@@ -4,19 +4,19 @@
 
 Symptom: service is `active`, WebUI/API return 200, but a registered task just sits in `todo` forever, and `journalctl -u tidepool.service` shows nothing at all (no errors, no `[worker]` lines) — or, since issue #682, at most one `[usage] timed out before the CLI prompt:` line and nothing else. Only the startup-modal case leaves that line; the other causes below are still silent.
 
-**Check `throttle_state` before anything else:**
+**Check the Provider usage observation before anything else:**
 
 ```bash
 ssh masaki@100.78.52.97 "cd /opt/tidepool && node -e \"
 const Database = require('better-sqlite3');
 const db = new Database('/opt/tidepool/data/board.sqlite', {readonly:true});
-console.log(db.prepare('select * from throttle_state').all());
+console.log(db.prepare('select * from provider_usage_observations').all(), db.prepare('select * from provider_usage_windows').all());
 \""
 ```
 
-If it shows `{ throttled: 1, resets_at: null }`, the Swell usage-limit gate (ADR-0008, `src/usage.ts`) is permanently fail-closed. This happens **silently** — `checkThrottle` swallows any parse failure into `{session: null, week: null}` → `evaluateThrottle` → `throttled: true, resetsAt: null`, with no exception and no log line. `isPickupBlocked` (the throttle read) is a display-only helper (`api.ts`) — the scheduler's own gate in `src/scheduler.ts` doesn't consult it, so this state doesn't even show up as an obvious "board is paused" signal anywhere in the UI logic; it just quietly never picks anything up again until a fresh `/usage` call parses cleanly.
+If the `anthropic` row shows `status: 'unobservable'`, the Swell usage-limit gate (ADR-0008, `src/usage.ts`) is fail-closed and every Anthropic entry is excluded from pickup. This happens **silently** — `checkThrottle` swallows any parse failure into `{session: null, week: null}` → `evaluateThrottle` → null window verdicts → an `unobservable` observation, with no exception and no log line. It is not a board-wide halt (ADR 0140), so the UI shows it only as `skipped` rows and the Provider usage card; nothing is picked up again until a fresh `/usage` call parses cleanly.
 
-Root cause is always the same shape: `checkUsage` (`src/claude-worker.ts`) hands `parseUsage` (`src/usage.ts`) something it can't read, so the snapshot comes back `{session: null, week: null}`. Since issue #81 / ADR-0028, `checkUsage` **no longer runs `claude -p "/usage"`** (that path is broken on current CLIs — `-p` treats `/usage` as a prompt string, not a slash command). It now drives an **interactive** `claude --safe-mode` session over a PTY (node-pty): waits for the input placeholder, sends `/usage`, scrapes the rendered panel, tears the session down (Ctrl-C×2 + SIGKILL). That adds several interactive-only ways to fail-close silently, all with the same `{throttled:1, resets_at:null}` symptom:
+Root cause is always the same shape: `checkUsage` (`src/claude-worker.ts`) hands `parseUsage` (`src/usage.ts`) something it can't read, so the snapshot comes back `{session: null, week: null}`. Since issue #81 / ADR-0028, `checkUsage` **no longer runs `claude -p "/usage"`** (that path is broken on current CLIs — `-p` treats `/usage` as a prompt string, not a slash command). It now drives an **interactive** `claude --safe-mode` session over a PTY (node-pty): waits for the input placeholder, sends `/usage`, scrapes the rendered panel, tears the session down (Ctrl-C×2 + SIGKILL). That adds several interactive-only ways to fail-close silently, all with the same `status: 'unobservable'` symptom:
 
 - **A startup modal is blocking the prompt.** The `Try "` placeholder marker never appears and `checkUsage` times out → null. Since issue #682 the board says which screen it stopped at — grep `journalctl -u tidepool.service` for `[usage] timed out before the CLI prompt:` and read the screen text before guessing between these two gates:
   - **A first-run dialog**: the folder-trust gate ("Is this a project you trust?") on a fresh/re-cloned board cwd, or the onboarding flow (theme, then login method) on a fresh install. Run the config script (issues #442 / #682) — no interactive session needed: `ssh masaki@100.78.52.97 'node /opt/tidepool/scripts/prepare-claude-cli.mjs /opt/tidepool'`. It merges `projects["/opt/tidepool"].hasTrustDialogAccepted: true` and `hasCompletedOnboarding: true` into `~/.claude.json` (home-side, survives redeploy) without touching anything else in the file.
@@ -57,7 +57,7 @@ cd /opt/tidepool && node --import tsx _cu.mjs; rm -f /opt/tidepool/_cu.mjs'
 worker 容器 supervisor で、どちらも欠けるとコンストラクタが即死する。
 
 **永続 fail-closed かどうかは、盤面に残っている行と突き合わせて決める。** 上の直接実行が
-きれいにパースできても、`throttle_state` には落ちた時の行が残ったままになる —— この状態が
+きれいにパースできても、`provider_usage_observations` には落ちた時の行が残ったままになる —— この状態が
 更新されるのは次の pickup 試行だけなので、**盤面が pause 中だと表示だけ fail-closed のまま
 張り付く**(一過性の失敗と書式ドリフトの見分けがつかなくなる箇所)。Pi に `sqlite3` は無いので:
 
@@ -65,7 +65,7 @@ worker 容器 supervisor で、どちらも欠けるとコンストラクタが�
 ssh masaki@100.78.52.97 'cat > /opt/tidepool/_ts.mjs <<"EOF"
 import { openDb } from "./src/db.ts";
 const db = openDb("/opt/tidepool/data/board.sqlite");
-console.log(JSON.stringify(db.prepare("select * from throttle_state where id = 1").all()));
+console.log(JSON.stringify(db.prepare("select * from provider_usage_observations").all()));
 process.exit(0);
 EOF
 cd /opt/tidepool && node --import tsx _ts.mjs; rm -f /opt/tidepool/_ts.mjs'
@@ -76,11 +76,11 @@ cd /opt/tidepool && node --import tsx _ts.mjs; rm -f /opt/tidepool/_ts.mjs'
 
 `raw null? true` → the scrape itself failed (modal / marker / timeout — one of the first three causes); inspect the printed raw to see which. `raw` non-null but `parseUsage` returns nulls → a renderer or format-drift problem (last two causes). It must run in `/opt/tidepool` (the trusted, service cwd) — the `cd` above handles that.
 
-To recover once the code is fixed and deployed: nothing extra needed, the very next pickup attempt (registering a task triggers one — see below) runs `checkThrottle` fresh and updates `throttle_state`.
+To recover once the code is fixed and deployed: nothing extra needed, the very next pickup attempt (registering a task triggers one — see below) runs `checkThrottle` fresh and replaces the Provider usage observation.
 
 ## A registered task is not picked up
 
-Registration, a worker session's teardown freeing the slot, and boot completion each trigger an immediate poll (CONTEXT.md "Pickup trigger"); the hourly tick is only the floor. A task that stays `todo` on a free slot is therefore held by a gate, not waiting for a trigger: read `GET /api/queue` — its halts (pause, triage session, throttle, open quarantine question) and each row's `skipped` status say which.
+Registration, a worker session's teardown freeing the slot, and boot completion each trigger an immediate poll (CONTEXT.md "Pickup trigger"); the hourly tick is only the floor. A task that stays `todo` on a free slot is therefore held by a gate, not waiting for a trigger: read `GET /api/queue` — its halts (pause, triage session, open quarantine question) and each row's `skipped` status (Provider usage throttle, agent quarantine) say which.
 
 ## Board crashes at boot with a ZodError from `registry.ts`
 

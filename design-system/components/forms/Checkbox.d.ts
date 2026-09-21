@@ -5,7 +5,7 @@ export interface CheckboxProps {
   label?: string;
   checked?: boolean;
   disabled?: boolean;
-  onChange?: (e: React.ChangeEvent) => void;
+  onChange?: (e: React.ChangeEvent<HTMLInputElement>) => void;
   style?: React.CSSProperties;
   /** `data-testid` on the label. */
   testId?: string;

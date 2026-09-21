@@ -162,7 +162,7 @@ it("spend-down(week) は fable 窓による entry の除外も解除する — �
     t.clock.now(),
   );
 
-  // fable 線だけ超過している観測(throttle.test.ts の fableOverPace と同じ数字)
+  // fable 線だけ超過している観測(provider-scheduler.test.ts の fableOverPace と同じ数字)
   const now = t.clock.now();
   t.worker.scriptUsage(
     usagePanelText({
@@ -194,7 +194,7 @@ it("Pause が勝つ — pause 中は spend-down を有効化しても pickup せ
   expect(t.worker.started.map((x) => x.id)).toEqual([task.id]);
 });
 
-it("手動取り消しも再評価を発火する — 取り消し後の観測が通るなら hourly tick を待たず pickup し、throttle_state も最新化される", async () => {
+it("手動取り消しも再評価を発火する — 取り消し後の観測が通るなら hourly tick を待たず pickup する", async () => {
   t = await bootTidepool();
   const task = queueWork(t, "runs after cancel");
 

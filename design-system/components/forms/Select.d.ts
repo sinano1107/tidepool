@@ -7,7 +7,7 @@ export interface SelectProps {
   options?: Array<string | { value: string; label: string }>;
   value?: string;
   disabled?: boolean;
-  onChange?: (e: React.ChangeEvent) => void;
+  onChange?: (e: React.ChangeEvent<HTMLSelectElement>) => void;
   style?: React.CSSProperties;
 }
 export declare function Select(props: SelectProps): JSX.Element;

@@ -6,7 +6,6 @@ import { quarantineFailedTeardown } from "../src/failed-teardown.js";
 import { setPaused } from "../src/pause.js";
 import { registerQuarantine } from "../src/quarantine.js";
 import { answerQuestion, getTask, listBoard } from "../src/tasks.js";
-import { reportThrottle } from "../src/throttle.js";
 import { startTriage } from "../src/triage.js";
 
 const NOW = new Date("2026-08-12T00:00:00.000Z");
@@ -16,7 +15,7 @@ describe("boardHalts は盤面全体の停止を1つの順序つき列挙で答�
     expect(boardHalts(openDb(":memory:"))).toEqual([]);
   });
 
-  it("6つすべてが同時に立っていれば落ちた後始末は containment の直後・レジストリ到達性の前に並ぶ", () => {
+  it("5つすべてが同時に立っていれば落ちた後始末は containment の直後・レジストリ到達性の前に並ぶ", () => {
     const db = openDb(":memory:");
     startTriage(db, NOW);
     setPaused(db, true);
@@ -24,15 +23,6 @@ describe("boardHalts は盤面全体の停止を1つの順序つき列挙で答�
     // ADR 0112 決定1: 両方立ったときに先に直すべきはホスト全体の側である
     quarantineFailedTeardown(db, "task-1", new Error("resolve exploded"), NOW);
     registerQuarantine(db, "registryReachability", null, "origin is unreachable", NOW);
-    reportThrottle(
-      db,
-      {
-        throttled: true,
-        resetsAt: new Date(NOW.getTime() + 90 * 60_000),
-        windows: { session: null, week: null, fable: null },
-      },
-      NOW,
-    );
 
     expect(boardHalts(db).map((h: { kind: string }) => h.kind)).toEqual([
       "triage",
@@ -40,7 +30,6 @@ describe("boardHalts は盤面全体の停止を1つの順序つき列挙で答�
       "containment",
       "failedTeardown",
       "registryReachability",
-      "throttle",
     ]);
   });
 
@@ -56,40 +45,5 @@ describe("boardHalts は盤面全体の停止を1つの順序つき列挙で答�
 
     answerQuestion(db, getTask(db, second!.id)!, ["repaired by hand"], NOW);
     expect(boardHalts(db)).toEqual([]);
-  });
-
-  it("throttle entry は throttled でなくても再観測中なら存在し、鮮度は throttle だけが運ぶ", () => {
-    const db = openDb(":memory:");
-    setPaused(db, true);
-
-    expect(boardHalts(db, () => true)).toEqual([
-      { kind: "pause" },
-      {
-        kind: "throttle",
-        revalidating: true,
-        failClosed: false,
-        resumesAt: null,
-        observedAt: null,
-      },
-    ]);
-  });
-
-  it("throttled なのに resets_at が無い観測は fail-closed として運ばれる", () => {
-    const db = openDb(":memory:");
-    reportThrottle(
-      db,
-      { throttled: true, resetsAt: null, windows: { session: null, week: null, fable: null } },
-      NOW,
-    );
-
-    expect(boardHalts(db)).toEqual([
-      {
-        kind: "throttle",
-        revalidating: false,
-        failClosed: true,
-        resumesAt: null,
-        observedAt: NOW.toISOString(),
-      },
-    ]);
   });
 });

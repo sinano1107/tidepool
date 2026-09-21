@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { type Db, openDb } from "../src/db.js";
-import { reportProviderUsage, reportThrottle } from "../src/throttle.js";
+import { reportProviderUsage } from "../src/throttle.js";
 import { translateSource } from "../src/translation.js";
 import { getCachedTranslation, hashSource } from "../src/translation-cache.js";
 import { FakeTranslationClient } from "./fakes.js";
@@ -54,15 +54,15 @@ it("同じソース+言語の2回目の呼び出しはキャッシュから返�
   expect(client.calls).toHaveLength(1);
 });
 
-it("throttled 中はクライアントを呼ばず、区別可能な throttled 応答を返す(完了基準)", async () => {
+it("Anthropic の使用量観測がまだ無い盤面では Board call を止めない(ADR 0140)", async () => {
   const db = await freshDb();
-  reportThrottle(db, { throttled: true, resetsAt: null, windows: { session: null, week: null, fable: null } }, NOW);
   const client = new FakeTranslationClient();
+  client.scriptTranslation("訳文");
 
-  const outcome = await translateSource(db, client, "never called", "Japanese", NOW);
+  const outcome = await translateSource(db, client, "not observed yet", "Japanese", NOW);
 
-  expect(outcome).toEqual({ status: "throttled" });
-  expect(client.calls).toEqual([]);
+  expect(outcome).toEqual({ status: "translated", text: "訳文", cached: false });
+  expect(client.calls).toHaveLength(1);
 });
 
 it("Provider 化後は Anthropic account window だけが Anthropic translation Board call を止める", async () => {
@@ -162,7 +162,24 @@ it("throttled 中でも既にキャッシュ済みのソースは翻訳を返す
   client.scriptTranslation("訳文");
   await translateSource(db, client, "same text", "Japanese", NOW);
 
-  reportThrottle(db, { throttled: true, resetsAt: null, windows: { session: null, week: null, fable: null } }, NOW);
+  reportProviderUsage(db, {
+    provider: "anthropic",
+    status: "observed",
+    plan: null,
+    cliVersion: null,
+    observedAt: NOW,
+    windows: [
+      {
+        window: "session",
+        model: null,
+        usedPercent: 50,
+        durationMs: 5 * 60 * 60 * 1000,
+        resetsAt: new Date(NOW.getTime() + 60 * 60 * 1000),
+        throttled: true,
+        resumesAt: new Date(NOW.getTime() + 30 * 60 * 1000),
+      },
+    ],
+  });
   const outcome = await translateSource(db, client, "same text", "Japanese", NOW);
 
   expect(outcome).toEqual({ status: "translated", text: "訳文", cached: true });

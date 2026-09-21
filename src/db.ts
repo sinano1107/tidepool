@@ -211,24 +211,6 @@ export function openDb(path: string): Db {
       ref_snapshot TEXT
     );
 
-    -- Swell throttle (ADR 0008): one row, account-scoped (not per-task/
-    -- workspace) usage state from the last just-in-time /usage poll at pickup
-    -- time. No row means normal (unthrottled). ADR 0030 extends it with the
-    -- per-window pace verdicts (which line is hit, and its catch-up instant);
-    -- a NULL *_throttled means that window went unobserved (fail-closed).
-    CREATE TABLE IF NOT EXISTS throttle_state (
-      id                 INTEGER PRIMARY KEY CHECK (id = 1),
-      throttled          INTEGER NOT NULL,
-      resets_at          TEXT,
-      session_throttled  INTEGER,
-      session_resume_at  TEXT,
-      week_throttled     INTEGER,
-      week_resume_at     TEXT,
-      fable_throttled    INTEGER,
-      fable_resume_at    TEXT,
-      observed_at        TEXT
-    );
-
     -- Pace offsets (ADR 0030): the human's reserved share (pt) per usage
     -- window — the board runs this far behind the elapsed-time pace line.
     -- One row; no row means the code defaults (session 20 / week 10 /
@@ -301,9 +283,8 @@ export function openDb(path: string): Db {
     );
 
     -- Pause (issue #34): a single, board-wide, human-only toggle for new-task
-    -- pickup — same one-row shape as throttle_state, but with no auto-resume
-    -- (CONTEXT.md's Pause: clearing it is purely manual). No row means never
-    -- paused.
+    -- pickup — one row, with no auto-resume (CONTEXT.md's Pause: clearing it
+    -- is purely manual). No row means never paused.
     CREATE TABLE IF NOT EXISTS pause_state (
       id     INTEGER PRIMARY KEY CHECK (id = 1),
       paused INTEGER NOT NULL

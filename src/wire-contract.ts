@@ -8,13 +8,9 @@
 import type { Cause } from "./cause.js";
 import type { HaltKind } from "./halt-kind.js";
 
-/** 盤面全体の停止の entry。属性を持つのは throttle だけ(ADR 0068 決定2)。 */
+/** 盤面全体の停止の entry。 */
 export interface BoardHalt {
   kind: HaltKind;
-  revalidating?: boolean;
-  failClosed?: boolean;
-  resumesAt?: string | null;
-  observedAt?: string | null;
 }
 
 /** 後始末中の session(ADR 0109 決定2)。経路は `settlement` が言う(ADR 0113 決定3)。 */
@@ -66,12 +62,6 @@ export interface BoardTask extends QueueTask {
 export interface ScratchpadLine {
   id: number;
   line: string;
-}
-
-/** 一窓ぶんの throttle(src/throttle.ts の WindowThrottleState)。 */
-interface WindowThrottle {
-  throttled: boolean;
-  resumeAt: string | null;
 }
 
 /** 危険な値の確認の 409(ADR 0061 決定1)。理由コードは表示の表を引くだけで、知らない
@@ -129,12 +119,6 @@ export interface WireContract {
   "GET /api/your-tasks": Array<Pick<QueueTask, "id" | "title" | "issue_live_state"> & { blocking: string | null }>;
   "GET /api/pause": {
     halts: BoardHalt[];
-    throttle: {
-      throttled: boolean;
-      resumesAt: string | null;
-      revalidating: boolean;
-      windows: { session: WindowThrottle | null; week: WindowThrottle | null; fable: WindowThrottle | null };
-    };
     spendDown: Record<"session" | "week", { activatedAt: string } | null>;
     providerUsage?: ProviderUsage[];
   };

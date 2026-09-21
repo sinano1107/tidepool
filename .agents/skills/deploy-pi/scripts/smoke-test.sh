@@ -72,7 +72,7 @@ done
 if [ "$status" = "todo" ] || [ "$status" = "in_progress" ]; then
   echo "[smoke-test] TIMED OUT still $status — check:"
   echo "[smoke-test]   ssh $PI 'journalctl -u tidepool.service -f'"
-  echo "[smoke-test]   throttle_state (see troubleshooting.md)"
+  echo "[smoke-test]   the Provider usage observation (see troubleshooting.md)"
   # A board-wide halt looks exactly like a throttle from out here, so name the
   # other cause: an unmet containment capability (ADR 0033 / ADR 0036, issue
   # #154) stops every pickup and stands one Tidepool-attributed question.

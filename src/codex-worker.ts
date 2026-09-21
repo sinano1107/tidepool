@@ -63,7 +63,6 @@ const BOARD_HOOK_MATCHER = "mcp__tidepool__.*";
 /** ADR 0124 決定4: probe 専用の1行。`codex debug prompt-input` は推論リクエストを
  *  送らないので、この marker がモデルに届くことはない。 */
 export const CODEX_DEVELOPER_MARKER = "tidepool-containment-probe: developer layer canary";
-const CODEX_PERMISSIONS = ["tidepool-work", "tidepool-review"] as const;
 /** 盤面が開ける feature —— 既定拒否の例外(ADR 0135 決定1)。ここに名前の無い feature は
  *  closedSurfaceConfig() が `=false` で閉じる。vendor が版の途中で足した名前は snapshot に無いので
  *  `=false` も渡らないが、その版へ pin を上げる前に featureDrift() が preflight を倒す。
@@ -292,28 +291,45 @@ export interface CodexHookRegistration {
   command: string | null;
 }
 
-/** `hooks/list` の `result` から、登録を cwd を跨いで並びのまま取り出す(ADR 0130 決定3)。
+/** `hooks/list` の `result` から、登録と vendor 診断(`errors[]` / `warnings[]`、#734)を
+ *  cwd を跨いで並びのまま取り出す(ADR 0130 決定3)。
  *  vendor の応答の形が変わったら、読み替えを直す場所はここ1つ —— 形の崩れは preflight の
- *  `hook mismatch` の観測値として出る(fail-closed)。 */
-export function observedHooks(result: unknown): CodexHookRegistration[] {
-  const { data } = result as { data: Array<{ hooks: Array<Record<string, unknown>> }> };
-  return data.flatMap((entry) => entry.hooks).map((hook) => ({
-    event: hook.eventName as string,
-    matcher: (hook.matcher ?? null) as string | null,
-    enabled: hook.enabled as boolean,
-    source: hook.source as string,
-    command: (hook.command ?? null) as string | null,
-  }));
+ *  `hook mismatch` か、読めずに投げた `could not run` として出る(どちらも fail-closed)。 */
+export function observedHooks(
+  result: unknown,
+): Pick<CodexCapabilityObservation, "hooks" | "hookDiagnostics"> {
+  const { data } = result as {
+    data: Array<{
+      hooks: Array<Record<string, unknown>>;
+      errors?: Array<{ message: string; path: string }>;
+      warnings?: string[];
+    }>;
+  };
+  return {
+    hooks: data.flatMap((entry) => entry.hooks).map((hook) => ({
+      event: hook.eventName as string,
+      matcher: (hook.matcher ?? null) as string | null,
+      enabled: hook.enabled as boolean,
+      source: hook.source as string,
+      command: (hook.command ?? null) as string | null,
+    })),
+    hookDiagnostics: data.flatMap((entry) => [
+      // 診断は照合に使わない —— 欄が欠けても判定を変えないよう、無い形は空として読む
+      ...(entry.errors ?? []).map((error) => `error: ${error.message} (${error.path})`),
+      ...(entry.warnings ?? []).map((warning) => `warning: ${warning}`),
+    ]),
+  };
 }
 
 export interface CodexCapabilityObservation {
   cliVersion: string;
   skills: readonly string[];
   hooks: readonly CodexHookRegistration[];
-  permissions: readonly string[];
   features: Readonly<Record<string, string>>;
   /** 盤面が `developer_instructions` で渡した marker のうち、developer item に載ったもの。 */
   developerMarkers: readonly string[];
+  /** `hooks/list` の vendor 診断。照合には使わず、hook 不一致の理由文に写すだけ(#734)。 */
+  hookDiagnostics: readonly string[];
 }
 
 /** 期待と観測の差だけを言う(全量は並べない —— 面の全行を並べた表は Quarantine 画面では読めない)。 */
@@ -349,7 +365,6 @@ export async function checkCodexCapability(
         [{ event: "preToolUse", matcher: BOARD_HOOK_MATCHER, enabled: true, source: "sessionFlags", command: hookPath }],
         observed.hooks,
       ],
-      ["permission", CODEX_PERMISSIONS, observed.permissions],
       ["developer instructions", [CODEX_DEVELOPER_MARKER], observed.developerMarkers],
     ] as const
   ).find(([, expected, actual]) => JSON.stringify(expected) !== JSON.stringify(actual));
@@ -358,7 +373,10 @@ export async function checkCodexCapability(
       available: false,
       reason:
         `Codex containment preflight ${mismatch[0]} mismatch: expected ` +
-        `${JSON.stringify(mismatch[1])}, observed ${JSON.stringify(mismatch[2])}`,
+        `${JSON.stringify(mismatch[1])}, observed ${JSON.stringify(mismatch[2])}` +
+        (mismatch[0] === "hook" && observed.hookDiagnostics.length > 0
+          ? `; vendor diagnostics: ${observed.hookDiagnostics.join("; ")}`
+          : ""),
     };
   }
   const drift = featureDrift(observed.features);
@@ -638,7 +656,7 @@ async function probeHookRegistration(
   executable: string,
   env: NodeJS.ProcessEnv,
   config: (taskType: Task["type"]) => string[],
-): Promise<CodexHookRegistration[]> {
+): Promise<ReturnType<typeof observedHooks>> {
   const command = codexCommandThrough(call, PREFLIGHT_KIND, CODEX_PREFLIGHT_LIMIT_MS);
   // ADR 0142 決定4: 未知キーはここで app-server の失敗として投げ、`could not run` に倒れる
   const [listed] = await callAppServer(command, executable, env, ["--strict-config", ...configArgs(config("work"))], [
@@ -781,7 +799,7 @@ async function actualCodexCapability(options: {
       cliVersion,
       skills: observedSkills(promptInput),
       developerMarkers: observedDeveloperMarkers(promptInput),
-      hooks: await probeHookRegistration(call, options.executable, env, (taskType) =>
+      ...await probeHookRegistration(call, options.executable, env, (taskType) =>
         // 問うのは parse だけ —— 値は形の正しい placeholder(ADR 0142 決定2)
         spawnConfig({
           taskType,
@@ -796,7 +814,6 @@ async function actualCodexCapability(options: {
           codexHome: options.codexHome,
           hook,
         })),
-      permissions: [...CODEX_PERMISSIONS],
       features: observedFeatures,
     };
   } finally {

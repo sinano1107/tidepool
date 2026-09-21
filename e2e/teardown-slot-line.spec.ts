@@ -8,8 +8,8 @@ import { expect, test } from "./fixtures.js";
  *  それをタスクの実行と取り違えていた。経路はサーバが `teardown.settlement` で
  *  導き、ブラウザは値 → コピーの写像だけを持つ(決定3 / ADR 0068 決定7)。 */
 
-/** 実行枠の状態(busy/limit/free)がブラウザに現れるのはここだけ ——
- *  `webui/queue-screen.tsx` は `free` のときだけ slot 行を減光する。 */
+/** 実行枠の状態がブラウザに現れるのはここだけ —— `webui/queue-screen.tsx` は
+ *  何も走っておらず(`running`)Pause 中でもないときだけ slot 行を減光する。 */
 const color = (locator: Locator) => locator.evaluate((el) => getComputedStyle(el).color);
 
 /** design token の実効値。色そのものをテストに焼き込むと theme の調整で落ちる。 */

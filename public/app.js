@@ -127,7 +127,7 @@ function TpQueueList({ tasks, onReorder, onFront, headId }) {
     /* @__PURE__ */ React.createElement(QueueItem, { position: i + 1, task: t, skipped: t.skipped, frontInserted: t.frontInserted, flash: t.flash, isHead: t.id === headId, draggable: !!onReorder, onFront: onFront ? () => onFront(t.id) : void 0 })
   )));
 }
-function QueueScreen({ data, slotState, paused, onTogglePause, spendDown, onSpendDown, onFront, onDoneHuman, onReorder }) {
+function QueueScreen({ data, paused, onTogglePause, spendDown, onSpendDown, onFront, onDoneHuman, onReorder }) {
   const { Card, Button, IdChip } = window.TidepoolDesignSystem_8a0ead;
   const slot = data.slot;
   const activeSpendDown = ["session", "week"].filter((window2) => spendDown[window2]);
@@ -136,7 +136,7 @@ function QueueScreen({ data, slotState, paused, onTogglePause, spendDown, onSpen
   React.useEffect(() => {
     lucide.createIcons();
   });
-  return /* @__PURE__ */ React.createElement("div", { style: { padding: "20px 16px" } }, /* @__PURE__ */ React.createElement("h1", { style: { fontSize: "var(--text-xl)", margin: "0 0 2px" } }, "Queue"), /* @__PURE__ */ React.createElement("p", { style: { fontSize: "var(--text-sm)", color: "var(--text-secondary)", margin: "0 0 16px" } }, "FIFO \xB7 new tasks append \xB7 reorder never resets \xB7 concurrency=1"), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8, marginBottom: 10, minHeight: 30 } }, /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: slot.color, textTransform: "uppercase", letterSpacing: "0.08em" } }, "slot"), slot.taskId && /* @__PURE__ */ React.createElement(IdChip, { id: slot.taskId, style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--text-muted)", flexShrink: 0 } }), /* @__PURE__ */ React.createElement("span", { style: { flex: 1, minWidth: 0, fontSize: "var(--text-sm)", color: !paused && slotState === "free" ? "var(--text-muted)" : "var(--text-body)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, slot.line), /* @__PURE__ */ React.createElement(
+  return /* @__PURE__ */ React.createElement("div", { style: { padding: "20px 16px" } }, /* @__PURE__ */ React.createElement("h1", { style: { fontSize: "var(--text-xl)", margin: "0 0 2px" } }, "Queue"), /* @__PURE__ */ React.createElement("p", { style: { fontSize: "var(--text-sm)", color: "var(--text-secondary)", margin: "0 0 16px" } }, "FIFO \xB7 new tasks append \xB7 reorder never resets \xB7 concurrency=1"), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8, marginBottom: 10, minHeight: 30 } }, /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: slot.color, textTransform: "uppercase", letterSpacing: "0.08em" } }, "slot"), slot.taskId && /* @__PURE__ */ React.createElement(IdChip, { id: slot.taskId, style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--text-muted)", flexShrink: 0 } }), /* @__PURE__ */ React.createElement("span", { style: { flex: 1, minWidth: 0, fontSize: "var(--text-sm)", color: !paused && !data.running ? "var(--text-muted)" : "var(--text-body)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, slot.line), /* @__PURE__ */ React.createElement(
     "button",
     {
       onClick: onTogglePause,
@@ -710,7 +710,6 @@ function RegisterScreen({ onRegister, parentTask, onClose }) {
     refreshPendingDumps();
   };
   const issueListHintStyle = { fontSize: "var(--text-sm)", color: "var(--text-secondary)" };
-  const targetValue = (e) => e.target.value;
   const filteredIssues = issueNumber.trim() ? issues.filter((i) => String(i.number).includes(issueNumber.trim()) || i.title.toLowerCase().includes(issueNumber.trim().toLowerCase())) : issues;
   const ok = issueMode ? workspace.trim() && /^[0-9]+$/.test(issueNumber.trim()) : title.trim() && purpose.trim() && criteria.trim() && (!childMode || reason.trim());
   const fields = () => issueMode ? { type: "work", workspace: workspace.trim(), github_issue_number: Number(issueNumber.trim()) } : {
@@ -831,7 +830,7 @@ function RegisterScreen({ onRegister, parentTask, onClose }) {
     {
       label: "Reason for splitting this",
       value: reason,
-      onChange: (e) => setReason(targetValue(e)),
+      onChange: (e) => setReason(e.target.value),
       placeholder: "why this work is being split"
     }
   )), !issueMode && !childMode && pendingDumps.length > 0 && /* @__PURE__ */ React.createElement(Card, { style: { display: "flex", flexDirection: "column", gap: 8, marginBottom: 14 } }, /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--tide-4)", textTransform: "uppercase", letterSpacing: "0.08em" } }, "pending dump", pendingDumps.length > 1 ? "s" : "", " \u2014 sent here from scratchpad triage, awaiting writeup"), pendingDumps.map((d) => /* @__PURE__ */ React.createElement("div", { key: d.id, style: { display: "flex", alignItems: "center", gap: 8 } }, /* @__PURE__ */ React.createElement("span", { style: {
@@ -840,10 +839,10 @@ function RegisterScreen({ onRegister, parentTask, onClose }) {
     color: "var(--text-body)",
     fontWeight: d.id === selectedDumpId ? 600 : 400
   } }, d.line), /* @__PURE__ */ React.createElement(Button, { variant: d.id === selectedDumpId ? "primary" : "secondary", size: "sm", onClick: () => pickPendingDump(d) }, "Use"), /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "sm", onClick: () => discardPendingDump(d.id) }, "Discard")))), /* @__PURE__ */ React.createElement(Card, { style: { display: "flex", flexDirection: "column", gap: 14 } }, !childMode && /* @__PURE__ */ React.createElement(Select, { label: "Source", options: ["manual", "github issue"], value: source, onChange: (e) => {
-    setSource(targetValue(e) === "github issue" ? "github issue" : "manual");
+    setSource(e.target.value === "github issue" ? "github issue" : "manual");
     setGate(null);
     setSelectedDumpId(null);
-  } }), issueMode && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(Select, { label: "Workspace", options: issueWorkspaceOptions, value: workspace, onChange: (e) => setWorkspace(targetValue(e)) }), /* @__PURE__ */ React.createElement(Input, { label: "Issue number", value: issueNumber, onChange: (e) => setIssueNumber(targetValue(e)), placeholder: "content stays on GitHub; the board keeps only this reference" }), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 4, maxHeight: 220, overflowY: "auto" } }, !workspace.trim() && /* @__PURE__ */ React.createElement("span", { style: issueListHintStyle }, "select a workspace to browse its open issues"), workspace.trim() && issuesFailed && /* @__PURE__ */ React.createElement("span", { style: issueListHintStyle }, "couldn't fetch open issues \u2014 type the number directly"), workspace.trim() && !issuesFailed && filteredIssues.map((i) => /* @__PURE__ */ React.createElement(
+  } }), issueMode && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(Select, { label: "Workspace", options: issueWorkspaceOptions, value: workspace, onChange: (e) => setWorkspace(e.target.value) }), /* @__PURE__ */ React.createElement(Input, { label: "Issue number", value: issueNumber, onChange: (e) => setIssueNumber(e.target.value), placeholder: "content stays on GitHub; the board keeps only this reference" }), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 4, maxHeight: 220, overflowY: "auto" } }, !workspace.trim() && /* @__PURE__ */ React.createElement("span", { style: issueListHintStyle }, "select a workspace to browse its open issues"), workspace.trim() && issuesFailed && /* @__PURE__ */ React.createElement("span", { style: issueListHintStyle }, "couldn't fetch open issues \u2014 type the number directly"), workspace.trim() && !issuesFailed && filteredIssues.map((i) => /* @__PURE__ */ React.createElement(
     "div",
     {
       key: i.number,
@@ -861,7 +860,7 @@ function RegisterScreen({ onRegister, parentTask, onClose }) {
     },
     /* @__PURE__ */ React.createElement("span", { style: { color: "var(--text-muted)" } }, "#", i.number),
     /* @__PURE__ */ React.createElement("span", null, i.title)
-  )), workspace.trim() && !issuesFailed && truncated && /* @__PURE__ */ React.createElement("span", { style: issueListHintStyle }, "older issues exist \u2014 type the number directly"))), !issueMode && !plainFormActive && !drafted && /* @__PURE__ */ React.createElement(Input, { multiline: true, rows: 4, placeholder: "what needs doing, in your own words \u2014 sloppy is fine here, sloppy completion criteria are not", value: dump, onChange: (e) => setDump(targetValue(e)) }), !issueMode && (plainFormActive || drafted) && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: drafted ? "var(--tide-4)" : "var(--sun-4)", textTransform: "uppercase", letterSpacing: "0.08em" } }, drafted ? "drafted \u2014 edit freely" : "plain form \u2014 same fields, no draft"), /* @__PURE__ */ React.createElement(Input, { label: "Title", value: title, onChange: (e) => setTitle(targetValue(e)) }), /* @__PURE__ */ React.createElement(Input, { label: "Purpose", multiline: true, rows: 2, value: purpose, onChange: (e) => setPurpose(targetValue(e)), placeholder: "state prerequisites here \u2014 the agent verifies and escalates cheaply" }), /* @__PURE__ */ React.createElement(Input, { label: "Completion criteria", multiline: true, rows: 2, value: criteria, onChange: (e) => setCriteria(targetValue(e)), placeholder: "sloppy completion criteria are the expensive kind" }), !childMode && /* @__PURE__ */ React.createElement(Select, { label: "Type", options: ["work", "review"], value: type, onChange: (e) => setType(targetValue(e) === "review" ? "review" : "work") }), /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 } }, /* @__PURE__ */ React.createElement(Select, { label: "Assignee", options: assigneeOptions, value: assignee, onChange: (e) => setAssignee(targetValue(e)) }), /* @__PURE__ */ React.createElement(Select, { label: "Workspace", options: workspaceOptions, value: workspace, onChange: (e) => setWorkspace(targetValue(e)) })), /* @__PURE__ */ React.createElement(Checkbox, { label: "risk flag \u2014 this task has irreversible external effects", checked: risk, onChange: () => setRisk(!risk) }), /* @__PURE__ */ React.createElement(Checkbox, { label: "review flag \u2014 request an on-completion review", checked: review, onChange: () => setReview(!review) })), /* @__PURE__ */ React.createElement(Button, { variant: "primary", size: "lg", full: true, disabled: primaryAction.disabled, onClick: primaryAction.onClick }, primaryAction.label), childMode && /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "lg", full: true, disabled: busy, onClick: onClose }, "Cancel")), !issueMode && /* @__PURE__ */ React.createElement(
+  )), workspace.trim() && !issuesFailed && truncated && /* @__PURE__ */ React.createElement("span", { style: issueListHintStyle }, "older issues exist \u2014 type the number directly"))), !issueMode && !plainFormActive && !drafted && /* @__PURE__ */ React.createElement(Input, { multiline: true, rows: 4, placeholder: "what needs doing, in your own words \u2014 sloppy is fine here, sloppy completion criteria are not", value: dump, onChange: (e) => setDump(e.target.value) }), !issueMode && (plainFormActive || drafted) && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: drafted ? "var(--tide-4)" : "var(--sun-4)", textTransform: "uppercase", letterSpacing: "0.08em" } }, drafted ? "drafted \u2014 edit freely" : "plain form \u2014 same fields, no draft"), /* @__PURE__ */ React.createElement(Input, { label: "Title", value: title, onChange: (e) => setTitle(e.target.value) }), /* @__PURE__ */ React.createElement(Input, { label: "Purpose", multiline: true, rows: 2, value: purpose, onChange: (e) => setPurpose(e.target.value), placeholder: "state prerequisites here \u2014 the agent verifies and escalates cheaply" }), /* @__PURE__ */ React.createElement(Input, { label: "Completion criteria", multiline: true, rows: 2, value: criteria, onChange: (e) => setCriteria(e.target.value), placeholder: "sloppy completion criteria are the expensive kind" }), !childMode && /* @__PURE__ */ React.createElement(Select, { label: "Type", options: ["work", "review"], value: type, onChange: (e) => setType(e.target.value === "review" ? "review" : "work") }), /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 } }, /* @__PURE__ */ React.createElement(Select, { label: "Assignee", options: assigneeOptions, value: assignee, onChange: (e) => setAssignee(e.target.value) }), /* @__PURE__ */ React.createElement(Select, { label: "Workspace", options: workspaceOptions, value: workspace, onChange: (e) => setWorkspace(e.target.value) })), /* @__PURE__ */ React.createElement(Checkbox, { label: "risk flag \u2014 this task has irreversible external effects", checked: risk, onChange: () => setRisk(!risk) }), /* @__PURE__ */ React.createElement(Checkbox, { label: "review flag \u2014 request an on-completion review", checked: review, onChange: () => setReview(!review) })), /* @__PURE__ */ React.createElement(Button, { variant: "primary", size: "lg", full: true, disabled: primaryAction.disabled, onClick: primaryAction.onClick }, primaryAction.label), childMode && /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "lg", full: true, disabled: busy, onClick: onClose }, "Cancel")), !issueMode && /* @__PURE__ */ React.createElement(
     "button",
     {
       onClick: togglePlainForm,
@@ -2802,7 +2801,6 @@ function toQuestionCardShape(q, icons) {
 function mapData(board, log, pause, icons, triage, queueEnvelope, yourTasks) {
   const halts = queueEnvelope.halts;
   const paused = halts.some((h) => h.kind === "pause");
-  const throttle = pause.throttle;
   const teardown = queueEnvelope.teardown;
   const providerUsage = pause.providerUsage ?? queueEnvelope.providerUsage ?? [];
   const fmtTime = (iso) => {
@@ -2841,7 +2839,7 @@ function mapData(board, log, pause, icons, triage, queueEnvelope, yourTasks) {
     risk: !!t.risk_flag,
     blocked: t.status === "blocked",
     // 資源単位の停止だけが行に現れる — workspace / agent の quarantine と
-    // fable 線(ADR 0068 決定4)。盤面全体の停止はスロット行が1回で言う
+    // Provider / model の throttle(ADR 0068 決定4 / ADR 0098 決定6)。盤面全体の停止はスロット行が1回で言う
     skipped: t.status === "skipped",
     frontInserted: RECENT_FRONTS.has(t.id),
     flash: RECENT_FRONTS.has(t.id)
@@ -2879,12 +2877,6 @@ function mapData(board, log, pause, icons, triage, queueEnvelope, yourTasks) {
     });
   }
   const running = board.find((t) => t.status === "in_progress" && t.id !== teardown?.taskId);
-  const throttled = !!throttle?.throttled;
-  const throttleWindows = throttle?.windows ?? { session: null, week: null, fable: null };
-  const hitLines = ["session", "week", "fable"].filter((w) => throttleWindows[w]?.throttled);
-  const fableWindow = throttleWindows.fable;
-  const fableThrottled = !!fableWindow?.throttled;
-  const fableResumesAt = fableThrottled && fableWindow.resumeAt ? fmtTime(fableWindow.resumeAt) : null;
   const halt = (slot2, kind, msg, detail) => ({ slot: slot2, toast: { kind, msg, detail } });
   const HALT_COPY = {
     triage: () => halt(
@@ -2918,49 +2910,11 @@ function mapData(board, log, pause, icons, triage, queueEnvelope, yourTasks) {
       "warn",
       "moved to front \u2014 pickup blocked",
       "registry remote is unreachable"
-    ),
-    // 再観測中は独立の kind ではなく throttle entry の属性 (ADR 0068 決定2) —
-    // 「観測中」と「観測結果」は同じ主題なので、分岐はこの1つの腕の中に閉じる。
-    // 鮮度(observedAt)と再開見込みは entry 自身が運ぶ
-    throttle: (entry) => {
-      const observed = entry.observedAt ? fmtTime(entry.observedAt) : null;
-      const resumes = entry.resumesAt ? fmtTime(entry.resumesAt) : null;
-      if (entry.revalidating) {
-        return halt(
-          {
-            color: "var(--sun-4)",
-            line: "usage re-evaluation in progress \xB7 nothing starts",
-            taskId: null,
-            meta: observed ? `last observed ${observed}` : "no observation yet"
-          },
-          "info",
-          "moved to front \u2014 usage is being re-evaluated",
-          "waiting for a fresh observation"
-        );
-      }
-      return halt(
-        {
-          color: "var(--coral-4)",
-          taskId: null,
-          ...entry.failClosed ? {
-            line: "usage check unavailable \xB7 nothing starts",
-            meta: `fail-closed \u2014 check usage check logs${observed ? ` \xB7 observed ${observed}` : ""}`
-          } : {
-            line: "usage pace \xB7 nothing starts",
-            // which line is hit (ADR 0030) — an old pre-window row (no
-            // windows persisted yet) falls back to the plain resume text
-            meta: `${hitLines.length ? `${hitLines.join(" + ")} line \xB7 ` : ""}resumes ${resumes}${observed ? ` \xB7 observed ${observed}` : ""}`
-          }
-        },
-        "warn",
-        "moved to front \u2014 pickup blocked",
-        entry.failClosed ? "usage check unavailable \u2014 nothing starts until a fresh reading arrives" : `usage limit \xB7 resumes ${resumes}`
-      );
-    }
+    )
     // 門そのもの (ADR 0133 決定3 / #749 User Story 8): HALT_KINDS に1つ足して
     // ここを更新しないと typecheck が落ちる。これがあるので下の引きに `?.` は要らない
   };
-  const pickupHalt = halts[0] && HALT_COPY[halts[0].kind](halts[0]);
+  const pickupHalt = halts[0] && HALT_COPY[halts[0].kind]();
   const TEARDOWN_META = {
     completed: "waiting for this session's processes to exit",
     interrupted: "usage limit hit \xB7 task returns to the queue once processes exit",
@@ -2974,21 +2928,7 @@ function mapData(board, log, pause, icons, triage, queueEnvelope, yourTasks) {
     taskId: teardown.taskId,
     line: "session teardown \xB7 nothing new starts",
     meta: `${TEARDOWN_META[teardown.settlement]} \xB7 since ${fmtTime(teardown.startedAt)}`
-  } : fableThrottled ? {
-    // fable line only (ADR 0030): the board keeps flowing — fable-model
-    // tasks alone wait for their catch-up
-    color: "var(--rock-3)",
-    taskId: null,
-    line: "slot free \u2014 fable tasks paced",
-    meta: fableResumesAt ? `fable line \xB7 resumes ${fableResumesAt}` : "fable line"
-  } : {
-    color: "var(--rock-3)",
-    line: "slot free \u2014 nothing running",
-    taskId: null,
-    // fable の観測状態を常時可視化 (ADR 0030): per-model 行の書式変更で
-    // 観測が黙って落ちたとき、Max プランの人間がここで気づける
-    meta: `concurrency=1 \xB7 fable ${fableWindow ? "on pace" : "not observed"}`
-  };
+  } : { color: "var(--rock-3)", line: "slot free \u2014 nothing running", taskId: null, meta: "concurrency=1" };
   return {
     questions,
     log: logEntries,
@@ -3008,10 +2948,6 @@ function mapData(board, log, pause, icons, triage, queueEnvelope, yourTasks) {
     // Spend-down (ADR 0091) — window ごとの盤面状態応答から素通し
     spendDown: pause.spendDown ?? { session: null, week: null },
     providerUsage,
-    throttled,
-    throttleRevalidating: !!throttle?.revalidating,
-    fableThrottled,
-    fableResumesAt,
     lastLogId: log.entries.at(-1)?.id ?? null
   };
 }
@@ -3354,16 +3290,6 @@ function App() {
     setData((d) => tab === "triage" && d ? { ...fresh, questions: d.questions, log: d.log, lastLogId: d.lastLogId } : fresh);
     return fresh;
   };
-  React.useEffect(() => {
-    if (!data?.throttleRevalidating) return;
-    const iv = setInterval(() => {
-      void refresh().then((fresh) => {
-        if (!fresh.throttleRevalidating) clearInterval(iv);
-      }).catch(() => {
-      });
-    }, 1e3);
-    return () => clearInterval(iv);
-  }, [data?.throttleRevalidating]);
   const answerNow = async (q, a) => {
     try {
       await api(`/api/tasks/${q.id}/answer`, { answers: a, triage: true });
@@ -3629,7 +3555,7 @@ function App() {
       loadLanding,
       onTranslate: onTranslateProp
     }
-  ) : /* @__PURE__ */ React.createElement("div", { style: { padding: "64px 24px", textAlign: "center" } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 28, marginBottom: 6 } }, "\u{1F41A}"), /* @__PURE__ */ React.createElement("div", { style: { fontFamily: "var(--font-display)", fontStyle: "italic", fontSize: "var(--text-2xl)", color: "var(--tide-5)", marginBottom: 8 } }, "Low tide. Go enjoy your coffee."), /* @__PURE__ */ React.createElement("div", { style: { fontSize: "var(--text-sm)", color: "var(--text-secondary)" } }, "the pool refills as tasks come in."))), tab === "board" && /* @__PURE__ */ React.createElement(BoardScreen, { data, onOpenTask: openTask }), tab === "queue" && /* @__PURE__ */ React.createElement(QueueScreen, { data, slotState: data.running ? "busy" : data.throttled ? "limit" : "free", paused: data.paused, onTogglePause: togglePause, spendDown: data.spendDown, onSpendDown: setSpendDown, onFront: moveFront, onDoneHuman: doneHuman, onReorder: reorder }), tab === "register" && /* @__PURE__ */ React.createElement(RegisterScreen, { onRegister: register }), tab === "settings" && /* @__PURE__ */ React.createElement(SettingsScreen, { say, registerLeaveGuard: (fn) => {
+  ) : /* @__PURE__ */ React.createElement("div", { style: { padding: "64px 24px", textAlign: "center" } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 28, marginBottom: 6 } }, "\u{1F41A}"), /* @__PURE__ */ React.createElement("div", { style: { fontFamily: "var(--font-display)", fontStyle: "italic", fontSize: "var(--text-2xl)", color: "var(--tide-5)", marginBottom: 8 } }, "Low tide. Go enjoy your coffee."), /* @__PURE__ */ React.createElement("div", { style: { fontSize: "var(--text-sm)", color: "var(--text-secondary)" } }, "the pool refills as tasks come in."))), tab === "board" && /* @__PURE__ */ React.createElement(BoardScreen, { data, onOpenTask: openTask }), tab === "queue" && /* @__PURE__ */ React.createElement(QueueScreen, { data, paused: data.paused, onTogglePause: togglePause, spendDown: data.spendDown, onSpendDown: setSpendDown, onFront: moveFront, onDoneHuman: doneHuman, onReorder: reorder }), tab === "register" && /* @__PURE__ */ React.createElement(RegisterScreen, { onRegister: register }), tab === "settings" && /* @__PURE__ */ React.createElement(SettingsScreen, { say, registerLeaveGuard: (fn) => {
     leaveGuard.current = fn;
   } }))), toast && /* @__PURE__ */ React.createElement("div", { style: { position: "fixed", bottom: 86, left: "50%", transform: "translateX(-50%)", zIndex: 50, width: "calc(100% - 32px)", maxWidth: 408 } }, /* @__PURE__ */ React.createElement("div", { className: toast.leaving ? "tp-toast-out" : "tp-toast-in" }, /* @__PURE__ */ React.createElement(Toast, { kind: toast.kind, detail: toast.detail, onDismiss: dismissToast }, toast.msg))), /* @__PURE__ */ React.createElement(PortalDialog, { open: !!addChildParent, onClose: () => setAddChildParent(null) }, addChildParent && /* @__PURE__ */ React.createElement(RegisterScreen, { parentTask: addChildParent, onRegister: addChild, onClose: () => setAddChildParent(null) })), /* @__PURE__ */ React.createElement(PortalDialog, { open: !!actionsTask, onClose: () => setActionsTask(null) }, actionsTask && /* @__PURE__ */ React.createElement(
     TaskActionsDialog,

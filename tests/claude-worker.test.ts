@@ -23,7 +23,7 @@ import { refreshRegistry } from "../src/registry.js";
 import { Slot } from "../src/slot.js";
 import { getTask, listBoard, nextSlotTask, type Task } from "../src/tasks.js";
 import { sessionInTeardown } from "../src/teardown.js";
-import { getThrottleState, reportThrottle } from "../src/throttle.js";
+import { getProviderUsage, reportProviderUsage } from "../src/throttle.js";
 import { capInterruptionHandler } from "../src/watchdog.js";
 import {
   prepareWorkspaceAtPickup,
@@ -3473,28 +3473,38 @@ describe("上限到達による中断(issue #467 / ADR 0104)", () => {
     expect(events.filter((e) => e.kind === "cap_interrupted")).toHaveLength(1);
   });
 
-  it("throttle の状態には書かない — 再開の門は次の pickup の使用量観測である(ADR 0104 決定3)", async () => {
+  it("Provider 使用量の観測には書かない — 再開の門は次の pickup の使用量観測である(ADR 0104 決定3)", async () => {
     const { start, stdout, emitExit, db, slot } = await makeWorker();
     start("task-capped-throttle");
     // 空の表と比べても「書かなかった」は測れない。直前の pickup が残した観測を
     // 1行置き、それが 429 の後も1文字も動かないことを見る
-    reportThrottle(
-      db,
-      {
-        throttled: false,
-        resetsAt: null,
-        windows: { session: { throttled: false, resumeAt: null }, week: null, fable: null },
-      },
-      new Date("2026-08-24T13:00:00.000Z"),
-    );
-    const before = getThrottleState(db);
-    expect(before.observedAt).toBe("2026-08-24T13:00:00.000Z");
+    const observedAt = new Date("2026-08-24T13:00:00.000Z");
+    reportProviderUsage(db, {
+      provider: "anthropic",
+      status: "observed",
+      plan: null,
+      cliVersion: null,
+      observedAt,
+      windows: [
+        {
+          window: "session",
+          model: null,
+          usedPercent: 50,
+          durationMs: 5 * 60 * 60 * 1000,
+          resetsAt: new Date(observedAt.getTime() + 60 * 60 * 1000),
+          throttled: false,
+          resumesAt: null,
+        },
+      ],
+    });
+    const before = getProviderUsage(db);
+    expect(before[0]?.observedAt).toBe("2026-08-24T13:00:00.000Z");
     stdout.write(CAP_STREAM);
 
     emitExit(1, null);
     await vi.waitFor(() => expect(slot.currentTaskId).toBeNull());
 
-    expect(getThrottleState(db)).toEqual(before);
+    expect(getProviderUsage(db)).toEqual(before);
   });
 
   it("401 の envelope は従来どおり認証 quarantine に落ち、上限到達とは混ざらない", async () => {
