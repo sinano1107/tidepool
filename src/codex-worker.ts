@@ -629,12 +629,15 @@ export function observedDeveloperMarkers(promptInput: string): string[] {
  *
  *  これは**登録**の観測であって**選択**の観測ではない。matcher が実物の呼び出しを選ぶことは
  *  開けた走行でしか観測できず、その受け入れは #730 が持つ。この行を「選択も見ている」と
- *  読んで #730 の受け入れ観測を省いてはならない。 */
+ *  読んで #730 の受け入れ観測を省いてはならない。
+ *
+ *  同じ起動で spawn の設定を `--strict-config` で読ませ、review 種別は initialize だけの
+ *  起動をもう1本足す —— 綴りの誤りはここで throw になる(ADR 0142 決定4)。 */
 async function probeHookRegistration(
   call: BoardCall,
   executable: string,
   env: NodeJS.ProcessEnv,
-  config: (taskType: "work" | "review") => string[],
+  config: (taskType: Task["type"]) => string[],
 ): Promise<CodexHookRegistration[]> {
   const command = codexCommandThrough(call, PREFLIGHT_KIND, CODEX_PREFLIGHT_LIMIT_MS);
   // ADR 0142 決定4: 未知キーはここで app-server の失敗として投げ、`could not run` に倒れる

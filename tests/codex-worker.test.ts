@@ -263,6 +263,7 @@ describe("CodexWorker (ADR 0098)", () => {
 
     const keys = (args: string[]) =>
       new Set(args.filter((_, index) => args[index - 1] === "-c").map((entry) => entry.split("=", 1)[0]));
+    expect(keys(f.process.calls[0]!.args)).toContain("mcp_servers.tidepool.url");
     expect(keys(preflight.calls[5]!.args)).toEqual(keys(f.process.calls[0]!.args));
     expect(keys(preflight.calls[6]!.args)).toEqual(keys(f.process.calls[1]!.args));
   });
