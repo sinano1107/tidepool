@@ -125,12 +125,14 @@ function RegisterScreen({ onRegister, parentTask, onClose }: RegisterScreenProps
     setDump(d.line);
   };
   const discardPendingDump = async (id: number) => {
-    if (id === selectedDumpId) { setSelectedDumpId(null); }
     try {
       await api(`/api/pending-dumps/${id}`, {}, 'DELETE');
     } catch {
       return;
     }
+    // only clear if `id` is still the selection at this point — a reselect
+    // made while the DELETE was in flight must not be clobbered
+    setSelectedDumpId((cur) => (cur === id ? null : cur));
     refreshPendingDumps();
   };
   const issueListHintStyle = { fontSize: 'var(--text-sm)', color: 'var(--text-secondary)' };
