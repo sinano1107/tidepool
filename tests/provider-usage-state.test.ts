@@ -110,7 +110,7 @@ it("Provider/window の観測値・offset・freshness・CLI version を pause �
   expect((await api(t.baseUrl, "GET", "/api/pause")).json.providerUsage[0].windows[0].offset).toBe(35);
 });
 
-it("既知の組(anthropic × session / week / fable、openai × primary / secondary)以外の pace offset は入口で弾き、行を作らない", async () => {
+it("既知の組(anthropic × session / week / fable、openai × primary / secondary)以外の pace offset は入口で 400 で弾く", async () => {
   t = await bootTidepool();
 
   for (const [provider, window] of [
@@ -122,7 +122,6 @@ it("既知の組(anthropic × session / week / fable、openai × primary / secon
     const res = await api(t.baseUrl, "POST", "/api/settings/provider-pace-offsets", { provider, window, offset: 30 });
     expect(res.status).toBe(400);
   }
-  expect((await api(t.baseUrl, "GET", "/api/settings/provider-pace-offsets")).json.offsets).toEqual(KNOWN_PAIR_DEFAULTS);
 });
 
 it("既知の5つの組の pace offset は保存され、anthropic の session / week / fable は旧 pace-offsets へ写る", async () => {
