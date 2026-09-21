@@ -2,12 +2,11 @@ import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
-import { setPaceOffsets, setProviderPaceOffset } from "../src/pace-offsets.js";
+import { setProviderPaceOffset } from "../src/pace-offsets.js";
 import { setSpendDown } from "../src/spend-down.js";
 import {
   evaluateAndReportProviderUsage,
   reportProviderUsage,
-  reportThrottle,
 } from "../src/throttle.js";
 import { api, bootTidepool, type Tidepool } from "./harness.js";
 
@@ -106,88 +105,6 @@ it("Provider/window の観測値・offset・freshness・CLI version を pause �
     offset: 45,
   });
   expect((await api(t.baseUrl, "GET", "/api/settings/pace-offsets")).json.session).toBe(45);
-});
-
-it("openDb は既存の account-wide throttle と offsets を anthropic の Provider/window 状態へ移す", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "tidepool-provider-migration-"));
-  t = await bootTidepool({ dir });
-  const db = t.db;
-  const observedAt = new Date("2026-08-28T08:00:00.000Z");
-  reportThrottle(
-    db,
-    {
-      throttled: true,
-      resetsAt: new Date("2026-08-28T09:00:00.000Z"),
-      windows: {
-        session: { throttled: true, resumeAt: new Date("2026-08-28T08:30:00.000Z") },
-        week: { throttled: false, resumeAt: null },
-        fable: null,
-      },
-    },
-    observedAt,
-  );
-  setPaceOffsets(db, { session: 25, week: 15, fable: 5 });
-  // Rebooting is the migration seam; HTTP is the only assertion surface.
-  await t.stopServer();
-  t = await bootTidepool({ dir });
-
-  expect((await api(t.baseUrl, "GET", "/api/pause")).json.providerUsage).toEqual([
-    {
-      provider: "anthropic",
-      status: "observed",
-      plan: null,
-      cliVersion: null,
-      observedAt: observedAt.toISOString(),
-      windows: [
-        {
-          window: "session",
-          model: null,
-          usedPercent: null,
-          durationMs: null,
-          resetsAt: null,
-          offset: 25,
-          throttled: true,
-          resumesAt: "2026-08-28T08:30:00.000Z",
-        },
-        {
-          window: "week",
-          model: null,
-          usedPercent: null,
-          durationMs: null,
-          resetsAt: null,
-          offset: 15,
-          throttled: false,
-          resumesAt: null,
-        },
-      ],
-    },
-  ]);
-});
-
-it("legacy の未観測 window は migration 後も Anthropic unobservable のまま", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "tidepool-provider-unobservable-migration-"));
-  t = await bootTidepool({ dir });
-  const db = t.db;
-  reportThrottle(
-    db,
-    {
-      throttled: true,
-      resetsAt: null,
-      windows: {
-        session: null,
-        week: { throttled: false, resumeAt: null },
-        fable: null,
-      },
-    },
-    new Date("2026-08-28T08:00:00.000Z"),
-  );
-  await t.stopServer();
-  t = await bootTidepool({ dir });
-
-  expect((await api(t.baseUrl, "GET", "/api/pause")).json.providerUsage[0]).toMatchObject({
-    provider: "anthropic",
-    status: "unobservable",
-  });
 });
 
 it("OpenAI Provider window は active Spend-down で pace line を外し 100% cap だけを残す", async () => {

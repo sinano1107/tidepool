@@ -4,13 +4,10 @@ import { SEED_EXECUTION_SETTINGS } from "./execution-setting.js";
 export type Db = Database.Database;
 
 // board-internal only (ADR 0120 決定2 / issue #618): この task が主題 X の周期 meta-review であること。
-// 盤面の登録関数だけが書き、MCP / JSON API からは書けない。fresh と ALTER で同じ CHECK を持つ。
+// 盤面の登録関数だけが書き、MCP / JSON API からは書けない。
 const META_REVIEW_SUBJECT_COLUMN = "meta_review_subject TEXT CHECK (meta_review_subject IN ('memory', 'routing'))";
 const META_REVIEW_PERIOD_COLUMN = "meta_review_period_days INTEGER CHECK (meta_review_period_days > 0)";
 
-// Shared between the fresh-board CREATE and the old-schema rebuild migration
-// below (title/purpose/completion_criteria's NOT NULL -> CHECK relaxation) so
-// the two can never drift apart.
 const TASKS_TABLE_DDL = `
     CREATE TABLE tasks (
       id                  TEXT PRIMARY KEY,
@@ -102,15 +99,17 @@ const TASKS_TABLE_DDL = `
       -- is distinguished in the record from "the board default was chosen" —
       -- the latter shows up as worker_spawned.source.tier, never here.
       -- Deliberately no CHECK: the enum is stated once in the domain
-      -- (registerTask / decomposeTask throw DomainError, ADR 0110 決定2), and
-      -- the ALTER below adds bare TEXT columns to existing boards — a CHECK
-      -- here and not there is exactly the drift this shared DDL exists to
-      -- prevent. Constraints (provider限定・予算) are deliberately NOT columns
+      -- (registerTask / decomposeTask throw DomainError, ADR 0110 決定2).
+      -- Constraints (provider限定・予算) are deliberately NOT columns
       -- here: those live on the workspace and the board settings.
       tier                TEXT,
       priority            TEXT,
       ${META_REVIEW_SUBJECT_COLUMN},
       created_at          TEXT NOT NULL,
+      -- ADR 0109 決定5: 後始末の未了は再起動をまたぐ事実である。最終 verb が着地した
+      -- 時刻を持ち、後始末が完走した時点で null に戻る —— in-memory の callback は
+      -- 盤面の crash を越えないので、起動時に拾うにはこの1列が要る。
+      teardown_started_at TEXT,
       -- exactly one content source, exclusively (issue #49, ADR 0016): an
       -- ordinary task carries all three content fields and no
       -- github_issue_number; an issue-backed task carries a
@@ -124,8 +123,6 @@ const TASKS_TABLE_DDL = `
       )
     )`;
 
-// Shared between the fresh-board CREATE and the pre-ADR-0008 rebuild
-// migration below, same pattern as TASKS_TABLE_DDL — the two can never drift.
 const THROTTLE_STATE_TABLE_DDL = `
     CREATE TABLE throttle_state (
       id                 INTEGER PRIMARY KEY CHECK (id = 1),
@@ -154,7 +151,6 @@ export const MEMORY_PREPROCESS_VERSION = "cjk-bigram-5";
 // Shared between the fresh-board CREATE and the memory index rebuild (memory.ts).
 export const MEMORY_FTS_DDL = `CREATE VIRTUAL TABLE memory_fts USING fts5(text, title, path, original, tokenize = "${MEMORY_FTS_TOKENIZER}")`;
 
-// Shared between the fresh-board CREATE and #600's kind-CHECK rebuild below.
 const MEMORY_ENTRIES_TABLE_DDL = `
     CREATE TABLE memory_entries (
       id                  INTEGER PRIMARY KEY,
@@ -177,8 +173,7 @@ const MEMORY_ENTRIES_TABLE_DDL = `
       successor_id        INTEGER REFERENCES memory_entries(id)
     )`;
 
-// Shared between the fresh-board CREATE and #190's event-table rebuild. The
-// database is the audit record's final backstop, so its route vocabulary is
+// The database is the audit record's final backstop, so its route vocabulary is
 // constrained here as well as by EventOrigin in TypeScript.
 // task_id is NULL for board-scoped events (execution_settings_changed, issue #545;
 // memory_entry_created / memory_entry_invalidated, issue #590; memory_entry_approved, issue #620; memory_index_rebuilt, issue #591; memory_settings_changed, issue #592) — a settings change
@@ -577,303 +572,9 @@ export function openDb(path: string): Db {
     -- append-only is enforced by structure, not convention
     ${EVENTS_APPEND_ONLY_TRIGGERS}
   `);
-  // ADR 0091: the old table could hold only one target. Spend-down expires
-  // on its own, so legacy state is disposable; rebuild it as a keyed set.
-  const spendDownCols = (
-    db.prepare("PRAGMA table_info(spend_down_state)").all() as Array<{ name: string }>
-  ).map((c) => c.name);
-  if (spendDownCols.includes("id")) {
-    db.exec(`
-      DROP TABLE spend_down_state;
-      ${SPEND_DOWN_STATE_TABLE_DDL};
-    `);
-  }
-  // ADR 0065: session closure records who closed it so the next terminal
-  // commit can report a timeout once. Scratchpad lines belong to the board,
-  // not to a session; SQLite on the deployed Pi supports this direct drop.
-  const triageSessionCols = (
-    db.prepare("PRAGMA table_info(triage_sessions)").all() as Array<{ name: string }>
-  ).map((c) => c.name);
-  if (!triageSessionCols.includes("closed_by")) {
-    db.exec(
-      "ALTER TABLE triage_sessions ADD COLUMN closed_by TEXT CHECK (closed_by IN ('commit', 'timeout'))",
-    );
-  }
-  if (!triageSessionCols.includes("timeout_notified")) {
-    db.exec(
-      "ALTER TABLE triage_sessions ADD COLUMN timeout_notified INTEGER NOT NULL DEFAULT 0 CHECK (timeout_notified IN (0, 1))",
-    );
-  }
-  const triageScratchpadCols = (
-    db.prepare("PRAGMA table_info(triage_scratchpad)").all() as Array<{ name: string }>
-  ).map((c) => c.name);
-  if (triageScratchpadCols.includes("session_id")) {
-    db.exec("ALTER TABLE triage_scratchpad DROP COLUMN session_id");
-  }
-  // boards created before the question fields existed get them added in place
-  const cols = (db.prepare("PRAGMA table_info(tasks)").all() as Array<{ name: string }>).map(
-    (c) => c.name,
-  );
-  for (const col of [
-    "question_items",
-    "question_answer",
-    "question_answer_comment",
-    "question_cancel_option",
-    "question_pending_child",
-    "question_pending_local_merge_task_id",
-    "question_pending_pr_promotion_task_id",
-    "workspace",
-    // ADR 0109 決定5: 後始末の未了は再起動をまたぐ事実である。最終 verb が着地した
-    // 時刻を持ち、後始末が完走した時点で null に戻る —— in-memory の callback は
-    // 盤面の crash を越えないので、起動時に拾うにはこの1列が要る。
-    "teardown_started_at",
-    // ADR 0110 決定2 / issue #543: 要求2列。TASKS_TABLE_DDL 側と同じ**素の
-    // TEXT** —— 片方にだけ CHECK を足せば fresh 盤面と migrate 盤面が drift する。
-    "tier",
-    "priority",
-    "review_by",
-    "review_tier",
-  ]) {
-    if (!cols.includes(col)) db.exec(`ALTER TABLE tasks ADD COLUMN ${col} TEXT`);
-  }
-  for (const col of [
-    "pr_number",
-    "question_pending_merge_pr",
-    "github_issue_number",
-    "question_cli_auth_expiry_warning",
-  ]) {
-    if (!cols.includes(col)) db.exec(`ALTER TABLE tasks ADD COLUMN ${col} INTEGER`);
-  }
-  if (!cols.includes("meta_review_subject")) db.exec(`ALTER TABLE tasks ADD COLUMN ${META_REVIEW_SUBJECT_COLUMN}`);
-  const memoryDefaultsCols = (db.prepare("PRAGMA table_info(memory_defaults)").all() as Array<{ name: string }>).map((c) => c.name);
-  if (!memoryDefaultsCols.includes("meta_review_period_days")) {
-    db.exec(`ALTER TABLE memory_defaults ADD COLUMN ${META_REVIEW_PERIOD_COLUMN}`);
-  }
-  // #190 / ADR 0032: the operation route is separate from the worker identity.
-  // Existing rows predate route recording and therefore represent the only
-  // human-facing surface that existed then: the WebUI.
-  const eventCols = (db.prepare("PRAGMA table_info(events)").all() as Array<{ name: string }>).map(
-    (c) => c.name,
-  );
-  if (!eventCols.includes("origin")) {
-    db.exec("ALTER TABLE events ADD COLUMN origin TEXT NOT NULL DEFAULT 'webui'");
-  }
-  const eventSchema = db
-    .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'events'")
-    .get() as { sql: string };
-  if (!eventSchema.sql.includes("CHECK (origin IN ('webui', 'mcp', 'worker', 'board'))")) {
-    db.transaction(() => {
-      db.exec("DROP TABLE IF EXISTS events_post_issue_190;");
-      db.exec(EVENTS_TABLE_DDL.replace("CREATE TABLE events", "CREATE TABLE events_post_issue_190"));
-      db.exec(`
-        INSERT INTO events_post_issue_190 (id, task_id, worker_id, origin, kind, payload, created_at)
-        SELECT id, task_id, worker_id, origin, kind, payload, created_at FROM events;
-        DROP TABLE events;
-        ALTER TABLE events_post_issue_190 RENAME TO events;
-      `);
-    })();
-    db.exec(EVENTS_APPEND_ONLY_TRIGGERS);
-  }
-  // issue #600: 種別 definition を受けるよう kind の CHECK を広げる(ALTER では変えられない)。
-  // 自己参照の successor_id があるので、DROP の暗黙 DELETE を FK が拒まないよう tasks の
-  // rebuild と同じく pragma を外で切る。
-  const memorySchema = db
-    .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'memory_entries'")
-    .get() as { sql: string };
-  if (!memorySchema.sql.includes("'definition'")) {
-    db.pragma("foreign_keys = OFF");
-    try {
-      db.transaction(() => {
-        db.exec(MEMORY_ENTRIES_TABLE_DDL.replace("CREATE TABLE memory_entries", "CREATE TABLE memory_entries_post_issue_600"));
-        db.exec(`
-          INSERT INTO memory_entries_post_issue_600 SELECT * FROM memory_entries;
-          DROP TABLE memory_entries;
-          ALTER TABLE memory_entries_post_issue_600 RENAME TO memory_entries;
-        `);
-      })();
-    } finally {
-      db.pragma("foreign_keys = ON");
-    }
-  }
-  if (!cols.includes("based_on_decision")) {
-    db.exec(`ALTER TABLE tasks ADD COLUMN based_on_decision INTEGER`);
-    db.exec(`
-      UPDATE tasks
-      SET based_on_decision = (
-        SELECT json_extract(e.payload, '$.based_on_decision')
-        FROM events e
-        WHERE e.task_id = tasks.id AND e.kind = 'task_registered'
-        ORDER BY e.id ASC
-        LIMIT 1
-      )
-      WHERE EXISTS (
-        SELECT 1
-        FROM events e
-        WHERE e.task_id = tasks.id
-          AND e.kind = 'task_registered'
-          AND json_extract(e.payload, '$.based_on_decision') IS NOT NULL
-      )
-    `);
-  }
-  // issue #49 / ADR 0016: title/purpose/completion_criteria's NOT NULL needs
-  // relaxing (to CHECK-enforced instead) so an issue-backed task can carry
-  // none of the three — SQLite can't drop a column's NOT NULL via ALTER.
-  // Unlike throttle_state's drop-and-recreate below, this is real task
-  // history, so the table is rebuilt with every existing row carried across
-  // (the additive-column loop above already guarantees every column this
-  // rebuild names exists on the old table, however old it is).
-  const taskColInfo = db.prepare("PRAGMA table_info(tasks)").all() as Array<{
-    name: string;
-    notnull: number;
-  }>;
-  if (taskColInfo.find((c) => c.name === "title")?.notnull === 1) {
-    const allCols = taskColInfo.map((c) => c.name);
-    // a prior crashed run of this same rebuild (e.g. mid-INSERT) can leave a
-    // stray, incomplete tasks_post_issue_49 behind since the statements
-    // below used to run outside a transaction — drop it before rebuilding.
-    // Idempotent regardless of how far a prior crashed attempt got, so it
-    // doesn't need to share a transaction with what follows.
-    db.exec(`DROP TABLE IF EXISTS tasks_post_issue_49;`);
-    // Renaming `tasks` itself (rather than building the replacement under a
-    // fresh name first) would make SQLite rewrite every other table's own
-    // `REFERENCES tasks(id)` to follow it to the renamed-away table — left
-    // dangling once that table is dropped. Building under a throwaway name
-    // and renaming *that* into place at the end never triggers the rewrite,
-    // since nothing references the throwaway name.
-    //
-    // foreign_keys stays ON (better-sqlite3's default) through this first
-    // transaction, so a dangling parent_id already sitting in old data fails
-    // loudly here instead of migrating across silently — parent_id's own
-    // `REFERENCES tasks(id)` on the new table still resolves to the old
-    // `tasks`, which hasn't been dropped yet, so the check is meaningful.
-    db.transaction(() => {
-      db.exec(TASKS_TABLE_DDL.replace("CREATE TABLE tasks", "CREATE TABLE tasks_post_issue_49"));
-      // old boards may still carry issue #30's superseded question_options /
-      // question_recommendation columns (dropped from the schema when
-      // question_items replaced them, but never physically dropped from
-      // already-created tables — ADD COLUMN above is additive-only). Carry
-      // across only columns the new schema still knows about; this rebuild
-      // is the natural place to actually drop the dead ones.
-      const newCols = (
-        db.prepare("PRAGMA table_info(tasks_post_issue_49)").all() as Array<{ name: string }>
-      ).map((c) => c.name);
-      const carriedCols = allCols.filter((name) => newCols.includes(name)).join(", ");
-      db.exec(`INSERT INTO tasks_post_issue_49 (${carriedCols}) SELECT ${carriedCols} FROM tasks;`);
-    })();
-    // events/triage_front_inserts/etc. hold FK references to tasks(id) with
-    // no ON DELETE CASCADE; DROP TABLE tasks below issues an implicit DELETE
-    // FROM tasks that FK enforcement would reject outright. The pragma can
-    // only be flipped outside a transaction (SQLite no-ops it mid-BEGIN), so
-    // it's off for this second transaction alone — narrower than the first,
-    // which needed it ON for the parent_id check above. If the process dies
-    // between the two transactions, `tasks` is left with title NOT NULL
-    // still set, so the next openDb re-enters this whole block and the
-    // DROP-IF-EXISTS above clears the completed-but-now-stale copy before
-    // redoing both steps — no data loss, just repeated work.
-    db.pragma("foreign_keys = OFF");
-    try {
-      db.transaction(() => {
-        db.exec(`DROP TABLE tasks;`);
-        db.exec(`ALTER TABLE tasks_post_issue_49 RENAME TO tasks;`);
-      })();
-    } finally {
-      db.pragma("foreign_keys = ON");
-    }
-  }
-  // boards created before issue #63 / ADR 0022's board timezone get tz added
-  // in place, defaulting to Asia/Tokyo — existing start/end rows keep their
-  // HH:MM values (they were entered assuming JST, so a default of Asia/Tokyo
-  // makes them mean what they always meant).
-  const quietHoursCols = (
-    db.prepare("PRAGMA table_info(quiet_hours)").all() as Array<{ name: string }>
-  ).map((c) => c.name);
-  if (!quietHoursCols.includes("tz")) {
-    db.exec(`ALTER TABLE quiet_hours ADD COLUMN tz TEXT NOT NULL DEFAULT 'Asia/Tokyo'`);
-  }
-  // ADR 0008 superseded #10's throttle_state shape (state/utilization ->
-  // throttled). Unlike the tasks columns above, this isn't an additive
-  // change — the old `state` CHECK/NOT NULL can't be relaxed via ALTER, and
-  // the row is a last-observed reading, not board history, so a board still
-  // on the old shape gets the table rebuilt; the next JIT poll repopulates it.
-  const throttleCols = (
-    db.prepare("PRAGMA table_info(throttle_state)").all() as Array<{ name: string }>
-  ).map((c) => c.name);
-  if (throttleCols.includes("state")) {
-    db.exec(`
-      DROP TABLE throttle_state;
-      ${THROTTLE_STATE_TABLE_DDL};
-    `);
-  } else if (!throttleCols.includes("session_throttled")) {
-    // ADR 0030: additive per-window verdict columns. NULL (the ALTER default)
-    // reads as "window unobserved", which is exactly right for a pre-0030
-    // last-observed row — the next JIT poll fills them in.
-    db.exec(`
-      ALTER TABLE throttle_state ADD COLUMN session_throttled INTEGER;
-      ALTER TABLE throttle_state ADD COLUMN session_resume_at TEXT;
-      ALTER TABLE throttle_state ADD COLUMN week_throttled INTEGER;
-      ALTER TABLE throttle_state ADD COLUMN week_resume_at TEXT;
-      ALTER TABLE throttle_state ADD COLUMN fable_throttled INTEGER;
-      ALTER TABLE throttle_state ADD COLUMN fable_resume_at TEXT;
-    `);
-  }
-  // ADR 0064 決定6: 既存盤面には NULL が入る。検査側に NULL の分岐は無いので、
-  // 移行の瞬間に in_progress だったタスク(高々1つ)の解放だけが「基準と一致しない」
-  // = 違反に落ちる — fail-closed 側の、人間が30秒で答える1枚である。
-  const workspaceStateCols = (
-    db.prepare("PRAGMA table_info(workspace_state)").all() as Array<{ name: string }>
-  ).map((c) => c.name);
-  if (!workspaceStateCols.includes("ref_snapshot")) {
-    db.exec("ALTER TABLE workspace_state ADD COLUMN ref_snapshot TEXT");
-  }
-  if (!throttleCols.includes("state") && !throttleCols.includes("observed_at")) {
-    // ADR 0058: pre-existing last-observed rows have no honest observation
-    // timestamp. NULL keeps that distinction until the next JIT poll.
-    db.exec(`ALTER TABLE throttle_state ADD COLUMN observed_at TEXT`);
-  }
-  // ADR 0098: the pre-Provider board stored one Anthropic account reading and
-  // one set of offsets. Preserve those values under their now-explicit
-  // Provider/window keys. Raw percentages/durations were never stored, so
-  // their NULLs remain honest until the next live probe replaces the row.
-  const hasAnthropicUsage = db
-    .prepare("SELECT 1 FROM provider_usage_observations WHERE provider = 'anthropic'")
-    .get();
-  const legacyThrottle = db.prepare("SELECT 1 FROM throttle_state WHERE id = 1").get();
-  if (!hasAnthropicUsage && legacyThrottle) {
-    db.exec(`
-      INSERT INTO provider_usage_observations
-        (provider, status, plan, cli_version, reason, observed_at)
-      SELECT 'anthropic',
-             CASE
-               WHEN session_throttled IS NULL OR week_throttled IS NULL
-                 THEN 'unobservable'
-               ELSE 'observed'
-             END,
-             NULL, NULL,
-             CASE
-               WHEN session_throttled IS NULL OR week_throttled IS NULL
-                 THEN 'legacy usage observation was incomplete'
-               ELSE NULL
-             END,
-             observed_at
-      FROM throttle_state WHERE id = 1;
-      INSERT INTO provider_usage_windows
-        (provider, window, model, used_percent, duration_ms, resets_at, throttled, resumes_at)
-      SELECT 'anthropic', 'session', '', NULL, NULL, NULL, session_throttled, session_resume_at
-      FROM throttle_state WHERE id = 1 AND session_throttled IS NOT NULL;
-      INSERT INTO provider_usage_windows
-        (provider, window, model, used_percent, duration_ms, resets_at, throttled, resumes_at)
-      SELECT 'anthropic', 'week', '', NULL, NULL, NULL, week_throttled, week_resume_at
-      FROM throttle_state WHERE id = 1 AND week_throttled IS NOT NULL;
-      INSERT INTO provider_usage_windows
-        (provider, window, model, used_percent, duration_ms, resets_at, throttled, resumes_at)
-      SELECT 'anthropic', 'fable', 'fable', NULL, NULL, NULL, fable_throttled, fable_resume_at
-      FROM throttle_state WHERE id = 1 AND fable_throttled IS NOT NULL;
-    `);
-  }
   // 種の表からの初期化は**一度だけ**(ADR 0110 決定3: 以後は DB が正本)。
-  // provider_pace_offsets の INSERT OR IGNORE と違って行ごとに撃たないのは、
-  // 運用者が消した行が再オープンのたびに生え直すのが「正本は DB」と矛盾する
-  // ためである。
+  // 行ごとの INSERT OR IGNORE にしないのは、運用者が消した行が再オープンの
+  // たびに生え直すのが「正本は DB」と矛盾するためである。
   if (seedExecutionSettings) {
     const insert = db.prepare(
       "INSERT INTO execution_settings (provider, tier, model, effort, price_in, price_out) VALUES (?, ?, ?, ?, ?, ?)",
@@ -882,17 +583,5 @@ export function openDb(path: string): Db {
       insert.run(row.provider, row.tier, row.model, row.effort, row.price_in, row.price_out);
     }
   }
-  db.exec(`
-    INSERT OR IGNORE INTO provider_pace_offsets (provider, window, offset)
-      SELECT 'anthropic', 'session', session FROM pace_offsets WHERE id = 1;
-    INSERT OR IGNORE INTO provider_pace_offsets (provider, window, offset)
-      SELECT 'anthropic', 'week', week FROM pace_offsets WHERE id = 1;
-    INSERT OR IGNORE INTO provider_pace_offsets (provider, window, offset)
-      SELECT 'anthropic', 'fable', fable FROM pace_offsets WHERE id = 1;
-    INSERT OR IGNORE INTO provider_pace_offsets (provider, window, offset)
-      SELECT 'openai', 'primary', session FROM pace_offsets WHERE id = 1;
-    INSERT OR IGNORE INTO provider_pace_offsets (provider, window, offset)
-      SELECT 'openai', 'secondary', week FROM pace_offsets WHERE id = 1;
-  `);
   return db;
 }
