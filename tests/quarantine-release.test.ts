@@ -18,10 +18,10 @@ import { unusedLanding } from "./fakes.js";
 
 const now = () => new Date(0);
 
-function quarantined(kind: (typeof QUARANTINES)[number]["kind"]) {
+function quarantined(kind: (typeof QUARANTINES)[number]["kind"], value: string | null) {
   const db = openDb(":memory:");
-  registerQuarantine(db, kind, "x", "it broke", now());
-  const question = getTask(db, openQuarantineQuestion(db, kind, "x")!.id)!;
+  registerQuarantine(db, kind, value, "it broke", now());
+  const question = getTask(db, openQuarantineQuestion(db, kind, value)!.id)!;
   const pollNow = vi.fn();
   const answer = (quarantineChecks: QuarantineChecks) =>
     submitAnswer(
@@ -34,37 +34,40 @@ function quarantined(kind: (typeof QUARANTINES)[number]["kind"]) {
   return { db, question, pollNow, answer };
 }
 
-describe.each(QUARANTINES.map((row) => row.kind))("%s の確認型 question への回答", (kind) => {
+// 盤面全体の種類は値を持たない(NULL の鍵)
+describe.each(QUARANTINES.map((row) => [row.kind, row.scope === "board" ? null : "x"] as const))(
+  "%s の確認型 question への回答",
+  (kind, value) => {
   it("検査が不成立なら回答は拒否され、question は開いたまま残る", async () => {
-    const q = quarantined(kind);
+    const q = quarantined(kind, value);
 
     await expect(
       q.answer({ [kind]: async () => { throw new DomainError("still broken"); } }),
     ).rejects.toThrow("still broken");
 
-    expect(openQuarantineQuestion(q.db, kind, "x")).toBeDefined();
+    expect(openQuarantineQuestion(q.db, kind, value)).toBeDefined();
   });
 
   it("検査の map にその種類が無ければ回答は拒否され、question は開いたまま残る", async () => {
-    const q = quarantined(kind);
+    const q = quarantined(kind, value);
 
     await expect(q.answer({})).rejects.toThrow(DomainError);
 
-    expect(openQuarantineQuestion(q.db, kind, "x")).toBeDefined();
+    expect(openQuarantineQuestion(q.db, kind, value)).toBeDefined();
   });
 
   it("受理されたら quarantine_released が種類と値を運び、pickup の再開が立つ", async () => {
-    const q = quarantined(kind);
+    const q = quarantined(kind, value);
     const checked: Array<string | null> = [];
 
     await q.answer({ [kind]: async (value: string | null) => { checked.push(value); } });
 
-    expect(checked).toEqual(["x"]);
-    expect(openQuarantineQuestion(q.db, kind, "x")).toBeUndefined();
+    expect(checked).toEqual([value]);
+    expect(openQuarantineQuestion(q.db, kind, value)).toBeUndefined();
     expect(listEvents(q.db, q.question.id).at(-1)?.payload).toEqual({
       kind: "quarantine_released",
       quarantine: kind,
-      value: "x",
+      value,
     });
     expect(q.pollNow).toHaveBeenCalledOnce();
   });

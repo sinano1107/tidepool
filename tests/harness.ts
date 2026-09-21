@@ -420,7 +420,7 @@ export async function api(
 /** Quarantines an agent name — for tests that drive the pickup/queue gate
  *  SQL (ADR 0012 / issue #36). The open Confirmation question is the state
  *  (ADR 0137 決定3), so this puts one on the board. */
-export function quarantineAgentRow(db: Db, name: string): void {
+export function quarantineTestAgent(db: Db, name: string): void {
   quarantineAgent(db, name, "test quarantine", new Date(0));
 }
 

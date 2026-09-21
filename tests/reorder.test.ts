@@ -10,7 +10,7 @@ import {
   holdChildren,
   makeWorkspace,
   mcpClient,
-  quarantineAgentRow,
+  quarantineTestAgent,
   queueChild,
   queueWork,
   type Tidepool,
@@ -254,7 +254,7 @@ it("a non-todo task can be moved — board order is global — without firing a 
   // standalone done task the instant its whole tree settles, which would
   // make it disappear from the list this test inspects
   const a = queueWork(t, "a", undefined, true);
-  quarantineAgentRow(t.db, DEFAULT_AUDITOR_NAME);
+  quarantineTestAgent(t.db, DEFAULT_AUDITOR_NAME);
   await t.clock.advance(HOUR); // a picked up
   const client = await mcpClient(t.mcpBaseUrl, a.id);
   const done: any = await client.callTool({
