@@ -201,7 +201,7 @@ it("provider 認証の quarantine 確認が開いている間は、その provid
   t = await bootTidepool({
     quarantineResolvers: { providerAuth: (providers) => (providers.includes("moonshot") ? ["kipper"] : []) },
   });
-  const task = await registerWork(t, "runs on moonshot", undefined, undefined, "kipper");
+  const task = queueWork(t, "runs on moonshot", undefined, undefined, "kipper");
   // an open provider-auth Confirmation for the provider the task's agent speaks
   registerQuestion(t, {
     title: "moonshot authentication is unavailable — pickup of moonshot-speaking agents is stopped",

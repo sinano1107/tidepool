@@ -177,8 +177,12 @@ export function quarantineStops(db: Db, resolvers: QuarantineResolvers = {}): Re
     if (row.scope === "board") continue;
     const values = openQuarantineValues(db, row.kind) as string[];
     if (values.length === 0) continue;
-    if (row.scope === "workspace") stops.workspaces.push(...values);
-    else stops.assignees.push(...(("resolveAssignees" in row ? row.resolveAssignees : resolvers[row.kind])?.(values) ?? []));
+    if (row.scope === "workspace") {
+      stops.workspaces.push(...values);
+      continue;
+    }
+    const resolve = "resolveAssignees" in row ? row.resolveAssignees : resolvers[row.kind];
+    stops.assignees.push(...(resolve?.(values) ?? []));
   }
   return stops;
 }

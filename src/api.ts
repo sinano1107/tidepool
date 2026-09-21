@@ -556,8 +556,8 @@ export interface ApiRouterDeps {
   /** ADR 0137 決定5: 解除の門の map。合成 root が組む。 */
   quarantineChecks?: QuarantineChecks;
   /** ADR 0137 決定6: 資源単位の quarantine の値 → agent 名。queue の `skipped` 表示は
-   *  scheduler のゲートと同じ集合を見る。Absent → registry を持たない盤面なので、
-   *  agent 名の行のほかは何も skip しない。 */
+   *  scheduler のゲートと同じ集合を見る。resolver の無い kind(registry を持たない
+   *  盤面では値が undefined)の行は何も skip しない。 */
   quarantineResolvers?: QuarantineResolvers;
   /** ADR 0110 決定1/3 / issue #544: この task が走りうる実行設定(Provider 順位
    *  で並び、除外は当たっていない)。queue の skipped 表示と Pickable head の判定が

@@ -2256,7 +2256,7 @@ export function resolveTaskAgent(
  *  unset assignee to (issue #42 / #242 / CONTEXT.md's Auditor): a question has
  *  no executor, an unset review resolves to the Auditor pointer, and an unset
  *  work task resolves to the board's default agent. Absent pointers evaluate
- *  to NULL, which the gates' COALESCE/`IN` already treats as "no fallback,
+ *  to NULL, which the gates' COALESCE/`=` already treats as "no fallback,
  *  gate only an explicit assignee" — no separate null-guard needed here. */
 function typeAwareDefaultAgentSql(
   taskTypeRef: string,
@@ -2266,6 +2266,18 @@ function typeAwareDefaultAgentSql(
   return `CASE WHEN ${taskTypeRef} = 'question' THEN NULL
                WHEN ${taskTypeRef} = 'review' THEN ${auditorRef}
                ELSE ${defaultAgentRef} END`;
+}
+
+/** 「このタスクは資源単位の停止で止まっている」の唯一の SQL(ADR 0137 決定6)。
+ *  `nextSlotTask` の pickup 述語と `listQueue` の skipped 表示が共有し、乖離させない。
+ *  workspace は `task.workspace ?? 既定`(既定が無い盤面では門ごと効かない、ADR 0009)、
+ *  assignee は `task.assignee ?? 型に応じた既定` を、呼び出し側が束ねた
+ *  `@stoppedWorkspaces` / `@stoppedAssignees` と比べる。EXISTS なので NULL は偽に落ちる。 */
+function stoppedSql(taskRef: string, fallback: string): string {
+  return `((@defaultWorkspaceName IS NOT NULL AND EXISTS (SELECT 1 FROM json_each(@stoppedWorkspaces)
+             WHERE value = COALESCE(${taskRef}.workspace, @defaultWorkspaceName)))
+           OR EXISTS (SELECT 1 FROM json_each(@stoppedAssignees)
+             WHERE value = COALESCE(${taskRef}.assignee, ${fallback})))`;
 }
 
 /** Held (CONTEXT.md, ADR 0006 / 0048): while a question is unanswered, keep
@@ -2501,11 +2513,7 @@ export function listQueue(
   const fallback = typeAwareDefaultAgentSql("tasks.type", "@defaultAgentName", "@auditorName");
   const rows = boardRows(
     db,
-    `WHEN status = 'todo' AND type <> 'question' AND (
-       (@defaultWorkspaceName IS NOT NULL AND COALESCE(tasks.workspace, @defaultWorkspaceName) IN (
-           SELECT value FROM json_each(@stoppedWorkspaces)))
-         OR COALESCE(tasks.assignee, ${fallback}) IN (SELECT value FROM json_each(@stoppedAssignees))
-     ) THEN 'skipped'`,
+    `WHEN status = 'todo' AND type <> 'question' AND ${stoppedSql("tasks", fallback)} THEN 'skipped'`,
     [
       {
         defaultWorkspaceName: defaultWorkspaceName ?? null,
@@ -2781,12 +2789,7 @@ export function nextSlotTask(
          AND t.assignee IS NOT @humanWorkerId
          AND (NOT ${unfinishedChildSql("t.id")} OR ${earlyIntegrationReturnSql("t.id")})
          AND NOT ${heldSql("t.id")}
-         AND (@defaultWorkspaceName IS NULL
-           OR COALESCE(t.workspace, @defaultWorkspaceName) NOT IN (
-             SELECT value FROM json_each(@stoppedWorkspaces)))
-         AND (COALESCE(t.assignee, ${fallback}) IS NULL
-           OR COALESCE(t.assignee, ${fallback}) NOT IN (
-             SELECT value FROM json_each(@stoppedAssignees)))
+         AND NOT ${stoppedSql("t", fallback)}
          AND (@excludedTaskIds IS NULL
            OR t.id NOT IN (SELECT value FROM json_each(@excludedTaskIds)))
        ORDER BY t.sort_key LIMIT 1`,

@@ -9,7 +9,7 @@ import {
   quarantineUnlessClear,
   registerQuarantine,
 } from "../src/quarantine.js";
-import { cancelTaskDirectly, listBoard, registerTask } from "../src/tasks.js";
+import { cancelTaskDirectly, listBoard, listQueue, nextSlotTask, registerTask } from "../src/tasks.js";
 
 /** Quarantine の種類の表(ADR 0137 決定1・2)。行を総なめにするので、1行足せば
  *  このテストも足した行について同じことを述べる —— 足すのは下の見本の値だけである。 */
@@ -76,7 +76,8 @@ describe.each(QUARANTINES.map((row) => row.kind))("Quarantine の種類 %s", (ki
 /** 止まるタスクの写像(ADR 0137 決定6): 資源単位の行は、停止範囲の比べ方だけで直接 cancel の
  *  門に掛かる。assignee 群の値は resolver が agent 名へ写す(agent 名は自分自身)。 */
 describe.each(QUARANTINES.filter((row) => row.scope !== "board"))("資源単位の種類 $kind", (row) => {
-  it("開いた確認が subtree のタスクの使う資源に立っている間、直接 cancel は拒まれる", () => {
+  /** 開いた確認の資源を使うタスクを1つ置き、表から導いた止める集合を返す。 */
+  function openOverTask() {
     const db = openDb(":memory:");
     const value = SAMPLE[row.kind][0]!;
     const task = registerTask(
@@ -95,9 +96,23 @@ describe.each(QUARANTINES.filter((row) => row.scope !== "board"))("資源単位�
       providerAuth: () => ["deckhand"],
       harnessContainment: () => ["deckhand"],
     });
+    return { db, task, stops };
+  }
+
+  it("開いた確認が subtree のタスクの使う資源に立っている間、直接 cancel は拒まれる", () => {
+    const { db, task, stops } = openOverTask();
 
     expect(() => cancelTaskDirectly(db, task, null, NOW, { quarantined: stops })).toThrow(
       /open quarantine confirmation/,
+    );
+  });
+
+  it("開いた確認が立っている間、その資源を使うタスクは pickup されずキューで skipped に見える", () => {
+    const { db, task, stops } = openOverTask();
+
+    expect(nextSlotTask(db, "default-workspace", "deckhand", "auditor", stops)).toBeUndefined();
+    expect(listQueue(db, "default-workspace", "deckhand", "auditor", stops).find((t) => t.id === task.id)?.status).toBe(
+      "skipped",
     );
   });
 });

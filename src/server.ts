@@ -260,8 +260,8 @@ export interface ServerOptions {
    *  configured, so the fable line can't attribute tasks and skips nothing. */
   fableAgents?: () => string[];
   /** ADR 0137 決定6: 資源単位の quarantine の値 → agent 名(provider / Harness は
-   *  registry を読む)。pickup・queue の skipped・直接 cancel の門へ渡す。Absent →
-   *  registry を持たない盤面なので、agent 名の行のほかは何も止めない。 */
+   *  registry を読む)。pickup・queue の skipped・直接 cancel の門へ渡す。resolver の無い kind
+   *  (registry を持たない盤面では値が undefined)の行は何も止めない。 */
   quarantineResolvers?: QuarantineResolvers;
   openaiUsage?: CodexAppServerProbe;
   /** ADR 0116 決定4: Provider → 資格情報の不在の理由。scheduler へそのまま渡す。 */
