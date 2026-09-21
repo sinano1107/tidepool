@@ -252,6 +252,12 @@ it("hooks/list の応答から、vendor 診断(errors / warnings)を cwd を跨�
     "error: invalid matcher (/<session-flags>/config.toml)",
     "warning: hook skipped",
   ]);
+
+  // 診断の欄が欠けた形でも、登録の読み出し(= 照合の判定)は変わらない
+  const bare = hooksListResult();
+  delete bare.data[0].errors;
+  delete bare.data[0].warnings;
+  expect(observedHooks(bare)).toEqual({ hooks: [BOARD_HOOK_REGISTRATION], hookDiagnostics: [] });
 });
 
 it.each([
@@ -271,6 +277,15 @@ it("診断が空なら hook 不一致の reason は変更前と同じ文字列(#
     available: false,
     reason: `Codex containment preflight hook mismatch: expected ${JSON.stringify([BOARD_HOOK_REGISTRATION])}, observed []`,
   });
+});
+
+it("hook 以外の行の不一致には vendor 診断を添えない(#734)", async () => {
+  const capability = await checkCodexCapability(
+    async () => ({ ...VALID, developerMarkers: [], hookDiagnostics: ["warning: hook skipped"] }),
+    BOARD_HOOK_PATH,
+  );
+  expect(capability.available).toBe(false);
+  if (!capability.available) expect(capability.reason).not.toContain("hook skipped");
 });
 
 it("hook が一致していれば warnings があっても封じ込めは成立する(#734)", async () => {

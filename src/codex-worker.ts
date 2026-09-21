@@ -295,15 +295,15 @@ export interface CodexHookRegistration {
 /** `hooks/list` の `result` から、登録と vendor 診断(`errors[]` / `warnings[]`、#734)を
  *  cwd を跨いで並びのまま取り出す(ADR 0130 決定3)。
  *  vendor の応答の形が変わったら、読み替えを直す場所はここ1つ —— 形の崩れは preflight の
- *  `hook mismatch` の観測値として出る(fail-closed)。 */
+ *  `hook mismatch` か、読めずに投げた `could not run` として出る(どちらも fail-closed)。 */
 export function observedHooks(
   result: unknown,
 ): Pick<CodexCapabilityObservation, "hooks" | "hookDiagnostics"> {
   const { data } = result as {
     data: Array<{
       hooks: Array<Record<string, unknown>>;
-      errors: Array<{ message: string; path: string }>;
-      warnings: string[];
+      errors?: Array<{ message: string; path: string }>;
+      warnings?: string[];
     }>;
   };
   return {
@@ -315,8 +315,9 @@ export function observedHooks(
       command: (hook.command ?? null) as string | null,
     })),
     hookDiagnostics: data.flatMap((entry) => [
-      ...entry.errors.map((error) => `error: ${error.message} (${error.path})`),
-      ...entry.warnings.map((warning) => `warning: ${warning}`),
+      // 診断は照合に使わない —— 欄が欠けても判定を変えないよう、無い形は空として読む
+      ...(entry.errors ?? []).map((error) => `error: ${error.message} (${error.path})`),
+      ...(entry.warnings ?? []).map((warning) => `warning: ${warning}`),
     ]),
   };
 }
