@@ -220,11 +220,13 @@ bash .agents/skills/deploy-pi/scripts/containment-canary.sh local   # this machi
 bash .agents/skills/deploy-pi/scripts/containment-canary.sh pi      # the Pi
 ```
 
-Measures that a confined worker cannot reach the human surface — issue #154 / ADR 0036. Two phases, split by what actually enforces each target: **loopback** under the OS confinement itself (bwrap's netns / Seatbelt, no model, deterministic and free) and **tailnet** inside one real `claude` session, because what refuses them is the CLI proxy's default deny (anything outside the allowlist) and that proxy exists nowhere else. Both tailnet names are shot — full and MagicDNS short. #152 once saw the short name tunnel through ahead of the allowlist; the current CLI closes it, but by vendor default behaviour that tidepool's code cannot pin (ADR 0139 decision 4), so only this canary notices if a CLI update reopens it.
+Measures that a confined worker cannot reach the human surface — issue #154 / ADR 0036. Two phases, split by what actually enforces each target: **loopback** under the OS confinement itself (bwrap's netns / Seatbelt, no model, deterministic and free) and **tailnet** inside one real `claude` session, because what refuses them is the CLI proxy's default deny (anything outside the allowlist) and that proxy exists nowhere else. Both tailnet names are shot — full and MagicDNS short. #152 once saw the short name tunnel through ahead of the allowlist; #793 measured it refused on macOS / CLI 2.1.278 with no deny list, but by vendor default behaviour that tidepool's code cannot pin (ADR 0139 decision 4), so only this canary notices if a CLI update reopens it.
 
 Passing is **401 / 403 / failed connection and nothing else** — not "anything but 200", which would wave through a 404 whose hole simply moved. Every target is also shot from *outside* first: if it was unreachable there too the run reports `VACUOUS`, not a pass.
 
 **Exit codes: `0`** all measured and refused — **`1`** a worker got through (a real hole, the loud one) — **`2`** nothing got through but something could not be measured here. `2` is a steady state on the Pi, see below; `1` never is.
+
+The tables below predate ADR 0139 and were taken while `deniedDomains` still listed both tailnet names. The no-deny shape was measured in #793 (macOS / CLI 2.1.278): both tailnet targets still get 403.
 
 Measured on macOS, 2026-07-30 — **exit 0**:
 

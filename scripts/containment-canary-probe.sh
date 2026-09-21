@@ -7,9 +7,9 @@
 #
 # THIS IS TIDEPOOL'S OWN REGRESSION CHECK. The board's owner runs it against
 # their own board to confirm that "a worker session cannot reach the human
-# surface" still holds after a CLI or OS update. Every request below is EXPECTED to be refused;
-# a refusal is the passing result, and the shape of the refusal is the data
-# being collected. Each target is attempted exactly once and whatever comes back
+# surface" still holds after a CLI or OS update. Every request below is
+# EXPECTED to be refused; a refusal is the passing result, and the shape of the
+# refusal is the data being collected. Each target is attempted exactly once and whatever comes back
 # is printed. Nothing here tries to get through, route around a refusal, or
 # retry.
 #
@@ -20,10 +20,10 @@
 # deterministically, with no model involved, by the canary's other phase.
 #
 # BOTH THE FULL NAME AND THE SHORT NAME. #152 once saw the MagicDNS short name
-# `raspberrypi:8443` tunnel through ahead of the allowlist. The current CLI
-# refuses it, but by vendor default behaviour that tidepool cannot pin in code
-# (ADR 0139 decision 4), so a CLI update could reopen it silently — hence
-# measuring it every time.
+# `raspberrypi:8443` tunnel through ahead of the allowlist. #793 measured it
+# refused on macOS / CLI 2.1.278 with no deny list, but by vendor default
+# behaviour that tidepool cannot pin in code (ADR 0139 decision 4), so a CLI
+# update could reopen it silently — hence measuring it every time.
 #
 # The path is one that answers 200 WITH a credential. Shooting a path that does
 # not exist would return 404 even through a wide-open hole, and read as a refusal.
