@@ -45,6 +45,8 @@ issue #140 の再グリリング(2026-07-29)で決定。**ADR 0034 を supersede
 
 **それでも deny は残る。根拠が変わる。** 金庫は `tailscale serve` の **Funnel** で提供されている — tailnet 公開ではなく**公開インターネット**である(`:443` が Funnel on、tidepool の人間面 `:8443` は tailnet only。**確認は `tailscale serve status --json` の `AllowFunnel` を見る** — 人間向けの `serve status` は既定ポートを省くため、`:443` の行はポート表記なしで出て `:443` という文字列は現れない)。したがって worker が `raspberrypi` に到達できること自体が、**盤面の中身を tailnet の外から読める永続ストアへ流し込む経路**になる。持ち出しは far end が認証するかどうかと直交する。`src/sandbox.ts` の `DENIED_TAILNET_DOMAINS` のコメントもこの根拠に差し替えてある。
 
+**追記(#793、2026-09-21)— deny は外した。** 上の差し替え後の根拠も立たなかった(書き込みが 401 なら worker に流し込む手段が無い)うえ、egress が既定 deny になった後の deny は人間が確認つきで開けた tailnet 名を黙って拒むだけになっていた。この節の `deniedDomains` に関する決定は ADR 0139 が supersede する。不変条件と canary の問いは変わらない。
+
 **タコツボの統合方針も同時に確定した(#150)。** 「統合後は人間面の credential を共有する」という #150 の当初案は**不採用**。あの credential は tailnet 限定・盤面1台・人間1人のための単一トークンであり、タコツボの客は公開インターネット上の外部 OAuth クライアント(claude.ai / iOS / 将来 ChatGPT)だから、寄せると外部クライアントが全滅する。そして**今は統合しない** — 金庫と盤面は同じ Pi に住む無関係な隣人のままで、worker は金庫を一切見ない。構想の正本は context-vault の `projects/tidepool/future-ideas.md`。
 
 **tailnet は信頼境界ではない。** `tailscale serve` は身元ヘッダを注入できるので「tailnet 経由は身元があるから素通し」にしたくなるが、worker が走るのは開発機や Pi という tailnet ノードそのものであり、worker の WebFetch から出た要求も人間と同じノード身元を持って到着する。認証は経路を問わず一律に効かせる。
