@@ -2038,11 +2038,10 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     }
     const [presented] = await presentLive([presentTask(db, task)]);
     // push の単体ビューは親の行を持たない — 承認 question の判定は一覧と同じくここで載せる
-    res.json(
-      (task.type === "question"
-        ? { ...presented!, approval: approvalAnnotation(db, task) }
-        : presented!) satisfies WireContract["GET /api/tasks/:id"],
-    );
+    res.json({
+      ...presented!,
+      ...(task.type === "question" && { approval: approvalAnnotation(db, task) }),
+    } satisfies WireContract["GET /api/tasks/:id"]);
   });
 
   return router;
