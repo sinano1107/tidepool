@@ -300,8 +300,8 @@ function RegisterScreen({ onRegister, parentTask, onClose }: RegisterScreenProps
                 flex: 1, fontSize: 'var(--text-sm)', color: 'var(--text-body)',
                 fontWeight: d.id === selectedDumpId ? 600 : 400,
               }}>{d.line}</span>
-              <Button variant={d.id === selectedDumpId ? 'primary' : 'secondary'} size="sm" onClick={() => pickPendingDump(d)}>Use</Button>
-              <Button variant="ghost" size="sm" onClick={() => discardPendingDump(d.id)}>Discard</Button>
+              <Button variant={d.id === selectedDumpId ? 'primary' : 'secondary'} size="sm" onClick={() => pickPendingDump(d)} aria-label={`use ${d.line}`}>Use</Button>
+              <Button variant="ghost" size="sm" onClick={() => discardPendingDump(d.id)} aria-label={`discard ${d.line}`}>Discard</Button>
             </div>
           ))}
         </Card>

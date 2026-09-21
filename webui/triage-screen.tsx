@@ -299,7 +299,7 @@ function TpScratchpad({ lines, onAdd, onRemove }: {
           {lines.map((l, i) => (
             <div key={l.id} style={{ display: 'flex', alignItems: 'baseline', gap: 6, fontSize: 'var(--text-xs)', color: 'var(--text-body)', marginBottom: 6 }}>
               <span style={{ flex: 1 }}>{l.text}</span>
-              <button onClick={() => onRemove(i)} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', padding: 0 }}>×</button>
+              <button onClick={() => onRemove(i)} aria-label={`remove ${l.text}`} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', padding: 0 }}>×</button>
             </div>
           ))}
           <div style={{ display: 'flex', gap: 6, alignItems: 'flex-end' }}>

@@ -1716,7 +1716,7 @@ function ExecutionTableCard({ settings, say, onSaved, edit }: {
                 <Input label="Effort" mono value={d.effort} onChange={(e) => update(i, { effort: e.target.value })} placeholder="high" />
                 <Input label="Price in" mono value={d.price_in} onChange={(e) => update(i, { price_in: e.target.value })} placeholder="USD / MTok" />
                 <Input label="Price out" mono value={d.price_out} onChange={(e) => update(i, { price_out: e.target.value })} placeholder="USD / MTok" />
-                <Button variant="ghost" size="sm" onClick={() => setDraft(draft.filter((_, j) => j !== i))}>Remove</Button>
+                <Button variant="ghost" size="sm" onClick={() => setDraft(draft.filter((_, j) => j !== i))} aria-label={`remove ${d.provider} ${d.tier} ${d.model}`.trim()}>Remove</Button>
               </div>
             ))}
             {/* ponytail: one unsaved new row at a time (its key is the literal 'new'); key by a counter if adding several per save matters */}

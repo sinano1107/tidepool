@@ -325,3 +325,26 @@ test("回答が唯一の項目だった triage も再読み込み後に Commit �
     .poll(() => t.worker.started.map((task) => task.title))
     .toContain("unblocked by the answer");
 });
+
+test("scratchpad の行ごとに × の aria-label が一意で、行を消しても他行は残る(#861)", async ({
+  boot,
+  page,
+}) => {
+  const t = await boot();
+  await api(t.baseUrl, "POST", "/api/triage/scratchpad", { line: "最初の苛立ち" });
+  await api(t.baseUrl, "POST", "/api/triage/scratchpad", { line: "2番目の苛立ち" });
+
+  await page.goto(t.baseUrl);
+  await page.getByRole("button", { name: "triage", exact: true }).click();
+  await page.getByRole("button", { name: "scratchpad", exact: true }).click();
+
+  const removeFirst = page.getByRole("button", { name: "remove 最初の苛立ち", exact: true });
+  const removeSecond = page.getByRole("button", { name: "remove 2番目の苛立ち", exact: true });
+  await expect(removeFirst).toHaveCount(1);
+  await expect(removeSecond).toHaveCount(1);
+
+  // クリックすると自分の行だけが消える — もう一方の行は残る
+  await removeFirst.click();
+  await expect(page.getByText("最初の苛立ち")).toHaveCount(0);
+  await expect(removeSecond).toHaveCount(1);
+});
