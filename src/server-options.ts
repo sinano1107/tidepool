@@ -697,6 +697,7 @@ function boardCallers(board: BoardComposition, workspace: WorkspaceConfig | unde
     executable: board.codexExecutable,
     codexHome: board.codexHome,
     workspace: workspace.path,
+    allowedDomains: workspace.allowed_domains ?? [],
     call,
   });
   const claudeContainment = async (): Promise<ContainmentCapability> => {

@@ -92,6 +92,7 @@ const enabledTools = (args: string[]) => configValue<string[]>(args, "mcp_server
 
 async function fixture(
   onSpawnFailed?: (taskId: string, failure: { error_code: string | null; message: string }) => void,
+  allowedDomains = "\n  allowed_domains:\n    - api.github.com",
 ) {
   const workspace = await mkdtemp(join(tmpdir(), "tidepool-codex-workspace-"));
   execFileSync("git", ["init", "-b", "main"], { cwd: workspace });
@@ -108,9 +109,7 @@ skills: []
 ---
 You are the Codex worker.`,
     "workspaces.yaml": `work:
-  path: ${workspace}
-  allowed_domains:
-    - api.github.com
+  path: ${workspace}${allowedDomains}
 `,
   });
   const db = openDb(":memory:");
@@ -166,6 +165,8 @@ describe("CodexWorker (ADR 0098)", () => {
     expect(config).toContain('\":root\"=\"deny\"');
     expect(config).toContain('\":slash_tmp\"=\"deny\"');
     expect(config).toContain("permissions.tidepool-work.workspace_roots=");
+    // workspace の allowed_domains が network の許可に載る(ADR 0072 決定6 / issue #763)
+    expect(config).toContain('\"api.github.com\"=\"allow\"');
     // 既定拒否(ADR 0135 決定1): snapshot が "false" の名前は全部 `-c` に載る
     const closed = Object.entries(CODEX_FEATURE_SNAPSHOT).filter(([, state]) => state === "false");
     expect(closed.filter(([name]) => !config.includes(`features.${name}=false`)).map(([name]) => name)).toEqual([]);
@@ -206,6 +207,30 @@ describe("CodexWorker (ADR 0098)", () => {
       harness: "codex",
       cli_version: CLI_VERSION,
     });
+  });
+
+  it("allowed_domains を持たない workspace では network の許可は 127.0.0.1 だけのまま(issue #763)", async () => {
+    const f = await fixture(undefined, "");
+    f.worker.start(task(f.db));
+
+    const call = f.process.calls[0]!;
+    const taskTemp = call.env.TMPDIR!;
+    expect(call.args).toContain(
+      `permissions.tidepool-work.network={"enabled"=true,"domains"={"127.0.0.1"="allow"},"unix_sockets"={${JSON.stringify(taskTemp)}="allow"},"allow_local_binding"=true}`,
+    );
+  });
+
+  it("review task の spawn にも workspace の allowed_domains が network の許可に載る(issue #763)", async () => {
+    const f = await fixture();
+    f.worker.start(registerTask(
+      f.db,
+      { type: "review", assignee: "codex-agent", workspace: "work", title: "codex-review", purpose: "read the diff", completion_criteria: "findings are filed" },
+      new Date("2026-08-24T00:00:00.000Z"),
+    ));
+
+    const config = f.process.calls[0]!.args.filter((_, index, args) => args[index - 1] === "-c").join("\n");
+    expect(config).toContain('default_permissions="tidepool-review"');
+    expect(config).toContain('permissions.tidepool-review.network={"enabled"=true,"domains"={"api.github.com"="allow","127.0.0.1"="allow"}');
   });
 
   it("主題 memory の meta-review の spawn では enabled_tools が worker の memory verb を専用 verb で置き換え、普通の task は変わらない(ADR 0122 決定2)", async () => {
