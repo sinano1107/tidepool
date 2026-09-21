@@ -3,118 +3,6 @@ import { windowMatchesModel } from "./execution-setting.js";
 import { defaultProviderPaceOffset, getProviderPaceOffset } from "./pace-offsets.js";
 import type { Provider } from "./registry.js";
 import { getSpendDown } from "./spend-down.js";
-import type { ThrottleDecision, WindowDecision } from "./usage.js";
-
-/** 旧 throttle 状態の書き口。scheduler はもう書かない(ADR 0140 / issue #802)——
- *  残る呼び手は、表とその読み口(#803 で消える)を検査するテストの setup だけである。
- *  A NULL *_throttled column records that the window went unobserved
- *  (fail-closed input), distinct from "not throttled". */
-export function reportThrottle(db: Db, decision: ThrottleDecision, observedAt: Date): void {
-  db.prepare(
-    `INSERT INTO throttle_state (
-       id, throttled, resets_at,
-       session_throttled, session_resume_at, week_throttled, week_resume_at,
-       fable_throttled, fable_resume_at, observed_at
-     ) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-     ON CONFLICT(id) DO UPDATE SET
-       throttled = excluded.throttled,
-       resets_at = excluded.resets_at,
-       session_throttled = excluded.session_throttled,
-       session_resume_at = excluded.session_resume_at,
-       week_throttled = excluded.week_throttled,
-       week_resume_at = excluded.week_resume_at,
-       fable_throttled = excluded.fable_throttled,
-       fable_resume_at = excluded.fable_resume_at,
-       observed_at = excluded.observed_at`,
-  ).run(
-    decision.throttled ? 1 : 0,
-    decision.resetsAt?.toISOString() ?? null,
-    ...windowColumns(decision.windows.session),
-    ...windowColumns(decision.windows.week),
-    ...windowColumns(decision.windows.fable),
-    observedAt.toISOString(),
-  );
-}
-
-function windowColumns(w: WindowDecision | null): [number | null, string | null] {
-  if (!w) return [null, null];
-  return [w.throttled ? 1 : 0, w.resumeAt?.toISOString() ?? null];
-}
-
-interface ThrottleStateRow {
-  throttled: number;
-  resets_at: string | null;
-  session_throttled: number | null;
-  session_resume_at: string | null;
-  week_throttled: number | null;
-  week_resume_at: string | null;
-  fable_throttled: number | null;
-  fable_resume_at: string | null;
-  observed_at: string | null;
-}
-
-function readThrottleState(db: Db): ThrottleStateRow | undefined {
-  return db
-    .prepare(
-      `SELECT throttled, resets_at,
-              session_throttled, session_resume_at, week_throttled, week_resume_at,
-              fable_throttled, fable_resume_at, observed_at
-       FROM throttle_state WHERE id = 1`,
-    )
-    .get() as ThrottleStateRow | undefined;
-}
-
-/** One window's last-observed pace verdict, for display: null when the
- *  window went unobserved. resumeAt is the catch-up instant (ADR 0030), not
- *  the window's reset time. */
-export interface WindowThrottleState {
-  throttled: boolean;
-  resumeAt: string | null;
-}
-
-export interface ThrottleState {
-  throttled: boolean;
-  resetsAt: string | null;
-  observedAt: string | null;
-  windows: {
-    session: WindowThrottleState | null;
-    week: WindowThrottleState | null;
-    /** fable の null は「個別制限の観測なし」(Pro プラン等)— session/week の
-     *  null(観測不能 = fail-closed)とは意味が違う (ADR 0030)。 */
-    fable: WindowThrottleState | null;
-  };
-}
-
-function windowState(throttled: number | null, resumeAt: string | null): WindowThrottleState | null {
-  if (throttled === null) return null;
-  return { throttled: !!throttled, resumeAt };
-}
-
-/** Raw throttle_state for display (issue #82): a passed resets_at is *not*
- *  resolved back to false — the human sees the last reported state as-is until
- *  the next poll refreshes it, and its age is what `observedAt` says
- *  (ADR 0068 決定2)。盤面全体の停止の読みは board-halt.ts がこれを使う。 */
-export function getThrottleState(db: Db): ThrottleState {
-  const row = readThrottleState(db);
-  if (!row) {
-    return {
-      throttled: false,
-      resetsAt: null,
-      observedAt: null,
-      windows: { session: null, week: null, fable: null },
-    };
-  }
-  return {
-    throttled: !!row.throttled,
-    resetsAt: row.resets_at,
-    observedAt: row.observed_at,
-    windows: {
-      session: windowState(row.session_throttled, row.session_resume_at),
-      week: windowState(row.week_throttled, row.week_resume_at),
-      fable: windowState(row.fable_throttled, row.fable_resume_at),
-    },
-  };
-}
 
 export interface ProviderUsageWindowState {
   window: string;
@@ -246,12 +134,8 @@ export function blockedProviderUsageResources(db: Db): ProviderUsageResource[] {
  *  Provider-wide account window always counts; a model window counts only
  *  against the model the call would pin (translation pins haiku and passes
  *  none; the allocation review pins the frontier row, whose fable window is
- *  exactly the one that matters). The legacy singleton remains the fallback
- *  for boards not yet wired to Provider resources. */
+ *  exactly the one that matters). No Anthropic observation yet → not blocked. */
 export function isAnthropicBoardCallBlocked(db: Db, model?: string): boolean {
-  if (!getProviderUsage(db).some((usage) => usage.provider === "anthropic")) {
-    return getThrottleState(db).throttled;
-  }
   return blockedProviderUsageResources(db).some(
     (resource) =>
       resource.provider === "anthropic" &&

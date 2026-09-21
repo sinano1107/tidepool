@@ -1,6 +1,6 @@
 import { afterEach, expect, it } from "vitest";
 import { getTask, logDecision } from "../src/tasks.js";
-import { reportThrottle } from "../src/throttle.js";
+import { reportProviderUsage } from "../src/throttle.js";
 import { FakeTranslationClient } from "./fakes.js";
 import { api, bootTidepool, registerQuestion, type Tidepool } from "./harness.js";
 
@@ -85,7 +85,25 @@ it("throttled 中は翻訳を実行せず、応答が throttled と区別でき�
   const translationClient = new FakeTranslationClient();
   t = await bootTidepool({ translationClient });
 
-  reportThrottle(t.db, { throttled: true, resetsAt: null, windows: { session: null, week: null, fable: null } }, t.clock.now());
+  const now = t.clock.now();
+  reportProviderUsage(t.db, {
+    provider: "anthropic",
+    status: "observed",
+    plan: null,
+    cliVersion: null,
+    observedAt: now,
+    windows: [
+      {
+        window: "session",
+        model: null,
+        usedPercent: 50,
+        durationMs: 5 * 60 * 60 * 1000,
+        resetsAt: new Date(now.getTime() + 60 * 60 * 1000),
+        throttled: true,
+        resumesAt: new Date(now.getTime() + 30 * 60 * 1000),
+      },
+    ],
+  });
 
   const question = registerQuestion(t, {
     title: "merge decision",

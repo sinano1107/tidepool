@@ -169,8 +169,8 @@ interface QueueScreenProps {
     queue: QueueScreenTask[];
     humanTasks: Array<{ id: string; title: string; blocking: string | null }>;
     providerUsage?: import('../src/wire-contract').ProviderUsage[];
+    running: boolean;
   };
-  slotState: 'busy' | 'limit' | 'free';
   paused: boolean;
   onTogglePause: () => void;
   /** window ごとに独立 —— null は未武装。 */
@@ -182,7 +182,7 @@ interface QueueScreenProps {
 }
 
 // biome-ignore lint/correctness/noUnusedVariables: rendered by webui/app.tsx — one concatenated bundle
-function QueueScreen({ data, slotState, paused, onTogglePause, spendDown, onSpendDown, onFront, onDoneHuman, onReorder }: QueueScreenProps) {
+function QueueScreen({ data, paused, onTogglePause, spendDown, onSpendDown, onFront, onDoneHuman, onReorder }: QueueScreenProps) {
   const { Card, Button, IdChip } = window.TidepoolDesignSystem_8a0ead;
   // 行の中身はサーバが導いた slot をそのまま描く。盤面全体の停止は行に降りない ——
   // 面が1回言う(ADR 0068 決定7)。Pause は行を作り直さない — 停止の並び順はサーバの
@@ -205,7 +205,7 @@ function QueueScreen({ data, slotState, paused, onTogglePause, spendDown, onSpen
         {slot.taskId && (
           <IdChip id={slot.taskId} style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', flexShrink: 0 }} />
         )}
-        <span style={{ flex: 1, minWidth: 0, fontSize: 'var(--text-sm)', color: !paused && slotState === 'free' ? 'var(--text-muted)' : 'var(--text-body)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{slot.line}</span>
+        <span style={{ flex: 1, minWidth: 0, fontSize: 'var(--text-sm)', color: !paused && !data.running ? 'var(--text-muted)' : 'var(--text-body)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{slot.line}</span>
         <button onClick={onTogglePause} aria-pressed={paused}
           aria-label={paused ? 'resume pickup' : 'pause pickup'}
           title={paused ? 'resume pickup — fires an immediate poll' : 'pause pickup — running task finishes, nothing new starts'}

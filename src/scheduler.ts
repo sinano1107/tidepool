@@ -328,9 +328,7 @@ export function startScheduler(deps: {
     // ADR 0068 決定5: 同期の短絡は列挙から導出する — triage セッション (issue #6)・
     // Pause (issue #34)・封じ込め能力とレジストリ到達性の**開いている確認
     // question**。停止が1つ増えたとき、増えるのは配線ではなく列挙の1行になる。
-    // stored throttle だけは消費しない: scheduler は常に再観測する
-    // (ADR 0008 の just-in-time)。
-    if (boardHalts(db).some((halt) => halt.kind !== "throttle")) return true;
+    if (boardHalts(db).length > 0) return true;
     // ADR 0033 / ADR 0036: a worker whose containment is not established is not
     // run at all. Unlike the workspace/agent quarantines below this halts the
     // whole board — containment belongs to the host and to the board's own
