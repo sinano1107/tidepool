@@ -144,9 +144,9 @@ export function capInterruptionHandler(deps: TeardownDeps): (taskId: string, rec
   };
 }
 
-/** worker が1度も走らなかった pickup(ADR 0118)の盤面側の一撃。観測点は2つ ——
- *  scheduler が捕まえる `start` の同期 throw と、adapter が捕まえる `spawn()` の非同期
- *  失敗 —— で、`spawn_failed` event はそれぞれの観測点が書く。
+/** worker が1度も走らなかった pickup(ADR 0118)の盤面側の一撃。観測点は3つ ——
+ *  scheduler が捕まえる `start` の同期 throw、adapter が捕まえる `spawn()` の非同期
+ *  失敗と skill 列挙の失敗(issue #770)—— で、`spawn_failed` event はそれぞれの観測点が書く。
  *
  *  上限到達による中断と違い、記録(failure question)を回収済み観測の**前**に置く ——
  *  escalate verb と同じ順で、後始末中の status が `todo` になるので経路は

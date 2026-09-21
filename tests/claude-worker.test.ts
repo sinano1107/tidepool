@@ -1018,6 +1018,23 @@ describe("ClaudeCodeWorker", () => {
     expect(calls).toEqual([]);
   });
 
+  it("列挙 ping が reject しても null と同じく spawn_failed を書いて onSpawnFailed を呼び、spawn しない(issue #770)", async () => {
+    const spawnFailures: string[] = [];
+    const { start, calls, db } = await makeWorker(
+      { "agents/deckhand.md": skilledMd("  - code-review\n") },
+      {
+        enumerateSkills: async () => {
+          throw new Error("reader blew up");
+        },
+        onSpawnFailed: (taskId) => spawnFailures.push(taskId),
+      },
+    );
+    start("task-ping-reject");
+    await vi.waitFor(() => expect(spawnFailures).toEqual(["task-ping-reject"]));
+    expect(listEvents(db, "task-ping-reject").filter((e) => e.kind === "spawn_failed")).toHaveLength(1);
+    expect(calls).toEqual([]);
+  });
+
   // issue #60 / ADR 0033: 全 worker セッションはハーネス内蔵サンドボックスの
   // settings を per-task ファイルで受け取る(--mcp-config と同型)。ここは
   // 「配線」の seam — profile の中身そのものは sandbox-settings.test.ts。

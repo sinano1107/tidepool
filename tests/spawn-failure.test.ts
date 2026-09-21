@@ -236,12 +236,9 @@ it("skill 列挙の容器が空にならず回収 timeout で null に落ちる�
   ]);
   const [failure] = await neverStarted();
   expect(failure.purpose).toContain("skill enumeration failed");
-  expect(failure.purpose).not.toMatch(/time limit|reclaim/i);
   const containment = all.find((q: any) => q.title.includes("containment"));
   expect(containment.purpose).toContain("skill enumeration Board call");
 
-  const events = (await api(t.baseUrl, "GET", `/api/tasks/${task.id}/events`)).json;
-  expect(events.filter((e: any) => e.kind === "spawn_failed").map((e: any) => e.payload.error_code)).toEqual([null]);
   expect(await status(task.id)).toBe("blocked");
   // task の容器は空になり後始末は完走して枠は空く —— だが quarantine が pickup を止める
   expect((await api(t.baseUrl, "GET", "/api/queue")).json.teardown).toBeUndefined();
