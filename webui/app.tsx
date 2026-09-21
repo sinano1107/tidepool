@@ -17,14 +17,9 @@ type HaltKind = import('../src/halt-kind').HaltKind;
 type ServerJson = any;
 /** assignee 名 → アイコン(GET /api/registry/candidates、issue #52)。 */
 type AppIcons = Record<string, string | undefined>;
-/** スロット行が読む停止 entry。属性を持つのは throttle だけ(ADR 0068 決定2)。 */
-interface AppBoardHalt {
-  kind: HaltKind;
-  revalidating?: boolean;
-  failClosed?: boolean;
-  resumesAt?: string | null;
-  observedAt?: string | null;
-}
+/** サーバ応答の形の正本(ADR 0138)。`api()` がこの表のキーで引く。 */
+type WireContract = import('../src/wire-contract').WireContract;
+type AppBoardHalt = import('../src/wire-contract').BoardHalt;
 /** キュー画面のスロット行 —— 停止・後始末・空きが同じ1本を書き換える。 */
 interface AppSlot {
   color: string;
@@ -63,9 +58,14 @@ class ApiError extends Error {
   }
 }
 
-async function api(path: string, body?: unknown, method = 'POST') {
+// 表のキー('METHOD /path')で引けば契約の型が返る —— unknown から契約型への変換は
+// この overload の1点だけ(ADR 0138 決定3)。生のパスの形は表に載っていない端点のために残る。
+function api<K extends keyof WireContract>(key: K): Promise<WireContract[K]>;
+function api(path: `/${string}`, body?: unknown, method?: string): Promise<ServerJson>;
+async function api(pathOrKey: string, body?: unknown, method = 'POST'): Promise<unknown> {
+  const [verb, path] = pathOrKey.startsWith('/') ? [method, pathOrKey] : (pathOrKey.split(' ') as [string, string]);
   const res = await fetch(path, {
-    method,
+    method: verb,
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(body),
   });
@@ -168,7 +168,7 @@ function markFront(id: string) {
 // 0016's UI use-moment), carries issue_live_state: suffix the title so
 // cached-but-old (stale) and never-fetched (unavailable) are visible at a
 // glance. Ordinary tasks have no issue_live_state and pass through as-is.
-function liveTitle(t: ServerJson) {
+function liveTitle(t: Pick<import('../src/wire-contract').QueueTask, 'title' | 'issue_live_state'>) {
   if (t.issue_live_state === 'stale') return `${t.title} (out of sync)`;
   if (t.issue_live_state === 'unavailable') return `${t.title} (unavailable)`;
   return t.title;
@@ -208,7 +208,7 @@ function mapData(
   pause: ServerJson,
   icons: AppIcons = {},
   triage: ServerJson = {},
-  queueEnvelope: ServerJson = { halts: [], tasks: [] },
+  queueEnvelope: WireContract['GET /api/queue'] = { halts: [], tasks: [] },
   yourTasks: ServerJson[] = [],
 ) {
   // 盤面全体の停止は queue の envelope が順序つきで1回答える (ADR 0068 決定1) —
@@ -261,8 +261,8 @@ function mapData(
   // stay visible — hiding them would make the displayed order lie about where a
   // drag actually lands. held rows stay out, same as before.
   const queue: QueueScreenTask[] = queueEnvelope.tasks
-    .filter((t: ServerJson) => t.status === 'todo' || t.status === 'blocked' || t.status === 'skipped')
-    .map((t: ServerJson) => ({
+    .filter((t) => t.status === 'todo' || t.status === 'blocked' || t.status === 'skipped')
+    .map((t) => ({
       id: t.id, title: liveTitle(t), assignee: t.assignee ?? undefined,
       assigneeIcon: t.assignee ? icons[t.assignee] : undefined, risk: !!t.risk_flag,
       blocked: t.status === 'blocked',
@@ -376,7 +376,7 @@ function mapData(
   // 後始末行は1本のまま、待っている理由だけが経路で変わる。経路を導くのはサーバ
   // (`teardown.settlement`、ADR 0113 決定3)で、ここは HALT_COPY と同じ値 → コピーの
   // 写像だけを持つ —— 行の status から導き直せば写しが2本になる
-  const TEARDOWN_META: Record<string, string> = {
+  const TEARDOWN_META: Record<import('../src/wire-contract').Teardown['settlement'], string> = {
     completed: "waiting for this session's processes to exit",
     interrupted: 'usage limit hit · task returns to the queue once processes exit',
     released: "task released · waiting for this session's processes to exit",
@@ -445,7 +445,7 @@ async function fetchData() {
     fetch('/api/pause').then((r) => r.json()),
     fetch('/api/registry/candidates').then((r) => r.json()).catch(() => ({ icons: {} })),
     fetch('/api/triage').then((r) => r.json()),
-    fetch('/api/queue').then((r) => r.json()),
+    api('GET /api/queue'),
     fetch('/api/your-tasks').then((r) => r.json()),
   ]);
   return mapData(board, log, pause, candidates.icons, triage, queue, yourTasks);

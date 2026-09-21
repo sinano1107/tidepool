@@ -840,7 +840,7 @@ function useDangerousSave(
   const { Button } = window.TidepoolDesignSystem_8a0ead;
   const [busy, setBusy] = React.useState(false);
   const [confirm, setConfirm] = React.useState<{ reasons: string[]; detail: ServerJson; resend: () => void } | null>(null); // null while safe
-  const save = async (path: string, method: string, body: ServerJson, verb: string, name: string) => {
+  const save = async (path: `/${string}`, method: string, body: ServerJson, verb: string, name: string) => {
     const attempt = async (confirmed: boolean) => {
       setBusy(true);
       try {

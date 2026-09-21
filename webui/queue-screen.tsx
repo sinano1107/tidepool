@@ -162,26 +162,7 @@ function TpQueueList({ tasks, onReorder, onFront, headId }: TpQueueListProps) {
 }
 
 type QueueScreenSpendWindow = 'session' | 'week';
-// 画面が読む分だけの provider usage(サーバ側の正本は src/throttle.ts の
-// DisplayProviderUsage)。集合ごとの移送は issue #352 が持つ。
-interface QueueScreenProviderUsage {
-  // provider の正本は src/provider.ts の Provider。ここは画面が綴りを読まない
-  // 素通しなので写しを増やさず string のまま —— 移送は issue #352 が持つ。
-  provider: string;
-  /** この画面が `=== 'observed'` で分岐するので綴りを閉じる(src/throttle.ts)。 */
-  status: 'observed' | 'unauthorized' | 'unobservable' | 'absent';
-  plan: string | null;
-  reason?: string;
-  observedAt: string | null;
-  windows: Array<{
-    window: string;
-    model: string | null;
-    usedPercent: number | null;
-    offset: number;
-    throttled: boolean;
-    resumesAt: string | null;
-  }>;
-}
+type QueueScreenProviderUsage = import('../src/wire-contract').ProviderUsage;
 interface QueueScreenProps {
   data: {
     /** 色も行も meta もサーバが導いた答えをそのまま描く(ADR 0068 決定1)。 */

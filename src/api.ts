@@ -139,6 +139,7 @@ import {
   triagePreview,
 } from "./triage.js";
 import type { PendingReclaim } from "./watchdog.js";
+import type { WireContract } from "./wire-contract.js";
 import {
   buildWorkspaceResolver,
   UnknownWorkspaceError,
@@ -1995,7 +1996,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
           entriesAllExcluded(),
         ),
       ),
-    });
+    } satisfies WireContract["GET /api/queue"]);
   });
 
   router.get("/tasks/:id/events", (req, res) => {
