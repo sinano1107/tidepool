@@ -40,11 +40,12 @@ const btnHover = {
   ghost: { background: "var(--surface-hover)", color: "var(--text-body)" },
   danger: { background: "var(--coral-2)" }
 };
-function Button({ variant = "primary", size = "md", full = false, disabled = false, children, onClick, style }) {
+function Button({ variant = "primary", size = "md", full = false, disabled = false, children, onClick, style, ...rest }) {
   const [hover, setHover] = React.useState(false);
   return /* @__PURE__ */ React.createElement(
     "button",
     {
+      ...rest,
       onClick: disabled ? void 0 : onClick,
       disabled,
       onMouseEnter: () => setHover(true),

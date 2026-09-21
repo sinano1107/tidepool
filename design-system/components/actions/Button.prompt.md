@@ -7,3 +7,5 @@ Tidepool button — one teal primary per view; labels say what they do ("Answer"
 ```
 
 Variants: primary (teal), secondary (outlined), ghost, danger (coral, for objections). Sizes sm/md/lg (lg = 44px mobile hit target). `full` stretches to container.
+
+Other props (`aria-label`, `type`, `title`, …) pass through to `<button>`; when identical labels repeat, distinguish them with `aria-label`.

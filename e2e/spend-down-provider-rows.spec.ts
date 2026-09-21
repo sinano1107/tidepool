@@ -41,17 +41,15 @@ test("provider usage の窓の行で Provider × 窓を arm / cancel できる",
   await expect(page.getByTestId("provider-usage-anthropic").getByRole("button")).toHaveCount(2);
   await expect(page.getByTestId("provider-usage-openai").getByRole("button")).toHaveCount(1);
   await expect(page.getByText("spend-down", { exact: false })).toHaveCount(0);
-  // 同じ文言のボタンが並ぶので、窓の行(ボタンの兄弟の文字列)から辿る(#854)
-  const rowButton = (provider: string, row: RegExp) =>
-    page.getByTestId(`provider-usage-${provider}`).getByText(row).locator("..").getByRole("button");
+  const button = (name: string) => page.getByRole("button", { name, exact: true });
 
-  await rowButton("anthropic", /^session · 40%/).click();
+  await button("spend down anthropic session").click();
   await expect(card.getByText("session · 40% · spend-down · 100% cap · expires at reset")).toBeVisible();
-  await rowButton("openai", /^primary · 30%/).click();
+  await button("spend down openai primary").click();
   await expect(card.getByText("primary · 30% · spend-down · 100% cap · expires at reset")).toBeVisible();
 
-  await expect(rowButton("anthropic", /^week · 20%/)).toHaveText("spend down");
-  await rowButton("anthropic", /^session · 40%/).click();
+  await expect(button("spend down anthropic week")).toHaveText("spend down");
+  await button("cancel spend-down anthropic session").click();
   await expect(card.getByText("session · 40% · offset", { exact: false })).toBeVisible();
   expect((await api(t.baseUrl, "GET", "/api/pause")).json.spendDown).toEqual({
     anthropic: { session: null, week: null },

@@ -262,7 +262,7 @@ function QueueScreen({ data, paused, onTogglePause, spendDown, onSpendDown, onFr
                           : `offset ${window.offset}pt · ${window.throttled ? `paced${window.resumesAt ? ` until ${new Date(window.resumesAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : ''}` : 'on pace'}`}
                       </span>
                       {spend !== undefined && (
-                        <Button variant="secondary" size="sm" onClick={() => onSpendDown(usage.provider, window.window, !spend)}>
+                        <Button variant="secondary" size="sm" aria-label={`${spend ? 'cancel spend-down' : 'spend down'} ${usage.provider} ${window.window}`} onClick={() => onSpendDown(usage.provider, window.window, !spend)}>
                           {spend ? 'cancel' : 'spend down'}
                         </Button>
                       )}
