@@ -201,12 +201,12 @@ export function evaluateAndReportProviderUsage(
   const spendDown = getSpendDown(db);
   // 逆算の不整合(今がリセット時刻 − 窓幅より前)の窓は観測から落とす。Provider 全体の窓なら
   // Provider ごと観測不能に倒す —— model 固有の窓の不在はプランの正常な姿でありうる(ADR 0144 決定3)
-  const inconsistent = observation.windows.filter(
-    (window) => now.getTime() < window.resetsAt.getTime() - window.durationMs,
-  );
+  const inconsistent = (window: ProviderUsageWindow) =>
+    now.getTime() < window.resetsAt.getTime() - window.durationMs;
   const unobservable =
-    observation.status === "observed" && inconsistent.some((window) => window.model === null);
-  const windows = observation.windows.filter((window) => !inconsistent.includes(window)).map((window): ProviderUsageWindowState => {
+    observation.status === "observed" &&
+    observation.windows.some((window) => window.model === null && inconsistent(window));
+  const windows = observation.windows.filter((window) => !inconsistent(window)).map((window): ProviderUsageWindowState => {
     const offset = getProviderPaceOffset(
       db,
       observation.provider,
