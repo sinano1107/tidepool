@@ -882,18 +882,14 @@ export function recordingSpawn() {
   const errorListeners: Array<(err: Error) => void> = [];
   const spawn: ContainerSpawn = (command, args, opts) => {
     calls.push({ command, args, cwd: opts.cwd, env: opts.env, ...(opts.stdin && { stdin: opts.stdin }) });
-    const stdout = new PassThrough();
-    const stderr = new PassThrough();
-    const stdin = new PassThrough();
-    processes.push({ stdout, stderr, stdin });
+    const io: RecordedProcess = { stdout: new PassThrough(), stderr: new PassThrough(), stdin: new PassThrough() };
+    processes.push(io);
     const processExitListeners: Array<
       (code: number | null, signal: NodeJS.Signals | null) => void
     > = [];
     exitListeners.push(processExitListeners);
     return {
-      stdout,
-      stderr,
-      stdin,
+      ...io,
       kill: (signal) => killed.push(signal),
       on: (
         event: "exit" | "error",
