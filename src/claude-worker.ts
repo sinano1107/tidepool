@@ -1791,7 +1791,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     );
   }
 
-  start(task: Task, chosen?: ExecutionSetting): void {
+  start(task: Task, setting: ExecutionSetting): void {
     // loaded per pickup so a registry update takes effect on the next task —
     // remote-backed 盤面では、直前の pickup ゲートが撃った fetch で更新された
     // `origin/main` を読む(ADR 0052 決定2: 観測点と refresh 点は同じ ref)
@@ -1909,18 +1909,10 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     // a missing-key failure inside a promise; its absence refuses the pickup
     // (MoonshotApiKeyMissingError, a failed start) rather than spawning a
     // worker that can only 401.
-    // ADR 0110 決定3: pickup の瞬間に selector が実行設定を1つ選ぶ。表に行が
-    // 無い / advisor の組み合わせが不成立なら例外で pickup を拒む —— どちらも
-    // 「黙って別のモデルで走る」「黙って advisor 無しで走る」の代わりである。
-    // provider の綴りもここから1つだけ取る(上の「derived once」の線)。
-    // 盤面が選んだ設定があればそれを使う(#544): ここで解決し直すと、除外の文脈を
-    // 持たない再解決が scheduler と違う entry —— 温存中の Provider —— を選びうる。
-    const setting = chosen ?? resolveExecutionSetting(this.options.db, agent.definition, task);
-    if (!setting) {
-      // 盤面は候補が空の task を pickup しない(ADR 0114 決定3)。ここに来るのは
-      // 設定を渡さずに start した呼び手だけ。
-      throw new Error(`agent ${agent.name}: no Provider entry to run on (ADR 0110 決定1)`);
-    }
+    // ADR 0110 決定3: pickup の瞬間に盤面が選んだ実行設定をそのまま使う(#544):
+    // ここで解決し直すと、除外の文脈を持たない再解決が scheduler と違う entry
+    // —— 温存中の Provider —— を選びうる。provider の綴りもここから1つだけ取る
+    // (上の「derived once」の線)。
     if (setting.provider === "openai") {
       throw new Error('canonical route "openai -> codex" cannot run through Claude Code (ADR 0098)');
     }

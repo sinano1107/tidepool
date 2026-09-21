@@ -22,8 +22,8 @@ export interface WorkerAdapter {
    *  `setting` は selector が pickup の瞬間に選んだ実行設定(ADR 0110 決定3)。
    *  **渡されたらそれを使う** —— adapter が spawn 時に解決し直すと、除外の文脈を
    *  持たない再解決が scheduler と違う entry を選びうる(温存中の Provider で
-   *  走る)。省略 → 除外なしで解決した今日の挙動。 */
-  start(task: Task, setting?: ExecutionSetting): void;
+   *  走る)。 */
+  start(task: Task, setting: ExecutionSetting): void;
   /** 畳み込み停止(graceful stop): `taskId` の session に、自己終了と作業の
    *  畳み込みを促す合図を送る。**送達のみで、従われる保証はない** — 合図の
    *  選択(Claude なら SIGTERM)は Harness の性質なので adapter の実装詳細に
@@ -43,24 +43,20 @@ export interface WorkerAdapter {
  *  second routing table that could drift from process reality. */
 export class CanonicalWorkerRouter implements WorkerAdapter {
   readonly id: string;
-  private readonly resolveHarness: (task: Task) => Harness;
   private readonly adapters: Record<Harness, WorkerAdapter>;
 
   constructor(options: {
     id: string;
-    resolveHarness: (task: Task) => Harness;
     adapters: Record<Harness, WorkerAdapter>;
   }) {
     this.id = options.id;
-    this.resolveHarness = options.resolveHarness;
     this.adapters = options.adapters;
   }
 
-  start(task: Task, setting?: ExecutionSetting): void {
-    // 選ばれた実行設定があれば、その Provider の正準経路へ出す —— 「どの Harness で
+  start(task: Task, setting: ExecutionSetting): void {
+    // 選ばれた実行設定の Provider の正準経路へ出す —— 「どの Harness で
     // 走るか」を Provider と別に解決すると、選択と dispatch がずれる(ADR 0098)。
-    const harness = setting ? canonicalHarness(setting.provider) : this.resolveHarness(task);
-    this.adapters[harness].start(task, setting);
+    this.adapters[canonicalHarness(setting.provider)].start(task, setting);
   }
 
   gracefulStop(taskId: string): void {
