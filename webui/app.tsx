@@ -16,7 +16,6 @@ type HaltKind = import('../src/halt-kind').HaltKind;
 type AppIcons = Record<string, string | undefined>;
 /** サーバ応答の形の正本(ADR 0138)。`api()` がこの表のキーで引く。 */
 type WireContract = import('../src/wire-contract').WireContract;
-type AppBoardHalt = import('../src/wire-contract').BoardHalt;
 /** キュー画面のスロット行 —— 停止・後始末・空きが同じ1本を書き換える。 */
 interface AppSlot {
   color: string;
@@ -244,7 +243,7 @@ function mapData(
 ) {
   // 盤面全体の停止は queue の envelope が順序つきで1回答える (ADR 0068 決定1) —
   // ブラウザは並べ替えず、先頭を読んで kind 別コピーに写すだけ
-  const halts: AppBoardHalt[] = queueEnvelope.halts;
+  const halts = queueEnvelope.halts;
   const paused = halts.some((h) => h.kind === 'pause');
   // 後始末は停止の列挙とは**並んで**運ばれる (ADR 0109 決定2) — 枠がまだ空いていない
   // 状態であって、盤面全体の停止ではない
