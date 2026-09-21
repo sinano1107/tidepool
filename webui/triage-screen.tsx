@@ -21,7 +21,7 @@ interface TpQuestion {
   context: string;
   items: TpQuestionItem[];
   /** 承認 question なら 'approval'、上方伝播があれば note に注記(issue #757)。 */
-  kind?: string;
+  kind?: 'approval';
   note?: string;
 }
 /** トリアージが受け取る question —— 着地 question だけが `landing` を持つ
