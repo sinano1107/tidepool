@@ -1290,8 +1290,7 @@ export function answerQuestion(
         // flag, not a decompose-time snapshot: a second, unrelated (e.g.
         // assignee-only) approval on an already-risky parent propagates
         // nothing new and must not re-fire the audit event.
-        const currentParent = getTask(db, question.parent_id!)!;
-        if (pending.risk_flag && !currentParent.risk_flag) {
+        if (raisesParentRisk(pending, getTask(db, question.parent_id!)!)) {
           db.prepare("UPDATE tasks SET risk_flag = 1 WHERE id = ?").run(question.parent_id);
           appendEvent(db, {
             taskId: question.parent_id!,
@@ -1845,7 +1844,7 @@ export function decomposeTask(
     const decisionId = logDecision(db, parent, input.reason, workerId, now, origin);
     for (const child of input.children) {
       const reasons: string[] = [];
-      if (child.risk_flag && !parent.risk_flag) {
+      if (raisesParentRisk(child, parent)) {
         reasons.push("carries risk beyond the parent's declared risk");
       }
       // A review's repair children may target the reviewed task's own
@@ -2385,6 +2384,25 @@ export function getRegistrant(db: Db, taskId: string): string {
     .prepare("SELECT worker_id FROM events WHERE task_id = ? AND kind = 'task_registered'")
     .get(taskId) as { worker_id: string };
   return worker_id;
+}
+
+/** Whether materializing `child` under `parent` raises the parent's risk
+ *  (issue #11's upward propagation) — the child carries risk the parent does
+ *  not. Approval evaluates it against the parent's current flag. */
+export function raisesParentRisk(child: { risk_flag?: boolean }, parent: Pick<Task, "risk_flag">): boolean {
+  return !!child.risk_flag && !parent.risk_flag;
+}
+
+/** 承認 question(`question_pending_child` を持つ question)の注釈(issue #757)。
+ *  approve で親の risk が上がるかは approve 時と同じ判定を現在の親に当てる ——
+ *  判定は盤面側、WebUI は描画だけ(`landingAnnotation` と同じ分担)。 */
+export function approvalAnnotation(
+  db: Db,
+  task: Pick<Task, "question_pending_child" | "parent_id">,
+): { raises_parent_risk: boolean } | null {
+  const pending = task.question_pending_child;
+  if (pending === null) return null;
+  return { raises_parent_risk: raisesParentRisk(pending, getTask(db, task.parent_id!)!) };
 }
 
 export function presentTask(db: Db, task: Task): BoardTask {

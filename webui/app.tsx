@@ -197,7 +197,7 @@ function liveTitle(t: Pick<import('../src/wire-contract').QueueTask, 'title' | '
 // Maps one raw question task into TpQuestionCard's shape — shared by the board's
 // question list (mapData) and the push deep-link's single-question view.
 function toQuestionCardShape(
-  q: Pick<WireContract['GET /api/tasks/:id'], 'id' | 'parent_id' | 'registrant' | 'purpose' | 'question_items'>,
+  q: Pick<WireContract['GET /api/tasks/:id'], 'id' | 'parent_id' | 'registrant' | 'purpose' | 'question_items' | 'approval'>,
   icons: AppIcons,
 ): TpQuestion {
   // who issued the question — the board itself (issue #261) or an agent
@@ -217,6 +217,12 @@ function toQuestionCardShape(
       title: item.title, detail: item.detail,
       options: item.options.map((o: string) => ({ label: o, recommended: o === item.recommendation })),
     })),
+    // 承認 question(決裁権外の子の登録)と、approve で親の risk が上がるかは
+    // 盤面の `approval` 注釈が答える(issue #757)— ここは描画の形に写すだけ
+    ...(q.approval && {
+      kind: 'approval',
+      ...(q.approval.raises_parent_risk && { note: `approving raises ${q.parent_id} risk (upward propagation)` }),
+    }),
   };
 }
 

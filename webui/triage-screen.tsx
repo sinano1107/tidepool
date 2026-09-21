@@ -20,7 +20,7 @@ interface TpQuestion {
   board: boolean;
   context: string;
   items: TpQuestionItem[];
-  /** カードは受け取れば描くが、今日これを載せる呼び手は居ない。 */
+  /** 承認 question なら 'approval'、上方伝播があれば note に注記(issue #757)。 */
   kind?: string;
   note?: string;
 }
