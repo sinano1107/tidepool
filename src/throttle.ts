@@ -178,7 +178,7 @@ export function getProviderUsage(db: Db): DisplayProviderUsage[] {
         usedPercent: window.used_percent,
         durationMs: window.duration_ms,
         resetsAt: window.resets_at,
-        offset: window.offset ?? defaultProviderPaceOffset(window.window),
+        offset: window.offset ?? defaultProviderPaceOffset(observation.provider, window.window),
         throttled: !!window.throttled,
         resumesAt: window.resumes_at,
       })),
