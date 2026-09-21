@@ -424,12 +424,20 @@ function permissionConfig(
   const name = taskType === "review" ? "tidepool-review" : "tidepool-work";
   const parent = taskType === "review" ? ":read-only" : ":workspace";
   const access = taskType === "review" ? "read" : "write";
+  const dotGit = join(workspace, ".git");
   const filesystem = {
     ":root": "deny",
     ":minimal": "read",
     ":slash_tmp": "deny",
     ":workspace_roots": { ".": access },
     [workspace]: access,
+    // issue #849: Linux の sandbox は書ける root 直下の .git を ro で重ねるので、書ける側は明示して書けるようにする。
+    // hooks と config は Claude 側の床と同じく読むだけ(ADR 0033)。macOS ではこの入れ子の read が効かない(#860)
+    ...(access === "write" && {
+      [dotGit]: "write",
+      [join(dotGit, "hooks")]: "read",
+      [join(dotGit, "config")]: "read",
+    }),
     [taskTemp]: "write",
     [dirname(process.execPath)]: "read",
     [dirname(executable)]: "read",
