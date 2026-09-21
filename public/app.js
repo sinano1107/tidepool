@@ -2712,7 +2712,8 @@ async function api(pathOrKey, bodyOrOpts, method = "POST") {
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
-    throw new ApiError(typeof err.error === "string" ? err.error : res.statusText, res.status, err);
+    const message = typeof err === "object" && err !== null && "error" in err && typeof err.error === "string" ? err.error : res.statusText;
+    throw new ApiError(message, res.status, err);
   }
   return res.json();
 }

@@ -12,9 +12,6 @@ const tabs = [
 // `import type` **文**にしないこと —— このファイルがモジュールになり、トップレベルが
 // グローバルから消えて他の .tsx からの参照が全部壊れる。
 type HaltKind = import('../src/halt-kind').HaltKind;
-/** 検査していないサーバ応答。集合ごとの型の移送は issue #352 が持つ —— ここでは
- *  「まだ形を知らない」ことを名前で言うに留める。 */
-type ServerJson = any;
 /** assignee 名 → アイコン(GET /api/registry/candidates、issue #52)。 */
 type AppIcons = Record<string, string | undefined>;
 /** サーバ応答の形の正本(ADR 0138)。`api()` がこの表のキーで引く。 */
@@ -50,7 +47,7 @@ interface AppCandidates {
  *  形は端点ごとに違う —— 読む箇所で契約のエラー行(例 'POST /api/tasks 422')に受ける。 */
 class ApiError extends Error {
   status: number;
-  detail: ServerJson;
+  detail: unknown;
   constructor(message: string, status: number, detail: unknown) {
     super(message);
     this.status = status;
@@ -70,13 +67,13 @@ type ApiOpts<K> = { query?: Record<string, string>; body?: unknown }
  *  ApiError でなければ null。本文から契約型への変換は api() と同じくここ1点(ADR 0138 決定3)。 */
 // biome-ignore lint/correctness/noUnusedVariables: read by webui/settings-screen.tsx — one concatenated bundle
 function apiErrorDetail<K extends Exclude<keyof WireContract, ApiKey>>(err: unknown, key: K): WireContract[K] | null {
-  return err instanceof ApiError && err.status === Number(key.split(' ')[2]) ? err.detail : null;
+  return err instanceof ApiError && err.status === Number(key.split(' ')[2]) ? (err.detail as WireContract[K]) : null;
 }
 
 // 表のキー('METHOD /path')で引けば契約の型が返る —— unknown から契約型への変換は
 // この overload の1点だけ(ADR 0138 決定3)。生のパスの形は表に載っていない端点のために残る。
 function api<K extends ApiKey>(key: K, ...opts: [KeyParams<K>] extends [never] ? [ApiOpts<K>?] : [ApiOpts<K>]): Promise<WireContract[K]>;
-function api(path: `/${string}`, body?: unknown, method?: string): Promise<ServerJson>;
+function api(path: `/${string}`, body?: unknown, method?: string): Promise<unknown>;
 async function api(pathOrKey: string, bodyOrOpts?: unknown, method = 'POST'): Promise<unknown> {
   let [verb, path, body] = [method, pathOrKey, bodyOrOpts];
   if (!pathOrKey.startsWith('/')) {
@@ -93,9 +90,10 @@ async function api(pathOrKey: string, bodyOrOpts?: unknown, method = 'POST'): Pr
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
+    const message = typeof err === 'object' && err !== null && 'error' in err && typeof err.error === 'string' ? err.error : res.statusText;
     // the registration gate's 422 (issue #49) carries structure beyond the
     // message (missing / suggested_comment) — keep it for the caller
-    throw new ApiError(typeof err.error === 'string' ? err.error : res.statusText, res.status, err);
+    throw new ApiError(message, res.status, err);
   }
   return res.json();
 }
