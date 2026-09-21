@@ -1,10 +1,6 @@
 import { quarantineAgent, UnknownAgentError } from "./agent.js";
 import { boardHalts } from "./board-halt.js";
-import {
-  type CliAuthCheck,
-  quarantineCliAuthForProvider,
-  quarantinedAuthProviders,
-} from "./cli-auth.js";
+import { type CliAuthCheck, quarantineCliAuthForProvider } from "./cli-auth.js";
 import type { Clock } from "./clock.js";
 import type { CodexAppServerProbe, CodexAppServerProbeResult } from "./codex-app-server.js";
 import {
@@ -22,21 +18,16 @@ import {
 } from "./execution-setting.js";
 import { type GitHubClient, IssueGoneError } from "./github.js";
 import type { GitHubAuth } from "./github-auth.js";
-import {
-  type HarnessContainmentCheck,
-  harnessContainmentPickupBlocked,
-  quarantinedHarnesses,
-} from "./harness-containment.js";
+import { type HarnessContainmentCheck, harnessContainmentPickupBlocked } from "./harness-containment.js";
 import { recordShadow } from "./learner.js";
 import { registerDueMetaReviews } from "./memory.js";
 import { getProviderPaceOffset } from "./pace-offsets.js";
 import type { ProcessContainers } from "./process-container.js";
-import { type QuarantineResolvers, quarantineStops } from "./quarantine.js";
+import { type QuarantineResolvers, quarantineExcludedProviders, quarantineStops } from "./quarantine.js";
 import {
   canonicalHarness,
   type Harness,
   InvalidAgentDefinitionError,
-  PROVIDER_VALUES,
   type Provider,
   type RegistryReachabilityCheck,
   type RegistrySource,
@@ -159,15 +150,13 @@ export function pickupStops(
  *  中で観測し直すので false で始め、観測のたびにこの集合を育てる。 */
 export function pickupExclusions(db: Db, includeStoredUsage = true): ExecutionExclusions {
   const usageResources = includeStoredUsage ? blockedProviderUsageResources(db) : [];
-  const harnesses = quarantinedHarnesses(db);
   return {
     providers: [
       ...new Set([
-        ...quarantinedAuthProviders(db),
+        ...quarantineExcludedProviders(db),
         ...usageResources
           .filter((resource) => resource.model === null)
           .map((resource) => resource.provider),
-        ...PROVIDER_VALUES.filter((provider) => harnesses.includes(canonicalHarness(provider))),
       ]),
     ],
     models: usageResources.flatMap((resource) =>

@@ -5,7 +5,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it } from "vitest";
-import { quarantinedAuthProviders } from "../src/cli-auth.js";
 import {
   CODEX_FEATURE_SNAPSHOT,
   type CodexSpawnFn,
@@ -15,6 +14,7 @@ import {
 import { openDb } from "../src/db.js";
 import { listEvents } from "../src/events.js";
 import { buildMemoryInjection, recordKnowledge } from "../src/memory.js";
+import { openQuarantineValues } from "../src/quarantine.js";
 import { registerTask } from "../src/tasks.js";
 import { FakeClock, passthroughContainers } from "./fakes.js";
 import { bootTidepool, mcpClient, type Tidepool } from "./harness.js";
@@ -414,7 +414,7 @@ describe("CodexWorker (ADR 0098)", () => {
     );
     f.process.exit(1, null);
 
-    expect(quarantinedAuthProviders(f.db)).toEqual([]);
+    expect(openQuarantineValues(f.db, "providerAuth")).toEqual([]);
     expect(listEvents(f.db, value.id).find((event) => event.kind === "worker_exited")?.payload).toMatchObject({
       kind: "worker_exited",
       exit_code: 1,

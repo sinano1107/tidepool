@@ -9,6 +9,7 @@ import {
   quarantineUnlessClear,
   registerQuarantine,
 } from "../src/quarantine.js";
+import { pickupExclusions } from "../src/scheduler.js";
 import { cancelTaskDirectly, listBoard, listQueue, nextSlotTask, registerTask } from "../src/tasks.js";
 
 /** Quarantine の種類の表(ADR 0137 決定1・2)。行を総なめにするので、1行足せば
@@ -115,4 +116,45 @@ describe.each(QUARANTINES.filter((row) => row.scope !== "board"))("資源単位�
       "skipped",
     );
   });
+});
+
+/** entry 経路の除外(ADR 0110 決定3 / issue #788): 資源単位の行のうち「その Provider では
+ *  走れない」を意味する種類は、開いた値から外す Provider の集合を `pickupExclusions` へ出す。 */
+describe("pickupExclusions の quarantine 由来の Provider", () => {
+  it("providerAuth の開いた値は、その Provider だけを外す", () => {
+    const db = openDb(":memory:");
+    registerQuarantine(db, "providerAuth", "moonshot", "cause", NOW);
+
+    expect(pickupExclusions(db)).toEqual({ providers: ["moonshot"], models: [] });
+  });
+
+  it("harnessContainment の開いた値は、その Harness を正準経路に持つ Provider だけを外す", () => {
+    const db = openDb(":memory:");
+    registerQuarantine(db, "harnessContainment", "claude-code", "cause", NOW);
+
+    expect(pickupExclusions(db)).toEqual({ providers: ["anthropic", "moonshot"], models: [] });
+  });
+
+  it.each(QUARANTINES.filter((row) => "excludesProviders" in row))(
+    "行が $kind の外す Provider を持てば、開いた値の Provider が除外に現れる",
+    (row) => {
+      const db = openDb(":memory:");
+      const value = SAMPLE[row.kind][0]!;
+      registerQuarantine(db, row.kind, value, "cause", NOW);
+
+      const excluded = row.excludesProviders([value]);
+      expect(excluded).not.toEqual([]);
+      expect(pickupExclusions(db).providers).toEqual(expect.arrayContaining(excluded));
+    },
+  );
+
+  it.each(["workspace", "agent", "containment", "failedTeardown", "registryReachability"] as const)(
+    "%s の開いた quarantine は除外を変えない",
+    (kind) => {
+      const db = openDb(":memory:");
+      registerQuarantine(db, kind, SAMPLE[kind][0], "cause", NOW);
+
+      expect(pickupExclusions(db)).toEqual({ providers: [], models: [] });
+    },
+  );
 });

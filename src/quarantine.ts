@@ -8,7 +8,8 @@
 import type { Db } from "./db.js";
 import { appendEvent } from "./events.js";
 import type { HaltKind } from "./halt-kind.js";
-import type { Provider } from "./registry.js";
+import { PROVIDER_VALUES } from "./provider.js";
+import { canonicalHarness, type Provider } from "./registry.js";
 import { BOARD_WORKER_ID, type QuestionItem, type ResourceStops, registerTask } from "./tasks.js";
 
 export const FAILED_TEARDOWN_QUESTION_TITLE = "the board's own teardown failed — pickup is stopped";
@@ -115,6 +116,7 @@ export const QUARANTINES = [
   {
     kind: "providerAuth",
     scope: "assignees",
+    excludesProviders: (providers: string[]) => providers as Provider[],
     prose: (provider: string | null): QuarantineProse => ({
       title: `${provider} authentication is unavailable — pickup of ${provider}-speaking agents is stopped`,
       purpose:
@@ -139,6 +141,8 @@ export const QUARANTINES = [
   {
     kind: "harnessContainment",
     scope: "assignees",
+    excludesProviders: (harnesses: string[]) =>
+      PROVIDER_VALUES.filter((provider) => harnesses.includes(canonicalHarness(provider))),
     prose: (harness: string | null, reason: string): QuarantineProse => ({
       title: `${harness} Harness containment is not established`,
       purpose:
@@ -155,6 +159,9 @@ export const QUARANTINES = [
   /** assignee 群単位の行が値を agent 名へ写す写像のうち、行そのものが知っているもの。
    *  無い行は合成 root の `QuarantineResolvers` から受ける(registry は読まない、ADR 0041)。 */
   resolveAssignees?: (values: string[]) => string[];
+  /** entry 経路(ADR 0110 決定3)で値が外す Provider —— 「その Provider では走れない」
+   *  種類だけが持つ。agent 名ではなく entry を外すので `QuarantineResolvers` とは別の写像。 */
+  excludesProviders?: (values: string[]) => Provider[];
   prose: (value: string | null, reason: string) => QuarantineProse;
 }>;
 
@@ -185,6 +192,13 @@ export function quarantineStops(db: Db, resolvers: QuarantineResolvers = {}): Re
     stops.assignees.push(...(resolve?.(values) ?? []));
   }
   return stops;
+}
+
+/** 開いた quarantine が entry 経路で外す Provider。`excludesProviders` を持つ行を総なめに畳む。 */
+export function quarantineExcludedProviders(db: Db): Provider[] {
+  return QUARANTINES.flatMap((row) =>
+    "excludesProviders" in row ? row.excludesProviders(openQuarantineValues(db, row.kind) as string[]) : [],
+  );
 }
 
 /** その鍵の開いた確認型 question。NULL の value は `IS` でしか一致しない。 */
