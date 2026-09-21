@@ -2,7 +2,7 @@
  *  表1つに宣言する。WebUI は `api()` を通して表の行を受け、サーバは `res.json(x satisfies
  *  WireContract[...])` で同じ行に照らす。分岐に使う欄はリテラル union、表示だけの欄は `string`。
  *
- *  依存ゼロの leaf module である —— WebUI の型検査プログラムがインライン `import()` 型で引くので、
+ *  leaf module である —— WebUI の型検査プログラムがインライン `import()` 型で引くので、
  *  import してよいのは leaf の語彙だけ(ADR 0133 決定3)。動的セグメントはテンプレート形(`:id`)を
  *  キーにする。 */
 import type { HaltKind } from "./halt-kind.js";
@@ -20,9 +20,11 @@ export interface BoardHalt {
 export interface Teardown {
   taskId: string;
   startedAt: string;
+  /** 値集合の正本は src/teardown.ts の Settlement(移送は issue #352)。 */
   settlement: "completed" | "released" | "interrupted";
 }
 
+/** サーバ側の正本は src/throttle.ts の DisplayProviderUsage(値集合の移送は issue #352)。 */
 export interface ProviderUsage {
   provider: string;
   status: "observed" | "unauthorized" | "unobservable" | "absent";
@@ -42,6 +44,7 @@ export interface ProviderUsage {
 export interface QueueTask {
   id: string;
   title: string;
+  /** 値集合の正本は src/tasks.ts の TaskStatus と表示上の派生状態(移送は issue #352)。 */
   status: "todo" | "in_progress" | "done" | "cancelled" | "blocked" | "held" | "skipped";
   assignee: string | null;
   risk_flag: number;
