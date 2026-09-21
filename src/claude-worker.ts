@@ -1962,18 +1962,28 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     void this.enumerateSkills(workspace.path).then((enumerated) => {
       if (enumerated === null) {
         // spawn failure with no fail-open (ADR 0025 point 6): the deny list
-        // could not be resolved, so no session starts and the allowlist is
-        // never bypassed. No child means no worker_exited to record; the task
-        // keeps the slot with no process, and the watchdog reclaims it at its
-        // per-type time limit into tidepool's failure question (the retry
-        // path) — the same failure system every kill routes to, entered
-        // without a running process to kill. Deliberately NOT degraded into a
+        // could not be resolved, so no process starts and the allowlist is
+        // never bypassed. This is the third observation point of ADR 0118's
+        // family (a pickup whose worker never ran): record spawn_failed now
+        // and hand the pickup to the board's one-shot, which raises the
+        // failure question and tears the session down — same shape as the
+        // Node spawn() "error" point below. Deliberately NOT degraded into a
         // --disable-slash-commands spawn: that would silently drop the
         // equipment the agent was promised and make the failure unobservable.
-        console.error(
-          `[worker] skill enumeration failed for task ${task.id}; not spawning ` +
-            "(deny list unresolved, no fail-open — ADR 0025)",
-        );
+        console.error(`[worker] skill enumeration failed for task ${task.id}; not spawning`);        const failure = {
+          error_code: null,
+          message:
+            "skill enumeration failed, so the skill deny list could not be resolved " +
+            "and the worker was not spawned (no fail-open, ADR 0025)",
+        };
+        appendEvent(this.options.db, {
+          taskId: task.id,
+          workerId: agent.name,
+          origin: "board",
+          payload: { kind: "spawn_failed", ...failure },
+          at: this.options.clock.now(),
+        });
+        this.options.onSpawnFailed?.(task.id, failure);
         return;
       }
       // the @workspace/@host split is a difference against the checkout's own

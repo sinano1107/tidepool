@@ -1,5 +1,11 @@
-import { rm } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { PassThrough } from "node:stream";
 import { afterEach, expect, it } from "vitest";
+import { ClaudeCodeWorker } from "../src/claude-worker.js";
+import { getTask } from "../src/tasks.js";
+import { FakeContainerRuntime, healthyUsageText } from "./fakes.js";
 import {
   api,
   bootTidepool,
@@ -11,6 +17,7 @@ import {
   queueWork,
   type Tidepool,
 } from "./harness.js";
+import { makeRegistry } from "./registry-fixture.js";
 
 /** ADR 0118(issue #570)。worker が1度も走らなかった pickup は、盤面が失敗を観測した
  *  瞬間に failure question を立て、後始末で枠を空ける —— タスク種別の時間制限の梯子には
@@ -165,5 +172,80 @@ it("既に別の session が slot に入っているときに遅れて届いた 
 
   expect(await status(running.id)).toBe("in_progress");
   expect(started()).toEqual([failed.id, running.id]);
+  expect(await neverStarted()).toHaveLength(1);
+});
+
+// issue #770: skill 列挙の null は ADR 0118 の族の3つ目の観測点。ここは列挙を fake に
+// 差し替えず、実 adapter の Board call を fake の容器機構の上で走らせる —— 列挙の容器が
+// 空を観測できないホストで、回収 timeout の null と Containment quarantine が重なる道を固定する。
+it("skill 列挙の容器が空にならず回収 timeout で null に落ちると、failure question と Containment quarantine が1枚ずつ立ち、時間制限を待たずに枠は空くが次は拾われない", async () => {
+  const registryDir = await makeRegistry({
+    "agents/deckhand.md":
+      "---\nname: deckhand\nversion: 0.3.1\nauthority: standard\nprovider: anthropic\n" +
+      "description: General work agent\nskills:\n  - code-review\n---\nYou are Deckhand.\n",
+  });
+  const logDir = await mkdtemp(join(tmpdir(), "skill-enum-fail-logs-"));
+  dirs.push(registryDir, logDir);
+  // 列挙の probe は init 行を出さず exit もしない。task 以外の容器(= Board call)は
+  // force では空にならない —— 容器 id の綴りには結び付けず「task の行が無い id」で見分ける
+  const runtime = new (class extends FakeContainerRuntime {
+    override create(id: string) {
+      const container = super.create(id);
+      if (!getTask(t.db, id)) this.hold(id);
+      return container;
+    }
+  })(() => ({ stdout: new PassThrough(), stderr: new PassThrough(), kill() {}, on() {} }));
+  t = await bootTidepool({
+    watchdog: WATCHDOG,
+    containerRuntime: runtime,
+    workerAdapter: ({ db, clock, containers, boardCall, onSpawnFailed }) => {
+      const worker = new ClaudeCodeWorker({
+        db,
+        clock,
+        containers,
+        boardCall,
+        onSpawnFailed,
+        registry: { dir: registryDir, mode: "purely-local" },
+        agent: "deckhand",
+        workspace: "tidepool",
+        mcpUrl: "http://127.0.0.1:1/mcp",
+        logDir,
+      });
+      return {
+        id: worker.id,
+        start: (task) => worker.start(task),
+        gracefulStop: (id) => worker.gracefulStop(id),
+        checkUsage: async () => healthyUsageText(t.clock.now()),
+      };
+    },
+  });
+  const task = queueWork(t, "never runs");
+  const next = queueWork(t, "next in line");
+  await t.clock.advance(HOUR); // pickup: 列挙の Board call が走り出す
+  expect(await status(task.id)).toBe("in_progress");
+  expect(await neverStarted()).toEqual([]);
+
+  // 15s の上限 → force → 回収 timeout(5 分)で null。時間制限(90 分)には遠い
+  await t.clock.advance(10 * MIN);
+  await settle();
+
+  const all = await questions(t);
+  expect(all.map((q: any) => q.title).sort()).toEqual([
+    "worker containment is not established — pickup is stopped",
+    "worker never started for task: never runs",
+  ]);
+  const [failure] = await neverStarted();
+  expect(failure.purpose).toContain("skill enumeration failed");
+  expect(failure.purpose).not.toMatch(/time limit|reclaim/i);
+  const containment = all.find((q: any) => q.title.includes("containment"));
+  expect(containment.purpose).toContain("skill enumeration Board call");
+
+  const events = (await api(t.baseUrl, "GET", `/api/tasks/${task.id}/events`)).json;
+  expect(events.filter((e: any) => e.kind === "spawn_failed").map((e: any) => e.payload.error_code)).toEqual([null]);
+  expect(await status(task.id)).toBe("blocked");
+  // task の容器は空になり後始末は完走して枠は空く —— だが quarantine が pickup を止める
+  expect((await api(t.baseUrl, "GET", "/api/queue")).json.teardown).toBeUndefined();
+  await t.clock.advance(2 * HOUR);
+  expect(await status(next.id)).toBe("todo");
   expect(await neverStarted()).toHaveLength(1);
 });
