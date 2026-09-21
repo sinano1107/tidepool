@@ -2948,7 +2948,7 @@ function mapData(board, log, pause, icons, triage, queueEnvelope, yourTasks) {
     paused: !!paused,
     triageActive: halts.some((h) => h.kind === "triage"),
     // Spend-down (ADR 0143) — Provider × 窓ごとの盤面状態応答から素通し
-    spendDown: pause.spendDown ?? {},
+    spendDown: pause.spendDown,
     providerUsage,
     lastLogId: log.entries.at(-1)?.id ?? null
   };

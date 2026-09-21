@@ -9,15 +9,16 @@ export const SPEND_DOWN_WINDOWS = {
   openai: ["primary", "secondary"],
 } as const;
 
-export type SpendDownProvider = keyof typeof SPEND_DOWN_WINDOWS;
-
 export interface SpendDownWindowState {
   activatedAt: Date;
 }
 
 export type SpendDownState = {
-  [P in SpendDownProvider]: Record<(typeof SPEND_DOWN_WINDOWS)[P][number], SpendDownWindowState | null>;
+  [P in keyof typeof SPEND_DOWN_WINDOWS]: Record<(typeof SPEND_DOWN_WINDOWS)[P][number], SpendDownWindowState | null>;
 };
+
+/** provider / window を文字列で引くための同じ状態の見え方。 */
+type LooseSpendDownState = Record<string, Record<string, SpendDownWindowState | null> | undefined>;
 
 export function isKnownSpendDownTarget(provider: string, window: string): boolean {
   return (SPEND_DOWN_WINDOWS as Record<string, readonly string[]>)[provider]?.includes(window) ?? false;
@@ -36,10 +37,12 @@ export function clearSpendDown(db: Db, provider: Provider, window: string): void
 }
 
 export function getSpendDown(db: Db): SpendDownState {
-  const state: SpendDownState = {
-    anthropic: { session: null, week: null },
-    openai: { primary: null, secondary: null },
-  };
+  const state: LooseSpendDownState = Object.fromEntries(
+    Object.entries(SPEND_DOWN_WINDOWS).map(([provider, windows]) => [
+      provider,
+      Object.fromEntries(windows.map((window) => [window, null])),
+    ]),
+  );
   const rows = db.prepare("SELECT provider, window, activated_at FROM spend_down_state").all() as Array<{
     provider: string;
     window: string;
@@ -47,11 +50,9 @@ export function getSpendDown(db: Db): SpendDownState {
   }>;
   for (const row of rows) {
     if (!isKnownSpendDownTarget(row.provider, row.window)) continue;
-    (state as Record<string, Record<string, SpendDownWindowState | null>>)[row.provider]![row.window] = {
-      activatedAt: new Date(row.activated_at),
-    };
+    state[row.provider]![row.window] = { activatedAt: new Date(row.activated_at) };
   }
-  return state;
+  return state as SpendDownState;
 }
 
 /** その窓の線を Spend-down が外すか: arm の時刻が窓の開始以降のときだけ当たる —— 前なら arm した
@@ -64,9 +65,7 @@ export function isSpendDownActive(
   startsAtMs: number,
 ): boolean {
   const target = provider === "anthropic" && window === "fable" ? "week" : window;
-  const armed = (state as Record<string, Record<string, SpendDownWindowState | null> | undefined>)[provider]?.[
-    target
-  ];
+  const armed = (state as LooseSpendDownState)[provider]?.[target];
   return !!armed && armed.activatedAt.getTime() >= startsAtMs;
 }
 
