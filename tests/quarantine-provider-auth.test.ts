@@ -5,14 +5,16 @@ import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { quarantineCliAuthForProvider } from "../src/cli-auth.js";
 import type { CodexAppServerProbeResult } from "../src/codex-app-server.js";
-import type { ExecutionSetting } from "../src/execution-setting.js";
+import { type ExecutionSetting, executionSettingsFor } from "../src/execution-setting.js";
 import type { Provider } from "../src/registry.js";
+import { healthyOpenai } from "./fakes.js";
 import {
   api,
   bootTidepool,
   FULL_HANDOFF,
   HOUR,
   mcpClient,
+  queueWork,
   registerWork,
   type Tidepool,
 } from "./harness.js";
@@ -222,4 +224,78 @@ it("codexHome に auth.json が無い openai は probe を撃たずに absent �
   writeFileSync(join(codexHome, "auth.json"), "{}");
   await t.clock.advance(HOUR);
   expect({ probes, questions: (await authQuestions()).length }).toEqual({ probes: 1, questions: 1 });
+});
+
+/* ------------------------------------------------------------------ *
+ * entry 経路(server 境界): 開いた quarantine が外すのは Provider であって
+ * agent ではない(ADR 0110 決定3 / issue #791)。候補は**実物の selector**
+ * (`executionSettingsFor` + 盤面の表)から作る —— `quarantineResolvers` は
+ * 渡さない。渡すと agent 名へ写る legacy 経路(`pickupStops`)を通ってしまい、
+ * 別 Provider の entry を持つ agent まで道連れになる形を測れない。
+ * ------------------------------------------------------------------ */
+
+/** agent の entry 宣言を名前の列から組む(provider-scheduler.test.ts と同じ形)。 */
+const entries = (...names: string[]) => ({
+  provider: names.map((name) => ({ name, advisor: false })),
+  tier: undefined,
+});
+
+it("openai を quarantine 中でも openai と anthropic の entry を持つ agent の task は anthropic で走り、openai entry しか持たない agent の task だけが skipped —— queue 表示と pickup の判定は同じ式(ADR 0110 決定5)", async () => {
+  t = await bootTidepool({
+    // openai の usage 観測を健全にしておく —— 未設定だと「unobservable」の
+    // fail-closed 自体が openai を除外してしまい、quarantine を外しても
+    // このテストが落ちなくなる(除外の原因が quarantine 単独と言えなくなる)
+    openaiUsage: healthyOpenai,
+    taskExecutionCandidates: (task) =>
+      executionSettingsFor(
+        t.db,
+        task.assignee === "multi-agent" ? entries("openai", "anthropic") : entries("openai"),
+        task,
+      ),
+  });
+  quarantineCliAuthForProvider(t.db, "openai", t.clock.now());
+
+  // 扉を通す(quarantine は登録より前に開いているので、pickup の契機である
+  // 登録の poll がそのまま今の除外集合を読む)
+  const solo = await registerWork(t, "openai entry しか持たない agent の task", undefined, undefined, "solo-agent");
+  const multi = await registerWork(t, "openai と anthropic の entry を持つ agent の task", undefined, undefined, "multi-agent");
+
+  // openai は候補にすら残らず anthropic entry で走る。選ばれた設定は adapter へ
+  // そのまま運ばれ、実 adapter はこれを worker_spawned に刻む
+  expect(t.worker.started.map((task) => task.id)).toEqual([multi.id]);
+  expect(t.worker.startedSettings[0]).toMatchObject({ provider: "anthropic" });
+
+  // queue の skipped 表示は scheduler のゲートと同じ1つの式から出る —— openai
+  // entry しか持たない task だけが skipped で、別 Provider の entry を持つ
+  // task は道連れにならない
+  const queue = (await api(t.baseUrl, "GET", "/api/queue")).json.tasks as any[];
+  expect({
+    solo: queue.find((task) => task.id === solo.id)?.status,
+    multi: queue.find((task) => task.id === multi.id)?.status,
+  }).toEqual({ solo: "skipped", multi: "in_progress" });
+});
+
+it("openai entry しか持たない行は quarantine 中は Pickable head ではない —— 下の行の ↑ を飲まない(ADR 0110 決定3 / CONTEXT.md「Pickable head」)", async () => {
+  t = await bootTidepool({
+    // openai の usage 観測を健全にしておく —— 理由は上のテストと同じ
+    openaiUsage: healthyOpenai,
+    taskExecutionCandidates: (task) =>
+      executionSettingsFor(t.db, task.assignee === "runnable-agent" ? entries("anthropic") : entries("openai"), task),
+  });
+  quarantineCliAuthForProvider(t.db, "openai", t.clock.now());
+  // 扉を通さずに置く(扉の登録は pickup の契機 —— ADR 0119 決定2 —— なので、
+  // todo のまま待つことを前提にするテストはこちらを使う)
+  const blocked = queueWork(t, "openai entry しか持たない行", undefined, undefined, "solo-agent");
+
+  await t.clock.advance(HOUR);
+  // この poll では候補が blocked しか無く、全 entry 除外なので何も走らない
+  expect(t.worker.started).toEqual([]);
+  const queue = (await api(t.baseUrl, "GET", "/api/queue")).json.tasks as any[];
+  expect(queue.find((task) => task.id === blocked.id)?.status).toBe("skipped");
+
+  // 素の先頭は blocked のままだが、候補の先頭は下の runnable(anthropic entry)。
+  // 1回の ↑ が空振りしないことが、Pickable head が entry 集合で判定されている証拠である
+  const runnable = queueWork(t, "anthropic entry を持つので別の行で走る", undefined, undefined, "runnable-agent");
+  await api(t.baseUrl, "POST", `/api/tasks/${runnable.id}/move`, { after: null });
+  expect(t.worker.started.map((task) => task.id)).toEqual([runnable.id]);
 });
