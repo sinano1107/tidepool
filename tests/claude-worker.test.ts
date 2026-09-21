@@ -992,23 +992,47 @@ describe("ClaudeCodeWorker", () => {
     expect(disallowedTools(recorder.calls[1]!.args)).toContain("Skill(tdd)");
   });
 
-  it("列挙 ping が失敗(null)したら spawn 失敗として扱い、deny 未解決のまま spawn しない(fail-open にしない・ADR 0025 point 6)", async () => {
+  // issue #770: ADR 0118 の族の3つ目の観測点。時計は進めない —— 失敗の瞬間に記録する
+  it("列挙 ping が失敗(null)したらその瞬間に spawn_failed を書いて onSpawnFailed を1度呼び、deny 未解決のまま spawn しない(fail-open にしない・ADR 0025 point 6)", async () => {
     const rec = recordingEnumerator(null);
-    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-    try {
-      const { start, calls } = await makeWorker(
-        { "agents/deckhand.md": skilledMd("  - code-review\n") },
-        { enumerateSkills: rec.enumerateSkills },
-      );
-      start("task-ping-fail");
-      await vi.waitFor(() => expect(rec.calls).toHaveLength(1));
-      // 列挙は試みたが、その失敗で子プロセスは起動しない
-      await new Promise((resolve) => setTimeout(resolve, 10));
-      expect(calls).toEqual([]);
-      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("skill enumeration failed"));
-    } finally {
-      errorSpy.mockRestore();
-    }
+    const spawnFailures: Array<[string, { error_code: string | null; message: string }]> = [];
+    const { start, calls, db } = await makeWorker(
+      { "agents/deckhand.md": skilledMd("  - code-review\n") },
+      {
+        enumerateSkills: rec.enumerateSkills,
+        onSpawnFailed: (taskId, failure) => spawnFailures.push([taskId, failure]),
+      },
+    );
+    start("task-ping-fail");
+    await vi.waitFor(() => expect(spawnFailures).toHaveLength(1));
+    const [[, failure]] = spawnFailures as [[string, { error_code: string | null; message: string }]];
+    expect(spawnFailures).toEqual([
+      ["task-ping-fail", { error_code: null, message: expect.stringContaining("skill enumeration failed") }],
+    ]);
+    expect(failure.message).not.toMatch(/time limit|reclaim/i);
+    const failed = listEvents(db, "task-ping-fail").filter((e) => e.kind === "spawn_failed");
+    expect(failed.map((e) => [e.worker_id, e.origin, e.payload])).toEqual([
+      ["deckhand", "board", { kind: "spawn_failed", ...failure }],
+    ]);
+    // 列挙は試みたが、その失敗で子プロセスは起動しない
+    expect(calls).toEqual([]);
+  });
+
+  it("列挙 ping が reject しても null と同じく spawn_failed を書いて onSpawnFailed を呼び、spawn しない(issue #770)", async () => {
+    const spawnFailures: string[] = [];
+    const { start, calls, db } = await makeWorker(
+      { "agents/deckhand.md": skilledMd("  - code-review\n") },
+      {
+        enumerateSkills: async () => {
+          throw new Error("reader blew up");
+        },
+        onSpawnFailed: (taskId) => spawnFailures.push(taskId),
+      },
+    );
+    start("task-ping-reject");
+    await vi.waitFor(() => expect(spawnFailures).toEqual(["task-ping-reject"]));
+    expect(listEvents(db, "task-ping-reject").filter((e) => e.kind === "spawn_failed")).toHaveLength(1);
+    expect(calls).toEqual([]);
   });
 
   // issue #60 / ADR 0033: 全 worker セッションはハーネス内蔵サンドボックスの

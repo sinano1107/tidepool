@@ -1959,21 +1959,24 @@ export class ClaudeCodeWorker implements WorkerAdapter {
       }, routing);
       return;
     }
-    void this.enumerateSkills(workspace.path).then((enumerated) => {
+    // a rejected probe is the same "could not enumerate" as null — never the old wedge
+    void this.enumerateSkills(workspace.path).catch(() => null).then((enumerated) => {
       if (enumerated === null) {
         // spawn failure with no fail-open (ADR 0025 point 6): the deny list
-        // could not be resolved, so no session starts and the allowlist is
-        // never bypassed. No child means no worker_exited to record; the task
-        // keeps the slot with no process, and the watchdog reclaims it at its
-        // per-type time limit into tidepool's failure question (the retry
-        // path) — the same failure system every kill routes to, entered
-        // without a running process to kill. Deliberately NOT degraded into a
+        // could not be resolved, so no process starts and the allowlist is
+        // never bypassed. This is the third observation point of ADR 0118's
+        // family (a pickup whose worker never ran): record spawn_failed now
+        // and hand the pickup to the board's one-shot, which raises the
+        // failure question and tears the session down — same shape as the
+        // Node spawn() "error" point below. Deliberately NOT degraded into a
         // --disable-slash-commands spawn: that would silently drop the
         // equipment the agent was promised and make the failure unobservable.
-        console.error(
-          `[worker] skill enumeration failed for task ${task.id}; not spawning ` +
-            "(deny list unresolved, no fail-open — ADR 0025)",
-        );
+        this.recordSpawnFailed(task, agent, {
+          error_code: null,
+          message:
+            "skill enumeration failed, so the skill deny list could not be resolved " +
+            "and the worker was not spawned (no fail-open, ADR 0025)",
+        });
         return;
       }
       // the @workspace/@host split is a difference against the checkout's own
@@ -1993,6 +1996,24 @@ export class ClaudeCodeWorker implements WorkerAdapter {
         permittedSkills,
       }, routing);
     });
+  }
+
+  /** ADR 0118: this adapter's observation points of a pickup whose worker never
+   *  ran (skill enumeration, Node spawn()) record the fact the same way, then
+   *  hand the pickup to the board's one-shot. */
+  private recordSpawnFailed(
+    task: Task,
+    agent: ResolvedAgent,
+    failure: { error_code: string | null; message: string },
+  ): void {
+    appendEvent(this.options.db, {
+      taskId: task.id,
+      workerId: agent.name,
+      origin: "board",
+      payload: { kind: "spawn_failed", ...failure },
+      at: this.options.clock.now(),
+    });
+    this.options.onSpawnFailed?.(task.id, failure);
   }
 
   /** The vendor spawn recipe, run once the skill deny list is resolved (ADR
@@ -2315,15 +2336,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
       }
       this.running.delete(task.id);
       console.error(`[worker] failed to spawn claude for task ${task.id}:`, err);
-      const failure = { error_code: errno.code ?? null, message: err.message };
-      appendEvent(this.options.db, {
-        taskId: task.id,
-        workerId: agent.name,
-        origin: "board",
-        payload: { kind: "spawn_failed", ...failure },
-        at: this.options.clock.now(),
-      });
-      this.options.onSpawnFailed?.(task.id, failure);
+      this.recordSpawnFailed(task, agent, { error_code: errno.code ?? null, message: err.message });
     });
     // usage is settled at process exit — after task_completed via MCP, not
     // before (issue #32) — so kill/crash sessions still get a worker_exited
