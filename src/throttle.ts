@@ -4,12 +4,16 @@ import { defaultProviderPaceOffset, getProviderPaceOffset } from "./pace-offsets
 import type { Provider } from "./registry.js";
 import { getSpendDown, isSpendDownActive } from "./spend-down.js";
 
-export interface ProviderUsageWindowState {
+/** 評価器が受け取る窓 —— Provider を問わない共通の形(ADR 0144)。 */
+export interface ProviderUsageWindow {
   window: string;
   model: string | null;
   usedPercent: number;
   durationMs: number;
   resetsAt: Date;
+}
+
+export interface ProviderUsageWindowState extends ProviderUsageWindow {
   throttled: boolean;
   resumesAt: Date | null;
 }
@@ -185,36 +189,36 @@ export function getProviderUsage(db: Db): DisplayProviderUsage[] {
   }));
 }
 
-/** Applies the same elapsed-time pace line as ADR 0030 to the App Server's
- * explicit duration/reset windows. Account-wide windows block the Provider;
- * model windows block only that model. */
+/** The one pace-line evaluator for every Provider (ADR 0030 / ADR 0144).
+ * Account-wide windows block the Provider; model windows block only that model. */
 export function evaluateAndReportProviderUsage(
   db: Db,
   observation: Omit<ProviderUsageObservation, "observedAt" | "windows"> & {
-    windows: Array<{
-      window: string;
-      model: string | null;
-      usedPercent: number;
-      durationMs: number;
-      resetsAt: Date;
-    }>;
+    windows: ProviderUsageWindow[];
   },
   now: Date,
 ): ProviderUsageObservation {
   const spendDown = getSpendDown(db);
-  const windows = observation.windows.map((window): ProviderUsageWindowState => {
+  // 逆算の不整合(今がリセット時刻 − 窓幅より前)の窓は観測から落とす。Provider 全体の窓なら
+  // Provider ごと観測不能に倒す —— model 固有の窓の不在はプランの正常な姿でありうる(ADR 0144 決定3)
+  const startsAt = (window: ProviderUsageWindow) => window.resetsAt.getTime() - window.durationMs;
+  const inconsistent = (window: ProviderUsageWindow) => now.getTime() < startsAt(window);
+  const unobservable =
+    observation.status === "observed" &&
+    observation.windows.some((window) => window.model === null && inconsistent(window));
+  const windows = observation.windows.filter((window) => !inconsistent(window)).map((window): ProviderUsageWindowState => {
     const offset = getProviderPaceOffset(
       db,
       observation.provider,
       window.window,
     );
-    const startsAt = window.resetsAt.getTime() - window.durationMs;
-    const elapsed = (now.getTime() - startsAt) / window.durationMs;
-    const spendDownActive = isSpendDownActive(spendDown, observation.provider, window.window, startsAt);
+    const startsAtMs = startsAt(window);
+    const elapsed = (now.getTime() - startsAtMs) / window.durationMs;
+    const spendDownActive = isSpendDownActive(spendDown, observation.provider, window.window, startsAtMs);
     const throttled = spendDownActive
       ? window.usedPercent >= 100
       : window.usedPercent >= 100 || window.usedPercent > elapsed * 100 - offset;
-    const catchesUpAt = startsAt + ((window.usedPercent + offset) / 100) * window.durationMs;
+    const catchesUpAt = startsAtMs + ((window.usedPercent + offset) / 100) * window.durationMs;
     return {
       ...window,
       throttled,
@@ -225,7 +229,15 @@ export function evaluateAndReportProviderUsage(
         : null,
     };
   });
-  const result = { ...observation, observedAt: now, windows };
+  const result: ProviderUsageObservation = {
+    ...observation,
+    ...(unobservable && {
+      status: "unobservable",
+      reason: "a Provider-wide usage window resets later than its duration allows",
+    }),
+    observedAt: now,
+    windows,
+  };
   reportProviderUsage(db, result);
   return result;
 }

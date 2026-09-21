@@ -1,6 +1,13 @@
 import type { Db } from "./db.js";
 import type { Provider } from "./registry.js";
-import type { PaceOffsets } from "./usage.js";
+
+/** ADR 0030: 人間の取り分の予約(pt)。盤面がペースからこの分だけ遅れて
+ *  走ることで、空いた分が人間の対話利用に残る。 */
+export interface PaceOffsets {
+  session: number;
+  week: number;
+  fable: number;
+}
 
 /** ADR 0030 の既定: 人間の取り分の予約(pt)。session は対話利用と取り合いに
  *  なりやすいので厚め、週次の2線は薄め。 */

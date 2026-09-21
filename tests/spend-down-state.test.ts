@@ -1,6 +1,12 @@
 import { expect, it } from "vitest";
 import { openDb } from "../src/db.js";
-import { clearSpendDown, expireSpendDown, getSpendDown, setSpendDown } from "../src/spend-down.js";
+import {
+  clearSpendDown,
+  expireSpendDown,
+  getSpendDown,
+  isSpendDownActive,
+  setSpendDown,
+} from "../src/spend-down.js";
 
 const HOUR = 60 * 60 * 1000;
 
@@ -71,5 +77,21 @@ it("観測に現れない窓(Idle・観測不能)の行は残る", () => {
   });
 
   expect(getSpendDown(db).anthropic.week).toEqual({ activatedAt: armedAt });
+  db.close();
+});
+
+it.each([
+  // 同じ瞬間に失効する予算(ADR 0091 決定2)
+  ["anthropic の week は anthropic の fable の線も外す", "anthropic", "week", "anthropic", "fable", true],
+  // fable は週次予算で、session と失効時刻を共有しない
+  ["anthropic の session は fable の線に触れない", "anthropic", "session", "anthropic", "fable", false],
+  // Provider をまたがない(ADR 0143)
+  ["openai の primary は anthropic の session の線に触れない", "openai", "primary", "anthropic", "session", false],
+] as const)("Spend-down の述語: %s", (_, armedProvider, armedWindow, provider, window, active) => {
+  const db = openDb(":memory:");
+  const windowStart = new Date("2026-08-20T00:00:00.000Z");
+  setSpendDown(db, armedProvider, armedWindow, new Date(windowStart.getTime() + HOUR));
+
+  expect(isSpendDownActive(getSpendDown(db), provider, window, windowStart.getTime())).toBe(active);
   db.close();
 });
