@@ -139,6 +139,7 @@ import {
   triagePreview,
 } from "./triage.js";
 import type { PendingReclaim } from "./watchdog.js";
+import type { WireContract } from "./wire-contract.js";
 import {
   buildWorkspaceResolver,
   UnknownWorkspaceError,
@@ -1741,7 +1742,9 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     };
   }
 
-  function providerUsageJson() {
+  // 返り値型は wire の契約から —— 呼び手は spread で合成するので、ここで照らさないと
+  // 欄の改名が satisfies をすり抜ける(spread された欄は excess property 検査の外)
+  function providerUsageJson(): Pick<WireContract["GET /api/queue"], "providerUsage"> {
     const providerUsage = getProviderUsage(db);
     return providerUsage.length === 0 ? {} : { providerUsage };
   }
@@ -1754,7 +1757,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   // (ADR 0112 決定1)、同じ session について2つが同時に出る —— このフィールドが言う
   // のは「いつ後始末に入ったか」、列挙が言うのは「止まっている」で、別の事実である
   // (把握して受け入れた重複)。
-  function teardownJson() {
+  function teardownJson(): Pick<WireContract["GET /api/queue"], "teardown"> {
     const teardown = sessionInTeardown(db);
     return teardown ? { teardown } : {};
   }
@@ -1995,7 +1998,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
           entriesAllExcluded(),
         ),
       ),
-    });
+    } satisfies WireContract["GET /api/queue"]);
   });
 
   router.get("/tasks/:id/events", (req, res) => {

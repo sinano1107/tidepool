@@ -2668,9 +2668,10 @@ class ApiError extends Error {
     this.detail = detail;
   }
 }
-async function api(path, body, method = "POST") {
+async function api(pathOrKey, body, method = "POST") {
+  const [verb, path] = pathOrKey.startsWith("/") ? [method, pathOrKey] : pathOrKey.split(" ");
   const res = await fetch(path, {
-    method,
+    method: verb,
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body)
   });
@@ -2980,7 +2981,7 @@ async function fetchData() {
     fetch("/api/pause").then((r) => r.json()),
     fetch("/api/registry/candidates").then((r) => r.json()).catch(() => ({ icons: {} })),
     fetch("/api/triage").then((r) => r.json()),
-    fetch("/api/queue").then((r) => r.json()),
+    api("GET /api/queue"),
     fetch("/api/your-tasks").then((r) => r.json())
   ]);
   return mapData(board, log, pause, candidates.icons, triage, queue, yourTasks);
