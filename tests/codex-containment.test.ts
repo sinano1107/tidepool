@@ -52,7 +52,6 @@ const VALID: CodexCapabilityObservation = {
   cliVersion: CODEX_CLI_VERSION,
   skills: [],
   hooks: [BOARD_HOOK_REGISTRATION],
-  permissions: ["tidepool-work", "tidepool-review"],
   features: CODEX_FEATURE_SNAPSHOT,
   developerMarkers: [CODEX_DEVELOPER_MARKER],
 };
@@ -145,7 +144,6 @@ it.each([
   ["hook (enabled=false)", { hooks: [{ ...BOARD_HOOK_REGISTRATION, enabled: false }] }],
   ["hook (別 source)", { hooks: [{ ...BOARD_HOOK_REGISTRATION, source: "userConfig" }] }],
   ["hook (別の command)", { hooks: [{ ...BOARD_HOOK_REGISTRATION, command: "/tmp/someone-elses-hook.mjs" }] }],
-  ["permission", { permissions: ["tidepool-work"] }],
   // 盤面の文面が developer 層に届かなかった3つの形(ADR 0124 決定4): 鍵が無視された、
   // 別の層に載った、item の構造が変わった
   ["developer instructions (空)", { developerMarkers: [] }],
