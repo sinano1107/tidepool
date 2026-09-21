@@ -8,8 +8,8 @@
 import type { Db } from "./db.js";
 import { appendEvent } from "./events.js";
 import type { HaltKind } from "./halt-kind.js";
-import { PROVIDER_VALUES } from "./provider.js";
-import { canonicalHarness, type Provider } from "./registry.js";
+import { PROVIDER_VALUES, type Provider } from "./provider.js";
+import { canonicalHarness } from "./registry.js";
 import { BOARD_WORKER_ID, type QuestionItem, type ResourceStops, registerTask } from "./tasks.js";
 
 export const FAILED_TEARDOWN_QUESTION_TITLE = "the board's own teardown failed — pickup is stopped";

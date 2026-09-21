@@ -148,7 +148,7 @@ describe("pickupExclusions の quarantine 由来の Provider", () => {
     },
   );
 
-  it.each(["workspace", "agent", "containment", "failedTeardown", "registryReachability"] as const)(
+  it.each(QUARANTINES.filter((row) => !("excludesProviders" in row)).map((row) => row.kind))(
     "%s の開いた quarantine は除外を変えない",
     (kind) => {
       const db = openDb(":memory:");
