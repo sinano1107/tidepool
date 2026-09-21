@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { openDb } from "../src/db.js";
+import { quarantineStops } from "../src/quarantine.js";
 import { listBoard, listQueue, registerTask } from "../src/tasks.js";
 import { quarantineTestAgent } from "./harness.js";
 
@@ -30,7 +31,7 @@ describe("listQueue は quarantine 済み agent 宛ての todo を skipped と�
       new Date(1),
     );
 
-    const queue = listQueue(db, undefined, "deckhand");
+    const queue = listQueue(db, undefined, "deckhand", undefined, quarantineStops(db));
     expect(queue.find((t) => t.id === stuck.id)?.status).toBe("skipped");
     expect(queue.find((t) => t.id === runnable.id)?.status).toBe("todo");
 
@@ -48,7 +49,7 @@ describe("listQueue は quarantine 済み agent 宛ての todo を skipped と�
       new Date(0),
     );
 
-    expect(listQueue(db).find((t) => t.id === task.id)?.status).toBe("todo");
+    expect(listQueue(db, undefined, undefined, undefined, quarantineStops(db)).find((t) => t.id === task.id)?.status).toBe("todo");
   });
 
   it("review type かつ assignee 未設定のタスクは、defaultAgentName が健全でも auditorName の quarantine で skipped になる(issue #42)", () => {
@@ -65,7 +66,7 @@ describe("listQueue は quarantine 済み agent 宛ての todo を skipped と�
       new Date(1),
     );
 
-    const queue = listQueue(db, undefined, "deckhand", "auditor");
+    const queue = listQueue(db, undefined, "deckhand", "auditor", quarantineStops(db));
     expect(queue.find((t) => t.id === review.id)?.status).toBe("skipped");
     expect(queue.find((t) => t.id === work.id)?.status).toBe("todo");
   });

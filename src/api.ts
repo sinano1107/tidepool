@@ -63,11 +63,10 @@ import {
 import { isPaused, setPaused } from "./pause.js";
 import { type ProfileAdmin, ProfileConfirmationRequiredError } from "./profile-create.js";
 import { removePushSubscription, savePushSubscription } from "./push.js";
-import type { QuarantineChecks } from "./quarantine.js";
+import type { QuarantineChecks, QuarantineResolvers } from "./quarantine.js";
 import { getQuietHours, HH_MM_PATTERN, setBoardTimezone, setQuietHours } from "./quiet-hours.js";
 import {
   authorityProfileSchema,
-  type Harness,
   InvalidAgentDefinitionError,
   InvalidAgentNameError,
   InvalidAllowedDomainError,
@@ -78,7 +77,6 @@ import {
   isBuiltInAgentName,
   PROVIDER_OPTIONS,
   PROVIDER_VALUES,
-  type Provider,
   type RegistryCandidates,
 } from "./registry.js";
 import {
@@ -88,7 +86,7 @@ import {
 import { RepoAccessMissingError } from "./repo-access.js";
 import {
   entryExclusionPredicate,
-  pickupExcludedAssignees,
+  pickupStops,
   type TaskExecutionCandidates,
 } from "./scheduler.js";
 import { clearSpendDown, getSpendDown, setSpendDown } from "./spend-down.js";
@@ -557,12 +555,10 @@ export interface ApiRouterDeps {
   reclaim?: Pick<PendingReclaim, "acceptReclaimed">;
   /** ADR 0137 決定5: 解除の門の map。合成 root が組む。 */
   quarantineChecks?: QuarantineChecks;
-  /** ADR 0097 決定2 / issue #446: the names of the agents declared with one of
-   *  the given providers — the pickup exclusion set the queue view's `skipped`
-   *  display shares with the scheduler's gate. Absent → no registry configured,
-   *  so no provider quarantine skips anything. */
-  agentsSpeakingProviders?: (providers: readonly Provider[]) => string[];
-  agentsUsingHarnesses?: (harnesses: readonly Harness[]) => string[];
+  /** ADR 0137 決定6: 資源単位の quarantine の値 → agent 名。queue の `skipped` 表示は
+   *  scheduler のゲートと同じ集合を見る。resolver の無い kind(registry を持たない
+   *  盤面では値が undefined)の行は何も skip しない。 */
+  quarantineResolvers?: QuarantineResolvers;
   /** ADR 0110 決定1/3 / issue #544: この task が走りうる実行設定(Provider 順位
    *  で並び、除外は当たっていない)。queue の skipped 表示と Pickable head の判定が
    *  scheduler のゲートと同じ式を共有するための口。Absent → registry を持たない
@@ -676,8 +672,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     attributionClient,
     behaviorDraftClient,
     fableAgents,
-    agentsSpeakingProviders,
-    agentsUsingHarnesses,
+    quarantineResolvers,
     taskExecutionCandidates,
     isProtectedWorkspace,
   } = deps;
@@ -685,18 +680,17 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   router.use(json());
   // one cache per router = per process (the API is booted once per board)
   const issueContent = new IssueContentCache();
-  /** 資源単位の skip で候補から外れるもの(ADR 0030 の fable 線 / ADR 0110 決定3 の
-   *  entry 除外)。pickup の述語(`nextSlotTask`)とキュービューの skipped 表示は
+  /** 資源単位の skip で候補から外れるもの(ADR 0137 決定6 の quarantine / ADR 0030 の
+   *  fable 線)。pickup の述語(`nextSlotTask`)とキュービューの skipped 表示は
    *  同じ集合を見なければならない(tasks.ts の「乖離させない」の線) — 述語だけ
    *  でなく、そこへ渡す引数も1つの式から出す。 */
-  const excludedAssignees = () =>
-    pickupExcludedAssignees(
+  const stopped = () =>
+    pickupStops(
       db,
       isFablePickupBlocked(db, clock.now()),
       fableAgents,
       // entry を持つ盤面は agent 名で外さない —— 下の述語がより細かく答える
-      taskExecutionCandidates ? undefined : agentsSpeakingProviders,
-      taskExecutionCandidates ? undefined : agentsUsingHarnesses,
+      taskExecutionCandidates ? {} : quarantineResolvers,
     );
   /** 「この行は全 entry が除外されているか」。scheduler の poll が同じ式を、同じ
    *  poll で観測し直した除外集合に対して当てる(ADR 0110 決定3)。 */
@@ -1261,7 +1255,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
         workspace?.name,
         defaultAgentName,
         auditorName,
-        excludedAssignees(),
+        stopped(),
         skipped,
       );
       if (!head || !excluded(head)) return head;
@@ -1348,8 +1342,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
         workspace,
         defaultAgentName,
         auditorName,
-        agentsSpeakingProviders,
-        agentsUsingHarnesses,
+        quarantineResolvers,
         landing,
         attributionClient,
         behaviorDraftClient,
@@ -1998,7 +1991,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
           workspace?.name,
           defaultAgentName,
           auditorName,
-          excludedAssignees(),
+          stopped(),
           entriesAllExcluded(),
         ),
       ),

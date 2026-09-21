@@ -199,9 +199,9 @@ it("default agent に解決される task を含む subtree は、quarantine 中
 
 it("provider 認証の quarantine 確認が開いている間は、その provider を喋る agent のタスクを含む subtree を直接 cancel できない(issue #446)", async () => {
   t = await bootTidepool({
-    agentsSpeakingProviders: (providers) => (providers.includes("moonshot") ? ["kipper"] : []),
+    quarantineResolvers: { providerAuth: (providers) => (providers.includes("moonshot") ? ["kipper"] : []) },
   });
-  const task = await registerWork(t, "runs on moonshot", undefined, undefined, "kipper");
+  const task = queueWork(t, "runs on moonshot", undefined, undefined, "kipper");
   // an open provider-auth Confirmation for the provider the task's agent speaks
   registerQuestion(t, {
     title: "moonshot authentication is unavailable — pickup of moonshot-speaking agents is stopped",
@@ -219,7 +219,7 @@ it("provider 認証の quarantine 確認が開いている間は、その provid
 
 it("provider 認証の quarantine 確認が開いていても、別の provider を喋る agent のタスクは直接 cancel できる(issue #446)", async () => {
   t = await bootTidepool({
-    agentsSpeakingProviders: (providers) => (providers.includes("moonshot") ? ["kipper"] : []),
+    quarantineResolvers: { providerAuth: (providers) => (providers.includes("moonshot") ? ["kipper"] : []) },
   });
   const task = queueWork(t, "runs on anthropic", undefined, undefined, "deckhand");
   registerQuestion(t, {

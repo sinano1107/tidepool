@@ -18,8 +18,9 @@ const NO_CREDENTIAL = { tokenHash: () => undefined };
 
 const HARNESS_OPTIONS = {
   resolveHarness: () => "claude-code" as const,
-  agentsUsingHarnesses: (harnesses: readonly string[]) =>
-    harnesses.includes("claude-code") ? ["fake-worker"] : [],
+  quarantineResolvers: {
+    harnessContainment: (harnesses: string[]) => (harnesses.includes("claude-code") ? ["fake-worker"] : []),
+  },
   harnessContainment: async () => ({ available: true }) as const,
 };
 

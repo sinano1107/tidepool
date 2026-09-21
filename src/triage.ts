@@ -250,7 +250,7 @@ function registerRcaReview(
  *    reference to the board's Auditor pointer resolved fresh at pickup —
  *    the same "unset = live reference" shape `defaultAgentName` itself uses
  *    (ADR 0011), not a value baked here at commit time. This relies on the
- *    agent-quarantine gate (`agentQuarantinedSql`, `nextSlotTask`/
+ *    agent-quarantine gate (`typeAwareDefaultAgentSql`, `nextSlotTask`/
  *    `listQueue`), claude-worker.ts's spawn resolution, and mcp.ts's
  *    attribution all being type-aware — a `review` task's unset `assignee`
  *    falls back to the Auditor pointer, never `defaultAgentName` (issue #42).

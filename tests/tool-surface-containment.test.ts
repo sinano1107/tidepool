@@ -60,8 +60,9 @@ function scriptedProbe(initial: ContainmentCapability) {
 
 const CLAUDE_ROUTE = {
   resolveHarness: () => "claude-code" as const,
-  agentsUsingHarnesses: (harnesses: readonly string[]) =>
-    harnesses.includes("claude-code") ? ["fake-worker"] : [],
+  quarantineResolvers: {
+    harnessContainment: (harnesses: string[]) => (harnesses.includes("claude-code") ? ["fake-worker"] : []),
+  },
 };
 
 const harnessCheck = (check: () => Promise<ContainmentCapability>) => async (harness: string) =>

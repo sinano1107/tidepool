@@ -25,6 +25,7 @@ import type { DraftClient } from "../src/draft.js";
 import type { GitHubAuth } from "../src/github-auth.js";
 import type { HarnessContainmentCheck } from "../src/harness-containment.js";
 import type { ProfileAdmin } from "../src/profile-create.js";
+import type { QuarantineResolvers } from "../src/quarantine.js";
 import type {
   AuthorityProfile,
   Harness,
@@ -187,10 +188,9 @@ export interface BootOptions {
    *  by the scheduler's fable line and the queue view. Absent → no fable
    *  model resolution, so the fable line never skips anything. */
   fableAgents?: () => string[];
-  /** ADR 0097 決定2 / issue #446: names of the agents declared with one of the
-   *  given providers, read fresh every poll by the scheduler's provider-auth
-   *  gate. Absent → no provider quarantine skips anything. */
-  agentsSpeakingProviders?: (providers: readonly Provider[]) => string[];
+  /** ADR 0137 決定6: 資源単位の quarantine の値 → agent 名(合成 root の map と同じ形)。
+   *  Absent → agent 名の行のほかは何も止めない。 */
+  quarantineResolvers?: QuarantineResolvers;
   openaiUsage?: CodexAppServerProbe;
   /** ADR 0116 決定4: moonshot の鍵ファイル / Codex の codexHome。渡した盤面だけが
    *  資格情報の不在を実ファイルの存否で観測する。Absent → 不在の観測なし。 */
@@ -203,7 +203,6 @@ export interface BootOptions {
   /** Adapter-owned sandbox/tool-surface capability seam. Passing it arms the
    *  shared container and human-surface checks too. */
   harnessContainment?: HarnessContainmentCheck;
-  agentsUsingHarnesses?: (harnesses: readonly Harness[]) => string[];
   /** ADR 0097 決定2 / issue #446: per-provider auth probes for the
    *  answer-time re-verification of a provider-auth Confirmation question. */
   providerCliAuth?: Partial<Record<Provider, CliAuthCheck>>;
@@ -290,7 +289,7 @@ export async function bootTidepool(options: BootOptions = {}): Promise<Tidepool>
     profileAdmin: options.profileAdmin,
     hostSkills: options.hostSkills,
     fableAgents: options.fableAgents,
-    agentsSpeakingProviders: options.agentsSpeakingProviders,
+    quarantineResolvers: options.quarantineResolvers,
     openaiUsage: options.openaiUsage,
     credentialAbsence: {
       ...(options.moonshotApiKeyFile && { moonshot: () => moonshotKeyAbsence(options.moonshotApiKeyFile) }),
@@ -299,7 +298,6 @@ export async function bootTidepool(options: BootOptions = {}): Promise<Tidepool>
     taskExecutionCandidates: options.taskExecutionCandidates,
     resolveHarness: options.resolveHarness,
     harnessContainment: options.harnessContainment,
-    agentsUsingHarnesses: options.agentsUsingHarnesses,
     providerCliAuth: options.providerCliAuth,
     registryReachability: options.registryReachability,
     cliAuth: options.cliAuth,

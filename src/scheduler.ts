@@ -31,6 +31,7 @@ import { recordShadow } from "./learner.js";
 import { registerDueMetaReviews } from "./memory.js";
 import { getProviderPaceOffset } from "./pace-offsets.js";
 import type { ProcessContainers } from "./process-container.js";
+import { type QuarantineResolvers, quarantineStops } from "./quarantine.js";
 import {
   canonicalHarness,
   type Harness,
@@ -51,6 +52,7 @@ import {
   escalateTask,
   nextSlotTask,
   pickupTask,
+  type ResourceStops,
   resolveTaskAgent,
   type Task,
   type TaskContent,
@@ -125,34 +127,23 @@ export function entryExclusionPredicate(
   return (task) => allEntriesExcluded(task, excluded, candidates);
 }
 
-/** **legacy 経路**の名前集合 —— Provider ごとの usage 観測を持たない盤面
- *  (`taskExecutionCandidates` を配線できない盤面)だけが通る面である。fable 線
- *  (ADR 0030)・provider 認証の quarantine(ADR 0097 決定2)・Harness の封じ込め
- *  (ADR 0098)を agent 名で外す。
+/** 資源単位の skip で pickup から外れる workspace / assignee 名 —— 開いた quarantine
+ *  (ADR 0137 決定6、表の行の停止範囲から `quarantineStops` が畳む)と、legacy 経路の
+ *  fable 線(ADR 0030)。pickup の述語とキューの skipped 表示が同じこの1つの式を見る。
  *
- *  **entry を持つ盤面はここを通らない**(ADR 0110 決定3 / issue #544): agent 名で
- *  外すと、別の Provider の entry を持つ agent が道連れになる —— 「全 entry が除外
- *  されて初めて skipped」に反する。そちらは `pickupExclusions` + selector が答える。
- *
- *  Empty normalizes to `undefined`, nextSlotTask's "no exclusion" spelling. */
-export function pickupExcludedAssignees(
+ *  **entry を持つ盤面は `resolvers` に空の map を渡す**(ADR 0110 決定3 / issue #544):
+ *  provider / Harness から agent 名へ写して外すと、別の Provider の entry を持つ agent が
+ *  道連れになる —— 「全 entry が除外されて初めて skipped」に反する。そちらは
+ *  `pickupExclusions` + selector が答える。agent 名の行は写像が自分自身なので両経路で効く。 */
+export function pickupStops(
   db: Db,
   fableBlocked: boolean,
   fableAgents?: () => string[],
-  agentsSpeakingProviders?: (providers: readonly Provider[]) => string[],
-  agentsUsingHarnesses?: (harnesses: readonly Harness[]) => string[],
-): string[] | undefined {
+  resolvers?: QuarantineResolvers,
+): ResourceStops {
+  const stops = quarantineStops(db, resolvers);
   const fable = fableBlocked && fableAgents ? fableAgents() : [];
-  const quarantinedProviders = quarantinedAuthProviders(db);
-  const providerExcluded =
-    quarantinedProviders.length > 0 && agentsSpeakingProviders
-      ? agentsSpeakingProviders(quarantinedProviders)
-      : [];
-  const harnesses = quarantinedHarnesses(db);
-  const harnessExcluded =
-    harnesses.length > 0 && agentsUsingHarnesses ? agentsUsingHarnesses(harnesses) : [];
-  const all = [...new Set([...fable, ...providerExcluded, ...harnessExcluded])];
-  return all.length > 0 ? all : undefined;
+  return { workspaces: stops.workspaces, assignees: [...new Set([...fable, ...stops.assignees])] };
 }
 
 /** **pickup の除外条件を組む1つの式**(ADR 0110 決定3 / issue #544)。scheduler の
@@ -315,11 +306,10 @@ export function startScheduler(deps: {
    *  skips tasks by (spawn 時と同じ経路の前倒し)。Absent → no registry
    *  configured, so the fable line can't attribute tasks and skips nothing. */
   fableAgents?: () => string[];
-  /** legacy 経路の名前集合(`pickupExcludedAssignees`)。entry を持つ盤面
+  /** 資源単位の quarantine の値 → agent 名(`pickupStops`)。entry を持つ盤面
    *  (`taskExecutionCandidates` あり)では読まない —— agent 名で外すと別 Provider の
    *  entry まで道連れになる(ADR 0110 決定3)。 */
-  agentsSpeakingProviders?: (providers: readonly Provider[]) => string[];
-  agentsUsingHarnesses?: (harnesses: readonly Harness[]) => string[];
+  quarantineResolvers?: QuarantineResolvers;
   /** ADR 0098 / issue #454: structured OpenAI subscription observation. */
   openaiUsage?: CodexAppServerProbe;
   /** ADR 0116 決定4: Provider → 資格情報の不在の理由(置かれていれば undefined)。
@@ -370,8 +360,7 @@ export function startScheduler(deps: {
     auditorName = DEFAULT_AUDITOR_NAME,
     github,
     fableAgents,
-    agentsSpeakingProviders,
-    agentsUsingHarnesses,
+    quarantineResolvers,
     openaiUsage,
     credentialAbsence,
     taskExecutionCandidates,
@@ -406,10 +395,10 @@ export function startScheduler(deps: {
     // wiring, so no narrower resource can be halted.
     if (containment && (await containmentPickupBlocked(db, containment, clock.now()))) return true;
     // the gate is keyed on each candidate's own execution workspace (issue
-    // #26 / ADR 0009) and assignee (ADR 0012 / issue #36), skipped in SQL by
-    // nextSlotTask itself — a quarantined workspace or agent halts only its
-    // own tasks, never the whole board.
-    return !nextSlotTask(db, workspace?.name, worker.id, auditorName);
+    // #26 / ADR 0009) and assignee (ADR 0012 / issue #36) — a quarantined
+    // workspace or agent halts only its own tasks, never the whole board.
+    // No resolvers here: provider / Harness names are taken out by the poll below.
+    return !nextSlotTask(db, workspace?.name, worker.id, auditorName, quarantineStops(db));
   }
 
   /** ADR 0067 決定2 の pickup 側の扉(修復の中身は ADR 0093 決定8)。
@@ -703,24 +692,22 @@ export function startScheduler(deps: {
       const fableWindow = decision?.windows.fable;
       // agent 名で外れるのは、定義が成立しない agent(quarantineAgent)—— と
       // legacy 経路の fable 線 —— だけになった(ADR 0110 決定3 / issue #544)。
-      const excluded =
-        pickupExcludedAssignees(
-          db,
-          fableWindow?.throttled ?? false,
-          fableAgents,
-          taskExecutionCandidates ? undefined : agentsSpeakingProviders,
-          taskExecutionCandidates ? undefined : agentsUsingHarnesses,
-        ) ?? [];
+      const stopped = pickupStops(
+        db,
+        fableWindow?.throttled ?? false,
+        fableAgents,
+        taskExecutionCandidates ? {} : quarantineResolvers,
+      );
       // ADR 0110 決定3: 除外が当たるのは**その task の entry**であって agent では
       // ない —— 要求ティアが task ごとに違う以上、agent を丸ごと外すと別のモデルで
       // 走るはずの兄弟まで止まり、別の Provider を持つ entry まで道連れになる。
       const excludedTasks: string[] = [];
       let entryExcluded = pickupExclusions(db, false);
-      let head = nextSlotTask(db, workspace?.name, worker.id, auditorName, excluded, excludedTasks);
+      let head = nextSlotTask(db, workspace?.name, worker.id, auditorName, stopped, excludedTasks);
       const observedProviders = new Map<Provider, ProviderUsageObservation>();
       /** この poll で head を進める1手。SQL の述語へ渡す引数は上の2つだけである。 */
       const nextHead = () =>
-        nextSlotTask(db, workspace?.name, worker.id, auditorName, excluded, excludedTasks);
+        nextSlotTask(db, workspace?.name, worker.id, auditorName, stopped, excludedTasks);
       let chosen: ExecutionSetting | undefined;
       let candidates: ExecutionSetting[] = [];
       while (head) {
@@ -737,12 +724,12 @@ export function startScheduler(deps: {
                 throw error;
               }
               quarantineAgent(db, assignee, error, clock.now());
-              excluded.push(assignee);
+              stopped.assignees.push(assignee);
               head = nextHead();
               continue;
             }
             if (await harnessContainmentPickupBlocked(db, harness, harnessContainment, clock.now())) {
-              excluded.push(assignee);
+              stopped.assignees.push(assignee);
               head = nextHead();
               continue;
             }
@@ -756,7 +743,7 @@ export function startScheduler(deps: {
             throw error;
           }
           quarantineAgent(db, assignee, error, clock.now());
-          excluded.push(assignee);
+          stopped.assignees.push(assignee);
           head = nextHead();
           continue;
         }

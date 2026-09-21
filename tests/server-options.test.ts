@@ -6,6 +6,7 @@ import { platform } from "node:process";
 import { afterEach, expect, it, vi } from "vitest";
 import { openDb } from "../src/db.js";
 import { GitHubAuth } from "../src/github-auth.js";
+import { QUARANTINES } from "../src/quarantine.js";
 import {
   type BoardComposition,
   buildServerOptions,
@@ -270,6 +271,18 @@ it("ServerOptions の任意フィールドは authority を除いて全て組み
   // 「その口は本番で永久に立たない」という宣言であり、#172 と同じ穴を開け直す
   // 行為でもあるので、src 側の1行で自動的に緑へ戻せてはいけない。
   expect(optional.filter((key) => !emitted.has(key))).toEqual(["authority"]);
+});
+
+/** 上の網羅はトップレベルの口しか数えない。resolver の map は1つの口に畳まれているので、
+ *  その中の1行を落としても上は緑のまま、その kind の quarantine が何も止めなくなる
+ *  (ADR 0137 決定6)。自分で写像を持たない資源単位の行は、すべて合成 root が埋める。 */
+it("合成 root の quarantineResolvers は、写像を自分で持たない assignee 群単位の行をすべて埋める", async () => {
+  const built = await buildOptions(composition());
+  const needed = QUARANTINES.filter((row) => row.scope === "assignees" && !("resolveAssignees" in row)).map(
+    (row) => row.kind,
+  );
+
+  expect(Object.keys(built.quarantineResolvers ?? {}).sort()).toEqual([...needed].sort());
 });
 
 /** 上の網羅は `buildServerOptions` の戻り値を見ている。main.ts がその戻り値で

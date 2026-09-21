@@ -25,8 +25,9 @@ function flippableCapability(initial: SandboxCapability) {
 
 const CLAUDE_ROUTE = {
   resolveHarness: () => "claude-code" as const,
-  agentsUsingHarnesses: (harnesses: readonly string[]) =>
-    harnesses.includes("claude-code") ? ["fake-worker"] : [],
+  quarantineResolvers: {
+    harnessContainment: (harnesses: string[]) => (harnesses.includes("claude-code") ? ["fake-worker"] : []),
+  },
 };
 
 const harnessCheck = (check: () => SandboxCapability) => async (harness: string) =>

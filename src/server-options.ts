@@ -357,7 +357,7 @@ function taskExecutionCandidatesResolver(
 
 function agentsUsingHarnessesResolver(
   board: BoardComposition,
-): ((harnesses: readonly ReturnType<typeof canonicalHarness>[]) => string[]) | undefined {
+): ((harnesses: readonly string[]) => string[]) | undefined {
   if (!board.registryDir) return undefined;
   return (harnesses) =>
     Object.values(loadBoardRegistry(board).agents)
@@ -516,7 +516,7 @@ function fableAgentsResolver(board: BoardComposition, db: Db): (() => string[]) 
  *  なし。 */
 function agentsSpeakingProvidersResolver(
   board: BoardComposition,
-): ((providers: readonly Provider[]) => string[]) | undefined {
+): ((providers: readonly string[]) => string[]) | undefined {
   const { registryDir } = board;
   if (!registryDir) return undefined;
   return (providers) =>
@@ -525,7 +525,7 @@ function agentsSpeakingProvidersResolver(
       // 倒さない)なので、ここでは文字列として突き合わせる。entry のどれか1つでも
       // その Provider を喋れば該当する(ADR 0110 決定1)
       .filter((agent) =>
-        agent.provider.some((entry) => (providers as readonly string[]).includes(entry.name)),
+        agent.provider.some((entry) => providers.includes(entry.name)),
       )
       .map((agent) => agent.name);
 }
@@ -784,13 +784,17 @@ export async function buildServerOptions(board: BoardComposition, db: Db): Promi
     // neutral-cwd enumeration — always available on a real host, faked in tests
     hostSkills: enumerateHostSkills,
     fableAgents: fableAgentsResolver(board, db),
-    agentsSpeakingProviders: agentsSpeakingProvidersResolver(board),
+    // ADR 0137 決定6: 資源単位の quarantine の値 → agent 名。registry を読む写像を要るのは
+    // provider / Harness の行だけ(agent 名の行は表が自分で持つ)
+    quarantineResolvers: {
+      providerAuth: agentsSpeakingProvidersResolver(board),
+      harnessContainment: agentsUsingHarnessesResolver(board),
+    },
     credentialAbsence: {
       moonshot: () => moonshotKeyAbsence(board.moonshotApiKeyFile),
       openai: () => codexLoginAbsence(board.codexHome),
     },
     taskExecutionCandidates: taskExecutionCandidatesResolver(board, db),
-    agentsUsingHarnesses: agentsUsingHarnessesResolver(board),
     resolveHarness: harnessResolver(board, db),
     registryReachability: registryReachabilityCheck(board),
     cliAuthExpiresAt: board.cliAuthExpiresAt,

@@ -330,8 +330,9 @@ it("the public queue and answer routes expose a durable Harness-scoped stop with
       harness === "codex" && !codexHealthy
         ? { available: false, reason: "permission canary failed" }
         : { available: true },
-    agentsUsingHarnesses: (harnesses) =>
-      harnesses.includes("codex") ? ["codex-agent"] : [],
+    quarantineResolvers: {
+      harnessContainment: (harnesses) => (harnesses.includes("codex") ? ["codex-agent"] : []),
+    },
   });
   try {
     const codex = await registerWork(
