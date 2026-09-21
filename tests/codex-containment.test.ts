@@ -14,7 +14,7 @@ import {
 } from "../src/codex-worker.js";
 import { listEvents } from "../src/events.js";
 import { harnessContainmentPickupBlocked } from "../src/harness-containment.js";
-import { submitAnswer } from "../src/human-verbs.js";
+import { quarantineChecks, submitAnswer } from "../src/human-verbs.js";
 import { ProcessContainers } from "../src/process-container.js";
 import { canonicalHarness } from "../src/registry.js";
 import { HOURLY, startScheduler } from "../src/scheduler.js";
@@ -291,7 +291,7 @@ it("a Harness quarantine answer is accepted only after the same live check recov
     {
       db,
       pollNow() {},
-      harnessContainment: async () => check(),
+      quarantineChecks: quarantineChecks({ db, harnessContainment: async () => check() }),
       landing: unusedLanding,
     },
     question!,
@@ -306,7 +306,7 @@ it("a Harness quarantine answer is accepted only after the same live check recov
     {
       db,
       pollNow() {},
-      harnessContainment: async () => check(),
+      quarantineChecks: quarantineChecks({ db, harnessContainment: async () => check() }),
       landing: unusedLanding,
     },
     question!,
@@ -316,8 +316,9 @@ it("a Harness quarantine answer is accepted only after the same live check recov
   );
   expect(getTask(db, questionId!)?.status).toBe("done");
   expect(listEvents(db, questionId!).at(-1)?.payload).toMatchObject({
-    kind: "harness_reinstated",
-    harness: "codex",
+    kind: "quarantine_released",
+    quarantine: "harnessContainment",
+    value: "codex",
   });
 });
 

@@ -11,7 +11,7 @@ afterEach(() => t?.stop());
  *  list). CONTEXT.md's Decompose exception ("自分の human タスクは実行中で
  *  も割ってよい") is nonetheless part of the gate's own definition, so this
  *  drives the DB row into that state directly (bypassing the status machine,
- *  the same technique tests/harness.ts's own quarantineAgentRow uses) to
+ *  the same technique tests/harness.ts's own quarantineTestAgent uses) to
  *  exercise the exception at the seam that actually reads it — the gate
  *  itself only looks at the Task row's fields, never how it got there. */
 function forceInProgress(t: Tidepool, taskId: string): void {

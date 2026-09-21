@@ -31,6 +31,7 @@ import {
   type HarnessContainmentCheck,
   harnessContainmentPickupBlocked,
 } from "./harness-containment.js";
+import { quarantineChecks } from "./human-verbs.js";
 import { createLanding } from "./landing.js";
 import { createManagementMcpRouter } from "./management-mcp.js";
 import { createMcpRouter } from "./mcp.js";
@@ -657,6 +658,23 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
     // 未回収は `pendingReclaim` が容器を読み直した時点で解ける。
     acceptReclaimed: () => watchdog?.acceptReclaimed(),
   };
+  // ADR 0137 決定5: 解除の門の map は WebUI と管理 MCP が共有する1つだけ
+  const checks = quarantineChecks({
+    db,
+    workspace: options.workspace,
+    resolveWorkspace: options.resolveWorkspace,
+    github: options.github,
+    agentRegistered: options.agentRegistered,
+    containment,
+    reclaim,
+    registryReachability,
+    teardownQuarantine,
+    providerCliAuth,
+    harnessContainment,
+    // ADR 0040: quarantine 解除の検証が撃ち直す先。boot の一斉検査と pickup の
+    // 床と同じ1つの配列(3箇所で別々に組み立てない)
+    boardState: options.boardState?.paths,
+  });
   // the auto_if_ci_green poll (issue #11): independent of the scheduler's
   // pickup poll, since it watches external CI state rather than the queue.
   // A no-op tick while pending_auto_merges is empty, same shape as the
@@ -737,14 +755,9 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
       draftClient: options.draftClient,
       defaultAgentName: worker.id,
       agentRegistered: options.agentRegistered,
-      containment,
-      harnessContainment,
-      // ADR 0099 決定3: 回収済み観測を待って止まっている slot の門。確認回答の
-      // 受理時に容器の空を再観測し、空なら tree rule を走らせて slot を解放する。
+      // ADR 0099 決定3: 受理された確認回答が tree rule を走らせて slot を解放する
       reclaim,
-      registryReachability,
-      teardownQuarantine,
-      providerCliAuth,
+      quarantineChecks: checks,
       vapidPublicKey: options.vapidPublicKey,
       auditorName,
       workspaceAdmin,
@@ -760,9 +773,6 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
       agentsUsingHarnesses: options.agentsUsingHarnesses,
       taskExecutionCandidates: options.taskExecutionCandidates,
       isProtectedWorkspace: options.isProtectedWorkspace,
-      // ADR 0040: quarantine 解除の検証が撃ち直す先。boot の一斉検査と pickup の
-      // 床と同じ1つの配列(3箇所で別々に組み立てない)
-      boardState: options.boardState?.paths,
     }),
   );
   app.use(
@@ -782,13 +792,8 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
       auditorName,
       agentRegistered: options.agentRegistered,
       isProtectedWorkspace: options.isProtectedWorkspace,
-      containment,
-      harnessContainment,
       reclaim,
-      registryReachability,
-      teardownQuarantine,
-      providerCliAuth,
-      boardState: options.boardState?.paths,
+      quarantineChecks: checks,
       fableAgents: options.fableAgents,
       agentsSpeakingProviders: options.agentsSpeakingProviders,
       agentsUsingHarnesses: options.agentsUsingHarnesses,

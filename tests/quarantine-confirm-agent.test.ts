@@ -37,7 +37,7 @@ it("quarantine 済み agent 宛ての todo はキュービューで skipped、�
   expect(t.worker.started.map((x: any) => x.id)).toEqual([other.id]);
 });
 
-it("quarantine question への回答は、その agent 名宛ての todo がまだ残っていれば拒否される(needs_human は1のまま)", async () => {
+it("quarantine question への回答は、その agent 名宛ての todo がまだ残っていれば拒否される(quarantine は開いたまま)", async () => {
   t = await bootTidepool();
   const delegated = queueWork(t, "delegated to navigator", undefined, undefined, "navigator");
 
@@ -59,7 +59,7 @@ it("quarantine question への回答は、その agent 名宛ての todo がま�
   expect(t.worker.started.map((x: any) => x.id)).not.toContain(delegated.id);
 });
 
-it("その agent 名宛ての todo がもう存在しなければ、回答が受理され needs_human が解除され pickup が即時再開する", async () => {
+it("その agent 名宛ての todo がもう存在しなければ、回答が受理され pickup が即時再開する", async () => {
   t = await bootTidepool();
   const delegated = queueWork(t, "delegated to navigator", undefined, undefined, "navigator");
   const other = queueWork(t, "waiting behind the quarantine");

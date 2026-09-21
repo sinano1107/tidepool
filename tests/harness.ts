@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { quarantineAgent } from "../src/agent.js";
 import type { AgentAdmin } from "../src/agent-create.js";
 import type { AllocationClient } from "../src/allocation-review.js";
 import type { AttributionClient, BehaviorDraftClient } from "../src/attribution.js";
@@ -416,16 +417,11 @@ export async function api(
   return { status: res.status, json: await res.json() };
 }
 
-/** Marks an agent name needs-human directly in `agent_state`, bypassing
- *  `quarantineAgent`'s own question-registration side effect — for tests that
- *  want to drive just the pickup/queue gate SQL (ADR 0012 / issue #36), not
- *  the whole quarantine-registration flow (that flow has its own coverage in
- *  tests/quarantine-agent.test.ts and tests/quarantine-confirm-agent.test.ts). */
-export function quarantineAgentRow(db: Db, name: string): void {
-  db.prepare(
-    `INSERT INTO agent_state (name, needs_human) VALUES (?, 1)
-     ON CONFLICT(name) DO UPDATE SET needs_human = 1`,
-  ).run(name);
+/** Quarantines an agent name — for tests that drive the pickup/queue gate
+ *  SQL (ADR 0012 / issue #36). The open Confirmation question is the state
+ *  (ADR 0137 決定3), so this puts one on the board. */
+export function quarantineTestAgent(db: Db, name: string): void {
+  quarantineAgent(db, name, "test quarantine", new Date(0));
 }
 
 /** A real git checkout for tree-rule/branch-discipline/quarantine tests —

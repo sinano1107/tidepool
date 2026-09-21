@@ -9,10 +9,8 @@ import {
 } from "./agent-create.js";
 import { type AttributionClient, attributeObjections, type BehaviorDraftClient, draftAfterCommit } from "./attribution.js";
 import { boardHalts } from "./board-halt.js";
-import type { BoardStatePath } from "./board-state.js";
-import { type CliAuthCheck, quarantineCliAuthFailure } from "./cli-auth.js";
+import { quarantineCliAuthFailure } from "./cli-auth.js";
 import type { Clock } from "./clock.js";
-import type { ContainmentCheck } from "./containment.js";
 import type { Db } from "./db.js";
 import {
   getDisplayLanguage,
@@ -30,7 +28,6 @@ import {
 } from "./execution-setting.js";
 import { type GitHubClient, OPEN_ISSUES_LIMIT } from "./github.js";
 import { githubLoggedIn } from "./github-auth.js";
-import type { HarnessContainmentCheck } from "./harness-containment.js";
 import {
   addIssueCommentThroughHumanDoor,
   cancelThroughHumanDoor,
@@ -66,6 +63,7 @@ import {
 import { isPaused, setPaused } from "./pause.js";
 import { type ProfileAdmin, ProfileConfirmationRequiredError } from "./profile-create.js";
 import { removePushSubscription, savePushSubscription } from "./push.js";
+import type { QuarantineChecks } from "./quarantine.js";
 import { getQuietHours, HH_MM_PATTERN, setBoardTimezone, setQuietHours } from "./quiet-hours.js";
 import {
   authorityProfileSchema,
@@ -82,7 +80,6 @@ import {
   PROVIDER_VALUES,
   type Provider,
   type RegistryCandidates,
-  type RegistryReachabilityCheck,
 } from "./registry.js";
 import {
   DeletionBlockedError,
@@ -112,7 +109,7 @@ import {
   presentTask,
   type Task,
 } from "./tasks.js";
-import { type FailedTeardownCheck, sessionInTeardown } from "./teardown.js";
+import { sessionInTeardown } from "./teardown.js";
 import {
   getProviderUsage,
   getThrottleState,
@@ -553,34 +550,13 @@ export interface ApiRouterDeps {
    *  entirely (nextSlotTask's own shape). */
   defaultAgentName?: string;
   /** Whether an agent name is currently registered (read fresh against the
-   *  registry by the caller, main.ts) — one half of a quarantine Confirmation
-   *  question's clearance check (CONTEXT.md's Quarantine): the other half is
-   *  "no more todo tasks depend on it", checked here regardless. Absent → only
-   *  that second half can ever clear an agent quarantine (no registry
-   *  configured at all). */
+   *  registry by the caller, main.ts) — the registration doors' assignee /
+   *  reviewer check. Absent → no registry configured at all. */
   agentRegistered?: (name: string) => boolean;
-  /** 封じ込め能力ゲートの回答側の半分(ADR 0033 / ADR 0036): 確認 question の
-   *  回答は鵜呑みにせず、受理の直前に能力検査を走らせ直す(workspace quarantine が
-   *  tree の清潔さを実際に確かめるのと同じ「検証つき解除」)。**ここは fs 半分
-   *  だけでなく合成後の検査を受け取る** — 認証側が壊れたまま立った question を
-   *  fs 側の成立だけで解除できてしまってはならない。
-   *  Absent → そのゲートを持たない盤面。 */
-  containment?: ContainmentCheck;
-  harnessContainment?: HarnessContainmentCheck;
-  /** ADR 0099 決定3: 回収済み観測を待って止まっている slot の門。Containment
-   *  quarantine の確認回答の受理は、容器がまだ populated なら拒まれ、空を再観測
-   *  できたときだけ tree rule を走らせて slot を解放する。Absent → watchdog を
-   *  持たない盤面(回収を待っている slot が存在しない)。 */
-  reclaim?: PendingReclaim;
-  /** ADR 0052: re-runs refresh before accepting a registry quarantine answer. */
-  registryReachability?: RegistryReachabilityCheck;
-  /** ADR 0112 決定3: re-runs the throwing teardown before accepting a failed-teardown
-   *  answer — the check *is* the release gate. */
-  teardownQuarantine?: FailedTeardownCheck;
-  /** ADR 0097 決定2 / issue #446: per-provider probes, re-run before accepting
-   *  a provider-auth Confirmation answer. Resource-scoped for every provider,
-   *  the board's own included (ADR 0098 決定6). */
-  providerCliAuth?: Partial<Record<Provider, CliAuthCheck>>;
+  /** ADR 0099 決定3: 受理された Containment quarantine の確認回答が slot を解放する門。 */
+  reclaim?: Pick<PendingReclaim, "acceptReclaimed">;
+  /** ADR 0137 決定5: 解除の門の map。合成 root が組む。 */
+  quarantineChecks?: QuarantineChecks;
   /** ADR 0097 決定2 / issue #446: the names of the agents declared with one of
    *  the given providers — the pickup exclusion set the queue view's `skipped`
    *  display shares with the scheduler's gate. Absent → no registry configured,
@@ -652,13 +628,6 @@ export interface ApiRouterDeps {
    *  the MCP `decompose` tool's own `isProtectedWorkspace` already enforces
    *  for an agent's decompose. Absent → no workspace is protected. */
   isProtectedWorkspace?: (name: string) => boolean;
-  /** ADR 0040 / issue #149: the board's own state paths (fixed for the whole
-   *  process), bound by main.ts. submitAnswer re-runs the
-   *  overlap check against them before it accepts a repair confirmation —
-   *  a clean tree is not a repair when the workspace still intersects the
-   *  board's own state. Absent → no state paths to protect (a board booted
-   *  without them, e.g. most test boards). */
-  boardState?: BoardStatePath[];
 }
 
 /** ADR 0087 の3つの削除の扉が共有する失敗の写し。資源固有の 404 / 403 は
@@ -694,12 +663,8 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     draftClient,
     defaultAgentName,
     agentRegistered,
-    containment,
-    harnessContainment,
     reclaim,
-    registryReachability,
-    teardownQuarantine,
-    providerCliAuth,
+    quarantineChecks,
     vapidPublicKey,
     auditorName,
     workspaceAdmin,
@@ -715,7 +680,6 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     agentsUsingHarnesses,
     taskExecutionCandidates,
     isProtectedWorkspace,
-    boardState,
   } = deps;
   const router = Router();
   router.use(json());
@@ -1427,14 +1391,8 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
           resolveWorkspace,
           github,
           landing,
-          agentRegistered,
-          containment,
-          harnessContainment,
           reclaim,
-          registryReachability,
-          teardownQuarantine,
-          providerCliAuth,
-          boardState,
+          quarantineChecks,
           attributionClient,
           behaviorDraftClient,
         },

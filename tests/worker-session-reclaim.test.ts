@@ -113,7 +113,7 @@ it("「今なぜ pickup が起きないか」の読み口が回収失敗を盤�
 
 it("quarantine の回答時に容器の空を再観測する — populated なら回答は拒否され question は開いたまま", async () => {
   const containers = new FakeContainerRuntime();
-  t = await bootTidepool({ containerRuntime: containers, watchdog });
+  t = await bootTidepool({ containerRuntime: containers, watchdog, harnessContainment: async () => ({ available: true }) });
   const task = queueWork(t, "long haul");
   await t.clock.advance(HOUR);
   containers.hold(task.id);
@@ -132,7 +132,12 @@ it("quarantine の回答時に容器の空を再観測する — populated な�
 it("空を観測してから回答すると受理され、slot-release tree rule が走って slot が解放される", async () => {
   const containers = new FakeContainerRuntime();
   const ws = await makeWorkspace(dirs, "sandbox");
-  t = await bootTidepool({ workspace: ws, containerRuntime: containers, watchdog });
+  t = await bootTidepool({
+    workspace: ws,
+    containerRuntime: containers,
+    watchdog,
+    harnessContainment: async () => ({ available: true }),
+  });
   const task = queueWork(t, "long haul");
   await t.clock.advance(HOUR);
   containers.hold(task.id);

@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { openDb } from "../src/db.js";
 import { listBoard, listQueue, registerTask } from "../src/tasks.js";
-import { quarantineAgentRow } from "./harness.js";
+import { quarantineTestAgent } from "./harness.js";
 
 describe("listQueue は quarantine 済み agent 宛ての todo を skipped と表示する(ADR 0012 / issue #36)", () => {
   it("quarantine 済み agent 宛ての todo はキュービューで skipped、他 agent 宛てはそのまま todo", () => {
     const db = openDb(":memory:");
-    quarantineAgentRow(db, "navigator");
+    quarantineTestAgent(db, "navigator");
     const stuck = registerTask(
       db,
       {
@@ -41,7 +41,7 @@ describe("listQueue は quarantine 済み agent 宛ての todo を skipped と�
 
   it("defaultAgentName を渡さないときはゲートが働かない", () => {
     const db = openDb(":memory:");
-    quarantineAgentRow(db, "deckhand");
+    quarantineTestAgent(db, "deckhand");
     const task = registerTask(
       db,
       { type: "work", title: "no agent tracking", purpose: "p", completion_criteria: "c" },
@@ -53,7 +53,7 @@ describe("listQueue は quarantine 済み agent 宛ての todo を skipped と�
 
   it("review type かつ assignee 未設定のタスクは、defaultAgentName が健全でも auditorName の quarantine で skipped になる(issue #42)", () => {
     const db = openDb(":memory:");
-    quarantineAgentRow(db, "auditor");
+    quarantineTestAgent(db, "auditor");
     const review = registerTask(
       db,
       { type: "review", title: "independent rca", purpose: "p", completion_criteria: "c" },

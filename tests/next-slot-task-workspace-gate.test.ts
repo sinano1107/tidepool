@@ -1,12 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { openDb } from "../src/db.js";
 import { nextSlotTask, registerTask } from "../src/tasks.js";
+import { quarantineWorkspace } from "../src/workspace.js";
 
 function quarantine(db: ReturnType<typeof openDb>, name: string): void {
-  db.prepare(
-    `INSERT INTO workspace_state (name, needs_human) VALUES (?, 1)
-     ON CONFLICT(name) DO UPDATE SET needs_human = 1`,
-  ).run(name);
+  quarantineWorkspace(db, name, "test quarantine", new Date(0));
 }
 
 describe("nextSlotTask の per-task workspace ゲート", () => {

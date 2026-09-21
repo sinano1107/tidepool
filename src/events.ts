@@ -222,36 +222,13 @@ export type EventPayload =
       harness: "claude-code" | "codex";
       cli_version: string;
     }
-  // issue #21: a workspace already needs-human failed the tree rule again
-  // before its open Confirmation question was answered — recorded on that
-  // same question rather than opening a second one (CONTEXT.md's Quarantine:
-  // "1 workspace につき確認は最大1枚")
+  // ADR 0137: a quarantine key that already has an open Confirmation question
+  // fired again — recorded on that same question rather than opening a second
+  // one (CONTEXT.md's Quarantine: 1資源につき確認は最大1枚)
   | { kind: "quarantine_refired"; cause: string }
-  // issue #21: a quarantine Confirmation question's answer was accepted as a
-  // repair confirmation (the board verified the tree clean first) — needs_human
-  // cleared, resuming pickup for this workspace
-  | { kind: "workspace_reinstated"; workspace: string }
-  // ADR 0012 / issue #36: the agent-name generalization of workspace_reinstated
-  // above — needs_human cleared for this agent name, resuming pickup for tasks
-  // assigned to it
-  | { kind: "agent_reinstated"; agent: string }
-  // issue #60 / ADR 0033: the host-wide twin of the two above — the worker
-  // sandbox's capability check was re-run at answer time and passed, so pickup
-  // resumes board-wide. It names no resource because the sandbox belongs to the
-  // host the board runs on, not to a workspace or an agent.
-  | { kind: "sandbox_reinstated" }
-  // ADR 0052: registry remote reachability was rechecked successfully when
-  // its Confirmation question was answered, so board-wide pickup resumes.
-  | { kind: "registry_reinstated" }
-  // ADR 0112: the board's own teardown was re-run at answer time and completed,
-  // so board-wide pickup resumes. Like the two board-wide kinds around it, it
-  // names nothing — which task it was is on the question this event hangs on.
-  | { kind: "teardown_reinstated" }
-  // ADR 0097 決定2 / issue #446: the provider's authentication probe passed at
-  // answer time, so pickup resumes for that provider's agents only. Every
-  // provider is resource-scoped, the board's own included (ADR 0098 決定6).
-  | { kind: "provider_auth_reinstated"; provider: string }
-  | { kind: "harness_reinstated"; harness: "claude-code" | "codex" }
+  // ADR 0137 決定4: a quarantine Confirmation question's answer passed its
+  // kind's check and was accepted — pickup resumes for what that kind stops
+  | { kind: "quarantine_released"; quarantine: string; value: string | null }
   // issue #32: pairs with worker_spawned to close out a worker session
   // (spawn~exit) — usage is null when the session ended without a final
   // stream-json `result` event (e.g. watchdog kill); the event itself is
