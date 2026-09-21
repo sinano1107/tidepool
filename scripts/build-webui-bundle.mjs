@@ -7,14 +7,6 @@ import { fileURLToPath } from "node:url";
 import * as esbuild from "esbuild";
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
-const require = createRequire(import.meta.url);
-
-// UMD files aren't in package "exports"; resolve the package dir via
-// package.json (which is exported) and read the file relative to it.
-function readVendorFile(pkg, relPath) {
-  const pkgDir = dirname(require.resolve(`${pkg}/package.json`));
-  return readFileSync(join(pkgDir, relPath));
-}
 const SOURCES = [
   "webui/queue-screen.tsx",
   "webui/triage-screen.tsx",
@@ -34,6 +26,15 @@ function compile(relPath) {
     jsxFragment: "React.Fragment",
   });
   return `// ${relPath}\n${code.trimEnd()}\n`;
+}
+
+const require = createRequire(import.meta.url);
+
+// UMD files aren't in package "exports"; resolve the package dir via
+// package.json (which is exported) and read the file relative to it.
+function readVendorFile(pkg, relPath) {
+  const pkgDir = dirname(require.resolve(`${pkg}/package.json`));
+  return readFileSync(join(pkgDir, relPath));
 }
 
 const out = SOURCES.map(compile).join("\n");
