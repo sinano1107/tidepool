@@ -240,8 +240,7 @@ function createResumeTimers(clock: Clock, onFire: () => void) {
     schedule(resource: string, resumeAt: Date): void {
       timers.get(resource)?.();
       const delay = Math.max(0, resumeAt.getTime() - clock.now().getTime());
-      const cancel = clock.setInterval(() => {
-        cancel();
+      const cancel = clock.setTimeout(() => {
         timers.delete(resource);
         onFire();
       }, delay);

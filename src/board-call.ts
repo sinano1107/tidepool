@@ -121,8 +121,7 @@ export function createBoardCalls(deps: {
     const observed = await Promise.race([
       deps.containers.reclaimed(id).then(() => true),
       new Promise<boolean>((resolve) => {
-        cancel = deps.clock.setInterval(() => {
-          cancel();
+        cancel = deps.clock.setTimeout(() => {
           resolve(false);
         }, deps.reclaimTimeout);
       }),
@@ -162,11 +161,10 @@ export function createBoardCalls(deps: {
         cancelLimit();
         resolve(value);
       };
-      // 時間上限。`Clock` は `setTimeout` を持たないので、1度撃って自分で止める
-      // interval で数える(注入された時計で数えることが要点 —— 実時間で数えると
-      // FakeClock の前進で上限が発火しない)。spawn より先に張る —— あとで張ると、
-      // 先に settle した呼び出しが止められない interval を残す。
-      cancelLimit = deps.clock.setInterval(() => settle(() => null), spec.limitMs);
+      // 時間上限。注入された時計で数えることが要点 —— 実時間で数えると FakeClock の
+      // 前進で上限が発火しない。spawn より先に張る —— あとで張ると、先に settle した
+      // 呼び出しが止められない timer を残す。
+      cancelLimit = deps.clock.setTimeout(() => settle(() => null), spec.limitMs);
       let observed!: (exitCode: number | null) => T | null;
       const done = (): void => settle(() => observed(null));
       // spawn の throw だけを「何も生まれていない」と読む —— 読み手の throw まで null に畳まない

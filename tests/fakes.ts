@@ -129,25 +129,35 @@ export function healthyUsageText(now: Date): string {
   });
 }
 
-interface ScheduledInterval {
+interface ScheduledTimer {
   fn: () => void;
   ms: number;
   nextAt: number;
   cancelled: boolean;
+  /** false = one-shot (setTimeout): marks itself done instead of rescheduling. */
+  repeat: boolean;
 }
 
 /** Deterministic clock: time moves only when the test calls advance(). */
 export class FakeClock implements Clock {
   private t = 0;
-  private intervals: ScheduledInterval[] = [];
+  private timers: ScheduledTimer[] = [];
 
   now(): Date {
     return new Date(this.t);
   }
 
   setInterval(fn: () => void, ms: number): () => void {
-    const entry: ScheduledInterval = { fn, ms, nextAt: this.t + ms, cancelled: false };
-    this.intervals.push(entry);
+    return this.schedule(fn, ms, true);
+  }
+
+  setTimeout(fn: () => void, ms: number): () => void {
+    return this.schedule(fn, ms, false);
+  }
+
+  private schedule(fn: () => void, ms: number, repeat: boolean): () => void {
+    const entry: ScheduledTimer = { fn, ms, nextAt: this.t + ms, cancelled: false, repeat };
+    this.timers.push(entry);
     return () => {
       entry.cancelled = true;
     };
@@ -156,12 +166,13 @@ export class FakeClock implements Clock {
   async advance(ms: number): Promise<void> {
     const target = this.t + ms;
     for (;;) {
-      const due = this.intervals
+      const due = this.timers
         .filter((i) => !i.cancelled && i.nextAt <= target)
         .sort((a, b) => a.nextAt - b.nextAt)[0];
       if (!due) break;
       this.t = due.nextAt;
-      due.nextAt += due.ms;
+      if (due.repeat) due.nextAt += due.ms;
+      else due.cancelled = true; // one-shot: fired, never due again
       due.fn();
       // let async effects of the tick settle before firing the next one
       await new Promise((resolve) => setImmediate(resolve));
