@@ -93,5 +93,5 @@ it("回答時の再検査は未回収の Board call 容器を読み、まだ空�
   // 止まっていた pickup が再開する
   const task = queueWork(t, "long haul");
   await t.clock.advance(HOUR);
-  expect(t.worker.started.map((x) => x.id)).toEqual([task.id]);
+  await vi.waitFor(() => expect(t.worker.started.map((x) => x.id)).toEqual([task.id]));
 });
