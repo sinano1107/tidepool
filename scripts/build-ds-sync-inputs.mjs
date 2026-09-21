@@ -20,8 +20,8 @@ import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
-const CONFIG_PATH = join(ROOT, '.design-sync/config.json');
 const CONFIG_REL = '.design-sync/config.json';
+const CONFIG_PATH = join(ROOT, CONFIG_REL);
 const PKG_DIR = join(ROOT, 'design-system/pkg');
 const DOCS_DIR = join(PKG_DIR, 'docs');
 
@@ -60,6 +60,7 @@ const { componentSrcMap } = JSON.parse(`{${configRaw.slice(srcMapStart, srcMapEn
 
 const staleAssets = [];
 const docWrites = []; // { path, content }
+const propsBodies = {};
 
 for (const [name, relPath] of Object.entries(componentSrcMap)) {
   const jsxAbsPath = resolve(PKG_DIR, relPath);
@@ -69,13 +70,12 @@ for (const [name, relPath] of Object.entries(componentSrcMap)) {
 
   const dtsSrc = readFileSync(dtsAbsPath, 'utf8');
   const propsBody = extractInterfaceBody(dtsSrc, name, dtsRelPath);
-  componentSrcMap[name] = { relPath, propsBody };
+  propsBodies[name] = propsBody;
 
-  const docRelPath = `design-system/pkg/docs/${name}.md`;
   const docAbsPath = join(DOCS_DIR, `${name}.md`);
   const promptContent = readFileSync(promptAbsPath, 'utf8');
   const isFresh = existsSync(docAbsPath) && readFileSync(docAbsPath, 'utf8') === promptContent;
-  if (!isFresh) staleAssets.push(docRelPath);
+  if (!isFresh) staleAssets.push(relative(ROOT, docAbsPath));
   docWrites.push({ path: docAbsPath, content: promptContent });
 }
 
@@ -84,11 +84,11 @@ const expectedDocNames = new Set(Object.keys(componentSrcMap));
 const extraDocFiles = existsSync(DOCS_DIR)
   ? readdirSync(DOCS_DIR).filter((f) => f.endsWith('.md') && !expectedDocNames.has(f.slice(0, -3)))
   : [];
-for (const f of extraDocFiles) staleAssets.push(`design-system/pkg/docs/${f}`);
+for (const f of extraDocFiles) staleAssets.push(relative(ROOT, join(DOCS_DIR, f)));
 
 // Rebuild the dtsPropsFor block, in componentSrcMap order.
-const dtsPropsForLines = Object.entries(componentSrcMap).map(
-  ([name, { propsBody }]) => `    "${name}": ${JSON.stringify(propsBody)}`,
+const dtsPropsForLines = Object.entries(propsBodies).map(
+  ([name, propsBody]) => `    "${name}": ${JSON.stringify(propsBody)}`,
 );
 const freshDtsPropsForBlock = `  "dtsPropsFor": {\n${dtsPropsForLines.join(',\n')}\n  }`;
 
@@ -100,6 +100,8 @@ const [dtsStart, dtsEnd] = findBlock(configRaw, 'dtsPropsFor');
 const topCloseIdx = configRaw.lastIndexOf('\n}');
 const tail = configRaw.slice(dtsEnd, topCloseIdx + 2);
 const freshConfigRaw = configRaw.slice(0, dtsStart) + freshDtsPropsForBlock + tail + '\n';
+// The splice relies on the file's formatting; fail loudly rather than write broken JSON.
+JSON.parse(freshConfigRaw);
 
 if (freshConfigRaw !== configRaw) staleAssets.push(CONFIG_REL);
 
