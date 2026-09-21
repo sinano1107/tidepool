@@ -16,7 +16,7 @@
 // Usage: node scripts/build-ds-sync-inputs.mjs [--check]
 
 import { existsSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -59,13 +59,13 @@ const [srcMapStart, srcMapEnd] = findBlock(configRaw, 'componentSrcMap');
 const { componentSrcMap } = JSON.parse(`{${configRaw.slice(srcMapStart, srcMapEnd)}}`);
 
 const staleAssets = [];
-const docWrites = []; // { path, relPath, content }
+const docWrites = []; // { path, content }
 
 for (const [name, relPath] of Object.entries(componentSrcMap)) {
   const jsxAbsPath = resolve(PKG_DIR, relPath);
   const dtsAbsPath = jsxAbsPath.replace(/\.jsx$/, '.d.ts');
   const promptAbsPath = jsxAbsPath.replace(/\.jsx$/, '.prompt.md');
-  const dtsRelPath = `design-system/${dtsAbsPath.slice(join(ROOT, 'design-system').length + 1)}`;
+  const dtsRelPath = relative(ROOT, dtsAbsPath);
 
   const dtsSrc = readFileSync(dtsAbsPath, 'utf8');
   const propsBody = extractInterfaceBody(dtsSrc, name, dtsRelPath);
@@ -76,7 +76,7 @@ for (const [name, relPath] of Object.entries(componentSrcMap)) {
   const promptContent = readFileSync(promptAbsPath, 'utf8');
   const isFresh = existsSync(docAbsPath) && readFileSync(docAbsPath, 'utf8') === promptContent;
   if (!isFresh) staleAssets.push(docRelPath);
-  docWrites.push({ path: docAbsPath, relPath: docRelPath, content: promptContent });
+  docWrites.push({ path: docAbsPath, content: promptContent });
 }
 
 // Any pkg/docs/*.md not backed by a componentSrcMap entry is stale (deleted on write).
