@@ -290,11 +290,14 @@ export function openDb(path: string): Db {
       paused INTEGER NOT NULL
     );
 
-    -- Spend-down (ADR 0091): one independently expiring row per active
-    -- window. No row for a window means its pace line remains in force.
+    -- Spend-down (ADR 0091 / 0143): one independently expiring row per armed
+    -- Provider window. No row for a window means its pace line remains in force.
+    -- The known (provider, window) pairs live in src/spend-down.ts.
     CREATE TABLE IF NOT EXISTS spend_down_state (
-      window       TEXT PRIMARY KEY CHECK (window IN ('session', 'week')),
-      activated_at TEXT NOT NULL
+      provider     TEXT NOT NULL,
+      window       TEXT NOT NULL,
+      activated_at TEXT NOT NULL,
+      PRIMARY KEY (provider, window)
     );
 
     -- Web Push subscriptions (issue #14): one row per installed PWA that

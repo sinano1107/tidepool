@@ -102,7 +102,10 @@ it("pause 状態はサーバー再起動を跨いで維持される", async () =
     // 盤面全体の停止は列挙が1回で答える — 4つの boolean は列挙から導出できる
     // ので応答から消えた(ADR 0068 決定3)
     halts: [{ kind: "pause" }],
-    spendDown: { session: null, week: null },
+    spendDown: {
+      anthropic: { session: null, week: null },
+      openai: { primary: null, secondary: null },
+    },
   });
   await t.clock.advance(HOUR);
   expect(t.worker.started).toEqual([]);

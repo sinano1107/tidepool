@@ -397,8 +397,8 @@ function mapData(
     humanTasks: yourTasks.map((t) => ({ id: t.id, title: liveTitle(t), blocking: t.blocking })),
     slot, pickupHalt, running: !!running, paused: !!paused,
     triageActive: halts.some((h) => h.kind === 'triage'),
-    // Spend-down (ADR 0091) — window ごとの盤面状態応答から素通し
-    spendDown: pause.spendDown ?? { session: null, week: null },
+    // Spend-down (ADR 0143) — Provider × 窓ごとの盤面状態応答から素通し
+    spendDown: pause.spendDown,
     providerUsage,
     lastLogId: log.entries.at(-1)?.id ?? null,
   };
@@ -1169,12 +1169,12 @@ function App() {
 
   // Spend-down (ADR 0091) — pause と同格の盤面状態。有効化は
   // サーバー側が即時 poll を発火する(残りを今すぐ燃やす操作なので)。
-  const setSpendDown = async (window: string, active: boolean) => {
+  const setSpendDown = async (provider: string, window: string, active: boolean) => {
     try {
-      await api('/api/spend-down', { window, active });
+      await api('/api/spend-down', { provider, window, active });
       await refresh();
       say(active ? 'warn' : 'info',
-        active ? `spend-down armed · ${window}` : `spend-down cancelled · ${window}`,
+        active ? `spend-down armed · ${provider} ${window}` : `spend-down cancelled · ${provider} ${window}`,
         active
           ? 'pace line off — burns to the 100% cap, expires at the window reset'
           : 'pace line back on');

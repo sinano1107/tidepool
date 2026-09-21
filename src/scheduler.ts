@@ -34,7 +34,7 @@ import {
 import { registryReachabilityPickupBlocked } from "./registry-reachability.js";
 import { parseGitHubRepo, repairRepoAccess } from "./repo-access.js";
 import type { Slot } from "./slot.js";
-import { clearSpendDown, getSpendDown } from "./spend-down.js";
+import { expireSpendDown, getSpendDown } from "./spend-down.js";
 import {
   abandonConsequence,
   contentSourceFor,
@@ -54,7 +54,6 @@ import {
 } from "./throttle.js";
 import {
   evaluateThrottle,
-  isSpendDownExpired,
   parseUsage,
   type ThrottleDecision,
   type UsageSnapshot,
@@ -183,15 +182,6 @@ async function checkThrottle(
     resultText !== null
       ? parseUsage(resultText, clock.now())
       : { session: null, week: null, fable: null };
-  // Spend-down (ADR 0091) も poll ごとに読み、各対象を自分のリセットで失効させる。
-  const spendDown = getSpendDown(db);
-  for (const window of ["session", "week"] as const) {
-    const state = spendDown[window];
-    if (state && isSpendDownExpired(window, state, snapshot)) {
-      clearSpendDown(db, window);
-      spendDown[window] = null;
-    }
-  }
   const decision = evaluateThrottle(
     snapshot,
     {
@@ -200,7 +190,7 @@ async function checkThrottle(
       fable: getProviderPaceOffset(db, "anthropic", "fable"),
     },
     clock.now(),
-    spendDown,
+    getSpendDown(db),
   );
   return { decision, snapshot };
 }
@@ -651,10 +641,13 @@ export function startScheduler(deps: {
             setting = firstSelectable(candidates, entryExcluded);
             continue;
           }
-          const observation =
-            observedProviders.get(setting.provider) ??
-            (await observeProviderUsage(setting.provider));
-          observedProviders.set(setting.provider, observation);
+          let observation = observedProviders.get(setting.provider);
+          if (!observation) {
+            observation = await observeProviderUsage(setting.provider);
+            // Spend-down (ADR 0143) は Provider ごとの観測で、arm の後に開いた窓の対象を失効させる
+            expireSpendDown(db, observation);
+            observedProviders.set(setting.provider, observation);
+          }
           const model = setting.model;
           const relevant = observation.windows.filter(
             // provider 全体の窓(model === null)は常に関係する。model 固有の窓の

@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
-import { composeTerminalScreen, evaluateThrottle, isSpendDownExpired, parseUsage } from "../src/usage.js";
+import type { SpendDownState } from "../src/spend-down.js";
+import { composeTerminalScreen, evaluateThrottle, parseUsage } from "../src/usage.js";
 import { PI_USAGE_CAPTURE_2_1_221 } from "./fixtures/usage-pi-2.1.221.js";
 
 it("Pi の実測差分描画を合成すると、ストリームに無い fable ラベルと全 usage を読める(issue #323)", async () => {
@@ -485,19 +486,18 @@ it("idle の session は fail-closed の入力にせず、健全な week と合�
   });
 });
 
-it("対象窓が idle なら spend-down は失効する — 観測できた不在はリセット済みの証拠(issue #287)", () => {
-  expect(
-    isSpendDownExpired(
-      "session",
-      { activatedAt: new Date("2026-07-22T11:00:00.000Z") },
-      { session: "idle", week: { percent: 30, resetsAt: WEEK_RESETS }, fable: null },
-    ),
-  ).toBe(true);
-});
-
-// --- Spend-down (ADR 0030 / issue #128): 対象ウィンドウのペース線だけを外して
+// --- Spend-down (ADR 0030 / issue #128 / ADR 0143): 対象ウィンドウのペース線だけを外して
 // 100%ハードキャップへ切り替える人間専用の盤面状態。有効化時刻が現ウィンドウの
-// 開始より前なら失効済み(対象ウィンドウのリセットで自動失効)。 ---
+// 開始より前なら当たらない(対象ウィンドウのリセットで自動失効)。 ---
+
+/** arm した対象だけを持つ Spend-down の状態。 */
+function armed(at: { session?: Date; week?: Date; primary?: Date; secondary?: Date }): SpendDownState {
+  const state = (activatedAt?: Date) => (activatedAt ? { activatedAt } : null);
+  return {
+    anthropic: { session: state(at.session), week: state(at.week) },
+    openai: { primary: state(at.primary), secondary: state(at.secondary) },
+  };
+}
 
 it("spend-down(session) は session のペース線を外す — 線超過(70 > 60)でも 100% 未満なら通す", () => {
   const decision = evaluateThrottle(
@@ -510,7 +510,7 @@ it("spend-down(session) は session のペース線を外す — 線超過(70 > 
     OFFSETS,
     PACE_NOW,
     // 現 session ウィンドウ(開始 08:00)内の有効化 — 失効していない
-    { session: { activatedAt: new Date("2026-07-22T11:00:00.000Z") }, week: null },
+    armed({ session: new Date("2026-07-22T11:00:00.000Z") }),
   );
 
   expect(decision).toEqual({
@@ -533,7 +533,7 @@ it("spend-down 中も 100% ハードキャップは残る — 到達で throttle
     },
     OFFSETS,
     PACE_NOW,
-    { session: { activatedAt: new Date("2026-07-22T11:00:00.000Z") }, week: null },
+    armed({ session: new Date("2026-07-22T11:00:00.000Z") }),
   );
 
   expect(decision.throttled).toBe(true);
@@ -551,7 +551,7 @@ it("spend-down(session) 中も week の線は生き続ける — session 使い�
     },
     OFFSETS,
     PACE_NOW,
-    { session: { activatedAt: new Date("2026-07-22T11:00:00.000Z") }, week: null },
+    armed({ session: new Date("2026-07-22T11:00:00.000Z") }),
   );
 
   expect(decision.throttled).toBe(true);
@@ -570,7 +570,7 @@ it("spend-down(week) は week と fable の線を一緒に外す(同じ瞬間に
     OFFSETS,
     PACE_NOW,
     // 現 week ウィンドウ(開始 Jul 17 12:00)内の有効化
-    { session: null, week: { activatedAt: new Date("2026-07-21T12:00:00.000Z") } },
+    armed({ week: new Date("2026-07-21T12:00:00.000Z") }),
   );
 
   expect(decision).toEqual({
@@ -593,10 +593,7 @@ it("spend-down(session / week) を両方有効にすると session / week / fabl
     },
     OFFSETS,
     PACE_NOW,
-    {
-      session: { activatedAt: new Date("2026-07-22T11:00:00.000Z") },
-      week: { activatedAt: new Date("2026-07-21T12:00:00.000Z") },
-    },
+    armed({ session: new Date("2026-07-22T11:00:00.000Z"), week: new Date("2026-07-21T12:00:00.000Z") }),
   );
 
   expect(decision).toEqual({
@@ -620,7 +617,7 @@ it("spend-down(session) は fable の線に触れない — fable は週次予�
     },
     OFFSETS,
     PACE_NOW,
-    { session: { activatedAt: new Date("2026-07-22T11:00:00.000Z") }, week: null },
+    armed({ session: new Date("2026-07-22T11:00:00.000Z") }),
   );
 
   expect(decision.throttled).toBe(false);
@@ -641,12 +638,31 @@ it("有効化が現ウィンドウの開始より前(= 対象はリセット済�
     OFFSETS,
     PACE_NOW,
     // 現 session ウィンドウの開始は 08:00 — それより前の有効化は前ウィンドウのもの
-    { session: { activatedAt: new Date("2026-07-22T07:00:00.000Z") }, week: null },
+    armed({ session: new Date("2026-07-22T07:00:00.000Z") }),
   );
 
   expect(decision.throttled).toBe(true);
   expect(decision.windows.session).toEqual({
     throttled: true,
     resumeAt: new Date("2026-07-22T12:30:00.000Z"),
+  });
+});
+
+it("openai の Spend-down は anthropic の session / week / fable の線に触れない — Provider をまたがない(ADR 0143)", () => {
+  const decision = evaluateThrottle(
+    {
+      session: { percent: 70, resetsAt: SESSION_RESETS },
+      week: { percent: 85, resetsAt: WEEK_RESETS },
+      fable: { percent: 85, resetsAt: WEEK_RESETS },
+    },
+    OFFSETS,
+    PACE_NOW,
+    armed({ primary: new Date("2026-07-22T11:00:00.000Z"), secondary: new Date("2026-07-21T12:00:00.000Z") }),
+  );
+
+  expect(decision.windows).toEqual({
+    session: { throttled: true, resumeAt: new Date("2026-07-22T12:30:00.000Z") },
+    week: { throttled: true, resumeAt: new Date("2026-07-24T03:36:00.000Z") },
+    fable: { throttled: true, resumeAt: new Date("2026-07-24T03:36:00.000Z") },
   });
 });
