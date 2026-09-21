@@ -203,28 +203,45 @@ function createCgroup(own: string, id: string): ProcessContainer {
     }
   };
 
+  // 容器へ入ってから exec する command と argv。stream も pty も、入り方はここ1箇所で被せる。
+  const entering = (command: string, args: string[]): [string, string[]] => [
+    "/bin/sh",
+    ["-c", ENTER_AND_EXEC, join(dir, "cgroup.procs"), command, ...args],
+  ];
+
   let live = 0;
+  /** 直の子1つを数え、その終わりを数える関数を返す。直の子が終わるまで待ってから
+   *  空を観測しにいく: wrapper は容器へ入ってから exec するので、子の exit の時点で
+   *  容器に残っているのは子孫だけであり、そこで読んだ populated 0 は本当の空である
+   *  (空の cgroup は自分を再び埋められない)。生まれたての容器を spawn 前に読むと、
+   *  まだ誰も入っていないことを「回収済み」と読み違える。pty の子も数える —— 数えない
+   *  と force が wrapper の入場前の populated 0 を空と読む。 */
+  const track = (): (() => void) => {
+    live++;
+    let counted = false;
+    return () => {
+      if (counted) return;
+      counted = true;
+      if (--live === 0) armEmptyWatch();
+    };
+  };
+
   return {
     spawn: (command, args, opts) => {
-      const child = defaultSpawn("/bin/sh", ["-c", ENTER_AND_EXEC, join(dir, "cgroup.procs"), command, ...args], opts);
-      live++;
-      let counted = false;
-      // 直の子が終わるまで待ってから空を観測しにいく: wrapper は容器へ入ってから
-      // exec するので、子の exit の時点で容器に残っているのは子孫だけであり、
-      // そこで読んだ populated 0 は本当の空である(空の cgroup は自分を再び埋め
-      // られない)。生まれたての容器を spawn 前に読むと、まだ誰も入っていない
-      // ことを「回収済み」と読み違える。
-      const finish = (): void => {
-        if (counted) return;
-        counted = true;
-        if (--live === 0) armEmptyWatch();
-      };
+      const child = defaultSpawn(...entering(command, args), opts);
+      const finish = track();
       child.on("exit", finish);
       // spawn そのものが失敗した process は生まれていない = 容器は空
       child.on("error", (err: NodeJS.ErrnoException) => {
         if (isSpawnFailure(err)) finish();
       });
       return child;
+    },
+    spawnPty: (launch, command, args, opts) => {
+      // launch が投げたら(node-pty の spawn-helper に実行ビットが無い等)数えない —— 何も生まれていない
+      const proc = launch(...entering(command, args), opts);
+      proc.onExit(track());
+      return proc;
     },
     forceReclaim: () => {
       try {

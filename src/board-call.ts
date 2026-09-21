@@ -1,5 +1,5 @@
 import type { Clock } from "./clock.js";
-import type { ContainedProcess, ProcessContainers } from "./process-container.js";
+import type { ContainedProcess, ProcessContainers, PtyFn, PtyProcess } from "./process-container.js";
 
 /** 1回の Board call の注文(ADR 0136 決定4)。「何を・どの cwd で・どの env で
  *  起こすか」と「時間上限」「結果をいつ返すか」だけを言い、容器・force・観測の
@@ -29,17 +29,34 @@ export interface BoardCallSpec {
   stdin?: "pipe";
 }
 
+/** pty で起こす呼び出し(usage TUI、ADR 0136 決定8)。pty を起こすのは `launch` で、
+ *  容器はその command に入り方を被せる。`read` は `PtyProcess` を受け取る。 */
+export interface PtyBoardCallSpec extends BoardCallSpec {
+  pty: { launch: PtyFn; cols: number; rows: number };
+}
+
 /** 呼び出し1回。`read` は spawn 直後に呼ばれ、「今までに観測した答え」を返す
  *  関数を渡す —— 口はそれを root の exit のあとに1度だけ、その exit code を添えて
  *  呼ぶ。答えの形(stream か1つの文字列か)は呼び出し側の話なので口は知らない。
  *
+ *  `read` の2つ目の引数 `done` は「呼び手はもう終わった —— 今 force を撃て」で、
+ *  root の exit と同じく読み手の答えで決着する(exit code は null —— pty の exit も同じ)。root が合図に
+ *  応じないときの teardown の底である(ADR 0136 決定8)。
+ *
  *  null は fail-closed の結果である: 機構前提の不成立・上限到達・spawn 失敗・
  *  回収済み観測を待つ呼び出しでの回収 timeout のどれでも、呼び出し側は今日と
  *  同じ「観測できなかった / 失敗」を受け取る(ADR 0136 決定7)。 */
-export type BoardCall = <T>(
-  spec: BoardCallSpec,
-  read: (proc: ContainedProcess) => (exitCode: number | null) => T | null,
-) => Promise<T | null>;
+export interface BoardCall {
+  // pty を先に置く: overload は上から選ばれ、PtyBoardCallSpec は BoardCallSpec にも当てはまる
+  <T>(
+    spec: PtyBoardCallSpec,
+    read: (proc: PtyProcess, done: () => void) => (exitCode: number | null) => T | null,
+  ): Promise<T | null>;
+  <T>(
+    spec: BoardCallSpec,
+    read: (proc: ContainedProcess, done: () => void) => (exitCode: number | null) => T | null,
+  ): Promise<T | null>;
+}
 
 /** 1回の呼び出しの出力。stdout / stderr を1つの文字列として読み切る呼び出し
  *  (答えを取りに行く呼び出しと、答えの JSON を読む probe)が共有する読み手の形。 */
@@ -126,9 +143,9 @@ export function createBoardCalls(deps: {
     );
   }
 
-  const call: BoardCall = async <T>(
-    spec: BoardCallSpec,
-    read: (proc: ContainedProcess) => (exitCode: number | null) => T | null,
+  const call = async <T>(
+    spec: BoardCallSpec & Partial<PtyBoardCallSpec>,
+    read: (proc: ContainedProcess & PtyProcess, done: () => void) => (exitCode: number | null) => T | null,
   ): Promise<T | null> => {
     // ADR 0136 決定7: 機構前提が不成立の platform では Board call を起こさない。
     // 容器なしで起こすのは ADR 0099 決定5 が禁じた「黙って弱い回収へ落ちる」形である。
@@ -150,15 +167,32 @@ export function createBoardCalls(deps: {
       // FakeClock の前進で上限が発火しない)。spawn より先に張る —— あとで張ると、
       // 先に settle した呼び出しが止められない interval を残す。
       cancelLimit = deps.clock.setInterval(() => settle(() => null), spec.limitMs);
+      let observed!: (exitCode: number | null) => T | null;
+      const done = (): void => settle(() => observed(null));
+      // spawn の throw だけを「何も生まれていない」と読む —— 読み手の throw まで null に畳まない
+      // process が1つも生まれていない(ENOENT / PATH の誤り / pty が立たない)= 容器は空
+      if (spec.pty) {
+        const { launch, cols, rows } = spec.pty;
+        let proc: PtyProcess;
+        try {
+          proc = container.spawnPty(launch, spec.command, spec.args, { cwd: spec.cwd, env: spec.env, cols, rows });
+        } catch {
+          settle(() => null);
+          return;
+        }
+        observed = read(proc as ContainedProcess & PtyProcess, done);
+        // pty の root の exit も stream と同じく force の契機(ADR 0109 決定4)
+        proc.onExit(done);
+        return;
+      }
       let proc: ContainedProcess;
       try {
         proc = container.spawn(spec.command, spec.args, { cwd: spec.cwd, env: spec.env, stdin: spec.stdin });
       } catch {
-        // process が1つも生まれていない(ENOENT / PATH の誤り)= 容器は空
         settle(() => null);
         return;
       }
-      const observed = read(proc);
+      observed = read(proc as ContainedProcess & PtyProcess, done);
       // ADR 0109 決定4 の形: root の exit は容器が空になった証拠ではないが、
       // 残っているものが孤児である証拠ではある。行儀のよい exit は待たない。
       proc.on("exit", (code) => settle(() => observed(code)));
@@ -176,7 +210,8 @@ export function createBoardCalls(deps: {
   };
 
   return {
-    call,
+    // 実装は2つの overload の和で1本 —— process の型の出し分けは spec.pty の有無だけ
+    call: call as BoardCall,
     // 容器の側を毎回読み直す(watchdog と同じ posture): 遅れて空になった容器は
     // もう保留ではないので、その場で帳簿から落とす。
     pendingReclaim: () => {

@@ -11,7 +11,6 @@ import {
   ClaudeCodeWorker,
   type EnumerateSkillsFn,
   PROMPT_READY_MARKER,
-  type PtyFn,
   pinnedModelFlags,
 } from "../src/claude-worker.js";
 import { openDb } from "../src/db.js";
@@ -19,7 +18,7 @@ import { appendEvent, type EventPayload, listEvents } from "../src/events.js";
 import { BOARD_WRITE_LANGUAGE_RULE } from "../src/mcp.js";
 import { buildMemoryInjection, recordKnowledge } from "../src/memory.js";
 import { listEpisodes } from "../src/precedent.js";
-import { ProcessContainers } from "../src/process-container.js";
+import { ProcessContainers, type PtyFn } from "../src/process-container.js";
 import { refreshRegistry } from "../src/registry.js";
 import { Slot } from "../src/slot.js";
 import { getTask, listBoard, nextSlotTask, type Task } from "../src/tasks.js";
@@ -36,6 +35,7 @@ import {
   FakeClock,
   FakeContainerRuntime,
   passthroughContainers,
+  recordingPty,
   recordingSpawn,
 } from "./fakes.js";
 import { git, makeWorkspace } from "./harness.js";
@@ -121,63 +121,26 @@ function registryGit(cwd: string) {
       .trim();
 }
 
-/** Scripted stand-in at the PTY boundary (issue #81 / ADR 0028): the test
- *  drives data emission and process exit, and reads back the spawn recipe,
- *  what checkUsage wrote to stdin, and how many times it killed the session. */
-function recordingPty() {
-  const calls: Array<{
-    command: string;
-    args: string[];
-    cwd: string;
-    cols: number;
-    env: NodeJS.ProcessEnv;
-  }> = [];
-  const writes: string[] = [];
-  const kills: Array<string | undefined> = [];
-  let dataListener: ((data: string) => void) | undefined;
-  let exitListener: (() => void) | undefined;
-  const pty: PtyFn = (command, args, opts) => {
-    calls.push({ command, args, cwd: opts.cwd, cols: opts.cols, env: opts.env });
-    return {
-      onData: (listener) => {
-        dataListener = listener;
-      },
-      write: (data) => {
-        writes.push(data);
-      },
-      kill: (signal) => {
-        kills.push(signal);
-      },
-      onExit: (listener) => {
-        exitListener = listener;
-      },
-    };
-  };
-  return {
-    pty,
-    calls,
-    writes,
-    kills,
-    emitData: (data: string) => dataListener?.(data),
-    emitExit: () => exitListener?.(),
-  };
-}
-
-/** A worker wired to a fake PTY, for the checkUsage scrape tests. */
+/** A worker wired to a fake PTY, for the checkUsage scrape tests. The container
+ *  runtime is the fake one so the mouth's force reclaims are observable, and the
+ *  mouth counts its limit on `clock` (checkUsage's own timers are setTimeout). */
 async function makeUsageWorker(pty: PtyFn) {
   const registryDir = await makeRegistry();
   const logDir = await mkdtemp(join(tmpdir(), "tidepool-worker-logs-"));
-  return new ClaudeCodeWorker({
+  const clock = new FakeClock();
+  const runtime = new FakeContainerRuntime();
+  const worker = new ClaudeCodeWorker({
     db: openDb(":memory:"),
-    clock: new FakeClock(),
+    clock,
     registry: { dir: registryDir, mode: "purely-local" },
     agent: "deckhand",
     workspace: "tidepool",
     mcpUrl: "http://127.0.0.1:4589/mcp",
     logDir,
-    ...containerHarness(passthroughContainers(recordingSpawn().spawn)),
+    ...containerHarness(new ProcessContainers(runtime), clock),
     pty,
   });
+  return { worker, runtime, clock };
 }
 
 async function makeWorker(
@@ -1739,7 +1702,7 @@ describe("ClaudeCodeWorker", () => {
 
   it("checkUsage はプロンプト到達パターンを待ち、さらに入力ボックスが落ち着いてから /usage を送る(盲送りしない・描画直後の取りこぼしも避ける・ADR 0028)", async () => {
     const rec = recordingPty();
-    const worker = await makeUsageWorker(rec.pty);
+    const { worker } = await makeUsageWorker(rec.pty);
     vi.useFakeTimers();
     try {
       const pending = worker.checkUsage();
@@ -1759,7 +1722,9 @@ describe("ClaudeCodeWorker", () => {
 
       // パネルを描いて片付けさせ、テストがハングしないようにする
       rec.emitData("Current session: 10% used\nCurrent week: 5% used\n");
-      await vi.advanceTimersByTimeAsync(5_000); // パネル debounce と画面合成を完了
+      await vi.advanceTimersByTimeAsync(5_000); // パネル debounce → Ctrl-C×2
+      rec.emitExit(); // Ctrl-C に応じて root が exit する
+      await vi.runAllTimersAsync(); // 画面合成を完了
       await pending;
     } finally {
       vi.useRealTimers();
@@ -1768,7 +1733,7 @@ describe("ClaudeCodeWorker", () => {
 
   it("checkUsage はパネル描画を捉えたら Ctrl-C×2 で終了させ、ANSI ではなく合成画面を返す(ADR 0074)", async () => {
     const rec = recordingPty();
-    const worker = await makeUsageWorker(rec.pty);
+    const { worker, runtime } = await makeUsageWorker(rec.pty);
     vi.useFakeTimers();
     try {
       const pending = worker.checkUsage();
@@ -1780,15 +1745,20 @@ describe("ClaudeCodeWorker", () => {
         "\x1b[1mCurrent session: 56% used · resets Jul 9 at 5:59pm\x1b[0m\n" +
         "Current week (all models): 12% used · resets Jul 14\n";
       rec.emitData(panel);
-      await vi.advanceTimersByTimeAsync(5_000); // パネル debounce と画面合成を完了
+      await vi.advanceTimersByTimeAsync(5_000); // パネル debounce → Ctrl-C×2
+      expect(rec.writes.at(-1)).toBe("\x03\x03");
+      expect(runtime.forceReclaims).toEqual([]);
+
+      // root が Ctrl-C に応じて exit する —— 口はその exit で容器ごと force を撃つ
+      rec.emitExit();
+      await vi.runAllTimersAsync(); // 画面合成を完了
 
       const screen = await pending;
       expect(screen).toContain("Current session: 56% used");
       expect(screen).not.toContain("\x1b[1m");
-      // Ctrl-C×2 で畳んだうえで、捕捉不可な SIGKILL を backstop に送る
-      // (孤児を残さないための保証は TUI の signal 処理に依存させない)
-      expect(rec.writes.at(-1)).toBe("\x03\x03");
-      expect(rec.kills).toContain("SIGKILL");
+      expect(runtime.forceReclaims).toEqual(runtime.created);
+      // root への直接の kill は無い(孤児を残さない保証は容器が担う — ADR 0136 決定8)
+      expect(rec.kills).toEqual([]);
     } finally {
       vi.useRealTimers();
     }
@@ -1796,7 +1766,7 @@ describe("ClaudeCodeWorker", () => {
 
   it("checkUsage はパネルのヘッダ2行が出ても即断せず、描画が静穏化するまで待って後続チャンクの % / reset まで取り込む", async () => {
     const rec = recordingPty();
-    const worker = await makeUsageWorker(rec.pty);
+    const { worker } = await makeUsageWorker(rec.pty);
     vi.useFakeTimers();
     try {
       const pending = worker.checkUsage();
@@ -1808,7 +1778,9 @@ describe("ClaudeCodeWorker", () => {
       // debounce 未満のうちに残りが届く(チャンク境界で数値が分断されるケース)
       await vi.advanceTimersByTimeAsync(200);
       rec.emitData("56% used\nResets Jul 9\n");
-      await vi.advanceTimersByTimeAsync(5_000); // 静穏化 → 合成
+      await vi.advanceTimersByTimeAsync(5_000); // 静穏化 → Ctrl-C×2
+      rec.emitExit();
+      await vi.runAllTimersAsync(); // 画面合成を完了
 
       const screen = await pending;
       // 後続チャンクの数値まで取り込めている(ヘッダ即断なら失われていた)
@@ -1821,7 +1793,7 @@ describe("ClaudeCodeWorker", () => {
 
   it("checkUsage は旧500ms窓より遅い差分再描画まで待ち、fable ラベルを含む合成画面を返す(issue #323)", async () => {
     const rec = recordingPty();
-    const worker = await makeUsageWorker(rec.pty);
+    const { worker } = await makeUsageWorker(rec.pty);
     vi.useFakeTimers();
     try {
       const pending = worker.checkUsage();
@@ -1851,7 +1823,7 @@ describe("ClaudeCodeWorker", () => {
 
   it("checkUsage はパネル描画後の再描画がタイムアウトまで止まらなくても、その時点の合成画面を返す(ADR 0074 safety floor)", async () => {
     const rec = recordingPty();
-    const worker = await makeUsageWorker(rec.pty);
+    const { worker, runtime } = await makeUsageWorker(rec.pty);
     vi.useFakeTimers();
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     try {
@@ -1869,11 +1841,19 @@ describe("ClaudeCodeWorker", () => {
         await vi.advanceTimersByTimeAsync(1_000);
         rec.emitData("\x1b[1;1HCurrent session");
       }
-      await vi.advanceTimersByTimeAsync(1_000); // 30s の全体 timeout
+      await vi.advanceTimersByTimeAsync(1_000); // 30s の全体 timeout → Ctrl-C×2
+      expect(rec.writes.at(-1)).toBe("\x03\x03");
+
+      // root は Ctrl-C に応じない: 猶予のあいだは force を撃たず、過ぎたら口の force で畳む
+      await vi.advanceTimersByTimeAsync(4_000);
+      expect(runtime.forceReclaims).toEqual([]);
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(runtime.forceReclaims).toEqual(runtime.created);
       await vi.runAllTimersAsync(); // headless terminal の非同期 write を完了
 
       await expect(pending).resolves.toContain("Current session");
-      expect(rec.kills).toContain("SIGKILL");
+      // root への直接の kill は無い(ADR 0136 決定8)
+      expect(rec.kills).toEqual([]);
       // パネルは見えている = 列挙漏れではないので、画面を盤面ログに流さない
       expect(warnSpy).not.toHaveBeenCalled();
     } finally {
@@ -1882,12 +1862,12 @@ describe("ClaudeCodeWorker", () => {
     }
   });
 
-  it("checkUsage はパネル未描画のままタイムアウトしたら kill して null を返す(fail-closed・孤児を残さない)", async () => {
+  it("checkUsage はパネル未描画のままタイムアウトしたら容器ごと回収して null を返す(fail-closed・孤児を残さない)", async () => {
     vi.useFakeTimers();
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     try {
       const rec = recordingPty();
-      const worker = await makeUsageWorker(rec.pty);
+      const { worker, runtime } = await makeUsageWorker(rec.pty);
       const pending = worker.checkUsage();
 
       // プロンプトには着いたが /usage パネルが返ってこない(CLI ハング相当)
@@ -1895,8 +1875,10 @@ describe("ClaudeCodeWorker", () => {
       await vi.advanceTimersByTimeAsync(60_000);
 
       await expect(pending).resolves.toBeNull();
-      // 孤児を残さない: 捕捉不可な SIGKILL で確実に落とす
-      expect(rec.kills).toContain("SIGKILL");
+      // 孤児を残さない: Ctrl-C×2 に応じない root は口の force で容器ごと畳む。直接の kill は無い
+      expect(rec.writes.at(-1)).toBe("\x03\x03");
+      expect(runtime.forceReclaims).toEqual(runtime.created);
+      expect(rec.kills).toEqual([]);
       // REPL には着いている = 初回対話で止まってはいないので、画面は残さない
       expect(warnSpy).not.toHaveBeenCalled();
     } finally {
@@ -1910,7 +1892,7 @@ describe("ClaudeCodeWorker", () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     try {
       const rec = recordingPty();
-      const worker = await makeUsageWorker(rec.pty);
+      const { worker } = await makeUsageWorker(rec.pty);
       const pending = worker.checkUsage();
 
       // 初回対話(テーマ選択)が REPL より手前に出て、プロンプトに一度も着かない。
@@ -1956,7 +1938,7 @@ describe("ClaudeCodeWorker", () => {
 
   it("checkUsage はセッションがパネル前に終了(認証落ち・CLI 不在相当)したら null を返す", async () => {
     const rec = recordingPty();
-    const worker = await makeUsageWorker(rec.pty);
+    const { worker } = await makeUsageWorker(rec.pty);
     const pending = worker.checkUsage();
 
     rec.emitExit();
@@ -1968,21 +1950,50 @@ describe("ClaudeCodeWorker", () => {
     const failingPty: PtyFn = () => {
       throw new Error("claude binary not found");
     };
-    const worker = await makeUsageWorker(failingPty);
+    const { worker } = await makeUsageWorker(failingPty);
 
     await expect(worker.checkUsage()).resolves.toBeNull();
   });
 
+  it("checkUsage は口の時間上限に達したら null を返す(fail-closed)", async () => {
+    // 口の上限は注入した時計で数え、scrape の timer は setTimeout —— setImmediate は
+    // FakeClock の前進が使うので本物のまま
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const rec = recordingPty();
+      const { worker, clock } = await makeUsageWorker(rec.pty);
+      const pending = worker.checkUsage();
+      await vi.waitFor(() => expect(rec.calls).toHaveLength(1));
+
+      await clock.advance(10 * 60_000);
+
+      await expect(pending).resolves.toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("checkUsage は容器の機構前提が不成立なら PTY を起こさず null を返す(ADR 0136 決定7)", async () => {
+    const rec = recordingPty();
+    const { worker, runtime } = await makeUsageWorker(rec.pty);
+    runtime.scriptPreflight("cgroup v2 is not mounted at /sys/fs/cgroup");
+
+    await expect(worker.checkUsage()).resolves.toBeNull();
+    expect(rec.calls).toEqual([]);
+  });
+
   it("checkUsage は board 自身の cwd で claude --safe-mode を、折り返しを避ける広い桁幅で起動する(ADR 0028)", async () => {
     const rec = recordingPty();
-    const worker = await makeUsageWorker(rec.pty);
+    const { worker } = await makeUsageWorker(rec.pty);
     vi.useFakeTimers();
     try {
       const pending = worker.checkUsage();
       rec.emitData(PROMPT_READY_MARKER);
       await vi.advanceTimersByTimeAsync(5_000);
       rec.emitData("Current session: 1%\nCurrent week: 1%\n");
-      await vi.advanceTimersByTimeAsync(5_000); // パネル debounce と画面合成を完了
+      await vi.advanceTimersByTimeAsync(5_000); // パネル debounce → Ctrl-C×2
+      rec.emitExit();
+      await vi.runAllTimersAsync(); // 画面合成を完了
       await pending;
     } finally {
       vi.useRealTimers();
@@ -2009,7 +2020,7 @@ describe("ClaudeCodeWorker", () => {
 
   it("checkUsage は語間がカーソル移動(空白ではない)で描画されても、プロンプト到達とパネルを取りこぼさない(Pi の classic 相当・spaceless 照合)", async () => {
     const rec = recordingPty();
-    const worker = await makeUsageWorker(rec.pty);
+    const { worker } = await makeUsageWorker(rec.pty);
     vi.useFakeTimers();
     try {
       const pending = worker.checkUsage();
@@ -2022,7 +2033,9 @@ describe("ClaudeCodeWorker", () => {
       // パネルも "Current" と "session" がカーソル移動で分断される
       const spaceless = "Current\x1b[10Gsession\r\n34%used\r\nCurrent\x1b[10Gweek\r\n35%used\r\n";
       rec.emitData(spaceless);
-      await vi.advanceTimersByTimeAsync(5_000);
+      await vi.advanceTimersByTimeAsync(5_000); // パネル debounce → Ctrl-C×2
+      rec.emitExit();
+      await vi.runAllTimersAsync(); // 画面合成を完了
 
       const screen = await pending;
       expect(screen).toContain("34%used"); // raw marker 照合を通り、合成まで完了

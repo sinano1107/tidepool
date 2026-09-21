@@ -47,6 +47,7 @@ import {
   isSpawnFailure,
   type ProcessContainer,
   ProcessContainers,
+  type PtyFn,
 } from "../src/process-container.js";
 import type { PushClient, PushPayload, PushSubscription } from "../src/push.js";
 import type { Task } from "../src/tasks.js";
@@ -250,6 +251,53 @@ export class ScriptedWorker implements WorkerAdapter {
   }
 }
 
+/** Scripted stand-in at the PTY boundary (issue #81 / ADR 0028): the test
+ *  drives data emission and process exit, and reads back the spawn recipe,
+ *  what checkUsage wrote to stdin, and every kill sent to the session (checkUsage sends
+ *  none — the mouth's force reclaims the container, ADR 0136 決定8). */
+export function recordingPty() {
+  const calls: Array<{
+    command: string;
+    args: string[];
+    cwd: string;
+    cols: number;
+    rows: number;
+    env: NodeJS.ProcessEnv;
+  }> = [];
+  const writes: string[] = [];
+  const kills: Array<string | undefined> = [];
+  let dataListener: ((data: string) => void) | undefined;
+  // node-pty の onExit は複数の listener を持てる —— 口と checkUsage の両方が聞く
+  const exitListeners: Array<() => void> = [];
+  const pty: PtyFn = (command, args, opts) => {
+    calls.push({ command, args, cwd: opts.cwd, cols: opts.cols, rows: opts.rows, env: opts.env });
+    return {
+      onData: (listener) => {
+        dataListener = listener;
+      },
+      write: (data) => {
+        writes.push(data);
+      },
+      kill: (signal) => {
+        kills.push(signal);
+      },
+      onExit: (listener) => {
+        exitListeners.push(listener);
+      },
+    };
+  };
+  return {
+    pty,
+    calls,
+    writes,
+    kills,
+    emitData: (data: string) => dataListener?.(data),
+    emitExit: () => {
+      for (const listener of exitListeners) listener();
+    },
+  };
+}
+
 /** 容器機構 seam の scripted stand-in(ADR 0099 決定2)。既定の容器は
  *  強制回収を受けた時点で空になる(実機構がそう振る舞うのが正常)。空にならない
  *  容器 — 回収に失敗するホスト — は `hold` で明示的にスクリプトし、`fireEmpty`
@@ -304,6 +352,7 @@ export class FakeContainerRuntime implements ContainerRuntime {
         if (!this.spawn) throw new Error("fake container runtime: no spawn scripted");
         return this.spawn(command, args, opts);
       },
+      spawnPty: (launch, command, args, opts) => launch(command, args, opts),
       forceReclaim: () => {
         this.forceReclaims.push(id);
         if (!this.held.has(id)) markEmpty();
@@ -719,14 +768,15 @@ function passthroughContainerRuntime(spawn: ContainerSpawn): ContainerRuntime {
   return {
     preflight: () => ({ available: true }),
     create: () => {
-      let child: ContainedProcess | null = null;
+      let kill: (() => void) | null = null;
       let markEmpty!: () => void;
       const reclaimed = new Promise<void>((resolve) => {
         markEmpty = resolve;
       });
       return {
         spawn: (command, args, opts) => {
-          child = spawn(command, args, opts);
+          const child = spawn(command, args, opts);
+          kill = () => child.kill("SIGKILL");
           child.on("exit", () => markEmpty());
           // spawn そのものが失敗した process は生まれていない = 容器は空
           child.on("error", (err: NodeJS.ErrnoException) => {
@@ -734,10 +784,16 @@ function passthroughContainerRuntime(spawn: ContainerSpawn): ContainerRuntime {
           });
           return child;
         },
+        spawnPty: (launch, command, args, opts) => {
+          const proc = launch(command, args, opts);
+          kill = () => proc.kill("SIGKILL");
+          proc.onExit(() => markEmpty());
+          return proc;
+        },
         forceReclaim: () => {
           // 空の容器(spawn 前 / 既に exit 済み)への force は、その場で空である
-          if (!child) markEmpty();
-          else child.kill("SIGKILL");
+          if (!kill) markEmpty();
+          else kill();
         },
         reclaimed,
       };

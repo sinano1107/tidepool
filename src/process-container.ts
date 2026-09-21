@@ -33,6 +33,26 @@ export type ContainerSpawn = (
   opts: { cwd: string; env: NodeJS.ProcessEnv; stdin?: "pipe" },
 ) => ContainedProcess;
 
+/** The interactive-TUI process boundary checkUsage scrapes at (issue #81 /
+ *  ADR 0028): a PTY, so `claude`'s /usage panel renders as it would under a
+ *  real terminal. Everything vendor-specific (node-pty, the interactive CLI
+ *  flags) flows through this one call — faked in tests so the scrape
+ *  orchestration runs without a real PTY (ADR 0027). */
+export type PtyProcess = {
+  onData(listener: (data: string) => void): void;
+  /** Bytes to the CLI's stdin: a submitted line ends in ENTER; shutdown is
+   *  CTRL_C sent twice. */
+  write(data: string): void;
+  kill(signal?: string): void;
+  onExit(listener: () => void): void;
+};
+
+export type PtyFn = (
+  command: string,
+  args: string[],
+  opts: { cwd: string; cols: number; rows: number; env: NodeJS.ProcessEnv },
+) => PtyProcess;
+
 /** 機構前提検査の答え。封じ込めの fs 半分と同じ形を使う(containment.ts が
  *  `ContainmentCapability` でそうしているのと同じ理由 — 「何が足りないか」は
  *  reason の文面が担うのであって、型ではない)。 */
@@ -42,6 +62,14 @@ export type ContainerRuntimeCapability = SandboxCapability;
 export interface ProcessContainer {
   /** 容器の中への spawn。その単位に属する process は全部この中で生きる。 */
   spawn: ContainerSpawn;
+  /** 容器の中への pty spawn(usage TUI、ADR 0136 決定8)。pty を起こすのは渡された
+   *  `launch` で、容器はその command に入り方を被せるだけである。 */
+  spawnPty(
+    launch: PtyFn,
+    command: string,
+    args: string[],
+    opts: { cwd: string; cols: number; rows: number; env: NodeJS.ProcessEnv },
+  ): PtyProcess;
   /** 強制回収(force reclaim): 容器ごと全 process を終了させる操作。**送達で
    *  あって回収の完了ではない** — 完了は `reclaimed` だけが言う。 */
   forceReclaim(): void;
