@@ -354,14 +354,14 @@ export function startWatchdog(deps: {
     return pickup;
   }
 
-  /** 報告なき exit(ADR 0145)。最終 verb・上限到達による中断は exit より先に後始末の印を
-   *  置くので、ここの門で自然に外れる。梯子に入った session(停止か回収を送達済み)は
-   *  梯子の底の question が受ける(決定4)。強制回収は adapter が送達済みなので重ねない。 */
+  /** 報告なき exit(ADR 0145)。最終 verb・上限到達による中断は exit より先に後始末へ
+   *  入るので、ここの門で自然に外れる。梯子に入った session は梯子の底の question が受ける
+   *  (決定4)—— 梯子の強制回収も決着も畳み込み停止の後ろにしか無いので、停止の送達記録
+   *  1つで見分けられる。強制回収は adapter が送達済みなので重ねない。 */
   function onWorkerExited(taskId: string, exit: WorkerExit): void {
     if (slot.currentTaskId !== taskId || slot.inTeardown) return;
-    if (sessionInTeardown(db)?.taskId === taskId) return;
     syncPickup(taskId);
-    if (stopSentAt.has(taskId) || forceSentAt.has(taskId) || settled.has(taskId)) return;
+    if (stopSentAt.has(taskId)) return;
     const task = getTask(db, taskId);
     if (task?.status !== "in_progress") return;
     const now = clock.now();
