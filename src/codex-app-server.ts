@@ -1,8 +1,8 @@
-import { spawn } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { z } from "zod";
+import { type BoardCall, readOutput } from "./board-call.js";
 
 export const CODEX_APP_SERVER_VERSION = "codex-cli 0.147.0";
 
@@ -106,35 +106,41 @@ const initializeResponse = z.object({
   codexHome: z.string(),
 });
 
-const defaultCommand: CodexCliCommand = (executable, args, options) =>
-  new Promise((resolve) => {
-    const child = spawn(executable, args, { env: options.env, stdio: ["pipe", "pipe", "pipe"] });
-    let stdout = "";
-    let stderr = "";
-    let settled = false;
-    const finish = (exitCode: number | null) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timeout);
-      resolve({ exitCode, stdout, stderr });
-    };
-    const timeout = setTimeout(() => {
-      stderr += "Codex command timed out";
-      child.kill("SIGKILL");
-      finish(null);
-    }, 15_000);
-    child.stdout.setEncoding("utf8").on("data", (chunk) => {
-      stdout += chunk;
-      if (options.until && !child.stdin.writableEnded && options.until(stdout)) child.stdin.end();
-    });
-    child.stderr.setEncoding("utf8").on("data", (chunk) => { stderr += chunk; });
-    child.on("error", () => finish(null));
-    child.on("exit", (code) => finish(code));
-    // App Server は EOF で打ち切り、flush できた分しか返さない(#706)。述語を渡した呼び手だけ
-    // 待ちたい応答が揃うまで stdin を開けたままにし、15 秒 SIGKILL は fallback に残す。
-    if (options.until) child.stdin.write(options.input ?? "");
-    else child.stdin.end(options.input);
-  });
+// 使用量と認証を読む App Server probe の上限(値は据え置き)。役は詰まりの検知であって
+// 通常の遅延を縛ることではない(TOOL_SURFACE_PROBE_TIMEOUT_MS と同じ線)—— 応答は数秒で
+// 揃い、揃った時点で stdin を閉じて返る。
+export const CODEX_APP_SERVER_LIMIT_MS = 15_000;
+
+/** `CodexCliCommand` の本番の実装: 1回を Board call の口に通す(ADR 0136 決定2)。
+ *
+ *  App Server は EOF で打ち切り、flush できた分しか返さない(#706)。述語を渡した呼び手
+ *  だけ、待ちたい応答が揃うまで stdin を開けたままにする。口が答えを返さなかったときは
+ *  exit code の無い失敗に写す —— 呼び手の `commandFailure` がそれを観測不能に倒す。 */
+export const codexCommandThrough =
+  (call: BoardCall, kind: string, limitMs: number): CodexCliCommand =>
+  async (executable, args, options) =>
+    (await call(
+      { kind, command: executable, args, cwd: process.cwd(), env: options.env, limitMs, stdin: "pipe" },
+      (proc) => {
+        const read = readOutput(proc);
+        const stdin = proc.stdin!;
+        // 読まずに exit した process への書き込み(EPIPE)で盤面を落とさない —— 失敗は exit code が言う
+        stdin.on("error", () => {});
+        const until = options.until;
+        if (until) {
+          let open = true;
+          // readOutput の listener が先に張られているので、ここで読む stdout はこの chunk まで込み
+          proc.stdout.on("data", () => {
+            if (open && until(read(null).stdout)) {
+              open = false;
+              stdin.end();
+            }
+          });
+          stdin.write(options.input ?? "");
+        } else stdin.end(options.input ?? "");
+        return read;
+      },
+    )) ?? { exitCode: null, stdout: "", stderr: `the ${kind} Board call did not complete (limit, spawn failure, or no container)` };
 
 /** openai の資格情報の不在(ADR 0116 決定4): Codex の login 未実施 = codexHome 配下に
  *  `auth.json` が無い。存否だけを読み、中身は読まない(ADR 0098 決定5)。 */
@@ -283,6 +289,7 @@ function respondedTo(ids: readonly number[]): (stdout: string) => boolean {
  *  stdin は応答が揃うまで開けたままにする —— EOF で打ち切ると応答は来ない(#706)。
  *  使用量 probe はこれを通さない: あちらは id ごとの error 行を読み分ける(ADR 0127 決定2)。 */
 export async function callAppServer(
+  command: CodexCliCommand,
   executable: string,
   env: NodeJS.ProcessEnv,
   args: readonly string[],
@@ -298,7 +305,7 @@ export async function callAppServer(
     { method: "initialized" },
     ...requests.map((request, index) => ({ id: ids[index], ...request })),
   ].map((request) => JSON.stringify(request)).join("\n") + "\n";
-  const observed = await defaultCommand(executable, ["app-server", ...args], {
+  const observed = await command(executable, ["app-server", ...args], {
     env,
     input,
     until: respondedTo([1, ...ids]),
@@ -337,9 +344,9 @@ function normalizeWindow(
 export function createCodexAppServerProbe(options: {
   executable: string;
   codexHome: string;
-  command?: CodexCliCommand;
+  command: CodexCliCommand;
 }): CodexAppServerProbe {
-  const command = options.command ?? defaultCommand;
+  const { command } = options;
   const env = probeEnv(options.codexHome);
   const compatibility = compatibilityCheck(options.executable, env, command);
   return async (now) => {

@@ -1,4 +1,3 @@
-import { execFile } from "node:child_process";
 import {
   accessSync,
   appendFileSync,
@@ -14,10 +13,11 @@ import {
 import { homedir, tmpdir } from "node:os";
 import { delimiter, dirname, join, resolve } from "node:path";
 import { resolveAgentOrQuarantine, resolveExecutionAgent } from "./agent.js";
+import { type BoardCall, readOutput } from "./board-call.js";
 import { type BoardStatePath, boardStateOverlap } from "./board-state.js";
 import { agentGitIdentityEnv, PREMISE_BREACH_PROTOCOL } from "./claude-worker.js";
 import type { Clock } from "./clock.js";
-import { CODEX_APP_SERVER_VERSION, callAppServer } from "./codex-app-server.js";
+import { CODEX_APP_SERVER_VERSION, callAppServer, codexCommandThrough } from "./codex-app-server.js";
 import type { ContainmentCapability } from "./containment.js";
 import type { Db } from "./db.js";
 import { appendEvent, type EventPayload } from "./events.js";
@@ -506,20 +506,38 @@ function configArgs(config: readonly string[]): string[] {
   return config.flatMap((entry) => ["-c", entry]);
 }
 
-function runFile(
+// 封じ込め能力 preflight の上限。失敗側が tool-surface probe と同じ封じ込め能力の不成立
+// なので値も同じにする。役は詰まりの検知であって通常の遅延を縛ることではない
+// (TOOL_SURFACE_PROBE_TIMEOUT_MS と同じ線)。
+const CODEX_PREFLIGHT_LIMIT_MS = 60_000;
+const PREFLIGHT_KIND = "Codex containment preflight";
+
+/** preflight の1回を Board call の口に通す(ADR 0136 決定2)。workspace を cwd にする
+ *  呼び出し(`cwd` を渡すのはそれだけ)は回収済み観測のあとに返す —— 残存がその workspace で
+ *  次に起きる worker と同居しない(決定5)。 */
+async function runFile(
+  call: BoardCall,
   command: string,
   args: readonly string[],
-  options: { cwd?: string; env?: NodeJS.ProcessEnv } = {},
+  options: { cwd?: string; env: NodeJS.ProcessEnv },
 ): Promise<string> {
-  return new Promise((resolve, reject) => {
-    execFile(command, args, { ...options, encoding: "utf8" }, (error, stdout, stderr) => {
-      if (error) {
-        reject(new Error(`${error.message}${stderr ? `: ${stderr.trim()}` : ""}`));
-        return;
-      }
-      resolve(stdout);
-    });
-  });
+  const output = await call(
+    {
+      kind: PREFLIGHT_KIND,
+      command,
+      args: [...args],
+      cwd: options.cwd ?? process.cwd(),
+      env: options.env,
+      limitMs: CODEX_PREFLIGHT_LIMIT_MS,
+      awaitReclaimed: options.cwd !== undefined,
+    },
+    readOutput,
+  );
+  if (!output) throw new Error(`${command} ${args[0]} did not complete (limit, spawn failure, or no container)`);
+  if (output.exitCode !== 0) {
+    throw new Error(`${command} ${args[0]} exited ${output.exitCode}${output.stderr ? `: ${output.stderr.trim()}` : ""}`);
+  }
+  return output.stdout;
 }
 
 /** Resolve once at composition time. Worker spawn uses the returned absolute path,
@@ -579,11 +597,13 @@ export function observedDeveloperMarkers(promptInput: string): string[] {
  *  開けた走行でしか観測できず、その受け入れは #730 が持つ。この行を「選択も見ている」と
  *  読んで #730 の受け入れ観測を省いてはならない。 */
 async function probeHookRegistration(
+  call: BoardCall,
   executable: string,
   env: NodeJS.ProcessEnv,
   hook: string,
 ): Promise<CodexHookRegistration[]> {
-  const [listed] = await callAppServer(executable, env, configArgs(hookConfig(hook)), [
+  const command = codexCommandThrough(call, PREFLIGHT_KIND, CODEX_PREFLIGHT_LIMIT_MS);
+  const [listed] = await callAppServer(command, executable, env, configArgs(hookConfig(hook)), [
     { method: "hooks/list", params: { cwds: [] } },
   ]);
   return observedHooks(listed);
@@ -642,6 +662,7 @@ try {
 `;
 
 async function probePermission(
+  call: BoardCall,
   executable: string,
   workspace: string,
   taskTemp: string,
@@ -655,6 +676,7 @@ async function probePermission(
   writeFileSync(canary, PERMISSION_CANARY);
   try {
     await runFile(
+      call,
       executable,
       [
         "sandbox",
@@ -679,7 +701,9 @@ async function actualCodexCapability(options: {
   executable: string;
   codexHome: string;
   workspace: string;
+  call: BoardCall;
 }): Promise<CodexCapabilityObservation> {
+  const { call } = options;
   const taskTemp = realpathSync(mkdtempSync(join(tmpdir(), "tidepool-codex-preflight-")));
   const workspace = realpathSync(options.workspace);
   const env = workerEnv(options.executable, options.codexHome, taskTemp, "tidepool");
@@ -688,14 +712,16 @@ async function actualCodexCapability(options: {
     skillConfig(options.codexHome, workspace),
   ];
   try {
-    const cliVersion = (await runFile(options.executable, ["--version"], { env })).trim();
+    const cliVersion = (await runFile(call, options.executable, ["--version"], { env })).trim();
     const promptInput = await runFile(
+      call,
       options.executable,
       // marker は prompt-input にだけ渡す —— 実測したのはこの面だけ(ADR 0124 の測定)
       ["debug", "prompt-input", ...configArgs([...config, `developer_instructions=${toml(CODEX_DEVELOPER_MARKER)}`]), "containment canary"],
       { cwd: workspace, env },
     );
     const features = await runFile(
+      call,
       options.executable,
       ["features", "list", ...configArgs(config)],
       { cwd: workspace, env },
@@ -707,13 +733,13 @@ async function actualCodexCapability(options: {
         return [fields[0] ?? "", fields.at(-1) ?? ""] as const;
       }),
     );
-    await probePermission(options.executable, workspace, taskTemp, "work", env);
-    await probePermission(options.executable, workspace, taskTemp, "review", env);
+    await probePermission(call, options.executable, workspace, taskTemp, "work", env);
+    await probePermission(call, options.executable, workspace, taskTemp, "review", env);
     return {
       cliVersion,
       skills: observedSkills(promptInput),
       developerMarkers: observedDeveloperMarkers(promptInput),
-      hooks: await probeHookRegistration(options.executable, env, installBoardHook(options.codexHome)),
+      hooks: await probeHookRegistration(call, options.executable, env, installBoardHook(options.codexHome)),
       permissions: [...CODEX_PERMISSIONS],
       features: observedFeatures,
     };
@@ -726,6 +752,7 @@ export function createCodexCapabilityCheck(options: {
   executable: string;
   codexHome: string;
   workspace: string;
+  call: BoardCall;
 }): () => Promise<ContainmentCapability> {
   return () => checkCodexCapability(
     () => actualCodexCapability(options),

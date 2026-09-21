@@ -1,11 +1,10 @@
-import { execFile, spawn as nodeSpawn } from "node:child_process";
 import { createWriteStream, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { type ResolvedAgent, resolveAgentOrQuarantine, resolveExecutionAgent } from "./agent.js";
-import type { BoardCall } from "./board-call.js";
+import { type BoardCall, readOutput } from "./board-call.js";
 import { type BoardStatePath, boardStateOverlap } from "./board-state.js";
 import {
   isCapInterruptionEnvelope,
@@ -1219,28 +1218,9 @@ const SKILL_ENUM_ARGS = [
 // 上限は口の契約の一部なので、ここが渡すのは値だけである。
 const SKILL_ENUM_TIMEOUT_MS = 15_000;
 
-/** The tool-surface probe's spawn options. Extracted as a pure function purely
- *  so the Board call env (ADR 0044) is **observable**: this ping sits below its
- *  injection seam — `EnumerateToolsFn` is faked at the whole-probe level (ADR
- *  0027), so a test can never see what `runInitPing` handed to the child.
- *  Naming the options makes the one thing worth asserting assertable, and
- *  leaves only the one-line wiring below to review — the same residue
- *  `SKILL_ENUM_ARGS` itself already has.
- *
- *  skill 列挙のほうはもう通らない: あちらは Board call の口を通るので、渡した
- *  cwd と env は容器機構の fake が記録する(#767)。 */
-export function initPingSpawnOptions(cwd: string): {
-  cwd: string;
-  stdio: ["ignore", "pipe", "ignore"];
-  env: NodeJS.ProcessEnv;
-} {
-  return { cwd, stdio: ["ignore", "pipe", "ignore"], env: boardCallEnv() };
-}
-
 /** init 行の読み取り: stdout の各行の decode 済みの形を `project` に渡し、
  *  「今までに観測した答え」を返す関数を渡す(末尾の未改行分は最後の1回で読む)。
- *  2つの spawn 経路 — 口を通る skill 列挙と、まだ口を通らない tool-surface probe
- *  (#768 が移す) — が共有するのはこの読み取りだけである。
+ *  skill 列挙と tool-surface probe が共有する。
  *
  *  **projector** を取るのは、tool-surface probe が1本の init 行から2つ読むため
  *  (ADR 0108 決定2)。field 名では1つの配列しか答えられず、この ping は起動時と
@@ -1289,45 +1269,6 @@ function enumerateSkillsThrough(
     },
     (proc) => readInitReport(proc.stdout, (parsed) => readInitField(parsed, "skills")),
   );
-}
-
-/** ADR 0039 の tool-surface probe が使う、口を通らない spawn 経路(自前の timeout と
- *  root への SIGKILL つき)。**#768 が口へ移すまでの一時的な2経路目**である —— 移せば
- *  この関数ごと消える。 */
-function runInitPing<T>(
-  cwd: string,
-  extraArgs: string[],
-  project: (parsed: Record<string, unknown> | null) => T | null,
-  timeoutMs: number,
-): Promise<T | null> {
-  return new Promise((resolve) => {
-    let child: ReturnType<typeof nodeSpawn>;
-    try {
-      child = nodeSpawn("claude", [...SKILL_ENUM_ARGS, ...extraArgs], initPingSpawnOptions(cwd));
-    } catch {
-      resolve(null);
-      return;
-    }
-    let settled = false;
-    const finish = (result: T | null) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      resolve(result);
-    };
-    const timer = setTimeout(() => {
-      try {
-        child.kill("SIGKILL");
-      } catch {
-        // already gone
-      }
-      finish(null);
-    }, timeoutMs);
-    const observed = readInitReport(child.stdout, project);
-    // an unlistened "error" (missing binary) would crash the board process
-    child.on("error", () => finish(null));
-    child.on("exit", () => finish(observed()));
-  });
 }
 
 /** A ping at a *neutral* cwd: a fresh empty directory, so nothing a checkout
@@ -1410,26 +1351,36 @@ const TOOL_SURFACE_PROBE_ARGS = [
 // 遅いぶんは poll が待つだけで、誤停止よりはるかに安い。
 const TOOL_SURFACE_PROBE_TIMEOUT_MS = 60_000;
 
-const defaultEnumerateTools: EnumerateToolsFn = () =>
-  // neutral cwd で撃つ: workspace の cwd で撃つと、その checkout の
-  // `.claude/settings.json` の `permissions.deny` が面を削って(測定3)「ホストの
-  // 封じ込め能力の不成立」に化ける。それは workspace の性質であって別の資源であり、
-  // `workspaceSettingsDisposition` がすでにその担当である。
-  atNeutralCwd("tidepool-tools-", (cwd) =>
-    runInitPing(
-      cwd,
-      TOOL_SURFACE_PROBE_ARGS,
-      (parsed) => {
-        // 1本の init 行から2つ読む。片方でも読めなければ観測そのものが無かったと
-        // して null に倒す — 呼び出し側の「観測できなかった = 不成立」がそのまま
-        // 受ける(ADR 0108 決定2)。
-        const tools = readInitField(parsed, "tools");
-        const mcpServers = readInitMcpServers(parsed);
-        return tools && mcpServers ? { tools, mcpServers } : null;
-      },
-      TOOL_SURFACE_PROBE_TIMEOUT_MS,
-    ),
-  );
+/** `EnumerateToolsFn` の本番の実装: `/usage` ping を Board call の口に1回通す
+ *  (ADR 0136 決定2)。口が答えを返さなければ null —— 呼び出し側はそれを不成立に倒す。 */
+export const enumerateToolsThrough =
+  (call: BoardCall): EnumerateToolsFn =>
+  () =>
+    // neutral cwd で撃つ: workspace の cwd で撃つと、その checkout の
+    // `.claude/settings.json` の `permissions.deny` が面を削って(測定3)「ホストの
+    // 封じ込め能力の不成立」に化ける。それは workspace の性質であって別の資源であり、
+    // `workspaceSettingsDisposition` がすでにその担当である。
+    atNeutralCwd("tidepool-tools-", (cwd) =>
+      call(
+        {
+          kind: "tool-surface probe",
+          command: "claude",
+          args: [...SKILL_ENUM_ARGS, ...TOOL_SURFACE_PROBE_ARGS],
+          cwd,
+          env: boardCallEnv(),
+          limitMs: TOOL_SURFACE_PROBE_TIMEOUT_MS,
+        },
+        (proc) =>
+          readInitReport(proc.stdout, (parsed) => {
+            // 1本の init 行から2つ読む。片方でも読めなければ観測そのものが無かったと
+            // して null に倒す — 呼び出し側の「観測できなかった = 不成立」がそのまま
+            // 受ける(ADR 0108 決定2)。
+            const tools = readInitField(parsed, "tools");
+            const mcpServers = readInitMcpServers(parsed);
+            return tools && mcpServers ? { tools, mcpServers } : null;
+          }),
+      ),
+    );
 
 /** 封じ込め能力の3つ目の問い(ADR 0039 決定3)の正本: `/usage` ping を**その場で
  *  撃ち**、観測されたツール面を `checkToolSurface` に渡す。
@@ -1443,7 +1394,7 @@ const defaultEnumerateTools: EnumerateToolsFn = () =>
  *  (人間面の半分が接続失敗を不成立に倒すのと同じ線)。ここを skip にすると3つ目の
  *  問いが黙って飾りになる。 */
 export async function probeToolSurfaceCapability(
-  enumerate: EnumerateToolsFn = defaultEnumerateTools,
+  enumerate: EnumerateToolsFn,
 ): Promise<ContainmentCapability> {
   const observed = await enumerate();
   if (observed === null) {
@@ -1498,13 +1449,33 @@ function scanWorkspaceSkills(workspacePath: string): string[] {
   }
 }
 
-export const defaultExec: ExecFn = (command, args, env) =>
-  new Promise((resolve, reject) => {
-    execFile(command, args, { env }, (err, stdout) => {
-      if (err) reject(Object.assign(err, { stdout }));
-      else resolve(stdout);
-    });
-  });
+// 答えを取りに行く呼び出し(下書き・翻訳・配分評価・帰責・Behavior candidate の起草)の
+// 上限。役は詰まりの検知であって通常の遅延を縛ることではない(TOOL_SURFACE_PROBE_TIMEOUT_MS
+// と同じ線)—— sonnet の medium effort で長い dump を下書きする呼び出しも収まる幅に取る。
+const ANSWER_CALL_LIMIT_MS = 300_000;
+
+/** `ExecFn` の本番の実装: 1回を Board call の口に通す(ADR 0136 決定2)。`kind` は回収の
+ *  不成立を人間が読むときの呼び出しの名前。
+ *
+ *  非ゼロ終了は `stdout` を付けて reject する —— `rethrowCliAuthExecFailure` がその
+ *  stdout の 401 envelope を読んで provider quarantine を撃つ(ADR 0070)。口が答えを
+ *  返さなかった(上限・spawn 失敗・容器の前提不成立)ときは stdout 無しで reject する。 */
+export const execThrough =
+  (call: BoardCall, kind: string): ExecFn =>
+  async (command, args, env) => {
+    const output = await call(
+      { kind, command, args, cwd: process.cwd(), env, limitMs: ANSWER_CALL_LIMIT_MS },
+      readOutput,
+    );
+    if (!output) throw new Error(`the ${kind} Board call produced no answer (limit, spawn failure, or no container)`);
+    if (output.exitCode !== 0) {
+      throw Object.assign(new Error(`Command failed: ${command} exited ${output.exitCode}\n${output.stderr}`), {
+        code: output.exitCode,
+        stdout: output.stdout,
+      });
+    }
+    return output.stdout;
+  };
 
 /** The interactive-TUI process boundary checkUsage scrapes at (issue #81 /
  *  ADR 0028): a PTY, so `claude`'s /usage panel renders as it would under a

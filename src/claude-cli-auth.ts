@@ -1,4 +1,4 @@
-import { execFile } from "node:child_process";
+import { type BoardCall, readOutput } from "./board-call.js";
 import {
   boardCallEnv,
   MoonshotApiKeyMissingError,
@@ -23,21 +23,27 @@ export type CliAuthCommand = (
   options: { cwd: string; env: NodeJS.ProcessEnv },
 ) => Promise<CliAuthCommandResult>;
 
-const defaultCommand: CliAuthCommand = (command, args, options) =>
-  new Promise((resolve) => {
-    execFile(command, args, { ...options, encoding: "utf8" }, (err, stdout) => {
-      resolve({
-        exitCode: typeof err?.code === "number" ? err.code : err ? null : 0,
-        stdout,
-      });
-    });
-  });
+// 認証 probe(Claude / moonshot)の上限。役は詰まりの検知であって通常の遅延を縛ることでは
+// ない(TOOL_SURFACE_PROBE_TIMEOUT_MS と同じ線)—— 最小1ターンのモデル呼び出しが冷えた
+// CLI の起動込みで収まる幅に取る。
+const CLI_AUTH_PROBE_LIMIT_MS = 60_000;
+
+/** `CliAuthCommand` の本番の実装: 1回を Board call の口に通す(ADR 0136 決定2)。
+ *  口が答えを返さなかったときは exit code も stdout も無い観測に写す —— 分類は
+ *  「JSON envelope が無い」= 判定不能に倒れ、認証失敗とは読まれない。 */
+export const cliAuthCommandThrough =
+  (call: BoardCall, kind: string): CliAuthCommand =>
+  async (command, args, options) =>
+    (await call(
+      { kind, command, args, cwd: options.cwd, env: options.env, limitMs: CLI_AUTH_PROBE_LIMIT_MS },
+      readOutput,
+    )) ?? { exitCode: null, stdout: "" };
 
 /** The real authentication probe (ADR 0070). It makes one minimal model call
  * because `claude auth status` validates only credential origin, not whether
  * the token can authenticate. This is a probe Board call, so it deliberately
  * does not declare an empty tool surface. */
-export function createClaudeCliAuthCheck(command: CliAuthCommand = defaultCommand): CliAuthCheck {
+export function createClaudeCliAuthCheck(command: CliAuthCommand): CliAuthCheck {
   return () =>
     runProbe(
       command,
@@ -62,7 +68,7 @@ export function createClaudeCliAuthCheck(command: CliAuthCommand = defaultComman
  *  classifies as unauthorized without spending a billed probe call. */
 export function createMoonshotCliAuthCheck(
   keyFile: string | undefined,
-  command: CliAuthCommand = defaultCommand,
+  command: CliAuthCommand,
 ): CliAuthCheck {
   return async (): Promise<CliAuthResult> => {
     let env: NodeJS.ProcessEnv;

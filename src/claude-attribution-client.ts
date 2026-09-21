@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { AttributionClient, AttributionInput, AttributionJudgment } from "./attribution.js";
 import { CAUSES } from "./cause.js";
 import { runOneShotJsonPrompt } from "./claude-draft-client.js";
-import { defaultExec, type ExecFn } from "./claude-worker.js";
+import type { ExecFn } from "./claude-worker.js";
 import type { ExecutionSettingRow } from "./execution-setting.js";
 
 // mirrors AttributionJudgment: the model's reply is untrusted input, and only a
@@ -45,8 +45,8 @@ function buildPrompt(input: AttributionInput): string {
 export class ClaudeAttributionClient implements AttributionClient {
   private readonly exec: ExecFn;
 
-  constructor(options: { exec?: ExecFn } = {}) {
-    this.exec = options.exec ?? defaultExec;
+  constructor(options: { exec: ExecFn }) {
+    this.exec = options.exec;
   }
 
   async judge(

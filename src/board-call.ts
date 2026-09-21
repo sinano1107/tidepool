@@ -22,19 +22,46 @@ export interface BoardCallSpec {
    *  呼び出しだけで、その workspace で次に起きる worker と残存を同居させない
    *  ために門を1つ手前に置く(ADR 0136 決定5)。 */
   awaitReclaimed?: boolean;
+  /** stdin を開けたまま渡すか。既定は閉じる。応答が揃うまで EOF を送れない
+   *  呼び出し(App Server、#706)だけが opt-in する。 */
+  stdin?: "pipe";
 }
 
 /** 呼び出し1回。`read` は spawn 直後に呼ばれ、「今までに観測した答え」を返す
- *  関数を渡す —— 口はそれを root の exit のあとに1度だけ呼ぶ。答えの形(stream か
- *  1つの文字列か)は呼び出し側の話なので口は知らない。
+ *  関数を渡す —— 口はそれを root の exit のあとに1度だけ、その exit code を添えて
+ *  呼ぶ。答えの形(stream か1つの文字列か)は呼び出し側の話なので口は知らない。
  *
  *  null は fail-closed の結果である: 機構前提の不成立・上限到達・spawn 失敗・
  *  回収済み観測を待つ呼び出しでの回収 timeout のどれでも、呼び出し側は今日と
  *  同じ「観測できなかった / 失敗」を受け取る(ADR 0136 決定7)。 */
 export type BoardCall = <T>(
   spec: BoardCallSpec,
-  read: (proc: ContainedProcess) => () => T | null,
+  read: (proc: ContainedProcess) => (exitCode: number | null) => T | null,
 ) => Promise<T | null>;
+
+/** 1回の呼び出しの出力。stdout / stderr を1つの文字列として読み切る呼び出し
+ *  (答えを取りに行く呼び出しと、答えの JSON を読む probe)が共有する読み手の形。 */
+export interface CallOutput {
+  exitCode: number | null;
+  stdout: string;
+  stderr: string;
+}
+
+/** `read` の実装の1つ: stdout / stderr を全部ためて、exit code と一緒に返す。
+ *  utf8 で decode するのは chunk 境界で多バイト文字が割れないため(翻訳の答えは日本語)。 */
+export function readOutput(proc: ContainedProcess): (exitCode: number | null) => CallOutput {
+  let stdout = "";
+  let stderr = "";
+  proc.stdout.setEncoding("utf8");
+  proc.stderr.setEncoding("utf8");
+  proc.stdout.on("data", (chunk: string) => {
+    stdout += chunk;
+  });
+  proc.stderr.on("data", (chunk: string) => {
+    stderr += chunk;
+  });
+  return (exitCode) => ({ exitCode, stdout, stderr });
+}
 
 /** 口そのもの。`pendingReclaim` は Containment quarantine の回答受理側
  *  (human-verbs)が読む門で、watchdog のものと並べて合成される —— 未回収の容器は
@@ -99,7 +126,7 @@ export function createBoardCalls(deps: {
 
   const call: BoardCall = async <T>(
     spec: BoardCallSpec,
-    read: (proc: ContainedProcess) => () => T | null,
+    read: (proc: ContainedProcess) => (exitCode: number | null) => T | null,
   ): Promise<T | null> => {
     // ADR 0136 決定7: 機構前提が不成立の platform では Board call を起こさない。
     // 容器なしで起こすのは ADR 0099 決定5 が禁じた「黙って弱い回収へ落ちる」形である。
@@ -123,7 +150,11 @@ export function createBoardCalls(deps: {
       cancelLimit = deps.clock.setInterval(() => settle(() => null), spec.limitMs);
       let proc: ContainedProcess;
       try {
-        proc = container.spawn(spec.command, spec.args, { cwd: spec.cwd, env: spec.env });
+        proc = container.spawn(spec.command, spec.args, {
+          cwd: spec.cwd,
+          env: spec.env,
+          ...(spec.stdin && { stdin: spec.stdin }),
+        });
       } catch {
         // process が1つも生まれていない(ENOENT / PATH の誤り)= 容器は空
         settle(() => null);
@@ -132,7 +163,7 @@ export function createBoardCalls(deps: {
       const observed = read(proc);
       // ADR 0109 決定4 の形: root の exit は容器が空になった証拠ではないが、
       // 残っているものが孤児である証拠ではある。行儀のよい exit は待たない。
-      proc.on("exit", () => settle(observed));
+      proc.on("exit", (code) => settle(() => observed(code)));
       proc.on("error", () => settle(() => null));
     });
 

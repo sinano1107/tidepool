@@ -3,9 +3,10 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { openHumanCredential, resolvePublicOrigins, resolveTokenFile } from "./auth.js";
+import type { BoardCall } from "./board-call.js";
 import { boardStatePaths } from "./board-state.js";
 import { ClaudeTranslationClient } from "./claude-translation-client.js";
-import { resolveMoonshotApiKeyFile } from "./claude-worker.js";
+import { execThrough, resolveMoonshotApiKeyFile } from "./claude-worker.js";
 import { resolveCliAuthExpiry } from "./cli-auth.js";
 import { SystemClock } from "./clock.js";
 import { resolveCodexExecutable } from "./codex-worker.js";
@@ -106,8 +107,8 @@ function boardGlossary(): ReturnType<typeof parseGlossary> {
  *  wired to the real Claude CLI. Unlike the draft client, this needs no
  *  registry — only the `claude` CLI and the board's own CONTEXT.md — so it's
  *  always configured, never gated. */
-function translationClientFactory(): TranslationClient {
-  return new ClaudeTranslationClient({ glossary: boardGlossary() });
+function translationClientFactory(call: BoardCall): TranslationClient {
+  return new ClaudeTranslationClient({ glossary: boardGlossary(), exec: execThrough(call, "translation") });
 }
 
 /** Web Push (issue #14): all three VAPID env vars must be set together, or
@@ -173,7 +174,7 @@ const server = await startServer(
     // happens while the board runs shows up without a restart (ADR 0093 決定5)
     githubTokenFile,
     vapid: vapidConfig(),
-    translationClient: translationClientFactory(),
+    translationClient: translationClientFactory,
     cliAuthExpiresAt: resolveCliAuthExpiry(process.env.TIDEPOOL_CLAUDE_TOKEN_EXPIRES_AT),
   }, db),
 );

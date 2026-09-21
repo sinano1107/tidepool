@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { BehaviorDraft, BehaviorDraftClient, BehaviorDraftInput } from "./attribution.js";
 import { runOneShotJsonPrompt } from "./claude-draft-client.js";
-import { defaultExec, type ExecFn } from "./claude-worker.js";
+import type { ExecFn } from "./claude-worker.js";
 import type { ExecutionSettingRow } from "./execution-setting.js";
 
 // mirrors BehaviorDraft: the model's reply is untrusted input and lands in the memory store
@@ -38,8 +38,8 @@ function buildPrompt(input: BehaviorDraftInput): string {
 export class ClaudeBehaviorDraftClient implements BehaviorDraftClient {
   private readonly exec: ExecFn;
 
-  constructor(options: { exec?: ExecFn } = {}) {
-    this.exec = options.exec ?? defaultExec;
+  constructor(options: { exec: ExecFn }) {
+    this.exec = options.exec;
   }
 
   async draft(input: BehaviorDraftInput, setting: Pick<ExecutionSettingRow, "model" | "effort">): Promise<BehaviorDraft> {

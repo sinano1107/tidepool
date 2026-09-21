@@ -9,6 +9,10 @@ export interface ContainedProcess {
    *  errors, forced terminations print here, not to stream-json) — captured so
    *  a failure always leaves evidence, alongside the stdout transcript. */
   stderr: NodeJS.ReadableStream;
+  /** `stdin: "pipe"` で起こしたときだけある。既定は閉じている(worker session は
+   *  stdin を読まない)。開けたまま書く必要があるのは、EOF で打ち切る App Server
+   *  だけである(#706)。 */
+  stdin?: NodeJS.WritableStream | null;
   /** 畳み込み停止の合図の送達先。合図の選択は adapter の実装詳細であり
    *  (ADR 0099 決定1)、容器はどの signal かを知らない。 */
   kill(signal: NodeJS.Signals): void;
@@ -26,7 +30,7 @@ export interface ContainedProcess {
 export type ContainerSpawn = (
   command: string,
   args: string[],
-  opts: { cwd: string; env: NodeJS.ProcessEnv },
+  opts: { cwd: string; env: NodeJS.ProcessEnv; stdin?: "pipe" },
 ) => ContainedProcess;
 
 /** 機構前提検査の答え。封じ込めの fs 半分と同じ形を使う(containment.ts が
@@ -134,12 +138,13 @@ export const defaultSpawn: ContainerSpawn = (command, args, opts) => {
   const child = nodeSpawn(command, args, {
     cwd: opts.cwd,
     env: opts.env,
-    stdio: ["ignore", "pipe", "pipe"],
+    stdio: [opts.stdin ?? "ignore", "pipe", "pipe"],
   });
   // stderr は捕捉のため pipe に変えた(issue #125)が、従来 "inherit" で
   // 運用者がリアルタイムに見ていた可視性はこの tee で維持する(pipe は
   // process.stderr を close しない — Node の readable.pipe の仕様)
-  child.stderr.pipe(process.stderr);
-  return child;
+  // stdout / stderr は pipe なので null にならない(stdin の有無で overload が割れるので型は手で言う)
+  child.stderr!.pipe(process.stderr);
+  return child as ContainedProcess;
 };
 

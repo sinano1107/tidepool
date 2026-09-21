@@ -1,6 +1,8 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { probeToolSurfaceCapability } from "../src/claude-worker.js";
+import { enumerateToolsThrough, probeToolSurfaceCapability } from "../src/claude-worker.js";
 import type { ContainmentCapability } from "../src/containment.js";
+import { ProcessContainers } from "../src/process-container.js";
+import { containerHarness, FakeClock, FakeContainerRuntime, recordingSpawn } from "./fakes.js";
 import { api, bootTidepool, HOUR, registerWork, type Tidepool } from "./harness.js";
 
 let t: Tidepool;
@@ -78,6 +80,22 @@ it("ping が失敗したら不成立 — 「測れなかった」は「無事」
   const result = await probeToolSurfaceCapability(async () => null);
   expect(result.available).toBe(false);
   expect(result.available === false && result.reason).toContain("could not");
+});
+
+it("ping は Board call の口を通り、口が答えを返さなければ(上限到達)不成立に倒れる", async () => {
+  const spawn = recordingSpawn();
+  const clock = new FakeClock();
+  const { boardCall } = containerHarness(new ProcessContainers(new FakeContainerRuntime(spawn.spawn)), clock);
+  const result = probeToolSurfaceCapability(enumerateToolsThrough(boardCall));
+  await vi.waitFor(() => expect(spawn.calls).toHaveLength(1));
+  // 容器の中へ、盤面が宣言する --tools と Board call の env(advisor を閉じる)で起こす
+  expect(spawn.calls[0]!.command).toBe("claude");
+  expect(spawn.calls[0]!.args).toContain("--tools");
+  expect(spawn.calls[0]!.env.CLAUDE_CODE_DISABLE_ADVISOR_TOOL).toBe("1");
+
+  await clock.advance(60_000);
+
+  expect((await result).available).toBe(false);
 });
 
 it("ping が allowlist 外のツールを観測したら不成立 — 具体名が残る", async () => {

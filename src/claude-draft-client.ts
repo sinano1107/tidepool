@@ -1,7 +1,6 @@
 import { z } from "zod";
 import {
   boardCallEnv,
-  defaultExec,
   type ExecFn,
   emptyToolSurfaceFlags,
   pinnedModelFlags,
@@ -173,7 +172,7 @@ export interface ClaudeDraftClientOptions {
    *  the drafted assignee/workspace toward known names. Absent → the model
    *  drafts those fields freely. */
   candidates?: RegistryCandidates;
-  exec?: ExecFn;
+  exec: ExecFn;
 }
 
 /** The real DraftClient (issue #25): a headless one-shot `claude -p` call,
@@ -182,9 +181,9 @@ export class ClaudeDraftClient implements DraftClient {
   private readonly candidates?: RegistryCandidates;
   private readonly exec: ExecFn;
 
-  constructor(options: ClaudeDraftClientOptions = {}) {
+  constructor(options: ClaudeDraftClientOptions) {
     this.candidates = options.candidates;
-    this.exec = options.exec ?? defaultExec;
+    this.exec = options.exec;
   }
 
   async draftTask(

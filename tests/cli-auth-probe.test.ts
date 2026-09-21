@@ -1,6 +1,8 @@
-import { expect, it } from "vitest";
-import { createClaudeCliAuthCheck } from "../src/claude-cli-auth.js";
+import { expect, it, vi } from "vitest";
+import { cliAuthCommandThrough, createClaudeCliAuthCheck } from "../src/claude-cli-auth.js";
 import { isCapInterruptionEnvelope, isCliAuthFailureEnvelope } from "../src/cli-auth.js";
+import { ProcessContainers } from "../src/process-container.js";
+import { containerHarness, FakeClock, FakeContainerRuntime, recordingSpawn } from "./fakes.js";
 
 it("JSON envelope の api_error_status: 401 だけを確定的な認証失敗に分類する(ADR 0070)", async () => {
   const check = createClaudeCliAuthCheck(async () => ({
@@ -38,6 +40,18 @@ it("成功したJSON envelope は認証済みと判定する", async () => {
   }));
 
   await expect(check()).resolves.toEqual({ status: "authenticated" });
+});
+
+it("認証 probe は Board call の口を通り、口が答えを返さなければ(上限到達)判定不能に倒れる", async () => {
+  const spawn = recordingSpawn();
+  const clock = new FakeClock();
+  const { boardCall } = containerHarness(new ProcessContainers(new FakeContainerRuntime(spawn.spawn)), clock);
+  const result = createClaudeCliAuthCheck(cliAuthCommandThrough(boardCall, "Claude authentication probe"))();
+  await vi.waitFor(() => expect(spawn.calls.map((c) => c.command)).toEqual(["claude"]));
+
+  await clock.advance(60_000);
+
+  await expect(result).resolves.toEqual({ status: "unknown", reason: "probe did not return a JSON envelope" });
 });
 
 /** 上限到達による中断(ADR 0104 決定2)の述語。認証の述語と同じ場所・同じ確度で
