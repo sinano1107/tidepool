@@ -54,6 +54,7 @@ const VALID: CodexCapabilityObservation = {
   hooks: [BOARD_HOOK_REGISTRATION],
   features: CODEX_FEATURE_SNAPSHOT,
   developerMarkers: [CODEX_DEVELOPER_MARKER],
+  hookDiagnostics: [],
 };
 
 it("preflight は Board call の口を通り、口が答えを返さなければ(上限到達)封じ込めを不成立に倒す", async () => {
@@ -215,28 +216,80 @@ const hooksListResult = () =>
   JSON.parse(readFileSync(new URL("fixtures/codex-hooks-list.json", import.meta.url), "utf8"));
 
 it("hooks/list の応答から、盤面が照合する登録の項目だけを取り出す(ADR 0130 決定3)", () => {
-  expect(observedHooks(hooksListResult())).toEqual([BOARD_HOOK_REGISTRATION]);
+  expect(observedHooks(hooksListResult()).hooks).toEqual([BOARD_HOOK_REGISTRATION]);
 
   // 登録が1つも無い形の2種: cwd の entry 自体が無い / entry はあるが hooks が空
-  expect(observedHooks({ data: [] })).toEqual([]);
+  expect(observedHooks({ data: [] }).hooks).toEqual([]);
   const empty = hooksListResult();
   empty.data[0].hooks = [];
-  expect(observedHooks(empty)).toEqual([]);
+  expect(observedHooks(empty).hooks).toEqual([]);
 
   // vendor の schema では matcher / command とも optional かつ nullable —— 欠けた形は null に揃える
   const bare = hooksListResult();
   delete bare.data[0].hooks[0].matcher;
   bare.data[0].hooks[0].command = null;
-  expect(observedHooks(bare)).toEqual([{ ...BOARD_HOOK_REGISTRATION, matcher: null, command: null }]);
+  expect(observedHooks(bare).hooks).toEqual([{ ...BOARD_HOOK_REGISTRATION, matcher: null, command: null }]);
 
   // 複数件は cwd を跨いでも並びのまま畳む —— 宣言との比較は集合ではなく列で行う
   const many = hooksListResult();
   const second = { ...many.data[0].hooks[0], matcher: "Bash", enabled: false };
   many.data.push({ ...many.data[0], hooks: [second] });
-  expect(observedHooks(many)).toEqual([
+  expect(observedHooks(many).hooks).toEqual([
     BOARD_HOOK_REGISTRATION,
     { ...BOARD_HOOK_REGISTRATION, matcher: "Bash", enabled: false },
   ]);
+});
+
+it("hooks/list の応答から、vendor 診断(errors / warnings)を cwd を跨いで取り出す(#734)", () => {
+  expect(observedHooks(hooksListResult()).hookDiagnostics).toEqual([]);
+
+  const diagnosed = hooksListResult();
+  diagnosed.data[0].errors = [{ message: "invalid matcher", path: "/<session-flags>/config.toml" }];
+  diagnosed.data.push({ cwd: "/board/other", hooks: [], warnings: ["hook skipped"], errors: [] });
+  expect(observedHooks(diagnosed).hookDiagnostics).toEqual([
+    "error: invalid matcher (/<session-flags>/config.toml)",
+    "warning: hook skipped",
+  ]);
+
+  // 診断の欄が欠けた形でも、登録の読み出し(= 照合の判定)は変わらない
+  const bare = hooksListResult();
+  delete bare.data[0].errors;
+  delete bare.data[0].warnings;
+  expect(observedHooks(bare)).toEqual({ hooks: [BOARD_HOOK_REGISTRATION], hookDiagnostics: [] });
+});
+
+it.each([
+  ["errors", "error: invalid matcher (/<session-flags>/config.toml)"],
+  ["warnings", "warning: hook skipped"],
+])("hook 不一致の reason は vendor の %s を添える(#734)", async (_, diagnostic) => {
+  const capability = await checkCodexCapability(
+    async () => ({ ...VALID, hooks: [], hookDiagnostics: [diagnostic] }),
+    BOARD_HOOK_PATH,
+  );
+  expect(capability.available).toBe(false);
+  if (!capability.available) expect(capability.reason).toContain(diagnostic);
+});
+
+it("診断が空なら hook 不一致の reason は変更前と同じ文字列(#734)", async () => {
+  expect(await checkCodexCapability(async () => ({ ...VALID, hooks: [] }), BOARD_HOOK_PATH)).toEqual({
+    available: false,
+    reason: `Codex containment preflight hook mismatch: expected ${JSON.stringify([BOARD_HOOK_REGISTRATION])}, observed []`,
+  });
+});
+
+it("hook 以外の行の不一致には vendor 診断を添えない(#734)", async () => {
+  const capability = await checkCodexCapability(
+    async () => ({ ...VALID, developerMarkers: [], hookDiagnostics: ["warning: hook skipped"] }),
+    BOARD_HOOK_PATH,
+  );
+  expect(capability.available).toBe(false);
+  if (!capability.available) expect(capability.reason).not.toContain("hook skipped");
+});
+
+it("hook が一致していれば warnings があっても封じ込めは成立する(#734)", async () => {
+  expect(
+    await checkCodexCapability(async () => ({ ...VALID, hookDiagnostics: ["warning: hook skipped"] }), BOARD_HOOK_PATH),
+  ).toEqual({ available: true });
 });
 
 it("a failed Codex Harness preflight skips that route and starts a Claude-route row in the same poll", async () => {

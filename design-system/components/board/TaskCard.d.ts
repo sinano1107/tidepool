@@ -10,6 +10,7 @@ export interface TaskCardProps {
     status?: 'todo' | 'in_progress' | 'blocked' | 'done' | 'cancelled';
     type?: 'work' | 'question' | 'review';
     assignee?: string;
+    assigneeIcon?: string;
     /** Assignee is the user. */
     human?: boolean;
     risk?: boolean;

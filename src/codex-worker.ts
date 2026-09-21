@@ -291,18 +291,34 @@ export interface CodexHookRegistration {
   command: string | null;
 }
 
-/** `hooks/list` の `result` から、登録を cwd を跨いで並びのまま取り出す(ADR 0130 決定3)。
+/** `hooks/list` の `result` から、登録と vendor 診断(`errors[]` / `warnings[]`、#734)を
+ *  cwd を跨いで並びのまま取り出す(ADR 0130 決定3)。
  *  vendor の応答の形が変わったら、読み替えを直す場所はここ1つ —— 形の崩れは preflight の
- *  `hook mismatch` の観測値として出る(fail-closed)。 */
-export function observedHooks(result: unknown): CodexHookRegistration[] {
-  const { data } = result as { data: Array<{ hooks: Array<Record<string, unknown>> }> };
-  return data.flatMap((entry) => entry.hooks).map((hook) => ({
-    event: hook.eventName as string,
-    matcher: (hook.matcher ?? null) as string | null,
-    enabled: hook.enabled as boolean,
-    source: hook.source as string,
-    command: (hook.command ?? null) as string | null,
-  }));
+ *  `hook mismatch` か、読めずに投げた `could not run` として出る(どちらも fail-closed)。 */
+export function observedHooks(
+  result: unknown,
+): Pick<CodexCapabilityObservation, "hooks" | "hookDiagnostics"> {
+  const { data } = result as {
+    data: Array<{
+      hooks: Array<Record<string, unknown>>;
+      errors?: Array<{ message: string; path: string }>;
+      warnings?: string[];
+    }>;
+  };
+  return {
+    hooks: data.flatMap((entry) => entry.hooks).map((hook) => ({
+      event: hook.eventName as string,
+      matcher: (hook.matcher ?? null) as string | null,
+      enabled: hook.enabled as boolean,
+      source: hook.source as string,
+      command: (hook.command ?? null) as string | null,
+    })),
+    hookDiagnostics: data.flatMap((entry) => [
+      // 診断は照合に使わない —— 欄が欠けても判定を変えないよう、無い形は空として読む
+      ...(entry.errors ?? []).map((error) => `error: ${error.message} (${error.path})`),
+      ...(entry.warnings ?? []).map((warning) => `warning: ${warning}`),
+    ]),
+  };
 }
 
 export interface CodexCapabilityObservation {
@@ -312,6 +328,8 @@ export interface CodexCapabilityObservation {
   features: Readonly<Record<string, string>>;
   /** 盤面が `developer_instructions` で渡した marker のうち、developer item に載ったもの。 */
   developerMarkers: readonly string[];
+  /** `hooks/list` の vendor 診断。照合には使わず、hook 不一致の理由文に写すだけ(#734)。 */
+  hookDiagnostics: readonly string[];
 }
 
 /** 期待と観測の差だけを言う(全量は並べない —— 面の全行を並べた表は Quarantine 画面では読めない)。 */
@@ -355,7 +373,10 @@ export async function checkCodexCapability(
       available: false,
       reason:
         `Codex containment preflight ${mismatch[0]} mismatch: expected ` +
-        `${JSON.stringify(mismatch[1])}, observed ${JSON.stringify(mismatch[2])}`,
+        `${JSON.stringify(mismatch[1])}, observed ${JSON.stringify(mismatch[2])}` +
+        (mismatch[0] === "hook" && observed.hookDiagnostics.length > 0
+          ? `; vendor diagnostics: ${observed.hookDiagnostics.join("; ")}`
+          : ""),
     };
   }
   const drift = featureDrift(observed.features);
@@ -599,7 +620,7 @@ async function probeHookRegistration(
   executable: string,
   env: NodeJS.ProcessEnv,
   hook: string,
-): Promise<CodexHookRegistration[]> {
+): Promise<ReturnType<typeof observedHooks>> {
   const command = codexCommandThrough(call, PREFLIGHT_KIND, CODEX_PREFLIGHT_LIMIT_MS);
   const [listed] = await callAppServer(command, executable, env, configArgs(hookConfig(hook)), [
     { method: "hooks/list", params: { cwds: [] } },
@@ -739,7 +760,7 @@ async function actualCodexCapability(options: {
       cliVersion,
       skills: observedSkills(promptInput),
       developerMarkers: observedDeveloperMarkers(promptInput),
-      hooks: await probeHookRegistration(call, options.executable, env, installBoardHook(options.codexHome)),
+      ...await probeHookRegistration(call, options.executable, env, installBoardHook(options.codexHome)),
       features: observedFeatures,
     };
   } finally {

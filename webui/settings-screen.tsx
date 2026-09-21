@@ -125,7 +125,7 @@ function FreeEntryAllowlistInput({
       )}
       <div style={{ display: 'flex', gap: 6, alignItems: 'flex-start' }}>
         <div style={{ flex: 1 }}>
-          <Input value={free} mono onChange={(e) => { setFree((e.target as HTMLInputElement).value); }}
+          <Input value={free} mono onChange={(e) => { setFree(e.target.value); }}
             placeholder={placeholder} />
         </div>
         <Button variant="secondary" disabled={!free.trim()} onClick={addFree}>Add</Button>
@@ -171,7 +171,7 @@ function PublishWorkspace({ ws, say, onPublished }: {
         give this purely-local workspace a remote source of truth — every branch is pushed to an
         empty repository you created and invited the bot to. The board creates nothing on GitHub.
       </p>
-      <Input value={repo} onChange={(e) => setRepo((e.target as HTMLInputElement).value)}
+      <Input value={repo} onChange={(e) => setRepo(e.target.value)}
         placeholder="the destination repository URL — must be empty" />
       <Button variant="secondary" size="sm" disabled={busy || !repo.trim()} onClick={submit}>
         Publish — pushes every branch, then commits to the registry
@@ -260,7 +260,7 @@ function WorkspaceRecord({ ws, baseDir, say, onChanged, edit }: {
       )}
       {open && (
         <React.Fragment>
-          <Input label="Notes" value={notes} onChange={(e) => setNotes((e.target as HTMLInputElement).value)}
+          <Input label="Notes" value={notes} onChange={(e) => setNotes(e.target.value)}
             placeholder="setup hints for humans — e.g. run npm install before first use" />
           {/* the board's own registry clone never offers the off position —
               the server refuses it too (ADR 0013), this just keeps the UI honest */}
@@ -310,7 +310,7 @@ function AgentIconPicker({ value, onChange }: { value?: string; onChange: (icon:
           </button>
         ))}
       </div>
-      <Input label="Custom icon" value={value ?? ''} onChange={(e) => onChange((e.target as HTMLInputElement).value)}
+      <Input label="Custom icon" value={value ?? ''} onChange={(e) => onChange(e.target.value)}
         placeholder="paste any single emoji, or pick one above" />
     </div>
   );
@@ -420,15 +420,15 @@ function AgentFields({ draft, set, authorityOptions, providerOptions, hostSkills
   return (
     <React.Fragment>
       <AgentIconPicker value={draft.icon} onChange={(v) => set('icon', v)} />
-      <Input label="Description" value={draft.description} onChange={(e) => set('description', (e.target as HTMLInputElement).value)}
+      <Input label="Description" value={draft.description} onChange={(e) => set('description', e.target.value)}
         placeholder="when a delegating agent should pick this one" />
       <Input label="Specialty — persona, perspective, or this agent's own steps (optional; the worker protocol itself is injected separately, not written here)"
-        multiline rows={4} value={draft.systemPrompt} onChange={(e) => set('systemPrompt', (e.target as HTMLInputElement).value)} />
+        multiline rows={4} value={draft.systemPrompt} onChange={(e) => set('systemPrompt', e.target.value)} />
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-        <Select label="Authority" options={authorityOptions} value={draft.authority} onChange={(e) => set('authority', (e.target as HTMLInputElement).value)} />
-        <Select label="Provider" options={[PROVIDER_PLACEHOLDER, ...providerOptions]} value={draft.provider} onChange={(e) => set('provider', (e.target as HTMLInputElement).value)} />
+        <Select label="Authority" options={authorityOptions} value={draft.authority} onChange={(e) => set('authority', e.target.value)} />
+        <Select label="Provider" options={[PROVIDER_PLACEHOLDER, ...providerOptions]} value={draft.provider} onChange={(e) => set('provider', e.target.value)} />
       </div>
-      <Select label="Default tier" options={TIER_OPTIONS} value={draft.tier} onChange={(e) => set('tier', (e.target as HTMLInputElement).value)} />
+      <Select label="Default tier" options={TIER_OPTIONS} value={draft.tier} onChange={(e) => set('tier', e.target.value)} />
       <Checkbox testId="agent-advisor" label="advisor — this agent may consult a stronger model at decision points"
         checked={draft.advisor} onChange={() => set('advisor', !draft.advisor)} />
       <SkillListInput candidates={hostSkills} degraded={hostSkillsDegraded} values={draft.skills} onChange={(v) => set('skills', v)} />
@@ -605,7 +605,7 @@ function ProfileListInput({ label, hint, candidates, wildcardHint, values, onCha
     ...addable.map((c) => ({ value: c, label: c })),
     ...(wildcardAddable ? [{ value: '*', label: `* — ${wildcardHint}` }] : []),
   ];
-  const pick = (e: React.ChangeEvent) => { if ((e.target as HTMLInputElement).value) onChange([...values, (e.target as HTMLInputElement).value]); };
+  const pick = (e: React.ChangeEvent<HTMLSelectElement>) => { if (e.target.value) onChange([...values, e.target.value]); };
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
       <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
@@ -681,7 +681,7 @@ function SkillListInput({ candidates, degraded, values, onChange }: {
     { value: '', label: offerable.length ? 'add a scope or skill…' : 'no more to add' },
     ...offerable.map((c) => ({ value: c, label: c === '*' ? '* — every skill' : c })),
   ];
-  const pick = (e: React.ChangeEvent) => { if ((e.target as HTMLInputElement).value) onChange([...values, (e.target as HTMLInputElement).value]); };
+  const pick = (e: React.ChangeEvent<HTMLSelectElement>) => { if (e.target.value) onChange([...values, e.target.value]); };
   const addFree = () => {
     const err = skillAddError(free, values);
     if (err) { setFreeError(err); return; }
@@ -716,7 +716,7 @@ function SkillListInput({ candidates, degraded, values, onChange }: {
       <div style={{ display: 'flex', gap: 6, alignItems: 'flex-start' }}>
         <div style={{ flex: 1 }}>
           <Input value={free} mono error={freeError || undefined}
-            onChange={(e) => { setFree((e.target as HTMLInputElement).value); setFreeError(null); }}
+            onChange={(e) => { setFree(e.target.value); setFreeError(null); }}
             placeholder='free entry — e.g. a workspace skill name or "plugin-name:*"' />
         </div>
         <Button variant="secondary" disabled={!free.trim()} onClick={addFree}>Add</Button>
@@ -744,7 +744,7 @@ function ProfileFields({ agentNames, workspaceNames, guidance, setGuidance, assi
   return (
     <React.Fragment>
       <Input label="Guidance — prose injected into the agent's system prompt at spawn"
-        multiline rows={4} value={guidance} onChange={(e) => setGuidance((e.target as HTMLInputElement).value)}
+        multiline rows={4} value={guidance} onChange={(e) => setGuidance(e.target.value)}
         hint={'name the act you want stopped — offering it as one example of a category ("irreversible or outward-facing") leaves the category call to the reader. And guidance is never a floor: a boundary that must hold goes in Assignable to / Allowed workspaces, or in a protected workspace — never in a flag, which declares rather than gates'}
         placeholder="how an agent carrying this authority should act" />
       <ProfileListInput label="Assignable to"
@@ -756,7 +756,7 @@ function ProfileFields({ agentNames, workspaceNames, guidance, setGuidance, assi
         hint={'which workspaces this authority may act in — pick a registered workspace, or "*" for every one (confirmed on save)'}
         candidates={workspaceNames} wildcardHint="every workspace"
         values={allowedWorkspaces} onChange={setAllowedWorkspaces} />
-      <Select label="Merge authority" options={MERGE_OPTIONS} value={merge} onChange={(e) => setMerge((e.target as HTMLInputElement).value)} />
+      <Select label="Merge authority" options={MERGE_OPTIONS} value={merge} onChange={(e) => setMerge(e.target.value)} />
     </React.Fragment>
   );
 }
@@ -1137,7 +1137,7 @@ function DisplayLanguageCard({ language, options, say, onSaved, edit }: {
           {/* options come straight from GET (display-language.ts's canonical
               list) — the UI never hardcodes the language list, so a board that
               adds a language needs no WebUI change (issue #115) */}
-          <Select label="Language" options={options} value={draft} onChange={(e) => setDraft((e.target as HTMLInputElement).value)} />
+          <Select label="Language" options={options} value={draft} onChange={(e) => setDraft(e.target.value)} />
           <EditActions dirty={dirty} ok={!!draft} busy={busy} saveLabel="Save display language"
             onSave={save} onCancel={() => edit.close()} />
         </React.Fragment>
@@ -1197,8 +1197,8 @@ function QuietHoursCard({ start, end, tz, say, onSaved, edit }: {
       {open && (
         <React.Fragment>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-            <Input label="Start" mono value={draftStart} onChange={(e) => setDraftStart((e.target as HTMLInputElement).value)} placeholder="HH:MM" />
-            <Input label="End" mono value={draftEnd} onChange={(e) => setDraftEnd((e.target as HTMLInputElement).value)} placeholder="HH:MM" />
+            <Input label="Start" mono value={draftStart} onChange={(e) => setDraftStart(e.target.value)} placeholder="HH:MM" />
+            <Input label="End" mono value={draftEnd} onChange={(e) => setDraftEnd(e.target.value)} placeholder="HH:MM" />
           </div>
           <p style={{ margin: 0, fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
             start after end wraps past midnight (e.g. 23:00–07:00) — that's valid, not an error.
@@ -1278,7 +1278,7 @@ function PaceOffsetsCard({ offsets, say, onSaved, edit }: {
             {offsets.map((value) => {
               const key = `${value.provider}:${value.window}`;
               return <Input key={key} label={`${value.provider} · ${value.window}`} mono value={String(draft[key])}
-                onChange={(e) => setDraft({ ...draft, [key]: (e.target as HTMLInputElement).value })} placeholder={String(value.offset)} />;
+                onChange={(e) => setDraft({ ...draft, [key]: e.target.value })} placeholder={String(value.offset)} />;
             })}
           </div>
           <p style={{ margin: 0, fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
@@ -1338,11 +1338,11 @@ function MemorySettingsCard({ settings, say, onSaved, edit }: {
       {!open && <FieldRow label="meta-review period" kind="mono" value={`${period} days`} />}
       {open && (
         <React.Fragment>
-          <Input label="Injection cap (tokens)" mono value={draft} onChange={(e) => setDraft((e.target as HTMLInputElement).value)} placeholder={cap} />
+          <Input label="Injection cap (tokens)" mono value={draft} onChange={(e) => setDraft(e.target.value)} placeholder={cap} />
           <p style={{ margin: 0, fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
             the most memory a worker is handed at spawn. past the cap, entry text is dropped first, then the index gets shallower, then relevant entries go one at a time from the bottom.
           </p>
-          <Input label="Meta-review period (days)" mono value={periodDraft} onChange={(e) => setPeriodDraft((e.target as HTMLInputElement).value)} placeholder={period} />
+          <Input label="Meta-review period (days)" mono value={periodDraft} onChange={(e) => setPeriodDraft(e.target.value)} placeholder={period} />
           <p style={{ margin: 0, fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
             the fewest days between two memory meta-reviews. once past it, the board registers one as soon as there is something new to review.
           </p>
@@ -1393,7 +1393,7 @@ function MemoryEntriesCard({ workspaceNames, language, say, edit }: {
   };
   React.useEffect(() => { load(); }, [filter.workspace, filter.kind, filter.state]);
 
-  const setFilterField = (key: string) => (e: React.ChangeEvent) => setFilter({ ...filter, [key]: (e.target as HTMLInputElement).value });
+  const setFilterField = (key: string) => (e: React.ChangeEvent<HTMLSelectElement>) => setFilter({ ...filter, [key]: e.target.value });
   const muted = { margin: 0, fontSize: 'var(--text-xs)', color: 'var(--text-muted)' };
 
   // the write form: one edit slot, like every settings card
@@ -1407,7 +1407,7 @@ function MemoryEntriesCard({ workspaceNames, language, say, edit }: {
   } = { kind: 'knowledge', workspace: '', path: '', originalTitle: '', originalText: '', title: '', text: '', backTranslation: null, supersedes: '' };
   const [draft, setDraft] = React.useState(blank);
   const [busy, setBusy] = React.useState(false);
-  const setDraftField = (key: string) => (e: React.ChangeEvent) => setDraft({ ...draft, [key]: (e.target as HTMLInputElement).value, ...(key === 'title' || key === 'text' ? { backTranslation: null } : {}) });
+  const setDraftField = (key: string) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => setDraft({ ...draft, [key]: e.target.value, ...(key === 'title' || key === 'text' ? { backTranslation: null } : {}) });
   useDirtySignal(edit, writing, [draft.originalTitle, draft.originalText, draft.title, draft.text].some((v) => v.trim() !== ''));
   const translatable = language !== 'English';
   // a definition is one line with no title: its original and English are the text alone (ADR 0015)
@@ -1546,10 +1546,10 @@ function MemoryEntriesCard({ workspaceNames, language, say, edit }: {
           {invalidating?.id === entry.id && (
             <React.Fragment>
               <Select label="Reason" value={invalidating!.reason} options={MEMORY_INVALIDATION_REASONS}
-                onChange={(e) => setInvalidating({ ...invalidating!, reason: (e.target as HTMLInputElement).value })} />
+                onChange={(e) => setInvalidating({ ...invalidating!, reason: e.target.value })} />
               {needsSuccessor(invalidating!.reason) && (
                 <Input label="Successor (entry id)" mono value={invalidating!.successor}
-                  onChange={(e) => setInvalidating({ ...invalidating!, successor: (e.target as HTMLInputElement).value })} />
+                  onChange={(e) => setInvalidating({ ...invalidating!, successor: e.target.value })} />
               )}
               <div style={{ display: 'flex', gap: 8 }}>
                 <Button variant="danger" size="sm" onClick={invalidate}
@@ -1625,11 +1625,11 @@ function ExecutionDefaultsCard({ settings, say, onSaved, edit }: {
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 12 }}>
               {draft.rank.map((provider, i) => (
                 <Select key={i} label={`Rank ${i + 1}`} options={[...settings.providers]} value={provider}
-                  onChange={(e) => setDraft({ ...draft, rank: draft.rank.map((p, j) => (j === i ? (e.target as HTMLInputElement).value : p)) })} />
+                  onChange={(e) => setDraft({ ...draft, rank: draft.rank.map((p, j) => (j === i ? e.target.value : p)) })} />
               ))}
             </div>
             <Select label="Default priority" options={[...settings.priorities]} value={draft.priority}
-              onChange={(e) => setDraft({ ...draft, priority: (e.target as HTMLInputElement).value })} />
+              onChange={(e) => setDraft({ ...draft, priority: e.target.value })} />
             <Checkbox testId="execution-frontier-advisor" checked={draft.advisor}
               label="frontier advisor — an advisor may use the frontier row even when the main model is a lower tier"
               onChange={() => setDraft({ ...draft, advisor: !draft.advisor })} />
@@ -1710,12 +1710,12 @@ function ExecutionTableCard({ settings, say, onSaved, edit }: {
             {draft.map((d, i) => (
               <div key={d.key} data-testid={`execution-row-${d.key}`}
                 style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(110px, 1fr))', gap: 8, alignItems: 'end', paddingBottom: 8, borderBottom: '1px solid var(--border-default)' }}>
-                <Select label="Provider" options={settings.providers.map((p) => p.value)} value={d.provider} onChange={(e) => update(i, { provider: (e.target as HTMLInputElement).value })} />
-                <Select label="Tier" options={[...settings.tiers]} value={d.tier} onChange={(e) => update(i, { tier: (e.target as HTMLInputElement).value })} />
-                <Input label="Model" mono value={d.model} onChange={(e) => update(i, { model: (e.target as HTMLInputElement).value })} placeholder="alias or model id" />
-                <Input label="Effort" mono value={d.effort} onChange={(e) => update(i, { effort: (e.target as HTMLInputElement).value })} placeholder="high" />
-                <Input label="Price in" mono value={d.price_in} onChange={(e) => update(i, { price_in: (e.target as HTMLInputElement).value })} placeholder="USD / MTok" />
-                <Input label="Price out" mono value={d.price_out} onChange={(e) => update(i, { price_out: (e.target as HTMLInputElement).value })} placeholder="USD / MTok" />
+                <Select label="Provider" options={settings.providers.map((p) => p.value)} value={d.provider} onChange={(e) => update(i, { provider: e.target.value })} />
+                <Select label="Tier" options={[...settings.tiers]} value={d.tier} onChange={(e) => update(i, { tier: e.target.value })} />
+                <Input label="Model" mono value={d.model} onChange={(e) => update(i, { model: e.target.value })} placeholder="alias or model id" />
+                <Input label="Effort" mono value={d.effort} onChange={(e) => update(i, { effort: e.target.value })} placeholder="high" />
+                <Input label="Price in" mono value={d.price_in} onChange={(e) => update(i, { price_in: e.target.value })} placeholder="USD / MTok" />
+                <Input label="Price out" mono value={d.price_out} onChange={(e) => update(i, { price_out: e.target.value })} placeholder="USD / MTok" />
                 <Button variant="ghost" size="sm" onClick={() => setDraft(draft.filter((_, j) => j !== i))}>Remove</Button>
               </div>
             ))}
@@ -1806,9 +1806,9 @@ function NewWorkspaceForm({ baseDir, say, onCreated, edit }: {
   return (
     <Card style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
       <span style={settingsCardLabel}>add a workspace</span>
-      <Select label="Mode" options={modeOptions} value={mode} onChange={(e) => setMode((e.target as HTMLInputElement).value)} />
+      <Select label="Mode" options={modeOptions} value={mode} onChange={(e) => setMode(e.target.value)} />
       <p style={{ margin: 0, fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>{modeHint}</p>
-      <Input label="Name" value={name} onChange={(e) => setName((e.target as HTMLInputElement).value)}
+      <Input label="Name" value={name} onChange={(e) => setName(e.target.value)}
         placeholder="letters, digits, - _ . — safe as a directory and a repo name" />
       {/* ADR 0082 決定1: 規約導出の2モードは着地先を人間に一度も見せずに決めていた。
           基点は一覧が返し、名前は区切り文字を含まない検証を既に通っているので、
@@ -1822,14 +1822,14 @@ function NewWorkspaceForm({ baseDir, say, onCreated, edit }: {
         </p>
       )}
       {mode === 'clone' && (
-        <Input label="Repository" value={repo} onChange={(e) => setRepo((e.target as HTMLInputElement).value)}
+        <Input label="Repository" value={repo} onChange={(e) => setRepo(e.target.value)}
           placeholder="anything git clone accepts — recorded on the entry" />
       )}
       {mode === 'register' && (
-        <Input label="Path" value={path} onChange={(e) => setPath((e.target as HTMLInputElement).value)}
+        <Input label="Path" value={path} onChange={(e) => setPath(e.target.value)}
           placeholder="an existing checkout on this host" />
       )}
-      <Input label="Notes" value={notes} onChange={(e) => setNotes((e.target as HTMLInputElement).value)}
+      <Input label="Notes" value={notes} onChange={(e) => setNotes(e.target.value)}
         placeholder="setup hints for humans — optional" />
       <Checkbox label="protected — changes here always need human approval" checked={prot} onChange={() => setProt(!prot)} />
       <EditActions ok={ok} busy={busy} saveLabel="Add workspace — commits to the registry"
@@ -1887,7 +1887,7 @@ function NewAgentForm({ authorityProfiles, providerOptions, hostSkills, hostSkil
   return (
     <Card style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
       <span style={settingsCardLabel}>add an agent</span>
-      <Input label="Name" value={name} onChange={(e) => setName((e.target as HTMLInputElement).value)}
+      <Input label="Name" value={name} onChange={(e) => setName(e.target.value)}
         placeholder="letters, digits, - _ . — becomes agents/<name>.md, not renameable later" />
       <AgentFields draft={draft} set={set} authorityOptions={authorityCreateOptions}
         providerOptions={providerOptions}
@@ -1929,7 +1929,7 @@ function NewProfileForm({ agentNames, workspaceNames, say, onCreated, edit }: {
   return (
     <Card style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
       <span style={settingsCardLabel}>add an authority profile</span>
-      <Input label="Name" value={name} onChange={(e) => setName((e.target as HTMLInputElement).value)}
+      <Input label="Name" value={name} onChange={(e) => setName(e.target.value)}
         placeholder="letters, digits, - _ . — becomes authority/<name>.yaml, not renameable later" />
       <ProfileFields
         agentNames={agentNames} workspaceNames={workspaceNames}

@@ -18,7 +18,8 @@ spec — it is the source of truth; this skill is the workflow around it.
 Unless the user explicitly asks to promote, every check is **throwaway**:
 
 1. Write `e2e/<name>.scratch.spec.ts` (`.scratch.spec.ts` is `.gitignore`d — it never
-   gets committed).
+   gets committed). In a Claude Code worktree, a `WorktreeRemove` hook copies it to the
+   main checkout's `e2e/` before the worktree is deleted.
 2. Import from `./fixtures.js`, boot with `boot(opts)`, injecting only the seams the
    screen needs (`hostSkills`, `agentAdmin`, `workspaceAdmin`, …). See
    `tests/harness.ts` `BootOptions` for the full seam list.

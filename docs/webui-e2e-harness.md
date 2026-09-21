@@ -14,6 +14,9 @@ Playwright でこの確認まで担う(ADR 0029)。この doc は、その確認
 
 - `e2e/*.spec.ts` — **昇格済みスモーク**。git 管理し、CI(の e2e job)で回す恒久資産。
 - `e2e/*.scratch.spec.ts` — **使い捨ての突発確認**。`.gitignore` 済み。資産にしない。
+  Claude Code の worktree で書いたものは、worktree 削除の直前に `WorktreeRemove` フック
+  (`scripts/rescue-scratch-e2e.sh`)が本体 checkout の `e2e/` へ退避する。同名で中身が違えば
+  `<name>.<worktree名>.scratch.spec.ts` として置く。
 
 `npm run e2e`(= `playwright test`) は昇格済みスモークだけを実行する。scratch は
 `npm run e2e:scratch -- <file>` で明示的に実行する。昇格は下記の条件を満たしたうえで、

@@ -132,7 +132,7 @@ function TpQuestionItemPicker({ item, value, locked, onChange, translated }: {
         )}
         {locked ? null : override
           ? <div style={{ display: 'flex', gap: 6, alignItems: 'flex-end' }}>
-              <Input multiline rows={2} placeholder="override answer — free text" value={overrideText} onChange={(e) => setOverrideText((e.target as HTMLInputElement).value)} style={{ flex: 1 }} />
+              <Input multiline rows={2} placeholder="override answer — free text" value={overrideText} onChange={(e) => setOverrideText(e.target.value)} style={{ flex: 1 }} />
               <Button variant="secondary" size="sm" disabled={!overrideText.trim()} onClick={() => { onChange(overrideText.trim()); setOverride(false); setOverrideText(''); }}>Set</Button>
             </div>
           : <button onClick={() => setOverride(true)} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', fontSize: 'var(--text-xs)', cursor: 'pointer', textAlign: 'left', padding: '2px 0' }}>override with free text…</button>}
@@ -303,7 +303,7 @@ function TpScratchpad({ lines, onAdd, onRemove }: {
             </div>
           ))}
           <div style={{ display: 'flex', gap: 6, alignItems: 'flex-end' }}>
-            <Input multiline rows={1} placeholder="jot the irritation — triaged at commit" value={draft} onChange={(e) => setDraft((e.target as HTMLInputElement).value)} style={{ flex: 1 }} />
+            <Input multiline rows={1} placeholder="jot the irritation — triaged at commit" value={draft} onChange={(e) => setDraft(e.target.value)} style={{ flex: 1 }} />
             <Button variant="secondary" size="sm" disabled={!draft.trim()} onClick={add}>Add</Button>
           </div>
         </div>
@@ -742,7 +742,7 @@ function TriageScreen({ data, onCommit, loadHandoff, onAnswer, onObject, onScrat
               )}
               {objecting === k && (
                 <div style={{ padding: '10px 12px', background: 'var(--coral-1)', display: 'flex', gap: 8, alignItems: 'flex-end' }}>
-                  <Input multiline rows={2} placeholder="direction — steering, not rollback" value={draft} onChange={(e) => setDraft((e.target as HTMLInputElement).value)} style={{ flex: 1 }} />
+                  <Input multiline rows={2} placeholder="direction — steering, not rollback" value={draft} onChange={(e) => setDraft(e.target.value)} style={{ flex: 1 }} />
                   <Button variant="danger" size="sm" disabled={!draft.trim()} onClick={async () => {
                     // the annotation is persisted the moment it is raised
                     try { await onObject(l, draft); } catch { return; }

@@ -16,7 +16,7 @@ export interface InputProps {
   placeholder?: string;
   rows?: number;
   disabled?: boolean;
-  onChange?: (e: React.ChangeEvent) => void;
+  onChange?: (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => void;
   style?: React.CSSProperties;
 }
 export declare function Input(props: InputProps): JSX.Element;
