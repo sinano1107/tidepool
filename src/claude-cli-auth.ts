@@ -107,10 +107,8 @@ async function runProbe(
   if (isCliAuthFailureEnvelope(envelope)) {
     return { status: "unauthorized", reason: "API returned 401" };
   }
-  // 予算キャップは呼び出し完了後に判定されるため、認証が起きたか否かは何も語らない —
-  // 「認証できなかった」でも「試す前に止まった」でもなく「判定を返す前にキャップへ
-  // 当たった」。一般の unknown と区別できる文言にして解除拒否(409)の理由が追える
-  // ようにする(issue #466、issue #737)
+  // 予算キャップは呼び出し完了後に判定されるため、認証が起きたか否かは何も語らない。
+  // 一般の unknown と区別できる文言にして解除拒否(409)の理由が追えるようにする(issue #466、issue #737)
   if (isCliAuthBudgetCapEnvelope(envelope)) {
     return {
       status: "unknown",
