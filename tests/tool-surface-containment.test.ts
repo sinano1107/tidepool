@@ -135,7 +135,7 @@ it("ツール面がずれた Claude Harness は pickup が止まり、確認 que
   expect(t.worker.started).toEqual([]);
   // 既存の器のまま: 1択の確認型、盤面(Tidepool)名義、停止は Harness 資源だけ
   expect(question.question_items[0].options).toEqual(["repaired by hand"]);
-  expect(question.question_quarantine_harness).toBe("claude-code");
+  expect(question).toMatchObject({ question_quarantine_kind: "harnessContainment", question_quarantine_value: "claude-code" });
   expect(question.purpose).toContain("CronCreate");
 });
 

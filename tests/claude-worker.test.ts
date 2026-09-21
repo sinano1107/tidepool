@@ -77,13 +77,8 @@ function makeTask(
     question_pending_merge_pr: null,
     question_pending_local_merge_task_id: null,
     question_pending_pr_promotion_task_id: null,
-    question_quarantine_workspace: null,
-    question_quarantine_agent: null,
-    question_quarantine_sandbox: null,
-    question_quarantine_registry: null,
-    question_quarantine_teardown: null,
-    question_quarantine_provider_auth: null,
-    question_quarantine_harness: null,
+    question_quarantine_kind: null,
+    question_quarantine_value: null,
     question_cli_auth_expiry_warning: null,
     github_issue_number: null,
     created_at: "2026-07-08T00:00:00.000Z",
@@ -367,7 +362,7 @@ describe("ClaudeCodeWorker", () => {
     expect(calls).toEqual([]);
     expect(workspaceNeedsHuman(db, "ghost")).toBe(true);
     const question = listBoard(db).find((t) => t.type === "question");
-    expect(question?.question_quarantine_workspace).toBe("ghost");
+    expect(question).toMatchObject({ question_quarantine_kind: "workspace", question_quarantine_value: "ghost" });
   });
 
   const NAVIGATOR_MD = `---\nname: navigator\nversion: 1.0.0\nauthority: standard\nprovider: anthropic\nskills:\n  - "*"\ndescription: Navigation specialist\n---\nYou are Navigator, the specialist.\n`;
@@ -397,7 +392,7 @@ describe("ClaudeCodeWorker", () => {
     expect(calls).toEqual([]);
     expect(agentNeedsHuman(db, "ghost")).toBe(true);
     const question = listBoard(db).find((t) => t.type === "question");
-    expect(question?.question_quarantine_agent).toBe("ghost");
+    expect(question).toMatchObject({ question_quarantine_kind: "agent", question_quarantine_value: "ghost" });
   });
 
   it("system prompt に roster を push する: assignable_to(既定は \"*\")を解決した registry 全体が「名前 — description」で並ぶ(issue #43 / ADR 0014)", async () => {
@@ -1316,7 +1311,7 @@ describe("ClaudeCodeWorker", () => {
   const initLine = (tools: string[], mcpServers: unknown[] = []) =>
     `${JSON.stringify({ type: "system", subtype: "init", tools, mcp_servers: mcpServers })}\n`;
   const containmentQuestion = (db: ReturnType<typeof openDb>) =>
-    listBoard(db).find((t) => t.type === "question" && t.question_quarantine_sandbox !== null);
+    listBoard(db).find((t) => t.type === "question" && t.question_quarantine_kind === "containment");
 
   it("宣言どおりの init 行なら何も起きない — 封じ込めの question は立たない", async () => {
     const { start, stdout, db } = await makeWorker();
@@ -3403,7 +3398,7 @@ You are Kipper, the tidepool board's Kimi work agent.
     expect(questions.map((task) => task.title)).toEqual([
       "moonshot authentication is unavailable — pickup of moonshot-speaking agents is stopped",
     ]);
-    expect(questions[0]?.question_quarantine_provider_auth).toBe("moonshot");
+    expect(questions[0]).toMatchObject({ question_quarantine_kind: "providerAuth", question_quarantine_value: "moonshot" });
     expect(boardHalts(db)).toEqual([]);
   });
 });

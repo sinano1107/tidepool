@@ -26,6 +26,6 @@ describe("resolveOrQuarantine", () => {
     expect(resolved).toBeUndefined();
     expect(workspaceNeedsHuman(db, "ghost")).toBe(true);
     const question = listBoard(db).find((t) => t.type === "question");
-    expect(question?.question_quarantine_workspace).toBe("ghost");
+    expect(question).toMatchObject({ question_quarantine_kind: "workspace", question_quarantine_value: "ghost" });
   });
 });

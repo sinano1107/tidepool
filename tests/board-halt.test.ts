@@ -5,6 +5,7 @@ import { openDb } from "../src/db.js";
 import { quarantineFailedTeardown } from "../src/failed-teardown.js";
 import { setPaused } from "../src/pause.js";
 import { quarantineRegistryReachability } from "../src/registry-reachability.js";
+import { answerQuestion, getTask, listBoard } from "../src/tasks.js";
 import { reportThrottle } from "../src/throttle.js";
 import { startTriage } from "../src/triage.js";
 
@@ -41,6 +42,20 @@ describe("boardHalts は盤面全体の停止を1つの順序つき列挙で答�
       "registryReachability",
       "throttle",
     ]);
+  });
+
+  it("落ちた後始末が2件なら確認型 question は2枚立ち、片方に答えても残りが開いている間は停止のまま(ADR 0112 決定2)", () => {
+    const db = openDb(":memory:");
+    quarantineFailedTeardown(db, "task-1", new Error("resolve exploded"), NOW);
+    quarantineFailedTeardown(db, "task-2", new Error("resolve exploded"), NOW);
+    const [first, second, ...rest] = listBoard(db).filter((t) => t.type === "question");
+    expect(rest).toEqual([]);
+
+    answerQuestion(db, getTask(db, first!.id)!, ["repaired by hand"], NOW);
+    expect(boardHalts(db)).toEqual([{ kind: "failedTeardown" }]);
+
+    answerQuestion(db, getTask(db, second!.id)!, ["repaired by hand"], NOW);
+    expect(boardHalts(db)).toEqual([]);
   });
 
   it("throttle entry は throttled でなくても再観測中なら存在し、鮮度は throttle だけが運ぶ", () => {

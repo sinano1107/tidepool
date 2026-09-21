@@ -238,7 +238,7 @@ it("追いつき merge が合わなければ PR 昇格失敗 question を立て�
     purpose: expect.stringContaining("does not merge cleanly"),
   });
   expect(
-    (await questions(t)).filter((q: any) => q.question_quarantine_workspace !== null),
+    (await questions(t)).filter((q: any) => q.question_quarantine_kind === "workspace"),
   ).toEqual([]);
 
   // 人間が衝突する行を保護ブランチと同じ内容に直す。履歴はまだ未収束なので、retry は
@@ -281,7 +281,7 @@ it("追いつき merge が合わなければ PR 昇格失敗 question を立て�
 
   await completeViaMcp(t, occupant.id);
   expect(
-    (await questions(t)).filter((q: any) => q.question_quarantine_workspace !== null),
+    (await questions(t)).filter((q: any) => q.question_quarantine_kind === "workspace"),
   ).toEqual([]);
 });
 
@@ -309,7 +309,7 @@ it("追いつきの git 道具が壊れた失敗を conflict と偽らず PR 昇
   expect(failure.purpose).not.toContain("does not merge cleanly");
   expect(failure.purpose).not.toContain("conflict");
   expect(
-    (await questions(t)).filter((q: any) => q.question_quarantine_workspace !== null),
+    (await questions(t)).filter((q: any) => q.question_quarantine_kind === "workspace"),
   ).toEqual([]);
 });
 
@@ -337,7 +337,7 @@ it("squash merge 後に同じ行が進んだ祖先へ修理が戻っても、mer
   expect(failure.purpose).toContain("merge-backed repair work");
   expect(failure.purpose).toContain("still has content to land");
   expect(
-    (await questions(t)).filter((q: any) => q.question_quarantine_workspace !== null),
+    (await questions(t)).filter((q: any) => q.question_quarantine_kind === "workspace"),
   ).toEqual([]);
 });
 

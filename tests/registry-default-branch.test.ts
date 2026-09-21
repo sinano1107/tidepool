@@ -43,7 +43,7 @@ describe("guardRegistryDefaultBranch (ADR 0020 part 2)", () => {
     expect(workspaceNeedsHuman(db, "registry")).toBe(true);
     // the existing quarantine surface: a 1-choice Confirmation question stands
     const question = listBoard(db).find(
-      (task) => task.question_quarantine_workspace === "registry",
+      (task) => (task.question_quarantine_kind === "workspace" && task.question_quarantine_value === "registry"),
     );
     expect(question?.title).toContain("registry");
   });

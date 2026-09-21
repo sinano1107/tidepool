@@ -1,9 +1,7 @@
 import { rm, writeFile } from "node:fs/promises";
 import { afterEach, expect, it } from "vitest";
-import {
-  FAILED_TEARDOWN_QUESTION_TITLE,
-  quarantineFailedTeardown,
-} from "../src/failed-teardown.js";
+import { quarantineFailedTeardown } from "../src/failed-teardown.js";
+import { FAILED_TEARDOWN_QUESTION_TITLE } from "../src/quarantine.js";
 import { markTeardown } from "../src/teardown.js";
 import { FakeContainerRuntime } from "./fakes.js";
 import {

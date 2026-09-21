@@ -1,9 +1,7 @@
-import { openContainmentQuestion } from "./containment.js";
 import type { Db } from "./db.js";
-import { openFailedTeardownQuestion } from "./failed-teardown.js";
 import type { HaltKind } from "./halt-kind.js";
 import { isPaused } from "./pause.js";
-import { openRegistryReachabilityQuestion } from "./registry-reachability.js";
+import { isQuarantineOpen, openQuarantines } from "./quarantine.js";
 import { getThrottleState } from "./throttle.js";
 import { activeTriageSession } from "./triage.js";
 
@@ -60,9 +58,10 @@ export function boardHalts(
   const halts: BoardHalt[] = [];
   if (activeTriageSession(db)) halts.push({ kind: "triage" });
   if (isPaused(db)) halts.push({ kind: "pause" });
-  if (openContainmentQuestion(db)) halts.push({ kind: "containment" });
-  if (openFailedTeardownQuestion(db)) halts.push({ kind: "failedTeardown" });
-  if (openRegistryReachabilityQuestion(db)) halts.push({ kind: "registryReachability" });
+  if (isQuarantineOpen(db, "containment", null)) halts.push({ kind: "containment" });
+  // 後始末のタスクごとに1枚。1枚でも開いていれば停止(ADR 0137 Consequences)
+  if (openQuarantines(db, "failedTeardown").length > 0) halts.push({ kind: "failedTeardown" });
+  if (isQuarantineOpen(db, "registryReachability", null)) halts.push({ kind: "registryReachability" });
   const throttle = getThrottleState(db);
   const revalidating = throttleRevalidating();
   if (throttle.throttled || revalidating) {

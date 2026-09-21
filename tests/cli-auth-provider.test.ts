@@ -19,7 +19,7 @@ describe("quarantineCliAuthForProvider(issue #454 / ADR 0098)", () => {
     expect(question?.title).toBe(
       "moonshot authentication is unavailable — pickup of moonshot-speaking agents is stopped",
     );
-    expect(question?.question_quarantine_provider_auth).toBe("moonshot");
+    expect(question).toMatchObject({ question_quarantine_kind: "providerAuth", question_quarantine_value: "moonshot" });
     expect(question?.question_items?.[0]?.options).toEqual(["authentication restored"]);
     expect(question?.question_items?.[0]?.recommendation).toBe("authentication restored");
     // 修理案内は provider ごとの網羅マップから来る — moonshot にはキーファイルの案内
@@ -45,7 +45,7 @@ describe("quarantineCliAuthForProvider(issue #454 / ADR 0098)", () => {
     expect(question?.title).toBe(
       "anthropic authentication is unavailable — pickup of anthropic-speaking agents is stopped",
     );
-    expect(question?.question_quarantine_provider_auth).toBe("anthropic");
+    expect(question).toMatchObject({ question_quarantine_kind: "providerAuth", question_quarantine_value: "anthropic" });
     expect(question?.purpose).toContain("claude setup-token");
     expect(boardHalts(db)).toEqual([]);
   });

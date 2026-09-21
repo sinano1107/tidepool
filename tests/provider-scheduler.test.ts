@@ -219,7 +219,7 @@ it("OpenAI usage が観測不能なら question を立てず OpenAI だけ fail-
   const queue = (await api(t.baseUrl, "GET", "/api/queue")).json.tasks as any[];
   expect(queue.find((task) => task.id === codex.id)?.status).toBe("skipped");
   const tasks = (await api(t.baseUrl, "GET", "/api/tasks")).json as any[];
-  expect(tasks.filter((task) => task.question_quarantine_provider_auth === "openai")).toEqual([]);
+  expect(tasks.filter((task) => (task.question_quarantine_kind === "providerAuth" && task.question_quarantine_value === "openai"))).toEqual([]);
   const openai = (await api(t.baseUrl, "GET", "/api/pause")).json.providerUsage.find(
     (usage: any) => usage.provider === "openai",
   );

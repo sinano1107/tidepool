@@ -402,7 +402,7 @@ it("open PR 更新は盤面が動かした remote ref だけを再基準化す�
   releaseWorkspace(db, workspace, task, clock.now());
 
   const quarantine = listBoard(db).find(
-    (candidate) => candidate.question_quarantine_workspace === workspace.name,
+    (candidate) => (candidate.question_quarantine_kind === "workspace" && candidate.question_quarantine_value === workspace.name),
   );
   expect(quarantine?.purpose).toContain("refs/tags/worker-created-tag");
   expect(quarantine?.purpose).not.toContain(`refs/remotes/origin/task/${task.id}`);
@@ -569,7 +569,8 @@ it("再発火時の registry drift は閉じた失敗を返し、既存の failu
   expect(listBoard(db)).toContainEqual(
     expect.objectContaining({
       status: "todo",
-      question_quarantine_workspace: workspace.name,
+      question_quarantine_kind: "workspace",
+      question_quarantine_value: workspace.name,
     }),
   );
   expect(github.requests).toHaveLength(1);

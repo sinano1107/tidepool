@@ -80,43 +80,14 @@ const TASKS_TABLE_DDL = `
       -- board-internal only (ADR 0120 決定4 / issue #620): 提案を運ぶ question の種別つき提案(JSON)と pin。
       -- 盤面の提案 verb だけが書き、この列を持つ question は親を塞がない付帯子。
       question_proposal TEXT,
-      -- system-internal only (issue #21): the workspace name a quarantine
-      -- Confirmation question stands in for — set only by quarantineWorkspace,
-      -- read only to dedup a re-fire onto the same open question. Never set
-      -- via MCP or the JSON API.
-      question_quarantine_workspace TEXT,
-      -- system-internal only (ADR 0012 / issue #36): the agent name a
-      -- quarantine Confirmation question stands in for — set only by
-      -- quarantineAgent, the agent-name generalization of the workspace
-      -- quarantine above. Never set via MCP or the JSON API.
-      question_quarantine_agent TEXT,
-      -- system-internal only (issue #60 / ADR 0033): 1 on the single
-      -- Confirmation question that stands in for the host's worker sandbox
-      -- being unusable. Unlike the workspace/agent quarantines above there is
-      -- no resource *name* to key on — the sandbox is a property of the host
-      -- the board runs on, so the marker is a flag. Set only by
-      -- quarantineSandbox; never via MCP or the JSON API.
-      question_quarantine_sandbox INTEGER,
-      -- system-internal only (ADR 0052): 1 on the single Confirmation
-      -- question standing in for registry remote reachability. Board-wide,
-      -- but distinct from worker containment; never set via MCP or JSON API.
-      question_quarantine_registry INTEGER,
-      -- system-internal only (ADR 0112): the id of the task whose teardown
-      -- threw. Borrows the quarantine family's mechanism only — what became
-      -- unrunnable is the board's own code, not a resource — so it names a
-      -- task rather than a resource. Set only by quarantineFailedTeardown;
-      -- never via MCP or the JSON API.
-      question_quarantine_teardown TEXT,
-      -- system-internal only (ADR 0097 決定2 / issue #446): the provider
-      -- name a provider-scoped authentication quarantine Confirmation
-      -- question stands in for. Resource-scoped — only that provider's
-      -- agents stop, the board's own provider included (ADR 0098 決定6).
-      -- Never set via MCP or JSON API.
-      question_quarantine_provider_auth TEXT,
-      -- system-internal only (ADR 0098): the canonical Harness whose
-      -- containment capability is unavailable. Resource-scoped, never a
-      -- board-wide halt; set only by harness-containment.ts.
-      question_quarantine_harness TEXT,
+      -- system-internal only (ADR 0137 決定2): the Quarantine kind a
+      -- Confirmation question stands in for, and the value it is keyed on — a
+      -- workspace name, agent name, Provider, Harness, or the id of the task
+      -- whose teardown threw; NULL for a board-wide kind that names nothing.
+      -- Set only by the Quarantine module's registration; never via MCP or the
+      -- JSON API.
+      question_quarantine_kind TEXT,
+      question_quarantine_value TEXT,
       -- system-internal only (ADR 0075): the configured expiry epoch for
       -- which this advance warning was created. It never halts pickup.
       question_cli_auth_expiry_warning INTEGER,
@@ -663,10 +634,6 @@ export function openDb(path: string): Db {
     "question_pending_child",
     "question_pending_local_merge_task_id",
     "question_pending_pr_promotion_task_id",
-    "question_quarantine_workspace",
-    "question_quarantine_agent",
-    "question_quarantine_provider_auth",
-    "question_quarantine_harness",
     "workspace",
     // ADR 0109 決定5: 後始末の未了は再起動をまたぐ事実である。最終 verb が着地した
     // 時刻を持ち、後始末が完走した時点で null に戻る —— in-memory の callback は
@@ -685,8 +652,6 @@ export function openDb(path: string): Db {
     "pr_number",
     "question_pending_merge_pr",
     "github_issue_number",
-    "question_quarantine_sandbox",
-    "question_quarantine_registry",
     "question_cli_auth_expiry_warning",
   ]) {
     if (!cols.includes(col)) db.exec(`ALTER TABLE tasks ADD COLUMN ${col} INTEGER`);

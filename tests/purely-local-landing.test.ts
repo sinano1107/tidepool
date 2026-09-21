@@ -39,7 +39,7 @@ async function landingQuestionFor(board: Tidepool, taskId: string): Promise<any>
 /** 隔離の確認 question(CONTEXT.md の Quarantine)の行、無ければ undefined。 */
 async function quarantineQuestion(board: Tidepool): Promise<any> {
   return (await questions(board)).find(
-    (candidate) => candidate.question_quarantine_workspace !== null,
+    (candidate) => candidate.question_quarantine_kind === "workspace",
   );
 }
 
@@ -299,7 +299,7 @@ it("保護ブランチが帯域外で進んで fast-forward できないと work
   expect(
     board.find(
       (candidate: any) =>
-        candidate.type === "question" && candidate.question_quarantine_workspace === "sandbox",
+        candidate.type === "question" && (candidate.question_quarantine_kind === "workspace" && candidate.question_quarantine_value === "sandbox"),
     ),
   ).toBeDefined();
 });
@@ -329,7 +329,7 @@ it("保護ブランチが帯域外で巻き戻されると、ff できる位置�
   expect(answered.status).toBe(409);
   expect(git(workspace.path, "rev-parse", "refs/heads/main")).toBe(rolledBackTo);
   expect((await api(t.baseUrl, "GET", `/api/tasks/${question.id}`)).json.status).toBe("todo");
-  expect((await quarantineQuestion(t))?.question_quarantine_workspace).toBe("sandbox");
+  expect(await quarantineQuestion(t)).toMatchObject({ question_quarantine_kind: "workspace", question_quarantine_value: "sandbox" });
 });
 
 // ADR 0103 決定1 の fail-closed(ADR 0064 決定6 と同じ姿勢): 記録の欠落に「検査を飛ばす」
@@ -369,7 +369,7 @@ it("記録に保護ブランチの行が無ければ、位置が動いていな�
   expect(answered.status).toBe(409);
   expect(answered.json.error).toContain("no recorded position");
   expect((await api(t.baseUrl, "GET", `/api/tasks/${question.id}`)).json.status).toBe("todo");
-  expect((await quarantineQuestion(t))?.question_quarantine_workspace).toBe("sandbox");
+  expect(await quarantineQuestion(t)).toMatchObject({ question_quarantine_kind: "workspace", question_quarantine_value: "sandbox" });
 });
 
 it("着地 question に hold と答えると保護ブランチを動かさず決着し、再提示しない", async () => {
