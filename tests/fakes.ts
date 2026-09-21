@@ -172,7 +172,7 @@ export class FakeClock implements Clock {
       if (!due) break;
       this.t = due.nextAt;
       if (due.repeat) due.nextAt += due.ms;
-      else due.cancelled = true; // one-shot: fired, never due again
+      else due.cancelled = true;
       due.fn();
       // let async effects of the tick settle before firing the next one
       await new Promise((resolve) => setImmediate(resolve));
