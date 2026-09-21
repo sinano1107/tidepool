@@ -635,7 +635,12 @@ function respondToDeletionFailure(res: Response, err: unknown): void {
     // 危険な値の 409 と同じ `confirm_required` の往復に乗る(WebUI 側の
     // `useDangerousSave` がそのまま使える)が、`dangerous_values` は載せない ——
     // 削除は「権限を広げる値」ではないので、その列挙に紛れ込ませない
-    res.status(409).json({ error: err.message, confirm_required: true });
+    // WebUI は3つの削除の扉を同じ確認で読む —— 本文は1つ、照らす行は3つ。欄の綴りは
+    // 字面の satisfies(excess property 検査が効く)が1本目で捕まえる
+    const body = { error: err.message, confirm_required: true } satisfies WireContract["DELETE /api/workspaces/:name 409"];
+    body satisfies WireContract["DELETE /api/agents/:name 409"];
+    body satisfies WireContract["DELETE /api/profiles/:name 409"];
+    res.status(409).json(body);
   } else if (err instanceof DeletionBlockedError) {
     // 409 だが `confirm_required` は立てない: 確認では買えず、参照が決着するまで
     // 状況が変わらない限り出し直しても通らない
@@ -844,7 +849,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
           confirm_required: true,
           live_checkout_signals: err.reasons,
           clone_landing: err.cloneLanding,
-        });
+        } satisfies WireContract["POST /api/workspaces 409"]);
       } else {
         res.status(502).json({ error: err instanceof Error ? err.message : String(err) });
       }
@@ -856,7 +861,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       res.status(503).json({ error: "workspace settings not configured" });
       return;
     }
-    res.json(workspaceAdmin.list());
+    res.json(workspaceAdmin.list() satisfies WireContract["GET /api/workspaces"]);
   });
 
   router.patch("/workspaces/:name", async (req, res) => {
@@ -889,7 +894,9 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
         // shows this 409's reasons in a dialog, and resends with confirm:
         // true once the human accepts — same round trip a direct API caller
         // gets, no client-side pre-judgment of danger (ADR 0027)
-        res.status(409).json({ error: err.message, confirm_required: true, dangerous_values: err.reasons });
+        res
+          .status(409)
+          .json({ error: err.message, confirm_required: true, dangerous_values: err.reasons } satisfies WireContract["PATCH /api/workspaces/:name 409"]);
       } else if (err instanceof RegistrySelfUnprotectError) {
         // 403, not 409: no resubmission can ever make this pass (ADR 0013)
         res.status(403).json({ error: err.message });
@@ -953,7 +960,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       await agentAdmin.create(parsed.data);
       // 静かな shadow は作らない(ADR 0117 決定2): 同名を拒まない代わりに、
       // 作成の扉が「組み込みを shadow した」ことを告げる。真のときだけ載せる
-      res.status(201).json(isBuiltInAgentName(parsed.data.name) ? { shadows_built_in: true } : {});
+      res.status(201).json((isBuiltInAgentName(parsed.data.name) ? { shadows_built_in: true } : {}) satisfies WireContract["POST /api/agents"]);
     } catch (err) {
       // same posture as /workspaces' create: the human's own synchronous
       // request fails fast on a bad input (400), anything else — including a
@@ -988,7 +995,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       agents: agentAdmin.list(),
       authorityProfiles: agentAdmin.authorityProfiles?.() ?? [],
       providers: PROVIDER_OPTIONS,
-    });
+    } satisfies WireContract["GET /api/agents"]);
   });
 
   // The skills picker's candidate source (issue #106 / ADR 0025 点4): the host's
@@ -1002,7 +1009,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   router.get("/skills", async (_req, res) => {
     const enumerated = hostSkills ? await hostSkills() : null;
     res.json(
-      enumerated === null ? { skills: [], degraded: true } : { skills: enumerated, degraded: false },
+      (enumerated === null ? { skills: [], degraded: true } : { skills: enumerated, degraded: false }) satisfies WireContract["GET /api/skills"],
     );
   });
 
@@ -1099,7 +1106,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       );
       // ADR 0087 決定4: 消えるのは registry エントリだけ —— 残る checkout の
       // 場所を応答が名指しする
-      res.json({ checkout });
+      res.json({ checkout } satisfies WireContract["DELETE /api/workspaces/:name"]);
     } catch (err) {
       if (err instanceof UnknownWorkspaceError) {
         res.status(404).json({ error: err.message });
@@ -1156,7 +1163,9 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       if (err instanceof InvalidAuthorityProfileNameError) {
         res.status(400).json({ error: err.message });
       } else if (err instanceof ProfileConfirmationRequiredError) {
-        res.status(409).json({ error: err.message, confirm_required: true, dangerous_values: err.reasons });
+        res
+          .status(409)
+          .json({ error: err.message, confirm_required: true, dangerous_values: err.reasons } satisfies WireContract["POST /api/profiles 409"]);
       } else {
         res.status(502).json({ error: err instanceof Error ? err.message : String(err) });
       }
@@ -1171,7 +1180,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       res.status(503).json({ error: "profile settings not configured" });
       return;
     }
-    res.json({ profiles: profileAdmin.list() });
+    res.json({ profiles: profileAdmin.list() } satisfies WireContract["GET /api/profiles"]);
   });
 
   router.patch("/profiles/:name", async (req, res) => {
@@ -1191,7 +1200,9 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       if (err instanceof UnknownAuthorityProfileError) {
         res.status(404).json({ error: err.message });
       } else if (err instanceof ProfileConfirmationRequiredError) {
-        res.status(409).json({ error: err.message, confirm_required: true, dangerous_values: err.reasons });
+        res
+          .status(409)
+          .json({ error: err.message, confirm_required: true, dangerous_values: err.reasons } satisfies WireContract["PATCH /api/profiles/:name 409"]);
       } else {
         res.status(502).json({ error: err instanceof Error ? err.message : String(err) });
       }
@@ -1522,7 +1533,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   // read path parallel to GET /api/tasks/:id/events surfacing worker_exited
   // usage, since translation calls aren't tied to any one task/worker session.
   router.get("/translate/usage", (_req, res) => {
-    res.json({ records: listTranslationUsage(db) });
+    res.json({ records: listTranslationUsage(db) } satisfies WireContract["GET /api/translate/usage"]);
   });
 
   // the decision log: events narrowed to human-facing kinds, oldest first,
@@ -1576,7 +1587,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   });
 
   router.get("/settings/quiet-hours", (_req, res) => {
-    res.json(getQuietHours(db));
+    res.json(getQuietHours(db) satisfies WireContract["GET /api/settings/quiet-hours"]);
   });
 
   router.post("/settings/quiet-hours", (req, res) => {
@@ -1586,7 +1597,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       return;
     }
     setQuietHours(db, parsed.data);
-    res.json(getQuietHours(db));
+    res.json(getQuietHours(db) satisfies WireContract["POST /api/settings/quiet-hours"]);
   });
 
   router.get("/settings/pace-offsets", (_req, res) => {
@@ -1610,7 +1621,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   });
 
   router.get("/settings/provider-pace-offsets", (_req, res) => {
-    res.json({ offsets: listProviderPaceOffsets(db) });
+    res.json({ offsets: listProviderPaceOffsets(db) } satisfies WireContract["GET /api/settings/provider-pace-offsets"]);
   });
 
   router.post("/settings/provider-pace-offsets", (req, res) => {
@@ -1628,7 +1639,12 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   // 選択肢(providers / tiers / priorities)もサーバ供給 —— WebUI が列挙を直書きして
   // drift しないため(/api/agents の providers と同じ配線)
   router.get("/settings/execution", (_req, res) => {
-    res.json({ ...readExecutionSettings(db), providers: PROVIDER_OPTIONS, tiers: TIERS, priorities: PRIORITIES });
+    res.json({
+      ...readExecutionSettings(db),
+      providers: PROVIDER_OPTIONS,
+      tiers: TIERS,
+      priorities: PRIORITIES,
+    } satisfies WireContract["GET /api/settings/execution"]);
   });
 
   // 1 リクエスト = 1 変更(行の upsert / 削除、frontier advisor、Provider 順位、優先
@@ -1647,7 +1663,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
 
   // spec #586 C / issue #592: spawn 注入のトークン上限。次の spawn から効くので再評価は無い
   router.get("/settings/memory", (_req, res) => {
-    res.json(readMemorySettings(db));
+    res.json(readMemorySettings(db) satisfies WireContract["GET /api/settings/memory"]);
   });
 
   // spec #586 F / issue #593: 記憶の一覧(candidate・無効化済み・影の定義も)。GET は盤面を変異させない
@@ -1660,7 +1676,9 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       return;
     }
     const { workspace, board_wide, ...filter } = parsed.data;
-    res.json({ entries: listMemoryEntries(db, { ...filter, scope: board_wide ? null : workspace }) });
+    res.json({
+      entries: listMemoryEntries(db, { ...filter, scope: board_wide ? null : workspace }),
+    } satisfies WireContract["GET /api/settings/memory/entries"]);
   });
 
   // 人間の書き込み(書き手 human、原文の言語は表示言語)と無効化。保存は翻訳 client に依存しない
@@ -1683,7 +1701,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     "/settings/memory",
     memoryWrite(memorySettingsChangeSchema, (change) => {
       changeMemorySettings(db, change, "webui", clock.now());
-      return readMemorySettings(db);
+      return readMemorySettings(db) satisfies WireContract["POST /api/settings/memory"];
     }),
   );
   router.post("/settings/memory/knowledge", memoryWrite(humanKnowledgeSchema, (input) => recordKnowledge(db, humanEntryInput(db, input), "webui", clock.now())));
@@ -1717,7 +1735,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   // (credential を書く扉を人間面に増やさない)。人間が打つコマンドは
   // 画面側が文言として持つ。
   router.get("/settings/github", (_req, res) => {
-    res.json({ loggedIn: githubLoggedIn(githubTokenFile) });
+    res.json({ loggedIn: githubLoggedIn(githubTokenFile) } satisfies WireContract["GET /api/settings/github"]);
   });
 
   router.get("/settings/display-language", (_req, res) => {
@@ -1731,7 +1749,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       return;
     }
     setDisplayLanguage(db, parsed.data.language);
-    res.json({ language: getDisplayLanguage(db) });
+    res.json({ language: getDisplayLanguage(db) } satisfies WireContract["POST /api/settings/display-language"]);
   });
 
   // Spend-down は pause と同じ「盤面状態」応答に同乗する — UI の露出面が同格

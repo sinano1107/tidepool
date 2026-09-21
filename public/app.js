@@ -983,7 +983,9 @@ function WorkspaceRecord({ ws, baseDir, say, onChanged, edit }) {
     if (prot !== !!ws.protected) body.protected = prot;
     if (!sameStrings(cmds, ws.review_allowed_commands ?? [])) body.review_allowed_commands = cmds;
     if (!sameStrings(domains, ws.allowed_domains ?? [])) body.allowed_domains = domains;
-    submit(`/api/workspaces/${encodeURIComponent(ws.name)}`, "PATCH", body, "updated", ws.name);
+    submit(async (confirm) => {
+      await api(`/api/workspaces/${encodeURIComponent(ws.name)}`, { ...body, ...confirm }, "PATCH");
+    }, "updated", ws.name);
   };
   return /* @__PURE__ */ React.createElement(Card, { style: { display: "flex", flexDirection: "column", gap: 14 } }, /* @__PURE__ */ React.createElement(RecordCardHead, { editing: open, onEdit: startEdit }, /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontWeight: 600, fontSize: "var(--text-sm)" } }, ws.name), ws.registrySelf && /* @__PURE__ */ React.createElement(Tag, { color: "tide", mono: true }, "registry"), ws.protected && /* @__PURE__ */ React.createElement(Tag, { color: "sun" }, "protected")), ws.registrySelf && /* @__PURE__ */ React.createElement("div", { style: { fontSize: "var(--text-xs)", color: "var(--text-muted)" } }, "the board's own registry clone \u2014 protection stays on"), !open && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(
     FieldRow,
@@ -1387,7 +1389,10 @@ function DeleteRecord({ section, sectionKey, name, say, onDeleted }) {
     // ダイアログの本文がそのまま資源ごとの説明である
     dialogLead: section.deleteLead,
     confirmLabel: "Delete",
-    successDetail: section.deleteDetail
+    confirmOf: (err) => apiErrorDetail(err, `DELETE /api/${sectionKey}/:name 409`)?.confirm_required ? { reasons: [] } : null
+  });
+  const remove = section.remove ?? (async (confirm) => {
+    await api(`/api/${sectionKey}/${encodeURIComponent(name)}`, confirm, "DELETE");
   });
   return /* @__PURE__ */ React.createElement(Card, null, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 } }, /* @__PURE__ */ React.createElement("p", { style: { margin: 0, fontSize: "var(--text-sm)", color: "var(--text-secondary)" } }, section.deleteNote), /* @__PURE__ */ React.createElement(
     Button,
@@ -1395,27 +1400,28 @@ function DeleteRecord({ section, sectionKey, name, say, onDeleted }) {
       variant: "danger",
       size: "sm",
       disabled: busy,
-      onClick: () => save(`/api/${sectionKey}/${encodeURIComponent(name)}`, "DELETE", {}, "deleted", name)
+      onClick: () => save((confirm) => remove(confirm, name), "deleted", name)
     },
     "Delete ",
     section.singular
   )), dialog);
 }
-function useDangerousSave(say, onDone, { noun, confirmKey, dialogTitle, dialogLead, successDetail, confirmLabel, dialogNote, failDetail, reasonsKey = "dangerous_values", labels = DANGEROUS_REASON_LABEL }) {
+function useDangerousSave(say, onDone, { noun, confirmKey, dialogTitle, dialogLead, confirmLabel, failDetail, labels = DANGEROUS_REASON_LABEL, confirmOf }) {
   const { Button } = window.TidepoolDesignSystem_8a0ead;
   const [busy, setBusy] = React.useState(false);
   const [confirm, setConfirm] = React.useState(null);
-  const save = async (path, method, body, verb, name) => {
+  const save = async (send, verb, name) => {
     const attempt = async (confirmed) => {
       setBusy(true);
       try {
-        const result = await api(path, confirmed ? { ...body, [confirmKey]: true } : body, method);
+        const detail = await send(confirmed ? { [confirmKey]: true } : {});
         setConfirm(null);
-        say("success", `${noun} ${verb} \u2014 committed to the registry`, successDetail ? successDetail(result, name) : name);
-        await onDone(result);
+        say("success", `${noun} ${verb} \u2014 committed to the registry`, detail || name);
+        await onDone();
       } catch (err) {
-        if (err instanceof ApiError && err.status === 409 && err.detail?.confirm_required) {
-          setConfirm({ reasons: err.detail[reasonsKey] ?? [], detail: err.detail, resend: () => attempt(true) });
+        const asked = confirmOf(err);
+        if (asked) {
+          setConfirm({ ...asked, resend: () => attempt(true) });
         } else {
           setConfirm(null);
           say("danger", `${noun} not ${verb}${failDetail ? ` \u2014 ${failDetail}` : ""}`, String(err.message || err));
@@ -1435,16 +1441,23 @@ function useDangerousSave(say, onDone, { noun, confirmKey, dialogTitle, dialogLe
     },
     /* @__PURE__ */ React.createElement("p", { style: { margin: "0 0 8px", fontSize: "var(--text-sm)" } }, dialogLead),
     /* @__PURE__ */ React.createElement("ul", { style: { margin: 0, paddingLeft: 18, fontSize: "var(--text-sm)", display: "flex", flexDirection: "column", gap: 6 } }, (confirm?.reasons ?? []).map((r) => /* @__PURE__ */ React.createElement("li", { key: r }, labels[r] ?? r))),
-    confirm && dialogNote?.(confirm.detail)
+    confirm?.note
   );
   return { busy, save, dialog };
 }
-function useProfileSave(say, onDone) {
+function dangerousValuesOf(key) {
+  return (err) => {
+    const detail = apiErrorDetail(err, key);
+    return detail?.confirm_required ? { reasons: detail.dangerous_values } : null;
+  };
+}
+function useProfileSave(say, onDone, conflict) {
   return useDangerousSave(say, onDone, {
     noun: "profile",
     confirmKey: "confirmDangerous",
     dialogTitle: "Save a profile with broad power?",
-    dialogLead: "This profile grants broad power. Review before saving:"
+    dialogLead: "This profile grants broad power. Review before saving:",
+    confirmOf: dangerousValuesOf(conflict)
   });
 }
 function useWorkspaceSave(say, onDone) {
@@ -1452,7 +1465,8 @@ function useWorkspaceSave(say, onDone) {
     noun: "workspace",
     confirmKey: "confirm",
     dialogTitle: "Save a change that widens what agents may do?",
-    dialogLead: "This change widens what agents may do here. Review before saving:"
+    dialogLead: "This change widens what agents may do here. Review before saving:",
+    confirmOf: dangerousValuesOf("PATCH /api/workspaces/:name 409")
   });
 }
 function ProfileRecord({ profile, agentNames, agentIcons, workspaceNames, say, onChanged, edit }) {
@@ -1466,7 +1480,7 @@ function ProfileRecord({ profile, agentNames, agentIcons, workspaceNames, say, o
   const { busy, save, dialog } = useProfileSave(say, async () => {
     edit.close();
     await onChanged();
-  });
+  }, "PATCH /api/profiles/:name 409");
   const changed = {
     guidance: guidance !== (profile.guidance ?? ""),
     assignable_to: !sameStrings(assignableTo, profile.assignable_to ?? []),
@@ -1487,7 +1501,9 @@ function ProfileRecord({ profile, agentNames, agentIcons, workspaceNames, say, o
     if (changed.assignable_to) body.assignable_to = assignableTo;
     if (changed.allowed_workspaces) body.allowed_workspaces = allowedWorkspaces;
     if (changed.merge) body.merge = merge;
-    save(`/api/profiles/${encodeURIComponent(profile.name)}`, "PATCH", body, "updated", profile.name);
+    save(async (confirm) => {
+      await api(`/api/profiles/${encodeURIComponent(profile.name)}`, { ...body, ...confirm }, "PATCH");
+    }, "updated", profile.name);
   };
   return /* @__PURE__ */ React.createElement(Card, { style: { display: "flex", flexDirection: "column", gap: 14 } }, /* @__PURE__ */ React.createElement(RecordCardHead, { editing: open, onEdit: startEdit }, /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontWeight: 600, fontSize: "var(--text-sm)" } }, profile.name)), !open && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(FieldRow, { label: "guidance", kind: profile.guidance ? "text" : "unset", value: profile.guidance ?? "", unsetLabel: "\u2014" }), /* @__PURE__ */ React.createElement(
     FieldRow,
@@ -1591,7 +1607,7 @@ function DisplayLanguageCard({ language, options, say, onSaved, edit }) {
   const save = async () => {
     setBusy(true);
     try {
-      const { language: saved } = await api("/api/settings/display-language", { language: draft });
+      const { language: saved } = await api("POST /api/settings/display-language", { body: { language: draft } });
       say("success", "display language saved", saved);
       edit.close();
       await onSaved();
@@ -1625,7 +1641,7 @@ function QuietHoursCard({ start, end, tz, say, onSaved, edit }) {
   const save = async () => {
     setBusy(true);
     try {
-      const saved = await api("/api/settings/quiet-hours", { start: draftStart, end: draftEnd });
+      const saved = await api("POST /api/settings/quiet-hours", { body: { start: draftStart, end: draftEnd } });
       say("success", "quiet hours saved", `${saved.start}\u2013${saved.end}`);
       edit.close();
       await onSaved();
@@ -1724,9 +1740,8 @@ function MemorySettingsCard({ settings, say, onSaved, edit }) {
   const save = async () => {
     setBusy(true);
     try {
-      const saved = await api("/api/settings/memory", {
-        injection_token_cap: Number(draft.trim()),
-        meta_review_period_days: Number(periodDraft.trim())
+      const saved = await api("POST /api/settings/memory", {
+        body: { injection_token_cap: Number(draft.trim()), meta_review_period_days: Number(periodDraft.trim()) }
       });
       say("success", "memory settings saved", `${saved.injection_token_cap} tokens \xB7 every ${saved.meta_review_period_days} days`);
       edit.close();
@@ -1759,13 +1774,13 @@ function MemoryEntriesCard({ workspaceNames, language, say, edit }) {
   const [entries, setEntries] = React.useState(null);
   const [translations, setTranslations] = React.useState({});
   const load = async () => {
-    const query = new URLSearchParams();
-    if (filter.workspace === "(board)") query.set("board_wide", "true");
-    else if (filter.workspace) query.set("workspace", filter.workspace);
-    if (filter.kind) query.set("kind", filter.kind);
-    if (filter.state) query.set("state", filter.state);
+    const query = {};
+    if (filter.workspace === "(board)") query.board_wide = "true";
+    else if (filter.workspace) query.workspace = filter.workspace;
+    if (filter.kind) query.kind = filter.kind;
+    if (filter.state) query.state = filter.state;
     try {
-      const loaded = (await api(`/api/settings/memory/entries?${query}`, void 0, "GET")).entries;
+      const loaded = (await api("GET /api/settings/memory/entries", { query })).entries;
       setEntries(loaded);
       if (language === "English") return;
       for (const entry of loaded.filter((e) => e.original === null)) {
@@ -1966,7 +1981,7 @@ function ExecutionDefaultsCard({ settings, say, onSaved, edit }) {
     {
       key: i,
       label: `Rank ${i + 1}`,
-      options: settings.providers,
+      options: [...settings.providers],
       value: provider,
       onChange: (e) => setDraft({ ...draft, rank: draft.rank.map((p, j) => j === i ? e.target.value : p) })
     }
@@ -1974,7 +1989,7 @@ function ExecutionDefaultsCard({ settings, say, onSaved, edit }) {
     Select,
     {
       label: "Default priority",
-      options: settings.priorities,
+      options: [...settings.priorities],
       value: draft.priority,
       onChange: (e) => setDraft({ ...draft, priority: e.target.value })
     }
@@ -2008,11 +2023,11 @@ function ExecutionTableCard({ settings, say, onSaved, edit }) {
   const [busy, setBusy] = React.useState(false);
   const current = new Map(settings.table.map((row) => [rowKey(row), row]));
   const toRow = (d) => ({ provider: d.provider, tier: d.tier, model: d.model.trim(), effort: d.effort.trim(), price_in: Number(d.price_in), price_out: Number(d.price_out) });
-  const same = (a, b) => a && b && a.tier === b.tier && a.effort === b.effort && a.price_in === b.price_in && a.price_out === b.price_out;
+  const same = (a, b) => a && a.tier === b.tier && a.effort === b.effort && a.price_in === b.price_in && a.price_out === b.price_out;
   const upserts = draft.map(toRow).filter((row) => !same(current.get(rowKey(row)), row));
   const deletes = [...current.values()].filter((row) => !draft.some((d) => rowKey(toRow(d)) === rowKey(row)));
   const dirty = upserts.length > 0 || deletes.length > 0;
-  const validPrice = (v) => /^\d+(\.\d+)?$/.test(String(v).trim());
+  const validPrice = (v) => /^\d+(\.\d+)?$/.test(v.trim());
   const ok = draft.every((d) => d.model.trim() && d.effort.trim() && validPrice(d.price_in) && validPrice(d.price_out)) && new Set(draft.map((d) => rowKey(toRow(d)))).size === draft.length;
   useDirtySignal(edit, open, dirty);
   const save = async () => {
@@ -2046,7 +2061,7 @@ function ExecutionTableCard({ settings, say, onSaved, edit }) {
       style: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(110px, 1fr))", gap: 8, alignItems: "end", paddingBottom: 8, borderBottom: "1px solid var(--border-default)" }
     },
     /* @__PURE__ */ React.createElement(Select, { label: "Provider", options: settings.providers.map((p) => p.value), value: d.provider, onChange: (e) => update(i, { provider: e.target.value }) }),
-    /* @__PURE__ */ React.createElement(Select, { label: "Tier", options: settings.tiers, value: d.tier, onChange: (e) => update(i, { tier: e.target.value }) }),
+    /* @__PURE__ */ React.createElement(Select, { label: "Tier", options: [...settings.tiers], value: d.tier, onChange: (e) => update(i, { tier: e.target.value }) }),
     /* @__PURE__ */ React.createElement(Input, { label: "Model", mono: true, value: d.model, onChange: (e) => update(i, { model: e.target.value }), placeholder: "alias or model id" }),
     /* @__PURE__ */ React.createElement(Input, { label: "Effort", mono: true, value: d.effort, onChange: (e) => update(i, { effort: e.target.value }), placeholder: "high" }),
     /* @__PURE__ */ React.createElement(Input, { label: "Price in", mono: true, value: d.price_in, onChange: (e) => update(i, { price_in: e.target.value }), placeholder: "USD / MTok" }),
@@ -2083,21 +2098,29 @@ function NewWorkspaceForm({ baseDir, say, onCreated, edit }) {
     confirmKey: "confirm",
     dialogTitle: "Register a checkout someone is working in?",
     dialogLead: "This path looks like a human's live development checkout:",
-    dialogNote: (detail) => detail?.clone_landing ? /* @__PURE__ */ React.createElement("p", { style: { margin: "8px 0 0", fontSize: "var(--text-sm)" } }, "The clone entrance would give the board its own checkout at", " ", /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)" } }, detail.clone_landing), " instead \u2014 one repository, two checkouts.") : null,
+    confirmOf: (err) => {
+      const detail = apiErrorDetail(err, "POST /api/workspaces 409");
+      return detail?.confirm_required ? {
+        reasons: detail.live_checkout_signals,
+        note: detail.clone_landing ? /* @__PURE__ */ React.createElement("p", { style: { margin: "8px 0 0", fontSize: "var(--text-sm)" } }, "The clone entrance would give the board its own checkout at", " ", /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)" } }, detail.clone_landing), " instead \u2014 one repository, two checkouts.") : null
+      } : null;
+    },
     confirmLabel: "Register anyway",
-    reasonsKey: "live_checkout_signals",
     labels: LIVE_CHECKOUT_SIGNAL_LABEL,
     // creation is idempotent server-side — a failed attempt leaves only
     // orphans the registry never saw, so "just press it again" is honest
     failDetail: "safe to retry as-is"
   });
-  const submit = () => save("/api/workspaces", "POST", {
-    mode,
-    name: name.trim(),
-    ...mode === "clone" ? { repo: repo.trim() } : {},
-    ...mode === "register" ? { path: path.trim() } : {},
-    ...notes.trim() ? { notes: notes.trim() } : {},
-    ...prot ? { protected: true } : {}
+  const submit = () => save(async (confirm) => {
+    await api("/api/workspaces", {
+      mode,
+      name: name.trim(),
+      ...mode === "clone" ? { repo: repo.trim() } : {},
+      ...mode === "register" ? { path: path.trim() } : {},
+      ...notes.trim() ? { notes: notes.trim() } : {},
+      ...prot ? { protected: true } : {},
+      ...confirm
+    });
   }, "added", name.trim());
   const modeOptions = [
     { value: "clone", label: "clone a repository" },
@@ -2168,11 +2191,11 @@ function NewAgentForm({ authorityProfiles, providerOptions, hostSkills, hostSkil
   const submit = async () => {
     setBusy(true);
     try {
-      const created = await api("/api/agents", { name: name.trim(), ...agentBody(draft) });
+      const created = await api("POST /api/agents", { body: { name: name.trim(), ...agentBody(draft) } });
       say(
         "success",
         "agent added \u2014 committed to the registry",
-        created?.shadows_built_in ? `${name.trim()} \u2014 shadows the board's built-in agent of the same name` : name.trim()
+        created.shadows_built_in ? `${name.trim()} \u2014 shadows the board's built-in agent of the same name` : name.trim()
       );
       edit.close();
       await onCreated();
@@ -2220,13 +2243,13 @@ function NewProfileForm({ agentNames, workspaceNames, say, onCreated, edit }) {
   const { busy, save, dialog } = useProfileSave(say, async () => {
     edit.close();
     await onCreated();
-  });
+  }, "POST /api/profiles 409");
   const dirty = !!name.trim() || !!guidance.trim() || assignableTo.length > 0 || allowedWorkspaces.length > 0 || !!merge;
   useDirtySignal(edit, true, dirty);
   const submit = () => save(
-    "/api/profiles",
-    "POST",
-    { name: name.trim(), guidance, assignable_to: assignableTo, allowed_workspaces: allowedWorkspaces, merge },
+    async (confirm) => {
+      await api("/api/profiles", { name: name.trim(), guidance, assignable_to: assignableTo, allowed_workspaces: allowedWorkspaces, merge, ...confirm });
+    },
     "created",
     name.trim()
   );
@@ -2269,9 +2292,9 @@ function SettingsScreen({ say, registerLeaveGuard }) {
   const [displayLanguageOptions, setDisplayLanguageOptions] = React.useState([]);
   const [displayLanguageLoaded, setDisplayLanguageLoaded] = React.useState(false);
   const loadDisplayLanguage = async () => {
-    const { language, options } = await api("/api/settings/display-language", void 0, "GET");
+    const { language, options } = await api("GET /api/settings/display-language");
     setDisplayLanguage(language);
-    setDisplayLanguageOptions(options);
+    setDisplayLanguageOptions([...options]);
     setDisplayLanguageLoaded(true);
   };
   React.useEffect(() => {
@@ -2282,7 +2305,7 @@ function SettingsScreen({ say, registerLeaveGuard }) {
   const [quietHoursTz, setQuietHoursTz] = React.useState("");
   const [quietHoursLoaded, setQuietHoursLoaded] = React.useState(false);
   const loadQuietHours = async () => {
-    const { start, end, tz } = await api("/api/settings/quiet-hours", void 0, "GET");
+    const { start, end, tz } = await api("GET /api/settings/quiet-hours");
     setQuietHoursStart(start);
     setQuietHoursEnd(end);
     setQuietHoursTz(tz);
@@ -2293,7 +2316,7 @@ function SettingsScreen({ say, registerLeaveGuard }) {
   }, []);
   const [paceOffsets, setPaceOffsets] = React.useState(null);
   const loadPaceOffsets = async () => {
-    const result = await api("/api/settings/provider-pace-offsets", void 0, "GET");
+    const result = await api("GET /api/settings/provider-pace-offsets");
     setPaceOffsets(result.offsets);
   };
   React.useEffect(() => {
@@ -2301,33 +2324,33 @@ function SettingsScreen({ say, registerLeaveGuard }) {
   }, []);
   const [executionSettings, setExecutionSettings] = React.useState(null);
   const loadExecutionSettings = async () => {
-    setExecutionSettings(await api("/api/settings/execution", void 0, "GET"));
+    setExecutionSettings(await api("GET /api/settings/execution"));
   };
   React.useEffect(() => {
     loadExecutionSettings();
   }, []);
   const [memorySettings, setMemorySettings] = React.useState(null);
   const loadMemorySettings = async () => {
-    setMemorySettings(await api("/api/settings/memory", void 0, "GET"));
+    setMemorySettings(await api("GET /api/settings/memory"));
   };
   React.useEffect(() => {
     loadMemorySettings();
   }, []);
   const [githubLoggedIn, setGithubLoggedIn] = React.useState(null);
   React.useEffect(() => {
-    api("/api/settings/github", void 0, "GET").then(({ loggedIn }) => setGithubLoggedIn(!!loggedIn)).catch(() => setGithubLoggedIn(null));
+    api("GET /api/settings/github").then(({ loggedIn }) => setGithubLoggedIn(loggedIn)).catch(() => setGithubLoggedIn(null));
   }, []);
   const [translateUsage, setTranslateUsage] = React.useState(null);
   const [translateUsageFailed, setTranslateUsageFailed] = React.useState(false);
   React.useEffect(() => {
-    api("/api/translate/usage", void 0, "GET").then(({ records }) => setTranslateUsage(records)).catch(() => setTranslateUsageFailed(true));
+    api("GET /api/translate/usage").then(({ records }) => setTranslateUsage(records)).catch(() => setTranslateUsageFailed(true));
   }, []);
   const [workspaces, setWorkspaces] = React.useState(null);
   const [baseDir, setBaseDir] = React.useState(null);
   const [unavailable, setUnavailable] = React.useState(false);
   const load = async () => {
     try {
-      const res = await api("/api/workspaces", void 0, "GET");
+      const res = await api("GET /api/workspaces");
       setWorkspaces(res.workspaces);
       setBaseDir(res.workspacesBaseDir);
     } catch {
@@ -2344,10 +2367,10 @@ function SettingsScreen({ say, registerLeaveGuard }) {
   const [agentsUnavailable, setAgentsUnavailable] = React.useState(false);
   const loadAgents = async () => {
     try {
-      const res = await api("/api/agents", void 0, "GET");
+      const res = await api("GET /api/agents");
       setAgents(res.agents);
       setAuthorityProfiles(res.authorityProfiles);
-      setProviderOptions(res.providers ?? []);
+      setProviderOptions([...res.providers]);
     } catch {
       setAgentsUnavailable(true);
       setAgents([]);
@@ -2360,7 +2383,7 @@ function SettingsScreen({ say, registerLeaveGuard }) {
   const [profilesUnavailable, setProfilesUnavailable] = React.useState(false);
   const loadProfiles = async () => {
     try {
-      const res = await api("/api/profiles", void 0, "GET");
+      const res = await api("GET /api/profiles");
       setProfiles(res.profiles);
     } catch {
       setProfilesUnavailable(true);
@@ -2374,9 +2397,9 @@ function SettingsScreen({ say, registerLeaveGuard }) {
   const [hostSkillsDegraded, setHostSkillsDegraded] = React.useState(false);
   const loadSkills = async () => {
     try {
-      const res = await api("/api/skills", void 0, "GET");
-      setHostSkills(res.skills ?? []);
-      setHostSkillsDegraded(!!res.degraded);
+      const res = await api("GET /api/skills");
+      setHostSkills(res.skills);
+      setHostSkillsDegraded(res.degraded);
     } catch {
       setHostSkills([]);
       setHostSkillsDegraded(true);
@@ -2455,7 +2478,10 @@ function SettingsScreen({ say, registerLeaveGuard }) {
       deleteNote: "removes the registry entry only \u2014 the checkout on this host is left where it is",
       deleteLead: "This workspace is being removed from the registry. The checkout on the host is left untouched \u2014 the board just stops knowing about it.",
       // ADR 0087 決定4: 残る checkout の場所は応答が運ぶ(WebUI が組み立てない)
-      deleteDetail: (result, name) => result?.checkout ? `checkout remains at ${result.checkout}` : name
+      remove: async (confirm, name) => {
+        const { checkout } = await api("DELETE /api/workspaces/:name", { params: { name }, body: confirm });
+        return checkout ? `checkout remains at ${checkout}` : void 0;
+      }
     },
     agents: {
       title: "Agents",
@@ -2550,12 +2576,10 @@ function SettingsScreen({ say, registerLeaveGuard }) {
         label: "Board",
         summary: displayLanguageLoaded && quietHoursLoaded ? `${displayLanguage} \xB7 ${quietHoursStart}\u2013${quietHoursEnd}` : "loading\u2026"
       },
-      ...Object.keys(SECTIONS).map((key) => ({
-        key,
-        label: SECTIONS[key].title,
-        summary: sectionSummary(SECTIONS[key], SECTIONS[key].indexSummary),
-        alert: SECTIONS[key].unavailable
-      }))
+      ...Object.keys(SECTIONS).map((key) => {
+        const s = SECTIONS[key];
+        return { key, label: s.title, summary: sectionSummary(s, s.indexSummary), alert: s.unavailable };
+      })
     ];
     body = /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("h1", { style: { fontSize: "var(--text-xl)", margin: "0 0 2px" } }, "Settings"), /* @__PURE__ */ React.createElement("p", { style: { fontSize: "var(--text-sm)", color: "var(--text-secondary)", margin: 0 } }, "the board's preferences, and the registry it works from")), /* @__PURE__ */ React.createElement(Card, { padding: "0", style: { overflow: "hidden" } }, rows.map((r, i) => /* @__PURE__ */ React.createElement(
       NavRow,
@@ -2668,6 +2692,9 @@ class ApiError extends Error {
     this.status = status;
     this.detail = detail;
   }
+}
+function apiErrorDetail(err, key) {
+  return err instanceof ApiError && err.status === Number(key.split(" ")[2]) ? err.detail : null;
 }
 async function api(pathOrKey, bodyOrOpts, method = "POST") {
   let [verb, path, body] = [method, pathOrKey, bodyOrOpts];

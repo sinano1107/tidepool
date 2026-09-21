@@ -46,6 +46,8 @@ type TpTranslation =
   | { status: 'error'; message: string }
   | {
       status: 'translated';
+      /** memory_entry の訳だけが title を持つ(本文は text)。 */
+      title?: string;
       purpose?: string;
       items?: { title: string; detail?: string }[];
       text?: string;

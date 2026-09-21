@@ -66,6 +66,13 @@ type KeyParams<K> = K extends `${string}:${infer P}/${infer R}` ? P | KeyParams<
 type ApiOpts<K> = { query?: Record<string, string>; body?: unknown }
   & ([KeyParams<K>] extends [never] ? { params?: never } : { params: Record<KeyParams<K>, string> });
 
+/** 契約のエラー行('METHOD /path STATUS')で ApiError の本文を読む —— その status の
+ *  ApiError でなければ null。本文から契約型への変換は api() と同じくここ1点(ADR 0138 決定3)。 */
+// biome-ignore lint/correctness/noUnusedVariables: read by webui/settings-screen.tsx — one concatenated bundle
+function apiErrorDetail<K extends Exclude<keyof WireContract, ApiKey>>(err: unknown, key: K): WireContract[K] | null {
+  return err instanceof ApiError && err.status === Number(key.split(' ')[2]) ? err.detail : null;
+}
+
 // 表のキー('METHOD /path')で引けば契約の型が返る —— unknown から契約型への変換は
 // この overload の1点だけ(ADR 0138 決定3)。生のパスの形は表に載っていない端点のために残る。
 function api<K extends ApiKey>(key: K, ...opts: [KeyParams<K>] extends [never] ? [ApiOpts<K>?] : [ApiOpts<K>]): Promise<WireContract[K]>;
