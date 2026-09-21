@@ -20,8 +20,8 @@ export interface WorkerAdapter {
   /** Fire-and-forget: the worker acts back on the board via MCP.
    *
    *  `setting` は selector が pickup の瞬間に選んだ実行設定(ADR 0110 決定3)。
-   *  **渡されたらそれを使う** —— adapter が spawn 時に解決し直すと、除外の文脈を
-   *  持たない再解決が scheduler と違う entry を選びうる(温存中の Provider で
+   *  adapter はこれをそのまま使い、spawn 時に解決し直さない —— 除外の文脈を
+   *  持たない再解決は scheduler と違う entry を選びうる(温存中の Provider で
    *  走る)。 */
   start(task: Task, setting: ExecutionSetting): void;
   /** 畳み込み停止(graceful stop): `taskId` の session に、自己終了と作業の

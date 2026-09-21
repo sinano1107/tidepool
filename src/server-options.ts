@@ -314,8 +314,8 @@ export function buildWorkerFactory(board: BoardComposition): WorkerFactory {
   };
 }
 
-/** pickup の除外判定と queue の skipped 表示が共有する口。**spawn 側と同じ1本**
- *  (`executionSettingsFor`)を通す —— ここに「agent の model」を別に持てば、
+/** pickup の除外判定と queue の skipped 表示が共有する口。ここで選ばれた設定が
+ *  そのまま spawn に渡る(ADR 0110 決定3)—— ここに「agent の model」を別に持てば、
  *  モデル窓の除外は全テスト緑のまま黙って効かなくなる。task の要求を必ず渡すのが
  *  この口の要点である(#543 の申し送り): 渡し忘れれば要求ティアで走る task が
  *  モデル窓をすり抜け、表示と実際の判定がずれる。 */

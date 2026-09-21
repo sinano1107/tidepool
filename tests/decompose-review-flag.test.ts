@@ -7,6 +7,7 @@ import { ClaudeCodeWorker } from "../src/claude-worker.js";
 import { openDb } from "../src/db.js";
 import { appendEvent } from "../src/events.js";
 import { executionSettingsFor } from "../src/execution-setting.js";
+import { loadRegistry } from "../src/registry.js";
 import { registerTask } from "../src/tasks.js";
 import { FakeClock, FakeContainerRuntime, healthyUsageText } from "./fakes.js";
 import {
@@ -396,7 +397,7 @@ it.each([
     t = await bootTidepool({
       // agent の tier を読むのは盤面の選択(ADR 0110 決定3)。adapter は選ばれた設定で走るだけ
       taskExecutionCandidates: (task) =>
-        executionSettingsFor(t.db, { provider: [{ name: "anthropic", advisor: false }], tier: agentTier }, task),
+        executionSettingsFor(t.db, loadRegistry(registryDir, "purely-local").agents.tako!, task),
       containerRuntime: new FakeContainerRuntime(() => ({
         stdout: new PassThrough(),
         stderr: new PassThrough(),
