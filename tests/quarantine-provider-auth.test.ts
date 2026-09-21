@@ -43,7 +43,7 @@ function quarantineMoonshot(tidepool: Tidepool): void {
 
 it("moonshot 失効中は moonshot agent の pickup のみが止まり、anthropic の worker は流れ続ける(確認型 question が立つ)", async () => {
   t = await bootTidepool({
-    agentsSpeakingProviders: (providers) => (providers.includes("moonshot") ? ["kipper"] : []),
+    quarantineResolvers: { providerAuth: (providers) => (providers.includes("moonshot") ? ["kipper"] : []) },
   });
   quarantineMoonshot(t);
   const kimi = await registerWork(t, "kimi task waits for its provider", undefined, undefined, "kipper");
@@ -83,7 +83,7 @@ it("moonshot 失効中は moonshot agent の pickup のみが止まり、anthrop
 it("moonshot の確認回答は provider の再検証が通るまで受理されず、通れば moonshot agent の pickup が再開する", async () => {
   let authenticated = false;
   t = await bootTidepool({
-    agentsSpeakingProviders: (providers) => (providers.includes("moonshot") ? ["kipper"] : []),
+    quarantineResolvers: { providerAuth: (providers) => (providers.includes("moonshot") ? ["kipper"] : []) },
     providerCliAuth: {
       moonshot: async () =>
         authenticated
