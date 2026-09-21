@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { type Db, openDb } from "../src/db.js";
-import { setProviderPaceOffset } from "../src/pace-offsets.js";
+import { getProviderPaceOffset, setProviderPaceOffset } from "../src/pace-offsets.js";
 import { setSpendDown } from "../src/spend-down.js";
 import {
   evaluateAndReportProviderUsage,
@@ -100,12 +100,47 @@ it("Provider/window の観測値・offset・freshness・CLI version を pause �
     json: { provider: "openai", window: "primary", offset: 35 },
   });
   expect((await api(t.baseUrl, "GET", "/api/pause")).json.providerUsage[0].windows[0].offset).toBe(35);
-  await api(t.baseUrl, "POST", "/api/settings/provider-pace-offsets", {
-    provider: "anthropic",
-    window: "session",
-    offset: 45,
-  });
-  expect((await api(t.baseUrl, "GET", "/api/settings/pace-offsets")).json.session).toBe(45);
+});
+
+it("既知の組(anthropic × session / week / fable、openai × primary / secondary)以外の pace offset は入口で弾き、行を作らない", async () => {
+  t = await bootTidepool();
+
+  for (const [provider, window] of [
+    ["anthropic", "primary"],
+    ["openai", "session"],
+    ["openai", "fable"],
+    ["moonshot", "week"],
+  ]) {
+    const res = await api(t.baseUrl, "POST", "/api/settings/provider-pace-offsets", { provider, window, offset: 30 });
+    expect(res.status).toBe(400);
+  }
+  expect((await api(t.baseUrl, "GET", "/api/settings/provider-pace-offsets")).json.offsets).toEqual([]);
+});
+
+it("既知の5つの組の pace offset は保存され、anthropic の session / week / fable は旧 pace-offsets へ写る", async () => {
+  t = await bootTidepool();
+
+  const pairs = [
+    { provider: "anthropic", window: "fable", offset: 33 },
+    { provider: "anthropic", window: "session", offset: 31 },
+    { provider: "anthropic", window: "week", offset: 32 },
+    { provider: "openai", window: "primary", offset: 34 },
+    { provider: "openai", window: "secondary", offset: 35 },
+  ];
+  for (const body of pairs) {
+    expect((await api(t.baseUrl, "POST", "/api/settings/provider-pace-offsets", body)).status).toBe(200);
+  }
+  expect((await api(t.baseUrl, "GET", "/api/settings/provider-pace-offsets")).json.offsets).toEqual(pairs);
+  expect((await api(t.baseUrl, "GET", "/api/settings/pace-offsets")).json).toEqual({ session: 31, week: 32, fable: 33 });
+});
+
+it("行が無い pace offset の既定は Provider × 窓ごと: anthropic session 20 / week 10 / fable 10、openai primary 20 / secondary 10", () => {
+  const db = openDb(":memory:");
+  expect({
+    anthropic: ["session", "week", "fable"].map((w) => getProviderPaceOffset(db, "anthropic", w)),
+    openai: ["primary", "secondary"].map((w) => getProviderPaceOffset(db, "openai", w)),
+  }).toEqual({ anthropic: [20, 10, 10], openai: [20, 10] });
+  db.close();
 });
 
 // --- Spend-down は Provider × ウィンドウで当たり、Provider をまたがない(ADR 0143) ---

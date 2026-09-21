@@ -55,6 +55,7 @@ import {
 } from "./memory.js";
 import {
   getPaceOffsets,
+  isKnownPaceOffsetTarget,
   isValidOffset,
   listProviderPaceOffsets,
   setPaceOffsets,
@@ -407,11 +408,15 @@ const paceOffsetsSchema = z.object({
   week: paceOffsetValue,
   fable: paceOffsetValue,
 });
-const providerPaceOffsetSchema = z.object({
-  provider: z.enum(PROVIDER_VALUES),
-  window: z.enum(["session", "week", "fable", "primary", "secondary"]),
-  offset: paceOffsetValue,
-});
+const providerPaceOffsetSchema = z
+  .object({
+    provider: z.enum(PROVIDER_VALUES),
+    window: z.string(),
+    offset: paceOffsetValue,
+  })
+  .refine((v) => isKnownPaceOffsetTarget(v.provider, v.window), {
+    message: "unknown provider/window pair",
+  });
 
 // the board timezone (issue #63 / ADR 0022) — a separate sender from
 // quiet-hours' start/end: this one is auto-reported by the browser at PWA

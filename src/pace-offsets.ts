@@ -57,10 +57,21 @@ export interface ProviderPaceOffset {
   offset: number;
 }
 
-export function defaultProviderPaceOffset(window: string): number {
-  return window === "primary" || window === "session"
-    ? DEFAULT_PACE_OFFSETS.session
-    : DEFAULT_PACE_OFFSETS.week;
+/** pace offset の既知の Provider × 窓とその既定(ADR 0030 / ADR 0143 決定5 の門を
+ *  pace offset に当てたもの)。Spend-down の SPEND_DOWN_WINDOWS とは共有しない —
+ *  fable は pace offset の対象だが Spend-down の対象ではない(ADR 0143 決定3)。 */
+const PROVIDER_PACE_OFFSET_DEFAULTS: Partial<Record<Provider, Record<string, number>>> = {
+  anthropic: { ...DEFAULT_PACE_OFFSETS },
+  openai: { primary: DEFAULT_PACE_OFFSETS.session, secondary: DEFAULT_PACE_OFFSETS.week },
+};
+
+export function isKnownPaceOffsetTarget(provider: Provider, window: string): boolean {
+  return Object.hasOwn(PROVIDER_PACE_OFFSET_DEFAULTS[provider] ?? {}, window);
+}
+
+/** 表にない組(観測にだけ現れた窓)は名前を見ずに固定の 10。 */
+export function defaultProviderPaceOffset(provider: Provider, window: string): number {
+  return isKnownPaceOffsetTarget(provider, window) ? PROVIDER_PACE_OFFSET_DEFAULTS[provider]![window]! : 10;
 }
 
 export function setProviderPaceOffset(db: Db, value: ProviderPaceOffset): void {
@@ -99,5 +110,5 @@ export function getProviderPaceOffset(
        WHERE provider = ? AND window = ?`,
     )
     .get(provider, window) as { offset: number } | undefined;
-  return row && isValidOffset(row.offset) ? row.offset : defaultProviderPaceOffset(window);
+  return row && isValidOffset(row.offset) ? row.offset : defaultProviderPaceOffset(provider, window);
 }
