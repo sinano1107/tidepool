@@ -192,3 +192,36 @@ it("機構前提検査に渡る「今生きている容器」に、実行中の 
   t.emitExit(0, null);
   await call;
 });
+
+it("答えを読む関数は root の exit code を受け取る — 口が決着する前に読み手が exit を見る順序に依らない", async () => {
+  const t = setup();
+  const call = t.calls.call(spec, (proc) => {
+    const text = readAll(proc);
+    return (exitCode) => `${text()} exited ${exitCode}`;
+  });
+  await t.spawned(1);
+
+  await t.say("envelope");
+  t.emitExit(1, null);
+
+  expect(await call).toBe("envelope exited 1");
+});
+
+it("stdin は既定で閉じており、opt-in した呼び出しだけが開けたまま書ける", async () => {
+  const t = setup();
+  const closed = t.calls.call(spec, readAll);
+  await t.spawned(1);
+  expect(t.spawns[0]!.stdin).toBeUndefined();
+  t.emitExitAt(0, 0, null);
+  await closed;
+
+  const piped = t.calls.call({ ...spec, stdin: "pipe" }, (proc) => {
+    proc.stdin!.write("request\n");
+    return () => "written";
+  });
+  await t.spawned(2);
+  expect(t.spawns[1]!.stdin).toBe("pipe");
+  expect(t.stdin.read()?.toString()).toBe("request\n");
+  t.emitExitAt(1, 0, null);
+  expect(await piped).toBe("written");
+});

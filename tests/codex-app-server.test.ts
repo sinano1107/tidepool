@@ -4,10 +4,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import {
+  CODEX_APP_SERVER_LIMIT_MS,
   CODEX_APP_SERVER_VERSION,
   type CodexCliCommand,
+  codexCommandThrough,
   createCodexAppServerProbe,
 } from "../src/codex-app-server.js";
+import { ProcessContainers } from "../src/process-container.js";
+import { containerHarness, FakeContainerRuntime, passthroughContainers } from "./fakes.js";
 
 afterEach(() => vi.unstubAllEnvs());
 
@@ -545,15 +549,34 @@ if (args[0] === "--version") {
   return executable;
 }
 
-it("app-server の stdin は応答が揃うまで開いたままで、15 秒の SIGKILL を待たずに observed を返す", async () => {
+it("app-server の stdin は応答が揃うまで開いたままで、上限を待たずに observed を返す", async () => {
   const root = await mkdtemp(join(tmpdir(), "tidepool-codex-probe-"));
   const startedAt = Date.now();
 
   const result = await createCodexAppServerProbe({
     executable: writeFakeCodex(root),
     codexHome: root,
+    command: codexCommandThrough(
+      containerHarness(passthroughContainers()).boardCall,
+      "Codex App Server probe",
+      CODEX_APP_SERVER_LIMIT_MS,
+    ),
   })(new Date(1_000));
 
   expect(result).toMatchObject({ status: "observed", provider: "openai", plan: "plus" });
   expect(Date.now() - startedAt).toBeLessThan(10_000);
 }, 20_000);
+
+it("口が答えを返さなかった App Server probe は観測不能に倒れる(Provider 単位の fail-closed)", async () => {
+  const runtime = new FakeContainerRuntime();
+  runtime.scriptPreflight("cgroup v2 is not mounted at /sys/fs/cgroup");
+  const { boardCall } = containerHarness(new ProcessContainers(runtime));
+
+  const result = await createCodexAppServerProbe({
+    executable: "/opt/tidepool/bin/codex",
+    codexHome: "/nonexistent/codex-home",
+    command: codexCommandThrough(boardCall, "Codex App Server probe", CODEX_APP_SERVER_LIMIT_MS),
+  })(new Date(1_000));
+
+  expect(result).toMatchObject({ status: "unobservable", provider: "openai", cliVersion: null });
+});

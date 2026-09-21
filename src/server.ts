@@ -325,6 +325,11 @@ export interface ServerOptions {
    *  server-options.ts to the adapter's neutral-cwd /usage ping. Absent → GET /api/skills
    *  degrades to an empty candidate set (never 503). */
   hostSkills?: (call: BoardCall) => Promise<string[] | null>;
+  /** 本番の Board call を撃つ口たち(ADR 0136 決定2)。どれも Board call の口から組まれ、
+   *  口は容器と時計が揃う `startServer` の中にしか無いので、口を受け取って組む形で渡す
+   *  (`hostSkills` と同じ形)。返った口は同名のフィールドに重なる —— テストはその
+   *  フィールドへ fake を直に渡す。 */
+  boardCallers?: (call: BoardCall) => BoardCallers;
   /** The display-time translation seam (issue #47 / ADR 0015). Absent →
    *  POST /api/translate reports the LLM as unreachable. */
   translationClient?: TranslationClient;
@@ -356,16 +361,30 @@ export interface ServerOptions {
   containerRuntime: ContainerRuntime;
 }
 
+/** `boardCallers` が組む口の一覧。 */
+export type BoardCallers = Pick<
+  ServerOptions,
+  | "draftClient"
+  | "translationClient"
+  | "allocationClient"
+  | "attributionClient"
+  | "behaviorDraftClient"
+  | "openaiUsage"
+  | "harnessContainment"
+  | "cliAuth"
+  | "providerCliAuth"
+>;
+
 export interface TidepoolServer {
   port: number;
   mcpPort: number;
   stop: () => Promise<void>;
 }
 
-export async function startServer(options: ServerOptions): Promise<TidepoolServer> {
-  const { db } = options;
+export async function startServer(given: ServerOptions): Promise<TidepoolServer> {
+  const { db } = given;
   const slot = new Slot();
-  const containers = new ProcessContainers(options.containerRuntime);
+  const containers = new ProcessContainers(given.containerRuntime);
   // ADR 0136: Board call は呼び出しごとの容器の中で起きる。口は容器の supervisor と
   // 時計しか要らないが、その2つが揃うのがここだけなので組み立てもここに置く。
   // 回収済み観測の不成立は worker session の回収失敗と同じ Containment quarantine へ
@@ -373,10 +392,11 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
   // 同じ既定を共有する —— `options.watchdog` は任意なので定数のほうから取る。
   const boardCalls = createBoardCalls({
     containers,
-    clock: options.clock,
-    reclaimTimeout: options.watchdog?.reclaimTimeout ?? RECLAIM_TIMEOUT,
-    onReclaimTimeout: (reason) => quarantineContainment(db, reason, options.clock.now()),
+    clock: given.clock,
+    reclaimTimeout: given.watchdog?.reclaimTimeout ?? RECLAIM_TIMEOUT,
+    onReclaimTimeout: (reason) => quarantineContainment(db, reason, given.clock.now()),
   });
+  const options: ServerOptions = { ...given, ...given.boardCallers?.(boardCalls.call) };
   // ADR 0099 決定5: boot 時の機構前提検査。不成立の platform を黙って弱い回収へ
   // 落とさない — 毎 boot の live kill canary は行わず、前提の存在だけを見る。
   // 同じ検査は封じ込め能力の合成(下)にも入り、pickup と quarantine 回答時に

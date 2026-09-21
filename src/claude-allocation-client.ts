@@ -7,7 +7,7 @@ import {
 } from "./allocation-review.js";
 import { CAUSES } from "./cause.js";
 import { runOneShotJsonPrompt } from "./claude-draft-client.js";
-import { defaultExec, type ExecFn } from "./claude-worker.js";
+import type { ExecFn } from "./claude-worker.js";
 import type { ExecutionSettingRow } from "./execution-setting.js";
 
 // mirrors AllocationJudgment: the model's reply is untrusted input, and only a
@@ -42,7 +42,7 @@ function buildPrompt(input: AllocationReviewInput): string {
 }
 
 export interface ClaudeAllocationClientOptions {
-  exec?: ExecFn;
+  exec: ExecFn;
 }
 
 /** The real AllocationClient (issue #547): a headless one-shot `claude -p`
@@ -52,8 +52,8 @@ export interface ClaudeAllocationClientOptions {
 export class ClaudeAllocationClient implements AllocationClient {
   private readonly exec: ExecFn;
 
-  constructor(options: ClaudeAllocationClientOptions = {}) {
-    this.exec = options.exec ?? defaultExec;
+  constructor(options: ClaudeAllocationClientOptions) {
+    this.exec = options.exec;
   }
 
   async judge(

@@ -15,17 +15,28 @@ import { containerRuntimeFor } from "./cgroup-container.js";
 import { ClaudeAllocationClient } from "./claude-allocation-client.js";
 import { ClaudeAttributionClient } from "./claude-attribution-client.js";
 import { ClaudeBehaviorDraftClient } from "./claude-behavior-draft-client.js";
-import { createClaudeCliAuthCheck, createMoonshotCliAuthCheck } from "./claude-cli-auth.js";
+import {
+  cliAuthCommandThrough,
+  createClaudeCliAuthCheck,
+  createMoonshotCliAuthCheck,
+} from "./claude-cli-auth.js";
 import { ClaudeDraftClient } from "./claude-draft-client.js";
 import {
   ClaudeCodeWorker,
   type ClaudeWorkerOptions,
   enumerateHostSkills,
+  enumerateToolsThrough,
+  execThrough,
   moonshotKeyAbsence,
   probeToolSurfaceCapability,
 } from "./claude-worker.js";
 import type { Clock } from "./clock.js";
-import { codexLoginAbsence, createCodexAppServerProbe } from "./codex-app-server.js";
+import {
+  CODEX_APP_SERVER_LIMIT_MS,
+  codexCommandThrough,
+  codexLoginAbsence,
+  createCodexAppServerProbe,
+} from "./codex-app-server.js";
 import {
   CODEX_CLI_VERSION,
   CodexWorker,
@@ -53,6 +64,7 @@ import {
   type AuthorityProfile,
   assertValidAgentDefinition,
   canonicalHarness,
+  type Harness,
   InvalidAgentDefinitionError,
   loadRegistry,
   ownEntry,
@@ -66,7 +78,7 @@ import {
 } from "./registry.js";
 import { checkSandboxCapability } from "./sandbox.js";
 import type { TaskExecutionCandidates } from "./scheduler.js";
-import type { ServerOptions, WorkerFactory } from "./server.js";
+import type { BoardCallers, ServerOptions, WorkerFactory } from "./server.js";
 import { resolveTaskAgent, type Task } from "./tasks.js";
 import type { TranslationClient } from "./translate.js";
 import type { WatchdogConfig } from "./watchdog.js";
@@ -178,8 +190,8 @@ export interface BoardComposition {
    *  1つから導く — 2つの口が別々の判定を持つと黙ってずれる。 */
   vapid: VapidConfig | undefined;
   /** issue #47 / ADR 0015: 表示時翻訳。盤面自身の CONTEXT.md を読んで作るので
-   *  合成 root 側で組む。 */
-  translationClient: TranslationClient;
+   *  合成 root 側で組む。Board call の口を受け取って組む(ADR 0136 決定2)。 */
+  translationClient: (call: BoardCall) => TranslationClient;
   /** ADR 0075: optional token expiry; absent disables only advance warning. */
   cliAuthExpiresAt: Date | undefined;
 }
@@ -608,9 +620,9 @@ function registryCandidates(board: BoardComposition): RegistryCandidates | undef
  *  real Claude CLI (issue #25) only when a registry is configured — same
  *  registryDir gate as the worker factory. Without it there's no worker
  *  either, so the board runs the LoggingWorker with drafting off too. */
-function draftClientFactory(board: BoardComposition): DraftClient | undefined {
+function draftClientFactory(board: BoardComposition, call: BoardCall): DraftClient | undefined {
   if (!board.registryDir) return undefined;
-  return new ClaudeDraftClient({ candidates: registryCandidates(board) });
+  return new ClaudeDraftClient({ candidates: registryCandidates(board), exec: execThrough(call, "task draft") });
 }
 
 /** The settings surface's workspace verbs (issue #57), bound to this board's
@@ -678,6 +690,54 @@ function profileAdmin(board: BoardComposition): ProfileAdmin | undefined {
   };
 }
 
+/** Board call を撃つ口たち(ADR 0136 決定2)。どれも口 `call` を通るので、口ができる
+ *  `startServer` がここを呼ぶ。 */
+function boardCallers(board: BoardComposition, workspace: WorkspaceConfig | undefined, call: BoardCall): BoardCallers {
+  const codexContainment = workspace && createCodexCapabilityCheck({
+    executable: board.codexExecutable,
+    codexHome: board.codexHome,
+    workspace: workspace.path,
+    call,
+  });
+  const claudeContainment = async (): Promise<ContainmentCapability> => {
+    const sandbox = checkSandboxCapability(platform);
+    return sandbox.available ? probeToolSurfaceCapability(enumerateToolsThrough(call)) : sandbox;
+  };
+  return {
+    draftClient: draftClientFactory(board, call),
+    translationClient: board.translationClient(call),
+    // ADR 0111 決定4: 配分評価の Board call。registry にも CONTEXT.md にも依らず
+    // `claude` CLI だけで組めるので、翻訳と同じく常に配線する
+    allocationClient: new ClaudeAllocationClient({ exec: execThrough(call, "allocation review") }),
+    // ADR 0115 決定2: 帰責の Board call。同じ理由で常に配線する
+    attributionClient: new ClaudeAttributionClient({ exec: execThrough(call, "attribution") }),
+    // ADR 0120 決定1(b)(c): Behavior candidate 起草の Board call。同じ理由で常に配線する
+    behaviorDraftClient: new ClaudeBehaviorDraftClient({ exec: execThrough(call, "Behavior candidate draft") }),
+    openaiUsage: createCodexAppServerProbe({
+      executable: board.codexExecutable,
+      codexHome: board.codexHome,
+      command: codexCommandThrough(call, "Codex App Server probe", CODEX_APP_SERVER_LIMIT_MS),
+    }),
+    harnessContainment: board.registryDir
+      ? (harness: Harness) => harness === "codex"
+        ? (codexContainment?.() ?? Promise.resolve({
+            available: false as const,
+            reason: "no execution workspace is configured for the Codex preflight",
+          }))
+        : claudeContainment()
+      : undefined,
+    cliAuth: createClaudeCliAuthCheck(cliAuthCommandThrough(call, "Claude authentication probe")),
+    // OpenAI is derived from the same App Server probe in server.ts; this
+    // record supplies the Claude-harness Provider probes.
+    providerCliAuth: {
+      moonshot: createMoonshotCliAuthCheck(
+        board.moonshotApiKeyFile,
+        cliAuthCommandThrough(call, "Moonshot authentication probe"),
+      ),
+    },
+  };
+}
+
 /** 盤面1台ぶんの ServerOptions を組み立てる。**口の一覧を持つ唯一の場所**であり、
  *  そのために存在する(ADR 0041 / issue #172): main.ts は top-level await の
  *  スクリプトで、import した瞬間に盤面が起動する — 組み立てが向こうにある限り、
@@ -693,19 +753,6 @@ export async function buildServerOptions(board: BoardComposition, db: Db): Promi
   // すべて fail-closed で off(以下の `github` が undefined になる)。
   const github = board.githubAuth && new GhCliClient(board.githubAuth);
   const workspace = workspaceConfig(board);
-  const openaiUsage = createCodexAppServerProbe({
-    executable: board.codexExecutable,
-    codexHome: board.codexHome,
-  });
-  const codexContainment = workspace && createCodexCapabilityCheck({
-    executable: board.codexExecutable,
-    codexHome: board.codexHome,
-    workspace: workspace.path,
-  });
-  const claudeContainment = async (): Promise<ContainmentCapability> => {
-    const sandbox = checkSandboxCapability(platform);
-    return sandbox.available ? probeToolSurfaceCapability() : sandbox;
-  };
   return {
     db,
     credential: board.credential,
@@ -726,15 +773,8 @@ export async function buildServerOptions(board: BoardComposition, db: Db): Promi
     // pass the provider itself, not a boot-time snapshot: the register screen's
     // candidates must reflect agents/workspaces created live through settings
     registryCandidates: () => registryCandidates(board),
-    draftClient: draftClientFactory(board),
-    translationClient: board.translationClient,
-    // ADR 0111 決定4: 配分評価の Board call。registry にも CONTEXT.md にも依らず
-    // `claude` CLI だけで組めるので、翻訳と同じく常に配線する
-    allocationClient: new ClaudeAllocationClient(),
-    // ADR 0115 決定2: 帰責の Board call。同じ理由で常に配線する
-    attributionClient: new ClaudeAttributionClient(),
-    // ADR 0120 決定1(b)(c): Behavior candidate 起草の Board call。同じ理由で常に配線する
-    behaviorDraftClient: new ClaudeBehaviorDraftClient(),
+    // ADR 0136 決定2: Board call を撃つ口はどれも Board call の口から組む
+    boardCallers: (call) => boardCallers(board, workspace, call),
     // issue #14: 3点セットが揃わなければ push は off。公開鍵も同じ1つから導く
     // ので、「送れないのに購読だけできる」状態が構造的に作れない。
     push: board.vapid && new WebPushClient(board.vapid),
@@ -745,7 +785,6 @@ export async function buildServerOptions(board: BoardComposition, db: Db): Promi
     hostSkills: enumerateHostSkills,
     fableAgents: fableAgentsResolver(board, db),
     agentsSpeakingProviders: agentsSpeakingProvidersResolver(board),
-    openaiUsage,
     credentialAbsence: {
       moonshot: () => moonshotKeyAbsence(board.moonshotApiKeyFile),
       openai: () => codexLoginAbsence(board.codexHome),
@@ -753,19 +792,7 @@ export async function buildServerOptions(board: BoardComposition, db: Db): Promi
     taskExecutionCandidates: taskExecutionCandidatesResolver(board, db),
     agentsUsingHarnesses: agentsUsingHarnessesResolver(board),
     resolveHarness: harnessResolver(board, db),
-    harnessContainment: board.registryDir
-      ? (harness) => harness === "codex"
-        ? (codexContainment?.() ?? Promise.resolve({
-            available: false as const,
-            reason: "no execution workspace is configured for the Codex preflight",
-          }))
-        : claudeContainment()
-      : undefined,
     registryReachability: registryReachabilityCheck(board),
-    cliAuth: createClaudeCliAuthCheck(),
-    // OpenAI is derived from the same App Server probe in server.ts; this
-    // record supplies the Claude-harness Provider probes.
-    providerCliAuth: { moonshot: createMoonshotCliAuthCheck(board.moonshotApiKeyFile) },
     cliAuthExpiresAt: board.cliAuthExpiresAt,
     // ADR 0093 / issue #211: remote 正本を宣言した workspace の pickup 直前の fetch は
     // `tidepool-board[bot]` 名義で撃つ。落とすと private な remote の workspace が黙って

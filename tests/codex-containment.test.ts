@@ -1,4 +1,6 @@
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import {
   CODEX_CLI_VERSION,
@@ -6,18 +8,28 @@ import {
   CODEX_FEATURE_SNAPSHOT,
   type CodexCapabilityObservation,
   checkCodexCapability,
+  createCodexCapabilityCheck,
   observedDeveloperMarkers,
   observedHooks,
 } from "../src/codex-worker.js";
 import { listEvents } from "../src/events.js";
 import { harnessContainmentPickupBlocked } from "../src/harness-containment.js";
 import { submitAnswer } from "../src/human-verbs.js";
+import { ProcessContainers } from "../src/process-container.js";
 import { canonicalHarness } from "../src/registry.js";
 import { HOURLY, startScheduler } from "../src/scheduler.js";
 import { Slot } from "../src/slot.js";
 import { getTask, listBoard, registerTask, type Task } from "../src/tasks.js";
 import type { WorkerAdapter } from "../src/worker.js";
-import { FakeClock, healthyUsageText, passthroughContainers, unusedLanding } from "./fakes.js";
+import {
+  containerHarness,
+  FakeClock,
+  FakeContainerRuntime,
+  healthyUsageText,
+  passthroughContainers,
+  recordingSpawn,
+  unusedLanding,
+} from "./fakes.js";
 import { api, bootTidepool, registerWork, type Tidepool } from "./harness.js";
 
 let t: Tidepool;
@@ -44,6 +56,56 @@ const VALID: CodexCapabilityObservation = {
   features: CODEX_FEATURE_SNAPSHOT,
   developerMarkers: [CODEX_DEVELOPER_MARKER],
 };
+
+it("preflight は Board call の口を通り、口が答えを返さなければ(上限到達)封じ込めを不成立に倒す", async () => {
+  const spawn = recordingSpawn();
+  const clock = new FakeClock();
+  const { boardCall } = containerHarness(new ProcessContainers(new FakeContainerRuntime(spawn.spawn)), clock);
+  const capability = createCodexCapabilityCheck({
+    executable: "/opt/tidepool/bin/codex",
+    codexHome: "/nonexistent/codex-home",
+    workspace: mkdtempSync(join(tmpdir(), "tidepool-codex-preflight-ws-")),
+    call: boardCall,
+  })();
+  await vi.waitFor(() =>
+    expect(spawn.calls.map((c) => [c.command, ...c.args])).toEqual([["/opt/tidepool/bin/codex", "--version"]]),
+  );
+
+  await clock.advance(60_000);
+
+  expect(await capability).toMatchObject({
+    available: false,
+    reason: expect.stringContaining("Codex containment preflight could not run"),
+  });
+});
+
+it("workspace を cwd にする preflight の呼び出しは、容器が空になるまで次へ進まない(ADR 0136 決定5)", async () => {
+  const spawn = recordingSpawn();
+  const runtime = new FakeContainerRuntime(spawn.spawn);
+  const clock = new FakeClock();
+  const { boardCall } = containerHarness(new ProcessContainers(runtime), clock);
+  const workspace = mkdtempSync(join(tmpdir(), "tidepool-codex-preflight-ws-"));
+  const capability = createCodexCapabilityCheck({
+    executable: "/opt/tidepool/bin/codex",
+    codexHome: "/nonexistent/codex-home",
+    workspace,
+    call: boardCall,
+  })();
+  await vi.waitFor(() => expect(spawn.calls).toHaveLength(1));
+  spawn.emitExitAt(0, 0, null);
+  await vi.waitFor(() => expect(spawn.calls).toHaveLength(2));
+  expect(spawn.calls[1]!.args.slice(0, 2)).toEqual(["debug", "prompt-input"]);
+  runtime.hold(runtime.created[1]!); // force では空にならないホスト
+  spawn.emitExitAt(1, 0, null);
+  await new Promise((resolve) => setImmediate(resolve));
+
+  expect(spawn.calls).toHaveLength(2);
+
+  runtime.fireEmpty(runtime.created[1]!);
+  await vi.waitFor(() => expect(spawn.calls).toHaveLength(3));
+  await clock.advance(60_000);
+  expect((await capability).available).toBe(false);
+});
 
 it("宣言どおりの観測は封じ込めを成立させる", async () => {
   expect(await checkCodexCapability(async () => VALID, BOARD_HOOK_PATH)).toEqual({ available: true });

@@ -60,7 +60,7 @@ function composition(): BoardComposition {
     githubAuth: undefined,
     githubTokenFile: undefined,
     vapid: undefined,
-    translationClient: new FakeTranslationClient(),
+    translationClient: () => new FakeTranslationClient(),
     cliAuthExpiresAt: undefined,
   };
 }
@@ -261,7 +261,10 @@ it("ServerOptions の任意フィールドは authority を除いて全て組み
   // 素の口・短縮記法で渡される口・入れ子の口。
   expect(optional).toEqual(expect.arrayContaining(["watchdog", "github", "harnessContainment"]));
 
-  const emitted = new Set(Object.keys(await buildOptions(composition())));
+  // Board call を撃つ口は Board call の口を受け取って組まれる(ADR 0136)ので、組んだ
+  // 結果のキーも「組み立てられた」に数える —— 数えなければ、そこに落ちた口を見逃す。
+  const built = await buildOptions(composition());
+  const emitted = new Set([...Object.keys(built), ...Object.keys(built.boardCallers?.(async () => null) ?? {})]);
   // 意図的な不在は `authority` だけ(ADR 0012 / issue #36 の `resolveAuthority` に
   // 置換済み)。**この期待値は src ではなくここに置く** — 除外を1つ増やすことは
   // 「その口は本番で永久に立たない」という宣言であり、#172 と同じ穴を開け直す
@@ -407,6 +410,7 @@ it("registry があるとき、各口には対応する解決子が刺さって�
     workspaceName: "derived",
     defaultAgentName: "deckhand",
   });
+  const callers = options.boardCallers?.(async () => null);
 
   // workspaceConfig: 盤面自身の workspace 名で解決され、path 省略なら
   // workspacesDir 由来に落ちる(ADR 0018)—— 名前と基底ディレクトリの両方を通す
@@ -435,10 +439,10 @@ it("registry があるとき、各口には対応する解決子が刺さって�
   expect(options.taskExecutionCandidates?.({ assignee: "deckhand" } as any)).toMatchObject([
     { provider: "anthropic", model: "sonnet" },
   ]);
-  expect(options.openaiUsage).toBeTypeOf("function");
+  expect(callers?.openaiUsage).toBeTypeOf("function");
   expect(options.agentAdmin?.authorityProfiles?.()).toEqual(["standard"]);
   // registry ゲートで初めて立つ口
-  expect(options.draftClient).toBeDefined();
+  expect(callers?.draftClient).toBeDefined();
   expect(options.workspaceAdmin).toBeDefined();
   // ADR 0082 決定1/2: 登録の門が着地先とその出所を見せる材料は一覧の口から来る。
   // 基点と出所は別々の口から合流するので、片方だけ配線しても型検査は黙る

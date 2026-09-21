@@ -1,7 +1,6 @@
 import { z } from "zod";
 import {
   boardCallEnvWithoutThinking,
-  defaultExec,
   type ExecFn,
   emptyToolSurfaceFlags,
   pinnedModelFlags,
@@ -102,7 +101,7 @@ export interface ClaudeTranslationClientOptions {
   /** CONTEXT.md's own term pairs (issue #47), injected as a translation aid
    *  when the target language is Japanese. Absent → no glossary guidance. */
   glossary?: GlossaryEntry[];
-  exec?: ExecFn;
+  exec: ExecFn;
 }
 
 /** The real TranslationClient (issue #47): a headless one-shot `claude -p`
@@ -119,9 +118,9 @@ export class ClaudeTranslationClient implements TranslationClient {
   private running = 0;
   private readonly waiting: Array<() => void> = [];
 
-  constructor(options: ClaudeTranslationClientOptions = {}) {
+  constructor(options: ClaudeTranslationClientOptions) {
     this.glossary = options.glossary ?? [];
-    this.exec = options.exec ?? defaultExec;
+    this.exec = options.exec;
   }
 
   private enterFloor(): Promise<void> {

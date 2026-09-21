@@ -1,7 +1,9 @@
 import { afterEach, expect, it } from "vitest";
 import { ClaudeDraftClient } from "../src/claude-draft-client.js";
 import { ClaudeTranslationClient } from "../src/claude-translation-client.js";
-import { defaultExec } from "../src/claude-worker.js";
+import { execThrough } from "../src/claude-worker.js";
+import { ProcessContainers } from "../src/process-container.js";
+import { containerHarness, FakeContainerRuntime, passthroughContainers } from "./fakes.js";
 import { api, bootTidepool, registerQuestion, type Tidepool } from "./harness.js";
 
 const ANTHROPIC_AUTH_QUESTION_TITLE =
@@ -10,14 +12,22 @@ const ANTHROPIC_AUTH_QUESTION_TITLE =
 let t: Tidepool;
 afterEach(() => t?.stop());
 
-it("実execFile境界は非ゼロ終了でも401 JSONのstdoutを分類側へ渡す(ADR 0070)", async () => {
-  const failure = await defaultExec(
+it("Board call の口を通る exec は非ゼロ終了でも401 JSONのstdoutを分類側へ渡す(ADR 0070)", async () => {
+  const failure = await execThrough(containerHarness(passthroughContainers()).boardCall, "task draft")(
     process.execPath,
     ["-e", 'process.stdout.write(JSON.stringify({ api_error_status: 401 })); process.exit(1)'],
     process.env,
   ).catch((err: unknown) => err);
 
   expect(failure).toMatchObject({ stdout: JSON.stringify({ api_error_status: 401 }) });
+});
+
+it("口が答えを返さなかった exec は reject する — 今日の失敗と同じく呼び出し側は 503 に倒す", async () => {
+  const runtime = new FakeContainerRuntime();
+  runtime.scriptPreflight("cgroup v2 is not mounted at /sys/fs/cgroup");
+  const exec = execThrough(containerHarness(new ProcessContainers(runtime)).boardCall, "task draft");
+
+  await expect(exec("claude", ["-p", "draft"], process.env)).rejects.toThrow(/task draft/);
 });
 
 it("AI draft が api_error_status: 401 を返したら、その場で provider の Confirmation を立てる(ADR 0070)", async () => {
