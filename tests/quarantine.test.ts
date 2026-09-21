@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { openDb } from "../src/db.js";
 import { listEvents } from "../src/events.js";
 import {
-  isQuarantineOpen,
+  openQuarantineQuestion,
   QUARANTINES,
   type QuarantineKind,
   quarantineUnlessClear,
@@ -41,7 +41,7 @@ describe.each(QUARANTINES.map((row) => row.kind))("Quarantine の種類 %s", (ki
     expect(rest).toEqual([]);
     expect(question!.question_quarantine_kind).toBe(kind);
     expect(question!.question_quarantine_value).toBe(value);
-    expect(isQuarantineOpen(db, kind, value)?.id).toBe(question!.id);
+    expect(openQuarantineQuestion(db, kind, value)?.id).toBe(question!.id);
     expect(
       listEvents(db, question!.id)
         .map((e) => e.payload)

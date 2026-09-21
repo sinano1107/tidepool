@@ -157,7 +157,7 @@ export const QUARANTINES = [
 export type QuarantineKind = (typeof QUARANTINES)[number]["kind"];
 
 /** その鍵の開いた確認型 question。NULL の value は `IS` でしか一致しない。 */
-export function isQuarantineOpen(
+export function openQuarantineQuestion(
   db: Db,
   kind: QuarantineKind,
   value: string | null,
@@ -190,7 +190,7 @@ export function registerQuarantine(
   reason: string,
   now: Date,
 ): void {
-  const existing = isQuarantineOpen(db, kind, value);
+  const existing = openQuarantineQuestion(db, kind, value);
   if (existing) {
     appendEvent(db, {
       taskId: existing.id,
@@ -229,7 +229,7 @@ export async function quarantineUnlessClear(
   check: () => Promise<{ available: true } | { available: false; reason: string }>,
   now: Date,
 ): Promise<boolean> {
-  if (isQuarantineOpen(db, kind, value)) return true;
+  if (openQuarantineQuestion(db, kind, value)) return true;
   const result = await check();
   if (result.available) return false;
   registerQuarantine(db, kind, value, result.reason, now);
