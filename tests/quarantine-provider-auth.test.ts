@@ -240,7 +240,7 @@ const entries = (...names: string[]) => ({
   tier: undefined,
 });
 
-it("openai を quarantine 中でも openai と anthropic の entry を持つ agent の task は anthropic で走り、openai entry しか持たない agent の task だけが skipped —— queue 表示と pickup の判定は同じ式(ADR 0110 決定5)", async () => {
+it("openai を quarantine 中でも openai と anthropic の entry を持つ agent の task は anthropic で走り、openai entry しか持たない agent の task だけが skipped —— queue 表示と pickup の判定は同じ式(ADR 0110 決定3・5)", async () => {
   t = await bootTidepool({
     // openai の usage 観測を健全にしておく —— 未設定だと「unobservable」の
     // fail-closed 自体が openai を除外してしまい、quarantine を外しても
