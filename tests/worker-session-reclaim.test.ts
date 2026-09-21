@@ -1,7 +1,7 @@
 import { writeFileSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import { join } from "node:path";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { FakeContainerRuntime } from "./fakes.js";
 import { api, bootTidepool, git, HOUR, makeWorkspace, queueWork, type Tidepool } from "./harness.js";
 
@@ -24,6 +24,13 @@ async function forceReclaimed(task: { id: string }): Promise<void> {
   await t.clock.advance(90 * MIN); // 畳み込み停止
   await t.clock.advance(GRACE); // 強制回収
   expect(t.containers.forceReclaims).toEqual([task.id]);
+}
+
+/** `harnessContainment` を渡す盤面の pickup は人間面の自己検査(実 HTTP の往復、
+ *  `src/server.ts` の Harness 封じ込めの合成)を挟むので、fake clock の tick の中では
+ *  終わらない。watchdog の起点は `task_picked_up` の時刻なので、次に進める前に待つ。 */
+async function pickedUp(task: { id: string }): Promise<void> {
+  await vi.waitFor(() => expect(t.worker.started.map((x) => x.id)).toEqual([task.id]));
 }
 
 const questions = async (): Promise<any[]> =>
@@ -116,6 +123,7 @@ it("quarantine の回答時に容器の空を再観測する — populated な�
   t = await bootTidepool({ containerRuntime: containers, watchdog, harnessContainment: async () => ({ available: true }) });
   const task = queueWork(t, "long haul");
   await t.clock.advance(HOUR);
+  await pickedUp(task);
   containers.hold(task.id);
   await forceReclaimed(task);
   await t.clock.advance(RECLAIM_TIMEOUT);
@@ -140,6 +148,7 @@ it("空を観測してから回答すると受理され、slot-release tree rule
   });
   const task = queueWork(t, "long haul");
   await t.clock.advance(HOUR);
+  await pickedUp(task);
   containers.hold(task.id);
   writeFileSync(join(ws.path, "draft.txt"), "stuck work\n");
   await forceReclaimed(task);
@@ -205,5 +214,5 @@ it("容器機構の前提は pickup と quarantine 回答時にも読み直さ�
 
   // 受理で pickup が再開する
   await t.clock.advance(HOUR);
-  expect(t.worker.started).toHaveLength(1);
+  await vi.waitFor(() => expect(t.worker.started).toHaveLength(1));
 });
