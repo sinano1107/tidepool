@@ -20,9 +20,7 @@ test("Register タブを開くと brain dump フォームが描画され、conso
   await page.goto(t.baseUrl);
   await page.getByRole("button", { name: "Register" }).click();
 
-  await expect(
-    page.getByPlaceholder("what needs doing, in your own words", { exact: false }),
-  ).toBeVisible();
+  await expect(page.getByPlaceholder("what needs doing, in your own words")).toBeVisible();
   await expect(
     page.getByRole("button", { name: "LLM unavailable? use the plain form" }),
   ).toBeVisible();
