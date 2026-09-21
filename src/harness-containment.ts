@@ -1,13 +1,9 @@
 import type { ContainmentCapability } from "./containment.js";
 import type { Db } from "./db.js";
-import { openQuarantineValues, quarantineUnlessClear } from "./quarantine.js";
+import { quarantineUnlessClear } from "./quarantine.js";
 import type { Harness } from "./registry.js";
 
 export type HarnessContainmentCheck = (harness: Harness) => Promise<ContainmentCapability>;
-
-export function quarantinedHarnesses(db: Db): Harness[] {
-  return openQuarantineValues(db, "harnessContainment") as Harness[];
-}
 
 /** Persist the narrowest safe stop: one Confirmation per Harness, never a
  * board-wide halt. Another canonical route remains eligible in the same poll. */

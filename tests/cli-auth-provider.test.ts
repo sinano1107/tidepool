@@ -4,8 +4,9 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { boardHalts } from "../src/board-halt.js";
 import { createMoonshotCliAuthCheck } from "../src/claude-cli-auth.js";
-import { quarantineCliAuthForProvider, quarantinedAuthProviders } from "../src/cli-auth.js";
+import { quarantineCliAuthForProvider } from "../src/cli-auth.js";
 import { openDb } from "../src/db.js";
+import { openQuarantineValues } from "../src/quarantine.js";
 import { listBoard } from "../src/tasks.js";
 
 /** ADR 0098 / issue #454: 401 の Provider 帰属は spawn/call 時の事実で決まり、
@@ -50,13 +51,13 @@ describe("quarantineCliAuthForProvider(issue #454 / ADR 0098)", () => {
     expect(boardHalts(db)).toEqual([]);
   });
 
-  it("quarantinedAuthProviders は資源単位の quarantine 中の provider だけを返す", () => {
+  it("providerAuth の開いた値は資源単位の quarantine 中の provider だけを返す", () => {
     const db = openDb(":memory:");
-    expect(quarantinedAuthProviders(db)).toEqual([]);
+    expect(openQuarantineValues(db, "providerAuth")).toEqual([]);
     quarantineCliAuthForProvider(db, "anthropic", new Date(0));
-    expect(quarantinedAuthProviders(db)).toEqual(["anthropic"]);
+    expect(openQuarantineValues(db, "providerAuth")).toEqual(["anthropic"]);
     quarantineCliAuthForProvider(db, "moonshot", new Date(1));
-    expect(quarantinedAuthProviders(db)).toEqual(["anthropic", "moonshot"]);
+    expect(openQuarantineValues(db, "providerAuth")).toEqual(["anthropic", "moonshot"]);
   });
 });
 

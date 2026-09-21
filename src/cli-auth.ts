@@ -1,5 +1,5 @@
 import type { Db } from "./db.js";
-import { openQuarantineValues, registerQuarantine } from "./quarantine.js";
+import { registerQuarantine } from "./quarantine.js";
 import type { Provider } from "./registry.js";
 import { BOARD_WORKER_ID, registerTask } from "./tasks.js";
 
@@ -94,14 +94,6 @@ export function quarantineCliAuthFailure(
  * resource-scoped quarantine; unrelated Provider workers continue. */
 export function quarantineCliAuthForProvider(db: Db, provider: Provider, now: Date): void {
   registerQuarantine(db, "providerAuth", provider, "authentication failure", now);
-}
-
-/** The providers whose authentication is currently quarantined resource-wide
- *  (ADR 0097 決定2) — the scheduler's pickup gate skips exactly the agents
- *  speaking one of these. Every provider is resource-scoped, the board's own
- *  included (ADR 0098 決定6), so no authentication failure reaches boardHalts. */
-export function quarantinedAuthProviders(db: Db): Provider[] {
-  return openQuarantineValues(db, "providerAuth") as Provider[];
 }
 
 export function warnCliAuthExpiry(db: Db, expiresAt: Date | undefined, now: Date): void {
