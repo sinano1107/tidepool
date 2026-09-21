@@ -90,6 +90,10 @@ Playwright への移行で **消えた**もの:
   ラップしてブラウザ側 `__name` 不在で落とす。**Playwright で解決したわけではない** — ただ
   `getByRole`/`fill` が揃ったので `evaluate` を書く機会がめっきり減っただけ。使うなら
   インライン化する(プロパティ代入 `window.__x = () => …` は影響なし)。
+- **制御 `<textarea>` の値に `getByText` が当たる。** React は制御 textarea の値を
+  `defaultValue`(= textContent)にも写すため、入力欄に同じ文言があると一覧行の `<span>` と
+  二重に解決し、「行がまだある」系の判定が偽陽性になる(issue #825)。`span:text-is(...)` や
+  ロール・スコープで要素種別を絞る。`<input>` の値は属性なので当たらない。
 
 ## セレクタ戦略
 
