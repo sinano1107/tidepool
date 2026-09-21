@@ -52,7 +52,7 @@ import {
   type Task,
 } from "./tasks.js";
 import { composeTerminalScreen } from "./usage.js";
-import type { WorkerAdapter } from "./worker.js";
+import type { WorkerAdapter, WorkerExit } from "./worker.js";
 import {
   excludeWorkspaceProjectHooks,
   guardRegistryDefaultBranch,
@@ -1160,6 +1160,9 @@ export interface ClaudeWorkerOptions {
   /** worker が1度も走らなかった pickup(ADR 0118)の盤面側の一撃 —— `spawnFailureHandler` 製。
    *  `onCapInterrupted` と同じ機能フィールド。不在 → spawn 失敗を観測しても盤面は動かない。 */
   onSpawnFailed?: (taskId: string, failure: { error_code: string | null; message: string }) => void;
+  /** root process の exit を受ける盤面側の一撃(ADR 0145)—— watchdog の `onWorkerExited`。
+   *  `onCapInterrupted` と同じ機能フィールド。報告なき exit かどうかの判定は盤面側が持つ。 */
+  onWorkerExited?: (taskId: string, exit: WorkerExit) => void;
   /** ADR 0097 決定4 / issue #445: where the Moonshot Platform key lives —
    *  a mode-600 state file, never the board's env (plaintext on process.env
    *  rides every worker spawn). Read fresh at each spawn, only for
@@ -2354,6 +2357,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
       // 文字の途中で stream が閉じた場合の未完バイト列を flush(この場合の
       // 置換文字は捏造ではなく「途中で切れた」事実そのもの)
       stderrBuffered = trimStderrTail(stderrBuffered + stderrDecoder.end());
+      const exit: WorkerExit = { exit_code: code, signal, stderr_tail: stderrTail(stderrBuffered) };
       // this diagnostic used to live in defaultSpawn (console.error only);
       // promoted here alongside the worker_exited write so an operator
       // tailing logs still sees a crash, not just the audit record (issue #32)
@@ -2371,9 +2375,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
         origin: "board",
         payload: {
           kind: "worker_exited",
-          exit_code: code,
-          signal,
-          stderr_tail: stderrTail(stderrBuffered),
+          ...exit,
           worker_spawned_event_id: spawnedEventId,
           usage: lastResult ? toUsage(lastResult, advisorObserved) : null,
         },
@@ -2396,6 +2398,9 @@ export class ClaudeCodeWorker implements WorkerAdapter {
       // 回収済み観測ただ1つで、後始末はその後ろでしか走らない。この force が pickup を
       // 進めることは無く、そこへ早く到達させるだけである。
       this.containers.forceReclaim(task.id);
+      // ADR 0145: 盤面に exit を渡す。上限到達の一撃が**先**に後始末へ入れているので、
+      // 盤面側の判定はその session を報告なき exit として拾わない。
+      this.options.onWorkerExited?.(task.id, exit);
       // issue #356: この session の Precedent を投影する。**worker_exited を
       // 書いたあと**でなければ exit / usage 参照が投影に入らず、**書き込み
       // ストリームが閉じたあと**でなければ transcript の末尾が届いていない —
@@ -2429,8 +2434,9 @@ export class ClaudeCodeWorker implements WorkerAdapter {
    *  奪う」ことではなく、ADR 0025 point 6 が skill 列挙の失敗に対して取ったのと同じ
    *  「このセッションは走らせない(fail-open しない)」である。ずれが広い側なら
    *  worker は持つべきでない能力を持ったまま走ることになり、狭い側なら能力を1つ
-   *  失って詰まるだけなので、どちらの向きも走らせる理由がない。slot は既存の失敗
-   *  経路 — watchdog の per-type 時限 → 失敗 question(リトライ)— が回収する。
+   *  失って詰まるだけなので、どちらの向きも走らせる理由がない。回収で root が exit
+   *  すると、exit handler の盤面側の一撃が報告なき exit として失敗 question(リトライ)を
+   *  立てて slot を後始末へ入れる(ADR 0145 決定5)—— 封じ込めの確認 question と2枚になる。
    *  畳み込み停止ではなく**強制回収**なのは、猶予の目的が「エージェントに畳ませる」
    *  ことであり、ここで止めたい相手がまさにその「これ以上動くこと」だから。回収は
    *  watchdog と同じ盤面側 supervisor を通る(ADR 0099 決定2)— session を終わらせる

@@ -53,7 +53,7 @@ import type { PushClient, PushPayload, PushSubscription } from "../src/push.js";
 import type { Task } from "../src/tasks.js";
 import type { TranslationClient, TranslationResult } from "../src/translate.js";
 import { RECLAIM_TIMEOUT } from "../src/watchdog.js";
-import type { WorkerAdapter } from "../src/worker.js";
+import type { WorkerAdapter, WorkerExit } from "../src/worker.js";
 
 /** Required landing dependency for tests whose exercised door cannot reach a
  * landing path. A mistaken land call fails loudly; ancestor re-fire is a
@@ -198,6 +198,8 @@ export class ScriptedWorker implements WorkerAdapter {
   private startFailure: Error | undefined;
   /** 盤面が factory で渡す「worker が1度も走らなかった」の一撃(ADR 0118)。 */
   onSpawnFailed: ((taskId: string, failure: { error_code: string | null; message: string }) => void) | undefined;
+  /** 盤面が factory で渡す root process の exit の一撃(ADR 0145)。 */
+  onWorkerExited: ((taskId: string, exit: WorkerExit) => void) | undefined;
   /** undefined = 未スクリプト(checkUsage 時点の now から健全 text を生成)。
    *  null はスクリプトされた観測失敗(fail-closed)。 */
   private usageText: string | null | undefined = undefined;
@@ -241,6 +243,13 @@ export class ScriptedWorker implements WorkerAdapter {
   exit(taskId: string): void {
     this.exits.push(taskId);
     this.containers?.forceReclaim(taskId);
+  }
+
+  /** 実 adapter の exit handler と同じ順で、強制回収のあとに盤面へ exit を渡す(ADR 0145)。
+   *  `exit` は盤面へ渡さない —— 最終 verb の後の exit を演じる harness の既定の姿のまま残す。 */
+  exitWith(taskId: string, exit: WorkerExit): void {
+    this.exit(taskId);
+    this.onWorkerExited?.(taskId, exit);
   }
 
   async checkUsage(): Promise<string | null> {

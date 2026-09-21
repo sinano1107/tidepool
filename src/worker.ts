@@ -1,6 +1,10 @@
+import type { EventPayload } from "./events.js";
 import type { ExecutionSetting } from "./execution-setting.js";
 import { canonicalHarness, type Harness } from "./registry.js";
 import type { Task } from "./tasks.js";
+
+/** root process の exit の観測(ADR 0145)。証拠は `worker_exited` そのものなので、その部分集合。 */
+export type WorkerExit = Pick<Extract<EventPayload, { kind: "worker_exited" }>, "exit_code" | "signal" | "stderr_tail">;
 
 /** Boundary between the board and whatever executes tasks (design principle 7:
  *  the board speaks tasks; adapters speak vendors). The real adapter spawns a

@@ -67,7 +67,7 @@ import {
   type Watchdog,
   type WatchdogConfig,
 } from "./watchdog.js";
-import type { WorkerAdapter } from "./worker.js";
+import type { WorkerAdapter, WorkerExit } from "./worker.js";
 import {
   buildWorkspaceResolver,
   pathIsRegistryClone,
@@ -175,6 +175,8 @@ export type WorkerFactory = (deps: {
   onCapInterrupted: (taskId: string, reclaimed: Promise<void>) => void;
   /** ADR 0118: Node の `spawn()` が失敗した pickup を受ける盤面側の一撃(`spawnFailureHandler` 製)。 */
   onSpawnFailed: (taskId: string, failure: { error_code: string | null; message: string }) => void;
+  /** ADR 0145: root process の exit を受ける盤面側の一撃(watchdog の `onWorkerExited`)。 */
+  onWorkerExited: (taskId: string, exit: WorkerExit) => void;
 }) => WorkerAdapter;
 
 export interface ServerOptions {
@@ -515,6 +517,8 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
     boardCall: boardCalls.call,
     onCapInterrupted,
     onSpawnFailed,
+    // ADR 0145: watchdog は worker の後に組まれるので、遅延で引く(`heldForContainment` と同じ)
+    onWorkerExited: (taskId, exit) => watchdog?.onWorkerExited(taskId, exit),
   });
   const providerCliAuth: Partial<Record<Provider, CliAuthCheck>> = {
     ...(options.cliAuth && { anthropic: options.cliAuth }),

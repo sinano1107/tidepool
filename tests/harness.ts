@@ -258,6 +258,7 @@ export async function bootTidepool(options: BootOptions = {}): Promise<Tidepool>
     worker: options.workerAdapter ?? ((deps) => {
       worker.useContainers(deps.containers);
       worker.onSpawnFailed = deps.onSpawnFailed;
+      worker.onWorkerExited = deps.onWorkerExited;
       return worker;
     }),
     containerRuntime: containers,
