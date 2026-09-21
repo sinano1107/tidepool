@@ -1,6 +1,6 @@
 import { expect, test } from "./fixtures.js";
 
-// #746: 常駐 e2e(52 件)は Register タブを一度も開いていなかった —— triage で
+// #746: 常駐 e2e は Register タブを一度も開いていなかった —— triage で
 // main 上で確認済み、RegisterScreen の本体先頭に throw を入れて bundle を
 // 再ビルドしても全部緑のままだった。このスモークは描画だけを見る: Register に
 // 切り替えたら brain dump の入力欄と plain form への切替ボタンが出て、その間
