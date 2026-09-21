@@ -14,17 +14,14 @@ afterEach(async () => {
 
 it("同じ盤面で stopServer() を同時に2回撃っても、両方が reject せずに解決する", async () => {
   t = await bootTidepool();
-  await expect(Promise.all([t.stopServer(), t.stopServer()])).resolves.toBeDefined();
+  await Promise.all([t.stopServer(), t.stopServer()]);
 });
 
 it("1度目の停止が完了する前に2度目の呼び出しは解決しない", async () => {
   t = await bootTidepool();
   let firstDone = false;
   const first = t.stopServer();
-  void first.then(() => {
-    firstDone = true;
-  });
-  const second = t.stopServer();
-  await second;
+  void first.then(() => (firstDone = true));
+  await t.stopServer();
   expect(firstDone).toBe(true);
 });
