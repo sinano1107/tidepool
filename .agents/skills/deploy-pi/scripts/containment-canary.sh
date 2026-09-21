@@ -18,7 +18,8 @@
 #   1. loopback — enforced by the OS confinement itself (bwrap's netns on Linux,
 #      Seatbelt on macOS). No model in the loop: this phase runs curl directly
 #      under the confinement, so it is deterministic and cheap.
-#   2. tailnet — enforced by the CLI's own network proxy (`deniedDomains`). That
+#   2. tailnet — enforced by the CLI's own network proxy, whose default deny
+#      refuses anything outside the allowlist (ADR 0139). That
 #      proxy exists only inside a real `claude` session, so this phase costs one.
 #
 # THE PASS LIST IS EXACTLY THREE SHAPES: 401, 403, or a failed connection. Not
@@ -68,8 +69,8 @@ classify() {
   # exactly the hole #152 measured: `raspberrypi:8443` tunnelled through with
   # `200 Connection Established` and only *then* died on the TLS handshake
   # (SNI ≠ the tailnet cert). Reading that as "connection failed" would score
-  # the hole as a pass — delete the `raspberrypi` deny entry and the canary
-  # would still go green. TLS dying afterwards is not containment.
+  # the hole as a pass — a CLI update that reopened the short name would still
+  # go green. TLS dying afterwards is not containment.
   if [[ "$connect" == "200" ]]; then
     echo "proxy ALLOWED CONNECT (tunnel opened), then curl exit $rc|reachable"
     return
@@ -210,8 +211,8 @@ case "$(uname -s)" in
   Darwin)
     # Mirrors what the CLI grants on macOS: `allowLocalBinding: true` opens
     # localhost outbound and nothing else (ADR 0036 fact 1 — loopback is
-    # OS-allowed and never reaches the proxy, which is why `deniedDomains` has
-    # no say here). So on macOS the loopback invariant rests on the CREDENTIAL,
+    # OS-allowed and never reaches the proxy, which is why the proxy has no
+    # say here). So on macOS the loopback invariant rests on the CREDENTIAL,
     # not on the network, and 401 is the whole of the expected answer.
     confined=$(sandbox-exec \
       -p '(version 1)(allow default)(deny network-outbound)(allow network-outbound (remote ip "localhost:*"))' \
@@ -248,7 +249,6 @@ if ! (cd "$REPO" && ./node_modules/.bin/tsx scripts/emit-sandbox-settings.ts wor
   fail "could not emit the sandbox profile from $REPO — is that a tidepool checkout with node_modules?"
   exit 1
 fi
-log "  deniedDomains: $(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["sandbox"]["network"]["deniedDomains"])' "$WORK/work.json")"
 
 log "  running one sandboxed worker session (costs a real claude session)…"
 # cwd is a real tidepool checkout, not a bare directory holding a lone curl
@@ -263,7 +263,7 @@ log "  running one sandboxed worker session (costs a real claude session)…"
 #
 # The other two canaries refuse to run against a checkout that predates ADR 0038,
 # because their verdicts depend on the mode. This one deliberately does not: what
-# it measures is `deniedDomains` and the CLI's proxy, and the flags above cannot
+# it measures is the CLI proxy's default deny, and the flags above cannot
 # change that answer. Blocking a still-valid network measurement on the board's
 # version would cost a real containment check for no gain.
 SESSION=$(cd "$SESSION_REPO" && claude -p \

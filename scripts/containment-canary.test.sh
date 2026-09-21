@@ -48,7 +48,7 @@ check "CONNECT refused with 407 is refused"     000 407 56 refused
 # The regression this file exists for. #152 measured `raspberrypi:8443` getting
 # `200 Connection Established` and then failing the TLS handshake — the worker
 # DID get out. Judged by the failed request alone it looks like a dead
-# connection, and the canary would go green with the deny entry deleted.
+# connection, and the canary would go green if a CLI update reopened that hole.
 check "CONNECT allowed then TLS died is REACHABLE" 000 200 35 reachable
 check "CONNECT allowed then 401 is still refused"  401 200 0 refused
 

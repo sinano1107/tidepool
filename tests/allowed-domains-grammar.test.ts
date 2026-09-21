@@ -89,7 +89,7 @@ describe("workspaces.yaml の allowed_domains 文法検証", () => {
     );
   });
 
-  it("IPv4 リテラルは tailnet の名前 deny を迂回できるため拒否する", async () => {
+  it("IPv4 リテラルは運営者を名指さないため拒否する(ADR 0139 決定3)", async () => {
     const dir = await makeRegistry({
       "workspaces.yaml": `tidepool:
   path: /home/pi/work/tidepool
@@ -103,7 +103,7 @@ describe("workspaces.yaml の allowed_domains 文法検証", () => {
     );
   });
 
-  it("IPv6 リテラルも tailnet の名前 deny を迂回できるため拒否する", async () => {
+  it("IPv6 リテラルも運営者を名指さないため拒否する(ADR 0139 決定3)", async () => {
     const dir = await makeRegistry({
       "workspaces.yaml": `tidepool:
   path: /home/pi/work/tidepool

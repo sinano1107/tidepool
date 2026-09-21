@@ -334,14 +334,13 @@ describe("盤面 verb deny hook の挙動(issue #378)", () => {
  *  ものである。宛先(人間面)で塞ぐのは #140 / ADR 0034 の領分で、「bind は許すが
  *  人間ポート宛は塞ぐ」は両立する。
  *
- *  ADR 0036 / issue #152: tailnet の名前パターン deny は多層の一枚としてここに
- *  同居する。*.ts.net の完全名は実測で塞げたが、MagicDNS の短縮名
- *  (`raspberrypi`)は塞げず(2026-07-29 実測、プロキシが CONNECT を 200 で通す)、
- *  短縮名も列挙している。 */
-describe("buildSandboxSettings の network(ADR 0033 追記 / issue #146, ADR 0036 / issue #152)", () => {
+ *  ADR 0139 / issue #793: 盤面は `deniedDomains` に何も入れない。ネットワークの
+ *  床は CLI の proxy の既定 deny の側にあり、tailnet 名も
+ *  `allowed_domains` のふつうの値として扱う。キーは空配列のまま残す。 */
+describe("buildSandboxSettings の network(ADR 0033 追記 / issue #146, ADR 0139 / issue #793)", () => {
   // 期待値は独立した literal — ブロックまるごと置くので、キーが増えれば落ちる
   // (ベンダー既定の意味論に依存する床なので、黙って広がってはならない)。
-  it("どちらのプロファイルも未許可 egress を閉じ、loopback listen と tailnet deny を共有する", () => {
+  it("どちらのプロファイルも未許可 egress を閉じ、loopback listen を共有し、deny には何も入れない", () => {
     for (const taskType of ["work", "review"] as const) {
       expect(
         buildSandboxSettings({
@@ -352,7 +351,7 @@ describe("buildSandboxSettings の network(ADR 0033 追記 / issue #146, ADR 003
       ).toEqual({
         allowLocalBinding: true,
         strictAllowlist: true,
-        deniedDomains: ["*.ts.net", "raspberrypi"],
+        deniedDomains: [],
       });
     }
   });
@@ -370,7 +369,7 @@ describe("buildSandboxSettings の network(ADR 0033 追記 / issue #146, ADR 003
         allowLocalBinding: true,
         strictAllowlist: true,
         allowedDomains: ["registry.npmjs.org"],
-        deniedDomains: ["*.ts.net", "raspberrypi"],
+        deniedDomains: [],
       });
     }
   });
