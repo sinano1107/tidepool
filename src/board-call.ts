@@ -169,25 +169,34 @@ export function createBoardCalls(deps: {
       cancelLimit = deps.clock.setInterval(() => settle(() => null), spec.limitMs);
       let observed!: (exitCode: number | null) => T | null;
       const done = (): void => settle(() => observed(null));
-      try {
-        if (spec.pty) {
-          const { launch, cols, rows } = spec.pty;
-          const proc = container.spawnPty(launch, spec.command, spec.args, { cwd: spec.cwd, env: spec.env, cols, rows });
-          observed = read(proc as ContainedProcess & PtyProcess, done);
-          // pty の root の exit も stream と同じく force の契機(ADR 0109 決定4)
-          proc.onExit(done);
+      // spawn の throw だけを「何も生まれていない」と読む —— 読み手の throw まで null に畳まない
+      // process が1つも生まれていない(ENOENT / PATH の誤り / pty が立たない)= 容器は空
+      if (spec.pty) {
+        const { launch, cols, rows } = spec.pty;
+        let proc: PtyProcess;
+        try {
+          proc = container.spawnPty(launch, spec.command, spec.args, { cwd: spec.cwd, env: spec.env, cols, rows });
+        } catch {
+          settle(() => null);
           return;
         }
-        const proc = container.spawn(spec.command, spec.args, { cwd: spec.cwd, env: spec.env, stdin: spec.stdin });
         observed = read(proc as ContainedProcess & PtyProcess, done);
-        // ADR 0109 決定4 の形: root の exit は容器が空になった証拠ではないが、
-        // 残っているものが孤児である証拠ではある。行儀のよい exit は待たない。
-        proc.on("exit", (code) => settle(() => observed(code)));
-        proc.on("error", () => settle(() => null));
-      } catch {
-        // process が1つも生まれていない(ENOENT / PATH の誤り / pty が立たない)= 容器は空
-        settle(() => null);
+        // pty の root の exit も stream と同じく force の契機(ADR 0109 決定4)
+        proc.onExit(done);
+        return;
       }
+      let proc: ContainedProcess;
+      try {
+        proc = container.spawn(spec.command, spec.args, { cwd: spec.cwd, env: spec.env, stdin: spec.stdin });
+      } catch {
+        settle(() => null);
+        return;
+      }
+      observed = read(proc as ContainedProcess & PtyProcess, done);
+      // ADR 0109 決定4 の形: root の exit は容器が空になった証拠ではないが、
+      // 残っているものが孤児である証拠ではある。行儀のよい exit は待たない。
+      proc.on("exit", (code) => settle(() => observed(code)));
+      proc.on("error", () => settle(() => null));
     });
 
     // 2つ目の force の契機(上限到達)も1つ目(root の exit)も、ここ1箇所を通る。

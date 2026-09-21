@@ -253,7 +253,8 @@ export class ScriptedWorker implements WorkerAdapter {
 
 /** Scripted stand-in at the PTY boundary (issue #81 / ADR 0028): the test
  *  drives data emission and process exit, and reads back the spawn recipe,
- *  what checkUsage wrote to stdin, and how many times it killed the session. */
+ *  what checkUsage wrote to stdin, and every kill sent to the session (checkUsage sends
+ *  none — the mouth's force reclaims the container, ADR 0136 決定8). */
 export function recordingPty() {
   const calls: Array<{
     command: string;

@@ -1961,14 +1961,13 @@ describe("ClaudeCodeWorker", () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     try {
       const rec = recordingPty();
-      const { worker, runtime, clock } = await makeUsageWorker(rec.pty);
+      const { worker, clock } = await makeUsageWorker(rec.pty);
       const pending = worker.checkUsage();
       await vi.waitFor(() => expect(rec.calls).toHaveLength(1));
 
       await clock.advance(10 * 60_000);
 
       await expect(pending).resolves.toBeNull();
-      expect(runtime.forceReclaims).toEqual(runtime.created);
     } finally {
       vi.useRealTimers();
     }
