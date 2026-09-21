@@ -397,8 +397,8 @@ function mapData(
     humanTasks: yourTasks.map((t) => ({ id: t.id, title: liveTitle(t), blocking: t.blocking })),
     slot, pickupHalt, running: !!running, paused: !!paused,
     triageActive: halts.some((h) => h.kind === 'triage'),
-    // Spend-down (ADR 0091) — window ごとの盤面状態応答から素通し
-    spendDown: pause.spendDown ?? { session: null, week: null },
+    // Spend-down (ADR 0143) — Provider × 窓ごとの盤面状態応答から素通し
+    spendDown: pause.spendDown ?? {},
     providerUsage,
     lastLogId: log.entries.at(-1)?.id ?? null,
   };
@@ -1169,17 +1169,17 @@ function App() {
 
   // Spend-down (ADR 0091) — pause と同格の盤面状態。有効化は
   // サーバー側が即時 poll を発火する(残りを今すぐ燃やす操作なので)。
-  const setSpendDown = async (window: string, active: boolean) => {
+  const setSpendDown = async (provider: string, window: string, active: boolean) => {
     try {
-      await api('/api/spend-down', { window, active });
+      await api('/api/spend-down', { provider, window, active });
       await refresh();
       say(active ? 'warn' : 'info',
-        active ? `spend-down armed · ${window}` : `spend-down cancelled · ${window}`,
+        active ? `${provider} の ${window} を使い切ります` : `${provider} の ${window} の使い切りをやめました`,
         active
-          ? 'pace line off — burns to the 100% cap, expires at the window reset'
-          : 'pace line back on');
+          ? 'ペース線を外し、100% に届くまで流します。この窓がリセットされると自動で解除されます'
+          : 'ペース線に戻しました');
     } catch (err) {
-      say('danger', 'spend-down failed', String((err as Error).message || err));
+      say('danger', '使い切りを切り替えられませんでした', String((err as Error).message || err));
     }
   };
 

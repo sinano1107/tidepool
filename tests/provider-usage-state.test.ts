@@ -2,6 +2,7 @@ import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
+import { type Db, openDb } from "../src/db.js";
 import { setProviderPaceOffset } from "../src/pace-offsets.js";
 import { setSpendDown } from "../src/spend-down.js";
 import {
@@ -107,13 +108,18 @@ it("Provider/window の観測値・offset・freshness・CLI version を pause �
   expect((await api(t.baseUrl, "GET", "/api/settings/pace-offsets")).json.session).toBe(45);
 });
 
-it("OpenAI Provider window は active Spend-down で pace line を外し 100% cap だけを残す", async () => {
-  t = await bootTidepool();
-  const db = t.db;
-  const now = new Date("2026-08-28T08:00:00.000Z");
-  setSpendDown(db, "session", now);
+// --- Spend-down は Provider × ウィンドウで当たり、Provider をまたがない(ADR 0143) ---
 
-  const observed = evaluateAndReportProviderUsage(
+const SPEND_NOW = new Date("2026-08-28T08:00:00.000Z");
+const H = 60 * 60 * 1000;
+
+/** primary: 07:00 開始・経過20%・線 20−10=10、secondary: 1日前開始・経過14.3%・線 4.3。
+ *  どちらも使用率 50% でペース線を超える観測。 */
+function evaluateOpenAi(db: Db, secondaryPercent = 50) {
+  for (const window of ["primary", "secondary"]) {
+    setProviderPaceOffset(db, { provider: "openai", window, offset: 10 });
+  }
+  return evaluateAndReportProviderUsage(
     db,
     {
       provider: "openai",
@@ -121,17 +127,51 @@ it("OpenAI Provider window は active Spend-down で pace line を外し 100% ca
       plan: "plus",
       cliVersion: "codex-cli 0.147.0",
       windows: [
+        { window: "primary", model: null, usedPercent: 50, durationMs: 5 * H, resetsAt: new Date("2026-08-28T12:00:00.000Z") },
         {
-          window: "primary",
+          window: "secondary",
           model: null,
-          usedPercent: 50,
-          durationMs: 5 * 60 * 60 * 1000,
-          resetsAt: new Date("2026-08-28T12:00:00.000Z"),
+          usedPercent: secondaryPercent,
+          durationMs: 7 * 24 * H,
+          resetsAt: new Date("2026-09-03T08:00:00.000Z"),
         },
       ],
     },
-    now,
+    SPEND_NOW,
   );
+}
+
+it("anthropic の Spend-down は openai の窓のペース線を外さない — オフセット込みの線が生きる", () => {
+  const db = openDb(":memory:");
+  setSpendDown(db, "anthropic", "session", SPEND_NOW);
+  setSpendDown(db, "anthropic", "week", SPEND_NOW);
+
+  const observed = evaluateOpenAi(db);
+
+  // catch-up は 07:00 + (50 + 10)% × 5h = 10:00
+  expect(observed.windows[0]).toMatchObject({ throttled: true, resumesAt: new Date("2026-08-28T10:00:00.000Z") });
+  expect(observed.windows[1]).toMatchObject({ throttled: true });
+  db.close();
+});
+
+it("openai の primary の Spend-down は primary の線だけを外し、secondary の線は生きる", () => {
+  const db = openDb(":memory:");
+  setSpendDown(db, "openai", "primary", SPEND_NOW);
+
+  const observed = evaluateOpenAi(db);
 
   expect(observed.windows[0]).toMatchObject({ throttled: false, resumesAt: null });
+  expect(observed.windows[1]).toMatchObject({ throttled: true });
+  db.close();
+});
+
+it("openai の secondary の Spend-down は 100% cap だけを残し(再開はリセット時刻)、primary の線は生きる", () => {
+  const db = openDb(":memory:");
+  setSpendDown(db, "openai", "secondary", SPEND_NOW);
+
+  const observed = evaluateOpenAi(db, 100);
+
+  expect(observed.windows[0]).toMatchObject({ throttled: true, resumesAt: new Date("2026-08-28T10:00:00.000Z") });
+  expect(observed.windows[1]).toMatchObject({ throttled: true, resumesAt: new Date("2026-09-03T08:00:00.000Z") });
+  db.close();
 });

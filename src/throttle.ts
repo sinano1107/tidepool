@@ -2,7 +2,7 @@ import type { Db } from "./db.js";
 import { windowMatchesModel } from "./execution-setting.js";
 import { defaultProviderPaceOffset, getProviderPaceOffset } from "./pace-offsets.js";
 import type { Provider } from "./registry.js";
-import { getSpendDown } from "./spend-down.js";
+import { getSpendDown, isSpendDownActive } from "./spend-down.js";
 
 export interface ProviderUsageWindowState {
   window: string;
@@ -210,11 +210,7 @@ export function evaluateAndReportProviderUsage(
     );
     const startsAt = window.resetsAt.getTime() - window.durationMs;
     const elapsed = (now.getTime() - startsAt) / window.durationMs;
-    const spendDownWindow = window.window === "primary" || window.window === "session"
-      ? spendDown.session
-      : spendDown.week;
-    const spendDownActive =
-      spendDownWindow !== null && spendDownWindow.activatedAt.getTime() >= startsAt;
+    const spendDownActive = isSpendDownActive(spendDown, observation.provider, window.window, startsAt);
     const throttled = spendDownActive
       ? window.usedPercent >= 100
       : window.usedPercent >= 100 || window.usedPercent > elapsed * 100 - offset;

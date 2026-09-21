@@ -161,7 +161,6 @@ function TpQueueList({ tasks, onReorder, onFront, headId }: TpQueueListProps) {
   );
 }
 
-type QueueScreenSpendWindow = 'session' | 'week';
 interface QueueScreenProps {
   data: {
     /** 色も行も meta もサーバが導いた答えをそのまま描く(ADR 0068 決定1)。 */
@@ -173,9 +172,9 @@ interface QueueScreenProps {
   };
   paused: boolean;
   onTogglePause: () => void;
-  /** window ごとに独立 —— null は未武装。 */
-  spendDown: Record<QueueScreenSpendWindow, { activatedAt: string } | null>;
-  onSpendDown: (window: QueueScreenSpendWindow, armed: boolean) => void;
+  /** Provider → 窓ごとに独立 —— null は未武装、キーが無い窓(fable など)は対象外。 */
+  spendDown: import('../src/wire-contract').WireContract['GET /api/pause']['spendDown'];
+  onSpendDown: (provider: string, window: string, armed: boolean) => void;
   onFront: (id: string) => void;
   onDoneHuman: (id: string) => void;
   onReorder: (next: QueueScreenTask[], id: string, position: number) => void;
@@ -189,7 +188,6 @@ function QueueScreen({ data, paused, onTogglePause, spendDown, onSpendDown, onFr
   // 列挙が持ち(ADR 0068 決定1)、この画面はその答えをそのまま描く。`paused` がここに
   // 残るのは pause ボタン・波線・文字色といった pause の操作面のためである。
   const slot = data.slot;
-  const activeSpendDown = (['session', 'week'] as const).filter((window) => spendDown[window]);
   const providerUsage = data.providerUsage ?? [];
   // the true queue head, by id — not a rendered-position computation, so a
   // sliced view (Triage's previewQueue) never mislabels it (issue #82 follow-up)
@@ -253,39 +251,29 @@ function QueueScreen({ data, paused, onTogglePause, spendDown, onSpendDown, onFr
                   {usage.observedAt && <span style={{ marginLeft: 'auto', fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>observed {new Date(usage.observedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>}
                 </div>
                 {usage.reason && <div style={{ marginTop: 3, fontSize: 'var(--text-xs)', color: 'var(--coral-4)' }}>{usage.reason}</div>}
-                {usage.windows.map((window) => (
-                  <div key={`${window.window}:${window.model ?? ''}`} style={{ marginTop: 3, fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: window.throttled ? 'var(--coral-4)' : 'var(--text-muted)' }}>
-                    {window.window}{window.model ? ` · ${window.model}` : ''} · {window.usedPercent ?? '?'}% · offset {window.offset}pt · {window.throttled ? `paced${window.resumesAt ? ` until ${new Date(window.resumesAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : ''}` : 'on pace'}
-                  </div>
-                ))}
+                {usage.windows.map((window) => {
+                  // Spend-down (ADR 0143): 入口は既知の組の窓の行だけ —— キーの集合はサーバが返す
+                  const spend = spendDown[usage.provider]?.[window.window];
+                  return (
+                    <div key={`${window.window}:${window.model ?? ''}`} style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 3, fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: window.throttled ? 'var(--coral-4)' : spend ? 'var(--text-body)' : 'var(--text-muted)' }}>
+                      <span style={{ flex: 1, minWidth: 0 }}>
+                        {window.window}{window.model ? ` · ${window.model}` : ''} · {window.usedPercent ?? '?'}% · {spend
+                          ? '使い切り中 — 100% で止まり、リセットで解除'
+                          : `offset ${window.offset}pt · ${window.throttled ? `paced${window.resumesAt ? ` until ${new Date(window.resumesAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : ''}` : 'on pace'}`}
+                      </span>
+                      {spend !== undefined && (
+                        <Button variant="secondary" size="sm" onClick={() => onSpendDown(usage.provider, window.window, !spend)}>
+                          {spend ? 'やめる' : '使い切る'}
+                        </Button>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             ))}
           </div>
         </Card>
       )}
-
-      {/* Spend-down (ADR 0091): each window is an independent target and
-         expires at its own reset. week also carries fable on the server. */}
-      <div style={{ padding: '8px 12px', marginBottom: 14, background: activeSpendDown.length ? 'var(--sun-1)' : 'transparent', border: activeSpendDown.length ? '1px solid var(--sun-2)' : '1px solid transparent', borderRadius: 'var(--radius-md)' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
-          {activeSpendDown.length > 0 && <span style={{ display: 'inline-flex', width: 13, height: 13, color: 'var(--sun-4)', flexShrink: 0 }}><i data-lucide="flame" style={{ width: 13, height: 13 }}></i></span>}
-          <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: activeSpendDown.length ? 'var(--text-body)' : 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
-            spend-down{activeSpendDown.length ? ` · ${activeSpendDown.join(' + ')}` : ''}
-          </span>
-        </div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-        {(['session', 'week'] as const).map((window) => (
-          <div key={window} style={{ display: 'flex', alignItems: 'center', gap: 8, minHeight: 30 }}>
-            <span style={{ flex: 1, minWidth: 0, fontSize: 'var(--text-xs)', color: spendDown[window] ? 'var(--text-body)' : 'var(--text-muted)' }}>
-              {spendDown[window] ? `${window} · 100% cap · expires at reset` : `${window} · pace line on`}
-            </span>
-            <Button variant="secondary" size="sm" onClick={() => onSpendDown(window, !spendDown[window])}>
-              {spendDown[window] ? `cancel ${window}` : `arm ${window}`}
-            </Button>
-          </div>
-        ))}
-        </div>
-      </div>
 
       <div style={{ marginBottom: 28 }}>
         <TpQueueList tasks={data.queue} onReorder={onReorder} onFront={onFront} headId={headId} />

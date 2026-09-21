@@ -1,4 +1,5 @@
 import xtermHeadless from "@xterm/headless";
+import { isSpendDownActive, type SpendDownState } from "./spend-down.js";
 import { offsetMinutesEastOfUtc } from "./tz.js";
 
 const { Terminal } = xtermHeadless;
@@ -185,18 +186,6 @@ export interface ThrottleDecision {
   };
 }
 
-/** Spend-down (ADR 0091): 有効な各ウィンドウのペース線を独立に外す。 */
-export type SpendDownWindow = "session" | "week";
-
-export interface SpendDownWindowState {
-  activatedAt: Date;
-}
-
-export interface SpendDownState {
-  session: SpendDownWindowState | null;
-  week: SpendDownWindowState | null;
-}
-
 /** ADR 0030: throttled ⟺ 使用率% > 経過時間割合% − オフセット(pt)(strict)。
  *  経過割合は「リセット時刻 − ウィンドウ長」で逆算した開始時刻から出す。
  *  now が逆算した開始より前(不整合)は観測不能と同じ fail-closed に落とす。 */
@@ -229,43 +218,24 @@ function evaluateCappedWindow(w: UsageWindowSnapshot, windowMs: number, now: Dat
   return { throttled: true, resumeAt: w.resetsAt };
 }
 
-/** Spend-down が対象ウィンドウのリセットで自動失効したか: 有効化時刻が観測
- *  された現ウィンドウの開始より前なら、有効化されたウィンドウはもうリセット
- *  済み。対象が観測不能なら判定できず失効させない(fail-closed 側は
- *  evaluateThrottle 本体が受ける)。evaluateThrottle 自身の無視と scheduler の
- *  状態クリアが同じ述語を共有する。 */
-export function isSpendDownExpired(
-  window: SpendDownWindow,
-  spendDown: SpendDownWindowState,
-  snapshot: UsageSnapshot,
-): boolean {
-  const target = window === "session" ? snapshot.session : snapshot.week;
-  if (!target) return false;
-  if (target === "idle") return true;
-  const windowMs = window === "session" ? SESSION_WINDOW_MS : WEEK_WINDOW_MS;
-  return spendDown.activatedAt.getTime() < target.resetsAt.getTime() - windowMs;
-}
-
 /** ADR 0030: session / week のどちらかがペース線を超えていれば盤面全体の新規
  *  pickup を絞る。fable 線は盤面を止めない — fable モデルのタスクだけを絞る
  *  資源単位の線で、windows.fable として運ばれ scheduler がタスク単位に適用する。
- *  実行中のタスクには決して触れない。spendDown(失効済みは無視)は対象
- *  ウィンドウの判定を evaluateCappedWindow に差し替える。 */
+ *  実行中のタスクには決して触れない。spendDown(arm の後に開いた窓には当たらない)は対象
+ *  ウィンドウの判定を evaluateCappedWindow に差し替える(当たるかは isSpendDownActive)。 */
 export function evaluateThrottle(
   snapshot: UsageSnapshot,
   offsets: PaceOffsets,
   now: Date,
   spendDown?: SpendDownState | null,
 ): ThrottleDecision {
-  const sessionSpendDown = spendDown?.session;
-  const weekSpendDown = spendDown?.week;
-  const sessionActive = sessionSpendDown && !isSpendDownExpired("session", sessionSpendDown, snapshot);
-  const weekActive = weekSpendDown && !isSpendDownExpired("week", weekSpendDown, snapshot);
+  const active = (window: string, w: UsageWindowSnapshot, windowMs: number) =>
+    !!spendDown && isSpendDownActive(spendDown, "anthropic", window, w.resetsAt.getTime() - windowMs);
   const session =
     snapshot.session === "idle"
       ? { throttled: false, resumeAt: null }
       : snapshot.session &&
-        (sessionActive
+        (active("session", snapshot.session, SESSION_WINDOW_MS)
           ? evaluateCappedWindow(snapshot.session, SESSION_WINDOW_MS, now)
           : evaluateWindow(snapshot.session, SESSION_WINDOW_MS, offsets.session, now));
   // spend-down(week) は fable の線も一緒に外す — 同じ瞬間に失効する予算(ADR 0030)
@@ -273,7 +243,7 @@ export function evaluateThrottle(
     snapshot.week === "idle"
       ? { throttled: false, resumeAt: null }
       : snapshot.week &&
-        (weekActive
+        (active("week", snapshot.week, WEEK_WINDOW_MS)
           ? evaluateCappedWindow(snapshot.week, WEEK_WINDOW_MS, now)
           : evaluateWindow(snapshot.week, WEEK_WINDOW_MS, offsets.week, now));
   // fable の逆算不整合も null(観測なし)へ倒す: fail-closed は session/week の
@@ -283,7 +253,7 @@ export function evaluateThrottle(
     snapshot.fable === "idle"
       ? { throttled: false, resumeAt: null }
       : snapshot.fable &&
-        (weekActive
+        (active("fable", snapshot.fable, WEEK_WINDOW_MS)
           ? evaluateCappedWindow(snapshot.fable, WEEK_WINDOW_MS, now)
           : evaluateWindow(snapshot.fable, WEEK_WINDOW_MS, offsets.fable, now));
   const windows = { session: session ?? null, week: week ?? null, fable: fable ?? null };

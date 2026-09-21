@@ -88,7 +88,7 @@ import {
   entryExclusionPredicate,
   type TaskExecutionCandidates,
 } from "./scheduler.js";
-import { clearSpendDown, getSpendDown, setSpendDown } from "./spend-down.js";
+import { clearSpendDown, getSpendDown, isKnownSpendDownTarget, setSpendDown } from "./spend-down.js";
 import {
   approvalAnnotation,
   type BoardTask,
@@ -469,11 +469,14 @@ const pauseSchema = z.object({
   paused: z.boolean(),
 });
 
-// Spend-down (ADR 0030 / 0091) — pause と同じ人間専用の盤面状態。
-const spendDownSchema = z.object({
-  window: z.enum(["session", "week"]),
-  active: z.boolean(),
-});
+// Spend-down (ADR 0030 / 0091 / 0143) — pause と同じ人間専用の盤面状態。門は既知の組だけを
+// 見る —— 最新の観測にその窓があるかは見ない(ADR 0143 決定5)。
+const spendDownSchema = z
+  .object({ provider: z.enum(PROVIDER_VALUES), window: z.string(), active: z.boolean() })
+  .refine((body) => isKnownSpendDownTarget(body.provider, body.window), {
+    message: "not a known Spend-down target",
+    path: ["window"],
+  });
 
 const objectionSchema = z.object({
   entry_id: z.number().int().positive(),
@@ -1728,12 +1731,18 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
 
   // Spend-down は pause と同じ「盤面状態」応答に同乗する — UI の露出面が同格
   // (ADR 0030: settings ではなく盤面状態としての表示・操作面)
-  function spendDownJson() {
-    const state = getSpendDown(db);
-    return {
-      session: state.session && { activatedAt: state.session.activatedAt.toISOString() },
-      week: state.week && { activatedAt: state.week.activatedAt.toISOString() },
-    };
+  function spendDownJson(): WireContract["GET /api/pause"]["spendDown"] {
+    return Object.fromEntries(
+      Object.entries(getSpendDown(db)).map(([provider, windows]) => [
+        provider,
+        Object.fromEntries(
+          Object.entries(windows).map(([window, state]) => [
+            window,
+            state && { activatedAt: state.activatedAt.toISOString() },
+          ]),
+        ),
+      ]),
+    );
   }
 
   // 返り値型は wire の契約から —— 呼び手は spread で合成するので、ここで照らさないと
@@ -1775,11 +1784,9 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       res.status(400).json({ error: z.treeifyError(parsed.error) });
       return;
     }
-    if (parsed.data.active) {
-      setSpendDown(db, parsed.data.window, clock.now());
-    } else {
-      clearSpendDown(db, parsed.data.window);
-    }
+    const { provider, window, active } = parsed.data;
+    if (active) setSpendDown(db, provider, window, clock.now());
+    else clearSpendDown(db, provider, window);
     // 有効化(今すぐ残りを燃やせ)も取り消しも即時再評価 — 取り消し側を tick 待ち
     // にすると、spend-down 時代の Provider 使用量の判定が最大1時間 UI に残る
     // (ADR 0028「fail-closed は可視化とセット」の可視化の延長)

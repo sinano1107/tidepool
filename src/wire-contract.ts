@@ -119,7 +119,9 @@ export interface WireContract {
   "GET /api/your-tasks": Array<Pick<QueueTask, "id" | "title" | "issue_live_state"> & { blocking: string | null }>;
   "GET /api/pause": {
     halts: BoardHalt[];
-    spendDown: Record<"session" | "week", { activatedAt: string } | null>;
+    /** Provider → 窓 → arm の状態(null は未 arm)。キーの集合は Spend-down の既知の組で、
+     *  正本は src/spend-down.ts の SPEND_DOWN_WINDOWS —— WebUI はここに在る窓にだけ入口を出す。 */
+    spendDown: Record<string, Record<string, { activatedAt: string } | null>>;
     providerUsage?: ProviderUsage[];
   };
   "GET /api/log": {
