@@ -762,8 +762,8 @@ function RegisterScreen({ onRegister, parentTask, onClose }) {
       resetContent();
       if (childMode) onClose?.();
     } catch (rawErr) {
-      if (rawErr instanceof ApiError && rawErr.status === 422 && rawErr.detail) {
-        const detail = rawErr.detail;
+      const detail = apiErrorDetail(rawErr, "POST /api/tasks 422");
+      if (detail) {
         setGate({
           ...detail,
           workspace: f.workspace,
@@ -2480,7 +2480,7 @@ function SettingsScreen({ say, registerLeaveGuard }) {
       // ADR 0087 決定4: 残る checkout の場所は応答が運ぶ(WebUI が組み立てない)
       remove: async (confirm, name) => {
         const { checkout } = await api("DELETE /api/workspaces/:name", { params: { name }, body: confirm });
-        return checkout ? `checkout remains at ${checkout}` : void 0;
+        return `checkout remains at ${checkout}`;
       }
     },
     agents: {

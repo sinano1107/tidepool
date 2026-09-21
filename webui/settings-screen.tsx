@@ -2182,7 +2182,7 @@ function SettingsScreen({ say, registerLeaveGuard }: {
       // ADR 0087 決定4: 残る checkout の場所は応答が運ぶ(WebUI が組み立てない)
       remove: async (confirm, name) => {
         const { checkout } = await api('DELETE /api/workspaces/:name', { params: { name }, body: confirm });
-        return checkout ? `checkout remains at ${checkout}` : undefined;
+        return `checkout remains at ${checkout}`;
       },
     },
     agents: {

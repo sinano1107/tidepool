@@ -11,4 +11,7 @@
   // 動的セグメントを持つキーは params を省けない
   // @ts-expect-error
   void api('GET /api/tasks/:id');
+  // エラーの本文を開けるのはエラー応答の行だけ
+  // @ts-expect-error
+  void apiErrorDetail(null, 'GET /api/workspaces');
 }

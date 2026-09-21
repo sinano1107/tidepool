@@ -194,9 +194,8 @@ function RegisterScreen({ onRegister, parentTask, onClose }: RegisterScreenProps
       // The inspected reference is burned into the gate state so a later
       // edit of the form fields can't repoint the approved comment (or the
       // retry) at a different issue than the one that was inspected.
-      // webui/app.tsx の api() が投げる ApiError —— status / detail はここで開く
-      if (rawErr instanceof ApiError && rawErr.status === 422 && rawErr.detail) {
-        const detail: WireContract['POST /api/tasks 422'] = rawErr.detail;
+      const detail = apiErrorDetail(rawErr, 'POST /api/tasks 422');
+      if (detail) {
         setGate({
           ...detail,
           workspace: f.workspace,
