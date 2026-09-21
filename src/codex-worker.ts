@@ -504,6 +504,39 @@ function skillConfig(codexHome: string, workspace: string): string {
   return `skills.config=[${paths.map((path) => `{path=${toml(path)},enabled=false}`).join(",")}]`;
 }
 
+/** worker の spawn に渡す設定の組み立て。preflight は同じここから placeholder で組み、
+ *  `--strict-config` の app-server に読ませる(ADR 0142 決定2)。 */
+function spawnConfig(input: {
+  taskType: Task["type"];
+  effort: string;
+  developerInstructions: string;
+  mcpUrl: string;
+  enabledTools: readonly string[];
+  workspace: string;
+  allowedDomains: readonly string[];
+  taskTemp: string;
+  executable: string;
+  codexHome: string;
+  hook: string;
+}): string[] {
+  return [
+    `model_reasoning_effort=${toml(input.effort)}`,
+    `developer_instructions=${toml(input.developerInstructions)}`,
+    ...permissionConfig(input.taskType, input.workspace, input.taskTemp, input.executable, input.allowedDomains),
+    ...closedSurfaceConfig(),
+    'forced_login_method="chatgpt"',
+    `mcp_servers.tidepool.url=${toml(input.mcpUrl)}`,
+    `mcp_servers.tidepool.enabled_tools=${toml(input.enabledTools)}`,
+    "mcp_servers.tidepool.required=true",
+    // ADR 0129 決定1: 答える人の居ない exec では承認の問いは Cancel にしかならない。verb の権限は盤面側が縛る
+    'mcp_servers.tidepool.default_tools_approval_mode="approve"',
+    // ADR 0134 決定3: この key は版に依らず効く —— 絞るのではなく本数の意味を固定する
+    "agents.max_concurrent_threads_per_session=3",
+    skillConfig(input.codexHome, input.workspace),
+    ...hookConfig(input.hook),
+  ];
+}
+
 function configArgs(config: readonly string[]): string[] {
   return config.flatMap((entry) => ["-c", entry]);
 }
@@ -601,12 +634,14 @@ async function probeHookRegistration(
   call: BoardCall,
   executable: string,
   env: NodeJS.ProcessEnv,
-  hook: string,
+  config: (taskType: "work" | "review") => string[],
 ): Promise<CodexHookRegistration[]> {
   const command = codexCommandThrough(call, PREFLIGHT_KIND, CODEX_PREFLIGHT_LIMIT_MS);
-  const [listed] = await callAppServer(command, executable, env, configArgs(hookConfig(hook)), [
+  // ADR 0142 決定4: 未知キーはここで app-server の失敗として投げ、`could not run` に倒れる
+  const [listed] = await callAppServer(command, executable, env, ["--strict-config", ...configArgs(config("work"))], [
     { method: "hooks/list", params: { cwds: [] } },
   ]);
+  await callAppServer(command, executable, env, ["--strict-config", ...configArgs(config("review"))], []);
   return observedHooks(listed);
 }
 
@@ -738,11 +773,26 @@ async function actualCodexCapability(options: {
     );
     await probePermission(call, options.executable, workspace, taskTemp, "work", env, options.allowedDomains);
     await probePermission(call, options.executable, workspace, taskTemp, "review", env, options.allowedDomains);
+    const hook = installBoardHook(options.codexHome);
     return {
       cliVersion,
       skills: observedSkills(promptInput),
       developerMarkers: observedDeveloperMarkers(promptInput),
-      hooks: await probeHookRegistration(call, options.executable, env, installBoardHook(options.codexHome)),
+      hooks: await probeHookRegistration(call, options.executable, env, (taskType) =>
+        // 問うのは parse だけ —— 値は形の正しい placeholder(ADR 0142 決定2)
+        spawnConfig({
+          taskType,
+          effort: "high",
+          developerInstructions: CODEX_DEVELOPER_MARKER,
+          mcpUrl: "http://127.0.0.1/mcp",
+          enabledTools: BOARD_VERBS,
+          workspace,
+          allowedDomains: options.allowedDomains,
+          taskTemp,
+          executable: options.executable,
+          codexHome: options.codexHome,
+          hook,
+        })),
       permissions: [...CODEX_PERMISSIONS],
       features: observedFeatures,
     };
@@ -888,28 +938,23 @@ export class CodexWorker implements WorkerAdapter {
     const taskMcpUrl = new URL(this.options.mcpUrl);
     taskMcpUrl.searchParams.set("task", task.id);
     const memory = buildMemoryInjection(this.options.db, task, workspace.name, agent.name);
-    const config = [
-      `model_reasoning_effort=${toml(setting.effort)}`,
-      `developer_instructions=${toml(developerInstructions(memory.section, agent.definition.systemPrompt, agent.profile.guidance))}`,
-      ...permissionConfig(task.type, workspace.path, taskTemp, this.options.executable, workspace.allowed_domains ?? []),
-      ...closedSurfaceConfig(),
-      'forced_login_method="chatgpt"',
-      `mcp_servers.tidepool.url=${toml(taskMcpUrl.toString())}`,
+    const config = spawnConfig({
+      taskType: task.type,
+      effort: setting.effort,
+      developerInstructions: developerInstructions(memory.section, agent.definition.systemPrompt, agent.profile.guidance),
+      mcpUrl: taskMcpUrl.toString(),
       // ADR 0122 決定2: MCP の登録と同じ差を写す。宣言と盤面の面が集合として一致することは
       // tests/codex-worker.test.ts が固定する(ADR 0125 決定2)
-      `mcp_servers.tidepool.enabled_tools=${toml(
-        isMetaReviewOf(this.options.db, task.id, "memory")
-          ? [...BOARD_VERBS.filter((verb) => !(WORKER_MEMORY_VERBS as readonly string[]).includes(verb)), ...MEMORY_META_REVIEW_VERBS]
-          : BOARD_VERBS,
-      )}`,
-      "mcp_servers.tidepool.required=true",
-      // ADR 0129 決定1: 答える人の居ない exec では承認の問いは Cancel にしかならない。verb の権限は盤面側が縛る
-      'mcp_servers.tidepool.default_tools_approval_mode="approve"',
-      // ADR 0134 決定3: この key は版に依らず効く —— 絞るのではなく本数の意味を固定する
-      "agents.max_concurrent_threads_per_session=3",
-      skillConfig(this.options.codexHome, workspace.path),
-      ...hookConfig(hook),
-    ];
+      enabledTools: isMetaReviewOf(this.options.db, task.id, "memory")
+        ? [...BOARD_VERBS.filter((verb) => !(WORKER_MEMORY_VERBS as readonly string[]).includes(verb)), ...MEMORY_META_REVIEW_VERBS]
+        : BOARD_VERBS,
+      workspace: workspace.path,
+      allowedDomains: workspace.allowed_domains ?? [],
+      taskTemp,
+      executable: this.options.executable,
+      codexHome: this.options.codexHome,
+      hook,
+    });
     const child = this.containers.open(task.id).spawn(
       this.options.executable,
       [

@@ -4,11 +4,12 @@ import { mkdir, mkdtemp, realpath, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   CODEX_FEATURE_SNAPSHOT,
   type CodexSpawnFn,
   CodexWorker,
+  createCodexCapabilityCheck,
   resolveCodexExecutable,
 } from "../src/codex-worker.js";
 import { openDb } from "../src/db.js";
@@ -16,7 +17,7 @@ import { listEvents } from "../src/events.js";
 import { buildMemoryInjection, recordKnowledge } from "../src/memory.js";
 import { openQuarantineValues } from "../src/quarantine.js";
 import { registerTask } from "../src/tasks.js";
-import { FakeClock, passthroughContainers } from "./fakes.js";
+import { containerHarness, FakeClock, passthroughContainers, recordingSpawn as recordingProcesses } from "./fakes.js";
 import { bootTidepool, mcpClient, type Tidepool } from "./harness.js";
 import { makeRegistry } from "./registry-fixture.js";
 
@@ -230,6 +231,40 @@ describe("CodexWorker (ADR 0098)", () => {
 
     const config = f.process.calls[0]!.args.filter((_, index, args) => args[index - 1] === "-c").join("\n");
     expect(config).toContain('permissions.tidepool-review.network={"enabled"=true,"domains"={"api.github.com"="allow","127.0.0.1"="allow"}');
+  });
+
+  it("preflight の app-server が読む設定のキーは、work / review とも同じ種別の spawn のキーと一致する(ADR 0142 決定2・3)", async () => {
+    const f = await fixture();
+    f.worker.start(task(f.db));
+    f.worker.start(registerTask(
+      f.db,
+      { type: "review", assignee: "codex-agent", workspace: "work", title: "codex-review", purpose: "read the diff", completion_criteria: "findings are filed" },
+      new Date("2026-08-24T00:00:00.000Z"),
+    ));
+
+    // preflight を --version・prompt-input・features list・sandbox 2本・hooks/list と通し、7本目の review 呼び出しまで進める
+    const preflight = recordingProcesses();
+    const capability = createCodexCapabilityCheck({
+      executable: "/opt/tidepool/bin/codex",
+      codexHome: f.codexHome,
+      workspace: f.workspace,
+      allowedDomains: ["api.github.com"],
+      call: containerHarness(passthroughContainers(preflight.spawn)).boardCall,
+    })();
+    for (const i of [0, 1, 2, 3, 4, 5]) {
+      await vi.waitFor(() => expect(preflight.calls).toHaveLength(i + 1));
+      if (i === 1) preflight.stdout.write("[]");
+      if (i === 5) preflight.stdout.write('{"id":1,"result":{}}\n{"id":2,"result":{"data":[]}}\n');
+      preflight.emitExitAt(i, 0, null);
+    }
+    await vi.waitFor(() => expect(preflight.calls).toHaveLength(7));
+    preflight.emitExitAt(6, 1, null);
+    await capability;
+
+    const keys = (args: string[]) =>
+      new Set(args.filter((_, index) => args[index - 1] === "-c").map((entry) => entry.split("=", 1)[0]));
+    expect(keys(preflight.calls[5]!.args)).toEqual(keys(f.process.calls[0]!.args));
+    expect(keys(preflight.calls[6]!.args)).toEqual(keys(f.process.calls[1]!.args));
   });
 
   it("主題 memory の meta-review の spawn では enabled_tools が worker の memory verb を専用 verb で置き換え、普通の task は変わらない(ADR 0122 決定2)", async () => {
