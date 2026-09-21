@@ -6,7 +6,8 @@ supersede する。** 両 ADR の他の部分は生きている。実測(deny �
 issue #793 のコメントに置く。
 
 `deniedDomains: ["*.ts.net", "raspberrypi"]` を支えていた根拠は3つとも立たなくなっていた。持ち出し先とされた同居の
-context-vault はトークン無しの書き込みに 401 を返し(ADR 0036 の #150 追記が自分で測っている)、worker は token を持たない。
+context-vault はトークン無しの書き込みに 401 を返し(ADR 0036 の #150 追記が自分で測っている)、worker に token を渡す経路は
+設計上無い(cwd 外の読み取りは床が拒む — ADR 0033 / 0038)。
 egress は ADR 0072 以降は既定 deny で、#152 で観測した「dot 無しの短縮名が allowlist の手前を通る」穴も現行 CLI では
 deny を抜いても再現しない。残る働きは「人間が明示確認つきで `allowed_domains` に書いた tailnet 名を黙って拒む」だけで、
 これは2つの害を持つ — ADR 0034 が予約し ADR 0072 決定1 が形の根拠に引いた「tailnet は allowlist で個別に開ける」を
