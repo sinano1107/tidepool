@@ -401,6 +401,7 @@ function permissionConfig(
   workspace: string,
   taskTemp: string,
   executable: string,
+  allowedDomains: readonly string[],
 ): string[] {
   const name = taskType === "review" ? "tidepool-review" : "tidepool-work";
   const parent = taskType === "review" ? ":read-only" : ":workspace";
@@ -419,7 +420,8 @@ function permissionConfig(
   };
   const network = {
     enabled: true,
-    domains: { "127.0.0.1": "allow" },
+    // ADR 0072 決定1: workspace の allowed_domains。文法は registry が検証済み
+    domains: Object.fromEntries([...allowedDomains, "127.0.0.1"].map((domain) => [domain, "allow"])),
     unix_sockets: { [taskTemp]: "allow" },
     allow_local_binding: true,
   };
@@ -667,6 +669,7 @@ async function probePermission(
   taskTemp: string,
   taskType: "work" | "review",
   env: NodeJS.ProcessEnv,
+  allowedDomains: readonly string[],
 ): Promise<void> {
   const outsideDir = realpathSync(mkdtempSync(join(tmpdir(), "tidepool-codex-outside-")));
   const outside = join(outsideDir, "secret");
@@ -681,7 +684,7 @@ async function probePermission(
         "sandbox",
         "-P", `tidepool-${taskType}`,
         "-C", workspace,
-        ...configArgs(permissionConfig(taskType, workspace, taskTemp, executable)),
+        ...configArgs(permissionConfig(taskType, workspace, taskTemp, executable, allowedDomains)),
         process.execPath,
         canary,
         workspace,
@@ -700,6 +703,7 @@ async function actualCodexCapability(options: {
   executable: string;
   codexHome: string;
   workspace: string;
+  allowedDomains: readonly string[];
   call: BoardCall;
 }): Promise<CodexCapabilityObservation> {
   const { call } = options;
@@ -732,8 +736,8 @@ async function actualCodexCapability(options: {
         return [fields[0] ?? "", fields.at(-1) ?? ""] as const;
       }),
     );
-    await probePermission(call, options.executable, workspace, taskTemp, "work", env);
-    await probePermission(call, options.executable, workspace, taskTemp, "review", env);
+    await probePermission(call, options.executable, workspace, taskTemp, "work", env, options.allowedDomains);
+    await probePermission(call, options.executable, workspace, taskTemp, "review", env, options.allowedDomains);
     return {
       cliVersion,
       skills: observedSkills(promptInput),
@@ -751,6 +755,7 @@ export function createCodexCapabilityCheck(options: {
   executable: string;
   codexHome: string;
   workspace: string;
+  allowedDomains: readonly string[];
   call: BoardCall;
 }): () => Promise<ContainmentCapability> {
   return () => checkCodexCapability(
@@ -886,7 +891,7 @@ export class CodexWorker implements WorkerAdapter {
     const config = [
       `model_reasoning_effort=${toml(setting.effort)}`,
       `developer_instructions=${toml(developerInstructions(memory.section, agent.definition.systemPrompt, agent.profile.guidance))}`,
-      ...permissionConfig(task.type, workspace.path, taskTemp, this.options.executable),
+      ...permissionConfig(task.type, workspace.path, taskTemp, this.options.executable, workspace.allowed_domains ?? []),
       ...closedSurfaceConfig(),
       'forced_login_method="chatgpt"',
       `mcp_servers.tidepool.url=${toml(taskMcpUrl.toString())}`,

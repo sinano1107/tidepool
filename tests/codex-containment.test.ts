@@ -65,6 +65,7 @@ it("preflight は Board call の口を通り、口が答えを返さなければ
     executable: "/opt/tidepool/bin/codex",
     codexHome: "/nonexistent/codex-home",
     workspace: mkdtempSync(join(tmpdir(), "tidepool-codex-preflight-ws-")),
+    allowedDomains: [],
     call: boardCall,
   })();
   await vi.waitFor(() =>
@@ -89,6 +90,7 @@ it("workspace を cwd にする preflight の呼び出しは、容器が空に�
     executable: "/opt/tidepool/bin/codex",
     codexHome: "/nonexistent/codex-home",
     workspace,
+    allowedDomains: [],
     call: boardCall,
   })();
   await vi.waitFor(() => expect(spawn.calls).toHaveLength(1));
@@ -104,6 +106,28 @@ it("workspace を cwd にする preflight の呼び出しは、容器が空に�
   runtime.fireEmpty(runtime.created[1]!);
   await vi.waitFor(() => expect(spawn.calls).toHaveLength(3));
   await clock.advance(60_000);
+  expect((await capability).available).toBe(false);
+});
+
+it("preflight の permission probe は workspace の allowed_domains を network の許可に載せる(issue #763)", async () => {
+  const spawn = recordingSpawn();
+  const { boardCall } = containerHarness(passthroughContainers(spawn.spawn));
+  const capability = createCodexCapabilityCheck({
+    executable: "/opt/tidepool/bin/codex",
+    codexHome: "/nonexistent/codex-home",
+    workspace: mkdtempSync(join(tmpdir(), "tidepool-codex-preflight-ws-")),
+    allowedDomains: ["registry.npmjs.org"],
+    call: boardCall,
+  })();
+  // --version・prompt-input・features list を通すと4本目が sandbox
+  for (const i of [0, 1, 2]) {
+    await vi.waitFor(() => expect(spawn.calls).toHaveLength(i + 1));
+    spawn.emitExitAt(i, 0, null);
+  }
+  await vi.waitFor(() => expect(spawn.calls).toHaveLength(4));
+
+  expect(spawn.calls[3]!.args).toContainEqual(expect.stringContaining('"domains"={"registry.npmjs.org"="allow","127.0.0.1"="allow"}'));
+  spawn.emitExitAt(3, 1, null); // 後続の probe は見ないので、ここで倒して後始末まで走らせる
   expect((await capability).available).toBe(false);
 });
 
