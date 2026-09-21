@@ -36,8 +36,6 @@ const PROVIDER_AUTH_REPAIR_GUIDANCE: Record<Provider, string> = {
     "`CODEX_HOME`; API keys are not accepted for the canonical Codex route (ADR 0098).",
 };
 
-const REGISTRY_REACHABILITY_QUESTION_TITLE = "registry remote is unreachable — pickup is stopped";
-
 /** 表の並びは盤面全体の停止の列挙と同じ(containment → failedTeardown →
  *  registryReachability)で、資源単位の種類がその後に続く。 */
 export const QUARANTINES = [
@@ -77,7 +75,7 @@ export const QUARANTINES = [
     kind: "registryReachability" satisfies HaltKind,
     scope: "board",
     prose: (_value: string | null, reason: string): QuarantineProse => ({
-      title: REGISTRY_REACHABILITY_QUESTION_TITLE,
+      title: "registry remote is unreachable — pickup is stopped",
       purpose:
         `${reason}. No agent task is picked up while this stands because every spawn depends ` +
         "on the registry source of truth. Repair access to the registry remote, then answer — " +
@@ -172,17 +170,15 @@ export function isQuarantineOpen(
     .get(kind, value) as { id: string } | undefined;
 }
 
-/** その種類で開いている確認型 question を登録順に。 */
-export function openQuarantines(
-  db: Db,
-  kind: QuarantineKind,
-): Array<{ id: string; value: string | null }> {
+/** その種類で開いている確認型 question の値を登録順に。 */
+export function openQuarantineValues(db: Db, kind: QuarantineKind): Array<string | null> {
   return db
     .prepare(
-      `SELECT id, question_quarantine_value AS value FROM tasks
+      `SELECT question_quarantine_value FROM tasks
        WHERE question_quarantine_kind = ? AND status = 'todo' ORDER BY rowid`,
     )
-    .all(kind) as Array<{ id: string; value: string | null }>;
+    .pluck()
+    .all(kind) as Array<string | null>;
 }
 
 /** 唯一の登録口。鍵が開いていれば既存の question に `quarantine_refired` を追記する

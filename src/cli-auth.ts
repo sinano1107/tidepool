@@ -1,5 +1,5 @@
 import type { Db } from "./db.js";
-import { openQuarantines, registerQuarantine } from "./quarantine.js";
+import { openQuarantineValues, registerQuarantine } from "./quarantine.js";
 import type { Provider } from "./registry.js";
 import { BOARD_WORKER_ID, registerTask } from "./tasks.js";
 
@@ -101,7 +101,7 @@ export function quarantineCliAuthForProvider(db: Db, provider: Provider, now: Da
  *  speaking one of these. Every provider is resource-scoped, the board's own
  *  included (ADR 0098 決定6), so no authentication failure reaches boardHalts. */
 export function quarantinedAuthProviders(db: Db): Provider[] {
-  return openQuarantines(db, "providerAuth").map((q) => q.value as Provider);
+  return openQuarantineValues(db, "providerAuth") as Provider[];
 }
 
 export function warnCliAuthExpiry(db: Db, expiresAt: Date | undefined, now: Date): void {

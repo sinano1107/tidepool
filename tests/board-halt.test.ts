@@ -4,7 +4,7 @@ import { quarantineContainment } from "../src/containment.js";
 import { openDb } from "../src/db.js";
 import { quarantineFailedTeardown } from "../src/failed-teardown.js";
 import { setPaused } from "../src/pause.js";
-import { quarantineRegistryReachability } from "../src/registry-reachability.js";
+import { registerQuarantine } from "../src/quarantine.js";
 import { answerQuestion, getTask, listBoard } from "../src/tasks.js";
 import { reportThrottle } from "../src/throttle.js";
 import { startTriage } from "../src/triage.js";
@@ -23,7 +23,7 @@ describe("boardHalts は盤面全体の停止を1つの順序つき列挙で答�
     quarantineContainment(db, "no sandbox", NOW);
     // ADR 0112 決定1: 両方立ったときに先に直すべきはホスト全体の側である
     quarantineFailedTeardown(db, "task-1", new Error("resolve exploded"), NOW);
-    quarantineRegistryReachability(db, "origin is unreachable", NOW);
+    registerQuarantine(db, "registryReachability", null, "origin is unreachable", NOW);
     reportThrottle(
       db,
       {

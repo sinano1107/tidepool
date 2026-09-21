@@ -4,7 +4,7 @@ import type { Db } from "./db.js";
 import type { GitHubAuth } from "./github-auth.js";
 import type { Landing } from "./landing.js";
 import type { ProcessContainers } from "./process-container.js";
-import { openQuarantines } from "./quarantine.js";
+import { openQuarantineValues } from "./quarantine.js";
 import type { Slot } from "./slot.js";
 import { abandonConsequence, escalateTask, getTask, type Task, type TaskType } from "./tasks.js";
 import {
@@ -347,7 +347,7 @@ export function startWatchdog(deps: {
     // 「その session のプロセスがこのホストに残っている」と断言するが実際には残って
     // いない。門は**行**に持つ: in-memory の門は再起動を越えないので、越えなければ
     // 起動のたびに偽の question を1枚ずつ刷る。
-    if (openQuarantines(db, "failedTeardown").length > 0) return;
+    if (openQuarantineValues(db, "failedTeardown").length > 0) return;
     const task = getTask(db, taskId);
     if (!task) return;
     const pickup = pickedUpAt(db, taskId);

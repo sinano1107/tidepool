@@ -38,7 +38,7 @@ import { ensureMemoryIndex } from "./memory.js";
 import { type ContainerRuntime, ProcessContainers } from "./process-container.js";
 import type { ProfileAdmin } from "./profile-create.js";
 import { createNotificationTick, type PushClient } from "./push.js";
-import { openQuarantines } from "./quarantine.js";
+import { openQuarantineValues } from "./quarantine.js";
 import type { Harness } from "./registry.js";
 import {
   type AuthorityProfile,
@@ -575,7 +575,7 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
     pollNow,
   };
   const unfinishedTeardown = sessionInTeardown(db);
-  if (unfinishedTeardown && runtimePreflight.available && openQuarantines(db, "failedTeardown").length === 0) {
+  if (unfinishedTeardown && runtimePreflight.available && openQuarantineValues(db, "failedTeardown").length === 0) {
     // 枠を握っているのは task ではなく session である(ADR 0109 決定2)—— 後始末が
     // 走り切るまで pickup は進まない
     slot.occupy(unfinishedTeardown.taskId);
