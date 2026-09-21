@@ -1,4 +1,5 @@
 import { afterEach, expect, it } from "vitest";
+import { registerTask } from "../src/tasks.js";
 import { healthyUsageText, usagePanelText } from "./fakes.js";
 import {
   api,
@@ -149,6 +150,36 @@ it("registry なしの盤面で窓が回復すると、元のキュー順の先�
   t.worker.scriptUsage(healthyUsageText(t.clock.now()));
   await t.clock.advance(40 * MIN);
   expect(t.worker.started.map((x) => x.id)).toEqual([first.id]);
+});
+
+/** session/week は健全なまま、fable 窓だけ超過している観測 (ADR 0030)。
+ *  fable resets は12時間後 → 経過 92.9%、オフセット10で線は82.9 — 84% は超過。
+ *  catch-up は経過94%の瞬間 = now + 1時間55分12秒後(hourly tick とずれた時刻)。 */
+function fableOverPace(now: Date): string {
+  return usagePanelText({
+    session: { percent: 0, resetsAt: new Date(now.getTime() + 3 * HOUR) },
+    week: { percent: 5, resetsAt: new Date(now.getTime() + 2 * 24 * HOUR) },
+    fable: { percent: 84, resetsAt: new Date(now.getTime() + 12 * HOUR) },
+  });
+}
+
+it("registry なしの盤面で fable 窓に当たる task しか無いキューは、fable の catch-up 時刻で(hourly tick を待たず)再開する(ADR 0030 / ADR 0140 決定3)", async () => {
+  t = await bootTidepool();
+  // frontier を要求する task は表の fable 行に解決され、fable 窓が当たる
+  const fableTask = registerTask(
+    t.db,
+    { type: "work", title: "fable work", purpose: "p", completion_criteria: "c", tier: "frontier" },
+    t.clock.now(),
+  );
+  t.worker.scriptUsage(fableOverPace(t.clock.now()));
+
+  // hourly tick(t=1h)が fable 窓の除外で候補ゼロを観測し、catch-up タイマーを張る
+  await t.clock.advance(HOUR + 50 * MIN); // t=1h50m: catch-up(1h55m)より手前
+  expect(t.worker.started).toEqual([]);
+
+  // 使用率は変わらないまま catch-up を跨ぐ — 次の hourly tick(2h)より手前で再開
+  await t.clock.advance(7 * MIN); // t=1h57m
+  expect(t.worker.started.map((x) => x.id)).toEqual([fableTask.id]);
 });
 
 it("盤面設定のオフセットが判定に効く: session オフセットを 0(予約なし)にすると、既定 20pt では絞られていた使用率が通る", async () => {
