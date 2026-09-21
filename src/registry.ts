@@ -620,6 +620,7 @@ export function assertValidAllowedDomains(domains: string[]): void {
       throw new InvalidAllowedDomainError(entry, "bare wildcard is not allowed");
     }
     const domain = entry.startsWith("*.") ? entry.slice(2) : entry;
+    // ADR 0139 decision 3: an IP does not name an operator.
     if (isIpLiteralHost(domain)) {
       throw new InvalidAllowedDomainError(entry, "IP literals are not allowed");
     }

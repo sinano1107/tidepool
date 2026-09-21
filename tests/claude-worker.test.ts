@@ -1049,7 +1049,7 @@ describe("ClaudeCodeWorker", () => {
       allowLocalBinding: true,
       strictAllowlist: true,
       allowedDomains: ["registry.npmjs.org"],
-      deniedDomains: ["*.ts.net", "raspberrypi"],
+      deniedDomains: [],
     });
   });
 

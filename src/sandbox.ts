@@ -102,8 +102,10 @@ export interface WorkerSessionSettings {
       /** The proxy filters on the `CONNECT` host string, not the address it
        *  resolves to — so a name pattern here does not reach traffic to an
        *  IP literal or to a name that merely *resolves into* a denied range.
-       *  See `DENIED_TAILNET_DOMAINS` for what tidepool puts in this key and
-       *  why. */
+       *  tidepool puts nothing here: the network floor is the default-deny
+       *  side (`strictAllowlist`, anything outside `allowedDomains` is
+       *  refused), and a tailnet name is an ordinary allowlist value
+       *  (ADR 0139). */
       deniedDomains: string[];
     };
   };
@@ -161,30 +163,6 @@ const WORKSPACE_SKILL_SUBDIR = ".claude/skills";
  *  denied, so opening the plugin cache wholesale bypasses no allowlist. A
  *  finite allowlist never gets this — see `skillReadPaths`. */
 const PLUGIN_ROOT = "~/.claude/plugins";
-
-/** ADR 0036: floor entry, not the primary mechanism (that's the human-surface
- *  credential) — but independently justified by #150, where a *writable*
- *  context-vault sits on the same Pi. The original wording said
- *  "unauthenticated"; that was false when #150 was filed and is corrected in
- *  ADR 0036's #150 addendum — the vault has required an Auth0 JWT since
- *  2026-07-03. The deny survives the correction on different grounds: the
- *  vault is served over Tailscale *Funnel*, i.e. the public internet, so a
- *  worker that can reach `raspberrypi` at all has a route for pushing this
- *  board's contents into a persistent store readable from outside the tailnet.
- *  Exfiltration is orthogonal to whether the far end authenticates.
- *
- *  Name patterns, not CIDR: `deniedDomains: ["100.64.0.0/10"]` does not block
- *  a request to a name that resolves into that range (measured 2026-07-29),
- *  so ADR 0034's "deny the whole CGNAT range" is only expressible as a name
- *  pattern — `*.ts.net` here.
- *
- *  `*.ts.net` alone also measured false (2026-07-29, issue #152): MagicDNS's
- *  bare short name (`raspberrypi`, no `.ts.net` suffix) reached the proxy's
- *  `CONNECT` step and got tunneled through (`200 Connection Established`)
- *  while the fully-qualified name got `403 blocked-by-allowlist`. There's no
- *  shared suffix across short names to pattern-match on, so the known one is
- *  enumerated — same posture as `TOOLCHAIN_READ`. */
-const DENIED_TAILNET_DOMAINS = ["*.ts.net", "raspberrypi"];
 
 /** The workspace-side settings files the CLI merges into a session's settings.
  *  Both live inside the checkout, so a `work` session can write them — which is
@@ -456,13 +434,12 @@ export function buildSandboxSettings(input: WorkerSessionSettingsInput): WorkerS
       },
       // ADR 0033 追記 / issue #146: not keyed on the profile — a worker of
       // either type has to be able to run the suite it is judging.
-      // ADR 0036 / issue #152: same for the tailnet deny — floor, not the
-      // primary mechanism, but independent of task type.
+      // ADR 0139: deniedDomains stays empty — the floor is the default deny.
       network: {
         allowLocalBinding: true,
         strictAllowlist: true,
         ...(allowedDomains !== undefined && { allowedDomains: [...allowedDomains] }),
-        deniedDomains: [...DENIED_TAILNET_DOMAINS],
+        deniedDomains: [],
       },
     },
   };

@@ -7,23 +7,23 @@
 #
 # THIS IS TIDEPOOL'S OWN REGRESSION CHECK. The board's owner runs it against
 # their own board to confirm that "a worker session cannot reach the human
-# surface (nor the unauthenticated context-vault standing next to it)" still
-# holds after a CLI or OS update. Every request below is EXPECTED to be refused;
+# surface" still holds after a CLI or OS update. Every request below is EXPECTED to be refused;
 # a refusal is the passing result, and the shape of the refusal is the data
 # being collected. Each target is attempted exactly once and whatever comes back
 # is printed. Nothing here tries to get through, route around a refusal, or
 # retry.
 #
-# The tailnet deny is enforced by the CLI's own network proxy, so this half can
+# The tailnet targets are refused by the CLI's own network proxy — its default
+# deny, since neither name is on the allowlist (ADR 0139) — so this half can
 # only be measured from inside a real worker session. The loopback half is
 # enforced by the OS confinement (netns / Seatbelt) and is measured
 # deterministically, with no model involved, by the canary's other phase.
 #
-# BOTH THE FULL NAME AND THE SHORT NAME. #152 measured that `*.ts.net` does not
-# match the MagicDNS short name, and `raspberrypi:8443` tunnelled through. Short
-# names share no suffix, so `deniedDomains` carries an enumeration of known
-# hosts — and an enumeration is exactly the thing that silently stops covering a
-# host, hence measuring it every time.
+# BOTH THE FULL NAME AND THE SHORT NAME. #152 once saw the MagicDNS short name
+# `raspberrypi:8443` tunnel through ahead of the allowlist. The current CLI
+# refuses it, but by vendor default behaviour that tidepool cannot pin in code
+# (ADR 0139 decision 4), so a CLI update could reopen it silently — hence
+# measuring it every time.
 #
 # The path is one that answers 200 WITH a credential. Shooting a path that does
 # not exist would return 404 even through a wide-open hole, and read as a refusal.
