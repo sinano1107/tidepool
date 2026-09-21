@@ -335,7 +335,7 @@ test("scratchpad の行ごとに × の aria-label が一意で、行を消し�
   await api(t.baseUrl, "POST", "/api/triage/scratchpad", { line: "2番目の苛立ち" });
 
   await page.goto(t.baseUrl);
-  await page.getByRole("button", { name: "triage", exact: true }).click();
+  // tab はセッション無しでも scratchpad があれば既定で triage — 明示クリックは不要
   await page.getByRole("button", { name: "scratchpad", exact: true }).click();
 
   const removeFirst = page.getByRole("button", { name: "remove 最初の苛立ち", exact: true });
