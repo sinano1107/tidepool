@@ -500,7 +500,7 @@ function registeredWorkspaces(board: BoardComposition): WorkspaceConfig[] {
  *  issue #446)、毎 poll registry から読み直す — 認証が失効した provider の
  *  agent だけが scheduler の資源単位 skip に落ちる。default agent が該当
  *  provider なら assignee 未設定のタスクもその名前へ解決される(SQL 側の
- *  COALESCE — fable 線と同じ形)。registry なし → provider は分からず skip
+ *  COALESCE)。registry なし → provider は分からず skip
  *  なし。 */
 function agentsSpeakingProvidersResolver(
   board: BoardComposition,

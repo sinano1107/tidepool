@@ -435,10 +435,7 @@ it("anthropic を温存中でも openai entry を持つ agent の task は走り
 });
 
 it("全 entry が除外された行は Pickable head ではない —— 下の行の ↑ を飲まない(ADR 0110 決定3 / CONTEXT.md「Pickable head」)", async () => {
-  t = await bootTidepool({
-    taskExecutionCandidates: (task) =>
-      executionSettingsFor(t.db, { provider: [{ name: "anthropic", advisor: false }], tier: undefined }, task),
-  });
+  t = await bootTidepool();
   // 上の行は frontier を要求するので fable 行に解決され、唯一の entry が
   // 温存中の窓に当たる。下の行は要求なし = economy 行なのでその窓に当たらない
   // 扉を通さない(扉の登録は pickup の契機 —— ADR 0119 決定2 —— で、usage を仕込む前に走る)

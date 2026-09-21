@@ -154,7 +154,10 @@ it("registry なしの盤面で窓が回復すると、元のキュー順の先�
 
 /** session/week は健全なまま、fable 窓だけ超過している観測 (ADR 0030)。
  *  fable resets は12時間後 → 経過 92.9%、オフセット10で線は82.9 — 84% は超過。
- *  catch-up は経過94%の瞬間 = now + 1時間55分12秒後(hourly tick とずれた時刻)。 */
+ *  catch-up は経過94%の瞬間 = now + 1時間55分12秒後(hourly tick とずれた時刻)。
+ *  session(+3h)の壁時計 reset が有効なうちに catch-up が来る数字にしてある —
+ *  固定 panel 文字列は clock が session reset を跨ぐと逆算不整合で Anthropic ごと
+ *  fail-closed に化けるため。 */
 function fableOverPace(now: Date): string {
   return usagePanelText({
     session: { percent: 0, resetsAt: new Date(now.getTime() + 3 * HOUR) },

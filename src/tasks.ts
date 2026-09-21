@@ -2479,8 +2479,8 @@ export function listBoard(
 /** The queue view (issue #10): the board plus `skipped`, a todo-pickable task
  *  frozen by **a reason of its own** — its execution workspace or agent under
  *  quarantine (issue #26 / ADR 0012), its agent's provider under authentication
- *  quarantine (ADR 0097 決定2), or the fable line (ADR 0030). Board-wide
- *  halts are not row properties and never reach here: the queue read's
+ *  quarantine (ADR 0097 決定2), or every one of its entries excluded (ADR 0110
+ *  決定3). Board-wide halts are not row properties and never reach here: the queue read's
  *  envelope answers them once with `boardHalts` (ADR 0068 決定4). `skipped` is
  *  display-only and queue-view-only (CONTEXT.md's Quarantine) — it never
  *  reaches `listBoard`/`presentTask`, so the board keeps showing plain `todo`
@@ -2767,8 +2767,8 @@ export function nextSlotTask(
   defaultAgentName?: string,
   auditorName?: string,
   /** 資源単位の skip で候補から外れる workspace / assignee 名 —— 開いた quarantine
-   *  (ADR 0137 決定6)と、超過中の fable 線(ADR 0030)。該当タスクだけが候補から
-   *  外れ、他のタスクは流れ続ける。Absent → 何も外さない。 */
+   *  (ADR 0137 決定6)。該当タスクだけが候補から外れ、他のタスクは流れ続ける。
+   *  Absent → 何も外さない。 */
   stopped?: ResourceStops,
   /** モデル固有の窓が超過中のタスクそのもの(ADR 0110 決定3)。要求ティアが
    *  task ごとに違う以上、**agent 単位の除外では広すぎる** —— 同じ agent の

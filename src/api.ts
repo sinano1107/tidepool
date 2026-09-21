@@ -1276,8 +1276,8 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     // the *pickable* head, not the raw todo head (issue #299): the same
     // predicate the slot itself walks, with the same argument tuple
     // `GET /queue` passes — a raw head that could never be picked (a blocked
-    // parent, a held row, a quarantined workspace/agent, an assignee over the
-    // fable line) must not swallow the human's first ↑.
+    // parent, a held row, a quarantined workspace/agent, a row whose every
+    // entry is excluded) must not swallow the human's first ↑.
     const headBefore = pickableHead()?.id;
     const moved = moveTask(db, task, after, clock.now());
     // "run now" is specifically a todo already at the pickable head, moved to
@@ -1984,8 +1984,8 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       ...teardownJson(),
       ...providerUsageJson(),
       tasks: await presentLive(
-        // 資源単位の skip(fable 線 ADR 0030・provider 認証の quarantine ADR
-        // 0097 決定2)に該当するタスクだけが skipped に見える — 盤面全体の停止は
+        // 資源単位の skip(開いた quarantine ADR 0137 決定6・全 entry の除外 ADR
+        // 0110 決定3)に該当するタスクだけが skipped に見える — 盤面全体の停止は
         // 行に現れず、上の halts が一度に答える
         listQueue(
           db,
