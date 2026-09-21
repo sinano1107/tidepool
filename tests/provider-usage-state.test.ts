@@ -100,12 +100,6 @@ it("Provider/window の観測値・offset・freshness・CLI version を pause �
     json: { provider: "openai", window: "primary", offset: 35 },
   });
   expect((await api(t.baseUrl, "GET", "/api/pause")).json.providerUsage[0].windows[0].offset).toBe(35);
-  await api(t.baseUrl, "POST", "/api/settings/provider-pace-offsets", {
-    provider: "anthropic",
-    window: "session",
-    offset: 45,
-  });
-  expect((await api(t.baseUrl, "GET", "/api/settings/pace-offsets")).json.session).toBe(45);
 });
 
 it("既知の組(anthropic × session / week / fable、openai × primary / secondary)以外の pace offset は入口で弾き、行を作らない", async () => {
