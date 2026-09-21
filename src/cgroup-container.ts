@@ -203,13 +203,10 @@ function createCgroup(own: string, id: string): ProcessContainer {
     }
   };
 
-  // 容器へ入ってから exec する argv。stream も pty も、入り方はここ1箇所で被せる。
-  const entering = (command: string, args: string[]): string[] => [
-    "-c",
-    ENTER_AND_EXEC,
-    join(dir, "cgroup.procs"),
-    command,
-    ...args,
+  // 容器へ入ってから exec する command と argv。stream も pty も、入り方はここ1箇所で被せる。
+  const entering = (command: string, args: string[]): [string, string[]] => [
+    "/bin/sh",
+    ["-c", ENTER_AND_EXEC, join(dir, "cgroup.procs"), command, ...args],
   ];
 
   let live = 0;
@@ -231,7 +228,7 @@ function createCgroup(own: string, id: string): ProcessContainer {
 
   return {
     spawn: (command, args, opts) => {
-      const child = defaultSpawn("/bin/sh", entering(command, args), opts);
+      const child = defaultSpawn(...entering(command, args), opts);
       const finish = track();
       child.on("exit", finish);
       // spawn そのものが失敗した process は生まれていない = 容器は空
@@ -242,7 +239,7 @@ function createCgroup(own: string, id: string): ProcessContainer {
     },
     spawnPty: (launch, command, args, opts) => {
       // launch が投げたら(node-pty の spawn-helper に実行ビットが無い等)数えない —— 何も生まれていない
-      const proc = launch("/bin/sh", entering(command, args), opts);
+      const proc = launch(...entering(command, args), opts);
       proc.onExit(track());
       return proc;
     },

@@ -49,15 +49,18 @@ interface CanaryProbe {
   residue(): string[];
 }
 
-/** 盤面自身が居る cgroup。検証側の読みであって、容器機構の内部を import して
- *  いるわけではない(`/proc/self/cgroup` の `0::` 行という kernel の面を読む)。 */
-function boardCgroup(): string {
-  const line = readFileSync("/proc/self/cgroup", "utf8")
+/** `/proc/<pid>/cgroup` の `0::` 行が指す cgroup ディレクトリ。検証側の読みであって、
+ *  容器機構の内部を import しているわけではない(kernel の面を読む)。 */
+function cgroupOf(pid: number): string {
+  const line = readFileSync(`/proc/${pid}/cgroup`, "utf8")
     .split("\n")
     .find((l) => l.startsWith("0::"));
   if (line === undefined) throw new Error("this host has no cgroup v2 unified hierarchy");
   return join("/sys/fs/cgroup", line.slice(3).trim());
 }
+
+/** 盤面自身が居る cgroup。 */
+const boardCgroup = (): string => cgroupOf(process.pid);
 
 /** `/proc/<pid>/stat` の session id(6番目のフィールド)。`comm` は括弧の中に
  *  空白を含みうるので、最後の `)` から後ろだけを割る。 */
@@ -268,14 +271,6 @@ exit 0`,
 
   await vi.waitFor(() => expect(alive(daemon)).toBe(false), { timeout: 15_000 });
 });
-
-/** `/proc/<pid>/cgroup` の `0::` 行が指す cgroup ディレクトリ(kernel の面の読み)。 */
-function cgroupOf(pid: number): string {
-  const line = readFileSync(`/proc/${pid}/cgroup`, "utf8")
-    .split("\n")
-    .find((l) => l.startsWith("0::"));
-  return join("/sys/fs/cgroup", line?.slice(3).trim() ?? "");
-}
 
 /** canary 自身の pty launcher: 実物の node-pty(src の launcher は import しない)。
  *  node-pty の型は env に `Record<string, string>` を要るので、src と同じく手で言う。 */

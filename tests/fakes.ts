@@ -47,6 +47,7 @@ import {
   isSpawnFailure,
   type ProcessContainer,
   ProcessContainers,
+  type PtyFn,
 } from "../src/process-container.js";
 import type { PushClient, PushPayload, PushSubscription } from "../src/push.js";
 import type { Task } from "../src/tasks.js";
@@ -248,6 +249,52 @@ export class ScriptedWorker implements WorkerAdapter {
   scriptUsageGate(gate: Promise<void>): void {
     this.usageGate = gate;
   }
+}
+
+/** Scripted stand-in at the PTY boundary (issue #81 / ADR 0028): the test
+ *  drives data emission and process exit, and reads back the spawn recipe,
+ *  what checkUsage wrote to stdin, and how many times it killed the session. */
+export function recordingPty() {
+  const calls: Array<{
+    command: string;
+    args: string[];
+    cwd: string;
+    cols: number;
+    rows: number;
+    env: NodeJS.ProcessEnv;
+  }> = [];
+  const writes: string[] = [];
+  const kills: Array<string | undefined> = [];
+  let dataListener: ((data: string) => void) | undefined;
+  // node-pty の onExit は複数の listener を持てる —— 口と checkUsage の両方が聞く
+  const exitListeners: Array<() => void> = [];
+  const pty: PtyFn = (command, args, opts) => {
+    calls.push({ command, args, cwd: opts.cwd, cols: opts.cols, rows: opts.rows, env: opts.env });
+    return {
+      onData: (listener) => {
+        dataListener = listener;
+      },
+      write: (data) => {
+        writes.push(data);
+      },
+      kill: (signal) => {
+        kills.push(signal);
+      },
+      onExit: (listener) => {
+        exitListeners.push(listener);
+      },
+    };
+  };
+  return {
+    pty,
+    calls,
+    writes,
+    kills,
+    emitData: (data: string) => dataListener?.(data),
+    emitExit: () => {
+      for (const listener of exitListeners) listener();
+    },
+  };
 }
 
 /** 容器機構 seam の scripted stand-in(ADR 0099 決定2)。既定の容器は

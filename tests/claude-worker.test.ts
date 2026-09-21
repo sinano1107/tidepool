@@ -35,6 +35,7 @@ import {
   FakeClock,
   FakeContainerRuntime,
   passthroughContainers,
+  recordingPty,
   recordingSpawn,
 } from "./fakes.js";
 import { git, makeWorkspace } from "./harness.js";
@@ -118,51 +119,6 @@ function registryGit(cwd: string) {
     execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@e", ...args], { cwd })
       .toString()
       .trim();
-}
-
-/** Scripted stand-in at the PTY boundary (issue #81 / ADR 0028): the test
- *  drives data emission and process exit, and reads back the spawn recipe,
- *  what checkUsage wrote to stdin, and how many times it killed the session. */
-function recordingPty() {
-  const calls: Array<{
-    command: string;
-    args: string[];
-    cwd: string;
-    cols: number;
-    env: NodeJS.ProcessEnv;
-  }> = [];
-  const writes: string[] = [];
-  const kills: Array<string | undefined> = [];
-  let dataListener: ((data: string) => void) | undefined;
-  // node-pty の onExit は複数の listener を持てる —— 口と checkUsage の両方が聞く
-  const exitListeners: Array<() => void> = [];
-  const pty: PtyFn = (command, args, opts) => {
-    calls.push({ command, args, cwd: opts.cwd, cols: opts.cols, env: opts.env });
-    return {
-      onData: (listener) => {
-        dataListener = listener;
-      },
-      write: (data) => {
-        writes.push(data);
-      },
-      kill: (signal) => {
-        kills.push(signal);
-      },
-      onExit: (listener) => {
-        exitListeners.push(listener);
-      },
-    };
-  };
-  return {
-    pty,
-    calls,
-    writes,
-    kills,
-    emitData: (data: string) => dataListener?.(data),
-    emitExit: () => {
-      for (const listener of exitListeners) listener();
-    },
-  };
 }
 
 /** A worker wired to a fake PTY, for the checkUsage scrape tests. The container

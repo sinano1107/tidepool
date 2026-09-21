@@ -38,10 +38,9 @@ export interface PtyBoardCallSpec extends BoardCallSpec {
 /** 呼び出し1回。`read` は spawn 直後に呼ばれ、「今までに観測した答え」を返す
  *  関数を渡す —— 口はそれを root の exit のあとに1度だけ、その exit code を添えて
  *  呼ぶ。答えの形(stream か1つの文字列か)は呼び出し側の話なので口は知らない。
- *  pty の呼び出しでは exit code は読まない(null)。
  *
  *  `read` の2つ目の引数 `done` は「呼び手はもう終わった —— 今 force を撃て」で、
- *  root の exit と同じく読み手の答えで決着する(exit code は null)。root が合図に
+ *  root の exit と同じく読み手の答えで決着する(exit code は null —— pty の exit も同じ)。root が合図に
  *  応じないときの teardown の底である(ADR 0136 決定8)。
  *
  *  null は fail-closed の結果である: 機構前提の不成立・上限到達・spawn 失敗・
