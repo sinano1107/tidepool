@@ -674,10 +674,6 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   router.use(json());
   // one cache per router = per process (the API is booted once per board)
   const issueContent = new IssueContentCache();
-  /** 資源単位の skip で候補から外れるもの(ADR 0137 決定6 の quarantine)。pickup の
-   *  述語(`nextSlotTask`)とキュービューの skipped 表示は同じ集合を見なければならない
-   *  (tasks.ts の「乖離させない」の線) — 述語だけでなく、そこへ渡す引数も1つの式から出す。 */
-  const stopped = () => quarantineStops(db);
   /** 「この行は全 entry が除外されているか」。scheduler の poll が同じ式を、同じ
    *  poll で観測し直した除外集合に対して当てる(ADR 0110 決定3)。 */
   const entriesAllExcluded = () => entryExclusionPredicate(db, taskExecutionCandidates);
@@ -1249,7 +1245,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
         workspace?.name,
         defaultAgentName,
         auditorName,
-        stopped(),
+        quarantineStops(db),
         skipped,
       );
       if (!head || !excluded(head)) return head;
@@ -1996,7 +1992,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
           workspace?.name,
           defaultAgentName,
           auditorName,
-          stopped(),
+          quarantineStops(db),
           entriesAllExcluded(),
         ),
       ),

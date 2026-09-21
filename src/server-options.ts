@@ -285,7 +285,7 @@ export function buildWorkerFactory(board: BoardComposition): WorkerFactory {
   const { registryDir } = board;
   if (!registryDir) return () => new LoggingWorker();
   return ({ db, clock, containers, boardCall, onCapInterrupted, onSpawnFailed }) => {
-    const resolveHarness = harnessResolver(board, db)!;
+    const resolveHarness = harnessResolver(board, db);
     const registry = { dir: registryDir, mode: board.registryMode } as const;
     return new CanonicalWorkerRouter({
       id: board.defaultAgentName,
@@ -325,8 +325,7 @@ export function buildWorkerFactory(board: BoardComposition): WorkerFactory {
 function harnessResolver(
   board: BoardComposition,
   db: Db,
-): ((task: Task) => ReturnType<typeof canonicalHarness>) | undefined {
-  if (!board.registryDir) return undefined;
+): (task: Task) => ReturnType<typeof canonicalHarness> {
   return (task) => {
     const registry = loadBoardRegistry(board);
     const name = resolveTaskAgent(task, board.defaultAgentName, board.auditorName);
