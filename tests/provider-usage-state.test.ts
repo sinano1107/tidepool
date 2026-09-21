@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { type Db, openDb } from "../src/db.js";
-import { getProviderPaceOffset, setProviderPaceOffset } from "../src/pace-offsets.js";
+import { getProviderPaceOffset, listProviderPaceOffsets, setProviderPaceOffset } from "../src/pace-offsets.js";
 import { setSpendDown } from "../src/spend-down.js";
 import {
   evaluateAndReportProviderUsage,
@@ -12,6 +12,14 @@ import {
 import { api, bootTidepool, type Tidepool } from "./harness.js";
 
 let t: Tidepool | undefined;
+
+const KNOWN_PAIR_DEFAULTS = [
+  { provider: "anthropic", window: "fable", offset: 10 },
+  { provider: "anthropic", window: "session", offset: 20 },
+  { provider: "anthropic", window: "week", offset: 10 },
+  { provider: "openai", window: "primary", offset: 20 },
+  { provider: "openai", window: "secondary", offset: 10 },
+];
 
 afterEach(async () => {
   await t?.stop();
@@ -114,7 +122,7 @@ it("既知の組(anthropic × session / week / fable、openai × primary / secon
     const res = await api(t.baseUrl, "POST", "/api/settings/provider-pace-offsets", { provider, window, offset: 30 });
     expect(res.status).toBe(400);
   }
-  expect((await api(t.baseUrl, "GET", "/api/settings/provider-pace-offsets")).json.offsets).toEqual([]);
+  expect((await api(t.baseUrl, "GET", "/api/settings/provider-pace-offsets")).json.offsets).toEqual(KNOWN_PAIR_DEFAULTS);
 });
 
 it("既知の5つの組の pace offset は保存され、anthropic の session / week / fable は旧 pace-offsets へ写る", async () => {
@@ -140,6 +148,21 @@ it("行が無い pace offset の既定は Provider × 窓ごと: anthropic sessi
     anthropic: ["session", "week", "fable"].map((w) => getProviderPaceOffset(db, "anthropic", w)),
     openai: ["primary", "secondary"].map((w) => getProviderPaceOffset(db, "openai", w)),
   }).toEqual({ anthropic: [20, 10, 10], openai: [20, 10] });
+  db.close();
+});
+
+it("空の盤面の pace offset 一覧は既知の5つの組を provider, window 順に既定値で返す", () => {
+  const db = openDb(":memory:");
+  expect(listProviderPaceOffsets(db)).toEqual(KNOWN_PAIR_DEFAULTS);
+  db.close();
+});
+
+it("ある組を保存すると一覧ではその組だけが保存値になり、他の組は既定値のまま", () => {
+  const db = openDb(":memory:");
+  setProviderPaceOffset(db, { provider: "openai", window: "secondary", offset: 42 });
+  expect(listProviderPaceOffsets(db)).toEqual(
+    KNOWN_PAIR_DEFAULTS.map((p) => (p.window === "secondary" ? { ...p, offset: 42 } : p)),
+  );
   db.close();
 });
 
