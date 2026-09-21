@@ -382,7 +382,7 @@ function fableOverPace(now: Date): string {
   });
 }
 
-it("anthropic を温存中でも openai entry を持つ agent の task は走り、単一 entry の task だけが skipped —— queue 表示と pickup の判定は同じ式(#543 申し送り / ADR 0110 決定5)", async () => {
+it("anthropic を温存中でも openai entry を持つ agent の task は走り、単一 entry の task だけが skipped —— queue 表示と pickup の判定は同じ式(#543 申し送り / ADR 0110 決定3・5)", async () => {
   // 候補は**実物の selector**(盤面の表 + Provider 順位)から作る —— fake が
   // 順位や model を自前で持つと、ここで測れるのは fake の側だけになる
   const entries = (...names: string[]) => ({
