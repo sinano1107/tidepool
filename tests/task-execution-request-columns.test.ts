@@ -2,7 +2,7 @@ import { expect, it } from "vitest";
 import { type Db, openDb } from "../src/db.js";
 
 /** ADR 0107 決定1 の schema 層 —— 列そのものを SQL で言う。ドメイン層は値の
- *  解決順と拒否を言い、この層は「新規盤面が列を持つ」を言う。 */
+ *  解決順と拒否を言い、このファイルは新規盤面の tasks が持つ列を言う。 */
 function taskColumns(db: Db): string[] {
   return (db.prepare("PRAGMA table_info(tasks)").all() as Array<{ name: string }>).map((c) => c.name);
 }
