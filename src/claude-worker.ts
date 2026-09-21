@@ -1970,7 +1970,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
         // Node spawn() "error" point below. Deliberately NOT degraded into a
         // --disable-slash-commands spawn: that would silently drop the
         // equipment the agent was promised and make the failure unobservable.
-        console.error(`[worker] skill enumeration failed for task ${task.id}; not spawning`);        const failure = {
+        const failure = {
           error_code: null,
           message:
             "skill enumeration failed, so the skill deny list could not be resolved " +

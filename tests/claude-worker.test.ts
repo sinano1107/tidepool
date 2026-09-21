@@ -996,31 +996,26 @@ describe("ClaudeCodeWorker", () => {
   it("列挙 ping が失敗(null)したらその瞬間に spawn_failed を書いて onSpawnFailed を1度呼び、deny 未解決のまま spawn しない(fail-open にしない・ADR 0025 point 6)", async () => {
     const rec = recordingEnumerator(null);
     const spawnFailures: Array<[string, { error_code: string | null; message: string }]> = [];
-    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-    try {
-      const { start, calls, db } = await makeWorker(
-        { "agents/deckhand.md": skilledMd("  - code-review\n") },
-        {
-          enumerateSkills: rec.enumerateSkills,
-          onSpawnFailed: (taskId, failure) => spawnFailures.push([taskId, failure]),
-        },
-      );
-      start("task-ping-fail");
-      await vi.waitFor(() => expect(spawnFailures).toHaveLength(1));
-      const failed = listEvents(db, "task-ping-fail").filter((e) => e.kind === "spawn_failed");
-      expect(failed).toHaveLength(1);
-      expect(failed[0]!.worker_id).toBe("deckhand");
-      expect(failed[0]!.origin).toBe("board");
-      const payload = failed[0]!.payload as { kind: string; error_code: string | null; message: string };
-      expect(payload).toEqual({ kind: "spawn_failed", error_code: null, message: expect.any(String) });
-      expect(payload.message).toContain("skill enumeration failed");
-      expect(payload.message).not.toMatch(/time limit|reclaim/i);
-      expect(spawnFailures).toEqual([["task-ping-fail", { error_code: null, message: payload.message }]]);
-      // 列挙は試みたが、その失敗で子プロセスは起動しない
-      expect(calls).toEqual([]);
-    } finally {
-      errorSpy.mockRestore();
-    }
+    const { start, calls, db } = await makeWorker(
+      { "agents/deckhand.md": skilledMd("  - code-review\n") },
+      {
+        enumerateSkills: rec.enumerateSkills,
+        onSpawnFailed: (taskId, failure) => spawnFailures.push([taskId, failure]),
+      },
+    );
+    start("task-ping-fail");
+    await vi.waitFor(() => expect(spawnFailures).toHaveLength(1));
+    const [[, failure]] = spawnFailures as [[string, { error_code: string | null; message: string }]];
+    expect(spawnFailures).toEqual([
+      ["task-ping-fail", { error_code: null, message: expect.stringContaining("skill enumeration failed") }],
+    ]);
+    expect(failure.message).not.toMatch(/time limit|reclaim/i);
+    const failed = listEvents(db, "task-ping-fail").filter((e) => e.kind === "spawn_failed");
+    expect(failed.map((e) => [e.worker_id, e.origin, e.payload])).toEqual([
+      ["deckhand", "board", { kind: "spawn_failed", ...failure }],
+    ]);
+    // 列挙は試みたが、その失敗で子プロセスは起動しない
+    expect(calls).toEqual([]);
   });
 
   // issue #60 / ADR 0033: 全 worker セッションはハーネス内蔵サンドボックスの
