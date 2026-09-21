@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -10,6 +11,7 @@ import {
   type ContainerRuntime,
   type ProcessContainer,
   ProcessContainers,
+  type PtyFn,
 } from "../../src/process-container.js";
 import { liveGroups, processGroupContainerRuntime } from "./process-group-container.js";
 
@@ -265,6 +267,50 @@ exit 0`,
   await containers.reclaimed("setsid-daemon");
 
   await vi.waitFor(() => expect(alive(daemon)).toBe(false), { timeout: 15_000 });
+});
+
+/** `/proc/<pid>/cgroup` の `0::` 行が指す cgroup ディレクトリ(kernel の面の読み)。 */
+function cgroupOf(pid: number): string {
+  const line = readFileSync(`/proc/${pid}/cgroup`, "utf8")
+    .split("\n")
+    .find((l) => l.startsWith("0::"));
+  return join("/sys/fs/cgroup", line?.slice(3).trim() ?? "");
+}
+
+/** canary 自身の pty launcher: 実物の node-pty(src の launcher は import しない)。
+ *  node-pty の型は env に `Record<string, string>` を要るので、src と同じく手で言う。 */
+const nodePtyLaunch: PtyFn = (command, args, opts) =>
+  (
+    createRequire(import.meta.url)("node-pty") as {
+      spawn(file: string, args: string[], options: typeof opts & { name: string }): ReturnType<PtyFn>;
+    }
+  ).spawn(command, args, { ...opts, name: "xterm-256color" });
+
+// pty の入り方(#769 / ADR 0136 決定9)は採用済みの cgroup 機構でだけ測る
+it.skipIf(probeName !== "cgroup")("pty で起こした process も容器に入り、強制回収で空になる", async () => {
+  const before = new Set(readdirSync(boardCgroup()));
+  const container = open("pty-enters");
+  const [dir] = readdirSync(boardCgroup()).filter((name) => !before.has(name));
+  if (dir === undefined) throw new Error("opening a container created no cgroup directory");
+
+  container.spawnPty(
+    nodePtyLaunch,
+    "/bin/sh",
+    ["-c", `echo $$ >> "$CANARY_PIDS"; exec sleep 300`],
+    { cwd: work, env: { ...process.env, CANARY_PIDS: pidsFile }, cols: 80, rows: 24 },
+  );
+  const empty = emptyObserved(container);
+  await vi.waitFor(() => expect(recordedPids()).toHaveLength(1), { timeout: 15_000 });
+
+  const [pid] = recordedPids();
+  if (pid === undefined) throw new Error("unreachable");
+  expect(cgroupOf(pid)).toBe(join(boardCgroup(), dir)); // runner の cgroup ではなく容器の中
+  expect(empty()).toBe(false);
+
+  containers.forceReclaim("pty-enters");
+  await containers.reclaimed("pty-enters");
+
+  await vi.waitFor(() => expect(recordedPids().filter(alive)).toEqual([]), { timeout: 15_000 });
 });
 
 it("回収を終えた容器は残骸を残さない — 次の boot の前提検査が成立したままである", () => {

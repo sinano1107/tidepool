@@ -116,6 +116,10 @@ function createProcessGroup(): ProcessContainer {
       });
       return child;
     },
+    // pty の入り方は cgroup 版でだけ測る(#769)。採用されていない候補のために広げない
+    spawnPty: () => {
+      throw new Error("the process-group candidate does not spawn ptys");
+    },
     forceReclaim: () => {
       forced = true;
       sweep();

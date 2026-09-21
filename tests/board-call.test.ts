@@ -1,6 +1,6 @@
 import { expect, it, vi } from "vitest";
-import { type BoardCallSpec, createBoardCalls } from "../src/board-call.js";
-import type { ContainedProcess } from "../src/process-container.js";
+import { type BoardCallSpec, createBoardCalls, type PtyBoardCallSpec } from "../src/board-call.js";
+import type { ContainedProcess, PtyFn, PtyProcess } from "../src/process-container.js";
 import { ProcessContainers } from "../src/process-container.js";
 import { RECLAIM_TIMEOUT } from "../src/watchdog.js";
 import { FakeClock, FakeContainerRuntime, recordingSpawn } from "./fakes.js";
@@ -224,4 +224,72 @@ it("stdin は既定で閉じており、opt-in した呼び出しだけが開け
   expect(t.stdin.read()?.toString()).toBe("request\n");
   t.emitExitAt(1, 0, null);
   expect(await piped).toBe("written");
+});
+
+/** pty を1つ起こす launcher の scripted stand-in。口に渡すのは spec の `pty.launch`
+ *  で、容器はその command に入り方を被せるだけなので、launcher が受け取ったものを
+ *  そのまま読む。 */
+function scriptedPty() {
+  const launched: Array<{ command: string; args: string[]; cwd: string; cols: number; rows: number }> = [];
+  const exits: Array<() => void> = [];
+  const launch: PtyFn = (command, args, opts) => {
+    launched.push({ command, args, cwd: opts.cwd, cols: opts.cols, rows: opts.rows });
+    return { onData: () => {}, write: () => {}, kill: () => {}, onExit: (listener) => exits.push(listener) };
+  };
+  return { launch, launched, exit: () => exits.forEach((listener) => listener()) };
+}
+
+const ptySpec = (launch: PtyFn): PtyBoardCallSpec => ({
+  ...spec,
+  kind: "usage TUI",
+  pty: { launch, cols: 200, rows: 50 },
+});
+
+it("pty の呼び出しも容器の中へ、渡された launcher で起こす", async () => {
+  const t = setup();
+  const pty = scriptedPty();
+  let read: PtyProcess | undefined;
+  const call = t.calls.call(ptySpec(pty.launch), (proc) => {
+    read = proc;
+    return () => "screen";
+  });
+  await vi.waitFor(() => expect(pty.launched).toHaveLength(1));
+
+  expect(t.runtime.created).toHaveLength(1);
+  expect(pty.launched[0]).toEqual({ command: "claude", args: ["-p", "/usage"], cwd: "/workspaces/sandbox", cols: 200, rows: 50 });
+  expect(read).toBeDefined();
+  expect(t.spawns).toEqual([]); // stream の口は通らない
+  pty.exit();
+  expect(await call).toBe("screen");
+});
+
+it("pty の root の exit で強制回収が撃たれる", async () => {
+  const t = setup();
+  const pty = scriptedPty();
+  const call = t.calls.call(ptySpec(pty.launch), () => () => "screen");
+  await vi.waitFor(() => expect(pty.launched).toHaveLength(1));
+  expect(t.runtime.forceReclaims).toEqual([]);
+
+  pty.exit();
+
+  expect(await call).toBe("screen");
+  expect(t.runtime.forceReclaims).toEqual(t.runtime.created);
+});
+
+it("呼び手の done で強制回収が撃たれ、呼び出しは読み手の答えを返す — root が exit しなくても", async () => {
+  const t = setup();
+  const pty = scriptedPty();
+  let done!: () => void;
+  const call = t.calls.call(ptySpec(pty.launch), (_proc, finished) => {
+    done = finished;
+    return (exitCode) => `screen (exit ${exitCode})`;
+  });
+  await vi.waitFor(() => expect(pty.launched).toHaveLength(1));
+  expect(t.runtime.forceReclaims).toEqual([]);
+
+  done();
+
+  // 上限到達の null ではなく読み手の答え(ADR 0074 のベストエフォート画面を失わない)
+  expect(await call).toBe("screen (exit null)");
+  expect(t.runtime.forceReclaims).toEqual(t.runtime.created);
 });

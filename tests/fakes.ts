@@ -304,6 +304,7 @@ export class FakeContainerRuntime implements ContainerRuntime {
         if (!this.spawn) throw new Error("fake container runtime: no spawn scripted");
         return this.spawn(command, args, opts);
       },
+      spawnPty: (launch, command, args, opts) => launch(command, args, opts),
       forceReclaim: () => {
         this.forceReclaims.push(id);
         if (!this.held.has(id)) markEmpty();
@@ -719,14 +720,15 @@ function passthroughContainerRuntime(spawn: ContainerSpawn): ContainerRuntime {
   return {
     preflight: () => ({ available: true }),
     create: () => {
-      let child: ContainedProcess | null = null;
+      let kill: (() => void) | null = null;
       let markEmpty!: () => void;
       const reclaimed = new Promise<void>((resolve) => {
         markEmpty = resolve;
       });
       return {
         spawn: (command, args, opts) => {
-          child = spawn(command, args, opts);
+          const child = spawn(command, args, opts);
+          kill = () => child.kill("SIGKILL");
           child.on("exit", () => markEmpty());
           // spawn そのものが失敗した process は生まれていない = 容器は空
           child.on("error", (err: NodeJS.ErrnoException) => {
@@ -734,10 +736,16 @@ function passthroughContainerRuntime(spawn: ContainerSpawn): ContainerRuntime {
           });
           return child;
         },
+        spawnPty: (launch, command, args, opts) => {
+          const proc = launch(command, args, opts);
+          kill = () => proc.kill("SIGKILL");
+          proc.onExit(() => markEmpty());
+          return proc;
+        },
         forceReclaim: () => {
           // 空の容器(spawn 前 / 既に exit 済み)への force は、その場で空である
-          if (!child) markEmpty();
-          else child.kill("SIGKILL");
+          if (!kill) markEmpty();
+          else kill();
         },
         reclaimed,
       };
