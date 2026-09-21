@@ -63,7 +63,6 @@ const BOARD_HOOK_MATCHER = "mcp__tidepool__.*";
 /** ADR 0124 決定4: probe 専用の1行。`codex debug prompt-input` は推論リクエストを
  *  送らないので、この marker がモデルに届くことはない。 */
 export const CODEX_DEVELOPER_MARKER = "tidepool-containment-probe: developer layer canary";
-const CODEX_PERMISSIONS = ["tidepool-work", "tidepool-review"] as const;
 /** 盤面が開ける feature —— 既定拒否の例外(ADR 0135 決定1)。ここに名前の無い feature は
  *  closedSurfaceConfig() が `=false` で閉じる。vendor が版の途中で足した名前は snapshot に無いので
  *  `=false` も渡らないが、その版へ pin を上げる前に featureDrift() が preflight を倒す。
@@ -326,7 +325,6 @@ export interface CodexCapabilityObservation {
   cliVersion: string;
   skills: readonly string[];
   hooks: readonly CodexHookRegistration[];
-  permissions: readonly string[];
   features: Readonly<Record<string, string>>;
   /** 盤面が `developer_instructions` で渡した marker のうち、developer item に載ったもの。 */
   developerMarkers: readonly string[];
@@ -367,7 +365,6 @@ export async function checkCodexCapability(
         [{ event: "preToolUse", matcher: BOARD_HOOK_MATCHER, enabled: true, source: "sessionFlags", command: hookPath }],
         observed.hooks,
       ],
-      ["permission", CODEX_PERMISSIONS, observed.permissions],
       ["developer instructions", [CODEX_DEVELOPER_MARKER], observed.developerMarkers],
     ] as const
   ).find(([, expected, actual]) => JSON.stringify(expected) !== JSON.stringify(actual));
@@ -764,7 +761,6 @@ async function actualCodexCapability(options: {
       skills: observedSkills(promptInput),
       developerMarkers: observedDeveloperMarkers(promptInput),
       ...await probeHookRegistration(call, options.executable, env, installBoardHook(options.codexHome)),
-      permissions: [...CODEX_PERMISSIONS],
       features: observedFeatures,
     };
   } finally {
