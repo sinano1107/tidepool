@@ -1226,12 +1226,12 @@ const SKILL_ENUM_TIMEOUT_MS = 15_000;
  *  (ADR 0108 決定2)。field 名では1つの配列しか答えられず、この ping は起動時と
  *  pickup ごとに走るので、2つ目の読みが2本目の ping を要してはならない。 */
 function readInitReport<T>(
-  stdout: NodeJS.ReadableStream | null,
+  stdout: NodeJS.ReadableStream,
   project: (parsed: Record<string, unknown> | null) => T | null,
 ): () => T | null {
   let buffered = "";
   let observed: T | null = null;
-  stdout?.on("data", (chunk: Buffer | string) => {
+  stdout.on("data", (chunk: Buffer | string) => {
     buffered += chunk.toString();
     const lines = buffered.split("\n");
     buffered = lines.pop() ?? "";
@@ -1470,7 +1470,6 @@ export const execThrough =
     if (!output) throw new Error(`the ${kind} Board call produced no answer (limit, spawn failure, or no container)`);
     if (output.exitCode !== 0) {
       throw Object.assign(new Error(`Command failed: ${command} exited ${output.exitCode}\n${output.stderr}`), {
-        code: output.exitCode,
         stdout: output.stdout,
       });
     }

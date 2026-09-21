@@ -150,11 +150,7 @@ export function createBoardCalls(deps: {
       cancelLimit = deps.clock.setInterval(() => settle(() => null), spec.limitMs);
       let proc: ContainedProcess;
       try {
-        proc = container.spawn(spec.command, spec.args, {
-          cwd: spec.cwd,
-          env: spec.env,
-          ...(spec.stdin && { stdin: spec.stdin }),
-        });
+        proc = container.spawn(spec.command, spec.args, { cwd: spec.cwd, env: spec.env, stdin: spec.stdin });
       } catch {
         // process が1つも生まれていない(ENOENT / PATH の誤り)= 容器は空
         settle(() => null);

@@ -821,7 +821,7 @@ export function recordingSpawn() {
     return {
       stdout,
       stderr,
-      ...(opts.stdin && { stdin }),
+      stdin,
       kill: (signal) => killed.push(signal),
       on: (
         event: "exit" | "error",
