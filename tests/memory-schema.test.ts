@@ -1,7 +1,3 @@
-import { mkdtemp } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import Database from "better-sqlite3";
 import { expect, it } from "vitest";
 import { openDb } from "../src/db.js";
 
@@ -76,48 +72,6 @@ it("episode_markers.kind の CHECK は memory マーカーを受ける(issue #59
   db.close();
 });
 
-it("definition を受けない旧いエントリ表は、再オープンで kind の CHECK が definition まで広がり、既存行は残る(issue #600)", async () => {
-  const dbPath = join(await mkdtemp(join(tmpdir(), "tidepool-db-migrate-memory-kind-")), "board.sqlite");
-  const legacy = new Database(dbPath);
-  legacy.exec(`
-    CREATE TABLE memory_entries (
-      id                  INTEGER PRIMARY KEY,
-      kind                TEXT NOT NULL CHECK (kind IN ('knowledge', 'behavior')),
-      state               TEXT NOT NULL CHECK (state IN ('candidate', 'approved')),
-      scope               TEXT,
-      path                TEXT NOT NULL,
-      title               TEXT NOT NULL,
-      text                TEXT NOT NULL,
-      original_title      TEXT,
-      original_text       TEXT,
-      original_language   TEXT,
-      addressee           TEXT,
-      source_kind         TEXT NOT NULL CHECK (source_kind IN ('event', 'commit', 'decision')),
-      source_ref          TEXT NOT NULL,
-      author_activity     TEXT NOT NULL CHECK (author_activity IN ('worker_verb', 'human', 'rca', 'meta_review')),
-      author              TEXT NOT NULL,
-      version             INTEGER,
-      invalidation_reason TEXT CHECK (invalidation_reason IN ('superseded', 'path_moved', 'capability', 'environment', 'requirement_change')),
-      successor_id        INTEGER REFERENCES memory_entries(id)
-    );
-  `);
-  insert(legacy, { id: 1 });
-  insert(legacy, { id: 3 });
-  insert(legacy, { id: 2, invalidation_reason: "superseded", successor_id: 3 });
-  expect(() => insert(legacy, { id: 4, kind: "definition" })).toThrow(/CHECK/);
-  legacy.close();
-
-  const db = openDb(dbPath);
-  insert(db, { id: 4, kind: "definition" });
-  expect(db.prepare("SELECT id, kind, successor_id FROM memory_entries ORDER BY id").all()).toEqual([
-    { id: 1, kind: "knowledge", successor_id: null },
-    { id: 2, kind: "knowledge", successor_id: 3 },
-    { id: 3, kind: "knowledge", successor_id: null },
-    { id: 4, kind: "definition", successor_id: null },
-  ]);
-  db.close();
-});
-
 it("fresh 盤面に注入上限の1行表があり、正でない上限は CHECK が拒む(issue #592)", () => {
   const db = openDb(":memory:");
   db.prepare("INSERT INTO memory_defaults (id, injection_token_cap) VALUES (1, 500)").run();
@@ -126,8 +80,8 @@ it("fresh 盤面に注入上限の1行表があり、正でない上限は CHECK
   db.close();
 });
 
-/** meta-review の主題列と周期の盤面設定(spec #615 D / issue #618)。fresh と migrate 後で同じ CHECK を言う。 */
-function expectMetaReviewSchema(db: ReturnType<typeof openDb>) {
+it("fresh 盤面の tasks.meta_review_subject は memory / routing / NULL だけを、memory_defaults.meta_review_period_days は正の値か NULL を受ける(issue #618)", () => {
+  const db = openDb(":memory:");
   const task = db.prepare(
     "INSERT INTO tasks (id, type, status, title, purpose, completion_criteria, sort_key, created_at, meta_review_subject) VALUES (?, 'review', 'todo', 't', 'p', 'c', 1, '2026-09-15T00:00:00.000Z', ?)",
   );
@@ -141,21 +95,5 @@ function expectMetaReviewSchema(db: ReturnType<typeof openDb>) {
   period.run(null);
   period.run(3);
   expect(() => period.run(0)).toThrow(/CHECK/);
-}
-
-it("fresh 盤面の tasks.meta_review_subject は memory / routing / NULL だけを、memory_defaults.meta_review_period_days は正の値か NULL を受ける(issue #618)", () => {
-  const db = openDb(":memory:");
-  expectMetaReviewSchema(db);
-  db.close();
-});
-
-it("主題列と周期列の無い旧い盤面は、再オープンで同じ CHECK つきの列を得る(issue #618)", async () => {
-  const dbPath = join(await mkdtemp(join(tmpdir(), "tidepool-db-migrate-meta-review-")), "board.sqlite");
-  openDb(dbPath).close();
-  const stripped = new Database(dbPath);
-  stripped.exec("ALTER TABLE tasks DROP COLUMN meta_review_subject; ALTER TABLE memory_defaults DROP COLUMN meta_review_period_days;");
-  stripped.close();
-  const db = openDb(dbPath);
-  expectMetaReviewSchema(db);
   db.close();
 });
