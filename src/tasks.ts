@@ -2500,9 +2500,8 @@ export function listQueue(
   defaultAgentName?: string,
   auditorName?: string,
   /** 資源単位の skip で候補から外れる workspace / assignee 名 — 開いた quarantine
-   *  (ADR 0137 決定6)と fable 線 (ADR 0030) の合成。`nextSlotTask` の `stopped` と
-   *  同じ1つの式(scheduler.ts の `pickupStops`)から渡す。該当タスクだけが skipped
-   *  表示になる(盤面全体の throttled とは独立)。Absent → 何も skip しない。 */
+   *  (ADR 0137 決定6)。`nextSlotTask` の `stopped` と同じ1つの式(`quarantineStops`)
+   *  から渡す。該当タスクだけが skipped 表示になる。Absent → 何も skip しない。 */
   stopped?: ResourceStops,
   /** 実行設定の entry がすべて除外されている task(ADR 0110 決定3 / issue #544)。
    *  SQL の後で当てるのは、判定に task の要求ティアが要るから —— agent 名では

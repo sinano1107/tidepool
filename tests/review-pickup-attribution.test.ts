@@ -9,6 +9,7 @@ import { listEvents } from "../src/events.js";
 import type { ContainerSpawn } from "../src/process-container.js";
 import { HOURLY, startScheduler } from "../src/scheduler.js";
 import { startServer, type TidepoolServer } from "../src/server.js";
+import { implicitTaskExecutionCandidates } from "../src/server-options.js";
 import { Slot } from "../src/slot.js";
 import { DEFAULT_AUDITOR_NAME, registerTask } from "../src/tasks.js";
 import type { WorkerAdapter } from "../src/worker.js";
@@ -75,8 +76,10 @@ You are Fugu.
   dirs.push(boardDir, logDir);
   const clock = new FakeClock();
 
+  const boardDb = openDb(join(boardDir, "board.sqlite"));
   server = await startServer({
-    db: openDb(join(boardDir, "board.sqlite")),
+    db: boardDb,
+    taskExecutionCandidates: implicitTaskExecutionCandidates(boardDb),
     port: 0,
     mcpPort: 0,
     credential: TEST_CREDENTIAL,
@@ -131,7 +134,15 @@ it("startScheduler を直接構築しても、省略された Auditor は既定�
   const db = openDb(":memory:");
   const clock = new FakeClock();
   const worker = new ScriptedWorker(clock);
-  const scheduler = startScheduler({ db, clock, slot: new Slot(), worker, containers: fakeContainers(), onSpawnFailed: () => {} });
+  const scheduler = startScheduler({
+    db,
+    clock,
+    slot: new Slot(),
+    worker,
+    containers: fakeContainers(),
+    onSpawnFailed: () => {},
+    taskExecutionCandidates: implicitTaskExecutionCandidates(db),
+  });
   const review = registerTask(
     db,
     {

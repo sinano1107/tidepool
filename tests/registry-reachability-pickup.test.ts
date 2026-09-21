@@ -1,6 +1,7 @@
 import { afterEach, expect, it } from "vitest";
 import { loadRegistry, refreshRegistry } from "../src/registry.js";
 import { HOURLY, startScheduler } from "../src/scheduler.js";
+import { implicitTaskExecutionCandidates } from "../src/server-options.js";
 import { Slot } from "../src/slot.js";
 import { listBoard, registerTask, type Task } from "../src/tasks.js";
 import type { WorkerAdapter } from "../src/worker.js";
@@ -45,6 +46,7 @@ it("次の pickup は spawn の手前で registry を refresh する(ADR 0052)",
     worker,
     containers: fakeContainers(),
     onSpawnFailed: () => {},
+    taskExecutionCandidates: implicitTaskExecutionCandidates(db),
     // GitHub 身元なしの盤面(ローカルの bare remote なので認証は要らない)
     registryReachability: async () => refreshRegistry(registryDir, undefined),
   });
@@ -77,6 +79,7 @@ it("registry に到達できない間は盤面全体の pickup を止め、確�
     worker,
     containers: fakeContainers(),
     onSpawnFailed: () => {},
+    taskExecutionCandidates: implicitTaskExecutionCandidates(db),
     registryReachability: async () => ({
       available: false,
       reason: "origin is unreachable",
@@ -123,10 +126,13 @@ it("registry 質問が開いている間、poll は /usage を観測しない(AD
     registryReachability: async () => ({ available: false, reason: "origin is unreachable" }),
   });
   await registerWork(t, "waits for the registry");
+  const observedAt = async () =>
+    (await api(t.baseUrl, "GET", "/api/pause")).json.providerUsage?.find((usage: any) => usage.provider === "anthropic")
+      ?.observedAt;
   await t.clock.advance(HOUR); // 1回目の poll: 質問がまだ無いので観測は走り、質問が立つ
-  const first = (await api(t.baseUrl, "GET", "/api/pause")).json.throttle.observedAt;
-  expect(first).not.toBeNull();
+  const first = await observedAt();
+  expect(first).toBeDefined();
 
   await t.clock.advance(HOUR); // 2回目の poll: 質問が開いているので手前で止まる
-  expect((await api(t.baseUrl, "GET", "/api/pause")).json.throttle.observedAt).toBe(first);
+  expect(await observedAt()).toBe(first);
 });

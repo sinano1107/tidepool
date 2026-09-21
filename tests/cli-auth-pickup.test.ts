@@ -35,7 +35,7 @@ it("checkUsage がnullでも追加probeで401が確定したときだけ provide
   });
 });
 
-it("checkUsage のnullを追加probeでも分類できなければfail-closed throttleだけに留める(ADR 0070)", async () => {
+it("checkUsage のnullを追加probeでも分類できなければ anthropic の fail-closed な除外だけに留める —— question も盤面全体の停止も立たない(ADR 0070 / ADR 0140)", async () => {
   const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
   let checks = 0;
   t = await bootTidepool({
@@ -50,12 +50,13 @@ it("checkUsage のnullを追加probeでも分類できなければfail-closed th
   await api(t.baseUrl, "POST", `/api/tasks/${task.id}/move`, { after: null });
 
   const tasks = (await api(t.baseUrl, "GET", "/api/tasks")).json as any[];
-  const pause = (await api(t.baseUrl, "GET", "/api/pause")).json;
+  const queue = (await api(t.baseUrl, "GET", "/api/queue")).json;
   expect({
     checks,
     questions: tasks.filter((candidate) => candidate.type === "question"),
-    halts: pause.halts.map((halt: { kind: string }) => halt.kind),
-  }).toEqual({ checks: 1, questions: [], halts: ["throttle"] });
+    halts: queue.halts,
+    status: queue.tasks.find((row: any) => row.id === task.id)?.status,
+  }).toEqual({ checks: 1, questions: [], halts: [], status: "skipped" });
   expect(warn).toHaveBeenCalledWith(
     "[cli-auth] usage failure could not be classified",
     "probe did not return a JSON envelope",

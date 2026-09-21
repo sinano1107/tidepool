@@ -342,17 +342,22 @@ function harnessResolver(
  *  モデル窓の除外は全テスト緑のまま黙って効かなくなる。task の要求を必ず渡すのが
  *  この口の要点である(#543 の申し送り): 渡し忘れれば要求ティアで走る task が
  *  モデル窓をすり抜け、表示と実際の判定がずれる。 */
-function taskExecutionCandidatesResolver(
-  board: BoardComposition,
-  db: Db,
-): TaskExecutionCandidates | undefined {
-  if (!board.registryDir) return undefined;
+function taskExecutionCandidatesResolver(board: BoardComposition, db: Db): TaskExecutionCandidates {
+  if (!board.registryDir) return implicitTaskExecutionCandidates(db);
   return (task) => {
     const registry = loadBoardRegistry(board);
     const name = resolveTaskAgent(task, board.defaultAgentName, board.auditorName);
     const agent = resolveExecutionAgent(registry, board.defaultAgentName, name);
     return executionSettingsFor(db, agent.definition, task);
   };
+}
+
+/** registry なしの盤面の暗黙の entry(ADR 0140 決定3): 合成の agent 定義1つ
+ *  (Provider は anthropic だけ、tier は書かない)を、registry ありと同じ
+ *  `executionSettingsFor` に通す —— ティアは盤面既定、モデルは Selector の表から決まる。 */
+export function implicitTaskExecutionCandidates(db: Db): TaskExecutionCandidates {
+  return (task) =>
+    executionSettingsFor(db, { provider: [{ name: "anthropic", advisor: false }], tier: undefined }, task);
 }
 
 function agentsUsingHarnessesResolver(
@@ -490,22 +495,6 @@ function workspaceResolver(
 function registeredWorkspaces(board: BoardComposition): WorkspaceConfig[] {
   if (!board.registryDir) return [];
   return listRegisteredWorkspaces(loadBoardRegistry(board), board.workspacesDir);
-}
-
-/** fable モデルに解決される agent 名の集合 (ADR 0030)、毎 poll registry から
- *  読み直す。CLI の --model は開かれた文字列("fable" でも "claude-fable-5"
- *  でも通る)なので、部分一致で fable 系と判定する。default agent が fable
- *  なら assignee 未設定のタスクもここに含まれる名前へ解決される(SQL 側の
- *  COALESCE)。registry なし → fable 判定は不可能、skip なし。 */
-function fableAgentsResolver(board: BoardComposition, db: Db): (() => string[]) | undefined {
-  const { registryDir } = board;
-  if (!registryDir) return undefined;
-  return () =>
-    Object.values(loadBoardRegistry(board).agents)
-      // task 単位ではなく agent 名の集合を答える面なので、要求は undefined ——
-      // 「その agent が要求なしで走ればどのモデルか」の判定である(#543)
-      .filter((agent) => executionSettingsFor(db, agent, undefined)[0]?.model.toLowerCase().includes("fable"))
-      .map((agent) => agent.name);
 }
 
 /** 指定された provider を喋ると宣言された agent 名の集合 (ADR 0097 決定2 /
@@ -783,9 +772,8 @@ export async function buildServerOptions(board: BoardComposition, db: Db): Promi
     // the skills picker's candidate source (issue #106): the real `claude` CLI's
     // neutral-cwd enumeration — always available on a real host, faked in tests
     hostSkills: enumerateHostSkills,
-    fableAgents: fableAgentsResolver(board, db),
-    // ADR 0137 決定6: 資源単位の quarantine の値 → agent 名。registry を読む写像を要るのは
-    // provider / Harness の行だけ(agent 名の行は表が自分で持つ)
+    // ADR 0137 決定6: 資源単位の quarantine の値 → agent 名(直接 cancel の門が読む)。
+    // registry を読む写像を要るのは provider / Harness の行だけ(agent 名の行は表が自分で持つ)
     quarantineResolvers: {
       providerAuth: agentsSpeakingProvidersResolver(board),
       harnessContainment: agentsUsingHarnessesResolver(board),
@@ -795,7 +783,6 @@ export async function buildServerOptions(board: BoardComposition, db: Db): Promi
       openai: () => codexLoginAbsence(board.codexHome),
     },
     taskExecutionCandidates: taskExecutionCandidatesResolver(board, db),
-    resolveHarness: harnessResolver(board, db),
     registryReachability: registryReachabilityCheck(board),
     cliAuthExpiresAt: board.cliAuthExpiresAt,
     // ADR 0093 / issue #211: remote 正本を宣言した workspace の pickup 直前の fetch は

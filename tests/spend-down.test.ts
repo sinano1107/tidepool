@@ -1,4 +1,5 @@
 import { afterEach, expect, it } from "vitest";
+import { registerTask } from "../src/tasks.js";
 import { usagePanelText } from "./fakes.js";
 import { api, bootTidepool, HOUR, mcpClient, queueWork, type Tidepool } from "./harness.js";
 
@@ -152,9 +153,14 @@ it("両方有効なとき session のリセットを poll が観測すると ses
   });
 });
 
-it("spend-down(week) は fable のタスク単位 skip も解除する — 同じ瞬間に失効する予算(ADR 0030)", async () => {
-  t = await bootTidepool({ fableAgents: () => ["fable-artisan"] });
-  const fableTask = queueWork(t, "fable work", undefined, undefined, "fable-artisan");
+it("spend-down(week) は fable 窓による entry の除外も解除する — 同じ瞬間に失効する予算(ADR 0030 / ADR 0140 決定3)", async () => {
+  t = await bootTidepool();
+  // frontier を要求する task は表の fable 行に解決され、fable 窓が当たる
+  const fableTask = registerTask(
+    t.db,
+    { type: "work", title: "fable work", purpose: "p", completion_criteria: "c", tier: "frontier" },
+    t.clock.now(),
+  );
 
   // fable 線だけ超過している観測(throttle.test.ts の fableOverPace と同じ数字)
   const now = t.clock.now();

@@ -13,13 +13,13 @@ import {
   observedHooks,
 } from "../src/codex-worker.js";
 import { listEvents } from "../src/events.js";
+import { executionSettingsFor } from "../src/execution-setting.js";
 import { harnessContainmentPickupBlocked } from "../src/harness-containment.js";
 import { quarantineChecks, submitAnswer } from "../src/human-verbs.js";
 import { ProcessContainers } from "../src/process-container.js";
-import { canonicalHarness } from "../src/registry.js";
 import { HOURLY, startScheduler } from "../src/scheduler.js";
 import { Slot } from "../src/slot.js";
-import { getTask, listBoard, registerTask, type Task } from "../src/tasks.js";
+import { getTask, listBoard, registerTask } from "../src/tasks.js";
 import type { WorkerAdapter } from "../src/worker.js";
 import {
   containerHarness,
@@ -253,7 +253,8 @@ it("a failed Codex Harness preflight skips that route and starts a Claude-route 
     worker,
     containers: passthroughContainers(),
     onSpawnFailed: () => {},
-    resolveHarness: (task: Task) => canonicalHarness(providers.get(task.assignee!)!),
+    taskExecutionCandidates: (task) =>
+      executionSettingsFor(db, { provider: [{ name: providers.get(task.assignee!)!, advisor: false }], tier: undefined }, task),
     harnessContainment: async (harness) =>
       harness === "codex"
         ? { available: false, reason: "Codex containment preflight: permission drift" }
@@ -325,14 +326,16 @@ it("a Harness quarantine answer is accepted only after the same live check recov
 it("the public queue and answer routes expose a durable Harness-scoped stop without halting another route", async () => {
   let codexHealthy = false;
   const tidepool = await bootTidepool({
-    resolveHarness: (task) => task.assignee === "codex-agent" ? "codex" : "claude-code",
+    taskExecutionCandidates: (task) =>
+      executionSettingsFor(
+        tidepool.db,
+        { provider: [{ name: task.assignee === "codex-agent" ? "openai" : "anthropic", advisor: false }], tier: undefined },
+        task,
+      ),
     harnessContainment: async (harness) =>
       harness === "codex" && !codexHealthy
         ? { available: false, reason: "permission canary failed" }
         : { available: true },
-    quarantineResolvers: {
-      harnessContainment: (harnesses) => (harnesses.includes("codex") ? ["codex-agent"] : []),
-    },
   });
   try {
     const codex = await registerWork(

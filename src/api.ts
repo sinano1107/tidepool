@@ -63,7 +63,7 @@ import {
 import { isPaused, setPaused } from "./pause.js";
 import { type ProfileAdmin, ProfileConfirmationRequiredError } from "./profile-create.js";
 import { removePushSubscription, savePushSubscription } from "./push.js";
-import type { QuarantineChecks, QuarantineResolvers } from "./quarantine.js";
+import { type QuarantineChecks, type QuarantineResolvers, quarantineStops } from "./quarantine.js";
 import { getQuietHours, HH_MM_PATTERN, setBoardTimezone, setQuietHours } from "./quiet-hours.js";
 import {
   authorityProfileSchema,
@@ -86,7 +86,6 @@ import {
 import { RepoAccessMissingError } from "./repo-access.js";
 import {
   entryExclusionPredicate,
-  pickupStops,
   type TaskExecutionCandidates,
 } from "./scheduler.js";
 import { clearSpendDown, getSpendDown, setSpendDown } from "./spend-down.js";
@@ -111,7 +110,6 @@ import { sessionInTeardown } from "./teardown.js";
 import {
   getProviderUsage,
   getThrottleState,
-  isFablePickupBlocked,
 } from "./throttle.js";
 import type { TranslationClient } from "./translate.js";
 import {
@@ -515,8 +513,6 @@ export interface ApiRouterDeps {
   db: Db;
   clock: Clock;
   pollNow: () => void;
-  /** Just-in-time usage observation in flight; absent for API-only tests. */
-  throttleRevalidating?: () => boolean;
   /** The board's workspace path — where `gh` runs for the merge dial's live
    *  CI check (issue #11). Absent → a merge-decision "merge" answer can't
    *  check CI and is rejected. */
@@ -556,15 +552,13 @@ export interface ApiRouterDeps {
   reclaim?: Pick<PendingReclaim, "acceptReclaimed">;
   /** ADR 0137 決定5: 解除の門の map。合成 root が組む。 */
   quarantineChecks?: QuarantineChecks;
-  /** ADR 0137 決定6: 資源単位の quarantine の値 → agent 名。queue の `skipped` 表示は
-   *  scheduler のゲートと同じ集合を見る。resolver の無い kind(registry を持たない
-   *  盤面では値が undefined)の行は何も skip しない。 */
+  /** ADR 0137 決定6: 資源単位の quarantine の値 → agent 名。直接 cancel の門が読む。
+   *  resolver の無い kind(registry を持たない盤面では値が undefined)の行は何も止めない。 */
   quarantineResolvers?: QuarantineResolvers;
   /** ADR 0110 決定1/3 / issue #544: この task が走りうる実行設定(Provider 順位
    *  で並び、除外は当たっていない)。queue の skipped 表示と Pickable head の判定が
-   *  scheduler のゲートと同じ式を共有するための口。Absent → registry を持たない
-   *  盤面なので、entry は知りようがなく何も skipped にならない。 */
-  taskExecutionCandidates?: TaskExecutionCandidates;
+   *  scheduler のゲートと同じ式を共有するための口。 */
+  taskExecutionCandidates: TaskExecutionCandidates;
   /** The public half of the board's VAPID keypair (issue #14) — the WebUI
    *  needs this to call `pushManager.subscribe`. Absent → push is not
    *  configured on this board at all. */
@@ -604,10 +598,6 @@ export interface ApiRouterDeps {
    *  盤面の外(`npm run github-login`)で起きるので、起動時に解決した身元では
    *  再起動するまで映らない。 */
   githubTokenFile?: string;
-  /** Agent names whose registry model is fable (ADR 0030), read fresh per
-   *  request — the queue view marks only their tasks skipped while the fable
-   *  line is over pace. Absent → no registry, fable skip never shows. */
-  fableAgents?: () => string[];
   /** The display-time translation seam (issue #47 / ADR 0015). Absent →
    *  POST /api/translate reports the LLM as unreachable, same 503 posture as
    *  no draftClient configured. */
@@ -656,7 +646,6 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     db,
     clock,
     pollNow,
-    throttleRevalidating = () => false,
     workspace,
     resolveWorkspace,
     github,
@@ -677,7 +666,6 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     translationClient,
     attributionClient,
     behaviorDraftClient,
-    fableAgents,
     quarantineResolvers,
     taskExecutionCandidates,
     isProtectedWorkspace,
@@ -686,18 +674,10 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   router.use(json());
   // one cache per router = per process (the API is booted once per board)
   const issueContent = new IssueContentCache();
-  /** 資源単位の skip で候補から外れるもの(ADR 0137 決定6 の quarantine / ADR 0030 の
-   *  fable 線)。pickup の述語(`nextSlotTask`)とキュービューの skipped 表示は
-   *  同じ集合を見なければならない(tasks.ts の「乖離させない」の線) — 述語だけ
-   *  でなく、そこへ渡す引数も1つの式から出す。 */
-  const stopped = () =>
-    pickupStops(
-      db,
-      isFablePickupBlocked(db, clock.now()),
-      fableAgents,
-      // entry を持つ盤面は agent 名で外さない —— 下の述語がより細かく答える
-      taskExecutionCandidates ? {} : quarantineResolvers,
-    );
+  /** 資源単位の skip で候補から外れるもの(ADR 0137 決定6 の quarantine)。pickup の
+   *  述語(`nextSlotTask`)とキュービューの skipped 表示は同じ集合を見なければならない
+   *  (tasks.ts の「乖離させない」の線) — 述語だけでなく、そこへ渡す引数も1つの式から出す。 */
+  const stopped = () => quarantineStops(db);
   /** 「この行は全 entry が除外されているか」。scheduler の poll が同じ式を、同じ
    *  poll で観測し直した除外集合に対して当てる(ADR 0110 決定3)。 */
   const entriesAllExcluded = () => entryExclusionPredicate(db, taskExecutionCandidates);
@@ -1790,9 +1770,9 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   router.get("/pause", (_req, res) => {
     const { resetsAt: resumesAt, ...throttle } = getThrottleState(db);
     res.json({
-      halts: boardHalts(db, throttleRevalidating),
+      halts: boardHalts(db),
       ...teardownJson(),
-      throttle: { ...throttle, resumesAt, revalidating: throttleRevalidating() },
+      throttle: { ...throttle, resumesAt, revalidating: false },
       spendDown: spendDownJson(),
       ...providerUsageJson(),
     } satisfies WireContract["GET /api/pause"]);
@@ -2004,7 +1984,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   // instant, so no gap between two fetches can make them disagree.
   router.get("/queue", async (_req, res) => {
     res.json({
-      halts: boardHalts(db, throttleRevalidating),
+      halts: boardHalts(db),
       ...teardownJson(),
       ...providerUsageJson(),
       tasks: await presentLive(

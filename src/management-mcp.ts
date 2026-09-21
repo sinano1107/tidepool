@@ -50,7 +50,7 @@ import {
   TOKENIZER,
 } from "./memory.js";
 import { type ProfileAdmin, ProfileConfirmationRequiredError } from "./profile-create.js";
-import type { QuarantineChecks, QuarantineResolvers } from "./quarantine.js";
+import { type QuarantineChecks, type QuarantineResolvers, quarantineStops } from "./quarantine.js";
 import {
   InvalidAgentDefinitionError,
   InvalidAgentNameError,
@@ -65,7 +65,6 @@ import {
 import { RepoAccessMissingError } from "./repo-access.js";
 import {
   entryExclusionPredicate,
-  pickupStops,
   type TaskExecutionCandidates,
 } from "./scheduler.js";
 import { createStatelessMcpRouter } from "./stateless-mcp.js";
@@ -79,7 +78,6 @@ import {
   listYourTasks,
 } from "./tasks.js";
 import { sessionInTeardown } from "./teardown.js";
-import { isFablePickupBlocked } from "./throttle.js";
 import type { PendingReclaim } from "./watchdog.js";
 import { UnknownWorkspaceError, type WorkspaceConfig } from "./workspace.js";
 import {
@@ -116,16 +114,12 @@ export interface ManagementMcpDeps {
   reclaim?: Pick<PendingReclaim, "acceptReclaimed">;
   /** ADR 0137 決定5: 解除の門の map(WebUI 側と同じ配線)。 */
   quarantineChecks?: QuarantineChecks;
-  fableAgents?: () => string[];
-  /** ADR 0137 決定6: 資源単位の quarantine の値 → agent 名 —— `list_queue` の `skipped`
-   *  表示が scheduler のゲートと同じ集合を見るための口。 */
+  /** ADR 0137 決定6: 資源単位の quarantine の値 → agent 名 —— 直接 cancel の門が読む
+   *  (WebUI 側と同じ配線)。 */
   quarantineResolvers?: QuarantineResolvers;
   /** ADR 0110 決定1/3 / issue #544: queue の skipped 表示が scheduler のゲートと
    *  同じ式を通るための口(api.ts と同じもの)。 */
-  taskExecutionCandidates?: TaskExecutionCandidates;
-  /** scheduler のメモリ内の再観測中フラグ (ADR 0041 の明示注入)。読み口だけの
-   *  盤面では未注入で、その場合 throttle の再観測中は現れない。 */
-  throttleRevalidating?: () => boolean;
+  taskExecutionCandidates: TaskExecutionCandidates;
   workspaceAdmin?: Partial<WorkspaceAdmin>;
   agentAdmin?: Partial<AgentAdmin>;
   profileAdmin?: Partial<ProfileAdmin>;
@@ -261,19 +255,14 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
     // 承知の上である
     const teardown = sessionInTeardown(deps.db);
     return toolResult({
-      halts: boardHalts(deps.db, deps.throttleRevalidating),
+      halts: boardHalts(deps.db),
       ...(teardown ? { teardown } : {}),
       tasks: listQueue(
         deps.db,
         deps.workspace?.name,
         deps.defaultAgentName,
         deps.auditorName,
-        pickupStops(
-          deps.db,
-          isFablePickupBlocked(deps.db, deps.clock.now()),
-          deps.fableAgents,
-          deps.taskExecutionCandidates ? {} : deps.quarantineResolvers,
-        ),
+        quarantineStops(deps.db),
         skippedByEntries(deps),
       ),
     });

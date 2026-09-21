@@ -445,11 +445,8 @@ it("registry があるとき、各口には対応する解決子が刺さって�
   expect(options.resolveAuthority?.(null)).toBeDefined();
   expect(options.resolveAuthority?.("nobody")).toBeUndefined();
   // ADR 0110 決定3: model は agent の宣言ではなく盤面の表から来る —— fixture の
-  // agent は tier を書いていないので盤面既定(standard)の行、すなわち fable では
-  // ない。この2つが**同じ1本**(resolveExecutionSetting)を通っていることが、
-  // モデル窓の除外が黙って効かなくなる形を塞いでいる。
-  expect(options.fableAgents?.()).toEqual([]);
-  expect(options.taskExecutionCandidates?.({ assignee: "deckhand" } as any)).toMatchObject([
+  // agent は tier を書いていないので盤面既定の行になる。
+  expect(options.taskExecutionCandidates({ assignee: "deckhand" } as any)).toMatchObject([
     { provider: "anthropic", model: "sonnet" },
   ]);
   expect(callers?.openaiUsage).toBeTypeOf("function");

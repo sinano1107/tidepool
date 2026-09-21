@@ -53,7 +53,7 @@ import {
 } from "./registry.js";
 import { type Scheduler, startScheduler, type TaskExecutionCandidates } from "./scheduler.js";
 import { Slot } from "./slot.js";
-import { DEFAULT_AUDITOR_NAME, getTask, type Task } from "./tasks.js";
+import { DEFAULT_AUDITOR_NAME, getTask } from "./tasks.js";
 import { acceptTeardownQuarantine, runTeardown, sessionInTeardown, type TeardownDeps, teardownStep } from "./teardown.js";
 import type { TranslationClient } from "./translate.js";
 import { closeStaleTriage } from "./triage.js";
@@ -255,12 +255,9 @@ export interface ServerOptions {
    *  registering worker's authority profile. Absent → no workspace is
    *  protected. */
   isProtectedWorkspace?: (name: string) => boolean;
-  /** Agent names whose registry model is fable (ADR 0030), read fresh by
-   *  the scheduler's fable line and the queue view. Absent → no registry
-   *  configured, so the fable line can't attribute tasks and skips nothing. */
-  fableAgents?: () => string[];
   /** ADR 0137 決定6: 資源単位の quarantine の値 → agent 名(provider / Harness は
-   *  registry を読む)。pickup・queue の skipped・直接 cancel の門へ渡す。resolver の無い kind
+   *  registry を読む)。直接 cancel の門へ渡す(pickup と queue の skipped は entry を
+   *  外すので読まない、ADR 0110 決定3)。resolver の無い kind
    *  (registry を持たない盤面では値が undefined)の行は何も止めない。 */
   quarantineResolvers?: QuarantineResolvers;
   openaiUsage?: CodexAppServerProbe;
@@ -268,10 +265,9 @@ export interface ServerOptions {
   credentialAbsence?: Partial<Record<Provider, () => string | undefined>>;
   /** ADR 0110 決定1/3 / issue #544: この task が走りうる実行設定(Provider 順位順、
    *  除外は未適用)。pickup のゲート・queue の skipped 表示・Pickable head の判定が
-   *  同じ1つの式を共有するための口。Absent → Provider ごとの usage 観測を持たない
-   *  盤面(legacy: 盤面全体の Claude usage と fable 線だけ)。 */
-  taskExecutionCandidates?: TaskExecutionCandidates;
-  resolveHarness?: (task: Task) => Harness;
+   *  同じ1つの式を共有するための口。registry なしの盤面も合成の定義1つでこれを持つ
+   *  (ADR 0140 決定3)。 */
+  taskExecutionCandidates: TaskExecutionCandidates;
   /** Adapter-owned sandbox/tool-surface check. Its presence also arms the
    *  shared container and live human-surface check. Their common result is
    *  prepended to each Harness result, and the four questions are re-run at
@@ -615,12 +611,9 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
     resolveWorkspace: options.resolveWorkspace,
     auditorName,
     github: options.github,
-    fableAgents: options.fableAgents,
-    quarantineResolvers: options.quarantineResolvers,
     openaiUsage: options.openaiUsage,
     credentialAbsence: options.credentialAbsence,
     taskExecutionCandidates: options.taskExecutionCandidates,
-    resolveHarness: options.resolveHarness,
     harnessContainment,
     registryReachability,
     cliAuth: options.cliAuth,
@@ -744,7 +737,6 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
       db,
       clock: options.clock,
       pollNow,
-      throttleRevalidating: () => scheduler.isThrottleRevalidating(),
       workspace: options.workspace,
       resolveWorkspace: options.resolveWorkspace,
       github: options.github,
@@ -766,7 +758,6 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
       translationClient: options.translationClient,
       attributionClient: options.attributionClient,
       behaviorDraftClient: options.behaviorDraftClient,
-      fableAgents: options.fableAgents,
       quarantineResolvers: options.quarantineResolvers,
       taskExecutionCandidates: options.taskExecutionCandidates,
       isProtectedWorkspace: options.isProtectedWorkspace,
@@ -791,10 +782,8 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
       isProtectedWorkspace: options.isProtectedWorkspace,
       reclaim,
       quarantineChecks: checks,
-      fableAgents: options.fableAgents,
       quarantineResolvers: options.quarantineResolvers,
       taskExecutionCandidates: options.taskExecutionCandidates,
-      throttleRevalidating: () => scheduler.isThrottleRevalidating(),
       workspaceAdmin,
       agentAdmin,
       profileAdmin,

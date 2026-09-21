@@ -34,6 +34,7 @@ function listGetRoutes(db: Db): string[] {
     clock: new FakeClock(),
     pollNow: () => {},
     landing: unusedLanding,
+    taskExecutionCandidates: () => [],
   });
   return (router as unknown as { stack: { route?: { path: string; methods: Record<string, boolean> } }[] }).stack
     .filter((layer) => layer.route?.methods.get)

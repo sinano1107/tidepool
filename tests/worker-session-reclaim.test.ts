@@ -180,7 +180,6 @@ it("容器機構の前提は pickup と quarantine 回答時にも読み直さ�
   t = await bootTidepool({
     containerRuntime: containers,
     watchdog,
-    resolveHarness: () => "claude-code",
     harnessContainment: async () => ({ available: true }),
   });
   containers.scriptPreflight("cgroup v2 delegation was lost after boot");

@@ -58,13 +58,6 @@ function scriptedProbe(initial: ContainmentCapability) {
   };
 }
 
-const CLAUDE_ROUTE = {
-  resolveHarness: () => "claude-code" as const,
-  quarantineResolvers: {
-    harnessContainment: (harnesses: string[]) => (harnesses.includes("claude-code") ? ["fake-worker"] : []),
-  },
-};
-
 const harnessCheck = (check: () => Promise<ContainmentCapability>) => async (harness: string) =>
   harness === "claude-code" ? check() : ({ available: true } as const);
 
@@ -126,7 +119,6 @@ it("ツール面がずれた Claude Harness は pickup が止まり、確認 que
     reason: "this host's claude CLI offered CronCreate on top of the allowlist",
   });
   t = await bootTidepool({
-    ...CLAUDE_ROUTE,
     harnessContainment: harnessCheck(drifted.probe),
   });
   await registerWork(t, "work that must not run on a host whose tool surface drifted");
@@ -142,7 +134,7 @@ it("ツール面がずれた Claude Harness は pickup が止まり、確認 que
 
 it("ツール面が成立している Claude Harness は pickup を止めない", async () => {
   const ok = scriptedProbe({ available: true });
-  t = await bootTidepool({ ...CLAUDE_ROUTE, harnessContainment: harnessCheck(ok.probe) });
+  t = await bootTidepool({ harnessContainment: harnessCheck(ok.probe) });
   const task = await registerWork(t, "work on a host whose tool surface matches the allowlist");
 
   await t.clock.advance(HOUR);
@@ -156,7 +148,6 @@ it("ずれたままの回答は受理されない — question は open のま�
     reason: "this host's claude CLI offered CronCreate on top of the allowlist",
   });
   t = await bootTidepool({
-    ...CLAUDE_ROUTE,
     harnessContainment: harnessCheck(drifted.probe),
   });
   const question = await openQuestion(t);
@@ -175,7 +166,6 @@ it("面を直せば回答が受理され、pickup が再開する(回答時に�
     reason: "this host's claude CLI offered CronCreate on top of the allowlist",
   });
   t = await bootTidepool({
-    ...CLAUDE_ROUTE,
     harnessContainment: harnessCheck(drifted.probe),
   });
   const task = await registerWork(t, "work that waited for a repaired tool surface");
@@ -200,7 +190,6 @@ it("fs 半分が不成立ならツール面の ping は撃たない — 安い�
     reason: "bwrap could not create a sandbox",
   };
   t = await bootTidepool({
-    ...CLAUDE_ROUTE,
     harnessContainment: harnessCheck(async () => {
       return sandbox.available ? ok.probe() : sandbox;
     }),
