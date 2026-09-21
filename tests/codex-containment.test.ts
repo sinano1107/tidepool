@@ -279,7 +279,7 @@ it("a failed Codex Harness preflight skips that route and starts a Claude-route 
       executionSettingsFor(db, { provider: [{ name: providers.get(task.assignee!)!, advisor: false }], tier: undefined }, task),
     harnessContainment: async (harness) =>
       harness === "codex"
-        ? { available: false, reason: "Codex containment preflight: permission drift" }
+        ? { available: false, reason: "Codex containment preflight: hook drift" }
         : { available: true },
   });
 
