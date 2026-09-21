@@ -309,14 +309,11 @@ export async function bootTidepool(options: BootOptions = {}): Promise<Tidepool>
   });
   const mcpBaseUrl = `http://127.0.0.1:${server.mcpPort}`;
   boards.set(mcpBaseUrl, worker);
-  let stopped = false;
-  const stopServer = async () => {
-    if (!stopped) {
-      await server.stop();
-      boards.delete(mcpBaseUrl);
-    }
-    stopped = true;
-  };
+  // 走っている停止の Promise を覚える(issue #775) —— ブールでは、中断された1度目の
+  // 途中に来た2度目が撃ち直しを起こし、2度目の `close()` が ERR_SERVER_NOT_RUNNING で
+  // 落ちる。`stopping` は1度目の呼び手が立て、以降の呼び手は同じ Promise を待つだけになる。
+  let stopping: Promise<void> | undefined;
+  const stopServer = () => (stopping ??= server.stop().then(() => { boards.delete(mcpBaseUrl); }));
   return {
     baseUrl: `http://127.0.0.1:${server.port}`,
     mcpBaseUrl,
