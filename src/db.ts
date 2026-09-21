@@ -3,13 +3,24 @@ import { SEED_EXECUTION_SETTINGS } from "./execution-setting.js";
 
 export type Db = Database.Database;
 
-// board-internal only (ADR 0120 決定2 / issue #618): この task が主題 X の周期 meta-review であること。
-// 盤面の登録関数だけが書き、MCP / JSON API からは書けない。
-const META_REVIEW_SUBJECT_COLUMN = "meta_review_subject TEXT CHECK (meta_review_subject IN ('memory', 'routing'))";
-const META_REVIEW_PERIOD_COLUMN = "meta_review_period_days INTEGER CHECK (meta_review_period_days > 0)";
+/** Memory の FTS5 tokenizer と、TS 側の前処理(CJK bigram + 語の先頭・末尾の . - _ 落とし)の版
+ *  (spec #586 B、実測は #357 / #606、順序は #610)。
+ *  どちらかを変えたら、boot の ensureMemoryIndex が索引を作り直す。 */
+export const MEMORY_FTS_TOKENIZER = "unicode61 tokenchars '_-.'";
+export const MEMORY_PREPROCESS_VERSION = "cjk-bigram-5";
+// Shared between the fresh-board CREATE and the memory index rebuild (memory.ts).
+export const MEMORY_FTS_DDL = `CREATE VIRTUAL TABLE memory_fts USING fts5(text, title, path, original, tokenize = "${MEMORY_FTS_TOKENIZER}")`;
 
-const TASKS_TABLE_DDL = `
-    CREATE TABLE tasks (
+export function openDb(path: string): Db {
+  const db = new Database(path);
+  db.pragma("journal_mode = WAL");
+  // 種の表で初期化するのは表を作ったときだけ —— 空かどうかで判定すると、運用者が
+  // settings から全行を消した表が再オープンで生え直す(#545)
+  const seedExecutionSettings = !db
+    .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'execution_settings'")
+    .get();
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS tasks (
       id                  TEXT PRIMARY KEY,
       type                TEXT NOT NULL CHECK (type IN ('work', 'question', 'review')),
       -- 'blocked' is not a stored status: it is derived from unfinished children
@@ -104,7 +115,9 @@ const TASKS_TABLE_DDL = `
       -- here: those live on the workspace and the board settings.
       tier                TEXT,
       priority            TEXT,
-      ${META_REVIEW_SUBJECT_COLUMN},
+      -- board-internal only (ADR 0120 決定2 / issue #618): この task が主題 X の周期 meta-review であること。
+      -- 盤面の登録関数だけが書き、MCP / JSON API からは書けない。
+      meta_review_subject TEXT CHECK (meta_review_subject IN ('memory', 'routing')),
       created_at          TEXT NOT NULL,
       -- ADR 0109 決定5: 後始末の未了は再起動をまたぐ事実である。最終 verb が着地した
       -- 時刻を持ち、後始末が完走した時点で null に戻る —— in-memory の callback は
@@ -121,65 +134,14 @@ const TASKS_TABLE_DDL = `
         (github_issue_number IS NOT NULL AND title IS NULL AND purpose IS NULL AND completion_criteria IS NULL)
         OR (github_issue_number IS NULL AND title IS NOT NULL AND purpose IS NOT NULL AND completion_criteria IS NOT NULL)
       )
-    )`;
+    );
 
-const THROTTLE_STATE_TABLE_DDL = `
-    CREATE TABLE throttle_state (
-      id                 INTEGER PRIMARY KEY CHECK (id = 1),
-      throttled          INTEGER NOT NULL,
-      resets_at          TEXT,
-      session_throttled  INTEGER,
-      session_resume_at  TEXT,
-      week_throttled     INTEGER,
-      week_resume_at     TEXT,
-      fable_throttled    INTEGER,
-      fable_resume_at    TEXT,
-      observed_at        TEXT
-    )`;
-
-const SPEND_DOWN_STATE_TABLE_DDL = `
-    CREATE TABLE spend_down_state (
-      window       TEXT PRIMARY KEY CHECK (window IN ('session', 'week')),
-      activated_at TEXT NOT NULL
-    )`;
-
-/** Memory の FTS5 tokenizer と、TS 側の前処理(CJK bigram + 語の先頭・末尾の . - _ 落とし)の版
- *  (spec #586 B、実測は #357 / #606、順序は #610)。
- *  どちらかを変えたら、boot の ensureMemoryIndex が索引を作り直す。 */
-export const MEMORY_FTS_TOKENIZER = "unicode61 tokenchars '_-.'";
-export const MEMORY_PREPROCESS_VERSION = "cjk-bigram-5";
-// Shared between the fresh-board CREATE and the memory index rebuild (memory.ts).
-export const MEMORY_FTS_DDL = `CREATE VIRTUAL TABLE memory_fts USING fts5(text, title, path, original, tokenize = "${MEMORY_FTS_TOKENIZER}")`;
-
-const MEMORY_ENTRIES_TABLE_DDL = `
-    CREATE TABLE memory_entries (
-      id                  INTEGER PRIMARY KEY,
-      kind                TEXT NOT NULL CHECK (kind IN ('knowledge', 'behavior', 'definition')),
-      state               TEXT NOT NULL CHECK (state IN ('candidate', 'approved')),
-      scope               TEXT,
-      path                TEXT NOT NULL,
-      title               TEXT NOT NULL,
-      text                TEXT NOT NULL,
-      original_title      TEXT,
-      original_text       TEXT,
-      original_language   TEXT,
-      addressee           TEXT,
-      source_kind         TEXT NOT NULL CHECK (source_kind IN ('event', 'commit', 'decision')),
-      source_ref          TEXT NOT NULL,
-      author_activity     TEXT NOT NULL CHECK (author_activity IN ('worker_verb', 'human', 'rca', 'meta_review', 'board')),
-      author              TEXT NOT NULL,
-      version             INTEGER,
-      invalidation_reason TEXT CHECK (invalidation_reason IN ('superseded', 'path_moved', 'capability', 'environment', 'requirement_change', 'rejected')),
-      successor_id        INTEGER REFERENCES memory_entries(id)
-    )`;
-
-// The database is the audit record's final backstop, so its route vocabulary is
-// constrained here as well as by EventOrigin in TypeScript.
-// task_id is NULL for board-scoped events (execution_settings_changed, issue #545;
-// memory_entry_created / memory_entry_invalidated, issue #590; memory_entry_approved, issue #620; memory_index_rebuilt, issue #591; memory_settings_changed, issue #592) — a settings change
-// or a memory entry belongs to no task but still carries its route.
-const EVENTS_TABLE_DDL = `
-    CREATE TABLE events (
+    -- The database is the audit record's final backstop, so its route vocabulary is
+    -- constrained here as well as by EventOrigin in TypeScript.
+    -- task_id is NULL for board-scoped events (execution_settings_changed, issue #545;
+    -- memory_entry_created / memory_entry_invalidated, issue #590; memory_entry_approved, issue #620; memory_index_rebuilt, issue #591; memory_settings_changed, issue #592) — a settings change
+    -- or a memory entry belongs to no task but still carries its route.
+    CREATE TABLE IF NOT EXISTS events (
       id         INTEGER PRIMARY KEY AUTOINCREMENT,
       task_id    TEXT REFERENCES tasks(id),
       worker_id  TEXT NOT NULL,
@@ -187,26 +149,7 @@ const EVENTS_TABLE_DDL = `
       kind       TEXT NOT NULL,
       payload    TEXT NOT NULL,
       created_at TEXT NOT NULL
-    )`;
-
-const EVENTS_APPEND_ONLY_TRIGGERS = `
-    CREATE TRIGGER IF NOT EXISTS events_no_update BEFORE UPDATE ON events
-      BEGIN SELECT RAISE(ABORT, 'events are append-only'); END;
-    CREATE TRIGGER IF NOT EXISTS events_no_delete BEFORE DELETE ON events
-      BEGIN SELECT RAISE(ABORT, 'events are append-only'); END;`;
-
-export function openDb(path: string): Db {
-  const db = new Database(path);
-  db.pragma("journal_mode = WAL");
-  // 種の表で初期化するのは表を作ったときだけ —— 空かどうかで判定すると、運用者が
-  // settings から全行を消した表が再オープンで生え直す(#545)
-  const seedExecutionSettings = !db
-    .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'execution_settings'")
-    .get();
-  db.exec(`
-    ${TASKS_TABLE_DDL.replace("CREATE TABLE tasks", "CREATE TABLE IF NOT EXISTS tasks")};
-
-    ${EVENTS_TABLE_DDL.replace("CREATE TABLE events", "CREATE TABLE IF NOT EXISTS events")};
+    );
 
     -- the human's read position in the decision log (the log itself is the
     -- events table, never its own entity): one row, the last-read event id
@@ -273,7 +216,18 @@ export function openDb(path: string): Db {
     -- time. No row means normal (unthrottled). ADR 0030 extends it with the
     -- per-window pace verdicts (which line is hit, and its catch-up instant);
     -- a NULL *_throttled means that window went unobserved (fail-closed).
-    ${THROTTLE_STATE_TABLE_DDL.replace("CREATE TABLE throttle_state", "CREATE TABLE IF NOT EXISTS throttle_state")};
+    CREATE TABLE IF NOT EXISTS throttle_state (
+      id                 INTEGER PRIMARY KEY CHECK (id = 1),
+      throttled          INTEGER NOT NULL,
+      resets_at          TEXT,
+      session_throttled  INTEGER,
+      session_resume_at  TEXT,
+      week_throttled     INTEGER,
+      week_resume_at     TEXT,
+      fable_throttled    INTEGER,
+      fable_resume_at    TEXT,
+      observed_at        TEXT
+    );
 
     -- Pace offsets (ADR 0030): the human's reserved share (pt) per usage
     -- window — the board runs this far behind the elapsed-time pace line.
@@ -357,7 +311,10 @@ export function openDb(path: string): Db {
 
     -- Spend-down (ADR 0091): one independently expiring row per active
     -- window. No row for a window means its pace line remains in force.
-    ${SPEND_DOWN_STATE_TABLE_DDL.replace("CREATE TABLE spend_down_state", "CREATE TABLE IF NOT EXISTS spend_down_state")};
+    CREATE TABLE IF NOT EXISTS spend_down_state (
+      window       TEXT PRIMARY KEY CHECK (window IN ('session', 'week')),
+      activated_at TEXT NOT NULL
+    );
 
     -- Web Push subscriptions (issue #14): one row per installed PWA that
     -- opted into push. endpoint is the browser's own dedup key (a fresh
@@ -543,7 +500,26 @@ export function openDb(path: string): Db {
     -- 理由コード(cause.ts の語彙の3つ + superseded / path_moved)と後継 id の列。
     -- version = 承認 event の id(Knowledge は作成 event の id、candidate は NULL)。
     -- 時刻・回数・重みの列は持たない(時刻は events)。
-    ${MEMORY_ENTRIES_TABLE_DDL.replace("CREATE TABLE", "CREATE TABLE IF NOT EXISTS")};
+    CREATE TABLE IF NOT EXISTS memory_entries (
+      id                  INTEGER PRIMARY KEY,
+      kind                TEXT NOT NULL CHECK (kind IN ('knowledge', 'behavior', 'definition')),
+      state               TEXT NOT NULL CHECK (state IN ('candidate', 'approved')),
+      scope               TEXT,
+      path                TEXT NOT NULL,
+      title               TEXT NOT NULL,
+      text                TEXT NOT NULL,
+      original_title      TEXT,
+      original_text       TEXT,
+      original_language   TEXT,
+      addressee           TEXT,
+      source_kind         TEXT NOT NULL CHECK (source_kind IN ('event', 'commit', 'decision')),
+      source_ref          TEXT NOT NULL,
+      author_activity     TEXT NOT NULL CHECK (author_activity IN ('worker_verb', 'human', 'rca', 'meta_review', 'board')),
+      author              TEXT NOT NULL,
+      version             INTEGER,
+      invalidation_reason TEXT CHECK (invalidation_reason IN ('superseded', 'path_moved', 'capability', 'environment', 'requirement_change', 'rejected')),
+      successor_id        INTEGER REFERENCES memory_entries(id)
+    );
 
     -- Memory の全文索引(spec #586 B)。rowid = エントリ id。CJK bigram の前処理を
     -- 通した文字列を持つので external-content にはできず、エントリ表と同じ
@@ -566,11 +542,14 @@ export function openDb(path: string): Db {
     CREATE TABLE IF NOT EXISTS memory_defaults (
       id                  INTEGER PRIMARY KEY CHECK (id = 1),
       injection_token_cap INTEGER CHECK (injection_token_cap > 0),
-      ${META_REVIEW_PERIOD_COLUMN}
+      meta_review_period_days INTEGER CHECK (meta_review_period_days > 0)
     );
 
     -- append-only is enforced by structure, not convention
-    ${EVENTS_APPEND_ONLY_TRIGGERS}
+    CREATE TRIGGER IF NOT EXISTS events_no_update BEFORE UPDATE ON events
+      BEGIN SELECT RAISE(ABORT, 'events are append-only'); END;
+    CREATE TRIGGER IF NOT EXISTS events_no_delete BEFORE DELETE ON events
+      BEGIN SELECT RAISE(ABORT, 'events are append-only'); END;
   `);
   // 種の表からの初期化は**一度だけ**(ADR 0110 決定3: 以後は DB が正本)。
   // 行ごとの INSERT OR IGNORE にしないのは、運用者が消した行が再オープンの

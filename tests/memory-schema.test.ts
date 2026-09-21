@@ -80,8 +80,8 @@ it("fresh 盤面に注入上限の1行表があり、正でない上限は CHECK
   db.close();
 });
 
-/** meta-review の主題列と周期の盤面設定(spec #615 D / issue #618)。 */
-function expectMetaReviewSchema(db: ReturnType<typeof openDb>) {
+it("fresh 盤面の tasks.meta_review_subject は memory / routing / NULL だけを、memory_defaults.meta_review_period_days は正の値か NULL を受ける(issue #618)", () => {
+  const db = openDb(":memory:");
   const task = db.prepare(
     "INSERT INTO tasks (id, type, status, title, purpose, completion_criteria, sort_key, created_at, meta_review_subject) VALUES (?, 'review', 'todo', 't', 'p', 'c', 1, '2026-09-15T00:00:00.000Z', ?)",
   );
@@ -95,10 +95,5 @@ function expectMetaReviewSchema(db: ReturnType<typeof openDb>) {
   period.run(null);
   period.run(3);
   expect(() => period.run(0)).toThrow(/CHECK/);
-}
-
-it("fresh 盤面の tasks.meta_review_subject は memory / routing / NULL だけを、memory_defaults.meta_review_period_days は正の値か NULL を受ける(issue #618)", () => {
-  const db = openDb(":memory:");
-  expectMetaReviewSchema(db);
   db.close();
 });
