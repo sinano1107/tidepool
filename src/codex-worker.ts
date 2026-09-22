@@ -745,10 +745,11 @@ async function probePermission(
   const outside = join(outsideDir, "secret");
   const homeOutside = join(homeOutsideDir, "secret");
   const canary = join(taskTemp, `${taskType}-permission-canary.cjs`);
-  writeFileSync(outside, "must remain unreadable");
-  writeFileSync(homeOutside, "must remain unreadable");
-  writeFileSync(canary, PERMISSION_CANARY);
   try {
+    // 書き込みも try の内側: 途中で投げても $HOME に使い捨てディレクトリを残さない
+    writeFileSync(outside, "must remain unreadable");
+    writeFileSync(homeOutside, "must remain unreadable");
+    writeFileSync(canary, PERMISSION_CANARY);
     await runFile(
       call,
       executable,
