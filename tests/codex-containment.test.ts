@@ -111,21 +111,7 @@ it("workspace を cwd にする preflight の呼び出しは、容器が空に�
 });
 
 it("preflight の permission probe は workspace の allowed_domains を network の許可に載せる(issue #763)", async () => {
-  const spawn = recordingSpawn();
-  const { boardCall } = containerHarness(passthroughContainers(spawn.spawn));
-  const capability = createCodexCapabilityCheck({
-    executable: "/opt/tidepool/bin/codex",
-    codexHome: "/nonexistent/codex-home",
-    workspace: mkdtempSync(join(tmpdir(), "tidepool-codex-preflight-ws-")),
-    allowedDomains: ["registry.npmjs.org"],
-    call: boardCall,
-  })();
-  // --version・prompt-input・features list を通すと4本目が sandbox
-  for (const i of [0, 1, 2]) {
-    await vi.waitFor(() => expect(spawn.calls).toHaveLength(i + 1));
-    spawn.emitExitAt(i, 0, null);
-  }
-  await vi.waitFor(() => expect(spawn.calls).toHaveLength(4));
+  const { spawn, capability } = await preflightToWorkSandbox(["registry.npmjs.org"]);
 
   expect(spawn.calls[3]!.args).toContainEqual(expect.stringContaining('"domains"={"registry.npmjs.org"="allow","127.0.0.1"="allow"}'));
   spawn.emitExitAt(3, 1, null); // 後続の probe は見ないので、ここで倒して後始末まで走らせる
@@ -133,16 +119,17 @@ it("preflight の permission probe は workspace の allowed_domains を network
 });
 
 /** preflight を work の sandbox probe(4本目)まで進める。 */
-async function preflightToWorkSandbox() {
+async function preflightToWorkSandbox(allowedDomains: readonly string[] = []) {
   const spawn = recordingSpawn();
   const { boardCall } = containerHarness(passthroughContainers(spawn.spawn));
   const capability = createCodexCapabilityCheck({
     executable: "/opt/tidepool/bin/codex",
     codexHome: "/nonexistent/codex-home",
     workspace: mkdtempSync(join(tmpdir(), "tidepool-codex-preflight-ws-")),
-    allowedDomains: [],
+    allowedDomains,
     call: boardCall,
   })();
+  // --version・prompt-input・features list を通すと4本目が sandbox
   for (const i of [0, 1, 2]) {
     await vi.waitFor(() => expect(spawn.calls).toHaveLength(i + 1));
     spawn.emitExitAt(i, 0, null);

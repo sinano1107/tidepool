@@ -689,11 +689,7 @@ try {
   // 読めることの証明は listing が throw しないことだけ —— workspace の中身に前提を置かない (#708)
   fs.readdirSync(workspace);
   for (const [path, code] of [[outside, 32], [homeOutside, 40]]) {
-    try {
-      fs.readFileSync(path, "utf8");
-    } catch {
-      continue;
-    }
+    try { fs.readFileSync(path, "utf8"); } catch { continue; }
     console.error("read outside: " + path);
     process.exit(code);
   }
