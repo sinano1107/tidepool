@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -76,7 +77,7 @@ it("preflight は Board call の口を通り、口が答えを返さなければ
 
   expect(await capability).toMatchObject({
     available: false,
-    reason: expect.stringContaining("Codex containment preflight could not run"),
+    reason: expect.stringContaining("Codex containment preflight failed"),
   });
 });
 
@@ -131,6 +132,36 @@ it("preflight の permission probe は workspace の allowed_domains を network
   expect((await capability).available).toBe(false);
 });
 
+it("canary の封じ込め破れは、番号と意味の1行を載せた failed で封じ込めを倒す(issue #710)", async () => {
+  const spawn = recordingSpawn();
+  const { boardCall } = containerHarness(passthroughContainers(spawn.spawn));
+  const capability = createCodexCapabilityCheck({
+    executable: "/opt/tidepool/bin/codex",
+    codexHome: "/nonexistent/codex-home",
+    workspace: mkdtempSync(join(tmpdir(), "tidepool-codex-preflight-ws-")),
+    allowedDomains: [],
+    call: boardCall,
+  })();
+  for (const i of [0, 1, 2]) {
+    await vi.waitFor(() => expect(spawn.calls).toHaveLength(i + 1));
+    if (i === 1) spawn.processes[1]!.stdout.write("[]");
+    spawn.emitExitAt(i, 0, null);
+  }
+  await vi.waitFor(() => expect(spawn.calls).toHaveLength(4));
+  // sandbox を通さず実物の canary を走らせる —— workspace 外のファイルが読めるので 32 で落ちる
+  const args = spawn.calls[3]!.args;
+  const canary = spawnSync(process.execPath, args.slice(args.indexOf(process.execPath) + 1), { encoding: "utf8" });
+  spawn.processes[3]!.stderr.write(canary.stderr);
+  spawn.emitExitAt(3, canary.status, null);
+
+  const result = await capability;
+  expect(result.available).toBe(false);
+  if (!result.available) {
+    expect(result.reason).toMatch(/^Codex containment preflight failed:/);
+    expect(result.reason).toContain("exited 32: canary could read a file outside the workspace");
+  }
+});
+
 /** preflight を work の app-server 呼び出し(6本目)まで進める。先の5本(--version・prompt-input・
  *  features list・sandbox 2本)は exit 0 で通す。prompt-input だけは JSON を読まれるので空の列を返す。 */
 async function preflightToWorkAppServer() {
@@ -175,7 +206,7 @@ it("preflight の app-server 呼び出しは work / review とも --strict-confi
 it.each([
   ["work", preflightToWorkAppServer, 5],
   ["review", preflightToReviewAppServer, 6],
-] as const)("%s の設定を app-server が未知キーで拒否すると、キーを名指した could not run で封じ込めを倒す(ADR 0142 決定5)", async (_, drive, index) => {
+] as const)("%s の設定を app-server が未知キーで拒否すると、キーを名指した failed で封じ込めを倒す(ADR 0142 決定5)", async (_, drive, index) => {
   const { spawn, capability } = await drive();
 
   spawn.processes[index]!.stderr.write("Error: unknown configuration field `mcp_servers.tidepool.enabled_tool`\n");
@@ -184,7 +215,7 @@ it.each([
   const result = await capability;
   expect(result.available).toBe(false);
   if (!result.available) {
-    expect(result.reason).toContain("could not run");
+    expect(result.reason).toMatch(/^Codex containment preflight failed:/);
     expect(result.reason).toContain("mcp_servers.tidepool.enabled_tool");
   }
 });

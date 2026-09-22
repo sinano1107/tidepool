@@ -296,7 +296,7 @@ export interface CodexHookRegistration {
 /** `hooks/list` の `result` から、登録と vendor 診断(`errors[]` / `warnings[]`、#734)を
  *  cwd を跨いで並びのまま取り出す(ADR 0130 決定3)。
  *  vendor の応答の形が変わったら、読み替えを直す場所はここ1つ —— 形の崩れは preflight の
- *  `hook mismatch` か、読めずに投げた `could not run` として出る(どちらも fail-closed)。 */
+ *  `hook mismatch` か、読めずに投げた `failed` として出る(どちらも fail-closed)。 */
 export function observedHooks(
   result: unknown,
 ): Pick<CodexCapabilityObservation, "hooks" | "hookDiagnostics"> {
@@ -355,7 +355,7 @@ export async function checkCodexCapability(
   try {
     observed = await probe();
   } catch (error) {
-    return { available: false, reason: `Codex containment preflight could not run: ${String(error)}` };
+    return { available: false, reason: `Codex containment preflight failed: ${String(error)}` };
   }
   const mismatch = (
     [
@@ -669,7 +669,7 @@ async function probeHookRegistration(
   config: (taskType: Task["type"]) => string[],
 ): Promise<ReturnType<typeof observedHooks>> {
   const command = codexCommandThrough(call, PREFLIGHT_KIND, CODEX_PREFLIGHT_LIMIT_MS);
-  // ADR 0142 決定4: 未知キーはここで app-server の失敗として投げ、`could not run` に倒れる
+  // ADR 0142 決定4: 未知キーはここで app-server の失敗として投げ、`failed` に倒れる
   const [listed] = await callAppServer(command, executable, env, ["--strict-config", ...configArgs(config("work"))], [
     { method: "hooks/list", params: { cwds: [] } },
   ]);
@@ -685,12 +685,17 @@ const cp = require("node:child_process");
 const [workspace, taskTemp, outside, access] = process.argv.slice(2);
 const workspaceFile = workspace + "/.tidepool-codex-permission-canary";
 const taskFile = taskTemp + "/task-canary";
+// 非ゼロの exit は理由を1行 stderr に書いてから落ちる —— 番号の意味を言うのはこの文だけ (#710)
+const fail = (code, why) => {
+  console.error(why);
+  process.exit(code);
+};
 try {
   // 読めることの証明は listing が throw しないことだけ —— workspace の中身に前提を置かない (#708)
   fs.readdirSync(workspace);
   try {
     fs.readFileSync(outside, "utf8");
-    process.exit(32);
+    fail(32, "canary could read a file outside the workspace");
   } catch {}
   if (access === "write") {
     fs.writeFileSync(workspaceFile, "ok");
@@ -698,12 +703,12 @@ try {
   } else {
     try {
       fs.writeFileSync(workspaceFile, "breach");
-      process.exit(33);
+      fail(33, "review profile could write to the workspace");
     } catch {}
   }
   fs.writeFileSync(taskFile, "ok");
-  if (cp.spawnSync(process.execPath, ["-e", "process.exit(0)"]).status !== 0) process.exit(34);
-  if (cp.spawnSync("git", ["--version"]).status !== 0) process.exit(35);
+  if (cp.spawnSync(process.execPath, ["-e", "process.exit(0)"]).status !== 0) fail(34, "canary could not spawn node");
+  if (cp.spawnSync("git", ["--version"]).status !== 0) fail(35, "canary could not run git");
   const tcp = http.createServer((_request, response) => response.end("ok"));
   tcp.listen(0, "127.0.0.1", () => {
     const request = http.get("http://127.0.0.1:" + tcp.address().port, (response) => {
@@ -716,14 +721,15 @@ try {
             peer.end();
             unix.close(() => process.exit(0));
           });
-          peer.on("error", () => process.exit(38));
+          peer.on("error", () => fail(38, "canary could not connect to a unix socket in the task temp"));
         });
       }));
     });
-    request.on("error", () => process.exit(39));
+    request.on("error", () => fail(39, "canary could not reach its own localhost TCP server"));
   });
-  setTimeout(() => process.exit(36), 3000);
+  setTimeout(() => fail(36, "canary did not finish within the 3s watchdog"), 3000);
 } catch (error) {
+  console.error("canary threw before finishing its checks:");
   console.error(error);
   process.exit(37);
 }
