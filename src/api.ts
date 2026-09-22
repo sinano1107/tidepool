@@ -137,6 +137,7 @@ import type { PendingReclaim } from "./watchdog.js";
 import type { WireContract } from "./wire-contract.js";
 import {
   buildWorkspaceResolver,
+  GitDirNotADirectoryError,
   UnknownWorkspaceError,
   type WorkspaceConfig,
 } from "./workspace.js";
@@ -806,6 +807,8 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
         err instanceof BoardStateOverlapError ||
         err instanceof RepoAccessMissingError ||
         err instanceof NotAGitRepositoryError ||
+        // ADR 0146: linked worktree・submodule は workspace にならない
+        err instanceof GitDirNotADirectoryError ||
         // ADR 0087 決定5: 規約パスに整合しない checkout が居る —— 帯域外で片付けるか
         // register モードで拾えば通る、呼び出し側の状態の問題である
         err instanceof OrphanCheckoutMismatchError
