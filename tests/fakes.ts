@@ -932,26 +932,19 @@ export function recordingSpawn() {
   return { calls, processes, killed, spawn, emitExit, emitExitAt, emitError };
 }
 
-/** Codex preflight の停止点ごとの spawn index(issue #874)。段の並びは --version(0)・
- *  prompt-input(1)・features list(2)・sandbox probe ×2(3, 4)・work app-server(5)・
- *  review app-server(6)。 */
-const CODEX_PREFLIGHT_STOP_INDEX = { sandboxProbe: 3, workAppServer: 5, reviewAppServer: 6 } as const;
-
 /** `createCodexCapabilityCheck(options)()` を `recordingSpawn` + `passthroughContainers`
- *  で駆動し、preflight を指定した停止点まで進める(issue #874)。停止点までの段は exit 0
- *  で通す — prompt-input は JSON を読まれるので空配列を返し、review まで進めるときだけ
- *  work app-server(hooks/list)に登録一致の応答を書いて通す。停止した spawn の `spawn` /
- *  `capability`(promise)/ `index` を返す — 段の並びと応答の文字列はこの関数の中にしか
- *  現れない。呼び出し側は返った `index` で `spawn.calls[index]` / `spawn.emitExitAt(index, …)`
- *  を読み書きする。review 停止での work 側の index は `index - 1`。 */
+ *  で駆動し、preflight を指定した停止点まで進める(issue #874)。段の並びは --version(0)・
+ *  prompt-input(1)・features list(2)・sandbox probe ×2(3, 4)・work app-server(5)・
+ *  review app-server(6)。停止点までの段は exit 0 で通す — prompt-input は JSON を読まれる
+ *  ので空配列を返し、review まで進めるときだけ work app-server(hooks/list)に登録一致の
+ *  応答を書いて通す。停止した spawn の `spawn` / `capability`(promise)/ `index` を返す —
+ *  段の並びと応答の文字列はこの関数の中にしか現れない。呼び出し側は返った `index` で
+ *  `spawn.calls[index]` / `spawn.emitExitAt(index, …)` を読み書きする。review 停止での
+ *  work 側の index は `index - 1`。 */
 export async function driveCodexPreflight(
-  stop: keyof typeof CODEX_PREFLIGHT_STOP_INDEX,
+  stop: "sandboxProbe" | "workAppServer" | "reviewAppServer",
   overrides: { codexHome?: string; workspace?: string; allowedDomains?: readonly string[] } = {},
-): Promise<{
-  spawn: ReturnType<typeof recordingSpawn>;
-  capability: ReturnType<ReturnType<typeof createCodexCapabilityCheck>>;
-  index: number;
-}> {
+) {
   const spawn = recordingSpawn();
   const { boardCall } = containerHarness(passthroughContainers(spawn.spawn));
   const capability = createCodexCapabilityCheck({
@@ -971,10 +964,11 @@ export async function driveCodexPreflight(
   await vi.waitFor(() => expect(spawn.calls).toHaveLength(before.length + 1));
 
   if (stop === "reviewAppServer") {
-    spawn.processes[5]!.stdout.write('{"id":1,"result":{}}\n{"id":2,"result":{"data":[]}}\n');
-    spawn.emitExitAt(5, 0, null);
-    await vi.waitFor(() => expect(spawn.calls).toHaveLength(7));
+    const workIndex = before.length; // 5: work app-server
+    spawn.processes[workIndex]!.stdout.write('{"id":1,"result":{}}\n{"id":2,"result":{"data":[]}}\n');
+    spawn.emitExitAt(workIndex, 0, null);
+    await vi.waitFor(() => expect(spawn.calls).toHaveLength(workIndex + 2));
   }
 
-  return { spawn, capability, index: CODEX_PREFLIGHT_STOP_INDEX[stop] };
+  return { spawn, capability, index: spawn.calls.length - 1 };
 }
