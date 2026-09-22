@@ -1441,11 +1441,6 @@ describe("ClaudeCodeWorker", () => {
 
   it("ずれたまま何セッション走っても question は1枚(封じ込めは1資源につき確認1枚)", async () => {
     const { start, processes, db } = await makeWorker();
-    const refiredCount = () =>
-      listEvents(db, question.id)
-        .map((e) => e.payload)
-        .filter((p) => p.kind === "quarantine_refired").length;
-
     start("task-init-dup-1", null, "deckhand", "work");
     processes[0]!.stdout.write(initLine(["Bash", "Read", "CronCreate"]));
     const question = await vi.waitFor(() => {
@@ -1453,6 +1448,10 @@ describe("ClaudeCodeWorker", () => {
       expect(q).toBeDefined();
       return q!;
     });
+    const refiredCount = () =>
+      listEvents(db, question.id)
+        .map((e) => e.payload)
+        .filter((p) => p.kind === "quarantine_refired").length;
 
     // 2セッション目・3セッション目はそれぞれ別の process(別セッション)で起こす —
     // 同じ process の stdout に3回書くだけでは1セッションしか検査を走らせない
