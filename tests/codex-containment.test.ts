@@ -12,6 +12,7 @@ import {
   createCodexCapabilityCheck,
   observedDeveloperMarkers,
   observedHooks,
+  observedSkills,
 } from "../src/codex-worker.js";
 import { listEvents } from "../src/events.js";
 import { executionSettingsFor } from "../src/execution-setting.js";
@@ -24,6 +25,7 @@ import { getTask, listBoard, registerTask } from "../src/tasks.js";
 import type { WorkerAdapter } from "../src/worker.js";
 import {
   containerHarness,
+  driveCodexPreflight,
   FakeClock,
   FakeContainerRuntime,
   healthyUsageText,
@@ -77,7 +79,7 @@ it("preflight は Board call の口を通り、口が答えを返さなければ
 
   expect(await capability).toMatchObject({
     available: false,
-    reason: expect.stringContaining("Codex containment preflight could not run"),
+    reason: expect.stringContaining("Codex containment preflight failed"),
   });
 });
 
@@ -111,32 +113,14 @@ it("workspace を cwd にする preflight の呼び出しは、容器が空に�
 });
 
 it("preflight の permission probe は workspace の allowed_domains を network の許可に載せる(issue #763)", async () => {
-  const { spawn, capability } = await preflightToWorkSandbox(["registry.npmjs.org"]);
+  const { spawn, capability, index } = await driveCodexPreflight("sandboxProbe", {
+    allowedDomains: ["registry.npmjs.org"],
+  });
 
-  expect(spawn.calls[3]!.args).toContainEqual(expect.stringContaining('"domains"={"registry.npmjs.org"="allow","127.0.0.1"="allow"}'));
-  spawn.emitExitAt(3, 1, null); // 後続の probe は見ないので、ここで倒して後始末まで走らせる
+  expect(spawn.calls[index]!.args).toContainEqual(expect.stringContaining('"domains"={"registry.npmjs.org"="allow","127.0.0.1"="allow"}'));
+  spawn.emitExitAt(index, 1, null); // 後続の probe は見ないので、ここで倒して後始末まで走らせる
   expect((await capability).available).toBe(false);
 });
-
-/** preflight を work の sandbox probe(4本目)まで進める。 */
-async function preflightToWorkSandbox(allowedDomains: readonly string[] = []) {
-  const spawn = recordingSpawn();
-  const { boardCall } = containerHarness(passthroughContainers(spawn.spawn));
-  const capability = createCodexCapabilityCheck({
-    executable: "/opt/tidepool/bin/codex",
-    codexHome: "/nonexistent/codex-home",
-    workspace: mkdtempSync(join(tmpdir(), "tidepool-codex-preflight-ws-")),
-    allowedDomains,
-    call: boardCall,
-  })();
-  // --version・prompt-input・features list を通すと4本目が sandbox
-  for (const i of [0, 1, 2]) {
-    await vi.waitFor(() => expect(spawn.calls).toHaveLength(i + 1));
-    spawn.emitExitAt(i, 0, null);
-  }
-  await vi.waitFor(() => expect(spawn.calls).toHaveLength(4));
-  return { spawn, capability };
-}
 
 /** sandbox probe の argv から、tmpdir() 側と homedir() 側の外側ファイルを拾う。 */
 function outsides(args: readonly string[]) {
@@ -148,14 +132,14 @@ function outsides(args: readonly string[]) {
 }
 
 it("permission probe は tmpdir() と homedir() の両方に外側を置き、終われば homedir() 側を消す(issue #712)", async () => {
-  const { spawn, capability } = await preflightToWorkSandbox();
-  const work = outsides(spawn.calls[3]!.args);
+  const { spawn, capability, index } = await driveCodexPreflight("sandboxProbe");
+  const work = outsides(spawn.calls[index]!.args);
   expect(work.tmp).toBeDefined();
   expect(work.home).toBeDefined();
-  spawn.emitExitAt(3, 0, null); // work は通し、review は倒す
-  await vi.waitFor(() => expect(spawn.calls).toHaveLength(5));
-  const review = outsides(spawn.calls[4]!.args);
-  spawn.emitExitAt(4, 1, null);
+  spawn.emitExitAt(index, 0, null); // work は通し、review は倒す
+  await vi.waitFor(() => expect(spawn.calls).toHaveLength(index + 2));
+  const review = outsides(spawn.calls[index + 1]!.args);
+  spawn.emitExitAt(index + 1, 1, null);
   expect((await capability).available).toBe(false);
 
   expect(existsSync(dirname(work.home))).toBe(false);
@@ -163,8 +147,8 @@ it("permission probe は tmpdir() と homedir() の両方に外側を置き、�
 });
 
 it("permission canary は読めた外側のパスを stderr に出し、tmpdir() 側は exit 32・homedir() 側は exit 40 で落ちる(issue #712)", async () => {
-  const { spawn, capability } = await preflightToWorkSandbox();
-  const args = spawn.calls[3]!.args;
+  const { spawn, capability, index } = await driveCodexPreflight("sandboxProbe");
+  const args = spawn.calls[index]!.args;
   const canaryArgs = args.slice(args.indexOf(process.execPath) + 1);
   const { tmp, home } = outsides(args);
   const runCanary = () => spawnSync(process.execPath, canaryArgs, { encoding: "utf8" });
@@ -177,56 +161,42 @@ it("permission canary は読めた外側のパスを stderr に出し、tmpdir()
   expect(homeReadable.status).toBe(40);
   expect(homeReadable.stderr).toContain(home);
 
-  spawn.emitExitAt(3, 1, null);
+  spawn.emitExitAt(index, 1, null);
   expect((await capability).available).toBe(false);
 });
 
-/** preflight を work の app-server 呼び出し(6本目)まで進める。先の5本(--version・prompt-input・
- *  features list・sandbox 2本)は exit 0 で通す。prompt-input だけは JSON を読まれるので空の列を返す。 */
-async function preflightToWorkAppServer() {
-  const spawn = recordingSpawn();
-  const { boardCall } = containerHarness(passthroughContainers(spawn.spawn));
-  const capability = createCodexCapabilityCheck({
-    executable: "/opt/tidepool/bin/codex",
-    codexHome: mkdtempSync(join(tmpdir(), "tidepool-codex-home-")),
-    workspace: mkdtempSync(join(tmpdir(), "tidepool-codex-preflight-ws-")),
-    allowedDomains: [],
-    call: boardCall,
-  })();
-  for (const i of [0, 1, 2, 3, 4]) {
-    await vi.waitFor(() => expect(spawn.calls).toHaveLength(i + 1));
-    if (i === 1) spawn.processes[1]!.stdout.write("[]");
-    spawn.emitExitAt(i, 0, null);
-  }
-  await vi.waitFor(() => expect(spawn.calls).toHaveLength(6));
-  return { spawn, capability };
-}
+it("canary の封じ込め破れは、番号と意味の1行を載せた failed で封じ込めを倒す(issue #710)", async () => {
+  const { spawn, capability, index } = await driveCodexPreflight("sandboxProbe");
+  // sandbox を通さず実物の canary を走らせる —— workspace 外のファイルが読めるので 32 で落ちる
+  const args = spawn.calls[index]!.args;
+  const canary = spawnSync(process.execPath, args.slice(args.indexOf(process.execPath) + 1), { encoding: "utf8" });
+  spawn.processes[index]!.stderr.write(canary.stderr);
+  spawn.emitExitAt(index, canary.status, null);
 
-/** work の app-server 呼び出し(hooks/list)を受理させ、review の呼び出し(7本目)まで進める。 */
-async function preflightToReviewAppServer() {
-  const { spawn, capability } = await preflightToWorkAppServer();
-  spawn.processes[5]!.stdout.write('{"id":1,"result":{}}\n{"id":2,"result":{"data":[]}}\n');
-  spawn.emitExitAt(5, 0, null);
-  await vi.waitFor(() => expect(spawn.calls).toHaveLength(7));
-  return { spawn, capability };
-}
+  const result = await capability;
+  expect(result.available).toBe(false);
+  if (!result.available) {
+    expect(result.reason).toMatch(/^Codex containment preflight failed:/);
+    expect(result.reason).toContain("exited 32: canary could read a file outside the workspace");
+  }
+});
 
 it("preflight の app-server 呼び出しは work / review とも --strict-config を app-server に付ける(ADR 0142 決定4)", async () => {
-  const { spawn, capability } = await preflightToReviewAppServer();
+  const { spawn, capability, index } = await driveCodexPreflight("reviewAppServer");
 
-  for (const call of [spawn.calls[5]!, spawn.calls[6]!]) {
+  for (const call of [spawn.calls[index - 1]!, spawn.calls[index]!]) {
     expect(call.args[0]).toBe("app-server");
     expect(call.args).toContain("--strict-config");
   }
-  spawn.emitExitAt(6, 1, null);
+  spawn.emitExitAt(index, 1, null);
   expect((await capability).available).toBe(false);
 });
 
 it.each([
-  ["work", preflightToWorkAppServer, 5],
-  ["review", preflightToReviewAppServer, 6],
-] as const)("%s の設定を app-server が未知キーで拒否すると、キーを名指した could not run で封じ込めを倒す(ADR 0142 決定5)", async (_, drive, index) => {
-  const { spawn, capability } = await drive();
+  ["work", "workAppServer"],
+  ["review", "reviewAppServer"],
+] as const)("%s の設定を app-server が未知キーで拒否すると、キーを名指した failed で封じ込めを倒す(ADR 0142 決定5)", async (_, stop) => {
+  const { spawn, capability, index } = await driveCodexPreflight(stop);
 
   spawn.processes[index]!.stderr.write("Error: unknown configuration field `mcp_servers.tidepool.enabled_tool`\n");
   spawn.emitExitAt(index, 1, null);
@@ -234,7 +204,7 @@ it.each([
   const result = await capability;
   expect(result.available).toBe(false);
   if (!result.available) {
-    expect(result.reason).toContain("could not run");
+    expect(result.reason).toMatch(/^Codex containment preflight failed:/);
     expect(result.reason).toContain("mcp_servers.tidepool.enabled_tool");
   }
 });
@@ -314,6 +284,23 @@ it("prompt-input の developer item に載った marker だけを拾う(ADR 0124
   const items = JSON.parse(promptInput("no-marker")) as Array<{ content: Array<{ type: string; text: string }> }>;
   items.at(-1)!.content.push({ type: "input_text", text: CODEX_DEVELOPER_MARKER });
   expect(observedDeveloperMarkers(JSON.stringify(items))).toEqual([]);
+});
+
+// 実物の `codex debug prompt-input` 出力(0.147.0、運用者の config から隔離した空の CODEX_HOME・
+// HOME で `-c forced_login_method="chatgpt"` だけ渡して叩いたもの)。system skill は初回起動時に
+// 自動配置されるので `skills.config` は渡していない —— 無効化しない形。cwd も空の workspace で、
+// closedSurfaceConfig・developer marker は付けていない —— ここが読むのは `<skills_instructions>`
+// の中身だけなので不要。CODEX_HOME・workspace のパスだけ無害な固定値へ置換してある。
+it("prompt-input の skills_instructions から、有効な skill 名だけを拾う(#699)", () => {
+  expect(observedSkills(promptInput("skills-enabled"))).toEqual([
+    "imagegen",
+    "openai-docs",
+    "plugin-creator",
+    "skill-creator",
+    "skill-installer",
+  ]);
+  expect(observedSkills(promptInput("developer-marker"))).toEqual([]);
+  expect(observedSkills(promptInput("no-marker"))).toEqual([]);
 });
 
 // 実物の `hooks/list` 応答の `result`(codex-cli 0.147.0、盤面所有の CODEX_HOME、model 呼び出し無し。
