@@ -1,5 +1,3 @@
-import { mkdtemp } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { type Db, openDb } from "../src/db.js";
@@ -8,12 +6,13 @@ import {
   isAnthropicBoardCallBlocked,
   reportProviderUsage,
 } from "../src/throttle.js";
+import { tempDir } from "./harness.js";
 
 let db: Db | undefined;
 afterEach(() => db?.close());
 
 async function freshDb(): Promise<Db> {
-  const dir = await mkdtemp(join(tmpdir(), "tidepool-blocked-provider-usage-"));
+  const dir = await tempDir("tidepool-blocked-provider-usage-");
   db = openDb(join(dir, "board.sqlite"));
   return db;
 }

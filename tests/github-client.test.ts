@@ -11,12 +11,11 @@ import {
   issuedToken,
   startFakeBroker,
 } from "./fake-broker.js";
-import { git } from "./harness.js";
+import { git, tempDir } from "./harness.js";
 
 let repoPath: string | undefined;
 let remotePath: string | undefined;
 let binPath: string | undefined;
-let authPath: string | undefined;
 let originalPath: string | undefined;
 let savedGhToken: string | undefined;
 const brokers: FakeBroker[] = [];
@@ -33,11 +32,11 @@ afterEach(async () => {
     delete process.env.GH_TOKEN;
   }
   if (originalPath !== undefined) process.env.PATH = originalPath;
-  for (const p of [repoPath, remotePath, binPath, authPath]) {
+  for (const p of [repoPath, remotePath, binPath]) {
     if (p) await rm(p, { recursive: true, force: true });
   }
   for (const broker of brokers.splice(0)) await broker.close();
-  repoPath = remotePath = binPath = authPath = originalPath = undefined;
+  repoPath = remotePath = binPath = originalPath = undefined;
 });
 
 /** ADR 0093 の user token ファイルの代役: mode 600 のファイルを実体で作り、
@@ -45,8 +44,8 @@ afterEach(async () => {
  *  の installation token を各呼び出しの env に都度注入する(process.env には
  *  決して書かない)。 */
 async function makeAuth(answer: BrokerAnswer = issuedToken("installation-token")): Promise<GitHubAuth> {
-  const dir = await mkdtemp(join(tmpdir(), "tidepool-secrets-"));
-  authPath = dir;
+  // 1つの test で2度呼ばれる(getIssue の not_found / outage)ので、共有変数でなく test 終了で消す
+  const dir = await tempDir("tidepool-secrets-");
   const file = join(dir, "github-token");
   writeFileSync(file, "gho_user\n");
   chmodSync(file, 0o600);
@@ -408,8 +407,7 @@ it("addIssueComment は gh issue comment --body を呼ぶ(issue #49 設計点4: 
 });
 
 it("tokenRefusal は仲介が token を出せれば null、断られたら status と error code を持つ理由を返す(ADR 0093 決定8)", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "tidepool-secrets-"));
-  authPath = dir;
+  const dir = await tempDir("tidepool-secrets-");
   const file = join(dir, "github-token");
   writeFileSync(file, "gho_user\n");
   chmodSync(file, 0o600);
@@ -429,8 +427,7 @@ it("tokenRefusal は仲介が token を出せれば null、断られたら statu
 });
 
 it("tokenRefusal は持っている token を答えにせず、扉のたびに仲介へ撃ち直す(再検査)", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "tidepool-secrets-"));
-  authPath = dir;
+  const dir = await tempDir("tidepool-secrets-");
   const file = join(dir, "github-token");
   writeFileSync(file, "gho_user\n");
   chmodSync(file, 0o600);

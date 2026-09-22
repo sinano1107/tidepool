@@ -1,6 +1,4 @@
 import { writeFileSync } from "node:fs";
-import { mkdtemp } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import type { CodexAppServerProbeResult } from "../src/codex-app-server.js";
@@ -20,6 +18,7 @@ import {
   queueWork,
   registerWork,
   type Tidepool,
+  tempDir,
 } from "./harness.js";
 
 let t: Tidepool;
@@ -574,7 +573,7 @@ it("cost の task は要求ティアの最安の行で spawn され、Provider �
  * ------------------------------------------------------------------ */
 
 it("anthropic 温存中に moonshot の鍵ファイルが無ければ task は queue で skipped、question も立たず absent が見え、鍵を置けば次の poll で moonshot で走る(ADR 0116 決定4)", async () => {
-  const keyFile = join(await mkdtemp(join(tmpdir(), "tidepool-moonshot-key-")), "moonshot-api-key");
+  const keyFile = join(await tempDir("tidepool-moonshot-key-"), "moonshot-api-key");
   t = await bootTidepool({
     ...boardWithEntries({ "either-agent": ["anthropic", "moonshot"] }),
     moonshotApiKeyFile: keyFile,

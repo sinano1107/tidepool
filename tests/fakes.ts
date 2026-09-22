@@ -1,7 +1,4 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { expect, vi } from "vitest";
 import type {
@@ -59,6 +56,7 @@ import type { Task } from "../src/tasks.js";
 import type { TranslationClient, TranslationResult } from "../src/translate.js";
 import { RECLAIM_TIMEOUT } from "../src/watchdog.js";
 import type { WorkerAdapter, WorkerExit } from "../src/worker.js";
+import { tempDir } from "./harness.js";
 
 /** Required landing dependency for tests whose exercised door cannot reach a
  * landing path. A mistaken land call fails loudly; ancestor re-fire is a
@@ -949,9 +947,9 @@ export async function driveCodexPreflight(
   const { boardCall } = containerHarness(passthroughContainers(spawn.spawn));
   const capability = createCodexCapabilityCheck({
     executable: "/opt/tidepool/bin/codex",
-    codexHome: overrides.codexHome ?? mkdtempSync(join(tmpdir(), "tidepool-codex-home-")),
+    codexHome: overrides.codexHome ?? await tempDir("tidepool-codex-home-"),
     codexSystemDir: overrides.codexSystemDir,
-    workspace: overrides.workspace ?? mkdtempSync(join(tmpdir(), "tidepool-codex-preflight-ws-")),
+    workspace: overrides.workspace ?? await tempDir("tidepool-codex-preflight-ws-"),
     allowedDomains: overrides.allowedDomains ?? [],
     call: boardCall,
   })();

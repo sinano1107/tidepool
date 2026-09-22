@@ -1,7 +1,6 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -13,6 +12,7 @@ import {
 import { loadRegistry } from "../src/registry.js";
 import { DEFAULT_AUDITOR_NAME as TASK_DEFAULT_AUDITOR_NAME } from "../src/tasks.js";
 import { resolveWorkspacesBaseDir } from "../src/workspace.js";
+import { tempDir } from "./harness.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -23,7 +23,7 @@ function git(cwd: string, ...args: string[]): string {
 }
 
 async function emptyRegistryClone(): Promise<{ clone: string; origin: string; root: string }> {
-  const root = await mkdtemp(join(tmpdir(), "tidepool-init-registry-"));
+  const root = await tempDir("tidepool-init-registry-");
   const origin = join(root, "origin.git");
   const clone = join(root, "registry");
   git(root, "init", "--bare", "-b", "main", origin);
@@ -238,7 +238,7 @@ describe("npm run init-registry", () => {
   });
 
   it("refuses a registry clone with no origin before changing either location", async () => {
-    const root = await mkdtemp(join(tmpdir(), "tidepool-init-no-origin-"));
+    const root = await tempDir("tidepool-init-no-origin-");
     const clone = join(root, "registry");
     const workspacesDir = join(root, "workspaces");
     git(root, "init", "-b", "main", clone);

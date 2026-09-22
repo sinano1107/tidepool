@@ -1,9 +1,8 @@
-import { mkdtemp } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { type Db, openDb } from "../src/db.js";
 import { getCachedTranslation, hashSource, saveTranslation } from "../src/translation-cache.js";
+import { tempDir } from "./harness.js";
 
 let db: Db | undefined;
 afterEach(() => db?.close());
@@ -17,7 +16,7 @@ const USAGE = {
 };
 
 async function freshDb(): Promise<Db> {
-  const dir = await mkdtemp(join(tmpdir(), "tidepool-translation-cache-"));
+  const dir = await tempDir("tidepool-translation-cache-");
   db = openDb(join(dir, "board.sqlite"));
   return db;
 }

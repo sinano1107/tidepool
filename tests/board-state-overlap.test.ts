@@ -1,14 +1,14 @@
-import { mkdir, mkdtemp, symlink } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdir, symlink } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { boardStateOverlap, boardStatePaths } from "../src/board-state.js";
+import { tempDir as harnessTempDir } from "./harness.js";
 
 /** 実 realpath を通す判定なので、テストも実ディレクトリを使う(macOS の
  *  /var → /private/var のように、tmp 自体が symlink であることも含めて
  *  意味論の一部)。 */
 async function tempDir(name: string): Promise<string> {
-  return mkdtemp(join(tmpdir(), `tidepool-${name}-`));
+  return harnessTempDir(`tidepool-${name}-`);
 }
 
 describe("boardStateOverlap: パス包含(ADR 0040)", () => {

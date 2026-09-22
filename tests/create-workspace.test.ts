@@ -1,7 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { InvalidWorkspaceNameError, loadRegistry } from "../src/registry.js";
@@ -15,6 +14,7 @@ import {
   OrphanCheckoutMismatchError,
 } from "../src/workspace-create.js";
 import { FakeGitHubClient } from "./fakes.js";
+import { tempDir } from "./harness.js";
 import { makeRegistry, makeRemoteBackedRegistry } from "./registry-fixture.js";
 
 function git(cwd: string, ...args: string[]): string {
@@ -39,7 +39,7 @@ function commitAll(dir: string, message: string): void {
 
 /** clone 元の実 git リポジトリ(ローカルパス = clone 可能な URL)。 */
 async function makeUpstream(defaultBranch = "main"): Promise<string> {
-  const dir = await mkdtemp(join(tmpdir(), "tidepool-upstream-"));
+  const dir = await tempDir("tidepool-upstream-");
   git(dir, "init", "-b", defaultBranch);
   await writeFile(join(dir, "readme.md"), "upstream fixture");
   commitAll(dir, "initial commit");
@@ -48,7 +48,7 @@ async function makeUpstream(defaultBranch = "main"): Promise<string> {
 
 /** register モードが登録する「ホスト上に既にある checkout」— origin を持つ実クローン。 */
 async function makeExistingCheckout(upstream: string): Promise<string> {
-  const parent = await mkdtemp(join(tmpdir(), "tidepool-existing-"));
+  const parent = await tempDir("tidepool-existing-");
   const dir = join(parent, "checkout");
   git(parent, "clone", "--quiet", upstream, dir);
   return dir;
@@ -57,7 +57,7 @@ async function makeExistingCheckout(upstream: string): Promise<string> {
 /** register モードの対象 — git リポジトリだが origin を持たない、ローカルのみの
  *  checkout(ADR 0066 決定7 の門をくぐれる最小の fixture)。 */
 async function makeLocalOnlyCheckout(): Promise<string> {
-  const dir = await mkdtemp(join(tmpdir(), "tidepool-local-only-"));
+  const dir = await tempDir("tidepool-local-only-");
   git(dir, "init", "-b", "main");
   return dir;
 }
@@ -74,7 +74,7 @@ function placeMatchingOrphan(baseDir: string, name: string, upstream: string, re
 async function makeDeps(registryDir: string) {
   return {
     registry: { dir: registryDir, mode: "purely-local" as const },
-    workspacesBaseDir: await mkdtemp(join(tmpdir(), "tidepool-ws-base-")),
+    workspacesBaseDir: await tempDir("tidepool-ws-base-"),
     github: new FakeGitHubClient(),
   };
 }
@@ -210,7 +210,7 @@ describe("createWorkspace: register モード(issue #57)", () => {
     const registryDir = await makeMainRegistry();
     const before = git(registryDir, "rev-parse", "HEAD");
     const deps = await makeDeps(registryDir);
-    const notAGitRepo = await mkdtemp(join(tmpdir(), "tidepool-not-a-repo-"));
+    const notAGitRepo = await tempDir("tidepool-not-a-repo-");
 
     await expect(
       createWorkspace({ mode: "register", name: "sandbox", path: notAGitRepo }, deps),
@@ -297,7 +297,7 @@ describe("createWorkspace: 生きた dev checkout の信号(issue #383)", () => 
   it("作業ツリーを持たないパス(bare repo)は例外ではなく信号として現れる", async () => {
     const registryDir = await makeMainRegistry();
     const deps = await makeDeps(registryDir);
-    const parent = await mkdtemp(join(tmpdir(), "tidepool-bare-"));
+    const parent = await tempDir("tidepool-bare-");
     const path = join(parent, "bare.git");
     git(parent, "init", "--bare", path);
 
@@ -492,7 +492,7 @@ describe("createWorkspace: 盤面の状態パスとの重なりは登録の門�
   it("register モード: 明示 path が盤面の状態パスと重なれば拒否され、コミットを積まない", async () => {
     const registryDir = await makeMainRegistry();
     const before = git(registryDir, "rev-parse", "HEAD");
-    const boardDir = await mkdtemp(join(tmpdir(), "tidepool-board-"));
+    const boardDir = await tempDir("tidepool-board-");
     const deps = {
       ...(await makeDeps(registryDir)),
       boardState: [{ label: "board database (TIDEPOOL_DB)", path: join(boardDir, "board.sqlite") }],
@@ -538,7 +538,7 @@ describe("createWorkspace: 盤面の状態パスとの重なりは登録の門�
   it("交差しない登録は従来どおり通る", async () => {
     const registryDir = await makeMainRegistry();
     const deps = await makeDeps(registryDir);
-    const boardDir = await mkdtemp(join(tmpdir(), "tidepool-board-"));
+    const boardDir = await tempDir("tidepool-board-");
     const path = await makeLocalOnlyCheckout();
 
     await createWorkspace({ mode: "register", name: "sandbox", path }, {

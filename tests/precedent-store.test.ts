@@ -1,11 +1,11 @@
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, it } from "vitest";
 import { type Db, openDb } from "../src/db.js";
 import { appendEvent, type EventRow, getEvent } from "../src/events.js";
 import { listPrecedents, registerMetaReview } from "../src/memory.js";
 import { backfillEpisodes, listEpisodes, projectAndPersist } from "../src/precedent.js";
+import { tempDir } from "./harness.js";
 
 const FIXTURE_TASK = "6b4c0b23-289e-4f9f-ade1-995fb27f3c0e";
 const SPAWNED_EVENT_ID = 5;
@@ -40,11 +40,11 @@ function writeTranscript(dir: string, name: string): string {
   return path;
 }
 
-const logDir = () => mkdtempSync(join(tmpdir(), "tidepool-precedent-"));
+const logDir = () => tempDir("tidepool-precedent-");
 
-it("投影した Episode は (workspace, agent) で時系列に引け、行動列 / マーカー / registry_commit を持つ", () => {
+it("投影した Episode は (workspace, agent) で時系列に引け、行動列 / マーカー / registry_commit を持つ", async () => {
   const db = seedBoard();
-  const dir = logDir();
+  const dir = await logDir();
   projectAndPersist(db, {
     workerSpawnedEventId: SPAWNED_EVENT_ID,
     transcriptPath: writeTranscript(dir, `${FIXTURE_TASK}.${SPAWNED_EVENT_ID}.stream.jsonl`),
@@ -83,9 +83,9 @@ it("投影した Episode は (workspace, agent) で時系列に引け、行動�
   expect(listEpisodes(db, { workspace: "other" })).toEqual([]);
 });
 
-it("同じ session を同じ extractor_version で二度投影しても Episode は増えない", () => {
+it("同じ session を同じ extractor_version で二度投影しても Episode は増えない", async () => {
   const db = seedBoard();
-  const dir = logDir();
+  const dir = await logDir();
   const transcriptPath = writeTranscript(dir, `${FIXTURE_TASK}.${SPAWNED_EVENT_ID}.stream.jsonl`);
   const first = projectAndPersist(db, { workerSpawnedEventId: SPAWNED_EVENT_ID, transcriptPath });
   const second = projectAndPersist(db, { workerSpawnedEventId: SPAWNED_EVENT_ID, transcriptPath });
@@ -96,9 +96,9 @@ it("同じ session を同じ extractor_version で二度投影しても Episode 
   expect(listEpisodes(db, {})[0]!.actions).toHaveLength(9);
 });
 
-it("backfill は <taskId>.<worker_spawned event id>.stream.jsonl だけを投影し、旧形式は投影せず件数だけ報告する(ADR 0083 追記 2)", () => {
+it("backfill は <taskId>.<worker_spawned event id>.stream.jsonl だけを投影し、旧形式は投影せず件数だけ報告する(ADR 0083 追記 2)", async () => {
   const db = seedBoard();
-  const dir = logDir();
+  const dir = await logDir();
   writeTranscript(dir, `${FIXTURE_TASK}.stream.jsonl`);
   // 走査対象ですらない隣人(同じセッションの stderr)は skip 件数にも入らない
   writeFileSync(join(dir, `${FIXTURE_TASK}.5.stderr.log`), "");
@@ -107,8 +107,8 @@ it("backfill は <taskId>.<worker_spawned event id>.stream.jsonl だけを投影
   expect(listEpisodes(db, {})).toEqual([]);
 });
 
-it("backfill は冪等で、worker_exited 時の投影と同じ Episode を出す", () => {
-  const dir = logDir();
+it("backfill は冪等で、worker_exited 時の投影と同じ Episode を出す", async () => {
+  const dir = await logDir();
   writeTranscript(dir, `${FIXTURE_TASK}.${SPAWNED_EVENT_ID}.stream.jsonl`);
 
   const backfilled = seedBoard();
@@ -124,9 +124,9 @@ it("backfill は冪等で、worker_exited 時の投影と同じ Episode を出�
   expect(listEpisodes(backfilled, {})).toEqual(listEpisodes(atExit, {}));
 });
 
-it("decision マーカーの outcome は読み出し時に entry_id で結ばれる(投影のあとに届く事実なので焼かない)", () => {
+it("decision マーカーの outcome は読み出し時に entry_id で結ばれる(投影のあとに届く事実なので焼かない)", async () => {
   const db = seedBoard();
-  const dir = logDir();
+  const dir = await logDir();
   projectAndPersist(db, {
     workerSpawnedEventId: SPAWNED_EVENT_ID,
     transcriptPath: writeTranscript(dir, `${FIXTURE_TASK}.${SPAWNED_EVENT_ID}.stream.jsonl`),
@@ -202,9 +202,9 @@ it("decision マーカーの outcome は読み出し時に entry_id で結ばれ
   expect(episode!.exitCode).toBe(0);
 });
 
-it("読み口は同じ (workspace, agent) の Episode を時系列(session を開いた順)で返す", () => {
+it("読み口は同じ (workspace, agent) の Episode を時系列(session を開いた順)で返す", async () => {
   const db = seedBoard();
-  const dir = logDir();
+  const dir = await logDir();
   // 同じタスクの2本目の session。1本目は id 5 で始まり 11 で閉じている
   db.prepare(
     "INSERT INTO events (id, task_id, worker_id, origin, kind, payload, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
@@ -223,11 +223,11 @@ it("読み口は同じ (workspace, agent) の Episode を時系列(session を�
   ).toEqual([SPAWNED_EVENT_ID, 12]);
 });
 
-it("list_precedents は異議つき decision を cause・outcome・読んだ / 見た記憶つきで返し、既定では前回の meta-review 登録より後に異議が来たものだけを返す(issue #619)", () => {
+it("list_precedents は異議つき decision を cause・outcome・読んだ / 見た記憶つきで返し、既定では前回の meta-review 登録より後に異議が来たものだけを返す(issue #619)", async () => {
   const db = seedBoard();
   projectAndPersist(db, {
     workerSpawnedEventId: SPAWNED_EVENT_ID,
-    transcriptPath: writeTranscript(logDir(), `${FIXTURE_TASK}.${SPAWNED_EVENT_ID}.stream.jsonl`),
+    transcriptPath: writeTranscript(await logDir(), `${FIXTURE_TASK}.${SPAWNED_EVENT_ID}.stream.jsonl`),
   });
   const at = new Date("2026-09-15T00:00:00.000Z");
   const event = (payload: Parameters<typeof appendEvent>[1]["payload"]) =>

@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import {
   CODEX_CLI_VERSION,
@@ -34,7 +34,7 @@ import {
   recordingSpawn,
   unusedLanding,
 } from "./fakes.js";
-import { api, bootTidepool, registerWork, type Tidepool } from "./harness.js";
+import { api, bootTidepool, registerWork, type Tidepool, tempDir } from "./harness.js";
 
 let t: Tidepool;
 afterEach(() => t?.stop());
@@ -69,7 +69,7 @@ it("preflight は Board call の口を通り、口が答えを返さなければ
   const capability = createCodexCapabilityCheck({
     executable: "/opt/tidepool/bin/codex",
     codexHome: "/nonexistent/codex-home",
-    workspace: mkdtempSync(join(tmpdir(), "tidepool-codex-preflight-ws-")),
+    workspace: await tempDir("tidepool-codex-preflight-ws-"),
     allowedDomains: [],
     call: boardCall,
   })();
@@ -90,7 +90,7 @@ it("workspace を cwd にする preflight の呼び出しは、容器が空に�
   const runtime = new FakeContainerRuntime(spawn.spawn);
   const clock = new FakeClock();
   const { boardCall } = containerHarness(new ProcessContainers(runtime), clock);
-  const workspace = mkdtempSync(join(tmpdir(), "tidepool-codex-preflight-ws-"));
+  const workspace = await tempDir("tidepool-codex-preflight-ws-");
   const capability = createCodexCapabilityCheck({
     executable: "/opt/tidepool/bin/codex",
     codexHome: "/nonexistent/codex-home",

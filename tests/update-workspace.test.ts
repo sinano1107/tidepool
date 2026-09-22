@@ -1,6 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdtemp, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { InvalidReviewAllowedCommandError, loadRegistry } from "../src/registry.js";
@@ -11,6 +10,7 @@ import {
   updateWorkspace,
   WorkspaceConfirmationRequiredError,
 } from "../src/workspace-create.js";
+import { tempDir } from "./harness.js";
 import { makeRegistry, makeRemoteBackedRegistry } from "./registry-fixture.js";
 
 /** protected な一般 workspace を1つ足した fixture。 */
@@ -37,7 +37,7 @@ async function makeMainRegistry(files?: Record<string, string>): Promise<string>
 async function makeDeps(registryDir: string) {
   return {
     registry: { dir: registryDir, mode: "purely-local" as const },
-    workspacesBaseDir: await mkdtemp(join(tmpdir(), "tidepool-ws-base-")),
+    workspacesBaseDir: await tempDir("tidepool-ws-base-"),
   };
 }
 

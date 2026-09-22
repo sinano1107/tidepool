@@ -1,9 +1,8 @@
 import { execFileSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
-import { mkdir, mkdtemp, readdir, readFile, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { agentNeedsHuman } from "../src/agent.js";
 import { boardHalts } from "../src/board-halt.js";
 import {
@@ -41,8 +40,13 @@ import {
   recordingPty,
   recordingSpawn,
 } from "./fakes.js";
-import { git, makeWorkspace } from "./harness.js";
+import { git, makeWorkspace, tempDir } from "./harness.js";
 import { makeRegistry, makeRemoteBackedRegistry } from "./registry-fixture.js";
+
+const dirs: string[] = [];
+afterEach(async () => {
+  await Promise.all(dirs.splice(0).map((d) => rm(d, { recursive: true, force: true })));
+});
 
 function makeTask(
   id = "task-1",
@@ -137,7 +141,7 @@ function registryGit(cwd: string) {
  *  mouth counts its limit on `clock` (checkUsage's own timers are setTimeout). */
 async function makeUsageWorker(pty: PtyFn) {
   const registryDir = await makeRegistry();
-  const logDir = await mkdtemp(join(tmpdir(), "tidepool-worker-logs-"));
+  const logDir = await tempDir("tidepool-worker-logs-");
   const clock = new FakeClock();
   const runtime = new FakeContainerRuntime();
   const worker = new ClaudeCodeWorker({
@@ -162,7 +166,7 @@ async function makeWorker(
   resolveWorkspace?: (taskWorkspace: string | null) => WorkspaceConfig,
 ) {
   const registryDir = await makeRegistry(registryFiles);
-  const logDir = await mkdtemp(join(tmpdir(), "tidepool-worker-logs-"));
+  const logDir = await tempDir("tidepool-worker-logs-");
   const db = openDb(":memory:");
   const clock = new FakeClock();
   const slot = new Slot();
@@ -339,7 +343,7 @@ describe("ClaudeCodeWorker", () => {
     // に反映することまで確かめる — 変数名が1つでも綴り違いなら、env には載るが
     // 履歴には効かない。実 claude セッションは要らない: git 自体が GIT_* を
     // 尊重する事実が、注入機構の end-to-end の正しさを担保する。
-    const repo = await mkdtemp(join(tmpdir(), "tidepool-git-identity-"));
+    const repo = await tempDir("tidepool-git-identity-");
     const env = { ...process.env, ...agentGitIdentityEnv("tako") };
     execFileSync("git", ["init", "-q"], { cwd: repo });
     execFileSync("git", ["commit", "-q", "--allow-empty", "-m", "work"], { cwd: repo, env });
@@ -936,7 +940,7 @@ describe("ClaudeCodeWorker", () => {
   });
 
   it("@workspace は checkout の .claude/skills 走査との差分でホスト由来(user + plugin)だけを deny する(ADR 0025)", async () => {
-    const wsDir = await mkdtemp(join(tmpdir(), "tidepool-ws-"));
+    const wsDir = await tempDir("tidepool-ws-");
     await mkdir(join(wsDir, ".claude", "skills", "tdd"), { recursive: true });
     await mkdir(join(wsDir, ".claude", "skills", "code-review"), { recursive: true });
     const rec = recordingEnumerator(["tdd", "code-review", "plug:deploy", "user-skill"]);
@@ -1156,7 +1160,7 @@ describe("ClaudeCodeWorker", () => {
     ],
     ["壊れた settings.json", "settings.json", "{ not json"],
   ])("%s は spawn せず workspace を quarantine する", async (_case, name, body) => {
-    const wsDir = await mkdtemp(join(tmpdir(), "tidepool-ws-"));
+    const wsDir = await tempDir("tidepool-ws-");
     await mkdir(join(wsDir, ".claude"), { recursive: true });
     await writeFile(join(wsDir, ".claude", name), body);
     const { start, calls, db } = await makeWorker({
@@ -1170,7 +1174,7 @@ describe("ClaudeCodeWorker", () => {
   it("workspace が盤面の状態パスと重なっていたら spawn せず workspace を quarantine する(issue #149 / ADR 0040)", async () => {
     // 盤面の DB が workspace の checkout の中にある形 — worker の書き込み半径
     // (allowWrite: [workspace.path])に盤面の状態が入る、issue #149 の本体。
-    const wsDir = await mkdtemp(join(tmpdir(), "tidepool-ws-"));
+    const wsDir = await tempDir("tidepool-ws-");
     const { start, calls, db } = await makeWorker(
       { "workspaces.yaml": `tidepool:\n  path: ${wsDir}\n` },
       { boardState: [{ label: "board database (TIDEPOOL_DB)", path: join(wsDir, "board.sqlite") }] },
@@ -1183,8 +1187,8 @@ describe("ClaudeCodeWorker", () => {
   });
 
   it("盤面の状態パスと交差しない workspace は spawn を止めない", async () => {
-    const wsDir = await mkdtemp(join(tmpdir(), "tidepool-ws-"));
-    const boardDir = await mkdtemp(join(tmpdir(), "tidepool-board-"));
+    const wsDir = await tempDir("tidepool-ws-");
+    const boardDir = await tempDir("tidepool-board-");
     const { start, calls, db } = await makeWorker(
       { "workspaces.yaml": `tidepool:\n  path: ${wsDir}\n` },
       { boardState: [{ label: "board database (TIDEPOOL_DB)", path: join(boardDir, "board.sqlite") }] },
@@ -1195,7 +1199,7 @@ describe("ClaudeCodeWorker", () => {
   });
 
   it("重なりの検査は settings ガードより先に走る(盤面自身の checkout は自前の .claude/settings.json を持つので、後だと診断名が入れ替わる)", async () => {
-    const wsDir = await mkdtemp(join(tmpdir(), "tidepool-ws-"));
+    const wsDir = await tempDir("tidepool-ws-");
     await mkdir(join(wsDir, ".claude"), { recursive: true });
     await writeFile(
       join(wsDir, ".claude", "settings.local.json"),
@@ -1213,7 +1217,7 @@ describe("ClaudeCodeWorker", () => {
   });
 
   it("tracked settings.json の hooks は spawn 前に実体化から外し、workspace を quarantine しない(issue #382)", async () => {
-    const ws = await makeWorkspace([], "tracked-hooks");
+    const ws = await makeWorkspace(dirs, "tracked-hooks");
     await mkdir(join(ws.path, ".claude"), { recursive: true });
     await writeFile(
       join(ws.path, ".claude", "settings.json"),
@@ -1239,7 +1243,7 @@ describe("ClaudeCodeWorker", () => {
   });
 
   it("sparse 後に branch の settings.json が床キーへ変われば index の内容で quarantine する", async () => {
-    const ws = await makeWorkspace([], "tracked-hooks-floor-change");
+    const ws = await makeWorkspace(dirs, "tracked-hooks-floor-change");
     await mkdir(join(ws.path, ".claude"), { recursive: true });
     await writeFile(
       join(ws.path, ".claude", "settings.json"),
@@ -1270,7 +1274,7 @@ describe("ClaudeCodeWorker", () => {
   });
 
   it("同じ workspace の次 session が先に始まっても、全 container の回収までは hooks を戻さない", async () => {
-    const ws = await makeWorkspace([], "tracked-hooks-overlap");
+    const ws = await makeWorkspace(dirs, "tracked-hooks-overlap");
     await mkdir(join(ws.path, ".claude"), { recursive: true });
     const settings = JSON.stringify({ hooks: { PostToolUse: [] } });
     await writeFile(join(ws.path, ".claude", "settings.json"), settings);
@@ -1295,7 +1299,7 @@ describe("ClaudeCodeWorker", () => {
   });
 
   it("sparse 後に branch の settings.json から hooks が消えれば通常 project settings を再実体化する", async () => {
-    const ws = await makeWorkspace([], "tracked-hooks-ordinary-change");
+    const ws = await makeWorkspace(dirs, "tracked-hooks-ordinary-change");
     await mkdir(join(ws.path, ".claude"), { recursive: true });
     await writeFile(
       join(ws.path, ".claude", "settings.json"),
@@ -1325,7 +1329,7 @@ describe("ClaudeCodeWorker", () => {
   });
 
   it("床キーを持たない通常の project settings(model 等)は spawn を止めない", async () => {
-    const wsDir = await mkdtemp(join(tmpdir(), "tidepool-ws-"));
+    const wsDir = await tempDir("tidepool-ws-");
     await mkdir(join(wsDir, ".claude"), { recursive: true });
     await writeFile(
       join(wsDir, ".claude", "settings.json"),
@@ -1585,7 +1589,7 @@ describe("ClaudeCodeWorker", () => {
 
   it("相対 logDir でも MCP config への参照は絶対パス(spawn 先の cwd は workspace であって盤面ではない)", async () => {
     const registryDir = await makeRegistry();
-    const base = await mkdtemp(join(tmpdir(), "tidepool-relative-logs-"));
+    const base = await tempDir("tidepool-relative-logs-");
     const prevCwd = process.cwd();
     process.chdir(base);
     try {
@@ -1702,7 +1706,7 @@ describe("ClaudeCodeWorker", () => {
     db.prepare(
       "UPDATE execution_settings SET effort = 'super-fast' WHERE provider = 'anthropic' AND tier = 'economy'",
     ).run();
-    const logDir = await mkdtemp(join(tmpdir(), "tidepool-worker-logs-"));
+    const logDir = await tempDir("tidepool-worker-logs-");
     expect(
       () =>
         new ClaudeCodeWorker({
@@ -1724,7 +1728,7 @@ describe("ClaudeCodeWorker", () => {
     db.prepare(
       "UPDATE execution_settings SET effort = 'ultracode' WHERE provider = 'anthropic' AND tier = 'economy'",
     ).run();
-    const logDir = await mkdtemp(join(tmpdir(), "tidepool-worker-logs-"));
+    const logDir = await tempDir("tidepool-worker-logs-");
     expect(
       () =>
         new ClaudeCodeWorker({
@@ -1744,7 +1748,7 @@ describe("ClaudeCodeWorker", () => {
     // a misconfigured registry must refuse to start the board, not wedge the
     // first task at pickup time
     const registryDir = await makeRegistry();
-    const logDir = await mkdtemp(join(tmpdir(), "tidepool-worker-logs-"));
+    const logDir = await tempDir("tidepool-worker-logs-");
     expect(
       () =>
         new ClaudeCodeWorker({
@@ -2444,7 +2448,7 @@ describe("ClaudeCodeWorker", () => {
       agent: "deckhand",
       workspace: "tidepool",
       mcpUrl: "http://127.0.0.1:4589/mcp",
-      logDir: await mkdtemp(join(tmpdir(), "tidepool-worker-logs-")),
+      logDir: await tempDir("tidepool-worker-logs-"),
       ...containerHarness(passthroughContainers(recorder.spawn)),
     });
     const task = makeTask("task-remote", null, "deckhand", "work");
@@ -3324,7 +3328,7 @@ You are Kipper, the tidepool board's Kimi work agent.
 
   /** Moonshot キーの fixture ファイル(mode 600 の状態ファイル置き場の形)。 */
   async function makeMoonshotKeyFile(key = "sk-moonshot-test-key"): Promise<string> {
-    const dir = await mkdtemp(join(tmpdir(), "tidepool-moonshot-key-"));
+    const dir = await tempDir("tidepool-moonshot-key-");
     const path = join(dir, "moonshot-api-key");
     await writeFile(path, `${key}\n`, { mode: 0o600 });
     return path;
@@ -3422,7 +3426,7 @@ You are Kipper, the tidepool board's Kimi work agent.
   });
 
   it("キー未配置で moonshot agent を spawn しようとすると、置き場を指す失敗で pickup が止まり、spawn もイベント記録もされない(issue #445)", async () => {
-    const missing = join(await mkdtemp(join(tmpdir(), "tidepool-moonshot-key-")), "moonshot-api-key");
+    const missing = join(await tempDir("tidepool-moonshot-key-"), "moonshot-api-key");
     const { start, calls, db } = await makeWorker(
       { "agents/kipper.md": MOONSHOT_AGENT_MD },
       { moonshotApiKeyFile: missing },
@@ -3622,7 +3626,7 @@ describe("上限到達による中断(issue #467 / ADR 0104)", () => {
     // この recorder から撃つ。
     const { spawn, processes, emitExit } = recordingSpawn();
     const runtime = new FakeContainerRuntime(spawn);
-    const ws = await makeWorkspace([], "cap-ws");
+    const ws = await makeWorkspace(dirs, "cap-ws");
     const { start, db, slot } = await makeWorker(
       {},
       { containers: new ProcessContainers(runtime) },

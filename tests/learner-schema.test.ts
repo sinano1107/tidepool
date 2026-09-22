@@ -1,13 +1,12 @@
-import { mkdtemp } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, it } from "vitest";
 import { openDb } from "../src/db.js";
+import { tempDir } from "./harness.js";
 
 /** shadow 行の表(spec #541「学習器(shadow)」)。読み手は routing meta-review で
  *  まだ無いので、行の形は schema 層が SQL で言う(ADR 0107 決定1 (iii))。 */
 it("学習器の shadow 行は pickup ごとの {task_id, 推薦したセル, 実際のセル, selector の出所, 推薦の根拠} で、根拠は prior / data の2値", async () => {
-  const db = openDb(join(await mkdtemp(join(tmpdir(), "tidepool-learner-shadow-")), "board.sqlite"));
+  const db = openDb(join(await tempDir("tidepool-learner-shadow-"), "board.sqlite"));
   db.prepare(
     "INSERT INTO tasks (id, type, status, title, purpose, completion_criteria, sort_key, created_at) VALUES ('t1', 'work', 'todo', 't', 'p', 'c', 1, '2026-09-13T00:00:00.000Z')",
   ).run();

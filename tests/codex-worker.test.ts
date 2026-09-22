@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { mkdir, mkdtemp, realpath, symlink, writeFile } from "node:fs/promises";
+import { mkdir, realpath, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -15,7 +15,7 @@ import { loadRegistry } from "../src/registry.js";
 import { registerTask, type Task } from "../src/tasks.js";
 import type { WorkerExit } from "../src/worker.js";
 import { driveCodexPreflight, FakeClock, passthroughContainers, recordingSpawn } from "./fakes.js";
-import { bootTidepool, mcpClient, type Tidepool } from "./harness.js";
+import { bootTidepool, mcpClient, type Tidepool, tempDir } from "./harness.js";
 import { makeRegistry } from "./registry-fixture.js";
 
 const CLI_VERSION = "codex-cli 0.147.0";
@@ -64,7 +64,7 @@ async function fixture(
   onWorkerExited?: (taskId: string, exit: WorkerExit) => void,
   spawn?: ContainerSpawn,
 ) {
-  const workspace = await mkdtemp(join(tmpdir(), "tidepool-codex-workspace-"));
+  const workspace = await tempDir("tidepool-codex-workspace-");
   execFileSync("git", ["init", "-b", "main"], { cwd: workspace });
   await mkdir(join(workspace, ".agents", "skills", "repo-skill"), { recursive: true });
   await writeFile(join(workspace, ".agents", "skills", "repo-skill", "SKILL.md"), "# Repo skill\n");
@@ -84,9 +84,9 @@ You are the Codex worker.`,
   });
   const db = openDb(":memory:");
   const process = recordingSpawn();
-  const codexHome = await mkdtemp(join(tmpdir(), "tidepool-codex-home-"));
-  const logDir = await mkdtemp(join(tmpdir(), "tidepool-codex-logs-"));
-  const codexSystemDir = await mkdtemp(join(tmpdir(), "tidepool-codex-system-"));
+  const codexHome = await tempDir("tidepool-codex-home-");
+  const logDir = await tempDir("tidepool-codex-logs-");
+  const codexSystemDir = await tempDir("tidepool-codex-system-");
   const worker = new CodexWorker({
     db,
     clock: new FakeClock(),
@@ -598,7 +598,7 @@ describe("CodexWorker (ADR 0098)", () => {
 
 describe("resolveCodexExecutable", () => {
   it("PATH に載っているのが symlink でも実体のパスを返す(issue #646)", async () => {
-    const base = await mkdtemp(join(tmpdir(), "tidepool-codex-which-"));
+    const base = await tempDir("tidepool-codex-which-");
     const linkDir = join(base, "link");
     await mkdir(linkDir);
     const realExecutable = join(base, "codex");

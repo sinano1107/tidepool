@@ -1,5 +1,4 @@
-import { mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { boardHalts } from "../src/board-halt.js";
@@ -8,6 +7,7 @@ import { quarantineCliAuthForProvider } from "../src/cli-auth.js";
 import { openDb } from "../src/db.js";
 import { openQuarantineValues } from "../src/quarantine.js";
 import { listBoard } from "../src/tasks.js";
+import { tempDir } from "./harness.js";
 
 /** ADR 0098 / issue #454: 401 の Provider 帰属は spawn/call 時の事実で決まり、
  *  失効した Provider を喋る agent の pickup だけが止まる。 */
@@ -64,15 +64,15 @@ describe("quarantineCliAuthForProvider(issue #454 / ADR 0098)", () => {
 describe("createMoonshotCliAuthCheck(issue #446 — quarantine 回答受理時の再検証が撃つ moonshot 向き probe)", () => {
   afterEach(() => vi.unstubAllEnvs());
 
-  function keyFileWith(key: string): string {
-    const dir = mkdtempSync(join(tmpdir(), "tidepool-moonshot-key-"));
+  async function keyFileWith(key: string): Promise<string> {
+    const dir = await tempDir("tidepool-moonshot-key-");
     const path = join(dir, "moonshot-api-key");
     writeFileSync(path, key, { mode: 0o600 });
     return path;
   }
 
   it("401 envelope は unauthorized、成功 envelope は authenticated — 判定は anthropic と同じ機械判定", async () => {
-    const keyFile = keyFileWith("sk-moonshot-test-key");
+    const keyFile = await keyFileWith("sk-moonshot-test-key");
     const unauthorized = createMoonshotCliAuthCheck(keyFile, async () => ({
       exitCode: 1,
       stdout: JSON.stringify({
@@ -93,7 +93,7 @@ describe("createMoonshotCliAuthCheck(issue #446 — quarantine 回答受理時�
   it("probe は Moonshot の向き先・キーファイル由来の Bearer トークン・provider 表記のモデルを env に載せ、Claude のサブスク資格情報は除く", async () => {
     vi.stubEnv("CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oauth-should-be-scrubbed");
     vi.stubEnv("ANTHROPIC_API_KEY", "sk-ant-api-should-be-scrubbed");
-    const keyFile = keyFileWith("sk-moonshot-test-key");
+    const keyFile = await keyFileWith("sk-moonshot-test-key");
     let observed: { args: string[]; env: NodeJS.ProcessEnv } | undefined;
     const check = createMoonshotCliAuthCheck(keyFile, async (_command, args, options) => {
       observed = { args, env: options.env };
@@ -110,7 +110,7 @@ describe("createMoonshotCliAuthCheck(issue #446 — quarantine 回答受理時�
   });
 
   it("probe の予算は $0.25 — kimi-k3[1m] の最小1ターン実測($0.057〜$0.122、issue #447)を $0.01 では必ず踏む(issue #466)", async () => {
-    const keyFile = keyFileWith("sk-moonshot-test-key");
+    const keyFile = await keyFileWith("sk-moonshot-test-key");
     let observedArgs: string[] | undefined;
     const check = createMoonshotCliAuthCheck(keyFile, async (_command, args) => {
       observedArgs = args;
@@ -125,7 +125,7 @@ describe("createMoonshotCliAuthCheck(issue #446 — quarantine 回答受理時�
   });
 
   it("error_max_budget_usd エンベロープは unknown のまま、予算超過と判る reason を返す(issue #466)", async () => {
-    const keyFile = keyFileWith("sk-moonshot-test-key");
+    const keyFile = await keyFileWith("sk-moonshot-test-key");
     const check = createMoonshotCliAuthCheck(keyFile, async () => ({
       exitCode: 1,
       stdout: JSON.stringify({
@@ -142,7 +142,7 @@ describe("createMoonshotCliAuthCheck(issue #446 — quarantine 回答受理時�
   });
 
   it("キーファイルが無ければ probe を撃たずに unauthorized と分類する(資格情報が無い = 認証できない)", async () => {
-    const missing = join(mkdtempSync(join(tmpdir(), "tidepool-moonshot-key-")), "moonshot-api-key");
+    const missing = join(await tempDir("tidepool-moonshot-key-"), "moonshot-api-key");
     let calls = 0;
     const check = createMoonshotCliAuthCheck(missing, async () => {
       calls += 1;

@@ -1,6 +1,4 @@
 import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
-import { mkdtemp } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import {
@@ -12,6 +10,7 @@ import {
 } from "../src/codex-app-server.js";
 import { ProcessContainers } from "../src/process-container.js";
 import { containerHarness, FakeContainerRuntime, passthroughContainers } from "./fakes.js";
+import { tempDir } from "./harness.js";
 
 afterEach(() => vi.unstubAllEnvs());
 
@@ -88,7 +87,7 @@ function writeCompatibleSchemas(out: string): void {
 it("fixed Codex app-server stdio returns authenticated, normalized primary and secondary windows", async () => {
   vi.stubEnv("OPENAI_API_KEY", "must-not-reach-codex");
   vi.stubEnv("CODEX_API_KEY", "must-not-reach-codex");
-  const root = await mkdtemp(join(tmpdir(), "tidepool-codex-probe-"));
+  const root = await tempDir("tidepool-codex-probe-");
   const calls: Array<{ args: string[]; input?: string; env: NodeJS.ProcessEnv }> = [];
   const command: CodexCliCommand = async (_executable, args, options) => {
     calls.push({ args, input: options.input, env: options.env });
@@ -178,7 +177,7 @@ it("fixed Codex app-server stdio returns authenticated, normalized primary and s
 
 it("version or generated response-schema drift fails closed before App Server usage is trusted", async () => {
   for (const drift of ["version", "schema"] as const) {
-    const root = await mkdtemp(join(tmpdir(), "tidepool-codex-probe-"));
+    const root = await tempDir("tidepool-codex-probe-");
     let appServerCalls = 0;
     const command: CodexCliCommand = async (_executable, args) => {
       if (args[0] === "--version") {
@@ -425,7 +424,7 @@ it("reset が pickup 時刻 + 窓幅を往復ぶん超えていても観測と�
 });
 
 it("accepts the validated codex indexed view but does not guess that unknown limit ids are models", async () => {
-  const root = await mkdtemp(join(tmpdir(), "tidepool-codex-probe-"));
+  const root = await tempDir("tidepool-codex-probe-");
   const command: CodexCliCommand = async (_executable, args) => {
     if (args[0] === "--version") {
       return { exitCode: 0, stdout: `${CODEX_APP_SERVER_VERSION}\n`, stderr: "" };
@@ -550,7 +549,7 @@ if (args[0] === "--version") {
 }
 
 it("app-server の stdin は応答が揃うまで開いたままで、上限を待たずに observed を返す", async () => {
-  const root = await mkdtemp(join(tmpdir(), "tidepool-codex-probe-"));
+  const root = await tempDir("tidepool-codex-probe-");
   const startedAt = Date.now();
 
   const result = await createCodexAppServerProbe({

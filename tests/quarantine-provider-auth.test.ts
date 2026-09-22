@@ -1,6 +1,4 @@
 import { writeFileSync } from "node:fs";
-import { mkdtemp } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { quarantineCliAuthForProvider } from "../src/cli-auth.js";
@@ -17,6 +15,7 @@ import {
   queueWork,
   registerWork,
   type Tidepool,
+  tempDir,
 } from "./harness.js";
 
 /** issue #446 / ADR 0097 決定2: provider 単位の資源への細分化のゲート面。
@@ -197,7 +196,7 @@ it("OpenAI の unauthorized は OpenAI だけの確認を立て、HTTP 回答時
 });
 
 it("codexHome に auth.json が無い openai は probe を撃たずに absent で除外され question も立たず、置かれて probe が unauthorized なら従来どおり確認が立つ(ADR 0116 決定4)", async () => {
-  const codexHome = await mkdtemp(join(tmpdir(), "tidepool-codex-home-"));
+  const codexHome = await tempDir("tidepool-codex-home-");
   let probes = 0;
   t = await bootTidepool({
     codexHome,
