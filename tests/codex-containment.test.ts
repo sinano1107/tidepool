@@ -10,6 +10,7 @@ import {
   type CodexCapabilityObservation,
   checkCodexCapability,
   createCodexCapabilityCheck,
+  observedAgentsMdLayer,
   observedDeveloperMarkers,
   observedHooks,
   observedSkills,
@@ -57,6 +58,7 @@ const VALID: CodexCapabilityObservation = {
   hooks: [BOARD_HOOK_REGISTRATION],
   features: CODEX_FEATURE_SNAPSHOT,
   developerMarkers: [CODEX_DEVELOPER_MARKER],
+  agentsMdLayer: [],
   hookDiagnostics: [],
 };
 
@@ -228,6 +230,8 @@ it.each([
   ["developer instructions (空)", { developerMarkers: [] }],
   ["developer instructions (別値)", { developerMarkers: ["some other text"] }],
   ["developer instructions (重複)", { developerMarkers: [CODEX_DEVELOPER_MARKER, CODEX_DEVELOPER_MARKER] }],
+  // 盤面の書いていない指示が task と同じ user 層に載った(ADR 0148 決定2)
+  ["agents.md", { agentsMdLayer: ["# AGENTS.md instructions"] }],
 ] as const)("Codex %s surface drift fails its Harness preflight closed", async (_, changed) => {
   const capability = await checkCodexCapability(async () => ({ ...VALID, ...changed }), BOARD_HOOK_PATH);
   expect(capability.available).toBe(false);
@@ -284,6 +288,29 @@ it("prompt-input の developer item に載った marker だけを拾う(ADR 0124
   const items = JSON.parse(promptInput("no-marker")) as Array<{ content: Array<{ type: string; text: string }> }>;
   items.at(-1)!.content.push({ type: "input_text", text: CODEX_DEVELOPER_MARKER });
   expect(observedDeveloperMarkers(JSON.stringify(items))).toEqual([]);
+});
+
+// global-agents-md は no-marker に、実物の codex-cli 0.147.0 を新しい CODEX_HOME
+// (AGENTS.md に `TIDEPOOL_GLOBAL_AGENTS_MARKER` だけを書いたもの)で叩いて採った part を、
+// `<environment_context>` を持つ user item の先頭へ逐語で差し込んだもの(ADR 0148 の実測、issue #697)。
+const GLOBAL_AGENTS_MD = "# AGENTS.md instructions\n\n<INSTRUCTIONS>\nTIDEPOOL_GLOBAL_AGENTS_MARKER\n</INSTRUCTIONS>";
+
+it("prompt-input の user item に載った AGENTS.md の層だけを、見出し行で拾う(ADR 0148 決定2)", () => {
+  expect(observedAgentsMdLayer(promptInput("global-agents-md"))).toEqual(["# AGENTS.md instructions"]);
+  expect(observedAgentsMdLayer(promptInput("no-marker"))).toEqual([]);
+
+  // project の形(`project_doc_max_bytes` が効いていないとき、0.147.0 で見出しに `for <path>` が付く)も同じ層
+  const project = JSON.parse(promptInput("no-marker")) as Array<{ role: string; content: Array<{ type: string; text: string }> }>;
+  project[3]!.content.unshift({
+    type: "input_text",
+    text: "# AGENTS.md instructions for /home/board/workspace\n\n<INSTRUCTIONS>\nPROJECT_MARKER\n</INSTRUCTIONS>",
+  });
+  expect(observedAgentsMdLayer(JSON.stringify(project))).toEqual(["# AGENTS.md instructions for /home/board/workspace"]);
+
+  // 同じ文面が developer item に載っているだけの形は AGENTS.md の層に数えない
+  const items = JSON.parse(promptInput("no-marker")) as Array<{ role: string; content: Array<{ type: string; text: string }> }>;
+  items.find((item) => item.role === "developer")!.content.push({ type: "input_text", text: GLOBAL_AGENTS_MD });
+  expect(observedAgentsMdLayer(JSON.stringify(items))).toEqual([]);
 });
 
 // 実物の `codex debug prompt-input` 出力(0.147.0、運用者の config から隔離した空の CODEX_HOME・
