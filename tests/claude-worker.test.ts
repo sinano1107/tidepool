@@ -1,8 +1,8 @@
 import { execFileSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
-import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { agentNeedsHuman } from "../src/agent.js";
 import { boardHalts } from "../src/board-halt.js";
 import {
@@ -42,6 +42,11 @@ import {
 } from "./fakes.js";
 import { git, makeWorkspace, tempDir } from "./harness.js";
 import { makeRegistry, makeRemoteBackedRegistry } from "./registry-fixture.js";
+
+const dirs: string[] = [];
+afterEach(async () => {
+  await Promise.all(dirs.splice(0).map((d) => rm(d, { recursive: true, force: true })));
+});
 
 function makeTask(
   id = "task-1",
@@ -1212,7 +1217,7 @@ describe("ClaudeCodeWorker", () => {
   });
 
   it("tracked settings.json の hooks は spawn 前に実体化から外し、workspace を quarantine しない(issue #382)", async () => {
-    const ws = await makeWorkspace([], "tracked-hooks");
+    const ws = await makeWorkspace(dirs, "tracked-hooks");
     await mkdir(join(ws.path, ".claude"), { recursive: true });
     await writeFile(
       join(ws.path, ".claude", "settings.json"),
@@ -1238,7 +1243,7 @@ describe("ClaudeCodeWorker", () => {
   });
 
   it("sparse 後に branch の settings.json が床キーへ変われば index の内容で quarantine する", async () => {
-    const ws = await makeWorkspace([], "tracked-hooks-floor-change");
+    const ws = await makeWorkspace(dirs, "tracked-hooks-floor-change");
     await mkdir(join(ws.path, ".claude"), { recursive: true });
     await writeFile(
       join(ws.path, ".claude", "settings.json"),
@@ -1269,7 +1274,7 @@ describe("ClaudeCodeWorker", () => {
   });
 
   it("同じ workspace の次 session が先に始まっても、全 container の回収までは hooks を戻さない", async () => {
-    const ws = await makeWorkspace([], "tracked-hooks-overlap");
+    const ws = await makeWorkspace(dirs, "tracked-hooks-overlap");
     await mkdir(join(ws.path, ".claude"), { recursive: true });
     const settings = JSON.stringify({ hooks: { PostToolUse: [] } });
     await writeFile(join(ws.path, ".claude", "settings.json"), settings);
@@ -1294,7 +1299,7 @@ describe("ClaudeCodeWorker", () => {
   });
 
   it("sparse 後に branch の settings.json から hooks が消えれば通常 project settings を再実体化する", async () => {
-    const ws = await makeWorkspace([], "tracked-hooks-ordinary-change");
+    const ws = await makeWorkspace(dirs, "tracked-hooks-ordinary-change");
     await mkdir(join(ws.path, ".claude"), { recursive: true });
     await writeFile(
       join(ws.path, ".claude", "settings.json"),
@@ -3604,7 +3609,7 @@ describe("上限到達による中断(issue #467 / ADR 0104)", () => {
     // この recorder から撃つ。
     const { spawn, processes, emitExit } = recordingSpawn();
     const runtime = new FakeContainerRuntime(spawn);
-    const ws = await makeWorkspace([], "cap-ws");
+    const ws = await makeWorkspace(dirs, "cap-ws");
     const { start, db, slot } = await makeWorker(
       {},
       { containers: new ProcessContainers(runtime) },
