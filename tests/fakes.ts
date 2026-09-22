@@ -943,13 +943,14 @@ export function recordingSpawn() {
  *  work 側の index は `index - 1`。 */
 export async function driveCodexPreflight(
   stop: "sandboxProbe" | "workAppServer" | "reviewAppServer",
-  overrides: { codexHome?: string; workspace?: string; allowedDomains?: readonly string[] } = {},
+  overrides: { codexHome?: string; codexSystemDir?: string; workspace?: string; allowedDomains?: readonly string[] } = {},
 ) {
   const spawn = recordingSpawn();
   const { boardCall } = containerHarness(passthroughContainers(spawn.spawn));
   const capability = createCodexCapabilityCheck({
     executable: "/opt/tidepool/bin/codex",
     codexHome: overrides.codexHome ?? mkdtempSync(join(tmpdir(), "tidepool-codex-home-")),
+    codexSystemDir: overrides.codexSystemDir,
     workspace: overrides.workspace ?? mkdtempSync(join(tmpdir(), "tidepool-codex-preflight-ws-")),
     allowedDomains: overrides.allowedDomains ?? [],
     call: boardCall,
