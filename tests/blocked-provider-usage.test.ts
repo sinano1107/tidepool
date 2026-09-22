@@ -89,24 +89,6 @@ it("throttled な model 固有の窓(fable)は、その model だけが除外さ
 it("別 Provider の除外は影響しない(openai の throttle で isAnthropicBoardCallBlocked は false)", async () => {
   const db = await freshDb();
   reportProviderUsage(db, {
-    provider: "anthropic",
-    status: "observed",
-    plan: null,
-    cliVersion: null,
-    observedAt: NOW,
-    windows: [
-      {
-        window: "session",
-        model: null,
-        usedPercent: 50,
-        durationMs: HOUR,
-        resetsAt: new Date(NOW.getTime() + HOUR),
-        throttled: false,
-        resumesAt: null,
-      },
-    ],
-  });
-  reportProviderUsage(db, {
     provider: "openai",
     status: "observed",
     plan: "plus",
@@ -165,6 +147,7 @@ it("isAnthropicBoardCallBlocked: model 窓の除外は渡した model が一致�
   });
 
   expect(isAnthropicBoardCallBlocked(db, "fable")).toBe(true);
+  expect(isAnthropicBoardCallBlocked(db, "claude-haiku-4-5")).toBe(false);
   expect(isAnthropicBoardCallBlocked(db)).toBe(false);
 });
 
@@ -214,6 +197,27 @@ it("新しい成功した観測が前の除外を置き換える", async () => {
         resumesAt: null,
       },
     ],
+  });
+
+  expect(blockedProviderUsageResources(db)).toEqual([]);
+
+  reportProviderUsage(db, {
+    provider: "anthropic",
+    status: "unauthorized",
+    plan: null,
+    cliVersion: null,
+    observedAt: NOW,
+    windows: [],
+  });
+  expect(blockedProviderUsageResources(db)).toEqual([{ provider: "anthropic", model: null }]);
+
+  reportProviderUsage(db, {
+    provider: "anthropic",
+    status: "observed",
+    plan: null,
+    cliVersion: null,
+    observedAt: NOW,
+    windows: [],
   });
 
   expect(blockedProviderUsageResources(db)).toEqual([]);
