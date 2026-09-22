@@ -211,18 +211,6 @@ export function openDb(path: string): Db {
       ref_snapshot TEXT
     );
 
-    -- Pace offsets (ADR 0030): the human's reserved share (pt) per usage
-    -- window — the board runs this far behind the elapsed-time pace line.
-    -- One row; no row means the code defaults (session 20 / week 10 /
-    -- fable 10). Values are validated at the API entry; the reader guards
-    -- out-of-range values back to defaults as well.
-    CREATE TABLE IF NOT EXISTS pace_offsets (
-      id      INTEGER PRIMARY KEY CHECK (id = 1),
-      session INTEGER NOT NULL,
-      week    INTEGER NOT NULL,
-      fable   INTEGER NOT NULL
-    );
-
     -- ADR 0098: a Provider probe is one observation with zero or more
     -- account/model windows.  model is stored as the empty string so the
     -- compound key stays unique for the account-wide window in SQLite.

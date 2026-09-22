@@ -1,24 +1,20 @@
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { mkdir, mkdtemp, realpath, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  CODEX_FEATURE_SNAPSHOT,
-  CodexWorker,
-  createCodexCapabilityCheck,
-  resolveCodexExecutable,
-} from "../src/codex-worker.js";
+import { afterEach, describe, expect, it } from "vitest";
+import { CODEX_FEATURE_SNAPSHOT, CodexWorker, resolveCodexExecutable } from "../src/codex-worker.js";
 import { openDb } from "../src/db.js";
 import { listEvents } from "../src/events.js";
 import { resolveExecutionSetting } from "../src/execution-setting.js";
 import { buildMemoryInjection, recordKnowledge } from "../src/memory.js";
+import type { ContainerSpawn } from "../src/process-container.js";
 import { openQuarantineValues } from "../src/quarantine.js";
 import { loadRegistry } from "../src/registry.js";
 import { registerTask, type Task } from "../src/tasks.js";
 import type { WorkerExit } from "../src/worker.js";
-import { containerHarness, FakeClock, passthroughContainers, recordingSpawn } from "./fakes.js";
+import { driveCodexPreflight, FakeClock, passthroughContainers, recordingSpawn } from "./fakes.js";
 import { bootTidepool, mcpClient, type Tidepool } from "./harness.js";
 import { makeRegistry } from "./registry-fixture.js";
 
@@ -66,6 +62,7 @@ async function fixture(
   onSpawnFailed?: (taskId: string, failure: { error_code: string | null; message: string }) => void,
   allowedDomains = "\n  allowed_domains:\n    - api.github.com",
   onWorkerExited?: (taskId: string, exit: WorkerExit) => void,
+  spawn?: ContainerSpawn,
 ) {
   const workspace = await mkdtemp(join(tmpdir(), "tidepool-codex-workspace-"));
   execFileSync("git", ["init", "-b", "main"], { cwd: workspace });
@@ -89,6 +86,7 @@ You are the Codex worker.`,
   const process = recordingSpawn();
   const codexHome = await mkdtemp(join(tmpdir(), "tidepool-codex-home-"));
   const logDir = await mkdtemp(join(tmpdir(), "tidepool-codex-logs-"));
+  const codexSystemDir = await mkdtemp(join(tmpdir(), "tidepool-codex-system-"));
   const worker = new CodexWorker({
     db,
     clock: new FakeClock(),
@@ -101,14 +99,15 @@ You are the Codex worker.`,
     codexHome,
     cliVersion: CLI_VERSION,
     executable: "/opt/tidepool/bin/codex",
-    containers: passthroughContainers(process.spawn),
+    containers: passthroughContainers(spawn ?? process.spawn),
+    codexSystemDir,
     onSpawnFailed,
     onWorkerExited,
   });
   // scheduler が pickup の瞬間に選ぶ実行設定(除外なし)を渡す
   const agent = loadRegistry(registry, "purely-local").agents["codex-agent"]!;
   const start = (value: Task) => worker.start(value, resolveExecutionSetting(db, agent, value)!);
-  return { db, worker, start, process, codexHome, workspace, logDir };
+  return { db, worker, start, process, codexHome, codexSystemDir, workspace, logDir };
 }
 
 describe("CodexWorker (ADR 0098)", () => {
@@ -236,30 +235,47 @@ describe("CodexWorker (ADR 0098)", () => {
       new Date("2026-08-24T00:00:00.000Z"),
     ));
 
-    // preflight を --version・prompt-input・features list・sandbox 2本・hooks/list と通し、7本目の review 呼び出しまで進める
-    const preflight = recordingSpawn();
-    const capability = createCodexCapabilityCheck({
-      executable: "/opt/tidepool/bin/codex",
+    // preflight を --version・prompt-input・features list・sandbox 2本・hooks/list と通し、review 呼び出しまで進める
+    const { spawn: preflight, capability, index } = await driveCodexPreflight("reviewAppServer", {
       codexHome: f.codexHome,
       workspace: f.workspace,
       allowedDomains: ["api.github.com"],
-      call: containerHarness(passthroughContainers(preflight.spawn)).boardCall,
-    })();
-    for (const i of [0, 1, 2, 3, 4, 5]) {
-      await vi.waitFor(() => expect(preflight.calls).toHaveLength(i + 1));
-      if (i === 1) preflight.processes[1]!.stdout.write("[]");
-      if (i === 5) preflight.processes[5]!.stdout.write('{"id":1,"result":{}}\n{"id":2,"result":{"data":[]}}\n');
-      preflight.emitExitAt(i, 0, null);
-    }
-    await vi.waitFor(() => expect(preflight.calls).toHaveLength(7));
-    preflight.emitExitAt(6, 1, null);
+    });
+    preflight.emitExitAt(index, 1, null);
     await capability;
 
     const keys = (args: string[]) =>
-      new Set(args.filter((_, index) => args[index - 1] === "-c").map((entry) => entry.split("=", 1)[0]));
+      new Set(args.filter((_, i) => args[i - 1] === "-c").map((entry) => entry.split("=", 1)[0]));
     expect(keys(f.process.calls[0]!.args)).toContain("mcp_servers.tidepool.url");
-    expect(keys(preflight.calls[5]!.args)).toEqual(keys(f.process.calls[0]!.args));
-    expect(keys(preflight.calls[6]!.args)).toEqual(keys(f.process.calls[1]!.args));
+    expect(keys(preflight.calls[index - 1]!.args)).toEqual(keys(f.process.calls[0]!.args));
+    expect(keys(preflight.calls[index]!.args)).toEqual(keys(f.process.calls[1]!.args));
+  });
+
+  it("$CODEX_HOME/skills のユーザー skill と system config の skill を spawn と probe の両方が同じ skills.config で閉じ、.system は二重にしない(ADR 0147 決定3)", async () => {
+    const f = await fixture();
+    for (const dir of [join(f.codexHome, "skills", "foo"), join(f.codexHome, "skills", ".system", "openai-docs"), join(f.codexSystemDir, "skills", "bar")]) {
+      await mkdir(dir, { recursive: true });
+      await writeFile(join(dir, "SKILL.md"), "# skill\n");
+    }
+    f.start(task(f.db));
+
+    // prompt-input(1)まで通れば足りる —— 最初の停止点で止めて落とす
+    const { spawn: preflight, capability, index } = await driveCodexPreflight("sandboxProbe", {
+      codexHome: f.codexHome,
+      codexSystemDir: f.codexSystemDir,
+      workspace: f.workspace,
+      allowedDomains: ["api.github.com"],
+    });
+    preflight.emitExitAt(index, 1, null);
+    await capability;
+
+    const skills = (args: string[]) => args.find((arg, index) => args[index - 1] === "-c" && arg.startsWith("skills.config="))!;
+    const spawned = skills(f.process.calls[0]!.args);
+    // probe は workspace を realpath で解決する(macOS の tmpdir は /private 経由)
+    expect(skills(preflight.calls[1]!.args).replaceAll(await realpath(f.workspace), f.workspace)).toBe(spawned);
+    expect(spawned).toContain(`{path=${JSON.stringify(join(f.codexHome, "skills", "foo", "SKILL.md"))},enabled=false}`);
+    expect(spawned).toContain(`{path=${JSON.stringify(join(f.codexSystemDir, "skills", "bar", "SKILL.md"))},enabled=false}`);
+    expect(spawned.split(join(f.codexHome, "skills", ".system", "openai-docs", "SKILL.md"))).toHaveLength(2);
   });
 
   it("主題 memory の meta-review の spawn では enabled_tools が worker の memory verb を専用 verb で置き換え、普通の task は変わらない(ADR 0122 決定2)", async () => {
@@ -547,6 +563,36 @@ describe("CodexWorker (ADR 0098)", () => {
       signal: "SIGINT",
       usage: null,
     });
+  });
+
+  it("worker の exit(0 / 非0 / signal)の後、TMPDIR が指した task の一時ディレクトリは残らない(issue #705)", async () => {
+    const f = await fixture();
+    const exits = [[0, null], [2, null], [null, "SIGKILL"]] as const;
+    exits.forEach((_, i) => f.start(task(f.db, `codex-exit-${i}`)));
+    const taskTemps = f.process.calls.map((call) => call.env.TMPDIR!);
+    expect(taskTemps.every((dir) => existsSync(dir))).toBe(true);
+
+    exits.forEach(([code, signal], i) => f.process.emitExitAt(i, code, signal));
+    expect(taskTemps.filter((dir) => existsSync(dir))).toEqual([]);
+  });
+
+  it("spawn の失敗(exit が来ないことがある)の後も、task の一時ディレクトリは残らない(issue #705)", async () => {
+    const f = await fixture();
+    f.start(task(f.db));
+    const taskTemp = f.process.calls[0]!.env.TMPDIR!;
+
+    f.process.emitError(Object.assign(new Error("spawn codex ENOENT"), { code: "ENOENT", syscall: "spawn codex" }));
+    expect(existsSync(taskTemp)).toBe(false);
+  });
+
+  it("spawn までの間に例外が出たら start はそれを投げ直し、task の一時ディレクトリは残らない(issue #705)", async () => {
+    const f = await fixture(undefined, undefined, undefined, () => {
+      throw new Error("spawn blew up");
+    });
+    const value = task(f.db);
+
+    expect(() => f.start(value)).toThrow("spawn blew up");
+    expect(readdirSync(tmpdir()).filter((name) => name.startsWith(`tidepool-codex-${value.id}-`))).toEqual([]);
   });
 });
 

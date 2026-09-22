@@ -192,7 +192,7 @@ it("盤面設定のオフセットが判定に効く: session オフセットを
   // 40% used, resets 4時間後 → t=1h 時点で経過40%。既定オフセット20なら線は20で
   // 40 は超過(冒頭の catch-up テストと同じ数字)。オフセット0なら線は40 —
   // strict 比較で 40 は通る。
-  await api(t.baseUrl, "POST", "/api/settings/pace-offsets", { session: 0, week: 10, fable: 10 });
+  await api(t.baseUrl, "POST", "/api/settings/provider-pace-offsets", { provider: "anthropic", window: "session", offset: 0 });
   const resetsAt = new Date(t.clock.now().getTime() + 4 * HOUR);
   t.worker.scriptUsage(
     usagePanelText({
