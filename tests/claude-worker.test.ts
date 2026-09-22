@@ -985,7 +985,7 @@ describe("ClaudeCodeWorker", () => {
     expect(probeContainer).not.toBe("task-skill-gate");
     runtime.hold(probeContainer); // force だけでは空にならないホスト
 
-    recorder.stdout.write(skillsInit(["code-review", "tdd"]));
+    recorder.processes[0]!.stdout.write(skillsInit(["code-review", "tdd"]));
     await settle();
     recorder.emitExitAt(0, 0, null);
     await settle();
@@ -1003,7 +1003,7 @@ describe("ClaudeCodeWorker", () => {
     await vi.waitFor(() => expect(recorder.calls).toHaveLength(1));
     const probeContainer = runtime.created[0]!;
     runtime.hold(probeContainer);
-    recorder.stdout.write(skillsInit(["code-review", "tdd"]));
+    recorder.processes[0]!.stdout.write(skillsInit(["code-review", "tdd"]));
     await settle();
     recorder.emitExitAt(0, 0, null);
     await settle();
@@ -1361,9 +1361,9 @@ describe("ClaudeCodeWorker", () => {
     listBoard(db).find((t) => t.type === "question" && t.question_quarantine_kind === "containment");
 
   it("宣言どおりの init 行なら何も起きない — 封じ込めの question は立たない", async () => {
-    const { start, stdout, db } = await makeWorker();
+    const { start, processes, db } = await makeWorker();
     start("task-init-ok", null, "deckhand", "work");
-    stdout.write(
+    processes[0]!.stdout.write(
       // 実セッションには MCP verb も並ぶ — 比較対象外
       initLine([...WORK_SURFACE, "mcp__tidepool__get_current_task"]),
     );
@@ -1371,11 +1371,11 @@ describe("ClaudeCodeWorker", () => {
   });
 
   it("init 行に allowlist 外のツールが並んでいたら封じ込め能力の question が立つ(ADR 0039 決定3)", async () => {
-    const { start, stdout, db } = await makeWorker();
+    const { start, processes, db } = await makeWorker();
     start("task-init-drift", null, "deckhand", "work");
     // `CronCreate` は測定2 でそのまま実行できてしまったツールそのもの。`--tools` が
     // honor されていないホストでは、これが面に残る。
-    stdout.write(initLine(["Bash", "Read", "CronCreate"]));
+    processes[0]!.stdout.write(initLine(["Bash", "Read", "CronCreate"]));
     const question = await vi.waitFor(() => {
       const q = containmentQuestion(db);
       expect(q).toBeDefined();
@@ -1396,9 +1396,9 @@ describe("ClaudeCodeWorker", () => {
     // ことであり、狭い側にずれていれば能力を1つ失ったまま詰まるだけである。どちらも
     // 走らせる理由がない。slot は watchdog が per-type 時限で回収する(既存の
     // 失敗経路)。
-    const { start, stdout, killed } = await makeWorker();
+    const { start, processes, killed } = await makeWorker();
     start("task-init-kill", null, "deckhand", "work");
-    stdout.write(initLine(["Bash", "Read", "CronCreate"]));
+    processes[0]!.stdout.write(initLine(["Bash", "Read", "CronCreate"]));
     await vi.waitFor(() => expect(killed).toContain("SIGKILL"));
   });
 
@@ -1409,25 +1409,25 @@ describe("ClaudeCodeWorker", () => {
     const runtime = new FakeContainerRuntime(recorder.spawn);
     const { start } = await makeWorker({}, { containers: new ProcessContainers(runtime) });
     const task = start("task-init-container-kill", null, "deckhand", "work");
-    recorder.stdout.write(initLine(["Bash", "Read", "CronCreate"]));
+    recorder.processes[0]!.stdout.write(initLine(["Bash", "Read", "CronCreate"]));
     await vi.waitFor(() => expect(runtime.forceReclaims).toEqual([task.id]));
     expect(recorder.killed).toEqual([]);
   });
 
   it("宣言どおりのセッションは kill されない", async () => {
-    const { start, stdout, killed } = await makeWorker();
+    const { start, processes, killed } = await makeWorker();
     start("task-init-nokill", null, "deckhand", "review");
-    stdout.write(
+    processes[0]!.stdout.write(
       initLine([...REVIEW_SURFACE, "mcp__tidepool__get_current_task"]),
     );
-    stdout.write(`{"type":"result","result":"done"}\n`);
+    processes[0]!.stdout.write(`{"type":"result","result":"done"}\n`);
     await vi.waitFor(() => expect(killed).toEqual([]));
   });
 
   it("review セッションの init 行は review の期待集合で照合される — 編集系が残っていたら不成立", async () => {
-    const { start, stdout, db } = await makeWorker();
+    const { start, processes, db } = await makeWorker();
     start("task-init-review-drift", null, "deckhand", "review");
-    stdout.write(
+    processes[0]!.stdout.write(
       initLine([...REVIEW_SURFACE, "Write"]),
     );
     const question = await vi.waitFor(() => {
@@ -1439,12 +1439,12 @@ describe("ClaudeCodeWorker", () => {
   });
 
   it("ずれたまま何セッション走っても question は1枚(封じ込めは1資源につき確認1枚)", async () => {
-    const { start, stdout, db } = await makeWorker();
+    const { start, processes, db } = await makeWorker();
     start("task-init-dup-1", null, "deckhand", "work");
-    stdout.write(initLine(["Bash", "Read", "CronCreate"]));
+    processes[0]!.stdout.write(initLine(["Bash", "Read", "CronCreate"]));
     await vi.waitFor(() => expect(containmentQuestion(db)).toBeDefined());
-    stdout.write(initLine(["Bash", "Read", "CronCreate"]));
-    stdout.write(initLine(["Bash", "Read", "RemoteTrigger"]));
+    processes[0]!.stdout.write(initLine(["Bash", "Read", "CronCreate"]));
+    processes[0]!.stdout.write(initLine(["Bash", "Read", "RemoteTrigger"]));
     await vi.waitFor(() =>
       expect(listBoard(db).filter((t) => t.type === "question")).toHaveLength(1),
     );
@@ -1454,11 +1454,11 @@ describe("ClaudeCodeWorker", () => {
     // `tools` を持たない init 行、壊れた行、`result` 行は「init の報告ではない」と
     // 読む(`parseInitSkills` と同じ fail-closed の形)。ここで question を立てると、
     // 正本である `/usage` ping が答えるべき問いを stdout の欠落で代弁してしまう。
-    const { start, stdout, db } = await makeWorker();
+    const { start, processes, db } = await makeWorker();
     start("task-init-absent", null, "deckhand", "work");
-    stdout.write(`{"type":"system","subtype":"init"}\n`);
-    stdout.write(`{"type":"result","result":"done"}\n`);
-    stdout.write(`{not json\n`);
+    processes[0]!.stdout.write(`{"type":"system","subtype":"init"}\n`);
+    processes[0]!.stdout.write(`{"type":"result","result":"done"}\n`);
+    processes[0]!.stdout.write(`{not json\n`);
     await vi.waitFor(() => expect(containmentQuestion(db)).toBeUndefined());
   });
 
@@ -1468,9 +1468,9 @@ describe("ClaudeCodeWorker", () => {
     // `--strict-mcp-config` を `--mcp-config` 無しで撃つので `mcp_servers` は構造上
     // いつも空 —— 要素の形が変わっても空配列は空配列のまま通る。要素を持つのは
     // `tidepool` が付いた実セッションだけなので、ここで倒さないと MCP 軸が黙って死ぬ。
-    const { start, stdout, db } = await makeWorker();
+    const { start, processes, db } = await makeWorker();
     start("task-init-mcp-unreadable", null, "deckhand", "work");
-    stdout.write(initLine(WORK_SURFACE, [{ status: "connected" }]));
+    processes[0]!.stdout.write(initLine(WORK_SURFACE, [{ status: "connected" }]));
     const question = await vi.waitFor(() => {
       const q = containmentQuestion(db);
       expect(q).toBeDefined();
@@ -1480,11 +1480,11 @@ describe("ClaudeCodeWorker", () => {
   });
 
   it("セッションの stream-json を全量ファイルに記録する(監査性)", async () => {
-    const { start, stdout, logDir, db } = await makeWorker();
+    const { start, processes, logDir, db } = await makeWorker();
     start("task-7");
-    stdout.write(`{"type":"system","subtype":"init"}\n`);
-    stdout.write(`{"type":"result","result":"done"}\n`);
-    stdout.end();
+    processes[0]!.stdout.write(`{"type":"system","subtype":"init"}\n`);
+    processes[0]!.stdout.write(`{"type":"result","result":"done"}\n`);
+    processes[0]!.stdout.end();
     // issue #379: ファイル名は worker_spawned の event id を挟んでセッションごとに
     // 一意 — その id はイベントログから読み返す(採番自体はここでは検証しない)
     const spawnedId = listEvents(db, "task-7").find((e) => e.kind === "worker_spawned")!.id;
@@ -1500,11 +1500,11 @@ describe("ClaudeCodeWorker", () => {
   });
 
   it("セッションの stderr を <taskId>.<event id>.stderr.log として stream.jsonl の隣に全量保存する(issue #125 / #379)", async () => {
-    const { start, stderr, logDir, db } = await makeWorker();
+    const { start, processes, logDir, db } = await makeWorker();
     start("task-stderr");
-    stderr.write("Error: Invalid API key\n");
-    stderr.write("(run /login to authenticate)\n");
-    stderr.end();
+    processes[0]!.stderr.write("Error: Invalid API key\n");
+    processes[0]!.stderr.write("(run /login to authenticate)\n");
+    processes[0]!.stderr.end();
     const spawnedId = listEvents(db, "task-stderr").find((e) => e.kind === "worker_spawned")!.id;
     await vi.waitFor(async () => {
       const log = await readFile(join(logDir, `task-stderr.${spawnedId}.stderr.log`), "utf8");
@@ -1526,13 +1526,13 @@ describe("ClaudeCodeWorker", () => {
   });
 
   it("worker session の終わりに transcript を Precedent に投影する — 書き込みが flush され worker_exited が記録されたあと(issue #356)", async () => {
-    const { start, stdout, emitExit, db } = await makeWorker();
+    const { start, processes, emitExit, db } = await makeWorker();
     const task = start("task-precedent", "tidepool", "deckhand");
-    stdout.write(`{"type":"system","subtype":"init","claude_code_version":"9.9.9"}\n`);
-    stdout.write(
+    processes[0]!.stdout.write(`{"type":"system","subtype":"init","claude_code_version":"9.9.9"}\n`);
+    processes[0]!.stdout.write(
       `{"type":"assistant","uuid":"u1","message":{"content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"ls"}}]}}\n`,
     );
-    stdout.end();
+    processes[0]!.stdout.end();
     emitExit(0, null);
 
     const episode = await vi.waitFor(() => {
@@ -2088,9 +2088,9 @@ describe("ClaudeCodeWorker", () => {
   });
 
   it("正常終了したセッションは worker_exited イベントにトークン内訳と estimated_cost_usd を記録する(issue #32)", async () => {
-    const { start, stdout, emitExit, db } = await makeWorker();
+    const { start, processes, emitExit, db } = await makeWorker();
     start("task-usage");
-    stdout.write(
+    processes[0]!.stdout.write(
       `${JSON.stringify({
         type: "result",
         result: "done",
@@ -2133,11 +2133,11 @@ describe("ClaudeCodeWorker", () => {
   });
 
   it("最終チャンクが改行なしで終わっても、最後の result 行を usage として拾う(issue #32 code review: 偽の欠測を防ぐ)", async () => {
-    const { start, stdout, emitExit, db } = await makeWorker();
+    const { start, processes, emitExit, db } = await makeWorker();
     start("task-no-trailing-newline");
     // no trailing "\n": the stream just closes mid-line, as a real process
     // exit can — this line must not get stranded in the tee's buffer
-    stdout.write(
+    processes[0]!.stdout.write(
       JSON.stringify({
         type: "result",
         result: "done",
@@ -2164,9 +2164,9 @@ describe("ClaudeCodeWorker", () => {
   });
 
   it("result 行の usage が期待した形と食い違えば、投げずに usage null として fail-closed する(issue #32 code review)", async () => {
-    const { start, stdout, emitExit, db } = await makeWorker();
+    const { start, processes, emitExit, db } = await makeWorker();
     start("task-malformed-usage");
-    stdout.write(
+    processes[0]!.stdout.write(
       `${JSON.stringify({
         type: "result",
         result: "done",
@@ -2180,12 +2180,12 @@ describe("ClaudeCodeWorker", () => {
   });
 
   it("is_error の result 行は usage の自己申告ではない — 途中で止まった session は欠測(issue #534)", async () => {
-    const { start, stdout, emitExit, db } = await makeWorker();
+    const { start, processes, emitExit, db } = await makeWorker();
     start("task-aborted-streaming");
     // 2.1.241 を SIGINT で止めたときの実測(2026-09-12 のトリアージ)から、
     // 読まれる欄だけを写したもの。主モデルの出力は実際に流れているのに
     // envelope は全ゼロで、形検査は通る。
-    stdout.write(
+    processes[0]!.stdout.write(
       `${JSON.stringify({
         type: "result",
         subtype: "error_during_execution",
@@ -2210,10 +2210,10 @@ describe("ClaudeCodeWorker", () => {
   });
 
   it("total_cost_usd が非ゼロでも is_error なら usage null — 判定はゼロではなく is_error 一点(issue #534)", async () => {
-    const { start, stdout, emitExit, db } = await makeWorker();
+    const { start, processes, emitExit, db } = await makeWorker();
     start("task-aborted-nonzero-cost");
     // 2.1.269 の形: helper モデル分だけコストが乗った「ゼロではないが誤り」の envelope
-    stdout.write(
+    processes[0]!.stdout.write(
       `${JSON.stringify({
         type: "result",
         is_error: true,
@@ -2246,9 +2246,9 @@ describe("ClaudeCodeWorker", () => {
   });
 
   it("実行中セッションの result が API 401 を返したら anthropic Provider 認証停止へ昇格する(issue #454)", async () => {
-    const { start, stdout, emitExit, db } = await makeWorker();
+    const { start, processes, emitExit, db } = await makeWorker();
     start("task-cli-auth-expired");
-    stdout.write(`${JSON.stringify({ type: "result", subtype: "error", api_error_status: 401 })}\n`);
+    processes[0]!.stdout.write(`${JSON.stringify({ type: "result", subtype: "error", api_error_status: 401 })}\n`);
 
     emitExit(1, null);
 
@@ -2262,11 +2262,11 @@ describe("ClaudeCodeWorker", () => {
   });
 
   it("worker_exited イベントに stderr の末尾20行を stderr_tail として載せる(issue #125)", async () => {
-    const { start, stderr, emitExit, db } = await makeWorker();
+    const { start, processes, emitExit, db } = await makeWorker();
     start("task-stderr-tail");
     // 20行を超える stderr — イベントに載るのは末尾20行だけ
     const lines = Array.from({ length: 25 }, (_, i) => `stderr line ${i + 1}`);
-    stderr.write(`${lines.join("\n")}\n`);
+    processes[0]!.stderr.write(`${lines.join("\n")}\n`);
     emitExit(0, null);
     const exited = listEvents(db, "task-stderr-tail").find((e) => e.kind === "worker_exited");
     // 期待値は独立に書き下す(入力から slice で再計算すると実装と同じ誤りを
@@ -2282,21 +2282,21 @@ describe("ClaudeCodeWorker", () => {
   });
 
   it("マルチバイト文字が chunk 境界で割れても stderr_tail に置換文字が混入しない(issue #125 code review)", async () => {
-    const { start, stderr, emitExit, db } = await makeWorker();
+    const { start, processes, emitExit, db } = await makeWorker();
     start("task-stderr-mb");
     // "認証" の2文字目(証)のバイト列の途中で chunk を切る
     const bytes = Buffer.from("認証エラー: トークン期限切れ\n");
-    stderr.write(bytes.subarray(0, 4));
-    stderr.write(bytes.subarray(4));
+    processes[0]!.stderr.write(bytes.subarray(0, 4));
+    processes[0]!.stderr.write(bytes.subarray(4));
     emitExit(0, null);
     const exited = listEvents(db, "task-stderr-mb").find((e) => e.kind === "worker_exited");
     expect(exited?.payload).toMatchObject({ stderr_tail: "認証エラー: トークン期限切れ" });
   });
 
   it("改行だけで実内容の無い stderr も stderr_tail null(空文字で「捕捉欠落」と紛れさせない — issue #125 code review)", async () => {
-    const { start, stderr, emitExit, db } = await makeWorker();
+    const { start, processes, emitExit, db } = await makeWorker();
     start("task-stderr-blank");
-    stderr.write("\n");
+    processes[0]!.stderr.write("\n");
     emitExit(0, null);
     const exited = listEvents(db, "task-stderr-blank").find((e) => e.kind === "worker_exited");
     expect(exited?.payload).toMatchObject({ stderr_tail: null });
@@ -2992,11 +2992,11 @@ describe("advisor capability (issue #33)", () => {
   };
 
   it("相談が観測されたセッションは、解決済み advisor id・相談回数・分離した消費を記録する(判断6)", async () => {
-    const { start, stdout, emitExit, db } = await makeWorker(withAdvisor);
+    const { start, processes, emitExit, db } = await makeWorker(withAdvisor);
     start("task-advisor-usage");
-    stdout.write(initLine("claude-sonnet-5"));
-    stdout.write(consultation("srvtoolu_01"));
-    stdout.write(resultLine());
+    processes[0]!.stdout.write(initLine("claude-sonnet-5"));
+    processes[0]!.stdout.write(consultation("srvtoolu_01"));
+    processes[0]!.stdout.write(resultLine());
     emitExit(0, null);
     expect(usageOf(db, "task-advisor-usage")).toEqual({
       // 既存欄の意味は**変えない** — トークンは main モデル・親スレッドのみ、
@@ -3036,13 +3036,13 @@ describe("advisor capability (issue #33)", () => {
   // コストだけでは「長い会話で1回」と「短い会話で3回」が区別できないので、回数は
   // usage とは独立に数える。数え上げは既に1行ずつ読んでいる stdout から取れる。
   it("相談回数は stream 中の server_tool_use(advisor) の本数を数える(判断6)", async () => {
-    const { start, stdout, emitExit, db } = await makeWorker(withAdvisor);
+    const { start, processes, emitExit, db } = await makeWorker(withAdvisor);
     start("task-advisor-count");
-    stdout.write(initLine("claude-sonnet-5"));
-    stdout.write(consultation("srvtoolu_01"));
-    stdout.write(consultation("srvtoolu_02"));
-    stdout.write(consultation("srvtoolu_03"));
-    stdout.write(resultLine());
+    processes[0]!.stdout.write(initLine("claude-sonnet-5"));
+    processes[0]!.stdout.write(consultation("srvtoolu_01"));
+    processes[0]!.stdout.write(consultation("srvtoolu_02"));
+    processes[0]!.stdout.write(consultation("srvtoolu_03"));
+    processes[0]!.stdout.write(resultLine());
     emitExit(0, null);
     expect(usageOf(db, "task-advisor-count")?.advisor).toMatchObject({ consultations: 3 });
   });
@@ -3050,17 +3050,17 @@ describe("advisor capability (issue #33)", () => {
   // 通常の tool_use(MCP verb 等)を advisor と数え間違えない — 数えるのは
   // `server_tool_use` かつ name が advisor のものだけ。
   it("通常の tool_use は相談として数えない", async () => {
-    const { start, stdout, emitExit, db } = await makeWorker(withAdvisor);
+    const { start, processes, emitExit, db } = await makeWorker(withAdvisor);
     start("task-advisor-noise");
-    stdout.write(initLine("claude-sonnet-5"));
-    stdout.write(
+    processes[0]!.stdout.write(initLine("claude-sonnet-5"));
+    processes[0]!.stdout.write(
       `${JSON.stringify({
         type: "assistant",
         message: { content: [{ type: "tool_use", name: "advisor", input: {} }] },
       })}\n`,
     );
-    stdout.write(consultation("srvtoolu_01"));
-    stdout.write(resultLine());
+    processes[0]!.stdout.write(consultation("srvtoolu_01"));
+    processes[0]!.stdout.write(resultLine());
     emitExit(0, null);
     expect(usageOf(db, "task-advisor-noise")?.advisor).toMatchObject({ consultations: 1 });
   });
@@ -3069,10 +3069,10 @@ describe("advisor capability (issue #33)", () => {
   // 未 attach のまま終わる —— 盤面から見て成功セッションと区別が付かない。
   // `advisor: null` が、そのセッションで advisor が**走らなかった**ことを言う。
   it("advisor をピン留めしても相談が1本も観測されなければ usage.advisor は null(判断6)", async () => {
-    const { start, stdout, emitExit, db } = await makeWorker(withAdvisor);
+    const { start, processes, emitExit, db } = await makeWorker(withAdvisor);
     start("task-advisor-silent");
-    stdout.write(initLine("claude-sonnet-5"));
-    stdout.write(resultLine({ modelUsage: { "claude-sonnet-5": { costUSD: 0.09 } }, usage: {
+    processes[0]!.stdout.write(initLine("claude-sonnet-5"));
+    processes[0]!.stdout.write(resultLine({ modelUsage: { "claude-sonnet-5": { costUSD: 0.09 } }, usage: {
       input_tokens: 4,
       output_tokens: 31,
       cache_read_input_tokens: 61644,
@@ -3087,15 +3087,15 @@ describe("advisor capability (issue #33)", () => {
   // 盤面はそれを**正規表現で判定しない**(黙って劣化する検出器は #172 が拒んだ形
   // そのもの)。証拠は stderr_tail に verbatim で残る、という形で保つ。
   it("未 attach の警告は判定に使わず、stderr_tail に verbatim で残す(判断3)", async () => {
-    const { start, stderr, stdout, emitExit, db } = await makeWorker(withAdvisor);
+    const { start, processes, emitExit, db } = await makeWorker(withAdvisor);
     start("task-advisor-warning");
     // 実測の文言(main opus × advisor sonnet のセル)
     const warning =
       '"sonnet" cannot advise "claude-opus-5" (the advisor must be at least as ' +
       "capable as the main model). The advisor will not be used for the main model.";
-    stderr.write(`${warning}\n`);
-    stdout.write(initLine("claude-sonnet-5"));
-    stdout.write(resultLine({ usage: {
+    processes[0]!.stderr.write(`${warning}\n`);
+    processes[0]!.stdout.write(initLine("claude-sonnet-5"));
+    processes[0]!.stdout.write(resultLine({ usage: {
       input_tokens: 4,
       output_tokens: 31,
       cache_read_input_tokens: 61644,
@@ -3112,11 +3112,11 @@ describe("advisor capability (issue #33)", () => {
   // (`usage: null` が「セッションは走ったが report が無い」を表すのと同じ形)。
   // 回数だけは数えられるので `consultations` は usage の外に出してある。
   it("main と advisor が同じモデルに解決されたら usage は null(0 ではない)", async () => {
-    const { start, stdout, emitExit, db } = await makeWorker(withAdvisor);
+    const { start, processes, emitExit, db } = await makeWorker(withAdvisor);
     start("task-advisor-same-model");
-    stdout.write(initLine("claude-sonnet-5"));
-    stdout.write(consultation("srvtoolu_01"));
-    stdout.write(
+    processes[0]!.stdout.write(initLine("claude-sonnet-5"));
+    processes[0]!.stdout.write(consultation("srvtoolu_01"));
+    processes[0]!.stdout.write(
       resultLine({
         usage: {
           input_tokens: 4,
@@ -3144,11 +3144,11 @@ describe("advisor capability (issue #33)", () => {
   // {内部 haiku, main, advisor} になりうる(実測)ので、main を引いても1つに
   // 定まらない。名前表もキャッシュ量のヒューリスティックも、黙って外れる形なので採らない。
   it("最終ターンに相談が無ければ解決済み id は残らない — model は null、相談回数は残る", async () => {
-    const { start, stdout, emitExit, db } = await makeWorker(withAdvisor);
+    const { start, processes, emitExit, db } = await makeWorker(withAdvisor);
     start("task-advisor-earlier-turn");
-    stdout.write(initLine("claude-sonnet-5"));
-    stdout.write(consultation("srvtoolu_01"));
-    stdout.write(
+    processes[0]!.stdout.write(initLine("claude-sonnet-5"));
+    processes[0]!.stdout.write(consultation("srvtoolu_01"));
+    processes[0]!.stdout.write(
       resultLine({
         usage: {
           input_tokens: 2,
@@ -3178,11 +3178,11 @@ describe("advisor capability (issue #33)", () => {
   // 観測できなかったセッション(壊れた行・`model` を持たない init)はこの状態に
   // なる。「測れなかった」を誤った値に化けさせない。
   it("main モデルの解決先が観測できていなければ usage は null(分離可否そのものが不明)", async () => {
-    const { start, stdout, emitExit, db } = await makeWorker(withAdvisor);
+    const { start, processes, emitExit, db } = await makeWorker(withAdvisor);
     start("task-advisor-no-init");
     // init 行を一切流さない
-    stdout.write(consultation("srvtoolu_01"));
-    stdout.write(resultLine());
+    processes[0]!.stdout.write(consultation("srvtoolu_01"));
+    processes[0]!.stdout.write(resultLine());
     emitExit(0, null);
     expect(usageOf(db, "task-advisor-no-init")?.advisor).toEqual({
       model: "claude-opus-5",
@@ -3194,11 +3194,11 @@ describe("advisor capability (issue #33)", () => {
   // `modelUsage` を持たない result 行(古い CLI・壊れた行)でも、相談の事実と回数は
   // stream 側から取れている。ここで throw して usage 全体を失わない。
   it("modelUsage を持たない result 行でも相談の事実は失わない", async () => {
-    const { start, stdout, emitExit, db } = await makeWorker(withAdvisor);
+    const { start, processes, emitExit, db } = await makeWorker(withAdvisor);
     start("task-advisor-no-modelusage");
-    stdout.write(initLine("claude-sonnet-5"));
-    stdout.write(consultation("srvtoolu_01"));
-    stdout.write(
+    processes[0]!.stdout.write(initLine("claude-sonnet-5"));
+    processes[0]!.stdout.write(consultation("srvtoolu_01"));
+    processes[0]!.stdout.write(
       `${JSON.stringify({
         type: "result",
         result: "done",
@@ -3226,11 +3226,11 @@ describe("advisor capability (issue #33)", () => {
   // 見分けが付かないので、丸ごと落とす)。既存の advisor 判定(advisorUsage は
   // 別の三項目narrowingのまま)には影響しない。
   it("modelUsage の1エントリが五項目のうち1つでも欠けば usage.models は丸ごと省略される(ADR 0094)", async () => {
-    const { start, stdout, emitExit, db } = await makeWorker(withAdvisor);
+    const { start, processes, emitExit, db } = await makeWorker(withAdvisor);
     start("task-models-malformed-entry");
-    stdout.write(initLine("claude-sonnet-5"));
-    stdout.write(consultation("srvtoolu_01"));
-    stdout.write(
+    processes[0]!.stdout.write(initLine("claude-sonnet-5"));
+    processes[0]!.stdout.write(consultation("srvtoolu_01"));
+    processes[0]!.stdout.write(
       resultLine({
         modelUsage: {
           "claude-sonnet-5": {
@@ -3258,9 +3258,9 @@ describe("advisor capability (issue #33)", () => {
   // null のまま —— `advisor` 欄が生えるのは usage がある行だけであり、欠測が
   // 「advisor なしで走った」に化けない。
   it("stdout が空のまま exit 1 したセッションは usage null のまま(advisor 欄も生えない)", async () => {
-    const { start, stderr, emitExit, db } = await makeWorker(withAdvisor);
+    const { start, processes, emitExit, db } = await makeWorker(withAdvisor);
     start("task-advisor-exit1");
-    stderr.write('Error: The model "haiku" cannot be used as an advisor.\n');
+    processes[0]!.stderr.write('Error: The model "haiku" cannot be used as an advisor.\n');
     emitExit(1, null);
     const exited = listEvents(db, "task-advisor-exit1").find((e) => e.kind === "worker_exited");
     expect(exited!.payload).toMatchObject({
@@ -3432,12 +3432,12 @@ You are Kipper, the tidepool board's Kimi work agent.
     // 401 の帰属は envelope の内容から推測しない — その session がどの provider
     // で spawn されたかという spawn 時の事実で決まる。
     const keyFile = await makeMoonshotKeyFile();
-    const { start, stdout, emitExit, db } = await makeWorker(
+    const { start, processes, emitExit, db } = await makeWorker(
       { "agents/kipper.md": MOONSHOT_AGENT_MD },
       { moonshotApiKeyFile: keyFile },
     );
     start("task-kimi-auth-expired", null, "kipper");
-    stdout.write(`${JSON.stringify({ type: "result", subtype: "error", api_error_status: 401 })}\n`);
+    processes[0]!.stdout.write(`${JSON.stringify({ type: "result", subtype: "error", api_error_status: 401 })}\n`);
 
     emitExit(1, null);
 
@@ -3463,9 +3463,9 @@ describe("上限到達による中断(issue #467 / ADR 0104)", () => {
     listEvents(db, taskId).map((e) => e.kind);
 
   it("429 で exit した session の task は todo の先頭へ戻り slot が解放される — failure question は立たない", async () => {
-    const { start, stdout, emitExit, db, slot } = await makeWorker();
+    const { start, processes, emitExit, db, slot } = await makeWorker();
     const task = start("task-capped");
-    stdout.write(CAP_STREAM);
+    processes[0]!.stdout.write(CAP_STREAM);
 
     emitExit(1, null);
     await vi.waitFor(() => expect(slot.currentTaskId).toBeNull());
@@ -3478,9 +3478,9 @@ describe("上限到達による中断(issue #467 / ADR 0104)", () => {
   });
 
   it("中断の事実を盤面名義の event として worker_exited と並べて刻む(ADR 0104 決定4)", async () => {
-    const { start, stdout, emitExit, db, slot } = await makeWorker();
+    const { start, processes, emitExit, db, slot } = await makeWorker();
     const task = start("task-capped-event");
-    stdout.write(CAP_STREAM);
+    processes[0]!.stdout.write(CAP_STREAM);
 
     emitExit(1, null);
     await vi.waitFor(() => expect(slot.currentTaskId).toBeNull());
@@ -3497,7 +3497,7 @@ describe("上限到達による中断(issue #467 / ADR 0104)", () => {
   });
 
   it("Provider 使用量の観測には書かない — 再開の門は次の pickup の使用量観測である(ADR 0104 決定3)", async () => {
-    const { start, stdout, emitExit, db, slot } = await makeWorker();
+    const { start, processes, emitExit, db, slot } = await makeWorker();
     start("task-capped-throttle");
     // 空の表と比べても「書かなかった」は測れない。直前の pickup が残した観測を
     // 1行置き、それが 429 の後も1文字も動かないことを見る
@@ -3522,7 +3522,7 @@ describe("上限到達による中断(issue #467 / ADR 0104)", () => {
     });
     const before = getProviderUsage(db);
     expect(before[0]?.observedAt).toBe("2026-08-24T13:00:00.000Z");
-    stdout.write(CAP_STREAM);
+    processes[0]!.stdout.write(CAP_STREAM);
 
     emitExit(1, null);
     await vi.waitFor(() => expect(slot.currentTaskId).toBeNull());
@@ -3531,9 +3531,9 @@ describe("上限到達による中断(issue #467 / ADR 0104)", () => {
   });
 
   it("401 の envelope は従来どおり認証 quarantine に落ち、上限到達とは混ざらない", async () => {
-    const { start, stdout, emitExit, db, slot } = await makeWorker();
+    const { start, processes, emitExit, db, slot } = await makeWorker();
     const task = start("task-capped-401");
-    stdout.write(`${JSON.stringify({ type: "result", subtype: "error", api_error_status: 401 })}\n`);
+    processes[0]!.stdout.write(`${JSON.stringify({ type: "result", subtype: "error", api_error_status: 401 })}\n`);
 
     emitExit(1, null);
 
@@ -3550,9 +3550,9 @@ describe("上限到達による中断(issue #467 / ADR 0104)", () => {
   });
 
   it("rate_limit_event を含むだけの正常な session では何も起きない(既存 fixture の回帰)", async () => {
-    const { start, stdout, emitExit, db, slot } = await makeWorker();
+    const { start, processes, emitExit, db, slot } = await makeWorker();
     const task = start("task-not-capped");
-    stdout.write(
+    processes[0]!.stdout.write(
       readFileSync(
         join(import.meta.dirname, "fixtures", "worker-session-2.1.237.stream.jsonl"),
         "utf8",
@@ -3570,7 +3570,7 @@ describe("上限到達による中断(issue #467 / ADR 0104)", () => {
     // 容器が空になる瞬間をテストが握る器。process 境界は makeWorker の既定と
     // 同じ recordingSpawn だが、容器はこちらが差し替えるので stdout / exit も
     // この recorder から撃つ。
-    const { spawn, stdout, emitExit } = recordingSpawn();
+    const { spawn, processes, emitExit } = recordingSpawn();
     const runtime = new FakeContainerRuntime(spawn);
     const ws = await makeWorkspace([], "cap-ws");
     const { start, db, slot } = await makeWorker(
@@ -3588,7 +3588,7 @@ describe("上限到達による中断(issue #467 / ADR 0104)", () => {
     await prepareWorkspaceAtPickup(db, ws, task, {});
     // 途中ターンの WIP: session はタスクブランチの上で作業していた
     writeFileSync(join(ws.path, "wip.txt"), "half-done work\n");
-    stdout.write(CAP_STREAM);
+    processes[0]!.stdout.write(CAP_STREAM);
 
     emitExit(1, null);
     expect(sessionInTeardown(db)).toEqual({

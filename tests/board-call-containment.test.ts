@@ -35,7 +35,7 @@ async function unreclaimedSkillEnumeration() {
   await vi.waitFor(() => expect(recorder.calls).toHaveLength(1));
   const container = runtime.created[0]!;
   runtime.hold(container);
-  recorder.stdout.write(`${JSON.stringify({ type: "system", subtype: "init", skills: ["tdd"] })}\n`);
+  recorder.processes[0]!.stdout.write(`${JSON.stringify({ type: "system", subtype: "init", skills: ["tdd"] })}\n`);
   await settle();
   recorder.emitExit(0, null);
 

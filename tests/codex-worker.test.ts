@@ -3,11 +3,9 @@ import { readFileSync } from "node:fs";
 import { mkdir, mkdtemp, realpath, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   CODEX_FEATURE_SNAPSHOT,
-  type CodexSpawnFn,
   CodexWorker,
   createCodexCapabilityCheck,
   resolveCodexExecutable,
@@ -19,7 +17,7 @@ import { buildMemoryInjection, recordKnowledge } from "../src/memory.js";
 import { openQuarantineValues } from "../src/quarantine.js";
 import { loadRegistry } from "../src/registry.js";
 import { registerTask, type Task } from "../src/tasks.js";
-import { containerHarness, FakeClock, passthroughContainers, recordingSpawn as recordingProcesses } from "./fakes.js";
+import { containerHarness, FakeClock, passthroughContainers, recordingSpawn } from "./fakes.js";
 import { bootTidepool, mcpClient, type Tidepool } from "./harness.js";
 import { makeRegistry } from "./registry-fixture.js";
 
@@ -49,36 +47,6 @@ function metaReviewTask(db: ReturnType<typeof openDb>) {
     completion_criteria: "the store is reviewed",
     meta_review_subject: "memory",
   }, new Date("2026-08-24T00:00:00.000Z"));
-}
-
-function recordingSpawn() {
-  const calls: Array<{ command: string; args: string[]; cwd: string; env: NodeJS.ProcessEnv }> = [];
-  const stdout = new PassThrough();
-  const stderr = new PassThrough();
-  const killed: NodeJS.Signals[] = [];
-  const exits: Array<(code: number | null, signal: NodeJS.Signals | null) => void> = [];
-  const errors: Array<(error: Error) => void> = [];
-  const spawn: CodexSpawnFn = (command, args, options) => {
-    calls.push({ command, args, ...options });
-    return {
-      stdout,
-      stderr,
-      kill: (signal) => killed.push(signal),
-      on(event, listener) {
-        if (event === "exit") exits.push(listener as (code: number | null, signal: NodeJS.Signals | null) => void);
-        else errors.push(listener as (error: Error) => void);
-      },
-    };
-  };
-  return {
-    calls,
-    stdout,
-    stderr,
-    killed,
-    spawn,
-    exit: (code: number | null, signal: NodeJS.Signals | null) => exits.forEach((fn) => fn(code, signal)),
-    error: (error: Error) => errors.forEach((fn) => fn(error)),
-  };
 }
 
 /** `-c <prefix><値>` を読む。値は toml() = JSON.stringify なので JSON.parse で戻す。 */
@@ -238,6 +206,24 @@ describe("CodexWorker (ADR 0098)", () => {
     expect(config).toContain('permissions.tidepool-review.network={"enabled"=true,"domains"={"api.github.com"="allow","127.0.0.1"="allow"}');
   });
 
+  it("work task の filesystem 表は workspace の .git を write、.git/hooks と .git/config を read にし、review task の表には .git の行が無い(issue #849 / ADR 0033)", async () => {
+    const f = await fixture();
+    f.start(task(f.db));
+    f.start(registerTask(
+      f.db,
+      { type: "review", assignee: "codex-agent", workspace: "work", title: "codex-review", purpose: "read the diff", completion_criteria: "findings are filed" },
+      new Date("2026-08-24T00:00:00.000Z"),
+    ));
+
+    const filesystem = (args: string[], name: string) =>
+      args.find((arg, index) => args[index - 1] === "-c" && arg.startsWith(`permissions.${name}.filesystem=`))!;
+    const work = filesystem(f.process.calls[0]!.args, "tidepool-work");
+    expect(work).toContain(`${JSON.stringify(join(f.workspace, ".git"))}="write"`);
+    expect(work).toContain(`${JSON.stringify(join(f.workspace, ".git", "hooks"))}="read"`);
+    expect(work).toContain(`${JSON.stringify(join(f.workspace, ".git", "config"))}="read"`);
+    expect(filesystem(f.process.calls[1]!.args, "tidepool-review")).not.toContain(join(f.workspace, ".git"));
+  });
+
   it("preflight の app-server が読む設定のキーは、work / review とも同じ種別の spawn のキーと一致する(ADR 0142 決定2・3)", async () => {
     const f = await fixture();
     f.start(task(f.db));
@@ -248,7 +234,7 @@ describe("CodexWorker (ADR 0098)", () => {
     ));
 
     // preflight を --version・prompt-input・features list・sandbox 2本・hooks/list と通し、7本目の review 呼び出しまで進める
-    const preflight = recordingProcesses();
+    const preflight = recordingSpawn();
     const capability = createCodexCapabilityCheck({
       executable: "/opt/tidepool/bin/codex",
       codexHome: f.codexHome,
@@ -258,8 +244,8 @@ describe("CodexWorker (ADR 0098)", () => {
     })();
     for (const i of [0, 1, 2, 3, 4, 5]) {
       await vi.waitFor(() => expect(preflight.calls).toHaveLength(i + 1));
-      if (i === 1) preflight.stdout.write("[]");
-      if (i === 5) preflight.stdout.write('{"id":1,"result":{}}\n{"id":2,"result":{"data":[]}}\n');
+      if (i === 1) preflight.processes[1]!.stdout.write("[]");
+      if (i === 5) preflight.processes[5]!.stdout.write('{"id":1,"result":{}}\n{"id":2,"result":{"data":[]}}\n');
       preflight.emitExitAt(i, 0, null);
     }
     await vi.waitFor(() => expect(preflight.calls).toHaveLength(7));
@@ -447,8 +433,8 @@ describe("CodexWorker (ADR 0098)", () => {
     f.start(value);
 
     const jsonl = readFileSync(new URL("fixtures/codex-success.jsonl", import.meta.url), "utf8");
-    f.process.stdout.write(jsonl);
-    f.process.exit(0, null);
+    f.process.processes[0]!.stdout.write(jsonl);
+    f.process.emitExit(0, null);
 
     const exited = listEvents(f.db, value.id).find((event) => event.kind === "worker_exited");
     expect(exited?.payload).toMatchObject({
@@ -474,10 +460,10 @@ describe("CodexWorker (ADR 0098)", () => {
     const f = await fixture();
     const value = task(f.db, "codex-auth");
     f.start(value);
-    f.process.stdout.write(
+    f.process.processes[0]!.stdout.write(
       readFileSync(new URL("fixtures/codex-auth-failure.jsonl", import.meta.url), "utf8"),
     );
-    f.process.exit(1, null);
+    f.process.emitExit(1, null);
 
     expect(openQuarantineValues(f.db, "providerAuth")).toEqual([]);
     expect(listEvents(f.db, value.id).find((event) => event.kind === "worker_exited")?.payload).toMatchObject({
@@ -495,8 +481,8 @@ describe("CodexWorker (ADR 0098)", () => {
       const f = await fixture();
       const value = task(f.db, id);
       f.start(value);
-      f.process.stderr.write(stderr);
-      f.process.exit(code, null);
+      f.process.processes[0]!.stderr.write(stderr);
+      f.process.emitExit(code, null);
 
       expect(listEvents(f.db, value.id).find((event) => event.kind === "worker_exited")?.payload).toMatchObject({
         kind: "worker_exited",
@@ -514,10 +500,10 @@ describe("CodexWorker (ADR 0098)", () => {
     const value = task(f.db, "codex-spawn-enoent");
     f.start(value);
 
-    f.process.error(Object.assign(new Error("kill EPERM"), { code: "EPERM", syscall: "kill" }));
+    f.process.emitError(Object.assign(new Error("kill EPERM"), { code: "EPERM", syscall: "kill" }));
     expect(calls).toEqual([]);
     expect(listEvents(f.db, value.id).some((e) => e.kind === "spawn_failed")).toBe(false);
-    f.process.error(Object.assign(new Error("spawn codex ENOENT"), { code: "ENOENT", syscall: "spawn codex" }));
+    f.process.emitError(Object.assign(new Error("spawn codex ENOENT"), { code: "ENOENT", syscall: "spawn codex" }));
     expect(calls).toEqual([[value.id, { error_code: "ENOENT", message: "spawn codex ENOENT" }]]);
   });
 
@@ -527,7 +513,7 @@ describe("CodexWorker (ADR 0098)", () => {
     f.start(value);
 
     f.worker.gracefulStop(value.id);
-    f.process.exit(null, "SIGINT");
+    f.process.emitExit(null, "SIGINT");
 
     // 畳み込み停止の SIGINT のあと、root の exit を観測した盤面が容器を強制回収する
     // (ADR 0109 決定4)。passthrough の器ではそれが既に終わった子への SIGKILL に

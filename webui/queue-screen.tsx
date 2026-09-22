@@ -288,7 +288,7 @@ function QueueScreen({ data, paused, onTogglePause, spendDown, onSpendDown, onFr
             <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>{t.id}</span>
             <span style={{ flex: 1, fontSize: 'var(--text-sm)', fontWeight: 500, color: 'var(--text-heading)' }}>{t.title}</span>
             {t.blocking && <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--sun-4)' }}>blocks {t.blocking}</span>}
-            <Button variant="secondary" size="sm" onClick={() => onDoneHuman(t.id)}>Done</Button>
+            <Button variant="secondary" size="sm" onClick={() => onDoneHuman(t.id)} aria-label={`done ${t.id}`}>Done</Button>
           </Card>
         ))}
       </div>

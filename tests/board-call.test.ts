@@ -44,9 +44,10 @@ function setup() {
   });
   const spawned = (n: number) => vi.waitFor(() => expect(spawns.length).toBe(n));
   /** stdout に1行流して、reader がそれを受け取るまで待つ(PassThrough の data は
-   *  次の tick で届くので、書いた直後に exit を撃つと読み落とす)。 */
+   *  次の tick で届くので、書いた直後に exit を撃つと読み落とす)。呼び手は常に
+   *  1本目の process だけが動いている状態で使う。 */
   const say = async (text: string) => {
-    recorder.stdout.write(text);
+    recorder.processes[0]!.stdout.write(text);
     await new Promise((resolve) => setImmediate(resolve));
   };
   return { ...recorder, spawns, clock, runtime, containers, calls, quarantined, spawned, say };
@@ -221,7 +222,7 @@ it("stdin は既定で閉じており、opt-in した呼び出しだけが開け
   });
   await t.spawned(2);
   expect(t.spawns[1]!.stdin).toBe("pipe");
-  expect(t.stdin.read()?.toString()).toBe("request\n");
+  expect(t.processes[1]!.stdin.read()?.toString()).toBe("request\n");
   t.emitExitAt(1, 0, null);
   expect(await piped).toBe("written");
 });

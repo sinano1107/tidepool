@@ -72,3 +72,34 @@ test("表の行を消す・価格を直す・行を足すのが1回の保存で�
     price_out: 2,
   });
 });
+
+test("表の行ごとに Remove の aria-label が一意で、model が空の新規行でも壊れない(#861)", async ({
+  boot,
+  page,
+}) => {
+  const t = await boot();
+  await openBoardSettings(page, t.baseUrl);
+
+  const card = page.getByTestId("execution-table");
+  await card.getByRole("button", { name: "Edit" }).click();
+
+  // 種の表だけで既に複数行 — 行ごとに一意な名前で exact match が1件に絞れる
+  const removeSonnet = card.getByRole("button", { name: "remove anthropic economy sonnet", exact: true });
+  const removeKimi = card.getByRole("button", { name: "remove moonshot economy kimi-k3[1m]", exact: true });
+  await expect(removeSonnet).toHaveCount(1);
+  await expect(removeKimi).toHaveCount(1);
+
+  // 新規行は model が未入力 — 末尾の余分な空白なしで名前が成立する
+  await card.getByRole("button", { name: "Add row" }).click();
+  const added = card.getByTestId("execution-row-new");
+  await added.getByLabel("Provider").selectOption("openai");
+  await added.getByLabel("Tier").selectOption("economy");
+  const removeNew = card.getByRole("button", { name: "remove openai economy", exact: true });
+  await expect(removeNew).toHaveCount(1);
+
+  // クリックすると自分の行だけが消える — 他の行を巻き込まない
+  await removeNew.click();
+  await expect(card.getByTestId("execution-row-new")).toHaveCount(0);
+  await expect(removeSonnet).toHaveCount(1);
+  await expect(removeKimi).toHaveCount(1);
+});

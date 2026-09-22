@@ -859,14 +859,20 @@ export interface SpawnCall {
   env: NodeJS.ProcessEnv;
   stdin?: "pipe";
 }
+/** spawn 1本ぶんの stdio。`stdin` は `stdin: "pipe"` で起こしたかに関わらず常にある
+ *  —— `stdin: "pipe"` のときだけ持つ `ContainedProcess.stdin` とはここが違う。 */
+export interface RecordedProcess {
+  stdout: PassThrough;
+  stderr: PassThrough;
+  stdin: PassThrough;
+}
 /** Scripted stand-in at the process boundary: records the spawn recipe.
- *  容器の中で走る process の代わりで、stdout / exit / error をテストが撃つ。 */
+ *  容器の中で走る process の代わりで、stdout / exit / error をテストが撃つ。spawn の
+ *  たびに新しい stdio を作る —— process ごとの答えは `processes[i]` で個別に読み書き
+ *  する。 */
 export function recordingSpawn() {
   const calls: SpawnCall[] = [];
-  const stdout = new PassThrough();
-  const stderr = new PassThrough();
-  /** `stdin: "pipe"` で起こした process が書いた先。 */
-  const stdin = new PassThrough();
+  const processes: RecordedProcess[] = [];
   const killed: NodeJS.Signals[] = [];
   const exitListeners: Array<
     Array<(code: number | null, signal: NodeJS.Signals | null) => void>
@@ -874,14 +880,14 @@ export function recordingSpawn() {
   const errorListeners: Array<(err: Error) => void> = [];
   const spawn: ContainerSpawn = (command, args, opts) => {
     calls.push({ command, args, cwd: opts.cwd, env: opts.env, ...(opts.stdin && { stdin: opts.stdin }) });
+    const io: RecordedProcess = { stdout: new PassThrough(), stderr: new PassThrough(), stdin: new PassThrough() };
+    processes.push(io);
     const processExitListeners: Array<
       (code: number | null, signal: NodeJS.Signals | null) => void
     > = [];
     exitListeners.push(processExitListeners);
     return {
-      stdout,
-      stderr,
-      stdin,
+      ...io,
       kill: (signal) => killed.push(signal),
       on: (
         event: "exit" | "error",
@@ -909,5 +915,5 @@ export function recordingSpawn() {
   const emitError = (err: Error) => {
     for (const listener of errorListeners) listener(err);
   };
-  return { calls, stdout, stderr, stdin, killed, spawn, emitExit, emitExitAt, emitError };
+  return { calls, processes, killed, spawn, emitExit, emitExitAt, emitError };
 }
