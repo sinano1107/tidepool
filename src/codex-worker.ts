@@ -658,7 +658,8 @@ export function observedDeveloperMarkers(promptInput: string): string[] {
 
 /** ADR 0148 決定2: `codex debug prompt-input` の出力から、**user role の item に属する
  *  AGENTS.md の層**(`# AGENTS.md instructions` で始まる part)を集める。global の形も
- *  project の形(`… for <path>`)も同じ接頭辞なので、ファイル名を知らずに層ごと捕まえる。 */
+ *  project の形(`… for <path>`)も同じ接頭辞なので、ファイル名を知らずに層ごと捕まえる。
+ *  写すのは見出し行だけ —— 本文は Quarantine の理由文では読めず、出どころは見出しで足りる。 */
 export function observedAgentsMdLayer(promptInput: string): string[] {
   const messages = JSON.parse(promptInput) as Array<{
     role?: string;
@@ -668,7 +669,8 @@ export function observedAgentsMdLayer(promptInput: string): string[] {
     .filter((message) => message.role === "user")
     .flatMap((message) => message.content ?? [])
     .map((part) => part.text ?? "")
-    .filter((text) => text.startsWith("# AGENTS.md instructions"));
+    .filter((text) => text.startsWith("# AGENTS.md instructions"))
+    .map((text) => text.split("\n", 1)[0]!);
 }
 
 /** 盤面が渡した hook を Codex が実際に**登録**したかを、使用量 probe と同じ app-server 面の
