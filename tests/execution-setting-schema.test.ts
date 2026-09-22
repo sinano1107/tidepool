@@ -1,9 +1,8 @@
-import { mkdtemp } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, it } from "vitest";
 import { openDb } from "../src/db.js";
 import { resolveExecutionSetting, SEED_EXECUTION_SETTINGS } from "../src/execution-setting.js";
+import { tempDir } from "./harness.js";
 
 /** 表を読む口は production の呼び手(`resolveExecutionSetting`)しかない
  *  (ADR 0107 決定5)。schema 層のテストは行を SQL で直に言い、読めていることは
@@ -11,7 +10,7 @@ import { resolveExecutionSetting, SEED_EXECUTION_SETTINGS } from "../src/executi
 const deckhand = { provider: [{ name: "anthropic", advisor: false }], tier: undefined };
 
 async function boardPath(name: string): Promise<string> {
-  return join(await mkdtemp(join(tmpdir(), `tidepool-${name}-`)), "board.sqlite");
+  return join(await tempDir(`tidepool-${name}-`), "board.sqlite");
 }
 
 it("実行設定の表は種の7行から DB へ初期化される —— 価格2列つきのモデル分類の行で、moonshot は economy の1行(ADR 0110 決定3 / ADR 0114 決定2)", async () => {

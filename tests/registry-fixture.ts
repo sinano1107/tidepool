@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SKILL_WILDCARD } from "../src/registry.js";
 import { AUTHORITY_WILDCARD } from "../src/tasks.js";
+import { tempDir } from "./harness.js";
 
 const AGENT_MD = `---
 name: deckhand
@@ -132,13 +133,18 @@ tidepool:
 `,
 };
 
-/** Build a minimal valid registry clone: one agent, one authority profile,
- *  one workspace, committed so it has a HEAD. */
-export async function makeRegistry(
-  files: Record<string, string> = {},
-  defaults: Record<string, string> = DEFAULT_REGISTRY_FILES,
+/** Writes `files` (over `defaults`) into an already-created `dir` and commits
+ *  them as its one commit — the population half of `makeRegistry`, split out
+ *  so `makePreviewRegistry` can drive it over a dir with its own lifecycle
+ *  (issue #703: `makeRegistry` self-cleans via `tempDir`/`onTestFinished`,
+ *  which only fires inside a vitest test — `makePreviewRegistry` runs from
+ *  `scripts/preview-settings.ts`, outside vitest, and keeps owning its own
+ *  dir via `tests/preview.ts`'s explicit `rm`). */
+async function populateRegistry(
+  dir: string,
+  files: Record<string, string>,
+  defaults: Record<string, string>,
 ): Promise<string> {
-  const dir = await mkdtemp(join(tmpdir(), "tidepool-registry-"));
   const contents: Record<string, string> = {
     ...defaults,
     ...files,
@@ -162,6 +168,16 @@ export async function makeRegistry(
   return dir;
 }
 
+/** Build a minimal valid registry clone: one agent, one authority profile,
+ *  one workspace, committed so it has a HEAD. */
+export async function makeRegistry(
+  files: Record<string, string> = {},
+  defaults: Record<string, string> = DEFAULT_REGISTRY_FILES,
+): Promise<string> {
+  const dir = await tempDir("tidepool-registry-");
+  return populateRegistry(dir, files, defaults);
+}
+
 /** ADR 0052 の remote-backed 盤面の fixture: bare な origin を持ち、`main` を
  *  push 済みの registry clone と、そこへ**人間の merge を模して**書き込むための
  *  publisher clone を返す。
@@ -178,8 +194,8 @@ export async function makeRemoteBackedRegistry(): Promise<{
   publish: (path: string, body: string, message: string) => string;
 }> {
   const registryDir = await makeRegistry();
-  const remote = await mkdtemp(join(tmpdir(), "tidepool-registry-remote-"));
-  const publisher = await mkdtemp(join(tmpdir(), "tidepool-registry-publisher-"));
+  const remote = await tempDir("tidepool-registry-remote-");
+  const publisher = await tempDir("tidepool-registry-publisher-");
   // stderr は piped: push / clone の進捗は成否に関係なく stderr へ出るので、
   // 素通しするとテスト出力が git のノイズで埋まる(registry.ts の GIT_STDIO と同じ規律)
   const git = (cwd: string, ...args: string[]) =>
@@ -203,7 +219,13 @@ export async function makeRemoteBackedRegistry(): Promise<{
   };
 }
 
-/** A realistic registry for a human authoring preview, rebuilt for every run. */
+/** A realistic registry for a human authoring preview, rebuilt for every run.
+ *  Deliberately does not go through `makeRegistry`: its only caller,
+ *  `tests/preview.ts`'s `bootPreview`, runs from a plain script
+ *  (`scripts/preview-settings.ts`, outside vitest) and owns this dir's
+ *  cleanup itself via an explicit `rm` — `tempDir`'s `onTestFinished` would
+ *  throw there for having no test to hook into. */
 export async function makePreviewRegistry(): Promise<string> {
-  return makeRegistry(PREVIEW_REGISTRY_FILES, {});
+  const dir = await mkdtemp(join(tmpdir(), "tidepool-registry-"));
+  return populateRegistry(dir, PREVIEW_REGISTRY_FILES, {});
 }

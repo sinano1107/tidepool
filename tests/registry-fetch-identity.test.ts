@@ -1,12 +1,11 @@
 import { execFileSync } from "node:child_process";
 import { chmodSync, readFileSync, writeFileSync } from "node:fs";
-import { mkdtemp } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { GitHubAuth } from "../src/github-auth.js";
 import { refreshRegistry } from "../src/registry.js";
 import { type BrokerAnswer, type FakeBroker, issuedToken, startFakeBroker } from "./fake-broker.js";
+import { tempDir } from "./harness.js";
 import { makeRemoteBackedRegistry } from "./registry-fixture.js";
 
 /** 本物の `git` を PATH で差し替えて、盤面が実際に渡した argv と env を捕まえる。
@@ -16,10 +15,10 @@ import { makeRemoteBackedRegistry } from "./registry-fixture.js";
  *  **成功してしまう**。したがって「Pi で通った」は合格の証拠にならず、証明できるのは
  *  「盤面がどの名義で撃ったか」を直接見ることだけである。 */
 async function gitShim(): Promise<{ cwd: string; record: string; restore: () => void }> {
-  const dir = await mkdtemp(join(tmpdir(), "tidepool-git-shim-"));
+  const dir = await tempDir("tidepool-git-shim-");
   // git は実在する cwd でしか起動できない: 観測したいのは argv と env なので
   // registry の中身は要らず、空のディレクトリで足りる
-  const cwd = await mkdtemp(join(tmpdir(), "tidepool-git-shim-cwd-"));
+  const cwd = await tempDir("tidepool-git-shim-cwd-");
   const record = join(dir, "record.txt");
   writeFileSync(record, "");
   // `git config remote.origin.url` は盤面が「どの repo 宛ての installation token
@@ -79,7 +78,7 @@ async function openBroker(reply: () => BrokerAnswer): Promise<FakeBroker> {
 }
 
 async function tokenFile(token: string): Promise<string> {
-  const dir = await mkdtemp(join(tmpdir(), "tidepool-secrets-"));
+  const dir = await tempDir("tidepool-secrets-");
   const file = join(dir, "token");
   writeFileSync(file, `${token}\n`);
   chmodSync(file, 0o600);

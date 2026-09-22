@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { onTestFinished } from "vitest";
 import { quarantineAgent } from "../src/agent.js";
 import type { AgentAdmin } from "../src/agent-create.js";
 import type { AllocationClient } from "../src/allocation-review.js";
@@ -441,6 +442,17 @@ export function commitWork(path: string, file: string, body: string): void {
  *  着地も PR も測れない。 */
 export function addTaskChange(path: string, taskId: string): void {
   commitWork(path, `${taskId}.txt`, "finished\n");
+}
+
+/** A fresh temp dir under the given `prefix`, self-cleaning at the end of the
+ *  calling test via vitest's `onTestFinished` (issue #703) — no `dirs` array,
+ *  no `afterEach`. Calling this outside a test (`beforeAll`, module top
+ *  level) throws, by `onTestFinished`'s own contract; that is accepted as
+ *  misuse detection rather than guarded against here. */
+export async function tempDir(prefix: string): Promise<string> {
+  const dir = await mkdtemp(join(tmpdir(), prefix));
+  onTestFinished(() => rm(dir, { recursive: true, force: true }));
+  return dir;
 }
 
 /** A fresh temp git checkout named `name`, one commit deep. The path is

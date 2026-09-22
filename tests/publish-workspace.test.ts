@@ -1,6 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { chmod, mkdtemp, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { chmod, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { GitHubAuth } from "../src/github-auth.js";
@@ -15,6 +14,7 @@ import {
 } from "../src/workspace-create.js";
 import { type FakeBroker, issuedToken, startFakeBroker } from "./fake-broker.js";
 import { FakeGitHubClient } from "./fakes.js";
+import { tempDir } from "./harness.js";
 import { makeRegistry } from "./registry-fixture.js";
 
 function git(cwd: string, ...args: string[]): string {
@@ -38,7 +38,7 @@ afterEach(async () => {
 });
 
 async function makeGitHubAuth(): Promise<GitHubAuth> {
-  const dir = await mkdtemp(join(tmpdir(), "tidepool-token-"));
+  const dir = await tempDir("tidepool-token-");
   const file = join(dir, "token");
   await writeFile(file, "gho_test\n");
   await chmod(file, 0o600);
@@ -57,7 +57,7 @@ async function makeBoard(entries?: string): Promise<{
   };
   checkout: string;
 }> {
-  const checkout = await mkdtemp(join(tmpdir(), "tidepool-sandbox-"));
+  const checkout = await tempDir("tidepool-sandbox-");
   git(checkout, "init", "-b", "main");
   await writeFile(join(checkout, "README.md"), "sandbox\n");
   git(checkout, "add", "-A");
@@ -73,7 +73,7 @@ async function makeBoard(entries?: string): Promise<{
     registryDir,
     deps: {
       registry: { dir: registryDir, mode: "purely-local" as const },
-      workspacesBaseDir: await mkdtemp(join(tmpdir(), "tidepool-ws-base-")),
+      workspacesBaseDir: await tempDir("tidepool-ws-base-"),
       githubAuth: await makeGitHubAuth(),
     },
     checkout,
@@ -83,14 +83,14 @@ async function makeBoard(entries?: string): Promise<{
 /** 人間が用意する宛先(ADR 0066 決定2): 盤面は repo を作らないので、テストでも
  *  空の bare repo を先に置く。 */
 async function makeDestination(): Promise<string> {
-  const dir = await mkdtemp(join(tmpdir(), "tidepool-dest-"));
+  const dir = await tempDir("tidepool-dest-");
   git(dir, "init", "--bare", "-b", "main");
   return dir;
 }
 
 /** GitHub UI の「Add a README」を模す: 宛先の `main` に無関係な履歴を1つ置く。 */
 async function seedDestination(dest: string): Promise<void> {
-  const seed = await mkdtemp(join(tmpdir(), "tidepool-seed-"));
+  const seed = await tempDir("tidepool-seed-");
   git(seed, "init", "-b", "main");
   await writeFile(join(seed, "README.md"), "# added from the GitHub UI\n");
   git(seed, "add", "-A");
@@ -235,7 +235,7 @@ describe("publishWorkspace: 4つの拒否(ADR 0066 決定5 / issue #285)", () =>
   it("既に remote-backed な workspace は拒否され、痕跡を残さない", async () => {
     const { registryDir, deps, checkout } = await makeBoard(
       `sandbox:
-  path: ${await mkdtemp(join(tmpdir(), "tidepool-unused-"))}
+  path: ${await tempDir("tidepool-unused-")}
   repo: https://github.com/sinano1107/sandbox.git
 `,
     );

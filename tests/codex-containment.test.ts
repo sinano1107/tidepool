@@ -1,6 +1,4 @@
-import { mkdtempSync, readFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { readFileSync } from "node:fs";
 import { afterEach, expect, it, vi } from "vitest";
 import {
   CODEX_CLI_VERSION,
@@ -30,7 +28,7 @@ import {
   recordingSpawn,
   unusedLanding,
 } from "./fakes.js";
-import { api, bootTidepool, registerWork, type Tidepool } from "./harness.js";
+import { api, bootTidepool, registerWork, type Tidepool, tempDir } from "./harness.js";
 
 let t: Tidepool;
 afterEach(() => t?.stop());
@@ -64,7 +62,7 @@ it("preflight は Board call の口を通り、口が答えを返さなければ
   const capability = createCodexCapabilityCheck({
     executable: "/opt/tidepool/bin/codex",
     codexHome: "/nonexistent/codex-home",
-    workspace: mkdtempSync(join(tmpdir(), "tidepool-codex-preflight-ws-")),
+    workspace: await tempDir("tidepool-codex-preflight-ws-"),
     allowedDomains: [],
     call: boardCall,
   })();
@@ -85,7 +83,7 @@ it("workspace を cwd にする preflight の呼び出しは、容器が空に�
   const runtime = new FakeContainerRuntime(spawn.spawn);
   const clock = new FakeClock();
   const { boardCall } = containerHarness(new ProcessContainers(runtime), clock);
-  const workspace = mkdtempSync(join(tmpdir(), "tidepool-codex-preflight-ws-"));
+  const workspace = await tempDir("tidepool-codex-preflight-ws-");
   const capability = createCodexCapabilityCheck({
     executable: "/opt/tidepool/bin/codex",
     codexHome: "/nonexistent/codex-home",
@@ -115,7 +113,7 @@ it("preflight の permission probe は workspace の allowed_domains を network
   const capability = createCodexCapabilityCheck({
     executable: "/opt/tidepool/bin/codex",
     codexHome: "/nonexistent/codex-home",
-    workspace: mkdtempSync(join(tmpdir(), "tidepool-codex-preflight-ws-")),
+    workspace: await tempDir("tidepool-codex-preflight-ws-"),
     allowedDomains: ["registry.npmjs.org"],
     call: boardCall,
   })();
@@ -138,8 +136,8 @@ async function preflightToWorkAppServer() {
   const { boardCall } = containerHarness(passthroughContainers(spawn.spawn));
   const capability = createCodexCapabilityCheck({
     executable: "/opt/tidepool/bin/codex",
-    codexHome: mkdtempSync(join(tmpdir(), "tidepool-codex-home-")),
-    workspace: mkdtempSync(join(tmpdir(), "tidepool-codex-preflight-ws-")),
+    codexHome: await tempDir("tidepool-codex-home-"),
+    workspace: await tempDir("tidepool-codex-preflight-ws-"),
     allowedDomains: [],
     call: boardCall,
   })();
