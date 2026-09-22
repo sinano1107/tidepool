@@ -150,10 +150,6 @@ export class UnknownWorkspaceError extends Error {
   }
 }
 
-/** ADR 0146: `.git` が存在してディレクトリでない checkout(linked worktree・submodule)は
- *  workspace にならない。判定は stat の形だけで git を通さない。`.git` が無いパスは
- *  何もしない —— 今日どおり git 側の失敗で落ちる。pickup・修理確認・登録の3つの門が
- *  この1つを共有する。 */
 export class GitDirNotADirectoryError extends Error {
   constructor(path: string) {
     super(`${join(path, ".git")} is not a directory — linked worktrees and submodules cannot be workspaces`);
@@ -161,6 +157,10 @@ export class GitDirNotADirectoryError extends Error {
   }
 }
 
+/** ADR 0146: `.git` が存在してディレクトリでない checkout(linked worktree・submodule)は
+ *  workspace にならない。判定は stat の形だけで git を通さない。`.git` が無いパスは
+ *  何もしない —— 今日どおり git 側の失敗で落ちる。pickup・修理確認・登録の3つの門が
+ *  この1つを共有する。 */
 export function assertGitDirIsDirectory(path: string): void {
   const stat = statSync(join(path, ".git"), { throwIfNoEntry: false });
   if (stat && !stat.isDirectory()) throw new GitDirNotADirectoryError(path);
