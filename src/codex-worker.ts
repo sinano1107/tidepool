@@ -275,7 +275,8 @@ export interface CodexWorkerOptions {
   executable: string;
   /** Board-owned worker-session container supervisor (ADR 0099). */
   containers: ProcessContainers;
-  /** Codex の system config のディレクトリ(vendor の Unix 既定 `/etc/codex`)。テストで差し替える。 */
+  /** Codex の system config のディレクトリ。既定は vendor の Unix 既定 `/etc/codex`
+   *  (`codex-rs/config/src/loader/mod.rs:55`、rust-v0.147.0)。テストで差し替える。 */
   codexSystemDir?: string;
   boardState?: BoardStatePath[];
   /** ADR 0118: `spawn()` が失敗した pickup を受ける盤面側の一撃(`spawnFailureHandler` 製)。 */
@@ -516,25 +517,25 @@ function hookConfig(hook: string): string[] {
 }
 
 function skillConfig(codexHome: string, workspace: string, codexSystemDir = "/etc/codex"): string {
-  const paths = SYSTEM_SKILLS.map((name) =>
-    join(codexHome, "skills", ".system", name, "SKILL.md")
-  );
+  const userSkills = join(codexHome, "skills");
+  const paths = SYSTEM_SKILLS.map((name) => join(userSkills, ".system", name, "SKILL.md"));
   // ADR 0147 決定3: pin した Codex が探索する root はすべて閉じる —— 漏れた skill を user config が
   // disable すると probe だけが見失い、fail-open になる。`$CODEX_HOME/skills/.system` は上で名指ししているので除く
   for (const root of [
     join(workspace, ".agents", "skills"),
     join(workspace, ".codex", "skills"),
     join(homedir(), ".agents", "skills"),
-    join(codexHome, "skills"),
+    userSkills,
     join(codexSystemDir, "skills"),
   ]) {
     try {
       for (const entry of readdirSync(root, { withFileTypes: true })) {
-        const dir = join(root, entry.name);
-        if (entry.isDirectory() && dir !== join(codexHome, "skills", ".system")) paths.push(join(dir, "SKILL.md"));
+        if (entry.isDirectory() && !(root === userSkills && entry.name === ".system")) {
+          paths.push(join(root, entry.name, "SKILL.md"));
+        }
       }
     } catch {
-      // A workspace need not declare skills.
+      // 無い root は何も足さない —— workspace も codexHome も system config も skill を持たなくてよい
     }
   }
   return `skills.config=[${paths.map((path) => `{path=${toml(path)},enabled=false}`).join(",")}]`;

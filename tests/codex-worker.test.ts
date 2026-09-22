@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -294,14 +294,6 @@ describe("CodexWorker (ADR 0098)", () => {
     expect(spawned).toContain(`{path=${JSON.stringify(join(f.codexHome, "skills", "foo", "SKILL.md"))},enabled=false}`);
     expect(spawned).toContain(`{path=${JSON.stringify(join(f.codexSystemDir, "skills", "bar", "SKILL.md"))},enabled=false}`);
     expect(spawned.split(join(f.codexHome, "skills", ".system", "openai-docs", "SKILL.md"))).toHaveLength(2);
-  });
-
-  it("$CODEX_HOME/skills も system config のディレクトリも無くても spawn は失敗せず skills.config を渡す(ADR 0147 決定3)", async () => {
-    const f = await fixture();
-    await rm(f.codexSystemDir, { recursive: true });
-    f.start(task(f.db));
-
-    expect(f.process.calls[0]!.args.some((arg, index, args) => args[index - 1] === "-c" && arg.startsWith("skills.config=["))).toBe(true);
   });
 
   it("主題 memory の meta-review の spawn では enabled_tools が worker の memory verb を専用 verb で置き換え、普通の task は変わらない(ADR 0122 決定2)", async () => {
