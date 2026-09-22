@@ -9,7 +9,8 @@ import {
   evaluateAndReportProviderUsage,
   reportProviderUsage,
 } from "../src/throttle.js";
-import { api, bootTidepool, type Tidepool } from "./harness.js";
+import { usagePanelText } from "./fakes.js";
+import { api, bootTidepool, HOUR, queueWork, type Tidepool } from "./harness.js";
 
 let t: Tidepool | undefined;
 
@@ -124,7 +125,7 @@ it("既知の組(anthropic × session / week / fable、openai × primary / secon
   }
 });
 
-it("既知の5つの組の pace offset は保存され、anthropic の session / week / fable は旧 pace-offsets へ写る", async () => {
+it("既知の5つの組の pace offset は保存され、一覧に反映される", async () => {
   t = await bootTidepool();
 
   const pairs = [
@@ -138,7 +139,79 @@ it("既知の5つの組の pace offset は保存され、anthropic の session /
     expect((await api(t.baseUrl, "POST", "/api/settings/provider-pace-offsets", body)).status).toBe(200);
   }
   expect((await api(t.baseUrl, "GET", "/api/settings/provider-pace-offsets")).json.offsets).toEqual(pairs);
-  expect((await api(t.baseUrl, "GET", "/api/settings/pace-offsets")).json).toEqual({ session: 31, week: 32, fable: 33 });
+});
+
+it("不正値(非数値・範囲外・非整数)の pace offset は入口で 400 に弾かれ、設定は変わらない(ADR 0030)", async () => {
+  t = await bootTidepool();
+
+  for (const offset of ["twenty", -5, 101, 12.5]) {
+    const res = await api(t.baseUrl, "POST", "/api/settings/provider-pace-offsets", {
+      provider: "anthropic",
+      window: "session",
+      offset,
+    });
+    expect(res.status).toBe(400);
+  }
+
+  expect((await api(t.baseUrl, "GET", "/api/settings/provider-pace-offsets")).json.offsets).toEqual(KNOWN_PAIR_DEFAULTS);
+});
+
+it("pace offset 0(予約なし)も有効な設定として保存できる境界値", async () => {
+  t = await bootTidepool();
+  const body = { provider: "anthropic", window: "session", offset: 0 };
+  expect((await api(t.baseUrl, "POST", "/api/settings/provider-pace-offsets", body)).status).toBe(200);
+
+  expect((await api(t.baseUrl, "GET", "/api/settings/provider-pace-offsets")).json.offsets).toContainEqual(body);
+});
+
+/** t=1h で session の経過は40%。既定 offset 20 の線20を使用率30が超えて throttle される盤面。 */
+async function throttledBySession() {
+  t = await bootTidepool();
+  const task = queueWork(t, "waits behind the session pace line");
+  const resetsAt = new Date(t.clock.now().getTime() + 4 * HOUR);
+  t.worker.scriptUsage(
+    usagePanelText({
+      session: { percent: 30, resetsAt },
+      week: { percent: 5, resetsAt: new Date(resetsAt.getTime() + 24 * HOUR) },
+    }),
+  );
+  await t.clock.advance(HOUR);
+  expect(t.worker.started).toEqual([]);
+  return { tidepool: t, task, resetsAt };
+}
+
+it("throttle 中に pace offset を緩めると hourly tick を待たず新しい判定で pickup される(issue #296)", async () => {
+  const { tidepool, task } = await throttledBySession();
+
+  const res = await api(tidepool.baseUrl, "POST", "/api/settings/provider-pace-offsets", {
+    provider: "anthropic",
+    window: "session",
+    offset: 0,
+  });
+
+  expect(res.status).toBe(200);
+  expect(tidepool.worker.started.map((started) => started.id)).toEqual([task.id]);
+});
+
+it("不正な pace offset の POST は即時再評価を発火しない(issue #296)", async () => {
+  const { tidepool, task, resetsAt } = await throttledBySession();
+  tidepool.worker.scriptUsage(
+    usagePanelText({
+      session: { percent: 5, resetsAt },
+      week: { percent: 5, resetsAt: new Date(resetsAt.getTime() + 24 * HOUR) },
+    }),
+  );
+
+  const res = await api(tidepool.baseUrl, "POST", "/api/settings/provider-pace-offsets", {
+    provider: "anthropic",
+    window: "session",
+    offset: "invalid",
+  });
+
+  expect(res.status).toBe(400);
+  expect(tidepool.worker.started).toEqual([]);
+  await tidepool.clock.advance(HOUR);
+  expect(tidepool.worker.started.map((started) => started.id)).toEqual([task.id]);
 });
 
 it("行が無い pace offset の既定は Provider × 窓ごと: anthropic session 20 / week 10 / fable 10、openai primary 20 / secondary 10", () => {
