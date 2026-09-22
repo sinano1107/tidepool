@@ -97,13 +97,13 @@ export function setProviderPaceOffset(db: Db, value: ProviderPaceOffset): void {
   })();
 }
 
+/** 既知の組ごとの実効値(保存値か既定値)。表に無い組の行は返さない。 */
 export function listProviderPaceOffsets(db: Db): ProviderPaceOffset[] {
-  return db
-    .prepare(
-      `SELECT provider, window, offset FROM provider_pace_offsets
-       ORDER BY provider, window`,
-    )
-    .all() as ProviderPaceOffset[];
+  return (Object.keys(PROVIDER_PACE_OFFSET_DEFAULTS) as Provider[]).sort().flatMap((provider) =>
+    Object.keys(PROVIDER_PACE_OFFSET_DEFAULTS[provider]!)
+      .sort()
+      .map((window) => ({ provider, window, offset: getProviderPaceOffset(db, provider, window) })),
+  );
 }
 
 export function getProviderPaceOffset(
