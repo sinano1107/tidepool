@@ -53,62 +53,8 @@ it("同じソース+言語の2回目の呼び出しはキャッシュから返�
   expect(client.calls).toHaveLength(1);
 });
 
-it("Anthropic の使用量観測がまだ無い盤面では Board call を止めない(ADR 0140)", async () => {
+it("Anthropic window が throttled のとき、translateSource は throttled を返しクライアントを呼ばない", async () => {
   const db = await freshDb();
-  const client = new FakeTranslationClient();
-  client.scriptTranslation("訳文");
-
-  const outcome = await translateSource(db, client, "not observed yet", "Japanese", NOW);
-
-  expect(outcome).toEqual({ status: "translated", text: "訳文", cached: false });
-  expect(client.calls).toHaveLength(1);
-});
-
-it("Provider 化後は Anthropic account window だけが Anthropic translation Board call を止める", async () => {
-  const db = await freshDb();
-  reportProviderUsage(db, {
-    provider: "anthropic",
-    status: "observed",
-    plan: null,
-    cliVersion: null,
-    observedAt: NOW,
-    windows: [
-      {
-        window: "session",
-        model: null,
-        usedPercent: 50,
-        durationMs: 5 * 60 * 60 * 1000,
-        resetsAt: new Date(NOW.getTime() + 60 * 60 * 1000),
-        throttled: false,
-        resumesAt: null,
-      },
-    ],
-  });
-  reportProviderUsage(db, {
-    provider: "openai",
-    status: "observed",
-    plan: "plus",
-    cliVersion: "codex-cli 0.147.0",
-    observedAt: NOW,
-    windows: [
-      {
-        window: "primary",
-        model: null,
-        usedPercent: 50,
-        durationMs: 5 * 60 * 60 * 1000,
-        resetsAt: new Date(NOW.getTime() + 60 * 60 * 1000),
-        throttled: true,
-        resumesAt: new Date(NOW.getTime() + 30 * 60 * 1000),
-      },
-    ],
-  });
-  const client = new FakeTranslationClient();
-  client.scriptTranslation("別予算なので翻訳できる");
-
-  expect(await translateSource(db, client, "OpenAI is separate", "Japanese", NOW)).toMatchObject({
-    status: "translated",
-  });
-
   reportProviderUsage(db, {
     provider: "anthropic",
     status: "observed",
@@ -127,11 +73,12 @@ it("Provider 化後は Anthropic account window だけが Anthropic translation 
       },
     ],
   });
+  const client = new FakeTranslationClient();
 
   expect(await translateSource(db, client, "never called", "Japanese", NOW)).toEqual({
     status: "throttled",
   });
-  expect(client.calls).toHaveLength(1);
+  expect(client.calls).toHaveLength(0);
 });
 
 it("キャッシュミス時、クライアントが返したトークン使用量をそのままキャッシュへ記録する(claude-worker.ts と同じ粒度 — 完了基準)", async () => {

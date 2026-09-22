@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { InvalidWorkspaceNameError, loadRegistry } from "../src/registry.js";
@@ -215,6 +215,23 @@ describe("createWorkspace: register モード(issue #57)", () => {
     await expect(
       createWorkspace({ mode: "register", name: "sandbox", path: notAGitRepo }, deps),
     ).rejects.toThrow(NotAGitRepositoryError);
+    expect(loadRegistry(registryDir, "purely-local").workspaces.sandbox).toBeUndefined();
+    expect(git(registryDir, "rev-parse", "HEAD")).toBe(before);
+  });
+
+  // ADR 0146: linked worktree・submodule(`.git` がファイル)は同意しても動かないので、
+  // #383 の信号のように提示せず拒否する
+  it("`.git` がファイルのパスの登録は理由つきで拒否され、コミットを積まない", async () => {
+    const registryDir = await makeMainRegistry();
+    const before = git(registryDir, "rev-parse", "HEAD");
+    const deps = await makeDeps(registryDir);
+    const checkout = await makeLocalOnlyCheckout();
+    await rm(join(checkout, ".git"), { recursive: true });
+    await writeFile(join(checkout, ".git"), "gitdir: /nowhere\n");
+
+    await expect(
+      createWorkspace({ mode: "register", name: "sandbox", path: checkout, confirm: true }, deps),
+    ).rejects.toThrow("linked worktrees and submodules cannot be workspaces");
     expect(loadRegistry(registryDir, "purely-local").workspaces.sandbox).toBeUndefined();
     expect(git(registryDir, "rev-parse", "HEAD")).toBe(before);
   });

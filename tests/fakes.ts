@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { PassThrough } from "node:stream";
+import { expect, vi } from "vitest";
 import type {
   AllocationClient,
   AllocationJudgment,
@@ -16,6 +17,7 @@ import type {
 import { type BoardCall, createBoardCalls } from "../src/board-call.js";
 import type { Clock } from "../src/clock.js";
 import type { CodexAppServerProbeResult } from "../src/codex-app-server.js";
+import { createCodexCapabilityCheck } from "../src/codex-worker.js";
 import type {
   ChildDraftContext,
   DraftClient,
@@ -54,6 +56,7 @@ import type { Task } from "../src/tasks.js";
 import type { TranslationClient, TranslationResult } from "../src/translate.js";
 import { RECLAIM_TIMEOUT } from "../src/watchdog.js";
 import type { WorkerAdapter, WorkerExit } from "../src/worker.js";
+import { tempDir } from "./harness.js";
 
 /** Required landing dependency for tests whose exercised door cannot reach a
  * landing path. A mistaken land call fails loudly; ancestor re-fire is a
@@ -925,4 +928,46 @@ export function recordingSpawn() {
     for (const listener of errorListeners) listener(err);
   };
   return { calls, processes, killed, spawn, emitExit, emitExitAt, emitError };
+}
+
+/** `createCodexCapabilityCheck(options)()` を `recordingSpawn` + `passthroughContainers`
+ *  で駆動し、preflight を指定した停止点まで進める(issue #874)。段の並びは --version(0)・
+ *  prompt-input(1)・features list(2)・sandbox probe ×2(3, 4)・work app-server(5)・
+ *  review app-server(6)。停止点までの段は exit 0 で通す — prompt-input は JSON を読まれる
+ *  ので空配列を返し、review まで進めるときだけ work app-server(hooks/list)に登録一致の
+ *  応答を書いて通す。停止した spawn の `spawn` / `capability`(promise)/ `index` を返す —
+ *  段の並びと応答の文字列はこの関数の中にしか現れない。呼び出し側は返った `index` で
+ *  `spawn.calls[index]` / `spawn.emitExitAt(index, …)` を読み書きする。review 停止での
+ *  work 側の index は `index - 1`。 */
+export async function driveCodexPreflight(
+  stop: "sandboxProbe" | "workAppServer" | "reviewAppServer",
+  overrides: { codexHome?: string; codexSystemDir?: string; workspace?: string; allowedDomains?: readonly string[] } = {},
+) {
+  const spawn = recordingSpawn();
+  const { boardCall } = containerHarness(passthroughContainers(spawn.spawn));
+  const capability = createCodexCapabilityCheck({
+    executable: "/opt/tidepool/bin/codex",
+    codexHome: overrides.codexHome ?? await tempDir("tidepool-codex-home-"),
+    codexSystemDir: overrides.codexSystemDir,
+    workspace: overrides.workspace ?? await tempDir("tidepool-codex-preflight-ws-"),
+    allowedDomains: overrides.allowedDomains ?? [],
+    call: boardCall,
+  })();
+
+  const before = stop === "sandboxProbe" ? [0, 1, 2] : [0, 1, 2, 3, 4];
+  for (const i of before) {
+    await vi.waitFor(() => expect(spawn.calls).toHaveLength(i + 1));
+    if (i === 1) spawn.processes[1]!.stdout.write("[]");
+    spawn.emitExitAt(i, 0, null);
+  }
+  await vi.waitFor(() => expect(spawn.calls).toHaveLength(before.length + 1));
+
+  if (stop === "reviewAppServer") {
+    const workIndex = before.length; // 5: work app-server
+    spawn.processes[workIndex]!.stdout.write('{"id":1,"result":{}}\n{"id":2,"result":{"data":[]}}\n');
+    spawn.emitExitAt(workIndex, 0, null);
+    await vi.waitFor(() => expect(spawn.calls).toHaveLength(workIndex + 2));
+  }
+
+  return { spawn, capability, index: spawn.calls.length - 1 };
 }

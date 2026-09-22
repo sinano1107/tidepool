@@ -79,7 +79,7 @@ import {
 } from "./tasks.js";
 import { sessionInTeardown } from "./teardown.js";
 import type { PendingReclaim } from "./watchdog.js";
-import { UnknownWorkspaceError, type WorkspaceConfig } from "./workspace.js";
+import { GitDirNotADirectoryError, UnknownWorkspaceError, type WorkspaceConfig } from "./workspace.js";
 import {
   BoardStateOverlapError,
   CheckoutHasOriginError,
@@ -174,6 +174,7 @@ function registryToolError(err: unknown) {
     err instanceof BoardStateOverlapError ||
     err instanceof RepoAccessMissingError ||
     err instanceof NotAGitRepositoryError ||
+    err instanceof GitDirNotADirectoryError ||
     err instanceof UnknownWorkspaceError ||
     err instanceof RegistrySelfUnprotectError ||
     err instanceof WorkspaceAlreadyPublishedError ||

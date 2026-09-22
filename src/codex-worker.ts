@@ -29,7 +29,7 @@ import {
   recordMemoryInjection,
   WORKER_MEMORY_VERBS,
 } from "./memory.js";
-import type { ContainerSpawn, ProcessContainers } from "./process-container.js";
+import type { ContainedProcess, ContainerSpawn, ProcessContainers } from "./process-container.js";
 import { loadRegistry, type RegistrySource } from "./registry.js";
 import { DEFAULT_AUDITOR_NAME, resolveTaskAgent, type Task } from "./tasks.js";
 import type { WorkerAdapter, WorkerExit } from "./worker.js";
@@ -275,6 +275,9 @@ export interface CodexWorkerOptions {
   executable: string;
   /** Board-owned worker-session container supervisor (ADR 0099). */
   containers: ProcessContainers;
+  /** Codex の system config のディレクトリ。既定は vendor の Unix 既定 `/etc/codex`
+   *  (`codex-rs/config/src/loader/mod.rs:55`、rust-v0.147.0)。テストで差し替える。 */
+  codexSystemDir?: string;
   boardState?: BoardStatePath[];
   /** ADR 0118: `spawn()` が失敗した pickup を受ける盤面側の一撃(`spawnFailureHandler` 製)。 */
   onSpawnFailed?: (taskId: string, failure: { error_code: string | null; message: string }) => void;
@@ -296,7 +299,7 @@ export interface CodexHookRegistration {
 /** `hooks/list` の `result` から、登録と vendor 診断(`errors[]` / `warnings[]`、#734)を
  *  cwd を跨いで並びのまま取り出す(ADR 0130 決定3)。
  *  vendor の応答の形が変わったら、読み替えを直す場所はここ1つ —— 形の崩れは preflight の
- *  `hook mismatch` か、読めずに投げた `could not run` として出る(どちらも fail-closed)。 */
+ *  `hook mismatch` か、読めずに投げた `failed` として出る(どちらも fail-closed)。 */
 export function observedHooks(
   result: unknown,
 ): Pick<CodexCapabilityObservation, "hooks" | "hookDiagnostics"> {
@@ -355,7 +358,7 @@ export async function checkCodexCapability(
   try {
     observed = await probe();
   } catch (error) {
-    return { available: false, reason: `Codex containment preflight could not run: ${String(error)}` };
+    return { available: false, reason: `Codex containment preflight failed: ${String(error)}` };
   }
   const mismatch = (
     [
@@ -513,21 +516,26 @@ function hookConfig(hook: string): string[] {
   ];
 }
 
-function skillConfig(codexHome: string, workspace: string): string {
-  const paths = SYSTEM_SKILLS.map((name) =>
-    join(codexHome, "skills", ".system", name, "SKILL.md")
-  );
+function skillConfig(codexHome: string, workspace: string, codexSystemDir = "/etc/codex"): string {
+  const userSkills = join(codexHome, "skills");
+  const paths = SYSTEM_SKILLS.map((name) => join(userSkills, ".system", name, "SKILL.md"));
+  // ADR 0147 決定3: pin した Codex が探索する root はすべて閉じる —— 漏れた skill を user config が
+  // disable すると probe だけが見失い、fail-open になる。`$CODEX_HOME/skills/.system` は上で名指ししているので除く
   for (const root of [
     join(workspace, ".agents", "skills"),
     join(workspace, ".codex", "skills"),
     join(homedir(), ".agents", "skills"),
+    userSkills,
+    join(codexSystemDir, "skills"),
   ]) {
     try {
       for (const entry of readdirSync(root, { withFileTypes: true })) {
-        if (entry.isDirectory()) paths.push(join(root, entry.name, "SKILL.md"));
+        if (entry.isDirectory() && !(root === userSkills && entry.name === ".system")) {
+          paths.push(join(root, entry.name, "SKILL.md"));
+        }
       }
     } catch {
-      // A workspace need not declare skills.
+      // 無い root は何も足さない —— workspace も codexHome も system config も skill を持たなくてよい
     }
   }
   return `skills.config=[${paths.map((path) => `{path=${toml(path)},enabled=false}`).join(",")}]`;
@@ -546,6 +554,7 @@ function spawnConfig(input: {
   taskTemp: string;
   executable: string;
   codexHome: string;
+  codexSystemDir?: string;
   hook: string;
 }): string[] {
   return [
@@ -561,7 +570,7 @@ function spawnConfig(input: {
     'mcp_servers.tidepool.default_tools_approval_mode="approve"',
     // ADR 0134 決定3: この key は版に依らず効く —— 絞るのではなく本数の意味を固定する
     "agents.max_concurrent_threads_per_session=3",
-    skillConfig(input.codexHome, input.workspace),
+    skillConfig(input.codexHome, input.workspace, input.codexSystemDir),
     ...hookConfig(input.hook),
   ];
 }
@@ -623,7 +632,10 @@ export function resolveCodexExecutable(searchPath = process.env.PATH ?? ""): str
   return resolve(directories[0] ?? "/usr/local/bin", "codex");
 }
 
-function observedSkills(promptInput: string): string[] {
+/** `codex debug prompt-input` の出力から、`<skills_instructions>` の `### Available skills` に
+ *  載った skill 名を集める。節が無ければ `[]` —— 期待値も `[]` なので、パースの静かな失敗は
+ *  skill を有効にした実物 fixture のテストだけが捕まえる(issue #699)。 */
+export function observedSkills(promptInput: string): string[] {
   const messages = JSON.parse(promptInput) as Array<{
     content?: Array<{ type?: string; text?: string }>;
   }>;
@@ -669,7 +681,7 @@ async function probeHookRegistration(
   config: (taskType: Task["type"]) => string[],
 ): Promise<ReturnType<typeof observedHooks>> {
   const command = codexCommandThrough(call, PREFLIGHT_KIND, CODEX_PREFLIGHT_LIMIT_MS);
-  // ADR 0142 決定4: 未知キーはここで app-server の失敗として投げ、`could not run` に倒れる
+  // ADR 0142 決定4: 未知キーはここで app-server の失敗として投げ、`failed` に倒れる
   const [listed] = await callAppServer(command, executable, env, ["--strict-config", ...configArgs(config("work"))], [
     { method: "hooks/list", params: { cwds: [] } },
   ]);
@@ -685,12 +697,18 @@ const cp = require("node:child_process");
 const [workspace, taskTemp, outside, access] = process.argv.slice(2);
 const workspaceFile = workspace + "/.tidepool-codex-permission-canary";
 const taskFile = taskTemp + "/task-canary";
+// 検査の失敗は理由を1行 stderr に書いてから落ちる —— 番号の意味を言うのはこの文だけ (#710)。
+// 37 だけは外側 catch で例外本体を出す。macOS の pipe では console.error が非同期なので同期で書く
+const fail = (code, why) => {
+  fs.writeSync(2, why + "\\n");
+  process.exit(code);
+};
 try {
   // 読めることの証明は listing が throw しないことだけ —— workspace の中身に前提を置かない (#708)
   fs.readdirSync(workspace);
   try {
     fs.readFileSync(outside, "utf8");
-    process.exit(32);
+    fail(32, "canary could read a file outside the workspace");
   } catch {}
   if (access === "write") {
     fs.writeFileSync(workspaceFile, "ok");
@@ -698,12 +716,12 @@ try {
   } else {
     try {
       fs.writeFileSync(workspaceFile, "breach");
-      process.exit(33);
+      fail(33, "review profile could write to the workspace");
     } catch {}
   }
   fs.writeFileSync(taskFile, "ok");
-  if (cp.spawnSync(process.execPath, ["-e", "process.exit(0)"]).status !== 0) process.exit(34);
-  if (cp.spawnSync("git", ["--version"]).status !== 0) process.exit(35);
+  if (cp.spawnSync(process.execPath, ["-e", "process.exit(0)"]).status !== 0) fail(34, "canary could not spawn node");
+  if (cp.spawnSync("git", ["--version"]).status !== 0) fail(35, "canary could not run git");
   const tcp = http.createServer((_request, response) => response.end("ok"));
   tcp.listen(0, "127.0.0.1", () => {
     const request = http.get("http://127.0.0.1:" + tcp.address().port, (response) => {
@@ -716,13 +734,13 @@ try {
             peer.end();
             unix.close(() => process.exit(0));
           });
-          peer.on("error", () => process.exit(38));
+          peer.on("error", () => fail(38, "canary could not connect to a unix socket in the task temp"));
         });
       }));
     });
-    request.on("error", () => process.exit(39));
+    request.on("error", () => fail(39, "canary could not reach its own localhost TCP server"));
   });
-  setTimeout(() => process.exit(36), 3000);
+  setTimeout(() => fail(36, "canary did not finish within the 3s watchdog"), 3000);
 } catch (error) {
   console.error(error);
   process.exit(37);
@@ -769,6 +787,7 @@ async function probePermission(
 async function actualCodexCapability(options: {
   executable: string;
   codexHome: string;
+  codexSystemDir?: string;
   workspace: string;
   allowedDomains: readonly string[];
   call: BoardCall;
@@ -779,7 +798,7 @@ async function actualCodexCapability(options: {
   const env = workerEnv(options.executable, options.codexHome, taskTemp, "tidepool");
   const config = [
     ...closedSurfaceConfig(),
-    skillConfig(options.codexHome, workspace),
+    skillConfig(options.codexHome, workspace, options.codexSystemDir),
   ];
   try {
     const cliVersion = (await runFile(call, options.executable, ["--version"], { env })).trim();
@@ -823,6 +842,7 @@ async function actualCodexCapability(options: {
           taskTemp,
           executable: options.executable,
           codexHome: options.codexHome,
+          codexSystemDir: options.codexSystemDir,
           hook,
         })),
       features: observedFeatures,
@@ -835,6 +855,7 @@ async function actualCodexCapability(options: {
 export function createCodexCapabilityCheck(options: {
   executable: string;
   codexHome: string;
+  codexSystemDir?: string;
   workspace: string;
   allowedDomains: readonly string[];
   call: BoardCall;
@@ -957,44 +978,59 @@ export class CodexWorker implements WorkerAdapter {
     if (setting.provider !== "openai") {
       throw new Error(`CodexWorker refuses provider ${setting.provider}; no Harness fallback (ADR 0098)`);
     }
-    const taskTemp = realpathSync(mkdtempSync(join(tmpdir(), `tidepool-codex-${task.id}-`)));
-    const hook = installBoardHook(this.options.codexHome);
-    const taskMcpUrl = new URL(this.options.mcpUrl);
-    taskMcpUrl.searchParams.set("task", task.id);
     const memory = buildMemoryInjection(this.options.db, task, workspace.name, agent.name);
-    const config = spawnConfig({
-      taskType: task.type,
-      effort: setting.effort,
-      developerInstructions: developerInstructions(memory.section, agent.definition.systemPrompt, agent.profile.guidance),
-      mcpUrl: taskMcpUrl.toString(),
-      // ADR 0122 決定2: MCP の登録と同じ差を写す。宣言と盤面の面が集合として一致することは
-      // tests/codex-worker.test.ts が固定する(ADR 0125 決定2)
-      enabledTools: isMetaReviewOf(this.options.db, task.id, "memory")
-        ? [...BOARD_VERBS.filter((verb) => !(WORKER_MEMORY_VERBS as readonly string[]).includes(verb)), ...MEMORY_META_REVIEW_VERBS]
-        : BOARD_VERBS,
-      workspace: workspace.path,
-      allowedDomains: workspace.allowed_domains ?? [],
-      taskTemp,
-      executable: this.options.executable,
-      codexHome: this.options.codexHome,
-      hook,
-    });
-    const child = this.containers.open(task.id).spawn(
-      this.options.executable,
-      [
-        "--ask-for-approval", "never",
-        "exec", "--json", "--ephemeral", "--ignore-user-config", "--ignore-rules",
-        "--strict-config", "--dangerously-bypass-hook-trust",
-        "-C", workspace.path,
-        "-m", setting.model,
-        ...config.flatMap((entry) => ["-c", entry]),
-        taskPrompt(task),
-      ],
-      {
-        cwd: workspace.path,
-        env: workerEnv(this.options.executable, this.options.codexHome, taskTemp, agent.name),
-      },
-    );
+    const taskTemp = realpathSync(mkdtempSync(join(tmpdir(), `tidepool-codex-${task.id}-`)));
+    // 削除の失敗で session の後始末を止めない(issue #705)
+    const removeTaskTemp = () => {
+      try {
+        rmSync(taskTemp, { recursive: true, force: true });
+      } catch (error) {
+        console.error(`[codex-worker] could not remove ${taskTemp}:`, error);
+      }
+    };
+    let child: ContainedProcess;
+    try {
+      const hook = installBoardHook(this.options.codexHome);
+      const taskMcpUrl = new URL(this.options.mcpUrl);
+      taskMcpUrl.searchParams.set("task", task.id);
+      const config = spawnConfig({
+        taskType: task.type,
+        effort: setting.effort,
+        developerInstructions: developerInstructions(memory.section, agent.definition.systemPrompt, agent.profile.guidance),
+        mcpUrl: taskMcpUrl.toString(),
+        // ADR 0122 決定2: MCP の登録と同じ差を写す。宣言と盤面の面が集合として一致することは
+        // tests/codex-worker.test.ts が固定する(ADR 0125 決定2)
+        enabledTools: isMetaReviewOf(this.options.db, task.id, "memory")
+          ? [...BOARD_VERBS.filter((verb) => !(WORKER_MEMORY_VERBS as readonly string[]).includes(verb)), ...MEMORY_META_REVIEW_VERBS]
+          : BOARD_VERBS,
+        workspace: workspace.path,
+        allowedDomains: workspace.allowed_domains ?? [],
+        taskTemp,
+        executable: this.options.executable,
+        codexHome: this.options.codexHome,
+        codexSystemDir: this.options.codexSystemDir,
+        hook,
+      });
+      child = this.containers.open(task.id).spawn(
+        this.options.executable,
+        [
+          "--ask-for-approval", "never",
+          "exec", "--json", "--ephemeral", "--ignore-user-config", "--ignore-rules",
+          "--strict-config", "--dangerously-bypass-hook-trust",
+          "-C", workspace.path,
+          "-m", setting.model,
+          ...config.flatMap((entry) => ["-c", entry]),
+          taskPrompt(task),
+        ],
+        {
+          cwd: workspace.path,
+          env: workerEnv(this.options.executable, this.options.codexHome, taskTemp, agent.name),
+        },
+      );
+    } catch (error) {
+      removeTaskTemp();
+      throw error;
+    }
     const spawned = appendEvent(this.options.db, {
       taskId: task.id,
       workerId: agent.name,
@@ -1046,6 +1082,7 @@ export class CodexWorker implements WorkerAdapter {
         return;
       }
       this.running.delete(task.id);
+      removeTaskTemp();
       const failure = { error_code: errno.code ?? null, message: error.message };
       appendEvent(this.options.db, {
         taskId: task.id,
@@ -1087,6 +1124,7 @@ export class CodexWorker implements WorkerAdapter {
       // ADR 0109 決定4: root の exit は容器に残るものが孤児である証拠 —— usage と
       // transcript を書いた後に強制回収を撃つ。Harness 非依存に、盤面 supervisor 経由。
       this.containers.forceReclaim(task.id);
+      removeTaskTemp();
       this.options.onWorkerExited?.(task.id, { exit_code: code, signal, stderr_tail: tail });
     });
   }
