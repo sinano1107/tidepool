@@ -1988,10 +1988,10 @@ function SettingsScreen({ say, registerLeaveGuard }: {
   };
   React.useEffect(() => { loadQuietHours(); }, []);
 
-  const [paceOffsets, setPaceOffsets] = React.useState<WireContract['GET /api/settings/provider-pace-offsets']['offsets'] | null>(null); // null → still loading
+  const [providerPaceOffsets, setProviderPaceOffsets] = React.useState<WireContract['GET /api/settings/provider-pace-offsets']['offsets'] | null>(null); // null → still loading
   const loadPaceOffsets = async () => {
     const result = await api('GET /api/settings/provider-pace-offsets');
-    setPaceOffsets(result.offsets);
+    setProviderPaceOffsets(result.offsets);
   };
   React.useEffect(() => { loadPaceOffsets(); }, []);
 
@@ -2298,8 +2298,8 @@ function SettingsScreen({ say, registerLeaveGuard }: {
           <QuietHoursCard start={quietHoursStart} end={quietHoursEnd} tz={quietHoursTz}
             say={say} onSaved={loadQuietHours} edit={edit} />
         )}
-        {paceOffsets && (
-          <PaceOffsetsCard offsets={paceOffsets} say={say} onSaved={loadPaceOffsets} edit={edit} />
+        {providerPaceOffsets && (
+          <PaceOffsetsCard offsets={providerPaceOffsets} say={say} onSaved={loadPaceOffsets} edit={edit} />
         )}
         {executionSettings && (
           <React.Fragment>
@@ -2315,7 +2315,7 @@ function SettingsScreen({ say, registerLeaveGuard }: {
         )}
         {githubLoggedIn !== null && <GitHubLoginCard loggedIn={githubLoggedIn} />}
         {(translateUsage !== null || translateUsageFailed) && <TranslateUsageCard records={translateUsage} />}
-        {(!displayLanguageLoaded || !quietHoursLoaded || !paceOffsets || !executionSettings || !memorySettings) && (
+        {(!displayLanguageLoaded || !quietHoursLoaded || !providerPaceOffsets || !executionSettings || !memorySettings) && (
           <Card style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)' }}>loading…</Card>
         )}
         <p style={settingsFootnote}>applies to every task the board picks up</p>

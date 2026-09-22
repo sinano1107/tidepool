@@ -35,7 +35,7 @@
 #
 # A fourth thing it deliberately does NOT do: clear the throttle. The pace
 # line (ADR 0030) is read off the real account, so a board that is up can
-# still sit at `todo` for hours. `POST /api/settings/pace-offsets` and
+# still sit at `todo` for hours. `POST /api/settings/provider-pace-offsets` and
 # `POST /api/spend-down` are the levers, and spending the human's quota is
 # their call, not this script's.
 

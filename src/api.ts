@@ -54,11 +54,9 @@ import {
   recordKnowledge,
 } from "./memory.js";
 import {
-  getPaceOffsets,
   isKnownPaceOffsetTarget,
   isValidOffset,
   listProviderPaceOffsets,
-  setPaceOffsets,
   setProviderPaceOffset,
 } from "./pace-offsets.js";
 import { isPaused, setPaused } from "./pause.js";
@@ -139,6 +137,7 @@ import type { PendingReclaim } from "./watchdog.js";
 import type { WireContract } from "./wire-contract.js";
 import {
   buildWorkspaceResolver,
+  GitDirNotADirectoryError,
   UnknownWorkspaceError,
   type WorkspaceConfig,
 } from "./workspace.js";
@@ -398,21 +397,15 @@ const quietHoursSchema = z.object({
   end: z.string().regex(HH_MM_PATTERN),
 });
 
-// ペースオフセット (ADR 0030): 3ウィンドウとも必須。値域の意味論(0–100 の
-// 整数 pt)は pace-offsets.ts の isValidOffset そのものを使う — 二重定義しない
-const paceOffsetValue = z.number().refine(isValidOffset, {
-  message: "offset must be an integer between 0 and 100",
-});
-const paceOffsetsSchema = z.object({
-  session: paceOffsetValue,
-  week: paceOffsetValue,
-  fable: paceOffsetValue,
-});
+// ペースオフセット (ADR 0030): 値域の意味論(0–100 の整数 pt)は pace-offsets.ts の
+// isValidOffset そのものを使う — 二重定義しない
 const providerPaceOffsetSchema = z
   .object({
     provider: z.enum(PROVIDER_VALUES),
     window: z.string(),
-    offset: paceOffsetValue,
+    offset: z.number().refine(isValidOffset, {
+      message: "offset must be an integer between 0 and 100",
+    }),
   })
   .refine((v) => isKnownPaceOffsetTarget(v.provider, v.window), {
     message: "unknown provider/window pair",
@@ -814,6 +807,8 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
         err instanceof BoardStateOverlapError ||
         err instanceof RepoAccessMissingError ||
         err instanceof NotAGitRepositoryError ||
+        // ADR 0146: linked worktree・submodule は workspace にならない
+        err instanceof GitDirNotADirectoryError ||
         // ADR 0087 決定5: 規約パスに整合しない checkout が居る —— 帯域外で片付けるか
         // register モードで拾えば通る、呼び出し側の状態の問題である
         err instanceof OrphanCheckoutMismatchError
@@ -1582,30 +1577,12 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     res.json(getQuietHours(db) satisfies WireContract["POST /api/settings/quiet-hours"]);
   });
 
-  router.get("/settings/pace-offsets", (_req, res) => {
-    res.json(getPaceOffsets(db));
-  });
-
-  // ADR 0030: 不正値はこの入口で弾く — 範囲外の値が判定式に入ると strict
-  // 比較が黙って崩れる(旧 TIDEPOOL_USAGE_THRESHOLD の NaN fail-open の教訓)
-  router.post("/settings/pace-offsets", (req, res) => {
-    const parsed = paceOffsetsSchema.safeParse(req.body);
-    if (!parsed.success) {
-      res.status(400).json({ error: z.treeifyError(parsed.error) });
-      return;
-    }
-    setPaceOffsets(db, parsed.data);
-    // どの window を変えたか・値が実際に変わったかによらず、保存成功後は即時再評価
-    // する。古い offset で立った Provider 使用量の判定を tick 待ちにすると、緩和後も最大
-    // 1時間 pickup と表示が止まり続ける(issue #296)。
-    pollNow();
-    res.json(getPaceOffsets(db));
-  });
-
   router.get("/settings/provider-pace-offsets", (_req, res) => {
     res.json({ offsets: listProviderPaceOffsets(db) } satisfies WireContract["GET /api/settings/provider-pace-offsets"]);
   });
 
+  // ADR 0030: 不正値はこの入口で弾く — 範囲外の値が判定式に入ると strict
+  // 比較が黙って崩れる(旧 TIDEPOOL_USAGE_THRESHOLD の NaN fail-open の教訓)
   router.post("/settings/provider-pace-offsets", (req, res) => {
     const parsed = providerPaceOffsetSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -1613,6 +1590,9 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       return;
     }
     setProviderPaceOffset(db, parsed.data);
+    // どの組を変えたか・値が実際に変わったかによらず、保存成功後は即時再評価する。
+    // 古い offset で立った Provider 使用量の判定を tick 待ちにすると、緩和後も最大
+    // 1時間 pickup と表示が止まり続ける(issue #296)。
     pollNow();
     res.json(parsed.data);
   });
@@ -1631,7 +1611,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
 
   // 1 リクエスト = 1 変更(行の upsert / 削除、frontier advisor、Provider 順位、優先
   // 順位の既定)。不正値(未知の Provider / ティア / 優先順位、負の価格、順列でない
-  // 順位)はこの入口で弾く。保存後は pace-offsets と同じく即時再評価(issue #296)
+  // 順位)はこの入口で弾く。保存後は provider-pace-offsets と同じく即時再評価(issue #296)
   router.post("/settings/execution", (req, res) => {
     const parsed = executionSettingsChangeSchema.safeParse(req.body);
     if (!parsed.success) {
