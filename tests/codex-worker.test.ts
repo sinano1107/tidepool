@@ -3,22 +3,22 @@ import { readFileSync } from "node:fs";
 import { mkdir, mkdtemp, realpath, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   CODEX_FEATURE_SNAPSHOT,
-  type CodexSpawnFn,
   CodexWorker,
   createCodexCapabilityCheck,
   resolveCodexExecutable,
 } from "../src/codex-worker.js";
 import { openDb } from "../src/db.js";
 import { listEvents } from "../src/events.js";
+import { resolveExecutionSetting } from "../src/execution-setting.js";
 import { buildMemoryInjection, recordKnowledge } from "../src/memory.js";
 import { openQuarantineValues } from "../src/quarantine.js";
-import { registerTask } from "../src/tasks.js";
+import { loadRegistry } from "../src/registry.js";
+import { registerTask, type Task } from "../src/tasks.js";
 import type { WorkerExit } from "../src/worker.js";
-import { containerHarness, FakeClock, passthroughContainers, recordingSpawn as recordingProcesses } from "./fakes.js";
+import { containerHarness, FakeClock, passthroughContainers, recordingSpawn } from "./fakes.js";
 import { bootTidepool, mcpClient, type Tidepool } from "./harness.js";
 import { makeRegistry } from "./registry-fixture.js";
 
@@ -48,36 +48,6 @@ function metaReviewTask(db: ReturnType<typeof openDb>) {
     completion_criteria: "the store is reviewed",
     meta_review_subject: "memory",
   }, new Date("2026-08-24T00:00:00.000Z"));
-}
-
-function recordingSpawn() {
-  const calls: Array<{ command: string; args: string[]; cwd: string; env: NodeJS.ProcessEnv }> = [];
-  const stdout = new PassThrough();
-  const stderr = new PassThrough();
-  const killed: NodeJS.Signals[] = [];
-  const exits: Array<(code: number | null, signal: NodeJS.Signals | null) => void> = [];
-  const errors: Array<(error: Error) => void> = [];
-  const spawn: CodexSpawnFn = (command, args, options) => {
-    calls.push({ command, args, ...options });
-    return {
-      stdout,
-      stderr,
-      kill: (signal) => killed.push(signal),
-      on(event, listener) {
-        if (event === "exit") exits.push(listener as (code: number | null, signal: NodeJS.Signals | null) => void);
-        else errors.push(listener as (error: Error) => void);
-      },
-    };
-  };
-  return {
-    calls,
-    stdout,
-    stderr,
-    killed,
-    spawn,
-    exit: (code: number | null, signal: NodeJS.Signals | null) => exits.forEach((fn) => fn(code, signal)),
-    error: (error: Error) => errors.forEach((fn) => fn(error)),
-  };
 }
 
 /** `-c <prefix><値>` を読む。値は toml() = JSON.stringify なので JSON.parse で戻す。 */
@@ -135,7 +105,10 @@ You are the Codex worker.`,
     onSpawnFailed,
     onWorkerExited,
   });
-  return { db, worker, process, codexHome, workspace, logDir };
+  // scheduler が pickup の瞬間に選ぶ実行設定(除外なし)を渡す
+  const agent = loadRegistry(registry, "purely-local").agents["codex-agent"]!;
+  const start = (value: Task) => worker.start(value, resolveExecutionSetting(db, agent, value)!);
+  return { db, worker, start, process, codexHome, workspace, logDir };
 }
 
 describe("CodexWorker (ADR 0098)", () => {
@@ -145,7 +118,7 @@ describe("CodexWorker (ADR 0098)", () => {
     process.env.OPENAI_API_KEY = "must-not-leak";
     process.env.GITHUB_TOKEN = "must-not-leak";
 
-    f.worker.start(value);
+    f.start(value);
     delete process.env.OPENAI_API_KEY;
     delete process.env.GITHUB_TOKEN;
 
@@ -215,7 +188,7 @@ describe("CodexWorker (ADR 0098)", () => {
 
   it("allowed_domains を持たない workspace では network の許可は 127.0.0.1 だけのまま(issue #763)", async () => {
     const f = await fixture(undefined, "");
-    f.worker.start(task(f.db));
+    f.start(task(f.db));
 
     const call = f.process.calls[0]!;
     const taskTemp = call.env.TMPDIR!;
@@ -226,7 +199,7 @@ describe("CodexWorker (ADR 0098)", () => {
 
   it("review task の spawn にも workspace の allowed_domains が network の許可に載る(issue #763)", async () => {
     const f = await fixture();
-    f.worker.start(registerTask(
+    f.start(registerTask(
       f.db,
       { type: "review", assignee: "codex-agent", workspace: "work", title: "codex-review", purpose: "read the diff", completion_criteria: "findings are filed" },
       new Date("2026-08-24T00:00:00.000Z"),
@@ -238,8 +211,8 @@ describe("CodexWorker (ADR 0098)", () => {
 
   it("work task の filesystem 表は workspace の .git を write、.git/hooks と .git/config を read にし、review task の表には .git の行が無い(issue #849 / ADR 0033)", async () => {
     const f = await fixture();
-    f.worker.start(task(f.db));
-    f.worker.start(registerTask(
+    f.start(task(f.db));
+    f.start(registerTask(
       f.db,
       { type: "review", assignee: "codex-agent", workspace: "work", title: "codex-review", purpose: "read the diff", completion_criteria: "findings are filed" },
       new Date("2026-08-24T00:00:00.000Z"),
@@ -256,15 +229,15 @@ describe("CodexWorker (ADR 0098)", () => {
 
   it("preflight の app-server が読む設定のキーは、work / review とも同じ種別の spawn のキーと一致する(ADR 0142 決定2・3)", async () => {
     const f = await fixture();
-    f.worker.start(task(f.db));
-    f.worker.start(registerTask(
+    f.start(task(f.db));
+    f.start(registerTask(
       f.db,
       { type: "review", assignee: "codex-agent", workspace: "work", title: "codex-review", purpose: "read the diff", completion_criteria: "findings are filed" },
       new Date("2026-08-24T00:00:00.000Z"),
     ));
 
     // preflight を --version・prompt-input・features list・sandbox 2本・hooks/list と通し、7本目の review 呼び出しまで進める
-    const preflight = recordingProcesses();
+    const preflight = recordingSpawn();
     const capability = createCodexCapabilityCheck({
       executable: "/opt/tidepool/bin/codex",
       codexHome: f.codexHome,
@@ -274,8 +247,8 @@ describe("CodexWorker (ADR 0098)", () => {
     })();
     for (const i of [0, 1, 2, 3, 4, 5]) {
       await vi.waitFor(() => expect(preflight.calls).toHaveLength(i + 1));
-      if (i === 1) preflight.stdout.write("[]");
-      if (i === 5) preflight.stdout.write('{"id":1,"result":{}}\n{"id":2,"result":{"data":[]}}\n');
+      if (i === 1) preflight.processes[1]!.stdout.write("[]");
+      if (i === 5) preflight.processes[5]!.stdout.write('{"id":1,"result":{}}\n{"id":2,"result":{"data":[]}}\n');
       preflight.emitExitAt(i, 0, null);
     }
     await vi.waitFor(() => expect(preflight.calls).toHaveLength(7));
@@ -291,8 +264,8 @@ describe("CodexWorker (ADR 0098)", () => {
 
   it("主題 memory の meta-review の spawn では enabled_tools が worker の memory verb を専用 verb で置き換え、普通の task は変わらない(ADR 0122 決定2)", async () => {
     const f = await fixture();
-    f.worker.start(task(f.db));
-    f.worker.start(metaReviewTask(f.db));
+    f.start(task(f.db));
+    f.start(metaReviewTask(f.db));
 
     const base = ["get_current_task", "list_agents", "complete_task", "log_decision", "decompose", "escalate", "declare_premise_breach", "continue_decomposition", "redecompose"];
     expect(enabledTools(f.process.calls[0]!.args)).toEqual([...base, "record_knowledge", "define_memory_branch", "browse_memory", "search_memory", "read_memory", "propose_from_objection"]);
@@ -319,7 +292,7 @@ describe("CodexWorker (ADR 0098)", () => {
       { type: "review", assignee: "codex-agent", workspace: "work", title: "codex-layer-review", purpose: "read the diff", completion_criteria: "findings are filed" },
       new Date("2026-08-24T00:00:00.000Z"),
     );
-    for (const value of [work, review]) f.worker.start(value);
+    for (const value of [work, review]) f.start(value);
 
     for (const [i, value] of [work, review].entries()) {
       const args = f.process.calls[i]!.args;
@@ -350,7 +323,7 @@ describe("CodexWorker (ADR 0098)", () => {
     ["主題 memory の meta-review", metaReviewTask],
   ] as const)("%s task では、spawn が Codex に宣言する enabled_tools と盤面の server が出す verb が集合として一致する(ADR 0125 決定2)", async (_, register) => {
     const f = await fixture();
-    f.worker.start(register(f.db));
+    f.start(register(f.db));
     t = await bootTidepool();
     const client = await mcpClient(t.mcpBaseUrl, register(t.db).id);
     try {
@@ -365,7 +338,7 @@ describe("CodexWorker (ADR 0098)", () => {
   it("見える approved の記憶があれば work / review task とも注入節を developer_instructions の先頭に置き、worker_spawned の直後に memory_injected を書く。無ければ節を置かず entries 空で残す(spec #586 C / issue #592)", async () => {
     const f = await fixture();
     const bare = task(f.db, "codex-no-memory");
-    f.worker.start(bare);
+    f.start(bare);
     expect(developerInstructions(f.process.calls[0]!.args)).not.toContain("## Memory");
 
     recordKnowledge(
@@ -381,7 +354,7 @@ describe("CodexWorker (ADR 0098)", () => {
       new Date("2026-08-24T00:00:00.000Z"),
     );
     for (const [i, value] of [work, review].entries()) {
-      f.worker.start(value);
+      f.start(value);
       const { section } = buildMemoryInjection(f.db, value, "work", "codex-agent");
       expect(developerInstructions(f.process.calls[i + 1]!.args).startsWith(`${section}\n\n`)).toBe(true);
     }
@@ -419,7 +392,7 @@ describe("CodexWorker (ADR 0098)", () => {
 
   it("the spawned Board-owned hook denies a Tidepool MCP call carrying an agent_id and fails closed", async () => {
     const f = await fixture();
-    f.worker.start(task(f.db, "codex-hook"));
+    f.start(task(f.db, "codex-hook"));
     const env = f.process.calls[0]!.env;
     const hook = join(f.codexHome, "tidepool-hooks", "main-thread-mcp.mjs");
     const invoke = (input: unknown) =>
@@ -460,11 +433,11 @@ describe("CodexWorker (ADR 0098)", () => {
   it("normalizes a successful Codex JSONL fixture into the durable session event", async () => {
     const f = await fixture();
     const value = task(f.db, "codex-success");
-    f.worker.start(value);
+    f.start(value);
 
     const jsonl = readFileSync(new URL("fixtures/codex-success.jsonl", import.meta.url), "utf8");
-    f.process.stdout.write(jsonl);
-    f.process.exit(0, null);
+    f.process.processes[0]!.stdout.write(jsonl);
+    f.process.emitExit(0, null);
 
     const exited = listEvents(f.db, value.id).find((event) => event.kind === "worker_exited");
     expect(exited?.payload).toMatchObject({
@@ -489,11 +462,11 @@ describe("CodexWorker (ADR 0098)", () => {
   it("does not infer OpenAI auth quarantine from Codex JSONL prose", async () => {
     const f = await fixture();
     const value = task(f.db, "codex-auth");
-    f.worker.start(value);
-    f.process.stdout.write(
+    f.start(value);
+    f.process.processes[0]!.stdout.write(
       readFileSync(new URL("fixtures/codex-auth-failure.jsonl", import.meta.url), "utf8"),
     );
-    f.process.exit(1, null);
+    f.process.emitExit(1, null);
 
     expect(openQuarantineValues(f.db, "providerAuth")).toEqual([]);
     expect(listEvents(f.db, value.id).find((event) => event.kind === "worker_exited")?.payload).toMatchObject({
@@ -510,9 +483,9 @@ describe("CodexWorker (ADR 0098)", () => {
     ] as const) {
       const f = await fixture();
       const value = task(f.db, id);
-      f.worker.start(value);
-      f.process.stderr.write(stderr);
-      f.process.exit(code, null);
+      f.start(value);
+      f.process.processes[0]!.stderr.write(stderr);
+      f.process.emitExit(code, null);
 
       expect(listEvents(f.db, value.id).find((event) => event.kind === "worker_exited")?.payload).toMatchObject({
         kind: "worker_exited",
@@ -528,12 +501,12 @@ describe("CodexWorker (ADR 0098)", () => {
     const calls: Array<[string, { error_code: string | null; message: string }]> = [];
     const f = await fixture((taskId, failure) => calls.push([taskId, failure]));
     const value = task(f.db, "codex-spawn-enoent");
-    f.worker.start(value);
+    f.start(value);
 
-    f.process.error(Object.assign(new Error("kill EPERM"), { code: "EPERM", syscall: "kill" }));
+    f.process.emitError(Object.assign(new Error("kill EPERM"), { code: "EPERM", syscall: "kill" }));
     expect(calls).toEqual([]);
     expect(listEvents(f.db, value.id).some((e) => e.kind === "spawn_failed")).toBe(false);
-    f.process.error(Object.assign(new Error("spawn codex ENOENT"), { code: "ENOENT", syscall: "spawn codex" }));
+    f.process.emitError(Object.assign(new Error("spawn codex ENOENT"), { code: "ENOENT", syscall: "spawn codex" }));
     expect(calls).toEqual([[value.id, { error_code: "ENOENT", message: "spawn codex ENOENT" }]]);
   });
 
@@ -546,9 +519,9 @@ describe("CodexWorker (ADR 0098)", () => {
       }]),
     );
     const value = task(f.db, "codex-exit-without-report");
-    f.worker.start(value);
-    f.process.stderr.write("boom\n");
-    f.process.exit(null, "SIGSEGV");
+    f.start(value);
+    f.process.processes[0]!.stderr.write("boom\n");
+    f.process.emitExit(null, "SIGSEGV");
 
     expect(calls).toEqual([
       [value.id, { exit_code: null, signal: "SIGSEGV", stderr_tail: "boom" }, { exitedRecorded: true, forced: true }],
@@ -558,10 +531,10 @@ describe("CodexWorker (ADR 0098)", () => {
   it("delivers graceful stop to the retained Codex root and records the signaled exit", async () => {
     const f = await fixture();
     const value = task(f.db, "codex-killed");
-    f.worker.start(value);
+    f.start(value);
 
     f.worker.gracefulStop(value.id);
-    f.process.exit(null, "SIGINT");
+    f.process.emitExit(null, "SIGINT");
 
     // 畳み込み停止の SIGINT のあと、root の exit を観測した盤面が容器を強制回収する
     // (ADR 0109 決定4)。passthrough の器ではそれが既に終わった子への SIGKILL に

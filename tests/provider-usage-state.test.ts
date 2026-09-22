@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { type Db, openDb } from "../src/db.js";
-import { getProviderPaceOffset, setProviderPaceOffset } from "../src/pace-offsets.js";
+import { getProviderPaceOffset, listProviderPaceOffsets, setProviderPaceOffset } from "../src/pace-offsets.js";
 import { setSpendDown } from "../src/spend-down.js";
 import {
   evaluateAndReportProviderUsage,
@@ -12,6 +12,14 @@ import {
 import { api, bootTidepool, type Tidepool } from "./harness.js";
 
 let t: Tidepool | undefined;
+
+const KNOWN_PAIR_DEFAULTS = [
+  { provider: "anthropic", window: "fable", offset: 10 },
+  { provider: "anthropic", window: "session", offset: 20 },
+  { provider: "anthropic", window: "week", offset: 10 },
+  { provider: "openai", window: "primary", offset: 20 },
+  { provider: "openai", window: "secondary", offset: 10 },
+];
 
 afterEach(async () => {
   await t?.stop();
@@ -102,7 +110,7 @@ it("Provider/window の観測値・offset・freshness・CLI version を pause �
   expect((await api(t.baseUrl, "GET", "/api/pause")).json.providerUsage[0].windows[0].offset).toBe(35);
 });
 
-it("既知の組(anthropic × session / week / fable、openai × primary / secondary)以外の pace offset は入口で弾き、行を作らない", async () => {
+it("既知の組(anthropic × session / week / fable、openai × primary / secondary)以外の pace offset は入口で 400 で弾く", async () => {
   t = await bootTidepool();
 
   for (const [provider, window] of [
@@ -114,7 +122,6 @@ it("既知の組(anthropic × session / week / fable、openai × primary / secon
     const res = await api(t.baseUrl, "POST", "/api/settings/provider-pace-offsets", { provider, window, offset: 30 });
     expect(res.status).toBe(400);
   }
-  expect((await api(t.baseUrl, "GET", "/api/settings/provider-pace-offsets")).json.offsets).toEqual([]);
 });
 
 it("既知の5つの組の pace offset は保存され、anthropic の session / week / fable は旧 pace-offsets へ写る", async () => {
@@ -140,6 +147,21 @@ it("行が無い pace offset の既定は Provider × 窓ごと: anthropic sessi
     anthropic: ["session", "week", "fable"].map((w) => getProviderPaceOffset(db, "anthropic", w)),
     openai: ["primary", "secondary"].map((w) => getProviderPaceOffset(db, "openai", w)),
   }).toEqual({ anthropic: [20, 10, 10], openai: [20, 10] });
+  db.close();
+});
+
+it("空の盤面の pace offset 一覧は既知の5つの組を provider, window 順に既定値で返す", () => {
+  const db = openDb(":memory:");
+  expect(listProviderPaceOffsets(db)).toEqual(KNOWN_PAIR_DEFAULTS);
+  db.close();
+});
+
+it("ある組を保存すると一覧ではその組だけが保存値になり、他の組は既定値のまま", () => {
+  const db = openDb(":memory:");
+  setProviderPaceOffset(db, { provider: "openai", window: "secondary", offset: 42 });
+  expect(listProviderPaceOffsets(db)).toEqual(
+    KNOWN_PAIR_DEFAULTS.map((p) => (p.window === "secondary" ? { ...p, offset: 42 } : p)),
+  );
   db.close();
 });
 
@@ -208,5 +230,110 @@ it("openai の secondary の Spend-down は 100% cap だけを残し(再開は�
 
   expect(observed.windows[0]).toMatchObject({ throttled: true, resumesAt: new Date("2026-08-28T10:00:00.000Z") });
   expect(observed.windows[1]).toMatchObject({ throttled: true, resumesAt: new Date("2026-09-03T08:00:00.000Z") });
+  db.close();
+});
+
+// --- ペース線の評価器は Provider を問わず1本(ADR 0030 / ADR 0144) ---
+// now = 12:00、session(5h)は 13:00 リセット → 開始 08:00・経過80%。既定オフセット20で線は60。
+// week(7d)は2日後リセット → 開始 Jul 17 12:00・経過 5/7 ≈ 71.4%。既定オフセット10で線は61.4。
+const PACE_NOW = new Date("2026-07-22T12:00:00.000Z");
+const SESSION_RESETS = new Date("2026-07-22T13:00:00.000Z");
+const WEEK_RESETS = new Date("2026-07-24T12:00:00.000Z");
+
+function evaluate(
+  db: Db,
+  windows: Array<{ window: string; model: string | null; usedPercent: number; resetsAt: Date }>,
+) {
+  return evaluateAndReportProviderUsage(
+    db,
+    {
+      provider: "anthropic",
+      status: "observed",
+      plan: null,
+      cliVersion: null,
+      windows: windows.map((window) => ({
+        ...window,
+        durationMs: window.window === "session" ? 5 * H : 7 * 24 * H,
+      })),
+    },
+    PACE_NOW,
+  );
+}
+
+it("Provider 全体の窓の逆算が不整合(開始時刻が未来)なら観測不能、不整合な窓は落ち、整合する窓は内訳に残る", () => {
+  const db = openDb(":memory:");
+
+  // resets が6時間先 — session は5時間なので開始が未来になり矛盾
+  const observed = evaluate(db, [
+    { window: "session", model: null, usedPercent: 5, resetsAt: new Date("2026-07-22T18:00:00.000Z") },
+    { window: "week", model: null, usedPercent: 30, resetsAt: WEEK_RESETS },
+  ]);
+
+  expect(observed.status).toBe("unobservable");
+  expect(observed.reason).toEqual(expect.any(String));
+  expect(observed.windows).toEqual([expect.objectContaining({ window: "week", throttled: false })]);
+  db.close();
+});
+
+it("model 固有の窓の逆算が不整合ならその窓だけ観測から落ち、Provider は他の窓で判定を続ける", () => {
+  const db = openDb(":memory:");
+
+  const observed = evaluate(db, [
+    { window: "week", model: null, usedPercent: 30, resetsAt: WEEK_RESETS },
+    // resets が8日先 — 7日の窓の開始が未来になり矛盾
+    { window: "fable", model: "fable", usedPercent: 5, resetsAt: new Date("2026-07-30T12:00:00.000Z") },
+  ]);
+
+  expect(observed.status).toBe("observed");
+  expect(observed.windows.map((window) => window.window)).toEqual(["week"]);
+  db.close();
+});
+
+it.each([
+  ["以下", 55],
+  ["ちょうど(strict 比較 — 線上は「ペースどおり」)", 60],
+])("使用率がペース線(経過% − オフセット)%s なら絞らない", (_, usedPercent) => {
+  const db = openDb(":memory:");
+
+  const observed = evaluate(db, [{ window: "session", model: null, usedPercent, resetsAt: SESSION_RESETS }]);
+
+  expect(observed.windows[0]).toMatchObject({ throttled: false, resumesAt: null });
+  db.close();
+});
+
+it("使用率がペース線を超えたら絞り、再開はリセットではなく catch-up 時刻(経過% = 使用率 + オフセット になる瞬間)", () => {
+  const db = openDb(":memory:");
+
+  // 70 > 60 で超過。catch-up は経過90%の瞬間 = 開始 08:00 + 4.5h = 12:30
+  const observed = evaluate(db, [{ window: "session", model: null, usedPercent: 70, resetsAt: SESSION_RESETS }]);
+
+  expect(observed.windows[0]).toMatchObject({ throttled: true, resumesAt: new Date("2026-07-22T12:30:00.000Z") });
+  db.close();
+});
+
+it("使用率 + オフセットが100%以上なら、ウィンドウ内に catch-up は来ない — 再開見込みはリセット時刻へクランプ", () => {
+  const db = openDb(":memory:");
+
+  // 85 + 20 = 105% — 経過がそこへ達する前にリセットが来る
+  const observed = evaluate(db, [{ window: "session", model: null, usedPercent: 85, resetsAt: SESSION_RESETS }]);
+
+  expect(observed.windows[0]).toMatchObject({ throttled: true, resumesAt: SESSION_RESETS });
+  db.close();
+});
+
+it("model 固有の窓のペース超過は Provider を止めない — 超過と catch-up はその窓にだけ載る(ADR 0030: 資源単位の絞り)", () => {
+  const db = openDb(":memory:");
+
+  // fable 85 > 線 61.4 で超過。catch-up は経過95%の瞬間 = 開始 Jul 17 12:00 + 0.95 × 7d = Jul 24 03:36
+  const observed = evaluate(db, [
+    { window: "week", model: null, usedPercent: 30, resetsAt: WEEK_RESETS },
+    { window: "fable", model: "fable", usedPercent: 85, resetsAt: WEEK_RESETS },
+  ]);
+
+  expect(observed.status).toBe("observed");
+  expect(observed.windows).toEqual([
+    expect.objectContaining({ window: "week", throttled: false }),
+    expect.objectContaining({ window: "fable", throttled: true, resumesAt: new Date("2026-07-24T03:36:00.000Z") }),
+  ]);
   db.close();
 });

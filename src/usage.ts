@@ -1,5 +1,5 @@
 import xtermHeadless from "@xterm/headless";
-import { isSpendDownActive, type SpendDownState } from "./spend-down.js";
+import type { ProviderUsageWindow } from "./throttle.js";
 import { offsetMinutesEastOfUtc } from "./tz.js";
 
 const { Terminal } = xtermHeadless;
@@ -156,118 +156,28 @@ function parseSessionResetsAt(time: ParsedTimeOfDay, now: Date): Date {
 export const SESSION_WINDOW_MS = 5 * 60 * 60 * 1000;
 export const WEEK_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 
-/** ADR 0030: 人間の取り分の予約(pt)。盤面がペースからこの分だけ遅れて
- *  走ることで、空いた分が人間の対話利用に残る。 */
-export interface PaceOffsets {
-  session: number;
-  week: number;
-  fable: number;
-}
-
-/** 一つのウィンドウのペース判定。resumeAt は catch-up 時刻(経過割合 =
- *  使用率 + オフセット になる瞬間)— リセット時刻ではない(ADR 0030)。 */
-export interface WindowDecision {
-  throttled: boolean;
-  resumeAt: Date | null;
-}
-
-export interface ThrottleDecision {
-  throttled: boolean;
-  /** 再開見込み時刻(超過した線の catch-up の最大値)。fail-closed 時は null。 */
-  resetsAt: Date | null;
-  /** ウィンドウ別の内訳(UI 表示用)。session/week の null はそのウィンドウが
-   *  観測不能(パース失敗または逆算の不整合)であること。fable の null は
-   *  「個別制限の観測なし」(行なし = Pro プラン、または読めない行)であり、
-   *  fail-closed の入力ではない(ADR 0030)。 */
-  windows: {
-    session: WindowDecision | null;
-    week: WindowDecision | null;
-    fable: WindowDecision | null;
-  };
-}
-
-/** ADR 0030: throttled ⟺ 使用率% > 経過時間割合% − オフセット(pt)(strict)。
- *  経過割合は「リセット時刻 − ウィンドウ長」で逆算した開始時刻から出す。
- *  now が逆算した開始より前(不整合)は観測不能と同じ fail-closed に落とす。 */
-function evaluateWindow(
-  w: UsageWindowSnapshot,
-  windowMs: number,
-  offsetPt: number,
-  now: Date,
-): WindowDecision | null {
-  const startMs = w.resetsAt.getTime() - windowMs;
-  if (now.getTime() < startMs) return null;
-  const elapsedPct = ((now.getTime() - startMs) / windowMs) * 100;
-  if (!(w.percent > elapsedPct - offsetPt)) return { throttled: false, resumeAt: null };
-  // 使用率 + オフセットが100%以上だと catch-up はウィンドウ内に来ない —
-  // その場合はリセット自体が再開の瞬間
-  const catchUpMs = Math.min(
-    startMs + ((w.percent + offsetPt) / 100) * windowMs,
-    w.resetsAt.getTime(),
-  );
-  return { throttled: true, resumeAt: new Date(catchUpMs) };
-}
-
-/** Spend-down 中の対象ウィンドウの判定: ペース線の代わりに100%ハードキャップ
- *  (全ウィンドウ常時有効の唯一の上限)だけを見る。キャップ到達の再開見込みは
- *  リセット時刻そのもの — catch-up は存在しない(ADR 0030)。 */
-function evaluateCappedWindow(w: UsageWindowSnapshot, windowMs: number, now: Date): WindowDecision | null {
-  const startMs = w.resetsAt.getTime() - windowMs;
-  if (now.getTime() < startMs) return null;
-  if (w.percent < 100) return { throttled: false, resumeAt: null };
-  return { throttled: true, resumeAt: w.resetsAt };
-}
-
-/** ADR 0030: session / week のどちらかがペース線を超えていれば盤面全体の新規
- *  pickup を絞る。fable 線は盤面を止めない — fable モデルのタスクだけを絞る
- *  資源単位の線で、windows.fable として運ばれ scheduler がタスク単位に適用する。
- *  実行中のタスクには決して触れない。spendDown(arm の後に開いた窓には当たらない)は対象
- *  ウィンドウの判定を evaluateCappedWindow に差し替える(当たるかは isSpendDownActive)。 */
-export function evaluateThrottle(
+/** `/usage` の読み取りを Provider ごとの使用量の観測(状態と窓の列)へ変換する。anthropic 固有の
+ *  規則はここだけが持つ(ADR 0144 決定2)。ペース線の判定は評価器の側。 */
+export function claudeUsageObservation(
   snapshot: UsageSnapshot,
-  offsets: PaceOffsets,
-  now: Date,
-  spendDown?: SpendDownState | null,
-): ThrottleDecision {
-  const active = (window: string, w: UsageWindowSnapshot, windowMs: number) =>
-    !!spendDown && isSpendDownActive(spendDown, "anthropic", window, w.resetsAt.getTime() - windowMs);
-  const session =
-    snapshot.session === "idle"
-      ? { throttled: false, resumeAt: null }
-      : snapshot.session &&
-        (active("session", snapshot.session, SESSION_WINDOW_MS)
-          ? evaluateCappedWindow(snapshot.session, SESSION_WINDOW_MS, now)
-          : evaluateWindow(snapshot.session, SESSION_WINDOW_MS, offsets.session, now));
-  // spend-down(week) は fable の線も一緒に外す — 同じ瞬間に失効する予算(ADR 0030)
-  const week =
-    snapshot.week === "idle"
-      ? { throttled: false, resumeAt: null }
-      : snapshot.week &&
-        (active("week", snapshot.week, WEEK_WINDOW_MS)
-          ? evaluateCappedWindow(snapshot.week, WEEK_WINDOW_MS, now)
-          : evaluateWindow(snapshot.week, WEEK_WINDOW_MS, offsets.week, now));
-  // fable の逆算不整合も null(観測なし)へ倒す: fail-closed は session/week の
-  // 意味論で、fable でそれをやると Pro プラン運用時に恒久 skip を製造する側に
-  // 倒れかねない。誤読の被害は全体線と100%キャップが上限を抑える(ADR 0030)。
-  const fable =
-    snapshot.fable === "idle"
-      ? { throttled: false, resumeAt: null }
-      : snapshot.fable &&
-        (active("fable", snapshot.fable, WEEK_WINDOW_MS)
-          ? evaluateCappedWindow(snapshot.fable, WEEK_WINDOW_MS, now)
-          : evaluateWindow(snapshot.fable, WEEK_WINDOW_MS, offsets.fable, now));
-  const windows = { session: session ?? null, week: week ?? null, fable: fable ?? null };
-  // fail-closed: either window unobserved means the decision can't be trusted,
-  // even if the other window looks fine (issue #22: "観測不能なとき...は
-  // fail-closed で skip する")
-  if (!session || !week) return { throttled: true, resetsAt: null, windows };
-  const violated = [session, week].filter((w) => w.throttled);
-  if (violated.length === 0) return { throttled: false, resetsAt: null, windows };
-  const resumeAt = violated.reduce(
-    (latest, w) => (w.resumeAt! > latest ? w.resumeAt! : latest),
-    violated[0]!.resumeAt!,
-  );
-  return { throttled: true, resetsAt: resumeAt, windows };
+): { status: "observed" | "unobservable"; reason?: string; windows: ProviderUsageWindow[] } {
+  const definitions = [
+    ["session", null, snapshot.session, SESSION_WINDOW_MS],
+    ["week", null, snapshot.week, WEEK_WINDOW_MS],
+    ["fable", "fable", snapshot.fable, WEEK_WINDOW_MS],
+  ] as const;
+  // session / week のどちらかが読めなければ観測不能(fail-closed)。fable の不在はプランの正常な姿
+  // でありうるので fail-closed の入力にしない(ADR 0030)。読めた窓は内訳として残す
+  const observable = snapshot.session !== null && snapshot.week !== null;
+  return {
+    status: observable ? "observed" : "unobservable",
+    ...(!observable && { reason: "Claude usage windows are unobservable" }),
+    windows: definitions.flatMap(([window, model, value, durationMs]) =>
+      value && value !== "idle"
+        ? [{ window, model, usedPercent: value.percent, durationMs, resetsAt: value.resetsAt }]
+        : [],
+    ),
+  };
 }
 
 /** The text between `label` and the next occurrence of `until` (or end of

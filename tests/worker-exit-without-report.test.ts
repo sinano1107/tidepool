@@ -5,9 +5,11 @@ import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { ClaudeCodeWorker } from "../src/claude-worker.js";
 import { CodexWorker } from "../src/codex-worker.js";
+import { executionSettingsFor } from "../src/execution-setting.js";
+import type { Provider } from "../src/registry.js";
 import type { WorkerFactory } from "../src/server.js";
 import { moveTask } from "../src/tasks.js";
-import { FakeContainerRuntime, healthyUsageText, recordingSpawn } from "./fakes.js";
+import { FakeContainerRuntime, healthyOpenai, healthyUsageText, recordingSpawn } from "./fakes.js";
 import {
   api,
   bootTidepool,
@@ -200,16 +202,23 @@ const tempDir = async (prefix: string) => {
 };
 
 /** 実 adapter を盤面に載せる。checkUsage だけは健全な固定値にする(pty を起こさない)。 */
-async function bootWithAdapter(build: (deps: Parameters<WorkerFactory>[0]) => ClaudeCodeWorker | CodexWorker) {
+async function bootWithAdapter(
+  build: (deps: Parameters<WorkerFactory>[0]) => ClaudeCodeWorker | CodexWorker,
+  provider: Provider = "anthropic",
+) {
   const proc = recordingSpawn();
   t = await bootTidepool({
     watchdog: WATCHDOG,
+    // 盤面が pickup で選ぶ実行設定の provider を adapter に揃える
+    taskExecutionCandidates: (task) =>
+      executionSettingsFor(t.db, { provider: [{ name: provider, advisor: false }], tier: undefined }, task),
+    openaiUsage: healthyOpenai,
     containerRuntime: new FakeContainerRuntime(proc.spawn),
     workerAdapter: (deps) => {
       const worker = build(deps);
       return {
         id: "adapter",
-        start: (task) => worker.start(task),
+        start: (task, setting) => worker.start(task, setting),
         gracefulStop: (id) => worker.gracefulStop(id),
         checkUsage: async () => healthyUsageText(t.clock.now()),
       };
@@ -265,6 +274,7 @@ async function bootCodex() {
         cliVersion: "codex-cli 0.147.0",
         executable: "/opt/tidepool/bin/codex",
       }),
+    "openai",
   );
 }
 
@@ -275,7 +285,7 @@ for (const [harness, boot] of [["Claude", bootClaude], ["Codex", bootCodex]] as 
     await t.clock.advance(HOUR);
     expect(proc.calls).toHaveLength(1);
 
-    proc.stderr.write("last words\n");
+    proc.processes[0]!.stderr.write("last words\n");
     proc.emitExit(0, null);
     await settle();
 
@@ -295,7 +305,7 @@ it("Claude adapter: 上限到達による中断で exit した session には、
   const task = queueWork(t, "capped");
   await t.clock.advance(HOUR);
 
-  proc.stdout.write(readFileSync(join(import.meta.dirname, "fixtures", "worker-session-cap-429.stream.jsonl"), "utf8"));
+  proc.processes[0]!.stdout.write(readFileSync(join(import.meta.dirname, "fixtures", "worker-session-cap-429.stream.jsonl"), "utf8"));
   proc.emitExit(1, null);
   await settle();
 
@@ -310,7 +320,7 @@ it("Claude adapter: tool surface drift で回収された session は、Containm
   queueWork(t, "drifted");
   await t.clock.advance(HOUR);
 
-  proc.stdout.write(`${JSON.stringify({ type: "system", subtype: "init", tools: ["Bash", "Read", "CronCreate"], mcp_servers: [] })}\n`);
+  proc.processes[0]!.stdout.write(`${JSON.stringify({ type: "system", subtype: "init", tools: ["Bash", "Read", "CronCreate"], mcp_servers: [] })}\n`);
   proc.emitExit(null, "SIGKILL");
   await settle();
 

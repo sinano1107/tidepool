@@ -21,7 +21,6 @@ import type { GitHubAuth } from "./github-auth.js";
 import { type HarnessContainmentCheck, harnessContainmentPickupBlocked } from "./harness-containment.js";
 import { recordShadow } from "./learner.js";
 import { registerDueMetaReviews } from "./memory.js";
-import { getProviderPaceOffset } from "./pace-offsets.js";
 import type { ProcessContainers } from "./process-container.js";
 import { quarantineExcludedProviders, quarantineStops } from "./quarantine.js";
 import {
@@ -34,7 +33,7 @@ import {
 import { registryReachabilityPickupBlocked } from "./registry-reachability.js";
 import { parseGitHubRepo, repairRepoAccess } from "./repo-access.js";
 import type { Slot } from "./slot.js";
-import { expireSpendDown, getSpendDown } from "./spend-down.js";
+import { expireSpendDown } from "./spend-down.js";
 import {
   abandonConsequence,
   contentSourceFor,
@@ -52,12 +51,7 @@ import {
   type ProviderUsageObservation,
   reportProviderUsage,
 } from "./throttle.js";
-import {
-  evaluateThrottle,
-  parseUsage,
-  type ThrottleDecision,
-  type UsageSnapshot,
-} from "./usage.js";
+import { claudeUsageObservation, parseUsage, type UsageSnapshot } from "./usage.js";
 import type { WorkerAdapter } from "./worker.js";
 import {
   BOARD_WORKER_ID,
@@ -153,15 +147,13 @@ function withExclusion(
 }
 
 /** ADR 0008: usage only matters at the moment of a pickup decision — a fresh
- *  check every time there is a candidate, never a background poll.
- *  オフセットは盤面設定 (ADR 0030) を毎回読む — settings で変えた値が次の
- *  poll から効く。 */
-async function checkThrottle(
+ *  read every time there is a candidate, never a background poll. */
+async function readClaudeUsage(
   db: Db,
   clock: Clock,
   worker: WorkerAdapter,
   cliAuth?: CliAuthCheck,
-): Promise<{ decision: ThrottleDecision; snapshot: UsageSnapshot }> {
+): Promise<UsageSnapshot> {
   const resultText = await worker.checkUsage();
   // `null` is deliberately ambiguous (modal, renderer, marker, auth, …).
   // Preserve fail-closed throttle, and quarantine the provider's authentication
@@ -178,21 +170,9 @@ async function checkThrottle(
       console.warn("[cli-auth] usage failure could not be classified", err);
     }
   }
-  const snapshot: UsageSnapshot =
-    resultText !== null
-      ? parseUsage(resultText, clock.now())
-      : { session: null, week: null, fable: null };
-  const decision = evaluateThrottle(
-    snapshot,
-    {
-      session: getProviderPaceOffset(db, "anthropic", "session"),
-      week: getProviderPaceOffset(db, "anthropic", "week"),
-      fable: getProviderPaceOffset(db, "anthropic", "fable"),
-    },
-    clock.now(),
-    getSpendDown(db),
-  );
-  return { decision, snapshot };
+  return resultText !== null
+    ? parseUsage(resultText, clock.now())
+    : { session: null, week: null, fable: null };
 }
 
 /** One replace-style timer per Provider/window/model resource. A fresh probe
@@ -549,39 +529,12 @@ export function startScheduler(deps: {
         now,
       );
     }
-    const { decision, snapshot } = await checkThrottle(db, clock, worker, cliAuth);
-    const definitions = [
-      ["session", null, snapshot.session, decision.windows.session, 5 * HOURLY],
-      ["week", null, snapshot.week, decision.windows.week, 7 * 24 * HOURLY],
-      ["fable", "fable", snapshot.fable, decision.windows.fable, 7 * 24 * HOURLY],
-    ] as const;
-    // 判定の側で見る —— 読めても逆算が不整合な窓は判定が null(evaluateThrottle の fail-closed)
-    const observable = decision.windows.session !== null && decision.windows.week !== null;
-    const observation: ProviderUsageObservation = {
-      provider,
-      status: observable ? "observed" : "unobservable",
-      plan: null,
-      cliVersion: null,
-      ...(!observable && { reason: "Claude usage windows are unobservable" }),
-      observedAt: now,
-      windows: definitions.flatMap(([window, model, value, verdict, durationMs]) =>
-        value && value !== "idle" && verdict
-          ? [
-              {
-                window,
-                model,
-                usedPercent: value.percent,
-                durationMs,
-                resetsAt: value.resetsAt,
-                throttled: verdict.throttled,
-                resumesAt: verdict.resumeAt,
-              },
-            ]
-          : [],
-      ),
-    };
-    reportProviderUsage(db, observation);
-    return observation;
+    const snapshot = await readClaudeUsage(db, clock, worker, cliAuth);
+    return evaluateAndReportProviderUsage(
+      db,
+      { provider, plan: null, cliVersion: null, ...claudeUsageObservation(snapshot) },
+      now,
+    );
   }
 
   async function poll(): Promise<void> {
