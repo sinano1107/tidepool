@@ -330,6 +330,8 @@ export interface CodexCapabilityObservation {
   features: Readonly<Record<string, string>>;
   /** 盤面が `developer_instructions` で渡した marker のうち、developer item に載ったもの。 */
   developerMarkers: readonly string[];
+  /** user item に載った AGENTS.md の層。盤面は何も置かないので空が期待値(ADR 0148)。 */
+  agentsMdLayer: readonly string[];
   /** `hooks/list` の vendor 診断。照合には使わず、hook 不一致の理由文に写すだけ(#734)。 */
   hookDiagnostics: readonly string[];
 }
@@ -368,6 +370,7 @@ export async function checkCodexCapability(
         observed.hooks,
       ],
       ["developer instructions", [CODEX_DEVELOPER_MARKER], observed.developerMarkers],
+      ["agents.md", [], observed.agentsMdLayer],
     ] as const
   ).find(([, expected, actual]) => JSON.stringify(expected) !== JSON.stringify(actual));
   if (mismatch) {
@@ -653,6 +656,21 @@ export function observedDeveloperMarkers(promptInput: string): string[] {
     .filter((text) => text === CODEX_DEVELOPER_MARKER);
 }
 
+/** ADR 0148 決定2: `codex debug prompt-input` の出力から、**user role の item に属する
+ *  AGENTS.md の層**(`# AGENTS.md instructions` で始まる part)を集める。global の形も
+ *  project の形(`… for <path>`)も同じ接頭辞なので、ファイル名を知らずに層ごと捕まえる。 */
+export function observedAgentsMdLayer(promptInput: string): string[] {
+  const messages = JSON.parse(promptInput) as Array<{
+    role?: string;
+    content?: Array<{ text?: string }>;
+  }>;
+  return messages
+    .filter((message) => message.role === "user")
+    .flatMap((message) => message.content ?? [])
+    .map((part) => part.text ?? "")
+    .filter((text) => text.startsWith("# AGENTS.md instructions"));
+}
+
 /** 盤面が渡した hook を Codex が実際に**登録**したかを、使用量 probe と同じ app-server 面の
  *  `hooks/list` で読む(ADR 0130 決定3)。
  *
@@ -810,6 +828,7 @@ async function actualCodexCapability(options: {
       cliVersion,
       skills: observedSkills(promptInput),
       developerMarkers: observedDeveloperMarkers(promptInput),
+      agentsMdLayer: observedAgentsMdLayer(promptInput),
       ...await probeHookRegistration(call, options.executable, env, (taskType) =>
         // 問うのは parse だけ —— 値は形の正しい placeholder(ADR 0142 決定2)
         spawnConfig({
