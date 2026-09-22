@@ -153,8 +153,8 @@ function parseSessionResetsAt(time: ParsedTimeOfDay, now: Date): Date {
 
 // ADR 0030: ウィンドウ長は Anthropic のプロダクト事実でありハードコード定数。
 // 仕様が変われば /usage 書式変更と同類のスクレイパー破損イベントとして直す。
-export const SESSION_WINDOW_MS = 5 * 60 * 60 * 1000;
-export const WEEK_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+const SESSION_WINDOW_MS = 5 * 60 * 60 * 1000;
+const WEEK_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 
 /** `/usage` の読み取りを Provider ごとの使用量の観測(状態と窓の列)へ変換する。anthropic 固有の
  *  規則はここだけが持つ(ADR 0144 決定2)。ペース線の判定は評価器の側。 */
