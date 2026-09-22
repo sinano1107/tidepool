@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import {
   CODEX_CLI_VERSION,
@@ -119,6 +119,49 @@ it("preflight の permission probe は workspace の allowed_domains を network
 
   expect(spawn.calls[index]!.args).toContainEqual(expect.stringContaining('"domains"={"registry.npmjs.org"="allow","127.0.0.1"="allow"}'));
   spawn.emitExitAt(index, 1, null); // 後続の probe は見ないので、ここで倒して後始末まで走らせる
+  expect((await capability).available).toBe(false);
+});
+
+/** sandbox probe の argv から、tmpdir() 側と homedir() 側の外側ファイルを拾う。 */
+function outsides(args: readonly string[]) {
+  const secrets = args.filter((arg) => arg.endsWith("/secret"));
+  return {
+    tmp: secrets.find((arg) => arg.startsWith(realpathSync(tmpdir())))!,
+    home: secrets.find((arg) => arg.startsWith(realpathSync(homedir())))!,
+  };
+}
+
+it("permission probe は tmpdir() と homedir() の両方に外側を置き、終われば homedir() 側を消す(issue #712)", async () => {
+  const { spawn, capability, index } = await driveCodexPreflight("sandboxProbe");
+  const work = outsides(spawn.calls[index]!.args);
+  expect(work.tmp).toBeDefined();
+  expect(work.home).toBeDefined();
+  spawn.emitExitAt(index, 0, null); // work は通し、review は倒す
+  await vi.waitFor(() => expect(spawn.calls).toHaveLength(index + 2));
+  const review = outsides(spawn.calls[index + 1]!.args);
+  spawn.emitExitAt(index + 1, 1, null);
+  expect((await capability).available).toBe(false);
+
+  expect(existsSync(dirname(work.home))).toBe(false);
+  expect(existsSync(dirname(review.home))).toBe(false);
+});
+
+it("permission canary は読めた外側のパスを stderr に出し、tmpdir() 側は exit 32・homedir() 側は exit 40 で落ちる(issue #712)", async () => {
+  const { spawn, capability, index } = await driveCodexPreflight("sandboxProbe");
+  const args = spawn.calls[index]!.args;
+  const canaryArgs = args.slice(args.indexOf(process.execPath) + 1);
+  const { tmp, home } = outsides(args);
+  const runCanary = () => spawnSync(process.execPath, canaryArgs, { encoding: "utf8" });
+
+  const tmpReadable = runCanary();
+  expect(tmpReadable.status).toBe(32);
+  expect(tmpReadable.stderr).toContain(tmp);
+  rmSync(tmp);
+  const homeReadable = runCanary();
+  expect(homeReadable.status).toBe(40);
+  expect(homeReadable.stderr).toContain(home);
+
+  spawn.emitExitAt(index, 1, null);
   expect((await capability).available).toBe(false);
 });
 
