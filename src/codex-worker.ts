@@ -685,9 +685,10 @@ const cp = require("node:child_process");
 const [workspace, taskTemp, outside, access] = process.argv.slice(2);
 const workspaceFile = workspace + "/.tidepool-codex-permission-canary";
 const taskFile = taskTemp + "/task-canary";
-// 非ゼロの exit は理由を1行 stderr に書いてから落ちる —— 番号の意味を言うのはこの文だけ (#710)
+// 検査の失敗は理由を1行 stderr に書いてから落ちる —— 番号の意味を言うのはこの文だけ (#710)。
+// 37 だけは外側 catch で例外本体を出す。macOS の pipe では console.error が非同期なので同期で書く
 const fail = (code, why) => {
-  console.error(why);
+  fs.writeSync(2, why + "\\n");
   process.exit(code);
 };
 try {
@@ -729,7 +730,6 @@ try {
   });
   setTimeout(() => fail(36, "canary did not finish within the 3s watchdog"), 3000);
 } catch (error) {
-  console.error("canary threw before finishing its checks:");
   console.error(error);
   process.exit(37);
 }
