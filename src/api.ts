@@ -398,14 +398,13 @@ const quietHoursSchema = z.object({
 
 // ペースオフセット (ADR 0030): 値域の意味論(0–100 の整数 pt)は pace-offsets.ts の
 // isValidOffset そのものを使う — 二重定義しない
-const paceOffsetValue = z.number().refine(isValidOffset, {
-  message: "offset must be an integer between 0 and 100",
-});
 const providerPaceOffsetSchema = z
   .object({
     provider: z.enum(PROVIDER_VALUES),
     window: z.string(),
-    offset: paceOffsetValue,
+    offset: z.number().refine(isValidOffset, {
+      message: "offset must be an integer between 0 and 100",
+    }),
   })
   .refine((v) => isKnownPaceOffsetTarget(v.provider, v.window), {
     message: "unknown provider/window pair",
