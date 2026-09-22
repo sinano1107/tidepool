@@ -145,7 +145,7 @@ async function preflightToWorkAppServer() {
   })();
   for (const i of [0, 1, 2, 3, 4]) {
     await vi.waitFor(() => expect(spawn.calls).toHaveLength(i + 1));
-    if (i === 1) spawn.stdout.write("[]");
+    if (i === 1) spawn.processes[1]!.stdout.write("[]");
     spawn.emitExitAt(i, 0, null);
   }
   await vi.waitFor(() => expect(spawn.calls).toHaveLength(6));
@@ -155,7 +155,7 @@ async function preflightToWorkAppServer() {
 /** work の app-server 呼び出し(hooks/list)を受理させ、review の呼び出し(7本目)まで進める。 */
 async function preflightToReviewAppServer() {
   const { spawn, capability } = await preflightToWorkAppServer();
-  spawn.stdout.write('{"id":1,"result":{}}\n{"id":2,"result":{"data":[]}}\n');
+  spawn.processes[5]!.stdout.write('{"id":1,"result":{}}\n{"id":2,"result":{"data":[]}}\n');
   spawn.emitExitAt(5, 0, null);
   await vi.waitFor(() => expect(spawn.calls).toHaveLength(7));
   return { spawn, capability };
@@ -178,7 +178,7 @@ it.each([
 ] as const)("%s の設定を app-server が未知キーで拒否すると、キーを名指した could not run で封じ込めを倒す(ADR 0142 決定5)", async (_, drive, index) => {
   const { spawn, capability } = await drive();
 
-  spawn.stderr.write("Error: unknown configuration field `mcp_servers.tidepool.enabled_tool`\n");
+  spawn.processes[index]!.stderr.write("Error: unknown configuration field `mcp_servers.tidepool.enabled_tool`\n");
   spawn.emitExitAt(index, 1, null);
 
   const result = await capability;
