@@ -2313,10 +2313,10 @@ function SettingsScreen({ say, registerLeaveGuard }) {
   React.useEffect(() => {
     loadQuietHours();
   }, []);
-  const [paceOffsets, setPaceOffsets] = React.useState(null);
+  const [providerPaceOffsets, setProviderPaceOffsets] = React.useState(null);
   const loadPaceOffsets = async () => {
     const result = await api("GET /api/settings/provider-pace-offsets");
-    setPaceOffsets(result.offsets);
+    setProviderPaceOffsets(result.offsets);
   };
   React.useEffect(() => {
     loadPaceOffsets();
@@ -2614,7 +2614,7 @@ function SettingsScreen({ say, registerLeaveGuard }) {
         onSaved: loadQuietHours,
         edit
       }
-    ), paceOffsets && /* @__PURE__ */ React.createElement(PaceOffsetsCard, { offsets: paceOffsets, say, onSaved: loadPaceOffsets, edit }), executionSettings && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(ExecutionDefaultsCard, { settings: executionSettings, say, onSaved: loadExecutionSettings, edit }), /* @__PURE__ */ React.createElement(ExecutionTableCard, { settings: executionSettings, say, onSaved: loadExecutionSettings, edit })), memorySettings && /* @__PURE__ */ React.createElement(MemorySettingsCard, { settings: memorySettings, say, onSaved: loadMemorySettings, edit }), displayLanguageLoaded && /* @__PURE__ */ React.createElement(MemoryEntriesCard, { workspaceNames, language: displayLanguage, say, edit }), githubLoggedIn !== null && /* @__PURE__ */ React.createElement(GitHubLoginCard, { loggedIn: githubLoggedIn }), (translateUsage !== null || translateUsageFailed) && /* @__PURE__ */ React.createElement(TranslateUsageCard, { records: translateUsage }), (!displayLanguageLoaded || !quietHoursLoaded || !paceOffsets || !executionSettings || !memorySettings) && /* @__PURE__ */ React.createElement(Card, { style: { fontSize: "var(--text-sm)", color: "var(--text-secondary)" } }, "loading\u2026"), /* @__PURE__ */ React.createElement("p", { style: settingsFootnote }, "applies to every task the board picks up"));
+    ), providerPaceOffsets && /* @__PURE__ */ React.createElement(PaceOffsetsCard, { offsets: providerPaceOffsets, say, onSaved: loadPaceOffsets, edit }), executionSettings && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(ExecutionDefaultsCard, { settings: executionSettings, say, onSaved: loadExecutionSettings, edit }), /* @__PURE__ */ React.createElement(ExecutionTableCard, { settings: executionSettings, say, onSaved: loadExecutionSettings, edit })), memorySettings && /* @__PURE__ */ React.createElement(MemorySettingsCard, { settings: memorySettings, say, onSaved: loadMemorySettings, edit }), displayLanguageLoaded && /* @__PURE__ */ React.createElement(MemoryEntriesCard, { workspaceNames, language: displayLanguage, say, edit }), githubLoggedIn !== null && /* @__PURE__ */ React.createElement(GitHubLoginCard, { loggedIn: githubLoggedIn }), (translateUsage !== null || translateUsageFailed) && /* @__PURE__ */ React.createElement(TranslateUsageCard, { records: translateUsage }), (!displayLanguageLoaded || !quietHoursLoaded || !providerPaceOffsets || !executionSettings || !memorySettings) && /* @__PURE__ */ React.createElement(Card, { style: { fontSize: "var(--text-sm)", color: "var(--text-secondary)" } }, "loading\u2026"), /* @__PURE__ */ React.createElement("p", { style: settingsFootnote }, "applies to every task the board picks up"));
   } else if (!sec) {
     body = /* @__PURE__ */ React.createElement(ScreenHeader, { title: "Settings", backLabel: "Settings", onBack: () => go([]) });
   } else if (recordName === void 0) {
