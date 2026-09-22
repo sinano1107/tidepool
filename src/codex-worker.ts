@@ -694,7 +694,7 @@ const fs = require("node:fs");
 const net = require("node:net");
 const http = require("node:http");
 const cp = require("node:child_process");
-const [workspace, taskTemp, outside, access] = process.argv.slice(2);
+const [workspace, taskTemp, outside, homeOutside, access] = process.argv.slice(2);
 const workspaceFile = workspace + "/.tidepool-codex-permission-canary";
 const taskFile = taskTemp + "/task-canary";
 // 検査の失敗は理由を1行 stderr に書いてから落ちる —— 番号の意味を言うのはこの文だけ (#710)。
@@ -706,10 +706,10 @@ const fail = (code, why) => {
 try {
   // 読めることの証明は listing が throw しないことだけ —— workspace の中身に前提を置かない (#708)
   fs.readdirSync(workspace);
-  try {
-    fs.readFileSync(outside, "utf8");
-    fail(32, "canary could read a file outside the workspace");
-  } catch {}
+  for (const [path, code] of [[outside, 32], [homeOutside, 40]]) {
+    try { fs.readFileSync(path, "utf8"); } catch { continue; }
+    fail(code, "canary could read a file outside the workspace: " + path);
+  }
   if (access === "write") {
     fs.writeFileSync(workspaceFile, "ok");
     fs.unlinkSync(workspaceFile);
@@ -757,11 +757,16 @@ async function probePermission(
   allowedDomains: readonly string[],
 ): Promise<void> {
   const outsideDir = realpathSync(mkdtempSync(join(tmpdir(), "tidepool-codex-outside-")));
+  // `:slash_tmp` の deny は tmpdir() 側、`:root` の deny は homedir() 側が測る(Linux、issue #712)
+  const homeOutsideDir = realpathSync(mkdtempSync(join(homedir(), ".tidepool-codex-outside-")));
   const outside = join(outsideDir, "secret");
+  const homeOutside = join(homeOutsideDir, "secret");
   const canary = join(taskTemp, `${taskType}-permission-canary.cjs`);
-  writeFileSync(outside, "must remain unreadable");
-  writeFileSync(canary, PERMISSION_CANARY);
   try {
+    // 書き込みも try の内側: 途中で投げても $HOME に使い捨てディレクトリを残さない
+    writeFileSync(outside, "must remain unreadable");
+    writeFileSync(homeOutside, "must remain unreadable");
+    writeFileSync(canary, PERMISSION_CANARY);
     await runFile(
       call,
       executable,
@@ -775,12 +780,14 @@ async function probePermission(
         workspace,
         taskTemp,
         outside,
+        homeOutside,
         taskType === "review" ? "read" : "write",
       ],
       { cwd: workspace, env },
     );
   } finally {
     rmSync(outsideDir, { recursive: true, force: true });
+    rmSync(homeOutsideDir, { recursive: true, force: true });
   }
 }
 
