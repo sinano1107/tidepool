@@ -34,9 +34,15 @@ its tools is [docs/mac-first-boot.md](../mac-first-boot.md); use that, don't rep
 
 - Keep the checkout on the VM's own disk (`~/tidepool`) and `cd` right after `limactl shell`:
   the shell opens in the Mac's current directory, mounted read-only inside the VM.
-- Run `npm run canary:container` under a `Delegate=yes` user scope
-  (`systemd-run --user --scope -p Delegate=yes -- npm run canary:container`); a bare `limactl shell`
-  session stops at the preflight check.
+- Anything that creates worker containers needs a `Delegate=yes` user scope; under a bare
+  `limactl shell` session the board raises a cgroup EACCES question on every Harness and picks
+  nothing up, and the canary stops at the preflight check.
+  - Start the board with `scripts/vm-board.sh`, as in
+    [Start the board](../mac-first-boot.md#start-the-board), not with a bare `npm start`. It runs in
+    the foreground and stops when the `limactl shell` session ends — `setsid` / `nohup` don't keep
+    it alive (ADR 0090 決定2).
+  - Run the canary as
+    `systemd-run --user --scope -p Delegate=yes -- npm run canary:container`.
 - The VM covers what CI never runs — the contract suite, a real worker run, real CLI login — and
   `npm test` when a failure shows up on Linux but not on the Mac: CI reruns green and keeps no
   transcript, while the VM repeats it and takes instrumentation (#773).
