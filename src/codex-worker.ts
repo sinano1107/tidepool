@@ -623,7 +623,10 @@ export function resolveCodexExecutable(searchPath = process.env.PATH ?? ""): str
   return resolve(directories[0] ?? "/usr/local/bin", "codex");
 }
 
-function observedSkills(promptInput: string): string[] {
+/** `codex debug prompt-input` の出力から、`<skills_instructions>` の `### Available skills` に
+ *  載った skill 名を集める。節が無ければ `[]` —— 期待値も `[]` なので、パースの静かな失敗は
+ *  skill を有効にした実物 fixture のテストだけが捕まえる(issue #699)。 */
+export function observedSkills(promptInput: string): string[] {
   const messages = JSON.parse(promptInput) as Array<{
     content?: Array<{ type?: string; text?: string }>;
   }>;
