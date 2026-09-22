@@ -15,7 +15,7 @@ import {
   type TeardownDeps,
   teardownStep,
 } from "./teardown.js";
-import type { WorkerAdapter } from "./worker.js";
+import type { WorkerAdapter, WorkerExit } from "./worker.js";
 import { BOARD_WORKER_ID, buildWorkspaceResolver, type WorkspaceConfig } from "./workspace.js";
 
 export const WATCHDOG_TICK = 60 * 1000;
@@ -57,6 +57,9 @@ export interface Watchdog extends PendingReclaim {
    *  遅れて届いた回収済み観測はこの述語で弾かれる。`pendingReclaim` では代われない:
    *  あちらは容器の側も読むので、空が観測された瞬間に false になる。 */
   heldForContainment: (taskId: string) => boolean;
+  /** root process の exit の観測(ADR 0145)。まだ後始末に入っておらず、梯子にも入って
+   *  いない session なら、報告なき exit として failure question を立てて後始末へ入れる。 */
+  onWorkerExited: (taskId: string, exit: WorkerExit) => void;
 }
 
 /** The task's most recent pickup, not its first: a retried task is picked up
@@ -338,6 +341,45 @@ export function startWatchdog(deps: {
     );
   }
 
+  /** 送達記録を今の pickup に合わせる。retry された task が次の tick より先に exit すると、
+   *  前の run の記録を読んでしまうので、tick と exit の観測の両方がここを通る。 */
+  function syncPickup(taskId: string): number {
+    const pickup = pickedUpAt(db, taskId);
+    if (lastSeenPickup.get(taskId) !== pickup) {
+      lastSeenPickup.set(taskId, pickup);
+      stopSentAt.delete(taskId);
+      forceSentAt.delete(taskId);
+      settled.delete(taskId);
+    }
+    return pickup;
+  }
+
+  /** 報告なき exit(ADR 0145)。最終 verb・上限到達による中断は exit より先に後始末へ
+   *  入るので、ここの門で自然に外れる。梯子に入った session は梯子の底の question が受ける
+   *  (決定4)—— 梯子の強制回収も決着も畳み込み停止の後ろにしか無いので、停止の送達記録
+   *  1つで見分けられる。強制回収は adapter が送達済みなので重ねない。 */
+  function onWorkerExited(taskId: string, exit: WorkerExit): void {
+    if (slot.currentTaskId !== taskId || slot.inTeardown) return;
+    syncPickup(taskId);
+    if (stopSentAt.has(taskId)) return;
+    const task = getTask(db, taskId);
+    if (task?.status !== "in_progress") return;
+    const now = clock.now();
+    const how = exit.signal ? `signal ${exit.signal}` : `exit code ${exit.exit_code}`;
+    registerFailureQuestion(
+      db,
+      task,
+      `worker exited without reporting: ${task.title}`,
+      `the worker for task "${task.title}" (${task.id}) exited (${how}) without a final report — ` +
+        "it did not complete, decompose, or escalate. No self-report is possible." +
+        (exit.stderr_tail ? `\n\nstderr tail:\n${exit.stderr_tail}` : ""),
+      now,
+    );
+    markTeardown(db, taskId, now);
+    slot.enterTeardown();
+    void containers.reclaimed(taskId).then(() => runTeardown(teardown, taskId, teardownStep(db, taskId)));
+  }
+
   function tick(): void {
     const taskId = slot.currentTaskId;
     if (taskId === null) return;
@@ -350,13 +392,7 @@ export function startWatchdog(deps: {
     if (openQuarantineValues(db, "failedTeardown").length > 0) return;
     const task = getTask(db, taskId);
     if (!task) return;
-    const pickup = pickedUpAt(db, taskId);
-    if (lastSeenPickup.get(taskId) !== pickup) {
-      lastSeenPickup.set(taskId, pickup);
-      stopSentAt.delete(taskId);
-      forceSentAt.delete(taskId);
-      settled.delete(taskId);
-    }
+    const pickup = syncPickup(taskId);
     // cap は in_progress のまま後始末に入る(ADR 0113)。タスク種別の梯子より先に読む。
     if (sessionInTeardown(db)?.taskId === taskId) {
       teardownTick(task);
@@ -394,6 +430,7 @@ export function startWatchdog(deps: {
   return {
     stop: cancel,
     heldForContainment: (taskId) => pending === taskId,
+    onWorkerExited,
     pendingReclaim: () =>
       pending !== null && containers.pendingReclaim(pending)
         ? `the container for task ${pending}`

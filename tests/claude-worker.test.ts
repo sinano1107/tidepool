@@ -27,6 +27,7 @@ import { getTask, listBoard, nextSlotTask, resolveTaskAgent, type Task } from ".
 import { sessionInTeardown } from "../src/teardown.js";
 import { getProviderUsage, reportProviderUsage } from "../src/throttle.js";
 import { capInterruptionHandler } from "../src/watchdog.js";
+import type { WorkerExit } from "../src/worker.js";
 import {
   prepareWorkspaceAtPickup,
   type WorkspaceConfig,
@@ -1394,8 +1395,8 @@ describe("ClaudeCodeWorker", () => {
     // skill 列挙の失敗に対して取ったのと同じ「このセッションは走らせない」である。
     // 面が広い側にずれていればそれは worker が持つべきでない能力を持ったまま走る
     // ことであり、狭い側にずれていれば能力を1つ失ったまま詰まるだけである。どちらも
-    // 走らせる理由がない。slot は watchdog が per-type 時限で回収する(既存の
-    // 失敗経路)。
+    // 走らせる理由がない。slot は回収後の root の exit が報告なき exit として
+    // 後始末へ入れる(ADR 0145)。
     const { start, processes, killed } = await makeWorker();
     start("task-init-kill", null, "deckhand", "work");
     processes[0]!.stdout.write(initLine(["Bash", "Read", "CronCreate"]));
@@ -2258,6 +2259,24 @@ describe("ClaudeCodeWorker", () => {
         .map((task) => task.title),
     ).toEqual([
       "anthropic authentication is unavailable — pickup of anthropic-speaking agents is stopped",
+    ]);
+  });
+
+  it("root の exit は worker_exited を書いて強制回収を撃ったあとで、盤面側の一撃に exit code / signal / stderr 末尾を渡す(ADR 0145)", async () => {
+    const calls: Array<[string, WorkerExit, { exitedRecorded: boolean; forced: boolean }]> = [];
+    const f = await makeWorker({}, {
+      onWorkerExited: (taskId, exit) =>
+        calls.push([taskId, exit, {
+          exitedRecorded: listEvents(f.db, taskId).some((e) => e.kind === "worker_exited"),
+          forced: f.killed.includes("SIGKILL"),
+        }]),
+    });
+    f.start("task-exit-without-report");
+    f.processes[0]!.stderr.write("boom\n");
+    f.emitExit(0, null);
+
+    expect(calls).toEqual([
+      ["task-exit-without-report", { exit_code: 0, signal: null, stderr_tail: "boom" }, { exitedRecorded: true, forced: true }],
     ]);
   });
 
@@ -3475,6 +3494,20 @@ describe("上限到達による中断(issue #467 / ADR 0104)", () => {
     expect(nextSlotTask(db)?.id).toBe(task.id);
     // 失敗ではなく環境事象なので、リトライ判断を問う question は生まれない
     expect(listBoard(db).filter((t) => t.type === "question")).toEqual([]);
+  });
+
+  it("上限到達の一撃は exit の一撃より先に呼ばれる(ADR 0145)", async () => {
+    const order: string[] = [];
+    const { start, processes, emitExit } = await makeWorker({}, {
+      onCapInterrupted: () => order.push("cap"),
+      onWorkerExited: () => order.push("exited"),
+    });
+    start("task-capped-order");
+    processes[0]!.stdout.write(CAP_STREAM);
+
+    emitExit(1, null);
+
+    expect(order).toEqual(["cap", "exited"]);
   });
 
   it("中断の事実を盤面名義の event として worker_exited と並べて刻む(ADR 0104 決定4)", async () => {

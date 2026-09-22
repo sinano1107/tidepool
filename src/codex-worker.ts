@@ -32,7 +32,7 @@ import {
 import type { ContainerSpawn, ProcessContainers } from "./process-container.js";
 import { loadRegistry, type RegistrySource } from "./registry.js";
 import { DEFAULT_AUDITOR_NAME, resolveTaskAgent, type Task } from "./tasks.js";
-import type { WorkerAdapter } from "./worker.js";
+import type { WorkerAdapter, WorkerExit } from "./worker.js";
 import {
   quarantineWorkspace,
   resolveExecutionWorkspace,
@@ -278,6 +278,8 @@ export interface CodexWorkerOptions {
   boardState?: BoardStatePath[];
   /** ADR 0118: `spawn()` が失敗した pickup を受ける盤面側の一撃(`spawnFailureHandler` 製)。 */
   onSpawnFailed?: (taskId: string, failure: { error_code: string | null; message: string }) => void;
+  /** ADR 0145: root process の exit を受ける盤面側の一撃。報告なき exit かどうかの判定は盤面側が持つ。 */
+  onWorkerExited?: (taskId: string, exit: WorkerExit) => void;
 }
 
 /** Codex に登録された hook のうち、盤面が宣言と突き合わせる項目 —— ADR 0130 決定3 の4つ
@@ -1084,6 +1086,7 @@ export class CodexWorker implements WorkerAdapter {
       // ADR 0109 決定4: root の exit は容器に残るものが孤児である証拠 —— usage と
       // transcript を書いた後に強制回収を撃つ。Harness 非依存に、盤面 supervisor 経由。
       this.containers.forceReclaim(task.id);
+      this.options.onWorkerExited?.(task.id, { exit_code: code, signal, stderr_tail: tail });
     });
   }
 

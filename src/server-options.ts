@@ -79,7 +79,7 @@ import type { BoardCallers, ServerOptions, WorkerFactory } from "./server.js";
 import { resolveTaskAgent, type Task } from "./tasks.js";
 import type { TranslationClient } from "./translate.js";
 import type { WatchdogConfig } from "./watchdog.js";
-import { CanonicalWorkerRouter, type WorkerAdapter } from "./worker.js";
+import { CanonicalWorkerRouter, type WorkerAdapter, type WorkerExit } from "./worker.js";
 import {
   listRegisteredWorkspaces,
   resolveExecutionWorkspace,
@@ -236,6 +236,7 @@ export function buildWorkerOptions(
     boardCall: BoardCall;
     onCapInterrupted: (taskId: string, reclaimed: Promise<void>) => void;
     onSpawnFailed: (taskId: string, failure: { error_code: string | null; message: string }) => void;
+    onWorkerExited: (taskId: string, exit: WorkerExit) => void;
   },
 ): ClaudeWorkerOptions {
   return {
@@ -272,6 +273,8 @@ export function buildWorkerOptions(
     onCapInterrupted: session.onCapInterrupted,
     // ADR 0118: 渡し忘れは「spawn に失敗した pickup が in_progress のまま枠を握る」形で静かに fail する
     onSpawnFailed: session.onSpawnFailed,
+    // ADR 0145: 渡し忘れは「報告なしに exit した session が時間制限まで枠を握る」形で静かに fail する
+    onWorkerExited: session.onWorkerExited,
   };
 }
 
@@ -281,7 +284,7 @@ export function buildWorkerOptions(
 export function buildWorkerFactory(board: BoardComposition): WorkerFactory {
   const { registryDir } = board;
   if (!registryDir) return () => new LoggingWorker();
-  return ({ db, clock, containers, boardCall, onCapInterrupted, onSpawnFailed }) => {
+  return ({ db, clock, containers, boardCall, onCapInterrupted, onSpawnFailed, onWorkerExited }) => {
     const registry = { dir: registryDir, mode: board.registryMode } as const;
     return new CanonicalWorkerRouter({
       id: board.defaultAgentName,
@@ -289,7 +292,7 @@ export function buildWorkerFactory(board: BoardComposition): WorkerFactory {
         "claude-code": new ClaudeCodeWorker(
           buildWorkerOptions(
             { ...board, registryDir },
-            { db, clock, containers, boardCall, onCapInterrupted, onSpawnFailed },
+            { db, clock, containers, boardCall, onCapInterrupted, onSpawnFailed, onWorkerExited },
           ),
         ),
         codex: new CodexWorker({
@@ -308,6 +311,7 @@ export function buildWorkerFactory(board: BoardComposition): WorkerFactory {
           cliVersion: CODEX_CLI_VERSION,
           boardState: board.boardState,
           onSpawnFailed,
+          onWorkerExited,
         }),
       },
     });

@@ -17,6 +17,7 @@ import { buildMemoryInjection, recordKnowledge } from "../src/memory.js";
 import { openQuarantineValues } from "../src/quarantine.js";
 import { loadRegistry } from "../src/registry.js";
 import { registerTask, type Task } from "../src/tasks.js";
+import type { WorkerExit } from "../src/worker.js";
 import { containerHarness, FakeClock, passthroughContainers, recordingSpawn } from "./fakes.js";
 import { bootTidepool, mcpClient, type Tidepool } from "./harness.js";
 import { makeRegistry } from "./registry-fixture.js";
@@ -64,6 +65,7 @@ const enabledTools = (args: string[]) => configValue<string[]>(args, "mcp_server
 async function fixture(
   onSpawnFailed?: (taskId: string, failure: { error_code: string | null; message: string }) => void,
   allowedDomains = "\n  allowed_domains:\n    - api.github.com",
+  onWorkerExited?: (taskId: string, exit: WorkerExit) => void,
 ) {
   const workspace = await mkdtemp(join(tmpdir(), "tidepool-codex-workspace-"));
   execFileSync("git", ["init", "-b", "main"], { cwd: workspace });
@@ -101,6 +103,7 @@ You are the Codex worker.`,
     executable: "/opt/tidepool/bin/codex",
     containers: passthroughContainers(process.spawn),
     onSpawnFailed,
+    onWorkerExited,
   });
   // scheduler が pickup の瞬間に選ぶ実行設定(除外なし)を渡す
   const agent = loadRegistry(registry, "purely-local").agents["codex-agent"]!;
@@ -505,6 +508,24 @@ describe("CodexWorker (ADR 0098)", () => {
     expect(listEvents(f.db, value.id).some((e) => e.kind === "spawn_failed")).toBe(false);
     f.process.emitError(Object.assign(new Error("spawn codex ENOENT"), { code: "ENOENT", syscall: "spawn codex" }));
     expect(calls).toEqual([[value.id, { error_code: "ENOENT", message: "spawn codex ENOENT" }]]);
+  });
+
+  it("root の exit は worker_exited を書いて強制回収を撃ったあとで、盤面側の一撃に exit code / signal / stderr 末尾を渡す(ADR 0145)", async () => {
+    const calls: Array<[string, WorkerExit, { exitedRecorded: boolean; forced: boolean }]> = [];
+    const f = await fixture(undefined, undefined, (taskId, exit) =>
+      calls.push([taskId, exit, {
+        exitedRecorded: listEvents(f.db, taskId).some((e) => e.kind === "worker_exited"),
+        forced: f.process.killed.includes("SIGKILL"),
+      }]),
+    );
+    const value = task(f.db, "codex-exit-without-report");
+    f.start(value);
+    f.process.processes[0]!.stderr.write("boom\n");
+    f.process.emitExit(null, "SIGSEGV");
+
+    expect(calls).toEqual([
+      [value.id, { exit_code: null, signal: "SIGSEGV", stderr_tail: "boom" }, { exitedRecorded: true, forced: true }],
+    ]);
   });
 
   it("delivers graceful stop to the retained Codex root and records the signaled exit", async () => {
