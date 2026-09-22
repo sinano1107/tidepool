@@ -3,13 +3,8 @@ import { readFileSync } from "node:fs";
 import { mkdir, mkdtemp, realpath, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  CODEX_FEATURE_SNAPSHOT,
-  CodexWorker,
-  createCodexCapabilityCheck,
-  resolveCodexExecutable,
-} from "../src/codex-worker.js";
+import { afterEach, describe, expect, it } from "vitest";
+import { CODEX_FEATURE_SNAPSHOT, CodexWorker, resolveCodexExecutable } from "../src/codex-worker.js";
 import { openDb } from "../src/db.js";
 import { listEvents } from "../src/events.js";
 import { resolveExecutionSetting } from "../src/execution-setting.js";
@@ -18,7 +13,7 @@ import { openQuarantineValues } from "../src/quarantine.js";
 import { loadRegistry } from "../src/registry.js";
 import { registerTask, type Task } from "../src/tasks.js";
 import type { WorkerExit } from "../src/worker.js";
-import { containerHarness, FakeClock, passthroughContainers, recordingSpawn } from "./fakes.js";
+import { driveCodexPreflight, FakeClock, passthroughContainers, recordingSpawn } from "./fakes.js";
 import { bootTidepool, mcpClient, type Tidepool } from "./harness.js";
 import { makeRegistry } from "./registry-fixture.js";
 
@@ -236,30 +231,20 @@ describe("CodexWorker (ADR 0098)", () => {
       new Date("2026-08-24T00:00:00.000Z"),
     ));
 
-    // preflight を --version・prompt-input・features list・sandbox 2本・hooks/list と通し、7本目の review 呼び出しまで進める
-    const preflight = recordingSpawn();
-    const capability = createCodexCapabilityCheck({
-      executable: "/opt/tidepool/bin/codex",
+    // preflight を --version・prompt-input・features list・sandbox 2本・hooks/list と通し、review 呼び出しまで進める
+    const { spawn: preflight, capability, index } = await driveCodexPreflight("reviewAppServer", {
       codexHome: f.codexHome,
       workspace: f.workspace,
       allowedDomains: ["api.github.com"],
-      call: containerHarness(passthroughContainers(preflight.spawn)).boardCall,
-    })();
-    for (const i of [0, 1, 2, 3, 4, 5]) {
-      await vi.waitFor(() => expect(preflight.calls).toHaveLength(i + 1));
-      if (i === 1) preflight.processes[1]!.stdout.write("[]");
-      if (i === 5) preflight.processes[5]!.stdout.write('{"id":1,"result":{}}\n{"id":2,"result":{"data":[]}}\n');
-      preflight.emitExitAt(i, 0, null);
-    }
-    await vi.waitFor(() => expect(preflight.calls).toHaveLength(7));
-    preflight.emitExitAt(6, 1, null);
+    });
+    preflight.emitExitAt(index, 1, null);
     await capability;
 
     const keys = (args: string[]) =>
-      new Set(args.filter((_, index) => args[index - 1] === "-c").map((entry) => entry.split("=", 1)[0]));
+      new Set(args.filter((_, i) => args[i - 1] === "-c").map((entry) => entry.split("=", 1)[0]));
     expect(keys(f.process.calls[0]!.args)).toContain("mcp_servers.tidepool.url");
-    expect(keys(preflight.calls[5]!.args)).toEqual(keys(f.process.calls[0]!.args));
-    expect(keys(preflight.calls[6]!.args)).toEqual(keys(f.process.calls[1]!.args));
+    expect(keys(preflight.calls[index - 1]!.args)).toEqual(keys(f.process.calls[0]!.args));
+    expect(keys(preflight.calls[index]!.args)).toEqual(keys(f.process.calls[1]!.args));
   });
 
   it("主題 memory の meta-review の spawn では enabled_tools が worker の memory verb を専用 verb で置き換え、普通の task は変わらない(ADR 0122 決定2)", async () => {

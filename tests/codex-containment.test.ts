@@ -23,6 +23,7 @@ import { getTask, listBoard, registerTask } from "../src/tasks.js";
 import type { WorkerAdapter } from "../src/worker.js";
 import {
   containerHarness,
+  driveCodexPreflight,
   FakeClock,
   FakeContainerRuntime,
   healthyUsageText,
@@ -110,73 +111,31 @@ it("workspace を cwd にする preflight の呼び出しは、容器が空に�
 });
 
 it("preflight の permission probe は workspace の allowed_domains を network の許可に載せる(issue #763)", async () => {
-  const spawn = recordingSpawn();
-  const { boardCall } = containerHarness(passthroughContainers(spawn.spawn));
-  const capability = createCodexCapabilityCheck({
-    executable: "/opt/tidepool/bin/codex",
-    codexHome: "/nonexistent/codex-home",
-    workspace: mkdtempSync(join(tmpdir(), "tidepool-codex-preflight-ws-")),
+  const { spawn, capability, index } = await driveCodexPreflight("sandboxProbe", {
     allowedDomains: ["registry.npmjs.org"],
-    call: boardCall,
-  })();
-  // --version・prompt-input・features list を通すと4本目が sandbox
-  for (const i of [0, 1, 2]) {
-    await vi.waitFor(() => expect(spawn.calls).toHaveLength(i + 1));
-    spawn.emitExitAt(i, 0, null);
-  }
-  await vi.waitFor(() => expect(spawn.calls).toHaveLength(4));
+  });
 
-  expect(spawn.calls[3]!.args).toContainEqual(expect.stringContaining('"domains"={"registry.npmjs.org"="allow","127.0.0.1"="allow"}'));
-  spawn.emitExitAt(3, 1, null); // 後続の probe は見ないので、ここで倒して後始末まで走らせる
+  expect(spawn.calls[index]!.args).toContainEqual(expect.stringContaining('"domains"={"registry.npmjs.org"="allow","127.0.0.1"="allow"}'));
+  spawn.emitExitAt(index, 1, null); // 後続の probe は見ないので、ここで倒して後始末まで走らせる
   expect((await capability).available).toBe(false);
 });
 
-/** preflight を work の app-server 呼び出し(6本目)まで進める。先の5本(--version・prompt-input・
- *  features list・sandbox 2本)は exit 0 で通す。prompt-input だけは JSON を読まれるので空の列を返す。 */
-async function preflightToWorkAppServer() {
-  const spawn = recordingSpawn();
-  const { boardCall } = containerHarness(passthroughContainers(spawn.spawn));
-  const capability = createCodexCapabilityCheck({
-    executable: "/opt/tidepool/bin/codex",
-    codexHome: mkdtempSync(join(tmpdir(), "tidepool-codex-home-")),
-    workspace: mkdtempSync(join(tmpdir(), "tidepool-codex-preflight-ws-")),
-    allowedDomains: [],
-    call: boardCall,
-  })();
-  for (const i of [0, 1, 2, 3, 4]) {
-    await vi.waitFor(() => expect(spawn.calls).toHaveLength(i + 1));
-    if (i === 1) spawn.processes[1]!.stdout.write("[]");
-    spawn.emitExitAt(i, 0, null);
-  }
-  await vi.waitFor(() => expect(spawn.calls).toHaveLength(6));
-  return { spawn, capability };
-}
-
-/** work の app-server 呼び出し(hooks/list)を受理させ、review の呼び出し(7本目)まで進める。 */
-async function preflightToReviewAppServer() {
-  const { spawn, capability } = await preflightToWorkAppServer();
-  spawn.processes[5]!.stdout.write('{"id":1,"result":{}}\n{"id":2,"result":{"data":[]}}\n');
-  spawn.emitExitAt(5, 0, null);
-  await vi.waitFor(() => expect(spawn.calls).toHaveLength(7));
-  return { spawn, capability };
-}
-
 it("preflight の app-server 呼び出しは work / review とも --strict-config を app-server に付ける(ADR 0142 決定4)", async () => {
-  const { spawn, capability } = await preflightToReviewAppServer();
+  const { spawn, capability, index } = await driveCodexPreflight("reviewAppServer");
 
-  for (const call of [spawn.calls[5]!, spawn.calls[6]!]) {
+  for (const call of [spawn.calls[index - 1]!, spawn.calls[index]!]) {
     expect(call.args[0]).toBe("app-server");
     expect(call.args).toContain("--strict-config");
   }
-  spawn.emitExitAt(6, 1, null);
+  spawn.emitExitAt(index, 1, null);
   expect((await capability).available).toBe(false);
 });
 
 it.each([
-  ["work", preflightToWorkAppServer, 5],
-  ["review", preflightToReviewAppServer, 6],
-] as const)("%s の設定を app-server が未知キーで拒否すると、キーを名指した could not run で封じ込めを倒す(ADR 0142 決定5)", async (_, drive, index) => {
-  const { spawn, capability } = await drive();
+  ["work", "workAppServer"],
+  ["review", "reviewAppServer"],
+] as const)("%s の設定を app-server が未知キーで拒否すると、キーを名指した could not run で封じ込めを倒す(ADR 0142 決定5)", async (_, stop) => {
+  const { spawn, capability, index } = await driveCodexPreflight(stop);
 
   spawn.processes[index]!.stderr.write("Error: unknown configuration field `mcp_servers.tidepool.enabled_tool`\n");
   spawn.emitExitAt(index, 1, null);
