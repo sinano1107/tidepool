@@ -623,7 +623,7 @@ export function resolveCodexExecutable(searchPath = process.env.PATH ?? ""): str
   return resolve(directories[0] ?? "/usr/local/bin", "codex");
 }
 
-function observedSkills(promptInput: string): string[] {
+export function observedSkills(promptInput: string): string[] {
   const messages = JSON.parse(promptInput) as Array<{
     content?: Array<{ type?: string; text?: string }>;
   }>;

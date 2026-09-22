@@ -11,6 +11,7 @@ import {
   createCodexCapabilityCheck,
   observedDeveloperMarkers,
   observedHooks,
+  observedSkills,
 } from "../src/codex-worker.js";
 import { listEvents } from "../src/events.js";
 import { executionSettingsFor } from "../src/execution-setting.js";
@@ -264,6 +265,23 @@ it("prompt-input の developer item に載った marker だけを拾う(ADR 0124
   const items = JSON.parse(promptInput("no-marker")) as Array<{ content: Array<{ type: string; text: string }> }>;
   items.at(-1)!.content.push({ type: "input_text", text: CODEX_DEVELOPER_MARKER });
   expect(observedDeveloperMarkers(JSON.stringify(items))).toEqual([]);
+});
+
+// 実物の `codex debug prompt-input` 出力(0.147.0、運用者の config から隔離した空の CODEX_HOME・
+// HOME で `-c forced_login_method="chatgpt"` だけ渡して叩いたもの)。system skill は初回起動時に
+// 自動配置されるので `skills.config` は渡していない —— 無効化しない形。cwd も空の workspace で、
+// closedSurfaceConfig・developer marker は付けていない —— ここが読むのは `<skills_instructions>`
+// の中身だけなので不要。CODEX_HOME・workspace のパスだけ無害な固定値へ置換してある。
+it("prompt-input の skills_instructions から、有効な skill 名だけを拾う(#699)", () => {
+  expect(observedSkills(promptInput("skills-enabled"))).toEqual([
+    "imagegen",
+    "openai-docs",
+    "plugin-creator",
+    "skill-creator",
+    "skill-installer",
+  ]);
+  expect(observedSkills(promptInput("developer-marker"))).toEqual([]);
+  expect(observedSkills(promptInput("no-marker"))).toEqual([]);
 });
 
 // 実物の `hooks/list` 応答の `result`(codex-cli 0.147.0、盤面所有の CODEX_HOME、model 呼び出し無し。
