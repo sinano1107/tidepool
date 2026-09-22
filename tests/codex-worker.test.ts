@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { mkdir, mkdtemp, realpath, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -89,6 +89,7 @@ You are the Codex worker.`,
   const process = recordingSpawn();
   const codexHome = await mkdtemp(join(tmpdir(), "tidepool-codex-home-"));
   const logDir = await mkdtemp(join(tmpdir(), "tidepool-codex-logs-"));
+  const codexSystemDir = await mkdtemp(join(tmpdir(), "tidepool-codex-system-"));
   const worker = new CodexWorker({
     db,
     clock: new FakeClock(),
@@ -102,13 +103,14 @@ You are the Codex worker.`,
     cliVersion: CLI_VERSION,
     executable: "/opt/tidepool/bin/codex",
     containers: passthroughContainers(process.spawn),
+    codexSystemDir,
     onSpawnFailed,
     onWorkerExited,
   });
   // scheduler が pickup の瞬間に選ぶ実行設定(除外なし)を渡す
   const agent = loadRegistry(registry, "purely-local").agents["codex-agent"]!;
   const start = (value: Task) => worker.start(value, resolveExecutionSetting(db, agent, value)!);
-  return { db, worker, start, process, codexHome, workspace, logDir };
+  return { db, worker, start, process, codexHome, codexSystemDir, workspace, logDir };
 }
 
 describe("CodexWorker (ADR 0098)", () => {
@@ -260,6 +262,46 @@ describe("CodexWorker (ADR 0098)", () => {
     expect(keys(f.process.calls[0]!.args)).toContain("mcp_servers.tidepool.url");
     expect(keys(preflight.calls[5]!.args)).toEqual(keys(f.process.calls[0]!.args));
     expect(keys(preflight.calls[6]!.args)).toEqual(keys(f.process.calls[1]!.args));
+  });
+
+  it("$CODEX_HOME/skills のユーザー skill と system config の skill を spawn と probe の両方が同じ skills.config で閉じ、.system は二重にしない(ADR 0147 決定3)", async () => {
+    const f = await fixture();
+    for (const dir of [join(f.codexHome, "skills", "foo"), join(f.codexHome, "skills", ".system", "openai-docs"), join(f.codexSystemDir, "skills", "bar")]) {
+      await mkdir(dir, { recursive: true });
+      await writeFile(join(dir, "SKILL.md"), "# skill\n");
+    }
+    f.start(task(f.db));
+
+    const preflight = recordingSpawn();
+    const capability = createCodexCapabilityCheck({
+      executable: "/opt/tidepool/bin/codex",
+      codexHome: f.codexHome,
+      codexSystemDir: f.codexSystemDir,
+      workspace: f.workspace,
+      allowedDomains: ["api.github.com"],
+      call: containerHarness(passthroughContainers(preflight.spawn)).boardCall,
+    })();
+    await vi.waitFor(() => expect(preflight.calls).toHaveLength(1));
+    preflight.emitExitAt(0, 0, null);
+    await vi.waitFor(() => expect(preflight.calls).toHaveLength(2));
+    preflight.emitExitAt(1, 1, null);
+    await capability;
+
+    const skills = (args: string[]) => args.find((arg, index) => args[index - 1] === "-c" && arg.startsWith("skills.config="))!;
+    const spawned = skills(f.process.calls[0]!.args);
+    // probe は workspace を realpath で解決する(macOS の tmpdir は /private 経由)
+    expect(skills(preflight.calls[1]!.args).replaceAll(await realpath(f.workspace), f.workspace)).toBe(spawned);
+    expect(spawned).toContain(`{path=${JSON.stringify(join(f.codexHome, "skills", "foo", "SKILL.md"))},enabled=false}`);
+    expect(spawned).toContain(`{path=${JSON.stringify(join(f.codexSystemDir, "skills", "bar", "SKILL.md"))},enabled=false}`);
+    expect(spawned.split(join(f.codexHome, "skills", ".system", "openai-docs", "SKILL.md"))).toHaveLength(2);
+  });
+
+  it("$CODEX_HOME/skills も system config のディレクトリも無くても spawn は失敗せず skills.config を渡す(ADR 0147 決定3)", async () => {
+    const f = await fixture();
+    await rm(f.codexSystemDir, { recursive: true });
+    f.start(task(f.db));
+
+    expect(f.process.calls[0]!.args.some((arg, index, args) => args[index - 1] === "-c" && arg.startsWith("skills.config=["))).toBe(true);
   });
 
   it("主題 memory の meta-review の spawn では enabled_tools が worker の memory verb を専用 verb で置き換え、普通の task は変わらない(ADR 0122 決定2)", async () => {

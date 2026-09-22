@@ -275,6 +275,8 @@ export interface CodexWorkerOptions {
   executable: string;
   /** Board-owned worker-session container supervisor (ADR 0099). */
   containers: ProcessContainers;
+  /** Codex の system config のディレクトリ(vendor の Unix 既定 `/etc/codex`)。テストで差し替える。 */
+  codexSystemDir?: string;
   boardState?: BoardStatePath[];
   /** ADR 0118: `spawn()` が失敗した pickup を受ける盤面側の一撃(`spawnFailureHandler` 製)。 */
   onSpawnFailed?: (taskId: string, failure: { error_code: string | null; message: string }) => void;
@@ -513,18 +515,23 @@ function hookConfig(hook: string): string[] {
   ];
 }
 
-function skillConfig(codexHome: string, workspace: string): string {
+function skillConfig(codexHome: string, workspace: string, codexSystemDir = "/etc/codex"): string {
   const paths = SYSTEM_SKILLS.map((name) =>
     join(codexHome, "skills", ".system", name, "SKILL.md")
   );
+  // ADR 0147 決定3: pin した Codex が探索する root はすべて閉じる —— 漏れた skill を user config が
+  // disable すると probe だけが見失い、fail-open になる。`$CODEX_HOME/skills/.system` は上で名指ししているので除く
   for (const root of [
     join(workspace, ".agents", "skills"),
     join(workspace, ".codex", "skills"),
     join(homedir(), ".agents", "skills"),
+    join(codexHome, "skills"),
+    join(codexSystemDir, "skills"),
   ]) {
     try {
       for (const entry of readdirSync(root, { withFileTypes: true })) {
-        if (entry.isDirectory()) paths.push(join(root, entry.name, "SKILL.md"));
+        const dir = join(root, entry.name);
+        if (entry.isDirectory() && dir !== join(codexHome, "skills", ".system")) paths.push(join(dir, "SKILL.md"));
       }
     } catch {
       // A workspace need not declare skills.
@@ -546,6 +553,7 @@ function spawnConfig(input: {
   taskTemp: string;
   executable: string;
   codexHome: string;
+  codexSystemDir?: string;
   hook: string;
 }): string[] {
   return [
@@ -561,7 +569,7 @@ function spawnConfig(input: {
     'mcp_servers.tidepool.default_tools_approval_mode="approve"',
     // ADR 0134 決定3: この key は版に依らず効く —— 絞るのではなく本数の意味を固定する
     "agents.max_concurrent_threads_per_session=3",
-    skillConfig(input.codexHome, input.workspace),
+    skillConfig(input.codexHome, input.workspace, input.codexSystemDir),
     ...hookConfig(input.hook),
   ];
 }
@@ -769,6 +777,7 @@ async function probePermission(
 async function actualCodexCapability(options: {
   executable: string;
   codexHome: string;
+  codexSystemDir?: string;
   workspace: string;
   allowedDomains: readonly string[];
   call: BoardCall;
@@ -779,7 +788,7 @@ async function actualCodexCapability(options: {
   const env = workerEnv(options.executable, options.codexHome, taskTemp, "tidepool");
   const config = [
     ...closedSurfaceConfig(),
-    skillConfig(options.codexHome, workspace),
+    skillConfig(options.codexHome, workspace, options.codexSystemDir),
   ];
   try {
     const cliVersion = (await runFile(call, options.executable, ["--version"], { env })).trim();
@@ -823,6 +832,7 @@ async function actualCodexCapability(options: {
           taskTemp,
           executable: options.executable,
           codexHome: options.codexHome,
+          codexSystemDir: options.codexSystemDir,
           hook,
         })),
       features: observedFeatures,
@@ -835,6 +845,7 @@ async function actualCodexCapability(options: {
 export function createCodexCapabilityCheck(options: {
   executable: string;
   codexHome: string;
+  codexSystemDir?: string;
   workspace: string;
   allowedDomains: readonly string[];
   call: BoardCall;
@@ -977,6 +988,7 @@ export class CodexWorker implements WorkerAdapter {
       taskTemp,
       executable: this.options.executable,
       codexHome: this.options.codexHome,
+      codexSystemDir: this.options.codexSystemDir,
       hook,
     });
     const child = this.containers.open(task.id).spawn(
