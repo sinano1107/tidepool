@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { mkdir, mkdtemp, realpath, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -17,6 +17,7 @@ import { buildMemoryInjection, recordKnowledge } from "../src/memory.js";
 import { openQuarantineValues } from "../src/quarantine.js";
 import { loadRegistry } from "../src/registry.js";
 import { registerTask, type Task } from "../src/tasks.js";
+import type { ContainerSpawn } from "../src/process-container.js";
 import type { WorkerExit } from "../src/worker.js";
 import { containerHarness, FakeClock, passthroughContainers, recordingSpawn } from "./fakes.js";
 import { bootTidepool, mcpClient, type Tidepool } from "./harness.js";
@@ -66,6 +67,7 @@ async function fixture(
   onSpawnFailed?: (taskId: string, failure: { error_code: string | null; message: string }) => void,
   allowedDomains = "\n  allowed_domains:\n    - api.github.com",
   onWorkerExited?: (taskId: string, exit: WorkerExit) => void,
+  spawn?: ContainerSpawn,
 ) {
   const workspace = await mkdtemp(join(tmpdir(), "tidepool-codex-workspace-"));
   execFileSync("git", ["init", "-b", "main"], { cwd: workspace });
@@ -101,7 +103,7 @@ You are the Codex worker.`,
     codexHome,
     cliVersion: CLI_VERSION,
     executable: "/opt/tidepool/bin/codex",
-    containers: passthroughContainers(process.spawn),
+    containers: passthroughContainers(spawn ?? process.spawn),
     onSpawnFailed,
     onWorkerExited,
   });
@@ -547,6 +549,36 @@ describe("CodexWorker (ADR 0098)", () => {
       signal: "SIGINT",
       usage: null,
     });
+  });
+
+  it("worker の exit(0 / 非0 / signal)の後、TMPDIR が指した task の一時ディレクトリは残らない(issue #705)", async () => {
+    const f = await fixture();
+    const exits = [[0, null], [2, null], [null, "SIGKILL"]] as const;
+    exits.forEach((_, i) => f.start(task(f.db, `codex-exit-${i}`)));
+    const taskTemps = f.process.calls.map((call) => call.env.TMPDIR!);
+    expect(taskTemps.every((dir) => existsSync(dir))).toBe(true);
+
+    exits.forEach(([code, signal], i) => f.process.emitExitAt(i, code, signal));
+    expect(taskTemps.filter((dir) => existsSync(dir))).toEqual([]);
+  });
+
+  it("spawn の失敗(exit が来ないことがある)の後も、task の一時ディレクトリは残らない(issue #705)", async () => {
+    const f = await fixture();
+    f.start(task(f.db));
+    const taskTemp = f.process.calls[0]!.env.TMPDIR!;
+
+    f.process.emitError(Object.assign(new Error("spawn codex ENOENT"), { code: "ENOENT", syscall: "spawn codex" }));
+    expect(existsSync(taskTemp)).toBe(false);
+  });
+
+  it("spawn までの間に例外が出たら start はそれを投げ直し、task の一時ディレクトリは残らない(issue #705)", async () => {
+    const f = await fixture(undefined, undefined, undefined, () => {
+      throw new Error("spawn blew up");
+    });
+    const value = task(f.db);
+
+    expect(() => f.start(value)).toThrow("spawn blew up");
+    expect(readdirSync(tmpdir()).filter((name) => name.startsWith(`tidepool-codex-${value.id}-`))).toEqual([]);
   });
 });
 

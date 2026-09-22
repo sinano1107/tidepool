@@ -29,7 +29,7 @@ import {
   recordMemoryInjection,
   WORKER_MEMORY_VERBS,
 } from "./memory.js";
-import type { ContainerSpawn, ProcessContainers } from "./process-container.js";
+import type { ContainedProcess, ContainerSpawn, ProcessContainers } from "./process-container.js";
 import { loadRegistry, type RegistrySource } from "./registry.js";
 import { DEFAULT_AUDITOR_NAME, resolveTaskAgent, type Task } from "./tasks.js";
 import type { WorkerAdapter, WorkerExit } from "./worker.js";
@@ -957,44 +957,58 @@ export class CodexWorker implements WorkerAdapter {
     if (setting.provider !== "openai") {
       throw new Error(`CodexWorker refuses provider ${setting.provider}; no Harness fallback (ADR 0098)`);
     }
-    const taskTemp = realpathSync(mkdtempSync(join(tmpdir(), `tidepool-codex-${task.id}-`)));
-    const hook = installBoardHook(this.options.codexHome);
-    const taskMcpUrl = new URL(this.options.mcpUrl);
-    taskMcpUrl.searchParams.set("task", task.id);
     const memory = buildMemoryInjection(this.options.db, task, workspace.name, agent.name);
-    const config = spawnConfig({
-      taskType: task.type,
-      effort: setting.effort,
-      developerInstructions: developerInstructions(memory.section, agent.definition.systemPrompt, agent.profile.guidance),
-      mcpUrl: taskMcpUrl.toString(),
-      // ADR 0122 決定2: MCP の登録と同じ差を写す。宣言と盤面の面が集合として一致することは
-      // tests/codex-worker.test.ts が固定する(ADR 0125 決定2)
-      enabledTools: isMetaReviewOf(this.options.db, task.id, "memory")
-        ? [...BOARD_VERBS.filter((verb) => !(WORKER_MEMORY_VERBS as readonly string[]).includes(verb)), ...MEMORY_META_REVIEW_VERBS]
-        : BOARD_VERBS,
-      workspace: workspace.path,
-      allowedDomains: workspace.allowed_domains ?? [],
-      taskTemp,
-      executable: this.options.executable,
-      codexHome: this.options.codexHome,
-      hook,
-    });
-    const child = this.containers.open(task.id).spawn(
-      this.options.executable,
-      [
-        "--ask-for-approval", "never",
-        "exec", "--json", "--ephemeral", "--ignore-user-config", "--ignore-rules",
-        "--strict-config", "--dangerously-bypass-hook-trust",
-        "-C", workspace.path,
-        "-m", setting.model,
-        ...config.flatMap((entry) => ["-c", entry]),
-        taskPrompt(task),
-      ],
-      {
-        cwd: workspace.path,
-        env: workerEnv(this.options.executable, this.options.codexHome, taskTemp, agent.name),
-      },
-    );
+    const taskTemp = realpathSync(mkdtempSync(join(tmpdir(), `tidepool-codex-${task.id}-`)));
+    // 削除の失敗で session の後始末を止めない(issue #705)
+    const removeTaskTemp = () => {
+      try {
+        rmSync(taskTemp, { recursive: true, force: true });
+      } catch (error) {
+        console.error(`[codex-worker] could not remove ${taskTemp}:`, error);
+      }
+    };
+    let child: ContainedProcess;
+    try {
+      const hook = installBoardHook(this.options.codexHome);
+      const taskMcpUrl = new URL(this.options.mcpUrl);
+      taskMcpUrl.searchParams.set("task", task.id);
+      const config = spawnConfig({
+        taskType: task.type,
+        effort: setting.effort,
+        developerInstructions: developerInstructions(memory.section, agent.definition.systemPrompt, agent.profile.guidance),
+        mcpUrl: taskMcpUrl.toString(),
+        // ADR 0122 決定2: MCP の登録と同じ差を写す。宣言と盤面の面が集合として一致することは
+        // tests/codex-worker.test.ts が固定する(ADR 0125 決定2)
+        enabledTools: isMetaReviewOf(this.options.db, task.id, "memory")
+          ? [...BOARD_VERBS.filter((verb) => !(WORKER_MEMORY_VERBS as readonly string[]).includes(verb)), ...MEMORY_META_REVIEW_VERBS]
+          : BOARD_VERBS,
+        workspace: workspace.path,
+        allowedDomains: workspace.allowed_domains ?? [],
+        taskTemp,
+        executable: this.options.executable,
+        codexHome: this.options.codexHome,
+        hook,
+      });
+      child = this.containers.open(task.id).spawn(
+        this.options.executable,
+        [
+          "--ask-for-approval", "never",
+          "exec", "--json", "--ephemeral", "--ignore-user-config", "--ignore-rules",
+          "--strict-config", "--dangerously-bypass-hook-trust",
+          "-C", workspace.path,
+          "-m", setting.model,
+          ...config.flatMap((entry) => ["-c", entry]),
+          taskPrompt(task),
+        ],
+        {
+          cwd: workspace.path,
+          env: workerEnv(this.options.executable, this.options.codexHome, taskTemp, agent.name),
+        },
+      );
+    } catch (error) {
+      removeTaskTemp();
+      throw error;
+    }
     const spawned = appendEvent(this.options.db, {
       taskId: task.id,
       workerId: agent.name,
@@ -1046,6 +1060,7 @@ export class CodexWorker implements WorkerAdapter {
         return;
       }
       this.running.delete(task.id);
+      removeTaskTemp();
       const failure = { error_code: errno.code ?? null, message: error.message };
       appendEvent(this.options.db, {
         taskId: task.id,
@@ -1087,6 +1102,7 @@ export class CodexWorker implements WorkerAdapter {
       // ADR 0109 決定4: root の exit は容器に残るものが孤児である証拠 —— usage と
       // transcript を書いた後に強制回収を撃つ。Harness 非依存に、盤面 supervisor 経由。
       this.containers.forceReclaim(task.id);
+      removeTaskTemp();
       this.options.onWorkerExited?.(task.id, { exit_code: code, signal, stderr_tail: tail });
     });
   }
