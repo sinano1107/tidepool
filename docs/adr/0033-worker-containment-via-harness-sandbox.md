@@ -37,7 +37,7 @@ macOS だけ `denyWrite` を効かせる案は採らない — 上の「片方�
 
 拒否の見え方は platform で異なる。macOS(Seatbelt)は `Operation not permitted`、Linux(bwrap)は denyRead を tmpfs の被せで実装するため `No such file or directory` になる。e2e スモークはどちらも「拒否」として扱う。
 
-**fail-closed**: サンドボックスが成立しない環境(bubblewrap 不在、AppArmor 干渉等)では worker を裸で走らせない。起動時 + pickup 時の能力検査で不成立を検出したら agent タスクの pickup を停止し、Tidepool 名義の確認型 question を立てる(既存 quarantine と同じ検証つき解除 — 回答時に能力検査を再実行してから受理)。「CLI が設定を黙って無視する」将来リスクへは、デプロイ時の一度きり e2e スモーク(canary 読み取りが OS 拒否されることの確認)を充て、CLI 更新時に再実行する。macOS(開発機)と Pi(本番)の両方で常時有効 — 片方だけ裸だと dev/prod の挙動乖離がテストされないまま残る。
+**fail-closed**: サンドボックスが成立しない環境(bubblewrap 不在、AppArmor 干渉等)では worker を裸で走らせない。起動時 + pickup 時の能力検査で不成立を検出したら agent タスクの pickup を停止し、Tidepool 名義の確認型 question を立てる(既存 quarantine と同じ検証つき解除 — 回答時に能力検査を再実行してから受理)。「CLI が設定を黙って無視する」将来リスクへは、デプロイ時の一度きり e2e スモーク(canary 読み取りが OS 拒否されることの確認)を充て、CLI 更新時に再実行する。macOS(開発機)と Pi(本番)の両方で常時有効 — 片方だけ裸だと dev/prod の挙動乖離がテストされないまま残る。**追記(#860、2026-09-22)。この文の「開発機」は ADR 0100(2026-08-25)以後は Mac 上の Lima VM を指す。ネイティブ macOS の盤面は worker を拾わない(ADR 0100 決定6、`cgroup-container.ts` の darwin ゲート)ので、dev/prod parity の比較は Linux / Linux であり、Seatbelt 下で床が成立するかは問われない —— Codex の `.git/hooks` / `.git/config` の入れ子 `read` が macOS で効かない観測(#860)は、起動しえない session の話として閉じた。**
 
 ネットワークはこの決定では触らない(現状のまま開放)。読める範囲が workspace + 許可 skill に閉じた時点で持ち出せる物はほぼ「もともとモデルに渡る内容」に一致し、ドメイン列挙の追従コストと正当タスクの失敗形が勝る。review プロファイルの Bash ネットワーク遮断(read-only + 書き込み不可の下でネットワークが要る正当な作業はほぼ無い)は将来の強化候補。**この段落の「現状のまま開放」という前提は bind に関して #146 の実測で覆った — 下の追記を参照。**
 

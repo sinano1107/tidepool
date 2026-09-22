@@ -434,7 +434,8 @@ function permissionConfig(
     ":workspace_roots": { ".": access },
     [workspace]: access,
     // issue #849: Linux の sandbox は書ける root 直下の .git を ro で重ねるので、書ける側は明示して書けるようにする。
-    // hooks と config は Claude 側の床と同じく読むだけ(ADR 0033)。macOS ではこの入れ子の read が効かない(#860)
+    // hooks と config は Claude 側の床と同じく読むだけ(ADR 0033)。macOS ではこの入れ子の read が効かないが、
+    // ネイティブ macOS は worker を拾わない(ADR 0100 決定6)ので床の問いは Linux にしか立たない(#860)
     ...(access === "write" && {
       [dotGit]: "write",
       [join(dotGit, "hooks")]: "read",
