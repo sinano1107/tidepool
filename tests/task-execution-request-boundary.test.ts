@@ -244,7 +244,7 @@ You are Tako.
       });
       return {
         id: worker.id,
-        start: (task) => worker.start(task),
+        start: (task, setting) => worker.start(task, setting),
         gracefulStop: (taskId) => worker.gracefulStop(taskId),
         checkUsage: async () => healthyUsageText(clock.now()),
       };

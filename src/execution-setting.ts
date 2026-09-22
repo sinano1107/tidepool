@@ -480,9 +480,8 @@ export function executionSettingsFor(
   );
 }
 
-/** 盤面境界の選択そのもの: 除外を当てずに1つ選ぶ —— spawn 側にとっての「今日の
- *  挙動」= Provider 順位の先頭 entry の設定である。除外を当てた選択は pickup の
- *  側にあり、そちらは育った除外集合を `firstSelectable` へ渡す。 */
+/** 除外を当てずに1つ選ぶ —— Provider 順位の先頭 entry の設定である。除外を当てた
+ *  選択は pickup の側にあり、そちらは育った除外集合を `firstSelectable` へ渡す。 */
 export function resolveExecutionSetting(
   db: Db,
   definition: Pick<AgentDefinition, "provider" | "tier">,

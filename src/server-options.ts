@@ -45,10 +45,7 @@ import {
 import type { ContainmentCapability } from "./containment.js";
 import type { Db } from "./db.js";
 import type { DraftClient } from "./draft.js";
-import {
-  executionSettingsFor,
-  resolveExecutionSetting,
-} from "./execution-setting.js";
+import { executionSettingsFor } from "./execution-setting.js";
 import { GhCliClient } from "./github.js";
 import type { GitHubAuth } from "./github-auth.js";
 import type { ProcessContainers } from "./process-container.js";
@@ -285,11 +282,9 @@ export function buildWorkerFactory(board: BoardComposition): WorkerFactory {
   const { registryDir } = board;
   if (!registryDir) return () => new LoggingWorker();
   return ({ db, clock, containers, boardCall, onCapInterrupted, onSpawnFailed }) => {
-    const resolveHarness = harnessResolver(board, db);
     const registry = { dir: registryDir, mode: board.registryMode } as const;
     return new CanonicalWorkerRouter({
       id: board.defaultAgentName,
-      resolveHarness,
       adapters: {
         "claude-code": new ClaudeCodeWorker(
           buildWorkerOptions(
@@ -319,25 +314,8 @@ export function buildWorkerFactory(board: BoardComposition): WorkerFactory {
   };
 }
 
-/** 除外を当てずに選ばれる実行設定 —— **選択と dispatch を同じ1本から出す**
- *  (ADR 0098 / #544)。盤面が選んだ設定を渡さずに `start(task)` した場合の
- *  行き先で、渡された場合は router がその Provider から直に導く。 */
-function harnessResolver(
-  board: BoardComposition,
-  db: Db,
-): (task: Task) => ReturnType<typeof canonicalHarness> {
-  return (task) => {
-    const registry = loadBoardRegistry(board);
-    const name = resolveTaskAgent(task, board.defaultAgentName, board.auditorName);
-    const agent = resolveExecutionAgent(registry, board.defaultAgentName, name);
-    const setting = resolveExecutionSetting(db, agent.definition, task);
-    if (!setting) throw new InvalidAgentDefinitionError(name, "no Provider entry to run on");
-    return canonicalHarness(setting.provider);
-  };
-}
-
-/** pickup の除外判定と queue の skipped 表示が共有する口。**spawn 側と同じ1本**
- *  (`executionSettingsFor`)を通す —— ここに「agent の model」を別に持てば、
+/** pickup の除外判定と queue の skipped 表示が共有する口。ここで選ばれた設定が
+ *  そのまま spawn に渡る(ADR 0110 決定3)—— ここに「agent の model」を別に持てば、
  *  モデル窓の除外は全テスト緑のまま黙って効かなくなる。task の要求を必ず渡すのが
  *  この口の要点である(#543 の申し送り): 渡し忘れれば要求ティアで走る task が
  *  モデル窓をすり抜け、表示と実際の判定がずれる。 */

@@ -213,7 +213,7 @@ it("skill 列挙の容器が空にならず回収 timeout で null に落ちる�
       });
       return {
         id: worker.id,
-        start: (task) => worker.start(task),
+        start: (task, setting) => worker.start(task, setting),
         gracefulStop: (id) => worker.gracefulStop(id),
         checkUsage: async () => healthyUsageText(t.clock.now()),
       };

@@ -14,14 +14,16 @@ import {
   pinnedModelFlags,
 } from "../src/claude-worker.js";
 import { openDb } from "../src/db.js";
+import { DEFAULT_AUDITOR_NAME } from "../src/defaults.js";
 import { appendEvent, type EventPayload, listEvents } from "../src/events.js";
+import { resolveExecutionSetting } from "../src/execution-setting.js";
 import { BOARD_WRITE_LANGUAGE_RULE } from "../src/mcp.js";
 import { buildMemoryInjection, recordKnowledge } from "../src/memory.js";
 import { listEpisodes } from "../src/precedent.js";
 import { ProcessContainers, type PtyFn } from "../src/process-container.js";
-import { refreshRegistry } from "../src/registry.js";
+import { loadRegistry, type RegistryMode, refreshRegistry } from "../src/registry.js";
 import { Slot } from "../src/slot.js";
-import { getTask, listBoard, nextSlotTask, type Task } from "../src/tasks.js";
+import { getTask, listBoard, nextSlotTask, resolveTaskAgent, type Task } from "../src/tasks.js";
 import { sessionInTeardown } from "../src/teardown.js";
 import { getProviderUsage, reportProviderUsage } from "../src/throttle.js";
 import { capInterruptionHandler } from "../src/watchdog.js";
@@ -107,6 +109,19 @@ function insertTask(db: ReturnType<typeof openDb>, task: Task): void {
   );
 }
 
+/** scheduler が pickup の瞬間に選ぶ実行設定(除外なし)。assignee が registry で解決
+ *  できない task は adapter が設定を読む前に quarantine するので、既定 agent の設定で足りる。 */
+function pickedSetting(
+  db: ReturnType<typeof openDb>,
+  registry: { dir: string; mode: RegistryMode },
+  task: Task,
+  agent = "deckhand",
+  auditorName = DEFAULT_AUDITOR_NAME,
+) {
+  const agents = loadRegistry(registry.dir, registry.mode).agents;
+  return resolveExecutionSetting(db, (agents[resolveTaskAgent(task, agent, auditorName)] ?? agents[agent])!, task)!;
+}
+
 /** A git runner pinned to the registry fixture clone, identity flags inlined
  *  so fixture commits need no global config. */
 function registryGit(cwd: string) {
@@ -180,10 +195,18 @@ async function makeWorker(
     // 1つずつ順に走らせるので、前の session の slot は次の pickup で明け渡す。
     slot.release();
     slot.occupy(task.id);
-    worker.start(task);
+    worker.start(task, setting(task));
     return task;
   };
-  return { worker, start, logDir, db, slot, registryDir, containers, ...recorder };
+  const setting = (task: Task) =>
+    pickedSetting(
+      db,
+      extraOptions.registry ?? { dir: registryDir, mode: "purely-local" },
+      task,
+      extraOptions.agent,
+      extraOptions.auditorName,
+    );
+  return { worker, start, setting, logDir, db, slot, registryDir, containers, ...recorder };
 }
 
 /** Scripted stand-in at the skill-enumeration boundary (issue #56 / ADR 0025):
@@ -466,7 +489,7 @@ describe("ClaudeCodeWorker", () => {
   });
 
   it("review タスクの roster は registry profile が全員への委譲を許していても被レビュータスクの executor 1名だけを示す(ADR 0056 / issue #249)", async () => {
-    const { worker, calls, db } = await makeWorker({
+    const { worker, setting, calls, db } = await makeWorker({
       "agents/keeper.md": KEEPER_MD,
       "agents/navigator.md": NAVIGATOR_MD,
     });
@@ -484,7 +507,7 @@ describe("ClaudeCodeWorker", () => {
       parent_id: reviewed.id,
     };
     insertTask(db, review);
-    worker.start(review);
+    worker.start(review, setting(review));
 
     const args = calls[0]!.args;
     const systemPrompt = args[args.indexOf("--append-system-prompt") + 1]!;
@@ -502,7 +525,7 @@ describe("ClaudeCodeWorker", () => {
   });
 
   it("被レビュータスクの executor が registry から drift していれば review の roster セクションを出さない(ADR 0056 / issue #249)", async () => {
-    const { worker, calls, db } = await makeWorker({ "agents/keeper.md": KEEPER_MD });
+    const { worker, setting, calls, db } = await makeWorker({ "agents/keeper.md": KEEPER_MD });
     const reviewed = makeTask("task-reviewed-by-drifted-agent", null, null);
     insertTask(db, reviewed);
     appendEvent(db, {
@@ -517,7 +540,7 @@ describe("ClaudeCodeWorker", () => {
       parent_id: reviewed.id,
     };
     insertTask(db, review);
-    worker.start(review);
+    worker.start(review, setting(review));
 
     const args = calls[0]!.args;
     const systemPrompt = args[args.indexOf("--append-system-prompt") + 1]!;
@@ -1490,11 +1513,11 @@ describe("ClaudeCodeWorker", () => {
   });
 
   it("同一タスクを2回 spawn すると、両方の worker session の transcript が別ファイルで残る(issue #379)", async () => {
-    const { worker, start, logDir } = await makeWorker();
+    const { worker, start, setting, logDir } = await makeWorker();
     const task = start("task-retry");
     // retry / decompose 復帰 / quarantine 復帰はいずれも同じ task を worker が
     // 再度 start する形なので、直接 worker.start を2回呼んで再現する
-    worker.start(task);
+    worker.start(task, setting(task));
     await vi.waitFor(async () => {
       const files = (await readdir(logDir)).filter((name) => name.startsWith("task-retry."));
       expect(files.filter((name) => name.endsWith(".stream.jsonl"))).toHaveLength(2);
@@ -1563,7 +1586,7 @@ describe("ClaudeCodeWorker", () => {
       await mkdir(join(base, "worker-logs"), { recursive: true });
       const task = makeTask("task-rel");
       insertTask(db, task);
-      worker.start(task);
+      worker.start(task, pickedSetting(db, { dir: registryDir, mode: "purely-local" }, task));
       const args = recorder.calls[0]!.args;
       const configPath = args[args.indexOf("--mcp-config") + 1]!;
       expect(isAbsolute(configPath)).toBe(true);
@@ -2390,7 +2413,7 @@ describe("ClaudeCodeWorker", () => {
     });
     const task = makeTask("task-remote", null, "deckhand", "work");
     insertTask(db, task);
-    worker.start(task);
+    worker.start(task, pickedSetting(db, { dir: registryDir, mode: "remote-backed" }, task));
 
     const spawned = listEvents(db, "task-remote").find((e) => e.kind === "worker_spawned");
     const args = recorder.calls[0]!.args;
@@ -2413,7 +2436,7 @@ describe("ClaudeCodeWorker", () => {
   });
 
   it("当事者レビュー(self RCA)の spawn には、記録 hash 時点の agent 定義本文を証拠として注入する(ADR 0020 part 4)", async () => {
-    const { worker, calls, db, registryDir } = await makeWorker();
+    const { worker, setting, calls, db, registryDir } = await makeWorker();
     const git = registryGit(registryDir);
     // the version deckhand actually ran the objected task under
     const oldHash = git("rev-parse", "main");
@@ -2467,7 +2490,7 @@ describe("ClaudeCodeWorker", () => {
     // self RCA: concrete assignee = the historical worker, parent = objected
     const rca: Task = { ...makeTask("rca-1", null, "deckhand", "review"), parent_id: "objected-1" };
     insertTask(db, rca);
-    worker.start(rca);
+    worker.start(rca, setting(rca));
 
     expect(calls).toHaveLength(1);
     const args = calls[0]!.args;
@@ -2479,7 +2502,7 @@ describe("ClaudeCodeWorker", () => {
   });
 
   it("同一 worker が objected task を複数回 spawn した場合、objected 判断時の session の版を注入し、後の再 spawn の版は使わない(ADR 0020 part 4)", async () => {
-    const { worker, calls, db, registryDir } = await makeWorker();
+    const { worker, setting, calls, db, registryDir } = await makeWorker();
     const git = registryGit(registryDir);
     // v1: the version live when the objected decision was made (fixture body)
     const v1Hash = git("rev-parse", "main");
@@ -2526,7 +2549,7 @@ describe("ClaudeCodeWorker", () => {
 
     const rca: Task = { ...makeTask("rca-3", null, "deckhand", "review"), parent_id: "objected-3" };
     insertTask(db, rca);
-    worker.start(rca);
+    worker.start(rca, setting(rca));
 
     expect(calls).toHaveLength(1);
     const args = calls[0]!.args;
@@ -2537,7 +2560,7 @@ describe("ClaudeCodeWorker", () => {
   });
 
   it("objected 判断が異なる版の session にまたがるとき、当時版は entry ごとに解決され、各版が entry id 付きで全部注入される(issue #87)", async () => {
-    const { worker, calls, db, registryDir } = await makeWorker();
+    const { worker, setting, calls, db, registryDir } = await makeWorker();
     const git = registryGit(registryDir);
     const objected = makeTask("objected-4", null, "deckhand", "work");
     insertTask(db, objected);
@@ -2599,7 +2622,7 @@ describe("ClaudeCodeWorker", () => {
 
     const rca: Task = { ...makeTask("rca-4", null, "deckhand", "review"), parent_id: "objected-4" };
     insertTask(db, rca);
-    worker.start(rca);
+    worker.start(rca, setting(rca));
 
     expect(calls).toHaveLength(1);
     const args = calls[0]!.args;
@@ -2622,7 +2645,7 @@ describe("ClaudeCodeWorker", () => {
   });
 
   it("一部の objected entry の版が解決できないとき、解決できた版を注入した上で証拠の欠落を申告する(issue #87)", async () => {
-    const { worker, calls, db, registryDir } = await makeWorker();
+    const { worker, setting, calls, db, registryDir } = await makeWorker();
     const main = execFileSync("git", ["rev-parse", "main"], { cwd: registryDir })
       .toString()
       .trim();
@@ -2681,7 +2704,7 @@ describe("ClaudeCodeWorker", () => {
 
     const rca: Task = { ...makeTask("rca-5", null, "deckhand", "review"), parent_id: "objected-5" };
     insertTask(db, rca);
-    worker.start(rca);
+    worker.start(rca, setting(rca));
 
     expect(calls).toHaveLength(1);
     const args = calls[0]!.args;
@@ -2698,7 +2721,7 @@ describe("ClaudeCodeWorker", () => {
 
   it("独立レビュー(assignee 未設定)の spawn には当時版定義を注入しない: 当事者レビューのみ(ADR 0020 part 4)", async () => {
     // an auditor agent so the unset-assignee review resolves and spawns
-    const { worker, calls, db, registryDir } = await makeWorker(
+    const { worker, setting, calls, db, registryDir } = await makeWorker(
       {
         "agents/auditor.md": `---\nname: auditor\ndescription: Independent reviewer\nversion: 1.0.0\nauthority: standard\nprovider: anthropic\nskills:\n  - "*"\n---\nYou are the Auditor.\n`,
       },
@@ -2719,7 +2742,7 @@ describe("ClaudeCodeWorker", () => {
     // independent review: unset assignee → resolves to the Auditor pointer
     const audit: Task = { ...makeTask("audit-1", null, null, "review"), parent_id: "objected-2" };
     insertTask(db, audit);
-    worker.start(audit);
+    worker.start(audit, setting(audit));
     expect(calls).toHaveLength(1);
     const args = calls[0]!.args;
     const prompt = args[args.indexOf("--append-system-prompt") + 1]!;

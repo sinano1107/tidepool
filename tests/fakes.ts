@@ -191,7 +191,7 @@ export class ScriptedWorker implements WorkerAdapter {
   /** 盤面が pickup の瞬間に選んだ実行設定(ADR 0110 決定3 / issue #544)。実 adapter は
    *  これを spawn にピン留めして `worker_spawned` に刻む —— 盤面境界で観測できるのは
    *  「何を渡したか」までで、刻まれることは adapter の seam が1度だけ言う。 */
-  readonly startedSettings: (ExecutionSetting | undefined)[] = [];
+  readonly startedSettings: ExecutionSetting[] = [];
   readonly gracefulStops: string[] = [];
   readonly exits: string[] = [];
   private containers: ProcessContainers | undefined;
@@ -207,7 +207,7 @@ export class ScriptedWorker implements WorkerAdapter {
     readonly id = "fake-worker",
   ) {}
 
-  start(task: Task, setting?: ExecutionSetting): void {
+  start(task: Task, setting: ExecutionSetting): void {
     this.started.push(task);
     this.startedSettings.push(setting);
     const failure = this.startFailure;

@@ -21,7 +21,7 @@ import { CODEX_APP_SERVER_VERSION, callAppServer, codexCommandThrough } from "./
 import type { ContainmentCapability } from "./containment.js";
 import type { Db } from "./db.js";
 import { appendEvent, type EventPayload } from "./events.js";
-import { type ExecutionSetting, resolveExecutionSetting } from "./execution-setting.js";
+import type { ExecutionSetting } from "./execution-setting.js";
 import {
   buildMemoryInjection,
   isMetaReviewOf,
@@ -923,7 +923,7 @@ export class CodexWorker implements WorkerAdapter {
     mkdirSync(options.codexHome, { recursive: true });
   }
 
-  start(task: Task, chosen?: ExecutionSetting): void {
+  start(task: Task, setting: ExecutionSetting): void {
     const registry = loadRegistry(this.options.registry.dir, this.options.registry.mode);
     const workspace = resolveOrQuarantine(
       this.options.db,
@@ -950,13 +950,6 @@ export class CodexWorker implements WorkerAdapter {
     // vendor boundary explicit so a future direct caller cannot silently mask it.
     if (agent.definition.skills.length > 0) {
       throw new Error("CodexWorker v1 refuses a non-empty skill allowlist (ADR 0098)");
-    }
-    // ADR 0005 の明示ピン留めは Codex 側でも同じ強さで効く。model と effort の
-    // 既定は adapter ごとに書かず、Claude 側と同じ1つの解決関数を通す。盤面が
-    // 選んだ設定があればそれを使う(#544 —— spawn 側の再解決は除外の文脈を持たない)。
-    const setting = chosen ?? resolveExecutionSetting(this.options.db, agent.definition, task);
-    if (!setting) {
-      throw new Error(`agent ${agent.name}: no Provider entry to run on (ADR 0110 決定1)`);
     }
     if (setting.provider !== "openai") {
       throw new Error(`CodexWorker refuses provider ${setting.provider}; no Harness fallback (ADR 0098)`);
