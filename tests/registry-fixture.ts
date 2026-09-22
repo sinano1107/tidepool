@@ -136,10 +136,7 @@ tidepool:
 /** Writes `files` (over `defaults`) into an already-created `dir` and commits
  *  them as its one commit — the population half of `makeRegistry`, split out
  *  so `makePreviewRegistry` can drive it over a dir with its own lifecycle
- *  (issue #703: `makeRegistry` self-cleans via `tempDir`/`onTestFinished`,
- *  which only fires inside a vitest test — `makePreviewRegistry` runs from
- *  `scripts/preview-settings.ts`, outside vitest, and keeps owning its own
- *  dir via `tests/preview.ts`'s explicit `rm`). */
+ *  (see that function's own doc comment for why). */
 async function populateRegistry(
   dir: string,
   files: Record<string, string>,
