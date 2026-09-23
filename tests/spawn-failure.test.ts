@@ -5,6 +5,7 @@ import { PassThrough } from "node:stream";
 import { afterEach, expect, it } from "vitest";
 import { ClaudeCodeWorker } from "../src/claude-worker.js";
 import { getTask } from "../src/tasks.js";
+import { TranscriptStore } from "../src/transcript-store.js";
 import { FakeContainerRuntime, healthyUsageText } from "./fakes.js";
 import {
   api,
@@ -210,6 +211,7 @@ it("skill 列挙の容器が空にならず回収 timeout で null に落ちる�
         workspace: "tidepool",
         mcpUrl: "http://127.0.0.1:1/mcp",
         logDir,
+        transcripts: new TranscriptStore(logDir),
       });
       return {
         id: worker.id,

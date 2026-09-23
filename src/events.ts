@@ -324,6 +324,15 @@ export type EventPayload =
   // event is what keeps the fact on the timeline. No reader pairs it, so an
   // unpaired spawn_failed breaks nothing.
   | { kind: "spawn_failed"; error_code: string | null; message: string }
+  // ADR 0149 決定4: 走ってから transcript(stream / stderr のどちらか)が書けなくなった
+  // 観測。question に答えた後もこの session の transcript が途中で切れている事実を残す。
+  | {
+      kind: "transcript_failed";
+      error_code: string | null;
+      message: string;
+      file: "stream" | "stderr";
+      worker_spawned_event_id: number;
+    }
   // ADR 0111 決定4 / issue #547: 配分評価 —— review の verdict が確定した後、盤面が
   // Board call に問うた「この結果に対する実行設定は適切だったか」。**判断種別**の
   // 注釈であり、観測(worker_exited.usage / Precedent の行動列)とはこの kind で

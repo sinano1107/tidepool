@@ -46,6 +46,7 @@ import {
   registerTask,
   type Task,
 } from "../src/tasks.js";
+import { TranscriptStore } from "../src/transcript-store.js";
 import type { TranslationClient } from "../src/translate.js";
 import type { WatchdogConfig } from "../src/watchdog.js";
 import type { WorkspaceConfig } from "../src/workspace.js";
@@ -125,6 +126,9 @@ export interface BootOptions {
   /** 容器機構(ADR 0099 決定2)。boot 前にスクリプトしたいテストだけが渡す
    *  (機構前提検査の不成立など)。Absent → 既定の fake。 */
   containerRuntime?: FakeContainerRuntime;
+  /** transcript の器(ADR 0149)。session の stream を取って落としたいテストだけが渡す。
+   *  Absent → 盤面の dir に開く既定の器。 */
+  transcripts?: TranscriptStore;
   /** This board's one worker's authority profile (issue #11). */
   authority?: AuthorityProfile;
   /** Resolves the executing task's own agent's authority profile (ADR 0012 /
@@ -263,6 +267,7 @@ export async function bootTidepool(options: BootOptions = {}): Promise<Tidepool>
       return worker;
     }),
     containerRuntime: containers,
+    transcripts: options.transcripts ?? new TranscriptStore(dir),
     workspace: options.workspace,
     resolveWorkspace: options.resolveWorkspace,
     watchdog: options.watchdog,

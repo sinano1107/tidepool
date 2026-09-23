@@ -7,6 +7,7 @@ import { CODEX_CLI_VERSION, CodexWorker } from "../src/codex-worker.js";
 import { openDb } from "../src/db.js";
 import type { PtyFn } from "../src/process-container.js";
 import { LoggingWorker } from "../src/server-options.js";
+import { TranscriptStore } from "../src/transcript-store.js";
 import type { WorkerAdapter } from "../src/worker.js";
 import { containerHarness, FakeClock, passthroughContainers, ScriptedWorker } from "./fakes.js";
 import { makeRegistry } from "./registry-fixture.js";
@@ -62,6 +63,7 @@ workerAdapterContract("ClaudeCodeWorker", async () => {
     workspace: "tidepool",
     mcpUrl: "http://127.0.0.1:4589/mcp",
     logDir,
+    transcripts: new TranscriptStore(logDir),
     pty: deadPty,
     ...containerHarness(passthroughContainers()),
   });
@@ -79,7 +81,7 @@ workerAdapterContract("CodexWorker", async () => {
     agent: "deckhand",
     workspace: "tidepool",
     mcpUrl: "http://127.0.0.1:4589/mcp",
-    logDir,
+    transcripts: new TranscriptStore(logDir),
     codexHome,
     cliVersion: CODEX_CLI_VERSION,
     executable: "/opt/tidepool/bin/codex",

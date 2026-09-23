@@ -3,7 +3,7 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { mkdir, realpath, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { CODEX_FEATURE_SNAPSHOT, CodexWorker, resolveCodexExecutable } from "../src/codex-worker.js";
 import { openDb } from "../src/db.js";
 import { listEvents } from "../src/events.js";
@@ -13,6 +13,7 @@ import type { ContainerSpawn } from "../src/process-container.js";
 import { openQuarantineValues } from "../src/quarantine.js";
 import { loadRegistry } from "../src/registry.js";
 import { registerTask, type Task } from "../src/tasks.js";
+import { TranscriptStore } from "../src/transcript-store.js";
 import type { WorkerExit } from "../src/worker.js";
 import { driveCodexPreflight, FakeClock, passthroughContainers, recordingSpawn } from "./fakes.js";
 import { bootTidepool, mcpClient, type Tidepool, tempDir } from "./harness.js";
@@ -95,7 +96,7 @@ You are the Codex worker.`,
     workspace: "work",
     workspacesDir: tmpdir(),
     mcpUrl: "http://127.0.0.1:4590/mcp",
-    logDir,
+    transcripts: new TranscriptStore(logDir),
     codexHome,
     cliVersion: CLI_VERSION,
     executable: "/opt/tidepool/bin/codex",
@@ -470,9 +471,25 @@ describe("CodexWorker (ADR 0098)", () => {
       },
     });
     const spawned = listEvents(f.db, value.id).find((event) => event.kind === "worker_spawned")!;
-    expect(
-      readFileSync(join(f.logDir, `${value.id}.${spawned.id}.stream.jsonl`), "utf8"),
-    ).toBe(jsonl);
+    // transcript は盤面側の器への pipe なので、ファイルに届くのは非同期(ADR 0149)
+    await vi.waitFor(() =>
+      expect(readFileSync(join(f.logDir, `${value.id}.${spawned.id}.stream.jsonl`), "utf8")).toBe(jsonl),
+    );
+  });
+
+  it("stderr を <taskId>.<worker_spawned の event id>.stderr.log として stream.jsonl の隣に全量保存する(ADR 0149)", async () => {
+    const f = await fixture();
+    const value = task(f.db, "codex-stderr");
+    f.start(value);
+    f.process.processes[0]!.stderr.write("Error: not logged in\n");
+    f.process.processes[0]!.stderr.end();
+
+    const spawned = listEvents(f.db, value.id).find((event) => event.kind === "worker_spawned")!;
+    await vi.waitFor(() =>
+      expect(readFileSync(join(f.logDir, `${value.id}.${spawned.id}.stderr.log`), "utf8")).toBe(
+        "Error: not logged in\n",
+      ),
+    );
   });
 
   it("does not infer OpenAI auth quarantine from Codex JSONL prose", async () => {

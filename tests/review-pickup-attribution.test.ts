@@ -12,6 +12,7 @@ import { startServer, type TidepoolServer } from "../src/server.js";
 import { implicitTaskExecutionCandidates } from "../src/server-options.js";
 import { Slot } from "../src/slot.js";
 import { DEFAULT_AUDITOR_NAME, registerTask } from "../src/tasks.js";
+import { TranscriptStore } from "../src/transcript-store.js";
 import type { WorkerAdapter } from "../src/worker.js";
 import {
   FakeClock,
@@ -86,6 +87,7 @@ You are Fugu.
     clock,
     auditorName: "fugu",
     containerRuntime: new FakeContainerRuntime(spawn),
+    transcripts: new TranscriptStore(logDir),
     worker: ({ db, containers, boardCall }): WorkerAdapter => {
       const worker = new ClaudeCodeWorker({
         db,
@@ -96,6 +98,7 @@ You are Fugu.
         workspace: "tidepool",
         mcpUrl: "http://127.0.0.1:1/mcp",
         logDir,
+        transcripts: new TranscriptStore(logDir),
         containers,
         boardCall,
       });

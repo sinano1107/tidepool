@@ -77,6 +77,7 @@ import { checkSandboxCapability } from "./sandbox.js";
 import type { TaskExecutionCandidates } from "./scheduler.js";
 import type { BoardCallers, ServerOptions, WorkerFactory } from "./server.js";
 import { resolveTaskAgent, type Task } from "./tasks.js";
+import { TranscriptStore } from "./transcript-store.js";
 import type { TranslationClient } from "./translate.js";
 import type { WatchdogConfig } from "./watchdog.js";
 import { CanonicalWorkerRouter, type WorkerAdapter, type WorkerExit } from "./worker.js";
@@ -237,6 +238,7 @@ export function buildWorkerOptions(
     onCapInterrupted: (taskId: string, reclaimed: Promise<void>) => void;
     onSpawnFailed: (taskId: string, failure: { error_code: string | null; message: string }) => void;
     onWorkerExited: (taskId: string, exit: WorkerExit) => void;
+    transcripts: TranscriptStore;
   },
 ): ClaudeWorkerOptions {
   return {
@@ -275,6 +277,8 @@ export function buildWorkerOptions(
     onSpawnFailed: session.onSpawnFailed,
     // ADR 0145: 渡し忘れは「報告なしに exit した session が時間制限まで枠を握る」形で静かに fail する
     onWorkerExited: session.onWorkerExited,
+    // ADR 0149: transcript は盤面側の器が開く
+    transcripts: session.transcripts,
   };
 }
 
@@ -284,7 +288,7 @@ export function buildWorkerOptions(
 export function buildWorkerFactory(board: BoardComposition): WorkerFactory {
   const { registryDir } = board;
   if (!registryDir) return () => new LoggingWorker();
-  return ({ db, clock, containers, boardCall, onCapInterrupted, onSpawnFailed, onWorkerExited }) => {
+  return ({ db, clock, containers, boardCall, onCapInterrupted, onSpawnFailed, onWorkerExited, transcripts }) => {
     const registry = { dir: registryDir, mode: board.registryMode } as const;
     return new CanonicalWorkerRouter({
       id: board.defaultAgentName,
@@ -292,7 +296,7 @@ export function buildWorkerFactory(board: BoardComposition): WorkerFactory {
         "claude-code": new ClaudeCodeWorker(
           buildWorkerOptions(
             { ...board, registryDir },
-            { db, clock, containers, boardCall, onCapInterrupted, onSpawnFailed, onWorkerExited },
+            { db, clock, containers, boardCall, onCapInterrupted, onSpawnFailed, onWorkerExited, transcripts },
           ),
         ),
         codex: new CodexWorker({
@@ -305,7 +309,7 @@ export function buildWorkerFactory(board: BoardComposition): WorkerFactory {
           workspace: board.workspaceName,
           workspacesDir: board.workspacesDir,
           mcpUrl: `http://127.0.0.1:${board.mcpPort}/mcp`,
-          logDir: board.logDir,
+          transcripts,
           codexHome: board.codexHome,
           executable: board.codexExecutable,
           cliVersion: CODEX_CLI_VERSION,
@@ -785,6 +789,8 @@ export async function buildServerOptions(board: BoardComposition, db: Db): Promi
     // 無い platform は fail-closed な機構を受け取り、boot 時の前提検査が pickup を
     // 止める(macOS の実測は #465)。
     containerRuntime: containerRuntimeFor(platform),
+    // ADR 0149: worker session の transcript の器。置き場は worker ログの dir
+    transcripts: new TranscriptStore(board.logDir),
     watchdog: WATCHDOG,
   };
 }

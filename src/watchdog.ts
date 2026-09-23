@@ -1,6 +1,7 @@
 import type { Clock } from "./clock.js";
 import { quarantineContainment } from "./containment.js";
 import type { Db } from "./db.js";
+import { appendEvent, getEvent } from "./events.js";
 import type { GitHubAuth } from "./github-auth.js";
 import type { Landing } from "./landing.js";
 import type { ProcessContainers } from "./process-container.js";
@@ -15,6 +16,7 @@ import {
   type TeardownDeps,
   teardownStep,
 } from "./teardown.js";
+import type { TranscriptFailure } from "./transcript-store.js";
 import type { WorkerAdapter, WorkerExit } from "./worker.js";
 import { BOARD_WORKER_ID, buildWorkspaceResolver, type WorkspaceConfig } from "./workspace.js";
 
@@ -159,25 +161,58 @@ export function spawnFailureHandler(
   deps: TeardownDeps,
   containers: ProcessContainers,
 ): (taskId: string, failure: { error_code: string | null; message: string }) => void {
-  return (taskId, failure) => {
-    if (deps.slot.currentTaskId !== taskId || deps.slot.inTeardown) return;
-    const task = getTask(deps.db, taskId);
-    if (task?.status !== "in_progress") return;
-    const now = deps.clock.now();
-    registerFailureQuestion(
-      deps.db,
-      task,
+  return (taskId, failure) =>
+    failAndReclaim(deps, containers, taskId, (task) => [
       `worker never started for task: ${task.title}`,
       `the worker for task "${task.title}" (${task.id}) never ran: the board observed this ` +
         `error while starting it${failure.error_code ? ` (${failure.error_code})` : ""}:\n\n` +
         failure.message,
-      now,
-    );
-    markTeardown(deps.db, taskId, now);
-    deps.slot.enterTeardown();
-    containers.forceReclaim(taskId);
-    void containers.reclaimed(taskId).then(() => runTeardown(deps, taskId, teardownStep(deps.db, taskId)));
+    ]);
+}
+
+/** 走ってから transcript が書けなくなった session(ADR 0149 決定4)の盤面側の一撃。
+ *  event は常に書く。question と強制回収は、まだ後始末に入っていない session だけ ——
+ *  決着後に届いた失敗には止めるものが無く、「盤面が止めた」が偽になる。後始末の印が
+ *  先に置かれるので、続く exit で ADR 0145 の question は立たない。 */
+export function transcriptFailureHandler(
+  deps: TeardownDeps,
+  containers: ProcessContainers,
+): (failure: TranscriptFailure) => void {
+  return ({ taskId, workerSpawnedEventId, file, error_code, message }) => {
+    appendEvent(deps.db, {
+      taskId,
+      // worker_spawned は open より先に書かれている(ADR 0149 決定2)
+      workerId: getEvent(deps.db, workerSpawnedEventId)!.worker_id,
+      origin: "board",
+      payload: { kind: "transcript_failed", error_code, message, file, worker_spawned_event_id: workerSpawnedEventId },
+      at: deps.clock.now(),
+    });
+    failAndReclaim(deps, containers, taskId, (task) => [
+      `worker transcript could not be written: ${task.title}`,
+      `the board force-reclaimed the worker for task "${task.title}" (${task.id}) because its ` +
+        `transcript could not be written (${error_code ?? "no error code"}, ${file} file):\n\n${message}`,
+    ]);
   };
+}
+
+/** 盤面が観測した瞬間に失敗を記録して後始末へ入れる(ADR 0118 の型)。記録を回収済み観測の
+ *  **前**に置くので、後始末中の status は `todo` になり、経路はエスカレーションの step に
+ *  読まれる(ADR 0113 決定3)。 */
+function failAndReclaim(
+  deps: TeardownDeps,
+  containers: ProcessContainers,
+  taskId: string,
+  wording: (task: Task) => [title: string, reason: string],
+): void {
+  if (deps.slot.currentTaskId !== taskId || deps.slot.inTeardown) return;
+  const task = getTask(deps.db, taskId);
+  if (task?.status !== "in_progress") return;
+  const now = deps.clock.now();
+  registerFailureQuestion(deps.db, task, ...wording(task), now);
+  markTeardown(deps.db, taskId, now);
+  deps.slot.enterTeardown();
+  containers.forceReclaim(taskId);
+  void containers.reclaimed(taskId).then(() => runTeardown(deps, taskId, teardownStep(deps.db, taskId)));
 }
 
 /** Process-internal watchdog (#9): an absolute per-type time limit on the

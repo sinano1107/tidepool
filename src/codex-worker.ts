@@ -1,6 +1,5 @@
 import {
   accessSync,
-  appendFileSync,
   chmodSync,
   constants as fsConstants,
   mkdirSync,
@@ -32,6 +31,7 @@ import {
 import type { ContainedProcess, ContainerSpawn, ProcessContainers } from "./process-container.js";
 import { loadRegistry, type RegistrySource } from "./registry.js";
 import { DEFAULT_AUDITOR_NAME, resolveTaskAgent, type Task } from "./tasks.js";
+import type { Transcript, TranscriptStore } from "./transcript-store.js";
 import type { WorkerAdapter, WorkerExit } from "./worker.js";
 import {
   quarantineWorkspace,
@@ -266,7 +266,8 @@ export interface CodexWorkerOptions {
   workspace: string;
   workspacesDir?: string;
   mcpUrl: string;
-  logDir: string;
+  /** ADR 0149: session ごとの transcript を開く盤面側の器。`containers` と同じく省略できない。 */
+  transcripts: TranscriptStore;
   /** Board-owned shared ChatGPT login/cache, isolated from the operator's Codex config. */
   codexHome: string;
   /** Version already established by the Harness preflight; production pins 0.147.0. */
@@ -962,16 +963,13 @@ function consumeJsonl(
 export class CodexWorker implements WorkerAdapter {
   readonly id: string;
   private readonly containers: ProcessContainers;
-  private readonly logDir: string;
   private readonly workspacesDir: string;
   private readonly running = new Map<string, { kill(signal: NodeJS.Signals): void }>();
 
   constructor(private readonly options: CodexWorkerOptions) {
     this.id = options.agent;
     this.containers = options.containers;
-    this.logDir = resolve(options.logDir);
     this.workspacesDir = resolveWorkspacesBaseDir(options.workspacesDir);
-    mkdirSync(this.logDir, { recursive: true });
     mkdirSync(options.codexHome, { recursive: true });
   }
 
@@ -1017,6 +1015,8 @@ export class CodexWorker implements WorkerAdapter {
       }
     };
     let child: ContainedProcess;
+    let spawned: number;
+    let transcript: Transcript;
     try {
       const hook = installBoardHook(this.options.codexHome);
       const taskMcpUrl = new URL(this.options.mcpUrl);
@@ -1039,6 +1039,29 @@ export class CodexWorker implements WorkerAdapter {
         codexSystemDir: this.options.codexSystemDir,
         hook,
       });
+      // ADR 0149 決定2: `worker_spawned` → transcript の同期 open → spawn(Claude adapter と同じ順)
+      spawned = appendEvent(this.options.db, {
+        taskId: task.id,
+        workerId: agent.name,
+        origin: "board",
+        payload: {
+          kind: "worker_spawned",
+          registry_commit: registry.commit,
+          definition_version: agent.definition.version,
+          // openai の正準経路は advisor を提供しない(ADR 0098)ので、選ばれた
+          // 実行設定に advisor は決して載らない
+          advisor: null,
+          provider: setting.provider,
+          model: setting.model,
+          effort: setting.effort,
+          source: setting.source,
+          harness: "codex",
+          cli_version: this.options.cliVersion,
+        },
+        at: this.options.clock.now(),
+      });
+      recordMemoryInjection(this.options.db, task.id, agent.name, spawned, memory, this.options.clock.now());
+      transcript = this.options.transcripts.open(task.id, spawned);
       child = this.containers.open(task.id).spawn(
         this.options.executable,
         [
@@ -1056,34 +1079,13 @@ export class CodexWorker implements WorkerAdapter {
         },
       );
     } catch (error) {
+      // ponytail: spawn が同期で投げると開いた transcript の2本の fd は閉じない(Claude adapter と同じ
+      // 稀な経路)。積み上がりが観測されたらここで destroy する。
       removeTaskTemp();
       throw error;
     }
-    const spawned = appendEvent(this.options.db, {
-      taskId: task.id,
-      workerId: agent.name,
-      origin: "board",
-      payload: {
-        kind: "worker_spawned",
-        registry_commit: registry.commit,
-        definition_version: agent.definition.version,
-        // openai の正準経路は advisor を提供しない(ADR 0098)ので、選ばれた
-        // 実行設定に advisor は決して載らない
-        advisor: null,
-        provider: setting.provider,
-        model: setting.model,
-        effort: setting.effort,
-        source: setting.source,
-        harness: "codex",
-        cli_version: this.options.cliVersion,
-      },
-      at: this.options.clock.now(),
-    });
-    recordMemoryInjection(this.options.db, task.id, agent.name, spawned, memory, this.options.clock.now());
-    const transcript = join(this.logDir, `${task.id}.${spawned}.stream.jsonl`);
-    const stderrPath = join(this.logDir, `${task.id}.${spawned}.stderr.log`);
-    writeFileSync(transcript, "");
-    writeFileSync(stderrPath, "");
+    child.stdout.pipe(transcript.stream);
+    child.stderr.pipe(transcript.stderr);
     let stdout = "";
     let stderr = "";
     let usage: CodexUsage | null = null;
@@ -1092,13 +1094,11 @@ export class CodexWorker implements WorkerAdapter {
     };
     child.stdout.on("data", (chunk: Buffer | string) => {
       const text = chunk.toString();
-      appendFileSync(transcript, text);
       stdout = consumeJsonl(stdout, text, observe);
     });
     child.stderr.on("data", (chunk: Buffer | string) => {
       const text = chunk.toString();
       stderr += text;
-      appendFileSync(stderrPath, text);
     });
     this.running.set(task.id, child);
     child.on("error", (error) => {
