@@ -139,7 +139,7 @@ export function openDb(path: string): Db {
     -- The database is the audit record's final backstop, so its route vocabulary is
     -- constrained here as well as by EventOrigin in TypeScript.
     -- task_id is NULL for board-scoped events (execution_settings_changed, issue #545;
-    -- memory_entry_created / memory_entry_invalidated, issue #590; memory_entry_approved, issue #620; memory_index_rebuilt, issue #591; memory_settings_changed, issue #592) — a settings change
+    -- memory_entry_created / memory_entry_invalidated, issue #590; memory_entry_approved, issue #620; memory_index_rebuilt, issue #591; memory_settings_changed, issue #592; meta_review_settings_changed, issue #924) — a settings change
     -- or a memory entry belongs to no task but still carries its route.
     CREATE TABLE IF NOT EXISTS events (
       id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -513,11 +513,16 @@ export function openDb(path: string): Db {
 
     -- Memory の盤面設定(1行、spec #586 C / issue #592): spawn 注入のトークン上限。
     -- 行が無い / NULL = 未設定 = コードの既定(2,000)。settings タブと管理MCP が書く。
-    -- meta_review_period_days: 周期 meta-review の間隔の下限(日、NULL = 既定 7、issue #618)。
     CREATE TABLE IF NOT EXISTS memory_defaults (
       id                  INTEGER PRIMARY KEY CHECK (id = 1),
-      injection_token_cap INTEGER CHECK (injection_token_cap > 0),
-      meta_review_period_days INTEGER CHECK (meta_review_period_days > 0)
+      injection_token_cap INTEGER CHECK (injection_token_cap > 0)
+    );
+
+    -- 周期 meta-review の盤面設定(1行、issue #618 / #924): 全主題に共通の間隔の下限(日)。
+    -- 行が無い / NULL = 未設定 = コードの既定(7)。settings タブと管理MCP が書く。
+    CREATE TABLE IF NOT EXISTS meta_review_defaults (
+      id          INTEGER PRIMARY KEY CHECK (id = 1),
+      period_days INTEGER CHECK (period_days > 0)
     );
 
     -- append-only is enforced by structure, not convention

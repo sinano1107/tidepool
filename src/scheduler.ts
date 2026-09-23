@@ -20,7 +20,6 @@ import { type GitHubClient, IssueGoneError } from "./github.js";
 import type { GitHubAuth } from "./github-auth.js";
 import { type HarnessContainmentCheck, harnessContainmentPickupBlocked } from "./harness-containment.js";
 import { recordShadow } from "./learner.js";
-import { readMemorySettings } from "./memory.js";
 import { registerDueMetaReviews } from "./meta-review.js";
 import type { ProcessContainers } from "./process-container.js";
 import { quarantineExcludedProviders, quarantineStops } from "./quarantine.js";
@@ -550,7 +549,7 @@ export function startScheduler(deps: {
       // ADR 0120 決定2 / ADR 0119: 周期 meta-review の登録は poll の中なので pickup 契機で、候補の
       // 読み取りより前なので同じ pass で拾われる。slot 占有・halt より手前(空の盤面でも登録する)。
       // **同期**に保つ —— ADR 0119 決定5 の「最初の await より前に slot を読む」を崩さない。
-      registerDueMetaReviews(db, clock.now(), readMemorySettings(db).meta_review_period_days);
+      registerDueMetaReviews(db, clock.now());
       if (await pickupBlocked()) return;
       // agent 名で外れるのは、定義が成立しない agent(quarantineAgent)だけである
       // (ADR 0110 決定3 / issue #544)。

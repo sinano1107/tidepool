@@ -72,7 +72,7 @@ it("worker_spawned だけでは routing の材料にならない", async () => {
 
 it("同主題の open な task があれば登録せず、完了後は前回 watermark 以降の材料で次の周期に登録される", async () => {
   t = await bootTidepool();
-  expect((await api(t.baseUrl, "POST", "/api/settings/memory", { meta_review_period_days: 1 })).status).toBe(200);
+  expect((await api(t.baseUrl, "POST", "/api/settings/meta-review", { period_days: 1 })).status).toBe(200);
   await material(t);
   await t.clock.advance(HOUR);
   const [first] = await openRoutingReviews(t);
@@ -88,7 +88,7 @@ it("同主題の open な task があれば登録せず、完了後は前回 wat
 
 it("親 task の meta_review_subject が routing の open な提案 question があれば登録しない —— 提案の kind では数えない", async () => {
   t = await bootTidepool();
-  expect((await api(t.baseUrl, "POST", "/api/settings/memory", { meta_review_period_days: 1 })).status).toBe(200);
+  expect((await api(t.baseUrl, "POST", "/api/settings/meta-review", { period_days: 1 })).status).toBe(200);
   await material(t);
   await t.clock.advance(HOUR);
   const [first] = await openRoutingReviews(t);

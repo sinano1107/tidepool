@@ -123,7 +123,7 @@ export function raiseObjection(
 }
 
 export type DecisionLogEntry = Omit<EventRow, "payload" | "task_id"> & {
-  /** decision-log kinds are always task-scoped (only the board-scoped execution_settings_changed / memory_entry_* / memory_index_rebuilt / memory_settings_changed are not) */
+  /** decision-log kinds are always task-scoped (only the board-scoped execution_settings_changed / memory_entry_* / memory_index_rebuilt / memory_settings_changed / meta_review_settings_changed are not) */
   task_id: string;
   payload: Extract<EventRow["payload"], { kind: (typeof HUMAN_FACING_KINDS)[number] }>;
 };

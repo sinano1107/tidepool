@@ -1,6 +1,7 @@
+import { z } from "zod";
 import type { Db } from "./db.js";
-import { appendEvent } from "./events.js";
-import { BOARD_WORKER_ID, registerTask } from "./tasks.js";
+import { appendEvent, type EventOrigin } from "./events.js";
+import { BOARD_WORKER_ID, HUMAN_WORKER_ID, registerTask } from "./tasks.js";
 
 /** memory の pull と routing の読み口が共有するページ長(定数 — spec #586 D)。 */
 export const PAGE_LENGTH = 20;
@@ -97,11 +98,39 @@ export function registerMetaReview(db: Db, subject: MetaReviewSubject, now: Date
   })();
 }
 
+/** 周期の既定(日、ADR 0120 決定2)。間隔の下限で、全主題に共通。 */
+const DEFAULT_PERIOD_DAYS = 7;
+
+export const metaReviewSettingsChangeSchema = z.object({ period_days: z.number().int().positive() });
+type MetaReviewSettings = { period_days: number };
+
+export function readMetaReviewSettings(db: Db): MetaReviewSettings {
+  const row = db.prepare("SELECT period_days FROM meta_review_defaults WHERE id = 1").get() as { period_days: number | null } | undefined;
+  return { period_days: row?.period_days ?? DEFAULT_PERIOD_DAYS };
+}
+
+/** 周期を書き、盤面スコープの操作イベントとして経路つきで残す(changeMemorySettings と同じ形)。
+ *  返り値は meta_review_settings_changed の event id。 */
+export function changeMetaReviewSettings(db: Db, change: z.infer<typeof metaReviewSettingsChangeSchema>, origin: EventOrigin, at: Date): number {
+  return db.transaction(() => {
+    db.prepare(
+      `INSERT INTO meta_review_defaults (id, period_days) VALUES (1, @period_days)
+       ON CONFLICT(id) DO UPDATE SET period_days = excluded.period_days`,
+    ).run(change);
+    return appendEvent(db, {
+      taskId: null,
+      workerId: HUMAN_WORKER_ID,
+      origin,
+      payload: { kind: "meta_review_settings_changed", ...readMetaReviewSettings(db) },
+      at,
+    });
+  })();
+}
+
 /** scheduler の poll が毎回呼ぶ: due な主題の meta-review を登録する。due = 前回登録から周期が経ち、
- *  同主題の open な task・提案 question が無く、前回の watermark より後に主題の材料がある(前回が無ければ周期は満たす)。
- *  周期の日数は呼び手が memory の設定から読んで渡す(このモジュールは memory を import しない)。 */
-export function registerDueMetaReviews(db: Db, now: Date, periodDays: number): void {
-  const periodMs = periodDays * 24 * 60 * 60 * 1000;
+ *  同主題の open な task・提案 question が無く、前回の watermark より後に主題の材料がある(前回が無ければ周期は満たす)。 */
+export function registerDueMetaReviews(db: Db, now: Date): void {
+  const periodMs = readMetaReviewSettings(db).period_days * 24 * 60 * 60 * 1000;
   for (const subject of Object.keys(META_REVIEW_SUBJECTS) as MetaReviewSubject[]) {
     const { material } = META_REVIEW_SUBJECTS[subject];
     const last = db

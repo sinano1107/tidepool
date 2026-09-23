@@ -7,42 +7,36 @@ import { api, bootTidepool, managementMcpClient, type Tidepool } from "./harness
 let t: Tidepool;
 afterEach(() => t?.stop());
 
-it("POST /api/settings/memory で書いた注入上限と meta-review の周期は GET で読め、正の整数でない値と空の変更は 400(issue #592 / #618)", async () => {
+it("POST /api/settings/memory で書いた注入上限は GET で読め、周期の欄は無く、正の整数でない値と空の変更は 400(issue #592 / #924)", async () => {
   t = await bootTidepool();
   expect(await api(t.baseUrl, "POST", "/api/settings/memory", { injection_token_cap: 800 })).toMatchObject({
     status: 200,
-    json: { injection_token_cap: 800, meta_review_period_days: 7 },
+    json: { injection_token_cap: 800 },
   });
   for (const bad of [0, 1.5, "900"]) {
     expect((await api(t.baseUrl, "POST", "/api/settings/memory", { injection_token_cap: bad })).status).toBe(400);
-    expect((await api(t.baseUrl, "POST", "/api/settings/memory", { meta_review_period_days: bad })).status).toBe(400);
   }
   expect((await api(t.baseUrl, "POST", "/api/settings/memory", {})).status).toBe(400);
-  expect((await api(t.baseUrl, "POST", "/api/settings/memory", { meta_review_period_days: 3 })).json).toEqual({
-    injection_token_cap: 800,
-    meta_review_period_days: 3,
-  });
-  expect((await api(t.baseUrl, "GET", "/api/settings/memory")).json).toEqual({ injection_token_cap: 800, meta_review_period_days: 3 });
+  expect((await api(t.baseUrl, "GET", "/api/settings/memory")).json).toEqual({ injection_token_cap: 800 });
 });
 
-it("管理MCP の change_memory_settings で書いた注入上限と meta-review の周期は read_memory_settings で読め、不正値と空の変更は拒む(issue #592 / #618)", async () => {
+it("管理MCP の change_memory_settings で書いた注入上限は read_memory_settings で読め(周期の欄は無い)、不正値と空の変更は拒む(issue #592 / #924)", async () => {
   t = await bootTidepool();
   const client = await managementMcpClient(t.baseUrl);
   try {
     const changed = (await client.callTool({ name: "change_memory_settings", arguments: { injection_token_cap: 1200 } })) as any;
-    expect(changed.isError).not.toBe(true);
+    expect(JSON.parse(changed.content[0].text)).toEqual({ injection_token_cap: 1200 });
     const rejected = (await client.callTool({ name: "change_memory_settings", arguments: { injection_token_cap: -5 } })) as any;
     expect(rejected.isError).toBe(true);
     const empty = (await client.callTool({ name: "change_memory_settings", arguments: {} })) as any;
     expect(empty.isError).toBe(true);
-    const period = (await client.callTool({ name: "change_memory_settings", arguments: { meta_review_period_days: 14 } })) as any;
-    expect(period.isError).not.toBe(true);
     const read = (await client.callTool({ name: "read_memory_settings", arguments: {} })) as any;
-    expect(JSON.parse(read.content[0].text)).toEqual({ injection_token_cap: 1200, meta_review_period_days: 14 });
+    expect(JSON.parse(read.content[0].text)).toEqual({ injection_token_cap: 1200 });
   } finally {
     await client.close();
   }
 });
+
 
 /** agent 由来の Knowledge を1つ(setup — 出所に使える event を registerTask で作る)。 */
 function agentKnowledge(tp: Tidepool, title: string) {

@@ -85,10 +85,14 @@ interface Option {
   label: string;
 }
 
-/** spawn 注入の上限と meta-review の間隔(src/memory.ts の MemorySettings)。 */
+/** spawn 注入の上限(src/memory.ts の MemorySettings)。 */
 interface MemorySettings {
   injection_token_cap: number;
-  meta_review_period_days: number;
+}
+
+/** 周期 meta-review の間隔の下限(日、src/meta-review.ts の MetaReviewSettings)。 */
+interface MetaReviewSettings {
+  period_days: number;
 }
 
 /** 承認 question の注釈(issue #757)。question 行にだけ載り、承認 question なら非 null。 */
@@ -257,6 +261,8 @@ export interface WireContract {
   };
   "GET /api/settings/memory": MemorySettings;
   "POST /api/settings/memory": MemorySettings;
+  "GET /api/settings/meta-review": MetaReviewSettings;
+  "POST /api/settings/meta-review": MetaReviewSettings;
   "GET /api/settings/memory/entries": {
     entries: Array<{
       id: number;

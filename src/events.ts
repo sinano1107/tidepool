@@ -408,9 +408,10 @@ export type EventPayload =
   // spec #586 G: エントリ表と FTS を events から作り直した(盤面スコープ、task_id NULL)。
   // 刻んだ索引の版を持つ。
   | { kind: "memory_index_rebuilt"; tokenizer: string; preprocess_version: string }
-  // spec #586 C / issue #618: 人間が settings タブ / 管理MCP から memory 設定を変えた(盤面スコープ、task_id NULL)。
-  // 変えなかった欄も合わせた後の値で持つ。
-  | { kind: "memory_settings_changed"; injection_token_cap: number; meta_review_period_days: number }
+  // spec #586 C: 人間が settings タブ / 管理MCP から memory 設定を変えた(盤面スコープ、task_id NULL)。
+  | { kind: "memory_settings_changed"; injection_token_cap: number }
+  // issue #924: 人間が settings タブ / 管理MCP から周期 meta-review の設定を変えた(盤面スコープ、task_id NULL)。
+  | { kind: "meta_review_settings_changed"; period_days: number }
   // spec #586 C: spawn 時の注入(task 帰属、worker_spawned の直後)。注入した entry(定義を含む)の
   // id と版、組んだ時点の watermark、計数したトークン数と計数器、出した INDEX の深さ・木の全深さ・
   // 落とした関連 leaf の件数(#600 D。再生できない event なので消費者の着地を待たずに持つ)。
@@ -439,7 +440,7 @@ export type EventOrigin = "webui" | "mcp" | "worker" | "board";
 
 export interface EventRow {
   id: number;
-  /** null は盤面スコープのイベント(`execution_settings_changed` / `memory_entry_*`(approved を含む)/ `memory_index_rebuilt` / `memory_settings_changed`)。 */
+  /** null は盤面スコープのイベント(`execution_settings_changed` / `memory_entry_*`(approved を含む)/ `memory_index_rebuilt` / `memory_settings_changed` / `meta_review_settings_changed`)。 */
   task_id: string | null;
   worker_id: string;
   origin: EventOrigin;
@@ -507,7 +508,7 @@ export function listLog(db: Db, defaultWorkspaceName?: string): LogEntry[] {
   const placeholders = HUMAN_FACING_KINDS.map(() => "?").join(", ");
   // an inner join is safe here only because every HUMAN_FACING_KIND is
   // task-scoped (the task-less kinds — execution_settings_changed, the
-  // memory_entry_* kinds, memory_index_rebuilt and memory_settings_changed — are not among them) and tasks are never deleted
+  // memory_entry_* kinds, memory_index_rebuilt, memory_settings_changed and meta_review_settings_changed — are not among them) and tasks are never deleted
   // (append-only) — no log entry can end up orphaned, so this can never
   // silently drop one
   const rows = db
