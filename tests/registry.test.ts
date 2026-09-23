@@ -336,7 +336,7 @@ describe("loadRegistry", () => {
     const dir = await makeRegistry();
     const registry = loadRegistry(dir, "purely-local");
     const ws = registry.workspaces.tidepool!;
-    expect(ws.path).toBe("/home/pi/work/tidepool");
+    expect(ws.path).toBe("/srv/pi/work/tidepool");
     expect(ws.repo).toBe("https://github.com/sinano1107/tidepool.git");
     expect(ws.notes).toContain("npm install");
   });
@@ -407,7 +407,7 @@ describe("loadRegistry", () => {
       `tidepool:\n  path: /tmp/hijacked\n  branch: attacker\n`,
     );
     const registry = loadRegistry(dir, "purely-local");
-    expect(registry.workspaces.tidepool!.path).toBe("/home/pi/work/tidepool");
+    expect(registry.workspaces.tidepool!.path).toBe("/srv/pi/work/tidepool");
     expect(registry.workspaces.tidepool!.branch).toBeUndefined();
   });
 });
