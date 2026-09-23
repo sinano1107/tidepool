@@ -57,7 +57,7 @@ So the boundary is which command you launched:
 
 ## Choosing the model
 
-`/implementation-delegation` decides the implementation model, the effort, and the review strength. `/implement-tidepool` runs it when nothing follows the issue number, and places the models either way — with one caveat on effort: Codex takes it at spawn, while Claude Code's sub-agents inherit the session's — so on Claude the effort has to be right at launch and the skill can only check it, whoever decided it. Implementation goes to Codex by default; only work that loops through the Design project stays on Claude.
+`/implementation-delegation` decides the implementation model, the effort, and the review strength. `/implement-tidepool` runs it when nothing follows the issue number, and places the models either way — with one caveat on effort: Codex takes it at spawn, while Claude Code's sub-agents inherit the session's — so on Claude the effort has to be right at launch and the skill can only check it, whoever decided it.
 
 ## Building
 
