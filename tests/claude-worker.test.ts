@@ -183,7 +183,12 @@ async function makeWorker(
     // する(issue #908)。open が rm と競合すると ENOTEMPTY / ENOENT になるので、
     // spawn 本数ぶんのファイルが揃うまで待ってから消す。揃わなければ諦めて消す
     // (`vi.waitFor` は条件待ちで、タイムアウトしても投げるだけでハングしない)。
-    const want = recorder.processes.length * 2;
+    // 本数は `recorder` でなく worker_spawned で数える —— containers を差し替える
+    // テストは fixture の recorder を通らずに spawn する。
+    const { n } = db
+      .prepare("SELECT COUNT(*) AS n FROM events WHERE kind = 'worker_spawned'")
+      .get() as { n: number };
+    const want = n * 2;
     if (want > 0) {
       await vi
         .waitFor(
