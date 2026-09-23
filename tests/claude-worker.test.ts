@@ -1,8 +1,9 @@
 import { execFileSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
-import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { agentNeedsHuman } from "../src/agent.js";
 import { boardHalts } from "../src/board-halt.js";
 import {
@@ -168,7 +169,9 @@ async function makeWorker(
   resolveWorkspace?: (taskWorkspace: string | null) => WorkspaceConfig,
 ) {
   const registryDir = await makeRegistry(registryFiles);
-  const logDir = await tempDir("tidepool-worker-logs-");
+  // `tempDir` ではなく直接作る —— 後始末の待ち責務(spawn 本数ぶんのログ open を
+  // 待ってから rm)をこの fixture に置く(issue #908)。汎用の `tempDir` の契約は変えない。
+  const logDir = await mkdtemp(join(tmpdir(), "tidepool-worker-logs-"));
   const db = openDb(":memory:");
   const clock = new FakeClock();
   const slot = new Slot();
@@ -177,6 +180,33 @@ async function makeWorker(
   // から組む —— 既定から組むと、テストが hold した容器と launch の門が見る帳簿が
   // ずれて、門が効いていなくてもテストが緑になる。
   const containers = extraOptions.containers ?? passthroughContainers(recorder.spawn);
+  onTestFinished(async () => {
+    // spawn 1回ごとに worker は stream.jsonl / stderr.log の2本を非同期に open
+    // する(issue #908)。open が rm と競合すると ENOTEMPTY / ENOENT になるので、
+    // spawn 本数ぶんのファイルが揃うまで待ってから消す。揃わなければ諦めて消す
+    // (`vi.waitFor` は条件待ちで、タイムアウトしても投げるだけでハングしない)。
+    // 本数は `recorder` でなく worker_spawned で数える —— containers を差し替える
+    // テストは fixture の recorder を通らずに spawn する。
+    const { n } = db
+      .prepare("SELECT COUNT(*) AS n FROM events WHERE kind = 'worker_spawned'")
+      .get() as { n: number };
+    const want = n * 2;
+    if (want > 0) {
+      await vi
+        .waitFor(
+          async () => {
+            const files = await readdir(logDir).catch(() => []);
+            const ready = files.filter(
+              (name) => name.endsWith(".stream.jsonl") || name.endsWith(".stderr.log"),
+            ).length;
+            expect(ready).toBeGreaterThanOrEqual(want);
+          },
+          { timeout: 2_000, interval: 20 },
+        )
+        .catch(() => {});
+    }
+    await rm(logDir, { recursive: true, force: true });
+  });
   const worker = new ClaudeCodeWorker({
     db,
     clock,
