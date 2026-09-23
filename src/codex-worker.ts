@@ -23,8 +23,8 @@ import { appendEvent, type EventPayload } from "./events.js";
 import type { ExecutionSetting } from "./execution-setting.js";
 import {
   buildMemoryInjection,
-  isMetaReviewOf,
-  MEMORY_META_REVIEW_VERBS,
+  META_REVIEW_SUBJECTS,
+  metaReviewSubjectOf,
   recordMemoryInjection,
   WORKER_MEMORY_VERBS,
 } from "./memory.js";
@@ -1019,6 +1019,7 @@ export class CodexWorker implements WorkerAdapter {
     let transcript: Transcript;
     try {
       const hook = installBoardHook(this.options.codexHome);
+      const subject = metaReviewSubjectOf(this.options.db, task.id);
       const taskMcpUrl = new URL(this.options.mcpUrl);
       taskMcpUrl.searchParams.set("task", task.id);
       const config = spawnConfig({
@@ -1028,8 +1029,8 @@ export class CodexWorker implements WorkerAdapter {
         mcpUrl: taskMcpUrl.toString(),
         // ADR 0122 決定2: MCP の登録と同じ差を写す。宣言と盤面の面が集合として一致することは
         // tests/codex-worker.test.ts が固定する(ADR 0125 決定2)
-        enabledTools: isMetaReviewOf(this.options.db, task.id, "memory")
-          ? [...BOARD_VERBS.filter((verb) => !(WORKER_MEMORY_VERBS as readonly string[]).includes(verb)), ...MEMORY_META_REVIEW_VERBS]
+        enabledTools: subject
+          ? [...BOARD_VERBS.filter((verb) => !(WORKER_MEMORY_VERBS as readonly string[]).includes(verb)), ...META_REVIEW_SUBJECTS[subject].verbs]
           : BOARD_VERBS,
         workspace: workspace.path,
         allowedDomains: workspace.allowed_domains ?? [],

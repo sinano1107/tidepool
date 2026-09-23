@@ -1,7 +1,7 @@
 import type { Allocation, AllocationUnevaluatedReason } from "./allocation-review.js";
 import type { Cause } from "./cause.js";
 import type { Db } from "./db.js";
-import type { ExecutionSettingsChange, ProviderSource, TierSource } from "./execution-setting.js";
+import type { ExecutionSettingRow, ExecutionSettingsChange, ProviderSource, TierSource } from "./execution-setting.js";
 import type { InvalidationReason, MemoryDropReason, MemoryEntryFields } from "./memory.js";
 import type { Provider } from "./registry.js";
 import type { QuestionProposal, TaskType } from "./tasks.js";
@@ -340,7 +340,14 @@ export type EventPayload =
   // session(episode の同一性キー)。null はレビューされた task に session が
   // 無かった(人間登録の task 等)。`unevaluated` は「判定が得られなかった」の
   // 理由コードで、`allocation: "uncertain"`(判定が「分からない」)とは別の値。
-  | ({ kind: "allocation_reviewed"; review_task_id: string; worker_spawned_event_id: number | null } & (
+  // `judge` は Board call 自身の実行設定(ADR 0150 決定8)—— 呼び出し前に表から決まるので
+  // unevaluated にも載る。null は表に Board call の行が無く解決できなかった。
+  | ({
+      kind: "allocation_reviewed";
+      review_task_id: string;
+      worker_spawned_event_id: number | null;
+      judge: Pick<ExecutionSettingRow, "provider" | "model" | "effort"> | null;
+    } & (
       | { allocation: Allocation; cause: Cause; evidence: string }
       | { unevaluated: AllocationUnevaluatedReason }
     ))
@@ -422,7 +429,7 @@ export type EventPayload =
     }
   // ADR 0120 決定2 / issue #618: 盤面が主題の meta-review を登録した(登録した task に帰属)。
   // material_watermark = 登録時の events の最大 id —— 次の周期の材料はこれより後の event。
-  | { kind: "meta_review_registered"; subject: "memory"; material_watermark: number }
+  | { kind: "meta_review_registered"; subject: "memory" | "routing"; material_watermark: number }
   // spec #615 A / issue #617: Board call の Behavior candidate 起草が撃てなかった / 失敗した
   // (異議されたタスクに帰属)。店の event ではなく rebuild は再生しない。
   | { kind: "memory_draft_failed"; entry_id: number; round: "initial" | "after_rca"; reason: string };

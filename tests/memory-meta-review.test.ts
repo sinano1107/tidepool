@@ -37,6 +37,7 @@ it("前回登録が無く材料があれば、poll が盤面名義で memory met
   expect((await api(t.baseUrl, "GET", `/api/tasks/${id}`)).json).toMatchObject({
     type: "review",
     meta_review_subject: "memory",
+    review_tier: "frontier",
     workspace: null,
     assignee: null,
     status: "in_progress",

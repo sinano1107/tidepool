@@ -156,6 +156,7 @@ it("統合点レビューの完了で被レビュー task の episode に配分�
       kind: "allocation_reviewed",
       review_task_id: review.id,
       worker_spawned_event_id: spawnedId,
+      judge: { provider: "anthropic", model: "fable", effort: "high" },
       allocation: "overpowered",
       cause: "uncertain",
       evidence: "a small diff, no consultations",
@@ -197,6 +198,7 @@ it("Board call の失敗は完了を倒さず、注釈は「未評価」の理�
       kind: "allocation_reviewed",
       review_task_id: review.id,
       worker_spawned_event_id: spawnedId,
+      judge: { provider: "anthropic", model: "fable", effort: "high" },
       unevaluated: "board_call_failed",
     },
   ]);
@@ -227,8 +229,9 @@ it("Board call の model の窓が閉じている間は client を呼ばず、�
 
   await completeReview(t, review.id);
 
+  // judge は呼び出し前に決まる値なので、評価できなかった注釈にも載る
   expect((await annotations(t, task.id)).map((e: any) => e.payload)).toMatchObject([
-    { unevaluated: "throttled" },
+    { unevaluated: "throttled", judge: { provider: "anthropic", model: "fable", effort: "high" } },
   ]);
   expect(allocationClient.calls).toEqual([]);
 });
@@ -245,8 +248,21 @@ it("被レビュー task に worker session の記録が無ければ client を�
       kind: "allocation_reviewed",
       review_task_id: review.id,
       worker_spawned_event_id: null,
+      judge: { provider: "anthropic", model: "fable", effort: "high" },
       unevaluated: "no_session",
     },
   ]);
+  expect(allocationClient.calls).toEqual([]);
+});
+
+it("表に Board call の行が無ければ client を呼ばず、注釈は judge 無しの board_call_failed で残る", async () => {
+  const allocationClient = new FakeAllocationClient();
+  t = await bootTidepool({ allocationClient });
+  const { task, review } = await reviewedWork(t);
+  expect((await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "delete_row", provider: "anthropic", model: "fable" })).status).toBe(200);
+
+  await completeReview(t, review.id);
+
+  expect((await annotations(t, task.id)).map((e: any) => e.payload)).toMatchObject([{ judge: null, unevaluated: "board_call_failed" }]);
   expect(allocationClient.calls).toEqual([]);
 });

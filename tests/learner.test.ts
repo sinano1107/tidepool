@@ -2,10 +2,12 @@ import { afterEach, expect, it } from "vitest";
 import { appendEvent, type EventPayload } from "../src/events.js";
 import type { ExecutionSetting } from "../src/execution-setting.js";
 import { aggregateCells, episodeOutcome, type LearnerEpisode, recommend } from "../src/learner.js";
+import { listRoutingShadow } from "../src/routing-review.js";
 import {
   api,
   bootTidepool,
   completeIntegrationReviews,
+  completeMetaReviews,
   completeViaMcp,
   HOUR,
   loggedEntry,
@@ -27,16 +29,6 @@ const candidate = (
 });
 const opus = candidate("anthropic", "opus");
 const sol = candidate("openai", "gpt-5.6-sol");
-
-/** 帰責の event は memory meta-review の材料なので、盤面が登録して queue に置く(issue #618)。後続の work が
- *  次の pickup を取れるよう、先に head から走らせて完了させる(setup)。 */
-async function completeMemoryMetaReview(tp: Tidepool) {
-  const { id } = tp.db.prepare("SELECT id FROM tasks WHERE meta_review_subject = 'memory'").get() as { id: string };
-  await api(tp.baseUrl, "POST", `/api/tasks/${id}/move`, { after: null });
-  // 並べ替えと Run now は別 —— head での2回目の move が pickup を求める
-  await api(tp.baseUrl, "POST", `/api/tasks/${id}/move`, { after: null });
-  expect((await completeViaMcp(tp, id, false)).isError).not.toBe(true);
-}
 
 /** 観測された episode の既定形。テストが言いたい1点だけを上書きする。 */
 function episode(overrides: Partial<LearnerEpisode> = {}): LearnerEpisode {
@@ -153,16 +145,15 @@ it("advisor pin ありの episode は advisor 無しのセルに合流しない 
 });
 
 /* ------------------------------------------------------------------ *
- * 盤面境界: pickup ごとの shadow 行(選択には介入しない)。
- * shadow 行の読み手(routing meta-review)はまだ無く読取面が無いので、行の有無だけは
- * SQL で言う —— 読取面が生えたらそちらへ写す(ADR 0107 決定2 の例外として申し送り)。
+ * 盤面境界: pickup ごとの shadow 行(選択には介入しない)。行は routing meta-review の
+ * 読み口(listRoutingShadow)で読む。
  * ------------------------------------------------------------------ */
 
 let t: Tidepool;
 afterEach(() => t?.stop());
 
 const shadowRows = (t: Tidepool) =>
-  t.db.prepare("SELECT task_id, cell_recommended, cell_actual, source, basis FROM learner_shadow ORDER BY id").all();
+  listRoutingShadow(t.db, "", { since_watermark: 0 }).shadow.map(({ task_id, recommended, actual, source, basis }) => ({ task_id, recommended, actual, source, basis }));
 
 it("work task の pickup ごとに shadow 行が1件記録され、selector の選択は変わらない —— review task では学習器を参照せず行も無い", async () => {
   t = await bootTidepool({ taskExecutionCandidates: () => [opus, sol] });
@@ -170,9 +161,9 @@ it("work task の pickup ごとに shadow 行が1件記録され、selector の�
   await t.clock.advance(HOUR);
 
   expect(t.worker.startedSettings).toEqual([opus]);
-  const cell = JSON.stringify({ provider: "anthropic", model: "opus", effort: "high", advisor: null });
+  const cell = { provider: "anthropic", model: "opus", effort: "high", advisor: null };
   expect(shadowRows(t)).toEqual([
-    { task_id: work.id, cell_recommended: cell, cell_actual: cell, source: JSON.stringify(opus.source), basis: "prior" },
+    { task_id: work.id, recommended: cell, actual: cell, source: opus.source, basis: "prior" },
   ]);
 
   // 完了で統合点レビュー(review task)が生まれ、次の poll で pickup される
@@ -218,7 +209,7 @@ it("観測が効くと shadow 行は selector と乖離しうるが、選択は�
   appendEvent(t.db, { taskId: earlier.id, workerId: "board", origin: "board", at: t.clock.now(), payload: attributed });
   await completeViaMcp(t, earlier.id);
   await completeIntegrationReviews(t, earlier.id);
-  await completeMemoryMetaReview(t);
+  await completeMetaReviews(t);
 
   const later = await registerWork(t, "later");
   await t.clock.advance(HOUR);
@@ -226,9 +217,9 @@ it("観測が効くと shadow 行は selector と乖離しうるが、選択は�
   expect(t.worker.startedSettings.at(-1)).toEqual(opus);
   expect(shadowRows(t).at(-1)).toEqual({
     task_id: later.id,
-    cell_recommended: JSON.stringify({ provider: "openai", model: "gpt-5.6-sol", effort: "high", advisor: null }),
-    cell_actual: JSON.stringify({ provider: "anthropic", model: "opus", effort: "high", advisor: null }),
-    source: JSON.stringify(opus.source),
+    recommended: { provider: "openai", model: "gpt-5.6-sol", effort: "high", advisor: null },
+    actual: { provider: "anthropic", model: "opus", effort: "high", advisor: null },
+    source: opus.source,
     basis: "data",
   });
 });
@@ -284,7 +275,7 @@ it("advisor pin ありで相談0回の session は、盤面の記録から読ん
   });
   await completeViaMcp(t, earlier.id);
   await completeIntegrationReviews(t, earlier.id);
-  await completeMemoryMetaReview(t);
+  await completeMetaReviews(t);
 
   const later = await registerWork(t, "later");
   await t.clock.advance(HOUR);
@@ -292,8 +283,8 @@ it("advisor pin ありで相談0回の session は、盤面の記録から読ん
   expect(t.worker.startedSettings.at(-1)).toEqual(opusWithAdvisor);
   expect(shadowRows(t).at(-1)).toMatchObject({
     task_id: later.id,
-    cell_recommended: JSON.stringify({ provider: "anthropic", model: "opus", effort: "high", advisor: null }),
-    cell_actual: JSON.stringify({ provider: "anthropic", model: "opus", effort: "high", advisor: "fable" }),
+    recommended: { provider: "anthropic", model: "opus", effort: "high", advisor: null },
+    actual: { provider: "anthropic", model: "opus", effort: "high", advisor: "fable" },
     basis: "data",
   });
 });
@@ -349,7 +340,7 @@ it("セルの model は観測された具体 id —— pin が alias でも、�
   });
   await completeViaMcp(t, earlier.id);
   await completeIntegrationReviews(t, earlier.id);
-  await completeMemoryMetaReview(t);
+  await completeMetaReviews(t);
 
   const later = await registerWork(t, "later");
   await t.clock.advance(HOUR);
@@ -358,7 +349,7 @@ it("セルの model は観測された具体 id —— pin が alias でも、�
   expect(t.worker.startedSettings.at(-1)).toEqual(opus41);
   expect(shadowRows(t).at(-1)).toMatchObject({
     task_id: later.id,
-    cell_recommended: JSON.stringify({ provider: "openai", model: "gpt-5.6-sol", effort: "high", advisor: null }),
+    recommended: { provider: "openai", model: "gpt-5.6-sol", effort: "high", advisor: null },
     basis: "data",
   });
 });

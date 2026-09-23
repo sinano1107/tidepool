@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import { onTestFinished } from "vitest";
+import { expect, onTestFinished } from "vitest";
 import { quarantineAgent } from "../src/agent.js";
 import type { AgentAdmin } from "../src/agent-create.js";
 import type { AllocationClient } from "../src/allocation-review.js";
@@ -694,6 +694,20 @@ export async function completeIntegrationReviews(t: Tidepool, taskId: string): P
     }
     const result = await completeViaMcp(t, review.id, false);
     if (result.isError) throw new Error(`review completion failed: ${JSON.stringify(result)}`);
+  }
+}
+
+/** 帰責の event は memory の、worker_exited と実行設定の変更は routing の meta-review の材料なので、盤面が登録して queue に
+ *  置く(issue #618・#917)。後続の work が次の pickup を取れるよう、open な meta-review を head から走らせて完了させる(setup)。 */
+export async function completeMetaReviews(tp: Tidepool) {
+  const reviews = tp.db
+    .prepare("SELECT id FROM tasks WHERE meta_review_subject IS NOT NULL AND status IN ('todo', 'in_progress')")
+    .all() as Array<{ id: string }>;
+  for (const { id } of reviews) {
+    await api(tp.baseUrl, "POST", `/api/tasks/${id}/move`, { after: null });
+    // 並べ替えと Run now は別 —— head での2回目の move が pickup を求める
+    await api(tp.baseUrl, "POST", `/api/tasks/${id}/move`, { after: null });
+    expect((await completeViaMcp(tp, id, false)).isError).not.toBe(true);
   }
 }
 

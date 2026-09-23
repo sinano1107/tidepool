@@ -104,6 +104,17 @@ export async function reviewAllocation(
   const reviewed = getTask(db, review.parent_id)!;
   const reviewedEvents = listEvents(db, reviewed.id);
   const spawnedEvent = reviewedEvents.filter((e) => e.payload.kind === "worker_spawned").at(-1);
+  // Board call の Provider / ティアは盤面設定の固定値で、**selector を通らない**
+  // (ADR 0111 決定4)—— 判定者が学習器に選ばれる輪をここで切る。model / effort は
+  // 表の行から呼び出しごとに解決するので、#545 の編集が次の評価から効く。行は注釈の
+  // judge になる(ADR 0150 決定8)ので、評価できない注釈にも載るよう先に解決する
+  let setting: ExecutionSettingRow | null = null;
+  try {
+    setting = rowFor(loadExecutionSettingTable(db), "anthropic", "frontier");
+  } catch {
+    // 表の行が欠けた盤面は judge 無し、撃てなかった(board_call_failed)に畳む
+  }
+  const judge = setting && { provider: setting.provider, model: setting.model, effort: setting.effort };
   // 注釈の時刻は判断が書かれた瞬間(Board call の返答後)であって review 完了ではない
   const annotate = (outcome: AllocationJudgment | { unevaluated: AllocationUnevaluatedReason }) =>
     appendEvent(db, {
@@ -114,6 +125,7 @@ export async function reviewAllocation(
         kind: "allocation_reviewed",
         review_task_id: review.id,
         worker_spawned_event_id: spawnedEvent?.id ?? null,
+        judge,
         ...outcome,
       },
       at: clock.now(),
@@ -122,14 +134,13 @@ export async function reviewAllocation(
     annotate({ unevaluated: "no_session" });
     return;
   }
+  if (setting === null) {
+    annotate({ unevaluated: "board_call_failed" });
+    return;
+  }
   const spawned = spawnedEvent.payload;
   let judgment: AllocationJudgment;
   try {
-    // Board call の Provider / ティアは盤面設定の固定値で、**selector を通らない**
-    // (ADR 0111 決定4)—— 判定者が学習器に選ばれる輪をここで切る。model / effort は
-    // 表の行から呼び出しごとに解決するので、#545 の編集が次の評価から効く。表の行が
-    // 欠けた盤面も「撃てなかった」として理由コードに畳む
-    const setting = rowFor(loadExecutionSettingTable(db), "anthropic", "frontier");
     if (isAnthropicBoardCallBlocked(db, setting.model)) {
       annotate({ unevaluated: "throttled" });
       return;
