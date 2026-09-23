@@ -255,9 +255,8 @@ async function bootCodex() {
   });
   dirs.push(registryDir);
   const codexHome = await tempDir("exit-without-report-codex-home-");
-  const logDir = await tempDir("exit-without-report-logs-");
   return bootWithAdapter(
-    ({ db, clock, containers, onSpawnFailed, onWorkerExited }) =>
+    ({ db, clock, containers, onSpawnFailed, onWorkerExited, transcripts }) =>
       new CodexWorker({
         db,
         clock,
@@ -269,7 +268,7 @@ async function bootCodex() {
         workspace: "work",
         workspacesDir: tmpdir(),
         mcpUrl: "http://127.0.0.1:1/mcp",
-        logDir,
+        transcripts,
         codexHome,
         cliVersion: "codex-cli 0.147.0",
         executable: "/opt/tidepool/bin/codex",

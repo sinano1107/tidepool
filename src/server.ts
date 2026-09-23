@@ -55,6 +55,7 @@ import { type Scheduler, startScheduler, type TaskExecutionCandidates } from "./
 import { Slot } from "./slot.js";
 import { DEFAULT_AUDITOR_NAME, getTask } from "./tasks.js";
 import { acceptTeardownQuarantine, runTeardown, sessionInTeardown, type TeardownDeps, teardownStep } from "./teardown.js";
+import type { TranscriptStore } from "./transcript-store.js";
 import type { TranslationClient } from "./translate.js";
 import { closeStaleTriage } from "./triage.js";
 import {
@@ -64,6 +65,7 @@ import {
   RECLAIM_TIMEOUT,
   spawnFailureHandler,
   startWatchdog,
+  transcriptFailureHandler,
   type Watchdog,
   type WatchdogConfig,
 } from "./watchdog.js";
@@ -177,6 +179,8 @@ export type WorkerFactory = (deps: {
   onSpawnFailed: (taskId: string, failure: { error_code: string | null; message: string }) => void;
   /** ADR 0145: root process の exit を受ける盤面側の一撃(watchdog の `onWorkerExited`)。 */
   onWorkerExited: (taskId: string, exit: WorkerExit) => void;
+  /** ADR 0149: session ごとの transcript を開く盤面側の器。失敗の一撃は盤面が差し込み済み。 */
+  transcripts: TranscriptStore;
 }) => WorkerAdapter;
 
 export interface ServerOptions {
@@ -357,6 +361,9 @@ export interface ServerOptions {
    *  配線を1本忘れた盤面が黙って弱い回収へ落ちる(ADR 0099 決定5 が禁じている
    *  状態そのもの)。本番の選択は合成 root の `containerRuntimeFor(platform)`。 */
   containerRuntime: ContainerRuntime;
+  /** transcript の器(ADR 0149 決定5)。`containerRuntime` と同じく**省略できない** ——
+   *  既定を持つと、失敗の一撃が配線されない器で黙って走る。 */
+  transcripts: TranscriptStore;
 }
 
 /** `boardCallers` が組む口の一覧。 */
@@ -510,6 +517,8 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
   const onCapInterrupted = capInterruptionHandler(sessionTeardown);
   // ADR 0118: worker が1度も走らなかった pickup の一撃。scheduler と adapter の両方の観測点が呼ぶ
   const onSpawnFailed = spawnFailureHandler(sessionTeardown, containers);
+  // ADR 0149: 走ってから transcript が書けなくなった session の一撃
+  options.transcripts.onFailed = transcriptFailureHandler(sessionTeardown, containers);
   const worker = options.worker({
     db,
     clock: options.clock,
@@ -519,6 +528,7 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
     onSpawnFailed,
     // ADR 0145: watchdog は worker の後に組まれるので、遅延で引く(`heldForContainment` と同じ)
     onWorkerExited: (taskId, exit) => watchdog?.onWorkerExited(taskId, exit),
+    transcripts: options.transcripts,
   });
   const providerCliAuth: Partial<Record<Provider, CliAuthCheck>> = {
     ...(options.cliAuth && { anthropic: options.cliAuth }),

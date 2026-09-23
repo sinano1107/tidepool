@@ -25,6 +25,7 @@ import { Slot } from "../src/slot.js";
 import { getTask, listBoard, nextSlotTask, resolveTaskAgent, type Task } from "../src/tasks.js";
 import { sessionInTeardown } from "../src/teardown.js";
 import { getProviderUsage, reportProviderUsage } from "../src/throttle.js";
+import { TranscriptStore } from "../src/transcript-store.js";
 import { capInterruptionHandler } from "../src/watchdog.js";
 import type { WorkerExit } from "../src/worker.js";
 import {
@@ -152,6 +153,7 @@ async function makeUsageWorker(pty: PtyFn) {
     workspace: "tidepool",
     mcpUrl: "http://127.0.0.1:4589/mcp",
     logDir,
+    transcripts: new TranscriptStore(logDir),
     ...containerHarness(new ProcessContainers(runtime), clock),
     pty,
   });
@@ -183,6 +185,7 @@ async function makeWorker(
     workspace: "tidepool",
     mcpUrl: "http://127.0.0.1:4589/mcp",
     logDir,
+    transcripts: new TranscriptStore(logDir),
     ...containerHarness(containers, clock),
     onCapInterrupted: capInterruptionHandler({ db, clock, slot, resolve: resolveWorkspace, pollNow: () => {} }),
     ...extraOptions,
@@ -1603,6 +1606,7 @@ describe("ClaudeCodeWorker", () => {
         workspace: "tidepool",
         mcpUrl: "http://127.0.0.1:4589/mcp",
         logDir: "worker-logs",
+        transcripts: new TranscriptStore("worker-logs"),
         ...containerHarness(passthroughContainers(recorder.spawn)),
       });
       await mkdir(join(base, "worker-logs"), { recursive: true });
@@ -1717,6 +1721,7 @@ describe("ClaudeCodeWorker", () => {
           workspace: "tidepool",
           mcpUrl: "http://127.0.0.1:4589/mcp",
           logDir,
+          transcripts: new TranscriptStore(logDir),
           ...containerHarness(passthroughContainers(recordingSpawn().spawn)),
         }),
     ).toThrow(/unknown effort level/);
@@ -1739,6 +1744,7 @@ describe("ClaudeCodeWorker", () => {
           workspace: "tidepool",
           mcpUrl: "http://127.0.0.1:4589/mcp",
           logDir,
+          transcripts: new TranscriptStore(logDir),
           ...containerHarness(passthroughContainers(recordingSpawn().spawn)),
         }),
     ).toThrow(/unknown effort level/);
@@ -1759,6 +1765,7 @@ describe("ClaudeCodeWorker", () => {
           workspace: "no-such-workspace",
           mcpUrl: "http://127.0.0.1:4589/mcp",
           logDir,
+          transcripts: new TranscriptStore(logDir),
           ...containerHarness(passthroughContainers(recordingSpawn().spawn)),
         }),
     ).toThrow(/unknown workspace/);
@@ -2449,6 +2456,7 @@ describe("ClaudeCodeWorker", () => {
       workspace: "tidepool",
       mcpUrl: "http://127.0.0.1:4589/mcp",
       logDir: await tempDir("tidepool-worker-logs-"),
+      transcripts: new TranscriptStore(await tempDir("tidepool-worker-logs-")),
       ...containerHarness(passthroughContainers(recorder.spawn)),
     });
     const task = makeTask("task-remote", null, "deckhand", "work");

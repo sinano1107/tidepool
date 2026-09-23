@@ -1,4 +1,4 @@
-import { createWriteStream, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -51,6 +51,7 @@ import {
   reviewedTaskExecutor,
   type Task,
 } from "./tasks.js";
+import type { TranscriptStore } from "./transcript-store.js";
 import { composeTerminalScreen } from "./usage.js";
 import type { WorkerAdapter, WorkerExit } from "./worker.js";
 import {
@@ -1163,6 +1164,8 @@ export interface ClaudeWorkerOptions {
   /** root process の exit を受ける盤面側の一撃(ADR 0145)—— watchdog の `onWorkerExited`。
    *  `onCapInterrupted` と同じ機能フィールド。報告なき exit かどうかの判定は盤面側が持つ。 */
   onWorkerExited?: (taskId: string, exit: WorkerExit) => void;
+  /** ADR 0149: session ごとの transcript を開く盤面側の器。`containers` と同じく**省略できない**。 */
+  transcripts: TranscriptStore;
   /** ADR 0097 決定4 / issue #445: where the Moonshot Platform key lives —
    *  a mode-600 state file, never the board's env (plaintext on process.env
    *  rides every worker spawn). Read fresh at each spawn, only for
@@ -1985,11 +1988,20 @@ export class ClaudeCodeWorker implements WorkerAdapter {
       // for `cat`, not just for the Skill tool).
       const denied = new Set(deny);
       const permittedSkills = enumerated.filter((skill) => !denied.has(skill));
-      this.launch(task, workspace, agent, registry, {
-        deny,
-        disableSlashCommands: false,
-        permittedSkills,
-      }, routing);
+      // ADR 0149 決定6: ここは scheduler の catch の外なので、launch の同期 throw
+      // (transcript が開けない等)をこの continuation が `spawn_failed` に落とす
+      try {
+        this.launch(task, workspace, agent, registry, {
+          deny,
+          disableSlashCommands: false,
+          permittedSkills,
+        }, routing);
+      } catch (err) {
+        this.recordSpawnFailed(task, agent, {
+          error_code: (err as NodeJS.ErrnoException).code ?? null,
+          message: err instanceof Error ? err.message : String(err),
+        });
+      }
     });
   }
 
@@ -2102,10 +2114,56 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     const cliVersion = typeof this.options.cliVersion === "function"
       ? this.options.cliVersion()
       : (this.options.cliVersion ?? CLAUDE_CLI_VERSION);
+    const memory = buildMemoryInjection(this.options.db, task, workspace.name, agent.name);
+    // issue #379: 1タスクに複数の worker session(retry・decompose からの統合
+    // 復帰・quarantine 復帰)がありうるため、`worker_spawned` の event id で
+    // transcript / stderr のファイル名をセッションごとに一意にする。イベント
+    // は監査ログの正本として元々書いていたもの — ファイル名を確定できる位置
+    // まで先に書く(ADR 0149 決定2: transcript の open と spawn より先)。
+    const spawnedEventId = appendEvent(this.options.db, {
+      taskId: task.id,
+      // attributed to whichever agent actually got spawned (ADR 0012 / issue
+      // #36) — not this worker's configured default, which a pre-set
+      // delegation may override
+      workerId: agent.name,
+      origin: "board",
+      // issue #127: this records the *attempt* to spawn, not a successful
+      // session — it is written before the transcript open and spawn()
+      // (ADR 0149), and either can still fail after this write so that the
+      // process never comes into being. That is not a false
+      // record: every fact this event carries (the resolved definition, the
+      // registry commit read) is true regardless of whether the process
+      // starts. spawn_failed, when it follows, closes the pair honestly
+      // rather than this event needing to be walked back.
+      payload: {
+        kind: "worker_spawned",
+        registry_commit: registry.commit,
+        definition_version: definition.version,
+        // issue #33 判断6: what the board pinned, not what the frontmatter said
+        // — the two differ under the kill switch, and only the frontmatter is
+        // recoverable from registry_commit above.
+        advisor: advisor ?? null,
+        // ADR 0110 決定3: 選んだ実行設定とその出所。kill switch は advisor だけを
+        // マスクするので(判断8)、model / effort / provider は選ばれたまま。
+        provider: routing.provider,
+        model: routing.model,
+        effort: routing.effort,
+        source: routing.source,
+        harness: "claude-code",
+        cli_version: cliVersion,
+      },
+      at: this.options.clock.now(),
+    });
+    recordMemoryInjection(this.options.db, task.id, agent.name, spawnedEventId, memory, this.options.clock.now());
+    // ADR 0149 決定2: 記録の口は spawn より先に開く。開けなければ例外が呼び手へ返り、
+    // process は1つも起きない(ADR 0118 の族)
+    const transcript = this.options.transcripts.open(task.id, spawnedEventId);
+    const transcriptPath = transcript.streamPath;
     // ADR 0099 決定2: 盤面が先に作った容器の中へ spawn するだけ。scheduler を
     // 通らずに直接動かされた adapter でも `open` が器を作るので、force /
     // reclaimed の相手が居ない session は生まれない。
-    const memory = buildMemoryInjection(this.options.db, task, workspace.name, agent.name);
+    // ponytail: spawn が同期で投げると開いた2本の fd は閉じない(ADR 0118 の question が
+    // 1枚ずつ立つ稀な経路)。積み上がりが観測されたら catch で destroy する。
     const child = this.containers.open(task.id).spawn(
       "claude",
       [
@@ -2222,56 +2280,12 @@ export class ClaudeCodeWorker implements WorkerAdapter {
         },
       },
     );
-    // issue #379: 1タスクに複数の worker session(retry・decompose からの統合
-    // 復帰・quarantine 復帰)がありうるため、`worker_spawned` の event id で
-    // transcript / stderr のファイル名をセッションごとに一意にする。イベント
-    // は監査ログの正本として元々書いていたもの — ファイル名を確定できる位置
-    // まで先に書くだけで、書く内容も呼び出し側からの見え方も変わらない。
-    const spawnedEventId = appendEvent(this.options.db, {
-      taskId: task.id,
-      // attributed to whichever agent actually got spawned (ADR 0012 / issue
-      // #36) — not this worker's configured default, which a pre-set
-      // delegation may override
-      workerId: agent.name,
-      origin: "board",
-      // issue #127: this records the *attempt* to spawn, not a successful
-      // session — spawn() has already returned synchronously by this point,
-      // but Node's "error" can still fire after this write if the process
-      // never actually came into being (ENOENT etc.). That is not a false
-      // record: every fact this event carries (the resolved definition, the
-      // registry commit read) is true regardless of whether the process
-      // starts. spawn_failed, when it follows, closes the pair honestly
-      // rather than this event needing to be walked back.
-      payload: {
-        kind: "worker_spawned",
-        registry_commit: registry.commit,
-        definition_version: definition.version,
-        // issue #33 判断6: what the board pinned, not what the frontmatter said
-        // — the two differ under the kill switch, and only the frontmatter is
-        // recoverable from registry_commit above.
-        advisor: advisor ?? null,
-        // ADR 0110 決定3: 選んだ実行設定とその出所。kill switch は advisor だけを
-        // マスクするので(判断8)、model / effort / provider は選ばれたまま。
-        provider: routing.provider,
-        model: routing.model,
-        effort: routing.effort,
-        source: routing.source,
-        harness: "claude-code",
-        cli_version: cliVersion,
-      },
-      at: this.options.clock.now(),
-    });
-    recordMemoryInjection(this.options.db, task.id, agent.name, spawnedEventId, memory, this.options.clock.now());
     // the whole stream-json session is kept verbatim: the audit trail of what
     // the agent actually did, not just what it wrote back to the board
-    const transcriptPath = join(this.logDir, `${task.id}.${spawnedEventId}.stream.jsonl`);
-    const transcript = createWriteStream(transcriptPath);
-    child.stdout.pipe(transcript);
+    child.stdout.pipe(transcript.stream);
     // stderr は CLI レベルの失敗(spawn 即死・limit 強制終了・認証エラー)が
     // 唯一証拠を残す面 — stream.jsonl の隣に全量保存する(issue #125)
-    child.stderr.pipe(
-      createWriteStream(join(this.logDir, `${task.id}.${spawnedEventId}.stderr.log`)),
-    );
+    child.stderr.pipe(transcript.stderr);
     // stdout の lastResult と同じ tee 形: worker_exited がファイルを読み返さず
     // に末尾要約を載せられるよう、イベント用の末尾だけをメモリに保つ。
     // chunk 単位の toString() は UTF-8 文字を境界で割ると置換文字に化けるので、
@@ -2406,8 +2420,8 @@ export class ClaudeCodeWorker implements WorkerAdapter {
           console.error(`[worker] precedent projection failed for task ${task.id}:`, err);
         }
       };
-      if (transcript.closed) project();
-      else transcript.once("close", project);
+      if (transcript.stream.closed) project();
+      else transcript.stream.once("close", project);
     });
   }
 

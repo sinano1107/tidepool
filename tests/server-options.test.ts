@@ -15,6 +15,7 @@ import {
   WATCHDOG,
 } from "../src/server-options.js";
 import type { Task } from "../src/tasks.js";
+import { TranscriptStore } from "../src/transcript-store.js";
 import { containerHarness, FakeClock, FakeTranslationClient, fakeContainers } from "./fakes.js";
 import { TEST_CREDENTIAL } from "./harness.js";
 import { makeRegistry, makeRemoteBackedRegistry } from "./registry-fixture.js";
@@ -112,7 +113,7 @@ it("worker options は宣言された registryMode を運ぶ(ADR 0052 / ADR 0043
 
   const options = buildWorkerOptions(
     { ...composition(), registryDir, registryMode: "remote-backed", workspaceName: "tidepool" },
-    { db: openDb(":memory:"), clock, ...containerHarness(fakeContainers()), onCapInterrupted: () => {}, onSpawnFailed: () => {}, onWorkerExited: () => {} },
+    { db: openDb(":memory:"), clock, ...containerHarness(fakeContainers()), onCapInterrupted: () => {}, onSpawnFailed: () => {}, onWorkerExited: () => {}, transcripts: new TranscriptStore("/nonexistent/worker-logs") },
   );
 
   expect(options.registry.mode).toBe("remote-backed");
@@ -322,7 +323,7 @@ it("ClaudeWorkerOptions の任意フィールドは、テスト用の注入 seam
   const registryDir = await makeRegistry();
   dirs.push(registryDir);
   const emitted = new Set(
-    Object.keys(buildWorkerOptions({ ...composition(), registryDir }, { db: openDb(":memory:"), clock: new FakeClock(), ...containerHarness(fakeContainers()), onCapInterrupted: () => {}, onSpawnFailed: () => {}, onWorkerExited: () => {} })),
+    Object.keys(buildWorkerOptions({ ...composition(), registryDir }, { db: openDb(":memory:"), clock: new FakeClock(), ...containerHarness(fakeContainers()), onCapInterrupted: () => {}, onSpawnFailed: () => {}, onWorkerExited: () => {}, transcripts: new TranscriptStore("/nonexistent/worker-logs") })),
   );
   // 不在が正当なのは注入 seam の2つだけ —— そこでの不在は「機能が静かに切れる」
   // ではなく「実プロセスを使う」を意味する(ADR 0027 の fake 注入の形)。#463 で
@@ -356,7 +357,7 @@ it("kill switch は盤面の合成からそのまま worker options へ届く(�
   const options = (advisorDisabled: boolean) =>
     buildWorkerOptions(
       { ...composition(), registryDir, advisorDisabled },
-      { db: openDb(":memory:"), clock: new FakeClock(), ...containerHarness(fakeContainers()), onCapInterrupted: () => {}, onSpawnFailed: () => {}, onWorkerExited: () => {} },
+      { db: openDb(":memory:"), clock: new FakeClock(), ...containerHarness(fakeContainers()), onCapInterrupted: () => {}, onSpawnFailed: () => {}, onWorkerExited: () => {}, transcripts: new TranscriptStore("/nonexistent/worker-logs") },
     );
 
   expect(options(true).advisorDisabled).toBe(true);
@@ -379,7 +380,7 @@ it("worker ログの置き場は、盤面が守っているパスと同じ1つ�
     logDir,
     boardState: [{ label: "worker logs (TIDEPOOL_WORKER_LOGS)", path: logDir }],
   };
-  const options = buildWorkerOptions(board, { db: openDb(":memory:"), clock: new FakeClock(), ...containerHarness(fakeContainers()), onCapInterrupted: () => {}, onSpawnFailed: () => {}, onWorkerExited: () => {} });
+  const options = buildWorkerOptions(board, { db: openDb(":memory:"), clock: new FakeClock(), ...containerHarness(fakeContainers()), onCapInterrupted: () => {}, onSpawnFailed: () => {}, onWorkerExited: () => {}, transcripts: new TranscriptStore("/nonexistent/worker-logs") });
 
   expect(options.logDir).toBe(logDir);
   expect(options.boardState?.map((p) => p.path)).toContain(options.logDir);

@@ -9,6 +9,7 @@ import { appendEvent } from "../src/events.js";
 import { executionSettingsFor } from "../src/execution-setting.js";
 import { loadRegistry } from "../src/registry.js";
 import { registerTask } from "../src/tasks.js";
+import { TranscriptStore } from "../src/transcript-store.js";
 import { FakeClock, FakeContainerRuntime, healthyUsageText } from "./fakes.js";
 import {
   api,
@@ -415,6 +416,7 @@ it.each([
           workspace: "tidepool",
           mcpUrl: "http://127.0.0.1:1/mcp",
           logDir,
+          transcripts: new TranscriptStore(logDir),
         });
         return {
           id: worker.id,
