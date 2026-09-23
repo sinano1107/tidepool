@@ -162,7 +162,7 @@ it("読み口4本と list_precedents は routing の task から引数ごと写�
       expect(await call(verb, { since_watermark: 0, page: 1 })).toMatchObject({ isError: false, body: { truncated: false } });
     }
     expect(await call("list_routing_shadow", { diverged_only: true })).toMatchObject({ isError: false, body: { shadow: [] } });
-    expect(await call("read_routing_settings")).toMatchObject({ isError: false, body: { priority: "cost", table: expect.any(Array) } });
+    expect(await call("read_routing_settings")).toMatchObject({ isError: false, body: { priority: "cost", table: expect.any(Array), providerRank: expect.any(Array), frontierAdvisor: expect.any(Boolean) } });
     expect(await call("list_precedents")).toMatchObject({ isError: false, body: { precedents: [], truncated: false } });
   } finally {
     await client.close();
