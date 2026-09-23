@@ -644,7 +644,7 @@ function ftsText(value: string): string {
 }
 
 /** pull 3動詞のページ長(定数 — spec #586 D)。 */
-const PAGE_LENGTH = 20;
+export const PAGE_LENGTH = 20;
 
 /** pull の読み手: 帰属 task、そのスコープ(workspace 名 / null = 盤面全体)、agent 名(宛先)。 */
 interface MemoryReader {
@@ -855,7 +855,7 @@ export function pullMemoryList(
 }
 
 /** meta-review の Precedent の読み口(issue #619): 異議つき decision マーカーを cause・outcome と、その decision より前に
- *  読んだ / 見た記憶つきで返す。既定の `since_watermark` は前回(読み手の task 以外で最新)の memory meta-review 登録の
+ *  読んだ / 見た記憶つきで返す。既定の `since_watermark` は読み手と同主題の前回の meta-review 登録の
  *  watermark で、異議の event がそれより後の decision だけを返す —— 古い decision への新しい異議も材料である。 */
 export function listPrecedents(
   db: Db,
@@ -865,17 +865,7 @@ export function listPrecedents(
 ) {
   const page = input.page ?? 1;
   return db.transaction(() => {
-    const since =
-      input.since_watermark ??
-      (
-        db
-          .prepare(
-            `SELECT json_extract(payload, '$.material_watermark') AS watermark FROM events
-              WHERE kind = 'meta_review_registered' AND json_extract(payload, '$.subject') = 'memory' AND task_id IS NOT ? ORDER BY id DESC LIMIT 1`,
-          )
-          .get(reader.taskId) as { watermark: number } | undefined
-      )?.watermark ??
-      0;
+    const since = input.since_watermark ?? previousMetaReviewWatermark(db, reader.taskId);
     const lastObjection = db.prepare(
       `SELECT MAX(id) AS id FROM events WHERE kind IN ('objection_raised', 'objection_attributed') AND json_extract(payload, '$.entry_id') = ?`,
     );
@@ -961,7 +951,7 @@ type MemoryInjection = {
  *  ポインタ(title・path・出所の種別、本文は運ばない —— 読むのは read_memory だけ、#604)を上限内に
  *  組む。関連度の query は task の title + purpose + completion criteria の語の OR で、順位は search と
  *  同じ FTS の rank。削り順は固定 —— 関連 leaf を順位の下から1件ずつ → INDEX を深い階層から1段ずつ。
- *  最上位 INDEX はそれだけで上限を超えても残す(枝が無いと pull で降りられない)。主題 memory の meta-review には組まない ——
+ *  最上位 INDEX はそれだけで上限を超えても残す(枝が無いと pull で降りられない)。meta-review(どの主題も)には組まない ——
  *  節は scope を task から解決し、案内する pull verb はその接続に無い(ADR 0122 決定2)。 */
 export function buildMemoryInjection(
   db: Db,
@@ -971,7 +961,7 @@ export function buildMemoryInjection(
 ): MemoryInjection {
   return db.transaction(() => {
     const watermark = memoryWatermark(db);
-    const visible = isMetaReviewOf(db, task.id, "memory") ? [] : visibleEntries(db, { scope, agent });
+    const visible = metaReviewSubjectOf(db, task.id) !== null ? [] : visibleEntries(db, { scope, agent });
     if (visible.length === 0) return { section: null, watermark, entries: [], tokens: 0, index_depth: 0, index_max_depth: 0, omitted: 0 };
     const tree = (prefix: string, depth: number): Array<IndexBranch & { depth: number }> =>
       indexChildren(visible, prefix)
@@ -1111,20 +1101,6 @@ export function changeMemorySettings(
   })();
 }
 
-/** 周期 meta-review の主題(ADR 0120 決定2)。`routing` は #549 で足す。 */
-const META_REVIEW_SUBJECTS = {
-  memory: {
-    title: "Memory meta-review",
-    purpose:
-      "Periodic meta-review of the board's memory store. Judge repeats among candidates by reading them, not by counting. " +
-      "For a Behavior, ask whether it holds true whatever leaf sits under its branch. Propose changes through the proposal verb; " +
-      "apply fixes directly only to Knowledge and Definitions. Read the invalidated candidates and their reasons first, so you do not re-propose what was rejected.",
-    completion_criteria:
-      "every candidate and store change since the previous meta-review is either proposed, applied (Knowledge / Definitions only), or deliberately left as is",
-  },
-} as const;
-type MetaReviewSubject = keyof typeof META_REVIEW_SUBJECTS;
-
 /** worker の memory verb と、主題 memory の meta-review の接続でそれを置き換える専用 verb(ADR 0122 決定2)。MCP の登録と
  *  Codex の `enabled_tools` が同じ差を写す。 */
 export const WORKER_MEMORY_VERBS = ["record_knowledge", "define_memory_branch", "browse_memory", "search_memory", "read_memory"] as const;
@@ -1139,16 +1115,72 @@ export const MEMORY_META_REVIEW_VERBS = [
   "invalidate_memory",
   "propose_memory_change",
 ] as const;
+/** 主題 routing の読み口と、両主題が共有する Precedent の読み口(issue #917)。 */
+export const ROUTING_META_REVIEW_VERBS = [
+  "list_routing_shadow",
+  "list_allocations",
+  "list_routing_cells",
+  "read_routing_settings",
+  "list_precedents",
+] as const;
 
-/** この task が主題 `subject` の meta-review か(主題 memory 専用 verb の門が読む、#619 / #620)。 */
-export function isMetaReviewOf(db: Db, taskId: string, subject: MetaReviewSubject): boolean {
-  return db.prepare("SELECT 1 FROM tasks WHERE id = ? AND meta_review_subject = ?").get(taskId, subject) !== undefined;
+/** 周期 meta-review の主題(ADR 0120 決定2・ADR 0150 決定7): task の文面、review のティア、due 判定が数える材料の
+ *  event 種別、接続で worker の memory verb を置き換える専用 verb。 */
+export const META_REVIEW_SUBJECTS = {
+  memory: {
+    title: "Memory meta-review",
+    purpose:
+      "Periodic meta-review of the board's memory store. Judge repeats among candidates by reading them, not by counting. " +
+      "For a Behavior, ask whether it holds true whatever leaf sits under its branch. Propose changes through the proposal verb; " +
+      "apply fixes directly only to Knowledge and Definitions. Read the invalidated candidates and their reasons first, so you do not re-propose what was rejected.",
+    completion_criteria:
+      "every candidate and store change since the previous meta-review is either proposed, applied (Knowledge / Definitions only), or deliberately left as is",
+    review_tier: "frontier",
+    material: ["memory_entry_created", "memory_entry_invalidated", "objection_attributed"],
+    verbs: MEMORY_META_REVIEW_VERBS,
+  },
+  routing: {
+    title: "Routing meta-review",
+    purpose:
+      "Periodic meta-review of how the board routes work to execution settings. Read the current table and settings first, " +
+      "then where the learner's recommendation diverged from what ran and how those episodes ended, then the allocation " +
+      "reviews split by tier source and agent (an overpowered verdict under an agent's default tier is not a registrant's " +
+      "declaration), and whether the judge ran on the worker's own model. Finish with cells first seen and rows humans changed " +
+      "since the previous meta-review. Record each judgment with log_decision, and base any case for promoting the learner " +
+      "on the outcomes of the diverged episodes.",
+    completion_criteria: "every routing reading since the previous meta-review is judged and each judgment is logged as a decision",
+    review_tier: "frontier",
+    material: ["allocation_reviewed", "worker_exited", "execution_settings_changed"],
+    verbs: ROUTING_META_REVIEW_VERBS,
+  },
+} as const;
+export type MetaReviewSubject = keyof typeof META_REVIEW_SUBJECTS;
+
+/** この task が meta-review ならその主題、そうでなければ null(専用 verb の登録と門が読む、ADR 0122 決定2)。 */
+export function metaReviewSubjectOf(db: Db, taskId: string): MetaReviewSubject | null {
+  return (db.prepare("SELECT meta_review_subject FROM tasks WHERE id = ?").get(taskId) as { meta_review_subject: MetaReviewSubject | null } | undefined)
+    ?.meta_review_subject ?? null;
+}
+
+/** 読み手の task より前の、同主題の最新の登録の watermark(読み口の既定、無ければ 0)。読み手自身の登録の watermark は
+ *  「今」なので除く。 */
+export function previousMetaReviewWatermark(db: Db, readerTaskId: string): number {
+  return (
+    db
+      .prepare(
+        `SELECT json_extract(payload, '$.material_watermark') AS watermark FROM events
+          WHERE kind = 'meta_review_registered' AND json_extract(payload, '$.subject') = (SELECT meta_review_subject FROM tasks WHERE id = @task)
+            AND task_id IS NOT @task ORDER BY id DESC LIMIT 1`,
+      )
+      .get({ task: readerTaskId }) as { watermark: number } | undefined
+  )?.watermark ?? 0;
 }
 
 /** 主題の meta-review を盤面名義で登録する(周期が通る1本、due は見ない)。 */
 export function registerMetaReview(db: Db, subject: MetaReviewSubject, now: Date): void {
+  const { material: _material, verbs: _verbs, ...fields } = META_REVIEW_SUBJECTS[subject];
   db.transaction(() => {
-    const task = registerTask(db, { type: "review", ...META_REVIEW_SUBJECTS[subject], meta_review_subject: subject }, now, BOARD_WORKER_ID, "board");
+    const task = registerTask(db, { type: "review", ...fields, meta_review_subject: subject }, now, BOARD_WORKER_ID, "board");
     const { watermark } = db.prepare("SELECT MAX(id) AS watermark FROM events").get() as { watermark: number };
     appendEvent(db, {
       taskId: task.id,
@@ -1161,10 +1193,10 @@ export function registerMetaReview(db: Db, subject: MetaReviewSubject, now: Date
 }
 
 /** scheduler の poll が毎回呼ぶ: due な主題の meta-review を登録する。due = 前回登録から周期が経ち、
- *  同主題の open な task・提案 question が無く、前回の watermark より後に材料がある(前回が無ければ周期は満たす)。 */
+ *  同主題の open な task・提案 question が無く、前回の watermark より後に主題の材料がある(前回が無ければ周期は満たす)。 */
 export function registerDueMetaReviews(db: Db, now: Date): void {
   const periodMs = readMemorySettings(db).meta_review_period_days * 24 * 60 * 60 * 1000;
-  for (const subject of Object.keys(META_REVIEW_SUBJECTS) as MetaReviewSubject[]) {
+  for (const [subject, { material }] of Object.entries(META_REVIEW_SUBJECTS) as [MetaReviewSubject, (typeof META_REVIEW_SUBJECTS)[MetaReviewSubject]][]) {
     const last = db
       .prepare(
         `SELECT created_at, json_extract(payload, '$.material_watermark') AS watermark FROM events
@@ -1172,20 +1204,20 @@ export function registerDueMetaReviews(db: Db, now: Date): void {
       )
       .get(subject) as { created_at: string; watermark: number } | undefined;
     if (last && Date.parse(last.created_at) + periodMs > now.getTime()) continue;
-    // 未決着 = 同主題の open な task か、同主題の open な提案 question(ADR 0120 決定2)
+    // 未決着 = 同主題の open な task か、親が同主題の meta-review である open な提案 question(ADR 0120 決定2)。
+    // 提案の kind では数えない —— routing の meta-review は registry 種別の提案も出す(spec #916 A)
     const open = db
       .prepare(
         `SELECT 1 FROM tasks WHERE status IN ('todo', 'in_progress')
-           AND (meta_review_subject = @subject OR json_extract(question_proposal, '$.kind') = @subject)`,
+           AND (meta_review_subject = @subject
+             OR (question_proposal IS NOT NULL AND parent_id IN (SELECT id FROM tasks WHERE meta_review_subject = @subject)))`,
       )
       .get({ subject });
     if (open) continue;
-    const material = db
-      .prepare(
-        "SELECT 1 FROM events WHERE id > ? AND kind IN ('memory_entry_created', 'memory_entry_invalidated', 'objection_attributed')",
-      )
-      .get(last?.watermark ?? 0);
-    if (material) registerMetaReview(db, subject, now);
+    const found = db
+      .prepare(`SELECT 1 FROM events WHERE id > ? AND kind IN (${material.map(() => "?").join(", ")})`)
+      .get(last?.watermark ?? 0, ...material);
+    if (found) registerMetaReview(db, subject, now);
   }
 }
 

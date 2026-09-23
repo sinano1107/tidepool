@@ -35,15 +35,15 @@ function task(db: ReturnType<typeof openDb>, title = "codex-task") {
   }, new Date("2026-08-24T00:00:00.000Z"));
 }
 
-/** 主題 memory の meta-review task —— enabled_tools と盤面の tool 一覧はこの主題でだけ形が変わる(ADR 0122 決定2)。 */
-function metaReviewTask(db: ReturnType<typeof openDb>) {
+/** meta-review task —— enabled_tools と盤面の tool 一覧は meta-review の主題でだけ形が変わる(ADR 0122 決定2)。 */
+function metaReviewTask(db: ReturnType<typeof openDb>, subject: "memory" | "routing" = "memory") {
   return registerTask(db, {
     type: "review",
     assignee: "codex-agent",
-    title: "Memory meta-review",
-    purpose: "keep the memory store correct",
-    completion_criteria: "the store is reviewed",
-    meta_review_subject: "memory",
+    title: `${subject} meta-review`,
+    purpose: `keep the ${subject} correct`,
+    completion_criteria: "it is reviewed",
+    meta_review_subject: subject,
   }, new Date("2026-08-24T00:00:00.000Z"));
 }
 
@@ -338,6 +338,7 @@ describe("CodexWorker (ADR 0098)", () => {
   it.each([
     ["work", task],
     ["主題 memory の meta-review", metaReviewTask],
+    ["主題 routing の meta-review", (db: ReturnType<typeof openDb>) => metaReviewTask(db, "routing")],
   ] as const)("%s task では、spawn が Codex に宣言する enabled_tools と盤面の server が出す verb が集合として一致する(ADR 0125 決定2)", async (_, register) => {
     const f = await fixture();
     f.start(register(f.db));

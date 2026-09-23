@@ -456,6 +456,8 @@ export function openDb(path: string): Db {
     -- source: selector の出所 {tier, provider}(worker_spawned.source と同じ綴り ——
     -- spawn に辿り着かなかった pickup でも読めるようここにも持つ)。
     -- basis: prior = 候補のどれにもデータが無く表そのまま / data = 観測が効いた。
+    -- event_watermark: 書いた時点の events の最大 id。同じ task の次の worker_spawned(id がこれより大きい最初のもの)が
+    -- この pickup の session で、meta-review の watermark とも同じ軸で比べられる(時刻は Clock の同時刻で並ばない)。
     CREATE TABLE IF NOT EXISTS learner_shadow (
       id               INTEGER PRIMARY KEY,
       task_id          TEXT NOT NULL REFERENCES tasks(id),
@@ -463,6 +465,7 @@ export function openDb(path: string): Db {
       cell_actual      TEXT NOT NULL,
       source           TEXT NOT NULL,
       basis            TEXT NOT NULL CHECK (basis IN ('prior', 'data')),
+      event_watermark  INTEGER NOT NULL,
       created_at       TEXT NOT NULL
     );
 

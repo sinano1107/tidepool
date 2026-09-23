@@ -6,7 +6,7 @@ import { type AttributionClient, attributeAfterRca, type BehaviorDraftClient, is
 import type { Clock } from "./clock.js";
 import type { Db } from "./db.js";
 import { getEvent, HUMAN_FACING_KINDS } from "./events.js";
-import { PRIORITY_FIELD_DESCRIPTION, TIER_FIELD_DESCRIPTION } from "./execution-setting.js";
+import { PRIORITY_FIELD_DESCRIPTION, readExecutionSettings, TIER_FIELD_DESCRIPTION } from "./execution-setting.js";
 import type { GitHubClient } from "./github.js";
 import type { GitHubAuth } from "./github-auth.js";
 import { assertReviewerKnown, assertWorkspaceKnown } from "./human-verbs.js";
@@ -18,10 +18,11 @@ import {
   foldMemory,
   invalidateMemoryByMetaReview,
   invalidationSchema,
-  isMetaReviewOf,
   listPrecedents,
+  type MetaReviewSubject,
   memoryListFilterSchema,
   memoryScope,
+  metaReviewSubjectOf,
   moveMemory,
   proposeMemoryChange,
   pullMemoryList,
@@ -31,6 +32,7 @@ import {
 } from "./memory.js";
 import type { ProcessContainers } from "./process-container.js";
 import { type AuthorityProfile, REVIEWER_AUTHORITY_PROFILE, type RosterAgent } from "./registry.js";
+import { listAllocations, listRoutingCells, listRoutingShadow } from "./routing-review.js";
 import type { Slot } from "./slot.js";
 import { createStatelessMcpRouter } from "./stateless-mcp.js";
 import {
@@ -404,8 +406,8 @@ const decomposeChildrenSchema = z.array(
  *  spawn-time ?task= URL param and must match the current slot task. */
 function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServer {
   const server = new McpServer({ name: "tidepool", version: "0.0.0" });
-  // ADR 0122 決定2: 主題 memory の meta-review には worker の memory verb を登録せず、専用 verb で置き換える
-  const memoryMetaReview = attributedTaskId !== null && isMetaReviewOf(deps.db, attributedTaskId, "memory");
+  // ADR 0122 決定2: meta-review には worker の memory verb を登録せず、主題の専用 verb で置き換える
+  const subject = attributedTaskId === null ? null : metaReviewSubjectOf(deps.db, attributedTaskId);
 
   server.registerTool(
     "get_current_task",
@@ -661,7 +663,7 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
       }),
   );
 
-  if (!memoryMetaReview) {
+  if (subject === null) {
     server.registerTool(
       "record_knowledge",
       {
@@ -740,8 +742,8 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
       }),
   );
 
-  if (memoryMetaReview) {
-    registerMemoryMetaReviewVerbs(server, deps, attributedTaskId);
+  if (subject !== null) {
+    registerMetaReviewVerbs(server, deps, attributedTaskId, subject);
     return server;
   }
 
@@ -824,14 +826,89 @@ function registeredScope(deps: McpDeps, scope: string | null): string | null {
   return scope;
 }
 
-/** 主題 memory の meta-review 専用 verb(issue #619 / ADR 0120 決定2・ADR 0122)。tool 一覧は権限の境界ではないので、
- *  呼び出し時の門も持つ。 */
-function registerMemoryMetaReviewVerbs(server: McpServer, deps: McpDeps, attributedTaskId: string | null): void {
-  const run = (verb: (reader: { taskId: string; agent: string }, now: Date) => unknown) =>
+type MetaReviewRun = (verb: (reader: { taskId: string; agent: string }, now: Date) => unknown) => ReturnType<typeof runVerb>;
+
+/** meta-review の主題の専用 verb(issue #619・#917 / ADR 0120 決定2・ADR 0122)。tool 一覧は権限の境界ではないので、
+ *  呼び出し時の門も持つ。Precedent の読み口は両主題で共有する。 */
+function registerMetaReviewVerbs(server: McpServer, deps: McpDeps, attributedTaskId: string | null, subject: MetaReviewSubject): void {
+  const run: MetaReviewRun = (verb) =>
     runVerb(deps, attributedTaskId, (task) => {
-      if (!isMetaReviewOf(deps.db, task.id, "memory")) throw new DomainError("memory meta-review verbs are only for a memory meta-review task");
+      if (metaReviewSubjectOf(deps.db, task.id) !== subject) throw new DomainError(`${subject} meta-review verbs are only for a ${subject} meta-review task`);
       return verb({ taskId: task.id, agent: attributedWorkerId(deps, task) }, deps.clock.now());
     });
+
+  server.registerTool(
+    "list_precedents",
+    {
+      description:
+        "List objected decisions from past worker sessions: the decision line, objections and their attributed cause, " +
+        "the session outcome, and the memory entry ids read (entries_read) and seen (entries_seen) before the decision. " +
+        "Defaults to objections since the previous meta-review of your subject; pass since_watermark (an event id) to look further back.",
+      inputSchema: { since_watermark: z.number().int().min(0).optional(), page },
+    },
+    async (input) => run((reader, now) => listPrecedents(deps.db, reader, input, now)),
+  );
+
+  if (subject === "memory") registerMemoryMetaReviewVerbs(server, deps, run);
+  else registerRoutingMetaReviewVerbs(server, deps, run);
+}
+
+/** 主題 routing の読み口(issue #917 / spec #916 C)。集計はドメイン層(routing-review.ts)。 */
+function registerRoutingMetaReviewVerbs(server: McpServer, deps: McpDeps, run: MetaReviewRun): void {
+  const since_watermark = z
+    .number()
+    .int()
+    .min(0)
+    .optional()
+    .describe("An event id; defaults to the previous routing meta-review's registration.");
+
+  server.registerTool(
+    "list_routing_shadow",
+    {
+      description:
+        "List the learner's shadow rows: for each work pickup, the cell the learner recommended, the cell that actually ran " +
+        "and the selector's source, with that session's agent and outcome (accepted / rejected / excluded, cost, duration). " +
+        "diverged marks rows where the two cells differ; diverged_only returns only those.",
+      inputSchema: { since_watermark, diverged_only: z.boolean().optional(), page },
+    },
+    async (input) => run((reader) => listRoutingShadow(deps.db, reader.taskId, input)),
+  );
+
+  server.registerTool(
+    "list_allocations",
+    {
+      description:
+        "List the allocation-review distribution: evaluated annotations counted by the session's tier source, agent, " +
+        "allocation and cause, with judged_by_same_model counting those whose judge ran on the worker's own model. " +
+        "Unevaluated annotations are not counted.",
+      inputSchema: { since_watermark, page },
+    },
+    async (input) => run((reader) => listAllocations(deps.db, reader.taskId, input)),
+  );
+
+  server.registerTool(
+    "list_routing_cells",
+    {
+      description:
+        "List cells (provider, model, effort, advisor) first observed in a finished session since the watermark, and the " +
+        "execution-setting table rows humans wrote since then.",
+      inputSchema: { since_watermark, page },
+    },
+    async (input) => run((reader) => listRoutingCells(deps.db, reader.taskId, input)),
+  );
+
+  server.registerTool(
+    "read_routing_settings",
+    {
+      description:
+        "Read the current execution-setting table, the frontier advisor setting, the provider rank and the default priority.",
+    },
+    async () => run(() => readExecutionSettings(deps.db)),
+  );
+}
+
+/** 主題 memory の専用 verb(issue #619)。 */
+function registerMemoryMetaReviewVerbs(server: McpServer, deps: McpDeps, run: MetaReviewRun): void {
   const author = (reader: { agent: string }) => ({ activity: "meta_review" as const, name: reader.agent });
   const scope = z.string().min(1).nullable().describe("A registry workspace name, or null for the whole board.");
 
@@ -853,18 +930,6 @@ function registerMemoryMetaReviewVerbs(server: McpServer, deps: McpDeps, attribu
       inputSchema: { page },
     },
     async (input) => run((reader, now) => pullMemoryList(deps.db, reader, "list_memory_behaviors", input, now)),
-  );
-
-  server.registerTool(
-    "list_precedents",
-    {
-      description:
-        "List objected decisions from past worker sessions: the decision line, objections and their attributed cause, " +
-        "the session outcome, and the memory entry ids read (entries_read) and seen (entries_seen) before the decision. " +
-        "Defaults to objections since the previous memory meta-review; pass since_watermark (an event id) to look further back.",
-      inputSchema: { since_watermark: z.number().int().min(0).optional(), page },
-    },
-    async (input) => run((reader, now) => listPrecedents(deps.db, reader, input, now)),
   );
 
   server.registerTool(

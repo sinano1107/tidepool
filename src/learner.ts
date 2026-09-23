@@ -77,7 +77,7 @@ export interface Recommendation {
 }
 
 /** セルの綴りは1つ: 集計の鍵も shadow 行の JSON もこれを通す。 */
-const cellJson = (c: Cell): string =>
+export const cellJson = (c: Cell): string =>
   JSON.stringify({ provider: c.provider, model: c.model, effort: c.effort, advisor: c.advisor });
 const cellOf = (s: ExecutionSetting): Cell => ({
   provider: s.provider,
@@ -178,13 +178,22 @@ function observedModel(pin: string, models: Record<string, unknown> | undefined)
 
 type Spawned = EventRow & { payload: Extract<EventPayload, { kind: "worker_spawned" }> };
 
+/** 学習器の episode に、routing meta-review の読み口が session を引き当てる鍵を足したもの。 */
+export interface RoutingEpisode extends LearnerEpisode {
+  task_id: string;
+  worker_spawned_event_id: number;
+  worker_exited_event_id: number | null;
+  agent: string;
+  source: Spawned["payload"]["source"];
+}
+
 /** 盤面境界の読み口: work task の worker session を1つ1 episode に(codex の
  *  session も含む —— Precedent の投影表は transcript を持つ session しか持たない
  *  ので、events を直に読む)。受理は task の派生なので task の**最後の** session に
  *  だけ付け、前の session は自分の窓の中の負の信号でしか数えない。異議の窓は
  *  Precedent と同じ規則(spawn より後、exit または次の spawn より前)。 */
 // ponytail: pickup ごとに work task の全 session を読み直す。表が大きくなったら集計を増分で持つ
-function loadEpisodes(db: Db): LearnerEpisode[] {
+export function loadEpisodes(db: Db): RoutingEpisode[] {
   const tasks = db
     .prepare(
       `SELECT id, workspace, ${acceptedSql("tasks.id")} AS accepted FROM tasks
@@ -217,6 +226,11 @@ function loadEpisodes(db: Db): LearnerEpisode[] {
     }
     const usage = exited?.payload.kind === "worker_exited" ? exited.payload.usage : null;
     return {
+      task_id: spawned.task_id!,
+      worker_spawned_event_id: spawned.id,
+      worker_exited_event_id: exited?.id ?? null,
+      agent: spawned.worker_id,
+      source: spawned.payload.source,
       cell: {
         provider: spawned.payload.provider,
         model: observedModel(spawned.payload.model, usage?.models),
@@ -253,7 +267,8 @@ export function recordShadow(
     priority: task.priority ?? BOARD_DEFAULT_PRIORITY,
   });
   db.prepare(
-    "INSERT INTO learner_shadow (task_id, cell_recommended, cell_actual, source, basis, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+    `INSERT INTO learner_shadow (task_id, cell_recommended, cell_actual, source, basis, event_watermark, created_at)
+     VALUES (?, ?, ?, ?, ?, (SELECT COALESCE(MAX(id), 0) FROM events), ?)`,
   ).run(
     task.id,
     cellJson(cellOf(recommended)),

@@ -6,6 +6,7 @@ import {
   api,
   bootTidepool,
   completeIntegrationReviews,
+  completeMetaReviews,
   FULL_HANDOFF,
   HOUR,
   managementMcpClient,
@@ -106,6 +107,9 @@ it("不正値(未知の Provider / ティア / 優先順位、負の価格、順
   expect(await state()).toEqual(before);
 });
 
+/** task が pickup されたときの実行設定(設定の変更は routing meta-review の材料なので、それが先に slot を取りうる)。 */
+const settingsOf = (taskId: string) => t.worker.startedSettings[t.worker.started.findIndex((task) => task.id === taskId)];
+
 /** 候補は**実物の selector**(盤面の表 + 盤面設定)から。 */
 const boardWith = (entries: string[]): Parameters<typeof bootTidepool>[0] => ({
   openaiUsage: healthyOpenai,
@@ -123,6 +127,7 @@ it("Provider 順位の変更は次の pickup から効く —— 「今週は Cl
   const client = await mcpClient(t.mcpBaseUrl, first.id);
   await client.callTool({ name: "complete_task", arguments: { handoff: FULL_HANDOFF } });
   await client.close();
+  await completeMetaReviews(t);
   await completeIntegrationReviews(t, first.id);
   const second = await registerWork(t, "after the rank change");
   await t.clock.advance(HOUR);
@@ -141,8 +146,9 @@ it("registry なしの盤面の暗黙の entry は Selector の表に追随す�
     row: { provider: "anthropic", tier: "economy", model: "haiku", effort: "low", price_in: 1, price_out: 5 },
   });
   await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "delete_row", provider: "anthropic", model: "sonnet" });
-  await registerWork(t, "runs on the replaced row");
-  expect(t.worker.startedSettings[0]).toMatchObject({ provider: "anthropic", model: "haiku", effort: "low" });
+  const work = await registerWork(t, "runs on the replaced row");
+  await completeMetaReviews(t);
+  expect(settingsOf(work.id)).toMatchObject({ provider: "anthropic", model: "haiku", effort: "low" });
 });
 
 it("優先順位の既定を cost にすると、要求の無い task は最安の行で走り、行を消すとその行は候補から消える(ADR 0114 決定1・3)", async () => {
@@ -151,9 +157,10 @@ it("優先順位の既定を cost にすると、要求の無い task は最安�
   // sonnet の行を消してから cost にする —— 両方の変更が同じ pickup に効くことを1度で言う
   await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "delete_row", provider: "anthropic", model: "sonnet" });
   await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "priority", value: "cost" });
-  await registerWork(t, "cheapest economy row that is left");
+  const work = await registerWork(t, "cheapest economy row that is left");
   await t.clock.advance(HOUR);
-  expect(t.worker.startedSettings[0]).toMatchObject({
+  await completeMetaReviews(t);
+  expect(settingsOf(work.id)).toMatchObject({
     provider: "openai",
     model: "gpt-5.6-terra",
     source: { tier: "board", provider: "cost" },

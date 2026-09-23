@@ -520,7 +520,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
     {
       description:
         "Read the board's memory settings: injection_token_cap, the token cap on the memory section injected into a worker at spawn; " +
-        "meta_review_period_days, the minimum number of days between two periodic memory meta-reviews.",
+        "meta_review_period_days, the minimum number of days between two periodic meta-reviews of the same subject (memory or routing).",
     },
     async () => toolResult(readMemorySettings(deps.db)),
   );
@@ -529,7 +529,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
     {
       description:
         `Change the board's memory settings as the human; give at least one field. injection_token_cap: a positive integer, counted with ${TOKENIZER.id}, takes effect at the next spawn. ` +
-        "meta_review_period_days: a positive integer, the minimum days between periodic memory meta-reviews.",
+        "meta_review_period_days: a positive integer, the minimum days between periodic meta-reviews of the same subject (memory or routing).",
       inputSchema: memorySettingsChangeSchema.shape,
     },
     async (change) => memoryVerb(() => {
