@@ -2,7 +2,7 @@ import type { Db } from "./db.js";
 import type { EventPayload } from "./events.js";
 import { type ExecutionSettingsChange, windowMatchesModel } from "./execution-setting.js";
 import { type Cell, cellJson, loadEpisodes, type RoutingEpisode } from "./learner.js";
-import { PAGE_LENGTH, previousMetaReviewWatermark } from "./meta-review.js";
+import { paged, previousMetaReviewWatermark } from "./meta-review.js";
 
 /** 主題 routing の meta-review の読み口(issue #917 / spec #916 C)。どれも既定の `since_watermark` は読み手と同主題の
  *  前回の登録の watermark(event id)で、ページ長は memory の読み口と同じ定数。 */
@@ -10,10 +10,6 @@ import { PAGE_LENGTH, previousMetaReviewWatermark } from "./meta-review.js";
 interface ReadWindow {
   since_watermark?: number;
   page?: number;
-}
-
-function paged<T>(rows: readonly T[], page = 1): { rows: T[]; truncated: boolean } {
-  return { rows: rows.slice((page - 1) * PAGE_LENGTH, page * PAGE_LENGTH), truncated: rows.length > page * PAGE_LENGTH };
 }
 
 const since = (db: Db, readerTaskId: string, input: ReadWindow) => input.since_watermark ?? previousMetaReviewWatermark(db, readerTaskId);

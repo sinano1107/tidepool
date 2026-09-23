@@ -5,7 +5,7 @@ import type { Cause } from "./cause.js";
 import { type Db, MEMORY_FTS_DDL, MEMORY_FTS_TOKENIZER, MEMORY_PREPROCESS_VERSION } from "./db.js";
 import { getDisplayLanguage } from "./display-language.js";
 import { appendEvent, type EventOrigin, type EventPayload, getEvent, listEvents } from "./events.js";
-import { metaReviewSubjectOf, PAGE_LENGTH, previousMetaReviewWatermark } from "./meta-review.js";
+import { metaReviewSubjectOf, paged, previousMetaReviewWatermark } from "./meta-review.js";
 import { entriesReadBefore, entriesSeenBefore, listEpisodes } from "./precedent.js";
 import { BOARD_WORKER_ID, DomainError, HUMAN_WORKER_ID, type QuestionProposal, registerTask, settleQuestionAsObserved, type Task } from "./tasks.js";
 
@@ -732,13 +732,12 @@ export function searchMemory(
   input: { query: string; page?: number },
   at: Date,
 ): { results: Array<{ id: number; title: string; path: string }>; truncated: boolean; event_id: number } {
-  const page = input.page ?? 1;
   return db.transaction(() => {
     const match = ftsQuery(input.query);
     if (match === null) throw new DomainError("query has no searchable terms: it is empty or only stopwords");
     const hits = rankedEntries(db, match, reader.scope);
     const visible = hits.filter((row) => dropReason(row, reader) === null);
-    const shown = visible.slice((page - 1) * PAGE_LENGTH, page * PAGE_LENGTH);
+    const { rows: shown, truncated } = paged(visible, input.page);
     const candidates = hits.map((row) => ({
       id: row.id,
       dropped: dropReason(row, reader) ?? (shown.includes(row) ? null : ("page_limit" as const)),
@@ -749,7 +748,7 @@ export function searchMemory(
       { verb: "search_memory", input, returned_ids: shown.map((row) => row.id), candidates },
       {
         results: shown.map(({ id, title, path }) => ({ id, title, path })),
-        truncated: visible.length > page * PAGE_LENGTH,
+        truncated,
       },
       at,
     );
@@ -811,10 +810,9 @@ export function browseMemory(
   event_id: number;
 } {
   const prefix = input.prefix ?? "";
-  const page = input.page ?? 1;
   return db.transaction(() => {
     const children = indexChildren(visibleEntries(db, reader), prefix);
-    const shown = children.slice((page - 1) * PAGE_LENGTH, page * PAGE_LENGTH);
+    const { rows: shown, truncated } = paged(children, input.page);
     const leaves = shown.filter((child): child is EntryRow => !isBranch(child));
     return recordPull(
       db,
@@ -823,7 +821,7 @@ export function browseMemory(
       {
         children: shown.filter(isBranch).map(({ name, definition }) => ({ name, definition: definition?.text ?? null })),
         entries: leaves.map(({ id, title }) => ({ id, title })),
-        truncated: children.length > page * PAGE_LENGTH,
+        truncated,
       },
       at,
     );
@@ -839,7 +837,6 @@ export function pullMemoryList(
   input: Parameters<typeof listMemoryEntries>[1] & { include_invalidated?: boolean; page?: number },
   at: Date,
 ) {
-  const page = input.page ?? 1;
   return db.transaction(() => {
     const entries =
       verb === "list_memory_entries"
@@ -847,8 +844,8 @@ export function pullMemoryList(
         : verb === "list_memory_behaviors"
           ? listMemoryEntries(db, { kind: "behavior", state: "approved" })
           : listMemoryEntries(db, {}).filter((e) => e.state === "candidate" && (input.include_invalidated || e.invalidation_reason === null));
-    const shown = entries.slice((page - 1) * PAGE_LENGTH, page * PAGE_LENGTH);
-    return recordPull(db, reader, { verb, input, returned_ids: shown.map((e) => e.id) }, { entries: shown, truncated: entries.length > page * PAGE_LENGTH }, at);
+    const { rows: shown, truncated } = paged(entries, input.page);
+    return recordPull(db, reader, { verb, input, returned_ids: shown.map((e) => e.id) }, { entries: shown, truncated }, at);
   })();
 }
 
@@ -861,7 +858,6 @@ export function listPrecedents(
   input: { since_watermark?: number; page?: number },
   at: Date,
 ) {
-  const page = input.page ?? 1;
   return db.transaction(() => {
     const since = input.since_watermark ?? previousMetaReviewWatermark(db, reader.taskId);
     const lastObjection = db.prepare(
@@ -888,12 +884,12 @@ export function listPrecedents(
         entries_seen: entriesSeenBefore(episode, events, m.eventId!),
       }));
     });
-    const shown = precedents.slice((page - 1) * PAGE_LENGTH, page * PAGE_LENGTH);
+    const { rows: shown, truncated } = paged(precedents, input.page);
     return recordPull(
       db,
       reader,
       { verb: "list_precedents", input, returned_ids: [...new Set(shown.flatMap((p) => [...(p.entries_read ?? []), ...(p.entries_seen ?? [])]))] },
-      { precedents: shown, truncated: precedents.length > page * PAGE_LENGTH },
+      { precedents: shown, truncated },
       at,
     );
   })();

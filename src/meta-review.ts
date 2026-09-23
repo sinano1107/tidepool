@@ -5,6 +5,11 @@ import { BOARD_WORKER_ID, registerTask } from "./tasks.js";
 /** memory の pull と routing の読み口が共有するページ長(定数 — spec #586 D)。 */
 export const PAGE_LENGTH = 20;
 
+/** routing 側の同名関数と統合(issue #925)。 */
+export function paged<T>(rows: readonly T[], page = 1): { rows: T[]; truncated: boolean } {
+  return { rows: rows.slice((page - 1) * PAGE_LENGTH, page * PAGE_LENGTH), truncated: rows.length > page * PAGE_LENGTH };
+}
+
 /** 主題 memory の meta-review の接続で worker の memory verb を置き換える専用 verb(ADR 0122 決定2)。 */
 export const MEMORY_META_REVIEW_VERBS = [
   "list_memory_candidates",
