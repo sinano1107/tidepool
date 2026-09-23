@@ -192,7 +192,7 @@ async function makeWorker(
             const ready = files.filter(
               (name) => name.endsWith(".stream.jsonl") || name.endsWith(".stderr.log"),
             ).length;
-            if (ready < want) throw new Error(`log files not ready: ${ready}/${want}`);
+            expect(ready).toBeGreaterThanOrEqual(want);
           },
           { timeout: 2_000, interval: 20 },
         )
