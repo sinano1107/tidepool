@@ -70,14 +70,8 @@ export function listAllocations(db: Db, readerTaskId: string, input: Window) {
     const key = JSON.stringify([episode.source.tier, episode.agent, p.allocation, p.cause]);
     const group = groups.get(key) ?? { source_tier: episode.source.tier, agent: episode.agent, allocation: p.allocation, cause: p.cause, count: 0, judged_by_same_model: 0 };
     group.count += 1;
-    // 表の行は alias、観測は具体 id でありうるので両向きの部分一致(windowMatchesModel)
-    if (
-      p.judge !== null &&
-      p.judge.provider === episode.cell.provider &&
-      (windowMatchesModel(p.judge.model, episode.cell.model) || windowMatchesModel(episode.cell.model, p.judge.model))
-    ) {
-      group.judged_by_same_model += 1;
-    }
+    // judge は表の行の綴り(alias 可)、セルは観測された具体 id —— 表の照合と同じ部分一致
+    if (p.judge?.provider === episode.cell.provider && windowMatchesModel(p.judge.model, episode.cell.model)) group.judged_by_same_model += 1;
     groups.set(key, group);
   }
   const { rows, truncated } = paged([...groups.values()], input.page);

@@ -1196,7 +1196,8 @@ export function registerMetaReview(db: Db, subject: MetaReviewSubject, now: Date
  *  同主題の open な task・提案 question が無く、前回の watermark より後に主題の材料がある(前回が無ければ周期は満たす)。 */
 export function registerDueMetaReviews(db: Db, now: Date): void {
   const periodMs = readMemorySettings(db).meta_review_period_days * 24 * 60 * 60 * 1000;
-  for (const [subject, { material }] of Object.entries(META_REVIEW_SUBJECTS) as [MetaReviewSubject, (typeof META_REVIEW_SUBJECTS)[MetaReviewSubject]][]) {
+  for (const subject of Object.keys(META_REVIEW_SUBJECTS) as MetaReviewSubject[]) {
+    const { material } = META_REVIEW_SUBJECTS[subject];
     const last = db
       .prepare(
         `SELECT created_at, json_extract(payload, '$.material_watermark') AS watermark FROM events

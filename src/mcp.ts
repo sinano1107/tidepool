@@ -855,12 +855,7 @@ function registerMetaReviewVerbs(server: McpServer, deps: McpDeps, attributedTas
 
 /** 主題 routing の読み口(issue #917 / spec #916 C)。集計はドメイン層(routing-review.ts)。 */
 function registerRoutingMetaReviewVerbs(server: McpServer, deps: McpDeps, run: MetaReviewRun): void {
-  const since_watermark = z
-    .number()
-    .int()
-    .min(0)
-    .optional()
-    .describe("An event id; defaults to the previous routing meta-review's registration.");
+  const since_watermark = z.number().int().min(0).optional().describe("An event id; defaults to the previous routing meta-review's registration.");
 
   server.registerTool(
     "list_routing_shadow",
