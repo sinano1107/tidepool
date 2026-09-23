@@ -1052,43 +1052,27 @@ export function recordMemoryInjection(
 /** 注入上限の既定(spec #586 C)。上限は ADR 0083 決定10 が置いた唯一のノブ。 */
 const DEFAULT_INJECTION_TOKEN_CAP = 2000;
 
-/** meta-review の周期の既定(日、ADR 0120 決定2)。間隔の下限。 */
-const DEFAULT_META_REVIEW_PERIOD_DAYS = 7;
-
-export const memorySettingsChangeSchema = z.object({
-  injection_token_cap: z.number().int().positive().optional(),
-  meta_review_period_days: z.number().int().positive().optional(),
-});
-type MemorySettings = { injection_token_cap: number; meta_review_period_days: number };
+export const memorySettingsChangeSchema = z.object({ injection_token_cap: z.number().int().positive() });
+type MemorySettings = { injection_token_cap: number };
 
 export function readMemorySettings(db: Db): MemorySettings {
-  const row = db.prepare("SELECT injection_token_cap, meta_review_period_days FROM memory_defaults WHERE id = 1").get() as
-    | { injection_token_cap: number | null; meta_review_period_days: number | null }
-    | undefined;
-  return {
-    injection_token_cap: row?.injection_token_cap ?? DEFAULT_INJECTION_TOKEN_CAP,
-    meta_review_period_days: row?.meta_review_period_days ?? DEFAULT_META_REVIEW_PERIOD_DAYS,
-  };
+  const row = db.prepare("SELECT injection_token_cap FROM memory_defaults WHERE id = 1").get() as { injection_token_cap: number | null } | undefined;
+  return { injection_token_cap: row?.injection_token_cap ?? DEFAULT_INJECTION_TOKEN_CAP };
 }
 
 /** 設定を書き、盤面スコープの操作イベントとして経路つきで残す(applyExecutionSettingsChange と
- *  同じ形)。欄はどちらも省略でき、event は合わせた後の両欄を持つ。返り値は memory_settings_changed の event id。 */
+ *  同じ形)。返り値は memory_settings_changed の event id。 */
 export function changeMemorySettings(
   db: Db,
   change: z.infer<typeof memorySettingsChangeSchema>,
   origin: EventOrigin,
   at: Date,
 ): number {
-  const row = { injection_token_cap: change.injection_token_cap ?? null, meta_review_period_days: change.meta_review_period_days ?? null };
-  if (row.injection_token_cap === null && row.meta_review_period_days === null) throw new DomainError("change at least one memory setting");
   return db.transaction(() => {
-    // 渡さなかった欄は NULL(= コードの既定)のまま残す —— 既定値を行に焼かない
     db.prepare(
-      `INSERT INTO memory_defaults (id, injection_token_cap, meta_review_period_days) VALUES (1, @injection_token_cap, @meta_review_period_days)
-       ON CONFLICT(id) DO UPDATE SET
-         injection_token_cap = COALESCE(excluded.injection_token_cap, injection_token_cap),
-         meta_review_period_days = COALESCE(excluded.meta_review_period_days, meta_review_period_days)`,
-    ).run(row);
+      `INSERT INTO memory_defaults (id, injection_token_cap) VALUES (1, @injection_token_cap)
+       ON CONFLICT(id) DO UPDATE SET injection_token_cap = excluded.injection_token_cap`,
+    ).run(change);
     return appendEvent(db, {
       taskId: null,
       workerId: HUMAN_WORKER_ID,

@@ -80,7 +80,7 @@ it("fresh 盤面に注入上限の1行表があり、正でない上限は CHECK
   db.close();
 });
 
-it("fresh 盤面の tasks.meta_review_subject は memory / routing / NULL だけを、memory_defaults.meta_review_period_days は正の値か NULL を受ける(issue #618)", () => {
+it("fresh 盤面の tasks.meta_review_subject は memory / routing / NULL だけを、meta_review_defaults.period_days は正の値か NULL を受ける(issue #618 / #924)", () => {
   const db = openDb(":memory:");
   const task = db.prepare(
     "INSERT INTO tasks (id, type, status, title, purpose, completion_criteria, sort_key, created_at, meta_review_subject) VALUES (?, 'review', 'todo', 't', 'p', 'c', 1, '2026-09-15T00:00:00.000Z', ?)",
@@ -90,7 +90,7 @@ it("fresh 盤面の tasks.meta_review_subject は memory / routing / NULL だけ
   task.run("n", null);
   expect(() => task.run("x", "precedent")).toThrow(/CHECK/);
   const period = db.prepare(
-    "INSERT INTO memory_defaults (id, meta_review_period_days) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET meta_review_period_days = excluded.meta_review_period_days",
+    "INSERT INTO meta_review_defaults (id, period_days) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET period_days = excluded.period_days",
   );
   period.run(null);
   period.run(3);

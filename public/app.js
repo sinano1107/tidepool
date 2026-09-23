@@ -1729,20 +1729,16 @@ function MemorySettingsCard({ settings, say, onSaved, edit }) {
   const id = "board:memory";
   const open = edit.isOpen(id);
   const cap = String(settings.injection_token_cap);
-  const period = String(settings.meta_review_period_days);
   const [draft, setDraft] = React.useState(cap);
-  const [periodDraft, setPeriodDraft] = React.useState(period);
   const [busy, setBusy] = React.useState(false);
-  const dirty = draft.trim() !== cap || periodDraft.trim() !== period;
-  const ok = /^[1-9]\d*$/.test(draft.trim()) && /^[1-9]\d*$/.test(periodDraft.trim());
+  const dirty = draft.trim() !== cap;
+  const ok = /^[1-9]\d*$/.test(draft.trim());
   useDirtySignal(edit, open, dirty);
   const save = async () => {
     setBusy(true);
     try {
-      const saved = await api("POST /api/settings/memory", {
-        body: { injection_token_cap: Number(draft.trim()), meta_review_period_days: Number(periodDraft.trim()) }
-      });
-      say("success", "memory settings saved", `${saved.injection_token_cap} tokens \xB7 every ${saved.meta_review_period_days} days`);
+      const saved = await api("POST /api/settings/memory", { body: { injection_token_cap: Number(draft.trim()) } });
+      say("success", "memory settings saved", `${saved.injection_token_cap} tokens`);
       edit.close();
       await onSaved();
     } catch (err) {
@@ -1750,16 +1746,47 @@ function MemorySettingsCard({ settings, say, onSaved, edit }) {
     }
     setBusy(false);
   };
-  return /* @__PURE__ */ React.createElement(Card, { style: { display: "flex", flexDirection: "column", gap: 14 } }, /* @__PURE__ */ React.createElement(RecordCardHead, { editing: open, onEdit: () => edit.open(id, () => {
-    setDraft(cap);
-    setPeriodDraft(period);
-  }) }, /* @__PURE__ */ React.createElement("span", { style: settingsCardLabel }, "memory")), !open && /* @__PURE__ */ React.createElement(FieldRow, { label: "injection cap", kind: "mono", value: `${cap} tokens` }), !open && /* @__PURE__ */ React.createElement(FieldRow, { label: "meta-review period", kind: "mono", value: `${period} days` }), open && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(Input, { label: "Injection cap (tokens)", mono: true, value: draft, onChange: (e) => setDraft(e.target.value), placeholder: cap }), /* @__PURE__ */ React.createElement("p", { style: { margin: 0, fontSize: "var(--text-xs)", color: "var(--text-muted)" } }, "the most memory a worker is handed at spawn. past the cap, entry text is dropped first, then the index gets shallower, then relevant entries go one at a time from the bottom."), /* @__PURE__ */ React.createElement(Input, { label: "Meta-review period (days)", mono: true, value: periodDraft, onChange: (e) => setPeriodDraft(e.target.value), placeholder: period }), /* @__PURE__ */ React.createElement("p", { style: { margin: 0, fontSize: "var(--text-xs)", color: "var(--text-muted)" } }, "the fewest days between two memory meta-reviews. once past it, the board registers one as soon as there is something new to review."), /* @__PURE__ */ React.createElement(
+  return /* @__PURE__ */ React.createElement(Card, { style: { display: "flex", flexDirection: "column", gap: 14 } }, /* @__PURE__ */ React.createElement(RecordCardHead, { editing: open, onEdit: () => edit.open(id, () => setDraft(cap)) }, /* @__PURE__ */ React.createElement("span", { style: settingsCardLabel }, "memory")), !open && /* @__PURE__ */ React.createElement(FieldRow, { label: "injection cap", kind: "mono", value: `${cap} tokens` }), open && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(Input, { label: "Injection cap (tokens)", mono: true, value: draft, onChange: (e) => setDraft(e.target.value), placeholder: cap }), /* @__PURE__ */ React.createElement("p", { style: { margin: 0, fontSize: "var(--text-xs)", color: "var(--text-muted)" } }, "the most memory a worker is handed at spawn. past the cap, entry text is dropped first, then the index gets shallower, then relevant entries go one at a time from the bottom."), /* @__PURE__ */ React.createElement(
     EditActions,
     {
       dirty,
       ok,
       busy,
       saveLabel: "Save memory settings",
+      onSave: save,
+      onCancel: () => edit.close()
+    }
+  )));
+}
+function MetaReviewSettingsCard({ settings, say, onSaved, edit }) {
+  const { Card, FieldRow, Input } = window.TidepoolDesignSystem_8a0ead;
+  const id = "board:meta-review";
+  const open = edit.isOpen(id);
+  const period = String(settings.period_days);
+  const [draft, setDraft] = React.useState(period);
+  const [busy, setBusy] = React.useState(false);
+  const dirty = draft.trim() !== period;
+  const ok = /^[1-9]\d*$/.test(draft.trim());
+  useDirtySignal(edit, open, dirty);
+  const save = async () => {
+    setBusy(true);
+    try {
+      const saved = await api("POST /api/settings/meta-review", { body: { period_days: Number(draft.trim()) } });
+      say("success", "meta-review settings saved", `every ${saved.period_days} days`);
+      edit.close();
+      await onSaved();
+    } catch (err) {
+      say("danger", "meta-review settings save failed", String(err.message || err));
+    }
+    setBusy(false);
+  };
+  return /* @__PURE__ */ React.createElement(Card, { style: { display: "flex", flexDirection: "column", gap: 14 } }, /* @__PURE__ */ React.createElement(RecordCardHead, { editing: open, onEdit: () => edit.open(id, () => setDraft(period)) }, /* @__PURE__ */ React.createElement("span", { style: settingsCardLabel }, "meta-review")), !open && /* @__PURE__ */ React.createElement(FieldRow, { label: "period", kind: "mono", value: `${period} days` }), open && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(Input, { label: "Period (days)", mono: true, value: draft, onChange: (e) => setDraft(e.target.value), placeholder: period }), /* @__PURE__ */ React.createElement("p", { style: { margin: 0, fontSize: "var(--text-xs)", color: "var(--text-muted)" } }, "the fewest days between two meta-reviews of the same subject (memory or routing). once past it, the board registers one as soon as there is something new to review."), /* @__PURE__ */ React.createElement(
+    EditActions,
+    {
+      dirty,
+      ok,
+      busy,
+      saveLabel: "Save meta-review settings",
       onSave: save,
       onCancel: () => edit.close()
     }
@@ -2335,6 +2362,13 @@ function SettingsScreen({ say, registerLeaveGuard }) {
   React.useEffect(() => {
     loadMemorySettings();
   }, []);
+  const [metaReviewSettings, setMetaReviewSettings] = React.useState(null);
+  const loadMetaReviewSettings = async () => {
+    setMetaReviewSettings(await api("GET /api/settings/meta-review"));
+  };
+  React.useEffect(() => {
+    loadMetaReviewSettings();
+  }, []);
   const [githubLoggedIn, setGithubLoggedIn] = React.useState(null);
   React.useEffect(() => {
     api("GET /api/settings/github").then(({ loggedIn }) => setGithubLoggedIn(loggedIn)).catch(() => setGithubLoggedIn(null));
@@ -2614,7 +2648,7 @@ function SettingsScreen({ say, registerLeaveGuard }) {
         onSaved: loadQuietHours,
         edit
       }
-    ), providerPaceOffsets && /* @__PURE__ */ React.createElement(PaceOffsetsCard, { offsets: providerPaceOffsets, say, onSaved: loadPaceOffsets, edit }), executionSettings && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(ExecutionDefaultsCard, { settings: executionSettings, say, onSaved: loadExecutionSettings, edit }), /* @__PURE__ */ React.createElement(ExecutionTableCard, { settings: executionSettings, say, onSaved: loadExecutionSettings, edit })), memorySettings && /* @__PURE__ */ React.createElement(MemorySettingsCard, { settings: memorySettings, say, onSaved: loadMemorySettings, edit }), displayLanguageLoaded && /* @__PURE__ */ React.createElement(MemoryEntriesCard, { workspaceNames, language: displayLanguage, say, edit }), githubLoggedIn !== null && /* @__PURE__ */ React.createElement(GitHubLoginCard, { loggedIn: githubLoggedIn }), (translateUsage !== null || translateUsageFailed) && /* @__PURE__ */ React.createElement(TranslateUsageCard, { records: translateUsage }), (!displayLanguageLoaded || !quietHoursLoaded || !providerPaceOffsets || !executionSettings || !memorySettings) && /* @__PURE__ */ React.createElement(Card, { style: { fontSize: "var(--text-sm)", color: "var(--text-secondary)" } }, "loading\u2026"), /* @__PURE__ */ React.createElement("p", { style: settingsFootnote }, "applies to every task the board picks up"));
+    ), providerPaceOffsets && /* @__PURE__ */ React.createElement(PaceOffsetsCard, { offsets: providerPaceOffsets, say, onSaved: loadPaceOffsets, edit }), executionSettings && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(ExecutionDefaultsCard, { settings: executionSettings, say, onSaved: loadExecutionSettings, edit }), /* @__PURE__ */ React.createElement(ExecutionTableCard, { settings: executionSettings, say, onSaved: loadExecutionSettings, edit })), memorySettings && /* @__PURE__ */ React.createElement(MemorySettingsCard, { settings: memorySettings, say, onSaved: loadMemorySettings, edit }), displayLanguageLoaded && /* @__PURE__ */ React.createElement(MemoryEntriesCard, { workspaceNames, language: displayLanguage, say, edit }), metaReviewSettings && /* @__PURE__ */ React.createElement(MetaReviewSettingsCard, { settings: metaReviewSettings, say, onSaved: loadMetaReviewSettings, edit }), githubLoggedIn !== null && /* @__PURE__ */ React.createElement(GitHubLoginCard, { loggedIn: githubLoggedIn }), (translateUsage !== null || translateUsageFailed) && /* @__PURE__ */ React.createElement(TranslateUsageCard, { records: translateUsage }), (!displayLanguageLoaded || !quietHoursLoaded || !providerPaceOffsets || !executionSettings || !memorySettings || !metaReviewSettings) && /* @__PURE__ */ React.createElement(Card, { style: { fontSize: "var(--text-sm)", color: "var(--text-secondary)" } }, "loading\u2026"), /* @__PURE__ */ React.createElement("p", { style: settingsFootnote }, "applies to every task the board picks up"));
   } else if (!sec) {
     body = /* @__PURE__ */ React.createElement(ScreenHeader, { title: "Settings", backLabel: "Settings", onBack: () => go([]) });
   } else if (recordName === void 0) {

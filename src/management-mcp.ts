@@ -49,6 +49,7 @@ import {
   recordKnowledge,
   TOKENIZER,
 } from "./memory.js";
+import { changeMetaReviewSettings, metaReviewSettingsChangeSchema, readMetaReviewSettings } from "./meta-review.js";
 import { type ProfileAdmin, ProfileConfirmationRequiredError } from "./profile-create.js";
 import { type QuarantineChecks, type QuarantineResolvers, quarantineStops } from "./quarantine.js";
 import {
@@ -519,23 +520,40 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
     "read_memory_settings",
     {
       description:
-        "Read the board's memory settings: injection_token_cap, the token cap on the memory section injected into a worker at spawn; " +
-        "meta_review_period_days, the minimum number of days between two periodic meta-reviews of the same subject (memory or routing).",
+        "Read the board's memory settings: injection_token_cap, the token cap on the memory section injected into a worker at spawn.",
     },
     async () => toolResult(readMemorySettings(deps.db)),
   );
   server.registerTool(
     "change_memory_settings",
     {
-      description:
-        `Change the board's memory settings as the human; give at least one field. injection_token_cap: a positive integer, counted with ${TOKENIZER.id}, takes effect at the next spawn. ` +
-        "meta_review_period_days: a positive integer, the minimum days between periodic meta-reviews of the same subject (memory or routing).",
+      description: `Change the board's memory settings as the human. injection_token_cap: a positive integer, counted with ${TOKENIZER.id}, takes effect at the next spawn.`,
       inputSchema: memorySettingsChangeSchema.shape,
     },
-    async (change) => memoryVerb(() => {
+    async (change) => {
       changeMemorySettings(deps.db, change, "mcp", deps.clock.now());
-      return readMemorySettings(deps.db);
-    }),
+      return toolResult(readMemorySettings(deps.db));
+    },
+  );
+  server.registerTool(
+    "read_meta_review_settings",
+    {
+      description:
+        "Read the board's periodic meta-review settings: period_days, the minimum number of days between two periodic meta-reviews of the same subject (memory or routing).",
+    },
+    async () => toolResult(readMetaReviewSettings(deps.db)),
+  );
+  server.registerTool(
+    "change_meta_review_settings",
+    {
+      description:
+        "Change the board's periodic meta-review settings as the human. period_days: a positive integer, the minimum days between periodic meta-reviews of the same subject (memory or routing).",
+      inputSchema: metaReviewSettingsChangeSchema.shape,
+    },
+    async (change) => {
+      changeMetaReviewSettings(deps.db, change, "mcp", deps.clock.now());
+      return toolResult(readMetaReviewSettings(deps.db));
+    },
   );
   // spec #586 F / issue #593: the human's memory surface. No approve verb — approval
   // only goes through a question (#358). Domain errors come back as tool errors.

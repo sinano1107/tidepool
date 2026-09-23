@@ -1305,22 +1305,18 @@ function MemorySettingsCard({ settings, say, onSaved, edit }: {
   const id = 'board:memory';
   const open = edit.isOpen(id);
   const cap = String(settings.injection_token_cap);
-  const period = String(settings.meta_review_period_days);
   const [draft, setDraft] = React.useState(cap);
-  const [periodDraft, setPeriodDraft] = React.useState(period);
   const [busy, setBusy] = React.useState(false);
-  const dirty = draft.trim() !== cap || periodDraft.trim() !== period;
+  const dirty = draft.trim() !== cap;
   // the API takes positive integers only — mirror it so Save enables on a sendable value
-  const ok = /^[1-9]\d*$/.test(draft.trim()) && /^[1-9]\d*$/.test(periodDraft.trim());
+  const ok = /^[1-9]\d*$/.test(draft.trim());
   useDirtySignal(edit, open, dirty);
 
   const save = async () => {
     setBusy(true);
     try {
-      const saved = await api('POST /api/settings/memory', {
-        body: { injection_token_cap: Number(draft.trim()), meta_review_period_days: Number(periodDraft.trim()) },
-      });
-      say('success', 'memory settings saved', `${saved.injection_token_cap} tokens · every ${saved.meta_review_period_days} days`);
+      const saved = await api('POST /api/settings/memory', { body: { injection_token_cap: Number(draft.trim()) } });
+      say('success', 'memory settings saved', `${saved.injection_token_cap} tokens`);
       edit.close();
       await onSaved();
     } catch (err) {
@@ -1331,22 +1327,69 @@ function MemorySettingsCard({ settings, say, onSaved, edit }: {
 
   return (
     <Card style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-      <RecordCardHead editing={open} onEdit={() => edit.open(id, () => { setDraft(cap); setPeriodDraft(period); })}>
+      <RecordCardHead editing={open} onEdit={() => edit.open(id, () => setDraft(cap))}>
         <span style={settingsCardLabel}>memory</span>
       </RecordCardHead>
       {!open && <FieldRow label="injection cap" kind="mono" value={`${cap} tokens`} />}
-      {!open && <FieldRow label="meta-review period" kind="mono" value={`${period} days`} />}
       {open && (
         <React.Fragment>
           <Input label="Injection cap (tokens)" mono value={draft} onChange={(e) => setDraft(e.target.value)} placeholder={cap} />
           <p style={{ margin: 0, fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
             the most memory a worker is handed at spawn. past the cap, entry text is dropped first, then the index gets shallower, then relevant entries go one at a time from the bottom.
           </p>
-          <Input label="Meta-review period (days)" mono value={periodDraft} onChange={(e) => setPeriodDraft(e.target.value)} placeholder={period} />
-          <p style={{ margin: 0, fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
-            the fewest days between two memory meta-reviews. once past it, the board registers one as soon as there is something new to review.
-          </p>
           <EditActions dirty={dirty} ok={ok} busy={busy} saveLabel="Save memory settings"
+            onSave={save} onCancel={() => edit.close()} />
+        </React.Fragment>
+      )}
+    </Card>
+  );
+}
+
+// Meta-review (issue #924) as a record card: the one period shared by every
+// subject's periodic meta-review (memory and routing).
+function MetaReviewSettingsCard({ settings, say, onSaved, edit }: {
+  settings: WireContract['GET /api/settings/meta-review'];
+  say: AppSay;
+  onSaved: () => Promise<void> | void;
+  edit: SettingsEditSlot;
+}) {
+  const { Card, FieldRow, Input } = window.TidepoolDesignSystem_8a0ead;
+  const id = 'board:meta-review';
+  const open = edit.isOpen(id);
+  const period = String(settings.period_days);
+  const [draft, setDraft] = React.useState(period);
+  const [busy, setBusy] = React.useState(false);
+  const dirty = draft.trim() !== period;
+  // the API takes positive integers only — mirror it so Save enables on a sendable value
+  const ok = /^[1-9]\d*$/.test(draft.trim());
+  useDirtySignal(edit, open, dirty);
+
+  const save = async () => {
+    setBusy(true);
+    try {
+      const saved = await api('POST /api/settings/meta-review', { body: { period_days: Number(draft.trim()) } });
+      say('success', 'meta-review settings saved', `every ${saved.period_days} days`);
+      edit.close();
+      await onSaved();
+    } catch (err) {
+      say('danger', 'meta-review settings save failed', String((err as Error).message || err));
+    }
+    setBusy(false);
+  };
+
+  return (
+    <Card style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+      <RecordCardHead editing={open} onEdit={() => edit.open(id, () => setDraft(period))}>
+        <span style={settingsCardLabel}>meta-review</span>
+      </RecordCardHead>
+      {!open && <FieldRow label="period" kind="mono" value={`${period} days`} />}
+      {open && (
+        <React.Fragment>
+          <Input label="Period (days)" mono value={draft} onChange={(e) => setDraft(e.target.value)} placeholder={period} />
+          <p style={{ margin: 0, fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
+            the fewest days between two meta-reviews of the same subject (memory or routing). once past it, the board registers one as soon as there is something new to review.
+          </p>
+          <EditActions dirty={dirty} ok={ok} busy={busy} saveLabel="Save meta-review settings"
             onSave={save} onCancel={() => edit.close()} />
         </React.Fragment>
       )}
@@ -2008,6 +2051,12 @@ function SettingsScreen({ say, registerLeaveGuard }: {
   };
   React.useEffect(() => { loadMemorySettings(); }, []);
 
+  const [metaReviewSettings, setMetaReviewSettings] = React.useState<WireContract['GET /api/settings/meta-review'] | null>(null); // null → still loading
+  const loadMetaReviewSettings = async () => {
+    setMetaReviewSettings(await api('GET /api/settings/meta-review'));
+  };
+  React.useEffect(() => { loadMetaReviewSettings(); }, []);
+
   // ADR 0093 決定5: read-only. null → still loading; the card only appears once
   // the board has answered, so "not logged in" is never shown speculatively.
   const [githubLoggedIn, setGithubLoggedIn] = React.useState<boolean | null>(null);
@@ -2313,9 +2362,12 @@ function SettingsScreen({ say, registerLeaveGuard }: {
         {displayLanguageLoaded && (
           <MemoryEntriesCard workspaceNames={workspaceNames} language={displayLanguage} say={say} edit={edit} />
         )}
+        {metaReviewSettings && (
+          <MetaReviewSettingsCard settings={metaReviewSettings} say={say} onSaved={loadMetaReviewSettings} edit={edit} />
+        )}
         {githubLoggedIn !== null && <GitHubLoginCard loggedIn={githubLoggedIn} />}
         {(translateUsage !== null || translateUsageFailed) && <TranslateUsageCard records={translateUsage} />}
-        {(!displayLanguageLoaded || !quietHoursLoaded || !providerPaceOffsets || !executionSettings || !memorySettings) && (
+        {(!displayLanguageLoaded || !quietHoursLoaded || !providerPaceOffsets || !executionSettings || !memorySettings || !metaReviewSettings) && (
           <Card style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)' }}>loading…</Card>
         )}
         <p style={settingsFootnote}>applies to every task the board picks up</p>

@@ -61,7 +61,7 @@ it("材料が無ければ登録しない(issue #618)", async () => {
 
 it("同主題の open な task があれば登録せず、周期は間隔の下限で、期限超過後は材料が出た poll で登録される(issue #618)", async () => {
   t = await bootTidepool();
-  expect((await api(t.baseUrl, "POST", "/api/settings/memory", { meta_review_period_days: 1 })).status).toBe(200);
+  expect((await api(t.baseUrl, "POST", "/api/settings/meta-review", { period_days: 1 })).status).toBe(200);
   material(t, "first");
   await t.clock.advance(HOUR);
   const [first] = await openMetaReviews(t);
@@ -95,7 +95,7 @@ async function finish(tp: Tidepool, taskId: string) {
 
 it("同主題の open な提案 question があれば、meta-review が完了していても登録しない —— 回答で決着すれば次の poll で登録される(issue #620)", async () => {
   t = await bootTidepool();
-  expect((await api(t.baseUrl, "POST", "/api/settings/memory", { meta_review_period_days: 1 })).status).toBe(200);
+  expect((await api(t.baseUrl, "POST", "/api/settings/meta-review", { period_days: 1 })).status).toBe(200);
   const candidate = createBehaviorCandidate(
     t.db,
     { scope: null, path: "habits", title: "Split migrations", text: "Split migrations.", addressee: null, source: { commit: "0a46a46" }, author: { activity: "rca", name: "auditor" } },

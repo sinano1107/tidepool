@@ -53,6 +53,7 @@ import {
   readMemorySettings,
   recordKnowledge,
 } from "./memory.js";
+import { changeMetaReviewSettings, metaReviewSettingsChangeSchema, readMetaReviewSettings } from "./meta-review.js";
 import {
   isKnownPaceOffsetTarget,
   isValidOffset,
@@ -1664,6 +1665,17 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     memoryWrite(memorySettingsChangeSchema, (change) => {
       changeMemorySettings(db, change, "webui", clock.now());
       return readMemorySettings(db) satisfies WireContract["POST /api/settings/memory"];
+    }),
+  );
+  // issue #924: 周期 meta-review の間隔の下限。次の poll の due 判定から効く
+  router.get("/settings/meta-review", (_req, res) => {
+    res.json(readMetaReviewSettings(db) satisfies WireContract["GET /api/settings/meta-review"]);
+  });
+  router.post(
+    "/settings/meta-review",
+    memoryWrite(metaReviewSettingsChangeSchema, (change) => {
+      changeMetaReviewSettings(db, change, "webui", clock.now());
+      return readMetaReviewSettings(db) satisfies WireContract["POST /api/settings/meta-review"];
     }),
   );
   router.post("/settings/memory/knowledge", memoryWrite(humanKnowledgeSchema, (input) => recordKnowledge(db, humanEntryInput(db, input), "webui", clock.now())));
