@@ -9,7 +9,7 @@
   "scripts": {
     "postinstall": "chmod +x node_modules/node-pty/prebuilds/*/spawn-helper 2>/dev/null || true",
     "pretest": "node scripts/test-preflight.mjs",
-    "test": "node scripts/test-lock.mjs vitest run",
+    "test": "vitest run",
     "test:watch": "vitest",
     "canary:container": "TIDEPOOL_CANARY=1 vitest run tests/canary/container-contract.canary.test.ts",
     "e2e": "playwright test",
