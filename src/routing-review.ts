@@ -30,6 +30,7 @@ export function listRoutingShadow(db: Db, readerTaskId: string, input: Window & 
     if (row.event_watermark < from) return [];
     const diverged = row.cell_recommended !== row.cell_actual;
     if (input.diverged_only && !diverged) return [];
+    // ponytail: 行ごとに後続の行と全 episode を走査する O(n²)。shadow が大きくなったら task ごとに1度だけ並べる
     const next = rows.slice(i + 1).find((r) => r.task_id === row.task_id)?.event_watermark ?? Infinity;
     const session = episodes.find(
       (e) => e.task_id === row.task_id && e.worker_spawned_event_id > row.event_watermark && e.worker_spawned_event_id <= next,
@@ -97,7 +98,7 @@ export function listRoutingCells(db: Db, readerTaskId: string, input: Window) {
       )
       .all(from) as Array<{ id: number; origin: string; payload: string; created_at: string }>
   ).map((r) => ({ event_id: r.id, origin: r.origin, created_at: r.created_at, row: (JSON.parse(r.payload) as Extract<ExecutionSettingsChange, { setting: "row" }>).row }));
-  const cells = paged([...firstSeen.values()].filter((c) => c.first_observed_event_id > from), input.page);
-  const rows = paged(changed, input.page);
-  return { cells: cells.rows, rows: rows.rows, truncated: cells.truncated || rows.truncated };
+  // 人間の行の編集は数件なのでページに割らず全部返す
+  const { rows: cells, truncated } = paged([...firstSeen.values()].filter((c) => c.first_observed_event_id > from), input.page);
+  return { cells, rows: changed, truncated };
 }
