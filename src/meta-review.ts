@@ -2,10 +2,9 @@ import type { Db } from "./db.js";
 import { appendEvent } from "./events.js";
 import { BOARD_WORKER_ID, registerTask } from "./tasks.js";
 
-/** memory の pull と routing の読み口が共有するページ長(定数 — spec #586 D)。 */
+/** memory の pull と routing の読み口が共有するページ長(定数 — spec #586 D)。ページ割りは `paged()` を通す。 */
 export const PAGE_LENGTH = 20;
 
-/** routing 側の同名関数と統合(issue #925)。 */
 export function paged<T>(rows: readonly T[], page = 1): { rows: T[]; truncated: boolean } {
   return { rows: rows.slice((page - 1) * PAGE_LENGTH, page * PAGE_LENGTH), truncated: rows.length > page * PAGE_LENGTH };
 }
