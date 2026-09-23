@@ -31,10 +31,18 @@ function isAlive(pid: number): boolean {
   }
 }
 
-export default async function setup(project: TestProject): Promise<(() => void) | undefined> {
+export default async function setup(project: TestProject): Promise<void> {
   if (project.config.watch || isLightRun(process.argv.slice(2))) return;
 
-  const commonDir = path.resolve(execFileSync("git", ["rev-parse", "--git-common-dir"], { encoding: "utf8" }).trim());
+  let commonDir: string;
+  try {
+    commonDir = path.resolve(
+      execFileSync("git", ["rev-parse", "--git-common-dir"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim(),
+    );
+  } catch {
+    console.warn("Could not find the git common dir; running without the test lock.");
+    return;
+  }
   const lockDir = path.join(commonDir, "tidepool-test.lock");
   const ownerFile = path.join(lockDir, "owner");
   const queueDir = path.join(commonDir, "tidepool-test.queue");
@@ -93,8 +101,7 @@ export default async function setup(project: TestProject): Promise<(() => void) 
     console.warn(`Could not join the test queue at ${queueDir} (${(error as NodeJS.ErrnoException).code}); running without the lock.`);
   }
   rmSync(path.join(queueDir, ticket), { force: true });
-  if (!locked) return;
-  const release = () => rmSync(lockDir, { recursive: true, force: true });
-  process.on("exit", release);
-  return release;
+  // 解放は exit の1経路だけ。globalSetup の teardown でも消すと、teardown から exit までの間に
+  // 次の run が取ったロックを exit 時に消してしまう。
+  if (locked) process.on("exit", () => rmSync(lockDir, { recursive: true, force: true }));
 }

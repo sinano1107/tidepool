@@ -8,18 +8,18 @@ describe("isLightRun: 既存テストファイルちょうど1つの指定だけ
   });
 
   it("既存テストファイル1つの run は軽い", () => {
-    expect(isLightRun(["run", "tests/abandon.test.ts"])).toBe(true);
+    expect(isLightRun(["run", "tests/test-lock.test.ts"])).toBe(true);
   });
 
   it("既存テストファイル1つを -t で名前まで絞っても軽い", () => {
-    expect(isLightRun(["run", "tests/abandon.test.ts", "-t", "some name"])).toBe(true);
+    expect(isLightRun(["run", "tests/test-lock.test.ts", "-t", "some name"])).toBe(true);
   });
 
   it("ファイルが2つなら重い", () => {
-    expect(isLightRun(["run", "tests/abandon.test.ts", "tests/abandon-regression.test.ts"])).toBe(false);
+    expect(isLightRun(["run", "tests/test-lock.test.ts", "vitest.config.ts"])).toBe(false);
   });
 
   it("既存ファイルでない部分一致パターンは重い", () => {
-    expect(isLightRun(["run", "abandon"])).toBe(false);
+    expect(isLightRun(["run", "test-lock"])).toBe(false);
   });
 });
