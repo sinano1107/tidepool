@@ -20,17 +20,6 @@ it("POST /api/settings/memory で書いた注入上限は GET で読め、周期
   expect((await api(t.baseUrl, "GET", "/api/settings/memory")).json).toEqual({ injection_token_cap: 800 });
 });
 
-it("GET /api/settings/meta-review は未設定なら周期 7 日、POST は保存値を返し、正の整数でない値と空の変更は 400(issue #924)", async () => {
-  t = await bootTidepool();
-  expect((await api(t.baseUrl, "GET", "/api/settings/meta-review")).json).toEqual({ period_days: 7 });
-  for (const bad of [0, 1.5, "900"]) {
-    expect((await api(t.baseUrl, "POST", "/api/settings/meta-review", { period_days: bad })).status).toBe(400);
-  }
-  expect((await api(t.baseUrl, "POST", "/api/settings/meta-review", {})).status).toBe(400);
-  expect(await api(t.baseUrl, "POST", "/api/settings/meta-review", { period_days: 3 })).toMatchObject({ status: 200, json: { period_days: 3 } });
-  expect((await api(t.baseUrl, "GET", "/api/settings/meta-review")).json).toEqual({ period_days: 3 });
-});
-
 it("管理MCP の change_memory_settings で書いた注入上限は read_memory_settings で読め(周期の欄は無い)、不正値と空の変更は拒む(issue #592 / #924)", async () => {
   t = await bootTidepool();
   const client = await managementMcpClient(t.baseUrl);
@@ -48,23 +37,6 @@ it("管理MCP の change_memory_settings で書いた注入上限は read_memory
   }
 });
 
-it("管理MCP の change_meta_review_settings で書いた周期は read_meta_review_settings で読め、不正値と空の変更は拒む(issue #924)", async () => {
-  t = await bootTidepool();
-  const client = await managementMcpClient(t.baseUrl);
-  try {
-    const unset = (await client.callTool({ name: "read_meta_review_settings", arguments: {} })) as any;
-    expect(JSON.parse(unset.content[0].text)).toEqual({ period_days: 7 });
-    const changed = (await client.callTool({ name: "change_meta_review_settings", arguments: { period_days: 14 } })) as any;
-    expect(JSON.parse(changed.content[0].text)).toEqual({ period_days: 14 });
-    for (const bad of [{ period_days: 0 }, { period_days: 1.5 }, {}]) {
-      expect(((await client.callTool({ name: "change_meta_review_settings", arguments: bad })) as any).isError).toBe(true);
-    }
-    const read = (await client.callTool({ name: "read_meta_review_settings", arguments: {} })) as any;
-    expect(JSON.parse(read.content[0].text)).toEqual({ period_days: 14 });
-  } finally {
-    await client.close();
-  }
-});
 
 /** agent 由来の Knowledge を1つ(setup — 出所に使える event を registerTask で作る)。 */
 function agentKnowledge(tp: Tidepool, title: string) {

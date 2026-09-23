@@ -1644,8 +1644,8 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     } satisfies WireContract["GET /api/settings/memory/entries"]);
   });
 
-  // 人間の書き込み(書き手 human、原文の言語は表示言語)と無効化。保存は翻訳 client に依存しない
-  const memoryWrite =
+  // 人間の書き込み(schema で弾けば 400、DomainError も 400)。memory の書き込み(書き手 human、原文の言語は表示言語)と無効化、盤面設定が使う。保存は翻訳 client に依存しない
+  const validatedWrite =
     <T>(schema: z.ZodType<T>, write: (input: T) => unknown): RequestHandler =>
     (req, res) => {
       const parsed = schema.safeParse({ ...req.body, ...req.params });
@@ -1662,7 +1662,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     };
   router.post(
     "/settings/memory",
-    memoryWrite(memorySettingsChangeSchema, (change) => {
+    validatedWrite(memorySettingsChangeSchema, (change) => {
       changeMemorySettings(db, change, "webui", clock.now());
       return readMemorySettings(db) satisfies WireContract["POST /api/settings/memory"];
     }),
@@ -1673,16 +1673,16 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   });
   router.post(
     "/settings/meta-review",
-    memoryWrite(metaReviewSettingsChangeSchema, (change) => {
+    validatedWrite(metaReviewSettingsChangeSchema, (change) => {
       changeMetaReviewSettings(db, change, "webui", clock.now());
       return readMetaReviewSettings(db) satisfies WireContract["POST /api/settings/meta-review"];
     }),
   );
-  router.post("/settings/memory/knowledge", memoryWrite(humanKnowledgeSchema, (input) => recordKnowledge(db, humanEntryInput(db, input), "webui", clock.now())));
-  router.post("/settings/memory/definitions", memoryWrite(humanDefinitionSchema, (input) => defineMemoryBranch(db, humanEntryInput(db, input), "webui", clock.now())));
+  router.post("/settings/memory/knowledge", validatedWrite(humanKnowledgeSchema, (input) => recordKnowledge(db, humanEntryInput(db, input), "webui", clock.now())));
+  router.post("/settings/memory/definitions", validatedWrite(humanDefinitionSchema, (input) => defineMemoryBranch(db, humanEntryInput(db, input), "webui", clock.now())));
   router.post(
     "/settings/memory/entries/:entry_id/invalidate",
-    memoryWrite(invalidationSchema.extend({ entry_id: z.coerce.number().int().positive() }), (input) => ({
+    validatedWrite(invalidationSchema.extend({ entry_id: z.coerce.number().int().positive() }), (input) => ({
       event_id: invalidateMemoryEntry(db, input, HUMAN_WORKER_ID, "webui", clock.now()),
     })),
   );
