@@ -74,3 +74,11 @@ registry diff として蒸留する」と同じ形で、適用は表 diff の盤
 他の出所は**読み物のみ**: `task` は登録者の申告で、人間なら報告が答え、decompose の親 agent なら Behavior の領分だが入力が異議で
 ない(ADR 0083 決定7)ので #584 の判断を待つ。`board` は既定 = `economy` で下げる先が無く、economy 内の安い行は表 diff か
 `cost` 優先順位の領分。
+
+## 追記3(2026-09-23 の grilling、issue #549 / ADR 0150)
+
+決定6 の「提案は escalation → 承認 question → 人間名義で登録」は、meta-review 発の Interview には成り立たない —— pending child は
+decompose 専用で type が work 固定・親の子固定なので、root review を人間名義で立てられない。meta-review の Interview 提案は
+ADR 0120 の付帯子 question(`question_proposal` の種別)に揃え、approve が人間名義の root review を登録する(ADR 0150 決定6)。
+決定5 の「同じモデルが評価したかは Precedent から読める」は `allocation_reviewed` が judge を持たず成り立っていなかったので、
+event に judge を足す(ADR 0150 決定8)。
