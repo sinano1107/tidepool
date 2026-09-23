@@ -3,8 +3,12 @@ import type { Db } from "./db.js";
 import { appendEvent, type EventOrigin } from "./events.js";
 import { BOARD_WORKER_ID, HUMAN_WORKER_ID, registerTask } from "./tasks.js";
 
-/** memory の pull と routing の読み口が共有するページ長(定数 — spec #586 D)。 */
+/** memory の pull と routing の読み口が共有するページ長(定数 — spec #586 D)。ページ割りは `paged()` を通す。 */
 export const PAGE_LENGTH = 20;
+
+export function paged<T>(rows: readonly T[], page = 1): { rows: T[]; truncated: boolean } {
+  return { rows: rows.slice((page - 1) * PAGE_LENGTH, page * PAGE_LENGTH), truncated: rows.length > page * PAGE_LENGTH };
+}
 
 /** 主題 memory の meta-review の接続で worker の memory verb を置き換える専用 verb(ADR 0122 決定2)。 */
 export const MEMORY_META_REVIEW_VERBS = [

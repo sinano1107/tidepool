@@ -1,7 +1,7 @@
 import { expect, it } from "vitest";
 import { openDb } from "../src/db.js";
 import { appendEvent, getEvent } from "../src/events.js";
-import { createBehaviorCandidate, invalidateMemoryEntry, pullMemoryList, recordKnowledge } from "../src/memory.js";
+import { createBehaviorCandidate, invalidateMemoryEntry, listPrecedents, pullMemoryList, recordKnowledge } from "../src/memory.js";
 import { logDecision, registerTask } from "../src/tasks.js";
 
 /** meta-review の読み口(issue #619 / ADR 0120 決定2)のドメイン層。verb への写像はサーバ境界
@@ -105,4 +105,27 @@ it("一覧はページ長で切り、truncated が次のページを言う", () 
   const second = pullMemoryList(db, reader, "list_memory_candidates", { page: 2 }, at);
   expect([first.entries.length, first.truncated]).toEqual([20, true]);
   expect([second.entries.map((e) => e.id), second.truncated]).toEqual([[ids[20]], false]);
+});
+
+it("Precedent もページ長で切り、2 ページ目に残りが出る", () => {
+  const { db, task, reader } = board();
+  // setup のみ: 1 marker = 1 episode の直挿し(#356 の投影は使わない、異議つき decision を安く並べる)
+  const insertEpisode = db.prepare(
+    "INSERT INTO episodes (id, worker_spawned_event_id, extractor_version, task_id, agent, lines) VALUES (?, ?, '3', ?, 'deckhand', '{}')",
+  );
+  const insertMarker = db.prepare(
+    "INSERT INTO episode_markers (episode_id, seq, kind, position, event_id) VALUES (?, 0, 'decision', 0, ?)",
+  );
+  const decisions = Array.from({ length: 21 }, (_, i) => {
+    const decision = logDecision(db, task, `decision ${i}`, "deckhand", at);
+    insertEpisode.run(i + 1, i + 1, task.id);
+    insertMarker.run(i + 1, decision);
+    appendEvent(db, { taskId: task.id, workerId: "human", origin: "webui", payload: { kind: "objection_raised", entry_id: decision, comment: `objection ${i}`, session_id: 1 }, at });
+    return decision;
+  });
+
+  const first = listPrecedents(db, reader, {}, at);
+  const second = listPrecedents(db, reader, { page: 2 }, at);
+  expect([first.precedents.length, first.truncated]).toEqual([20, true]);
+  expect([second.precedents.map((p) => p.decision_event_id), second.truncated]).toEqual([[decisions[20]], false]);
 });

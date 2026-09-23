@@ -282,6 +282,20 @@ it("search の memory_pulled は FTS の順位どおりの候補と、返さな�
   expect(searchMemory(db, reader, { query: "tide", page: 2 }, at)).toMatchObject({ results: [{ id: pages[20] }], truncated: false });
 });
 
+it("browse の children も page 単位で切られ、2 ページ目に残りが出る", () => {
+  const { db, reader, record } = board();
+  const names = Array.from({ length: 25 }, (_, i) => `wide/c${String(i).padStart(2, "0")}`);
+  for (const name of names) record({ path: name, title: name });
+
+  const first = browseMemory(db, reader, { prefix: "wide" }, at);
+  expect(first.truncated).toBe(true);
+  expect(first.children.map((c) => c.name)).toEqual(names.slice(0, 20));
+
+  const second = browseMemory(db, reader, { prefix: "wide", page: 2 }, at);
+  expect(second.truncated).toBe(false);
+  expect(second.children.map((c) => c.name)).toEqual(names.slice(20));
+});
+
 /** 読取面の export で見た店の姿(版つきの approved 集合、INDEX、search の順位と候補)。 */
 function storeView(db: ReturnType<typeof openDb>, reader: { taskId: string; scope: string | null; agent: string }) {
   const { event_id: _b, ...index } = browseMemory(db, reader, { prefix: "build" }, at);
