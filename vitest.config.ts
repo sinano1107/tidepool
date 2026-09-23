@@ -11,6 +11,8 @@ const canary = process.env.TIDEPOOL_CANARY !== undefined;
 
 export default defineConfig({
   test: {
+    // worktree 間の test lock。main process で1度だけ走る面なので globalSetup に置く(worker ごとの setupFiles ではない)
+    globalSetup: ["scripts/test-lock.ts"],
     // docs/experiments/ の review 対象は欠陥を仕込んだ教材で、node:test 形式。盤面のテストではない。
     // .claude/worktrees/ は並行実装中の別 checkout で、拾うと main の実行が worktree の数だけ重くなる。
     exclude: [
