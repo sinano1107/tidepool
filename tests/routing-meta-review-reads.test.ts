@@ -3,7 +3,7 @@ import { openDb } from "../src/db.js";
 import { appendEvent, type EventPayload } from "../src/events.js";
 import { applyExecutionSettingsChange, type ExecutionSetting } from "../src/execution-setting.js";
 import { recordShadow } from "../src/learner.js";
-import { registerMetaReview } from "../src/memory.js";
+import { registerMetaReview } from "../src/meta-review.js";
 import { listAllocations, listRoutingCells, listRoutingShadow } from "../src/routing-review.js";
 import { registerTask } from "../src/tasks.js";
 

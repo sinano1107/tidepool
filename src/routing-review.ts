@@ -2,7 +2,7 @@ import type { Db } from "./db.js";
 import type { EventPayload } from "./events.js";
 import { type ExecutionSettingsChange, windowMatchesModel } from "./execution-setting.js";
 import { type Cell, cellJson, loadEpisodes, type RoutingEpisode } from "./learner.js";
-import { PAGE_LENGTH, previousMetaReviewWatermark } from "./memory.js";
+import { PAGE_LENGTH, previousMetaReviewWatermark } from "./meta-review.js";
 
 /** 主題 routing の meta-review の読み口(issue #917 / spec #916 C)。どれも既定の `since_watermark` は読み手と同主題の
  *  前回の登録の watermark(event id)で、ページ長は memory の読み口と同じ定数。 */

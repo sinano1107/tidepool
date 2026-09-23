@@ -19,10 +19,8 @@ import {
   invalidateMemoryByMetaReview,
   invalidationSchema,
   listPrecedents,
-  type MetaReviewSubject,
   memoryListFilterSchema,
   memoryScope,
-  metaReviewSubjectOf,
   moveMemory,
   proposeMemoryChange,
   pullMemoryList,
@@ -30,6 +28,7 @@ import {
   recordKnowledge,
   searchMemory,
 } from "./memory.js";
+import { type MetaReviewSubject, metaReviewSubjectOf } from "./meta-review.js";
 import type { ProcessContainers } from "./process-container.js";
 import { type AuthorityProfile, REVIEWER_AUTHORITY_PROFILE, type RosterAgent } from "./registry.js";
 import { listAllocations, listRoutingCells, listRoutingShadow } from "./routing-review.js";

@@ -3,7 +3,8 @@ import { join } from "node:path";
 import { expect, it } from "vitest";
 import { type Db, openDb } from "../src/db.js";
 import { appendEvent, type EventRow, getEvent } from "../src/events.js";
-import { listPrecedents, registerMetaReview } from "../src/memory.js";
+import { listPrecedents } from "../src/memory.js";
+import { registerMetaReview } from "../src/meta-review.js";
 import { backfillEpisodes, listEpisodes, projectAndPersist } from "../src/precedent.js";
 import { tempDir } from "./harness.js";
 
