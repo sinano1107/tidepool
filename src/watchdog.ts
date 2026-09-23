@@ -181,7 +181,8 @@ export function transcriptFailureHandler(
   return ({ taskId, workerSpawnedEventId, file, error_code, message }) => {
     appendEvent(deps.db, {
       taskId,
-      workerId: getEvent(deps.db, workerSpawnedEventId)?.worker_id ?? BOARD_WORKER_ID,
+      // worker_spawned は open より先に書かれている(ADR 0149 決定2)
+      workerId: getEvent(deps.db, workerSpawnedEventId)!.worker_id,
       origin: "board",
       payload: { kind: "transcript_failed", error_code, message, file, worker_spawned_event_id: workerSpawnedEventId },
       at: deps.clock.now(),
