@@ -2,7 +2,7 @@ import type { Db } from "./db.js";
 import { appendEvent } from "./events.js";
 import { BOARD_WORKER_ID, registerTask } from "./tasks.js";
 
-/** pull 3動詞のページ長(定数 — spec #586 D)。 */
+/** memory の pull と routing の読み口が共有するページ長(定数 — spec #586 D)。 */
 export const PAGE_LENGTH = 20;
 
 /** 主題 memory の meta-review の接続で worker の memory verb を置き換える専用 verb(ADR 0122 決定2)。 */
