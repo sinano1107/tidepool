@@ -10,9 +10,18 @@ export interface TranscriptFailure {
   file: "stream" | "stderr";
 }
 
+/** 開いた session の transcript。`stream` の path は fd から作った stream が持たないので別に運ぶ。 */
+export interface Transcript {
+  streamPath: string;
+  stream: WriteStream;
+  stderr: WriteStream;
+}
+
 /** worker session ごとの transcript(CONTEXT.md「Transcript」—— stream と stderr の2本で
  *  1単位)を開く盤面側の器(ADR 0149 決定5)。容器(`ProcessContainers`)と同じ立て付けで、
- *  開く順序と失敗方針はここ1箇所に住み、adapter は開いた2本へ pipe するだけである。
+ *  失敗方針はここ1箇所に住み、adapter は開いた2本へ pipe するだけである。順序は
+ *  データ依存で固定される —— open は `worker_spawned` の event id を要り、spawn は
+ *  open が返した2本へ pipe する。
  *  dir は作らない —— 無ければ過去の transcript が失われた事実ごと表に出す(決定2)。 */
 export class TranscriptStore {
   /** 走ってから書けなくなった観測の盤面側の一撃。盤面(`startServer`)が差し込む。 */
@@ -26,7 +35,7 @@ export class TranscriptStore {
   open(
     taskId: string,
     workerSpawnedEventId: number,
-  ): { streamPath: string; stream: WriteStream; stderr: WriteStream } {
+  ): Transcript {
     const base = join(this.dir, `${taskId}.${workerSpawnedEventId}`);
     const streamPath = `${base}.stream.jsonl`;
     const streamFd = openSync(streamPath, "w");
@@ -44,7 +53,6 @@ export class TranscriptStore {
         reported = true;
         this.onFailed({ taskId, workerSpawnedEventId, error_code: err.code ?? null, message: err.message, file });
       });
-    // fd を渡した stream は path を持たない(Node の仕様)ので、読み返す側へ path を別に返す
     return {
       streamPath,
       stream: watch("stream", createWriteStream("", { fd: streamFd })),

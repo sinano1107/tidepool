@@ -7,7 +7,7 @@ import { CodexWorker } from "../src/codex-worker.js";
 import { executionSettingsFor } from "../src/execution-setting.js";
 import type { Provider } from "../src/registry.js";
 import type { WorkerFactory } from "../src/server.js";
-import { TranscriptStore } from "../src/transcript-store.js";
+import { type Transcript, TranscriptStore } from "../src/transcript-store.js";
 import { FakeContainerRuntime, healthyOpenai, healthyUsageText, recordingSpawn } from "./fakes.js";
 import { api, bootTidepool, FULL_HANDOFF, git, HOUR, mcpClient, questions, queueWork, type Tidepool } from "./harness.js";
 import { makeRegistry } from "./registry-fixture.js";
@@ -40,7 +40,7 @@ const tempDir = async (prefix: string) => {
 
 /** 盤面に渡す transcript の器。テストは開かれた session の stream をここから取って落とす。 */
 class RecordingTranscripts extends TranscriptStore {
-  readonly opened = new Map<string, ReturnType<TranscriptStore["open"]>>();
+  readonly opened = new Map<string, Transcript>();
   override open(taskId: string, workerSpawnedEventId: number) {
     const opened = super.open(taskId, workerSpawnedEventId);
     this.opened.set(taskId, opened);

@@ -31,7 +31,7 @@ import {
 import type { ContainedProcess, ContainerSpawn, ProcessContainers } from "./process-container.js";
 import { loadRegistry, type RegistrySource } from "./registry.js";
 import { DEFAULT_AUDITOR_NAME, resolveTaskAgent, type Task } from "./tasks.js";
-import type { TranscriptStore } from "./transcript-store.js";
+import type { Transcript, TranscriptStore } from "./transcript-store.js";
 import type { WorkerAdapter, WorkerExit } from "./worker.js";
 import {
   quarantineWorkspace,
@@ -1016,7 +1016,7 @@ export class CodexWorker implements WorkerAdapter {
     };
     let child: ContainedProcess;
     let spawned: number;
-    let transcript: ReturnType<TranscriptStore["open"]>;
+    let transcript: Transcript;
     try {
       const hook = installBoardHook(this.options.codexHome);
       const taskMcpUrl = new URL(this.options.mcpUrl);
@@ -1079,6 +1079,8 @@ export class CodexWorker implements WorkerAdapter {
         },
       );
     } catch (error) {
+      // ponytail: spawn が同期で投げると開いた transcript の2本の fd は閉じない(Claude adapter と同じ
+      // 稀な経路)。積み上がりが観測されたらここで destroy する。
       removeTaskTemp();
       throw error;
     }

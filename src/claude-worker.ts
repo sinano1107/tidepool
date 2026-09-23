@@ -2006,7 +2006,8 @@ export class ClaudeCodeWorker implements WorkerAdapter {
   }
 
   /** ADR 0118: this adapter's observation points of a pickup whose worker never
-   *  ran (skill enumeration, Node spawn()) record the fact the same way, then
+   *  ran (skill enumeration, a synchronous throw from `launch` inside the
+   *  enumeration continuation — ADR 0149 決定6 —, Node spawn()) record the fact the same way, then
    *  hand the pickup to the board's one-shot. */
   private recordSpawnFailed(
     task: Task,
