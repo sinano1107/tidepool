@@ -23,7 +23,7 @@ Ask `/ask-matt` when the question is "which skill fits". This file answers "how 
 2. **`CONTEXT.md`, updated as each decision lands** — not batched. The main job is correcting lines the decision just made false.
 3. **Findings outside the scope, split into their own issues** — mixing them gives the ADR two subjects.
 4. **The implementation work, written up** — see below.
-5. **A comment on the originating issue** — the decisions, and links to the implementation issues. When step 4 produced no issue, this comment is also where the measurement tables and implementation walk-throughs go, since [domain.md](./domain.md) keeps them out of the ADR.
+5. **A comment on the originating issue** — the decisions, and links to the implementation issues. When step 4 produced no issue, this comment is also where the measurement tables and implementation walk-throughs go, since [domain.md](./domain.md) keeps them out of the ADR. Take `needs-triage` off the originating issue at the same time — it has been evaluated, and leaving the label puts a decided issue in the triage queue. The issue stays open until the fix lands: the implementation PR carries `Closes #<originating issue>` alongside `Closes #<spec or ticket>`, so the spec's Further Notes say so (without it the originating issue outlives its fix, as #559 and #538 did).
 6. **A commit on `main`** — not pushed.
 
 ## Writing the work up
