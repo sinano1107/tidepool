@@ -1,7 +1,7 @@
 import type { Allocation, AllocationUnevaluatedReason } from "./allocation-review.js";
 import type { Cause } from "./cause.js";
 import type { Db } from "./db.js";
-import type { ExecutionSettingsChange, ProviderSource, TierSource } from "./execution-setting.js";
+import type { ExecutionSettingRow, ExecutionSettingsChange, ProviderSource, TierSource } from "./execution-setting.js";
 import type { InvalidationReason, MemoryDropReason, MemoryEntryFields } from "./memory.js";
 import type { Provider } from "./registry.js";
 import type { QuestionProposal, TaskType } from "./tasks.js";
@@ -346,7 +346,7 @@ export type EventPayload =
       kind: "allocation_reviewed";
       review_task_id: string;
       worker_spawned_event_id: number | null;
-      judge: { provider: Provider; model: string; effort: string } | null;
+      judge: Pick<ExecutionSettingRow, "provider" | "model" | "effort"> | null;
     } & (
       | { allocation: Allocation; cause: Cause; evidence: string }
       | { unevaluated: AllocationUnevaluatedReason }

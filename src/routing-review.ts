@@ -6,7 +6,8 @@ import { PAGE_LENGTH, previousMetaReviewWatermark } from "./memory.js";
 
 /** 主題 routing の meta-review の読み口(issue #917 / spec #916 C)。どれも既定の `since_watermark` は読み手と同主題の
  *  前回の登録の watermark(event id)で、ページ長は memory の読み口と同じ定数。 */
-interface Window {
+
+interface ReadWindow {
   since_watermark?: number;
   page?: number;
 }
@@ -15,12 +16,12 @@ function paged<T>(rows: readonly T[], page = 1): { rows: T[]; truncated: boolean
   return { rows: rows.slice((page - 1) * PAGE_LENGTH, page * PAGE_LENGTH), truncated: rows.length > page * PAGE_LENGTH };
 }
 
-const since = (db: Db, readerTaskId: string, input: Window) => input.since_watermark ?? previousMetaReviewWatermark(db, readerTaskId);
+const since = (db: Db, readerTaskId: string, input: ReadWindow) => input.since_watermark ?? previousMetaReviewWatermark(db, readerTaskId);
 
 /** shadow 行を、その pickup が開いた session の outcome と結ぶ。session = 同じ task の、行の watermark より後で次の
  *  shadow 行より前の最初の worker_spawned(spawn に辿り着かなかった pickup は session 無し)。`diverged` は学習器の推薦と
  *  実際に走ったセルが違う行で、`diverged_only` でそれだけに絞る。 */
-export function listRoutingShadow(db: Db, readerTaskId: string, input: Window & { diverged_only?: boolean }) {
+export function listRoutingShadow(db: Db, readerTaskId: string, input: ReadWindow & { diverged_only?: boolean }) {
   const rows = db
     .prepare("SELECT task_id, cell_recommended, cell_actual, source, basis, event_watermark, created_at FROM learner_shadow ORDER BY id")
     .all() as Array<{ task_id: string; cell_recommended: string; cell_actual: string; source: string; basis: "prior" | "data"; event_watermark: number; created_at: string }>;
@@ -58,7 +59,7 @@ export function listRoutingShadow(db: Db, readerTaskId: string, input: Window & 
 
 /** 配分評価の分布: 評価された注釈を worker session の (`source.tier`, agent, allocation, cause) で数え、judge の model が
  *  worker のセルの model と同じだった件数を添える(ADR 0150 決定8)。unevaluated の注釈は分布に入らない。 */
-export function listAllocations(db: Db, readerTaskId: string, input: Window) {
+export function listAllocations(db: Db, readerTaskId: string, input: ReadWindow) {
   const episodes = new Map(loadEpisodes(db).map((e) => [e.worker_spawned_event_id, e]));
   const annotations = db
     .prepare("SELECT payload FROM events WHERE kind = 'allocation_reviewed' AND id > ? ORDER BY id")
@@ -81,7 +82,7 @@ export function listAllocations(db: Db, readerTaskId: string, input: Window) {
 
 /** 新しいセルと人間が変えた行: 観測(worker_exited)で初めて現れたのが watermark より後のセルと、watermark より後に
  *  settings タブ / 管理MCP から書かれた表の行(`execution_settings_changed` の `row`)。 */
-export function listRoutingCells(db: Db, readerTaskId: string, input: Window) {
+export function listRoutingCells(db: Db, readerTaskId: string, input: ReadWindow) {
   const from = since(db, readerTaskId, input);
   const firstSeen = new Map<string, { cell: Cell; first_observed_event_id: number }>();
   for (const e of loadEpisodes(db)) {

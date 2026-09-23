@@ -886,7 +886,7 @@ function registerRoutingMetaReviewVerbs(server: McpServer, deps: McpDeps, run: M
     {
       description:
         "List cells (provider, model, effort, advisor) first observed in a finished session since the watermark, and the " +
-        "execution-setting table rows humans wrote since then.",
+        "execution-setting table rows humans wrote since then. Only cells are paged; the rows always come back in full.",
       inputSchema: { since_watermark, page },
     },
     async (input) => run((reader) => listRoutingCells(deps.db, reader.taskId, input)),
