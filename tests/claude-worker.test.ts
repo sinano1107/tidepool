@@ -305,7 +305,7 @@ describe("ClaudeCodeWorker", () => {
     const call = calls[0]!;
     expect(call.command).toBe("claude");
     // cwd comes from the registry's workspaces.yaml, not from tidepool itself
-    expect(call.cwd).toBe("/home/pi/work/tidepool");
+    expect(call.cwd).toBe("/srv/pi/work/tidepool");
     expect(call.args.join(" ")).toContain("--output-format stream-json");
     // headless: nobody is present to answer a permission prompt, so the mode's
     // residual answer is the floor (ADR 0038). work runs acceptEdits — edits
@@ -368,20 +368,20 @@ describe("ClaudeCodeWorker", () => {
 
   it("task.workspace が設定されていれば、コンストラクタの workspace より優先して cwd に使う(issue #26)", async () => {
     const { start, calls } = await makeWorker({
-      "workspaces.yaml": `tidepool:\n  path: /home/pi/work/tidepool\nprod:\n  path: /home/pi/work/prod\n`,
+      "workspaces.yaml": `tidepool:\n  path: /srv/pi/work/tidepool\nprod:\n  path: /srv/pi/work/prod\n`,
     });
     start("task-prod", "prod");
     expect(calls).toHaveLength(1);
-    expect(calls[0]!.cwd).toBe("/home/pi/work/prod");
+    expect(calls[0]!.cwd).toBe("/srv/pi/work/prod");
   });
 
   it("task.workspace が null なら、これまで通りコンストラクタの workspace を cwd に使う", async () => {
     const { start, calls } = await makeWorker({
-      "workspaces.yaml": `tidepool:\n  path: /home/pi/work/tidepool\nprod:\n  path: /home/pi/work/prod\n`,
+      "workspaces.yaml": `tidepool:\n  path: /srv/pi/work/tidepool\nprod:\n  path: /srv/pi/work/prod\n`,
     });
     start("task-default", null);
     expect(calls).toHaveLength(1);
-    expect(calls[0]!.cwd).toBe("/home/pi/work/tidepool");
+    expect(calls[0]!.cwd).toBe("/srv/pi/work/tidepool");
   });
 
   it("task.workspace が registry に存在しない名前(registry drift)なら、投げずに quarantine して spawn しない(issue #26 / ADR 0009)", async () => {
@@ -679,7 +679,7 @@ describe("ClaudeCodeWorker", () => {
   it("許可ドメインがある session は実効 egress とリトライ禁止を英語で伝える(ADR 0072)", async () => {
     const { start, calls } = await makeWorker({
       "workspaces.yaml": `tidepool:
-  path: /home/pi/work/tidepool
+  path: /srv/pi/work/tidepool
   allowed_domains:
     - registry.npmjs.org
 `,
@@ -860,7 +860,7 @@ describe("ClaudeCodeWorker", () => {
   it("workspace の review_allowed_commands が review spawn の --allowedTools に Bash パターンとして畳まれる", async () => {
     const { start, calls } = await makeWorker({
       "workspaces.yaml": `tidepool:
-  path: /home/pi/work/tidepool
+  path: /srv/pi/work/tidepool
   review_allowed_commands:
     - npm test
 `,
@@ -883,7 +883,7 @@ describe("ClaudeCodeWorker", () => {
   it("review_allowed_commands は work の spawn には効かない(allowlist は MCP サーバだけ)", async () => {
     const { start, calls } = await makeWorker({
       "workspaces.yaml": `tidepool:
-  path: /home/pi/work/tidepool
+  path: /srv/pi/work/tidepool
   review_allowed_commands:
     - npm test
 `,
@@ -930,7 +930,7 @@ describe("ClaudeCodeWorker", () => {
     start();
     // ping はタスクの workspace cwd で走る
     await vi.waitFor(() => expect(calls).toHaveLength(1));
-    expect(rec.calls).toEqual(["/home/pi/work/tidepool"]);
+    expect(rec.calls).toEqual(["/srv/pi/work/tidepool"]);
     const deny = disallowedTools(calls[0]!.args);
     expect(deny).toContain("Workflow");
     expect(deny).toContain("Skill(tdd)");
@@ -1083,13 +1083,13 @@ describe("ClaudeCodeWorker", () => {
     // 裸で走る」— ADR 0033 が唯一拒む状態)
     expect(sandbox.failIfUnavailable).toBe(true);
     expect(sandbox.filesystem.denyRead).toEqual(["~/"]);
-    expect(sandbox.filesystem.allowRead).toContain("/home/pi/work/tidepool");
+    expect(sandbox.filesystem.allowRead).toContain("/srv/pi/work/tidepool");
   });
 
   it("registry の allowed_domains が実 spawn の network.allowedDomains に届く(ADR 0072)", async () => {
     const { start, calls, logDir } = await makeWorker({
       "workspaces.yaml": `tidepool:
-  path: /home/pi/work/tidepool
+  path: /srv/pi/work/tidepool
   allowed_domains:
     - registry.npmjs.org
 `,
@@ -1115,7 +1115,7 @@ describe("ClaudeCodeWorker", () => {
     const { start, calls, logDir } = await makeWorker();
     start("task-sbx-work", null, "deckhand", "work");
     expect(sandboxSettings(calls[0]!.args, logDir).filesystem.allowWrite).toEqual([
-      "/home/pi/work/tidepool",
+      "/srv/pi/work/tidepool",
     ]);
   });
 

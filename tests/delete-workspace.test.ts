@@ -38,7 +38,7 @@ describe("deleteWorkspace: 正常系(issue #205 / ADR 0087 決定1・決定4)", 
     expect(loadRegistry(registryDir, "purely-local").workspaces.tidepool).toBeUndefined();
     expect(git(registryDir, "log", "-1", "--format=%s")).toBe("delete workspace tidepool via WebUI");
     // ADR 0087 決定4: ホスト上の checkout は触らない —— 応答が場所を名指しする
-    expect(checkout).toBe("/home/pi/work/tidepool");
+    expect(checkout).toBe("/srv/pi/work/tidepool");
   });
 });
 

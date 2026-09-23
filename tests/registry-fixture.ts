@@ -30,7 +30,7 @@ merge: external
 `;
 
 const WORKSPACES_YAML = `tidepool:
-  path: /home/pi/work/tidepool
+  path: /srv/pi/work/tidepool
   repo: https://github.com/sinano1107/tidepool.git
   notes: run npm install before first use
 `;
