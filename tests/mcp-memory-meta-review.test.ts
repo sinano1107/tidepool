@@ -1,6 +1,7 @@
 import { rm } from "node:fs/promises";
 import { afterEach, expect, it } from "vitest";
-import { defineMemoryBranch, listMemoryEntries, MEMORY_META_REVIEW_VERBS, recordKnowledge, WORKER_MEMORY_VERBS } from "../src/memory.js";
+import { defineMemoryBranch, listMemoryEntries, recordKnowledge, WORKER_MEMORY_VERBS } from "../src/memory.js";
+import { MEMORY_META_REVIEW_VERBS } from "../src/meta-review.js";
 import { DEFAULT_AUDITOR_NAME } from "../src/tasks.js";
 import { UnknownWorkspaceError } from "../src/workspace.js";
 import { api, bootTidepool, HOUR, makeWorkspace, mcpClient, registerWork, type Tidepool } from "./harness.js";

@@ -21,13 +21,8 @@ import type { ContainmentCapability } from "./containment.js";
 import type { Db } from "./db.js";
 import { appendEvent, type EventPayload } from "./events.js";
 import type { ExecutionSetting } from "./execution-setting.js";
-import {
-  buildMemoryInjection,
-  META_REVIEW_SUBJECTS,
-  metaReviewSubjectOf,
-  recordMemoryInjection,
-  WORKER_MEMORY_VERBS,
-} from "./memory.js";
+import { buildMemoryInjection, recordMemoryInjection, WORKER_MEMORY_VERBS } from "./memory.js";
+import { META_REVIEW_SUBJECTS, metaReviewSubjectOf } from "./meta-review.js";
 import type { ContainedProcess, ContainerSpawn, ProcessContainers } from "./process-container.js";
 import { loadRegistry, type RegistrySource } from "./registry.js";
 import { DEFAULT_AUDITOR_NAME, resolveTaskAgent, type Task } from "./tasks.js";
