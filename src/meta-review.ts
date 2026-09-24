@@ -136,7 +136,8 @@ export function changeMetaReviewSettings(db: Db, change: z.infer<typeof metaRevi
 }
 
 /** scheduler の poll が毎回呼ぶ: due な主題の meta-review を登録する。due = 前回登録から周期が経ち、
- *  同主題の open な task・提案 question が無く、前回の watermark より後に主題の材料がある(前回が無ければ周期は満たす)。 */
+ *  同主題の open な task・提案 question が無く、前回の watermark より後に主題の材料がある(前回が無ければ周期は満たす)。材料は meta-review 自身の産物 —— 提案
+ *  question への回答が刻んだものと直接書き込み —— を数えない(ADR 0151)。 */
 export function registerDueMetaReviews(db: Db, now: Date): void {
   const periodMs = readMetaReviewSettings(db).period_days * 24 * 60 * 60 * 1000;
   for (const subject of Object.keys(META_REVIEW_SUBJECTS) as MetaReviewSubject[]) {

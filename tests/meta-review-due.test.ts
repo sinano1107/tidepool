@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { openDb } from "../src/db.js";
+import { type Db, openDb } from "../src/db.js";
 import { applyExecutionSettingsChange, composeRoutingRow } from "../src/execution-setting.js";
 import {
   approveMemoryProposal,
@@ -21,12 +21,12 @@ const afterPeriod = new Date(at.getTime() + 8 * 24 * 60 * 60 * 1000);
 const row = { provider: "anthropic" as const, tier: "standard" as const, model: "claude-opus-4-1", effort: "high", price_in: 5, price_out: 25 };
 
 /** 前回の meta-review を登録して完了させる(周期の起点と watermark)。 */
-function previousReview(db: ReturnType<typeof openDb>, subject: MetaReviewSubject) {
+function previousReview(db: Db, subject: MetaReviewSubject) {
   registerMetaReview(db, subject, at);
   db.prepare("UPDATE tasks SET status = 'done' WHERE meta_review_subject = ?").run(subject);
 }
 
-const registered = (db: ReturnType<typeof openDb>, subject: MetaReviewSubject) =>
+const registered = (db: Db, subject: MetaReviewSubject) =>
   (db.prepare("SELECT COUNT(*) AS n FROM events WHERE kind = 'meta_review_registered' AND json_extract(payload, '$.subject') = ?").get(subject) as { n: number }).n;
 
 it("routing の行の提案への approve(修正値つきも)の適用だけでは、周期が過ぎても次の routing meta-review を登録しない", () => {
@@ -53,10 +53,10 @@ it("settings タブ / 管理MCP からの人間の行の直接編集は材料で
 
 const deckhand = { activity: "worker_verb" as const, name: "deckhand" };
 const metaReview = { activity: "meta_review" as const, name: "auditor" };
-const behavior = (db: ReturnType<typeof openDb>, title: string) =>
+const behavior = (db: Db, title: string) =>
   createBehaviorCandidate(db, { scope: null, path: "habits", title, text: `${title}.`, addressee: null, source: { commit: "0a46a46" }, author: deckhand }, "worker", at)
     .entry_id;
-const knowledge = (db: ReturnType<typeof openDb>, title: string) =>
+const knowledge = (db: Db, title: string) =>
   recordKnowledge(db, { scope: null, path: "build", title, text: `${title}.`, source: { commit: "0a46a46" }, author: deckhand }, "worker", at).entry_id;
 
 it("memory の提案 question への回答(置換つき approve の superseded・invalidate の approve・reject)だけでは、次の memory meta-review を登録しない", () => {

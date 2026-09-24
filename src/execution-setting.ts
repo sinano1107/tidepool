@@ -415,7 +415,8 @@ export function composeRoutingRow(proposal: RoutingRowProposal, amendment?: Rout
 
 /** 変更を書き、操作イベントとして経路つきで残す(CONTEXT.md「管理MCP」)。task を
  *  持たない盤面イベントなので task_id は NULL、帰属は人間。表を書くのはこの1本なので、routing の提案の陳腐化の hook
- *  (ADR 0150 決定1)もここに置く。返り値は execution_settings_changed の event id(何も変わらなければ null)。 */
+ *  (ADR 0150 決定1)もここに置く。`questionId` は提案 question への回答で適用したときの印で、meta-review の材料と「人間が変えた行」から外れる(ADR 0151)。
+ *  返り値は execution_settings_changed の event id(何も変わらなければ null)。 */
 export function applyExecutionSettingsChange(db: Db, change: ExecutionSettingsChange, origin: EventOrigin, at: Date, questionId?: string): number | null {
   return db.transaction(() => {
     switch (change.setting) {

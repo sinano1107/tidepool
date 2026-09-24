@@ -136,6 +136,8 @@ it("reject の回答は reject の export に届き(candidate が rejected)、�
     expect((await answer(questionId, "reject")).status).toBe(200);
 
     expect(await entry(ids[0]!)).toMatchObject({ invalidation_reason: "rejected" });
+    // 無効化は回答の印を持ち、meta-review の材料に数えられない(ADR 0151)
+    expect(t.db.prepare("SELECT json_extract(payload, '$.question_id') AS q FROM events WHERE kind = 'memory_entry_invalidated' ORDER BY id DESC").get()).toEqual({ q: questionId });
     expect((await events(questionId)).map((e) => e.kind)).toEqual(["task_registered", "question_answered"]);
   } finally {
     await client.close();
