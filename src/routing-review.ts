@@ -1,8 +1,9 @@
 import type { Db } from "./db.js";
 import type { EventPayload } from "./events.js";
-import { type ExecutionSettingsChange, windowMatchesModel } from "./execution-setting.js";
+import { type ExecutionSettingsChange, loadExecutionSettingTable, parseRoutingRowChange, windowMatchesModel } from "./execution-setting.js";
 import { type Cell, cellJson, loadEpisodes, type RoutingEpisode } from "./learner.js";
 import { paged, previousMetaReviewWatermark } from "./meta-review.js";
+import { DomainError, type RoutingRowProposal, registerTask } from "./tasks.js";
 
 /** 主題 routing の meta-review の読み口(issue #917 / spec #916 C)。どれも既定の `since_watermark` は読み手と同主題の
  *  前回の登録の watermark(event id)で、ページ長は memory の読み口と同じ定数。 */
@@ -98,4 +99,69 @@ export function listRoutingCells(db: Db, readerTaskId: string, input: ReadWindow
   // 人間の行の編集は数件なのでページに割らず全部返す
   const { rows: cells, truncated } = paged([...firstSeen.values()].filter((c) => c.first_observed_event_id > from), input.page);
   return { cells, rows: changed, truncated };
+}
+
+/** 過去の routing の提案(spec #916 C): 提案、回答(question_answered の答え・修正値・コメント)、observed の理由
+ *  (routing_proposal_stale)。提案の表は持たず question と event から組む。窓で切らない —— 退けられた提案を繰り返さない
+ *  ための読み物なので、全期間を返す。 */
+export function listRoutingProposals(db: Db) {
+  const rows = db
+    .prepare(
+      `SELECT t.id, t.question_proposal,
+         (SELECT payload FROM events WHERE task_id = t.id AND kind = 'question_answered') AS answered,
+         (SELECT payload FROM events WHERE task_id = t.id AND kind = 'routing_proposal_stale') AS stale
+       FROM tasks t WHERE json_extract(t.question_proposal, '$.kind') = 'routing' ORDER BY t.rowid`,
+    )
+    .all() as Array<{ id: string; question_proposal: string; answered: string | null; stale: string | null }>;
+  return rows.map((row) => {
+    const answered = row.answered === null ? null : (JSON.parse(row.answered) as Extract<EventPayload, { kind: "question_answered" }>);
+    const stale = row.stale === null ? null : (JSON.parse(row.stale) as Extract<EventPayload, { kind: "routing_proposal_stale" }>);
+    return {
+      question_id: row.id,
+      proposal: JSON.parse(row.question_proposal) as RoutingRowProposal,
+      answer: answered?.answers[0]?.answer ?? null,
+      amendment: answered?.amendment ?? null,
+      comment: answered?.comment ?? null,
+      observed: stale && { changed: stale.changed, observed_event_id: stale.observed_event_id },
+    };
+  });
+}
+
+/** 提案 verb の op row(issue #918 / ADR 0150 決定1・2): 表の既存の1行の tier / effort の置換を、meta-review の付帯子の
+ *  question として立てる。pin はその行の全欄。同じ行への提案は重ねてよい —— 片方の承認が表を変えれば、もう片方は陳腐化の
+ *  hook で決着する。 */
+export function proposeRoutingChange(
+  db: Db,
+  metaReviewId: string,
+  input: { op: "row"; row: { provider: string; model: string }; change: unknown; rationale: string },
+  workerId: string,
+  now: Date,
+): { question_id: string } {
+  const change = parseRoutingRowChange(input.change);
+  const pin = loadExecutionSettingTable(db).find((row) => row.provider === input.row.provider && row.model === input.row.model);
+  if (!pin) throw new DomainError(`the execution-setting table has no row for ${input.row.provider} / ${input.row.model}`);
+  const proposal: RoutingRowProposal = { kind: "routing", op: "row", row: { provider: pin.provider, model: pin.model }, change, pin };
+  const title = `Change routing row: ${pin.provider} / ${pin.model}`;
+  const detail = [
+    `Execution-setting row ${pin.provider} / ${pin.model} (price ${pin.price_in} / ${pin.price_out} USD per MTok):`,
+    ...Object.entries(change).map(([field, to]) => `${field}: ${pin[field as keyof typeof change]} -> ${to}`),
+    "",
+    `Rationale: ${input.rationale}`,
+  ].join("\n");
+  const question = registerTask(
+    db,
+    {
+      type: "question",
+      title,
+      purpose: "The routing meta-review proposes changing one row of the execution-setting table. Approve applies it, with your amendment if you give one; reject leaves the table as is.",
+      completion_criteria: "a human answer is recorded",
+      parent_id: metaReviewId,
+      question: [{ title, detail, options: ["approve", "reject"], recommendation: "approve" }],
+      proposal,
+    },
+    now,
+    workerId,
+    "worker",
+  );
+  return { question_id: question.id };
 }

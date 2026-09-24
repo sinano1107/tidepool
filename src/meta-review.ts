@@ -22,13 +22,14 @@ export const MEMORY_META_REVIEW_VERBS = [
   "invalidate_memory",
   "propose_memory_change",
 ] as const;
-/** 主題 routing の読み口と、両主題が共有する Precedent の読み口(issue #917)。 */
+/** 主題 routing の読み口と提案 verb、両主題が共有する Precedent の読み口(issue #917・#918)。 */
 export const ROUTING_META_REVIEW_VERBS = [
   "list_routing_shadow",
   "list_allocations",
   "list_routing_cells",
   "read_routing_settings",
   "list_precedents",
+  "propose_routing_change",
 ] as const;
 
 /** 周期 meta-review の主題(ADR 0120 決定2・ADR 0150 決定7): 登録する task の欄(文面と review のティア)、due 判定が数える
@@ -52,13 +53,16 @@ export const META_REVIEW_SUBJECTS = {
     task: {
       title: "Routing meta-review",
       purpose:
-        "Periodic meta-review of how the board routes work to execution settings. Read the current table and settings first, " +
-        "then where the learner's recommendation diverged from what ran and how those episodes ended, then the allocation " +
-        "reviews split by tier source and agent (an overpowered verdict under an agent's default tier is not a registrant's " +
-        "declaration), and whether the judge ran on the worker's own model. Finish with cells first seen and rows humans changed " +
-        "since the previous meta-review. Record each judgment with log_decision, and base any case for promoting the learner " +
-        "on the outcomes of the diverged episodes.",
-      completion_criteria: "every routing reading since the previous meta-review is judged and each judgment is logged as a decision",
+        "Periodic meta-review of how the board routes work to execution settings. First read the current table and settings " +
+        "with the past routing proposals, their answers, amendments and comments (read_routing_settings), so you do not " +
+        "re-propose what was rejected or amended. Then read where the learner's recommendation diverged from what ran and how " +
+        "those episodes ended, then the allocation reviews split by tier source and agent (an overpowered verdict under an " +
+        "agent's default tier is not a registrant's declaration), and whether the judge ran on the worker's own model. Finish " +
+        "with cells first seen and rows humans changed since the previous meta-review. Record each judgment with log_decision. " +
+        "When the evidence says a row's tier or effort is wrong, propose replacing it with propose_routing_change. Base any " +
+        "case for promoting the learner on the outcomes of the diverged episodes.",
+      completion_criteria:
+        "every routing reading since the previous meta-review is judged, each judgment is logged as a decision, and each row change the evidence supports is proposed",
       review_tier: "frontier",
     },
     material: ["allocation_reviewed", "worker_exited", "execution_settings_changed"],

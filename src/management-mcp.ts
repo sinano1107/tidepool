@@ -780,14 +780,17 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
   server.registerTool(
     "answer_question",
     {
-      description: "Answer every item of a question task as the human.",
+      description:
+        "Answer every item of a question task as the human. amendment is accepted only with approve on a routing proposal: " +
+        "tier and/or effort to apply instead of the proposed values.",
       inputSchema: {
         task_id: z.string(),
         answers: z.array(z.string()),
         comment: z.string().optional(),
+        amendment: z.record(z.string(), z.unknown()).optional(),
       },
     },
-    async ({ task_id, answers, comment }) => {
+    async ({ task_id, answers, comment, amendment }) => {
       const task = getTask(deps.db, task_id);
       if (!task) return toolError("task not found");
       try {
@@ -810,6 +813,8 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
             comment,
             () => deps.clock.now(),
             "mcp",
+            false,
+            amendment,
           ),
         );
       } catch (err) {

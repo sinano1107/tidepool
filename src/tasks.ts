@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { Db } from "./db.js";
 import { DEFAULT_AUDITOR_NAME } from "./defaults.js";
 import { appendEvent, type EventOrigin, type EventPayload, getEvent, type TaskScopedPayload, taskDecisionLog } from "./events.js";
-import { PRIORITIES, type Priority, TIERS, type Tier } from "./execution-setting.js";
+import { type ExecutionSettingRow, PRIORITIES, type Priority, type RoutingRowChange, TIERS, type Tier } from "./execution-setting.js";
 import type { GitHubClient, Issue, IssueRef } from "./github.js";
 import type { MergeDial, RosterAgent } from "./registry.js";
 
@@ -151,9 +151,11 @@ export interface TaskContent {
   completion_criteria: string;
 }
 
-/** 提案 question の種別つき提案(ADR 0120 決定4)。pin = replaces / target の版と candidate の状態。`routing` / `registry` は
- *  後続(#549 / #583)が足す。 */
-export type QuestionProposal = {
+/** 提案 question の種別つき提案(ADR 0120 決定4 / ADR 0150 決定1)。`registry` は後続(spec #916 B)が足す。 */
+export type QuestionProposal = MemoryProposal | RoutingRowProposal;
+
+/** memory の提案。pin = replaces / target の版と candidate の状態。 */
+export type MemoryProposal = {
   kind: "memory";
   /** version は candidate なら null(版は承認 event の id)。invalidate では空。 */
   replaces: Array<{ id: number; version: number | null }>;
@@ -161,6 +163,15 @@ export type QuestionProposal = {
   | { op: "approve" | "consolidate"; candidate_id: number }
   | { op: "invalidate"; target: { id: number; version: number }; reason: "capability" | "environment" | "requirement_change" }
 );
+
+/** 表の1行の tier / effort を置き換える提案(issue #918)。pin = 提案時点のその行の全欄。 */
+export interface RoutingRowProposal {
+  kind: "routing";
+  op: "row";
+  row: Pick<ExecutionSettingRow, "provider" | "model">;
+  change: RoutingRowChange;
+  pin: ExecutionSettingRow;
+}
 
 interface PendingChildSpec extends TaskContent {
   review_by?: string[];
@@ -1216,6 +1227,9 @@ export function answerQuestion(
    *  when absent, rather than stored as null, so an unanswered comment
    *  leaves the event shape exactly as it was before this existed. */
   comment?: string,
+  /** routing の提案の approve に添えた修正値(ADR 0150 決定2)。検査は呼び手(submitAnswer)が済ませ、ここは comment と
+   *  同じく event に運ぶだけ。修正つきの回答は推奨どおりに数えない。 */
+  amendment?: RoutingRowChange,
   origin: EventOrigin = "webui",
 ): { question: Task; parentUnblocked: boolean; pickupResumed: boolean } {
   assertAnswerable(question, answers);
@@ -1237,10 +1251,11 @@ export function answerQuestion(
         kind: "question_answered",
         answers: answers.map((a, i) => ({
           answer: a,
-          recommendation_accepted: a === items[i]!.recommendation,
+          recommendation_accepted: a === items[i]!.recommendation && amendment === undefined,
         })),
         recommended_by: getRegistrant(db, question.id),
         ...(comment !== undefined && { comment }),
+        ...(amendment !== undefined && { amendment }),
       },
       at: now,
     });

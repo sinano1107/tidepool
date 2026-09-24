@@ -3,7 +3,7 @@ import type { Db } from "./db.js";
 import { appendEvent, type EventOrigin } from "./events.js";
 import { PROVIDER_VALUES, type Provider } from "./provider.js";
 import type { AgentDefinition } from "./registry.js";
-import { HUMAN_WORKER_ID, type Task } from "./tasks.js";
+import { DomainError, HUMAN_WORKER_ID, type RoutingRowProposal, settleQuestionAsObserved, type Task } from "./tasks.js";
 
 /** 必要品質のティア(CONTEXT.md「要求」)—— 廉価 / 主力 / 上位。**順序を持つ配列**
  *  であることがこの定数の内容で、advisor の pairing はこの並びの添字だけで判定する
@@ -384,10 +384,40 @@ export const executionSettingsChangeSchema = z.discriminatedUnion("setting", [
 ]);
 export type ExecutionSettingsChange = z.infer<typeof executionSettingsChangeSchema>;
 
+/** 行の提案の変更と、承認に添える修正値の形(ADR 0150 決定2): 動かせるのは分類と effort だけ。 */
+const routingRowChangeSchema = z
+  .object({ tier: z.enum(TIERS), effort: z.string().min(1) })
+  .partial()
+  .strict()
+  .refine((change) => Object.keys(change).length > 0, { message: "name at least one of tier / effort" });
+export type RoutingRowChange = z.infer<typeof routingRowChangeSchema>;
+
+/** 提案 verb の `change` と回答の `amendment` の検査。schema 違反は DomainError(扉は形を緩く受ける)。 */
+export function parseRoutingRowChange(input: unknown): RoutingRowChange {
+  const parsed = routingRowChangeSchema.safeParse(input);
+  if (!parsed.success) throw new DomainError(`a row change takes tier (${TIERS.join(" / ")}) and/or effort, nothing else: ${parsed.error.issues.map((i) => i.message).join("; ")}`);
+  return parsed.data;
+}
+
+/** pin の照合(ADR 0150 決定1): 提案が焼いた行と表の現在の行を全欄で比べ、崩れた欄の名前を返す(空 = pin は生きている)。
+ *  行が消えていれば null。 */
+export function routingPinChanges(proposal: RoutingRowProposal, table: ExecutionSettingTable): Array<"tier" | "effort" | "price_in" | "price_out"> | null {
+  const { pin } = proposal;
+  const current = table.find((row) => row.provider === pin.provider && row.model === pin.model);
+  if (!current) return null;
+  return (["tier", "effort", "price_in", "price_out"] as const).filter((field) => current[field] !== pin[field]);
+}
+
+/** 修正値の合成(ADR 0150 決定2): 適用する行 = pin の行に提案の変更、その上に人間の修正値を重ねたもの。 */
+export function composeRoutingRow(proposal: RoutingRowProposal, amendment?: RoutingRowChange): ExecutionSettingRow {
+  return { ...proposal.pin, ...proposal.change, ...amendment };
+}
+
 /** 変更を書き、操作イベントとして経路つきで残す(CONTEXT.md「管理MCP」)。task を
- *  持たない盤面イベントなので task_id は NULL、帰属は人間。 */
-export function applyExecutionSettingsChange(db: Db, change: ExecutionSettingsChange, origin: EventOrigin, at: Date): void {
-  db.transaction(() => {
+ *  持たない盤面イベントなので task_id は NULL、帰属は人間。表を書くのはこの1本なので、routing の提案の陳腐化の hook
+ *  (ADR 0150 決定1)もここに置く。返り値は execution_settings_changed の event id(何も変わらなければ null)。 */
+export function applyExecutionSettingsChange(db: Db, change: ExecutionSettingsChange, origin: EventOrigin, at: Date): number | null {
+  return db.transaction(() => {
     switch (change.setting) {
       case "row": {
         const { provider, tier, model, effort, price_in, price_out } = change.row;
@@ -400,7 +430,7 @@ export function applyExecutionSettingsChange(db: Db, change: ExecutionSettingsCh
       }
       case "delete_row":
         // 消す行が無ければ何も変わっていないので、操作イベントも残さない
-        if (db.prepare("DELETE FROM execution_settings WHERE provider = ? AND model = ?").run(change.provider, change.model).changes === 0) return;
+        if (db.prepare("DELETE FROM execution_settings WHERE provider = ? AND model = ?").run(change.provider, change.model).changes === 0) return null;
         break;
       default: {
         const column = change.setting;
@@ -412,13 +442,24 @@ export function applyExecutionSettingsChange(db: Db, change: ExecutionSettingsCh
         ).run(value);
       }
     }
-    appendEvent(db, {
+    const eventId = appendEvent(db, {
       taskId: null,
       workerId: HUMAN_WORKER_ID,
       origin,
       payload: { kind: "execution_settings_changed", ...change },
       at,
     });
+    // 回答中の question は answerQuestion が先に done にしているので、承認した提案が自分自身を決着させることは無い
+    const table = loadExecutionSettingTable(db);
+    const open = db
+      .prepare("SELECT id, question_proposal FROM tasks WHERE status = 'todo' AND json_extract(question_proposal, '$.kind') = 'routing'")
+      .all() as Array<{ id: string; question_proposal: string }>;
+    for (const { id, question_proposal } of open) {
+      const changed = routingPinChanges(JSON.parse(question_proposal) as RoutingRowProposal, table);
+      if (changed?.length === 0) continue;
+      settleQuestionAsObserved(db, id, { kind: "routing_proposal_stale", question_id: id, proposal_kind: "routing", changed, observed_event_id: eventId }, at);
+    }
+    return eventId;
   })();
 }
 

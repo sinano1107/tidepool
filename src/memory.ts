@@ -7,7 +7,7 @@ import { getDisplayLanguage } from "./display-language.js";
 import { appendEvent, type EventOrigin, type EventPayload, getEvent, listEvents } from "./events.js";
 import { metaReviewSubjectOf, paged, previousMetaReviewWatermark } from "./meta-review.js";
 import { entriesReadBefore, entriesSeenBefore, listEpisodes } from "./precedent.js";
-import { BOARD_WORKER_ID, DomainError, HUMAN_WORKER_ID, type QuestionProposal, registerTask, settleQuestionAsObserved, type Task } from "./tasks.js";
+import { BOARD_WORKER_ID, DomainError, HUMAN_WORKER_ID, type MemoryProposal, registerTask, settleQuestionAsObserved, type Task } from "./tasks.js";
 
 /** 無効化の理由コード(spec #586 A)。自由記述は持たない。置換と path の付け替えは後継 id
  *  必須、cause.ts の語彙の3つ(間違っていた / 陳腐化)と、人間が提案 question を reject した `rejected`(issue #620)。 */
@@ -364,7 +364,7 @@ function openProposalsPinning(db: Db, entryId: number): string[] {
 /** pin 検査(ADR 0120 決定4): candidate が未無効化の Behavior candidate(invalidate op は target の版が一致し未無効化)で、
  *  replaces の版が現在と一致し未無効化。
  *  approve も reject も、見せた状態に対してだけ適用する。 */
-function assertProposalFresh(db: Db, proposal: QuestionProposal): EntryRow {
+function assertProposalFresh(db: Db, proposal: MemoryProposal): EntryRow {
   const unchanged = ({ id, version }: { id: number; version: number | null }) => {
     const row = requireEntry(db, id);
     return row.version === version && row.invalidation_reason === null;
@@ -385,7 +385,7 @@ function markApproved(db: Db, id: number, version: number): void {
 /** Behavior 承認の export(spec #615 A / issue #620): pin 検査(assertProposalFresh)→ memory_entry_approved(版 = この event の id)→ replaces を candidate を後継とする superseded で
  *  無効化、を1 transaction。承認は人間の回答なので人間名義。返り値は memory_entry_approved の event id。
  *  invalidate op(issue #621)は target を理由コードで後継なしに無効化し、その memory_entry_invalidated の event id を返す。 */
-export function approveMemoryProposal(db: Db, proposal: QuestionProposal, questionId: string, origin: EventOrigin, at: Date): number {
+export function approveMemoryProposal(db: Db, proposal: MemoryProposal, questionId: string, origin: EventOrigin, at: Date): number {
   return db.transaction(() => {
     const candidate = assertProposalFresh(db, proposal);
     if (proposal.op === "invalidate") {
@@ -408,7 +408,7 @@ export function approveMemoryProposal(db: Db, proposal: QuestionProposal, questi
 
 /** 提案の reject(spec #615 F): 同じ pin 検査の後、approve / consolidate は candidate だけを `rejected` で無効化し
  *  (consolidate の replaces は残る)、invalidate は何もしない。 */
-export function rejectMemoryProposal(db: Db, proposal: QuestionProposal, origin: EventOrigin, at: Date): void {
+export function rejectMemoryProposal(db: Db, proposal: MemoryProposal, origin: EventOrigin, at: Date): void {
   assertProposalFresh(db, proposal);
   if (proposal.op !== "invalidate") invalidateMemoryEntry(db, { entry_id: proposal.candidate_id, reason: "rejected" }, HUMAN_WORKER_ID, origin, at);
 }
@@ -442,7 +442,7 @@ export function proposeMemoryChange(
     replaces?: number[];
     based_on_decision?: number;
     target_id?: number;
-    reason?: Extract<QuestionProposal, { op: "invalidate" }>["reason"];
+    reason?: Extract<MemoryProposal, { op: "invalidate" }>["reason"];
   },
   workerId: string,
   now: Date,
@@ -455,7 +455,7 @@ export function proposeMemoryChange(
   const stray = Object.entries(PROPOSAL_FIELDS).flatMap(([op, fields]) => (op === input.op ? [] : fields.filter((f) => input[f] !== undefined)));
   if (stray.length > 0) throw new DomainError(`op ${input.op} does not take ${stray.join(", ")}`);
   return db.transaction(() => {
-    let proposal: QuestionProposal;
+    let proposal: MemoryProposal;
     let heading: string[];
     let shown: EntryRow;
     if (input.op === "consolidate") {
