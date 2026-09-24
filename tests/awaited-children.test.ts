@@ -124,3 +124,40 @@ it("answering a question returns the parent to the queue head when only attached
   expect(nextSlotTask(db)?.id).toBe(parent.id);
   db.close();
 });
+
+it("answering a proposal question does not return its parent to the queue head(issue #938)", () => {
+  const db = openDb(":memory:");
+  const other = registerTask(
+    db,
+    { type: "work", title: "other", purpose: "p", completion_criteria: "c" },
+    new Date(0),
+  );
+  const parent = registerTask(
+    db,
+    { type: "work", title: "parent", purpose: "p", completion_criteria: "c" },
+    new Date(1),
+  );
+  const question = registerTask(
+    db,
+    {
+      type: "question",
+      title: "approve?",
+      purpose: "p",
+      completion_criteria: "answered",
+      parent_id: parent.id,
+      question: [{ title: "approve?", options: ["approve", "reject"], recommendation: "approve" }],
+      proposal: { kind: "memory", op: "approve", candidate_id: 1, replaces: [] },
+    },
+    new Date(2),
+  );
+  // 提案 question は付帯子(ADR 0049 / ADR 0120 決定3)なので親を塞がない — answerQuestion がそれでも動かさないことを見るには、親が他の条件では unblock 対象になる状態が要る
+  expect(presentTask(db, parent).status).toBe("todo");
+
+  const answered = answerQuestion(db, question, ["approve"], new Date(3));
+
+  expect(answered.parentUnblocked).toBe(false);
+  expect(listQueue(db).findIndex((task) => task.id === parent.id)).toBeGreaterThan(
+    listQueue(db).findIndex((task) => task.id === other.id),
+  );
+  db.close();
+});

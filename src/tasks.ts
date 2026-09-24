@@ -1316,8 +1316,9 @@ export function answerQuestion(
           });
         }
       }
-      // 提案 question の親(meta-review)はこの回答を待っていない(付帯子)ので先頭へ戻さない
-      unblockTarget = question.parent_id && question.question_proposal === null ? getTask(db, question.parent_id) : undefined;
+      // awaitedChildSql がこの question を付帯子と判定すれば親はこの回答を待っていないので先頭へ戻さない(ADR 0049 / ADR 0120 決定3)
+      const blockedParentId = questionBlocking(db, question.id);
+      unblockTarget = blockedParentId ? getTask(db, blockedParentId) : undefined;
     }
 
     if (
