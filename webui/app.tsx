@@ -206,7 +206,7 @@ function toQuestionCardShape(
   const isBoard = registrant === 'tidepool';
   return {
     // 付帯子の提案 question は親を塞がない — 塞ぐ親は盤面の `blocking` が答える(issue #935)
-    id: q.id, parent: q.blocking,
+    id: q.id, blocking: q.blocking,
     agent: registrant,
     agentIcon: isBoard ? undefined : icons[registrant],
     board: isBoard,
@@ -1043,7 +1043,7 @@ function App() {
     for (const [qid, a] of Object.entries(answers)) {
       if (!a) continue;
       const q = data!.questions.find((x) => x.id === qid);
-      if (q && q.parent) markFront(q.parent);
+      if (q && q.blocking) markFront(q.blocking);
     }
     let cursorNote = '';
     try {
@@ -1267,7 +1267,7 @@ function App() {
         questionId={deepLinkQuestionId}
         onTranslate={onTranslateProp}
         onDone={(answeredTask) => {
-          if (answeredTask && answeredTask.parent_id) markFront(answeredTask.parent_id);
+          if (answeredTask?.blocking) markFront(answeredTask.blocking);
           history.replaceState(null, '', location.pathname);
           setDeepLinkQuestionId(null);
           refreshFull();
