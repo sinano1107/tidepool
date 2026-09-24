@@ -1316,8 +1316,7 @@ export function answerQuestion(
           });
         }
       }
-      // awaitedChildSql がこの question を付帯子と判定すれば親はこの回答を待っていない
-      // ので先頭へ戻さない(ADR 0049 / ADR 0120 決定3)
+      // awaitedChildSql がこの question を付帯子と判定すれば親はこの回答を待っていないので先頭へ戻さない(ADR 0049 / ADR 0120 決定3)
       const blockedParentId = questionBlocking(db, question.id);
       unblockTarget = blockedParentId ? getTask(db, blockedParentId) : undefined;
     }

@@ -150,8 +150,7 @@ it("answering a proposal question does not return its parent to the queue head(i
     },
     new Date(2),
   );
-  // 提案 question は付帯子(ADR 0049 / ADR 0120 決定3)なので親を塞がない — この answerQuestion が
-  // それでも動かしてしまわないことを見るには、親が他の条件では unblock 対象になる状態が要る
+  // 提案 question は付帯子(ADR 0049 / ADR 0120 決定3)なので親を塞がない — answerQuestion がそれでも動かさないことを見るには、親が他の条件では unblock 対象になる状態が要る
   expect(presentTask(db, parent).status).toBe("todo");
 
   const answered = answerQuestion(db, question, ["approve"], new Date(3));
