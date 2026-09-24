@@ -469,7 +469,6 @@ export interface EventRow {
 export function appendEvent(
   db: Db,
   event: { workerId: string; origin: EventOrigin; at: Date } & (
-    /** null = 盤面スコープ(`BOARD_SCOPED_KINDS`)。 */
     | { taskId: null; payload: Extract<EventPayload, { kind: BoardScopedKind }> }
     | { taskId: string; payload: TaskScopedPayload }
   ),
@@ -491,10 +490,11 @@ export function appendEvent(
 
 /** The decision log is not its own entity: it is the events table narrowed to
  *  the kinds a human skims (issue #5). Kinds join this list; no table is added. */
-export const HUMAN_FACING_KINDS = ["decision_logged", "task_completed", "premise_breached"] as const;
-// listLog の inner join の前提: HUMAN_FACING_KINDS はどれも盤面スコープでない。重なると型検査が落ちる(issue #927)。
-type Disjoint<T extends never> = T;
-type HumanFacingKindsAreTaskScoped = Disjoint<Extract<(typeof HUMAN_FACING_KINDS)[number], BoardScopedKind>>;
+// satisfies は listLog の inner join の前提(どれも盤面スコープでない)を型で断言する(issue #927)。
+export const HUMAN_FACING_KINDS = ["decision_logged", "task_completed", "premise_breached"] as const satisfies readonly Exclude<
+  EventKind,
+  BoardScopedKind
+>[];
 
 /** A log entry annotated with its resolved workspace name (issue #44): the
  *  event's own task's `workspace`, or the board's default when the task
