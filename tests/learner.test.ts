@@ -4,7 +4,6 @@ import type { ExecutionSetting } from "../src/execution-setting.js";
 import { aggregateCells, episodeOutcome, type LearnerEpisode, recommend } from "../src/learner.js";
 import { listRoutingShadow } from "../src/routing-review.js";
 import {
-  api,
   bootTidepool,
   completeIntegrationReviews,
   completeMetaReviews,
