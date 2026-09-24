@@ -381,14 +381,7 @@ export type EventPayload =
   | { kind: "memory_entry_created"; entry: MemoryEntryFields }
   // question_id / activity = meta-review の産物の印(ADR 0151 決定3)。回答が刻んだ無効化は question_id、書き込みの一部として
   // 刻んだ無効化は書き手の activity。人間の直接の無効化はどちらも持たない。
-  | {
-      kind: "memory_entry_invalidated";
-      entry_id: number;
-      reason: InvalidationReason;
-      successor_id: number | null;
-      question_id?: string;
-      activity?: MemoryEntryFields["author"]["activity"];
-    }
+  | { kind: "memory_entry_invalidated"; entry_id: number; reason: InvalidationReason; successor_id: number | null; question_id?: string; activity?: MemoryEntryFields["author"]["activity"] }
   // ADR 0120 決定3・4 / issue #620: 提案 question の approve で candidate が approved になった(版 = この event の id)。
   // replaced = pin した置換対象の id と版(後続の superseded 無効化が同じ transaction で続く)。
   | { kind: "memory_entry_approved"; entry_id: number; question_id: string; replaced: MemoryProposal["replaces"] }

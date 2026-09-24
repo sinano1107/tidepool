@@ -412,9 +412,7 @@ export function approveMemoryProposal(db: Db, proposal: MemoryProposal, question
  *  (consolidate の replaces は残る)、invalidate は何もしない。 */
 export function rejectMemoryProposal(db: Db, proposal: MemoryProposal, questionId: string, origin: EventOrigin, at: Date): void {
   assertProposalFresh(db, proposal);
-  if (proposal.op !== "invalidate") {
-    invalidateMemoryEntry(db, { entry_id: proposal.candidate_id, reason: "rejected" }, HUMAN_WORKER_ID, origin, at, { question_id: questionId });
-  }
+  if (proposal.op !== "invalidate") invalidateMemoryEntry(db, { entry_id: proposal.candidate_id, reason: "rejected" }, HUMAN_WORKER_ID, origin, at, { question_id: questionId });
 }
 
 function requireBehavior(db: Db, id: number, state?: MemoryEntryFields["state"]): EntryRow {
