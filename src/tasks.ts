@@ -2219,12 +2219,17 @@ function earlyIntegrationReturnSql(parentRef: string): string {
 }
 
 /** Just the child-side half of that rule (ADR 0049): "is this row a child its
- *  parent waits for?". `listYourTasks` applies it to the row itself to name the
+ *  parent waits for?". `blockingSql` applies it to the row itself to name the
  *  parent it is holding up, so the predicate has one home rather than a copy
  *  per read口. `rowRef` is the SQL alias of the child row. */
 function awaitedChildSql(rowRef: string): string {
   // 提案を運ぶ question は付帯子(ADR 0120 決定3): 適用は盤面が行うので親は見届けない
   return `(${rowRef}.based_on_decision IS NOT NULL OR (${rowRef}.type = 'question' AND ${rowRef}.question_proposal IS NULL))`;
+}
+
+/** The parent this row is holding up, or NULL — `listYourTasks` and `questionBlocking` share it. */
+function blockingSql(rowRef: string): string {
+  return `CASE WHEN ${awaitedChildSql(rowRef)} THEN ${rowRef}.parent_id END`;
 }
 
 /** あるタスクを根とする子孫全体(根自身を含む)の CTE。`rootRef` は根の id を持つ SQL 式
@@ -2420,6 +2425,15 @@ export function approvalAnnotation(
   return { raises_parent_risk: raisesParentRisk(pending, getTask(db, task.parent_id!)!) };
 }
 
+/** question が塞いでいる親の id、塞がなければ null(issue #935)— `listYourTasks` の
+ *  `blocking` と同じく awaitedChildSql を行自身に当てる。付帯子の提案 question は null。 */
+export function questionBlocking(db: Db, taskId: string): string | null {
+  return db
+    .prepare(`SELECT ${blockingSql("tasks")} FROM tasks WHERE id = ?`)
+    .pluck()
+    .get(taskId) as string | null;
+}
+
 export function presentTask(db: Db, task: Task): BoardTask {
   const { accepted } = db
     .prepare(`SELECT ${acceptedSql("tasks.id")} AS accepted FROM tasks WHERE id = ?`)
@@ -2587,7 +2601,7 @@ export function listYourTasks(db: Db): YourTask[] {
   const rows = db
     .prepare(
       `SELECT tasks.*,
-         CASE WHEN ${awaitedChildSql("tasks")} THEN tasks.parent_id END AS blocking
+         ${blockingSql("tasks")} AS blocking
        FROM tasks WHERE assignee = @humanWorkerId
          AND status NOT IN ('done', 'cancelled') ORDER BY sort_key`,
     )

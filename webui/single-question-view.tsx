@@ -28,7 +28,7 @@ function TpSingleQuestion({ q, onAnswer, onClose, onTranslate }: TpSingleQuestio
       <h1 style={{ fontFamily: 'var(--font-display)', fontStyle: 'italic', fontSize: 'var(--text-2xl)', fontWeight: 400, color: 'var(--tide-5)', margin: '0 0 16px', lineHeight: 1.15 }}>{heading}</h1>
       <TpQuestionCard q={q} answer={null} onAnswer={onAnswer} onTranslate={onTranslate} />
       <p style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', textAlign: 'center', marginTop: 12 }}>
-        {q.parent ? `answering sends ${q.parent} to the front · ` : ''}applies immediately · immediate poll if slot free · no transaction needed
+        {q.blocking ? `answering sends ${q.blocking} to the front · ` : ''}applies immediately · immediate poll if slot free · no transaction needed
       </p>
     </div>
   );

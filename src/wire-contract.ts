@@ -113,10 +113,12 @@ export interface WireContract {
     BoardTask & {
       landing?: { blocked_by: "attached_children" | "objections" | null } | null;
       approval?: ApprovalAnnotation | null;
+      blocking?: string | null;
     }
   >;
   "GET /api/tasks/:id": BoardTask & {
     approval?: ApprovalAnnotation | null;
+    blocking?: string | null;
     completion_criteria: string;
     workspace: string | null;
     review_flag: number;

@@ -14,7 +14,7 @@ interface TpQuestionItem {
 }
 interface TpQuestion {
   id: string;
-  parent?: string | null;
+  blocking?: string | null;
   agent: string;
   agentIcon?: string;
   board: boolean;
@@ -240,7 +240,7 @@ function TpQuestionCard({ q, answer, onAnswer, locked = false, onTranslate }: {
         <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>{q.id}</span>
         <AgentChip name={q.agent} icon={q.agentIcon} board={q.board} size="sm" />
         <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-secondary)' }}>{q.agent}</span>
-        {q.parent && <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', marginLeft: 'auto' }}>blocks {q.parent}</span>}
+        {q.blocking && <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', marginLeft: 'auto' }}>blocks {q.blocking}</span>}
       </div>
       {q.kind === 'approval' && (
         <span style={{ display: 'inline-block', fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--sun-4)', background: 'var(--sun-1)', borderRadius: 'var(--radius-full)', padding: '2px 10px', marginBottom: 6 }}>

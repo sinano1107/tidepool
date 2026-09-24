@@ -196,7 +196,7 @@ function liveTitle(t: Pick<import('../src/wire-contract').QueueTask, 'title' | '
 // Maps one raw question task into TpQuestionCard's shape — shared by the board's
 // question list (mapData) and the push deep-link's single-question view.
 function toQuestionCardShape(
-  q: Pick<WireContract['GET /api/tasks/:id'], 'id' | 'parent_id' | 'registrant' | 'purpose' | 'question_items' | 'approval' | 'question_proposal'>,
+  q: Pick<WireContract['GET /api/tasks/:id'], 'id' | 'parent_id' | 'blocking' | 'registrant' | 'purpose' | 'question_items' | 'approval' | 'question_proposal'>,
   icons: AppIcons,
 ): TpQuestion {
   // who issued the question — the board itself (issue #261) or an agent
@@ -205,7 +205,8 @@ function toQuestionCardShape(
   const registrant = q.registrant!;
   const isBoard = registrant === 'tidepool';
   return {
-    id: q.id, parent: q.parent_id,
+    // 付帯子の提案 question は親を塞がない — 塞ぐ親は盤面の `blocking` が答える(issue #935)
+    id: q.id, blocking: q.blocking,
     agent: registrant,
     agentIcon: isBoard ? undefined : icons[registrant],
     board: isBoard,
@@ -1042,7 +1043,7 @@ function App() {
     for (const [qid, a] of Object.entries(answers)) {
       if (!a) continue;
       const q = data!.questions.find((x) => x.id === qid);
-      if (q && q.parent) markFront(q.parent);
+      if (q && q.blocking) markFront(q.blocking);
     }
     let cursorNote = '';
     try {
@@ -1266,7 +1267,7 @@ function App() {
         questionId={deepLinkQuestionId}
         onTranslate={onTranslateProp}
         onDone={(answeredTask) => {
-          if (answeredTask && answeredTask.parent_id) markFront(answeredTask.parent_id);
+          if (answeredTask?.blocking) markFront(answeredTask.blocking);
           history.replaceState(null, '', location.pathname);
           setDeepLinkQuestionId(null);
           refreshFull();
