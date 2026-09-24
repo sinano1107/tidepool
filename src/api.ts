@@ -91,7 +91,6 @@ import {
 import { clearSpendDown, getSpendDown, isKnownSpendDownTarget, setSpendDown } from "./spend-down.js";
 import {
   approvalAnnotation,
-  questionBlocking,
   type BoardTask,
   countUnsettledTasksReferencing,
   DEFAULT_AUDITOR_NAME,
@@ -106,6 +105,7 @@ import {
   moveTask,
   nextSlotTask,
   presentTask,
+  questionBlocking,
   type Task,
 } from "./tasks.js";
 import { sessionInTeardown } from "./teardown.js";
