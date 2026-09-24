@@ -94,6 +94,8 @@ it("approve で表の行が提案の値になり、推奨どおりに数えら�
     expect((await answer(questionId, { answers: ["approve"] })).status).toBe(200);
 
     expect(await row("opus")).toEqual({ ...OPUS, tier: "frontier" });
+    // 適用は回答の印を持ち、meta-review の材料に数えられない(ADR 0151)
+    expect(JSON.parse((t.db.prepare("SELECT payload FROM events WHERE id = ?").get(lastSettingsChange()) as { payload: string }).payload)).toMatchObject({ question_id: questionId });
     expect((await events(questionId)).find((e) => e.kind === "question_answered").payload).toEqual(
       expect.objectContaining({ answers: [{ answer: "approve", recommendation_accepted: true }] }),
     );

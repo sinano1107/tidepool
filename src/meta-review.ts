@@ -136,7 +136,8 @@ export function changeMetaReviewSettings(db: Db, change: z.infer<typeof metaRevi
 }
 
 /** scheduler の poll が毎回呼ぶ: due な主題の meta-review を登録する。due = 前回登録から周期が経ち、
- *  同主題の open な task・提案 question が無く、前回の watermark より後に主題の材料がある(前回が無ければ周期は満たす)。 */
+ *  同主題の open な task・提案 question が無く、前回の watermark より後に主題の材料がある(前回が無ければ周期は満たす)。材料は meta-review 自身の産物 —— 提案
+ *  question への回答が刻んだものと直接書き込み —— を数えない(ADR 0151)。 */
 export function registerDueMetaReviews(db: Db, now: Date): void {
   const periodMs = readMetaReviewSettings(db).period_days * 24 * 60 * 60 * 1000;
   for (const subject of Object.keys(META_REVIEW_SUBJECTS) as MetaReviewSubject[]) {
@@ -158,8 +159,13 @@ export function registerDueMetaReviews(db: Db, now: Date): void {
       )
       .get({ subject });
     if (open) continue;
+    // 同じ主題の meta-review 自身の産物(回答が刻んだ question_id、review の直接書き込みの activity)は材料でない(ADR 0151)
     const found = db
-      .prepare(`SELECT 1 FROM events WHERE id > ? AND kind IN (${material.map(() => "?").join(", ")})`)
+      .prepare(
+        `SELECT 1 FROM events WHERE id > ? AND kind IN (${material.map(() => "?").join(", ")})
+           AND json_extract(payload, '$.question_id') IS NULL
+           AND COALESCE(json_extract(payload, '$.activity'), json_extract(payload, '$.entry.author.activity')) IS NOT 'meta_review'`,
+      )
       .get(last?.watermark ?? 0, ...material);
     if (found) registerMetaReview(db, subject, now);
   }

@@ -174,3 +174,13 @@ it("list_routing_cells の新セルは終わった session で初めて観測さ
     truncated: false,
   });
 });
+
+it("list_routing_cells の人間が変えた行は settings タブ / 管理MCP の直接編集だけで、提案 question への approve の適用は含まない(ADR 0151)", () => {
+  const { db, routingReview } = board();
+  const row = { provider: "anthropic" as const, tier: "standard" as const, model: "claude-opus-4-1", effort: "high", price_in: 5, price_out: 25 };
+  applyExecutionSettingsChange(db, { setting: "row", row: { ...row, tier: "frontier" } }, "webui", at, "question-1");
+  applyExecutionSettingsChange(db, { setting: "row", row: { ...row, effort: "max" } }, "mcp", at);
+  const reader = routingReview();
+
+  expect(listRoutingCells(db, reader, { since_watermark: 0 }).rows).toMatchObject([{ origin: "mcp", row: { effort: "max" } }]);
+});

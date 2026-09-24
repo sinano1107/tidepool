@@ -516,7 +516,7 @@ it("invalidate op の承認は target を理由コードのまま後継なしで
 
   const eventId = approveMemoryProposal(db, { kind: "memory", op: "invalidate", target: { id: target, version }, reason: "environment", replaces: [] }, "question-2", "webui", at);
 
-  expect(getEvent(db, eventId)?.payload).toEqual({ kind: "memory_entry_invalidated", entry_id: target, reason: "environment", successor_id: null });
+  expect(getEvent(db, eventId)?.payload).toEqual({ kind: "memory_entry_invalidated", entry_id: target, reason: "environment", successor_id: null, question_id: "question-2" });
   expect(approvedMemoryEntries(db)).toEqual([]);
 });
 
@@ -569,10 +569,10 @@ it("reject は consolidate の新 candidate だけを後継なしの rejected �
   const merged = candidate(db, "merged wording");
   const before = listMemoryEntries(db, {});
 
-  rejectMemoryProposal(db, { kind: "memory", op: "invalidate", target: { id: old, version }, reason: "environment", replaces: [] }, "webui", at);
+  rejectMemoryProposal(db, { kind: "memory", op: "invalidate", target: { id: old, version }, reason: "environment", replaces: [] }, "question-1", "webui", at);
   expect(listMemoryEntries(db, {})).toEqual(before);
 
-  rejectMemoryProposal(db, { kind: "memory", op: "consolidate", candidate_id: merged, replaces: [{ id: old, version }] }, "webui", at);
+  rejectMemoryProposal(db, { kind: "memory", op: "consolidate", candidate_id: merged, replaces: [{ id: old, version }] }, "question-2", "webui", at);
   expect(listMemoryEntries(db, { state: "invalidated" })).toMatchObject([{ id: merged, invalidation_reason: "rejected", successor_id: null }]);
   expect(approvedMemoryEntries(db).map((e) => e.id)).toEqual([old]);
 });

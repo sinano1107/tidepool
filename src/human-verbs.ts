@@ -841,9 +841,9 @@ export async function submitAnswer(
     );
     if (proposal?.kind === "memory") {
       if (answers[0] === "approve") approveMemoryProposal(deps.db, proposal, task.id, origin, now());
-      else rejectMemoryProposal(deps.db, proposal, origin, now());
+      else rejectMemoryProposal(deps.db, proposal, task.id, origin, now());
     } else if (proposal?.kind === "routing" && answers[0] === "approve") {
-      applyExecutionSettingsChange(deps.db, { setting: "row", row: composeRoutingRow(proposal, amended) }, origin, now());
+      applyExecutionSettingsChange(deps.db, { setting: "row", row: composeRoutingRow(proposal, amended) }, origin, now(), task.id);
     }
     return answered;
   })();

@@ -171,7 +171,7 @@ export function defineMemoryBranch(
     const { supersedes, ...fields } = input;
     const id = createEntry(db, { ...fields, title: fields.text, kind: "definition", state: "approved", original: fields.original ?? null, addressee: null }, origin, at);
     if (supersedes !== undefined) {
-      invalidateMemoryEntry(db, { entry_id: supersedes, reason: "superseded", successor_id: id }, fields.author.name, origin, at);
+      invalidateMemoryEntry(db, { entry_id: supersedes, reason: "superseded", successor_id: id }, fields.author.name, origin, at, { activity: fields.author.activity });
     }
     return { entry_id: id, event_id: id };
   })();
@@ -191,7 +191,7 @@ export function foldMemory(
   return db.transaction(() => {
     for (const id of replaces) requireKnowledge(db, id);
     const created = recordKnowledge(db, { ...fields, source: { event_id: based_on_decision } }, origin, at);
-    for (const id of replaces) invalidateMemoryEntry(db, { entry_id: id, reason: "superseded", successor_id: created.entry_id }, fields.author.name, origin, at);
+    for (const id of replaces) invalidateMemoryEntry(db, { entry_id: id, reason: "superseded", successor_id: created.entry_id }, fields.author.name, origin, at, { activity: fields.author.activity });
     return created;
   })();
 }
@@ -208,7 +208,7 @@ export function moveMemory(
     const old = rowToEntry(requireKnowledge(db, input.entry_id));
     const source = old.source.kind === "commit" ? { commit: old.source.ref } : { event_id: old.source.ref };
     const created = recordKnowledge(db, { scope: input.scope, path: input.path, title: old.title, text: old.text, original: old.original, source, author: input.author }, origin, at);
-    invalidateMemoryEntry(db, { entry_id: old.id, reason: "path_moved", successor_id: created.entry_id }, input.author.name, origin, at);
+    invalidateMemoryEntry(db, { entry_id: old.id, reason: "path_moved", successor_id: created.entry_id }, input.author.name, origin, at, { activity: input.author.activity });
     return created;
   })();
 }
@@ -290,6 +290,7 @@ function requireEntry(db: Db, id: number): EntryRow {
 }
 
 /** 無効化(削除は無い)。人間 / meta-review の判断で、エントリは approved 集合から外れる。
+ *  mark は meta-review の産物の印(ADR 0151 決定3): 回答が刻む無効化は question_id、書き込みが刻む無効化は書き手の activity。
  *  返り値は memory_entry_invalidated の event id。 */
 export function invalidateMemoryEntry(
   db: Db,
@@ -297,6 +298,7 @@ export function invalidateMemoryEntry(
   workerId: string,
   origin: EventOrigin,
   at: Date,
+  mark?: { question_id: string } | { activity: MemoryEntryFields["author"]["activity"] },
 ): number {
   const { entry_id, reason, successor_id } = input;
   if (!INVALIDATION_REASONS.includes(reason)) throw new DomainError(`unknown invalidation reason: ${reason}`);
@@ -320,7 +322,7 @@ export function invalidateMemoryEntry(
       taskId: null,
       workerId,
       origin,
-      payload: { kind: "memory_entry_invalidated", entry_id, reason, successor_id: successor_id ?? null },
+      payload: { kind: "memory_entry_invalidated", entry_id, reason, successor_id: successor_id ?? null, ...mark },
       at,
     });
     // pin の陳腐化(ADR 0120 決定4): この entry を pin する open な提案 question を観測で決着させる。回答中の question は
@@ -344,7 +346,7 @@ export function invalidateMemoryByMetaReview(
   if (input.reason === "path_moved") throw new DomainError("path_moved comes only from move_memory, which copies the text itself");
   const row = requireEntry(db, input.entry_id);
   if (row.kind === "behavior" && row.state === "approved") throw new DomainError(`memory entry ${row.id} is an approved behavior: propose its invalidation instead`);
-  return invalidateMemoryEntry(db, input, workerId, origin, at);
+  return invalidateMemoryEntry(db, input, workerId, origin, at, { activity: "meta_review" });
 }
 
 /** この entry を pin する open な提案 question の id(陳腐化の hook と、同じ entry への二重提案の拒否が読む)。 */
@@ -389,7 +391,7 @@ export function approveMemoryProposal(db: Db, proposal: MemoryProposal, question
   return db.transaction(() => {
     const candidate = assertProposalFresh(db, proposal);
     if (proposal.op === "invalidate") {
-      return invalidateMemoryEntry(db, { entry_id: candidate.id, reason: proposal.reason }, HUMAN_WORKER_ID, origin, at);
+      return invalidateMemoryEntry(db, { entry_id: candidate.id, reason: proposal.reason }, HUMAN_WORKER_ID, origin, at, { question_id: questionId });
     }
     const eventId = appendEvent(db, {
       taskId: null,
@@ -400,7 +402,7 @@ export function approveMemoryProposal(db: Db, proposal: MemoryProposal, question
     });
     markApproved(db, candidate.id, eventId);
     for (const { id } of proposal.replaces) {
-      invalidateMemoryEntry(db, { entry_id: id, reason: "superseded", successor_id: candidate.id }, HUMAN_WORKER_ID, origin, at);
+      invalidateMemoryEntry(db, { entry_id: id, reason: "superseded", successor_id: candidate.id }, HUMAN_WORKER_ID, origin, at, { question_id: questionId });
     }
     return eventId;
   })();
@@ -408,9 +410,9 @@ export function approveMemoryProposal(db: Db, proposal: MemoryProposal, question
 
 /** 提案の reject(spec #615 F): 同じ pin 検査の後、approve / consolidate は candidate だけを `rejected` で無効化し
  *  (consolidate の replaces は残る)、invalidate は何もしない。 */
-export function rejectMemoryProposal(db: Db, proposal: MemoryProposal, origin: EventOrigin, at: Date): void {
+export function rejectMemoryProposal(db: Db, proposal: MemoryProposal, questionId: string, origin: EventOrigin, at: Date): void {
   assertProposalFresh(db, proposal);
-  if (proposal.op !== "invalidate") invalidateMemoryEntry(db, { entry_id: proposal.candidate_id, reason: "rejected" }, HUMAN_WORKER_ID, origin, at);
+  if (proposal.op !== "invalidate") invalidateMemoryEntry(db, { entry_id: proposal.candidate_id, reason: "rejected" }, HUMAN_WORKER_ID, origin, at, { question_id: questionId });
 }
 
 function requireBehavior(db: Db, id: number, state?: MemoryEntryFields["state"]): EntryRow {
