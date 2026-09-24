@@ -405,13 +405,23 @@ const opusRow = { provider: "anthropic", tier: "standard", model: "opus", effort
 const rowProposal = { kind: "routing", op: "row", row: { provider: "anthropic", model: "opus" }, change: { tier: "frontier" }, pin: opusRow } as const;
 
 it("pin の照合は行の全欄の一致で、崩れた欄の名前を返す —— 行が消えていれば null", () => {
-  expect(routingPinChanges(rowProposal, SEED_EXECUTION_SETTINGS)).toEqual([]);
+  expect(routingPinChanges(rowProposal, { table: SEED_EXECUTION_SETTINGS, learnerPromoted: false })).toEqual([]);
   const edited = SEED_EXECUTION_SETTINGS.map((row) => (row.model === "opus" ? { ...row, effort: "max", price_out: 30 } : row));
-  expect(routingPinChanges(rowProposal, edited)).toEqual(["effort", "price_out"]);
+  expect(routingPinChanges(rowProposal, { table: edited, learnerPromoted: false })).toEqual(["effort", "price_out"]);
   // 別の行の編集は pin に触れない
   const other = SEED_EXECUTION_SETTINGS.map((row) => (row.model === "sonnet" ? { ...row, tier: "standard" as const } : row));
-  expect(routingPinChanges(rowProposal, other)).toEqual([]);
-  expect(routingPinChanges(rowProposal, SEED_EXECUTION_SETTINGS.filter((row) => row.model !== "opus"))).toBeNull();
+  expect(routingPinChanges(rowProposal, { table: other, learnerPromoted: false })).toEqual([]);
+  expect(routingPinChanges(rowProposal, { table: SEED_EXECUTION_SETTINGS.filter((row) => row.model !== "opus"), learnerPromoted: false })).toBeNull();
+});
+
+it("昇格 / 降格の提案の pin はフラグの現在値 —— フラグが変われば learner_promoted が崩れ、表の編集では崩れない", () => {
+  const settings = (learnerPromoted: boolean, t: ExecutionSettingTable = SEED_EXECUTION_SETTINGS) => ({ table: t, learnerPromoted });
+  const promote = { kind: "routing", op: "promote", pin: { promoted: false } } as const;
+  const demote = { kind: "routing", op: "demote", pin: { promoted: true } } as const;
+  expect(routingPinChanges(promote, settings(false, []))).toEqual([]);
+  expect(routingPinChanges(promote, settings(true))).toEqual(["learner_promoted"]);
+  expect(routingPinChanges(demote, settings(true))).toEqual([]);
+  expect(routingPinChanges(demote, settings(false))).toEqual(["learner_promoted"]);
 });
 
 it("適用する行は pin の行に提案の変更、その上に修正値を重ねたもの", () => {

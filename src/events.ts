@@ -217,7 +217,7 @@ export type EventPayload =
        *  `provider` は Provider の出所(ADR 0110 決定5 / issue #544、ADR 0114 決定4):
        *  `"only"` は agent が entry を1つしか宣言していなかった、`"rank"` は残った
        *  候補から Provider 順位で選んだ、`"cost"` は task の優先順位が cost で価格が
-       *  選んだ。「温存中の anthropic を避けて openai で走った」が事後に読めるのは
+       *  選んだ、`"learner"` は昇格した学習器が選んだ(ADR 0150 決定3)。「温存中の anthropic を避けて openai で走った」が事後に読めるのは
        *  この1値による。 */
       source: { tier: TierSource; provider: ProviderSource };
       /** ADR 0098: the Harness/version actually selected for this session. */

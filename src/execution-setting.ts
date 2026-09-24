@@ -3,7 +3,7 @@ import type { Db } from "./db.js";
 import { appendEvent, type EventOrigin } from "./events.js";
 import { PROVIDER_VALUES, type Provider } from "./provider.js";
 import type { AgentDefinition } from "./registry.js";
-import { DomainError, HUMAN_WORKER_ID, type RoutingRowProposal, settleQuestionAsObserved, type Task } from "./tasks.js";
+import { DomainError, HUMAN_WORKER_ID, type RoutingProposal, type RoutingRowProposal, settleQuestionAsObserved, type Task } from "./tasks.js";
 
 /** 必要品質のティア(CONTEXT.md「要求」)—— 廉価 / 主力 / 上位。**順序を持つ配列**
  *  であることがこの定数の内容で、advisor の pairing はこの並びの添字だけで判定する
@@ -37,8 +37,8 @@ export type TierSource = "task" | "review_tier" | "agent" | "board";
 /** 選ばれた Provider が**なぜその Provider だったか**(ADR 0110 決定3 / 決定5、
  *  ADR 0114 決定4)。`"only"` は agent が entry を1つしか宣言していなかった、
  *  `"rank"` は残った候補から Provider 順位で選んだ、`"cost"` は task の優先順位が
- *  cost で価格が Provider を決めた。 */
-export type ProviderSource = "only" | "rank" | "cost";
+ *  cost で価格が Provider を決めた、`"learner"` は昇格した学習器が選んだ(ADR 0150 決定3)。 */
+export type ProviderSource = "only" | "rank" | "cost" | "learner";
 
 /** task にも agent にも要求が無いときのティア。**配布される既定は最小の床**で
  *  あり、上げるのは運用者の判断である(ADR 0094 の advisor と同じ線 ——「既定は
@@ -235,7 +235,7 @@ export function rowFor(table: ExecutionSettingTable, provider: Provider, tier: T
 
 /** entry 集合から要求ティアの行を全部集め、優先順位の鍵で並べる(ADR 0110 決定3 /
  *  ADR 0114 決定3・4)。**除外は当てない** —— 除外は観測のたびに育つので、盤面境界が
- *  候補を1度作り、除外が増えるたびに `firstSelectable` を引き直す形にしてある。
+ *  候補を1度作り、除外が増えるたびに `selectable` を引き直す形にしてある。
  *  要求ティアの行を持たない entry は候補に入らない(Throttle と同じ「除外」)。
  *
  *  advisor の model は agent.md には書かれない: 真のときだけ表から導出し、同
@@ -335,16 +335,17 @@ export function loadExecutionSettingTable(db: Db): ExecutionSettingTable {
     .all() as ExecutionSettingRow[];
 }
 
-/** 盤面設定の3値(ADR 0110 決定5): 「上位ティアの行を advisor に使ってよい」、
- *  Provider 順位、優先順位の既定。行が無い / 列が NULL = 未設定 = コードの既定
+/** 盤面設定(ADR 0110 決定5): 「上位ティアの行を advisor に使ってよい」、
+ *  Provider 順位、優先順位の既定、学習器の昇格(ADR 0150 決定4)。行が無い / 列が NULL = 未設定 = コードの既定
  *  —— display_language と同じ「行が無ければ既定」の形。 */
 interface ExecutionDefaults {
   frontierAdvisor: boolean;
   providerRank: readonly Provider[];
   priority: Priority;
+  learnerPromoted: boolean;
 }
 
-/** settings タブ / 管理MCP の読み口(ADR 0110 決定5): 表と盤面設定3値を1往復で。
+/** settings タブ / 管理MCP の読み口(ADR 0110 決定5): 表と盤面設定4値を1往復で。
  *  表は (provider, model) 順 —— 主キーの順で、UI も MCP も同じ並びを見る。 */
 export function readExecutionSettings(db: Db): ExecutionDefaults & { table: ExecutionSettingTable } {
   return { table: loadExecutionSettingTable(db), ...loadExecutionDefaults(db) };
@@ -381,6 +382,13 @@ export const executionSettingsChangeSchema = z.discriminatedUnion("setting", [
     }),
   }),
   z.object({ setting: z.literal("priority"), value: z.enum(PRIORITIES) }),
+  // 扉は降格だけを受ける。昇格は承認の適用が schema を通さず書く
+  z.object({
+    setting: z.literal("learner_promoted"),
+    value: z.boolean().refine((value) => !value, {
+      message: "the learner is promoted only by approving a routing meta-review's proposal question (ADR 0150 決定4); this door only demotes",
+    }),
+  }),
 ]);
 export type ExecutionSettingsChange = z.infer<typeof executionSettingsChangeSchema>;
 
@@ -400,10 +408,14 @@ export function parseRoutingRowChange(input: unknown): RoutingRowChange {
 }
 
 /** pin の照合(ADR 0150 決定1): 提案が焼いた行と表の現在の行を全欄で比べ、崩れた欄の名前を返す(空 = pin は生きている)。
- *  行が消えていれば null。 */
-export function routingPinChanges(proposal: RoutingRowProposal, table: ExecutionSettingTable): Array<"tier" | "effort" | "price_in" | "price_out"> | null {
+ *  行が消えていれば null。昇格 / 降格の提案の pin はフラグの現在値。 */
+export function routingPinChanges(
+  proposal: RoutingProposal,
+  settings: { table: ExecutionSettingTable; learnerPromoted: boolean },
+): Array<"tier" | "effort" | "price_in" | "price_out" | "learner_promoted"> | null {
+  if (proposal.op !== "row") return proposal.pin.promoted === settings.learnerPromoted ? [] : ["learner_promoted"];
   const { pin } = proposal;
-  const current = table.find((row) => row.provider === pin.provider && row.model === pin.model);
+  const current = settings.table.find((row) => row.provider === pin.provider && row.model === pin.model);
   if (!current) return null;
   return (["tier", "effort", "price_in", "price_out"] as const).filter((field) => current[field] !== pin[field]);
 }
@@ -436,7 +448,7 @@ export function applyExecutionSettingsChange(db: Db, change: ExecutionSettingsCh
       default: {
         const column = change.setting;
         const value =
-          change.setting === "frontier_advisor" ? Number(change.value)
+          typeof change.value === "boolean" ? Number(change.value)
           : change.setting === "provider_rank" ? JSON.stringify(change.value) : change.value;
         db.prepare(
           `INSERT INTO execution_defaults (id, ${column}) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET ${column} = excluded.${column}`,
@@ -451,12 +463,12 @@ export function applyExecutionSettingsChange(db: Db, change: ExecutionSettingsCh
       at,
     });
     // 回答中の question は answerQuestion が先に done にしているので、承認した提案が自分自身を決着させることは無い
-    const table = loadExecutionSettingTable(db);
+    const settings = readExecutionSettings(db);
     const open = db
       .prepare("SELECT id, question_proposal FROM tasks WHERE status = 'todo' AND json_extract(question_proposal, '$.kind') = 'routing'")
       .all() as Array<{ id: string; question_proposal: string }>;
     for (const { id, question_proposal } of open) {
-      const changed = routingPinChanges(JSON.parse(question_proposal) as RoutingRowProposal, table);
+      const changed = routingPinChanges(JSON.parse(question_proposal) as RoutingProposal, settings);
       if (changed?.length === 0) continue;
       settleQuestionAsObserved(db, id, { kind: "routing_proposal_stale", question_id: id, proposal_kind: "routing", changed, observed_event_id: eventId }, at);
     }
@@ -466,12 +478,13 @@ export function applyExecutionSettingsChange(db: Db, change: ExecutionSettingsCh
 
 function loadExecutionDefaults(db: Db): ExecutionDefaults {
   const row = db
-    .prepare("SELECT frontier_advisor, provider_rank, priority FROM execution_defaults WHERE id = 1")
-    .get() as { frontier_advisor: number; provider_rank: string | null; priority: Priority | null } | undefined;
+    .prepare("SELECT frontier_advisor, provider_rank, priority, learner_promoted FROM execution_defaults WHERE id = 1")
+    .get() as { frontier_advisor: number; provider_rank: string | null; priority: Priority | null; learner_promoted: number } | undefined;
   return {
     frontierAdvisor: row?.frontier_advisor === 1,
     providerRank: row?.provider_rank ? (JSON.parse(row.provider_rank) as Provider[]) : PROVIDER_VALUES,
     priority: row?.priority ?? BOARD_DEFAULT_PRIORITY,
+    learnerPromoted: row?.learner_promoted === 1,
   };
 }
 
@@ -523,7 +536,7 @@ export function executionSettingsFor(
 }
 
 /** 除外を当てずに1つ選ぶ —— Provider 順位の先頭 entry の設定である。除外を当てた
- *  選択は pickup の側にあり、そちらは育った除外集合を `firstSelectable` へ渡す。 */
+ *  選択は pickup の側にあり、そちらは育った除外集合を `selectable` へ渡す。 */
 export function resolveExecutionSetting(
   db: Db,
   definition: Pick<AgentDefinition, "provider" | "tier">,

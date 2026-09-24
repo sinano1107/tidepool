@@ -1,5 +1,5 @@
 import { afterEach, expect, it } from "vitest";
-import { executionSettingsFor, SEED_EXECUTION_SETTINGS } from "../src/execution-setting.js";
+import { applyExecutionSettingsChange, executionSettingsFor, SEED_EXECUTION_SETTINGS } from "../src/execution-setting.js";
 import { PROVIDER_VALUES } from "../src/registry.js";
 import { healthyOpenai } from "./fakes.js";
 import {
@@ -29,6 +29,7 @@ it("GET /api/settings/execution は種の表と盤面既定(frontier advisor 無
     frontierAdvisor: false,
     providerRank: [...PROVIDER_VALUES],
     priority: "quality",
+    learnerPromoted: false,
     providers: [
       { value: "anthropic", label: "anthropic — Claude models, Anthropic billing" },
       { value: "moonshot", label: "moonshot — Kimi models, Moonshot Platform billing" },
@@ -215,4 +216,59 @@ it("変更は操作イベント execution_settings_changed として経路 webui
   const log = await api(t.baseUrl, "GET", "/api/log");
   expect(log.status).toBe(200);
   expect(log.json.entries).toEqual([]);
+});
+
+/** 学習器を昇格させる —— approve の適用と同じ書き口(扉は true を断るので、盤面の内側から書く)。 */
+const promote = () => applyExecutionSettingsChange(t.db, { setting: "learner_promoted", value: true }, "webui", t.clock.now());
+
+it("学習器の降格は settings タブと管理MCP の扉から直接できるが、昇格は両方の扉で ADR 0150 決定4 を理由に断られる", async () => {
+  t = await bootTidepool();
+  promote();
+  expect((await state()).learnerPromoted).toBe(true);
+
+  const refused = await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "learner_promoted", value: true });
+  expect(refused.status).toBe(400);
+  expect(JSON.stringify(refused.json)).toContain("ADR 0150 決定4");
+  expect((await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "learner_promoted", value: false })).status).toBe(200);
+  expect((await state()).learnerPromoted).toBe(false);
+
+  promote();
+  const client = await managementMcpClient(t.baseUrl);
+  try {
+    const change = (value: boolean) => client.callTool({ name: "change_execution_settings", arguments: { change: { setting: "learner_promoted", value } } }) as Promise<any>;
+    const viaMcp = await change(true);
+    expect(viaMcp.isError).toBe(true);
+    expect(viaMcp.content[0].text).toContain("ADR 0150 決定4");
+    expect((await change(false)).isError).not.toBe(true);
+  } finally {
+    await client.close();
+  }
+  expect((await state()).learnerPromoted).toBe(false);
+});
+
+it("人間の直接の降格は open な降格提案を観測で決着させ、routing_proposal_stale に崩れた pin を残す", async () => {
+  t = await bootTidepool();
+  promote();
+  await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "priority", value: "cost" });
+  await t.clock.advance(HOUR);
+  const review = ((await api(t.baseUrl, "GET", "/api/tasks")).json as any[]).find((task) => task.meta_review_subject === "routing");
+  const client = await mcpClient(t.mcpBaseUrl, review.id);
+  let questionId: string;
+  try {
+    const result: any = await client.callTool({ name: "propose_routing_change", arguments: { op: "demote", rationale: "the learner routed worse than the table." } });
+    questionId = JSON.parse(result.content[0].text).question_id;
+  } finally {
+    await client.close();
+  }
+
+  expect((await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "learner_promoted", value: false })).status).toBe(200);
+
+  expect((await api(t.baseUrl, "GET", `/api/tasks/${questionId}`)).json).toMatchObject({ status: "done", question_answer: null });
+  expect(((await api(t.baseUrl, "GET", `/api/tasks/${questionId}/events`)).json as any[]).find((e) => e.kind === "routing_proposal_stale").payload).toEqual({
+    kind: "routing_proposal_stale",
+    question_id: questionId,
+    proposal_kind: "routing",
+    changed: ["learner_promoted"],
+    observed_event_id: expect.any(Number),
+  });
 });

@@ -1619,7 +1619,7 @@ function ExecutionDefaultsCard({ settings, say, onSaved, edit }: {
   onSaved: () => Promise<void> | void;
   edit: SettingsEditSlot;
 }) {
-  const { Card, Checkbox, FieldRow, Select } = window.TidepoolDesignSystem_8a0ead;
+  const { Button, Card, Checkbox, FieldRow, Select } = window.TidepoolDesignSystem_8a0ead;
   const id = 'board:execution-defaults';
   const open = edit.isOpen(id);
   const current = { rank: settings.providerRank, priority: settings.priority, advisor: settings.frontierAdvisor };
@@ -1650,6 +1650,18 @@ function ExecutionDefaultsCard({ settings, say, onSaved, edit }: {
     setBusy(false);
   };
 
+  const demote = async () => {
+    setBusy(true);
+    try {
+      await api('/api/settings/execution', { setting: 'learner_promoted', value: false });
+      say('success', 'learner demoted', 'work tasks run on the table again');
+      await onSaved();
+    } catch (err) {
+      say('danger', 'learner demote failed', String((err as Error).message || err));
+    }
+    setBusy(false);
+  };
+
   return (
     <div data-testid="execution-defaults">
       <Card style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
@@ -1661,6 +1673,11 @@ function ExecutionDefaultsCard({ settings, say, onSaved, edit }: {
             <FieldRow label="provider rank" kind="mono" value={settings.providerRank.join(' › ')} />
             <FieldRow label="default priority" kind="mono" value={settings.priority} />
             <FieldRow label="frontier advisor" kind="mono" value={settings.frontierAdvisor ? 'on' : 'off'} />
+            {/* promotion only comes from approving a routing meta-review's question (ADR 0150 決定4); this card only demotes */}
+            <FieldRow label="learner" kind="mono" value={settings.learnerPromoted ? 'promoted — chooses work tasks' : 'shadow — the table chooses'} />
+            {settings.learnerPromoted && (
+              <Button variant="secondary" size="sm" disabled={busy} onClick={demote}>Demote learner</Button>
+            )}
           </React.Fragment>
         )}
         {open && (

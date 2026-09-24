@@ -152,7 +152,7 @@ export interface TaskContent {
 }
 
 /** 提案 question の種別つき提案(ADR 0120 決定4 / ADR 0150 決定1)。`registry` は後続(spec #916 B)が足す。 */
-export type QuestionProposal = MemoryProposal | RoutingRowProposal;
+export type QuestionProposal = MemoryProposal | RoutingProposal;
 
 /** memory の提案。pin = replaces / target の版と candidate の状態。 */
 export type MemoryProposal = {
@@ -172,6 +172,9 @@ export interface RoutingRowProposal {
   change: RoutingRowChange;
   pin: ExecutionSettingRow;
 }
+
+/** routing の提案(ADR 0150 決定1): 表の1行、または学習器の昇格 / 降格。昇格 / 降格の pin はフラグの現在値。 */
+export type RoutingProposal = RoutingRowProposal | { kind: "routing"; op: "promote" | "demote"; pin: { promoted: boolean } };
 
 interface PendingChildSpec extends TaskContent {
   review_by?: string[];

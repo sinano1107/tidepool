@@ -84,12 +84,12 @@ it("list_routing_shadow は shadow 行をその pickup が開いた session の 
   const diverged = work("diverged");
   const agreed = work("agreed");
   // 分かれた pickup が2回: 1回目は spawn に辿り着かず、2回目の session が capability で退けられた
-  recordShadow(db, diverged, [sol, opus], opus, at);
-  recordShadow(db, diverged, [sol, opus], opus, at);
+  recordShadow(db, diverged.id, { recommended: sol, actual: opus, basis: "prior" }, at);
+  recordShadow(db, diverged.id, { recommended: sol, actual: opus, basis: "prior" }, at);
   const second = spawn(diverged.id, "reef-crab", opus);
   exit(diverged.id, second, [], 1.25);
   allocate(diverged.id, second, { judge, allocation: "underpowered", cause: "capability", evidence: "e" });
-  recordShadow(db, agreed, [opus], opus, at);
+  recordShadow(db, agreed.id, { recommended: opus, actual: opus, basis: "data" }, at);
   spawn(agreed.id, "deckhand", opus);
   const reader = routingReview();
 
@@ -108,14 +108,14 @@ it("list_routing_shadow は shadow 行をその pickup が開いた session の 
 it("読み口の既定の窓は読み手より前の routing の登録の watermark から —— 読み手自身の登録も memory の登録も窓を動かさない", () => {
   const { db, work, spawn, exit, allocate, routingReview } = board();
   const before = work("before");
-  recordShadow(db, before, [opus], opus, at);
+  recordShadow(db, before.id, { recommended: opus, actual: opus, basis: "prior" }, at);
   const old = spawn(before.id, "deckhand", sol);
   exit(before.id, old, ["gpt-5.6-sol"]);
   allocate(before.id, old, { judge, allocation: "appropriate", cause: "uncertain", evidence: "e" });
   applyExecutionSettingsChange(db, { setting: "row", row: { provider: "openai", tier: "standard", model: "gpt-5.6-sol", effort: "high", price_in: 1, price_out: 2 } }, "webui", at);
   routingReview(); // 前回
   const after = work("after");
-  recordShadow(db, after, [opus], opus, at);
+  recordShadow(db, after.id, { recommended: opus, actual: opus, basis: "prior" }, at);
   const fresh = spawn(after.id, "deckhand", opus);
   exit(after.id, fresh, ["claude-opus-4-1"]);
   allocate(after.id, fresh, { judge, allocation: "overpowered", cause: "uncertain", evidence: "e" });

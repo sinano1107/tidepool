@@ -1995,7 +1995,7 @@ function MemoryEntriesCard({ workspaceNames, language, say, edit }) {
   }));
 }
 function ExecutionDefaultsCard({ settings, say, onSaved, edit }) {
-  const { Card, Checkbox, FieldRow, Select } = window.TidepoolDesignSystem_8a0ead;
+  const { Button, Card, Checkbox, FieldRow, Select } = window.TidepoolDesignSystem_8a0ead;
   const id = "board:execution-defaults";
   const open = edit.isOpen(id);
   const current = { rank: settings.providerRank, priority: settings.priority, advisor: settings.frontierAdvisor };
@@ -2022,7 +2022,18 @@ function ExecutionDefaultsCard({ settings, say, onSaved, edit }) {
     }
     setBusy(false);
   };
-  return /* @__PURE__ */ React.createElement("div", { "data-testid": "execution-defaults" }, /* @__PURE__ */ React.createElement(Card, { style: { display: "flex", flexDirection: "column", gap: 14 } }, /* @__PURE__ */ React.createElement(RecordCardHead, { editing: open, onEdit: () => edit.open(id, () => setDraft(current)) }, /* @__PURE__ */ React.createElement("span", { style: settingsCardLabel }, "execution defaults")), !open && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(FieldRow, { label: "provider rank", kind: "mono", value: settings.providerRank.join(" \u203A ") }), /* @__PURE__ */ React.createElement(FieldRow, { label: "default priority", kind: "mono", value: settings.priority }), /* @__PURE__ */ React.createElement(FieldRow, { label: "frontier advisor", kind: "mono", value: settings.frontierAdvisor ? "on" : "off" })), open && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 12 } }, draft.rank.map((provider, i) => /* @__PURE__ */ React.createElement(
+  const demote = async () => {
+    setBusy(true);
+    try {
+      await api("/api/settings/execution", { setting: "learner_promoted", value: false });
+      say("success", "learner demoted", "work tasks run on the table again");
+      await onSaved();
+    } catch (err) {
+      say("danger", "learner demote failed", String(err.message || err));
+    }
+    setBusy(false);
+  };
+  return /* @__PURE__ */ React.createElement("div", { "data-testid": "execution-defaults" }, /* @__PURE__ */ React.createElement(Card, { style: { display: "flex", flexDirection: "column", gap: 14 } }, /* @__PURE__ */ React.createElement(RecordCardHead, { editing: open, onEdit: () => edit.open(id, () => setDraft(current)) }, /* @__PURE__ */ React.createElement("span", { style: settingsCardLabel }, "execution defaults")), !open && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(FieldRow, { label: "provider rank", kind: "mono", value: settings.providerRank.join(" \u203A ") }), /* @__PURE__ */ React.createElement(FieldRow, { label: "default priority", kind: "mono", value: settings.priority }), /* @__PURE__ */ React.createElement(FieldRow, { label: "frontier advisor", kind: "mono", value: settings.frontierAdvisor ? "on" : "off" }), /* @__PURE__ */ React.createElement(FieldRow, { label: "learner", kind: "mono", value: settings.learnerPromoted ? "promoted \u2014 chooses work tasks" : "shadow \u2014 the table chooses" }), settings.learnerPromoted && /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", disabled: busy, onClick: demote }, "Demote learner")), open && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 12 } }, draft.rank.map((provider, i) => /* @__PURE__ */ React.createElement(
     Select,
     {
       key: i,
@@ -2849,7 +2860,7 @@ function toQuestionCardShape(q, icons) {
     })),
     // 承認 question(決裁権外の子の登録)と、approve で親の risk が上がるかは
     // 盤面の `approval` 注釈が答える(issue #757)— ここは描画の形に写すだけ
-    ...q.question_proposal?.kind === "routing" && { amendable: true },
+    ...q.question_proposal?.kind === "routing" && q.question_proposal.op === "row" && { amendable: true },
     ...q.approval && {
       kind: "approval",
       ...q.approval.raises_parent_risk && { note: `approving raises ${q.parent_id} risk (upward propagation)` }

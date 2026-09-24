@@ -2,12 +2,7 @@ import type { Allocation } from "./allocation-review.js";
 import type { Cause } from "./cause.js";
 import type { Db } from "./db.js";
 import type { EventPayload, EventRow } from "./events.js";
-import {
-  BOARD_DEFAULT_PRIORITY,
-  type ExecutionSetting,
-  type Priority,
-  windowMatchesModel,
-} from "./execution-setting.js";
+import { type ExecutionSetting, type Priority, windowMatchesModel } from "./execution-setting.js";
 import { sessionWindow } from "./precedent.js";
 import type { Provider } from "./registry.js";
 import { acceptedSql, type Task } from "./tasks.js";
@@ -249,32 +244,31 @@ export function loadEpisodes(db: Db): RoutingEpisode[] {
   });
 }
 
-/** shadow 行の書き手(盤面境界、spec #541): work task の pickup 直前に、除外を
- *  当てた候補から学習器の推薦を引いて、selector の実際の選択とその出所に並べて1行残す。
- *  **選択には介入しない** —— 返り値も無く、呼び手は結果を読まない。 */
-export function recordShadow(
-  db: Db,
-  task: Pick<Task, "id" | "workspace" | "priority">,
-  candidates: readonly ExecutionSetting[],
-  actual: ExecutionSetting,
-  now: Date,
-): void {
-  const episodes = loadEpisodes(db);
-  const { recommended, basis } = recommend({
-    candidates,
-    board: aggregateCells(episodes),
-    workspace: aggregateCells(episodes.filter((e) => e.workspace === task.workspace)),
-    priority: task.priority ?? BOARD_DEFAULT_PRIORITY,
-  });
+/** selector の分岐(純関数、ADR 0110 決定4 / ADR 0150 決定3): 除外を当てた候補(selector の並び)から、実際に走る設定と
+ *  shadow 行の組を決める。昇格前は表の先頭が走り、shadow の推薦は学習器の選択。昇格後は学習器の選択が出所 `learner` で
+ *  走り、shadow の推薦は表の先頭 —— 列は増えず意味が反転する。データの無いセルでは推薦が表と一致するので、昇格初日は表と同じ。 */
+export function selectorBranch(input: Parameters<typeof recommend>[0] & { promoted: boolean }): {
+  chosen: ExecutionSetting;
+  shadow: { recommended: ExecutionSetting; actual: ExecutionSetting; basis: Recommendation["basis"] };
+} {
+  const table = input.candidates[0]!;
+  const { recommended, basis } = recommend(input);
+  if (!input.promoted) return { chosen: table, shadow: { recommended, actual: table, basis } };
+  const chosen = { ...recommended, source: { ...recommended.source, provider: "learner" as const } };
+  return { chosen, shadow: { recommended: table, actual: chosen, basis } };
+}
+
+/** shadow 行の書き手(盤面境界、spec #541): work task の pickup 直前に、selector の分岐が決めた組を1行残す。 */
+export function recordShadow(db: Db, taskId: string, shadow: ReturnType<typeof selectorBranch>["shadow"], now: Date): void {
   db.prepare(
     `INSERT INTO learner_shadow (task_id, cell_recommended, cell_actual, source, basis, event_watermark, created_at)
      VALUES (?, ?, ?, ?, ?, (SELECT COALESCE(MAX(id), 0) FROM events), ?)`,
   ).run(
-    task.id,
-    cellJson(cellOf(recommended)),
-    cellJson(cellOf(actual)),
-    JSON.stringify(actual.source),
-    basis,
+    taskId,
+    cellJson(cellOf(shadow.recommended)),
+    cellJson(cellOf(shadow.actual)),
+    JSON.stringify(shadow.actual.source),
+    shadow.basis,
     now.toISOString(),
   );
 }
