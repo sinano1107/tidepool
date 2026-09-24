@@ -51,13 +51,11 @@ it("行の提案は meta-review の子に1 item の question を立て、その�
   }
 });
 
-it("表に無い行・空の変更・tier / effort 以外の欄・知らない tier の提案は断られ、question は立たない", async () => {
+it("表に無い行の提案と schema 違反の変更は断られ、question は立たない(変更の schema の中身はドメイン層が言う)", async () => {
   const { review, client, call } = await boardWithRoutingReview();
   try {
     for (const [row, change] of [
       [{ provider: "anthropic", model: "haiku" }, { tier: "economy" }],
-      [{ provider: "anthropic", model: "opus" }, {}],
-      [{ provider: "anthropic", model: "opus" }, { tier: "economy", price_in: 1 }],
       [{ provider: "anthropic", model: "opus" }, { tier: "ultra" }],
     ]) {
       expect(await call("propose_routing_change", { op: "row", row, change, rationale: "r" })).toMatchObject({
@@ -127,10 +125,17 @@ it("schema 違反の修正値・reject に添えた修正値・memory の提案�
     const questionId = await propose({ tier: "frontier" });
     for (const body of [
       { answers: ["approve"], amendment: { tier: "ultra" } },
-      { answers: ["approve"], amendment: { price_in: 1 } },
       { answers: ["reject"], amendment: { effort: "max" } },
     ]) {
       expect((await answer(questionId, body)).status).toBe(409);
+    }
+    // 管理MCP の扉も修正値を運ぶ —— 落とせば素の approve として通ってしまう
+    const management = await managementMcpClient(t.baseUrl);
+    try {
+      const viaMcp: any = await management.callTool({ name: "answer_question", arguments: { task_id: questionId, answers: ["approve"], amendment: { tier: "ultra" } } });
+      expect(viaMcp.isError).toBe(true);
+    } finally {
+      await management.close();
     }
     expect(await task(questionId)).toMatchObject({ status: "todo", question_answer: null });
     expect((await events(questionId)).map((e) => e.kind)).toEqual(["task_registered"]);
