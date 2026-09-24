@@ -259,7 +259,9 @@ export function openDb(path: string): Db {
       id               INTEGER PRIMARY KEY CHECK (id = 1),
       frontier_advisor INTEGER NOT NULL DEFAULT 0,
       provider_rank    TEXT,
-      priority         TEXT CHECK (priority IN ('quality', 'cost'))
+      priority         TEXT CHECK (priority IN ('quality', 'cost')),
+      -- 学習器の昇格(ADR 0150 決定4)。NULL = 0
+      learner_promoted INTEGER CHECK (learner_promoted IN (0, 1))
     );
 
     CREATE TABLE IF NOT EXISTS provider_pace_offsets (

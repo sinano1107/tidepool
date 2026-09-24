@@ -10,16 +10,18 @@ import {
 import type { Db } from "./db.js";
 import { appendEvent } from "./events.js";
 import {
+  BOARD_DEFAULT_PRIORITY,
   type ExecutionExclusions,
   type ExecutionSetting,
   firstSelectable,
+  readExecutionSettings,
   selectable,
   windowMatchesModel,
 } from "./execution-setting.js";
 import { type GitHubClient, IssueGoneError } from "./github.js";
 import type { GitHubAuth } from "./github-auth.js";
 import { type HarnessContainmentCheck, harnessContainmentPickupBlocked } from "./harness-containment.js";
-import { recordShadow } from "./learner.js";
+import { aggregateCells, loadEpisodes, type RoutingEpisode, recordShadow, selectorBranch } from "./learner.js";
 import { registerDueMetaReviews } from "./meta-review.js";
 import type { ProcessContainers } from "./process-container.js";
 import { quarantineExcludedProviders, quarantineStops } from "./quarantine.js";
@@ -566,6 +568,28 @@ export function startScheduler(deps: {
         nextSlotTask(db, workspace?.name, worker.id, auditorName, stopped, excludedTasks);
       let chosen: ExecutionSetting | undefined;
       let candidates: ExecutionSetting[] = [];
+      // 学習器の分岐(ADR 0110 決定4 / ADR 0150 決定3): 除外を当てた候補から、走る設定と shadow 行の組を決める。
+      // フラグは poll ごとに1度、episode は分岐が要るときに1度だけ読む
+      const promoted = readExecutionSettings(db).learnerPromoted;
+      let episodes: RoutingEpisode[] | undefined;
+      const branch = (task: Task, promotedNow: boolean) => {
+        episodes ??= loadEpisodes(db);
+        const inWorkspace = episodes.filter((e) => e.workspace === task.workspace);
+        return selectorBranch({
+          promoted: promotedNow,
+          candidates: selectable(candidates, entryExcluded),
+          board: aggregateCells(episodes),
+          workspace: aggregateCells(inWorkspace),
+          priority: task.priority ?? BOARD_DEFAULT_PRIORITY,
+        });
+      };
+      let branched: ReturnType<typeof branch> | undefined;
+      /** 1手の選択: 昇格中の work task は学習器の選択、それ以外は表の先頭。どちらも下の観測 → 除外 → 引き直しを通るので、
+       *  昇格しても Throttle / Spend-down / Provider 認証の除外は同じく効く。review task はフラグを読まない(ADR 0111 決定3) */
+      const pick = (task: Task): ExecutionSetting | null => {
+        branched = promoted && task.type === "work" && selectable(candidates, entryExcluded).length > 0 ? branch(task, true) : undefined;
+        return branched ? branched.chosen : firstSelectable(candidates, entryExcluded);
+      };
       while (head) {
         const assignee = resolveTaskAgent(head, worker.id, auditorName);
         try {
@@ -579,7 +603,7 @@ export function startScheduler(deps: {
           head = nextHead();
           continue;
         }
-        let setting = firstSelectable(candidates, entryExcluded);
+        let setting = pick(head);
         while (setting) {
           if (
             harnessContainment &&
@@ -591,7 +615,7 @@ export function startScheduler(deps: {
             ))
           ) {
             entryExcluded = withExclusion(entryExcluded, setting.provider, null);
-            setting = firstSelectable(candidates, entryExcluded);
+            setting = pick(head);
             continue;
           }
           let observation = observedProviders.get(setting.provider);
@@ -623,7 +647,7 @@ export function startScheduler(deps: {
             observation.status !== "observed" ||
             relevant.some((window) => window.model === null && window.throttled);
           entryExcluded = withExclusion(entryExcluded, setting.provider, providerWide ? null : model);
-          setting = firstSelectable(candidates, entryExcluded);
+          setting = pick(head);
         }
         if (setting === null) {
           // 全 entry が除外されて初めて、この task は候補から落ちる(ADR 0110 決定3)
@@ -642,12 +666,12 @@ export function startScheduler(deps: {
         return;
       const content = await issuePickupGate(head);
       if (!content) return;
-      // 学習器の shadow 行(ADR 0110 決定4): work task の pickup ごとに、除外を当てた
-      // 候補から「学習器ならこう選ぶ」を引いて selector の選択と並べる。review task は
-      // 学習器を参照しない(ADR 0111 決定3)。記録は選択に介入しない —— 学習器が倒れても pickup は進む
+      // 学習器の shadow 行(ADR 0110 決定4): work task の pickup ごとに、走る設定の反対側(昇格前は学習器の推薦、昇格後は
+      // 表の先頭)を並べて1行残す。review task は学習器を参照しない(ADR 0111 決定3)。昇格前の記録は選択に介入しない ——
+      // 学習器が倒れても pickup は進む
       if (head.type === "work") {
         try {
-          recordShadow(db, head, selectable(candidates, entryExcluded), chosen, clock.now());
+          recordShadow(db, head.id, (branched ?? branch(head, false)).shadow, clock.now());
         } catch (err) {
           console.error(`[scheduler] learner shadow row failed for ${head.id}:`, err);
         }

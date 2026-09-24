@@ -496,7 +496,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
     {
       description:
         "Read the board's execution settings: the model table (rows of provider, model, tier, effort, price_in / price_out in USD per MTok), " +
-        "whether the frontier row may serve as advisor, the Provider rank, and the default priority (quality / cost).",
+        "whether the frontier row may serve as advisor, the Provider rank, the default priority (quality / cost), and whether the learner is promoted.",
     },
     async () => toolResult(readExecutionSettings(deps.db)),
   );
@@ -506,7 +506,8 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
       description:
         "Apply one change to the board's execution settings as the human: upsert a table row (`row`, keyed by provider + model), " +
         "delete one (`delete_row` — deleting every row of a provider × tier just excludes that provider for tasks of that tier), " +
-        "or set `frontier_advisor`, `provider_rank` (every provider exactly once, first = preferred) or the default `priority`. " +
+        "or set `frontier_advisor`, `provider_rank` (every provider exactly once, first = preferred) or the default `priority`, " +
+        "or demote the learner (`learner_promoted: false` — promotion only comes from approving a routing meta-review's proposal). " +
         "Takes effect at the next pickup.",
       inputSchema: { change: executionSettingsChangeSchema },
     },

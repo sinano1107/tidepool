@@ -6,7 +6,7 @@ import type { ContainmentCheck } from "./containment.js";
 import type { Db } from "./db.js";
 import type { DraftClient } from "./draft.js";
 import { appendEvent, type EventOrigin } from "./events.js";
-import { applyExecutionSettingsChange, composeRoutingRow, parseRoutingRowChange } from "./execution-setting.js";
+import { applyExecutionSettingsChange, composeRoutingRow, type ExecutionSettingsChange, parseRoutingRowChange } from "./execution-setting.js";
 import { type GitHubClient, IssueGoneError } from "./github.js";
 import type { HarnessContainmentCheck } from "./harness-containment.js";
 import { type Landing, type LandingVerdict, landingBlock } from "./landing.js";
@@ -734,9 +734,9 @@ export async function submitAnswer(
   // verify quarantine before answerQuestion eventually rejects the payload.
   assertAnswerable(task, answers);
   const proposal = task.question_proposal;
-  // 修正値を受けるのは routing の提案の approve だけ(ADR 0150 決定2)。memory の修正値(#915)も黙って捨てず断る
-  if (amendment !== undefined && (proposal?.kind !== "routing" || answers[0] !== "approve")) {
-    throw new DomainError("only an approve answer to a routing proposal takes an amendment");
+  // 修正値を受けるのは routing の行の提案の approve だけ(ADR 0150 決定2)。memory(#915)・昇格 / 降格の修正値も黙って捨てず断る
+  if (amendment !== undefined && (proposal?.kind !== "routing" || proposal.op !== "row" || answers[0] !== "approve")) {
+    throw new DomainError("only an approve answer to a routing row proposal takes an amendment");
   }
   const amended = amendment === undefined ? undefined : parseRoutingRowChange(amendment);
 
@@ -843,7 +843,11 @@ export async function submitAnswer(
       if (answers[0] === "approve") approveMemoryProposal(deps.db, proposal, task.id, origin, now());
       else rejectMemoryProposal(deps.db, proposal, task.id, origin, now());
     } else if (proposal?.kind === "routing" && answers[0] === "approve") {
-      applyExecutionSettingsChange(deps.db, { setting: "row", row: composeRoutingRow(proposal, amended) }, origin, now(), task.id);
+      const change: ExecutionSettingsChange =
+        proposal.op === "row"
+          ? { setting: "row", row: composeRoutingRow(proposal, amended) }
+          : { setting: "learner_promoted", value: proposal.op === "promote" };
+      applyExecutionSettingsChange(deps.db, change, origin, now(), task.id);
     }
     return answered;
   })();

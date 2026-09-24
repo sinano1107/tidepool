@@ -1,9 +1,9 @@
 import type { Db } from "./db.js";
 import type { EventPayload } from "./events.js";
-import { type ExecutionSettingsChange, loadExecutionSettingTable, parseRoutingRowChange, windowMatchesModel } from "./execution-setting.js";
+import { type ExecutionSettingsChange, loadExecutionSettingTable, parseRoutingRowChange, readExecutionSettings, windowMatchesModel } from "./execution-setting.js";
 import { type Cell, cellJson, loadEpisodes, type RoutingEpisode } from "./learner.js";
 import { paged, previousMetaReviewWatermark } from "./meta-review.js";
-import { DomainError, type RoutingRowProposal, registerTask } from "./tasks.js";
+import { DomainError, type RoutingProposal, registerTask } from "./tasks.js";
 
 /** 主題 routing の meta-review の読み口(issue #917 / spec #916 C)。どれも既定の `since_watermark` は読み手と同主題の
  *  前回の登録の watermark(event id)で、ページ長は memory の読み口と同じ定数。 */
@@ -120,7 +120,7 @@ export function listRoutingProposals(db: Db) {
     const stale = row.stale === null ? null : (JSON.parse(row.stale) as Extract<EventPayload, { kind: "routing_proposal_stale" }>);
     return {
       question_id: row.id,
-      proposal: JSON.parse(row.question_proposal) as RoutingRowProposal,
+      proposal: JSON.parse(row.question_proposal) as RoutingProposal,
       answer: answered?.answers[0]?.answer ?? null,
       amendment: answered?.amendment ?? null,
       comment: answered?.comment ?? null,
@@ -129,33 +129,53 @@ export function listRoutingProposals(db: Db) {
   });
 }
 
-/** 提案 verb の op row(issue #918 / ADR 0150 決定1・2): 表の既存の1行の tier / effort の置換を、meta-review の付帯子の
- *  question として立てる。pin はその行の全欄。同じ行への提案は重ねてよい —— 片方の承認が表を変えれば、もう片方は陳腐化の
- *  hook で決着する。 */
+/** 提案 verb(issue #918 / #919 / ADR 0150 決定1・2・4): 表の既存の1行の tier / effort の置換(op row)、または学習器の
+ *  昇格 / 降格を、meta-review の付帯子の question として立てる。pin は row ならその行の全欄、昇格 / 降格ならフラグの現在値。
+ *  同じ行への提案は重ねてよい —— 片方の承認が表を変えれば、もう片方は陳腐化の hook で決着する。 */
 export function proposeRoutingChange(
   db: Db,
   metaReviewId: string,
-  input: { op: "row"; row: { provider: string; model: string }; change: unknown; rationale: string },
+  input: { op: RoutingProposal["op"]; row?: { provider: string; model: string }; change?: unknown; rationale: string },
   workerId: string,
   now: Date,
 ): { question_id: string } {
-  const change = parseRoutingRowChange(input.change);
-  const pin = loadExecutionSettingTable(db).find((row) => row.provider === input.row.provider && row.model === input.row.model);
-  if (!pin) throw new DomainError(`the execution-setting table has no row for ${input.row.provider} / ${input.row.model}`);
-  const proposal: RoutingRowProposal = { kind: "routing", op: "row", row: { provider: pin.provider, model: pin.model }, change, pin };
-  const title = `Change routing row: ${pin.provider} / ${pin.model}`;
-  const detail = [
-    `Execution-setting row ${pin.provider} / ${pin.model} (price ${pin.price_in} / ${pin.price_out} USD per MTok):`,
-    ...Object.entries(change).map(([field, to]) => `${field}: ${pin[field as keyof typeof change]} -> ${to}`),
-    "",
-    `Rationale: ${input.rationale}`,
-  ].join("\n");
+  let proposal: RoutingProposal;
+  let title: string;
+  let diff: string[];
+  let purpose: string;
+  if (input.op === "row") {
+    if (!input.row) throw new DomainError("op row names the row to change (provider and model)");
+    const change = parseRoutingRowChange(input.change);
+    const { provider, model } = input.row;
+    const pin = loadExecutionSettingTable(db).find((row) => row.provider === provider && row.model === model);
+    if (!pin) throw new DomainError(`the execution-setting table has no row for ${provider} / ${model}`);
+    proposal = { kind: "routing", op: "row", row: { provider: pin.provider, model: pin.model }, change, pin };
+    title = `Change routing row: ${pin.provider} / ${pin.model}`;
+    diff = [
+      `Execution-setting row ${pin.provider} / ${pin.model} (price ${pin.price_in} / ${pin.price_out} USD per MTok):`,
+      ...Object.entries(change).map(([field, to]) => `${field}: ${pin[field as keyof typeof change]} -> ${to}`),
+    ];
+    purpose = "The routing meta-review proposes changing one row of the execution-setting table. Approve applies it, with your amendment if you give one; reject leaves the table as is.";
+  } else {
+    const promoted = readExecutionSettings(db).learnerPromoted;
+    const promote = input.op === "promote";
+    if (promote === promoted) throw new DomainError(`the learner is already ${promoted ? "promoted" : "not promoted"}; op ${input.op} only applies while it is ${promoted ? "not promoted" : "promoted"}`);
+    proposal = { kind: "routing", op: input.op, pin: { promoted } };
+    title = promote ? "Promote the learner" : "Demote the learner";
+    diff = [
+      promote
+        ? "Work tasks would run on the learner's recommendation instead of the execution-setting table's first choice. The shadow keeps what the table would have chosen."
+        : "Work tasks would run on the execution-setting table's first choice again. The shadow keeps what the learner would have recommended.",
+    ];
+    purpose = `The routing meta-review proposes to ${input.op} the learner. Approve applies it; reject leaves the learner as it is.`;
+  }
+  const detail = [...diff, "", `Rationale: ${input.rationale}`].join("\n");
   const question = registerTask(
     db,
     {
       type: "question",
       title,
-      purpose: "The routing meta-review proposes changing one row of the execution-setting table. Approve applies it, with your amendment if you give one; reject leaves the table as is.",
+      purpose,
       completion_criteria: "a human answer is recorded",
       parent_id: metaReviewId,
       question: [{ title, detail, options: ["approve", "reject"], recommendation: "approve" }],

@@ -862,7 +862,8 @@ function registerRoutingMetaReviewVerbs(server: McpServer, deps: McpDeps, run: M
       description:
         "List the learner's shadow rows: for each work pickup, the cell the learner recommended, the cell that actually ran " +
         "and the selector's source, with that session's agent and outcome (accepted / rejected / excluded, cost, duration). " +
-        "diverged marks rows where the two cells differ; diverged_only returns only those.",
+        "diverged marks rows where the two cells differ; diverged_only returns only those. When source.provider is learner, the " +
+        "learner was promoted and chose what ran, and recommended is what the table would have chosen instead.",
       inputSchema: { since_watermark, diverged_only: z.boolean().optional(), page },
     },
     async (input) => run((reader) => listRoutingShadow(deps.db, reader.taskId, input)),
@@ -895,9 +896,9 @@ function registerRoutingMetaReviewVerbs(server: McpServer, deps: McpDeps, run: M
     "read_routing_settings",
     {
       description:
-        "Read the current execution-setting table, the frontier advisor setting, the provider rank and the default priority, " +
-        "and every past routing proposal with its answer, the human's amendment and comment, or why the board settled it as observed " +
-        "(the pinned row changed or was deleted).",
+        "Read the current execution-setting table, the frontier advisor setting, the provider rank, the default priority and " +
+        "whether the learner is promoted, and every past routing proposal with its answer, the human's amendment and comment, or " +
+        "why the board settled it as observed (the pinned row or learner flag changed, or the row was deleted).",
     },
     async () => run(() => ({ ...readExecutionSettings(deps.db), proposals: listRoutingProposals(deps.db) })),
   );
@@ -908,14 +909,16 @@ function registerRoutingMetaReviewVerbs(server: McpServer, deps: McpDeps, run: M
       description:
         "Propose a routing change to the human as one approve / reject question attached to this task. op row replaces the " +
         "tier (economy / standard / frontier) and/or effort of one existing execution-setting row, named by provider and model; " +
-        "change takes only those two fields. rationale is your evidence summary (episode count, tier source, period) and is shown " +
-        "with the diff. The human may amend the values when approving. The board applies the answer itself, so you can complete " +
+        "change takes only those two fields, and the human may amend them when approving. op promote makes work tasks run on the " +
+        "learner's recommendation and is only accepted while the learner is not promoted; op demote returns them to the table and " +
+        "is only accepted while it is promoted; neither takes row, change, or an amendment. rationale is your evidence summary " +
+        "(episode count, tier source, period) and is shown with the diff. The board applies the answer itself, so you can complete " +
         "this task without waiting for it. Returns the question id. " +
         BOARD_WRITE_LANGUAGE_RULE,
       inputSchema: {
-        op: z.enum(["row"]),
-        row: z.object({ provider: z.string(), model: z.string() }),
-        change: z.record(z.string(), z.unknown()).describe("tier and/or effort, nothing else."),
+        op: z.enum(["row", "promote", "demote"]),
+        row: z.object({ provider: z.string(), model: z.string() }).optional().describe("op row only."),
+        change: z.record(z.string(), z.unknown()).optional().describe("op row only: tier and/or effort, nothing else."),
         rationale: z.string().min(1),
       },
     },

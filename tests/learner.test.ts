@@ -1,8 +1,10 @@
 import { afterEach, expect, it } from "vitest";
+import type { CodexAppServerProbeResult } from "../src/codex-app-server.js";
 import { appendEvent, type EventPayload } from "../src/events.js";
-import type { ExecutionSetting } from "../src/execution-setting.js";
-import { aggregateCells, episodeOutcome, type LearnerEpisode, recommend } from "../src/learner.js";
+import { applyExecutionSettingsChange, type ExecutionSetting } from "../src/execution-setting.js";
+import { aggregateCells, episodeOutcome, type LearnerEpisode, recommend, selectorBranch } from "../src/learner.js";
 import { listRoutingShadow } from "../src/routing-review.js";
+import { healthyOpenai } from "./fakes.js";
 import {
   bootTidepool,
   completeIntegrationReviews,
@@ -110,6 +112,22 @@ it("受理率が同点のときだけ、cost の要求では観測された sess
   expect(recommendFor([cheapSol, episode()], [opus, sol], "tidepool", "cost").recommended).toEqual(opus);
 });
 
+it("selector の分岐: 昇格前は表の先頭が走り shadow の推薦が学習器、昇格後は学習器の選択が出所 learner で走り shadow の推薦が表の先頭", () => {
+  const rejected = [episode({ outcome: "rejected" }), episode({ outcome: "rejected" })];
+  const branch = (promoted: boolean) =>
+    selectorBranch({ promoted, candidates: [opus, sol], board: aggregateCells(rejected), workspace: aggregateCells(rejected), priority: "quality" });
+  const learnerSol = { ...sol, source: { ...sol.source, provider: "learner" } };
+
+  expect(branch(false)).toEqual({ chosen: opus, shadow: { recommended: sol, actual: opus, basis: "data" } });
+  expect(branch(true)).toEqual({ chosen: learnerSol, shadow: { recommended: opus, actual: learnerSol, basis: "data" } });
+});
+
+it("昇格後もデータの無いセルでは学習器の選択が表の先頭と一致する —— 昇格初日は表と同じ(出所だけが learner)", () => {
+  const { chosen, shadow } = selectorBranch({ promoted: true, candidates: [opus, sol], board: [], workspace: [], priority: "quality" });
+  expect(chosen).toEqual({ ...opus, source: { ...opus.source, provider: "learner" } });
+  expect(shadow).toEqual({ recommended: opus, actual: chosen, basis: "prior" });
+});
+
 it("outcome は受理 = 統合点レビューがすべて完了、負 = capability の帰責か underpowered × capability の配分評価、それ以外は数えない(ADR 0115 決定5)", () => {
   const facts = { accepted: false, causes: [] as const, allocations: [] as const };
   expect(episodeOutcome({ ...facts, accepted: true })).toBe("accepted");
@@ -172,8 +190,8 @@ it("work task の pickup ごとに shadow 行が1件記録され、selector の�
   expect(shadowRows(t)).toHaveLength(1);
 });
 
-it("観測が効くと shadow 行は selector と乖離しうるが、選択は変わらない —— capability と帰責された session の行が下がり、出所は data", async () => {
-  t = await bootTidepool({ taskExecutionCandidates: () => [opus, sol] });
+/** opus の session が1つ capability と帰責された盤面にする —— 学習器は opus を下げ、sol を推薦するようになる。 */
+async function rejectOpusSession(t: Tidepool) {
   const earlier = await registerWork(t, "earlier");
   await t.clock.advance(HOUR);
   // ScriptedWorker は spawn しないので、その session の記録(spawn + 決定 + 帰責)を setup として置く
@@ -209,6 +227,12 @@ it("観測が効くと shadow 行は selector と乖離しうるが、選択は�
   await completeViaMcp(t, earlier.id);
   await completeIntegrationReviews(t, earlier.id);
   await completeMetaReviews(t);
+
+}
+
+it("観測が効くと shadow 行は selector と乖離しうるが、選択は変わらない —— capability と帰責された session の行が下がり、出所は data", async () => {
+  t = await bootTidepool({ taskExecutionCandidates: () => [opus, sol] });
+  await rejectOpusSession(t);
 
   const later = await registerWork(t, "later");
   await t.clock.advance(HOUR);
@@ -351,4 +375,68 @@ it("セルの model は観測された具体 id —— pin が alias でも、�
     recommended: { provider: "openai", model: "gpt-5.6-sol", effort: "high", advisor: null },
     basis: "data",
   });
+});
+
+/** 学習器を昇格させる —— approve の適用と同じ書き口。設定の変更は routing meta-review の材料なので、登録されたそれを先に済ませる。 */
+async function promote(t: Tidepool) {
+  applyExecutionSettingsChange(t.db, { setting: "learner_promoted", value: true }, "webui", t.clock.now());
+  await t.clock.advance(HOUR);
+  await completeMetaReviews(t);
+}
+const byLearner = (s: ExecutionSetting): ExecutionSetting => ({ ...s, source: { ...s.source, provider: "learner" } });
+const cellOf = (s: ExecutionSetting) => ({ provider: s.provider, model: s.model, effort: s.effort, advisor: null });
+/** task が pickup されたときの実行設定(設定の変更は routing meta-review の材料なので、それが先に slot を取りうる)。 */
+const settingsOf = (t: Tidepool, taskId: string) => t.worker.startedSettings[t.worker.started.findIndex((task) => task.id === taskId)];
+
+it("昇格中の work task は学習器の選択で走り出所は learner、shadow 行は表の選択を推薦に・学習器の選択を実際に持つ —— review task は表のまま", async () => {
+  t = await bootTidepool({ openaiUsage: healthyOpenai, taskExecutionCandidates: () => [opus, sol] });
+  await promote(t);
+  await rejectOpusSession(t);
+
+  const later = await registerWork(t, "later");
+  await t.clock.advance(HOUR);
+
+  expect(settingsOf(t, later.id)).toEqual(byLearner(sol));
+  expect(shadowRows(t).at(-1)).toEqual({
+    task_id: later.id,
+    recommended: cellOf(opus),
+    actual: cellOf(sol),
+    source: byLearner(sol).source,
+    basis: "data",
+  });
+
+  await completeViaMcp(t, later.id);
+  await t.clock.advance(HOUR);
+  expect(t.worker.started.at(-1)).toMatchObject({ type: "review", parent_id: later.id });
+  expect(t.worker.startedSettings.at(-1)).toEqual(opus);
+});
+
+it("昇格中でもデータの無いセルでは表と同じ設定で走る(出所だけが learner)", async () => {
+  t = await bootTidepool({ openaiUsage: healthyOpenai, taskExecutionCandidates: () => [opus, sol] });
+  await promote(t);
+
+  const work = await registerWork(t, "day one");
+  await t.clock.advance(HOUR);
+
+  expect(settingsOf(t, work.id)).toEqual(byLearner(opus));
+  expect(shadowRows(t)).toEqual([{ task_id: work.id, recommended: cellOf(opus), actual: cellOf(opus), source: byLearner(opus).source, basis: "prior" }]);
+});
+
+it("昇格中も学習器の選択は Throttle の除外を通る —— 選んだ Provider が throttle 中なら除外を当てた残りから選び直す", async () => {
+  const throttledOpenai = async (now: Date): Promise<CodexAppServerProbeResult> => ({
+    status: "observed",
+    provider: "openai",
+    cliVersion: "codex-cli 0.147.0",
+    plan: "plus",
+    windows: [{ name: "primary", model: null, usedPercent: 100, durationMs: 5 * HOUR, resetsAt: new Date(now.getTime() + 4 * HOUR).toISOString() }],
+  });
+  t = await bootTidepool({ openaiUsage: throttledOpenai, taskExecutionCandidates: () => [opus, sol] });
+  await promote(t);
+  await rejectOpusSession(t);
+
+  const later = await registerWork(t, "later");
+  await t.clock.advance(HOUR);
+
+  expect(settingsOf(t, later.id)).toEqual(byLearner(opus));
+  expect(shadowRows(t).at(-1)).toMatchObject({ task_id: later.id, recommended: cellOf(opus), actual: cellOf(opus) });
 });

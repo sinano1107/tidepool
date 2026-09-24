@@ -219,7 +219,7 @@ function toQuestionCardShape(
     })),
     // 承認 question(決裁権外の子の登録)と、approve で親の risk が上がるかは
     // 盤面の `approval` 注釈が答える(issue #757)— ここは描画の形に写すだけ
-    ...(q.question_proposal?.kind === 'routing' && { amendable: true }),
+    ...(q.question_proposal?.kind === 'routing' && q.question_proposal.op === 'row' && { amendable: true }),
     ...(q.approval && {
       kind: 'approval',
       ...(q.approval.raises_parent_risk && { note: `approving raises ${q.parent_id} risk (upward propagation)` }),
