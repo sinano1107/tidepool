@@ -438,7 +438,7 @@ export type EventKind = EventPayload["kind"];
 
 /** 盤面スコープの kind —— task を持たず、task_id を NULL で書く(issue #545 / #590 / #927)。
  *  一覧はここにだけ置き、`appendEvent` の型がこの一覧と taskId の null を結ぶ。 */
-export const BOARD_SCOPED_KINDS = [
+const BOARD_SCOPED_KINDS = [
   "execution_settings_changed",
   "memory_entry_created",
   "memory_entry_invalidated",
@@ -489,8 +489,8 @@ export function appendEvent(
 }
 
 /** The decision log is not its own entity: it is the events table narrowed to
- *  the kinds a human skims (issue #5). Kinds join this list; no table is added. */
-// satisfies は listLog の inner join の前提(どれも盤面スコープでない)を型で断言する(issue #927)。
+ *  the kinds a human skims (issue #5). Kinds join this list; no table is added.
+ *  satisfies は listLog の inner join の前提(どれも盤面スコープでない)を型で断言する(issue #927)。 */
 export const HUMAN_FACING_KINDS = ["decision_logged", "task_completed", "premise_breached"] as const satisfies readonly Exclude<
   EventKind,
   BoardScopedKind
