@@ -21,7 +21,7 @@ import {
 import { type GitHubClient, IssueGoneError } from "./github.js";
 import type { GitHubAuth } from "./github-auth.js";
 import { type HarnessContainmentCheck, harnessContainmentPickupBlocked } from "./harness-containment.js";
-import { aggregateCells, loadEpisodes, type RoutingEpisode, recordShadow, selectorBranch } from "./learner.js";
+import { aggregateCells, type CellStats, loadEpisodes, type RoutingEpisode, recordShadow, selectorBranch } from "./learner.js";
 import { registerDueMetaReviews } from "./meta-review.js";
 import type { ProcessContainers } from "./process-container.js";
 import { quarantineExcludedProviders, quarantineStops } from "./quarantine.js";
@@ -572,13 +572,15 @@ export function startScheduler(deps: {
       // フラグは poll ごとに1度、episode は分岐が要るときに1度だけ読む
       const promoted = readExecutionSettings(db).learnerPromoted;
       let episodes: RoutingEpisode[] | undefined;
-      const branch = (task: Task, promotedNow: boolean) => {
+      let board: CellStats[] | undefined;
+      const branch = (task: Task, pool: ExecutionSetting[], promotedNow: boolean) => {
         episodes ??= loadEpisodes(db);
+        board ??= aggregateCells(episodes);
         const inWorkspace = episodes.filter((e) => e.workspace === task.workspace);
         return selectorBranch({
           promoted: promotedNow,
-          candidates: selectable(candidates, entryExcluded),
-          board: aggregateCells(episodes),
+          candidates: pool,
+          board,
           workspace: aggregateCells(inWorkspace),
           priority: task.priority ?? BOARD_DEFAULT_PRIORITY,
         });
@@ -587,8 +589,9 @@ export function startScheduler(deps: {
       /** 1手の選択: 昇格中の work task は学習器の選択、それ以外は表の先頭。どちらも下の観測 → 除外 → 引き直しを通るので、
        *  昇格しても Throttle / Spend-down / Provider 認証の除外は同じく効く。review task はフラグを読まない(ADR 0111 決定3) */
       const pick = (task: Task): ExecutionSetting | null => {
-        branched = promoted && task.type === "work" && selectable(candidates, entryExcluded).length > 0 ? branch(task, true) : undefined;
-        return branched ? branched.chosen : firstSelectable(candidates, entryExcluded);
+        const pool = selectable(candidates, entryExcluded);
+        branched = promoted && task.type === "work" && pool.length > 0 ? branch(task, pool, true) : undefined;
+        return branched?.chosen ?? pool[0] ?? null;
       };
       while (head) {
         const assignee = resolveTaskAgent(head, worker.id, auditorName);
@@ -671,7 +674,7 @@ export function startScheduler(deps: {
       // 学習器が倒れても pickup は進む
       if (head.type === "work") {
         try {
-          recordShadow(db, head.id, (branched ?? branch(head, false)).shadow, clock.now());
+          recordShadow(db, head.id, (branched ?? branch(head, selectable(candidates, entryExcluded), false)).shadow, clock.now());
         } catch (err) {
           console.error(`[scheduler] learner shadow row failed for ${head.id}:`, err);
         }
