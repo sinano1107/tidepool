@@ -289,6 +289,7 @@ it("昇格の提案はフラグが寝ている間だけ立ち、pin にフラグ
     expect((await answer(question_id, { answers: ["approve"] })).status).toBe(200);
     expect(await learnerPromoted()).toBe(true);
     expect(await call("propose_routing_change", { op: "promote", rationale: "r" })).toMatchObject({ error: expect.stringContaining("already promoted") });
+    expect(await call("propose_routing_change", { op: "demote", change: { tier: "economy" }, rationale: "r" })).toMatchObject({ error: expect.stringContaining("takes no row and no change") });
   } finally {
     await client.close();
   }

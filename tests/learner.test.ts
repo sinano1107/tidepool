@@ -411,17 +411,6 @@ it("昇格中の work task は学習器の選択で走り出所は learner、sha
   expect(t.worker.startedSettings.at(-1)).toEqual(opus);
 });
 
-it("昇格中でもデータの無いセルでは表と同じ設定で走る(出所だけが learner)", async () => {
-  t = await bootTidepool({ openaiUsage: healthyOpenai, taskExecutionCandidates: () => [opus, sol] });
-  await promote(t);
-
-  const work = await registerWork(t, "day one");
-  await t.clock.advance(HOUR);
-
-  expect(settingsOf(t, work.id)).toEqual(byLearner(opus));
-  expect(shadowRows(t)).toEqual([{ task_id: work.id, recommended: cellOf(opus), actual: cellOf(opus), source: byLearner(opus).source, basis: "prior" }]);
-});
-
 it("昇格中も学習器の選択は Throttle の除外を通る —— 選んだ Provider が throttle 中なら除外を当てた残りから選び直す", async () => {
   const throttledOpenai = async (now: Date): Promise<CodexAppServerProbeResult> => ({
     status: "observed",

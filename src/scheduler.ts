@@ -569,16 +569,16 @@ export function startScheduler(deps: {
       let chosen: ExecutionSetting | undefined;
       let candidates: ExecutionSetting[] = [];
       // 学習器の分岐(ADR 0110 決定4 / ADR 0150 決定3): 除外を当てた候補から、走る設定と shadow 行の組を決める。
-      // フラグは poll ごとに1度、episode は分岐が要るときに1度だけ読む
+      // フラグは poll ごとに1度読み(review task は分岐しない)、episode は分岐が要るときに1度だけ読む
       const promoted = readExecutionSettings(db).learnerPromoted;
       let episodes: RoutingEpisode[] | undefined;
       let board: CellStats[] | undefined;
-      const branch = (task: Task, pool: ExecutionSetting[], promotedNow: boolean) => {
+      const branch = (task: Task, pool: ExecutionSetting[]) => {
         episodes ??= loadEpisodes(db);
         board ??= aggregateCells(episodes);
         const inWorkspace = episodes.filter((e) => e.workspace === task.workspace);
         return selectorBranch({
-          promoted: promotedNow,
+          promoted,
           candidates: pool,
           board,
           workspace: aggregateCells(inWorkspace),
@@ -587,10 +587,18 @@ export function startScheduler(deps: {
       };
       let branched: ReturnType<typeof branch> | undefined;
       /** 1手の選択: 昇格中の work task は学習器の選択、それ以外は表の先頭。どちらも下の観測 → 除外 → 引き直しを通るので、
-       *  昇格しても Throttle / Spend-down / Provider 認証の除外は同じく効く。review task はフラグを読まない(ADR 0111 決定3) */
+       *  昇格しても Throttle / Spend-down / Provider 認証の除外は同じく効く。review task は分岐しない(ADR 0111 決定3) */
       const pick = (task: Task): ExecutionSetting | null => {
         const pool = selectable(candidates, entryExcluded);
-        branched = promoted && task.type === "work" && pool.length > 0 ? branch(task, pool, true) : undefined;
+        branched = undefined;
+        if (promoted && task.type === "work" && pool.length > 0) {
+          // 学習器が倒れたら表の先頭で走る —— 出所は表のままなので記録は偽らず、盤面も止まらない
+          try {
+            branched = branch(task, pool);
+          } catch (err) {
+            console.error(`[scheduler] learner failed for ${task.id}; running the table's choice:`, err);
+          }
+        }
         return branched?.chosen ?? pool[0] ?? null;
       };
       while (head) {
@@ -672,9 +680,10 @@ export function startScheduler(deps: {
       // 学習器の shadow 行(ADR 0110 決定4): work task の pickup ごとに、走る設定の反対側(昇格前は学習器の推薦、昇格後は
       // 表の先頭)を並べて1行残す。review task は学習器を参照しない(ADR 0111 決定3)。昇格前の記録は選択に介入しない ——
       // 学習器が倒れても pickup は進む
-      if (head.type === "work") {
+      // 昇格中に学習器が倒れた pickup は shadow の組が無いので残さない
+      if (head.type === "work" && (branched || !promoted)) {
         try {
-          recordShadow(db, head.id, (branched ?? branch(head, selectable(candidates, entryExcluded), false)).shadow, clock.now());
+          recordShadow(db, head.id, (branched ?? branch(head, selectable(candidates, entryExcluded))).shadow, clock.now());
         } catch (err) {
           console.error(`[scheduler] learner shadow row failed for ${head.id}:`, err);
         }

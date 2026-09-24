@@ -235,7 +235,7 @@ export function rowFor(table: ExecutionSettingTable, provider: Provider, tier: T
 
 /** entry 集合から要求ティアの行を全部集め、優先順位の鍵で並べる(ADR 0110 決定3 /
  *  ADR 0114 決定3・4)。**除外は当てない** —— 除外は観測のたびに育つので、盤面境界が
- *  候補を1度作り、除外が増えるたびに `firstSelectable` を引き直す形にしてある。
+ *  候補を1度作り、除外が増えるたびに `selectable` を引き直す形にしてある。
  *  要求ティアの行を持たない entry は候補に入らない(Throttle と同じ「除外」)。
  *
  *  advisor の model は agent.md には書かれない: 真のときだけ表から導出し、同
@@ -345,7 +345,7 @@ interface ExecutionDefaults {
   learnerPromoted: boolean;
 }
 
-/** settings タブ / 管理MCP の読み口(ADR 0110 決定5): 表と盤面設定3値を1往復で。
+/** settings タブ / 管理MCP の読み口(ADR 0110 決定5): 表と盤面設定4値を1往復で。
  *  表は (provider, model) 順 —— 主キーの順で、UI も MCP も同じ並びを見る。 */
 export function readExecutionSettings(db: Db): ExecutionDefaults & { table: ExecutionSettingTable } {
   return { table: loadExecutionSettingTable(db), ...loadExecutionDefaults(db) };
@@ -448,7 +448,7 @@ export function applyExecutionSettingsChange(db: Db, change: ExecutionSettingsCh
       default: {
         const column = change.setting;
         const value =
-          change.setting === "frontier_advisor" || change.setting === "learner_promoted" ? Number(change.value)
+          typeof change.value === "boolean" ? Number(change.value)
           : change.setting === "provider_rank" ? JSON.stringify(change.value) : change.value;
         db.prepare(
           `INSERT INTO execution_defaults (id, ${column}) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET ${column} = excluded.${column}`,
@@ -479,7 +479,7 @@ export function applyExecutionSettingsChange(db: Db, change: ExecutionSettingsCh
 function loadExecutionDefaults(db: Db): ExecutionDefaults {
   const row = db
     .prepare("SELECT frontier_advisor, provider_rank, priority, learner_promoted FROM execution_defaults WHERE id = 1")
-    .get() as { frontier_advisor: number; provider_rank: string | null; priority: Priority | null; learner_promoted: number | null } | undefined;
+    .get() as { frontier_advisor: number; provider_rank: string | null; priority: Priority | null; learner_promoted: number } | undefined;
   return {
     frontierAdvisor: row?.frontier_advisor === 1,
     providerRank: row?.provider_rank ? (JSON.parse(row.provider_rank) as Provider[]) : PROVIDER_VALUES,
@@ -536,7 +536,7 @@ export function executionSettingsFor(
 }
 
 /** 除外を当てずに1つ選ぶ —— Provider 順位の先頭 entry の設定である。除外を当てた
- *  選択は pickup の側にあり、そちらは育った除外集合を `firstSelectable` へ渡す。 */
+ *  選択は pickup の側にあり、そちらは育った除外集合を `selectable` へ渡す。 */
 export function resolveExecutionSetting(
   db: Db,
   definition: Pick<AgentDefinition, "provider" | "tier">,

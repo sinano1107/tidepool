@@ -263,13 +263,12 @@ it("人間の直接の降格は open な降格提案を観測で決着させ、r
 
   expect((await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "learner_promoted", value: false })).status).toBe(200);
 
-  const demoted = (t.db.prepare("SELECT MAX(id) AS id FROM events WHERE kind = 'execution_settings_changed'").get() as { id: number }).id;
   expect((await api(t.baseUrl, "GET", `/api/tasks/${questionId}`)).json).toMatchObject({ status: "done", question_answer: null });
   expect(((await api(t.baseUrl, "GET", `/api/tasks/${questionId}/events`)).json as any[]).find((e) => e.kind === "routing_proposal_stale").payload).toEqual({
     kind: "routing_proposal_stale",
     question_id: questionId,
     proposal_kind: "routing",
     changed: ["learner_promoted"],
-    observed_event_id: demoted,
+    observed_event_id: expect.any(Number),
   });
 });

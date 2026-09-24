@@ -157,6 +157,7 @@ export function proposeRoutingChange(
     ];
     purpose = "The routing meta-review proposes changing one row of the execution-setting table. Approve applies it, with your amendment if you give one; reject leaves the table as is.";
   } else {
+    if (input.row !== undefined || input.change !== undefined) throw new DomainError(`op ${input.op} takes no row and no change`);
     const promoted = readExecutionSettings(db).learnerPromoted;
     const promote = input.op === "promote";
     if (promote === promoted) throw new DomainError(`the learner is already ${promoted ? "promoted" : "not promoted"}; op ${input.op} only applies while it is ${promoted ? "not promoted" : "promoted"}`);
