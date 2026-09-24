@@ -31,7 +31,7 @@ import {
 import { type MetaReviewSubject, metaReviewSubjectOf } from "./meta-review.js";
 import type { ProcessContainers } from "./process-container.js";
 import { type AuthorityProfile, REVIEWER_AUTHORITY_PROFILE, type RosterAgent } from "./registry.js";
-import { listAllocations, listRoutingCells, listRoutingShadow } from "./routing-review.js";
+import { listAllocations, listRoutingCells, listRoutingProposals, listRoutingShadow, proposeRoutingChange } from "./routing-review.js";
 import type { Slot } from "./slot.js";
 import { createStatelessMcpRouter } from "./stateless-mcp.js";
 import {
@@ -895,9 +895,31 @@ function registerRoutingMetaReviewVerbs(server: McpServer, deps: McpDeps, run: M
     "read_routing_settings",
     {
       description:
-        "Read the current execution-setting table, the frontier advisor setting, the provider rank and the default priority.",
+        "Read the current execution-setting table, the frontier advisor setting, the provider rank and the default priority, " +
+        "and every past routing proposal with its answer, the human's amendment and comment, or why the board settled it as observed " +
+        "(the pinned row changed or was deleted).",
     },
-    async () => run(() => readExecutionSettings(deps.db)),
+    async () => run(() => ({ ...readExecutionSettings(deps.db), proposals: listRoutingProposals(deps.db) })),
+  );
+
+  server.registerTool(
+    "propose_routing_change",
+    {
+      description:
+        "Propose a routing change to the human as one approve / reject question attached to this task. op row replaces the " +
+        "tier (economy / standard / frontier) and/or effort of one existing execution-setting row, named by provider and model; " +
+        "change takes only those two fields. rationale is your evidence summary (episode count, tier source, period) and is shown " +
+        "with the diff. The human may amend the values when approving. The board applies the answer itself, so you can complete " +
+        "this task without waiting for it. Returns the question id. " +
+        BOARD_WRITE_LANGUAGE_RULE,
+      inputSchema: {
+        op: z.enum(["row"]),
+        row: z.object({ provider: z.string(), model: z.string() }),
+        change: z.record(z.string(), z.unknown()).describe("tier and/or effort, nothing else."),
+        rationale: z.string().min(1),
+      },
+    },
+    async (input) => run((reader, now) => proposeRoutingChange(deps.db, reader.taskId, input, reader.agent, now)),
   );
 }
 

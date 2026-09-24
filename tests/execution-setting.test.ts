@@ -4,15 +4,19 @@ import {
   assertAdvisorPairing,
   BOARD_DEFAULT_PRIORITY,
   BOARD_DEFAULT_TIER,
+  composeRoutingRow,
   type ExecutionSetting,
   type ExecutionSettingTable,
   PRIORITIES,
+  parseRoutingRowChange,
+  routingPinChanges,
   SEED_EXECUTION_SETTINGS,
   type SelectorInput,
   selectExecutionSetting,
   TIERS,
 } from "../src/execution-setting.js";
 import { PROVIDER_VALUES } from "../src/registry.js";
+import { DomainError } from "../src/tasks.js";
 
 const table: ExecutionSettingTable = SEED_EXECUTION_SETTINGS;
 
@@ -394,4 +398,31 @@ it("advisor のティアが main と同じなら main の行そのもの —— 
 
 it("review の要求は priority を持たず quality の並べ方で解決される(ADR 0111 決定3)", () => {
   expect(select(input({ entries: both, reviewTier: "standard", priority: "cost" })).model).toBe("opus");
+});
+
+/** routing の行の提案(issue #918 / ADR 0150 決定1): pin はその行の全欄。 */
+const opusRow = { provider: "anthropic", tier: "standard", model: "opus", effort: "high", price_in: 5, price_out: 25 } as const;
+const rowProposal = { kind: "routing", op: "row", row: { provider: "anthropic", model: "opus" }, change: { tier: "frontier" }, pin: opusRow } as const;
+
+it("pin の照合は行の全欄の一致で、崩れた欄の名前を返す —— 行が消えていれば null", () => {
+  expect(routingPinChanges(rowProposal, SEED_EXECUTION_SETTINGS)).toEqual([]);
+  const edited = SEED_EXECUTION_SETTINGS.map((row) => (row.model === "opus" ? { ...row, effort: "max", price_out: 30 } : row));
+  expect(routingPinChanges(rowProposal, edited)).toEqual(["effort", "price_out"]);
+  // 別の行の編集は pin に触れない
+  const other = SEED_EXECUTION_SETTINGS.map((row) => (row.model === "sonnet" ? { ...row, tier: "standard" as const } : row));
+  expect(routingPinChanges(rowProposal, other)).toEqual([]);
+  expect(routingPinChanges(rowProposal, SEED_EXECUTION_SETTINGS.filter((row) => row.model !== "opus"))).toBeNull();
+});
+
+it("適用する行は pin の行に提案の変更、その上に修正値を重ねたもの", () => {
+  expect(composeRoutingRow(rowProposal)).toEqual({ ...opusRow, tier: "frontier" });
+  expect(composeRoutingRow(rowProposal, { effort: "max" })).toEqual({ ...opusRow, tier: "frontier", effort: "max" });
+  expect(composeRoutingRow(rowProposal, { tier: "economy" })).toEqual({ ...opusRow, tier: "economy" });
+});
+
+it("行の変更・修正値の形は tier / effort の少なくとも1つだけで、それ以外は DomainError", () => {
+  expect(parseRoutingRowChange({ tier: "economy", effort: "low" })).toEqual({ tier: "economy", effort: "low" });
+  for (const bad of [{}, { tier: "ultra" }, { effort: "" }, { tier: "economy", price_in: 1 }, "frontier", null]) {
+    expect(() => parseRoutingRowChange(bad)).toThrow(DomainError);
+  }
 });

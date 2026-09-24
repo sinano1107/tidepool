@@ -126,7 +126,7 @@ async function boardWithRoutingReview() {
   return { review, client, call };
 }
 
-it("主題 routing の task の接続は、普通の task の一覧から worker の memory verb を除き読み口4本と list_precedents を足したもの", async () => {
+it("主題 routing の task の接続は、普通の task の一覧から worker の memory verb を除き読み口4本と list_precedents と提案 verb を足したもの", async () => {
   const { client } = await boardWithRoutingReview();
   const work = await registerWork(t, "index the tide charts");
   const workClient = await mcpClient(t.mcpBaseUrl, work.id);
@@ -135,21 +135,23 @@ it("主題 routing の task の接続は、普通の task の一覧から worker
     const routing = await names(client);
     const worker = await names(workClient);
     const memory: string[] = [...WORKER_MEMORY_VERBS];
-    expect(worker.filter((name) => [...ROUTING_READS, "list_precedents"].includes(name))).toEqual([]);
-    expect(routing.sort()).toEqual([...worker.filter((name) => !memory.includes(name)), ...ROUTING_READS, "list_precedents"].sort());
+    expect(worker.filter((name) => [...ROUTING_READS, "list_precedents", "propose_routing_change"].includes(name))).toEqual([]);
+    expect(routing.sort()).toEqual([...worker.filter((name) => !memory.includes(name)), ...ROUTING_READS, "list_precedents", "propose_routing_change"].sort());
   } finally {
     await client.close();
     await workClient.close();
   }
 });
 
-it("主題外の task から読み口を呼ぶと tool error", async () => {
+it("主題外の task から読み口・提案 verb を呼ぶと tool error", async () => {
   t = await bootTidepool();
   const work = await registerWork(t, "index the tide charts");
   await t.clock.advance(HOUR);
   const client = await mcpClient(t.mcpBaseUrl, work.id);
   try {
     for (const name of ROUTING_READS) expect((await client.callTool({ name, arguments: {} })).isError).toBe(true);
+    const proposal = { op: "row", row: { provider: "anthropic", model: "opus" }, change: { tier: "frontier" }, rationale: "r" };
+    expect((await client.callTool({ name: "propose_routing_change", arguments: proposal })).isError).toBe(true);
   } finally {
     await client.close();
   }

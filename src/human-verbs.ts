@@ -6,6 +6,7 @@ import type { ContainmentCheck } from "./containment.js";
 import type { Db } from "./db.js";
 import type { DraftClient } from "./draft.js";
 import { appendEvent, type EventOrigin } from "./events.js";
+import { applyExecutionSettingsChange, composeRoutingRow, parseRoutingRowChange } from "./execution-setting.js";
 import { type GitHubClient, IssueGoneError } from "./github.js";
 import type { HarnessContainmentCheck } from "./harness-containment.js";
 import { type Landing, type LandingVerdict, landingBlock } from "./landing.js";
@@ -726,11 +727,18 @@ export async function submitAnswer(
   now: () => Date,
   origin: EventOrigin = "webui",
   openTriage = false,
+  amendment?: unknown,
 ): Promise<Task> {
   // Every special-case side effect below must come after this validation.
   // Otherwise a malformed answer can retry promotion, inspect/merge a PR, or
   // verify quarantine before answerQuestion eventually rejects the payload.
   assertAnswerable(task, answers);
+  const proposal = task.question_proposal;
+  // 修正値を受けるのは routing の提案の approve だけ(ADR 0150 決定2)。memory の修正値(#915)も黙って捨てず断る
+  if (amendment !== undefined && (proposal?.kind !== "routing" || answers[0] !== "approve")) {
+    throw new DomainError("only an approve answer to a routing proposal takes an amendment");
+  }
+  const amended = amendment === undefined ? undefined : parseRoutingRowChange(amendment);
 
   const promotionTaskId = task.question_pending_pr_promotion_task_id;
   const wantsPromotionRetry =
@@ -817,8 +825,9 @@ export async function submitAnswer(
   // An answer during triage is durable immediately, but its parent unblock is
   // staged until commit. The activity touch also defers the timeout close.
   const session = triageActivity(deps.db, now(), openTriage);
-  // 提案 question(ADR 0120 決定3・spec #615 F)は回答と記憶の適用を1 transaction にする —— approve は承認の export
-  // (pin 不一致の DomainError は回答ごと巻き戻す)、reject は reject の export
+  // 提案 question(ADR 0120 決定3・spec #615 F / ADR 0150)は回答と適用を1 transaction にする。memory の approve は承認の
+  // export(pin 不一致の DomainError は回答ごと巻き戻す)、reject は reject の export。routing の approve は表の書き口で
+  // 行を書く —— 回答が先に question を done にするので、書き口の陳腐化の hook はこの question 自身を決着させない
   const { question, parentUnblocked, pickupResumed } = deps.db.transaction(() => {
     const answered = answerQuestion(
       deps.db,
@@ -827,11 +836,15 @@ export async function submitAnswer(
       now(),
       session && ((taskId) => stageFrontInsert(deps.db, session.id, taskId)),
       comment,
+      amended,
       origin,
     );
-    const proposal = task.question_proposal;
-    if (proposal && answers[0] === "approve") approveMemoryProposal(deps.db, proposal, task.id, origin, now());
-    else if (proposal) rejectMemoryProposal(deps.db, proposal, origin, now());
+    if (proposal?.kind === "memory") {
+      if (answers[0] === "approve") approveMemoryProposal(deps.db, proposal, task.id, origin, now());
+      else rejectMemoryProposal(deps.db, proposal, origin, now());
+    } else if (proposal?.kind === "routing" && answers[0] === "approve") {
+      applyExecutionSettingsChange(deps.db, { setting: "row", row: composeRoutingRow(proposal, amended) }, origin, now());
+    }
     return answered;
   })();
   if (wantsMerge) {

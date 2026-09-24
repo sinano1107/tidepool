@@ -23,7 +23,11 @@ interface TpQuestion {
   /** 承認 question なら 'approval'、上方伝播があれば note に注記(issue #757)。 */
   kind?: 'approval';
   note?: string;
+  /** routing の提案 question —— approve に修正値(tier / effort)を添えられる(ADR 0150 決定2)。 */
+  amendable?: boolean;
 }
+/** approve に添える修正値。空欄は送らない。 */
+type TpAmendment = { tier?: string; effort?: string };
 /** トリアージが受け取る question —— 着地 question だけが `landing` を持つ
  *  (ADR 0092 決定4)。判定は盤面側で、ここは描画だけ。 */
 interface TpTriageQuestion extends TpQuestion {
@@ -198,21 +202,25 @@ function TpQuestionCard({ q, answer, onAnswer, locked = false, onTranslate }: {
   q: TpQuestion;
   /** 盤面が確定した回答 —— 未回答は null(呼び手は id 引きの map)。 */
   answer?: string[] | null;
-  onAnswer: (answers: string[]) => void;
+  /** amendment は routing の提案を approve したときだけ、入力があれば渡る。 */
+  onAnswer: (answers: string[], amendment?: TpAmendment) => void;
   /** 回答済みのカードは選び直せない。 */
   locked?: boolean;
   onTranslate?: TpTranslateFn;
 }) {
-  const { Card, AgentChip, Switch } = window.TidepoolDesignSystem_8a0ead;
+  const { Card, AgentChip, Switch, Select, Input } = window.TidepoolDesignSystem_8a0ead;
   const items = q.items;
   const [draft, setDraft] = React.useState<(string | null)[]>(() => answer ?? items.map(() => null));
   // a server-confirmed answer (locked) always wins over in-progress local picks
   React.useEffect(() => { if (answer) setDraft(answer); }, [answer]);
+  const [amendment, setAmendment] = React.useState<TpAmendment>({});
   const setItemAnswer = (i: number, value: string | null) => {
     const next = draft.slice();
     next[i] = value;
     setDraft(next);
-    if (next.every(Boolean)) onAnswer(next as string[]);
+    if (!next.every(Boolean)) return;
+    const filled = Object.fromEntries(Object.entries(amendment).filter(([, v]) => v)) as TpAmendment;
+    onAnswer(next as string[], q.amendable && next[0] === 'approve' && Object.keys(filled).length > 0 ? filled : undefined);
   };
   const answeredCount = draft.filter(Boolean).length;
 
@@ -251,6 +259,14 @@ function TpQuestionCard({ q, answer, onAnswer, locked = false, onTranslate }: {
           : <div style={{ marginBottom: q.note ? 6 : 14 }}><TpTranslationNote result={translation} /></div>
       )}
       {q.note && <div style={{ fontSize: 'var(--text-xs)', color: 'var(--sun-4)', marginBottom: 14 }}>⚠ {q.note}</div>}
+      {q.amendable && !locked && (
+        <div style={{ display: 'flex', gap: 8, marginBottom: 14 }}>
+          <Select label="Amend tier (optional)" value={amendment.tier ?? ''} onChange={(e) => setAmendment({ ...amendment, tier: e.target.value })}
+            options={[{ value: '', label: 'as proposed' }, ...['economy', 'standard', 'frontier'].map((tier) => ({ value: tier, label: tier }))]} />
+          <Input label="Amend effort (optional)" value={amendment.effort ?? ''} placeholder="as proposed" mono
+            onChange={(e) => setAmendment({ ...amendment, effort: e.target.value.trim() })} />
+        </div>
+      )}
       {items.length > 1 && !locked && (
         <div style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--tide-4)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 12 }}>
           {answeredCount} of {items.length} answered — submits together once every item is
@@ -413,7 +429,7 @@ function TriageScreen({ data, onCommit, loadHandoff, onAnswer, onObject, onScrat
     scratch: { id: number; text: string; kind: string }[],
   ) => void;
   loadHandoff: (entry: TpLogEntry) => Promise<string>;
-  onAnswer: (q: TpTriageQuestion, answers: string[]) => Promise<void>;
+  onAnswer: (q: TpTriageQuestion, answers: string[], amendment?: TpAmendment) => Promise<void>;
   onObject: (entry: TpLogEntry, comment: string) => Promise<void>;
   onScratchAdd: (text: string) => Promise<TpScratchLine>;
   onDisplayed: (entries: TpLogEntry[]) => void;
@@ -443,9 +459,9 @@ function TriageScreen({ data, onCommit, loadHandoff, onAnswer, onObject, onScrat
   const [landingNow, setLandingNow] = React.useState<Record<string, { blocked_by: string | null }> | null>(null); // { [questionId]: { blocked_by } }
 
   // live answers are one-way: a persisted answer cannot be untapped or replaced
-  const answerQ = async (q: TpTriageQuestion, a: string[] | null) => {
+  const answerQ = async (q: TpTriageQuestion, a: string[] | null, amendment?: TpAmendment) => {
     if (!a || answers[q.id]) return;
-    try { await onAnswer(q, a); } catch { return; }
+    try { await onAnswer(q, a, amendment); } catch { return; }
     setAnswers((prev) => ({ ...prev, [q.id]: a }));
   };
 
@@ -685,7 +701,7 @@ function TriageScreen({ data, onCommit, loadHandoff, onAnswer, onObject, onScrat
         <div>
           {generalQuestions.map((q, i) => (
             <div key={q.id} className="tp-rise" style={{ animationDelay: `${180 + i * 90}ms` }}>
-              <TpQuestionCard q={q} answer={answers[q.id]} onAnswer={(a) => answerQ(q, a)} locked={!!answers[q.id]} onTranslate={onTranslate} />
+              <TpQuestionCard q={q} answer={answers[q.id]} onAnswer={(a, amendment) => answerQ(q, a, amendment)} locked={!!answers[q.id]} onTranslate={onTranslate} />
             </div>
           ))}
         </div>
@@ -810,7 +826,7 @@ function TriageScreen({ data, onCommit, loadHandoff, onAnswer, onObject, onScrat
         <div>
           {landingReady.map((q, i) => (
             <div key={q.id} className="tp-rise" style={{ animationDelay: `${180 + i * 90}ms` }}>
-              <TpQuestionCard q={q} answer={answers[q.id]} onAnswer={(a) => answerQ(q, a)} locked={!!answers[q.id]} onTranslate={onTranslate} />
+              <TpQuestionCard q={q} answer={answers[q.id]} onAnswer={(a, amendment) => answerQ(q, a, amendment)} locked={!!answers[q.id]} onTranslate={onTranslate} />
             </div>
           ))}
           {/* 回答不能な着地 question は件数と理由の1行だけ — 押せば必ず 409 になる

@@ -236,17 +236,20 @@ function TpTranslationNote({ result }) {
   return /* @__PURE__ */ React.createElement("span", { style: { fontSize: "var(--text-xs)", color: "var(--coral-4)" } }, result.message);
 }
 function TpQuestionCard({ q, answer, onAnswer, locked = false, onTranslate }) {
-  const { Card, AgentChip, Switch } = window.TidepoolDesignSystem_8a0ead;
+  const { Card, AgentChip, Switch, Select, Input } = window.TidepoolDesignSystem_8a0ead;
   const items = q.items;
   const [draft, setDraft] = React.useState(() => answer ?? items.map(() => null));
   React.useEffect(() => {
     if (answer) setDraft(answer);
   }, [answer]);
+  const [amendment, setAmendment] = React.useState({});
   const setItemAnswer = (i, value) => {
     const next = draft.slice();
     next[i] = value;
     setDraft(next);
-    if (next.every(Boolean)) onAnswer(next);
+    if (!next.every(Boolean)) return;
+    const filled = Object.fromEntries(Object.entries(amendment).filter(([, v]) => v));
+    onAnswer(next, q.amendable && next[0] === "approve" && Object.keys(filled).length > 0 ? filled : void 0);
   };
   const answeredCount = draft.filter(Boolean).length;
   const [translateOn, setTranslateOn] = React.useState(false);
@@ -258,7 +261,24 @@ function TpQuestionCard({ q, answer, onAnswer, locked = false, onTranslate }) {
     runTranslate(onTranslate, { type: "question", task_id: q.id }, setTranslation);
   }, [translateOn]);
   const translatedItems = translation && translation.status === "translated" ? translation.items : null;
-  return /* @__PURE__ */ React.createElement(Card, { style: { marginBottom: 12 } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "baseline", gap: 8, marginBottom: 6 } }, /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--text-muted)" } }, q.id), /* @__PURE__ */ React.createElement(AgentChip, { name: q.agent, icon: q.agentIcon, board: q.board, size: "sm" }), /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--text-secondary)" } }, q.agent), q.parent && /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--text-muted)", marginLeft: "auto" } }, "blocks ", q.parent)), q.kind === "approval" && /* @__PURE__ */ React.createElement("span", { style: { display: "inline-block", fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--sun-4)", background: "var(--sun-1)", borderRadius: "var(--radius-full)", padding: "2px 10px", marginBottom: 6 } }, "out-of-authority \u2192 approval"), onTranslate && /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "flex-end", marginBottom: 6 } }, /* @__PURE__ */ React.createElement(Switch, { label: "\u8A33\u3092\u6DFB\u3048\u308B", checked: translateOn, onChange: setTranslateOn })), /* @__PURE__ */ React.createElement("div", { style: { fontSize: "var(--text-sm)", color: "var(--text-secondary)", marginBottom: q.note ? 6 : 14, whiteSpace: "pre-wrap" } }, q.context), translateOn && translation && (translation.status === "translated" ? /* @__PURE__ */ React.createElement("div", { style: { fontSize: "var(--text-sm)", color: "var(--tide-5)", marginBottom: q.note ? 6 : 14, whiteSpace: "pre-wrap" } }, translation.purpose) : /* @__PURE__ */ React.createElement("div", { style: { marginBottom: q.note ? 6 : 14 } }, /* @__PURE__ */ React.createElement(TpTranslationNote, { result: translation }))), q.note && /* @__PURE__ */ React.createElement("div", { style: { fontSize: "var(--text-xs)", color: "var(--sun-4)", marginBottom: 14 } }, "\u26A0 ", q.note), items.length > 1 && !locked && /* @__PURE__ */ React.createElement("div", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--tide-4)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 12 } }, answeredCount, " of ", items.length, " answered \u2014 submits together once every item is"), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 18 } }, items.map((item, i) => /* @__PURE__ */ React.createElement(
+  return /* @__PURE__ */ React.createElement(Card, { style: { marginBottom: 12 } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "baseline", gap: 8, marginBottom: 6 } }, /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--text-muted)" } }, q.id), /* @__PURE__ */ React.createElement(AgentChip, { name: q.agent, icon: q.agentIcon, board: q.board, size: "sm" }), /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--text-secondary)" } }, q.agent), q.parent && /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--text-muted)", marginLeft: "auto" } }, "blocks ", q.parent)), q.kind === "approval" && /* @__PURE__ */ React.createElement("span", { style: { display: "inline-block", fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--sun-4)", background: "var(--sun-1)", borderRadius: "var(--radius-full)", padding: "2px 10px", marginBottom: 6 } }, "out-of-authority \u2192 approval"), onTranslate && /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "flex-end", marginBottom: 6 } }, /* @__PURE__ */ React.createElement(Switch, { label: "\u8A33\u3092\u6DFB\u3048\u308B", checked: translateOn, onChange: setTranslateOn })), /* @__PURE__ */ React.createElement("div", { style: { fontSize: "var(--text-sm)", color: "var(--text-secondary)", marginBottom: q.note ? 6 : 14, whiteSpace: "pre-wrap" } }, q.context), translateOn && translation && (translation.status === "translated" ? /* @__PURE__ */ React.createElement("div", { style: { fontSize: "var(--text-sm)", color: "var(--tide-5)", marginBottom: q.note ? 6 : 14, whiteSpace: "pre-wrap" } }, translation.purpose) : /* @__PURE__ */ React.createElement("div", { style: { marginBottom: q.note ? 6 : 14 } }, /* @__PURE__ */ React.createElement(TpTranslationNote, { result: translation }))), q.note && /* @__PURE__ */ React.createElement("div", { style: { fontSize: "var(--text-xs)", color: "var(--sun-4)", marginBottom: 14 } }, "\u26A0 ", q.note), q.amendable && !locked && /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8, marginBottom: 14 } }, /* @__PURE__ */ React.createElement(
+    Select,
+    {
+      label: "Amend tier (optional)",
+      value: amendment.tier ?? "",
+      onChange: (e) => setAmendment({ ...amendment, tier: e.target.value }),
+      options: [{ value: "", label: "as proposed" }, ...["economy", "standard", "frontier"].map((tier) => ({ value: tier, label: tier }))]
+    }
+  ), /* @__PURE__ */ React.createElement(
+    Input,
+    {
+      label: "Amend effort (optional)",
+      value: amendment.effort ?? "",
+      placeholder: "as proposed",
+      mono: true,
+      onChange: (e) => setAmendment({ ...amendment, effort: e.target.value.trim() })
+    }
+  )), items.length > 1 && !locked && /* @__PURE__ */ React.createElement("div", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--tide-4)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 12 } }, answeredCount, " of ", items.length, " answered \u2014 submits together once every item is"), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 18 } }, items.map((item, i) => /* @__PURE__ */ React.createElement(
     TpQuestionItemPicker,
     {
       key: i,
@@ -379,10 +399,10 @@ function TriageScreen({ data, onCommit, loadHandoff, onAnswer, onObject, onScrat
   const [scratchKinds, setScratchKinds] = React.useState({});
   const [preview, setPreview] = React.useState(null);
   const [landingNow, setLandingNow] = React.useState(null);
-  const answerQ = async (q, a) => {
+  const answerQ = async (q, a, amendment) => {
     if (!a || answers[q.id]) return;
     try {
-      await onAnswer(q, a);
+      await onAnswer(q, a, amendment);
     } catch {
       return;
     }
@@ -552,7 +572,7 @@ function TriageScreen({ data, onCommit, loadHandoff, onAnswer, onObject, onScrat
     ...scratch.map((s) => ({ id: s.id, text: s.text, kind: scratchKinds[s.id] || "task" })),
     ...dropped.map((s) => ({ id: s.id, text: s.text, kind: "discard" }))
   ];
-  return /* @__PURE__ */ React.createElement("div", { key: section, style: { padding: "20px 16px 28px" } }, /* @__PURE__ */ React.createElement("div", { className: "tp-rise", style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--tide-4)", letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: 8 } }, cur.step), /* @__PURE__ */ React.createElement("h1", { className: "tp-rise", style: { fontFamily: "var(--font-display)", fontStyle: "italic", fontSize: "var(--text-2xl)", fontWeight: 400, color: "var(--tide-5)", margin: "0 0 4px", lineHeight: 1.15, animationDelay: "60ms" } }, cur.title), /* @__PURE__ */ React.createElement("p", { className: "tp-rise", style: { fontSize: "var(--text-sm)", color: "var(--text-secondary)", margin: "0 0 20px", animationDelay: "120ms" } }, cur.sub), section === S_QUESTIONS ? /* @__PURE__ */ React.createElement(TpSegmentGauge, { total: nQuestions, filled: answered }) : /* @__PURE__ */ React.createElement(TpWaterline, { progress }), /* @__PURE__ */ React.createElement("div", { style: { height: 20 } }), section === S_QUESTIONS && /* @__PURE__ */ React.createElement("div", null, generalQuestions.map((q, i) => /* @__PURE__ */ React.createElement("div", { key: q.id, className: "tp-rise", style: { animationDelay: `${180 + i * 90}ms` } }, /* @__PURE__ */ React.createElement(TpQuestionCard, { q, answer: answers[q.id], onAnswer: (a) => answerQ(q, a), locked: !!answers[q.id], onTranslate })))), section === S_LOG && (() => {
+  return /* @__PURE__ */ React.createElement("div", { key: section, style: { padding: "20px 16px 28px" } }, /* @__PURE__ */ React.createElement("div", { className: "tp-rise", style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--tide-4)", letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: 8 } }, cur.step), /* @__PURE__ */ React.createElement("h1", { className: "tp-rise", style: { fontFamily: "var(--font-display)", fontStyle: "italic", fontSize: "var(--text-2xl)", fontWeight: 400, color: "var(--tide-5)", margin: "0 0 4px", lineHeight: 1.15, animationDelay: "60ms" } }, cur.title), /* @__PURE__ */ React.createElement("p", { className: "tp-rise", style: { fontSize: "var(--text-sm)", color: "var(--text-secondary)", margin: "0 0 20px", animationDelay: "120ms" } }, cur.sub), section === S_QUESTIONS ? /* @__PURE__ */ React.createElement(TpSegmentGauge, { total: nQuestions, filled: answered }) : /* @__PURE__ */ React.createElement(TpWaterline, { progress }), /* @__PURE__ */ React.createElement("div", { style: { height: 20 } }), section === S_QUESTIONS && /* @__PURE__ */ React.createElement("div", null, generalQuestions.map((q, i) => /* @__PURE__ */ React.createElement("div", { key: q.id, className: "tp-rise", style: { animationDelay: `${180 + i * 90}ms` } }, /* @__PURE__ */ React.createElement(TpQuestionCard, { q, answer: answers[q.id], onAnswer: (a, amendment) => answerQ(q, a, amendment), locked: !!answers[q.id], onTranslate })))), section === S_LOG && (() => {
     const renderLogRow = (l) => {
       const k = l.id;
       const hasHandoff = l.kind === "completion" && l.handoffPresent;
@@ -607,7 +627,7 @@ function TriageScreen({ data, onCommit, loadHandoff, onAnswer, onObject, onScrat
         " \u2014 show"
       ), visibleReadEntries.map(renderLogRow), unreadEntries.map(renderLogRow));
     })));
-  })(), section === S_MERGE && /* @__PURE__ */ React.createElement("div", null, landingReady.map((q, i) => /* @__PURE__ */ React.createElement("div", { key: q.id, className: "tp-rise", style: { animationDelay: `${180 + i * 90}ms` } }, /* @__PURE__ */ React.createElement(TpQuestionCard, { q, answer: answers[q.id], onAnswer: (a) => answerQ(q, a), locked: !!answers[q.id], onTranslate }))), Object.keys(TP_LANDING_BLOCKED).map((kind) => {
+  })(), section === S_MERGE && /* @__PURE__ */ React.createElement("div", null, landingReady.map((q, i) => /* @__PURE__ */ React.createElement("div", { key: q.id, className: "tp-rise", style: { animationDelay: `${180 + i * 90}ms` } }, /* @__PURE__ */ React.createElement(TpQuestionCard, { q, answer: answers[q.id], onAnswer: (a, amendment) => answerQ(q, a, amendment), locked: !!answers[q.id], onTranslate }))), Object.keys(TP_LANDING_BLOCKED).map((kind) => {
     const blocked = landingBlocked.filter((q) => landingBlockOf(q) === kind);
     if (blocked.length === 0) return null;
     return /* @__PURE__ */ React.createElement("p", { key: kind, style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--text-muted)", margin: "0 0 8px" } }, blocked.length, " landing question", blocked.length > 1 ? "s" : "", " not yet answerable \u2014 ", TP_LANDING_BLOCKED[kind]);
@@ -2828,6 +2848,7 @@ function toQuestionCardShape(q, icons) {
     })),
     // 承認 question(決裁権外の子の登録)と、approve で親の risk が上がるかは
     // 盤面の `approval` 注釈が答える(issue #757)— ここは描画の形に写すだけ
+    ...q.question_proposal?.kind === "routing" && { amendable: true },
     ...q.approval && {
       kind: "approval",
       ...q.approval.raises_parent_risk && { note: `approving raises ${q.parent_id} risk (upward propagation)` }
@@ -3031,12 +3052,12 @@ function QuestionDeepLinkView({ questionId, onDone, onTranslate }) {
       cancelled = true;
     };
   }, [questionId]);
-  const answer = async (answers) => {
+  const answer = async (answers, amendment) => {
     if (busy) return;
     setBusy(true);
     setErr(null);
     try {
-      await api(`/api/tasks/${questionId}/answer`, { answers });
+      await api(`/api/tasks/${questionId}/answer`, { answers, amendment });
       onDone(rawTask);
     } catch (e) {
       setErr(String(e.message || e));
@@ -3326,9 +3347,9 @@ function App() {
     setData((d) => tab === "triage" && d ? { ...fresh, questions: d.questions, log: d.log, lastLogId: d.lastLogId } : fresh);
     return fresh;
   };
-  const answerNow = async (q, a) => {
+  const answerNow = async (q, a, amendment) => {
     try {
-      await api(`/api/tasks/${q.id}/answer`, { answers: a, triage: true });
+      await api(`/api/tasks/${q.id}/answer`, { answers: a, triage: true, amendment });
     } catch (err) {
       say("danger", "answer failed", String(err.message || err));
       throw err;

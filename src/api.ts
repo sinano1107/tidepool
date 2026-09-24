@@ -376,6 +376,8 @@ const answerSchema = z.object({
   // (silence is fine on approve, and a reject often needs no more than the
   // option name), carried through verbatim onto the question_answered event
   comment: z.string().min(1).optional(),
+  // routing の提案の approve に添える修正値(ADR 0150 決定2)。形は提案の種別ごとなので、検査は submitAnswer が持つ
+  amendment: z.record(z.string(), z.unknown()).optional(),
 });
 
 const cursorSchema = z.object({
@@ -1387,6 +1389,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
         () => clock.now(),
         "webui",
         parsed.data.triage,
+        parsed.data.amendment,
       );
       res.json(presentTask(db, question));
     } catch (err) {

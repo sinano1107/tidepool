@@ -11,7 +11,7 @@
 // onTranslate も同様に実体から引く。
 interface TpSingleQuestionProps {
   q: ReturnType<typeof toQuestionCardShape>;
-  onAnswer: (answers: string[]) => void;
+  onAnswer: (answers: string[], amendment?: TpAmendment) => void;
   onClose: () => void;
   onTranslate?: typeof translateTarget;
 }

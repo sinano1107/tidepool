@@ -196,7 +196,7 @@ function liveTitle(t: Pick<import('../src/wire-contract').QueueTask, 'title' | '
 // Maps one raw question task into TpQuestionCard's shape — shared by the board's
 // question list (mapData) and the push deep-link's single-question view.
 function toQuestionCardShape(
-  q: Pick<WireContract['GET /api/tasks/:id'], 'id' | 'parent_id' | 'registrant' | 'purpose' | 'question_items' | 'approval'>,
+  q: Pick<WireContract['GET /api/tasks/:id'], 'id' | 'parent_id' | 'registrant' | 'purpose' | 'question_items' | 'approval' | 'question_proposal'>,
   icons: AppIcons,
 ): TpQuestion {
   // who issued the question — the board itself (issue #261) or an agent
@@ -218,6 +218,7 @@ function toQuestionCardShape(
     })),
     // 承認 question(決裁権外の子の登録)と、approve で親の risk が上がるかは
     // 盤面の `approval` 注釈が答える(issue #757)— ここは描画の形に写すだけ
+    ...(q.question_proposal?.kind === 'routing' && { amendable: true }),
     ...(q.approval && {
       kind: 'approval',
       ...(q.approval.raises_parent_risk && { note: `approving raises ${q.parent_id} risk (upward propagation)` }),
@@ -480,12 +481,12 @@ function QuestionDeepLinkView({ questionId, onDone, onTranslate }: {
     return () => { cancelled = true; };
   }, [questionId]);
 
-  const answer = async (answers: string[]) => {
+  const answer = async (answers: string[], amendment?: TpAmendment) => {
     if (busy) return; // guards the design component's button against a double-tap
     setBusy(true);
     setErr(null);
     try {
-      await api(`/api/tasks/${questionId}/answer`, { answers });
+      await api(`/api/tasks/${questionId}/answer`, { answers, amendment });
       onDone(rawTask);
     } catch (e) {
       setErr(String((e as Error).message || e));
@@ -950,9 +951,9 @@ function App() {
   // S1 — the last tap in a bundle persists every item's answer atomically;
   // the unblocked parent is staged server-side (issue #30: `a` is one answer
   // per item, in item order)
-  const answerNow = async (q: TpTriageQuestion, a: string[]) => {
+  const answerNow = async (q: TpTriageQuestion, a: string[], amendment?: TpAmendment) => {
     try {
-      await api(`/api/tasks/${q.id}/answer`, { answers: a, triage: true });
+      await api(`/api/tasks/${q.id}/answer`, { answers: a, triage: true, amendment });
     } catch (err) {
       say('danger', 'answer failed', String((err as Error).message || err));
       throw err;
