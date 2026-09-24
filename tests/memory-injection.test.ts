@@ -2,6 +2,7 @@ import { expect, it } from "vitest";
 import { openDb } from "../src/db.js";
 import { getEvent } from "../src/events.js";
 import {
+  approveMemoryProposal,
   buildMemoryInjection,
   changeMemorySettings,
   createBehaviorCandidate,
@@ -95,8 +96,9 @@ it("他 agent 宛の Behavior・他 workspace・candidate・無効化済みは�
   behavior("candidate", "deckhand");
   const elsewhere = behavior("elsewhere", "someone-else");
   const addressed = behavior("tide", "deckhand");
-  // setup のみ: Behavior の承認経路は #358 が置くので、宛先の効き目を見るために行を approved にする
-  db.prepare("UPDATE memory_entries SET state = 'approved', version = id WHERE id IN (?, ?)").run(elsewhere, addressed);
+  for (const id of [elsewhere, addressed]) {
+    approveMemoryProposal(db, { kind: "memory", op: "approve", candidate_id: id, replaces: [] }, "question-1", "webui", at);
+  }
 
   const injection = buildMemoryInjection(db, task, "tidepool", "deckhand");
 

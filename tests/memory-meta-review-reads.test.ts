@@ -1,7 +1,14 @@
 import { expect, it } from "vitest";
 import { openDb } from "../src/db.js";
 import { appendEvent, getEvent } from "../src/events.js";
-import { createBehaviorCandidate, invalidateMemoryEntry, listPrecedents, pullMemoryList, recordKnowledge } from "../src/memory.js";
+import {
+  approveMemoryProposal,
+  createBehaviorCandidate,
+  invalidateMemoryEntry,
+  listPrecedents,
+  pullMemoryList,
+  recordKnowledge,
+} from "../src/memory.js";
 import { logDecision, registerTask } from "../src/tasks.js";
 
 /** meta-review の読み口(issue #619 / ADR 0120 決定2)のドメイン層。verb への写像はサーバ境界
@@ -91,8 +98,9 @@ it("list_memory_behaviors は approved の Behavior を宛先・scope で絞ら�
   ];
   const retired = behavior({ title: "Retired habit" });
   behavior({ title: "Still a candidate" });
-  // setup のみ: Behavior の承認経路は #620 なので、承認済みの行を直接置く
-  for (const id of [...approved, retired]) db.prepare("UPDATE memory_entries SET state = 'approved', version = id WHERE id = ?").run(id);
+  for (const id of [...approved, retired]) {
+    approveMemoryProposal(db, { kind: "memory", op: "approve", candidate_id: id, replaces: [] }, "question-1", "webui", at);
+  }
   invalidateMemoryEntry(db, { entry_id: retired, reason: "environment" }, "human", "webui", at);
 
   expect(pullMemoryList(db, reader, "list_memory_behaviors", {}, at).entries.map((e) => e.id)).toEqual(approved);
