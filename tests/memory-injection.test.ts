@@ -96,9 +96,8 @@ it("他 agent 宛の Behavior・他 workspace・candidate・無効化済みは�
   behavior("candidate", "deckhand");
   const elsewhere = behavior("elsewhere", "someone-else");
   const addressed = behavior("tide", "deckhand");
-  for (const id of [elsewhere, addressed]) {
+  for (const id of [elsewhere, addressed])
     approveMemoryProposal(db, { kind: "memory", op: "approve", candidate_id: id, replaces: [] }, "question-1", "webui", at);
-  }
 
   const injection = buildMemoryInjection(db, task, "tidepool", "deckhand");
 

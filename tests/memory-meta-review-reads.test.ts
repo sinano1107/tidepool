@@ -98,9 +98,8 @@ it("list_memory_behaviors は approved の Behavior を宛先・scope で絞ら�
   ];
   const retired = behavior({ title: "Retired habit" });
   behavior({ title: "Still a candidate" });
-  for (const id of [...approved, retired]) {
+  for (const id of [...approved, retired])
     approveMemoryProposal(db, { kind: "memory", op: "approve", candidate_id: id, replaces: [] }, "question-1", "webui", at);
-  }
   invalidateMemoryEntry(db, { entry_id: retired, reason: "environment" }, "human", "webui", at);
 
   expect(pullMemoryList(db, reader, "list_memory_behaviors", {}, at).entries.map((e) => e.id)).toEqual(approved);
