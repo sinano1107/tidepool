@@ -1,6 +1,7 @@
 import { expect, it } from "vitest";
 import { openDb } from "../src/db.js";
 import {
+  approveMemoryProposal,
   createBehaviorCandidate,
   defineMemoryBranch,
   foldMemory,
@@ -147,8 +148,7 @@ it("meta-review の無効化は candidate・Knowledge・Definition に効き、a
     ).entry_id;
   const candidate = behavior("Small commits");
   const approved = behavior("Rebase before push");
-  // setup のみ: Behavior の承認経路は #620 なので、承認済みの行を直接置く
-  db.prepare("UPDATE memory_entries SET state = 'approved', version = id WHERE id = ?").run(approved);
+  approveMemoryProposal(db, { kind: "memory", op: "approve", candidate_id: approved, replaces: [] }, "question-1", "webui", at);
   const invalidate = (entry_id: number, reason: InvalidationReason, successor_id?: number) =>
     invalidateMemoryByMetaReview(db, { entry_id, reason, successor_id }, "auditor", "worker", at);
 

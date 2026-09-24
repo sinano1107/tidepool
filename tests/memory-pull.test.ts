@@ -3,6 +3,7 @@ import { openDb } from "../src/db.js";
 import { getEvent } from "../src/events.js";
 import {
   approvedMemoryEntries,
+  approveMemoryProposal,
   browseMemory,
   createBehaviorCandidate,
   defineMemoryBranch,
@@ -16,6 +17,8 @@ import {
 import { DomainError, logDecision, registerTask } from "../src/tasks.js";
 
 const at = new Date("2026-09-14T00:00:00.000Z");
+const approve = (db: ReturnType<typeof openDb>, candidate_id: number) =>
+  approveMemoryProposal(db, { kind: "memory", op: "approve", candidate_id, replaces: [] }, "question-1", "webui", at);
 
 function board() {
   const db = openDb(":memory:");
@@ -215,8 +218,8 @@ it("無効化済み・candidate・宛先外・他 workspace のエントリは I
   const candidate = behavior("deckhand");
   const elsewhere = behavior("someone-else");
   const addressed = behavior("deckhand");
-  // setup のみ: Behavior の承認経路は #358 が置くので、宛先の効き目を見るために行を approved にする
-  db.prepare("UPDATE memory_entries SET state = 'approved', version = id WHERE id IN (?, ?)").run(elsewhere, addressed);
+  approve(db, elsewhere);
+  approve(db, addressed);
   const all = [shown, boardWide, other, invalidated, candidate, elsewhere, addressed];
   const expected = [shown, boardWide, addressed];
 
@@ -258,8 +261,7 @@ it("search の memory_pulled は FTS の順位どおりの候補と、返さな�
     "board",
     at,
   ).entry_id;
-  // setup のみ: Behavior の承認経路は #358
-  db.prepare("UPDATE memory_entries SET state = 'approved', version = id WHERE id = ?").run(elsewhere);
+  approve(db, elsewhere);
   const pages = Array.from({ length: 21 }, (_, i) => record({ title: `tide ${i}`, text: `tide and ${"filler ".repeat(i + 1)}` }));
 
   const search = searchMemory(db, reader, { query: "tide" }, at);
