@@ -91,6 +91,7 @@ import {
 import { clearSpendDown, getSpendDown, isKnownSpendDownTarget, setSpendDown } from "./spend-down.js";
 import {
   approvalAnnotation,
+  questionBlocking,
   type BoardTask,
   countUnsettledTasksReferencing,
   DEFAULT_AUDITOR_NAME,
@@ -1964,7 +1965,12 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     res.json(
       board.map((task) =>
         task.type === "question"
-          ? { ...task, landing: landingAnnotation(db, task), approval: approvalAnnotation(db, task) }
+          ? {
+              ...task,
+              landing: landingAnnotation(db, task),
+              approval: approvalAnnotation(db, task),
+              blocking: questionBlocking(db, task.id),
+            }
           : task,
       ) satisfies WireContract["GET /api/tasks"],
     );
@@ -2017,7 +2023,10 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     // push の単体ビューは親の行を持たない — 承認 question の判定は一覧と同じくここで載せる
     res.json({
       ...presented!,
-      ...(task.type === "question" && { approval: approvalAnnotation(db, task) }),
+      ...(task.type === "question" && {
+        approval: approvalAnnotation(db, task),
+        blocking: questionBlocking(db, task.id),
+      }),
     } satisfies WireContract["GET /api/tasks/:id"]);
   });
 

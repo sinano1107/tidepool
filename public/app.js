@@ -2833,8 +2833,9 @@ function toQuestionCardShape(q, icons) {
   const registrant = q.registrant;
   const isBoard = registrant === "tidepool";
   return {
+    // 付帯子の提案 question は親を塞がない — 塞ぐ親は盤面の `blocking` が答える(issue #935)
     id: q.id,
-    parent: q.parent_id,
+    parent: q.blocking,
     agent: registrant,
     agentIcon: isBoard ? void 0 : icons[registrant],
     board: isBoard,

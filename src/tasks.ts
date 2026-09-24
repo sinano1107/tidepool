@@ -2420,6 +2420,15 @@ export function approvalAnnotation(
   return { raises_parent_risk: raisesParentRisk(pending, getTask(db, task.parent_id!)!) };
 }
 
+/** question が塞いでいる親の id、塞がなければ null(issue #935)— `listYourTasks` の
+ *  `blocking` と同じく awaitedChildSql を行自身に当てる。付帯子の提案 question は null。 */
+export function questionBlocking(db: Db, taskId: string): string | null {
+  return db
+    .prepare(`SELECT CASE WHEN ${awaitedChildSql("tasks")} THEN tasks.parent_id END FROM tasks WHERE id = ?`)
+    .pluck()
+    .get(taskId) as string | null;
+}
+
 export function presentTask(db: Db, task: Task): BoardTask {
   const { accepted } = db
     .prepare(`SELECT ${acceptedSql("tasks.id")} AS accepted FROM tasks WHERE id = ?`)
