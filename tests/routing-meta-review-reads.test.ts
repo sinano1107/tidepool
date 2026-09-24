@@ -67,7 +67,7 @@ function board() {
       workerId: "tidepool",
       origin: "board",
       at,
-      payload: { kind: "allocation_reviewed", review_task_id: "r", worker_spawned_event_id: spawned, ...outcome } as EventPayload,
+      payload: { kind: "allocation_reviewed", review_task_id: "r", worker_spawned_event_id: spawned, ...outcome } as Extract<EventPayload, { kind: "allocation_reviewed" }>,
     });
   /** 登録された routing meta-review(読み手)。 */
   const routingReview = () => {

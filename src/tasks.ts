@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { Db } from "./db.js";
 import { DEFAULT_AUDITOR_NAME } from "./defaults.js";
-import { appendEvent, type EventOrigin, type EventPayload, getEvent, taskDecisionLog } from "./events.js";
+import { appendEvent, type EventOrigin, type EventPayload, getEvent, type TaskScopedPayload, taskDecisionLog } from "./events.js";
 import { PRIORITIES, type Priority, TIERS, type Tier } from "./execution-setting.js";
 import type { GitHubClient, Issue, IssueRef } from "./github.js";
 import type { MergeDial, RosterAgent } from "./registry.js";
@@ -982,7 +982,7 @@ function cancelUnsettledSubtree(
   rootTaskId: string,
   workerId: string,
   now: Date,
-  payload: EventPayload,
+  payload: TaskScopedPayload,
   origin: EventOrigin,
 ): void {
   const rows = db
@@ -1634,7 +1634,7 @@ export function taskIdForPr(db: Db, prNumber: number, workspace: string | null):
 export function settleQuestionAsObserved(
   db: Db,
   questionId: string,
-  payload: EventPayload,
+  payload: TaskScopedPayload,
   now: Date,
 ): void {
   db.transaction(() => {
