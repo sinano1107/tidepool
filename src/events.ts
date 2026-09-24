@@ -369,12 +369,11 @@ export type EventPayload =
     }
   // ADR 0110 決定5 / issue #545: 人間が settings タブ / 管理MCP から実行設定(表の
   // 行・frontier advisor・Provider 順位・優先順位の既定)を変えた操作イベント。
-  // task を持たない盤面スコープの kind(task_id は NULL)で、`origin` が
-  // どの手から入ったか(webui / mcp)を機械記録する(CONTEXT.md「管理MCP」)。
+  // `origin` がどの手から入ったか(webui / mcp)を機械記録する(CONTEXT.md「管理MCP」)。
   | ({ kind: "execution_settings_changed" } & ExecutionSettingsChange)
   // ADR 0083 / spec #586 A: Memory の正本。エントリ表(memory_entries)は同じ
   // transaction で維持する投影で、この3つの再生で任意 watermark の approved 集合に
-  // 戻せる。どちらも task 非依存(task_id NULL)で、決定 log には現れない。
+  // 戻せる。決定 log には現れない。
   // created の event id がそのままエントリの id(Knowledge は版も)。
   | { kind: "memory_entry_created"; entry: MemoryEntryFields }
   | { kind: "memory_entry_invalidated"; entry_id: number; reason: InvalidationReason; successor_id: number | null }
@@ -405,12 +404,12 @@ export type EventPayload =
       watermark: number;
       candidates?: Array<{ id: number; dropped: MemoryDropReason | null }>;
     }
-  // spec #586 G: エントリ表と FTS を events から作り直した(盤面スコープ、task_id NULL)。
+  // spec #586 G: エントリ表と FTS を events から作り直した。
   // 刻んだ索引の版を持つ。
   | { kind: "memory_index_rebuilt"; tokenizer: string; preprocess_version: string }
-  // spec #586 C: 人間が settings タブ / 管理MCP から memory 設定を変えた(盤面スコープ、task_id NULL)。
+  // spec #586 C: 人間が settings タブ / 管理MCP から memory 設定を変えた。
   | { kind: "memory_settings_changed"; injection_token_cap: number }
-  // issue #924: 人間が settings タブ / 管理MCP から周期 meta-review の設定を変えた(盤面スコープ、task_id NULL)。
+  // issue #924: 人間が settings タブ / 管理MCP から周期 meta-review の設定を変えた。
   | { kind: "meta_review_settings_changed"; period_days: number }
   // spec #586 C: spawn 時の注入(task 帰属、worker_spawned の直後)。注入した entry(定義を含む)の
   // id と版、組んだ時点の watermark、計数したトークン数と計数器、出した INDEX の深さ・木の全深さ・
@@ -436,11 +435,26 @@ export type EventPayload =
   | { kind: "memory_draft_failed"; entry_id: number; round: "initial" | "after_rca"; reason: string };
 
 export type EventKind = EventPayload["kind"];
+
+/** 盤面スコープの kind —— task を持たず、task_id を NULL で書く(issue #545 / #590 / #927)。
+ *  一覧はここにだけ置き、`appendEvent` の型がこの一覧と taskId の null を結ぶ。 */
+const BOARD_SCOPED_KINDS = [
+  "execution_settings_changed",
+  "memory_entry_created",
+  "memory_entry_invalidated",
+  "memory_entry_approved",
+  "memory_index_rebuilt",
+  "memory_settings_changed",
+  "meta_review_settings_changed",
+] as const satisfies readonly EventKind[];
+type BoardScopedKind = (typeof BOARD_SCOPED_KINDS)[number];
+/** task に帰属させて書く payload(`BOARD_SCOPED_KINDS` 以外)。 */
+export type TaskScopedPayload = Exclude<EventPayload, { kind: BoardScopedKind }>;
 export type EventOrigin = "webui" | "mcp" | "worker" | "board";
 
 export interface EventRow {
   id: number;
-  /** null は盤面スコープのイベント(`execution_settings_changed` / `memory_entry_*`(approved を含む)/ `memory_index_rebuilt` / `memory_settings_changed` / `meta_review_settings_changed`)。 */
+  /** null は盤面スコープのイベント(`BOARD_SCOPED_KINDS`)。 */
   task_id: string | null;
   worker_id: string;
   origin: EventOrigin;
@@ -454,14 +468,10 @@ export interface EventRow {
  *  child pointing at the decision it rests on). */
 export function appendEvent(
   db: Db,
-  event: {
-    /** null = 盤面スコープ(task を持たないイベント、issue #545 / #590)。 */
-    taskId: string | null;
-    workerId: string;
-    origin: EventOrigin;
-    payload: EventPayload;
-    at: Date;
-  },
+  event: { workerId: string; origin: EventOrigin; at: Date } & (
+    | { taskId: null; payload: Extract<EventPayload, { kind: BoardScopedKind }> }
+    | { taskId: string; payload: TaskScopedPayload }
+  ),
 ): number {
   const { lastInsertRowid } = db
     .prepare(
@@ -479,8 +489,12 @@ export function appendEvent(
 }
 
 /** The decision log is not its own entity: it is the events table narrowed to
- *  the kinds a human skims (issue #5). Kinds join this list; no table is added. */
-export const HUMAN_FACING_KINDS = ["decision_logged", "task_completed", "premise_breached"] as const;
+ *  the kinds a human skims (issue #5). Kinds join this list; no table is added.
+ *  satisfies は listLog の inner join の前提(どれも盤面スコープでない)を型で断言する(issue #927)。 */
+export const HUMAN_FACING_KINDS = ["decision_logged", "task_completed", "premise_breached"] as const satisfies readonly Exclude<
+  EventKind,
+  BoardScopedKind
+>[];
 
 /** A log entry annotated with its resolved workspace name (issue #44): the
  *  event's own task's `workspace`, or the board's default when the task
@@ -507,8 +521,7 @@ export interface LogEntry extends EventRow {
 export function listLog(db: Db, defaultWorkspaceName?: string): LogEntry[] {
   const placeholders = HUMAN_FACING_KINDS.map(() => "?").join(", ");
   // an inner join is safe here only because every HUMAN_FACING_KIND is
-  // task-scoped (the task-less kinds — execution_settings_changed, the
-  // memory_entry_* kinds, memory_index_rebuilt, memory_settings_changed and meta_review_settings_changed — are not among them) and tasks are never deleted
+  // task-scoped (asserted against BOARD_SCOPED_KINDS next to HUMAN_FACING_KINDS) and tasks are never deleted
   // (append-only) — no log entry can end up orphaned, so this can never
   // silently drop one
   const rows = db

@@ -2,7 +2,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, it } from "vitest";
 import { type Db, openDb } from "../src/db.js";
-import { appendEvent, type EventRow, getEvent } from "../src/events.js";
+import { appendEvent, type EventRow, getEvent, type TaskScopedPayload } from "../src/events.js";
 import { listPrecedents } from "../src/memory.js";
 import { registerMetaReview } from "../src/meta-review.js";
 import { backfillEpisodes, listEpisodes, projectAndPersist } from "../src/precedent.js";
@@ -231,7 +231,7 @@ it("list_precedents は異議つき decision を cause・outcome・読んだ / �
     transcriptPath: writeTranscript(await logDir(), `${FIXTURE_TASK}.${SPAWNED_EVENT_ID}.stream.jsonl`),
   });
   const at = new Date("2026-09-15T00:00:00.000Z");
-  const event = (payload: Parameters<typeof appendEvent>[1]["payload"]) =>
+  const event = (payload: TaskScopedPayload) =>
     appendEvent(db, { taskId: FIXTURE_TASK, workerId: "human", origin: "webui", payload, at });
   event({ kind: "memory_injected", worker_spawned_event_id: SPAWNED_EVENT_ID, watermark: 0, entries: [{ id: 42, version: 42 }], tokens: 10, index_depth: 1, index_max_depth: 1, omitted: 0, tokenizer: "t", tokenizer_version: "1" });
   event({ kind: "objection_raised", entry_id: 6, comment: "前の周期の異議", session_id: 1 });

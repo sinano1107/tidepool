@@ -138,8 +138,7 @@ export function openDb(path: string): Db {
 
     -- The database is the audit record's final backstop, so its route vocabulary is
     -- constrained here as well as by EventOrigin in TypeScript.
-    -- task_id is NULL for board-scoped events (execution_settings_changed, issue #545;
-    -- memory_entry_created / memory_entry_invalidated, issue #590; memory_entry_approved, issue #620; memory_index_rebuilt, issue #591; memory_settings_changed, issue #592; meta_review_settings_changed, issue #924) — a settings change
+    -- task_id is NULL for board-scoped events (BOARD_SCOPED_KINDS in events.ts) — a settings change
     -- or a memory entry belongs to no task but still carries its route.
     CREATE TABLE IF NOT EXISTS events (
       id         INTEGER PRIMARY KEY AUTOINCREMENT,
