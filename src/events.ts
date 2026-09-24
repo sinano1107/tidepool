@@ -1,7 +1,7 @@
 import type { Allocation, AllocationUnevaluatedReason } from "./allocation-review.js";
 import type { Cause } from "./cause.js";
 import type { Db } from "./db.js";
-import type { ExecutionSettingRow, ExecutionSettingsChange, ProviderSource, RoutingRowChange, TierSource } from "./execution-setting.js";
+import type { ExecutionSettingRow, ExecutionSettingsChange, ProviderSource, RoutingRowChange, routingPinChanges, TierSource } from "./execution-setting.js";
 import type { InvalidationReason, MemoryDropReason, MemoryEntryFields } from "./memory.js";
 import type { Provider } from "./registry.js";
 import type { MemoryProposal, TaskType } from "./tasks.js";
@@ -387,7 +387,7 @@ export type EventPayload =
   | { kind: "memory_proposal_stale"; question_id: string; entry_id: number; observed_event_id: number }
   // ADR 0150 決定1 / issue #918: pin した表の行が変わった / 消えた(changed = 崩れた欄、null = 行の削除)ので、盤面が routing の
   // 提案 question を観測で決着させた(決着させた question に帰属)。observed_event_id = その execution_settings_changed の id。
-  | { kind: "routing_proposal_stale"; question_id: string; proposal_kind: "routing"; changed: Array<"tier" | "effort" | "price_in" | "price_out"> | null; observed_event_id: number }
+  | { kind: "routing_proposal_stale"; question_id: string; proposal_kind: "routing"; changed: ReturnType<typeof routingPinChanges>; observed_event_id: number }
   // spec #586 D: worker の pull 1回(task 帰属)。返した id と snapshot watermark、search は
   // 候補ごとの落ちた理由(null = 返した)。event id は tool 結果に載り、Precedent の
   // memory マーカーになる。
