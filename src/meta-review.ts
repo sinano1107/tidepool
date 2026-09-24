@@ -158,8 +158,13 @@ export function registerDueMetaReviews(db: Db, now: Date): void {
       )
       .get({ subject });
     if (open) continue;
+    // 同じ主題の meta-review 自身の産物(回答が刻んだ question_id、review の直接書き込みの activity)は材料でない(ADR 0151)
     const found = db
-      .prepare(`SELECT 1 FROM events WHERE id > ? AND kind IN (${material.map(() => "?").join(", ")})`)
+      .prepare(
+        `SELECT 1 FROM events WHERE id > ? AND kind IN (${material.map(() => "?").join(", ")})
+           AND json_extract(payload, '$.question_id') IS NULL
+           AND COALESCE(json_extract(payload, '$.activity'), json_extract(payload, '$.entry.author.activity')) IS NOT 'meta_review'`,
+      )
       .get(last?.watermark ?? 0, ...material);
     if (found) registerMetaReview(db, subject, now);
   }

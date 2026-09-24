@@ -78,7 +78,8 @@ export function listAllocations(db: Db, readerTaskId: string, input: ReadWindow)
 }
 
 /** 新しいセルと人間が変えた行: 観測(worker_exited)で初めて現れたのが watermark より後のセルと、watermark より後に
- *  settings タブ / 管理MCP から書かれた表の行(`execution_settings_changed` の `row`)。 */
+ *  settings タブ / 管理MCP から書かれた表の行(`execution_settings_changed` の `row`)。提案 question への approve の適用は
+ *  read_routing_settings が読むので含まない(ADR 0151 決定2)。 */
 export function listRoutingCells(db: Db, readerTaskId: string, input: ReadWindow) {
   const from = since(db, readerTaskId, input);
   const firstSeen = new Map<string, { cell: Cell; first_observed_event_id: number }>();
@@ -92,7 +93,8 @@ export function listRoutingCells(db: Db, readerTaskId: string, input: ReadWindow
     db
       .prepare(
         `SELECT id, origin, payload, created_at FROM events
-          WHERE kind = 'execution_settings_changed' AND json_extract(payload, '$.setting') = 'row' AND id > ? ORDER BY id`,
+          WHERE kind = 'execution_settings_changed' AND json_extract(payload, '$.setting') = 'row' AND json_extract(payload, '$.question_id') IS NULL
+            AND id > ? ORDER BY id`,
       )
       .all(from) as Array<{ id: number; origin: string; payload: string; created_at: string }>
   ).map((r) => ({ event_id: r.id, origin: r.origin, created_at: r.created_at, row: (JSON.parse(r.payload) as Extract<ExecutionSettingsChange, { setting: "row" }>).row }));

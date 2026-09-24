@@ -416,7 +416,7 @@ export function composeRoutingRow(proposal: RoutingRowProposal, amendment?: Rout
 /** 変更を書き、操作イベントとして経路つきで残す(CONTEXT.md「管理MCP」)。task を
  *  持たない盤面イベントなので task_id は NULL、帰属は人間。表を書くのはこの1本なので、routing の提案の陳腐化の hook
  *  (ADR 0150 決定1)もここに置く。返り値は execution_settings_changed の event id(何も変わらなければ null)。 */
-export function applyExecutionSettingsChange(db: Db, change: ExecutionSettingsChange, origin: EventOrigin, at: Date): number | null {
+export function applyExecutionSettingsChange(db: Db, change: ExecutionSettingsChange, origin: EventOrigin, at: Date, questionId?: string): number | null {
   return db.transaction(() => {
     switch (change.setting) {
       case "row": {
@@ -446,7 +446,7 @@ export function applyExecutionSettingsChange(db: Db, change: ExecutionSettingsCh
       taskId: null,
       workerId: HUMAN_WORKER_ID,
       origin,
-      payload: { kind: "execution_settings_changed", ...change },
+      payload: { kind: "execution_settings_changed", ...change, ...(questionId && { question_id: questionId }) },
       at,
     });
     // 回答中の question は answerQuestion が先に done にしているので、承認した提案が自分自身を決着させることは無い
