@@ -42,6 +42,7 @@ import { type Landing, landingAnnotation } from "./landing.js";
 import {
   changeMemorySettings,
   defineMemoryBranch,
+  humanBehaviorSchema,
   humanDefinitionSchema,
   humanEntryInput,
   humanKnowledgeSchema,
@@ -51,6 +52,7 @@ import {
   memoryListFilterSchema,
   memorySettingsChangeSchema,
   readMemorySettings,
+  recordBehavior,
   recordKnowledge,
 } from "./memory.js";
 import { changeMetaReviewSettings, metaReviewSettingsChangeSchema, readMetaReviewSettings } from "./meta-review.js";
@@ -1684,6 +1686,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   );
   router.post("/settings/memory/knowledge", validatedWrite(humanKnowledgeSchema, (input) => recordKnowledge(db, humanEntryInput(db, input), "webui", clock.now())));
   router.post("/settings/memory/definitions", validatedWrite(humanDefinitionSchema, (input) => defineMemoryBranch(db, humanEntryInput(db, input), "webui", clock.now())));
+  router.post("/settings/memory/behaviors", validatedWrite(humanBehaviorSchema, (input) => recordBehavior(db, humanEntryInput(db, input), "webui", clock.now())));
   router.post(
     "/settings/memory/entries/:entry_id/invalidate",
     validatedWrite(invalidationSchema.extend({ entry_id: z.coerce.number().int().positive() }), (input) => ({

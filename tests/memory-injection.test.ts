@@ -7,8 +7,10 @@ import {
   changeMemorySettings,
   createBehaviorCandidate,
   defineMemoryBranch,
+  humanEntryInput,
   invalidateMemoryEntry,
   readMemorySettings,
+  recordBehavior,
   recordKnowledge,
   recordMemoryInjection,
 } from "../src/memory.js";
@@ -103,6 +105,19 @@ it("他 agent 宛の Behavior・他 workspace・candidate・無効化済みは�
 
   expect(injection.entries.map((e) => e.id).sort()).toEqual([shown, boardWide, addressed].sort());
   expect(injection.section).toContain("### Index\n\n- tide/ — (undefined)\n\n###");
+});
+
+it("人間が書いた Behavior は書いた時点で approved になり、宛先の agent の注入に載って他の agent には載らない(ADR 0152)", () => {
+  const { db, task } = board();
+  const { entry_id } = recordBehavior(
+    db,
+    humanEntryInput(db, { workspace: "tidepool", path: "tide", title: "Re-read the tide chart", text: "Re-read the tide chart before editing it.", addressee: "deckhand" }),
+    "webui",
+    at,
+  );
+
+  expect(buildMemoryInjection(db, task, "tidepool", "deckhand").entries).toEqual([{ id: entry_id, version: entry_id }]);
+  expect(buildMemoryInjection(db, task, "tidepool", "someone-else").entries).toEqual([]);
 });
 
 it("英語の自然文の task では、stopword しか共有しない leaf は関連 leaf に入らない(#606 の実測: 4枝 10 leaf → 2件)", () => {

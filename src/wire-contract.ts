@@ -280,6 +280,7 @@ export interface WireContract {
       title: string;
       text: string;
       original: { title: string; text: string } | null;
+      addressee: string | null;
       author: { activity: string };
       invalidation_reason: string | null;
       successor_id: number | null;
