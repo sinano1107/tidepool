@@ -1452,7 +1452,7 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit }: 
   } = { kind: 'knowledge', workspace: '', path: '', originalTitle: '', originalText: '', title: '', text: '', backTranslation: null, supersedes: '', addressee: '' };
   const [draft, setDraft] = React.useState(blank);
   const [busy, setBusy] = React.useState(false);
-  const setDraftField = (key: string) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => setDraft({ ...draft, [key]: e.target.value, ...(key === 'title' || key === 'text' ? { backTranslation: null } : {}) });
+  const setDraftField = (key: string) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => setDraft({ ...draft, [key]: e.target.value, ...(key === 'title' || key === 'text' ? { backTranslation: null } : {}), ...(key === 'kind' ? { supersedes: '' } : {}) });
   useDirtySignal(edit, writing, [draft.originalTitle, draft.originalText, draft.title, draft.text].some((v) => v.trim() !== ''));
   const translatable = language !== 'English';
   // a definition is one line with no title: its original and English are the text alone (ADR 0015)

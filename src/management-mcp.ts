@@ -609,8 +609,8 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
       description:
         "Record a Behavior entry: how agents should act, injected into the workers of addressee (an agent name, or null for every agent). " +
         "To edit an approved behavior, pass its id as supersedes: the new entry replaces it and the old one is invalidated as superseded. " +
-        "Candidates cannot be edited here; they are fixed through their proposal question. source_event_id optionally cites the episode " +
-        "the rule comes from: a decision_logged or worker_spawned event id. title and text are the English canonical wording; " +
+        "Candidates cannot be edited here. source_event_id optionally cites the episode the rule comes from: a decision_logged or " +
+        "worker_spawned event id; an edit does not carry the old entry's source over, so pass it again to keep it. title and text are the English canonical wording; " +
         `original_title and original_text go together (both or neither). ${writtenAs}`,
       inputSchema: humanBehaviorSchema.shape,
     },

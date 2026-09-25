@@ -133,10 +133,11 @@ function createEntry(db: Db, fields: Omit<MemoryEntryFields, "source"> & { sourc
     throw new DomainError("only a human can write an approved behavior; others write a candidate");
   }
   // 人間の Behavior だけは任意で出所の Episode を添えられる(ADR 0153 決定3)
-  const ownSource = fields.kind === "definition" || (fields.author.activity === "human" && (fields.kind !== "behavior" || fields.source === undefined));
-  if (ownSource && fields.source !== undefined) throw new DomainError("a definition or a human-written knowledge entry has no source: it is the writer's own declaration");
+  const mayCiteSource = fields.kind === "behavior" && fields.author.activity === "human";
+  const ownSource = fields.kind === "definition" || fields.author.activity === "human";
+  if (ownSource && !mayCiteSource && fields.source !== undefined) throw new DomainError("a definition or a human-written knowledge entry has no source: it is the writer's own declaration");
   return db.transaction(() => {
-    const entry: MemoryEntryFields = { ...fields, source: ownSource ? null : resolveSource(db, fields.source) };
+    const entry: MemoryEntryFields = { ...fields, source: ownSource && fields.source === undefined ? null : resolveSource(db, fields.source) };
     const id = appendEvent(db, {
       taskId: null,
       workerId: entry.author.name,
