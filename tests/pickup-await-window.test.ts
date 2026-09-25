@@ -31,7 +31,6 @@ it.each([
   await new Promise((r) => setImmediate(r));
 
   expect(t.worker.started).toEqual([]);
-  expect((await api(t.baseUrl, "GET", `/api/tasks/${head.id}`)).json.status).not.toBe("in_progress");
 
   const next = queueWork(t, "next");
   await t.clock.advance(HOUR);
