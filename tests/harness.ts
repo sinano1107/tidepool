@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -23,6 +23,7 @@ import type { CliAuthCheck } from "../src/cli-auth.js";
 import { type CodexAppServerProbe, codexLoginAbsence } from "../src/codex-app-server.js";
 import { type Db, openDb } from "../src/db.js";
 import type { DraftClient } from "../src/draft.js";
+import type { EventRow } from "../src/events.js";
 import type { GitHubAuth } from "../src/github-auth.js";
 import type { HarnessContainmentCheck } from "../src/harness-containment.js";
 import type { ProfileAdmin } from "../src/profile-create.js";
@@ -463,6 +464,40 @@ export async function tempDir(prefix: string): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), prefix));
   onTestFinished(() => rm(dir, { recursive: true, force: true }));
   return dir;
+}
+
+export const FIXTURE_TASK = "6b4c0b23-289e-4f9f-ade1-995fb27f3c0e";
+export const FIXTURE_SPAWNED_EVENT_ID = 5;
+
+const sessionFixture = (name: string) =>
+  readFileSync(join(import.meta.dirname, "fixtures", `worker-session-2.1.237.${name}`), "utf8");
+
+/** #386 のフィクスチャをそのまま持つ盤面。events は id ごと写す(投影の結合は
+ *  盤面が発行した event id の完全一致なので、採番が変わると意味が変わる)。
+ *  workspace / assignee / handoff は events には無いので tasks 行から解決される。 */
+export function seedFixtureBoard(handoffDoc: string | null = null): Db {
+  const db = openDb(":memory:");
+  const insertTask = db.prepare(
+    `INSERT INTO tasks (id, type, status, assignee, workspace, title, purpose, completion_criteria,
+       risk_flag, review_flag, sort_key, created_at, handoff_doc)
+     VALUES (?, 'work', 'done', ?, ?, 'fixture', 'fixture', 'fixture', 0, 0, 1, '2026-08-20T05:50:48.374Z', ?)`,
+  );
+  insertTask.run(FIXTURE_TASK, "tako", "sandbox", handoffDoc);
+  insertTask.run("609d9475-0191-4a7f-b5bf-5b939695315a", "tidepool", "sandbox", null);
+  const insertEvent = db.prepare(
+    "INSERT INTO events (id, task_id, worker_id, origin, kind, payload, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+  );
+  for (const e of JSON.parse(sessionFixture("events.json")) as EventRow[]) {
+    insertEvent.run(e.id, e.task_id, e.worker_id, e.origin, e.kind, JSON.stringify(e.payload), e.created_at);
+  }
+  return db;
+}
+
+/** フィクスチャの transcript を dir に name で書き、その path を返す。 */
+export function writeFixtureTranscript(dir: string, name: string): string {
+  const path = join(dir, name);
+  writeFileSync(path, sessionFixture("stream.jsonl"));
+  return path;
 }
 
 /** A fresh temp git checkout named `name`, one commit deep. The path is

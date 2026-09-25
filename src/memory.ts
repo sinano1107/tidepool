@@ -4,10 +4,11 @@ import { z } from "zod";
 import type { Cause } from "./cause.js";
 import { type Db, MEMORY_FTS_DDL, MEMORY_FTS_TOKENIZER, MEMORY_PREPROCESS_VERSION } from "./db.js";
 import { getDisplayLanguage } from "./display-language.js";
-import { appendEvent, type EventOrigin, type EventPayload, getEvent, listEvents } from "./events.js";
+import { appendEvent, type EventOrigin, type EventPayload, getEvent, HUMAN_FACING_KINDS, listEvents } from "./events.js";
 import { metaReviewSubjectOf, paged, previousMetaReviewWatermark } from "./meta-review.js";
-import { entriesReadBefore, entriesSeenBefore, listEpisodes } from "./precedent.js";
+import { caseEpisode, entriesReadBefore, entriesSeenBefore, listEpisodes } from "./precedent.js";
 import { BOARD_WORKER_ID, DomainError, HUMAN_WORKER_ID, type MemoryProposal, registerTask, settleQuestionAsObserved, type Task } from "./tasks.js";
+import { type DecisionLogEntry, objectedEntryText } from "./triage.js";
 
 /** 無効化の理由コード(spec #586 A)。自由記述は持たない。置換と path の付け替えは後継 id
  *  必須、cause.ts の語彙の3つ(間違っていた / 陳腐化)と、人間が提案 question を reject した `rejected`(issue #620)。 */
@@ -937,21 +938,77 @@ export function listPrecedents(
 /** 出所の種別(ADR 0083 追記3): commit / event の参照は事実、decision の参照は推論。 */
 const SOURCE_KIND = { commit: "fact", event: "fact", decision: "inference" } as const;
 
-/** id で本文を読む。見えないエントリ(フィルタ外・存在しない id)は黙って返さない。 */
+/** case 描画(ADR 0153 決定3): 出所の decision なら本文・その entry への異議の steering(event 順)・
+ *  Episode の handoff と result、出所の session なら decision 列・handoff・result。transcript は含まない。 */
+type MemoryCase =
+  | { decision: string; steering: string[]; handoff: string | null; result: string | null }
+  | { decisions: string[]; handoff: string | null; result: string | null };
+
+/** 出所から case を描く。帰責 event は異議された entry へ辿る。事例に辿れない出所(commit、自身の作成
+ *  event など)は null。Episode が投影されていなければ handoff / result は null。 */
+function renderCase(db: Db, source: MemorySource): MemoryCase | null {
+  if (source.kind === "commit") return null;
+  const payload = getEvent(db, source.ref)?.payload;
+  if (payload?.kind === "worker_spawned") {
+    const episode = caseEpisode(db, { workerSpawnedEventId: source.ref });
+    return {
+      decisions: (episode?.decisionEventIds ?? []).map((id) => objectedEntryText(getEvent(db, id) as DecisionLogEntry)),
+      handoff: episode?.handoff ?? null,
+      result: episode?.result ?? null,
+    };
+  }
+  const entryId = payload?.kind === "objection_attributed" ? payload.entry_id : source.ref;
+  const entry = getEvent(db, entryId);
+  if (!entry || !(HUMAN_FACING_KINDS as readonly string[]).includes(entry.kind)) return null;
+  const steering = db
+    .prepare(
+      `SELECT json_extract(payload, '$.comment') AS comment FROM events
+        WHERE kind = 'objection_raised' AND json_extract(payload, '$.entry_id') = ? ORDER BY id`,
+    )
+    .all(entryId) as Array<{ comment: string }>;
+  const episode = caseEpisode(
+    db,
+    entry.kind === "task_completed" ? { completion: { taskId: entry.task_id!, eventId: entryId } } : { decisionEventId: entryId },
+  );
+  return {
+    decision: objectedEntryText(entry as DecisionLogEntry),
+    steering: steering.map((s) => s.comment),
+    handoff: episode?.handoff ?? null,
+    result: episode?.result ?? null,
+  };
+}
+
+/** id で本文を読む。見えないエントリ(フィルタ外・存在しない id)は黙って返さない。case は Behavior だけが持つ。 */
 export function readMemory(
   db: Db,
   reader: MemoryReader,
   input: { ids: number[] },
   at: Date,
 ): {
-  entries: Array<{ id: number; title: string; path: string; text: string; source: MemorySource; source_kind: "fact" | "inference" }>;
+  entries: Array<{
+    id: number;
+    title: string;
+    path: string;
+    text: string;
+    source: MemorySource;
+    source_kind: "fact" | "inference";
+    case: MemoryCase | null;
+  }>;
   event_id: number;
 } {
   return db.transaction(() => {
     const entries = visibleEntries(db, reader)
       .filter((row) => input.ids.includes(row.id))
       .map(rowToEntry)
-      .map(({ id, title, path, text, source }) => ({ id, title, path, text, source, source_kind: SOURCE_KIND[source.kind] }));
+      .map(({ id, kind, title, path, text, source }) => ({
+        id,
+        title,
+        path,
+        text,
+        source,
+        source_kind: SOURCE_KIND[source.kind],
+        case: kind === "behavior" ? renderCase(db, source) : null,
+      }));
     return recordPull(db, reader, { verb: "read_memory", input, returned_ids: entries.map((e) => e.id) }, { entries }, at);
   })();
 }
