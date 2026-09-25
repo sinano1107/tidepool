@@ -21,7 +21,7 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const CONFIG_REL = '.design-sync/config.json';
-const outRootArg = process.argv.indexOf('--out-root');
+const outRootArg = process.argv.includes('--check') ? process.argv.indexOf('--out-root') : -1;
 const OUT_ROOT = outRootArg === -1 ? ROOT : process.argv[outRootArg + 1];
 const CONFIG_PATH = join(OUT_ROOT, CONFIG_REL);
 const PKG_DIR = join(ROOT, 'design-system/pkg');

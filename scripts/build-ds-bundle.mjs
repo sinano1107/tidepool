@@ -14,7 +14,7 @@ import { fileURLToPath } from 'node:url';
 import * as esbuild from 'esbuild';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
-const outRootArg = process.argv.indexOf('--out-root');
+const outRootArg = process.argv.includes('--check') ? process.argv.indexOf('--out-root') : -1;
 const OUT_ROOT = outRootArg === -1 ? ROOT : process.argv[outRootArg + 1];
 const DS_SRC = 'design-system/components';
 

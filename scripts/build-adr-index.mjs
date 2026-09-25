@@ -11,7 +11,7 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const ADR_DIR = join(ROOT, 'docs/adr');
-const outRootArg = process.argv.indexOf('--out-root');
+const outRootArg = process.argv.includes('--check') ? process.argv.indexOf('--out-root') : -1;
 const OUT_ROOT = outRootArg === -1 ? ROOT : process.argv[outRootArg + 1];
 
 const files = readdirSync(ADR_DIR)
