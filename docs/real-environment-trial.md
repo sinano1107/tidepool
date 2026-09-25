@@ -507,9 +507,7 @@ UUID=68A9-671B /mnt/ssd exfat defaults,nofail,uid=1000,gid=1000,fmask=0022,dmask
 
 1. **レビューを付けるタスクは assignee を明示する。** 未設定だと #217 により修理子が全部人間承認 question になる。
 
-2. **pickup はタスク登録では発火しない。** スケジューラは1時間おき。即時発火するのは triage の auto-commit と `POST /api/tasks/:id/move`(先頭が変わる body、既に先頭のタスクへの `{"after": null}` も特例で発火)だけ。**queue 画面で ↑ を2回**押す(1回目は「reordered only」、2回目で「immediate poll fired」)。
-
-   発火条件は「**素の** todo の先頭に居るタスクを、もう一度先頭へ動かしたとき」である。`queueHeadId` は pick 可能性を見ないので、**blocked な親・question・held・quarantine されたタスクが上に居座っていると1回目は必ず空振りする**(#299)。1-C では blocked な親が先頭に居たため、子への ↑ が毎回2回必要だった。
+2. ~~**pickup はタスク登録では発火しない。**~~ —— **#536 と #299 の修正で消えた**。タスクの登録・分解、走行の後始末で slot が空いたとき、起動完了のときに pickup が即時に走るので、登録後に queue で ↑ を押す必要はもうない。↑ が即時に発火するのは今も「pick 可能な先頭に居るタスクを、もう一度先頭へ動かしたとき」だけだが、先頭は pick 可能性で判定するので、blocked な親・question・held・quarantine されたタスクが上に居ても1回目が空振りすることはない。
 
 3. **triage セッションは pickup を止める。** Triage は既定タブで、未読があると入った瞬間にサーバ側でセッションが開き、**タブを離れても閉じない**。skim を最後まで終えて commit するか、30分の無活動タイムアウトを待つ(#225)。
 
@@ -519,7 +517,7 @@ UUID=68A9-671B /mnt/ssd exfat defaults,nofail,uid=1000,gid=1000,fmask=0022,dmask
 
 6. **decision log の翻訳表示は切らなくてよい** —— #224 は ADR 0062 / 0063(#270 / #271)で決着し、流量制御・進行表示・キャンセルが入った。むしろ点けて挙動を見るほうがよい。
 
-7. **ペースのオフセットを変えても、そのままでは効かない**(#296)。`throttle_state` は古い判定を `resets_at` まで保持し続けるので、盤面は最大1時間**変更前のオフセットの判定に縛られる**。`pollNow()` を撃つ操作(queue の ↑ / spend-down の入切 / pause 解除 / triage close)を1つやって再評価させること。
+7. ~~**ペースのオフセットを変えても、そのままでは効かない**~~ —— **#296 の修正で消えた**。オフセットを保存すると盤面はその場で再評価するので、別の操作で `pollNow()` を撃たなくてよい。
 
 8. **再評価中は古い halt が「失敗」として見える**(#297)。↑ を押した直後の黄色い `moved to front — pickup blocked` は、再評価が終わる前の古い `throttle_state` を読んだものである。数秒待って queue を見直すこと。
 
