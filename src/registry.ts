@@ -812,12 +812,12 @@ function readRegistryFiles(dir: string, commit: string): Map<string, string> {
   });
   // 出力は `<sha> blob <size>\n<content>\n` の繰り返し。本文は文字数でなく
   // バイト数で切る(マルチバイトの本文では両者がずれる)
-  let at = 0;
+  let offset = 0;
   for (const { path } of blobs) {
-    const headerEnd = out.indexOf(0x0a, at);
-    const size = Number(out.toString("utf8", at, headerEnd).split(" ")[2]);
+    const headerEnd = out.indexOf(0x0a, offset);
+    const size = Number(out.toString("utf8", offset, headerEnd).split(" ")[2]);
     files.set(path, out.toString("utf8", headerEnd + 1, headerEnd + 1 + size));
-    at = headerEnd + 1 + size + 1;
+    offset = headerEnd + 1 + size + 1;
   }
   return files;
 }

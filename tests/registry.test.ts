@@ -375,6 +375,11 @@ describe("loadRegistry", () => {
     expect(registry.authority).toEqual({});
   });
 
+  it("workspaces.yaml が無い registry は読めずに投げる(空として扱わない)", async () => {
+    const dir = await makeRegistry({}, { "README.md": "no workspaces here\n" });
+    expect(() => loadRegistry(dir, "purely-local")).toThrow(/workspaces\.yaml/);
+  });
+
   it("使用中の clone の HEAD commit hash を持つ(どのバージョンの判断か、の来歴)", async () => {
     const dir = await makeRegistry();
     const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: dir }).toString().trim();
