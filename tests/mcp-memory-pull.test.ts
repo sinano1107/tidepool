@@ -1,7 +1,7 @@
 import { afterEach, expect, it } from "vitest";
-import { approvedMemoryEntries, approveMemoryProposal, createBehaviorCandidate, defineMemoryBranch, recordKnowledge } from "../src/memory.js";
+import { approveMemoryProposal, createBehaviorCandidate, defineMemoryBranch, recordKnowledge } from "../src/memory.js";
 import { logDecision } from "../src/tasks.js";
-import { bootTidepool, HOUR, mcpClient, registerWork, type Tidepool } from "./harness.js";
+import { bootTidepool, HOUR, mcpClient, memoryEntries, registerWork, type Tidepool } from "./harness.js";
 
 /** worker MCP の pull 3動詞(spec #586 D / issue #591)と枝の定義(#600 E)。フィルタ・順位・event の中身は
  *  ドメイン層(tests/memory-pull.test.ts)が言うので、ここは写像だけ —— 帰属 task の
@@ -88,7 +88,7 @@ it("define_memory_branch は attributed task の workspace をスコープ、wor
     const result = await client.callTool({ name: "define_memory_branch", arguments: { prefix: "build", definition: "How charts is built." } });
     expect(result.isError).toBeFalsy();
     const { entry_id, event_id } = body(result);
-    expect(approvedMemoryEntries(t.db)).toMatchObject([
+    expect(await memoryEntries(t, "?state=approved")).toMatchObject([
       { id: entry_id, version: event_id, kind: "definition", path: "build", text: "How charts is built.", scope: "charts", author: { activity: "worker_verb", name: t.worker.id } },
     ]);
 

@@ -1400,13 +1400,15 @@ function MetaReviewSettingsCard({ settings, say, onSaved, edit }: {
 // Memory entries (spec #586 F / issue #593): the human reads, writes and
 // invalidates board memory here. Entries without an original are agent-written
 // and get a display-language translation through the shared translate pacer;
-// a failed or throttled one just stays untranslated. There is no approve action —
-// approval only goes through a question.
+// a failed or throttled one just stays untranslated. There is no approve action
+// (ADR 0152): a behavior the human writes or edits here is approved on write, and
+// an AI-drafted candidate is approved only through its proposal question.
 const MEMORY_INVALIDATION_REASONS = ['superseded', 'path_moved', 'capability', 'environment', 'requirement_change'];
 const needsSuccessor = (reason: string) => reason === 'superseded' || reason === 'path_moved';
 
-function MemoryEntriesCard({ workspaceNames, language, say, edit }: {
+function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit }: {
   workspaceNames: string[];
+  agentNames: string[];
   language: string;
   say: AppSay;
   edit: SettingsEditSlot;
@@ -1446,15 +1448,17 @@ function MemoryEntriesCard({ workspaceNames, language, say, edit }: {
    *  (ADR 0015) なので欄ごとの map か null。 */
   const blank: {
     kind: string; workspace: string; path: string; originalTitle: string; originalText: string;
-    title: string; text: string; backTranslation: Record<string, string> | null; supersedes: string;
-  } = { kind: 'knowledge', workspace: '', path: '', originalTitle: '', originalText: '', title: '', text: '', backTranslation: null, supersedes: '' };
+    title: string; text: string; backTranslation: Record<string, string> | null; supersedes: string; addressee: string;
+  } = { kind: 'knowledge', workspace: '', path: '', originalTitle: '', originalText: '', title: '', text: '', backTranslation: null, supersedes: '', addressee: '' };
   const [draft, setDraft] = React.useState(blank);
   const [busy, setBusy] = React.useState(false);
-  const setDraftField = (key: string) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => setDraft({ ...draft, [key]: e.target.value, ...(key === 'title' || key === 'text' ? { backTranslation: null } : {}) });
+  const setDraftField = (key: string) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => setDraft({ ...draft, [key]: e.target.value, ...(key === 'title' || key === 'text' ? { backTranslation: null } : {}), ...(key === 'kind' ? { supersedes: '' } : {}) });
   useDirtySignal(edit, writing, [draft.originalTitle, draft.originalText, draft.title, draft.text].some((v) => v.trim() !== ''));
   const translatable = language !== 'English';
   // a definition is one line with no title: its original and English are the text alone (ADR 0015)
-  const fields: ('title' | 'text')[] = draft.kind === 'knowledge' ? ['title', 'text'] : ['text'];
+  const fields: ('title' | 'text')[] = draft.kind === 'definition' ? ['text'] : ['title', 'text'];
+  // editing an approved behavior writes its successor (ADR 0152 決定4), so the kind is fixed
+  const editingBehavior = draft.kind === 'behavior' && !!draft.supersedes;
   const originalOf: Record<'title' | 'text', string> = { title: draft.originalTitle, text: draft.originalText };
 
   // Translate fills both English fields from the original title + text; Back-translate re-checks English the
@@ -1488,8 +1492,10 @@ function MemoryEntriesCard({ workspaceNames, language, say, edit }: {
       // a partial original is sent as is so the server's 400 says why
       const originals = fields.map((key) => [`original_${key}`, originalOf[key].trim()]).filter(([, v]) => v);
       const body = { workspace: draft.workspace || null, path: draft.path.trim(), text: draft.text.trim(), ...Object.fromEntries(originals) };
+      const supersedes = draft.supersedes ? { supersedes: Number(draft.supersedes) } : {};
       if (draft.kind === 'knowledge') await api('/api/settings/memory/knowledge', { ...body, title: draft.title.trim() });
-      else await api('/api/settings/memory/definitions', { ...body, ...(draft.supersedes ? { supersedes: Number(draft.supersedes) } : {}) });
+      else if (draft.kind === 'behavior') await api('/api/settings/memory/behaviors', { ...body, title: draft.title.trim(), addressee: draft.addressee || null, ...supersedes });
+      else await api('/api/settings/memory/definitions', { ...body, ...supersedes });
       say('success', `${draft.kind} saved`, body.path);
       edit.close();
       await load();
@@ -1529,23 +1535,29 @@ function MemoryEntriesCard({ workspaceNames, language, say, edit }: {
       </div>
       {writing && (
         <React.Fragment>
-          <Select label="Kind" value={draft.kind} onChange={setDraftField('kind')}
-            options={['knowledge', 'definition']} />
+          {editingBehavior
+            ? <p style={muted}>editing behavior #{draft.supersedes} — saving writes a new approved entry and supersedes this one</p>
+            : <Select label="Kind" value={draft.kind} onChange={setDraftField('kind')} options={['knowledge', 'behavior', 'definition']} />}
           <Select label="Workspace" value={draft.workspace} onChange={setDraftField('workspace')} options={[{ value: '', label: 'board-wide' }, ...workspaceNames]} />
-          <Input label={draft.kind === 'knowledge' ? 'Path' : 'Branch path'} mono value={draft.path} onChange={setDraftField('path')} placeholder="build/tests" />
+          <Input label={draft.kind === 'definition' ? 'Branch path' : 'Path'} mono value={draft.path} onChange={setDraftField('path')} placeholder="build/tests" />
+          {draft.kind === 'behavior' && (
+            // the current addressee stays offered even if its agent has left the registry
+            <Select label="Addressee" value={draft.addressee} onChange={setDraftField('addressee')}
+              options={[{ value: '', label: 'every agent' }, ...new Set([...agentNames, ...(draft.addressee ? [draft.addressee] : [])])]} />
+          )}
           {draft.kind === 'definition' && (
             <Input label="Supersedes (entry id, to revise the branch's current definition)" mono value={draft.supersedes} onChange={setDraftField('supersedes')} />
           )}
           {translatable && (
             <React.Fragment>
-              {draft.kind === 'knowledge' && (
+              {draft.kind !== 'definition' && (
                 <Input label={`Original title (${language})`} value={draft.originalTitle} onChange={setDraftField('originalTitle')} />
               )}
               <Input label={`Original (${language})`} multiline rows={3} value={draft.originalText} onChange={setDraftField('originalText')} />
               <Button variant="secondary" size="sm" disabled={busy || fields.some((key) => !originalOf[key].trim())} onClick={() => runTranslation(true)}>Translate</Button>
             </React.Fragment>
           )}
-          {draft.kind === 'knowledge' && <Input label="Title (English)" value={draft.title} onChange={setDraftField('title')} />}
+          {draft.kind !== 'definition' && <Input label="Title (English)" value={draft.title} onChange={setDraftField('title')} />}
           <Input label="English (saved as the canonical text)" multiline rows={3} value={draft.text} onChange={setDraftField('text')} />
           {translatable && (
             <Button variant="secondary" size="sm" disabled={busy || fields.some((key) => !draft[key].trim())} onClick={() => runTranslation(false)}>Back-translate</Button>
@@ -1575,7 +1587,7 @@ function MemoryEntriesCard({ workspaceNames, language, say, edit }: {
           <p style={{ ...muted, fontFamily: 'var(--font-mono)' }}>
             #{entry.id} · {entry.kind} · {entry.invalidation_reason
               ? `invalidated: ${entry.invalidation_reason}${entry.successor_id ? ` → #${entry.successor_id}` : ''}`
-              : entry.state} · {entry.scope ?? 'board-wide'} · {entry.path} · {entry.author.activity}{entry.cause && ` · ${entry.cause}`}
+              : entry.state} · {entry.scope ?? 'board-wide'} · {entry.path}{entry.kind === 'behavior' && ` · to ${entry.addressee ?? 'every agent'}`} · {entry.author.activity}{entry.cause && ` · ${entry.cause}`}
           </p>
           {entry.kind !== 'definition' && <strong style={{ fontSize: 'var(--text-sm)' }}>{entry.title}</strong>}
           <p style={{ margin: 0, fontSize: 'var(--text-sm)' }}>{entry.text}</p>
@@ -1584,7 +1596,16 @@ function MemoryEntriesCard({ workspaceNames, language, say, edit }: {
             <p style={muted}>{entry.original ? 'original' : 'translation'}: {[...new Set([shown.title, shown.text])].join(' — ')}</p>
           )}
           {!entry.invalidation_reason && invalidating?.id !== entry.id && (
-            <div><Button variant="ghost" size="sm" onClick={() => setInvalidating({ id: entry.id, reason: 'capability', successor: '' })}>Invalidate</Button></div>
+            <div style={{ display: 'flex', gap: 8 }}>
+              {entry.kind === 'behavior' && entry.state === 'approved' && (
+                <Button variant="ghost" size="sm" onClick={() => edit.open(writeId, () => setDraft({
+                  ...blank, kind: 'behavior', workspace: entry.scope ?? '', path: entry.path, title: entry.title, text: entry.text,
+                  originalTitle: entry.original?.title ?? '', originalText: entry.original?.text ?? '',
+                  addressee: entry.addressee ?? '', supersedes: String(entry.id),
+                }))}>Edit</Button>
+              )}
+              <Button variant="ghost" size="sm" onClick={() => setInvalidating({ id: entry.id, reason: 'capability', successor: '' })}>Invalidate</Button>
+            </div>
           )}
           {invalidating?.id === entry.id && (
             <React.Fragment>
@@ -2377,7 +2398,7 @@ function SettingsScreen({ say, registerLeaveGuard }: {
           <MemorySettingsCard settings={memorySettings} say={say} onSaved={loadMemorySettings} edit={edit} />
         )}
         {displayLanguageLoaded && (
-          <MemoryEntriesCard workspaceNames={workspaceNames} language={displayLanguage} say={say} edit={edit} />
+          <MemoryEntriesCard workspaceNames={workspaceNames} agentNames={agentNames} language={displayLanguage} say={say} edit={edit} />
         )}
         {metaReviewSettings && (
           <MetaReviewSettingsCard settings={metaReviewSettings} say={say} onSaved={loadMetaReviewSettings} edit={edit} />

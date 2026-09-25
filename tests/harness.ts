@@ -413,6 +413,11 @@ export async function api(
   return { status: res.status, json: await res.json() };
 }
 
+/** 記憶の一覧を settings タブの読み口(GET /api/settings/memory/entries)で読む。query は `?state=approved` など。 */
+export async function memoryEntries(tp: Tidepool, query = ""): Promise<any[]> {
+  return (await api(tp.baseUrl, "GET", `/api/settings/memory/entries${query}`)).json.entries;
+}
+
 /** Quarantines an agent name — for tests that drive the pickup/queue gate
  *  SQL (ADR 0012 / issue #36). The open Confirmation question is the state
  *  (ADR 0137 決定3), so this puts one on the board. */

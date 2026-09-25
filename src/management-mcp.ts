@@ -36,6 +36,7 @@ import { toolError, toolResult } from "./mcp.js";
 import {
   changeMemorySettings,
   defineMemoryBranch,
+  humanBehaviorSchema,
   humanDefinitionSchema,
   humanEntryInput,
   humanKnowledgeSchema,
@@ -46,6 +47,7 @@ import {
   memorySettingsChangeSchema,
   readMemorySettings,
   rebuildMemoryIndex,
+  recordBehavior,
   recordKnowledge,
   TOKENIZER,
 } from "./memory.js";
@@ -556,8 +558,9 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
       return toolResult(readMetaReviewSettings(deps.db));
     },
   );
-  // spec #586 F / issue #593: the human's memory surface. No approve verb — approval
-  // only goes through a question (#358). Domain errors come back as tool errors.
+  // spec #586 F / issue #593: the human's memory surface. No approve verb (ADR 0152):
+  // wording the human writes here is approved on write, and AI-drafted wording is approved
+  // only through a proposal question. Domain errors come back as tool errors.
   const memoryVerb = (write: () => unknown) => {
     try {
       return toolResult(write());
@@ -599,6 +602,19 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
       inputSchema: humanDefinitionSchema.shape,
     },
     async (input) => memoryVerb(() => defineMemoryBranch(deps.db, humanEntryInput(deps.db, input), "mcp", deps.clock.now())),
+  );
+  server.registerTool(
+    "record_behavior",
+    {
+      description:
+        "Record a Behavior entry: how agents should act, injected into the workers of addressee (an agent name, or null for every agent). " +
+        "To edit an approved behavior, pass its id as supersedes: the new entry replaces it and the old one is invalidated as superseded. " +
+        "Candidates cannot be edited here. source_event_id optionally cites the episode the rule comes from: a decision_logged or " +
+        "worker_spawned event id; an edit does not carry the old entry's source over, so pass it again to keep it. title and text are the English canonical wording; " +
+        `original_title and original_text go together (both or neither). ${writtenAs}`,
+      inputSchema: humanBehaviorSchema.shape,
+    },
+    async (input) => memoryVerb(() => recordBehavior(deps.db, humanEntryInput(deps.db, input), "mcp", deps.clock.now())),
   );
   server.registerTool(
     "invalidate_memory_entry",
