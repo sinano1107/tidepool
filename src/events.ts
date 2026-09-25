@@ -5,6 +5,7 @@ import type { ExecutionSettingRow, ExecutionSettingsChange, ProviderSource, regi
 import type { InvalidationReason, MemoryDropReason, MemoryEntryFields } from "./memory.js";
 import type { Provider } from "./registry.js";
 import type { MemoryProposal, ProposalAmendment, TaskType } from "./tasks.js";
+import { entryObjections } from "./triage.js";
 
 /** What the advisor **actually did** in one worker session (issue #33 判断6),
  *  as against `worker_spawned.advisor`'s "what the board asked for". Carried by
@@ -554,16 +555,8 @@ export function listLog(db: Db, defaultWorkspaceName?: string): LogEntry[] {
     Omit<EventRow, "payload" | "task_id"> & { task_id: string; payload: string; workspace: string | null }
   >;
   // a second, flat query rather than N+1 per entry — grouped in JS below
-  const objectionRows = db
-    .prepare(
-      `SELECT json_extract(payload, '$.entry_id') AS entry_id,
-              json_extract(payload, '$.comment') AS comment,
-              json_extract(payload, '$.session_id') AS session_id
-         FROM events WHERE kind = 'objection_raised' ORDER BY id`,
-    )
-    .all() as Array<{ entry_id: number; comment: string; session_id: number }>;
   const objectionsByEntry = new Map<number, { comment: string; session_id: number }[]>();
-  for (const o of objectionRows) {
+  for (const o of entryObjections(db)) {
     const list = objectionsByEntry.get(o.entry_id) ?? [];
     list.push({ comment: o.comment, session_id: o.session_id });
     objectionsByEntry.set(o.entry_id, list);
