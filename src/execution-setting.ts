@@ -341,14 +341,14 @@ export function loadExecutionSettingTable(db: Db): ExecutionSettingTable {
 }
 
 /** 盤面設定(ADR 0110 決定5): 「上位ティアの行を advisor に使ってよい」、
- *  Provider 順位、優先順位の既定、学習器の昇格(ADR 0150 決定4)。行が無い / 列が NULL = 未設定 = コードの既定
+ *  Provider 順位、優先順位の既定、学習器の昇格(ADR 0150 決定4)、振り返り Board call が
+ *  共有するティア(ADR 0111 追記4)。行が無い / 列が NULL = 未設定 = コードの既定
  *  —— display_language と同じ「行が無ければ既定」の形。 */
 interface ExecutionDefaults {
   frontierAdvisor: boolean;
   providerRank: readonly Provider[];
   priority: Priority;
   learnerPromoted: boolean;
-  /** 振り返り Board call(ADR 0111 追記4)が共有するティア。未設定 = `BOARD_DEFAULT_RETROSPECTIVE_TIER`。 */
   retrospectiveTier: Tier;
 }
 
