@@ -236,7 +236,7 @@ export async function changeAgentTier(input: ChangeAgentTierInput, deps: AgentAd
   await refreshRegistryForWrite(deps.registry, deps.githubAuth);
   const existing = ownEntry(loadRegistry(deps.registry.dir, deps.registry.mode).agents, input.name);
   if (!existing || existing.builtin || existing.tier !== input.expectTier) {
-    throw new AgentTierMismatchError(input.name, input.expectTier, existing?.builtin ? "built-in" : existing?.tier);
+    throw new AgentTierMismatchError(input.name, input.expectTier, existing?.tier);
   }
   return commitToRegistry(
     deps.registry,

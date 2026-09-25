@@ -748,8 +748,7 @@ async function landAgentTier(deps: SubmitAnswerDeps, questionId: string, proposa
     return new DomainError(`the proposal's premise no longer holds (${changed.join(", ")} changed), so the board settled the question as observed`);
   };
   const settings = readExecutionSettings(deps.db);
-  const rows = routingPinChanges(proposal, settings);
-  if (rows?.length) throw stale(["rows"]);
+  if (routingPinChanges(proposal, settings)?.length) throw stale(["rows"]);
   const agent = list().find((a) => a.name === proposal.agent);
   if (registryPinChanges(proposal, agent).length) throw stale(["agent_tier"]);
   if (!tierHasRowFor(settings.table, agent!.provider.split(", "), to)) {
