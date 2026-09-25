@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { InvalidWorkspaceNameError, loadRegistry } from "../src/registry.js";
 import { RegistryFetchFailedError, RegistryPushFailedError } from "../src/registry-write.js";
 import { RepoAccessMissingError } from "../src/repo-access.js";
@@ -99,15 +99,13 @@ describe("createWorkspace: 新規作成モード(issue #57 / ADR 0066)", () => {
     // ホストの init.defaultBranch を master に振っておく —— -b main が実装から
     // 抜けても既定が main のホストでは緑のままなので、判別力を持たせるには
     // 既定を master 側にずらして確かめる必要がある
-    process.env.GIT_CONFIG_COUNT = "1";
-    process.env.GIT_CONFIG_KEY_0 = "init.defaultbranch";
-    process.env.GIT_CONFIG_VALUE_0 = "master";
+    vi.stubEnv("GIT_CONFIG_COUNT", "1");
+    vi.stubEnv("GIT_CONFIG_KEY_0", "init.defaultbranch");
+    vi.stubEnv("GIT_CONFIG_VALUE_0", "master");
     try {
       await createWorkspace({ mode: "create", name: "lagoon" }, deps);
     } finally {
-      delete process.env.GIT_CONFIG_COUNT;
-      delete process.env.GIT_CONFIG_KEY_0;
-      delete process.env.GIT_CONFIG_VALUE_0;
+      vi.unstubAllEnvs();
     }
 
     const checkoutDir = join(deps.workspacesBaseDir, "lagoon");

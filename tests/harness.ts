@@ -1,11 +1,11 @@
 import { execFileSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { cp, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import { expect, onTestFinished } from "vitest";
+import { afterAll, expect, onTestFinished } from "vitest";
 import { quarantineAgent } from "../src/agent.js";
 import type { AgentAdmin } from "../src/agent-create.js";
 import type { AllocationClient } from "../src/allocation-review.js";
@@ -530,23 +530,24 @@ export async function makeRemoteBackedWorkspace(
    *  そこが測りたい差である。 */
   publish: (file: string, body: string, message: string) => void;
 }> {
-  const workspace = await makeWorkspace(dirs, name);
+  // 中身は全ケースで同一なので、組むのは1度だけ。各ケースはそのコピーを使う(issue #842)
+  remoteTemplate ??= buildRemoteTemplate();
+  const template = await remoteTemplate;
+  const path = await mkdtemp(join(tmpdir(), `tidepool-${name}-`));
   const origin = await mkdtemp(join(tmpdir(), `tidepool-${name}-origin-`));
   const publisher = await mkdtemp(join(tmpdir(), `tidepool-${name}-publisher-`));
-  dirs.push(origin, publisher);
-  // stderr は piped: clone / push の進捗は成否に関係なく stderr へ出るので、素通しすると
-  // テスト出力が git のノイズで埋まる(registry-fixture.ts と同じ規律)
-  const netGit = (cwd: string, ...args: string[]) =>
-    execFileSync("git", ["-c", "user.name=test", "-c", "user.email=test@example.com", ...args], {
-      cwd,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-  netGit(origin, "init", "--bare", "-b", "main");
-  netGit(workspace.path, "remote", "add", "origin", origin);
-  netGit(workspace.path, "push", "-u", "origin", "main");
-  netGit(publisher, "clone", "--quiet", origin, ".");
+  dirs.push(path, origin, publisher);
+  await cp(template.origin, origin, { recursive: true });
+  for (const [from, to] of [
+    [template.path, path],
+    [template.publisher, publisher],
+  ] as const) {
+    await cp(from, to, { recursive: true });
+    const config = join(to, ".git", "config");
+    await writeFile(config, (await readFile(config, "utf8")).replaceAll(template.origin, origin));
+  }
   return {
-    workspace: { ...workspace, repo: origin },
+    workspace: { name, path, repo: origin },
     publish: (file, body, message) => {
       writeFileSync(join(publisher, file), body);
       netGit(publisher, "add", file);
@@ -554,6 +555,36 @@ export async function makeRemoteBackedWorkspace(
       netGit(publisher, "push", "origin", "main");
     },
   };
+}
+
+let remoteTemplate: ReturnType<typeof buildRemoteTemplate> | undefined;
+// テストの dirs には載せない —— どのケースの後始末でも消えてはならず、ファイルの afterAll で消す。
+// module はテストファイルごとに読み直されるので、組むのもファイルごとに1度。
+// afterAll はテスト実行中には登録できないので import 時に置く。e2e(Playwright)も api を
+// ここから import するので vitest の下に限る
+const remoteTemplateDirs: string[] = [];
+if (process.env.VITEST) {
+  afterAll(() => Promise.all(remoteTemplateDirs.map((dir) => rm(dir, { recursive: true, force: true }))));
+}
+
+// stderr は piped: clone / push の進捗は成否に関係なく stderr へ出るので、素通しすると
+// テスト出力が git のノイズで埋まる(registry-fixture.ts と同じ規律)
+const netGit = (cwd: string, ...args: string[]) =>
+  execFileSync("git", ["-c", "user.name=test", "-c", "user.email=test@example.com", ...args], {
+    cwd,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+
+async function buildRemoteTemplate() {
+  const { path } = await makeWorkspace(remoteTemplateDirs, "remote-template");
+  const origin = await mkdtemp(join(tmpdir(), "tidepool-remote-template-origin-"));
+  const publisher = await mkdtemp(join(tmpdir(), "tidepool-remote-template-publisher-"));
+  remoteTemplateDirs.push(origin, publisher);
+  netGit(origin, "init", "--bare", "-b", "main");
+  netGit(path, "remote", "add", "origin", origin);
+  netGit(path, "push", "-u", "origin", "main");
+  netGit(publisher, "clone", "--quiet", origin, ".");
+  return { path, origin, publisher };
 }
 
 /** Land a task branch on a bare origin by content but not ancestry, mirroring

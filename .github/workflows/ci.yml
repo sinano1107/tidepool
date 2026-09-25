@@ -7,9 +7,17 @@ on:
 
 jobs:
   # サーバー境界までの実物テスト(ADR 0027)。tidepool のリスクの大半はここが
-  # 吸収している。
+  # 吸収している。full suite の合否は ubuntu と macOS で確かめる(ADR 0155)。
+  # macOS の runner は遅いので、shard に割って ubuntu と同じくらいの時間に収める。
   test:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, shard: 1/1 }
+          - { os: macos-latest, shard: 1/2 }
+          - { os: macos-latest, shard: 2/2 }
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -19,7 +27,7 @@ jobs:
       - run: npm ci
       - run: npm run lint
       - run: npm run typecheck
-      - run: npm run test
+      - run: npm run test -- --shard=${{ matrix.shard }}
 
   # 実ブラウザでのみ見える React 配線層の昇格済みスモーク(ADR 0027 / 0055)。
   # サーバー境界の test job と失敗シグナルを分け、並列に走らせる。
