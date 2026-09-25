@@ -7,9 +7,13 @@ on:
 
 jobs:
   # サーバー境界までの実物テスト(ADR 0027)。tidepool のリスクの大半はここが
-  # 吸収している。
+  # 吸収している。full suite の合否はこの2本で確かめる(ADR 0155)。
   test:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

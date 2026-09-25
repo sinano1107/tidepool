@@ -37,8 +37,10 @@ Stay in this thread for all three:
 
 Dispatch one sub-agent at the implementation model, carrying the issue number, the agreed seams, and the ADRs that govern the area. This belongs in a build session (`claude-build` / `codex-build`), where ponytail is already `full` and the plugin's `SubagentStart` hook copies the live mode into every sub-agent. That hook copies rather than sets: if the mode is off, set `/ponytail full` in this thread **before** dispatching, or the loop runs ponytail-unaware. It owns two commits and returns what it did:
 
-1. **Implementation** — `/tdd` at the agreed seams, one red-green slice at a time, typechecking and running single test files as it goes. Full suite green, then commit.
-2. **ponytail-review** — `/ponytail-review` over its own diff, inline in the same thread, applying what it finds. This is a separate beat from the mode above, not a substitute for it. Full suite green, then commit.
+1. **Implementation** — `/tdd` at the agreed seams, one red-green slice at a time, typechecking and running single test files as it goes. The touched test files and typecheck green, then commit.
+2. **ponytail-review** — `/ponytail-review` over its own diff, inline in the same thread, applying what it finds. This is a separate beat from the mode above, not a substitute for it. The touched test files and typecheck green, then commit.
+
+Neither stage runs the full suite; CI does, after the PR opens (ADR 0155).
 
 A stage with no diff produces no commit. Never amend: keeping the stages apart is what makes each applied change reviewable and revertible on its own.
 
@@ -81,6 +83,10 @@ Completeness is the whole point of the section. A list that quietly drops the fi
 
 A review finding that was filed or commented on says so on its own line above (`→ #n に起票`). Then a second section, `## 発見した問題`, for the rest of what the filing step settled — the sub-agent's report, the reviewers' notes on what the diff did not cause, your own observations: each one filed as `#<n>`, commented on `#<n>`, or not filed and why. Each problem appears in exactly one of the two sections.
 
+## Waiting for CI
+
+Once the PR is open, `gh pr checks --watch` until both `test` jobs — ubuntu and macOS — finish. When one fails, fix it on the branch, commit, push, and watch again. The PR goes to the human only once both pass.
+
 ## Where this stops
 
-At the open pull request. Do not merge it, do not close the issue, do not tick its acceptance criteria. The human merges, and the PR's `Closes #<issue>` closes the issue with it (ADR 0126) — no confirmation of yours gates that. What survives a symptom issue's close is the confirmation issue the filing step filed.
+At the open pull request with CI green. Do not merge it, do not close the issue, do not tick its acceptance criteria. The human merges, and the PR's `Closes #<issue>` closes the issue with it (ADR 0126) — no confirmation of yours gates that. What survives a symptom issue's close is the confirmation issue the filing step filed.

@@ -65,6 +65,8 @@ So the boundary is which command you launched:
 
 Tests need the Node version and sandbox permission described in `AGENTS.md`.
 
+Stages commit on the touched test files and typecheck; the full suite is not run locally. After opening the PR, the run waits with `gh pr checks --watch` for both CI `test` jobs (ubuntu and macOS), fixes and pushes again on a failure, and hands the PR over only once both pass (ADR 0155).
+
 Everything the flow calls — `/implementation-delegation`, `/tdd`, `/code-review` — is vendored under `.agents/skills/`, so a clone has it. ponytail is the exception: it is a plugin, and getting it onto a machine is [machine-setup.md](./machine-setup.md).
 
 One issue per session, cleared between them. Two implementation sessions in one checkout share an index, a `HEAD`, and `refs/stash`, and corrupt each other.
@@ -72,7 +74,7 @@ One issue per session, cleared between them. Two implementation sessions in one 
 ## Where a human is required
 
 - **Agreeing the seams**, before the first test. `/tdd` refuses to write a test at an unconfirmed seam, and a sub-agent cannot ask. The seams on offer are the three in ADR 0107 — server boundary (`bootTidepool`), domain layer (exported functions, asserted through exports), schema layer (SQL, migrations only) — and a behaviour is stated once, at the lowest seam it shows at.
-- **Merging the pull request.** The skill stops at an open PR and never merges, closes, or ticks acceptance criteria.
+- **Merging the pull request.** The skill stops at an open PR with CI green and never merges, closes, or ticks acceptance criteria.
 
 Closing the originating issue is **not** one of them: the PR carries `Closes #<issue>` and merging
 closes it (ADR 0126).
