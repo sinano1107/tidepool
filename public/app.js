@@ -260,7 +260,7 @@ function TpMemoryAmendment({ candidateId, onTranslate, onChange }) {
     api("GET /api/settings/memory/entries", { query: { kind: "behavior", state: "candidate" } }).then(({ entries }) => {
       const candidate = entries.find((e) => e.id === candidateId);
       if (!candidate) return;
-      const wording = { title: candidate.title, text: candidate.text, addressee: candidate.addressee ?? "" };
+      const wording = { title: candidate.title.trim(), text: candidate.text.trim(), addressee: candidate.addressee?.trim() ?? "" };
       setBase(wording);
       setDraft({ ...wording, originalTitle: "", originalText: "" });
     }).catch((err) => setError(String(err.message || err)));

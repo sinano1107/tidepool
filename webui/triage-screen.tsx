@@ -223,7 +223,8 @@ function TpMemoryAmendment({ candidateId, onTranslate, onChange }: {
       .then(({ entries }) => {
         const candidate = entries.find((e) => e.id === candidateId);
         if (!candidate) return;
-        const wording = { title: candidate.title, text: candidate.text, addressee: candidate.addressee ?? '' };
+        // candidate の文言は trim されずに保存されうる —— 比べる基準を trim しておかないと、触らない承認が修正つきになる
+        const wording = { title: candidate.title.trim(), text: candidate.text.trim(), addressee: candidate.addressee?.trim() ?? '' };
         setBase(wording);
         setDraft({ ...wording, originalTitle: '', originalText: '' });
       })

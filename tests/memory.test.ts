@@ -500,10 +500,10 @@ it("rebuild は一覧を無効化の理由コード・後継 id ごと同じに�
 });
 
 /** 承認の export(issue #620 / spec #615 A)。pin の一致 / 不一致は回答の挙動としてサーバ境界が言う。 */
-function candidate(db: ReturnType<typeof openDb>, title: string, scope: string | null = null) {
+function candidate(db: ReturnType<typeof openDb>, title: string, scope: string | null = null, addressee: string | null = null) {
   return createBehaviorCandidate(
     db,
-    { scope, path: "habits", title, text: `${title}.`, addressee: null, source: { commit: "0a46a46" }, author: { activity: "rca", name: "auditor" } },
+    { scope, path: "habits", title, text: `${title}.`, addressee, source: { commit: "0a46a46" }, author: { activity: "rca", name: "auditor" } },
     "worker",
     at,
   ).entry_id;
@@ -654,4 +654,82 @@ it("reject は consolidate の新 candidate だけを後継なしの rejected �
   rejectMemoryProposal(db, { kind: "memory", op: "consolidate", candidate_id: merged, replaces: [{ id: old, version }] }, "question-2", "webui", at);
   expect(listMemoryEntries(db, { state: "invalidated" })).toMatchObject([{ id: merged, invalidation_reason: "rejected", successor_id: null }]);
   expect(approvedMemoryEntries(db).map((e) => e.id)).toEqual([old]);
+});
+
+/** 修正値つき approve(issue #944 / ADR 0152 決定2・4): 承認の export に修正値を渡す。 */
+const entryById = (db: ReturnType<typeof openDb>, id: number) => listMemoryEntries(db, {}).find((e) => e.id === id);
+
+it("修正値つき approve は人間名義の approved エントリを作り、candidate を後継つき superseded にする —— 欠けた欄は candidate から継ぐ", () => {
+  const { db } = board();
+  const drafted = candidate(db, "Split migrations", "tidepool", "deckhand");
+
+  const created = approveMemoryProposal(db, { kind: "memory", op: "approve", candidate_id: drafted, replaces: [] }, "question-1", "webui", at, {
+    text: "Keep migrations in their own commit.",
+  });
+
+  expect(entryById(db, created)).toMatchObject({
+    kind: "behavior",
+    state: "approved",
+    scope: "tidepool",
+    path: "habits",
+    title: "Split migrations",
+    text: "Keep migrations in their own commit.",
+    addressee: "deckhand",
+    original: null,
+    author: { activity: "human" },
+    source: { kind: "event", ref: created },
+    invalidation_reason: null,
+  });
+  expect(entryById(db, drafted)).toMatchObject({ state: "candidate", invalidation_reason: "superseded", successor_id: created });
+});
+
+it("修正値つき consolidate は replaces の後継も新エントリにし、統合後の candidate を approved にしない", () => {
+  const { db } = board();
+  const replaced = [candidate(db, "Split migrations", "tidepool", "deckhand"), candidate(db, "Split schema changes", "tidepool", "deckhand")];
+  const merged = candidate(db, "One concern per commit", "tidepool", "deckhand");
+
+  const created = approveMemoryProposal(
+    db,
+    { kind: "memory", op: "consolidate", candidate_id: merged, replaces: replaced.map((id) => ({ id, version: null })) },
+    "question-1",
+    "webui",
+    at,
+    { title: "One concern", addressee: null },
+  );
+
+  expect(entryById(db, created)).toMatchObject({ state: "approved", title: "One concern", text: "One concern per commit.", addressee: null, author: { activity: "human" } });
+  for (const id of [merged, ...replaced]) expect(entryById(db, id)).toMatchObject({ state: "candidate", invalidation_reason: "superseded", successor_id: created });
+});
+
+it("pin が古ければ修正値つきでも拒否し、何も変えない", () => {
+  const { db } = board();
+  const drafted = candidate(db, "Split migrations", "tidepool", "deckhand");
+  const proposal = { kind: "memory" as const, op: "approve" as const, candidate_id: drafted, replaces: [] };
+  approveMemoryProposal(db, proposal, "elsewhere", "webui", at);
+  const before = listMemoryEntries(db, {});
+
+  expect(() => approveMemoryProposal(db, proposal, "question-1", "webui", at, { text: "Keep migrations apart." })).toThrow(/stale/);
+  expect(listMemoryEntries(db, {})).toEqual(before);
+});
+
+it("修正値つき approve が生む event(新エントリの作成と無効化)はすべて question の id を印に持つ", () => {
+  const { db } = board();
+  const replaced = candidate(db, "Split migrations", "tidepool", "deckhand");
+  const merged = candidate(db, "One concern per commit", "tidepool", "deckhand");
+
+  const created = approveMemoryProposal(
+    db,
+    { kind: "memory", op: "consolidate", candidate_id: merged, replaces: [{ id: replaced, version: null }] },
+    "question-1",
+    "webui",
+    at,
+    { text: "One concern." },
+  );
+
+  expect([created, created + 1, created + 2, created + 3].map((id) => getEvent(db, id)).map((e) => e && [e.kind, (e.payload as { question_id?: string }).question_id])).toEqual([
+    ["memory_entry_created", "question-1"],
+    ["memory_entry_invalidated", "question-1"],
+    ["memory_entry_invalidated", "question-1"],
+    undefined,
+  ]);
 });

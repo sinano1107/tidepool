@@ -454,6 +454,8 @@ export function approveMemoryProposal(db: Db, proposal: MemoryProposal, question
   return db.transaction(() => {
     const candidate = assertProposalFresh(db, proposal);
     if (proposal.op === "invalidate") {
+      // 文言を承認しないので修正値を持たない(ADR 0152 決定2)—— 扉の外から呼ばれても黙って捨てず断る
+      if (amendment) throw new DomainError("an invalidate proposal takes no amendment");
       return invalidateMemoryEntry(db, { entry_id: candidate.id, reason: proposal.reason }, HUMAN_WORKER_ID, origin, at, mark);
     }
     if (amendment) {
@@ -901,6 +903,8 @@ export function browseMemory(
   })();
 }
 
+type ListedEntry = ReturnType<typeof listMemoryEntries>[number];
+
 /** meta-review の一覧3つ(issue #619): 人間の面と同じ一覧を verb ごとに絞ってページで返す。scope・宛先では
  *  絞らない(両方を見る必要があるのは矛盾を見る人間と meta-review だけ —— ADR 0083 追記4)。 */
 export function pullMemoryList(
@@ -911,9 +915,9 @@ export function pullMemoryList(
   at: Date,
 ) {
   return db.transaction(() => {
-    const all = listMemoryEntries(db, {});
     // 過去の提案の読み物(ADR 0152 決定2): 後継の文言を載せる —— 人間名義の後継なら修正つきで承認された candidate
-    const withSuccessor = (e: (typeof all)[number]) => {
+    // (か、修正つきの統合に置き換えられた candidate)
+    const withSuccessor = (e: ListedEntry, all: ListedEntry[]) => {
       const next = e.successor_id === null ? undefined : all.find((s) => s.id === e.successor_id);
       return next ? { ...e, successor: { title: next.title, text: next.text, addressee: next.addressee, author: next.author } } : e;
     };
@@ -922,7 +926,9 @@ export function pullMemoryList(
         ? listMemoryEntries(db, input)
         : verb === "list_memory_behaviors"
           ? listMemoryEntries(db, { kind: "behavior", state: "approved" })
-          : all.filter((e) => e.state === "candidate" && (input.include_invalidated || e.invalidation_reason === null)).map(withSuccessor);
+          : ((all) => all.filter((e) => e.state === "candidate" && (input.include_invalidated || e.invalidation_reason === null)).map((e) => withSuccessor(e, all)))(
+              listMemoryEntries(db, {}),
+            );
     const { rows: shown, truncated } = paged(entries, input.page);
     return recordPull(db, reader, { verb, input, returned_ids: shown.map((e) => e.id) }, { entries: shown, truncated }, at);
   })();
