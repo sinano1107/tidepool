@@ -656,7 +656,7 @@ export function listEpisodes(
 }
 
 /** case 描画(ADR 0153 決定3)が Episode から読む欄。行動列・transcript は持たない。 */
-export interface CaseEpisode {
+interface CaseEpisode {
   /** handoff 付きで完了した session の task の handoff 文書。 */
   handoff: string | null;
   result: string | null;
