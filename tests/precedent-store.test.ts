@@ -1,45 +1,11 @@
-import { readFileSync, writeFileSync } from "node:fs";
+import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, it } from "vitest";
-import { type Db, openDb } from "../src/db.js";
-import { appendEvent, type EventRow, getEvent, type TaskScopedPayload } from "../src/events.js";
+import { appendEvent, getEvent, type TaskScopedPayload } from "../src/events.js";
 import { listPrecedents } from "../src/memory.js";
 import { registerMetaReview } from "../src/meta-review.js";
 import { backfillEpisodes, listEpisodes, projectAndPersist } from "../src/precedent.js";
-import { tempDir } from "./harness.js";
-
-const FIXTURE_TASK = "6b4c0b23-289e-4f9f-ade1-995fb27f3c0e";
-const SPAWNED_EVENT_ID = 5;
-
-const fixture = (name: string) =>
-  readFileSync(join(import.meta.dirname, "fixtures", `worker-session-2.1.237.${name}`), "utf8");
-
-/** #386 のフィクスチャをそのまま持つ盤面。events は id ごと写す(投影の結合は
- *  盤面が発行した event id の完全一致なので、採番が変わると意味が変わる)。
- *  workspace / assignee は events には無いので tasks 行から解決される。 */
-function seedBoard(): Db {
-  const db = openDb(":memory:");
-  const insertTask = db.prepare(
-    `INSERT INTO tasks (id, type, status, assignee, workspace, title, purpose, completion_criteria,
-       risk_flag, review_flag, sort_key, created_at)
-     VALUES (?, 'work', 'done', ?, ?, 'fixture', 'fixture', 'fixture', 0, 0, 1, '2026-08-20T05:50:48.374Z')`,
-  );
-  insertTask.run(FIXTURE_TASK, "tako", "sandbox");
-  insertTask.run("609d9475-0191-4a7f-b5bf-5b939695315a", "tidepool", "sandbox");
-  const insertEvent = db.prepare(
-    "INSERT INTO events (id, task_id, worker_id, origin, kind, payload, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-  );
-  for (const e of JSON.parse(fixture("events.json")) as EventRow[]) {
-    insertEvent.run(e.id, e.task_id, e.worker_id, e.origin, e.kind, JSON.stringify(e.payload), e.created_at);
-  }
-  return db;
-}
-
-function writeTranscript(dir: string, name: string): string {
-  const path = join(dir, name);
-  writeFileSync(path, fixture("stream.jsonl"));
-  return path;
-}
+import { FIXTURE_TASK, FIXTURE_SPAWNED_EVENT_ID as SPAWNED_EVENT_ID, seedFixtureBoard as seedBoard, tempDir, writeFixtureTranscript as writeTranscript } from "./harness.js";
 
 const logDir = () => tempDir("tidepool-precedent-");
 
