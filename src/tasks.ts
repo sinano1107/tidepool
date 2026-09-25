@@ -791,11 +791,11 @@ export class DomainError extends Error {}
  *  #972): if a human door cancelled it or handed it to `human` meanwhile, the
  *  row no longer matches and the pickup is abandoned (null, no event). */
 export function pickupTask(db: Db, task: Task, workerId: string, now: Date): Task | null {
-  const picked = db.transaction(() => {
+  return db.transaction(() => {
     const { changes } = db
       .prepare("UPDATE tasks SET status = 'in_progress' WHERE id = ? AND status = 'todo' AND assignee IS NOT ?")
       .run(task.id, HUMAN_WORKER_ID);
-    if (changes === 0) return false;
+    if (changes === 0) return null;
     appendEvent(db, {
       taskId: task.id,
       workerId,
@@ -803,9 +803,8 @@ export function pickupTask(db: Db, task: Task, workerId: string, now: Date): Tas
       payload: { kind: "task_picked_up" },
       at: now,
     });
-    return true;
+    return getTask(db, task.id)!;
   })();
-  return picked ? getTask(db, task.id)! : null;
 }
 
 /** Work tasks may not complete without a full handoff doc; question/review
