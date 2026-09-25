@@ -168,9 +168,8 @@ function selectObjections(db: Db, where: string, params: unknown[]): Objection[]
 /** Every objection ever raised against these entries (every entry when omitted),
  *  across sessions — one query however many entries. */
 export function entryObjections(db: Db, entryIds?: number[]): Objection[] {
-  return entryIds
-    ? selectObjections(db, `AND json_extract(payload, '$.entry_id') IN (${entryIds.map(() => "?").join(", ")})`, entryIds)
-    : selectObjections(db, "", []);
+  const where = entryIds ? `AND json_extract(payload, '$.entry_id') IN (${entryIds.map(() => "?").join(", ")})` : "";
+  return selectObjections(db, where, entryIds ?? []);
 }
 
 /** Exactly these objection events against `entryId` — an attribution's
