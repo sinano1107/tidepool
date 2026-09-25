@@ -13,7 +13,7 @@
 // string (an embedded "\n" is the two-character escape sequence, not a byte 0x0A),
 // so the first `\n  }` after a block's opening brace is always that block's own close.
 //
-// Usage: node scripts/build-ds-sync-inputs.mjs [--check]
+// Usage: node scripts/build-ds-sync-inputs.mjs [--check [--out-root <dir>]]
 
 import { existsSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
@@ -21,9 +21,11 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const CONFIG_REL = '.design-sync/config.json';
-const CONFIG_PATH = join(ROOT, CONFIG_REL);
+const outRootArg = process.argv.indexOf('--out-root');
+const OUT_ROOT = outRootArg === -1 ? ROOT : resolve(process.argv[outRootArg + 1]);
+const CONFIG_PATH = join(OUT_ROOT, CONFIG_REL);
 const PKG_DIR = join(ROOT, 'design-system/pkg');
-const DOCS_DIR = join(PKG_DIR, 'docs');
+const DOCS_DIR = join(OUT_ROOT, 'design-system/pkg/docs');
 
 // Finds a top-level `"<key>": { ... }` block in raw JSON text and returns
 // [start, end) where `start` is the index of the leading two-space indent and
@@ -75,7 +77,7 @@ for (const [name, relPath] of Object.entries(componentSrcMap)) {
   const docAbsPath = join(DOCS_DIR, `${name}.md`);
   const promptContent = readFileSync(promptAbsPath, 'utf8');
   const isFresh = existsSync(docAbsPath) && readFileSync(docAbsPath, 'utf8') === promptContent;
-  if (!isFresh) staleAssets.push(relative(ROOT, docAbsPath));
+  if (!isFresh) staleAssets.push(relative(OUT_ROOT, docAbsPath));
   docWrites.push({ path: docAbsPath, content: promptContent });
 }
 
@@ -84,7 +86,7 @@ const expectedDocNames = new Set(Object.keys(componentSrcMap));
 const extraDocFiles = existsSync(DOCS_DIR)
   ? readdirSync(DOCS_DIR).filter((f) => f.endsWith('.md') && !expectedDocNames.has(f.slice(0, -3)))
   : [];
-for (const f of extraDocFiles) staleAssets.push(relative(ROOT, join(DOCS_DIR, f)));
+for (const f of extraDocFiles) staleAssets.push(relative(OUT_ROOT, join(DOCS_DIR, f)));
 
 // Rebuild the dtsPropsFor block, in componentSrcMap order.
 const dtsPropsForLines = Object.entries(propsBodies).map(

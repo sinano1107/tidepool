@@ -6,14 +6,16 @@
 // the standard repo-is-source direction, so component fixes land here
 // without a manual round trip through /design-sync.
 //
-// Usage: node scripts/build-ds-bundle.mjs
+// Usage: node scripts/build-ds-bundle.mjs [--check [--out-root <dir>]]
 
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as esbuild from 'esbuild';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
+const outRootArg = process.argv.indexOf('--out-root');
+const OUT_ROOT = outRootArg === -1 ? ROOT : resolve(process.argv[outRootArg + 1]);
 const DS_SRC = 'design-system/components';
 
 // Order and grouping mirror the manifest already shipped in _ds_bundle.js.
@@ -121,7 +123,7 @@ const outputs = new Map([
 
 if (process.argv.includes('--check')) {
   const stale = [...outputs].filter(([relPath, expected]) => {
-    const path = join(ROOT, relPath);
+    const path = join(OUT_ROOT, relPath);
     return !existsSync(path) || readFileSync(path, 'utf8') !== expected;
   });
   if (stale.length > 0) {

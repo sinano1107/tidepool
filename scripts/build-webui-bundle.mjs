@@ -2,11 +2,13 @@
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import * as esbuild from "esbuild";
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
+const outRootArg = process.argv.indexOf("--out-root");
+const OUT_ROOT = outRootArg === -1 ? ROOT : resolve(process.argv[outRootArg + 1]);
 const SOURCES = [
   "webui/queue-screen.tsx",
   "webui/triage-screen.tsx",
@@ -47,7 +49,7 @@ const outputs = new Map([
 
 if (process.argv.includes("--check")) {
   const stale = [...outputs].filter(([relPath, expected]) => {
-    const path = join(ROOT, relPath);
+    const path = join(OUT_ROOT, relPath);
     return !existsSync(path) || !readFileSync(path).equals(expected);
   });
   if (stale.length > 0) {
