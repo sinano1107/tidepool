@@ -161,7 +161,7 @@ export type EventPayload =
       // the reject-reason steering channel (issue #40) — one per submission,
       // not per item; absent entirely (not null) when the answer carried none
       comment?: string;
-      // routing の提案の approve に添えた修正値(ADR 0150 決定2 / issue #918)。comment と同じく無ければ欄ごと無い
+      // 提案の approve に添えた修正値(ADR 0150 決定2 / issue #918・ADR 0152 決定2 / issue #944)。comment と同じく無ければ欄ごと無い
       amendment?: ProposalAmendment;
     }
   // a triage objection annotates one log entry (entry_id = event id); the
@@ -379,7 +379,8 @@ export type EventPayload =
   // transaction で維持する投影で、この3つの再生で任意 watermark の approved 集合に
   // 戻せる。決定 log には現れない。
   // created の event id がそのままエントリの id(Knowledge は版も)。
-  | { kind: "memory_entry_created"; entry: MemoryEntryFields }
+  // question_id = 提案 question の修正値つき approve が作ったエントリの印(ADR 0151 決定3)
+  | { kind: "memory_entry_created"; entry: MemoryEntryFields; question_id?: string }
   // question_id / activity = meta-review の産物の印(ADR 0151 決定3)。回答が刻んだ無効化は question_id、書き込みの一部として
   // 刻んだ無効化は書き手の activity。人間の直接の無効化はどちらも持たない。
   | { kind: "memory_entry_invalidated"; entry_id: number; reason: InvalidationReason; successor_id: number | null; question_id?: string; activity?: MemoryEntryFields["author"]["activity"] }

@@ -122,7 +122,13 @@ function insertEntry(db: Db, id: number, entry: MemoryEntryFields): void {
   );
 }
 
-function createEntry(db: Db, fields: Omit<MemoryEntryFields, "source"> & { source?: SourceInput }, origin: EventOrigin, at: Date): number {
+function createEntry(
+  db: Db,
+  fields: Omit<MemoryEntryFields, "source"> & { source?: SourceInput },
+  origin: EventOrigin,
+  at: Date,
+  mark?: { question_id: string },
+): number {
   if (fields.path.split("/").some((segment) => segment === "" || segment.trim() !== segment)) {
     throw new DomainError(`path must be "/"-separated non-empty segments without surrounding spaces: ${JSON.stringify(fields.path)}`);
   }
@@ -143,7 +149,7 @@ function createEntry(db: Db, fields: Omit<MemoryEntryFields, "source"> & { sourc
       taskId: null,
       workerId: entry.author.name,
       origin,
-      payload: { kind: "memory_entry_created", entry },
+      payload: { kind: "memory_entry_created", entry, ...mark },
       at,
     });
     insertEntry(db, id, entry);
@@ -248,6 +254,21 @@ export const humanBehaviorSchema = humanKnowledgeSchema.extend({
   supersedes: z.number().int().positive().optional(),
   source_event_id: z.number().int().positive().optional(),
 });
+/** memory の提案の approve に添える修正値(ADR 0152 決定2): 文言と宛先だけ。置き場(path / scope)は動かさない。 */
+const memoryAmendmentSchema = humanBehaviorSchema
+  .pick({ title: true, text: true, addressee: true, original_title: true, original_text: true })
+  .partial()
+  .strict()
+  .refine((amendment) => Object.keys(amendment).length > 0, { message: "name at least one field" });
+export type MemoryAmendment = z.infer<typeof memoryAmendmentSchema>;
+
+/** 回答の `amendment` の検査。schema 違反は DomainError(扉は形を緩く受ける)。 */
+export function parseMemoryAmendment(input: unknown): MemoryAmendment {
+  const parsed = memoryAmendmentSchema.safeParse(input);
+  if (!parsed.success) throw new DomainError(`a memory amendment takes title, text, addressee and original_title + original_text, nothing else: ${parsed.error.issues.map((i) => i.message).join("; ")}`);
+  return parsed.data;
+}
+
 // `rejected` は提案 question の reject だけが書く(人間の面・meta-review の verb からは渡せない)
 export const invalidationSchema = z.object({ reason: z.enum(INVALIDATION_REASONS).exclude(["rejected"]), successor_id: z.number().int().positive().optional() });
 
@@ -304,6 +325,7 @@ export function recordBehavior(
   input: Omit<EntryInput, "source"> & { addressee: string | null; source_event_id?: number; supersedes?: number },
   origin: EventOrigin,
   at: Date,
+  mark?: { question_id: string },
 ): { entry_id: number; event_id: number } {
   const { source_event_id, supersedes, ...fields } = input;
   if (source_event_id !== undefined && !["decision_logged", "worker_spawned"].includes(getEvent(db, source_event_id)?.kind ?? "")) {
@@ -313,7 +335,7 @@ export function recordBehavior(
   return db.transaction(() => {
     // candidate を直す口は提案 question の修正値だけ(ADR 0152 決定3)
     if (supersedes !== undefined) requireBehavior(db, supersedes, "approved");
-    const id = createEntry(db, { ...fields, source, kind: "behavior", state: "approved", original: fields.original ?? null }, origin, at);
+    const id = createEntry(db, { ...fields, source, kind: "behavior", state: "approved", original: fields.original ?? null }, origin, at, mark);
     if (supersedes !== undefined) {
       invalidateMemoryEntry(db, { entry_id: supersedes, reason: "superseded", successor_id: id }, fields.author.name, origin, at, { activity: fields.author.activity });
     }
@@ -424,12 +446,25 @@ function markApproved(db: Db, id: number, version: number): void {
 
 /** Behavior 承認の export(spec #615 A / issue #620): pin 検査(assertProposalFresh)→ memory_entry_approved(版 = この event の id)→ replaces を candidate を後継とする superseded で
  *  無効化、を1 transaction。承認は人間の回答なので人間名義。返り値は memory_entry_approved の event id。
- *  invalidate op(issue #621)は target を理由コードで後継なしに無効化し、その memory_entry_invalidated の event id を返す。 */
-export function approveMemoryProposal(db: Db, proposal: MemoryProposal, questionId: string, origin: EventOrigin, at: Date): number {
+ *  invalidate op(issue #621)は target を理由コードで後継なしに無効化し、その memory_entry_invalidated の event id を返す。
+ *  修正値つき(ADR 0152 決定2・4)は candidate を approved にせず、人間名義の approved エントリ(欠けた欄は candidate の値)を作って
+ *  candidate と replaces をそれの superseded にし、新エントリの id を返す。pin の照合は元の前提のまま。 */
+export function approveMemoryProposal(db: Db, proposal: MemoryProposal, questionId: string, origin: EventOrigin, at: Date, amendment?: MemoryAmendment): number {
+  const mark = { question_id: questionId };
   return db.transaction(() => {
     const candidate = assertProposalFresh(db, proposal);
     if (proposal.op === "invalidate") {
-      return invalidateMemoryEntry(db, { entry_id: candidate.id, reason: proposal.reason }, HUMAN_WORKER_ID, origin, at, { question_id: questionId });
+      // 文言を承認しないので修正値を持たない(ADR 0152 決定2)—— 扉の外から呼ばれても黙って捨てず断る
+      if (amendment) throw new DomainError("an invalidate proposal takes no amendment");
+      return invalidateMemoryEntry(db, { entry_id: candidate.id, reason: proposal.reason }, HUMAN_WORKER_ID, origin, at, mark);
+    }
+    if (amendment) {
+      const { addressee = candidate.addressee, title = candidate.title, text = candidate.text, ...original } = amendment;
+      const { entry_id } = recordBehavior(db, { ...humanEntryInput(db, { workspace: candidate.scope, path: candidate.path, title, text, ...original }), addressee }, origin, at, mark);
+      for (const id of [candidate.id, ...proposal.replaces.map((r) => r.id)]) {
+        invalidateMemoryEntry(db, { entry_id: id, reason: "superseded", successor_id: entry_id }, HUMAN_WORKER_ID, origin, at, mark);
+      }
+      return entry_id;
     }
     const eventId = appendEvent(db, {
       taskId: null,
@@ -440,7 +475,7 @@ export function approveMemoryProposal(db: Db, proposal: MemoryProposal, question
     });
     markApproved(db, candidate.id, eventId);
     for (const { id } of proposal.replaces) {
-      invalidateMemoryEntry(db, { entry_id: id, reason: "superseded", successor_id: candidate.id }, HUMAN_WORKER_ID, origin, at, { question_id: questionId });
+      invalidateMemoryEntry(db, { entry_id: id, reason: "superseded", successor_id: candidate.id }, HUMAN_WORKER_ID, origin, at, mark);
     }
     return eventId;
   })();
@@ -868,6 +903,8 @@ export function browseMemory(
   })();
 }
 
+type ListedEntry = ReturnType<typeof listMemoryEntries>[number];
+
 /** meta-review の一覧3つ(issue #619): 人間の面と同じ一覧を verb ごとに絞ってページで返す。scope・宛先では
  *  絞らない(両方を見る必要があるのは矛盾を見る人間と meta-review だけ —— ADR 0083 追記4)。 */
 export function pullMemoryList(
@@ -878,12 +915,20 @@ export function pullMemoryList(
   at: Date,
 ) {
   return db.transaction(() => {
+    // 過去の提案の読み物(ADR 0152 決定2): 後継の文言を載せる —— 人間名義の後継なら修正つきで承認された candidate
+    // (か、修正つきの統合に置き換えられた candidate)
+    const withSuccessor = (e: ListedEntry, all: ListedEntry[]) => {
+      const next = e.successor_id === null ? undefined : all.find((s) => s.id === e.successor_id);
+      return next ? { ...e, successor: { title: next.title, text: next.text, addressee: next.addressee, author: next.author } } : e;
+    };
     const entries =
       verb === "list_memory_entries"
         ? listMemoryEntries(db, input)
         : verb === "list_memory_behaviors"
           ? listMemoryEntries(db, { kind: "behavior", state: "approved" })
-          : listMemoryEntries(db, {}).filter((e) => e.state === "candidate" && (input.include_invalidated || e.invalidation_reason === null));
+          : ((all) => all.filter((e) => e.state === "candidate" && (input.include_invalidated || e.invalidation_reason === null)).map((e) => withSuccessor(e, all)))(
+              listMemoryEntries(db, {}),
+            );
     const { rows: shown, truncated } = paged(entries, input.page);
     return recordPull(db, reader, { verb, input, returned_ids: shown.map((e) => e.id) }, { entries: shown, truncated }, at);
   })();

@@ -22,7 +22,7 @@ import {
 import { type GitHubClient, IssueGoneError } from "./github.js";
 import type { HarnessContainmentCheck } from "./harness-containment.js";
 import { type Landing, type LandingVerdict, landingBlock } from "./landing.js";
-import { approveMemoryProposal, rejectMemoryProposal } from "./memory.js";
+import { approveMemoryProposal, type MemoryAmendment, parseMemoryAmendment, rejectMemoryProposal } from "./memory.js";
 import { type QuarantineChecks, type QuarantineKind, type QuarantineResolvers, quarantineStops } from "./quarantine.js";
 import type { Harness, Provider, RegistryReachabilityCheck } from "./registry.js";
 import { RegistryFetchFailedError, RegistryPushFailedError } from "./registry-write.js";
@@ -793,13 +793,14 @@ export async function submitAnswer(
   // verify quarantine before answerQuestion eventually rejects the payload.
   assertAnswerable(task, answers);
   const proposal = task.question_proposal;
-  // 修正値を受けるのは routing の行の提案と tier の提案の approve だけ(ADR 0150 決定2)。memory(#915)・昇格 / 降格の修正値も黙って捨てず断る
-  const amendable = (proposal?.kind === "routing" && proposal.op === "row") || proposal?.kind === "registry";
-  if (amendment !== undefined && (!amendable || answers[0] !== "approve")) {
-    throw new DomainError("only an approve answer to a routing row proposal or an agent tier proposal takes an amendment");
-  }
+  // 修正値は approve だけが種別ごとの schema で受ける(ADR 0150 決定2・ADR 0152 決定2)。昇格 / 降格・memory の invalidate・reject の修正値も黙って捨てず断る
   let amended: ProposalAmendment | undefined;
-  if (amendment !== undefined) amended = proposal?.kind === "registry" ? { to: parseAgentTierAmendment(proposal, amendment) } : parseRoutingRowChange(amendment);
+  if (amendment !== undefined) {
+    if (answers[0] === "approve" && proposal?.kind === "routing" && proposal.op === "row") amended = parseRoutingRowChange(amendment);
+    else if (answers[0] === "approve" && proposal?.kind === "registry") amended = { to: parseAgentTierAmendment(proposal, amendment) };
+    else if (answers[0] === "approve" && proposal?.kind === "memory" && proposal.op !== "invalidate") amended = parseMemoryAmendment(amendment);
+    else throw new DomainError("only an approve answer to a routing row, agent tier, or memory approve / consolidate proposal takes an amendment");
+  }
 
   const promotionTaskId = task.question_pending_pr_promotion_task_id;
   const wantsPromotionRetry =
@@ -905,7 +906,7 @@ export async function submitAnswer(
       origin,
     );
     if (proposal?.kind === "memory") {
-      if (answers[0] === "approve") approveMemoryProposal(deps.db, proposal, task.id, origin, now());
+      if (answers[0] === "approve") approveMemoryProposal(deps.db, proposal, task.id, origin, now(), amended as MemoryAmendment | undefined);
       else rejectMemoryProposal(deps.db, proposal, task.id, origin, now());
     } else if (proposal?.kind === "routing" && answers[0] === "approve") {
       const change: ExecutionSettingsChange =

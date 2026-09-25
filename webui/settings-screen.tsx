@@ -1466,19 +1466,7 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit }: 
   const runTranslation = async (toEnglish: boolean) => {
     setBusy(true);
     try {
-      const english: Record<string, string> = {};
-      const back: Record<string, string> = {};
-      for (const key of fields) {
-        english[key] = draft[key];
-        if (toEnglish) {
-            const out = await translateTarget({ type: 'to_english', text: originalOf[key] });
-          if (out.status !== 'translated') throw new Error('translation is throttled right now');
-          english[key] = out.text!;
-        }
-        const out = await translateTarget({ type: 'back_translation', text: english[key]! });
-        if (out.status !== 'translated') throw new Error('translation is throttled right now');
-        back[key] = out.text!;
-      }
+      const { english, back } = await translateMemoryWording(translateTarget, Object.fromEntries(fields.map((key) => [key, draft[key]])), toEnglish ? originalOf : null);
       setDraft({ ...draft, ...english, backTranslation: back });
     } catch (err) {
       say('danger', 'translate failed', String((err as Error).message || err));

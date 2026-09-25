@@ -801,7 +801,10 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
     {
       description:
         "Answer every item of a question task as the human. amendment is accepted only with approve: on a routing row proposal, " +
-        "tier and/or effort to apply instead of the proposed values; on an agent tier proposal, to — any tier below the agent's current one.",
+        "tier and/or effort to apply instead of the proposed values; on an agent tier proposal, to — any tier below the agent's current one; " +
+        "on a memory approve or consolidate proposal, title, text and/or addressee (null = every agent) to approve instead of the candidate's, " +
+        "with original_title + original_text together if you wrote it in another language. An amended memory approval is written as your own " +
+        "approved behavior and supersedes the candidate.",
       inputSchema: {
         task_id: z.string(),
         answers: z.array(z.string()),

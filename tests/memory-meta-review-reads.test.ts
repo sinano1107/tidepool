@@ -89,6 +89,24 @@ it("list_memory_candidates は candidate を cause・author・出所つきで返
   ]);
 });
 
+it("list_memory_candidates の無効化済みは、修正つきで承認された candidate に人間名義の後継の文言を載せる", () => {
+  const { db, reader, behavior } = board();
+  const amended = behavior({ title: "Short notes", addressee: "deckhand" });
+  const plain = behavior({ title: "Long notes" });
+  approveMemoryProposal(db, { kind: "memory", op: "approve", candidate_id: amended, replaces: [] }, "question-1", "webui", at, { text: "Keep notes to one line." });
+  approveMemoryProposal(db, { kind: "memory", op: "approve", candidate_id: plain, replaces: [] }, "question-2", "webui", at);
+
+  const { entries } = pullMemoryList(db, reader, "list_memory_candidates", { include_invalidated: true }, at);
+  expect(entries).toEqual([
+    expect.objectContaining({
+      id: amended,
+      text: "Short notes.",
+      invalidation_reason: "superseded",
+      successor: { title: "Short notes", text: "Keep notes to one line.", addressee: "deckhand", author: { activity: "human", name: "human" } },
+    }),
+  ]);
+});
+
 it("list_memory_behaviors は approved の Behavior を宛先・scope で絞らずに返し、candidate と無効化済みは返さない", () => {
   const { db, reader, behavior } = board();
   const approved = [

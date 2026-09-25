@@ -1,6 +1,6 @@
 import { afterEach, expect, it } from "vitest";
 import { approveMemoryProposal, createBehaviorCandidate, defineMemoryBranch, recordKnowledge } from "../src/memory.js";
-import { api, bootTidepool, completeViaMcp, HOUR, mcpClient, memoryEntries, type Tidepool } from "./harness.js";
+import { api, bootTidepool, completeViaMcp, HOUR, managementMcpClient, mcpClient, memoryEntries, type Tidepool } from "./harness.js";
 
 /** 提案 question の扉(issue #620・#621 / ADR 0120 決定3・4): meta-review の提案 verb、付帯子としての question、回答での適用、
  *  pin の陳腐化。承認の transaction と再生はドメイン層(tests/memory.test.ts)が言う。 */
@@ -42,7 +42,8 @@ async function boardWithMetaReview(titles = ["Keep migrations in their own commi
 
 const task = async (id: string) => (await api(t.baseUrl, "GET", `/api/tasks/${id}`)).json;
 const events = async (id: string) => (await api(t.baseUrl, "GET", `/api/tasks/${id}/events`)).json as any[];
-const answer = (id: string, option: string) => api(t.baseUrl, "POST", `/api/tasks/${id}/answer`, { answers: [option] });
+const answer = (id: string, option: string, amendment?: Record<string, unknown>) =>
+  api(t.baseUrl, "POST", `/api/tasks/${id}/answer`, { answers: [option], ...(amendment && { amendment }) });
 const entry = async (id: number) => (await memoryEntries(t)).find((e) => e.id === id);
 
 it("approve の提案は meta-review の子に1 item の question を立て、pin を question_proposal に焼き、detail に新本文・宛先・path・scope を載せる", async () => {
@@ -371,6 +372,48 @@ it("op に属さない欄を渡すと、黙って捨てずに断られる", asyn
     expect(await board.call("propose_memory_change", { op: "approve", candidate_id: board.ids[0], replaces: [board.ids[1]], rationale: "r" })).toMatchObject({
       error: expect.stringContaining("op approve does not take replaces"),
     });
+  } finally {
+    await board.client.close();
+  }
+});
+
+it("HTTP の回答と管理MCP の answer_question は memory の修正値を受け、修正つき approve は推奨どおりに数えず修正値を回答に残す", async () => {
+  const board = await boardWithMetaReview(["Keep migrations in their own commit", "Split schema changes"]);
+  const management = await managementMcpClient(t.baseUrl);
+  try {
+    const viaHttp = await board.propose(board.ids[0]!);
+    const amendment = { text: "Keep each migration in its own commit.", addressee: null };
+    expect((await answer(viaHttp, "approve", amendment)).status).toBe(200);
+    expect((await events(viaHttp)).find((e) => e.kind === "question_answered").payload).toMatchObject({
+      answers: [{ answer: "approve", recommendation_accepted: false }],
+      amendment,
+    });
+
+    const viaMcp = (await consolidate(board, [board.ids[1]!])).question_id;
+    const answered: any = await management.callTool({ name: "answer_question", arguments: { task_id: viaMcp, answers: ["approve"], amendment: { title: "One concern" } } });
+    expect(answered.isError).not.toBe(true);
+    expect((await events(viaMcp)).find((e) => e.kind === "question_answered").payload).toMatchObject({
+      answers: [{ answer: "approve", recommendation_accepted: false }],
+      amendment: { title: "One concern" },
+    });
+  } finally {
+    await management.close();
+    await board.client.close();
+  }
+});
+
+it("invalidate の提案と reject に付いた memory の修正値は回答ごと断られ、question は未回答のまま残る", async () => {
+  const board = await boardWithMetaReview();
+  try {
+    const target = await approvedBehavior(board, "Split migrations");
+    const invalidation = (await invalidate(board, target)).question_id;
+    const approval = await board.propose(board.ids[0]!);
+
+    for (const [id, option] of [[invalidation, "approve"], [approval, "reject"]] as const) {
+      expect((await answer(id, option, { text: "Something else." })).status).toBe(409);
+      expect(await task(id)).toMatchObject({ status: "todo", question_answer: null });
+      expect((await events(id)).map((e) => e.kind)).toEqual(["task_registered"]);
+    }
   } finally {
     await board.client.close();
   }
