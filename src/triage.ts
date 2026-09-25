@@ -145,15 +145,16 @@ export function objectedEntryText(entry: DecisionLogEntry): string {
 }
 
 /** One objection (`objection_raised`) against a log entry — a steering comment. */
-export interface Objection {
+interface Objection {
   id: number;
   entry_id: number;
   comment: string;
   session_id: number;
 }
 
-/** The one read of objections: every read of an entry's steering goes through
- *  `entryObjections` / `objectionsById`, both in objection event order. */
+/** The one read of objection comments: every read of an entry's steering goes
+ *  through `entryObjections` / `objectionsById`, both in objection event order
+ *  (counts and id watermarks elsewhere read no comment). */
 function selectObjections(db: Db, where: string, params: unknown[]): Objection[] {
   return db
     .prepare(

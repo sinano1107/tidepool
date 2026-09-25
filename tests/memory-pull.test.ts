@@ -17,6 +17,7 @@ import {
 } from "../src/memory.js";
 import { projectAndPersist } from "../src/precedent.js";
 import { DomainError, logDecision, registerTask } from "../src/tasks.js";
+import { TriageError } from "../src/triage.js";
 import { FakeBehaviorDraftClient } from "./fakes.js";
 import { FIXTURE_SPAWNED_EVENT_ID, FIXTURE_TASK, seedFixtureBoard, tempDir, writeFixtureTranscript } from "./harness.js";
 
@@ -305,6 +306,16 @@ it("2つ目の session の帰責を出所に持つ Behavior の case の steerin
   const steering = (readMemory(db, reader, { ids: [id] }, at).entries[0]?.case as { steering: string[] }).steering;
   expect(steering).toEqual(["cover the tide cycle too"]);
   expect(behaviorDraftClient.calls.map((c) => c.input.steering)).toEqual([steering]);
+});
+
+it("帰責の objection_event_ids に objection_raised でない id があると、帰責の入力を組む段で例外になり起草は撃たれない", async () => {
+  const { db, attribution } = await objectedInTwoSessions();
+  const behaviorDraftClient = new FakeBehaviorDraftClient();
+
+  await expect(
+    draftBehaviorCandidate(db, { behaviorDraftClient, workspace: { name: "sandbox" } }, { ...attribution, objection_event_ids: [6] }, at),
+  ).rejects.toThrow(TriageError);
+  expect(behaviorDraftClient.calls).toEqual([]);
 });
 
 it("decision entry を直接出所に持つ Behavior の case の steering は、全 session の異議を event 順に並べたもの", async () => {
