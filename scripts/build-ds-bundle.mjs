@@ -9,13 +9,13 @@
 // Usage: node scripts/build-ds-bundle.mjs [--check [--out-root <dir>]]
 
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as esbuild from 'esbuild';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const outRootArg = process.argv.indexOf('--out-root');
-const OUT_ROOT = outRootArg === -1 ? ROOT : resolve(process.argv[outRootArg + 1]);
+const OUT_ROOT = outRootArg === -1 ? ROOT : process.argv[outRootArg + 1];
 const DS_SRC = 'design-system/components';
 
 // Order and grouping mirror the manifest already shipped in _ds_bundle.js.
