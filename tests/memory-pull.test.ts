@@ -1,7 +1,7 @@
 import { expect, it } from "vitest";
 import { draftBehaviorCandidate } from "../src/attribution.js";
 import { openDb } from "../src/db.js";
-import { appendEvent, getEvent } from "../src/events.js";
+import { appendEvent, getEvent, type TaskScopedPayload } from "../src/events.js";
 import {
   approvedMemoryEntries,
   approveMemoryProposal,
@@ -303,7 +303,7 @@ it("2つ目の session の帰責を出所に持つ Behavior の case の steerin
   await draftBehaviorCandidate(db, { behaviorDraftClient, workspace: { name: "sandbox" } }, attribution, at);
   const id = approvedBehavior(db, "Cover the topic", { event_id: attribution.id });
 
-  const steering = (readMemory(db, reader, { ids: [id] }, at).entries[0]?.case as { steering: string[] }).steering;
+  const steering = (readMemory(db, reader, { ids: [id] }, at).entries[0]?.case as { steering: string[] } | undefined)?.steering;
   expect(steering).toEqual(["cover the tide cycle too"]);
   expect(behaviorDraftClient.calls.map((c) => c.input.steering)).toEqual([steering]);
 });
@@ -327,7 +327,7 @@ it("decision entry を直接出所に持つ Behavior の case の steering は�
   });
 });
 
-it("worker_spawned を出所に持つ Behavior の case は、その session の decision 列(マーカー順)・handoff・result", async () => {
+it("worker_spawned を出所に持つ Behavior の case は、その session の decision 列(event id 順)・handoff・result", async () => {
   const { db, reader } = await projectedBoard();
   const id = approvedBehavior(db, "Session", { event_id: FIXTURE_SPAWNED_EVENT_ID });
 
@@ -351,16 +351,50 @@ it("人間が書いた Behavior(出所 = 自身の作成 event)と Knowledge の
   expect(readMemory(db, reader, { ids: [human, knowledge] }, at).entries.map((e) => e.case)).toEqual([null, null]);
 });
 
-it("Episode が投影されていない decision の case は、decision 本文と steering(異議が無ければ空)だけを持つ", () => {
+it("episode 行の無い session の decision / 完了 entry の case も、events から その session の handoff と result を持つ", () => {
   const db = seedFixtureBoard("## Outcome\nCreated notes.md.");
-  const id = approvedBehavior(db, "Unprojected", { event_id: 6 });
+  const decision = approvedBehavior(db, "Unprojected", { event_id: 6 });
+  const completion = approvedBehavior(db, "Unprojected completion", { event_id: 9 });
 
-  expect(readMemory(db, { taskId: FIXTURE_TASK, scope: "sandbox", agent: "tako" }, { ids: [id] }, at).entries[0]?.case).toEqual({
-    decision: "kept the note to three bullets",
-    steering: [],
-    handoff: null,
-    result: null,
-  });
+  expect(readMemory(db, { taskId: FIXTURE_TASK, scope: "sandbox", agent: "tako" }, { ids: [decision, completion] }, at).entries.map((e) => e.case)).toEqual([
+    { decision: "kept the note to three bullets", steering: [], handoff: "## Outcome\nCreated notes.md.", result: FIXTURE_RESULT },
+    { decision: `completion report: ${FIXTURE_RESULT}`, steering: [], handoff: "## Outcome\nCreated notes.md.", result: FIXTURE_RESULT },
+  ]);
+});
+
+it("episode 行の無い同じ task の複数 session は、それぞれの窓の decision(event id 順)と完了だけを case に持ち、前後の session と混ざらない", () => {
+  const db = seedFixtureBoard("## Outcome\nCreated notes.md.");
+  const append = (payload: TaskScopedPayload) => appendEvent(db, { taskId: FIXTURE_TASK, workerId: "tako", origin: "worker", payload, at });
+  const spawned: TaskScopedPayload = {
+    kind: "worker_spawned",
+    registry_commit: "commit",
+    definition_version: "1",
+    advisor: null,
+    provider: "openai",
+    model: "gpt",
+    effort: "high",
+    source: { tier: "task", provider: "only" },
+    harness: "codex",
+    cli_version: "1",
+  };
+  // 2つ目の session: decision を書かずに exit
+  const silent = append(spawned);
+  append({ kind: "worker_exited", exit_code: 1, signal: null, stderr_tail: null, worker_spawned_event_id: silent, usage: null });
+  // 3つ目の session: decision を書いたが完了していない(exit も無い)
+  const open = append(spawned);
+  const retried = append({ kind: "decision_logged", line: "retried with a shorter note" });
+  const ids = [FIXTURE_SPAWNED_EVENT_ID, silent, open, retried].map((ref) => approvedBehavior(db, `Session ${ref}`, { event_id: ref }));
+
+  expect(readMemory(db, { taskId: FIXTURE_TASK, scope: "sandbox", agent: "tako" }, { ids }, at).entries.map((e) => e.case)).toEqual([
+    {
+      decisions: ["kept the note to three bullets", "kept the note to three bullets", "subagent reported notes.md word count as 62"],
+      handoff: "## Outcome\nCreated notes.md.",
+      result: FIXTURE_RESULT,
+    },
+    { decisions: [], handoff: null, result: null },
+    { decisions: ["retried with a shorter note"], handoff: null, result: null },
+    { decision: "retried with a shorter note", steering: [], handoff: null, result: null },
+  ]);
 });
 
 it("pull は1回ごとに task 帰属の memory_pulled を残す —— verb・入力・返した id・その時点の memory 系 event の最大 id(watermark)", () => {

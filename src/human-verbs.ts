@@ -31,6 +31,7 @@ import {
   answerQuestion,
   assertAnswerable,
   assertNoUnsettledIssueRef,
+  assertUnsettledNotInProgress,
   type CancelDefaults,
   type ChildSpec,
   cancelTaskDirectly,
@@ -650,6 +651,7 @@ export async function completeThroughHumanDoor(
         "only a human-assignee task can be completed here — agents complete via MCP's complete_task",
       );
     }
+    assertUnsettledNotInProgress(task, "completed", true);
     const done = completeTask(deps.db, task, handoff, HUMAN_WORKER_ID, now(), origin);
     // 帰責の第2回(ADR 0115 決定2): RCA 子は人間登録なので human に振り直して ここで完了できる
     void attributeAfterRca(deps.db, deps, done, now()).catch((err) =>

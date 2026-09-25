@@ -1994,13 +1994,15 @@ function isHumanRegistered(db: Db, taskId: string): boolean {
 
 /** The status half of the human-decompose gate (issue #129), split out so the
  *  edit / direct-cancel scope line (issue #130) can share the unsettled clause:
- *  `task` must be unsettled and not in_progress. `allowOwnInProgress` grants the
- *  one caller that has it — decompose — its own-task exception ("自分の human
+ *  `task` must be unsettled and not in_progress. `allowOwnInProgress` grants
+ *  decompose its own-task exception ("自分の human
  *  タスクは実行中でも割ってよい", a `human`-assignee task runs outside the slot
  *  and races no one); edit and cancel do NOT inherit it — their scope line is
  *  flatly "未決着かつ実行中でない" (CONTEXT.md's Edit/Cancel, issue #130), so
- *  they pass `false`. The `verb` names the action in the error for its caller. */
-function assertUnsettledNotInProgress(task: Task, verb: string, allowOwnInProgress: boolean): void {
+ *  they pass `false`. The human completion door (issue #964) passes `true`: its
+ *  task is already human-assigned, so only the settled clause bites. The `verb`
+ *  names the action in the error for its caller. */
+export function assertUnsettledNotInProgress(task: Task, verb: string, allowOwnInProgress: boolean): void {
   if (task.status === "done" || task.status === "cancelled") {
     throw new DomainError(`a settled task cannot be ${verb}`);
   }

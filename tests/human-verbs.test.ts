@@ -4,11 +4,18 @@ import { ClaudeDraftClient } from "../src/claude-draft-client.js";
 import { quarantineContainment } from "../src/containment.js";
 import { type Db, openDb } from "../src/db.js";
 import { listEvents } from "../src/events.js";
-import { quarantineChecks, registerThroughHumanDoor, submitAnswer } from "../src/human-verbs.js";
+import {
+  completeThroughHumanDoor,
+  quarantineChecks,
+  registerThroughHumanDoor,
+  submitAnswer,
+} from "../src/human-verbs.js";
 import { registerPrPromotionFailureQuestion } from "../src/landing.js";
 import {
   BOARD_WORKER_ID,
+  cancelTaskDirectly,
   getTask,
+  HUMAN_WORKER_ID,
   listBoard,
   registerMergeQuestion,
   registerTask,
@@ -763,4 +770,71 @@ it("回答で親が unblock したら queue head の再評価を即時通知す�
   );
 
   expect({ status: answered.status, polls }).toEqual({ status: "done", polls: 1 });
+});
+
+function registerHumanTask(db: Db): Task {
+  return registerTask(
+    db,
+    {
+      type: "work",
+      title: "sign the contract",
+      purpose: "only a human can sign",
+      completion_criteria: "the contract is signed",
+      assignee: HUMAN_WORKER_ID,
+    },
+    NOW,
+  );
+}
+
+function completeHumanTask(db: Db, taskId: string, outcome: string) {
+  return completeThroughHumanDoor(
+    { db, pollNow: () => {}, landing: unusedLanding },
+    taskId,
+    { outcome },
+    () => NOW,
+    "webui",
+  );
+}
+
+function completedEvents(db: Db, taskId: string) {
+  return listEvents(db, taskId).filter((event) => event.kind === "task_completed");
+}
+
+it("人間の完了の扉は cancelled の task を拒否し、status も event も変えない", async () => {
+  db = openDb(":memory:");
+  const task = registerHumanTask(db);
+  cancelTaskDirectly(db, task, null, NOW, {});
+
+  const result = await completeHumanTask(db, task.id, "signed");
+
+  expect({
+    kind: result.ok ? "ok" : result.failure.kind,
+    status: getTask(db, task.id)?.status,
+    completed: completedEvents(db, task.id).length,
+  }).toEqual({ kind: "domain_error", status: "cancelled", completed: 0 });
+});
+
+it("人間の完了の扉は done の task の再完了を拒否し、handoff_doc を上書きしない", async () => {
+  db = openDb(":memory:");
+  const task = registerHumanTask(db);
+  await completeHumanTask(db, task.id, "signed");
+  const firstHandoff = getTask(db, task.id)?.handoff_doc;
+
+  const result = await completeHumanTask(db, task.id, "signed again");
+
+  expect({
+    kind: result.ok ? "ok" : result.failure.kind,
+    handoff: getTask(db, task.id)?.handoff_doc,
+    completed: completedEvents(db, task.id).length,
+  }).toEqual({ kind: "domain_error", handoff: firstHandoff, completed: 1 });
+});
+
+it.each(["todo", "in_progress"])("人間の完了の扉は %s の人間担当 task を完了できる", async (status) => {
+  db = openDb(":memory:");
+  const task = registerHumanTask(db);
+  db.prepare("UPDATE tasks SET status = ? WHERE id = ?").run(status, task.id);
+
+  const result = await completeHumanTask(db, task.id, "signed");
+
+  expect({ ok: result.ok, status: getTask(db, task.id)?.status }).toEqual({ ok: true, status: "done" });
 });
