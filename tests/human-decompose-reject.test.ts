@@ -4,7 +4,7 @@ import { api, bootTidepool, HOUR, mcpClient, registerWork, type Tidepool } from 
 let t: Tidepool;
 afterEach(() => t?.stop());
 
-it("実行中(かつ human 自身のタスクでない)親への人間の子追加は 400 で拒否され、子は登録されない", async () => {
+it("実行中の親への人間の子追加は 400 で拒否され、子は登録されない", async () => {
   t = await bootTidepool();
   const parent = await registerWork(t, "parent");
   await t.clock.advance(HOUR); // parent picked up into the slot (agent, in_progress)

@@ -364,6 +364,8 @@ export function startScheduler(deps: {
     // the execution slot.
     const agent = resolveTaskAgent(task, worker.id, auditorName ?? worker.id);
     const picked = pickupTask(db, task, agent, clock.now());
+    // await の窓で人間の扉が head を書き換えた(issue #972): slot は空けたまま、次の poll が選び直す
+    if (!picked) return;
     slot.occupy(picked.id);
     // ADR 0099 決定2: 容器は盤面が**先に**作る。adapter が spawn に辿り着けな
     // かった pickup でも、force / reclaimed の相手はもう存在している。

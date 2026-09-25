@@ -73,7 +73,7 @@ async function session(route: "complete" | "cap" | "watchdog" = "complete"): Pro
     { type: "work", title: "one", purpose: "why", completion_criteria: "done" },
     clock.now(),
   );
-  const picked = pickupTask(db, registered, "deckhand", clock.now());
+  const picked = pickupTask(db, registered, "deckhand", clock.now())!;
   slot.occupy(picked.id);
   await prepareWorkspaceAtPickup(db, ws, picked, {});
   commitWork(ws.path, "deliverable.txt", "the real work\n");

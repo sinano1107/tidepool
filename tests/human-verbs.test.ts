@@ -829,10 +829,9 @@ it("人間の完了の扉は done の task の再完了を拒否し、handoff_do
   }).toEqual({ kind: "domain_error", handoff: firstHandoff, completed: 1 });
 });
 
-it.each(["todo", "in_progress"])("人間の完了の扉は %s の人間担当 task を完了できる", async (status) => {
+it("人間の完了の扉は todo の人間担当 task を完了できる", async () => {
   db = openDb(":memory:");
   const task = registerHumanTask(db);
-  db.prepare("UPDATE tasks SET status = ? WHERE id = ?").run(status, task.id);
 
   const result = await completeHumanTask(db, task.id, "signed");
 

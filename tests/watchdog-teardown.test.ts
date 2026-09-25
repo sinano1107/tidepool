@@ -62,7 +62,7 @@ async function sessionInTeardown(
     { type: "work", title: "one", purpose: "why", completion_criteria: "done" },
     clock.now(),
   );
-  const picked = pickupTask(db, registered, "deckhand", clock.now());
+  const picked = pickupTask(db, registered, "deckhand", clock.now())!;
   slot.occupy(picked.id);
   await prepareWorkspaceAtPickup(db, ws, picked, {});
   // 盤面は pickup 時に session の容器を作る。このホストでは force だけでは空にならない
@@ -134,7 +134,7 @@ it("cap settlement supersedes an already pending watchdog reclaim callback", asy
   const slot = new Slot();
   const runtime = new FakeContainerRuntime();
   const containers = new ProcessContainers(runtime);
-  const task = pickupTask(db, registerTask(db, { type: "work", title: "one", purpose: "why", completion_criteria: "done" }, clock.now()), "deckhand", clock.now());
+  const task = pickupTask(db, registerTask(db, { type: "work", title: "one", purpose: "why", completion_criteria: "done" }, clock.now()), "deckhand", clock.now())!;
   slot.occupy(task.id);
   containers.open(task.id);
   runtime.hold(task.id);
