@@ -128,17 +128,19 @@ it("pin が古い提案への回答は approve も reject も拒否され何も�
   }
 });
 
-it("reject の回答は reject の export に届き(candidate が rejected)、答えた question 自身は陳腐化で決着しない", async () => {
-  const { ids, client, propose } = await boardWithMetaReview();
+it("reject の回答は reject の export に届き(candidate が rejected)、答えた question 自身は陳腐化で決着せず、無効化は次の meta-review の材料にならない", async () => {
+  const { review, ids, client, propose } = await boardWithMetaReview();
   try {
     const questionId = await propose(ids[0]!);
 
     expect((await answer(questionId, "reject")).status).toBe(200);
 
     expect(await entry(ids[0]!)).toMatchObject({ invalidation_reason: "rejected" });
-    // 無効化は回答の印を持ち、meta-review の材料に数えられない(ADR 0151)
-    expect(t.db.prepare("SELECT json_extract(payload, '$.question_id') AS q FROM events WHERE kind = 'memory_entry_invalidated' ORDER BY id DESC").get()).toEqual({ q: questionId });
     expect((await events(questionId)).map((e) => e.kind)).toEqual(["task_registered", "question_answered"]);
+    // 無効化は回答の印を持ち、周期が過ぎても次の memory meta-review を登録しない(ADR 0151)
+    expect((await completeViaMcp(t, review.id, false)).isError).not.toBe(true);
+    await t.clock.advance(8 * 24 * HOUR);
+    expect(((await api(t.baseUrl, "GET", "/api/tasks")).json as any[]).filter((task) => task.meta_review_subject === "memory")).toEqual([]);
   } finally {
     await client.close();
   }
