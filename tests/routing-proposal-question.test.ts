@@ -121,7 +121,7 @@ it("修正値つき approve では行が提案に修正値を重ねた値にな�
   }
 });
 
-it("schema 違反の修正値・reject に添えた修正値・memory の提案への修正値は回答ごと断られ、question は open のまま何も書かれない", async () => {
+it("schema 違反の修正値・reject に添えた修正値・memory の提案への行の修正値は回答ごと断られ、question は open のまま何も書かれない", async () => {
   const { client, propose } = await boardWithRoutingReview();
   try {
     const questionId = await propose({ tier: "frontier" });
@@ -151,7 +151,7 @@ it("schema 違反の修正値・reject に添えた修正値・memory の提案�
   expect(await task(memoryQuestion)).toMatchObject({ status: "todo", question_answer: null });
 });
 
-/** memory の提案 question(修正値の拒否だけを見るので、親は普通の task でよい)。 */
+/** memory の提案 question(種別違いの修正値の拒否だけを見るので、親は普通の task でよい)。 */
 function registerMemoryProposal(tp: Tidepool): string {
   const candidate = createBehaviorCandidate(
     tp.db,

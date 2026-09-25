@@ -1,6 +1,8 @@
 import { afterEach, expect, it } from "vitest";
-import { approveMemoryProposal, createBehaviorCandidate, defineMemoryBranch, recordKnowledge } from "../src/memory.js";
-import { api, bootTidepool, completeViaMcp, HOUR, mcpClient, memoryEntries, type Tidepool } from "./harness.js";
+import { openDb } from "../src/db.js";
+import { getEvent } from "../src/events.js";
+import { approveMemoryProposal, createBehaviorCandidate, defineMemoryBranch, listMemoryEntries, recordKnowledge } from "../src/memory.js";
+import { api, bootTidepool, completeViaMcp, HOUR, managementMcpClient, mcpClient, memoryEntries, type Tidepool } from "./harness.js";
 
 /** 提案 question の扉(issue #620・#621 / ADR 0120 決定3・4): meta-review の提案 verb、付帯子としての question、回答での適用、
  *  pin の陳腐化。承認の transaction と再生はドメイン層(tests/memory.test.ts)が言う。 */
@@ -374,4 +376,139 @@ it("op に属さない欄を渡すと、黙って捨てずに断られる", asyn
   } finally {
     await board.client.close();
   }
+});
+
+const answerWith = (id: string, body: Record<string, unknown>) => api(t.baseUrl, "POST", `/api/tasks/${id}/answer`, body);
+
+it("HTTP の回答と管理MCP の answer_question は memory の修正値を受け、修正つき approve は推奨どおりに数えず修正値を回答に残す", async () => {
+  const board = await boardWithMetaReview(["Keep migrations in their own commit", "Split schema changes"]);
+  const management = await managementMcpClient(t.baseUrl);
+  try {
+    const viaHttp = await board.propose(board.ids[0]!);
+    const amendment = { text: "Keep each migration in its own commit.", addressee: null };
+    expect((await answerWith(viaHttp, { answers: ["approve"], amendment })).status).toBe(200);
+    expect((await events(viaHttp)).find((e) => e.kind === "question_answered").payload).toMatchObject({
+      answers: [{ answer: "approve", recommendation_accepted: false }],
+      amendment,
+    });
+
+    const viaMcp = (await consolidate(board, [board.ids[1]!])).question_id;
+    const answered: any = await management.callTool({ name: "answer_question", arguments: { task_id: viaMcp, answers: ["approve"], amendment: { title: "One concern" } } });
+    expect(answered.isError).not.toBe(true);
+
+    expect((await board.call("list_memory_behaviors", {})).entries).toMatchObject([
+      { text: "Keep each migration in its own commit.", addressee: null, author: { activity: "human" } },
+      { title: "One concern", text: "Keep each commit to one concern.", author: { activity: "human" } },
+    ]);
+  } finally {
+    await management.close();
+    await board.client.close();
+  }
+});
+
+it("invalidate の提案と reject に付いた memory の修正値は回答ごと断られ、question は未回答のまま残る", async () => {
+  const board = await boardWithMetaReview();
+  try {
+    const target = await approvedBehavior(board, "Split migrations");
+    const invalidation = (await invalidate(board, target)).question_id;
+    const approval = await board.propose(board.ids[0]!);
+
+    for (const [id, option] of [[invalidation, "approve"], [approval, "reject"]] as const) {
+      expect((await answerWith(id, { answers: [option], amendment: { text: "Something else." } })).status).toBe(409);
+      expect(await task(id)).toMatchObject({ status: "todo", question_answer: null });
+      expect((await events(id)).map((e) => e.kind)).toEqual(["task_registered"]);
+    }
+  } finally {
+    await board.client.close();
+  }
+});
+
+/** 修正値つき approve(issue #944 / ADR 0152 決定2・4)のドメイン層: 承認の export に修正値を渡す。 */
+function domainBoard() {
+  const db = openDb(":memory:");
+  const at = new Date("2026-09-25T00:00:00.000Z");
+  const draft = (title: string) =>
+    createBehaviorCandidate(
+      db,
+      { scope: "tidepool", path: "habits/commits", title, text: `${title}, always.`, addressee: "deckhand", source: { commit: "0a46a46" }, author: { activity: "meta_review", name: "auditor" } },
+      "worker",
+      at,
+    ).entry_id;
+  const byId = (id: number) => listMemoryEntries(db, {}).find((e) => e.id === id);
+  return { db, at, draft, byId };
+}
+
+it("修正値つき approve は人間名義の approved エントリを作り、candidate を後継つき superseded にする —— 欠けた欄は candidate から継ぐ", () => {
+  const { db, at, draft, byId } = domainBoard();
+  const candidate = draft("Split migrations");
+
+  const created = approveMemoryProposal(db, { kind: "memory", op: "approve", candidate_id: candidate, replaces: [] }, "question-1", "webui", at, {
+    text: "Keep migrations in their own commit.",
+  });
+
+  expect(byId(created)).toMatchObject({
+    kind: "behavior",
+    state: "approved",
+    scope: "tidepool",
+    path: "habits/commits",
+    title: "Split migrations",
+    text: "Keep migrations in their own commit.",
+    addressee: "deckhand",
+    original: null,
+    author: { activity: "human" },
+    source: { kind: "event", ref: created },
+    invalidation_reason: null,
+  });
+  expect(byId(candidate)).toMatchObject({ state: "candidate", invalidation_reason: "superseded", successor_id: created });
+});
+
+it("修正値つき consolidate は replaces の後継も新エントリにし、統合後の candidate を approved にしない", () => {
+  const { db, at, draft, byId } = domainBoard();
+  const replaced = [draft("Split migrations"), draft("Split schema changes")];
+  const merged = draft("One concern per commit");
+
+  const created = approveMemoryProposal(
+    db,
+    { kind: "memory", op: "consolidate", candidate_id: merged, replaces: replaced.map((id) => ({ id, version: null })) },
+    "question-1",
+    "webui",
+    at,
+    { title: "One concern", addressee: null },
+  );
+
+  expect(byId(created)).toMatchObject({ state: "approved", title: "One concern", text: "One concern per commit, always.", addressee: null, author: { activity: "human" } });
+  for (const id of [merged, ...replaced]) expect(byId(id)).toMatchObject({ state: "candidate", invalidation_reason: "superseded", successor_id: created });
+});
+
+it("pin が古ければ修正値つきでも拒否し、何も変えない", () => {
+  const { db, at, draft } = domainBoard();
+  const candidate = draft("Split migrations");
+  const proposal = { kind: "memory" as const, op: "approve" as const, candidate_id: candidate, replaces: [] };
+  approveMemoryProposal(db, proposal, "elsewhere", "webui", at);
+  const before = listMemoryEntries(db, {});
+
+  expect(() => approveMemoryProposal(db, proposal, "question-1", "webui", at, { text: "Keep migrations apart." })).toThrow(/stale/);
+  expect(listMemoryEntries(db, {})).toEqual(before);
+});
+
+it("修正値つき approve が生む event(新エントリの作成と無効化)はすべて question の id を印に持つ", () => {
+  const { db, at, draft } = domainBoard();
+  const replaced = draft("Split migrations");
+  const merged = draft("One concern per commit");
+
+  const created = approveMemoryProposal(
+    db,
+    { kind: "memory", op: "consolidate", candidate_id: merged, replaces: [{ id: replaced, version: null }] },
+    "question-1",
+    "webui",
+    at,
+    { text: "One concern." },
+  );
+
+  expect([created, created + 1, created + 2, created + 3].map((id) => getEvent(db, id)).map((e) => e && [e.kind, (e.payload as { question_id?: string }).question_id])).toEqual([
+    ["memory_entry_created", "question-1"],
+    ["memory_entry_invalidated", "question-1"],
+    ["memory_entry_invalidated", "question-1"],
+    undefined,
+  ]);
 });

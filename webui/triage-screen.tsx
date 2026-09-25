@@ -23,11 +23,16 @@ interface TpQuestion {
   /** 承認 question なら 'approval'、上方伝播があれば note に注記(issue #757)。 */
   kind?: 'approval';
   note?: string;
-  /** 修正値を添えられる提案 question(ADR 0150 決定2): 表の行の提案は tier / effort、agent の tier の提案は下げ先 `to`。 */
-  amendable?: 'row' | 'agent_tier';
+  /** 修正値を添えられる提案 question(ADR 0150 決定2・ADR 0152 決定2): 表の行の提案は tier / effort、agent の tier の提案は下げ先 `to`、
+   *  memory の approve / consolidate は `candidateId` の文言と宛先。 */
+  amendable?: 'row' | 'agent_tier' | 'memory';
+  candidateId?: number;
 }
-/** approve に添える修正値。空欄は送らない。 */
-type TpAmendment = { tier?: string; effort?: string; to?: string };
+/** approve に添える修正値。空欄は送らない(memory の宛先の null = 全員は送る)。 */
+type TpAmendment = {
+  tier?: string; effort?: string; to?: string;
+  title?: string; text?: string; addressee?: string | null; original_title?: string; original_text?: string;
+};
 /** トリアージが受け取る question —— 着地 question だけが `landing` を持つ
  *  (ADR 0092 決定4)。判定は盤面側で、ここは描画だけ。 */
 interface TpTriageQuestion extends TpQuestion {
@@ -182,6 +187,93 @@ function TpTranslationNote({ result }: { result: Exclude<TpTranslation, { status
   return <span style={{ fontSize: 'var(--text-xs)', color: 'var(--coral-4)' }}>{result.message}</span>;
 }
 
+/** 人間が書く記憶の文言の Translate(原文 → 英語)と Back-translate(英語 → 表示言語)(ADR 0015)。`originals` が
+ *  あれば先に英語を訳し、無ければ `english` をそのまま逆翻訳する。settings の書き込みと question カードの修正値が共有する。 */
+async function translateMemoryWording(translate: TpTranslateFn, english: Record<string, string>, originals: Record<string, string> | null) {
+  const out = { ...english };
+  const back: Record<string, string> = {};
+  for (const key of Object.keys(out)) {
+    if (originals) {
+      const r = await translate({ type: 'to_english', text: originals[key]! });
+      if (r.status !== 'translated') throw new Error('translation is throttled right now');
+      out[key] = r.text!;
+    }
+    const r = await translate({ type: 'back_translation', text: out[key]! });
+    if (r.status !== 'translated') throw new Error('translation is throttled right now');
+    back[key] = r.text!;
+  }
+  return { english: out, back };
+}
+
+// memory の提案の修正値(ADR 0152 決定2・5): candidate の文言を初期値に、settings と同じ英語 + 原文の2欄と逆翻訳。
+// candidate から変えた欄(と原文)だけを修正値として上に渡す —— 何も変えなければ素の approve になる。
+function TpMemoryAmendment({ candidateId, onTranslate, onChange }: {
+  candidateId: number;
+  onTranslate?: TpTranslateFn;
+  onChange: (amendment: TpAmendment | undefined) => void;
+}) {
+  const { Button, Input } = window.TidepoolDesignSystem_8a0ead;
+  type Wording = { title: string; text: string; addressee: string };
+  const [base, setBase] = React.useState<Wording | null>(null);
+  const [draft, setDraft] = React.useState({ title: '', text: '', addressee: '', originalTitle: '', originalText: '' });
+  const [back, setBack] = React.useState<string | null>(null);
+  const [error, setError] = React.useState<string | null>(null);
+  React.useEffect(() => {
+    api('GET /api/settings/memory/entries', { query: { kind: 'behavior', state: 'candidate' } })
+      .then(({ entries }) => {
+        const candidate = entries.find((e) => e.id === candidateId);
+        if (!candidate) return;
+        const wording = { title: candidate.title, text: candidate.text, addressee: candidate.addressee ?? '' };
+        setBase(wording);
+        setDraft({ ...wording, originalTitle: '', originalText: '' });
+      })
+      .catch((err) => setError(String(err.message || err)));
+  }, [candidateId]);
+  React.useEffect(() => {
+    if (!base) return;
+    const changed: TpAmendment = {};
+    if (draft.title.trim() !== base.title) changed.title = draft.title.trim();
+    if (draft.text.trim() !== base.text) changed.text = draft.text.trim();
+    if (draft.addressee.trim() !== base.addressee) changed.addressee = draft.addressee.trim() || null;
+    // a partial original is sent as is so the server's refusal says why
+    if (draft.originalTitle.trim()) changed.original_title = draft.originalTitle.trim();
+    if (draft.originalText.trim()) changed.original_text = draft.originalText.trim();
+    onChange(Object.keys(changed).length > 0 ? changed : undefined);
+  }, [base, draft]);
+  if (!base) return error ? <div style={{ fontSize: 'var(--text-xs)', color: 'var(--coral-4)', marginBottom: 14 }}>{error}</div> : null;
+  const set = (key: keyof typeof draft) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+    setDraft({ ...draft, [key]: e.target.value });
+    if (key === 'title' || key === 'text') setBack(null);
+  };
+  const translate = async (toEnglish: boolean) => {
+    setError(null);
+    try {
+      const out = await translateMemoryWording(onTranslate!, { title: draft.title, text: draft.text }, toEnglish ? { title: draft.originalTitle, text: draft.originalText } : null);
+      setDraft({ ...draft, ...out.english });
+      setBack(`${out.back.title} — ${out.back.text}`);
+    } catch (err) {
+      setError(String((err as Error).message || err));
+    }
+  };
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 14 }}>
+      {onTranslate && (
+        <React.Fragment>
+          <Input label="Amend original title (optional)" value={draft.originalTitle} onChange={set('originalTitle')} />
+          <Input label="Amend original (optional)" multiline rows={3} value={draft.originalText} onChange={set('originalText')} />
+          <Button variant="secondary" size="sm" disabled={!draft.originalTitle.trim() || !draft.originalText.trim()} onClick={() => translate(true)}>Translate</Button>
+        </React.Fragment>
+      )}
+      <Input label="Title (English)" value={draft.title} onChange={set('title')} />
+      <Input label="English (approved as the canonical text)" multiline rows={3} value={draft.text} onChange={set('text')} />
+      <Input label="Addressee (agent name, empty = every agent)" mono value={draft.addressee} onChange={set('addressee')} />
+      {onTranslate && <Button variant="secondary" size="sm" disabled={!draft.title.trim() || !draft.text.trim()} onClick={() => translate(false)}>Back-translate</Button>}
+      {back && <p style={{ margin: 0, fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }} data-testid="amendment-back-translation">back: {back}</p>}
+      {error && <div style={{ fontSize: 'var(--text-xs)', color: 'var(--coral-4)' }}>{error}</div>}
+    </div>
+  );
+}
+
 // One question task's card: the shared context (its `purpose`) once, then
 // every item's picker (issue #30 — a single-item bundle is the degenerate,
 // most common case). The card owns its own in-progress picks and fires
@@ -219,7 +311,7 @@ function TpQuestionCard({ q, answer, onAnswer, locked = false, onTranslate }: {
     next[i] = value;
     setDraft(next);
     if (!next.every(Boolean)) return;
-    const filled = Object.fromEntries(Object.entries(amendment).filter(([, v]) => v)) as TpAmendment;
+    const filled = q.amendable === 'memory' ? amendment : Object.fromEntries(Object.entries(amendment).filter(([, v]) => v)) as TpAmendment;
     onAnswer(next as string[], q.amendable && next[0] === 'approve' && Object.keys(filled).length > 0 ? filled : undefined);
   };
   const answeredCount = draft.filter(Boolean).length;
@@ -264,6 +356,9 @@ function TpQuestionCard({ q, answer, onAnswer, locked = false, onTranslate }: {
           <Select label="Amend target tier (optional)" value={amendment.to ?? ''} onChange={(e) => setAmendment({ ...amendment, to: e.target.value })}
             options={[{ value: '', label: 'as proposed' }, ...['economy', 'standard'].map((tier) => ({ value: tier, label: tier }))]} />
         </div>
+      )}
+      {q.amendable === 'memory' && !locked && (
+        <TpMemoryAmendment candidateId={q.candidateId!} onTranslate={onTranslate} onChange={(changed) => setAmendment(changed ?? {})} />
       )}
       {q.amendable === 'row' && !locked && (
         <div style={{ display: 'flex', gap: 8, marginBottom: 14 }}>

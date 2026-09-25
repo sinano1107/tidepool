@@ -42,7 +42,8 @@ export const META_REVIEW_SUBJECTS = {
       purpose:
         "Periodic meta-review of the board's memory store. Judge repeats among candidates by reading them, not by counting. " +
         "For a Behavior, ask whether it holds true whatever leaf sits under its branch. Propose changes through the proposal verb; " +
-        "apply fixes directly only to Knowledge and Definitions. Read the invalidated candidates and their reasons first, so you do not re-propose what was rejected.",
+        "apply fixes directly only to Knowledge and Definitions. Read the invalidated candidates and their reasons first, so you do not re-propose what was rejected. " +
+        "Where a human amended a candidate when approving it (a superseded candidate whose successor a human wrote), draft closer to the human's wording.",
       completion_criteria:
         "every candidate and store change since the previous meta-review is either proposed, applied (Knowledge / Definitions only), or deliberately left as is",
       review_tier: "frontier",

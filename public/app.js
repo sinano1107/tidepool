@@ -235,6 +235,63 @@ function TpTranslationNote({ result }) {
   }
   return /* @__PURE__ */ React.createElement("span", { style: { fontSize: "var(--text-xs)", color: "var(--coral-4)" } }, result.message);
 }
+async function translateMemoryWording(translate, english, originals) {
+  const out = { ...english };
+  const back = {};
+  for (const key of Object.keys(out)) {
+    if (originals) {
+      const r2 = await translate({ type: "to_english", text: originals[key] });
+      if (r2.status !== "translated") throw new Error("translation is throttled right now");
+      out[key] = r2.text;
+    }
+    const r = await translate({ type: "back_translation", text: out[key] });
+    if (r.status !== "translated") throw new Error("translation is throttled right now");
+    back[key] = r.text;
+  }
+  return { english: out, back };
+}
+function TpMemoryAmendment({ candidateId, onTranslate, onChange }) {
+  const { Button, Input } = window.TidepoolDesignSystem_8a0ead;
+  const [base, setBase] = React.useState(null);
+  const [draft, setDraft] = React.useState({ title: "", text: "", addressee: "", originalTitle: "", originalText: "" });
+  const [back, setBack] = React.useState(null);
+  const [error, setError] = React.useState(null);
+  React.useEffect(() => {
+    api("GET /api/settings/memory/entries", { query: { kind: "behavior", state: "candidate" } }).then(({ entries }) => {
+      const candidate = entries.find((e) => e.id === candidateId);
+      if (!candidate) return;
+      const wording = { title: candidate.title, text: candidate.text, addressee: candidate.addressee ?? "" };
+      setBase(wording);
+      setDraft({ ...wording, originalTitle: "", originalText: "" });
+    }).catch((err) => setError(String(err.message || err)));
+  }, [candidateId]);
+  React.useEffect(() => {
+    if (!base) return;
+    const changed = {};
+    if (draft.title.trim() !== base.title) changed.title = draft.title.trim();
+    if (draft.text.trim() !== base.text) changed.text = draft.text.trim();
+    if (draft.addressee.trim() !== base.addressee) changed.addressee = draft.addressee.trim() || null;
+    if (draft.originalTitle.trim()) changed.original_title = draft.originalTitle.trim();
+    if (draft.originalText.trim()) changed.original_text = draft.originalText.trim();
+    onChange(Object.keys(changed).length > 0 ? changed : void 0);
+  }, [base, draft]);
+  if (!base) return error ? /* @__PURE__ */ React.createElement("div", { style: { fontSize: "var(--text-xs)", color: "var(--coral-4)", marginBottom: 14 } }, error) : null;
+  const set = (key) => (e) => {
+    setDraft({ ...draft, [key]: e.target.value });
+    if (key === "title" || key === "text") setBack(null);
+  };
+  const translate = async (toEnglish) => {
+    setError(null);
+    try {
+      const out = await translateMemoryWording(onTranslate, { title: draft.title, text: draft.text }, toEnglish ? { title: draft.originalTitle, text: draft.originalText } : null);
+      setDraft({ ...draft, ...out.english });
+      setBack(`${out.back.title} \u2014 ${out.back.text}`);
+    } catch (err) {
+      setError(String(err.message || err));
+    }
+  };
+  return /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 8, marginBottom: 14 } }, onTranslate && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(Input, { label: "Amend original title (optional)", value: draft.originalTitle, onChange: set("originalTitle") }), /* @__PURE__ */ React.createElement(Input, { label: "Amend original (optional)", multiline: true, rows: 3, value: draft.originalText, onChange: set("originalText") }), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", disabled: !draft.originalTitle.trim() || !draft.originalText.trim(), onClick: () => translate(true) }, "Translate")), /* @__PURE__ */ React.createElement(Input, { label: "Title (English)", value: draft.title, onChange: set("title") }), /* @__PURE__ */ React.createElement(Input, { label: "English (approved as the canonical text)", multiline: true, rows: 3, value: draft.text, onChange: set("text") }), /* @__PURE__ */ React.createElement(Input, { label: "Addressee (agent name, empty = every agent)", mono: true, value: draft.addressee, onChange: set("addressee") }), onTranslate && /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", disabled: !draft.title.trim() || !draft.text.trim(), onClick: () => translate(false) }, "Back-translate"), back && /* @__PURE__ */ React.createElement("p", { style: { margin: 0, fontSize: "var(--text-xs)", color: "var(--text-muted)" }, "data-testid": "amendment-back-translation" }, "back: ", back), error && /* @__PURE__ */ React.createElement("div", { style: { fontSize: "var(--text-xs)", color: "var(--coral-4)" } }, error));
+}
 function TpQuestionCard({ q, answer, onAnswer, locked = false, onTranslate }) {
   const { Card, AgentChip, Switch, Select, Input } = window.TidepoolDesignSystem_8a0ead;
   const items = q.items;
@@ -248,7 +305,7 @@ function TpQuestionCard({ q, answer, onAnswer, locked = false, onTranslate }) {
     next[i] = value;
     setDraft(next);
     if (!next.every(Boolean)) return;
-    const filled = Object.fromEntries(Object.entries(amendment).filter(([, v]) => v));
+    const filled = q.amendable === "memory" ? amendment : Object.fromEntries(Object.entries(amendment).filter(([, v]) => v));
     onAnswer(next, q.amendable && next[0] === "approve" && Object.keys(filled).length > 0 ? filled : void 0);
   };
   const answeredCount = draft.filter(Boolean).length;
@@ -269,7 +326,7 @@ function TpQuestionCard({ q, answer, onAnswer, locked = false, onTranslate }) {
       onChange: (e) => setAmendment({ ...amendment, to: e.target.value }),
       options: [{ value: "", label: "as proposed" }, ...["economy", "standard"].map((tier) => ({ value: tier, label: tier }))]
     }
-  )), q.amendable === "row" && !locked && /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8, marginBottom: 14 } }, /* @__PURE__ */ React.createElement(
+  )), q.amendable === "memory" && !locked && /* @__PURE__ */ React.createElement(TpMemoryAmendment, { candidateId: q.candidateId, onTranslate, onChange: (changed) => setAmendment(changed ?? {}) }), q.amendable === "row" && !locked && /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8, marginBottom: 14 } }, /* @__PURE__ */ React.createElement(
     Select,
     {
       label: "Amend tier (optional)",
@@ -1864,19 +1921,7 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit }) 
   const runTranslation = async (toEnglish) => {
     setBusy(true);
     try {
-      const english = {};
-      const back = {};
-      for (const key of fields) {
-        english[key] = draft[key];
-        if (toEnglish) {
-          const out2 = await translateTarget({ type: "to_english", text: originalOf[key] });
-          if (out2.status !== "translated") throw new Error("translation is throttled right now");
-          english[key] = out2.text;
-        }
-        const out = await translateTarget({ type: "back_translation", text: english[key] });
-        if (out.status !== "translated") throw new Error("translation is throttled right now");
-        back[key] = out.text;
-      }
+      const { english, back } = await translateMemoryWording(translateTarget, Object.fromEntries(fields.map((key) => [key, draft[key]])), toEnglish ? originalOf : null);
       setDraft({ ...draft, ...english, backTranslation: back });
     } catch (err) {
       say("danger", "translate failed", String(err.message || err));
@@ -2894,6 +2939,7 @@ function toQuestionCardShape(q, icons) {
     // 盤面の `approval` 注釈が答える(issue #757)— ここは描画の形に写すだけ
     ...q.question_proposal?.kind === "routing" && q.question_proposal.op === "row" && { amendable: "row" },
     ...q.question_proposal?.kind === "registry" && { amendable: "agent_tier" },
+    ...q.question_proposal?.kind === "memory" && q.question_proposal.op !== "invalidate" && { amendable: "memory", candidateId: q.question_proposal.candidate_id },
     ...q.approval && {
       kind: "approval",
       ...q.approval.raises_parent_risk && { note: `approving raises ${q.parent_id} risk (upward propagation)` }

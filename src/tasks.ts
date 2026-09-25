@@ -4,6 +4,7 @@ import { DEFAULT_AUDITOR_NAME } from "./defaults.js";
 import { appendEvent, type EventOrigin, type EventPayload, getEvent, type TaskScopedPayload, taskDecisionLog } from "./events.js";
 import { type ExecutionSettingRow, PRIORITIES, type Priority, type RoutingRowChange, TIERS, type Tier } from "./execution-setting.js";
 import type { GitHubClient, Issue, IssueRef } from "./github.js";
+import type { MemoryAmendment } from "./memory.js";
 import type { MergeDial, RosterAgent } from "./registry.js";
 
 export { DEFAULT_AUDITOR_NAME };
@@ -187,8 +188,8 @@ export interface RegistryProposal {
   evidence: number[];
 }
 
-/** 提案の approve に添える修正値(ADR 0150 決定2): 行の提案は tier / effort、tier の提案は下げ先。 */
-export type ProposalAmendment = RoutingRowChange | { to: Tier };
+/** 提案の approve に添える修正値(ADR 0150 決定2・ADR 0152 決定2): 行の提案は tier / effort、tier の提案は下げ先、memory は文言と宛先。 */
+export type ProposalAmendment = RoutingRowChange | { to: Tier } | MemoryAmendment;
 
 interface PendingChildSpec extends TaskContent {
   review_by?: string[];
@@ -1244,7 +1245,7 @@ export function answerQuestion(
    *  when absent, rather than stored as null, so an unanswered comment
    *  leaves the event shape exactly as it was before this existed. */
   comment?: string,
-  /** routing の提案の approve に添えた修正値(ADR 0150 決定2)。検査は呼び手(submitAnswer)が済ませ、ここは comment と
+  /** 提案の approve に添えた修正値(ADR 0150 決定2・ADR 0152 決定2)。検査は呼び手(submitAnswer)が済ませ、ここは comment と
    *  同じく event に運ぶだけ。修正つきの回答は推奨どおりに数えない。 */
   amendment?: ProposalAmendment,
   origin: EventOrigin = "webui",

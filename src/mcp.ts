@@ -950,7 +950,8 @@ function registerMemoryMetaReviewVerbs(server: McpServer, deps: McpDeps, run: Me
     {
       description:
         "List memory candidates with their cause, author, and source. include_invalidated adds invalidated " +
-        "candidates with their invalidation reason and successor — read them so you do not re-propose what was rejected.",
+        "candidates with their invalidation reason and successor — read them so you do not re-propose what was rejected. A candidate superseded " +
+          "by a successor a human wrote was approved with the human's amendment; successor shows the wording they approved instead.",
       inputSchema: { include_invalidated: z.boolean().optional(), page },
     },
     async (input) => run((reader, now) => pullMemoryList(deps.db, reader, "list_memory_candidates", input, now)),
