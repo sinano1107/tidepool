@@ -67,7 +67,7 @@ it("同主題の open な task があれば登録せず、周期は間隔の下�
   const [first] = await openMetaReviews(t);
 
   material(t, "second");
-  await t.clock.advance(2 * DAY); // 周期は過ぎ材料もあるが、同主題が open(slot で走っている)
+  await t.clock.advance(DAY + HOUR); // 周期(1日)を HOUR だけ越え材料もあるが、同主題が open(slot で走っている)
   expect((await openMetaReviews(t)).map((task) => task.id)).toEqual([first.id]);
 
   await finish(t, first.id);
@@ -84,7 +84,7 @@ it("同主題の open な task があれば登録せず、周期は間隔の下�
   expect(third).toMatchObject({ status: "in_progress" });
 
   await finish(t, third.id);
-  await t.clock.advance(2 * DAY); // 周期は過ぎたが、前回登録以降の材料が無い
+  await t.clock.advance(DAY + HOUR); // 周期(1日)を HOUR だけ越えたが、前回登録以降の材料が無い
   expect(await openMetaReviews(t)).toEqual([]);
   expect(t.worker.started).toHaveLength(3);
 });
