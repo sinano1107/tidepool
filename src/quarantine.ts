@@ -94,8 +94,14 @@ export const QUARANTINES = [
       purpose:
         `${reason}. ` +
         "Tasks in this workspace stay out of the slot until it is repaired. " +
-        "Answering confirms the repair — the board verifies the tree is " +
-        "clean before it resumes pickup; any answer text is kept as a repair note.",
+        "Answering confirms the repair — the board re-checks all of the following before " +
+        "it accepts the answer, and refuses it if any fails:\n\n" +
+        `1. a workspace named "${name}" is still configured (the board can resolve it).\n` +
+        "2. its `.git` is a directory — not a linked worktree or submodule (ADR 0146).\n" +
+        "3. it is a usable git repository whose working tree is clean (`git status --porcelain` runs and is empty).\n" +
+        "4. the workspace path does not overlap the board's own state paths (ADR 0040).\n" +
+        "5. if the workspace declares a GitHub repo, the board can still access it (ADR 0067).\n\n" +
+        "Any answer text is kept as a repair note.",
       completion_criteria: "the workspace is repaired by hand",
     }),
   },
