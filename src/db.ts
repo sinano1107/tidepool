@@ -133,7 +133,11 @@ export function openDb(path: string): Db {
       CHECK (
         (github_issue_number IS NOT NULL AND title IS NULL AND purpose IS NULL AND completion_criteria IS NULL)
         OR (github_issue_number IS NULL AND title IS NOT NULL AND purpose IS NOT NULL AND completion_criteria IS NOT NULL)
-      )
+      ),
+      -- a human task never enters the slot (issue #972): only pickupTask writes
+      -- in_progress, and its CAS skips human rows. An invariant across two
+      -- columns the types can't hold, so the row holds it.
+      CHECK (NOT (assignee = 'human' AND status = 'in_progress'))
     );
 
     -- The database is the audit record's final backstop, so its route vocabulary is

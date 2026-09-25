@@ -141,19 +141,6 @@ it("issue-backed タスクの内容(title)と workspace の編集は 400 で拒�
   expect(ws.status).toBe(400);
 });
 
-it("実行中なら自分(assignee: human)のタスクでも編集は拒否される(編集の線は「実行中でない」— decompose の自タスク例外は継がない)", async () => {
-  t = await bootTidepool();
-  const task = await registerWork(t, "my own task", undefined, undefined, "human");
-  // no code path drives a human task into in_progress in normal flow, so drive
-  // the row directly — the gate reads only the row's fields (same technique as
-  // tests/human-decompose-own-task.test.ts)
-  const db = t.db;
-  db.prepare("UPDATE tasks SET status = 'in_progress' WHERE id = ?").run(task.id);
-
-  const res = await api(t.baseUrl, "PATCH", `/api/tasks/${task.id}`, { title: "rename my own" });
-  expect(res.status).toBe(400);
-});
-
 it("存在しないタスクへの編集は 404", async () => {
   t = await bootTidepool();
   const res = await api(t.baseUrl, "PATCH", "/api/tasks/no-such-task", { title: "x" });

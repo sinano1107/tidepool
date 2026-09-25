@@ -18,7 +18,7 @@ describe("pickupTask は assignee を上書きしない(issue #36 / ADR 0012)", 
       new Date(0),
     );
 
-    const picked = pickupTask(db, task, "deckhand", new Date(1));
+    const picked = pickupTask(db, task, "deckhand", new Date(1))!;
 
     expect(picked.status).toBe("in_progress");
     expect(picked.assignee).toBe("navigator");
@@ -34,7 +34,7 @@ describe("pickupTask は assignee を上書きしない(issue #36 / ADR 0012)", 
     );
     expect(task.assignee).toBeNull();
 
-    const picked = pickupTask(db, task, "deckhand", new Date(1));
+    const picked = pickupTask(db, task, "deckhand", new Date(1))!;
 
     expect(picked.status).toBe("in_progress");
     expect(picked.assignee).toBeNull();

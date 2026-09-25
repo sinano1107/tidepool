@@ -154,7 +154,7 @@ describe("listBoard は進捗俯瞰に必要な形を一望できる(issue #16)"
       new Date(2),
       BOARD_WORKER_ID,
     );
-    const running = pickupTask(db, byAgent, "reef-crab", new Date(3));
+    const running = pickupTask(db, byAgent, "reef-crab", new Date(3))!;
 
     expect(presentTask(db, byAgent).registrant).toBe("reef-crab");
     expect(presentTask(db, byHuman).registrant).toBe(HUMAN_WORKER_ID);

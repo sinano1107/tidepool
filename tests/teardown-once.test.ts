@@ -41,7 +41,7 @@ async function pickedUpSession(): Promise<{
     { type: "work", title: "one", purpose: "why", completion_criteria: "done" },
     clock.now(),
   );
-  const task = pickupTask(db, registered, "deckhand", clock.now());
+  const task = pickupTask(db, registered, "deckhand", clock.now())!;
   slot.occupy(task.id);
   await prepareWorkspaceAtPickup(db, ws, task, {});
   return { deps: { db, clock, slot, resolve: () => ws, pollNow: () => {} }, slot, task, ws };
@@ -97,7 +97,7 @@ it("門が既に解決した workspace は後始末で解決し直さない —�
     },
     clock.now(),
   );
-  const task = pickupTask(db, registered, "deckhand", clock.now());
+  const task = pickupTask(db, registered, "deckhand", clock.now())!;
   slot.occupy(task.id);
   let resolveCalls = 0;
   const resolve = () => {
@@ -135,7 +135,7 @@ function completedSession(land: () => Promise<void> = async () => {}) {
     { type: "work", title: "one", purpose: "why", completion_criteria: "done" },
     clock.now(),
   );
-  const task = completeTask(db, pickupTask(db, registered, "deckhand", clock.now()), FULL_HANDOFF, "deckhand", clock.now());
+  const task = completeTask(db, pickupTask(db, registered, "deckhand", clock.now())!, FULL_HANDOFF, "deckhand", clock.now());
   slot.occupy(task.id);
   const calls: string[] = [];
   const deps: TeardownDeps = {

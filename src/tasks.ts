@@ -785,10 +785,17 @@ export class DomainError extends Error {}
  *  (CONTEXT.md's Assignee), same as workspace's own "resolved fresh every
  *  use, never pinned" rule (ADR 0009). `workerId` is only the event's
  *  attribution — the caller resolves it (`task.assignee ?? the default
- *  agent`) before calling. */
-export function pickupTask(db: Db, task: Task, workerId: string, now: Date): Task {
-  db.transaction(() => {
-    db.prepare("UPDATE tasks SET status = 'in_progress' WHERE id = ?").run(task.id);
+ *  agent`) before calling.
+ *
+ *  `task` is the head the scheduler chose before awaiting real I/O (issue
+ *  #972): if a human door cancelled it or handed it to `human` meanwhile, the
+ *  row no longer matches and the pickup is abandoned (null, no event). */
+export function pickupTask(db: Db, task: Task, workerId: string, now: Date): Task | null {
+  return db.transaction(() => {
+    const { changes } = db
+      .prepare("UPDATE tasks SET status = 'in_progress' WHERE id = ? AND status = 'todo' AND assignee IS NOT ?")
+      .run(task.id, HUMAN_WORKER_ID);
+    if (changes === 0) return null;
     appendEvent(db, {
       taskId: task.id,
       workerId,
@@ -796,8 +803,8 @@ export function pickupTask(db: Db, task: Task, workerId: string, now: Date): Tas
       payload: { kind: "task_picked_up" },
       at: now,
     });
+    return getTask(db, task.id)!;
   })();
-  return getTask(db, task.id)!;
 }
 
 /** Work tasks may not complete without a full handoff doc; question/review
@@ -1994,40 +2001,30 @@ function isHumanRegistered(db: Db, taskId: string): boolean {
 }
 
 /** The status half of the human-decompose gate (issue #129), split out so the
- *  edit / direct-cancel scope line (issue #130) can share the unsettled clause:
- *  `task` must be unsettled and not in_progress. `allowOwnInProgress` grants
- *  decompose its own-task exception ("自分の human
- *  タスクは実行中でも割ってよい", a `human`-assignee task runs outside the slot
- *  and races no one); edit and cancel do NOT inherit it — their scope line is
- *  flatly "未決着かつ実行中でない" (CONTEXT.md's Edit/Cancel, issue #130), so
- *  they pass `false`. The human completion door (issue #964) passes `true`: its
- *  task is already human-assigned, so only the settled clause bites. The `verb`
- *  names the action in the error for its caller. */
-export function assertUnsettledNotInProgress(task: Task, verb: string, allowOwnInProgress: boolean): void {
+ *  edit / direct-cancel scope line (issue #130) and the human completion door
+ *  (issue #964) share the unsettled clause: `task` must be unsettled and not
+ *  in_progress. A `human`-assignee task never enters the slot, so it stays
+ *  `todo` until settled and only the settled clause bites it (issue #972). The
+ *  `verb` names the action in the error for its caller. */
+export function assertUnsettledNotInProgress(task: Task, verb: string): void {
   if (task.status === "done" || task.status === "cancelled") {
     throw new DomainError(`a settled task cannot be ${verb}`);
   }
-  const ownInProgress = allowOwnInProgress && task.assignee === HUMAN_WORKER_ID;
-  if (task.status === "in_progress" && !ownInProgress) {
-    throw new DomainError(
-      allowOwnInProgress
-        ? `an in-progress task cannot be ${verb} unless it is the human's own task`
-        : `an in-progress task cannot be ${verb}`,
-    );
+  if (task.status === "in_progress") {
+    throw new DomainError(`an in-progress task cannot be ${verb}`);
   }
 }
 
 /** The human-decompose gate (issue #129, CONTEXT.md's Decompose: "線は
  *  「agent の判断がまだ存在しないところ」"). A human may add a child to
  *  `parent` only when all three hold: `parent` is unsettled, `parent` is not
- *  in_progress (unless it's the human's own — a `human`-assignee task runs
- *  outside the slot and races no one), and `parent` carries no child an agent
- *  has already registered via its own decompose judgment. Outside this line,
- *  rearranging an agent-decomposed tree is the objection → repair task →
- *  assignee's own replan route's job, not this one's — direct rearrangement
- *  here would erase the fix-forward signal that route depends on. */
+ *  in_progress, and `parent` carries no child an agent has already registered
+ *  via its own decompose judgment. Outside this line, rearranging an
+ *  agent-decomposed tree is the objection → repair task → assignee's own
+ *  replan route's job, not this one's — direct rearrangement here would erase
+ *  the fix-forward signal that route depends on. */
 function assertHumanDecomposable(db: Db, parent: Task): void {
-  assertUnsettledNotInProgress(parent, "decomposed by a human", true);
+  assertUnsettledNotInProgress(parent, "decomposed by a human");
   if (hasAgentRegisteredChild(db, parent.id)) {
     throw new DomainError(
       "a task an agent has already decomposed cannot be decomposed by a human — " +
@@ -2047,7 +2044,7 @@ function assertHumanEditableScope(db: Db, task: Task, verb: string): void {
       `only a human-registered task can be ${verb} — an agent's decompose child is out of scope`,
     );
   }
-  assertUnsettledNotInProgress(task, verb, false);
+  assertUnsettledNotInProgress(task, verb);
 }
 
 /** Human decompose (issue #129): the same mechanics as agent decompose

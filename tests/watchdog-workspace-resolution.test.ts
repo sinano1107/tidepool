@@ -26,7 +26,7 @@ describe("watchdog の failTask が task.workspace を解決する", () => {
       { type: "work", title: "prod work", purpose: "p", completion_criteria: "c", workspace: "prod" },
       clock.now(),
     );
-    const picked = pickupTask(db, task, "deckhand", clock.now());
+    const picked = pickupTask(db, task, "deckhand", clock.now())!;
     ensureTaskBranch(db, prod, picked);
     await import("node:fs").then((fs) =>
       fs.writeFileSync(join(prod.path, "stuck.txt"), "stuck work\n"),

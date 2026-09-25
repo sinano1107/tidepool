@@ -1226,7 +1226,7 @@ function App() {
 
   // issue #129/#130: a board task-card tap opens the action chooser (add child
   // / edit / cancel) only for a task the client can already tell is plausibly
-  // eligible — done and another worker's in-progress task are cheap, always-
+  // eligible — done and in-progress tasks are cheap, always-
   // correct exclusions from the board's own derived `status`/`assignee`
   // (CONTEXT.md's Decompose/Edit/Cancel share the same first two conditions);
   // the remaining conditions (no agent-decomposed child yet for add-child;
@@ -1235,8 +1235,7 @@ function App() {
   // An ineligible tap keeps the plain info toast this used to always show.
   const openTask = (t: BoardScreenTask) => {
     const settled = t.status === 'done';
-    const othersInProgress = t.status === 'in_progress' && t.rawAssignee !== 'human';
-    if (settled || othersInProgress) {
+    if (settled || t.status === 'in_progress') {
       say('info', t.title, `${t.id} · ${t.type}`);
       return;
     }

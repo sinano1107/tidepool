@@ -525,8 +525,9 @@ export class FakeGitHubClient implements GitHubClient {
 
   /** Holds every getIssue response until the given promise resolves (issue
    *  #49 §6: keeping a fetch in flight so a test can overlap requests). The
-   *  call is still recorded in issueFetches immediately. */
-  scriptIssueGate(gate: Promise<void>): void {
+   *  call is still recorded in issueFetches immediately. Pass null to let later
+   *  calls through while the ones already held keep waiting. */
+  scriptIssueGate(gate: Promise<void> | null): void {
     this.issueGate = gate;
   }
 

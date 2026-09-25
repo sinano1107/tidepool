@@ -3649,8 +3649,7 @@ function App() {
   };
   const openTask = (t) => {
     const settled = t.status === "done";
-    const othersInProgress = t.status === "in_progress" && t.rawAssignee !== "human";
-    if (settled || othersInProgress) {
+    if (settled || t.status === "in_progress") {
       say("info", t.title, `${t.id} \xB7 ${t.type}`);
       return;
     }

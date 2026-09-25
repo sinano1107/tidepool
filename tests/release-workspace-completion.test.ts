@@ -36,7 +36,7 @@ async function pickedUpSession(type: TaskType = "work"): Promise<{
     { type, title: "one", purpose: "why", completion_criteria: "done" },
     NOW,
   );
-  const task = pickupTask(db, registered, "deckhand", NOW);
+  const task = pickupTask(db, registered, "deckhand", NOW)!;
   await prepareWorkspaceAtPickup(db, ws, task, {});
   return { db, task, ws };
 }

@@ -356,6 +356,7 @@ export function startScheduler(deps: {
     task: Task,
     setting: ExecutionSetting,
     content: Partial<TaskContent>,
+    onPicked: () => void,
   ): Promise<(() => void) | void> {
     // assignee is never overwritten (ADR 0012 / issue #36) — the event's
     // attribution resolves the same three-value read CONTEXT.md's Assignee
@@ -364,6 +365,9 @@ export function startScheduler(deps: {
     // the execution slot.
     const agent = resolveTaskAgent(task, worker.id, auditorName ?? worker.id);
     const picked = pickupTask(db, task, agent, clock.now());
+    // await の窓で人間の扉が head を書き換えた(issue #972): slot は空けたまま、次の poll が選び直す
+    if (!picked) return;
+    onPicked();
     slot.occupy(picked.id);
     // ADR 0099 決定2: 容器は盤面が**先に**作る。adapter が spawn に辿り着けな
     // かった pickup でも、force / reclaimed の相手はもう存在している。
@@ -685,14 +689,16 @@ export function startScheduler(deps: {
       // 表の先頭)を並べて1行残す。review task は学習器を参照しない(ADR 0111 決定3)。昇格前の記録は選択に介入しない ——
       // 学習器が倒れても pickup は進む
       // 昇格中に学習器が倒れた pickup は shadow の組が無いので残さない
-      if (head.type === "work" && (branched || !promoted)) {
+      // 行は pickup が成立してから書く —— await の窓で取りやめた pickup(issue #972)に shadow を残さない
+      const recordShadowRow = () => {
+        if (head.type !== "work" || !(branched || !promoted)) return;
         try {
           recordShadow(db, head.id, (branched ?? branch(head, selectable(candidates, entryExcluded))).shadow, clock.now());
         } catch (err) {
           console.error(`[scheduler] learner shadow row failed for ${head.id}:`, err);
         }
-      }
-      afterPoll = await pickup(head, chosen, content);
+      };
+      afterPoll = await pickup(head, chosen, content, recordShadowRow);
     } finally {
       inFlight = false;
     }
