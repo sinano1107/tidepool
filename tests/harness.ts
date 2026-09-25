@@ -557,7 +557,7 @@ export async function makeRemoteBackedWorkspace(
   };
 }
 
-let remoteTemplate: Promise<{ path: string; origin: string; publisher: string }> | undefined;
+let remoteTemplate: ReturnType<typeof buildRemoteTemplate> | undefined;
 // テストの dirs には載せない —— どのケースの後始末でも消えてはならず、ファイルの afterAll で消す。
 // forks の worker はテストファイルごとの process なので、組むのもファイルごとに1度。
 // afterAll はテスト実行中には登録できないので import 時に置く。e2e(Playwright)も api を
@@ -575,12 +575,11 @@ const netGit = (cwd: string, ...args: string[]) =>
     stdio: ["ignore", "pipe", "pipe"],
   });
 
-async function buildRemoteTemplate(): Promise<{ path: string; origin: string; publisher: string }> {
-  const dirs = remoteTemplateDirs;
-  const { path } = await makeWorkspace(dirs, "remote-template");
+async function buildRemoteTemplate() {
+  const { path } = await makeWorkspace(remoteTemplateDirs, "remote-template");
   const origin = await mkdtemp(join(tmpdir(), "tidepool-remote-template-origin-"));
   const publisher = await mkdtemp(join(tmpdir(), "tidepool-remote-template-publisher-"));
-  dirs.push(origin, publisher);
+  remoteTemplateDirs.push(origin, publisher);
   netGit(origin, "init", "--bare", "-b", "main");
   netGit(path, "remote", "add", "origin", origin);
   netGit(path, "push", "-u", "origin", "main");
