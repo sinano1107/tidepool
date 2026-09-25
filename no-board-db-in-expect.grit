@@ -1,6 +1,6 @@
 language js
 
 `expect($args)` where {
-  $args <: contains `t.db.prepare`,
+  $args <: contains `t.db`,
   register_diagnostic(span=$args, message="t.db is setup-only (ADR 0107 decision 4 / ADR 0154): assert through the server boundary or the domain layer instead.", severity="error")
 }
