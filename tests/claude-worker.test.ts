@@ -21,7 +21,13 @@ import { BOARD_WRITE_LANGUAGE_RULE } from "../src/mcp.js";
 import { buildMemoryInjection, recordKnowledge } from "../src/memory.js";
 import { listEpisodes } from "../src/precedent.js";
 import { ProcessContainers, type PtyFn } from "../src/process-container.js";
-import { loadRegistry, type RegistryMode, refreshRegistry } from "../src/registry.js";
+import {
+  loadRegistry,
+  type Registry,
+  type RegistryMode,
+  refreshRegistry,
+  registryRef,
+} from "../src/registry.js";
 import { Slot } from "../src/slot.js";
 import { getTask, listBoard, nextSlotTask, resolveTaskAgent, type Task } from "../src/tasks.js";
 import { sessionInTeardown } from "../src/teardown.js";
@@ -116,6 +122,8 @@ function insertTask(db: ReturnType<typeof openDb>, task: Task): void {
   );
 }
 
+const loadedRegistries = new Map<string, Registry>();
+
 /** scheduler が pickup の瞬間に選ぶ実行設定(除外なし)。assignee が registry で解決
  *  できない task は adapter が設定を読む前に quarantine するので、既定 agent の設定で足りる。 */
 function pickedSetting(
@@ -125,7 +133,15 @@ function pickedSetting(
   agent = "deckhand",
   auditorName = DEFAULT_AUDITOR_NAME,
 ) {
-  const agents = loadRegistry(registry.dir, registry.mode).agents;
+  // 同じ commit の registry を start ごとに読み直さない(issue #983)。鍵に解決済みの
+  // commit を含めるので、makeWorker の後に積んだ commit は読み直す
+  const commit = execFileSync("git", ["rev-parse", registryRef(registry.mode)], { cwd: registry.dir })
+    .toString()
+    .trim();
+  const key = `${registry.dir}@${commit}`;
+  const loaded = loadedRegistries.get(key) ?? loadRegistry(registry.dir, registry.mode);
+  loadedRegistries.set(key, loaded);
+  const { agents } = loaded;
   return resolveExecutionSetting(db, (agents[resolveTaskAgent(task, agent, auditorName)] ?? agents[agent])!, task)!;
 }
 
@@ -186,9 +202,14 @@ async function makeWorker(
     // spawn 本数ぶんのファイルが揃うまで待ってから消す。揃わなければ諦めて消す
     // (`vi.waitFor` は条件待ちで、タイムアウトしても投げるだけでハングしない)。
     // 本数は `recorder` でなく worker_spawned で数える —— containers を差し替える
-    // テストは fixture の recorder を通らずに spawn する。
+    // テストは fixture の recorder を通らずに spawn する。数えるのは worker 自身が
+    // 書いた origin = 'board' だけ —— 当時版注入のテスト(ADR 0020 part 4)が手で
+    // 積む過去 session の worker_spawned はファイルを作らないので、数えると揃わない
+    // ファイルを timeout まで待つことになる(issue #983)。
     const { n } = db
-      .prepare("SELECT COUNT(*) AS n FROM events WHERE kind = 'worker_spawned'")
+      .prepare(
+        "SELECT COUNT(*) AS n FROM events WHERE kind = 'worker_spawned' AND origin = 'board'",
+      )
       .get() as { n: number };
     const want = n * 2;
     if (want > 0) {

@@ -6,6 +6,7 @@ import {
   assertValidAgentDefinition,
   assertValidWorkspaceName,
   InvalidWorkspaceNameError,
+  isBuiltInAgentName,
   loadRegistry,
   type Registry,
   refreshRegistry,
@@ -365,6 +366,18 @@ describe("loadRegistry", () => {
     });
     const registry = loadRegistry(dir, "purely-local");
     expect(registry.workspaces.sandbox!.path).toBeUndefined();
+  });
+
+  it("agents/ と authority/ が無い registry は空として読む: agents は組み込みの Auditor だけ、authority は空(エラーにしない)", async () => {
+    const dir = await makeRegistry({}, { "workspaces.yaml": "tidepool:\n  path: /tmp/tidepool\n" });
+    const registry = loadRegistry(dir, "purely-local");
+    expect(Object.keys(registry.agents).map(isBuiltInAgentName)).toEqual([true]);
+    expect(registry.authority).toEqual({});
+  });
+
+  it("workspaces.yaml が無い registry は読めずに投げる(空として扱わない)", async () => {
+    const dir = await makeRegistry({}, { "README.md": "no workspaces here\n" });
+    expect(() => loadRegistry(dir, "purely-local")).toThrow(/workspaces\.yaml/);
   });
 
   it("使用中の clone の HEAD commit hash を持つ(どのバージョンの判断か、の来歴)", async () => {

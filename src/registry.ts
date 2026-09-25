@@ -784,18 +784,42 @@ function gitShowFile(dir: string, ref: string, path: string): string {
   return execFileSync("git", ["show", `${ref}:${path}`], { cwd: dir, stdio: GIT_STDIO }).toString();
 }
 
-/** The paths of the entries directly under `subdir` at `ref` (e.g.
- *  `agents/deckhand.md`). A missing directory yields no entries — the same
- *  "absent is empty, not an error" shape `readdirSync` had on a present-but-
- *  empty directory. */
-function gitListDir(dir: string, ref: string, subdir: string): string[] {
-  const out = execFileSync("git", ["ls-tree", "--name-only", ref, `${subdir}/`], {
+/** The committed registry files at `commit`, path → content, read in a fixed
+ *  number of git spawns whatever the file count (issue #983): one `ls-tree`
+ *  lists the blobs, one `cat-file --batch` streams them all. Only direct
+ *  children of `agents/` (`.md`) and `authority/` (`.yaml`) plus
+ *  `workspaces.yaml` are kept; a missing directory contributes nothing — the
+ *  "absent is empty, not an error" shape `readdirSync` had. */
+function readRegistryFiles(dir: string, commit: string): Map<string, string> {
+  const listing = execFileSync(
+    "git",
+    ["ls-tree", "-r", "-z", commit, "--", "agents", "authority", "workspaces.yaml"],
+    { cwd: dir, stdio: GIT_STDIO },
+  ).toString();
+  const blobs: { path: string; sha: string }[] = [];
+  for (const entry of listing.split("\0")) {
+    // `<mode> <type> <sha>\t<path>`
+    const match = entry.match(
+      /^\d+ blob ([0-9a-f]+)\t(agents\/[^/]+\.md|authority\/[^/]+\.yaml|workspaces\.yaml)$/,
+    );
+    if (match) blobs.push({ sha: match[1]!, path: match[2]! });
+  }
+  const files = new Map<string, string>();
+  const out = execFileSync("git", ["cat-file", "--batch"], {
     cwd: dir,
-    stdio: GIT_STDIO,
-  })
-    .toString()
-    .trim();
-  return out === "" ? [] : out.split("\n");
+    stdio: ["pipe", "pipe", "pipe"],
+    input: `${blobs.map((b) => b.sha).join("\n")}\n`,
+  });
+  // 出力は `<sha> blob <size>\n<content>\n` の繰り返し。本文は文字数でなく
+  // バイト数で切る(マルチバイトの本文では両者がずれる)
+  let offset = 0;
+  for (const { path } of blobs) {
+    const headerEnd = out.indexOf(0x0a, offset);
+    const size = Number(out.toString("utf8", offset, headerEnd).split(" ")[2]);
+    files.set(path, out.toString("utf8", headerEnd + 1, headerEnd + 1 + size));
+    offset = headerEnd + 1 + size + 1;
+  }
+  return files;
 }
 
 /** Split a `---\nfrontmatter\n---\nbody` document into its two halves, or null
@@ -1025,7 +1049,8 @@ export function ownEntry<T>(record: Record<string, T>, key: string): T | undefin
 /** Load the registry from its declared committed source (ADR 0020 / ADR 0052)
  *  — remote-tracking main for a remote-backed board, local main for a
  *  purely-local board, and never the working tree. Every content read and the
- *  provenance `commit` use the same ref, so they agree by construction.
+ *  provenance `commit` come from the one commit the ref resolves to first, so
+ *  they agree by construction.
  *
  *  `mode` に既定値を置かない。既定があると、渡し忘れた呼び出しが**静かに**
  *  ローカル main へ落ちる —— remote 正本を宣言した盤面でも spawn の入力だけが
@@ -1033,12 +1058,24 @@ export function ownEntry<T>(record: Record<string, T>, key: string): T | undefin
  *  フォールバックなので、必須にして tsc に全呼び出しを名指しさせる
  *  (containment.ts の「省略 = 無制限という footgun は作らない」と同じ線)。 */
 export function loadRegistry(dir: string, mode: RegistryMode): Registry {
-  const ref = registryRef(mode);
+  // ref を先に1つの commit へ解決し、以降はその commit だけを読む
+  const commit = execFileSync("git", ["rev-parse", registryRef(mode)], {
+    cwd: dir,
+    stdio: GIT_STDIO,
+  })
+    .toString()
+    .trim();
+  const files = readRegistryFiles(dir, commit);
   const agents: Record<string, AgentDefinition> = {};
-  for (const path of gitListDir(dir, ref, "agents")) {
-    if (!path.endsWith(".md")) continue;
-    const agent = parseAgentFile(basename(path, ".md"), gitShowFile(dir, ref, path));
-    agents[agent.name] = agent;
+  const authority: Record<string, AuthorityProfile> = {};
+  for (const [path, raw] of files) {
+    if (path.startsWith("agents/")) {
+      const agent = parseAgentFile(basename(path, ".md"), raw);
+      agents[agent.name] = agent;
+    } else if (path.startsWith("authority/")) {
+      const profile = parseAuthorityFile(basename(path, ".yaml"), raw);
+      authority[profile.name] = profile;
+    }
   }
   // 名前の解決は registry が先、無ければ組み込み(ADR 0117 決定2 の shadowing)。
   // ここで1つの map に畳むので、下流(assignee 候補・review_by 検査・roster・
@@ -1046,16 +1083,9 @@ export function loadRegistry(dir: string, mode: RegistryMode): Registry {
   // (`resolveExecutionAgent`)—— 組み込みの profile は registry に無いので、
   // そこだけが印を読む。
   if (!Object.hasOwn(agents, BUILT_IN_AUDITOR.name)) agents[BUILT_IN_AUDITOR.name] = BUILT_IN_AUDITOR;
-  const authority: Record<string, AuthorityProfile> = {};
-  for (const path of gitListDir(dir, ref, "authority")) {
-    if (!path.endsWith(".yaml")) continue;
-    const profile = parseAuthorityFile(basename(path, ".yaml"), gitShowFile(dir, ref, path));
-    authority[profile.name] = profile;
-  }
-  const workspaces = workspacesSchema.parse(parseYaml(gitShowFile(dir, ref, "workspaces.yaml")));
+  const workspacesYaml = files.get("workspaces.yaml");
+  if (workspacesYaml === undefined) throw new Error(`workspaces.yaml is missing at ${commit}`);
+  const workspaces = workspacesSchema.parse(parseYaml(workspacesYaml));
   assertValidWorkspaces(workspaces);
-  const commit = execFileSync("git", ["rev-parse", ref], { cwd: dir, stdio: GIT_STDIO })
-    .toString()
-    .trim();
   return { commit, agents, authority, workspaces };
 }
