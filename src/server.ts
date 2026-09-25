@@ -432,6 +432,7 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
     create: rebaselineAfter(options.agentAdmin.create, rebaselineRegistry),
     update: rebaselineAfter(options.agentAdmin.update, rebaselineRegistry),
     delete: rebaselineAfter(options.agentAdmin.delete, rebaselineRegistry),
+    changeTier: rebaselineAfter(options.agentAdmin.changeTier, rebaselineRegistry),
   };
   const profileAdmin = options.profileAdmin && {
     ...options.profileAdmin,
@@ -633,6 +634,7 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
     cliAuth: options.cliAuth,
     githubAuth: options.githubAuth,
     registry: options.registry,
+    agents: agentAdmin?.list,
   });
   // an abandoned triage session may not pause pickup forever: the watchdog
   // closes it past the timeout, and reopening pickup is a "run now" trigger
@@ -743,6 +745,7 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
     allocationClient: options.allocationClient,
     attributionClient: options.attributionClient,
     behaviorDraftClient: options.behaviorDraftClient,
+    agentAdmin,
     pollNow,
   };
   app.use(

@@ -14,6 +14,7 @@ import {
   type ExecutionExclusions,
   type ExecutionSetting,
   firstSelectable,
+  type ListAgentTiers,
   readExecutionSettings,
   selectable,
   windowMatchesModel,
@@ -266,6 +267,8 @@ export function startScheduler(deps: {
    *  **2つの宣言**を持ち、その食い違いが quarantine になるからである。Absent →
    *  registry を持たない盤面なので、食い違う相手の宣言そのものが無い。 */
   registry?: RegistrySource;
+  /** registry の agent 一覧(issue #920): routing の due 判定の直前に tier の提案の pin を照合する。Absent → registry の無い盤面。 */
+  agents?: ListAgentTiers;
 }): Scheduler {
   const {
     db,
@@ -287,6 +290,7 @@ export function startScheduler(deps: {
     cliAuth,
     githubAuth,
     registry,
+    agents,
   } = deps;
   let inFlight = false;
   const resumeTimer = createResumeTimers(clock, pollNow);
@@ -551,7 +555,7 @@ export function startScheduler(deps: {
       // ADR 0120 決定2 / ADR 0119: 周期 meta-review の登録は poll の中なので pickup 契機で、候補の
       // 読み取りより前なので同じ pass で拾われる。slot 占有・halt より手前(空の盤面でも登録する)。
       // **同期**に保つ —— ADR 0119 決定5 の「最初の await より前に slot を読む」を崩さない。
-      registerDueMetaReviews(db, clock.now());
+      registerDueMetaReviews(db, clock.now(), agents);
       if (await pickupBlocked()) return;
       // agent 名で外れるのは、定義が成立しない agent(quarantineAgent)だけである
       // (ADR 0110 決定3 / issue #544)。

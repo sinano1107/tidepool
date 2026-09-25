@@ -1,4 +1,5 @@
 import { verifyAgentRepaired } from "./agent.js";
+import { type AgentAdmin, AgentTierMismatchError, agentViewProviders } from "./agent-create.js";
 import { type AttributionClient, attributeAfterRca, type BehaviorDraftClient } from "./attribution.js";
 import { type BoardStatePath, boardStateOverlap } from "./board-state.js";
 import { type CliAuthCheck, quarantineCliAuthFailure } from "./cli-auth.js";
@@ -6,13 +7,25 @@ import type { ContainmentCheck } from "./containment.js";
 import type { Db } from "./db.js";
 import type { DraftClient } from "./draft.js";
 import { appendEvent, type EventOrigin } from "./events.js";
-import { applyExecutionSettingsChange, composeRoutingRow, type ExecutionSettingsChange, parseRoutingRowChange } from "./execution-setting.js";
+import {
+  applyExecutionSettingsChange,
+  composeRoutingRow,
+  type ExecutionSettingsChange,
+  parseAgentTierAmendment,
+  parseRoutingRowChange,
+  type RoutingRowChange,
+  readExecutionSettings,
+  registryPinChanges,
+  type Tier,
+  tierHasRowFor,
+} from "./execution-setting.js";
 import { type GitHubClient, IssueGoneError } from "./github.js";
 import type { HarnessContainmentCheck } from "./harness-containment.js";
 import { type Landing, type LandingVerdict, landingBlock } from "./landing.js";
 import { approveMemoryProposal, rejectMemoryProposal } from "./memory.js";
 import { type QuarantineChecks, type QuarantineKind, type QuarantineResolvers, quarantineStops } from "./quarantine.js";
 import type { Harness, Provider, RegistryReachabilityCheck } from "./registry.js";
+import { RegistryFetchFailedError, RegistryPushFailedError } from "./registry-write.js";
 import { parseGitHubRepo, repairRepoAccess } from "./repo-access.js";
 import {
   answerQuestion,
@@ -34,8 +47,11 @@ import {
   logDecision,
   MERGE_QUESTION_OPTIONS,
   PR_PROMOTION_FAILURE_OPTIONS,
+  type ProposalAmendment,
   type RegisterTaskInput,
+  type RegistryProposal,
   registerTask,
+  settleQuestionAsObserved,
   type Task,
   taskIdForPr,
 } from "./tasks.js";
@@ -367,6 +383,8 @@ export interface SubmitAnswerDeps {
    *  持たない盤面(回収を待っている slot が存在しない)。 */
   reclaim?: Pick<PendingReclaim, "acceptReclaimed">;
   quarantineChecks?: QuarantineChecks;
+  /** registry の agent 一覧と tier の書き込み(issue #920): tier の提案への approve が使う。Absent → registry の無い盤面。 */
+  agentAdmin?: Partial<Pick<AgentAdmin, "list" | "changeTier">>;
 }
 
 /** 門の検査の材料。合成 root が一度だけ `quarantineChecks` に束ね、回答の口
@@ -713,6 +731,45 @@ export async function cancelThroughHumanDoor(
   }
 }
 
+/** tier の提案の approve の書き込み(issue #920 / spec #916 D): pin の照合 → 下げ先の検査 → registry への commit。pin が崩れて
+ *  いれば question を observed で決着させて回答を断り、下げ先に行が無い・push できないなら question は open のまま回答を断る。
+ *  返り値は着地した commit。 */
+async function landAgentTier(deps: SubmitAnswerDeps, questionId: string, proposal: RegistryProposal, to: Tier, now: () => Date): Promise<string> {
+  const { list, changeTier } = deps.agentAdmin ?? {};
+  if (!list || !changeTier) throw new DomainError("no registry configured — cannot change the agent's tier");
+  const stale = (changed: ["rows"] | ["agent_tier"]) => {
+    settleQuestionAsObserved(
+      deps.db,
+      questionId,
+      { kind: "routing_proposal_stale", question_id: questionId, proposal_kind: "registry", changed, observed_event_id: null },
+      now(),
+    );
+    return new DomainError(`the proposal's premise no longer holds (${changed.join(", ")} changed), so the board settled the question as observed`);
+  };
+  // 根拠の行の pin は表の書き口の hook が決着させる(ADR 0150 決定1)ので、ここで照合するのは registry 側だけ
+  const agent = list().find((a) => a.name === proposal.agent);
+  if (registryPinChanges(proposal, agent).length) throw stale(["agent_tier"]);
+  const assertLandable = (providers: string[]) => {
+    if (!tierHasRowFor(readExecutionSettings(deps.db).table, providers, to)) {
+      throw new DomainError(`the execution-setting table has no row at ${to} for ${proposal.agent}'s providers (${providers.join(", ")}), so the agent would be skipped`);
+    }
+  };
+  assertLandable(agentViewProviders(agent!));
+  try {
+    return await changeTier({
+      name: proposal.agent,
+      expectTier: proposal.pin.tier,
+      to,
+      assertLandable,
+      message: `lower agent ${proposal.agent}'s tier to ${to} (question ${questionId})`,
+    });
+  } catch (err) {
+    if (err instanceof AgentTierMismatchError) throw stale(["agent_tier"]);
+    if (err instanceof RegistryPushFailedError || err instanceof RegistryFetchFailedError) throw new DomainError(err.message);
+    throw err;
+  }
+}
+
 /**
  * question への人間回答を実行する正準の application seam。
  * WebUI と管理 MCP は transport の違いだけを持ち、この副作用列を共有する。
@@ -734,11 +791,13 @@ export async function submitAnswer(
   // verify quarantine before answerQuestion eventually rejects the payload.
   assertAnswerable(task, answers);
   const proposal = task.question_proposal;
-  // 修正値を受けるのは routing の行の提案の approve だけ(ADR 0150 決定2)。memory(#915)・昇格 / 降格の修正値も黙って捨てず断る
-  if (amendment !== undefined && (proposal?.kind !== "routing" || proposal.op !== "row" || answers[0] !== "approve")) {
-    throw new DomainError("only an approve answer to a routing row proposal takes an amendment");
+  // 修正値を受けるのは routing の行の提案と tier の提案の approve だけ(ADR 0150 決定2)。memory(#915)・昇格 / 降格の修正値も黙って捨てず断る
+  const amendable = (proposal?.kind === "routing" && proposal.op === "row") || proposal?.kind === "registry";
+  if (amendment !== undefined && (!amendable || answers[0] !== "approve")) {
+    throw new DomainError("only an approve answer to a routing row proposal or an agent tier proposal takes an amendment");
   }
-  const amended = amendment === undefined ? undefined : parseRoutingRowChange(amendment);
+  let amended: ProposalAmendment | undefined;
+  if (amendment !== undefined) amended = proposal?.kind === "registry" ? { to: parseAgentTierAmendment(proposal, amendment) } : parseRoutingRowChange(amendment);
 
   const promotionTaskId = task.question_pending_pr_promotion_task_id;
   const wantsPromotionRetry =
@@ -822,6 +881,10 @@ export async function submitAnswer(
     await check(task.question_quarantine_value);
   }
 
+  // tier の提案の approve は registry への commit が先(issue #920 / ADR 0150 決定5)—— merge と同じく、着地しなければ question は open のまま
+  const tierTarget = proposal?.kind === "registry" && answers[0] === "approve" ? ((amended as { to: Tier } | undefined)?.to ?? proposal.to) : undefined;
+  const registryCommit = tierTarget && proposal?.kind === "registry" ? await landAgentTier(deps, task.id, proposal, tierTarget, now) : undefined;
+
   // An answer during triage is durable immediately, but its parent unblock is
   // staged until commit. The activity touch also defers the timeout close.
   const session = triageActivity(deps.db, now(), openTriage);
@@ -845,9 +908,17 @@ export async function submitAnswer(
     } else if (proposal?.kind === "routing" && answers[0] === "approve") {
       const change: ExecutionSettingsChange =
         proposal.op === "row"
-          ? { setting: "row", row: composeRoutingRow(proposal, amended) }
+          ? { setting: "row", row: composeRoutingRow(proposal, amended as RoutingRowChange | undefined) }
           : { setting: "learner_promoted", value: proposal.op === "promote" };
       applyExecutionSettingsChange(deps.db, change, origin, now(), task.id);
+    } else if (proposal?.kind === "registry" && registryCommit) {
+      appendEvent(deps.db, {
+        taskId: null,
+        workerId: HUMAN_WORKER_ID,
+        origin,
+        payload: { kind: "agent_tier_changed", agent: proposal.agent, from: proposal.pin.tier, to: tierTarget!, question_id: task.id, registry_commit: registryCommit },
+        at: now(),
+      });
     }
     return answered;
   })();

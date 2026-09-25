@@ -3,7 +3,7 @@ import type { Db } from "./db.js";
 import { appendEvent, type EventOrigin } from "./events.js";
 import { PROVIDER_VALUES, type Provider } from "./provider.js";
 import type { AgentDefinition } from "./registry.js";
-import { DomainError, HUMAN_WORKER_ID, type RoutingProposal, type RoutingRowProposal, settleQuestionAsObserved, type Task } from "./tasks.js";
+import { DomainError, HUMAN_WORKER_ID, type RegistryProposal, type RoutingProposal, type RoutingRowProposal, settleQuestionAsObserved, type Task } from "./tasks.js";
 
 /** 必要品質のティア(CONTEXT.md「要求」)—— 廉価 / 主力 / 上位。**順序を持つ配列**
  *  であることがこの定数の内容で、advisor の pairing はこの並びの添字だけで判定する
@@ -417,11 +417,18 @@ export function parseRoutingRowChange(input: unknown): RoutingRowChange {
 }
 
 /** pin の照合(ADR 0150 決定1): 提案が焼いた行と表の現在の行を全欄で比べ、崩れた欄の名前を返す(空 = pin は生きている)。
- *  行が消えていれば null。昇格 / 降格の提案の pin はフラグの現在値。 */
+ *  行が消えていれば null。昇格 / 降格の提案の pin はフラグの現在値。tier の提案は根拠の行を (provider, model) の tier / effort で
+ *  比べる(消えた行も `rows` —— agent の側の pin は表からは見えないので `registryPinChanges` が言う)。 */
 export function routingPinChanges(
-  proposal: RoutingProposal,
+  proposal: RoutingProposal | RegistryProposal,
   settings: { table: ExecutionSettingTable; learnerPromoted: boolean },
-): Array<"tier" | "effort" | "price_in" | "price_out" | "learner_promoted"> | null {
+): Array<"tier" | "effort" | "price_in" | "price_out" | "learner_promoted" | "rows"> | null {
+  if (proposal.kind === "registry") {
+    const held = proposal.pin.rows.every((pinned) =>
+      settings.table.some((row) => row.provider === pinned.provider && row.model === pinned.model && row.tier === pinned.tier && row.effort === pinned.effort),
+    );
+    return held ? [] : ["rows"];
+  }
   if (proposal.op !== "row") return proposal.pin.promoted === settings.learnerPromoted ? [] : ["learner_promoted"];
   const { pin } = proposal;
   const current = settings.table.find((row) => row.provider === pin.provider && row.model === pin.model);
@@ -432,6 +439,26 @@ export function routingPinChanges(
 /** 修正値の合成(ADR 0150 決定2): 適用する行 = pin の行に提案の変更、その上に人間の修正値を重ねたもの。 */
 export function composeRoutingRow(proposal: RoutingRowProposal, amendment?: RoutingRowChange): ExecutionSettingRow {
   return { ...proposal.pin, ...proposal.change, ...amendment };
+}
+
+/** tier の提案の agent 側の pin(issue #920): registry の agent の tier が焼いた値のままか。agent が消えていても崩れている。 */
+export function registryPinChanges(proposal: RegistryProposal, agent: { tier?: string } | undefined): Array<"agent_tier"> {
+  return agent?.tier === proposal.pin.tier ? [] : ["agent_tier"];
+}
+
+/** 下げ先の検査(spec #916 B): 対象ティアに agent の entry のいずれかの行があるか。無ければ下げた agent は skipped になる。
+ *  提案 verb と回答時(修正後の値)の両方が呼ぶ。 */
+export function tierHasRowFor(table: ExecutionSettingTable, providers: readonly string[], tier: Tier): boolean {
+  return table.some((row) => row.tier === tier && providers.includes(row.provider));
+}
+
+/** tier の提案の修正値の検査(ADR 0150 決定2): `to` だけで、pin の tier より下の任意のティア。 */
+export function parseAgentTierAmendment(proposal: RegistryProposal, amendment: unknown): Tier {
+  const parsed = z.object({ to: z.enum(TIERS) }).strict().safeParse(amendment);
+  if (!parsed.success || TIERS.indexOf(parsed.data.to) >= TIERS.indexOf(proposal.pin.tier)) {
+    throw new DomainError(`an agent tier amendment takes only to, a tier below ${proposal.pin.tier}`);
+  }
+  return parsed.data.to;
 }
 
 /** 変更を書き、操作イベントとして経路つきで残す(CONTEXT.md「管理MCP」)。task を
@@ -472,17 +499,47 @@ export function applyExecutionSettingsChange(db: Db, change: ExecutionSettingsCh
       at,
     });
     // 回答中の question は answerQuestion が先に done にしているので、承認した提案が自分自身を決着させることは無い
-    const settings = readExecutionSettings(db);
-    const open = db
-      .prepare("SELECT id, question_proposal FROM tasks WHERE status = 'todo' AND json_extract(question_proposal, '$.kind') = 'routing'")
-      .all() as Array<{ id: string; question_proposal: string }>;
-    for (const { id, question_proposal } of open) {
-      const changed = routingPinChanges(JSON.parse(question_proposal) as RoutingProposal, settings);
-      if (changed?.length === 0) continue;
-      settleQuestionAsObserved(db, id, { kind: "routing_proposal_stale", question_id: id, proposal_kind: "routing", changed, observed_event_id: eventId }, at);
-    }
+    settleStaleProposals(db, at, eventId);
     return eventId;
   })();
+}
+
+/** registry の agent 一覧を読む口(registry の無い盤面では無い)。registry の提案の (agent, tier) の照合が読む。 */
+export type ListAgentTiers = () => readonly { name: string; tier?: string }[];
+
+/** 陳腐化の決着(ADR 0150 決定1): open な routing / registry の提案の pin を表・フラグの現在値と照合し、崩れた question を
+ *  observed で決着させる。表の書き口は書いた event を `observedEventId` に渡す。`listAgents` を渡せば registry の提案の
+ *  (agent, tier) も照合する —— routing の due 判定の直前(issue #920)で、registry の変更は盤面の event ではないので
+ *  observed_event_id は null。 */
+export function settleStaleProposals(db: Db, at: Date, observedEventId: number | null, listAgents?: ListAgentTiers): void {
+  const settings = readExecutionSettings(db);
+  // registry を読むのは registry の提案が open なときだけ(poll ごとに registry を読まない)。読めなければこの回は照合しない
+  // —— due 判定は scheduler の poll の中なので、registry が読めないことで pickup を止めない
+  let agents: readonly { name: string; tier?: string }[] | null | undefined;
+  const readAgents = (list: ListAgentTiers) => {
+    try {
+      return list();
+    } catch (err) {
+      console.warn(`[execution-setting] registry pins not checked: ${String(err)}`);
+      return null;
+    }
+  };
+  const open = db
+    .prepare("SELECT id, question_proposal FROM tasks WHERE status = 'todo' AND json_extract(question_proposal, '$.kind') IN ('routing', 'registry')")
+    .all() as Array<{ id: string; question_proposal: string }>;
+  for (const { id, question_proposal } of open) {
+    const proposal = JSON.parse(question_proposal) as RoutingProposal | RegistryProposal;
+    let changed: ReturnType<typeof routingPinChanges> | ReturnType<typeof registryPinChanges>;
+    if (proposal.kind === "registry" && listAgents) {
+      agents = agents === undefined ? readAgents(listAgents) : agents;
+      if (agents === null) continue;
+      changed = registryPinChanges(proposal, agents.find((agent) => agent.name === proposal.agent));
+    } else {
+      changed = routingPinChanges(proposal, settings);
+    }
+    if (changed?.length === 0) continue;
+    settleQuestionAsObserved(db, id, { kind: "routing_proposal_stale", question_id: id, proposal_kind: proposal.kind, changed, observed_event_id: observedEventId }, at);
+  }
 }
 
 function loadExecutionDefaults(db: Db): ExecutionDefaults {

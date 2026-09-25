@@ -23,11 +23,11 @@ interface TpQuestion {
   /** 承認 question なら 'approval'、上方伝播があれば note に注記(issue #757)。 */
   kind?: 'approval';
   note?: string;
-  /** routing の提案 question —— approve に修正値(tier / effort)を添えられる(ADR 0150 決定2)。 */
-  amendable?: boolean;
+  /** 修正値を添えられる提案 question(ADR 0150 決定2): 表の行の提案は tier / effort、agent の tier の提案は下げ先 `to`。 */
+  amendable?: 'row' | 'agent_tier';
 }
 /** approve に添える修正値。空欄は送らない。 */
-type TpAmendment = { tier?: string; effort?: string };
+type TpAmendment = { tier?: string; effort?: string; to?: string };
 /** トリアージが受け取る question —— 着地 question だけが `landing` を持つ
  *  (ADR 0092 決定4)。判定は盤面側で、ここは描画だけ。 */
 interface TpTriageQuestion extends TpQuestion {
@@ -202,7 +202,7 @@ function TpQuestionCard({ q, answer, onAnswer, locked = false, onTranslate }: {
   q: TpQuestion;
   /** 盤面が確定した回答 —— 未回答は null(呼び手は id 引きの map)。 */
   answer?: string[] | null;
-  /** amendment は routing の提案を approve したときだけ、入力があれば渡る。 */
+  /** amendment は修正値を添えられる提案を approve したときだけ、入力があれば渡る。 */
   onAnswer: (answers: string[], amendment?: TpAmendment) => void;
   /** 回答済みのカードは選び直せない。 */
   locked?: boolean;
@@ -259,7 +259,13 @@ function TpQuestionCard({ q, answer, onAnswer, locked = false, onTranslate }: {
           : <div style={{ marginBottom: q.note ? 6 : 14 }}><TpTranslationNote result={translation} /></div>
       )}
       {q.note && <div style={{ fontSize: 'var(--text-xs)', color: 'var(--sun-4)', marginBottom: 14 }}>⚠ {q.note}</div>}
-      {q.amendable && !locked && (
+      {q.amendable === 'agent_tier' && !locked && (
+        <div style={{ display: 'flex', gap: 8, marginBottom: 14 }}>
+          <Select label="Amend target tier (optional)" value={amendment.to ?? ''} onChange={(e) => setAmendment({ ...amendment, to: e.target.value })}
+            options={[{ value: '', label: 'as proposed' }, ...['economy', 'standard'].map((tier) => ({ value: tier, label: tier }))]} />
+        </div>
+      )}
+      {q.amendable === 'row' && !locked && (
         <div style={{ display: 'flex', gap: 8, marginBottom: 14 }}>
           <Select label="Amend tier (optional)" value={amendment.tier ?? ''} onChange={(e) => setAmendment({ ...amendment, tier: e.target.value })}
             options={[{ value: '', label: 'as proposed' }, ...['economy', 'standard', 'frontier'].map((tier) => ({ value: tier, label: tier }))]} />

@@ -1,10 +1,10 @@
 import type { Allocation, AllocationUnevaluatedReason } from "./allocation-review.js";
 import type { Cause } from "./cause.js";
 import type { Db } from "./db.js";
-import type { ExecutionSettingRow, ExecutionSettingsChange, ProviderSource, RoutingRowChange, routingPinChanges, TierSource } from "./execution-setting.js";
+import type { ExecutionSettingRow, ExecutionSettingsChange, ProviderSource, registryPinChanges, routingPinChanges, Tier, TierSource } from "./execution-setting.js";
 import type { InvalidationReason, MemoryDropReason, MemoryEntryFields } from "./memory.js";
 import type { Provider } from "./registry.js";
-import type { MemoryProposal, TaskType } from "./tasks.js";
+import type { MemoryProposal, ProposalAmendment, TaskType } from "./tasks.js";
 
 /** What the advisor **actually did** in one worker session (issue #33 判断6),
  *  as against `worker_spawned.advisor`'s "what the board asked for". Carried by
@@ -161,7 +161,7 @@ export type EventPayload =
       // not per item; absent entirely (not null) when the answer carried none
       comment?: string;
       // routing の提案の approve に添えた修正値(ADR 0150 決定2 / issue #918)。comment と同じく無ければ欄ごと無い
-      amendment?: RoutingRowChange;
+      amendment?: ProposalAmendment;
     }
   // a triage objection annotates one log entry (entry_id = event id); the
   // direction comment is mandatory — silence is approval, so the only explicit
@@ -390,7 +390,18 @@ export type EventPayload =
   | { kind: "memory_proposal_stale"; question_id: string; entry_id: number; observed_event_id: number }
   // ADR 0150 決定1 / issue #918: pin した表の行が変わった / 消えた(changed = 崩れた欄、null = 行の削除)ので、盤面が routing の
   // 提案 question を観測で決着させた(決着させた question に帰属)。observed_event_id = その execution_settings_changed の id。
-  | { kind: "routing_proposal_stale"; question_id: string; proposal_kind: "routing"; changed: ReturnType<typeof routingPinChanges>; observed_event_id: number }
+  // registry の提案(issue #920)は、approve 時 / due 判定時に registry の現在値と照合して崩れた pin も決着させる —— registry の変更は
+  // 盤面の event ではないので、そのとき observed_event_id は null。
+  | {
+      kind: "routing_proposal_stale";
+      question_id: string;
+      proposal_kind: "routing" | "registry";
+      changed: ReturnType<typeof routingPinChanges> | ReturnType<typeof registryPinChanges>;
+      observed_event_id: number | null;
+    }
+  // issue #920: agent の tier の提案への approve が registry の main へ commit した(盤面スコープ)。registry_commit = 着地した commit。
+  // ADR 0150 決定1 が新設しないとした「registry 変更の event」ではない —— 盤面自身の書き込みの記録で、row の approve の execution_settings_changed と同じ位置。
+  | { kind: "agent_tier_changed"; agent: string; from: Tier; to: Tier; question_id: string; registry_commit: string }
   // spec #586 D: worker の pull 1回(task 帰属)。返した id と snapshot watermark、search は
   // 候補ごとの落ちた理由(null = 返した)。event id は tool 結果に載り、Precedent の
   // memory マーカーになる。
@@ -454,6 +465,7 @@ const BOARD_SCOPED_KINDS = [
   "memory_index_rebuilt",
   "memory_settings_changed",
   "meta_review_settings_changed",
+  "agent_tier_changed",
 ] as const satisfies readonly EventKind[];
 type BoardScopedKind = (typeof BOARD_SCOPED_KINDS)[number];
 /** task に帰属させて書く payload(`BOARD_SCOPED_KINDS` 以外)。 */
