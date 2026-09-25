@@ -282,7 +282,7 @@ it("RCA が起草した Behavior の read は、帰責 event から辿った異�
   ]);
 });
 
-it("worker_spawned を出所に持つ Behavior の case は、その session の decision 列(マーカー順)・handoff・result", async () => {
+it("worker_spawned を出所に持つ Behavior の case は、その session の decision 列(event id 順)・handoff・result", async () => {
   const { db, reader } = await projectedBoard();
   const id = approvedBehavior(db, "Session", { event_id: FIXTURE_SPAWNED_EVENT_ID });
 

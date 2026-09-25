@@ -981,7 +981,7 @@ function caseSession(db: Db, anchor: EventRow): { events: EventRow[]; handoff: s
   const spawned = anchor.kind === "worker_spawned" ? anchor : events.filter((e) => e.kind === "worker_spawned" && e.id < anchor.id).at(-1);
   if (!spawned) return empty;
   const { inSession } = sessionWindow(events, spawned);
-  if (anchor !== spawned && !inSession(anchor)) return empty;
+  if (anchor.kind !== "worker_spawned" && !inSession(anchor)) return empty;
   const inWindow = events.filter(inSession);
   const payload = inWindow.find((e) => e.kind === "task_completed")?.payload;
   const completed = payload?.kind === "task_completed" ? payload : null;
