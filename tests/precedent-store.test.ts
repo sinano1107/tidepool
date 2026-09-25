@@ -5,16 +5,16 @@ import { appendEvent, getEvent, type TaskScopedPayload } from "../src/events.js"
 import { listPrecedents } from "../src/memory.js";
 import { registerMetaReview } from "../src/meta-review.js";
 import { backfillEpisodes, listEpisodes, projectAndPersist } from "../src/precedent.js";
-import { FIXTURE_TASK, FIXTURE_SPAWNED_EVENT_ID as SPAWNED_EVENT_ID, seedFixtureBoard as seedBoard, tempDir, writeFixtureTranscript as writeTranscript } from "./harness.js";
+import { FIXTURE_SPAWNED_EVENT_ID, FIXTURE_TASK, seedFixtureBoard, tempDir, writeFixtureTranscript } from "./harness.js";
 
 const logDir = () => tempDir("tidepool-precedent-");
 
 it("投影した Episode は (workspace, agent) で時系列に引け、行動列 / マーカー / registry_commit を持つ", async () => {
-  const db = seedBoard();
+  const db = seedFixtureBoard();
   const dir = await logDir();
   projectAndPersist(db, {
-    workerSpawnedEventId: SPAWNED_EVENT_ID,
-    transcriptPath: writeTranscript(dir, `${FIXTURE_TASK}.${SPAWNED_EVENT_ID}.stream.jsonl`),
+    workerSpawnedEventId: FIXTURE_SPAWNED_EVENT_ID,
+    transcriptPath: writeFixtureTranscript(dir, `${FIXTURE_TASK}.${FIXTURE_SPAWNED_EVENT_ID}.stream.jsonl`),
   });
 
   const episodes = listEpisodes(db, { workspace: "sandbox", agent: "tako" });
@@ -51,11 +51,11 @@ it("投影した Episode は (workspace, agent) で時系列に引け、行動�
 });
 
 it("同じ session を同じ extractor_version で二度投影しても Episode は増えない", async () => {
-  const db = seedBoard();
+  const db = seedFixtureBoard();
   const dir = await logDir();
-  const transcriptPath = writeTranscript(dir, `${FIXTURE_TASK}.${SPAWNED_EVENT_ID}.stream.jsonl`);
-  const first = projectAndPersist(db, { workerSpawnedEventId: SPAWNED_EVENT_ID, transcriptPath });
-  const second = projectAndPersist(db, { workerSpawnedEventId: SPAWNED_EVENT_ID, transcriptPath });
+  const transcriptPath = writeFixtureTranscript(dir, `${FIXTURE_TASK}.${FIXTURE_SPAWNED_EVENT_ID}.stream.jsonl`);
+  const first = projectAndPersist(db, { workerSpawnedEventId: FIXTURE_SPAWNED_EVENT_ID, transcriptPath });
+  const second = projectAndPersist(db, { workerSpawnedEventId: FIXTURE_SPAWNED_EVENT_ID, transcriptPath });
 
   expect(first).toBeTypeOf("number");
   expect(second).toBeNull();
@@ -64,9 +64,9 @@ it("同じ session を同じ extractor_version で二度投影しても Episode 
 });
 
 it("backfill は <taskId>.<worker_spawned event id>.stream.jsonl だけを投影し、旧形式は投影せず件数だけ報告する(ADR 0083 追記 2)", async () => {
-  const db = seedBoard();
+  const db = seedFixtureBoard();
   const dir = await logDir();
-  writeTranscript(dir, `${FIXTURE_TASK}.stream.jsonl`);
+  writeFixtureTranscript(dir, `${FIXTURE_TASK}.stream.jsonl`);
   // 走査対象ですらない隣人(同じセッションの stderr)は skip 件数にも入らない
   writeFileSync(join(dir, `${FIXTURE_TASK}.5.stderr.log`), "");
 
@@ -76,27 +76,27 @@ it("backfill は <taskId>.<worker_spawned event id>.stream.jsonl だけを投影
 
 it("backfill は冪等で、worker_exited 時の投影と同じ Episode を出す", async () => {
   const dir = await logDir();
-  writeTranscript(dir, `${FIXTURE_TASK}.${SPAWNED_EVENT_ID}.stream.jsonl`);
+  writeFixtureTranscript(dir, `${FIXTURE_TASK}.${FIXTURE_SPAWNED_EVENT_ID}.stream.jsonl`);
 
-  const backfilled = seedBoard();
+  const backfilled = seedFixtureBoard();
   expect(backfillEpisodes(backfilled, dir)).toEqual({ projected: 1, skipped: 0 });
   expect(backfillEpisodes(backfilled, dir)).toEqual({ projected: 0, skipped: 0 });
   expect(listEpisodes(backfilled, {})).toHaveLength(1);
 
-  const atExit = seedBoard();
+  const atExit = seedFixtureBoard();
   projectAndPersist(atExit, {
-    workerSpawnedEventId: SPAWNED_EVENT_ID,
-    transcriptPath: join(dir, `${FIXTURE_TASK}.${SPAWNED_EVENT_ID}.stream.jsonl`),
+    workerSpawnedEventId: FIXTURE_SPAWNED_EVENT_ID,
+    transcriptPath: join(dir, `${FIXTURE_TASK}.${FIXTURE_SPAWNED_EVENT_ID}.stream.jsonl`),
   });
   expect(listEpisodes(backfilled, {})).toEqual(listEpisodes(atExit, {}));
 });
 
 it("decision マーカーの outcome は読み出し時に entry_id で結ばれる(投影のあとに届く事実なので焼かない)", async () => {
-  const db = seedBoard();
+  const db = seedFixtureBoard();
   const dir = await logDir();
   projectAndPersist(db, {
-    workerSpawnedEventId: SPAWNED_EVENT_ID,
-    transcriptPath: writeTranscript(dir, `${FIXTURE_TASK}.${SPAWNED_EVENT_ID}.stream.jsonl`),
+    workerSpawnedEventId: FIXTURE_SPAWNED_EVENT_ID,
+    transcriptPath: writeFixtureTranscript(dir, `${FIXTURE_TASK}.${FIXTURE_SPAWNED_EVENT_ID}.stream.jsonl`),
   });
   // 投影のあとに人間が読み、そのうち1件に異議を出す
   const at = new Date("2026-08-21T00:00:00.000Z");
@@ -170,7 +170,7 @@ it("decision マーカーの outcome は読み出し時に entry_id で結ばれ
 });
 
 it("読み口は同じ (workspace, agent) の Episode を時系列(session を開いた順)で返す", async () => {
-  const db = seedBoard();
+  const db = seedFixtureBoard();
   const dir = await logDir();
   // 同じタスクの2本目の session。1本目は id 5 で始まり 11 で閉じている
   db.prepare(
@@ -180,26 +180,26 @@ it("読み口は同じ (workspace, agent) の Episode を時系列(session を�
     JSON.stringify({ kind: "worker_spawned", registry_commit: "abc", definition_version: "0.1.1", advisor: null }),
     "2026-08-20T06:30:00.000Z",
   );
-  writeTranscript(dir, `${FIXTURE_TASK}.12.stream.jsonl`);
-  writeTranscript(dir, `${FIXTURE_TASK}.${SPAWNED_EVENT_ID}.stream.jsonl`);
+  writeFixtureTranscript(dir, `${FIXTURE_TASK}.12.stream.jsonl`);
+  writeFixtureTranscript(dir, `${FIXTURE_TASK}.${FIXTURE_SPAWNED_EVENT_ID}.stream.jsonl`);
 
   // backfill はファイル名順に走るので、投影の順序は読み出しの順序を保証しない
   expect(backfillEpisodes(db, dir)).toEqual({ projected: 2, skipped: 0 });
   expect(
     listEpisodes(db, { workspace: "sandbox", agent: "tako" }).map((e) => e.workerSpawnedEventId),
-  ).toEqual([SPAWNED_EVENT_ID, 12]);
+  ).toEqual([FIXTURE_SPAWNED_EVENT_ID, 12]);
 });
 
 it("list_precedents は異議つき decision を cause・outcome・読んだ / 見た記憶つきで返し、既定では前回の meta-review 登録より後に異議が来たものだけを返す(issue #619)", async () => {
-  const db = seedBoard();
+  const db = seedFixtureBoard();
   projectAndPersist(db, {
-    workerSpawnedEventId: SPAWNED_EVENT_ID,
-    transcriptPath: writeTranscript(await logDir(), `${FIXTURE_TASK}.${SPAWNED_EVENT_ID}.stream.jsonl`),
+    workerSpawnedEventId: FIXTURE_SPAWNED_EVENT_ID,
+    transcriptPath: writeFixtureTranscript(await logDir(), `${FIXTURE_TASK}.${FIXTURE_SPAWNED_EVENT_ID}.stream.jsonl`),
   });
   const at = new Date("2026-09-15T00:00:00.000Z");
   const event = (payload: TaskScopedPayload) =>
     appendEvent(db, { taskId: FIXTURE_TASK, workerId: "human", origin: "webui", payload, at });
-  event({ kind: "memory_injected", worker_spawned_event_id: SPAWNED_EVENT_ID, watermark: 0, entries: [{ id: 42, version: 42 }], tokens: 10, index_depth: 1, index_max_depth: 1, omitted: 0, tokenizer: "t", tokenizer_version: "1" });
+  event({ kind: "memory_injected", worker_spawned_event_id: FIXTURE_SPAWNED_EVENT_ID, watermark: 0, entries: [{ id: 42, version: 42 }], tokens: 10, index_depth: 1, index_max_depth: 1, omitted: 0, tokenizer: "t", tokenizer_version: "1" });
   event({ kind: "objection_raised", entry_id: 6, comment: "前の周期の異議", session_id: 1 });
   registerMetaReview(db, "memory", at); // 前回の meta-review
   const objection = event({ kind: "objection_raised", entry_id: 7, comment: "2回目は要らない", session_id: 1 });
@@ -216,7 +216,7 @@ it("list_precedents は異議つき decision を cause・outcome・読んだ / �
         task_id: FIXTURE_TASK,
         workspace: "sandbox",
         agent: "tako",
-        worker_spawned_event_id: SPAWNED_EVENT_ID,
+        worker_spawned_event_id: FIXTURE_SPAWNED_EVENT_ID,
         decision_event_id: 7,
         line: "kept the note to three bullets",
         displayed: false,

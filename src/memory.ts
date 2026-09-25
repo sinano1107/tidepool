@@ -903,13 +903,13 @@ const SOURCE_KIND = { commit: "fact", event: "fact", decision: "inference" } as 
 
 /** case 描画(ADR 0153 決定3): 出所の decision なら本文・その entry への異議の steering(event 順)・
  *  Episode の handoff と result、出所の session なら decision 列・handoff・result。transcript は含まない。 */
-export type MemoryCase =
+type MemoryCase =
   | { decision: string; steering: string[]; handoff: string | null; result: string | null }
   | { decisions: string[]; handoff: string | null; result: string | null };
 
 /** 出所から case を描く。帰責 event は異議された entry へ辿る。事例に辿れない出所(commit、自身の作成
  *  event など)は null。Episode が投影されていなければ handoff / result は null。 */
-export function renderCase(db: Db, source: MemorySource): MemoryCase | null {
+function renderCase(db: Db, source: MemorySource): MemoryCase | null {
   if (source.kind === "commit") return null;
   const payload = getEvent(db, source.ref)?.payload;
   if (payload?.kind === "worker_spawned") {

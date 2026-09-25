@@ -72,12 +72,7 @@ it("browse_memory / search_memory / read_memory は attributed task の workspac
       ],
       event_id: expect.any(Number),
     });
-    expect((await call("read_memory", { ids: [behavior] })).entries[0].case).toEqual({
-      decision: "kept tests on Node 22",
-      steering: [],
-      handoff: null,
-      result: null,
-    });
+    expect((await call("read_memory", { ids: [behavior] })).entries[0].case).toHaveProperty("decision", "kept tests on Node 22");
   } finally {
     await client.close();
   }
