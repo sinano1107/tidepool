@@ -19,7 +19,7 @@
     "init-registry": "tsx scripts/init-registry.ts",
     "token": "tsx scripts/token.ts",
     "start:live": "TIDEPOOL_REGISTRY=$HOME/tidepool-registry tsx src/main.ts",
-    "typecheck": "tsc --noEmit && tsc -p tsconfig.webui.json",
+    "typecheck": "tsc --noEmit && tsc -p webui",
     "lint": "biome check --error-on-warnings",
     "lint:fix": "biome check --write",
     "build:webui": "node scripts/build-webui-bundle.mjs",
