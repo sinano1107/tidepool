@@ -219,11 +219,13 @@ function TpMemoryAmendment({ candidateId, onTranslate, onChange }: {
   const [back, setBack] = React.useState<string | null>(null);
   const [error, setError] = React.useState<string | null>(null);
   // settings の Behavior フォーム(#943)と同じ registry 引き —— このカードは agent 一覧を持たないので自分で引く
+  // 取得の失敗は翻訳の失敗と別に持つ —— 翻訳の setError(null) で消えると、選択肢が欠けたまま理由が見えなくなる
   const [agentNames, setAgentNames] = React.useState<string[]>([]);
+  const [agentsError, setAgentsError] = React.useState<string | null>(null);
   React.useEffect(() => {
     api('GET /api/agents')
       .then(({ agents }) => setAgentNames(agents.map((a) => a.name)))
-      .catch((err) => setError(String(err.message || err)));
+      .catch((err) => setAgentsError(String(err.message || err)));
   }, []);
   React.useEffect(() => {
     api('GET /api/settings/memory/entries', { query: { kind: 'behavior', state: 'candidate' } })
@@ -277,6 +279,7 @@ function TpMemoryAmendment({ candidateId, onTranslate, onChange }: {
       {/* the current addressee stays offered even if its agent has left the registry */}
       <Select label="Addressee" value={draft.addressee} onChange={set('addressee')}
         options={[{ value: '', label: 'every agent' }, ...new Set([...agentNames, ...(draft.addressee ? [draft.addressee] : [])])]} />
+      {agentsError && <div style={{ fontSize: 'var(--text-xs)', color: 'var(--coral-4)' }}>{agentsError}</div>}
       {onTranslate && <Button variant="secondary" size="sm" disabled={!draft.title.trim() || !draft.text.trim()} onClick={() => translate(false)}>Back-translate</Button>}
       {back && <p style={{ margin: 0, fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }} data-testid="amendment-back-translation">back: {back}</p>}
       {error && <div style={{ fontSize: 'var(--text-xs)', color: 'var(--coral-4)' }}>{error}</div>}

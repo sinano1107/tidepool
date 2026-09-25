@@ -257,8 +257,9 @@ function TpMemoryAmendment({ candidateId, onTranslate, onChange }) {
   const [back, setBack] = React.useState(null);
   const [error, setError] = React.useState(null);
   const [agentNames, setAgentNames] = React.useState([]);
+  const [agentsError, setAgentsError] = React.useState(null);
   React.useEffect(() => {
-    api("GET /api/agents").then(({ agents }) => setAgentNames(agents.map((a) => a.name))).catch((err) => setError(String(err.message || err)));
+    api("GET /api/agents").then(({ agents }) => setAgentNames(agents.map((a) => a.name))).catch((err) => setAgentsError(String(err.message || err)));
   }, []);
   React.useEffect(() => {
     api("GET /api/settings/memory/entries", { query: { kind: "behavior", state: "candidate" } }).then(({ entries }) => {
@@ -302,7 +303,7 @@ function TpMemoryAmendment({ candidateId, onTranslate, onChange }) {
       onChange: set("addressee"),
       options: [{ value: "", label: "every agent" }, .../* @__PURE__ */ new Set([...agentNames, ...draft.addressee ? [draft.addressee] : []])]
     }
-  ), onTranslate && /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", disabled: !draft.title.trim() || !draft.text.trim(), onClick: () => translate(false) }, "Back-translate"), back && /* @__PURE__ */ React.createElement("p", { style: { margin: 0, fontSize: "var(--text-xs)", color: "var(--text-muted)" }, "data-testid": "amendment-back-translation" }, "back: ", back), error && /* @__PURE__ */ React.createElement("div", { style: { fontSize: "var(--text-xs)", color: "var(--coral-4)" } }, error));
+  ), agentsError && /* @__PURE__ */ React.createElement("div", { style: { fontSize: "var(--text-xs)", color: "var(--coral-4)" } }, agentsError), onTranslate && /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", disabled: !draft.title.trim() || !draft.text.trim(), onClick: () => translate(false) }, "Back-translate"), back && /* @__PURE__ */ React.createElement("p", { style: { margin: 0, fontSize: "var(--text-xs)", color: "var(--text-muted)" }, "data-testid": "amendment-back-translation" }, "back: ", back), error && /* @__PURE__ */ React.createElement("div", { style: { fontSize: "var(--text-xs)", color: "var(--coral-4)" } }, error));
 }
 function TpQuestionCard({ q, answer, onAnswer, locked = false, onTranslate }) {
   const { Card, AgentChip, Switch, Select, Input } = window.TidepoolDesignSystem_8a0ead;
