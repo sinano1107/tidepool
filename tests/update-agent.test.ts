@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 import { UnknownAgentError } from "../src/agent.js";
-import { UnknownAuthorityProfileError, updateAgent } from "../src/agent-create.js";
+import { AgentTierMismatchError, changeAgentTier, UnknownAuthorityProfileError, updateAgent } from "../src/agent-create.js";
 import { InvalidAgentDefinitionError, loadRegistry } from "../src/registry.js";
 import { RegistryPushFailedError } from "../src/registry-write.js";
 import { makeRegistry, makeRemoteBackedRegistry } from "./registry-fixture.js";
@@ -301,5 +301,49 @@ describe("updateAgent: 存在しないエージェント(issue #70 — 編集は
     ).rejects.toThrow(UnknownAgentError);
     expect(git(registryDir, "rev-parse", "HEAD")).toBe(before);
     expect(loadRegistry(registryDir, "purely-local").agents.ghost).toBeUndefined();
+  });
+});
+
+describe("changeAgentTier: tier の提案の承認が registry へ書く口(issue #920)", () => {
+  const TIERED = `---
+name: crab
+# hand-written comment stays
+description: Crab
+version: 0.3.1
+authority: standard
+tier: standard
+provider: anthropic
+skills:
+  - "*"
+---
+You are Crab.
+`;
+
+  it("agent 定義の tier と version の行だけを書き換えた commit を着地させ、その sha を返す", async () => {
+    const registryDir = await makeMainRegistry({ "agents/crab.md": TIERED });
+    const before = git(registryDir, "rev-parse", "HEAD");
+
+    const sha = await changeAgentTier(
+      { name: "crab", expectTier: "standard", to: "economy", message: "lower agent crab's tier to economy (question q-1)" },
+      { registry: { dir: registryDir, mode: "purely-local" } },
+    );
+
+    expect(sha).toBe(git(registryDir, "rev-parse", "main"));
+    expect(git(registryDir, "log", "-1", "--format=%s", sha)).toBe("lower agent crab's tier to economy (question q-1)");
+    const changed = git(registryDir, "diff", "--unified=0", before, sha)
+      .split("\n")
+      .filter((line) => /^[-+][^-+]/.test(line));
+    expect(changed).toEqual(["-version: 0.3.1", '+version: "0.3.2"', "-tier: standard", "+tier: economy"]);
+    expect(loadRegistry(registryDir, "purely-local").agents.crab).toMatchObject({ tier: "economy", version: "0.3.2" });
+  });
+
+  it("registry の tier が期待値と違えば AgentTierMismatchError で、commit を積まない", async () => {
+    const registryDir = await makeMainRegistry({ "agents/crab.md": TIERED });
+    const before = git(registryDir, "rev-parse", "HEAD");
+
+    await expect(
+      changeAgentTier({ name: "crab", expectTier: "frontier", to: "standard", message: "m" }, { registry: { dir: registryDir, mode: "purely-local" } }),
+    ).rejects.toThrow(AgentTierMismatchError);
+    expect(git(registryDir, "rev-parse", "HEAD")).toBe(before);
   });
 });

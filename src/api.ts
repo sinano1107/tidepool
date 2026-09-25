@@ -1383,6 +1383,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
           quarantineChecks,
           attributionClient,
           behaviorDraftClient,
+          agentAdmin,
         },
         task,
         parsed.data.answers,

@@ -3,6 +3,7 @@ import { platform } from "node:process";
 import { resolveExecutionAgent, UnknownAgentError } from "./agent.js";
 import {
   type AgentAdmin,
+  changeAgentTier,
   createAgent,
   deleteAgent,
   listAgentViews,
@@ -642,6 +643,7 @@ function agentAdmin(board: BoardComposition): AgentAdmin | undefined {
     list: () => listAgentViews(deps),
     update: (input) => updateAgent(input, deps),
     delete: (input, refs) => deleteAgent(input, { ...deps, ...refs }),
+    changeTier: (input) => changeAgentTier(input, deps),
     // registry-global, not per-agent (issue #71) — read directly here, same
     // posture as registryCandidates()/agentRegisteredChecker() above
     authorityProfiles: () => Object.keys(loadBoardRegistry(board).authority),

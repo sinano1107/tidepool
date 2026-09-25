@@ -151,8 +151,8 @@ export interface TaskContent {
   completion_criteria: string;
 }
 
-/** 提案 question の種別つき提案(ADR 0120 決定4 / ADR 0150 決定1)。`registry` は後続(spec #916 B)が足す。 */
-export type QuestionProposal = MemoryProposal | RoutingProposal;
+/** 提案 question の種別つき提案(ADR 0120 決定4 / ADR 0150 決定1)。 */
+export type QuestionProposal = MemoryProposal | RoutingProposal | RegistryProposal;
 
 /** memory の提案。pin = replaces / target の版と candidate の状態。 */
 export type MemoryProposal = {
@@ -175,6 +175,20 @@ export interface RoutingRowProposal {
 
 /** routing の提案(ADR 0150 決定1): 表の1行、または学習器の昇格 / 降格。昇格 / 降格の pin はフラグの現在値。 */
 export type RoutingProposal = RoutingRowProposal | { kind: "routing"; op: "promote" | "demote"; pin: { promoted: boolean } };
+
+/** agent の既定 tier を1段下げる提案(issue #920 / ADR 0150 決定1・5)。承認は registry へ commit する。pin = agent の tier の
+ *  現在値と、根拠(`worker_spawned` の event id)の episode が走った表の行。 */
+export interface RegistryProposal {
+  kind: "registry";
+  op: "agent_tier";
+  agent: string;
+  to: Tier;
+  pin: { tier: Tier; rows: Array<Pick<ExecutionSettingRow, "provider" | "model" | "tier" | "effort">> };
+  evidence: number[];
+}
+
+/** 提案の approve に添える修正値(ADR 0150 決定2): 行の提案は tier / effort、tier の提案は下げ先。 */
+export type ProposalAmendment = RoutingRowChange | { to: Tier };
 
 interface PendingChildSpec extends TaskContent {
   review_by?: string[];
@@ -1232,7 +1246,7 @@ export function answerQuestion(
   comment?: string,
   /** routing の提案の approve に添えた修正値(ADR 0150 決定2)。検査は呼び手(submitAnswer)が済ませ、ここは comment と
    *  同じく event に運ぶだけ。修正つきの回答は推奨どおりに数えない。 */
-  amendment?: RoutingRowChange,
+  amendment?: ProposalAmendment,
   origin: EventOrigin = "webui",
 ): { question: Task; parentUnblocked: boolean; pickupResumed: boolean } {
   assertAnswerable(question, answers);

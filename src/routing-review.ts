@@ -1,9 +1,20 @@
+import type { AgentView } from "./agent-create.js";
 import type { Db } from "./db.js";
 import type { EventPayload } from "./events.js";
-import { type ExecutionSettingsChange, loadExecutionSettingTable, parseRoutingRowChange, readExecutionSettings, windowMatchesModel } from "./execution-setting.js";
+import {
+  BOARD_DEFAULT_TIER,
+  type ExecutionSettingsChange,
+  loadExecutionSettingTable,
+  parseRoutingRowChange,
+  readExecutionSettings,
+  TIERS,
+  type Tier,
+  tierHasRowFor,
+  windowMatchesModel,
+} from "./execution-setting.js";
 import { type Cell, cellJson, loadEpisodes, type RoutingEpisode } from "./learner.js";
 import { paged, previousMetaReviewWatermark } from "./meta-review.js";
-import { DomainError, type RoutingProposal, registerTask } from "./tasks.js";
+import { DomainError, type RegistryProposal, type RoutingProposal, registerTask } from "./tasks.js";
 
 /** 主題 routing の meta-review の読み口(issue #917 / spec #916 C)。どれも既定の `since_watermark` は読み手と同主題の
  *  前回の登録の watermark(event id)で、ページ長は memory の読み口と同じ定数。 */
@@ -103,47 +114,103 @@ export function listRoutingCells(db: Db, readerTaskId: string, input: ReadWindow
   return { cells, rows: changed, truncated };
 }
 
-/** 過去の routing の提案(spec #916 C): 提案、回答(question_answered の答え・修正値・コメント)、observed の理由
- *  (routing_proposal_stale)。提案の表は持たず question と event から組む。窓で切らない —— 退けられた提案を繰り返さない
- *  ための読み物なので、全期間を返す。 */
+/** 過去の routing / registry の提案(spec #916 C): 提案、回答(question_answered の答え・修正値・コメント)、observed の理由
+ *  (routing_proposal_stale)、registry へ適用した tier の提案なら着地した commit(agent_tier_changed)。提案の表は持たず question と
+ *  event から組む。窓で切らない —— 退けられた提案を繰り返さないための読み物なので、全期間を返す。 */
 export function listRoutingProposals(db: Db) {
   const rows = db
     .prepare(
       `SELECT t.id, t.question_proposal,
          (SELECT payload FROM events WHERE task_id = t.id AND kind = 'question_answered') AS answered,
-         (SELECT payload FROM events WHERE task_id = t.id AND kind = 'routing_proposal_stale') AS stale
-       FROM tasks t WHERE json_extract(t.question_proposal, '$.kind') = 'routing' ORDER BY t.rowid`,
+         (SELECT payload FROM events WHERE task_id = t.id AND kind = 'routing_proposal_stale') AS stale,
+         (SELECT payload FROM events WHERE kind = 'agent_tier_changed' AND json_extract(payload, '$.question_id') = t.id) AS applied
+       FROM tasks t WHERE json_extract(t.question_proposal, '$.kind') IN ('routing', 'registry') ORDER BY t.rowid`,
     )
-    .all() as Array<{ id: string; question_proposal: string; answered: string | null; stale: string | null }>;
+    .all() as Array<{ id: string; question_proposal: string; answered: string | null; stale: string | null; applied: string | null }>;
   return rows.map((row) => {
     const answered = row.answered === null ? null : (JSON.parse(row.answered) as Extract<EventPayload, { kind: "question_answered" }>);
     const stale = row.stale === null ? null : (JSON.parse(row.stale) as Extract<EventPayload, { kind: "routing_proposal_stale" }>);
+    const applied = row.applied === null ? null : (JSON.parse(row.applied) as Extract<EventPayload, { kind: "agent_tier_changed" }>);
     return {
       question_id: row.id,
-      proposal: JSON.parse(row.question_proposal) as RoutingProposal,
+      proposal: JSON.parse(row.question_proposal) as RoutingProposal | RegistryProposal,
       answer: answered?.answers[0]?.answer ?? null,
       amendment: answered?.amendment ?? null,
       comment: answered?.comment ?? null,
       observed: stale && { changed: stale.changed, observed_event_id: stale.observed_event_id },
+      ...(applied && { applied: { registry_commit: applied.registry_commit, from: applied.from, to: applied.to } }),
     };
   });
 }
 
-/** 提案 verb(issue #918 / #919 / ADR 0150 決定1・2・4): 表の既存の1行の tier / effort の置換(op row)、または学習器の
- *  昇格 / 降格を、meta-review の付帯子の question として立てる。pin は row ならその行の全欄、昇格 / 降格ならフラグの現在値。
- *  同じ行への提案は重ねてよい —— 片方の承認が表を変えれば、もう片方は陳腐化の hook で決着する。 */
+/** agent の tier の提案の門と pin(issue #920 / spec #916 B・C): 組み込みでない agent を、今の tier(省略は盤面既定)のちょうど
+ *  1段下へ。下げ先に agent の entry の行が無ければ下げた agent は skipped になるので断る。根拠はその agent の worker_spawned で、
+ *  pin の行はそれらが走った表の行の現在値。 */
+function agentTierProposal(db: Db, agents: readonly AgentView[], input: { agent?: string; to?: Tier; evidence?: number[] }): RegistryProposal {
+  const { agent: name, to, evidence } = input;
+  if (!name || !to || !evidence?.length) throw new DomainError("op agent_tier names the agent, the target tier (to) and at least one evidence worker_spawned event id");
+  const agent = agents.find((a) => a.name === name);
+  if (!agent) throw new DomainError(`unknown agent: ${name}`);
+  if (agent.builtin) throw new DomainError(`agent ${name} is built-in; its definition is the board's code, not a registry file`);
+  const from = (agent.tier ?? BOARD_DEFAULT_TIER) as Tier;
+  const below = TIERS[TIERS.indexOf(from) - 1];
+  if (to !== below) throw new DomainError(`an agent's tier is lowered by exactly one step: ${name} is at ${from}, so the only target is ${below ?? "none (already the lowest tier)"}`);
+  const table = loadExecutionSettingTable(db);
+  if (!tierHasRowFor(table, agent.provider.split(", "), to)) {
+    throw new DomainError(`the execution-setting table has no execution-setting row at ${to} for ${name}'s providers (${agent.provider}), so the agent would be skipped`);
+  }
+  const rows = new Map<string, RegistryProposal["pin"]["rows"][number]>();
+  for (const id of evidence) {
+    const event = db.prepare("SELECT worker_id, payload FROM events WHERE id = ? AND kind = 'worker_spawned'").get(id) as { worker_id: string; payload: string } | undefined;
+    if (event?.worker_id !== name) throw new DomainError(`evidence ${id} is not a worker_spawned event of ${name}`);
+    const spawned = JSON.parse(event.payload) as Extract<EventPayload, { kind: "worker_spawned" }>;
+    const row = table.find((r) => r.provider === spawned.provider && r.model === spawned.model);
+    if (!row) throw new DomainError(`evidence ${id} ran on ${spawned.provider} / ${spawned.model}, which is no longer in the execution-setting table`);
+    rows.set(`${row.provider}/${row.model}`, { provider: row.provider, model: row.model, tier: row.tier, effort: row.effort });
+  }
+  // agent が tier を書いていれば from はその値(書いていなければ economy で、下げ先が無く上で断っている)
+  return { kind: "registry", op: "agent_tier", agent: name, to, pin: { tier: from, rows: [...rows.values()] }, evidence };
+}
+
+/** 提案 verb(issue #918 / #919 / #920 / ADR 0150 決定1・2・4・5): 表の既存の1行の tier / effort の置換(op row)、学習器の
+ *  昇格 / 降格、または agent の既定 tier の1段引き下げ(op agent_tier)を、meta-review の付帯子の question として立てる。pin は
+ *  row ならその行の全欄、昇格 / 降格ならフラグの現在値、agent_tier なら (agent, tier) と根拠の行。
+ *  同じ行への提案は重ねてよい —— 片方の承認が表を変えれば、もう片方は陳腐化の hook で決着する。
+ *  `agents` は registry の agent 一覧(registry の無い盤面では無く、agent_tier は断る)。 */
 export function proposeRoutingChange(
   db: Db,
   metaReviewId: string,
-  input: { op: RoutingProposal["op"]; row?: { provider: string; model: string }; change?: unknown; rationale: string },
+  input: {
+    op: (RoutingProposal | RegistryProposal)["op"];
+    row?: { provider: string; model: string };
+    change?: unknown;
+    agent?: string;
+    to?: Tier;
+    evidence?: number[];
+    rationale: string;
+  },
   workerId: string,
   now: Date,
+  agents?: () => readonly AgentView[],
 ): { question_id: string } {
-  let proposal: RoutingProposal;
+  let proposal: RoutingProposal | RegistryProposal;
   let title: string;
   let diff: string[];
   let purpose: string;
-  if (input.op === "row") {
+  if (input.op === "agent_tier") {
+    if (input.row !== undefined || input.change !== undefined) throw new DomainError("op agent_tier takes no row and no change");
+    if (!agents) throw new DomainError("this board has no registry, so there is no agent definition to change");
+    proposal = agentTierProposal(db, agents(), input);
+    const { agent, to, pin } = proposal;
+    title = `Lower agent ${agent}'s tier: ${pin.tier} -> ${to}`;
+    diff = [
+      `Agent ${agent} (registry definition), default tier: ${pin.tier} -> ${to}`,
+      `Evidence: ${proposal.evidence.length} worker session(s) on ${pin.rows.map((r) => `${r.provider} / ${r.model} (${r.tier}, ${r.effort})`).join(", ")}`,
+    ];
+    purpose =
+      "The routing meta-review proposes lowering an agent's default tier by one step. Approve commits the new tier to the registry, " +
+      "with your amendment (any lower tier) if you give one; reject leaves the agent as it is.";
+  } else if (input.op === "row") {
     if (!input.row) throw new DomainError("op row names the row to change (provider and model)");
     const change = parseRoutingRowChange(input.change);
     const { provider, model } = input.row;

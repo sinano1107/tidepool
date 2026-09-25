@@ -782,8 +782,8 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
     "answer_question",
     {
       description:
-        "Answer every item of a question task as the human. amendment is accepted only with approve on a routing proposal: " +
-        "tier and/or effort to apply instead of the proposed values.",
+        "Answer every item of a question task as the human. amendment is accepted only with approve: on a routing row proposal, " +
+        "tier and/or effort to apply instead of the proposed values; on an agent tier proposal, to — any tier below the agent's current one.",
       inputSchema: {
         task_id: z.string(),
         answers: z.array(z.string()),
@@ -808,6 +808,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
               quarantineChecks: deps.quarantineChecks,
               attributionClient: deps.attributionClient,
               behaviorDraftClient: deps.behaviorDraftClient,
+              agentAdmin: deps.agentAdmin,
             },
             task,
             answers,

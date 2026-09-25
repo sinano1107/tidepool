@@ -1,4 +1,4 @@
-import { unlinkSync, writeFileSync } from "node:fs";
+import { readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { stringify as stringifyYaml } from "yaml";
 import { UnknownAgentError } from "./agent.js";
@@ -212,6 +212,49 @@ function sameSkills(existing: string[], input: string[]): boolean {
   return existing.length === input.length && existing.every((s, i) => s === input[i]);
 }
 
+/** tier の提案の承認が書く前に見た registry の tier が、提案の pin と違う(issue #920)。agent が消えた / 組み込みに戻った
+ *  ときも同じ —— どれも「承認した前提がもう無い」で、回答の側は question を観測で決着させる。 */
+export class AgentTierMismatchError extends Error {
+  constructor(agentName: string, expected: string, actual: string | undefined) {
+    super(`agent "${agentName}" no longer has tier ${expected} in the registry (it is ${actual ?? "unset or gone"})`);
+    this.name = "AgentTierMismatchError";
+  }
+}
+
+export interface ChangeAgentTierInput {
+  name: string;
+  /** 提案が pin した tier。書き込み前の fetch の後の registry がこの値でなければ書かない。 */
+  expectTier: string;
+  to: string;
+  message: string;
+}
+
+/** tier の提案への approve の書き込み(issue #920 / ADR 0150 決定5): 入口で fetch し、tier が pin のままなら
+ *  frontmatter の `tier:` と `version:` の行だけを書き換えて着地させる。フォームの編集と違いファイルを丸ごと書き直さない
+ *  —— 手書きの行やコメントは提案の対象ではない。返り値は着地した commit。 */
+export async function changeAgentTier(input: ChangeAgentTierInput, deps: AgentAdminDeps): Promise<string> {
+  await refreshRegistryForWrite(deps.registry, deps.githubAuth);
+  const existing = ownEntry(loadRegistry(deps.registry.dir, deps.registry.mode).agents, input.name);
+  if (!existing || existing.builtin || existing.tier !== input.expectTier) {
+    throw new AgentTierMismatchError(input.name, input.expectTier, existing?.builtin ? "built-in" : existing?.tier);
+  }
+  return commitToRegistry(
+    deps.registry,
+    deps.githubAuth,
+    (worktreeDir) => {
+      const file = join(worktreeDir, "agents", `${input.name}.md`);
+      const version = JSON.stringify(bumpVersion(existing.version));
+      writeFileSync(
+        file,
+        readFileSync(file, "utf8").replace(/^---\n[\s\S]*?\n---\n/, (frontmatter) =>
+          frontmatter.replace(/^tier:.*$/m, `tier: ${input.to}`).replace(/^version:.*$/m, `version: ${version}`),
+        ),
+      );
+    },
+    input.message,
+  );
+}
+
 /** One agent as the settings surface's edit form needs it (issue #70):
  *  the full definition, systemPrompt included — the form resubmits every
  *  field, so the view must carry every field.
@@ -336,6 +379,8 @@ export interface AgentAdmin {
    *  `list` itself keeps phase 1's shape (issue #70) since nothing about
    *  exposing it over HTTP requires changing what it returns. */
   authorityProfiles: () => string[];
+  /** tier の提案への approve の書き込み(issue #920)。着地した commit を返す。 */
+  changeTier: (input: ChangeAgentTierInput) => Promise<string>;
 }
 
 function assertKnownAuthority(registry: Registry, profileName: string): void {

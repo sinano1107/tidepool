@@ -8,15 +8,18 @@ import {
   type ExecutionSetting,
   type ExecutionSettingTable,
   PRIORITIES,
+  parseAgentTierAmendment,
   parseRoutingRowChange,
+  registryPinChanges,
   routingPinChanges,
   SEED_EXECUTION_SETTINGS,
   type SelectorInput,
   selectExecutionSetting,
   TIERS,
+  tierHasRowFor,
 } from "../src/execution-setting.js";
 import { PROVIDER_VALUES } from "../src/registry.js";
-import { DomainError } from "../src/tasks.js";
+import { DomainError, type RegistryProposal } from "../src/tasks.js";
 
 const table: ExecutionSettingTable = SEED_EXECUTION_SETTINGS;
 
@@ -434,5 +437,47 @@ it("行の変更・修正値の形は tier / effort の少なくとも1つだけ
   expect(parseRoutingRowChange({ tier: "economy", effort: "low" })).toEqual({ tier: "economy", effort: "low" });
   for (const bad of [{}, { tier: "ultra" }, { effort: "" }, { tier: "economy", price_in: 1 }, "frontier", null]) {
     expect(() => parseRoutingRowChange(bad)).toThrow(DomainError);
+  }
+});
+
+/** agent の既定 tier の提案(issue #920 / ADR 0150 決定1・5): pin は (agent, tier) と根拠の episode が走った行。 */
+const tierProposal: RegistryProposal = {
+  kind: "registry",
+  op: "agent_tier",
+  agent: "deckhand",
+  to: "standard",
+  pin: { tier: "frontier", rows: [{ provider: "anthropic", model: "fable", tier: "frontier", effort: "high" }] },
+  evidence: [7],
+};
+
+it("下げ先の検査は、対象ティアに agent の entry のいずれかの行があるか", () => {
+  expect(tierHasRowFor(SEED_EXECUTION_SETTINGS, ["moonshot"], "economy")).toBe(true);
+  // moonshot に standard の行は無い —— entry が1つでも行があれば通る
+  expect(tierHasRowFor(SEED_EXECUTION_SETTINGS, ["moonshot"], "standard")).toBe(false);
+  expect(tierHasRowFor(SEED_EXECUTION_SETTINGS, ["moonshot", "openai"], "standard")).toBe(true);
+  expect(tierHasRowFor(SEED_EXECUTION_SETTINGS, [], "economy")).toBe(false);
+});
+
+it("registry の提案の pin: 根拠の行は (provider, model) の tier / effort で照合し、agent は tier の値で照合する", () => {
+  const settings = (t: ExecutionSettingTable) => ({ table: t, learnerPromoted: false });
+  expect(routingPinChanges(tierProposal, settings(SEED_EXECUTION_SETTINGS))).toEqual([]);
+  // 根拠の行の effort が変わる・行が消える → rows が崩れる。価格や別の行の編集では崩れない
+  const edit = (model: string, change: object) => SEED_EXECUTION_SETTINGS.map((row) => (row.model === model ? { ...row, ...change } : row));
+  expect(routingPinChanges(tierProposal, settings(edit("fable", { effort: "max" })))).toEqual(["rows"]);
+  expect(routingPinChanges(tierProposal, settings(SEED_EXECUTION_SETTINGS.filter((row) => row.model !== "fable")))).toEqual(["rows"]);
+  expect(routingPinChanges(tierProposal, settings(edit("fable", { price_out: 60 })))).toEqual([]);
+  expect(routingPinChanges(tierProposal, settings(edit("opus", { effort: "max" })))).toEqual([]);
+
+  expect(registryPinChanges(tierProposal, { tier: "frontier" })).toEqual([]);
+  expect(registryPinChanges(tierProposal, { tier: "standard" })).toEqual(["agent_tier"]);
+  expect(registryPinChanges(tierProposal, {})).toEqual(["agent_tier"]);
+  expect(registryPinChanges(tierProposal, undefined)).toEqual(["agent_tier"]);
+});
+
+it("tier の提案の修正値は to だけで、pin の tier より下の任意のティア —— 同位・上位・それ以外の欄は DomainError", () => {
+  expect(parseAgentTierAmendment(tierProposal, { to: "economy" })).toBe("economy");
+  expect(parseAgentTierAmendment(tierProposal, { to: "standard" })).toBe("standard");
+  for (const bad of [{ to: "frontier" }, { to: "ultra" }, { to: "economy", effort: "low" }, {}, "economy"]) {
+    expect(() => parseAgentTierAmendment(tierProposal, bad)).toThrow(DomainError);
   }
 });
