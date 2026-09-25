@@ -261,7 +261,10 @@ export function openDb(path: string): Db {
       provider_rank    TEXT,
       priority         TEXT CHECK (priority IN ('quality', 'cost')),
       -- 学習器の昇格(ADR 0150 決定4)
-      learner_promoted INTEGER NOT NULL DEFAULT 0 CHECK (learner_promoted IN (0, 1))
+      learner_promoted INTEGER NOT NULL DEFAULT 0 CHECK (learner_promoted IN (0, 1)),
+      -- 振り返り Board call(配分評価・帰責の判定・起草)が共有する1つのティア(ADR 0111 追記4、issue #914)。
+      -- 列が NULL = 未設定 = frontier(今日と同じ挙動)。Provider は anthropic 固定のまま(#456 まで)。
+      retrospective_tier TEXT CHECK (retrospective_tier IN ('economy', 'standard', 'frontier'))
     );
 
     CREATE TABLE IF NOT EXISTS provider_pace_offsets (

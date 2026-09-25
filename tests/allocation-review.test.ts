@@ -266,3 +266,35 @@ it("表に Board call の行が無ければ client を呼ばず、注釈は judg
   expect((await annotations(t, task.id)).map((e: any) => e.payload)).toMatchObject([{ judge: null, unevaluated: "board_call_failed" }]);
   expect(allocationClient.calls).toEqual([]);
 });
+
+it("盤面設定 retrospective_tier を standard にすると、次の配分評価は anthropic × standard の行で撃たれ、judge もその行を指す(issue #914)", async () => {
+  const allocationClient = new FakeAllocationClient();
+  t = await bootTidepool({ allocationClient });
+  const { task, review, spawnedId } = await reviewedWork(t);
+  expect((await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "retrospective_tier", value: "standard" })).status).toBe(200);
+
+  await completeReview(t, review.id);
+
+  expect((await annotations(t, task.id)).map((e: any) => e.payload)).toMatchObject([
+    {
+      worker_spawned_event_id: spawnedId,
+      judge: { provider: "anthropic", model: "opus", effort: "high" },
+    },
+  ]);
+  expect(allocationClient.calls).toEqual([
+    expect.objectContaining({ setting: expect.objectContaining({ model: "opus", effort: "high" }) }),
+  ]);
+});
+
+it("選んだティアの anthropic 行が無ければ、frontier ではなく退避先無しの board_call_failed に畳む(issue #914)", async () => {
+  const allocationClient = new FakeAllocationClient();
+  t = await bootTidepool({ allocationClient });
+  const { task, review } = await reviewedWork(t);
+  expect((await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "retrospective_tier", value: "standard" })).status).toBe(200);
+  expect((await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "delete_row", provider: "anthropic", model: "opus" })).status).toBe(200);
+
+  await completeReview(t, review.id);
+
+  expect((await annotations(t, task.id)).map((e: any) => e.payload)).toMatchObject([{ judge: null, unevaluated: "board_call_failed" }]);
+  expect(allocationClient.calls).toEqual([]);
+});

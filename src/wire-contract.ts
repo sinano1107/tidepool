@@ -260,6 +260,8 @@ export interface WireContract {
     providerRank: readonly string[];
     priority: string;
     learnerPromoted: boolean;
+    /** 振り返り Board call(配分評価・帰責の判定・起草)が共有するティア(ADR 0111 追記4、issue #914)。 */
+    retrospectiveTier: string;
     providers: readonly Option[];
     tiers: readonly string[];
     priorities: readonly string[];

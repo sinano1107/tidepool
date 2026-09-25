@@ -496,7 +496,8 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
     {
       description:
         "Read the board's execution settings: the model table (rows of provider, model, tier, effort, price_in / price_out in USD per MTok), " +
-        "whether the frontier row may serve as advisor, the Provider rank, the default priority (quality / cost), and whether the learner is promoted.",
+        "whether the frontier row may serve as advisor, the Provider rank, the default priority (quality / cost), whether the learner is promoted, " +
+        "and the retrospective tier (economy / standard / frontier) shared by the board's own retrospective Board calls (allocation review, attribution, Behavior candidate drafting).",
     },
     async () => toolResult(readExecutionSettings(deps.db)),
   );
@@ -506,9 +507,10 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
       description:
         "Apply one change to the board's execution settings as the human: upsert a table row (`row`, keyed by provider + model), " +
         "delete one (`delete_row` — deleting every row of a provider × tier just excludes that provider for tasks of that tier), " +
-        "or set `frontier_advisor`, `provider_rank` (every provider exactly once, first = preferred) or the default `priority`, " +
+        "or set `frontier_advisor`, `provider_rank` (every provider exactly once, first = preferred), the default `priority`, or `retrospective_tier` " +
+        "(economy / standard / frontier — the tier the board's own retrospective Board calls resolve on the anthropic row; unset = frontier), " +
         "or demote the learner (`learner_promoted: false` — promotion only comes from approving a routing meta-review's proposal). " +
-        "Takes effect at the next pickup.",
+        "Takes effect at the next pickup or Board call.",
       inputSchema: { change: executionSettingsChangeSchema },
     },
     async ({ change }) => {
