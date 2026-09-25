@@ -4,10 +4,10 @@ import { z } from "zod";
 import type { Cause } from "./cause.js";
 import { type Db, MEMORY_FTS_DDL, MEMORY_FTS_TOKENIZER, MEMORY_PREPROCESS_VERSION } from "./db.js";
 import { getDisplayLanguage } from "./display-language.js";
-import { appendEvent, type EventOrigin, type EventPayload, getEvent, HUMAN_FACING_KINDS, listEvents } from "./events.js";
+import { appendEvent, type EventOrigin, type EventPayload, type EventRow, getEvent, HUMAN_FACING_KINDS, listEvents } from "./events.js";
 import { metaReviewSubjectOf, paged, previousMetaReviewWatermark } from "./meta-review.js";
-import { caseEpisode, entriesReadBefore, entriesSeenBefore, listEpisodes } from "./precedent.js";
-import { BOARD_WORKER_ID, DomainError, HUMAN_WORKER_ID, type MemoryProposal, registerTask, settleQuestionAsObserved, type Task } from "./tasks.js";
+import { entriesReadBefore, entriesSeenBefore, listEpisodes, sessionWindow } from "./precedent.js";
+import { BOARD_WORKER_ID, DomainError, getTask, HUMAN_WORKER_ID, type MemoryProposal, registerTask, settleQuestionAsObserved, type Task } from "./tasks.js";
 import { type DecisionLogEntry, objectedEntryText } from "./triage.js";
 
 /** 無効化の理由コード(spec #586 A)。自由記述は持たない。置換と path の付け替えは後継 id
@@ -945,19 +945,20 @@ type MemoryCase =
   | { decisions: string[]; handoff: string | null; result: string | null };
 
 /** 出所から case を描く。帰責 event は異議された entry へ辿る。事例に辿れない出所(commit、自身の作成
- *  event など)は null。Episode が投影されていなければ handoff / result は null。 */
+ *  event など)は null。handoff / result / decision 列は Episode の投影表でなく、anchor を含む session の窓
+ *  (`sessionWindow`)の events から読む —— Harness にも投影の有無にも依らない(issue #960)。 */
 function renderCase(db: Db, source: MemorySource): MemoryCase | null {
   if (source.kind === "commit") return null;
-  const payload = getEvent(db, source.ref)?.payload;
-  if (payload?.kind === "worker_spawned") {
-    const episode = caseEpisode(db, { workerSpawnedEventId: source.ref });
+  const event = getEvent(db, source.ref);
+  if (event?.payload.kind === "worker_spawned") {
+    const session = caseSession(db, event);
     return {
-      decisions: (episode?.decisionEventIds ?? []).map((id) => objectedEntryText(getEvent(db, id) as DecisionLogEntry)),
-      handoff: episode?.handoff ?? null,
-      result: episode?.result ?? null,
+      decisions: session.events.filter((e) => e.kind === "decision_logged").map((e) => objectedEntryText(e as DecisionLogEntry)),
+      handoff: session.handoff,
+      result: session.result,
     };
   }
-  const entryId = payload?.kind === "objection_attributed" ? payload.entry_id : source.ref;
+  const entryId = event?.payload.kind === "objection_attributed" ? event.payload.entry_id : source.ref;
   const entry = getEvent(db, entryId);
   if (!entry || !(HUMAN_FACING_KINDS as readonly string[]).includes(entry.kind)) return null;
   const steering = db
@@ -966,15 +967,28 @@ function renderCase(db: Db, source: MemorySource): MemoryCase | null {
         WHERE kind = 'objection_raised' AND json_extract(payload, '$.entry_id') = ? ORDER BY id`,
     )
     .all(entryId) as Array<{ comment: string }>;
-  const episode = caseEpisode(
-    db,
-    entry.kind === "task_completed" ? { completion: { taskId: entry.task_id!, eventId: entryId } } : { decisionEventId: entryId },
-  );
+  const { handoff, result } = caseSession(db, entry);
+  return { decision: objectedEntryText(entry as DecisionLogEntry), steering: steering.map((s) => s.comment), handoff, result };
+}
+
+/** anchor を含む worker session の events(id 順)と、その窓の完了の handoff / result。anchor が
+ *  `worker_spawned` ならその session、そうでなければ anchor より前で最後に開いた同じ task の session ——
+ *  窓の外(session 無しに書かれた entry)なら空。 */
+function caseSession(db: Db, anchor: EventRow): { events: EventRow[]; handoff: string | null; result: string | null } {
+  const empty = { events: [], handoff: null, result: null };
+  if (anchor.task_id === null) return empty;
+  const events = listEvents(db, anchor.task_id);
+  const spawned = anchor.kind === "worker_spawned" ? anchor : events.filter((e) => e.kind === "worker_spawned" && e.id < anchor.id).at(-1);
+  if (!spawned) return empty;
+  const { inSession } = sessionWindow(events, spawned);
+  if (anchor.kind !== "worker_spawned" && !inSession(anchor)) return empty;
+  const inWindow = events.filter(inSession);
+  const payload = inWindow.find((e) => e.kind === "task_completed")?.payload;
+  const completed = payload?.kind === "task_completed" ? payload : null;
   return {
-    decision: objectedEntryText(entry as DecisionLogEntry),
-    steering: steering.map((s) => s.comment),
-    handoff: episode?.handoff ?? null,
-    result: episode?.result ?? null,
+    events: inWindow,
+    handoff: completed?.handoff_present ? (getTask(db, anchor.task_id)?.handoff_doc ?? null) : null,
+    result: completed?.result ?? null,
   };
 }
 
