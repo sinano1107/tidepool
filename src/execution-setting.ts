@@ -60,7 +60,7 @@ export const BOARD_DEFAULT_PRIORITY: Priority = "quality";
 /** 振り返り Board call(配分評価・帰責の判定・Behavior candidate の起草、ADR 0111 追記4)が
  *  共有するティアの、盤面設定 `execution_defaults.retrospective_tier` が未設定のときの既定。
  *  今日までコードに固定されていた `"frontier"` をそのまま倒れ先にする。 */
-export const BOARD_DEFAULT_RETROSPECTIVE_TIER: Tier = "frontier";
+const BOARD_DEFAULT_RETROSPECTIVE_TIER: Tier = "frontier";
 
 /** 表の1行 = モデル分類の行(ADR 0114 決定2): この model はこの provider のこの
  *  ティアの品質を満たす、という分類と、そこで使う effort・価格(USD per MTok)。
@@ -229,12 +229,13 @@ function rowsFor(table: ExecutionSettingTable, provider: Provider, tier: Tier): 
   return table.filter((row) => row.provider === provider && row.tier === tier).sort(byPrice);
 }
 
-/** Board call(ADR 0111 決定4)のように Provider / ティアが盤面設定の固定値で
- *  selector を通らない呼び手の口: 最安の行。行が無ければ「撃てなかった」として
- *  呼び手が畳む。 */
-export function rowFor(table: ExecutionSettingTable, provider: Provider, tier: Tier): ExecutionSettingRow {
-  const row = rowsFor(table, provider, tier)[0];
-  if (!row) throw new Error(`the board's execution-setting table has no row for ${provider} / ${tier}`);
+/** 振り返り Board call(配分評価・帰責の判定・Behavior candidate の起草)の行。selector を通らず
+ *  (ADR 0111 決定4)、Provider は anthropic 固定、ティアは3用途が共有する盤面設定(追記4)の最安の行。
+ *  呼び出しごとに読むので書き換えは次の呼び出しから効く。行が無ければ投げ、呼び手が「撃てなかった」に畳む。 */
+export function retrospectiveBoardCallRow(db: Db): ExecutionSettingRow {
+  const tier = loadExecutionDefaults(db).retrospectiveTier;
+  const row = rowsFor(loadExecutionSettingTable(db), "anthropic", tier)[0];
+  if (!row) throw new Error(`the board's execution-setting table has no row for anthropic / ${tier}`);
   return row;
 }
 
@@ -484,7 +485,7 @@ export function applyExecutionSettingsChange(db: Db, change: ExecutionSettingsCh
   })();
 }
 
-export function loadExecutionDefaults(db: Db): ExecutionDefaults {
+function loadExecutionDefaults(db: Db): ExecutionDefaults {
   const row = db
     .prepare("SELECT frontier_advisor, provider_rank, priority, learner_promoted, retrospective_tier FROM execution_defaults WHERE id = 1")
     .get() as

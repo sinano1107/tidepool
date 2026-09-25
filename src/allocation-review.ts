@@ -4,9 +4,7 @@ import type { Db } from "./db.js";
 import { appendEvent, type EventPayload, listEvents } from "./events.js";
 import {
   type ExecutionSettingRow,
-  loadExecutionDefaults,
-  loadExecutionSettingTable,
-  rowFor,
+  retrospectiveBoardCallRow,
   type Tier,
 } from "./execution-setting.js";
 import { episodeMarkerKinds, type MarkerKind } from "./precedent.js";
@@ -112,7 +110,7 @@ export async function reviewAllocation(
   // judge になる(ADR 0150 決定8)ので、評価できない注釈にも載るよう先に解決する
   let setting: ExecutionSettingRow | null = null;
   try {
-    setting = rowFor(loadExecutionSettingTable(db), "anthropic", loadExecutionDefaults(db).retrospectiveTier);
+    setting = retrospectiveBoardCallRow(db);
   } catch {
     // 表の行が欠けた盤面は judge 無し、撃てなかった(board_call_failed)に畳む
   }

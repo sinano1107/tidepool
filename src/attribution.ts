@@ -1,7 +1,7 @@
 import type { Cause } from "./cause.js";
 import type { Db } from "./db.js";
 import { appendEvent, type EventPayload, getEvent, listEvents, taskDecisionLog } from "./events.js";
-import { type ExecutionSettingRow, loadExecutionDefaults, loadExecutionSettingTable, rowFor } from "./execution-setting.js";
+import { type ExecutionSettingRow, retrospectiveBoardCallRow } from "./execution-setting.js";
 import { buildMemoryInjection, createBehaviorCandidate, memoryScope } from "./memory.js";
 import { BOARD_WORKER_ID, DomainError, getRegistrant, getTask, HUMAN_WORKER_ID, listChildren, type Task } from "./tasks.js";
 import { isAnthropicBoardCallBlocked } from "./throttle.js";
@@ -74,7 +74,7 @@ function boardCallSetting<C>(
   if (!client) return { unavailable: "Board call not made: no client is configured" };
   let setting: Pick<ExecutionSettingRow, "model" | "effort">;
   try {
-    setting = rowFor(loadExecutionSettingTable(db), "anthropic", loadExecutionDefaults(db).retrospectiveTier);
+    setting = retrospectiveBoardCallRow(db);
   } catch (err) {
     return { unavailable: `Board call not made: ${message(err)}` };
   }
