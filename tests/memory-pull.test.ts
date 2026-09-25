@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { draftBehaviorCandidate } from "../src/attribution.js";
 import { openDb } from "../src/db.js";
 import { appendEvent, getEvent } from "../src/events.js";
 import {
@@ -16,6 +17,7 @@ import {
 } from "../src/memory.js";
 import { projectAndPersist } from "../src/precedent.js";
 import { DomainError, logDecision, registerTask } from "../src/tasks.js";
+import { FakeBehaviorDraftClient } from "./fakes.js";
 import { FIXTURE_SPAWNED_EVENT_ID, FIXTURE_TASK, seedFixtureBoard, tempDir, writeFixtureTranscript } from "./harness.js";
 
 const at = new Date("2026-09-14T00:00:00.000Z");
@@ -280,6 +282,38 @@ it("RCA が起草した Behavior の read は、帰責 event から辿った異�
     },
     { decision: `completion report: ${FIXTURE_RESULT}`, steering: [], handoff: "## Outcome\nCreated notes.md.", result: FIXTURE_RESULT },
   ]);
+});
+
+/** 同じ entry 6 に session 1 と session 2 から異議を積み、session 2 で帰責した盤面(#958)。 */
+async function objectedInTwoSessions() {
+  const { db, reader } = await projectedBoard();
+  const objection = (comment: string, session_id: number) =>
+    appendEvent(db, { taskId: FIXTURE_TASK, workerId: "human", origin: "webui", payload: { kind: "objection_raised", entry_id: 6, comment, session_id }, at });
+  objection("three bullets is too few", 1);
+  const second = objection("cover the tide cycle too", 2);
+  const payload = { kind: "objection_attributed" as const, entry_id: 6, objection_event_ids: [second], cause: "preference" as const, evidence: "e", round: "initial" as const };
+  const attributed = appendEvent(db, { taskId: FIXTURE_TASK, workerId: "board", origin: "board", payload, at });
+  return { db, reader, attribution: { id: attributed, ...payload } };
+}
+
+it("2つ目の session の帰責を出所に持つ Behavior の case の steering は、その session の異議だけで、同じ帰責の AttributionInput.steering と一致する", async () => {
+  const { db, reader, attribution } = await objectedInTwoSessions();
+  const behaviorDraftClient = new FakeBehaviorDraftClient();
+  await draftBehaviorCandidate(db, { behaviorDraftClient, workspace: { name: "sandbox" } }, attribution, at);
+  const id = approvedBehavior(db, "Cover the topic", { event_id: attribution.id });
+
+  const steering = (readMemory(db, reader, { ids: [id] }, at).entries[0]?.case as { steering: string[] }).steering;
+  expect(steering).toEqual(["cover the tide cycle too"]);
+  expect(behaviorDraftClient.calls.map((c) => c.input.steering)).toEqual([steering]);
+});
+
+it("decision entry を直接出所に持つ Behavior の case の steering は、全 session の異議を event 順に並べたもの", async () => {
+  const { db, reader } = await objectedInTwoSessions();
+  const id = approvedBehavior(db, "Cover the topic", { event_id: 6 });
+
+  expect(readMemory(db, reader, { ids: [id] }, at).entries[0]?.case).toMatchObject({
+    steering: ["three bullets is too few", "cover the tide cycle too"],
+  });
 });
 
 it("worker_spawned を出所に持つ Behavior の case は、その session の decision 列(マーカー順)・handoff・result", async () => {

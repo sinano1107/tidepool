@@ -144,6 +144,48 @@ export function objectedEntryText(entry: DecisionLogEntry): string {
     : entry.payload.line;
 }
 
+/** One objection (`objection_raised`) against a log entry — a steering comment. */
+export interface Objection {
+  id: number;
+  entry_id: number;
+  comment: string;
+  session_id: number;
+}
+
+/** The one read of objections: every read of an entry's steering goes through
+ *  `entryObjections` / `objectionsById`, both in objection event order. */
+function selectObjections(db: Db, where: string, params: unknown[]): Objection[] {
+  return db
+    .prepare(
+      `SELECT id, json_extract(payload, '$.entry_id') AS entry_id,
+              json_extract(payload, '$.comment') AS comment,
+              json_extract(payload, '$.session_id') AS session_id
+         FROM events WHERE kind = 'objection_raised' ${where} ORDER BY id`,
+    )
+    .all(...params) as Objection[];
+}
+
+/** Every objection ever raised against these entries (every entry when omitted),
+ *  across sessions — one query however many entries. */
+export function entryObjections(db: Db, entryIds?: number[]): Objection[] {
+  return entryIds
+    ? selectObjections(db, `AND json_extract(payload, '$.entry_id') IN (${entryIds.map(() => "?").join(", ")})`, entryIds)
+    : selectObjections(db, "", []);
+}
+
+/** Exactly these objection events against `entryId` — an attribution's
+ *  `objection_event_ids`. An id that is not an objection, or is one against
+ *  another entry, throws rather than dropping out of the steering. */
+export function objectionsById(db: Db, entryId: number, ids: number[]): Objection[] {
+  const found = new Map(selectObjections(db, `AND id IN (${ids.map(() => "?").join(", ")})`, ids).map((o) => [o.id, o]));
+  return ids.map((id) => {
+    const o = found.get(id);
+    if (!o) throw new TriageError(`event ${id} is not an objection`);
+    if (o.entry_id !== entryId) throw new TriageError(`objection ${id} is against entry ${o.entry_id}, not ${entryId}`);
+    return o;
+  });
+}
+
 /** Render the entry/comment pairs shared by repair and RCA tasks. Entries are
  * ordered by their own event id; comments retain objection event order. */
 function renderObjectionPairs(purposeIntro: string, pairs: ObjectionPair[]): string {
@@ -164,23 +206,15 @@ function renderObjectionPairs(purposeIntro: string, pairs: ObjectionPair[]): str
  *  order — the one collection both the Board call (before the transaction)
  *  and the bundling (inside it) read. */
 export function listObjectedEntries(db: Db, sessionId: number): ObjectionPair[] {
-  const rows = db
-    .prepare(
-      `SELECT id, payload FROM events
-       WHERE kind = 'objection_raised' AND json_extract(payload, '$.session_id') = ?
-       ORDER BY id`,
-    )
-    .all(sessionId) as Array<{ id: number; payload: string }>;
   const pairs = new Map<number, ObjectionPair>();
-  for (const row of rows) {
-    const { comment, entry_id } = JSON.parse(row.payload) as { comment: string; entry_id: number };
+  for (const { id, comment, entry_id } of selectObjections(db, "AND json_extract(payload, '$.session_id') = ?", [sessionId])) {
     const pair = pairs.get(entry_id) ?? {
       entry: requireLogEntry(db, entry_id),
       comments: [],
       objection_event_ids: [],
     };
     pair.comments.push(comment);
-    pair.objection_event_ids.push(row.id);
+    pair.objection_event_ids.push(id);
     pairs.set(entry_id, pair);
   }
   return [...pairs.values()];

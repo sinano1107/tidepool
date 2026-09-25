@@ -8,7 +8,7 @@ import { appendEvent, type EventOrigin, type EventPayload, getEvent, HUMAN_FACIN
 import { metaReviewSubjectOf, paged, previousMetaReviewWatermark } from "./meta-review.js";
 import { caseEpisode, entriesReadBefore, entriesSeenBefore, listEpisodes } from "./precedent.js";
 import { BOARD_WORKER_ID, DomainError, HUMAN_WORKER_ID, type MemoryProposal, registerTask, settleQuestionAsObserved, type Task } from "./tasks.js";
-import { type DecisionLogEntry, objectedEntryText } from "./triage.js";
+import { type DecisionLogEntry, entryObjections, objectedEntryText, objectionsById } from "./triage.js";
 
 /** 無効化の理由コード(spec #586 A)。自由記述は持たない。置換と path の付け替えは後継 id
  *  必須、cause.ts の語彙の3つ(間違っていた / 陳腐化)と、人間が提案 question を reject した `rejected`(issue #620)。 */
@@ -938,7 +938,8 @@ export function listPrecedents(
 /** 出所の種別(ADR 0083 追記3): commit / event の参照は事実、decision の参照は推論。 */
 const SOURCE_KIND = { commit: "fact", event: "fact", decision: "inference" } as const;
 
-/** case 描画(ADR 0153 決定3): 出所の decision なら本文・その entry への異議の steering(event 順)・
+/** case 描画(ADR 0153 決定3): 出所の decision なら本文・steering(event 順。帰責が出所ならその帰責の異議だけ、
+ *  decision を直接指すなら entry への全異議)・
  *  Episode の handoff と result、出所の session なら decision 列・handoff・result。transcript は含まない。 */
 type MemoryCase =
   | { decision: string; steering: string[]; handoff: string | null; result: string | null }
@@ -960,12 +961,9 @@ function renderCase(db: Db, source: MemorySource): MemoryCase | null {
   const entryId = payload?.kind === "objection_attributed" ? payload.entry_id : source.ref;
   const entry = getEvent(db, entryId);
   if (!entry || !(HUMAN_FACING_KINDS as readonly string[]).includes(entry.kind)) return null;
-  const steering = db
-    .prepare(
-      `SELECT json_extract(payload, '$.comment') AS comment FROM events
-        WHERE kind = 'objection_raised' AND json_extract(payload, '$.entry_id') = ? ORDER BY id`,
-    )
-    .all(entryId) as Array<{ comment: string }>;
+  // 帰責が出所なら、その帰責が入力に使った steering だけ(AttributionInput.steering と同じ列、#958)
+  const steering =
+    payload?.kind === "objection_attributed" ? objectionsById(db, entryId, payload.objection_event_ids) : entryObjections(db, [entryId]);
   const episode = caseEpisode(
     db,
     entry.kind === "task_completed" ? { completion: { taskId: entry.task_id!, eventId: entryId } } : { decisionEventId: entryId },

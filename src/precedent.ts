@@ -4,6 +4,7 @@ import type { Cause } from "./cause.js";
 import type { Db } from "./db.js";
 import { type EventRow, getEvent, listEvents } from "./events.js";
 import { isAdvisorBlock, parseStreamLine, readInitVersion } from "./stream-json.js";
+import { entryObjections } from "./triage.js";
 
 /** Precedent(前例)の投影 — 盤面の記録(events + worker transcript)から
  *  Episode を決定論的に組む(ADR 0083 決定8 / 追記 / 追記 2、issue #356)。
@@ -735,21 +736,20 @@ function decisionOutcomes(db: Db, markerRows: MarkerRow[]): Map<number, Decision
     const entry = out.get(row.id);
     if (entry) entry.line = row.line;
   }
+  for (const o of entryObjections(db, ids)) out.get(o.entry_id)!.objections.push(o.comment);
   for (const row of db
     .prepare(
       `SELECT kind, json_extract(payload, '$.entry_id') AS entry_id,
-              json_extract(payload, '$.comment') AS comment,
               json_extract(payload, '$.cause') AS cause
          FROM events
-        WHERE kind IN ('objection_raised', 'log_entry_displayed', 'objection_attributed')
+        WHERE kind IN ('log_entry_displayed', 'objection_attributed')
           AND json_extract(payload, '$.entry_id') IN (${placeholders})
         ORDER BY id`,
     )
-    .all(...ids) as Array<{ kind: string; entry_id: number; comment: string | null; cause: Cause | null }>) {
+    .all(...ids) as Array<{ kind: string; entry_id: number; cause: Cause | null }>) {
     const entry = out.get(row.entry_id);
     if (!entry) continue;
     if (row.kind === "log_entry_displayed") entry.displayed = true;
-    else if (row.kind === "objection_raised" && row.comment !== null) entry.objections.push(row.comment);
     else if (row.cause !== null) entry.cause = row.cause;
   }
   return out;

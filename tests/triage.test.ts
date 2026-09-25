@@ -1,6 +1,7 @@
 import { afterEach, expect, it } from "vitest";
-import { TRIAGE_TIMEOUT } from "../src/triage.js";
-import { api, bootTidepool, HOUR, loggedEntry, mcpClient, queueWork, registerWork, type Tidepool } from "./harness.js";
+import { appendEvent } from "../src/events.js";
+import { entryObjections, objectionsById, TRIAGE_TIMEOUT } from "../src/triage.js";
+import { api, bootTidepool, FIXTURE_TASK, HOUR, loggedEntry, mcpClient, queueWork, registerWork, seedFixtureBoard, type Tidepool } from "./harness.js";
 
 let t: Tidepool;
 afterEach(() => t?.stop());
@@ -764,4 +765,37 @@ it("the independent auditor RCA registers with assignee unset — a live Auditor
   // Board presents the current Auditor, while raw_assignee proves it remains
   // an unset, live reference rather than a name baked at commit time.
   expect(auditorReview).toMatchObject({ assignee: "keeper-of-the-code", raw_assignee: null });
+});
+
+/** フィクスチャ盤面(decision 6・7・8)に、2つの session から異議を積む。 */
+function objectedFixture() {
+  const db = seedFixtureBoard();
+  const at = new Date("2026-09-14T00:00:00.000Z");
+  const object = (entry_id: number, comment: string, session_id: number) =>
+    appendEvent(db, { taskId: FIXTURE_TASK, workerId: "human", origin: "webui", payload: { kind: "objection_raised", entry_id, comment, session_id }, at });
+  const a = object(6, "first session", 1);
+  const b = object(8, "other entry", 1);
+  const c = object(6, "second session", 2);
+  return { db, a, b, c };
+}
+
+it("entry の異議の読みは、session をまたいで event 順に返す(entry を渡さなければ全 entry)", () => {
+  const { db, a, b, c } = objectedFixture();
+  expect(entryObjections(db, [6])).toEqual([
+    { id: a, entry_id: 6, comment: "first session", session_id: 1 },
+    { id: c, entry_id: 6, comment: "second session", session_id: 2 },
+  ]);
+  expect(entryObjections(db).map((o) => o.id)).toEqual([a, b, c]);
+});
+
+it("異議 event id 列の読みは、その id の異議だけを返す", () => {
+  const { db, c } = objectedFixture();
+  expect(objectionsById(db, 6, [c])).toEqual([{ id: c, entry_id: 6, comment: "second session", session_id: 2 }]);
+});
+
+it("異議 event id 列に objection_raised でない id・存在しない id・別 entry を指す id が来たら投げる", () => {
+  const { db, a, b } = objectedFixture();
+  expect(() => objectionsById(db, 6, [a, 7])).toThrow("event 7 is not an objection");
+  expect(() => objectionsById(db, 6, [a, 9999])).toThrow("event 9999 is not an objection");
+  expect(() => objectionsById(db, 6, [a, b])).toThrow(`objection ${b} is against entry 8, not 6`);
 });

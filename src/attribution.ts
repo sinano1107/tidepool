@@ -5,7 +5,7 @@ import { type ExecutionSettingRow, retrospectiveBoardCallRow } from "./execution
 import { buildMemoryInjection, createBehaviorCandidate, memoryScope } from "./memory.js";
 import { BOARD_WORKER_ID, DomainError, getRegistrant, getTask, HUMAN_WORKER_ID, listChildren, type Task } from "./tasks.js";
 import { isAnthropicBoardCallBlocked } from "./throttle.js";
-import { type DecisionLogEntry, listObjectedEntries, objectedEntryText } from "./triage.js";
+import { type DecisionLogEntry, listObjectedEntries, objectedEntryText, objectionsById } from "./triage.js";
 
 /** Board call に渡す入力(ADR 0115 決定2): 異議されたエントリ本文・その steering 列・
  *  当時の decision log(異議されたタスクの decision_logged と完了エントリ)。agent
@@ -207,10 +207,7 @@ function objectionInput(
   return {
     entry_id: entry.id,
     entry: objectedEntryText(entry),
-    steering: attribution.objection_event_ids.map((id) => {
-      const p = getEvent(db, id)?.payload;
-      return p?.kind === "objection_raised" ? p.comment : "";
-    }),
+    steering: objectionsById(db, entry.id, attribution.objection_event_ids).map((o) => o.comment),
     decision_log: decisionLogText(db, entry.task_id, attribution.id),
   };
 }
