@@ -30,6 +30,7 @@ it("GET /api/settings/execution は種の表と盤面既定(frontier advisor 無
     providerRank: [...PROVIDER_VALUES],
     priority: "quality",
     learnerPromoted: false,
+    retrospectiveTier: "frontier",
     providers: [
       { value: "anthropic", label: "anthropic — Claude models, Anthropic billing" },
       { value: "moonshot", label: "moonshot — Kimi models, Moonshot Platform billing" },
@@ -52,6 +53,7 @@ it("POST /api/settings/execution は1つの変更を受け、Provider 順位・�
     { setting: "provider_rank", value: ["openai", "anthropic", "moonshot"] },
     { setting: "priority", value: "cost" },
     { setting: "frontier_advisor", value: true },
+    { setting: "retrospective_tier", value: "standard" },
   ]) {
     expect((await api(t.baseUrl, "POST", "/api/settings/execution", change)).status).toBe(200);
   }
@@ -59,6 +61,7 @@ it("POST /api/settings/execution は1つの変更を受け、Provider 順位・�
     providerRank: ["openai", "anthropic", "moonshot"],
     priority: "cost",
     frontierAdvisor: true,
+    retrospectiveTier: "standard",
   });
 });
 
@@ -102,6 +105,7 @@ it("不正値(未知の Provider / ティア / 優先順位、負の価格、順
     { setting: "provider_rank", value: ["anthropic", "openai", "moonshot", "openai"] },
     { setting: "frontier_advisor", value: "yes" },
     { setting: "tier", value: "frontier" }, // ティアの既定は設定ではない(BOARD_DEFAULT_TIER)
+    { setting: "retrospective_tier", value: "premium" }, // ティア語彙の外(issue #914)
   ]) {
     expect((await api(t.baseUrl, "POST", "/api/settings/execution", bad)).status, JSON.stringify(bad)).toBe(400);
   }
@@ -188,6 +192,21 @@ it("管理MCP の read_execution_settings / change_execution_settings は同じ�
     })) as any;
     expect(rejected.isError).toBe(true);
     expect((await state()).priority).toBe("quality");
+
+    // retrospective_tier(issue #914): 両方の扉から設定でき、語彙の外は両方の扉で拒否される
+    const changedTier = (await client.callTool({
+      name: "change_execution_settings",
+      arguments: { change: { setting: "retrospective_tier", value: "standard" } },
+    })) as any;
+    expect(changedTier.isError).not.toBe(true);
+    expect((await state()).retrospectiveTier).toBe("standard");
+
+    const rejectedTier = (await client.callTool({
+      name: "change_execution_settings",
+      arguments: { change: { setting: "retrospective_tier", value: "premium" } },
+    })) as any;
+    expect(rejectedTier.isError).toBe(true);
+    expect((await state()).retrospectiveTier).toBe("standard");
   } finally {
     await client.close();
   }

@@ -1643,11 +1643,11 @@ function ExecutionDefaultsCard({ settings, say, onSaved, edit }: {
   const { Button, Card, Checkbox, FieldRow, Select } = window.TidepoolDesignSystem_8a0ead;
   const id = 'board:execution-defaults';
   const open = edit.isOpen(id);
-  const current = { rank: settings.providerRank, priority: settings.priority, advisor: settings.frontierAdvisor };
+  const current = { rank: settings.providerRank, priority: settings.priority, advisor: settings.frontierAdvisor, retrospectiveTier: settings.retrospectiveTier };
   const [draft, setDraft] = React.useState(current);
   const [busy, setBusy] = React.useState(false);
   const rankChanged = draft.rank.join() !== current.rank.join();
-  const dirty = rankChanged || draft.priority !== current.priority || draft.advisor !== current.advisor;
+  const dirty = rankChanged || draft.priority !== current.priority || draft.advisor !== current.advisor || draft.retrospectiveTier !== current.retrospectiveTier;
   // the API only takes a permutation of every provider (a missing one would
   // sort first in the selector) — mirror that so Save only enables on a sendable rank
   const ok = new Set(draft.rank).size === settings.providers.length;
@@ -1660,6 +1660,7 @@ function ExecutionDefaultsCard({ settings, say, onSaved, edit }: {
         rankChanged && { setting: 'provider_rank', value: draft.rank },
         draft.priority !== current.priority && { setting: 'priority', value: draft.priority },
         draft.advisor !== current.advisor && { setting: 'frontier_advisor', value: draft.advisor },
+        draft.retrospectiveTier !== current.retrospectiveTier && { setting: 'retrospective_tier', value: draft.retrospectiveTier },
       ].filter(Boolean);
       for (const change of changes) await api('/api/settings/execution', change);
       say('success', 'execution defaults saved', `${changes.length} setting${changes.length === 1 ? '' : 's'} updated`);
@@ -1694,6 +1695,7 @@ function ExecutionDefaultsCard({ settings, say, onSaved, edit }: {
             <FieldRow label="provider rank" kind="mono" value={settings.providerRank.join(' › ')} />
             <FieldRow label="default priority" kind="mono" value={settings.priority} />
             <FieldRow label="frontier advisor" kind="mono" value={settings.frontierAdvisor ? 'on' : 'off'} />
+            <FieldRow label="retrospective tier" kind="mono" value={settings.retrospectiveTier} />
             {/* promotion only comes from approving a routing meta-review's question (ADR 0150 決定4); this card only demotes */}
             <FieldRow label="learner" kind="mono" value={settings.learnerPromoted ? 'promoted — chooses work tasks' : 'shadow — the table chooses'} />
             {settings.learnerPromoted && (
@@ -1714,9 +1716,12 @@ function ExecutionDefaultsCard({ settings, say, onSaved, edit }: {
             <Checkbox testId="execution-frontier-advisor" checked={draft.advisor}
               label="frontier advisor — an advisor may use the frontier row even when the main model is a lower tier"
               onChange={() => setDraft({ ...draft, advisor: !draft.advisor })} />
+            <Select label="Retrospective tier" options={[...settings.tiers]} value={draft.retrospectiveTier}
+              onChange={(e) => setDraft({ ...draft, retrospectiveTier: e.target.value })} />
             <p style={{ margin: 0, fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
               rank orders the providers a task may run on (first = preferred; every provider exactly once).
               priority is the default for tasks that request none: quality = rank then price, cost = price then rank.
+              retrospective tier is the anthropic row the board's own retrospective Board calls (allocation review, attribution, Behavior candidate drafting) resolve on.
             </p>
             <EditActions dirty={dirty} ok={ok} busy={busy} saveLabel="Save execution defaults"
               onSave={save} onCancel={() => edit.close()} />

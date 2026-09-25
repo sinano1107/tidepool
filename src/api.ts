@@ -1617,7 +1617,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   });
 
   // 1 リクエスト = 1 変更(行の upsert / 削除、frontier advisor、Provider 順位、優先
-  // 順位の既定)。不正値(未知の Provider / ティア / 優先順位、負の価格、順列でない
+  // 順位の既定、振り返り Board call のティア)。不正値(未知の Provider / ティア / 優先順位、負の価格、順列でない
   // 順位)はこの入口で弾く。保存後は provider-pace-offsets と同じく即時再評価(issue #296)
   router.post("/settings/execution", (req, res) => {
     const parsed = executionSettingsChangeSchema.safeParse(req.body);
