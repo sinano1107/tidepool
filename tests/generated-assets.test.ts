@@ -1,42 +1,41 @@
 import { spawnSync } from "node:child_process";
-import { readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { cpSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 const ROOT = join(import.meta.dirname, "..");
 
+const WEBUI = ["public/app.js", "public/vendor/react.js", "public/vendor/react-dom.js", "public/vendor/lucide.js"];
+const DS = ["_ds_bundle.js", "webui/globals.d.ts"];
+const DS_SYNC = [".design-sync/config.json", "design-system/pkg/docs"];
+
 describe("生成済みアセット", () => {
   it.each([
-    ["WebUI", "public/app.js", "scripts/build-webui-bundle.mjs"],
-    ["Design System", "_ds_bundle.js", "scripts/build-ds-bundle.mjs"],
-    ["WebUI グローバル型宣言", "webui/globals.d.ts", "scripts/build-ds-bundle.mjs"],
-    ["ADR Index", "docs/adr/README.md", "scripts/build-adr-index.mjs"],
-    ["design-sync dtsPropsFor", ".design-sync/config.json", "scripts/build-ds-sync-inputs.mjs"],
-    ["design-sync docs", "design-system/pkg/docs/LogEntry.md", "scripts/build-ds-sync-inputs.mjs"],
-  ])("%s の --check は fresh / stale を判定して書き換えない", (_name, output, script) => {
-    const outputPath = join(ROOT, output);
-    const original = readFileSync(outputPath, "utf8");
-    const stale = `${original}\n// stale`;
-
-    expect(spawnSync(process.execPath, [script, "--check"], { cwd: ROOT }).status).toBe(0);
-    writeFileSync(outputPath, stale);
-
+    ["WebUI", "public/app.js", "scripts/build-webui-bundle.mjs", WEBUI],
+    ["Design System", "_ds_bundle.js", "scripts/build-ds-bundle.mjs", DS],
+    ["WebUI グローバル型宣言", "webui/globals.d.ts", "scripts/build-ds-bundle.mjs", DS],
+    ["ADR Index", "docs/adr/README.md", "scripts/build-adr-index.mjs", ["docs/adr/README.md"]],
+    ["design-sync dtsPropsFor", ".design-sync/config.json", "scripts/build-ds-sync-inputs.mjs", DS_SYNC],
+    ["design-sync docs", "design-system/pkg/docs/LogEntry.md", "scripts/build-ds-sync-inputs.mjs", DS_SYNC],
+  ])("%s の --check は fresh / stale を判定して書き換えない", (_name, target, script, outputs) => {
+    const tmp = mkdtempSync(join(tmpdir(), "generated-assets-"));
     try {
-      const result = spawnSync(process.execPath, [script, "--check"], {
-        cwd: ROOT,
-        encoding: "utf8",
-      });
-      expect(result.status).toBe(1);
-      expect(readFileSync(outputPath, "utf8")).toBe(stale);
+      for (const output of outputs) cpSync(join(ROOT, output), join(tmp, output), { recursive: true });
+      const check = () => spawnSync(process.execPath, [script, "--check", "--out-root", tmp], { cwd: ROOT }).status;
+
+      expect(check()).toBe(0);
+      const stale = `${readFileSync(join(tmp, target), "utf8")}\n// stale`;
+      writeFileSync(join(tmp, target), stale);
+      expect(check()).toBe(1);
+      expect(readFileSync(join(tmp, target), "utf8")).toBe(stale);
     } finally {
-      writeFileSync(outputPath, original);
+      rmSync(tmp, { recursive: true, force: true });
     }
   });
 });
 
 describe("ADR 索引の生成内容", () => {
-  // 上の it.each が実行中に docs/adr/README.md を stale 化 → finally で復元するため、
-  // ここは collection 時(it の外)で読む必要がある — it の中に移すとレースする。
   const lines = readFileSync(join(ROOT, "docs/adr/README.md"), "utf8").split("\n");
   const line = (num: string) => lines.find((l) => l.startsWith(`- [${num}]`));
 

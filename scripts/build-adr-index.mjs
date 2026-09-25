@@ -3,7 +3,7 @@
 // See issue #343 / ADR 0080: the index was hand-maintained and drifted (missing
 // lines, hand-shortened titles) because nothing enforced it matched the files.
 //
-// Usage: node scripts/build-adr-index.mjs [--check]
+// Usage: node scripts/build-adr-index.mjs [--check [--out-root <dir>]]
 
 import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -11,6 +11,8 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const ADR_DIR = join(ROOT, 'docs/adr');
+const outRootArg = process.argv.includes('--check') ? process.argv.indexOf('--out-root') : -1;
+const OUT_ROOT = outRootArg === -1 ? ROOT : process.argv[outRootArg + 1];
 
 const files = readdirSync(ADR_DIR)
   .filter((name) => /^\d{4}-.*\.md$/.test(name))
@@ -49,7 +51,7 @@ const header =
 
 const out = header + entries.join('\n') + '\n';
 
-const outputPath = join(ADR_DIR, 'README.md');
+const outputPath = join(OUT_ROOT, 'docs/adr/README.md');
 if (process.argv.includes('--check')) {
   if (!existsSync(outputPath) || readFileSync(outputPath, 'utf8') !== out) {
     console.error('stale generated asset: docs/adr/README.md');
