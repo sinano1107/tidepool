@@ -251,11 +251,15 @@ async function translateMemoryWording(translate, english, originals) {
   return { english: out, back };
 }
 function TpMemoryAmendment({ candidateId, onTranslate, onChange }) {
-  const { Button, Input } = window.TidepoolDesignSystem_8a0ead;
+  const { Button, Input, Select } = window.TidepoolDesignSystem_8a0ead;
   const [base, setBase] = React.useState(null);
   const [draft, setDraft] = React.useState({ title: "", text: "", addressee: "", originalTitle: "", originalText: "" });
   const [back, setBack] = React.useState(null);
   const [error, setError] = React.useState(null);
+  const [agentNames, setAgentNames] = React.useState([]);
+  React.useEffect(() => {
+    api("GET /api/agents").then(({ agents }) => setAgentNames(agents.map((a) => a.name))).catch((err) => setError(String(err.message || err)));
+  }, []);
   React.useEffect(() => {
     api("GET /api/settings/memory/entries", { query: { kind: "behavior", state: "candidate" } }).then(({ entries }) => {
       const candidate = entries.find((e) => e.id === candidateId);
@@ -290,7 +294,15 @@ function TpMemoryAmendment({ candidateId, onTranslate, onChange }) {
       setError(String(err.message || err));
     }
   };
-  return /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 8, marginBottom: 14 } }, onTranslate && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(Input, { label: "Amend original title (optional)", value: draft.originalTitle, onChange: set("originalTitle") }), /* @__PURE__ */ React.createElement(Input, { label: "Amend original (optional)", multiline: true, rows: 3, value: draft.originalText, onChange: set("originalText") }), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", disabled: !draft.originalTitle.trim() || !draft.originalText.trim(), onClick: () => translate(true) }, "Translate")), /* @__PURE__ */ React.createElement(Input, { label: "Title (English)", value: draft.title, onChange: set("title") }), /* @__PURE__ */ React.createElement(Input, { label: "English (approved as the canonical text)", multiline: true, rows: 3, value: draft.text, onChange: set("text") }), /* @__PURE__ */ React.createElement(Input, { label: "Addressee (agent name, empty = every agent)", mono: true, value: draft.addressee, onChange: set("addressee") }), onTranslate && /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", disabled: !draft.title.trim() || !draft.text.trim(), onClick: () => translate(false) }, "Back-translate"), back && /* @__PURE__ */ React.createElement("p", { style: { margin: 0, fontSize: "var(--text-xs)", color: "var(--text-muted)" }, "data-testid": "amendment-back-translation" }, "back: ", back), error && /* @__PURE__ */ React.createElement("div", { style: { fontSize: "var(--text-xs)", color: "var(--coral-4)" } }, error));
+  return /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 8, marginBottom: 14 } }, onTranslate && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(Input, { label: "Amend original title (optional)", value: draft.originalTitle, onChange: set("originalTitle") }), /* @__PURE__ */ React.createElement(Input, { label: "Amend original (optional)", multiline: true, rows: 3, value: draft.originalText, onChange: set("originalText") }), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", disabled: !draft.originalTitle.trim() || !draft.originalText.trim(), onClick: () => translate(true) }, "Translate")), /* @__PURE__ */ React.createElement(Input, { label: "Title (English)", value: draft.title, onChange: set("title") }), /* @__PURE__ */ React.createElement(Input, { label: "English (approved as the canonical text)", multiline: true, rows: 3, value: draft.text, onChange: set("text") }), /* @__PURE__ */ React.createElement(
+    Select,
+    {
+      label: "Addressee",
+      value: draft.addressee,
+      onChange: set("addressee"),
+      options: [{ value: "", label: "every agent" }, .../* @__PURE__ */ new Set([...agentNames, ...draft.addressee ? [draft.addressee] : []])]
+    }
+  ), onTranslate && /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", disabled: !draft.title.trim() || !draft.text.trim(), onClick: () => translate(false) }, "Back-translate"), back && /* @__PURE__ */ React.createElement("p", { style: { margin: 0, fontSize: "var(--text-xs)", color: "var(--text-muted)" }, "data-testid": "amendment-back-translation" }, "back: ", back), error && /* @__PURE__ */ React.createElement("div", { style: { fontSize: "var(--text-xs)", color: "var(--coral-4)" } }, error));
 }
 function TpQuestionCard({ q, answer, onAnswer, locked = false, onTranslate }) {
   const { Card, AgentChip, Switch, Select, Input } = window.TidepoolDesignSystem_8a0ead;

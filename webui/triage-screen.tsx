@@ -212,12 +212,19 @@ function TpMemoryAmendment({ candidateId, onTranslate, onChange }: {
   onTranslate?: TpTranslateFn;
   onChange: (amendment: TpAmendment) => void;
 }) {
-  const { Button, Input } = window.TidepoolDesignSystem_8a0ead;
+  const { Button, Input, Select } = window.TidepoolDesignSystem_8a0ead;
   type Wording = { title: string; text: string; addressee: string };
   const [base, setBase] = React.useState<Wording | null>(null);
   const [draft, setDraft] = React.useState({ title: '', text: '', addressee: '', originalTitle: '', originalText: '' });
   const [back, setBack] = React.useState<string | null>(null);
   const [error, setError] = React.useState<string | null>(null);
+  // settings の Behavior フォーム(#943)と同じ registry 引き —— このカードは agent 一覧を持たないので自分で引く
+  const [agentNames, setAgentNames] = React.useState<string[]>([]);
+  React.useEffect(() => {
+    api('GET /api/agents')
+      .then(({ agents }) => setAgentNames(agents.map((a) => a.name)))
+      .catch((err) => setError(String(err.message || err)));
+  }, []);
   React.useEffect(() => {
     api('GET /api/settings/memory/entries', { query: { kind: 'behavior', state: 'candidate' } })
       .then(({ entries }) => {
@@ -242,7 +249,7 @@ function TpMemoryAmendment({ candidateId, onTranslate, onChange }: {
     onChange(changed);
   }, [base, draft]);
   if (!base) return error ? <div style={{ fontSize: 'var(--text-xs)', color: 'var(--coral-4)', marginBottom: 14 }}>{error}</div> : null;
-  const set = (key: keyof typeof draft) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+  const set = (key: keyof typeof draft) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => {
     setDraft({ ...draft, [key]: e.target.value });
     if (key === 'title' || key === 'text') setBack(null);
   };
@@ -267,7 +274,9 @@ function TpMemoryAmendment({ candidateId, onTranslate, onChange }: {
       )}
       <Input label="Title (English)" value={draft.title} onChange={set('title')} />
       <Input label="English (approved as the canonical text)" multiline rows={3} value={draft.text} onChange={set('text')} />
-      <Input label="Addressee (agent name, empty = every agent)" mono value={draft.addressee} onChange={set('addressee')} />
+      {/* the current addressee stays offered even if its agent has left the registry */}
+      <Select label="Addressee" value={draft.addressee} onChange={set('addressee')}
+        options={[{ value: '', label: 'every agent' }, ...new Set([...agentNames, ...(draft.addressee ? [draft.addressee] : [])])]} />
       {onTranslate && <Button variant="secondary" size="sm" disabled={!draft.title.trim() || !draft.text.trim()} onClick={() => translate(false)}>Back-translate</Button>}
       {back && <p style={{ margin: 0, fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }} data-testid="amendment-back-translation">back: {back}</p>}
       {error && <div style={{ fontSize: 'var(--text-xs)', color: 'var(--coral-4)' }}>{error}</div>}
