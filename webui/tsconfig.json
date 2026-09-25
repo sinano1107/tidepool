@@ -23,5 +23,5 @@
   },
   // webui ごと。ここがファイル一覧を持たない限り、scripts/build-webui-bundle.mjs の
   // SOURCES にだけ足して型検査から漏れる(出荷されるが未検査)は起こらない。
-  "include": ["webui"]
+  "include": ["."]
 }

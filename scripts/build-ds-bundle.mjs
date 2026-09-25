@@ -98,7 +98,7 @@ const out =
   exportsBlock + '\n\n' +
   `})();\n`;
 
-// webui/*.tsx の型検査(tsconfig.webui.json)が読む宣言。連結方式のまま TypeScript
+// webui/*.tsx の型検査(webui/tsconfig.json)が読む宣言。連結方式のまま TypeScript
 // にするので(ADR 0133 決定1)このファイルも import / export を持たないスクリプトで
 // あり、`interface Window` は大域の Window に併合される。コンポーネントの型は
 // design-system/components/**/*.d.ts を正本として引くだけで、写しを持たない。

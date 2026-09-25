@@ -11,8 +11,10 @@ ADR 0055 は前半を偽にしたうえで、後半について「埋めるの�
 1. **`.tsx` にするが、モジュールにはしない。** `import` / `export` を書かず、全ファイルがスクリプトスコープで
    グローバルを共有する今日の形を保つ。tsc はスクリプトのファイル群を1つのグローバルとして見るので、
    `app` から `BoardScreen` を引く参照はそのまま解決される。ADR 0055 の「連結方式であって bundle ではない」は無傷。
-2. **strict はルートと同水準。** `tsconfig.webui.json` をルートに置き(ルートは `types: ["node"]`・DOM lib 無し・
-   `jsx` 未設定なので `include` の追加では通らない)、`npm run typecheck` は `tsc -p` 2本になる。水準を2つ持たない —
+2. **strict はルートと同水準。** webui 用の設定を `webui/tsconfig.json` として独立に持ち(ルートは `types: ["node"]`・
+   DOM lib 無し・`jsx` 未設定なので `include` の追加では通らない)、`npm run typecheck` は `tsc -p` 2本になる。
+   置き場所が webui 直下で名前が `tsconfig.json` なのは、tsserver が自動で探すのがその名前だけで、別名だと
+   エディタ診断が webui を inferred project で検査して偽のエラーを出すため(issue #975)。水準を2つ持たない —
    下げれば「webui は緩い」が既定になり、締め直す契機が構造的に来ない。
 3. **サーバの語彙はインライン `import(...)` 型で leaf module から引く。** `import type` **文**はファイルを
    モジュールにし、そのトップレベルがグローバルから消えて参照側が壊れる。`type S = import("../src/x").S;` は
