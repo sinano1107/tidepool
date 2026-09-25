@@ -324,7 +324,7 @@ You are Crab.
     const before = git(registryDir, "rev-parse", "HEAD");
 
     const sha = await changeAgentTier(
-      { name: "crab", expectTier: "standard", to: "economy", message: "lower agent crab's tier to economy (question q-1)" },
+      { name: "crab", expectTier: "standard", to: "economy", assertLandable: () => {}, message: "lower agent crab's tier to economy (question q-1)" },
       { registry: { dir: registryDir, mode: "purely-local" } },
     );
 
@@ -342,8 +342,27 @@ You are Crab.
     const before = git(registryDir, "rev-parse", "HEAD");
 
     await expect(
-      changeAgentTier({ name: "crab", expectTier: "frontier", to: "standard", message: "m" }, { registry: { dir: registryDir, mode: "purely-local" } }),
+      changeAgentTier(
+        { name: "crab", expectTier: "frontier", to: "standard", assertLandable: () => {}, message: "m" },
+        { registry: { dir: registryDir, mode: "purely-local" } },
+      ),
     ).rejects.toThrow(AgentTierMismatchError);
+    expect(git(registryDir, "rev-parse", "HEAD")).toBe(before);
+  });
+
+  it("下げ先の検査は fetch の後の定義の provider で呼ばれ、断れば commit を積まない", async () => {
+    const registryDir = await makeMainRegistry({ "agents/crab.md": TIERED });
+    const before = git(registryDir, "rev-parse", "HEAD");
+    const seen: string[][] = [];
+    const assertLandable = (providers: string[]) => {
+      seen.push(providers);
+      throw new Error("no row at economy");
+    };
+
+    await expect(
+      changeAgentTier({ name: "crab", expectTier: "standard", to: "economy", assertLandable, message: "m" }, { registry: { dir: registryDir, mode: "purely-local" } }),
+    ).rejects.toThrow("no row at economy");
+    expect(seen).toEqual([["anthropic"]]);
     expect(git(registryDir, "rev-parse", "HEAD")).toBe(before);
   });
 });

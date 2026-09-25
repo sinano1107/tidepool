@@ -1,4 +1,4 @@
-import type { AgentView } from "./agent-create.js";
+import { type AgentView, agentViewProviders } from "./agent-create.js";
 import type { Db } from "./db.js";
 import type { EventPayload } from "./events.js";
 import {
@@ -156,14 +156,16 @@ function agentTierProposal(db: Db, agents: readonly AgentView[], input: { agent?
   const below = TIERS[TIERS.indexOf(from) - 1];
   if (to !== below) throw new DomainError(`an agent's tier is lowered by exactly one step: ${name} is at ${from}, so the only target is ${below ?? "none (already the lowest tier)"}`);
   const table = loadExecutionSettingTable(db);
-  if (!tierHasRowFor(table, agent.provider.split(", "), to)) {
-    throw new DomainError(`the execution-setting table has no execution-setting row at ${to} for ${name}'s providers (${agent.provider}), so the agent would be skipped`);
+  if (!tierHasRowFor(table, agentViewProviders(agent), to)) {
+    throw new DomainError(`the execution-setting table has no row at ${to} for ${name}'s providers (${agent.provider}), so the agent would be skipped`);
   }
   const rows = new Map<string, RegistryProposal["pin"]["rows"][number]>();
   for (const id of evidence) {
     const event = db.prepare("SELECT worker_id, payload FROM events WHERE id = ? AND kind = 'worker_spawned'").get(id) as { worker_id: string; payload: string } | undefined;
     if (event?.worker_id !== name) throw new DomainError(`evidence ${id} is not a worker_spawned event of ${name}`);
     const spawned = JSON.parse(event.payload) as Extract<EventPayload, { kind: "worker_spawned" }>;
+    // 根拠は床を agent の既定ティアが決めた episode だけ(ADR 0111 追記2)—— 他の出所の tier は agent の宣言の過剰を言わない
+    if (spawned.source.tier !== "agent") throw new DomainError(`evidence ${id} took its tier from ${spawned.source.tier}, not from ${name}'s default tier`);
     const row = table.find((r) => r.provider === spawned.provider && r.model === spawned.model);
     if (!row) throw new DomainError(`evidence ${id} ran on ${spawned.provider} / ${spawned.model}, which is no longer in the execution-setting table`);
     rows.set(`${row.provider}/${row.model}`, { provider: row.provider, model: row.model, tier: row.tier, effort: row.effort });
@@ -197,6 +199,9 @@ export function proposeRoutingChange(
   let title: string;
   let diff: string[];
   let purpose: string;
+  if (input.op !== "agent_tier" && (input.agent !== undefined || input.to !== undefined || input.evidence !== undefined)) {
+    throw new DomainError(`op ${input.op} takes no agent, to or evidence`);
+  }
   if (input.op === "agent_tier") {
     if (input.row !== undefined || input.change !== undefined) throw new DomainError("op agent_tier takes no row and no change");
     if (!agents) throw new DomainError("this board has no registry, so there is no agent definition to change");

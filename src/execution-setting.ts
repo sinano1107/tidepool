@@ -495,23 +495,39 @@ export function applyExecutionSettingsChange(db: Db, change: ExecutionSettingsCh
   })();
 }
 
+/** registry の agent 一覧を読む口(registry の無い盤面では無い)。registry の提案の (agent, tier) の照合が読む。 */
+export type ListAgentTiers = () => readonly { name: string; tier?: string }[];
+
 /** 陳腐化の決着(ADR 0150 決定1): open な routing / registry の提案の pin を表・フラグの現在値と照合し、崩れた question を
- *  observed で決着させる。表の書き口は書いた event を `observedEventId` に渡す。`listAgents`(registry の agent 一覧)を渡せば
- *  registry の提案の (agent, tier) も照合する —— routing の due 判定の直前(issue #920)で、registry の変更は盤面の event では
- *  ないので observed_event_id は null。 */
-export function settleStaleProposals(db: Db, at: Date, observedEventId: number | null, listAgents?: () => readonly { name: string; tier?: string }[]): void {
+ *  observed で決着させる。表の書き口は書いた event を `observedEventId` に渡す。`listAgents` を渡せば registry の提案の
+ *  (agent, tier) も照合する —— routing の due 判定の直前(issue #920)で、registry の変更は盤面の event ではないので
+ *  observed_event_id は null。 */
+export function settleStaleProposals(db: Db, at: Date, observedEventId: number | null, listAgents?: ListAgentTiers): void {
   const settings = readExecutionSettings(db);
-  // registry を読むのは registry の提案が open なときだけ(poll ごとに registry を読まない)
-  let agents: readonly { name: string; tier?: string }[] | undefined;
+  // registry を読むのは registry の提案が open なときだけ(poll ごとに registry を読まない)。読めなければこの回は照合しない
+  // —— due 判定は scheduler の poll の中なので、registry が読めないことで pickup を止めない
+  let agents: readonly { name: string; tier?: string }[] | null | undefined;
+  const readAgents = (list: ListAgentTiers) => {
+    try {
+      return list();
+    } catch (err) {
+      console.warn(`[execution-setting] registry pins not checked: ${String(err)}`);
+      return null;
+    }
+  };
   const open = db
     .prepare("SELECT id, question_proposal FROM tasks WHERE status = 'todo' AND json_extract(question_proposal, '$.kind') IN ('routing', 'registry')")
     .all() as Array<{ id: string; question_proposal: string }>;
   for (const { id, question_proposal } of open) {
     const proposal = JSON.parse(question_proposal) as RoutingProposal | RegistryProposal;
-    const changed =
-      proposal.kind === "registry" && listAgents
-        ? registryPinChanges(proposal, (agents ??= listAgents()).find((agent) => agent.name === proposal.agent))
-        : routingPinChanges(proposal, settings);
+    let changed: ReturnType<typeof routingPinChanges> | ReturnType<typeof registryPinChanges>;
+    if (proposal.kind === "registry" && listAgents) {
+      agents = agents === undefined ? readAgents(listAgents) : agents;
+      if (agents === null) continue;
+      changed = registryPinChanges(proposal, agents.find((agent) => agent.name === proposal.agent));
+    } else {
+      changed = routingPinChanges(proposal, settings);
+    }
     if (changed?.length === 0) continue;
     settleQuestionAsObserved(db, id, { kind: "routing_proposal_stale", question_id: id, proposal_kind: proposal.kind, changed, observed_event_id: observedEventId }, at);
   }

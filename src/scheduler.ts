@@ -14,6 +14,7 @@ import {
   type ExecutionExclusions,
   type ExecutionSetting,
   firstSelectable,
+  type ListAgentTiers,
   readExecutionSettings,
   selectable,
   windowMatchesModel,
@@ -267,7 +268,7 @@ export function startScheduler(deps: {
    *  registry を持たない盤面なので、食い違う相手の宣言そのものが無い。 */
   registry?: RegistrySource;
   /** registry の agent 一覧(issue #920): routing の due 判定の直前に tier の提案の pin を照合する。Absent → registry の無い盤面。 */
-  agents?: () => readonly { name: string; tier?: string }[];
+  agents?: ListAgentTiers;
 }): Scheduler {
   const {
     db,

@@ -400,6 +400,7 @@ export type EventPayload =
       observed_event_id: number | null;
     }
   // issue #920: agent の tier の提案への approve が registry の main へ commit した(盤面スコープ)。registry_commit = 着地した commit。
+  // ADR 0150 決定1 が新設しないとした「registry 変更の event」ではない —— 盤面自身の書き込みの記録で、row の approve の execution_settings_changed と同じ位置。
   | { kind: "agent_tier_changed"; agent: string; from: Tier; to: Tier; question_id: string; registry_commit: string }
   // spec #586 D: worker の pull 1回(task 帰属)。返した id と snapshot watermark、search は
   // 候補ごとの落ちた理由(null = 返した)。event id は tool 結果に載り、Precedent の

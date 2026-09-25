@@ -226,6 +226,8 @@ export interface ChangeAgentTierInput {
   /** 提案が pin した tier。書き込み前の fetch の後の registry がこの値でなければ書かない。 */
   expectTier: string;
   to: string;
+  /** 下げ先の検査(spec #916 B)。fetch の後の定義の provider で呼ぶ —— 提案後に entry が変わっていても skipped へ落とさない。 */
+  assertLandable: (providers: string[]) => void;
   message: string;
 }
 
@@ -238,17 +240,20 @@ export async function changeAgentTier(input: ChangeAgentTierInput, deps: AgentAd
   if (!existing || existing.builtin || existing.tier !== input.expectTier) {
     throw new AgentTierMismatchError(input.name, input.expectTier, existing?.tier);
   }
+  input.assertLandable(existing.provider.map((entry) => entry.name));
   return commitToRegistry(
     deps.registry,
     deps.githubAuth,
     (worktreeDir) => {
       const file = join(worktreeDir, "agents", `${input.name}.md`);
       const version = JSON.stringify(bumpVersion(existing.version));
+      const text = readFileSync(file, "utf8");
+      const frontmatter = text.match(/^---\n[\s\S]*?\n---\n/)?.[0];
+      // tier を行で書いていない frontmatter(flow 形式・字下げ)は書き換えられない —— 変わらないまま着地を成功と数えない
+      if (!frontmatter || !/^tier:/m.test(frontmatter)) throw new Error(`agents/${input.name}.md has no top-level tier: line to rewrite`);
       writeFileSync(
         file,
-        readFileSync(file, "utf8").replace(/^---\n[\s\S]*?\n---\n/, (frontmatter) =>
-          frontmatter.replace(/^tier:.*$/m, `tier: ${input.to}`).replace(/^version:.*$/m, `version: ${version}`),
-        ),
+        text.replace(frontmatter, frontmatter.replace(/^tier:.*$/m, `tier: ${input.to}`).replace(/^version:.*$/m, `version: ${version}`)),
       );
     },
     input.message,
@@ -271,6 +276,11 @@ export interface AgentView extends Omit<AgentDefinition, "provider"> {
    *  `builtin`(定義の側の印)との2つで、表示は機械の解決をそのまま映す ——
    *  **読み取り時に導出**され、保存されない。 */
   shadowsBuiltIn?: true;
+}
+
+/** `AgentView.provider` の表示の綴りから entry の provider 名へ戻す(区切りは `listAgentViews` の join と対)。 */
+export function agentViewProviders(view: Pick<AgentView, "provider">): string[] {
+  return view.provider.split(", ");
 }
 
 export function listAgentViews(deps: AgentAdminDeps): AgentView[] {

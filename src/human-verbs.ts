@@ -1,5 +1,5 @@
 import { verifyAgentRepaired } from "./agent.js";
-import { type AgentAdmin, AgentTierMismatchError } from "./agent-create.js";
+import { type AgentAdmin, AgentTierMismatchError, agentViewProviders } from "./agent-create.js";
 import { type AttributionClient, attributeAfterRca, type BehaviorDraftClient } from "./attribution.js";
 import { type BoardStatePath, boardStateOverlap } from "./board-state.js";
 import { type CliAuthCheck, quarantineCliAuthFailure } from "./cli-auth.js";
@@ -16,7 +16,6 @@ import {
   type RoutingRowChange,
   readExecutionSettings,
   registryPinChanges,
-  routingPinChanges,
   type Tier,
   tierHasRowFor,
 } from "./execution-setting.js";
@@ -747,15 +746,23 @@ async function landAgentTier(deps: SubmitAnswerDeps, questionId: string, proposa
     );
     return new DomainError(`the proposal's premise no longer holds (${changed.join(", ")} changed), so the board settled the question as observed`);
   };
-  const settings = readExecutionSettings(deps.db);
-  if (routingPinChanges(proposal, settings)?.length) throw stale(["rows"]);
+  // 根拠の行の pin は表の書き口の hook が決着させる(ADR 0150 決定1)ので、ここで照合するのは registry 側だけ
   const agent = list().find((a) => a.name === proposal.agent);
   if (registryPinChanges(proposal, agent).length) throw stale(["agent_tier"]);
-  if (!tierHasRowFor(settings.table, agent!.provider.split(", "), to)) {
-    throw new DomainError(`the execution-setting table has no row at ${to} for ${proposal.agent}'s providers (${agent!.provider}), so the agent would be skipped`);
-  }
+  const assertLandable = (providers: string[]) => {
+    if (!tierHasRowFor(readExecutionSettings(deps.db).table, providers, to)) {
+      throw new DomainError(`the execution-setting table has no row at ${to} for ${proposal.agent}'s providers (${providers.join(", ")}), so the agent would be skipped`);
+    }
+  };
+  assertLandable(agentViewProviders(agent!));
   try {
-    return await changeTier({ name: proposal.agent, expectTier: proposal.pin.tier, to, message: `lower agent ${proposal.agent}'s tier to ${to} (question ${questionId})` });
+    return await changeTier({
+      name: proposal.agent,
+      expectTier: proposal.pin.tier,
+      to,
+      assertLandable,
+      message: `lower agent ${proposal.agent}'s tier to ${to} (question ${questionId})`,
+    });
   } catch (err) {
     if (err instanceof AgentTierMismatchError) throw stale(["agent_tier"]);
     if (err instanceof RegistryPushFailedError || err instanceof RegistryFetchFailedError) throw new DomainError(err.message);
