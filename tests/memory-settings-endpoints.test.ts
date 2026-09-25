@@ -180,3 +180,32 @@ it("管理MCP で Knowledge を書き、枝を定義し、一覧で読み、無�
     await client.close();
   }
 });
+
+it("POST /api/settings/memory/behaviors と管理MCP の record_behavior は人間名義の approved Behavior を書き、supersedes で編集し、domain error は 400 / tool error、経路は webui / mcp で残る(ADR 0152)", async () => {
+  t = await bootTidepool();
+  const behavior = { workspace: "tidepool", path: "habits/commits", title: "Split migrations", text: "Commit schema changes on their own.", addressee: "deckhand" };
+  const written = await api(t.baseUrl, "POST", "/api/settings/memory/behaviors", behavior);
+  expect(written.status).toBe(200);
+  expect((await api(t.baseUrl, "POST", "/api/settings/memory/behaviors", { ...behavior, supersedes: 999 })).status).toBe(400);
+  expect((await api(t.baseUrl, "POST", "/api/settings/memory/behaviors", { ...behavior, addressee: undefined })).status).toBe(400);
+
+  const client = await managementMcpClient(t.baseUrl);
+  try {
+    const edited = (await client.callTool({ name: "record_behavior", arguments: { ...behavior, addressee: null, supersedes: written.json.entry_id } })) as any;
+    const editedId = JSON.parse(edited.content[0].text).entry_id;
+    const rejected = (await client.callTool({ name: "record_behavior", arguments: { ...behavior, supersedes: written.json.entry_id } })) as any;
+    expect(rejected.isError).toBe(true);
+
+    expect((await api(t.baseUrl, "GET", "/api/settings/memory/entries?kind=behavior")).json.entries).toMatchObject([
+      { id: written.json.entry_id, invalidation_reason: "superseded", successor_id: editedId },
+      { id: editedId, state: "approved", addressee: null, author: { activity: "human", name: "human" } },
+    ]);
+    const origins = t.db.prepare("SELECT id, origin FROM events WHERE kind = 'memory_entry_created' ORDER BY id").all();
+    expect(origins).toEqual([
+      { id: written.json.entry_id, origin: "webui" },
+      { id: editedId, origin: "mcp" },
+    ]);
+  } finally {
+    await client.close();
+  }
+});

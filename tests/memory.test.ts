@@ -1,6 +1,6 @@
 import { expect, it } from "vitest";
 import { openDb } from "../src/db.js";
-import { getEvent, listEvents, listLog } from "../src/events.js";
+import { appendEvent, getEvent, listEvents, listLog } from "../src/events.js";
 import {
   approvedMemoryEntries,
   approveMemoryProposal,
@@ -11,12 +11,14 @@ import {
   humanEntryInput,
   invalidateMemoryEntry,
   listMemoryEntries,
+  proposeMemoryChange,
   readMemory,
   rebuildMemoryIndex,
+  recordBehavior,
   recordKnowledge,
   rejectMemoryProposal,
 } from "../src/memory.js";
-import { countUnsettledAttachedChildren, DomainError, logDecision, registerTask } from "../src/tasks.js";
+import { countUnsettledAttachedChildren, DomainError, getTask, logDecision, registerTask } from "../src/tasks.js";
 
 const at = new Date("2026-09-14T00:00:00.000Z");
 
@@ -177,6 +179,17 @@ it("author の活動 board(Board call の起草)は Knowledge と Definition で
 
   createBehaviorCandidate(db, { ...knowledge, author, addressee: null, source: { commit: "0a46a46" } }, "board", at);
   expect(listMemoryEntries(db, {}).map((e) => e.author)).toEqual([author]);
+});
+
+it("approved の Behavior を直接作れるのは人間名義だけ —— worker・RCA・Board call・meta-review の名義では domain error で何も残らない(ADR 0152)", () => {
+  const { db, task } = board();
+  const decision = logDecision(db, task, "split the migration", "deckhand", at);
+  for (const activity of ["worker_verb", "rca", "board", "meta_review"] as const) {
+    expect(() =>
+      recordBehavior(db, { ...knowledge, addressee: null, source_event_id: decision, author: { activity, name: "deckhand" } }, "worker", at),
+    ).toThrow(/only a human/);
+  }
+  expect(listMemoryEntries(db, {})).toEqual([]);
 });
 
 it("無効化済み・存在しないエントリの無効化は domain error", () => {
@@ -374,6 +387,72 @@ it("人間が書く Knowledge に出所を渡すと domain error —— 出所�
   const { db } = board();
   expect(() => recordKnowledge(db, { ...knowledge, author: human, source: { commit: "0a46a46" } }, "webui", at)).toThrow(/no source/);
   expect(approvedMemoryEntries(db)).toEqual([]);
+});
+
+it("人間が書く Behavior は任意で decision_logged か worker_spawned の event を出所に添えられ、他の種別の event は domain error —— 添えなければ出所は自身の作成 event(ADR 0153 決定3)", () => {
+  const { db, task } = board();
+  const decision = logDecision(db, task, "split the migration", "deckhand", at);
+  // setup のみ: worker session の開始 event
+  const spawned = appendEvent(db, {
+    taskId: task.id,
+    workerId: "deckhand",
+    origin: "board",
+    at,
+    payload: { kind: "worker_spawned", registry_commit: "c", definition_version: "1", advisor: null, provider: "anthropic", model: "opus", effort: "high", source: { tier: "task", provider: "only" }, harness: "claude-code", cli_version: "1" },
+  });
+  const write = (source_event_id?: number) =>
+    recordBehavior(db, { ...humanEntryInput(db, humanKnowledge), addressee: null, ...(source_event_id === undefined ? {} : { source_event_id }) }, "webui", at).entry_id;
+
+  const fromDecision = write(decision);
+  const fromSession = write(spawned);
+  const own = write();
+  expect(() => write(1)).toThrow(/decision_logged or worker_spawned/);
+  expect(() => write(999)).toThrow(DomainError);
+
+  expect(approvedMemoryEntries(db).map((e) => [e.id, e.source])).toEqual([
+    [fromDecision, { kind: "decision", ref: decision }],
+    [fromSession, { kind: "event", ref: spawned }],
+    [own, { kind: "event", ref: own }],
+  ]);
+});
+
+it("人間の Behavior は supersedes で approved の Behavior を書き直し、旧を人間名義の superseded + 後継で無効化する —— candidate・無効化済み・Knowledge・Definition を指すと domain error で何も変わらない(ADR 0152 決定4)", () => {
+  const { db } = board();
+  const write = (title: string, supersedes?: number) =>
+    recordBehavior(db, { ...humanEntryInput(db, { ...humanKnowledge, title }), addressee: "deckhand", ...(supersedes === undefined ? {} : { supersedes }) }, "webui", at).entry_id;
+  const old = write("old rule");
+  const candidate = createBehaviorCandidate(db, { ...knowledge, addressee: null, source: { commit: "0a46a46" }, author: { activity: "rca", name: "auditor" } }, "board", at).entry_id;
+  const dead = write("dead rule");
+  invalidateMemoryEntry(db, { entry_id: dead, reason: "requirement_change" }, "human", "webui", at);
+  const fact = record(db, "fact");
+  const branch = defineMemoryBranch(db, { scope: "tidepool", path: "build", text: "How the build runs.", author: human }, "webui", at).entry_id;
+  const before = listMemoryEntries(db, {});
+
+  for (const target of [candidate, dead, fact, branch]) expect(() => write("new rule", target)).toThrow(DomainError);
+  expect(listMemoryEntries(db, {})).toEqual(before);
+
+  const revised = write("new rule", old);
+  expect(listMemoryEntries(db, { kind: "behavior" })).toMatchObject([
+    { id: old, invalidation_reason: "superseded", successor_id: revised },
+    { id: candidate },
+    { id: dead },
+    { id: revised, state: "approved", title: "new rule", addressee: "deckhand", author: human },
+  ]);
+  // 作成 event の直後が旧の無効化 event
+  expect(getEvent(db, revised + 1)).toMatchObject({ worker_id: "human", payload: { kind: "memory_entry_invalidated", entry_id: old, activity: "human" } });
+});
+
+it("直接編集で superseded になった approved Behavior を pin する open な提案 question は、観測で決着し回答は残らない(ADR 0152 決定4)", () => {
+  const { db, task } = board();
+  const write = (supersedes?: number) =>
+    recordBehavior(db, { ...humanEntryInput(db, humanKnowledge), addressee: null, ...(supersedes === undefined ? {} : { supersedes }) }, "webui", at).entry_id;
+  const old = write();
+  const { question_id } = proposeMemoryChange(db, task.id, { op: "invalidate", target_id: old, reason: "requirement_change", rationale: "r" }, "auditor", at);
+
+  write(old);
+
+  expect(getTask(db, question_id)).toMatchObject({ status: "done", question_answer: null });
+  expect(listEvents(db, question_id).map((e) => e.kind)).toEqual(["task_registered", "memory_proposal_stale"]);
 });
 
 it("人間が書く定義の原文は title = text で持つ", () => {

@@ -33,7 +33,7 @@ export interface MemoryEntryFields {
   original: { title: string; text: string; language: string } | null;
   /** Behavior のみ: agent 名 or null = 全員。Knowledge は常に null。 */
   addressee: string | null;
-  /** definition と人間が書くエントリは null —— 出所は自身の作成 event(ADR 0083 追記4・追記5)で、
+  /** definition と人間が書くエントリ(出所を添えない Behavior を含む)は null —— 出所は自身の作成 event(ADR 0083 追記4・追記5)で、
    *  id は event を書くまで決まらないので投影と再生が id から導く(sourceOf)。 */
   source: MemorySource | null;
   author: { activity: "worker_verb" | "human" | "rca" | "meta_review" | "board"; name: string };
@@ -128,8 +128,13 @@ function createEntry(db: Db, fields: Omit<MemoryEntryFields, "source"> & { sourc
   if (fields.title.trim() === "" || fields.text.trim() === "") throw new DomainError("title and text must be non-empty");
   // board = Board call の起草(ADR 0120 決定1(b)(c))は Behavior candidate だけ
   if (fields.author.activity === "board" && fields.kind !== "behavior") throw new DomainError("a board-drafted entry can only be a behavior candidate");
-  const ownSource = fields.kind === "definition" || fields.author.activity === "human";
-  if (ownSource && fields.source !== undefined) throw new DomainError("a definition or a human-written entry has no source: it is the writer's own declaration");
+  // 承認の線は「人間が文言を保証したか」(ADR 0152 決定1): AI の起草は candidate → question
+  if (fields.kind === "behavior" && fields.state === "approved" && fields.author.activity !== "human") {
+    throw new DomainError("only a human can write an approved behavior; others write a candidate");
+  }
+  // 人間の Behavior だけは任意で出所の Episode を添えられる(ADR 0153 決定3)
+  const ownSource = fields.kind === "definition" || (fields.author.activity === "human" && (fields.kind !== "behavior" || fields.source === undefined));
+  if (ownSource && fields.source !== undefined) throw new DomainError("a definition or a human-written knowledge entry has no source: it is the writer's own declaration");
   return db.transaction(() => {
     const entry: MemoryEntryFields = { ...fields, source: ownSource ? null : resolveSource(db, fields.source) };
     const id = appendEvent(db, {
@@ -226,7 +231,7 @@ function requireKnowledge(db: Db, id: number): EntryRow {
 }
 
 /** 人間の面(settings の HTTP / 管理MCP)の書き込み欄(spec #586 F)。workspace は null = 盤面全体、
- *  original_title / original_text は人間の原文で言語は盤面の表示言語。出所欄は無い(ADR 0083 追記5)。 */
+ *  original_title / original_text は人間の原文で言語は盤面の表示言語。出所欄は Behavior だけが持つ(ADR 0083 追記5 / ADR 0153 決定3)。 */
 const humanEntryFields = {
   workspace: z.string().min(1).nullable(),
   path: z.string(),
@@ -235,6 +240,12 @@ const humanEntryFields = {
 };
 export const humanKnowledgeSchema = z.object({ ...humanEntryFields, title: z.string(), original_title: z.string().optional() });
 export const humanDefinitionSchema = z.object({ ...humanEntryFields, supersedes: z.number().int().positive().optional() });
+/** Behavior は Knowledge の欄 + 宛先(null = 全員)、任意の編集先と出所の Episode(ADR 0152 / ADR 0153 決定3)。 */
+export const humanBehaviorSchema = humanKnowledgeSchema.extend({
+  addressee: z.string().min(1).nullable(),
+  supersedes: z.number().int().positive().optional(),
+  source_event_id: z.number().int().positive().optional(),
+});
 // `rejected` は提案 question の reject だけが書く(人間の面・meta-review の verb からは渡せない)
 export const invalidationSchema = z.object({ reason: z.enum(INVALIDATION_REASONS).exclude(["rejected"]), successor_id: z.number().int().positive().optional() });
 
@@ -281,6 +292,31 @@ export function createBehaviorCandidate(
 ): { entry_id: number; event_id: number } {
   const id = createEntry(db, { ...input, kind: "behavior", state: "candidate", original: null }, origin, at);
   return { entry_id: id, event_id: id };
+}
+
+/** 人間が書く Behavior(ADR 0152 決定3・4): 書いた時点で approved。出所は任意で事例の Episode(decision_logged か
+ *  worker_spawned の event、ADR 0153 決定3)、無ければ自身の作成 event。`supersedes` は編集 —— 未無効化の approved
+ *  Behavior を指し、書くのと superseded + 後継の無効化を1 transaction(defineMemoryBranch と同じ形)。 */
+export function recordBehavior(
+  db: Db,
+  input: Omit<EntryInput, "source"> & { addressee: string | null; source_event_id?: number; supersedes?: number },
+  origin: EventOrigin,
+  at: Date,
+): { entry_id: number; event_id: number } {
+  const { source_event_id, supersedes, ...fields } = input;
+  if (source_event_id !== undefined && !["decision_logged", "worker_spawned"].includes(getEvent(db, source_event_id)?.kind ?? "")) {
+    throw new DomainError(`a behavior's source must be a decision_logged or worker_spawned event: ${source_event_id}`);
+  }
+  const source = source_event_id === undefined ? undefined : { event_id: source_event_id };
+  return db.transaction(() => {
+    // candidate を直す口は提案 question の修正値だけ(ADR 0152 決定3)
+    if (supersedes !== undefined) requireBehavior(db, supersedes, "approved");
+    const id = createEntry(db, { ...fields, source, kind: "behavior", state: "approved", original: fields.original ?? null }, origin, at);
+    if (supersedes !== undefined) {
+      invalidateMemoryEntry(db, { entry_id: supersedes, reason: "superseded", successor_id: id }, fields.author.name, origin, at, { activity: fields.author.activity });
+    }
+    return { entry_id: id, event_id: id };
+  })();
 }
 
 function requireEntry(db: Db, id: number): EntryRow {
