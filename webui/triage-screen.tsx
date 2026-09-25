@@ -210,7 +210,7 @@ async function translateMemoryWording(translate: TpTranslateFn, english: Record<
 function TpMemoryAmendment({ candidateId, onTranslate, onChange }: {
   candidateId: number;
   onTranslate?: TpTranslateFn;
-  onChange: (amendment: TpAmendment | undefined) => void;
+  onChange: (amendment: TpAmendment) => void;
 }) {
   const { Button, Input } = window.TidepoolDesignSystem_8a0ead;
   type Wording = { title: string; text: string; addressee: string };
@@ -238,7 +238,7 @@ function TpMemoryAmendment({ candidateId, onTranslate, onChange }: {
     // a partial original is sent as is so the server's refusal says why
     if (draft.originalTitle.trim()) changed.original_title = draft.originalTitle.trim();
     if (draft.originalText.trim()) changed.original_text = draft.originalText.trim();
-    onChange(Object.keys(changed).length > 0 ? changed : undefined);
+    onChange(changed);
   }, [base, draft]);
   if (!base) return error ? <div style={{ fontSize: 'var(--text-xs)', color: 'var(--coral-4)', marginBottom: 14 }}>{error}</div> : null;
   const set = (key: keyof typeof draft) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
@@ -358,7 +358,7 @@ function TpQuestionCard({ q, answer, onAnswer, locked = false, onTranslate }: {
         </div>
       )}
       {q.amendable === 'memory' && !locked && (
-        <TpMemoryAmendment candidateId={q.candidateId!} onTranslate={onTranslate} onChange={(changed) => setAmendment(changed ?? {})} />
+        <TpMemoryAmendment candidateId={q.candidateId!} onTranslate={onTranslate} onChange={setAmendment} />
       )}
       {q.amendable === 'row' && !locked && (
         <div style={{ display: 'flex', gap: 8, marginBottom: 14 }}>

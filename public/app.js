@@ -273,7 +273,7 @@ function TpMemoryAmendment({ candidateId, onTranslate, onChange }) {
     if (draft.addressee.trim() !== base.addressee) changed.addressee = draft.addressee.trim() || null;
     if (draft.originalTitle.trim()) changed.original_title = draft.originalTitle.trim();
     if (draft.originalText.trim()) changed.original_text = draft.originalText.trim();
-    onChange(Object.keys(changed).length > 0 ? changed : void 0);
+    onChange(changed);
   }, [base, draft]);
   if (!base) return error ? /* @__PURE__ */ React.createElement("div", { style: { fontSize: "var(--text-xs)", color: "var(--coral-4)", marginBottom: 14 } }, error) : null;
   const set = (key) => (e) => {
@@ -326,7 +326,7 @@ function TpQuestionCard({ q, answer, onAnswer, locked = false, onTranslate }) {
       onChange: (e) => setAmendment({ ...amendment, to: e.target.value }),
       options: [{ value: "", label: "as proposed" }, ...["economy", "standard"].map((tier) => ({ value: tier, label: tier }))]
     }
-  )), q.amendable === "memory" && !locked && /* @__PURE__ */ React.createElement(TpMemoryAmendment, { candidateId: q.candidateId, onTranslate, onChange: (changed) => setAmendment(changed ?? {}) }), q.amendable === "row" && !locked && /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8, marginBottom: 14 } }, /* @__PURE__ */ React.createElement(
+  )), q.amendable === "memory" && !locked && /* @__PURE__ */ React.createElement(TpMemoryAmendment, { candidateId: q.candidateId, onTranslate, onChange: setAmendment }), q.amendable === "row" && !locked && /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8, marginBottom: 14 } }, /* @__PURE__ */ React.createElement(
     Select,
     {
       label: "Amend tier (optional)",

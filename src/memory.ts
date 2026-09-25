@@ -454,7 +454,6 @@ export function approveMemoryProposal(db: Db, proposal: MemoryProposal, question
   return db.transaction(() => {
     const candidate = assertProposalFresh(db, proposal);
     if (proposal.op === "invalidate") {
-      if (amendment) throw new DomainError("an invalidate proposal takes no amendment");
       return invalidateMemoryEntry(db, { entry_id: candidate.id, reason: proposal.reason }, HUMAN_WORKER_ID, origin, at, mark);
     }
     if (amendment) {
