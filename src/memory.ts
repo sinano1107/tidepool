@@ -983,12 +983,12 @@ function caseSession(db: Db, anchor: EventRow): { events: EventRow[]; handoff: s
   const { inSession } = sessionWindow(events, spawned);
   if (anchor !== spawned && !inSession(anchor)) return empty;
   const inWindow = events.filter(inSession);
-  const completed = inWindow.find((e) => e.payload.kind === "task_completed")?.payload;
-  if (completed?.kind !== "task_completed") return { events: inWindow, handoff: null, result: null };
+  const payload = inWindow.find((e) => e.kind === "task_completed")?.payload;
+  const completed = payload?.kind === "task_completed" ? payload : null;
   return {
     events: inWindow,
-    handoff: completed.handoff_present ? (getTask(db, anchor.task_id)?.handoff_doc ?? null) : null,
-    result: completed.result,
+    handoff: completed?.handoff_present ? (getTask(db, anchor.task_id)?.handoff_doc ?? null) : null,
+    result: completed?.result ?? null,
   };
 }
 
