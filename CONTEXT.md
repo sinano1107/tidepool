@@ -297,7 +297,7 @@ _Avoid_: 畳み中・畳み込み中(畳み込み停止は watchdog が撃つ合
 
 ## Board call(盤面呼び出し)
 
-盤面が**自分自身の機能のために**回す AI 呼び出し(2026-08-04 の grilling、issue #174)。v1 の用途は AI 下書き・表示時翻訳・worker に与える面の事前確認・使用量の読み取り。配分評価(Allocation review 参照)と帰責の判定・`preference` と第2回確定後の Behavior candidate の起草(帰責 参照、ADR 0115 / ADR 0120)もここで回す。Worker session と対をなす概念であり、**worker session ではない** —— タスクにも slot にも属さず、assignee を持たず、decision log にも現れない。説明責任の主体は実行者ではなく盤面自身(= 人間)である。 各用途は使う Provider を呼び出しごとに明示し、盤面全体の暗黙の既定 Provider は持たない。
+盤面が**自分自身の機能のために**回す AI 呼び出し(2026-08-04 の grilling、issue #174)。v1 の用途は AI 下書き・表示時翻訳・worker に与える面の事前確認・使用量の読み取り。配分評価(Allocation review 参照)と帰責の判定・`preference` と第2回確定後の Behavior candidate の起草(帰責 参照、ADR 0115 / ADR 0120)もここで回す —— この3用途は worker の仕事の結果が出てから撃つので**振り返り Board call** と呼び、ティアを盤面設定の1つの値で共有する(Provider は `anthropic`、ADR 0111 追記4)。Worker session と対をなす概念であり、**worker session ではない** —— タスクにも slot にも属さず、assignee を持たず、decision log にも現れない。説明責任の主体は実行者ではなく盤面自身(= 人間)である。 各用途は使う Provider を呼び出しごとに明示し、盤面全体の暗黙の既定 Provider は持たない。
 
 したがって **advisor を持たない**(Advisor 参照) —— advisor は worker がタスクの途中で判断の質を上げるための能力であり、盤面の内部処理には相談すべき判断が無い。この不在はホスト環境の設定に委ねられず、**盤面が呼び出しごとに明示的に宣言する**: 別の目的で渡した設定の副作用として advisor が結果的に不在になっている状態は、ホスト側の1行で静かに反転しうるため不在の綴りとして認めない(ADR 0044)。同じ理由で逆向きも成立する —— ホストの環境設定が worker の advisor を黙って落とすことも許されない(有効・無効の正本は registry と kill switch のみ)。
 

@@ -1,6 +1,5 @@
 import { afterEach, expect, it } from "vitest";
-import { approvedMemoryEntries } from "../src/memory.js";
-import { bootTidepool, HOUR, mcpClient, registerWork, type Tidepool } from "./harness.js";
+import { bootTidepool, HOUR, mcpClient, memoryEntries, registerWork, type Tidepool } from "./harness.js";
 
 /** worker MCP の `record_knowledge`(spec #586 E / issue #590)。検査と event の中身は
  *  ドメイン層(tests/memory.test.ts)が言うので、ここは写像だけ —— スコープ・書き手・
@@ -28,7 +27,7 @@ it("record_knowledge は attributed task の workspace をスコープ、worker 
     });
     expect(result.isError).toBeFalsy();
     const { entry_id, event_id } = JSON.parse(text(result));
-    expect(approvedMemoryEntries(t.db)).toMatchObject([
+    expect(await memoryEntries(t, "?state=approved")).toMatchObject([
       {
         id: entry_id,
         version: event_id,
@@ -54,7 +53,7 @@ it("record_knowledge の拒否は protocol error ではなく domain error の t
     });
     expect(missing.isError).toBe(true);
     expect(text(missing)).toContain("exactly one of event_id or commit");
-    expect(approvedMemoryEntries(t.db)).toEqual([]);
+    expect(await memoryEntries(t, "?state=approved")).toEqual([]);
   } finally {
     await client.close();
   }
@@ -78,7 +77,7 @@ it("registry の無い盤面で workspace を指定しないタスクからの r
     });
     expect(result.isError).toBe(true);
     expect(text(result)).toContain("memory verbs need a task workspace");
-    expect(approvedMemoryEntries(t.db)).toEqual([]);
+    expect(await memoryEntries(t, "?state=approved")).toEqual([]);
   } finally {
     await client.close();
   }

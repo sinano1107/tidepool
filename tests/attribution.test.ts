@@ -518,6 +518,41 @@ it.each([
   },
 );
 
+it("盤面設定 retrospective_tier を standard にすると、帰責の判定も Behavior candidate の起草も anthropic × standard の行で撃たれる(issue #914)", async () => {
+  const s = await objectedForDraft("tiered-draft", { initial: { cause: "preference", evidence: "taste" } });
+  t = s.t;
+  expect((await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "retrospective_tier", value: "standard" })).status).toBe(200);
+  s.behaviorDraftClient.scriptDraft(s.entry.id, { path: "testing/fixtures", title: "Keep fixtures", text: "Always keep the fixtures.", addressee: "all" });
+
+  await commit(t, s.task.id, "tiered-draft");
+
+  expect(s.attributionClient.calls).toEqual([
+    expect.objectContaining({ setting: expect.objectContaining({ model: "opus", effort: "high" }) }),
+  ]);
+  expect(s.behaviorDraftClient.calls).toEqual([
+    expect.objectContaining({ setting: expect.objectContaining({ model: "opus", effort: "high" }) }),
+  ]);
+});
+
+it("選んだティアの anthropic 行が無ければ、帰責も起草も client を呼ばずに畳み、commit から例外は出ない(issue #914)", async () => {
+  // preference を scriptJudgment しても、行が無ければ帰責自身の Board call が先に uncertain へ畳むので
+  // 起草の条件(初回は preference のみ)に届かない —— 3用途は同じ欄を共有する(ADR 0111 追記4)
+  const s = await objectedForDraft("tiered-draft-fail", { initial: { cause: "preference", evidence: "taste" } });
+  t = s.t;
+  expect((await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "retrospective_tier", value: "standard" })).status).toBe(200);
+  expect((await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "delete_row", provider: "anthropic", model: "opus" })).status).toBe(200);
+
+  const { res } = await commit(t, s.task.id, "tiered-draft-fail");
+
+  expect(res.json.outcome).toBe("closed_now");
+  expect(s.attributionClient.calls).toEqual([]);
+  expect(s.behaviorDraftClient.calls).toEqual([]);
+  expect((await attributions(t, s.task.id)).map((e: any) => e.payload)).toMatchObject([
+    { cause: "uncertain", evidence: expect.stringContaining("no row for anthropic / standard") },
+  ]);
+  expect(await memoryEntries(t)).toEqual([]);
+});
+
 it.each([
   ["preference", null],
   ["capability", "worker"],

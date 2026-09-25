@@ -1,6 +1,6 @@
 import { expect, it } from "vitest";
 import { openDb } from "../src/db.js";
-import { getEvent } from "../src/events.js";
+import { appendEvent, getEvent } from "../src/events.js";
 import {
   approvedMemoryEntries,
   approveMemoryProposal,
@@ -14,7 +14,9 @@ import {
   recordKnowledge,
   searchMemory,
 } from "../src/memory.js";
+import { projectAndPersist } from "../src/precedent.js";
 import { DomainError, logDecision, registerTask } from "../src/tasks.js";
+import { FIXTURE_SPAWNED_EVENT_ID, FIXTURE_TASK, seedFixtureBoard, tempDir, writeFixtureTranscript } from "./harness.js";
 
 const at = new Date("2026-09-14T00:00:00.000Z");
 const approve = (db: ReturnType<typeof openDb>, candidate_id: number) =>
@@ -226,6 +228,94 @@ it("無効化済み・candidate・宛先外・他 workspace のエントリは I
   expect(browseMemory(db, reader, { prefix: "tide" }, at).entries.map((e) => e.id)).toEqual(expected);
   expect(searchMemory(db, reader, { query: "tide" }, at).results.map((e) => e.id).sort()).toEqual(expected);
   expect(readMemory(db, reader, { ids: all }, at).entries.map((e) => e.id)).toEqual(expected);
+});
+
+/** #386 のフィクスチャの session(worker_spawned 5、decision 6・7・8、完了 9)を投影した盤面と、その task の reader。 */
+async function projectedBoard() {
+  const db = seedFixtureBoard("## Outcome\nCreated notes.md.");
+  projectAndPersist(db, {
+    workerSpawnedEventId: FIXTURE_SPAWNED_EVENT_ID,
+    transcriptPath: writeFixtureTranscript(await tempDir("tidepool-case-"), `${FIXTURE_TASK}.${FIXTURE_SPAWNED_EVENT_ID}.stream.jsonl`),
+  });
+  return { db, reader: { taskId: FIXTURE_TASK, scope: "sandbox", agent: "tako" } };
+}
+
+const approvedBehavior = (db: ReturnType<typeof openDb>, title: string, source?: { event_id: number }) => {
+  const id = createBehaviorCandidate(
+    db,
+    { scope: "sandbox", path: "notes", title, text: "Keep notes short.", addressee: null, source, author: { activity: source ? "rca" : "human", name: "auditor" } },
+    "board",
+    at,
+  ).entry_id;
+  approve(db, id);
+  return id;
+};
+
+const FIXTURE_RESULT = "Created notes.md with 3 bullets on tide pools; logged 3 decisions (2 identical); used 1 subagent and 1 advisor consult.";
+
+it("RCA が起草した Behavior の read は、帰責 event から辿った異議の decision 本文・その entry への異議の steering(event 順)・その session の handoff と result を case に持つ", async () => {
+  const { db, reader } = await projectedBoard();
+  const objection = (entry_id: number, comment: string) =>
+    appendEvent(db, { taskId: FIXTURE_TASK, workerId: "human", origin: "webui", payload: { kind: "objection_raised", entry_id, comment, session_id: 1 }, at });
+  const first = objection(6, "three bullets is too few");
+  objection(8, "not about this entry");
+  const second = objection(6, "cover the tide cycle too");
+  const attributed = appendEvent(db, {
+    taskId: FIXTURE_TASK,
+    workerId: "board",
+    origin: "board",
+    payload: { kind: "objection_attributed", entry_id: 6, objection_event_ids: [first, second], cause: "capability", evidence: "e", round: "initial" },
+    at,
+  });
+  const id = approvedBehavior(db, "Cover the topic", { event_id: attributed });
+  // 完了 entry は decision マーカーを持たないので、その完了を記録した session から handoff / result を引く
+  const completion = approvedBehavior(db, "Report the outcome", { event_id: 9 });
+
+  expect(readMemory(db, reader, { ids: [id, completion] }, at).entries.map((e) => e.case)).toEqual([
+    {
+      decision: "kept the note to three bullets",
+      steering: ["three bullets is too few", "cover the tide cycle too"],
+      handoff: "## Outcome\nCreated notes.md.",
+      result: FIXTURE_RESULT,
+    },
+    { decision: `completion report: ${FIXTURE_RESULT}`, steering: [], handoff: "## Outcome\nCreated notes.md.", result: FIXTURE_RESULT },
+  ]);
+});
+
+it("worker_spawned を出所に持つ Behavior の case は、その session の decision 列(マーカー順)・handoff・result", async () => {
+  const { db, reader } = await projectedBoard();
+  const id = approvedBehavior(db, "Session", { event_id: FIXTURE_SPAWNED_EVENT_ID });
+
+  expect(readMemory(db, reader, { ids: [id] }, at).entries[0]?.case).toEqual({
+    decisions: ["kept the note to three bullets", "kept the note to three bullets", "subagent reported notes.md word count as 62"],
+    handoff: "## Outcome\nCreated notes.md.",
+    result: FIXTURE_RESULT,
+  });
+});
+
+it("人間が書いた Behavior(出所 = 自身の作成 event)と Knowledge の case は null", async () => {
+  const { db, reader } = await projectedBoard();
+  const human = approvedBehavior(db, "Human");
+  const knowledge = recordKnowledge(
+    db,
+    { scope: "sandbox", path: "notes", title: "k", text: "x", source: { event_id: 6 }, author: { activity: "worker_verb", name: "tako" } },
+    "worker",
+    at,
+  ).entry_id;
+
+  expect(readMemory(db, reader, { ids: [human, knowledge] }, at).entries.map((e) => e.case)).toEqual([null, null]);
+});
+
+it("Episode が投影されていない decision の case は、decision 本文と steering(異議が無ければ空)だけを持つ", () => {
+  const db = seedFixtureBoard("## Outcome\nCreated notes.md.");
+  const id = approvedBehavior(db, "Unprojected", { event_id: 6 });
+
+  expect(readMemory(db, { taskId: FIXTURE_TASK, scope: "sandbox", agent: "tako" }, { ids: [id] }, at).entries[0]?.case).toEqual({
+    decision: "kept the note to three bullets",
+    steering: [],
+    handoff: null,
+    result: null,
+  });
 });
 
 it("pull は1回ごとに task 帰属の memory_pulled を残す —— verb・入力・返した id・その時点の memory 系 event の最大 id(watermark)", () => {

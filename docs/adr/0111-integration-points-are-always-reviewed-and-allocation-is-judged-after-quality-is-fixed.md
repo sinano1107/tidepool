@@ -82,3 +82,13 @@ decompose 専用で type が work 固定・親の子固定なので、root revie
 ADR 0120 の付帯子 question(`question_proposal` の種別)に揃え、approve が人間名義の root review を登録する(ADR 0150 決定6)。
 決定5 の「同じモデルが評価したかは Precedent から読める」は `allocation_reviewed` が judge を持たず成り立っていなかったので、
 event に judge を足す(ADR 0150 決定8)。
+
+## 追記4(2026-09-25 の triage、issue #914)
+
+決定4 の「盤面設定で Provider / ティアを固定」は実装されず、`anthropic × frontier` がコードに固定されていた。**ティアを盤面設定に
+移し、配分評価・帰責の判定・Behavior candidate の起草の3用途(振り返り Board call)で1つの欄を共有する**。未設定は `frontier`。
+3用途は同じ値をコードで共有していたので、配分評価だけを設定に移すと同じ枠の中に設定とコードの食い違いを作る。起草を裁く側と
+別のモデルにしたい場面が観測されたら欄を分ける。
+
+**Provider は `anthropic` 固定のまま残す。** 答えを取りに行く Board call の client は Claude しか無く、Provider を選べる欄は
+`anthropic` 以外を受け取れない。Codex 版の client と用途ごとの Provider の宣言は #456 の範囲で、その時に欄を足す。

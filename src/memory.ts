@@ -4,10 +4,11 @@ import { z } from "zod";
 import type { Cause } from "./cause.js";
 import { type Db, MEMORY_FTS_DDL, MEMORY_FTS_TOKENIZER, MEMORY_PREPROCESS_VERSION } from "./db.js";
 import { getDisplayLanguage } from "./display-language.js";
-import { appendEvent, type EventOrigin, type EventPayload, getEvent, listEvents } from "./events.js";
+import { appendEvent, type EventOrigin, type EventPayload, getEvent, HUMAN_FACING_KINDS, listEvents } from "./events.js";
 import { metaReviewSubjectOf, paged, previousMetaReviewWatermark } from "./meta-review.js";
-import { entriesReadBefore, entriesSeenBefore, listEpisodes } from "./precedent.js";
+import { caseEpisode, entriesReadBefore, entriesSeenBefore, listEpisodes } from "./precedent.js";
 import { BOARD_WORKER_ID, DomainError, HUMAN_WORKER_ID, type MemoryProposal, registerTask, settleQuestionAsObserved, type Task } from "./tasks.js";
+import { type DecisionLogEntry, objectedEntryText } from "./triage.js";
 
 /** 無効化の理由コード(spec #586 A)。自由記述は持たない。置換と path の付け替えは後継 id
  *  必須、cause.ts の語彙の3つ(間違っていた / 陳腐化)と、人間が提案 question を reject した `rejected`(issue #620)。 */
@@ -33,7 +34,7 @@ export interface MemoryEntryFields {
   original: { title: string; text: string; language: string } | null;
   /** Behavior のみ: agent 名 or null = 全員。Knowledge は常に null。 */
   addressee: string | null;
-  /** definition と人間が書くエントリは null —— 出所は自身の作成 event(ADR 0083 追記4・追記5)で、
+  /** definition と人間が書くエントリ(出所を添えない Behavior を含む)は null —— 出所は自身の作成 event(ADR 0083 追記4・追記5)で、
    *  id は event を書くまで決まらないので投影と再生が id から導く(sourceOf)。 */
   source: MemorySource | null;
   author: { activity: "worker_verb" | "human" | "rca" | "meta_review" | "board"; name: string };
@@ -128,10 +129,16 @@ function createEntry(db: Db, fields: Omit<MemoryEntryFields, "source"> & { sourc
   if (fields.title.trim() === "" || fields.text.trim() === "") throw new DomainError("title and text must be non-empty");
   // board = Board call の起草(ADR 0120 決定1(b)(c))は Behavior candidate だけ
   if (fields.author.activity === "board" && fields.kind !== "behavior") throw new DomainError("a board-drafted entry can only be a behavior candidate");
+  // 承認の線は「人間が文言を保証したか」(ADR 0152 決定1): AI の起草は candidate → question
+  if (fields.kind === "behavior" && fields.state === "approved" && fields.author.activity !== "human") {
+    throw new DomainError("only a human can write an approved behavior; others write a candidate");
+  }
+  // 人間の Behavior だけは任意で出所の Episode を添えられる(ADR 0153 決定3)
+  const mayCiteSource = fields.kind === "behavior" && fields.author.activity === "human";
   const ownSource = fields.kind === "definition" || fields.author.activity === "human";
-  if (ownSource && fields.source !== undefined) throw new DomainError("a definition or a human-written entry has no source: it is the writer's own declaration");
+  if (ownSource && !mayCiteSource && fields.source !== undefined) throw new DomainError("a definition or a human-written knowledge entry has no source: it is the writer's own declaration");
   return db.transaction(() => {
-    const entry: MemoryEntryFields = { ...fields, source: ownSource ? null : resolveSource(db, fields.source) };
+    const entry: MemoryEntryFields = { ...fields, source: ownSource && fields.source === undefined ? null : resolveSource(db, fields.source) };
     const id = appendEvent(db, {
       taskId: null,
       workerId: entry.author.name,
@@ -226,7 +233,7 @@ function requireKnowledge(db: Db, id: number): EntryRow {
 }
 
 /** 人間の面(settings の HTTP / 管理MCP)の書き込み欄(spec #586 F)。workspace は null = 盤面全体、
- *  original_title / original_text は人間の原文で言語は盤面の表示言語。出所欄は無い(ADR 0083 追記5)。 */
+ *  original_title / original_text は人間の原文で言語は盤面の表示言語。出所欄は Behavior だけが持つ(ADR 0083 追記5 / ADR 0153 決定3)。 */
 const humanEntryFields = {
   workspace: z.string().min(1).nullable(),
   path: z.string(),
@@ -235,6 +242,12 @@ const humanEntryFields = {
 };
 export const humanKnowledgeSchema = z.object({ ...humanEntryFields, title: z.string(), original_title: z.string().optional() });
 export const humanDefinitionSchema = z.object({ ...humanEntryFields, supersedes: z.number().int().positive().optional() });
+/** Behavior は Knowledge の欄 + 宛先(null = 全員)、任意の編集先と出所の Episode(ADR 0152 / ADR 0153 決定3)。 */
+export const humanBehaviorSchema = humanKnowledgeSchema.extend({
+  addressee: z.string().min(1).nullable(),
+  supersedes: z.number().int().positive().optional(),
+  source_event_id: z.number().int().positive().optional(),
+});
 // `rejected` は提案 question の reject だけが書く(人間の面・meta-review の verb からは渡せない)
 export const invalidationSchema = z.object({ reason: z.enum(INVALIDATION_REASONS).exclude(["rejected"]), successor_id: z.number().int().positive().optional() });
 
@@ -281,6 +294,31 @@ export function createBehaviorCandidate(
 ): { entry_id: number; event_id: number } {
   const id = createEntry(db, { ...input, kind: "behavior", state: "candidate", original: null }, origin, at);
   return { entry_id: id, event_id: id };
+}
+
+/** 人間が書く Behavior(ADR 0152 決定3・4): 書いた時点で approved。出所は任意で事例の Episode(decision_logged か
+ *  worker_spawned の event、ADR 0153 決定3)、無ければ自身の作成 event。`supersedes` は編集 —— 未無効化の approved
+ *  Behavior を指し、書くのと superseded + 後継の無効化を1 transaction(defineMemoryBranch と同じ形)。 */
+export function recordBehavior(
+  db: Db,
+  input: Omit<EntryInput, "source"> & { addressee: string | null; source_event_id?: number; supersedes?: number },
+  origin: EventOrigin,
+  at: Date,
+): { entry_id: number; event_id: number } {
+  const { source_event_id, supersedes, ...fields } = input;
+  if (source_event_id !== undefined && !["decision_logged", "worker_spawned"].includes(getEvent(db, source_event_id)?.kind ?? "")) {
+    throw new DomainError(`a behavior's source must be a decision_logged or worker_spawned event: ${source_event_id}`);
+  }
+  const source = source_event_id === undefined ? undefined : { event_id: source_event_id };
+  return db.transaction(() => {
+    // candidate を直す口は提案 question の修正値だけ(ADR 0152 決定3)
+    if (supersedes !== undefined) requireBehavior(db, supersedes, "approved");
+    const id = createEntry(db, { ...fields, source, kind: "behavior", state: "approved", original: fields.original ?? null }, origin, at);
+    if (supersedes !== undefined) {
+      invalidateMemoryEntry(db, { entry_id: supersedes, reason: "superseded", successor_id: id }, fields.author.name, origin, at, { activity: fields.author.activity });
+    }
+    return { entry_id: id, event_id: id };
+  })();
 }
 
 function requireEntry(db: Db, id: number): EntryRow {
@@ -900,21 +938,77 @@ export function listPrecedents(
 /** 出所の種別(ADR 0083 追記3): commit / event の参照は事実、decision の参照は推論。 */
 const SOURCE_KIND = { commit: "fact", event: "fact", decision: "inference" } as const;
 
-/** id で本文を読む。見えないエントリ(フィルタ外・存在しない id)は黙って返さない。 */
+/** case 描画(ADR 0153 決定3): 出所の decision なら本文・その entry への異議の steering(event 順)・
+ *  Episode の handoff と result、出所の session なら decision 列・handoff・result。transcript は含まない。 */
+type MemoryCase =
+  | { decision: string; steering: string[]; handoff: string | null; result: string | null }
+  | { decisions: string[]; handoff: string | null; result: string | null };
+
+/** 出所から case を描く。帰責 event は異議された entry へ辿る。事例に辿れない出所(commit、自身の作成
+ *  event など)は null。Episode が投影されていなければ handoff / result は null。 */
+function renderCase(db: Db, source: MemorySource): MemoryCase | null {
+  if (source.kind === "commit") return null;
+  const payload = getEvent(db, source.ref)?.payload;
+  if (payload?.kind === "worker_spawned") {
+    const episode = caseEpisode(db, { workerSpawnedEventId: source.ref });
+    return {
+      decisions: (episode?.decisionEventIds ?? []).map((id) => objectedEntryText(getEvent(db, id) as DecisionLogEntry)),
+      handoff: episode?.handoff ?? null,
+      result: episode?.result ?? null,
+    };
+  }
+  const entryId = payload?.kind === "objection_attributed" ? payload.entry_id : source.ref;
+  const entry = getEvent(db, entryId);
+  if (!entry || !(HUMAN_FACING_KINDS as readonly string[]).includes(entry.kind)) return null;
+  const steering = db
+    .prepare(
+      `SELECT json_extract(payload, '$.comment') AS comment FROM events
+        WHERE kind = 'objection_raised' AND json_extract(payload, '$.entry_id') = ? ORDER BY id`,
+    )
+    .all(entryId) as Array<{ comment: string }>;
+  const episode = caseEpisode(
+    db,
+    entry.kind === "task_completed" ? { completion: { taskId: entry.task_id!, eventId: entryId } } : { decisionEventId: entryId },
+  );
+  return {
+    decision: objectedEntryText(entry as DecisionLogEntry),
+    steering: steering.map((s) => s.comment),
+    handoff: episode?.handoff ?? null,
+    result: episode?.result ?? null,
+  };
+}
+
+/** id で本文を読む。見えないエントリ(フィルタ外・存在しない id)は黙って返さない。case は Behavior だけが持つ。 */
 export function readMemory(
   db: Db,
   reader: MemoryReader,
   input: { ids: number[] },
   at: Date,
 ): {
-  entries: Array<{ id: number; title: string; path: string; text: string; source: MemorySource; source_kind: "fact" | "inference" }>;
+  entries: Array<{
+    id: number;
+    title: string;
+    path: string;
+    text: string;
+    source: MemorySource;
+    source_kind: "fact" | "inference";
+    case: MemoryCase | null;
+  }>;
   event_id: number;
 } {
   return db.transaction(() => {
     const entries = visibleEntries(db, reader)
       .filter((row) => input.ids.includes(row.id))
       .map(rowToEntry)
-      .map(({ id, title, path, text, source }) => ({ id, title, path, text, source, source_kind: SOURCE_KIND[source.kind] }));
+      .map(({ id, kind, title, path, text, source }) => ({
+        id,
+        title,
+        path,
+        text,
+        source,
+        source_kind: SOURCE_KIND[source.kind],
+        case: kind === "behavior" ? renderCase(db, source) : null,
+      }));
     return recordPull(db, reader, { verb: "read_memory", input, returned_ids: entries.map((e) => e.id) }, { entries }, at);
   })();
 }

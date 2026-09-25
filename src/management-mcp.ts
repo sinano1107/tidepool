@@ -36,6 +36,7 @@ import { toolError, toolResult } from "./mcp.js";
 import {
   changeMemorySettings,
   defineMemoryBranch,
+  humanBehaviorSchema,
   humanDefinitionSchema,
   humanEntryInput,
   humanKnowledgeSchema,
@@ -46,6 +47,7 @@ import {
   memorySettingsChangeSchema,
   readMemorySettings,
   rebuildMemoryIndex,
+  recordBehavior,
   recordKnowledge,
   TOKENIZER,
 } from "./memory.js";
@@ -496,7 +498,8 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
     {
       description:
         "Read the board's execution settings: the model table (rows of provider, model, tier, effort, price_in / price_out in USD per MTok), " +
-        "whether the frontier row may serve as advisor, the Provider rank, the default priority (quality / cost), and whether the learner is promoted.",
+        "whether the frontier row may serve as advisor, the Provider rank, the default priority (quality / cost), whether the learner is promoted, " +
+        "and the retrospective tier (economy / standard / frontier) shared by the board's own retrospective Board calls (allocation review, attribution, Behavior candidate drafting).",
     },
     async () => toolResult(readExecutionSettings(deps.db)),
   );
@@ -506,9 +509,10 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
       description:
         "Apply one change to the board's execution settings as the human: upsert a table row (`row`, keyed by provider + model), " +
         "delete one (`delete_row` — deleting every row of a provider × tier just excludes that provider for tasks of that tier), " +
-        "or set `frontier_advisor`, `provider_rank` (every provider exactly once, first = preferred) or the default `priority`, " +
+        "or set `frontier_advisor`, `provider_rank` (every provider exactly once, first = preferred), the default `priority`, or `retrospective_tier` " +
+        "(economy / standard / frontier — the tier the board's own retrospective Board calls resolve on the anthropic row; unset = frontier), " +
         "or demote the learner (`learner_promoted: false` — promotion only comes from approving a routing meta-review's proposal). " +
-        "Takes effect at the next pickup.",
+        "Takes effect at the next pickup or Board call.",
       inputSchema: { change: executionSettingsChangeSchema },
     },
     async ({ change }) => {
@@ -556,8 +560,9 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
       return toolResult(readMetaReviewSettings(deps.db));
     },
   );
-  // spec #586 F / issue #593: the human's memory surface. No approve verb — approval
-  // only goes through a question (#358). Domain errors come back as tool errors.
+  // spec #586 F / issue #593: the human's memory surface. No approve verb (ADR 0152):
+  // wording the human writes here is approved on write, and AI-drafted wording is approved
+  // only through a proposal question. Domain errors come back as tool errors.
   const memoryVerb = (write: () => unknown) => {
     try {
       return toolResult(write());
@@ -599,6 +604,19 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
       inputSchema: humanDefinitionSchema.shape,
     },
     async (input) => memoryVerb(() => defineMemoryBranch(deps.db, humanEntryInput(deps.db, input), "mcp", deps.clock.now())),
+  );
+  server.registerTool(
+    "record_behavior",
+    {
+      description:
+        "Record a Behavior entry: how agents should act, injected into the workers of addressee (an agent name, or null for every agent). " +
+        "To edit an approved behavior, pass its id as supersedes: the new entry replaces it and the old one is invalidated as superseded. " +
+        "Candidates cannot be edited here. source_event_id optionally cites the episode the rule comes from: a decision_logged or " +
+        "worker_spawned event id; an edit does not carry the old entry's source over, so pass it again to keep it. title and text are the English canonical wording; " +
+        `original_title and original_text go together (both or neither). ${writtenAs}`,
+      inputSchema: humanBehaviorSchema.shape,
+    },
+    async (input) => memoryVerb(() => recordBehavior(deps.db, humanEntryInput(deps.db, input), "mcp", deps.clock.now())),
   );
   server.registerTool(
     "invalidate_memory_entry",

@@ -87,15 +87,15 @@ const row = async (model: string) =>
   ((await api(t.baseUrl, "GET", "/api/settings/execution")).json.table as any[]).find((r) => r.provider === "anthropic" && r.model === model);
 
 it("approve で表の行が提案の値になり、推奨どおりに数えられる", async () => {
-  const { client, propose } = await boardWithRoutingReview();
+  const { client, call, propose } = await boardWithRoutingReview();
   try {
     const questionId = await propose({ tier: "frontier" });
 
     expect((await answer(questionId, { answers: ["approve"] })).status).toBe(200);
 
     expect(await row("opus")).toEqual({ ...OPUS, tier: "frontier" });
-    // 適用は回答の印を持ち、meta-review の材料に数えられない(ADR 0151)
-    expect(JSON.parse((t.db.prepare("SELECT payload FROM events WHERE id = ?").get(lastSettingsChange()) as { payload: string }).payload)).toMatchObject({ question_id: questionId });
+    // 適用は回答の印を持ち、人間が変えた行として meta-review に読まれない(ADR 0151)
+    expect((await call("list_routing_cells", { since_watermark: 0 })).rows).toEqual([]);
     expect((await events(questionId)).find((e) => e.kind === "question_answered").payload).toEqual(
       expect.objectContaining({ answers: [{ answer: "approve", recommendation_accepted: true }] }),
     );
@@ -177,8 +177,6 @@ it("reject で表は変わらず、コメントが回答に残る", async () => 
   }
 });
 
-const lastSettingsChange = () =>
-  (t.db.prepare("SELECT MAX(id) AS id FROM events WHERE kind = 'execution_settings_changed'").get() as { id: number }).id;
 const staleEvents = async (id: string) => (await events(id)).filter((e) => e.kind !== "task_registered").map((e) => [e.kind, e.worker_id, e.payload]);
 
 it("pin の行を settings タブで編集する・管理MCP で消すと open な提案は観測で決着し routing_proposal_stale が残る", async () => {
@@ -189,18 +187,16 @@ it("pin の行を settings タブで編集する・管理MCP で消すと open �
     const deleted = await propose({ effort: "max" }, { provider: "anthropic", model: "sonnet" });
 
     expect((await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "row", row: { ...OPUS, price_out: 30 } })).status).toBe(200);
-    const editEvent = lastSettingsChange();
     const removal: any = await management.callTool({ name: "change_execution_settings", arguments: { change: { setting: "delete_row", provider: "anthropic", model: "sonnet" } } });
     expect(removal.isError).not.toBe(true);
-    const deleteEvent = lastSettingsChange();
 
     expect(await task(edited)).toMatchObject({ status: "done", question_answer: null });
     expect(await staleEvents(edited)).toEqual([
-      ["routing_proposal_stale", "tidepool", { kind: "routing_proposal_stale", question_id: edited, proposal_kind: "routing", changed: ["price_out"], observed_event_id: editEvent }],
+      ["routing_proposal_stale", "tidepool", { kind: "routing_proposal_stale", question_id: edited, proposal_kind: "routing", changed: ["price_out"], observed_event_id: expect.any(Number) }],
     ]);
     expect(await task(deleted)).toMatchObject({ status: "done", question_answer: null });
     expect(await staleEvents(deleted)).toEqual([
-      ["routing_proposal_stale", "tidepool", { kind: "routing_proposal_stale", question_id: deleted, proposal_kind: "routing", changed: null, observed_event_id: deleteEvent }],
+      ["routing_proposal_stale", "tidepool", { kind: "routing_proposal_stale", question_id: deleted, proposal_kind: "routing", changed: null, observed_event_id: expect.any(Number) }],
     ]);
   } finally {
     await client.close();
@@ -236,13 +232,12 @@ it("read_routing_settings は過去の routing の提案を、回答・修正値
     expect((await answer(rejected, { answers: ["reject"], comment: "sol is fine at high" })).status).toBe(200);
     const astra = { provider: "openai", tier: "frontier", model: "gpt-6-astra", effort: "high", price_in: 12, price_out: 50 };
     expect((await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "row", row: astra })).status).toBe(200);
-    const observed = lastSettingsChange();
 
     const proposal = async (id: string) => (await task(id)).question_proposal;
     expect((await call("read_routing_settings")).proposals).toEqual([
       { question_id: amended, proposal: await proposal(amended), answer: "approve", amendment: { effort: "max" }, comment: "and give it room", observed: null },
       { question_id: rejected, proposal: await proposal(rejected), answer: "reject", amendment: null, comment: "sol is fine at high", observed: null },
-      { question_id: stale, proposal: await proposal(stale), answer: null, amendment: null, comment: null, observed: { changed: ["price_in"], observed_event_id: observed } },
+      { question_id: stale, proposal: await proposal(stale), answer: null, amendment: null, comment: null, observed: { changed: ["price_in"], observed_event_id: expect.any(Number) } },
       { question_id: open, proposal: await proposal(open), answer: null, amendment: null, comment: null, observed: null },
     ]);
   } finally {
@@ -260,7 +255,7 @@ it("同じ行の提案 A の承認は open な提案 B を観測で決着させ�
 
     expect((await events(a)).map((e) => e.kind)).toEqual(["task_registered", "question_answered"]);
     expect(await staleEvents(b)).toEqual([
-      ["routing_proposal_stale", "tidepool", { kind: "routing_proposal_stale", question_id: b, proposal_kind: "routing", changed: ["tier"], observed_event_id: lastSettingsChange() }],
+      ["routing_proposal_stale", "tidepool", { kind: "routing_proposal_stale", question_id: b, proposal_kind: "routing", changed: ["tier"], observed_event_id: expect.any(Number) }],
     ]);
   } finally {
     await client.close();

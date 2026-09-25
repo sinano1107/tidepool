@@ -12,6 +12,7 @@
 	"formatter": {
 		"enabled": false
 	},
+	"plugins": ["./no-board-db-in-expect.grit"],
 	"linter": {
 		"enabled": true,
 		"rules": {

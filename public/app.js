@@ -1822,7 +1822,7 @@ function MetaReviewSettingsCard({ settings, say, onSaved, edit }) {
 }
 const MEMORY_INVALIDATION_REASONS = ["superseded", "path_moved", "capability", "environment", "requirement_change"];
 const needsSuccessor = (reason) => reason === "superseded" || reason === "path_moved";
-function MemoryEntriesCard({ workspaceNames, language, say, edit }) {
+function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit }) {
   const { Button, Card, Input, Select } = window.TidepoolDesignSystem_8a0ead;
   const [filter, setFilter] = React.useState({ workspace: "", kind: "", state: "" });
   const [entries, setEntries] = React.useState(null);
@@ -1852,13 +1852,14 @@ function MemoryEntriesCard({ workspaceNames, language, say, edit }) {
   const muted = { margin: 0, fontSize: "var(--text-xs)", color: "var(--text-muted)" };
   const writeId = "board:memory-write";
   const writing = edit.isOpen(writeId);
-  const blank = { kind: "knowledge", workspace: "", path: "", originalTitle: "", originalText: "", title: "", text: "", backTranslation: null, supersedes: "" };
+  const blank = { kind: "knowledge", workspace: "", path: "", originalTitle: "", originalText: "", title: "", text: "", backTranslation: null, supersedes: "", addressee: "" };
   const [draft, setDraft] = React.useState(blank);
   const [busy, setBusy] = React.useState(false);
-  const setDraftField = (key) => (e) => setDraft({ ...draft, [key]: e.target.value, ...key === "title" || key === "text" ? { backTranslation: null } : {} });
+  const setDraftField = (key) => (e) => setDraft({ ...draft, [key]: e.target.value, ...key === "title" || key === "text" ? { backTranslation: null } : {}, ...key === "kind" ? { supersedes: "" } : {} });
   useDirtySignal(edit, writing, [draft.originalTitle, draft.originalText, draft.title, draft.text].some((v) => v.trim() !== ""));
   const translatable = language !== "English";
-  const fields = draft.kind === "knowledge" ? ["title", "text"] : ["text"];
+  const fields = draft.kind === "definition" ? ["text"] : ["title", "text"];
+  const editingBehavior = draft.kind === "behavior" && !!draft.supersedes;
   const originalOf = { title: draft.originalTitle, text: draft.originalText };
   const runTranslation = async (toEnglish) => {
     setBusy(true);
@@ -1887,8 +1888,10 @@ function MemoryEntriesCard({ workspaceNames, language, say, edit }) {
     try {
       const originals = fields.map((key) => [`original_${key}`, originalOf[key].trim()]).filter(([, v]) => v);
       const body = { workspace: draft.workspace || null, path: draft.path.trim(), text: draft.text.trim(), ...Object.fromEntries(originals) };
+      const supersedes = draft.supersedes ? { supersedes: Number(draft.supersedes) } : {};
       if (draft.kind === "knowledge") await api("/api/settings/memory/knowledge", { ...body, title: draft.title.trim() });
-      else await api("/api/settings/memory/definitions", { ...body, ...draft.supersedes ? { supersedes: Number(draft.supersedes) } : {} });
+      else if (draft.kind === "behavior") await api("/api/settings/memory/behaviors", { ...body, title: draft.title.trim(), addressee: draft.addressee || null, ...supersedes });
+      else await api("/api/settings/memory/definitions", { ...body, ...supersedes });
       say("success", `${draft.kind} saved`, body.path);
       edit.close();
       await load();
@@ -1913,15 +1916,16 @@ function MemoryEntriesCard({ workspaceNames, language, say, edit }) {
     }
     setBusy(false);
   };
-  return /* @__PURE__ */ React.createElement(Card, { style: { display: "flex", flexDirection: "column", gap: 14 } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8, minHeight: 26 } }, /* @__PURE__ */ React.createElement("span", { style: settingsCardLabel }, "memory entries"), !writing && /* @__PURE__ */ React.createElement("div", { style: { marginLeft: "auto" } }, /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "sm", onClick: () => edit.open(writeId, () => setDraft(blank)) }, "Write"))), writing && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(
+  return /* @__PURE__ */ React.createElement(Card, { style: { display: "flex", flexDirection: "column", gap: 14 } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8, minHeight: 26 } }, /* @__PURE__ */ React.createElement("span", { style: settingsCardLabel }, "memory entries"), !writing && /* @__PURE__ */ React.createElement("div", { style: { marginLeft: "auto" } }, /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "sm", onClick: () => edit.open(writeId, () => setDraft(blank)) }, "Write"))), writing && /* @__PURE__ */ React.createElement(React.Fragment, null, editingBehavior ? /* @__PURE__ */ React.createElement("p", { style: muted }, "editing behavior #", draft.supersedes, " \u2014 saving writes a new approved entry and supersedes this one") : /* @__PURE__ */ React.createElement(Select, { label: "Kind", value: draft.kind, onChange: setDraftField("kind"), options: ["knowledge", "behavior", "definition"] }), /* @__PURE__ */ React.createElement(Select, { label: "Workspace", value: draft.workspace, onChange: setDraftField("workspace"), options: [{ value: "", label: "board-wide" }, ...workspaceNames] }), /* @__PURE__ */ React.createElement(Input, { label: draft.kind === "definition" ? "Branch path" : "Path", mono: true, value: draft.path, onChange: setDraftField("path"), placeholder: "build/tests" }), draft.kind === "behavior" && // the current addressee stays offered even if its agent has left the registry
+  /* @__PURE__ */ React.createElement(
     Select,
     {
-      label: "Kind",
-      value: draft.kind,
-      onChange: setDraftField("kind"),
-      options: ["knowledge", "definition"]
+      label: "Addressee",
+      value: draft.addressee,
+      onChange: setDraftField("addressee"),
+      options: [{ value: "", label: "every agent" }, .../* @__PURE__ */ new Set([...agentNames, ...draft.addressee ? [draft.addressee] : []])]
     }
-  ), /* @__PURE__ */ React.createElement(Select, { label: "Workspace", value: draft.workspace, onChange: setDraftField("workspace"), options: [{ value: "", label: "board-wide" }, ...workspaceNames] }), /* @__PURE__ */ React.createElement(Input, { label: draft.kind === "knowledge" ? "Path" : "Branch path", mono: true, value: draft.path, onChange: setDraftField("path"), placeholder: "build/tests" }), draft.kind === "definition" && /* @__PURE__ */ React.createElement(Input, { label: "Supersedes (entry id, to revise the branch's current definition)", mono: true, value: draft.supersedes, onChange: setDraftField("supersedes") }), translatable && /* @__PURE__ */ React.createElement(React.Fragment, null, draft.kind === "knowledge" && /* @__PURE__ */ React.createElement(Input, { label: `Original title (${language})`, value: draft.originalTitle, onChange: setDraftField("originalTitle") }), /* @__PURE__ */ React.createElement(Input, { label: `Original (${language})`, multiline: true, rows: 3, value: draft.originalText, onChange: setDraftField("originalText") }), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", disabled: busy || fields.some((key) => !originalOf[key].trim()), onClick: () => runTranslation(true) }, "Translate")), draft.kind === "knowledge" && /* @__PURE__ */ React.createElement(Input, { label: "Title (English)", value: draft.title, onChange: setDraftField("title") }), /* @__PURE__ */ React.createElement(Input, { label: "English (saved as the canonical text)", multiline: true, rows: 3, value: draft.text, onChange: setDraftField("text") }), translatable && /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", disabled: busy || fields.some((key) => !draft[key].trim()), onClick: () => runTranslation(false) }, "Back-translate"), draft.backTranslation && /* @__PURE__ */ React.createElement("p", { style: muted, "data-testid": "memory-back-translation" }, "back in ", language, ": ", fields.map((key) => draft.backTranslation[key]).join(" \u2014 ")), /* @__PURE__ */ React.createElement(
+  ), draft.kind === "definition" && /* @__PURE__ */ React.createElement(Input, { label: "Supersedes (entry id, to revise the branch's current definition)", mono: true, value: draft.supersedes, onChange: setDraftField("supersedes") }), translatable && /* @__PURE__ */ React.createElement(React.Fragment, null, draft.kind !== "definition" && /* @__PURE__ */ React.createElement(Input, { label: `Original title (${language})`, value: draft.originalTitle, onChange: setDraftField("originalTitle") }), /* @__PURE__ */ React.createElement(Input, { label: `Original (${language})`, multiline: true, rows: 3, value: draft.originalText, onChange: setDraftField("originalText") }), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", disabled: busy || fields.some((key) => !originalOf[key].trim()), onClick: () => runTranslation(true) }, "Translate")), draft.kind !== "definition" && /* @__PURE__ */ React.createElement(Input, { label: "Title (English)", value: draft.title, onChange: setDraftField("title") }), /* @__PURE__ */ React.createElement(Input, { label: "English (saved as the canonical text)", multiline: true, rows: 3, value: draft.text, onChange: setDraftField("text") }), translatable && /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", disabled: busy || fields.some((key) => !draft[key].trim()), onClick: () => runTranslation(false) }, "Back-translate"), draft.backTranslation && /* @__PURE__ */ React.createElement("p", { style: muted, "data-testid": "memory-back-translation" }, "back in ", language, ": ", fields.map((key) => draft.backTranslation[key]).join(" \u2014 ")), /* @__PURE__ */ React.createElement(
     EditActions,
     {
       ok: fields.every((key) => draft[key].trim() !== ""),
@@ -1966,12 +1970,23 @@ function MemoryEntriesCard({ workspaceNames, language, say, edit }) {
         "data-testid": `memory-entry-${entry.id}`,
         style: { display: "flex", flexDirection: "column", gap: 4, borderTop: "1px solid var(--border-default)", paddingTop: 10 }
       },
-      /* @__PURE__ */ React.createElement("p", { style: { ...muted, fontFamily: "var(--font-mono)" } }, "#", entry.id, " \xB7 ", entry.kind, " \xB7 ", entry.invalidation_reason ? `invalidated: ${entry.invalidation_reason}${entry.successor_id ? ` \u2192 #${entry.successor_id}` : ""}` : entry.state, " \xB7 ", entry.scope ?? "board-wide", " \xB7 ", entry.path, " \xB7 ", entry.author.activity, entry.cause && ` \xB7 ${entry.cause}`),
+      /* @__PURE__ */ React.createElement("p", { style: { ...muted, fontFamily: "var(--font-mono)" } }, "#", entry.id, " \xB7 ", entry.kind, " \xB7 ", entry.invalidation_reason ? `invalidated: ${entry.invalidation_reason}${entry.successor_id ? ` \u2192 #${entry.successor_id}` : ""}` : entry.state, " \xB7 ", entry.scope ?? "board-wide", " \xB7 ", entry.path, entry.kind === "behavior" && ` \xB7 to ${entry.addressee ?? "every agent"}`, " \xB7 ", entry.author.activity, entry.cause && ` \xB7 ${entry.cause}`),
       entry.kind !== "definition" && /* @__PURE__ */ React.createElement("strong", { style: { fontSize: "var(--text-sm)" } }, entry.title),
       /* @__PURE__ */ React.createElement("p", { style: { margin: 0, fontSize: "var(--text-sm)" } }, entry.text),
       shown && // a definition's title is its text, so the Set shows it once
       /* @__PURE__ */ React.createElement("p", { style: muted }, entry.original ? "original" : "translation", ": ", [.../* @__PURE__ */ new Set([shown.title, shown.text])].join(" \u2014 ")),
-      !entry.invalidation_reason && invalidating?.id !== entry.id && /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "sm", onClick: () => setInvalidating({ id: entry.id, reason: "capability", successor: "" }) }, "Invalidate")),
+      !entry.invalidation_reason && invalidating?.id !== entry.id && /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8 } }, entry.kind === "behavior" && entry.state === "approved" && /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "sm", onClick: () => edit.open(writeId, () => setDraft({
+        ...blank,
+        kind: "behavior",
+        workspace: entry.scope ?? "",
+        path: entry.path,
+        title: entry.title,
+        text: entry.text,
+        originalTitle: entry.original?.title ?? "",
+        originalText: entry.original?.text ?? "",
+        addressee: entry.addressee ?? "",
+        supersedes: String(entry.id)
+      })) }, "Edit"), /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "sm", onClick: () => setInvalidating({ id: entry.id, reason: "capability", successor: "" }) }, "Invalidate")),
       invalidating?.id === entry.id && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(
         Select,
         {
@@ -2006,11 +2021,11 @@ function ExecutionDefaultsCard({ settings, say, onSaved, edit }) {
   const { Button, Card, Checkbox, FieldRow, Select } = window.TidepoolDesignSystem_8a0ead;
   const id = "board:execution-defaults";
   const open = edit.isOpen(id);
-  const current = { rank: settings.providerRank, priority: settings.priority, advisor: settings.frontierAdvisor };
+  const current = { rank: settings.providerRank, priority: settings.priority, advisor: settings.frontierAdvisor, retrospectiveTier: settings.retrospectiveTier };
   const [draft, setDraft] = React.useState(current);
   const [busy, setBusy] = React.useState(false);
   const rankChanged = draft.rank.join() !== current.rank.join();
-  const dirty = rankChanged || draft.priority !== current.priority || draft.advisor !== current.advisor;
+  const dirty = rankChanged || draft.priority !== current.priority || draft.advisor !== current.advisor || draft.retrospectiveTier !== current.retrospectiveTier;
   const ok = new Set(draft.rank).size === settings.providers.length;
   useDirtySignal(edit, open, dirty);
   const save = async () => {
@@ -2019,7 +2034,8 @@ function ExecutionDefaultsCard({ settings, say, onSaved, edit }) {
       const changes = [
         rankChanged && { setting: "provider_rank", value: draft.rank },
         draft.priority !== current.priority && { setting: "priority", value: draft.priority },
-        draft.advisor !== current.advisor && { setting: "frontier_advisor", value: draft.advisor }
+        draft.advisor !== current.advisor && { setting: "frontier_advisor", value: draft.advisor },
+        draft.retrospectiveTier !== current.retrospectiveTier && { setting: "retrospective_tier", value: draft.retrospectiveTier }
       ].filter(Boolean);
       for (const change of changes) await api("/api/settings/execution", change);
       say("success", "execution defaults saved", `${changes.length} setting${changes.length === 1 ? "" : "s"} updated`);
@@ -2041,7 +2057,7 @@ function ExecutionDefaultsCard({ settings, say, onSaved, edit }) {
     }
     setBusy(false);
   };
-  return /* @__PURE__ */ React.createElement("div", { "data-testid": "execution-defaults" }, /* @__PURE__ */ React.createElement(Card, { style: { display: "flex", flexDirection: "column", gap: 14 } }, /* @__PURE__ */ React.createElement(RecordCardHead, { editing: open, onEdit: () => edit.open(id, () => setDraft(current)) }, /* @__PURE__ */ React.createElement("span", { style: settingsCardLabel }, "execution defaults")), !open && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(FieldRow, { label: "provider rank", kind: "mono", value: settings.providerRank.join(" \u203A ") }), /* @__PURE__ */ React.createElement(FieldRow, { label: "default priority", kind: "mono", value: settings.priority }), /* @__PURE__ */ React.createElement(FieldRow, { label: "frontier advisor", kind: "mono", value: settings.frontierAdvisor ? "on" : "off" }), /* @__PURE__ */ React.createElement(FieldRow, { label: "learner", kind: "mono", value: settings.learnerPromoted ? "promoted \u2014 chooses work tasks" : "shadow \u2014 the table chooses" }), settings.learnerPromoted && /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", disabled: busy, onClick: demote }, "Demote learner")), open && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 12 } }, draft.rank.map((provider, i) => /* @__PURE__ */ React.createElement(
+  return /* @__PURE__ */ React.createElement("div", { "data-testid": "execution-defaults" }, /* @__PURE__ */ React.createElement(Card, { style: { display: "flex", flexDirection: "column", gap: 14 } }, /* @__PURE__ */ React.createElement(RecordCardHead, { editing: open, onEdit: () => edit.open(id, () => setDraft(current)) }, /* @__PURE__ */ React.createElement("span", { style: settingsCardLabel }, "execution defaults")), !open && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(FieldRow, { label: "provider rank", kind: "mono", value: settings.providerRank.join(" \u203A ") }), /* @__PURE__ */ React.createElement(FieldRow, { label: "default priority", kind: "mono", value: settings.priority }), /* @__PURE__ */ React.createElement(FieldRow, { label: "frontier advisor", kind: "mono", value: settings.frontierAdvisor ? "on" : "off" }), /* @__PURE__ */ React.createElement(FieldRow, { label: "retrospective tier", kind: "mono", value: settings.retrospectiveTier }), /* @__PURE__ */ React.createElement(FieldRow, { label: "learner", kind: "mono", value: settings.learnerPromoted ? "promoted \u2014 chooses work tasks" : "shadow \u2014 the table chooses" }), settings.learnerPromoted && /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", disabled: busy, onClick: demote }, "Demote learner")), open && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 12 } }, draft.rank.map((provider, i) => /* @__PURE__ */ React.createElement(
     Select,
     {
       key: i,
@@ -2066,7 +2082,15 @@ function ExecutionDefaultsCard({ settings, say, onSaved, edit }) {
       label: "frontier advisor \u2014 an advisor may use the frontier row even when the main model is a lower tier",
       onChange: () => setDraft({ ...draft, advisor: !draft.advisor })
     }
-  ), /* @__PURE__ */ React.createElement("p", { style: { margin: 0, fontSize: "var(--text-xs)", color: "var(--text-muted)" } }, "rank orders the providers a task may run on (first = preferred; every provider exactly once). priority is the default for tasks that request none: quality = rank then price, cost = price then rank."), /* @__PURE__ */ React.createElement(
+  ), /* @__PURE__ */ React.createElement(
+    Select,
+    {
+      label: "Retrospective tier",
+      options: [...settings.tiers],
+      value: draft.retrospectiveTier,
+      onChange: (e) => setDraft({ ...draft, retrospectiveTier: e.target.value })
+    }
+  ), /* @__PURE__ */ React.createElement("p", { style: { margin: 0, fontSize: "var(--text-xs)", color: "var(--text-muted)" } }, "rank orders the providers a task may run on (first = preferred; every provider exactly once). priority is the default for tasks that request none: quality = rank then price, cost = price then rank. retrospective tier is the anthropic row the board's own retrospective Board calls (allocation review, attribution, Behavior candidate drafting) resolve on."), /* @__PURE__ */ React.createElement(
     EditActions,
     {
       dirty,
@@ -2687,7 +2711,7 @@ function SettingsScreen({ say, registerLeaveGuard }) {
         onSaved: loadQuietHours,
         edit
       }
-    ), providerPaceOffsets && /* @__PURE__ */ React.createElement(PaceOffsetsCard, { offsets: providerPaceOffsets, say, onSaved: loadPaceOffsets, edit }), executionSettings && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(ExecutionDefaultsCard, { settings: executionSettings, say, onSaved: loadExecutionSettings, edit }), /* @__PURE__ */ React.createElement(ExecutionTableCard, { settings: executionSettings, say, onSaved: loadExecutionSettings, edit })), memorySettings && /* @__PURE__ */ React.createElement(MemorySettingsCard, { settings: memorySettings, say, onSaved: loadMemorySettings, edit }), displayLanguageLoaded && /* @__PURE__ */ React.createElement(MemoryEntriesCard, { workspaceNames, language: displayLanguage, say, edit }), metaReviewSettings && /* @__PURE__ */ React.createElement(MetaReviewSettingsCard, { settings: metaReviewSettings, say, onSaved: loadMetaReviewSettings, edit }), githubLoggedIn !== null && /* @__PURE__ */ React.createElement(GitHubLoginCard, { loggedIn: githubLoggedIn }), (translateUsage !== null || translateUsageFailed) && /* @__PURE__ */ React.createElement(TranslateUsageCard, { records: translateUsage }), (!displayLanguageLoaded || !quietHoursLoaded || !providerPaceOffsets || !executionSettings || !memorySettings || !metaReviewSettings) && /* @__PURE__ */ React.createElement(Card, { style: { fontSize: "var(--text-sm)", color: "var(--text-secondary)" } }, "loading\u2026"), /* @__PURE__ */ React.createElement("p", { style: settingsFootnote }, "applies to every task the board picks up"));
+    ), providerPaceOffsets && /* @__PURE__ */ React.createElement(PaceOffsetsCard, { offsets: providerPaceOffsets, say, onSaved: loadPaceOffsets, edit }), executionSettings && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(ExecutionDefaultsCard, { settings: executionSettings, say, onSaved: loadExecutionSettings, edit }), /* @__PURE__ */ React.createElement(ExecutionTableCard, { settings: executionSettings, say, onSaved: loadExecutionSettings, edit })), memorySettings && /* @__PURE__ */ React.createElement(MemorySettingsCard, { settings: memorySettings, say, onSaved: loadMemorySettings, edit }), displayLanguageLoaded && /* @__PURE__ */ React.createElement(MemoryEntriesCard, { workspaceNames, agentNames, language: displayLanguage, say, edit }), metaReviewSettings && /* @__PURE__ */ React.createElement(MetaReviewSettingsCard, { settings: metaReviewSettings, say, onSaved: loadMetaReviewSettings, edit }), githubLoggedIn !== null && /* @__PURE__ */ React.createElement(GitHubLoginCard, { loggedIn: githubLoggedIn }), (translateUsage !== null || translateUsageFailed) && /* @__PURE__ */ React.createElement(TranslateUsageCard, { records: translateUsage }), (!displayLanguageLoaded || !quietHoursLoaded || !providerPaceOffsets || !executionSettings || !memorySettings || !metaReviewSettings) && /* @__PURE__ */ React.createElement(Card, { style: { fontSize: "var(--text-sm)", color: "var(--text-secondary)" } }, "loading\u2026"), /* @__PURE__ */ React.createElement("p", { style: settingsFootnote }, "applies to every task the board picks up"));
   } else if (!sec) {
     body = /* @__PURE__ */ React.createElement(ScreenHeader, { title: "Settings", backLabel: "Settings", onBack: () => go([]) });
   } else if (recordName === void 0) {

@@ -1,6 +1,8 @@
 import { expect, it } from "vitest";
+import { openDb } from "../src/db.js";
 import {
   AdvisorPairingError,
+  applyExecutionSettingsChange,
   assertAdvisorPairing,
   BOARD_DEFAULT_PRIORITY,
   BOARD_DEFAULT_TIER,
@@ -480,4 +482,9 @@ it("tier の提案の修正値は to だけで、pin の tier より下の任意
   for (const bad of [{ to: "frontier" }, { to: "ultra" }, { to: "economy", effort: "low" }, {}, "economy"]) {
     expect(() => parseAgentTierAmendment(tierProposal, bad)).toThrow(DomainError);
   }
+});
+
+it("存在しない行の削除は何も変えないので、操作イベントを残さず null を返す", () => {
+  const db = openDb(":memory:");
+  expect(applyExecutionSettingsChange(db, { setting: "delete_row", provider: "openai", model: "no-such-model" }, "webui", new Date())).toBeNull();
 });

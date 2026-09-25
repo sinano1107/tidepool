@@ -655,6 +655,52 @@ export function listEpisodes(
   }));
 }
 
+/** case 描画(ADR 0153 決定3)が Episode から読む欄。行動列・transcript は持たない。 */
+interface CaseEpisode {
+  /** handoff 付きで完了した session の task の handoff 文書。 */
+  handoff: string | null;
+  result: string | null;
+  /** session の decision マーカーが指す event id(seq 順、結べなかったものは除く)。 */
+  decisionEventIds: number[];
+}
+
+/** case の Episode を今の投影器の版で1つ引く —— decision マーカーから、session を開いた worker_spawned から、
+ *  または完了 entry(マーカーを持たない)からその完了より前に開いた同じ task の完了済み session。投影されて
+ *  いなければ null。 */
+export function caseEpisode(
+  db: Db,
+  anchor: { decisionEventId: number } | { workerSpawnedEventId: number } | { completion: { taskId: string; eventId: number } },
+): CaseEpisode | null {
+  const [filter, params] =
+    "decisionEventId" in anchor
+      ? ["e.id IN (SELECT episode_id FROM episode_markers WHERE kind = 'decision' AND event_id = ?)", [anchor.decisionEventId]]
+      : "workerSpawnedEventId" in anchor
+        ? ["e.worker_spawned_event_id = ?", [anchor.workerSpawnedEventId]]
+        : [
+            "e.task_id = ? AND e.completed_handoff IS NOT NULL AND e.worker_spawned_event_id < ?",
+            [anchor.completion.taskId, anchor.completion.eventId],
+          ];
+  const row = db
+    .prepare(
+      `SELECT e.id, e.completed_handoff, e.completed_result, t.handoff_doc
+         FROM episodes e JOIN tasks t ON t.id = e.task_id
+        WHERE e.extractor_version = ? AND ${filter}
+        ORDER BY e.worker_spawned_event_id DESC LIMIT 1`,
+    )
+    .get(EXTRACTOR_VERSION, ...params) as
+    | { id: number; completed_handoff: number | null; completed_result: string | null; handoff_doc: string | null }
+    | undefined;
+  if (!row) return null;
+  const markers = db
+    .prepare("SELECT event_id FROM episode_markers WHERE episode_id = ? AND kind = 'decision' AND event_id IS NOT NULL ORDER BY seq")
+    .all(row.id) as Array<{ event_id: number }>;
+  return {
+    handoff: row.completed_handoff === 1 ? row.handoff_doc : null,
+    result: row.completed_result,
+    decisionEventIds: markers.map((m) => m.event_id),
+  };
+}
+
 /** 1 session の行動列マーカーの種別だけを順に返す(配分評価の入力、ADR 0111
  *  決定4)。episode 行が無ければ null —— transcript を投影しない Harness(codex)
  *  や投影前の session を「マーカーが1つも無かった」と混ぜない。 */

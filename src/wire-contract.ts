@@ -260,6 +260,7 @@ export interface WireContract {
     providerRank: readonly string[];
     priority: string;
     learnerPromoted: boolean;
+    retrospectiveTier: string;
     providers: readonly Option[];
     tiers: readonly string[];
     priorities: readonly string[];
@@ -279,6 +280,7 @@ export interface WireContract {
       title: string;
       text: string;
       original: { title: string; text: string } | null;
+      addressee: string | null;
       author: { activity: string };
       invalidation_reason: string | null;
       successor_id: number | null;

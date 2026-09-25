@@ -810,6 +810,9 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
       description:
         "Read memory entries by id: text, path, and source. source_kind is fact (backed by " +
         "a commit or board event) or inference (backed by an agent's decision) — weigh it. " +
+        "A behavior's case is the example it was drafted from: the decision, the steering objections " +
+        "raised against it, and that session's handoff and result — or, for a whole session, its decisions " +
+        "in order with the handoff and result; case is null when there is none. " +
         "Ids you cannot see are omitted.",
       inputSchema: { ids: z.array(z.number().int()).min(1) },
     },

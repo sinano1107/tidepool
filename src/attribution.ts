@@ -1,7 +1,7 @@
 import type { Cause } from "./cause.js";
 import type { Db } from "./db.js";
 import { appendEvent, type EventPayload, getEvent, listEvents, taskDecisionLog } from "./events.js";
-import { type ExecutionSettingRow, loadExecutionSettingTable, rowFor } from "./execution-setting.js";
+import { type ExecutionSettingRow, retrospectiveBoardCallRow } from "./execution-setting.js";
 import { buildMemoryInjection, createBehaviorCandidate, memoryScope } from "./memory.js";
 import { BOARD_WORKER_ID, DomainError, getRegistrant, getTask, HUMAN_WORKER_ID, listChildren, type Task } from "./tasks.js";
 import { isAnthropicBoardCallBlocked } from "./throttle.js";
@@ -64,7 +64,8 @@ export interface BoardCallDeps {
 
 const uncertain = (evidence: string): AttributionJudgment => ({ cause: "uncertain", evidence });
 
-/** Board call を撃てるか。Provider / ティアは盤面設定の固定値(ADR 0111 決定4 と同じ枠)で、
+/** Board call を撃てるか。Provider は盤面設定の固定値(ADR 0111 決定4 と同じ枠)、ティアは
+ *  振り返り Board call 3用途が共有する盤面設定(ADR 0111 追記4、issue #914)で、
  *  client 未設定・表の行の欠落・窓の閉鎖は「撃てなかった」として理由を返す。 */
 function boardCallSetting<C>(
   db: Db,
@@ -73,7 +74,7 @@ function boardCallSetting<C>(
   if (!client) return { unavailable: "Board call not made: no client is configured" };
   let setting: Pick<ExecutionSettingRow, "model" | "effort">;
   try {
-    setting = rowFor(loadExecutionSettingTable(db), "anthropic", "frontier");
+    setting = retrospectiveBoardCallRow(db);
   } catch (err) {
     return { unavailable: `Board call not made: ${message(err)}` };
   }

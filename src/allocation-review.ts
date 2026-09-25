@@ -4,8 +4,7 @@ import type { Db } from "./db.js";
 import { appendEvent, type EventPayload, listEvents } from "./events.js";
 import {
   type ExecutionSettingRow,
-  loadExecutionSettingTable,
-  rowFor,
+  retrospectiveBoardCallRow,
   type Tier,
 } from "./execution-setting.js";
 import { episodeMarkerKinds, type MarkerKind } from "./precedent.js";
@@ -105,12 +104,13 @@ export async function reviewAllocation(
   const reviewedEvents = listEvents(db, reviewed.id);
   const spawnedEvent = reviewedEvents.filter((e) => e.payload.kind === "worker_spawned").at(-1);
   // Board call の Provider / ティアは盤面設定の固定値で、**selector を通らない**
-  // (ADR 0111 決定4)—— 判定者が学習器に選ばれる輪をここで切る。model / effort は
+  // (ADR 0111 決定4)—— 判定者が学習器に選ばれる輪をここで切る。ティアは振り返り
+  // Board call 3用途が共有する盤面設定(ADR 0111 追記4、issue #914)、model / effort は
   // 表の行から呼び出しごとに解決するので、#545 の編集が次の評価から効く。行は注釈の
   // judge になる(ADR 0150 決定8)ので、評価できない注釈にも載るよう先に解決する
   let setting: ExecutionSettingRow | null = null;
   try {
-    setting = rowFor(loadExecutionSettingTable(db), "anthropic", "frontier");
+    setting = retrospectiveBoardCallRow(db);
   } catch {
     // 表の行が欠けた盤面は judge 無し、撃てなかった(board_call_failed)に畳む
   }

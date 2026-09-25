@@ -57,6 +57,11 @@ export const BOARD_DEFAULT_TIER: Tier = "economy";
  *  (`selectorInputFor` / `loadExecutionDefaults`)。 */
 export const BOARD_DEFAULT_PRIORITY: Priority = "quality";
 
+/** 振り返り Board call(配分評価・帰責の判定・Behavior candidate の起草、ADR 0111 追記4)が
+ *  共有するティアの、盤面設定 `execution_defaults.retrospective_tier` が未設定のときの既定。
+ *  今日までコードに固定されていた `"frontier"` をそのまま倒れ先にする。 */
+const BOARD_DEFAULT_RETROSPECTIVE_TIER: Tier = "frontier";
+
 /** 表の1行 = モデル分類の行(ADR 0114 決定2): この model はこの provider のこの
  *  ティアの品質を満たす、という分類と、そこで使う effort・価格(USD per MTok)。
  *  同じ (provider, tier) に複数行あってよい。「alias か具体 id か」の判別子は
@@ -224,12 +229,13 @@ function rowsFor(table: ExecutionSettingTable, provider: Provider, tier: Tier): 
   return table.filter((row) => row.provider === provider && row.tier === tier).sort(byPrice);
 }
 
-/** Board call(ADR 0111 決定4)のように Provider / ティアが盤面設定の固定値で
- *  selector を通らない呼び手の口: 最安の行。行が無ければ「撃てなかった」として
- *  呼び手が畳む。 */
-export function rowFor(table: ExecutionSettingTable, provider: Provider, tier: Tier): ExecutionSettingRow {
-  const row = rowsFor(table, provider, tier)[0];
-  if (!row) throw new Error(`the board's execution-setting table has no row for ${provider} / ${tier}`);
+/** 振り返り Board call(配分評価・帰責の判定・Behavior candidate の起草)の行。selector を通らず
+ *  (ADR 0111 決定4)、Provider は anthropic 固定、ティアは3用途が共有する盤面設定(追記4)の最安の行。
+ *  呼び出しごとに読むので書き換えは次の呼び出しから効く。行が無ければ投げ、呼び手が「撃てなかった」に畳む。 */
+export function retrospectiveBoardCallRow(db: Db): ExecutionSettingRow {
+  const tier = loadExecutionDefaults(db).retrospectiveTier;
+  const row = rowsFor(loadExecutionSettingTable(db), "anthropic", tier)[0];
+  if (!row) throw new Error(`the board's execution-setting table has no row for anthropic / ${tier}`);
   return row;
 }
 
@@ -336,13 +342,15 @@ export function loadExecutionSettingTable(db: Db): ExecutionSettingTable {
 }
 
 /** 盤面設定(ADR 0110 決定5): 「上位ティアの行を advisor に使ってよい」、
- *  Provider 順位、優先順位の既定、学習器の昇格(ADR 0150 決定4)。行が無い / 列が NULL = 未設定 = コードの既定
+ *  Provider 順位、優先順位の既定、学習器の昇格(ADR 0150 決定4)、振り返り Board call が
+ *  共有するティア(ADR 0111 追記4)。行が無い / 列が NULL = 未設定 = コードの既定
  *  —— display_language と同じ「行が無ければ既定」の形。 */
 interface ExecutionDefaults {
   frontierAdvisor: boolean;
   providerRank: readonly Provider[];
   priority: Priority;
   learnerPromoted: boolean;
+  retrospectiveTier: Tier;
 }
 
 /** settings タブ / 管理MCP の読み口(ADR 0110 決定5): 表と盤面設定4値を1往復で。
@@ -382,6 +390,7 @@ export const executionSettingsChangeSchema = z.discriminatedUnion("setting", [
     }),
   }),
   z.object({ setting: z.literal("priority"), value: z.enum(PRIORITIES) }),
+  z.object({ setting: z.literal("retrospective_tier"), value: z.enum(TIERS) }),
   // 扉は降格だけを受ける。昇格は承認の適用が schema を通さず書く
   z.object({
     setting: z.literal("learner_promoted"),
@@ -535,13 +544,16 @@ export function settleStaleProposals(db: Db, at: Date, observedEventId: number |
 
 function loadExecutionDefaults(db: Db): ExecutionDefaults {
   const row = db
-    .prepare("SELECT frontier_advisor, provider_rank, priority, learner_promoted FROM execution_defaults WHERE id = 1")
-    .get() as { frontier_advisor: number; provider_rank: string | null; priority: Priority | null; learner_promoted: number } | undefined;
+    .prepare("SELECT frontier_advisor, provider_rank, priority, learner_promoted, retrospective_tier FROM execution_defaults WHERE id = 1")
+    .get() as
+    | { frontier_advisor: number; provider_rank: string | null; priority: Priority | null; learner_promoted: number; retrospective_tier: Tier | null }
+    | undefined;
   return {
     frontierAdvisor: row?.frontier_advisor === 1,
     providerRank: row?.provider_rank ? (JSON.parse(row.provider_rank) as Provider[]) : PROVIDER_VALUES,
     priority: row?.priority ?? BOARD_DEFAULT_PRIORITY,
     learnerPromoted: row?.learner_promoted === 1,
+    retrospectiveTier: row?.retrospective_tier ?? BOARD_DEFAULT_RETROSPECTIVE_TIER,
   };
 }
 

@@ -1,10 +1,10 @@
 import { rm } from "node:fs/promises";
 import { afterEach, expect, it } from "vitest";
-import { defineMemoryBranch, listMemoryEntries, recordKnowledge, WORKER_MEMORY_VERBS } from "../src/memory.js";
+import { defineMemoryBranch, recordKnowledge, WORKER_MEMORY_VERBS } from "../src/memory.js";
 import { MEMORY_META_REVIEW_VERBS } from "../src/meta-review.js";
 import { DEFAULT_AUDITOR_NAME } from "../src/tasks.js";
 import { UnknownWorkspaceError } from "../src/workspace.js";
-import { api, bootTidepool, HOUR, makeWorkspace, mcpClient, registerWork, type Tidepool } from "./harness.js";
+import { api, bootTidepool, HOUR, makeWorkspace, mcpClient, memoryEntries, registerWork, type Tidepool } from "./harness.js";
 
 /** 主題 memory の meta-review 専用 verb(issue #619 / ADR 0122)。検査と一覧の中身はドメイン層
  *  (tests/memory-meta-review-writes.test.ts / tests/memory-meta-review-reads.test.ts / tests/precedent-store.test.ts)が
@@ -73,7 +73,7 @@ it("主題外の task から専用 verb を呼ぶと tool error で、何も書�
   try {
     const result = await client.callTool({ name: "define_memory", arguments: { scope: null, path: "build", definition: "How it builds." } });
     expect(result.isError).toBe(true);
-    expect(listMemoryEntries(t.db, {})).toEqual([]);
+    expect(await memoryEntries(t)).toEqual([]);
   } finally {
     await client.close();
   }
@@ -95,7 +95,7 @@ it("直接適用4つは引数の scope(null = 盤面全体 / registry の worksp
       body: { event_id: expect.any(Number) },
     });
 
-    expect(listMemoryEntries(t.db, {}).map((e) => [e.id, e.scope, e.author, e.invalidation_reason])).toEqual([
+    expect((await memoryEntries(t)).map((e) => [e.id, e.scope, e.author, e.invalidation_reason])).toEqual([
       [material, "sandbox", { activity: "worker_verb", name: "deckhand" }, "superseded"],
       [boardWide.body.entry_id, null, author, "superseded"],
       [revised.body.entry_id, "sandbox", author, "requirement_change"],

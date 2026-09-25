@@ -1,6 +1,7 @@
 import { afterEach, expect, it } from "vitest";
-import { approvedMemoryEntries, defineMemoryBranch, recordKnowledge } from "../src/memory.js";
-import { bootTidepool, HOUR, mcpClient, registerWork, type Tidepool } from "./harness.js";
+import { approveMemoryProposal, createBehaviorCandidate, defineMemoryBranch, recordKnowledge } from "../src/memory.js";
+import { logDecision } from "../src/tasks.js";
+import { bootTidepool, HOUR, mcpClient, memoryEntries, registerWork, type Tidepool } from "./harness.js";
 
 /** worker MCP の pull 3動詞(spec #586 D / issue #591)と枝の定義(#600 E)。フィルタ・順位・event の中身は
  *  ドメイン層(tests/memory-pull.test.ts)が言うので、ここは写像だけ —— 帰属 task の
@@ -23,6 +24,14 @@ it("browse_memory / search_memory / read_memory は attributed task の workspac
   const id = record("charts", "Tests need Node 22");
   defineMemoryBranch(t.db, { scope: "charts", path: "build", text: "How charts is built.", author: { activity: "human", name: "human" } }, "webui", t.clock.now());
   record("elsewhere", "Not this workspace");
+  const decision = logDecision(t.db, task, "kept tests on Node 22", t.worker.id, t.clock.now());
+  const behavior = createBehaviorCandidate(
+    t.db,
+    { scope: "charts", path: "build", title: "Pin the runtime", text: "Pin the runtime version.", addressee: null, source: { event_id: decision }, author: { activity: "rca", name: "auditor" } },
+    "board",
+    t.clock.now(),
+  ).entry_id;
+  approveMemoryProposal(t.db, { kind: "memory", op: "approve", candidate_id: behavior, replaces: [] }, "question-1", "webui", t.clock.now());
   await t.clock.advance(HOUR);
 
   const client = await mcpClient(t.mcpBaseUrl, task.id);
@@ -58,10 +67,12 @@ it("browse_memory / search_memory / read_memory は attributed task の workspac
           text: "npm test fails on Node 24.",
           source: { kind: "commit", ref: "0a46a46" },
           source_kind: "fact",
+          case: null,
         },
       ],
       event_id: expect.any(Number),
     });
+    expect((await call("read_memory", { ids: [behavior] })).entries[0].case).toHaveProperty("decision", "kept tests on Node 22");
   } finally {
     await client.close();
   }
@@ -77,7 +88,7 @@ it("define_memory_branch は attributed task の workspace をスコープ、wor
     const result = await client.callTool({ name: "define_memory_branch", arguments: { prefix: "build", definition: "How charts is built." } });
     expect(result.isError).toBeFalsy();
     const { entry_id, event_id } = body(result);
-    expect(approvedMemoryEntries(t.db)).toMatchObject([
+    expect(await memoryEntries(t, "?state=approved")).toMatchObject([
       { id: entry_id, version: event_id, kind: "definition", path: "build", text: "How charts is built.", scope: "charts", author: { activity: "worker_verb", name: t.worker.id } },
     ]);
 
