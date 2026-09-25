@@ -559,7 +559,7 @@ export async function makeRemoteBackedWorkspace(
 
 let remoteTemplate: ReturnType<typeof buildRemoteTemplate> | undefined;
 // テストの dirs には載せない —— どのケースの後始末でも消えてはならず、ファイルの afterAll で消す。
-// forks の worker はテストファイルごとの process なので、組むのもファイルごとに1度。
+// module はテストファイルごとに読み直されるので、組むのもファイルごとに1度。
 // afterAll はテスト実行中には登録できないので import 時に置く。e2e(Playwright)も api を
 // ここから import するので vitest の下に限る
 const remoteTemplateDirs: string[] = [];

@@ -65,7 +65,7 @@ So the boundary is which command you launched:
 
 Tests need the Node version and sandbox permission described in `AGENTS.md`.
 
-Stages commit on the touched test files and typecheck; the full suite is not run locally. After opening the PR, the run waits with `gh pr checks --watch` for both CI `test` jobs (ubuntu and macOS), fixes and pushes again on a failure, and hands the PR over only once both pass (ADR 0155).
+The full suite runs in CI, not in the run's stages — see the skill's "Waiting for CI" (ADR 0155).
 
 Everything the flow calls — `/implementation-delegation`, `/tdd`, `/code-review` — is vendored under `.agents/skills/`, so a clone has it. ponytail is the exception: it is a plugin, and getting it onto a machine is [machine-setup.md](./machine-setup.md).
 

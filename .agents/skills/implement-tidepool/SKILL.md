@@ -40,7 +40,7 @@ Dispatch one sub-agent at the implementation model, carrying the issue number, t
 1. **Implementation** — `/tdd` at the agreed seams, one red-green slice at a time, typechecking and running single test files as it goes. The touched test files and typecheck green, then commit.
 2. **ponytail-review** — `/ponytail-review` over its own diff, inline in the same thread, applying what it finds. This is a separate beat from the mode above, not a substitute for it. The touched test files and typecheck green, then commit.
 
-Neither stage runs the full suite; CI does, after the PR opens (ADR 0155).
+The full suite is CI's, after the PR opens (ADR 0155).
 
 A stage with no diff produces no commit. Never amend: keeping the stages apart is what makes each applied change reviewable and revertible on its own.
 
@@ -85,7 +85,7 @@ A review finding that was filed or commented on says so on its own line above (`
 
 ## Waiting for CI
 
-Once the PR is open, `gh pr checks --watch` until both `test` jobs — ubuntu and macOS — finish. When one fails, fix it on the branch, commit, push, and watch again. The PR goes to the human only once both pass.
+Once the PR is open, `gh pr checks --watch` until every check finishes — the `test` jobs on ubuntu and macOS, and `e2e`. When one fails, fix it on the branch, commit, push, and watch again. The PR goes to the human only once all pass.
 
 ## Where this stops
 
