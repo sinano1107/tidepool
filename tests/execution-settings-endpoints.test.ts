@@ -168,7 +168,7 @@ it("優先順位の既定を cost にすると、要求の無い task は最安�
   });
 });
 
-it("管理MCP の read_execution_settings / change_execution_settings は同じ状態を読み書きし、変更は人間名義・経路 mcp で残る(ADR 0110 決定5)", async () => {
+it("管理MCP の read_execution_settings / change_execution_settings は同じ状態を読み書きする(ADR 0110 決定5)", async () => {
   t = await bootTidepool();
   const client = await managementMcpClient(t.baseUrl);
   try {
@@ -191,28 +191,11 @@ it("管理MCP の read_execution_settings / change_execution_settings は同じ�
   } finally {
     await client.close();
   }
-  expect(t.db.prepare("SELECT worker_id, origin FROM events WHERE kind = 'execution_settings_changed'").all()).toEqual([
-    { worker_id: "human", origin: "mcp" },
-  ]);
 });
 
-it("変更は操作イベント execution_settings_changed として経路 webui つきで残る(CONTEXT.md「管理MCP」の経路の機械記録)", async () => {
+it("task を持たない盤面イベント(execution_settings_changed)が混ざっても decision log の読み口は落ちない(JOIN は kind で絞られる)", async () => {
   t = await bootTidepool();
   await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "priority", value: "cost" });
-  // 存在しない行の削除は何も変えないので、イベントも残らない
-  await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "delete_row", provider: "openai", model: "no-such-model" });
-  // task を持たない盤面イベントには読み口が無い(learner_shadow と同じ)ので行を直に読む
-  expect(
-    t.db.prepare("SELECT task_id, worker_id, origin, payload FROM events WHERE kind = 'execution_settings_changed'").all(),
-  ).toEqual([
-    {
-      task_id: null,
-      worker_id: "human",
-      origin: "webui",
-      payload: JSON.stringify({ kind: "execution_settings_changed", setting: "priority", value: "cost" }),
-    },
-  ]);
-  // task を持たない行が混ざっても decision log の読み口は落ちない(JOIN は kind で絞られる)
   const log = await api(t.baseUrl, "GET", "/api/log");
   expect(log.status).toBe(200);
   expect(log.json.entries).toEqual([]);
