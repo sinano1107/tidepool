@@ -113,7 +113,7 @@ export class RegistryPushFailedError extends Error {
  *
  *  着地は remote-backed なら push、purely-local(push 先が無い)ならローカル
  *  ブランチへの fast-forward-only な ref 更新 —— どちらも worktree を切った時点
- *  からの前進を要求する。fork してから着地するまでの間に base が動いていれば
+ *  からの前進を要求する。返り値は着地した commit(no-change なら base のまま)。fork してから着地するまでの間に base が動いていれば
  *  (別の書き込みが先に着地した)双方とも拒否するので、並行書き込みは黙って
  *  上書きされず、致命の再試行可能な失敗になる(issue #57 の冪等性)。 */
 export function commitToRegistry(
@@ -121,7 +121,7 @@ export function commitToRegistry(
   auth: GitHubAuth | undefined,
   write: (worktreeDir: string) => void,
   message: string,
-): void {
+): string {
   // プロセス死で残った前回の worktree 管理情報の掃除(issue #210 やること4) —
   // 掃除してから add しないと、同じパスが使用中と誤認されることがある
   git(registry.dir, "worktree", "prune");
@@ -131,10 +131,11 @@ export function commitToRegistry(
   try {
     git(registry.dir, "worktree", "add", "--detach", worktreeDir, base);
     write(worktreeDir);
-    if (git(worktreeDir, "status", "--porcelain") === "") return;
+    if (git(worktreeDir, "status", "--porcelain") === "") return baseSha;
     git(worktreeDir, "add", "-A");
     git(worktreeDir, "commit", "-m", message);
     land(registry, worktreeDir, baseSha, auth);
+    return git(worktreeDir, "rev-parse", "HEAD");
   } finally {
     // ベストエフォート: ここで投げると、push/CAS が投げた本当の失敗を隠してしまう。
     // 消し損ねた分は次回の呼び出しの冒頭の `worktree prune` が拾う。

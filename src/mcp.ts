@@ -1,12 +1,13 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Router } from "express";
 import { z } from "zod";
+import type { AgentAdmin } from "./agent-create.js";
 import { type AllocationClient, reviewAllocation } from "./allocation-review.js";
 import { type AttributionClient, attributeAfterRca, type BehaviorDraftClient, isHumanEntry, latestAttribution, learningTarget } from "./attribution.js";
 import type { Clock } from "./clock.js";
 import type { Db } from "./db.js";
 import { getEvent, HUMAN_FACING_KINDS } from "./events.js";
-import { PRIORITY_FIELD_DESCRIPTION, readExecutionSettings, TIER_FIELD_DESCRIPTION } from "./execution-setting.js";
+import { PRIORITY_FIELD_DESCRIPTION, readExecutionSettings, TIER_FIELD_DESCRIPTION, TIERS } from "./execution-setting.js";
 import type { GitHubClient } from "./github.js";
 import type { GitHubAuth } from "./github-auth.js";
 import { assertReviewerKnown, assertWorkspaceKnown } from "./human-verbs.js";
@@ -168,6 +169,8 @@ export interface McpDeps {
   /** The Behavior candidate drafting Board call seam (issue #617), asked after the
    *  second attribution round. Absent → nothing is drafted. */
   behaviorDraftClient?: BehaviorDraftClient;
+  /** registry の agent 一覧(issue #920): routing meta-review の tier の提案が agent の定義を読む。Absent → registry の無い盤面。 */
+  agentAdmin?: Partial<Pick<AgentAdmin, "list">>;
 }
 
 /** Every MCP call is attributed to a real agent session (never human — that's
@@ -900,8 +903,9 @@ function registerRoutingMetaReviewVerbs(server: McpServer, deps: McpDeps, run: M
     {
       description:
         "Read the current execution-setting table, the frontier advisor setting, the provider rank, the default priority and " +
-        "whether the learner is promoted, and every past routing proposal with its answer, the human's amendment and comment, or " +
-        "why the board settled it as observed (the pinned row or learner flag changed, or the row was deleted).",
+        "whether the learner is promoted, and every past routing proposal (agent tier proposals included) with its answer, the " +
+        "human's amendment and comment, or why the board settled it as observed (the pinned row, learner flag or agent tier " +
+        "changed, or the row was deleted). An applied agent tier proposal carries the registry commit it landed as applied.",
     },
     async () => run(() => ({ ...readExecutionSettings(deps.db), proposals: listRoutingProposals(deps.db) })),
   );
@@ -914,18 +918,25 @@ function registerRoutingMetaReviewVerbs(server: McpServer, deps: McpDeps, run: M
         "tier (economy / standard / frontier) and/or effort of one existing execution-setting row, named by provider and model; " +
         "change takes only those two fields, and the human may amend them when approving. op promote makes work tasks run on the " +
         "learner's recommendation and is only accepted while the learner is not promoted; op demote returns them to the table and " +
-        "is only accepted while it is promoted; neither takes row, change, or an amendment. rationale is your evidence summary " +
+        "is only accepted while it is promoted; neither takes row, change, or an amendment. op agent_tier lowers a non-built-in " +
+        "agent's default tier by exactly one step (an agent with no tier runs at economy and cannot be lowered): agent names it, " +
+        "to is the tier one step below, and evidence lists the worker_spawned event ids of that agent's sessions your case rests " +
+        "on; it is refused when the execution-setting table has no row at the target tier for any of the agent's providers. The " +
+        "human may amend to with any lower tier when approving, and approval commits the new tier to the registry. rationale is your evidence summary " +
         "(episode count, tier source, period) and is shown with the diff. The board applies the answer itself, so you can complete " +
         "this task without waiting for it. Returns the question id. " +
         BOARD_WRITE_LANGUAGE_RULE,
       inputSchema: {
-        op: z.enum(["row", "promote", "demote"]),
+        op: z.enum(["row", "promote", "demote", "agent_tier"]),
         row: z.object({ provider: z.string(), model: z.string() }).optional().describe("op row only."),
         change: z.record(z.string(), z.unknown()).optional().describe("op row only: tier and/or effort, nothing else."),
+        agent: z.string().optional().describe("op agent_tier only: the agent whose default tier to lower."),
+        to: z.enum(TIERS).optional().describe("op agent_tier only: the tier one step below the agent's current tier."),
+        evidence: z.array(z.number().int()).optional().describe("op agent_tier only: worker_spawned event ids of the agent's sessions."),
         rationale: z.string().min(1),
       },
     },
-    async (input) => run((reader, now) => proposeRoutingChange(deps.db, reader.taskId, input, reader.agent, now)),
+    async (input) => run((reader, now) => proposeRoutingChange(deps.db, reader.taskId, input, reader.agent, now, deps.agentAdmin?.list)),
   );
 }
 
