@@ -796,15 +796,15 @@ function readRegistryFiles(dir: string, commit: string): Map<string, string> {
     ["ls-tree", "-r", "-z", commit, "--", "agents", "authority", "workspaces.yaml"],
     { cwd: dir, stdio: GIT_STDIO },
   ).toString();
-  const wanted = /^(agents\/[^/]+\.md|authority\/[^/]+\.yaml|workspaces\.yaml)$/;
   const blobs: { path: string; sha: string }[] = [];
   for (const entry of listing.split("\0")) {
     // `<mode> <type> <sha>\t<path>`
-    const match = entry.match(/^\d+ blob ([0-9a-f]+)\t(.*)$/s);
-    if (match && wanted.test(match[2]!)) blobs.push({ sha: match[1]!, path: match[2]! });
+    const match = entry.match(
+      /^\d+ blob ([0-9a-f]+)\t(agents\/[^/]+\.md|authority\/[^/]+\.yaml|workspaces\.yaml)$/,
+    );
+    if (match) blobs.push({ sha: match[1]!, path: match[2]! });
   }
   const files = new Map<string, string>();
-  if (blobs.length === 0) return files;
   const out = execFileSync("git", ["cat-file", "--batch"], {
     cwd: dir,
     stdio: ["pipe", "pipe", "pipe"],

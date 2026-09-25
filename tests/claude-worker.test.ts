@@ -139,12 +139,9 @@ function pickedSetting(
     .toString()
     .trim();
   const key = `${registry.dir}@${commit}`;
-  let loaded = loadedRegistries.get(key);
-  if (!loaded) {
-    loaded = loadRegistry(registry.dir, registry.mode);
-    loadedRegistries.set(key, loaded);
-  }
-  const agents = loaded.agents;
+  const loaded = loadedRegistries.get(key) ?? loadRegistry(registry.dir, registry.mode);
+  loadedRegistries.set(key, loaded);
+  const { agents } = loaded;
   return resolveExecutionSetting(db, (agents[resolveTaskAgent(task, agent, auditorName)] ?? agents[agent])!, task)!;
 }
 
