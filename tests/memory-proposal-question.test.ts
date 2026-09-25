@@ -140,7 +140,8 @@ it("reject の回答は reject の export に届き(candidate が rejected)、�
     expect((await events(questionId)).map((e) => e.kind)).toEqual(["task_registered", "question_answered"]);
     // 無効化は回答の印を持ち、周期が過ぎても次の memory meta-review を登録しない(ADR 0151)
     expect((await completeViaMcp(t, review.id, false)).isError).not.toBe(true);
-    await t.clock.advance(8 * 24 * HOUR); // 既定の周期(7日)を越える
+    expect((await api(t.baseUrl, "POST", "/api/settings/meta-review", { period_days: 1 })).status).toBe(200);
+    await t.clock.advance(2 * 24 * HOUR); // 周期(1日)を越える
     expect(((await api(t.baseUrl, "GET", "/api/tasks")).json as any[]).filter((task) => task.meta_review_subject === "memory")).toEqual([]);
   } finally {
     await client.close();
