@@ -63,10 +63,40 @@ const harnessCheck = (check: () => Promise<ContainmentCapability>) => async (har
   harness === "claude-code" ? check() : ({ available: true } as const);
 
 // ── ping から答えへの写像(正本の側)────────────────────────────────────
+//
+// ADR 0039 決定3 / ADR 0108 決定1: probe は観測した面を、worker の init 行の照合
+// (claude-worker.test.ts)と同じ1つの照合に通す。組み込みツールは集合の一致(過剰も
+// 欠落も不成立)、MCP 軸は宣言外サーバの過剰側だけを見る。理由の正本は
+// src/claude-worker.ts の照合関数の doc comment。
 
 it("ping が観測した面が宣言どおりなら成立する", async () => {
-  const observed = async () => ({ tools: WORK_SURFACE, mcpServers: [], autoMemoryPath: null });
-  expect(await probeToolSurfaceCapability(observed)).toEqual({ available: true });
+  expect(
+    await probeToolSurfaceCapability(async () => ({
+      tools: WORK_SURFACE,
+      mcpServers: [],
+      autoMemoryPath: null,
+    })),
+  ).toEqual({ available: true });
+  // init の `tools` 配列の順序は CLI の内部順であって盤面の綴り順ではない(集合の一致)
+  expect(
+    await probeToolSurfaceCapability(async () => ({
+      tools: [...WORK_SURFACE].reverse(),
+      mcpServers: [],
+      autoMemoryPath: null,
+    })),
+  ).toEqual({ available: true });
+});
+
+it("`mcp__` で始まるエントリは比較対象から外す — MCP の落下を封じ込めの不成立に化けさせない", async () => {
+  // MCP サーバーが繋がらなかったセッションでは verb が丸ごと消える。含めると
+  // 「盤面の MCP が落ちている」が封じ込め能力の不成立に化ける。それは別の障害で
+  // あり別の扱いを受けるべきである(ADR 0039 決定3)。
+  const result = await probeToolSurfaceCapability(async () => ({
+    tools: [...WORK_SURFACE, "mcp__tidepool__get_current_task"],
+    mcpServers: [],
+    autoMemoryPath: null,
+  }));
+  expect(result).toEqual({ available: true });
 });
 
 it("ping が失敗したら不成立 — 「測れなかった」は「無事」ではない", async () => {
@@ -100,6 +130,58 @@ it("ping が allowlist 外のツールを観測したら不成立 — 具体名�
     autoMemoryPath: null,
   }));
   expect(result.available === false && result.reason).toContain("CronCreate");
+});
+
+it("観測 ⊂ 期待も不成立 — 黙って不活性化した名前を挙げる(測定8)", async () => {
+  const result = await probeToolSurfaceCapability(async () => ({
+    tools: WORK_SURFACE.filter((tool) => tool !== "Glob" && tool !== "TaskOutput"),
+    mcpServers: [],
+    autoMemoryPath: null,
+  }));
+  expect(result.available === false && result.reason).toContain("Glob");
+  expect(result.available === false && result.reason).toContain("TaskOutput");
+});
+
+it("過不足が同時に起きたら両方を挙げる(綴りの取り違えの形そのもの)", async () => {
+  // `Glob` を `Globb` と書けば、期待側に `Globb` が現れ観測側から `Glob` が消える
+  // ——「1本足して1本落ちた」ではなく綴りミス1つである、と読める文が要る。
+  const result = await probeToolSurfaceCapability(async () => ({
+    tools: [...WORK_SURFACE.filter((tool) => tool !== "Grep"), "Bogus"],
+    mcpServers: [],
+    autoMemoryPath: null,
+  }));
+  expect(result.available === false && result.reason).toContain("Bogus");
+  expect(result.available === false && result.reason).toContain("Grep");
+});
+
+it("空の観測は不成立 — 「測れなかった」を「無事」と読ませない(ping が失敗した null とは別の形)", async () => {
+  const result = await probeToolSurfaceCapability(async () => ({
+    tools: [],
+    mcpServers: [],
+    autoMemoryPath: null,
+  }));
+  expect(result.available).toBe(false);
+});
+
+it("宣言していない MCP サーバが面にあれば不成立 — そのサーバ名が本文に載る", async () => {
+  // 盤面が MCP について宣言しているのは自分が書いた `--mcp-config` と
+  // `--strict-mcp-config` の2つだけなので、それ以外の名前が面にあることは
+  // 「このホストの CLI が盤面の宣言を honor しなくなった」である。
+  const result = await probeToolSurfaceCapability(async () => ({
+    tools: WORK_SURFACE,
+    mcpServers: ["tidepool", "computer-use"],
+    autoMemoryPath: null,
+  }));
+  expect(result.available === false && result.reason).toContain("computer-use");
+});
+
+it("盤面が宣言した `tidepool` だけなら成立 — 実セッションの形", async () => {
+  const result = await probeToolSurfaceCapability(async () => ({
+    tools: WORK_SURFACE,
+    mcpServers: ["tidepool"],
+    autoMemoryPath: null,
+  }));
+  expect(result).toEqual({ available: true });
 });
 
 it("検査は毎回 ping を撃ち直す(memoize しない)— 解除の検証がこれに依存する", async () => {
