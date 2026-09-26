@@ -431,7 +431,7 @@ export function git(dir: string, ...args: string[]): string {
   return execFileSync(
     "git",
     ["-c", "user.name=test", "-c", "user.email=test@example.com", ...args],
-    { cwd: dir },
+    { cwd: dir, stdio: ["ignore", "pipe", "pipe"] },
   )
     .toString()
     .trim();

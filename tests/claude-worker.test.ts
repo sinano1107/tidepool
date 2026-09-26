@@ -149,7 +149,7 @@ function pickedSetting(
  *  so fixture commits need no global config. */
 function registryGit(cwd: string) {
   return (...args: string[]) =>
-    execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@e", ...args], { cwd })
+    execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@e", ...args], { cwd, stdio: ["ignore", "pipe", "pipe"] })
       .toString()
       .trim();
 }
