@@ -1467,20 +1467,21 @@ describe("ClaudeCodeWorker", () => {
   });
 
   it("宣言どおりのセッションは kill されない", async () => {
-    const { start, processes, killed } = await makeWorker();
+    const { start, processes, killed, db } = await makeWorker();
     start("task-init-nokill", null, "deckhand", "review");
     processes[0]!.stdout.write(
       initLine([...REVIEW_SURFACE, "mcp__tidepool__get_current_task"]),
     );
     processes[0]!.stdout.write(`{"type":"result","result":"done"}\n`);
     await vi.waitFor(() => expect(killed).toEqual([]));
+    await vi.waitFor(() => expect(containmentQuestion(db)).toBeUndefined());
   });
 
   it("review セッションの init 行は review の期待集合で照合される — 編集系が残っていたら不成立", async () => {
     const { start, processes, db } = await makeWorker();
     start("task-init-review-drift", null, "deckhand", "review");
     processes[0]!.stdout.write(
-      initLine([...REVIEW_SURFACE, "Write"]),
+      initLine([...REVIEW_SURFACE, "Write", "Edit", "NotebookEdit"]),
     );
     const question = await vi.waitFor(() => {
       const q = containmentQuestion(db);
@@ -1488,6 +1489,8 @@ describe("ClaudeCodeWorker", () => {
       return q!;
     });
     expect(question.purpose).toContain("Write");
+    expect(question.purpose).toContain("Edit");
+    expect(question.purpose).toContain("NotebookEdit");
   });
 
   it("ずれたまま何セッション走っても question は1枚(封じ込めは1資源につき確認1枚)", async () => {

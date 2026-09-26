@@ -210,8 +210,7 @@ export function reviewToolDenials(taskType: Task["type"]): string[] {
 // import して比べるとコードが計算する通りに期待値も計算するトートロジーになる)ので、
 // 置いてある場所は1つではない: tests/spawn-tools.test.ts(正)、
 // tests/claude-worker.test.ts(spawn 引数と init 行、ファイル冒頭の2定数)、
-// tests/tool-surface-drift.test.ts / tests/tool-surface-containment.test.ts
-// (それぞれ WORK_SURFACE)。
+// tests/tool-surface-containment.test.ts(WORK_SURFACE)。
 //
 // テストが保証できないのは**綴りの正しさ**である — 実在しない名前は警告なく不活性に
 // なる(測定8)。それを捕まえるのは封じ込め能力の3つ目の問い(`checkToolSurface`)。
@@ -293,7 +292,7 @@ const MCP_TOOL_PREFIX = "mcp__";
  *  純関数であり、**封じ込め能力の probe(`probeToolSurfaceCapability`)と worker 自身の
  *  init 行の照合が同じこれを共有する** — 期待集合を2箇所に置かない(ADR 0039
  *  決定3)。答えの型も封じ込め能力の他の半分と同じ1つ(`ContainmentCapability`)。 */
-export function checkToolSurface(
+function checkToolSurface(
   observed: string[],
   taskType: Task["type"],
   mcpServers: string[],
