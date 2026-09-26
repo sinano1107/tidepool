@@ -294,7 +294,6 @@ it("main.ts は buildServerOptions が組み立てたオプションで盤面を
   expect(main).not.toMatch(/startServer\(\s*\{/);
 });
 
-
 /** ADR 0043 / issue #33: 同じ網羅を **worker options 層**にも掛ける。
  *
  *  ADR 0041 は `ClaudeWorkerOptions` を「#172 の類ではない」と除外していたが、
