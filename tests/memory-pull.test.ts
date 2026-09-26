@@ -13,6 +13,7 @@ import {
   invalidateMemoryEntry,
   previewCase,
   readMemory,
+  recordBehavior,
   recordExemplar,
   recordKnowledge,
   searchMemory,
@@ -255,6 +256,15 @@ const approvedBehavior = (db: ReturnType<typeof openDb>, title: string, source?:
   approve(db, id);
   return id;
 };
+/** decision entry を直接出所に持つのは人間が事例を添えた Behavior(出所の種別は event)。createBehaviorCandidate に decision_logged の
+ *  id を渡すと推論(decision 種別)になり case を描かない(issue #954)。 */
+const citedBehavior = (db: ReturnType<typeof openDb>, title: string, source_event_id: number) =>
+  recordBehavior(
+    db,
+    humanEntryInput(db, { workspace: "sandbox", path: "notes", title, text: "Keep notes short.", addressee: null, source_event_id }),
+    "webui",
+    at,
+  ).entry_id;
 
 const FIXTURE_RESULT = "Created notes.md with 3 bullets on tide pools; logged 3 decisions (2 identical); used 1 subagent and 1 advisor consult.";
 
@@ -322,7 +332,7 @@ it("帰責の objection_event_ids に objection_raised でない id があると
 
 it("decision entry を直接出所に持つ Behavior の case の steering は、全 session の異議を event 順に並べたもの", async () => {
   const { db, reader } = await objectedInTwoSessions();
-  const id = approvedBehavior(db, "Cover the topic", { event_id: 6 });
+  const id = citedBehavior(db, "Cover the topic", 6);
 
   expect(readMemory(db, reader, { ids: [id] }, at).entries[0]?.case).toMatchObject({
     steering: ["three bullets is too few", "cover the tide cycle too"],
@@ -355,7 +365,7 @@ it("人間が書いた Behavior(出所 = 自身の作成 event)と Knowledge の
 
 it("episode 行の無い session の decision / 完了 entry の case も、events から その session の handoff と result を持つ", () => {
   const db = seedFixtureBoard("## Outcome\nCreated notes.md.");
-  const decision = approvedBehavior(db, "Unprojected", { event_id: 6 });
+  const decision = citedBehavior(db, "Unprojected", 6);
   const completion = approvedBehavior(db, "Unprojected completion", { event_id: 9 });
 
   expect(readMemory(db, { taskId: FIXTURE_TASK, scope: "sandbox", agent: "tako" }, { ids: [decision, completion] }, at).entries.map((e) => e.case)).toEqual([
@@ -385,7 +395,7 @@ it("episode 行の無い同じ task の複数 session は、それぞれの窓�
   // 3つ目の session: decision を書いたが完了していない(exit も無い)
   const open = append(spawned);
   const retried = append({ kind: "decision_logged", line: "retried with a shorter note" });
-  const ids = [FIXTURE_SPAWNED_EVENT_ID, silent, open, retried].map((ref) => approvedBehavior(db, `Session ${ref}`, { event_id: ref }));
+  const ids = [FIXTURE_SPAWNED_EVENT_ID, silent, open, retried].map((ref) => citedBehavior(db, `Session ${ref}`, ref));
 
   expect(readMemory(db, { taskId: FIXTURE_TASK, scope: "sandbox", agent: "tako" }, { ids }, at).entries.map((e) => e.case)).toEqual([
     {

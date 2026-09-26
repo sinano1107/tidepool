@@ -1,5 +1,5 @@
 import { afterEach, expect, it } from "vitest";
-import { approveMemoryProposal, createBehaviorCandidate, defineMemoryBranch, recordKnowledge } from "../src/memory.js";
+import { defineMemoryBranch, humanEntryInput, recordBehavior, recordKnowledge } from "../src/memory.js";
 import { logDecision } from "../src/tasks.js";
 import { bootTidepool, HOUR, mcpClient, memoryEntries, registerWork, type Tidepool } from "./harness.js";
 
@@ -25,13 +25,12 @@ it("browse_memory / search_memory / read_memory は attributed task の workspac
   defineMemoryBranch(t.db, { scope: "charts", path: "build", text: "How charts is built.", author: { activity: "human", name: "human" } }, "webui", t.clock.now());
   record("elsewhere", "Not this workspace");
   const decision = logDecision(t.db, task, "kept tests on Node 22", t.worker.id, t.clock.now());
-  const behavior = createBehaviorCandidate(
+  const behavior = recordBehavior(
     t.db,
-    { scope: "charts", path: "build", title: "Pin the runtime", text: "Pin the runtime version.", addressee: null, source: { event_id: decision }, author: { activity: "rca", name: "auditor" } },
-    "board",
+    humanEntryInput(t.db, { workspace: "charts", path: "build", title: "Pin the runtime", text: "Pin the runtime version.", addressee: null, source_event_id: decision }),
+    "webui",
     t.clock.now(),
   ).entry_id;
-  approveMemoryProposal(t.db, { kind: "memory", op: "approve", candidate_id: behavior, replaces: [] }, "question-1", "webui", t.clock.now());
   await t.clock.advance(HOUR);
 
   const client = await mcpClient(t.mcpBaseUrl, task.id);

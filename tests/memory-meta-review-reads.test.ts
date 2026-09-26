@@ -6,10 +6,11 @@ import {
   createBehaviorCandidate,
   invalidateMemoryEntry,
   listPrecedents,
+  proposeMemoryChange,
   pullMemoryList,
   recordKnowledge,
 } from "../src/memory.js";
-import { logDecision, registerTask } from "../src/tasks.js";
+import { getTask, logDecision, registerTask } from "../src/tasks.js";
 
 /** meta-review の読み口(issue #619 / ADR 0120 決定2)のドメイン層。verb への写像はサーバ境界
  *  (tests/mcp-memory-meta-review.test.ts)が言う。 */
@@ -105,6 +106,26 @@ it("list_memory_candidates の無効化済みは、修正つきで承認され�
       successor: { title: "Short notes", text: "Keep notes to one line.", addressee: "deckhand", author: { activity: "human", name: "human" } },
     }),
   ]);
+});
+
+it("list_memory_candidates は kind で絞れる —— exemplar なら Exemplar の candidate だけ(issue #954)", () => {
+  const { db, task, decision, reader, behavior } = board();
+  const attributed = appendEvent(db, {
+    taskId: task.id,
+    workerId: "tidepool",
+    origin: "board",
+    payload: { kind: "objection_attributed", entry_id: decision, objection_event_ids: [], cause: "preference", evidence: "e", round: "after_rca" },
+    at,
+  });
+  const drafted = behavior({ title: "Short notes", source: attributed });
+  const annotations = [{ anchor: "whole", polarity: "imitate", text: "Keep it this short." }];
+  const text = { scope: null, path: "habits", title: "Short notes", addressee: null, kind: "exemplar" as const, annotations };
+  const { question_id } = proposeMemoryChange(db, task.id, { op: "consolidate", text, replaces: [drafted], based_on_decision: decision, rationale: "r" }, "auditor", at);
+  const exemplar = (getTask(db, question_id)!.question_proposal as { candidate_id: number }).candidate_id;
+
+  const ids = (kind: "behavior" | "exemplar") => pullMemoryList(db, reader, "list_memory_candidates", { kind }, at).entries.map((e) => e.id);
+  expect(ids("exemplar")).toEqual([exemplar]);
+  expect(ids("behavior")).toEqual([drafted]);
 });
 
 it("list_memory_behaviors は approved の Behavior を宛先・scope で絞らずに返し、candidate と無効化済みは返さない", () => {

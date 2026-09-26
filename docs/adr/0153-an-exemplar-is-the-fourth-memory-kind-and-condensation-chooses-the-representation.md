@@ -45,3 +45,9 @@ ADR 0115 決定4)に既に居場所があり、残余は **tacit な質に worke
 - **Exemplar 本体を #587 の観測後に建てる** — write path の表現が1つしか無いのは既存挙動の欠陥で、kind が無ければ「一般化できな
   かった」観測自体が記録されない。観測を待つのは提案 op だけ。
 
+## 追記: meta-review の畳みも注釈 list を受ける(2026-09-26、issue #954)
+
+決定2 の括弧書き「注釈1件・avoid・anchor = 異議された decision の引用」は、RCA が起草した candidate を畳むときの典型の形であり、
+制約ではない。`consolidate` の kind exemplar は人間の write と同じ注釈 list を受ける — 件数・polarity・anchor の欄を問わず、
+検証も同じ関数。1つの例に正負の注釈が同居する(決定1)のは meta-review の起草でも同じで、1件・avoid に絞ると
+「全体はこの形で、特にここを真似よ」を meta-review が書けない。

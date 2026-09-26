@@ -794,6 +794,25 @@ it("reject は consolidate の新 candidate だけを後継なしの rejected �
   expect(approvedMemoryEntries(db).map((e) => e.id)).toEqual([old]);
 });
 
+it("出所の揃わない統合が承認された Behavior(出所 = meta-review の推論)の read_memory の case は null —— 推論は事例ではない(issue #954)", () => {
+  const { db, task } = board();
+  const other = createBehaviorCandidate(
+    db,
+    { scope: null, path: "habits", title: "Split schema changes", text: "Split schema changes.", addressee: null, source: { commit: "b7e1c2d" }, author: { activity: "rca", name: "auditor" } },
+    "worker",
+    at,
+  ).entry_id;
+  const text = { scope: null, path: "habits", title: "One concern per commit", text: "Keep each commit to one concern.", addressee: null };
+  const based_on_decision = logDecision(db, task, "the split rules say the same thing", "auditor", at);
+  const { question_id } = proposeMemoryChange(db, task.id, { op: "consolidate", text, replaces: [candidate(db, "Keep migrations apart"), other], based_on_decision, rationale: "r" }, "auditor", at);
+  const proposal = getTask(db, question_id)!.question_proposal as Parameters<typeof approveMemoryProposal>[1] & { candidate_id: number };
+  approveMemoryProposal(db, proposal, question_id, "webui", at);
+
+  expect(readMemory(db, { taskId: task.id, scope: "tidepool", agent: "deckhand" }, { ids: [proposal.candidate_id] }, at).entries).toMatchObject([
+    { id: proposal.candidate_id, source: { kind: "decision", ref: based_on_decision }, source_kind: "inference", case: null },
+  ]);
+});
+
 /** 修正値つき approve(issue #944 / ADR 0152 決定2・4): 承認の export に修正値を渡す。 */
 const entryById = (db: ReturnType<typeof openDb>, id: number) => listMemoryEntries(db, {}).find((e) => e.id === id);
 
