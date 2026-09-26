@@ -48,7 +48,7 @@ Specs and tickets are GitHub issues here, not files — the `.scratch/` layout i
 
 **Switching mid-session is the human's action, and it happens in one place.** `/to-spec` → `/to-tickets` continues in the same session (the truncation above), so the human types `/ponytail full` before `/to-tickets`. The agent cannot switch the mode: the plugin reads the command from the user's own prompt (`UserPromptSubmit`), and an agent-side skill invocation neither writes the flag nor reaches the sub-agents.
 
-**The flag is one file per machine, not per session** (`~/.claude/.ponytail-active`). A build session launched on the same Mac while a design session is open rewrites it to `full`, and the design session's `SubagentStart` hook then reads that — so before dispatching a sub-agent, confirm the mode on the statusline rather than trusting the launcher.
+**The flag is one file per machine, not per session** (`~/.claude/.ponytail-active`), and the `SubagentStart` hook reads it — so a session launched alongside changes what this session's sub-agents get: a build session puts `full` on a design session's sub-agents, and a design session's start strips it from a build session's. Nothing here prevents it, and it costs little: the main thread keeps the ruleset its own launch gave it, and the review beat runs whatever the mode. The upstream fix is DietrichGebert/ponytail#711.
 
 So the boundary is which command you launched:
 
