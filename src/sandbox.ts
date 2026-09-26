@@ -588,10 +588,10 @@ const defaultRunOk: RunOkFn = (command, args) => {
   }
 };
 
-/** Settings that claim authorship of the worker floor and therefore can never
- *  be silently removed. A tracked project-tier `hooks` block is the exception:
- *  issue #382 makes that file absent from the worker checkout instead, while
- *  keeping the human-authored hooks in Git. */
+/** Settings that claim authorship of the worker floor. In a local or untracked
+ *  file they quarantine the workspace; a tracked `.claude/settings.json` is
+ *  made absent from the worker checkout instead, whatever it holds (issue #382
+ *  / ADR 0158), while staying in Git for the human side. */
 const FLOOR_DEFINING_KEYS = ["sandbox", "permissions"];
 
 function settingsIndexState(workspacePath: string, path: string): "tracked" | "hidden" | undefined {
@@ -660,15 +660,23 @@ function settingsFile(
  *
  *  Fail-closed on a file it cannot parse: the CLI's own reader may accept more
  *  than `JSON.parse` does, and "we couldn't tell" must not read as "clean".
- *  Tracked project hooks are returned as a separate disposition for physical
- *  exclusion; local or untracked hooks remain offending because sparse-checkout
- *  cannot safely remove them.
+ *
+ *  All of the above binds only files the CLI will read (ADR 0158). A tracked
+ *  `.claude/settings.json` carrying floor keys, hooks, or invalid JSON is
+ *  returned as `excludedProjectSettings` instead: the caller hides it with
+ *  sparse-checkout for the session, and a file the CLI never reads — which the
+ *  worker cannot write back (ADR 0037) — has no floor to widen and nothing to
+ *  overlook. Local or untracked files stay offending because sparse-checkout
+ *  cannot safely remove them, and so does a file the filesystem cannot read.
+ *  `projectHooks` is the register gate's `claude_settings_hooks` signal (issue
+ *  #383), not a disposition: tracked hooks without floor keys, as before.
  *
  *  `untrackedProjectSettings` is not part of the guard: it feeds the register
  *  gate's live-checkout signal (issue #686) — `.claude/settings.json` on disk
  *  and not in the index, whatever it holds. */
 export function workspaceSettingsDisposition(workspacePath: string) {
   const offending: string[] = [];
+  let excludedProjectSettings = false;
   let projectHooks = false;
   let hiddenProjectSettings = false;
   let untrackedProjectSettings = false;
@@ -687,15 +695,25 @@ export function workspaceSettingsDisposition(workspacePath: string) {
     try {
       const parsed: unknown = JSON.parse(file.raw);
       if (typeof parsed !== "object" || parsed === null) continue;
-      if (FLOOR_DEFINING_KEYS.some((key) => key in parsed)) {
+      const floor = FLOOR_DEFINING_KEYS.some((key) => key in parsed);
+      if (!floor && !("hooks" in parsed)) continue;
+      if (indexed === undefined) {
         offending.push(name);
-      } else if ("hooks" in parsed) {
-        if (indexed !== undefined) projectHooks = true;
-        else offending.push(name);
+        continue;
       }
+      excludedProjectSettings = true;
+      // 登録の門の信号は広げない —— 床キー持ちの tracked は黙って通す(issue #686)
+      if (!floor) projectHooks = true;
     } catch {
-      offending.push(name);
+      if (indexed === undefined) offending.push(name);
+      else excludedProjectSettings = true;
     }
   }
-  return { overriding: offending, projectHooks, hiddenProjectSettings, untrackedProjectSettings };
+  return {
+    overriding: offending,
+    excludedProjectSettings,
+    projectHooks,
+    hiddenProjectSettings,
+    untrackedProjectSettings,
+  };
 }

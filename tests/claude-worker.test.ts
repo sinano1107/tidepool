@@ -1189,12 +1189,12 @@ describe("ClaudeCodeWorker", () => {
 
   it.each([
     [
-      "settings.json の sandbox + hooks",
+      "untracked settings.json の sandbox + hooks",
       "settings.json",
       JSON.stringify({ sandbox: { filesystem: { allowRead: ["/"] } }, hooks: {} }),
     ],
     [
-      "settings.json の permissions",
+      "untracked settings.json の permissions",
       "settings.json",
       JSON.stringify({ permissions: { allow: ["Bash(*)"] } }),
     ],
@@ -1205,7 +1205,7 @@ describe("ClaudeCodeWorker", () => {
       "settings.local.json",
       JSON.stringify({ permissions: { allow: ["Bash(*)"] } }),
     ],
-    ["壊れた settings.json", "settings.json", "{ not json"],
+    ["壊れた untracked settings.json", "settings.json", "{ not json"],
   ])("%s は spawn せず workspace を quarantine する", async (_case, name, body) => {
     const wsDir = await tempDir("tidepool-ws-");
     await mkdir(join(wsDir, ".claude"), { recursive: true });
@@ -1263,15 +1263,20 @@ describe("ClaudeCodeWorker", () => {
     expect(question?.purpose).not.toContain("settings.local.json");
   });
 
-  it("tracked settings.json の hooks は spawn 前に実体化から外し、workspace を quarantine しない(issue #382)", async () => {
-    const ws = await makeWorkspace("tracked-hooks");
+  it.each([
+    ["hooks(issue #382)", JSON.stringify({ hooks: { PostToolUse: [] }, model: "sonnet" })],
+    ["permissions(ADR 0158)", JSON.stringify({ permissions: { allow: ["Bash(*)"] } })],
+    [
+      "sandbox + hooks(ADR 0158)",
+      JSON.stringify({ sandbox: { filesystem: { allowRead: ["/"] } }, hooks: {} }),
+    ],
+    ["壊れた JSON(ADR 0158)", "{ not json"],
+  ])("tracked settings.json の %s は spawn 前に実体化から外し、workspace を quarantine しない", async (_case, body) => {
+    const ws = await makeWorkspace("tracked-settings");
     await mkdir(join(ws.path, ".claude"), { recursive: true });
-    await writeFile(
-      join(ws.path, ".claude", "settings.json"),
-      JSON.stringify({ hooks: { PostToolUse: [] }, model: "sonnet" }),
-    );
+    await writeFile(join(ws.path, ".claude", "settings.json"), body);
     git(ws.path, "add", ".claude/settings.json");
-    git(ws.path, "commit", "-m", "share project hooks");
+    git(ws.path, "commit", "-m", "share project settings");
     const { start, calls, db, emitExit } = await makeWorker({
       "workspaces.yaml": `tidepool:\n  path: ${ws.path}\n`,
     });
@@ -1283,13 +1288,11 @@ describe("ClaudeCodeWorker", () => {
 
     emitExit(0, null);
     await vi.waitFor(() =>
-      expect(readFileSync(join(ws.path, ".claude", "settings.json"), "utf8")).toContain(
-        '"hooks"',
-      ),
+      expect(readFileSync(join(ws.path, ".claude", "settings.json"), "utf8")).toBe(body),
     );
   });
 
-  it("sparse 後に branch の settings.json が床キーへ変われば index の内容で quarantine する", async () => {
+  it("sparse 後に branch の settings.json が床キーへ変わっても quarantine せず、次の task も spawn する(ADR 0158)", async () => {
     const ws = await makeWorkspace("tracked-hooks-floor-change");
     await mkdir(join(ws.path, ".claude"), { recursive: true });
     await writeFile(
@@ -1315,9 +1318,10 @@ describe("ClaudeCodeWorker", () => {
     git(ws.path, "checkout", "unsafe-settings");
     start("task-hooks-unsafe");
 
-    expect(calls).toHaveLength(1);
-    expect(workspaceNeedsHuman(db, "tidepool")).toBe(true);
+    expect(calls).toHaveLength(2);
+    expect(workspaceNeedsHuman(db, "tidepool")).toBe(false);
     expect(() => readFileSync(join(ws.path, ".claude", "settings.json"), "utf8")).toThrow();
+    expect(git(ws.path, "status", "--porcelain")).toBe("");
   });
 
   it("同じ workspace の次 session が先に始まっても、全 container の回収までは hooks を戻さない", async () => {

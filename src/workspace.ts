@@ -346,11 +346,11 @@ export function ensureTaskBranch(db: Db, workspace: WorkspaceConfig, task: Task)
   git(workspace.path, "checkout", branch);
 }
 
-/** Keep shared project hooks in Git but out of the worker's physical checkout.
+/** Keep shared project settings (ADR 0158) in Git but out of the worker's physical checkout.
  *  Non-cone sparse-checkout is the Git-native form that leaves the index and
  *  status clean, so branch changes and the slot-release tree rule need no
  *  special case for the hidden file. */
-export function excludeWorkspaceProjectHooks(workspace: WorkspaceConfig): void {
+export function excludeWorkspaceProjectSettings(workspace: WorkspaceConfig): void {
   git(
     workspace.path,
     "sparse-checkout",
@@ -382,7 +382,7 @@ export function materializeWorkspaceProjectSettings(workspace: WorkspaceConfig):
 
 /** Recover a sparse exclusion left by a previous board process. The caller
  *  must first prove that the old container set is empty; otherwise
- *  restoring hooks would expose them to a process that survived the restart. */
+ *  restoring settings would expose them to a process that survived the restart. */
 export function restoreWorkspaceProjectSettingsAtBoot(
   db: Db,
   listWorkspaces: () => WorkspaceConfig[],

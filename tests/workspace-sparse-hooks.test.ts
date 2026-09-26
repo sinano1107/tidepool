@@ -5,7 +5,7 @@ import { afterEach, expect, it } from "vitest";
 import { type Db, openDb } from "../src/db.js";
 import { registerTask } from "../src/tasks.js";
 import {
-  excludeWorkspaceProjectHooks,
+  excludeWorkspaceProjectSettings,
   materializeWorkspaceProjectSettings,
   prepareWorkspaceAtPickup,
   releaseWorkspace,
@@ -45,7 +45,7 @@ it("hooks settings は slot 解放中も sparse のまま親子の WIP に混ぜ
   );
 
   await prepareWorkspaceAtPickup(db, workspace, parent, {});
-  excludeWorkspaceProjectHooks(workspace);
+  excludeWorkspaceProjectSettings(workspace);
   commitWork(workspace.path, "parent.txt", "parent work\n");
   releaseWorkspace(db, workspace, parent, now);
   expect(() => readFileSync(join(workspace.path, ".claude", "settings.json"), "utf8")).toThrow();
@@ -62,7 +62,7 @@ it("hooks settings は slot 解放中も sparse のまま親子の WIP に混ぜ
     now,
   );
   await prepareWorkspaceAtPickup(db, workspace, child, {});
-  excludeWorkspaceProjectHooks(workspace);
+  excludeWorkspaceProjectSettings(workspace);
   expect(readFileSync(join(workspace.path, "parent.txt"), "utf8")).toBe("parent work\n");
   writeFileSync(join(workspace.path, "child.txt"), "child work\n");
   releaseWorkspace(db, workspace, child, now);
@@ -86,7 +86,7 @@ it("再起動は前 process が残した sparse settings を human side へ戻�
   await writeFile(join(workspace.path, ".claude", "settings.json"), settings);
   git(workspace.path, "add", ".claude/settings.json");
   git(workspace.path, "commit", "-m", "share project hooks");
-  excludeWorkspaceProjectHooks(workspace);
+  excludeWorkspaceProjectSettings(workspace);
 
   tidepool = await bootTidepool({
     workspace,
@@ -105,7 +105,7 @@ it("再起動時に前 worker の不在を証明できなければ sparse settin
   );
   git(workspace.path, "add", ".claude/settings.json");
   git(workspace.path, "commit", "-m", "share project hooks");
-  excludeWorkspaceProjectHooks(workspace);
+  excludeWorkspaceProjectSettings(workspace);
   const containers = new FakeContainerRuntime();
   containers.scriptPreflight("a container from a previous run is still populated");
 
