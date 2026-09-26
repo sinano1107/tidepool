@@ -94,6 +94,11 @@ function sourceOf(entry: MemoryEntryFields, id: number): MemorySource {
   return entry.source ?? { kind: "event", ref: id };
 }
 
+/** 後継が継げる出所: 自身の作成 event(人間が出所を添えずに書いたもの)は事例を持たないので継がない。 */
+function inheritableSource(entry: MemoryEntry): MemorySource | undefined {
+  return entry.source.ref === entry.id ? undefined : entry.source;
+}
+
 /** 版 = 承認 event の id。表の投影と watermark 再生が同じ1つを読む。 */
 function versionOf(state: MemoryEntryFields["state"], createdEventId: number): number | null {
   return state === "approved" ? createdEventId : null;
@@ -368,7 +373,7 @@ export function recordBehavior(
   return db.transaction(() => {
     // candidate を直す口は提案 question の修正値だけ(ADR 0152 決定3)
     const old = supersedes === undefined ? (amends && rowToEntry(amends)) : rowToEntry(requireBehavior(db, supersedes, "approved"));
-    const source = cited ?? (old && old.source.ref !== old.id ? old.source : undefined);
+    const source = cited ?? (old && inheritableSource(old));
     const id = createEntry(db, { ...fields, source, kind: "behavior", state: "approved", original: fields.original ?? null }, origin, at, mark);
     if (supersedes !== undefined) {
       invalidateMemoryEntry(db, { entry_id: supersedes, reason: "superseded", successor_id: id }, fields.author.name, origin, at, { activity: fields.author.activity });
@@ -651,9 +656,8 @@ export function proposeMemoryChange(
       const { kind = "behavior", text, annotations, ...draft } = need(input.text, "text");
       // replaces が1つの出所を共有するなら新 candidate はそれを継ぐ(rule ↔ case の関係を共有 Episode から導ける)。workspace を
       // 跨ぐ統合(ADR 0120)は帰責 event が揃わないので meta-review の推論のまま。自身の作成 event の出所は継ぐ事例を持たない
-      const [first, ...rest] = replaced;
-      const shared =
-        first!.source.ref !== first!.id && rest.every(({ source }) => source.kind === first!.source.kind && source.ref === first!.source.ref) ? first!.source : undefined;
+      const [head, ...rest] = replaced as [MemoryEntry, ...MemoryEntry[]];
+      const shared = rest.every(({ source }) => source.kind === head.source.kind && source.ref === head.source.ref) ? head.source : undefined;
       const author = { activity: "meta_review" as const, name: workerId };
       let created: number;
       if (kind === "exemplar") {
@@ -664,7 +668,7 @@ export function proposeMemoryChange(
         created = createEntry(db, { ...draft, ...checked, kind, state: "candidate", original: null, source: shared, author }, "worker", now);
       } else {
         if (annotations !== undefined) throw new DomainError("only an exemplar takes annotations");
-        const source = shared ?? { event_id: decision };
+        const source = (shared && inheritableSource(head)) ?? { event_id: decision };
         created = createEntry(db, { ...draft, text: need(text, "text.text"), kind, state: "candidate", original: null, source, author }, "worker", now);
       }
       proposal = { kind: "memory", op: "consolidate", candidate_id: created, replaces: replaced.map(({ id, version }) => ({ id, version })) };

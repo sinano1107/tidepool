@@ -33,6 +33,13 @@ export const ROUTING_META_REVIEW_VERBS = [
   "propose_routing_change",
 ] as const;
 
+/** 昇格規則の4択(spec #949 / issue #954): propose_memory_change の記述と memory meta-review の purpose が同じ文を載せる。 */
+export const PROMOTION_RULE =
+  "For each candidate, promote it to a Behavior when its scope and criterion can be stated so they hold for any future task; " +
+  "fold it into an Exemplar (consolidate with kind exemplar) when that cannot be said but the concrete case carries quality worth reusing; " +
+  "retire it with invalidate_memory reason rejected when it will become neither; leave it unpromoted while more material could still " +
+  "change the judgment — there is no threshold or deadline.";
+
 /** 周期 meta-review の主題(ADR 0120 決定2・ADR 0150 決定7): 登録する task の欄(文面と review のティア)、due 判定が数える
  *  材料の event 種別、接続で worker の memory verb を置き換える専用 verb。 */
 export const META_REVIEW_SUBJECTS = {
@@ -41,11 +48,9 @@ export const META_REVIEW_SUBJECTS = {
       title: "Memory meta-review",
       purpose:
         "Periodic meta-review of the board's memory store. Judge repeats among candidates and exemplars, redundant examples included, by reading them, not by counting. " +
-        "For a Behavior, ask whether it holds true whatever leaf sits under its branch. For each candidate, promote it to a Behavior when its " +
-        "scope and criterion can be stated so they hold for any future task; fold it into an Exemplar (consolidate with kind exemplar) when that " +
-        "cannot be said but the concrete case carries quality worth reusing; retire it with invalidate_memory reason rejected when it will become " +
-        "neither; leave it unpromoted while more material could still change the judgment — there is no threshold or deadline. Retire a redundant " +
-        "exemplar with invalidate_memory superseded, naming the one you keep as successor. Propose other changes through the proposal verb; " +
+        "For a Behavior, ask whether it holds true whatever leaf sits under its branch. " +
+        PROMOTION_RULE +
+        " Retire a redundant exemplar with invalidate_memory superseded, naming the one you keep as successor. Propose other changes through the proposal verb; " +
         "apply fixes directly only to Knowledge and Definitions. Read the invalidated candidates and their reasons first, so you do not re-propose what was rejected. " +
         "Where a human amended a candidate when approving it (a superseded candidate whose successor a human wrote), draft closer to the human's wording.",
       completion_criteria:

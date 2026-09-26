@@ -175,13 +175,8 @@ it("pin の entry が人間・meta-review・superseded のどの経路で無効�
 });
 
 /** 統合・無効化の提案(issue #621)。approved の Behavior は approve の提案と回答で作る。 */
-async function approvedBehavior(
-  board: Awaited<ReturnType<typeof boardWithMetaReview>>,
-  title: string,
-  scope: string | null = null,
-  source?: Parameters<typeof candidate>[3],
-) {
-  const id = candidate(t, title, scope, source);
+async function approvedBehavior(board: Awaited<ReturnType<typeof boardWithMetaReview>>, title: string, scope: string | null = null) {
+  const id = candidate(t, title, scope);
   expect((await answer(await board.propose(id), "approve")).status).toBe(200);
   return id;
 }
@@ -197,10 +192,10 @@ async function consolidate(board: Awaited<ReturnType<typeof boardWithMetaReview>
   });
 }
 
-it("出所の揃わない consolidate の提案は meta_review 名義・decision 出所の新 candidate を作り、その id と replaces の pin を焼き、detail に置換対象の id と本文 → 新本文・宛先・path・scope を載せる", async () => {
+it("consolidate の提案は meta_review 名義の新 candidate を作り、その id と replaces の pin を焼き、detail に置換対象の id と本文 → 新本文・宛先・path・scope を載せる", async () => {
   const board = await boardWithMetaReview();
   try {
-    const approved = await approvedBehavior(board, "Split migrations", "tidepool", { commit: "b7e1c2d" });
+    const approved = await approvedBehavior(board, "Split migrations", "tidepool");
     const approvedVersion = (await entry(approved)).version;
 
     const { question_id } = await consolidate(board, [approved, board.ids[0]!]);
@@ -222,7 +217,6 @@ it("出所の揃わない consolidate の提案は meta_review 名義・decision
       scope: null,
       addressee: null,
       author: { activity: "meta_review" },
-      source: { kind: "decision" },
     });
     const { detail } = question.question_items[0];
     for (const shown of [`#${approved} (scope: tidepool, addressee: deckhand)`, "Split migrations, always.", `#${board.ids[0]}`, "Keep migrations in their own commit, always.", "Keep each commit to one concern.", "every agent", "habits/commits", "whole board"]) {
@@ -261,7 +255,7 @@ it("consolidate の kind exemplar は注釈つきの Exemplar candidate を作�
 
     const question = await task(question_id);
     const candidateId = question.question_proposal.candidate_id;
-    expect(await entry(candidateId)).toMatchObject({ kind: "exemplar", state: "candidate", annotations, source: { kind: "event", ref: attributed } });
+    expect(await entry(candidateId)).toMatchObject({ kind: "exemplar" });
     const { detail } = question.question_items[0];
     for (const shown of [
       `new exemplar candidate #${candidateId}`,
@@ -274,6 +268,16 @@ it("consolidate の kind exemplar は注釈つきの Exemplar candidate を作�
     expect((await board.call("list_memory_candidates", { kind: "exemplar" })).entries.map((e: any) => e.id)).toEqual([candidateId]);
   } finally {
     await board.client.close();
+  }
+});
+
+it("meta-review の invalidate_memory は reason rejected で candidate を引退させる(issue #954)", async () => {
+  const { ids, client, call } = await boardWithMetaReview();
+  try {
+    expect(await call("invalidate_memory", { entry_id: ids[0], reason: "rejected" })).toEqual({ event_id: expect.any(Number) });
+    expect(await entry(ids[0]!)).toMatchObject({ invalidation_reason: "rejected" });
+  } finally {
+    await client.close();
   }
 });
 

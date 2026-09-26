@@ -31,7 +31,7 @@ import {
   recordKnowledge,
   searchMemory,
 } from "./memory.js";
-import { type MetaReviewSubject, metaReviewSubjectOf } from "./meta-review.js";
+import { type MetaReviewSubject, metaReviewSubjectOf, PROMOTION_RULE } from "./meta-review.js";
 import type { ProcessContainers } from "./process-container.js";
 import { type AuthorityProfile, REVIEWER_AUTHORITY_PROFILE, type RosterAgent } from "./registry.js";
 import { listAllocations, listRoutingCells, listRoutingProposals, listRoutingShadow, proposeRoutingChange } from "./routing-review.js";
@@ -955,7 +955,7 @@ function registerMemoryMetaReviewVerbs(server: McpServer, deps: McpDeps, run: Me
         "candidates with their invalidation reason and successor — read them so you do not re-propose what was rejected. A candidate superseded " +
           "by a successor a human wrote was approved with the human's amendment, or replaced by a consolidation the human amended; successor " +
           "shows the wording they approved instead.",
-      inputSchema: { include_invalidated: z.boolean().optional(), kind: memoryListFilterSchema.shape.kind, page },
+      inputSchema: { include_invalidated: z.boolean().optional(), kind: z.enum(["behavior", "exemplar"]).optional(), page },
     },
     async (input) => run((reader, now) => pullMemoryList(deps.db, reader, "list_memory_candidates", input, now)),
   );
@@ -1061,10 +1061,8 @@ function registerMemoryMetaReviewVerbs(server: McpServer, deps: McpDeps, run: Me
         "based_on_decision as its source when they share none. With text.kind exemplar it is an Exemplar: give annotations instead " +
         "of text.text; the replaced entries must share a source that renders a case. op invalidate asks to invalidate the approved Behavior " +
         "target_id for reason capability / environment / requirement_change. rationale is why you propose it (the question's context). " +
-        "For each candidate, promote it to a Behavior when its scope and criterion can be stated so they hold for any future task; " +
-        "fold it into an Exemplar when that cannot be said but the concrete case carries quality worth reusing; retire it with " +
-        "invalidate_memory reason rejected when it will become neither; leave it unpromoted while more material could still change " +
-        "the judgment — there is no threshold or deadline. " +
+        PROMOTION_RULE +
+        " " +
         "The board applies the answer itself, so you can complete this task without waiting for it. Returns the question id. " +
         BOARD_WRITE_LANGUAGE_RULE,
       inputSchema: {

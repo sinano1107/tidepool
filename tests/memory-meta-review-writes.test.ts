@@ -6,12 +6,14 @@ import {
   createBehaviorCandidate,
   defineMemoryBranch,
   foldMemory,
+  humanEntryInput,
   type InvalidationReason,
   invalidateMemoryByMetaReview,
   invalidateMemoryEntry,
   listMemoryEntries,
   moveMemory,
   proposeMemoryChange,
+  recordBehavior,
   recordKnowledge,
   rejectMemoryProposal,
 } from "../src/memory.js";
@@ -311,6 +313,19 @@ it("Exemplar の提案の修正値つき approve は domain error で何も変�
 
   expect(() => approveMemoryProposal(db, proposal, "question-1", "webui", at, { title: "Split it" })).toThrow(DomainError);
   expect(listMemoryEntries(db, {})).toEqual(before);
+});
+
+it("出所を添えずに人間が書いた Behavior だけを replaces に取る consolidate は、その作成 event を継がず Behavior なら decision を出所にし、Exemplar なら domain error", () => {
+  const { db, decision, consolidate } = drafts();
+  const human = recordBehavior(
+    db,
+    { ...humanEntryInput(db, { workspace: "tidepool", path: "habits", title: "Pin Node", text: "Pin Node 22." }), addressee: null },
+    "webui",
+    at,
+  ).entry_id;
+
+  expect(entry(db, consolidate([human], { text: "Pin the toolchain." }).candidate_id)).toMatchObject({ source: { kind: "decision", ref: decision } });
+  expect(() => consolidate([human], { kind: "exemplar", annotations })).toThrow(/case the board can render/);
 });
 
 it("kind を省いた consolidate は Behavior candidate を作り、replaces(Exemplar も取れる)の出所が揃えばそれを継ぎ、揃わなければ meta-review の推論(decision)を出所にする", () => {
