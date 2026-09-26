@@ -254,7 +254,7 @@ function requireKnowledge(db: Db, id: number): EntryRow {
 }
 
 /** 人間の面(settings の HTTP / 管理MCP)の書き込み欄(spec #586 F)。workspace は null = 盤面全体、
- *  original_title / original_text は人間の原文で言語は盤面の表示言語。出所欄は Behavior だけが持つ(ADR 0083 追記5 / ADR 0153 決定3)。 */
+ *  original_title / original_text は人間の原文で言語は盤面の表示言語。出所欄は Behavior(任意)と Exemplar(必須)だけが持つ(ADR 0083 追記5 / ADR 0153 決定3)。 */
 const humanEntryFields = {
   workspace: z.string().min(1).nullable(),
   path: z.string(),
@@ -1121,7 +1121,7 @@ export function readMemory(
     source: MemorySource;
     source_kind: "fact" | "inference";
     case: MemoryCase | null;
-    annotations?: ExemplarAnnotation[];
+    annotations?: Array<Omit<ExemplarAnnotation, "original">>;
   }>;
   event_id: number;
 } {
@@ -1137,7 +1137,8 @@ export function readMemory(
         source,
         source_kind: SOURCE_KIND[source.kind],
         case: kind === "behavior" || kind === "exemplar" ? renderCase(db, source) : null,
-        annotations,
+        // 原文は人間の面のもの —— worker には英語の正文だけ(ADR 0015)
+        annotations: annotations?.map(({ original: _, ...annotation }) => annotation),
       }));
     return recordPull(db, reader, { verb: "read_memory", input, returned_ids: entries.map((e) => e.id) }, { entries }, at);
   })();

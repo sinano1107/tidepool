@@ -402,15 +402,17 @@ it("episode 行の無い同じ task の複数 session は、それぞれの窓�
 const fixtureExemplar = (db: ReturnType<typeof openDb>, source_event_id: number, annotations: unknown[]) =>
   recordExemplar(db, humanEntryInput(db, { workspace: "sandbox", path: "notes", title: `Case ${source_event_id}`, addressee: null, source_event_id, annotations }), "webui", at).entry_id;
 
-it("Exemplar の read は annotations と、出所の decision entry / session から描いた case を返す(ADR 0153 決定3)", () => {
+it("Exemplar の read は annotations(原文を除く)と、出所の decision entry / session から描いた case を返す(ADR 0153 決定3)", () => {
   const db = seedFixtureBoard("## Outcome\nCreated notes.md.");
-  const fromDecision = [{ anchor: { field: "decision", quote: "three bullets" }, polarity: "avoid", text: "Three bullets is too thin for a topic note." }];
+  const avoid = { anchor: { field: "decision", quote: "three bullets" }, polarity: "avoid", text: "Three bullets is too thin for a topic note." };
   const fromSession = [{ anchor: { field: "handoff", quote: "Created notes.md" }, polarity: "imitate", text: "State the outcome first in the handoff." }];
-  const ids = [fixtureExemplar(db, 6, fromDecision), fixtureExemplar(db, FIXTURE_SPAWNED_EVENT_ID, fromSession)];
+  const ids = [fixtureExemplar(db, 6, [{ ...avoid, original: "3点では薄い" }]), fixtureExemplar(db, FIXTURE_SPAWNED_EVENT_ID, fromSession)];
 
-  expect(readMemory(db, { taskId: FIXTURE_TASK, scope: "sandbox", agent: "tako" }, { ids }, at).entries).toMatchObject([
+  const { entries } = readMemory(db, { taskId: FIXTURE_TASK, scope: "sandbox", agent: "tako" }, { ids }, at);
+  // 原文は worker に渡らない(ADR 0015)
+  expect(entries[0]?.annotations).toEqual([avoid]);
+  expect(entries).toMatchObject([
     {
-      annotations: fromDecision,
       case: { decision: "kept the note to three bullets", steering: [], handoff: "## Outcome\nCreated notes.md.", result: FIXTURE_RESULT },
     },
     {

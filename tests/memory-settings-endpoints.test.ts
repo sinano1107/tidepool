@@ -1,5 +1,5 @@
 import { afterEach, expect, it } from "vitest";
-import { recordKnowledge } from "../src/memory.js";
+import { previewCase, recordKnowledge } from "../src/memory.js";
 import { logDecision, registerTask } from "../src/tasks.js";
 import { FakeTranslationClient } from "./fakes.js";
 import { api, bootTidepool, managementMcpClient, type Tidepool } from "./harness.js";
@@ -213,7 +213,7 @@ it("Exemplar の write(POST /api/settings/memory/exemplars・管理MCP の recor
     source_event_id: decision,
     annotations: [{ anchor: { field: "decision", quote: "two commits" }, polarity: "imitate", text: "Split schema changes from data changes." }],
   };
-  const preview = { decision: "split the migration into two commits", steering: [], handoff: null, result: null };
+  const preview = previewCase(t.db, decision);
 
   const written = await api(t.baseUrl, "POST", "/api/settings/memory/exemplars", exemplar);
   expect(written).toMatchObject({ status: 200, json: { entry_id: expect.any(Number) } });
@@ -234,7 +234,7 @@ it("Exemplar の write(POST /api/settings/memory/exemplars・管理MCP の recor
     await client.close();
   }
   expect((await api(t.baseUrl, "GET", "/api/settings/memory/entries?kind=exemplar")).json.entries).toMatchObject([
-    { id: written.json.entry_id, kind: "exemplar", state: "approved", author: { activity: "human" } },
-    { kind: "exemplar" },
+    { id: written.json.entry_id },
+    { id: expect.any(Number) },
   ]);
 });

@@ -615,7 +615,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
         "Record a Behavior entry: how agents should act, injected into the workers of addressee (an agent name, or null for every agent). " +
         "To edit an approved behavior, pass its id as supersedes: the new entry replaces it and the old one is invalidated as superseded. " +
         "Candidates cannot be edited here. source_event_id optionally cites the episode the rule comes from: a decision_logged or " +
-        "worker_spawned event id; an edit without it keeps the old entry's source. title and text are the English canonical wording; " +
+        "worker_spawned event id; an edit without it keeps the old entry's cited source (an entry that cited none stays without one). title and text are the English canonical wording; " +
         `original_title and original_text go together (both or neither). ${writtenAs}`,
       inputSchema: humanBehaviorSchema.shape,
     },
@@ -639,7 +639,8 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
         "for every agent). source_event_id is the case: a decision_logged or worker_spawned event id (see preview_case). annotations is a " +
         "non-empty list; each has a polarity (imitate or avoid), an English text, an optional original (the human's own wording), and an " +
         "anchor: \"whole\" or { field, quote } where quote is a verbatim substring of that field (decision, steering, handoff or result) " +
-        `of the rendered case. title is the English one-line label. ${writtenAs}`,
+        `of the rendered case. title is the English one-line label. Written as the human, approved at once; an annotation's original is ` +
+        "recorded in the board's display language. workspace null = the whole board.",
       inputSchema: humanExemplarSchema.shape,
     },
     async (input) => memoryVerb(() => recordExemplar(deps.db, humanEntryInput(deps.db, input), "mcp", deps.clock.now())),
