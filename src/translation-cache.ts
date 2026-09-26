@@ -89,13 +89,13 @@ interface TranslationUsageRow extends TranslationCacheRow {
   created_at: string;
 }
 
-/** Every generated (non-cached) translation's token usage, oldest first;
- *  rows sharing a `created_at` (one request's `now` covers purpose and each
- *  question item, issue #688) come back in the order they were inserted
+/** Every generated (non-cached) translation's token usage, oldest first
  *  (issue #47's "record it the same way worker sessions do, make it
  *  observable"): a cache hit never adds a row (saveTranslation only runs on
  *  a miss), so this lists exactly the LLM calls actually made, same as
- *  GET /api/tasks/:id/events surfaces a work task's worker_exited usage. */
+ *  GET /api/tasks/:id/events surfaces a work task's worker_exited usage.
+ *  Rows sharing a `created_at` (one request's `now` covers purpose and each
+ *  question item, issue #688) come back in the order they were inserted. */
 export function listTranslationUsage(db: Db): TranslationUsageRecord[] {
   const rows = db
     .prepare(
