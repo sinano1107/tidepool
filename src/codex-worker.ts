@@ -13,8 +13,9 @@ import { homedir, tmpdir } from "node:os";
 import { delimiter, dirname, join, resolve } from "node:path";
 import { resolveAgentOrQuarantine, resolveExecutionAgent } from "./agent.js";
 import { type BoardCall, readOutput } from "./board-call.js";
+import { boardDoctrine, boardProse } from "./board-prose.js";
 import { type BoardStatePath, boardStateOverlap } from "./board-state.js";
-import { agentGitIdentityEnv, PREMISE_BREACH_PROTOCOL } from "./claude-worker.js";
+import { agentGitIdentityEnv } from "./claude-worker.js";
 import type { Clock } from "./clock.js";
 import { CODEX_APP_SERVER_VERSION, callAppServer, codexCommandThrough } from "./codex-app-server.js";
 import type { ContainmentCapability } from "./containment.js";
@@ -401,16 +402,11 @@ function tomlInline(value: Record<string, unknown>): string {
     .join(",")}}`;
 }
 
-/** ADR 0124 決定1・2: 盤面が書いた文面 —— task に固有でない背景知識 —— は
- *  `developer_instructions` に載せる。Codex は次の part(`<skills_instructions>`)との間に
- *  区切りを入れないので、終端の空行は文面の一部である。 */
-function developerInstructions(memorySection: string | null, systemPrompt: string, authority: string): string {
-  return `${memorySection ? `${memorySection}\n\n` : ""}${systemPrompt}\n\n## Authority\n\n${authority}\n\n` +
-    "Use only the tidepool MCP verbs to report board decisions and completion. " +
-    "Board verbs are main-thread only; if a subagent needs one, call it from the main thread. " +
-    "Spawn subagents with fork_turns: \"none\"; this session keeps no rollout, so forking the parent thread's history always fails.\n\n" +
-    `${PREMISE_BREACH_PROTOCOL}\n\n`;
-}
+/** ADR 0157 決定2・3: Codex の委譲先は subagent。Workflow tool に当たる機構は無いので禁止の段落は出さない。
+ *  最終段落に続く `fork_turns` の1文は Codex 固有の追記(ADR 0134 決定4)。 */
+const CODEX_DOCTRINE =
+  `${boardDoctrine({ delegate: "a subagent", workflow: false })} ` +
+  "Spawn subagents with fork_turns: \"none\"; this session keeps no rollout, so forking the parent thread's history always fails.";
 
 /** user turn に残るのは、その task に固有の指示だけ(ADR 0124 決定1)。 */
 function taskPrompt(task: Task): string {
@@ -1020,7 +1016,19 @@ export class CodexWorker implements WorkerAdapter {
       const config = spawnConfig({
         taskType: task.type,
         effort: setting.effort,
-        developerInstructions: developerInstructions(memory.section, agent.definition.systemPrompt, agent.profile.guidance),
+        // ADR 0124 決定1・2 / ADR 0157 決定1: 盤面が書いた文面は Claude と同じ正本から組む。Codex は次の
+        // part(`<skills_instructions>`)との間に区切りを入れないので、終端の空行は文面の一部である
+        developerInstructions: `${boardProse({
+          db: this.options.db,
+          registryDir: this.options.registry.dir,
+          registry,
+          task,
+          systemPrompt: agent.definition.systemPrompt,
+          profile: agent.profile,
+          doctrine: CODEX_DOCTRINE,
+          allowedDomains: workspace.allowed_domains,
+          memorySection: memory.section,
+        })}\n\n`,
         mcpUrl: taskMcpUrl.toString(),
         // ADR 0122 決定2: MCP の登録と同じ差を写す。宣言と盤面の面が集合として一致することは
         // tests/codex-worker.test.ts が固定する(ADR 0125 決定2)
