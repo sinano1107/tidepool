@@ -560,6 +560,8 @@ const LIVE_CHECKOUT_SIGNAL_LABEL: Record<string, string> = {
     'The checkout has .claude/settings.local.json — host-local state a human put there for their own sessions.',
   claude_settings_hooks:
     'The checkout\'s .claude/settings.json carries hooks — the shape of a development checkout, not a disposable one.',
+  claude_settings_untracked:
+    'The checkout has an untracked .claude/settings.json — host-local settings that live only in this tree, not in the repository.',
 };
 
 // The merge dial (registry.ts): required and three-valued since ADR 0079, so

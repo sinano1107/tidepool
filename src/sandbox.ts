@@ -667,9 +667,17 @@ export function workspaceSettingsDisposition(workspacePath: string) {
   const offending: string[] = [];
   let projectHooks = false;
   let hiddenProjectSettings = false;
+  let untrackedProjectSettings = false;
   for (const name of PROJECT_SETTINGS_FILES) {
     const file = settingsFile(workspacePath, name);
     if (file === undefined) continue;
+    // 登録の門の信号(issue #686)。中身は読まない —— parse より前に、存在と未追跡だけで立てる
+    if (
+      name === "settings.json" &&
+      settingsIndexState(workspacePath, ".claude/settings.json") === undefined
+    ) {
+      untrackedProjectSettings = true;
+    }
     if (file === "unreadable") {
       offending.push(name);
       continue;
@@ -694,5 +702,5 @@ export function workspaceSettingsDisposition(workspacePath: string) {
       offending.push(name);
     }
   }
-  return { overriding: offending, projectHooks, hiddenProjectSettings };
+  return { overriding: offending, projectHooks, hiddenProjectSettings, untrackedProjectSettings };
 }

@@ -635,7 +635,8 @@ type LiveCheckoutSignal =
   | "uncommitted_changes"
   | "worktree_unreadable"
   | "claude_settings_local"
-  | "claude_settings_hooks";
+  | "claude_settings_hooks"
+  | "claude_settings_untracked";
 
 /** 登録対象の checkout に「生きた dev checkout らしさ」の信号があるか(issue #383)。
  *
@@ -659,7 +660,10 @@ function liveCheckoutSignals(path: string): LiveCheckoutSignal[] {
     reasons.push("worktree_unreadable");
   }
   if (existsSync(join(path, ".claude", "settings.local.json"))) reasons.push("claude_settings_local");
-  if (workspaceSettingsDisposition(path).projectHooks) reasons.push("claude_settings_hooks");
+  const settings = workspaceSettingsDisposition(path);
+  if (settings.projectHooks) reasons.push("claude_settings_hooks");
+  // gitignore された settings.json は `git status` にも現れない(issue #686)
+  if (settings.untrackedProjectSettings) reasons.push("claude_settings_untracked");
   return reasons;
 }
 

@@ -1345,7 +1345,8 @@ const LIVE_CHECKOUT_SIGNAL_LABEL = {
   uncommitted_changes: "The checkout has uncommitted changes or untracked files \u2014 someone is working in this tree right now.",
   worktree_unreadable: "The checkout has no readable working tree \u2014 the board could not tell whether work is in progress there.",
   claude_settings_local: "The checkout has .claude/settings.local.json \u2014 host-local state a human put there for their own sessions.",
-  claude_settings_hooks: "The checkout's .claude/settings.json carries hooks \u2014 the shape of a development checkout, not a disposable one."
+  claude_settings_hooks: "The checkout's .claude/settings.json carries hooks \u2014 the shape of a development checkout, not a disposable one.",
+  claude_settings_untracked: "The checkout has an untracked .claude/settings.json \u2014 host-local settings that live only in this tree, not in the repository."
 };
 const MERGE_OPTIONS = [
   { value: "", label: "choose one \u2014 the dial is required" },
