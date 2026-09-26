@@ -14,7 +14,6 @@ import { git, tempDir } from "./harness.js";
 
 let repoPath: string | undefined;
 let remotePath: string | undefined;
-let binPath: string | undefined;
 let originalPath: string | undefined;
 let savedGhToken: string | undefined;
 const brokers: FakeBroker[] = [];
@@ -32,7 +31,7 @@ afterEach(async () => {
   }
   if (originalPath !== undefined) process.env.PATH = originalPath;
   for (const broker of brokers.splice(0)) await broker.close();
-  repoPath = remotePath = binPath = originalPath = undefined;
+  repoPath = remotePath = originalPath = undefined;
 });
 
 /** ADR 0093 の user token ファイルの代役: mode 600 のファイルを実体で作り、
@@ -72,7 +71,6 @@ function repoOnTaskBranch(repo: string, remote: string, file: string, message: s
  *  + auth, so it's faked at the process boundary instead. */
 async function fakeGh(logPath: string): Promise<string> {
   const dir = await tempDir("tidepool-fakebin-");
-  binPath = dir;
   const script = join(dir, "gh");
   writeFileSync(
     script,
@@ -115,7 +113,6 @@ it("gh pr create の前にタスクブランチを origin へ push する", asyn
 
 it("トークンは gh の子プロセス env にだけ注入され、盤面プロセスの env には載らない(ADR 0093)", async () => {
   const dir = await tempDir("tidepool-fakebin-");
-  binPath = dir;
   const logPath = join(dir, "gh-invocations.log");
   writeFileSync(join(dir, "gh"), `#!/bin/sh\necho "token=$GH_TOKEN" >> "${logPath}"\n`);
   chmodSync(join(dir, "gh"), 0o755);
@@ -141,7 +138,6 @@ it("トークンは gh の子プロセス env にだけ注入され、盤面プ�
  *  failing でも exit 0 で、非ゼロ終了は「読めなかった」ときだけ。 */
 async function fakeGhChecks(stdout: string, exitCode: number): Promise<string> {
   const dir = await tempDir("tidepool-fakebin-");
-  binPath = dir;
   const script = join(dir, "gh");
   writeFileSync(script, `#!/bin/sh\nprintf '%s' '${stdout}'\nexit ${exitCode}\n`);
   chmodSync(script, 0o755);
@@ -240,7 +236,6 @@ it("getCiStatus は gh が非ゼロ終了したら(到達不能)pending を返�
  *  fakeGhChecks. */
 async function fakeGhIssueView(stdout: string): Promise<string> {
   const dir = await tempDir("tidepool-fakebin-");
-  binPath = dir;
   const script = join(dir, "gh");
   writeFileSync(script, `#!/bin/sh\nprintf '%s' '${stdout}'\n`);
   chmodSync(script, 0o755);
@@ -292,7 +287,6 @@ it("getIssue は close 済み issue に対して IssueGoneError(closed) を投�
  *  outage — the classifier has only this surface to tell them apart. */
 async function fakeGhIssueViewFailure(stderr: string): Promise<string> {
   const dir = await tempDir("tidepool-fakebin-");
-  binPath = dir;
   const script = join(dir, "gh");
   writeFileSync(script, `#!/bin/sh\necho '${stderr}' >&2\nexit 1\n`);
   chmodSync(script, 0o755);
@@ -325,7 +319,6 @@ it("getIssue は存在しない issue に対して IssueGoneError(not_found) を
 
 it("listIssues は gh issue list --state open --limit 100 --json number,title を呼び、結果を返す(issue #67)", async () => {
   const dir = await tempDir("tidepool-fakebin-");
-  binPath = dir;
   const logPath = join(dir, "gh-invocations.log");
   writeFileSync(
     join(dir, "gh"),
@@ -350,7 +343,6 @@ it("listIssues は gh issue list --state open --limit 100 --json number,title �
 
 it("mergePullRequest は gh pr merge --merge を呼ぶ", async () => {
   const dir = await tempDir("tidepool-fakebin-");
-  binPath = dir;
   const logPath = join(dir, "gh-invocations.log");
   writeFileSync(join(dir, "gh"), `#!/bin/sh\necho "$@" >> "${logPath}"\n`);
   chmodSync(join(dir, "gh"), 0o755);
@@ -365,7 +357,6 @@ it("mergePullRequest は gh pr merge --merge を呼ぶ", async () => {
 
 it("isPullRequestMerged は gh pr view --json state を読み、MERGED だけを真とする(ADR 0079)", async () => {
   const dir = await tempDir("tidepool-fakebin-");
-  binPath = dir;
   const logPath = join(dir, "gh-invocations.log");
   writeFileSync(
     join(dir, "gh"),
@@ -385,7 +376,6 @@ it("isPullRequestMerged は gh pr view --json state を読み、MERGED だけを
 
 it("addIssueComment は gh issue comment --body を呼ぶ(issue #49 設計点4: 承認済みサジェストの追記)", async () => {
   const dir = await tempDir("tidepool-fakebin-");
-  binPath = dir;
   const logPath = join(dir, "gh-invocations.log");
   writeFileSync(join(dir, "gh"), `#!/bin/sh\necho "$@" >> "${logPath}"\n`);
   chmodSync(join(dir, "gh"), 0o755);

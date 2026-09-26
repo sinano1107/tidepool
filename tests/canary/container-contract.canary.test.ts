@@ -1,7 +1,6 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
@@ -13,6 +12,7 @@ import {
   ProcessContainers,
   type PtyFn,
 } from "../../src/process-container.js";
+import { tempDir } from "../harness.js";
 import { liveGroups, processGroupContainerRuntime } from "./process-group-container.js";
 
 /** 容器の contract suite(ADR 0099 決定5 / issue #464)。実カーネルの
@@ -155,8 +155,8 @@ let pidsFile: string;
  *  process をホストに残さない。 */
 const opened: string[] = [];
 
-beforeEach(() => {
-  work = mkdtempSync(join(tmpdir(), "tidepool-container-canary-"));
+beforeEach(async () => {
+  work = await tempDir("tidepool-container-canary-");
   pidsFile = join(work, "pids");
   writeFileSync(pidsFile, "");
 });
@@ -165,7 +165,6 @@ afterEach(async () => {
   const ids = opened.splice(0);
   for (const id of ids) containers.forceReclaim(id);
   await Promise.all(ids.map((id) => containers.reclaimed(id)));
-  rmSync(work, { recursive: true, force: true });
 });
 
 function open(sessionId: string): ProcessContainer {

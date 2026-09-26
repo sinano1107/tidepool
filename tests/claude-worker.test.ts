@@ -1,7 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
-import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { agentNeedsHuman } from "../src/agent.js";
@@ -180,9 +179,9 @@ async function makeWorker(
   resolveWorkspace?: (taskWorkspace: string | null) => WorkspaceConfig,
 ) {
   const registryDir = await makeRegistry(registryFiles);
-  // `tempDir` ではなく直接作る —— 後始末の待ち責務(spawn 本数ぶんのログ open を
-  // 待ってから rm)をこの fixture に置く(issue #908)。汎用の `tempDir` の契約は変えない。
-  const logDir = await mkdtemp(join(tmpdir(), "tidepool-worker-logs-"));
+  // 後始末の待ち責務(spawn 本数ぶんのログ open を待つ)はこの fixture に置く(issue #908)。
+  // onTestFinished は後から積んだものが先に走るので、下の待ちが済んでから `tempDir` が消す。
+  const logDir = await tempDir("tidepool-worker-logs-");
   const db = openDb(":memory:");
   const clock = new FakeClock();
   const slot = new Slot();
@@ -221,7 +220,6 @@ async function makeWorker(
         )
         .catch(() => {});
     }
-    await rm(logDir, { recursive: true, force: true });
   });
   const worker = new ClaudeCodeWorker({
     db,
