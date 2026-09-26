@@ -2508,7 +2508,7 @@ describe("ClaudeCodeWorker", () => {
       `---\nname: deckhand\ndescription: General work agent for the tidepool board\nversion: 0.4.0\nauthority: standard\nprovider: anthropic\nskills:\n  - "*"\n---\nYou are Deckhand, MERGED on the remote.\n`,
       "merged registry change",
     );
-    refreshRegistry(registryDir, undefined);
+    expect(await refreshRegistry(registryDir, undefined)).toEqual({ available: true });
     expect(git("rev-parse", "main")).toBe(staleLocal);
 
     const db = openDb(":memory:");
