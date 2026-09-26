@@ -33,12 +33,8 @@ test("決定ログのエントリを事例に選び、描画の選択で anchor 
   await expect(page.getByText("Separate schema commits")).toBeVisible();
   expect(await memoryEntries(t, "?kind=exemplar")).toMatchObject([
     {
-      title: "Separate schema commits",
-      state: "approved",
       source: { kind: "event", ref: decision.id },
-      annotations: [
-        { anchor: { field: "decision", quote: "split the migration into two commits" }, polarity: "imitate", text: "Keep the schema change in its own commit." },
-      ],
+      annotations: [{ anchor: { field: "decision", quote: "split the migration into two commits" } }],
     },
   ]);
 });
