@@ -1551,7 +1551,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
   /** Shared project settings stay hidden until every overlapping session in the
    *  workspace has actually left its container. Slot release happens earlier,
    *  inside the worker's final MCP call, so it is not an exit boundary. */
-  private readonly projectHookSessions = new Map<string, number>();
+  private readonly projectSettingsSessions = new Map<string, number>();
   /** ADR 0018: resolved once at construction, same "config edge" posture as
    *  the rest of `options` — env access itself stays in main.ts. */
   private readonly workspacesDir: string;
@@ -1576,14 +1576,14 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     workspace: WorkspaceConfig,
   ): void {
     const key = workspace.path;
-    this.projectHookSessions.set(key, (this.projectHookSessions.get(key) ?? 0) + 1);
+    this.projectSettingsSessions.set(key, (this.projectSettingsSessions.get(key) ?? 0) + 1);
     void reclaimed.then(() => {
-      const remaining = (this.projectHookSessions.get(key) ?? 1) - 1;
+      const remaining = (this.projectSettingsSessions.get(key) ?? 1) - 1;
       if (remaining > 0) {
-        this.projectHookSessions.set(key, remaining);
+        this.projectSettingsSessions.set(key, remaining);
         return;
       }
-      this.projectHookSessions.delete(key);
+      this.projectSettingsSessions.delete(key);
       try {
         materializeWorkspaceProjectSettings(workspace);
       } catch (err) {
@@ -1687,7 +1687,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
       );
       return;
     }
-    if (settings.excludedProjectSettings) {
+    if (settings.excludeProjectSettings) {
       try {
         const reclaimed = this.containers.open(task.id).reclaimed;
         excludeWorkspaceProjectSettings(workspace);

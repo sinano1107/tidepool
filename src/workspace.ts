@@ -394,7 +394,7 @@ export function restoreWorkspaceProjectSettingsAtBoot(
   } catch (err) {
     console.error(
       "[workspace] could not enumerate registered workspaces for project-settings recovery; " +
-        `shared human hooks may remain hidden (${String(err)})`,
+        `shared project settings may remain hidden (${String(err)})`,
     );
     return;
   }

@@ -663,7 +663,7 @@ function settingsFile(
  *
  *  All of the above binds only files the CLI will read (ADR 0158): a tracked
  *  `.claude/settings.json` with floor keys, hooks, or invalid JSON is returned
- *  as `excludedProjectSettings` for the caller to hide during the session.
+ *  as `excludeProjectSettings` for the caller to hide during the session.
  *  Local, untracked, and unreadable files stay offending. `projectHooks` is the
  *  register gate's signal (issue #383), not a disposition.
  *
@@ -672,7 +672,7 @@ function settingsFile(
  *  and not in the index, whatever it holds. */
 export function workspaceSettingsDisposition(workspacePath: string) {
   const offending: string[] = [];
-  let excludedProjectSettings = false;
+  let excludeProjectSettings = false;
   let projectHooks = false;
   let hiddenProjectSettings = false;
   let untrackedProjectSettings = false;
@@ -695,18 +695,18 @@ export function workspaceSettingsDisposition(workspacePath: string) {
       if (!floor && !("hooks" in parsed)) continue;
       if (indexed === undefined) offending.push(name);
       else {
-        excludedProjectSettings = true;
+        excludeProjectSettings = true;
         // 登録の門の信号は広げない —— 床キー持ちの tracked は黙って通す(issue #686)
         if (!floor) projectHooks = true;
       }
     } catch {
       if (indexed === undefined) offending.push(name);
-      else excludedProjectSettings = true;
+      else excludeProjectSettings = true;
     }
   }
   return {
     overriding: offending,
-    excludedProjectSettings,
+    excludeProjectSettings,
     projectHooks,
     hiddenProjectSettings,
     untrackedProjectSettings,

@@ -349,15 +349,16 @@ describe("createWorkspace: 生きた dev checkout の信号(issue #383)", () => 
 
   // tracked な床キーはリポジトリの性質で、clone 入口の提案先にも同じファイルが来る。
   // 登録時の quarantine 予告は #383 が退けた意味なので、門は黙って通す(issue #686)。
-  it("tracked な .claude/settings.json の床キーは信号にならず、confirm 無しで登録される", async () => {
+  // hooks と両持ちでも claude_settings_hooks は立てない(issue #1005 — 信号は hooks だけの tracked に限る)
+  it.each([
+    ["床キーだけ", { permissions: { allow: ["Bash"] } }],
+    ["床キーと hooks", { permissions: { allow: ["Bash"] }, hooks: { PreToolUse: [] } }],
+  ])("tracked な .claude/settings.json の%sは信号にならず、confirm 無しで登録される", async (_, content) => {
     const registryDir = await makeMainRegistry();
     const deps = await makeDeps(registryDir);
     const path = await makeLocalOnlyCheckout();
     await mkdir(join(path, ".claude"), { recursive: true });
-    await writeFile(
-      join(path, ".claude", "settings.json"),
-      JSON.stringify({ permissions: { allow: ["Bash"] } }),
-    );
+    await writeFile(join(path, ".claude", "settings.json"), JSON.stringify(content));
     commitAll(path, "floor key");
 
     await createWorkspace({ mode: "register", name: "sandbox", path }, deps);
