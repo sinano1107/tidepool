@@ -641,8 +641,10 @@ type LiveCheckoutSignal =
 /** 登録対象の checkout に「生きた dev checkout らしさ」の信号があるか(issue #383)。
  *
  *  `settings.local.json` の検査は `git status` の冗長ではない —— このファイルは
- *  gitignore されるので untracked としても現れない。hooks の読み口は `src/sandbox.ts`
- *  の `workspaceSettingsDisposition` をそのまま使う(設定の読み手は1つ)。 */
+ *  gitignore されるので untracked としても現れない。未追跡の `settings.json` も同じ理由で
+ *  独立に要る(issue #686 — ignore されていなければ `uncommitted_changes` と両方立つが、
+ *  抑制しない)。hooks と未追跡の読み口は `src/sandbox.ts` の
+ *  `workspaceSettingsDisposition` をそのまま使う(設定の読み手は1つ)。 */
 function liveCheckoutSignals(path: string): LiveCheckoutSignal[] {
   const reasons: LiveCheckoutSignal[] = [];
   // --no-optional-locks: 門が人間の生きた作業ツリーの index.lock を取らない
@@ -662,7 +664,6 @@ function liveCheckoutSignals(path: string): LiveCheckoutSignal[] {
   if (existsSync(join(path, ".claude", "settings.local.json"))) reasons.push("claude_settings_local");
   const settings = workspaceSettingsDisposition(path);
   if (settings.projectHooks) reasons.push("claude_settings_hooks");
-  // gitignore された settings.json は `git status` にも現れない(issue #686)
   if (settings.untrackedProjectSettings) reasons.push("claude_settings_untracked");
   return reasons;
 }
