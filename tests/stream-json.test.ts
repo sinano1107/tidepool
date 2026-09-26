@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseStreamLine, readInitMcpServers } from "../src/stream-json.js";
+import { parseStreamLine, readInitAutoMemoryPath, readInitMcpServers } from "../src/stream-json.js";
 
 /** ADR 0108 決定2: 封じ込めの3つ目の問いが MCP 軸で見るのは init 行の
  *  `mcp_servers[].name` であって `tools` の `mcp__` 接頭辞ではない — サーバは
@@ -43,5 +43,29 @@ describe("readInitMcpServers", () => {
   it("要素が名前を持たなければ null — 半分だけ読めた面を面として通さない", () => {
     expect(readInitMcpServers(init({ mcp_servers: [{ status: "connected" }] }))).toBeNull();
     expect(readInitMcpServers(init({ mcp_servers: ["tidepool"] }))).toBeNull();
+  });
+});
+
+/** ADR 0156 決定3: auto-memory の読みが閉じていることは init 行の `memory_paths.auto`
+ *  の不在として観測する。null が「閉じている」、それ以外は観測値(呼び出し側が不成立に
+ *  倒す)。`auto` だけを読むので、ベンダーが別種の memory を足しても誤停止しない。 */
+describe("readInitAutoMemoryPath", () => {
+  const init = (extra: Record<string, unknown>) =>
+    parseStreamLine(JSON.stringify({ type: "system", subtype: "init", ...extra }));
+
+  it("`memory_paths.auto` の文字列をそのまま返す", () => {
+    expect(readInitAutoMemoryPath(init({ memory_paths: { auto: "/home/pi/.claude/projects/x/memory/" } }))).toBe(
+      "/home/pi/.claude/projects/x/memory/",
+    );
+  });
+
+  it("`memory_paths` が無い / `auto` 以外の項目だけなら null(閉じている)", () => {
+    expect(readInitAutoMemoryPath(init({}))).toBeNull();
+    expect(readInitAutoMemoryPath(init({ memory_paths: { team: "/x" } }))).toBeNull();
+  });
+
+  it("読めない形は閉じているとみなさない — 観測値を JSON で返して不成立に倒させる", () => {
+    expect(readInitAutoMemoryPath(init({ memory_paths: { auto: { dir: "/x" } } }))).toBe('{"dir":"/x"}');
+    expect(readInitAutoMemoryPath(init({ memory_paths: "/x" }))).toBe('"/x"');
   });
 });

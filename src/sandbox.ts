@@ -238,7 +238,7 @@ const SETTINGS_TOOL_DENY = PROJECT_SETTINGS_FILES.map((name) => `Edit(.claude/${
  *  worker. Absolute, like the board's other home-owned paths
  *  (`~/.tidepool/api-token`). The deny rule below and the probe's inline
  *  `--settings` are both derived from this one value, so they cannot drift. */
-export const CLAUDE_AUTO_MEMORY_DIR = join(homedir(), ".tidepool", "claude-auto-memory");
+const CLAUDE_AUTO_MEMORY_DIR = join(homedir(), ".tidepool", "claude-auto-memory");
 
 /** ADR 0156 決定2/3: the keys that close the host's auto-memory, shared by the
  *  worker settings and the containment probe (claude-worker.ts). `--setting-sources

@@ -406,6 +406,13 @@ memory_target_of() { echo "$MEMORY_DIR/tp-canary-$1.md"; }
 # The directory must stay empty; take back whatever the canary put there, on any
 # exit. rmdir only if this run created it (and only if it is empty).
 [[ -d "$MEMORY_DIR" ]] && memory_dir_existed=yes || memory_dir_existed=no
+# Anything already in there got past the deny before this run — the very hole the
+# rows below hunt, and the next auto-memory-enabled session would read it.
+if [[ "$memory_dir_existed" == "yes" ]] && [[ -n "$(ls -A "$MEMORY_DIR")" ]]; then
+  fail "$MEMORY_DIR is not empty before this run — something wrote past the deny (ADR 0156):"
+  ls -A "$MEMORY_DIR" | sed 's/^/    /' >&2
+  record "auto-memory/residue" "pinned directory" "-" "not empty" "FAIL"
+fi
 cleanup_memory_dir() {
   rm -f "$(memory_target_of memory)" "$(memory_target_of memory-control)"
   [[ "$memory_dir_existed" == "no" ]] && rmdir "$MEMORY_DIR" 2>/dev/null

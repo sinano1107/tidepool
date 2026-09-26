@@ -148,9 +148,8 @@ it("init 報告に memory_paths.auto が有れば不成立 — 観測した値�
   expect(result.available === false && result.reason).toContain("ADR 0156");
 });
 
-it("memory_paths が無い / auto 以外の項目だけなら成立 — ベンダーが別種の memory を足しても誤停止しない", async () => {
+it("init 報告に memory_paths.auto が無ければ成立", async () => {
   expect((await probeWithInit({})).result).toEqual({ available: true });
-  expect((await probeWithInit({ memory_paths: { team: "/x" } })).result).toEqual({ available: true });
 });
 
 // ── 封じ込め能力の3つ目の問いとしての振る舞い(ゲートの側)──────────────

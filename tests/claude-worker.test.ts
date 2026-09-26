@@ -1573,15 +1573,6 @@ describe("ClaudeCodeWorker", () => {
     expect(question.purpose).toContain("/home/pi/.claude/projects/x/memory");
   });
 
-  it("memory_paths に auto 以外の項目しか無ければ止めない — 別種の memory で誤って quarantine しない", async () => {
-    const { start, processes, db, killed } = await makeWorker();
-    start("task-init-other-memory", null, "deckhand", "work");
-    processes[0]!.stdout.write(initLine(WORK_SURFACE, [], { team: "/home/pi/team-memory" }));
-    processes[0]!.stdout.write(`{"type":"result","result":"done"}\n`);
-    await vi.waitFor(() => expect(containmentQuestion(db)).toBeUndefined());
-    expect(killed).toEqual([]);
-  });
-
   it("セッションの stream-json を全量ファイルに記録する(監査性)", async () => {
     const { start, processes, logDir, db } = await makeWorker();
     start("task-7");
@@ -3579,7 +3570,9 @@ You are Kipper, the tidepool board's Kimi work agent.
 describe("上限到達による中断(issue #467 / ADR 0104)", () => {
   /** #447 のライブ検証(2026-08-24、Claude Code 2.1.241)の逐語。判定の根拠は
    *  最終行 `result` の `api_error_status: 429` 一点で、その手前の
-   *  `rate_limit_event` や本文の「session limit」は見ない。 */
+   *  `rate_limit_event` や本文の「session limit」は見ない。ただし init 行の
+   *  `memory_paths` だけは除いてある — auto-memory を閉じた今の spawn 形では出ない項目で、
+   *  残すと再生のたびに封じ込めが不成立になる(ADR 0156、#994)。 */
   const CAP_STREAM = readFileSync(
     join(import.meta.dirname, "fixtures", "worker-session-cap-429.stream.jsonl"),
     "utf8",

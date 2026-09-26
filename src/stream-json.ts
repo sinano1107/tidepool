@@ -80,12 +80,19 @@ export function readInitMcpServers(parsed: Record<string, unknown> | null): stri
  *  `autoMemoryEnabled: false`). **Null here means closed** — `memory_paths`
  *  absent, or carrying only other kinds of memory — unlike the readers above,
  *  where null means "not the init report". Only `auto` is read, so a vendor
- *  adding another kind of memory does not quarantine the board. */
+ *  adding another kind of memory does not quarantine the board.
+ *
+ *  A shape it cannot read is **not** closed: an `auto` that is not a string, or a
+ *  `memory_paths` that is not an object, comes back as its JSON text so the caller
+ *  fails it — the same fail-closed reading as `readInitMcpServers`. */
 export function readInitAutoMemoryPath(parsed: Record<string, unknown> | null): string | null {
   if (!isInitLine(parsed)) return null;
   const paths = (parsed as Record<string, unknown>).memory_paths;
-  const auto = typeof paths === "object" && paths !== null ? (paths as { auto?: unknown }).auto : null;
-  return typeof auto === "string" ? auto : null;
+  if (paths === undefined || paths === null) return null;
+  if (typeof paths !== "object" || Array.isArray(paths)) return JSON.stringify(paths);
+  const auto = (paths as { auto?: unknown }).auto;
+  if (auto === undefined) return null;
+  return typeof auto === "string" ? auto : JSON.stringify(auto);
 }
 
 /** The init line's `model` — the CLI's **resolved** main model id, e.g.
