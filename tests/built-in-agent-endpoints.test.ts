@@ -51,7 +51,7 @@ it("agent 一覧は組み込みの fugu を built-in として、同名の regis
   expect(agentRow(builtIn.json, "fugu")).toMatchObject({ builtin: true, skills: ["@workspace"] });
   expect(agentRow(builtIn.json, "fugu").shadowsBuiltIn).toBeUndefined();
 
-  t.stop();
+  await t.stop();
   t = await bootWithRegistry({ "agents/fugu.md": MY_FUGU_MD });
 
   const shadowed = await api(t.baseUrl, "GET", "/api/agents");
@@ -140,7 +140,7 @@ it("review_by の fugu は組み込み・shadow のどちらの状態でも登�
 
   expect((await api(t.baseUrl, "POST", "/api/tasks", body)).status).toBe(201);
 
-  t.stop();
+  await t.stop();
   t = await bootWithRegistry({ "agents/fugu.md": MY_FUGU_MD });
 
   expect((await api(t.baseUrl, "POST", "/api/tasks", body)).status).toBe(201);

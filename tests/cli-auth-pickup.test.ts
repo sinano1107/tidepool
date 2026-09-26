@@ -5,8 +5,8 @@ const ANTHROPIC_AUTH_QUESTION_TITLE =
   "anthropic authentication is unavailable — pickup of anthropic-speaking agents is stopped";
 
 let t: Tidepool;
-afterEach(() => {
-  t?.stop();
+afterEach(async () => {
+  await t?.stop();
   vi.restoreAllMocks();
 });
 
