@@ -1137,7 +1137,7 @@ export function readMemory(
         source,
         source_kind: SOURCE_KIND[source.kind],
         case: kind === "behavior" || kind === "exemplar" ? renderCase(db, source) : null,
-        ...(annotations ? { annotations } : {}),
+        annotations,
       }));
     return recordPull(db, reader, { verb: "read_memory", input, returned_ids: entries.map((e) => e.id) }, { entries }, at);
   })();
