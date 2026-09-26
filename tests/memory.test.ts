@@ -769,7 +769,7 @@ it("reject は consolidate の新 candidate だけを後継なしの rejected �
 /** 修正値つき approve(issue #944 / ADR 0152 決定2・4): 承認の export に修正値を渡す。 */
 const entryById = (db: ReturnType<typeof openDb>, id: number) => listMemoryEntries(db, {}).find((e) => e.id === id);
 
-it("修正値つき approve は人間名義の approved エントリを作り、candidate を後継つき superseded にする —— 欠けた欄は candidate から継ぐ", () => {
+it("修正値つき approve は人間名義の approved エントリを作り、candidate を後継つき superseded にする —— 欠けた欄と出所は candidate から継ぐ", () => {
   const { db } = board();
   const drafted = candidate(db, "Split migrations", "tidepool", "deckhand");
 
@@ -787,7 +787,7 @@ it("修正値つき approve は人間名義の approved エントリを作り、
     addressee: "deckhand",
     original: null,
     author: { activity: "human" },
-    source: { kind: "event", ref: created },
+    source: { kind: "commit", ref: "0a46a46" },
     invalidation_reason: null,
   });
   expect(entryById(db, drafted)).toMatchObject({ state: "candidate", invalidation_reason: "superseded", successor_id: created });
@@ -807,7 +807,7 @@ it("修正値つき consolidate は replaces の後継も新エントリにし�
     { title: "One concern", addressee: null },
   );
 
-  expect(entryById(db, created)).toMatchObject({ state: "approved", title: "One concern", text: "One concern per commit.", addressee: null, author: { activity: "human" } });
+  expect(entryById(db, created)).toMatchObject({ state: "approved", title: "One concern", text: "One concern per commit.", addressee: null, author: { activity: "human" }, source: { kind: "commit", ref: "0a46a46" } });
   for (const id of [merged, ...replaced]) expect(entryById(db, id)).toMatchObject({ state: "candidate", invalidation_reason: "superseded", successor_id: created });
 });
 
@@ -842,4 +842,33 @@ it("修正値つき approve が生む event(新エントリの作成と無効化
     ["memory_entry_invalidated", "question-1"],
     undefined,
   ]);
+});
+
+it("RCA が起草した candidate(出所は帰責 event)を修正値つきで approve すると、後継は candidate の出所を継ぎ read_memory の case が引ける(ADR 0152 決定4 / ADR 0153 決定3)", () => {
+  const { db, task } = board();
+  const decision = logDecision(db, task, "split the migration", "deckhand", at);
+  const attributed = appendEvent(db, {
+    taskId: task.id,
+    workerId: "tidepool",
+    origin: "board",
+    payload: { kind: "objection_attributed", entry_id: decision, objection_event_ids: [], cause: "preference", evidence: "e", round: "after_rca" },
+    at,
+  });
+  const drafted = createBehaviorCandidate(db, { ...knowledge, addressee: null, source: { event_id: attributed }, author: { activity: "rca", name: "auditor" } }, "board", at).entry_id;
+
+  const created = approveMemoryProposal(db, { kind: "memory", op: "approve", candidate_id: drafted, replaces: [] }, "question-1", "webui", at, { text: "Keep migrations apart." });
+
+  const [read] = readMemory(db, { taskId: task.id, scope: "tidepool", agent: "deckhand" }, { ids: [created] }, at).entries;
+  expect(read?.source).toEqual(entryById(db, drafted)?.source);
+  expect(read?.case).toMatchObject({ decision: "split the migration" });
+});
+
+it("出所が自身の作成 event の candidate を修正値つきで approve すると、後継の出所は後継自身の作成 event", () => {
+  const { db } = board();
+  const drafted = createBehaviorCandidate(db, { ...knowledge, addressee: null, author: human }, "webui", at).entry_id;
+  expect(entryById(db, drafted)?.source).toEqual({ kind: "event", ref: drafted });
+
+  const created = approveMemoryProposal(db, { kind: "memory", op: "approve", candidate_id: drafted, replaces: [] }, "question-1", "webui", at, { text: "Keep migrations apart." });
+
+  expect(entryById(db, created)?.source).toEqual({ kind: "event", ref: created });
 });
