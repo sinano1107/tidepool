@@ -1,20 +1,15 @@
 import { rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { afterEach, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import { openDb } from "../src/db.js";
 import { registerTask } from "../src/tasks.js";
 import { prepareWorkspaceAtPickup, verifyWorkspaceClean } from "../src/workspace.js";
 import { makeWorkspace } from "./harness.js";
 
-const dirs: string[] = [];
-afterEach(async () => {
-  await Promise.all(dirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
-});
-
 /** linked worktree / submodule の形: `.git` がディレクトリでなくファイル(ADR 0146)。
  *  本物の `.git` は脇へ退けておき、直す側のテストが戻せるようにする。 */
 async function gitFileCheckout(name: string) {
-  const workspace = await makeWorkspace(dirs, name);
+  const workspace = await makeWorkspace(name);
   await rename(join(workspace.path, ".git"), join(workspace.path, ".git.real"));
   await writeFile(join(workspace.path, ".git"), "gitdir: /nowhere\n");
   return workspace;

@@ -1,17 +1,14 @@
-import { rm } from "node:fs/promises";
 import { afterEach, expect, it } from "vitest";
 import { UnknownWorkspaceError } from "../src/workspace.js";
 import { api, bootTidepool, HOUR, makeWorkspace, mcpClient, registerWork, type Tidepool } from "./harness.js";
 
 let t: Tidepool;
-const dirs: string[] = [];
 afterEach(async () => {
   await t?.stop();
-  await Promise.all(dirs.splice(0).map((d) => rm(d, { recursive: true, force: true })));
 });
 
 it("registry に存在しない workspace 名を指定した decompose の子は、承認 question にもならず tool error で差し戻される", async () => {
-  const sandbox = await makeWorkspace(dirs, "sandbox");
+  const sandbox = await makeWorkspace("sandbox");
   t = await bootTidepool({
     workspace: sandbox,
     resolveWorkspace: (name) => {

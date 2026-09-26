@@ -1,4 +1,3 @@
-import { rm } from "node:fs/promises";
 import { afterEach, expect, it } from "vitest";
 import { registerTask } from "../src/tasks.js";
 import {
@@ -12,10 +11,8 @@ import {
 } from "./harness.js";
 
 let t: Tidepool;
-const dirs: string[] = [];
 afterEach(async () => {
   await t?.stop();
-  await Promise.all(dirs.splice(0).map((d) => rm(d, { recursive: true, force: true })));
 });
 
 const fullHandoff = {
@@ -28,7 +25,7 @@ const fullHandoff = {
 };
 
 it("issue参照タスクの complete_task 成立後、PR の title は GitHub の issue タイトルを解決したものになる(issue #49, ADR 0016: PR titleでのlive展開)", async () => {
-  const { workspace: ws } = await makeRemoteBackedWorkspace(dirs, "sandbox");
+  const { workspace: ws } = await makeRemoteBackedWorkspace("sandbox");
   t = await bootTidepool({ workspace: ws });
 
   const db = t.db;

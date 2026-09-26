@@ -1,4 +1,3 @@
-import { rm } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { openDb } from "../src/db.js";
@@ -19,16 +18,14 @@ import {
 } from "./harness.js";
 
 let t: Tidepool;
-const dirs: string[] = [];
 
 afterEach(async () => {
   await t?.stop();
-  await Promise.all(dirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
 });
 
 /** 着地 question が立つところまで進めた purely-local な盤面。 */
 async function landedQuestion(): Promise<any> {
-  const workspace = await makeWorkspace(dirs, "sandbox");
+  const workspace = await makeWorkspace("sandbox");
   t = await bootTidepool({ workspace });
   const task = await registerWork(t, "ship the feature");
   await t.clock.advance(HOUR);
@@ -107,7 +104,7 @@ it("付帯子と異議が両方あれば attached_children を名乗る — 回�
 
 /** PR の merge question が立つところまで進めた remote-backed な盤面(`escalate`)。 */
 async function landedPrQuestion(): Promise<any> {
-  const { workspace } = await makeRemoteBackedWorkspace(dirs, "sandbox");
+  const { workspace } = await makeRemoteBackedWorkspace("sandbox");
   t = await bootTidepool({
     workspace,
     authority: { name: "standard", guidance: "", merge: "escalate" },

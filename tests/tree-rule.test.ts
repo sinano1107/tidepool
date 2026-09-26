@@ -17,7 +17,6 @@ import {
 } from "./harness.js";
 
 let t: Tidepool;
-const dirs: string[] = [];
 const KNOWN_SANDBOX_SHADOW_PATHS = [
   ".bash_profile",
   ".bashrc",
@@ -42,11 +41,10 @@ const KNOWN_SANDBOX_SHADOW_PATHS = [
 ] as const;
 afterEach(async () => {
   await t?.stop();
-  await Promise.all(dirs.splice(0).map((d) => rm(d, { recursive: true, force: true })));
 });
 
 it("pickup 時にタスクブランチが作成・checkout され、作業はそのブランチ上で行われる", async () => {
-  const ws = await makeWorkspace(dirs, "sandbox");
+  const ws = await makeWorkspace("sandbox");
   t = await bootTidepool({ workspace: ws });
   const task = await registerWork(t, "build the thing");
   await t.clock.advance(HOUR);
@@ -60,7 +58,7 @@ it("pickup 時にタスクブランチが作成・checkout され、作業はそ
 // ADR 0084 以降、完了は例外である: worker のコミットが門で要求されるので、完了の
 // 解放で WIP が生まれることはもう無い(退避は完了**以外**の解放の手段になった)
 it("complete による解放ではツリーがクリーンに戻り、WIP コミットは増えない", async () => {
-  const ws = await makeWorkspace(dirs, "sandbox");
+  const ws = await makeWorkspace("sandbox");
   t = await bootTidepool({ workspace: ws });
   const task = await registerWork(t, "write things");
   await t.clock.advance(HOUR);
@@ -82,7 +80,7 @@ it("complete による解放ではツリーがクリーンに戻り、WIP コミ
 });
 
 it("release は既知パス・untracked・0バイトをすべて満たす sandbox shadow だけを WIP から除く", async () => {
-  const ws = await makeWorkspace(dirs, "sandbox");
+  const ws = await makeWorkspace("sandbox");
   writeFileSync(join(ws.path, ".profile"), "");
   git(ws.path, "add", ".profile");
   git(ws.path, "commit", "-m", "tracked empty profile");
@@ -117,7 +115,7 @@ it("release は既知パス・untracked・0バイトをすべて満たす sandbo
 });
 
 it("WIP 退避コミットの author は Tidepool 名義(bot noreply)— 盤面の機械的執行でエージェントの行為ではない(issue #53)", async () => {
-  const ws = await makeWorkspace(dirs, "sandbox");
+  const ws = await makeWorkspace("sandbox");
   t = await bootTidepool({ workspace: ws });
   const task = await registerWork(t, "write things");
   await t.clock.advance(HOUR);
@@ -144,7 +142,7 @@ it("WIP 退避コミットの author は Tidepool 名義(bot noreply)— 盤面�
 });
 
 it("エスカレーション解放でも WIP が退避され、再開は自ブランチの checkout だけで済む", async () => {
-  const ws = await makeWorkspace(dirs, "sandbox");
+  const ws = await makeWorkspace("sandbox");
   t = await bootTidepool({ workspace: ws });
   const task = await registerWork(t, "risky work");
   await t.clock.advance(HOUR);
@@ -188,7 +186,7 @@ it("エスカレーション解放でも WIP が退避され、再開は自ブ�
 });
 
 it("tree rule の失敗で workspace が needs-human になり、pickup が止まり、question が生まれる", async () => {
-  const ws = await makeWorkspace(dirs, "sandbox");
+  const ws = await makeWorkspace("sandbox");
   t = await bootTidepool({ workspace: ws });
   const task = await registerWork(t, "doomed work");
   await t.clock.advance(HOUR);
@@ -227,7 +225,7 @@ it("tree rule の失敗で workspace が needs-human になり、pickup が止�
 });
 
 it("sandbox shadow の削除失敗は workspace を quarantine し、後続 pickup を止める", async () => {
-  const ws = await makeWorkspace(dirs, "sandbox");
+  const ws = await makeWorkspace("sandbox");
   t = await bootTidepool({ workspace: ws });
   const task = await registerWork(t, "finish while a sandbox mount survives");
   await t.clock.advance(HOUR);
@@ -254,7 +252,7 @@ it("sandbox shadow の削除失敗は workspace を quarantine し、後続 pick
 });
 
 it("ワーカーが main に逃げていても WIP は main にコミットされず、workspace が隔離される", async () => {
-  const ws = await makeWorkspace(dirs, "sandbox");
+  const ws = await makeWorkspace("sandbox");
   t = await bootTidepool({ workspace: ws });
   const task = await registerWork(t, "rogue work");
   await t.clock.advance(HOUR);

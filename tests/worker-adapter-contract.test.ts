@@ -1,7 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { afterEach, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import { ClaudeCodeWorker } from "../src/claude-worker.js";
 import { CODEX_CLI_VERSION, CodexWorker } from "../src/codex-worker.js";
 import { openDb } from "../src/db.js";
@@ -10,6 +7,7 @@ import { LoggingWorker } from "../src/server-options.js";
 import { TranscriptStore } from "../src/transcript-store.js";
 import type { WorkerAdapter } from "../src/worker.js";
 import { containerHarness, FakeClock, passthroughContainers, ScriptedWorker } from "./fakes.js";
+import { tempDir } from "./harness.js";
 import { makeRegistry } from "./registry-fixture.js";
 
 /** 公開 contract の共通テスト(ADR 0099 決定1)。**adapter が持つ終了の語彙は
@@ -34,11 +32,6 @@ function workerAdapterContract(name: string, build: () => Promise<WorkerAdapter>
   });
 }
 
-const dirs: string[] = [];
-afterEach(async () => {
-  await Promise.all(dirs.splice(0).map((d) => rm(d, { recursive: true, force: true })));
-});
-
 /** 実 PTY を起こさずに「観測できなかった」を返す(ADR 0028 の fail-closed)。 */
 const deadPty: PtyFn = () => ({
   onData: () => {},
@@ -53,8 +46,7 @@ workerAdapterContract("LoggingWorker", async () => new LoggingWorker());
 
 workerAdapterContract("ClaudeCodeWorker", async () => {
   const registryDir = await makeRegistry();
-  const logDir = await mkdtemp(join(tmpdir(), "tidepool-contract-logs-"));
-  dirs.push(registryDir, logDir);
+  const logDir = await tempDir("tidepool-contract-logs-");
   return new ClaudeCodeWorker({
     db: openDb(":memory:"),
     clock: new FakeClock(),
@@ -71,9 +63,8 @@ workerAdapterContract("ClaudeCodeWorker", async () => {
 
 workerAdapterContract("CodexWorker", async () => {
   const registryDir = await makeRegistry();
-  const codexHome = await mkdtemp(join(tmpdir(), "tidepool-contract-codex-home-"));
-  const logDir = await mkdtemp(join(tmpdir(), "tidepool-contract-codex-logs-"));
-  dirs.push(registryDir, codexHome, logDir);
+  const codexHome = await tempDir("tidepool-contract-codex-home-");
+  const logDir = await tempDir("tidepool-contract-codex-logs-");
   return new CodexWorker({
     db: openDb(":memory:"),
     clock: new FakeClock(),

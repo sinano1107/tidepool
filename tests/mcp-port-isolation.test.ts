@@ -1,5 +1,3 @@
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
@@ -9,19 +7,16 @@ import { startServer, type TidepoolServer } from "../src/server.js";
 import { implicitTaskExecutionCandidates } from "../src/server-options.js";
 import { TranscriptStore } from "../src/transcript-store.js";
 import { FakeClock, FakeContainerRuntime, ScriptedWorker } from "./fakes.js";
-import { AUTH_HEADERS, TEST_CREDENTIAL } from "./harness.js";
+import { AUTH_HEADERS, TEST_CREDENTIAL, tempDir } from "./harness.js";
 
 let server: TidepoolServer | undefined;
-let dir: string | undefined;
 afterEach(async () => {
   await server?.stop();
   server = undefined;
-  if (dir) await rm(dir, { recursive: true, force: true });
-  dir = undefined;
 });
 
 it("/mcp は web/api ポートでは待ち受けず、mcpPort 専用ポートでのみ待ち受ける(issue #37)", async () => {
-  dir = await mkdtemp(join(tmpdir(), "tidepool-mcp-port-"));
+  const dir = await tempDir("tidepool-mcp-port-");
   const bootClock = new FakeClock();
   const db = openDb(join(dir, "board.sqlite"));
   server = await startServer({

@@ -1,7 +1,6 @@
 import { writeFileSync } from "node:fs";
-import { rm } from "node:fs/promises";
 import { join } from "node:path";
-import { afterEach, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { openDb } from "../src/db.js";
 import { listEvents } from "../src/events.js";
 import { Slot } from "../src/slot.js";
@@ -21,11 +20,6 @@ import { FULL_HANDOFF, git, makeWorkspace } from "./harness.js";
  *  session が枠に入っていることがありうる。梯子の底で保留されている session
  *  (`heldForContainment`)も同じ点で弾く(ADR 0099 決定3)。 */
 
-const dirs: string[] = [];
-afterEach(async () => {
-  await Promise.all(dirs.splice(0).map((d) => rm(d, { recursive: true, force: true })));
-});
-
 async function pickedUpSession(): Promise<{
   deps: TeardownDeps;
   slot: Slot;
@@ -34,7 +28,7 @@ async function pickedUpSession(): Promise<{
 }> {
   const db = openDb(":memory:");
   const clock = new FakeClock();
-  const ws = await makeWorkspace(dirs, "sandbox");
+  const ws = await makeWorkspace("sandbox");
   const slot = new Slot();
   const registered = registerTask(
     db,

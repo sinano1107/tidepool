@@ -1,5 +1,4 @@
 import { writeFileSync } from "node:fs";
-import { rm } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import {
@@ -13,10 +12,8 @@ import {
 } from "./harness.js";
 
 let t: Tidepool;
-const dirs: string[] = [];
 afterEach(async () => {
   await t?.stop();
-  await Promise.all(dirs.splice(0).map((d) => rm(d, { recursive: true, force: true })));
 });
 
 const MIN = 60 * 1000;
@@ -24,7 +21,7 @@ const WORK_LIMIT = 90 * MIN;
 
 it("abandon の回答で判断ごと破棄される: 失敗タスクと同判断の兄弟が cancelled になり、親が先頭復帰して再ピックアップされる", async () => {
   const grace = 30 * MIN;
-  const ws = await makeWorkspace(dirs, "sandbox");
+  const ws = await makeWorkspace("sandbox");
   t = await bootTidepool({
     workspace: ws,
     watchdog: { timeLimits: { work: WORK_LIMIT }, grace },
@@ -90,7 +87,7 @@ it("abandon の回答で判断ごと破棄される: 失敗タスクと同判断
 
 it("abandon のカスケードは done の兄弟には触れない(記録は劣化しない)", async () => {
   const grace = 30 * MIN;
-  const ws = await makeWorkspace(dirs, "sandbox");
+  const ws = await makeWorkspace("sandbox");
   t = await bootTidepool({
     workspace: ws,
     watchdog: { timeLimits: { work: WORK_LIMIT }, grace },

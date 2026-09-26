@@ -1,18 +1,15 @@
-import { rm } from "node:fs/promises";
 import { afterEach, expect, it } from "vitest";
 import { IssueGoneError } from "../src/github.js";
 import { registerTask } from "../src/tasks.js";
 import { api, bootTidepool, HOUR, makeWorkspace, type Tidepool } from "./harness.js";
 
 let t: Tidepool;
-const dirs: string[] = [];
 afterEach(async () => {
   await t?.stop();
-  await Promise.all(dirs.splice(0).map((d) => rm(d, { recursive: true, force: true })));
 });
 
 it("issue参照タスクの展開が一時的に失敗したら、そのサイクルの pickup を skip し、復旧後の poll で拾う(issue #49 設計点5)", async () => {
-  t = await bootTidepool({ workspace: await makeWorkspace(dirs, "tidepool") });
+  t = await bootTidepool({ workspace: await makeWorkspace("tidepool") });
 
   const db = t.db;
   const task = registerTask(
@@ -40,7 +37,7 @@ it("issue参照タスクの展開が一時的に失敗したら、そのサイ�
 });
 
 it("issue参照の確定的失敗(not found / close 済み)では retry/abandon の failure question が生まれ、worker は起動しない(issue #49 設計点5)", async () => {
-  t = await bootTidepool({ workspace: await makeWorkspace(dirs, "tidepool") });
+  t = await bootTidepool({ workspace: await makeWorkspace("tidepool") });
 
   const db = t.db;
   const task = registerTask(

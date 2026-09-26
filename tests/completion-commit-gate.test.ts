@@ -1,5 +1,4 @@
 import { mkdirSync, writeFileSync } from "node:fs";
-import { rm } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { registerTask } from "../src/tasks.js";
@@ -16,14 +15,12 @@ import {
 } from "./harness.js";
 
 let t: Tidepool;
-const dirs: string[] = [];
 afterEach(async () => {
   await t?.stop();
-  await Promise.all(dirs.splice(0).map((d) => rm(d, { recursive: true, force: true })));
 });
 
 it("未コミットの変更を残したまま work タスクを完了しようとすると拒否され、commit を要求される", async () => {
-  const ws = await makeWorkspace(dirs, "sandbox");
+  const ws = await makeWorkspace("sandbox");
   t = await bootTidepool({ workspace: ws });
   const task = await registerWork(t, "build the thing");
   await t.clock.advance(HOUR);
@@ -60,7 +57,7 @@ it("未コミットの変更を残したまま work タスクを完了しよう�
 // 丸ごと untracked なディレクトリの下にいるので、porcelain の既定の畳み込みでは
 // `?? .claude/` としか見えない —— そこで残骸の除外が効かなくなる形が回帰の本体である
 it("sandbox の shadow 残骸だけが残っていても完了の門は通る", async () => {
-  const ws = await makeWorkspace(dirs, "sandbox");
+  const ws = await makeWorkspace("sandbox");
   t = await bootTidepool({ workspace: ws });
   const task = await registerWork(t, "verify without changing anything");
   await t.clock.advance(HOUR);
@@ -83,7 +80,7 @@ it("sandbox の shadow 残骸だけが残っていても完了の門は通る", 
 // review は読むだけで書けない —— 完了の門は掛からず、残っていたものは現行どおり
 // WIP に退避される
 it("review タスクの完了は dirty でも拒否されない", async () => {
-  const ws = await makeWorkspace(dirs, "sandbox");
+  const ws = await makeWorkspace("sandbox");
   t = await bootTidepool({ workspace: ws });
   const task = (
     await api(t.baseUrl, "POST", "/api/tasks", {
@@ -107,7 +104,7 @@ it("review タスクの完了は dirty でも拒否されない", async () => {
 
 // escalate / decompose は「作業が終わっていない」解放なので門を掛けない
 it("escalate は dirty でも拒否されず、WIP コミットの subject にタスクの title が載る", async () => {
-  const ws = await makeWorkspace(dirs, "sandbox");
+  const ws = await makeWorkspace("sandbox");
   t = await bootTidepool({ workspace: ws });
   const task = await registerWork(t, "wire up the sensor");
   await t.clock.advance(HOUR);
@@ -138,7 +135,7 @@ it("escalate は dirty でも拒否されず、WIP コミットの subject に�
 // issue-backed の stored title は `#N` プレースホルダのまま —— 退避は同期の機械処理で
 // GitHub を叩かないので、subject は素の形に落ちる
 it("issue参照タスクの WIP コミット subject はプレースホルダを載せず素の形になる", async () => {
-  const ws = await makeWorkspace(dirs, "sandbox");
+  const ws = await makeWorkspace("sandbox");
   t = await bootTidepool({ workspace: ws });
   const db = t.db;
   const task = registerTask(
@@ -166,7 +163,7 @@ it("issue参照タスクの WIP コミット subject はプレースホルダを
 });
 
 it("decompose は dirty でも拒否されず、WIP がタスクブランチへ退避される", async () => {
-  const ws = await makeWorkspace(dirs, "sandbox");
+  const ws = await makeWorkspace("sandbox");
   t = await bootTidepool({ workspace: ws });
   const task = await registerWork(t, "split the work");
   await t.clock.advance(HOUR);

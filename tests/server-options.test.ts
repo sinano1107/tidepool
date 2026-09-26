@@ -1,9 +1,8 @@
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { rm } from "node:fs/promises";
 import { join } from "node:path";
 import { platform } from "node:process";
-import { afterEach, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { openDb } from "../src/db.js";
 import { GitHubAuth } from "../src/github-auth.js";
 import { QUARANTINES } from "../src/quarantine.js";
@@ -90,7 +89,6 @@ skills: []
 Codex agent.
 `,
   });
-  dirs.push(registryDir);
   const options = await buildOptions({
     ...composition(),
     registryDir,
@@ -108,7 +106,6 @@ Codex agent.
 // 盤面側の resolver だけが remote を読む——という ADR 0052 が直した壊れ方に戻る。
 it("worker options は宣言された registryMode を運ぶ(ADR 0052 / ADR 0043)", async () => {
   const registryDir = await makeRegistry();
-  dirs.push(registryDir);
   const clock = new FakeClock();
 
   const options = buildWorkerOptions(
@@ -121,7 +118,6 @@ it("worker options は宣言された registryMode を運ぶ(ADR 0052 / ADR 0043
 
 it("remote-backed registry を宣言した盤面は到達性検査を持つ(ADR 0052)", async () => {
   const { registryDir } = await makeRemoteBackedRegistry();
-  dirs.push(registryDir);
 
   const options = await buildOptions({
     ...composition(),
@@ -144,7 +140,6 @@ it("remote-backed registry を宣言した盤面は到達性検査を持つ(ADR 
 // このためで、`workspace` と draft の candidates はここで即座に registry を読む。
 it("origin/main がまだ無い remote-backed 盤面でも、起動時 refresh が先に走って合成できる(ADR 0052)", async () => {
   const { registryDir } = await makeRemoteBackedRegistry();
-  dirs.push(registryDir);
   // remote は生きているが tracking ref だけが無い = 張り直した直後の姿
   execFileSync("git", ["update-ref", "-d", "refs/remotes/origin/main"], { cwd: registryDir });
 
@@ -164,7 +159,6 @@ it("origin/main がまだ無い remote-backed 盤面でも、起動時 refresh �
 // pickup ゲートの1枚だけで、ここは騒ぐだけである。
 it("起動時 refresh が失敗しても合成は落ちず、理由を1度だけ警告する(ADR 0052)", async () => {
   const { registryDir } = await makeRemoteBackedRegistry();
-  dirs.push(registryDir);
   execFileSync("git", ["remote", "set-url", "origin", "/nonexistent/registry-remote"], {
     cwd: registryDir,
   });
@@ -193,7 +187,6 @@ it("起動時 refresh が失敗しても合成は落ちず、理由を1度だけ
 // GitHub 上で merge され、ホストの checkout はまだ動いていない状態そのもの。
 it("remote-backed の registry resolver は origin/main の内容を返す(ADR 0052)", async () => {
   const { registryDir, publish } = await makeRemoteBackedRegistry();
-  dirs.push(registryDir);
   publish(
     "agents/deckhand.md",
     `---\nname: deckhand\ndescription: Definition from remote main\nversion: 0.4.0\nauthority: standard\nprovider: anthropic\nskills:\n  - "*"\n---\nRemote definition.\n`,
@@ -301,11 +294,6 @@ it("main.ts は buildServerOptions が組み立てたオプションで盤面を
   expect(main).not.toMatch(/startServer\(\s*\{/);
 });
 
-const dirs: string[] = [];
-afterEach(async () => {
-  await Promise.all(dirs.splice(0).map((d) => rm(d, { recursive: true, force: true })));
-});
-
 /** ADR 0043 / issue #33: 同じ網羅を **worker options 層**にも掛ける。
  *
  *  ADR 0041 は `ClaudeWorkerOptions` を「#172 の類ではない」と除外していたが、
@@ -321,7 +309,6 @@ it("ClaudeWorkerOptions の任意フィールドは、テスト用の注入 seam
   expect(optional).toEqual(expect.arrayContaining(["advisorDisabled", "pty", "boardState"]));
 
   const registryDir = await makeRegistry();
-  dirs.push(registryDir);
   const emitted = new Set(
     Object.keys(buildWorkerOptions({ ...composition(), registryDir }, { db: openDb(":memory:"), clock: new FakeClock(), ...containerHarness(fakeContainers()), onCapInterrupted: () => {}, onSpawnFailed: () => {}, onWorkerExited: () => {}, transcripts: new TranscriptStore("/nonexistent/worker-logs") })),
   );
@@ -353,7 +340,6 @@ it("worker options の口の一覧は main.ts に戻っていない(ADR 0043)", 
  *  黙る —— しかも壊れ方が fail-open なので、黙ったまま advisor が止まらなくなる。 */
 it("kill switch は盤面の合成からそのまま worker options へ届く(判断8)", async () => {
   const registryDir = await makeRegistry();
-  dirs.push(registryDir);
   const options = (advisorDisabled: boolean) =>
     buildWorkerOptions(
       { ...composition(), registryDir, advisorDisabled },
@@ -372,7 +358,6 @@ it("kill switch は盤面の合成からそのまま worker options へ届く(�
  *  取り違えても型は黙る — ADR 0041 §5 と同じ理由)。 */
 it("worker ログの置き場は、盤面が守っているパスと同じ1つである(ADR 0040)", async () => {
   const registryDir = await makeRegistry();
-  dirs.push(registryDir);
   const logDir = "/opt/tidepool/worker-logs";
   const board = {
     ...composition(),
@@ -404,7 +389,6 @@ it("registry があるとき、各口には対応する解決子が刺さって�
       "guarded:\n  path: /home/pi/work/guarded\n  protected: true\n" +
       "derived: {}\n",
   });
-  dirs.push(registryDir);
   const workspacesDir = "/base/workspaces";
   // composition() の既定は "configured" —— ここだけ "default" に振ることで、
   // 一覧の口が定数を焼き付けている綴りと区別がつく(ADR 0082 決定2)

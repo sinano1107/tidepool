@@ -1,4 +1,3 @@
-import { rm } from "node:fs/promises";
 import { afterEach, expect, it } from "vitest";
 import { UnknownWorkspaceError, type WorkspaceConfig } from "../src/workspace.js";
 import {
@@ -16,15 +15,13 @@ import {
 } from "./harness.js";
 
 let t: Tidepool;
-const dirs: string[] = [];
 afterEach(async () => {
   await t?.stop();
-  await Promise.all(dirs.splice(0).map((d) => rm(d, { recursive: true, force: true })));
 });
 
 it("prod workspace のタスクの merge 回答は、CI チェックと merge を prod の checkout に対して行う", async () => {
-  const sandbox = await makeWorkspace(dirs, "sandbox");
-  const { workspace: prod } = await makeRemoteBackedWorkspace(dirs, "prod");
+  const sandbox = await makeWorkspace("sandbox");
+  const { workspace: prod } = await makeRemoteBackedWorkspace("prod");
   const registry: Record<string, WorkspaceConfig> = { sandbox, prod };
   t = await bootTidepool({
     workspace: sandbox,

@@ -17,10 +17,8 @@ import {
 } from "./harness.js";
 
 let t: Tidepool;
-const dirs: string[] = [];
 afterEach(async () => {
   await t?.stop();
-  await Promise.all(dirs.splice(0).map((d) => rm(d, { recursive: true, force: true })));
 });
 
 const fullHandoff = {
@@ -33,7 +31,7 @@ const fullHandoff = {
 };
 
 it("work タスクの complete_task 成立後、タスクブランチから PR が作成される", async () => {
-  const { workspace: ws } = await makeRemoteBackedWorkspace(dirs, "sandbox");
+  const { workspace: ws } = await makeRemoteBackedWorkspace("sandbox");
   t = await bootTidepool({ workspace: ws });
   const task = await registerWork(t, "build the thing");
   await t.clock.advance(HOUR);
@@ -59,7 +57,7 @@ it("work タスクの complete_task 成立後、タスクブランチから PR �
 });
 
 it("PR 本文がハンドオフドキュメントの6項目を反映している", async () => {
-  const { workspace: ws } = await makeRemoteBackedWorkspace(dirs, "sandbox");
+  const { workspace: ws } = await makeRemoteBackedWorkspace("sandbox");
   t = await bootTidepool({ workspace: ws });
   const task = await registerWork(t, "write the report");
   await t.clock.advance(HOUR);
@@ -87,7 +85,7 @@ it("PR 本文がハンドオフドキュメントの6項目を反映している
 });
 
 it("PR 作成が失敗しても complete_task 自体は成立し、ツリーはクリーンなまま", async () => {
-  const { workspace: ws } = await makeRemoteBackedWorkspace(dirs, "sandbox");
+  const { workspace: ws } = await makeRemoteBackedWorkspace("sandbox");
   t = await bootTidepool({ workspace: ws });
   const task = await registerWork(t, "ship the feature");
   await t.clock.advance(HOUR);
@@ -109,7 +107,7 @@ it("PR 作成が失敗しても complete_task 自体は成立し、ツリーは�
 });
 
 it("review タスクの complete_task では PR が作られない", async () => {
-  const ws = await makeWorkspace(dirs, "sandbox");
+  const ws = await makeWorkspace("sandbox");
   t = await bootTidepool({ workspace: ws });
   const task = (
     await api(t.baseUrl, "POST", "/api/tasks", {
@@ -130,7 +128,7 @@ it("review タスクの complete_task では PR が作られない", async () =>
 });
 
 it("tree rule が失敗して workspace が quarantine された場合は PR が作られない", async () => {
-  const ws = await makeWorkspace(dirs, "sandbox");
+  const ws = await makeWorkspace("sandbox");
   t = await bootTidepool({ workspace: ws });
   const task = await registerWork(t, "doomed work");
   await t.clock.advance(HOUR);
@@ -154,7 +152,7 @@ it("tree rule が失敗して workspace が quarantine された場合は PR が
 });
 
 it("question タスクの完了(回答)では PR が作られない", async () => {
-  const ws = await makeWorkspace(dirs, "sandbox");
+  const ws = await makeWorkspace("sandbox");
   t = await bootTidepool({ workspace: ws });
   const task = registerQuestion(t, {
     title: "which approach?",

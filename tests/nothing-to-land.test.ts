@@ -1,4 +1,3 @@
-import { rm } from "node:fs/promises";
 import { afterEach, expect, it } from "vitest";
 import {
   api,
@@ -17,15 +16,13 @@ import {
 } from "./harness.js";
 
 let t: Tidepool;
-const dirs: string[] = [];
 
 afterEach(async () => {
   await t?.stop();
-  await Promise.all(dirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
 });
 
 it("promotion retry の時点で差分ゼロなら、人間にエラーを返して failure question を開いたままにする", async () => {
-  const { workspace } = await makeRemoteBackedWorkspace(dirs, "sandbox");
+  const { workspace } = await makeRemoteBackedWorkspace("sandbox");
   t = await bootTidepool({ workspace });
   t.github.scriptFailure(new Error("token expired"));
   const task = await registerWork(t, "ship the feature");
@@ -63,7 +60,7 @@ it("promotion retry の時点で差分ゼロなら、人間にエラーを返し
 });
 
 it("purely-local の root work が差分ゼロで完了すると、merge question を立てず着地対象なしを記録する", async () => {
-  const workspace = await makeWorkspace(dirs, "sandbox");
+  const workspace = await makeWorkspace("sandbox");
   t = await bootTidepool({ workspace });
   const task = await registerWork(t, "inspect without changing files");
   await t.clock.advance(HOUR);
@@ -91,7 +88,7 @@ it("purely-local の root work が差分ゼロで完了すると、merge questio
 });
 
 it("remote-backed の root work が差分ゼロで完了すると、PR を開かず着地対象なしを記録する", async () => {
-  const { workspace } = await makeRemoteBackedWorkspace(dirs, "sandbox");
+  const { workspace } = await makeRemoteBackedWorkspace("sandbox");
   t = await bootTidepool({ workspace });
   const task = await registerWork(t, "verify the existing result");
   await t.clock.advance(HOUR);
@@ -120,12 +117,12 @@ it("remote-backed の root work が差分ゼロで完了すると、PR を開か
 });
 
 it("同じ内容が squash で保護ブランチへ着地済みなら、履歴が分岐していても PR を開かず着地対象なしを記録する", async () => {
-  const { workspace } = await makeRemoteBackedWorkspace(dirs, "content-landed");
+  const { workspace } = await makeRemoteBackedWorkspace("content-landed");
   t = await bootTidepool({ workspace });
   const task = await registerWork(t, "finish work already landed by content");
   await t.clock.advance(HOUR);
   commitWork(workspace.path, "feature.txt", "same result\n");
-  await squashTaskIntoOrigin(dirs, workspace, task.id);
+  await squashTaskIntoOrigin(workspace, task.id);
 
   const client = await mcpClient(t.mcpBaseUrl, task.id);
   const completed: any = await client.callTool({

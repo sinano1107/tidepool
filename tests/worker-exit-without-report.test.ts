@@ -1,5 +1,4 @@
 import { readFileSync } from "node:fs";
-import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
@@ -20,6 +19,7 @@ import {
   questions,
   queueWork,
   type Tidepool,
+  tempDir,
 } from "./harness.js";
 import { makeRegistry } from "./registry-fixture.js";
 
@@ -27,10 +27,8 @@ import { makeRegistry } from "./registry-fixture.js";
  *  failure question を立てて後始末へ入る —— タスク種別の時間制限まで枠を握らない。 */
 
 let t: Tidepool;
-const dirs: string[] = [];
 afterEach(async () => {
   await t?.stop();
-  await Promise.all(dirs.splice(0).map((d) => rm(d, { recursive: true, force: true })));
 });
 
 const MIN = 60 * 1000;
@@ -195,12 +193,6 @@ it("retry の回答で task は queue 先頭へ戻り、abandon の回答で can
 // ── 実 adapter: 両 adapter で同じ結果になる ──────────────────────────────────
 // adapter の exit handler を fake の容器機構の上で走らせる。process の exit はテストが撃つ。
 
-const tempDir = async (prefix: string) => {
-  const dir = await mkdtemp(join(tmpdir(), prefix));
-  dirs.push(dir);
-  return dir;
-};
-
 /** 実 adapter を盤面に載せる。checkUsage だけは健全な固定値にする(pty を起こさない)。 */
 async function bootWithAdapter(
   build: (deps: Parameters<WorkerFactory>[0]) => ClaudeCodeWorker | CodexWorker,
@@ -229,7 +221,6 @@ async function bootWithAdapter(
 
 async function bootClaude() {
   const registryDir = await makeRegistry();
-  dirs.push(registryDir);
   const logDir = await tempDir("exit-without-report-logs-");
   return bootWithAdapter(
     (deps) =>
@@ -253,7 +244,6 @@ async function bootCodex() {
       "provider: openai\nskills: []\n---\nYou are the Codex worker.",
     "workspaces.yaml": `work:\n  path: ${workspace}\n`,
   });
-  dirs.push(registryDir);
   const codexHome = await tempDir("exit-without-report-codex-home-");
   return bootWithAdapter(
     ({ db, clock, containers, onSpawnFailed, onWorkerExited, transcripts }) =>

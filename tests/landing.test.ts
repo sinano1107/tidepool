@@ -1,5 +1,3 @@
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { type Db, openDb } from "../src/db.js";
@@ -26,20 +24,18 @@ import {
   makeRemoteBackedWorkspace,
   makeWorkspace,
   squashTaskIntoOrigin,
+  tempDir,
 } from "./harness.js";
 
-const dirs: string[] = [];
 let db: Db | undefined;
 
 afterEach(async () => {
   db?.close();
   db = undefined;
-  await Promise.all(dirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
 });
 
 async function openBoard(): Promise<{ db: Db; clock: FakeClock }> {
-  const boardDir = await mkdtemp(join(tmpdir(), "tidepool-landing-"));
-  dirs.push(boardDir);
+  const boardDir = await tempDir("tidepool-landing-");
   const database = openDb(join(boardDir, "board.sqlite"));
   db = database;
   return { db: database, clock: new FakeClock() };
@@ -52,7 +48,7 @@ function promotionFailures(board: Db, taskId: string) {
 }
 
 it("work でないタスクは着地対象ではない", async () => {
-  const workspace = await makeWorkspace(dirs, "landing-verdict");
+  const workspace = await makeWorkspace("landing-verdict");
   const { db, clock } = await openBoard();
   const landing = createLanding({ db, clock, workspace, github: null });
   const question = registerTask(
@@ -74,7 +70,7 @@ it("work でないタスクは着地対象ではない", async () => {
 });
 
 it("祖先の task branch へ帰る work は着地対象ではない", async () => {
-  const workspace = await makeWorkspace(dirs, "landing-lineage");
+  const workspace = await makeWorkspace("landing-lineage");
   const { db, clock } = await openBoard();
   const landing = createLanding({ db, clock, workspace, github: null });
   const parent = registerTask(
@@ -106,7 +102,7 @@ it("祖先の task branch へ帰る work は着地対象ではない", async () 
 });
 
 it("保護ブランチへ運ぶ内容が無い work はその事実を返して記録する", async () => {
-  const workspace = await makeWorkspace(dirs, "landing-empty");
+  const workspace = await makeWorkspace("landing-empty");
   const { db, clock } = await openBoard();
   const landing = createLanding({ db, clock, workspace, github: null });
   const task = registerTask(
@@ -143,7 +139,7 @@ it("保護ブランチへ運ぶ内容が無い work はその事実を返して�
 });
 
 it("squash 済みで内容差が無い work は commit 差が残っていても着地しない", async () => {
-  const { workspace } = await makeRemoteBackedWorkspace(dirs, "landing-squashed");
+  const { workspace } = await makeRemoteBackedWorkspace("landing-squashed");
   const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
   const landing = createLanding({ db, clock, workspace, github });
@@ -159,7 +155,7 @@ it("squash 済みで内容差が無い work は commit 差が残っていても�
   );
   git(workspace.path, "checkout", "-b", `task/${task.id}`);
   commitWork(workspace.path, "feature.txt", "already on main\n");
-  await squashTaskIntoOrigin(dirs, workspace, task.id);
+  await squashTaskIntoOrigin(workspace, task.id);
   git(workspace.path, "fetch", "origin", "main");
 
   await expect(landing.land(task)).resolves.toEqual({
@@ -170,7 +166,7 @@ it("squash 済みで内容差が無い work は commit 差が残っていても�
 });
 
 it("再発火が門で止まったら failure question を開いたままにして GitHub を再試行しない", async () => {
-  const { workspace } = await makeRemoteBackedWorkspace(dirs, "landing-deferred");
+  const { workspace } = await makeRemoteBackedWorkspace("landing-deferred");
   const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
   github.scriptFailure(new Error("first promotion failed"));
@@ -220,7 +216,7 @@ it("再発火が門で止まったら failure question を開いたままにし�
 });
 
 it("GitHub の無い purely-local work は merge question 面へ着地する", async () => {
-  const workspace = await makeWorkspace(dirs, "landing-local");
+  const workspace = await makeWorkspace("landing-local");
   const { db, clock } = await openBoard();
   const landing = createLanding({ db, clock, workspace, github: null });
   const task = registerTask(
@@ -249,7 +245,7 @@ it("GitHub の無い purely-local work は merge question 面へ着地する", a
 });
 
 it("remote-backed から purely-local へ変わった再発火は local question を立てて failure question を引退する", async () => {
-  const { workspace } = await makeRemoteBackedWorkspace(dirs, "landing-became-local");
+  const { workspace } = await makeRemoteBackedWorkspace("landing-became-local");
   const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
   github.scriptFailure(new Error("token expired"));
@@ -288,7 +284,7 @@ it("remote-backed から purely-local へ変わった再発火は local question
 });
 
 it("GitHub の無い remote-backed work は閉じた理由で失敗し failure question を立てる", async () => {
-  const { workspace } = await makeRemoteBackedWorkspace(dirs, "landing-no-github");
+  const { workspace } = await makeRemoteBackedWorkspace("landing-no-github");
   const { db, clock } = await openBoard();
   const landing = createLanding({ db, clock, workspace, github: null });
   const task = registerTask(
@@ -318,7 +314,7 @@ it("GitHub の無い remote-backed work は閉じた理由で失敗し failure q
 });
 
 it("remote-backed work は PR を開いた面を返す", async () => {
-  const { workspace } = await makeRemoteBackedWorkspace(dirs, "landing-pr");
+  const { workspace } = await makeRemoteBackedWorkspace("landing-pr");
   const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
   const landing = createLanding({ db, clock, workspace, github });
@@ -347,7 +343,7 @@ it("remote-backed work は PR を開いた面を返す", async () => {
 });
 
 it("open PR を持つ work の修理は同じ PR の branch を更新する", async () => {
-  const { workspace } = await makeRemoteBackedWorkspace(dirs, "landing-open-pr");
+  const { workspace } = await makeRemoteBackedWorkspace("landing-open-pr");
   const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
   const landing = createLanding({ db, clock, workspace, github });
@@ -376,7 +372,7 @@ it("open PR を持つ work の修理は同じ PR の branch を更新する", as
 });
 
 it("open PR 更新は盤面が動かした remote ref だけを再基準化する", async () => {
-  const { workspace } = await makeRemoteBackedWorkspace(dirs, "landing-rebaseline");
+  const { workspace } = await makeRemoteBackedWorkspace("landing-rebaseline");
   const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
   const landing = createLanding({ db, clock, workspace, github });
@@ -409,7 +405,7 @@ it("open PR 更新は盤面が動かした remote ref だけを再基準化す�
 });
 
 it("merge 済み PR に残った修理は閉じた理由で失敗し failure question を立てる", async () => {
-  const { workspace } = await makeRemoteBackedWorkspace(dirs, "landing-merged-pr");
+  const { workspace } = await makeRemoteBackedWorkspace("landing-merged-pr");
   const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
   const landing = createLanding({ db, clock, workspace, github });
@@ -444,7 +440,7 @@ it("merge 済み PR に残った修理は閉じた理由で失敗し failure que
 });
 
 it("open PR branch の push 失敗は既存の着地痕跡で隠さず failure question を立てる", async () => {
-  const { workspace } = await makeRemoteBackedWorkspace(dirs, "landing-push-failure");
+  const { workspace } = await makeRemoteBackedWorkspace("landing-push-failure");
   const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
   github.scriptPushFailure(new Error("push rejected"));
@@ -474,7 +470,7 @@ it("open PR branch の push 失敗は既存の着地痕跡で隠さず failure q
 });
 
 it("PR 作成の失敗は閉じた理由で返して failure question を立てる", async () => {
-  const { workspace } = await makeRemoteBackedWorkspace(dirs, "landing-pr-failure");
+  const { workspace } = await makeRemoteBackedWorkspace("landing-pr-failure");
   const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
   github.scriptFailure(new Error("token expired"));
@@ -527,7 +523,7 @@ it("workspace 不在は閉じた理由で返す", async () => {
 });
 
 it("再発火時の registry drift は閉じた失敗を返し、既存の failure question を引退させない", async () => {
-  const { workspace } = await makeRemoteBackedWorkspace(dirs, "landing-registry-drift");
+  const { workspace } = await makeRemoteBackedWorkspace("landing-registry-drift");
   const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
   let drifted = false;
@@ -577,7 +573,7 @@ it("再発火時の registry drift は閉じた失敗を返し、既存の failu
 });
 
 it("needs-human workspace は閉じた理由で返す", async () => {
-  const workspace = await makeWorkspace(dirs, "landing-needs-human");
+  const workspace = await makeWorkspace("landing-needs-human");
   const { db, clock } = await openBoard();
   const landing = createLanding({ db, clock, workspace, github: null });
   const task = registerTask(
@@ -608,7 +604,7 @@ it("needs-human workspace は閉じた理由で返す", async () => {
 });
 
 it("着地判定の Git failure も throw せず閉じた失敗 verdict と question にする", async () => {
-  const workspace = await makeWorkspace(dirs, "landing-git-failure");
+  const workspace = await makeWorkspace("landing-git-failure");
   const { db, clock } = await openBoard();
   const landing = createLanding({ db, clock, workspace, github: null });
   const task = registerTask(
@@ -636,7 +632,7 @@ it("着地判定の Git failure も throw せず閉じた失敗 verdict と ques
 });
 
 it("着地成立は積み上がった failure question を引退させ、回答中の1件だけ除外する", async () => {
-  const { workspace } = await makeRemoteBackedWorkspace(dirs, "landing-retirement");
+  const { workspace } = await makeRemoteBackedWorkspace("landing-retirement");
   const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
   github.scriptFailure(new Error("token expired"));
@@ -671,7 +667,7 @@ it("着地成立は積み上がった failure question を引退させ、回答�
 });
 
 it("未束ねの異議がある work は同じ門で理由と数を返す", async () => {
-  const workspace = await makeWorkspace(dirs, "landing-objection");
+  const workspace = await makeWorkspace("landing-objection");
   const { db, clock } = await openBoard();
   const landing = createLanding({ db, clock, workspace, github: null });
   const task = registerTask(
@@ -708,7 +704,7 @@ it("未束ねの異議がある work は同じ門で理由と数を返す", asyn
 });
 
 it("祖先の再発火は open PR を持つ work だけを更新する", async () => {
-  const { workspace } = await makeRemoteBackedWorkspace(dirs, "landing-ancestors");
+  const { workspace } = await makeRemoteBackedWorkspace("landing-ancestors");
   const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
   const landing = createLanding({ db, clock, workspace, github });
@@ -764,7 +760,7 @@ it("祖先の再発火は open PR を持つ work だけを更新する", async (
 });
 
 it("並行 retry が先に着地したら遅い再発火の失敗は failure question にしない", async () => {
-  const { workspace } = await makeRemoteBackedWorkspace(dirs, "landing-race");
+  const { workspace } = await makeRemoteBackedWorkspace("landing-race");
   const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
   const create = github.createPullRequest.bind(github);
@@ -815,7 +811,7 @@ it("並行 retry が先に着地したら遅い再発火の失敗は failure que
 });
 
 it("fork 元が squash 着地した根は保護ブランチへ merge で追いついてから PR を開く", async () => {
-  const { workspace } = await makeRemoteBackedWorkspace(dirs, "landing-catch-up");
+  const { workspace } = await makeRemoteBackedWorkspace("landing-catch-up");
   const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
   const landing = createLanding({ db, clock, workspace, github });
@@ -845,7 +841,7 @@ it("fork 元が squash 着地した根は保護ブランチへ merge で追い�
     clock.now(),
   );
   git(workspace.path, "checkout", "-b", `task/${repair.id}`, `task/${parent.id}`);
-  await squashTaskIntoOrigin(dirs, workspace, parent.id);
+  await squashTaskIntoOrigin(workspace, parent.id);
   git(workspace.path, "fetch", "origin", "main");
   commitWork(workspace.path, "repair.txt", "fixed\n");
   const before = git(workspace.path, "rev-parse", `task/${repair.id}`);

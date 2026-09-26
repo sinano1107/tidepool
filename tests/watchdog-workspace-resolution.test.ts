@@ -1,6 +1,5 @@
-import { rm } from "node:fs/promises";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { openDb } from "../src/db.js";
 import { getTask, pickupTask, registerTask } from "../src/tasks.js";
 import { failTask } from "../src/watchdog.js";
@@ -8,15 +7,10 @@ import { ensureTaskBranch, UnknownWorkspaceError, type WorkspaceConfig } from ".
 import { FakeClock } from "./fakes.js";
 import { git, makeWorkspace } from "./harness.js";
 
-const dirs: string[] = [];
-afterEach(async () => {
-  await Promise.all(dirs.splice(0).map((d) => rm(d, { recursive: true, force: true })));
-});
-
 describe("watchdog の failTask が task.workspace を解決する", () => {
   it("失敗した task 自身の workspace の checkout で tree rule を実行する", async () => {
-    const sandbox = await makeWorkspace(dirs, "sandbox");
-    const prod = await makeWorkspace(dirs, "prod");
+    const sandbox = await makeWorkspace("sandbox");
+    const prod = await makeWorkspace("prod");
     const registry: Record<string, WorkspaceConfig> = { sandbox, prod };
     const db = openDb(":memory:");
     const clock = new FakeClock();

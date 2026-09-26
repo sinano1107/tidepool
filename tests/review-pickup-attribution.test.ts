@@ -1,5 +1,3 @@
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, expect, it } from "vitest";
@@ -21,16 +19,14 @@ import {
   healthyUsageText,
   ScriptedWorker,
 } from "./fakes.js";
-import { api, HOUR, makeWorkspace, TEST_CREDENTIAL } from "./harness.js";
+import { api, HOUR, makeWorkspace, TEST_CREDENTIAL, tempDir } from "./harness.js";
 import { makeRegistry } from "./registry-fixture.js";
 
-const dirs: string[] = [];
 let server: TidepoolServer | undefined;
 
 afterEach(async () => {
   await server?.stop();
   server = undefined;
-  await Promise.all(dirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
 });
 
 const spawn: ContainerSpawn = () => {
@@ -45,7 +41,7 @@ const spawn: ContainerSpawn = () => {
 };
 
 it("assignee 未指定の review を pickup すると、pickup と spawn の両イベントが Auditor に帰属する(issue #223)", async () => {
-  const workspace = await makeWorkspace(dirs, "review-pickup-attribution");
+  const workspace = await makeWorkspace("review-pickup-attribution");
   const registryDir = await makeRegistry({
     "agents/tako.md": `---
 name: tako
@@ -71,10 +67,8 @@ You are Fugu.
 `,
     "workspaces.yaml": `tidepool:\n  path: ${workspace.path}\n`,
   });
-  dirs.push(registryDir);
-  const boardDir = await mkdtemp(join(tmpdir(), "tidepool-review-attribution-"));
-  const logDir = await mkdtemp(join(tmpdir(), "tidepool-worker-logs-"));
-  dirs.push(boardDir, logDir);
+  const boardDir = await tempDir("tidepool-review-attribution-");
+  const logDir = await tempDir("tidepool-worker-logs-");
   const clock = new FakeClock();
 
   const boardDb = openDb(join(boardDir, "board.sqlite"));

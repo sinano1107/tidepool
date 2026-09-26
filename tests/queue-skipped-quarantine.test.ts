@@ -15,15 +15,13 @@ import {
 } from "./harness.js";
 
 let t: Tidepool;
-const dirs: string[] = [];
 afterEach(async () => {
   await t?.stop();
-  await Promise.all(dirs.splice(0).map((d) => rm(d, { recursive: true, force: true })));
 });
 
 it("workspace が quarantine された間、その workspace の todo タスクはキュービューでは skipped、ボードでは todo のまま表示される", async () => {
-  const sandbox = await makeWorkspace(dirs, "sandbox");
-  const prod = await makeWorkspace(dirs, "prod");
+  const sandbox = await makeWorkspace("sandbox");
+  const prod = await makeWorkspace("prod");
   const registry: Record<string, WorkspaceConfig> = { sandbox, prod };
   t = await bootTidepool({
     workspace: sandbox,

@@ -2,7 +2,7 @@
   // ブラウザ側の連結方式(ADR 0055)を TypeScript にするための2本目のプログラム
   // (ADR 0133 決定2)。ルートの tsconfig.json は types: ["node"]・DOM lib 無し・
   // jsx 未設定なので、そこへ webui を足すのではなく独立した設定として持つ。
-  // strict / noUncheckedIndexedAccess はルートと同じ値 —— 水準を2つ持たない。
+  // strict / noUncheckedIndexedAccess / noUnusedLocals はルートと同じ値 —— 水準を2つ持たない。
   "compilerOptions": {
     "target": "ES2022",
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
@@ -16,6 +16,7 @@
     "types": ["react", "react-dom"],
     "strict": true,
     "noUncheckedIndexedAccess": true,
+    "noUnusedLocals": true,
     "skipLibCheck": true,
     "noEmit": true,
     // 移行は終わり(ADR 0133 決定5)—— .js / .jsx はもうプログラムに入らない。

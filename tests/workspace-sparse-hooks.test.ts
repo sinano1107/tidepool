@@ -1,5 +1,5 @@
 import { readFileSync, writeFileSync } from "node:fs";
-import { mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { type Db, openDb } from "../src/db.js";
@@ -14,7 +14,6 @@ import {
 import { FakeContainerRuntime } from "./fakes.js";
 import { bootTidepool, commitWork, git, makeWorkspace, type Tidepool } from "./harness.js";
 
-const dirs: string[] = [];
 let db: Db | undefined;
 let tidepool: Tidepool | undefined;
 
@@ -23,11 +22,10 @@ afterEach(async () => {
   db = undefined;
   await tidepool?.stop();
   tidepool = undefined;
-  await Promise.all(dirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
 });
 
 it("hooks settings は slot 解放中も sparse のまま親子の WIP に混ぜず、worker 回収後に戻せる", async () => {
-  const workspace = await makeWorkspace(dirs, "sparse-hooks");
+  const workspace = await makeWorkspace("sparse-hooks");
   await mkdir(join(workspace.path, ".claude"), { recursive: true });
   const settings = JSON.stringify({ hooks: { PostToolUse: [] } });
   await writeFile(join(workspace.path, ".claude", "settings.json"), settings);
@@ -82,7 +80,7 @@ it("hooks settings は slot 解放中も sparse のまま親子の WIP に混ぜ
 });
 
 it("再起動は前 process が残した sparse settings を human side へ戻す", async () => {
-  const workspace = await makeWorkspace(dirs, "sparse-hooks-restart");
+  const workspace = await makeWorkspace("sparse-hooks-restart");
   await mkdir(join(workspace.path, ".claude"), { recursive: true });
   const settings = JSON.stringify({ hooks: { PostToolUse: [] } });
   await writeFile(join(workspace.path, ".claude", "settings.json"), settings);
@@ -99,7 +97,7 @@ it("再起動は前 process が残した sparse settings を human side へ戻�
 });
 
 it("再起動時に前 worker の不在を証明できなければ sparse settings を戻さない", async () => {
-  const workspace = await makeWorkspace(dirs, "sparse-hooks-restart-unsafe");
+  const workspace = await makeWorkspace("sparse-hooks-restart-unsafe");
   await mkdir(join(workspace.path, ".claude"), { recursive: true });
   await writeFile(
     join(workspace.path, ".claude", "settings.json"),

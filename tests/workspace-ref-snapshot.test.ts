@@ -1,6 +1,4 @@
 import { writeFileSync } from "node:fs";
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { createAgent } from "../src/agent-create.js";
@@ -21,14 +19,13 @@ import {
   mcpClient,
   registerWork,
   type Tidepool,
+  tempDir,
 } from "./harness.js";
 import { makeRegistry, makeRemoteBackedRegistry } from "./registry-fixture.js";
 
 let t: Tidepool;
-const dirs: string[] = [];
 afterEach(async () => {
   await t?.stop();
-  await Promise.all(dirs.splice(0).map((d) => rm(d, { recursive: true, force: true })));
 });
 
 async function complete(board: Tidepool, taskId: string): Promise<void> {
@@ -56,7 +53,7 @@ function commitOn(path: string, file: string, body: string, message: string): vo
 // 別の非保護ブランチへ寄り道して戻ってくる形は、`releaseTree` の HEAD 検査を素通り
 // する —— 終了時点の HEAD は自分のタスクブランチだからである。
 it("worker が別の非保護ブランチを変更して自ブランチへ戻っても quarantine に落ちる", async () => {
-  const ws = await makeWorkspace(dirs, "sandbox");
+  const ws = await makeWorkspace("sandbox");
   git(ws.path, "branch", "sibling");
   t = await bootTidepool({ workspace: ws });
   const task = await registerWork(t, "wanders onto a sibling branch");
@@ -74,7 +71,7 @@ it("worker が別の非保護ブランチを変更して自ブランチへ戻っ
 // 回帰(#234 のケース1): 終了時の HEAD 検査は `releaseTree` が今も先に持っている ——
 // スナップショット比較を1本挟んでも、この最も基本的な形の理由が変わってはならない。
 it("worker が別ブランチのまま終了すると、今までどおり HEAD 検査で quarantine に落ちる", async () => {
-  const ws = await makeWorkspace(dirs, "sandbox");
+  const ws = await makeWorkspace("sandbox");
   git(ws.path, "branch", "sibling");
   t = await bootTidepool({ workspace: ws });
   const task = await registerWork(t, "wanders off and stays there");
@@ -91,7 +88,7 @@ it("worker が別ブランチのまま終了すると、今までどおり HEAD 
 // `parkOnProtectedBranch` は `isRemoteBacked` で早期 return するので、今日は着地
 // (ff-only)まで無防備で、着地判断が hold なら永久に捕まらない。
 it("purely-local で保護ブランチを変更してタスクブランチへ戻っても quarantine に落ちる", async () => {
-  const ws = await makeWorkspace(dirs, "sandbox");
+  const ws = await makeWorkspace("sandbox");
   t = await bootTidepool({ workspace: ws });
   const task = await registerWork(t, "writes on main and comes back");
   await t.clock.advance(HOUR);
@@ -106,7 +103,7 @@ it("purely-local で保護ブランチを変更してタスクブランチへ戻
 });
 
 it("remote 正本を宣言した workspace でも同じく quarantine に落ちる", async () => {
-  const { workspace } = await makeRemoteBackedWorkspace(dirs, "sandbox");
+  const { workspace } = await makeRemoteBackedWorkspace("sandbox");
   t = await bootTidepool({ workspace });
   const task = await registerWork(t, "writes on main and comes back");
   await t.clock.advance(HOUR);
@@ -123,7 +120,7 @@ it("remote 正本を宣言した workspace でも同じく quarantine に落ち�
 // ADR 0064 決定1 が「守るのは操作の列ではなく最終的な Git 状態」であること: checkout を
 // 一度もせずに ref だけを直接書き換える形も、同じ1つの述語が捕まえる。
 it("checkout を経ずに ref を直接書き換えても quarantine に落ちる", async () => {
-  const ws = await makeWorkspace(dirs, "sandbox");
+  const ws = await makeWorkspace("sandbox");
   git(ws.path, "branch", "sibling");
   t = await bootTidepool({ workspace: ws });
   const task = await registerWork(t, "rewrites a ref in place");
@@ -141,7 +138,7 @@ it("checkout を経ずに ref を直接書き換えても quarantine に落ち�
 // 産んだ差分の恒久記録」であり続けるので、`git branch -D` は監査記録を消して痕跡を
 // どこにも残さない —— 移動だけを見る綴りはこれを通す。
 it("兄弟のタスクブランチを削除しても quarantine に落ちる", async () => {
-  const ws = await makeWorkspace(dirs, "sandbox");
+  const ws = await makeWorkspace("sandbox");
   git(ws.path, "branch", "task/sibling-record");
   t = await bootTidepool({ workspace: ws });
   const task = await registerWork(t, "erases a sibling's record");
@@ -159,7 +156,7 @@ it("兄弟のタスクブランチを削除しても quarantine に落ちる", a
 // あと、**その次の無実のセッション**の解放で位置検査が落ちる。走ったセッション自身で
 // 捕まえるのがこの検査である。
 it("refs/remotes の偽造は、偽造したセッション自身の解放で捕まる", async () => {
-  const { workspace } = await makeRemoteBackedWorkspace(dirs, "sandbox");
+  const { workspace } = await makeRemoteBackedWorkspace("sandbox");
   t = await bootTidepool({ workspace });
   const task = await registerWork(t, "forges the remote-tracking ref");
   await t.clock.advance(HOUR);
@@ -190,7 +187,7 @@ it("refs/remotes の偽造は、偽造したセッション自身の解放で捕
 // 人間が答えた瞬間にタスクB が走っていれば、B の解放で不変条件が落ちる。無実のセッションの
 // quarantine である。盤面が書いた ref の行だけを撮り直すことでこれを防ぐ。
 it("セッション中に盤面が保護ブランチを動かしても、そのセッションは quarantine されない", async () => {
-  const ws = await makeWorkspace(dirs, "sandbox");
+  const ws = await makeWorkspace("sandbox");
   t = await bootTidepool({ workspace: ws });
   const landing = await registerWork(t, "lands through the merge question");
   await t.clock.advance(HOUR);
@@ -223,7 +220,6 @@ it("セッション中に盤面が保護ブランチを動かしても、その�
 // 経路であり、盤面の書き込みは人間面の settings から実行中のセッションと並行して入る。
 it("セッション中の registry 書き込みで、registry clone の workspace は quarantine されない", async () => {
   const registryDir = await makeRegistry();
-  dirs.push(registryDir);
   const workspace = { name: "registry", path: registryDir };
   t = await bootTidepool({
     workspace,
@@ -261,7 +257,7 @@ it("セッション中の registry 書き込みで、registry clone の workspac
 // question の本文がそのまま人間の修理手順になるためで、ハッシュだけを比べて「どれかが
 // 動いた」としか言えない実装は選ばない。
 it("違反メッセージは動いた ref を名指しし、消えた行と増えた行を出す", async () => {
-  const ws = await makeWorkspace(dirs, "sandbox");
+  const ws = await makeWorkspace("sandbox");
   git(ws.path, "branch", "sibling");
   t = await bootTidepool({ workspace: ws });
   const task = await registerWork(t, "moves a sibling branch");
@@ -285,7 +281,6 @@ it("違反メッセージは動いた ref を名指しし、消えた行と増�
 // 指し先で数えれば symref の行は指し先が動いても不変で、取り残しが生じない。
 it("盤面が origin/main を撮り直しても、連動する origin/HEAD で quarantine されない", async () => {
   const { registryDir } = await makeRemoteBackedRegistry();
-  dirs.push(registryDir);
   // clone が持つ既定ブランチの symref(本番の registry clone と同じ姿)。push -u は
   // これを張らないので明示する
   git(registryDir, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main");
@@ -329,7 +324,7 @@ it("盤面が origin/main を撮り直しても、連動する origin/HEAD で q
 // あり、worker は `git symbolic-ref` / `git remote set-head` でそれを動かせる。
 // 付け替えは行差分にそのまま出て、動いた ref が名指しされる。
 it("worker が symref を付け替えれば、指し先の差として quarantine に落ちる", async () => {
-  const { workspace } = await makeRemoteBackedWorkspace(dirs, "sandbox");
+  const { workspace } = await makeRemoteBackedWorkspace("sandbox");
   git(workspace.path, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main");
   t = await bootTidepool({ workspace });
   const task = await registerWork(t, "repoints the remote default branch");
@@ -353,7 +348,7 @@ it("worker が symref を付け替えれば、指し先の差として quarantin
 // ADR 0081: 削除は `guardRegistryDefaultBranch` も素通しする(`origin/HEAD` 不在は
 // 「remote 既定なし」として合格扱い)—— この不変条件だけが捕まえる。
 it("worker が symref を削除すれば quarantine に落ちる", async () => {
-  const { workspace } = await makeRemoteBackedWorkspace(dirs, "sandbox");
+  const { workspace } = await makeRemoteBackedWorkspace("sandbox");
   git(workspace.path, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main");
   t = await bootTidepool({ workspace });
   const task = await registerWork(t, "deletes the remote default branch symref");
@@ -371,7 +366,7 @@ it("worker が symref を削除すれば quarantine に落ちる", async () => {
 // ADR 0081: 新規 symref の作成はどの守りにも掛かっていなかった —— 指し先で数えることで
 // 行が増え、名指しで出る。
 it("worker が symref を新規に作れば quarantine に落ちる", async () => {
-  const { workspace } = await makeRemoteBackedWorkspace(dirs, "sandbox");
+  const { workspace } = await makeRemoteBackedWorkspace("sandbox");
   t = await bootTidepool({ workspace });
   const task = await registerWork(t, "creates a symref that was not there");
   await t.clock.advance(HOUR);
@@ -388,7 +383,7 @@ it("worker が symref を新規に作れば quarantine に落ちる", async () =
 // ADR 0081: 保存の形そのもの(db.ts の `workspace_state.ref_snapshot` の契約)。
 // symref の行だけが指し先を持ち、解決値の行はどこにも残らない。
 it("symref を持つ workspace のスナップショットは、symref の行を指し先で保存する", async () => {
-  const { workspace } = await makeRemoteBackedWorkspace(dirs, "sandbox");
+  const { workspace } = await makeRemoteBackedWorkspace("sandbox");
   git(workspace.path, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main");
   t = await bootTidepool({ workspace });
   await registerWork(t, "gets a snapshot at pickup");
@@ -414,12 +409,11 @@ async function publishableBoard(name: string): Promise<{
   dest: string;
   boot: Parameters<typeof bootTidepool>[0];
 }> {
-  const ws = await makeWorkspace(dirs, name);
+  const ws = await makeWorkspace(name);
   const registryDir = await makeRegistry({ "workspaces.yaml": `${name}:\n  path: ${ws.path}\n` });
-  const workspacesBaseDir = await mkdtemp(join(tmpdir(), "tidepool-ws-base-"));
-  const tokenDir = await mkdtemp(join(tmpdir(), "tidepool-token-"));
-  const dest = await mkdtemp(join(tmpdir(), "tidepool-dest-"));
-  dirs.push(registryDir, workspacesBaseDir, tokenDir, dest);
+  const workspacesBaseDir = await tempDir("tidepool-ws-base-");
+  const tokenDir = await tempDir("tidepool-token-");
+  const dest = await tempDir("tidepool-dest-");
   git(dest, "init", "--bare", "-b", "main");
   writeFileSync(join(tokenDir, "token"), "ghp_test\n");
   const deps = {

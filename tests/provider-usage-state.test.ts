@@ -1,6 +1,3 @@
-import { mkdtemp } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { type Db, openDb } from "../src/db.js";
 import { getProviderPaceOffset, listProviderPaceOffsets, setProviderPaceOffset } from "../src/pace-offsets.js";
@@ -10,7 +7,7 @@ import {
   reportProviderUsage,
 } from "../src/throttle.js";
 import { usagePanelText } from "./fakes.js";
-import { api, bootTidepool, HOUR, queueWork, type Tidepool } from "./harness.js";
+import { api, bootTidepool, HOUR, queueWork, type Tidepool, tempDir } from "./harness.js";
 
 let t: Tidepool | undefined;
 
@@ -27,7 +24,7 @@ afterEach(async () => {
 });
 
 it("Provider/window の観測値・offset・freshness・CLI version を pause と queue に永続表示する", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "tidepool-provider-usage-"));
+  const dir = await tempDir("tidepool-provider-usage-");
   t = await bootTidepool({ dir });
   const db = t.db;
   const observedAt = new Date("2026-08-28T08:00:00.000Z");

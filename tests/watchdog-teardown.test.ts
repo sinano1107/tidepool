@@ -1,5 +1,5 @@
-import { rm, writeFile } from "node:fs/promises";
-import { afterEach, expect, it } from "vitest";
+import { writeFile } from "node:fs/promises";
+import { expect, it } from "vitest";
 import { boardHalts } from "../src/board-halt.js";
 import { type Db, openDb } from "../src/db.js";
 import { quarantineFailedTeardown } from "../src/failed-teardown.js";
@@ -23,11 +23,6 @@ import { commitWork, FULL_HANDOFF, git, makeWorkspace } from "./harness.js";
  *  それを跨いではならない —— 跨げば確認 question が開いたまま workspace と slot が動く。 */
 
 const MIN = 60 * 1000;
-const dirs: string[] = [];
-afterEach(async () => {
-  await Promise.all(dirs.splice(0).map((d) => rm(d, { recursive: true, force: true })));
-});
-
 /** 後始末は fire-and-forget の `void` の先にある。 */
 const settle = () => new Promise((resolve) => setImmediate(resolve));
 
@@ -53,7 +48,7 @@ async function sessionInTeardown(
 ): Promise<Fixture> {
   const db = openDb(":memory:");
   const clock = new FakeClock();
-  const ws = await makeWorkspace(dirs, "sandbox");
+  const ws = await makeWorkspace("sandbox");
   const slot = new Slot();
   const runtime = new FakeContainerRuntime();
   const containers = new ProcessContainers(runtime);

@@ -1,5 +1,4 @@
 import { writeFileSync } from "node:fs";
-import { rm } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import {
@@ -14,10 +13,8 @@ import {
 } from "./harness.js";
 
 let t: Tidepool;
-const dirs: string[] = [];
 afterEach(async () => {
   await t?.stop();
-  await Promise.all(dirs.splice(0).map((d) => rm(d, { recursive: true, force: true })));
 });
 
 const MIN = 60 * 1000;
@@ -114,7 +111,7 @@ it("get_current_task の history に、完了済み work 子タスクの handoff
 
 it("get_current_task の history に、cancelled 子タスクの発端 question の title/answer が含まれる(abandon 後の再計画)", async () => {
   const grace = 30 * MIN;
-  const ws = await makeWorkspace(dirs, "sandbox");
+  const ws = await makeWorkspace("sandbox");
   t = await bootTidepool({ workspace: ws, watchdog: { timeLimits: { work: WORK_LIMIT }, grace } });
 
   const plan = (

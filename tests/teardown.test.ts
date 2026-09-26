@@ -1,4 +1,4 @@
-import { rm, writeFile } from "node:fs/promises";
+import { writeFile } from "node:fs/promises";
 import { afterEach, expect, it } from "vitest";
 import { quarantineFailedTeardown } from "../src/failed-teardown.js";
 import { FAILED_TEARDOWN_QUESTION_TITLE } from "../src/quarantine.js";
@@ -28,10 +28,8 @@ import {
  *  着地したのに、その session の process はまだホストに残っている。 */
 
 let t: Tidepool;
-const dirs: string[] = [];
 afterEach(async () => {
   await t?.stop();
-  await Promise.all(dirs.splice(0).map((d) => rm(d, { recursive: true, force: true })));
 });
 
 /** 後始末は回収済み観測の後ろ = microtask の先にある。 */
@@ -42,7 +40,7 @@ const started = () => t.worker.started.map((task) => task.id);
 const payload = (result: any) => JSON.parse(result.content[0].text);
 
 it.each([false, true])("restart recovers cap teardown without a failure question (failed preflight first: %s)", async (failPreflight) => {
-  const ws = await makeWorkspace(dirs, "sandbox");
+  const ws = await makeWorkspace("sandbox");
   t = await bootTidepool({ workspace: ws });
   const task = await registerWork(t, "interrupted by cap");
   await registerWork(t, "next");
@@ -142,7 +140,7 @@ it("decompose と escalate も同じ —— 枠を握っているのは task で
 });
 
 it("最終 verb の着地後、同じ session の呼び出しは読取も含めて拒まれる —— 最初の解放系 verb 自身は拒まれない", async () => {
-  const ws = await makeWorkspace(dirs, "sandbox");
+  const ws = await makeWorkspace("sandbox");
   t = await bootTidepool({ workspace: ws });
   const task = await registerWork(t, "one");
   await t.clock.advance(HOUR);
@@ -222,7 +220,7 @@ it("「今なぜ pickup が起きないか」の読み口が後始末を報せ�
 });
 
 it("後始末の途中で盤面を再起動しても、前提検査が通れば完走する", async () => {
-  const ws = await makeWorkspace(dirs, "sandbox");
+  const ws = await makeWorkspace("sandbox");
   t = await bootTidepool({ workspace: ws });
   const task = await registerWork(t, "one");
   await t.clock.advance(HOUR);
@@ -255,7 +253,7 @@ it("後始末の途中で盤面を再起動しても、前提検査が通れば�
 });
 
 it("前提検査が通らなければ後始末は走らず、pickup は止まったままになる", async () => {
-  const ws = await makeWorkspace(dirs, "sandbox");
+  const ws = await makeWorkspace("sandbox");
   t = await bootTidepool({ workspace: ws });
   const task = await registerWork(t, "one");
   await t.clock.advance(HOUR);
@@ -277,7 +275,7 @@ it("前提検査が通らなければ後始末は走らず、pickup は止まっ
 });
 
 it("落ちた後始末の question を残したまま再起動しても、起動時復旧は撃ち直さず偽の Containment question も刷られない", async () => {
-  const ws = await makeWorkspace(dirs, "sandbox");
+  const ws = await makeWorkspace("sandbox");
   t = await bootTidepool({ workspace: ws });
   const task = await registerWork(t, "one");
   await t.clock.advance(HOUR);

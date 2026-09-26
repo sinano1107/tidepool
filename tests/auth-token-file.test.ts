@@ -1,6 +1,6 @@
 import { statSync } from "node:fs";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import { homedir, tmpdir } from "node:os";
+import { writeFile } from "node:fs/promises";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import {
@@ -16,25 +16,18 @@ import { startServer, type TidepoolServer } from "../src/server.js";
 import { implicitTaskExecutionCandidates } from "../src/server-options.js";
 import { TranscriptStore } from "../src/transcript-store.js";
 import { FakeClock, FakeContainerRuntime, ScriptedWorker } from "./fakes.js";
+import { tempDir } from "./harness.js";
 
 let server: TidepoolServer | undefined;
-const dirs: string[] = [];
 afterEach(async () => {
   await server?.stop();
   server = undefined;
-  await Promise.all(dirs.splice(0).map((d) => rm(d, { recursive: true, force: true })));
 });
-
-async function tempDir(): Promise<string> {
-  const dir = await mkdtemp(join(tmpdir(), "tidepool-token-"));
-  dirs.push(dir);
-  return dir;
-}
 
 // #151: work プロファイルの worker は Read ツールで cwd 外の任意パスを読める。
 // 平文はどこに置いても読まれるので、盤面側の複製は存在させない(ADR 0036)。
 it("盤面はハッシュだけを保存し、平文はディスクに残さない(issue #153 / ADR 0036)", async () => {
-  const dir = await tempDir();
+  const dir = await tempDir("tidepool-token-");
   const tokenFile = join(dir, "api-token");
   const token = rotateToken(tokenFile);
 
@@ -51,7 +44,7 @@ it("盤面はハッシュだけを保存し、平文はディスクに残さな�
 // 新規作成だけを測ると穴が残る: writeFileSync の mode は作成時にしか効かないので、
 // ローテーション(既存ファイルへの上書き)は緩いモードを引き継ぎうる
 it("ローテーションは既存ファイルのパーミッションも 600 に直す(issue #153)", async () => {
-  const dir = await tempDir();
+  const dir = await tempDir("tidepool-token-");
   const tokenFile = join(dir, "api-token");
   await writeFile(tokenFile, "stale\n", { mode: 0o644 });
   expect(statSync(tokenFile).mode & 0o077).not.toBe(0);
@@ -66,7 +59,7 @@ it("ハッシュの既定の置き場所は盤面ディレクトリの外(issue 
 });
 
 it("壊れた/欠けたハッシュファイルは undefined(issue #153)", async () => {
-  const dir = await tempDir();
+  const dir = await tempDir("tidepool-token-");
   expect(readTokenHash(join(dir, "does-not-exist"))).toBeUndefined();
 
   const empty = join(dir, "empty");
@@ -116,7 +109,7 @@ it("ローテーションの出力は管理MCP の bearer 再設定を促す(iss
 /** 盤面を1台、**本番と同じ配線**(main.ts が呼ぶ `openHumanCredential`)で起こす。
  *  ここでハッシュ源を手で組むと、production が通らない経路を測ることになる。 */
 async function bootWithTokenFile(tokenFile: string): Promise<TidepoolServer> {
-  const dir = await tempDir();
+  const dir = await tempDir("tidepool-token-");
   const clock = new FakeClock();
   const { credential } = openHumanCredential({ tokenFile, origins: ["http://127.0.0.1:4589"] });
   const db = openDb(join(dir, "board.sqlite"));
@@ -141,7 +134,7 @@ const board = (s: TidepoolServer, token: string) =>
 // `npm run token` は再表示ではなくローテーション(ADR 0036)。盤面を再起動せずに
 // 効かなければ、ローテーション手順が「盤面を落として上げる」を含むことになる。
 it("ローテーションは再起動なしに効き、古い token を失効させる(issue #153)", async () => {
-  const dir = await tempDir();
+  const dir = await tempDir("tidepool-token-");
   const tokenFile = join(dir, "api-token");
   const first = rotateToken(tokenFile);
   server = await bootWithTokenFile(tokenFile);
@@ -156,7 +149,7 @@ it("ローテーションは再起動なしに効き、古い token を失効さ
 // 初回起動: ハッシュファイルが無ければその場で発行して表示する(以後、平文を
 // 得る手段はローテーションだけ)
 it("ハッシュファイルが無い盤面は起動時に発行して表示する(issue #153)", async () => {
-  const dir = await tempDir();
+  const dir = await tempDir("tidepool-token-");
   const tokenFile = join(dir, "api-token");
   const { messages } = openHumanCredential({ tokenFile, origins: ["http://127.0.0.1:4589"] });
 
@@ -169,7 +162,7 @@ it("ハッシュファイルが無い盤面は起動時に発行して表示す�
 // **壊れたハッシュでは発行し直さない。** 読めないだけかもしれないファイルを上書き
 // すると、生きている端末の cookie を黙って捨てることになる
 it("壊れたハッシュを持つ盤面は発行し直さず、認証が立たないことを知らせる(issue #153)", async () => {
-  const dir = await tempDir();
+  const dir = await tempDir("tidepool-token-");
   const tokenFile = join(dir, "api-token");
   await writeFile(tokenFile, "not a hash\n");
 
@@ -187,7 +180,7 @@ it("壊れたハッシュを持つ盤面は発行し直さず、認証が立た�
 // 発行に失敗しても**起動そのものは拒まない** — Pi で起動を拒むと ssh するしか
 // なくなる(ADR 0036)。直したら `npm run token` で認証が立つ
 it("ハッシュを書けない盤面も起動する(issue #153)", async () => {
-  const dir = await tempDir();
+  const dir = await tempDir("tidepool-token-");
   const blocker = join(dir, "not-a-dir");
   await writeFile(blocker, "");
   const { credential, messages } = openHumanCredential({
@@ -203,7 +196,7 @@ it("ハッシュを書けない盤面も起動する(issue #153)", async () => {
 // 対になる pickup ゲート(#154)が worker を1枚も走らせないので、開いた面に敵は
 // おらず、開いていること自体が人間の復旧経路になる。
 it("使えるハッシュを持たない盤面は人間面を開ける(issue #154 / ADR 0036 の fail-open)", async () => {
-  const dir = await tempDir();
+  const dir = await tempDir("tidepool-token-");
   const tokenFile = join(dir, "api-token");
   await writeFile(tokenFile, "not a hash\n");
   server = await bootWithTokenFile(tokenFile);

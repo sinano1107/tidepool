@@ -1,6 +1,5 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { ClaudeCodeWorker, type ClaudeWorkerOptions } from "../src/claude-worker.js";
 import { CodexWorker } from "../src/codex-worker.js";
@@ -9,17 +8,26 @@ import type { Provider } from "../src/registry.js";
 import type { WorkerFactory } from "../src/server.js";
 import { type Transcript, TranscriptStore } from "../src/transcript-store.js";
 import { FakeContainerRuntime, healthyOpenai, healthyUsageText, recordingSpawn } from "./fakes.js";
-import { api, bootTidepool, FULL_HANDOFF, git, HOUR, mcpClient, questions, queueWork, type Tidepool } from "./harness.js";
+import {
+  api,
+  bootTidepool,
+  FULL_HANDOFF,
+  git,
+  HOUR,
+  mcpClient,
+  questions,
+  queueWork,
+  type Tidepool,
+  tempDir,
+} from "./harness.js";
 import { makeRegistry } from "./registry-fixture.js";
 
 /** ADR 0149(issue #911)。transcript を取れない session は走らせず、走ってから書けなく
  *  なった session はその場で強制回収する —— 盤面は落ちず、記録を捨てて続けることもない。 */
 
 let t: Tidepool;
-const dirs: string[] = [];
 afterEach(async () => {
   await t?.stop();
-  await Promise.all(dirs.splice(0).map((d) => rm(d, { recursive: true, force: true })));
 });
 
 const MIN = 60 * 1000;
@@ -31,12 +39,6 @@ const settle = () => new Promise((resolve) => setImmediate(resolve));
 const status = async (id: string) => (await api(t.baseUrl, "GET", `/api/tasks/${id}`)).json.status;
 const events = async (id: string) => (await api(t.baseUrl, "GET", `/api/tasks/${id}/events`)).json;
 const teardown = async () => (await api(t.baseUrl, "GET", "/api/queue")).json.teardown;
-
-const tempDir = async (prefix: string) => {
-  const dir = await mkdtemp(join(tmpdir(), prefix));
-  dirs.push(dir);
-  return dir;
-};
 
 /** 盤面に渡す transcript の器。テストは開かれた session の stream をここから取って落とす。 */
 class RecordingTranscripts extends TranscriptStore {
@@ -79,7 +81,6 @@ async function bootWithAdapter(
 
 async function bootClaude(registryFiles: Record<string, string> = {}, extra: Partial<ClaudeWorkerOptions> = {}) {
   const registryDir = await makeRegistry(registryFiles);
-  dirs.push(registryDir);
   const logDir = await tempDir("transcript-failure-logs-");
   return bootWithAdapter(
     (deps) =>
@@ -105,7 +106,6 @@ async function bootCodex() {
       "provider: openai\nskills: []\n---\nYou are the Codex worker.",
     "workspaces.yaml": `work:\n  path: ${workspace}\n`,
   });
-  dirs.push(registryDir);
   const codexHome = await tempDir("transcript-failure-codex-home-");
   return bootWithAdapter(
     ({ db, clock, containers, onSpawnFailed, onWorkerExited, transcripts }) =>

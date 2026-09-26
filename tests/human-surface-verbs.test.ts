@@ -1,4 +1,3 @@
-import { rm } from "node:fs/promises";
 import { afterEach, expect, it } from "vitest";
 import { UnknownWorkspaceError } from "../src/workspace.js";
 import {
@@ -20,11 +19,9 @@ import {
 type HumanSurface = "webui" | "mcp";
 
 const pools: Tidepool[] = [];
-const dirs: string[] = [];
 
 afterEach(async () => {
   await Promise.all(pools.splice(0).map((pool) => pool.stop()));
-  await Promise.all(dirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
 });
 
 function toolPayload(result: any): any {
@@ -165,7 +162,7 @@ async function exerciseSettlement(surface: HumanSurface, verb: SettlementVerb) {
     await api(queuePool.baseUrl, "GET", `/api/tasks/${child.id}/events`)
   ).json;
 
-  const workspace = await makeWorkspace(dirs, `${surface}-${verb}-landing`);
+  const workspace = await makeWorkspace(`${surface}-${verb}-landing`);
   const landingPool = await bootTidepool({ workspace });
   pools.push(landingPool);
   const root = await registerWork(landingPool, `${surface} ${verb} landing root`);

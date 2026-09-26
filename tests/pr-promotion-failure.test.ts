@@ -1,4 +1,3 @@
-import { rm } from "node:fs/promises";
 import { afterEach, expect, it } from "vitest";
 import {
   addTaskChange,
@@ -15,14 +14,12 @@ import {
 } from "./harness.js";
 
 let t: Tidepool;
-const dirs: string[] = [];
 afterEach(async () => {
   await t?.stop();
-  await Promise.all(dirs.splice(0).map((d) => rm(d, { recursive: true, force: true })));
 });
 
 it("a failed PR promotion leaves the work done and asks Tidepool whether to retry or abandon promotion", async () => {
-  const { workspace: ws } = await makeRemoteBackedWorkspace(dirs, "sandbox");
+  const { workspace: ws } = await makeRemoteBackedWorkspace("sandbox");
   t = await bootTidepool({
     workspace: ws,
     authority: { name: "standard", guidance: "", merge: "escalate" },
@@ -58,7 +55,7 @@ it("a failed PR promotion leaves the work done and asks Tidepool whether to retr
 });
 
 it("human retry maps failure to a visible error, then lands while excluding the answered question and retiring siblings", async () => {
-  const { workspace: ws } = await makeRemoteBackedWorkspace(dirs, "sandbox");
+  const { workspace: ws } = await makeRemoteBackedWorkspace("sandbox");
   t = await bootTidepool({
     workspace: ws,
     authority: { name: "standard", guidance: "", merge: "escalate" },
@@ -115,7 +112,7 @@ it("human retry maps failure to a visible error, then lands while excluding the 
 });
 
 it("abandoning PR promotion settles the failure question without changing completed work", async () => {
-  const { workspace: ws } = await makeRemoteBackedWorkspace(dirs, "sandbox");
+  const { workspace: ws } = await makeRemoteBackedWorkspace("sandbox");
   t = await bootTidepool({ workspace: ws });
   t.github.scriptFailure(new Error("token expired"));
   const task = await registerWork(t, "ship the feature");
@@ -151,7 +148,7 @@ it("abandoning PR promotion settles the failure question without changing comple
 });
 
 it("a settled failure question cannot be re-answered into a retry", async () => {
-  const { workspace: ws } = await makeRemoteBackedWorkspace(dirs, "sandbox");
+  const { workspace: ws } = await makeRemoteBackedWorkspace("sandbox");
   t = await bootTidepool({ workspace: ws });
   t.github.scriptFailure(new Error("token expired"));
   const task = await registerWork(t, "ship the feature");
@@ -184,7 +181,7 @@ it("a settled failure question cannot be re-answered into a retry", async () => 
 });
 
 it("a typo'd answer is rejected outright instead of silently settling the question as an implicit abandon", async () => {
-  const { workspace: ws } = await makeRemoteBackedWorkspace(dirs, "sandbox");
+  const { workspace: ws } = await makeRemoteBackedWorkspace("sandbox");
   t = await bootTidepool({ workspace: ws });
   t.github.scriptFailure(new Error("token expired"));
   const task = await registerWork(t, "ship the feature");
@@ -214,7 +211,7 @@ it("a typo'd answer is rejected outright instead of silently settling the questi
 });
 
 it("a malformed POST (answer count mismatch) to an open promotion-failure question is rejected before any retry (issue #111)", async () => {
-  const { workspace: ws } = await makeRemoteBackedWorkspace(dirs, "sandbox");
+  const { workspace: ws } = await makeRemoteBackedWorkspace("sandbox");
   t = await bootTidepool({ workspace: ws });
   t.github.scriptFailure(new Error("token expired"));
   const task = await registerWork(t, "ship the feature");

@@ -1,7 +1,6 @@
 import { mkdirSync, writeFileSync } from "node:fs";
-import { rm } from "node:fs/promises";
 import { join } from "node:path";
-import { afterEach, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import { type Db, openDb } from "../src/db.js";
 import { listBoard, pickupTask, registerTask, type Task, type TaskType } from "../src/tasks.js";
 import {
@@ -19,18 +18,13 @@ import { commitWork, git, makeWorkspace } from "./harness.js";
  *  掛かる範囲(work タスク)では汚れは成果ではなく残存プロセスの露見である。 */
 
 const NOW = new Date("2026-09-10T00:00:00.000Z");
-const dirs: string[] = [];
-afterEach(async () => {
-  await Promise.all(dirs.splice(0).map((d) => rm(d, { recursive: true, force: true })));
-});
-
 async function pickedUpSession(type: TaskType = "work"): Promise<{
   db: Db;
   task: Task;
   ws: WorkspaceConfig;
 }> {
   const db = openDb(":memory:");
-  const ws = await makeWorkspace(dirs, "sandbox");
+  const ws = await makeWorkspace("sandbox");
   const registered = registerTask(
     db,
     { type, title: "one", purpose: "why", completion_criteria: "done" },

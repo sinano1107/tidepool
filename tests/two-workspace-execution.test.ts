@@ -17,16 +17,14 @@ import {
 } from "./harness.js";
 
 let t: Tidepool;
-const dirs: string[] = [];
 afterEach(async () => {
   await t?.stop();
-  await Promise.all(dirs.splice(0).map((d) => rm(d, { recursive: true, force: true })));
 });
 
 describe("issue #26: 実行側の複数 workspace 対応", () => {
   it("異なる workspace の2タスクがそれぞれの checkout で実行され、片方の quarantine が他方の pickup を止めない", async () => {
-    const sandbox = await makeWorkspace(dirs, "sandbox");
-    const prod = await makeWorkspace(dirs, "prod");
+    const sandbox = await makeWorkspace("sandbox");
+    const prod = await makeWorkspace("prod");
     const registry: Record<string, WorkspaceConfig> = { sandbox, prod };
     t = await bootTidepool({
       workspace: sandbox,
