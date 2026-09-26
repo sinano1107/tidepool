@@ -842,8 +842,8 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
   // four-question check again.
   if (harnessContainment) {
     const agentsUsing = options.quarantineResolvers?.harnessContainment;
-    const harnesses = (["claude-code", "codex"] as const).filter((harness) => !agentsUsing || agentsUsing([harness]).length > 0);
-    for (const harness of harnesses) {
+    for (const harness of ["claude-code", "codex"] as const) {
+      if (agentsUsing?.([harness]).length === 0) continue;
       await harnessContainmentPickupBlocked(db, harness, harnessContainment, options.clock.now());
     }
   }
