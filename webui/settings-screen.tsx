@@ -1404,6 +1404,97 @@ function MetaReviewSettingsCard({ settings, say, onSaved, edit }: {
 // a failed or throttled one just stays untranslated. There is no approve action
 // (ADR 0152): a behavior the human writes or edits here is approved on write, and
 // an AI-drafted candidate is approved only through its proposal question.
+// The case picker (#953 / ADR 0153 決定3): the decision-log read model, read-only and narrowed to the
+// workspace, offers "this entry" (a decision) or "this session"; the picked case renders in place, and a
+// text selection inside one of its fields reports `{ field, quote }` through `onQuote`.
+type TpMemoryAnchor = 'whole' | { field: 'decision' | 'steering' | 'handoff' | 'result'; quote: string };
+/** an exemplar annotation being written: `back` is its back-translation, held only for rereading (ADR 0015) */
+type TpDraftAnnotation = { anchor: TpMemoryAnchor; polarity: '' | 'imitate' | 'avoid'; text: string; original: string; back: string | null };
+function MemoryCasePicker({ workspace, value, onChange, onQuote }: {
+  workspace: string;
+  value: number | null;
+  onChange: (eventId: number | null) => void;
+  onQuote?: (anchor: Exclude<TpMemoryAnchor, 'whole'>) => void;
+}) {
+  const { Button, LogEntry } = window.TidepoolDesignSystem_8a0ead;
+  const muted = { margin: 0, fontSize: 'var(--text-xs)', color: 'var(--text-muted)' };
+  const [log, setLog] = React.useState<WireContract['GET /api/log']['entries'] | string | null>(null); // string → load error
+  const [rendered, setRendered] = React.useState<WireContract['GET /api/settings/memory/cases/:event_id'] | string | null>(null);
+  React.useEffect(() => {
+    api('GET /api/log').then(({ entries }) => setLog(entries)).catch((err) => setLog(String(err.message || err)));
+  }, []);
+  React.useEffect(() => {
+    setRendered(null);
+    if (value !== null) {
+      api('GET /api/settings/memory/cases/:event_id', { params: { event_id: String(value) } })
+        .then(setRendered).catch((err) => setRendered(String(err.message || err)));
+    }
+  }, [value]);
+  const caseBox = React.useRef<HTMLDivElement>(null);
+  const quoteTo = React.useRef(onQuote);
+  quoteTo.current = onQuote;
+  React.useEffect(() => {
+    // selectionchange, not mouseup: keyboard selection counts too. A quote is one field item's verbatim text
+    const onSelection = () => {
+      const selection = document.getSelection();
+      const quote = selection?.toString() ?? '';
+      const fieldOf = (node: Node | null | undefined) => (node instanceof Element ? node : node?.parentElement)?.closest<HTMLElement>('[data-field]');
+      const field = fieldOf(selection?.anchorNode);
+      if (!quote.trim() || !field || field !== fieldOf(selection?.focusNode) || !caseBox.current?.contains(field)) return;
+      quoteTo.current?.({ field: field.dataset.field as 'decision', quote });
+    };
+    document.addEventListener('selectionchange', onSelection);
+    return () => document.removeEventListener('selectionchange', onSelection);
+  }, []);
+
+  if (value !== null) {
+    // a session case's decisions quote as field `decision` (recordExemplar); array fields render one element per item
+    const fields: [string, (string | null)[]][] = rendered === null || typeof rendered === 'string' ? []
+      : 'decisions' in rendered
+        ? [['decision', rendered.decisions], ['handoff', [rendered.handoff]], ['result', [rendered.result]]]
+        : [['decision', [rendered.decision]], ['steering', rendered.steering], ['handoff', [rendered.handoff]], ['result', [rendered.result]]];
+    return (
+      <div ref={caseBox} data-testid="memory-case" style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span style={muted}>case: event #{value}</span>
+          <Button variant="ghost" size="sm" onClick={() => onChange(null)}>Pick another</Button>
+        </div>
+        {rendered === null && <p style={muted}>loading…</p>}
+        {typeof rendered === 'string' && <p style={muted}>{rendered}</p>}
+        {fields.map(([name, texts]) => texts.filter((t) => t).map((text, i) => (
+          <div key={`${name}-${i}`}>
+            <span style={muted}>{name}</span>
+            <pre data-field={name} style={{ margin: 0, whiteSpace: 'pre-wrap', fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', lineHeight: 1.6 }}>{text}</pre>
+          </div>
+        )))}
+      </div>
+    );
+  }
+  const shown = typeof log === 'string' || log === null ? [] : log.filter((e) => !workspace || e.workspace === workspace).reverse();
+  return (
+    <div data-testid="memory-case-picker" style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 360, overflowY: 'auto' }}>
+      {log === null && <p style={muted}>loading…</p>}
+      {typeof log === 'string' && <p style={muted}>{log}</p>}
+      {log !== null && shown.length === 0 && <p style={muted}>no log entries</p>}
+      {shown.map((e) => (
+        <div key={e.id} data-testid={`memory-case-row-${e.id}`}>
+          <LogEntry entry={{
+            taskId: e.task_id, agent: e.worker_id, human: e.worker_id === 'human',
+            kind: e.payload.kind === 'task_completed' ? 'completion' : 'decision',
+            text: e.payload.kind === 'task_completed' ? (e.payload.result ?? '(no outcome recorded)') : e.payload.line,
+            cause: e.cause ?? undefined, objection: objectionBadge(e.objections.map((o) => o.comment)),
+          }} />
+          <div style={{ display: 'flex', gap: 8 }}>
+            {/* only a decision_logged entry is a citable case by itself (citedEpisode) */}
+            {e.payload.kind === 'decision_logged' && <Button variant="ghost" size="sm" onClick={() => onChange(e.id)}>This entry</Button>}
+            {e.session_event_id !== null && <Button variant="ghost" size="sm" onClick={() => onChange(e.session_event_id)}>This session</Button>}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 const MEMORY_INVALIDATION_REASONS = ['superseded', 'path_moved', 'capability', 'environment', 'requirement_change'];
 const needsSuccessor = (reason: string) => reason === 'superseded' || reason === 'path_moved';
 
@@ -1450,11 +1541,22 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit }: 
   const blank: {
     kind: string; workspace: string; path: string; originalTitle: string; originalText: string;
     title: string; text: string; backTranslation: Record<string, string> | null; supersedes: string; addressee: string;
-  } = { kind: 'knowledge', workspace: '', path: '', originalTitle: '', originalText: '', title: '', text: '', backTranslation: null, supersedes: '', addressee: '' };
+    /** the cited case (a behavior's optional source, an exemplar's required one); `inheritedSource` is the edited
+     *  behavior's, which the server keeps when no source is sent */
+    source: number | null; inheritedSource: number | null; annotations: TpDraftAnnotation[];
+  } = { kind: 'knowledge', workspace: '', path: '', originalTitle: '', originalText: '', title: '', text: '', backTranslation: null, supersedes: '', addressee: '', source: null, inheritedSource: null, annotations: [] };
   const [draft, setDraft] = React.useState(blank);
+  // the annotation a case selection fills: the last one added or focused
+  const [currentAnnotation, setCurrentAnnotation] = React.useState(0);
+  const setAnnotation = (i: number, patch: Partial<TpDraftAnnotation>) =>
+    setDraft((d) => ({ ...d, annotations: d.annotations.map((a, j) => (j === i ? { ...a, ...patch } : a)) }));
+  const addAnnotation = () => {
+    setCurrentAnnotation(draft.annotations.length);
+    setDraft((d) => ({ ...d, annotations: [...d.annotations, { anchor: 'whole', polarity: '', text: '', original: '', back: null }] }));
+  };
   const [busy, setBusy] = React.useState(false);
   const setDraftField = (key: string) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => setDraft({ ...draft, [key]: e.target.value, ...(key === 'title' || key === 'text' ? { backTranslation: null } : {}), ...(key === 'kind' ? { supersedes: '' } : {}) });
-  useDirtySignal(edit, writing, [draft.originalTitle, draft.originalText, draft.title, draft.text].some((v) => v.trim() !== ''));
+  useDirtySignal(edit, writing, [draft.originalTitle, draft.originalText, draft.title, draft.text, ...draft.annotations.map((a) => a.text)].some((v) => v.trim() !== ''));
   const translatable = language !== 'English';
   // a definition is one line with no title: its original and English are the text alone (ADR 0015)
   const fields: ('title' | 'text')[] = draft.kind === 'definition' ? ['text'] : ['title', 'text'];
@@ -1474,6 +1576,17 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit }: 
     }
     setBusy(false);
   };
+  const translateAnnotation = async (i: number, toEnglish: boolean) => {
+    setBusy(true);
+    try {
+      const a = draft.annotations[i]!;
+      const { english, back } = await translateMemoryWording(translateTarget, { text: a.text }, toEnglish ? { text: a.original } : null);
+      setAnnotation(i, { text: english.text!, back: back.text! });
+    } catch (err) {
+      say('danger', 'translate failed', String((err as Error).message || err));
+    }
+    setBusy(false);
+  };
 
   const save = async () => {
     setBusy(true);
@@ -1483,7 +1596,16 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit }: 
       const body = { workspace: draft.workspace || null, path: draft.path.trim(), text: draft.text.trim(), ...Object.fromEntries(originals) };
       const supersedes = draft.supersedes ? { supersedes: Number(draft.supersedes) } : {};
       if (draft.kind === 'knowledge') await api('/api/settings/memory/knowledge', { ...body, title: draft.title.trim() });
-      else if (draft.kind === 'behavior') await api('/api/settings/memory/behaviors', { ...body, title: draft.title.trim(), addressee: draft.addressee || null, ...supersedes });
+      else if (draft.kind === 'behavior') {
+        // an unchanged inherited source is left out: the server keeps it (and may be an attribution event the picker can't cite)
+        const source = draft.source !== null && draft.source !== draft.inheritedSource ? { source_event_id: draft.source } : {};
+        await api('/api/settings/memory/behaviors', { ...body, title: draft.title.trim(), addressee: draft.addressee || null, ...supersedes, ...source });
+      } else if (draft.kind === 'exemplar') {
+        await api('/api/settings/memory/exemplars', {
+          workspace: body.workspace, path: body.path, title: draft.title.trim(), addressee: draft.addressee || null, source_event_id: draft.source,
+          annotations: draft.annotations.map(({ anchor, polarity, text, original }) => ({ anchor, polarity, text: text.trim(), ...(original.trim() ? { original: original.trim() } : {}) })),
+        });
+      }
       else await api('/api/settings/memory/definitions', { ...body, ...supersedes });
       say('success', `${draft.kind} saved`, body.path);
       edit.close();
@@ -1526,10 +1648,10 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit }: 
         <React.Fragment>
           {editingBehavior
             ? <p style={muted}>editing behavior #{draft.supersedes} — saving writes a new approved entry and supersedes this one</p>
-            : <Select label="Kind" value={draft.kind} onChange={setDraftField('kind')} options={['knowledge', 'behavior', 'definition']} />}
+            : <Select label="Kind" value={draft.kind} onChange={setDraftField('kind')} options={['knowledge', 'behavior', 'definition', 'exemplar']} />}
           <Select label="Workspace" value={draft.workspace} onChange={setDraftField('workspace')} options={[{ value: '', label: 'board-wide' }, ...workspaceNames]} />
           <Input label={draft.kind === 'definition' ? 'Branch path' : 'Path'} mono value={draft.path} onChange={setDraftField('path')} placeholder="build/tests" />
-          {draft.kind === 'behavior' && (
+          {(draft.kind === 'behavior' || draft.kind === 'exemplar') && (
             // the current addressee stays offered even if its agent has left the registry
             <Select label="Addressee" value={draft.addressee} onChange={setDraftField('addressee')}
               options={[{ value: '', label: 'every agent' }, ...new Set([...agentNames, ...(draft.addressee ? [draft.addressee] : [])])]} />
@@ -1537,7 +1659,41 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit }: 
           {draft.kind === 'definition' && (
             <Input label="Supersedes (entry id, to revise the branch's current definition)" mono value={draft.supersedes} onChange={setDraftField('supersedes')} />
           )}
-          {translatable && (
+          {(draft.kind === 'behavior' || draft.kind === 'exemplar') && (
+            <React.Fragment>
+              <span style={muted}>{draft.kind === 'exemplar' ? 'case — pick one, then select text in it to anchor the current annotation' : 'case (optional)'}</span>
+              <MemoryCasePicker workspace={draft.workspace} value={draft.source} onChange={(source) => setDraft((d) => ({ ...d, source }))}
+                onQuote={draft.kind === 'exemplar' ? (anchor) => setAnnotation(currentAnnotation, { anchor }) : undefined} />
+              {draft.source === null && draft.inheritedSource !== null && (
+                <p style={muted}>saving without a pick keeps #{draft.supersedes}'s case</p>
+              )}
+            </React.Fragment>
+          )}
+          {draft.kind === 'exemplar' && draft.annotations.map((a, i) => (
+            <div key={i} data-testid={`exemplar-annotation-${i}`} onFocus={() => setCurrentAnnotation(i)}
+              style={{ display: 'flex', flexDirection: 'column', gap: 6, paddingLeft: 8, borderLeft: `2px solid ${i === currentAnnotation ? 'var(--tide-4)' : 'var(--border-default)'}` }}>
+              <p style={muted} data-testid="exemplar-anchor">
+                anchor: {a.anchor === 'whole' ? 'whole' : `${a.anchor.field} “${a.anchor.quote}”`}
+                {a.anchor !== 'whole' && <Button variant="ghost" size="sm" onClick={() => setAnnotation(i, { anchor: 'whole' })}>Use whole</Button>}
+              </p>
+              <Select label="Polarity" value={a.polarity} onChange={(e) => setAnnotation(i, { polarity: e.target.value as TpDraftAnnotation['polarity'] })}
+                options={[{ value: '', label: 'choose…' }, 'imitate', 'avoid']} />
+              {translatable && (
+                <React.Fragment>
+                  <Input label={`Original (${language})`} multiline rows={2} value={a.original} onChange={(e) => setAnnotation(i, { original: e.target.value })} />
+                  <Button variant="secondary" size="sm" disabled={busy || !a.original.trim()} onClick={() => translateAnnotation(i, true)}>Translate</Button>
+                </React.Fragment>
+              )}
+              <Input label="Annotation (English)" multiline rows={2} value={a.text} onChange={(e) => setAnnotation(i, { text: e.target.value, back: null })} />
+              {translatable && (
+                <Button variant="secondary" size="sm" disabled={busy || !a.text.trim()} onClick={() => translateAnnotation(i, false)}>Back-translate</Button>
+              )}
+              {a.back && <p style={muted}>back in {language}: {a.back}</p>}
+              <Button variant="ghost" size="sm" onClick={() => setDraft((d) => ({ ...d, annotations: d.annotations.filter((_, j) => j !== i) }))}>Remove annotation</Button>
+            </div>
+          ))}
+          {draft.kind === 'exemplar' && <Button variant="ghost" size="sm" onClick={addAnnotation}>Add annotation</Button>}
+          {translatable && draft.kind !== 'exemplar' && (
             <React.Fragment>
               {draft.kind !== 'definition' && (
                 <Input label={`Original title (${language})`} value={draft.originalTitle} onChange={setDraftField('originalTitle')} />
@@ -1547,14 +1703,21 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit }: 
             </React.Fragment>
           )}
           {draft.kind !== 'definition' && <Input label="Title (English)" value={draft.title} onChange={setDraftField('title')} />}
-          <Input label="English (saved as the canonical text)" multiline rows={3} value={draft.text} onChange={setDraftField('text')} />
-          {translatable && (
-            <Button variant="secondary" size="sm" disabled={busy || fields.some((key) => !draft[key].trim())} onClick={() => runTranslation(false)}>Back-translate</Button>
+          {draft.kind !== 'exemplar' && (
+            <React.Fragment>
+              <Input label="English (saved as the canonical text)" multiline rows={3} value={draft.text} onChange={setDraftField('text')} />
+              {translatable && (
+                <Button variant="secondary" size="sm" disabled={busy || fields.some((key) => !draft[key].trim())} onClick={() => runTranslation(false)}>Back-translate</Button>
+              )}
+            </React.Fragment>
           )}
           {draft.backTranslation && (
             <p style={muted} data-testid="memory-back-translation">back in {language}: {fields.map((key) => draft.backTranslation![key]).join(' — ')}</p>
           )}
-          <EditActions ok={fields.every((key) => draft[key].trim() !== '')} busy={busy} saveLabel={`Save ${draft.kind}`}
+          <EditActions busy={busy} saveLabel={`Save ${draft.kind}`}
+            ok={draft.kind === 'exemplar'
+              ? !!draft.title.trim() && draft.source !== null && draft.annotations.length > 0 && draft.annotations.every((a) => a.polarity && a.text.trim())
+              : fields.every((key) => draft[key].trim() !== '')}
             onSave={save} onCancel={() => edit.close()} />
         </React.Fragment>
       )}
@@ -1562,7 +1725,7 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit }: 
         <Select label="Workspace" value={filter.workspace} onChange={setFilterField('workspace')} style={{ flex: '1 1 120px' }}
           options={[{ value: '', label: 'all' }, { value: '(board)', label: 'board-wide' }, ...workspaceNames]} />
         <Select label="Kind" value={filter.kind} onChange={setFilterField('kind')} style={{ flex: '1 1 120px' }}
-          options={[{ value: '', label: 'all' }, 'knowledge', 'behavior', 'definition']} />
+          options={[{ value: '', label: 'all' }, 'knowledge', 'behavior', 'definition', 'exemplar']} />
         <Select label="State" value={filter.state} onChange={setFilterField('state')} style={{ flex: '1 1 120px' }}
           options={[{ value: '', label: 'all' }, 'approved', 'candidate', 'invalidated']} />
       </div>
@@ -1570,13 +1733,15 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit }: 
       {entries?.length === 0 && <p style={muted}>no entries</p>}
       {entries?.map((entry) => {
         const shown = entry.original ?? translations[entry.id];
+        // an event source other than its own creation event is a case, which the server inherits on edit
+        const caseSource = entry.source.kind !== 'commit' && entry.source.ref !== entry.id ? entry.source.ref : null;
         return (
         <div key={entry.id} data-testid={`memory-entry-${entry.id}`}
           style={{ display: 'flex', flexDirection: 'column', gap: 4, borderTop: '1px solid var(--border-default)', paddingTop: 10 }}>
           <p style={{ ...muted, fontFamily: 'var(--font-mono)' }}>
             #{entry.id} · {entry.kind} · {entry.invalidation_reason
               ? `invalidated: ${entry.invalidation_reason}${entry.successor_id ? ` → #${entry.successor_id}` : ''}`
-              : entry.state} · {entry.scope ?? 'board-wide'} · {entry.path}{entry.kind === 'behavior' && ` · to ${entry.addressee ?? 'every agent'}`} · {entry.author.activity}{entry.cause && ` · ${entry.cause}`}
+              : entry.state} · {entry.scope ?? 'board-wide'} · {entry.path}{(entry.kind === 'behavior' || entry.kind === 'exemplar') && ` · to${entry.addressee ?? 'every agent'}`} · {entry.author.activity}{entry.cause && ` · ${entry.cause}`}
           </p>
           {entry.kind !== 'definition' && <strong style={{ fontSize: 'var(--text-sm)' }}>{entry.title}</strong>}
           <p style={{ margin: 0, fontSize: 'var(--text-sm)' }}>{entry.text}</p>
@@ -1591,6 +1756,7 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit }: 
                   ...blank, kind: 'behavior', workspace: entry.scope ?? '', path: entry.path, title: entry.title, text: entry.text,
                   originalTitle: entry.original?.title ?? '', originalText: entry.original?.text ?? '',
                   addressee: entry.addressee ?? '', supersedes: String(entry.id),
+                  source: caseSource, inheritedSource: caseSource,
                 }))}>Edit</Button>
               )}
               <Button variant="ghost" size="sm" onClick={() => setInvalidating({ id: entry.id, reason: 'capability', successor: '' })}>Invalidate</Button>

@@ -565,6 +565,34 @@ it("worker_spawned を出所に持つ Exemplar の decision の quote はその 
   expect(approvedMemoryEntries(db)).toMatchObject([{ id, source: { kind: "event", ref: spawned } }]);
 });
 
+it("決定ログの各エントリは、それを含む worker session の worker_spawned の id を持ち、session の窓の外なら null(#953 の picker が「この session」に使う)", () => {
+  const { db, task } = board();
+  const before = logDecision(db, task, "before any session", "human", at);
+  // setup のみ: worker session の開始と終了の event
+  const spawned = appendEvent(db, {
+    taskId: task.id,
+    workerId: "deckhand",
+    origin: "board",
+    at,
+    payload: { kind: "worker_spawned", registry_commit: "c", definition_version: "1", advisor: null, provider: "anthropic", model: "opus", effort: "high", source: { tier: "task", provider: "only" }, harness: "claude-code", cli_version: "1" },
+  });
+  const inside = logDecision(db, task, "inside the session", "deckhand", at);
+  appendEvent(db, {
+    taskId: task.id,
+    workerId: "deckhand",
+    origin: "board",
+    at,
+    payload: { kind: "worker_exited", exit_code: 0, signal: null, stderr_tail: null, worker_spawned_event_id: spawned, usage: null },
+  });
+  const after = logDecision(db, task, "after the session exited", "human", at);
+
+  expect(listLog(db).map((e) => [e.id, e.session_event_id])).toEqual([
+    [before, null],
+    [inside, spawned],
+    [after, null],
+  ]);
+});
+
 it("人間が書く定義の原文は title = text で持つ", () => {
   const { db } = board();
   defineMemoryBranch(db, humanEntryInput(db, { workspace: "tidepool", path: "build", text: definition.text, original_text: "ビルドとテストの手順" }), "webui", at);

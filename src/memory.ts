@@ -6,7 +6,7 @@ import { type Db, MEMORY_FTS_DDL, MEMORY_FTS_TOKENIZER, MEMORY_PREPROCESS_VERSIO
 import { getDisplayLanguage } from "./display-language.js";
 import { appendEvent, type EventOrigin, type EventPayload, type EventRow, getEvent, HUMAN_FACING_KINDS, listEvents } from "./events.js";
 import { metaReviewSubjectOf, paged, previousMetaReviewWatermark } from "./meta-review.js";
-import { entriesReadBefore, entriesSeenBefore, listEpisodes, sessionWindow } from "./precedent.js";
+import { entriesReadBefore, entriesSeenBefore, listEpisodes, sessionSpawnOf, sessionWindow } from "./precedent.js";
 import { BOARD_WORKER_ID, DomainError, getTask, HUMAN_WORKER_ID, type MemoryProposal, registerTask, settleQuestionAsObserved, type Task } from "./tasks.js";
 import { type DecisionLogEntry, entryObjections, objectedEntryText, objectionsById } from "./triage.js";
 
@@ -1094,10 +1094,9 @@ function caseSession(db: Db, anchor: EventRow): { events: EventRow[]; handoff: s
   const empty = { events: [], handoff: null, result: null };
   if (anchor.task_id === null) return empty;
   const events = listEvents(db, anchor.task_id);
-  const spawned = anchor.kind === "worker_spawned" ? anchor : events.filter((e) => e.kind === "worker_spawned" && e.id < anchor.id).at(-1);
+  const spawned = sessionSpawnOf(events, anchor);
   if (!spawned) return empty;
   const { inSession } = sessionWindow(events, spawned);
-  if (anchor.kind !== "worker_spawned" && !inSession(anchor)) return empty;
   const inWindow = events.filter(inSession);
   const payload = inWindow.find((e) => e.kind === "task_completed")?.payload;
   const completed = payload?.kind === "task_completed" ? payload : null;

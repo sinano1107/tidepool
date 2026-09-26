@@ -1891,6 +1891,50 @@ function MetaReviewSettingsCard({ settings, say, onSaved, edit }) {
     }
   )));
 }
+function MemoryCasePicker({ workspace, value, onChange, onQuote }) {
+  const { Button, LogEntry } = window.TidepoolDesignSystem_8a0ead;
+  const muted = { margin: 0, fontSize: "var(--text-xs)", color: "var(--text-muted)" };
+  const [log, setLog] = React.useState(null);
+  const [rendered, setRendered] = React.useState(null);
+  React.useEffect(() => {
+    api("GET /api/log").then(({ entries }) => setLog(entries)).catch((err) => setLog(String(err.message || err)));
+  }, []);
+  React.useEffect(() => {
+    setRendered(null);
+    if (value !== null) {
+      api("GET /api/settings/memory/cases/:event_id", { params: { event_id: String(value) } }).then(setRendered).catch((err) => setRendered(String(err.message || err)));
+    }
+  }, [value]);
+  const caseBox = React.useRef(null);
+  const quoteTo = React.useRef(onQuote);
+  quoteTo.current = onQuote;
+  React.useEffect(() => {
+    const onSelection = () => {
+      const selection = document.getSelection();
+      const quote = selection?.toString() ?? "";
+      const fieldOf = (node) => (node instanceof Element ? node : node?.parentElement)?.closest("[data-field]");
+      const field = fieldOf(selection?.anchorNode);
+      if (!quote.trim() || !field || field !== fieldOf(selection?.focusNode) || !caseBox.current?.contains(field)) return;
+      quoteTo.current?.({ field: field.dataset.field, quote });
+    };
+    document.addEventListener("selectionchange", onSelection);
+    return () => document.removeEventListener("selectionchange", onSelection);
+  }, []);
+  if (value !== null) {
+    const fields = rendered === null || typeof rendered === "string" ? [] : "decisions" in rendered ? [["decision", rendered.decisions], ["handoff", [rendered.handoff]], ["result", [rendered.result]]] : [["decision", [rendered.decision]], ["steering", rendered.steering], ["handoff", [rendered.handoff]], ["result", [rendered.result]]];
+    return /* @__PURE__ */ React.createElement("div", { ref: caseBox, "data-testid": "memory-case", style: { display: "flex", flexDirection: "column", gap: 6 } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8 } }, /* @__PURE__ */ React.createElement("span", { style: muted }, "case: event #", value), /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "sm", onClick: () => onChange(null) }, "Pick another")), rendered === null && /* @__PURE__ */ React.createElement("p", { style: muted }, "loading\u2026"), typeof rendered === "string" && /* @__PURE__ */ React.createElement("p", { style: muted }, rendered), fields.map(([name, texts]) => texts.filter((t) => t).map((text, i) => /* @__PURE__ */ React.createElement("div", { key: `${name}-${i}` }, /* @__PURE__ */ React.createElement("span", { style: muted }, name), /* @__PURE__ */ React.createElement("pre", { "data-field": name, style: { margin: 0, whiteSpace: "pre-wrap", fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", lineHeight: 1.6 } }, text)))));
+  }
+  const shown = typeof log === "string" || log === null ? [] : log.filter((e) => !workspace || e.workspace === workspace).reverse();
+  return /* @__PURE__ */ React.createElement("div", { "data-testid": "memory-case-picker", style: { display: "flex", flexDirection: "column", gap: 6, maxHeight: 360, overflowY: "auto" } }, log === null && /* @__PURE__ */ React.createElement("p", { style: muted }, "loading\u2026"), typeof log === "string" && /* @__PURE__ */ React.createElement("p", { style: muted }, log), log !== null && shown.length === 0 && /* @__PURE__ */ React.createElement("p", { style: muted }, "no log entries"), shown.map((e) => /* @__PURE__ */ React.createElement("div", { key: e.id, "data-testid": `memory-case-row-${e.id}` }, /* @__PURE__ */ React.createElement(LogEntry, { entry: {
+    taskId: e.task_id,
+    agent: e.worker_id,
+    human: e.worker_id === "human",
+    kind: e.payload.kind === "task_completed" ? "completion" : "decision",
+    text: e.payload.kind === "task_completed" ? e.payload.result ?? "(no outcome recorded)" : e.payload.line,
+    cause: e.cause ?? void 0,
+    objection: objectionBadge(e.objections.map((o) => o.comment))
+  } }), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8 } }, e.payload.kind === "decision_logged" && /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "sm", onClick: () => onChange(e.id) }, "This entry"), e.session_event_id !== null && /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "sm", onClick: () => onChange(e.session_event_id) }, "This session")))));
+}
 const MEMORY_INVALIDATION_REASONS = ["superseded", "path_moved", "capability", "environment", "requirement_change"];
 const needsSuccessor = (reason) => reason === "superseded" || reason === "path_moved";
 function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit }) {
@@ -1923,11 +1967,17 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit }) 
   const muted = { margin: 0, fontSize: "var(--text-xs)", color: "var(--text-muted)" };
   const writeId = "board:memory-write";
   const writing = edit.isOpen(writeId);
-  const blank = { kind: "knowledge", workspace: "", path: "", originalTitle: "", originalText: "", title: "", text: "", backTranslation: null, supersedes: "", addressee: "" };
+  const blank = { kind: "knowledge", workspace: "", path: "", originalTitle: "", originalText: "", title: "", text: "", backTranslation: null, supersedes: "", addressee: "", source: null, inheritedSource: null, annotations: [] };
   const [draft, setDraft] = React.useState(blank);
+  const [currentAnnotation, setCurrentAnnotation] = React.useState(0);
+  const setAnnotation = (i, patch) => setDraft((d) => ({ ...d, annotations: d.annotations.map((a, j) => j === i ? { ...a, ...patch } : a) }));
+  const addAnnotation = () => {
+    setCurrentAnnotation(draft.annotations.length);
+    setDraft((d) => ({ ...d, annotations: [...d.annotations, { anchor: "whole", polarity: "", text: "", original: "", back: null }] }));
+  };
   const [busy, setBusy] = React.useState(false);
   const setDraftField = (key) => (e) => setDraft({ ...draft, [key]: e.target.value, ...key === "title" || key === "text" ? { backTranslation: null } : {}, ...key === "kind" ? { supersedes: "" } : {} });
-  useDirtySignal(edit, writing, [draft.originalTitle, draft.originalText, draft.title, draft.text].some((v) => v.trim() !== ""));
+  useDirtySignal(edit, writing, [draft.originalTitle, draft.originalText, draft.title, draft.text, ...draft.annotations.map((a) => a.text)].some((v) => v.trim() !== ""));
   const translatable = language !== "English";
   const fields = draft.kind === "definition" ? ["text"] : ["title", "text"];
   const editingBehavior = draft.kind === "behavior" && !!draft.supersedes;
@@ -1942,6 +1992,17 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit }) 
     }
     setBusy(false);
   };
+  const translateAnnotation = async (i, toEnglish) => {
+    setBusy(true);
+    try {
+      const a = draft.annotations[i];
+      const { english, back } = await translateMemoryWording(translateTarget, { text: a.text }, toEnglish ? { text: a.original } : null);
+      setAnnotation(i, { text: english.text, back: back.text });
+    } catch (err) {
+      say("danger", "translate failed", String(err.message || err));
+    }
+    setBusy(false);
+  };
   const save = async () => {
     setBusy(true);
     try {
@@ -1949,8 +2010,19 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit }) 
       const body = { workspace: draft.workspace || null, path: draft.path.trim(), text: draft.text.trim(), ...Object.fromEntries(originals) };
       const supersedes = draft.supersedes ? { supersedes: Number(draft.supersedes) } : {};
       if (draft.kind === "knowledge") await api("/api/settings/memory/knowledge", { ...body, title: draft.title.trim() });
-      else if (draft.kind === "behavior") await api("/api/settings/memory/behaviors", { ...body, title: draft.title.trim(), addressee: draft.addressee || null, ...supersedes });
-      else await api("/api/settings/memory/definitions", { ...body, ...supersedes });
+      else if (draft.kind === "behavior") {
+        const source = draft.source !== null && draft.source !== draft.inheritedSource ? { source_event_id: draft.source } : {};
+        await api("/api/settings/memory/behaviors", { ...body, title: draft.title.trim(), addressee: draft.addressee || null, ...supersedes, ...source });
+      } else if (draft.kind === "exemplar") {
+        await api("/api/settings/memory/exemplars", {
+          workspace: body.workspace,
+          path: body.path,
+          title: draft.title.trim(),
+          addressee: draft.addressee || null,
+          source_event_id: draft.source,
+          annotations: draft.annotations.map(({ anchor, polarity, text, original }) => ({ anchor, polarity, text: text.trim(), ...original.trim() ? { original: original.trim() } : {} }))
+        });
+      } else await api("/api/settings/memory/definitions", { ...body, ...supersedes });
       say("success", `${draft.kind} saved`, body.path);
       edit.close();
       await load();
@@ -1975,7 +2047,7 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit }) 
     }
     setBusy(false);
   };
-  return /* @__PURE__ */ React.createElement(Card, { style: { display: "flex", flexDirection: "column", gap: 14 } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8, minHeight: 26 } }, /* @__PURE__ */ React.createElement("span", { style: settingsCardLabel }, "memory entries"), !writing && /* @__PURE__ */ React.createElement("div", { style: { marginLeft: "auto" } }, /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "sm", onClick: () => edit.open(writeId, () => setDraft(blank)) }, "Write"))), writing && /* @__PURE__ */ React.createElement(React.Fragment, null, editingBehavior ? /* @__PURE__ */ React.createElement("p", { style: muted }, "editing behavior #", draft.supersedes, " \u2014 saving writes a new approved entry and supersedes this one") : /* @__PURE__ */ React.createElement(Select, { label: "Kind", value: draft.kind, onChange: setDraftField("kind"), options: ["knowledge", "behavior", "definition"] }), /* @__PURE__ */ React.createElement(Select, { label: "Workspace", value: draft.workspace, onChange: setDraftField("workspace"), options: [{ value: "", label: "board-wide" }, ...workspaceNames] }), /* @__PURE__ */ React.createElement(Input, { label: draft.kind === "definition" ? "Branch path" : "Path", mono: true, value: draft.path, onChange: setDraftField("path"), placeholder: "build/tests" }), draft.kind === "behavior" && // the current addressee stays offered even if its agent has left the registry
+  return /* @__PURE__ */ React.createElement(Card, { style: { display: "flex", flexDirection: "column", gap: 14 } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8, minHeight: 26 } }, /* @__PURE__ */ React.createElement("span", { style: settingsCardLabel }, "memory entries"), !writing && /* @__PURE__ */ React.createElement("div", { style: { marginLeft: "auto" } }, /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "sm", onClick: () => edit.open(writeId, () => setDraft(blank)) }, "Write"))), writing && /* @__PURE__ */ React.createElement(React.Fragment, null, editingBehavior ? /* @__PURE__ */ React.createElement("p", { style: muted }, "editing behavior #", draft.supersedes, " \u2014 saving writes a new approved entry and supersedes this one") : /* @__PURE__ */ React.createElement(Select, { label: "Kind", value: draft.kind, onChange: setDraftField("kind"), options: ["knowledge", "behavior", "definition", "exemplar"] }), /* @__PURE__ */ React.createElement(Select, { label: "Workspace", value: draft.workspace, onChange: setDraftField("workspace"), options: [{ value: "", label: "board-wide" }, ...workspaceNames] }), /* @__PURE__ */ React.createElement(Input, { label: draft.kind === "definition" ? "Branch path" : "Path", mono: true, value: draft.path, onChange: setDraftField("path"), placeholder: "build/tests" }), (draft.kind === "behavior" || draft.kind === "exemplar") && // the current addressee stays offered even if its agent has left the registry
   /* @__PURE__ */ React.createElement(
     Select,
     {
@@ -1984,12 +2056,43 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit }) 
       onChange: setDraftField("addressee"),
       options: [{ value: "", label: "every agent" }, .../* @__PURE__ */ new Set([...agentNames, ...draft.addressee ? [draft.addressee] : []])]
     }
-  ), draft.kind === "definition" && /* @__PURE__ */ React.createElement(Input, { label: "Supersedes (entry id, to revise the branch's current definition)", mono: true, value: draft.supersedes, onChange: setDraftField("supersedes") }), translatable && /* @__PURE__ */ React.createElement(React.Fragment, null, draft.kind !== "definition" && /* @__PURE__ */ React.createElement(Input, { label: `Original title (${language})`, value: draft.originalTitle, onChange: setDraftField("originalTitle") }), /* @__PURE__ */ React.createElement(Input, { label: `Original (${language})`, multiline: true, rows: 3, value: draft.originalText, onChange: setDraftField("originalText") }), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", disabled: busy || fields.some((key) => !originalOf[key].trim()), onClick: () => runTranslation(true) }, "Translate")), draft.kind !== "definition" && /* @__PURE__ */ React.createElement(Input, { label: "Title (English)", value: draft.title, onChange: setDraftField("title") }), /* @__PURE__ */ React.createElement(Input, { label: "English (saved as the canonical text)", multiline: true, rows: 3, value: draft.text, onChange: setDraftField("text") }), translatable && /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", disabled: busy || fields.some((key) => !draft[key].trim()), onClick: () => runTranslation(false) }, "Back-translate"), draft.backTranslation && /* @__PURE__ */ React.createElement("p", { style: muted, "data-testid": "memory-back-translation" }, "back in ", language, ": ", fields.map((key) => draft.backTranslation[key]).join(" \u2014 ")), /* @__PURE__ */ React.createElement(
+  ), draft.kind === "definition" && /* @__PURE__ */ React.createElement(Input, { label: "Supersedes (entry id, to revise the branch's current definition)", mono: true, value: draft.supersedes, onChange: setDraftField("supersedes") }), (draft.kind === "behavior" || draft.kind === "exemplar") && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("span", { style: muted }, draft.kind === "exemplar" ? "case \u2014 pick one, then select text in it to anchor the current annotation" : "case (optional)"), /* @__PURE__ */ React.createElement(
+    MemoryCasePicker,
+    {
+      workspace: draft.workspace,
+      value: draft.source,
+      onChange: (source) => setDraft((d) => ({ ...d, source })),
+      onQuote: draft.kind === "exemplar" ? (anchor) => setAnnotation(currentAnnotation, { anchor }) : void 0
+    }
+  ), draft.source === null && draft.inheritedSource !== null && /* @__PURE__ */ React.createElement("p", { style: muted }, "saving without a pick keeps #", draft.supersedes, "'s case")), draft.kind === "exemplar" && draft.annotations.map((a, i) => /* @__PURE__ */ React.createElement(
+    "div",
+    {
+      key: i,
+      "data-testid": `exemplar-annotation-${i}`,
+      onFocus: () => setCurrentAnnotation(i),
+      style: { display: "flex", flexDirection: "column", gap: 6, paddingLeft: 8, borderLeft: `2px solid ${i === currentAnnotation ? "var(--tide-4)" : "var(--border-default)"}` }
+    },
+    /* @__PURE__ */ React.createElement("p", { style: muted, "data-testid": "exemplar-anchor" }, "anchor: ", a.anchor === "whole" ? "whole" : `${a.anchor.field} \u201C${a.anchor.quote}\u201D`, a.anchor !== "whole" && /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "sm", onClick: () => setAnnotation(i, { anchor: "whole" }) }, "Use whole")),
+    /* @__PURE__ */ React.createElement(
+      Select,
+      {
+        label: "Polarity",
+        value: a.polarity,
+        onChange: (e) => setAnnotation(i, { polarity: e.target.value }),
+        options: [{ value: "", label: "choose\u2026" }, "imitate", "avoid"]
+      }
+    ),
+    translatable && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(Input, { label: `Original (${language})`, multiline: true, rows: 2, value: a.original, onChange: (e) => setAnnotation(i, { original: e.target.value }) }), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", disabled: busy || !a.original.trim(), onClick: () => translateAnnotation(i, true) }, "Translate")),
+    /* @__PURE__ */ React.createElement(Input, { label: "Annotation (English)", multiline: true, rows: 2, value: a.text, onChange: (e) => setAnnotation(i, { text: e.target.value, back: null }) }),
+    translatable && /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", disabled: busy || !a.text.trim(), onClick: () => translateAnnotation(i, false) }, "Back-translate"),
+    a.back && /* @__PURE__ */ React.createElement("p", { style: muted }, "back in ", language, ": ", a.back),
+    /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "sm", onClick: () => setDraft((d) => ({ ...d, annotations: d.annotations.filter((_, j) => j !== i) })) }, "Remove annotation")
+  )), draft.kind === "exemplar" && /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "sm", onClick: addAnnotation }, "Add annotation"), translatable && draft.kind !== "exemplar" && /* @__PURE__ */ React.createElement(React.Fragment, null, draft.kind !== "definition" && /* @__PURE__ */ React.createElement(Input, { label: `Original title (${language})`, value: draft.originalTitle, onChange: setDraftField("originalTitle") }), /* @__PURE__ */ React.createElement(Input, { label: `Original (${language})`, multiline: true, rows: 3, value: draft.originalText, onChange: setDraftField("originalText") }), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", disabled: busy || fields.some((key) => !originalOf[key].trim()), onClick: () => runTranslation(true) }, "Translate")), draft.kind !== "definition" && /* @__PURE__ */ React.createElement(Input, { label: "Title (English)", value: draft.title, onChange: setDraftField("title") }), draft.kind !== "exemplar" && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(Input, { label: "English (saved as the canonical text)", multiline: true, rows: 3, value: draft.text, onChange: setDraftField("text") }), translatable && /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", disabled: busy || fields.some((key) => !draft[key].trim()), onClick: () => runTranslation(false) }, "Back-translate")), draft.backTranslation && /* @__PURE__ */ React.createElement("p", { style: muted, "data-testid": "memory-back-translation" }, "back in ", language, ": ", fields.map((key) => draft.backTranslation[key]).join(" \u2014 ")), /* @__PURE__ */ React.createElement(
     EditActions,
     {
-      ok: fields.every((key) => draft[key].trim() !== ""),
       busy,
       saveLabel: `Save ${draft.kind}`,
+      ok: draft.kind === "exemplar" ? !!draft.title.trim() && draft.source !== null && draft.annotations.length > 0 && draft.annotations.every((a) => a.polarity && a.text.trim()) : fields.every((key) => draft[key].trim() !== ""),
       onSave: save,
       onCancel: () => edit.close()
     }
@@ -2009,7 +2112,7 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit }) 
       value: filter.kind,
       onChange: setFilterField("kind"),
       style: { flex: "1 1 120px" },
-      options: [{ value: "", label: "all" }, "knowledge", "behavior", "definition"]
+      options: [{ value: "", label: "all" }, "knowledge", "behavior", "definition", "exemplar"]
     }
   ), /* @__PURE__ */ React.createElement(
     Select,
@@ -2022,6 +2125,7 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit }) 
     }
   )), entries === null && /* @__PURE__ */ React.createElement("p", { style: muted }, "loading\u2026"), entries?.length === 0 && /* @__PURE__ */ React.createElement("p", { style: muted }, "no entries"), entries?.map((entry) => {
     const shown = entry.original ?? translations[entry.id];
+    const caseSource = entry.source.kind !== "commit" && entry.source.ref !== entry.id ? entry.source.ref : null;
     return /* @__PURE__ */ React.createElement(
       "div",
       {
@@ -2029,7 +2133,7 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit }) 
         "data-testid": `memory-entry-${entry.id}`,
         style: { display: "flex", flexDirection: "column", gap: 4, borderTop: "1px solid var(--border-default)", paddingTop: 10 }
       },
-      /* @__PURE__ */ React.createElement("p", { style: { ...muted, fontFamily: "var(--font-mono)" } }, "#", entry.id, " \xB7 ", entry.kind, " \xB7 ", entry.invalidation_reason ? `invalidated: ${entry.invalidation_reason}${entry.successor_id ? ` \u2192 #${entry.successor_id}` : ""}` : entry.state, " \xB7 ", entry.scope ?? "board-wide", " \xB7 ", entry.path, entry.kind === "behavior" && ` \xB7 to ${entry.addressee ?? "every agent"}`, " \xB7 ", entry.author.activity, entry.cause && ` \xB7 ${entry.cause}`),
+      /* @__PURE__ */ React.createElement("p", { style: { ...muted, fontFamily: "var(--font-mono)" } }, "#", entry.id, " \xB7 ", entry.kind, " \xB7 ", entry.invalidation_reason ? `invalidated: ${entry.invalidation_reason}${entry.successor_id ? ` \u2192 #${entry.successor_id}` : ""}` : entry.state, " \xB7 ", entry.scope ?? "board-wide", " \xB7 ", entry.path, (entry.kind === "behavior" || entry.kind === "exemplar") && ` \xB7 to${entry.addressee ?? "every agent"}`, " \xB7 ", entry.author.activity, entry.cause && ` \xB7 ${entry.cause}`),
       entry.kind !== "definition" && /* @__PURE__ */ React.createElement("strong", { style: { fontSize: "var(--text-sm)" } }, entry.title),
       /* @__PURE__ */ React.createElement("p", { style: { margin: 0, fontSize: "var(--text-sm)" } }, entry.text),
       shown && // a definition's title is its text, so the Set shows it once
@@ -2044,7 +2148,9 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit }) 
         originalTitle: entry.original?.title ?? "",
         originalText: entry.original?.text ?? "",
         addressee: entry.addressee ?? "",
-        supersedes: String(entry.id)
+        supersedes: String(entry.id),
+        source: caseSource,
+        inheritedSource: caseSource
       })) }, "Edit"), /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "sm", onClick: () => setInvalidating({ id: entry.id, reason: "capability", successor: "" }) }, "Invalidate")),
       invalidating?.id === entry.id && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(
         Select,

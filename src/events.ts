@@ -3,6 +3,7 @@ import type { Cause } from "./cause.js";
 import type { Db } from "./db.js";
 import type { ExecutionSettingRow, ExecutionSettingsChange, ProviderSource, registryPinChanges, routingPinChanges, Tier, TierSource } from "./execution-setting.js";
 import type { InvalidationReason, MemoryDropReason, MemoryEntryFields } from "./memory.js";
+import { sessionSpawnOf } from "./precedent.js";
 import type { Provider } from "./registry.js";
 import type { MemoryProposal, ProposalAmendment, TaskType } from "./tasks.js";
 import { entryObjections } from "./triage.js";
@@ -538,6 +539,8 @@ export interface LogEntry extends EventRow {
   workspace: string | null;
   objections: { comment: string; session_id: number }[];
   cause: Cause | null;
+  /** エントリを含む worker session の `worker_spawned` の id(case 描画と同じ窓、`sessionSpawnOf`)。窓の外なら null。 */
+  session_event_id: number | null;
 }
 
 export function listLog(db: Db, defaultWorkspaceName?: string): LogEntry[] {
@@ -572,12 +575,20 @@ export function listLog(db: Db, defaultWorkspaceName?: string): LogEntry[] {
     .all() as Array<{ entry_id: number; cause: Cause }>) {
     causesByEntry.set(row.entry_id, row.cause);
   }
-  return rows.map((r) => ({
-    ...r,
-    payload: JSON.parse(r.payload) as LogEntry["payload"],
-    objections: objectionsByEntry.get(r.id) ?? [],
-    cause: causesByEntry.get(r.id) ?? null,
-  }));
+  // session の窓を切るのに要るのは spawn と exit だけ。窓の規則は task で絞るので盤面全体を1回で引いて渡す
+  // ponytail: エントリ数 × session 数の走査。盤面が育って一覧が重くなったら task ごとに束ねる
+  const sessionEvents = (
+    db.prepare("SELECT * FROM events WHERE kind IN ('worker_spawned', 'worker_exited') ORDER BY id").all() as Array<Omit<EventRow, "payload"> & { payload: string }>
+  ).map((e): EventRow => ({ ...e, payload: JSON.parse(e.payload) as EventPayload }));
+  return rows.map((r) => {
+    const entry = { ...r, payload: JSON.parse(r.payload) as LogEntry["payload"] };
+    return {
+      ...entry,
+      objections: objectionsByEntry.get(r.id) ?? [],
+      cause: causesByEntry.get(r.id) ?? null,
+      session_event_id: sessionSpawnOf(sessionEvents, entry)?.id ?? null,
+    };
+  });
 }
 
 export function getLogCursor(db: Db): number {
