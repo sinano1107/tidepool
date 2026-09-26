@@ -516,8 +516,8 @@ function markApproved(db: Db, id: number, version: number): void {
  *  無効化、を1 transaction。承認は人間の回答なので人間名義。返り値は memory_entry_approved の event id。
  *  invalidate op(issue #621)は target を理由コードで後継なしに無効化し、その memory_entry_invalidated の event id を返す。
  *  修正値つき(ADR 0152 決定2・4)は candidate を approved にせず、人間名義の approved エントリ(欠けた欄は candidate の値)を作って
- *  candidate と replaces をそれの superseded にし、新エントリの id を返す。pin の照合は元の前提のまま。出所は直接編集と同じく
- *  candidate の出所(RCA 起草の帰責 event も)を継ぎ、それが candidate 自身の作成 event なら新エントリ自身の作成 event。 */
+ *  candidate と replaces をそれの superseded にし、新エントリの id を返す。pin の照合は元の前提のまま。出所は recordBehavior の
+ *  編集と同じ規則で candidate から継ぐ(`amends`)。 */
 export function approveMemoryProposal(db: Db, proposal: MemoryProposal, questionId: string, origin: EventOrigin, at: Date, amendment?: MemoryAmendment): number {
   const mark = { question_id: questionId };
   return db.transaction(() => {

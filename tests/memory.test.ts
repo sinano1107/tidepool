@@ -769,7 +769,7 @@ it("reject は consolidate の新 candidate だけを後継なしの rejected �
 /** 修正値つき approve(issue #944 / ADR 0152 決定2・4): 承認の export に修正値を渡す。 */
 const entryById = (db: ReturnType<typeof openDb>, id: number) => listMemoryEntries(db, {}).find((e) => e.id === id);
 
-it("修正値つき approve は人間名義の approved エントリを作り、candidate を後継つき superseded にする —— 欠けた欄は candidate から継ぐ", () => {
+it("修正値つき approve は人間名義の approved エントリを作り、candidate を後継つき superseded にする —— 欠けた欄と出所は candidate から継ぐ", () => {
   const { db } = board();
   const drafted = candidate(db, "Split migrations", "tidepool", "deckhand");
 
@@ -807,7 +807,7 @@ it("修正値つき consolidate は replaces の後継も新エントリにし�
     { title: "One concern", addressee: null },
   );
 
-  expect(entryById(db, created)).toMatchObject({ state: "approved", title: "One concern", text: "One concern per commit.", addressee: null, author: { activity: "human" } });
+  expect(entryById(db, created)).toMatchObject({ state: "approved", title: "One concern", text: "One concern per commit.", addressee: null, author: { activity: "human" }, source: { kind: "commit", ref: "0a46a46" } });
   for (const id of [merged, ...replaced]) expect(entryById(db, id)).toMatchObject({ state: "candidate", invalidation_reason: "superseded", successor_id: created });
 });
 
