@@ -596,7 +596,7 @@ it("quarantine の resolver が codex を経路にする agent を返さなけ�
       harness === "codex" ? { available: false, reason: "codex was not found on PATH" } : { available: true },
   });
 
-  expect(listBoard(t.db).filter((task) => task.type === "question" && task.status === "todo")).toEqual([]);
+  expect(((await api(t.baseUrl, "GET", "/api/tasks")).json as any[]).filter((task) => task.type === "question" && task.status === "todo")).toEqual([]);
 });
 
 it("quarantine の resolver が codex を経路にする agent を返せば、起動時に codex の Harness 検査が走り、失敗は question を立てる(#683)", async () => {
@@ -606,7 +606,7 @@ it("quarantine の resolver が codex を経路にする agent を返せば、�
       harness === "codex" ? { available: false, reason: "codex was not found on PATH" } : { available: true },
   });
 
-  expect(listBoard(t.db).filter((task) => task.type === "question" && task.status === "todo")).toMatchObject([
+  expect(((await api(t.baseUrl, "GET", "/api/tasks")).json as any[]).filter((task) => task.type === "question" && task.status === "todo")).toMatchObject([
     { question_quarantine_kind: "harnessContainment", question_quarantine_value: "codex" },
   ]);
 });
