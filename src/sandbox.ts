@@ -662,14 +662,23 @@ function settingsFile(
  *  than `JSON.parse` does, and "we couldn't tell" must not read as "clean".
  *  Tracked project hooks are returned as a separate disposition for physical
  *  exclusion; local or untracked hooks remain offending because sparse-checkout
- *  cannot safely remove them. */
+ *  cannot safely remove them.
+ *
+ *  `untrackedProjectSettings` is not part of the guard: it feeds the register
+ *  gate's live-checkout signal (issue #686) — `.claude/settings.json` on disk
+ *  and not in the index, whatever it holds. */
 export function workspaceSettingsDisposition(workspacePath: string) {
   const offending: string[] = [];
   let projectHooks = false;
   let hiddenProjectSettings = false;
+  let untrackedProjectSettings = false;
   for (const name of PROJECT_SETTINGS_FILES) {
     const file = settingsFile(workspacePath, name);
     if (file === undefined) continue;
+    const indexed =
+      name === "settings.json" ? settingsIndexState(workspacePath, ".claude/settings.json") : undefined;
+    // 登録の門の信号(issue #686)。中身は読まない —— parse より前に、存在と未追跡だけで立てる
+    if (name === "settings.json" && indexed === undefined) untrackedProjectSettings = true;
     if (file === "unreadable") {
       offending.push(name);
       continue;
@@ -681,18 +690,12 @@ export function workspaceSettingsDisposition(workspacePath: string) {
       if (FLOOR_DEFINING_KEYS.some((key) => key in parsed)) {
         offending.push(name);
       } else if ("hooks" in parsed) {
-        if (
-          name === "settings.json" &&
-          (file.tracked ||
-            settingsIndexState(workspacePath, ".claude/settings.json") !== undefined)
-        ) {
-          projectHooks = true;
-        }
+        if (indexed !== undefined) projectHooks = true;
         else offending.push(name);
       }
     } catch {
       offending.push(name);
     }
   }
-  return { overriding: offending, projectHooks, hiddenProjectSettings };
+  return { overriding: offending, projectHooks, hiddenProjectSettings, untrackedProjectSettings };
 }

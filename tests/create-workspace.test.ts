@@ -267,11 +267,37 @@ async function checkoutWithProjectHooks(): Promise<string> {
   return dir;
 }
 
+/** 信号4だけを立てる: gitignore される `.claude/settings.json`(issue #686)。
+ *  中身は読まないので、床キーと hooks の両持ちでも壊れた JSON でも同じ信号になる。
+ *  .gitignore は commit して信号1 を立てない。 */
+function checkoutWithUntrackedSettings(content: string): () => Promise<string> {
+  return async () => {
+    const dir = await makeLocalOnlyCheckout();
+    await mkdir(join(dir, ".claude"), { recursive: true });
+    await writeFile(join(dir, ".claude", "settings.json"), content);
+    await writeFile(join(dir, ".gitignore"), ".claude/settings.json\n");
+    commitAll(dir, "ignore project settings");
+    return dir;
+  };
+}
+
 describe("createWorkspace: 生きた dev checkout の信号(issue #383)", () => {
   const cases: [string, () => Promise<string>, string][] = [
     ["uncommitted changes / untracked files", dirtyCheckout, "uncommitted_changes"],
     [".claude/settings.local.json の存在", checkoutWithLocalSettings, "claude_settings_local"],
     [".claude/settings.json の hooks", checkoutWithProjectHooks, "claude_settings_hooks"],
+    [
+      "gitignore された .claude/settings.json(床キーと hooks)",
+      checkoutWithUntrackedSettings(
+        JSON.stringify({ permissions: { allow: ["Bash"] }, hooks: { PreToolUse: [] } }),
+      ),
+      "claude_settings_untracked",
+    ],
+    [
+      "gitignore された .claude/settings.json(壊れた JSON)",
+      checkoutWithUntrackedSettings("{ not json"),
+      "claude_settings_untracked",
+    ],
   ];
   for (const [label, makeCheckout, code] of cases) {
     it(`${label} だけでも、confirm 無しの register は拒まれコミットを積まない`, async () => {
@@ -319,6 +345,24 @@ describe("createWorkspace: 生きた dev checkout の信号(issue #383)", () => 
     );
 
     expect((err as LiveCheckoutSignalsError).cloneLanding).toBeNull();
+  });
+
+  // tracked な床キーはリポジトリの性質で、clone 入口の提案先にも同じファイルが来る。
+  // 登録時の quarantine 予告は #383 が退けた意味なので、門は黙って通す(issue #686)。
+  it("tracked な .claude/settings.json の床キーは信号にならず、confirm 無しで登録される", async () => {
+    const registryDir = await makeMainRegistry();
+    const deps = await makeDeps(registryDir);
+    const path = await makeLocalOnlyCheckout();
+    await mkdir(join(path, ".claude"), { recursive: true });
+    await writeFile(
+      join(path, ".claude", "settings.json"),
+      JSON.stringify({ permissions: { allow: ["Bash"] } }),
+    );
+    commitAll(path, "floor key");
+
+    await createWorkspace({ mode: "register", name: "sandbox", path }, deps);
+
+    expect(loadRegistry(registryDir, "purely-local").workspaces.sandbox).toEqual({ path });
   });
 
   it("confirm: true の再送は従来どおり登録する — エントリに confirm は残らない", async () => {
