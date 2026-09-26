@@ -2,6 +2,7 @@ import { rm } from "node:fs/promises";
 import { afterEach, expect, it } from "vitest";
 import { createApiRouter } from "../src/api.js";
 import type { Db } from "../src/db.js";
+import { getTask, logDecision } from "../src/tasks.js";
 import { FakeClock, FakeTranslationClient, unusedLanding } from "./fakes.js";
 import {
   AUTH_HEADERS,
@@ -63,6 +64,8 @@ it("人間面の全 GET エンドポイントは盤面 DB を1行も変異させ
   // 実在するタスクを1つ置く(この POST 自体は snapshot の前)
   const task = await registerWork(t, "a task to view");
   expect(task.id).toBeTruthy();
+  // case preview(ADR 0153)は decision entry の event id を引く
+  const decision = logDecision(t.db, getTask(t.db, task.id)!, "a decision to preview", "deckhand", t.clock.now());
 
   // harness の db は setup 専用。fixture を置いた後に共有 connection 自体を
   // read-only にし、どの GET からでも書き込みを試みれば 200 でなくす。
@@ -73,7 +76,7 @@ it("人間面の全 GET エンドポイントは盤面 DB を1行も変異させ
   // 弾く番犬。総数は下限ではなく実数で固定する — 下限だと1本消えても気づけず、
   // ルートが増減したときに人間がこの数字を意図して更新することに意味がある
   expect(routes).toContain("/tasks/:id");
-  expect(routes.length).toBe(26);
+  expect(routes.length).toBe(27);
 
   const paths = [
     ...STATIC_GET_PATHS,
@@ -83,7 +86,9 @@ it("人間面の全 GET エンドポイントは盤面 DB を1行も変異させ
     ...routes.map((route) =>
       route === "/github-issues"
         ? "/api/github-issues?workspace=board-ws"
-        : `/api${route.replace(/:[^/]+/g, task.id)}`,
+        : route === "/settings/memory/cases/:event_id"
+          ? `/api/settings/memory/cases/${decision}`
+          : `/api${route.replace(/:[^/]+/g, task.id)}`,
     ),
   ];
 
