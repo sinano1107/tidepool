@@ -158,7 +158,7 @@ describe("deleteAgent: 記録は git が保つ(ADR 0087 決定1)", () => {
       { registry: { dir: registryDir, mode: "purely-local" }, ...NO_REFERENCES },
     );
 
-    // 過去タスクの自己 RCA が読む経路(ADR 0020 / claude-worker.ts)
+    // 過去タスクの自己 RCA が読む経路(ADR 0020 / board-prose.ts)
     expect(agentBodyAtCommit(registryDir, before, "deckhand")).toContain("You are Deckhand");
     expect(agentBodyAtCommit(registryDir, "HEAD", "deckhand")).toBeUndefined();
   });

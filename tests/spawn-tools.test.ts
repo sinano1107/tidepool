@@ -16,7 +16,7 @@ describe("spawnTools", () => {
   it("work は17本 — 検索ツールとバックグラウンド実行の受け口まで含む(ADR 0039 決定1)", () => {
     // `Glob` / `Grep` は 2.1.220 の既定の面には出ていない(測定7)。work セッションに
     // 本物の検索ツールを与えられるのは、この allowlist を書くからである。
-    // `Task`(Agent)は BOARD_DOCTRINE が意図的に開いている既決事項(ADR 0010 追記)、
+    // `Task`(Agent)は boardDoctrine(board-prose.ts)が意図的に開いている既決事項(ADR 0010 追記)、
     // `TaskOutput` / `TaskStop` は todo リストの仲間ではなく `Bash` の
     // `run_in_background` の受け口。
     expect(spawnTools("work")).toEqual([
