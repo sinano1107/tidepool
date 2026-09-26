@@ -1,4 +1,3 @@
-import { rm } from "node:fs/promises";
 import { afterEach, expect, it } from "vitest";
 import { getTask, registerTask } from "../src/tasks.js";
 import {
@@ -12,10 +11,8 @@ import {
 } from "./harness.js";
 
 let t: Tidepool;
-const dirs: string[] = [];
 afterEach(async () => {
   await t?.stop();
-  await Promise.all(dirs.splice(0).map((d) => rm(d, { recursive: true, force: true })));
 });
 
 const fullHandoff = {
@@ -29,8 +26,8 @@ const fullHandoff = {
 
 /** 2つのテストが共有する「issue参照タスクを complete_task で完了させる」下ごしらえ
  *  (issue #303 の /ponytail-review 指摘: セットアップの重複を1箇所に)。 */
-async function completeIssueBackedTask(dirs: string[], handoff: Record<string, string> = fullHandoff) {
-  const { workspace: ws } = await makeRemoteBackedWorkspace(dirs, "sandbox");
+async function completeIssueBackedTask(handoff: Record<string, string> = fullHandoff) {
+  const { workspace: ws } = await makeRemoteBackedWorkspace("sandbox");
   const t = await bootTidepool({ workspace: ws });
 
   const task = registerTask(
@@ -58,7 +55,7 @@ async function completeIssueBackedTask(dirs: string[], handoff: Record<string, s
 }
 
 it("issue参照タスクの complete_task 成立後、PR body の末尾に空行区切りで `Closes #N` が付与される(issue #49, ADR 0016 設計点7)", async () => {
-  const { t: booted, res } = await completeIssueBackedTask(dirs);
+  const { t: booted, res } = await completeIssueBackedTask();
   t = booted;
   expect(res.isError ?? false).toBe(false);
 
@@ -74,7 +71,7 @@ it("PR body は handoff の直後・`Closes #N` の直前に盤面の定型フ�
   // (deliverables 等)を marker にすると、その後続フィールドまで
   // フッタとして誤判定してしまう(/ponytail-review 指摘)。
   const footerHandoff = { ...fullHandoff, known_issues: "flaky login redirect on slow network" };
-  const { t: booted, task, res, tools } = await completeIssueBackedTask(dirs, footerHandoff);
+  const { t: booted, task, res, tools } = await completeIssueBackedTask(footerHandoff);
   t = booted;
   expect(res.isError ?? false).toBe(false);
 
@@ -96,7 +93,7 @@ it("PR body は handoff の直後・`Closes #N` の直前に盤面の定型フ�
 });
 
 it("通常タスク(github_issue_number なし)の complete_task 成立後、PR body に Closes 行は付与されない", async () => {
-  const { workspace: ws } = await makeRemoteBackedWorkspace(dirs, "sandbox");
+  const { workspace: ws } = await makeRemoteBackedWorkspace("sandbox");
   t = await bootTidepool({ workspace: ws });
 
   const task = registerTask(

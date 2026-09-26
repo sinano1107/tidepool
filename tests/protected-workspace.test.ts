@@ -1,4 +1,3 @@
-import { rm } from "node:fs/promises";
 import { afterEach, expect, it } from "vitest";
 import { UnknownWorkspaceError, type WorkspaceConfig } from "../src/workspace.js";
 import {
@@ -16,10 +15,8 @@ import {
 } from "./harness.js";
 
 let t: Tidepool;
-const dirs: string[] = [];
 afterEach(async () => {
   await t?.stop();
-  await Promise.all(dirs.splice(0).map((d) => rm(d, { recursive: true, force: true })));
 });
 
 it("decompose converts a child targeting a protected workspace into an approval question, even when the workspace is within allowed_workspaces", async () => {
@@ -93,8 +90,8 @@ it("a child targeting a non-protected workspace registers directly even when isP
 const MINUTE = 60 * 1000;
 
 it("completing a task in a protected workspace under the external merge dial still asks for a human merge (ADR 0079: the resource-side invariant outranks the dial)", async () => {
-  const sandbox = await makeWorkspace(dirs, "sandbox");
-  const { workspace: registry } = await makeRemoteBackedWorkspace(dirs, "registry");
+  const sandbox = await makeWorkspace("sandbox");
+  const { workspace: registry } = await makeRemoteBackedWorkspace("registry");
   const workspaces: Record<string, WorkspaceConfig> = { sandbox, registry };
   t = await bootTidepool({
     workspace: sandbox,
@@ -125,8 +122,8 @@ it("completing a task in a protected workspace under the external merge dial sti
 });
 
 it("completing a low-risk task in a protected workspace under auto_if_ci_green asks for merge approval immediately, instead of queueing for auto-merge", async () => {
-  const sandbox = await makeWorkspace(dirs, "sandbox");
-  const { workspace: registry } = await makeRemoteBackedWorkspace(dirs, "registry");
+  const sandbox = await makeWorkspace("sandbox");
+  const { workspace: registry } = await makeRemoteBackedWorkspace("registry");
   const workspaces: Record<string, WorkspaceConfig> = { sandbox, registry };
   t = await bootTidepool({
     workspace: sandbox,

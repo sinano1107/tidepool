@@ -1,4 +1,3 @@
-import { rm } from "node:fs/promises";
 import { afterEach, describe, expect, it } from "vitest";
 import { UnknownWorkspaceError, type WorkspaceConfig } from "../src/workspace.js";
 import {
@@ -15,15 +14,13 @@ import {
 } from "./harness.js";
 
 let t: Tidepool;
-const dirs: string[] = [];
 afterEach(async () => {
   await t?.stop();
-  await Promise.all(dirs.splice(0).map((d) => rm(d, { recursive: true, force: true })));
 });
 
 describe("issue #27: workspace ごとの保護ブランチ設定", () => {
   it("branch: master な workspace のタスクは master 起点で fork され、master base で PR が開く", async () => {
-    const { workspace: prod } = await makeRemoteBackedWorkspace(dirs, "prod");
+    const { workspace: prod } = await makeRemoteBackedWorkspace("prod");
     git(prod.path, "branch", "master");
     git(prod.path, "push", "origin", "master");
     const registry: Record<string, WorkspaceConfig> = {

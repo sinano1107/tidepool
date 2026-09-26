@@ -1,4 +1,3 @@
-import { rm } from "node:fs/promises";
 import { afterEach, expect, it } from "vitest";
 import { TRIAGE_TIMEOUT } from "../src/triage.js";
 import {
@@ -19,11 +18,9 @@ import {
 } from "./harness.js";
 
 let t: Tidepool;
-const dirs: string[] = [];
 
 afterEach(async () => {
   await t?.stop();
-  await Promise.all(dirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
 });
 
 /** 完了 → slot が空く → 次の todo が拾われる、を待たずに任意のタスクを slot へ入れる。
@@ -34,7 +31,7 @@ async function pickUp(pool: Tidepool, taskId: string): Promise<void> {
 }
 
 it("purely-local: 未決着の付帯子がある間は着地 question を立てず、付帯子の完了で立つ", async () => {
-  const workspace = await makeWorkspace(dirs, "sandbox");
+  const workspace = await makeWorkspace("sandbox");
   t = await bootTidepool({ workspace });
   const task = await registerWork(t, "ship the feature", undefined, true);
   await t.clock.advance(HOUR);
@@ -68,7 +65,7 @@ it("purely-local: 未決着の付帯子がある間は着地 question を立て�
 });
 
 it("remote-backed(escalate): 付帯子が未決着なら PR を開かず、決着後に PR と merge question が立つ", async () => {
-  const { workspace } = await makeRemoteBackedWorkspace(dirs, "sandbox");
+  const { workspace } = await makeRemoteBackedWorkspace("sandbox");
   t = await bootTidepool({
     workspace,
     authority: { name: "standard", guidance: "", merge: "escalate" },
@@ -94,7 +91,7 @@ it("remote-backed(escalate): 付帯子が未決着なら PR を開かず、決�
 });
 
 it("remote-backed(auto_if_ci_green、risk なし): 付帯子が未決着なら auto-merge キューに入らず、決着後に無人 merge へ進む", async () => {
-  const { workspace } = await makeRemoteBackedWorkspace(dirs, "sandbox");
+  const { workspace } = await makeRemoteBackedWorkspace("sandbox");
   t = await bootTidepool({
     workspace,
     authority: { name: "standard", guidance: "", merge: "auto_if_ci_green" },
@@ -122,7 +119,7 @@ it("remote-backed(auto_if_ci_green、risk なし): 付帯子が未決着なら a
 });
 
 it("remote-backed(external): 付帯子の決着後に PR が開く", async () => {
-  const { workspace } = await makeRemoteBackedWorkspace(dirs, "sandbox");
+  const { workspace } = await makeRemoteBackedWorkspace("sandbox");
   t = await bootTidepool({
     workspace,
     authority: { name: "standard", guidance: "", merge: "external" },
@@ -146,7 +143,7 @@ it("remote-backed(external): 付帯子の決着後に PR が開く", async () =>
 });
 
 it("purely-local: 人間が付帯子を cancel しても着地する — cancel も決着である", async () => {
-  const workspace = await makeWorkspace(dirs, "sandbox");
+  const workspace = await makeWorkspace("sandbox");
   t = await bootTidepool({ workspace });
   const task = await registerWork(t, "ship despite the cancelled review");
   await t.clock.advance(HOUR);
@@ -167,7 +164,7 @@ it("purely-local: 人間が付帯子を cancel しても着地する — cancel 
 });
 
 it("purely-local: 人間が付帯子を complete しても着地する", async () => {
-  const workspace = await makeWorkspace(dirs, "sandbox");
+  const workspace = await makeWorkspace("sandbox");
   t = await bootTidepool({ workspace });
   const task = await registerWork(t, "ship after the human check");
   await t.clock.advance(HOUR);
@@ -187,7 +184,7 @@ it("purely-local: 人間が付帯子を complete しても着地する", async (
 });
 
 it("待機中に付いた2つ目の付帯子が着地をもう一度待たせ、landing_deferred は重複しない", async () => {
-  const workspace = await makeWorkspace(dirs, "sandbox");
+  const workspace = await makeWorkspace("sandbox");
   t = await bootTidepool({ workspace });
   const task = await registerWork(t, "ship after two attached children", undefined, true);
   await t.clock.advance(HOUR);
@@ -214,7 +211,7 @@ it("待機中に付いた2つ目の付帯子が着地をもう一度待たせ、
 });
 
 it("決着済み分解子に付いた異議修理が未決着なら、親の着地は待つ", async () => {
-  const workspace = await makeWorkspace(dirs, "sandbox");
+  const workspace = await makeWorkspace("sandbox");
   t = await bootTidepool({ workspace });
   const parent = await registerWork(t, "integrate the feature");
   await t.clock.advance(HOUR);
@@ -257,7 +254,7 @@ it("決着済み分解子に付いた異議修理が未決着なら、親の着�
 });
 
 it("差分ゼロの完了は付帯子に関係なく着地対象なしを即座に記録する", async () => {
-  const workspace = await makeWorkspace(dirs, "sandbox");
+  const workspace = await makeWorkspace("sandbox");
   t = await bootTidepool({ workspace });
   const task = await registerWork(t, "inspect without changing files", undefined, true);
   await t.clock.advance(HOUR);
@@ -277,7 +274,7 @@ it("差分ゼロの完了は付帯子に関係なく着地対象なしを即座�
 
 it("付帯子が abandon で決着した場合も着地する", async () => {
   const grace = 30 * 60 * 1000;
-  const workspace = await makeWorkspace(dirs, "sandbox");
+  const workspace = await makeWorkspace("sandbox");
   t = await bootTidepool({
     workspace,
     watchdog: { timeLimits: { work: 90 * 60 * 1000 }, grace },
@@ -309,7 +306,7 @@ it("付帯子が abandon で決着した場合も着地する", async () => {
 });
 
 it("付帯子の付帯子(修理に付いたレビュー)も、根の着地を待たせる", async () => {
-  const workspace = await makeWorkspace(dirs, "sandbox");
+  const workspace = await makeWorkspace("sandbox");
   t = await bootTidepool({ workspace });
   const task = await registerWork(t, "ship the feature");
   await t.clock.advance(HOUR);
@@ -332,7 +329,7 @@ it("付帯子の付帯子(修理に付いたレビュー)も、根の着地を�
 });
 
 it("着地済みの根の下で自分が着地の根になった付帯子も、自分の付帯子の決着で着地する", async () => {
-  const workspace = await makeWorkspace(dirs, "sandbox");
+  const workspace = await makeWorkspace("sandbox");
   t = await bootTidepool({ workspace });
   const task = await registerWork(t, "ship the feature");
   await t.clock.advance(HOUR);
@@ -384,7 +381,7 @@ async function settleAttachedChildren(pool: Tidepool, taskId: string): Promise<v
 /** Complete an external-dial work task while an objection against its running
  *  session is still waiting for triage to bundle it. */
 async function completeObjectedExternalWorkAndExpectNoPr(): Promise<any> {
-  const { workspace } = await makeRemoteBackedWorkspace(dirs, "sandbox");
+  const { workspace } = await makeRemoteBackedWorkspace("sandbox");
   t = await bootTidepool({
     workspace,
     authority: { name: "standard", guidance: "", merge: "external" },
@@ -439,7 +436,7 @@ it("remote-backed(external): timeout が異議を束ねても付帯子の決着�
 
 /** 門(#402)を抜けて question が立った**後**に付帯子が付く盤面 — 回答時検証が要る理由そのもの。 */
 async function landingQuestionThenAttachedChild(): Promise<{ task: any; landing: any; workspace: any }> {
-  const workspace = await makeWorkspace(dirs, "sandbox");
+  const workspace = await makeWorkspace("sandbox");
   t = await bootTidepool({ workspace });
   const task = await registerWork(t, "ship the feature");
   await t.clock.advance(HOUR);
@@ -486,7 +483,7 @@ it("hold は付帯子が未決着でも受理される — 着地しない決定
 });
 
 it("open な triage session の未束ねの異議は、着地 question への merge 回答を 409 にする", async () => {
-  const workspace = await makeWorkspace(dirs, "sandbox");
+  const workspace = await makeWorkspace("sandbox");
   t = await bootTidepool({ workspace });
   const task = await registerWork(t, "ship the objected feature");
   await t.clock.advance(HOUR);
@@ -515,7 +512,7 @@ it("open な triage session の未束ねの異議は、着地 question への me
 });
 
 it("分解子の判断への異議も親の着地 question を 409 にし、commit 後は付帯子として捕まり、決着で受理される", async () => {
-  const workspace = await makeWorkspace(dirs, "sandbox");
+  const workspace = await makeWorkspace("sandbox");
   t = await bootTidepool({ workspace });
   const parent = await registerWork(t, "integrate the feature");
   await t.clock.advance(HOUR);
@@ -578,7 +575,7 @@ it("分解子の判断への異議も親の着地 question を 409 にし、comm
 });
 
 it("PR の merge question も同じ検証を通る — 未決着の付帯子があれば CI も見ずに 409", async () => {
-  const { workspace } = await makeRemoteBackedWorkspace(dirs, "sandbox");
+  const { workspace } = await makeRemoteBackedWorkspace("sandbox");
   t = await bootTidepool({
     workspace,
     authority: { name: "standard", guidance: "", merge: "escalate" },

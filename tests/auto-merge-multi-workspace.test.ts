@@ -1,4 +1,3 @@
-import { rm } from "node:fs/promises";
 import { afterEach, expect, it } from "vitest";
 import { UnknownWorkspaceError, type WorkspaceConfig } from "../src/workspace.js";
 import {
@@ -17,10 +16,8 @@ import {
 } from "./harness.js";
 
 let t: Tidepool;
-const dirs: string[] = [];
 afterEach(async () => {
   await t?.stop();
-  await Promise.all(dirs.splice(0).map((d) => rm(d, { recursive: true, force: true })));
 });
 
 const MINUTE = 60 * 1000;
@@ -30,8 +27,8 @@ async function runAutoMergeTick() {
 }
 
 it("prod workspace の低リスクタスクの auto_if_ci_green poll は、CI チェックと merge を prod の checkout に対して行う", async () => {
-  const sandbox = await makeWorkspace(dirs, "sandbox");
-  const { workspace: prod } = await makeRemoteBackedWorkspace(dirs, "prod");
+  const sandbox = await makeWorkspace("sandbox");
+  const { workspace: prod } = await makeRemoteBackedWorkspace("prod");
   const registry: Record<string, WorkspaceConfig> = { sandbox, prod };
   t = await bootTidepool({
     workspace: sandbox,
@@ -63,7 +60,7 @@ it("prod workspace の低リスクタスクの auto_if_ci_green poll は、CI �
 });
 
 it("PR open 後に付いた未決着の付帯子があれば CI を読まず行を残し、決着後の tick で merge する", async () => {
-  const { workspace } = await makeRemoteBackedWorkspace(dirs, "attached-gate");
+  const { workspace } = await makeRemoteBackedWorkspace("attached-gate");
   t = await bootTidepool({
     workspace,
     authority: { name: "standard", guidance: "", merge: "auto_if_ci_green" },
@@ -88,7 +85,7 @@ it("PR open 後に付いた未決着の付帯子があれば CI を読まず行�
 });
 
 it("CI を読んでいる間に付帯子が付いたら merge 直前の門で止まり、次の tick へ残す", async () => {
-  const { workspace } = await makeRemoteBackedWorkspace(dirs, "attached-during-ci");
+  const { workspace } = await makeRemoteBackedWorkspace("attached-during-ci");
   t = await bootTidepool({
     workspace,
     authority: { name: "standard", guidance: "", merge: "auto_if_ci_green" },
@@ -120,7 +117,7 @@ it("CI を読んでいる間に付帯子が付いたら merge 直前の門で止
 });
 
 it("PR open 後の未束ね異議は CI を読まず行を残し、commit された修理の決着後に merge する", async () => {
-  const { workspace } = await makeRemoteBackedWorkspace(dirs, "objection-gate");
+  const { workspace } = await makeRemoteBackedWorkspace("objection-gate");
   t = await bootTidepool({
     workspace,
     authority: { name: "standard", guidance: "", merge: "auto_if_ci_green" },

@@ -1,5 +1,4 @@
-import { rm } from "node:fs/promises";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import { boardHalts } from "../src/board-halt.js";
 import { type Db, openDb } from "../src/db.js";
 import { quarantineChecks, submitAnswer } from "../src/human-verbs.js";
@@ -31,10 +30,6 @@ import { commitWork, FULL_HANDOFF, git, makeWorkspace } from "./harness.js";
  *  (ADR 0112)。既存 quarantine 族の**機構だけ**を借りる —— 確認 question 1枚、
  *  受理の直前の検査、回答が唯一の門。 */
 
-const dirs: string[] = [];
-afterEach(async () => {
-  await Promise.all(dirs.splice(0).map((d) => rm(d, { recursive: true, force: true })));
-});
 // 想定外の例外は握り潰さず console にも残る(この経路の唯一の signal ではなくなった)
 beforeEach(() => {
   vi.spyOn(console, "error").mockImplementation(() => {});
@@ -66,7 +61,7 @@ interface Fixture {
 async function session(route: "complete" | "cap" | "watchdog" = "complete"): Promise<Fixture> {
   const db = openDb(":memory:");
   const clock = new FakeClock();
-  const ws = await makeWorkspace(dirs, "sandbox");
+  const ws = await makeWorkspace("sandbox");
   const slot = new Slot();
   const registered = registerTask(
     db,

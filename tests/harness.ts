@@ -500,17 +500,22 @@ export function writeFixtureTranscript(dir: string, name: string): string {
   return path;
 }
 
-/** A fresh temp git checkout named `name`, one commit deep. The path is
- *  pushed onto the caller's own `dirs` array so its own `afterEach` cleans it
- *  up — this helper only creates, never tracks cleanup itself. */
-export async function makeWorkspace(dirs: string[], name: string): Promise<WorkspaceConfig> {
-  const path = await mkdtemp(join(tmpdir(), `tidepool-${name}-`));
-  dirs.push(path);
+/** `git init` + one commit into an already-created dir. Shared by `makeWorkspace`
+ *  (a self-cleaning `tempDir`) and `buildRemoteTemplate` (a dir that must
+ *  outlive a single test, so it creates its own non-self-cleaning dir). */
+async function initWorkspaceCheckout(path: string, name: string): Promise<WorkspaceConfig> {
   git(path, "init", "-b", "main");
   await writeFile(join(path, "README.md"), "workspace\n");
   git(path, "add", "-A");
   git(path, "commit", "-m", "initial");
   return { name, path };
+}
+
+/** A fresh temp git checkout named `name`, one commit deep. The dir is a
+ *  harness `tempDir`, so it is removed when the calling test finishes. */
+export async function makeWorkspace(name: string): Promise<WorkspaceConfig> {
+  const path = await tempDir(`tidepool-${name}-`);
+  return initWorkspaceCheckout(path, name);
 }
 
 /** `makeWorkspace` の remote 正本つきの姿(ADR 0052 / issue #211): bare な origin を
@@ -521,7 +526,6 @@ export async function makeWorkspace(dirs: string[], name: string): Promise<Works
  *  `makeWorkspace` に remote を足さないのは意図的で、remote を持たない workspace は
  *  正当な構成(既存の全テストがその形)だから。remote が要るテストだけがこれを使う。 */
 export async function makeRemoteBackedWorkspace(
-  dirs: string[],
   name: string,
 ): Promise<{
   workspace: WorkspaceConfig;
@@ -533,10 +537,9 @@ export async function makeRemoteBackedWorkspace(
   // 中身は全ケースで同一なので、組むのは1度だけ。各ケースはそのコピーを使う(issue #842)
   remoteTemplate ??= buildRemoteTemplate();
   const template = await remoteTemplate;
-  const path = await mkdtemp(join(tmpdir(), `tidepool-${name}-`));
-  const origin = await mkdtemp(join(tmpdir(), `tidepool-${name}-origin-`));
-  const publisher = await mkdtemp(join(tmpdir(), `tidepool-${name}-publisher-`));
-  dirs.push(path, origin, publisher);
+  const path = await tempDir(`tidepool-${name}-`);
+  const origin = await tempDir(`tidepool-${name}-origin-`);
+  const publisher = await tempDir(`tidepool-${name}-publisher-`);
   await cp(template.origin, origin, { recursive: true });
   for (const [from, to] of [
     [template.path, path],
@@ -558,7 +561,7 @@ export async function makeRemoteBackedWorkspace(
 }
 
 let remoteTemplate: ReturnType<typeof buildRemoteTemplate> | undefined;
-// テストの dirs には載せない —— どのケースの後始末でも消えてはならず、ファイルの afterAll で消す。
+// 自己完結する harness の `tempDir` には載せない —— どのケースの後始末でも消えてはならず、ファイルの afterAll で消す。
 // module はテストファイルごとに読み直されるので、組むのもファイルごとに1度。
 // afterAll はテスト実行中には登録できないので import 時に置く。e2e(Playwright)も api を
 // ここから import するので vitest の下に限る
@@ -576,7 +579,9 @@ const netGit = (cwd: string, ...args: string[]) =>
   });
 
 async function buildRemoteTemplate() {
-  const { path } = await makeWorkspace(remoteTemplateDirs, "remote-template");
+  const path = await mkdtemp(join(tmpdir(), "tidepool-remote-template-"));
+  remoteTemplateDirs.push(path);
+  await initWorkspaceCheckout(path, "remote-template");
   const origin = await mkdtemp(join(tmpdir(), "tidepool-remote-template-origin-"));
   const publisher = await mkdtemp(join(tmpdir(), "tidepool-remote-template-publisher-"));
   remoteTemplateDirs.push(origin, publisher);
@@ -590,12 +595,10 @@ async function buildRemoteTemplate() {
 /** Land a task branch on a bare origin by content but not ancestry, mirroring
  *  an out-of-band squash merge. */
 export async function squashTaskIntoOrigin(
-  dirs: string[],
   workspace: WorkspaceConfig,
   taskId: string,
 ): Promise<void> {
-  const merger = await mkdtemp(join(tmpdir(), "tidepool-squash-"));
-  dirs.push(merger);
+  const merger = await tempDir("tidepool-squash-");
   git(merger, "clone", workspace.repo!, ".");
   git(merger, "fetch", workspace.path, `task/${taskId}:landed`);
   git(merger, "merge", "--squash", "landed");

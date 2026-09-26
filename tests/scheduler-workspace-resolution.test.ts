@@ -1,5 +1,4 @@
-import { rm } from "node:fs/promises";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { openDb } from "../src/db.js";
 import { HOURLY, startScheduler } from "../src/scheduler.js";
 import { implicitTaskExecutionCandidates } from "../src/server-options.js";
@@ -9,15 +8,10 @@ import { UnknownWorkspaceError, type WorkspaceConfig, workspaceNeedsHuman } from
 import { FakeClock, fakeContainers, ScriptedWorker } from "./fakes.js";
 import { git, makeWorkspace } from "./harness.js";
 
-const dirs: string[] = [];
-afterEach(async () => {
-  await Promise.all(dirs.splice(0).map((d) => rm(d, { recursive: true, force: true })));
-});
-
 describe("scheduler の pickup が task.workspace を解決する", () => {
   it("task.workspace が盤面既定と異なる workspace を指すとき、そのタスク自身の checkout でブランチが作られる", async () => {
-    const sandbox = await makeWorkspace(dirs, "sandbox");
-    const prod = await makeWorkspace(dirs, "prod");
+    const sandbox = await makeWorkspace("sandbox");
+    const prod = await makeWorkspace("prod");
     const registry: Record<string, WorkspaceConfig> = { sandbox, prod };
     const db = openDb(":memory:");
     const clock = new FakeClock();
@@ -55,7 +49,7 @@ describe("scheduler の pickup が task.workspace を解決する", () => {
   });
 
   it("registry に存在しない workspace 名は quarantine され、worker には渡らない", async () => {
-    const sandbox = await makeWorkspace(dirs, "sandbox");
+    const sandbox = await makeWorkspace("sandbox");
     const registry: Record<string, WorkspaceConfig> = { sandbox };
     const db = openDb(":memory:");
     const clock = new FakeClock();
@@ -91,7 +85,7 @@ describe("scheduler の pickup が task.workspace を解決する", () => {
   });
 
   it("workspace の branch がその checkout に存在しないとき、pickup 時に workspace が quarantine され、worker には渡らない(issue #27)", async () => {
-    const prod = await makeWorkspace(dirs, "prod");
+    const prod = await makeWorkspace("prod");
     const registry: Record<string, WorkspaceConfig> = {
       prod: { ...prod, branch: "no-such-branch" },
     };

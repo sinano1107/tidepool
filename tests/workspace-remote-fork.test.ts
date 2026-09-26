@@ -1,4 +1,3 @@
-import { rm } from "node:fs/promises";
 import { afterEach, expect, it } from "vitest";
 import {
   bootTidepool,
@@ -10,10 +9,8 @@ import {
 } from "./harness.js";
 
 let t: Tidepool;
-const dirs: string[] = [];
 afterEach(async () => {
   await t?.stop();
-  await Promise.all(dirs.splice(0).map((d) => rm(d, { recursive: true, force: true })));
 });
 
 // ADR 0052 が registry について決めた線を一般 workspace へ広げる(issue #211):
@@ -21,7 +18,7 @@ afterEach(async () => {
 // **リモート側の**保護ブランチである。これが成立しないと、タスク1の PR が merge
 // された後のタスク2は「タスク1の成果が見えない地点」から始まる。
 it("remote 正本を宣言した workspace のタスクブランチは、リモート側の保護ブランチから切られる", async () => {
-  const { workspace, publish } = await makeRemoteBackedWorkspace(dirs, "sandbox");
+  const { workspace, publish } = await makeRemoteBackedWorkspace("sandbox");
   // タスク1の PR がリモートで merge された、を模す
   publish("merged.txt", "task 1's landed work\n", "merge task 1");
   // remote-tracking ref だけを進める —— ローカルの main は古いまま置く。fork 元が
@@ -45,7 +42,7 @@ it("remote 正本を宣言した workspace のタスクブランチは、リモ�
 // fetch する**ことである —— 手で fetch しない限り、リモートの merge は
 // remote-tracking ref に届かない。
 it("remote 正本を宣言した workspace は pickup の直前に fetch される", async () => {
-  const { workspace, publish } = await makeRemoteBackedWorkspace(dirs, "sandbox");
+  const { workspace, publish } = await makeRemoteBackedWorkspace("sandbox");
   publish("merged.txt", "task 1's landed work\n", "merge task 1");
   // 手で fetch しない: clone の origin/main はまだ merge を知らない
   const staleRemoteRef = git(workspace.path, "rev-parse", "refs/remotes/origin/main");

@@ -1,14 +1,11 @@
 import { writeFileSync } from "node:fs";
-import { rm } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { api, bootTidepool, HOUR, makeWorkspace, mcpClient, type Tidepool } from "./harness.js";
 
 let t: Tidepool;
-const dirs: string[] = [];
 afterEach(async () => {
   await t?.stop();
-  await Promise.all(dirs.splice(0).map((d) => rm(d, { recursive: true, force: true })));
 });
 
 const MIN = 60 * 1000;
@@ -16,7 +13,7 @@ const WORK_LIMIT = 90 * MIN;
 
 it("failure question で「再実行」を選んでも、計画の残りは cancel されず既存の再実行挙動(#9)のまま", async () => {
   const grace = 30 * MIN;
-  const ws = await makeWorkspace(dirs, "sandbox");
+  const ws = await makeWorkspace("sandbox");
   t = await bootTidepool({
     workspace: ws,
     watchdog: { timeLimits: { work: WORK_LIMIT }, grace },

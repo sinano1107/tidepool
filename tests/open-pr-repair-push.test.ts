@@ -1,6 +1,4 @@
 import { writeFileSync } from "node:fs";
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { openDb } from "../src/db.js";
@@ -20,14 +18,13 @@ import {
   registerWork,
   squashTaskIntoOrigin,
   type Tidepool,
+  tempDir,
 } from "./harness.js";
 
 let t: Tidepool;
-const dirs: string[] = [];
 
 afterEach(async () => {
   await t?.stop();
-  await Promise.all(dirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
 });
 
 /** 盤面が焼いている ref スナップショット(ADR 0064 決定1)の行。 */
@@ -78,8 +75,7 @@ async function changeProtectedFile(
   file: string,
   body: string,
 ): Promise<void> {
-  const publisher = await mkdtemp(join(tmpdir(), "tidepool-protected-change-"));
-  dirs.push(publisher);
+  const publisher = await tempDir("tidepool-protected-change-");
   git(publisher, "clone", workspace.repo!, ".");
   writeFileSync(join(publisher, file), body);
   git(publisher, "add", file);
@@ -88,7 +84,7 @@ async function changeProtectedFile(
 }
 
 it("PR が開いたままの祖先へ merge back された修理を、盤面が push して PR を更新する", async () => {
-  const { workspace } = await makeRemoteBackedWorkspace(dirs, "open-pr-push");
+  const { workspace } = await makeRemoteBackedWorkspace("open-pr-push");
   const work = await landedWork(workspace);
   expect(t.github.requests).toHaveLength(1);
 
@@ -104,7 +100,7 @@ it("PR が開いたままの祖先へ merge back された修理を、盤面が 
 });
 
 it("push のあとに別タスクの slot 解放が走っても、盤面自身の push は帯域外違反にならない", async () => {
-  const { workspace } = await makeRemoteBackedWorkspace(dirs, "push-then-release");
+  const { workspace } = await makeRemoteBackedWorkspace("push-then-release");
   const work = await landedWork(workspace);
   await completeRepair(work, workspace);
 
@@ -120,7 +116,7 @@ it("push のあとに別タスクの slot 解放が走っても、盤面自身�
 });
 
 it("purely-local の同じ構図では push もリモート記録の変更も起きない", async () => {
-  const workspace = await makeWorkspace(dirs, "local-repair");
+  const workspace = await makeWorkspace("local-repair");
   const work = await landedWork(workspace);
   expect(work.pr_number).toBeNull();
 
@@ -132,7 +128,7 @@ it("purely-local の同じ構図では push もリモート記録の変更も起
 });
 
 it("祖先の PR が既に merge 済みなら push しない", async () => {
-  const { workspace } = await makeRemoteBackedWorkspace(dirs, "merged-pr");
+  const { workspace } = await makeRemoteBackedWorkspace("merged-pr");
   const work = await landedWork(workspace);
   t.github.scriptMergedOutside(work.pr_number);
 
@@ -143,7 +139,7 @@ it("祖先の PR が既に merge 済みなら push しない", async () => {
 });
 
 it("squash merge 後に review 子が決着しただけの再発火は、push も question も event も増やさない", async () => {
-  const { workspace } = await makeRemoteBackedWorkspace(dirs, "merged-pr-review-settlement");
+  const { workspace } = await makeRemoteBackedWorkspace("merged-pr-review-settlement");
   t = await bootTidepool({ workspace });
   const work = await registerWork(t, "ship work reviewed after PR open");
   await t.clock.advance(HOUR);
@@ -152,7 +148,7 @@ it("squash merge 後に review 子が決着しただけの再発火は、push �
   await completeIntegrationReviews(t, work.id);
   const landed = (await api(t.baseUrl, "GET", `/api/tasks/${work.id}`)).json;
   const review = attachChild(t, work.id, "review already-landed work", undefined, "review");
-  await squashTaskIntoOrigin(dirs, workspace, work.id);
+  await squashTaskIntoOrigin(workspace, work.id);
   t.github.scriptMergedOutside(landed.pr_number);
   await api(t.baseUrl, "POST", `/api/tasks/${review.id}/move`, { after: null });
   await t.clock.advance(HOUR);
@@ -169,7 +165,7 @@ it("squash merge 後に review 子が決着しただけの再発火は、push �
 });
 
 it("走行中に fork 元が squash merge された修理は、保護ブランチへ追いついて自分の差分だけの PR を開く", async () => {
-  const { workspace } = await makeRemoteBackedWorkspace(dirs, "squash-catch-up");
+  const { workspace } = await makeRemoteBackedWorkspace("squash-catch-up");
   const work = await landedWork(workspace);
   const repair = attachChild(t, work.id, "repair after squash landing");
   await api(t.baseUrl, "POST", `/api/tasks/${repair.id}/move`, { after: null });
@@ -178,7 +174,7 @@ it("走行中に fork 元が squash merge された修理は、保護ブラン�
     git(workspace.path, "rev-parse", `task/${work.id}`),
   );
 
-  await squashTaskIntoOrigin(dirs, workspace, work.id);
+  await squashTaskIntoOrigin(workspace, work.id);
   t.github.scriptMergedOutside(work.pr_number);
   commitWork(workspace.path, "repair.txt", "fixed after squash\n");
   const taskHeadBeforeCatchUp = git(workspace.path, "rev-parse", `task/${repair.id}`);
@@ -216,13 +212,13 @@ it("走行中に fork 元が squash merge された修理は、保護ブラン�
 });
 
 it("追いつき merge が合わなければ PR 昇格失敗 question を立て、手動解決後の retry で PR を開く", async () => {
-  const { workspace } = await makeRemoteBackedWorkspace(dirs, "squash-catch-up-conflict");
+  const { workspace } = await makeRemoteBackedWorkspace("squash-catch-up-conflict");
   const work = await landedWork(workspace);
   const repair = attachChild(t, work.id, "repair conflicting after squash");
   await api(t.baseUrl, "POST", `/api/tasks/${repair.id}/move`, { after: null });
   await t.clock.advance(HOUR);
 
-  await squashTaskIntoOrigin(dirs, workspace, work.id);
+  await squashTaskIntoOrigin(workspace, work.id);
   await changeProtectedFile(workspace, "repair.txt", "protected version\n");
   t.github.scriptMergedOutside(work.pr_number);
   commitWork(workspace.path, "repair.txt", "task version\n");
@@ -286,13 +282,13 @@ it("追いつき merge が合わなければ PR 昇格失敗 question を立て�
 });
 
 it("追いつきの git 道具が壊れた失敗を conflict と偽らず PR 昇格失敗 question に残す", async () => {
-  const { workspace } = await makeRemoteBackedWorkspace(dirs, "squash-catch-up-tool-error");
+  const { workspace } = await makeRemoteBackedWorkspace("squash-catch-up-tool-error");
   const work = await landedWork(workspace);
   const repair = attachChild(t, work.id, "repair before a git tool error");
   await api(t.baseUrl, "POST", `/api/tasks/${repair.id}/move`, { after: null });
   await t.clock.advance(HOUR);
 
-  await squashTaskIntoOrigin(dirs, workspace, work.id);
+  await squashTaskIntoOrigin(workspace, work.id);
   t.github.scriptMergedOutside(work.pr_number);
   commitWork(workspace.path, "repair.txt", "repair survives tool failure\n");
   writeFileSync(
@@ -314,13 +310,13 @@ it("追いつきの git 道具が壊れた失敗を conflict と偽らず PR 昇
 });
 
 it("squash merge 後に同じ行が進んだ祖先へ修理が戻っても、merge 済み PR の前で無言にしない", async () => {
-  const { workspace } = await makeRemoteBackedWorkspace(dirs, "merged-pr-with-repair");
+  const { workspace } = await makeRemoteBackedWorkspace("merged-pr-with-repair");
   const work = await landedWork(workspace);
   const repair = attachChild(t, work.id, "repair a line changed after squash");
   await api(t.baseUrl, "POST", `/api/tasks/${repair.id}/move`, { after: null });
   await t.clock.advance(HOUR);
 
-  await squashTaskIntoOrigin(dirs, workspace, work.id);
+  await squashTaskIntoOrigin(workspace, work.id);
   await changeProtectedFile(workspace, "feature.txt", "protected follow-up\n");
   t.github.scriptMergedOutside(work.pr_number);
   commitWork(workspace.path, "feature.txt", "repair result\n");
@@ -342,7 +338,7 @@ it("squash merge 後に同じ行が進んだ祖先へ修理が戻っても、mer
 });
 
 it("push の失敗は PR 昇格失敗 question として人間に見える", async () => {
-  const { workspace } = await makeRemoteBackedWorkspace(dirs, "push-failure");
+  const { workspace } = await makeRemoteBackedWorkspace("push-failure");
   const work = await landedWork(workspace);
   t.github.scriptPushFailure(new Error("remote hung up after upload"));
 

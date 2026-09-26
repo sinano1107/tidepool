@@ -1,6 +1,4 @@
 import { writeFileSync } from "node:fs";
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import {
@@ -17,10 +15,10 @@ import {
   registerWork,
   squashTaskIntoOrigin,
   type Tidepool,
+  tempDir,
 } from "./harness.js";
 
 let t: Tidepool;
-const dirs: string[] = [];
 const MINUTE = 60 * 1000;
 
 /** 後始末は回収済み観測の後ろ = microtask の先にある。 */
@@ -28,7 +26,6 @@ const settle = () => new Promise((resolve) => setImmediate(resolve));
 
 afterEach(async () => {
   await t?.stop();
-  await Promise.all(dirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
 });
 
 async function complete(taskId: string): Promise<void> {
@@ -50,8 +47,7 @@ async function decompose(taskId: string, title: string): Promise<void> {
 }
 
 async function rebaseLandOutside(workspacePath: string, taskId: string): Promise<void> {
-  const merger = await mkdtemp(join(tmpdir(), "tidepool-lineage-rebase-"));
-  dirs.push(merger);
+  const merger = await tempDir("tidepool-lineage-rebase-");
   const origin = git(workspacePath, "remote", "get-url", "origin");
   git(merger, "clone", origin, ".");
   writeFileSync(join(merger, "protected.txt"), "protected branch advanced\n");
@@ -63,7 +59,7 @@ async function rebaseLandOutside(workspacePath: string, taskId: string): Promise
 }
 
 it("decompose の子は親ブランチから切られ、完了すると親ブランチへ戻って PR も着地 question も作らない", async () => {
-  const workspace = await makeWorkspace(dirs, "lineage");
+  const workspace = await makeWorkspace("lineage");
   t = await bootTidepool({ workspace });
   const parent = await registerWork(t, "integrate the feature");
   await t.clock.advance(HOUR);
@@ -109,7 +105,7 @@ it("decompose の子は親ブランチから切られ、完了すると親ブラ
 });
 
 it("完了時 review は元 PR が merge 済みでも被レビュータスクの恒久ブランチから切られる", async () => {
-  const workspace = await makeWorkspace(dirs, "review-lineage");
+  const workspace = await makeWorkspace("review-lineage");
   t = await bootTidepool({ workspace });
   const reviewed = await registerWork(t, "ship reviewed work", undefined, true);
   await t.clock.advance(HOUR);
@@ -131,7 +127,7 @@ it("完了時 review は元 PR が merge 済みでも被レビュータスクの
 });
 
 it("review の完了は生成物を被レビュー work ブランチへ merge back しない", async () => {
-  const workspace = await makeWorkspace(dirs, "review-transparent-release");
+  const workspace = await makeWorkspace("review-transparent-release");
   t = await bootTidepool({ workspace });
   const reviewed = await registerWork(t, "review without branch pollution", undefined, true);
   await t.clock.advance(HOUR);
@@ -156,7 +152,7 @@ it("review の完了は生成物を被レビュー work ブランチへ merge ba
 });
 
 it("review の修理は元 PR が未 merge なら被レビュー work へ戻り、PR を増やさない", async () => {
-  const { workspace } = await makeRemoteBackedWorkspace(dirs, "open-pr-repair");
+  const { workspace } = await makeRemoteBackedWorkspace("open-pr-repair");
   t = await bootTidepool({ workspace });
   const reviewed = await registerWork(t, "ship repairable work", undefined, true);
   await t.clock.advance(HOUR);
@@ -192,7 +188,7 @@ it("review の修理は元 PR が未 merge なら被レビュー work へ戻り�
 });
 
 it("review の修理は元 PR が merge 済みなら保護ブランチから切られ、自分の PR を開く", async () => {
-  const { workspace } = await makeRemoteBackedWorkspace(dirs, "merged-pr-repair");
+  const { workspace } = await makeRemoteBackedWorkspace("merged-pr-repair");
   t = await bootTidepool({ workspace });
   const reviewed = await registerWork(t, "ship merged work", undefined, true);
   await t.clock.advance(HOUR);
@@ -229,16 +225,13 @@ it("review の修理は元 PR が merge 済みなら保護ブランチから切�
 it.each(["squash", "rebase"] as const)(
   "review の修理は元 PR が %s merge 済みでも保護ブランチから切られ、自分の PR を開く",
   async (method) => {
-    const { workspace } = await makeRemoteBackedWorkspace(
-      dirs,
-      `${method}-merged-pr-repair`,
-    );
+    const { workspace } = await makeRemoteBackedWorkspace(`${method}-merged-pr-repair`);
     t = await bootTidepool({ workspace });
     const reviewed = await registerWork(t, `ship ${method}-merged work`, undefined, true);
     await t.clock.advance(HOUR);
     commitWork(workspace.path, "reviewed.txt", "merged work\n");
     await complete(reviewed.id);
-    if (method === "squash") await squashTaskIntoOrigin(dirs, workspace, reviewed.id);
+    if (method === "squash") await squashTaskIntoOrigin(workspace, reviewed.id);
     else await rebaseLandOutside(workspace.path, reviewed.id);
 
     const review = (await api(t.baseUrl, "GET", "/api/tasks")).json.find(
@@ -269,7 +262,7 @@ it.each(["squash", "rebase"] as const)(
 );
 
 it("ルート review の修理子は work の祖先がないため保護ブランチから切られる", async () => {
-  const workspace = await makeWorkspace(dirs, "root-review-repair");
+  const workspace = await makeWorkspace("root-review-repair");
   t = await bootTidepool({ workspace });
   const review = (
     await api(t.baseUrl, "POST", "/api/tasks", {
@@ -292,7 +285,7 @@ it("ルート review の修理子は work の祖先がないため保護ブラ�
 });
 
 it("入れ子の decompose はルートから親まで候補を進め、直近の統合幹から孫を切る", async () => {
-  const workspace = await makeWorkspace(dirs, "nested-lineage");
+  const workspace = await makeWorkspace("nested-lineage");
   t = await bootTidepool({ workspace });
   const parent = await registerWork(t, "parent integration");
   await t.clock.advance(HOUR);
@@ -322,7 +315,7 @@ it("入れ子の decompose はルートから親まで候補を進め、直近�
 });
 
 it("先行する兄弟の merge back 後に pickup された兄弟は、その成果を含む親ブランチから切られる", async () => {
-  const workspace = await makeWorkspace(dirs, "sibling-lineage");
+  const workspace = await makeWorkspace("sibling-lineage");
   t = await bootTidepool({ workspace });
   const parent = await registerWork(t, "integrate siblings");
   await t.clock.advance(HOUR);
@@ -354,7 +347,7 @@ it("先行する兄弟の merge back 後に pickup された兄弟は、その�
 });
 
 it("decompose 子の review 修理は、着地済みの子ブランチを飛ばして現在の親統合幹から切られる", async () => {
-  const workspace = await makeWorkspace(dirs, "decomposed-review-repair");
+  const workspace = await makeWorkspace("decomposed-review-repair");
   t = await bootTidepool({ workspace });
   const parent = await registerWork(t, "parent integration");
   await t.clock.advance(HOUR);
@@ -413,7 +406,7 @@ it("decompose 子の review 修理は、着地済みの子ブランチを飛ば�
 });
 
 it("付帯子の実行中に祖先が着地したら、完了時の再解決で保護ブランチへ帰り先を切り替える", async () => {
-  const { workspace } = await makeRemoteBackedWorkspace(dirs, "landing-reresolution");
+  const { workspace } = await makeRemoteBackedWorkspace("landing-reresolution");
   t = await bootTidepool({ workspace });
   const reviewed = await registerWork(t, "work that lands during repair", undefined, true);
   await t.clock.advance(HOUR);
@@ -436,8 +429,7 @@ it("付帯子の実行中に祖先が着地したら、完了時の再解決で�
   // 着地は**盤面の checkout の外で**起こす(ADR 0064 決定1/3): workspace 自身から
   // push すると `refs/remotes/origin/task/*` が動き、セッション中の ref 変更として
   // 正しく quarantine に落ちる。fetch は相手側を読むだけなので workspace は動かない。
-  const merger = await mkdtemp(join(tmpdir(), "tidepool-lineage-merger-"));
-  dirs.push(merger);
+  const merger = await tempDir("tidepool-lineage-merger-");
   git(merger, "clone", workspace.repo!, ".");
   git(merger, "fetch", workspace.path, `task/${reviewed.id}:landed`);
   git(merger, "merge", "--no-ff", "landed", "-m", "merge reviewed work");
@@ -456,7 +448,7 @@ it("付帯子の実行中に祖先が着地したら、完了時の再解決で�
 });
 
 it("merge back が conflict すると完了は維持したまま workspace を quarantine する", async () => {
-  const workspace = await makeWorkspace(dirs, "lineage-conflict");
+  const workspace = await makeWorkspace("lineage-conflict");
   t = await bootTidepool({ workspace });
   const parent = await registerWork(t, "conflicting integration");
   await t.clock.advance(HOUR);
@@ -491,8 +483,7 @@ it("merge back が conflict すると完了は維持したまま workspace を q
     (task: any) => task.type === "question" && task.parent_id === child.id,
   );
 
-  const parentCheckout = await mkdtemp(join(tmpdir(), "tidepool-parent-worktree-"));
-  dirs.push(parentCheckout);
+  const parentCheckout = await tempDir("tidepool-parent-worktree-");
   git(workspace.path, "worktree", "add", parentCheckout, `task/${parent.id}`);
   writeFileSync(join(parentCheckout, "shared.txt"), "parent version\n");
   git(parentCheckout, "add", "shared.txt");
@@ -515,7 +506,7 @@ it("merge back が conflict すると完了は維持したまま workspace を q
 });
 
 it("兄弟が親ブランチを進めた後の merge back は ff-only にせず、正当な merge commit を作る", async () => {
-  const workspace = await makeWorkspace(dirs, "non-ff-lineage");
+  const workspace = await makeWorkspace("non-ff-lineage");
   t = await bootTidepool({ workspace });
   const parent = await registerWork(t, "integrate divergent siblings");
   await t.clock.advance(HOUR);
@@ -574,7 +565,7 @@ it("兄弟が親ブランチを進めた後の merge back は ff-only にせず�
 });
 
 it("watchdog の slot 解放は WIP を子ブランチに残し、親へ merge back しない", async () => {
-  const workspace = await makeWorkspace(dirs, "watchdog-lineage");
+  const workspace = await makeWorkspace("watchdog-lineage");
   t = await bootTidepool({
     workspace,
     watchdog: { timeLimits: { work: MINUTE }, grace: MINUTE },

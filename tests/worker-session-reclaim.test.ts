@@ -1,15 +1,12 @@
 import { writeFileSync } from "node:fs";
-import { rm } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { FakeContainerRuntime } from "./fakes.js";
 import { api, bootTidepool, git, HOUR, makeWorkspace, queueWork, type Tidepool } from "./harness.js";
 
 let t: Tidepool;
-const dirs: string[] = [];
 afterEach(async () => {
   await t?.stop();
-  await Promise.all(dirs.splice(0).map((d) => rm(d, { recursive: true, force: true })));
 });
 
 const MIN = 60 * 1000;
@@ -70,7 +67,7 @@ it("強制回収の送達では slot は解放されない — 解放するの�
 
 it("回収 timeout では failure question は立つが slot は解放されず、Containment quarantine の確認 question が立つ", async () => {
   const containers = new FakeContainerRuntime();
-  const ws = await makeWorkspace(dirs, "sandbox");
+  const ws = await makeWorkspace("sandbox");
   t = await bootTidepool({ workspace: ws, containerRuntime: containers, watchdog });
   const task = queueWork(t, "long haul");
   await t.clock.advance(HOUR);
@@ -139,7 +136,7 @@ it("quarantine の回答時に容器の空を再観測する — populated な�
 
 it("空を観測してから回答すると受理され、slot-release tree rule が走って slot が解放される", async () => {
   const containers = new FakeContainerRuntime();
-  const ws = await makeWorkspace(dirs, "sandbox");
+  const ws = await makeWorkspace("sandbox");
   t = await bootTidepool({
     workspace: ws,
     containerRuntime: containers,

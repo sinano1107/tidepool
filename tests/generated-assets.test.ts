@@ -1,8 +1,8 @@
 import { spawnSync } from "node:child_process";
-import { cpSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { cpSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { tempDir } from "./harness.js";
 
 const ROOT = join(import.meta.dirname, "..");
 
@@ -18,20 +18,16 @@ describe("生成済みアセット", () => {
     ["ADR Index", "docs/adr/README.md", "scripts/build-adr-index.mjs", ["docs/adr/README.md"]],
     ["design-sync dtsPropsFor", ".design-sync/config.json", "scripts/build-ds-sync-inputs.mjs", DS_SYNC],
     ["design-sync docs", "design-system/pkg/docs/LogEntry.md", "scripts/build-ds-sync-inputs.mjs", DS_SYNC],
-  ])("%s の --check は fresh / stale を判定して書き換えない", (_name, target, script, outputs) => {
-    const tmp = mkdtempSync(join(tmpdir(), "generated-assets-"));
-    try {
-      for (const output of outputs) cpSync(join(ROOT, output), join(tmp, output), { recursive: true });
-      const check = () => spawnSync(process.execPath, [script, "--check", "--out-root", tmp], { cwd: ROOT }).status;
+  ])("%s の --check は fresh / stale を判定して書き換えない", async (_name, target, script, outputs) => {
+    const tmp = await tempDir("generated-assets-");
+    for (const output of outputs) cpSync(join(ROOT, output), join(tmp, output), { recursive: true });
+    const check = () => spawnSync(process.execPath, [script, "--check", "--out-root", tmp], { cwd: ROOT }).status;
 
-      expect(check()).toBe(0);
-      const stale = `${readFileSync(join(tmp, target), "utf8")}\n// stale`;
-      writeFileSync(join(tmp, target), stale);
-      expect(check()).toBe(1);
-      expect(readFileSync(join(tmp, target), "utf8")).toBe(stale);
-    } finally {
-      rmSync(tmp, { recursive: true, force: true });
-    }
+    expect(check()).toBe(0);
+    const stale = `${readFileSync(join(tmp, target), "utf8")}\n// stale`;
+    writeFileSync(join(tmp, target), stale);
+    expect(check()).toBe(1);
+    expect(readFileSync(join(tmp, target), "utf8")).toBe(stale);
   });
 });
 

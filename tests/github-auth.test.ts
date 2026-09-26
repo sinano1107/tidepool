@@ -1,6 +1,4 @@
 import { chmodSync, writeFileSync } from "node:fs";
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -11,20 +9,13 @@ import {
   originRepo,
 } from "../src/github-auth.js";
 import { type FakeBroker, issuedToken, startFakeBroker } from "./fake-broker.js";
-import { git } from "./harness.js";
+import { git, tempDir } from "./harness.js";
 
-const dirs: string[] = [];
 const brokers: FakeBroker[] = [];
 let savedGhToken: string | undefined;
 
-async function makeDir(prefix: string): Promise<string> {
-  const dir = await mkdtemp(join(tmpdir(), prefix));
-  dirs.push(dir);
-  return dir;
-}
-
 async function makeTokenFile(token: string, mode: number): Promise<string> {
-  const dir = await makeDir("tidepool-secrets-");
+  const dir = await tempDir("tidepool-secrets-");
   const file = join(dir, "github-token");
   writeFileSync(file, token);
   chmodSync(file, mode);
@@ -44,7 +35,6 @@ afterEach(async () => {
   }
   vi.restoreAllMocks();
   for (const broker of brokers.splice(0)) await broker.close();
-  for (const dir of dirs.splice(0)) await rm(dir, { recursive: true, force: true });
 });
 
 /** 立てた仲介は afterEach で必ず閉じる。 */
@@ -228,7 +218,7 @@ describe("GitHubAuth: 仲介経由の installation token(ADR 0093 決定2/6)", (
 
 describe("originRepo: 呼び出し元 checkout の origin から repo を決める(ADR 0093)", () => {
   it("github.com の origin は owner/name に、非 GitHub と origin 無しは undefined になる", async () => {
-    const repo = await makeDir("tidepool-repo-");
+    const repo = await tempDir("tidepool-repo-");
     git(repo, "init", "-b", "main");
     expect(originRepo(repo)).toBeUndefined();
 
@@ -243,9 +233,9 @@ describe("originRepo: 呼び出し元 checkout の origin から repo を決め�
 
 describe("authedGit: 認証つき git 実行(ADR 0024 の唯一の注入経路)", () => {
   it("キャッシュ済みの installation token を子プロセスに渡し、ホストの helper を先に消す", async () => {
-    const remote = await makeDir("tidepool-remote-");
+    const remote = await tempDir("tidepool-remote-");
     git(remote, "init", "--bare", "-b", "main");
-    const repo = await makeDir("tidepool-repo-");
+    const repo = await tempDir("tidepool-repo-");
     git(repo, "init", "-b", "main");
     writeFileSync(join(repo, "readme.md"), "hello\n");
     git(repo, "add", "-A");
@@ -263,13 +253,13 @@ describe("authedGit: 認証つき git 実行(ADR 0024 の唯一の注入経路)"
   });
 
   it("repo を名指しできない呼び出しは素の git で走る — 非 GitHub の remote に credential を渡さない", async () => {
-    const upstream = await makeDir("tidepool-upstream-");
+    const upstream = await tempDir("tidepool-upstream-");
     git(upstream, "init", "-b", "main");
     writeFileSync(join(upstream, "readme.md"), "hi\n");
     git(upstream, "add", "-A");
     git(upstream, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-m", "initial");
 
-    const base = await makeDir("tidepool-ws-base-");
+    const base = await tempDir("tidepool-ws-base-");
     const broker = await openBroker(() => issuedToken("inst-token", 60));
     const auth = new GitHubAuth(await makeTokenFile("gho_user\n", 0o600), broker.url);
     authedGit(auth, base, undefined, "clone", upstream, join(base, "ws"));

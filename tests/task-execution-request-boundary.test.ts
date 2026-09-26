@@ -1,5 +1,3 @@
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, expect, it } from "vitest";
@@ -22,6 +20,7 @@ import {
   registerWork,
   TEST_CREDENTIAL,
   type Tidepool,
+  tempDir,
 } from "./harness.js";
 import { makeRegistry } from "./registry-fixture.js";
 
@@ -184,13 +183,11 @@ it("管理MCP の decompose_task は要求2列を受け取り、不正値は too
  * (先例: tests/review-pickup-attribution.test.ts)。
  * ------------------------------------------------------------------ */
 
-const dirs: string[] = [];
 let server: TidepoolServer | undefined;
 
 afterEach(async () => {
   await server?.stop();
   server = undefined;
-  await Promise.all(dirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
 });
 
 const spawn: ContainerSpawn = () => ({
@@ -201,7 +198,7 @@ const spawn: ContainerSpawn = () => ({
 });
 
 it("要求のある task はその要求のモデルで spawn され、worker_spawned の出所は task(ADR 0110 決定3)", async () => {
-  const workspace = await makeWorkspace(dirs, "task-execution-request");
+  const workspace = await makeWorkspace("task-execution-request");
   const registryDir = await makeRegistry({
     "agents/tako.md": `---
 name: tako
@@ -217,9 +214,8 @@ You are Tako.
 `,
     "workspaces.yaml": `tidepool:\n  path: ${workspace.path}\n`,
   });
-  const boardDir = await mkdtemp(join(tmpdir(), "tidepool-task-request-"));
-  const logDir = await mkdtemp(join(tmpdir(), "tidepool-worker-logs-"));
-  dirs.push(registryDir, boardDir, logDir);
+  const boardDir = await tempDir("tidepool-task-request-");
+  const logDir = await tempDir("tidepool-worker-logs-");
   const clock = new FakeClock();
 
   const boardDb = openDb(join(boardDir, "board.sqlite"));

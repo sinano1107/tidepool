@@ -16,15 +16,13 @@ import {
 } from "./harness.js";
 
 let t: Tidepool;
-const dirs: string[] = [];
 afterEach(async () => {
   await t?.stop();
-  await Promise.all(dirs.splice(0).map((d) => rm(d, { recursive: true, force: true })));
 });
 
 it("非既定 workspace(prod)の quarantine は、ツリーがクリーンな状態で回答すれば解除され、prod の pickup が再開する", async () => {
-  const sandbox = await makeWorkspace(dirs, "sandbox");
-  const prod = await makeWorkspace(dirs, "prod");
+  const sandbox = await makeWorkspace("sandbox");
+  const prod = await makeWorkspace("prod");
   const registry: Record<string, WorkspaceConfig> = { sandbox, prod };
   t = await bootTidepool({
     workspace: sandbox,

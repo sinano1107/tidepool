@@ -1,5 +1,4 @@
-import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { chmod, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { GitHubAuth } from "../src/github-auth.js";
@@ -14,16 +13,15 @@ import {
   makeRemoteBackedWorkspace,
   registerWork,
   type Tidepool,
+  tempDir,
 } from "./harness.js";
 import { makeRegistry, makeRemoteBackedRegistry } from "./registry-fixture.js";
 
 let t: Tidepool;
-const dirs: string[] = [];
 const brokers: FakeBroker[] = [];
 afterEach(async () => {
   await t?.stop();
   for (const broker of brokers.splice(0)) await broker.close();
-  await Promise.all(dirs.splice(0).map((d) => rm(d, { recursive: true, force: true })));
 });
 
 async function questionTitles(board: Tidepool): Promise<string[]> {
@@ -40,7 +38,7 @@ async function quarantineReason(board: Tidepool): Promise<string | undefined> {
 // —— その workspace のタスクだけが止まればよく、資源単位の原則がそのまま適用できる。
 // 狭められないのは registry の側だけである(あらゆる spawn の入力だから)。
 it("remote 正本を宣言した workspace の refresh が失敗すると、その workspace が quarantine に落ちる", async () => {
-  const { workspace } = await makeRemoteBackedWorkspace(dirs, "sandbox");
+  const { workspace } = await makeRemoteBackedWorkspace("sandbox");
   // remote は宣言どおり張られているが届かない = credential の失効やホスティング障害
   git(workspace.path, "remote", "set-url", "origin", "/nonexistent/workspace-remote");
 
@@ -60,7 +58,7 @@ it("remote 正本を宣言した workspace の refresh が失敗すると、そ�
 // なら remote が失われた瞬間に古い挙動へ静かに戻り、どこも赤くならない —— それが
 // この ADR が名指しで却下した道である。
 it("repo を宣言しているのに clone に remote が無い workspace は quarantine に落ちる", async () => {
-  const { workspace } = await makeRemoteBackedWorkspace(dirs, "sandbox");
+  const { workspace } = await makeRemoteBackedWorkspace("sandbox");
   // 宣言だけが残り、実態が消えた状態(`git remote remove` は tracking ref も消す)
   git(workspace.path, "remote", "remove", "origin");
 
@@ -77,7 +75,7 @@ it("repo を宣言しているのに clone に remote が無い workspace は qu
 // 保護ブランチのままなので、merge 済みの成果が見えない地点からタスクが始まり続け、
 // 症状は「PR が毎回コンフリクトする」という遠い場所に出る。
 it("repo を宣言していないのに clone に remote がある workspace は quarantine に落ちる", async () => {
-  const { workspace } = await makeRemoteBackedWorkspace(dirs, "sandbox");
+  const { workspace } = await makeRemoteBackedWorkspace("sandbox");
   const undeclared = { ...workspace, repo: undefined };
 
   t = await bootTidepool({ workspace: undeclared });
@@ -99,7 +97,6 @@ it("registry clone の2つの宣言が食い違えば quarantine に落ちる �
   // remote を持たない clone を registry として remote-backed と宣言した盤面。workspace
   // としての宣言(repo 無し)は実態と一致しているので、捕まえられるのはこの突き合わせだけ
   const registryDir = await makeRegistry();
-  dirs.push(registryDir);
 
   t = await bootTidepool({
     workspace: { name: "tidepool", path: registryDir },
@@ -114,7 +111,6 @@ it("registry clone の2つの宣言が食い違えば quarantine に落ちる �
 
 it("registry clone の2つの宣言が食い違えば quarantine に落ちる — registry は purely-local、workspace は remote-backed", async () => {
   const { registryDir } = await makeRemoteBackedRegistry();
-  dirs.push(registryDir);
 
   t = await bootTidepool({
     workspace: { name: "tidepool", path: registryDir, repo: "https://example.invalid/registry.git" },
@@ -132,8 +128,7 @@ it("registry clone の2つの宣言が食い違えば quarantine に落ちる �
 // 盤面に remote-backed な workspace が並ぶのは正当な構成である)。
 it("registry clone でない workspace は盤面の registryMode と突き合わせない", async () => {
   const registryDir = await makeRegistry();
-  dirs.push(registryDir);
-  const { workspace } = await makeRemoteBackedWorkspace(dirs, "sandbox");
+  const { workspace } = await makeRemoteBackedWorkspace("sandbox");
 
   t = await bootTidepool({ workspace, registry: { dir: registryDir, mode: "purely-local" } });
   const task = await registerWork(t, "unrelated workspace");
@@ -147,7 +142,7 @@ it("registry clone でない workspace は盤面の registryMode と突き合わ
 // 「GitHub が遠い」の一形態であって、盤面側に新しい失敗の資源も語彙も作らない ——
 // fetch できない workspace として、上と**同じ** quarantine に落ちる。
 it("仲介が installation token を出せない workspace は、fetch 失敗と同じ quarantine に落ちる", async () => {
-  const { workspace } = await makeRemoteBackedWorkspace(dirs, "sandbox");
+  const { workspace } = await makeRemoteBackedWorkspace("sandbox");
   // 宣言も remote も正しく github.com を指す = token が要る形。仲介が断るので
   // fetch は撃たれる前に止まる(実ネットワークへは出ない)
   git(workspace.path, "remote", "set-url", "origin", "https://github.com/acme/sandbox.git");
@@ -156,8 +151,7 @@ it("仲介が installation token を出せない workspace は、fetch 失敗と
     body: { error: "invalid_user_token" },
   }));
   brokers.push(broker);
-  const dir = await mkdtemp(join(tmpdir(), "tidepool-secrets-"));
-  dirs.push(dir);
+  const dir = await tempDir("tidepool-secrets-");
   const tokenFile = join(dir, "github-token");
   await writeFile(tokenFile, "gho_user\n");
   await chmod(tokenFile, 0o600);
@@ -179,7 +173,7 @@ it("仲介が installation token を出せない workspace は、fetch 失敗と
 // そこで投げると verb は着地済みなのに tree rule も slot の解放も走らない。失敗は
 // fetch が落ちたのと同じ位置へ持ち越され、同じ quarantine に落ちる。
 it("完了時の merge back で仲介が token を出せなくても、WIP は退避され workspace が quarantine に落ちる", async () => {
-  const { workspace } = await makeRemoteBackedWorkspace(dirs, "sandbox");
+  const { workspace } = await makeRemoteBackedWorkspace("sandbox");
   const localOrigin = workspace.repo!;
   // origin の綴りは github.com(= token が要る形)、実際の往復は insteadOf でローカルの
   // bare へ —— 実ネットワークへは出ない
@@ -197,8 +191,7 @@ it("完了時の merge back で仲介が token を出せなくても、WIP は�
         },
   );
   brokers.push(broker);
-  const dir = await mkdtemp(join(tmpdir(), "tidepool-secrets-"));
-  dirs.push(dir);
+  const dir = await tempDir("tidepool-secrets-");
   const tokenFile = join(dir, "github-token");
   await writeFile(tokenFile, "gho_user\n");
   await chmod(tokenFile, 0o600);

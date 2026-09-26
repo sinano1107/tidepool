@@ -1,20 +1,15 @@
 import { chmodSync, writeFileSync } from "node:fs";
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
-import { api, bootTidepool, type Tidepool } from "./harness.js";
+import { api, bootTidepool, type Tidepool, tempDir } from "./harness.js";
 
 let t: Tidepool;
-const dirs: string[] = [];
 afterEach(async () => {
   await t?.stop();
-  for (const dir of dirs.splice(0)) await rm(dir, { recursive: true, force: true });
 });
 
 async function tokenPath(): Promise<string> {
-  const dir = await mkdtemp(join(tmpdir(), "tidepool-secrets-"));
-  dirs.push(dir);
+  const dir = await tempDir("tidepool-secrets-");
   return join(dir, "github-token");
 }
 

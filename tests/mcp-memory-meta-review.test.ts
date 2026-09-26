@@ -1,4 +1,3 @@
-import { rm } from "node:fs/promises";
 import { afterEach, expect, it } from "vitest";
 import { defineMemoryBranch, recordKnowledge, WORKER_MEMORY_VERBS } from "../src/memory.js";
 import { MEMORY_META_REVIEW_VERBS } from "../src/meta-review.js";
@@ -10,10 +9,8 @@ import { api, bootTidepool, HOUR, makeWorkspace, mcpClient, memoryEntries, regis
  *  (tests/memory-meta-review-writes.test.ts / tests/memory-meta-review-reads.test.ts / tests/precedent-store.test.ts)が
  *  言うので、ここは写像だけ —— 接続の task で登録が変わり、引数の scope を registry と照合し、書き手が meta_review になる。 */
 let t: Tidepool;
-const dirs: string[] = [];
 afterEach(async () => {
   await t?.stop();
-  await Promise.all(dirs.splice(0).map((d) => rm(d, { recursive: true, force: true })));
 });
 
 const body = (result: any) => JSON.parse(result.content[0].text);
@@ -23,7 +20,7 @@ const META_REVIEW_MEMORY: string[] = [...MEMORY_META_REVIEW_VERBS];
 
 /** registry に sandbox だけがある盤面と、slot に入った memory meta-review(材料の Knowledge を1件書いて poll させる)。 */
 async function boardWithMetaReview() {
-  const sandbox = await makeWorkspace(dirs, "sandbox");
+  const sandbox = await makeWorkspace("sandbox");
   t = await bootTidepool({
     workspace: sandbox,
     resolveWorkspace: (name) => {

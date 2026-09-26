@@ -1,5 +1,4 @@
 import { writeFileSync } from "node:fs";
-import { rm } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import {
@@ -17,10 +16,8 @@ import {
 } from "./harness.js";
 
 let t: Tidepool;
-const dirs: string[] = [];
 afterEach(async () => {
   await t?.stop();
-  await Promise.all(dirs.splice(0).map((d) => rm(d, { recursive: true, force: true })));
 });
 
 async function complete(board: Tidepool, taskId: string): Promise<void> {
@@ -38,7 +35,7 @@ async function complete(board: Tidepool, taskId: string): Promise<void> {
 // その checkout を覗く。最後に走ったタスクのブランチが居座った clone は、覗いた人間に
 // 「今この workspace はこうなっている」と嘘をつく。
 it("slot 解放で checkout が保護ブランチへ戻る", async () => {
-  const ws = await makeWorkspace(dirs, "sandbox");
+  const ws = await makeWorkspace("sandbox");
   t = await bootTidepool({ workspace: ws });
   const task = await registerWork(t, "leaves work behind");
   await t.clock.advance(HOUR);
@@ -59,7 +56,7 @@ it("slot 解放で checkout が保護ブランチへ戻る", async () => {
 // 「リモートに追従したローカルの保護ブランチ」である。追従させずに戻すと、覗いた人間は
 // merge 済みのはずの成果が無い main を見る。
 it("remote 正本を宣言した workspace では、休止位置がリモートへ追従している", async () => {
-  const { workspace, publish } = await makeRemoteBackedWorkspace(dirs, "sandbox");
+  const { workspace, publish } = await makeRemoteBackedWorkspace("sandbox");
   publish("merged.txt", "landed on the remote\n", "merge on the remote");
 
   t = await bootTidepool({ workspace });
@@ -80,7 +77,7 @@ it("remote 正本を宣言した workspace では、休止位置がリモート�
 // 黙って捨てない(`checkout -B` で上書きすれば人間の作業が消える)—— quarantine に
 // 落として人間に見せる。
 it("ローカルの保護ブランチが分岐していて ff できなければ quarantine に落ちる", async () => {
-  const { workspace, publish } = await makeRemoteBackedWorkspace(dirs, "sandbox");
+  const { workspace, publish } = await makeRemoteBackedWorkspace("sandbox");
   // 帯域外の手作業: ホスト上でローカル main に直接コミットした
   writeFileSync(join(workspace.path, "by-hand.txt"), "committed on the host\n");
   git(workspace.path, "add", "-A");
@@ -106,7 +103,7 @@ it("ローカルの保護ブランチが分岐していて ff できなければ
 // 求めているのは「ff コマンドが成功したこと」ではなく「リモートへ追従していること」
 // なので、検査は位置の一致で行う(/code-review Spec 軸の指摘)。
 it("ローカルの保護ブランチがリモートより先行しているだけでも quarantine に落ちる", async () => {
-  const { workspace } = await makeRemoteBackedWorkspace(dirs, "sandbox");
+  const { workspace } = await makeRemoteBackedWorkspace("sandbox");
   // 帯域外の手作業: ホスト上でローカル main に直接コミットしたが push していない。
   // リモートは動いていないので、ff は「もう最新」として黙って成功する
   writeFileSync(join(workspace.path, "by-hand.txt"), "committed on the host\n");

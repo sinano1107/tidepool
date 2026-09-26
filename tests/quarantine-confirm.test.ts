@@ -18,10 +18,8 @@ import {
 } from "./harness.js";
 
 let t: Tidepool;
-const dirs: string[] = [];
 afterEach(async () => {
   await t?.stop();
-  await Promise.all(dirs.splice(0).map((d) => rm(d, { recursive: true, force: true })));
 });
 
 /** Breaks the tree rule the same way tree-rule.test.ts does: destroy .git so
@@ -38,7 +36,7 @@ async function triggerQuarantine(t: Tidepool, ws: WorkspaceConfig, title: string
 }
 
 it("tree rule 失敗時の question は1択の確認型(repaired by hand)である", async () => {
-  const ws = await makeWorkspace(dirs, "sandbox");
+  const ws = await makeWorkspace("sandbox");
   t = await bootTidepool({ workspace: ws });
   await triggerQuarantine(t, ws, "doomed work");
 
@@ -49,7 +47,7 @@ it("tree rule 失敗時の question は1択の確認型(repaired by hand)であ�
 });
 
 it("task の応答は quarantine を kind と value の2欄で運び、種類ごとの quarantine 欄は無い(ADR 0137 決定2)", async () => {
-  const ws = await makeWorkspace(dirs, "sandbox");
+  const ws = await makeWorkspace("sandbox");
   t = await bootTidepool({ workspace: ws });
   await triggerQuarantine(t, ws, "doomed work");
 
@@ -72,7 +70,7 @@ it("task の応答は quarantine を kind と value の2欄で運び、種類ご
 // worker-failure.test.ts drops to the scheduler/tasks seam when the full
 // stack can't reach the scenario. Git itself is still real, never faked.
 it("同一 workspace への2度目の quarantine は quarantine question を増やさず、既存 question に再発火の cause イベントを追記する", async () => {
-  const ws = await makeWorkspace(dirs, "sandbox");
+  const ws = await makeWorkspace("sandbox");
   t = await bootTidepool({ workspace: ws });
   await triggerQuarantine(t, ws, "doomed work");
 
@@ -93,7 +91,7 @@ it("同一 workspace への2度目の quarantine は quarantine question を増�
 });
 
 it("quarantine question への回答はツリーが汚れたままだと拒否され、question は open のまま残り、その workspace は quarantine されたまま", async () => {
-  const ws = await makeWorkspace(dirs, "sandbox");
+  const ws = await makeWorkspace("sandbox");
   t = await bootTidepool({ workspace: ws });
   await triggerQuarantine(t, ws, "doomed work");
 
@@ -116,7 +114,7 @@ it("quarantine question への回答はツリーが汚れたままだと拒否�
 });
 
 it("ツリーがクリーンだと確認されれば question が done になり、pickup が即時再開する。自由記述の回答は question_answer に残る", async () => {
-  const ws = await makeWorkspace(dirs, "sandbox");
+  const ws = await makeWorkspace("sandbox");
   t = await bootTidepool({ workspace: ws });
   await triggerQuarantine(t, ws, "doomed work");
 
@@ -182,7 +180,7 @@ it("worker id が BOARD_WORKER_ID(\"tidepool\")と衝突しても、MCP 経由�
 const DECLARED = "https://github.com/sinano1107/tidepool";
 
 it("remote 正本を宣言した workspace の解除は、仲介が token を出せない間は拒否され question は開いたままである(ADR 0093 決定8)", async () => {
-  const { workspace } = await makeRemoteBackedWorkspace(dirs, "sandbox");
+  const { workspace } = await makeRemoteBackedWorkspace("sandbox");
   t = await bootTidepool({ workspace: { ...workspace, repo: DECLARED } });
   t.github.scriptUnreachable("sinano1107/tidepool");
   const db = t.db;
@@ -203,7 +201,7 @@ it("remote 正本を宣言した workspace の解除は、仲介が token を出
 });
 
 it("token が出せていれば解除はそのまま受理される —— 新しい文法は増やしていない", async () => {
-  const { workspace } = await makeRemoteBackedWorkspace(dirs, "sandbox");
+  const { workspace } = await makeRemoteBackedWorkspace("sandbox");
   t = await bootTidepool({ workspace: { ...workspace, repo: DECLARED } });
   const db = t.db;
   quarantineWorkspace(db, "sandbox", new Error("fetch failed"), t.clock.now());

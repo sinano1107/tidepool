@@ -1,12 +1,9 @@
-import { rm } from "node:fs/promises";
 import { afterEach, expect, it } from "vitest";
 import { api, bootTidepool, HOUR, makeWorkspace, mcpClient, registerWork, type Tidepool } from "./harness.js";
 
 let t: Tidepool;
-const dirs: string[] = [];
 afterEach(async () => {
   await t?.stop();
-  await Promise.all(dirs.splice(0).map((d) => rm(d, { recursive: true, force: true })));
 });
 
 it("a log entry from a task registered against a named workspace carries that workspace name", async () => {
@@ -22,7 +19,7 @@ it("a log entry from a task registered against a named workspace carries that wo
 });
 
 it("a log entry from a task with no named workspace falls back to the board's default", async () => {
-  const board = await makeWorkspace(dirs, "board-default");
+  const board = await makeWorkspace("board-default");
   t = await bootTidepool({ workspace: board });
   const task = await registerWork(t, "build the parser"); // no workspace named
   await t.clock.advance(HOUR);

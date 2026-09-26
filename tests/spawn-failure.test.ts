@@ -1,6 +1,3 @@
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, expect, it } from "vitest";
 import { ClaudeCodeWorker } from "../src/claude-worker.js";
@@ -17,6 +14,7 @@ import {
   questions,
   queueWork,
   type Tidepool,
+  tempDir,
 } from "./harness.js";
 import { makeRegistry } from "./registry-fixture.js";
 
@@ -25,10 +23,8 @@ import { makeRegistry } from "./registry-fixture.js";
  *  入らない。 */
 
 let t: Tidepool;
-const dirs: string[] = [];
 afterEach(async () => {
   await t?.stop();
-  await Promise.all(dirs.splice(0).map((d) => rm(d, { recursive: true, force: true })));
 });
 
 const MIN = 60 * 1000;
@@ -45,7 +41,7 @@ const neverStarted = async () =>
 const status = async (id: string) => (await api(t.baseUrl, "GET", `/api/tasks/${id}`)).json.status;
 
 it("start が同期で投げた瞬間に failure question が立ち、後始末が checkout を休止位置へ戻して枠を空ける —— 時間制限の梯子には入らない", async () => {
-  const ws = await makeWorkspace(dirs, "sandbox");
+  const ws = await makeWorkspace("sandbox");
   t = await bootTidepool({ workspace: ws, watchdog: WATCHDOG });
   const task = queueWork(t, "never runs");
   const next = queueWork(t, "next in line");
@@ -85,7 +81,7 @@ it("start が同期で投げた瞬間に failure question が立ち、後始末�
 });
 
 it("空を観測できない容器では、読み口が後始末中を報せ、回収 timeout で Containment quarantine に落ちる —— 文面は cap も完了も断言しない", async () => {
-  const ws = await makeWorkspace(dirs, "sandbox");
+  const ws = await makeWorkspace("sandbox");
   t = await bootTidepool({ workspace: ws, watchdog: WATCHDOG });
   const task = queueWork(t, "never runs");
   queueWork(t, "next in line");
@@ -116,7 +112,7 @@ it("空を観測できない容器では、読み口が後始末中を報せ、�
 });
 
 it("後始末の途中で再起動しても failure question は残り、cap として queue 先頭へ戻らず、再起動中断の question も立たない", async () => {
-  const ws = await makeWorkspace(dirs, "sandbox");
+  const ws = await makeWorkspace("sandbox");
   t = await bootTidepool({ workspace: ws, watchdog: WATCHDOG });
   const task = queueWork(t, "never runs");
   t.containers.hold(task.id);
@@ -185,8 +181,7 @@ it("skill 列挙の容器が空にならず回収 timeout で null に落ちる�
       "---\nname: deckhand\nversion: 0.3.1\nauthority: standard\nprovider: anthropic\n" +
       "description: General work agent\nskills:\n  - code-review\n---\nYou are Deckhand.\n",
   });
-  const logDir = await mkdtemp(join(tmpdir(), "skill-enum-fail-logs-"));
-  dirs.push(registryDir, logDir);
+  const logDir = await tempDir("skill-enum-fail-logs-");
   // 列挙の probe は init 行を出さず exit もしない。task 以外の容器(= Board call)は
   // force では空にならない —— 容器 id の綴りには結び付けず「task の行が無い id」で見分ける
   const runtime = new (class extends FakeContainerRuntime {

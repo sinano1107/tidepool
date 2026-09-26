@@ -1,5 +1,4 @@
 import { readFileSync, writeFileSync } from "node:fs";
-import { rm } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { openDb } from "../src/db.js";
@@ -20,11 +19,9 @@ import {
 } from "./harness.js";
 
 let t: Tidepool;
-const dirs: string[] = [];
 
 afterEach(async () => {
   await t?.stop();
-  await Promise.all(dirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
 });
 
 /** その work の着地 question の行。 */
@@ -79,7 +76,7 @@ async function serialPairLanding(
 }
 
 it("purely-local の root work 完了は PR を試みず、代わりに着地 question を1本立てる", async () => {
-  const workspace = await makeWorkspace(dirs, "sandbox");
+  const workspace = await makeWorkspace("sandbox");
   t = await bootTidepool({ workspace });
   const task = await registerWork(t, "ship the feature");
   await t.clock.advance(HOUR);
@@ -107,7 +104,7 @@ it("purely-local の root work 完了は PR を試みず、代わりに着地 qu
 });
 
 it("purely-local では auto_if_ci_green を無人 merge に使わず、観測不能の理由を question に書く", async () => {
-  const workspace = await makeWorkspace(dirs, "sandbox");
+  const workspace = await makeWorkspace("sandbox");
   t = await bootTidepool({
     workspace,
     authority: { name: "standard", guidance: "", merge: "auto_if_ci_green" },
@@ -133,7 +130,7 @@ it("purely-local では auto_if_ci_green を無人 merge に使わず、観測�
 });
 
 it("着地 question に merge と答えると保護ブランチを task branch へ fast-forward する", async () => {
-  const workspace = await makeWorkspace(dirs, "sandbox");
+  const workspace = await makeWorkspace("sandbox");
   t = await bootTidepool({ workspace });
   const task = await registerWork(t, "land the feature");
   await t.clock.advance(HOUR);
@@ -165,7 +162,7 @@ it("着地 question に merge と答えると保護ブランチを task branch �
 // 必ず非 ff になる。これは帯域外の書き込みではなく盤面自身が作った正当な直列進行であり、
 // 隔離ではなく merge commit で追いつかせる。
 it("直列に登録された2件目の着地は、1件目が進めた保護ブランチへ merge commit で追いつく", async () => {
-  const workspace = await makeWorkspace(dirs, "sandbox");
+  const workspace = await makeWorkspace("sandbox");
   t = await bootTidepool({ workspace });
   const { first, second, question } = await serialPairLanding(t, workspace.path);
   const taskSha = git(workspace.path, "rev-parse", `refs/heads/task/${second.id}`);
@@ -187,7 +184,7 @@ it("直列に登録された2件目の着地は、1件目が進めた保護ブ�
 
 // ADR 0103 決定3 / ADR 0064: 盤面は走っているセッションの checkout を動かさない。
 it("走行中の slot を占めたまま来た非 ff の着地は、ref だけを進め HEAD と作業ツリーに触れない", async () => {
-  const workspace = await makeWorkspace(dirs, "sandbox");
+  const workspace = await makeWorkspace("sandbox");
   t = await bootTidepool({ workspace });
   const { second, third, question } = await serialPairLanding(t, workspace.path, {
     occupySlot: true,
@@ -223,7 +220,7 @@ it("走行中の slot を占めたまま来た非 ff の着地は、ref だけ�
 // 走行中の綴りでも、コンフリクトは回答の拒否であって隔離ではない(ADR 0103 決定4)——
 // `merge-tree` は盤面の作業ツリーを使わないので、拒んだ跡も残らない。
 it("走行中の slot を占めたまま来た着地がコンフリクトしても、隔離せず作業ツリーも汚さない", async () => {
-  const workspace = await makeWorkspace(dirs, "sandbox");
+  const workspace = await makeWorkspace("sandbox");
   t = await bootTidepool({ workspace });
   const { third, question } = await serialPairLanding(t, workspace.path, {
     sharedFile: true,
@@ -248,7 +245,7 @@ it("走行中の slot を占めたまま来た着地がコンフリクトして�
 // ADR 0103 決定4: 記録と一致していれば、merge の失敗は回答の拒否であって隔離ではない ——
 // 失敗の時点で何も壊れていない(「自動では合わない」と分かっただけ)。
 it("snapshot が一致していれば着地のコンフリクトは回答を拒むだけで、workspace を quarantine しない", async () => {
-  const workspace = await makeWorkspace(dirs, "sandbox");
+  const workspace = await makeWorkspace("sandbox");
   t = await bootTidepool({ workspace });
   const { second, question } = await serialPairLanding(t, workspace.path, { sharedFile: true });
   const protectedSha = git(workspace.path, "rev-parse", "refs/heads/main");
@@ -272,7 +269,7 @@ it("snapshot が一致していれば着地のコンフリクトは回答を拒�
 });
 
 it("保護ブランチが帯域外で進んで fast-forward できないと workspace を quarantine し、着地 question を開いたままにする", async () => {
-  const workspace = await makeWorkspace(dirs, "sandbox");
+  const workspace = await makeWorkspace("sandbox");
   t = await bootTidepool({ workspace });
   const task = await registerWork(t, "land without overwriting main");
   await t.clock.advance(HOUR);
@@ -308,7 +305,7 @@ it("保護ブランチが帯域外で進んで fast-forward できないと work
 // 突き合わせで下すので、ff が黙って飲み込んでいた**巻き戻し**まで捕まる —— 検知は
 // 弱まるのではなく強くなる。
 it("保護ブランチが帯域外で巻き戻されると、ff できる位置であっても着地を拒み workspace を quarantine する", async () => {
-  const workspace = await makeWorkspace(dirs, "sandbox");
+  const workspace = await makeWorkspace("sandbox");
   // タスクブランチの fork 元を2つ目のコミットにして、巻き戻し先を祖先として残す
   commitWork(workspace.path, "base.txt", "the base the task forks from\n");
   const rolledBackTo = git(workspace.path, "rev-parse", "HEAD~1");
@@ -336,7 +333,7 @@ it("保護ブランチが帯域外で巻き戻されると、ff できる位置�
 // 分岐を書かない —— 行が無いことは一致の証明にならないので、位置が動いていなくても
 // 帯域外側に落とす。
 it("記録に保護ブランチの行が無ければ、位置が動いていなくても着地を拒み workspace を quarantine する", async () => {
-  const workspace = await makeWorkspace(dirs, "sandbox");
+  const workspace = await makeWorkspace("sandbox");
   t = await bootTidepool({ workspace });
   const task = await registerWork(t, "land with the protected branch unrecorded");
   await t.clock.advance(HOUR);
@@ -373,7 +370,7 @@ it("記録に保護ブランチの行が無ければ、位置が動いていな�
 });
 
 it("着地 question に hold と答えると保護ブランチを動かさず決着し、再提示しない", async () => {
-  const workspace = await makeWorkspace(dirs, "sandbox");
+  const workspace = await makeWorkspace("sandbox");
   t = await bootTidepool({ workspace });
   const task = await registerWork(t, "keep the result on its task branch");
   await t.clock.advance(HOUR);

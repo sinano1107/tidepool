@@ -1,14 +1,11 @@
-import { rm } from "node:fs/promises";
 import { afterEach, expect, it } from "vitest";
 import { quarantineAgent } from "../src/agent.js";
 import { DEFAULT_AUDITOR_NAME, registerTask } from "../src/tasks.js";
 import { api, bootTidepool, HOUR, queueWork, type Tidepool } from "./harness.js";
 
 let t: Tidepool;
-const dirs: string[] = [];
 afterEach(async () => {
   await t?.stop();
-  await Promise.all(dirs.splice(0).map((d) => rm(d, { recursive: true, force: true })));
 });
 
 /** Register a standalone review task with no explicit assignee — the same

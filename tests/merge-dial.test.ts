@@ -1,4 +1,3 @@
-import { rm } from "node:fs/promises";
 import { afterEach, expect, it } from "vitest";
 import {
   addTaskChange,
@@ -14,14 +13,12 @@ import {
 } from "./harness.js";
 
 let t: Tidepool;
-const dirs: string[] = [];
 afterEach(async () => {
   await t?.stop();
-  await Promise.all(dirs.splice(0).map((d) => rm(d, { recursive: true, force: true })));
 });
 
 it("completing a work task under the escalate merge dial registers a merge-decision question referencing the opened PR", async () => {
-  const { workspace: ws } = await makeRemoteBackedWorkspace(dirs, "sandbox");
+  const { workspace: ws } = await makeRemoteBackedWorkspace("sandbox");
   t = await bootTidepool({
     workspace: ws,
     authority: { name: "standard", guidance: "", merge: "escalate" },
@@ -52,7 +49,7 @@ it("completing a work task under the escalate merge dial registers a merge-decis
 });
 
 it("completing a work task under the external merge dial opens the PR and stops there — no question, nothing queued for the unattended poll (ADR 0079)", async () => {
-  const { workspace: ws } = await makeRemoteBackedWorkspace(dirs, "sandbox");
+  const { workspace: ws } = await makeRemoteBackedWorkspace("sandbox");
   t = await bootTidepool({
     workspace: ws,
     authority: { name: "standard", guidance: "", merge: "external" },
@@ -81,7 +78,7 @@ it("completing a work task under the external merge dial opens the PR and stops 
 });
 
 it("completing a work task under a code-built profile carrying no dial opens the PR without any merge-decision question (the reviewer floor's shape — registry profiles must declare one)", async () => {
-  const { workspace: ws } = await makeRemoteBackedWorkspace(dirs, "sandbox");
+  const { workspace: ws } = await makeRemoteBackedWorkspace("sandbox");
   t = await bootTidepool({ workspace: ws });
   const task = await registerWork(t, "ship the feature");
   await t.clock.advance(HOUR);
@@ -114,7 +111,7 @@ async function completeUnderEscalate(t: Tidepool, path: string) {
 }
 
 it("answering a merge-decision question with \"merge\" while CI is green performs the actual merge", async () => {
-  const { workspace: ws } = await makeRemoteBackedWorkspace(dirs, "sandbox");
+  const { workspace: ws } = await makeRemoteBackedWorkspace("sandbox");
   t = await bootTidepool({
     workspace: ws,
     authority: { name: "standard", guidance: "", merge: "escalate" },
@@ -135,7 +132,7 @@ it("answering a merge-decision question with \"merge\" while CI is green perform
 });
 
 it("answering \"merge\" while CI is not green is rejected, and the question stays open to retry", async () => {
-  const { workspace: ws } = await makeRemoteBackedWorkspace(dirs, "sandbox");
+  const { workspace: ws } = await makeRemoteBackedWorkspace("sandbox");
   t = await bootTidepool({
     workspace: ws,
     authority: { name: "standard", guidance: "", merge: "escalate" },
@@ -155,7 +152,7 @@ it("answering \"merge\" while CI is not green is rejected, and the question stay
 });
 
 it("a malformed POST (answer count mismatch) to an open merge question is rejected before any CI check or merge (issue #111)", async () => {
-  const { workspace: ws } = await makeRemoteBackedWorkspace(dirs, "sandbox");
+  const { workspace: ws } = await makeRemoteBackedWorkspace("sandbox");
   t = await bootTidepool({
     workspace: ws,
     authority: { name: "standard", guidance: "", merge: "escalate" },
@@ -179,7 +176,7 @@ it("a malformed POST (answer count mismatch) to an open merge question is reject
 });
 
 it("answering \"hold\" resolves the question without checking CI or merging", async () => {
-  const { workspace: ws } = await makeRemoteBackedWorkspace(dirs, "sandbox");
+  const { workspace: ws } = await makeRemoteBackedWorkspace("sandbox");
   t = await bootTidepool({
     workspace: ws,
     authority: { name: "standard", guidance: "", merge: "escalate" },
@@ -196,7 +193,7 @@ it("answering \"hold\" resolves the question without checking CI or merging", as
 });
 
 it("盤面の外で先に merge された PR の merge question は、「merge」回答が CI ゲートより先に観測へ変換されて決着する(ADR 0079 決定3)", async () => {
-  const { workspace: ws } = await makeRemoteBackedWorkspace(dirs, "sandbox");
+  const { workspace: ws } = await makeRemoteBackedWorkspace("sandbox");
   t = await bootTidepool({
     workspace: ws,
     authority: { name: "standard", guidance: "", merge: "escalate" },
@@ -227,7 +224,7 @@ it("盤面の外で先に merge された PR の merge question は、「merge�
 });
 
 it("同じ question に「hold」で回答しても観測決着になり、hold は決定として記録されない(ADR 0079 決定3)", async () => {
-  const { workspace: ws } = await makeRemoteBackedWorkspace(dirs, "sandbox");
+  const { workspace: ws } = await makeRemoteBackedWorkspace("sandbox");
   t = await bootTidepool({
     workspace: ws,
     authority: { name: "standard", guidance: "", merge: "escalate" },
@@ -255,7 +252,7 @@ const MINUTE = 60 * 1000;
 const SCAN = 10 * 60 * 1000;
 
 it("open な merge question の PR が盤面の外で merge されていたら、独自の遅い走査が1 tick 以内に観測決着させる(ADR 0079 決定3)", async () => {
-  const { workspace: ws } = await makeRemoteBackedWorkspace(dirs, "sandbox");
+  const { workspace: ws } = await makeRemoteBackedWorkspace("sandbox");
   t = await bootTidepool({
     workspace: ws,
     authority: { name: "standard", guidance: "", merge: "escalate" },
@@ -282,7 +279,7 @@ it("open な merge question の PR が盤面の外で merge されていたら�
 });
 
 it("走査中に1枚の PR が読めなくても、走査は倒れず残りの question を観測する(快適性の機構は盤面を落とせない)", async () => {
-  const { workspace: ws } = await makeRemoteBackedWorkspace(dirs, "sandbox");
+  const { workspace: ws } = await makeRemoteBackedWorkspace("sandbox");
   t = await bootTidepool({
     workspace: ws,
     authority: { name: "standard", guidance: "", merge: "escalate" },
@@ -308,7 +305,7 @@ it("走査中に1枚の PR が読めなくても、走査は倒れず残りの q
 });
 
 it("external の PR は open な merge question を残さないので、走査は GitHub に1リクエストも撃たない(ADR 0079 決定2/3)", async () => {
-  const { workspace: ws } = await makeRemoteBackedWorkspace(dirs, "sandbox");
+  const { workspace: ws } = await makeRemoteBackedWorkspace("sandbox");
   t = await bootTidepool({
     workspace: ws,
     authority: { name: "standard", guidance: "", merge: "external" },
@@ -333,7 +330,7 @@ it("external の PR は open な merge question を残さないので、走査�
 });
 
 it("a low-risk task under auto_if_ci_green queues for auto-merge instead of asking, then merges once the poll sees CI green", async () => {
-  const { workspace: ws } = await makeRemoteBackedWorkspace(dirs, "sandbox");
+  const { workspace: ws } = await makeRemoteBackedWorkspace("sandbox");
   t = await bootTidepool({
     workspace: ws,
     authority: { name: "standard", guidance: "", merge: "auto_if_ci_green" },
@@ -369,7 +366,7 @@ it("a low-risk task under auto_if_ci_green queues for auto-merge instead of aski
 });
 
 it("CI 待ち行の PR が盤面の外で merge されていたら、次の poll tick で観測記録つきに行がクリアされ、リトライが止まる(ADR 0079 決定3)", async () => {
-  const { workspace: ws } = await makeRemoteBackedWorkspace(dirs, "sandbox");
+  const { workspace: ws } = await makeRemoteBackedWorkspace("sandbox");
   t = await bootTidepool({
     workspace: ws,
     authority: { name: "standard", guidance: "", merge: "auto_if_ci_green" },
@@ -401,7 +398,7 @@ it("CI 待ち行の PR が盤面の外で merge されていたら、次の poll
 });
 
 it("a CI failure during the auto_if_ci_green poll converts the queued auto-merge into an escalation question instead of merging", async () => {
-  const { workspace: ws } = await makeRemoteBackedWorkspace(dirs, "sandbox");
+  const { workspace: ws } = await makeRemoteBackedWorkspace("sandbox");
   t = await bootTidepool({
     workspace: ws,
     authority: { name: "standard", guidance: "", merge: "auto_if_ci_green" },
@@ -427,7 +424,7 @@ it("a CI failure during the auto_if_ci_green poll converts the queued auto-merge
 });
 
 it("a risky decomposed child merges back, then its root integration PR asks for approval instead of auto-merge", async () => {
-  const { workspace: ws } = await makeRemoteBackedWorkspace(dirs, "sandbox");
+  const { workspace: ws } = await makeRemoteBackedWorkspace("sandbox");
   t = await bootTidepool({
     workspace: ws,
     authority: { name: "standard", guidance: "", merge: "auto_if_ci_green" },
@@ -504,7 +501,7 @@ it("a risky decomposed child merges back, then its root integration PR asks for 
 });
 
 it("a settled merge-decision question cannot be re-answered into a merge", async () => {
-  const { workspace: ws } = await makeRemoteBackedWorkspace(dirs, "sandbox");
+  const { workspace: ws } = await makeRemoteBackedWorkspace("sandbox");
   t = await bootTidepool({
     workspace: ws,
     authority: { name: "standard", guidance: "", merge: "escalate" },

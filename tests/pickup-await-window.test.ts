@@ -1,13 +1,10 @@
-import { rm } from "node:fs/promises";
 import { afterEach, expect, it, vi } from "vitest";
 import { registerTask } from "../src/tasks.js";
 import { api, bootTidepool, HOUR, makeWorkspace, queueWork, type Tidepool } from "./harness.js";
 
 let t: Tidepool;
-const dirs: string[] = [];
 afterEach(async () => {
   await t?.stop();
-  await Promise.all(dirs.splice(0).map((d) => rm(d, { recursive: true, force: true })));
 });
 
 // scheduler は head を選んでから issue 本文の取得を await する(issue #972)。その窓で人間の
@@ -16,7 +13,7 @@ it.each([
   ["assignee を human に付け替えた", (id: string) => api(t.baseUrl, "PATCH", `/api/tasks/${id}`, { assignee: "human" })],
   ["直接 cancel した", (id: string) => api(t.baseUrl, "POST", `/api/tasks/${id}/cancel`, {})],
 ])("issue 本文の取得中に %s task は走らず、slot は次の task に空いたままになる(issue #972)", async (_, mutate) => {
-  t = await bootTidepool({ workspace: await makeWorkspace(dirs, "tidepool") });
+  t = await bootTidepool({ workspace: await makeWorkspace("tidepool") });
   const head = registerTask(t.db, { type: "work", workspace: "tidepool", github_issue_number: 49 }, t.clock.now());
   t.github.scriptIssue(49, { title: "t", body: "b", comments: [] });
   let release!: () => void;

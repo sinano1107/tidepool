@@ -1,5 +1,3 @@
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, expect, it } from "vitest";
@@ -20,14 +18,13 @@ import {
   mcpClient,
   registerWork,
   type Tidepool,
+  tempDir,
 } from "./harness.js";
 import { makeRegistry } from "./registry-fixture.js";
 
 let t: Tidepool;
-const dirs: string[] = [];
 afterEach(async () => {
   await t?.stop();
-  await Promise.all(dirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
 });
 
 /** Complete the slot task via MCP with a full work handoff. */
@@ -329,7 +326,7 @@ it.each([
 });
 
 it("更新前に生成済みの完了時 review も、完了後は受理に数える", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "legacy-integration-review-"));
+  const dir = await tempDir("legacy-integration-review-");
   const db = openDb(join(dir, "board.sqlite"));
   const subject = registerTask(
     db,
@@ -388,13 +385,12 @@ it.each([
 ])(
   "review 設定は review_tier > agent tier > board ($source)",
   async ({ reviewTier, agentTier, model, source }) => {
-    const workspace = await makeWorkspace(dirs, "integration-review-tier");
+    const workspace = await makeWorkspace("integration-review-tier");
     const registryDir = await makeRegistry({
       "agents/tako.md": `---\nname: tako\ndescription: Reviewer\nversion: 1.0.0\nauthority: standard\nprovider: anthropic\n${agentTier ? `tier: ${agentTier}\n` : ""}skills: ["*"]\n---\nReview carefully.\n`,
       "workspaces.yaml": `tidepool:\n  path: ${workspace.path}\n`,
     });
-    const logDir = await mkdtemp(join(tmpdir(), "review-tier-logs-"));
-    dirs.push(registryDir, logDir);
+    const logDir = await tempDir("review-tier-logs-");
     t = await bootTidepool({
       // agent の tier を読むのは盤面の選択(ADR 0110 決定3)。adapter は選ばれた設定で走るだけ
       taskExecutionCandidates: (task) =>

@@ -1,4 +1,3 @@
-import { rm } from "node:fs/promises";
 import { afterEach, expect, it } from "vitest";
 import { createApiRouter } from "../src/api.js";
 import type { Db } from "../src/db.js";
@@ -12,10 +11,8 @@ import {
 } from "./harness.js";
 
 let t: Tidepool;
-const dirs: string[] = [];
 afterEach(async () => {
   await t?.stop();
-  await Promise.all(dirs.splice(0).map((d) => rm(d, { recursive: true, force: true })));
 });
 
 /** 人間用リスナーの GET のうち `server.ts` が直接 `app` に登録するもの。ここだけは
@@ -48,7 +45,7 @@ function listGetRoutes(db: Db): string[] {
 it("人間面の全 GET エンドポイントは盤面 DB を1行も変異させない(issue #140 / ADR 0036)", async () => {
   // 503 の早期 return で読み取り経路が素通りにならないよう、GET が読む先の
   // 依存はすべて埋めて boot する
-  const workspace = await makeWorkspace(dirs, "board-ws");
+  const workspace = await makeWorkspace("board-ws");
   t = await bootTidepool({
     workspace,
     registryCandidates: { assignees: ["tako"], workspaces: ["board-ws"], icons: {} },

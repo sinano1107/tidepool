@@ -1,15 +1,5 @@
 import { spawnSync } from "node:child_process";
-import {
-  chmod,
-  mkdir,
-  mkdtemp,
-  open,
-  readFile,
-  rm,
-  stat,
-  writeFile,
-} from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { chmod, mkdir, open, readFile, stat, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
@@ -18,6 +8,7 @@ import {
   runGitHubDeviceFlow,
   writeGitHubTokenFile,
 } from "../src/github-login.js";
+import { tempDir } from "./harness.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -135,36 +126,28 @@ describe("runGitHubDeviceFlow", () => {
 
 describe("writeGitHubTokenFile", () => {
   it("creates the parent and writes the token with final mode 0600", async () => {
-    const root = await mkdtemp(join(tmpdir(), "tidepool-github-login-"));
+    const root = await tempDir("tidepool-github-login-");
     const tokenFile = join(root, "secrets", "github-token");
-    try {
-      await writeGitHubTokenFile(tokenFile, "github-user-token");
+    await writeGitHubTokenFile(tokenFile, "github-user-token");
 
-      expect(await readFile(tokenFile, "utf8")).toBe("github-user-token\n");
-      expect((await stat(tokenFile)).mode & 0o777).toBe(0o600);
-    } finally {
-      await rm(root, { recursive: true, force: true });
-    }
+    expect(await readFile(tokenFile, "utf8")).toBe("github-user-token\n");
+    expect((await stat(tokenFile)).mode & 0o777).toBe(0o600);
   });
 
   it("replaces an existing token and leaves the replacement at mode 0600", async () => {
-    const root = await mkdtemp(join(tmpdir(), "tidepool-github-login-"));
+    const root = await tempDir("tidepool-github-login-");
     const tokenFile = join(root, "secrets", "github-token");
-    try {
-      await mkdir(join(root, "secrets"));
-      await writeFile(tokenFile, "old-token\n", { mode: 0o644 });
+    await mkdir(join(root, "secrets"));
+    await writeFile(tokenFile, "old-token\n", { mode: 0o644 });
 
-      await writeGitHubTokenFile(tokenFile, "new-token");
+    await writeGitHubTokenFile(tokenFile, "new-token");
 
-      expect(await readFile(tokenFile, "utf8")).toBe("new-token\n");
-      expect((await stat(tokenFile)).mode & 0o777).toBe(0o600);
-    } finally {
-      await rm(root, { recursive: true, force: true });
-    }
+    expect(await readFile(tokenFile, "utf8")).toBe("new-token\n");
+    expect((await stat(tokenFile)).mode & 0o777).toBe(0o600);
   });
 
   it("atomically renames the replacement over the old token file", async () => {
-    const root = await mkdtemp(join(tmpdir(), "tidepool-github-login-"));
+    const root = await tempDir("tidepool-github-login-");
     const tokenFile = join(root, "github-token");
     await writeFile(tokenFile, "old-token\n", { mode: 0o600 });
     const oldFile = await open(tokenFile, "r");
@@ -178,13 +161,12 @@ describe("writeGitHubTokenFile", () => {
       expect((await stat(tokenFile)).ino).not.toBe(oldInode);
     } finally {
       await oldFile.close();
-      await rm(root, { recursive: true, force: true });
     }
   });
 
   it("preserves the existing token when preparing its replacement fails", async () => {
     if (process.getuid?.() === 0) return;
-    const root = await mkdtemp(join(tmpdir(), "tidepool-github-login-"));
+    const root = await tempDir("tidepool-github-login-");
     const parent = join(root, "secrets");
     const tokenFile = join(parent, "github-token");
     await mkdir(parent);
@@ -195,37 +177,32 @@ describe("writeGitHubTokenFile", () => {
       expect(await readFile(tokenFile, "utf8")).toBe("old-token\n");
     } finally {
       await chmod(parent, 0o700);
-      await rm(root, { recursive: true, force: true });
     }
   });
 });
 
 describe("npm run github-login", () => {
   it("exits nonzero before writing when TIDEPOOL_GITHUB_TOKEN_FILE is unset", async () => {
-    const home = await mkdtemp(join(tmpdir(), "tidepool-github-login-home-"));
+    const home = await tempDir("tidepool-github-login-home-");
     const env: NodeJS.ProcessEnv = { ...process.env, HOME: home };
     delete env.TIDEPOOL_GITHUB_TOKEN_FILE;
-    try {
-      const result = spawnSync("npm", ["run", "github-login"], {
-        cwd: ROOT,
-        env,
-        encoding: "utf8",
-      });
+    const result = spawnSync("npm", ["run", "github-login"], {
+      cwd: ROOT,
+      env,
+      encoding: "utf8",
+    });
 
-      expect(result.status).toBe(1);
-      expect(result.stderr).toBe("Error: TIDEPOOL_GITHUB_TOKEN_FILE is required\n");
-      const fetch = vi.fn<typeof globalThis.fetch>(async () =>
-        json({ error: "unexpected_request" }),
-      );
-      const writeTokenFile = vi.fn(async () => {});
-      expect(
-        await githubLoginMain({ env: {}, fetch, writeTokenFile, errorOutput: () => {} }),
-      ).toBe(1);
-      expect(fetch).not.toHaveBeenCalled();
-      expect(writeTokenFile).not.toHaveBeenCalled();
-    } finally {
-      await rm(home, { recursive: true, force: true });
-    }
+    expect(result.status).toBe(1);
+    expect(result.stderr).toBe("Error: TIDEPOOL_GITHUB_TOKEN_FILE is required\n");
+    const fetch = vi.fn<typeof globalThis.fetch>(async () =>
+      json({ error: "unexpected_request" }),
+    );
+    const writeTokenFile = vi.fn(async () => {});
+    expect(
+      await githubLoginMain({ env: {}, fetch, writeTokenFile, errorOutput: () => {} }),
+    ).toBe(1);
+    expect(fetch).not.toHaveBeenCalled();
+    expect(writeTokenFile).not.toHaveBeenCalled();
   });
 
   it.each([

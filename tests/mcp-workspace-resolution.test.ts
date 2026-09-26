@@ -1,10 +1,9 @@
-import { rm } from "node:fs/promises";
 import type { AddressInfo } from "node:net";
 import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import express from "express";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { openDb } from "../src/db.js";
 import { createLanding } from "../src/landing.js";
 import { createMcpRouter } from "../src/mcp.js";
@@ -14,15 +13,10 @@ import { ensureTaskBranch, UnknownWorkspaceError, type WorkspaceConfig } from ".
 import { FakeClock } from "./fakes.js";
 import { commitWork, FULL_HANDOFF as fullHandoff, git, makeWorkspace } from "./harness.js";
 
-const dirs: string[] = [];
-afterEach(async () => {
-  await Promise.all(dirs.splice(0).map((d) => rm(d, { recursive: true, force: true })));
-});
-
 describe("mcp の releasing verb が task.workspace を解決する", () => {
   it("complete_task は task 自身の workspace の checkout で tree rule を実行する", async () => {
-    const sandbox = await makeWorkspace(dirs, "sandbox");
-    const prod = await makeWorkspace(dirs, "prod");
+    const sandbox = await makeWorkspace("sandbox");
+    const prod = await makeWorkspace("prod");
     const registry: Record<string, WorkspaceConfig> = { sandbox, prod };
     const db = openDb(":memory:");
     const clock = new FakeClock();

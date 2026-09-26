@@ -14,10 +14,8 @@ import {
 } from "./harness.js";
 
 let t: Tidepool;
-const dirs: string[] = [];
 afterEach(async () => {
   await t?.stop();
-  await Promise.all(dirs.splice(0).map((d) => rm(d, { recursive: true, force: true })));
 });
 
 const MIN = 60 * 1000;
@@ -62,7 +60,7 @@ it("畳み込み停止後、猶予を過ぎると容器の強制回収が一度�
 
 it("回収済み観測のあと、tree rule が走り、tidepool 名義で再実行選択肢付きの question が生まれ、slot が解放される", async () => {
   const grace = 30 * MIN;
-  const ws = await makeWorkspace(dirs, "sandbox");
+  const ws = await makeWorkspace("sandbox");
   t = await bootTidepool({
     workspace: ws,
     watchdog: { timeLimits: { work: WORK_LIMIT }, grace },
@@ -109,7 +107,7 @@ it("回収済み観測のあと、tree rule が走り、tidepool 名義で再実
 
 it("failure question の「再実行」を選ぶと元タスクが先頭復帰し、再ピックアップされる", async () => {
   const grace = 30 * MIN;
-  const ws = await makeWorkspace(dirs, "sandbox");
+  const ws = await makeWorkspace("sandbox");
   t = await bootTidepool({
     workspace: ws,
     watchdog: { timeLimits: { work: WORK_LIMIT }, grace },
@@ -133,7 +131,7 @@ it("failure question の「再実行」を選ぶと元タスクが先頭復帰�
 
 it("再実行で再ピックアップされたタスクにも、新しい pickup から改めて時間リミットが働く(以前の kill 状態を引きずらない)", async () => {
   const grace = 30 * MIN;
-  const ws = await makeWorkspace(dirs, "sandbox");
+  const ws = await makeWorkspace("sandbox");
   t = await bootTidepool({
     workspace: ws,
     watchdog: { timeLimits: { work: WORK_LIMIT }, grace },
@@ -163,7 +161,7 @@ it("再実行で再ピックアップされたタスクにも、新しい pickup
 
 it("failure question が開いている間、失敗タスクと同判断の兄弟も held になり slot に入らない", async () => {
   const grace = 30 * MIN;
-  const ws = await makeWorkspace(dirs, "sandbox");
+  const ws = await makeWorkspace("sandbox");
   t = await bootTidepool({
     workspace: ws,
     watchdog: { timeLimits: { work: WORK_LIMIT }, grace },
@@ -218,7 +216,7 @@ it("failure question が開いている間、失敗タスクと同判断の兄�
 
 it("回収済み観測のあと tree rule 自体が失敗すると、failure question に加えて workspace の quarantine に落ちる", async () => {
   const grace = 30 * MIN;
-  const ws = await makeWorkspace(dirs, "sandbox");
+  const ws = await makeWorkspace("sandbox");
   t = await bootTidepool({
     workspace: ws,
     watchdog: { timeLimits: { work: WORK_LIMIT }, grace },

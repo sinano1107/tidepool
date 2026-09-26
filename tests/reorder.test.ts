@@ -1,4 +1,3 @@
-import { rm } from "node:fs/promises";
 import { afterEach, expect, it } from "vitest";
 import { DEFAULT_AUDITOR_NAME } from "../src/defaults.js";
 import { quarantineWorkspace } from "../src/workspace.js";
@@ -17,10 +16,8 @@ import {
 } from "./harness.js";
 
 let t: Tidepool;
-const dirs: string[] = [];
 afterEach(async () => {
   await t?.stop();
-  await Promise.all(dirs.splice(0).map((d) => rm(d, { recursive: true, force: true })));
 });
 
 function queueIds(list: any[]): string[] {
@@ -176,7 +173,7 @@ it("a held row at the raw head does not swallow the ↑ of the task below it", a
 it("a skipped row at the raw head does not swallow the ↑ of the task below it", async () => {
   // only the board's own workspace needs a real checkout — the stuck task's
   // "prod" is never picked up, so it exists as a name in workspace_state alone
-  t = await bootTidepool({ workspace: await makeWorkspace(dirs, "sandbox") });
+  t = await bootTidepool({ workspace: await makeWorkspace("sandbox") });
   const stuck = queueWork(t, "stuck in prod", "prod");
   const db = t.db;
   quarantineWorkspace(db, "prod", new Error("tree rule failed"), t.clock.now());

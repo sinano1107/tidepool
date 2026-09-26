@@ -1,21 +1,18 @@
-import { rm } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import type { WorkspaceConfig } from "../src/workspace.js";
 import { api, bootTidepool, makeWorkspace, type Tidepool } from "./harness.js";
 
 let t: Tidepool;
-const dirs: string[] = [];
 afterEach(async () => {
   await t?.stop();
-  await Promise.all(dirs.splice(0).map((d) => rm(d, { recursive: true, force: true })));
 });
 
 /** 重なりで quarantine された盤面を起こす。workspace の解決は registry 相当の
  *  可変ポインタ越しに行い、「人間が registry を直して別の checkout を指させた」を
  *  テストの中で再現できるようにする(ADR 0009: 解決は毎回 fresh)。 */
 async function bootWithOverlap(): Promise<{ live: { path: string }; questionId: string }> {
-  const overlapping = await makeWorkspace(dirs, "self");
+  const overlapping = await makeWorkspace("self");
   const live = { path: overlapping.path };
   const resolve = (name: string | null): WorkspaceConfig => ({
     name: name ?? "self",
@@ -51,7 +48,7 @@ it("重なりが残ったままの「直した」回答は拒否され、questio
 
 it("workspace を交差しない checkout へ指し直せば回答は受理される", async () => {
   const { live, questionId } = await bootWithOverlap();
-  const elsewhere = await makeWorkspace(dirs, "elsewhere");
+  const elsewhere = await makeWorkspace("elsewhere");
   // 人間の修理: registry のエントリを別の checkout へ向け直した
   live.path = elsewhere.path;
 

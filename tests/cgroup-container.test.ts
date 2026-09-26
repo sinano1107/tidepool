@@ -1,22 +1,15 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import { type CgroupPaths, containerRuntimeFor } from "../src/cgroup-container.js";
 import type { ContainerRuntimeCapability } from "../src/process-container.js";
-
-const dirs: string[] = [];
-afterEach(async () => {
-  await Promise.all(dirs.splice(0).map((d) => rm(d, { recursive: true, force: true })));
-});
+import { tempDir } from "./harness.js";
 
 /** kernel の代わりに cgroupfs の形だけを temp dir に作る: mount の
  *  `cgroup.controllers` と、盤面自身が居る cgroup(`/proc/self/cgroup` の
  *  `0::` 行が指す先)。実カーネルでの証明は #464 の contract suite が担う。 */
 async function fakeCgroupfs(): Promise<CgroupPaths & { own: string }> {
-  const mount = await mkdtemp(join(tmpdir(), "tidepool-cgroupfs-"));
-  dirs.push(mount);
+  const mount = await tempDir("tidepool-cgroupfs-");
   writeFileSync(join(mount, "cgroup.controllers"), "cpuset cpu memory pids\n");
   const own = join(mount, "board.slice");
   mkdirSync(own);
