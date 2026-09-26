@@ -350,19 +350,21 @@ export function createBehaviorCandidate(
 /** 人間が書く Behavior(ADR 0152 決定3・4): 書いた時点で approved。出所は任意で事例の Episode(decision_logged か
  *  worker_spawned の event、ADR 0153 決定3)、無ければ自身の作成 event。`supersedes` は編集 —— 未無効化の approved
  *  Behavior を指し、書くのと superseded + 後継の無効化を1 transaction(defineMemoryBranch と同じ形)。編集は出所を渡さなければ
- *  旧の出所(RCA 起草の帰責 event も)を継ぐので、case は編集後も引ける。旧の出所が自身の作成 event なら後継も自身の作成 event。 */
+ *  旧の出所(RCA 起草の帰責 event も)を継ぐので、case は編集後も引ける。旧の出所が自身の作成 event なら後継も自身の作成 event。
+ *  `amends` は修正値つき approve の candidate(approveMemoryProposal だけが渡す): 出所の継ぎ方は編集と同じで、無効化は呼び手が持つ。 */
 export function recordBehavior(
   db: Db,
   input: Omit<EntryInput, "source"> & { addressee: string | null; source_event_id?: number; supersedes?: number },
   origin: EventOrigin,
   at: Date,
   mark?: { question_id: string },
+  amends?: EntryRow,
 ): { entry_id: number; event_id: number } {
   const { source_event_id, supersedes, ...fields } = input;
   const cited = source_event_id === undefined ? undefined : citedEpisode(db, source_event_id);
   return db.transaction(() => {
     // candidate を直す口は提案 question の修正値だけ(ADR 0152 決定3)
-    const old = supersedes === undefined ? undefined : rowToEntry(requireBehavior(db, supersedes, "approved"));
+    const old = supersedes === undefined ? (amends && rowToEntry(amends)) : rowToEntry(requireBehavior(db, supersedes, "approved"));
     const source = cited ?? (old && old.source.ref !== old.id ? old.source : undefined);
     const id = createEntry(db, { ...fields, source, kind: "behavior", state: "approved", original: fields.original ?? null }, origin, at, mark);
     if (supersedes !== undefined) {
@@ -514,7 +516,8 @@ function markApproved(db: Db, id: number, version: number): void {
  *  無効化、を1 transaction。承認は人間の回答なので人間名義。返り値は memory_entry_approved の event id。
  *  invalidate op(issue #621)は target を理由コードで後継なしに無効化し、その memory_entry_invalidated の event id を返す。
  *  修正値つき(ADR 0152 決定2・4)は candidate を approved にせず、人間名義の approved エントリ(欠けた欄は candidate の値)を作って
- *  candidate と replaces をそれの superseded にし、新エントリの id を返す。pin の照合は元の前提のまま。 */
+ *  candidate と replaces をそれの superseded にし、新エントリの id を返す。pin の照合は元の前提のまま。出所は直接編集と同じく
+ *  candidate の出所(RCA 起草の帰責 event も)を継ぎ、それが candidate 自身の作成 event なら新エントリ自身の作成 event。 */
 export function approveMemoryProposal(db: Db, proposal: MemoryProposal, questionId: string, origin: EventOrigin, at: Date, amendment?: MemoryAmendment): number {
   const mark = { question_id: questionId };
   return db.transaction(() => {
@@ -526,7 +529,7 @@ export function approveMemoryProposal(db: Db, proposal: MemoryProposal, question
     }
     if (amendment) {
       const { addressee = candidate.addressee, title = candidate.title, text = candidate.text, ...original } = amendment;
-      const { entry_id } = recordBehavior(db, { ...humanEntryInput(db, { workspace: candidate.scope, path: candidate.path, title, text, ...original }), addressee }, origin, at, mark);
+      const { entry_id } = recordBehavior(db, { ...humanEntryInput(db, { workspace: candidate.scope, path: candidate.path, title, text, ...original }), addressee }, origin, at, mark, candidate);
       for (const id of [candidate.id, ...proposal.replaces.map((r) => r.id)]) {
         invalidateMemoryEntry(db, { entry_id: id, reason: "superseded", successor_id: entry_id }, HUMAN_WORKER_ID, origin, at, mark);
       }

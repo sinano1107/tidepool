@@ -24,6 +24,8 @@
 4. **修正と編集は、人間名義の新しい approved エントリを作り元を後継つき `superseded` にする、の1つの形。** candidate
    の文言を上書きすると meta-review が起草した文言が記録から消え、`author` が嘘になる。修正つき approve の承認 event は
    question と元の candidate を指し、pin の照合は元の前提のまま行う。出所は自身の作成 event(ADR 0083 追記5)。
+   ただし元の出所が元自身の作成 event でなければ(RCA 起草の帰責 event など)、修正でも編集でも後継はそれを継ぐ ——
+   ADR 0153 決定3 で出所が `read_memory` の case を運ぶようになったため。
    直接編集で pin が崩れた提案 question は、既存の陳腐化 hook が observed で決着させる。
 
 5. **入力は Knowledge の扉と同じ2欄。** 英語正文が必須、原文は任意、人間は逆翻訳を見て英語を確かめる(ADR 0015)。
