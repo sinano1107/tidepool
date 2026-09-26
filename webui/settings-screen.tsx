@@ -1039,16 +1039,13 @@ function ProfileRecord({ profile, agentNames, agentIcons, workspaceNames, say, o
 // The footnote under a settings screen — where its edits actually land.
 const settingsFootnote = { margin: 0, fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' };
 
-// The mono-caps label a settings card wears in place of a heading.
+// The mono-caps label a settings card wears in place of a heading — also the
+// Board level's `board state` subheading (#691).
 const settingsCardLabel = {
-  fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)',
+  margin: 0, fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)',
   textTransform: 'uppercase', letterSpacing: '0.08em',
 };
 
-// Display language (issue #46) as a record card: the one board setting both the
-// draft prompt's language instruction and a later display-time-translation
-// feature read — a plain board-wide setting, not gated on the registry like the
-// workspaces/agents/profiles sections.
 // GitHub login state (ADR 0093 決定5). Read-only on purpose: logging in writes a
 // credential, and that door stays on the terminal — this card only says whether
 // the board has one, and names the command that makes it.
@@ -1096,6 +1093,10 @@ function TranslateUsageCard({ records }: { records: WireContract['GET /api/trans
   );
 }
 
+// Display language (issue #46) as a record card: the one board setting both the
+// draft prompt's language instruction and a later display-time-translation
+// feature read — a plain board-wide setting, not gated on the registry like the
+// workspaces/agents/profiles sections.
 function DisplayLanguageCard({ language, options, say, onSaved, edit }: {
   language: string;
   options: string[];
@@ -2366,7 +2367,8 @@ function SettingsScreen({ say, registerLeaveGuard }: {
       </React.Fragment>
     );
   } else if (sectionKey === 'board') {
-    // --- level 2 (board): the SQLite-backed preferences, one card each
+    // --- level 2 (board): the SQLite-backed preferences, one card each, then
+    // the read-only board-state cards under their own subheading (#691)
     body = (
       <React.Fragment>
         <ScreenHeader title="Board" backLabel="Settings" meta="board-wide preferences" onBack={() => go([])} />
@@ -2396,12 +2398,16 @@ function SettingsScreen({ say, registerLeaveGuard }: {
         {metaReviewSettings && (
           <MetaReviewSettingsCard settings={metaReviewSettings} say={say} onSaved={loadMetaReviewSettings} edit={edit} />
         )}
-        {githubLoggedIn !== null && <GitHubLoginCard loggedIn={githubLoggedIn} />}
-        {(translateUsage !== null || translateUsageFailed) && <TranslateUsageCard records={translateUsage} />}
         {(!displayLanguageLoaded || !quietHoursLoaded || !providerPaceOffsets || !executionSettings || !memorySettings || !metaReviewSettings) && (
           <Card style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)' }}>loading…</Card>
         )}
         <p style={settingsFootnote}>applies to every task the board picks up</p>
+        {/* read-only state the board holds — not a preference, so outside the footer's claim (#691) */}
+        {(githubLoggedIn !== null || translateUsage !== null || translateUsageFailed) && (
+          <p style={settingsCardLabel}>board state</p>
+        )}
+        {githubLoggedIn !== null && <GitHubLoginCard loggedIn={githubLoggedIn} />}
+        {(translateUsage !== null || translateUsageFailed) && <TranslateUsageCard records={translateUsage} />}
       </React.Fragment>
     );
   } else if (!sec) {
