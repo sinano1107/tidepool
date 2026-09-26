@@ -1741,7 +1741,7 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit }: 
           <p style={{ ...muted, fontFamily: 'var(--font-mono)' }}>
             #{entry.id} · {entry.kind} · {entry.invalidation_reason
               ? `invalidated: ${entry.invalidation_reason}${entry.successor_id ? ` → #${entry.successor_id}` : ''}`
-              : entry.state} · {entry.scope ?? 'board-wide'} · {entry.path}{(entry.kind === 'behavior' || entry.kind === 'exemplar') && ` · to${entry.addressee ?? 'every agent'}`} · {entry.author.activity}{entry.cause && ` · ${entry.cause}`}
+              : entry.state} · {entry.scope ?? 'board-wide'} · {entry.path}{(entry.kind === 'behavior' || entry.kind === 'exemplar') && ` · to ${entry.addressee ?? 'every agent'}`} · {entry.author.activity}{entry.cause && ` · ${entry.cause}`}
           </p>
           {entry.kind !== 'definition' && <strong style={{ fontSize: 'var(--text-sm)' }}>{entry.title}</strong>}
           <p style={{ margin: 0, fontSize: 'var(--text-sm)' }}>{entry.text}</p>

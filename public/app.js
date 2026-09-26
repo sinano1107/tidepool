@@ -2133,7 +2133,7 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit }) 
         "data-testid": `memory-entry-${entry.id}`,
         style: { display: "flex", flexDirection: "column", gap: 4, borderTop: "1px solid var(--border-default)", paddingTop: 10 }
       },
-      /* @__PURE__ */ React.createElement("p", { style: { ...muted, fontFamily: "var(--font-mono)" } }, "#", entry.id, " \xB7 ", entry.kind, " \xB7 ", entry.invalidation_reason ? `invalidated: ${entry.invalidation_reason}${entry.successor_id ? ` \u2192 #${entry.successor_id}` : ""}` : entry.state, " \xB7 ", entry.scope ?? "board-wide", " \xB7 ", entry.path, (entry.kind === "behavior" || entry.kind === "exemplar") && ` \xB7 to${entry.addressee ?? "every agent"}`, " \xB7 ", entry.author.activity, entry.cause && ` \xB7 ${entry.cause}`),
+      /* @__PURE__ */ React.createElement("p", { style: { ...muted, fontFamily: "var(--font-mono)" } }, "#", entry.id, " \xB7 ", entry.kind, " \xB7 ", entry.invalidation_reason ? `invalidated: ${entry.invalidation_reason}${entry.successor_id ? ` \u2192 #${entry.successor_id}` : ""}` : entry.state, " \xB7 ", entry.scope ?? "board-wide", " \xB7 ", entry.path, (entry.kind === "behavior" || entry.kind === "exemplar") && ` \xB7 to ${entry.addressee ?? "every agent"}`, " \xB7 ", entry.author.activity, entry.cause && ` \xB7 ${entry.cause}`),
       entry.kind !== "definition" && /* @__PURE__ */ React.createElement("strong", { style: { fontSize: "var(--text-sm)" } }, entry.title),
       /* @__PURE__ */ React.createElement("p", { style: { margin: 0, fontSize: "var(--text-sm)" } }, entry.text),
       shown && // a definition's title is its text, so the Set shows it once
