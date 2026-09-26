@@ -288,8 +288,6 @@ describe("buildSandboxSettings の auto-memory(ADR 0156)", () => {
       expect(settings.autoMemoryDirectory).toBe(fixed);
       const rule = settings.permissions.deny.find((entry) => entry.includes("claude-auto-memory"));
       expect(rule).toBe(`Edit(/${fixed}/**)`);
-      expect(rule!.startsWith("Edit(//")).toBe(true);
-      expect(rule!.startsWith("Edit(///")).toBe(false);
     }
   });
 });

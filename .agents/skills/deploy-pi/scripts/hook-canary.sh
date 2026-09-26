@@ -70,8 +70,8 @@
 # and the control session's deny/scope row depends on it staying silent, so a
 # memory write riding either one could not be attributed. A session of its own
 # makes the memory write the only write that can draw the rule. The canary
-# writes into the REAL pinned directory, which must stay empty: each target is
-# removed right after its session is judged, and again on exit.
+# writes into the REAL pinned directory, which must stay empty: every target is
+# removed on exit (the EXIT trap), whatever the verdict.
 #
 # THE CONTROL IS WHY ANY OF THIS MEANS ANYTHING. A session whose settings file
 # was dropped wholesale — or whose MCP stub never connected — is exactly as
@@ -542,7 +542,7 @@ prompt_for() {
 # sandbox died: that row is recorded here and the caller has nothing to judge.
 run_session() {
   local role="$1"
-  local ws out
+  local ws
   ws=$(ws_of "$role")
   log "running the $role session (costs a real claude session)…"
   # The flag triple is the production spawn shape (ADR 0038 / claude-worker.ts).
@@ -551,7 +551,7 @@ run_session() {
   # are the board-side drift guard. Measuring the OLD `auto` shape would measure a
   # session the board no longer spawns, and `acceptEdits` also removes the
   # classifier from the deny row entirely (ADR 0038: no worker session runs auto).
-  out=$(cd "$ws" && claude -p "$(prompt_for "$role")" \
+  SESSION_OUT=$(cd "$ws" && claude -p "$(prompt_for "$role")" \
     --permission-mode acceptEdits \
     --setting-sources project \
     --allowedTools "mcp__tidepool" \
@@ -559,7 +559,7 @@ run_session() {
     --mcp-config "$(mcpconf_of "$role")" \
     --strict-mcp-config \
     --model sonnet --effort low --max-turns 24 --max-budget-usd 2.5 < /dev/null 2>&1)
-  echo "$out"
+  echo "$SESSION_OUT"
 
   # ADR 0037's file-level denyWrite exists precisely so this cannot happen. A
   # directory-level entry would put it here on Linux, and `failIfUnavailable:
@@ -571,7 +571,7 @@ run_session() {
   # `denyWrite` stub refuses says exactly that — so the loose pattern turned a
   # working floor into a FAIL and skipped this role's remaining rows on the way
   # out. Fail loud, but not at the sight of the floor doing its job.
-  if grep -qE "bwrap: Can.t create file|sandbox failed to start" <<< "$out"; then
+  if grep -qE "bwrap: Can.t create file|sandbox failed to start" <<< "$SESSION_OUT"; then
     fail "the sandbox did not start in the $role session — this is the file-level denyWrite regression"
     fail "  (ADR 0037 / #143 G table: naming the .claude DIRECTORY breaks bwrap. Read the output above.)"
     record "sandbox/$role" "emitted profile" "sandbox died" "-" "FAIL"
@@ -580,13 +580,12 @@ run_session() {
 
   # The board must not be emitting rules the CLI declines to honour. Free, and
   # the half of the deny-spelling question that does not need a session.
-  if grep -q "Permission deny rule" <<< "$out"; then
+  if grep -q "Permission deny rule" <<< "$SESSION_OUT"; then
     fail "the CLI reported a deny rule it cannot honour in the $role session:"
-    grep "Permission deny rule" <<< "$out" | sed 's/^/    /' >&2
+    grep "Permission deny rule" <<< "$SESSION_OUT" | sed 's/^/    /' >&2
     fail "  the board is emitting a permissions.deny spelling that enforces nothing (ADR 0037)"
     record "rules/$role" "emitted deny list" "-" "CLI declined a rule" "FAIL"
   fi
-  SESSION_OUT="$out"
 }
 
 run_role() {
@@ -669,21 +668,12 @@ run_memory_role() {
   local role="$1"
   local target trigger written rule_refused mode_refused
   target=$(memory_target_of "$role")
-  # Structural guard, same class as run_role's: the live profile must carry the
-  # rule naming the pinned directory, the control must not.
-  if [[ "$role" == "memory" ]] && ! grep -qF "$MEMORY_DIR/**)" "$(profile_of "$role")"; then
-    fail "$(profile_of "$role") carries no deny rule for $MEMORY_DIR — refusing to report a verdict"
-    exit 1
-  fi
-  if [[ "$role" == "memory-control" ]] && grep -qF "$MEMORY_DIR/**)" "$(profile_of "$role")"; then
-    fail "$(profile_of "$role") still denies $MEMORY_DIR — the roles are crossed; refusing to report a verdict"
-    exit 1
-  fi
+  # The profiles need no role guard: deriving the control already failed loudly
+  # unless exactly one rule named the directory, and removed that one.
   rm -f "$target"
   run_session "$role" || return
   [[ -f "$(ws_of "$role")/notes.txt" ]] && trigger=yes || trigger=no
   [[ -f "$target" ]] && written=yes || written=no
-  rm -f "$target"
   if [[ "$role" == "memory" ]]; then
     # The rule's own words only. Not rule_refused_in: its second spelling cites
     # the SETTINGS rule, which would be the wrong rule here. Attributable because
