@@ -11,7 +11,9 @@ import {
   ensureMemoryIndex,
   humanEntryInput,
   invalidateMemoryEntry,
+  previewCase,
   readMemory,
+  recordExemplar,
   recordKnowledge,
   searchMemory,
 } from "../src/memory.js";
@@ -395,6 +397,46 @@ it("episode 行の無い同じ task の複数 session は、それぞれの窓�
     { decisions: ["retried with a shorter note"], handoff: null, result: null },
     { decision: "retried with a shorter note", steering: [], handoff: null, result: null },
   ]);
+});
+
+const fixtureExemplar = (db: ReturnType<typeof openDb>, source_event_id: number, annotations: unknown[]) =>
+  recordExemplar(db, humanEntryInput(db, { workspace: "sandbox", path: "notes", title: `Case ${source_event_id}`, addressee: null, source_event_id, annotations }), "webui", at).entry_id;
+
+it("Exemplar の read は annotations(原文を除く)と、出所の decision entry / session から描いた case を返す(ADR 0153 決定3)", () => {
+  const db = seedFixtureBoard("## Outcome\nCreated notes.md.");
+  const avoid = { anchor: { field: "decision", quote: "three bullets" }, polarity: "avoid", text: "Three bullets is too thin for a topic note." };
+  const fromSession = [{ anchor: { field: "handoff", quote: "Created notes.md" }, polarity: "imitate", text: "State the outcome first in the handoff." }];
+  const ids = [fixtureExemplar(db, 6, [{ ...avoid, original: "3点では薄い" }]), fixtureExemplar(db, FIXTURE_SPAWNED_EVENT_ID, fromSession)];
+
+  const { entries } = readMemory(db, { taskId: FIXTURE_TASK, scope: "sandbox", agent: "tako" }, { ids }, at);
+  // 原文は worker に渡らない(ADR 0015)
+  expect(entries[0]?.annotations).toEqual([avoid]);
+  expect(entries).toMatchObject([
+    {
+      case: { decision: "kept the note to three bullets", steering: [], handoff: "## Outcome\nCreated notes.md.", result: FIXTURE_RESULT },
+    },
+    {
+      annotations: fromSession,
+      case: {
+        decisions: ["kept the note to three bullets", "kept the note to three bullets", "subagent reported notes.md word count as 62"],
+        handoff: "## Outcome\nCreated notes.md.",
+        result: FIXTURE_RESULT,
+      },
+    },
+  ]);
+});
+
+it("search_memory は Exemplar に注釈の text で当たる", () => {
+  const db = seedFixtureBoard();
+  const id = fixtureExemplar(db, 6, [{ anchor: "whole", polarity: "avoid", text: "Cover the tide cycle before the bullets." }]);
+  expect(searchMemory(db, { taskId: FIXTURE_TASK, scope: "sandbox", agent: "tako" }, { query: "tide cycle" }, at).results.map((e) => e.id)).toEqual([id]);
+});
+
+it("case preview は事例に選べる event id(decision entry / session)の描画を返し、他の event は domain error", () => {
+  const db = seedFixtureBoard("## Outcome\nCreated notes.md.");
+  expect(previewCase(db, 6)).toEqual({ decision: "kept the note to three bullets", steering: [], handoff: "## Outcome\nCreated notes.md.", result: FIXTURE_RESULT });
+  expect(previewCase(db, FIXTURE_SPAWNED_EVENT_ID)).toMatchObject({ decisions: expect.any(Array), handoff: "## Outcome\nCreated notes.md." });
+  expect(() => previewCase(db, 9)).toThrow(DomainError);
 });
 
 it("pull は1回ごとに task 帰属の memory_pulled を残す —— verb・入力・返した id・その時点の memory 系 event の最大 id(watermark)", () => {

@@ -274,7 +274,7 @@ export interface WireContract {
     entries: Array<{
       id: number;
       /** 値集合の正本は src/memory.ts の MemoryEntryFields["kind"](移送は issue #352)。 */
-      kind: "knowledge" | "behavior" | "definition";
+      kind: "knowledge" | "behavior" | "definition" | "exemplar";
       state: string;
       scope: string | null;
       path: string;
@@ -288,6 +288,10 @@ export interface WireContract {
       cause: string | null;
     }>;
   };
+  /** 事例の case 描画(src/memory.ts の MemoryCase、ADR 0153 決定3): decision entry なら本文と steering、session なら decision 列。 */
+  "GET /api/settings/memory/cases/:event_id":
+    | { decision: string; steering: string[]; handoff: string | null; result: string | null }
+    | { decisions: string[]; handoff: string | null; result: string | null };
   "POST /api/settings/display-language": { language: string };
   "GET /api/settings/github": { loggedIn: boolean };
   "GET /api/translate/usage": {

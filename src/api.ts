@@ -45,14 +45,17 @@ import {
   humanBehaviorSchema,
   humanDefinitionSchema,
   humanEntryInput,
+  humanExemplarSchema,
   humanKnowledgeSchema,
   invalidateMemoryEntry,
   invalidationSchema,
   listMemoryEntries,
   memoryListFilterSchema,
   memorySettingsChangeSchema,
+  previewCase,
   readMemorySettings,
   recordBehavior,
+  recordExemplar,
   recordKnowledge,
 } from "./memory.js";
 import { changeMetaReviewSettings, metaReviewSettingsChangeSchema, readMetaReviewSettings } from "./meta-review.js";
@@ -1688,6 +1691,14 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   router.post("/settings/memory/knowledge", validatedWrite(humanKnowledgeSchema, (input) => recordKnowledge(db, humanEntryInput(db, input), "webui", clock.now())));
   router.post("/settings/memory/definitions", validatedWrite(humanDefinitionSchema, (input) => defineMemoryBranch(db, humanEntryInput(db, input), "webui", clock.now())));
   router.post("/settings/memory/behaviors", validatedWrite(humanBehaviorSchema, (input) => recordBehavior(db, humanEntryInput(db, input), "webui", clock.now())));
+  router.post("/settings/memory/exemplars", validatedWrite(humanExemplarSchema, (input) => recordExemplar(db, humanEntryInput(db, input), "webui", clock.now())));
+  // ADR 0153 決定3: Exemplar の anchor を選ぶための case 描画。読むだけだが検査と DomainError の写し方は書き込みと同じ
+  router.get(
+    "/settings/memory/cases/:event_id",
+    validatedWrite(z.object({ event_id: z.coerce.number().int().positive() }), ({ event_id }) =>
+      previewCase(db, event_id) satisfies WireContract["GET /api/settings/memory/cases/:event_id"],
+    ),
+  );
   router.post(
     "/settings/memory/entries/:entry_id/invalidate",
     validatedWrite(invalidationSchema.extend({ entry_id: z.coerce.number().int().positive() }), (input) => ({
