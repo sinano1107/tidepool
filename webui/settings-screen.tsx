@@ -1041,7 +1041,7 @@ const settingsFootnote = { margin: 0, fontFamily: 'var(--font-mono)', fontSize: 
 
 // The mono-caps label a settings card wears in place of a heading.
 const settingsCardLabel = {
-  fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)',
+  margin: 0, fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)',
   textTransform: 'uppercase', letterSpacing: '0.08em',
 };
 
@@ -2403,7 +2403,7 @@ function SettingsScreen({ say, registerLeaveGuard }: {
         <p style={settingsFootnote}>applies to every task the board picks up</p>
         {/* read-only state the board holds — not a preference, so outside the footer's claim (#691) */}
         {(githubLoggedIn !== null || translateUsage !== null || translateUsageFailed) && (
-          <p style={{ ...settingsCardLabel, margin: 0 }}>board state</p>
+          <p style={settingsCardLabel}>board state</p>
         )}
         {githubLoggedIn !== null && <GitHubLoginCard loggedIn={githubLoggedIn} />}
         {(translateUsage !== null || translateUsageFailed) && <TranslateUsageCard records={translateUsage} />}
