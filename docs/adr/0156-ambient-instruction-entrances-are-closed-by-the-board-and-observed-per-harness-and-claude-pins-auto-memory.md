@@ -30,3 +30,11 @@ project 設定 `autoMemoryDirectory` はその例外の場所を任意に移せ�
 - **`--bare`** —— auto-memory を止めるが OAuth を読まなくなり、worker の認証が成り立たない。
 - **Claude 固有の決定に留め、共通化は3例目を待つ** —— 2例が「フラグで除けているつもりだった」同じ誤りから出ており、原則が
   無ければ3例目は実測されるまで気づかれない。
+
+## 追記(実装時、issue #994)
+
+決定3 の「`memory_paths` の不在」は **`memory_paths.auto` の不在**と読む。`memory_paths` は memory の種類ごとの
+入れ物で、項目ごと消えるかどうかを期待値にすると、ベンダーが別種の memory を足しただけで Claude の封じ込めが
+誤って不成立になる。閉じたいのは auto-memory の層だけなので、見るのも `auto` だけでよい(#881 の追補で決定)。
+逆に `auto` や `memory_paths` が読めない形で現れたときは閉じているとみなさず、不成立に倒す —— `mcp_servers`
+の読み取りと同じ fail-closed の線である。
