@@ -405,7 +405,7 @@ function tomlInline(value: Record<string, unknown>): string {
 /** ADR 0157 決定2・3: Codex の委譲先は subagent。Workflow tool に当たる機構は無いので禁止の段落は出さない。
  *  最終段落に続く `fork_turns` の1文は Codex 固有の追記(ADR 0134 決定4)。 */
 const CODEX_DOCTRINE =
-  `${boardDoctrine({ delegate: "a subagent", delegateAtLineEnd: "a subagent", workflow: false })} ` +
+  `${boardDoctrine({ delegate: "a subagent", workflow: false })} ` +
   "Spawn subagents with fork_turns: \"none\"; this session keeps no rollout, so forking the parent thread's history always fails.";
 
 /** user turn に残るのは、その task に固有の指示だけ(ADR 0124 決定1)。 */

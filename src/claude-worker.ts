@@ -5,7 +5,7 @@ import { join, resolve } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { type ResolvedAgent, resolveAgentOrQuarantine, resolveExecutionAgent } from "./agent.js";
 import { type BoardCall, readOutput } from "./board-call.js";
-import { boardDoctrine, boardProse, type DoctrineVocabulary } from "./board-prose.js";
+import { boardDoctrine, boardProse } from "./board-prose.js";
 import { type BoardStatePath, boardStateOverlap } from "./board-state.js";
 import {
   isCapInterruptionEnvelope,
@@ -75,13 +75,6 @@ function assertKnownEffort(effort: string): void {
     throw new Error(`unknown effort level: ${effort}`);
   }
 }
-
-// ADR 0157 決定2: Claude の委譲先は Agent tool、Workflow tool も実在するので禁止の段落が出る
-const CLAUDE_DOCTRINE: DoctrineVocabulary = {
-  delegate: "the Agent tool",
-  delegateAtLineEnd: "the Agent\ntool",
-  workflow: true,
-};
 
 /** Does one allowlist entry permit one enumerated skill? (issue #56 / ADR
  *  0025) The five-form vocabulary, resolved against the CLI's enumerated set:
@@ -2082,7 +2075,8 @@ export class ClaudeCodeWorker implements WorkerAdapter {
           task,
           systemPrompt: definition.systemPrompt,
           profile,
-          doctrine: boardDoctrine(CLAUDE_DOCTRINE),
+          // ADR 0157 決定2: 委譲先は Agent tool、Workflow tool も実在するので禁止の段落が出る
+          doctrine: boardDoctrine({ delegate: "the Agent tool", delegateAtLineEnd: "the Agent\ntool", workflow: true }),
           allowedDomains: workspace.allowed_domains,
           memorySection: memory.section,
         }),

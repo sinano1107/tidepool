@@ -16,10 +16,10 @@ import { AUTHORITY_WILDCARD, HUMAN_ROSTER_AGENT, reviewedTaskExecutor, type Task
 
 /** doctrine のスロット(ADR 0157 決定3)。スロットは「委譲先の語」と「Workflow 段落の有無」の2つだけ。
  *  `delegateAtLineEnd` は委譲先の語の同じスロットで、行末に掛かる位置の綴りである —— Claude の文面は
- *  バイト単位で不変(#695)で、そこだけ語の途中で折り返している。 */
-export interface DoctrineVocabulary {
+ *  バイト単位で不変(#695)で、そこだけ語の途中で折り返している。省けば `delegate` と同じ。 */
+interface DoctrineVocabulary {
   delegate: string;
-  delegateAtLineEnd: string;
+  delegateAtLineEnd?: string;
   workflow: boolean;
 }
 
@@ -27,7 +27,7 @@ export interface DoctrineVocabulary {
 // 0010), regardless of agent or profile — a board-wide doctrine copied into
 // each authority profile would drift, and "Agent tool"/"Workflow tool" are
 // vendor vocabulary the adapter translates the board's line into (ADR 0005)
-export function boardDoctrine({ delegate, delegateAtLineEnd, workflow }: DoctrineVocabulary): string {
+export function boardDoctrine({ delegate, delegateAtLineEnd = delegate, workflow }: DoctrineVocabulary): string {
   const Delegate = delegate[0]!.toUpperCase() + delegate.slice(1);
   return `## Board doctrine
 
@@ -268,9 +268,6 @@ export function boardProse(input: {
   const { db, task } = input;
   const authorityProfile = task.type === "review" ? REVIEWER_AUTHORITY_PROFILE : input.profile;
   const reviewExecutor = task.type === "review" ? reviewedTaskExecutor(db, task) : undefined;
-  const rosterAssignableTo =
-    task.type === "review" && reviewExecutor !== undefined
-      ? [reviewExecutor]
-      : authorityProfile.assignable_to;
+  const rosterAssignableTo = reviewExecutor !== undefined ? [reviewExecutor] : authorityProfile.assignable_to;
   return `${input.systemPrompt}${authoritySection(authorityProfile.guidance)}${rosterSection(buildRoster(input.registry, rosterAssignableTo))}\n\n${input.doctrine}\n\n${workerProtocol(input.allowedDomains)}${historicalDefinitionSection(db, input.registryDir, task)}${input.memorySection ? `\n\n${input.memorySection}` : ""}`;
 }
