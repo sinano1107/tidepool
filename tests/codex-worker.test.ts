@@ -3,7 +3,7 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { mkdir, realpath, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { CODEX_FEATURE_SNAPSHOT, CodexWorker, resolveCodexExecutable } from "../src/codex-worker.js";
 import { openDb } from "../src/db.js";
 import { appendEvent, listEvents } from "../src/events.js";
@@ -87,6 +87,9 @@ You are the Codex worker.`,
   });
   const db = openDb(":memory:");
   const process = recordingSpawn();
+  // 多くの test が exit を撃たないまま終わる —— #705 の後始末は exit / spawn-error 経路
+  // 止まりなので、それらは task の一時ディレクトリを os.tmpdir() に残す(issue #1001)。
+  onTestFinished(() => process.emitExit(0, null));
   const codexHome = await tempDir("tidepool-codex-home-");
   const logDir = await tempDir("tidepool-codex-logs-");
   const codexSystemDir = await tempDir("tidepool-codex-system-");
