@@ -2863,7 +2863,7 @@ function SettingsScreen({ say, registerLeaveGuard }) {
       }
     ))));
   } else if (sectionKey === "board") {
-    body = /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(ScreenHeader, { title: "Board", backLabel: "Settings", meta: "board-wide preferences", onBack: () => go([]) }), displayLanguageLoaded && /* @__PURE__ */ React.createElement(
+    body = /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(ScreenHeader, { title: "Board", backLabel: "Settings", meta: "board-wide preferences, and the board's state", onBack: () => go([]) }), displayLanguageLoaded && /* @__PURE__ */ React.createElement(
       DisplayLanguageCard,
       {
         language: displayLanguage,

@@ -2545,7 +2545,7 @@ function SettingsScreen({ say, registerLeaveGuard }: {
     // the read-only board-state cards under their own subheading (#691)
     body = (
       <React.Fragment>
-        <ScreenHeader title="Board" backLabel="Settings" meta="board-wide preferences" onBack={() => go([])} />
+        <ScreenHeader title="Board" backLabel="Settings" meta="board-wide preferences, and the board's state" onBack={() => go([])} />
         {displayLanguageLoaded && (
           <DisplayLanguageCard language={displayLanguage} options={displayLanguageOptions}
             say={say} onSaved={loadDisplayLanguage} edit={edit} />
