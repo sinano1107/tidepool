@@ -35,7 +35,7 @@ Stay in this thread for all three:
 
 ## The implementation sub-agent
 
-Dispatch one sub-agent at the implementation model, carrying the issue number, the agreed seams, and the ADRs that govern the area. This belongs in a build session (`claude-build` / `codex-build`), where ponytail is already `full` and the plugin's `SubagentStart` hook copies the live mode into every sub-agent. That hook copies rather than sets: if the mode is off, set `/ponytail full` in this thread **before** dispatching, or the loop runs ponytail-unaware. It owns two commits and returns what it did:
+Dispatch one sub-agent at the implementation model, carrying the issue number, the agreed seams, and the ADRs that govern the area. This belongs in a build session (`claude-build` / `codex-build`), where ponytail is already `full` and the plugin's `SubagentStart` hook copies the live mode into every sub-agent. That hook copies rather than sets, and the agent cannot switch the mode (the plugin reads `/ponytail` from the user's own prompt): if the mode is off — no ponytail ruleset in this context — stop **before** dispatching and ask the user to type `/ponytail full`, or the loop runs ponytail-unaware. It owns two commits and returns what it did:
 
 1. **Implementation** — `/tdd` at the agreed seams, one red-green slice at a time, typechecking and running single test files as it goes. The touched test files and typecheck green, then commit.
 2. **ponytail-review** — `/ponytail-review` over its own diff, inline in the same thread, applying what it finds. This is a separate beat from the mode above, not a substitute for it. The touched test files and typecheck green, then commit.

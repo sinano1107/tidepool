@@ -28,13 +28,13 @@ Ask `/ask-matt` when the question is "which skill fits". This file answers "how 
 
 ## Writing the work up
 
-The branch is about sessions, not about size in the abstract and not about who implements:
+The branch is about what the record already says, not about size in the abstract and not about who implements. Implementation always starts in a build session — a grilling session never goes straight into `/implement-tidepool`, however much room it has left: the only thing it would save is a relaunch, and the price is switching the ponytail mode by hand (see below).
 
-- **The whole change fits one fresh context window, and this session still has room for it** → skip the write-up and go straight to `/implement-tidepool`, run against the originating issue and the comment step 5 left on it. Both gates have to hold: a long grilling session replays its whole context on every implementation turn, so writing the work up and starting fresh can cost less than staying put.
-- **One slice, but not this session** → `/to-spec`, then hand the spec issue to `/implement-tidepool`.
+- **One slice, and the comment step 5 left on the originating issue already says what a spec would** — completion criteria, the files to touch, the invariants and the tests that pin them → skip the write-up and hand `/implement-tidepool <originating issue>` to a build session.
+- **One slice, but the comment does not carry that** → `/to-spec`, then hand the spec issue to `/implement-tidepool`.
 - **Several slices** → `/to-spec`, then `/to-tickets`. Both, in that order — they are a chain, not a choice.
 
-Do not `/compact` or `/clear` between `/to-spec` and `/to-tickets`: re-fetching a large spec out of an issue truncates.
+Do not `/compact` or `/clear` between `/to-spec` and `/to-tickets`: re-fetching a large spec out of an issue truncates. This is the one place a session crosses from deciding into building, and the mode has to be switched by hand at the crossing — see the ponytail section.
 
 Specs and tickets are GitHub issues here, not files — the `.scratch/` layout in those skills belongs to the local-markdown tracker, which this repo does not use (see [issue-tracker.md](./issue-tracker.md)). Nothing lands in the working tree, so a machine that only has the issue number has everything it needs.
 
@@ -44,7 +44,11 @@ Specs and tickets are GitHub issues here, not files — the `.scratch/` layout i
 
 `/ponytail` is a standing mode that biases how work gets done; `/ponytail-review` is a one-shot pass over a diff. The two are separate, and neither substitutes for the other.
 
-**The mode is chosen by the launcher, once per session.** `claude-design` / `codex-design` start off; `claude-build` / `codex-build` start at `full`. It is re-derived at every session boundary, so it never carries over and there is nothing to unset by hand. Those functions are per-machine setup — [machine-setup.md](./machine-setup.md).
+**The launcher sets the mode a session starts in.** `claude-design` / `codex-design` start off; `claude-build` / `codex-build` start at `full`. Those functions are per-machine setup — [machine-setup.md](./machine-setup.md). The plugin's `SessionStart` hook rewrites its flag from that default on every startup, resume, clear and compact.
+
+**Switching mid-session is the human's action, and it happens in one place.** `/to-spec` → `/to-tickets` continues in the same session (the truncation above), so the human types `/ponytail full` before `/to-tickets`. The agent cannot switch the mode: the plugin reads the command from the user's own prompt (`UserPromptSubmit`), and an agent-side skill invocation neither writes the flag nor reaches the sub-agents.
+
+**The flag is one file per machine, not per session** (`~/.claude/.ponytail-active`). A build session launched on the same Mac while a design session is open rewrites it to `full`, and the design session's `SubagentStart` hook then reads that — so before dispatching a sub-agent, confirm the mode on the statusline rather than trusting the launcher.
 
 So the boundary is which command you launched:
 
