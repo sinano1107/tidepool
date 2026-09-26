@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { homedir } from "node:os";
 import { describe, expect, it } from "vitest";
 import { buildSandboxSettings, skillReadPaths } from "../src/sandbox.js";
 
@@ -254,7 +255,11 @@ describe("buildSandboxSettings の permissions.deny(ADR 0037)", () => {
         permittedSkills: "all",
       }).permissions,
     ).toEqual({
-      deny: ["Edit(.claude/settings.json)", "Edit(.claude/settings.local.json)"],
+      deny: [
+        "Edit(.claude/settings.json)",
+        "Edit(.claude/settings.local.json)",
+        `Edit(/${homedir()}/.tidepool/claude-auto-memory/**)`,
+      ],
     });
   });
 
@@ -263,6 +268,26 @@ describe("buildSandboxSettings の permissions.deny(ADR 0037)", () => {
       buildSandboxSettings({ taskType: "review", workspacePath, permittedSkills: "all" })
         .permissions.deny;
     expect(at("/home/pi/work/tidepool")).toEqual(at("/some/other/checkout"));
+  });
+});
+
+/** ADR 0156: auto-memory を per-task 設定で閉じる3キー。読みは `autoMemoryEnabled:
+ *  false`、書きは移し先を盤面所有の固定パスに置いてそこへの `Edit` を deny する。
+ *  期待値は #881 の実測(Claude Code 2.1.283)の形を literal で置く — 絶対パスは `//`
+ *  始まり(`/…` は設定ファイル相対になり黙って効かない)。 */
+describe("buildSandboxSettings の auto-memory(ADR 0156)", () => {
+  it("work / review とも読みを閉じ、移し先を固定し、そこへの Edit を絶対パスの綴りで deny する", () => {
+    const fixed = `${homedir()}/.tidepool/claude-auto-memory`;
+    for (const taskType of ["work", "review"] as const) {
+      const settings = buildSandboxSettings({
+        taskType,
+        workspacePath: "/home/pi/work/tidepool",
+        permittedSkills: "all",
+      });
+      expect(settings.autoMemoryEnabled).toBe(false);
+      expect(settings.autoMemoryDirectory).toBe(fixed);
+      expect(settings.permissions.deny).toContain(`Edit(/${fixed}/**)`);
+    }
   });
 });
 

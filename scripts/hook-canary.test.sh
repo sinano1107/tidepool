@@ -54,16 +54,19 @@ check "a silent parent with deny words is still not a pass"   VACUOUS board_hook
 check "silence without the hook's words proves nothing"        VACUOUS board_hook_live_verdict yes yes no no
 check "no trigger, nothing in the log — the session never ran" VACUOUS board_hook_live_verdict no no no no
 
-# session-ran, subagent-reached → expected verdict
-echo "board-hook/control — no hook in the way: the subagent MUST get through"
+# session-ran, guarded-thing-happened → expected verdict。board-hook/control
+# (subagent が stub に届いたか)と auto-memory/control(固定した移し先への書き込みが
+# 着地したか — ADR 0156)の両方がこの1つで判定される。
+echo "control rows — the one guard removed: what it stops MUST happen"
 # control で届くことが、live の沈黙を「hook が止めた」と読んでよい根拠になる。
-check "the subagent reaching the stub is what proves delivery" PASS board_hook_control_verdict yes yes
+check "the subagent reaching the stub is what proves delivery" PASS control_verdict yes yes
 # 届かないなら live 行も同じだけ無意味 — ハーネスが subagent への MCP 配達を
 # やめたのかもしれず、それは設計ごと見直す事件であって緑ではない。
-check "a silent control means the live row measured nothing" VACUOUS board_hook_control_verdict yes no
-check "no session, no measurement"                           VACUOUS board_hook_control_verdict no no
+check "a silent control means the live row measured nothing" VACUOUS control_verdict yes no
+check "no session, no measurement"                           VACUOUS control_verdict no no
 
-echo "deny — permissions.deny must refuse the Write tool IN ITS OWN WORDS"
+# deny と auto-memory(ADR 0156)の両方がこの1つで判定される。
+echo "deny / auto-memory — permissions.deny must refuse the Write tool IN ITS OWN WORDS"
 check "the rule's own refusal is the pass"        PASS deny_verdict no yes
 check "a settings file that appeared is the hole" FAIL deny_verdict yes no
 # ADR 0033:「床はモデルの判断に依存しない」。auto の分類器はこの書き込みを断る

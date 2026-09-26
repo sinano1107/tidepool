@@ -1,3 +1,4 @@
+import { homedir } from "node:os";
 import { afterEach, expect, it, vi } from "vitest";
 import { enumerateToolsThrough, probeToolSurfaceCapability } from "../src/claude-worker.js";
 import type { ContainmentCapability } from "../src/containment.js";
@@ -64,7 +65,7 @@ const harnessCheck = (check: () => Promise<ContainmentCapability>) => async (har
 // ── ping から答えへの写像(正本の側)────────────────────────────────────
 
 it("ping が観測した面が宣言どおりなら成立する", async () => {
-  const observed = async () => ({ tools: WORK_SURFACE, mcpServers: [] });
+  const observed = async () => ({ tools: WORK_SURFACE, mcpServers: [], autoMemoryPath: null });
   expect(await probeToolSurfaceCapability(observed)).toEqual({ available: true });
 });
 
@@ -96,6 +97,7 @@ it("ping が allowlist 外のツールを観測したら不成立 — 具体名�
   const result = await probeToolSurfaceCapability(async () => ({
     tools: [...WORK_SURFACE, "CronCreate"],
     mcpServers: [],
+    autoMemoryPath: null,
   }));
   expect(result.available === false && result.reason).toContain("CronCreate");
 });
@@ -104,11 +106,50 @@ it("検査は毎回 ping を撃ち直す(memoize しない)— 解除の検証�
   let calls = 0;
   const enumerate = async () => {
     calls += 1;
-    return { tools: WORK_SURFACE, mcpServers: [] };
+    return { tools: WORK_SURFACE, mcpServers: [], autoMemoryPath: null };
   };
   await probeToolSurfaceCapability(enumerate);
   await probeToolSurfaceCapability(enumerate);
   expect(calls).toBe(2);
+});
+
+// ── auto-memory の閉鎖(ADR 0156 決定3)────────────────────────────────
+// 正本の ping は auto-memory を閉じる設定**だけ**を inline の `--settings` で運び、
+// init 報告の `memory_paths.auto` の不在を期待値にする。CLI がキーを改名して設定が
+// 効かなくなれば `auto` が現れ、pickup の前に不成立になる。
+
+/** ping を Board call の口に1回通し、偽の process に init 行を書いて exit させる。 */
+async function probeWithInit(init: Record<string, unknown>) {
+  const spawn = recordingSpawn();
+  const { boardCall } = containerHarness(new ProcessContainers(new FakeContainerRuntime(spawn.spawn)));
+  const result = probeToolSurfaceCapability(enumerateToolsThrough(boardCall));
+  await vi.waitFor(() => expect(spawn.calls).toHaveLength(1));
+  spawn.processes[0]!.stdout.write(
+    `${JSON.stringify({ type: "system", subtype: "init", tools: WORK_SURFACE, mcp_servers: [], ...init })}\n`,
+  );
+  spawn.emitExit(0, null);
+  return { result: await result, args: spawn.calls[0]!.args };
+}
+
+it("ping は auto-memory を閉じる設定だけを inline の --settings で運ぶ", async () => {
+  const { args } = await probeWithInit({});
+  const settings = JSON.parse(args[args.indexOf("--settings") + 1]!);
+  // 期待値は独立した literal: #881 の実測で閉じた2キー(deny は書きの話で init に出ない)
+  expect(settings).toEqual({
+    autoMemoryEnabled: false,
+    autoMemoryDirectory: `${homedir()}/.tidepool/claude-auto-memory`,
+  });
+});
+
+it("init 報告に memory_paths.auto が有れば不成立 — 観測した値と ADR 0156 を言う", async () => {
+  const { result } = await probeWithInit({ memory_paths: { auto: "/home/pi/.claude/projects/x/memory" } });
+  expect(result.available).toBe(false);
+  expect(result.available === false && result.reason).toContain("/home/pi/.claude/projects/x/memory");
+  expect(result.available === false && result.reason).toContain("ADR 0156");
+});
+
+it("init 報告に memory_paths.auto が無ければ成立", async () => {
+  expect((await probeWithInit({})).result).toEqual({ available: true });
 });
 
 // ── 封じ込め能力の3つ目の問いとしての振る舞い(ゲートの側)──────────────

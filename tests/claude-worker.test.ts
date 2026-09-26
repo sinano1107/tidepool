@@ -1414,8 +1414,8 @@ describe("ClaudeCodeWorker", () => {
   // `mcp_servers` は 2.1.267 の init 行に必ず出る(実測)。実セッションでは盤面が
   // 書いた `tidepool` が1つ載るが、載っている名前が宣言どおりかは MCP 軸の話なので、
   // 組み込みツールの照合を見るここでは空で置く。
-  const initLine = (tools: string[], mcpServers: unknown[] = []) =>
-    `${JSON.stringify({ type: "system", subtype: "init", tools, mcp_servers: mcpServers })}\n`;
+  const initLine = (tools: string[], mcpServers: unknown[] = [], memoryPaths?: Record<string, string>) =>
+    `${JSON.stringify({ type: "system", subtype: "init", tools, mcp_servers: mcpServers, memory_paths: memoryPaths })}\n`;
   const containmentQuestion = (db: ReturnType<typeof openDb>) =>
     listBoard(db).find((t) => t.type === "question" && t.question_quarantine_kind === "containment");
 
@@ -1553,6 +1553,24 @@ describe("ClaudeCodeWorker", () => {
       return q!;
     });
     expect(question.purpose).toContain("mcp_servers");
+  });
+
+  // ADR 0156 決定3: 実セッションの init 行でも auto-memory の閉鎖を確かめる。per-task の
+  // `--settings` が丸ごと黙って無視された場合、正本の probe(inline の2キーだけを運ぶ)は
+  // 通ってしまうので、観測できるのはここだけである。止め方はツール面のずれと同じ経路。
+  it("init 行に memory_paths.auto が有ればそのセッションを強制回収し、封じ込めの question が立つ", async () => {
+    const { start, processes, db, killed } = await makeWorker();
+    start("task-init-auto-memory", null, "deckhand", "work");
+    processes[0]!.stdout.write(
+      initLine(WORK_SURFACE, [], { auto: "/home/pi/.claude/projects/x/memory" }),
+    );
+    await vi.waitFor(() => expect(killed).toContain("SIGKILL"));
+    const question = await vi.waitFor(() => {
+      const q = containmentQuestion(db);
+      expect(q).toBeDefined();
+      return q!;
+    });
+    expect(question.purpose).toContain("/home/pi/.claude/projects/x/memory");
   });
 
   it("セッションの stream-json を全量ファイルに記録する(監査性)", async () => {
@@ -3552,7 +3570,9 @@ You are Kipper, the tidepool board's Kimi work agent.
 describe("上限到達による中断(issue #467 / ADR 0104)", () => {
   /** #447 のライブ検証(2026-08-24、Claude Code 2.1.241)の逐語。判定の根拠は
    *  最終行 `result` の `api_error_status: 429` 一点で、その手前の
-   *  `rate_limit_event` や本文の「session limit」は見ない。 */
+   *  `rate_limit_event` や本文の「session limit」は見ない。ただし init 行の
+   *  `memory_paths` だけは除いてある — auto-memory を閉じた今の spawn 形では出ない項目で、
+   *  残すと再生のたびに封じ込めが不成立になる(ADR 0156、#994)。 */
   const CAP_STREAM = readFileSync(
     join(import.meta.dirname, "fixtures", "worker-session-cap-429.stream.jsonl"),
     "utf8",
