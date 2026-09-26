@@ -22,6 +22,8 @@ import {
   listPrecedents,
   memoryListFilterSchema,
   memoryScope,
+  metaReviewAnnotationSchema,
+  metaReviewInvalidationSchema,
   moveMemory,
   proposeMemoryChange,
   pullMemoryList,
@@ -953,7 +955,7 @@ function registerMemoryMetaReviewVerbs(server: McpServer, deps: McpDeps, run: Me
         "candidates with their invalidation reason and successor — read them so you do not re-propose what was rejected. A candidate superseded " +
           "by a successor a human wrote was approved with the human's amendment, or replaced by a consolidation the human amended; successor " +
           "shows the wording they approved instead.",
-      inputSchema: { include_invalidated: z.boolean().optional(), page },
+      inputSchema: { include_invalidated: z.boolean().optional(), kind: memoryListFilterSchema.shape.kind, page },
     },
     async (input) => run((reader, now) => pullMemoryList(deps.db, reader, "list_memory_candidates", input, now)),
   );
@@ -1040,9 +1042,10 @@ function registerMemoryMetaReviewVerbs(server: McpServer, deps: McpDeps, run: Me
     "invalidate_memory",
     {
       description:
-        "Invalidate a candidate, Knowledge entry, or Definition. reason is superseded (with successor_id) or " +
-        "capability / environment / requirement_change. An approved Behavior cannot be invalidated here — propose it instead.",
-      inputSchema: { entry_id: z.number().int(), ...invalidationSchema.shape },
+        "Invalidate a candidate, Knowledge entry, Definition, or Exemplar. reason is superseded (with successor_id), " +
+        "capability / environment / requirement_change, or rejected — only for a candidate that will become neither a Behavior nor an Exemplar. " +
+        "An approved Behavior cannot be invalidated here — propose it instead.",
+      inputSchema: { entry_id: z.number().int(), ...metaReviewInvalidationSchema.shape },
     },
     async (input) => run((reader, now) => ({ event_id: invalidateMemoryByMetaReview(deps.db, input, reader.agent, "worker", now) })),
   );
@@ -1051,20 +1054,40 @@ function registerMemoryMetaReviewVerbs(server: McpServer, deps: McpDeps, run: Me
     "propose_memory_change",
     {
       description:
-        "Propose a Behavior change to the human as one approve / reject question attached to this task. op approve asks to " +
-        "approve a Behavior candidate exactly as worded (candidate_id). op consolidate drafts text as a new Behavior candidate " +
-        "that replaces the Behavior candidates and approved Behaviors in replaces; based_on_decision is the event id " +
-        "log_decision returned for your reasoning and becomes its source. op invalidate asks to invalidate the approved Behavior " +
+        "Propose a Behavior or Exemplar change to the human as one approve / reject question attached to this task. op approve asks to " +
+        "approve a Behavior candidate exactly as worded (candidate_id). op consolidate drafts text as a new candidate " +
+        "that replaces the candidates, approved Behaviors and Exemplars in replaces; based_on_decision is the event id " +
+        "log_decision returned for your reasoning. The new candidate keeps the source the replaced entries share, and takes " +
+        "based_on_decision as its source when they share none. With text.kind exemplar it is an Exemplar: give annotations instead " +
+        "of text.text; the replaced entries must share a source that renders a case. op invalidate asks to invalidate the approved Behavior " +
         "target_id for reason capability / environment / requirement_change. rationale is why you propose it (the question's context). " +
+        "For each candidate, promote it to a Behavior when its scope and criterion can be stated so they hold for any future task; " +
+        "fold it into an Exemplar when that cannot be said but the concrete case carries quality worth reusing; retire it with " +
+        "invalidate_memory reason rejected when it will become neither; leave it unpromoted while more material could still change " +
+        "the judgment — there is no threshold or deadline. " +
         "The board applies the answer itself, so you can complete this task without waiting for it. Returns the question id. " +
         BOARD_WRITE_LANGUAGE_RULE,
       inputSchema: {
         op: z.enum(["approve", "consolidate", "invalidate"]),
         candidate_id: z.number().int().optional(),
         text: z
-          .object({ scope, path: z.string(), title: z.string().min(1), text: z.string().min(1), addressee: z.string().min(1).nullable() })
+          .object({
+            scope,
+            path: z.string(),
+            title: z.string().min(1),
+            text: z.string().min(1).optional(),
+            addressee: z.string().min(1).nullable(),
+            kind: z.enum(["behavior", "exemplar"]).optional(),
+            annotations: z
+              .array(metaReviewAnnotationSchema)
+              .optional()
+              .describe(
+                "kind exemplar only. anchor is whole, or a case field (decision / steering / handoff / result) with a quote copied verbatim " +
+                  "from it; polarity is imitate or avoid; text says what to imitate or avoid.",
+              ),
+          })
           .optional()
-          .describe("op consolidate: the new Behavior. addressee is an agent name, or null for every agent."),
+          .describe("op consolidate: the new candidate — a Behavior (text.text) unless kind is exemplar. addressee is an agent name, or null for every agent."),
         replaces: z.array(z.number().int()).optional(),
         based_on_decision: z.number().int().optional(),
         target_id: z.number().int().optional(),

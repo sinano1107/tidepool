@@ -40,12 +40,16 @@ export const META_REVIEW_SUBJECTS = {
     task: {
       title: "Memory meta-review",
       purpose:
-        "Periodic meta-review of the board's memory store. Judge repeats among candidates by reading them, not by counting. " +
-        "For a Behavior, ask whether it holds true whatever leaf sits under its branch. Propose changes through the proposal verb; " +
+        "Periodic meta-review of the board's memory store. Judge repeats among candidates and exemplars, redundant examples included, by reading them, not by counting. " +
+        "For a Behavior, ask whether it holds true whatever leaf sits under its branch. For each candidate, promote it to a Behavior when its " +
+        "scope and criterion can be stated so they hold for any future task; fold it into an Exemplar (consolidate with kind exemplar) when that " +
+        "cannot be said but the concrete case carries quality worth reusing; retire it with invalidate_memory reason rejected when it will become " +
+        "neither; leave it unpromoted while more material could still change the judgment — there is no threshold or deadline. Retire a redundant " +
+        "exemplar with invalidate_memory superseded, naming the one you keep as successor. Propose other changes through the proposal verb; " +
         "apply fixes directly only to Knowledge and Definitions. Read the invalidated candidates and their reasons first, so you do not re-propose what was rejected. " +
         "Where a human amended a candidate when approving it (a superseded candidate whose successor a human wrote), draft closer to the human's wording.",
       completion_criteria:
-        "every candidate and store change since the previous meta-review is either proposed, applied (Knowledge / Definitions only), or deliberately left as is",
+        "every candidate and store change since the previous meta-review is either proposed, retired, applied (Knowledge / Definitions only), or deliberately left as is",
       review_tier: "frontier",
     },
     material: ["memory_entry_created", "memory_entry_invalidated", "objection_attributed"],

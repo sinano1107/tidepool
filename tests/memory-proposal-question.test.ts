@@ -1,4 +1,5 @@
 import { afterEach, expect, it } from "vitest";
+import { appendEvent } from "../src/events.js";
 import { approveMemoryProposal, createBehaviorCandidate, defineMemoryBranch, recordKnowledge } from "../src/memory.js";
 import { api, bootTidepool, completeViaMcp, HOUR, managementMcpClient, mcpClient, memoryEntries, type Tidepool } from "./harness.js";
 
@@ -7,7 +8,7 @@ import { api, bootTidepool, completeViaMcp, HOUR, managementMcpClient, mcpClient
 let t: Tidepool;
 afterEach(() => t?.stop());
 
-function candidate(tp: Tidepool, title: string, scope: string | null = null): number {
+function candidate(tp: Tidepool, title: string, scope: string | null = null, source: { commit: string } | { event_id: number } = { commit: "0a46a46" }): number {
   return createBehaviorCandidate(
     tp.db,
     {
@@ -16,7 +17,7 @@ function candidate(tp: Tidepool, title: string, scope: string | null = null): nu
       title,
       text: `${title}, always.`,
       addressee: "deckhand",
-      source: { commit: "0a46a46" },
+      source,
       author: { activity: "rca", name: "auditor" },
     },
     "worker",
@@ -174,8 +175,13 @@ it("pin の entry が人間・meta-review・superseded のどの経路で無効�
 });
 
 /** 統合・無効化の提案(issue #621)。approved の Behavior は approve の提案と回答で作る。 */
-async function approvedBehavior(board: Awaited<ReturnType<typeof boardWithMetaReview>>, title: string, scope: string | null = null) {
-  const id = candidate(t, title, scope);
+async function approvedBehavior(
+  board: Awaited<ReturnType<typeof boardWithMetaReview>>,
+  title: string,
+  scope: string | null = null,
+  source?: Parameters<typeof candidate>[3],
+) {
+  const id = candidate(t, title, scope, source);
   expect((await answer(await board.propose(id), "approve")).status).toBe(200);
   return id;
 }
@@ -191,10 +197,10 @@ async function consolidate(board: Awaited<ReturnType<typeof boardWithMetaReview>
   });
 }
 
-it("consolidate の提案は meta_review 名義・decision 出所の新 candidate を作り、その id と replaces の pin を焼き、detail に置換対象の id と本文 → 新本文・宛先・path・scope を載せる", async () => {
+it("出所の揃わない consolidate の提案は meta_review 名義・decision 出所の新 candidate を作り、その id と replaces の pin を焼き、detail に置換対象の id と本文 → 新本文・宛先・path・scope を載せる", async () => {
   const board = await boardWithMetaReview();
   try {
-    const approved = await approvedBehavior(board, "Split migrations", "tidepool");
+    const approved = await approvedBehavior(board, "Split migrations", "tidepool", { commit: "b7e1c2d" });
     const approvedVersion = (await entry(approved)).version;
 
     const { question_id } = await consolidate(board, [approved, board.ids[0]!]);
@@ -222,6 +228,50 @@ it("consolidate の提案は meta_review 名義・decision 出所の新 candidat
     for (const shown of [`#${approved} (scope: tidepool, addressee: deckhand)`, "Split migrations, always.", `#${board.ids[0]}`, "Keep migrations in their own commit, always.", "Keep each commit to one concern.", "every agent", "habits/commits", "whole board"]) {
       expect(detail).toContain(shown);
     }
+  } finally {
+    await board.client.close();
+  }
+});
+
+it("consolidate の kind exemplar は注釈つきの Exemplar candidate を作り、detail に注釈と case を載せ、list_memory_candidates は kind exemplar で それを引く(issue #954)", async () => {
+  const board = await boardWithMetaReview();
+  try {
+    const objected = (await board.call("log_decision", { line: "split the migration into two commits" })).event_id;
+    // setup のみ: RCA の帰責 event(起草の出所)
+    const attributed = appendEvent(t.db, {
+      taskId: board.review.id,
+      workerId: "tidepool",
+      origin: "board",
+      payload: { kind: "objection_attributed", entry_id: objected, objection_event_ids: [], cause: "preference", evidence: "e", round: "after_rca" },
+      at: t.clock.now(),
+    });
+    const replaces = [candidate(t, "Split migrations", null, { event_id: attributed }), candidate(t, "Two commits", null, { event_id: attributed })];
+    const annotations = [
+      { anchor: { field: "decision", quote: "two commits" }, polarity: "imitate", text: "Split schema changes from data changes." },
+      { anchor: "whole", polarity: "avoid", text: "Do not mix in unrelated refactors." },
+    ];
+
+    const { question_id } = await board.call("propose_memory_change", {
+      op: "consolidate",
+      text: { scope: null, path: "habits/migrations", title: "Split the migration", addressee: null, kind: "exemplar", annotations },
+      replaces,
+      based_on_decision: (await board.call("log_decision", { line: "too particular for a rule" })).event_id,
+      rationale: "Too particular for a rule.",
+    });
+
+    const question = await task(question_id);
+    const candidateId = question.question_proposal.candidate_id;
+    expect(await entry(candidateId)).toMatchObject({ kind: "exemplar", state: "candidate", annotations, source: { kind: "event", ref: attributed } });
+    const { detail } = question.question_items[0];
+    for (const shown of [
+      `new exemplar candidate #${candidateId}`,
+      'imitate (decision: "two commits"): Split schema changes from data changes.',
+      "avoid (whole): Do not mix in unrelated refactors.",
+      "Decision: split the migration into two commits",
+    ]) {
+      expect(detail).toContain(shown);
+    }
+    expect((await board.call("list_memory_candidates", { kind: "exemplar" })).entries.map((e: any) => e.id)).toEqual([candidateId]);
   } finally {
     await board.client.close();
   }

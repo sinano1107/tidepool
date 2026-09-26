@@ -278,6 +278,8 @@ export const exemplarAnnotationSchema = z.object({
   original: z.string().optional(),
 });
 type ExemplarAnnotation = Omit<z.infer<typeof exemplarAnnotationSchema>, "original"> & { original?: { text: string; language: string } };
+/** meta-review の consolidate の注釈: 原文は人間のものなので持たない(渡されたら黙って捨てず断る)。 */
+export const metaReviewAnnotationSchema = exemplarAnnotationSchema.omit({ original: true }).strict();
 /** Exemplar は Behavior の置き場・title・宛先 + 必須の出所の Episode と注釈の list。英語の title の原文は持たない。 */
 export const humanExemplarSchema = humanBehaviorSchema.pick({ workspace: true, path: true, title: true, addressee: true }).extend({
   source_event_id: z.number().int().positive(),
@@ -299,8 +301,9 @@ export function parseMemoryAmendment(input: unknown): MemoryAmendment {
   return parsed.data;
 }
 
-// `rejected` は提案 question の reject だけが書く(人間の面・meta-review の verb からは渡せない)
+// `rejected` は提案 question の reject と、meta-review の candidate の引退(issue #954)だけが書く —— 人間の面からは渡せない
 export const invalidationSchema = z.object({ reason: z.enum(INVALIDATION_REASONS).exclude(["rejected"]), successor_id: z.number().int().positive().optional() });
+export const metaReviewInvalidationSchema = invalidationSchema.extend({ reason: z.enum(INVALIDATION_REASONS) });
 
 /** 一覧の絞り込み(HTTP の query と管理MCP が共有)。workspace は完全一致、board_wide は盤面全体だけ。 */
 export const memoryListFilterSchema = z.object({
@@ -374,22 +377,22 @@ export function recordBehavior(
   })();
 }
 
-/** 人間が書く Exemplar(ADR 0153 決定1・3): 書いた時点で approved。出所は事例の Episode(必須)で、各注釈の anchor の
- *  quote は書く時点の case 描画のその欄に逐語で含まれなければ拒否する(欄は不変の記録なので以後も一致する)。text は注釈の
- *  英語 text の連結 —— FTS・注入・既存の読み手はそれを読む。注釈の形の検査も domain が持つ(扉は形を緩く受けてよい)。 */
-export function recordExemplar(
+/** Exemplar の注釈の検査(人間の write と meta-review の consolidate が共有、ADR 0153 決定3)。各 anchor の quote は書く時点の
+ *  出所の case 描画のその欄に逐語で含まれなければ拒否する(欄は不変の記録なので以後も一致する)。case を描けない出所
+ *  (commit・推論の decision)は事例にならない。形の検査も domain が持つ(扉は形を緩く受けてよい)。text は注釈の英語 text の
+ *  連結 —— FTS・注入・既存の読み手はそれを読む。 */
+function checkedAnnotations<T extends z.infer<typeof metaReviewAnnotationSchema>>(
   db: Db,
-  input: Omit<EntryInput, "text" | "source" | "original"> & { addressee: string | null; source_event_id: number; annotations: unknown },
-  origin: EventOrigin,
-  at: Date,
-): { entry_id: number; event_id: number } {
-  const { source_event_id, annotations: raw, ...fields } = input;
-  const source = citedEpisode(db, source_event_id);
-  const parsed = z.array(exemplarAnnotationSchema).min(1).safeParse(raw);
+  source: MemorySource,
+  raw: unknown,
+  schema: z.ZodType<T>,
+): { annotations: T[]; text: string } {
+  const parsed = z.array(schema).min(1).safeParse(raw);
   if (!parsed.success) {
     throw new DomainError(`an exemplar needs at least one annotation, each with an anchor, a polarity and a non-empty text: ${parsed.error.issues.map((i) => i.message).join("; ")}`);
   }
-  const rendered = renderCase(db, source)!;
+  const rendered = renderCase(db, source);
+  if (!rendered) throw new DomainError(`an exemplar's source must be a case the board can render: ${source.kind} ${source.ref}`);
   const fieldTexts: Record<"decision" | "steering" | "handoff" | "result", Array<string | null>> =
     "decisions" in rendered
       ? { decision: rendered.decisions, steering: [], handoff: [rendered.handoff], result: [rendered.result] }
@@ -399,9 +402,21 @@ export function recordExemplar(
       throw new DomainError(`the quote is not verbatim in the case's ${anchor.field}: ${JSON.stringify(anchor.quote)}`);
     }
   }
+  return { annotations: parsed.data, text: parsed.data.map((a) => a.text).join("\n") };
+}
+
+/** 人間が書く Exemplar(ADR 0153 決定1・3): 書いた時点で approved。出所は事例の Episode(必須)。 */
+export function recordExemplar(
+  db: Db,
+  input: Omit<EntryInput, "text" | "source" | "original"> & { addressee: string | null; source_event_id: number; annotations: unknown },
+  origin: EventOrigin,
+  at: Date,
+): { entry_id: number; event_id: number } {
+  const { source_event_id, annotations: raw, ...fields } = input;
+  const source = citedEpisode(db, source_event_id);
+  const { annotations: checked, text } = checkedAnnotations(db, source, raw, exemplarAnnotationSchema);
   const language = getDisplayLanguage(db);
-  const annotations = parsed.data.map(({ original, ...annotation }) => (original?.trim() ? { ...annotation, original: { text: original, language } } : annotation));
-  const text = annotations.map((a) => a.text).join("\n");
+  const annotations = checked.map(({ original, ...annotation }) => (original?.trim() ? { ...annotation, original: { text: original, language } } : annotation));
   const id = createEntry(db, { ...fields, kind: "exemplar", state: "approved", text, original: null, annotations, source }, origin, at);
   return { entry_id: id, event_id: id };
 }
@@ -463,7 +478,7 @@ export function invalidateMemoryEntry(
 }
 
 /** meta-review の無効化(ADR 0122 決定1): approved の Behavior は承認の線なので提案へ回し、`path_moved` は
- *  `moveMemory` だけが生む。 */
+ *  `moveMemory` だけが生む。`rejected` は Behavior にも Exemplar にもならない candidate の引退(issue #954)。 */
 export function invalidateMemoryByMetaReview(
   db: Db,
   input: Parameters<typeof invalidateMemoryEntry>[1],
@@ -474,6 +489,7 @@ export function invalidateMemoryByMetaReview(
   if (input.reason === "path_moved") throw new DomainError("path_moved comes only from move_memory, which copies the text itself");
   const row = requireEntry(db, input.entry_id);
   if (row.kind === "behavior" && row.state === "approved") throw new DomainError(`memory entry ${row.id} is an approved behavior: propose its invalidation instead`);
+  if (input.reason === "rejected" && row.state !== "candidate") throw new DomainError(`rejected retires only a candidate; memory entry ${row.id} is not one`);
   return invalidateMemoryEntry(db, input, workerId, origin, at, { activity: "meta_review" });
 }
 
@@ -491,7 +507,7 @@ function openProposalsPinning(db: Db, entryId: number): string[] {
   ).map(({ id }) => id);
 }
 
-/** pin 検査(ADR 0120 決定4): candidate が未無効化の Behavior candidate(invalidate op は target の版が一致し未無効化)で、
+/** pin 検査(ADR 0120 決定4): candidate が未無効化の Behavior / Exemplar candidate(invalidate op は target の版が一致し未無効化)で、
  *  replaces の版が現在と一致し未無効化。
  *  approve も reject も、見せた状態に対してだけ適用する。 */
 function assertProposalFresh(db: Db, proposal: MemoryProposal): EntryRow {
@@ -503,7 +519,8 @@ function assertProposalFresh(db: Db, proposal: MemoryProposal): EntryRow {
   const fresh =
     (proposal.op === "invalidate"
       ? unchanged(proposal.target)
-      : named.kind === "behavior" && named.state === "candidate" && named.invalidation_reason === null) && proposal.replaces.every(unchanged);
+      : (named.kind === "behavior" || named.kind === "exemplar") && named.state === "candidate" && named.invalidation_reason === null) &&
+    proposal.replaces.every(unchanged);
   if (!fresh) throw new DomainError("this proposal is stale: a memory entry it names changed since it was proposed");
   return named;
 }
@@ -527,6 +544,8 @@ export function approveMemoryProposal(db: Db, proposal: MemoryProposal, question
       if (amendment) throw new DomainError("an invalidate proposal takes no amendment");
       return invalidateMemoryEntry(db, { entry_id: candidate.id, reason: proposal.reason }, HUMAN_WORKER_ID, origin, at, mark);
     }
+    // 注釈の修正は #944 の拡張 —— 修正値の欄(文言・宛先)を Exemplar に当てる口はまだ無いので断る
+    if (amendment && candidate.kind === "exemplar") throw new DomainError("an exemplar proposal takes no amendment: approve or reject it as drafted");
     if (amendment) {
       const { addressee = candidate.addressee, title = candidate.title, text = candidate.text, ...original } = amendment;
       const { entry_id } = recordBehavior(db, { ...humanEntryInput(db, { workspace: candidate.scope, path: candidate.path, title, text, ...original }), addressee }, origin, at, mark, candidate);
@@ -573,6 +592,22 @@ const PROPOSAL_FIELDS = {
   invalidate: ["target_id", "reason"],
 } as const;
 
+/** 提案 question の detail の Exemplar の本文(issue #954): 注釈と、worker の read_memory と同じ case 描画。 */
+function exemplarDetail(db: Db, row: EntryRow): string[] {
+  const { annotations, source } = rowToEntry(row);
+  const rendered = renderCase(db, source)!;
+  return [
+    "Annotations:",
+    ...annotations!.map(({ anchor, polarity, text }) => `- ${polarity} (${anchor === "whole" ? "whole" : `${anchor.field}: ${JSON.stringify(anchor.quote)}`}): ${text}`),
+    "Case:",
+    ...("decisions" in rendered
+      ? ["Decisions:", ...rendered.decisions.map((decision) => `- ${decision}`)]
+      : [`Decision: ${rendered.decision}`, ...rendered.steering.map((steering) => `Steering: ${steering}`)]),
+    `Handoff: ${rendered.handoff ?? "(none)"}`,
+    `Result: ${rendered.result ?? "(none)"}`,
+  ];
+}
+
 /** 提案 verb(spec #615 E / issue #620・#621): meta-review の子に提案 question を1件立て、pin を焼いて question の id を返す。
  *  consolidate の新 candidate と question は1 transaction。 */
 export function proposeMemoryChange(
@@ -582,7 +617,8 @@ export function proposeMemoryChange(
     op: "approve" | "consolidate" | "invalidate";
     rationale: string;
     candidate_id?: number;
-    text?: { scope: string | null; path: string; title: string; text: string; addressee: string | null };
+    /** kind 省略 = behavior。exemplar は text を持たず注釈を持つ(text は注釈から導く)。 */
+    text?: { scope: string | null; path: string; title: string; text?: string; addressee: string | null; kind?: "behavior" | "exemplar"; annotations?: unknown };
     replaces?: number[];
     based_on_decision?: number;
     target_id?: number;
@@ -603,20 +639,39 @@ export function proposeMemoryChange(
     let heading: string[];
     let shown: EntryRow;
     if (input.op === "consolidate") {
-      const replaced = [...new Set(need(input.replaces, "replaces"))].map((id) => requireBehavior(db, id));
+      const replaced = [...new Set(need(input.replaces, "replaces"))].map((id) => {
+        const row = requireEntry(db, id);
+        if ((row.kind !== "behavior" && row.kind !== "exemplar") || row.invalidation_reason !== null) {
+          throw new DomainError(`memory entry ${id} is not a non-invalidated behavior or exemplar`);
+        }
+        return rowToEntry(row);
+      });
       if (replaced.length === 0) throw new DomainError("a consolidation needs at least one entry to replace");
       const decision = requireDecision(db, need(input.based_on_decision, "based_on_decision"));
-      const created = createBehaviorCandidate(
-        db,
-        { ...need(input.text, "text"), source: { event_id: decision }, author: { activity: "meta_review", name: workerId } },
-        "worker",
-        now,
-      );
-      proposal = { kind: "memory", op: "consolidate", candidate_id: created.entry_id, replaces: replaced.map(({ id, version }) => ({ id, version })) };
-      shown = requireEntry(db, created.entry_id);
+      const { kind = "behavior", text, annotations, ...draft } = need(input.text, "text");
+      // replaces が1つの出所を共有するなら新 candidate はそれを継ぐ(rule ↔ case の関係を共有 Episode から導ける)。workspace を
+      // 跨ぐ統合(ADR 0120)は帰責 event が揃わないので meta-review の推論のまま。自身の作成 event の出所は継ぐ事例を持たない
+      const [first, ...rest] = replaced;
+      const shared =
+        first!.source.ref !== first!.id && rest.every(({ source }) => source.kind === first!.source.kind && source.ref === first!.source.ref) ? first!.source : undefined;
+      const author = { activity: "meta_review" as const, name: workerId };
+      let created: number;
+      if (kind === "exemplar") {
+        // text は注釈の英語 text から導く —— 渡されたら黙って捨てず断る
+        if (text !== undefined) throw new DomainError("an exemplar's text is derived from its annotations: do not pass text");
+        if (!shared) throw new DomainError("an exemplar consolidation needs replaces that share one source: the exemplar keeps it as its case");
+        const checked = checkedAnnotations(db, shared, annotations, metaReviewAnnotationSchema);
+        created = createEntry(db, { ...draft, ...checked, kind, state: "candidate", original: null, source: shared, author }, "worker", now);
+      } else {
+        if (annotations !== undefined) throw new DomainError("only an exemplar takes annotations");
+        const source = shared ?? { event_id: decision };
+        created = createEntry(db, { ...draft, text: need(text, "text.text"), kind, state: "candidate", original: null, source, author }, "worker", now);
+      }
+      proposal = { kind: "memory", op: "consolidate", candidate_id: created, replaces: replaced.map(({ id, version }) => ({ id, version })) };
+      shown = requireEntry(db, created);
       // scope null への統合で、どの workspace・宛先から広がるかを人間が見られるように置換対象ごとに載せる
       heading = [
-        `Consolidate into new behavior candidate #${created.entry_id}, replacing:`,
+        `Consolidate into new ${kind} candidate #${created}, replacing:`,
         ...replaced.map((row) => `#${row.id} (scope: ${row.scope ?? "whole board"}, addressee: ${row.addressee ?? "every agent"}): ${row.text}`),
       ];
     } else if (input.op === "invalidate") {
@@ -640,8 +695,7 @@ export function proposeMemoryChange(
       `Path: ${shown.path}`,
       `Addressee: ${shown.addressee ?? "every agent"}`,
       `Title: ${shown.title}`,
-      input.op === "invalidate" ? "Text:" : "New text:",
-      shown.text,
+      ...(shown.kind === "exemplar" ? exemplarDetail(db, shown) : [input.op === "invalidate" ? "Text:" : "New text:", shown.text]),
     ].join("\n");
     const title = `${{ approve: "Approve", consolidate: "Consolidate", invalidate: "Invalidate" }[input.op]} memory: ${shown.title}`;
     const question = registerTask(
@@ -997,9 +1051,10 @@ export function pullMemoryList(
         ? listMemoryEntries(db, input)
         : verb === "list_memory_behaviors"
           ? listMemoryEntries(db, { kind: "behavior", state: "approved" })
-          : ((all) => all.filter((e) => e.state === "candidate" && (input.include_invalidated || e.invalidation_reason === null)).map((e) => withSuccessor(e, all)))(
-              listMemoryEntries(db, {}),
-            );
+          : ((all) =>
+              all
+                .filter((e) => e.state === "candidate" && (input.kind === undefined || e.kind === input.kind) && (input.include_invalidated || e.invalidation_reason === null))
+                .map((e) => withSuccessor(e, all)))(listMemoryEntries(db, {}));
     const { rows: shown, truncated } = paged(entries, input.page);
     return recordPull(db, reader, { verb, input, returned_ids: shown.map((e) => e.id) }, { entries: shown, truncated }, at);
   })();
@@ -1062,10 +1117,11 @@ type MemoryCase =
   | { decisions: string[]; handoff: string | null; result: string | null };
 
 /** 出所から case を描く。帰責 event は異議された entry へ辿る。事例に辿れない出所(commit、自身の作成
- *  event など)は null。handoff / result / decision 列は Episode の投影表でなく、anchor を含む session の窓
+ *  event など)は null。decision 種別の出所は書き手(meta-review)自身の推論で事例ではないので null —— RCA / Board call の
+ *  起草の出所は帰責 event(issue #954)。handoff / result / decision 列は Episode の投影表でなく、anchor を含む session の窓
  *  (`sessionWindow`)の events から読む —— Harness にも投影の有無にも依らない(issue #960)。 */
 function renderCase(db: Db, source: MemorySource): MemoryCase | null {
-  if (source.kind === "commit") return null;
+  if (source.kind !== "event") return null;
   const event = getEvent(db, source.ref);
   if (event?.payload.kind === "worker_spawned") {
     const session = caseSession(db, event);
