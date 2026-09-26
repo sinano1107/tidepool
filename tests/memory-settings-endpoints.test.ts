@@ -1,6 +1,6 @@
 import { afterEach, expect, it } from "vitest";
 import { recordKnowledge } from "../src/memory.js";
-import { registerTask } from "../src/tasks.js";
+import { logDecision, registerTask } from "../src/tasks.js";
 import { FakeTranslationClient } from "./fakes.js";
 import { api, bootTidepool, managementMcpClient, type Tidepool } from "./harness.js";
 
@@ -199,4 +199,42 @@ it("POST /api/settings/memory/behaviors と管理MCP の record_behavior は Beh
   } finally {
     await client.close();
   }
+});
+
+it("Exemplar の write(POST /api/settings/memory/exemplars・管理MCP の record_exemplar)と case preview(GET /api/settings/memory/cases/:event_id・preview_case)は domain の結果を返し、domain error は 400 / tool error(ADR 0153)", async () => {
+  t = await bootTidepool();
+  const task = registerTask(t.db, { type: "work", title: "t", purpose: "p", completion_criteria: "c" }, t.clock.now());
+  const decision = logDecision(t.db, task, "split the migration into two commits", "deckhand", t.clock.now());
+  const exemplar = {
+    workspace: "tidepool",
+    path: "habits/migrations",
+    title: "Split the migration",
+    addressee: null,
+    source_event_id: decision,
+    annotations: [{ anchor: { field: "decision", quote: "two commits" }, polarity: "imitate", text: "Split schema changes from data changes." }],
+  };
+  const preview = { decision: "split the migration into two commits", steering: [], handoff: null, result: null };
+
+  const written = await api(t.baseUrl, "POST", "/api/settings/memory/exemplars", exemplar);
+  expect(written).toMatchObject({ status: 200, json: { entry_id: expect.any(Number) } });
+  expect((await api(t.baseUrl, "POST", "/api/settings/memory/exemplars", { ...exemplar, source_event_id: 1 })).status).toBe(400);
+  expect(await api(t.baseUrl, "GET", `/api/settings/memory/cases/${decision}`)).toMatchObject({ status: 200, json: preview });
+  expect((await api(t.baseUrl, "GET", "/api/settings/memory/cases/1")).status).toBe(400);
+
+  const client = await managementMcpClient(t.baseUrl);
+  try {
+    const recorded = (await client.callTool({ name: "record_exemplar", arguments: exemplar })) as any;
+    expect(recorded.isError).toBeFalsy();
+    const mismatched = { ...exemplar, annotations: [{ ...exemplar.annotations[0], anchor: { field: "decision", quote: "three commits" } }] };
+    expect(((await client.callTool({ name: "record_exemplar", arguments: mismatched })) as any).isError).toBe(true);
+    const previewed = (await client.callTool({ name: "preview_case", arguments: { event_id: decision } })) as any;
+    expect(JSON.parse(previewed.content[0].text)).toEqual(preview);
+    expect(((await client.callTool({ name: "preview_case", arguments: { event_id: 1 } })) as any).isError).toBe(true);
+  } finally {
+    await client.close();
+  }
+  expect((await api(t.baseUrl, "GET", "/api/settings/memory/entries?kind=exemplar")).json.entries).toMatchObject([
+    { id: written.json.entry_id, kind: "exemplar", state: "approved", author: { activity: "human" } },
+    { kind: "exemplar" },
+  ]);
 });

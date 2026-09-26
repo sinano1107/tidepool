@@ -11,6 +11,7 @@ import {
   invalidateMemoryEntry,
   readMemorySettings,
   recordBehavior,
+  recordExemplar,
   recordKnowledge,
   recordMemoryInjection,
 } from "../src/memory.js";
@@ -118,6 +119,26 @@ it("人間が書いた Behavior は書いた時点で approved になり、宛�
 
   expect(buildMemoryInjection(db, task, "tidepool", "deckhand").entries).toEqual([{ id: entry_id, version: entry_id }]);
   expect(buildMemoryInjection(db, task, "tidepool", "someone-else").entries).toEqual([]);
+});
+
+it("decision entry を出所に持つ Exemplar も、注釈の text で関連 leaf のポインタに並び、出所の種別は fact(ADR 0153)", () => {
+  const { db, task } = board();
+  const decision = logDecision(db, task, "reset the chart clock", "deckhand", at);
+  const { entry_id } = recordExemplar(
+    db,
+    humanEntryInput(db, {
+      workspace: "tidepool",
+      path: "tide",
+      title: "Clock reset case",
+      addressee: null,
+      source_event_id: decision,
+      annotations: [{ anchor: "whole", polarity: "imitate", text: "When the chart drifts, reset its clock first." }],
+    }),
+    "webui",
+    at,
+  );
+
+  expect(buildMemoryInjection(db, task, "tidepool", "deckhand").section).toContain(`- #${entry_id} Clock reset case (path: tide, source: fact)`);
 });
 
 it("英語の自然文の task では、stopword しか共有しない leaf は関連 leaf に入らない(#606 の実測: 4枝 10 leaf → 2件)", () => {

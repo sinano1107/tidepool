@@ -15,6 +15,7 @@ import {
   readMemory,
   rebuildMemoryIndex,
   recordBehavior,
+  recordExemplar,
   recordKnowledge,
   rejectMemoryProposal,
 } from "../src/memory.js";
@@ -389,7 +390,7 @@ it("人間が書く Knowledge に出所を渡すと domain error —— 出所�
   expect(approvedMemoryEntries(db)).toEqual([]);
 });
 
-it("人間が書く Behavior は任意で decision_logged か worker_spawned の event を出所に添えられ、他の種別の event は domain error —— 添えなければ出所は自身の作成 event(ADR 0153 決定3)", () => {
+it("人間が書く Behavior は任意で decision_logged か worker_spawned の event を出所に添えられ(decision でも種別は event)、他の種別の event は domain error —— 添えなければ出所は自身の作成 event(ADR 0153 決定3)", () => {
   const { db, task } = board();
   const decision = logDecision(db, task, "split the migration", "deckhand", at);
   // setup のみ: worker session の開始 event
@@ -410,7 +411,7 @@ it("人間が書く Behavior は任意で decision_logged か worker_spawned の
   expect(() => write(999)).toThrow(DomainError);
 
   expect(approvedMemoryEntries(db).map((e) => [e.id, e.source])).toEqual([
-    [fromDecision, { kind: "decision", ref: decision }],
+    [fromDecision, { kind: "event", ref: decision }],
     [fromSession, { kind: "event", ref: spawned }],
     [own, { kind: "event", ref: own }],
   ]);
@@ -442,6 +443,27 @@ it("人間の Behavior は supersedes で approved の Behavior を書き直し�
   expect(getEvent(db, revised + 1)).toMatchObject({ worker_id: "human", payload: { kind: "memory_entry_invalidated", entry_id: old, activity: "human" } });
 });
 
+it("人間の Behavior の編集は出所を渡さなければ旧の出所(RCA 起草の帰責 event も)を継ぎ、渡せば置き換える —— 旧の出所が自身の作成 event なら後継も自身の作成 event(ADR 0153 決定3)", () => {
+  const { db, task } = board();
+  const decision = logDecision(db, task, "split the migration", "deckhand", at);
+  const registered = listEvents(db, task.id)[0]!.id;
+  const drafted = createBehaviorCandidate(db, { ...knowledge, addressee: null, source: { event_id: registered }, author: { activity: "rca", name: "auditor" } }, "board", at).entry_id;
+  approveMemoryProposal(db, { kind: "memory", op: "approve", candidate_id: drafted, replaces: [] }, "question-1", "webui", at);
+  const edit = (supersedes: number, source_event_id?: number) =>
+    recordBehavior(db, { ...humanEntryInput(db, humanKnowledge), addressee: null, supersedes, ...(source_event_id === undefined ? {} : { source_event_id }) }, "webui", at).entry_id;
+
+  const inherited = edit(drafted);
+  const replaced = edit(inherited, decision);
+  const own = recordBehavior(db, { ...humanEntryInput(db, humanKnowledge), addressee: null }, "webui", at).entry_id;
+  const ownEdited = edit(own);
+
+  expect(approvedMemoryEntries(db).map((e) => [e.id, e.source])).toEqual([
+    [replaced, { kind: "event", ref: decision }],
+    [ownEdited, { kind: "event", ref: ownEdited }],
+  ]);
+  expect(listMemoryEntries(db, { kind: "behavior" }).find((e) => e.id === inherited)?.source).toEqual({ kind: "event", ref: registered });
+});
+
 it("直接編集で superseded になった approved Behavior を pin する open な提案 question は、観測で決着し回答は残らない(ADR 0152 決定4)", () => {
   const { db, task } = board();
   const write = (supersedes?: number) =>
@@ -453,6 +475,94 @@ it("直接編集で superseded になった approved Behavior を pin する ope
 
   expect(getTask(db, question_id)).toMatchObject({ status: "done", question_answer: null });
   expect(listEvents(db, question_id).map((e) => e.kind)).toEqual(["task_registered", "memory_proposal_stale"]);
+});
+
+const exemplar = (db: ReturnType<typeof openDb>, source_event_id: number, annotations: unknown[]) =>
+  recordExemplar(
+    db,
+    humanEntryInput(db, { workspace: "tidepool", path: "habits/migrations", title: "Split the migration", addressee: null, source_event_id, annotations }),
+    "webui",
+    at,
+  ).entry_id;
+const whole = { anchor: "whole", polarity: "imitate", text: "Keep the whole shape." };
+
+it("人間が書く Exemplar は書いた時点で approved・書き手 human・出所は事例の event(decision でも種別は event)で、text は注釈の英語 text の連結、原文は注釈ごとに表示言語つきで持つ —— 作成 event が残り watermark 再生と rebuild でも同じ(ADR 0153 決定1)", () => {
+  const { db, task } = board();
+  const decision = logDecision(db, task, "split the migration into two commits", "deckhand", at);
+  const id = exemplar(db, decision, [
+    { anchor: { field: "decision", quote: "two commits" }, polarity: "imitate", text: "Split schema changes from data changes.", original: "スキーマとデータの変更を分ける" },
+    { anchor: "whole", polarity: "avoid", text: "Do not mix in unrelated refactors." },
+  ]);
+
+  const current = approvedMemoryEntries(db);
+  expect(current).toEqual([
+    {
+      id,
+      kind: "exemplar",
+      state: "approved",
+      scope: "tidepool",
+      path: "habits/migrations",
+      title: "Split the migration",
+      text: "Split schema changes from data changes.\nDo not mix in unrelated refactors.",
+      original: null,
+      addressee: null,
+      annotations: [
+        {
+          anchor: { field: "decision", quote: "two commits" },
+          polarity: "imitate",
+          text: "Split schema changes from data changes.",
+          original: { text: "スキーマとデータの変更を分ける", language: "Japanese" },
+        },
+        { anchor: "whole", polarity: "avoid", text: "Do not mix in unrelated refactors." },
+      ],
+      source: { kind: "event", ref: decision },
+      author: human,
+      version: id,
+    },
+  ]);
+  expect(getEvent(db, id)).toMatchObject({ payload: { kind: "memory_entry_created", entry: { kind: "exemplar", annotations: current[0]!.annotations } } });
+  expect(approvedMemoryEntries(db, id)).toEqual(current);
+  // setup のみ: 版の古い店を模して rebuild を走らせる
+  db.prepare("UPDATE memory_index_version SET preprocess_version = 'cjk-bigram-0'").run();
+  ensureMemoryIndex(db, at);
+  expect(approvedMemoryEntries(db)).toEqual(current);
+});
+
+it.each([
+  ["出所が decision_logged / worker_spawned 以外の event", "registered", [whole]],
+  ["出所の event が無い", 999, [whole]],
+  ["注釈が空", "decision", []],
+  ["polarity が無い", "decision", [{ anchor: "whole", text: "Keep it." }]],
+  ["text が無い", "decision", [{ anchor: "whole", polarity: "imitate" }]],
+  ["text が空白だけ", "decision", [{ anchor: "whole", polarity: "imitate", text: " " }]],
+  ["quote が decision の逐語部分文字列でない", "decision", [whole, { anchor: { field: "decision", quote: "three commits" }, polarity: "avoid", text: "x" }]],
+  ["quote の欄が空(steering 無し)", "decision", [{ anchor: { field: "steering", quote: "two" }, polarity: "avoid", text: "x" }]],
+  ["quote の欄が無い(handoff 無し)", "decision", [{ anchor: { field: "handoff", quote: "two" }, polarity: "avoid", text: "x" }]],
+] as const)("Exemplar の%sは domain error で何も書かない(ADR 0153 決定3)", (_, source, annotations) => {
+  const { db, task } = board();
+  const registered = listEvents(db, task.id)[0]!.id;
+  const decision = logDecision(db, task, "split the migration into two commits", "deckhand", at);
+  const ref = source === "registered" ? registered : source === "decision" ? decision : source;
+  expect(() => exemplar(db, ref, [...annotations])).toThrow(DomainError);
+  expect(approvedMemoryEntries(db)).toEqual([]);
+});
+
+it("worker_spawned を出所に持つ Exemplar の decision の quote はその session のどの decision に当たってもよく、steering の anchor は domain error(ADR 0153 決定3)", () => {
+  const { db, task } = board();
+  // setup のみ: worker session の開始 event
+  const spawned = appendEvent(db, {
+    taskId: task.id,
+    workerId: "deckhand",
+    origin: "board",
+    at,
+    payload: { kind: "worker_spawned", registry_commit: "c", definition_version: "1", advisor: null, provider: "anthropic", model: "opus", effort: "high", source: { tier: "task", provider: "only" }, harness: "claude-code", cli_version: "1" },
+  });
+  logDecision(db, task, "read the schema first", "deckhand", at);
+  logDecision(db, task, "split the migration into two commits", "deckhand", at);
+
+  expect(() => exemplar(db, spawned, [{ anchor: { field: "steering", quote: "split" }, polarity: "avoid", text: "x" }])).toThrow(DomainError);
+  const id = exemplar(db, spawned, [{ anchor: { field: "decision", quote: "two commits" }, polarity: "imitate", text: "Split it." }]);
+  expect(approvedMemoryEntries(db)).toMatchObject([{ id, source: { kind: "event", ref: spawned } }]);
 });
 
 it("人間が書く定義の原文は title = text で持つ", () => {

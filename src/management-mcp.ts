@@ -39,15 +39,18 @@ import {
   humanBehaviorSchema,
   humanDefinitionSchema,
   humanEntryInput,
+  humanExemplarSchema,
   humanKnowledgeSchema,
   invalidateMemoryEntry,
   invalidationSchema,
   listMemoryEntries,
   memoryListFilterSchema,
   memorySettingsChangeSchema,
+  previewCase,
   readMemorySettings,
   rebuildMemoryIndex,
   recordBehavior,
+  recordExemplar,
   recordKnowledge,
   TOKENIZER,
 } from "./memory.js";
@@ -612,11 +615,34 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
         "Record a Behavior entry: how agents should act, injected into the workers of addressee (an agent name, or null for every agent). " +
         "To edit an approved behavior, pass its id as supersedes: the new entry replaces it and the old one is invalidated as superseded. " +
         "Candidates cannot be edited here. source_event_id optionally cites the episode the rule comes from: a decision_logged or " +
-        "worker_spawned event id; an edit does not carry the old entry's source over, so pass it again to keep it. title and text are the English canonical wording; " +
+        "worker_spawned event id; an edit without it keeps the old entry's source. title and text are the English canonical wording; " +
         `original_title and original_text go together (both or neither). ${writtenAs}`,
       inputSchema: humanBehaviorSchema.shape,
     },
     async (input) => memoryVerb(() => recordBehavior(deps.db, humanEntryInput(deps.db, input), "mcp", deps.clock.now())),
+  );
+  server.registerTool(
+    "preview_case",
+    {
+      description:
+        "Render the case an exemplar can cite: event_id is a decision_logged event (its decision text, the steering of its objections, " +
+        "and its session's handoff and result) or a worker_spawned event (that session's decisions in order, handoff and result).",
+      inputSchema: { event_id: z.number().int().positive() },
+    },
+    async ({ event_id }) => memoryVerb(() => previewCase(deps.db, event_id)),
+  );
+  server.registerTool(
+    "record_exemplar",
+    {
+      description:
+        "Record an Exemplar entry: a concrete case agents should learn from, injected into the workers of addressee (an agent name, or null " +
+        "for every agent). source_event_id is the case: a decision_logged or worker_spawned event id (see preview_case). annotations is a " +
+        "non-empty list; each has a polarity (imitate or avoid), an English text, an optional original (the human's own wording), and an " +
+        "anchor: \"whole\" or { field, quote } where quote is a verbatim substring of that field (decision, steering, handoff or result) " +
+        `of the rendered case. title is the English one-line label. ${writtenAs}`,
+      inputSchema: humanExemplarSchema.shape,
+    },
+    async (input) => memoryVerb(() => recordExemplar(deps.db, humanEntryInput(deps.db, input), "mcp", deps.clock.now())),
   );
   server.registerTool(
     "invalidate_memory_entry",

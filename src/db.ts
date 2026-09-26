@@ -485,7 +485,7 @@ export function openDb(path: string): Db {
     -- 時刻・回数・重みの列は持たない(時刻は events)。
     CREATE TABLE IF NOT EXISTS memory_entries (
       id                  INTEGER PRIMARY KEY,
-      kind                TEXT NOT NULL CHECK (kind IN ('knowledge', 'behavior', 'definition')),
+      kind                TEXT NOT NULL CHECK (kind IN ('knowledge', 'behavior', 'definition', 'exemplar')),
       state               TEXT NOT NULL CHECK (state IN ('candidate', 'approved')),
       scope               TEXT,
       path                TEXT NOT NULL,
@@ -495,6 +495,8 @@ export function openDb(path: string): Db {
       original_text       TEXT,
       original_language   TEXT,
       addressee           TEXT,
+      -- Exemplar の注釈 list(JSON、ADR 0153)。他の種別は NULL
+      annotations         TEXT,
       source_kind         TEXT NOT NULL CHECK (source_kind IN ('event', 'commit', 'decision')),
       source_ref          TEXT NOT NULL,
       author_activity     TEXT NOT NULL CHECK (author_activity IN ('worker_verb', 'human', 'rca', 'meta_review', 'board')),

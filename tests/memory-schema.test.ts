@@ -34,6 +34,14 @@ it("fresh 盤面に memory のエントリ表があり、値域どおりの行�
   db.close();
 });
 
+it("エントリ表は kind exemplar と注釈の列を受ける(ADR 0153 / issue #952)", () => {
+  const db = openDb(":memory:");
+  const annotations = JSON.stringify([{ anchor: "whole", polarity: "imitate", text: "x" }]);
+  insert(db, { kind: "exemplar", source_kind: "event", source_ref: "5", author_activity: "human", annotations });
+  expect(db.prepare("SELECT kind, annotations FROM memory_entries").all()).toEqual([{ kind: "exemplar", annotations }]);
+  db.close();
+});
+
 it.each([
   ["種別", { kind: "fact" }],
   ["状態", { state: "rejected" }],
