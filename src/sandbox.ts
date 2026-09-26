@@ -661,15 +661,11 @@ function settingsFile(
  *  Fail-closed on a file it cannot parse: the CLI's own reader may accept more
  *  than `JSON.parse` does, and "we couldn't tell" must not read as "clean".
  *
- *  All of the above binds only files the CLI will read (ADR 0158). A tracked
- *  `.claude/settings.json` carrying floor keys, hooks, or invalid JSON is
- *  returned as `excludedProjectSettings` instead: the caller hides it with
- *  sparse-checkout for the session, and a file the CLI never reads — which the
- *  worker cannot write back (ADR 0037) — has no floor to widen and nothing to
- *  overlook. Local or untracked files stay offending because sparse-checkout
- *  cannot safely remove them, and so does a file the filesystem cannot read.
- *  `projectHooks` is the register gate's `claude_settings_hooks` signal (issue
- *  #383), not a disposition: tracked hooks without floor keys, as before.
+ *  All of the above binds only files the CLI will read (ADR 0158): a tracked
+ *  `.claude/settings.json` with floor keys, hooks, or invalid JSON is returned
+ *  as `excludedProjectSettings` for the caller to hide during the session.
+ *  Local, untracked, and unreadable files stay offending. `projectHooks` is the
+ *  register gate's signal (issue #383), not a disposition.
  *
  *  `untrackedProjectSettings` is not part of the guard: it feeds the register
  *  gate's live-checkout signal (issue #686) — `.claude/settings.json` on disk
@@ -697,13 +693,12 @@ export function workspaceSettingsDisposition(workspacePath: string) {
       if (typeof parsed !== "object" || parsed === null) continue;
       const floor = FLOOR_DEFINING_KEYS.some((key) => key in parsed);
       if (!floor && !("hooks" in parsed)) continue;
-      if (indexed === undefined) {
-        offending.push(name);
-        continue;
+      if (indexed === undefined) offending.push(name);
+      else {
+        excludedProjectSettings = true;
+        // 登録の門の信号は広げない —— 床キー持ちの tracked は黙って通す(issue #686)
+        if (!floor) projectHooks = true;
       }
-      excludedProjectSettings = true;
-      // 登録の門の信号は広げない —— 床キー持ちの tracked は黙って通す(issue #686)
-      if (!floor) projectHooks = true;
     } catch {
       if (indexed === undefined) offending.push(name);
       else excludedProjectSettings = true;
