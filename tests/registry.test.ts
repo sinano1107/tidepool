@@ -392,7 +392,10 @@ describe("loadRegistry", () => {
     const dir = await makeRegistry();
     const mainCommit = execFileSync("git", ["rev-parse", "main"], { cwd: dir }).toString().trim();
     const git = (...args: string[]) =>
-      execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@e", ...args], { cwd: dir });
+      execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@e", ...args], {
+        cwd: dir,
+        stdio: ["ignore", "pipe", "pipe"],
+      });
     // branch discipline moves HEAD onto a registry-edit task branch, and the
     // working tree carries an edit that never went through a human merge —
     // the loophole ADR 0020 closes
