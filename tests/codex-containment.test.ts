@@ -585,11 +585,11 @@ it("codex が PATH に無ければ、preflight は起こさず、合成した pa
     },
   })();
 
-  expect(capability).toEqual({ available: false, reason: "Codex containment preflight failed: codex was not found on PATH" });
+  expect(capability).toEqual({ available: false, reason: "Codex containment preflight failed: codex was not found on PATH when the board started" });
   expect(JSON.stringify(capability)).not.toContain(codex.executable);
 });
 
-it("codex を経路にする agent が registry に居なければ、起動時に codex の Harness 検査は走らず question は立たない(#683)", async () => {
+it("quarantine の resolver が codex を経路にする agent を返さなければ、起動時に codex の Harness 検査は走らず question は立たない(#683)", async () => {
   t = await bootTidepool({
     quarantineResolvers: { harnessContainment: (harnesses) => (harnesses.includes("codex") ? [] : ["tako"]) },
     harnessContainment: async (harness) =>
@@ -599,7 +599,7 @@ it("codex を経路にする agent が registry に居なければ、起動時�
   expect(listBoard(t.db).filter((task) => task.type === "question" && task.status === "todo")).toEqual([]);
 });
 
-it("openai を entry に持つ agent が居れば、起動時に codex の Harness 検査が走り、失敗は question を立てる(#683)", async () => {
+it("quarantine の resolver が codex を経路にする agent を返せば、起動時に codex の Harness 検査が走り、失敗は question を立てる(#683)", async () => {
   t = await bootTidepool({
     quarantineResolvers: { harnessContainment: (harnesses) => (harnesses.includes("codex") ? ["codex-agent"] : ["tako"]) },
     harnessContainment: async (harness) =>

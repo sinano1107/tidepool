@@ -174,7 +174,7 @@ export interface BoardComposition {
   moonshotApiKeyFile: string;
   /** ADR 0098: isolated Board-owned Codex login/cache/config root. */
   codexHome: string;
-  /** ADR 0098: absolute Codex executable; the live preflight proves it exists. */
+  /** ADR 0098: absolute Codex executable, synthetic when `codexOnPath` is false. */
   codexExecutable: string;
   /** false: codex was not on PATH and `codexExecutable` is synthetic (#683). */
   codexOnPath: boolean;

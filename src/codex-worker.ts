@@ -883,7 +883,7 @@ export function createCodexCapabilityCheck(options: {
   call: BoardCall;
 }): () => Promise<ContainmentCapability> {
   if (options.onPath === false) {
-    return async () => ({ available: false, reason: "Codex containment preflight failed: codex was not found on PATH" });
+    return async () => ({ available: false, reason: "Codex containment preflight failed: codex was not found on PATH when the board started" });
   }
   return () => checkCodexCapability(
     () => actualCodexCapability(options),
