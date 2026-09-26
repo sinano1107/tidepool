@@ -588,10 +588,10 @@ const defaultRunOk: RunOkFn = (command, args) => {
   }
 };
 
-/** Settings that claim authorship of the worker floor and therefore can never
- *  be silently removed. A tracked project-tier `hooks` block is the exception:
- *  issue #382 makes that file absent from the worker checkout instead, while
- *  keeping the human-authored hooks in Git. */
+/** Settings that claim authorship of the worker floor. In a local or untracked
+ *  file they quarantine the workspace; a tracked `.claude/settings.json` is
+ *  made absent from the worker checkout instead, whatever it holds (issue #382
+ *  / ADR 0158), while staying in Git for the human side. */
 const FLOOR_DEFINING_KEYS = ["sandbox", "permissions"];
 
 function settingsIndexState(workspacePath: string, path: string): "tracked" | "hidden" | undefined {
@@ -660,15 +660,19 @@ function settingsFile(
  *
  *  Fail-closed on a file it cannot parse: the CLI's own reader may accept more
  *  than `JSON.parse` does, and "we couldn't tell" must not read as "clean".
- *  Tracked project hooks are returned as a separate disposition for physical
- *  exclusion; local or untracked hooks remain offending because sparse-checkout
- *  cannot safely remove them.
+ *
+ *  All of the above binds only files the CLI will read (ADR 0158): a tracked
+ *  `.claude/settings.json` with floor keys, hooks, or invalid JSON is returned
+ *  as `excludeProjectSettings` for the caller to hide during the session.
+ *  Local, untracked, and unreadable files stay offending. `projectHooks` is the
+ *  register gate's signal (issue #383), not a disposition.
  *
  *  `untrackedProjectSettings` is not part of the guard: it feeds the register
  *  gate's live-checkout signal (issue #686) — `.claude/settings.json` on disk
  *  and not in the index, whatever it holds. */
 export function workspaceSettingsDisposition(workspacePath: string) {
   const offending: string[] = [];
+  let excludeProjectSettings = false;
   let projectHooks = false;
   let hiddenProjectSettings = false;
   let untrackedProjectSettings = false;
@@ -687,15 +691,24 @@ export function workspaceSettingsDisposition(workspacePath: string) {
     try {
       const parsed: unknown = JSON.parse(file.raw);
       if (typeof parsed !== "object" || parsed === null) continue;
-      if (FLOOR_DEFINING_KEYS.some((key) => key in parsed)) {
-        offending.push(name);
-      } else if ("hooks" in parsed) {
-        if (indexed !== undefined) projectHooks = true;
-        else offending.push(name);
+      const floor = FLOOR_DEFINING_KEYS.some((key) => key in parsed);
+      if (!floor && !("hooks" in parsed)) continue;
+      if (indexed === undefined) offending.push(name);
+      else {
+        excludeProjectSettings = true;
+        // 登録の門の信号は広げない —— 床キー持ちの tracked は黙って通す(issue #686)
+        if (!floor) projectHooks = true;
       }
     } catch {
-      offending.push(name);
+      if (indexed === undefined) offending.push(name);
+      else excludeProjectSettings = true;
     }
   }
-  return { overriding: offending, projectHooks, hiddenProjectSettings, untrackedProjectSettings };
+  return {
+    overriding: offending,
+    excludeProjectSettings,
+    projectHooks,
+    hiddenProjectSettings,
+    untrackedProjectSettings,
+  };
 }

@@ -50,7 +50,7 @@ import type { TranscriptStore } from "./transcript-store.js";
 import { composeTerminalScreen } from "./usage.js";
 import type { WorkerAdapter, WorkerExit } from "./worker.js";
 import {
-  excludeWorkspaceProjectHooks,
+  excludeWorkspaceProjectSettings,
   guardRegistryDefaultBranch,
   materializeWorkspaceProjectSettings,
   quarantineWorkspace,
@@ -1547,10 +1547,10 @@ export class ClaudeCodeWorker implements WorkerAdapter {
    *  強制回収は容器の側なので、ここに居るのは root 1本でよい。A finished
    *  process removes itself so a stale entry never outlives it. */
   private readonly running = new Map<string, { kill(signal: NodeJS.Signals): void }>();
-  /** Shared project hooks stay hidden until every overlapping session in the
+  /** Shared project settings stay hidden until every overlapping session in the
    *  workspace has actually left its container. Slot release happens earlier,
    *  inside the worker's final MCP call, so it is not an exit boundary. */
-  private readonly projectHookSessions = new Map<string, number>();
+  private readonly projectSettingsSessions = new Map<string, number>();
   /** ADR 0018: resolved once at construction, same "config edge" posture as
    *  the rest of `options` — env access itself stays in main.ts. */
   private readonly workspacesDir: string;
@@ -1575,14 +1575,14 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     workspace: WorkspaceConfig,
   ): void {
     const key = workspace.path;
-    this.projectHookSessions.set(key, (this.projectHookSessions.get(key) ?? 0) + 1);
+    this.projectSettingsSessions.set(key, (this.projectSettingsSessions.get(key) ?? 0) + 1);
     void reclaimed.then(() => {
-      const remaining = (this.projectHookSessions.get(key) ?? 1) - 1;
+      const remaining = (this.projectSettingsSessions.get(key) ?? 1) - 1;
       if (remaining > 0) {
-        this.projectHookSessions.set(key, remaining);
+        this.projectSettingsSessions.set(key, remaining);
         return;
       }
-      this.projectHookSessions.delete(key);
+      this.projectSettingsSessions.delete(key);
       try {
         materializeWorkspaceProjectSettings(workspace);
       } catch (err) {
@@ -1648,9 +1648,10 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     // entries win, and a `permissions.allow` entry lifts review's manual write
     // floor (both measured — see workspaceSettingsDisposition). A work session can
     // write its own checkout, so this would be a two-session escalation: widen
-    // the floor in session N, walk out in N+1. A workspace that redefines the
-    // floor is a broken resource — quarantined like a dirty tree, and no session
-    // starts in it meanwhile.
+    // the floor in session N, walk out in N+1. A workspace whose local or
+    // untracked settings redefine the floor is a broken resource — quarantined
+    // like a dirty tree, and no session starts in it meanwhile. A tracked
+    // settings.json is hidden for the session instead, whatever it holds (ADR 0158).
     // issue #149 / ADR 0040: 盤面自身の状態(DB・worker-logs・token ファイル・
     // 実行 checkout)が workspace と交差していたら、この workspace で走る worker は
     // 人間面に到達せずに盤面の状態を書き換えられる(ADR 0034/0036 の不変条件の
@@ -1675,19 +1676,20 @@ export class ClaudeCodeWorker implements WorkerAdapter {
         this.options.db,
         workspace.name,
         new Error(
-          `workspace carries unsafe .claude/${overriding.join(", .claude/")}: it is invalid, ` +
-            "declares sandbox/permissions, or carries hooks outside tracked settings.json " +
-            "(ADR 0033 / ADR 0035 / issues #378 and #382) — repair the JSON, remove floor " +
-            "blocks, or commit project hooks in .claude/settings.json",
+          `workspace carries unsafe .claude/${overriding.join(", .claude/")}: it is unreadable, ` +
+            "or it is a local or untracked settings file that is invalid JSON or declares " +
+            "sandbox/permissions/hooks (ADR 0033 / ADR 0035 / ADR 0158) — the board can hide " +
+            "only a Git-tracked .claude/settings.json, so make the file readable or remove it " +
+            "(or those blocks) from this checkout",
         ),
         this.options.clock.now(),
       );
       return;
     }
-    if (settings.projectHooks) {
+    if (settings.excludeProjectSettings) {
       try {
         const reclaimed = this.containers.open(task.id).reclaimed;
-        excludeWorkspaceProjectHooks(workspace);
+        excludeWorkspaceProjectSettings(workspace);
         this.restoreProjectSettingsAfterReclaim(reclaimed, workspace);
       } catch (err) {
         quarantineWorkspace(this.options.db, workspace.name, err, this.options.clock.now());
