@@ -1004,7 +1004,7 @@ it("create_workspace は mode と各引数を listTools で advertise する(iss
   try {
     const { tools } = await client.listTools();
     const schema: any = tools.find((tool) => tool.name === "create_workspace")?.inputSchema;
-    expect(Object.keys(schema.properties)).toEqual(expect.arrayContaining(["mode", "name", "path", "repo"]));
+    expect(Object.keys(schema.properties)).toEqual(expect.arrayContaining(["mode", "name", "notes", "protected", "path", "repo"]));
     expect(schema.properties.mode.enum).toEqual(["register", "clone", "create"]);
     expect(schema.required).toEqual(expect.arrayContaining(["name", "mode"]));
   } finally {
