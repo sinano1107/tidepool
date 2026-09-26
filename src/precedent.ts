@@ -371,6 +371,15 @@ export function sessionWindow(
   };
 }
 
+/** `anchor` を含む session を開いた `worker_spawned`: anchor 自身が spawn ならそれ、そうでなければ anchor より前で最後に
+ *  開いた同じ task の session で、その窓に anchor が入るもの —— 窓の外(session 無しに書かれた entry)なら undefined。
+ *  `events` は同じ task の、payload を解いた event(spawn と exit があれば足りる)。case 描画と決定ログの一覧が共有する。 */
+export function sessionSpawnOf(events: readonly EventRow[], anchor: EventRow): EventRow | undefined {
+  if (anchor.kind === "worker_spawned") return anchor;
+  const spawned = events.filter((e) => e.kind === "worker_spawned" && e.task_id === anchor.task_id && e.id < anchor.id).at(-1);
+  return spawned && sessionWindow(events, spawned).inSession(anchor) ? spawned : undefined;
+}
+
 /** この session の `decision_logged`(decision)/ `memory_pulled`(memory)を、盤面が
  *  発行した event id の**完全一致**で行動列に結ぶ(ADR 0083 追記 2 — ヒューリスティック
  *  結合は作らない)。出現順や文言では結ばない: フィクスチャの events 6 と 7 は文言が

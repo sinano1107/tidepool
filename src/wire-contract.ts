@@ -147,6 +147,8 @@ export interface WireContract {
       workspace: string | null;
       cause: Cause | null;
       objections: Array<{ comment: string; session_id: number }>;
+      /** エントリを含む worker session の worker_spawned の id(src/events.ts の LogEntry)。窓の外なら null。 */
+      session_event_id: number | null;
     }>;
     cursor: number;
   };
@@ -286,6 +288,15 @@ export interface WireContract {
       invalidation_reason: string | null;
       successor_id: number | null;
       cause: string | null;
+      /** 値集合の正本は src/memory.ts の MemorySource。event の ref が自身の id なら出所は作成 event(事例なし)。 */
+      source: { kind: "commit"; ref: string } | { kind: "event" | "decision"; ref: number };
+      /** Exemplar のみ(src/memory.ts の ExemplarAnnotation)。 */
+      annotations?: Array<{
+        anchor: "whole" | { field: "decision" | "steering" | "handoff" | "result"; quote: string };
+        polarity: "imitate" | "avoid";
+        text: string;
+        original?: { text: string; language: string };
+      }>;
     }>;
   };
   /** 事例の case 描画(src/memory.ts の MemoryCase、ADR 0153 決定3): decision entry なら本文と steering、session なら decision 列。 */
