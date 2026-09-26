@@ -82,27 +82,33 @@ const harnessCheck = (check: () => Promise<ContainmentCapability>) => async (har
 // 欠落は一切見ない。
 
 it("ping が観測した面が宣言どおりなら成立する", async () => {
-  const observed = async () => ({ tools: WORK_SURFACE, mcpServers: [], autoMemoryPath: null });
-  expect(await probeToolSurfaceCapability(observed)).toEqual({ available: true });
+  expect(
+    await probeToolSurfaceCapability(async () => ({
+      tools: WORK_SURFACE,
+      mcpServers: [],
+      autoMemoryPath: null,
+    })),
+  ).toEqual({ available: true });
   // init の `tools` 配列の順序は CLI の内部順であって盤面の綴り順ではない(集合の一致)
-  const reversed = async () => ({
-    tools: [...WORK_SURFACE].reverse(),
-    mcpServers: [],
-    autoMemoryPath: null,
-  });
-  expect(await probeToolSurfaceCapability(reversed)).toEqual({ available: true });
+  expect(
+    await probeToolSurfaceCapability(async () => ({
+      tools: [...WORK_SURFACE].reverse(),
+      mcpServers: [],
+      autoMemoryPath: null,
+    })),
+  ).toEqual({ available: true });
 });
 
 it("`mcp__` で始まるエントリは比較対象から外す — MCP の落下を封じ込めの不成立に化けさせない", async () => {
   // MCP サーバーが繋がらなかったセッションでは verb が丸ごと消える。含めると
   // 「盤面の MCP が落ちている」が封じ込め能力の不成立に化ける。それは別の障害で
   // あり別の扱いを受けるべきである(ADR 0039 決定3)。
-  const observed = async () => ({
+  const result = await probeToolSurfaceCapability(async () => ({
     tools: [...WORK_SURFACE, "mcp__tidepool__get_current_task"],
     mcpServers: [],
     autoMemoryPath: null,
-  });
-  expect(await probeToolSurfaceCapability(observed)).toEqual({ available: true });
+  }));
+  expect(result).toEqual({ available: true });
 });
 
 it("ping が失敗したら不成立 — 「測れなかった」は「無事」ではない", async () => {
@@ -149,7 +155,7 @@ it("観測 ⊂ 期待も不成立 — 黙って不活性化した名前を挙げ
 });
 
 it("過不足が同時に起きたら両方を挙げる(綴りの取り違えの形そのもの)", async () => {
-  // `Grep` を `Bogus` と書けば、期待側に `Bogus` が現れ観測側から `Grep` が消える
+  // `Glob` を `Globb` と書けば、期待側に `Globb` が現れ観測側から `Glob` が消える
   // ——「1本足して1本落ちた」ではなく綴りミス1つである、と読める文が要る。
   const result = await probeToolSurfaceCapability(async () => ({
     tools: [...WORK_SURFACE.filter((tool) => tool !== "Grep"), "Bogus"],
