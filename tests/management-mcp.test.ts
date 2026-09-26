@@ -998,6 +998,39 @@ it("管理MCP に registry リソースの削除 verb は無い(ADR 0088 / issue
   }
 });
 
+it("create_workspace は mode と各引数を listTools で advertise する(issue #685)", async () => {
+  t = await bootTidepool({ workspaceAdmin: { create: async () => "/mnt/workspaces/harbor" } });
+  const client = await managementMcpClient(t.baseUrl);
+  try {
+    const { tools } = await client.listTools();
+    const schema: any = tools.find((tool) => tool.name === "create_workspace")?.inputSchema;
+    expect(Object.keys(schema.properties)).toEqual(expect.arrayContaining(["mode", "name", "path", "repo"]));
+    expect(schema.properties.mode.enum).toEqual(["register", "clone", "create"]);
+    expect(schema.required).toEqual(expect.arrayContaining(["name", "mode"]));
+  } finally {
+    await client.close();
+  }
+});
+
+it("create_workspace は mode と path / repo の組み合わせが欠けた呼び出しを拒み、workspace を作らない(issue #685)", async () => {
+  const created = vi.fn(async () => "/mnt/workspaces/harbor");
+  t = await bootTidepool({ workspaceAdmin: { create: created } });
+  const client = await managementMcpClient(t.baseUrl);
+  try {
+    for (const args of [
+      { name: "harbor", mode: "register" },
+      { name: "harbor", mode: "clone" },
+      { name: "harbor", mode: "adopt", path: "/work/harbor" },
+    ]) {
+      const result: any = await client.callTool({ name: "create_workspace", arguments: args });
+      expect(result.isError).toBe(true);
+    }
+    expect(created).not.toHaveBeenCalled();
+  } finally {
+    await client.close();
+  }
+});
+
 it("create_workspace は生きた dev checkout の信号でも登録を通し、信号と clone 入口の提案を結果に載せる(issue #383)", async () => {
   const calls: CreateWorkspaceInput[] = [];
   t = await bootTidepool({

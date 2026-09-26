@@ -89,6 +89,7 @@ import { GitDirNotADirectoryError, UnknownWorkspaceError, type WorkspaceConfig }
 import {
   BoardStateOverlapError,
   CheckoutHasOriginError,
+  type CreateWorkspaceInput,
   GitHubIdentityMissingError,
   LiveCheckoutSignalsError,
   NotAGitRepositoryError,
@@ -131,28 +132,31 @@ export interface ManagementMcpDeps {
   profileAdmin?: Partial<ProfileAdmin>;
 }
 
-const createWorkspaceSchema = z.discriminatedUnion("mode", [
-  z.object({
+// issue #685: top-level の union は SDK が object と認識せず引数を1つも advertise
+// しない。平らな object にして、mode と path / repo の組み合わせは refine で強制する
+const createWorkspaceSchema = z
+  .object({
     name: z.string().min(1),
     notes: z.string().min(1).optional(),
     protected: z.boolean().optional(),
-    mode: z.literal("register"),
-    path: z.string().min(1),
-  }),
-  z.object({
-    name: z.string().min(1),
-    notes: z.string().min(1).optional(),
-    protected: z.boolean().optional(),
-    mode: z.literal("clone"),
-    repo: z.string().min(1),
-  }),
-  z.object({
-    name: z.string().min(1),
-    notes: z.string().min(1).optional(),
-    protected: z.boolean().optional(),
-    mode: z.literal("create"),
-  }),
-]);
+    mode: z.enum(["register", "clone", "create"]),
+    path: z.string().min(1).optional().describe("Required for register (the existing checkout); ignored otherwise."),
+    repo: z.string().min(1).optional().describe("Required for clone (anything git clone accepts); ignored otherwise."),
+  })
+  .superRefine((input, ctx) => {
+    if (input.mode === "register" && input.path === undefined)
+      ctx.addIssue({ code: "custom", path: ["path"], message: "register requires path" });
+    if (input.mode === "clone" && input.repo === undefined)
+      ctx.addIssue({ code: "custom", path: ["repo"], message: "clone requires repo" });
+  });
+
+/** refine 済みの平らな入力を mode の分だけのフィールドに narrow する — 旧 union が
+ *  他 mode のキーを黙って剥がしていた挙動を保つ。 */
+function toCreateWorkspaceInput({ path, repo, ...rest }: z.infer<typeof createWorkspaceSchema>): CreateWorkspaceInput {
+  if (rest.mode === "register") return { ...rest, mode: "register", path: path! };
+  if (rest.mode === "clone") return { ...rest, mode: "clone", repo: repo! };
+  return { ...rest, mode: "create" };
+}
 
 const agentFieldsSchema = z.object({
   authority: z.string().min(1),
@@ -304,8 +308,9 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
         "Create a workspace in the human-managed registry. clone / create land at <workspaces dir>/<name> — read list_workspaces first for that directory and whether it is configured or the default. register goes through even when the path looks like a checkout a human is working in; the result then carries a notice naming what was observed and where the clone entrance would have landed instead.",
       inputSchema: createWorkspaceSchema,
     },
-    async (input) => {
+    async (args) => {
       if (!deps.workspaceAdmin?.create) return toolError("workspace administration is not configured");
+      const input = toCreateWorkspaceInput(args);
       try {
         return toolResult({ path: await deps.workspaceAdmin.create(input) });
       } catch (err) {
