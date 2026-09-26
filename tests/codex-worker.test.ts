@@ -6,12 +6,12 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CODEX_FEATURE_SNAPSHOT, CodexWorker, resolveCodexExecutable } from "../src/codex-worker.js";
 import { openDb } from "../src/db.js";
-import { listEvents } from "../src/events.js";
+import { appendEvent, listEvents } from "../src/events.js";
 import { resolveExecutionSetting } from "../src/execution-setting.js";
 import { buildMemoryInjection, recordKnowledge } from "../src/memory.js";
 import type { ContainerSpawn } from "../src/process-container.js";
 import { openQuarantineValues } from "../src/quarantine.js";
-import { loadRegistry } from "../src/registry.js";
+import { loadRegistry, REVIEWER_AUTHORITY_PROFILE } from "../src/registry.js";
 import { registerTask, type Task } from "../src/tasks.js";
 import { TranscriptStore } from "../src/transcript-store.js";
 import type { WorkerExit } from "../src/worker.js";
@@ -64,6 +64,7 @@ async function fixture(
   allowedDomains = "\n  allowed_domains:\n    - api.github.com",
   onWorkerExited?: (taskId: string, exit: WorkerExit) => void,
   spawn?: ContainerSpawn,
+  registryFiles: Record<string, string> = {},
 ) {
   const workspace = await tempDir("tidepool-codex-workspace-");
   execFileSync("git", ["init", "-b", "main"], { cwd: workspace });
@@ -82,6 +83,7 @@ You are the Codex worker.`,
     "workspaces.yaml": `work:
   path: ${workspace}${allowedDomains}
 `,
+    ...registryFiles,
   });
   const db = openDb(":memory:");
   const process = recordingSpawn();
@@ -108,7 +110,7 @@ You are the Codex worker.`,
   // scheduler が pickup の瞬間に選ぶ実行設定(除外なし)を渡す
   const agent = loadRegistry(registry, "purely-local").agents["codex-agent"]!;
   const start = (value: Task) => worker.start(value, resolveExecutionSetting(db, agent, value)!);
-  return { db, worker, start, process, codexHome, codexSystemDir, workspace, logDir };
+  return { db, worker, start, process, codexHome, codexSystemDir, workspace, logDir, registry };
 }
 
 describe("CodexWorker (ADR 0098)", () => {
@@ -316,8 +318,7 @@ describe("CodexWorker (ADR 0098)", () => {
       const developer = developerInstructions(args);
       expect(developer).toContain("You are the Codex worker.");
       expect(developer).toContain("## Authority");
-      expect(developer).toContain("Use only the tidepool MCP verbs to report board decisions and completion.");
-      expect(developer).toContain("Board verbs are main-thread only");
+      expect(developer).toContain("Board verbs (the tidepool MCP tools) are main-thread only");
       expect(developer).toContain('Spawn subagents with fork_turns: "none"; this session keeps no rollout, so forking the parent thread\'s history always fails.');
       expect(developer).toContain("declare a premise breach");
       expect(developer).not.toContain(value.title);
@@ -353,7 +354,7 @@ describe("CodexWorker (ADR 0098)", () => {
     }
   });
 
-  it("見える approved の記憶があれば work / review task とも注入節を developer_instructions の先頭に置き、worker_spawned の直後に memory_injected を書く。無ければ節を置かず entries 空で残す(spec #586 C / issue #592)", async () => {
+  it("見える approved の記憶があれば work / review task とも注入節を developer_instructions の末尾に置き(Claude と同じ位置 —— ADR 0157 決定1)、worker_spawned の直後に memory_injected を書く。無ければ節を置かず entries 空で残す(spec #586 C / issue #592)", async () => {
     const f = await fixture();
     const bare = task(f.db, "codex-no-memory");
     f.start(bare);
@@ -374,7 +375,7 @@ describe("CodexWorker (ADR 0098)", () => {
     for (const [i, value] of [work, review].entries()) {
       f.start(value);
       const { section } = buildMemoryInjection(f.db, value, "work", "codex-agent");
-      expect(developerInstructions(f.process.calls[i + 1]!.args).startsWith(`${section}\n\n`)).toBe(true);
+      expect(developerInstructions(f.process.calls[i + 1]!.args).endsWith(`\n\n${section}\n\n`)).toBe(true);
     }
 
     for (const value of [bare, work, review]) {
@@ -383,6 +384,164 @@ describe("CodexWorker (ADR 0098)", () => {
       expect(events[spawned + 1]?.payload).toMatchObject({ kind: "memory_injected", worker_spawned_event_id: events[spawned]!.id });
     }
     expect(listEvents(f.db, bare.id).find((e) => e.kind === "memory_injected")?.payload).toMatchObject({ entries: [] });
+  });
+
+  it("Board doctrine は Claude と同じ正本から、委譲先を subagent と訳して届き、Workflow 段落を持たず fork_turns の1文で終わる(ADR 0157 決定2・3)", async () => {
+    const f = await fixture();
+    f.start(task(f.db, "codex-doctrine"));
+    const developer = developerInstructions(f.process.calls[0]!.args);
+    const doctrine = developer.slice(developer.indexOf("## Board doctrine"), developer.indexOf("## Rules of the road"));
+    // 文面の一致は語で見る —— 折り返しの位置は Claude の文面に従う(#695)
+    const words = (text: string) => text.replace(/\s+/g, " ").trim();
+    expect(words(doctrine)).toBe(words(`## Board doctrine
+
+Work that needs independent completion criteria, separate authority, its own
+risk, or survival across sessions must not be routed to a subagent — that is
+delegation smuggled past the board. Register that split with the tidepool
+MCP's decompose instead.
+
+A subagent may only be used for labor-splitting that does not divide
+accountability (exploration, parallel research, mechanical edits): you carry
+full accountability for its output as the parent task. If another registry
+agent's capability is needed, use decompose with an assignee, not a subagent.
+
+Board verbs (the tidepool MCP tools) are main-thread only: a subagent's call
+is denied by the harness, not by an attacker. If a subagent reports that
+denial, make the call yourself from the main thread. Spawn subagents with
+fork_turns: "none"; this session keeps no rollout, so forking the parent
+thread's history always fails.`));
+    expect(developer).not.toContain("Workflow");
+    expect(developer).toContain('Spawn subagents with fork_turns: "none"; this session keeps no rollout, so forking the parent thread\'s history always fails.');
+  });
+
+  it("Rules of the road と network egress の行が届き、行は workspace の allowed_domains に従う(ADR 0157 決定1 / ADR 0072 決定4)", async () => {
+    const open = await fixture();
+    open.start(task(open.db, "codex-network-open"));
+    const opened = developerInstructions(open.process.calls[0]!.args);
+    expect(opened).toContain("## Rules of the road");
+    expect(opened).toContain("Commit your work before completing");
+    expect(opened).toContain("This session may reach only: api.github.com. Do not retry downloads from any other domain.");
+
+    const closed = await fixture(undefined, "");
+    closed.start(task(closed.db, "codex-network-closed"));
+    expect(developerInstructions(closed.process.calls[0]!.args)).toContain(
+      "This session cannot fetch from any external domain. Do not retry external downloads.",
+    );
+  });
+
+  it("authority guidance が空文字なら `## Authority` 見出しごと省き、空でなければ置く(issue #488 / ADR 0157 決定1)", async () => {
+    const empty = await fixture(undefined, undefined, undefined, undefined, {
+      "authority/standard.yaml": `guidance: ""\nassignable_to:\n  - "*"\nallowed_workspaces:\n  - "*"\nmerge: external\n`,
+    });
+    empty.start(task(empty.db, "codex-empty-guidance"));
+    expect(developerInstructions(empty.process.calls[0]!.args)).not.toContain("## Authority");
+
+    const filled = await fixture();
+    filled.start(task(filled.db, "codex-guidance"));
+    expect(developerInstructions(filled.process.calls[0]!.args)).toContain("## Authority\n\nPrefer reversible actions.");
+  });
+
+  it("work task の Roster は profile の assignable_to から、review task は reviewer の authority と被レビュー task の executor 1名の Roster になる(ADR 0056 / ADR 0157 決定1)", async () => {
+    const f = await fixture();
+    const at = new Date("2026-08-24T00:00:00.000Z");
+    const reviewed = registerTask(
+      f.db,
+      { type: "work", assignee: "deckhand", workspace: "work", title: "deckhand-work", purpose: "do it", completion_criteria: "done" },
+      at,
+    );
+    f.start(task(f.db, "codex-roster-work"));
+    f.start(registerTask(
+      f.db,
+      { type: "review", assignee: "codex-agent", workspace: "work", parent_id: reviewed.id, title: "codex-roster-review", purpose: "read it", completion_criteria: "reviewed" },
+      at,
+    ));
+
+    const work = developerInstructions(f.process.calls[0]!.args);
+    expect(work).toContain("## Roster\n\n");
+    expect(work).toContain("codex-agent — Codex agent");
+    expect(work).toContain("deckhand — General work agent for the tidepool board");
+
+    const review = developerInstructions(f.process.calls[1]!.args);
+    expect(review).toContain(
+      `## Authority\n\n${REVIEWER_AUTHORITY_PROFILE.guidance}\n\n## Roster\n\ndeckhand — General work agent for the tidepool board\n\n## Board doctrine`,
+    );
+    expect(review).not.toContain("Prefer reversible actions.");
+  });
+
+  it("当事者レビューは当時版の定義を証拠として持ち、節は 定義本文 → authority → roster → doctrine → protocol → 当時版 → Memory の順に並ぶ(ADR 0020 part 4 / ADR 0157 決定1)", async () => {
+    const f = await fixture();
+    const git = (...args: string[]) =>
+      execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@e", ...args], { cwd: f.registry }).toString().trim();
+    const objectedCommit = git("rev-parse", "main");
+    // objected の後に定義が改訂される —— review は現行版で走り、当時版は証拠として読む(ADR 0019)
+    await writeFile(
+      join(f.registry, "agents", "codex-agent.md"),
+      "---\nname: codex-agent\ndescription: Codex agent\nversion: 1.2.4\nauthority: standard\nprovider: openai\nskills: []\n---\nYou are the Codex worker, REFINED after the objected call.",
+    );
+    git("commit", "-am", "refine codex-agent");
+
+    const at = new Date("2026-08-24T00:00:00.000Z");
+    const objected = task(f.db, "codex-objected");
+    appendEvent(f.db, {
+      taskId: objected.id,
+      workerId: "codex-agent",
+      origin: "board",
+      payload: {
+        kind: "worker_spawned",
+        registry_commit: objectedCommit,
+        definition_version: "1.2.3",
+        advisor: null,
+        provider: "openai",
+        model: "gpt-5.6-terra",
+        effort: "high",
+        source: { tier: "board", provider: "only" },
+        harness: "codex",
+        cli_version: CLI_VERSION,
+      },
+      at,
+    });
+    const decision = appendEvent(f.db, {
+      taskId: objected.id,
+      workerId: "codex-agent",
+      origin: "board",
+      payload: { kind: "decision_logged", line: "chose approach X" },
+      at,
+    });
+    appendEvent(f.db, {
+      taskId: objected.id,
+      workerId: "human",
+      origin: "webui",
+      payload: { kind: "objection_raised", entry_id: decision, comment: "reconsider X", session_id: 1 },
+      at,
+    });
+    recordKnowledge(
+      f.db,
+      { scope: "work", path: "board", title: "Board correctness", text: "Tests guard the board.", author: { activity: "human", name: "human" } },
+      "webui",
+      at,
+    );
+    const rca = registerTask(
+      f.db,
+      { type: "review", assignee: "codex-agent", workspace: "work", parent_id: objected.id, title: "codex-rca", purpose: "why X", completion_criteria: "explained" },
+      at,
+    );
+    f.start(rca);
+
+    const developer = developerInstructions(f.process.calls[0]!.args);
+    const { section } = buildMemoryInjection(f.db, rca, "work", "codex-agent");
+    const order = [
+      "You are the Codex worker, REFINED after the objected call.",
+      "## Authority",
+      "## Roster\n\ncodex-agent — Codex agent",
+      "## Board doctrine",
+      "## Rules of the road",
+      "## Definition under review",
+      section!,
+    ].map((heading) => developer.indexOf(heading));
+    expect(order.every((index) => index >= 0)).toBe(true);
+    expect(order).toEqual([...order].sort((a, b) => a - b));
+    expect(developer).toContain("---\n\nYou are the Codex worker.\n\n");
+    expect(developer.endsWith(`\n\n${section}\n\n`)).toBe(true);
   });
 
   it("盤面が順位で選んだ openai の設定を渡されれば、anthropic を先頭に持つ agent でも codex で走る(#544 の demo —— spawn 側の再解決は順位1位の anthropic を返して拒否になる)", async () => {

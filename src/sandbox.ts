@@ -289,7 +289,7 @@ const AUTO_MEMORY_TOOL_DENY = `Edit(/${CLAUDE_AUTO_MEMORY_DIR}/**)`;
  *    board (issue #378 のやらないこと).
  *
  *  The deny reason is worker-facing text, hence English — and its "main-thread
- *  only" phrasing is load-bearing twice over: BOARD_DOCTRINE (claude-worker.ts)
+ *  only" phrasing is load-bearing twice over: boardDoctrine (board-prose.ts)
  *  tells workers how to recover from this exact denial, and the deploy canary
  *  greps for the phrase (BOARD_HOOK_WORDING). Reword all three together. */
 const SUBAGENT_BOARD_VERB_DENY: WorkerSessionSettings["hooks"]["PreToolUse"][0] = {
