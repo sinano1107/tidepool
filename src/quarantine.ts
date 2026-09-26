@@ -114,8 +114,13 @@ export const QUARANTINES = [
       purpose:
         `${reason}. ` +
         "Tasks assigned to this agent stay out of the slot until it is repaired. " +
-        "Answering confirms the repair — the board verifies before it resumes " +
-        "pickup; any answer text is kept as a repair note.",
+        "Answering confirms the repair — the board re-checks the following before it accepts " +
+        "the answer, and refuses it only if neither holds (either one is enough):\n\n" +
+        `1. an agent named "${name}" is back in the registry (never true when no registry is ` +
+        "configured).\n" +
+        "2. no `todo` task is still assigned to it (e.g. its pending tasks were reassigned to " +
+        "another agent).\n\n" +
+        "Any answer text is kept as a repair note.",
       completion_criteria: "the agent is repaired by hand",
     }),
   },
