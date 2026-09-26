@@ -6,9 +6,9 @@ argument-hint: "[issue] [codex|claude]"
 
 # 実装委任の選定
 
-決めるのは**モデル・effort・/code-review 強度**の3つ。「Opus 5 / high」という判断の形で渡し、起動は人間が手動で指示する。
+決めるのは**モデル・effort・/code-review 強度**の3つ。「Opus 5.5 / medium」という判断の形で渡し、起動は人間が手動で指示する。
 
-**対象: $ARGUMENTS** —— issue 番号の後に `codex` / `claude` があればその提供元だけ、無ければ両方。§1〜§3 は提供元非依存 —— 同じ判断を §4 / §5 の表に写すだけ。ティアの対応は**価格で揃える**(§5 の対応表): 主力 = Opus 5 ↔ Sol、廉価 = Sonnet 5 ↔ Terra、上位 = Fable 5.1 ↔ Astra。
+**対象: $ARGUMENTS** —— issue 番号の後に `codex` / `claude` があればその提供元だけ、無ければ両方。§1〜§3 は提供元非依存 —— 同じ判断を §4 / §5 の表に写すだけ。ティアの対応は**役割で揃える**(§5 の対応表): 上位 = Fable 5.1 ↔ Astra、主力 = Opus 5.5 ↔ Sol、廉価 = Sonnet 5 ↔ Sol(effort を下げる)。
 
 ## 出力
 
@@ -49,7 +49,7 @@ compute で埋めず、`/grilling`・issue の補完・分割のいずれかで�
 - **実装難度ではなく、間違いの現れ方で決める。** 上げるのは失敗が**静か**な面 —— 記録の汚染、開くだけのセキュリティ窓、挙動不変のはずの逸脱など、テストが緑のまま動いて見える方向。fail-closed に**うるさく**壊れる面(スキーマ拒否で止まる、受け入れ基準の赤で見える)は実装と同モデルで足りる。上げるときは「この間違いはどう静かに壊れるか」を issue ごとに1行。パターン踏襲の実装を強くレビューする逆転も、この軸から自然に出る(migration 等、見所が1点なら下げてよい)。
 - **実装と同じ提供元・設定が既定。** 上の1行が書けたときだけ1段上げ(初回の上限は `xhigh`)、判断が割れるなら同じ設定に置く。review のトークンが実装より少ないことは理由にならない。別系列レビューは残量に余裕があるときの任意の上乗せ。
 - **Codex**: モデルも effort も動かせる。spawn 時は必ず両方渡す(model だけでは compute budget が確定しない)。エージェントファイル側の設定は spawn 時より強いので、都度指定するならファイル側で固定しない。
-- **Claude Code**: 強度の上下はモデルで行う(effort は親を継ぐ)。上げる=上位モデル —— Opus 5 実装なら /code-review を Fable 5.1 に。effort が動かないことは実装と同モデルに揃える理由にならない。ただし `Sol / high → Sol / xhigh` に当たる中間段が無く、1段が価格2倍(§4 の週次上限も共有)—— 同じ1行が書けても、上げる閾値は Codex 側より高く置く。
+- **Claude Code**: 強度の上下はモデルで行う(subagent の effort は、セッションで明示した値があればそれ、無ければそのモデルの既定 —— §4)。上げる=上位モデル —— Opus 5.5 実装なら /code-review を Fable 5.1 に。effort が動かないことは実装と同モデルに揃える理由にならない。ただし Sol の effort 段に当たる中間段が無く、1段が価格2.5倍(§4 の週次上限も共有)—— 同じ1行が書けても、上げる閾値は Codex 側より高く置く。
 - **インライン実行する構成だけはモデルも effort も動かさない**(effort はプロンプトにレンダリングされキャッシュが飛ぶ)。
 - **上げられないときは issue 本文で埋める**(発動条件はトークン残量と、リポジトリの `/code-review` が別物に差し替わっているときの2つだけ): 不変条件をテストファイル名で列挙する / 判断の分岐を PR 本文に書かせる。
 
@@ -63,29 +63,29 @@ compute で埋めず、`/grilling`・issue の補完・分割のいずれかで�
 - **読む鎖の確認**: スキル → `CONTEXT.md`/ADR、`AGENTS.md` → issue の引き方、issue 冒頭 → ADR 番号。切れていたらその場所を直す(プロンプトで埋め合わせない)。
 - 大型リファクタは「挙動不変+既存テスト green」を完了条件に単独スライス。モジュール新設2つ以上なら分割不足。相互依存スライスは分けない(分けてよいのは順序依存だけで、前提として issue に書く)。
 
-## 4. Claude(鮮度 2026-09。世代が変わっていたら `claude-api` で更新し、このファイルも書き換える)
+## 4. Claude(鮮度 2026-09-26。世代が変わっていたら `claude-api` で更新し、このファイルも書き換える)
 
 | モデル | 向くタスク |
 |---|---|
 | **Fable 5.1** | 一発で解けていない難問、長時間の自律実装。既定 `high`。1リクエストが数分〜十数分走るので待ち方を先に決める |
-| **Opus 5** | 主力。複数ファイル実装・大きめリファクタ・床。既定 `high`、要求の厳しい作業だけ `xhigh` |
+| **Opus 5.5** | 主力。複数ファイル実装・大きめリファクタ・床。既定 `medium`(Claude Code の既定)、仕様が曖昧・床は `high`、要求の厳しい作業だけ `xhigh` |
 | **Sonnet 5** | 既存パターン踏襲、テスト追加、定型配線。既定 `high` |
 | **Haiku 4.5** | rename、機械的置換、大量読み取り |
 
 Max 席では Fable 5.1 も他モデルと同じ週次 usage limit を共有(上限50%)。
 
-## 5. Codex(GPT-6 Astra + GPT-5.6、鮮度 2026-09。世代が変わっていたら Web 検索で更新)
+## 5. Codex(GPT-6、鮮度 2026-09-26。世代が変わっていたら Web 検索で更新)
 
-対応は**価格で揃える**(in / out USD per MTok): Astra 10 / 50 = Fable 5.1 10 / 50、Sol 4 / 20 ≈ Opus 5 5 / 25、Terra 2 / 12 ≈ Sonnet 5 2 / 10。Sol の 4 / 20 は 2026-11-21 までの promo 価格で、元の 5 / 30 に戻っても Opus 5 の帯なので対応は動かない。最下段だけは価格が揃わない(Luna 0.20 / 1.20 に対し Haiku 4.5 は 1 / 5) —— ここは値段ではなく役割で対応させる。OpenAI 自身の位置づけは「Astra = most capable、Sol = complex professional work の flagship(`gpt-5.6` alias の行き先)」。
+対応は**役割で揃える**(in / out USD per MTok): Astra 10 / 50 = Fable 5.1 10 / 50 は価格も一致。GPT-6 に Terra は無く、Sol(2 / 10)が主力と廉価の両方を effort で受け持つ —— 価格は Sonnet 5(2 / 10)と同じで Opus 5.5(4 / 20)の半分だが、OpenAI の位置づけは「complex coding and agentic workflows」向けで、主力枠にあたる。Luna 0.10 / 0.50 と Haiku 4.5 1 / 5 も価格は揃わない。旧世代の GPT-5.6 Sol / Terra / Luna は表から外した。
 
 | モデル | Claude 側の相方 | 向くタスク |
 |---|---|---|
 | **Astra** | Fable 5.1 | 一発で解けていない難問、床。既定 `high`。`ultra` は effort の延長ではない別枠 orchestration mode —— 選ぶ前に効果を検証 |
-| **Sol** | Opus 5 | 主力。複数ファイル実装・大きめリファクタ。既定 `high`(OpenAI 既定は medium だが Opus 5 の既定 `high` に揃える)、要求の厳しい作業だけ `xhigh` |
-| **Terra** | Sonnet 5 | 既存パターン踏襲、テスト追加、定型配線。既定 `high` |
+| **Sol** | Opus 5.5 | 主力。複数ファイル実装・大きめリファクタ。既定 `medium`(OpenAI 既定、Opus 5.5 と同じ)、仕様が曖昧・床は `high`、要求の厳しい作業だけ `xhigh` |
+| **Sol** | Sonnet 5 | 既存パターン踏襲、テスト追加、定型配線。`low`〜`medium` |
 | **Luna** | Haiku 4.5 | rename、機械的置換、大量処理 |
 
-effort は提供モデルで幅が違う: Sol は `none`〜`max`(OpenAI 既定 medium)、Astra は `low`〜`max`(`none` なし)。low=軽作業、medium=標準、high=既定、xhigh=難所、max=§1 の再試行。強度を上げる梯子は `Sol / high → Sol / xhigh → Astra`。
+effort は提供モデルで幅が違う: Sol / Luna は `none`〜`max`(OpenAI 既定 medium)、Astra は `low`〜`max`(`none` なし)。low=軽作業、medium=標準・既定、high=曖昧さ・床、xhigh=難所、max=§1 の再試行。強度を上げる梯子は `Sol / medium → Sol / high → Sol / xhigh → Astra`。
 
 ## 6. 委任先の前提
 

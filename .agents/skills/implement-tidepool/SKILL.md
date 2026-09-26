@@ -23,7 +23,7 @@ Either way, before touching the branch, say which models the run will use. They 
 - **`/code-review`** — its sub-agents take the review strength.
 - **`/ponytail`** and **`/ponytail-review`** — never moved. Both run inline in the implementation thread at the implementation's own setting. They are different things: `/ponytail` is the standing mode that biases how the code gets written, `/ponytail-review` is a one-shot pass over a diff.
 
-**Effort behaves differently per provider.** Where the sub-agent spawn takes an effort — Codex — pass the decided one alongside the model; a model on its own does not fix the compute budget. Where it does not — Claude Code, whose sub-agents inherit the session's effort — the decided effort is a check rather than a setting: state the effort this session is running at, and if it is below what the decision calls for, stop and say so rather than implementing at the wrong tier.
+**Effort behaves differently per provider.** Where the sub-agent spawn takes an effort — Codex — pass the decided one alongside the model; a model on its own does not fix the compute budget. Where it does not — Claude Code — a sub-agent runs at the session's effort when one was set explicitly (`/effort`, `--effort`, `CLAUDE_CODE_EFFORT_LEVEL`), and otherwise at its own model's default (Opus 5.5 `medium`; Fable 5.1 and Sonnet 5 `high`). `echo $CLAUDE_EFFORT` shows the level this thread is running at. The decided effort is therefore a check rather than a setting: if the implementation sub-agent would run below it, stop before dispatching and ask the user to type `/effort <level>` — no restart; it applies to every sub-agent spawned after.
 
 ## Before writing code
 
