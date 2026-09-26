@@ -14,12 +14,9 @@ import {
 } from "./registry.js";
 import { AUTHORITY_WILDCARD, HUMAN_ROSTER_AGENT, reviewedTaskExecutor, type Task } from "./tasks.js";
 
-/** doctrine のスロット(ADR 0157 決定3)。スロットは「委譲先の語」と「Workflow 段落の有無」の2つだけ。
- *  `delegateAtLineEnd` は委譲先の語の同じスロットで、行末に掛かる位置の綴りである —— Claude の文面は
- *  バイト単位で不変(#695)で、そこだけ語の途中で折り返している。省けば `delegate` と同じ。 */
+/** doctrine のスロット(ADR 0157 決定3)。スロットは「委譲先の語」と「Workflow 段落の有無」の2つだけ。 */
 interface DoctrineVocabulary {
   delegate: string;
-  delegateAtLineEnd?: string;
   workflow: boolean;
 }
 
@@ -27,8 +24,10 @@ interface DoctrineVocabulary {
 // 0010), regardless of agent or profile — a board-wide doctrine copied into
 // each authority profile would drift, and "Agent tool"/"Workflow tool" are
 // vendor vocabulary the adapter translates the board's line into (ADR 0005)
-export function boardDoctrine({ delegate, delegateAtLineEnd = delegate, workflow }: DoctrineVocabulary): string {
-  const Delegate = delegate[0]!.toUpperCase() + delegate.slice(1);
+export function boardDoctrine({ delegate, workflow }: DoctrineVocabulary): string {
+  const delegateAtSentenceStart = delegate[0]!.toUpperCase() + delegate.slice(1);
+  // Claude の文面はバイト単位で不変(#695)で、2段落目の末尾だけ委譲先の語の最後の空白で折り返している
+  const delegateAtLineEnd = delegate.replace(/ (?=\S+$)/, "\n");
   return `## Board doctrine
 
 Work that needs independent completion criteria, separate authority, its own
@@ -36,7 +35,7 @@ risk, or survival across sessions must not be routed to ${delegate} —
 that is delegation smuggled past the board. Register that split with the
 tidepool MCP's decompose instead.
 
-${Delegate} may only be used for labor-splitting that does not divide
+${delegateAtSentenceStart} may only be used for labor-splitting that does not divide
 accountability (exploration, parallel research, mechanical edits): you carry
 full accountability for its output as the parent task. If another registry
 agent's capability is needed, use decompose with an assignee, not ${delegateAtLineEnd}.
@@ -111,7 +110,7 @@ function rosterLine(agent: RosterAgent): string {
  *  `human` (never a registry agent) draws `HUMAN_ROSTER_AGENT` only when
  *  explicitly listed. Absent/empty `assignable_to` → undefined (nothing to
  *  push). Names drifted out of the registry are silently skipped, same
- *  fail-closed spirit as the rest of this file's registry-drift handling. */
+ *  fail-closed spirit as the adapters' registry-drift handling. */
 function buildRoster(registry: Registry, assignableTo: string[] | undefined): string | undefined {
   if (assignableTo === undefined || assignableTo.length === 0) return undefined;
   const wildcard = assignableTo.includes(AUTHORITY_WILDCARD);
@@ -144,7 +143,6 @@ function authoritySection(guidance: string): string {
 function entryLabels(ids: number[]): string {
   return `${ids.length === 1 ? "entry" : "entries"} ${ids.map((id) => `#${id}`).join(", ")}`;
 }
-
 
 /** ADR 0020 part 4: a party review (self RCA) is a review task with a
  *  concrete assignee — the historical worker, baked as a fact (CONTEXT.md's

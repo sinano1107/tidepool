@@ -2076,7 +2076,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
           systemPrompt: definition.systemPrompt,
           profile,
           // ADR 0157 決定2: 委譲先は Agent tool、Workflow tool も実在するので禁止の段落が出る
-          doctrine: boardDoctrine({ delegate: "the Agent tool", delegateAtLineEnd: "the Agent\ntool", workflow: true }),
+          doctrine: boardDoctrine({ delegate: "the Agent tool", workflow: true }),
           allowedDomains: workspace.allowed_domains,
           memorySection: memory.section,
         }),
