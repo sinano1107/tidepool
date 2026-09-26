@@ -2366,7 +2366,8 @@ function SettingsScreen({ say, registerLeaveGuard }: {
       </React.Fragment>
     );
   } else if (sectionKey === 'board') {
-    // --- level 2 (board): the SQLite-backed preferences, one card each
+    // --- level 2 (board): the SQLite-backed preferences, one card each, then
+    // the read-only board-state cards under their own subheading (#691)
     body = (
       <React.Fragment>
         <ScreenHeader title="Board" backLabel="Settings" meta="board-wide preferences" onBack={() => go([])} />
@@ -2396,12 +2397,16 @@ function SettingsScreen({ say, registerLeaveGuard }: {
         {metaReviewSettings && (
           <MetaReviewSettingsCard settings={metaReviewSettings} say={say} onSaved={loadMetaReviewSettings} edit={edit} />
         )}
-        {githubLoggedIn !== null && <GitHubLoginCard loggedIn={githubLoggedIn} />}
-        {(translateUsage !== null || translateUsageFailed) && <TranslateUsageCard records={translateUsage} />}
         {(!displayLanguageLoaded || !quietHoursLoaded || !providerPaceOffsets || !executionSettings || !memorySettings || !metaReviewSettings) && (
           <Card style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)' }}>loading…</Card>
         )}
         <p style={settingsFootnote}>applies to every task the board picks up</p>
+        {/* read-only state the board holds — not a preference, so outside the footer's claim (#691) */}
+        {(githubLoggedIn !== null || translateUsage !== null || translateUsageFailed) && (
+          <p style={{ ...settingsCardLabel, margin: 0 }}>board state</p>
+        )}
+        {githubLoggedIn !== null && <GitHubLoginCard loggedIn={githubLoggedIn} />}
+        {(translateUsage !== null || translateUsageFailed) && <TranslateUsageCard records={translateUsage} />}
       </React.Fragment>
     );
   } else if (!sec) {
