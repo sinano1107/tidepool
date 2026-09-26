@@ -14,6 +14,7 @@ import {
   observedDeveloperMarkers,
   observedHooks,
   observedSkills,
+  resolveCodexExecutable,
 } from "../src/codex-worker.js";
 import { listEvents } from "../src/events.js";
 import { executionSettingsFor } from "../src/execution-setting.js";
@@ -570,4 +571,42 @@ it("the public queue and answer routes expose a durable Harness-scoped stop with
   } finally {
     await tidepool.stop();
   }
+});
+
+it("codex が PATH に無ければ、preflight は起こさず、合成した path ではなく PATH に見つからないことを理由にする(#683)", async () => {
+  const codex = resolveCodexExecutable(await tempDir("tidepool-empty-path-"));
+  const capability = await createCodexCapabilityCheck({
+    ...codex,
+    codexHome: "/nonexistent/codex-home",
+    workspace: await tempDir("tidepool-codex-preflight-ws-"),
+    allowedDomains: [],
+    call: () => {
+      throw new Error("preflight must not spawn an absent codex");
+    },
+  })();
+
+  expect(capability).toEqual({ available: false, reason: "Codex containment preflight failed: codex was not found on PATH" });
+  expect(JSON.stringify(capability)).not.toContain(codex.executable);
+});
+
+it("codex を経路にする agent が registry に居なければ、起動時に codex の Harness 検査は走らず question は立たない(#683)", async () => {
+  t = await bootTidepool({
+    quarantineResolvers: { harnessContainment: (harnesses) => (harnesses.includes("codex") ? [] : ["tako"]) },
+    harnessContainment: async (harness) =>
+      harness === "codex" ? { available: false, reason: "codex was not found on PATH" } : { available: true },
+  });
+
+  expect(listBoard(t.db).filter((task) => task.type === "question" && task.status === "todo")).toEqual([]);
+});
+
+it("openai を entry に持つ agent が居れば、起動時に codex の Harness 検査が走り、失敗は question を立てる(#683)", async () => {
+  t = await bootTidepool({
+    quarantineResolvers: { harnessContainment: (harnesses) => (harnesses.includes("codex") ? ["codex-agent"] : ["tako"]) },
+    harnessContainment: async (harness) =>
+      harness === "codex" ? { available: false, reason: "codex was not found on PATH" } : { available: true },
+  });
+
+  expect(listBoard(t.db).filter((task) => task.type === "question" && task.status === "todo")).toMatchObject([
+    { question_quarantine_kind: "harnessContainment", question_quarantine_value: "codex" },
+  ]);
 });

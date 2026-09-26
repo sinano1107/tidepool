@@ -782,6 +782,6 @@ describe("resolveCodexExecutable", () => {
     await writeFile(realExecutable, "#!/bin/sh\n", { mode: 0o755 });
     await symlink(realExecutable, join(linkDir, "codex"));
 
-    expect(resolveCodexExecutable(linkDir)).toBe(await realpath(realExecutable));
+    expect(resolveCodexExecutable(linkDir).executable).toBe(await realpath(realExecutable));
   });
 });

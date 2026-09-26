@@ -836,10 +836,14 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
   // 実際に bind された番号を使う — テスト盤面は port: 0 で起こす。
   probeHumanSurface = () =>
     checkHumanSurfaceRefusesAnonymous(`http://127.0.0.1:${humanPort}${HUMAN_SURFACE_PROBE_PATH}`);
-  // Both Harness resources are inspected before boot returns. Pickup and
-  // Confirmation answers run the same four-question check again.
+  // Harness resources some registry agent routes through (ADR 0110 決定1, via the
+  // same resolver the quarantine stops use) are inspected before boot returns.
+  // Without a resolver both are. Pickup and Confirmation answers run the same
+  // four-question check again.
   if (harnessContainment) {
-    for (const harness of ["claude-code", "codex"] as const) {
+    const agentsUsing = options.quarantineResolvers?.harnessContainment;
+    const harnesses = (["claude-code", "codex"] as const).filter((harness) => !agentsUsing || agentsUsing([harness]).length > 0);
+    for (const harness of harnesses) {
       await harnessContainmentPickupBlocked(db, harness, harnessContainment, options.clock.now());
     }
   }

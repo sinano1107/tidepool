@@ -611,20 +611,20 @@ async function runFile(
  * so a narrower child PATH cannot turn an observed CLI into ENOENT.
  * 見つかった場合に返すのは symlink を解いた実体のパス —— sandbox が exec するのは実体なので、
  * `permissionConfig()` が read を与える `dirname()` も実体側でなければ届かない(issue #646)。 */
-export function resolveCodexExecutable(searchPath = process.env.PATH ?? ""): string {
+export function resolveCodexExecutable(searchPath = process.env.PATH ?? ""): { executable: string; onPath: boolean } {
   const directories = searchPath.split(delimiter).filter(Boolean);
   for (const directory of directories) {
     const candidate = resolve(directory, "codex");
     try {
       accessSync(candidate, fsConstants.X_OK);
-      return realpathSync(candidate);
+      return { executable: realpathSync(candidate), onPath: true };
     } catch {
       // Keep searching the declared PATH.
     }
   }
-  // Preserve the absolute-path invariant even when absent. The live preflight
-  // will persist a Codex-only quarantine after the human surface is listening.
-  return resolve(directories[0] ?? "/usr/local/bin", "codex");
+  // Preserve the absolute-path invariant even when absent. `onPath: false` makes
+  // the preflight name the absence instead of this synthetic path (#683).
+  return { executable: resolve(directories[0] ?? "/usr/local/bin", "codex"), onPath: false };
 }
 
 /** `codex debug prompt-input` の出力から、`<skills_instructions>` の `### Available skills` に
@@ -874,12 +874,17 @@ async function actualCodexCapability(options: {
 
 export function createCodexCapabilityCheck(options: {
   executable: string;
+  /** `resolveCodexExecutable` の結果。false なら probe を起こさない。 */
+  onPath?: boolean;
   codexHome: string;
   codexSystemDir?: string;
   workspace: string;
   allowedDomains: readonly string[];
   call: BoardCall;
 }): () => Promise<ContainmentCapability> {
+  if (options.onPath === false) {
+    return async () => ({ available: false, reason: "Codex containment preflight failed: codex was not found on PATH" });
+  }
   return () => checkCodexCapability(
     () => actualCodexCapability(options),
     boardHookPath(options.codexHome),

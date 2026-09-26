@@ -58,6 +58,7 @@ function composition(): BoardComposition {
     moonshotApiKeyFile: "/nonexistent/moonshot-api-key",
     codexHome: "/nonexistent/codex-home",
     codexExecutable: "/nonexistent/bin/codex",
+    codexOnPath: false,
     githubAuth: undefined,
     githubTokenFile: undefined,
     vapid: undefined,

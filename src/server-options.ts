@@ -176,6 +176,8 @@ export interface BoardComposition {
   codexHome: string;
   /** ADR 0098: absolute Codex executable; the live preflight proves it exists. */
   codexExecutable: string;
+  /** false: codex was not on PATH and `codexExecutable` is synthetic (#683). */
+  codexOnPath: boolean;
   /** ADR 0024 / issue #50: 盤面の GitHub 識別情報。ファイルの読み取りは合成 root
    *  側の I/O なので、ここには解決済みの値だけが来る。未設定 → GitHub 機能は
    *  すべて fail-closed で off。 */
@@ -671,6 +673,7 @@ function profileAdmin(board: BoardComposition): ProfileAdmin | undefined {
 function boardCallers(board: BoardComposition, workspace: WorkspaceConfig | undefined, call: BoardCall): BoardCallers {
   const codexContainment = workspace && createCodexCapabilityCheck({
     executable: board.codexExecutable,
+    onPath: board.codexOnPath,
     codexHome: board.codexHome,
     workspace: workspace.path,
     allowedDomains: workspace.allowed_domains ?? [],
