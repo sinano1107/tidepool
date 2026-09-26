@@ -74,6 +74,20 @@ export function readInitMcpServers(parsed: Record<string, unknown> | null): stri
   return names as string[];
 }
 
+/** The init line's `memory_paths.auto` — the host auto-memory directory the CLI
+ *  loaded into this session (ADR 0156; measured 2.1.283: `memory_paths: {auto:
+ *  <dir>}` while auto-memory is on, the whole field gone with
+ *  `autoMemoryEnabled: false`). **Null here means closed** — `memory_paths`
+ *  absent, or carrying only other kinds of memory — unlike the readers above,
+ *  where null means "not the init report". Only `auto` is read, so a vendor
+ *  adding another kind of memory does not quarantine the board. */
+export function readInitAutoMemoryPath(parsed: Record<string, unknown> | null): string | null {
+  if (!isInitLine(parsed)) return null;
+  const paths = (parsed as Record<string, unknown>).memory_paths;
+  const auto = typeof paths === "object" && paths !== null ? (paths as { auto?: unknown }).auto : null;
+  return typeof auto === "string" ? auto : null;
+}
+
 /** The init line's `model` — the CLI's **resolved** main model id, e.g.
  *  `claude-sonnet-5` for a `--model sonnet` spawn (issue #33, measured). Only
  *  used to decide whether the advisor's own usage is separable from the main

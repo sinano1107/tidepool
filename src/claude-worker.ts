@@ -35,10 +35,11 @@ import {
   type RosterAgent,
   SKILL_WILDCARD,
 } from "./registry.js";
-import { buildSandboxSettings, workspaceSettingsDisposition } from "./sandbox.js";
+import { AUTO_MEMORY_CLOSED, buildSandboxSettings, workspaceSettingsDisposition } from "./sandbox.js";
 import {
   countAdvisorConsultations,
   parseStreamLine,
+  readInitAutoMemoryPath,
   readInitField,
   readInitMcpServers,
   readInitModel,
@@ -452,6 +453,29 @@ export function checkToolSurface(
       "have parted ways. Check the CLI version against what the board declares (CONTEXT.md): " +
       "the Tool allowlist for a built-in, `--mcp-config` + `--strict-mcp-config` for a server. " +
       "Then fix the declaration or pin the CLI",
+  };
+}
+
+/** ADR 0156 決定3: **ホストの auto-memory の層が閉じているか**。`autoMemory` は
+ *  init 報告の `memory_paths.auto`(`readInitAutoMemoryPath`)で、文字列として
+ *  有れば不成立、無ければ成立。盤面は worker 設定と probe の両方で `AUTO_MEMORY_CLOSED`
+ *  を渡しているので、`auto` が出るのは CLI がその設定を honor しなくなったとき
+ *  (キーの改名、per-task `--settings` が丸ごと黙って無視された)である。
+ *
+ *  `checkToolSurface` と同じく、probe と実セッションの init 行の照合が**この1つ**を
+ *  共有する。 */
+export function checkAutoMemoryClosed(autoMemory: string | null): ContainmentCapability {
+  if (autoMemory === null) return { available: true };
+  return {
+    available: false,
+    reason:
+      "this host's claude CLI loaded the host's auto-memory into a session the board closed it " +
+      `for (ADR 0156): the init report's \`memory_paths.auto\` is ${autoMemory}. The board sets ` +
+      "`autoMemoryEnabled: false` and pins `autoMemoryDirectory`, so an `auto` entry means the " +
+      "CLI no longer honors those settings — a MEMORY.md the board never wrote reaches the " +
+      "worker, and the worker can carry things to the next session past the board's Memory. " +
+      "Check the CLI version and the settings key names (`autoMemoryEnabled` / " +
+      "`autoMemoryDirectory`), then fix the settings or pin the CLI",
   };
 }
 
@@ -1303,7 +1327,12 @@ function atNeutralCwd<T>(
  *
  *  Both or nothing: a half-read init line is not an observation of the surface,
  *  and null already means "could not observe" on this seam. */
-export type EnumerateToolsFn = () => Promise<{ tools: string[]; mcpServers: string[] } | null>;
+export type EnumerateToolsFn = () => Promise<{
+  tools: string[];
+  mcpServers: string[];
+  /** ADR 0156: `memory_paths.auto`, read off the same init line — null is closed. */
+  autoMemoryPath: string | null;
+} | null>;
 
 // 3つ目の問いの正本の ping(ADR 0039 決定3)。**work のリストで撃つ — review 用に
 // 2本目は撃たない。** review は work の真部分集合なので、改名で不活性化した名前
@@ -1313,10 +1342,10 @@ export type EnumerateToolsFn = () => Promise<{ tools: string[]; mcpServers: stri
 //
 // **この ping が運ぶのは本番フラグ一式のうち面を決める分だけである。** `--tools` は
 // 測る対象そのもの、`--permission-mode` と `--setting-sources project` は本番と同じ値。
-// 運ばないのは `--settings`(サンドボックスプロファイル)と `--mcp-config` — どちらも
-// **タスク単位の生成物**(workspace のパス・タスク帰属つき URL)で、spawn の外には
-// 存在しない。したがって正本が答えるのは「このホストの CLI が盤面の `--tools` 宣言を
-// honor するか」であり、`--settings` まで含んだ**実際の spawn 形**を測るのは深層防御側
+// 運ばないのは per-task の `--settings` ファイル(サンドボックスプロファイル)と
+// `--mcp-config` — どちらも**タスク単位の生成物**(workspace のパス・タスク帰属つき URL)で、
+// spawn の外には存在しない。したがって正本が答えるのは「このホストの CLI が盤面の宣言を
+// honor するか」であり、`--settings` ファイルまで含んだ**実際の spawn 形**を測るのは深層防御側
 // (実セッションの init 行)である。2つで面の全体を覆う、という分担であって取りこぼし
 // ではない — ADR 0039 の測定は本番フラグ一式で 18本(組み込み17 + MCP verb 1)を観測
 // しており、正本の側はその MCP verb が無い 17本を見る(`mcp__` は比較対象外なので
@@ -1338,12 +1367,21 @@ export type EnumerateToolsFn = () => Promise<{ tools: string[]; mcpServers: stri
 // ではない。後者を止めているのは probe でも `-p` である。つまりこの probe は「盤面の宣言が
 // honor されているか」と「`-p` の門がまだ立っているか」を同時に見ており、
 // strict が dynamic を落とすと読んではならない。
+//
+// inline の `--settings` は auto-memory を閉じる2キー(`AUTO_MEMORY_CLOSED`)**だけ**を運ぶ。
+// これも `--strict-mcp-config` と同じく**姿勢であってタスク単位の生成物ではない**ので
+// (固定パスで workspace を含まない)、上の線に抵触しない(ADR 0108 決定3 と同じ理屈、
+// ADR 0156 決定3)。worker 設定と同じ定数から作るので閉じ方が食い違わず、CLI がキーを
+// 改名すれば init 報告に `memory_paths.auto` が現れて pickup の前に不成立になる。書きの
+// deny は init に出ないので運ばない(deploy 時の canary の仕事)。
 const TOOL_SURFACE_PROBE_ARGS = [
   "--permission-mode",
   "acceptEdits",
   "--setting-sources",
   "project",
   "--strict-mcp-config",
+  "--settings",
+  JSON.stringify(AUTO_MEMORY_CLOSED),
   "--tools",
   spawnTools("work").join(","),
 ];
@@ -1378,12 +1416,15 @@ export const enumerateToolsThrough =
         },
         (proc) =>
           readInitReport(proc.stdout, (parsed) => {
-            // 1本の init 行から2つ読む。片方でも読めなければ観測そのものが無かったと
-            // して null に倒す — 呼び出し側の「観測できなかった = 不成立」がそのまま
-            // 受ける(ADR 0108 決定2)。
+            // 1本の init 行から読む。tools / mcp_servers の片方でも読めなければ観測
+            // そのものが無かったとして null に倒す — 呼び出し側の「観測できなかった =
+            // 不成立」がそのまま受ける(ADR 0108 決定2)。auto-memory は null が「閉じて
+            // いる」なので、この門には加えない(ADR 0156)。
             const tools = readInitField(parsed, "tools");
             const mcpServers = readInitMcpServers(parsed);
-            return tools && mcpServers ? { tools, mcpServers } : null;
+            return tools && mcpServers
+              ? { tools, mcpServers, autoMemoryPath: readInitAutoMemoryPath(parsed) }
+              : null;
           }),
       ),
     );
@@ -1415,7 +1456,8 @@ export async function probeToolSurfaceCapability(
     };
   }
   // work プロファイルで撃っている(TOOL_SURFACE_PROBE_ARGS のコメント参照)
-  return checkToolSurface(observed.tools, "work", observed.mcpServers);
+  const surface = checkToolSurface(observed.tools, "work", observed.mcpServers);
+  return surface.available ? checkAutoMemoryClosed(observed.autoMemoryPath) : surface;
 }
 
 /** The skills-picker candidate source (issue #106 / ADR 0025): the `@host`
@@ -2465,12 +2507,17 @@ export class ClaudeCodeWorker implements WorkerAdapter {
    *  まま通る。要素を持つのは `tidepool` が付いた実セッションだけなので、要素の形の
    *  ドリフトを見られる面はここしか無い。null を `[]` に潰すと MCP 軸が丸ごと黙って
    *  死ぬ(`readInitMcpServers` が低い seam で fail-closed に倒しているのを1層上で
-   *  取り消すことになる)。 */
+   *  取り消すことになる)。
+   *
+   *  **同じ init 行で auto-memory の閉鎖(`checkAutoMemoryClosed`)も確かめる**(ADR 0156
+   *  決定3)。正本の probe は閉じる2キーを inline で運ぶので、per-task の `--settings`
+   *  ファイルが丸ごと黙って無視されたことは probe には見えず、ここが初めての実行時の
+   *  観測面になる。不成立の扱いはツール面のずれとまったく同じ(強制回収 + quarantine)。 */
   private checkSessionToolSurface(task: Task, parsed: Record<string, unknown> | null): boolean {
     const tools = readInitField(parsed, "tools");
     if (!tools) return false;
     const mcpServers = readInitMcpServers(parsed);
-    const surface: ContainmentCapability = mcpServers
+    const toolSurface: ContainmentCapability = mcpServers
       ? checkToolSurface(tools, task.type, mcpServers)
       : {
           available: false,
@@ -2484,8 +2531,11 @@ export class ClaudeCodeWorker implements WorkerAdapter {
             "not safe (ADR 0039). Check the CLI version, then teach `readInitMcpServers` the " +
             "new shape or pin the CLI",
         };
+    const surface = toolSurface.available
+      ? checkAutoMemoryClosed(readInitAutoMemoryPath(parsed))
+      : toolSurface;
     if (surface.available) return true;
-    console.error(`[worker] tool surface drift on task ${task.id}: ${surface.reason}`);
+    console.error(`[worker] containment drift on task ${task.id}: ${surface.reason}`);
     this.containers.forceReclaim(task.id);
     quarantineContainment(this.options.db, surface.reason, this.options.clock.now());
     return true;

@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import type { Task } from "./tasks.js";
 
@@ -8,9 +9,10 @@ import type { Task } from "./tasks.js";
  *  semantics were read off the installed CLI (2.1.220) and confirmed by running
  *  it, not from memory.
  *
- *  Not `SandboxSettings`: ADR 0037 added two members that live *outside* the
- *  `sandbox` block, because the escapes they close are outside the sandbox too —
- *  a hook runs in the harness, not in the confined Bash. The artifact the board
+ *  Not `SandboxSettings`: ADR 0037 and ADR 0156 added members that live
+ *  *outside* the `sandbox` block, because the escapes they close are outside the
+ *  sandbox too — a hook, auto-memory and the Write/Edit tools run in the harness,
+ *  not in the confined Bash. The artifact the board
  *  writes is still called the sandbox settings file (`<task>.sandbox.json`), so
  *  `buildSandboxSettings` keeps its name — ADRs 0033/0035/0037 and several
  *  issues cite it, and a rename would quietly break those references. */
@@ -45,6 +47,9 @@ export interface WorkerSessionSettings {
    *  `.claude/settings.json` straight through `filesystem.denyWrite`
    *  (measured — it was written). See `SETTINGS_TOOL_DENY`. */
   permissions: { deny: string[] };
+  /** ADR 0156: see `AUTO_MEMORY_CLOSED`. */
+  autoMemoryEnabled: false;
+  autoMemoryDirectory: string;
   sandbox: {
     enabled: true;
     /** ADR 0033: the vendor's fail-open hatch — a command that fails inside the
@@ -228,6 +233,34 @@ function settingsDenyWrite(workspacePath: string): string[] {
  *  widening any floor first. */
 const SETTINGS_TOOL_DENY = PROJECT_SETTINGS_FILES.map((name) => `Edit(.claude/${name})`);
 
+/** ADR 0156: where the CLI's built-in auto-memory write allowance is pinned — a
+ *  board-owned path that stays empty, written by neither the board nor any
+ *  worker. Absolute, like the board's other home-owned paths
+ *  (`~/.tidepool/api-token`). The deny rule below and the probe's inline
+ *  `--settings` are both derived from this one value, so they cannot drift. */
+export const CLAUDE_AUTO_MEMORY_DIR = join(homedir(), ".tidepool", "claude-auto-memory");
+
+/** ADR 0156 決定2/3: the keys that close the host's auto-memory, shared by the
+ *  worker settings and the containment probe (claude-worker.ts). `--setting-sources
+ *  project` does not keep `MEMORY.md` out of the session; `autoMemoryEnabled:
+ *  false` does (read). The memory directory keeps a built-in write allowance even
+ *  then — past review's `manual` floor — and a workspace's own
+ *  `autoMemoryDirectory` could move it anywhere under home, so the directory is
+ *  pinned here (the flag tier beats the project tier, measured on 2.1.283, which
+ *  is why `workspaceSettingsDisposition` does not inspect these keys) and denied
+ *  by `AUTO_MEMORY_TOOL_DENY` (write). */
+export const AUTO_MEMORY_CLOSED = {
+  autoMemoryEnabled: false,
+  autoMemoryDirectory: CLAUDE_AUTO_MEMORY_DIR,
+} as const;
+
+/** The write half of ADR 0156. `Edit(...)` for the same reason as
+ *  `SETTINGS_TOOL_DENY`. An absolute path must be spelled `//path` — a single
+ *  leading `/` is read relative to the settings file and is silently inert
+ *  (measured, 2.1.283) — and `CLAUDE_AUTO_MEMORY_DIR` already starts with `/`,
+ *  hence one extra slash. Re-measured on every deploy by `hook-canary.sh`. */
+const AUTO_MEMORY_TOOL_DENY = `Edit(/${CLAUDE_AUTO_MEMORY_DIR}/**)`;
+
 /** issue #378 (ADR 0010 addendum): board verbs are main-thread only. The CLI
  *  hands every MCP tool of the parent to its subagents wholesale (measured:
  *  a general-purpose subagent called an MCP verb over the parent's shared
@@ -407,7 +440,9 @@ export function buildSandboxSettings(input: WorkerSessionSettingsInput): WorkerS
     // (ADR 0013).
     hooks: { PreToolUse: [SUBAGENT_BOARD_VERB_DENY] },
     // ADR 0037: the tool-layer half of the same ban, likewise on both profiles.
-    permissions: { deny: [...SETTINGS_TOOL_DENY] },
+    // ADR 0156: auto-memory is closed on both profiles too.
+    permissions: { deny: [...SETTINGS_TOOL_DENY, AUTO_MEMORY_TOOL_DENY] },
+    ...AUTO_MEMORY_CLOSED,
     sandbox: {
       enabled: true,
       allowUnsandboxedCommands: false,
