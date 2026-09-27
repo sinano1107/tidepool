@@ -1,6 +1,6 @@
 import { afterEach, expect, it } from "vitest";
 import { appendEvent } from "../src/events.js";
-import { approveMemoryProposal, createBehaviorCandidate, defineMemoryBranch, recordKnowledge } from "../src/memory.js";
+import { approveMemoryProposal, createBehaviorCandidate } from "../src/memory.js";
 import { api, bootTidepool, completeViaMcp, HOUR, managementMcpClient, mcpClient, memoryEntries, type Tidepool } from "./harness.js";
 
 /** 提案 question の扉(issue #620・#621 / ADR 0120 決定3・4): meta-review の提案 verb、付帯子としての question、回答での適用、
@@ -101,13 +101,13 @@ it("approve の回答で candidate が approved になって Behavior の pull �
   }
 });
 
-it("同じ candidate への2本目の提案は断られる —— 1本目の承認は無効化でないので、2本目は陳腐化で決着しない", async () => {
+it("propose_memory_change の拒否は tool error として返る(何を断るかは domain 層 —— tests/memory-meta-review-writes.test.ts が言う)", async () => {
   const { ids, client, call, propose } = await boardWithMetaReview();
   try {
     await propose(ids[0]!);
 
     expect(await call("propose_memory_change", { op: "approve", candidate_id: ids[0], rationale: "again" })).toMatchObject({
-      error: expect.stringContaining("already in an open proposal question"),
+      error: expect.any(String),
     });
   } finally {
     await client.close();
@@ -182,8 +182,8 @@ async function approvedBehavior(board: Awaited<ReturnType<typeof boardWithMetaRe
   return id;
 }
 
-async function consolidate(board: Awaited<ReturnType<typeof boardWithMetaReview>>, replaces: number[], based_on_decision?: number) {
-  const decision = based_on_decision ?? (await board.call("log_decision", { line: "the split rules say the same thing" })).event_id;
+async function consolidate(board: Awaited<ReturnType<typeof boardWithMetaReview>>, replaces: number[]) {
+  const decision = (await board.call("log_decision", { line: "the split rules say the same thing" })).event_id;
   return board.call("propose_memory_change", {
     op: "consolidate",
     text: { scope: null, path: "habits/commits", title: "One concern per commit", text: "Keep each commit to one concern.", addressee: null },
@@ -363,71 +363,6 @@ it("consolidate の replaces や invalidate の target が先に無効化され�
         payload: { question_id: questions[i], entry_id: entryId, observed_event_id: observed[i] },
       });
     }
-  } finally {
-    await board.client.close();
-  }
-});
-
-it("consolidate は Knowledge / Definition / 無効化済みを replaces に含むと、based_on_decision が decision でないと断られ、candidate を残さない", async () => {
-  const board = await boardWithMetaReview(["Keep migrations in their own commit", "Invalidated rule"]);
-  try {
-    const author = { activity: "meta_review" as const, name: "auditor" };
-    const knowledge = recordKnowledge(t.db, { scope: null, path: "habits", title: "k", text: "k.", source: { commit: "0a46a46" }, author }, "worker", t.clock.now()).entry_id;
-    const definition = defineMemoryBranch(t.db, { scope: null, path: "habits", text: "Working habits.", author }, "worker", t.clock.now()).entry_id;
-    await board.call("invalidate_memory", { entry_id: board.ids[1], reason: "capability" });
-    const before = (await api(t.baseUrl, "GET", "/api/settings/memory/entries")).json.entries;
-
-    for (const bad of [knowledge, definition, board.ids[1]!]) {
-      expect(await consolidate(board, [board.ids[0]!, bad])).toMatchObject({ error: expect.stringContaining("not a non-invalidated behavior") });
-    }
-    const notDecision = (await events(board.review.id))[0].id;
-    expect(await consolidate(board, [board.ids[0]!], notDecision)).toMatchObject({ error: expect.stringContaining("not a logged decision") });
-
-    expect((await api(t.baseUrl, "GET", "/api/settings/memory/entries")).json.entries).toEqual(before);
-  } finally {
-    await board.client.close();
-  }
-});
-
-it("invalidate は approved でない Behavior・Knowledge・無効化済みを target にすると断られる", async () => {
-  const board = await boardWithMetaReview();
-  try {
-    const author = { activity: "meta_review" as const, name: "auditor" };
-    const knowledge = recordKnowledge(t.db, { scope: null, path: "habits", title: "k", text: "k.", source: { commit: "0a46a46" }, author }, "worker", t.clock.now()).entry_id;
-    const invalidated = await approvedBehavior(board, "Split migrations");
-    expect((await answer((await invalidate(board, invalidated)).question_id, "approve")).status).toBe(200);
-
-    for (const bad of [board.ids[0]!, knowledge, invalidated]) {
-      expect(await invalidate(board, bad)).toMatchObject({ error: expect.stringContaining("not a non-invalidated behavior or exemplar in state approved") });
-    }
-  } finally {
-    await board.client.close();
-  }
-});
-
-it("pin する entry のどれかが既に open な提案に pin されていれば、op を問わず提案の時点で断られる", async () => {
-  const board = await boardWithMetaReview(["Keep migrations in their own commit", "Split schema changes"]);
-  try {
-    const target = await approvedBehavior(board, "Split migrations");
-    await invalidate(board, target);
-    const consolidation = await task((await consolidate(board, [board.ids[0]!])).question_id);
-    const refused = expect.objectContaining({ error: expect.stringContaining("already in an open proposal question") });
-
-    expect(await invalidate(board, target)).toEqual(refused);
-    expect(await consolidate(board, [board.ids[1]!, target])).toEqual(refused);
-    expect(await board.call("propose_memory_change", { op: "approve", candidate_id: board.ids[0], rationale: "r" })).toEqual(refused);
-    expect(await consolidate(board, [board.ids[1]!, consolidation.question_proposal.candidate_id])).toEqual(refused);
-  } finally {
-    await board.client.close();
-  }
-});
-
-it("op に属さない欄を渡すと、黙って捨てずに断られる", async () => {
-  const board = await boardWithMetaReview(["Keep migrations in their own commit", "Split schema changes"]);
-  try {
-    expect(await board.call("propose_memory_change", { op: "approve", candidate_id: board.ids[0], replaces: [board.ids[1]], rationale: "r" })).toMatchObject({
-      error: expect.stringContaining("op approve does not take replaces"),
-    });
   } finally {
     await board.client.close();
   }

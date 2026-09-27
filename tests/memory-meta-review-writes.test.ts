@@ -39,6 +39,10 @@ function board() {
 }
 
 const entry = (db: ReturnType<typeof openDb>, id: number) => listMemoryEntries(db, {}).find((e) => e.id === id);
+const knowledgeEntry = (db: ReturnType<typeof openDb>) =>
+  recordKnowledge(db, { scope: null, path: "habits", title: "k", text: "k.", source: { commit: "0a46a46" }, author: metaReview }, "worker", at).entry_id;
+const definitionEntry = (db: ReturnType<typeof openDb>) =>
+  defineMemoryBranch(db, { scope: "tidepool", path: "build", text: "How it builds.", author: metaReview }, "worker", at).entry_id;
 
 it("fold_memory は新しい Knowledge を decision(推論)を出所に作り、replaces をその後継つき superseded にする", () => {
   const { db, decision, knowledge } = board();
@@ -438,12 +442,7 @@ it.each([
       return { successor_id: f.behavior };
     },
   ],
-  [
-    "後継が Knowledge",
-    (f: Fixture) => ({
-      successor_id: recordKnowledge(f.db, { scope: null, path: "habits", title: "k", text: "k.", source: { commit: "0a46a46" }, author: metaReview }, "worker", at).entry_id,
-    }),
-  ],
+  ["後継が Knowledge", (f: Fixture) => ({ successor_id: knowledgeEntry(f.db) })],
   ["後継が replaces に含まれる", (f: Fixture) => ({ successor_id: f.exemplar, replaces: [f.replaced("Two commits again"), f.exemplar] })],
 ] as const)("consolidate で%sと domain error で、何も pin せず entry も書かない", (_, input) => {
   const fixture = approvedPair();
@@ -497,4 +496,121 @@ it("既存の後継は pin に入り、提案の open 中に無効化される�
   }
   expect(() => approveMemoryProposal(db, first.question_proposal as MemoryProposal, first.id, "webui", at)).toThrow(/stale/);
   expect(entry(db, replaces[0]!)).toMatchObject({ invalidation_reason: null });
+});
+
+/** 提案の時点の拒否(issue #1034 / ADR 0107 決定3)。server boundary(tests/memory-proposal-question.test.ts)は tool error への
+ *  写像だけを言う。各テストは欠陥だけを抜いた同じ呼び出しが通ることを対照に持つ —— 別の理由の domain error で緑にならないように。 */
+type Drafts = ReturnType<typeof drafts>;
+const approve = (f: Fixture) => (candidate_id: number) => proposeMemoryChange(f.db, f.task.id, { op: "approve", candidate_id, rationale: "r" }, "auditor", at);
+const invalidate = (f: Fixture) => (target_id: number) =>
+  proposeMemoryChange(f.db, f.task.id, { op: "invalidate", target_id, reason: "environment", rationale: "r" }, "auditor", at);
+const replacing = (f: Drafts) => (id: number) => f.consolidate([id], { text: "One rule." });
+
+it.each([
+  ["Knowledge", (f: Drafts) => knowledgeEntry(f.db)],
+  ["Definition", (f: Drafts) => definitionEntry(f.db)],
+  [
+    "無効化済みの Behavior",
+    (f: Drafts) => {
+      const id = f.drafted("Dead", { commit: "0a46a46" });
+      invalidateMemoryEntry(f.db, { entry_id: id, reason: "environment" }, "human", "webui", at);
+      return id;
+    },
+  ],
+] as const)("consolidate の replaces に%sを含めると domain error で、entry も書かない", (_, makeBad) => {
+  const fixture = drafts();
+  const bad = makeBad(fixture);
+  const before = listMemoryEntries(fixture.db, {});
+
+  expect(() => replacing(fixture)(bad)).toThrow(DomainError);
+  expect(listMemoryEntries(fixture.db, {})).toEqual(before);
+  expect(replacing(fixture)(fixture.drafted("Good", { commit: "0a46a46" }))).toMatchObject({ candidate_id: expect.any(Number) });
+});
+
+it("consolidate の based_on_decision が decision_logged でない event だと domain error で、entry も書かない", () => {
+  const { db, task, decision, drafted } = drafts();
+  const replaces = [drafted("Good", { commit: "0a46a46" })];
+  const notDecision = listEvents(db, task.id)[0]!.id; // task_registered
+  const propose = (based_on_decision: number) =>
+    proposeMemoryChange(
+      db,
+      task.id,
+      { op: "consolidate", text: { scope: null, path: "habits", title: "One rule", text: "One rule.", addressee: null }, replaces, based_on_decision, rationale: "r" },
+      "auditor",
+      at,
+    );
+  const before = listMemoryEntries(db, {});
+
+  expect(() => propose(notDecision)).toThrow(DomainError);
+  expect(listMemoryEntries(db, {})).toEqual(before);
+  expect(propose(decision)).toMatchObject({ question_id: expect.any(String) });
+});
+
+it.each([
+  ["candidate の Behavior", (f: Fixture) => f.replaced("Bad")],
+  ["Knowledge", (f: Fixture) => knowledgeEntry(f.db)],
+  ["Definition", (f: Fixture) => definitionEntry(f.db)],
+  [
+    "無効化済みの Behavior",
+    (f: Fixture) => {
+      invalidateMemoryEntry(f.db, { entry_id: f.behavior, reason: "requirement_change" }, "human", "webui", at);
+      return f.behavior;
+    },
+  ],
+] as const)("invalidate の target_id に%sを渡すと domain error", (_, makeBad) => {
+  const fixture = approvedPair();
+
+  expect(() => invalidate(fixture)(makeBad(fixture))).toThrow(DomainError);
+  expect(invalidate(fixture)(fixture.exemplar)).toMatchObject({ question_id: expect.any(String) });
+});
+
+/** 既存の後継への pin は「既存の後継は pin に入り…」のテストが言う。ここは op を跨いだ pin。 */
+it.each([
+  [
+    "approve の candidate を consolidate の replaces に取る",
+    (f: Fixture) => {
+      const pinned = f.replaced("A");
+      approve(f)(pinned);
+      return { pinned, free: f.replaced("B"), propose: replacing(f) };
+    },
+  ],
+  [
+    "invalidate の target を consolidate の replaces に取る",
+    (f: Fixture) => {
+      invalidate(f)(f.exemplar);
+      return { pinned: f.exemplar, free: f.behavior, propose: replacing(f) };
+    },
+  ],
+  [
+    "consolidate の replaces の candidate を approve する",
+    (f: Fixture) => {
+      const pinned = f.replaced("A");
+      replacing(f)(pinned);
+      return { pinned, free: f.replaced("B"), propose: approve(f) };
+    },
+  ],
+  [
+    "consolidate の replaces の approved を invalidate する",
+    (f: Fixture) => {
+      replacing(f)(f.behavior);
+      return { pinned: f.behavior, free: f.exemplar, propose: invalidate(f) };
+    },
+  ],
+  ["consolidate が作った新 candidate を approve する", (f: Fixture) => ({ pinned: replacing(f)(f.replaced("A")).candidate_id, free: f.replaced("B"), propose: approve(f) })],
+] as const)("%sと、既に open な提案に pin されているので domain error で entry も書かない", (_, setup) => {
+  const fixture = approvedPair();
+  const { pinned, free, propose } = setup(fixture);
+  const before = listMemoryEntries(fixture.db, {});
+
+  expect(() => propose(pinned)).toThrow(DomainError);
+  expect(listMemoryEntries(fixture.db, {})).toEqual(before);
+  expect(() => propose(free)).not.toThrow();
+});
+
+it("op approve に consolidate の欄(replaces)を渡すと、黙って捨てずに domain error で断る", () => {
+  const { db, task, drafted } = drafts();
+  const candidate_id = drafted("A", { commit: "0a46a46" });
+
+  expect(() => proposeMemoryChange(db, task.id, { op: "approve", candidate_id, replaces: [999999], rationale: "r" }, "auditor", at)).toThrow(DomainError);
+  expect(proposeMemoryChange(db, task.id, { op: "approve", candidate_id, rationale: "r" }, "auditor", at)).toMatchObject({ question_id: expect.any(String) });
 });
