@@ -498,3 +498,112 @@ it("既存の後継は pin に入り、提案の open 中に無効化される�
   expect(() => approveMemoryProposal(db, first.question_proposal as MemoryProposal, first.id, "webui", at)).toThrow(/stale/);
   expect(entry(db, replaces[0]!)).toMatchObject({ invalidation_reason: null });
 });
+
+/** propose_memory_change の拒否(issue #1034 / ADR 0107 決定2・3): 検査は domain 層で言い、server boundary
+ *  (tests/memory-proposal-question.test.ts)は tool error への写像だけを言う。各テストは同じ入力から欠陥だけを
+ *  抜いた呼び出しが通ることを control として持つ(誤った理由で domain error になっていないことの確認)。 */
+it.each([
+  ["Knowledge", (f: ReturnType<typeof drafts>) => recordKnowledge(f.db, { scope: null, path: "habits", title: "k", text: "k.", source: { commit: "0a46a46" }, author: metaReview }, "worker", at).entry_id],
+  ["Definition", (f: ReturnType<typeof drafts>) => defineMemoryBranch(f.db, { scope: "tidepool", path: "build", text: "How it builds.", author: metaReview }, "worker", at).entry_id],
+  [
+    "無効化済みの Behavior",
+    (f: ReturnType<typeof drafts>) => {
+      const id = f.drafted("Dead", { commit: "0a46a46" });
+      invalidateMemoryEntry(f.db, { entry_id: id, reason: "environment" }, "human", "webui", at);
+      return id;
+    },
+  ],
+] as const)("consolidate の replaces に%sを含めると domain error で、candidate も question も書かれない", (_, makeBad) => {
+  const fixture = drafts();
+  const { db, drafted, consolidate } = fixture;
+  const bad = makeBad(fixture);
+  const before = listMemoryEntries(db, {});
+
+  expect(() => consolidate([bad], { text: "One rule." })).toThrow(DomainError);
+  expect(listMemoryEntries(db, {})).toEqual(before);
+  expect(consolidate([drafted("Good", { commit: "0a46a46" })], { text: "One rule." })).toMatchObject({ candidate_id: expect.any(Number) });
+});
+
+it("consolidate の based_on_decision が decision_logged でない event だと domain error で、candidate も question も書かれない", () => {
+  const { db, task, decision, drafted } = drafts();
+  const replaces = [drafted("Good", { commit: "0a46a46" })];
+  const notDecision = listEvents(db, task.id)[0]!.id; // task_registered
+  const input = (based_on_decision: number) => ({
+    op: "consolidate" as const,
+    text: { scope: null, path: "habits", title: "One rule", text: "One rule.", addressee: null },
+    replaces,
+    based_on_decision,
+    rationale: "r",
+  });
+  const before = listMemoryEntries(db, {});
+
+  expect(() => proposeMemoryChange(db, task.id, input(notDecision), "auditor", at)).toThrow(DomainError);
+  expect(listMemoryEntries(db, {})).toEqual(before);
+  expect(proposeMemoryChange(db, task.id, input(decision), "auditor", at)).toMatchObject({ question_id: expect.any(String) });
+});
+
+it.each([
+  ["candidate の Behavior", (f: Fixture) => f.replaced("Bad")],
+  ["Knowledge", (f: Fixture) => recordKnowledge(f.db, { scope: null, path: "habits", title: "k", text: "k.", source: { commit: "0a46a46" }, author: metaReview }, "worker", at).entry_id],
+  [
+    "無効化済みの Behavior",
+    (f: Fixture) => {
+      invalidateMemoryEntry(f.db, { entry_id: f.behavior, reason: "requirement_change" }, "human", "webui", at);
+      return f.behavior;
+    },
+  ],
+] as const)("invalidate の target_id に%sを渡すと domain error で、candidate も question も書かれない", (_, makeBad) => {
+  const fixture = approvedPair();
+  const { db, task, exemplar } = fixture;
+  const bad = makeBad(fixture);
+  const before = listMemoryEntries(db, {});
+
+  expect(() => proposeMemoryChange(db, task.id, { op: "invalidate", target_id: bad, reason: "environment", rationale: "r" }, "auditor", at)).toThrow(DomainError);
+  expect(listMemoryEntries(db, {})).toEqual(before);
+  expect(proposeMemoryChange(db, task.id, { op: "invalidate", target_id: exemplar, reason: "environment", rationale: "r" }, "auditor", at)).toMatchObject({
+    question_id: expect.any(String),
+  });
+});
+
+it("提案が pin する entry が既に別の open 提案に pin されていれば op を問わず断られ、pin されていない entry には通る —— consolidate が作った新 candidate 自身も同様(既存の後継の pin だけが別、ADR 0160 決定3。successor_id の replaces pin は既存の L490 が言うので、ここでは新 candidate 作成(text)経路で同じ replaces pin を確認する)", () => {
+  const { db, task, exemplar, behavior, consolidate, replaced } = approvedPair();
+  const before = () => listMemoryEntries(db, {});
+
+  const candidateA = replaced("A");
+  proposeMemoryChange(db, task.id, { op: "approve", candidate_id: candidateA, rationale: "r" }, "auditor", at);
+  const snap1 = before();
+  expect(() => proposeMemoryChange(db, task.id, { op: "approve", candidate_id: candidateA, rationale: "again" }, "auditor", at)).toThrow(DomainError);
+  expect(before()).toEqual(snap1);
+  expect(proposeMemoryChange(db, task.id, { op: "approve", candidate_id: replaced("B"), rationale: "r" }, "auditor", at)).toMatchObject({ question_id: expect.any(String) });
+
+  proposeMemoryChange(db, task.id, { op: "invalidate", target_id: exemplar, reason: "environment", rationale: "r" }, "auditor", at);
+  const snap2 = before();
+  expect(() => proposeMemoryChange(db, task.id, { op: "invalidate", target_id: exemplar, reason: "environment", rationale: "again" }, "auditor", at)).toThrow(DomainError);
+  expect(before()).toEqual(snap2);
+  expect(proposeMemoryChange(db, task.id, { op: "invalidate", target_id: behavior, reason: "environment", rationale: "r" }, "auditor", at)).toMatchObject({
+    question_id: expect.any(String),
+  });
+
+  const split = replaced("Split");
+  consolidate([split], { text: "One rule." });
+  const snap3 = before();
+  expect(() => consolidate([split], { text: "Another rule." })).toThrow(DomainError);
+  expect(before()).toEqual(snap3);
+  expect(consolidate([replaced("Other")], { text: "Another rule." })).toMatchObject({ candidate_id: expect.any(Number) });
+
+  const made = consolidate([replaced("Made")], { text: "Made rule." });
+  const snap4 = before();
+  expect(() => proposeMemoryChange(db, task.id, { op: "approve", candidate_id: made.candidate_id, rationale: "r" }, "auditor", at)).toThrow(DomainError);
+  expect(before()).toEqual(snap4);
+  expect(proposeMemoryChange(db, task.id, { op: "approve", candidate_id: replaced("Free"), rationale: "r" }, "auditor", at)).toMatchObject({ question_id: expect.any(String) });
+});
+
+it("op approve に consolidate の欄(replaces)を渡すと domain error で question も書かれない —— 欄を捨てず断る(replaces の値自体が有効かは見ない)", () => {
+  const { db, task, drafted } = drafts();
+  const candidate = drafted("A", { commit: "0a46a46" });
+  const before = listMemoryEntries(db, {});
+
+  expect(() => proposeMemoryChange(db, task.id, { op: "approve", candidate_id: candidate, replaces: [999999], rationale: "r" }, "auditor", at)).toThrow(DomainError);
+  expect(listMemoryEntries(db, {})).toEqual(before);
+  expect(proposeMemoryChange(db, task.id, { op: "approve", candidate_id: candidate, rationale: "r" }, "auditor", at)).toMatchObject({ question_id: expect.any(String) });
+});
