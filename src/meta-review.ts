@@ -56,7 +56,7 @@ export const META_REVIEW_SUBJECTS = {
         "or into a new candidate when they share a source. Apply fixes to Knowledge and Definitions directly, and retire or fold a candidate directly " +
         "(fold_memory's successor_id folds it into an approved Behavior or Exemplar). First read the past memory proposals with the human's answers and comments (list_memory_proposals) " +
         "and the invalidated candidates with invalidated_by, so you do not re-propose what a human rejected and do not repeat a retirement of your own. " +
-        "Where a human amended a candidate when approving it (a superseded candidate whose successor a human wrote), draft closer to the human's wording.",
+        "Where a human amended a candidate when approving it (a superseded candidate whose invalidated_by is a question and whose successor a human wrote — not one you folded into an existing entry), draft closer to the human's wording.",
       completion_criteria:
         "every candidate and store change since the previous meta-review is either proposed, retired, folded, applied (Knowledge / Definitions), or deliberately left as is",
       review_tier: "frontier",
