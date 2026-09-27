@@ -587,7 +587,7 @@ it.each([
   const entry_id = make[from]();
   const successor_id = make[to]();
 
-  expect(() => invalidateMemoryEntry(db, { entry_id, reason, successor_id }, "human", "webui", at)).toThrow(`a ${from} cannot be ${reason} by a ${to}`);
+  expect(() => invalidateMemoryEntry(db, { entry_id, reason, successor_id }, "human", "webui", at)).toThrow(`${from} entry ${entry_id} cannot be ${reason} by ${to} entry ${successor_id}`);
   expect(listMemoryEntries(db, { state: "invalidated" })).toEqual([]);
 });
 

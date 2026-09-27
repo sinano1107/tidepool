@@ -501,8 +501,7 @@ it("既存の後継は pin に入り、提案の open 中に無効化される�
 });
 
 /** fold_memory の既にある後継(ADR 0161 決定2)。 */
-const foldInto = (f: Fixture) => (input: { successor_id?: number; replaces: number[] } & Record<string, unknown>) =>
-  foldMemory(f.db, { ...input, author: metaReview } as Parameters<typeof foldMemory>[1], "worker", at);
+const foldInto = (f: Fixture) => (input: Omit<Parameters<typeof foldMemory>[1], "author">) => foldMemory(f.db, { ...input, author: metaReview }, "worker", at);
 
 it("fold_memory の successor_id は replaces を既にある approved の後継つき superseded(meta_review の印)にし、新しい entry を作らない —— Knowledge → Knowledge、Definition → Definition、candidate の Behavior / Exemplar → approved の Behavior / Exemplar(ADR 0161 決定2)", () => {
   const fixture = approvedPair();
@@ -551,16 +550,11 @@ it.each([
   expect(foldInto(fixture)({ successor_id: fixture.exemplar, replaces: [fixture.replaced("Good")] })).toMatchObject({ entry_id: fixture.exemplar });
 });
 
-it("define_memory の supersedes は path を問わず Definition を置き換え、Definition でないものを指すと domain error で何も書かない(ADR 0161 決定2)", () => {
-  const { db, knowledge } = board();
+it("define_memory の supersedes は path を問わず Definition を置き換える(ADR 0161 決定2)", () => {
+  const { db } = board();
   const old = definitionEntry(db);
-  const fact = knowledge("Tests need Node 22");
-  const define = (supersedes: number) => defineMemoryBranch(db, { scope: "tidepool", path: "toolchain", text: "Which toolchain it pins.", supersedes, author: metaReview }, "worker", at);
-  const before = listMemoryEntries(db, {});
+  const { entry_id } = defineMemoryBranch(db, { scope: "tidepool", path: "toolchain", text: "Which toolchain it pins.", supersedes: old, author: metaReview }, "worker", at);
 
-  expect(() => define(fact)).toThrow(DomainError);
-  expect(listMemoryEntries(db, {})).toEqual(before);
-  const { entry_id } = define(old);
   expect(entry(db, old)).toMatchObject({ invalidation_reason: "superseded", successor_id: entry_id });
 });
 

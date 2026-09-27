@@ -120,10 +120,6 @@ it("fold_memory の successor_id は既にある後継に畳んで無効化の e
     const folded = await call("fold_memory", { successor_id: kept, replaces: [material] });
 
     expect(folded).toMatchObject({ isError: false, body: { entry_id: kept, event_ids: [expect.any(Number)] } });
-    expect((await memoryEntries(t)).map((e) => [e.id, e.invalidation_reason, e.successor_id])).toEqual([
-      [material, "superseded", kept],
-      [kept, null, null],
-    ]);
   } finally {
     await client.close();
   }

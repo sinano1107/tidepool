@@ -184,8 +184,8 @@ export function recordKnowledge(db: Db, input: EntryInput, origin: EventOrigin, 
 }
 
 /** 枝の定義(spec #600 A): その枝の下に何を保存するかの1行。承認不要で書いた瞬間に approved、
- *  出所は持たない(自身の作成 event)。同じ枝・同じスコープの approved は1つだけ —— 同じ枝の改訂は
- *  `supersedes` に旧定義を渡し、書くのと superseded + 後継の無効化を1つの transaction で行う。 */
+ *  出所は持たない(自身の作成 event)。同じ枝・同じスコープの approved は1つだけ —— 改訂は
+ *  `supersedes` に旧定義(path は問わない、ADR 0161 決定2)を渡し、書くのと superseded + 後継の無効化を1つの transaction で行う。 */
 export function defineMemoryBranch(
   db: Db,
   input: Omit<EntryInput, "title"> & { supersedes?: number },
@@ -238,7 +238,7 @@ export function foldMemory(
       successor = recordKnowledge(db, { scope, path, title, text, author, source: { event_id: requireDecision(db, based_on_decision) } }, origin, at).entry_id;
     }
     const event_ids = replaces.map((id) =>
-      invalidateMemoryEntry(db, { entry_id: requireUnapprovedJudgment(db, id).id, reason: "superseded", successor_id: successor }, author.name, origin, at, { activity: author.activity }),
+      invalidateMemoryEntry(db, { entry_id: requireNotApprovedBehaviorOrExemplar(db, id).id, reason: "superseded", successor_id: successor }, author.name, origin, at, { activity: author.activity }),
     );
     return { entry_id: successor, event_ids };
   })();
@@ -482,9 +482,9 @@ export function invalidateMemoryEntry(
         throw new DomainError(`successor ${successor_id} must be an approved, non-invalidated entry`);
       }
       // 種別の線(ADR 0161 決定1): Behavior ↔ Exemplar は superseded で互いに、それ以外は同じ種別だけ
-      const judgment = [replaced.kind, successor.kind].every((kind) => kind === "behavior" || kind === "exemplar");
-      if (replaced.kind !== successor.kind && !(reason === "superseded" && judgment)) {
-        throw new DomainError(`a ${replaced.kind} cannot be ${reason} by a ${successor.kind}`);
+      const bothBehaviorOrExemplar = [replaced.kind, successor.kind].every((kind) => kind === "behavior" || kind === "exemplar");
+      if (replaced.kind !== successor.kind && !(reason === "superseded" && bothBehaviorOrExemplar)) {
+        throw new DomainError(`${replaced.kind} entry ${entry_id} cannot be ${reason} by ${successor.kind} entry ${successor_id}`);
       }
     }
     markInvalidated(db, entry_id, reason, successor_id ?? null);
@@ -505,7 +505,7 @@ export function invalidateMemoryEntry(
 }
 
 /** meta-review が直接落とせるエントリ(ADR 0160 決定1): approved の Behavior / Exemplar は承認の線なので提案へ回す。 */
-function requireUnapprovedJudgment(db: Db, id: number): EntryRow {
+function requireNotApprovedBehaviorOrExemplar(db: Db, id: number): EntryRow {
   const row = requireEntry(db, id);
   if ((row.kind === "behavior" || row.kind === "exemplar") && row.state === "approved") throw new DomainError(`memory entry ${row.id} is an approved ${row.kind}: propose it instead`);
   return row;
@@ -523,7 +523,7 @@ export function invalidateMemoryByMetaReview(
   if (input.reason === "superseded" || input.reason === "path_moved") {
     throw new DomainError(`invalidate_memory does not take ${input.reason}: replace with fold_memory, define_memory's supersedes or move_memory`);
   }
-  const row = requireUnapprovedJudgment(db, input.entry_id);
+  const row = requireNotApprovedBehaviorOrExemplar(db, input.entry_id);
   if (input.reason === "rejected" && row.state !== "candidate") throw new DomainError(`rejected retires only a candidate; memory entry ${row.id} is not one`);
   return invalidateMemoryEntry(db, input, workerId, origin, at, { activity: "meta_review" });
 }
