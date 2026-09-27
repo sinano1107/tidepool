@@ -101,7 +101,7 @@ it("approve の回答で candidate が approved になって Behavior の pull �
   }
 });
 
-it("propose_memory_change の拒否は tool error として返る(文言は domain 層が言う —— tests/memory-meta-review-writes.test.ts)", async () => {
+it("propose_memory_change の拒否は tool error として返る(何を断るかは domain 層 —— tests/memory-meta-review-writes.test.ts が言う)", async () => {
   const { ids, client, call, propose } = await boardWithMetaReview();
   try {
     await propose(ids[0]!);
@@ -182,8 +182,8 @@ async function approvedBehavior(board: Awaited<ReturnType<typeof boardWithMetaRe
   return id;
 }
 
-async function consolidate(board: Awaited<ReturnType<typeof boardWithMetaReview>>, replaces: number[], based_on_decision?: number) {
-  const decision = based_on_decision ?? (await board.call("log_decision", { line: "the split rules say the same thing" })).event_id;
+async function consolidate(board: Awaited<ReturnType<typeof boardWithMetaReview>>, replaces: number[]) {
+  const decision = (await board.call("log_decision", { line: "the split rules say the same thing" })).event_id;
   return board.call("propose_memory_change", {
     op: "consolidate",
     text: { scope: null, path: "habits/commits", title: "One concern per commit", text: "Keep each commit to one concern.", addressee: null },
