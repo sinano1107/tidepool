@@ -502,8 +502,11 @@ it("既存の後継は pin に入り、提案の open 中に無効化される�
 /** propose_memory_change の拒否(issue #1034 / ADR 0107 決定2・3): 検査は domain 層で言い、server boundary
  *  (tests/memory-proposal-question.test.ts)は tool error への写像だけを言う。各テストは同じ入力から欠陥だけを
  *  抜いた呼び出しが通ることを control として持つ(誤った理由で domain error になっていないことの確認)。 */
+const knowledgeEntry = (db: ReturnType<typeof openDb>) =>
+  recordKnowledge(db, { scope: null, path: "habits", title: "k", text: "k.", source: { commit: "0a46a46" }, author: metaReview }, "worker", at).entry_id;
+
 it.each([
-  ["Knowledge", (f: ReturnType<typeof drafts>) => recordKnowledge(f.db, { scope: null, path: "habits", title: "k", text: "k.", source: { commit: "0a46a46" }, author: metaReview }, "worker", at).entry_id],
+  ["Knowledge", (f: ReturnType<typeof drafts>) => knowledgeEntry(f.db)],
   ["Definition", (f: ReturnType<typeof drafts>) => defineMemoryBranch(f.db, { scope: "tidepool", path: "build", text: "How it builds.", author: metaReview }, "worker", at).entry_id],
   [
     "無効化済みの Behavior",
@@ -544,7 +547,7 @@ it("consolidate の based_on_decision が decision_logged でない event だと
 
 it.each([
   ["candidate の Behavior", (f: Fixture) => f.replaced("Bad")],
-  ["Knowledge", (f: Fixture) => recordKnowledge(f.db, { scope: null, path: "habits", title: "k", text: "k.", source: { commit: "0a46a46" }, author: metaReview }, "worker", at).entry_id],
+  ["Knowledge", (f: Fixture) => knowledgeEntry(f.db)],
   [
     "無効化済みの Behavior",
     (f: Fixture) => {
