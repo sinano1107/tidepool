@@ -178,16 +178,18 @@ function TpWaterline({ progress }) {
 function TpSegmentGauge({ total, filled }) {
   return /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 5 } }, Array.from({ length: total }).map((_, i) => /* @__PURE__ */ React.createElement("div", { key: i, style: { flex: 1, height: 6, borderRadius: 999, background: i < filled ? "var(--tide-4)" : "var(--tide-2)", transition: "background var(--duration-calm) var(--ease-tidal)" } })));
 }
-function TpQuestionItemPicker({ item, value, locked, onChange, translated }) {
+function TpQuestionItemPicker({ item, value, locked, onChange, translated, disabled = [] }) {
   const { Input, Button } = window.TidepoolDesignSystem_8a0ead;
   const [override, setOverride] = React.useState(false);
   const [overrideText, setOverrideText] = React.useState("");
   return /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: { fontSize: "var(--text-md)", fontWeight: "var(--weight-semibold)", color: "var(--text-heading)", marginBottom: item.detail ? 3 : 8, whiteSpace: "pre-wrap" } }, item.title), translated && /* @__PURE__ */ React.createElement("div", { style: { fontSize: "var(--text-sm)", color: "var(--tide-5)", marginBottom: item.detail ? 3 : 8, whiteSpace: "pre-wrap" } }, translated.title), item.detail && /* @__PURE__ */ React.createElement("div", { style: { fontSize: "var(--text-xs)", color: "var(--text-secondary)", marginBottom: 8, whiteSpace: "pre-wrap" } }, item.detail), translated && item.detail && /* @__PURE__ */ React.createElement("div", { style: { fontSize: "var(--text-xs)", color: "var(--tide-5)", marginBottom: 8, whiteSpace: "pre-wrap" } }, translated.detail), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 8 } }, item.options.map((o) => {
     const picked = value === o.label;
+    const off = disabled.includes(o.label);
     return /* @__PURE__ */ React.createElement(
       "button",
       {
         key: o.label,
+        disabled: off,
         onClick: () => !locked && onChange(picked ? null : o.label),
         style: {
           display: "flex",
@@ -204,8 +206,8 @@ function TpQuestionItemPicker({ item, value, locked, onChange, translated }) {
           borderRadius: "var(--radius-full)",
           padding: "11px 18px",
           minHeight: 44,
-          cursor: locked ? "default" : "pointer",
-          opacity: locked && !picked ? 0.45 : 1,
+          cursor: locked || off ? "default" : "pointer",
+          opacity: locked && !picked || off ? 0.45 : 1,
           transition: "background var(--duration-quick) var(--ease-tidal)"
         }
       },
@@ -313,13 +315,14 @@ function TpQuestionCard({ q, answer, onAnswer, locked = false, onTranslate }) {
     if (answer) setDraft(answer);
   }, [answer]);
   const [amendment, setAmendment] = React.useState({});
+  const [comment, setComment] = React.useState("");
   const setItemAnswer = (i, value) => {
     const next = draft.slice();
     next[i] = value;
     setDraft(next);
     if (!next.every(Boolean)) return;
     const filled = q.amendable === "memory" ? amendment : Object.fromEntries(Object.entries(amendment).filter(([, v]) => v));
-    onAnswer(next, q.amendable && next[0] === "approve" && Object.keys(filled).length > 0 ? filled : void 0);
+    onAnswer(next, q.amendable && next[0] === "approve" && Object.keys(filled).length > 0 ? filled : void 0, comment.trim() ? comment : void 0);
   };
   const answeredCount = draft.filter(Boolean).length;
   const [translateOn, setTranslateOn] = React.useState(false);
@@ -356,6 +359,16 @@ function TpQuestionCard({ q, answer, onAnswer, locked = false, onTranslate }) {
       mono: true,
       onChange: (e) => setAmendment({ ...amendment, effort: e.target.value.trim() })
     }
+  )), q.rejectNeedsComment && !locked && /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 14 } }, /* @__PURE__ */ React.createElement(
+    Input,
+    {
+      label: "Comment (required to reject)",
+      multiline: true,
+      rows: 2,
+      value: comment,
+      onChange: (e) => setComment(e.target.value),
+      placeholder: "why \u2014 the next memory meta-review reads it"
+    }
   )), items.length > 1 && !locked && /* @__PURE__ */ React.createElement("div", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--tide-4)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 12 } }, answeredCount, " of ", items.length, " answered \u2014 submits together once every item is"), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 18 } }, items.map((item, i) => /* @__PURE__ */ React.createElement(
     TpQuestionItemPicker,
     {
@@ -364,7 +377,8 @@ function TpQuestionCard({ q, answer, onAnswer, locked = false, onTranslate }) {
       value: draft[i],
       locked,
       onChange: (v) => setItemAnswer(i, v),
-      translated: translatedItems ? translatedItems[i] : null
+      translated: translatedItems ? translatedItems[i] : null,
+      disabled: q.rejectNeedsComment && !comment.trim() ? ["reject"] : []
     }
   ))));
 }
@@ -477,10 +491,10 @@ function TriageScreen({ data, onCommit, loadHandoff, onAnswer, onObject, onScrat
   const [scratchKinds, setScratchKinds] = React.useState({});
   const [preview, setPreview] = React.useState(null);
   const [landingNow, setLandingNow] = React.useState(null);
-  const answerQ = async (q, a, amendment) => {
+  const answerQ = async (q, a, amendment, comment) => {
     if (!a || answers[q.id]) return;
     try {
-      await onAnswer(q, a, amendment);
+      await onAnswer(q, a, amendment, comment);
     } catch {
       return;
     }
@@ -650,7 +664,7 @@ function TriageScreen({ data, onCommit, loadHandoff, onAnswer, onObject, onScrat
     ...scratch.map((s) => ({ id: s.id, text: s.text, kind: scratchKinds[s.id] || "task" })),
     ...dropped.map((s) => ({ id: s.id, text: s.text, kind: "discard" }))
   ];
-  return /* @__PURE__ */ React.createElement("div", { key: section, style: { padding: "20px 16px 28px" } }, /* @__PURE__ */ React.createElement("div", { className: "tp-rise", style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--tide-4)", letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: 8 } }, cur.step), /* @__PURE__ */ React.createElement("h1", { className: "tp-rise", style: { fontFamily: "var(--font-display)", fontStyle: "italic", fontSize: "var(--text-2xl)", fontWeight: 400, color: "var(--tide-5)", margin: "0 0 4px", lineHeight: 1.15, animationDelay: "60ms" } }, cur.title), /* @__PURE__ */ React.createElement("p", { className: "tp-rise", style: { fontSize: "var(--text-sm)", color: "var(--text-secondary)", margin: "0 0 20px", animationDelay: "120ms" } }, cur.sub), section === S_QUESTIONS ? /* @__PURE__ */ React.createElement(TpSegmentGauge, { total: nQuestions, filled: answered }) : /* @__PURE__ */ React.createElement(TpWaterline, { progress }), /* @__PURE__ */ React.createElement("div", { style: { height: 20 } }), section === S_QUESTIONS && /* @__PURE__ */ React.createElement("div", null, generalQuestions.map((q, i) => /* @__PURE__ */ React.createElement("div", { key: q.id, className: "tp-rise", style: { animationDelay: `${180 + i * 90}ms` } }, /* @__PURE__ */ React.createElement(TpQuestionCard, { q, answer: answers[q.id], onAnswer: (a, amendment) => answerQ(q, a, amendment), locked: !!answers[q.id], onTranslate })))), section === S_LOG && (() => {
+  return /* @__PURE__ */ React.createElement("div", { key: section, style: { padding: "20px 16px 28px" } }, /* @__PURE__ */ React.createElement("div", { className: "tp-rise", style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--tide-4)", letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: 8 } }, cur.step), /* @__PURE__ */ React.createElement("h1", { className: "tp-rise", style: { fontFamily: "var(--font-display)", fontStyle: "italic", fontSize: "var(--text-2xl)", fontWeight: 400, color: "var(--tide-5)", margin: "0 0 4px", lineHeight: 1.15, animationDelay: "60ms" } }, cur.title), /* @__PURE__ */ React.createElement("p", { className: "tp-rise", style: { fontSize: "var(--text-sm)", color: "var(--text-secondary)", margin: "0 0 20px", animationDelay: "120ms" } }, cur.sub), section === S_QUESTIONS ? /* @__PURE__ */ React.createElement(TpSegmentGauge, { total: nQuestions, filled: answered }) : /* @__PURE__ */ React.createElement(TpWaterline, { progress }), /* @__PURE__ */ React.createElement("div", { style: { height: 20 } }), section === S_QUESTIONS && /* @__PURE__ */ React.createElement("div", null, generalQuestions.map((q, i) => /* @__PURE__ */ React.createElement("div", { key: q.id, className: "tp-rise", style: { animationDelay: `${180 + i * 90}ms` } }, /* @__PURE__ */ React.createElement(TpQuestionCard, { q, answer: answers[q.id], onAnswer: (a, amendment, comment) => answerQ(q, a, amendment, comment), locked: !!answers[q.id], onTranslate })))), section === S_LOG && (() => {
     const renderLogRow = (l) => {
       const k = l.id;
       const hasHandoff = l.kind === "completion" && l.handoffPresent;
@@ -705,7 +719,7 @@ function TriageScreen({ data, onCommit, loadHandoff, onAnswer, onObject, onScrat
         " \u2014 show"
       ), visibleReadEntries.map(renderLogRow), unreadEntries.map(renderLogRow));
     })));
-  })(), section === S_MERGE && /* @__PURE__ */ React.createElement("div", null, landingReady.map((q, i) => /* @__PURE__ */ React.createElement("div", { key: q.id, className: "tp-rise", style: { animationDelay: `${180 + i * 90}ms` } }, /* @__PURE__ */ React.createElement(TpQuestionCard, { q, answer: answers[q.id], onAnswer: (a, amendment) => answerQ(q, a, amendment), locked: !!answers[q.id], onTranslate }))), Object.keys(TP_LANDING_BLOCKED).map((kind) => {
+  })(), section === S_MERGE && /* @__PURE__ */ React.createElement("div", null, landingReady.map((q, i) => /* @__PURE__ */ React.createElement("div", { key: q.id, className: "tp-rise", style: { animationDelay: `${180 + i * 90}ms` } }, /* @__PURE__ */ React.createElement(TpQuestionCard, { q, answer: answers[q.id], onAnswer: (a, amendment, comment) => answerQ(q, a, amendment, comment), locked: !!answers[q.id], onTranslate }))), Object.keys(TP_LANDING_BLOCKED).map((kind) => {
     const blocked = landingBlocked.filter((q) => landingBlockOf(q) === kind);
     if (blocked.length === 0) return null;
     return /* @__PURE__ */ React.createElement("p", { key: kind, style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--text-muted)", margin: "0 0 8px" } }, blocked.length, " landing question", blocked.length > 1 ? "s" : "", " not yet answerable \u2014 ", TP_LANDING_BLOCKED[kind]);
@@ -1939,6 +1953,7 @@ function MemoryCasePicker({ workspace, value, onChange, onQuote }) {
 const MEMORY_KINDS = ["knowledge", "behavior", "definition", "exemplar"];
 const MEMORY_INVALIDATION_REASONS = ["superseded", "path_moved", "capability", "environment", "requirement_change"];
 const needsSuccessor = (reason) => reason === "superseded" || reason === "path_moved";
+const invalidatedBy = (by) => !by ? "" : ` by ${"question_id" in by ? `answer to ${by.question_id}` : "activity" in by ? by.activity : by.worker}`;
 function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit }) {
   const { Button, Card, Input, Select } = window.TidepoolDesignSystem_8a0ead;
   const [filter, setFilter] = React.useState({ workspace: "", kind: "", state: "" });
@@ -2141,7 +2156,7 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit }) 
         "data-testid": `memory-entry-${entry.id}`,
         style: { display: "flex", flexDirection: "column", gap: 4, borderTop: "1px solid var(--border-default)", paddingTop: 10 }
       },
-      /* @__PURE__ */ React.createElement("p", { style: { ...muted, fontFamily: "var(--font-mono)" } }, "#", entry.id, " \xB7 ", entry.kind, " \xB7 ", entry.invalidation_reason ? `invalidated: ${entry.invalidation_reason}${entry.successor_id ? ` \u2192 #${entry.successor_id}` : ""}` : entry.state, " \xB7 ", entry.scope ?? "board-wide", " \xB7 ", entry.path, (entry.kind === "behavior" || entry.kind === "exemplar") && ` \xB7 to ${entry.addressee ?? "every agent"}`, " \xB7 ", entry.author.activity, entry.cause && ` \xB7 ${entry.cause}`),
+      /* @__PURE__ */ React.createElement("p", { style: { ...muted, fontFamily: "var(--font-mono)" } }, "#", entry.id, " \xB7 ", entry.kind, " \xB7 ", entry.invalidation_reason ? `invalidated: ${entry.invalidation_reason}${entry.successor_id ? ` \u2192 #${entry.successor_id}` : ""}${invalidatedBy(entry.invalidated_by)}` : entry.state, " \xB7 ", entry.scope ?? "board-wide", " \xB7 ", entry.path, (entry.kind === "behavior" || entry.kind === "exemplar") && ` \xB7 to ${entry.addressee ?? "every agent"}`, " \xB7 ", entry.author.activity, entry.cause && ` \xB7 ${entry.cause}`),
       entry.kind !== "definition" && /* @__PURE__ */ React.createElement("strong", { style: { fontSize: "var(--text-sm)" } }, entry.title),
       /* @__PURE__ */ React.createElement("p", { style: { margin: 0, fontSize: "var(--text-sm)" } }, entry.text),
       shown && // a definition's title is its text, so the Set shows it once
@@ -3067,6 +3082,7 @@ function toQuestionCardShape(q, icons) {
     ...q.question_proposal?.kind === "routing" && q.question_proposal.op === "row" && { amendable: "row" },
     ...q.question_proposal?.kind === "registry" && { amendable: "agent_tier" },
     ...q.question_proposal?.kind === "memory" && q.question_proposal.op !== "invalidate" && { amendable: "memory", candidateId: q.question_proposal.candidate_id },
+    ...q.question_proposal?.kind === "memory" && { rejectNeedsComment: true },
     ...q.approval && {
       kind: "approval",
       ...q.approval.raises_parent_risk && { note: `approving raises ${q.parent_id} risk (upward propagation)` }
@@ -3270,12 +3286,12 @@ function QuestionDeepLinkView({ questionId, onDone, onTranslate }) {
       cancelled = true;
     };
   }, [questionId]);
-  const answer = async (answers, amendment) => {
+  const answer = async (answers, amendment, comment) => {
     if (busy) return;
     setBusy(true);
     setErr(null);
     try {
-      await api(`/api/tasks/${questionId}/answer`, { answers, amendment });
+      await api(`/api/tasks/${questionId}/answer`, { answers, amendment, comment });
       onDone(rawTask);
     } catch (e) {
       setErr(String(e.message || e));
@@ -3565,9 +3581,9 @@ function App() {
     setData((d) => tab === "triage" && d ? { ...fresh, questions: d.questions, log: d.log, lastLogId: d.lastLogId } : fresh);
     return fresh;
   };
-  const answerNow = async (q, a, amendment) => {
+  const answerNow = async (q, a, amendment, comment) => {
     try {
-      await api(`/api/tasks/${q.id}/answer`, { answers: a, triage: true, amendment });
+      await api(`/api/tasks/${q.id}/answer`, { answers: a, triage: true, amendment, comment });
     } catch (err) {
       say("danger", "answer failed", String(err.message || err));
       throw err;

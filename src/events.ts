@@ -410,7 +410,7 @@ export type EventPayload =
   // memory マーカーになる。
   | {
       kind: "memory_pulled";
-      verb: "browse_memory" | "search_memory" | "read_memory" | "list_memory_candidates" | "list_memory_behaviors" | "list_memory_entries" | "list_precedents";
+      verb: "browse_memory" | "search_memory" | "read_memory" | "list_memory_candidates" | "list_memory_behaviors" | "list_memory_entries" | "list_memory_proposals" | "list_precedents";
       input: {
         prefix?: string;
         query?: string;

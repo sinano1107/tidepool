@@ -575,8 +575,10 @@ export function approveMemoryProposal(db: Db, proposal: MemoryProposal, question
 }
 
 /** 提案の reject(spec #615 F): 同じ pin 検査の後、approve / consolidate は candidate だけを `rejected` で無効化し
- *  (consolidate の replaces は残る)、invalidate は何もしない。 */
-export function rejectMemoryProposal(db: Db, proposal: MemoryProposal, questionId: string, origin: EventOrigin, at: Date): void {
+ *  (consolidate の replaces は残る)、invalidate は何もしない。comment は必須(ADR 0159 決定3)—— 次の meta-review が
+ *  選び直す材料で、question_answered に残る(`listMemoryProposals`)。 */
+export function rejectMemoryProposal(db: Db, proposal: MemoryProposal, questionId: string, origin: EventOrigin, at: Date, comment: string | undefined): void {
+  if (!comment?.trim()) throw new DomainError("rejecting a memory proposal requires a comment saying why");
   assertProposalFresh(db, proposal);
   if (proposal.op !== "invalidate") invalidateMemoryEntry(db, { entry_id: proposal.candidate_id, reason: "rejected" }, HUMAN_WORKER_ID, origin, at, { question_id: questionId });
 }
@@ -805,14 +807,27 @@ export function approvedMemoryEntries(db: Db, watermark?: number): MemoryEntry[]
   ).map(rowToEntry);
 }
 
+/** 無効化の書き手(ADR 0159 決定2): memory_entry_invalidated の印そのまま —— 回答なら question、書き込みなら書き手の activity、
+ *  印の無い無効化(settings タブ / 管理MCP の直接の無効化)は event の worker。 */
+type InvalidatedBy = { question_id: string } | { activity: MemoryEntryFields["author"]["activity"] } | { worker: string };
+
 /** 人間の面の一覧(spec #586 F): candidate・無効化済み・影になった盤面全体の定義も出す(id 順)。
  *  scope は完全一致(null = 盤面全体、省略 = すべて)、state の invalidated は無効化済み、
  *  approved / candidate は無効化されていないもの。 */
 export function listMemoryEntries(
   db: Db,
   filter: { scope?: string | null; kind?: MemoryEntryFields["kind"]; state?: MemoryEntryFields["state"] | "invalidated" },
-): Array<MemoryEntry & { invalidation_reason: InvalidationReason | null; successor_id: number | null; cause: Cause | null }> {
+): Array<MemoryEntry & { invalidation_reason: InvalidationReason | null; successor_id: number | null; invalidated_by: InvalidatedBy | null; cause: Cause | null }> {
   const { scope, kind, state } = filter;
+  // エントリの無効化は高々1度(invalidateMemoryEntry の門)なので entry_id で引ける。印は event が正本で列は持たない
+  const invalidatedBy = new Map(
+    (db.prepare("SELECT worker_id, payload FROM events WHERE kind = 'memory_entry_invalidated'").all() as Array<{ worker_id: string; payload: string }>).map(
+      ({ worker_id, payload }) => {
+        const { entry_id, question_id, activity } = JSON.parse(payload) as Extract<EventPayload, { kind: "memory_entry_invalidated" }>;
+        return [entry_id, question_id ? { question_id } : activity ? { activity } : { worker: worker_id }] as const;
+      },
+    ),
+  );
   // cause = 出所 event が帰責(objection_attributed)のときのその cause(spec #615 G)
   return (
     db
@@ -829,7 +844,39 @@ export function listMemoryEntries(
         (kind === undefined || row.kind === kind) &&
         (state === undefined || (state === "invalidated" ? row.invalidation_reason !== null : row.invalidation_reason === null && row.state === state)),
     )
-    .map((row) => ({ ...rowToEntry(row), invalidation_reason: row.invalidation_reason, successor_id: row.successor_id, cause: row.cause }));
+    .map((row) => ({
+      ...rowToEntry(row),
+      invalidation_reason: row.invalidation_reason,
+      successor_id: row.successor_id,
+      invalidated_by: invalidatedBy.get(row.id) ?? null,
+      cause: row.cause,
+    }));
+}
+
+/** 過去の memory 提案(ADR 0159 決定1): 提案、回答(question_answered の答え・修正値・コメント)、陳腐化の決着
+ *  (memory_proposal_stale)。`listRoutingProposals` と同じく提案の表は持たず question と event から組み、全期間を返す。
+ *  invalidate の提案の reject は記憶の側に跡を残さないので、ここだけが読み口になる。 */
+export function listMemoryProposals(db: Db) {
+  const rows = db
+    .prepare(
+      `SELECT t.id, t.question_proposal,
+         (SELECT payload FROM events WHERE task_id = t.id AND kind = 'question_answered') AS answered,
+         (SELECT payload FROM events WHERE task_id = t.id AND kind = 'memory_proposal_stale') AS stale
+       FROM tasks t WHERE json_extract(t.question_proposal, '$.kind') = 'memory' ORDER BY t.rowid`,
+    )
+    .all() as Array<{ id: string; question_proposal: string; answered: string | null; stale: string | null }>;
+  return rows.map((row) => {
+    const answered = row.answered === null ? null : (JSON.parse(row.answered) as Extract<EventPayload, { kind: "question_answered" }>);
+    const stale = row.stale === null ? null : (JSON.parse(row.stale) as Extract<EventPayload, { kind: "memory_proposal_stale" }>);
+    return {
+      question_id: row.id,
+      proposal: JSON.parse(row.question_proposal) as MemoryProposal,
+      answer: answered?.answers[0]?.answer ?? null,
+      amendment: answered?.amendment ?? null,
+      comment: answered?.comment ?? null,
+      observed: stale && { entry_id: stale.entry_id, observed_event_id: stale.observed_event_id },
+    };
+  });
 }
 
 /** 索引と query の共通の前処理(spec #586 B / #606 / #608 / #610)。まず CJK の連なりを重なりつきの2文字語に割り(LWC 式)
@@ -1061,6 +1108,16 @@ export function pullMemoryList(
                 .map((e) => withSuccessor(e, all)))(listMemoryEntries(db, {}));
     const { rows: shown, truncated } = paged(entries, input.page);
     return recordPull(db, reader, { verb, input, returned_ids: shown.map((e) => e.id) }, { entries: shown, truncated }, at);
+  })();
+}
+
+/** list_memory_proposals(ADR 0159 決定1): 一覧3つと同じくページに割って pull に載せる。返した id は各提案が名指す entry
+ *  (candidate か invalidate の target)。 */
+export function pullMemoryProposals(db: Db, reader: Pick<MemoryReader, "taskId" | "agent">, input: { page?: number }, at: Date) {
+  return db.transaction(() => {
+    const { rows, truncated } = paged(listMemoryProposals(db), input.page);
+    const returned_ids = rows.map(({ proposal }) => (proposal.op === "invalidate" ? proposal.target.id : proposal.candidate_id));
+    return recordPull(db, reader, { verb: "list_memory_proposals", input, returned_ids }, { proposals: rows, truncated }, at);
   })();
 }
 

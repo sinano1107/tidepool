@@ -287,6 +287,8 @@ export interface WireContract {
       author: { activity: string };
       invalidation_reason: string | null;
       successor_id: number | null;
+      /** 無効化の書き手(src/memory.ts の InvalidatedBy)。無効化されていなければ null。 */
+      invalidated_by: { question_id: string } | { activity: string } | { worker: string } | null;
       cause: string | null;
       /** 値集合の正本は src/memory.ts の MemorySource。event の ref が自身の id なら出所は作成 event(事例なし)。 */
       source: { kind: "commit"; ref: string } | { kind: "event" | "decision"; ref: number };

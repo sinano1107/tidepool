@@ -114,7 +114,7 @@ it("同主題の open な提案 question があれば、meta-review が完了し
   await t.clock.advance(2 * DAY); // 周期は過ぎ材料もあるが、提案 question が open
   expect((await openMetaReviews(t)).map((task) => task.id)).toEqual([first.id]); // 完了済みの first は question の木ごと盤面に残る
 
-  expect((await api(t.baseUrl, "POST", `/api/tasks/${question_id}/answer`, { answers: ["reject"] })).status).toBe(200);
+  expect((await api(t.baseUrl, "POST", `/api/tasks/${question_id}/answer`, { answers: ["reject"], comment: "Too broad." })).status).toBe(200);
   await t.clock.advance(HOUR);
   expect(await openMetaReviews(t)).toMatchObject([{ status: "in_progress" }]);
 });

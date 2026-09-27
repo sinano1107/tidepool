@@ -43,8 +43,9 @@ async function boardWithMetaReview(titles = ["Keep migrations in their own commi
 
 const task = async (id: string) => (await api(t.baseUrl, "GET", `/api/tasks/${id}`)).json;
 const events = async (id: string) => (await api(t.baseUrl, "GET", `/api/tasks/${id}/events`)).json as any[];
-const answer = (id: string, option: string, amendment?: Record<string, unknown>) =>
-  api(t.baseUrl, "POST", `/api/tasks/${id}/answer`, { answers: [option], ...(amendment && { amendment }) });
+const answer = (id: string, option: string, extra: { amendment?: Record<string, unknown>; comment?: string } = {}) =>
+  api(t.baseUrl, "POST", `/api/tasks/${id}/answer`, { answers: [option], ...extra });
+const because = { comment: "Too broad for every task." };
 const entry = async (id: number) => (await memoryEntries(t)).find((e) => e.id === id);
 
 it("approve の提案は meta-review の子に1 item の question を立て、pin を question_proposal に焼き、detail に新本文・宛先・path・scope を載せる", async () => {
@@ -120,7 +121,7 @@ it("pin が古い提案への回答は approve も reject も拒否され何も�
     approveMemoryProposal(t.db, (await task(questionId)).question_proposal, "elsewhere", "webui", t.clock.now());
     const approved = await entry(ids[0]!);
 
-    for (const option of ["approve", "reject"]) expect((await answer(questionId, option)).status).toBe(409);
+    for (const option of ["approve", "reject"]) expect((await answer(questionId, option, because)).status).toBe(409);
 
     expect(await task(questionId)).toMatchObject({ status: "todo", question_answer: null });
     expect((await events(questionId)).map((e) => e.kind)).toEqual(["task_registered"]);
@@ -135,7 +136,7 @@ it("reject の回答は reject の export に届き(candidate が rejected)、�
   try {
     const questionId = await propose(ids[0]!);
 
-    expect((await answer(questionId, "reject")).status).toBe(200);
+    expect((await answer(questionId, "reject", because)).status).toBe(200);
 
     expect(await entry(ids[0]!)).toMatchObject({ invalidation_reason: "rejected" });
     expect((await events(questionId)).map((e) => e.kind)).toEqual(["task_registered", "question_answered"]);
@@ -314,7 +315,7 @@ it("consolidate の回答は reject で新 candidate を rejected にして appr
     const rejected = (await task((await consolidate(board, [approved, board.ids[0]!])).question_id));
     const behaviors = async () => (await board.call("list_memory_behaviors", {})).entries.map((e: any) => e.id);
 
-    expect((await answer(rejected.id, "reject")).status).toBe(200);
+    expect((await answer(rejected.id, "reject", because)).status).toBe(200);
     expect(await entry(rejected.question_proposal.candidate_id)).toMatchObject({ invalidation_reason: "rejected" });
     expect(await behaviors()).toEqual([approved]);
 
@@ -333,7 +334,7 @@ it("invalidate の回答は reject で approved 集合を変えず、approve で
     const target = await approvedBehavior(board, "Split migrations");
     const behaviors = async () => (await board.call("list_memory_behaviors", {})).entries.map((e: any) => e.id);
 
-    expect((await answer((await invalidate(board, target)).question_id, "reject")).status).toBe(200);
+    expect((await answer((await invalidate(board, target)).question_id, "reject", because)).status).toBe(200);
     expect(await behaviors()).toEqual([target]);
 
     expect((await answer((await invalidate(board, target, "capability")).question_id, "approve")).status).toBe(200);
@@ -438,7 +439,7 @@ it("HTTP の回答と管理MCP の answer_question は memory の修正値を受
   try {
     const viaHttp = await board.propose(board.ids[0]!);
     const amendment = { text: "Keep each migration in its own commit.", addressee: null };
-    expect((await answer(viaHttp, "approve", amendment)).status).toBe(200);
+    expect((await answer(viaHttp, "approve", { amendment })).status).toBe(200);
     expect((await events(viaHttp)).find((e) => e.kind === "question_answered").payload).toMatchObject({
       answers: [{ answer: "approve", recommendation_accepted: false }],
       amendment,
@@ -465,11 +466,26 @@ it("invalidate の提案と reject に付いた memory の修正値は回答ご�
     const approval = await board.propose(board.ids[0]!);
 
     for (const [id, option] of [[invalidation, "approve"], [approval, "reject"]] as const) {
-      expect((await answer(id, option, { text: "Something else." })).status).toBe(409);
+      expect((await answer(id, option, { ...because, amendment: { text: "Something else." } })).status).toBe(409);
       expect(await task(id)).toMatchObject({ status: "todo", question_answer: null });
       expect((await events(id)).map((e) => e.kind)).toEqual(["task_registered"]);
     }
   } finally {
     await board.client.close();
+  }
+});
+
+it("HTTP の回答で comment の無い・空白だけの memory 提案の reject は断られ、question は未回答のまま candidate も残る(ADR 0159 決定3)", async () => {
+  const { ids, client, propose } = await boardWithMetaReview();
+  try {
+    const questionId = await propose(ids[0]!);
+
+    for (const extra of [{}, { comment: "  " }]) expect((await answer(questionId, "reject", extra)).status).toBe(409);
+
+    expect(await task(questionId)).toMatchObject({ status: "todo", question_answer: null });
+    expect((await events(questionId)).map((e) => e.kind)).toEqual(["task_registered"]);
+    expect(await entry(ids[0]!)).toMatchObject({ invalidation_reason: null });
+  } finally {
+    await client.close();
   }
 });

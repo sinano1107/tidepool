@@ -289,7 +289,7 @@ it("Exemplar の consolidate は approve で candidate を approved にして re
   const replaces = [drafted("Split migrations", { event_id: source }), drafted("Two commits per migration", { event_id: source })];
   const rejected = consolidate(replaces, { kind: "exemplar", annotations });
 
-  rejectMemoryProposal(db, rejected, "question-1", "webui", at);
+  rejectMemoryProposal(db, rejected, "question-1", "webui", at, "Too particular.");
   expect(listMemoryEntries(db, {}).filter((e) => e.kind !== "knowledge").map((e) => [e.id, e.state, e.invalidation_reason, e.successor_id])).toEqual([
     [replaces[0], "candidate", null, null],
     [replaces[1], "candidate", null, null],
@@ -312,6 +312,15 @@ it("Exemplar の提案の修正値つき approve は domain error で何も変�
   const before = listMemoryEntries(db, {});
 
   expect(() => approveMemoryProposal(db, proposal, "question-1", "webui", at, { title: "Split it" })).toThrow(DomainError);
+  expect(listMemoryEntries(db, {})).toEqual(before);
+});
+
+it("memory 提案の reject は comment が空・空白だけなら domain error で何も変えない(ADR 0159 決定3)", () => {
+  const { db, attributed, drafted, consolidate } = drafts();
+  const proposal = consolidate([drafted("Split migrations", { event_id: attributed("split the migration into two commits") })], { kind: "exemplar", annotations });
+  const before = listMemoryEntries(db, {});
+
+  for (const comment of [undefined, "", " \n "]) expect(() => rejectMemoryProposal(db, proposal, "question-1", "webui", at, comment)).toThrow(DomainError);
   expect(listMemoryEntries(db, {})).toEqual(before);
 });
 

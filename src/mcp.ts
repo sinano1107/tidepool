@@ -27,6 +27,7 @@ import {
   moveMemory,
   proposeMemoryChange,
   pullMemoryList,
+  pullMemoryProposals,
   readMemory,
   recordKnowledge,
   searchMemory,
@@ -952,7 +953,8 @@ function registerMemoryMetaReviewVerbs(server: McpServer, deps: McpDeps, run: Me
     {
       description:
         "List memory candidates with their cause, author, and source. include_invalidated adds invalidated " +
-        "candidates with their invalidation reason and successor — read them so you do not re-propose what was rejected. A candidate superseded " +
+        "candidates with their invalidation reason, successor, and invalidated_by: question_id when a human answered a proposal " +
+        "(read its comment in list_memory_proposals), activity when a meta-review retired or replaced it, worker otherwise. A candidate superseded " +
           "by a successor a human wrote was approved with the human's amendment, or replaced by a consolidation the human amended; successor " +
           "shows the wording they approved instead.",
       inputSchema: { include_invalidated: z.boolean().optional(), kind: z.enum(["behavior", "exemplar"]).optional(), page },
@@ -983,6 +985,18 @@ function registerMemoryMetaReviewVerbs(server: McpServer, deps: McpDeps, run: Me
       },
     },
     async (input) => run((reader, now) => pullMemoryList(deps.db, reader, "list_memory_entries", input, now)),
+  );
+
+  server.registerTool(
+    "list_memory_proposals",
+    {
+      description:
+        "List every past memory proposal (approve, consolidate, invalidate) with the human's answer, amendment and comment, or " +
+        "why the board settled it as observed (an entry it pinned was invalidated first). A rejected proposal always carries the " +
+        "human's reason in comment — read it so you do not re-propose what was rejected and can redraft closer to what they want.",
+      inputSchema: { page },
+    },
+    async (input) => run((reader, now) => pullMemoryProposals(deps.db, reader, input, now)),
   );
 
   server.registerTool(

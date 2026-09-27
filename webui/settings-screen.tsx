@@ -1500,6 +1500,9 @@ function MemoryCasePicker({ workspace, value, onChange, onQuote }: {
 const MEMORY_KINDS = ['knowledge', 'behavior', 'definition', 'exemplar'];
 const MEMORY_INVALIDATION_REASONS = ['superseded', 'path_moved', 'capability', 'environment', 'requirement_change'];
 const needsSuccessor = (reason: string) => reason === 'superseded' || reason === 'path_moved';
+// who invalidated it (ADR 0159): a human answering a proposal question, a meta-review writing, or a direct invalidation
+const invalidatedBy = (by: WireContract['GET /api/settings/memory/entries']['entries'][number]['invalidated_by']) =>
+  !by ? '' : ` by ${'question_id' in by ? `answer to ${by.question_id}` : 'activity' in by ? by.activity : by.worker}`;
 
 function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit }: {
   workspaceNames: string[];
@@ -1750,7 +1753,7 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit }: 
           style={{ display: 'flex', flexDirection: 'column', gap: 4, borderTop: '1px solid var(--border-default)', paddingTop: 10 }}>
           <p style={{ ...muted, fontFamily: 'var(--font-mono)' }}>
             #{entry.id} · {entry.kind} · {entry.invalidation_reason
-              ? `invalidated: ${entry.invalidation_reason}${entry.successor_id ? ` → #${entry.successor_id}` : ''}`
+              ? `invalidated: ${entry.invalidation_reason}${entry.successor_id ? ` → #${entry.successor_id}` : ''}${invalidatedBy(entry.invalidated_by)}`
               : entry.state} · {entry.scope ?? 'board-wide'} · {entry.path}{(entry.kind === 'behavior' || entry.kind === 'exemplar') && ` · to ${entry.addressee ?? 'every agent'}`} · {entry.author.activity}{entry.cause && ` · ${entry.cause}`}
           </p>
           {entry.kind !== 'definition' && <strong style={{ fontSize: 'var(--text-sm)' }}>{entry.title}</strong>}

@@ -17,6 +17,7 @@ export const MEMORY_META_REVIEW_VERBS = [
   "list_memory_behaviors",
   "list_precedents",
   "list_memory_entries",
+  "list_memory_proposals",
   "define_memory",
   "fold_memory",
   "move_memory",
@@ -51,7 +52,8 @@ export const META_REVIEW_SUBJECTS = {
         "For a Behavior, ask whether it holds true whatever leaf sits under its branch. " +
         PROMOTION_RULE +
         " Retire a redundant exemplar with invalidate_memory superseded, naming the one you keep as successor. Propose other changes through the proposal verb; " +
-        "apply fixes directly only to Knowledge and Definitions. Read the invalidated candidates and their reasons first, so you do not re-propose what was rejected. " +
+        "apply fixes directly only to Knowledge and Definitions. First read the past memory proposals with the human's answers and comments (list_memory_proposals) " +
+        "and the invalidated candidates with invalidated_by, so you do not re-propose what a human rejected and do not repeat a retirement of your own. " +
         "Where a human amended a candidate when approving it (a superseded candidate whose successor a human wrote), draft closer to the human's wording.",
       completion_criteria:
         "every candidate and store change since the previous meta-review is either proposed, retired, applied (Knowledge / Definitions only), or deliberately left as is",
