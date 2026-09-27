@@ -565,6 +565,50 @@ it("worker_spawned を出所に持つ Exemplar の decision の quote はその 
   expect(approvedMemoryEntries(db)).toMatchObject([{ id, source: { kind: "event", ref: spawned } }]);
 });
 
+/** 種別の線(ADR 0161 決定1)の各種別のエントリ。Behavior は candidate、Exemplar は人間の approved。 */
+function kinds() {
+  const { db, task } = board();
+  const decision = logDecision(db, task, "split the migration into two commits", "deckhand", at);
+  const make = {
+    knowledge: () => record(db, "fact"),
+    definition: () => defineMemoryBranch(db, definition, "worker", at).entry_id,
+    behavior: () => createBehaviorCandidate(db, { ...knowledge, addressee: null, source: { commit: "0a46a46" } }, "board", at).entry_id,
+    exemplar: () => exemplar(db, decision, [whole]),
+  };
+  return { db, make };
+}
+
+it.each([
+  ["Behavior を Knowledge で superseded", "superseded", "behavior", "knowledge"],
+  ["Knowledge を Definition で superseded", "superseded", "knowledge", "definition"],
+  ["Behavior を Exemplar で path_moved", "path_moved", "behavior", "exemplar"],
+] as const)("%sにする無効化は種別の線を跨ぐので domain error で、エントリは残る(ADR 0161 決定1)", (_, reason, from, to) => {
+  const { db, make } = kinds();
+  const entry_id = make[from]();
+  const successor_id = make[to]();
+
+  expect(() => invalidateMemoryEntry(db, { entry_id, reason, successor_id }, "human", "webui", at)).toThrow(`${from} entry ${entry_id} cannot be ${reason} by ${to} entry ${successor_id}`);
+  expect(listMemoryEntries(db, { state: "invalidated" })).toEqual([]);
+});
+
+it("superseded は Behavior と Exemplar を互いに置き換え、path_moved は同じ種別を置き換える(ADR 0161 決定1)", () => {
+  const { db, make } = kinds();
+  const behavior = make.behavior();
+  const exemplarEntry = make.exemplar();
+  const human = recordBehavior(db, { ...humanEntryInput(db, humanKnowledge), addressee: null }, "webui", at).entry_id;
+  const [moved, fact] = [make.knowledge(), make.knowledge()];
+
+  invalidateMemoryEntry(db, { entry_id: behavior, reason: "superseded", successor_id: exemplarEntry }, "human", "webui", at);
+  invalidateMemoryEntry(db, { entry_id: exemplarEntry, reason: "superseded", successor_id: human }, "human", "webui", at);
+  invalidateMemoryEntry(db, { entry_id: moved, reason: "path_moved", successor_id: fact }, "human", "webui", at);
+
+  expect(listMemoryEntries(db, { state: "invalidated" }).map((e) => [e.id, e.invalidation_reason, e.successor_id])).toEqual([
+    [behavior, "superseded", exemplarEntry],
+    [exemplarEntry, "superseded", human],
+    [moved, "path_moved", fact],
+  ]);
+});
+
 it("決定ログの各エントリは、それを含む worker session の worker_spawned の id を持ち、session の窓の外なら null(#953 の picker が「この session」に使う)", () => {
   const { db, task } = board();
   const before = logDecision(db, task, "before any session", "human", at);

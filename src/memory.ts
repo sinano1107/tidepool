@@ -184,8 +184,8 @@ export function recordKnowledge(db: Db, input: EntryInput, origin: EventOrigin, 
 }
 
 /** 枝の定義(spec #600 A): その枝の下に何を保存するかの1行。承認不要で書いた瞬間に approved、
- *  出所は持たない(自身の作成 event)。同じ枝・同じスコープの approved は1つだけ —— 同じ枝の改訂は
- *  `supersedes` に旧定義を渡し、書くのと superseded + 後継の無効化を1つの transaction で行う。 */
+ *  出所は持たない(自身の作成 event)。同じ枝・同じスコープの approved は1つだけ —— 改訂は
+ *  `supersedes` に旧定義(path は問わない、ADR 0161 決定2)を渡し、書くのと superseded + 後継の無効化を1つの transaction で行う。 */
 export function defineMemoryBranch(
   db: Db,
   input: Omit<EntryInput, "title"> & { supersedes?: number },
@@ -210,22 +210,37 @@ export function defineMemoryBranch(
   })();
 }
 
-/** meta-review の Knowledge の畳み(issue #619 / ADR 0122 決定1): 新本文を `based_on_decision` の decision(推論)を
- *  出所に作り、replaces(approved かつ未無効化の Knowledge、1つ以上)をその後継つき superseded にする。1 transaction。 */
+/** meta-review の畳み(issue #619 / ADR 0122 決定1 / ADR 0161 決定2): replaces(1つ以上)を1つの後継の superseded にする。1 transaction。
+ *  後継は新しく書く Knowledge(`based_on_decision` の decision(推論)を出所に)か、既にある approved の `successor_id` のどちらか一方。
+ *  組(Knowledge → Knowledge、Definition → Definition、Behavior / Exemplar ↔)は種別の線が持ち、approved の Behavior / Exemplar は
+ *  承認の線なので consolidate の提案へ回す。返り値の event_ids は replaces の memory_entry_invalidated。 */
 export function foldMemory(
   db: Db,
-  input: Omit<EntryInput, "source" | "original"> & { replaces: number[]; based_on_decision: number },
+  input: Partial<Omit<EntryInput, "source" | "original" | "author"> & { based_on_decision: number; successor_id: number }> & {
+    replaces: number[];
+    author: MemoryEntryFields["author"];
+  },
   origin: EventOrigin,
   at: Date,
-): { entry_id: number; event_id: number } {
-  const { replaces, based_on_decision, ...fields } = input;
+): { entry_id: number; event_ids: number[] } {
+  const { replaces, successor_id, author, ...draft } = input;
   if (replaces.length === 0) throw new DomainError("fold_memory needs at least one entry to replace");
-  requireDecision(db, based_on_decision);
+  if ((successor_id === undefined) === Object.values(draft).every((value) => value === undefined)) {
+    throw new DomainError("fold_memory takes exactly one of successor_id (an existing approved entry) and scope, path, title, text and based_on_decision (a new knowledge entry)");
+  }
   return db.transaction(() => {
-    for (const id of replaces) requireKnowledge(db, id);
-    const created = recordKnowledge(db, { ...fields, source: { event_id: based_on_decision } }, origin, at);
-    for (const id of replaces) invalidateMemoryEntry(db, { entry_id: id, reason: "superseded", successor_id: created.entry_id }, fields.author.name, origin, at, { activity: fields.author.activity });
-    return created;
+    let successor = successor_id;
+    if (successor === undefined) {
+      const { scope, path, title, text, based_on_decision } = draft;
+      if (scope === undefined || path === undefined || title === undefined || text === undefined || based_on_decision === undefined) {
+        throw new DomainError("a new knowledge entry needs scope, path, title, text and based_on_decision");
+      }
+      successor = recordKnowledge(db, { scope, path, title, text, author, source: { event_id: requireDecision(db, based_on_decision) } }, origin, at).entry_id;
+    }
+    const event_ids = replaces.map((id) =>
+      invalidateMemoryEntry(db, { entry_id: requireNotApprovedBehaviorOrExemplar(db, id).id, reason: "superseded", successor_id: successor }, author.name, origin, at, { activity: author.activity }),
+    );
+    return { entry_id: successor, event_ids };
   })();
 }
 
@@ -308,7 +323,8 @@ export function parseMemoryAmendment(input: unknown): MemoryAmendment {
 
 // `rejected` は提案 question の reject と、meta-review の candidate の引退(issue #954)だけが書く —— 人間の面からは渡せない
 export const invalidationSchema = z.object({ reason: z.enum(INVALIDATION_REASONS).exclude(["rejected"]), successor_id: z.number().int().positive().optional() });
-export const metaReviewInvalidationSchema = invalidationSchema.extend({ reason: z.enum(INVALIDATION_REASONS) });
+/** meta-review の invalidate_memory は後継なしで落とすだけ(ADR 0161 決定2): 後継 id は黙って捨てず断る。 */
+export const metaReviewInvalidationSchema = z.object({ reason: z.enum(INVALIDATION_REASONS).exclude(["superseded", "path_moved"]) }).strict();
 
 /** 一覧の絞り込み(HTTP の query と管理MCP が共有)。workspace は完全一致、board_wide は盤面全体だけ。 */
 export const memoryListFilterSchema = z.object({
@@ -455,7 +471,8 @@ export function invalidateMemoryEntry(
   }
   if (successor_id === entry_id) throw new DomainError("an entry cannot be its own successor");
   return db.transaction(() => {
-    if (requireEntry(db, entry_id).invalidation_reason !== null) {
+    const replaced = requireEntry(db, entry_id);
+    if (replaced.invalidation_reason !== null) {
       throw new DomainError(`memory entry ${entry_id} is already invalidated`);
     }
     if (successor_id !== undefined) {
@@ -463,6 +480,11 @@ export function invalidateMemoryEntry(
       const successor = requireEntry(db, successor_id);
       if (successor.state !== "approved" || successor.invalidation_reason !== null) {
         throw new DomainError(`successor ${successor_id} must be an approved, non-invalidated entry`);
+      }
+      // 種別の線(ADR 0161 決定1): Behavior ↔ Exemplar は superseded で互いに、それ以外は同じ種別だけ
+      const bothBehaviorOrExemplar = [replaced.kind, successor.kind].every((kind) => kind === "behavior" || kind === "exemplar");
+      if (replaced.kind !== successor.kind && !(reason === "superseded" && bothBehaviorOrExemplar)) {
+        throw new DomainError(`${replaced.kind} entry ${entry_id} cannot be ${reason} by ${successor.kind} entry ${successor_id}`);
       }
     }
     markInvalidated(db, entry_id, reason, successor_id ?? null);
@@ -482,8 +504,15 @@ export function invalidateMemoryEntry(
   })();
 }
 
-/** meta-review の無効化(ADR 0122 決定1 / ADR 0160 決定1): approved の Behavior / Exemplar は承認の線なので提案へ回し、`path_moved` は
- *  `moveMemory` だけが生む。`rejected` は Behavior にも Exemplar にもならない candidate の引退(issue #954)。 */
+/** meta-review が直接落とせるエントリ(ADR 0160 決定1): approved の Behavior / Exemplar は承認の線なので提案へ回す。 */
+function requireNotApprovedBehaviorOrExemplar(db: Db, id: number): EntryRow {
+  const row = requireEntry(db, id);
+  if ((row.kind === "behavior" || row.kind === "exemplar") && row.state === "approved") throw new DomainError(`memory entry ${row.id} is an approved ${row.kind}: propose it instead`);
+  return row;
+}
+
+/** meta-review の無効化(ADR 0122 決定1 / ADR 0160 決定1 / ADR 0161 決定2): 後継なしで落とすだけ —— 置き換えは `fold_memory`・
+ *  `define_memory` の supersedes・`moveMemory` が持つ。`rejected` は Behavior にも Exemplar にもならない candidate の引退(issue #954)。 */
 export function invalidateMemoryByMetaReview(
   db: Db,
   input: Parameters<typeof invalidateMemoryEntry>[1],
@@ -491,9 +520,10 @@ export function invalidateMemoryByMetaReview(
   origin: EventOrigin,
   at: Date,
 ): number {
-  if (input.reason === "path_moved") throw new DomainError("path_moved comes only from move_memory, which copies the text itself");
-  const row = requireEntry(db, input.entry_id);
-  if ((row.kind === "behavior" || row.kind === "exemplar") && row.state === "approved") throw new DomainError(`memory entry ${row.id} is an approved ${row.kind}: propose it instead`);
+  if (input.reason === "superseded" || input.reason === "path_moved") {
+    throw new DomainError(`invalidate_memory does not take ${input.reason}: replace with fold_memory, define_memory's supersedes or move_memory`);
+  }
+  const row = requireNotApprovedBehaviorOrExemplar(db, input.entry_id);
   if (input.reason === "rejected" && row.state !== "candidate") throw new DomainError(`rejected retires only a candidate; memory entry ${row.id} is not one`);
   return invalidateMemoryEntry(db, input, workerId, origin, at, { activity: "meta_review" });
 }

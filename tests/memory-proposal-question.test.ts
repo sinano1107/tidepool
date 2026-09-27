@@ -160,7 +160,7 @@ it("pin の entry が人間・meta-review・superseded のどの経路で無効�
     const observed = [
       (await api(t.baseUrl, "POST", `/api/settings/memory/entries/${byHuman}/invalidate`, { reason: "requirement_change" })).json.event_id,
       (await call("invalidate_memory", { entry_id: byMetaReview, reason: "capability" })).event_id,
-      (await call("invalidate_memory", { entry_id: superseded, reason: "superseded", successor_id: successor })).event_id,
+      (await call("fold_memory", { successor_id: successor, replaces: [superseded] })).event_ids[0],
     ];
 
     for (const [i, entryId] of [byHuman, byMetaReview, superseded].entries()) {

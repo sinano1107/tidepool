@@ -143,7 +143,7 @@ it("move_memory は Definition と Behavior を domain error で拒み、何も�
   expect(listMemoryEntries(db, {})).toEqual(before);
 });
 
-it("meta-review の無効化は candidate・Knowledge・Definition に効き、approved の Behavior と path_moved は domain error で拒む", () => {
+it("meta-review の無効化は candidate・Knowledge・Definition に効き、approved の Behavior と後継つきの理由(superseded / path_moved)は domain error で拒む(ADR 0161 決定2)", () => {
   const { db, decision, knowledge } = board();
   const fact = knowledge("stale fact");
   const successor = knowledge("fresh fact", null);
@@ -162,13 +162,16 @@ it("meta-review の無効化は candidate・Knowledge・Definition に効き、a
     invalidateMemoryByMetaReview(db, { entry_id, reason, successor_id }, "auditor", "worker", at);
 
   invalidate(candidate, "requirement_change");
-  invalidate(fact, "superseded", successor);
+  invalidate(fact, "capability");
   invalidate(definition, "environment");
   expect(() => invalidate(approved, "capability")).toThrow(DomainError);
-  expect(() => invalidate(successor, "path_moved", approved)).toThrow(DomainError);
+  // 同じ種別の Knowledge なので種別の線には当たらない —— 断るのは verb
+  for (const reason of ["superseded", "path_moved"] as const) {
+    expect(() => invalidate(successor, reason, knowledge("fresher fact"))).toThrow(`invalidate_memory does not take ${reason}`);
+  }
 
   expect(listMemoryEntries(db, { state: "invalidated" }).map((e) => [e.id, e.invalidation_reason, e.successor_id])).toEqual([
-    [fact, "superseded", successor],
+    [fact, "capability", null],
     [definition, "environment", null],
     [candidate, "requirement_change", null],
   ]);
@@ -197,20 +200,19 @@ it("meta-review の無効化の rejected は candidate(Behavior / Exemplar)だ�
   ]);
 });
 
-it("meta-review の無効化は approved の Exemplar を superseded を含むどの理由でも domain error で拒み、candidate の Exemplar は直接無効化できる(ADR 0160 決定1)", () => {
-  const { db, attributed, drafted, consolidate, exemplar, behavior } = approvedPair();
+it("meta-review の無効化は approved の Exemplar をどの理由でも domain error で拒み、candidate の Exemplar は直接無効化できる(ADR 0160 決定1)", () => {
+  const { db, attributed, drafted, consolidate, exemplar } = approvedPair();
   const candidate = consolidate([drafted("Keep it split", { event_id: attributed("kept the two commits apart") })], { kind: "exemplar", annotations }).candidate_id;
-  const invalidate = (entry_id: number, reason: InvalidationReason, successor_id?: number) =>
-    invalidateMemoryByMetaReview(db, { entry_id, reason, successor_id }, "auditor", "worker", at);
+  const invalidate = (entry_id: number, reason: InvalidationReason) => invalidateMemoryByMetaReview(db, { entry_id, reason }, "auditor", "worker", at);
 
-  for (const [reason, successor_id] of [["superseded", behavior], ["capability"], ["environment"], ["requirement_change"]] as const) {
-    expect(() => invalidate(exemplar, reason, successor_id)).toThrow(/propose it instead/);
+  for (const reason of ["capability", "environment", "requirement_change"] as const) {
+    expect(() => invalidate(exemplar, reason)).toThrow(/propose it instead/);
   }
-  invalidate(candidate, "superseded", exemplar);
+  invalidate(candidate, "requirement_change");
 
   expect([entry(db, exemplar), entry(db, candidate)]).toMatchObject([
     { state: "approved", invalidation_reason: null },
-    { state: "candidate", invalidation_reason: "superseded", successor_id: exemplar },
+    { state: "candidate", invalidation_reason: "requirement_change", successor_id: null },
   ]);
 });
 
@@ -496,6 +498,64 @@ it("既存の後継は pin に入り、提案の open 中に無効化される�
   }
   expect(() => approveMemoryProposal(db, first.question_proposal as MemoryProposal, first.id, "webui", at)).toThrow(/stale/);
   expect(entry(db, replaces[0]!)).toMatchObject({ invalidation_reason: null });
+});
+
+/** fold_memory の既にある後継(ADR 0161 決定2)。 */
+const foldInto = (f: Fixture) => (input: Omit<Parameters<typeof foldMemory>[1], "author">) => foldMemory(f.db, { ...input, author: metaReview }, "worker", at);
+
+it("fold_memory の successor_id は replaces を既にある approved の後継つき superseded(meta_review の印)にし、新しい entry を作らない —— Knowledge → Knowledge、Definition → Definition、candidate の Behavior / Exemplar → approved の Behavior / Exemplar(ADR 0161 決定2)", () => {
+  const fixture = approvedPair();
+  const { db, attributed, drafted, consolidate, exemplar, behavior, replaced } = fixture;
+  const [fact, kept] = [knowledgeEntry(db), knowledgeEntry(db)];
+  const branch = definitionEntry(db);
+  const merged = defineMemoryBranch(db, { scope: "tidepool", path: "ci", text: "How CI runs.", author: metaReview }, "worker", at).entry_id;
+  const candidateBehavior = replaced("Two commits per migration");
+  const candidateExemplar = consolidate([drafted("Keep it split", { event_id: attributed("kept the two commits apart") })], { kind: "exemplar", annotations }).candidate_id;
+  const before = listMemoryEntries(db, {}).length;
+
+  expect(foldInto(fixture)({ successor_id: kept, replaces: [fact] })).toEqual({ entry_id: kept, event_ids: [expect.any(Number)] });
+  foldInto(fixture)({ successor_id: merged, replaces: [branch] });
+  foldInto(fixture)({ successor_id: exemplar, replaces: [candidateBehavior] });
+  foldInto(fixture)({ successor_id: behavior, replaces: [candidateExemplar] });
+
+  expect(listMemoryEntries(db, {})).toHaveLength(before);
+  expect([fact, branch, candidateBehavior, candidateExemplar].map((id) => entry(db, id))).toMatchObject([
+    { invalidation_reason: "superseded", successor_id: kept, invalidated_by: { activity: "meta_review" } },
+    { invalidation_reason: "superseded", successor_id: merged, invalidated_by: { activity: "meta_review" } },
+    { invalidation_reason: "superseded", successor_id: exemplar, invalidated_by: { activity: "meta_review" } },
+    { invalidation_reason: "superseded", successor_id: behavior, invalidated_by: { activity: "meta_review" } },
+  ]);
+});
+
+it.each([
+  ["replaces の組が混ざる(Knowledge と candidate の Behavior)", (f: Fixture) => ({ successor_id: knowledgeEntry(f.db), replaces: [knowledgeEntry(f.db), f.replaced("Mixed")] })],
+  [
+    "後継が replaces に含まれる",
+    (f: Fixture) => {
+      const kept = knowledgeEntry(f.db);
+      return { successor_id: kept, replaces: [knowledgeEntry(f.db), kept] };
+    },
+  ],
+  ["replaces に approved の Behavior を含める(それは consolidate の提案、ADR 0160)", (f: Fixture) => ({ successor_id: f.exemplar, replaces: [f.behavior] })],
+  ["text の側の欄と successor_id の両方を渡す", (f: Fixture) => ({ successor_id: f.exemplar, replaces: [f.replaced("Both")], scope: null, path: "habits", title: "Split", text: "Split it." })],
+  ["text の側の欄も successor_id も渡さない", (f: Fixture) => ({ replaces: [f.replaced("Neither")] })],
+  ["successor_id に based_on_decision を添える(新しい entry を作らないので出所は要らない)", (f: Fixture) => ({ successor_id: f.exemplar, replaces: [f.replaced("Sourced")], based_on_decision: f.decision })],
+] as const)("fold_memory で%sと domain error で、何も書かない(ADR 0161 決定2)", (_, input) => {
+  const fixture = approvedPair();
+  const bad = input(fixture);
+  const before = listMemoryEntries(fixture.db, {});
+
+  expect(() => foldInto(fixture)(bad)).toThrow(DomainError);
+  expect(listMemoryEntries(fixture.db, {})).toEqual(before);
+  expect(foldInto(fixture)({ successor_id: fixture.exemplar, replaces: [fixture.replaced("Good")] })).toMatchObject({ entry_id: fixture.exemplar });
+});
+
+it("define_memory の supersedes は path を問わず Definition を置き換える(ADR 0161 決定2)", () => {
+  const { db } = board();
+  const old = definitionEntry(db);
+  const { entry_id } = defineMemoryBranch(db, { scope: "tidepool", path: "toolchain", text: "Which toolchain it pins.", supersedes: old, author: metaReview }, "worker", at);
+
+  expect(entry(db, old)).toMatchObject({ invalidation_reason: "superseded", successor_id: entry_id });
 });
 
 /** 提案の時点の拒否(issue #1034 / ADR 0107 決定3)。server boundary(tests/memory-proposal-question.test.ts)は tool error への

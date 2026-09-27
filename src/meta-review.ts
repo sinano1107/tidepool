@@ -34,10 +34,11 @@ export const ROUTING_META_REVIEW_VERBS = [
   "propose_routing_change",
 ] as const;
 
-/** 昇格規則の4択(spec #949 / issue #954): propose_memory_change の記述と memory meta-review の purpose が同じ文を載せる。 */
+/** 昇格規則の5択(spec #949 / issue #954 / ADR 0161 決定3): propose_memory_change の記述と memory meta-review の purpose が同じ文を載せる。 */
 export const PROMOTION_RULE =
   "For each candidate, promote it to a Behavior when its scope and criterion can be stated so they hold for any future task; " +
   "fold it into an Exemplar (consolidate with kind exemplar) when that cannot be said but the concrete case carries quality worth reusing; " +
+  "fold it into an existing approved Behavior or Exemplar that already says the same (fold_memory with successor_id); " +
   "retire it with invalidate_memory reason rejected when it will become neither; leave it unpromoted while more material could still " +
   "change the judgment — there is no threshold or deadline.";
 
@@ -51,12 +52,13 @@ export const META_REVIEW_SUBJECTS = {
         "Periodic meta-review of the board's memory store. Judge repeats among candidates and exemplars, redundant examples included, by reading them, not by counting. " +
         "For a Behavior, ask whether it holds true whatever leaf sits under its branch. " +
         PROMOTION_RULE +
-        " Propose changes through the proposal verb; consolidate redundant approved exemplars or behaviors into the one you keep with successor_id, " +
-        "or into a new candidate when they share a source. Apply fixes directly only to Knowledge and Definitions. First read the past memory proposals with the human's answers and comments (list_memory_proposals) " +
+        " Changes to approved Behaviors and Exemplars go through the proposal verb: consolidate redundant ones into the one you keep (propose_memory_change's successor_id), " +
+        "or into a new candidate when they share a source. Apply fixes to Knowledge and Definitions directly, and retire or fold a candidate directly " +
+        "(fold_memory's successor_id folds it into an approved Behavior or Exemplar). First read the past memory proposals with the human's answers and comments (list_memory_proposals) " +
         "and the invalidated candidates with invalidated_by, so you do not re-propose what a human rejected and do not repeat a retirement of your own. " +
-        "Where a human amended a candidate when approving it (a superseded candidate whose successor a human wrote), draft closer to the human's wording.",
+        "Where a human amended a candidate when approving it (a superseded candidate whose invalidated_by is a question and whose successor a human wrote — not one you folded into an existing entry), draft closer to the human's wording.",
       completion_criteria:
-        "every candidate and store change since the previous meta-review is either proposed, retired, applied (Knowledge / Definitions only), or deliberately left as is",
+        "every candidate and store change since the previous meta-review is either proposed, retired, folded, applied (Knowledge / Definitions), or deliberately left as is",
       review_tier: "frontier",
     },
     material: ["memory_entry_created", "memory_entry_invalidated", "objection_attributed"],
