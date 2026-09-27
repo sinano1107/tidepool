@@ -1004,7 +1004,7 @@ function registerMemoryMetaReviewVerbs(server: McpServer, deps: McpDeps, run: Me
     {
       description:
         "Draft or revise a branch definition in the given scope: one line declaring what is filed under the path. " +
-        "A branch has one definition per scope; revise it with supersedes, which may point at a definition in another scope. " +
+        "A branch has one definition per scope; revise it with supersedes, which may point at a definition in another scope or at another path. " +
         BOARD_WRITE_LANGUAGE_RULE,
       inputSchema: { scope, path: z.string(), definition: z.string(), supersedes: z.number().int().optional() },
     },
@@ -1023,21 +1023,24 @@ function registerMemoryMetaReviewVerbs(server: McpServer, deps: McpDeps, run: Me
     "fold_memory",
     {
       description:
-        "Fold approved Knowledge entries into one new Knowledge entry in the given scope: every entry in replaces is " +
-        "invalidated as superseded by the new one. based_on_decision is the event id log_decision returned for your " +
-        "reasoning; it becomes the source (an inference). " +
+        "Fold the entries in replaces into one successor: each is invalidated as superseded by it. Give exactly one of: " +
+        "scope, path, title, text and based_on_decision, to write a new Knowledge entry replacing Knowledge entries (based_on_decision " +
+        "is the event id log_decision returned for your reasoning; it becomes the source, an inference); or successor_id, an existing " +
+        "approved entry: Knowledge into Knowledge, Definitions into a Definition, Behavior and Exemplar candidates into an approved " +
+        "Behavior or Exemplar. An approved Behavior or Exemplar cannot be replaced here — propose a consolidate instead. " +
         BOARD_WRITE_LANGUAGE_RULE,
       inputSchema: {
-        scope,
-        path: z.string(),
-        title: z.string().min(1),
-        text: z.string().min(1),
         replaces: z.array(z.number().int()),
-        based_on_decision: z.number().int(),
+        successor_id: z.number().int().optional(),
+        scope: scope.optional(),
+        path: z.string().optional(),
+        title: z.string().min(1).optional(),
+        text: z.string().min(1).optional(),
+        based_on_decision: z.number().int().optional(),
       },
     },
     async (input) =>
-      run((reader, now) => foldMemory(deps.db, { ...input, scope: registeredScope(deps, input.scope), author: author(reader) }, "worker", now)),
+      run((reader, now) => foldMemory(deps.db, { ...input, scope: input.scope && registeredScope(deps, input.scope), author: author(reader) }, "worker", now)),
   );
 
   server.registerTool(
@@ -1056,10 +1059,11 @@ function registerMemoryMetaReviewVerbs(server: McpServer, deps: McpDeps, run: Me
     "invalidate_memory",
     {
       description:
-        "Invalidate a candidate (Behavior or Exemplar), Knowledge entry, or Definition. reason is superseded (with successor_id), " +
+        "Drop a candidate (Behavior or Exemplar), Knowledge entry, or Definition with no successor. reason is " +
         "capability / environment / requirement_change, or rejected — only for a candidate that will become neither a Behavior nor an Exemplar. " +
+        "To replace an entry, use fold_memory, define_memory's supersedes, or move_memory. " +
         "An approved Behavior or Exemplar cannot be invalidated here — propose it instead.",
-      inputSchema: { entry_id: z.number().int(), ...metaReviewInvalidationSchema.shape },
+      inputSchema: metaReviewInvalidationSchema.extend({ entry_id: z.number().int() }),
     },
     async (input) => run((reader, now) => ({ event_id: invalidateMemoryByMetaReview(deps.db, input, reader.agent, "worker", now) })),
   );

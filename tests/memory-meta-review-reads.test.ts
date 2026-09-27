@@ -11,7 +11,6 @@ import {
   proposeMemoryChange,
   pullMemoryList,
   pullMemoryProposals,
-  recordKnowledge,
   rejectMemoryProposal,
 } from "../src/memory.js";
 import { answerQuestion, getTask, logDecision, type MemoryProposal, registerTask } from "../src/tasks.js";
@@ -55,12 +54,8 @@ it("list_memory_candidates は candidate を cause・author・出所つきで返
   const open = behavior({ title: "Short notes", source: attributed });
   const stale = behavior({ title: "Long notes" });
   const replaced = behavior({ title: "Medium notes" });
-  const successor = recordKnowledge(
-    db,
-    { scope: null, path: "notes", title: "Notes are medium", text: "Notes are medium.", source: { event_id: decision }, author: { activity: "worker_verb", name: "deckhand" } },
-    "worker",
-    at,
-  ).entry_id;
+  const successor = behavior({ title: "Notes are medium" });
+  approveMemoryProposal(db, { kind: "memory", op: "approve", candidate_id: successor, replaces: [] }, "question-1", "webui", at);
   invalidateMemoryEntry(db, { entry_id: stale, reason: "requirement_change" }, "human", "webui", at);
   invalidateMemoryEntry(db, { entry_id: replaced, reason: "superseded", successor_id: successor }, "human", "webui", at);
 

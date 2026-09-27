@@ -104,6 +104,31 @@ it("直接適用4つは引数の scope(null = 盤面全体 / registry の worksp
   }
 });
 
+it("fold_memory の successor_id は既にある後継に畳んで無効化の event id を返し、invalidate_memory は superseded も後継 id も tool error で断る(ADR 0161 決定2)", async () => {
+  const { client, call, material } = await boardWithMetaReview();
+  const kept = recordKnowledge(
+    t.db,
+    { scope: "sandbox", path: "build", title: "Node 22 only", text: "Tests run on Node 22 only.", source: { commit: "0a46a46" }, author: { activity: "worker_verb", name: "deckhand" } },
+    "worker",
+    t.clock.now(),
+  ).entry_id;
+  try {
+    for (const args of [{ reason: "superseded", successor_id: kept }, { reason: "capability", successor_id: kept }]) {
+      expect(await call("invalidate_memory", { entry_id: material, ...args })).toMatchObject({ isError: true });
+    }
+
+    const folded = await call("fold_memory", { successor_id: kept, replaces: [material] });
+
+    expect(folded).toMatchObject({ isError: false, body: { entry_id: kept, event_ids: [expect.any(Number)] } });
+    expect((await memoryEntries(t)).map((e) => [e.id, e.invalidation_reason, e.successor_id])).toEqual([
+      [material, "superseded", kept],
+      [kept, null, null],
+    ]);
+  } finally {
+    await client.close();
+  }
+});
+
 it("list_memory_entries は scope の名前 / null(盤面全体)/ 省略(すべて)を区別して渡し、読み口5つは event id を載せる", async () => {
   const { client, call, material } = await boardWithMetaReview();
   const now = t.clock.now();
