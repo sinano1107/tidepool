@@ -550,7 +550,7 @@ export function approveMemoryProposal(db: Db, proposal: MemoryProposal, question
     const candidate = assertProposalFresh(db, proposal);
     if (!("candidate_id" in proposal)) {
       // 文言を承認しないので修正値を持たない(ADR 0152 決定2 / ADR 0160)—— 扉の外から呼ばれても黙って捨てず断る
-      if (amendment) throw new DomainError(`${proposal.op === "invalidate" ? "an invalidate proposal" : "a consolidation into an existing entry"} takes no amendment`);
+      if (amendment) throw new DomainError("a proposal without a candidate takes no amendment: approve or reject it as proposed");
       if (proposal.op === "invalidate") return invalidateMemoryEntry(db, { entry_id: candidate.id, reason: proposal.reason }, HUMAN_WORKER_ID, origin, at, mark);
       for (const { id } of proposal.replaces) {
         invalidateMemoryEntry(db, { entry_id: id, reason: "superseded", successor_id: candidate.id }, HUMAN_WORKER_ID, origin, at, mark);
