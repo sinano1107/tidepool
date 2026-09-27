@@ -7,10 +7,10 @@ import {
   invalidateMemoryByMetaReview,
   invalidateMemoryEntry,
   listMemoryEntries,
-  listMemoryProposals,
   listPrecedents,
   proposeMemoryChange,
   pullMemoryList,
+  pullMemoryProposals,
   recordKnowledge,
   rejectMemoryProposal,
 } from "../src/memory.js";
@@ -147,7 +147,7 @@ function proposals() {
 }
 
 it("list_memory_proposals は過去の memory 提案を approve・修正つき approve・comment つき reject・invalidate の reject・陳腐化の決着ごと返す(ADR 0159 決定1)", () => {
-  const { db, behavior, propose, answer } = proposals();
+  const { db, reader, behavior, propose, answer } = proposals();
   const [approved, amended, rejected, stale] = ["Short notes", "Long notes", "Loud notes", "Old notes"].map((title) => behavior({ title }));
   const plain = propose({ op: "approve", candidate_id: approved!, rationale: "r" });
   answer(plain, "approve");
@@ -160,7 +160,7 @@ it("list_memory_proposals は過去の memory 提案を approve・修正つき a
   const settled = propose({ op: "approve", candidate_id: stale!, rationale: "r" });
   const retired = invalidateMemoryByMetaReview(db, { entry_id: stale!, reason: "rejected" }, "auditor", "worker", at);
 
-  expect(listMemoryProposals(db)).toEqual([
+  expect(pullMemoryProposals(db, reader, {}, at).proposals).toEqual([
     { question_id: plain, proposal: expect.objectContaining({ op: "approve", candidate_id: approved }), answer: "approve", amendment: null, comment: null, observed: null },
     { question_id: withAmendment, proposal: expect.objectContaining({ candidate_id: amended }), answer: "approve", amendment: { text: "Keep notes to one line." }, comment: null, observed: null },
     { question_id: refused, proposal: expect.objectContaining({ candidate_id: rejected }), answer: "reject", amendment: null, comment: "Notes are not about volume.", observed: null },

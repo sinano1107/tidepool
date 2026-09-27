@@ -576,7 +576,7 @@ export function approveMemoryProposal(db: Db, proposal: MemoryProposal, question
 
 /** 提案の reject(spec #615 F): 同じ pin 検査の後、approve / consolidate は candidate だけを `rejected` で無効化し
  *  (consolidate の replaces は残る)、invalidate は何もしない。comment は必須(ADR 0159 決定3)—— 次の meta-review が
- *  選び直す材料で、question_answered に残る(`listMemoryProposals`)。 */
+ *  選び直す材料で、question_answered に残る(`pullMemoryProposals`)。 */
 export function rejectMemoryProposal(db: Db, proposal: MemoryProposal, questionId: string, origin: EventOrigin, at: Date, comment: string | undefined): void {
   if (!comment?.trim()) throw new DomainError("rejecting a memory proposal requires a comment saying why");
   assertProposalFresh(db, proposal);
@@ -853,32 +853,6 @@ export function listMemoryEntries(
     }));
 }
 
-/** 過去の memory 提案(ADR 0159 決定1): 提案、回答(question_answered の答え・修正値・コメント)、陳腐化の決着
- *  (memory_proposal_stale)。`listRoutingProposals` と同じく提案の表は持たず question と event から組み、全期間を返す。
- *  invalidate の提案の reject は記憶の側に跡を残さないので、ここだけが読み口になる。 */
-export function listMemoryProposals(db: Db) {
-  const rows = db
-    .prepare(
-      `SELECT t.id, t.question_proposal,
-         (SELECT payload FROM events WHERE task_id = t.id AND kind = 'question_answered') AS answered,
-         (SELECT payload FROM events WHERE task_id = t.id AND kind = 'memory_proposal_stale') AS stale
-       FROM tasks t WHERE json_extract(t.question_proposal, '$.kind') = 'memory' ORDER BY t.rowid`,
-    )
-    .all() as Array<{ id: string; question_proposal: string; answered: string | null; stale: string | null }>;
-  return rows.map((row) => {
-    const answered = row.answered === null ? null : (JSON.parse(row.answered) as Extract<EventPayload, { kind: "question_answered" }>);
-    const stale = row.stale === null ? null : (JSON.parse(row.stale) as Extract<EventPayload, { kind: "memory_proposal_stale" }>);
-    return {
-      question_id: row.id,
-      proposal: JSON.parse(row.question_proposal) as MemoryProposal,
-      answer: answered?.answers[0]?.answer ?? null,
-      amendment: answered?.amendment ?? null,
-      comment: answered?.comment ?? null,
-      observed: stale && { entry_id: stale.entry_id, observed_event_id: stale.observed_event_id },
-    };
-  });
-}
-
 /** 索引と query の共通の前処理(spec #586 B / #606 / #608 / #610)。まず CJK の連なりを重なりつきの2文字語に割り(LWC 式)
  *  空白で囲む。unicode61 は CJK を語に切らない。1文字の連なりはそのまま。長音符 ー は Script=Common なので
  *  Script_Extensions で拾う(拾わないと「サーバ」が割れて当たらない)。その後で . - _ の連なりを、連なりの外側の隣が
@@ -1111,13 +1085,35 @@ export function pullMemoryList(
   })();
 }
 
-/** list_memory_proposals(ADR 0159 決定1): 一覧3つと同じくページに割って pull に載せる。返した id は各提案が名指す entry
- *  (candidate か invalidate の target)。 */
+/** list_memory_proposals(ADR 0159 決定1): 過去の memory 提案 —— 提案、回答(question_answered の答え・修正値・コメント)、
+ *  陳腐化の決着(memory_proposal_stale)。`listRoutingProposals` と同じく提案の表は持たず question と event から組み、全期間を
+ *  ページに割って pull に載せる。invalidate の提案の reject は記憶の側に跡を残さないので、ここだけが読み口になる。
+ *  返した id は各提案が名指す entry(candidate か invalidate の target)。 */
 export function pullMemoryProposals(db: Db, reader: Pick<MemoryReader, "taskId" | "agent">, input: { page?: number }, at: Date) {
   return db.transaction(() => {
-    const { rows, truncated } = paged(listMemoryProposals(db), input.page);
-    const returned_ids = rows.map(({ proposal }) => (proposal.op === "invalidate" ? proposal.target.id : proposal.candidate_id));
-    return recordPull(db, reader, { verb: "list_memory_proposals", input, returned_ids }, { proposals: rows, truncated }, at);
+    const rows = db
+      .prepare(
+        `SELECT t.id, t.question_proposal,
+           (SELECT payload FROM events WHERE task_id = t.id AND kind = 'question_answered') AS answered,
+           (SELECT payload FROM events WHERE task_id = t.id AND kind = 'memory_proposal_stale') AS stale
+         FROM tasks t WHERE json_extract(t.question_proposal, '$.kind') = 'memory' ORDER BY t.rowid`,
+      )
+      .all() as Array<{ id: string; question_proposal: string; answered: string | null; stale: string | null }>;
+    const proposals = rows.map((row) => {
+      const answered = row.answered === null ? null : (JSON.parse(row.answered) as Extract<EventPayload, { kind: "question_answered" }>);
+      const stale = row.stale === null ? null : (JSON.parse(row.stale) as Extract<EventPayload, { kind: "memory_proposal_stale" }>);
+      return {
+        question_id: row.id,
+        proposal: JSON.parse(row.question_proposal) as MemoryProposal,
+        answer: answered?.answers[0]?.answer ?? null,
+        amendment: answered?.amendment ?? null,
+        comment: answered?.comment ?? null,
+        observed: stale && { entry_id: stale.entry_id, observed_event_id: stale.observed_event_id },
+      };
+    });
+    const { rows: page, truncated } = paged(proposals, input.page);
+    const returned_ids = [...new Set(page.map(({ proposal }) => (proposal.op === "invalidate" ? proposal.target.id : proposal.candidate_id)))];
+    return recordPull(db, reader, { verb: "list_memory_proposals", input, returned_ids }, { proposals: page, truncated }, at);
   })();
 }
 

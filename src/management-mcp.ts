@@ -836,7 +836,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
         "tier and/or effort to apply instead of the proposed values; on an agent tier proposal, to — any tier below the agent's current one; " +
         "on a memory approve or consolidate proposal, title, text and/or addressee (null = every agent) to approve instead of the candidate's, " +
         "with original_title + original_text together if you wrote it in another language. An amended memory approval is written as your own " +
-        "approved behavior and supersedes the candidate.",
+        "approved behavior and supersedes the candidate. Rejecting a memory proposal requires a comment saying why.",
       inputSchema: {
         task_id: z.string(),
         answers: z.array(z.string()),

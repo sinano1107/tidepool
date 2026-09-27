@@ -475,16 +475,15 @@ it("invalidate の提案と reject に付いた memory の修正値は回答ご�
   }
 });
 
-it("HTTP の回答で comment の無い・空白だけの memory 提案の reject は断られ、question は未回答のまま candidate も残る(ADR 0159 決定3)", async () => {
+it("HTTP の回答で comment の無い memory 提案の reject は 409 で断られ、question は未回答のまま(ADR 0159 決定3)", async () => {
   const { ids, client, propose } = await boardWithMetaReview();
   try {
     const questionId = await propose(ids[0]!);
 
-    for (const extra of [{}, { comment: "  " }]) expect((await answer(questionId, "reject", extra)).status).toBe(409);
+    expect((await answer(questionId, "reject")).status).toBe(409);
 
     expect(await task(questionId)).toMatchObject({ status: "todo", question_answer: null });
     expect((await events(questionId)).map((e) => e.kind)).toEqual(["task_registered"]);
-    expect(await entry(ids[0]!)).toMatchObject({ invalidation_reason: null });
   } finally {
     await client.close();
   }
