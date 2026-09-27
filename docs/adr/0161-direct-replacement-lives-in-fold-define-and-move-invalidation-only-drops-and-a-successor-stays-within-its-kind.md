@@ -45,3 +45,32 @@ meta-review は superseded になった candidate の後継を読んで人間の
 - **既にある approved に覆われた candidate は `rejected`** — 覆っていたものの記録が消える。
 - **`define_memory` の `supersedes` を同じ path に限る** — 文言を直しながらの枝の改名が2手になる。
 - **人間の口は据え置き、種別の線だけ掛ける** — 人間の畳みが N+1 手のまま残る。
+
+## 追記(2026-09-28 の grilling、issue #1033 / #1037 —— #1038 の見直しを受けて)
+
+5. **既にある後継を名指す `consolidate` の replaces は approved だけ。** candidate を既にある approved へ寄せるのは決定3 の
+   `fold_memory` だけで、同じ置き換えを提案と直接の2本で言えるようにしない。新しい candidate を書く `consolidate` は今までどおり
+   candidate も replaces に取る(ADR 0153)。ADR 0160 決定2 の「replaces の種別を問わない」はそのままで、状態の線が加わる。
+6. **直接の畳みは後継が replaces を覆うときだけ。** 覆う = 種別の線の内側で、後継の scope が盤面全体か replaces と同じ、
+   後継の宛先が全員か replaces と同じ(宛先は Behavior / Exemplar)。`fold_memory` の既にある後継(`successor_id`)にも
+   新しく書く Knowledge(`text`)にも掛ける —— scope の違う畳みは置き場の変更なので移動の側。提案の経路と人間の畳み
+   (ADR 0162)には掛けない。狭める判断は人間に残る。
+
+### なぜ replaces の状態の線を提案の側に掛けるのか
+
+経路が2本あると、question で承認された candidate が「invalidated_by が question・後継は人間の文言」の形になり、meta-review の
+purpose が人間の修正(修正つき承認)と読む形と区別が付かない。決定3 で直接の経路を作った時点で提案の側は要らない。
+
+### なぜ覆いの門を直接適用にだけ掛けるのか
+
+種別の線は記録の意味なので書き手を問わなかったが、覆う範囲を狭めるのは判断で、承認の線の側にある。提案は detail に
+replaces ごとの scope と宛先を載せて人間が見比べる。直接適用に人間の目は無いので、決定3 の「同じことを言っている」を
+盤面が言える範囲で定義する。
+
+### 退けた案
+
+- **2本の経路を残して purpose の文だけ狭める** —— 読み分けの文が増えるだけで、形が同じ記録は残る。
+- **覆いを description で meta-review に任せる** —— 直接適用の門は盤面の不変条件として置く(ADR 0107)。
+- **覆いの門を Behavior / Exemplar にだけ掛ける** —— workspace の Knowledge を別 workspace の Knowledge に畳めば元の
+  workspace の注入から消えるので狭まりは同じ。盤面全体の Definition は workspace を影として覆うので同じ規則で言える。
+
