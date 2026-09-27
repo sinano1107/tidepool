@@ -799,7 +799,7 @@ export async function submitAnswer(
     if (answers[0] === "approve" && proposal?.kind === "routing" && proposal.op === "row") amended = parseRoutingRowChange(amendment);
     else if (answers[0] === "approve" && proposal?.kind === "registry") amended = { to: parseAgentTierAmendment(proposal, amendment) };
     else if (answers[0] === "approve" && proposal?.kind === "memory" && "candidate_id" in proposal) amended = parseMemoryAmendment(amendment);
-    else throw new DomainError("only an approve answer to a routing row, agent tier, or memory approve / consolidate proposal takes an amendment");
+    else throw new DomainError("only an approve answer to a routing row, agent tier, or memory proposal with a candidate takes an amendment");
   }
 
   const promotionTaskId = task.question_pending_pr_promotion_task_id;

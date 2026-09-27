@@ -431,7 +431,13 @@ it.each([
   ["text も successor_id も渡さない", () => ({})],
   ["successor_id に based_on_decision を添える(新しい entry を作らないので出所は要らない)", (f: Fixture) => ({ successor_id: f.exemplar, based_on_decision: f.decision })],
   ["後継が candidate", (f: Fixture) => ({ successor_id: f.replaced("Split migrations again") })],
-  ["後継が無効化済み", (f: Fixture) => ({ successor_id: f.behavior })],
+  [
+    "後継が無効化済み",
+    (f: Fixture) => {
+      invalidateMemoryEntry(f.db, { entry_id: f.behavior, reason: "requirement_change" }, "human", "webui", at);
+      return { successor_id: f.behavior };
+    },
+  ],
   [
     "後継が Knowledge",
     (f: Fixture) => ({
@@ -441,9 +447,8 @@ it.each([
   ["後継が replaces に含まれる", (f: Fixture) => ({ successor_id: f.exemplar, replaces: [f.replaced("Two commits again"), f.exemplar] })],
 ] as const)("consolidate で%sと domain error で、何も pin せず entry も書かない", (_, input) => {
   const fixture = approvedPair();
-  const { db, exemplar: successor, behavior, propose, replaced } = fixture;
+  const { db, exemplar: successor, propose, replaced } = fixture;
   const replaces = [replaced("Two commits per migration")];
-  invalidateMemoryEntry(db, { entry_id: behavior, reason: "requirement_change" }, "human", "webui", at);
   const bad = input(fixture);
   const before = listMemoryEntries(db, {});
 

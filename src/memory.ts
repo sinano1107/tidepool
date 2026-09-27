@@ -547,37 +547,35 @@ function markApproved(db: Db, id: number, version: number): void {
 export function approveMemoryProposal(db: Db, proposal: MemoryProposal, questionId: string, origin: EventOrigin, at: Date, amendment?: MemoryAmendment): number {
   const mark = { question_id: questionId };
   return db.transaction(() => {
-    const candidate = assertProposalFresh(db, proposal);
+    const named = assertProposalFresh(db, proposal);
+    const supersede = (ids: number[], successor_id: number) => {
+      for (const id of ids) invalidateMemoryEntry(db, { entry_id: id, reason: "superseded", successor_id }, HUMAN_WORKER_ID, origin, at, mark);
+    };
+    const replaced = proposal.replaces.map((r) => r.id);
     if (!("candidate_id" in proposal)) {
       // 文言を承認しないので修正値を持たない(ADR 0152 決定2 / ADR 0160)—— 扉の外から呼ばれても黙って捨てず断る
       if (amendment) throw new DomainError("a proposal without a candidate takes no amendment: approve or reject it as proposed");
-      if (proposal.op === "invalidate") return invalidateMemoryEntry(db, { entry_id: candidate.id, reason: proposal.reason }, HUMAN_WORKER_ID, origin, at, mark);
-      for (const { id } of proposal.replaces) {
-        invalidateMemoryEntry(db, { entry_id: id, reason: "superseded", successor_id: candidate.id }, HUMAN_WORKER_ID, origin, at, mark);
-      }
-      return candidate.id;
+      if (proposal.op === "invalidate") return invalidateMemoryEntry(db, { entry_id: named.id, reason: proposal.reason }, HUMAN_WORKER_ID, origin, at, mark);
+      supersede(replaced, named.id);
+      return named.id;
     }
     // 注釈の修正は #944 の拡張 —— 修正値の欄(文言・宛先)を Exemplar に当てる口はまだ無いので断る
-    if (amendment && candidate.kind === "exemplar") throw new DomainError("an exemplar proposal takes no amendment: approve or reject it as drafted");
+    if (amendment && named.kind === "exemplar") throw new DomainError("an exemplar proposal takes no amendment: approve or reject it as drafted");
     if (amendment) {
-      const { addressee = candidate.addressee, title = candidate.title, text = candidate.text, ...original } = amendment;
-      const { entry_id } = recordBehavior(db, { ...humanEntryInput(db, { workspace: candidate.scope, path: candidate.path, title, text, ...original }), addressee }, origin, at, mark, candidate);
-      for (const id of [candidate.id, ...proposal.replaces.map((r) => r.id)]) {
-        invalidateMemoryEntry(db, { entry_id: id, reason: "superseded", successor_id: entry_id }, HUMAN_WORKER_ID, origin, at, mark);
-      }
+      const { addressee = named.addressee, title = named.title, text = named.text, ...original } = amendment;
+      const { entry_id } = recordBehavior(db, { ...humanEntryInput(db, { workspace: named.scope, path: named.path, title, text, ...original }), addressee }, origin, at, mark, named);
+      supersede([named.id, ...replaced], entry_id);
       return entry_id;
     }
     const eventId = appendEvent(db, {
       taskId: null,
       workerId: HUMAN_WORKER_ID,
       origin,
-      payload: { kind: "memory_entry_approved", entry_id: candidate.id, question_id: questionId, replaced: proposal.replaces },
+      payload: { kind: "memory_entry_approved", entry_id: named.id, question_id: questionId, replaced: proposal.replaces },
       at,
     });
-    markApproved(db, candidate.id, eventId);
-    for (const { id } of proposal.replaces) {
-      invalidateMemoryEntry(db, { entry_id: id, reason: "superseded", successor_id: candidate.id }, HUMAN_WORKER_ID, origin, at, mark);
-    }
+    markApproved(db, named.id, eventId);
+    supersede(replaced, named.id);
     return eventId;
   })();
 }
@@ -591,7 +589,7 @@ export function rejectMemoryProposal(db: Db, proposal: MemoryProposal, questionI
   if ("candidate_id" in proposal) invalidateMemoryEntry(db, { entry_id: proposal.candidate_id, reason: "rejected" }, HUMAN_WORKER_ID, origin, at, { question_id: questionId });
 }
 
-/** 提案が名指す entry: 無効化されていない kinds のどれかで、state を渡せばその state。 */
+/** 無効化されていない kinds のどれかで、state を渡せばその state の entry(提案が名指す entry と、Behavior の編集の supersedes)。 */
 function requireLive(db: Db, id: number, kinds: Array<MemoryEntryFields["kind"]>, state?: MemoryEntryFields["state"]): EntryRow {
   const row = requireEntry(db, id);
   if (!kinds.includes(row.kind) || row.invalidation_reason !== null || (state !== undefined && row.state !== state)) {
