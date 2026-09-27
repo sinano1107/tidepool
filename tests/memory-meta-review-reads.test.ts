@@ -146,9 +146,9 @@ function proposals() {
   return { db, reader, behavior, propose, answer };
 }
 
-it("list_memory_proposals は過去の memory 提案を approve・修正つき approve・comment つき reject・invalidate の reject・陳腐化の決着ごと返す(ADR 0159 決定1)", () => {
+it("list_memory_proposals は過去の memory 提案を approve・修正つき approve・comment つき reject・invalidate の reject・既存の後継の consolidate・陳腐化の決着ごと返し、returned_ids は各提案が名指す entry(ADR 0159 決定1 / ADR 0160 決定2)", () => {
   const { db, reader, behavior, propose, answer } = proposals();
-  const [approved, amended, rejected, stale] = ["Short notes", "Long notes", "Loud notes", "Old notes"].map((title) => behavior({ title }));
+  const [approved, amended, rejected, stale, replaced] = ["Short notes", "Long notes", "Loud notes", "Old notes", "Brief notes"].map((title) => behavior({ title }));
   const plain = propose({ op: "approve", candidate_id: approved!, rationale: "r" });
   answer(plain, "approve");
   const withAmendment = propose({ op: "approve", candidate_id: amended!, rationale: "r" });
@@ -157,16 +157,21 @@ it("list_memory_proposals は過去の memory 提案を approve・修正つき a
   answer(refused, "reject", { comment: "Notes are not about volume." });
   const kept = propose({ op: "invalidate", target_id: approved!, reason: "environment", rationale: "r" });
   answer(kept, "reject", { comment: "The CI still squashes." });
+  const merged = propose({ op: "consolidate", successor_id: approved!, replaces: [replaced!], rationale: "r" });
+  answer(merged, "approve");
   const settled = propose({ op: "approve", candidate_id: stale!, rationale: "r" });
   const retired = invalidateMemoryByMetaReview(db, { entry_id: stale!, reason: "rejected" }, "auditor", "worker", at);
 
-  expect(pullMemoryProposals(db, reader, {}, at).proposals).toEqual([
+  const pulled = pullMemoryProposals(db, reader, {}, at);
+  expect(pulled.proposals).toEqual([
     { question_id: plain, proposal: expect.objectContaining({ op: "approve", candidate_id: approved }), answer: "approve", amendment: null, comment: null, observed: null },
     { question_id: withAmendment, proposal: expect.objectContaining({ candidate_id: amended }), answer: "approve", amendment: { text: "Keep notes to one line." }, comment: null, observed: null },
     { question_id: refused, proposal: expect.objectContaining({ candidate_id: rejected }), answer: "reject", amendment: null, comment: "Notes are not about volume.", observed: null },
     { question_id: kept, proposal: expect.objectContaining({ op: "invalidate", target: expect.objectContaining({ id: approved }) }), answer: "reject", amendment: null, comment: "The CI still squashes.", observed: null },
+    { question_id: merged, proposal: expect.objectContaining({ op: "consolidate", successor: expect.objectContaining({ id: approved }) }), answer: "approve", amendment: null, comment: null, observed: null },
     { question_id: settled, proposal: expect.objectContaining({ candidate_id: stale }), answer: null, amendment: null, comment: null, observed: { entry_id: stale, observed_event_id: retired } },
   ]);
+  expect(getEvent(db, pulled.event_id)).toMatchObject({ payload: { returned_ids: [approved, amended, rejected, stale] } });
 });
 
 it("無効化済みのエントリは書き手の印 invalidated_by を持つ —— 人間の reject は question、meta-review の引退は activity、印の無い無効化は worker(ADR 0159 決定2)", () => {

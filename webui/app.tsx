@@ -221,7 +221,7 @@ function toQuestionCardShape(
     // 盤面の `approval` 注釈が答える(issue #757)— ここは描画の形に写すだけ
     ...(q.question_proposal?.kind === 'routing' && q.question_proposal.op === 'row' && { amendable: 'row' as const }),
     ...(q.question_proposal?.kind === 'registry' && { amendable: 'agent_tier' as const }),
-    ...(q.question_proposal?.kind === 'memory' && q.question_proposal.op !== 'invalidate' && { amendable: 'memory' as const, candidateId: q.question_proposal.candidate_id }),
+    ...(q.question_proposal?.kind === 'memory' && q.question_proposal.candidate_id !== undefined && { amendable: 'memory' as const, candidateId: q.question_proposal.candidate_id }),
     ...(q.question_proposal?.kind === 'memory' && { rejectNeedsComment: true }),
     ...(q.approval && {
       kind: 'approval',
