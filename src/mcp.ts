@@ -1056,9 +1056,9 @@ function registerMemoryMetaReviewVerbs(server: McpServer, deps: McpDeps, run: Me
     "invalidate_memory",
     {
       description:
-        "Invalidate a candidate, Knowledge entry, Definition, or Exemplar. reason is superseded (with successor_id), " +
+        "Invalidate a candidate (Behavior or Exemplar), Knowledge entry, or Definition. reason is superseded (with successor_id), " +
         "capability / environment / requirement_change, or rejected — only for a candidate that will become neither a Behavior nor an Exemplar. " +
-        "An approved Behavior cannot be invalidated here — propose it instead.",
+        "An approved Behavior or Exemplar cannot be invalidated here — propose it instead.",
       inputSchema: { entry_id: z.number().int(), ...metaReviewInvalidationSchema.shape },
     },
     async (input) => run((reader, now) => ({ event_id: invalidateMemoryByMetaReview(deps.db, input, reader.agent, "worker", now) })),
@@ -1069,12 +1069,13 @@ function registerMemoryMetaReviewVerbs(server: McpServer, deps: McpDeps, run: Me
     {
       description:
         "Propose a Behavior or Exemplar change to the human as one approve / reject question attached to this task. op approve asks to " +
-        "approve a Behavior candidate exactly as worded (candidate_id). op consolidate drafts text as a new candidate " +
-        "that replaces the candidates, approved Behaviors and Exemplars in replaces; based_on_decision is the event id " +
-        "log_decision returned for your reasoning. The new candidate keeps the source the replaced entries share, and takes " +
-        "based_on_decision as its source when they share none. With text.kind exemplar it is an Exemplar: give annotations instead " +
-        "of text.text; the replaced entries must share a source that renders a case. op invalidate asks to invalidate the approved Behavior " +
-        "target_id for reason capability / environment / requirement_change. rationale is why you propose it (the question's context). " +
+        "approve a Behavior candidate exactly as worded (candidate_id). op consolidate replaces the candidates, approved Behaviors and " +
+        "Exemplars in replaces with one successor: either text, drafted as a new candidate, or successor_id, an approved Behavior or " +
+        "Exemplar you keep instead. With text, based_on_decision is the event id log_decision returned for your reasoning; the new " +
+        "candidate keeps the source the replaced entries share, and takes based_on_decision as its source when they share none. With " +
+        "text.kind exemplar it is an Exemplar: give annotations instead of text.text; the replaced entries must share a source that " +
+        "renders a case. op invalidate asks to drop the approved Behavior or Exemplar target_id, with no successor, for reason " +
+        "capability / environment / requirement_change. rationale is why you propose it (the question's context). " +
         PROMOTION_RULE +
         " " +
         "The board applies the answer itself, so you can complete this task without waiting for it. Returns the question id. " +
@@ -1100,6 +1101,7 @@ function registerMemoryMetaReviewVerbs(server: McpServer, deps: McpDeps, run: Me
           })
           .optional()
           .describe("op consolidate: the new candidate — a Behavior (text.text) unless kind is exemplar. addressee is an agent name, or null for every agent."),
+        successor_id: z.number().int().optional(),
         replaces: z.array(z.number().int()).optional(),
         based_on_decision: z.number().int().optional(),
         target_id: z.number().int().optional(),

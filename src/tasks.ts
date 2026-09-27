@@ -155,13 +155,15 @@ export interface TaskContent {
 /** 提案 question の種別つき提案(ADR 0120 決定4 / ADR 0150 決定1)。 */
 export type QuestionProposal = MemoryProposal | RoutingProposal | RegistryProposal;
 
-/** memory の提案。pin = replaces / target の版と candidate の状態。 */
+/** memory の提案。pin = replaces / target / 既存の後継の版と candidate の状態。 */
 export type MemoryProposal = {
   kind: "memory";
   /** version は candidate なら null(版は承認 event の id)。invalidate では空。 */
   replaces: Array<{ id: number; version: number | null }>;
 } & (
   | { op: "approve" | "consolidate"; candidate_id: number }
+  /** 既存の approved の Behavior / Exemplar を後継に名指す統合(ADR 0160 決定2)。 */
+  | { op: "consolidate"; successor: { id: number; version: number } }
   | { op: "invalidate"; target: { id: number; version: number }; reason: "capability" | "environment" | "requirement_change" }
 );
 

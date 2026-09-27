@@ -1,6 +1,6 @@
 import { expect, it } from "vitest";
 import { openDb } from "../src/db.js";
-import { appendEvent } from "../src/events.js";
+import { appendEvent, listEvents } from "../src/events.js";
 import {
   approveMemoryProposal,
   createBehaviorCandidate,
@@ -193,6 +193,45 @@ it("meta-review の無効化の rejected は candidate(Behavior / Exemplar)だ�
   ]);
 });
 
+it("meta-review の無効化は approved の Exemplar を superseded を含むどの理由でも domain error で拒み、candidate の Exemplar は直接無効化できる(ADR 0160 決定1)", () => {
+  const { db, attributed, drafted, consolidate } = drafts();
+  const source = attributed("split the migration into two commits");
+  const approved = consolidate([drafted("Split migrations", { event_id: source })], { kind: "exemplar", annotations });
+  approveMemoryProposal(db, approved, "question-1", "webui", at);
+  const successor = consolidate([drafted("Two commits", { event_id: source })], { kind: "exemplar", annotations });
+  approveMemoryProposal(db, successor, "question-2", "webui", at);
+  const candidate = consolidate([drafted("Keep it split", { event_id: source })], { kind: "exemplar", annotations }).candidate_id;
+  const invalidate = (entry_id: number, reason: InvalidationReason, successor_id?: number) =>
+    invalidateMemoryByMetaReview(db, { entry_id, reason, successor_id }, "auditor", "worker", at);
+
+  for (const [reason, successor_id] of [["superseded", successor.candidate_id], ["capability"], ["environment"], ["requirement_change"]] as const) {
+    expect(() => invalidate(approved.candidate_id, reason, successor_id)).toThrow(/propose it instead/);
+  }
+  invalidate(candidate, "superseded", successor.candidate_id);
+
+  expect([entry(db, approved.candidate_id), entry(db, candidate)]).toMatchObject([
+    { state: "approved", invalidation_reason: null },
+    { state: "candidate", invalidation_reason: "superseded", successor_id: successor.candidate_id },
+  ]);
+});
+
+it("invalidate の提案は approved の Exemplar も target に取り、見出しを kind で出し分け、approve で target を理由コードのまま後継なしで無効化する(ADR 0160 決定2)", () => {
+  const { db, task, attributed, drafted, consolidate } = drafts();
+  const exemplar = consolidate([drafted("Split migrations", { event_id: attributed("split the migration into two commits") })], { kind: "exemplar", annotations });
+  approveMemoryProposal(db, exemplar, "question-1", "webui", at);
+  const behavior = consolidate([drafted("Pin Node", { commit: "0a46a46" })], { text: "Pin Node 22." });
+  approveMemoryProposal(db, behavior, "question-2", "webui", at);
+  const invalidate = (target_id: number) =>
+    getTask(db, proposeMemoryChange(db, task.id, { op: "invalidate", target_id, reason: "environment", rationale: "The CI no longer squashes." }, "auditor", at).question_id)!;
+
+  const question = invalidate(exemplar.candidate_id);
+  expect(question.question_items![0]!.detail).toContain(`Invalidate approved exemplar #${exemplar.candidate_id} (reason: environment).`);
+  expect(invalidate(behavior.candidate_id).question_items![0]!.detail).toContain(`Invalidate approved behavior #${behavior.candidate_id} (reason: environment).`);
+
+  approveMemoryProposal(db, question.question_proposal as MemoryProposal, question.id, "webui", at);
+  expect(entry(db, exemplar.candidate_id)).toMatchObject({ invalidation_reason: "environment", successor_id: null });
+});
+
 /** consolidate の kind exemplar(issue #954 / ADR 0153)。replaces は RCA の起草と同じ形 —— 異議された decision への帰責 event を
  *  出所に持つ Behavior candidate。 */
 function drafts() {
@@ -229,7 +268,7 @@ function drafts() {
         at,
       ).question_id,
     )!.question_proposal as MemoryProposal & { candidate_id: number };
-  return { db, decision, attributed, drafted, consolidate };
+  return { db, task, decision, attributed, drafted, consolidate };
 }
 const annotations = [
   { anchor: { field: "decision", quote: "two commits" }, polarity: "imitate", text: "Split schema changes from data changes." },
@@ -351,4 +390,115 @@ it("kind を省いた consolidate は Behavior candidate を作り、replaces(Ex
     { kind: "behavior", state: "candidate", text: behavior.text, source: { kind: "event", ref: source }, author: metaReview },
     { kind: "behavior", state: "candidate", text: behavior.text, source: { kind: "decision", ref: decision }, author: metaReview },
   ]);
+});
+
+/** 既存の後継を名指す consolidate(ADR 0160 決定2)。後継は approved の Exemplar と approved の Behavior。 */
+function intoExisting() {
+  const fixture = drafts();
+  const { db, task, attributed, drafted, consolidate } = fixture;
+  const exemplar = consolidate([drafted("Split migrations", { event_id: attributed("split the migration into two commits") })], { kind: "exemplar", annotations });
+  approveMemoryProposal(db, exemplar, "question-1", "webui", at);
+  const behavior = consolidate([drafted("Pin Node", { commit: "0a46a46" })], { text: "Pin Node 22." });
+  approveMemoryProposal(db, behavior, "question-2", "webui", at);
+  const propose = (input: Omit<Parameters<typeof proposeMemoryChange>[2], "op" | "rationale">) =>
+    getTask(db, proposeMemoryChange(db, task.id, { op: "consolidate", rationale: "The same case as the kept one.", ...input }, "auditor", at).question_id)!;
+  const replaced = (title: string) => drafted(title, { commit: "0a46a46" });
+  return { ...fixture, successor: exemplar.candidate_id, behavior: behavior.candidate_id, propose, replaced };
+}
+
+it("consolidate の successor_id は既存の approved の Exemplar / Behavior を後継に名指して版を pin し、新しい entry を作らず、detail に replaces と後継の本文を載せる(ADR 0160 決定2・4)", () => {
+  const { db, successor, behavior, propose, replaced } = intoExisting();
+  const replaces = [replaced("Two commits per migration"), replaced("One schema change per commit")];
+  const before = listMemoryEntries(db, {});
+
+  const question = propose({ successor_id: successor, replaces });
+
+  expect(listMemoryEntries(db, {})).toEqual(before);
+  expect(question.question_proposal).toEqual({
+    kind: "memory",
+    op: "consolidate",
+    successor: { id: successor, version: entry(db, successor)!.version },
+    replaces: replaces.map((id) => ({ id, version: null })),
+  });
+  const { detail } = question.question_items![0]!;
+  for (const shown of [
+    `Consolidate into existing exemplar #${successor}, replacing:`,
+    `#${replaces[0]} (scope: tidepool, addressee: every agent): Two commits per migration.`,
+    `#${replaces[1]} (scope: tidepool, addressee: every agent): One schema change per commit.`,
+    'Annotations:\n- imitate (decision: "two commits"): Split schema changes from data changes.',
+    "Case:\nDecision: split the migration into two commits",
+  ]) {
+    expect(detail).toContain(shown);
+  }
+  const intoBehavior = propose({ successor_id: behavior, replaces: [replaced("Pin npm")] }).question_items![0]!.detail;
+  expect(intoBehavior).toContain(`Consolidate into existing behavior #${behavior}, replacing:`);
+  expect(intoBehavior).toContain("Pin Node 22.");
+});
+
+it.each([
+  ["text と successor_id の両方を渡す", (f: Fixture) => ({ successor_id: f.successor, text: { scope: null, path: "habits", title: "Split", text: "Split it.", addressee: null } })],
+  ["text も successor_id も渡さない", () => ({})],
+  ["successor_id に based_on_decision を添える(新しい entry を作らないので出所は要らない)", (f: Fixture) => ({ successor_id: f.successor, based_on_decision: f.decision })],
+  ["後継が candidate", (f: Fixture) => ({ successor_id: f.replaced("Split migrations again") })],
+  ["後継が無効化済み", (f: Fixture) => ({ successor_id: f.behavior })],
+  [
+    "後継が Knowledge",
+    (f: Fixture) => ({
+      successor_id: recordKnowledge(f.db, { scope: null, path: "habits", title: "k", text: "k.", source: { commit: "0a46a46" }, author: metaReview }, "worker", at).entry_id,
+    }),
+  ],
+  ["後継が replaces に含まれる", (f: Fixture) => ({ successor_id: f.successor, replaces: [f.replaced("Two commits again"), f.successor] })],
+] as const)("consolidate で%sと domain error で、何も pin せず entry も書かない", (_, input) => {
+  const fixture = intoExisting();
+  const { db, successor, behavior, propose, replaced } = fixture;
+  const replaces = [replaced("Two commits per migration")];
+  invalidateMemoryEntry(db, { entry_id: behavior, reason: "requirement_change" }, "human", "webui", at);
+  const bad = input(fixture);
+  const before = listMemoryEntries(db, {});
+
+  expect(() => propose({ replaces, ...bad })).toThrow(DomainError);
+  expect(listMemoryEntries(db, {})).toEqual(before);
+  expect(propose({ successor_id: successor, replaces }).question_proposal).toMatchObject({ successor: { id: successor } });
+});
+type Fixture = ReturnType<typeof intoExisting>;
+
+it("既存の後継の consolidate は approve で replaces を後継つき superseded(人間名義・question の印)にし、修正値は断り、reject は何も変えない(ADR 0160 決定2)", () => {
+  const { db, successor, propose, replaced } = intoExisting();
+  const kept = [replaced("Two commits per migration")];
+  const replaces = [replaced("One schema change per commit"), replaced("Separate the data migration")];
+
+  const refused = propose({ successor_id: successor, replaces: kept });
+  const before = listMemoryEntries(db, {});
+  rejectMemoryProposal(db, refused.question_proposal as MemoryProposal, refused.id, "webui", at, "A different case.");
+  expect(listMemoryEntries(db, {})).toEqual(before);
+
+  const question = propose({ successor_id: successor, replaces });
+  const proposal = question.question_proposal as MemoryProposal;
+  expect(() => approveMemoryProposal(db, proposal, question.id, "webui", at, { title: "Split it" })).toThrow(DomainError);
+  expect(listMemoryEntries(db, {})).toEqual(before);
+
+  approveMemoryProposal(db, proposal, question.id, "webui", at);
+  expect([...kept, ...replaces, successor].map((id) => entry(db, id))).toMatchObject([
+    { state: "candidate", invalidation_reason: null },
+    { invalidation_reason: "superseded", successor_id: successor, invalidated_by: { question_id: question.id } },
+    { invalidation_reason: "superseded", successor_id: successor, invalidated_by: { question_id: question.id } },
+    { state: "approved", invalidation_reason: null },
+  ]);
+});
+
+it("既存の後継は pin に入り、提案の open 中に無効化されると question は観測で決着し承認も stale で断る —— 同じ後継の2件目(別の replaces)は通り、同じ replaces の2件目は断る(ADR 0160 決定3)", () => {
+  const { db, successor, propose, replaced } = intoExisting();
+  const replaces = [replaced("Two commits per migration")];
+  const first = propose({ successor_id: successor, replaces });
+  const second = propose({ successor_id: successor, replaces: [replaced("One schema change per commit")] });
+  expect(() => propose({ successor_id: successor, replaces })).toThrow(/already in an open proposal question/);
+
+  const observed = invalidateMemoryEntry(db, { entry_id: successor, reason: "requirement_change" }, "human", "webui", at);
+
+  for (const question of [first, second]) {
+    expect(getTask(db, question.id)).toMatchObject({ status: "done", question_answer: null });
+    expect(listEvents(db, question.id).at(-1)).toMatchObject({ kind: "memory_proposal_stale", payload: { entry_id: successor, observed_event_id: observed } });
+  }
+  expect(() => approveMemoryProposal(db, first.question_proposal as MemoryProposal, first.id, "webui", at)).toThrow(/stale/);
+  expect(entry(db, replaces[0]!)).toMatchObject({ invalidation_reason: null });
 });

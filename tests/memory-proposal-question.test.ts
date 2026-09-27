@@ -398,7 +398,7 @@ it("invalidate は approved でない Behavior・Knowledge・無効化済みを 
     expect((await answer((await invalidate(board, invalidated)).question_id, "approve")).status).toBe(200);
 
     for (const bad of [board.ids[0]!, knowledge, invalidated]) {
-      expect(await invalidate(board, bad)).toMatchObject({ error: expect.stringContaining("not a non-invalidated behavior in state approved") });
+      expect(await invalidate(board, bad)).toMatchObject({ error: expect.stringContaining("not a non-invalidated behavior or exemplar in state approved") });
     }
   } finally {
     await board.client.close();

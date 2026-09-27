@@ -58,7 +58,7 @@ export interface BoardTask extends QueueTask {
   purpose: string;
   question_items: Array<{ title: string; detail?: string; options: string[]; recommendation: string }> | null;
   /** 提案 question の種別(ADR 0120 決定4 / ADR 0150 決定2 / ADR 0152 決定2)。routing の行の提案(op row)と registry の tier の提案、
-   *  memory の approve / consolidate(`candidate_id` の文言)は approve に修正値を添えられる。 */
+   *  memory の approve / consolidate のうち `candidate_id` を持つもの(その文言)は approve に修正値を添えられる。 */
   question_proposal: { kind: "memory" | "routing" | "registry"; op: string; candidate_id?: number } | null;
 }
 
