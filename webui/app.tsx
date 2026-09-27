@@ -222,6 +222,7 @@ function toQuestionCardShape(
     ...(q.question_proposal?.kind === 'routing' && q.question_proposal.op === 'row' && { amendable: 'row' as const }),
     ...(q.question_proposal?.kind === 'registry' && { amendable: 'agent_tier' as const }),
     ...(q.question_proposal?.kind === 'memory' && q.question_proposal.op !== 'invalidate' && { amendable: 'memory' as const, candidateId: q.question_proposal.candidate_id }),
+    ...(q.question_proposal?.kind === 'memory' && { rejectNeedsComment: true }),
     ...(q.approval && {
       kind: 'approval',
       ...(q.approval.raises_parent_risk && { note: `approving raises ${q.parent_id} risk (upward propagation)` }),
@@ -484,12 +485,12 @@ function QuestionDeepLinkView({ questionId, onDone, onTranslate }: {
     return () => { cancelled = true; };
   }, [questionId]);
 
-  const answer = async (answers: string[], amendment?: TpAmendment) => {
+  const answer = async (answers: string[], amendment?: TpAmendment, comment?: string) => {
     if (busy) return; // guards the design component's button against a double-tap
     setBusy(true);
     setErr(null);
     try {
-      await api(`/api/tasks/${questionId}/answer`, { answers, amendment });
+      await api(`/api/tasks/${questionId}/answer`, { answers, amendment, comment });
       onDone(rawTask);
     } catch (e) {
       setErr(String((e as Error).message || e));
@@ -954,9 +955,9 @@ function App() {
   // S1 — the last tap in a bundle persists every item's answer atomically;
   // the unblocked parent is staged server-side (issue #30: `a` is one answer
   // per item, in item order)
-  const answerNow = async (q: TpTriageQuestion, a: string[], amendment?: TpAmendment) => {
+  const answerNow = async (q: TpTriageQuestion, a: string[], amendment?: TpAmendment, comment?: string) => {
     try {
-      await api(`/api/tasks/${q.id}/answer`, { answers: a, triage: true, amendment });
+      await api(`/api/tasks/${q.id}/answer`, { answers: a, triage: true, amendment, comment });
     } catch (err) {
       say('danger', 'answer failed', String((err as Error).message || err));
       throw err;

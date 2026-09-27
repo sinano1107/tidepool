@@ -4,13 +4,17 @@ import { appendEvent, getEvent } from "../src/events.js";
 import {
   approveMemoryProposal,
   createBehaviorCandidate,
+  invalidateMemoryByMetaReview,
   invalidateMemoryEntry,
+  listMemoryEntries,
   listPrecedents,
   proposeMemoryChange,
   pullMemoryList,
+  pullMemoryProposals,
   recordKnowledge,
+  rejectMemoryProposal,
 } from "../src/memory.js";
-import { getTask, logDecision, registerTask } from "../src/tasks.js";
+import { answerQuestion, getTask, logDecision, type MemoryProposal, registerTask } from "../src/tasks.js";
 
 /** meta-review の読み口(issue #619 / ADR 0120 決定2)のドメイン層。verb への写像はサーバ境界
  *  (tests/mcp-memory-meta-review.test.ts)が言う。 */
@@ -126,6 +130,59 @@ it("list_memory_candidates は kind で絞れる —— exemplar なら Exemplar
   const ids = (kind: "behavior" | "exemplar") => pullMemoryList(db, reader, "list_memory_candidates", { kind }, at).entries.map((e) => e.id);
   expect(ids("exemplar")).toEqual([exemplar]);
   expect(ids("behavior")).toEqual([drafted]);
+});
+
+/** 提案 question を立て、回答(question_answered)と適用を人間の扉と同じ順で書く。 */
+function proposals() {
+  const { db, task, reader, behavior } = board();
+  const propose = (input: Parameters<typeof proposeMemoryChange>[2]) => proposeMemoryChange(db, task.id, input, "auditor", at).question_id;
+  const answer = (questionId: string, option: "approve" | "reject", rest: { comment?: string; amendment?: { text: string } } = {}) => {
+    const question = getTask(db, questionId)!;
+    answerQuestion(db, question, [option], at, undefined, rest.comment, rest.amendment);
+    const proposal = question.question_proposal as MemoryProposal;
+    if (option === "approve") approveMemoryProposal(db, proposal, questionId, "webui", at, rest.amendment);
+    else rejectMemoryProposal(db, proposal, questionId, "webui", at, rest.comment);
+  };
+  return { db, reader, behavior, propose, answer };
+}
+
+it("list_memory_proposals は過去の memory 提案を approve・修正つき approve・comment つき reject・invalidate の reject・陳腐化の決着ごと返す(ADR 0159 決定1)", () => {
+  const { db, reader, behavior, propose, answer } = proposals();
+  const [approved, amended, rejected, stale] = ["Short notes", "Long notes", "Loud notes", "Old notes"].map((title) => behavior({ title }));
+  const plain = propose({ op: "approve", candidate_id: approved!, rationale: "r" });
+  answer(plain, "approve");
+  const withAmendment = propose({ op: "approve", candidate_id: amended!, rationale: "r" });
+  answer(withAmendment, "approve", { amendment: { text: "Keep notes to one line." } });
+  const refused = propose({ op: "approve", candidate_id: rejected!, rationale: "r" });
+  answer(refused, "reject", { comment: "Notes are not about volume." });
+  const kept = propose({ op: "invalidate", target_id: approved!, reason: "environment", rationale: "r" });
+  answer(kept, "reject", { comment: "The CI still squashes." });
+  const settled = propose({ op: "approve", candidate_id: stale!, rationale: "r" });
+  const retired = invalidateMemoryByMetaReview(db, { entry_id: stale!, reason: "rejected" }, "auditor", "worker", at);
+
+  expect(pullMemoryProposals(db, reader, {}, at).proposals).toEqual([
+    { question_id: plain, proposal: expect.objectContaining({ op: "approve", candidate_id: approved }), answer: "approve", amendment: null, comment: null, observed: null },
+    { question_id: withAmendment, proposal: expect.objectContaining({ candidate_id: amended }), answer: "approve", amendment: { text: "Keep notes to one line." }, comment: null, observed: null },
+    { question_id: refused, proposal: expect.objectContaining({ candidate_id: rejected }), answer: "reject", amendment: null, comment: "Notes are not about volume.", observed: null },
+    { question_id: kept, proposal: expect.objectContaining({ op: "invalidate", target: expect.objectContaining({ id: approved }) }), answer: "reject", amendment: null, comment: "The CI still squashes.", observed: null },
+    { question_id: settled, proposal: expect.objectContaining({ candidate_id: stale }), answer: null, amendment: null, comment: null, observed: { entry_id: stale, observed_event_id: retired } },
+  ]);
+});
+
+it("無効化済みのエントリは書き手の印 invalidated_by を持つ —— 人間の reject は question、meta-review の引退は activity、印の無い無効化は worker(ADR 0159 決定2)", () => {
+  const { db, behavior, propose, answer } = proposals();
+  const [byHuman, byMetaReview, bySettings, open] = ["Short notes", "Long notes", "Loud notes", "Quiet notes"].map((title) => behavior({ title }));
+  const refused = propose({ op: "approve", candidate_id: byHuman!, rationale: "r" });
+  answer(refused, "reject", { comment: "Notes are not about length." });
+  invalidateMemoryByMetaReview(db, { entry_id: byMetaReview!, reason: "rejected" }, "auditor", "worker", at);
+  invalidateMemoryEntry(db, { entry_id: bySettings!, reason: "environment" }, "human", "webui", at);
+
+  expect(listMemoryEntries(db, {}).map((e) => [e.id, e.invalidation_reason, e.invalidated_by])).toEqual([
+    [byHuman, "rejected", { question_id: refused }],
+    [byMetaReview, "rejected", { activity: "meta_review" }],
+    [bySettings, "environment", { worker: "human" }],
+    [open, null, null],
+  ]);
 });
 
 it("list_memory_behaviors は approved の Behavior を宛先・scope で絞らずに返し、candidate と無効化済みは返さない", () => {

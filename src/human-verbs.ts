@@ -907,7 +907,7 @@ export async function submitAnswer(
     );
     if (proposal?.kind === "memory") {
       if (answers[0] === "approve") approveMemoryProposal(deps.db, proposal, task.id, origin, now(), amended as MemoryAmendment | undefined);
-      else rejectMemoryProposal(deps.db, proposal, task.id, origin, now());
+      else rejectMemoryProposal(deps.db, proposal, task.id, origin, now(), comment);
     } else if (proposal?.kind === "routing" && answers[0] === "approve") {
       const change: ExecutionSettingsChange =
         proposal.op === "row"

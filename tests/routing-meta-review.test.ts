@@ -106,7 +106,7 @@ it("親 task の meta_review_subject が routing の open な提案 question が
   await t.clock.advance(2 * DAY); // 周期は過ぎ材料もあるが、親が routing の提案 question が open
   expect((await openRoutingReviews(t)).map((task) => task.id)).toEqual([first.id]);
 
-  expect((await api(t.baseUrl, "POST", `/api/tasks/${question_id}/answer`, { answers: ["reject"] })).status).toBe(200);
+  expect((await api(t.baseUrl, "POST", `/api/tasks/${question_id}/answer`, { answers: ["reject"], comment: "Not now." })).status).toBe(200);
   await t.clock.advance(HOUR);
   // candidate は memory の材料でもあり、memory meta-review が slot を取るので pickup ではなく登録を見る
   expect((await openRoutingReviews(t)).filter((task) => task.id !== first.id)).toHaveLength(1);
