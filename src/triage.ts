@@ -1,7 +1,7 @@
 import type { GatedJudgment } from "./attribution.js";
 import type { Cause } from "./cause.js";
 import type { Db } from "./db.js";
-import { appendEvent, type EventRow, getEvent, HUMAN_FACING_KINDS } from "./events.js";
+import { appendEvent, type DecisionLogEntry, getEvent, isDecisionLogEntry } from "./events.js";
 import {
   BOARD_WORKER_ID,
   type BoardTask,
@@ -121,12 +121,6 @@ export function raiseObjection(
     at: now,
   });
 }
-
-export type DecisionLogEntry = Omit<EventRow, "payload" | "task_id"> & {
-  /** decision-log kinds are always task-scoped (none is in BOARD_SCOPED_KINDS; asserted in events.ts) */
-  task_id: string;
-  payload: Extract<EventRow["payload"], { kind: (typeof HUMAN_FACING_KINDS)[number] }>;
-};
 
 /** One objected log entry with every direction comment raised against it this
  *  session (objection event order) and the ids of those objection events. */
@@ -454,10 +448,8 @@ export function consumePendingDump(db: Db, id: number): void {
 /** An event id that must point at a decision-log entry (a human-facing kind). */
 function requireLogEntry(db: Db, entryId: number): DecisionLogEntry {
   const entry = getEvent(db, entryId);
-  if (!entry || !(HUMAN_FACING_KINDS as readonly string[]).includes(entry.kind)) {
-    throw new TriageError(`event ${entryId} is not a decision-log entry`);
-  }
-  return entry as DecisionLogEntry;
+  if (!isDecisionLogEntry(entry)) throw new TriageError(`event ${entryId} is not a decision-log entry`);
+  return entry;
 }
 
 /** Record that these log entries were actually put in front of the human.

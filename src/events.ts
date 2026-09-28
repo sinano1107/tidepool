@@ -532,6 +532,17 @@ export const HUMAN_FACING_KINDS = ["decision_logged", "task_completed", "premise
   BoardScopedKind
 >[];
 
+export type DecisionLogEntry = Omit<EventRow, "payload" | "task_id"> & {
+  /** decision-log kinds are always task-scoped (none is in BOARD_SCOPED_KINDS; asserted above) */
+  task_id: string;
+  payload: Extract<EventRow["payload"], { kind: (typeof HUMAN_FACING_KINDS)[number] }>;
+};
+
+/** SQL 側(listLog / taskDecisionLog / push)の `kind IN (...HUMAN_FACING_KINDS)` と同じ定義。kind だけを見る ——
+ *  `task_id: string` への絞り込みは、human-facing kind が BOARD_SCOPED_KINDS に入らないという上の satisfies に依る。 */
+export const isDecisionLogEntry = (e: EventRow | undefined): e is DecisionLogEntry =>
+  HUMAN_FACING_KINDS.some((k) => k === e?.kind);
+
 /** A log entry annotated with its resolved workspace name (issue #44): the
  *  event's own task's `workspace`, or the board's default when the task
  *  carries none — resolved fresh at read time, never stamped onto the event
