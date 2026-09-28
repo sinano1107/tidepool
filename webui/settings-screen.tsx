@@ -1772,7 +1772,9 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit, fo
   const [selected, setSelected] = React.useState<TpMemoryEntry[]>([]);
   const [foldTarget, setFoldTarget] = React.useState('');
   const selectedIds = selected.map((e) => `#${e.id}`).join(', ');
-  const foldKinds = successorKinds(selected.map((e) => e.kind));
+  // a new entry replaces only approved ones: a candidate is corrected in its question (ADR 0162 決定2)
+  const candidateSelected = selected.some((e) => e.state === 'candidate');
+  const foldKinds = candidateSelected ? [] : successorKinds(selected.map((e) => e.kind));
   const toggle = (entry: TpMemoryEntry) =>
     setSelected((s) => (s.some((e) => e.id === entry.id) ? s.filter((e) => e.id !== entry.id) : [...s, entry]));
   const foldIntoNew = () => edit.open(writeId, () => setDraft({
@@ -1839,7 +1841,9 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit, fo
             <Button variant="secondary" size="sm" disabled={busy || !/^[1-9]\d*$/.test(foldTarget)} onClick={foldIntoExisting}>Fold into #{foldTarget || '…'}</Button>
             <Button variant="ghost" size="sm" disabled={busy} onClick={() => setSelected([])}>Clear</Button>
           </div>
-          {foldKinds.length === 0 && <p style={muted}>no one kind may replace all of these; fold them into an existing entry of their kind</p>}
+          {foldKinds.length === 0 && <p style={muted}>{candidateSelected
+            ? 'a candidate cannot be replaced by a new entry; fold it into an existing approved one'
+            : 'no one kind may replace all of these; fold them into an existing entry of their kind'}</p>}
         </React.Fragment>
       )}
       {writing && (

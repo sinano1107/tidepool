@@ -53,3 +53,10 @@ Definition(書き手を問わず)・出所の Episode を添えない人間の B
 結び付きは `path_moved` の後継 id が既に持つ(出所と役目が別、決定3)。「自身の宣言」の判定は出所が自身の id を指すことのままで
 よい —— worker の Knowledge は任意の event を引用できるので、作成 event を指すことを自己宣言と読むと正当な引用を誤分類する。
 今の実装の walk-through は #1047 のコメントに置く。
+
+## 追記(2026-09-28、issue #1041 の実装時)
+
+**決定3 の「この規則は Behavior だけのもの」を改め、Exemplar も `supersedes` があれば出所を省いてよく、省いたときは
+supersedes の出所が1つに揃っていればそれを継ぐ。** 揃っていなければ拒否する —— Exemplar は出所が必須のまま。注釈はその出所の
+case で検査する。RCA 起草の Exemplar candidate は出所が帰責(`objection_attributed`)のまま承認されるが、事例の引用はその
+event を受けないので、出所を転記し直す編集ではその approved Exemplar を書き直せなかった。

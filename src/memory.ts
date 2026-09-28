@@ -202,7 +202,7 @@ function writeSuperseding(
   return db.transaction(() => {
     const replaced = (supersedes ?? []).map((id) => rowToEntry(requireLive(db, id, undefined, "approved")));
     const id = write(replaced);
-    if (supersedes) foldMemoryEntries(db, { replaces: supersedes, successor_id: id, author }, origin, at);
+    if (supersedes?.length) foldMemoryEntries(db, { replaces: supersedes, successor_id: id, author }, origin, at);
     return { entry_id: id, event_id: id };
   })();
 }
@@ -451,7 +451,7 @@ const humanEntryFields = {
   text: z.string(),
   original_text: z.string().optional(),
   /** 新エントリが置き換える approved のエントリ(ADR 0162 決定1)。 */
-  supersedes: z.array(z.number().int().positive()).min(1).optional(),
+  supersedes: z.array(z.number().int().positive()).optional(),
 };
 export const humanKnowledgeSchema = z.object({ ...humanEntryFields, title: z.string(), original_title: z.string().optional() });
 export const humanDefinitionSchema = z.object(humanEntryFields);

@@ -595,7 +595,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
     "list_memory_entries",
     {
       description:
-        "List the board's memory entries, including candidates, invalidated ones (with invalidation_reason and successor_id) " +
+        "List the board's memory entries, including candidates, invalidated ones (with invalidation_reason and successor_id), the ids each entry replaced (replaced_ids) " +
         "and board-wide definitions a workspace definition shadows. workspace matches exactly; board_wide lists only board-wide entries; " +
         "state invalidated lists invalidated entries, approved / candidate the rest.",
       inputSchema: memoryListFilterSchema.extend({ board_wide: z.boolean().optional() }).shape,
