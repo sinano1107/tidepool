@@ -1538,8 +1538,12 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit, fo
     }
   };
   React.useEffect(() => { load(); }, [filter.workspace, filter.kind, filter.state]);
+  // once per visit: a later reload (a save, a filter change) must not pull the list back to the entry
+  const focused = React.useRef(false);
   React.useEffect(() => {
-    if (focus !== null && entries) document.querySelector(`[data-testid="memory-entry-${focus}"]`)?.scrollIntoView({ block: 'center' });
+    if (focused.current || focus === null || !entries) return;
+    focused.current = true;
+    document.querySelector(`[data-testid="memory-entry-${focus}"]`)?.scrollIntoView({ block: 'center' });
   }, [focus, entries]);
 
   const setFilterField = (key: string) => (e: React.ChangeEvent<HTMLSelectElement>) => setFilter({ ...filter, [key]: e.target.value });

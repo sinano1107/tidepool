@@ -65,3 +65,11 @@ it("prompt は cause の memory と、entries を読んだ記憶から名指す�
   expect(prompts[0]).toContain('"entries"');
   expect(prompts[0]).toContain("Squash before merge.");
 });
+
+it("memory 以外の判定が entries を null で返しても判定は失われず、entries の無い判定として届く", async () => {
+  const client = new ClaudeAttributionClient({
+    exec: async () => JSON.stringify({ result: JSON.stringify({ ...judgment, entries: null }) }),
+  });
+
+  await expect(client.judge(input, { model: "fable", effort: "high" })).resolves.toEqual(judgment);
+});

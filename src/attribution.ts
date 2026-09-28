@@ -309,6 +309,7 @@ function memoryRead(db: Db, entry: DecisionLogEntry): AttributionInput["memory_r
   const ids = new Set(
     events.flatMap((e) => (e.payload.kind === "memory_pulled" && e.payload.verb === "read_memory" && e.id < entry.id && inSession(e) ? e.payload.returned_ids : [])),
   );
+  // ponytail: 数件の id を引くのに記憶の全件を読む。記憶が数万に育って commit が重くなったら id で引く読み口を足す
   const byId = new Map(listMemoryEntries(db, {}).map((m) => [m.id, m]));
   return [...ids].map((id) => {
     const { kind, title, text } = byId.get(id)!;

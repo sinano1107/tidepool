@@ -212,7 +212,7 @@ function LogEntry({ entry = {}, onObject, onExpand, onOpenMemoryEntry, active = 
         role: clickable ? "button" : void 0,
         tabIndex: clickable ? 0 : void 0,
         onKeyDown: clickable ? (e) => {
-          if (e.key === "Enter" || e.key === " ") {
+          if (e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")) {
             e.preventDefault();
             onObject();
           }

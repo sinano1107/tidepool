@@ -1981,8 +1981,11 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit, fo
   React.useEffect(() => {
     load();
   }, [filter.workspace, filter.kind, filter.state]);
+  const focused = React.useRef(false);
   React.useEffect(() => {
-    if (focus !== null && entries) document.querySelector(`[data-testid="memory-entry-${focus}"]`)?.scrollIntoView({ block: "center" });
+    if (focused.current || focus === null || !entries) return;
+    focused.current = true;
+    document.querySelector(`[data-testid="memory-entry-${focus}"]`)?.scrollIntoView({ block: "center" });
   }, [focus, entries]);
   const setFilterField = (key) => (e) => setFilter({ ...filter, [key]: e.target.value });
   const muted = { margin: 0, fontSize: "var(--text-xs)", color: "var(--text-muted)" };

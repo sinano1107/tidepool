@@ -35,7 +35,7 @@ export function LogEntry({ entry = {}, onObject, onExpand, onOpenMemoryEntry, ac
         onClick={clickable ? onObject : undefined}
         role={clickable ? 'button' : undefined}
         tabIndex={clickable ? 0 : undefined}
-        onKeyDown={clickable ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onObject(); } } : undefined}
+        onKeyDown={clickable ? (e) => { if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); onObject(); } } : undefined}
         style={{ display: 'flex', alignItems: 'flex-start', gap: 10, flex: 1, minWidth: 0 }}
       >
         <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', paddingTop: 2, flexShrink: 0 }}>{time}</span>

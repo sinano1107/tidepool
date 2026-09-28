@@ -10,7 +10,8 @@ import type { ExecutionSettingRow } from "./execution-setting.js";
 const judgmentSchema = z.object({
   cause: z.enum(CAUSES),
   evidence: z.string().min(1),
-  entries: z.array(z.number().int()).optional(),
+  // prompt の JSON は model が null を書きうる —— 欠落と同じに読み、正しい判定を parse 失敗で落とさない
+  entries: z.array(z.number().int()).nullish().transform((v) => v ?? undefined),
 });
 
 /** The question the board asks when an objection is bundled (ADR 0115 決定2):

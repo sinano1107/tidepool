@@ -133,4 +133,10 @@ test("memory の帰責は異議バッジに cause と名指された entry へ�
   await row.getByRole("link", { name: `#${note}` }).click();
 
   await expect(page.getByTestId(`memory-entry-${note}`)).toBeInViewport();
+
+  // キーボードでも同じ所へ移る —— Enter が行の Object に吸われない
+  await page.goto(t.baseUrl);
+  await row.getByRole("link", { name: `#${note}` }).focus();
+  await page.keyboard.press("Enter");
+  await expect(page.getByTestId(`memory-entry-${note}`)).toBeInViewport();
 });

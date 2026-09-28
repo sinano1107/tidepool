@@ -210,22 +210,19 @@ it("一覧はページ長で切り、truncated が次のページを言う", () 
   expect([second.entries.map((e) => e.id), second.truncated]).toEqual([[ids[20]], false]);
 });
 
+/** setup のみ: 1 marker = 1 episode の直挿しで異議つき decision を安く並べる(#356 の投影は使わない)。異議の event id と decision を返す。 */
+function objectedDecision({ db, task }: ReturnType<typeof board>, i: number) {
+  const decision = logDecision(db, task, `decision ${i}`, "deckhand", at);
+  db.prepare("INSERT INTO episodes (id, worker_spawned_event_id, extractor_version, task_id, agent, lines) VALUES (?, ?, '3', ?, 'deckhand', '{}')").run(i, i, task.id);
+  db.prepare("INSERT INTO episode_markers (episode_id, seq, kind, position, event_id) VALUES (?, 0, 'decision', 0, ?)").run(i, decision);
+  const objection = appendEvent(db, { taskId: task.id, workerId: "human", origin: "webui", payload: { kind: "objection_raised", entry_id: decision, comment: `objection ${i}`, session_id: 1 }, at });
+  return { decision, objection };
+}
+
 it("Precedent もページ長で切り、2 ページ目に残りが出る", () => {
-  const { db, task, reader } = board();
-  // setup のみ: 1 marker = 1 episode の直挿し(#356 の投影は使わない、異議つき decision を安く並べる)
-  const insertEpisode = db.prepare(
-    "INSERT INTO episodes (id, worker_spawned_event_id, extractor_version, task_id, agent, lines) VALUES (?, ?, '3', ?, 'deckhand', '{}')",
-  );
-  const insertMarker = db.prepare(
-    "INSERT INTO episode_markers (episode_id, seq, kind, position, event_id) VALUES (?, 0, 'decision', 0, ?)",
-  );
-  const decisions = Array.from({ length: 21 }, (_, i) => {
-    const decision = logDecision(db, task, `decision ${i}`, "deckhand", at);
-    insertEpisode.run(i + 1, i + 1, task.id);
-    insertMarker.run(i + 1, decision);
-    appendEvent(db, { taskId: task.id, workerId: "human", origin: "webui", payload: { kind: "objection_raised", entry_id: decision, comment: `objection ${i}`, session_id: 1 }, at });
-    return decision;
-  });
+  const b = board();
+  const { db, reader } = b;
+  const decisions = Array.from({ length: 21 }, (_, i) => objectedDecision(b, i + 1).decision);
 
   const first = listPrecedents(db, reader, {}, at);
   const second = listPrecedents(db, reader, { page: 2 }, at);
@@ -234,17 +231,11 @@ it("Precedent もページ長で切り、2 ページ目に残りが出る", () =
 });
 
 it("Precedent は最新の帰責の entries を運ぶ —— memory なら名指された id 列、他の cause は null(ADR 0166 決定5)", () => {
-  const { db, task, reader } = board();
-  // setup のみ: 1 marker = 1 episode の直挿しと、異議・帰責の event
-  const insertEpisode = db.prepare(
-    "INSERT INTO episodes (id, worker_spawned_event_id, extractor_version, task_id, agent, lines) VALUES (?, ?, '3', ?, 'deckhand', '{}')",
-  );
-  const insertMarker = db.prepare("INSERT INTO episode_markers (episode_id, seq, kind, position, event_id) VALUES (?, 0, 'decision', 0, ?)");
+  const b = board();
+  const { db, task, reader } = b;
+  // setup のみ: 帰責の event
   const objected = (i: number, cause: "memory" | "capability", entries: number[] | null) => {
-    const decision = logDecision(db, task, `decision ${i}`, "deckhand", at);
-    insertEpisode.run(i, i, task.id);
-    insertMarker.run(i, decision);
-    const objection = appendEvent(db, { taskId: task.id, workerId: "human", origin: "webui", payload: { kind: "objection_raised", entry_id: decision, comment: "wrong", session_id: 1 }, at });
+    const { decision, objection } = objectedDecision(b, i);
     appendEvent(db, { taskId: task.id, workerId: "tidepool", origin: "board", payload: { kind: "objection_attributed", entry_id: decision, objection_event_ids: [objection], cause, evidence: "e", entries, round: "initial" }, at });
     return decision;
   };
