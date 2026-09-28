@@ -49,9 +49,8 @@ it("worker MCP の読み取り verb に未知の引数を渡すと、絞り込�
 
 it("worker MCP の tools/list は、引数を持たない verb にも additionalProperties: false を載せる", async () => {
   t = await bootTidepool();
-  const task = await registerWork(t, "index the tide charts", "charts");
 
-  const client = await mcpClient(t.mcpBaseUrl, task.id);
+  const client = await mcpClient(t.mcpBaseUrl);
   try {
     const { tools } = await client.listTools();
     expect(tools.find((tool) => tool.name === "get_current_task")?.inputSchema).toMatchObject({ additionalProperties: false });
