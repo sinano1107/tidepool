@@ -1021,14 +1021,16 @@ async function reobject(t: Tidepool, entryId: number, comment: string, closeOnly
   return id;
 }
 
-/** まだ決着していない RCA 子をすべて決着させる: 待っているものは取り消し、走っているものは完了させる。 */
-async function settleOpenRcas(t: Tidepool, taskId: string) {
+/** まだ決着していない RCA 子をすべて決着させ(待っているものは取り消し、走っているものは完了させる)、決着後の tick を
+ *  pickup の契機で1つ回す —— 第2回をどの契機が撃ったかは言わない(ADR 0169)。 */
+async function settleRcasThenTick(t: Tidepool, taskId: string) {
   for (;;) {
     const rca = (await children(t, taskId)).find((x: any) => x.title.startsWith("rca (") && ["todo", "in_progress"].includes(x.status));
-    if (!rca) return;
+    if (!rca) break;
     if (rca.status === "todo") await api(t.baseUrl, "POST", `/api/tasks/${rca.id}/cancel`, {});
     else await completeViaMcp(t, rca.id, false);
   }
+  await registerWork(t, "a pickup trigger");
 }
 
 it("初回と第2回の失敗 event は異議群の名前を持ち、第2回の回数は異議群ごとに数える —— 前の異議群が2回・後が1回失敗しても打ち切りは無く、次の tick で3回目に達した前の異議群だけが打ち切られる", async () => {
@@ -1036,11 +1038,11 @@ it("初回と第2回の失敗 event は異議群の名前を持ち、第2回の�
   t = s.t;
   s.attributionClient.scriptJudgment(s.entry.id, new Error("claude CLI timed out"));
   await commit(t, s.task.id, "per bundle");
-  await settleOpenRcas(t, s.task.id);
+  await settleRcasThenTick(t, s.task.id);
   await t.clock.advance(HOUR);
   const again = await reobject(t, s.entry.id, "and name the fixtures in the report");
 
-  await settleOpenRcas(t, s.task.id);
+  await settleRcasThenTick(t, s.task.id);
 
   expect((await attributionsFailed(t, s.task.id)).map((e: any) => [e.payload.objection_event_id, e.payload.round])).toEqual([
     [s.objection, "initial"],
@@ -1075,7 +1077,7 @@ it("前の異議群で capability と判定された entry を後の session が
     content: [{ text: expect.stringContaining("the entry's cause is uncertain: nothing to learn from it") }],
   });
   s.attributionClient.scriptJudgment(s.entry.id, { cause: "task_ambiguity", evidence: "the second RCA decided it" });
-  await settleOpenRcas(t, s.task.id);
+  await settleRcasThenTick(t, s.task.id);
   await t.clock.advance(HOUR);
 
   expect(s.attributionClient.calls.map((c) => c.input.steering)).toEqual([["always keep the fixtures"], ["and name the fixtures in the report"]]);
@@ -1087,13 +1089,13 @@ it("前の異議群の第2回が打ち切られていても後の異議群の第
   t = s.t;
   s.attributionClient.scriptJudgment(s.entry.id, new Error("claude CLI timed out"));
   await commit(t, s.task.id, "halted bundles");
-  await settleOpenRcas(t, s.task.id);
+  await settleRcasThenTick(t, s.task.id);
   await t.clock.advance(HOUR);
   await t.clock.advance(HOUR);
   expect((await haltedRefires(t)).map((r: any) => r.target)).toEqual([s.objection]);
   const again = await reobject(t, s.entry.id, "and name the fixtures in the report", true);
 
-  await settleOpenRcas(t, s.task.id);
+  await settleRcasThenTick(t, s.task.id);
   await t.clock.advance(HOUR);
   await t.clock.advance(HOUR);
 
@@ -1123,11 +1125,10 @@ it("後の異議群の第2回が確定した後に前の異議群の第2回が�
   t = s.t;
   s.attributionClient.scriptJudgment(s.entry.id, new Error("claude CLI timed out"));
   await commit(t, s.task.id, "late landing");
-  await settleOpenRcas(t, s.task.id);
+  await settleRcasThenTick(t, s.task.id);
   const again = await reobject(t, s.entry.id, "and name the fixtures in the report", true);
   s.attributionClient.scriptJudgment(s.entry.id, { cause: "capability", evidence: "the second RCA decided it" });
-  await settleOpenRcas(t, s.task.id);
-  await registerWork(t, "a pickup trigger");
+  await settleRcasThenTick(t, s.task.id);
   s.attributionClient.scriptJudgment(s.entry.id, { cause: "task_ambiguity", evidence: "the first RCA decided it, late" });
 
   await t.clock.advance(HOUR);
