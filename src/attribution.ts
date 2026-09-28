@@ -295,7 +295,7 @@ const secondRoundInput = (db: Db, objectedId: string, attribution: SecondRoundSo
 const fireAndForget = (fired: Promise<void>, entryId: number) =>
   void fired.catch((err) => console.error(`[attribution] entry ${entryId}: ${String(err)}`));
 
-/** 撃ち直しの対象(ADR 0164 決定1): entry ごとの帰責の状態のうち、あるべき結果が無いもの —— 第2回を待つ entry
+/** sweep の対象(ADR 0164 決定1): entry ごとの帰責の状態のうち、あるべき結果が無いもの —— 第2回を待つ entry
  *  (初回の `uncertain` と束ね済みの未帰責、ADR 0168 決定3)で RCA 子がすべて決着したものは第2回、それ以外は
  *  最新の帰責を出所とする candidate が無いもの の起草。sweep と打ち切りの一覧が同じ集合を読む。 */
 type RefireTarget = { task_id: string } & ({ refire: "second_round"; source: SecondRoundSource } | { refire: "draft"; attribution: Attribution });
@@ -312,7 +312,8 @@ function refireTargets(db: Db): RefireTarget[] {
   });
 }
 
-/** 撃ち直しの sweep(ADR 0164 決定1・4): pickup の poll が同期で呼び、撃ち直しの対象を fire-and-forget で撃つ。
+/** sweep(ADR 0164 決定1・4): 第2回の帰責と起草を撃つ唯一の契機(ADR 0169 決定1)。pickup の poll が同期で呼び、
+ *  対象を fire-and-forget で撃つ —— 1回目も撃ち直しもここから出る。
  *  起草の規則・回数・間隔・in-flight・撃てるか は撃つ側(`draftBehaviorCandidate` / `attributeSecondRound`)が見る。
  *  初回の帰責は撃ち直さない(ADR 0168 決定1)。 */
 export function refireAttributions(db: Db, deps: AttributionCallDeps, now: Date): void {
@@ -395,8 +396,8 @@ function memoryRead(db: Db, entry: DecisionLogEntry): AttributionInput["memory_r
  *  人間エントリ・起草 client の無い盤面・宛先の agent がいない起草(登録者が人間か盤面の
  *  `task_ambiguity` / `missing_information`、ADR 0164 決定2)・workspace の無い task は何もしない。宛先は cause から導出し
  *  (ADR 0115 決定4)、Board call の `addressee` は `preference` だけが読む。撃てなかったら何も書かず、
- *  撃って失敗したら `memory_draft_failed` を残す(ADR 0164 決定3)。poll の sweep が撃ち(第2回は帰責の追記の直後、ADR 0169)、
- *  commit も settlement も止めない。 */
+ *  撃って失敗したら `memory_draft_failed` を残す(ADR 0164 決定3)。poll の sweep が fire-and-forget で撃つ
+ *  (第2回は帰責の追記の直後、ADR 0169)ので poll を止めない。 */
 export async function draftBehaviorCandidate(db: Db, deps: AttributionCallDeps, attribution: Attribution, now: Date): Promise<void> {
   const { cause, round, entry_id } = attribution;
   const drafts = round === "initial" ? cause === "preference" : LEARNING_CAUSES.includes(cause);

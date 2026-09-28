@@ -358,6 +358,7 @@ it("初回で uncertain が無いタスクでは RCA 子がすべて決着して
 
   const self = await api(t.baseUrl, "POST", `/api/tasks/${s.self.id}/cancel`, {});
   const auditor = await api(t.baseUrl, "POST", `/api/tasks/${s.auditor.id}/cancel`, {});
+  await nextPoll(t);
 
   expect([self.json.status, auditor.json.status]).toEqual(["cancelled", "cancelled"]);
   expect(s.attributionClient.calls).toHaveLength(1);
@@ -546,7 +547,7 @@ it("人間が書いたエントリは preference でも起草しない", async (
   expect(await memoryEntries(t)).toEqual([]);
 });
 
-it("起草の Board call の失敗は memory_draft_failed を残し、帰責の event と commit の応答は従来どおり", async () => {
+it("commit が促す poll の起草の Board call が失敗すると memory_draft_failed を残し、初回の帰責の event と commit の応答はそのまま", async () => {
   const s = await objectedForDraft("flaky draft", { initial: { cause: "preference", evidence: "taste" } });
   t = s.t;
   s.behaviorDraftClient.scriptDraft(s.entry.id, new Error("claude CLI timed out"));
@@ -668,7 +669,7 @@ it("起草の失敗から1時間未満の pickup 契機では撃たない", asyn
   s.behaviorDraftClient.scriptDraft(s.entry.id, KEEP_FIXTURES);
 
   await t.clock.advance(HOUR / 2);
-  await registerWork(t, "a pickup trigger");
+  await nextPoll(t);
 
   expect(s.behaviorDraftClient.calls).toHaveLength(1);
   expect(await behaviors(t)).toEqual([]);
@@ -1087,7 +1088,7 @@ it.each<[string, (ids: { read: number; unread: number }) => number[], Partial<Ga
   const rca = listChildren(b.db, b.task.id).filter((c) => c.title.startsWith("rca ("));
   for (const r of rca) cancelTaskDirectly(b.db, r, null, at, {});
 
-  refireAttributions(b.db, { attributionClient: client, behaviorDraftClient: drafter, workspace: { name: "charts" }, containers: undefined }, at);
+  refireAttributions(b.db, { ...noAttributionCalls, attributionClient: client, behaviorDraftClient: drafter, workspace: { name: "charts" } }, at);
   // sweep は fire-and-forget: fake の返答が着地するまで回す
   await new Promise((resolve) => setImmediate(resolve));
 

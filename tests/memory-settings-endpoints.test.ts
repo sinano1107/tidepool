@@ -443,7 +443,7 @@ it("POST .../retry で打ち切りの起草はすぐ次の poll で撃たれ、�
   const retried = await api(t.baseUrl, "POST", `/api/settings/memory/halted-refires/draft/${s.attribution.id}/retry`);
   expect(retried).toEqual({ status: 200, json: { event_id: expect.any(Number) } });
   expect(await halted(t)).toEqual([]);
-  await registerWork(t, "a pickup trigger");
+  await nextPoll(t);
   expect(s.behaviorDraftClient.calls).toHaveLength(4);
   await t.clock.advance(HOUR);
   await t.clock.advance(HOUR);
