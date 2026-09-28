@@ -265,7 +265,6 @@ function moveEntries(
   const moving = new Set(moves.map(({ old }) => old.id));
   return db.transaction(() => {
     for (const { old, scope, path } of moves) {
-      if (old.invalidation_reason !== null) throw new DomainError(`memory entry ${old.id} is already invalidated`);
       if (old.scope === scope && old.path === path) throw new DomainError(`memory entry ${old.id} is already at ${path} in this scope`);
       checkPath(path);
       if (old.kind !== "definition") continue;
