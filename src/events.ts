@@ -409,7 +409,8 @@ export type EventPayload =
   // ADR 0150 決定1 が新設しないとした「registry 変更の event」ではない —— 盤面自身の書き込みの記録で、row の approve の execution_settings_changed と同じ位置。
   | { kind: "agent_tier_changed"; agent: string; from: Tier; to: Tier; question_id: string; registry_commit: string }
   // spec #586 D: worker の pull 1回(task 帰属)。返した id と snapshot watermark、search は
-  // 候補ごとの落ちた理由(null = 返した)。event id は tool 結果に載り、Precedent の
+  // 候補ごとの落ちた理由(null = 返した)、read は求めた id のうち本文を返さなかった無効化済みの理由と見える後継
+  // (ADR 0167 決定4。returned_ids はたどった先の id)。event id は tool 結果に載り、Precedent の
   // memory マーカーになる。
   | {
       kind: "memory_pulled";
@@ -428,6 +429,7 @@ export type EventPayload =
       returned_ids: number[];
       watermark: number;
       candidates?: Array<{ id: number; dropped: MemoryDropReason | null }>;
+      dropped?: Array<{ id: number; reason: InvalidationReason; successor: number | null }>;
     }
   // spec #586 G: エントリ表と FTS を events から作り直した。
   // 刻んだ索引の版を持つ。

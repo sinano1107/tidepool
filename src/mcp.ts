@@ -822,6 +822,10 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
         "A behavior's case is the example it was drafted from: the decision, the steering objections " +
         "raised against it, and that session's handoff and result — or, for a whole session, its decisions " +
         "in order with the handoff and result; case is null when there is none. " +
+        "An id whose entry was moved or restored returns the entry it now lives as, with requested_id " +
+        "set to the id you asked for. Any other invalidated id returns no entry but a dropped item with " +
+        "the reason — superseded, capability (it was wrong), environment / requirement_change (it went " +
+        "stale), or path_moved (moved where you cannot see) — and the successor id when you can see it. " +
         "Ids you cannot see are omitted.",
       inputSchema: { ids: z.array(z.number().int()).min(1) },
     },

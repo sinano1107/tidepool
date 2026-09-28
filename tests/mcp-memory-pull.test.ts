@@ -1,5 +1,5 @@
 import { afterEach, expect, it } from "vitest";
-import { defineMemoryBranch, humanEntryInput, recordBehavior, recordKnowledge } from "../src/memory.js";
+import { defineMemoryBranch, humanEntryInput, invalidateMemoryEntry, moveMemory, recordBehavior, recordKnowledge } from "../src/memory.js";
 import { logDecision } from "../src/tasks.js";
 import { bootTidepool, HOUR, mcpClient, memoryEntries, registerWork, type Tidepool } from "./harness.js";
 
@@ -69,9 +69,16 @@ it("browse_memory / search_memory / read_memory は attributed task の workspac
           case: null,
         },
       ],
+      dropped: [],
       event_id: expect.any(Number),
     });
     expect((await call("read_memory", { ids: [behavior] })).entries[0].case).toHaveProperty("decision", "kept tests on Node 22");
+    const copy = moveMemory(t.db, { entry_id: id, scope: "charts", path: "build/node", mover: { activity: "human", name: "human" } }, "webui", t.clock.now()).entry_id;
+    invalidateMemoryEntry(t.db, { entry_id: behavior, reason: "capability" }, "human", "webui", t.clock.now());
+    expect(await call("read_memory", { ids: [id, behavior] })).toMatchObject({
+      entries: [{ id: copy, requested_id: id }],
+      dropped: [{ id: behavior, reason: "capability", successor: null }],
+    });
   } finally {
     await client.close();
   }

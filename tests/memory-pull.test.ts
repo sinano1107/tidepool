@@ -11,11 +11,13 @@ import {
   ensureMemoryIndex,
   humanEntryInput,
   invalidateMemoryEntry,
+  moveMemory,
   previewCase,
   readMemory,
   recordBehavior,
   recordExemplar,
   recordKnowledge,
+  restoreMemoryEntry,
   searchMemory,
 } from "../src/memory.js";
 import { projectAndPersist } from "../src/precedent.js";
@@ -209,7 +211,7 @@ it("read は本文・path・出所の参照と、参照の型から導いた出�
   });
 });
 
-it("無効化済み・candidate・宛先外・他 workspace のエントリは INDEX / search / read のどれにも出ない", () => {
+it("無効化済み・candidate・宛先外・他 workspace のエントリは INDEX / search / read のどれにも本文が出ない", () => {
   const { db, reader, record } = board();
   const shown = record({ path: "tide", title: "tide shown", text: "tide chart" });
   const boardWide = record({ path: "tide", title: "tide board-wide", text: "tide chart", scope: null });
@@ -469,7 +471,133 @@ it("pull は1回ごとに task 帰属の memory_pulled を残す —— verb・�
     input: { ids: [second, 999] },
     returned_ids: [second],
     watermark: second,
+    dropped: [],
   });
+});
+
+const human = { activity: "human" as const, name: "human" };
+
+it("read は移された(path_moved)id を移動先の本文で返して requested_id を添え、移動 → 移動の鎖も末尾までたどる —— pull の returned_ids は移動先", () => {
+  const { db, reader, record } = board();
+  const once = record({ title: "moved once", text: "Once." });
+  const twice = record({ title: "moved twice", text: "Twice." });
+  const copy = moveMemory(db, { entry_id: once, scope: "tidepool", path: "elsewhere", mover: human }, "webui", at).entry_id;
+  const tail = moveMemory(db, { entry_id: moveMemory(db, { entry_id: twice, scope: null, path: "a", mover: human }, "webui", at).entry_id, scope: "tidepool", path: "b", mover: human }, "webui", at).entry_id;
+
+  const read = readMemory(db, reader, { ids: [once, twice] }, at);
+
+  expect(read.entries.map(({ id, text, requested_id }) => ({ id, text, requested_id }))).toEqual([
+    { id: copy, text: "Once.", requested_id: once },
+    { id: tail, text: "Twice.", requested_id: twice },
+  ]);
+  expect(read.dropped).toEqual([]);
+  expect(getEvent(db, read.event_id)?.payload).toMatchObject({ returned_ids: [copy, tail], dropped: [] });
+});
+
+it("後継なしで無効化(capability)したあと人間が復元した id の read は、復元の複製の本文を requested_id つきで返す", () => {
+  const { db, reader, record } = board();
+  const old = record({ title: "was wrong", text: "Restored." });
+  invalidateMemoryEntry(db, { entry_id: old, reason: "capability" }, "human", "webui", at);
+  const copy = restoreMemoryEntry(db, { entry_id: old, restorer: human }, "webui", at).entry_id;
+
+  const read = readMemory(db, reader, { ids: [old] }, at);
+
+  expect(read.entries).toMatchObject([{ id: copy, requested_id: old, text: "Restored." }]);
+  expect(read.dropped).toEqual([]);
+});
+
+it("複数の旧 id が同じ末尾に着くと entry は1件で、requested_id は最初に求めた id", () => {
+  const { db, reader, record } = board();
+  const first = record({ title: "moved twice", text: "Twice." });
+  const middle = moveMemory(db, { entry_id: first, scope: null, path: "a", mover: human }, "webui", at).entry_id;
+  const tail = moveMemory(db, { entry_id: middle, scope: "tidepool", path: "b", mover: human }, "webui", at).entry_id;
+
+  expect(readMemory(db, reader, { ids: [middle, first] }, at).entries.map(({ id, requested_id }) => ({ id, requested_id }))).toEqual([{ id: tail, requested_id: middle }]);
+});
+
+it("移動 → 復元 → 移動の鎖も末尾までたどり、復元の複製が畳まれていれば dropped に末尾の理由と後継を載せる", () => {
+  const { db, reader, record } = board();
+  const moved = record({ title: "moved then restored", text: "Chain." });
+  const wrong = moveMemory(db, { entry_id: moved, scope: "tidepool", path: "a", mover: human }, "webui", at).entry_id;
+  invalidateMemoryEntry(db, { entry_id: wrong, reason: "capability" }, "human", "webui", at);
+  const restored = restoreMemoryEntry(db, { entry_id: wrong, restorer: human }, "webui", at).entry_id;
+  const tail = moveMemory(db, { entry_id: restored, scope: null, path: "b", mover: human }, "webui", at).entry_id;
+  const folded = record({ title: "restored then folded", text: "Folded." });
+  invalidateMemoryEntry(db, { entry_id: folded, reason: "environment" }, "human", "webui", at);
+  const copy = restoreMemoryEntry(db, { entry_id: folded, restorer: human }, "webui", at).entry_id;
+  const successor = record({ title: "successor", text: "New." });
+  invalidateMemoryEntry(db, { entry_id: copy, reason: "superseded", successor_id: successor }, "human", "webui", at);
+
+  expect(readMemory(db, reader, { ids: [moved, folded] }, at)).toMatchObject({
+    entries: [{ id: tail, requested_id: moved, text: "Chain." }],
+    dropped: [{ id: folded, reason: "superseded", successor }],
+  });
+});
+
+it("superseded の id は本文を返さず、dropped に理由と見える後継を載せ、pull の event にも同じ dropped を残す", () => {
+  const { db, reader, record } = board();
+  const old = record({ title: "old", text: "Old." });
+  const successor = record({ title: "new", text: "New." });
+  invalidateMemoryEntry(db, { entry_id: old, reason: "superseded", successor_id: successor }, "human", "webui", at);
+
+  const read = readMemory(db, reader, { ids: [old] }, at);
+
+  expect(read.entries).toEqual([]);
+  expect(read.dropped).toEqual([{ id: old, reason: "superseded", successor }]);
+  expect(getEvent(db, read.event_id)?.payload).toMatchObject({ returned_ids: [], dropped: [{ id: old, reason: "superseded", successor }] });
+});
+
+it.each(["capability", "environment", "requirement_change"] as const)("理由コード %s で無効化した id は dropped に理由を載せ、successor は null", (reason) => {
+  const { db, reader, record } = board();
+  const old = record({ title: "stale", text: "Stale." });
+  invalidateMemoryEntry(db, { entry_id: old, reason }, "human", "webui", at);
+
+  expect(readMemory(db, reader, { ids: [old] }, at)).toMatchObject({ entries: [], dropped: [{ id: old, reason, successor: null }] });
+});
+
+it("後継が読み手に見えない scope へ移された id は、本文を返さず dropped に path_moved・successor null で載る", () => {
+  const { db, reader, record } = board();
+  const old = record({ title: "moved away", text: "Away." });
+  moveMemory(db, { entry_id: old, scope: "sandbox", path: "notes", mover: human }, "webui", at);
+
+  expect(readMemory(db, reader, { ids: [old] }, at)).toMatchObject({ entries: [], dropped: [{ id: old, reason: "path_moved", successor: null }] });
+});
+
+it("scope・宛先・candidate で見えない無効化済みの id と存在しない id は、結果の dropped にも event にも載らない", () => {
+  const { db, reader, record } = board();
+  const other = record({ title: "other workspace", scope: "sandbox" });
+  invalidateMemoryEntry(db, { entry_id: other, reason: "capability" }, "human", "webui", at);
+  const behavior = (addressee: string) =>
+    createBehaviorCandidate(
+      db,
+      { scope: "tidepool", path: "notes", title: `for ${addressee}`, text: "x", addressee, source: { commit: "0a46a46" }, author: { activity: "rca", name: "auditor" } },
+      "board",
+      at,
+    ).entry_id;
+  const elsewhere = behavior("someone-else");
+  approve(db, elsewhere);
+  invalidateMemoryEntry(db, { entry_id: elsewhere, reason: "environment" }, "human", "webui", at);
+  const candidate = behavior("deckhand");
+  invalidateMemoryEntry(db, { entry_id: candidate, reason: "rejected" }, "human", "webui", at);
+
+  const read = readMemory(db, reader, { ids: [other, elsewhere, candidate, 999] }, at);
+
+  expect(read).toMatchObject({ entries: [], dropped: [] });
+  expect(getEvent(db, read.event_id)?.payload).toMatchObject({ dropped: [] });
+});
+
+it.each([
+  ["旧 → 複製", (old: number, copy: number) => [old, copy]],
+  ["複製 → 旧", (old: number, copy: number) => [copy, old]],
+])("旧 id と移動先の id を同時に求めると(%s)、entry は移動先の1件で requested_id は付かない", (_, order) => {
+  const { db, reader, record } = board();
+  const old = record({ title: "both", text: "Both." });
+  const copy = moveMemory(db, { entry_id: old, scope: "tidepool", path: "elsewhere", mover: human }, "webui", at).entry_id;
+
+  const { entries, dropped } = readMemory(db, reader, { ids: order(old, copy) }, at);
+
+  expect(entries.map(({ id, requested_id }) => ({ id, requested_id }))).toEqual([{ id: copy, requested_id: undefined }]);
+  expect(dropped).toEqual([]);
 });
 
 it("search の memory_pulled は FTS の順位どおりの候補と、返さなかった理由(宛先で外れた / 無効化済み / 上限で溢れた)を持つ", () => {
