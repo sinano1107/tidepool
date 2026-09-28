@@ -43,7 +43,7 @@ export function LogEntry({ entry = {}, onObject, onExpand, onOpenMemoryEntry, ac
       >
         <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', paddingTop: 2 }}>{time}</span>
         <AgentChip name={agent} icon={agentIcon} human={human} size="sm" style={{ paddingTop: 1 }} />
-        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, minWidth: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
           <div style={{ flex: 1, minWidth: 0, fontSize: 'var(--text-sm)', color: kindColors[kind], lineHeight: 'var(--leading-normal)', whiteSpace: 'pre-wrap' }}>
             <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', marginRight: 6 }}>{taskId}</span>
             {completion && <strong style={{ fontWeight: 'var(--weight-semibold)', marginRight: 4 }}>done —</strong>}
@@ -64,7 +64,7 @@ export function LogEntry({ entry = {}, onObject, onExpand, onOpenMemoryEntry, ac
         >⌄</button>
       )}
       {(objection || bundledObjection) && (
-        <div style={{ gridColumn: 3, minWidth: 0 }}>
+        <div style={{ gridColumn: 3 }}>
           {objection && (
             <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, marginTop: 6, padding: '6px 10px', background: 'var(--coral-1)', borderRadius: 'var(--radius-xs)', fontSize: 'var(--text-xs)', color: 'var(--coral-4)', whiteSpace: 'pre-wrap' }}>
               <span style={{ flex: 1 }}>objection: {objection}</span>
