@@ -359,9 +359,10 @@ export type EventPayload =
   // 問うた「この異議は誰の落ち度か」。配分評価と同じく**判断種別**の注釈で、観測
   // (objection_raised)とはこの kind で区別され、決定 log には現れない。task_id は
   // 異議されたタスク、`entry_id` は異議されたエントリ、`objection_event_ids` は出所の
-  // 異議 event(すべての注釈が記録に遡れる)。同じ entry への2回目以降は新しい event を
-  // 追記し最新が有効 —— `round` がそれを言う(`initial` = commit 時、`after_rca` = その
-  // タスクの RCA 子が決着した後に findings を証拠に `uncertain` を問い直した回、#575)。
+  // 異議 event(すべての注釈が記録に遡れる)で、先頭がその異議群の名前(ADR 0170)。同じ異議群への2回目は新しい
+  // event を追記し後が有効 —— `round` がそれを言う(`initial` = commit 時、`after_rca` = その
+  // タスクの RCA 子が決着した後に findings を証拠に `uncertain` を問い直した回、#575)。entry を1つの値で読む読み手は
+  // 最後の異議群の判定を読む(`currentAttributions`)。
   // どちらの回も判断が返ったときだけ書く —— 撃てなかった entry には何も書かず、撃って失敗したら
   // `objection_attribution_failed` だけを残す(ADR 0164 決定3 / ADR 0168 決定2)。初回の帰責が無い entry は
   // `uncertain` と同じく RCA を要し、第2回の対象になる(ADR 0168 決定3)。
@@ -465,10 +466,11 @@ export type EventPayload =
   // 撃ち直しの回数と間隔はこれで数える。店の event ではなく rebuild は再生しない。
   | { kind: "memory_draft_failed"; entry_id: number; round: "initial" | "after_rca"; attribution_event_id: number; reason: string }
   // ADR 0164 決定3 / ADR 0168 決定2: 帰責の Board call が撃って失敗した(異議されたタスクに帰属)。
-  // 判断ではないので `objection_attributed` には書かない。撃ち直すのは第2回だけで、その回数と間隔は
-  // entry ごとに `round = after_rca` のこれで数える —— 初回(`initial`)は撃ち直さない。
-  | { kind: "objection_attribution_failed"; entry_id: number; round: "initial" | "after_rca"; reason: string }
-  // ADR 0164 決定5 / issue #1066: 撃ち直しを打ち切った起草(target = 帰責 event の id)/ 第2回の帰責(target = entry の id)への
+  // 判断ではないので `objection_attributed` には書かない。`objection_event_id` は異議群の名前(最初の異議 event の id、
+  // ADR 0170 決定4)。撃ち直すのは第2回だけで、その回数と間隔は異議群ごとに `round = after_rca` のこれで数える ——
+  // 初回(`initial`)は撃ち直さない。
+  | { kind: "objection_attribution_failed"; entry_id: number; objection_event_id: number; round: "initial" | "after_rca"; reason: string }
+  // ADR 0164 決定5 / issue #1066: 撃ち直しを打ち切った起草(target = 帰責 event の id)/ 第2回の帰責(target = 異議群の最初の異議 event の id)への
   // 人間の Retry(以後の失敗を数え直す)と Dismiss(二度と撃たない)。異議されたタスクに帰属。
   | { kind: "refire_retried" | "refire_dismissed"; refire: "draft" | "second_round"; target: number };
 
@@ -545,6 +547,65 @@ export type DecisionLogEntry = Omit<EventRow, "payload" | "task_id"> & {
 export const isDecisionLogEntry = (e: EventRow | undefined): e is DecisionLogEntry =>
   HUMAN_FACING_KINDS.some((k) => k === e?.kind);
 
+/** 帰責 event を id つきで。 */
+export type Attribution = { id: number } & Extract<EventPayload, { kind: "objection_attributed" }>;
+
+/** 異議群(ADR 0170 決定1): 1つの entry に対し、束ねられた(session が閉じた)同じ session で打たれた異議の集合。名前は
+ *  最初の異議 event の id(`objection_event_ids` の先頭)で、異議群の順は名前の順(session の順と一致する)。open session の
+ *  異議はまだ異議群ではない。帰責は `objection_event_ids` の先頭で自分の異議群を名指し、同じ異議群では後の event(after_rca)が
+ *  有効 —— `attribution` が無い異議群は未帰責。 */
+export interface ObjectionBundle {
+  entry_id: number;
+  task_id: string;
+  objection_event_ids: number[];
+  attribution?: Attribution;
+}
+
+/** 異議群の名前(最初の異議 event の id、ADR 0170 決定4)—— 帰責の `objection_event_ids` の先頭も同じ異議群を名指す。 */
+export const bundleName = (b: { objection_event_ids: number[] }) => b.objection_event_ids[0]!;
+
+/** entry ごとの異議群を古い順に(`entryIds` を省けば全 entry)。帰責は束ねた異議群にしか書かれず、`objection_event_ids` の
+ *  先頭で自分の異議群を名指す。 */
+export function objectionBundles(db: Db, entryIds?: number[]): Map<number, ObjectionBundle[]> {
+  const only = (column: string) => (entryIds ? `AND json_extract(${column}, '$.entry_id') IN (${entryIds.map(() => "?").join(", ")})` : "");
+  const params = entryIds ?? [];
+  const bySession = new Map<string, ObjectionBundle>();
+  for (const o of db
+    .prepare(
+      `SELECT o.id, o.task_id, json_extract(o.payload, '$.entry_id') AS entry_id, s.id AS session_id
+         FROM events o JOIN triage_sessions s ON s.id = json_extract(o.payload, '$.session_id')
+        WHERE o.kind = 'objection_raised' AND s.committed_at IS NOT NULL ${only("o.payload")} ORDER BY o.id`,
+    )
+    .all(...params) as Array<{ id: number; task_id: string; entry_id: number; session_id: number }>) {
+    const key = `${o.entry_id}:${o.session_id}`;
+    const bundle = bySession.get(key);
+    if (bundle) bundle.objection_event_ids.push(o.id);
+    else bySession.set(key, { entry_id: o.entry_id, task_id: o.task_id, objection_event_ids: [o.id] });
+  }
+  const byName = new Map([...bySession.values()].map((b) => [`${b.entry_id}:${bundleName(b)}`, b]));
+  for (const e of db
+    .prepare(`SELECT * FROM events WHERE kind = 'objection_attributed' ${only("payload")} ORDER BY id`)
+    .all(...params)
+    .map((r) => parseEventRow(r))) {
+    if (e.payload.kind !== "objection_attributed") continue; // SQL で kind を絞り済み —— 型の絞り込みのためだけ
+    const attribution: Attribution = { ...e.payload, id: e.id };
+    const bundle = byName.get(`${attribution.entry_id}:${bundleName(attribution)}`);
+    if (bundle) bundle.attribution = attribution;
+  }
+  const byEntry = new Map<number, ObjectionBundle[]>();
+  for (const b of [...byName.values()].sort((a, b) => bundleName(a) - bundleName(b))) byEntry.set(b.entry_id, [...(byEntry.get(b.entry_id) ?? []), b]);
+  return byEntry;
+}
+
+/** entry の今の判定(ADR 0170 決定2): 最後の異議群の帰責。最後の異議群が未帰責なら entry は未帰責で、Map に載らない。
+ *  entry を1つの値で読む読み手(一覧・Precedent・起草 verb・打ち切りの行)はすべてこれを読む。 */
+export function currentAttributions(db: Db, entryIds?: number[]): Map<number, Attribution> {
+  return new Map([...objectionBundles(db, entryIds)].flatMap(([entryId, bundles]) => {
+    const attribution = bundles.at(-1)!.attribution;
+    return attribution ? [[entryId, attribution] as const] : [];
+  }));
+}
+
 /** A log entry annotated with its resolved workspace name (issue #44): the
  *  event's own task's `workspace`, or the board's default when the task
  *  carries none — resolved fresh at read time, never stamped onto the event
@@ -555,13 +616,14 @@ export const isDecisionLogEntry = (e: EventRow | undefined): e is DecisionLogEnt
  *  objections both ride along. `session_id` is the sole fact the read model
  *  hands the caller for telling the two apart (against the current open
  *  session, if any); `at` and who raised it are deliberately left out
- *  (issue #371). The latest attribution `cause` (and its `entries`, ADR 0166)
- *  is joined at read time from append-only `objection_attributed` events (ADR 0115). */
+ *  (issue #371). The entry's current attribution `cause` (and its `entries`, ADR 0166) — the last
+ *  objection bundle's judgment (ADR 0170) — is joined at read time from append-only
+ *  `objection_attributed` events (ADR 0115). */
 export interface LogEntry extends DecisionLogEntry {
   workspace: string | null;
   objections: { comment: string; session_id: number }[];
   cause: Cause | null;
-  /** 最新の帰責が `memory` のとき名指された entry の id 列(ADR 0166 決定6)。他の cause・帰責の無いエントリは null。 */
+  /** 今の判定(`currentAttributions`)が `memory` のとき名指された entry の id 列(ADR 0166 決定6)。他の cause・未帰責のエントリは null。 */
   entries: number[] | null;
   /** エントリを含む worker session の `worker_spawned` の id(case 描画と同じ窓、`sessionSpawnOf`)。窓の外なら null。 */
   session_event_id: number | null;
@@ -588,7 +650,7 @@ export function listLog(db: Db, defaultWorkspaceName?: string): LogEntry[] {
     list.push({ comment: o.comment, session_id: o.session_id });
     objectionsByEntry.set(o.entry_id, list);
   }
-  const attributions = latestAttributions(db);
+  const attributions = currentAttributions(db);
   // session の窓を切るのに要るのは spawn と exit だけ。窓の規則は task で絞るので盤面全体を1回で引いて渡す
   // ponytail: エントリ数 × session 数の走査。盤面が育って一覧が重くなったら task ごとに束ねる
   const sessionEvents = listEventsOfKinds(db, ["worker_spawned", "worker_exited"]);
@@ -665,16 +727,6 @@ export function listEventsOfKinds<K extends EventKind>(
 export function latestEventOfTask<K extends EventKind>(db: Db, taskId: string, kind: K): EventRowOf<K> | undefined {
   const row = db.prepare("SELECT * FROM events WHERE task_id = ? AND kind = ? ORDER BY id DESC LIMIT 1").get(taskId, kind);
   return row === undefined ? undefined : (parseEventRow(row) as EventRowOf<K>);
-}
-
-/** entry ごとの最新の帰責(同じ entry への追記は最新が有効 —— spec #563)。盤面全体を id 順に畳む。
- *  `task_id` は帰責 event のもの(書き手はどれも entry のタスクに書く)。 */
-export function latestAttributions(
-  db: Db,
-): Map<number, Extract<EventPayload, { kind: "objection_attributed" }> & Pick<EventRow, "id" | "task_id">> {
-  const latest: ReturnType<typeof latestAttributions> = new Map();
-  for (const e of listEventsOfKinds(db, ["objection_attributed"])) latest.set(e.payload.entry_id, { ...e.payload, id: e.id, task_id: e.task_id });
-  return latest;
 }
 
 export function listEvents(db: Db, taskId: string): EventRow[] {

@@ -10,9 +10,10 @@ import {
   HOUR,
   loggedEntry,
   managementMcpClient,
-  mcpClient,
   memoryEntries,
+  propose,
   registerWork,
+  runNow,
   type Tidepool,
 } from "./harness.js";
 
@@ -52,34 +53,14 @@ async function objectedTasks(attributionClient: FakeAttributionClient, specs: Ob
   return made.map((m) => ({ ...m, kids: tasks.filter((x: any) => x.parent_id === m.task.id) }));
 }
 
-/** slot を占めている task を順に完了させてから、先頭での2回の move で `taskId` を Run now。 */
-async function runNow(taskId: string) {
-  for (;;) {
-    const running = (await api(t.baseUrl, "GET", "/api/tasks")).json.find((x: any) => x.status === "in_progress");
-    if (!running || running.id === taskId) break;
-    await completeViaMcp(t, running.id, running.type === "work");
-  }
-  await api(t.baseUrl, "POST", `/api/tasks/${taskId}/move`, { after: null });
-  await api(t.baseUrl, "POST", `/api/tasks/${taskId}/move`, { after: null });
-}
-
-async function propose(taskId: string, args: Record<string, unknown>) {
-  const client = await mcpClient(t.mcpBaseUrl, taskId);
-  try {
-    return (await client.callTool({ name: "propose_from_objection", arguments: { path: "testing/fixtures", title: "Keep fixtures", text: "Never skip the fixtures.", ...args } })) as any;
-  } finally {
-    await client.close();
-  }
-}
-
 it("capability の異議エントリに self RCA が propose すると、author = rca + RCA の agent で載り、tool 結果に entry id と event id が載る", async () => {
   const attributionClient = new FakeAttributionClient();
   t = await bootTidepool({ attributionClient });
   const [{ entry, kids }]: any[] = await objectedTasks(attributionClient, [{ title: "capable", cause: "capability" }]);
   const self = kids.find((x: any) => x.title === "rca (self): capable");
-  await runNow(self.id);
+  await runNow(t, self.id);
 
-  const result = await propose(self.id, { entry_id: entry.id });
+  const result = await propose(t, self.id, { entry_id: entry.id });
 
   expect(result.isError, JSON.stringify(result.content)).toBeFalsy();
   const returned = body(result);
@@ -92,7 +73,7 @@ it("propose_from_objection の拒否は tool error として返る(何を断る�
   const work = await registerWork(t, "not a review", "charts");
   await t.clock.advance(HOUR); // picked up into the slot
 
-  expect(await propose(work.id, { entry_id: 999_999 })).toMatchObject({ isError: true, content: [{ text: expect.any(String) }] });
+  expect(await propose(t, work.id, { entry_id: 999_999 })).toMatchObject({ isError: true, content: [{ text: expect.any(String) }] });
 });
 
 it("auditor RCA では author = RCA task の agent 名(auditorName の盤面)になり、settings の HTTP 一覧と管理MCP 一覧が同じ行を author の活動と cause つきで返す", async () => {
@@ -100,9 +81,9 @@ it("auditor RCA では author = RCA task の agent 名(auditorName の盤面)に
   t = await bootTidepool({ attributionClient, auditorName: "shako" });
   const [{ entry, kids }]: any[] = await objectedTasks(attributionClient, [{ title: "delegated", cause: "task_ambiguity", registrant: "tako" }]);
   const auditor = kids.find((x: any) => x.title === "rca (auditor): delegated");
-  await runNow(auditor.id);
+  await runNow(t, auditor.id);
 
-  const result = await propose(auditor.id, { entry_id: entry.id });
+  const result = await propose(t, auditor.id, { entry_id: entry.id });
 
   expect(result.isError, JSON.stringify(result.content)).toBeFalsy();
   const { entry_id } = body(result);

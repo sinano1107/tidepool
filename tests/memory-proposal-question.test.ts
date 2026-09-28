@@ -1,7 +1,7 @@
 import { afterEach, expect, it } from "vitest";
 import { appendEvent } from "../src/events.js";
 import { approveMemoryProposal, createBehaviorCandidate } from "../src/memory.js";
-import { api, bootTidepool, completeViaMcp, HOUR, managementMcpClient, mcpClient, memoryEntries, type Tidepool } from "./harness.js";
+import { api, bootTidepool, bundledObjection, completeViaMcp, HOUR, managementMcpClient, mcpClient, memoryEntries, type Tidepool } from "./harness.js";
 
 /** 提案 question の扉(issue #620・#621 / ADR 0120 決定3・4): meta-review の提案 verb、付帯子としての question、回答での適用、
  *  pin の陳腐化。承認の transaction と再生はドメイン層(tests/memory.test.ts)が言う。 */
@@ -268,7 +268,7 @@ async function proposeExemplar(board: Awaited<ReturnType<typeof boardWithMetaRev
     taskId: board.review.id,
     workerId: "tidepool",
     origin: "board",
-    payload: { kind: "objection_attributed", entry_id: objected, objection_event_ids: [], cause: "preference", evidence: "e", entries: null, round: "after_rca" },
+    payload: { kind: "objection_attributed", entry_id: objected, objection_event_ids: [bundledObjection(t.db, board.review.id, objected, t.clock.now())], cause: "preference", evidence: "e", entries: null, round: "after_rca" },
     at: t.clock.now(),
   });
   const replaces = [candidate(t, "Split migrations", null, { event_id: attributed }), candidate(t, "Two commits", null, { event_id: attributed })];

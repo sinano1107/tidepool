@@ -1,6 +1,6 @@
 import { afterEach, expect, it } from "vitest";
-import { appendEvent, latestAttributions, latestEventOfTask, listEventsOfKinds } from "../src/events.js";
-import { api, bootTidepool, FIXTURE_OTHER_TASK, FIXTURE_TASK, HOUR, mcpClient, seedFixtureBoard, type Tidepool } from "./harness.js";
+import { appendEvent, currentAttributions, latestEventOfTask, listEventsOfKinds } from "../src/events.js";
+import { api, bootTidepool, bundledObjection, FIXTURE_OTHER_TASK, FIXTURE_TASK, HOUR, mcpClient, seedFixtureBoard, type Tidepool } from "./harness.js";
 
 let t: Tidepool;
 afterEach(() => t?.stop());
@@ -97,19 +97,20 @@ it("タスク単位の最新1件の読み口は、同じタスク・同じ kind 
   expect(latestEventOfTask(db, FIXTURE_OTHER_TASK, "worker_spawned")).toBeUndefined();
 });
 
-it("最新の帰責の読み口は、同じ entry に2件の帰責があるとき後の方を返す(spec #563 / issue #1073)", () => {
+it("今の判定の読み口は、同じ異議群に initial と after_rca の帰責があるとき after_rca を返す(ADR 0170 / issue #1073)", () => {
   const db = seedFixtureBoard();
   const at = new Date("2026-09-28T00:00:00.000Z");
+  const objection = bundledObjection(db, FIXTURE_TASK, 7, at);
   const attribute = (cause: "uncertain" | "preference", round: "initial" | "after_rca") =>
     appendEvent(db, {
       taskId: FIXTURE_TASK,
       workerId: "tidepool",
       origin: "board",
-      payload: { kind: "objection_attributed", entry_id: 7, objection_event_ids: [], cause, evidence: "e", entries: null, round },
+      payload: { kind: "objection_attributed", entry_id: 7, objection_event_ids: [objection], cause, evidence: "e", entries: null, round },
       at,
     });
   attribute("uncertain", "initial");
   const later = attribute("preference", "after_rca");
 
-  expect(latestAttributions(db).get(7)).toMatchObject({ id: later, cause: "preference", round: "after_rca" });
+  expect(currentAttributions(db).get(7)).toMatchObject({ id: later, cause: "preference", round: "after_rca" });
 });

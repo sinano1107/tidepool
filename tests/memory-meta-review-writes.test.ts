@@ -19,6 +19,7 @@ import {
   rejectMemoryProposal,
 } from "../src/memory.js";
 import { DomainError, getTask, logDecision, type MemoryProposal, registerTask } from "../src/tasks.js";
+import { bundledObjection } from "./harness.js";
 
 /** meta-review の直接適用(issue #619 / ADR 0122 決定1)のドメイン層。verb への写像はサーバ境界
  *  (tests/mcp-memory-meta-review.test.ts)が言う。 */
@@ -221,14 +222,16 @@ it("invalidate の提案は approved の Exemplar も target に取り、見出�
  *  出所に持つ Behavior candidate。 */
 function drafts() {
   const { db, task, decision } = board();
-  const attributed = (line: string) =>
-    appendEvent(db, {
+  const attributed = (line: string) => {
+    const entry_id = logDecision(db, task, line, "deckhand", at);
+    return appendEvent(db, {
       taskId: task.id,
       workerId: "tidepool",
       origin: "board",
-      payload: { kind: "objection_attributed", entry_id: logDecision(db, task, line, "deckhand", at), objection_event_ids: [], cause: "preference", evidence: "e", entries: null, round: "after_rca" },
+      payload: { kind: "objection_attributed", entry_id, objection_event_ids: [bundledObjection(db, task.id, entry_id, at)], cause: "preference", evidence: "e", entries: null, round: "after_rca" },
       at,
     });
+  };
   const drafted = (title: string, source: { event_id: number } | { commit: string }) =>
     createBehaviorCandidate(
       db,

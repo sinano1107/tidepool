@@ -730,8 +730,9 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
     {
       description:
         "List the Behavior drafts (refire draft, target = the attribution event id) and second-round attributions (refire second_round, " +
-        "target = the objected entry id) the board stopped refiring after 3 failed calls since the last retry. Each row shows the objected " +
-        "entry, its task, cause (null = unattributed), round, and the last failure's reason and time.",
+        "target = the id of the first objection event of the bundle — the objections one triage session raised against the entry) the board " +
+        "stopped refiring after 3 failed calls since the last retry. Each row shows the objected entry, its task, cause (the latest bundle's " +
+        "judgment; null = unattributed), round, and the last failure's reason and time.",
     },
     async () => toolResult({ halted: listHaltedRefires(deps.db) }),
   );
@@ -740,7 +741,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
     {
       description:
         "Retry a halted refire: the board fires it again at the next pickup poll, up to 3 more failed calls. " +
-        "Refused for anything not currently in list_halted_refires.",
+        "Key it as list_halted_refires does (second_round: target = the bundle's first objection event id). Refused for anything not currently in list_halted_refires.",
       inputSchema: refireKeySchema.shape,
     },
     async (key) => memoryVerb(() => ({ event_id: markHaltedRefire(deps.db, "refire_retried", key, "mcp", deps.clock.now()) })),
@@ -750,7 +751,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
     {
       description:
         "Dismiss a halted refire: it leaves the list and the board never fires it again (nothing to learn, or you wrote the behavior yourself). " +
-        "Refused for anything not currently in list_halted_refires.",
+        "Key it as list_halted_refires does (second_round: target = the bundle's first objection event id). Refused for anything not currently in list_halted_refires.",
       inputSchema: refireKeySchema.shape,
     },
     async (key) => memoryVerb(() => ({ event_id: markHaltedRefire(deps.db, "refire_dismissed", key, "mcp", deps.clock.now()) })),

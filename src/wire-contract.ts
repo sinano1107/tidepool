@@ -147,7 +147,7 @@ export interface WireContract {
       unread: boolean;
       workspace: string | null;
       cause: Cause | null;
-      /** 最新の帰責が memory のとき名指された entry の id 列(src/events.ts の LogEntry)。他は null。 */
+      /** 今の判定(最後の異議群の帰責)が memory のとき名指された entry の id 列(src/events.ts の LogEntry)。他は null。 */
       entries: number[] | null;
       objections: Array<{ comment: string; session_id: number }>;
       /** エントリを含む worker session の worker_spawned の id(src/events.ts の LogEntry)。窓の外なら null。 */
@@ -308,7 +308,8 @@ export interface WireContract {
       }>;
     }>;
   };
-  /** 撃ち直しを打ち切った起草と第2回の帰責(src/attribution.ts の listHaltedRefires、ADR 0164 決定5)。cause は未帰責なら null。 */
+  /** 撃ち直しを打ち切った起草と第2回の帰責(src/attribution.ts の listHaltedRefires、ADR 0164 決定5)。target は起草なら帰責 event の id、
+   *  第2回なら異議群の最初の異議 event の id(ADR 0170 決定4)。cause は entry の今の判定で、最後の異議群が未帰責なら null。 */
   "GET /api/settings/memory/halted-refires": {
     halted: Array<{
       refire: "draft" | "second_round";
