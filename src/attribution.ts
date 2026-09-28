@@ -1,3 +1,4 @@
+import { z } from "zod";
 import type { Cause } from "./cause.js";
 import type { Db } from "./db.js";
 import { appendEvent, type EventPayload, getEvent, HUMAN_FACING_KINDS, listEvents, taskDecisionLog } from "./events.js";
@@ -130,18 +131,34 @@ async function singleFlight(db: Db, key: string, fire: () => Promise<void>): Pro
   }
 }
 
-/** 失敗 event の kind ごとの、撃ち直しの対象を指す欄(起草は帰責、第2回は entry)。 */
-const FAILURE_TARGET = { memory_draft_failed: "attribution_event_id", objection_attribution_failed: "entry_id" } as const;
+/** 撃ち直しの種別ごとの失敗 event の kind と、撃ち直しの対象を指す欄(起草は帰責、第2回は entry)。 */
+const REFIRE = {
+  draft: { failed: "memory_draft_failed", target: "attribution_event_id" },
+  second_round: { failed: "objection_attribution_failed", target: "entry_id" },
+} as const;
+/** 打ち切りの行を指す鍵: 種別と対象(起草は帰責 event の id、第2回は entry の id)。 */
+export const refireKeySchema = z.object({ refire: z.enum(["draft", "second_round"]), target: z.number().int().positive() });
+export type RefireKey = z.infer<typeof refireKeySchema>;
 
-/** 撃ってよいか(ADR 0164 決定4・5): その対象の失敗 event が3件未満で、最後の失敗から1時間以上経っている。
- *  帰責の初回の失敗は数えない —— 撃ち直すのは第2回だけ(ADR 0168 決定1)。 */
-function refireDue(db: Db, kind: keyof typeof FAILURE_TARGET, target: number, now: Date): boolean {
-  const { n, last } = db
+/** 対象の失敗の数え(ADR 0164 決定5): 直近の Retry より後の失敗 event の数・最後の失敗、Dismiss の有無。
+ *  Retry との前後は id で見る。帰責の初回の失敗は数えない —— 撃ち直すのは第2回だけ(ADR 0168 決定1)。 */
+function refireFailures(db: Db, { refire, target }: RefireKey): { n: number; last: string | null; last_id: number | null; dismissed: number } {
+  const marks = "json_extract(payload, '$.refire') = @refire AND json_extract(payload, '$.target') = @target";
+  return db
     .prepare(
-      `SELECT COUNT(*) AS n, MAX(created_at) AS last FROM events WHERE kind = ? AND json_extract(payload, ?) = ?
-          AND NOT (kind = 'objection_attribution_failed' AND json_extract(payload, '$.round') = 'initial')`,
+      `SELECT COUNT(*) AS n, MAX(created_at) AS last, MAX(id) AS last_id,
+              EXISTS (SELECT 1 FROM events WHERE kind = 'refire_dismissed' AND ${marks}) AS dismissed
+         FROM events WHERE kind = @failed AND json_extract(payload, @path) = @target
+          AND NOT (kind = 'objection_attribution_failed' AND json_extract(payload, '$.round') = 'initial')
+          AND id > COALESCE((SELECT MAX(id) FROM events WHERE kind = 'refire_retried' AND ${marks}), 0)`,
     )
-    .get(kind, `$.${FAILURE_TARGET[kind]}`, target) as { n: number; last: string | null };
+    .get({ refire, target, failed: REFIRE[refire].failed, path: `$.${REFIRE[refire].target}` }) as ReturnType<typeof refireFailures>;
+}
+
+/** 撃ってよいか(ADR 0164 決定4・5): 直近の Retry 以降の失敗が3件未満で、最後の失敗から1時間以上経っている。
+ *  Dismiss は打ち切り(3件)にしか打てず、その後の Retry も拒まれるので、Dismiss した対象は数えるだけで二度と撃たれない。 */
+function refireDue(db: Db, key: RefireKey, now: Date): boolean {
+  const { n, last } = refireFailures(db, key);
   return n < MAX_FIRED_FAILURES && (last === null || now.getTime() - Date.parse(last) >= REFIRE_INTERVAL_MS);
 }
 
@@ -264,7 +281,7 @@ export async function attributeAfterRca(
  *  撃てなかったら何も書かず、撃って失敗したら `objection_attribution_failed` だけを残す(ADR 0164 決定3・6)。 */
 async function attributeSecondRound(db: Db, deps: BoardCallDeps, objectedId: string, source: SecondRoundSource, now: Date): Promise<void> {
   await singleFlight(db, `after_rca:${source.entry_id}`, async () => {
-    if (!refireDue(db, "objection_attribution_failed", source.entry_id, now)) return;
+    if (!refireDue(db, { refire: "second_round", target: source.entry_id }, now)) return;
     const call = boardCallSetting(db, deps.attributionClient, deps.containers);
     if ("unavailable" in call) return;
     const input = secondRoundInput(db, objectedId, source);
@@ -308,25 +325,66 @@ export function draftAfterCommit(db: Db, deps: BoardCallDeps, since: number, now
 const fireAndForget = (fired: Promise<void>, entryId: number) =>
   void fired.catch((err) => console.error(`[attribution] entry ${entryId}: ${String(err)}`));
 
-/** 撃ち直しの sweep(ADR 0164 決定1・4): pickup の poll が同期で呼ぶ。entry ごとの帰責の状態のうち、
- *  あるべき結果が無いものを fire-and-forget で撃ち直す —— 第2回を待つ entry(初回の `uncertain` と束ね済みの
- *  未帰責、ADR 0168 決定3)で RCA 子がすべて決着したものは第2回、それ以外は最新の帰責を出所とする candidate が
- *  無いもの の起草。起草の規則・回数・間隔・in-flight・撃てるか は撃つ側(`draftBehaviorCandidate` /
- *  `attributeSecondRound`)が見る。初回の帰責は撃ち直さない(ADR 0168 決定1)。 */
-export function refireAttributions(db: Db, deps: BoardCallDeps, now: Date): void {
+/** 撃ち直しの対象(ADR 0164 決定1): entry ごとの帰責の状態のうち、あるべき結果が無いもの —— 第2回を待つ entry
+ *  (初回の `uncertain` と束ね済みの未帰責、ADR 0168 決定3)で RCA 子がすべて決着したものは第2回、それ以外は
+ *  最新の帰責を出所とする candidate が無いもの の起草。sweep と打ち切りの一覧が同じ集合を読む。 */
+type RefireTarget = { task_id: string } & ({ refire: "second_round"; source: SecondRoundSource } | { refire: "draft"; attribution: Attribution });
+function refireTargets(db: Db): RefireTarget[] {
   const drafted = new Set(
     (db.prepare("SELECT CAST(source_ref AS INTEGER) AS id FROM memory_entries WHERE source_kind = 'event'").all() as { id: number }[]).map((r) => r.id),
   );
-  for (const state of attributionStates(db)) {
+  return attributionStates(db).flatMap((state): RefireTarget[] => {
     if ("awaiting" in state) {
       const rca = rcaChildren(db, state.task_id);
-      if (rca.length > 0 && settledAll(rca)) {
-        fireAndForget(attributeSecondRound(db, deps, state.task_id, state.awaiting, now), state.awaiting.entry_id);
-      }
-    } else if (!drafted.has(state.latest.id)) {
-      fireAndForget(draftBehaviorCandidate(db, deps, state.latest, now), state.latest.entry_id);
+      return rca.length > 0 && settledAll(rca) ? [{ task_id: state.task_id, refire: "second_round", source: state.awaiting }] : [];
+    }
+    return drafted.has(state.latest.id) ? [] : [{ task_id: state.task_id, refire: "draft", attribution: state.latest }];
+  });
+}
+
+/** 撃ち直しの sweep(ADR 0164 決定1・4): pickup の poll が同期で呼び、撃ち直しの対象を fire-and-forget で撃つ。
+ *  起草の規則・回数・間隔・in-flight・撃てるか は撃つ側(`draftBehaviorCandidate` / `attributeSecondRound`)が見る。
+ *  初回の帰責は撃ち直さない(ADR 0168 決定1)。 */
+export function refireAttributions(db: Db, deps: BoardCallDeps, now: Date): void {
+  for (const target of refireTargets(db)) {
+    if (target.refire === "second_round") {
+      fireAndForget(attributeSecondRound(db, deps, target.task_id, target.source, now), target.source.entry_id);
+    } else {
+      fireAndForget(draftBehaviorCandidate(db, deps, target.attribution, now), target.attribution.entry_id);
     }
   }
+}
+
+/** 撃ち直しを打ち切った起草と第2回の帰責(ADR 0164 決定5): 撃ち直しの対象のうち、直近の Retry 以降に撃って3回失敗し
+ *  Dismiss が無いもの。行が閉じるのは撃ち直しの成功(対象から外れる)と Dismiss だけ。 */
+export function listHaltedRefires(db: Db) {
+  return refireTargets(db).flatMap((t) => {
+    const key: RefireKey = { refire: t.refire, target: t.refire === "draft" ? t.attribution.id : t.source.entry_id };
+    const { n, last_id, dismissed } = refireFailures(db, key);
+    if (dismissed || n < MAX_FIRED_FAILURES) return [];
+    const failure = getEvent(db, last_id!)!;
+    const { entry_id, round, reason } = failure.payload as Extract<EventPayload, { kind: "memory_draft_failed" | "objection_attribution_failed" }>;
+    const entry = getEvent(db, entry_id) as DecisionLogEntry;
+    return [
+      {
+        ...key,
+        entry: { id: entry_id, text: objectedEntryText(entry) },
+        task: { id: t.task_id, title: getTask(db, t.task_id)!.title },
+        // 未帰責の entry は cause が空(ADR 0168 決定3)
+        cause: latestAttribution(db, entry)?.cause ?? null,
+        round,
+        last_failure: { reason, at: failure.created_at },
+      },
+    ];
+  });
+}
+
+/** 打ち切りの行への人間の Retry(もう3回撃つ)/ Dismiss(二度と撃たない)。追記だけの event で、打ち切りでない対象は DomainError。 */
+export function markHaltedRefire(db: Db, mark: "retried" | "dismissed", key: RefireKey, origin: "webui" | "mcp", now: Date): number {
+  const row = listHaltedRefires(db).find((r) => r.refire === key.refire && r.target === key.target);
+  if (!row) throw new DomainError(`no halted ${key.refire} refire for target ${key.target}`);
+  const payload = { kind: mark === "retried" ? ("refire_retried" as const) : ("refire_dismissed" as const), ...key };
+  return appendEvent(db, { taskId: row.task.id, workerId: HUMAN_WORKER_ID, origin, payload, at: now });
 }
 
 /** 帰責の入力を注釈 event から組む: 異議エントリ本文・steering 列・その注釈より前の decision log。 */
@@ -392,7 +450,7 @@ export async function draftBehaviorCandidate(db: Db, deps: BoardCallDeps, attrib
     return; // workspace の無い task は Memory の置き場が無く、何度撃っても同じ —— 宛先の無い起草と同じく何も残さない
   }
   await singleFlight(db, `draft:${attribution.id}`, async () => {
-    if (!refireDue(db, "memory_draft_failed", attribution.id, now)) return;
+    if (!refireDue(db, { refire: "draft", target: attribution.id }, now)) return;
     // 入力が組めない帰責(出所の異議が壊れている)は撃って失敗したのではないので、失敗 event に畳まず投げる
     const input = round === "initial" ? objectionInput(db, attribution) : secondRoundInput(db, taskId, attribution);
     const call = boardCallSetting(db, deps.behaviorDraftClient, deps.containers);

@@ -7,7 +7,16 @@ import {
   InvalidAgentIconError,
   UnknownAuthorityProfileError,
 } from "./agent-create.js";
-import { type AttributionClient, attributeObjections, type BehaviorDraftClient, type BoardCallDeps, draftAfterCommit } from "./attribution.js";
+import {
+  type AttributionClient,
+  attributeObjections,
+  type BehaviorDraftClient,
+  type BoardCallDeps,
+  draftAfterCommit,
+  listHaltedRefires,
+  markHaltedRefire,
+  refireKeySchema,
+} from "./attribution.js";
 import { boardHalts } from "./board-halt.js";
 import { quarantineCliAuthFailure } from "./cli-auth.js";
 import type { Clock } from "./clock.js";
@@ -1729,6 +1738,17 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       restoreMemoryEntry(db, { entry_id, restorer: HUMAN_AUTHOR }, "webui", clock.now()),
     ),
   );
+  // ADR 0164 決定5 / issue #1066: 撃ち直しを打ち切った起草と第2回の帰責。Retry / Dismiss は打ち切りの行にだけ効き、他は DomainError で 400
+  router.get("/settings/memory/halted-refires", (_req, res) => {
+    res.json({ halted: listHaltedRefires(db) } satisfies WireContract["GET /api/settings/memory/halted-refires"]);
+  });
+  const haltedRefireKey = refireKeySchema.extend({ target: z.coerce.number().int().positive() });
+  for (const [verb, mark] of [["retry", "retried"], ["dismiss", "dismissed"]] as const) {
+    router.post(
+      `/settings/memory/halted-refires/:refire/:target/${verb}`,
+      validatedWrite(haltedRefireKey, (key) => ({ event_id: markHaltedRefire(db, mark, key, "webui", clock.now()) })),
+    );
+  }
   router.post(
     "/settings/memory/branches/move",
     validatedWrite(memoryBranchMoveSchema, ({ workspace, path, to_workspace, to_path }) =>

@@ -8,7 +8,7 @@ import {
   InvalidAgentIconError,
   UnknownAuthorityProfileError,
 } from "./agent-create.js";
-import type { AttributionClient, BehaviorDraftClient, BoardCallDeps } from "./attribution.js";
+import { type AttributionClient, type BehaviorDraftClient, type BoardCallDeps, listHaltedRefires, markHaltedRefire, refireKeySchema } from "./attribution.js";
 import { boardHalts } from "./board-halt.js";
 import type { Clock } from "./clock.js";
 import type { Db } from "./db.js";
@@ -707,6 +707,26 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
     },
     async ({ entry_id }) => memoryVerb(() => restoreMemoryEntry(deps.db, { entry_id, restorer: HUMAN_AUTHOR }, "mcp", deps.clock.now())),
   );
+  server.registerTool(
+    "list_halted_refires",
+    {
+      description:
+        "List the Behavior drafts (refire draft, target = the attribution event id) and second-round attributions (refire second_round, " +
+        "target = the objected entry id) the board stopped refiring after 3 failed calls since the last retry. Each row shows the objected " +
+        "entry, its task, cause (null = unattributed), round, and the last failure's reason and time.",
+    },
+    async () => toolResult({ halted: listHaltedRefires(deps.db) }),
+  );
+  for (const [name, mark, effect] of [
+    ["retry_halted_refire", "retried", "Retry a halted refire: the board fires it again at the next pickup poll, up to 3 more failed calls."],
+    ["dismiss_halted_refire", "dismissed", "Dismiss a halted refire: it leaves the list and the board never fires it again (nothing to learn, or you wrote the behavior yourself)."],
+  ] as const) {
+    server.registerTool(
+      name,
+      { description: `${effect} Refused for anything not currently in list_halted_refires.`, inputSchema: refireKeySchema.shape },
+      async (key) => memoryVerb(() => ({ event_id: markHaltedRefire(deps.db, mark, key, "mcp", deps.clock.now()) })),
+    );
+  }
   server.registerTool(
     "rebuild_memory_index",
     { description: "Rebuild the memory entry table and its search index by replaying the board's memory events." },
