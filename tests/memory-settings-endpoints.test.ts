@@ -1,8 +1,8 @@
 import { afterEach, expect, it } from "vitest";
 import { previewCase, recordKnowledge } from "../src/memory.js";
 import { logDecision, registerTask } from "../src/tasks.js";
-import { FakeTranslationClient } from "./fakes.js";
-import { api, bootTidepool, commit, HOUR, KEEP_FIXTURES, managementMcpClient, nextPoll, objectedForDraft, registerWork, type Tidepool } from "./harness.js";
+import { FakeAllocationClient, FakeTranslationClient } from "./fakes.js";
+import { api, bootTidepool, children, commit, HOUR, KEEP_FIXTURES, managementMcpClient, nextPoll, objectedForDraft, registerWork, type Tidepool } from "./harness.js";
 
 let t: Tidepool;
 afterEach(() => t?.stop());
@@ -345,7 +345,7 @@ it("管理MCP の restore_memory_entry は無効化済みのエントリを doma
 
 // 撃ち直しの打ち切りと Retry / Dismiss(ADR 0164 決定5 / issue #1066)
 
-const halted = async (t: Tidepool) => (await api(t.baseUrl, "GET", "/api/settings/memory/halted-refires")).json.halted;
+const halted = async (t: Tidepool) => (await api(t.baseUrl, "GET", "/api/settings/execution/halted-refires")).json.halted;
 
 const taskEvents = async (t: Tidepool, taskId: string, kind: string) =>
   (await api(t.baseUrl, "GET", `/api/tasks/${taskId}/events`)).json.filter((e: any) => e.kind === kind);
@@ -440,7 +440,7 @@ it("POST .../retry で打ち切りの起草はすぐ次の poll で撃たれ、�
   const s = await draftHalted("retried");
   t = s.t;
 
-  const retried = await api(t.baseUrl, "POST", `/api/settings/memory/halted-refires/draft/${s.attribution.id}/retry`);
+  const retried = await api(t.baseUrl, "POST", `/api/settings/execution/halted-refires/draft/${s.attribution.id}/retry`);
   expect(retried).toEqual({ status: 200, json: { event_id: expect.any(Number) } });
   expect(await halted(t)).toEqual([]);
   await nextPoll(t);
@@ -470,7 +470,7 @@ it("POST .../retry で打ち切りの起草はすぐ次の poll で撃たれ、�
   ]);
   // 撃ち直しが成功して candidate のある起草は打ち切りでない
   for (const verb of ["retry", "dismiss"]) {
-    expect((await api(t.baseUrl, "POST", `/api/settings/memory/halted-refires/draft/${s.attribution.id}/${verb}`)).status).toBe(400);
+    expect((await api(t.baseUrl, "POST", `/api/settings/execution/halted-refires/draft/${s.attribution.id}/${verb}`)).status).toBe(400);
   }
 });
 
@@ -478,7 +478,7 @@ it("打ち切りでない件への Retry / Dismiss は 400 / tool error: 3回未
   const s = await draftHalted("refused");
   t = s.t;
   const post = async (verb: "retry" | "dismiss", key: { refire: string; target: number }) =>
-    (await api(t.baseUrl, "POST", `/api/settings/memory/halted-refires/${key.refire}/${key.target}/${verb}`)).status;
+    (await api(t.baseUrl, "POST", `/api/settings/execution/halted-refires/${key.refire}/${key.target}/${verb}`)).status;
   const draft = { refire: "draft", target: s.attribution.id };
   const client = await managementMcpClient(t.baseUrl);
   try {
@@ -499,4 +499,80 @@ it("打ち切りでない件への Retry / Dismiss は 400 / tool error: 3回未
   await t.clock.advance(HOUR);
   expect(await post("dismiss", draft)).toBe(200);
   expect([await post("dismiss", draft), await post("retry", draft)]).toEqual([400, 400]);
+});
+
+// 配分評価の打ち切り(ADR 0172 決定3 / issue #1139)
+
+/** 撃つたびに失敗する配分評価の client。統合点レビューの完了が促す poll で1回目が撃たれる。 */
+function failingAllocation() {
+  const allocationClient = new FakeAllocationClient();
+  allocationClient.scriptFailure(new Error("claude CLI timed out"));
+  return allocationClient;
+}
+
+it("配分評価が撃って3回失敗すると、settings の一覧と管理MCP の一覧に起草の行と並んで review と被レビュー task の行が出る", async () => {
+  const s = await objectedForDraft("hopeless", { initial: { cause: "preference", evidence: "taste" }, allocationClient: failingAllocation() });
+  t = s.t;
+  s.behaviorDraftClient.scriptDraft(s.entry.id, new Error("claude CLI timed out"));
+  await commit(t, s.task.id, "hopeless");
+  await t.clock.advance(HOUR);
+  await t.clock.advance(HOUR);
+
+  const review = (await children(t, s.task.id)).find((x: any) => x.title === "review: hopeless");
+  const [completed] = await taskEvents(t, review.id, "task_completed");
+  const [, , last] = await taskEvents(t, s.task.id, "allocation_review_failed");
+  const rows = await halted(t);
+  expect(rows).toEqual([
+    expect.objectContaining({ refire: "draft", task: { id: s.task.id, title: "hopeless" } }),
+    {
+      refire: "allocation",
+      target: completed.id,
+      review: { id: review.id, title: "review: hopeless" },
+      task: { id: s.task.id, title: "hopeless" },
+      last_failure: { reason: "claude CLI timed out", at: last.created_at },
+    },
+  ]);
+  const client = await managementMcpClient(t.baseUrl);
+  try {
+    expect(await toolCaller(client)("list_halted_refires", {})).toEqual({ isError: false, json: { halted: rows } });
+  } finally {
+    await client.close();
+  }
+});
+
+it("打ち切りの配分評価は POST .../retry で次の poll にまた撃たれ、管理MCP の Dismiss の後は二度と撃たれず、どちらも被レビュー task の人間の event に残る", async () => {
+  const allocationClient = failingAllocation();
+  const s = await objectedForDraft("hopeless review", { allocationClient });
+  t = s.t;
+  await t.clock.advance(HOUR);
+  await t.clock.advance(HOUR);
+  const [row] = await halted(t);
+  const key = { refire: "allocation", target: row.target };
+  expect(row).toMatchObject(key);
+
+  const retried = await api(t.baseUrl, "POST", `/api/settings/execution/halted-refires/allocation/${row.target}/retry`);
+  expect(retried).toEqual({ status: 200, json: { event_id: expect.any(Number) } });
+  expect(await halted(t)).toEqual([]);
+  await nextPoll(t);
+  expect(allocationClient.calls).toHaveLength(4);
+  await t.clock.advance(HOUR);
+  await t.clock.advance(HOUR);
+  expect(await halted(t)).toEqual([expect.objectContaining(key)]);
+
+  const client = await managementMcpClient(t.baseUrl);
+  try {
+    expect(await toolCaller(client)("dismiss_halted_refire", key)).toEqual({ isError: false, json: { event_id: expect.any(Number) } });
+  } finally {
+    await client.close();
+  }
+  await t.clock.advance(HOUR);
+  await t.clock.advance(HOUR);
+
+  expect(await halted(t)).toEqual([]);
+  expect(allocationClient.calls).toHaveLength(6);
+  const human = [...(await taskEvents(t, s.task.id, "refire_retried")), ...(await taskEvents(t, s.task.id, "refire_dismissed"))];
+  expect(human.map((e: any) => [e.worker_id, e.origin, e.payload])).toEqual([
+    ["human", "webui", { kind: "refire_retried", ...key }],
+    ["human", "mcp", { kind: "refire_dismissed", ...key }],
+  ]);
 });

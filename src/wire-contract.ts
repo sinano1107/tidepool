@@ -308,17 +308,15 @@ export interface WireContract {
       }>;
     }>;
   };
-  /** 撃ち直しを打ち切った起草と第2回の帰責(src/attribution.ts の listHaltedRefires、ADR 0164 決定5)。cause は未帰責なら null。 */
-  "GET /api/settings/memory/halted-refires": {
-    halted: Array<{
-      refire: "draft" | "second_round";
-      target: number;
-      entry: { id: number; text: string };
-      task: { id: string; title: string };
-      cause: Cause | null;
-      round: "initial" | "after_rca";
-      last_failure: { reason: string; at: string };
-    }>;
+  /** 撃ち直しを打ち切った振り返り Board call(src/attribution.ts の listHaltedRefires、ADR 0164 決定5 / ADR 0172 決定3)。
+   *  配分評価の行は review と被レビュー task、起草と第2回の行は entry とその帰責(cause は未帰責なら null)。 */
+  "GET /api/settings/execution/halted-refires": {
+    halted: Array<
+      { target: number; task: { id: string; title: string }; last_failure: { reason: string; at: string } } & (
+        | { refire: "allocation"; review: { id: string; title: string } }
+        | { refire: "draft" | "second_round"; entry: { id: number; text: string }; cause: Cause | null; round: "initial" | "after_rca" }
+      )
+    >;
   };
   /** 事例の case 描画(src/memory.ts の MemoryCase、ADR 0153 決定3): decision entry なら本文と steering、session なら decision 列。 */
   "GET /api/settings/memory/cases/:event_id":

@@ -1908,26 +1908,15 @@ function MemorySettingsCard({ settings, say, onSaved, edit }) {
     }
   )));
 }
-function HaltedRefiresCard({ say }) {
+function HaltedRefiresCard({ rows, say, onChanged }) {
   const { Button, Card } = window.TidepoolDesignSystem_8a0ead;
-  const [rows, setRows] = React.useState([]);
   const [busy, setBusy] = React.useState(false);
-  const load = async () => {
-    try {
-      setRows((await api("GET /api/settings/memory/halted-refires")).halted);
-    } catch (err) {
-      say("danger", "halted refires load failed", String(err.message || err));
-    }
-  };
-  React.useEffect(() => {
-    load();
-  }, []);
   const act = async (row, verb) => {
     setBusy(true);
     try {
-      await api(`/api/settings/memory/halted-refires/${row.refire}/${row.target}/${verb}`, {});
-      say("success", verb === "retry" ? "refire retried" : "refire dismissed", `entry #${row.entry.id}`);
-      await load();
+      await api(`/api/settings/execution/halted-refires/${row.refire}/${row.target}/${verb}`, {});
+      say("success", verb === "retry" ? "refire retried" : "refire dismissed", row.task.title);
+      await onChanged();
     } catch (err) {
       say("danger", `${verb} failed`, String(err.message || err));
     }
@@ -1935,7 +1924,7 @@ function HaltedRefiresCard({ say }) {
   };
   if (rows.length === 0) return null;
   const muted = { margin: 0, fontSize: "var(--text-xs)", color: "var(--text-muted)" };
-  return /* @__PURE__ */ React.createElement(Card, { style: { display: "flex", flexDirection: "column", gap: 10 } }, /* @__PURE__ */ React.createElement("span", { style: settingsCardLabel }, "halted refires"), /* @__PURE__ */ React.createElement("p", { style: muted }, "the board stopped retrying these after 3 failed calls. retry to fire again, dismiss to stop learning from it."), rows.map((row) => /* @__PURE__ */ React.createElement("div", { key: `${row.refire}:${row.target}`, style: { display: "flex", flexDirection: "column", gap: 4, borderTop: "1px solid var(--border-default)", paddingTop: 10 } }, /* @__PURE__ */ React.createElement("p", { style: { ...muted, fontFamily: "var(--font-mono)" } }, row.refire === "draft" ? "behavior draft" : "second-round attribution", " \xB7 entry #", row.entry.id, " \xB7 ", row.task.title, " \xB7 ", row.cause ?? "unattributed", " \xB7 ", row.round), /* @__PURE__ */ React.createElement("p", { style: { margin: 0, fontSize: "var(--text-sm)" } }, row.entry.text), /* @__PURE__ */ React.createElement("p", { style: muted }, "last failure ", new Date(row.last_failure.at).toLocaleString(), ": ", row.last_failure.reason), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8 } }, /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", disabled: busy, onClick: () => act(row, "retry") }, "Retry"), /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "sm", disabled: busy, onClick: () => act(row, "dismiss") }, "Dismiss")))));
+  return /* @__PURE__ */ React.createElement(Card, { style: { display: "flex", flexDirection: "column", gap: 10 } }, /* @__PURE__ */ React.createElement("span", { style: settingsCardLabel }, "halted refires"), /* @__PURE__ */ React.createElement("p", { style: muted }, "retrospective Board calls (allocation review, attribution, drafting) the board stopped retrying after 3 failed calls. retry to fire again, dismiss to never fire it."), rows.map((row) => /* @__PURE__ */ React.createElement("div", { key: `${row.refire}:${row.target}`, style: { display: "flex", flexDirection: "column", gap: 4, borderTop: "1px solid var(--border-default)", paddingTop: 10 } }, row.refire === "allocation" ? /* @__PURE__ */ React.createElement("p", { style: { ...muted, fontFamily: "var(--font-mono)" } }, "allocation review \xB7 ", row.review.title, " \xB7 ", row.task.title) : /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("p", { style: { ...muted, fontFamily: "var(--font-mono)" } }, row.refire === "draft" ? "behavior draft" : "second-round attribution", " \xB7 entry #", row.entry.id, " \xB7 ", row.task.title, " \xB7 ", row.cause ?? "unattributed", " \xB7 ", row.round), /* @__PURE__ */ React.createElement("p", { style: { margin: 0, fontSize: "var(--text-sm)" } }, row.entry.text)), /* @__PURE__ */ React.createElement("p", { style: muted }, "last failure ", new Date(row.last_failure.at).toLocaleString(), ": ", row.last_failure.reason), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8 } }, /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", disabled: busy, onClick: () => act(row, "retry") }, "Retry"), /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "sm", disabled: busy, onClick: () => act(row, "dismiss") }, "Dismiss")))));
 }
 function MetaReviewSettingsCard({ settings, say, onSaved, edit }) {
   const { Card, FieldRow, Input } = window.TidepoolDesignSystem_8a0ead;
@@ -2794,6 +2783,13 @@ function SettingsScreen({ say, memoryFocus, registerLeaveGuard }) {
   React.useEffect(() => {
     loadMetaReviewSettings();
   }, []);
+  const [haltedRefires, setHaltedRefires] = React.useState(null);
+  const loadHaltedRefires = async () => {
+    setHaltedRefires((await api("GET /api/settings/execution/halted-refires")).halted);
+  };
+  React.useEffect(() => {
+    loadHaltedRefires();
+  }, []);
   const [githubLoggedIn, setGithubLoggedIn] = React.useState(null);
   React.useEffect(() => {
     api("GET /api/settings/github").then(({ loggedIn }) => setGithubLoggedIn(loggedIn)).catch(() => setGithubLoggedIn(null));
@@ -2915,7 +2911,7 @@ function SettingsScreen({ say, memoryFocus, registerLeaveGuard }) {
     setStack(next);
     closeEdit();
   });
-  const boardLoaded = displayLanguageLoaded && quietHoursLoaded && !!providerPaceOffsets && !!executionSettings && !!memorySettings && !!metaReviewSettings;
+  const boardLoaded = displayLanguageLoaded && quietHoursLoaded && !!providerPaceOffsets && !!executionSettings && !!memorySettings && !!metaReviewSettings && !!haltedRefires;
   React.useEffect(() => {
     registerLeaveGuard((move) => guard(move));
     return () => registerLeaveGuard(null);
@@ -3074,7 +3070,7 @@ function SettingsScreen({ say, memoryFocus, registerLeaveGuard }) {
         onSaved: loadQuietHours,
         edit
       }
-    ), providerPaceOffsets && /* @__PURE__ */ React.createElement(PaceOffsetsCard, { offsets: providerPaceOffsets, say, onSaved: loadPaceOffsets, edit }), executionSettings && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(ExecutionDefaultsCard, { settings: executionSettings, say, onSaved: loadExecutionSettings, edit }), /* @__PURE__ */ React.createElement(ExecutionTableCard, { settings: executionSettings, say, onSaved: loadExecutionSettings, edit })), memorySettings && /* @__PURE__ */ React.createElement(MemorySettingsCard, { settings: memorySettings, say, onSaved: loadMemorySettings, edit }), displayLanguageLoaded && // the focus waits for every card above: one that loads later would push the entry back out of view
+    ), providerPaceOffsets && /* @__PURE__ */ React.createElement(PaceOffsetsCard, { offsets: providerPaceOffsets, say, onSaved: loadPaceOffsets, edit }), executionSettings && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(ExecutionDefaultsCard, { settings: executionSettings, say, onSaved: loadExecutionSettings, edit }), haltedRefires && /* @__PURE__ */ React.createElement(HaltedRefiresCard, { rows: haltedRefires, say, onChanged: loadHaltedRefires }), /* @__PURE__ */ React.createElement(ExecutionTableCard, { settings: executionSettings, say, onSaved: loadExecutionSettings, edit })), memorySettings && /* @__PURE__ */ React.createElement(MemorySettingsCard, { settings: memorySettings, say, onSaved: loadMemorySettings, edit }), displayLanguageLoaded && // the focus waits for every card above: one that loads later would push the entry back out of view
     /* @__PURE__ */ React.createElement(
       MemoryEntriesCard,
       {
@@ -3085,7 +3081,7 @@ function SettingsScreen({ say, memoryFocus, registerLeaveGuard }) {
         edit,
         focus: boardLoaded ? memoryFocus : null
       }
-    ), metaReviewSettings && /* @__PURE__ */ React.createElement(MetaReviewSettingsCard, { settings: metaReviewSettings, say, onSaved: loadMetaReviewSettings, edit }), !boardLoaded && /* @__PURE__ */ React.createElement(Card, { style: { fontSize: "var(--text-sm)", color: "var(--text-secondary)" } }, "loading\u2026"), /* @__PURE__ */ React.createElement("p", { style: settingsFootnote }, "applies to every task the board picks up"), (githubLoggedIn !== null || translateUsage !== null || translateUsageFailed) && /* @__PURE__ */ React.createElement("p", { style: settingsCardLabel }, "board state"), githubLoggedIn !== null && /* @__PURE__ */ React.createElement(GitHubLoginCard, { loggedIn: githubLoggedIn }), (translateUsage !== null || translateUsageFailed) && /* @__PURE__ */ React.createElement(TranslateUsageCard, { records: translateUsage }), /* @__PURE__ */ React.createElement(HaltedRefiresCard, { say }));
+    ), metaReviewSettings && /* @__PURE__ */ React.createElement(MetaReviewSettingsCard, { settings: metaReviewSettings, say, onSaved: loadMetaReviewSettings, edit }), !boardLoaded && /* @__PURE__ */ React.createElement(Card, { style: { fontSize: "var(--text-sm)", color: "var(--text-secondary)" } }, "loading\u2026"), /* @__PURE__ */ React.createElement("p", { style: settingsFootnote }, "applies to every task the board picks up"), (githubLoggedIn !== null || translateUsage !== null || translateUsageFailed) && /* @__PURE__ */ React.createElement("p", { style: settingsCardLabel }, "board state"), githubLoggedIn !== null && /* @__PURE__ */ React.createElement(GitHubLoginCard, { loggedIn: githubLoggedIn }), (translateUsage !== null || translateUsageFailed) && /* @__PURE__ */ React.createElement(TranslateUsageCard, { records: translateUsage }));
   } else if (!sec) {
     body = /* @__PURE__ */ React.createElement(ScreenHeader, { title: "Settings", backLabel: "Settings", onBack: () => go([]) });
   } else if (recordName === void 0) {

@@ -60,7 +60,7 @@ function board() {
       },
     });
   };
-  /** outcome = judge と、評価(allocation / cause / evidence)または unevaluated。 */
+  /** outcome = judge と評価(allocation / cause / evidence)。 */
   const allocate = (taskId: string, spawned: number, outcome: object) =>
     appendEvent(db, {
       taskId,
@@ -134,7 +134,7 @@ it("読み口の既定の窓は読み手より前の routing の登録の waterm
   expect(listRoutingShadow(db, reader, { since_watermark: 0 }).shadow.map((r) => r.task_id)).toEqual([before.id, after.id]);
 });
 
-it("list_allocations は評価された注釈を source.tier × agent × allocation × cause で数え、judge の model が worker のセルと同じ件数を添える —— unevaluated は数えない", () => {
+it("list_allocations は評価された注釈を source.tier × agent × allocation × cause で数え、judge の model が worker のセルと同じ件数を添える", () => {
   const { db, work, spawn, exit, allocate, routingReview } = board();
   const task = work("t");
   // 観測された具体 id(claude-fable-5)は表の alias 行(fable)の judge と同じ model
@@ -145,9 +145,8 @@ it("list_allocations は評価された注釈を source.tier × agent × allocat
   allocate(task.id, other, { judge, allocation: "overpowered", cause: "uncertain", evidence: "e" });
   const declared = spawn(task.id, "reef-crab", opus, "task");
   allocate(task.id, declared, { judge, allocation: "overpowered", cause: "uncertain", evidence: "e" });
-  const unjudged = spawn(task.id, "deckhand", opus);
-  allocate(task.id, unjudged, { judge: null, allocation: "appropriate", cause: "uncertain", evidence: "e" });
-  allocate(task.id, unjudged, { judge, unevaluated: "throttled" });
+  const deckhand = spawn(task.id, "deckhand", opus);
+  allocate(task.id, deckhand, { judge, allocation: "appropriate", cause: "uncertain", evidence: "e" });
 
   expect(listAllocations(db, routingReview(), {})).toEqual({
     allocations: [

@@ -1,4 +1,4 @@
-import type { Allocation, AllocationUnevaluatedReason } from "./allocation-review.js";
+import type { Allocation } from "./allocation-review.js";
 import type { Cause } from "./cause.js";
 import type { Db } from "./db.js";
 import type { ExecutionSettingRow, ExecutionSettingsChange, ProviderSource, registryPinChanges, routingPinChanges, Tier, TierSource } from "./execution-setting.js";
@@ -340,21 +340,22 @@ export type EventPayload =
   // ADR 0111 決定4 / issue #547: 配分評価 —— review の verdict が確定した後、盤面が
   // Board call に問うた「この結果に対する実行設定は適切だったか」。**判断種別**の
   // 注釈であり、観測(worker_exited.usage / Precedent の行動列)とはこの kind で
-  // 区別される。task_id は被レビュー task、`worker_spawned_event_id` はその最新
-  // session(episode の同一性キー)。null はレビューされた task に session が
-  // 無かった(人間登録の task 等)。`unevaluated` は「判定が得られなかった」の
-  // 理由コードで、`allocation: "uncertain"`(判定が「分からない」)とは別の値。
-  // `judge` は Board call 自身の実行設定(ADR 0150 決定8)—— 呼び出し前に表から決まるので
-  // unevaluated にも載る。null は表に Board call の行が無く解決できなかった。
-  | ({
+  // 区別される。task_id は被レビュー task、`worker_spawned_event_id` は review の完了より前の
+  // 最新 session(episode の同一性キー)。判断が返ったときだけ書く —— 撃てなかった・session の無い
+  // task には何も書かず、撃って失敗したら `allocation_review_failed` だけを残す(ADR 0172 決定2)。
+  // `judge` は Board call 自身の実行設定(ADR 0150 決定8)。
+  | {
       kind: "allocation_reviewed";
       review_task_id: string;
-      worker_spawned_event_id: number | null;
-      judge: Pick<ExecutionSettingRow, "provider" | "model" | "effort"> | null;
-    } & (
-      | { allocation: Allocation; cause: Cause; evidence: string }
-      | { unevaluated: AllocationUnevaluatedReason }
-    ))
+      worker_spawned_event_id: number;
+      judge: Pick<ExecutionSettingRow, "provider" | "model" | "effort">;
+      allocation: Allocation;
+      cause: Cause;
+      evidence: string;
+    }
+  // ADR 0172 決定2: 配分評価の Board call が撃って失敗した(被レビュー task に帰属)。`review_completed_event_id` は
+  // review の `task_completed` —— 撃ち直しの回数と間隔はこれで数える(ADR 0164 決定4・5)。
+  | { kind: "allocation_review_failed"; review_completed_event_id: number; review_task_id: string; reviewed_task_id: string; reason: string }
   // ADR 0115 / issue #574: 帰責 —— 異議が束ねられる commit 時、盤面が Board call に
   // 問うた「この異議は誰の落ち度か」。配分評価と同じく**判断種別**の注釈で、観測
   // (objection_raised)とはこの kind で区別され、決定 log には現れない。task_id は
@@ -468,9 +469,10 @@ export type EventPayload =
   // 判断ではないので `objection_attributed` には書かない。撃ち直すのは第2回だけで、その回数と間隔は
   // entry ごとに `round = after_rca` のこれで数える —— 初回(`initial`)は撃ち直さない。
   | { kind: "objection_attribution_failed"; entry_id: number; round: "initial" | "after_rca"; reason: string }
-  // ADR 0164 決定5 / issue #1066: 撃ち直しを打ち切った起草(target = 帰責 event の id)/ 第2回の帰責(target = entry の id)への
-  // 人間の Retry(以後の失敗を数え直す)と Dismiss(二度と撃たない)。異議されたタスクに帰属。
-  | { kind: "refire_retried" | "refire_dismissed"; refire: "draft" | "second_round"; target: number };
+  // ADR 0164 決定5 / issue #1066: 撃ち直しを打ち切った起草(target = 帰責 event の id)/ 第2回の帰責(target = entry の id)/
+  // 配分評価(target = review の task_completed event の id、ADR 0172 決定3)への人間の Retry(以後の失敗を数え直す)と
+  // Dismiss(二度と撃たない)。失敗 event と同じタスクに帰属。
+  | { kind: "refire_retried" | "refire_dismissed"; refire: "draft" | "second_round" | "allocation"; target: number };
 
 export type EventKind = EventPayload["kind"];
 

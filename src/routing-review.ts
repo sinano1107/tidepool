@@ -65,8 +65,8 @@ export function listRoutingShadow(db: Db, readerTaskId: string, input: ReadWindo
   return { shadow: shown, truncated };
 }
 
-/** 配分評価の分布: 評価された注釈を worker session の (`source.tier`, agent, allocation, cause) で数え、judge の model が
- *  worker のセルの model と同じだった件数を添える(ADR 0150 決定8)。unevaluated の注釈は分布に入らない。 */
+/** 配分評価の分布: 注釈を worker session の (`source.tier`, agent, allocation, cause) で数え、judge の model が
+ *  worker のセルの model と同じだった件数を添える(ADR 0150 決定8)。 */
 export function listAllocations(db: Db, readerTaskId: string, input: ReadWindow) {
   const episodes = new Map(loadEpisodes(db).map((e) => [e.worker_spawned_event_id, e]));
   const annotations = db
@@ -75,13 +75,13 @@ export function listAllocations(db: Db, readerTaskId: string, input: ReadWindow)
   const groups = new Map<string, { source_tier: string; agent: string; allocation: string; cause: string; count: number; judged_by_same_model: number }>();
   for (const { payload } of annotations) {
     const p = JSON.parse(payload) as Extract<EventPayload, { kind: "allocation_reviewed" }>;
-    const episode = p.worker_spawned_event_id === null ? undefined : episodes.get(p.worker_spawned_event_id);
-    if (!("allocation" in p) || !episode) continue;
+    const episode = episodes.get(p.worker_spawned_event_id);
+    if (!episode) continue;
     const key = JSON.stringify([episode.source.tier, episode.agent, p.allocation, p.cause]);
     const group = groups.get(key) ?? { source_tier: episode.source.tier, agent: episode.agent, allocation: p.allocation, cause: p.cause, count: 0, judged_by_same_model: 0 };
     group.count += 1;
     // judge は表の行の綴り(alias 可)、セルは観測された具体 id —— 表の照合と同じ部分一致
-    if (p.judge?.provider === episode.cell.provider && windowMatchesModel(p.judge.model, episode.cell.model)) group.judged_by_same_model += 1;
+    if (p.judge.provider ===episode.cell.provider && windowMatchesModel(p.judge.model, episode.cell.model)) group.judged_by_same_model += 1;
     groups.set(key, group);
   }
   const { rows, truncated } = paged([...groups.values()], input.page);
