@@ -317,6 +317,18 @@ function restoredAs(db: Db): Map<number, number> {
   );
 }
 
+/** 本文が同じ後継の鎖(row 自身から末尾まで): `path_moved` の後継と、restored を渡せば復元の複製(ADR 0167 決定1)。
+ *  どちらの複製も旧より後の行なので鎖は閉じない。 */
+function sameBodyChain(db: Db, row: EntryRow, restored?: Map<number, number>): EntryRow[] {
+  const chain = [row];
+  for (;;) {
+    const last = chain.at(-1)!;
+    const next = last.invalidation_reason === "path_moved" ? last.successor_id : restored?.get(last.id);
+    if (next == null) return chain;
+    chain.push(requireEntry(db, next));
+  }
+}
+
 /** 復元(ADR 0163): 無効化済みのエントリ(4種別、状態は問わない)の本文の側を同じ scope / path に写して新エントリにする ——
  *  移動の複製と同じ形で新規の書き込みの門は掛けず、版は継がない(approved なら版は複製の作成 event)。旧の行は触らず、旧を pin して
  *  いた提案 question も戻さない。`path_moved` と一度復元した旧は複製の側を扱う(移し戻すか、落ちた複製を復元する —— 追記 #1059)
@@ -335,8 +347,7 @@ export function restoreMemoryEntry(
     }
     const copy = restoredAs(db).get(row.id);
     if (copy !== undefined) throw new DomainError(`memory entry ${row.id} was already restored as entry ${copy}: handle that copy instead`);
-    let successor = row.successor_id === null ? undefined : requireEntry(db, row.successor_id);
-    while (successor?.invalidation_reason === "path_moved") successor = requireEntry(db, successor.successor_id!);
+    const successor = row.successor_id === null ? undefined : sameBodyChain(db, requireEntry(db, row.successor_id)).at(-1);
     if (successor && successor.invalidation_reason === null) {
       throw new DomainError(`memory entry ${row.id} was replaced by the live successor ${successor.id}: invalidate that first`);
     }
@@ -1177,6 +1188,12 @@ function visibleEntries(db: Db, reader: Omit<MemoryReader, "taskId">): EntryRow[
     .all(reader.scope, reader.agent) as EntryRow[];
 }
 
+/** 無効化を問わない visibleEntries の門(ADR 0167 決定3): approved、スコープ、宛先。read が求めた id・たどる鎖・落とした行の
+ *  後継を同じ門で見る。 */
+function inSight(row: EntryRow, reader: Omit<MemoryReader, "taskId">): boolean {
+  return row.state === "approved" && (row.scope === null || row.scope === reader.scope) && (row.addressee === null || row.addressee === reader.agent);
+}
+
 /** INDEX の枝: prefix の path と、その path に置かれた定義(workspace が盤面全体に勝つ —— 見える
  *  スコープは task の workspace と盤面全体の2つだけ)。null = 未定義。 */
 interface IndexBranch {
@@ -1398,8 +1415,10 @@ function caseSession(db: Db, anchor: EventRow): { events: EventRow[]; handoff: s
   };
 }
 
-/** id で本文を読む。見えないエントリ(フィルタ外・存在しない id)は黙って返さない。case は Behavior と Exemplar が、
- *  annotations は Exemplar が持つ。 */
+/** id で本文を読む(ADR 0167)。無効化済みの id は本文が同じ後継(`path_moved` の鎖・復元の複製)を見える行の内側でたどり、
+ *  末尾の本文に requested_id(求めた旧 id)を添える —— 同じ行は1件で、自身を求めた id が勝つ。末尾が無効化済みなら本文は返さず
+ *  dropped に末尾の理由と、見える後継を載せる。見えない id(スコープ・宛先・candidate・存在しない)は黙って落とす。case は
+ *  Behavior と Exemplar が、annotations は Exemplar が持つ。 */
 export function readMemory(
   db: Db,
   reader: MemoryReader,
@@ -1408,6 +1427,7 @@ export function readMemory(
 ): {
   entries: Array<{
     id: number;
+    requested_id?: number;
     title: string;
     path: string;
     text: string;
@@ -1416,24 +1436,45 @@ export function readMemory(
     case: MemoryCase | null;
     annotations?: Array<Omit<ExemplarAnnotation, "original">>;
   }>;
+  dropped: Array<{ id: number; reason: InvalidationReason; successor: number | null }>;
   event_id: number;
 } {
   return db.transaction(() => {
-    const entries = visibleEntries(db, reader)
-      .filter((row) => input.ids.includes(row.id))
-      .map(rowToEntry)
-      .map(({ id, kind, title, path, text, source, annotations }) => ({
-        id,
-        title,
-        path,
-        text,
-        source,
-        source_kind: SOURCE_KIND[source.kind],
-        case: kind === "behavior" || kind === "exemplar" ? renderCase(db, source) : null,
-        // 原文は人間の面のもの —— worker には英語の正文だけ(ADR 0015)
-        annotations: annotations?.map(({ original: _, ...annotation }) => annotation),
-      }));
-    return recordPull(db, reader, { verb: "read_memory", input, returned_ids: entries.map((e) => e.id) }, { entries }, at);
+    const restored = restoredAs(db);
+    const found = new Map<number, { row: EntryRow; requested_id?: number }>();
+    const dropped: Array<{ id: number; reason: InvalidationReason; successor: number | null }> = [];
+    for (const id of new Set(input.ids)) {
+      const row = db.prepare("SELECT * FROM memory_entries WHERE id = ?").get(id) as EntryRow | undefined;
+      if (!row || !inSight(row, reader)) continue;
+      const chain = sameBodyChain(db, row, restored);
+      const cut = chain.findIndex((link) => !inSight(link, reader));
+      const tail = chain[(cut === -1 ? chain.length : cut) - 1]!;
+      if (tail.invalidation_reason === null) {
+        if (tail.id === id) found.set(id, { row: tail });
+        else if (!found.has(tail.id)) found.set(tail.id, { row: tail, requested_id: id });
+        continue;
+      }
+      const successor = tail.successor_id === null ? undefined : requireEntry(db, tail.successor_id);
+      dropped.push({ id, reason: tail.invalidation_reason, successor: successor && inSight(successor, reader) ? successor.id : null });
+    }
+    const entries = [...found.values()]
+      .sort((a, b) => a.row.id - b.row.id)
+      .map(({ row, requested_id }) => {
+        const { id, kind, title, path, text, source, annotations } = rowToEntry(row);
+        return {
+          id,
+          ...(requested_id !== undefined && { requested_id }),
+          title,
+          path,
+          text,
+          source,
+          source_kind: SOURCE_KIND[source.kind],
+          case: kind === "behavior" || kind === "exemplar" ? renderCase(db, source) : null,
+          // 原文は人間の面のもの —— worker には英語の正文だけ(ADR 0015)
+          annotations: annotations?.map(({ original: _, ...annotation }) => annotation),
+        };
+      });
+    return recordPull(db, reader, { verb: "read_memory", input, returned_ids: entries.map((e) => e.id), dropped }, { entries, dropped }, at);
   })();
 }
 
