@@ -7,6 +7,7 @@ const input: AttributionInput = {
   entry: "chose plan B",
   steering: ["plan A was the agreed plan"],
   decision_log: ["chose plan B", "completion report: shipped plan B"],
+  memory_read: [],
 };
 
 const judgment = { cause: "requirement_change", evidence: "plan A was agreed after the fact" };
@@ -44,4 +45,23 @@ it("語彙の外の cause や JSON でない応答は reject する(未検証の
     exec: async () => JSON.stringify({ result: "looks like a preference to me" }),
   });
   await expect(prose.judge(input, { model: "fable", effort: "high" })).rejects.toThrow();
+});
+
+it("prompt は cause の memory と、entries を読んだ記憶から名指すことを言い、判定は entries を運ぶ(ADR 0166 決定3)", async () => {
+  const prompts: string[] = [];
+  const memory = { cause: "memory", evidence: "followed the squash note", entries: [3] };
+  const client = new ClaudeAttributionClient({
+    exec: async (_command, args) => {
+      prompts.push(args[1]!);
+      return JSON.stringify({ result: JSON.stringify(memory) });
+    },
+  });
+
+  await expect(
+    client.judge({ ...input, memory_read: [{ id: 3, kind: "behavior", title: "Squash", text: "Squash before merge." }] }, { model: "fable", effort: "high" }),
+  ).resolves.toEqual(memory);
+
+  expect(prompts[0]).toContain("memory is when a memory entry the worker read before the decision, and followed, was itself wrong");
+  expect(prompts[0]).toContain('"entries"');
+  expect(prompts[0]).toContain("Squash before merge.");
 });

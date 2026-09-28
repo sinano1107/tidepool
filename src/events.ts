@@ -370,6 +370,8 @@ export type EventPayload =
       objection_event_ids: number[];
       cause: Cause;
       evidence: string;
+      /** cause `memory` のとき名指された誤った entry の id(読んだ集合の内側、ADR 0166 決定3)。他の cause は null。 */
+      entries: number[] | null;
       round: "initial" | "after_rca";
     }
   // ADR 0110 決定5 / issue #545: 人間が settings タブ / 管理MCP から実行設定(表の
@@ -536,8 +538,8 @@ export const HUMAN_FACING_KINDS = ["decision_logged", "task_completed", "premise
  *  objections both ride along. `session_id` is the sole fact the read model
  *  hands the caller for telling the two apart (against the current open
  *  session, if any); `at` and who raised it are deliberately left out
- *  (issue #371). The latest attribution `cause` is joined at read time from
- *  append-only `objection_attributed` events (ADR 0115). */
+ *  (issue #371). The latest attribution `cause` (and its `entries`, ADR 0166)
+ *  is joined at read time from append-only `objection_attributed` events (ADR 0115). */
 export interface LogEntry extends EventRow {
   /** every HUMAN_FACING_KIND is task-scoped, so the join below never leaves this null */
   task_id: string;
@@ -546,6 +548,8 @@ export interface LogEntry extends EventRow {
   workspace: string | null;
   objections: { comment: string; session_id: number }[];
   cause: Cause | null;
+  /** 最新の帰責が `memory` のとき名指された entry の id 列(ADR 0166 決定6)。他の cause・帰責の無いエントリは null。 */
+  entries: number[] | null;
   /** エントリを含む worker session の `worker_spawned` の id(case 描画と同じ窓、`sessionSpawnOf`)。窓の外なら null。 */
   session_event_id: number | null;
 }
@@ -572,15 +576,16 @@ export function listLog(db: Db, defaultWorkspaceName?: string): LogEntry[] {
     list.push({ comment: o.comment, session_id: o.session_id });
     objectionsByEntry.set(o.entry_id, list);
   }
-  const causesByEntry = new Map<number, Cause>();
+  const causesByEntry = new Map<number, { cause: Cause; entries: number[] | null }>();
   for (const row of db
     .prepare(
       `SELECT json_extract(payload, '$.entry_id') AS entry_id,
-              json_extract(payload, '$.cause') AS cause
+              json_extract(payload, '$.cause') AS cause,
+              json_extract(payload, '$.entries') AS entries
          FROM events WHERE kind = 'objection_attributed' ORDER BY id`,
     )
-    .all() as Array<{ entry_id: number; cause: Cause }>) {
-    causesByEntry.set(row.entry_id, row.cause);
+    .all() as Array<{ entry_id: number; cause: Cause; entries: string | null }>) {
+    causesByEntry.set(row.entry_id, { cause: row.cause, entries: row.entries === null ? null : (JSON.parse(row.entries) as number[]) });
   }
   // session の窓を切るのに要るのは spawn と exit だけ。窓の規則は task で絞るので盤面全体を1回で引いて渡す
   // ponytail: エントリ数 × session 数の走査。盤面が育って一覧が重くなったら task ごとに束ねる
@@ -592,7 +597,8 @@ export function listLog(db: Db, defaultWorkspaceName?: string): LogEntry[] {
     return {
       ...entry,
       objections: objectionsByEntry.get(r.id) ?? [],
-      cause: causesByEntry.get(r.id) ?? null,
+      cause: causesByEntry.get(r.id)?.cause ?? null,
+      entries: causesByEntry.get(r.id)?.entries ?? null,
       session_event_id: sessionSpawnOf(sessionEvents, entry)?.id ?? null,
     };
   });

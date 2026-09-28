@@ -269,7 +269,7 @@ it("consolidate の kind exemplar は注釈つきの Exemplar candidate を作�
       taskId: board.review.id,
       workerId: "tidepool",
       origin: "board",
-      payload: { kind: "objection_attributed", entry_id: objected, objection_event_ids: [], cause: "preference", evidence: "e", round: "after_rca" },
+      payload: { kind: "objection_attributed", entry_id: objected, objection_event_ids: [], cause: "preference", evidence: "e", entries: null, round: "after_rca" },
       at: t.clock.now(),
     });
     const replaces = [candidate(t, "Split migrations", null, { event_id: attributed }), candidate(t, "Two commits", null, { event_id: attributed })];
@@ -334,6 +334,19 @@ it("invalidate の提案は target の pin と理由コードを焼き、detail 
     for (const shown of [`#${target}`, "Split migrations, always.", "tidepool", "habits/commits", "deckhand", "environment"]) {
       expect(detail).toContain(shown);
     }
+  } finally {
+    await board.client.close();
+  }
+});
+
+it("invalidate の提案の理由に cause の memory は取れず tool error で、question は立たない(ADR 0166 決定7)", async () => {
+  const board = await boardWithMetaReview();
+  try {
+    const target = await approvedBehavior(board, "Split migrations", "tidepool");
+    const before = (await api(t.baseUrl, "GET", "/api/tasks")).json.length;
+
+    expect(await invalidate(board, target, "memory")).toMatchObject({ error: expect.any(String) });
+    expect((await api(t.baseUrl, "GET", "/api/tasks")).json).toHaveLength(before);
   } finally {
     await board.client.close();
   }

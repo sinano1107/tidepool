@@ -1505,12 +1505,14 @@ const needsSuccessor = (reason: string) => reason === 'superseded';
 const invalidatedBy = (by: WireContract['GET /api/settings/memory/entries']['entries'][number]['invalidated_by']) =>
   !by ? '' : ` by ${'question_id' in by ? `answer to ${by.question_id}` : 'activity' in by ? by.activity : by.worker}`;
 
-function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit }: {
+function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit, focus }: {
   workspaceNames: string[];
   agentNames: string[];
   language: string;
   say: AppSay;
   edit: SettingsEditSlot;
+  /** an entry id to scroll to once the list is in (a memory attribution's link, ADR 0166 決定6) */
+  focus: number | null;
 }) {
   const { Button, Card, Input, Select } = window.TidepoolDesignSystem_8a0ead;
   const [filter, setFilter] = React.useState({ workspace: '', kind: '', state: '' });
@@ -1536,6 +1538,9 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit }: 
     }
   };
   React.useEffect(() => { load(); }, [filter.workspace, filter.kind, filter.state]);
+  React.useEffect(() => {
+    if (focus !== null && entries) document.querySelector(`[data-testid="memory-entry-${focus}"]`)?.scrollIntoView({ block: 'center' });
+  }, [focus, entries]);
 
   const setFilterField = (key: string) => (e: React.ChangeEvent<HTMLSelectElement>) => setFilter({ ...filter, [key]: e.target.value });
   const muted = { margin: 0, fontSize: 'var(--text-xs)', color: 'var(--text-muted)' };
@@ -2264,8 +2269,10 @@ function NewProfileForm({ agentNames, workspaceNames, say, onCreated, edit }: {
 // pace offsets #126) is the SQLite-backed half; workspaces, agents (#72) and
 // authority profiles (#55) are the registry-backed half.
 // biome-ignore lint/correctness/noUnusedVariables: rendered by webui/app.tsx — one concatenated bundle
-function SettingsScreen({ say, registerLeaveGuard }: {
+function SettingsScreen({ say, memoryFocus, registerLeaveGuard }: {
   say: AppSay;
+  /** opens on the Board section's memory list at this entry */
+  memoryFocus: number | null;
   registerLeaveGuard: (guard: ((move: () => void) => boolean) | null) => void;
 }) {
   const { Button, Card, NavRow, ScreenHeader } = window.TidepoolDesignSystem_8a0ead;
@@ -2437,7 +2444,7 @@ function SettingsScreen({ say, registerLeaveGuard }: {
   // stack: [] the index · ['board'] · ['<section>'] · ['<section>', '<name>'].
   // A record is addressed by name, not by list position: the lists reload on
   // every commit, and an index would silently re-point at a different entry.
-  const [stack, setStack] = React.useState<string[]>([]);
+  const [stack, setStack] = React.useState<string[]>(memoryFocus === null ? [] : ['board']);
   // at most one card — record or create form — is in edit mode across the whole
   // surface (決定4): `editing` holds its id, `dirty` whether it has unsaved work
   const [editing, setEditing] = React.useState<string | null>(null);
@@ -2471,6 +2478,7 @@ function SettingsScreen({ say, registerLeaveGuard }: {
     setDirty,
   };
   const go = (next: string[]) => guard(() => { setStack(next); closeEdit(); });
+  const boardLoaded = displayLanguageLoaded && quietHoursLoaded && !!providerPaceOffsets && !!executionSettings && !!memorySettings && !!metaReviewSettings;
 
   // a tab switch unmounts this screen, so it has to ask too (決定4)
   React.useEffect(() => {
@@ -2632,12 +2640,14 @@ function SettingsScreen({ say, registerLeaveGuard }: {
           <MemorySettingsCard settings={memorySettings} say={say} onSaved={loadMemorySettings} edit={edit} />
         )}
         {displayLanguageLoaded && (
-          <MemoryEntriesCard workspaceNames={workspaceNames} agentNames={agentNames} language={displayLanguage} say={say} edit={edit} />
+          // the focus waits for every card above: one that loads later would push the entry back out of view
+          <MemoryEntriesCard workspaceNames={workspaceNames} agentNames={agentNames} language={displayLanguage} say={say} edit={edit}
+            focus={boardLoaded ? memoryFocus : null} />
         )}
         {metaReviewSettings && (
           <MetaReviewSettingsCard settings={metaReviewSettings} say={say} onSaved={loadMetaReviewSettings} edit={edit} />
         )}
-        {(!displayLanguageLoaded || !quietHoursLoaded || !providerPaceOffsets || !executionSettings || !memorySettings || !metaReviewSettings) && (
+        {!boardLoaded && (
           <Card style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)' }}>loading…</Card>
         )}
         <p style={settingsFootnote}>applies to every task the board picks up</p>

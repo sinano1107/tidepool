@@ -279,7 +279,7 @@ it("RCA が起草した Behavior の read は、帰責 event から辿った異�
     taskId: FIXTURE_TASK,
     workerId: "board",
     origin: "board",
-    payload: { kind: "objection_attributed", entry_id: 6, objection_event_ids: [first, second], cause: "capability", evidence: "e", round: "initial" },
+    payload: { kind: "objection_attributed", entry_id: 6, objection_event_ids: [first, second], cause: "capability", evidence: "e", entries: null, round: "initial" },
     at,
   });
   const id = approvedBehavior(db, "Cover the topic", { event_id: attributed });
@@ -304,7 +304,7 @@ async function objectedInTwoSessions() {
     appendEvent(db, { taskId: FIXTURE_TASK, workerId: "human", origin: "webui", payload: { kind: "objection_raised", entry_id: 6, comment, session_id }, at });
   objection("three bullets is too few", 1);
   const second = objection("cover the tide cycle too", 2);
-  const payload = { kind: "objection_attributed" as const, entry_id: 6, objection_event_ids: [second], cause: "preference" as const, evidence: "e", round: "initial" as const };
+  const payload = { kind: "objection_attributed" as const, entry_id: 6, objection_event_ids: [second], cause: "preference" as const, evidence: "e", entries: null, round: "initial" as const };
   const attributed = appendEvent(db, { taskId: FIXTURE_TASK, workerId: "board", origin: "board", payload, at });
   return { db, reader, attribution: { id: attributed, ...payload } };
 }

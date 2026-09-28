@@ -125,6 +125,16 @@ it("fold_memory の successor_id は既にある後継に畳んで無効化の e
   }
 });
 
+it("invalidate_memory は cause の memory を理由コードに取らず tool error で、エントリは残る(ADR 0166 決定7)", async () => {
+  const { client, call, material } = await boardWithMetaReview();
+  try {
+    expect(await call("invalidate_memory", { entry_id: material, reason: "memory" })).toMatchObject({ isError: true });
+    expect((await memoryEntries(t)).map((e) => e.invalidation_reason)).toEqual([null]);
+  } finally {
+    await client.close();
+  }
+});
+
 it("list_memory_entries は scope の名前 / null(盤面全体)/ 省略(すべて)を区別して渡し、読み口5つは event id を載せる", async () => {
   const { client, call, material } = await boardWithMetaReview();
   const now = t.clock.now();

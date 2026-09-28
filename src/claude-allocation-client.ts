@@ -18,6 +18,9 @@ const judgmentSchema = z.object({
   evidence: z.string().min(1),
 });
 
+// memory は読んだ記憶を入力に持つ帰責だけが判定できる(ADR 0166 決定1)ので、配分評価の prompt には載せない
+const ALLOCATION_CAUSES = CAUSES.filter((cause) => cause !== "memory");
+
 /** The question the board asks after quality is fixed (ADR 0111 決定4): the
  *  review has already said whether the deliverable is acceptable; this call
  *  says whether the compute spent on it was the right amount, and why a miss
@@ -32,7 +35,7 @@ function buildPrompt(input: AllocationReviewInput): string {
     "fences, no prose) with these fields: " +
     `"allocation" (one of ${ALLOCATIONS.join(" / ")} — overpowered means a cheaper setting would ` +
     "very likely have produced the same accepted result), " +
-    `"cause" (one of ${CAUSES.join(" / ")} — capability is the model itself falling short; ` +
+    `"cause" (one of ${ALLOCATION_CAUSES.join(" / ")} — capability is the model itself falling short; ` +
     "task_ambiguity and missing_information are the task's own framing; environment is tooling, " +
     "network or sandbox trouble outside the worker; preference and requirement_change are the human's " +
     "taste or a requirement changed after the fact; use uncertain when the evidence does not " +
