@@ -8,7 +8,7 @@ import {
   InvalidAgentIconError,
   UnknownAuthorityProfileError,
 } from "./agent-create.js";
-import type { AttributionClient, BehaviorDraftClient } from "./attribution.js";
+import type { AttributionClient, BehaviorDraftClient, BoardCallDeps } from "./attribution.js";
 import { boardHalts } from "./board-halt.js";
 import type { Clock } from "./clock.js";
 import type { Db } from "./db.js";
@@ -118,6 +118,8 @@ export interface ManagementMcpDeps {
    *  same seam the WebUI router carries. */
   attributionClient?: AttributionClient;
   behaviorDraftClient?: BehaviorDraftClient;
+  /** 容器の前提(ADR 0136 決定7): 不成立なら帰責と起草の Board call は撃てなかった扱い(ADR 0164 決定3)。 */
+  containers?: BoardCallDeps["containers"];
   pollNow: () => void;
   defaultAgentName?: string;
   auditorName?: string;
@@ -908,6 +910,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
               quarantineChecks: deps.quarantineChecks,
               attributionClient: deps.attributionClient,
               behaviorDraftClient: deps.behaviorDraftClient,
+              containers: deps.containers,
               agentAdmin: deps.agentAdmin,
             },
             task,

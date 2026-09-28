@@ -635,6 +635,8 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
     githubAuth: options.githubAuth,
     registry: options.registry,
     agents: agentAdmin?.list,
+    attributionClient: options.attributionClient,
+    behaviorDraftClient: options.behaviorDraftClient,
   });
   // an abandoned triage session may not pause pickup forever: the watchdog
   // closes it past the timeout, and reopening pickup is a "run now" trigger
@@ -775,6 +777,7 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
       translationClient: options.translationClient,
       attributionClient: options.attributionClient,
       behaviorDraftClient: options.behaviorDraftClient,
+      containers,
       quarantineResolvers: options.quarantineResolvers,
       taskExecutionCandidates: options.taskExecutionCandidates,
       isProtectedWorkspace: options.isProtectedWorkspace,
@@ -793,6 +796,7 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
       draftClient: options.draftClient,
       attributionClient: options.attributionClient,
       behaviorDraftClient: options.behaviorDraftClient,
+      containers,
       defaultAgentName: worker.id,
       auditorName,
       agentRegistered: options.agentRegistered,

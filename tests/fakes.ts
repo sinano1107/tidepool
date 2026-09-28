@@ -746,14 +746,14 @@ export class FakeAttributionClient implements AttributionClient {
 }
 
 /** Scripted stand-in at the BehaviorDraftClient seam (issue #617): records every
- *  input; the draft is scripted per objected entry (or an Error to throw); an
- *  unscripted entry throws. */
+ *  input; the draft is scripted per objected entry (or an Error to throw, or a
+ *  promise to hold the call open); an unscripted entry throws. */
 export class FakeBehaviorDraftClient implements BehaviorDraftClient {
   readonly calls: Array<{
     input: BehaviorDraftInput;
     setting: Pick<ExecutionSettingRow, "model" | "effort">;
   }> = [];
-  private readonly scripted = new Map<number, BehaviorDraft | Error>();
+  private readonly scripted = new Map<number, BehaviorDraft | Error | Promise<BehaviorDraft>>();
 
   async draft(
     input: BehaviorDraftInput,
@@ -765,7 +765,7 @@ export class FakeBehaviorDraftClient implements BehaviorDraftClient {
     return answer;
   }
 
-  scriptDraft(entryId: number, draft: BehaviorDraft | Error): void {
+  scriptDraft(entryId: number, draft: BehaviorDraft | Error | Promise<BehaviorDraft>): void {
     this.scripted.set(entryId, draft);
   }
 }

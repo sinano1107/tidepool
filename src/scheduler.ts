@@ -1,4 +1,5 @@
 import { quarantineAgent, UnknownAgentError } from "./agent.js";
+import { type BoardCallDeps, refireAttributions } from "./attribution.js";
 import { boardHalts } from "./board-halt.js";
 import { type CliAuthCheck, quarantineCliAuthForProvider } from "./cli-auth.js";
 import type { Clock } from "./clock.js";
@@ -269,6 +270,9 @@ export function startScheduler(deps: {
   registry?: RegistrySource;
   /** registry の agent 一覧(issue #920): routing の due 判定の直前に tier の提案の pin を照合する。Absent → registry の無い盤面。 */
   agents?: ListAgentTiers;
+  /** 帰責と起草の Board call(ADR 0164): poll が結果の無い帰責を撃ち直す。Absent → 撃ち直すものが無い盤面。 */
+  attributionClient?: BoardCallDeps["attributionClient"];
+  behaviorDraftClient?: BoardCallDeps["behaviorDraftClient"];
 }): Scheduler {
   const {
     db,
@@ -291,6 +295,8 @@ export function startScheduler(deps: {
     githubAuth,
     registry,
     agents,
+    attributionClient,
+    behaviorDraftClient,
   } = deps;
   let inFlight = false;
   const resumeTimer = createResumeTimers(clock, pollNow);
@@ -560,6 +566,13 @@ export function startScheduler(deps: {
       // 読み取りより前なので同じ pass で拾われる。slot 占有・halt より手前(空の盤面でも登録する)。
       // **同期**に保つ —— ADR 0119 決定5 の「最初の await より前に slot を読む」を崩さない。
       registerDueMetaReviews(db, clock.now(), agents);
+      // ADR 0164 決定4: 結果の無い帰責の撃ち直しも同じく同期で相乗りし、Board call は待たない。
+      // 対象の読み取りが倒れても pickup は進める
+      try {
+        refireAttributions(db, { attributionClient, behaviorDraftClient, workspace, containers }, clock.now());
+      } catch (err) {
+        console.error("[scheduler] attribution refire sweep failed:", err);
+      }
       if (await pickupBlocked()) return;
       // agent 名で外れるのは、定義が成立しない agent(quarantineAgent)だけである
       // (ADR 0110 決定3 / issue #544)。
