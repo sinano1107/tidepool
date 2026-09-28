@@ -398,7 +398,7 @@ it("第2回の帰責が撃って3回失敗すると両方の一覧に出て、�
   ]);
 });
 
-it("POST .../retry で打ち切りの起草はすぐ次の poll で撃たれ、失敗はもう3回まで数え直す。管理MCP の Retry で撃った起草が成功すると candidate が載って一覧から消える", async () => {
+it("POST .../retry で打ち切りの起草はすぐ次の poll で撃たれ、失敗はもう3回まで数え直す。管理MCP の Retry で撃った起草が成功すると candidate が載って一覧から消え、以後の Retry / Dismiss は 400", async () => {
   const s = await draftHalted("retried");
   t = s.t;
 
@@ -430,9 +430,13 @@ it("POST .../retry で打ち切りの起草はすぐ次の poll で撃たれ、�
     ["human", "webui", { kind: "refire_retried", refire: "draft", target: s.attribution.id }],
     ["human", "mcp", { kind: "refire_retried", refire: "draft", target: s.attribution.id }],
   ]);
+  // 撃ち直しが成功して candidate のある起草は打ち切りでない
+  for (const verb of ["retry", "dismiss"]) {
+    expect((await api(t.baseUrl, "POST", `/api/settings/memory/halted-refires/draft/${s.attribution.id}/${verb}`)).status).toBe(400);
+  }
 });
 
-it("打ち切りでない件への Retry / Dismiss は 400 / tool error: 3回未満の失敗・Retry 直後・結果がある・Dismiss 済みへの Dismiss と Retry", async () => {
+it("打ち切りでない件への Retry / Dismiss は 400 / tool error: 3回未満の失敗・Retry 直後・Dismiss 済みへの Dismiss と Retry", async () => {
   const s = await draftHalted("refused");
   t = s.t;
   const client = await managementMcpClient(t.baseUrl);
@@ -458,23 +462,6 @@ it("打ち切りでない件への Retry / Dismiss は 400 / tool error: 3回未
     expect((await call("dismiss_halted_refire", draft)).isError).toBe(false);
     expect(await both("dismiss", draft)).toEqual([400, true]);
     expect(await both("retry", draft)).toEqual([400, true]);
-  } finally {
-    await client.close();
-  }
-});
-
-it("撃ち直しが成功して candidate のある起草への Retry / Dismiss は 400 / tool error", async () => {
-  const s = await objectedForDraft("drafted", { initial: { cause: "preference", evidence: "taste" } });
-  t = s.t;
-  s.behaviorDraftClient.scriptDraft(s.entry.id, KEEP_FIXTURES);
-  await commit(t, s.task.id, "drafted");
-  const [attribution] = await taskEvents(t, s.task.id, "objection_attributed");
-  const client = await managementMcpClient(t.baseUrl);
-  try {
-    for (const verb of ["retry", "dismiss"]) {
-      expect((await api(t.baseUrl, "POST", `/api/settings/memory/halted-refires/draft/${attribution.id}/${verb}`)).status).toBe(400);
-      expect((await toolCaller(client)(`${verb}_halted_refire`, { refire: "draft", target: attribution.id })).isError).toBe(true);
-    }
   } finally {
     await client.close();
   }
