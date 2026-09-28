@@ -1,7 +1,7 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { type Db, openDb } from "../src/db.js";
 import { registerTask } from "../src/tasks.js";
 import {
@@ -12,7 +12,9 @@ import {
   workspaceNeedsHuman,
 } from "../src/workspace.js";
 import { FakeContainerRuntime } from "./fakes.js";
-import { bootTidepool, commitWork, git, makeWorkspace, type Tidepool } from "./harness.js";
+import { bootTidepool, commitWork, GIT_FIXTURE_TEST_TIMEOUT, git, makeWorkspace, type Tidepool } from "./harness.js";
+
+vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 
 let db: Db | undefined;
 let tidepool: Tidepool | undefined;

@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { ClaudeCodeWorker } from "../src/claude-worker.js";
 import { openDb } from "../src/db.js";
 import type { ContainerSpawn } from "../src/process-container.js";
@@ -12,6 +12,7 @@ import { FakeClock, FakeContainerRuntime, healthyUsageText } from "./fakes.js";
 import {
   api,
   bootTidepool,
+  GIT_FIXTURE_TEST_TIMEOUT,
   HOUR,
   makeWorkspace,
   managementMcpClient,
@@ -23,6 +24,8 @@ import {
   tempDir,
 } from "./harness.js";
 import { makeRegistry } from "./registry-fixture.js";
+
+vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 
 /** ADR 0107 決定1 の盤面境界 —— 4つの入口が要求2列を**受け取る**ことと、不正値が
  *  その入口の失敗の綴り(400 / toolError)になることだけを言う。「どの値が正しいか」

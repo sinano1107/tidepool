@@ -1,4 +1,4 @@
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { createApiRouter } from "../src/api.js";
 import type { Db } from "../src/db.js";
 import { getTask, logDecision } from "../src/tasks.js";
@@ -6,10 +6,13 @@ import { FakeClock, FakeTranslationClient, noAttributionCalls, unusedLanding } f
 import {
   AUTH_HEADERS,
   bootTidepool,
+  GIT_FIXTURE_TEST_TIMEOUT,
   makeWorkspace,
   registerWork,
   type Tidepool,
 } from "./harness.js";
+
+vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 
 let t: Tidepool;
 afterEach(async () => {

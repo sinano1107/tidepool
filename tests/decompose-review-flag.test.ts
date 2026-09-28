@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { ClaudeCodeWorker } from "../src/claude-worker.js";
 import { openDb } from "../src/db.js";
 import { appendEvent } from "../src/events.js";
@@ -13,6 +13,7 @@ import {
   api,
   bootTidepool,
   FULL_HANDOFF,
+  GIT_FIXTURE_TEST_TIMEOUT,
   HOUR,
   makeWorkspace,
   mcpClient,
@@ -21,6 +22,8 @@ import {
   tempDir,
 } from "./harness.js";
 import { makeRegistry } from "./registry-fixture.js";
+
+vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 
 let t: Tidepool;
 afterEach(async () => {

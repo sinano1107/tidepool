@@ -1,13 +1,14 @@
 import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import {
   api,
   bootTidepool,
   commitWork,
   completeIntegrationReviews,
   FULL_HANDOFF as fullHandoff,
+  GIT_FIXTURE_TEST_TIMEOUT,
   git,
   HOUR,
   makeWorkspace,
@@ -15,6 +16,8 @@ import {
   registerWork,
   type Tidepool,
 } from "./harness.js";
+
+vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 
 let t: Tidepool;
 const KNOWN_SANDBOX_SHADOW_PATHS = [

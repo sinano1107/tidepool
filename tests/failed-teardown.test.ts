@@ -24,7 +24,9 @@ import {
 } from "../src/teardown.js";
 import { prepareWorkspaceAtPickup, type WorkspaceConfig } from "../src/workspace.js";
 import { FakeClock, unusedLanding } from "./fakes.js";
-import { commitWork, FULL_HANDOFF, git, makeWorkspace } from "./harness.js";
+import { commitWork, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, makeWorkspace } from "./harness.js";
+
+vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 
 /** 落ちた後始末は盤面全体の停止であり、解放の門は後始末の再実行そのものである
  *  (ADR 0112)。既存 quarantine 族の**機構だけ**を借りる —— 確認 question 1枚、

@@ -1,5 +1,5 @@
 import { writeFile } from "node:fs/promises";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { quarantineFailedTeardown } from "../src/failed-teardown.js";
 import { FAILED_TEARDOWN_QUESTION_TITLE } from "../src/quarantine.js";
 import { markTeardown } from "../src/teardown.js";
@@ -11,6 +11,7 @@ import {
   completeIntegrationReviews,
   completeViaMcp,
   FULL_HANDOFF,
+  GIT_FIXTURE_TEST_TIMEOUT,
   git,
   HOUR,
   makeWorkspace,
@@ -19,6 +20,8 @@ import {
   registerWork,
   type Tidepool,
 } from "./harness.js";
+
+vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 
 /** ADR 0109(issue #531)。通常完了の解放も**回収済み観測**を門とし、後始末は
  *  worker session の最後の局面である —— タスクが決着しても、その session の後始末が

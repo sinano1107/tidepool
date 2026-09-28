@@ -1,10 +1,11 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { UnknownWorkspaceError, type WorkspaceConfig } from "../src/workspace.js";
 import {
   addTaskChange,
   bootTidepool,
   completeIntegrationReviews,
   FULL_HANDOFF as fullHandoff,
+  GIT_FIXTURE_TEST_TIMEOUT,
   git,
   HOUR,
   makeRemoteBackedWorkspace,
@@ -12,6 +13,8 @@ import {
   registerWork,
   type Tidepool,
 } from "./harness.js";
+
+vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 
 let t: Tidepool;
 afterEach(async () => {

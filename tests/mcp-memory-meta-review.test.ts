@@ -1,9 +1,11 @@
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { defineMemoryBranch, recordKnowledge, WORKER_MEMORY_VERBS } from "../src/memory.js";
 import { MEMORY_META_REVIEW_VERBS } from "../src/meta-review.js";
 import { DEFAULT_AUDITOR_NAME } from "../src/tasks.js";
 import { UnknownWorkspaceError } from "../src/workspace.js";
-import { api, bootTidepool, HOUR, makeWorkspace, mcpClient, memoryEntries, registerWork, type Tidepool } from "./harness.js";
+import { api, bootTidepool, GIT_FIXTURE_TEST_TIMEOUT, HOUR, makeWorkspace, mcpClient, memoryEntries, registerWork, type Tidepool } from "./harness.js";
+
+vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 
 /** 主題 memory の meta-review 専用 verb(issue #619 / ADR 0122)。検査と一覧の中身はドメイン層
  *  (tests/memory-meta-review-writes.test.ts / tests/memory-meta-review-reads.test.ts / tests/precedent-store.test.ts)が

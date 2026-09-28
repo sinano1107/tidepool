@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { openDb } from "../src/db.js";
 import { HOURLY, startScheduler } from "../src/scheduler.js";
 import { implicitTaskExecutionCandidates } from "../src/server-options.js";
@@ -6,7 +6,9 @@ import { Slot } from "../src/slot.js";
 import { registerTask } from "../src/tasks.js";
 import { UnknownWorkspaceError, type WorkspaceConfig, workspaceNeedsHuman } from "../src/workspace.js";
 import { FakeClock, fakeContainers, noAttributionCalls, ScriptedWorker } from "./fakes.js";
-import { git, makeWorkspace } from "./harness.js";
+import { GIT_FIXTURE_TEST_TIMEOUT, git, makeWorkspace } from "./harness.js";
+
+vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 
 describe("scheduler の pickup が task.workspace を解決する", () => {
   it("task.workspace が盤面既定と異なる workspace を指すとき、そのタスク自身の checkout でブランチが作られる", async () => {

@@ -2,7 +2,9 @@ import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { FakeContainerRuntime } from "./fakes.js";
-import { api, bootTidepool, git, HOUR, makeWorkspace, queueWork, type Tidepool } from "./harness.js";
+import { api, bootTidepool, GIT_FIXTURE_TEST_TIMEOUT, git, HOUR, makeWorkspace, queueWork, type Tidepool } from "./harness.js";
+
+vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 
 let t: Tidepool;
 afterEach(async () => {

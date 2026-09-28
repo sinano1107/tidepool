@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import express from "express";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { openDb } from "../src/db.js";
 import { createLanding } from "../src/landing.js";
 import { createMcpRouter } from "../src/mcp.js";
@@ -11,7 +11,9 @@ import { Slot } from "../src/slot.js";
 import { pickupTask, registerTask } from "../src/tasks.js";
 import { ensureTaskBranch, UnknownWorkspaceError, type WorkspaceConfig } from "../src/workspace.js";
 import { FakeClock } from "./fakes.js";
-import { commitWork, FULL_HANDOFF as fullHandoff, git, makeWorkspace } from "./harness.js";
+import { commitWork, FULL_HANDOFF as fullHandoff, GIT_FIXTURE_TEST_TIMEOUT, git, makeWorkspace } from "./harness.js";
+
+vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 
 describe("mcp の releasing verb が task.workspace を解決する", () => {
   it("complete_task は task 自身の workspace の checkout で tree rule を実行する", async () => {

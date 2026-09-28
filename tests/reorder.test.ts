@@ -1,10 +1,11 @@
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { DEFAULT_AUDITOR_NAME } from "../src/defaults.js";
 import { quarantineWorkspace } from "../src/workspace.js";
 import {
   api,
   bootTidepool,
   FULL_HANDOFF as fullHandoff,
+  GIT_FIXTURE_TEST_TIMEOUT,
   HOUR,
   holdChildren,
   makeWorkspace,
@@ -14,6 +15,8 @@ import {
   queueWork,
   type Tidepool,
 } from "./harness.js";
+
+vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 
 let t: Tidepool;
 afterEach(async () => {

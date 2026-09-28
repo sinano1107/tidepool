@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { openDb } from "../src/db.js";
 import {
   api,
@@ -8,6 +8,7 @@ import {
   commitWork,
   completeIntegrationReviews,
   completeViaMcp,
+  GIT_FIXTURE_TEST_TIMEOUT,
   HOUR,
   makeRemoteBackedWorkspace,
   makeWorkspace,
@@ -16,6 +17,8 @@ import {
   registerWork,
   type Tidepool,
 } from "./harness.js";
+
+vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 
 let t: Tidepool;
 

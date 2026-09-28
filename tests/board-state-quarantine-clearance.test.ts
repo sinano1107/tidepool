@@ -1,7 +1,9 @@
 import { join } from "node:path";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import type { WorkspaceConfig } from "../src/workspace.js";
-import { api, bootTidepool, makeWorkspace, type Tidepool } from "./harness.js";
+import { api, bootTidepool, GIT_FIXTURE_TEST_TIMEOUT, makeWorkspace, type Tidepool } from "./harness.js";
+
+vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 
 let t: Tidepool;
 afterEach(async () => {

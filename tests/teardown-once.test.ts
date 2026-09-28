@@ -13,7 +13,9 @@ import {
   type WorkspaceConfig,
 } from "../src/workspace.js";
 import { FakeClock, unusedLanding } from "./fakes.js";
-import { FULL_HANDOFF, git, makeWorkspace } from "./harness.js";
+import { FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, makeWorkspace } from "./harness.js";
+
+vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 
 /** 後始末モジュール(ADR 0109 決定1)。3経路が共有する型である。門の主は
  *  `slot.currentTaskId` の再観測 —— 回収済み観測は非同期に届くので、その間に次の

@@ -1,11 +1,13 @@
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { openDb } from "../src/db.js";
 import { getTask, pickupTask, registerTask } from "../src/tasks.js";
 import { failTask } from "../src/watchdog.js";
 import { ensureTaskBranch, UnknownWorkspaceError, type WorkspaceConfig } from "../src/workspace.js";
 import { FakeClock } from "./fakes.js";
-import { git, makeWorkspace } from "./harness.js";
+import { GIT_FIXTURE_TEST_TIMEOUT, git, makeWorkspace } from "./harness.js";
+
+vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 
 describe("watchdog の failTask が task.workspace を解決する", () => {
   it("失敗した task 自身の workspace の checkout で tree rule を実行する", async () => {
