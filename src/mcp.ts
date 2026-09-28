@@ -464,7 +464,7 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
     "complete_task",
     {
       description:
-        "Complete the current task. Work tasks require the full 6-field handoff doc (" +
+        "Complete the current task. Work tasks require the full handoff doc (" +
         describeHandoffFields() +
         ") and a committed work tree — commit your changes before calling this. " +
         "resume_context is what the next session needs to pick the work back up — " +

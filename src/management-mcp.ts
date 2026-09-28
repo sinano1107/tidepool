@@ -826,7 +826,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
     "complete_task",
     {
       description:
-        "Complete a task assigned to the human, optionally with the 6-field handoff doc: " +
+        "Complete a task assigned to the human, optionally with the handoff doc: " +
         describeHandoffFields() +
         ".",
       inputSchema: {

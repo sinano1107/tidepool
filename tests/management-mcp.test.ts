@@ -794,6 +794,20 @@ it("register_task は空の content を protocol error ではなく domain tool 
   }
 });
 
+it("管理MCP の complete_task の description は HANDOFF_FIELDS の全フィールド名を挙げる(issue #1084)", async () => {
+  t = await bootTidepool();
+  const client = await managementMcpClient(t.baseUrl);
+  try {
+    const { tools } = await client.listTools();
+    const description = tools.find((tool) => tool.name === "complete_task")?.description ?? "";
+    for (const field of HANDOFF_FIELDS) {
+      expect(description).toContain(field);
+    }
+  } finally {
+    await client.close();
+  }
+});
+
 it("complete_task は human assignee の task だけを mcp origin で完了する(issue #192)", async () => {
   t = await bootTidepool();
   const humanTask = await registerWork(t, "confirm the tide gauge licence", undefined, undefined, "human");
@@ -1007,20 +1021,6 @@ it("create_workspace は mode と各引数を listTools で advertise する(iss
     expect(Object.keys(schema.properties)).toEqual(expect.arrayContaining(["mode", "name", "notes", "protected", "path", "repo"]));
     expect(schema.properties.mode.enum).toEqual(["register", "clone", "create"]);
     expect(schema.required).toEqual(expect.arrayContaining(["name", "mode"]));
-  } finally {
-    await client.close();
-  }
-});
-
-it("管理MCP の complete_task の description は HANDOFF_FIELDS の全フィールド名を挙げる(issue #1084)", async () => {
-  t = await bootTidepool();
-  const client = await managementMcpClient(t.baseUrl);
-  try {
-    const { tools } = await client.listTools();
-    const description = tools.find((tool) => tool.name === "complete_task")?.description ?? "";
-    for (const field of HANDOFF_FIELDS) {
-      expect(description).toContain(field);
-    }
   } finally {
     await client.close();
   }
