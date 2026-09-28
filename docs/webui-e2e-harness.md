@@ -1,10 +1,11 @@
 # WebUI E2E ハーネス — 実ブラウザで `public/index.html` を駆動する
 
-自動テストはサーバー境界で止める(ADR 0027)。`webui/*.jsx` の React 配線層は
-TypeScript の型検査が効かない唯一の層で、ここは生成された `public/app.js` を
-実ブラウザで駆動して確かめる。かつては人間の受け入れ確認に委ねていたが、いまはエージェントが
-Playwright でこの確認まで担う(ADR 0029)。この doc は、その確認を回すための土台の型と、
-過去に溶かしたハマりどころをまとめたもの。
+自動テストはサーバー境界で止める(ADR 0027)。`webui/*.tsx` の React 配線層は
+`npm run typecheck`(`tsc -p webui`)で型検査される。守るのは e2e が撃たない分岐
+(`undefined` 参照、props の付け忘れ)で、生成された `public/app.js` が実ブラウザで
+描画され API と噛み合うかは型では確かめられない。かつては人間の受け入れ確認に
+委ねていたが、いまはエージェントが Playwright でこの確認まで担う(ADR 0029)。
+この doc は、その確認を回すための土台の型と、過去に溶かしたハマりどころをまとめたもの。
 
 **ツールは Playwright に統一した。** 素の puppeteer-core 手駆動はやめ、突発確認も昇格資産も
 同じ Playwright Test で書く。理由は、突発確認と恒久スモークの書式を揃えておくと、昇格が
@@ -99,7 +100,7 @@ Playwright への移行で **消えた**もの:
 
 原則 `getByRole` / `getByLabel` などユーザー可視のロールベース。文言依存の取得は避ける
 (日本語 UI コピーは変わりうる)。クリティカルな導線で壊れやすい要素にだけ
-所有する JSX (`webui/*.jsx`、共有部品なら `design-system/components/`) に
+所有するコンポーネント(`webui/*.tsx`、共有部品なら `design-system/components/`) に
 `data-testid` を足して文言変更に強くする。Design System の掴み方:
 `Select` は native `<select>`(`selectOption`)、`Input` は placeholder 付き native `<input>`。
 
@@ -110,4 +111,5 @@ Playwright への移行で **消えた**もの:
 - `tests/harness.ts`(`bootTidepool`)/ `e2e/fixtures.ts`(`boot` fixture)
 - `e2e/settings-drilldown.spec.ts`(最初の昇格済みスモーク)
 - ADR 0055(WebUI の事前ビルドと最初の E2E 昇格基盤)
+- ADR 0133(WebUI は連結方式のまま TypeScript にする)
 - issue #108(dotfile 404 の root cause と修正)/ issue #106(初出:skills ピッカー)
