@@ -2054,37 +2054,27 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit }) 
     }
     setBusy(false);
   };
-  const [invalidating, setInvalidating] = React.useState(null);
-  const invalidate = async () => {
-    setBusy(true);
-    try {
-      await api(`/api/settings/memory/entries/${invalidating.id}/invalidate`, {
-        reason: invalidating.reason,
-        ...needsSuccessor(invalidating.reason) ? { successor_id: Number(invalidating.successor) } : {}
-      });
-      say("success", "entry invalidated", `#${invalidating.id} \xB7 ${invalidating.reason}`);
-      setInvalidating(null);
-      await load();
-    } catch (err) {
-      say("danger", "invalidate failed", String(err.message || err));
-    }
-    setBusy(false);
-  };
-  const [moving, setMoving] = React.useState(null);
-  const [branchMove, setBranchMove] = React.useState(null);
-  const workspaceOptions = [{ value: "", label: "board-wide" }, ...workspaceNames];
-  const move = async (path, body, detail, close) => {
+  const submit = async (path, body, [title, detail], failed, close) => {
     setBusy(true);
     try {
       await api(path, body);
-      say("success", "moved", detail);
+      say("success", title, detail);
       close();
       await load();
     } catch (err) {
-      say("danger", "move failed", String(err.message || err));
+      say("danger", failed, String(err.message || err));
     }
     setBusy(false);
   };
+  const [invalidating, setInvalidating] = React.useState(null);
+  const invalidate = () => submit(`/api/settings/memory/entries/${invalidating.id}/invalidate`, {
+    reason: invalidating.reason,
+    ...needsSuccessor(invalidating.reason) ? { successor_id: Number(invalidating.successor) } : {}
+  }, ["entry invalidated", `#${invalidating.id} \xB7 ${invalidating.reason}`], "invalidate failed", () => setInvalidating(null));
+  const [moving, setMoving] = React.useState(null);
+  const [branchMove, setBranchMove] = React.useState(null);
+  const workspaceOptions = [{ value: "", label: "board-wide" }, ...workspaceNames];
+  const move = (path, body, detail, close) => submit(path, body, ["moved", detail], "move failed", close);
   return /* @__PURE__ */ React.createElement(Card, { style: { display: "flex", flexDirection: "column", gap: 14 } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8, minHeight: 26 } }, /* @__PURE__ */ React.createElement("span", { style: settingsCardLabel }, "memory entries"), !writing && /* @__PURE__ */ React.createElement("div", { style: { marginLeft: "auto", display: "flex", gap: 8 } }, !branchMove && /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "sm", onClick: () => setBranchMove({ workspace: "", path: "", to_workspace: "", to_path: "" }) }, "Move branch"), /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "sm", onClick: () => edit.open(writeId, () => setDraft(blank)) }, "Write"))), branchMove && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("p", { style: muted }, "moves the branch and every live entry under it in one workspace; invalidated entries stay where they are"), /* @__PURE__ */ React.createElement(
     Select,
     {
@@ -2115,7 +2105,7 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit }) 
       }, `${branchMove.path.trim()} \u2192 ${branchMove.to_path.trim()}`, () => setBranchMove(null))
     },
     "Move branch"
-  ), /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "sm", disabled: busy, onClick: () => setBranchMove(null) }, "Cancel"))), writing && /* @__PURE__ */ React.createElement(React.Fragment, null, editingBehavior ? /* @__PURE__ */ React.createElement("p", { style: muted }, "editing behavior #", draft.supersedes, " \u2014 saving writes a new approved entry and supersedes this one") : /* @__PURE__ */ React.createElement(Select, { label: "Kind", value: draft.kind, onChange: setDraftField("kind"), options: MEMORY_KINDS }), /* @__PURE__ */ React.createElement(Select, { label: "Workspace", value: draft.workspace, onChange: setDraftField("workspace"), options: [{ value: "", label: "board-wide" }, ...workspaceNames] }), /* @__PURE__ */ React.createElement(Input, { label: draft.kind === "definition" ? "Branch path" : "Path", mono: true, value: draft.path, onChange: setDraftField("path"), placeholder: "build/tests" }), (draft.kind === "behavior" || draft.kind === "exemplar") && // the current addressee stays offered even if its agent has left the registry
+  ), /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "sm", disabled: busy, onClick: () => setBranchMove(null) }, "Cancel"))), writing && /* @__PURE__ */ React.createElement(React.Fragment, null, editingBehavior ? /* @__PURE__ */ React.createElement("p", { style: muted }, "editing behavior #", draft.supersedes, " \u2014 saving writes a new approved entry and supersedes this one") : /* @__PURE__ */ React.createElement(Select, { label: "Kind", value: draft.kind, onChange: setDraftField("kind"), options: MEMORY_KINDS }), /* @__PURE__ */ React.createElement(Select, { label: "Workspace", value: draft.workspace, onChange: setDraftField("workspace"), options: workspaceOptions }), /* @__PURE__ */ React.createElement(Input, { label: draft.kind === "definition" ? "Branch path" : "Path", mono: true, value: draft.path, onChange: setDraftField("path"), placeholder: "build/tests" }), (draft.kind === "behavior" || draft.kind === "exemplar") && // the current addressee stays offered even if its agent has left the registry
   /* @__PURE__ */ React.createElement(
     Select,
     {

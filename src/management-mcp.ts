@@ -666,7 +666,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
     },
     async (input) => memoryVerb(() => ({ event_id: invalidateMemoryEntry(deps.db, input, HUMAN_WORKER_ID, "mcp", deps.clock.now()) })),
   );
-  const movedAs =
+  const moveEffect =
     "The board copies the body — title, text, originals, addressee, annotations, source, author, state and approval — to the new place " +
     "and invalidates the old entry as path_moved; you are recorded as the one who moved it. A candidate stays a candidate. A Definition " +
     "cannot move onto a branch that already has a live Definition in that scope: fold the two instead.";
@@ -675,7 +675,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
     {
       description:
         "Move one live memory entry (any kind, approved or candidate) to another workspace and path. workspace null = the whole board. " +
-        movedAs,
+        moveEffect,
       inputSchema: memoryMoveSchema.extend({ entry_id: z.number().int().positive() }).shape,
     },
     async ({ entry_id, workspace, path }) =>
@@ -687,7 +687,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
       description:
         "Move a whole branch: every live entry in workspace (exact match; null = the whole board) whose path is path or under path/ " +
         "moves to to_workspace, with path's prefix replaced by to_path, in one step. Invalidated entries stay where they are. Returns " +
-        `each moved entry_id with the successor_id of its copy. ${movedAs}`,
+        `each moved entry_id with the successor_id of its copy. ${moveEffect}`,
       inputSchema: memoryBranchMoveSchema.shape,
     },
     async ({ workspace, path, to_workspace, to_path }) =>

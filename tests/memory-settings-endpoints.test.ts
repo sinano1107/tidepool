@@ -7,6 +7,14 @@ import { api, bootTidepool, managementMcpClient, type Tidepool } from "./harness
 let t: Tidepool;
 afterEach(() => t?.stop());
 
+/** 管理MCP の tool を呼び、tool error か JSON の結果を返す。 */
+function toolCaller(client: Awaited<ReturnType<typeof managementMcpClient>>) {
+  return async (name: string, args: Record<string, unknown>) => {
+    const result = (await client.callTool({ name, arguments: args })) as any;
+    return { isError: result.isError === true, json: result.isError ? result.content[0].text : JSON.parse(result.content[0].text) };
+  };
+}
+
 it("POST /api/settings/memory で書いた注入上限は GET で読め、周期の欄は無く、正の整数でない値と空の変更は 400(issue #592 / #924)", async () => {
   t = await bootTidepool();
   expect(await api(t.baseUrl, "POST", "/api/settings/memory", { injection_token_cap: 800 })).toMatchObject({
@@ -143,10 +151,7 @@ it("POST /api/settings/memory/entries/:id/invalidate は理由コードと後継
 it("管理MCP で Knowledge を書き、枝を定義し、一覧で読み、無効化し(path_moved は断る)、rebuild できる —— approve の verb は無い(issue #593)", async () => {
   t = await bootTidepool();
   const client = await managementMcpClient(t.baseUrl);
-  const call = async (name: string, args: Record<string, unknown>) => {
-    const result = (await client.callTool({ name, arguments: args })) as any;
-    return { isError: result.isError === true, json: result.isError ? result.content[0].text : JSON.parse(result.content[0].text) };
-  };
+  const call = toolCaller(client);
   try {
     const knowledge = await call("record_knowledge", {
       workspace: "tidepool",
@@ -254,10 +259,7 @@ it("エントリ1件と枝ごとの移動(POST /api/settings/memory/entries/:id/
   expect((await api(t.baseUrl, "POST", "/api/settings/memory/branches/move", branch)).status).toBe(400);
 
   const client = await managementMcpClient(t.baseUrl);
-  const call = async (name: string, args: Record<string, unknown>) => {
-    const result = (await client.callTool({ name, arguments: args })) as any;
-    return { isError: result.isError === true, json: result.isError ? result.content[0].text : JSON.parse(result.content[0].text) };
-  };
+  const call = toolCaller(client);
   try {
     const entry = await call("move_memory_entry", { entry_id: moved.json.entry_id, workspace: "tidepool", path: "toolchain" });
     expect(entry).toMatchObject({ isError: false, json: { entry_id: expect.any(Number) } });

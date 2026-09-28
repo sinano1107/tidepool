@@ -115,17 +115,11 @@ it("move_memory は Knowledge を別の scope・path へ移し、書き手は移
   expect(entry(db, old)).toMatchObject({ invalidation_reason: "path_moved", successor_id: moved, invalidated_by: { activity: "meta_review" } });
 });
 
-it("move_memory は Definition と Behavior を domain error で拒み、何も書かない", () => {
-  const { db, decision } = board();
+it("move_memory は Definition・Behavior・Exemplar を domain error で拒み、何も書かない", () => {
+  const { db, behavior, exemplar } = approvedPair();
   const definition = defineMemoryBranch(db, { scope: "tidepool", path: "build", text: "How it builds.", author: metaReview }, "worker", at).entry_id;
-  const behavior = createBehaviorCandidate(
-    db,
-    { scope: null, path: "habits", title: "Small commits", text: "Commit small.", addressee: null, source: { event_id: decision }, author: { activity: "rca", name: "auditor" } },
-    "worker",
-    at,
-  ).entry_id;
   const before = listMemoryEntries(db, {});
-  for (const entry_id of [definition, behavior]) {
+  for (const entry_id of [definition, behavior, exemplar]) {
     expect(() => moveMemoryByMetaReview(db, { entry_id, scope: null, path: "elsewhere", mover: metaReview }, "worker", at)).toThrow(DomainError);
   }
   expect(listMemoryEntries(db, {})).toEqual(before);

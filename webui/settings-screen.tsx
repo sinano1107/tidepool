@@ -1630,41 +1630,33 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit }: 
     setBusy(false);
   };
 
-  // invalidation: one entry at a time, reason + successor when the reason needs one
-  const [invalidating, setInvalidating] = React.useState<{ id: number; reason: string; successor: string } | null>(null);
-  const invalidate = async () => {
+  // a one-shot change to an entry (invalidate, move): only the form that submitted closes
+  const submit = async (path: `/${string}`, body: Record<string, unknown>, [title, detail]: [string, string], failed: string, close: () => void) => {
     setBusy(true);
     try {
-      await api(`/api/settings/memory/entries/${invalidating!.id}/invalidate`, {
-        reason: invalidating!.reason,
-        ...(needsSuccessor(invalidating!.reason) ? { successor_id: Number(invalidating!.successor) } : {}),
-      });
-      say('success', 'entry invalidated', `#${invalidating!.id} · ${invalidating!.reason}`);
-      setInvalidating(null);
+      await api(path, body);
+      say('success', title, detail);
+      close();
       await load();
     } catch (err) {
-      say('danger', 'invalidate failed', String((err as Error).message || err));
+      say('danger', failed, String((err as Error).message || err));
     }
     setBusy(false);
   };
+
+  // invalidation: one entry at a time, reason + successor when the reason needs one
+  const [invalidating, setInvalidating] = React.useState<{ id: number; reason: string; successor: string } | null>(null);
+  const invalidate = () => submit(`/api/settings/memory/entries/${invalidating!.id}/invalidate`, {
+    reason: invalidating!.reason,
+    ...(needsSuccessor(invalidating!.reason) ? { successor_id: Number(invalidating!.successor) } : {}),
+  }, ['entry invalidated', `#${invalidating!.id} · ${invalidating!.reason}`], 'invalidate failed', () => setInvalidating(null));
 
   // moves (ADR 0162 決定4): the board copies the body to the new place — one entry, or a whole branch of one scope.
   // '' is board-wide in both workspace fields
   const [moving, setMoving] = React.useState<{ id: number; workspace: string; path: string } | null>(null);
   const [branchMove, setBranchMove] = React.useState<{ workspace: string; path: string; to_workspace: string; to_path: string } | null>(null);
   const workspaceOptions = [{ value: '', label: 'board-wide' }, ...workspaceNames];
-  const move = async (path: `/${string}`, body: Record<string, unknown>, detail: string, close: () => void) => {
-    setBusy(true);
-    try {
-      await api(path, body);
-      say('success', 'moved', detail);
-      close();
-      await load();
-    } catch (err) {
-      say('danger', 'move failed', String((err as Error).message || err));
-    }
-    setBusy(false);
-  };
+  const move = (path: `/${string}`, body: Record<string, unknown>, detail: string, close: () => void) => submit(path, body, ['moved', detail], 'move failed', close);
 
   return (
     <Card style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
@@ -1705,7 +1697,7 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit }: 
           {editingBehavior
             ? <p style={muted}>editing behavior #{draft.supersedes} — saving writes a new approved entry and supersedes this one</p>
             : <Select label="Kind" value={draft.kind} onChange={setDraftField('kind')} options={MEMORY_KINDS} />}
-          <Select label="Workspace" value={draft.workspace} onChange={setDraftField('workspace')} options={[{ value: '', label: 'board-wide' }, ...workspaceNames]} />
+          <Select label="Workspace" value={draft.workspace} onChange={setDraftField('workspace')} options={workspaceOptions} />
           <Input label={draft.kind === 'definition' ? 'Branch path' : 'Path'} mono value={draft.path} onChange={setDraftField('path')} placeholder="build/tests" />
           {(draft.kind === 'behavior' || draft.kind === 'exemplar') && (
             // the current addressee stays offered even if its agent has left the registry
