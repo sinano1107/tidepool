@@ -2191,7 +2191,7 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit }) 
         "data-testid": `memory-entry-${entry.id}`,
         style: { display: "flex", flexDirection: "column", gap: 4, borderTop: "1px solid var(--border-default)", paddingTop: 10 }
       },
-      /* @__PURE__ */ React.createElement("p", { style: { ...muted, fontFamily: "var(--font-mono)" } }, "#", entry.id, " \xB7 ", entry.kind, " \xB7 ", entry.invalidation_reason ? `invalidated: ${entry.invalidation_reason}${entry.successor_id ? ` \u2192 #${entry.successor_id}` : ""}${invalidatedBy(entry.invalidated_by)}` : entry.state, " \xB7 ", entry.scope ?? "board-wide", " \xB7 ", entry.path, (entry.kind === "behavior" || entry.kind === "exemplar") && ` \xB7 to ${entry.addressee ?? "every agent"}`, " \xB7 ", entry.author.activity, entry.cause && ` \xB7 ${entry.cause}`),
+      /* @__PURE__ */ React.createElement("p", { style: { ...muted, fontFamily: "var(--font-mono)" } }, "#", entry.id, " \xB7 ", entry.kind, " \xB7 ", entry.invalidation_reason ? `invalidated: ${entry.invalidation_reason}${entry.successor_id ? ` \u2192 #${entry.successor_id}` : ""}${invalidatedBy(entry.invalidated_by)}${entry.restored_as ? ` \xB7 restored \u2192 #${entry.restored_as}` : ""}` : entry.state, " \xB7 ", entry.scope ?? "board-wide", " \xB7 ", entry.path, (entry.kind === "behavior" || entry.kind === "exemplar") && ` \xB7 to ${entry.addressee ?? "every agent"}`, " \xB7 ", entry.author.activity, entry.cause && ` \xB7 ${entry.cause}`),
       entry.kind !== "definition" && /* @__PURE__ */ React.createElement("strong", { style: { fontSize: "var(--text-sm)" } }, entry.title),
       /* @__PURE__ */ React.createElement("p", { style: { margin: 0, fontSize: "var(--text-sm)" } }, entry.text),
       shown && // a definition's title is its text, so the Set shows it once
@@ -2209,7 +2209,7 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit }) 
         supersedes: String(entry.id),
         inheritedSource: caseSource
       })) }, "Edit"), /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "sm", onClick: () => setMoving({ id: entry.id, workspace: entry.scope ?? "", path: entry.path }) }, "Move"), /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "sm", onClick: () => setInvalidating({ id: entry.id, reason: "capability", successor: "" }) }, "Invalidate")),
-      entry.invalidation_reason && entry.invalidation_reason !== "path_moved" && /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8 } }, /* @__PURE__ */ React.createElement(
+      entry.invalidation_reason && entry.invalidation_reason !== "path_moved" && !entry.restored_as && /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8 } }, /* @__PURE__ */ React.createElement(
         Button,
         {
           variant: "ghost",

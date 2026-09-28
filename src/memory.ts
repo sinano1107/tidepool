@@ -305,10 +305,22 @@ function copyBody(
   return id;
 }
 
+/** 復元元の id → 復元の複製の id(ADR 0163 追記 #1059)。正本は複製の作成 event の restored_from で、旧の行に列は持たない。
+ *  一度復元した旧は再び復元できないので復元元ごとに高々1つ。 */
+function restoredAs(db: Db): Map<number, number> {
+  return new Map(
+    (
+      db
+        .prepare("SELECT json_extract(payload, '$.restored_from') AS old, id FROM events WHERE kind = 'memory_entry_created' AND json_extract(payload, '$.restored_from') IS NOT NULL")
+        .all() as Array<{ old: number; id: number }>
+    ).map(({ old, id }) => [old, id]),
+  );
+}
+
 /** 復元(ADR 0163): 無効化済みのエントリ(4種別、状態は問わない)の本文の側を同じ scope / path に写して新エントリにする ——
  *  移動の複製と同じ形で新規の書き込みの門は掛けず、版は継がない(approved なら版は複製の作成 event)。旧の行は触らず、旧を pin して
- *  いた提案 question も戻さない。`path_moved` は複製の側を扱う(移し戻すか、畳まれた複製を復元する)ので拒み、後継が生きている間も
- *  拒む —— 後継の `path_moved` の鎖は末尾までたどる(`superseded` はたどらない)。Definition は同じ枝に生きた Definition があれば拒む。 */
+ *  いた提案 question も戻さない。`path_moved` と一度復元した旧は複製の側を扱う(移し戻すか、落ちた複製を復元する —— 追記 #1059)
+ *  ので拒み、後継が生きている間も拒む —— 後継の `path_moved` の鎖は末尾までたどる(`superseded` はたどらない)。Definition は同じ枝に生きた Definition があれば拒む。 */
 export function restoreMemoryEntry(
   db: Db,
   input: { entry_id: number; restorer: Actor },
@@ -321,6 +333,8 @@ export function restoreMemoryEntry(
     if (row.invalidation_reason === "path_moved") {
       throw new DomainError(`memory entry ${row.id} was moved to entry ${row.successor_id}: move that copy back, or restore it if it was invalidated`);
     }
+    const copy = restoredAs(db).get(row.id);
+    if (copy !== undefined) throw new DomainError(`memory entry ${row.id} was already restored as entry ${copy}: handle that copy instead`);
     let successor = row.successor_id === null ? undefined : requireEntry(db, row.successor_id);
     while (successor?.invalidation_reason === "path_moved") successor = requireEntry(db, successor.successor_id!);
     if (successor && successor.invalidation_reason === null) {
@@ -979,7 +993,9 @@ type InvalidatedBy = { question_id: string } | { activity: MemoryEntryFields["au
 export function listMemoryEntries(
   db: Db,
   filter: { scope?: string | null; kind?: MemoryEntryFields["kind"]; state?: MemoryEntryFields["state"] | "invalidated" },
-): Array<MemoryEntry & { invalidation_reason: InvalidationReason | null; successor_id: number | null; invalidated_by: InvalidatedBy | null; cause: Cause | null }> {
+): Array<
+  MemoryEntry & { invalidation_reason: InvalidationReason | null; successor_id: number | null; invalidated_by: InvalidatedBy | null; restored_as: number | null; cause: Cause | null }
+> {
   const { scope, kind, state } = filter;
   // エントリの無効化は高々1度(invalidateMemoryEntry の門)なので entry_id で引ける。印は event が正本で列は持たない
   const invalidatedBy = new Map(
@@ -990,6 +1006,7 @@ export function listMemoryEntries(
       },
     ),
   );
+  const restored = restoredAs(db);
   // cause = 出所 event が帰責(objection_attributed)のときのその cause(spec #615 G)
   return (
     db
@@ -1011,6 +1028,7 @@ export function listMemoryEntries(
       invalidation_reason: row.invalidation_reason,
       successor_id: row.successor_id,
       invalidated_by: invalidatedBy.get(row.id) ?? null,
+      restored_as: restored.get(row.id) ?? null,
       cause: row.cause,
     }));
 }
