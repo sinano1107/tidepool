@@ -140,17 +140,17 @@ it("define_memory の supersedes は list で、同じ scope の複数の Defini
     expect(combined.isError).toBe(false);
 
     const rows = async () => (await memoryEntries(t)).map((e) => [e.id, e.invalidation_reason, e.successor_id]);
-    const before = [
+    const consolidated = [
       [material, null, null],
       [build.body.entry_id, "superseded", combined.body.entry_id],
       [toolchain.body.entry_id, "superseded", combined.body.entry_id],
       [combined.body.entry_id, null, null],
     ];
-    expect(await rows()).toEqual(before);
+    expect(await rows()).toEqual(consolidated);
 
     expect(await call("define_memory", { scope: "sandbox", path: "empty", definition: "x", supersedes: [] })).toMatchObject({ isError: true });
     expect(await call("define_memory", { scope: "sandbox", path: "scalar", definition: "x", supersedes: build.body.entry_id })).toMatchObject({ isError: true });
-    expect(await rows()).toEqual(before);
+    expect(await rows()).toEqual(consolidated);
   } finally {
     await client.close();
   }
