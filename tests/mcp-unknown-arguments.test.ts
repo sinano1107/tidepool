@@ -72,20 +72,8 @@ it("arguments を省いた呼び出しは空の引数として受ける —— �
   }
 });
 
-it("管理 MCP の verb に未知の引数を渡すと、キー名つきの tool error になる", async () => {
-  t = await bootTidepool();
-  const task = await registerWork(t, "index the tide charts");
-
-  const client = await managementMcpClient(t.baseUrl);
-  try {
-    const result = await client.callTool({ name: "get_task", arguments: { task_id: task.id, with_events: true } });
-    expect(result.isError).toBe(true);
-    expect(text(result)).toContain("with_events");
-  } finally {
-    await client.close();
-  }
-});
-
+// 管理 MCP の verb が未知の引数を拒否することは tests/management-mcp.test.ts の confirm / confirm_dangerous
+// の3件が verb ごとに言う(ADR 0088 の扉)ので、ここでは tools/list だけを言う
 it("管理 MCP の tools/list は additionalProperties: false を載せる", async () => {
   t = await bootTidepool();
 

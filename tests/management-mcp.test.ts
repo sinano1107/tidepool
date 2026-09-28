@@ -1051,7 +1051,7 @@ it("create_workspace は生きた dev checkout の信号でも登録を通し、
   const client = await managementMcpClient(t.baseUrl);
   try {
     // 確認をエージェントに肩代わりさせる経路は作らない: スキーマに `confirm` が
-    // 無い(送れば未知の引数として拒まれる、issue #1075)
+    // 無いので、1回目はエージェントの確認なしでドメインに届く(下の calls[0] が undefined)
     const create: any = await client.callTool({
       name: "create_workspace",
       arguments: { name: "tidepool", mode: "register", path: "/home/masaki/tidepool" },
