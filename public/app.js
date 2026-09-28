@@ -494,6 +494,17 @@ function groupLogEntries(entries) {
   return groups;
 }
 const objectionBadge = (comments) => comments?.length > 1 ? comments.map((c) => `- ${c}`).join("\n") : comments?.[0];
+const toLogEntryShape = (e, openSessionId) => ({
+  taskId: e.task_id,
+  agent: e.worker_id,
+  human: e.worker_id === "human",
+  kind: e.payload.kind === "task_completed" ? "completion" : "decision",
+  text: e.payload.kind === "task_completed" ? e.payload.result ?? "(no outcome recorded)" : e.payload.line,
+  cause: e.cause ?? void 0,
+  causeEntries: e.entries ?? void 0,
+  pendingObjections: e.objections.filter((o) => o.session_id === openSessionId).map((o) => o.comment),
+  bundledObjections: e.objections.filter((o) => o.session_id !== openSessionId).map((o) => o.comment)
+});
 function commitPendingObjectionKeys(log, localObjections) {
   return /* @__PURE__ */ new Set([
     ...Object.keys(localObjections),
@@ -1964,10 +1975,14 @@ function MemoryCasePicker({ workspace, value, onChange, onQuote }) {
   const { Button, LogEntry } = window.TidepoolDesignSystem_8a0ead;
   const muted = { margin: 0, fontSize: "var(--text-xs)", color: "var(--text-muted)" };
   const [log, setLog] = React.useState(null);
+  const [openSessionId, setOpenSessionId] = React.useState(null);
   const [rendered, setRendered] = React.useState(null);
   React.useEffect(() => {
     if (!onChange) return;
-    api("GET /api/log").then(({ entries }) => setLog(entries)).catch((err) => setLog(String(err.message || err)));
+    Promise.all([api("GET /api/log"), api("GET /api/triage")]).then(([{ entries }, { session }]) => {
+      setOpenSessionId(session?.id ?? null);
+      setLog(entries);
+    }).catch((err) => setLog(String(err.message || err)));
   }, []);
   React.useEffect(() => {
     setRendered(null);
@@ -1995,15 +2010,16 @@ function MemoryCasePicker({ workspace, value, onChange, onQuote }) {
     return /* @__PURE__ */ React.createElement("div", { ref: caseBox, "data-testid": "memory-case", style: { display: "flex", flexDirection: "column", gap: 6 } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8 } }, /* @__PURE__ */ React.createElement("span", { style: muted }, "case: event #", value), onChange && /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "sm", onClick: () => onChange(null) }, "Pick another")), rendered === null && /* @__PURE__ */ React.createElement("p", { style: muted }, "loading\u2026"), typeof rendered === "string" && /* @__PURE__ */ React.createElement("p", { style: muted }, rendered), fields.map(([name, texts]) => texts.filter((t) => t).map((text, i) => /* @__PURE__ */ React.createElement("div", { key: `${name}-${i}` }, /* @__PURE__ */ React.createElement("span", { style: muted }, name), /* @__PURE__ */ React.createElement("pre", { "data-field": name, style: { margin: 0, whiteSpace: "pre-wrap", fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", lineHeight: 1.6 } }, text)))));
   }
   const shown = typeof log === "string" || log === null ? [] : log.filter((e) => !workspace || e.workspace === workspace).reverse();
-  return /* @__PURE__ */ React.createElement("div", { "data-testid": "memory-case-picker", style: { display: "flex", flexDirection: "column", gap: 6, maxHeight: 360, overflowY: "auto" } }, log === null && /* @__PURE__ */ React.createElement("p", { style: muted }, "loading\u2026"), typeof log === "string" && /* @__PURE__ */ React.createElement("p", { style: muted }, log), log !== null && shown.length === 0 && /* @__PURE__ */ React.createElement("p", { style: muted }, "no log entries"), shown.map((e) => /* @__PURE__ */ React.createElement("div", { key: e.id, "data-testid": `memory-case-row-${e.id}` }, /* @__PURE__ */ React.createElement(LogEntry, { entry: {
-    taskId: e.task_id,
-    agent: e.worker_id,
-    human: e.worker_id === "human",
-    kind: e.payload.kind === "task_completed" ? "completion" : "decision",
-    text: e.payload.kind === "task_completed" ? e.payload.result ?? "(no outcome recorded)" : e.payload.line,
-    cause: e.cause ?? void 0,
-    objection: objectionBadge(e.objections.map((o) => o.comment))
-  } }), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8 } }, e.payload.kind === "decision_logged" && /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "sm", onClick: () => onChange?.(e.id) }, "This entry"), e.session_event_id !== null && /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "sm", onClick: () => onChange?.(e.session_event_id) }, "This session")))));
+  return /* @__PURE__ */ React.createElement("div", { "data-testid": "memory-case-picker", style: { display: "flex", flexDirection: "column", gap: 6, maxHeight: 360, overflowY: "auto" } }, log === null && /* @__PURE__ */ React.createElement("p", { style: muted }, "loading\u2026"), typeof log === "string" && /* @__PURE__ */ React.createElement("p", { style: muted }, log), log !== null && shown.length === 0 && /* @__PURE__ */ React.createElement("p", { style: muted }, "no log entries"), shown.map((e) => {
+    const row = toLogEntryShape(e, openSessionId);
+    return /* @__PURE__ */ React.createElement("div", { key: e.id, "data-testid": `memory-case-row-${e.id}` }, /* @__PURE__ */ React.createElement(
+      LogEntry,
+      {
+        entry: { ...row, objection: objectionBadge(row.pendingObjections), bundledObjection: objectionBadge(row.bundledObjections) },
+        onOpenMemoryEntry: (id) => document.querySelector(`[data-testid="memory-entry-${id}"]`)?.scrollIntoView({ block: "center" })
+      }
+    ), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8 } }, e.payload.kind === "decision_logged" && /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "sm", onClick: () => onChange?.(e.id) }, "This entry"), e.session_event_id !== null && /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "sm", onClick: () => onChange?.(e.session_event_id) }, "This session")));
+  }));
 }
 const annotationsToSend = (annotations) => annotations.map(({ anchor, polarity, text, original }) => ({ anchor, polarity, text: text.trim(), ...original.trim() ? { original: original.trim() } : {} }));
 function MemoryExemplarAnnotations({ workspace, source, onSource, annotations, onChange, language, translate, onError, busy, setBusy }) {
@@ -3262,21 +3278,13 @@ function mapData(board, log, pause, icons, triage, queueEnvelope, yourTasks) {
   }));
   const openSessionId = triage.session?.id ?? null;
   const logEntries = [...log.entries].reverse().map((e) => ({
+    ...toLogEntryShape(e, openSessionId),
     id: e.id,
     time: fmtTime(e.created_at),
-    taskId: e.task_id,
-    agent: e.worker_id,
     agentIcon: icons[e.worker_id],
-    human: e.worker_id === "human",
-    kind: e.payload.kind === "task_completed" ? "completion" : "decision",
-    text: e.payload.kind === "task_completed" ? e.payload.result ?? "(no outcome recorded)" : e.payload.line,
     unread: e.unread,
     handoffPresent: e.payload.kind === "task_completed" && !!e.payload.handoff_present,
-    workspace: e.workspace ?? null,
-    cause: e.cause ?? void 0,
-    causeEntries: e.entries ?? void 0,
-    pendingObjections: e.objections.filter((o) => o.session_id === openSessionId).map((o) => o.comment),
-    bundledObjections: e.objections.filter((o) => o.session_id !== openSessionId).map((o) => o.comment)
+    workspace: e.workspace ?? null
   }));
   const queue = queueEnvelope.tasks.filter((t) => t.status === "todo" || t.status === "blocked" || t.status === "skipped").map((t) => ({
     id: t.id,

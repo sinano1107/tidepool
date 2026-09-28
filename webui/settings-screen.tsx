@@ -1471,11 +1471,14 @@ function MemoryCasePicker({ workspace, value, onChange, onQuote }: {
   const { Button, LogEntry } = window.TidepoolDesignSystem_8a0ead;
   const muted = { margin: 0, fontSize: 'var(--text-xs)', color: 'var(--text-muted)' };
   const [log, setLog] = React.useState<WireContract['GET /api/log']['entries'] | string | null>(null); // string → load error
+  const [openSessionId, setOpenSessionId] = React.useState<number | null>(null);
   const [rendered, setRendered] = React.useState<WireContract['GET /api/settings/memory/cases/:event_id'] | string | null>(null);
   React.useEffect(() => {
     // a fixed case never shows the list to pick from
     if (!onChange) return;
-    api('GET /api/log').then(({ entries }) => setLog(entries)).catch((err) => setLog(String(err.message || err)));
+    Promise.all([api('GET /api/log'), api('GET /api/triage')])
+      .then(([{ entries }, { session }]) => { setOpenSessionId(session?.id ?? null); setLog(entries); })
+      .catch((err) => setLog(String(err.message || err)));
   }, []);
   React.useEffect(() => {
     setRendered(null);
@@ -1530,21 +1533,19 @@ function MemoryCasePicker({ workspace, value, onChange, onQuote }: {
       {log === null && <p style={muted}>loading…</p>}
       {typeof log === 'string' && <p style={muted}>{log}</p>}
       {log !== null && shown.length === 0 && <p style={muted}>no log entries</p>}
-      {shown.map((e) => (
-        <div key={e.id} data-testid={`memory-case-row-${e.id}`}>
-          <LogEntry entry={{
-            taskId: e.task_id, agent: e.worker_id, human: e.worker_id === 'human',
-            kind: e.payload.kind === 'task_completed' ? 'completion' : 'decision',
-            text: e.payload.kind === 'task_completed' ? (e.payload.result ?? '(no outcome recorded)') : e.payload.line,
-            cause: e.cause ?? undefined, objection: objectionBadge(e.objections.map((o) => o.comment)),
-          }} />
+      {shown.map((e) => {
+        const row = toLogEntryShape(e, openSessionId);
+        return <div key={e.id} data-testid={`memory-case-row-${e.id}`}>
+          <LogEntry entry={{ ...row, objection: objectionBadge(row.pendingObjections), bundledObjection: objectionBadge(row.bundledObjections) }}
+          // scroll only, not the MemoryCard focus: that one fires once per visit, and the draft stays as it is
+          onOpenMemoryEntry={(id: number) => document.querySelector(`[data-testid="memory-entry-${id}"]`)?.scrollIntoView({ block: 'center' })} />
           <div style={{ display: 'flex', gap: 8 }}>
             {/* only a decision_logged entry is a citable case by itself (citedEpisode) */}
             {e.payload.kind === 'decision_logged' && <Button variant="ghost" size="sm" onClick={() => onChange?.(e.id)}>This entry</Button>}
             {e.session_event_id !== null && <Button variant="ghost" size="sm" onClick={() => onChange?.(e.session_event_id)}>This session</Button>}
           </div>
-        </div>
-      ))}
+        </div>;
+      })}
     </div>
   );
 }

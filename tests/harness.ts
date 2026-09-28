@@ -24,9 +24,10 @@ import type { CliAuthCheck } from "../src/cli-auth.js";
 import { type CodexAppServerProbe, codexLoginAbsence } from "../src/codex-app-server.js";
 import { type Db, openDb } from "../src/db.js";
 import type { DraftClient } from "../src/draft.js";
-import type { EventRow } from "../src/events.js";
+import { appendEvent, type EventRow } from "../src/events.js";
 import type { GitHubAuth } from "../src/github-auth.js";
 import type { HarnessContainmentCheck } from "../src/harness-containment.js";
+import { recordKnowledge } from "../src/memory.js";
 import type { ProfileAdmin } from "../src/profile-create.js";
 import type { QuarantineResolvers } from "../src/quarantine.js";
 import type {
@@ -662,6 +663,30 @@ export async function loggedEntry(t: Tidepool, taskId: string, line: string): Pr
   await client.close();
   const log = (await api(t.baseUrl, "GET", "/api/log")).json;
   return log.entries.find((e: any) => e.payload.line === line);
+}
+
+/** 盤面全体の knowledge entry を1件置き、その id を返す(setup のみ)。 */
+export function rememberedNote(t: Tidepool, title: string): number {
+  return recordKnowledge(
+    t.db,
+    { scope: null, path: "build", title, text: `${title}.`, source: { commit: "0a46a46" }, author: { activity: "worker_verb", name: "deckhand" } },
+    "worker",
+    t.clock.now(),
+  ).entry_id;
+}
+
+/** `entryId` に異議を打ってセッションを閉じ(束ね済みにし)、`entries` を名指す memory の帰責を最新として足す。
+ *  setup のみ —— 門を通った帰責を直に置き、Board call は撃たない。 */
+export async function memoryAttributedObjection(t: Tidepool, taskId: string, entryId: number, entries: number[]): Promise<void> {
+  await api(t.baseUrl, "POST", "/api/triage/objection", { entry_id: entryId, comment: "そのメモが間違っています" });
+  await api(t.baseUrl, "POST", "/api/triage/close");
+  appendEvent(t.db, {
+    taskId,
+    workerId: "tidepool",
+    origin: "board",
+    at: t.clock.now(),
+    payload: { kind: "objection_attributed", entry_id: entryId, objection_event_ids: [], cause: "memory", evidence: "followed the note", entries, round: "after_rca" },
+  });
 }
 
 /** A child under `parentId` — which makes the parent `blocked` (unfinished
