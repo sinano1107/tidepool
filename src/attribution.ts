@@ -173,7 +173,8 @@ const settledAll = (tasks: Task[]) => tasks.every((r) => r.status === "done" || 
 type SecondRoundSource = Pick<Attribution, "id" | "entry_id" | "objection_event_ids">;
 
 /** 異議群を束ねた commit が立てた修理子の `task_registered`(その異議群の最後より後で最初のもの)。
- *  初回の帰責 event が書かれるはずだった位置 —— 同じ transaction の中にある。 */
+ *  初回の帰責 event が書かれるはずだった位置 —— 同じ transaction の中にある。束ねた異議群には必ず
+ *  修理子がある(task は消えず、`bundleObjections` が飛ばすのは task の無い異議だけ)。 */
 // ponytail: 修理子の目印も題の接頭辞だけ(rcaChildren と同じ)
 const repairRegistered = (db: Db, objectedId: string, after: number) =>
   (
@@ -186,10 +187,11 @@ const repairRegistered = (db: Db, objectedId: string, after: number) =>
   ).id;
 
 /** 束ね済みの異議を持つ entry ごとの帰責の状態(ADR 0168 決定3)。第2回を待つ(`awaiting`)のは、最新の帰責が
- *  初回の `uncertain` の entry と、最後に束ねられた異議群(session が閉じた `objection_raised`)より後に帰責が
- *  無い entry —— 後者の出所はその異議群で、当時の decision log は修理子の登録で切る。open session の異議は
- *  まだ束ねられていないので見ない。それ以外は最新の帰責(`latest`、同じ entry への追記は最新が有効 —— spec #563)。 */
-// ponytail: 毎 poll で全帰責と全異議を読む。帰責が数万に育ったら結果の不在を SQL 1本に寄せる
+ *  初回の `uncertain` の entry と、最後に束ねられた異議群(session が閉じた `objection_raised`)を最新の帰責が
+ *  出所に持たない entry —— 後者の出所はその異議群で、当時の decision log は修理子の登録で切る。前後は id でなく
+ *  出所で見る: 前の RCA 群の第2回は次の session の開いている間にも着地する。open session の異議はまだ束ねられて
+ *  いないので見ない。それ以外は最新の帰責(`latest`、同じ entry への追記は最新が有効 —— spec #563)。 */
+// ponytail: poll の sweep と RCA の決着の扉のたびに全帰責と全異議を読む。帰責が数万に育ったら結果の不在を SQL 1本に寄せる
 function attributionStates(db: Db): Array<{ task_id: string } & ({ awaiting: SecondRoundSource } | { latest: Attribution })> {
   const latest = new Map<number, Attribution>();
   for (const row of db.prepare("SELECT id, payload FROM events WHERE kind = 'objection_attributed' ORDER BY id").all() as Array<{ id: number; payload: string }>) {
@@ -210,7 +212,7 @@ function attributionStates(db: Db): Array<{ task_id: string } & ({ awaiting: Sec
   }
   return [...bundled].map(([entryId, { task_id, ids }]) => {
     const attribution = latest.get(entryId);
-    if (!attribution || attribution.id < ids.at(-1)!) {
+    if (!attribution?.objection_event_ids.includes(ids[0]!)) {
       return { task_id, awaiting: { id: repairRegistered(db, task_id, ids.at(-1)!), entry_id: entryId, objection_event_ids: ids } };
     }
     return attribution.round === "initial" && attribution.cause === "uncertain" ? { task_id, awaiting: attribution } : { task_id, latest: attribution };

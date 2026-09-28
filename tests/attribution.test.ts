@@ -973,6 +973,29 @@ it("open session の未帰責の異議は、同じタスクの RCA 子がすべ�
   expect((await attributions(t, s.task.id)).map((e: any) => e.payload.entry_id)).toEqual([s.entry.id]);
 });
 
+it("前の RCA 群の第2回が次の session の開いている間に確定しても、その session が close-only で閉じた未帰責の異議は、新しい RCA 群の決着で第2回が撃たれる", async () => {
+  const s = await objectedForDraft("reobjected");
+  t = s.t;
+  s.attributionClient.scriptJudgment(s.entry.id, new Error("claude CLI timed out"));
+  const first = await commit(t, s.task.id, "reobjected");
+  await api(t.baseUrl, "POST", "/api/triage/start");
+  const again = await object(t, s.entry.id, "the fixtures, again");
+  s.attributionClient.scriptJudgment(s.entry.id, { cause: "capability", evidence: "the first RCA decided it" });
+  await api(t.baseUrl, "POST", `/api/tasks/${first.self.id}/cancel`, {});
+  await api(t.baseUrl, "POST", `/api/tasks/${first.auditor.id}/cancel`, {});
+  await api(t.baseUrl, "POST", "/api/triage/close", { close_only: true });
+  s.attributionClient.scriptJudgment(s.entry.id, { cause: "task_ambiguity", evidence: "the second RCA decided it" });
+
+  const fresh = (await children(t, s.task.id)).filter((x: any) => x.title.startsWith("rca (") && x.status === "todo");
+  for (const rca of fresh) await api(t.baseUrl, "POST", `/api/tasks/${rca.id}/cancel`, {});
+
+  expect(fresh).toHaveLength(2);
+  expect((await attributions(t, s.task.id)).map((e: any) => [e.payload.cause, e.payload.round, e.payload.objection_event_ids])).toEqual([
+    ["capability", "after_rca", [s.objection]],
+    ["task_ambiguity", "after_rca", [again]],
+  ]);
+});
+
 it("初回の帰責の失敗は poll で撃ち直されず、round initial の失敗が3つあっても第2回の回数と間隔には数えない", async () => {
   const s = await objectedForDraft("failing first");
   t = s.t;
