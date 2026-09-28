@@ -81,6 +81,16 @@ async function propose(taskId: string, args: Record<string, unknown>) {
   }
 }
 
+/** RCA 自身の推論を log_decision で書き、その event id(based_on_decision に渡すもの)を返す。 */
+async function decide(taskId: string, line: string): Promise<number> {
+  const client = await mcpClient(t.mcpBaseUrl, taskId);
+  try {
+    return body(await client.callTool({ name: "log_decision", arguments: { line } })).event_id;
+  } finally {
+    await client.close();
+  }
+}
+
 const memoryEntries = async () => (await api(t.baseUrl, "GET", "/api/settings/memory/entries")).json.entries;
 
 async function attributionId(taskId: string, entryId: number) {
@@ -117,7 +127,7 @@ it("capability の異議エントリに RCA が呼ぶと、宛先 = エントリ
   ]);
 });
 
-it("学習に向かない cause・人間登録の task_ambiguity / missing_information の Behavior・as の過不足・親の異議エントリでない id は domain error で拒否され、work task から呼んでも拒否され、店には何も載らない", async () => {
+it("学習に向かない cause・人間登録の task_ambiguity / missing_information の Behavior・as と based_on_decision の過不足・decision でない based_on_decision・親の異議エントリでない id は domain error で拒否され、work task から呼んでも拒否され、店には何も載らない", async () => {
   const attributionClient = new FakeAttributionClient();
   t = await bootTidepool({ attributionClient });
   const [mixed, other]: any[] = await objectedTasks(attributionClient, [
@@ -134,6 +144,7 @@ it("学習に向かない cause・人間登録の task_ambiguity / missing_infor
 
   const self = mixed.kids.find((x: any) => x.title === "rca (self): mixed");
   await runNow(self.id);
+  const decision = await decide(self.id, "the fixture rule was never written down");
   for (const [args, error] of [
     [{ entry_id: uncertain }, "the entry's cause is uncertain: nothing to learn from it"],
     [{ entry_id: requirementChange }, "the entry's cause is requirement_change: nothing to learn from it"],
@@ -142,6 +153,9 @@ it("学習に向かない cause・人間登録の task_ambiguity / missing_infor
     [{ entry_id: missingInformation, as: "behavior" }, "the task was not registered by an agent: there is no agent to address a behavior to"],
     [{ entry_id: missingInformation }, 'as ("behavior" or "knowledge") is required for a missing_information entry and only for it'],
     [{ entry_id: capability, as: "behavior" }, 'as ("behavior" or "knowledge") is required for a missing_information entry and only for it'],
+    [{ entry_id: missingInformation, as: "knowledge" }, "based_on_decision is required for a knowledge entry and only for it"],
+    [{ entry_id: missingInformation, as: "knowledge", based_on_decision: completion }, `event ${completion} is not a logged decision`],
+    [{ entry_id: capability, based_on_decision: decision }, "based_on_decision is required for a knowledge entry and only for it"],
     [{ entry_id: completion }, `entry ${completion} carries no attributed objection`],
     [{ entry_id: other.entries[0].id }, `entry ${other.entries[0].id} is not a decision-log entry of your parent task`],
     [{ entry_id: 999_999 }, "entry 999999 is not a decision-log entry of your parent task"],
@@ -178,18 +192,22 @@ it("agent 登録の task では(盤面の登録は除く)task_ambiguity と miss
   const [taskAmbiguity, missingInformation, preference] = entries.map((e: any) => e.id);
   const auditor = kids.find((x: any) => x.title === "rca (auditor): delegated");
   await runNow(auditor.id);
+  const decision = await decide(auditor.id, "the fixture rule was never written down");
 
   const ids = [];
   for (const args of [
     { entry_id: taskAmbiguity },
     { entry_id: missingInformation, as: "behavior" },
-    { entry_id: missingInformation, as: "knowledge" },
+    { entry_id: missingInformation, as: "knowledge", based_on_decision: decision },
     { entry_id: preference },
   ]) {
     const result = await propose(auditor.id, args);
     expect(result.isError, JSON.stringify(result.content)).toBeFalsy();
     ids.push(body(result).entry_id);
   }
+
+  const behaviorWithDecision = await propose(auditor.id, { entry_id: missingInformation, as: "behavior", based_on_decision: decision });
+  expect(behaviorWithDecision.content[0].text).toBe("based_on_decision is required for a knowledge entry and only for it");
 
   // 盤面(tidepool)の登録は agent の登録ではない
   const boardAuditor = board.kids.find((x: any) => x.title === "rca (auditor): by the board");
@@ -204,13 +222,37 @@ it("agent 登録の task では(盤面の登録は除く)task_ambiguity と miss
   expect(listed).toEqual([
     expect.objectContaining({ id: ids[0], kind: "behavior", state: "candidate", addressee: "tako", source: await source(taskAmbiguity), author, cause: "task_ambiguity" }),
     expect.objectContaining({ id: ids[1], kind: "behavior", state: "candidate", addressee: "tako", source: await source(missingInformation), author, cause: "missing_information" }),
-    expect.objectContaining({ id: ids[2], kind: "knowledge", state: "approved", addressee: null, source: await source(missingInformation), author, cause: "missing_information" }),
+    expect.objectContaining({ id: ids[2], kind: "knowledge", state: "approved", addressee: null, source: { kind: "decision", ref: decision }, author, cause: null }),
     expect.objectContaining({ id: ids[3], kind: "behavior", state: "candidate", addressee: t.worker.id, source: await source(preference), author, cause: "preference" }),
   ]);
 
   const client = await managementMcpClient(t.baseUrl);
   try {
     expect(body(await client.callTool({ name: "list_memory_entries", arguments: {} }))).toEqual(listed);
+  } finally {
+    await client.close();
+  }
+});
+
+it("missing_information の Knowledge は RCA が log_decision した推論を出所に取り(based_on_decision)、read_memory には inference と届く", async () => {
+  const attributionClient = new FakeAttributionClient();
+  t = await bootTidepool({ attributionClient });
+  const [{ entries, kids }]: any[] = await objectedTasks(attributionClient, [{ title: "uninformed", causes: ["missing_information"] }]);
+  const self = kids.find((x: any) => x.title === "rca (self): uninformed");
+  await runNow(self.id);
+  const decision = await decide(self.id, "the fixture rule was never written down");
+
+  const result = await propose(self.id, { entry_id: entries[0].id, as: "knowledge", based_on_decision: decision });
+
+  expect(result.isError, JSON.stringify(result.content)).toBeFalsy();
+  const { entry_id } = body(result);
+  expect(await memoryEntries()).toEqual([
+    expect.objectContaining({ id: entry_id, kind: "knowledge", state: "approved", source: { kind: "decision", ref: decision }, cause: null }),
+  ]);
+  const client = await mcpClient(t.mcpBaseUrl, self.id);
+  try {
+    const read = body(await client.callTool({ name: "read_memory", arguments: { ids: [entry_id] } }));
+    expect(read.entries).toEqual([expect.objectContaining({ id: entry_id, source: { kind: "decision", ref: decision }, source_kind: "inference" })]);
   } finally {
     await client.close();
   }

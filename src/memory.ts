@@ -383,8 +383,8 @@ export function moveMemoryByMetaReview(db: Db, input: Parameters<typeof moveMemo
   return moveMemory(db, input, origin, at);
 }
 
-/** 畳みと統合の出所 = meta-review が log_decision で書いた推論。 */
-function requireDecision(db: Db, eventId: number): number {
+/** LLM が合成した本文の出所 = 書き手が log_decision で書いた推論(meta-review の畳みと統合、RCA の Knowledge —— ADR 0115 追記)。 */
+export function requireDecision(db: Db, eventId: number): number {
   if (getEvent(db, eventId)?.kind !== "decision_logged") throw new DomainError(`event ${eventId} is not a logged decision`);
   return eventId;
 }
