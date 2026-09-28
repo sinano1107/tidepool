@@ -64,16 +64,17 @@ export interface BehaviorDraftClient {
   draft(input: BehaviorDraftInput, setting: Pick<ExecutionSettingRow, "model" | "effort">): Promise<BehaviorDraft>;
 }
 
-/** 帰責と起草の Board call が扉から受け取るもの。合成 root が一度だけ組み、各扉の deps の `attributionCalls` に同じ束を渡す。 */
+/** 帰責と起草の Board call が受け取るもの。合成 root が一度だけ組み、scheduler(poll の sweep)と triage close に同じ束を渡す
+ *  (ADR 0169)。欄は必須で値に `undefined` を許す —— 扉の deps を丸ごと渡す取り違えを型で落とすため。 */
 export interface AttributionCallDeps {
-  /** 帰責の Board call(ADR 0115 / issue #574・#575)。Absent → commit は異議を `uncertain` で束ね(RCA は帰責以前のまま立つ)、第2回も撃たない。 */
-  attributionClient?: AttributionClient;
-  /** Behavior candidate 起草の Board call(ADR 0120 / issue #617)。commit の後と帰責の第2回の後に撃つ。Absent → 何も起草しない。 */
-  behaviorDraftClient?: BehaviorDraftClient;
+  /** 帰責の Board call(ADR 0115 / issue #574・#575)。undefined → commit は異議を `uncertain` で束ね(RCA は帰責以前のまま立つ)、第2回も撃たない。 */
+  attributionClient: AttributionClient | undefined;
+  /** Behavior candidate 起草の Board call(ADR 0120 / issue #617)。sweep が帰責の後に撃つ。undefined → 何も起草しない。 */
+  behaviorDraftClient: BehaviorDraftClient | undefined;
   /** 起草の scope が null の workspace で継ぐ盤面の既定(issue #617)。 */
-  workspace?: { name: string };
-  /** 容器の前提(ADR 0136 決定7)。不成立なら撃てなかった扱い。Absent → 前提を検査しない盤面。 */
-  containers?: Pick<ProcessContainers, "preflight">;
+  workspace: { name: string } | undefined;
+  /** 容器の前提(ADR 0136 決定7)。不成立なら撃てなかった扱い。undefined → 前提を検査しない盤面。 */
+  containers: Pick<ProcessContainers, "preflight"> | undefined;
 }
 
 const uncertain = (evidence: string): GatedJudgment => ({ cause: "uncertain", evidence, entries: null });
@@ -172,7 +173,7 @@ function refireDue(db: Db, key: RefireKey, now: Date): boolean {
  *  帰責の障害は commit を止めない。 */
 export async function attributeObjections(
   db: Db,
-  deps: AttributionCallDeps = {},
+  deps: AttributionCallDeps,
   sessionId: number,
   now: Date,
 ): Promise<Map<number, GatedJudgment>> {
@@ -232,7 +233,7 @@ const repairRegistered = (db: Db, objectedId: string, after: number) =>
  *  出所に持たない entry —— 後者の出所はその異議群で、当時の decision log は修理子の登録で切る。前後は id でなく
  *  出所で見る: 前の RCA 群の第2回は次の session の開いている間にも着地する。open session の異議はまだ束ねられて
  *  いないので見ない。それ以外は最新の帰責(`latest`、同じ entry への追記は最新が有効 —— spec #563)。 */
-// ponytail: poll の sweep と RCA の決着の扉のたびに全帰責と全異議を読む。帰責が数万に育ったら結果の不在を SQL 1本に寄せる
+// ponytail: poll の sweep のたびに全帰責と全異議を読む。帰責が数万に育ったら結果の不在を SQL 1本に寄せる
 function attributionStates(db: Db): Array<{ task_id: string } & ({ awaiting: SecondRoundSource } | { latest: Attribution })> {
   const latest = latestAttributions(db);
   const bundled = new Map<number, { task_id: string; session_id: number; ids: number[] }>();
@@ -254,24 +255,6 @@ function attributionStates(db: Db): Array<{ task_id: string } & ({ awaiting: Sec
     }
     return attribution.round === "initial" && attribution.cause === "uncertain" ? { task_id, awaiting: attribution } : { task_id, latest: attribution };
   });
-}
-
-/** 帰責の第2回(ADR 0115 決定2 / issue #575)の扉側の契機: `settled` が異議されたタスクの RCA 子で、
- *  それを最後にその RCA 子がすべて決着(完了 / 取り消し)したとき、第2回を待つ entry(初回の `uncertain` と
- *  束ね済みの未帰責、ADR 0168 決定3)ごとに第2回を撃つ。後から同じタスクの統合 review が決着しても撃たない。
- *  取りこぼし(撃てなかった・失敗・再起動)は poll の sweep が結果の不在で拾い直す(ADR 0164 決定1)。 */
-export async function attributeAfterRca(
-  db: Db,
-  deps: AttributionCallDeps = {},
-  settled: Task,
-  now: Date,
-): Promise<void> {
-  if (settled.type !== "review" || settled.parent_id === null) return;
-  const objectedId = settled.parent_id;
-  const rca = rcaChildren(db, objectedId);
-  if (!rca.some((r) => r.id === settled.id) || !settledAll(rca)) return;
-  const pending = attributionStates(db).flatMap((s) => (s.task_id === objectedId && "awaiting" in s ? [s.awaiting] : []));
-  await Promise.all(pending.map((source) => attributeSecondRound(db, deps, objectedId, source, now)));
 }
 
 /** 帰責の第2回を1 entry ぶん撃つ: RCA の findings を証拠にした判断(`uncertain` も判断として)を
@@ -309,17 +292,6 @@ const secondRoundInput = (db: Db, objectedId: string, attribution: SecondRoundSo
   rca_findings: rcaChildren(db, objectedId).flatMap((r) => decisionLogText(db, r.id)),
 });
 
-/** commit が書いた初回の帰責(`since` より後の event)ごとに起草を fire-and-forget する。境で切るのは、
- *  commit が束ねなかった entry の古い帰責から二度起草しないため。 */
-export function draftAfterCommit(db: Db, deps: AttributionCallDeps = {}, since: number, now: Date): void {
-  const rows = db.prepare("SELECT id FROM events WHERE kind = 'objection_attributed' AND id > ? ORDER BY id").all(since) as { id: number }[];
-  for (const { id } of rows) {
-    const payload = getEvent(db, id)!.payload;
-    if (payload.kind !== "objection_attributed") continue;
-    fireAndForget(draftBehaviorCandidate(db, deps, { id, ...payload }, now), payload.entry_id);
-  }
-}
-
 const fireAndForget = (fired: Promise<void>, entryId: number) =>
   void fired.catch((err) => console.error(`[attribution] entry ${entryId}: ${String(err)}`));
 
@@ -343,7 +315,7 @@ function refireTargets(db: Db): RefireTarget[] {
 /** 撃ち直しの sweep(ADR 0164 決定1・4): pickup の poll が同期で呼び、撃ち直しの対象を fire-and-forget で撃つ。
  *  起草の規則・回数・間隔・in-flight・撃てるか は撃つ側(`draftBehaviorCandidate` / `attributeSecondRound`)が見る。
  *  初回の帰責は撃ち直さない(ADR 0168 決定1)。 */
-export function refireAttributions(db: Db, deps: AttributionCallDeps = {}, now: Date): void {
+export function refireAttributions(db: Db, deps: AttributionCallDeps, now: Date): void {
   for (const target of refireTargets(db)) {
     if (target.refire === "second_round") {
       fireAndForget(attributeSecondRound(db, deps, target.task_id, target.source, now), target.source.entry_id);
@@ -423,7 +395,7 @@ function memoryRead(db: Db, entry: DecisionLogEntry): AttributionInput["memory_r
  *  人間エントリ・起草 client の無い盤面・宛先の agent がいない起草(登録者が人間か盤面の
  *  `task_ambiguity` / `missing_information`、ADR 0164 決定2)・workspace の無い task は何もしない。宛先は cause から導出し
  *  (ADR 0115 決定4)、Board call の `addressee` は `preference` だけが読む。撃てなかったら何も書かず、
- *  撃って失敗したら `memory_draft_failed` を残す(ADR 0164 決定3)。帰責の transaction の後に走り、
+ *  撃って失敗したら `memory_draft_failed` を残す(ADR 0164 決定3)。poll の sweep が撃ち(第2回は帰責の追記の直後、ADR 0169)、
  *  commit も settlement も止めない。 */
 export async function draftBehaviorCandidate(db: Db, deps: AttributionCallDeps, attribution: Attribution, now: Date): Promise<void> {
   const { cause, round, entry_id } = attribution;

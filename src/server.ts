@@ -615,7 +615,7 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
   // 人間 verb には後始末の deps 一式ではなく、束ねた callback ひとつを渡す
   // (`containment` / `registryReachability` と同じ配線)。
   const teardownQuarantine = (taskId: string) => acceptTeardownQuarantine(teardownDeps, taskId);
-  // 帰責と起草の Board call の束: scheduler・worker MCP・WebUI・管理 MCP へ同じ1つを渡す
+  // 帰責と起草の Board call の束: scheduler(poll の sweep)と WebUI(triage close)へ同じ1つを渡す
   const attributionCalls: AttributionCallDeps = {
     attributionClient: options.attributionClient,
     behaviorDraftClient: options.behaviorDraftClient,
@@ -766,7 +766,6 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
       github: options.github,
       landing,
       draftClient: options.draftClient,
-      attributionCalls,
       defaultAgentName: worker.id,
       auditorName,
       agentRegistered: options.agentRegistered,
@@ -808,7 +807,6 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
       isProtectedWorkspace: options.isProtectedWorkspace,
       listAgents: options.listAgents,
       allocationClient: options.allocationClient,
-      attributionCalls,
       agentAdmin,
       pollNow,
     }),

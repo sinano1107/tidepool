@@ -1,13 +1,13 @@
 import { afterEach, expect, it } from "vitest";
-import { attributeAfterRca, attributeObjections, type GatedJudgment } from "../src/attribution.js";
+import { attributeObjections, type GatedJudgment, refireAttributions } from "../src/attribution.js";
 import type { Cause } from "../src/cause.js";
 import { openDb } from "../src/db.js";
 import { appendEvent, listEvents } from "../src/events.js";
 import { readMemory, recordKnowledge, searchMemory } from "../src/memory.js";
-import { cancelTaskDirectly, getTask, listChildren, logDecision, registerTask } from "../src/tasks.js";
+import { cancelTaskDirectly, listChildren, logDecision, registerTask } from "../src/tasks.js";
 import { reportProviderUsage } from "../src/throttle.js";
 import { commitTriage, raiseObjection, startTriage, TRIAGE_TIMEOUT } from "../src/triage.js";
-import { FakeAttributionClient, FakeBehaviorDraftClient } from "./fakes.js";
+import { FakeAttributionClient, FakeBehaviorDraftClient, noAttributionCalls } from "./fakes.js";
 import {
   api,
   bootTidepool,
@@ -22,6 +22,7 @@ import {
   managementMcpClient,
   mcpClient,
   memoryEntries,
+  nextPoll,
   object,
   objectedForDraft,
   registerWork,
@@ -326,9 +327,9 @@ it("uncertain の entry は RCA 子がすべて決着した後に1度だけ第2�
   expect(s.attributionClient.calls).toHaveLength(1);
   expect(await attributions(t, s.task.id)).toHaveLength(1);
 
-  const cancelled = await api(t.baseUrl, "POST", `/api/tasks/${s.auditor.id}/cancel`, {});
+  await api(t.baseUrl, "POST", `/api/tasks/${s.auditor.id}/cancel`, {});
+  await nextPoll(t);
 
-  expect(cancelled.status).toBe(200);
   expect((await attributions(t, s.task.id)).map((e: any) => e.payload)).toEqual([
     expect.objectContaining({ entry_id: s.entry.id, cause: "uncertain", round: "initial" }),
     {
@@ -363,24 +364,6 @@ it("初回で uncertain が無いタスクでは RCA 子がすべて決着して
   expect((await attributions(t, s.task.id)).map((e: any) => e.payload.round)).toEqual(["initial"]);
 });
 
-it("最後の RCA 子を人間が human の扉で完了しても第2回が走る", async () => {
-  const s = await objectedAndCommitted("human-rca");
-  t = s.t;
-  s.attributionClient.scriptJudgment(s.entry.id, { cause: "task_ambiguity", evidence: "criteria were silent" });
-  await api(t.baseUrl, "POST", `/api/tasks/${s.self.id}/cancel`, {});
-  await api(t.baseUrl, "PATCH", `/api/tasks/${s.auditor.id}`, { assignee: "human" });
-
-  const done = await api(t.baseUrl, "POST", `/api/tasks/${s.auditor.id}/complete`, {
-    handoff: { outcome: "the criteria never mentioned fixtures" },
-  });
-
-  expect(done.status).toBe(200);
-  expect((await attributions(t, s.task.id)).map((e: any) => [e.payload.cause, e.payload.round])).toEqual([
-    ["uncertain", "initial"],
-    ["task_ambiguity", "after_rca"],
-  ]);
-});
-
 it("ログの HTTP / 管理 MCP 読取は異議の隣に最新の cause を返す", async () => {
   const s = await objectedAndCommitted("read attribution");
   t = s.t;
@@ -390,6 +373,7 @@ it("ログの HTTP / 管理 MCP 読取は異議の隣に最新の cause を返�
   });
   await api(t.baseUrl, "POST", `/api/tasks/${s.self.id}/cancel`, {});
   await api(t.baseUrl, "POST", `/api/tasks/${s.auditor.id}/cancel`, {});
+  await nextPoll(t);
 
   const httpEntry = (await api(t.baseUrl, "GET", "/api/log")).json.entries.find(
     (entry: any) => entry.id === s.entry.id,
@@ -421,7 +405,7 @@ it.each([
   ["worker", (t: Tidepool) => t.worker.id],
   ["all", () => null],
 ] as const)(
-  "初回の帰責が preference のエントリは commit 後に Board call が起草し、author board・出所 = 帰責 event・scope = task の workspace・宛先 = Board call の %s の candidate が載る",
+  "初回の帰責が preference のエントリは commit が促す次の poll で Board call が起草し、author board・出所 = 帰責 event・scope = task の workspace・宛先 = Board call の %s の candidate が載る",
   async (addressee, expected) => {
     const s = await objectedForDraft("naming", { initial: { cause: "preference", evidence: "taste" } });
     t = s.t;
@@ -513,6 +497,7 @@ it.each([
 
     await settleRca(t, self.id, "the criteria named the fixtures", "fixtures were required");
     await api(t.baseUrl, "POST", `/api/tasks/${auditor.id}/cancel`, {});
+    await nextPoll(t);
 
     const second = (await attributions(t, s.task.id)).find((e: any) => e.payload.round === "after_rca");
     expect((await memoryEntries(t)).filter((e: any) => e.kind === "behavior")).toEqual([
@@ -542,6 +527,7 @@ it.each(["requirement_change", "environment"] as const)(
 
     await api(t.baseUrl, "POST", `/api/tasks/${self.id}/cancel`, {});
     await api(t.baseUrl, "POST", `/api/tasks/${auditor.id}/cancel`, {});
+    await nextPoll(t);
 
     expect((await attributions(t, s.task.id)).map((e: any) => e.payload.cause)).toEqual(["uncertain", cause]);
     expect(s.behaviorDraftClient.calls).toEqual([]);
@@ -647,16 +633,16 @@ it("起草が1回失敗すると帰責 id つきの memory_draft_failed が残�
   expect(s.behaviorDraftClient.calls).toHaveLength(2);
 });
 
-it("第2回の帰責の失敗は after_rca を書かず失敗 event を残し、RCA の決着の応答は倒れない。1時間後の tick の撃ち直しで確定し、学習向きなら candidate まで載る", async () => {
+it("第2回の帰責の失敗は after_rca を書かず失敗 event を残し、1時間後の tick の撃ち直しで確定し、学習向きなら candidate まで載る", async () => {
   const s = await objectedForDraft("flaky-rca");
   t = s.t;
   const { self, auditor } = await commit(t, s.task.id, "flaky-rca");
   s.attributionClient.scriptJudgment(s.entry.id, new Error("claude CLI timed out"));
 
   await api(t.baseUrl, "POST", `/api/tasks/${self.id}/cancel`, {});
-  const cancelled = await api(t.baseUrl, "POST", `/api/tasks/${auditor.id}/cancel`, {});
+  await api(t.baseUrl, "POST", `/api/tasks/${auditor.id}/cancel`, {});
+  await nextPoll(t);
 
-  expect([cancelled.status, cancelled.json.status]).toEqual([200, "cancelled"]);
   expect((await attributions(t, s.task.id)).map((e: any) => e.payload.round)).toEqual(["initial"]);
   expect((await attributionsFailed(t, s.task.id)).map((e: any) => [e.worker_id, e.origin, e.payload])).toEqual([
     ["tidepool", "board", { kind: "objection_attribution_failed", entry_id: s.entry.id, round: "after_rca", reason: "Board call failed: claude CLI timed out" }],
@@ -866,6 +852,7 @@ it("第2回の帰責が確定した entry は、同じタスクに新しい RCA 
   s.attributionClient.scriptJudgment(s.entry.id, { cause: "capability", evidence: "the RCA decided it" });
   await api(t.baseUrl, "POST", `/api/tasks/${s.self.id}/cancel`, {});
   await api(t.baseUrl, "POST", `/api/tasks/${s.auditor.id}/cancel`, {});
+  await nextPoll(t);
   expect(s.attributionClient.calls).toHaveLength(2);
 
   await completeIntegrationReviews(t, s.task.id);
@@ -886,7 +873,7 @@ it("第2回の帰責が確定した entry は、同じタスクに新しい RCA 
 
 // 初回の帰責の失敗は未帰責のまま RCA に倒れ、第2回が拾う(ADR 0168 / issue #1082)
 
-it("初回の帰責が失敗した未帰責の entry は、RCA 子がすべて決着すると扉で第2回が撃たれ、その session の異議を出所に確定し、学習向きなら candidate まで載る", async () => {
+it("初回の帰責が失敗した未帰責の entry は、RCA 子がすべて決着すると次の poll で第2回が撃たれ、その session の異議を出所に確定し、学習向きなら candidate まで載る", async () => {
   const s = await objectedForDraft("unattributed");
   t = s.t;
   s.attributionClient.scriptJudgment(s.entry.id, new Error("claude CLI timed out"));
@@ -900,6 +887,7 @@ it("初回の帰責が失敗した未帰責の entry は、RCA 子がすべて�
   await completeIntegrationReviews(t, repair.id);
 
   await settleRca(t, self.id, "the criteria named the fixtures", "fixtures were required");
+  await nextPoll(t);
 
   const [second] = await attributions(t, s.task.id);
   expect(second.payload).toEqual({
@@ -924,25 +912,6 @@ it("初回の帰責が失敗した未帰責の entry は、RCA 子がすべて�
   ]);
 });
 
-it("未帰責の entry の第2回を扉で撃てなかったら(throttle)、窓が開いた後の tick の sweep が撃って確定する", async () => {
-  const s = await objectedForDraft("unattributed sweep");
-  t = s.t;
-  s.attributionClient.scriptJudgment(s.entry.id, new Error("claude CLI timed out"));
-  const { self, auditor } = await commit(t, s.task.id, "unattributed sweep");
-  s.attributionClient.scriptJudgment(s.entry.id, { cause: "capability", evidence: "the RCA decided it" });
-  reportFableWindow(t, true);
-  await api(t.baseUrl, "POST", `/api/tasks/${self.id}/cancel`, {});
-  await api(t.baseUrl, "POST", `/api/tasks/${auditor.id}/cancel`, {});
-  expect(await attributions(t, s.task.id)).toEqual([]);
-
-  reportFableWindow(t, false);
-  await t.clock.advance(HOUR);
-
-  expect((await attributions(t, s.task.id)).map((e: any) => [e.payload.cause, e.payload.round, e.payload.objection_event_ids])).toEqual([
-    ["capability", "after_rca", [s.objection]],
-  ]);
-});
-
 it("open session の未帰責の異議は、同じタスクの RCA 子がすべて決着しても第2回の対象にならない", async () => {
   const s = await objectedForDraft("still open");
   t = s.t;
@@ -955,6 +924,7 @@ it("open session の未帰責の異議は、同じタスクの RCA 子がすべ�
 
   await api(t.baseUrl, "POST", `/api/tasks/${self.id}/cancel`, {});
   await api(t.baseUrl, "POST", `/api/tasks/${auditor.id}/cancel`, {});
+  await nextPoll(t);
 
   expect(s.attributionClient.calls.map((c) => c.input.entry_id)).toEqual([s.entry.id, s.entry.id]);
   expect((await attributions(t, s.task.id)).map((e: any) => e.payload.entry_id)).toEqual([s.entry.id]);
@@ -970,11 +940,13 @@ it("前の RCA 群の第2回が次の session の開いている間に確定し�
   s.attributionClient.scriptJudgment(s.entry.id, { cause: "capability", evidence: "the first RCA decided it" });
   await api(t.baseUrl, "POST", `/api/tasks/${first.self.id}/cancel`, {});
   await api(t.baseUrl, "POST", `/api/tasks/${first.auditor.id}/cancel`, {});
+  await nextPoll(t);
   await api(t.baseUrl, "POST", "/api/triage/close", { close_only: true });
   s.attributionClient.scriptJudgment(s.entry.id, { cause: "task_ambiguity", evidence: "the second RCA decided it" });
 
   const fresh = (await children(t, s.task.id)).filter((x: any) => x.title.startsWith("rca (") && x.status === "todo");
   for (const rca of fresh) await api(t.baseUrl, "POST", `/api/tasks/${rca.id}/cancel`, {});
+  await nextPoll(t);
 
   expect(fresh).toHaveLength(2);
   expect((await attributions(t, s.task.id)).map((e: any) => [e.payload.cause, e.payload.round, e.payload.objection_event_ids])).toEqual([
@@ -1001,6 +973,7 @@ it("初回の帰責の失敗は poll で撃ち直されず、round initial の�
 
   const rcas = (await children(t, s.task.id)).filter((x: any) => x.title.startsWith("rca ("));
   for (const rca of rcas) await api(t.baseUrl, "POST", `/api/tasks/${rca.id}/cancel`, {});
+  await nextPoll(t);
 
   expect(rcas).toHaveLength(6);
   expect((await attributions(t, s.task.id)).map((e: any) => [e.payload.cause, e.payload.round])).toEqual([["capability", "after_rca"]]);
@@ -1051,7 +1024,7 @@ it("帰責の入力の読んだ記憶は、異議された decision と同じ wo
   b.read(later);
   const client = new FakeAttributionClient();
 
-  await attributeObjections(b.db, { attributionClient: client }, b.objectTo(decision), at);
+  await attributeObjections(b.db, { ...noAttributionCalls, attributionClient: client }, b.objectTo(decision), at);
 
   expect(client.calls.map((c) => c.input.memory_read)).toEqual([
     [{ id: mine, kind: "knowledge", title: "Squash before merge", text: "Squash before merge." }],
@@ -1082,7 +1055,7 @@ it.each<[string, (ids: { read: number; unread: number }) => { cause: Cause; entr
   const client = new FakeAttributionClient();
   client.scriptJudgment(b.decision, { ...judgment(b), evidence: "followed the note" });
 
-  commitTriage(b.db, at, [], await attributeObjections(b.db, { attributionClient: client }, b.sessionId, at));
+  commitTriage(b.db, at, [], await attributeObjections(b.db, { ...noAttributionCalls, attributionClient: client }, b.sessionId, at));
 
   expect(attributed(b.db, b.task.id)).toEqual([
     expect.objectContaining({ cause: "uncertain", evidence: expect.stringContaining(reason), entries: null }),
@@ -1094,7 +1067,7 @@ it("初回: 読んだ集合の中の entry を名指す memory は entries ご�
   const client = new FakeAttributionClient();
   client.scriptJudgment(b.decision, { cause: "memory", evidence: "followed the squash note", entries: [b.read] });
 
-  commitTriage(b.db, at, [], await attributeObjections(b.db, { attributionClient: client }, b.sessionId, at));
+  commitTriage(b.db, at, [], await attributeObjections(b.db, { ...noAttributionCalls, attributionClient: client }, b.sessionId, at));
 
   expect(attributed(b.db, b.task.id)).toEqual([
     { kind: "objection_attributed", entry_id: b.decision, objection_event_ids: [expect.any(Number)], cause: "memory", evidence: "followed the squash note", entries: [b.read], round: "initial" },
@@ -1108,13 +1081,15 @@ it.each<[string, (ids: { read: number; unread: number }) => number[], Partial<Ga
 ])("第2回: %s", async (_, entries, expected) => {
   const b = objectedAfterReading();
   const client = new FakeAttributionClient();
-  commitTriage(b.db, at, [], await attributeObjections(b.db, { attributionClient: client }, b.sessionId, at));
+  commitTriage(b.db, at, [], await attributeObjections(b.db, { ...noAttributionCalls, attributionClient: client }, b.sessionId, at));
   client.scriptJudgment(b.decision, { cause: "memory", evidence: "the RCA traced it to the note", entries: entries(b) });
   const drafter = new FakeBehaviorDraftClient();
   const rca = listChildren(b.db, b.task.id).filter((c) => c.title.startsWith("rca ("));
   for (const r of rca) cancelTaskDirectly(b.db, r, null, at, {});
 
-  await attributeAfterRca(b.db, { attributionClient: client, behaviorDraftClient: drafter, workspace: { name: "charts" } }, getTask(b.db, rca.at(-1)!.id)!, at);
+  refireAttributions(b.db, { attributionClient: client, behaviorDraftClient: drafter, workspace: { name: "charts" }, containers: undefined }, at);
+  // sweep は fire-and-forget: fake の返答が着地するまで回す
+  await new Promise((resolve) => setImmediate(resolve));
 
   expect(attributed(b.db, b.task.id).map((p) => p.round)).toEqual(["initial", "after_rca"]);
   expect(attributed(b.db, b.task.id)[1]).toMatchObject({ entries: entries(b), ...expected });

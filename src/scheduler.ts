@@ -270,8 +270,8 @@ export function startScheduler(deps: {
   registry?: RegistrySource;
   /** registry の agent 一覧(issue #920): routing の due 判定の直前に tier の提案の pin を照合する。Absent → registry の無い盤面。 */
   agents?: ListAgentTiers;
-  /** 帰責と起草の Board call(ADR 0164): poll が結果の無い帰責を撃ち直す。Absent → 撃ち直すものが無い盤面。 */
-  attributionCalls?: AttributionCallDeps;
+  /** 帰責と起草の Board call(ADR 0164 / ADR 0169): 第2回の帰責と起草を撃つのは poll の sweep だけ。 */
+  attributionCalls: AttributionCallDeps;
 }): Scheduler {
   const {
     db,

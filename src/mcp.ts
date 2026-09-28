@@ -3,7 +3,7 @@ import type { Router } from "express";
 import { z } from "zod";
 import type { AgentAdmin } from "./agent-create.js";
 import { type AllocationClient, reviewAllocation } from "./allocation-review.js";
-import { type AttributionCallDeps, attributeAfterRca, proposeFromObjection } from "./attribution.js";
+import { proposeFromObjection } from "./attribution.js";
 import type { Clock } from "./clock.js";
 import type { Db } from "./db.js";
 import { PRIORITY_FIELD_DESCRIPTION, readExecutionSettings, TIER_FIELD_DESCRIPTION, TIERS } from "./execution-setting.js";
@@ -164,9 +164,6 @@ export interface McpDeps {
    *  asked after an integration review completes. Absent → no annotation is
    *  written (a board with no Board call configured, same as translation). */
   allocationClient?: AllocationClient;
-  /** The attribution / drafting Board calls (ADR 0115 決定2 / issue #575), fired
-   *  once a task's last RCA child completes. */
-  attributionCalls?: AttributionCallDeps;
   /** registry の agent 一覧(issue #920): routing meta-review の tier の提案が agent の定義を読む。Absent → registry の無い盤面。 */
   agentAdmin?: Partial<Pick<AgentAdmin, "list">>;
 }
@@ -498,11 +495,6 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
               console.error(`[allocation-review] ${done.id}: ${String(err)}`),
             );
           }
-          // 帰責の第2回(ADR 0115 決定2): 同じ位置・同じ fire-and-forget。決着したのが
-          // 異議されたタスクの最後の RCA 子だったときだけ中で撃つ
-          void attributeAfterRca(deps.db, deps.attributionCalls, done, now).catch((err) =>
-            console.error(`[attribution] ${done.id}: ${String(err)}`),
-          );
           return { id: done.id, status: done.status };
         },
         (task, workspace) => assertWorkTreeCommitted(deps, task, workspace),
