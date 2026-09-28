@@ -10,6 +10,8 @@ import type { ExecutionSettingRow } from "./execution-setting.js";
 const judgmentSchema = z.object({
   cause: z.enum(CAUSES),
   evidence: z.string().min(1),
+  // prompt の JSON は model が null を書きうる —— 欠落と同じに読み、正しい判定を parse 失敗で落とさない
+  entries: z.array(z.number().int()).nullish().transform((v) => v ?? undefined),
 });
 
 /** The question the board asks when an objection is bundled (ADR 0115 決定2):
@@ -29,8 +31,11 @@ function buildPrompt(input: AttributionInput): string {
     "for the objected reading or omitting a fact the worker needed; environment is tooling, " +
     "network or sandbox trouble outside the worker; preference is the human's taste where the " +
     "worker's choice was equally valid; requirement_change is a requirement the human changed " +
-    "or introduced after the fact; use uncertain when the evidence does not decide it), and " +
-    '"evidence" (string — the concrete observations your judgment rests on). When the input ' +
+    "or introduced after the fact; memory is when a memory entry the worker read before the decision, and followed, " +
+    "was itself wrong — the shortfall is the entry's, not the worker's; use uncertain when the evidence does " +
+    'not decide it), "evidence" (string — the concrete observations your judgment rests on), and "entries" ' +
+    "(only with cause memory: the ids of the wrong entries, named from memory_read — the entries the worker " +
+    "read before the decision; never answer memory when memory_read is empty). When the input " +
     "carries rca_findings, an earlier judgment was uncertain and the task's root-cause reviews " +
     "have since settled: those are their decision logs and completion reports, read them as " +
     "evidence.\n\n" +

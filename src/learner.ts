@@ -36,7 +36,7 @@ export interface LearnerEpisode {
 /** 1 session の outcome(純関数)。受理は統合点レビューの完了からの派生(ADR 0111
  *  決定1、`acceptedSql`)で、0 は「保留」も含むので失敗とは読まない。負の信号は
  *  worker の落ち度と帰責された異議(`capability`)と、配分評価の underpowered ×
- *  capability だけ —— `preference` / `requirement_change` / `environment` の異議は
+ *  capability だけ —— `preference` / `requirement_change` / `environment` / `memory`(ADR 0166 決定4)の異議は
  *  数えず、環境要因を除く配分評価と同じ機構に乗る(ADR 0115 決定5)。負の信号は
  *  受理より強い: 受理された task に capability の異議が残っていれば負である。
  *  配分評価は reviewer ごとに1件(ADR 0111 決定2)なので session に複数並びうる ——

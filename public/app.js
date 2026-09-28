@@ -476,7 +476,7 @@ function commitPendingObjectionKeys(log, localObjections) {
     ...log.filter((l) => l.pendingObjections?.length).map((l) => String(l.id))
   ]);
 }
-function TriageScreen({ data, onCommit, loadHandoff, onAnswer, onObject, onScratchAdd, onDisplayed, loadPreview, loadLanding, onTranslate }) {
+function TriageScreen({ data, onCommit, loadHandoff, onAnswer, onObject, onScratchAdd, onDisplayed, loadPreview, loadLanding, onTranslate, onOpenMemoryEntry }) {
   const { Button, Input, LogEntry, Switch } = window.TidepoolDesignSystem_8a0ead;
   const generalQuestions = data.questions.filter((q) => !q.landing);
   const landingQuestions = data.questions.filter((q) => q.landing);
@@ -683,7 +683,8 @@ function TriageScreen({ data, onCommit, loadHandoff, onAnswer, onObject, onScrat
           },
           active: objecting === k,
           onObject: () => toggleObjecting(k),
-          onExpand: hasHandoff ? () => toggleHandoff(k, l) : void 0
+          onExpand: hasHandoff ? () => toggleHandoff(k, l) : void 0,
+          onOpenMemoryEntry
         }
       ), logTranslateOn && logTranslations[k] && logTranslations[k].status !== "throttled" && /* @__PURE__ */ React.createElement("div", { style: { padding: "2px 14px 10px", background: "var(--surface-recessed)" } }, logTranslations[k].status === "translated" ? /* @__PURE__ */ React.createElement("div", { style: { fontSize: "var(--text-sm)", color: "var(--tide-5)" } }, logTranslations[k].text) : /* @__PURE__ */ React.createElement(TpTranslationNote, { result: logTranslations[k] })), handoffOpen[k] && /* @__PURE__ */ React.createElement("div", { style: { padding: "10px 14px 12px", background: "var(--surface-recessed)" } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8, marginBottom: 6 } }, /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.08em" } }, "handoff \u2014 ", l.taskId), onTranslate && /* @__PURE__ */ React.createElement(Switch, { label: "\u8A33\u3092\u6DFB\u3048\u308B", checked: !!handoffTranslateOn[k], onChange: (next) => setHandoffTranslate(k, l, next), style: { marginLeft: "auto" } })), /* @__PURE__ */ React.createElement("pre", { style: { margin: 0, whiteSpace: "pre-wrap", fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", lineHeight: 1.6, color: "var(--text-body)", overflowX: "auto" } }, handoffCache.current[k]), handoffTranslateOn[k] && handoffTranslations[k] && (handoffTranslations[k].status === "translated" ? /* @__PURE__ */ React.createElement("pre", { style: { margin: "8px 0 0", paddingTop: 8, borderTop: "1px dashed var(--border-hairline)", whiteSpace: "pre-wrap", fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", lineHeight: 1.6, color: "var(--tide-5)", overflowX: "auto" } }, handoffTranslations[k].doc) : /* @__PURE__ */ React.createElement("div", { style: { marginTop: 8 } }, /* @__PURE__ */ React.createElement(TpTranslationNote, { result: handoffTranslations[k] }))), objecting !== k && /* @__PURE__ */ React.createElement("button", { onClick: () => toggleObjecting(k), style: { background: "none", border: "none", color: "var(--coral-4)", fontSize: "var(--text-xs)", cursor: "pointer", padding: "8px 0 0", display: "block" } }, "object to this entry\u2026")), objecting === k && /* @__PURE__ */ React.createElement("div", { style: { padding: "10px 12px", background: "var(--coral-1)", display: "flex", gap: 8, alignItems: "flex-end" } }, /* @__PURE__ */ React.createElement(Input, { multiline: true, rows: 2, placeholder: "direction \u2014 steering, not rollback", value: draft, onChange: (e) => setDraft(e.target.value), style: { flex: 1 } }), /* @__PURE__ */ React.createElement(Button, { variant: "danger", size: "sm", disabled: !draft.trim(), onClick: async () => {
         try {
@@ -1954,7 +1955,7 @@ const MEMORY_KINDS = ["knowledge", "behavior", "definition", "exemplar"];
 const MEMORY_INVALIDATION_REASONS = ["superseded", "capability", "environment", "requirement_change"];
 const needsSuccessor = (reason) => reason === "superseded";
 const invalidatedBy = (by) => !by ? "" : ` by ${"question_id" in by ? `answer to ${by.question_id}` : "activity" in by ? by.activity : by.worker}`;
-function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit }) {
+function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit, focus }) {
   const { Button, Card, Input, Select } = window.TidepoolDesignSystem_8a0ead;
   const [filter, setFilter] = React.useState({ workspace: "", kind: "", state: "" });
   const [entries, setEntries] = React.useState(null);
@@ -1980,6 +1981,12 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit }) 
   React.useEffect(() => {
     load();
   }, [filter.workspace, filter.kind, filter.state]);
+  const focused = React.useRef(false);
+  React.useEffect(() => {
+    if (focused.current || focus === null || !entries) return;
+    focused.current = true;
+    document.querySelector(`[data-testid="memory-entry-${focus}"]`)?.scrollIntoView({ block: "center" });
+  }, [focus, entries]);
   const setFilterField = (key) => (e) => setFilter({ ...filter, [key]: e.target.value });
   const muted = { margin: 0, fontSize: "var(--text-xs)", color: "var(--text-muted)" };
   const writeId = "board:memory-write";
@@ -2626,7 +2633,7 @@ function NewProfileForm({ agentNames, workspaceNames, say, onCreated, edit }) {
     }
   ), dialog);
 }
-function SettingsScreen({ say, registerLeaveGuard }) {
+function SettingsScreen({ say, memoryFocus, registerLeaveGuard }) {
   const { Button, Card, NavRow, ScreenHeader } = window.TidepoolDesignSystem_8a0ead;
   const [displayLanguage, setDisplayLanguage] = React.useState("");
   const [displayLanguageOptions, setDisplayLanguageOptions] = React.useState([]);
@@ -2765,7 +2772,7 @@ function SettingsScreen({ say, registerLeaveGuard }) {
   (agents ?? []).forEach((a) => {
     if (a.icon) agentIcons[a.name] = a.icon;
   });
-  const [stack, setStack] = React.useState([]);
+  const [stack, setStack] = React.useState(memoryFocus === null ? [] : ["board"]);
   const [editing, setEditing] = React.useState(null);
   const [dirty, setDirty] = React.useState(false);
   const [pending, setPending] = React.useState(null);
@@ -2804,6 +2811,7 @@ function SettingsScreen({ say, registerLeaveGuard }) {
     setStack(next);
     closeEdit();
   });
+  const boardLoaded = displayLanguageLoaded && quietHoursLoaded && !!providerPaceOffsets && !!executionSettings && !!memorySettings && !!metaReviewSettings;
   React.useEffect(() => {
     registerLeaveGuard((move) => guard(move));
     return () => registerLeaveGuard(null);
@@ -2962,7 +2970,18 @@ function SettingsScreen({ say, registerLeaveGuard }) {
         onSaved: loadQuietHours,
         edit
       }
-    ), providerPaceOffsets && /* @__PURE__ */ React.createElement(PaceOffsetsCard, { offsets: providerPaceOffsets, say, onSaved: loadPaceOffsets, edit }), executionSettings && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(ExecutionDefaultsCard, { settings: executionSettings, say, onSaved: loadExecutionSettings, edit }), /* @__PURE__ */ React.createElement(ExecutionTableCard, { settings: executionSettings, say, onSaved: loadExecutionSettings, edit })), memorySettings && /* @__PURE__ */ React.createElement(MemorySettingsCard, { settings: memorySettings, say, onSaved: loadMemorySettings, edit }), displayLanguageLoaded && /* @__PURE__ */ React.createElement(MemoryEntriesCard, { workspaceNames, agentNames, language: displayLanguage, say, edit }), metaReviewSettings && /* @__PURE__ */ React.createElement(MetaReviewSettingsCard, { settings: metaReviewSettings, say, onSaved: loadMetaReviewSettings, edit }), (!displayLanguageLoaded || !quietHoursLoaded || !providerPaceOffsets || !executionSettings || !memorySettings || !metaReviewSettings) && /* @__PURE__ */ React.createElement(Card, { style: { fontSize: "var(--text-sm)", color: "var(--text-secondary)" } }, "loading\u2026"), /* @__PURE__ */ React.createElement("p", { style: settingsFootnote }, "applies to every task the board picks up"), (githubLoggedIn !== null || translateUsage !== null || translateUsageFailed) && /* @__PURE__ */ React.createElement("p", { style: settingsCardLabel }, "board state"), githubLoggedIn !== null && /* @__PURE__ */ React.createElement(GitHubLoginCard, { loggedIn: githubLoggedIn }), (translateUsage !== null || translateUsageFailed) && /* @__PURE__ */ React.createElement(TranslateUsageCard, { records: translateUsage }));
+    ), providerPaceOffsets && /* @__PURE__ */ React.createElement(PaceOffsetsCard, { offsets: providerPaceOffsets, say, onSaved: loadPaceOffsets, edit }), executionSettings && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(ExecutionDefaultsCard, { settings: executionSettings, say, onSaved: loadExecutionSettings, edit }), /* @__PURE__ */ React.createElement(ExecutionTableCard, { settings: executionSettings, say, onSaved: loadExecutionSettings, edit })), memorySettings && /* @__PURE__ */ React.createElement(MemorySettingsCard, { settings: memorySettings, say, onSaved: loadMemorySettings, edit }), displayLanguageLoaded && // the focus waits for every card above: one that loads later would push the entry back out of view
+    /* @__PURE__ */ React.createElement(
+      MemoryEntriesCard,
+      {
+        workspaceNames,
+        agentNames,
+        language: displayLanguage,
+        say,
+        edit,
+        focus: boardLoaded ? memoryFocus : null
+      }
+    ), metaReviewSettings && /* @__PURE__ */ React.createElement(MetaReviewSettingsCard, { settings: metaReviewSettings, say, onSaved: loadMetaReviewSettings, edit }), !boardLoaded && /* @__PURE__ */ React.createElement(Card, { style: { fontSize: "var(--text-sm)", color: "var(--text-secondary)" } }, "loading\u2026"), /* @__PURE__ */ React.createElement("p", { style: settingsFootnote }, "applies to every task the board picks up"), (githubLoggedIn !== null || translateUsage !== null || translateUsageFailed) && /* @__PURE__ */ React.createElement("p", { style: settingsCardLabel }, "board state"), githubLoggedIn !== null && /* @__PURE__ */ React.createElement(GitHubLoginCard, { loggedIn: githubLoggedIn }), (translateUsage !== null || translateUsageFailed) && /* @__PURE__ */ React.createElement(TranslateUsageCard, { records: translateUsage }));
   } else if (!sec) {
     body = /* @__PURE__ */ React.createElement(ScreenHeader, { title: "Settings", backLabel: "Settings", onBack: () => go([]) });
   } else if (recordName === void 0) {
@@ -3183,6 +3202,7 @@ function mapData(board, log, pause, icons, triage, queueEnvelope, yourTasks) {
     handoffPresent: e.payload.kind === "task_completed" && !!e.payload.handoff_present,
     workspace: e.workspace ?? null,
     cause: e.cause ?? void 0,
+    causeEntries: e.entries ?? void 0,
     pendingObjections: e.objections.filter((o) => o.session_id === openSessionId).map((o) => o.comment),
     bundledObjections: e.objections.filter((o) => o.session_id !== openSessionId).map((o) => o.comment)
   }));
@@ -3527,6 +3547,7 @@ function App() {
   const { Toast, Button, IdChip } = window.TidepoolDesignSystem_8a0ead;
   const [data, setData] = React.useState(null);
   const [tab, setTabRaw] = React.useState("triage");
+  const [memoryFocus, setMemoryFocus] = React.useState(null);
   const [tabDir, setTabDir] = React.useState("right");
   const [toast, setToast] = React.useState(null);
   const [wash, setWash] = React.useState(null);
@@ -3907,9 +3928,13 @@ function App() {
       onDisplayed: reportDisplayed,
       loadPreview,
       loadLanding,
-      onTranslate: onTranslateProp
+      onTranslate: onTranslateProp,
+      onOpenMemoryEntry: (id) => {
+        setMemoryFocus(id);
+        setTab("settings");
+      }
     }
-  ) : /* @__PURE__ */ React.createElement("div", { style: { padding: "64px 24px", textAlign: "center" } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 28, marginBottom: 6 } }, "\u{1F41A}"), /* @__PURE__ */ React.createElement("div", { style: { fontFamily: "var(--font-display)", fontStyle: "italic", fontSize: "var(--text-2xl)", color: "var(--tide-5)", marginBottom: 8 } }, "Low tide. Go enjoy your coffee."), /* @__PURE__ */ React.createElement("div", { style: { fontSize: "var(--text-sm)", color: "var(--text-secondary)" } }, "the pool refills as tasks come in."))), tab === "board" && /* @__PURE__ */ React.createElement(BoardScreen, { data, onOpenTask: openTask }), tab === "queue" && /* @__PURE__ */ React.createElement(QueueScreen, { data, paused: data.paused, onTogglePause: togglePause, spendDown: data.spendDown, onSpendDown: setSpendDown, onFront: moveFront, onDoneHuman: doneHuman, onReorder: reorder }), tab === "register" && /* @__PURE__ */ React.createElement(RegisterScreen, { onRegister: register }), tab === "settings" && /* @__PURE__ */ React.createElement(SettingsScreen, { say, registerLeaveGuard: (fn) => {
+  ) : /* @__PURE__ */ React.createElement("div", { style: { padding: "64px 24px", textAlign: "center" } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 28, marginBottom: 6 } }, "\u{1F41A}"), /* @__PURE__ */ React.createElement("div", { style: { fontFamily: "var(--font-display)", fontStyle: "italic", fontSize: "var(--text-2xl)", color: "var(--tide-5)", marginBottom: 8 } }, "Low tide. Go enjoy your coffee."), /* @__PURE__ */ React.createElement("div", { style: { fontSize: "var(--text-sm)", color: "var(--text-secondary)" } }, "the pool refills as tasks come in."))), tab === "board" && /* @__PURE__ */ React.createElement(BoardScreen, { data, onOpenTask: openTask }), tab === "queue" && /* @__PURE__ */ React.createElement(QueueScreen, { data, paused: data.paused, onTogglePause: togglePause, spendDown: data.spendDown, onSpendDown: setSpendDown, onFront: moveFront, onDoneHuman: doneHuman, onReorder: reorder }), tab === "register" && /* @__PURE__ */ React.createElement(RegisterScreen, { onRegister: register }), tab === "settings" && /* @__PURE__ */ React.createElement(SettingsScreen, { say, memoryFocus, registerLeaveGuard: (fn) => {
     leaveGuard.current = fn;
   } }))), toast && /* @__PURE__ */ React.createElement("div", { style: { position: "fixed", bottom: 86, left: "50%", transform: "translateX(-50%)", zIndex: 50, width: "calc(100% - 32px)", maxWidth: 408 } }, /* @__PURE__ */ React.createElement("div", { className: toast.leaving ? "tp-toast-out" : "tp-toast-in" }, /* @__PURE__ */ React.createElement(Toast, { kind: toast.kind, detail: toast.detail, onDismiss: dismissToast }, toast.msg))), /* @__PURE__ */ React.createElement(PortalDialog, { open: !!addChildParent, onClose: () => setAddChildParent(null) }, addChildParent && /* @__PURE__ */ React.createElement(RegisterScreen, { parentTask: addChildParent, onRegister: addChild, onClose: () => setAddChildParent(null) })), /* @__PURE__ */ React.createElement(PortalDialog, { open: !!actionsTask, onClose: () => setActionsTask(null) }, actionsTask && /* @__PURE__ */ React.createElement(
     TaskActionsDialog,
@@ -3935,7 +3960,10 @@ function App() {
       "button",
       {
         key: t.key,
-        onClick: () => setTab(t.key),
+        onClick: () => {
+          setMemoryFocus(null);
+          setTab(t.key);
+        },
         style: {
           flex: 1,
           display: "flex",

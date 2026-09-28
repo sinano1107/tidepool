@@ -10,12 +10,12 @@ import { BOARD_WORKER_ID, DomainError, HUMAN_WORKER_ID, logDecision, registerTas
  *  写像はサーバ境界(tests/mcp-propose-from-objection.test.ts)が言う。 */
 const at = new Date("2026-09-15T00:00:00.000Z");
 
-it("学習に向かない cause・宛先の agent が無い Behavior・as と based_on_decision の過不足・decision でない based_on_decision・帰責の無い / 他 task の / 存在しない / 人間が書いたエントリ・work task や parent の無い review からの呼び出しは DomainError で拒否され、店には何も載らない", () => {
+it("学習に向かない cause・宛先の agent が無い Behavior・as と based_on_decision の過不足・decision でない / 別の task の decision の based_on_decision・帰責の無い / 他 task の / 存在しない / 人間が書いたエントリ・work task や parent の無い review からの呼び出しは DomainError で拒否され、店には何も載らない", () => {
   const db = openDb(":memory:");
   const task = (type: TaskType, title: string, registrant = HUMAN_WORKER_ID, parent_id?: string) =>
     registerTask(db, { type, title, purpose: "p", completion_criteria: "c", workspace: "charts", parent_id }, at, registrant);
-  const attribute = (taskId: string, entry_id: number, cause: Cause) =>
-    appendEvent(db, { taskId, workerId: BOARD_WORKER_ID, origin: "board", payload: { kind: "objection_attributed", entry_id, objection_event_ids: [], cause, evidence: "e", round: "initial" }, at });
+  const attribute = (taskId: string, entry_id: number, cause: Cause, entries: number[] | null = null) =>
+    appendEvent(db, { taskId, workerId: BOARD_WORKER_ID, origin: "board", payload: { kind: "objection_attributed", entry_id, objection_event_ids: [], cause, evidence: "e", entries, round: "initial" }, at });
   /** 異議されたエントリ(agent の記入)に cause を帰責する。 */
   const objected = (parent: ReturnType<typeof task>, cause: Cause, worker = "deckhand") => {
     const entry = logDecision(db, parent, `decided as ${cause}`, worker, at);
@@ -30,6 +30,9 @@ it("学習に向かない cause・宛先の agent が無い Behavior・as と ba
   const environment = objected(mixed, "environment");
   const taskAmbiguity = objected(mixed, "task_ambiguity");
   const missingInformation = objected(mixed, "missing_information");
+  // memory の帰責は読んだ記憶を名指す(門は cause だけで断るので、entries の中身は見ない)
+  const memory = logDecision(db, mixed, "decided as memory", "deckhand", at);
+  attribute(mixed.id, memory, "memory", [1]);
   const unattributed = appendEvent(db, { taskId: mixed.id, workerId: "deckhand", origin: "worker", payload: { kind: "task_completed", handoff_present: true, result: null }, at });
   const byHuman = objected(mixed, "capability", HUMAN_WORKER_ID);
   const notDecision = attribute(mixed.id, capability, "capability");
@@ -49,12 +52,14 @@ it("学習に向かない cause・宛先の agent が無い Behavior・as と ba
     [self, { entry_id: uncertain }, "the entry's cause is uncertain: nothing to learn from it"],
     [self, { entry_id: requirementChange }, "the entry's cause is requirement_change: nothing to learn from it"],
     [self, { entry_id: environment }, "the entry's cause is environment: nothing to learn from it"],
+    [self, { entry_id: memory }, "the entry's cause is memory: nothing to learn from it"],
     [self, { entry_id: taskAmbiguity }, notAgent],
     [self, { entry_id: missingInformation, as: "behavior" }, notAgent],
     [self, { entry_id: missingInformation }, asRule],
     [self, { entry_id: capability, as: "behavior" }, asRule],
     [self, { entry_id: missingInformation, as: "knowledge" }, decisionRule],
     [self, { entry_id: missingInformation, as: "knowledge", based_on_decision: notDecision }, `event ${notDecision} is not a logged decision`],
+    [self, { entry_id: missingInformation, as: "knowledge", based_on_decision: capability }, `event ${capability} is not a decision of this task`],
     [self, { entry_id: capability, based_on_decision: decision }, decisionRule],
     [self, { entry_id: unattributed }, `entry ${unattributed} carries no attributed objection`],
     [self, { entry_id: otherEntry }, `entry ${otherEntry} is not a decision-log entry of your parent task`],

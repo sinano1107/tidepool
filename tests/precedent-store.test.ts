@@ -126,6 +126,7 @@ it("decision マーカーの outcome は読み出し時に entry_id で結ばれ
       objection_event_ids: [objectionId],
       cause: "uncertain",
       evidence: "RCA is needed",
+      entries: null,
       round: "initial",
     },
     at,
@@ -140,6 +141,7 @@ it("decision マーカーの outcome は読み出し時に entry_id で結ばれ
       objection_event_ids: [objectionId],
       cause: "preference",
       evidence: "RCA found a naming preference",
+      entries: null,
       round: "after_rca",
     },
     at,
@@ -203,7 +205,7 @@ it("list_precedents は異議つき decision を cause・outcome・読んだ / �
   event({ kind: "objection_raised", entry_id: 6, comment: "前の周期の異議", session_id: 1 });
   registerMetaReview(db, "memory", at); // 前回の meta-review
   const objection = event({ kind: "objection_raised", entry_id: 7, comment: "2回目は要らない", session_id: 1 });
-  event({ kind: "objection_attributed", entry_id: 7, objection_event_ids: [objection], cause: "preference", evidence: "e", round: "after_rca" });
+  event({ kind: "objection_attributed", entry_id: 7, objection_event_ids: [objection], cause: "preference", evidence: "e", entries: null, round: "after_rca" });
   registerMetaReview(db, "memory", at); // 今回の meta-review(読み手)
   // setup のみ: 登録した task の id を引く
   const [, current] = db.prepare("SELECT id FROM tasks WHERE meta_review_subject = 'memory' ORDER BY rowid").all() as Array<{ id: string }>;
@@ -222,6 +224,7 @@ it("list_precedents は異議つき decision を cause・outcome・読んだ / �
         displayed: false,
         objections: ["2回目は要らない"],
         cause: "preference",
+        entries: null,
         completed: {
           result:
             "Created notes.md with 3 bullets on tide pools; logged 3 decisions (2 identical); used 1 subagent and 1 advisor consult.",
