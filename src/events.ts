@@ -585,7 +585,7 @@ export function listLog(db: Db, defaultWorkspaceName?: string): LogEntry[] {
          FROM events WHERE kind = 'objection_attributed' ORDER BY id`,
     )
     .all() as Array<{ entry_id: number; cause: Cause; entries: string | null }>) {
-    causesByEntry.set(row.entry_id, { cause: row.cause, entries: row.entries === null ? null : (JSON.parse(row.entries) as number[]) });
+    causesByEntry.set(row.entry_id, { cause: row.cause, entries: JSON.parse(row.entries ?? "null") as number[] | null });
   }
   // session の窓を切るのに要るのは spawn と exit だけ。窓の規則は task で絞るので盤面全体を1回で引いて渡す
   // ponytail: エントリ数 × session 数の走査。盤面が育って一覧が重くなったら task ごとに束ねる
@@ -597,8 +597,7 @@ export function listLog(db: Db, defaultWorkspaceName?: string): LogEntry[] {
     return {
       ...entry,
       objections: objectionsByEntry.get(r.id) ?? [],
-      cause: causesByEntry.get(r.id)?.cause ?? null,
-      entries: causesByEntry.get(r.id)?.entries ?? null,
+      ...(causesByEntry.get(r.id) ?? { cause: null, entries: null }),
       session_event_id: sessionSpawnOf(sessionEvents, entry)?.id ?? null,
     };
   });

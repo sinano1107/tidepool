@@ -310,9 +310,9 @@ function memoryRead(db: Db, entry: DecisionLogEntry): AttributionInput["memory_r
     events.flatMap((e) => (e.payload.kind === "memory_pulled" && e.payload.verb === "read_memory" && e.id < entry.id && inSession(e) ? e.payload.returned_ids : [])),
   );
   const byId = new Map(listMemoryEntries(db, {}).map((m) => [m.id, m]));
-  return [...ids].flatMap((id) => {
-    const m = byId.get(id);
-    return m ? [{ id, kind: m.kind, title: m.title, text: m.text }] : [];
+  return [...ids].map((id) => {
+    const { kind, title, text } = byId.get(id)!;
+    return { id, kind, title, text };
   });
 }
 

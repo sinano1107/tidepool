@@ -717,7 +717,7 @@ function decisionOutcomes(db: Db, markerRows: MarkerRow[]): Map<number, Decision
     if (row.kind === "log_entry_displayed") entry.displayed = true;
     else if (row.cause !== null) {
       entry.cause = row.cause;
-      entry.entries = row.entries === null ? null : (JSON.parse(row.entries) as number[]);
+      entry.entries = JSON.parse(row.entries ?? "null") as number[] | null;
     }
   }
   return out;
