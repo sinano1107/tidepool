@@ -1463,7 +1463,7 @@ export function readMemory(
         const { id, kind, title, path, text, source, annotations } = rowToEntry(row);
         return {
           id,
-          ...(requested_id !== undefined && { requested_id }),
+          requested_id,
           title,
           path,
           text,
