@@ -1104,7 +1104,7 @@ it("復元は無効化済みのエントリの本文の側(書き手・状態・
   const { entry_id } = restoreMemoryEntry(db, { entry_id: drafted, restorer: human }, "webui", at);
 
   const after = new Map(listMemoryEntries(db, {}).map((e) => [e.id, e]));
-  expect(after.get(drafted)).toEqual(old);
+  expect(after.get(drafted)).toEqual({ ...old, restored_as: entry_id });
   expect(after.get(entry_id)).toEqual({ ...old, id: entry_id, invalidation_reason: null, successor_id: null, invalidated_by: null, cause: null });
   expect(old).toMatchObject({ state: "candidate", scope: "tidepool", addressee: "deckhand", author: { activity: "rca" }, source: { kind: "commit", ref: "0a46a46" } });
   const created = getEvent(db, entry_id);
@@ -1154,6 +1154,62 @@ it("path_moved のエントリ・無効化されていないエントリの復�
 
   expect(restore(fact)).toThrow(/moved/);
   expect(restore(moved)).toThrow(/not invalidated/);
+  expect(listMemoryEntries(db, {})).toEqual(before);
+});
+
+it("一度復元した旧の2回目の復元は復元の複製を名指す domain error で何も変わらない(ADR 0163 追記 #1059)", () => {
+  const { db } = board();
+  const fact = record(db, "fact");
+  invalidateMemoryEntry(db, { entry_id: fact, reason: "capability" }, "human", "webui", at);
+  const copy = restoreMemoryEntry(db, { entry_id: fact, restorer: human }, "webui", at).entry_id;
+  const before = listMemoryEntries(db, {});
+
+  expect(() => restoreMemoryEntry(db, { entry_id: fact, restorer: human }, "webui", at)).toThrow(
+    new DomainError(`memory entry ${fact} was already restored as entry ${copy}: handle that copy instead`),
+  );
+  expect(listMemoryEntries(db, {})).toEqual(before);
+});
+
+it("一覧の restored_as は復元した旧の行だけに復元の複製の id を持ち、複製とほかの行は null(ADR 0163 追記 #1059)", () => {
+  const { db } = board();
+  const fact = record(db, "fact");
+  const other = record(db, "other");
+  invalidateMemoryEntry(db, { entry_id: fact, reason: "capability" }, "human", "webui", at);
+  const copy = restoreMemoryEntry(db, { entry_id: fact, restorer: human }, "webui", at).entry_id;
+
+  expect(listMemoryEntries(db, {}).map((e) => [e.id, e.restored_as])).toEqual([
+    [fact, copy],
+    [other, null],
+    [copy, null],
+  ]);
+});
+
+it("復元の複製を落としても旧は復元できず、落ちた複製は復元できる —— 1つの本文から復元できる行は常に1本(ADR 0163 追記 #1059)", () => {
+  const { db } = board();
+  const fact = record(db, "fact");
+  invalidateMemoryEntry(db, { entry_id: fact, reason: "capability" }, "human", "webui", at);
+  const copy = restoreMemoryEntry(db, { entry_id: fact, restorer: human }, "webui", at).entry_id;
+  invalidateMemoryEntry(db, { entry_id: copy, reason: "environment" }, "human", "webui", at);
+  const before = listMemoryEntries(db, {});
+
+  expect(() => restoreMemoryEntry(db, { entry_id: fact, restorer: human }, "webui", at)).toThrow(new RegExp(`already restored as entry ${copy}`));
+  expect(listMemoryEntries(db, {})).toEqual(before);
+  const { entry_id } = restoreMemoryEntry(db, { entry_id: copy, restorer: human }, "webui", at);
+  expect(approvedMemoryEntries(db).map((e) => [e.id, e.title])).toEqual([[entry_id, "fact"]]);
+});
+
+it("復元の複製が生きた後継に畳まれていれば、旧も複製も復元できない(ADR 0163 決定2・追記 #1059)", () => {
+  const { db } = board();
+  const fact = record(db, "fact");
+  invalidateMemoryEntry(db, { entry_id: fact, reason: "capability" }, "human", "webui", at);
+  const copy = restoreMemoryEntry(db, { entry_id: fact, restorer: human }, "webui", at).entry_id;
+  const successor = record(db, "better fact");
+  invalidateMemoryEntry(db, { entry_id: copy, reason: "superseded", successor_id: successor }, "human", "webui", at);
+  const before = listMemoryEntries(db, {});
+  const restore = (entry_id: number) => () => restoreMemoryEntry(db, { entry_id, restorer: human }, "webui", at);
+
+  expect(restore(fact)).toThrow(new RegExp(`already restored as entry ${copy}`));
+  expect(restore(copy)).toThrow(new RegExp(`successor ${successor}`));
   expect(listMemoryEntries(db, {})).toEqual(before);
 });
 

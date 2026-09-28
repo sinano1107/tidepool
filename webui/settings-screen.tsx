@@ -1788,7 +1788,7 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit }: 
           style={{ display: 'flex', flexDirection: 'column', gap: 4, borderTop: '1px solid var(--border-default)', paddingTop: 10 }}>
           <p style={{ ...muted, fontFamily: 'var(--font-mono)' }}>
             #{entry.id} · {entry.kind} · {entry.invalidation_reason
-              ? `invalidated: ${entry.invalidation_reason}${entry.successor_id ? ` → #${entry.successor_id}` : ''}${invalidatedBy(entry.invalidated_by)}`
+              ? `invalidated: ${entry.invalidation_reason}${entry.successor_id ? ` → #${entry.successor_id}` : ''}${invalidatedBy(entry.invalidated_by)}${entry.restored_as ? ` · restored → #${entry.restored_as}` : ''}`
               : entry.state} · {entry.scope ?? 'board-wide'} · {entry.path}{(entry.kind === 'behavior' || entry.kind === 'exemplar') && ` · to ${entry.addressee ?? 'every agent'}`} · {entry.author.activity}{entry.cause && ` · ${entry.cause}`}
           </p>
           {entry.kind !== 'definition' && <strong style={{ fontSize: 'var(--text-sm)' }}>{entry.title}</strong>}
@@ -1811,8 +1811,8 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit }: 
               <Button variant="ghost" size="sm" onClick={() => setInvalidating({ id: entry.id, reason: 'capability', successor: '' })}>Invalidate</Button>
             </div>
           )}
-          {/* restore (ADR 0163): the board copies the body back to the same place; a moved entry is handled through its copy */}
-          {entry.invalidation_reason && entry.invalidation_reason !== 'path_moved' && (
+          {/* restore (ADR 0163): the board copies the body back to the same place; a moved or already restored entry is handled through its copy */}
+          {entry.invalidation_reason && entry.invalidation_reason !== 'path_moved' && !entry.restored_as && (
             <div style={{ display: 'flex', gap: 8 }}>
               <Button variant="ghost" size="sm" disabled={busy}
                 onClick={() => submit(`/api/settings/memory/entries/${entry.id}/restore`, {}, ['entry restored', `#${entry.id}`], 'restore failed')}>
