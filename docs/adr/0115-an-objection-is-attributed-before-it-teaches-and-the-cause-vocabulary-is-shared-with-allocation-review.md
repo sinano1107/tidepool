@@ -62,3 +62,8 @@ RCA task → 親の異議エントリで辿れ、人間の一覧の `cause` 列(
 退けた案: **出所は帰責 event のまま、種別の導出だけを「判定 event も推論」に変える** —— 出所の型1本(commit / event = 事実、
 decision = 推論)に event 種別の例外が入り、同じ帰責 event を出所に持つ Behavior の case 描画と食い違う。**今のまま「事実 = 記録の
 引用、検証済みの意味ではない」と明記する** —— meta-review の合成と RCA の合成で印が違う理由を説明で温存することになる。
+
+## 追記(2026-09-28 の grilling、issue #1063 / ADR 0168)
+
+決定2 の「判定できなければ `uncertain` で従来どおり RCA を立て」は判断としての `uncertain` の話で、Board call を撃てなかった・
+失敗した entry は `uncertain` を書かず**未帰責のまま**同じく RCA に倒す。未帰責は RCA の門と第2回の門で `uncertain` と同じに読む。
