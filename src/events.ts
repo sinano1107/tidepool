@@ -533,7 +533,6 @@ export const HUMAN_FACING_KINDS = ["decision_logged", "task_completed", "premise
 >[];
 
 export type DecisionLogEntry = Omit<EventRow, "payload" | "task_id"> & {
-  /** decision-log kinds are always task-scoped (none is in BOARD_SCOPED_KINDS; asserted above) */
   task_id: string;
   payload: Extract<EventRow["payload"], { kind: (typeof HUMAN_FACING_KINDS)[number] }>;
 };
