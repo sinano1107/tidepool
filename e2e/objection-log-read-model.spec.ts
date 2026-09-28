@@ -1,7 +1,5 @@
-import { appendEvent } from "../src/events.js";
-import { recordKnowledge } from "../src/memory.js";
 import { FakeAttributionClient } from "../tests/fakes.js";
-import { api, completeViaMcp, HOUR, loggedEntry, mcpClient, registerWork } from "../tests/harness.js";
+import { api, completeViaMcp, HOUR, loggedEntry, mcpClient, memoryAttributedObjection, registerWork, rememberedNote } from "../tests/harness.js";
 import { expect, test } from "./fixtures.js";
 
 // issue #371: 異議バッジは triage 画面のローカル state だけで描かれており、
@@ -109,22 +107,8 @@ test("memory の帰責は異議バッジに cause と名指された entry へ�
   const work = await registerWork(t, "記憶への帰責 e2e");
   await t.clock.advance(HOUR);
   const decided = await loggedEntry(t, work.id, "誤ったメモに従った判断");
-  const note = recordKnowledge(
-    t.db,
-    { scope: null, path: "build", title: "Squash before merge", text: "Squash before merge.", source: { commit: "0a46a46" }, author: { activity: "worker_verb", name: "deckhand" } },
-    "worker",
-    t.clock.now(),
-  ).entry_id;
-  await api(t.baseUrl, "POST", "/api/triage/objection", { entry_id: decided.id, comment: "そのメモが間違っています" });
-  await api(t.baseUrl, "POST", "/api/triage/close");
-  // setup のみ: 門を通った memory の帰責を最新として足す(Board call は撃たない)
-  appendEvent(t.db, {
-    taskId: work.id,
-    workerId: "tidepool",
-    origin: "board",
-    at: t.clock.now(),
-    payload: { kind: "objection_attributed", entry_id: decided.id, objection_event_ids: [], cause: "memory", evidence: "followed the note", entries: [note], round: "after_rca" },
-  });
+  const note = rememberedNote(t, "Squash before merge");
+  await memoryAttributedObjection(t, work.id, decided.id, [note]);
 
   await page.goto(t.baseUrl);
 
