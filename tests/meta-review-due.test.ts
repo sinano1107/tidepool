@@ -26,9 +26,8 @@ function previousReview(db: Db, subject: MetaReviewSubject) {
   db.prepare("UPDATE tasks SET status = 'done' WHERE meta_review_subject = ?").run(subject);
 }
 
-/** board 上に開いている主題ごとの meta-review の数。listBoard は settled なツリー(root と子孫が
- *  すべて done / cancelled)を除くので、previousReview が done にした前回の meta-review は数えない —
- *  ここで数えるのは新しく登録された、まだ開いている meta-review だけ。 */
+/** 盤面に載っている主題ごとの meta-review の数。listBoard は settled なツリー(root と子孫が
+ *  すべて done / cancelled)を除くので、previousReview が done にした前回の meta-review は数えない。 */
 const openMetaReviews = (db: Db, subject: MetaReviewSubject) =>
   listBoard(db).filter((task) => task.meta_review_subject === subject).length;
 
