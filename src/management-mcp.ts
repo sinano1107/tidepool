@@ -741,7 +741,8 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
     "retry_halted_refire",
     {
       description:
-        "Retry a halted refire: the board fires it again at the next pickup poll, up to 3 more failed calls. " +
+        "Retry a halted refire (allocation review, Behavior draft or second-round attribution): the board fires it again at the next " +
+        "pickup poll, up to 3 more failed calls. " +
         "Refused for anything not currently in list_halted_refires.",
       inputSchema: refireKeySchema.shape,
     },
