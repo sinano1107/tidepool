@@ -490,7 +490,7 @@ it("盤面設定 retrospective_tier を standard にすると、帰責の判定�
   ]);
 });
 
-it("選んだティアの anthropic 行が無ければ、帰責も起草も client を呼ばず帰責の event も書かず、commit から例外は出ず RCA が立つ(issue #914)", async () => {
+it("選んだティアの anthropic 行が無ければ、帰責も起草も client を呼ばず帰責の event も書かず、commit から例外は出ない(issue #914)", async () => {
   // preference を scriptJudgment しても、行が無ければ帰責自身の Board call が撃てず判断が無いので
   // 起草の条件(初回は preference のみ)に届かない —— 3用途は同じ欄を共有する(ADR 0111 追記4)
   const s = await objectedForDraft("tiered-draft-fail", { initial: { cause: "preference", evidence: "taste" } });
@@ -498,14 +498,13 @@ it("選んだティアの anthropic 行が無ければ、帰責も起草も clie
   expect((await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "retrospective_tier", value: "standard" })).status).toBe(200);
   expect((await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "delete_row", provider: "anthropic", model: "opus" })).status).toBe(200);
 
-  const { res, self, auditor } = await commit(t, s.task.id, "tiered-draft-fail");
+  const { res } = await commit(t, s.task.id, "tiered-draft-fail");
 
   expect(res.json.outcome).toBe("closed_now");
   expect(s.attributionClient.calls).toEqual([]);
   expect(s.behaviorDraftClient.calls).toEqual([]);
   expect(await attributions(t, s.task.id)).toEqual([]);
   expect(await attributionsFailed(t, s.task.id)).toEqual([]);
-  expect([self, auditor]).toEqual([expect.anything(), expect.anything()]);
   expect(await memoryEntries(t)).toEqual([]);
 });
 

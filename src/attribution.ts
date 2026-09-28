@@ -240,24 +240,24 @@ export async function attributeAfterRca(
 /** 帰責の第2回を1 entry ぶん撃つ: RCA の findings を証拠にした判断(`uncertain` も判断として)を
  *  同じ entry への新しい event(round = after_rca)として追記し、起草へ進む(ADR 0120 決定1(b)(c))。
  *  撃てなかったら何も書かず、撃って失敗したら `objection_attribution_failed` だけを残す(ADR 0164 決定3・6)。 */
-async function attributeSecondRound(db: Db, deps: BoardCallDeps, objectedId: string, initial: SecondRoundSource, now: Date): Promise<void> {
-  await singleFlight(db, `after_rca:${initial.entry_id}`, async () => {
-    if (!refireDue(db, "objection_attribution_failed", initial.entry_id, now)) return;
+async function attributeSecondRound(db: Db, deps: BoardCallDeps, objectedId: string, source: SecondRoundSource, now: Date): Promise<void> {
+  await singleFlight(db, `after_rca:${source.entry_id}`, async () => {
+    if (!refireDue(db, "objection_attribution_failed", source.entry_id, now)) return;
     const call = boardCallSetting(db, deps.attributionClient, deps.containers);
     if ("unavailable" in call) return;
-    const input = secondRoundInput(db, objectedId, initial);
+    const input = secondRoundInput(db, objectedId, source);
     let judgment: AttributionJudgment;
     try {
       judgment = await call.client.judge(input, call.setting);
     } catch (err) {
-      const payload = { kind: "objection_attribution_failed" as const, entry_id: initial.entry_id, round: "after_rca" as const, reason: `Board call failed: ${message(err)}` };
+      const payload = { kind: "objection_attribution_failed" as const, entry_id: source.entry_id, round: "after_rca" as const, reason: `Board call failed: ${message(err)}` };
       appendEvent(db, { taskId: objectedId, workerId: BOARD_WORKER_ID, origin: "board", payload, at: now });
       return;
     }
     const payload = {
       kind: "objection_attributed" as const,
-      entry_id: initial.entry_id,
-      objection_event_ids: initial.objection_event_ids,
+      entry_id: source.entry_id,
+      objection_event_ids: source.objection_event_ids,
       ...judgment,
       round: "after_rca" as const,
     };
