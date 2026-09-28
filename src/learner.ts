@@ -203,10 +203,8 @@ export function loadEpisodes(db: Db): RoutingEpisode[] {
   return spawns.map((spawned) => {
     const task = tasks.find((t) => t.id === spawned.task_id)!;
     const { exited, hasNextSpawn, inSession } = sessionWindow(events, spawned);
-    // 帰責 event のタスクでも絞る —— inSession に渡すのは spawn のタスクなので、id の窓だけでは他タスクの entry が混ざる
-    const causes = attributions
-      .filter((a) => a.task_id === spawned.task_id && inSession({ id: a.entry_id, task_id: spawned.task_id }))
-      .map((a) => a.cause);
+    // 帰責 event のタスクで窓に入れる(書き手はどれも entry のタスクに書く)
+    const causes = attributions.filter((a) => inSession({ id: a.entry_id, task_id: a.task_id })).map((a) => a.cause);
     const allocations: { allocation: Allocation; cause: Cause }[] = [];
     for (const e of events) {
       if (e.task_id !== spawned.task_id) continue;

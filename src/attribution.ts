@@ -356,6 +356,7 @@ export function refireAttributions(db: Db, deps: AttributionCallDeps = {}, now: 
 /** 撃ち直しを打ち切った起草と第2回の帰責(ADR 0164 決定5): 撃ち直しの対象のうち、直近の Retry 以降に撃って3回失敗し
  *  Dismiss が無いもの。行が閉じるのは撃ち直しの成功(対象から外れる)と Dismiss だけ。 */
 export function listHaltedRefires(db: Db) {
+  const latest = latestAttributions(db);
   return refireTargets(db).flatMap((t) => {
     const key: RefireKey = { refire: t.refire, target: t.refire === "draft" ? t.attribution.id : t.source.entry_id };
     const { n, last_id, dismissed } = refireFailures(db, key);
@@ -369,7 +370,7 @@ export function listHaltedRefires(db: Db) {
         entry: { id: entry_id, text: objectedEntryText(entry) },
         task: { id: t.task_id, title: getTask(db, t.task_id)!.title },
         // 未帰責の entry は cause が空(ADR 0168 決定3)
-        cause: latestAttributions(db).get(entry_id)?.cause ?? null,
+        cause: latest.get(entry_id)?.cause ?? null,
         round,
         last_failure: { reason, at: failure.created_at },
       },
