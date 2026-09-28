@@ -44,3 +44,12 @@ question の列を新しい id に書き換える案は、見せた前提の記�
 - **移動は Knowledge と Definition だけ** —— Behavior / Exemplar の置き場の変更が本文の変更(`superseded`)として記録され続ける。
 - **移動はエントリ1件だけ** —— 枝の改名が途中で止まると枝が割れて残る。ADR 0161 が畳むで退けた N+1 手と同じ欠陥。
 - **枝の下に candidate があれば枝ごとの移動を拒否する / candidate は元の path に残す** —— 本文が同じなので candidate のまま移せる。
+
+## 追記(2026-09-28 の grilling、issue #1047)
+
+**決定5 の「出所を継ぐ」は、出所が自身の宣言(自身の作成 event)なら複製も自身の宣言、と読む。** 対象は人間の Knowledge・
+Definition(書き手を問わず)・出所の Episode を添えない人間の Behavior。旧エントリの作成 event を複製の出所に写す形は退けた —— それは
+どの書き口も作れず(事例の引用は decision_logged / worker_spawned の event だけを受ける)どの読み口も描けない出所であり、旧との
+結び付きは `path_moved` の後継 id が既に持つ(出所と役目が別、決定3)。「自身の宣言」の判定は出所が自身の id を指すことのままで
+よい —— worker の Knowledge は任意の event を引用できるので、作成 event を指すことを自己宣言と読むと正当な引用を誤分類する。
+今の実装の walk-through は #1047 のコメントに置く。
