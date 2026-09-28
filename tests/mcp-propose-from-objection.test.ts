@@ -117,7 +117,7 @@ it("capability の異議エントリに RCA が呼ぶと、宛先 = エントリ
   ]);
 });
 
-it("学習に向かない cause・人間登録の task_ambiguity / missing_information の Behavior・as と based_on_decision の過不足・decision でない based_on_decision・親の異議エントリでない id は domain error で拒否され、work task から呼んでも拒否され、店には何も載らない", async () => {
+it("学習に向かない cause・人間登録の task_ambiguity / missing_information の Behavior・as と based_on_decision の過不足・decision でない / 別の task の decision の based_on_decision・親の異議エントリでない id は domain error で拒否され、work task から呼んでも拒否され、店には何も載らない", async () => {
   const attributionClient = new FakeAttributionClient();
   t = await bootTidepool({ attributionClient });
   const [mixed, other]: any[] = await objectedTasks(attributionClient, [
@@ -145,6 +145,7 @@ it("学習に向かない cause・人間登録の task_ambiguity / missing_infor
     [{ entry_id: capability, as: "behavior" }, 'as ("behavior" or "knowledge") is required for a missing_information entry and only for it'],
     [{ entry_id: missingInformation, as: "knowledge" }, "based_on_decision is required for a knowledge entry and only for it"],
     [{ entry_id: missingInformation, as: "knowledge", based_on_decision: completion }, `event ${completion} is not a logged decision`],
+    [{ entry_id: missingInformation, as: "knowledge", based_on_decision: capability }, `event ${capability} is not a decision of this task`],
     [{ entry_id: capability, based_on_decision: decision }, "based_on_decision is required for a knowledge entry and only for it"],
     [{ entry_id: completion }, `entry ${completion} carries no attributed objection`],
     [{ entry_id: other.entries[0].id }, `entry ${other.entries[0].id} is not a decision-log entry of your parent task`],

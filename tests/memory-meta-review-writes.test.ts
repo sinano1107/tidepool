@@ -46,13 +46,13 @@ const definitionEntry = (db: ReturnType<typeof openDb>) =>
   defineMemoryBranch(db, { scope: "tidepool", path: "build", text: "How it builds.", author: metaReview }, "worker", at).entry_id;
 
 it("fold_memory は新しい Knowledge を decision(推論)を出所に作り、replaces をその後継つき superseded にする", () => {
-  const { db, decision, knowledge } = board();
+  const { db, task, decision, knowledge } = board();
   const a = knowledge("Tests need Node 22");
   const b = knowledge("Node 24 breaks the tests");
 
   const { entry_id } = foldMemory(
     db,
-    { scope: null, path: "build", title: "Node 22 only", text: "Tests run on Node 22 only.", replaces: [a, b], based_on_decision: decision, author: metaReview },
+    { scope: null, path: "build", title: "Node 22 only", text: "Tests run on Node 22 only.", replaces: [a, b], based_on_decision: decision, author: metaReview, task_id: task.id },
     "worker",
     at,
   );
@@ -73,7 +73,7 @@ it("fold_memory は新しい Knowledge を decision(推論)を出所に作り、
 });
 
 it("fold_memory の replaces に畳めないものが1つでもあれば domain error で、新しい Knowledge も書かれず、他の replaces も残る", () => {
-  const { db, decision, knowledge } = board();
+  const { db, task, decision, knowledge } = board();
   const kept = knowledge("kept");
   const dead = knowledge("dead");
   invalidateMemoryEntry(db, { entry_id: dead, reason: "environment" }, "human", "webui", at);
@@ -86,7 +86,7 @@ it("fold_memory の replaces に畳めないものが1つでもあれば domain 
   ).entry_id;
   const before = listMemoryEntries(db, {});
   const fold = (replaces: number[], based_on_decision = decision) => () =>
-    foldMemory(db, { scope: "tidepool", path: "build", title: "Folded", text: "Folded.", replaces, based_on_decision, author: metaReview }, "worker", at);
+    foldMemory(db, { scope: "tidepool", path: "build", title: "Folded", text: "Folded.", replaces, based_on_decision, author: metaReview, task_id: task.id }, "worker", at);
 
   for (const replaces of [[kept, dead], [kept, definition], [kept, candidate], [kept, 999], []]) {
     expect(fold(replaces)).toThrow(DomainError);
@@ -94,6 +94,20 @@ it("fold_memory の replaces に畳めないものが1つでもあれば domain 
   // 出所は decision_logged の event に限る(それ以外の event は推論として載せない)
   expect(fold([kept], kept)).toThrow(DomainError);
   expect(listMemoryEntries(db, {})).toEqual(before);
+});
+
+it("fold_memory の based_on_decision が別の task の decision だと domain error で、何も書かない(ADR 0115 追記)", () => {
+  const { db, task, decision, knowledge } = board();
+  const kept = knowledge("kept");
+  const other = registerTask(db, { type: "work", title: "o", purpose: "p", completion_criteria: "c" }, at);
+  const othersDecision = logDecision(db, other, "someone else's reasoning", "deckhand", at);
+  const fold = (based_on_decision: number) => () =>
+    foldMemory(db, { scope: "tidepool", path: "build", title: "Folded", text: "Folded.", replaces: [kept], based_on_decision, author: metaReview, task_id: task.id }, "worker", at);
+  const before = listMemoryEntries(db, {});
+
+  expect(fold(othersDecision)).toThrow(`event ${othersDecision} is not a decision of this task`);
+  expect(listMemoryEntries(db, {})).toEqual(before);
+  expect(fold(decision)).not.toThrow();
 });
 
 it("move_memory は Knowledge を別の scope・path へ移し、書き手は移した meta-review でなく旧の書き手を継ぐ —— meta-review は無効化 event の activity に載る(ADR 0162 決定5)", () => {
@@ -501,7 +515,8 @@ it("既存の後継は pin に入り、提案の open 中に無効化される�
 });
 
 /** fold_memory の既にある後継(ADR 0161 決定2)。 */
-const foldInto = (f: Fixture) => (input: Omit<Parameters<typeof foldMemory>[1], "author">) => foldMemory(f.db, { ...input, author: metaReview }, "worker", at);
+const foldInto = (f: Fixture) => (input: Omit<Parameters<typeof foldMemory>[1], "author" | "task_id">) =>
+  foldMemory(f.db, { ...input, author: metaReview, task_id: f.task.id }, "worker", at);
 
 it("fold_memory の successor_id は replaces を既にある approved の後継つき superseded(meta_review の印)にし、新しい entry を作らない —— Knowledge → Knowledge、Definition → Definition、candidate の Behavior / Exemplar → approved の Behavior / Exemplar(ADR 0161 決定2)", () => {
   const fixture = approvedPair();
@@ -604,6 +619,26 @@ it("consolidate の based_on_decision が decision_logged でない event だと
   expect(() => propose(notDecision)).toThrow(DomainError);
   expect(listMemoryEntries(db, {})).toEqual(before);
   expect(propose(decision)).toMatchObject({ question_id: expect.any(String) });
+});
+
+it("consolidate の based_on_decision が別の task の decision だと domain error で、entry も書かない(ADR 0115 追記)", () => {
+  const { db, task, decision, drafted } = drafts();
+  const replaces = [drafted("Good", { commit: "0a46a46" })];
+  const other = registerTask(db, { type: "work", title: "o", purpose: "p", completion_criteria: "c" }, at);
+  const othersDecision = logDecision(db, other, "someone else's reasoning", "deckhand", at);
+  const propose = (based_on_decision: number) => () =>
+    proposeMemoryChange(
+      db,
+      task.id,
+      { op: "consolidate", text: { scope: null, path: "habits", title: "One rule", text: "One rule.", addressee: null }, replaces, based_on_decision, rationale: "r" },
+      "auditor",
+      at,
+    );
+  const before = listMemoryEntries(db, {});
+
+  expect(propose(othersDecision)).toThrow(`event ${othersDecision} is not a decision of this task`);
+  expect(listMemoryEntries(db, {})).toEqual(before);
+  expect(propose(decision)).not.toThrow();
 });
 
 it.each([
