@@ -381,9 +381,16 @@ export type EventPayload =
   // 戻せる。決定 log には現れない。
   // created の event id がそのままエントリの id(Knowledge は版も)。
   // question_id = 提案 question の修正値つき approve が作ったエントリの印(ADR 0151 決定3)。
-  // 移動の複製(ADR 0162 決定5)だけが activity(移した者 —— 書き手は entry.author のまま旧から継ぐ)と、approved なら
-  // version(旧から継いだ版)を持つ。
-  | { kind: "memory_entry_created"; entry: MemoryEntryFields; question_id?: string; activity?: MemoryEntryFields["author"]["activity"]; version?: number }
+  // 移動の複製(ADR 0162 決定5)と復元の複製(ADR 0163)だけが activity(写した者 —— 書き手は entry.author のまま旧から継ぐ)を持ち、
+  // 移動の複製は approved なら version(旧から継いだ版)を、復元の複製は restored_from(復元元の id、版は継がない)を持つ。
+  | {
+      kind: "memory_entry_created";
+      entry: MemoryEntryFields;
+      question_id?: string;
+      activity?: MemoryEntryFields["author"]["activity"];
+      version?: number;
+      restored_from?: number;
+    }
   // question_id / activity = 誰の産物かの印で、meta-review の材料判定が読む(ADR 0151 決定3)。回答が刻んだ無効化は question_id、
   // 書き込み・移動の一部として刻んだ無効化は書き手・移した者の activity(人間も持つ)。人間の直接の無効化はどちらも持たない。
   | { kind: "memory_entry_invalidated"; entry_id: number; reason: InvalidationReason; successor_id: number | null; question_id?: string; activity?: MemoryEntryFields["author"]["activity"] }

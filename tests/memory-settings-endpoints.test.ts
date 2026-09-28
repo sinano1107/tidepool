@@ -276,3 +276,32 @@ it("エントリ1件と枝ごとの移動(POST /api/settings/memory/entries/:id/
     [null, "build/tests"],
   ]);
 });
+
+it("POST /api/settings/memory/entries/:id/restore は無効化済みのエントリを domain に渡して複製の id を返し、domain error(生きたエントリ)は 400(ADR 0163)", async () => {
+  t = await bootTidepool();
+  const old = agentKnowledge(t, "Old");
+  await api(t.baseUrl, "POST", `/api/settings/memory/entries/${old}/invalidate`, { reason: "capability" });
+
+  const restored = await api(t.baseUrl, "POST", `/api/settings/memory/entries/${old}/restore`, {});
+  expect(restored).toMatchObject({ status: 200, json: { entry_id: expect.any(Number) } });
+  expect((await api(t.baseUrl, "POST", `/api/settings/memory/entries/${restored.json.entry_id}/restore`, {})).status).toBe(400);
+  expect((await api(t.baseUrl, "GET", "/api/settings/memory/entries?state=approved")).json.entries).toMatchObject([
+    { id: restored.json.entry_id, title: "Old", author: { activity: "worker_verb", name: "deckhand" } },
+  ]);
+});
+
+it("管理MCP の restore_memory_entry は無効化済みのエントリを domain に渡して複製の id を返し、domain error(生きたエントリ)は tool error(ADR 0163)", async () => {
+  t = await bootTidepool();
+  const old = agentKnowledge(t, "Old");
+  const client = await managementMcpClient(t.baseUrl);
+  const call = toolCaller(client);
+  try {
+    await call("invalidate_memory_entry", { entry_id: old, reason: "capability" });
+    const restored = await call("restore_memory_entry", { entry_id: old });
+    expect(restored).toMatchObject({ isError: false, json: { entry_id: expect.any(Number) } });
+    expect((await call("restore_memory_entry", { entry_id: restored.json.entry_id })).isError).toBe(true);
+    expect((await call("list_memory_entries", { state: "approved" })).json).toMatchObject([{ id: restored.json.entry_id, title: "Old" }]);
+  } finally {
+    await client.close();
+  }
+});

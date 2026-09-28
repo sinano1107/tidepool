@@ -2209,6 +2209,17 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit }) 
         supersedes: String(entry.id),
         inheritedSource: caseSource
       })) }, "Edit"), /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "sm", onClick: () => setMoving({ id: entry.id, workspace: entry.scope ?? "", path: entry.path }) }, "Move"), /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "sm", onClick: () => setInvalidating({ id: entry.id, reason: "capability", successor: "" }) }, "Invalidate")),
+      entry.invalidation_reason && entry.invalidation_reason !== "path_moved" && /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8 } }, /* @__PURE__ */ React.createElement(
+        Button,
+        {
+          variant: "ghost",
+          size: "sm",
+          disabled: busy,
+          onClick: () => submit(`/api/settings/memory/entries/${entry.id}/restore`, {}, ["entry restored", `#${entry.id}`], "restore failed", () => {
+          })
+        },
+        "Restore"
+      )),
       moving?.id === entry.id && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(
         Select,
         {

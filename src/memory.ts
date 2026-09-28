@@ -268,26 +268,69 @@ function moveEntries(
       if (old.scope === scope && old.path === path) throw new DomainError(`memory entry ${old.id} is already at ${path} in this scope`);
       checkPath(path);
       if (old.kind !== "definition") continue;
-      const defined = (
-        db.prepare("SELECT id FROM memory_entries WHERE kind = 'definition' AND invalidation_reason IS NULL AND path = ? AND scope IS ?").all(path, scope) as Array<{ id: number }>
-      ).find(({ id }) => !moving.has(id));
-      if (defined) throw new DomainError(`branch ${path} is already defined in that scope by entry ${defined.id}: fold the two definitions into one instead of moving`);
+      const defined = liveDefinitions(db, scope, path).find((id) => !moving.has(id));
+      if (defined) throw new DomainError(`branch ${path} is already defined in that scope by entry ${defined}: fold the two definitions into one instead of moving`);
     }
     return moves.map(({ old: row, scope, path }) => {
       const old = rowToEntry(row);
-      const { id, version, source: _source, ...body } = old;
-      const entry: MemoryEntryFields = { ...body, scope, path, source: inheritableSource(old) ?? null };
-      const copy = appendEvent(db, {
-        taskId: null,
-        workerId: mover.name,
-        origin,
-        payload: { kind: "memory_entry_created", entry, activity: mover.activity, ...(version === null ? {} : { version }) },
-        at,
-      });
-      insertEntry(db, copy, entry, version ?? undefined);
-      invalidateMemoryEntry(db, { entry_id: id, reason: "path_moved", successor_id: copy }, mover.name, origin, at, { activity: mover.activity });
-      return { entry_id: id, successor_id: copy };
+      const copy = copyBody(db, old, { scope, path }, mover, origin, at, old.version === null ? {} : { version: old.version });
+      invalidateMemoryEntry(db, { entry_id: old.id, reason: "path_moved", successor_id: copy }, mover.name, origin, at, { activity: mover.activity });
+      return { entry_id: old.id, successor_id: copy };
     });
+  })();
+}
+
+/** scope / path に生きている Definition の id(移動と復元の置き場の門)。 */
+function liveDefinitions(db: Db, scope: string | null, path: string): number[] {
+  return (
+    db.prepare("SELECT id FROM memory_entries WHERE kind = 'definition' AND invalidation_reason IS NULL AND path = ? AND scope IS ?").all(path, scope) as Array<{ id: number }>
+  ).map(({ id }) => id);
+}
+
+/** 本文の側の複製(移動と復元が共有する): 出所・書き手・状態ごと写して place に作り、写した者を作成 event の activity に載せる。
+ *  mark は移動が継ぐ版か、復元の復元元。返り値は複製の id。 */
+function copyBody(
+  db: Db,
+  old: MemoryEntry,
+  place: Pick<MemoryEntryFields, "scope" | "path">,
+  actor: Mover,
+  origin: EventOrigin,
+  at: Date,
+  mark: { version?: number; restored_from?: number },
+): number {
+  const { id: _id, version: _version, source: _source, ...body } = old;
+  const entry: MemoryEntryFields = { ...body, ...place, source: inheritableSource(old) ?? null };
+  const id = appendEvent(db, { taskId: null, workerId: actor.name, origin, payload: { kind: "memory_entry_created", entry, activity: actor.activity, ...mark }, at });
+  insertEntry(db, id, entry, mark.version);
+  return id;
+}
+
+/** 復元(ADR 0163): 無効化済みのエントリ(4種別、状態は問わない)の本文の側を同じ scope / path に写して新エントリにする ——
+ *  移動の複製と同じ形で新規の書き込みの門は掛けず、版は継がない(approved なら版は複製の作成 event)。旧の行は触らず、旧を pin して
+ *  いた提案 question も戻さない。`path_moved` は複製の側を扱う(移し戻すか、畳まれた複製を復元する)ので拒み、後継が生きている間も
+ *  拒む —— 後継の `path_moved` の鎖は末尾までたどる(`superseded` はたどらない)。Definition は同じ枝に生きた Definition があれば拒む。 */
+export function restoreMemoryEntry(
+  db: Db,
+  input: { entry_id: number; restorer: Mover },
+  origin: EventOrigin,
+  at: Date,
+): { entry_id: number; event_id: number } {
+  return db.transaction(() => {
+    const row = requireEntry(db, input.entry_id);
+    if (row.invalidation_reason === null) throw new DomainError(`memory entry ${row.id} is not invalidated`);
+    if (row.invalidation_reason === "path_moved") {
+      throw new DomainError(`memory entry ${row.id} was moved to entry ${row.successor_id}: move that copy back, or restore it if it was invalidated`);
+    }
+    let successor = row.successor_id === null ? undefined : requireEntry(db, row.successor_id);
+    while (successor?.invalidation_reason === "path_moved") successor = requireEntry(db, successor.successor_id!);
+    if (successor && successor.invalidation_reason === null) {
+      throw new DomainError(`memory entry ${row.id} was replaced by the live successor ${successor.id}: invalidate that first`);
+    }
+    const [defined] = row.kind === "definition" ? liveDefinitions(db, row.scope, row.path) : [];
+    if (defined) throw new DomainError(`branch ${row.path} is already defined in that scope by entry ${defined}: invalidate it first`);
+    const old = rowToEntry(row);
+    const id = copyBody(db, old, { scope: old.scope, path: old.path }, input.restorer, origin, at, { restored_from: old.id });
+    return { entry_id: id, event_id: id };
   })();
 }
 

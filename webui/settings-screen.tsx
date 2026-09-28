@@ -1811,6 +1811,15 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit }: 
               <Button variant="ghost" size="sm" onClick={() => setInvalidating({ id: entry.id, reason: 'capability', successor: '' })}>Invalidate</Button>
             </div>
           )}
+          {/* restore (ADR 0163): the board copies the body back to the same place; a moved entry is handled through its copy */}
+          {entry.invalidation_reason && entry.invalidation_reason !== 'path_moved' && (
+            <div style={{ display: 'flex', gap: 8 }}>
+              <Button variant="ghost" size="sm" disabled={busy}
+                onClick={() => submit(`/api/settings/memory/entries/${entry.id}/restore`, {}, ['entry restored', `#${entry.id}`], 'restore failed', () => {})}>
+                Restore
+              </Button>
+            </div>
+          )}
           {moving?.id === entry.id && (
             <React.Fragment>
               {/* the entry's current workspace stays offered even if it has left the registry */}

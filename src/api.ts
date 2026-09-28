@@ -62,6 +62,7 @@ import {
   recordBehavior,
   recordExemplar,
   recordKnowledge,
+  restoreMemoryEntry,
 } from "./memory.js";
 import { changeMetaReviewSettings, metaReviewSettingsChangeSchema, readMetaReviewSettings } from "./meta-review.js";
 import {
@@ -1715,6 +1716,13 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     "/settings/memory/entries/:entry_id/move",
     validatedWrite(memoryMoveSchema.extend({ entry_id: z.coerce.number().int().positive() }), ({ entry_id, workspace, path }) =>
       moveMemory(db, { entry_id, scope: workspace, path, mover: HUMAN_AUTHOR }, "webui", clock.now()),
+    ),
+  );
+  // ADR 0163: 無効化済みのエントリの本文の側を同じ置き場に写す復元。復元した者(human)は作成 event の activity に載る
+  router.post(
+    "/settings/memory/entries/:entry_id/restore",
+    validatedWrite(z.object({ entry_id: z.coerce.number().int().positive() }), ({ entry_id }) =>
+      restoreMemoryEntry(db, { entry_id, restorer: HUMAN_AUTHOR }, "webui", clock.now()),
     ),
   );
   router.post(
