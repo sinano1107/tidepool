@@ -297,7 +297,7 @@ _Avoid_: 畳み中・畳み込み中(畳み込み停止は watchdog が撃つ合
 
 ## Board call(盤面呼び出し)
 
-盤面が**自分自身の機能のために**回す AI 呼び出し(2026-08-04 の grilling、issue #174)。v1 の用途は AI 下書き・表示時翻訳・worker に与える面の事前確認・使用量の読み取り。配分評価(Allocation review 参照)と帰責の判定・`preference` と第2回確定後の Behavior candidate の起草(帰責 参照、ADR 0115 / ADR 0120)もここで回す —— この3用途は worker の仕事の結果が出てから撃つので**振り返り Board call** と呼び、ティアを盤面設定の1つの値で共有する(Provider は `anthropic`、ADR 0111 追記4)。Worker session と対をなす概念であり、**worker session ではない** —— タスクにも slot にも属さず、assignee を持たず、decision log にも現れない。説明責任の主体は実行者ではなく盤面自身(= 人間)である。 各用途は使う Provider を呼び出しごとに明示し、盤面全体の暗黙の既定 Provider は持たない。
+盤面が**自分自身の機能のために**回す AI 呼び出し(2026-08-04 の grilling、issue #174)。v1 の用途は AI 下書き・表示時翻訳・worker に与える面の事前確認・使用量の読み取り。配分評価(Allocation review 参照)と帰責の判定・`preference` と第2回確定後の Behavior candidate の起草(帰責 参照、ADR 0115 / ADR 0120)もここで回す —— この3用途は worker の仕事の結果が出てから撃つので**振り返り Board call** と呼び、ティアを盤面設定の1つの値で共有する(Provider は `anthropic`、ADR 0111 追記4)。撃って3回失敗した振り返り Board call は3用途で1つの一覧に並び、人間が Retry / Dismiss で閉じる —— 一覧の置き場所はティア設定の隣(ADR 0164 / 0172)。Worker session と対をなす概念であり、**worker session ではない** —— タスクにも slot にも属さず、assignee を持たず、decision log にも現れない。説明責任の主体は実行者ではなく盤面自身(= 人間)である。 各用途は使う Provider を呼び出しごとに明示し、盤面全体の暗黙の既定 Provider は持たない。
 
 したがって **advisor を持たない**(Advisor 参照) —— advisor は worker がタスクの途中で判断の質を上げるための能力であり、盤面の内部処理には相談すべき判断が無い。この不在はホスト環境の設定に委ねられず、**盤面が呼び出しごとに明示的に宣言する**: 別の目的で渡した設定の副作用として advisor が結果的に不在になっている状態は、ホスト側の1行で静かに反転しうるため不在の綴りとして認めない(ADR 0044)。同じ理由で逆向きも成立する —— ホストの環境設定が worker の advisor を黙って落とすことも許されない(有効・無効の正本は registry と kill switch のみ)。
 
@@ -465,7 +465,7 @@ _Avoid_: bandit、optimizer
 
 ## 配分評価(Allocation review)
 
-品質判定(review の verdict + findings)を固定した**後**に、盤面が Board call で問う「この結果に対する実行設定は適切だったか」— `allocation`(appropriate / underpowered / overpowered / uncertain)と `cause`(capability / task_ambiguity / environment / missing_information — 帰責と共有する語彙で、異議でしか現れない `preference` / `requirement_change` を含めて1本、ADR 0115)。episode への**判断種別**の注釈で、観測と混ぜない。注釈は Board call 自身の実行設定(judge)を持ち、routing meta-review が「同じモデルが評価した」偏りの手がかりに読む(ADR 0150)。帰責(エントリ単位、異議が契機)とは同じ episode に別々に並ぶ。review session はモデル名・価格・routing を入力に持たない(ADR 0111)。
+品質判定(review の verdict + findings)を固定した**後**に、盤面が Board call で問う「この結果に対する実行設定は適切だったか」— `allocation`(appropriate / underpowered / overpowered / uncertain)と `cause`(capability / task_ambiguity / environment / missing_information — 帰責と共有する語彙で、異議でしか現れない `preference` / `requirement_change` を含めて1本、ADR 0115)。episode への**判断種別**の注釈で、観測と混ぜない。注釈は Board call 自身の実行設定(judge)を持ち、routing meta-review が「同じモデルが評価した」偏りの手がかりに読む(ADR 0150)。注釈は判断だけを持つ —— 撃つのは pickup の poll の **sweep** だけで(review 完了の扉は撃たない)、「統合点レビューが完了したのに注釈が無い」を見て、review 完了より前の最新の worker session を問う。撃てなかった呼び出しは何も残さず、撃って失敗したものだけ失敗 event になり、3回で打ち切って人間の面に出る —— 帰責の第2回・起草と同じ機構(ADR 0164 / 0169 / 0172)。session の無い被レビュー task は評価しない。帰責(エントリ単位、異議が契機)とは同じ episode に別々に並ぶ。review session はモデル名・価格・routing を入力に持たない(ADR 0111)。
 _Avoid_: Supervisor、Phase 2
 
 ## Interview(面接)
