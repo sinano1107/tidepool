@@ -242,7 +242,7 @@ export function proposeRoutingChange(
     ];
     purpose = `The routing meta-review proposes to ${input.op} the learner. Approve applies it; reject leaves the learner as it is.`;
   }
-  const detail = [...diff, "", `Rationale: ${input.rationale}`].join("\n");
+  const detail = [...diff, "", `Rationale: ${input.rationale}`, "", "While this question is open, the next routing meta-review is not registered."].join("\n");
   const question = registerTask(
     db,
     {

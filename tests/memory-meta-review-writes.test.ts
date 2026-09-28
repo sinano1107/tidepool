@@ -4,6 +4,7 @@ import { appendEvent, listEvents } from "../src/events.js";
 import {
   approveMemoryProposal,
   createBehaviorCandidate,
+  deferMemoryProposal,
   defineMemoryBranch,
   foldMemory,
   humanEntryInput,
@@ -340,6 +341,23 @@ it("memory 提案の reject は comment が空・空白だけなら domain error
 
   for (const comment of [undefined, "", " \n "]) expect(() => rejectMemoryProposal(db, proposal, "question-1", "webui", at, comment)).toThrow(DomainError);
   expect(listMemoryEntries(db, {})).toEqual(before);
+});
+
+it("memory 提案の defer は comment が空・空白だけなら domain error で断る(ADR 0165 決定3)", () => {
+  for (const comment of [undefined, "", " \n "]) expect(() => deferMemoryProposal(comment)).toThrow(DomainError);
+  expect(() => deferMemoryProposal("Not sure the split holds for data-only migrations.")).not.toThrow();
+});
+
+it("memory の提案 question は approve / reject / defer の3択で推奨は approve、detail は open な間の門と defer の案内の1文で終わる(ADR 0165 決定3・4)", () => {
+  const { db, task, drafted } = drafts();
+  const candidate_id = drafted("Split migrations", { commit: "0a46a46" });
+
+  const question = getTask(db, proposeMemoryChange(db, task.id, { op: "approve", candidate_id, rationale: "r" }, "auditor", at).question_id)!;
+
+  expect(question.question_items).toMatchObject([{ options: ["approve", "reject", "defer"], recommendation: "approve" }]);
+  expect(question.question_items![0]!.detail).toMatch(
+    /\nWhile this question is open, the next memory meta-review is not registered; if you cannot decide yet, answer defer with a comment\.$/,
+  );
 });
 
 it("出所を添えずに人間が書いた Behavior だけを replaces に取る consolidate は、その作成 event を継がず Behavior なら decision を出所にし、Exemplar なら domain error", () => {

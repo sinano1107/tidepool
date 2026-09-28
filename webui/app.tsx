@@ -222,7 +222,7 @@ function toQuestionCardShape(
     ...(q.question_proposal?.kind === 'routing' && q.question_proposal.op === 'row' && { amendable: 'row' as const }),
     ...(q.question_proposal?.kind === 'registry' && { amendable: 'agent_tier' as const }),
     ...(q.question_proposal?.kind === 'memory' && q.question_proposal.candidate_id !== undefined && { amendable: 'memory' as const, candidateId: q.question_proposal.candidate_id }),
-    ...(q.question_proposal?.kind === 'memory' && { rejectNeedsComment: true }),
+    ...(q.question_proposal?.kind === 'memory' && { needsComment: ['reject', 'defer'] }),
     ...(q.approval && {
       kind: 'approval',
       ...(q.approval.raises_parent_risk && { note: `approving raises ${q.parent_id} risk (upward propagation)` }),

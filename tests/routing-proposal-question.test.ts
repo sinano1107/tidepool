@@ -28,7 +28,7 @@ async function boardWithRoutingReview() {
 
 const task = async (id: string) => (await api(t.baseUrl, "GET", `/api/tasks/${id}`)).json;
 
-it("行の提案は meta-review の子に1 item の question を立て、その行の全欄を pin に焼き、detail に散文 diff と根拠を載せる", async () => {
+it("行の提案は meta-review の子に1 item の question を立て、その行の全欄を pin に焼き、detail に散文 diff と根拠を載せ、open な間の門の1文で終える(ADR 0165 決定4)", async () => {
   const { review, client, propose } = await boardWithRoutingReview();
   try {
     const questionId = await propose({ tier: "frontier", effort: "max" });
@@ -46,6 +46,7 @@ it("行の提案は meta-review の子に1 item の question を立て、その�
     for (const shown of ["anthropic / opus", "tier: standard -> frontier", "effort: high -> max", "12 of 14 opus episodes were underpowered."]) {
       expect(detail).toContain(shown);
     }
+    expect(detail).toMatch(/\nWhile this question is open, the next routing meta-review is not registered\.$/);
   } finally {
     await client.close();
   }

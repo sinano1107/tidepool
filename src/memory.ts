@@ -749,6 +749,11 @@ export function rejectMemoryProposal(db: Db, proposal: MemoryProposal, questionI
   if ("candidate_id" in proposal) invalidateMemoryEntry(db, { entry_id: proposal.candidate_id, reason: "rejected" }, HUMAN_WORKER_ID, origin, at, { question_id: questionId });
 }
 
+/** 提案の defer(ADR 0165 決定3): 決めないので店には何もせず(pin 検査も要らない)、comment だけを reject と同じく必須にする。 */
+export function deferMemoryProposal(comment: string | undefined): void {
+  if (!comment?.trim()) throw new DomainError("deferring a memory proposal requires a comment saying what is still undecided");
+}
+
 /** 無効化されていない kinds のどれかで、state を渡せばその state の entry(提案が名指す entry と、Behavior の編集の supersedes)。 */
 function requireLive(db: Db, id: number, kinds: Array<MemoryEntryFields["kind"]>, state?: MemoryEntryFields["state"]): EntryRow {
   const row = requireEntry(db, id);
@@ -878,6 +883,8 @@ export function proposeMemoryChange(
       `Addressee: ${shown.addressee ?? "every agent"}`,
       `Title: ${shown.title}`,
       ...(shown.kind === "exemplar" ? exemplarDetail(db, shown) : ["candidate_id" in proposal ? "New text:" : "Text:", shown.text]),
+      "",
+      "While this question is open, the next memory meta-review is not registered; if you cannot decide yet, answer defer with a comment.",
     ].join("\n");
     const title = `${{ approve: "Approve", consolidate: "Consolidate", invalidate: "Invalidate" }[input.op]} memory: ${shown.title}`;
     const question = registerTask(
@@ -888,7 +895,7 @@ export function proposeMemoryChange(
         purpose: input.rationale,
         completion_criteria: "a human answer is recorded",
         parent_id: metaReviewId,
-        question: [{ title, detail, options: ["approve", "reject"], recommendation: "approve" }],
+        question: [{ title, detail, options: ["approve", "reject", "defer"], recommendation: "approve" }],
         proposal,
       },
       now,

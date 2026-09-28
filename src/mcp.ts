@@ -992,8 +992,8 @@ function registerMemoryMetaReviewVerbs(server: McpServer, deps: McpDeps, run: Me
     {
       description:
         "List every past memory proposal (approve, consolidate, invalidate) with the human's answer, amendment and comment, or " +
-        "why the board settled it as observed (an entry it pinned was invalidated first). A rejected proposal always carries the " +
-        "human's reason in comment — read it so you do not re-propose what was rejected and can redraft closer to what they want.",
+        "why the board settled it as observed (an entry it pinned was invalidated first). A rejected or deferred proposal always carries the " +
+        "human's reason or what is still undecided in comment — read it so you do not re-propose what was rejected and can redraft closer to what they want.",
       inputSchema: { page },
     },
     async (input) => run((reader, now) => pullMemoryProposals(deps.db, reader, input, now)),
@@ -1072,7 +1072,7 @@ function registerMemoryMetaReviewVerbs(server: McpServer, deps: McpDeps, run: Me
     "propose_memory_change",
     {
       description:
-        "Propose a Behavior or Exemplar change to the human as one approve / reject question attached to this task. op approve asks to " +
+        "Propose a Behavior or Exemplar change to the human as one approve / reject / defer question attached to this task. op approve asks to " +
         "approve a Behavior candidate exactly as worded (candidate_id). op consolidate replaces the candidates, approved Behaviors and " +
         "Exemplars in replaces with one successor: either text, drafted as a new candidate, or successor_id, an approved Behavior or " +
         "Exemplar you keep instead. With text, based_on_decision is the event id log_decision returned for your reasoning; the new " +

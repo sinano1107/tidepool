@@ -27,8 +27,8 @@ interface TpQuestion {
    *  memory の approve / consolidate は `candidateId` の文言と宛先。 */
   amendable?: 'row' | 'agent_tier' | 'memory';
   candidateId?: number;
-  /** memory の提案 question: reject は理由の comment が要る(ADR 0159 決定3)。 */
-  rejectNeedsComment?: boolean;
+  /** comment が要る選択肢(memory の提案 question の reject / defer、ADR 0159 決定3・ADR 0165 決定3)。 */
+  needsComment?: string[];
 }
 /** approve に添える修正値。空欄は送らない(memory の宛先の null = 全員は送る)。 */
 type TpAmendment = {
@@ -101,7 +101,7 @@ function TpSegmentGauge({ total, filled }: { total: number; filled: number }) {
 // 30-second decision an agent reads back).
 function TpQuestionItemPicker({ item, value, locked, onChange, translated, disabled = [] }: {
   item: TpQuestionItem;
-  /** 今は選べない選択肢(comment の無い memory 提案の reject)。 */
+  /** 今は選べない選択肢(comment の無い memory 提案の reject / defer)。 */
   disabled?: string[];
   /** 未選択は null / undefined のどちらでも来る(呼び手は配列の添字)。 */
   value?: string | null;
@@ -387,10 +387,10 @@ function TpQuestionCard({ q, answer, onAnswer, locked = false, onTranslate }: {
             onChange={(e) => setAmendment({ ...amendment, effort: e.target.value.trim() })} />
         </div>
       )}
-      {q.rejectNeedsComment && !locked && (
+      {q.needsComment && !locked && (
         <div style={{ marginBottom: 14 }}>
-          <Input label="Comment (required to reject)" multiline rows={2} value={comment} onChange={(e) => setComment(e.target.value)}
-            placeholder="why — the next memory meta-review reads it" />
+          <Input label={`Comment (required to ${q.needsComment.join(' / ')})`} multiline rows={2} value={comment} onChange={(e) => setComment(e.target.value)}
+            placeholder="why, or what is still undecided — the next memory meta-review reads it" />
         </div>
       )}
       {items.length > 1 && !locked && (
@@ -401,7 +401,7 @@ function TpQuestionCard({ q, answer, onAnswer, locked = false, onTranslate }: {
       <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
         {items.map((item, i) => (
           <TpQuestionItemPicker key={i} item={item} value={draft[i]} locked={locked} onChange={(v) => setItemAnswer(i, v)}
-            translated={translatedItems ? translatedItems[i] : null} disabled={q.rejectNeedsComment && !comment.trim() ? ['reject'] : []} />
+            translated={translatedItems ? translatedItems[i] : null} disabled={comment.trim() ? [] : q.needsComment} />
         ))}
       </div>
     </Card>
