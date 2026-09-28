@@ -21,6 +21,7 @@ import {
   loggedEntry,
   managementMcpClient,
   mcpClient,
+  memoryEntries,
   object,
   objectedForDraft,
   registerWork,
@@ -391,8 +392,6 @@ it("ログの HTTP / 管理 MCP 読取は異議の隣に最新の cause を返�
 });
 
 // Board call の Behavior candidate 起草(ADR 0120 決定1(b)(c) / issue #617)
-
-const memoryEntries = async (t: Tidepool) => (await api(t.baseUrl, "GET", "/api/settings/memory/entries")).json.entries;
 
 const draftsFailed = async (t: Tidepool, taskId: string) =>
   (await api(t.baseUrl, "GET", `/api/tasks/${taskId}/events`)).json.filter((e: any) => e.kind === "memory_draft_failed");
