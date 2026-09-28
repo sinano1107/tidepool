@@ -1,6 +1,6 @@
 /**
  * One decision-log line for the morning skim. Silence = approval; tapping a
- * clickable row (onObject given) toggles the objection
+ * clickable row's body (onObject given) toggles the objection
  * composer — works on touch, no hover required. Completions get a grass fill.
  */
 export interface LogEntryProps {
@@ -28,7 +28,9 @@ export interface LogEntryProps {
     /** Teal unread bar (entries since last skim). */
     unread?: boolean;
   };
-  /** Tap/click handler — row becomes the Object affordance. */
+  /** Tap/click handler — the row's time, agent, task id, text and
+   *  "objecting…" marker become the Object affordance (a button, Enter/Space).
+   *  The objection annotations sit outside it, so tapping them does nothing. */
   onObject?: () => void;
   /** Completion handoff toggle, kept separate from the row's Object affordance. */
   onExpand?: () => void;

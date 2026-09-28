@@ -1,7 +1,7 @@
 import { appendEvent } from "../src/events.js";
 import { recordKnowledge } from "../src/memory.js";
 import { FakeAttributionClient } from "../tests/fakes.js";
-import { api, HOUR, loggedEntry, mcpClient, registerWork } from "../tests/harness.js";
+import { api, completeViaMcp, HOUR, loggedEntry, mcpClient, registerWork } from "../tests/harness.js";
 import { expect, test } from "./fixtures.js";
 
 // issue #371: 異議バッジは triage 画面のローカル state だけで描かれており、
@@ -130,6 +130,8 @@ test("memory の帰責は異議バッジに cause と名指された entry へ�
 
   const row = page.locator(".tp-log-entry").filter({ hasText: "誤ったメモに従った判断" });
   await expect(row.getByText("cause: memory")).toBeVisible();
+  // リンクは行の Object 押下面の入れ子にならない(issue #1090)
+  await expect(row.getByRole("button", { name: /誤ったメモに従った判断/ }).getByRole("link")).toHaveCount(0);
   await row.getByRole("link", { name: `#${note}` }).click();
 
   await expect(page.getByTestId(`memory-entry-${note}`)).toBeInViewport();
@@ -139,4 +141,57 @@ test("memory の帰責は異議バッジに cause と名指された entry へ�
   await row.getByRole("link", { name: `#${note}` }).focus();
   await page.keyboard.press("Enter");
   await expect(page.getByTestId(`memory-entry-${note}`)).toBeInViewport();
+});
+
+test("異議注釈の帯を押しても Object の composer は開かず、行の本文を押すと開く(issue #1090)", async ({ boot, page }) => {
+  const t = await boot();
+  const work = await registerWork(t, "注記の帯は押下面の外 e2e");
+  await t.clock.advance(HOUR);
+  const decided = await loggedEntry(t, work.id, "帯の外側を押す判断");
+  await api(t.baseUrl, "POST", "/api/triage/objection", { entry_id: decided.id, comment: "帯の中の方向コメント" });
+
+  await page.goto(t.baseUrl);
+
+  const row = page.locator(".tp-log-entry").filter({ hasText: "帯の外側を押す判断" });
+  await row.getByText("objection: 帯の中の方向コメント").click();
+  await expect(row).not.toHaveAttribute("data-active");
+  await expect(page.getByRole("textbox")).toHaveCount(0);
+
+  await row.getByText("帯の外側を押す判断").click();
+  await expect(row).toHaveAttribute("data-active", "");
+  await expect(page.getByRole("textbox")).toBeVisible();
+});
+
+test("行の Object 押下面に focus して Enter でも Space でも Object の composer が開く(issue #1090)", async ({ boot, page }) => {
+  const t = await boot();
+  const work = await registerWork(t, "キーボードで異議 e2e");
+  await t.clock.advance(HOUR);
+  await loggedEntry(t, work.id, "キーボードで開く判断");
+
+  for (const key of ["Enter", "Space"]) {
+    await page.goto(t.baseUrl);
+    const row = page.locator(".tp-log-entry").filter({ hasText: "キーボードで開く判断" });
+    await row.getByRole("button", { name: /キーボードで開く判断/ }).focus();
+    await page.keyboard.press(key);
+    await expect(row).toHaveAttribute("data-active", "");
+    await expect(page.getByRole("textbox")).toBeVisible();
+  }
+});
+
+test("完了エントリの Expand ボタンは handoff を開閉する(issue #1090)", async ({ boot, page }) => {
+  const t = await boot();
+  const task = await registerWork(t, "handoff を開閉する e2e");
+  await t.clock.advance(HOUR);
+  await completeViaMcp(t, task.id);
+
+  await page.goto(t.baseUrl);
+  // landing 先の無い完了は PR 昇格失敗の question を出すので、ログまで進む
+  await page.getByRole("button", { name: /Log skim/ }).click();
+
+  const expand = page.getByRole("button", { name: "Expand handoff" });
+  const handoff = page.getByText(`handoff — ${task.id}`);
+  await expand.click();
+  await expect(handoff).toBeVisible();
+  await expand.click();
+  await expect(handoff).toHaveCount(0);
 });
