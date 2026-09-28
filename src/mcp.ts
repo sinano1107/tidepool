@@ -3,10 +3,9 @@ import type { Router } from "express";
 import { z } from "zod";
 import type { AgentAdmin } from "./agent-create.js";
 import { type AllocationClient, reviewAllocation } from "./allocation-review.js";
-import { type AttributionClient, attributeAfterRca, type BehaviorDraftClient, isHumanEntry, latestAttribution, learningTarget } from "./attribution.js";
+import { type AttributionClient, attributeAfterRca, type BehaviorDraftClient, proposeFromObjection } from "./attribution.js";
 import type { Clock } from "./clock.js";
 import type { Db } from "./db.js";
-import { getEvent, HUMAN_FACING_KINDS } from "./events.js";
 import { PRIORITY_FIELD_DESCRIPTION, readExecutionSettings, TIER_FIELD_DESCRIPTION, TIERS } from "./execution-setting.js";
 import type { GitHubClient } from "./github.js";
 import type { GitHubAuth } from "./github-auth.js";
@@ -14,7 +13,6 @@ import { assertReviewerKnown, assertWorkspaceKnown } from "./human-verbs.js";
 import type { Landing } from "./landing.js";
 import {
   browseMemory,
-  createBehaviorCandidate,
   defineMemoryBranch,
   foldMemory,
   invalidateMemoryByMetaReview,
@@ -30,7 +28,6 @@ import {
   pullMemoryProposals,
   readMemory,
   recordKnowledge,
-  requireDecision,
   searchMemory,
 } from "./memory.js";
 import { type MetaReviewSubject, metaReviewSubjectOf, PROMOTION_RULE } from "./meta-review.js";
@@ -49,7 +46,6 @@ import {
   declarePremiseBreach,
   decomposeTask,
   escalateTask,
-  getRegistrant,
   getTask,
   HANDOFF_FIELDS,
   HUMAN_ROSTER_AGENT,
@@ -724,33 +720,8 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
         based_on_decision: z.number().int().optional(),
       },
     },
-    async ({ entry_id, as, based_on_decision, ...fields }) =>
-      runVerb(deps, attributedTaskId, (task) => {
-        // 門は列を足さず構造で引く(ADR 0120 決定1(a))
-        if (task.type !== "review" || task.parent_id === null) {
-          throw new DomainError("propose_from_objection is only for a review of an objected task");
-        }
-        const entry = getEvent(deps.db, entry_id);
-        if (entry?.task_id !== task.parent_id || !(HUMAN_FACING_KINDS as readonly string[]).includes(entry.kind)) {
-          throw new DomainError(`entry ${entry_id} is not a decision-log entry of your parent task`);
-        }
-        const attribution = latestAttribution(deps.db, { id: entry_id, task_id: task.parent_id });
-        if (!attribution) throw new DomainError(`entry ${entry_id} carries no attributed objection`);
-        if (isHumanEntry(entry)) throw new DomainError(`entry ${entry_id} was written by a human`);
-        const target = learningTarget(attribution.cause, entry.worker_id, getRegistrant(deps.db, entry.task_id), as);
-        if ((target.kind === "knowledge") !== (based_on_decision !== undefined)) {
-          throw new DomainError("based_on_decision is required for a knowledge entry and only for it");
-        }
-        const input = {
-          ...fields,
-          scope: memoryScope(deps, getTask(deps.db, task.parent_id)!),
-          source: { event_id: based_on_decision === undefined ? attribution.id : requireDecision(deps.db, based_on_decision, task.id) },
-          author: { activity: "rca" as const, name: attributedWorkerId(deps, task) },
-        };
-        return target.kind === "knowledge"
-          ? recordKnowledge(deps.db, input, "worker", deps.clock.now())
-          : createBehaviorCandidate(deps.db, { ...input, addressee: target.addressee }, "worker", deps.clock.now());
-      }),
+    async (input) =>
+      runVerb(deps, attributedTaskId, (task) => proposeFromObjection(deps.db, task.id, input, deps, attributedWorkerId(deps, task), deps.clock.now())),
   );
 
   if (subject !== null) {

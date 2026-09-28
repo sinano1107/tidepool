@@ -1,8 +1,8 @@
 import type { Cause } from "./cause.js";
 import type { Db } from "./db.js";
-import { appendEvent, type EventPayload, getEvent, listEvents, taskDecisionLog } from "./events.js";
+import { appendEvent, type EventPayload, getEvent, HUMAN_FACING_KINDS, listEvents, taskDecisionLog } from "./events.js";
 import { type ExecutionSettingRow, retrospectiveBoardCallRow } from "./execution-setting.js";
-import { buildMemoryInjection, createBehaviorCandidate, listMemoryEntries, memoryScope } from "./memory.js";
+import { buildMemoryInjection, createBehaviorCandidate, listMemoryEntries, memoryScope, recordKnowledge, requireDecision } from "./memory.js";
 import { sessionSpawnOf, sessionWindow } from "./precedent.js";
 import type { ProcessContainers } from "./process-container.js";
 import { BOARD_WORKER_ID, DomainError, getRegistrant, getTask, HUMAN_WORKER_ID, listChildren, type Task } from "./tasks.js";
@@ -392,7 +392,7 @@ function decisionLogText(db: Db, taskId: string, before = Number.POSITIVE_INFINI
 }
 
 /** entry への最新の帰責(同じ entry への追記は最新が有効 —— spec #563)。無ければ undefined。 */
-export function latestAttribution(
+function latestAttribution(
   db: Db,
   entry: { id: number; task_id: string },
 ): Attribution | undefined {
@@ -404,13 +404,13 @@ export function latestAttribution(
 }
 
 /** 人間が書いたエントリか —— 宛先となる agent を持たない(self RCA も立たない)。 */
-export const isHumanEntry = (entry: { worker_id: string }) => entry.worker_id === HUMAN_WORKER_ID;
+const isHumanEntry = (entry: { worker_id: string }) => entry.worker_id === HUMAN_WORKER_ID;
 
 const LEARNING_CAUSES: readonly Cause[] = ["capability", "preference", "task_ambiguity", "missing_information"];
 
 /** 学習の行き先を cause から導出する(ADR 0115 決定4)。`as` は `missing_information` だけが
  *  要り、Knowledge は宛先を持たない。Behavior の宛先が agent に落ちなければ DomainError。 */
-export function learningTarget(
+function learningTarget(
   cause: Cause,
   entryWorker: string,
   registrant: string,
@@ -438,6 +438,43 @@ export function learningTarget(
     default:
       throw new DomainError(`the entry's cause is ${cause}: nothing to learn from it`);
   }
+}
+
+/** RCA の起草 verb `propose_from_objection`(spec #615 B / issue #1077): 異議エントリへの所見を記憶にする。
+ *  門は列を足さず構造で引き(ADR 0120 決定1(a))、kind と宛先は最新の cause から導く(ADR 0115 決定4)。 */
+export function proposeFromObjection(
+  db: Db,
+  reviewId: string,
+  input: { entry_id: number; path: string; title: string; text: string; as?: "behavior" | "knowledge"; based_on_decision?: number },
+  board: { workspace?: { name: string } },
+  author: string,
+  now: Date,
+): { entry_id: number; event_id: number } {
+  const { entry_id, as, based_on_decision, ...fields } = input;
+  const task = getTask(db, reviewId);
+  if (task?.type !== "review" || task.parent_id === null) {
+    throw new DomainError("propose_from_objection is only for a review of an objected task");
+  }
+  const entry = getEvent(db, entry_id);
+  if (entry?.task_id !== task.parent_id || !(HUMAN_FACING_KINDS as readonly string[]).includes(entry.kind)) {
+    throw new DomainError(`entry ${entry_id} is not a decision-log entry of your parent task`);
+  }
+  const attribution = latestAttribution(db, { id: entry_id, task_id: task.parent_id });
+  if (!attribution) throw new DomainError(`entry ${entry_id} carries no attributed objection`);
+  if (isHumanEntry(entry)) throw new DomainError(`entry ${entry_id} was written by a human`);
+  const target = learningTarget(attribution.cause, entry.worker_id, getRegistrant(db, entry.task_id), as);
+  if ((target.kind === "knowledge") !== (based_on_decision !== undefined)) {
+    throw new DomainError("based_on_decision is required for a knowledge entry and only for it");
+  }
+  const entryInput = {
+    ...fields,
+    scope: memoryScope(board, getTask(db, task.parent_id)!),
+    source: { event_id: based_on_decision === undefined ? attribution.id : requireDecision(db, based_on_decision, reviewId) },
+    author: { activity: "rca" as const, name: author },
+  };
+  return target.kind === "knowledge"
+    ? recordKnowledge(db, entryInput, "worker", now)
+    : createBehaviorCandidate(db, { ...entryInput, addressee: target.addressee }, "worker", now);
 }
 
 const message = (err: unknown) => (err instanceof Error ? err.message : String(err));
