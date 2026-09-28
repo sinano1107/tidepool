@@ -724,37 +724,6 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
   const stopNotificationPoll = options.clock.setInterval(() => {
     void notificationTick.run(options.clock.now());
   }, 60 * 1000);
-  // one deps object for both MCP-side promotion paths: the MCP router's
-  // completion-time attempt and submitAnswer's synchronous retry (issue
-  // #66) — the retry is the same promotion under the same identity, so the
-  // two must not drift apart field by field
-  const mcpDeps = {
-    db,
-    slot,
-    clock: options.clock,
-    landing,
-    // ADR 0109 決定1: 最終 verb の後の解放は、この supervisor の回収済み観測の
-    // 後ろでしか走らない
-    containers,
-    // ADR 0099 決定3: 梯子の底へ落ちた session の解放の門は確認 question ただ1つ ——
-    // 遅れて届いた回収済み観測が跨がないよう、watchdog の保留を後始末が読む
-    heldForContainment: watchdog?.heldForContainment,
-    workspace: options.workspace,
-    resolveWorkspace: options.resolveWorkspace,
-    github: options.github,
-    githubAuth: options.githubAuth,
-    authority: options.authority,
-    resolveAuthority: options.resolveAuthority,
-    defaultAgentName: worker.id,
-    auditorName,
-    agentRegistered: options.agentRegistered,
-    isProtectedWorkspace: options.isProtectedWorkspace,
-    listAgents: options.listAgents,
-    allocationClient: options.allocationClient,
-    attributionCalls,
-    agentAdmin,
-    pollNow,
-  };
   app.use(
     "/api",
     createApiRouter({
@@ -814,7 +783,36 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
   // its own app/port (issue #37): `/mcp` never shares `port`, so publishing
   // `port` via `tailscale serve` can never also expose MCP tool calls
   const mcpApp = express();
-  mcpApp.use("/mcp", createMcpRouter(mcpDeps));
+  mcpApp.use(
+    "/mcp",
+    createMcpRouter({
+      db,
+      slot,
+      clock: options.clock,
+      landing,
+      // ADR 0109 決定1: 最終 verb の後の解放は、この supervisor の回収済み観測の
+      // 後ろでしか走らない
+      containers,
+      // ADR 0099 決定3: 梯子の底へ落ちた session の解放の門は確認 question ただ1つ ——
+      // 遅れて届いた回収済み観測が跨がないよう、watchdog の保留を後始末が読む
+      heldForContainment: watchdog?.heldForContainment,
+      workspace: options.workspace,
+      resolveWorkspace: options.resolveWorkspace,
+      github: options.github,
+      githubAuth: options.githubAuth,
+      authority: options.authority,
+      resolveAuthority: options.resolveAuthority,
+      defaultAgentName: worker.id,
+      auditorName,
+      agentRegistered: options.agentRegistered,
+      isProtectedWorkspace: options.isProtectedWorkspace,
+      listAgents: options.listAgents,
+      allocationClient: options.allocationClient,
+      attributionCalls,
+      agentAdmin,
+      pollNow,
+    }),
+  );
   const root = join(dirname(fileURLToPath(import.meta.url)), "..");
   app.use(express.static(join(root, "public")));
   app.use("/tokens", express.static(join(root, "design-system", "tokens")));
