@@ -471,6 +471,8 @@ export async function tempDir(prefix: string): Promise<string> {
 }
 
 export const FIXTURE_TASK = "6b4c0b23-289e-4f9f-ade1-995fb27f3c0e";
+/** seedFixtureBoard が FIXTURE_TASK の隣に置くもう1つのタスク。 */
+export const FIXTURE_OTHER_TASK = "609d9475-0191-4a7f-b5bf-5b939695315a";
 export const FIXTURE_SPAWNED_EVENT_ID = 5;
 
 // 2.1.237 の実セッションの記録。init 行の `memory_paths` だけは除いてある —
@@ -490,7 +492,7 @@ export function seedFixtureBoard(handoffDoc: string | null = null): Db {
      VALUES (?, 'work', 'done', ?, ?, 'fixture', 'fixture', 'fixture', 0, 0, 1, '2026-08-20T05:50:48.374Z', ?)`,
   );
   insertTask.run(FIXTURE_TASK, "tako", "sandbox", handoffDoc);
-  insertTask.run("609d9475-0191-4a7f-b5bf-5b939695315a", "tidepool", "sandbox", null);
+  insertTask.run(FIXTURE_OTHER_TASK, "tidepool", "sandbox", null);
   const insertEvent = db.prepare(
     "INSERT INTO events (id, task_id, worker_id, origin, kind, payload, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
   );
