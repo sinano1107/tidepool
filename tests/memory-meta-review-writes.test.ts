@@ -91,23 +91,11 @@ it("fold_memory の replaces に畳めないものが1つでもあれば domain 
   for (const replaces of [[kept, dead], [kept, definition], [kept, candidate], [kept, 999], []]) {
     expect(fold(replaces)).toThrow(DomainError);
   }
-  // 出所は decision_logged の event に限る(それ以外の event は推論として載せない)
+  // 出所は decision_logged の event に限る(それ以外の event は推論として載せない)。それも自分の task の decision に限る(ADR 0115 追記)
   expect(fold([kept], kept)).toThrow(DomainError);
+  const othersDecision = logDecision(db, registerTask(db, { type: "work", title: "o", purpose: "p", completion_criteria: "c" }, at), "someone else's reasoning", "deckhand", at);
+  expect(fold([kept], othersDecision)).toThrow(`event ${othersDecision} is not a decision of this task`);
   expect(listMemoryEntries(db, {})).toEqual(before);
-});
-
-it("fold_memory の based_on_decision が別の task の decision だと domain error で、何も書かない(ADR 0115 追記)", () => {
-  const { db, task, decision, knowledge } = board();
-  const kept = knowledge("kept");
-  const other = registerTask(db, { type: "work", title: "o", purpose: "p", completion_criteria: "c" }, at);
-  const othersDecision = logDecision(db, other, "someone else's reasoning", "deckhand", at);
-  const fold = (based_on_decision: number) => () =>
-    foldMemory(db, { scope: "tidepool", path: "build", title: "Folded", text: "Folded.", replaces: [kept], based_on_decision, author: metaReview, task_id: task.id }, "worker", at);
-  const before = listMemoryEntries(db, {});
-
-  expect(fold(othersDecision)).toThrow(`event ${othersDecision} is not a decision of this task`);
-  expect(listMemoryEntries(db, {})).toEqual(before);
-  expect(fold(decision)).not.toThrow();
 });
 
 it("move_memory は Knowledge を別の scope・path へ移し、書き手は移した meta-review でなく旧の書き手を継ぐ —— meta-review は無効化 event の activity に載る(ADR 0162 決定5)", () => {
@@ -602,10 +590,11 @@ it.each([
   expect(replacing(fixture)(fixture.drafted("Good", { commit: "0a46a46" }))).toMatchObject({ candidate_id: expect.any(Number) });
 });
 
-it("consolidate の based_on_decision が decision_logged でない event だと domain error で、entry も書かない", () => {
+it("consolidate の based_on_decision が decision_logged でない event か別の task の decision だと domain error で、entry も書かない(ADR 0115 追記)", () => {
   const { db, task, decision, drafted } = drafts();
   const replaces = [drafted("Good", { commit: "0a46a46" })];
   const notDecision = listEvents(db, task.id)[0]!.id; // task_registered
+  const othersDecision = logDecision(db, registerTask(db, { type: "work", title: "o", purpose: "p", completion_criteria: "c" }, at), "someone else's reasoning", "deckhand", at);
   const propose = (based_on_decision: number) =>
     proposeMemoryChange(
       db,
@@ -617,28 +606,9 @@ it("consolidate の based_on_decision が decision_logged でない event だと
   const before = listMemoryEntries(db, {});
 
   expect(() => propose(notDecision)).toThrow(DomainError);
+  expect(() => propose(othersDecision)).toThrow(`event ${othersDecision} is not a decision of this task`);
   expect(listMemoryEntries(db, {})).toEqual(before);
   expect(propose(decision)).toMatchObject({ question_id: expect.any(String) });
-});
-
-it("consolidate の based_on_decision が別の task の decision だと domain error で、entry も書かない(ADR 0115 追記)", () => {
-  const { db, task, decision, drafted } = drafts();
-  const replaces = [drafted("Good", { commit: "0a46a46" })];
-  const other = registerTask(db, { type: "work", title: "o", purpose: "p", completion_criteria: "c" }, at);
-  const othersDecision = logDecision(db, other, "someone else's reasoning", "deckhand", at);
-  const propose = (based_on_decision: number) => () =>
-    proposeMemoryChange(
-      db,
-      task.id,
-      { op: "consolidate", text: { scope: null, path: "habits", title: "One rule", text: "One rule.", addressee: null }, replaces, based_on_decision, rationale: "r" },
-      "auditor",
-      at,
-    );
-  const before = listMemoryEntries(db, {});
-
-  expect(propose(othersDecision)).toThrow(`event ${othersDecision} is not a decision of this task`);
-  expect(listMemoryEntries(db, {})).toEqual(before);
-  expect(propose(decision)).not.toThrow();
 });
 
 it.each([
