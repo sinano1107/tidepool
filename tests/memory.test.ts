@@ -11,8 +11,10 @@ import {
   humanEntryInput,
   invalidateMemoryEntry,
   listMemoryEntries,
+  type MemoryAmendment,
   moveMemory,
   moveMemoryBranch,
+  previewCase,
   proposeMemoryChange,
   readMemory,
   rebuildMemoryIndex,
@@ -983,6 +985,127 @@ it("出所が自身の作成 event の candidate を修正値つきで approve �
   const created = approveMemoryProposal(db, { kind: "memory", op: "approve", candidate_id: drafted, replaces: [] }, "question-1", "webui", at, { text: "Keep migrations apart." });
 
   expect(entryById(db, created)?.source).toEqual({ kind: "event", ref: created });
+});
+
+/** 注釈の修正値(issue #950 / ADR 0152 決定2・4 の Exemplar 版): RCA の帰責 event を出所に共有する2つの candidate を
+ *  consolidate の kind exemplar で統合した Exemplar candidate への approve。 */
+function exemplarProposal() {
+  const { db, task } = board();
+  const decision = logDecision(db, task, "split the migration into two commits", "deckhand", at);
+  // setup のみ: RCA の帰責 event(起草の出所)
+  const attributed = appendEvent(db, {
+    taskId: task.id,
+    workerId: "tidepool",
+    origin: "board",
+    payload: { kind: "objection_attributed", entry_id: decision, objection_event_ids: [], cause: "preference", evidence: "e", entries: null, round: "after_rca" },
+    at,
+  });
+  const replaces = ["Split migrations", "Two commits"].map(
+    (title) => createBehaviorCandidate(db, { ...knowledge, title, addressee: null, source: { event_id: attributed }, author: { activity: "rca", name: "auditor" } }, "board", at).entry_id,
+  );
+  const { question_id } = proposeMemoryChange(
+    db,
+    task.id,
+    {
+      op: "consolidate",
+      text: {
+        scope: "tidepool",
+        path: "habits/migrations",
+        title: "Split the migration",
+        addressee: "deckhand",
+        kind: "exemplar",
+        annotations: [{ anchor: { field: "decision", quote: "two commits" }, polarity: "imitate", text: "Split schema changes from data changes." }],
+      },
+      replaces,
+      based_on_decision: logDecision(db, task, "too particular for a rule", "auditor", at),
+      rationale: "r",
+    },
+    "auditor",
+    at,
+  );
+  const proposal = getTask(db, question_id)!.question_proposal as Parameters<typeof approveMemoryProposal>[1] & { candidate_id: number };
+  return { db, proposal, replaces, attributed };
+}
+
+it("Exemplar の candidate への注釈の修正値つき approve は、注釈 list を差し替えた人間名義の approved Exemplar を作り、candidate と replaces を後継つき superseded にする —— 出所は candidate から継ぎ、生む event は question の id を印に持つ", () => {
+  const { db, proposal, replaces, attributed } = exemplarProposal();
+
+  const created = approveMemoryProposal(db, proposal, "question-1", "webui", at, {
+    title: "Keep the migration apart",
+    addressee: null,
+    annotations: [
+      { anchor: { field: "decision", quote: "the migration" }, polarity: "avoid", text: "Do not bundle the migration.", original: "マイグレーションをまとめない" },
+      { anchor: "whole", polarity: "imitate", text: "Keep the whole shape." },
+    ],
+  });
+
+  expect(entryById(db, created)).toMatchObject({
+    kind: "exemplar",
+    state: "approved",
+    scope: "tidepool",
+    path: "habits/migrations",
+    title: "Keep the migration apart",
+    text: "Do not bundle the migration.\nKeep the whole shape.",
+    addressee: null,
+    annotations: [
+      {
+        anchor: { field: "decision", quote: "the migration" },
+        polarity: "avoid",
+        text: "Do not bundle the migration.",
+        original: { text: "マイグレーションをまとめない", language: "Japanese" },
+      },
+      { anchor: "whole", polarity: "imitate", text: "Keep the whole shape." },
+    ],
+    author: { activity: "human" },
+    source: { kind: "event", ref: attributed },
+    invalidation_reason: null,
+  });
+  for (const id of [proposal.candidate_id, ...replaces]) expect(entryById(db, id)).toMatchObject({ invalidation_reason: "superseded", successor_id: created });
+  // setup の question は答えずに candidate が落ちるので陳腐化の event も立つ —— 見るのは memory の event だけ
+  const written = [0, 1, 2, 3, 4, 5].map((n) => getEvent(db, created + n)).filter((e) => e?.kind.startsWith("memory_entry_"));
+  expect(written.map((e) => [e!.kind, (e!.payload as { question_id?: string }).question_id])).toEqual([
+    ["memory_entry_created", "question-1"],
+    ["memory_entry_invalidated", "question-1"],
+    ["memory_entry_invalidated", "question-1"],
+    ["memory_entry_invalidated", "question-1"],
+  ]);
+});
+
+it("Exemplar の candidate への title だけの修正値は candidate の注釈を継ぐ", () => {
+  const { db, proposal } = exemplarProposal();
+  const drafted = entryById(db, proposal.candidate_id)!;
+
+  const created = approveMemoryProposal(db, proposal, "question-1", "webui", at, { title: "Keep the migration apart" });
+
+  expect(entryById(db, created)).toMatchObject({ kind: "exemplar", title: "Keep the migration apart", text: drafted.text, annotations: drafted.annotations, author: { activity: "human" } });
+});
+
+it.each<[string, MemoryAmendment]>([
+  ["anchor の quote が case の逐語部分文字列でない", { annotations: [{ anchor: { field: "decision", quote: "three commits" }, polarity: "avoid", text: "x" }] }],
+  ["Exemplar に text", { text: "Split it." }],
+  ["Exemplar に原文", { original_title: "分ける", original_text: "分ける" }],
+])("Exemplar の candidate への修正値で%sは domain error で何も変えない", (_, amendment) => {
+  const { db, proposal } = exemplarProposal();
+  const before = listMemoryEntries(db, {});
+
+  expect(() => approveMemoryProposal(db, proposal, "question-1", "webui", at, amendment)).toThrow(DomainError);
+  expect(listMemoryEntries(db, {})).toEqual(before);
+});
+
+it("Behavior の candidate への修正値の注釈は domain error で何も変えない", () => {
+  const { db } = board();
+  const drafted = candidate(db, "Split migrations");
+  const before = listMemoryEntries(db, {});
+
+  expect(() =>
+    approveMemoryProposal(db, { kind: "memory", op: "approve", candidate_id: drafted, replaces: [] }, "question-1", "webui", at, { annotations: [{ anchor: "whole", polarity: "imitate", text: "Keep the whole shape." }] }),
+  ).toThrow(DomainError);
+  expect(listMemoryEntries(db, {})).toEqual(before);
+});
+
+it("case preview は帰責 event も描く —— RCA 起草の出所を継いだ Exemplar の candidate の case で、修正値の anchor はそこから選ぶ", () => {
+  const { db, attributed } = exemplarProposal();
+  expect(previewCase(db, attributed)).toEqual({ decision: "split the migration into two commits", steering: [], handoff: null, result: null });
 });
 
 /** 移動(ADR 0162 決定4・5)の4種別のエントリ: 出所の違う Knowledge 2つ(worker の commit・人間の自身の宣言)、Definition、

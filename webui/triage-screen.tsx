@@ -24,7 +24,7 @@ interface TpQuestion {
   kind?: 'approval';
   note?: string;
   /** 修正値を添えられる提案 question(ADR 0150 決定2・ADR 0152 決定2): 表の行の提案は tier / effort、agent の tier の提案は下げ先 `to`、
-   *  memory の approve / consolidate は `candidateId` の文言と宛先。 */
+   *  memory の approve / consolidate は `candidateId` の文言と宛先(Exemplar なら title・宛先と注釈 list)。 */
   amendable?: 'row' | 'agent_tier' | 'memory';
   candidateId?: number;
   /** comment が要る選択肢(memory の提案 question の reject / defer、ADR 0159 決定3・ADR 0165 決定3)。 */
@@ -34,6 +34,7 @@ interface TpQuestion {
 type TpAmendment = {
   tier?: string; effort?: string; to?: string;
   title?: string; text?: string; addressee?: string | null; original_title?: string; original_text?: string;
+  annotations?: ReturnType<typeof annotationsToSend>;
 };
 /** トリアージが受け取る question —— 着地 question だけが `landing` を持つ
  *  (ADR 0092 決定4)。判定は盤面側で、ここは描画だけ。 */
@@ -211,6 +212,7 @@ async function translateMemoryWording(translate: TpTranslateFn, english: Record<
 }
 
 // memory の提案の修正値(ADR 0152 決定2・5): candidate の文言を初期値に、settings と同じ英語 + 原文の2欄と逆翻訳。
+// Exemplar の candidate(#950)は settings の Exemplar の扉と同じ注釈の form で、case は candidate の出所に固定。
 // candidate から変えた欄(と原文)だけを修正値として上に渡す —— 何も変えなければ素の approve になる。
 function TpMemoryAmendment({ candidateId, onTranslate, onChange }: {
   candidateId: number;
@@ -218,11 +220,12 @@ function TpMemoryAmendment({ candidateId, onTranslate, onChange }: {
   onChange: (amendment: TpAmendment) => void;
 }) {
   const { Button, Input, Select } = window.TidepoolDesignSystem_8a0ead;
-  type Wording = { title: string; text: string; addressee: string };
-  const [base, setBase] = React.useState<Wording | null>(null);
-  const [draft, setDraft] = React.useState({ title: '', text: '', addressee: '', originalTitle: '', originalText: '' });
+  type Wording = { title: string; text: string; addressee: string; annotations: TpDraftAnnotation[] };
+  const [base, setBase] = React.useState<(Wording & { kind: string; source: number | null }) | null>(null);
+  const [draft, setDraft] = React.useState({ title: '', text: '', addressee: '', originalTitle: '', originalText: '', annotations: [] as TpDraftAnnotation[] });
   const [back, setBack] = React.useState<string | null>(null);
   const [error, setError] = React.useState<string | null>(null);
+  const [busy, setBusy] = React.useState(false);
   // settings の Behavior フォーム(#943)と同じ registry 引き —— このカードは agent 一覧を持たないので自分で引く
   // 取得の失敗は翻訳の失敗と別に持つ —— 翻訳の setError(null) で消えると、選択肢が欠けたまま理由が見えなくなる
   const [agentNames, setAgentNames] = React.useState<string[]>([]);
@@ -233,13 +236,17 @@ function TpMemoryAmendment({ candidateId, onTranslate, onChange }: {
       .catch((err) => setAgentsError(String(err.message || err)));
   }, []);
   React.useEffect(() => {
-    api('GET /api/settings/memory/entries', { query: { kind: 'behavior', state: 'candidate' } })
+    api('GET /api/settings/memory/entries', { query: { state: 'candidate' } })
       .then(({ entries }) => {
         const candidate = entries.find((e) => e.id === candidateId);
         if (!candidate) return;
         // candidate の文言は trim されずに保存されうる —— 比べる基準を trim しておかないと、触らない承認が修正つきになる
-        const wording = { title: candidate.title.trim(), text: candidate.text.trim(), addressee: candidate.addressee?.trim() ?? '' };
-        setBase(wording);
+        const wording = {
+          title: candidate.title.trim(), text: candidate.text.trim(), addressee: candidate.addressee?.trim() ?? '',
+          annotations: (candidate.annotations ?? []).map(({ anchor, polarity, text }) => ({ anchor, polarity, text: text.trim(), original: '', back: null })),
+        };
+        // Exemplar の出所は常に event(case を描けない出所は Exemplar にならない)
+        setBase({ ...wording, kind: candidate.kind, source: typeof candidate.source.ref === 'number' ? candidate.source.ref : null });
         setDraft({ ...wording, originalTitle: '', originalText: '' });
       })
       .catch((err) => setError(String(err.message || err)));
@@ -250,6 +257,9 @@ function TpMemoryAmendment({ candidateId, onTranslate, onChange }: {
     if (draft.title.trim() !== base.title) changed.title = draft.title.trim();
     if (draft.text.trim() !== base.text) changed.text = draft.text.trim();
     if (draft.addressee.trim() !== base.addressee) changed.addressee = draft.addressee.trim() || null;
+    // 注釈は list ごと送る(ADR 0153 決定2)
+    const annotations = annotationsToSend(draft.annotations);
+    if (JSON.stringify(annotations) !== JSON.stringify(annotationsToSend(base.annotations))) changed.annotations = annotations;
     // a partial original is sent as is so the server's refusal says why
     if (draft.originalTitle.trim()) changed.original_title = draft.originalTitle.trim();
     if (draft.originalText.trim()) changed.original_text = draft.originalText.trim();
@@ -270,6 +280,26 @@ function TpMemoryAmendment({ candidateId, onTranslate, onChange }: {
       setError(String((err as Error).message || err));
     }
   };
+  // the current addressee stays offered even if its agent has left the registry
+  const addressee = (
+    <React.Fragment>
+      <Select label="Addressee" value={draft.addressee} onChange={set('addressee')}
+        options={[{ value: '', label: 'every agent' }, ...new Set([...agentNames, ...(draft.addressee ? [draft.addressee] : [])])]} />
+      {agentsError && <div style={{ fontSize: 'var(--text-xs)', color: 'var(--coral-4)' }}>{agentsError}</div>}
+    </React.Fragment>
+  );
+  if (base.kind === 'exemplar') {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 14 }}>
+        <Input label="Title (English)" value={draft.title} onChange={set('title')} />
+        {addressee}
+        <MemoryExemplarAnnotations workspace="" source={base.source} annotations={draft.annotations}
+          onChange={(update) => setDraft((d) => ({ ...d, annotations: update(d.annotations) }))} translate={onTranslate} onError={setError}
+          busy={busy} setBusy={setBusy} />
+        {error && <div style={{ fontSize: 'var(--text-xs)', color: 'var(--coral-4)' }}>{error}</div>}
+      </div>
+    );
+  }
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 14 }}>
       {onTranslate && (
@@ -281,10 +311,7 @@ function TpMemoryAmendment({ candidateId, onTranslate, onChange }: {
       )}
       <Input label="Title (English)" value={draft.title} onChange={set('title')} />
       <Input label="English (approved as the canonical text)" multiline rows={3} value={draft.text} onChange={set('text')} />
-      {/* the current addressee stays offered even if its agent has left the registry */}
-      <Select label="Addressee" value={draft.addressee} onChange={set('addressee')}
-        options={[{ value: '', label: 'every agent' }, ...new Set([...agentNames, ...(draft.addressee ? [draft.addressee] : [])])]} />
-      {agentsError && <div style={{ fontSize: 'var(--text-xs)', color: 'var(--coral-4)' }}>{agentsError}</div>}
+      {addressee}
       {onTranslate && <Button variant="secondary" size="sm" disabled={!draft.title.trim() || !draft.text.trim()} onClick={() => translate(false)}>Back-translate</Button>}
       {back && <p style={{ margin: 0, fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }} data-testid="amendment-back-translation">back: {back}</p>}
       {error && <div style={{ fontSize: 'var(--text-xs)', color: 'var(--coral-4)' }}>{error}</div>}

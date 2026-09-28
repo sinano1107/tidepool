@@ -1457,14 +1457,15 @@ function MetaReviewSettingsCard({ settings, say, onSaved, edit }: {
 // an AI-drafted candidate is approved only through its proposal question.
 // The case picker (#953 / ADR 0153 決定3): the decision-log read model, read-only and narrowed to the
 // workspace, offers "this entry" (a decision) or "this session"; the picked case renders in place, and a
-// text selection inside one of its fields reports `{ field, quote }` through `onQuote`.
+// text selection inside one of its fields reports `{ field, quote }` through `onQuote`. Without `onChange`
+// the case is fixed: an amended exemplar candidate keeps its source (#950).
 type TpMemoryAnchor = NonNullable<WireContract['GET /api/settings/memory/entries']['entries'][number]['annotations']>[number]['anchor'];
 /** an exemplar annotation being written: `back` is its back-translation, held only for rereading (ADR 0015) */
 type TpDraftAnnotation = { anchor: TpMemoryAnchor; polarity: '' | 'imitate' | 'avoid'; text: string; original: string; back: string | null };
 function MemoryCasePicker({ workspace, value, onChange, onQuote }: {
   workspace: string;
   value: number | null;
-  onChange: (eventId: number | null) => void;
+  onChange?: (eventId: number | null) => void;
   onQuote?: (anchor: Exclude<TpMemoryAnchor, 'whole'>) => void;
 }) {
   const { Button, LogEntry } = window.TidepoolDesignSystem_8a0ead;
@@ -1472,6 +1473,8 @@ function MemoryCasePicker({ workspace, value, onChange, onQuote }: {
   const [log, setLog] = React.useState<WireContract['GET /api/log']['entries'] | string | null>(null); // string → load error
   const [rendered, setRendered] = React.useState<WireContract['GET /api/settings/memory/cases/:event_id'] | string | null>(null);
   React.useEffect(() => {
+    // a fixed case never shows the list to pick from
+    if (!onChange) return;
     api('GET /api/log').then(({ entries }) => setLog(entries)).catch((err) => setLog(String(err.message || err)));
   }, []);
   React.useEffect(() => {
@@ -1508,7 +1511,7 @@ function MemoryCasePicker({ workspace, value, onChange, onQuote }: {
       <div ref={caseBox} data-testid="memory-case" style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <span style={muted}>case: event #{value}</span>
-          <Button variant="ghost" size="sm" onClick={() => onChange(null)}>Pick another</Button>
+          {onChange && <Button variant="ghost" size="sm" onClick={() => onChange(null)}>Pick another</Button>}
         </div>
         {rendered === null && <p style={muted}>loading…</p>}
         {typeof rendered === 'string' && <p style={muted}>{rendered}</p>}
@@ -1537,12 +1540,85 @@ function MemoryCasePicker({ workspace, value, onChange, onQuote }: {
           }} />
           <div style={{ display: 'flex', gap: 8 }}>
             {/* only a decision_logged entry is a citable case by itself (citedEpisode) */}
-            {e.payload.kind === 'decision_logged' && <Button variant="ghost" size="sm" onClick={() => onChange(e.id)}>This entry</Button>}
-            {e.session_event_id !== null && <Button variant="ghost" size="sm" onClick={() => onChange(e.session_event_id)}>This session</Button>}
+            {e.payload.kind === 'decision_logged' && <Button variant="ghost" size="sm" onClick={() => onChange?.(e.id)}>This entry</Button>}
+            {e.session_event_id !== null && <Button variant="ghost" size="sm" onClick={() => onChange?.(e.session_event_id)}>This session</Button>}
           </div>
         </div>
       ))}
     </div>
+  );
+}
+
+/** the annotations as the board takes them: trimmed text, and an original only when written */
+const annotationsToSend = (annotations: TpDraftAnnotation[]) =>
+  annotations.map(({ anchor, polarity, text, original }) => ({ anchor, polarity, text: text.trim(), ...(original.trim() ? { original: original.trim() } : {}) }));
+
+// The exemplar's case and annotation rows, shared by the settings write (#949) and the proposal question's
+// amendment (#950). A selection in the case anchors the current annotation (the last one added or focused,
+// clamped after a removal) and starts one when there is none yet. `onChange` takes an updater so a burst of
+// selectionchange events never works from a stale list. Without `translate` (an English board) there is no original.
+function MemoryExemplarAnnotations({ workspace, source, onSource, annotations, onChange, language, translate, onError, busy, setBusy }: {
+  workspace: string;
+  source: number | null;
+  /** absent: the case is fixed */
+  onSource?: (eventId: number | null) => void;
+  annotations: TpDraftAnnotation[];
+  onChange: (update: (annotations: TpDraftAnnotation[]) => TpDraftAnnotation[]) => void;
+  language?: string;
+  translate?: TpTranslateFn;
+  onError: (message: string) => void;
+  /** the holder's busy flag: a translation here and the holder's save wait on each other */
+  busy: boolean;
+  setBusy: (busy: boolean) => void;
+}) {
+  const { Button, Input, Select } = window.TidepoolDesignSystem_8a0ead;
+  const muted = { margin: 0, fontSize: 'var(--text-xs)', color: 'var(--text-muted)' };
+  const [current, setCurrent] = React.useState(0);
+  const blank: TpDraftAnnotation = { anchor: 'whole', polarity: '', text: '', original: '', back: null };
+  const set = (i: number, patch: Partial<TpDraftAnnotation>) => onChange((list) => list.map((a, j) => (j === i ? { ...a, ...patch } : a)));
+  const quote = (anchor: TpMemoryAnchor) => onChange((list) =>
+    list.length === 0 ? [{ ...blank, anchor }] : list.map((a, j) => (j === Math.min(current, list.length - 1) ? { ...a, anchor } : a)));
+  const translateOne = async (i: number, toEnglish: boolean) => {
+    setBusy(true);
+    try {
+      const a = annotations[i]!;
+      const { english, back } = await translateMemoryWording(translate!, { text: a.text }, toEnglish ? { text: a.original } : null);
+      set(i, { text: english.text!, back: back.text! });
+    } catch (err) {
+      onError(String((err as Error).message || err));
+    }
+    setBusy(false);
+  };
+  return (
+    <React.Fragment>
+      <span style={muted}>{onSource ? 'case — pick one, then select text in it to anchor the current annotation' : 'case — select text in it to anchor the current annotation'}</span>
+      <MemoryCasePicker workspace={workspace} value={source} onQuote={quote}
+        onChange={onSource && ((picked) => { onSource(picked); onChange((list) => list.map((a) => ({ ...a, anchor: 'whole' }))); })} />
+      {annotations.map((a, i) => (
+        <div key={i} data-testid={`exemplar-annotation-${i}`} onFocus={() => setCurrent(i)}
+          style={{ display: 'flex', flexDirection: 'column', gap: 6, paddingLeft: 8, borderLeft: `2px solid ${i === current ? 'var(--tide-4)' : 'var(--border-default)'}` }}>
+          <p style={muted} data-testid="exemplar-anchor">
+            anchor: {a.anchor === 'whole' ? 'whole' : `${a.anchor.field} “${a.anchor.quote}”`}
+            {a.anchor !== 'whole' && <Button variant="ghost" size="sm" onClick={() => set(i, { anchor: 'whole' })}>Use whole</Button>}
+          </p>
+          <Select label="Polarity" value={a.polarity} onChange={(e) => set(i, { polarity: e.target.value as TpDraftAnnotation['polarity'] })}
+            options={[{ value: '', label: 'choose…' }, 'imitate', 'avoid']} />
+          {translate && (
+            <React.Fragment>
+              <Input label={language ? `Original (${language})` : 'Original'} multiline rows={2} value={a.original} onChange={(e) => set(i, { original: e.target.value })} />
+              <Button variant="secondary" size="sm" disabled={busy || !a.original.trim()} onClick={() => translateOne(i, true)}>Translate</Button>
+            </React.Fragment>
+          )}
+          <Input label="Annotation (English)" multiline rows={2} value={a.text} onChange={(e) => set(i, { text: e.target.value, back: null })} />
+          {translate && (
+            <Button variant="secondary" size="sm" disabled={busy || !a.text.trim()} onClick={() => translateOne(i, false)}>Back-translate</Button>
+          )}
+          {a.back && <p style={muted}>back{language ? ` in ${language}` : ''}: {a.back}</p>}
+          <Button variant="ghost" size="sm" onClick={() => onChange((list) => list.filter((_, j) => j !== i))}>Remove annotation</Button>
+        </div>
+      ))}
+      <Button variant="ghost" size="sm" onClick={() => { setCurrent(annotations.length); onChange((list) => [...list, blank]); }}>Add annotation</Button>
+    </React.Fragment>
   );
 }
 
@@ -1611,21 +1687,6 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit, fo
     source: number | null; inheritedSource: number | null; annotations: TpDraftAnnotation[];
   } = { kind: 'knowledge', workspace: '', path: '', originalTitle: '', originalText: '', title: '', text: '', backTranslation: null, supersedes: '', addressee: '', source: null, inheritedSource: null, annotations: [] };
   const [draft, setDraft] = React.useState(blank);
-  // the annotation a case selection fills: the last one added or focused
-  const [currentAnnotation, setCurrentAnnotation] = React.useState(0);
-  const setAnnotation = (i: number, patch: Partial<TpDraftAnnotation>) =>
-    setDraft((d) => ({ ...d, annotations: d.annotations.map((a, j) => (j === i ? { ...a, ...patch } : a)) }));
-  const blankAnnotation: TpDraftAnnotation = { anchor: 'whole', polarity: '', text: '', original: '', back: null };
-  // a selection anchors the current annotation, clamped after a removal, and starts one when there is none yet
-  const quoteAnchor = (anchor: TpMemoryAnchor) => setDraft((d) => {
-    if (d.annotations.length === 0) return { ...d, annotations: [{ ...blankAnnotation, anchor }] };
-    const current = Math.min(currentAnnotation, d.annotations.length - 1);
-    return { ...d, annotations: d.annotations.map((a, j) => (j === current ? { ...a, anchor } : a)) };
-  });
-  const addAnnotation = () => {
-    setCurrentAnnotation(draft.annotations.length);
-    setDraft((d) => ({ ...d, annotations: [...d.annotations, blankAnnotation] }));
-  };
   const [busy, setBusy] = React.useState(false);
   const setDraftField = (key: string) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => setDraft({ ...draft, [key]: e.target.value, ...(key === 'title' || key === 'text' ? { backTranslation: null } : {}), ...(key === 'kind' ? { supersedes: '' } : {}), ...(key === 'workspace' ? { source: null } : {}) });
   useDirtySignal(edit, writing, [draft.originalTitle, draft.originalText, draft.title, draft.text, ...draft.annotations.map((a) => a.text)].some((v) => v.trim() !== ''));
@@ -1648,17 +1709,6 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit, fo
     }
     setBusy(false);
   };
-  const translateAnnotation = async (i: number, toEnglish: boolean) => {
-    setBusy(true);
-    try {
-      const a = draft.annotations[i]!;
-      const { english, back } = await translateMemoryWording(translateTarget, { text: a.text }, toEnglish ? { text: a.original } : null);
-      setAnnotation(i, { text: english.text!, back: back.text! });
-    } catch (err) {
-      say('danger', 'translate failed', String((err as Error).message || err));
-    }
-    setBusy(false);
-  };
 
   const save = async () => {
     setBusy(true);
@@ -1675,7 +1725,7 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit, fo
       } else if (draft.kind === 'exemplar') {
         await api('/api/settings/memory/exemplars', {
           workspace: body.workspace, path: body.path, title: draft.title.trim(), addressee: draft.addressee || null, source_event_id: draft.source,
-          annotations: draft.annotations.map(({ anchor, polarity, text, original }) => ({ anchor, polarity, text: text.trim(), ...(original.trim() ? { original: original.trim() } : {}) })),
+          annotations: annotationsToSend(draft.annotations),
         });
       }
       else await api('/api/settings/memory/definitions', { ...body, ...supersedes });
@@ -1765,40 +1815,21 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit, fo
           {draft.kind === 'definition' && (
             <Input label="Supersedes (entry id, to revise the branch's current definition)" mono value={draft.supersedes} onChange={setDraftField('supersedes')} />
           )}
-          {(draft.kind === 'behavior' || draft.kind === 'exemplar') && (
+          {draft.kind === 'behavior' && (
             <React.Fragment>
-              <span style={muted}>{draft.kind === 'exemplar' ? 'case — pick one, then select text in it to anchor the current annotation' : 'case (optional)'}</span>
-              <MemoryCasePicker workspace={draft.workspace} value={draft.source} onChange={(source) => setDraft((d) => ({ ...d, source, annotations: d.annotations.map((a) => ({ ...a, anchor: 'whole' })) }))}
-                onQuote={draft.kind === 'exemplar' ? quoteAnchor : undefined} />
+              <span style={muted}>case (optional)</span>
+              <MemoryCasePicker workspace={draft.workspace} value={draft.source} onChange={(source) => setDraft((d) => ({ ...d, source }))} />
               {draft.source === null && draft.inheritedSource !== null && (
                 <p style={muted}>saving without a pick keeps #{draft.supersedes}'s case</p>
               )}
             </React.Fragment>
           )}
-          {draft.kind === 'exemplar' && draft.annotations.map((a, i) => (
-            <div key={i} data-testid={`exemplar-annotation-${i}`} onFocus={() => setCurrentAnnotation(i)}
-              style={{ display: 'flex', flexDirection: 'column', gap: 6, paddingLeft: 8, borderLeft: `2px solid ${i === currentAnnotation ? 'var(--tide-4)' : 'var(--border-default)'}` }}>
-              <p style={muted} data-testid="exemplar-anchor">
-                anchor: {a.anchor === 'whole' ? 'whole' : `${a.anchor.field} “${a.anchor.quote}”`}
-                {a.anchor !== 'whole' && <Button variant="ghost" size="sm" onClick={() => setAnnotation(i, { anchor: 'whole' })}>Use whole</Button>}
-              </p>
-              <Select label="Polarity" value={a.polarity} onChange={(e) => setAnnotation(i, { polarity: e.target.value as TpDraftAnnotation['polarity'] })}
-                options={[{ value: '', label: 'choose…' }, 'imitate', 'avoid']} />
-              {translatable && (
-                <React.Fragment>
-                  <Input label={`Original (${language})`} multiline rows={2} value={a.original} onChange={(e) => setAnnotation(i, { original: e.target.value })} />
-                  <Button variant="secondary" size="sm" disabled={busy || !a.original.trim()} onClick={() => translateAnnotation(i, true)}>Translate</Button>
-                </React.Fragment>
-              )}
-              <Input label="Annotation (English)" multiline rows={2} value={a.text} onChange={(e) => setAnnotation(i, { text: e.target.value, back: null })} />
-              {translatable && (
-                <Button variant="secondary" size="sm" disabled={busy || !a.text.trim()} onClick={() => translateAnnotation(i, false)}>Back-translate</Button>
-              )}
-              {a.back && <p style={muted}>back in {language}: {a.back}</p>}
-              <Button variant="ghost" size="sm" onClick={() => setDraft((d) => ({ ...d, annotations: d.annotations.filter((_, j) => j !== i) }))}>Remove annotation</Button>
-            </div>
-          ))}
-          {draft.kind === 'exemplar' && <Button variant="ghost" size="sm" onClick={addAnnotation}>Add annotation</Button>}
+          {draft.kind === 'exemplar' && (
+            <MemoryExemplarAnnotations workspace={draft.workspace} source={draft.source} onSource={(source) => setDraft((d) => ({ ...d, source }))}
+              annotations={draft.annotations} onChange={(update) => setDraft((d) => ({ ...d, annotations: update(d.annotations) }))}
+              language={language} translate={translatable ? translateTarget : undefined} onError={(message) => say('danger', 'translate failed', message)}
+              busy={busy} setBusy={setBusy} />
+          )}
           {translatable && draft.kind !== 'exemplar' && (
             <React.Fragment>
               {draft.kind !== 'definition' && (

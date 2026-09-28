@@ -329,16 +329,6 @@ it("Exemplar の consolidate は approve で candidate を approved にして re
   ]);
 });
 
-it("Exemplar の提案の修正値つき approve は domain error で何も変えない(注釈の修正は #944 の拡張)", () => {
-  const { db, attributed, drafted, consolidate } = drafts();
-  const source = attributed("split the migration into two commits");
-  const proposal = consolidate([drafted("Split migrations", { event_id: source })], { kind: "exemplar", annotations });
-  const before = listMemoryEntries(db, {});
-
-  expect(() => approveMemoryProposal(db, proposal, "question-1", "webui", at, { title: "Split it" })).toThrow(DomainError);
-  expect(listMemoryEntries(db, {})).toEqual(before);
-});
-
 it("memory 提案の reject は comment が空・空白だけなら domain error で何も変えない(ADR 0159 決定3)", () => {
   const { db, attributed, drafted, consolidate } = drafts();
   const proposal = consolidate([drafted("Split migrations", { event_id: attributed("split the migration into two commits") })], { kind: "exemplar", annotations });
