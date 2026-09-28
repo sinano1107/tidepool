@@ -45,6 +45,7 @@ import {
   DomainError,
   declarePremiseBreach,
   decomposeTask,
+  describeHandoffFields,
   escalateTask,
   getTask,
   HANDOFF_FIELDS,
@@ -463,14 +464,16 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
     "complete_task",
     {
       description:
-        "Complete the current task. Work tasks require the full 6-field handoff doc " +
-        "and a committed work tree — commit your changes before calling this. " +
+        "Complete the current task. Work tasks require the full handoff doc (" +
+        describeHandoffFields() +
+        ") and a committed work tree — commit your changes before calling this. " +
         "resume_context is what the next session needs to pick the work back up — " +
         "do not describe landing state (push / PR / merge): the board lands the " +
         "branch after you complete, and you cannot observe that. " +
         BOARD_WRITE_LANGUAGE_RULE,
-      // the schema stays permissive: the handoff invariant is enforced inside
-      // the verb so callers get a domain error, not a protocol error
+      // the schema stays permissive: a missing field is enforced inside the verb
+      // (a domain error), but an unknown key is rejected by the schema itself
+      // (a protocol error)
       inputSchema: {
         handoff: z
           .partialRecord(z.enum(HANDOFF_FIELDS), z.string())

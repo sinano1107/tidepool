@@ -757,6 +757,13 @@ function renderHandoffMarkdown(handoff: Partial<HandoffDoc>): string {
 
 const HANDOFF_HEADING_SET: ReadonlySet<string> = new Set(Object.values(HANDOFF_HEADINGS));
 
+/** `field (heading), field (heading), …` for the six handoff fields — the source
+ *  for both complete_task tool descriptions, so they can't drift from
+ *  HANDOFF_FIELDS / HANDOFF_HEADINGS (issue #1084). */
+export function describeHandoffFields(): string {
+  return HANDOFF_FIELDS.map((f) => `${f} (${HANDOFF_HEADINGS[f]})`).join(", ");
+}
+
 /** The structural inverse of renderHandoffMarkdown (issue #47): only the
  *  rendered blob is stored on a task row (the per-field HandoffDoc is never
  *  persisted separately), so display-time translation of a handoff doc must
