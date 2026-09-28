@@ -708,12 +708,25 @@ export function getEvent(db: Db, id: number): EventRow | undefined {
   return row === undefined ? undefined : parseEventRow(row);
 }
 
-/** kind(複数可)で盤面全体の event を id 順に引く。 */
-export function listEventsOfKinds(db: Db, kinds: readonly EventKind[]): EventRow[] {
+/** payload を kind で絞った EventRow。 */
+type EventRowOf<K extends EventKind> = EventRow & { payload: Extract<EventPayload, { kind: K }> };
+
+/** kind(複数可)で盤面全体の event を id 順に引く。`after` より後(排他)・`upTo` まで(包含)に絞れる。 */
+export function listEventsOfKinds<K extends EventKind>(
+  db: Db,
+  kinds: readonly K[],
+  { after = 0, upTo = Number.MAX_SAFE_INTEGER }: { after?: number; upTo?: number } = {},
+): EventRowOf<K>[] {
   return db
-    .prepare(`SELECT * FROM events WHERE kind IN (${kinds.map(() => "?").join(", ")}) ORDER BY id`)
-    .all(...kinds)
-    .map((r) => parseEventRow(r));
+    .prepare(`SELECT * FROM events WHERE kind IN (${kinds.map(() => "?").join(", ")}) AND id > ? AND id <= ? ORDER BY id`)
+    .all(...kinds, after, upTo)
+    .map((r) => parseEventRow(r) as EventRowOf<K>);
+}
+
+/** タスクの kind の event のうち最新の1件。 */
+export function latestEventOfTask<K extends EventKind>(db: Db, taskId: string, kind: K): EventRowOf<K> | undefined {
+  const row = db.prepare("SELECT * FROM events WHERE task_id = ? AND kind = ? ORDER BY id DESC LIMIT 1").get(taskId, kind);
+  return row === undefined ? undefined : (parseEventRow(row) as EventRowOf<K>);
 }
 
 export function listEvents(db: Db, taskId: string): EventRow[] {
