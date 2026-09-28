@@ -111,7 +111,6 @@ async function reviewedWork(t: Tidepool, options: { session: boolean } = { sessi
   return { task, review, spawnedId };
 }
 
-
 /** worker が MCP の complete_task で review を完了する —— 後始末が poll を促す。 */
 async function completeReview(t: Tidepool, reviewId: string) {
   await t.clock.advance(HOUR);

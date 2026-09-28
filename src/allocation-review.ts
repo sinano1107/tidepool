@@ -84,6 +84,7 @@ export interface AllocationTarget {
   reviewed_task_id: string;
   spawned_event_id: number;
 }
+// ponytail: poll の sweep のたびに全 review 完了と全注釈を json_extract で走査する。event が数万に育ったら索引か結果の不在の表に寄せる
 export function allocationTargets(db: Db): AllocationTarget[] {
   return (
     db
