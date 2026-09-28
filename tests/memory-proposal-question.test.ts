@@ -60,7 +60,6 @@ it("approve の提案は meta-review の子に1 item の question を立て、pi
       parent_id: review.id,
       purpose: "Three RCAs asked for the same split.",
       question_proposal: { kind: "memory", op: "approve", candidate_id: ids[0], replaces: [] },
-      question_items: [{ options: ["approve", "reject"], recommendation: "approve" }],
     });
     expect(question.question_items).toHaveLength(1);
     const { detail } = question.question_items[0];
@@ -145,6 +144,39 @@ it("reject の回答は reject の export に届き(candidate が rejected)、�
     expect((await api(t.baseUrl, "POST", "/api/settings/meta-review", { period_days: 1 })).status).toBe(200);
     await t.clock.advance(2 * 24 * HOUR); // 周期(1日)を越える
     expect(((await api(t.baseUrl, "GET", "/api/tasks")).json as any[]).filter((task) => task.meta_review_subject === "memory")).toEqual([]);
+  } finally {
+    await client.close();
+  }
+});
+
+it("defer の回答は comment が無ければ 409 で question を開いたまま残し、comment つきなら店に触れずに question を閉じて list_memory_proposals に並ぶ —— 次の memory meta-review の材料にはならず、門が開いたので材料が出れば登録される(ADR 0165)", async () => {
+  const { review, ids, client, call, propose } = await boardWithMetaReview();
+  try {
+    const questionId = await propose(ids[0]!);
+    const before = await entry(ids[0]!);
+
+    expect((await answer(questionId, "defer")).status).toBe(409);
+    expect(await task(questionId)).toMatchObject({ status: "todo", question_answer: null });
+
+    const undecided = "Not sure the split holds for data-only migrations.";
+    expect((await answer(questionId, "defer", { comment: undecided })).status).toBe(200);
+
+    expect(await task(questionId)).toMatchObject({ status: "done", question_answer: ["defer"], question_answer_comment: undecided });
+    expect((await events(questionId)).map((e) => [e.kind, e.payload.answers?.[0]?.answer, e.payload.comment])).toEqual([
+      ["task_registered", undefined, undefined],
+      ["question_answered", "defer", undecided],
+    ]);
+    expect(await entry(ids[0]!)).toEqual(before);
+    expect((await call("list_memory_proposals", {})).proposals).toMatchObject([{ question_id: questionId, answer: "defer", comment: undecided }]);
+
+    expect((await completeViaMcp(t, review.id, false)).isError).not.toBe(true);
+    expect((await api(t.baseUrl, "POST", "/api/settings/meta-review", { period_days: 1 })).status).toBe(200);
+    await t.clock.advance(2 * 24 * HOUR); // 周期(1日)を越えるが、defer は材料でない(ADR 0151)
+    const memoryReviews = async () => ((await api(t.baseUrl, "GET", "/api/tasks")).json as any[]).filter((task) => task.meta_review_subject === "memory");
+    expect(await memoryReviews()).toEqual([]);
+    candidate(t, "Keep data migrations separate");
+    await t.clock.advance(HOUR);
+    expect(await memoryReviews()).toMatchObject([{ status: "in_progress" }]);
   } finally {
     await client.close();
   }
@@ -297,7 +329,6 @@ it("invalidate の提案は target の pin と理由コードを焼き、detail 
       parent_id: board.review.id,
       purpose: "The CI no longer squashes commits.",
       question_proposal: { kind: "memory", op: "invalidate", target: { id: target, version: (await entry(target)).version }, reason: "environment", replaces: [] },
-      question_items: [{ options: ["approve", "reject"], recommendation: "approve" }],
     });
     const { detail } = question.question_items[0];
     for (const shown of [`#${target}`, "Split migrations, always.", "tidepool", "habits/commits", "deckhand", "environment"]) {

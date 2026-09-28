@@ -1072,7 +1072,7 @@ function registerMemoryMetaReviewVerbs(server: McpServer, deps: McpDeps, run: Me
     "propose_memory_change",
     {
       description:
-        "Propose a Behavior or Exemplar change to the human as one approve / reject question attached to this task. op approve asks to " +
+        "Propose a Behavior or Exemplar change to the human as one approve / reject / defer question attached to this task. op approve asks to " +
         "approve a Behavior candidate exactly as worded (candidate_id). op consolidate replaces the candidates, approved Behaviors and " +
         "Exemplars in replaces with one successor: either text, drafted as a new candidate, or successor_id, an approved Behavior or " +
         "Exemplar you keep instead. With text, based_on_decision is the event id log_decision returned for your reasoning; the new " +

@@ -359,10 +359,10 @@ function TpQuestionCard({ q, answer, onAnswer, locked = false, onTranslate }) {
       mono: true,
       onChange: (e) => setAmendment({ ...amendment, effort: e.target.value.trim() })
     }
-  )), q.rejectNeedsComment && !locked && /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 14 } }, /* @__PURE__ */ React.createElement(
+  )), q.needsComment && !locked && /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 14 } }, /* @__PURE__ */ React.createElement(
     Input,
     {
-      label: "Comment (required to reject)",
+      label: `Comment (required to ${q.needsComment.join(" / ")})`,
       multiline: true,
       rows: 2,
       value: comment,
@@ -378,7 +378,7 @@ function TpQuestionCard({ q, answer, onAnswer, locked = false, onTranslate }) {
       locked,
       onChange: (v) => setItemAnswer(i, v),
       translated: translatedItems ? translatedItems[i] : null,
-      disabled: q.rejectNeedsComment && !comment.trim() ? ["reject"] : []
+      disabled: comment.trim() ? [] : q.needsComment ?? []
     }
   ))));
 }
@@ -3146,7 +3146,7 @@ function toQuestionCardShape(q, icons) {
     ...q.question_proposal?.kind === "routing" && q.question_proposal.op === "row" && { amendable: "row" },
     ...q.question_proposal?.kind === "registry" && { amendable: "agent_tier" },
     ...q.question_proposal?.kind === "memory" && q.question_proposal.candidate_id !== void 0 && { amendable: "memory", candidateId: q.question_proposal.candidate_id },
-    ...q.question_proposal?.kind === "memory" && { rejectNeedsComment: true },
+    ...q.question_proposal?.kind === "memory" && { needsComment: ["reject", "defer"] },
     ...q.approval && {
       kind: "approval",
       ...q.approval.raises_parent_risk && { note: `approving raises ${q.parent_id} risk (upward propagation)` }

@@ -22,7 +22,7 @@ import {
 import { type GitHubClient, IssueGoneError } from "./github.js";
 import type { HarnessContainmentCheck } from "./harness-containment.js";
 import { type Landing, type LandingVerdict, landingBlock } from "./landing.js";
-import { approveMemoryProposal, type MemoryAmendment, parseMemoryAmendment, rejectMemoryProposal } from "./memory.js";
+import { approveMemoryProposal, deferMemoryProposal, type MemoryAmendment, parseMemoryAmendment, rejectMemoryProposal } from "./memory.js";
 import { type QuarantineChecks, type QuarantineKind, type QuarantineResolvers, quarantineStops } from "./quarantine.js";
 import type { Harness, Provider, RegistryReachabilityCheck } from "./registry.js";
 import { RegistryFetchFailedError, RegistryPushFailedError } from "./registry-write.js";
@@ -892,7 +892,7 @@ export async function submitAnswer(
   // staged until commit. The activity touch also defers the timeout close.
   const session = triageActivity(deps.db, now(), openTriage);
   // 提案 question(ADR 0120 決定3・spec #615 F / ADR 0150)は回答と適用を1 transaction にする。memory の approve は承認の
-  // export(pin 不一致の DomainError は回答ごと巻き戻す)、reject は reject の export。routing の approve は表の書き口で
+  // export(pin 不一致の DomainError は回答ごと巻き戻す)、reject は reject の export、defer は comment の検査だけ(ADR 0165)。routing の approve は表の書き口で
   // 行を書く —— 回答が先に question を done にするので、書き口の陳腐化の hook はこの question 自身を決着させない
   const { question, parentUnblocked, pickupResumed } = deps.db.transaction(() => {
     const answered = answerQuestion(
@@ -907,6 +907,7 @@ export async function submitAnswer(
     );
     if (proposal?.kind === "memory") {
       if (answers[0] === "approve") approveMemoryProposal(deps.db, proposal, task.id, origin, now(), amended as MemoryAmendment | undefined);
+      else if (answers[0] === "defer") deferMemoryProposal(comment);
       else rejectMemoryProposal(deps.db, proposal, task.id, origin, now(), comment);
     } else if (proposal?.kind === "routing" && answers[0] === "approve") {
       const change: ExecutionSettingsChange =
