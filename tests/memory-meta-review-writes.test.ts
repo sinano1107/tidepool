@@ -11,7 +11,7 @@ import {
   invalidateMemoryByMetaReview,
   invalidateMemoryEntry,
   listMemoryEntries,
-  moveMemory,
+  moveMemoryByMetaReview,
   proposeMemoryChange,
   recordBehavior,
   recordKnowledge,
@@ -95,7 +95,7 @@ it("fold_memory の replaces に畳めないものが1つでもあれば domain 
   expect(listMemoryEntries(db, {})).toEqual(before);
 });
 
-it("move_memory は title / text / 出所(原文も)を写した Knowledge を別の scope・path に作り、旧を path_moved で新へ指す", () => {
+it("move_memory は Knowledge を別の scope・path へ移し、書き手は移した meta-review でなく旧の書き手を継ぐ —— meta-review は無効化 event の activity に載る(ADR 0162 決定5)", () => {
   const { db, knowledge } = board();
   const old = knowledge("Tests need Node 22");
   const human = recordKnowledge(
@@ -105,26 +105,14 @@ it("move_memory は title / text / 出所(原文も)を写した Knowledge を�
     at,
   ).entry_id;
 
-  const moved = moveMemory(db, { entry_id: old, scope: null, path: "toolchain/node", author: metaReview }, "worker", at).entry_id;
-  const movedHuman = moveMemory(db, { entry_id: human, scope: "charts", path: "deploy", author: metaReview }, "worker", at).entry_id;
+  const moved = moveMemoryByMetaReview(db, { entry_id: old, scope: null, path: "toolchain/node", mover: metaReview }, "worker", at).entry_id;
+  const movedHuman = moveMemoryByMetaReview(db, { entry_id: human, scope: "charts", path: "deploy", mover: metaReview }, "worker", at).entry_id;
 
-  expect(entry(db, moved)).toMatchObject({
-    kind: "knowledge",
-    scope: null,
-    path: "toolchain/node",
-    title: "Tests need Node 22",
-    text: "Tests need Node 22.",
-    source: { kind: "commit", ref: "0a46a46" },
-    author: metaReview,
-    invalidation_reason: null,
-  });
-  expect(entry(db, old)).toMatchObject({ invalidation_reason: "path_moved", successor_id: moved });
-  // 人間の Knowledge の出所は自身の作成 event —— 移動後もそれを指す
-  expect(entry(db, movedHuman)).toMatchObject({
-    scope: "charts",
-    original: { title: "金曜デプロイ可", text: "何曜でも安全", language: "Japanese" },
-    source: { kind: "event", ref: human },
-  });
+  expect([entry(db, moved), entry(db, movedHuman)]).toMatchObject([
+    { scope: null, path: "toolchain/node", author: { activity: "worker_verb", name: "deckhand" }, invalidation_reason: null },
+    { scope: "charts", path: "deploy", author: { activity: "human", name: "human" }, source: { kind: "event", ref: movedHuman } },
+  ]);
+  expect(entry(db, old)).toMatchObject({ invalidation_reason: "path_moved", successor_id: moved, invalidated_by: { activity: "meta_review" } });
 });
 
 it("move_memory は Definition と Behavior を domain error で拒み、何も書かない", () => {
@@ -138,7 +126,7 @@ it("move_memory は Definition と Behavior を domain error で拒み、何も�
   ).entry_id;
   const before = listMemoryEntries(db, {});
   for (const entry_id of [definition, behavior]) {
-    expect(() => moveMemory(db, { entry_id, scope: null, path: "elsewhere", author: metaReview }, "worker", at)).toThrow(DomainError);
+    expect(() => moveMemoryByMetaReview(db, { entry_id, scope: null, path: "elsewhere", mover: metaReview }, "worker", at)).toThrow(DomainError);
   }
   expect(listMemoryEntries(db, {})).toEqual(before);
 });

@@ -380,8 +380,10 @@ export type EventPayload =
   // transaction で維持する投影で、この3つの再生で任意 watermark の approved 集合に
   // 戻せる。決定 log には現れない。
   // created の event id がそのままエントリの id(Knowledge は版も)。
-  // question_id = 提案 question の修正値つき approve が作ったエントリの印(ADR 0151 決定3)
-  | { kind: "memory_entry_created"; entry: MemoryEntryFields; question_id?: string }
+  // question_id = 提案 question の修正値つき approve が作ったエントリの印(ADR 0151 決定3)。
+  // 移動の複製(ADR 0162 決定5)だけが activity(移した者 —— 書き手は entry.author のまま旧から継ぐ)と、approved なら
+  // version(旧から継いだ版)を持つ。
+  | { kind: "memory_entry_created"; entry: MemoryEntryFields; question_id?: string; activity?: MemoryEntryFields["author"]["activity"]; version?: number }
   // question_id / activity = meta-review の産物の印(ADR 0151 決定3)。回答が刻んだ無効化は question_id、書き込みの一部として
   // 刻んだ無効化は書き手の activity。人間の直接の無効化はどちらも持たない。
   | { kind: "memory_entry_invalidated"; entry_id: number; reason: InvalidationReason; successor_id: number | null; question_id?: string; activity?: MemoryEntryFields["author"]["activity"] }

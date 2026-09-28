@@ -42,6 +42,7 @@ import { type Landing, landingAnnotation } from "./landing.js";
 import {
   changeMemorySettings,
   defineMemoryBranch,
+  HUMAN_AUTHOR,
   humanBehaviorSchema,
   humanDefinitionSchema,
   humanEntryInput,
@@ -50,8 +51,12 @@ import {
   invalidateMemoryEntry,
   invalidationSchema,
   listMemoryEntries,
+  memoryBranchMoveSchema,
   memoryListFilterSchema,
+  memoryMoveSchema,
   memorySettingsChangeSchema,
+  moveMemory,
+  moveMemoryBranch,
   previewCase,
   readMemorySettings,
   recordBehavior,
@@ -1704,6 +1709,19 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     validatedWrite(invalidationSchema.extend({ entry_id: z.coerce.number().int().positive() }), (input) => ({
       event_id: invalidateMemoryEntry(db, input, HUMAN_WORKER_ID, "webui", clock.now()),
     })),
+  );
+  // ADR 0162 決定4: 盤面が本文を写す移動。移した者(human)は event の activity に載り、書き手は旧を継ぐ
+  router.post(
+    "/settings/memory/entries/:entry_id/move",
+    validatedWrite(memoryMoveSchema.extend({ entry_id: z.coerce.number().int().positive() }), ({ entry_id, workspace, path }) =>
+      moveMemory(db, { entry_id, scope: workspace, path, mover: HUMAN_AUTHOR }, "webui", clock.now()),
+    ),
+  );
+  router.post(
+    "/settings/memory/branches/move",
+    validatedWrite(memoryBranchMoveSchema, ({ workspace, path, to_workspace, to_path }) =>
+      moveMemoryBranch(db, { scope: workspace, path, to_scope: to_workspace, to_path, mover: HUMAN_AUTHOR }, "webui", clock.now()),
+    ),
   );
 
   router.get("/settings/timezone", (_req, res) => {

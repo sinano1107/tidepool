@@ -24,7 +24,7 @@ import {
   memoryScope,
   metaReviewAnnotationSchema,
   metaReviewInvalidationSchema,
-  moveMemory,
+  moveMemoryByMetaReview,
   proposeMemoryChange,
   pullMemoryList,
   pullMemoryProposals,
@@ -1047,12 +1047,12 @@ function registerMemoryMetaReviewVerbs(server: McpServer, deps: McpDeps, run: Me
     "move_memory",
     {
       description:
-        "Move a Knowledge entry to another scope and path: the board copies its title, text, and source into a new " +
-        "entry and invalidates the old one as path_moved. Definitions and Behaviors cannot be moved.",
+        "Move a Knowledge entry to another scope and path: the board copies it — title, text, source and author included — into a new " +
+        "entry and invalidates the old one as path_moved. Definitions, Behaviors and Exemplars cannot be moved here.",
       inputSchema: { entry_id: z.number().int(), scope, path: z.string() },
     },
     async (input) =>
-      run((reader, now) => moveMemory(deps.db, { ...input, scope: registeredScope(deps, input.scope), author: author(reader) }, "worker", now)),
+      run((reader, now) => moveMemoryByMetaReview(deps.db, { ...input, scope: registeredScope(deps, input.scope), mover: author(reader) }, "worker", now)),
   );
 
   server.registerTool(
@@ -1109,7 +1109,7 @@ function registerMemoryMetaReviewVerbs(server: McpServer, deps: McpDeps, run: Me
         replaces: z.array(z.number().int()).optional(),
         based_on_decision: z.number().int().optional(),
         target_id: z.number().int().optional(),
-        reason: invalidationSchema.shape.reason.exclude(["superseded", "path_moved"]).optional(),
+        reason: invalidationSchema.shape.reason.exclude(["superseded"]).optional(),
         rationale: z.string().min(1),
       },
     },

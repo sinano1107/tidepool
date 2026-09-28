@@ -20,7 +20,7 @@ const INVALIDATION_REASONS = ["superseded", "path_moved", "capability", "environ
 type MemorySource = { kind: "event" | "decision"; ref: number } | { kind: "commit"; ref: string };
 
 /** エントリの欄のうち events に写すもの。同一性(id)と版は event 自身の id なので
- *  payload には持たない。 */
+ *  ここには持たない(移動の複製が継いだ版は memory_entry_created の payload の version が運ぶ)。 */
 export interface MemoryEntryFields {
   kind: "knowledge" | "behavior" | "definition" | "exemplar";
   state: "candidate" | "approved";
@@ -46,7 +46,7 @@ interface MemoryEntry extends Omit<MemoryEntryFields, "source"> {
   source: MemorySource;
   /** = memory_entry_created の event id。 */
   id: number;
-  /** = 承認 event の id(Knowledge は作成 event の id)。candidate は null。 */
+  /** = 承認 event の id(Knowledge と Definition は作成 event の id、移動の複製は旧から継いだ版)。candidate は null。 */
   version: number | null;
 }
 
@@ -99,13 +99,13 @@ function inheritableSource(entry: MemoryEntry): MemorySource | undefined {
   return entry.source.ref === entry.id ? undefined : entry.source;
 }
 
-/** 版 = 承認 event の id。表の投影と watermark 再生が同じ1つを読む。 */
-function versionOf(state: MemoryEntryFields["state"], createdEventId: number): number | null {
-  return state === "approved" ? createdEventId : null;
+/** 版 = 承認 event の id。表の投影と watermark 再生が同じ1つを読む。`carried` は移動の複製が作成 event で運ぶ旧の版。 */
+function versionOf(state: MemoryEntryFields["state"], createdEventId: number, carried?: number): number | null {
+  return state === "approved" ? (carried ?? createdEventId) : null;
 }
 
-/** エントリ表と FTS への投影(作成と rebuild の再生が共有する)。 */
-function insertEntry(db: Db, id: number, entry: MemoryEntryFields): void {
+/** エントリ表と FTS への投影(作成・移動と rebuild の再生が共有する)。 */
+function insertEntry(db: Db, id: number, entry: MemoryEntryFields, carried?: number): void {
   const source = sourceOf(entry, id);
   db.prepare(
     `INSERT INTO memory_entries (id, kind, state, scope, path, title, text, original_title, original_text, original_language,
@@ -128,7 +128,7 @@ function insertEntry(db: Db, id: number, entry: MemoryEntryFields): void {
     String(source.ref),
     entry.author.activity,
     entry.author.name,
-    versionOf(entry.state, id),
+    versionOf(entry.state, id, carried),
   );
   db.prepare("INSERT INTO memory_fts (rowid, text, title, path, original) VALUES (?, ?, ?, ?, ?)").run(
     id,
@@ -139,6 +139,12 @@ function insertEntry(db: Db, id: number, entry: MemoryEntryFields): void {
   );
 }
 
+function checkPath(path: string): void {
+  if (path.split("/").some((segment) => segment === "" || segment.trim() !== segment)) {
+    throw new DomainError(`path must be "/"-separated non-empty segments without surrounding spaces: ${JSON.stringify(path)}`);
+  }
+}
+
 function createEntry(
   db: Db,
   fields: Omit<MemoryEntryFields, "source"> & { source?: SourceInput | MemorySource },
@@ -146,9 +152,7 @@ function createEntry(
   at: Date,
   mark?: { question_id: string },
 ): number {
-  if (fields.path.split("/").some((segment) => segment === "" || segment.trim() !== segment)) {
-    throw new DomainError(`path must be "/"-separated non-empty segments without surrounding spaces: ${JSON.stringify(fields.path)}`);
-  }
+  checkPath(fields.path);
   if (fields.title.trim() === "" || fields.text.trim() === "") throw new DomainError("title and text must be non-empty");
   // board = Board call の起草(ADR 0120 決定1(b)(c))は Behavior candidate だけ
   if (fields.author.activity === "board" && fields.kind !== "behavior") throw new DomainError("a board-drafted entry can only be a behavior candidate");
@@ -244,21 +248,83 @@ export function foldMemory(
   })();
 }
 
-/** meta-review の Knowledge の移動(ADR 0122 決定1): 盤面が title・text・原文・出所を写して新しい scope / path に作り、
- *  旧を `path_moved` で新へ指す —— 「本文は同じ」は LLM の申告でなくここが保証する。 */
+type Mover = MemoryEntryFields["author"];
+
+/** 移動の本体(ADR 0162 決定4・5)。盤面が本文の側 —— title・text・原文・宛先・注釈・出所・書き手・状態・版 —— を写して新しい
+ *  scope / path に複製を作り、旧を `path_moved` で複製へ指す(「本文は同じ」は申告でなくここが保証する)。複製は新規の書き込みでは
+ *  ないので書き込みの門(approved の Behavior / Exemplar は人間だけ・人間の Knowledge は出所なし・注釈の再検査)を掛けない。出所が
+ *  自身の宣言なら複製も自身の宣言(ADR 0162 追記)。移した者は両方の event の activity に載る。移される Definition の置き場に、
+ *  一緒に移されない生きた Definition があれば全体を拒む —— 2つの定義をまとめるのは畳む。1 transaction。 */
+function moveEntries(
+  db: Db,
+  moves: Array<{ old: EntryRow; scope: string | null; path: string }>,
+  mover: Mover,
+  origin: EventOrigin,
+  at: Date,
+): Array<{ entry_id: number; successor_id: number }> {
+  const moving = new Set(moves.map(({ old }) => old.id));
+  return db.transaction(() => {
+    for (const { old, scope, path } of moves) {
+      if (old.invalidation_reason !== null) throw new DomainError(`memory entry ${old.id} is already invalidated`);
+      if (old.scope === scope && old.path === path) throw new DomainError(`memory entry ${old.id} is already at ${path} in this scope`);
+      checkPath(path);
+      if (old.kind !== "definition") continue;
+      const defined = (
+        db.prepare("SELECT id FROM memory_entries WHERE kind = 'definition' AND invalidation_reason IS NULL AND path = ? AND scope IS ?").all(path, scope) as Array<{ id: number }>
+      ).find(({ id }) => !moving.has(id));
+      if (defined) throw new DomainError(`branch ${path} is already defined in that scope by entry ${defined.id}: fold the two definitions into one instead of moving`);
+    }
+    return moves.map(({ old: row, scope, path }) => {
+      const old = rowToEntry(row);
+      const { id, version, source: _source, ...body } = old;
+      const entry: MemoryEntryFields = { ...body, scope, path, source: inheritableSource(old) ?? null };
+      const copy = appendEvent(db, {
+        taskId: null,
+        workerId: mover.name,
+        origin,
+        payload: { kind: "memory_entry_created", entry, activity: mover.activity, ...(version === null ? {} : { version }) },
+        at,
+      });
+      insertEntry(db, copy, entry, version ?? undefined);
+      invalidateMemoryEntry(db, { entry_id: id, reason: "path_moved", successor_id: copy }, mover.name, origin, at, { activity: mover.activity });
+      return { entry_id: id, successor_id: copy };
+    });
+  })();
+}
+
+/** エントリ1件の移動(ADR 0162 決定4): 4種別の未無効化の approved か candidate を、scope(null = 盤面全体)と path へ。
+ *  人間の面と meta-review の `move_memory`(moveMemoryByMetaReview)が共有する。返り値は複製。 */
 export function moveMemory(
   db: Db,
-  input: { entry_id: number; scope: string | null; path: string; author: MemoryEntryFields["author"] },
+  input: { entry_id: number; scope: string | null; path: string; mover: Mover },
   origin: EventOrigin,
   at: Date,
 ): { entry_id: number; event_id: number } {
-  return db.transaction(() => {
-    const old = rowToEntry(requireKnowledge(db, input.entry_id));
-    const source = old.source.kind === "commit" ? { commit: old.source.ref } : { event_id: old.source.ref };
-    const created = recordKnowledge(db, { scope: input.scope, path: input.path, title: old.title, text: old.text, original: old.original, source, author: input.author }, origin, at);
-    invalidateMemoryEntry(db, { entry_id: old.id, reason: "path_moved", successor_id: created.entry_id }, input.author.name, origin, at, { activity: input.author.activity });
-    return created;
-  })();
+  const { successor_id } = moveEntries(db, [{ old: requireEntry(db, input.entry_id), scope: input.scope, path: input.path }], input.mover, origin, at)[0]!;
+  return { entry_id: successor_id, event_id: successor_id };
+}
+
+/** 枝ごとの移動(ADR 0162 決定4): scope(完全一致、null = 盤面全体)で path が P か P/… の未無効化エントリすべてを、to_scope の
+ *  to_path + 残りの path へ1 transaction で。無効化済みは元の置き場に残る。返り値は旧 id → 複製の id。 */
+export function moveMemoryBranch(
+  db: Db,
+  input: { scope: string | null; path: string; to_scope: string | null; to_path: string; mover: Mover },
+  origin: EventOrigin,
+  at: Date,
+): { moved: Array<{ entry_id: number; successor_id: number }> } {
+  const { scope, path, to_scope, to_path, mover } = input;
+  const rows = (db.prepare("SELECT * FROM memory_entries WHERE invalidation_reason IS NULL AND scope IS ? ORDER BY id").all(scope) as EntryRow[]).filter(
+    (row) => row.path === path || row.path.startsWith(`${path}/`),
+  );
+  if (rows.length === 0) throw new DomainError(`no live memory entry at ${path} or under it in this scope`);
+  return { moved: moveEntries(db, rows.map((old) => ({ old, scope: to_scope, path: to_path + old.path.slice(path.length) })), mover, origin, at) };
+}
+
+/** meta-review の `move_memory`(ADR 0122 決定1): Knowledge だけ(ほかの種別は #1039)。書き手は継ぎ、移した meta-review は
+ *  activity に載るので自身の移動は次の周期の材料にならない(ADR 0151)。 */
+export function moveMemoryByMetaReview(db: Db, input: Parameters<typeof moveMemory>[1], origin: EventOrigin, at: Date): { entry_id: number; event_id: number } {
+  requireKnowledge(db, input.entry_id);
+  return moveMemory(db, input, origin, at);
 }
 
 /** 畳みと統合の出所 = meta-review が log_decision で書いた推論。 */
@@ -321,8 +387,12 @@ export function parseMemoryAmendment(input: unknown): MemoryAmendment {
   return parsed.data;
 }
 
-// `rejected` は提案 question の reject と、meta-review の candidate の引退(issue #954)だけが書く —— 人間の面からは渡せない
-export const invalidationSchema = z.object({ reason: z.enum(INVALIDATION_REASONS).exclude(["rejected"]), successor_id: z.number().int().positive().optional() });
+// `rejected` は提案 question の reject と、meta-review の candidate の引退(issue #954)だけが書く —— 人間の面からは渡せない。
+// `path_moved` は移動(moveMemory / moveMemoryBranch)だけが書く(ADR 0161 決定4)
+export const invalidationSchema = z.object({ reason: z.enum(INVALIDATION_REASONS).exclude(["rejected", "path_moved"]), successor_id: z.number().int().positive().optional() });
+/** 人間の面の移動(ADR 0162 決定4)。workspace null = 盤面全体。エントリ1件は移動先(扉が entry_id を足す)、枝ごとは移動元と移動先。 */
+export const memoryMoveSchema = z.object({ workspace: humanEntryFields.workspace, path: z.string() });
+export const memoryBranchMoveSchema = z.object({ workspace: humanEntryFields.workspace, path: z.string(), to_workspace: humanEntryFields.workspace, to_path: z.string() });
 /** meta-review の invalidate_memory は後継なしで落とすだけ(ADR 0161 決定2): 後継 id は黙って捨てず断る。 */
 export const metaReviewInvalidationSchema = z.object({ reason: z.enum(INVALIDATION_REASONS).exclude(["superseded", "path_moved"]) }).strict();
 
@@ -332,6 +402,9 @@ export const memoryListFilterSchema = z.object({
   kind: z.enum(["knowledge", "behavior", "definition", "exemplar"]).optional(),
   state: z.enum(["candidate", "approved", "invalidated"]).optional(),
 });
+
+/** 人間の面(settings の HTTP / 管理MCP)の書き手・移した者。 */
+export const HUMAN_AUTHOR = { activity: "human", name: HUMAN_WORKER_ID } as const satisfies Mover;
 
 /** 原文は title と text の揃いで持つか持たないか。英語の title を持たない Definition は、英語側と
  *  同じく原文も title = text(ADR 0015 五度目の精密化)。 */
@@ -345,7 +418,7 @@ export function humanEntryInput<T extends { workspace: string | null; original_t
     ...rest,
     scope: workspace,
     original: originalTitle?.trim() && original_text?.trim() ? { title: originalTitle, text: original_text, language: getDisplayLanguage(db) } : null,
-    author: { activity: "human" as const, name: HUMAN_WORKER_ID },
+    author: HUMAN_AUTHOR,
   };
 }
 
@@ -476,15 +549,16 @@ export function invalidateMemoryEntry(
       throw new DomainError(`memory entry ${entry_id} is already invalidated`);
     }
     if (successor_id !== undefined) {
-      // 後継は注入に届く側でなければ置換の連鎖が行き止まる
       const successor = requireEntry(db, successor_id);
-      if (successor.state !== "approved" || successor.invalidation_reason !== null) {
-        throw new DomainError(`successor ${successor_id} must be an approved, non-invalidated entry`);
-      }
       // 種別の線(ADR 0161 決定1): Behavior ↔ Exemplar は superseded で互いに、それ以外は同じ種別だけ
       const bothBehaviorOrExemplar = [replaced.kind, successor.kind].every((kind) => kind === "behavior" || kind === "exemplar");
       if (replaced.kind !== successor.kind && !(reason === "superseded" && bothBehaviorOrExemplar)) {
         throw new DomainError(`${replaced.kind} entry ${entry_id} cannot be ${reason} by ${successor.kind} entry ${successor_id}`);
+      }
+      // 後継は注入に届く側でなければ置換の連鎖が行き止まる。移動の複製は旧の状態のまま(candidate は candidate、ADR 0162 決定5)
+      const state = reason === "path_moved" ? replaced.state : "approved";
+      if (successor.state !== state || successor.invalidation_reason !== null) {
+        throw new DomainError(`successor ${successor_id} must be ${state === "approved" ? "an approved" : "a candidate"}, non-invalidated entry`);
       }
     }
     markInvalidated(db, entry_id, reason, successor_id ?? null);
@@ -836,7 +910,7 @@ export function approvedMemoryEntries(db: Db, watermark?: number): MemoryEntry[]
     const entries = new Map<number, MemoryEntry>();
     for (const { id, event } of storeEvents(db, watermark)) {
       if (event.kind === "memory_entry_created") {
-        entries.set(id, { ...event.entry, id, source: sourceOf(event.entry, id), version: versionOf(event.entry.state, id) });
+        entries.set(id, { ...event.entry, id, source: sourceOf(event.entry, id), version: versionOf(event.entry.state, id, event.version) });
       } else if (event.kind === "memory_entry_approved") {
         const entry = entries.get(event.entry_id);
         if (entry) entries.set(event.entry_id, { ...entry, state: "approved", version: id });
@@ -1477,7 +1551,7 @@ export function rebuildMemoryIndex(db: Db, workerId: string, origin: EventOrigin
   return db.transaction(() => {
     db.exec(`DELETE FROM memory_entries; DROP TABLE memory_fts; ${MEMORY_FTS_DDL};`);
     for (const { id, event } of storeEvents(db)) {
-      if (event.kind === "memory_entry_created") insertEntry(db, id, event.entry);
+      if (event.kind === "memory_entry_created") insertEntry(db, id, event.entry, event.version);
       else if (event.kind === "memory_entry_approved") markApproved(db, event.entry_id, id);
       else markInvalidated(db, event.entry_id, event.reason, event.successor_id);
     }

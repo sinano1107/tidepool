@@ -36,6 +36,7 @@ import { toolError, toolResult } from "./mcp.js";
 import {
   changeMemorySettings,
   defineMemoryBranch,
+  HUMAN_AUTHOR,
   humanBehaviorSchema,
   humanDefinitionSchema,
   humanEntryInput,
@@ -44,8 +45,12 @@ import {
   invalidateMemoryEntry,
   invalidationSchema,
   listMemoryEntries,
+  memoryBranchMoveSchema,
   memoryListFilterSchema,
+  memoryMoveSchema,
   memorySettingsChangeSchema,
+  moveMemory,
+  moveMemoryBranch,
   previewCase,
   readMemorySettings,
   rebuildMemoryIndex,
@@ -654,11 +659,39 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
     "invalidate_memory_entry",
     {
       description:
-        "Invalidate a memory entry so it is no longer injected or pulled (nothing is deleted). reason is superseded or path_moved " +
-        "(both require successor_id), capability (it was wrong), or environment / requirement_change (it went stale).",
+        "Invalidate a memory entry so it is no longer injected or pulled (nothing is deleted). reason is superseded " +
+        "(requires successor_id), capability (it was wrong), or environment / requirement_change (it went stale). " +
+        "To change where an entry is filed, use move_memory_entry or move_memory_branch.",
       inputSchema: invalidationSchema.extend({ entry_id: z.number().int().positive() }).shape,
     },
     async (input) => memoryVerb(() => ({ event_id: invalidateMemoryEntry(deps.db, input, HUMAN_WORKER_ID, "mcp", deps.clock.now()) })),
+  );
+  const movedAs =
+    "The board copies the body — title, text, originals, addressee, annotations, source, author, state and approval — to the new place " +
+    "and invalidates the old entry as path_moved; you are recorded as the one who moved it. A candidate stays a candidate. A Definition " +
+    "cannot move onto a branch that already has a live Definition in that scope: fold the two instead.";
+  server.registerTool(
+    "move_memory_entry",
+    {
+      description:
+        "Move one live memory entry (any kind, approved or candidate) to another workspace and path. workspace null = the whole board. " +
+        movedAs,
+      inputSchema: memoryMoveSchema.extend({ entry_id: z.number().int().positive() }).shape,
+    },
+    async ({ entry_id, workspace, path }) =>
+      memoryVerb(() => moveMemory(deps.db, { entry_id, scope: workspace, path, mover: HUMAN_AUTHOR }, "mcp", deps.clock.now())),
+  );
+  server.registerTool(
+    "move_memory_branch",
+    {
+      description:
+        "Move a whole branch: every live entry in workspace (exact match; null = the whole board) whose path is path or under path/ " +
+        "moves to to_workspace, with path's prefix replaced by to_path, in one step. Invalidated entries stay where they are. Returns " +
+        `each moved entry_id with the successor_id of its copy. ${movedAs}`,
+      inputSchema: memoryBranchMoveSchema.shape,
+    },
+    async ({ workspace, path, to_workspace, to_path }) =>
+      memoryVerb(() => moveMemoryBranch(deps.db, { scope: workspace, path, to_scope: to_workspace, to_path, mover: HUMAN_AUTHOR }, "mcp", deps.clock.now())),
   );
   server.registerTool(
     "rebuild_memory_index",
