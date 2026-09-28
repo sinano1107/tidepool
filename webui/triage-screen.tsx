@@ -557,6 +557,16 @@ function groupLogEntries(entries: TpLogEntry[]) {
 const objectionBadge = (comments?: string[] | null) =>
   (comments?.length)! > 1 ? comments!.map((c) => `- ${c}`).join('\n') : comments?.[0];
 
+// ADR 0085: a log entry's `objections` (every one ever raised) split by whether
+// it belongs to the currently open session — the sole fact `session_id` carries —
+// into commit-pending vs. already-bundled. No open session → all bundled.
+// Shared by webui/app.tsx's triage log and the settings case picker (#1102).
+// biome-ignore lint/correctness/noUnusedVariables: used by webui/app.tsx and webui/settings-screen.tsx — one concatenated bundle
+const splitObjections = (objections: WireContract['GET /api/log']['entries'][number]['objections'], openSessionId: number | null) => ({
+  pendingObjections: objections.filter((o) => o.session_id === openSessionId).map((o) => o.comment),
+  bundledObjections: objections.filter((o) => o.session_id !== openSessionId).map((o) => o.comment),
+});
+
 // The entry keys with a commit-pending objection (ADR 0085): the union of
 // this tab's own immediate reflection (`localObjections`, populated the
 // moment Object is tapped) and the server-delivered entries whose
