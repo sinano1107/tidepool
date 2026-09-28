@@ -117,7 +117,7 @@ it("capability の異議エントリに RCA が呼ぶと、宛先 = エントリ
   ]);
 });
 
-it("学習に向かない cause・人間登録の task_ambiguity / missing_information の Behavior・as の過不足・親の異議エントリでない id は domain error で拒否され、work task から呼んでも拒否され、店には何も載らない", async () => {
+it("学習に向かない cause・人間登録の task_ambiguity / missing_information の Behavior・as と based_on_decision の過不足・decision でない based_on_decision・親の異議エントリでない id は domain error で拒否され、work task から呼んでも拒否され、店には何も載らない", async () => {
   const attributionClient = new FakeAttributionClient();
   t = await bootTidepool({ attributionClient });
   const [mixed, other]: any[] = await objectedTasks(attributionClient, [
@@ -134,6 +134,7 @@ it("学習に向かない cause・人間登録の task_ambiguity / missing_infor
 
   const self = mixed.kids.find((x: any) => x.title === "rca (self): mixed");
   await runNow(self.id);
+  const decision = (await loggedEntry(t, self.id, "the fixture rule was never written down")).id;
   for (const [args, error] of [
     [{ entry_id: uncertain }, "the entry's cause is uncertain: nothing to learn from it"],
     [{ entry_id: requirementChange }, "the entry's cause is requirement_change: nothing to learn from it"],
@@ -142,6 +143,9 @@ it("学習に向かない cause・人間登録の task_ambiguity / missing_infor
     [{ entry_id: missingInformation, as: "behavior" }, "the task was not registered by an agent: there is no agent to address a behavior to"],
     [{ entry_id: missingInformation }, 'as ("behavior" or "knowledge") is required for a missing_information entry and only for it'],
     [{ entry_id: capability, as: "behavior" }, 'as ("behavior" or "knowledge") is required for a missing_information entry and only for it'],
+    [{ entry_id: missingInformation, as: "knowledge" }, "based_on_decision is required for a knowledge entry and only for it"],
+    [{ entry_id: missingInformation, as: "knowledge", based_on_decision: completion }, `event ${completion} is not a logged decision`],
+    [{ entry_id: capability, based_on_decision: decision }, "based_on_decision is required for a knowledge entry and only for it"],
     [{ entry_id: completion }, `entry ${completion} carries no attributed objection`],
     [{ entry_id: other.entries[0].id }, `entry ${other.entries[0].id} is not a decision-log entry of your parent task`],
     [{ entry_id: 999_999 }, "entry 999999 is not a decision-log entry of your parent task"],
@@ -168,7 +172,7 @@ it("人間が書いた異議エントリは auditor RCA から拒否され、par
   expect(await memoryEntries()).toEqual([]);
 });
 
-it("agent 登録の task では(盤面の登録は除く)task_ambiguity と missing_information の Behavior が登録者宛て、missing_information の Knowledge は宛先なしで即 approved、preference は worker 宛てになり、settings の一覧(HTTP / 管理MCP)が author の活動と出所の cause を運ぶ", async () => {
+it("agent 登録の task では(盤面の登録は除く)task_ambiguity と missing_information の Behavior が登録者宛て、missing_information の Knowledge は宛先なしで即 approved・出所は RCA が log_decision した推論(based_on_decision、cause は無い)、preference は worker 宛てになり、based_on_decision は Behavior には渡せず、settings の一覧(HTTP / 管理MCP)が author の活動と出所の cause を運ぶ", async () => {
   const attributionClient = new FakeAttributionClient();
   t = await bootTidepool({ attributionClient, auditorName: "shako" });
   const [{ task, entries, kids }, board]: any[] = await objectedTasks(attributionClient, [
@@ -178,18 +182,23 @@ it("agent 登録の task では(盤面の登録は除く)task_ambiguity と miss
   const [taskAmbiguity, missingInformation, preference] = entries.map((e: any) => e.id);
   const auditor = kids.find((x: any) => x.title === "rca (auditor): delegated");
   await runNow(auditor.id);
+  const decision = (await loggedEntry(t, auditor.id, "the fixture rule was never written down")).id;
 
   const ids = [];
   for (const args of [
     { entry_id: taskAmbiguity },
     { entry_id: missingInformation, as: "behavior" },
-    { entry_id: missingInformation, as: "knowledge" },
+    { entry_id: missingInformation, as: "knowledge", based_on_decision: decision },
     { entry_id: preference },
   ]) {
     const result = await propose(auditor.id, args);
     expect(result.isError, JSON.stringify(result.content)).toBeFalsy();
     ids.push(body(result).entry_id);
   }
+
+  expect((await propose(auditor.id, { entry_id: missingInformation, as: "behavior", based_on_decision: decision })).content[0].text).toBe(
+    "based_on_decision is required for a knowledge entry and only for it",
+  );
 
   // 盤面(tidepool)の登録は agent の登録ではない
   const boardAuditor = board.kids.find((x: any) => x.title === "rca (auditor): by the board");
@@ -204,7 +213,7 @@ it("agent 登録の task では(盤面の登録は除く)task_ambiguity と miss
   expect(listed).toEqual([
     expect.objectContaining({ id: ids[0], kind: "behavior", state: "candidate", addressee: "tako", source: await source(taskAmbiguity), author, cause: "task_ambiguity" }),
     expect.objectContaining({ id: ids[1], kind: "behavior", state: "candidate", addressee: "tako", source: await source(missingInformation), author, cause: "missing_information" }),
-    expect.objectContaining({ id: ids[2], kind: "knowledge", state: "approved", addressee: null, source: await source(missingInformation), author, cause: "missing_information" }),
+    expect.objectContaining({ id: ids[2], kind: "knowledge", state: "approved", addressee: null, source: { kind: "decision", ref: decision }, author, cause: null }),
     expect.objectContaining({ id: ids[3], kind: "behavior", state: "candidate", addressee: t.worker.id, source: await source(preference), author, cause: "preference" }),
   ]);
 

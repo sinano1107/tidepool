@@ -30,6 +30,7 @@ import {
   pullMemoryProposals,
   readMemory,
   recordKnowledge,
+  requireDecision,
   searchMemory,
 } from "./memory.js";
 import { type MetaReviewSubject, metaReviewSubjectOf, PROMOTION_RULE } from "./meta-review.js";
@@ -711,6 +712,7 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
       description:
         "Review only: turn your finding about an objected entry into memory — objected entries of your parent task only. The board derives the entry kind and addressee from the entry's attributed cause, " +
         "except for a missing_information cause, where you pass as (behavior or knowledge) and must not otherwise. " +
+        "With as knowledge, pass based_on_decision (the event id log_decision returned for your reasoning), and not otherwise; it becomes the knowledge entry's source, an inference. " +
         "A behavior is a candidate a human approves later. path is a \"/\"-separated hierarchy (e.g. build/tests). " +
         BOARD_WRITE_LANGUAGE_RULE,
       inputSchema: {
@@ -719,9 +721,10 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
         title: z.string().min(1),
         text: z.string().min(1),
         as: z.enum(["behavior", "knowledge"]).optional(),
+        based_on_decision: z.number().int().optional(),
       },
     },
-    async ({ entry_id, as, ...fields }) =>
+    async ({ entry_id, as, based_on_decision, ...fields }) =>
       runVerb(deps, attributedTaskId, (task) => {
         // 門は列を足さず構造で引く(ADR 0120 決定1(a))
         if (task.type !== "review" || task.parent_id === null) {
@@ -735,10 +738,13 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
         if (!attribution) throw new DomainError(`entry ${entry_id} carries no attributed objection`);
         if (isHumanEntry(entry)) throw new DomainError(`entry ${entry_id} was written by a human`);
         const target = learningTarget(attribution.cause, entry.worker_id, getRegistrant(deps.db, entry.task_id), as);
+        if ((target.kind === "knowledge") !== (based_on_decision !== undefined)) {
+          throw new DomainError("based_on_decision is required for a knowledge entry and only for it");
+        }
         const input = {
           ...fields,
           scope: memoryScope(deps, getTask(deps.db, task.parent_id)!),
-          source: { event_id: attribution.id },
+          source: { event_id: based_on_decision === undefined ? attribution.id : requireDecision(deps.db, based_on_decision) },
           author: { activity: "rca" as const, name: attributedWorkerId(deps, task) },
         };
         return target.kind === "knowledge"
