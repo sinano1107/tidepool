@@ -992,8 +992,8 @@ function registerMemoryMetaReviewVerbs(server: McpServer, deps: McpDeps, run: Me
     {
       description:
         "List every past memory proposal (approve, consolidate, invalidate) with the human's answer, amendment and comment, or " +
-        "why the board settled it as observed (an entry it pinned was invalidated first). A rejected proposal always carries the " +
-        "human's reason in comment — read it so you do not re-propose what was rejected and can redraft closer to what they want.",
+        "why the board settled it as observed (an entry it pinned was invalidated first). A rejected or deferred proposal always carries the " +
+        "human's reason or what is still undecided in comment — read it so you do not re-propose what was rejected and can redraft closer to what they want.",
       inputSchema: { page },
     },
     async (input) => run((reader, now) => pullMemoryProposals(deps.db, reader, input, now)),

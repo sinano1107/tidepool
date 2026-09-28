@@ -390,7 +390,7 @@ function TpQuestionCard({ q, answer, onAnswer, locked = false, onTranslate }: {
       {q.needsComment && !locked && (
         <div style={{ marginBottom: 14 }}>
           <Input label={`Comment (required to ${q.needsComment.join(' / ')})`} multiline rows={2} value={comment} onChange={(e) => setComment(e.target.value)}
-            placeholder="why — the next memory meta-review reads it" />
+            placeholder="why, or what is still undecided — the next memory meta-review reads it" />
         </div>
       )}
       {items.length > 1 && !locked && (

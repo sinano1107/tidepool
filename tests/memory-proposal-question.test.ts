@@ -153,7 +153,7 @@ it("defer の回答は comment が無ければ 409 で question を開いたま�
   const { review, ids, client, call, propose } = await boardWithMetaReview();
   try {
     const questionId = await propose(ids[0]!);
-    const before = await entry(ids[0]!);
+    const before = await memoryEntries(t);
 
     expect((await answer(questionId, "defer")).status).toBe(409);
     expect(await task(questionId)).toMatchObject({ status: "todo", question_answer: null });
@@ -166,7 +166,7 @@ it("defer の回答は comment が無ければ 409 で question を開いたま�
       ["task_registered", undefined, undefined],
       ["question_answered", "defer", undecided],
     ]);
-    expect(await entry(ids[0]!)).toEqual(before);
+    expect(await memoryEntries(t)).toEqual(before);
     expect((await call("list_memory_proposals", {})).proposals).toMatchObject([{ question_id: questionId, answer: "defer", comment: undecided }]);
 
     expect((await completeViaMcp(t, review.id, false)).isError).not.toBe(true);

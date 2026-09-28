@@ -343,7 +343,7 @@ it("memory 提案の reject は comment が空・空白だけなら domain error
   expect(listMemoryEntries(db, {})).toEqual(before);
 });
 
-it("memory 提案の defer は comment が空・空白だけなら domain error で断る —— 店には触らない(ADR 0165 決定3)", () => {
+it("memory 提案の defer は comment が空・空白だけなら domain error で断る(ADR 0165 決定3)", () => {
   for (const comment of [undefined, "", " \n "]) expect(() => deferMemoryProposal(comment)).toThrow(DomainError);
   expect(() => deferMemoryProposal("Not sure the split holds for data-only migrations.")).not.toThrow();
 });

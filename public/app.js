@@ -367,7 +367,7 @@ function TpQuestionCard({ q, answer, onAnswer, locked = false, onTranslate }) {
       rows: 2,
       value: comment,
       onChange: (e) => setComment(e.target.value),
-      placeholder: "why \u2014 the next memory meta-review reads it"
+      placeholder: "why, or what is still undecided \u2014 the next memory meta-review reads it"
     }
   )), items.length > 1 && !locked && /* @__PURE__ */ React.createElement("div", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--tide-4)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 12 } }, answeredCount, " of ", items.length, " answered \u2014 submits together once every item is"), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 18 } }, items.map((item, i) => /* @__PURE__ */ React.createElement(
     TpQuestionItemPicker,
