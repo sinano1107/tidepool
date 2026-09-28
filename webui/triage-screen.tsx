@@ -547,7 +547,7 @@ function commitPendingObjectionKeys(log: TpLogEntry[], localObjections: Record<s
 // staged S3 queue, loadLanding re-reads the landing questions' answerability.
 // onCommit always closes the flow.
 // biome-ignore lint/correctness/noUnusedVariables: rendered by webui/app.tsx — one concatenated bundle
-function TriageScreen({ data, onCommit, loadHandoff, onAnswer, onObject, onScratchAdd, onDisplayed, loadPreview, loadLanding, onTranslate }: {
+function TriageScreen({ data, onCommit, loadHandoff, onAnswer, onObject, onScratchAdd, onDisplayed, loadPreview, loadLanding, onTranslate, onOpenMemoryEntry }: {
   data: { questions: TpTriageQuestion[]; log: TpLogEntry[]; scratchpad?: TpScratchLine[] };
   onCommit: (
     answers: Record<string, string[]>,
@@ -562,6 +562,7 @@ function TriageScreen({ data, onCommit, loadHandoff, onAnswer, onObject, onScrat
   loadPreview: () => Promise<QueueScreenTask[]>;
   loadLanding: () => Promise<Record<string, { blocked_by: string | null }>>;
   onTranslate?: TpTranslateFn;
+  onOpenMemoryEntry: (id: number) => void;
 }) {
   const { Button, Input, LogEntry, Switch } = window.TidepoolDesignSystem_8a0ead;
   // 着地 question(`landing` を持つ行)は merge 判断ステップの持ち物 — 先頭の質問
@@ -855,6 +856,7 @@ function TriageScreen({ data, onCommit, loadHandoff, onAnswer, onObject, onScrat
                 active={objecting === k}
                 onObject={() => toggleObjecting(k)}
                 onExpand={hasHandoff ? () => toggleHandoff(k, l) : undefined}
+                onOpenMemoryEntry={onOpenMemoryEntry}
               />
               {logTranslateOn && logTranslations[k] && logTranslations[k].status !== 'throttled' && (
                 <div style={{ padding: '2px 14px 10px', background: 'var(--surface-recessed)' }}>

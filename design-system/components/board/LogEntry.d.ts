@@ -21,7 +21,10 @@ export interface LogEntryProps {
     bundledObjection?: string;
     /** Latest attribution beside the objection annotation. `uncertain` is
      *  rendered as explicitly not yet determined. Read-only. */
-    cause?: 'capability' | 'task_ambiguity' | 'missing_information' | 'environment' | 'preference' | 'requirement_change' | 'uncertain';
+    cause?: 'capability' | 'task_ambiguity' | 'missing_information' | 'environment' | 'preference' | 'requirement_change' | 'memory' | 'uncertain';
+    /** With cause `memory`: the ids of the memory entries the attribution
+     *  named, each rendered as a link beside the cause. */
+    causeEntries?: number[];
     /** Teal unread bar (entries since last skim). */
     unread?: boolean;
   };
@@ -29,6 +32,8 @@ export interface LogEntryProps {
   onObject?: () => void;
   /** Completion handoff toggle, kept separate from the row's Object affordance. */
   onExpand?: () => void;
+  /** A `causeEntries` link was followed; it never triggers the row's Object. */
+  onOpenMemoryEntry?: (id: number) => void;
   /** Objection composer open for this row (coral tint + "objecting…" marker). */
   active?: boolean;
   style?: React.CSSProperties;

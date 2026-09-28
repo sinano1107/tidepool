@@ -226,7 +226,7 @@ function drafts() {
       taskId: task.id,
       workerId: "tidepool",
       origin: "board",
-      payload: { kind: "objection_attributed", entry_id: logDecision(db, task, line, "deckhand", at), objection_event_ids: [], cause: "preference", evidence: "e", round: "after_rca" },
+      payload: { kind: "objection_attributed", entry_id: logDecision(db, task, line, "deckhand", at), objection_event_ids: [], cause: "preference", evidence: "e", entries: null, round: "after_rca" },
       at,
     });
   const drafted = (title: string, source: { event_id: number } | { commit: string }) =>

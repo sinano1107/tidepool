@@ -2,7 +2,8 @@ import type { Cause } from "./cause.js";
 import type { Db } from "./db.js";
 import { appendEvent, type EventPayload, getEvent, listEvents, taskDecisionLog } from "./events.js";
 import { type ExecutionSettingRow, retrospectiveBoardCallRow } from "./execution-setting.js";
-import { buildMemoryInjection, createBehaviorCandidate, memoryScope } from "./memory.js";
+import { buildMemoryInjection, createBehaviorCandidate, listMemoryEntries, memoryScope } from "./memory.js";
+import { sessionSpawnOf, sessionWindow } from "./precedent.js";
 import type { ProcessContainers } from "./process-container.js";
 import { BOARD_WORKER_ID, DomainError, getRegistrant, getTask, HUMAN_WORKER_ID, listChildren, type Task } from "./tasks.js";
 import { isAnthropicBoardCallBlocked } from "./throttle.js";
@@ -13,20 +14,26 @@ import { type DecisionLogEntry, listObjectedEntries, objectedEntryText, objectio
  *  定義本文・model 名・価格は渡さない —— 判断に要らず、配分評価の線と同じ。
  *  `entry_id` は Fake が entry ごとに応答を引く鍵で、model に意味は無い。
  *  `rca_findings` は第2回(#575)だけが足す: RCA 子(self / auditor)の decision log と
- *  完了 result を並べたもの。 */
+ *  完了 result を並べたもの。`memory_read` は worker がその decision の前に読んだ記憶(ADR 0166 決定2)。 */
 export interface AttributionInput {
   entry_id: number;
   entry: string;
   steering: string[];
   decision_log: string[];
+  memory_read: Array<{ id: number; kind: string; title: string; text: string }>;
   rca_findings?: string[];
 }
 
-/** 帰責の構造化出力 —— 保存する値は `cause` 1つ、evidence は散文(ADR 0115 決定1)。 */
+/** 帰責の構造化出力 —— 保存する値は `cause` と、`memory` のときだけ誤った entry の id 列(ADR 0115 決定1 / ADR 0166 決定3)。
+ *  evidence は散文。client の出力は門(`gate`)を通してから event に載る。 */
 export interface AttributionJudgment {
   cause: Cause;
   evidence: string;
+  entries?: number[];
 }
+
+/** 門を通った判定 —— `objection_attributed` に載る形。 */
+export type GatedJudgment = Pick<Extract<EventPayload, { kind: "objection_attributed" }>, "cause" | "evidence" | "entries">;
 
 /** The Board call seam for attribution (draft / translation / allocation client と
  *  同型): `setting` は盤面が表から解決した Board call 自身の model / effort。 */
@@ -63,6 +70,20 @@ export interface BoardCallDeps {
   workspace?: { name: string };
   /** 容器の前提(ADR 0136 決定7)。不成立なら撃てなかった扱い。Absent → 前提を検査しない盤面。 */
   containers?: Pick<ProcessContainers, "preflight">;
+}
+
+const uncertain = (evidence: string): GatedJudgment => ({ cause: "uncertain", evidence, entries: null });
+
+/** 帰責の門(ADR 0166 決定3): `memory` は読んだ集合の内側の entry を1つ以上名指すときだけ、他の cause は entries を
+ *  持たないときだけ通す。通らない判定は `uncertain` + 理由の判断に倒す(投げない)。 */
+function gate({ entries, ...judgment }: AttributionJudgment, read: AttributionInput["memory_read"]): GatedJudgment {
+  if (judgment.cause !== "memory") {
+    return entries === undefined ? { ...judgment, entries: null } : uncertain(`${judgment.cause} attribution rejected: entries are only for cause memory`);
+  }
+  if (!entries?.length) return uncertain("memory attribution rejected: it names no entry");
+  const unread = entries.filter((id) => !read.some((r) => r.id === id));
+  if (unread.length > 0) return uncertain(`memory attribution rejected: entry ${unread.join(", ")} was not read before the decision`);
+  return { ...judgment, entries };
 }
 
 /** Board call を撃てるか。Provider は盤面設定の固定値(ADR 0111 決定4 と同じ枠)、ティアは
@@ -135,9 +156,9 @@ export async function attributeObjections(
   client: AttributionClient | undefined,
   sessionId: number,
   now: Date,
-): Promise<Map<number, AttributionJudgment>> {
+): Promise<Map<number, GatedJudgment>> {
   const objected = listObjectedEntries(db, sessionId);
-  const judgments = new Map<number, AttributionJudgment>();
+  const judgments = new Map<number, GatedJudgment>();
   if (objected.length === 0) return judgments;
   const call = boardCallSetting(db, client);
   if ("unavailable" in call) return judgments;
@@ -148,9 +169,10 @@ export async function attributeObjections(
         entry: objectedEntryText(o.entry),
         steering: o.comments,
         decision_log: decisionLogText(db, o.entry.task_id),
+        memory_read: memoryRead(db, o.entry),
       };
       try {
-        judgments.set(o.entry.id, await call.client.judge(input, call.setting));
+        judgments.set(o.entry.id, gate(await call.client.judge(input, call.setting), input.memory_read));
       } catch (err) {
         const payload = { kind: "objection_attribution_failed" as const, entry_id: o.entry.id, round: "initial" as const, reason: `Board call failed: ${message(err)}` };
         appendEvent(db, { taskId: o.entry.task_id, workerId: BOARD_WORKER_ID, origin: "board", payload, at: now });
@@ -246,9 +268,9 @@ async function attributeSecondRound(db: Db, deps: BoardCallDeps, objectedId: str
     const call = boardCallSetting(db, deps.attributionClient, deps.containers);
     if ("unavailable" in call) return;
     const input = secondRoundInput(db, objectedId, source);
-    let judgment: AttributionJudgment;
+    let judgment: GatedJudgment;
     try {
-      judgment = await call.client.judge(input, call.setting);
+      judgment = gate(await call.client.judge(input, call.setting), input.memory_read);
     } catch (err) {
       const payload = { kind: "objection_attribution_failed" as const, entry_id: source.entry_id, round: "after_rca" as const, reason: `Board call failed: ${message(err)}` };
       appendEvent(db, { taskId: objectedId, workerId: BOARD_WORKER_ID, origin: "board", payload, at: now });
@@ -318,7 +340,26 @@ function objectionInput(
     entry: objectedEntryText(entry),
     steering: objectionsById(db, entry.id, attribution.objection_event_ids).map((o) => o.comment),
     decision_log: decisionLogText(db, entry.task_id, attribution.id),
+    memory_read: memoryRead(db, entry),
   };
+}
+
+/** 異議された entry を含む worker session で、その entry より前に read_memory が返した記憶(ADR 0166 決定2)。
+ *  event 順で組み、transcript には依らない —— Precedent の entries_read より広くてよい(issue #1045)。 */
+function memoryRead(db: Db, entry: DecisionLogEntry): AttributionInput["memory_read"] {
+  const events = listEvents(db, entry.task_id);
+  const spawned = sessionSpawnOf(events, entry);
+  if (!spawned) return [];
+  const { inSession } = sessionWindow(events, spawned);
+  const ids = new Set(
+    events.flatMap((e) => (e.payload.kind === "memory_pulled" && e.payload.verb === "read_memory" && e.id < entry.id && inSession(e) ? e.payload.returned_ids : [])),
+  );
+  // ponytail: 数件の id を引くのに記憶の全件を読む。記憶が数万に育って commit が重くなったら id で引く読み口を足す
+  const byId = new Map(listMemoryEntries(db, {}).map((m) => [m.id, m]));
+  return [...ids].map((id) => {
+    const { kind, title, text } = byId.get(id)!;
+    return { id, kind, title, text };
+  });
 }
 
 /** 帰責が起草に向くエントリから Board call で Behavior candidate を起草する(ADR 0120 決定1(b)(c) /

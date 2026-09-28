@@ -1,4 +1,4 @@
-import type { AttributionJudgment } from "./attribution.js";
+import type { GatedJudgment } from "./attribution.js";
 import type { Cause } from "./cause.js";
 import type { Db } from "./db.js";
 import { appendEvent, type EventRow, getEvent, HUMAN_FACING_KINDS } from "./events.js";
@@ -221,7 +221,7 @@ export function listObjectedEntries(db: Db, sessionId: number): ObjectionPair[] 
 }
 
 /** RCA を要する cause(ADR 0115 決定3): worker か登録者に落ち度がありうる側と、まだ
- *  判定できていない側。`preference` / `requirement_change` / `environment` では
+ *  判定できていない側。`preference` / `requirement_change` / `environment` / `memory`(ADR 0166 決定4)では
  *  self RCA の問い「なぜ自分はそう判断したか」が空である。判断の無い entry も
  *  `uncertain` と同じくこちら側(ADR 0168 決定3)。 */
 const RCA_CAUSES: readonly Cause[] = ["capability", "task_ambiguity", "missing_information", "uncertain"];
@@ -296,7 +296,7 @@ function bundleObjections(
   db: Db,
   sessionId: number,
   now: Date,
-  judgments: Map<number, AttributionJudgment>,
+  judgments: Map<number, GatedJudgment>,
 ): void {
   const byTask = new Map<string, ObjectionPair[]>();
   for (const pair of listObjectedEntries(db, sessionId)) {
@@ -526,7 +526,7 @@ function closeTriageSession(
   open: TriageSession,
   now: Date,
   closedBy: "commit" | "timeout",
-  judgments: Map<number, AttributionJudgment>,
+  judgments: Map<number, GatedJudgment>,
 ): void {
   bundleObjections(db, open.id, now, judgments);
   // apply in reverse staging order so the first-staged task ends up on top
@@ -564,7 +564,7 @@ export function commitTriage(
   db: Db,
   now: Date,
   scratchpad: Array<{ id: number; disposition: ScratchpadDisposition }> = [],
-  judgments: Map<number, AttributionJudgment> = new Map(),
+  judgments: Map<number, GatedJudgment> = new Map(),
 ): TriageCommitResult {
   const open = activeTriageSession(db);
   if (!open) {

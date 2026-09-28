@@ -133,7 +133,7 @@ it("outcome は受理 = 統合点レビューがすべて完了、負 = capabili
   expect(episodeOutcome({ ...facts, accepted: true })).toBe("accepted");
   expect(episodeOutcome(facts)).toBe("excluded");
   expect(episodeOutcome({ ...facts, accepted: true, causes: ["capability"] })).toBe("rejected");
-  expect(episodeOutcome({ ...facts, causes: ["preference", "requirement_change", "environment", "uncertain"] })).toBe("excluded");
+  expect(episodeOutcome({ ...facts, causes: ["preference", "requirement_change", "environment", "memory", "uncertain"] })).toBe("excluded");
   expect(episodeOutcome({ ...facts, allocations: [{ allocation: "underpowered", cause: "capability" }] })).toBe("rejected");
   expect(episodeOutcome({ ...facts, accepted: true, allocations: [{ allocation: "underpowered", cause: "environment" }] })).toBe("accepted");
   expect(episodeOutcome({ ...facts, accepted: true, allocations: [{ allocation: "overpowered", cause: "capability" }] })).toBe("accepted");
@@ -221,6 +221,7 @@ async function rejectOpusSession(t: Tidepool) {
     objection_event_ids: [],
     cause: "capability",
     evidence: "the shortcut missed the second criterion",
+    entries: null,
     round: "initial",
   };
   appendEvent(t.db, { taskId: earlier.id, workerId: "board", origin: "board", at: t.clock.now(), payload: attributed });
@@ -278,6 +279,7 @@ it("advisor pin ありで相談0回の session は、盤面の記録から読ん
     objection_event_ids: [],
     cause: "capability",
     evidence: "the shortcut missed the second criterion",
+    entries: null,
     round: "initial",
   };
   appendEvent(t.db, { taskId: earlier.id, workerId: "board", origin: "board", at: t.clock.now(), payload: attributed });
@@ -343,6 +345,7 @@ it("セルの model は観測された具体 id —— pin が alias でも、�
     objection_event_ids: [],
     cause: "capability",
     evidence: "the shortcut missed the second criterion",
+    entries: null,
     round: "initial",
   };
   appendEvent(t.db, { taskId: earlier.id, workerId: "board", origin: "board", at: t.clock.now(), payload: attributed });

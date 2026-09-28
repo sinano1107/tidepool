@@ -2,7 +2,8 @@
  *  (#563)が**同じ1本**を輸入する —— 分類が2本あると必ず漂流するので、どちらの
  *  module にも置かず、この中立の module が1つだけ持つ。`preference` /
  *  `requirement_change` は異議でしか現れないが、値域は1本である。`uncertain` は
- *  帰責では最終値にならない(決定2)が、配分評価では判定そのものの値。 */
+ *  帰責では最終値にならない(決定2)が、配分評価では判定そのものの値。`memory`(読んだ記憶が誤っていた)も
+ *  異議でしか現れず、配分評価の prompt には載せない(ADR 0166 決定1)。 */
 export const CAUSES = [
   "capability",
   "task_ambiguity",
@@ -10,6 +11,7 @@ export const CAUSES = [
   "environment",
   "preference",
   "requirement_change",
+  "memory",
   "uncertain",
 ] as const;
 export type Cause = (typeof CAUSES)[number];
