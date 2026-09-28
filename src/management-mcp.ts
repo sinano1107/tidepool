@@ -717,16 +717,26 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
     },
     async () => toolResult({ halted: listHaltedRefires(deps.db) }),
   );
-  for (const [name, mark, effect] of [
-    ["retry_halted_refire", "retried", "Retry a halted refire: the board fires it again at the next pickup poll, up to 3 more failed calls."],
-    ["dismiss_halted_refire", "dismissed", "Dismiss a halted refire: it leaves the list and the board never fires it again (nothing to learn, or you wrote the behavior yourself)."],
-  ] as const) {
-    server.registerTool(
-      name,
-      { description: `${effect} Refused for anything not currently in list_halted_refires.`, inputSchema: refireKeySchema.shape },
-      async (key) => memoryVerb(() => ({ event_id: markHaltedRefire(deps.db, mark, key, "mcp", deps.clock.now()) })),
-    );
-  }
+  server.registerTool(
+    "retry_halted_refire",
+    {
+      description:
+        "Retry a halted refire: the board fires it again at the next pickup poll, up to 3 more failed calls. " +
+        "Refused for anything not currently in list_halted_refires.",
+      inputSchema: refireKeySchema.shape,
+    },
+    async (key) => memoryVerb(() => ({ event_id: markHaltedRefire(deps.db, "refire_retried", key, "mcp", deps.clock.now()) })),
+  );
+  server.registerTool(
+    "dismiss_halted_refire",
+    {
+      description:
+        "Dismiss a halted refire: it leaves the list and the board never fires it again (nothing to learn, or you wrote the behavior yourself). " +
+        "Refused for anything not currently in list_halted_refires.",
+      inputSchema: refireKeySchema.shape,
+    },
+    async (key) => memoryVerb(() => ({ event_id: markHaltedRefire(deps.db, "refire_dismissed", key, "mcp", deps.clock.now()) })),
+  );
   server.registerTool(
     "rebuild_memory_index",
     { description: "Rebuild the memory entry table and its search index by replaying the board's memory events." },

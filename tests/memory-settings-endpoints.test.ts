@@ -439,30 +439,26 @@ it("POST .../retry で打ち切りの起草はすぐ次の poll で撃たれ、�
 it("打ち切りでない件への Retry / Dismiss は 400 / tool error: 3回未満の失敗・Retry 直後・Dismiss 済みへの Dismiss と Retry", async () => {
   const s = await draftHalted("refused");
   t = s.t;
+  const post = async (verb: "retry" | "dismiss", key: { refire: string; target: number }) =>
+    (await api(t.baseUrl, "POST", `/api/settings/memory/halted-refires/${key.refire}/${key.target}/${verb}`)).status;
+  const draft = { refire: "draft", target: s.attribution.id };
   const client = await managementMcpClient(t.baseUrl);
-  const call = toolCaller(client);
-  const both = async (verb: "retry" | "dismiss", key: { refire: string; target: number }) => [
-    (await api(t.baseUrl, "POST", `/api/settings/memory/halted-refires/${key.refire}/${key.target}/${verb}`)).status,
-    (await call(`${verb}_halted_refire`, key)).isError,
-  ];
   try {
-    const draft = { refire: "draft", target: s.attribution.id };
-    // 第2回を撃ったことのない entry(3回未満)
-    expect(await both("retry", { refire: "second_round", target: s.entry.id })).toEqual([400, true]);
-    expect(await both("dismiss", { refire: "second_round", target: s.entry.id })).toEqual([400, true]);
-
-    expect((await api(t.baseUrl, "POST", `/api/settings/memory/halted-refires/draft/${s.attribution.id}/retry`)).status).toBe(200);
-    // Retry の後はまだ1回も失敗していない
-    expect(await both("retry", draft)).toEqual([400, true]);
-    expect(await both("dismiss", draft)).toEqual([400, true]);
-
-    await t.clock.advance(HOUR);
-    await t.clock.advance(HOUR);
-    await t.clock.advance(HOUR);
-    expect((await call("dismiss_halted_refire", draft)).isError).toBe(false);
-    expect(await both("dismiss", draft)).toEqual([400, true]);
-    expect(await both("retry", draft)).toEqual([400, true]);
+    // 第2回を撃ったことのない entry(3回未満)。管理MCP では tool error(対応づけはこの1件で見る)
+    const neverFired = { refire: "second_round", target: s.entry.id };
+    expect([await post("retry", neverFired), await post("dismiss", neverFired)]).toEqual([400, 400]);
+    expect((await toolCaller(client)("retry_halted_refire", neverFired)).isError).toBe(true);
   } finally {
     await client.close();
   }
+
+  expect(await post("retry", draft)).toBe(200);
+  // Retry の後はまだ1回も失敗していない
+  expect([await post("retry", draft), await post("dismiss", draft)]).toEqual([400, 400]);
+
+  await t.clock.advance(HOUR);
+  await t.clock.advance(HOUR);
+  await t.clock.advance(HOUR);
+  expect(await post("dismiss", draft)).toBe(200);
+  expect([await post("dismiss", draft), await post("retry", draft)]).toEqual([400, 400]);
 });

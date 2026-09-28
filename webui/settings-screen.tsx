@@ -1355,7 +1355,13 @@ function HaltedRefiresCard({ say }: { say: AppSay }) {
   const { Button, Card } = window.TidepoolDesignSystem_8a0ead;
   const [rows, setRows] = React.useState<WireContract['GET /api/settings/memory/halted-refires']['halted']>([]);
   const [busy, setBusy] = React.useState(false);
-  const load = async () => setRows((await api('GET /api/settings/memory/halted-refires')).halted);
+  const load = async () => {
+    try {
+      setRows((await api('GET /api/settings/memory/halted-refires')).halted);
+    } catch (err) {
+      say('danger', 'halted refires load failed', String((err as Error).message || err));
+    }
+  };
   React.useEffect(() => { load(); }, []);
   const act = async (row: (typeof rows)[number], verb: 'retry' | 'dismiss') => {
     setBusy(true);
@@ -1380,7 +1386,7 @@ function HaltedRefiresCard({ say }: { say: AppSay }) {
             {row.refire === 'draft' ? 'behavior draft' : 'second-round attribution'} · entry #{row.entry.id} · {row.task.title} · {row.cause ?? 'unattributed'} · {row.round}
           </p>
           <p style={{ margin: 0, fontSize: 'var(--text-sm)' }}>{row.entry.text}</p>
-          <p style={muted}>last failure {row.last_failure.at}: {row.last_failure.reason}</p>
+          <p style={muted}>last failure {new Date(row.last_failure.at).toLocaleString()}: {row.last_failure.reason}</p>
           <div style={{ display: 'flex', gap: 8 }}>
             <Button variant="secondary" size="sm" disabled={busy} onClick={() => act(row, 'retry')}>Retry</Button>
             <Button variant="ghost" size="sm" disabled={busy} onClick={() => act(row, 'dismiss')}>Dismiss</Button>
@@ -2691,8 +2697,6 @@ function SettingsScreen({ say, memoryFocus, registerLeaveGuard }: {
           <MemoryEntriesCard workspaceNames={workspaceNames} agentNames={agentNames} language={displayLanguage} say={say} edit={edit}
             focus={boardLoaded ? memoryFocus : null} />
         )}
-        {/* below the entries: a card that appears later must not push a focused entry out of view */}
-        <HaltedRefiresCard say={say} />
         {metaReviewSettings && (
           <MetaReviewSettingsCard settings={metaReviewSettings} say={say} onSaved={loadMetaReviewSettings} edit={edit} />
         )}
@@ -2706,6 +2710,8 @@ function SettingsScreen({ say, memoryFocus, registerLeaveGuard }: {
         )}
         {githubLoggedIn !== null && <GitHubLoginCard loggedIn={githubLoggedIn} />}
         {(translateUsage !== null || translateUsageFailed) && <TranslateUsageCard records={translateUsage} />}
+        {/* board state too, and below the entries: a card that appears later must not push a focused entry out of view */}
+        <HaltedRefiresCard say={say} />
       </React.Fragment>
     );
   } else if (!sec) {

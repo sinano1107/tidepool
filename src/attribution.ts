@@ -155,11 +155,10 @@ function refireFailures(db: Db, { refire, target }: RefireKey): { n: number; las
     .get({ refire, target, failed: REFIRE[refire].failed, path: `$.${REFIRE[refire].target}` }) as ReturnType<typeof refireFailures>;
 }
 
-/** 撃ってよいか(ADR 0164 決定4・5): 直近の Retry 以降の失敗が3件未満で、最後の失敗から1時間以上経っている。
- *  Dismiss は打ち切り(3件)にしか打てず、その後の Retry も拒まれるので、Dismiss した対象は数えるだけで二度と撃たれない。 */
+/** 撃ってよいか(ADR 0164 決定4・5): Dismiss が無く、直近の Retry 以降の失敗が3件未満で、最後の失敗から1時間以上経っている。 */
 function refireDue(db: Db, key: RefireKey, now: Date): boolean {
-  const { n, last } = refireFailures(db, key);
-  return n < MAX_FIRED_FAILURES && (last === null || now.getTime() - Date.parse(last) >= REFIRE_INTERVAL_MS);
+  const { n, last, dismissed } = refireFailures(db, key);
+  return !dismissed && n < MAX_FIRED_FAILURES && (last === null || now.getTime() - Date.parse(last) >= REFIRE_INTERVAL_MS);
 }
 
 /** commit の前半(spec #563「commit の流れ」): open session の異議されたエントリを
@@ -380,11 +379,10 @@ export function listHaltedRefires(db: Db) {
 }
 
 /** 打ち切りの行への人間の Retry(もう3回撃つ)/ Dismiss(二度と撃たない)。追記だけの event で、打ち切りでない対象は DomainError。 */
-export function markHaltedRefire(db: Db, mark: "retried" | "dismissed", key: RefireKey, origin: "webui" | "mcp", now: Date): number {
+export function markHaltedRefire(db: Db, kind: "refire_retried" | "refire_dismissed", key: RefireKey, origin: "webui" | "mcp", now: Date): number {
   const row = listHaltedRefires(db).find((r) => r.refire === key.refire && r.target === key.target);
   if (!row) throw new DomainError(`no halted ${key.refire} refire for target ${key.target}`);
-  const payload = { kind: mark === "retried" ? ("refire_retried" as const) : ("refire_dismissed" as const), ...key };
-  return appendEvent(db, { taskId: row.task.id, workerId: HUMAN_WORKER_ID, origin, payload, at: now });
+  return appendEvent(db, { taskId: row.task.id, workerId: HUMAN_WORKER_ID, origin, payload: { kind, ...key }, at: now });
 }
 
 /** 帰責の入力を注釈 event から組む: 異議エントリ本文・steering 列・その注釈より前の decision log。 */

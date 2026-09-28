@@ -1743,12 +1743,14 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     res.json({ halted: listHaltedRefires(db) } satisfies WireContract["GET /api/settings/memory/halted-refires"]);
   });
   const haltedRefireKey = refireKeySchema.extend({ target: z.coerce.number().int().positive() });
-  for (const [verb, mark] of [["retry", "retried"], ["dismiss", "dismissed"]] as const) {
-    router.post(
-      `/settings/memory/halted-refires/:refire/:target/${verb}`,
-      validatedWrite(haltedRefireKey, (key) => ({ event_id: markHaltedRefire(db, mark, key, "webui", clock.now()) })),
-    );
-  }
+  router.post(
+    "/settings/memory/halted-refires/:refire/:target/retry",
+    validatedWrite(haltedRefireKey, (key) => ({ event_id: markHaltedRefire(db, "refire_retried", key, "webui", clock.now()) })),
+  );
+  router.post(
+    "/settings/memory/halted-refires/:refire/:target/dismiss",
+    validatedWrite(haltedRefireKey, (key) => ({ event_id: markHaltedRefire(db, "refire_dismissed", key, "webui", clock.now()) })),
+  );
   router.post(
     "/settings/memory/branches/move",
     validatedWrite(memoryBranchMoveSchema, ({ workspace, path, to_workspace, to_path }) =>
