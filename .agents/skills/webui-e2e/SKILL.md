@@ -5,10 +5,11 @@ description: Drive tidepool's WebUI (public/index.html) in a real browser with P
 
 # WebUI E2E — real-browser checks for `public/index.html`
 
-tidepool stops automated tests at the server boundary (ADR 0027). The one layer that
-leaves unguarded is the JSX React wiring compiled into `public/app.js` — no source
-type-checking. This skill drives that layer in a real browser. The agent owns this
-check now; there is no separate human acceptance step (ADR 0029).
+tidepool stops automated tests at the server boundary (ADR 0027). The React wiring in
+`webui/*.tsx` is type-checked (`npm run typecheck` runs `tsc -p webui`, ADR 0133), which
+guards the branches e2e never fires. What types cannot confirm is whether the generated
+`public/app.js` renders in a real browser and meshes with the API — this skill drives
+that. The agent owns this check now; there is no separate human acceptance step (ADR 0029).
 
 Full harness type and gotchas: `docs/webui-e2e-harness.md`. Read it before writing a
 spec — it is the source of truth; this skill is the workflow around it.
