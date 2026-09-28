@@ -7,7 +7,7 @@ import {
   InvalidAgentIconError,
   UnknownAuthorityProfileError,
 } from "./agent-create.js";
-import { type AttributionClient, attributeObjections, type BehaviorDraftClient, draftAfterCommit } from "./attribution.js";
+import { type AttributionClient, attributeObjections, type BehaviorDraftClient, type BoardCallDeps, draftAfterCommit } from "./attribution.js";
 import { boardHalts } from "./board-halt.js";
 import { quarantineCliAuthFailure } from "./cli-auth.js";
 import type { Clock } from "./clock.js";
@@ -623,6 +623,7 @@ export interface ApiRouterDeps {
   /** The Behavior candidate drafting Board call seam (issue #617), fired after a
    *  commit and after the second attribution round. Absent → nothing is drafted. */
   behaviorDraftClient?: BehaviorDraftClient;
+  containers?: BoardCallDeps["containers"];
   /** Whether an explicitly named workspace is protected (CONTEXT.md's
    *  protected workspace / ADR 0013), threaded straight to human decompose's
    *  own call into decomposeTask (issue #129) — same resource-side invariant
@@ -680,6 +681,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     translationClient,
     attributionClient,
     behaviorDraftClient,
+    containers,
     quarantineResolvers,
     taskExecutionCandidates,
     isProtectedWorkspace,
@@ -1352,6 +1354,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
         landing,
         attributionClient,
         behaviorDraftClient,
+        containers,
       },
       req.params.id,
       parsed.data.reason,
@@ -1394,6 +1397,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
           quarantineChecks,
           attributionClient,
           behaviorDraftClient,
+          containers,
           agentAdmin,
         },
         task,
@@ -1422,7 +1426,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       return;
     }
     const result = await completeThroughHumanDoor(
-      { db, pollNow, landing, attributionClient, behaviorDraftClient, workspace },
+      { db, pollNow, landing, attributionClient, behaviorDraftClient, workspace, containers },
       req.params.id,
       parsed.data.handoff,
       () => clock.now(),
@@ -1939,7 +1943,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
         const since = lastEventId(db);
         result = commitTriage(db, clock.now(), parsed.data.scratchpad, judgments);
         // ADR 0120 決定1(b): 帰責の transaction の後に起草を fire-and-forget(応答を待たせない)
-        draftAfterCommit(db, { behaviorDraftClient, workspace }, since, clock.now());
+        draftAfterCommit(db, { behaviorDraftClient, workspace, containers }, since, clock.now());
       }
       // Closing an open session re-opens pickup. A sessionless triage never
       // stopped it, so its terminal commit is not a "run now" trigger — but a

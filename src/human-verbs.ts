@@ -1,6 +1,6 @@
 import { verifyAgentRepaired } from "./agent.js";
 import { type AgentAdmin, AgentTierMismatchError, agentViewProviders } from "./agent-create.js";
-import { type AttributionClient, attributeAfterRca, type BehaviorDraftClient } from "./attribution.js";
+import { type AttributionClient, attributeAfterRca, type BehaviorDraftClient, type BoardCallDeps } from "./attribution.js";
 import { type BoardStatePath, boardStateOverlap } from "./board-state.js";
 import { type CliAuthCheck, quarantineCliAuthFailure } from "./cli-auth.js";
 import type { ContainmentCheck } from "./containment.js";
@@ -379,6 +379,7 @@ export interface SubmitAnswerDeps {
    *  RCA 子なら帰責の第2回がここで走る。 */
   attributionClient?: AttributionClient;
   behaviorDraftClient?: BehaviorDraftClient;
+  containers?: BoardCallDeps["containers"];
   /** ADR 0099 決定3: 受理された Containment quarantine の確認回答が slot を解放する
    *  唯一の門。空の再観測は containment の検査の側にある。Absent → watchdog を
    *  持たない盤面(回収を待っている slot が存在しない)。 */
@@ -611,6 +612,7 @@ export interface CancelThroughHumanDoorDeps {
    *  cancel の扉も帰責の第2回を撃つ。 */
   attributionClient?: AttributionClient;
   behaviorDraftClient?: BehaviorDraftClient;
+  containers?: BoardCallDeps["containers"];
   workspace?: WorkspaceConfig;
   defaultAgentName?: string;
   auditorName?: string;
@@ -631,6 +633,7 @@ export interface CompleteThroughHumanDoorDeps {
   /** ADR 0115 決定2 / issue #575: 最後に決着した RCA 子が人間の完了でも第2回が走る。 */
   attributionClient?: AttributionClient;
   behaviorDraftClient?: BehaviorDraftClient;
+  containers?: BoardCallDeps["containers"];
   /** 起草の scope が null の workspace で継ぐ盤面の既定(issue #617)。 */
   workspace?: WorkspaceConfig;
 }

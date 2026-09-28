@@ -362,7 +362,8 @@ export type EventPayload =
   // 異議 event(すべての注釈が記録に遡れる)。同じ entry への2回目以降は新しい event を
   // 追記し最新が有効 —— `round` がそれを言う(`initial` = commit 時、`after_rca` = その
   // タスクの RCA 子が決着した後に findings を証拠に `uncertain` を問い直した回、#575)。
-  // Board call を撃てなかった / 失敗した entry も `uncertain` + 理由の evidence で残る。
+  // 初回は Board call を撃てなかった / 失敗した entry も `uncertain` + 理由の evidence で残る。
+  // 第2回は判断が返ったときだけ書く(失敗は `objection_attribution_failed`、ADR 0164 決定3)。
   | {
       kind: "objection_attributed";
       entry_id: number;
@@ -454,9 +455,13 @@ export type EventPayload =
   // ADR 0120 決定2 / issue #618: 盤面が主題の meta-review を登録した(登録した task に帰属)。
   // material_watermark = 登録時の events の最大 id —— 次の周期の材料はこれより後の event。
   | { kind: "meta_review_registered"; subject: "memory" | "routing"; material_watermark: number }
-  // spec #615 A / issue #617: Board call の Behavior candidate 起草が撃てなかった / 失敗した
-  // (異議されたタスクに帰属)。店の event ではなく rebuild は再生しない。
-  | { kind: "memory_draft_failed"; entry_id: number; round: "initial" | "after_rca"; reason: string };
+  // spec #615 A / issue #617: Board call の Behavior candidate 起草が撃って失敗した(異議されたタスクに帰属)。
+  // 撃てなかった回は書かない(ADR 0164 決定3)。`attribution_event_id` は起草の出所になるはずだった帰責 ——
+  // 撃ち直しの回数と間隔はこれで数える。店の event ではなく rebuild は再生しない。
+  | { kind: "memory_draft_failed"; entry_id: number; round: "initial" | "after_rca"; attribution_event_id: number; reason: string }
+  // ADR 0164 決定3 / issue #1065: 帰責の第2回の Board call が撃って失敗した(異議されたタスクに帰属)。
+  // 判断ではないので `objection_attributed` には書かない —— 撃ち直しの回数と間隔は entry ごとにこれで数える。
+  | { kind: "objection_attribution_failed"; entry_id: number; reason: string };
 
 export type EventKind = EventPayload["kind"];
 
