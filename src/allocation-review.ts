@@ -102,7 +102,6 @@ export function allocationTargets(db: Db): AllocationTarget[] {
 /** 対象1件の入力: verdict は review の完了 event の result、findings は review の handoff doc、実行設定は固定した session の
  *  spawn、usage はその session の `worker_exited`、行動列はその session の Precedent のマーカー。 */
 export function allocationInput(db: Db, target: AllocationTarget): AllocationReviewInput {
-  const completed = getEvent(db, target.completed_event_id)!.payload as Extract<EventPayload, { kind: "task_completed" }>;
   const exited = listEvents(db, target.reviewed_task_id)
     .map((e) => e.payload)
     .find(
@@ -110,7 +109,7 @@ export function allocationInput(db: Db, target: AllocationTarget): AllocationRev
         p.kind === "worker_exited" && p.worker_spawned_event_id === target.spawned_event_id,
     );
   return buildAllocationReviewInput({
-    verdict: completed.result,
+    verdict: (getEvent(db, target.completed_event_id)!.payload as Extract<EventPayload, { kind: "task_completed" }>).result,
     findings: getTask(db, target.review_task_id)!.handoff_doc,
     requestedTier: getTask(db, target.reviewed_task_id)!.tier,
     spawned: getEvent(db, target.spawned_event_id)!.payload as Extract<EventPayload, { kind: "worker_spawned" }>,

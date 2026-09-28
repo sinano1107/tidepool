@@ -81,7 +81,7 @@ export function listAllocations(db: Db, readerTaskId: string, input: ReadWindow)
     const group = groups.get(key) ?? { source_tier: episode.source.tier, agent: episode.agent, allocation: p.allocation, cause: p.cause, count: 0, judged_by_same_model: 0 };
     group.count += 1;
     // judge は表の行の綴り(alias 可)、セルは観測された具体 id —— 表の照合と同じ部分一致
-    if (p.judge.provider ===episode.cell.provider && windowMatchesModel(p.judge.model, episode.cell.model)) group.judged_by_same_model += 1;
+    if (p.judge.provider === episode.cell.provider && windowMatchesModel(p.judge.model, episode.cell.model)) group.judged_by_same_model += 1;
     groups.set(key, group);
   }
   const { rows, truncated } = paged([...groups.values()], input.page);
