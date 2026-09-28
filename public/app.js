@@ -378,7 +378,7 @@ function TpQuestionCard({ q, answer, onAnswer, locked = false, onTranslate }) {
       locked,
       onChange: (v) => setItemAnswer(i, v),
       translated: translatedItems ? translatedItems[i] : null,
-      disabled: comment.trim() ? [] : q.needsComment ?? []
+      disabled: comment.trim() ? [] : q.needsComment
     }
   ))));
 }

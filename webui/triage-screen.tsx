@@ -401,7 +401,7 @@ function TpQuestionCard({ q, answer, onAnswer, locked = false, onTranslate }: {
       <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
         {items.map((item, i) => (
           <TpQuestionItemPicker key={i} item={item} value={draft[i]} locked={locked} onChange={(v) => setItemAnswer(i, v)}
-            translated={translatedItems ? translatedItems[i] : null} disabled={comment.trim() ? [] : (q.needsComment ?? [])} />
+            translated={translatedItems ? translatedItems[i] : null} disabled={comment.trim() ? [] : q.needsComment} />
         ))}
       </div>
     </Card>
