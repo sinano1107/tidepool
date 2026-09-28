@@ -1,5 +1,6 @@
 import { afterEach, expect, it } from "vitest";
 import type { Cause } from "../src/cause.js";
+import { appendEvent } from "../src/events.js";
 import { registerTask } from "../src/tasks.js";
 import { FakeAttributionClient } from "./fakes.js";
 import {
@@ -121,10 +122,19 @@ it("学習に向かない cause・人間登録の task_ambiguity / missing_infor
   const attributionClient = new FakeAttributionClient();
   t = await bootTidepool({ attributionClient });
   const [mixed, other]: any[] = await objectedTasks(attributionClient, [
-    { title: "mixed", causes: ["capability", "uncertain", "requirement_change", "environment", "task_ambiguity", "missing_information"] },
+    { title: "mixed", causes: ["capability", "uncertain", "requirement_change", "environment", "task_ambiguity", "missing_information", "memory"] },
     { title: "other", causes: ["capability"] },
   ]);
-  const [capability, uncertain, requirementChange, environment, taskAmbiguity, missingInformation] = mixed.entries.map((e: any) => e.id);
+  const [capability, uncertain, requirementChange, environment, taskAmbiguity, missingInformation, memory] = mixed.entries.map((e: any) => e.id);
+  // setup のみ: harness の worker は session を開かず読んだ記憶が無いので、Fake の memory は門で uncertain に倒れる。
+  // 門を通った memory の帰責を最新として足す
+  appendEvent(t.db, {
+    taskId: mixed.task.id,
+    workerId: "tidepool",
+    origin: "board",
+    at: t.clock.now(),
+    payload: { kind: "objection_attributed", entry_id: memory, objection_event_ids: [], cause: "memory", evidence: "followed a wrong note", entries: [1], round: "after_rca" },
+  });
   const completion = (await api(t.baseUrl, "GET", `/api/tasks/${mixed.task.id}/events`)).json.find((e: any) => e.kind === "task_completed").id;
   const repair = mixed.kids.find((x: any) => x.title === "repair: mixed");
   await runNow(repair.id);
@@ -139,6 +149,7 @@ it("学習に向かない cause・人間登録の task_ambiguity / missing_infor
     [{ entry_id: uncertain }, "the entry's cause is uncertain: nothing to learn from it"],
     [{ entry_id: requirementChange }, "the entry's cause is requirement_change: nothing to learn from it"],
     [{ entry_id: environment }, "the entry's cause is environment: nothing to learn from it"],
+    [{ entry_id: memory }, "the entry's cause is memory: nothing to learn from it"],
     [{ entry_id: taskAmbiguity }, "the task was not registered by an agent: there is no agent to address a behavior to"],
     [{ entry_id: missingInformation, as: "behavior" }, "the task was not registered by an agent: there is no agent to address a behavior to"],
     [{ entry_id: missingInformation }, 'as ("behavior" or "knowledge") is required for a missing_information entry and only for it'],

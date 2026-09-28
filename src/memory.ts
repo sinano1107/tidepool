@@ -1352,6 +1352,7 @@ export function listPrecedents(
         displayed: m.displayed,
         objections: m.objections,
         cause: m.cause,
+        entries: m.entries,
         completed: episode.completed,
         pr_merged: episode.prMerged,
         entries_read: entriesReadBefore(episode, events, m.eventId!),

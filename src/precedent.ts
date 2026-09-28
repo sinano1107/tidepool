@@ -562,7 +562,7 @@ export function entriesSeenBefore(
 /** 読み出し時に結ぶ outcome を持つマーカー。表示済み・異議は投影のあとに届く
  *  ので派生表には焼かない(ADR 0083 決定7: 正の信号は「表示済み・異議なし」から
  *  機械導出する — 分母は Displayed)。 */
-type DecisionOutcome = Pick<StoredMarker, "line" | "displayed" | "objections" | "cause">;
+type DecisionOutcome = Pick<StoredMarker, "line" | "displayed" | "objections" | "cause" | "entries">;
 
 export interface StoredMarker extends EpisodeMarker {
   /** decision の文言。transcript と events が正本なので、読み出し時に引く。 */
@@ -570,6 +570,8 @@ export interface StoredMarker extends EpisodeMarker {
   displayed: boolean;
   objections: string[];
   cause: Cause | null;
+  /** 最新の帰責が `memory` のとき名指された entry の id 列(ADR 0166 決定5)。他は null。 */
+  entries: number[] | null;
 }
 
 export interface StoredEpisode extends Omit<Episode, "markers"> {
@@ -682,7 +684,7 @@ export function episodeMarkerKinds(db: Db, workerSpawnedEventId: number): Marker
 
 /** decision 以外のマーカー、および events から何も見つからなかった decision の
  *  outcome。`objections` は積まれるので、共有せず毎回新しく作る。 */
-const noOutcome = (): DecisionOutcome => ({ line: null, displayed: false, objections: [], cause: null });
+const noOutcome = (): DecisionOutcome => ({ line: null, displayed: false, objections: [], cause: null, entries: null });
 
 /** decision マーカーの outcome — 表示済み(異議の分母)と異議の本文。`listLog` と
  *  同じ形で `entry_id` で引く: エントリを指す id であって task_id ではないので、
@@ -703,17 +705,20 @@ function decisionOutcomes(db: Db, markerRows: MarkerRow[]): Map<number, Decision
   for (const row of db
     .prepare(
       `SELECT kind, json_extract(payload, '$.entry_id') AS entry_id,
-              json_extract(payload, '$.cause') AS cause
+              json_extract(payload, '$.cause') AS cause, json_extract(payload, '$.entries') AS entries
          FROM events
         WHERE kind IN ('log_entry_displayed', 'objection_attributed')
           AND json_extract(payload, '$.entry_id') IN (${placeholders})
         ORDER BY id`,
     )
-    .all(...ids) as Array<{ kind: string; entry_id: number; cause: Cause | null }>) {
+    .all(...ids) as Array<{ kind: string; entry_id: number; cause: Cause | null; entries: string | null }>) {
     const entry = out.get(row.entry_id);
     if (!entry) continue;
     if (row.kind === "log_entry_displayed") entry.displayed = true;
-    else if (row.cause !== null) entry.cause = row.cause;
+    else if (row.cause !== null) {
+      entry.cause = row.cause;
+      entry.entries = JSON.parse(row.entries ?? "null") as number[] | null;
+    }
   }
   return out;
 }

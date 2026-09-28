@@ -7,11 +7,16 @@ const kindColors = {
   objection: 'var(--coral-4)',
 };
 
-export function LogEntry({ entry = {}, onObject, onExpand, active = false, style }) {
-  const { time, taskId, agent, agentIcon, human = false, kind = 'decision', text, objection, bundledObjection, cause, unread = false } = entry;
+export function LogEntry({ entry = {}, onObject, onExpand, onOpenMemoryEntry, active = false, style }) {
+  const { time, taskId, agent, agentIcon, human = false, kind = 'decision', text, objection, bundledObjection, cause, causeEntries = [], unread = false } = entry;
   const completion = kind === 'completion';
   const clickable = !!onObject;
   const causeText = cause === 'uncertain' ? 'cause: not yet determined (uncertain)' : cause ? `cause: ${cause}` : null;
+  // memory の帰責は名指された entry へのリンクを添える —— 行の Object に泡立たせない
+  const causeLinks = causeEntries.map((id) => (
+    <a key={id} href={`#memory-entry-${id}`} onClick={(e) => { e.preventDefault(); e.stopPropagation(); onOpenMemoryEntry?.(id); }}
+      style={{ marginLeft: 6, color: 'var(--tide-4)' }}>#{id}</a>
+  ));
   return (
     <div
       className="tp-log-entry"
@@ -30,7 +35,7 @@ export function LogEntry({ entry = {}, onObject, onExpand, active = false, style
         onClick={clickable ? onObject : undefined}
         role={clickable ? 'button' : undefined}
         tabIndex={clickable ? 0 : undefined}
-        onKeyDown={clickable ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onObject(); } } : undefined}
+        onKeyDown={clickable ? (e) => { if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); onObject(); } } : undefined}
         style={{ display: 'flex', alignItems: 'flex-start', gap: 10, flex: 1, minWidth: 0 }}
       >
         <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', paddingTop: 2, flexShrink: 0 }}>{time}</span>
@@ -44,7 +49,7 @@ export function LogEntry({ entry = {}, onObject, onExpand, active = false, style
           {objection && (
             <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, marginTop: 6, padding: '6px 10px', background: 'var(--coral-1)', borderRadius: 'var(--radius-xs)', fontSize: 'var(--text-xs)', color: 'var(--coral-4)', whiteSpace: 'pre-wrap' }}>
               <span style={{ flex: 1 }}>objection: {objection}</span>
-              {causeText && <span style={{ color: 'var(--text-muted)', flexShrink: 0 }}>{causeText}</span>}
+              {causeText && <span style={{ color: 'var(--text-muted)', flexShrink: 0 }}>{causeText}{causeLinks}</span>}
             </div>
           )}
           {bundledObjection && (
@@ -53,7 +58,7 @@ export function LogEntry({ entry = {}, onObject, onExpand, active = false, style
                 <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', textTransform: 'uppercase', letterSpacing: '0.06em', marginRight: 6 }}>bundled</span>
                 {bundledObjection}
               </span>
-              {!objection && causeText && <span style={{ flexShrink: 0 }}>{causeText}</span>}
+              {!objection && causeText && <span style={{ flexShrink: 0 }}>{causeText}{causeLinks}</span>}
             </div>
           )}
         </div>

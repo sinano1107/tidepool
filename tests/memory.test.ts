@@ -143,6 +143,7 @@ it.each<[string, (ids: { entry: number; other: number }) => Omit<Invalidation, "
   ["path_moved に後継 id が無い", () => ({ reason: "path_moved" }), /successor/],
   ["後継 id が盤面に無い", () => ({ reason: "path_moved", successor_id: 999 }), /no memory entry 999/],
   ["理由コードが語彙に無い", () => ({ reason: "wrong" as never }), /unknown invalidation reason/],
+  ["理由コードが cause の memory(ADR 0166 決定7)", () => ({ reason: "memory" as never }), /unknown invalidation reason/],
   ["後継 id が自分自身", ({ entry }) => ({ reason: "superseded", successor_id: entry }), /own successor/],
   ["cause の理由コードに後継 id がある", ({ other }) => ({ reason: "capability", successor_id: other }), /successor/],
 ])("%s無効化は domain error で拒まれ、エントリは残る", (_, input, message) => {
@@ -640,6 +641,23 @@ it("決定ログの各エントリは、それを含む worker session の worke
   ]);
 });
 
+it("決定ログの各エントリは最新の帰責の entries を持つ —— memory なら名指された id 列、他の cause と帰責の無いエントリは null(ADR 0166 決定6)", () => {
+  const { db, task } = board();
+  const [followed, overturned, plain] = ["followed the note", "followed then overturned", "no objection"].map((line) => logDecision(db, task, line, "deckhand", at));
+  // setup のみ: 帰責の event(同じ entry への追記は最新が有効)
+  const attribute = (entry_id: number, cause: "memory" | "capability", entries: number[] | null) =>
+    appendEvent(db, { taskId: task.id, workerId: "tidepool", origin: "board", at, payload: { kind: "objection_attributed", entry_id, objection_event_ids: [], cause, evidence: "e", entries, round: "initial" } });
+  attribute(followed!, "memory", [41, 42]);
+  attribute(overturned!, "memory", [41]);
+  attribute(overturned!, "capability", null);
+
+  expect(listLog(db).map((e) => [e.id, e.cause, e.entries])).toEqual([
+    [followed, "memory", [41, 42]],
+    [overturned, "capability", null],
+    [plain, null, null],
+  ]);
+});
+
 it("人間が書く定義の原文は title = text で持つ", () => {
   const { db } = board();
   defineMemoryBranch(db, humanEntryInput(db, { workspace: "tidepool", path: "build", text: definition.text, original_text: "ビルドとテストの手順" }), "webui", at);
@@ -945,7 +963,7 @@ it("RCA が起草した candidate(出所は帰責 event)を修正値つきで ap
     taskId: task.id,
     workerId: "tidepool",
     origin: "board",
-    payload: { kind: "objection_attributed", entry_id: decision, objection_event_ids: [], cause: "preference", evidence: "e", round: "after_rca" },
+    payload: { kind: "objection_attributed", entry_id: decision, objection_event_ids: [], cause: "preference", evidence: "e", entries: null, round: "after_rca" },
     at,
   });
   const drafted = createBehaviorCandidate(db, { ...knowledge, addressee: null, source: { event_id: attributed }, author: { activity: "rca", name: "auditor" } }, "board", at).entry_id;

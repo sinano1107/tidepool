@@ -861,6 +861,7 @@ function registerMetaReviewVerbs(server: McpServer, deps: McpDeps, attributedTas
       description:
         "List objected decisions from past worker sessions: the decision line, objections and their attributed cause, " +
         "the session outcome, and the memory entry ids read (entries_read) and seen (entries_seen) before the decision. " +
+        "When the cause is memory, entries names the ids of the entries the worker read and followed that were wrong; otherwise it is null. " +
         "Defaults to objections since the previous meta-review of your subject; pass since_watermark (an event id) to look further back.",
       inputSchema: { since_watermark: z.number().int().min(0).optional(), page },
     },

@@ -40,6 +40,8 @@ it("judge は表の行の model / effort をピン留めし、空のツール面
   // the input rides in the prompt — the verdict and the setting under judgment
   expect(args[1]).toContain("accepted");
   expect(args[1]).toContain('"model": "sonnet"');
+  // cause の memory は配分評価の入力に読んだ記憶が無いので載せない(ADR 0166 決定1)
+  expect(args[1]).toContain('"cause" (one of capability / task_ambiguity / missing_information / environment / preference / requirement_change / uncertain —');
 });
 
 it("語彙の外の allocation / cause や JSON でない応答は reject する(未検証の model 出力を events に載せない)", async () => {

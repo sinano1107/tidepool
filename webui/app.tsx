@@ -283,6 +283,7 @@ function mapData(
     handoffPresent: e.payload.kind === 'task_completed' && !!e.payload.handoff_present,
     workspace: e.workspace ?? null,
     cause: e.cause ?? undefined,
+    causeEntries: e.entries ?? undefined,
     pendingObjections: e.objections.filter((o) => o.session_id === openSessionId).map((o) => o.comment),
     bundledObjections: e.objections.filter((o) => o.session_id !== openSessionId).map((o) => o.comment),
   }));
@@ -800,6 +801,8 @@ function App() {
   const { Toast, Button, IdChip } = window.TidepoolDesignSystem_8a0ead;
   const [data, setData] = React.useState<AppData | null>(null);
   const [tab, setTabRaw] = React.useState('triage');
+  // a memory attribution's entry link (ADR 0166 決定6): settings opens on the memory list at that entry
+  const [memoryFocus, setMemoryFocus] = React.useState<number | null>(null);
   const [tabDir, setTabDir] = React.useState('right');
   const [toast, setToast] = React.useState<AppToast | null>(null);
   const [wash, setWash] = React.useState<{ label: string; emoji?: string } | null>(null);
@@ -1321,7 +1324,8 @@ function App() {
         {tab === 'triage' && (data.questions.length || unreadCount || data.scratchpad.length || data.triageActive
           ? <TriageScreen data={data} onCommit={commitTriage} loadHandoff={loadHandoff}
               onAnswer={answerNow} onObject={objectNow} onScratchAdd={scratchAdd} onDisplayed={reportDisplayed} loadPreview={loadPreview} loadLanding={loadLanding}
-              onTranslate={onTranslateProp} />
+              onTranslate={onTranslateProp}
+              onOpenMemoryEntry={(id: number) => { setMemoryFocus(id); setTab('settings'); }} />
           : <div style={{ padding: '64px 24px', textAlign: 'center' }}>
               <div style={{ fontSize: 28, marginBottom: 6 }}>🐚</div>
               <div style={{ fontFamily: 'var(--font-display)', fontStyle: 'italic', fontSize: 'var(--text-2xl)', color: 'var(--tide-5)', marginBottom: 8 }}>Low tide. Go enjoy your coffee.</div>
@@ -1330,7 +1334,7 @@ function App() {
         {tab === 'board' && <BoardScreen data={data} onOpenTask={openTask} />}
         {tab === 'queue' && <QueueScreen data={data} paused={data.paused} onTogglePause={togglePause} spendDown={data.spendDown} onSpendDown={setSpendDown} onFront={moveFront} onDoneHuman={doneHuman} onReorder={reorder} />}
         {tab === 'register' && <RegisterScreen onRegister={register} />}
-        {tab === 'settings' && <SettingsScreen say={say} registerLeaveGuard={(fn: ((move: () => void) => boolean) | null) => { leaveGuard.current = fn; }} />}
+        {tab === 'settings' && <SettingsScreen say={say} memoryFocus={memoryFocus} registerLeaveGuard={(fn: ((move: () => void) => boolean) | null) => { leaveGuard.current = fn; }} />}
         </div>
       </main>
 
@@ -1389,7 +1393,7 @@ function App() {
         {tabs.map((t) => {
           const active = tab === t.key;
           return (
-            <button key={t.key} onClick={() => setTab(t.key)}
+            <button key={t.key} onClick={() => { setMemoryFocus(null); setTab(t.key); }}
               style={{
                 flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3,
                 padding: '10px 0 12px', minHeight: 56, background: 'none', border: 'none', cursor: 'pointer',

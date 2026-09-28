@@ -1,8 +1,12 @@
 import { afterEach, expect, it } from "vitest";
+import { attributeAfterRca, attributeObjections, type GatedJudgment } from "../src/attribution.js";
 import type { Cause } from "../src/cause.js";
-import { registerTask } from "../src/tasks.js";
+import { openDb } from "../src/db.js";
+import { appendEvent, listEvents } from "../src/events.js";
+import { readMemory, recordKnowledge, searchMemory } from "../src/memory.js";
+import { cancelTaskDirectly, getTask, listChildren, logDecision, registerTask } from "../src/tasks.js";
 import { reportProviderUsage } from "../src/throttle.js";
-import { TRIAGE_TIMEOUT } from "../src/triage.js";
+import { commitTriage, raiseObjection, startTriage, TRIAGE_TIMEOUT } from "../src/triage.js";
 import { FakeAttributionClient, FakeBehaviorDraftClient } from "./fakes.js";
 import {
   api,
@@ -70,6 +74,7 @@ it("好みの異議(preference)だけの commit では修理だけが立ち、�
         objection_event_ids: [objectionId],
         cause: "preference",
         evidence: "the steering asks for a different spelling of the same flag",
+        entries: null,
         round: "initial",
       },
     ],
@@ -196,6 +201,7 @@ it("Board call は異議されたエントリ本文・steering 列・当時の d
         entry: "chose plan B",
         steering: ["plan A was the agreed plan", "and plan B breaks the fixtures"],
         decision_log: ["chose plan B", "dropped the cache layer", "completion report: shipped plan B"],
+        memory_read: [],
       },
       // the board's own frontier row (seed) pins the judge, never the worker's model
       setting: expect.objectContaining({ model: "fable", effort: "high" }),
@@ -308,6 +314,7 @@ it("uncertain の entry は RCA 子がすべて決着した後に1度だけ第2�
       objection_event_ids: [expect.any(Number)],
       cause: "capability",
       evidence: "the self RCA found the criteria named the fixtures",
+      entries: null,
       round: "after_rca",
     },
   ]);
@@ -316,6 +323,7 @@ it("uncertain の entry は RCA 子がすべて決着した後に1度だけ第2�
     entry: "skipped the fixtures",
     steering: ["bring the fixtures back"],
     decision_log: ["skipped the fixtures", "completion report: done as specified"],
+    memory_read: [],
     rca_findings: ["the criteria named the fixtures explicitly", "completion report: fixtures were required"],
   });
 });
@@ -461,6 +469,7 @@ it.each([
           entry: "skipped the fixtures",
           steering: ["always keep the fixtures"],
           decision_log: ["skipped the fixtures", "completion report: done as specified"],
+          memory_read: [],
           index: expect.stringContaining("testing/ — how tests are run"),
         },
         setting: expect.objectContaining({ model: "fable", effort: "high" }),
@@ -589,6 +598,7 @@ it("起草の Board call の失敗は memory_draft_failed を残し、帰責の 
         objection_event_ids: [expect.any(Number)],
         cause: "preference",
         evidence: "taste",
+        entries: null,
         round: "initial",
       },
     ],
@@ -895,4 +905,119 @@ it("第2回の帰責が確定した entry は、同じタスクに新しい RCA 
   await t.clock.advance(HOUR);
 
   expect(s.attributionClient.calls.slice(2).map((c) => c.input.entry_id)).toEqual([second.id, second.id]);
+});
+
+// 読んだ記憶への帰責(ADR 0166 / issue #1045)—— ドメイン層
+
+const at = new Date("2026-09-28T00:00:00.000Z");
+
+/** worker session を event で開き、記憶を読ませ、decision に異議を打つまでを1つの盤面で組む(harness の worker は
+ *  worker_spawned を書かないので、session の開始は setup として event を直接足す)。 */
+function memoryBoard() {
+  const db = openDb(":memory:");
+  const task = registerTask(db, { type: "work", title: "t", purpose: "p", completion_criteria: "c" }, at);
+  const reader = { taskId: task.id, scope: null, agent: "deckhand" };
+  const spawn = () =>
+    appendEvent(db, {
+      taskId: task.id,
+      workerId: "deckhand",
+      origin: "board",
+      at,
+      payload: { kind: "worker_spawned", registry_commit: "c", definition_version: "1", advisor: null, provider: "anthropic", model: "opus", effort: "high", source: { tier: "task", provider: "only" }, harness: "claude-code", cli_version: "1" },
+    });
+  const knowledge = (title: string) =>
+    recordKnowledge(db, { scope: null, path: "build", title, text: `${title}.`, source: { commit: "0a46a46" }, author: { activity: "worker_verb", name: "deckhand" } }, "worker", at).entry_id;
+  const read = (id: number) => readMemory(db, reader, { ids: [id] }, at);
+  const decide = (line: string) => logDecision(db, task, line, "deckhand", at);
+  const objectTo = (entryId: number) => {
+    const session = startTriage(db, at);
+    raiseObjection(db, entryId, "the note was wrong", at);
+    return session.id;
+  };
+  return { db, task, reader, spawn, knowledge, read, decide, objectTo };
+}
+
+it("帰責の入力の読んだ記憶は、異議された decision と同じ worker session でそれより前に read_memory が返した entry だけ —— 前の session・他の verb・decision より後の pull は入らない", async () => {
+  const b = memoryBoard();
+  const previous = b.knowledge("Previous session note");
+  const mine = b.knowledge("Squash before merge");
+  const searched = b.knowledge("Searched note");
+  const later = b.knowledge("Later note");
+  b.spawn();
+  b.read(previous);
+  b.spawn();
+  b.read(mine);
+  expect(searchMemory(b.db, b.reader, { query: "Searched" }, at).results.map((r) => r.id)).toEqual([searched]);
+  const decision = b.decide("squashed the branch");
+  b.read(later);
+  const client = new FakeAttributionClient();
+
+  await attributeObjections(b.db, client, b.objectTo(decision));
+
+  expect(client.calls.map((c) => c.input.memory_read)).toEqual([
+    [{ id: mine, kind: "knowledge", title: "Squash before merge", text: "Squash before merge." }],
+  ]);
+});
+
+/** 同じ session で `read` を読んでから decision を書き、異議を打つ(`unread` は読まずに店にあるだけの entry)。 */
+function objectedAfterReading() {
+  const b = memoryBoard();
+  const read = b.knowledge("Squash before merge");
+  const unread = b.knowledge("Rebase before merge");
+  b.spawn();
+  b.read(read);
+  const decision = b.decide("squashed the branch");
+  return { ...b, read, unread, decision, sessionId: b.objectTo(decision) };
+}
+
+const attributed = (db: ReturnType<typeof openDb>, taskId: string) =>
+  listEvents(db, taskId).flatMap((e) => (e.payload.kind === "objection_attributed" ? [e.payload] : []));
+
+it.each<[string, (ids: { read: number; unread: number }) => { cause: Cause; entries?: number[] }, string]>([
+  ["読んでいない entry を名指す memory", ({ read, unread }) => ({ cause: "memory", entries: [read, unread] }), "was not read before the decision"],
+  ["entries が空の memory", () => ({ cause: "memory", entries: [] }), "names no entry"],
+  ["entries の無い memory", () => ({ cause: "memory" }), "names no entry"],
+  ["entries つきの capability", ({ read }) => ({ cause: "capability", entries: [read] }), "only for cause memory"],
+])("初回: %s は門で uncertain に倒れ、evidence が理由を言い、entries は null", async (_, judgment, reason) => {
+  const b = objectedAfterReading();
+  const client = new FakeAttributionClient();
+  client.scriptJudgment(b.decision, { ...judgment(b), evidence: "followed the note" });
+
+  commitTriage(b.db, at, [], await attributeObjections(b.db, client, b.sessionId));
+
+  expect(attributed(b.db, b.task.id)).toEqual([
+    expect.objectContaining({ cause: "uncertain", evidence: expect.stringContaining(reason), entries: null }),
+  ]);
+});
+
+it("初回: 読んだ集合の中の entry を名指す memory は entries ごと帰責に載り、memory だけの commit は修理だけが立つ(RCA も candidate も立たない)", async () => {
+  const b = objectedAfterReading();
+  const client = new FakeAttributionClient();
+  client.scriptJudgment(b.decision, { cause: "memory", evidence: "followed the squash note", entries: [b.read] });
+
+  commitTriage(b.db, at, [], await attributeObjections(b.db, client, b.sessionId));
+
+  expect(attributed(b.db, b.task.id)).toEqual([
+    { kind: "objection_attributed", entry_id: b.decision, objection_event_ids: [expect.any(Number)], cause: "memory", evidence: "followed the squash note", entries: [b.read], round: "initial" },
+  ]);
+  expect(listChildren(b.db, b.task.id).map((c) => c.title)).toEqual(["repair: t"]);
+});
+
+it.each<[string, (ids: { read: number; unread: number }) => number[], Partial<GatedJudgment>]>([
+  ["読んだ集合の中の entry を名指す memory は entries ごと載り、candidate は起草されない", ({ read }) => [read], { cause: "memory", evidence: "the RCA traced it to the note" }],
+  ["読んでいない entry を名指す memory は uncertain に倒れる", ({ unread }) => [unread], { cause: "uncertain", evidence: expect.stringContaining("was not read before the decision"), entries: null }],
+])("第2回: %s", async (_, entries, expected) => {
+  const b = objectedAfterReading();
+  const client = new FakeAttributionClient();
+  commitTriage(b.db, at, [], await attributeObjections(b.db, client, b.sessionId));
+  client.scriptJudgment(b.decision, { cause: "memory", evidence: "the RCA traced it to the note", entries: entries(b) });
+  const drafter = new FakeBehaviorDraftClient();
+  const rca = listChildren(b.db, b.task.id).filter((c) => c.title.startsWith("rca ("));
+  for (const r of rca) cancelTaskDirectly(b.db, r, null, at, {});
+
+  await attributeAfterRca(b.db, { attributionClient: client, behaviorDraftClient: drafter, workspace: { name: "charts" } }, getTask(b.db, rca.at(-1)!.id)!, at);
+
+  expect(attributed(b.db, b.task.id).map((p) => p.round)).toEqual(["initial", "after_rca"]);
+  expect(attributed(b.db, b.task.id)[1]).toMatchObject({ entries: entries(b), ...expected });
+  expect(drafter.calls).toEqual([]);
 });
