@@ -554,11 +554,7 @@ export const isDecisionLogEntry = (e: EventRow | undefined): e is DecisionLogEnt
  *  session, if any); `at` and who raised it are deliberately left out
  *  (issue #371). The latest attribution `cause` (and its `entries`, ADR 0166)
  *  is joined at read time from append-only `objection_attributed` events (ADR 0115). */
-export interface LogEntry extends EventRow {
-  /** every HUMAN_FACING_KIND is task-scoped, so the join below never leaves this null */
-  task_id: string;
-  /** 下の SQL が HUMAN_FACING_KINDS に絞っている */
-  payload: Extract<EventPayload, { kind: (typeof HUMAN_FACING_KINDS)[number] }>;
+export interface LogEntry extends DecisionLogEntry {
   workspace: string | null;
   objections: { comment: string; session_id: number }[];
   cause: Cause | null;
@@ -636,14 +632,14 @@ export function advanceLogCursor(db: Db, lastRead: number): number {
  *  scoped to a single task_id — the primary resource a review's RCA reads
  *  ("自分は何をどの順で判断したか"). No summarizing middle layer: every
  *  human-facing entry, verbatim. */
-export function taskDecisionLog(db: Db, taskId: string): EventRow[] {
+export function taskDecisionLog(db: Db, taskId: string): DecisionLogEntry[] {
   const placeholders = HUMAN_FACING_KINDS.map(() => "?").join(", ");
   const rows = db
     .prepare(
       `SELECT * FROM events WHERE task_id = ? AND kind IN (${placeholders}) ORDER BY id`,
     )
-    .all(taskId, ...HUMAN_FACING_KINDS) as Array<Omit<EventRow, "payload"> & { payload: string }>;
-  return rows.map((r) => ({ ...r, payload: JSON.parse(r.payload) as EventPayload }));
+    .all(taskId, ...HUMAN_FACING_KINDS) as Array<Omit<DecisionLogEntry, "payload"> & { payload: string }>;
+  return rows.map((r) => ({ ...r, payload: JSON.parse(r.payload) as LogEntry["payload"] }));
 }
 
 export function getEvent(db: Db, id: number): EventRow | undefined {

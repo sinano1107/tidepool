@@ -7,7 +7,7 @@ import { sessionSpawnOf, sessionWindow } from "./precedent.js";
 import type { ProcessContainers } from "./process-container.js";
 import { BOARD_WORKER_ID, DomainError, getRegistrant, getTask, HUMAN_WORKER_ID, listChildren, type Task } from "./tasks.js";
 import { isAnthropicBoardCallBlocked } from "./throttle.js";
-import { entryObjections, listObjectedEntries, objectedEntryText, objectionsById } from "./triage.js";
+import { entryObjections, listObjectedEntries, objectedEntryText, objectionsById, requireLogEntry } from "./triage.js";
 
 /** Board call に渡す入力(ADR 0115 決定2): 異議されたエントリ本文・その steering 列・
  *  当時の decision log(異議されたタスクの decision_logged と完了エントリ)。agent
@@ -334,7 +334,7 @@ function objectionInput(
   db: Db,
   attribution: { id: number; entry_id: number; objection_event_ids: number[] },
 ): AttributionInput {
-  const entry = attributedEntry(db, attribution.entry_id);
+  const entry = requireLogEntry(db, attribution.entry_id);
   return {
     entry_id: entry.id,
     entry: objectedEntryText(entry),
@@ -342,13 +342,6 @@ function objectionInput(
     decision_log: decisionLogText(db, entry.task_id, attribution.id),
     memory_read: memoryRead(db, entry),
   };
-}
-
-/** 帰責の entry_id は書き込み時に decision-log entry と保証されている —— 違えば不変条件違反として投げる。 */
-function attributedEntry(db: Db, entryId: number): DecisionLogEntry {
-  const entry = getEvent(db, entryId);
-  if (!isDecisionLogEntry(entry)) throw new Error(`attributed event ${entryId} is not a decision-log entry`);
-  return entry;
 }
 
 /** 異議された entry を含む worker session で、その entry より前に read_memory が返した記憶(ADR 0166 決定2)。
@@ -379,7 +372,7 @@ function memoryRead(db: Db, entry: DecisionLogEntry): AttributionInput["memory_r
 export async function draftBehaviorCandidate(db: Db, deps: BoardCallDeps, attribution: Attribution, now: Date): Promise<void> {
   const { cause, round, entry_id } = attribution;
   const drafts = round === "initial" ? cause === "preference" : LEARNING_CAUSES.includes(cause);
-  const entry = attributedEntry(db, entry_id);
+  const entry = requireLogEntry(db, entry_id);
   if (!deps.behaviorDraftClient || !drafts || isHumanEntry(entry)) return;
   const taskId = entry.task_id;
   // preference の宛先は Board call が選ぶ。他の cause は導出し、登録者が agent でなければ起草しない
@@ -439,7 +432,6 @@ export async function draftBehaviorCandidate(db: Db, deps: BoardCallDeps, attrib
  *  より前のものだけ = 当時の log)。 */
 function decisionLogText(db: Db, taskId: string, before = Number.POSITIVE_INFINITY): string[] {
   return taskDecisionLog(db, taskId)
-    .filter(isDecisionLogEntry)
     .filter((e) => e.id < before)
     .map(objectedEntryText);
 }

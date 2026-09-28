@@ -446,7 +446,7 @@ export function consumePendingDump(db: Db, id: number): void {
 }
 
 /** An event id that must point at a decision-log entry (a human-facing kind). */
-function requireLogEntry(db: Db, entryId: number): DecisionLogEntry {
+export function requireLogEntry(db: Db, entryId: number): DecisionLogEntry {
   const entry = getEvent(db, entryId);
   if (!isDecisionLogEntry(entry)) throw new TriageError(`event ${entryId} is not a decision-log entry`);
   return entry;
