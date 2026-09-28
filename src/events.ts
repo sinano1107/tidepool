@@ -673,9 +673,7 @@ export function latestAttributions(
   db: Db,
 ): Map<number, Extract<EventPayload, { kind: "objection_attributed" }> & Pick<EventRow, "id" | "task_id">> {
   const latest: ReturnType<typeof latestAttributions> = new Map();
-  for (const e of listEventsOfKinds(db, ["objection_attributed"])) {
-    if (e.payload.kind === "objection_attributed") latest.set(e.payload.entry_id, { ...e.payload, id: e.id, task_id: e.task_id });
-  }
+  for (const e of listEventsOfKinds(db, ["objection_attributed"])) latest.set(e.payload.entry_id, { ...e.payload, id: e.id, task_id: e.task_id });
   return latest;
 }
 
