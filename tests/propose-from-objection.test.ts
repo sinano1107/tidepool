@@ -9,7 +9,7 @@ import { BOARD_WORKER_ID, DomainError, HUMAN_WORKER_ID, logDecision, registerTas
 /** RCA の起草 verb `propose_from_objection` の門(issue #1077)と成功経路(issue #1092)のドメイン層。
  *  tool error への写像はサーバ境界(tests/mcp-propose-from-objection.test.ts)が言う。 */
 const at = new Date("2026-09-15T00:00:00.000Z");
-/** 成功経路の3つの新テストが共有する起草の中身(path・title・text は無関係)。 */
+/** 起草の中身(門と導出はこれを見ない)。 */
 const draft = { path: "testing/fixtures", title: "Keep fixtures", text: "Never skip the fixtures." };
 
 const task = (db: Db, type: TaskType, title: string, registrant = HUMAN_WORKER_ID, parent_id?: string): Task =>
@@ -77,27 +77,27 @@ it("学習に向かない cause・異議済みで未帰責のエントリ・宛�
     // 盤面(tidepool)の登録は agent の登録ではない
     [task(db, "review", "rca (auditor): by the board", HUMAN_WORKER_ID, byBoard.id).id, { entry_id: byBoardEntry }, notAgent],
   ] as const) {
-    const propose = () => proposeFromObjection(db, reviewId, { path: "testing/fixtures", title: "Keep fixtures", text: "Never skip the fixtures.", ...args }, {}, "auditor", at);
+    const propose = () => proposeFromObjection(db, reviewId, { ...draft, ...args }, {}, "auditor", at);
     expect(propose).toThrow(DomainError);
     expect(propose).toThrow(new DomainError(error));
   }
   expect(listMemoryEntries(db, {})).toEqual([]);
 });
 
-it("capability・preference は entry の worker 宛ての Behavior candidate になり、出所は最新の帰責 event、scope は親の workspace", () => {
+it("capability・preference は agent 登録の task でも entry の worker 宛ての Behavior candidate になり、起草の中身を載せ、出所は最新の帰責 event、scope は RCA でなく親の workspace", () => {
   const db = openDb(":memory:");
-  const mixed = task(db, "work", "mixed");
+  const mixed = task(db, "work", "mixed", "tako");
   const capabilityEntry = objected(db, mixed, "capability");
   const latest = attribute(db, mixed.id, capabilityEntry, "capability"); // 2度目の帰責 —— 出所は最新を指す
   const preferenceEntry = objected(db, mixed, "preference", "helmsman");
-  const self = task(db, "review", "rca (self): mixed", HUMAN_WORKER_ID, mixed.id).id;
+  const self = registerTask(db, { type: "review", title: "rca (self): mixed", purpose: "p", completion_criteria: "c", workspace: "elsewhere", parent_id: mixed.id }, at, HUMAN_WORKER_ID).id;
 
   const capabilityResult = proposeFromObjection(db, self, { ...draft, entry_id: capabilityEntry }, {}, "auditor", at);
   const preferenceResult = proposeFromObjection(db, self, { ...draft, entry_id: preferenceEntry }, {}, "auditor", at);
 
   expect(capabilityResult.event_id).toBe(capabilityResult.entry_id);
   expect(listMemoryEntries(db, {})).toEqual([
-    expect.objectContaining({ id: capabilityResult.entry_id, kind: "behavior", state: "candidate", scope: "charts", addressee: "deckhand", source: { kind: "event", ref: latest }, cause: "capability" }),
+    expect.objectContaining({ ...draft, id: capabilityResult.entry_id, kind: "behavior", state: "candidate", scope: "charts", addressee: "deckhand", source: { kind: "event", ref: latest }, cause: "capability" }),
     expect.objectContaining({ id: preferenceResult.entry_id, kind: "behavior", state: "candidate", addressee: "helmsman", cause: "preference" }),
   ]);
 });
@@ -114,7 +114,6 @@ it("agent 登録の task では task_ambiguity と missing_information(as: behav
   const behaviorResult = proposeFromObjection(db, auditor.id, { ...draft, entry_id: missingInformationEntry, as: "behavior" }, {}, "auditor", at);
   const knowledgeResult = proposeFromObjection(db, auditor.id, { ...draft, entry_id: missingInformationEntry, as: "knowledge", based_on_decision: decision }, {}, "auditor", at);
 
-  expect(knowledgeResult.event_id).toBe(knowledgeResult.entry_id);
   expect(listMemoryEntries(db, {})).toEqual([
     expect.objectContaining({ id: ambiguityResult.entry_id, kind: "behavior", state: "candidate", addressee: "tako", cause: "task_ambiguity" }),
     expect.objectContaining({ id: behaviorResult.entry_id, kind: "behavior", state: "candidate", addressee: "tako", cause: "missing_information" }),
@@ -122,10 +121,11 @@ it("agent 登録の task では task_ambiguity と missing_information(as: behav
   ]);
 });
 
-it("premise_breached の宣言への異議エントリからも提案できる(decompose / continue_decomposition は経由しない)", () => {
+it("premise_breached の宣言への異議エントリからも提案できる", () => {
   const db = openDb(":memory:");
-  const child = task(db, "work", "A");
-  const based_on_decision = logDecision(db, child, "split T into A", "board", at);
+  const parent = task(db, "work", "T");
+  const based_on_decision = logDecision(db, parent, "split T into A", "deckhand", at);
+  const child = task(db, "work", "A", HUMAN_WORKER_ID, parent.id);
   const entry = appendEvent(db, {
     taskId: child.id,
     workerId: "deckhand",
@@ -133,11 +133,12 @@ it("premise_breached の宣言への異議エントリからも提案できる(d
     payload: { kind: "premise_breached", line: "module M is broken", based_on_decision },
     at,
   });
-  attribute(db, child.id, entry, "capability");
+  const attribution = attribute(db, child.id, entry, "capability");
   const self = task(db, "review", "rca (self): A", HUMAN_WORKER_ID, child.id).id;
 
   const result = proposeFromObjection(db, self, { ...draft, entry_id: entry }, {}, "auditor", at);
 
-  expect(result.event_id).toBe(result.entry_id);
-  expect(listMemoryEntries(db, {})).toEqual([expect.objectContaining({ id: result.entry_id, kind: "behavior", state: "candidate", addressee: "deckhand" })]);
+  expect(listMemoryEntries(db, {})).toEqual([
+    expect.objectContaining({ id: result.entry_id, kind: "behavior", state: "candidate", addressee: "deckhand", source: { kind: "event", ref: attribution } }),
+  ]);
 });

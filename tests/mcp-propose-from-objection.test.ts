@@ -95,7 +95,7 @@ it("propose_from_objection の拒否は tool error として返る(何を断る�
   expect(await propose(work.id, { entry_id: 999_999 })).toMatchObject({ isError: true, content: [{ text: expect.any(String) }] });
 });
 
-it("auditor RCA では author = 帰責された worker 名(auditorName の盤面)になり、settings の HTTP 一覧と管理MCP 一覧が同じ行を author の活動と cause つきで返す", async () => {
+it("auditor RCA では author = RCA task の agent 名(auditorName の盤面)になり、settings の HTTP 一覧と管理MCP 一覧が同じ行を author の活動と cause つきで返す", async () => {
   const attributionClient = new FakeAttributionClient();
   t = await bootTidepool({ attributionClient, auditorName: "shako" });
   const [{ entry, kids }]: any[] = await objectedTasks(attributionClient, [{ title: "delegated", cause: "task_ambiguity", registrant: "tako" }]);
