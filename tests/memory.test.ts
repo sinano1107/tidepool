@@ -20,6 +20,7 @@ import {
   recordExemplar,
   recordKnowledge,
   rejectMemoryProposal,
+  restoreMemoryEntry,
 } from "../src/memory.js";
 import { countUnsettledAttachedChildren, DomainError, getTask, logDecision, registerTask } from "../src/tasks.js";
 
@@ -1086,6 +1087,109 @@ it("watermark 再生と rebuild は移した複製(1件・枝ごと、2度の移
   moveMemoryBranch(db, { scope: "charts", path: "moved", to_scope: null, to_path: "again", mover: human }, "webui", at);
   const current = approvedMemoryEntries(db);
   const listed = listMemoryEntries(db, {});
+
+  expect(approvedMemoryEntries(db, Number.MAX_SAFE_INTEGER)).toEqual(current);
+  // setup のみ: 版の古い店を模して rebuild を走らせる
+  db.prepare("UPDATE memory_index_version SET preprocess_version = 'cjk-bigram-0'").run();
+  ensureMemoryIndex(db, at);
+  expect(listMemoryEntries(db, {})).toEqual(listed);
+});
+
+it("復元は無効化済みのエントリの本文の側(書き手・状態・出所・宛先)を同じ scope / path に写して新エントリにし、作成 event は復元元と復元した者を持ち、旧は無効化のまま —— rejected の candidate は candidate のまま(ADR 0163 決定1・3)", () => {
+  const { db } = board();
+  const drafted = candidate(db, "Rebase before push", "tidepool", "deckhand");
+  invalidateMemoryEntry(db, { entry_id: drafted, reason: "rejected" }, "human", "webui", at);
+  const [old] = listMemoryEntries(db, {});
+
+  const { entry_id } = restoreMemoryEntry(db, { entry_id: drafted, restorer: human }, "webui", at);
+
+  const after = new Map(listMemoryEntries(db, {}).map((e) => [e.id, e]));
+  expect(after.get(drafted)).toEqual(old);
+  expect(after.get(entry_id)).toEqual({ ...old, id: entry_id, invalidation_reason: null, successor_id: null, invalidated_by: null, cause: null });
+  expect(old).toMatchObject({ state: "candidate", scope: "tidepool", addressee: "deckhand", author: { activity: "rca" }, source: { kind: "commit", ref: "0a46a46" } });
+  const created = getEvent(db, entry_id);
+  expect(created).toMatchObject({ worker_id: "human", payload: { kind: "memory_entry_created", restored_from: drafted, activity: "human" } });
+  expect(created?.payload).not.toHaveProperty("version");
+});
+
+it("superseded のエントリは後継が生きている間は domain error で復元できず、後継の path_moved の鎖を末尾までたどる —— 末尾の複製も落ちれば復元できる(ADR 0163 決定2)", () => {
+  const { db } = board();
+  const old = record(db, "old wording");
+  const successor = record(db, "new wording");
+  invalidateMemoryEntry(db, { entry_id: old, reason: "superseded", successor_id: successor }, "human", "webui", at);
+  const restore = () => restoreMemoryEntry(db, { entry_id: old, restorer: human }, "webui", at);
+
+  expect(restore).toThrow(new RegExp(`successor ${successor}`));
+  const moved = moveMemory(db, { entry_id: successor, scope: null, path: "moved", mover: human }, "webui", at).entry_id;
+  const before = listMemoryEntries(db, {});
+  expect(restore).toThrow(new RegExp(`successor ${moved}`));
+  expect(listMemoryEntries(db, {})).toEqual(before);
+
+  invalidateMemoryEntry(db, { entry_id: moved, reason: "environment" }, "human", "webui", at);
+  const { entry_id } = restore();
+  expect(approvedMemoryEntries(db).map((e) => [e.id, e.title])).toEqual([[entry_id, "old wording"]]);
+});
+
+it("後継の superseded の鎖はたどらない —— 後継が落ちていれば、その後継の後継が生きていても復元できる(ADR 0163 決定2)", () => {
+  const { db } = board();
+  const old = record(db, "first wording");
+  const middle = record(db, "second wording");
+  const latest = record(db, "third wording");
+  invalidateMemoryEntry(db, { entry_id: old, reason: "superseded", successor_id: middle }, "human", "webui", at);
+  invalidateMemoryEntry(db, { entry_id: middle, reason: "superseded", successor_id: latest }, "human", "webui", at);
+
+  const { entry_id } = restoreMemoryEntry(db, { entry_id: old, restorer: human }, "webui", at);
+  expect(approvedMemoryEntries(db).map((e) => [e.id, e.title])).toEqual([
+    [latest, "third wording"],
+    [entry_id, "first wording"],
+  ]);
+});
+
+it("path_moved のエントリ・無効化されていないエントリの復元は domain error で何も変わらない —— 移されたものは複製の側を扱う(ADR 0163 決定1)", () => {
+  const { db } = board();
+  const fact = record(db, "fact");
+  const moved = moveMemory(db, { entry_id: fact, scope: null, path: "moved", mover: human }, "webui", at).entry_id;
+  const before = listMemoryEntries(db, {});
+  const restore = (entry_id: number) => () => restoreMemoryEntry(db, { entry_id, restorer: human }, "webui", at);
+
+  expect(restore(fact)).toThrow(/moved/);
+  expect(restore(moved)).toThrow(/not invalidated/);
+  expect(listMemoryEntries(db, {})).toEqual(before);
+});
+
+it("commit を出所に持つ approved の Knowledge を復元すると複製は同じ commit の出所を持ち、版は旧を継がず複製の作成 event の id(ADR 0163 決定1)", () => {
+  const { db } = board();
+  const fact = record(db, "fact");
+  invalidateMemoryEntry(db, { entry_id: fact, reason: "capability" }, "human", "webui", at);
+
+  const { entry_id } = restoreMemoryEntry(db, { entry_id: fact, restorer: human }, "webui", at);
+
+  expect(approvedMemoryEntries(db)).toMatchObject([{ id: entry_id, version: entry_id, source: { kind: "commit", ref: "0a46a46" }, author: knowledge.author }]);
+});
+
+it("Definition の復元は同じ scope / path に生きた Definition があれば domain error で何も変わらず、その定義が落ちれば復元できる(ADR 0163 決定4)", () => {
+  const { db } = board();
+  const old = defineMemoryBranch(db, definition, "worker", at).entry_id;
+  invalidateMemoryEntry(db, { entry_id: old, reason: "requirement_change" }, "human", "webui", at);
+  const current = defineMemoryBranch(db, { ...definition, text: "The build." }, "worker", at).entry_id;
+  const before = listMemoryEntries(db, {});
+  const restore = () => restoreMemoryEntry(db, { entry_id: old, restorer: human }, "webui", at);
+
+  expect(restore).toThrow(new RegExp(`already defined in that scope by entry ${current}`));
+  expect(listMemoryEntries(db, {})).toEqual(before);
+  invalidateMemoryEntry(db, { entry_id: current, reason: "requirement_change" }, "human", "webui", at);
+  const { entry_id } = restore();
+  expect(approvedMemoryEntries(db)).toMatchObject([{ id: entry_id, kind: "definition", text: definition.text, source: { kind: "event", ref: entry_id } }]);
+});
+
+it("watermark 再生と rebuild は復元した複製(4種別、approved と candidate)を表と同じ版・状態・書き手・出所に戻す", () => {
+  const db = movable();
+  const entries = listMemoryEntries(db, {});
+  for (const { id } of entries) invalidateMemoryEntry(db, { entry_id: id, reason: "capability" }, "human", "webui", at);
+  for (const { id } of entries) restoreMemoryEntry(db, { entry_id: id, restorer: human }, "webui", at);
+  const current = approvedMemoryEntries(db);
+  const listed = listMemoryEntries(db, {});
+  expect(current).toHaveLength(6);
 
   expect(approvedMemoryEntries(db, Number.MAX_SAFE_INTEGER)).toEqual(current);
   // setup のみ: 版の古い店を模して rebuild を走らせる

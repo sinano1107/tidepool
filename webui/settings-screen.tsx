@@ -1631,12 +1631,12 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit }: 
   };
 
   // a one-shot change to an entry (invalidate, move): only the form that submitted closes
-  const submit = async (path: `/${string}`, body: Record<string, unknown>, [title, detail]: [string, string], failed: string, close: () => void) => {
+  const submit = async (path: `/${string}`, body: Record<string, unknown>, [title, detail]: [string, string], failed: string, close?: () => void) => {
     setBusy(true);
     try {
       await api(path, body);
       say('success', title, detail);
-      close();
+      close?.();
       await load();
     } catch (err) {
       say('danger', failed, String((err as Error).message || err));
@@ -1809,6 +1809,15 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit }: 
               )}
               <Button variant="ghost" size="sm" onClick={() => setMoving({ id: entry.id, workspace: entry.scope ?? '', path: entry.path })}>Move</Button>
               <Button variant="ghost" size="sm" onClick={() => setInvalidating({ id: entry.id, reason: 'capability', successor: '' })}>Invalidate</Button>
+            </div>
+          )}
+          {/* restore (ADR 0163): the board copies the body back to the same place; a moved entry is handled through its copy */}
+          {entry.invalidation_reason && entry.invalidation_reason !== 'path_moved' && (
+            <div style={{ display: 'flex', gap: 8 }}>
+              <Button variant="ghost" size="sm" disabled={busy}
+                onClick={() => submit(`/api/settings/memory/entries/${entry.id}/restore`, {}, ['entry restored', `#${entry.id}`], 'restore failed')}>
+                Restore
+              </Button>
             </div>
           )}
           {moving?.id === entry.id && (

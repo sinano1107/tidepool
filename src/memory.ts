@@ -248,7 +248,7 @@ export function foldMemory(
   })();
 }
 
-type Mover = MemoryEntryFields["author"];
+type Actor = MemoryEntryFields["author"];
 
 /** 移動の本体(ADR 0162 決定4・5)。盤面が本文の側 —— title・text・原文・宛先・注釈・出所・書き手・状態・版 —— を写して新しい
  *  scope / path に複製を作り、旧を `path_moved` で複製へ指す(「本文は同じ」は申告でなくここが保証する)。複製は新規の書き込みでは
@@ -258,7 +258,7 @@ type Mover = MemoryEntryFields["author"];
 function moveEntries(
   db: Db,
   moves: Array<{ old: EntryRow; scope: string | null; path: string }>,
-  mover: Mover,
+  mover: Actor,
   origin: EventOrigin,
   at: Date,
 ): Array<{ entry_id: number; successor_id: number }> {
@@ -268,26 +268,69 @@ function moveEntries(
       if (old.scope === scope && old.path === path) throw new DomainError(`memory entry ${old.id} is already at ${path} in this scope`);
       checkPath(path);
       if (old.kind !== "definition") continue;
-      const defined = (
-        db.prepare("SELECT id FROM memory_entries WHERE kind = 'definition' AND invalidation_reason IS NULL AND path = ? AND scope IS ?").all(path, scope) as Array<{ id: number }>
-      ).find(({ id }) => !moving.has(id));
-      if (defined) throw new DomainError(`branch ${path} is already defined in that scope by entry ${defined.id}: fold the two definitions into one instead of moving`);
+      const defined = liveDefinitions(db, scope, path).find((id) => !moving.has(id));
+      if (defined) throw new DomainError(`branch ${path} is already defined in that scope by entry ${defined}: fold the two definitions into one instead of moving`);
     }
     return moves.map(({ old: row, scope, path }) => {
       const old = rowToEntry(row);
-      const { id, version, source: _source, ...body } = old;
-      const entry: MemoryEntryFields = { ...body, scope, path, source: inheritableSource(old) ?? null };
-      const copy = appendEvent(db, {
-        taskId: null,
-        workerId: mover.name,
-        origin,
-        payload: { kind: "memory_entry_created", entry, activity: mover.activity, ...(version === null ? {} : { version }) },
-        at,
-      });
-      insertEntry(db, copy, entry, version ?? undefined);
-      invalidateMemoryEntry(db, { entry_id: id, reason: "path_moved", successor_id: copy }, mover.name, origin, at, { activity: mover.activity });
-      return { entry_id: id, successor_id: copy };
+      const copy = copyBody(db, old, { scope, path }, mover, origin, at, old.version === null ? {} : { version: old.version });
+      invalidateMemoryEntry(db, { entry_id: old.id, reason: "path_moved", successor_id: copy }, mover.name, origin, at, { activity: mover.activity });
+      return { entry_id: old.id, successor_id: copy };
     });
+  })();
+}
+
+/** scope / path に生きている Definition の id(移動と復元の置き場の門)。 */
+function liveDefinitions(db: Db, scope: string | null, path: string): number[] {
+  return (
+    db.prepare("SELECT id FROM memory_entries WHERE kind = 'definition' AND invalidation_reason IS NULL AND path = ? AND scope IS ?").all(path, scope) as Array<{ id: number }>
+  ).map(({ id }) => id);
+}
+
+/** 本文の側の複製(移動と復元が共有する): 出所・書き手・状態ごと写して place に作り、写した者を作成 event の activity に載せる。
+ *  mark は移動が継ぐ版か、復元の復元元。返り値は複製の id。 */
+function copyBody(
+  db: Db,
+  old: MemoryEntry,
+  place: Pick<MemoryEntryFields, "scope" | "path">,
+  actor: Actor,
+  origin: EventOrigin,
+  at: Date,
+  mark: { version?: number; restored_from?: number },
+): number {
+  const { id: _id, version: _version, source: _source, ...body } = old;
+  const entry: MemoryEntryFields = { ...body, ...place, source: inheritableSource(old) ?? null };
+  const id = appendEvent(db, { taskId: null, workerId: actor.name, origin, payload: { kind: "memory_entry_created", entry, activity: actor.activity, ...mark }, at });
+  insertEntry(db, id, entry, mark.version);
+  return id;
+}
+
+/** 復元(ADR 0163): 無効化済みのエントリ(4種別、状態は問わない)の本文の側を同じ scope / path に写して新エントリにする ——
+ *  移動の複製と同じ形で新規の書き込みの門は掛けず、版は継がない(approved なら版は複製の作成 event)。旧の行は触らず、旧を pin して
+ *  いた提案 question も戻さない。`path_moved` は複製の側を扱う(移し戻すか、畳まれた複製を復元する)ので拒み、後継が生きている間も
+ *  拒む —— 後継の `path_moved` の鎖は末尾までたどる(`superseded` はたどらない)。Definition は同じ枝に生きた Definition があれば拒む。 */
+export function restoreMemoryEntry(
+  db: Db,
+  input: { entry_id: number; restorer: Actor },
+  origin: EventOrigin,
+  at: Date,
+): { entry_id: number; event_id: number } {
+  return db.transaction(() => {
+    const row = requireEntry(db, input.entry_id);
+    if (row.invalidation_reason === null) throw new DomainError(`memory entry ${row.id} is not invalidated`);
+    if (row.invalidation_reason === "path_moved") {
+      throw new DomainError(`memory entry ${row.id} was moved to entry ${row.successor_id}: move that copy back, or restore it if it was invalidated`);
+    }
+    let successor = row.successor_id === null ? undefined : requireEntry(db, row.successor_id);
+    while (successor?.invalidation_reason === "path_moved") successor = requireEntry(db, successor.successor_id!);
+    if (successor && successor.invalidation_reason === null) {
+      throw new DomainError(`memory entry ${row.id} was replaced by the live successor ${successor.id}: invalidate that first`);
+    }
+    const [defined] = row.kind === "definition" ? liveDefinitions(db, row.scope, row.path) : [];
+    if (defined) throw new DomainError(`branch ${row.path} is already defined in that scope by entry ${defined}: invalidate it first`);
+    const old = rowToEntry(row);
+    const id = copyBody(db, old, { scope: old.scope, path: old.path }, input.restorer, origin, at, { restored_from: old.id });
+    return { entry_id: id, event_id: id };
   })();
 }
 
@@ -295,7 +338,7 @@ function moveEntries(
  *  人間の面と meta-review の `move_memory`(moveMemoryByMetaReview)が共有する。返り値は複製。 */
 export function moveMemory(
   db: Db,
-  input: { entry_id: number; scope: string | null; path: string; mover: Mover },
+  input: { entry_id: number; scope: string | null; path: string; mover: Actor },
   origin: EventOrigin,
   at: Date,
 ): { entry_id: number; event_id: number } {
@@ -307,7 +350,7 @@ export function moveMemory(
  *  to_path + 残りの path へ1 transaction で。無効化済みは元の置き場に残る。返り値は旧 id → 複製の id。 */
 export function moveMemoryBranch(
   db: Db,
-  input: { scope: string | null; path: string; to_scope: string | null; to_path: string; mover: Mover },
+  input: { scope: string | null; path: string; to_scope: string | null; to_path: string; mover: Actor },
   origin: EventOrigin,
   at: Date,
 ): { moved: Array<{ entry_id: number; successor_id: number }> } {
@@ -403,7 +446,7 @@ export const memoryListFilterSchema = z.object({
 });
 
 /** 人間の面(settings の HTTP / 管理MCP)の書き手・移した者。 */
-export const HUMAN_AUTHOR = { activity: "human", name: HUMAN_WORKER_ID } as const satisfies Mover;
+export const HUMAN_AUTHOR = { activity: "human", name: HUMAN_WORKER_ID } as const satisfies Actor;
 
 /** 原文は title と text の揃いで持つか持たないか。英語の title を持たない Definition は、英語側と
  *  同じく原文も title = text(ADR 0015 五度目の精密化)。 */

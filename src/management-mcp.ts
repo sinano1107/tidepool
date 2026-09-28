@@ -57,6 +57,7 @@ import {
   recordBehavior,
   recordExemplar,
   recordKnowledge,
+  restoreMemoryEntry,
   TOKENIZER,
 } from "./memory.js";
 import { changeMetaReviewSettings, metaReviewSettingsChangeSchema, readMetaReviewSettings } from "./meta-review.js";
@@ -692,6 +693,19 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
     },
     async ({ workspace, path, to_workspace, to_path }) =>
       memoryVerb(() => moveMemoryBranch(deps.db, { scope: workspace, path, to_scope: to_workspace, to_path, mover: HUMAN_AUTHOR }, "mcp", deps.clock.now())),
+  );
+  server.registerTool(
+    "restore_memory_entry",
+    {
+      description:
+        "Restore an invalidated memory entry (any kind): the board copies its body — title, text, originals, addressee, annotations, " +
+        "source, author and state — into a new entry at the same workspace and path; the old entry stays invalidated and you are recorded " +
+        "as the one who restored it. An approved copy gets a new version. Refused for an entry invalidated as path_moved (move its copy " +
+        "back, or restore the copy), while its successor — followed through any moves — is still live (invalidate that first), and for " +
+        "a Definition whose branch already has a live Definition in that workspace.",
+      inputSchema: { entry_id: z.number().int().positive() },
+    },
+    async ({ entry_id }) => memoryVerb(() => restoreMemoryEntry(deps.db, { entry_id, restorer: HUMAN_AUTHOR }, "mcp", deps.clock.now())),
   );
   server.registerTool(
     "rebuild_memory_index",
