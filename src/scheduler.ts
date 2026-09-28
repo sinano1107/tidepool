@@ -566,13 +566,8 @@ export function startScheduler(deps: {
       // 読み取りより前なので同じ pass で拾われる。slot 占有・halt より手前(空の盤面でも登録する)。
       // **同期**に保つ —— ADR 0119 決定5 の「最初の await より前に slot を読む」を崩さない。
       registerDueMetaReviews(db, clock.now(), agents);
-      // ADR 0164 決定4: 結果の無い帰責の撃ち直しも同じく同期で相乗りし、Board call は待たない。
-      // 対象の読み取りが倒れても pickup は進める
-      try {
-        refireAttributions(db, { attributionClient, behaviorDraftClient, workspace, containers }, clock.now());
-      } catch (err) {
-        console.error("[scheduler] attribution refire sweep failed:", err);
-      }
+      // ADR 0164 決定4: 結果の無い帰責の撃ち直しも同じく同期で相乗りし、Board call は待たない
+      refireAttributions(db, { attributionClient, behaviorDraftClient, workspace, containers }, clock.now());
       if (await pickupBlocked()) return;
       // agent 名で外れるのは、定義が成立しない agent(quarantineAgent)だけである
       // (ADR 0110 決定3 / issue #544)。

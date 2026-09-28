@@ -118,7 +118,6 @@ export interface ManagementMcpDeps {
    *  same seam the WebUI router carries. */
   attributionClient?: AttributionClient;
   behaviorDraftClient?: BehaviorDraftClient;
-  /** 容器の前提(ADR 0136 決定7): 不成立なら帰責と起草の Board call は撃てなかった扱い(ADR 0164 決定3)。 */
   containers?: BoardCallDeps["containers"];
   pollNow: () => void;
   defaultAgentName?: string;

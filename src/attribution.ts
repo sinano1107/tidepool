@@ -190,7 +190,6 @@ export async function attributeAfterRca(
  *  同じ entry への新しい event(round = after_rca)として追記し、起草へ進む(ADR 0120 決定1(b)(c))。
  *  撃てなかったら何も書かず、撃って失敗したら `objection_attribution_failed` だけを残す(ADR 0164 決定3・6)。 */
 async function attributeSecondRound(db: Db, deps: BoardCallDeps, objectedId: string, initial: Attribution, now: Date): Promise<void> {
-  let recorded: Attribution | undefined;
   await exclusive(db, `after_rca:${initial.entry_id}`, async () => {
     if (!refireDue(db, "objection_attribution_failed", "entry_id", initial.entry_id, now)) return;
     const call = boardCallSetting(db, deps.attributionClient, deps.containers);
@@ -211,9 +210,9 @@ async function attributeSecondRound(db: Db, deps: BoardCallDeps, objectedId: str
       ...judgment,
       round: "after_rca" as const,
     };
-    recorded = { id: appendEvent(db, { taskId: objectedId, workerId: BOARD_WORKER_ID, origin: "board", payload, at: now }), ...payload };
+    const id = appendEvent(db, { taskId: objectedId, workerId: BOARD_WORKER_ID, origin: "board", payload, at: now });
+    await draftBehaviorCandidate(db, deps, { id, ...payload }, now);
   });
-  if (recorded) await draftBehaviorCandidate(db, deps, recorded, now);
 }
 
 /** 第2回の入力: 帰責の入力(当時の decision log = その注釈より前の entry)に RCA 子の decision log と完了 result を足す。 */

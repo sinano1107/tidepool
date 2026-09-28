@@ -209,24 +209,7 @@ it("Board call の model の窓が閉じている間は client を呼ばず、�
   const { task, entries } = await objectedWork(t, "throttled", ["picked the quick hack"]);
   attributionClient.scriptJudgment(entries[0].id, { cause: "preference", evidence: "would be ignored" });
   await object(t, entries[0].id, "do it properly");
-  reportProviderUsage(t.db, {
-    provider: "anthropic",
-    status: "observed",
-    plan: null,
-    cliVersion: null,
-    observedAt: t.clock.now(),
-    windows: [
-      {
-        window: "fable",
-        model: "fable",
-        usedPercent: 100,
-        durationMs: HOUR,
-        resetsAt: new Date(t.clock.now().getTime() + HOUR),
-        throttled: true,
-        resumesAt: new Date(t.clock.now().getTime() + HOUR),
-      },
-    ],
-  });
+  reportFableWindow(t, true);
 
   await api(t.baseUrl, "POST", "/api/triage/close");
 

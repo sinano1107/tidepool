@@ -379,7 +379,6 @@ export interface SubmitAnswerDeps {
    *  RCA 子なら帰責の第2回がここで走る。 */
   attributionClient?: AttributionClient;
   behaviorDraftClient?: BehaviorDraftClient;
-  /** 容器の前提(ADR 0136 決定7): 不成立なら帰責と起草の Board call は撃てなかった扱い(ADR 0164 決定3)。 */
   containers?: BoardCallDeps["containers"];
   /** ADR 0099 決定3: 受理された Containment quarantine の確認回答が slot を解放する
    *  唯一の門。空の再観測は containment の検査の側にある。Absent → watchdog を
@@ -613,7 +612,6 @@ export interface CancelThroughHumanDoorDeps {
    *  cancel の扉も帰責の第2回を撃つ。 */
   attributionClient?: AttributionClient;
   behaviorDraftClient?: BehaviorDraftClient;
-  /** 容器の前提(ADR 0136 決定7): 不成立なら帰責と起草の Board call は撃てなかった扱い(ADR 0164 決定3)。 */
   containers?: BoardCallDeps["containers"];
   workspace?: WorkspaceConfig;
   defaultAgentName?: string;
@@ -635,7 +633,6 @@ export interface CompleteThroughHumanDoorDeps {
   /** ADR 0115 決定2 / issue #575: 最後に決着した RCA 子が人間の完了でも第2回が走る。 */
   attributionClient?: AttributionClient;
   behaviorDraftClient?: BehaviorDraftClient;
-  /** 容器の前提(ADR 0136 決定7): 不成立なら帰責と起草の Board call は撃てなかった扱い(ADR 0164 決定3)。 */
   containers?: BoardCallDeps["containers"];
   /** 起草の scope が null の workspace で継ぐ盤面の既定(issue #617)。 */
   workspace?: WorkspaceConfig;

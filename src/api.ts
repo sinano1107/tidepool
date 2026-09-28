@@ -623,7 +623,6 @@ export interface ApiRouterDeps {
   /** The Behavior candidate drafting Board call seam (issue #617), fired after a
    *  commit and after the second attribution round. Absent → nothing is drafted. */
   behaviorDraftClient?: BehaviorDraftClient;
-  /** 容器の前提(ADR 0136 決定7): 不成立なら帰責と起草の Board call は撃てなかった扱い(ADR 0164 決定3)。 */
   containers?: BoardCallDeps["containers"];
   /** Whether an explicitly named workspace is protected (CONTEXT.md's
    *  protected workspace / ADR 0013), threaded straight to human decompose's
