@@ -5,7 +5,7 @@ import express from "express";
 import type { AgentAdmin } from "./agent-create.js";
 import type { AllocationClient } from "./allocation-review.js";
 import { createApiRouter } from "./api.js";
-import type { AttributionClient, BehaviorDraftClient } from "./attribution.js";
+import type { AttributionCallDeps, AttributionClient, BehaviorDraftClient } from "./attribution.js";
 import { createHumanSurfaceAuth, type HumanCredential } from "./auth.js";
 import { type BoardCall, createBoardCalls } from "./board-call.js";
 import { type BoardStatePath, sweepBoardStateOverlap } from "./board-state.js";
@@ -616,7 +616,7 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
   // (`containment` / `registryReachability` と同じ配線)。
   const teardownQuarantine = (taskId: string) => acceptTeardownQuarantine(teardownDeps, taskId);
   // 帰責と起草の Board call の束: scheduler・worker MCP・WebUI・管理 MCP へ同じ1つを渡す
-  const attributionCalls = {
+  const attributionCalls: AttributionCallDeps = {
     attributionClient: options.attributionClient,
     behaviorDraftClient: options.behaviorDraftClient,
     workspace: options.workspace,

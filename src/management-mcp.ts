@@ -114,7 +114,7 @@ export interface ManagementMcpDeps {
   github?: GitHubClient;
   landing: Landing;
   draftClient?: DraftClient;
-  /** ADR 0115 決定2 / issue #575: threaded to the cancel / answer doors, the
+  /** ADR 0115 決定2 / issue #575: threaded to the cancel / answer / complete doors, the
    *  same seam the WebUI router carries. */
   attributionCalls?: AttributionCallDeps;
   pollNow: () => void;
