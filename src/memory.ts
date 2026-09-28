@@ -4,11 +4,11 @@ import { z } from "zod";
 import type { Cause } from "./cause.js";
 import { type Db, MEMORY_FTS_DDL, MEMORY_FTS_TOKENIZER, MEMORY_PREPROCESS_VERSION } from "./db.js";
 import { getDisplayLanguage } from "./display-language.js";
-import { appendEvent, type EventOrigin, type EventPayload, type EventRow, getEvent, HUMAN_FACING_KINDS, listEvents } from "./events.js";
+import { appendEvent, type EventOrigin, type EventPayload, type EventRow, getEvent, isDecisionLogEntry, listEvents } from "./events.js";
 import { metaReviewSubjectOf, paged, previousMetaReviewWatermark } from "./meta-review.js";
 import { entriesReadBefore, entriesSeenBefore, listEpisodes, sessionSpawnOf, sessionWindow } from "./precedent.js";
 import { BOARD_WORKER_ID, DomainError, getTask, HUMAN_WORKER_ID, type MemoryProposal, registerTask, settleQuestionAsObserved, type Task } from "./tasks.js";
-import { type DecisionLogEntry, entryObjections, objectedEntryText, objectionsById } from "./triage.js";
+import { entryObjections, objectedEntryText, objectionsById } from "./triage.js";
 
 /** 無効化の理由コード(spec #586 A)。自由記述は持たない。置換と path の付け替えは後継 id
  *  必須、cause.ts の語彙の3つ(間違っていた / 陳腐化)と、人間が提案 question を reject した `rejected`(issue #620)。 */
@@ -1390,21 +1390,21 @@ function renderCase(db: Db, source: MemorySource): MemoryCase | null {
   if (event?.payload.kind === "worker_spawned") {
     const session = caseSession(db, event);
     return {
-      decisions: session.events.filter((e) => e.kind === "decision_logged").map((e) => objectedEntryText(e as DecisionLogEntry)),
+      decisions: session.events.filter(isDecisionLogEntry).filter((e) => e.kind === "decision_logged").map(objectedEntryText),
       handoff: session.handoff,
       result: session.result,
     };
   }
   const entryId = event?.payload.kind === "objection_attributed" ? event.payload.entry_id : source.ref;
   const entry = getEvent(db, entryId);
-  if (!entry || !(HUMAN_FACING_KINDS as readonly string[]).includes(entry.kind)) return null;
+  if (!isDecisionLogEntry(entry)) return null;
   // 帰責が出所なら、その帰責が入力に使った steering だけ(AttributionInput.steering と同じ列、#958)
   const steering =
     event?.payload.kind === "objection_attributed"
       ? objectionsById(db, entryId, event.payload.objection_event_ids)
       : entryObjections(db, [entryId]);
   const { handoff, result } = caseSession(db, entry);
-  return { decision: objectedEntryText(entry as DecisionLogEntry), steering: steering.map((s) => s.comment), handoff, result };
+  return { decision: objectedEntryText(entry), steering: steering.map((s) => s.comment), handoff, result };
 }
 
 /** anchor を含む worker session の events(id 順)と、その窓の完了の handoff / result。anchor が
