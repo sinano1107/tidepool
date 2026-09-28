@@ -82,6 +82,7 @@ import {
 import { createStatelessMcpRouter, rejectUnknownArguments } from "./stateless-mcp.js";
 import {
   DomainError,
+  describeHandoffFields,
   getTask,
   HANDOFF_FIELDS,
   HUMAN_WORKER_ID,
@@ -824,7 +825,10 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
   server.registerTool(
     "complete_task",
     {
-      description: "Complete a task assigned to the human.",
+      description:
+        "Complete a task assigned to the human, optionally with the 6-field handoff doc: " +
+        describeHandoffFields() +
+        ".",
       inputSchema: {
         task_id: z.string(),
         handoff: z.partialRecord(z.enum(HANDOFF_FIELDS), z.string()).optional(),

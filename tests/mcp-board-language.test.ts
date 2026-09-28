@@ -1,5 +1,6 @@
 import { afterEach, expect, it } from "vitest";
 import { BOARD_WRITE_LANGUAGE_RULE } from "../src/mcp.js";
+import { HANDOFF_FIELDS } from "../src/tasks.js";
 import { api, bootTidepool, mcpClient, type Tidepool } from "./harness.js";
 
 let t: Tidepool;
@@ -26,6 +27,29 @@ it("盤面に書く6 verb の description だけが英語ルールを運び、�
     }
     for (const verb of ["get_current_task", "list_agents"]) {
       expect(byName.get(verb)).not.toContain(BOARD_WRITE_LANGUAGE_RULE);
+    }
+  } finally {
+    await client.close();
+  }
+});
+
+it("worker 用 complete_task の description は HANDOFF_FIELDS の全フィールド名を挙げる(issue #1084)", async () => {
+  t = await bootTidepool();
+  const task = (
+    await api(t.baseUrl, "POST", "/api/tasks", {
+      type: "work",
+      title: "index the tide charts",
+      purpose: "make historical tides searchable",
+      completion_criteria: "a query for 2025-06 returns chart rows",
+    })
+  ).json;
+
+  const client = await mcpClient(t.mcpBaseUrl, task.id);
+  try {
+    const { tools } = await client.listTools();
+    const description = tools.find((tool) => tool.name === "complete_task")?.description ?? "";
+    for (const field of HANDOFF_FIELDS) {
+      expect(description).toContain(field);
     }
   } finally {
     await client.close();

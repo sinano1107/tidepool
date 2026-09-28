@@ -5,7 +5,7 @@ import { ProfileConfirmationRequiredError } from "../src/profile-create.js";
 import { InvalidAllowedDomainError, InvalidWorkspaceNameError } from "../src/registry.js";
 import { RegistryPushFailedError } from "../src/registry-write.js";
 import { RepoAccessMissingError } from "../src/repo-access.js";
-import { registerTask } from "../src/tasks.js";
+import { HANDOFF_FIELDS, registerTask } from "../src/tasks.js";
 import {
   BoardStateOverlapError,
   type CreateWorkspaceInput,
@@ -1007,6 +1007,20 @@ it("create_workspace は mode と各引数を listTools で advertise する(iss
     expect(Object.keys(schema.properties)).toEqual(expect.arrayContaining(["mode", "name", "notes", "protected", "path", "repo"]));
     expect(schema.properties.mode.enum).toEqual(["register", "clone", "create"]);
     expect(schema.required).toEqual(expect.arrayContaining(["name", "mode"]));
+  } finally {
+    await client.close();
+  }
+});
+
+it("管理MCP の complete_task の description は HANDOFF_FIELDS の全フィールド名を挙げる(issue #1084)", async () => {
+  t = await bootTidepool();
+  const client = await managementMcpClient(t.baseUrl);
+  try {
+    const { tools } = await client.listTools();
+    const description = tools.find((tool) => tool.name === "complete_task")?.description ?? "";
+    for (const field of HANDOFF_FIELDS) {
+      expect(description).toContain(field);
+    }
   } finally {
     await client.close();
   }
