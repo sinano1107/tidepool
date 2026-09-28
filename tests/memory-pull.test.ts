@@ -332,6 +332,16 @@ it("帰責の objection_event_ids に objection_raised でない id があると
   expect(behaviorDraftClient.calls).toEqual([]);
 });
 
+it("帰責の entry_id が decision-log entry でないと、不変条件違反として例外になり起草は撃たれない", async () => {
+  const { db, attribution } = await objectedInTwoSessions();
+  const behaviorDraftClient = new FakeBehaviorDraftClient();
+
+  await expect(
+    draftBehaviorCandidate(db, { behaviorDraftClient, workspace: { name: "sandbox" } }, { ...attribution, entry_id: FIXTURE_SPAWNED_EVENT_ID }, at),
+  ).rejects.toThrow(/not a decision-log entry/);
+  expect(behaviorDraftClient.calls).toEqual([]);
+});
+
 it("decision entry を直接出所に持つ Behavior の case の steering は、全 session の異議を event 順に並べたもの", async () => {
   const { db, reader } = await objectedInTwoSessions();
   const id = citedBehavior(db, "Cover the topic", 6);

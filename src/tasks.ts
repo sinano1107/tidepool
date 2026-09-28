@@ -2705,19 +2705,19 @@ export function taskHistory(
   > = [];
   const decisions = new Map<number, WorkingDecision>();
   for (const event of taskDecisionLog(db, taskId)) {
-    if (event.kind === "decision_logged") {
+    if (event.payload.kind === "decision_logged") {
       const decision = {
-        decision: (event.payload as Extract<EventPayload, { kind: "decision_logged" }>).line,
+        decision: event.payload.line,
         children: [],
       };
       decisions.set(event.id, decision);
       timeline.push({ eventId: event.id, kind: "decision", value: decision });
-    } else if (event.kind === "task_completed") {
+    } else if (event.payload.kind === "task_completed") {
       timeline.push({
         eventId: event.id,
         kind: "entry",
         value: {
-          completion: (event.payload as Extract<EventPayload, { kind: "task_completed" }>).result,
+          completion: event.payload.result,
         },
       });
     }

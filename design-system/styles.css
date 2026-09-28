@@ -20,7 +20,7 @@
 
 /* LogEntry — tap-to-object; hover is an enhancement, not the mechanism */
 .tp-log-entry { transition: background var(--duration-quick) var(--ease-tidal); }
-.tp-log-entry[data-clickable] { cursor: pointer; -webkit-tap-highlight-color: transparent; }
+.tp-log-entry[data-clickable] > [role="button"] { cursor: pointer; -webkit-tap-highlight-color: transparent; }
 @media (hover: hover) { .tp-log-entry[data-clickable]:hover { background: var(--surface-hover); } }
 .tp-log-entry[data-active] { background: var(--coral-1); }
 @media (prefers-reduced-motion: reduce) { .tp-queue-item[data-front] { animation: none; } }

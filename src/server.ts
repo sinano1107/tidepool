@@ -5,7 +5,7 @@ import express from "express";
 import type { AgentAdmin } from "./agent-create.js";
 import type { AllocationClient } from "./allocation-review.js";
 import { createApiRouter } from "./api.js";
-import type { AttributionClient, BehaviorDraftClient } from "./attribution.js";
+import type { AttributionCallDeps, AttributionClient, BehaviorDraftClient } from "./attribution.js";
 import { createHumanSurfaceAuth, type HumanCredential } from "./auth.js";
 import { type BoardCall, createBoardCalls } from "./board-call.js";
 import { type BoardStatePath, sweepBoardStateOverlap } from "./board-state.js";
@@ -615,6 +615,13 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
   // 人間 verb には後始末の deps 一式ではなく、束ねた callback ひとつを渡す
   // (`containment` / `registryReachability` と同じ配線)。
   const teardownQuarantine = (taskId: string) => acceptTeardownQuarantine(teardownDeps, taskId);
+  // 帰責と起草の Board call の束: scheduler・worker MCP・WebUI・管理 MCP へ同じ1つを渡す
+  const attributionCalls: AttributionCallDeps = {
+    attributionClient: options.attributionClient,
+    behaviorDraftClient: options.behaviorDraftClient,
+    workspace: options.workspace,
+    containers,
+  };
   const scheduler = startScheduler({
     db,
     clock: options.clock,
@@ -635,8 +642,7 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
     githubAuth: options.githubAuth,
     registry: options.registry,
     agents: agentAdmin?.list,
-    attributionClient: options.attributionClient,
-    behaviorDraftClient: options.behaviorDraftClient,
+    attributionCalls,
   });
   // an abandoned triage session may not pause pickup forever: the watchdog
   // closes it past the timeout, and reopening pickup is a "run now" trigger
@@ -745,8 +751,7 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
     isProtectedWorkspace: options.isProtectedWorkspace,
     listAgents: options.listAgents,
     allocationClient: options.allocationClient,
-    attributionClient: options.attributionClient,
-    behaviorDraftClient: options.behaviorDraftClient,
+    attributionCalls,
     agentAdmin,
     pollNow,
   };
@@ -775,9 +780,7 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
       hostSkills: options.hostSkills && (() => options.hostSkills!(boardCalls.call)),
       githubTokenFile: options.githubTokenFile,
       translationClient: options.translationClient,
-      attributionClient: options.attributionClient,
-      behaviorDraftClient: options.behaviorDraftClient,
-      containers,
+      attributionCalls,
       quarantineResolvers: options.quarantineResolvers,
       taskExecutionCandidates: options.taskExecutionCandidates,
       isProtectedWorkspace: options.isProtectedWorkspace,
@@ -794,9 +797,7 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
       github: options.github,
       landing,
       draftClient: options.draftClient,
-      attributionClient: options.attributionClient,
-      behaviorDraftClient: options.behaviorDraftClient,
-      containers,
+      attributionCalls,
       defaultAgentName: worker.id,
       auditorName,
       agentRegistered: options.agentRegistered,

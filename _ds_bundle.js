@@ -180,7 +180,6 @@ function LogEntry({ entry = {}, onObject, onExpand, onOpenMemoryEntry, active = 
       href: `#memory-entry-${id}`,
       onClick: (e) => {
         e.preventDefault();
-        e.stopPropagation();
         onOpenMemoryEntry?.(id);
       },
       style: { marginLeft: 6, color: "var(--tide-4)" }
@@ -195,9 +194,10 @@ function LogEntry({ entry = {}, onObject, onExpand, onOpenMemoryEntry, active = 
       "data-clickable": clickable ? "" : void 0,
       "data-active": active ? "" : void 0,
       style: {
-        display: "flex",
-        alignItems: "flex-start",
-        gap: 10,
+        display: "grid",
+        gridTemplateColumns: onExpand ? "auto auto minmax(0, 1fr) auto" : "auto auto minmax(0, 1fr)",
+        alignItems: "start",
+        gap: "0 10px",
         padding: "10px 12px",
         background: completion ? "var(--grass-1)" : void 0,
         borderBottom: "1px solid var(--border-hairline)",
@@ -212,17 +212,16 @@ function LogEntry({ entry = {}, onObject, onExpand, onOpenMemoryEntry, active = 
         role: clickable ? "button" : void 0,
         tabIndex: clickable ? 0 : void 0,
         onKeyDown: clickable ? (e) => {
-          if (e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")) {
+          if (e.key === "Enter" || e.key === " ") {
             e.preventDefault();
             onObject();
           }
         } : void 0,
-        style: { display: "flex", alignItems: "flex-start", gap: 10, flex: 1, minWidth: 0 }
+        style: { gridColumn: "1 / 4", display: "grid", gridTemplateColumns: "subgrid", alignItems: "start", minWidth: 0 }
       },
-      /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--text-muted)", paddingTop: 2, flexShrink: 0 } }, time),
+      /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--text-muted)", paddingTop: 2 } }, time),
       /* @__PURE__ */ React.createElement(__ds_scope.AgentChip, { name: agent, icon: agentIcon, human, size: "sm", style: { paddingTop: 1 } }),
-      /* @__PURE__ */ React.createElement("div", { style: { flex: 1, minWidth: 0 } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: "var(--text-sm)", color: kindColors[kind], lineHeight: "var(--leading-normal)", whiteSpace: "pre-wrap" } }, /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--text-muted)", marginRight: 6 } }, taskId), completion && /* @__PURE__ */ React.createElement("strong", { style: { fontWeight: "var(--weight-semibold)", marginRight: 4 } }, "done \u2014"), text), objection && /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "flex-start", gap: 8, marginTop: 6, padding: "6px 10px", background: "var(--coral-1)", borderRadius: "var(--radius-xs)", fontSize: "var(--text-xs)", color: "var(--coral-4)", whiteSpace: "pre-wrap" } }, /* @__PURE__ */ React.createElement("span", { style: { flex: 1 } }, "objection: ", objection), causeText && /* @__PURE__ */ React.createElement("span", { style: { color: "var(--text-muted)", flexShrink: 0 } }, causeText, causeLinks)), bundledObjection && /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "flex-start", gap: 8, marginTop: 6, padding: "6px 10px", background: "var(--surface-recessed)", borderRadius: "var(--radius-xs)", fontSize: "var(--text-xs)", color: "var(--text-muted)", whiteSpace: "pre-wrap" } }, /* @__PURE__ */ React.createElement("span", { style: { flex: 1 } }, /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", textTransform: "uppercase", letterSpacing: "0.06em", marginRight: 6 } }, "bundled"), bundledObjection), !objection && causeText && /* @__PURE__ */ React.createElement("span", { style: { flexShrink: 0 } }, causeText, causeLinks))),
-      active && /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--coral-4)", paddingTop: 3, flexShrink: 0 } }, "objecting\u2026")
+      /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "flex-start", gap: 10 } }, /* @__PURE__ */ React.createElement("div", { style: { flex: 1, minWidth: 0, fontSize: "var(--text-sm)", color: kindColors[kind], lineHeight: "var(--leading-normal)", whiteSpace: "pre-wrap" } }, /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--text-muted)", marginRight: 6 } }, taskId), completion && /* @__PURE__ */ React.createElement("strong", { style: { fontWeight: "var(--weight-semibold)", marginRight: 4 } }, "done \u2014"), text), active && /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--coral-4)", paddingTop: 3, flexShrink: 0 } }, "objecting\u2026"))
     ),
     onExpand && /* @__PURE__ */ React.createElement(
       "button",
@@ -231,10 +230,11 @@ function LogEntry({ entry = {}, onObject, onExpand, onOpenMemoryEntry, active = 
         "aria-label": "Expand handoff",
         title: "Expand handoff",
         onClick: onExpand,
-        style: { flexShrink: 0, padding: "2px 4px", border: "none", background: "none", color: "var(--text-secondary)", cursor: "pointer", fontSize: "var(--text-sm)", lineHeight: 1 }
+        style: { padding: "2px 4px", border: "none", background: "none", color: "var(--text-secondary)", cursor: "pointer", fontSize: "var(--text-sm)", lineHeight: 1 }
       },
       "\u2304"
-    )
+    ),
+    (objection || bundledObjection) && /* @__PURE__ */ React.createElement("div", { style: { gridColumn: 3 } }, objection && /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "flex-start", gap: 8, marginTop: 6, padding: "6px 10px", background: "var(--coral-1)", borderRadius: "var(--radius-xs)", fontSize: "var(--text-xs)", color: "var(--coral-4)", whiteSpace: "pre-wrap" } }, /* @__PURE__ */ React.createElement("span", { style: { flex: 1 } }, "objection: ", objection), causeText && /* @__PURE__ */ React.createElement("span", { style: { color: "var(--text-muted)", flexShrink: 0 } }, causeText, causeLinks)), bundledObjection && /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "flex-start", gap: 8, marginTop: 6, padding: "6px 10px", background: "var(--surface-recessed)", borderRadius: "var(--radius-xs)", fontSize: "var(--text-xs)", color: "var(--text-muted)", whiteSpace: "pre-wrap" } }, /* @__PURE__ */ React.createElement("span", { style: { flex: 1 } }, /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", textTransform: "uppercase", letterSpacing: "0.06em", marginRight: 6 } }, "bundled"), bundledObjection), !objection && causeText && /* @__PURE__ */ React.createElement("span", { style: { flexShrink: 0 } }, causeText, causeLinks)))
   );
 }
 Object.assign(__ds_scope, { LogEntry });
