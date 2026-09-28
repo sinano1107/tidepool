@@ -81,12 +81,15 @@ test("記憶ケース選択の memory の帰責のリンクは記憶一覧のそ
   const work = await registerWork(t, "ケース選択の帰責リンク e2e");
   await t.clock.advance(HOUR);
   const decided = await loggedEntry(t, work.id, "誤ったメモに従った判断");
-  const note = recordKnowledge(
-    t.db,
-    { scope: null, path: "build", title: "Squash before merge", text: "Squash before merge.", source: { commit: "0a46a46" }, author: { activity: "worker_verb", name: "deckhand" } },
-    "worker",
-    t.clock.now(),
-  ).entry_id;
+  const remember = (title: string) =>
+    recordKnowledge(
+      t.db,
+      { scope: null, path: "build", title, text: `${title}.`, source: { commit: "0a46a46" }, author: { activity: "worker_verb", name: "deckhand" } },
+      "worker",
+      t.clock.now(),
+    ).entry_id;
+  const note = remember("Squash before merge");
+  const other = remember("Rebase before merge");
   await api(t.baseUrl, "POST", "/api/triage/objection", { entry_id: decided.id, comment: "そのメモが間違っています" });
   await api(t.baseUrl, "POST", "/api/triage/close");
   // setup のみ: 門を通った memory の帰責を最新として足す(Board call は撃たない)
@@ -95,14 +98,17 @@ test("記憶ケース選択の memory の帰責のリンクは記憶一覧のそ
     workerId: "tidepool",
     origin: "board",
     at: t.clock.now(),
-    payload: { kind: "objection_attributed", entry_id: decided.id, objection_event_ids: [], cause: "memory", evidence: "followed the note", entries: [note], round: "after_rca" },
+    payload: { kind: "objection_attributed", entry_id: decided.id, objection_event_ids: [], cause: "memory", evidence: "followed the note", entries: [note, other], round: "after_rca" },
   });
 
   await openExemplarForm(page, t.baseUrl);
   await page.getByLabel("Path").fill("habits/memory");
   await page.getByLabel("Title (English)").fill("Check the note first");
 
-  const link = page.getByTestId(`memory-case-row-${decided.id}`).getByRole("link", { name: `#${note}` });
+  const row = page.getByTestId(`memory-case-row-${decided.id}`);
+  // 名指された entry ごとにリンクが出る
+  await expect(row.getByRole("link", { name: `#${other}` })).toBeVisible();
+  const link = row.getByRole("link", { name: `#${note}` });
   const target = page.getByTestId(`memory-entry-${note}`);
   // 2回目も効く —— 1回目の後にリンクの所へ戻り、entry が見えない状態から押し直す
   for (let i = 0; i < 2; i++) {

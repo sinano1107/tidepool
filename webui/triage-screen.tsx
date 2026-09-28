@@ -557,14 +557,20 @@ function groupLogEntries(entries: TpLogEntry[]) {
 const objectionBadge = (comments?: string[] | null) =>
   (comments?.length)! > 1 ? comments!.map((c) => `- ${c}`).join('\n') : comments?.[0];
 
-// ADR 0085: a log entry's `objections` (every one ever raised) split by whether
-// it belongs to the currently open session — the sole fact `session_id` carries —
+// A `GET /api/log` entry as a LogEntry row — shared by webui/app.tsx's triage log
+// and the settings case picker, so the two never drift apart again (#1102).
+// ADR 0085: the entry's `objections` (every one ever raised) split by whether it
+// belongs to the currently open session — the sole fact `session_id` carries —
 // into commit-pending vs. already-bundled. No open session → all bundled.
-// Shared by webui/app.tsx's triage log and the settings case picker (#1102).
 // biome-ignore lint/correctness/noUnusedVariables: used by webui/app.tsx and webui/settings-screen.tsx — one concatenated bundle
-const splitObjections = (objections: WireContract['GET /api/log']['entries'][number]['objections'], openSessionId: number | null) => ({
-  pendingObjections: objections.filter((o) => o.session_id === openSessionId).map((o) => o.comment),
-  bundledObjections: objections.filter((o) => o.session_id !== openSessionId).map((o) => o.comment),
+const toLogEntryShape = (e: WireContract['GET /api/log']['entries'][number], openSessionId: number | null) => ({
+  taskId: e.task_id, agent: e.worker_id, human: e.worker_id === 'human',
+  kind: e.payload.kind === 'task_completed' ? 'completion' as const : 'decision' as const,
+  text: e.payload.kind === 'task_completed' ? (e.payload.result ?? '(no outcome recorded)') : e.payload.line,
+  cause: e.cause ?? undefined,
+  causeEntries: e.entries ?? undefined,
+  pendingObjections: e.objections.filter((o) => o.session_id === openSessionId).map((o) => o.comment),
+  bundledObjections: e.objections.filter((o) => o.session_id !== openSessionId).map((o) => o.comment),
 });
 
 // The entry keys with a commit-pending objection (ADR 0085): the union of

@@ -494,9 +494,16 @@ function groupLogEntries(entries) {
   return groups;
 }
 const objectionBadge = (comments) => comments?.length > 1 ? comments.map((c) => `- ${c}`).join("\n") : comments?.[0];
-const splitObjections = (objections, openSessionId) => ({
-  pendingObjections: objections.filter((o) => o.session_id === openSessionId).map((o) => o.comment),
-  bundledObjections: objections.filter((o) => o.session_id !== openSessionId).map((o) => o.comment)
+const toLogEntryShape = (e, openSessionId) => ({
+  taskId: e.task_id,
+  agent: e.worker_id,
+  human: e.worker_id === "human",
+  kind: e.payload.kind === "task_completed" ? "completion" : "decision",
+  text: e.payload.kind === "task_completed" ? e.payload.result ?? "(no outcome recorded)" : e.payload.line,
+  cause: e.cause ?? void 0,
+  causeEntries: e.entries ?? void 0,
+  pendingObjections: e.objections.filter((o) => o.session_id === openSessionId).map((o) => o.comment),
+  bundledObjections: e.objections.filter((o) => o.session_id !== openSessionId).map((o) => o.comment)
 });
 function commitPendingObjectionKeys(log, localObjections) {
   return /* @__PURE__ */ new Set([
@@ -2004,21 +2011,11 @@ function MemoryCasePicker({ workspace, value, onChange, onQuote }) {
   }
   const shown = typeof log === "string" || log === null ? [] : log.filter((e) => !workspace || e.workspace === workspace).reverse();
   return /* @__PURE__ */ React.createElement("div", { "data-testid": "memory-case-picker", style: { display: "flex", flexDirection: "column", gap: 6, maxHeight: 360, overflowY: "auto" } }, log === null && /* @__PURE__ */ React.createElement("p", { style: muted }, "loading\u2026"), typeof log === "string" && /* @__PURE__ */ React.createElement("p", { style: muted }, log), log !== null && shown.length === 0 && /* @__PURE__ */ React.createElement("p", { style: muted }, "no log entries"), shown.map((e) => {
-    const { pendingObjections, bundledObjections } = splitObjections(e.objections, openSessionId);
+    const row = toLogEntryShape(e, openSessionId);
     return /* @__PURE__ */ React.createElement("div", { key: e.id, "data-testid": `memory-case-row-${e.id}` }, /* @__PURE__ */ React.createElement(
       LogEntry,
       {
-        entry: {
-          taskId: e.task_id,
-          agent: e.worker_id,
-          human: e.worker_id === "human",
-          kind: e.payload.kind === "task_completed" ? "completion" : "decision",
-          text: e.payload.kind === "task_completed" ? e.payload.result ?? "(no outcome recorded)" : e.payload.line,
-          cause: e.cause ?? void 0,
-          causeEntries: e.entries ?? void 0,
-          objection: objectionBadge(pendingObjections),
-          bundledObjection: objectionBadge(bundledObjections)
-        },
+        entry: { ...row, objection: objectionBadge(row.pendingObjections), bundledObjection: objectionBadge(row.bundledObjections) },
         onOpenMemoryEntry: (id) => document.querySelector(`[data-testid="memory-entry-${id}"]`)?.scrollIntoView({ block: "center" })
       }
     ), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8 } }, e.payload.kind === "decision_logged" && /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "sm", onClick: () => onChange?.(e.id) }, "This entry"), e.session_event_id !== null && /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "sm", onClick: () => onChange?.(e.session_event_id) }, "This session")));
@@ -3281,20 +3278,13 @@ function mapData(board, log, pause, icons, triage, queueEnvelope, yourTasks) {
   }));
   const openSessionId = triage.session?.id ?? null;
   const logEntries = [...log.entries].reverse().map((e) => ({
+    ...toLogEntryShape(e, openSessionId),
     id: e.id,
     time: fmtTime(e.created_at),
-    taskId: e.task_id,
-    agent: e.worker_id,
     agentIcon: icons[e.worker_id],
-    human: e.worker_id === "human",
-    kind: e.payload.kind === "task_completed" ? "completion" : "decision",
-    text: e.payload.kind === "task_completed" ? e.payload.result ?? "(no outcome recorded)" : e.payload.line,
     unread: e.unread,
     handoffPresent: e.payload.kind === "task_completed" && !!e.payload.handoff_present,
-    workspace: e.workspace ?? null,
-    cause: e.cause ?? void 0,
-    causeEntries: e.entries ?? void 0,
-    ...splitObjections(e.objections, openSessionId)
+    workspace: e.workspace ?? null
   }));
   const queue = queueEnvelope.tasks.filter((t) => t.status === "todo" || t.status === "blocked" || t.status === "skipped").map((t) => ({
     id: t.id,

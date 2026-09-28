@@ -1534,15 +1534,9 @@ function MemoryCasePicker({ workspace, value, onChange, onQuote }: {
       {typeof log === 'string' && <p style={muted}>{log}</p>}
       {log !== null && shown.length === 0 && <p style={muted}>no log entries</p>}
       {shown.map((e) => {
-        const { pendingObjections, bundledObjections } = splitObjections(e.objections, openSessionId);
+        const row = toLogEntryShape(e, openSessionId);
         return <div key={e.id} data-testid={`memory-case-row-${e.id}`}>
-          <LogEntry entry={{
-            taskId: e.task_id, agent: e.worker_id, human: e.worker_id === 'human',
-            kind: e.payload.kind === 'task_completed' ? 'completion' : 'decision',
-            text: e.payload.kind === 'task_completed' ? (e.payload.result ?? '(no outcome recorded)') : e.payload.line,
-            cause: e.cause ?? undefined, causeEntries: e.entries ?? undefined,
-            objection: objectionBadge(pendingObjections), bundledObjection: objectionBadge(bundledObjections),
-          }}
+          <LogEntry entry={{ ...row, objection: objectionBadge(row.pendingObjections), bundledObjection: objectionBadge(row.bundledObjections) }}
           // scroll only, not the MemoryCard focus: that one fires once per visit, and the draft stays as it is
           onOpenMemoryEntry={(id: number) => document.querySelector(`[data-testid="memory-entry-${id}"]`)?.scrollIntoView({ block: 'center' })} />
           <div style={{ display: 'flex', gap: 8 }}>

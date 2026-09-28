@@ -272,16 +272,11 @@ function mapData(
   // kit does itself from this flat, order-independent list — see triage-screen.tsx.
   const openSessionId = triage.session?.id ?? null;
   const logEntries: TpLogEntry[] = [...log.entries].reverse().map((e) => ({
-    id: e.id, time: fmtTime(e.created_at), taskId: e.task_id, agent: e.worker_id,
-    agentIcon: icons[e.worker_id], human: e.worker_id === 'human',
-    kind: e.payload.kind === 'task_completed' ? 'completion' : 'decision',
-    text: e.payload.kind === 'task_completed' ? (e.payload.result ?? '(no outcome recorded)') : e.payload.line,
+    ...toLogEntryShape(e, openSessionId),
+    id: e.id, time: fmtTime(e.created_at), agentIcon: icons[e.worker_id],
     unread: e.unread,
     handoffPresent: e.payload.kind === 'task_completed' && !!e.payload.handoff_present,
     workspace: e.workspace ?? null,
-    cause: e.cause ?? undefined,
-    causeEntries: e.entries ?? undefined,
-    ...splitObjections(e.objections, openSessionId),
   }));
   // the queue is the todo order the slot walks, straight from /api/queue (ADR
   // 0068 決定6) — the server's own row set and its resource-scoped `skipped`,
