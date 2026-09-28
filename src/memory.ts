@@ -1175,8 +1175,8 @@ function dropReason(row: EntryRow, reader: Pick<MemoryReader, "agent">): MemoryD
   return null;
 }
 
-/** search / INDEX / read に共通のフィルタ(spec #586 B): approved、未無効化、スコープ(task の
- *  workspace or 盤面全体)、宛先(agent 名一致 or 全員)。 */
+/** INDEX(browse と注入)のフィルタ(spec #586 B): approved、未無効化、スコープ(task の
+ *  workspace or 盤面全体)、宛先(agent 名一致 or 全員)。search は rankedEntries と dropReason に、read は inSight に同じ条件を持つ。 */
 function visibleEntries(db: Db, reader: Omit<MemoryReader, "taskId">): EntryRow[] {
   return db
     .prepare(
@@ -1448,7 +1448,7 @@ export function readMemory(
       if (!row || !inSight(row, reader)) continue;
       const chain = sameBodyChain(db, row, restored);
       const cut = chain.findIndex((link) => !inSight(link, reader));
-      const tail = chain[(cut === -1 ? chain.length : cut) - 1]!;
+      const tail = (cut === -1 ? chain : chain.slice(0, cut)).at(-1)!;
       if (tail.invalidation_reason === null) {
         if (tail.id === id) found.set(id, { row: tail });
         else if (!found.has(tail.id)) found.set(tail.id, { row: tail, requested_id: id });
