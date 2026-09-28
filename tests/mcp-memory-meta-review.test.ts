@@ -81,7 +81,7 @@ it("直接適用4つは引数の scope(null = 盤面全体 / registry の worksp
   const author = { activity: "meta_review", name: DEFAULT_AUDITOR_NAME };
   try {
     const boardWide = await call("define_memory", { scope: null, path: "build", definition: "How every workspace builds." });
-    const revised = await call("define_memory", { scope: "sandbox", path: "build", definition: "How sandbox builds.", supersedes: boardWide.body.entry_id });
+    const revised = await call("define_memory", { scope: "sandbox", path: "build", definition: "How sandbox builds.", supersedes: [boardWide.body.entry_id] });
     expect(await call("define_memory", { scope: "charts", path: "build", definition: "How charts builds." })).toMatchObject({ isError: true });
 
     const { event_id: decision } = (await call("log_decision", { line: "the build note belongs board-wide" })).body;
@@ -120,6 +120,37 @@ it("fold_memory の successor_id は既にある後継に畳んで無効化の e
     const folded = await call("fold_memory", { successor_id: kept, replaces: [material] });
 
     expect(folded).toMatchObject({ isError: false, body: { entry_id: kept, event_ids: [expect.any(Number)] } });
+  } finally {
+    await client.close();
+  }
+});
+
+it("define_memory の supersedes は list で、同じ scope の複数の Definition を1回で1つの新しい定義に畳み、空配列とスカラーは tool error で何も書かれない(ADR 0161 決定2)", async () => {
+  const { client, call, material } = await boardWithMetaReview();
+  try {
+    const build = await call("define_memory", { scope: "sandbox", path: "build", definition: "How sandbox builds." });
+    const toolchain = await call("define_memory", { scope: "sandbox", path: "toolchain", definition: "What toolchain sandbox uses." });
+
+    const combined = await call("define_memory", {
+      scope: "sandbox",
+      path: "build-and-toolchain",
+      definition: "How sandbox builds and what it uses.",
+      supersedes: [build.body.entry_id, toolchain.body.entry_id],
+    });
+    expect(combined.isError).toBe(false);
+
+    const rows = async () => (await memoryEntries(t)).map((e) => [e.id, e.invalidation_reason, e.successor_id]);
+    const before = [
+      [material, null, null],
+      [build.body.entry_id, "superseded", combined.body.entry_id],
+      [toolchain.body.entry_id, "superseded", combined.body.entry_id],
+      [combined.body.entry_id, null, null],
+    ];
+    expect(await rows()).toEqual(before);
+
+    expect(await call("define_memory", { scope: "sandbox", path: "empty", definition: "x", supersedes: [] })).toMatchObject({ isError: true });
+    expect(await call("define_memory", { scope: "sandbox", path: "scalar", definition: "x", supersedes: build.body.entry_id })).toMatchObject({ isError: true });
+    expect(await rows()).toEqual(before);
   } finally {
     await client.close();
   }
