@@ -1400,7 +1400,7 @@ function MetaReviewSettingsCard({ settings, say, onSaved, edit }: {
   );
 }
 
-// Memory entries (spec #586 F / issue #593): the human reads, writes and
+// Memory entries (spec #586 F / issue #593): the human reads, writes, moves and
 // invalidates board memory here. Entries without an original are agent-written
 // and get a display-language translation through the shared translate pacer;
 // a failed or throttled one just stays untranslated. There is no approve action
@@ -1498,8 +1498,9 @@ function MemoryCasePicker({ workspace, value, onChange, onQuote }: {
 }
 
 const MEMORY_KINDS = ['knowledge', 'behavior', 'definition', 'exemplar'];
-const MEMORY_INVALIDATION_REASONS = ['superseded', 'path_moved', 'capability', 'environment', 'requirement_change'];
-const needsSuccessor = (reason: string) => reason === 'superseded' || reason === 'path_moved';
+// a change of place is a move, not an invalidation (ADR 0161 決定4)
+const MEMORY_INVALIDATION_REASONS = ['superseded', 'capability', 'environment', 'requirement_change'];
+const needsSuccessor = (reason: string) => reason === 'superseded';
 // who invalidated it (ADR 0159): a human answering a proposal question, a meta-review writing, or a direct invalidation
 const invalidatedBy = (by: WireContract['GET /api/settings/memory/entries']['entries'][number]['invalidated_by']) =>
   !by ? '' : ` by ${'question_id' in by ? `answer to ${by.question_id}` : 'activity' in by ? by.activity : by.worker}`;
@@ -1629,40 +1630,74 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit }: 
     setBusy(false);
   };
 
-  // invalidation: one entry at a time, reason + successor when the reason needs one
-  const [invalidating, setInvalidating] = React.useState<{ id: number; reason: string; successor: string } | null>(null);
-  const invalidate = async () => {
+  // a one-shot change to an entry (invalidate, move): only the form that submitted closes
+  const submit = async (path: `/${string}`, body: Record<string, unknown>, [title, detail]: [string, string], failed: string, close: () => void) => {
     setBusy(true);
     try {
-      await api(`/api/settings/memory/entries/${invalidating!.id}/invalidate`, {
-        reason: invalidating!.reason,
-        ...(needsSuccessor(invalidating!.reason) ? { successor_id: Number(invalidating!.successor) } : {}),
-      });
-      say('success', 'entry invalidated', `#${invalidating!.id} · ${invalidating!.reason}`);
-      setInvalidating(null);
+      await api(path, body);
+      say('success', title, detail);
+      close();
       await load();
     } catch (err) {
-      say('danger', 'invalidate failed', String((err as Error).message || err));
+      say('danger', failed, String((err as Error).message || err));
     }
     setBusy(false);
   };
+
+  // invalidation: one entry at a time, reason + successor when the reason needs one
+  const [invalidating, setInvalidating] = React.useState<{ id: number; reason: string; successor: string } | null>(null);
+  const invalidate = () => submit(`/api/settings/memory/entries/${invalidating!.id}/invalidate`, {
+    reason: invalidating!.reason,
+    ...(needsSuccessor(invalidating!.reason) ? { successor_id: Number(invalidating!.successor) } : {}),
+  }, ['entry invalidated', `#${invalidating!.id} · ${invalidating!.reason}`], 'invalidate failed', () => setInvalidating(null));
+
+  // moves (ADR 0162 決定4): the board copies the body to the new place — one entry, or a whole branch of one scope.
+  // '' is board-wide in both workspace fields
+  const [moving, setMoving] = React.useState<{ id: number; workspace: string; path: string } | null>(null);
+  const [branchMove, setBranchMove] = React.useState<{ workspace: string; path: string; to_workspace: string; to_path: string } | null>(null);
+  const workspaceOptions = [{ value: '', label: 'board-wide' }, ...workspaceNames];
+  const move = (path: `/${string}`, body: Record<string, unknown>, detail: string, close: () => void) => submit(path, body, ['moved', detail], 'move failed', close);
 
   return (
     <Card style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, minHeight: 26 }}>
         <span style={settingsCardLabel}>memory entries</span>
         {!writing && (
-          <div style={{ marginLeft: 'auto' }}>
+          <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
+            {!branchMove && (
+              <Button variant="ghost" size="sm" onClick={() => setBranchMove({ workspace: '', path: '', to_workspace: '', to_path: '' })}>Move branch</Button>
+            )}
             <Button variant="ghost" size="sm" onClick={() => edit.open(writeId, () => setDraft(blank))}>Write</Button>
           </div>
         )}
       </div>
+      {branchMove && (
+        <React.Fragment>
+          <p style={muted}>moves the branch and every live entry under it in one workspace; invalidated entries stay where they are</p>
+          <Select label="From workspace" value={branchMove.workspace} options={workspaceOptions}
+            onChange={(e) => setBranchMove({ ...branchMove, workspace: e.target.value })} />
+          <Input label="From branch path" mono value={branchMove.path} onChange={(e) => setBranchMove({ ...branchMove, path: e.target.value })} placeholder="build" />
+          <Select label="To workspace" value={branchMove.to_workspace} options={workspaceOptions}
+            onChange={(e) => setBranchMove({ ...branchMove, to_workspace: e.target.value })} />
+          <Input label="To branch path" mono value={branchMove.to_path} onChange={(e) => setBranchMove({ ...branchMove, to_path: e.target.value })} placeholder="toolchain" />
+          <div style={{ display: 'flex', gap: 8 }}>
+            <Button variant="secondary" size="sm" disabled={busy || !branchMove.path.trim() || !branchMove.to_path.trim()}
+              onClick={() => move('/api/settings/memory/branches/move', {
+                workspace: branchMove.workspace || null, path: branchMove.path.trim(),
+                to_workspace: branchMove.to_workspace || null, to_path: branchMove.to_path.trim(),
+              }, `${branchMove.path.trim()} → ${branchMove.to_path.trim()}`, () => setBranchMove(null))}>
+              Move branch
+            </Button>
+            <Button variant="ghost" size="sm" disabled={busy} onClick={() => setBranchMove(null)}>Cancel</Button>
+          </div>
+        </React.Fragment>
+      )}
       {writing && (
         <React.Fragment>
           {editingBehavior
             ? <p style={muted}>editing behavior #{draft.supersedes} — saving writes a new approved entry and supersedes this one</p>
             : <Select label="Kind" value={draft.kind} onChange={setDraftField('kind')} options={MEMORY_KINDS} />}
-          <Select label="Workspace" value={draft.workspace} onChange={setDraftField('workspace')} options={[{ value: '', label: 'board-wide' }, ...workspaceNames]} />
+          <Select label="Workspace" value={draft.workspace} onChange={setDraftField('workspace')} options={workspaceOptions} />
           <Input label={draft.kind === 'definition' ? 'Branch path' : 'Path'} mono value={draft.path} onChange={setDraftField('path')} placeholder="build/tests" />
           {(draft.kind === 'behavior' || draft.kind === 'exemplar') && (
             // the current addressee stays offered even if its agent has left the registry
@@ -1762,7 +1797,7 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit }: 
             // a definition's title is its text, so the Set shows it once
             <p style={muted}>{entry.original ? 'original' : 'translation'}: {[...new Set([shown.title, shown.text])].join(' — ')}</p>
           )}
-          {!entry.invalidation_reason && invalidating?.id !== entry.id && (
+          {!entry.invalidation_reason && invalidating?.id !== entry.id && moving?.id !== entry.id && (
             <div style={{ display: 'flex', gap: 8 }}>
               {entry.kind === 'behavior' && entry.state === 'approved' && (
                 <Button variant="ghost" size="sm" onClick={() => edit.open(writeId, () => setDraft({
@@ -1772,8 +1807,24 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit }: 
                   inheritedSource: caseSource,
                 }))}>Edit</Button>
               )}
+              <Button variant="ghost" size="sm" onClick={() => setMoving({ id: entry.id, workspace: entry.scope ?? '', path: entry.path })}>Move</Button>
               <Button variant="ghost" size="sm" onClick={() => setInvalidating({ id: entry.id, reason: 'capability', successor: '' })}>Invalidate</Button>
             </div>
+          )}
+          {moving?.id === entry.id && (
+            <React.Fragment>
+              {/* the entry's current workspace stays offered even if it has left the registry */}
+              <Select label="Workspace" value={moving!.workspace} options={[...new Set([...workspaceOptions, ...(entry.scope ? [entry.scope] : [])])]}
+                onChange={(e) => setMoving({ ...moving!, workspace: e.target.value })} />
+              <Input label="Path" mono value={moving!.path} onChange={(e) => setMoving({ ...moving!, path: e.target.value })} />
+              <div style={{ display: 'flex', gap: 8 }}>
+                <Button variant="secondary" size="sm" disabled={busy || !moving!.path.trim()}
+                  onClick={() => move(`/api/settings/memory/entries/${entry.id}/move`, { workspace: moving!.workspace || null, path: moving!.path.trim() }, `#${entry.id} → ${moving!.path.trim()}`, () => setMoving(null))}>
+                  Move #{entry.id}
+                </Button>
+                <Button variant="ghost" size="sm" disabled={busy} onClick={() => setMoving(null)}>Cancel</Button>
+              </div>
+            </React.Fragment>
           )}
           {invalidating?.id === entry.id && (
             <React.Fragment>

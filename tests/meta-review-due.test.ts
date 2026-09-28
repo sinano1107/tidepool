@@ -8,7 +8,7 @@ import {
   foldMemory,
   invalidateMemoryByMetaReview,
   invalidateMemoryEntry,
-  moveMemory,
+  moveMemoryByMetaReview,
   recordKnowledge,
   rejectMemoryProposal,
 } from "../src/memory.js";
@@ -90,7 +90,7 @@ it("memory meta-review の直接書き込み(define・fold・move・invalidate)�
 
   defineMemoryBranch(db, { scope: null, path: "build", text: "How the board builds.", supersedes: definition, author: metaReview }, "worker", at);
   foldMemory(db, { scope: null, path: "build", title: "Folded", text: "Folded.", replaces: [a, b], based_on_decision: decision, author: metaReview }, "worker", at);
-  moveMemory(db, { entry_id: moved, scope: null, path: "toolchain", author: metaReview }, "worker", at);
+  moveMemoryByMetaReview(db, { entry_id: moved, scope: null, path: "toolchain", mover: metaReview }, "worker", at);
   invalidateMemoryByMetaReview(db, { entry_id: invalidated, reason: "environment" }, "auditor", "worker", at);
   registerDueMetaReviews(db, afterPeriod);
 

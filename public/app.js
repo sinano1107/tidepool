@@ -1951,8 +1951,8 @@ function MemoryCasePicker({ workspace, value, onChange, onQuote }) {
   } }), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8 } }, e.payload.kind === "decision_logged" && /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "sm", onClick: () => onChange(e.id) }, "This entry"), e.session_event_id !== null && /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "sm", onClick: () => onChange(e.session_event_id) }, "This session")))));
 }
 const MEMORY_KINDS = ["knowledge", "behavior", "definition", "exemplar"];
-const MEMORY_INVALIDATION_REASONS = ["superseded", "path_moved", "capability", "environment", "requirement_change"];
-const needsSuccessor = (reason) => reason === "superseded" || reason === "path_moved";
+const MEMORY_INVALIDATION_REASONS = ["superseded", "capability", "environment", "requirement_change"];
+const needsSuccessor = (reason) => reason === "superseded";
 const invalidatedBy = (by) => !by ? "" : ` by ${"question_id" in by ? `answer to ${by.question_id}` : "activity" in by ? by.activity : by.worker}`;
 function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit }) {
   const { Button, Card, Input, Select } = window.TidepoolDesignSystem_8a0ead;
@@ -2054,23 +2054,58 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit }) 
     }
     setBusy(false);
   };
-  const [invalidating, setInvalidating] = React.useState(null);
-  const invalidate = async () => {
+  const submit = async (path, body, [title, detail], failed, close) => {
     setBusy(true);
     try {
-      await api(`/api/settings/memory/entries/${invalidating.id}/invalidate`, {
-        reason: invalidating.reason,
-        ...needsSuccessor(invalidating.reason) ? { successor_id: Number(invalidating.successor) } : {}
-      });
-      say("success", "entry invalidated", `#${invalidating.id} \xB7 ${invalidating.reason}`);
-      setInvalidating(null);
+      await api(path, body);
+      say("success", title, detail);
+      close();
       await load();
     } catch (err) {
-      say("danger", "invalidate failed", String(err.message || err));
+      say("danger", failed, String(err.message || err));
     }
     setBusy(false);
   };
-  return /* @__PURE__ */ React.createElement(Card, { style: { display: "flex", flexDirection: "column", gap: 14 } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8, minHeight: 26 } }, /* @__PURE__ */ React.createElement("span", { style: settingsCardLabel }, "memory entries"), !writing && /* @__PURE__ */ React.createElement("div", { style: { marginLeft: "auto" } }, /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "sm", onClick: () => edit.open(writeId, () => setDraft(blank)) }, "Write"))), writing && /* @__PURE__ */ React.createElement(React.Fragment, null, editingBehavior ? /* @__PURE__ */ React.createElement("p", { style: muted }, "editing behavior #", draft.supersedes, " \u2014 saving writes a new approved entry and supersedes this one") : /* @__PURE__ */ React.createElement(Select, { label: "Kind", value: draft.kind, onChange: setDraftField("kind"), options: MEMORY_KINDS }), /* @__PURE__ */ React.createElement(Select, { label: "Workspace", value: draft.workspace, onChange: setDraftField("workspace"), options: [{ value: "", label: "board-wide" }, ...workspaceNames] }), /* @__PURE__ */ React.createElement(Input, { label: draft.kind === "definition" ? "Branch path" : "Path", mono: true, value: draft.path, onChange: setDraftField("path"), placeholder: "build/tests" }), (draft.kind === "behavior" || draft.kind === "exemplar") && // the current addressee stays offered even if its agent has left the registry
+  const [invalidating, setInvalidating] = React.useState(null);
+  const invalidate = () => submit(`/api/settings/memory/entries/${invalidating.id}/invalidate`, {
+    reason: invalidating.reason,
+    ...needsSuccessor(invalidating.reason) ? { successor_id: Number(invalidating.successor) } : {}
+  }, ["entry invalidated", `#${invalidating.id} \xB7 ${invalidating.reason}`], "invalidate failed", () => setInvalidating(null));
+  const [moving, setMoving] = React.useState(null);
+  const [branchMove, setBranchMove] = React.useState(null);
+  const workspaceOptions = [{ value: "", label: "board-wide" }, ...workspaceNames];
+  const move = (path, body, detail, close) => submit(path, body, ["moved", detail], "move failed", close);
+  return /* @__PURE__ */ React.createElement(Card, { style: { display: "flex", flexDirection: "column", gap: 14 } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8, minHeight: 26 } }, /* @__PURE__ */ React.createElement("span", { style: settingsCardLabel }, "memory entries"), !writing && /* @__PURE__ */ React.createElement("div", { style: { marginLeft: "auto", display: "flex", gap: 8 } }, !branchMove && /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "sm", onClick: () => setBranchMove({ workspace: "", path: "", to_workspace: "", to_path: "" }) }, "Move branch"), /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "sm", onClick: () => edit.open(writeId, () => setDraft(blank)) }, "Write"))), branchMove && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("p", { style: muted }, "moves the branch and every live entry under it in one workspace; invalidated entries stay where they are"), /* @__PURE__ */ React.createElement(
+    Select,
+    {
+      label: "From workspace",
+      value: branchMove.workspace,
+      options: workspaceOptions,
+      onChange: (e) => setBranchMove({ ...branchMove, workspace: e.target.value })
+    }
+  ), /* @__PURE__ */ React.createElement(Input, { label: "From branch path", mono: true, value: branchMove.path, onChange: (e) => setBranchMove({ ...branchMove, path: e.target.value }), placeholder: "build" }), /* @__PURE__ */ React.createElement(
+    Select,
+    {
+      label: "To workspace",
+      value: branchMove.to_workspace,
+      options: workspaceOptions,
+      onChange: (e) => setBranchMove({ ...branchMove, to_workspace: e.target.value })
+    }
+  ), /* @__PURE__ */ React.createElement(Input, { label: "To branch path", mono: true, value: branchMove.to_path, onChange: (e) => setBranchMove({ ...branchMove, to_path: e.target.value }), placeholder: "toolchain" }), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8 } }, /* @__PURE__ */ React.createElement(
+    Button,
+    {
+      variant: "secondary",
+      size: "sm",
+      disabled: busy || !branchMove.path.trim() || !branchMove.to_path.trim(),
+      onClick: () => move("/api/settings/memory/branches/move", {
+        workspace: branchMove.workspace || null,
+        path: branchMove.path.trim(),
+        to_workspace: branchMove.to_workspace || null,
+        to_path: branchMove.to_path.trim()
+      }, `${branchMove.path.trim()} \u2192 ${branchMove.to_path.trim()}`, () => setBranchMove(null))
+    },
+    "Move branch"
+  ), /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "sm", disabled: busy, onClick: () => setBranchMove(null) }, "Cancel"))), writing && /* @__PURE__ */ React.createElement(React.Fragment, null, editingBehavior ? /* @__PURE__ */ React.createElement("p", { style: muted }, "editing behavior #", draft.supersedes, " \u2014 saving writes a new approved entry and supersedes this one") : /* @__PURE__ */ React.createElement(Select, { label: "Kind", value: draft.kind, onChange: setDraftField("kind"), options: MEMORY_KINDS }), /* @__PURE__ */ React.createElement(Select, { label: "Workspace", value: draft.workspace, onChange: setDraftField("workspace"), options: workspaceOptions }), /* @__PURE__ */ React.createElement(Input, { label: draft.kind === "definition" ? "Branch path" : "Path", mono: true, value: draft.path, onChange: setDraftField("path"), placeholder: "build/tests" }), (draft.kind === "behavior" || draft.kind === "exemplar") && // the current addressee stays offered even if its agent has left the registry
   /* @__PURE__ */ React.createElement(
     Select,
     {
@@ -2161,7 +2196,7 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit }) 
       /* @__PURE__ */ React.createElement("p", { style: { margin: 0, fontSize: "var(--text-sm)" } }, entry.text),
       shown && // a definition's title is its text, so the Set shows it once
       /* @__PURE__ */ React.createElement("p", { style: muted }, entry.original ? "original" : "translation", ": ", [.../* @__PURE__ */ new Set([shown.title, shown.text])].join(" \u2014 ")),
-      !entry.invalidation_reason && invalidating?.id !== entry.id && /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8 } }, entry.kind === "behavior" && entry.state === "approved" && /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "sm", onClick: () => edit.open(writeId, () => setDraft({
+      !entry.invalidation_reason && invalidating?.id !== entry.id && moving?.id !== entry.id && /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8 } }, entry.kind === "behavior" && entry.state === "approved" && /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "sm", onClick: () => edit.open(writeId, () => setDraft({
         ...blank,
         kind: "behavior",
         workspace: entry.scope ?? "",
@@ -2173,7 +2208,26 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit }) 
         addressee: entry.addressee ?? "",
         supersedes: String(entry.id),
         inheritedSource: caseSource
-      })) }, "Edit"), /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "sm", onClick: () => setInvalidating({ id: entry.id, reason: "capability", successor: "" }) }, "Invalidate")),
+      })) }, "Edit"), /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "sm", onClick: () => setMoving({ id: entry.id, workspace: entry.scope ?? "", path: entry.path }) }, "Move"), /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "sm", onClick: () => setInvalidating({ id: entry.id, reason: "capability", successor: "" }) }, "Invalidate")),
+      moving?.id === entry.id && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(
+        Select,
+        {
+          label: "Workspace",
+          value: moving.workspace,
+          options: [.../* @__PURE__ */ new Set([...workspaceOptions, ...entry.scope ? [entry.scope] : []])],
+          onChange: (e) => setMoving({ ...moving, workspace: e.target.value })
+        }
+      ), /* @__PURE__ */ React.createElement(Input, { label: "Path", mono: true, value: moving.path, onChange: (e) => setMoving({ ...moving, path: e.target.value }) }), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8 } }, /* @__PURE__ */ React.createElement(
+        Button,
+        {
+          variant: "secondary",
+          size: "sm",
+          disabled: busy || !moving.path.trim(),
+          onClick: () => move(`/api/settings/memory/entries/${entry.id}/move`, { workspace: moving.workspace || null, path: moving.path.trim() }, `#${entry.id} \u2192 ${moving.path.trim()}`, () => setMoving(null))
+        },
+        "Move #",
+        entry.id
+      ), /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "sm", disabled: busy, onClick: () => setMoving(null) }, "Cancel"))),
       invalidating?.id === entry.id && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(
         Select,
         {
