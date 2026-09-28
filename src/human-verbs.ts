@@ -1,6 +1,6 @@
 import { verifyAgentRepaired } from "./agent.js";
 import { type AgentAdmin, AgentTierMismatchError, agentViewProviders } from "./agent-create.js";
-import { type AttributionClient, attributeAfterRca, type BehaviorDraftClient, type BoardCallDeps } from "./attribution.js";
+import { type AttributionCallDeps, attributeAfterRca } from "./attribution.js";
 import { type BoardStatePath, boardStateOverlap } from "./board-state.js";
 import { type CliAuthCheck, quarantineCliAuthFailure } from "./cli-auth.js";
 import type { ContainmentCheck } from "./containment.js";
@@ -377,9 +377,7 @@ export interface SubmitAnswerDeps {
   landing: Landing;
   /** ADR 0115 決定2 / issue #575: abandon は失敗タスクの木を cancel する —— それが
    *  RCA 子なら帰責の第2回がここで走る。 */
-  attributionClient?: AttributionClient;
-  behaviorDraftClient?: BehaviorDraftClient;
-  containers?: BoardCallDeps["containers"];
+  attributionCalls?: AttributionCallDeps;
   /** ADR 0099 決定3: 受理された Containment quarantine の確認回答が slot を解放する
    *  唯一の門。空の再観測は containment の検査の側にある。Absent → watchdog を
    *  持たない盤面(回収を待っている slot が存在しない)。 */
@@ -610,9 +608,7 @@ export interface CancelThroughHumanDoorDeps {
   landing: Landing;
   /** ADR 0115 決定2 / issue #575: cancel された RCA 子が最後の決着になりうるので、
    *  cancel の扉も帰責の第2回を撃つ。 */
-  attributionClient?: AttributionClient;
-  behaviorDraftClient?: BehaviorDraftClient;
-  containers?: BoardCallDeps["containers"];
+  attributionCalls?: AttributionCallDeps;
   workspace?: WorkspaceConfig;
   defaultAgentName?: string;
   auditorName?: string;
@@ -631,11 +627,7 @@ export interface CompleteThroughHumanDoorDeps {
   pollNow: () => void;
   landing: Landing;
   /** ADR 0115 決定2 / issue #575: 最後に決着した RCA 子が人間の完了でも第2回が走る。 */
-  attributionClient?: AttributionClient;
-  behaviorDraftClient?: BehaviorDraftClient;
-  containers?: BoardCallDeps["containers"];
-  /** 起草の scope が null の workspace で継ぐ盤面の既定(issue #617)。 */
-  workspace?: WorkspaceConfig;
+  attributionCalls?: AttributionCallDeps;
 }
 
 /** Shared human-surface completion for human-assignee tasks. */
@@ -657,7 +649,7 @@ export async function completeThroughHumanDoor(
     assertUnsettledNotInProgress(task, "completed");
     const done = completeTask(deps.db, task, handoff, HUMAN_WORKER_ID, now(), origin);
     // 帰責の第2回(ADR 0115 決定2): RCA 子は人間登録なので human に振り直して ここで完了できる
-    void attributeAfterRca(deps.db, deps, done, now()).catch((err) =>
+    void attributeAfterRca(deps.db, deps.attributionCalls, done, now()).catch((err) =>
       console.error(`[attribution] ${done.id}: ${String(err)}`),
     );
     pollIfParentUnblocked(deps.db, done, deps.pollNow);
@@ -722,7 +714,7 @@ export async function cancelThroughHumanDoor(
     );
     // 帰責の第2回(ADR 0115 決定2): cancel も決着。書き込みと同じ tick で呼ぶ(await を挟むと
     // 2つの扉が同時に「RCA 子が揃った」を見る)。fire-and-forget で response を待たせない
-    void attributeAfterRca(deps.db, deps, task, now()).catch((err) =>
+    void attributeAfterRca(deps.db, deps.attributionCalls, task, now()).catch((err) =>
       console.error(`[attribution] ${task.id}: ${String(err)}`),
     );
     pollIfParentUnblocked(deps.db, task, deps.pollNow);
@@ -956,7 +948,7 @@ export async function submitAnswer(
     const abandoned = task.parent_id ? getTask(deps.db, task.parent_id) : undefined;
     if (abandoned) {
       // 帰責の第2回(ADR 0115 決定2): 捨てられたのが RCA 子ならここが最後の決着になりうる
-      void attributeAfterRca(deps.db, deps, abandoned, now()).catch((err) =>
+      void attributeAfterRca(deps.db, deps.attributionCalls, abandoned, now()).catch((err) =>
         console.error(`[attribution] ${abandoned.id}: ${String(err)}`),
       );
       await deps.landing.relandAncestors(abandoned);

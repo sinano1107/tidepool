@@ -63,10 +63,13 @@ export interface BehaviorDraftClient {
   draft(input: BehaviorDraftInput, setting: Pick<ExecutionSettingRow, "model" | "effort">): Promise<BehaviorDraft>;
 }
 
-/** 帰責と起草の Board call が扉から受け取るもの(各扉の deps がそのまま満たす)。 */
-export interface BoardCallDeps {
+/** 帰責と起草の Board call が扉から受け取るもの。合成 root が一度だけ組み、各扉の deps の `attributionCalls` に同じ束を渡す。 */
+export interface AttributionCallDeps {
+  /** 帰責の Board call(ADR 0115 / issue #574・#575)。Absent → commit は異議を `uncertain` で束ね(RCA は帰責以前のまま立つ)、第2回も撃たない。 */
   attributionClient?: AttributionClient;
+  /** Behavior candidate 起草の Board call(ADR 0120 / issue #617)。commit の後と帰責の第2回の後に撃つ。Absent → 何も起草しない。 */
   behaviorDraftClient?: BehaviorDraftClient;
+  /** 起草の scope が null の workspace で継ぐ盤面の既定(issue #617)。 */
   workspace?: { name: string };
   /** 容器の前提(ADR 0136 決定7)。不成立なら撃てなかった扱い。Absent → 前提を検査しない盤面。 */
   containers?: Pick<ProcessContainers, "preflight">;
@@ -92,7 +95,7 @@ function gate({ entries, ...judgment }: AttributionJudgment, read: AttributionIn
 function boardCallSetting<C>(
   db: Db,
   client: C | undefined,
-  containers?: BoardCallDeps["containers"],
+  containers?: AttributionCallDeps["containers"],
 ): { client: C; setting: Pick<ExecutionSettingRow, "model" | "effort"> } | { unavailable: string } {
   if (!client) return { unavailable: "Board call not made: no client is configured" };
   let setting: Pick<ExecutionSettingRow, "model" | "effort">;
@@ -247,7 +250,7 @@ function attributionStates(db: Db): Array<{ task_id: string } & ({ awaiting: Sec
  *  取りこぼし(撃てなかった・失敗・再起動)は poll の sweep が結果の不在で拾い直す(ADR 0164 決定1)。 */
 export async function attributeAfterRca(
   db: Db,
-  deps: BoardCallDeps,
+  deps: AttributionCallDeps = {},
   settled: Task,
   now: Date,
 ): Promise<void> {
@@ -262,7 +265,7 @@ export async function attributeAfterRca(
 /** 帰責の第2回を1 entry ぶん撃つ: RCA の findings を証拠にした判断(`uncertain` も判断として)を
  *  同じ entry への新しい event(round = after_rca)として追記し、起草へ進む(ADR 0120 決定1(b)(c))。
  *  撃てなかったら何も書かず、撃って失敗したら `objection_attribution_failed` だけを残す(ADR 0164 決定3・6)。 */
-async function attributeSecondRound(db: Db, deps: BoardCallDeps, objectedId: string, source: SecondRoundSource, now: Date): Promise<void> {
+async function attributeSecondRound(db: Db, deps: AttributionCallDeps, objectedId: string, source: SecondRoundSource, now: Date): Promise<void> {
   await singleFlight(db, `after_rca:${source.entry_id}`, async () => {
     if (!refireDue(db, "objection_attribution_failed", source.entry_id, now)) return;
     const call = boardCallSetting(db, deps.attributionClient, deps.containers);
@@ -296,7 +299,7 @@ const secondRoundInput = (db: Db, objectedId: string, attribution: SecondRoundSo
 
 /** commit が書いた初回の帰責(`since` より後の event)ごとに起草を fire-and-forget する。境で切るのは、
  *  commit が束ねなかった entry の古い帰責から二度起草しないため。 */
-export function draftAfterCommit(db: Db, deps: BoardCallDeps, since: number, now: Date): void {
+export function draftAfterCommit(db: Db, deps: AttributionCallDeps = {}, since: number, now: Date): void {
   const rows = db.prepare("SELECT id FROM events WHERE kind = 'objection_attributed' AND id > ? ORDER BY id").all(since) as { id: number }[];
   for (const { id } of rows) {
     const payload = getEvent(db, id)!.payload;
@@ -313,7 +316,7 @@ const fireAndForget = (fired: Promise<void>, entryId: number) =>
  *  未帰責、ADR 0168 決定3)で RCA 子がすべて決着したものは第2回、それ以外は最新の帰責を出所とする candidate が
  *  無いもの の起草。起草の規則・回数・間隔・in-flight・撃てるか は撃つ側(`draftBehaviorCandidate` /
  *  `attributeSecondRound`)が見る。初回の帰責は撃ち直さない(ADR 0168 決定1)。 */
-export function refireAttributions(db: Db, deps: BoardCallDeps, now: Date): void {
+export function refireAttributions(db: Db, deps: AttributionCallDeps = {}, now: Date): void {
   const drafted = new Set(
     (db.prepare("SELECT CAST(source_ref AS INTEGER) AS id FROM memory_entries WHERE source_kind = 'event'").all() as { id: number }[]).map((r) => r.id),
   );
@@ -369,7 +372,7 @@ function memoryRead(db: Db, entry: DecisionLogEntry): AttributionInput["memory_r
  *  (ADR 0115 決定4)、Board call の `addressee` は `preference` だけが読む。撃てなかったら何も書かず、
  *  撃って失敗したら `memory_draft_failed` を残す(ADR 0164 決定3)。帰責の transaction の後に走り、
  *  commit も settlement も止めない。 */
-export async function draftBehaviorCandidate(db: Db, deps: BoardCallDeps, attribution: Attribution, now: Date): Promise<void> {
+export async function draftBehaviorCandidate(db: Db, deps: AttributionCallDeps, attribution: Attribution, now: Date): Promise<void> {
   const { cause, round, entry_id } = attribution;
   const drafts = round === "initial" ? cause === "preference" : LEARNING_CAUSES.includes(cause);
   const entry = requireLogEntry(db, entry_id);

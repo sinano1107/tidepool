@@ -8,7 +8,7 @@ import {
   InvalidAgentIconError,
   UnknownAuthorityProfileError,
 } from "./agent-create.js";
-import type { AttributionClient, BehaviorDraftClient, BoardCallDeps } from "./attribution.js";
+import type { AttributionCallDeps } from "./attribution.js";
 import { boardHalts } from "./board-halt.js";
 import type { Clock } from "./clock.js";
 import type { Db } from "./db.js";
@@ -114,11 +114,9 @@ export interface ManagementMcpDeps {
   github?: GitHubClient;
   landing: Landing;
   draftClient?: DraftClient;
-  /** ADR 0115 決定2 / issue #575: threaded to the cancel / answer doors, the
+  /** ADR 0115 決定2 / issue #575: threaded to the cancel / answer / complete doors, the
    *  same seam the WebUI router carries. */
-  attributionClient?: AttributionClient;
-  behaviorDraftClient?: BehaviorDraftClient;
-  containers?: BoardCallDeps["containers"];
+  attributionCalls?: AttributionCallDeps;
   pollNow: () => void;
   defaultAgentName?: string;
   auditorName?: string;
@@ -906,9 +904,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
               landing: deps.landing,
               reclaim: deps.reclaim,
               quarantineChecks: deps.quarantineChecks,
-              attributionClient: deps.attributionClient,
-              behaviorDraftClient: deps.behaviorDraftClient,
-              containers: deps.containers,
+              attributionCalls: deps.attributionCalls,
               agentAdmin: deps.agentAdmin,
             },
             task,
