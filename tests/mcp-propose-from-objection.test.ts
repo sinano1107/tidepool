@@ -112,7 +112,7 @@ it("capability の異議エントリに RCA が呼ぶと、宛先 = エントリ
 it("propose_from_objection の拒否は tool error として返る(何を断るかは domain 層 —— tests/propose-from-objection.test.ts が言う)", async () => {
   t = await bootTidepool();
   const work = await registerWork(t, "not a review", "charts");
-  await t.clock.advance(HOUR);
+  await t.clock.advance(HOUR); // picked up into the slot
 
   expect(await propose(work.id, { entry_id: 999_999 })).toMatchObject({ isError: true, content: [{ text: expect.any(String) }] });
 });

@@ -68,7 +68,7 @@ it("学習に向かない cause・宛先の agent が無い Behavior・as と ba
   ] as const) {
     const propose = () => proposeFromObjection(db, reviewId, { path: "testing/fixtures", title: "Keep fixtures", text: "Never skip the fixtures.", ...args }, {}, "auditor", at);
     expect(propose).toThrow(DomainError);
-    expect(propose).toThrow(error);
+    expect(propose).toThrow(new DomainError(error));
   }
   expect(listMemoryEntries(db, {})).toEqual([]);
 });

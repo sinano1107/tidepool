@@ -353,7 +353,7 @@ function decisionLogText(db: Db, taskId: string, before = Number.POSITIVE_INFINI
 }
 
 /** entry への最新の帰責(同じ entry への追記は最新が有効 —— spec #563)。無ければ undefined。 */
-export function latestAttribution(
+function latestAttribution(
   db: Db,
   entry: { id: number; task_id: string },
 ): Attribution | undefined {
@@ -365,13 +365,13 @@ export function latestAttribution(
 }
 
 /** 人間が書いたエントリか —— 宛先となる agent を持たない(self RCA も立たない)。 */
-export const isHumanEntry = (entry: { worker_id: string }) => entry.worker_id === HUMAN_WORKER_ID;
+const isHumanEntry = (entry: { worker_id: string }) => entry.worker_id === HUMAN_WORKER_ID;
 
 const LEARNING_CAUSES: readonly Cause[] = ["capability", "preference", "task_ambiguity", "missing_information"];
 
 /** 学習の行き先を cause から導出する(ADR 0115 決定4)。`as` は `missing_information` だけが
  *  要り、Knowledge は宛先を持たない。Behavior の宛先が agent に落ちなければ DomainError。 */
-export function learningTarget(
+function learningTarget(
   cause: Cause,
   entryWorker: string,
   registrant: string,
