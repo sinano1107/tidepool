@@ -1,9 +1,8 @@
 import { type AgentView, agentViewProviders } from "./agent-create.js";
 import type { Db } from "./db.js";
-import type { EventPayload } from "./events.js";
+import { type EventPayload, getEvent, listEventsOfKinds } from "./events.js";
 import {
   BOARD_DEFAULT_TIER,
-  type ExecutionSettingsChange,
   loadExecutionSettingTable,
   parseRoutingRowChange,
   readExecutionSettings,
@@ -65,23 +64,20 @@ export function listRoutingShadow(db: Db, readerTaskId: string, input: ReadWindo
   return { shadow: shown, truncated };
 }
 
-/** 配分評価の分布: 評価された注釈を worker session の (`source.tier`, agent, allocation, cause) で数え、judge の model が
- *  worker のセルの model と同じだった件数を添える(ADR 0150 決定8)。unevaluated の注釈は分布に入らない。 */
+/** 配分評価の分布: 注釈を worker session の (`source.tier`, agent, allocation, cause) で数え、judge の model が
+ *  worker のセルの model と同じだった件数を添える(ADR 0150 決定8)。 */
 export function listAllocations(db: Db, readerTaskId: string, input: ReadWindow) {
   const episodes = new Map(loadEpisodes(db).map((e) => [e.worker_spawned_event_id, e]));
-  const annotations = db
-    .prepare("SELECT payload FROM events WHERE kind = 'allocation_reviewed' AND id > ? ORDER BY id")
-    .all(since(db, readerTaskId, input)) as Array<{ payload: string }>;
+  const annotations = listEventsOfKinds(db, ["allocation_reviewed"], { after: since(db, readerTaskId, input) });
   const groups = new Map<string, { source_tier: string; agent: string; allocation: string; cause: string; count: number; judged_by_same_model: number }>();
-  for (const { payload } of annotations) {
-    const p = JSON.parse(payload) as Extract<EventPayload, { kind: "allocation_reviewed" }>;
-    const episode = p.worker_spawned_event_id === null ? undefined : episodes.get(p.worker_spawned_event_id);
-    if (!("allocation" in p) || !episode) continue;
+  for (const { payload: p } of annotations) {
+    const episode = episodes.get(p.worker_spawned_event_id);
+    if (!episode) continue;
     const key = JSON.stringify([episode.source.tier, episode.agent, p.allocation, p.cause]);
     const group = groups.get(key) ?? { source_tier: episode.source.tier, agent: episode.agent, allocation: p.allocation, cause: p.cause, count: 0, judged_by_same_model: 0 };
     group.count += 1;
     // judge は表の行の綴り(alias 可)、セルは観測された具体 id —— 表の照合と同じ部分一致
-    if (p.judge?.provider === episode.cell.provider && windowMatchesModel(p.judge.model, episode.cell.model)) group.judged_by_same_model += 1;
+    if (p.judge.provider === episode.cell.provider && windowMatchesModel(p.judge.model, episode.cell.model)) group.judged_by_same_model += 1;
     groups.set(key, group);
   }
   const { rows, truncated } = paged([...groups.values()], input.page);
@@ -100,15 +96,9 @@ export function listRoutingCells(db: Db, readerTaskId: string, input: ReadWindow
     const seen = firstSeen.get(key);
     if (!seen || e.worker_exited_event_id < seen.first_observed_event_id) firstSeen.set(key, { cell: e.cell, first_observed_event_id: e.worker_exited_event_id });
   }
-  const changed = (
-    db
-      .prepare(
-        `SELECT id, origin, payload, created_at FROM events
-          WHERE kind = 'execution_settings_changed' AND json_extract(payload, '$.setting') = 'row' AND json_extract(payload, '$.question_id') IS NULL
-            AND id > ? ORDER BY id`,
-      )
-      .all(from) as Array<{ id: number; origin: string; payload: string; created_at: string }>
-  ).map((r) => ({ event_id: r.id, origin: r.origin, created_at: r.created_at, row: (JSON.parse(r.payload) as Extract<ExecutionSettingsChange, { setting: "row" }>).row }));
+  const changed = listEventsOfKinds(db, ["execution_settings_changed"], { after: from }).flatMap(({ id, origin, created_at, payload: p }) =>
+    p.setting === "row" && p.question_id === undefined ? [{ event_id: id, origin, created_at, row: p.row }] : [],
+  );
   // 人間の行の編集は数件なのでページに割らず全部返す
   const { rows: cells, truncated } = paged([...firstSeen.values()].filter((c) => c.first_observed_event_id > from), input.page);
   return { cells, rows: changed, truncated };
@@ -161,9 +151,9 @@ function agentTierProposal(db: Db, agents: readonly AgentView[], input: { agent?
   }
   const rows = new Map<string, RegistryProposal["pin"]["rows"][number]>();
   for (const id of evidence) {
-    const event = db.prepare("SELECT worker_id, payload FROM events WHERE id = ? AND kind = 'worker_spawned'").get(id) as { worker_id: string; payload: string } | undefined;
-    if (event?.worker_id !== name) throw new DomainError(`evidence ${id} is not a worker_spawned event of ${name}`);
-    const spawned = JSON.parse(event.payload) as Extract<EventPayload, { kind: "worker_spawned" }>;
+    const event = getEvent(db, id);
+    if (event?.payload.kind !== "worker_spawned" || event.worker_id !== name) throw new DomainError(`evidence ${id} is not a worker_spawned event of ${name}`);
+    const spawned = event.payload;
     // 根拠は床を agent の既定ティアが決めた episode だけ(ADR 0111 追記2)—— 他の出所の tier は agent の宣言の過剰を言わない
     if (spawned.source.tier !== "agent") throw new DomainError(`evidence ${id} took its tier from ${spawned.source.tier}, not from ${name}'s default tier`);
     const row = table.find((r) => r.provider === spawned.provider && r.model === spawned.model);

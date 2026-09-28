@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { createApiRouter } from "../src/api.js";
 import type { Db } from "../src/db.js";
-import { FakeClock, unusedLanding } from "./fakes.js";
+import { FakeClock, noAttributionCalls, unusedLanding } from "./fakes.js";
 import { bootTidepool, mcpClient, TEST_TOKEN, type Tidepool } from "./harness.js";
 
 let t: Tidepool;
@@ -15,6 +15,7 @@ afterEach(() => t?.stop());
  *  全メソッドを拾う: credential は読取も操作も等しく要求する(ADR 0036)。 */
 function listRoutes(db: Db): { method: string; path: string }[] {
   const router = createApiRouter({
+    attributionCalls: noAttributionCalls,
     db,
     clock: new FakeClock(),
     pollNow: () => {},

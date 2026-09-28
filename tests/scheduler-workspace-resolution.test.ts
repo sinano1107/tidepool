@@ -5,7 +5,7 @@ import { implicitTaskExecutionCandidates } from "../src/server-options.js";
 import { Slot } from "../src/slot.js";
 import { registerTask } from "../src/tasks.js";
 import { UnknownWorkspaceError, type WorkspaceConfig, workspaceNeedsHuman } from "../src/workspace.js";
-import { FakeClock, fakeContainers, ScriptedWorker } from "./fakes.js";
+import { FakeClock, fakeContainers, noAttributionCalls, ScriptedWorker } from "./fakes.js";
 import { GIT_FIXTURE_TEST_TIMEOUT, git, makeWorkspace } from "./harness.js";
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
@@ -20,6 +20,7 @@ describe("scheduler の pickup が task.workspace を解決する", () => {
     const worker = new ScriptedWorker(clock);
     const slot = new Slot();
     const scheduler = startScheduler({
+      attributionCalls: noAttributionCalls,
       db,
       clock,
       slot,
@@ -58,6 +59,7 @@ describe("scheduler の pickup が task.workspace を解決する", () => {
     const worker = new ScriptedWorker(clock);
     const slot = new Slot();
     const scheduler = startScheduler({
+      attributionCalls: noAttributionCalls,
       db,
       clock,
       slot,
@@ -96,6 +98,7 @@ describe("scheduler の pickup が task.workspace を解決する", () => {
     const worker = new ScriptedWorker(clock);
     const slot = new Slot();
     const scheduler = startScheduler({
+      attributionCalls: noAttributionCalls,
       db,
       clock,
       slot,

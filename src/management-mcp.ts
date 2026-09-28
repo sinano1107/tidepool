@@ -8,7 +8,7 @@ import {
   InvalidAgentIconError,
   UnknownAuthorityProfileError,
 } from "./agent-create.js";
-import { type AttributionCallDeps, listHaltedRefires, markHaltedRefire, refireKeySchema } from "./attribution.js";
+import { listHaltedRefires, markHaltedRefire, refireKeySchema } from "./attribution.js";
 import { boardHalts } from "./board-halt.js";
 import type { Clock } from "./clock.js";
 import type { Db } from "./db.js";
@@ -117,9 +117,6 @@ export interface ManagementMcpDeps {
   github?: GitHubClient;
   landing: Landing;
   draftClient?: DraftClient;
-  /** ADR 0115 決定2 / issue #575: threaded to the cancel / answer / complete doors, the
-   *  same seam the WebUI router carries. */
-  attributionCalls?: AttributionCallDeps;
   pollNow: () => void;
   defaultAgentName?: string;
   auditorName?: string;
@@ -732,9 +729,12 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
     "list_halted_refires",
     {
       description:
-        "List the Behavior drafts (refire draft, target = the attribution event id) and second-round attributions (refire second_round, " +
-        "target = the objected entry id) the board stopped refiring after 3 failed calls since the last retry. Each row shows the objected " +
-        "entry, its task, cause (null = unattributed), round, and the last failure's reason and time.",
+        "List the retrospective Board calls the board stopped refiring after 3 failed calls since the last retry: allocation reviews " +
+        "(refire allocation, target = the review's task_completed event id), Behavior drafts (refire draft, target = the attribution event id) " +
+        "and second-round attributions (refire second_round, target = the id of the first objection event of the bundle — the objections one " +
+        "triage session raised against the entry). An allocation row shows the review and the reviewed task; a draft or second-round row shows " +
+        "the objected entry, its task, cause (the latest bundle's judgment; null = unattributed) and round. Every row shows the last failure's " +
+        "reason and time.",
     },
     async () => toolResult({ halted: listHaltedRefires(deps.db) }),
   );
@@ -742,8 +742,9 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
     "retry_halted_refire",
     {
       description:
-        "Retry a halted refire: the board fires it again at the next pickup poll, up to 3 more failed calls. " +
-        "Refused for anything not currently in list_halted_refires.",
+        "Retry a halted refire (allocation review, Behavior draft or second-round attribution): the board fires it again at the next " +
+        "pickup poll, up to 3 more failed calls. " +
+        "Key it as list_halted_refires does (second_round: target = the bundle's first objection event id). Refused for anything not currently in list_halted_refires.",
       inputSchema: refireKeySchema.shape,
     },
     async (key) => memoryVerb(() => ({ event_id: markHaltedRefire(deps.db, "refire_retried", key, "mcp", deps.clock.now()) })),
@@ -752,8 +753,9 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
     "dismiss_halted_refire",
     {
       description:
-        "Dismiss a halted refire: it leaves the list and the board never fires it again (nothing to learn, or you wrote the behavior yourself). " +
-        "Refused for anything not currently in list_halted_refires.",
+        "Dismiss a halted refire: it leaves the list and the board never fires it again (nothing to learn, you wrote the behavior yourself, " +
+        "or the episode is not worth an allocation review). " +
+        "Key it as list_halted_refires does (second_round: target = the bundle's first objection event id). Refused for anything not currently in list_halted_refires.",
       inputSchema: refireKeySchema.shape,
     },
     async (key) => memoryVerb(() => ({ event_id: markHaltedRefire(deps.db, "refire_dismissed", key, "mcp", deps.clock.now()) })),
@@ -961,7 +963,6 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
               landing: deps.landing,
               reclaim: deps.reclaim,
               quarantineChecks: deps.quarantineChecks,
-              attributionCalls: deps.attributionCalls,
               agentAdmin: deps.agentAdmin,
             },
             task,

@@ -1,6 +1,6 @@
 import { afterEach, expect, it } from "vitest";
-import { appendEvent, latestAttributions, listEventsOfKinds } from "../src/events.js";
-import { api, bootTidepool, FIXTURE_TASK, HOUR, mcpClient, seedFixtureBoard, type Tidepool } from "./harness.js";
+import { appendEvent, currentAttributions, latestEventOfTask, listEventsOfKinds } from "../src/events.js";
+import { api, bootTidepool, bundledObjection, FIXTURE_OTHER_TASK, FIXTURE_TASK, HOUR, mcpClient, seedFixtureBoard, type Tidepool } from "./harness.js";
 
 let t: Tidepool;
 afterEach(() => t?.stop());
@@ -73,19 +73,44 @@ it("kind で引く読み口は、指定した kind の event だけを盤面全�
   ]);
 });
 
-it("最新の帰責の読み口は、同じ entry に2件の帰責があるとき後の方を返す(spec #563 / issue #1073)", () => {
+it("kind で引く読み口の id の範囲は、下限の id ちょうどを含まず上限の id ちょうどを含み、省略すれば全件(issue #1126)", () => {
+  const db = seedFixtureBoard();
+  const ids = (range?: { after?: number; upTo?: number }) => listEventsOfKinds(db, ["worker_exited", "decision_logged"], range).map((e) => e.id);
+  expect(ids({ after: 7 })).toEqual([8, 11]);
+  expect(ids({ upTo: 7 })).toEqual([6, 7]);
+  expect(ids({ after: 6, upTo: 8 })).toEqual([7, 8]);
+  expect(ids({})).toEqual([6, 7, 8, 11]);
+});
+
+it("タスク単位の最新1件の読み口は、同じタスク・同じ kind の後の方を返し、他タスクの event は返さず、無ければ undefined(issue #1126)", () => {
+  const db = seedFixtureBoard();
+  const later = appendEvent(db, {
+    taskId: FIXTURE_OTHER_TASK,
+    workerId: "tidepool",
+    origin: "worker",
+    payload: { kind: "decision_logged", line: "other task" },
+    at: new Date("2026-09-28T00:00:00.000Z"),
+  });
+  // FIXTURE_TASK の decision_logged は 6 / 7 / 8。他タスクの後の event(later)は返さない
+  expect(latestEventOfTask(db, FIXTURE_TASK, "decision_logged")?.id).toBe(8);
+  expect(latestEventOfTask(db, FIXTURE_OTHER_TASK, "decision_logged")?.id).toBe(later);
+  expect(latestEventOfTask(db, FIXTURE_OTHER_TASK, "worker_spawned")).toBeUndefined();
+});
+
+it("今の判定の読み口は、同じ異議群に initial と after_rca の帰責があるとき after_rca を返す(ADR 0170 / issue #1073)", () => {
   const db = seedFixtureBoard();
   const at = new Date("2026-09-28T00:00:00.000Z");
+  const objection = bundledObjection(db, FIXTURE_TASK, 7, at);
   const attribute = (cause: "uncertain" | "preference", round: "initial" | "after_rca") =>
     appendEvent(db, {
       taskId: FIXTURE_TASK,
       workerId: "tidepool",
       origin: "board",
-      payload: { kind: "objection_attributed", entry_id: 7, objection_event_ids: [], cause, evidence: "e", entries: null, round },
+      payload: { kind: "objection_attributed", entry_id: 7, objection_event_ids: [objection], cause, evidence: "e", entries: null, round },
       at,
     });
   attribute("uncertain", "initial");
   const later = attribute("preference", "after_rca");
 
-  expect(latestAttributions(db).get(7)).toMatchObject({ id: later, cause: "preference", round: "after_rca" });
+  expect(currentAttributions(db).get(7)).toMatchObject({ id: later, cause: "preference", round: "after_rca" });
 });

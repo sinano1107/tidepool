@@ -1348,27 +1348,23 @@ function MemorySettingsCard({ settings, say, onSaved, edit }: {
   );
 }
 
-// Halted refires (ADR 0164 決定5 / issue #1066): behavior drafts and second-round attributions the board
-// stopped refiring after 3 failed calls. Retry fires it again (3 more tries); Dismiss closes it for good.
-// Hidden while nothing is halted.
-function HaltedRefiresCard({ say }: { say: AppSay }) {
+// Halted refires (ADR 0164 決定5 / ADR 0172 決定3): retrospective Board calls (allocation review, attribution,
+// Behavior candidate drafting) the board stopped refiring after 3 failed calls. Retry fires it again (3 more
+// tries); Dismiss closes it for good. Sits next to the retrospective tier those calls run on; hidden while
+// nothing is halted.
+function HaltedRefiresCard({ rows, say, onChanged }: {
+  rows: WireContract['GET /api/settings/execution/halted-refires']['halted'];
+  say: AppSay;
+  onChanged: () => Promise<void>;
+}) {
   const { Button, Card } = window.TidepoolDesignSystem_8a0ead;
-  const [rows, setRows] = React.useState<WireContract['GET /api/settings/memory/halted-refires']['halted']>([]);
   const [busy, setBusy] = React.useState(false);
-  const load = async () => {
-    try {
-      setRows((await api('GET /api/settings/memory/halted-refires')).halted);
-    } catch (err) {
-      say('danger', 'halted refires load failed', String((err as Error).message || err));
-    }
-  };
-  React.useEffect(() => { load(); }, []);
   const act = async (row: (typeof rows)[number], verb: 'retry' | 'dismiss') => {
     setBusy(true);
     try {
-      await api(`/api/settings/memory/halted-refires/${row.refire}/${row.target}/${verb}`, {});
-      say('success', verb === 'retry' ? 'refire retried' : 'refire dismissed', `entry #${row.entry.id}`);
-      await load();
+      await api(`/api/settings/execution/halted-refires/${row.refire}/${row.target}/${verb}`, {});
+      say('success', verb === 'retry' ? 'refire retried' : 'refire dismissed', row.task.title);
+      await onChanged();
     } catch (err) {
       say('danger', `${verb} failed`, String((err as Error).message || err));
     }
@@ -1379,13 +1375,19 @@ function HaltedRefiresCard({ say }: { say: AppSay }) {
   return (
     <Card style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
       <span style={settingsCardLabel}>halted refires</span>
-      <p style={muted}>the board stopped retrying these after 3 failed calls. retry to fire again, dismiss to stop learning from it.</p>
+      <p style={muted}>retrospective Board calls (allocation review, attribution, drafting) the board stopped retrying after 3 failed calls. retry to fire again, dismiss to never fire it.</p>
       {rows.map((row) => (
         <div key={`${row.refire}:${row.target}`} style={{ display: 'flex', flexDirection: 'column', gap: 4, borderTop: '1px solid var(--border-default)', paddingTop: 10 }}>
-          <p style={{ ...muted, fontFamily: 'var(--font-mono)' }}>
-            {row.refire === 'draft' ? 'behavior draft' : 'second-round attribution'} · entry #{row.entry.id} · {row.task.title} · {row.cause ?? 'unattributed'} · {row.round}
-          </p>
-          <p style={{ margin: 0, fontSize: 'var(--text-sm)' }}>{row.entry.text}</p>
+          {row.refire === 'allocation' ? (
+            <p style={{ ...muted, fontFamily: 'var(--font-mono)' }}>allocation review · {row.review.title} · {row.task.title}</p>
+          ) : (
+            <React.Fragment>
+              <p style={{ ...muted, fontFamily: 'var(--font-mono)' }}>
+                {row.refire === 'draft' ? 'behavior draft' : `second-round attribution · objection #${row.target}`} · entry #{row.entry.id} · {row.task.title} · {row.cause ?? 'unattributed'} · {row.round}
+              </p>
+              <p style={{ margin: 0, fontSize: 'var(--text-sm)' }}>{row.entry.text}</p>
+            </React.Fragment>
+          )}
           <p style={muted}>last failure {new Date(row.last_failure.at).toLocaleString()}: {row.last_failure.reason}</p>
           <div style={{ display: 'flex', gap: 8 }}>
             <Button variant="secondary" size="sm" disabled={busy} onClick={() => act(row, 'retry')}>Retry</Button>
@@ -2452,6 +2454,12 @@ function SettingsScreen({ say, memoryFocus, registerLeaveGuard }: {
   };
   React.useEffect(() => { loadMetaReviewSettings(); }, []);
 
+  const [haltedRefires, setHaltedRefires] = React.useState<WireContract['GET /api/settings/execution/halted-refires']['halted'] | null>(null); // null → still loading
+  const loadHaltedRefires = async () => {
+    setHaltedRefires((await api('GET /api/settings/execution/halted-refires')).halted);
+  };
+  React.useEffect(() => { loadHaltedRefires(); }, []);
+
   // ADR 0093 決定5: read-only. null → still loading; the card only appears once
   // the board has answered, so "not logged in" is never shown speculatively.
   const [githubLoggedIn, setGithubLoggedIn] = React.useState<boolean | null>(null);
@@ -2595,7 +2603,7 @@ function SettingsScreen({ say, memoryFocus, registerLeaveGuard }: {
     setDirty,
   };
   const go = (next: string[]) => guard(() => { setStack(next); closeEdit(); });
-  const boardLoaded = displayLanguageLoaded && quietHoursLoaded && !!providerPaceOffsets && !!executionSettings && !!memorySettings && !!metaReviewSettings;
+  const boardLoaded = displayLanguageLoaded && quietHoursLoaded && !!providerPaceOffsets && !!executionSettings && !!memorySettings && !!metaReviewSettings && !!haltedRefires;
 
   // a tab switch unmounts this screen, so it has to ask too (決定4)
   React.useEffect(() => {
@@ -2750,6 +2758,7 @@ function SettingsScreen({ say, memoryFocus, registerLeaveGuard }: {
         {executionSettings && (
           <React.Fragment>
             <ExecutionDefaultsCard settings={executionSettings} say={say} onSaved={loadExecutionSettings} edit={edit} />
+            {haltedRefires && <HaltedRefiresCard rows={haltedRefires} say={say} onChanged={loadHaltedRefires} />}
             <ExecutionTableCard settings={executionSettings} say={say} onSaved={loadExecutionSettings} edit={edit} />
           </React.Fragment>
         )}
@@ -2774,8 +2783,6 @@ function SettingsScreen({ say, memoryFocus, registerLeaveGuard }: {
         )}
         {githubLoggedIn !== null && <GitHubLoginCard loggedIn={githubLoggedIn} />}
         {(translateUsage !== null || translateUsageFailed) && <TranslateUsageCard records={translateUsage} />}
-        {/* board state too, and below the entries: a card that appears later must not push a focused entry out of view */}
-        <HaltedRefiresCard say={say} />
       </React.Fragment>
     );
   } else if (!sec) {

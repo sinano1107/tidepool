@@ -2,7 +2,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Cause } from "./cause.js";
 import type { Db } from "./db.js";
-import { type EventRow, getEvent, latestAttributions, listEvents } from "./events.js";
+import { currentAttributions, type EventRow, getEvent, listEvents } from "./events.js";
 import { isAdvisorBlock, parseStreamLine, readInitVersion } from "./stream-json.js";
 import { entryObjections } from "./triage.js";
 
@@ -570,7 +570,7 @@ export interface StoredMarker extends EpisodeMarker {
   displayed: boolean;
   objections: string[];
   cause: Cause | null;
-  /** 最新の帰責が `memory` のとき名指された entry の id 列(ADR 0166 決定5)。他は null。 */
+  /** 今の判定(最後の異議群の判定、ADR 0170)が `memory` のとき名指された entry の id 列(ADR 0166 決定5)。他は null。 */
   entries: number[] | null;
 }
 
@@ -710,14 +710,8 @@ function decisionOutcomes(db: Db, markerRows: MarkerRow[]): Map<number, Decision
     .all(...ids) as Array<{ entry_id: number }>) {
     out.get(row.entry_id)!.displayed = true;
   }
-  const attributions = latestAttributions(db);
-  for (const [id, entry] of out) {
-    const attribution = attributions.get(id);
-    if (attribution) {
-      entry.cause = attribution.cause;
-      entry.entries = attribution.entries;
-    }
-  }
+  // cause は entry の今の判定 —— 最後の異議群の判定(ADR 0170 決定2)
+  for (const [entryId, { cause, entries }] of currentAttributions(db, ids)) Object.assign(out.get(entryId)!, { cause, entries });
   return out;
 }
 

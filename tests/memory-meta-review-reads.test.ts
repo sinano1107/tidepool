@@ -14,6 +14,7 @@ import {
   rejectMemoryProposal,
 } from "../src/memory.js";
 import { answerQuestion, getTask, logDecision, type MemoryProposal, registerTask } from "../src/tasks.js";
+import { bundledObjection } from "./harness.js";
 
 /** meta-review の読み口(issue #619 / ADR 0120 決定2)のドメイン層。verb への写像はサーバ境界
  *  (tests/mcp-memory-meta-review.test.ts)が言う。 */
@@ -48,7 +49,7 @@ it("list_memory_candidates は candidate を cause・author・出所つきで返
     taskId: task.id,
     workerId: "tidepool",
     origin: "board",
-    payload: { kind: "objection_attributed", entry_id: decision, objection_event_ids: [], cause: "preference", evidence: "e", entries: null, round: "after_rca" },
+    payload: { kind: "objection_attributed", entry_id: decision, objection_event_ids: [bundledObjection(db, task.id, decision, at)], cause: "preference", evidence: "e", entries: null, round: "after_rca" },
     at,
   });
   const open = behavior({ title: "Short notes", source: attributed });
@@ -113,7 +114,7 @@ it("list_memory_candidates は kind で絞れる —— exemplar なら Exemplar
     taskId: task.id,
     workerId: "tidepool",
     origin: "board",
-    payload: { kind: "objection_attributed", entry_id: decision, objection_event_ids: [], cause: "preference", evidence: "e", entries: null, round: "after_rca" },
+    payload: { kind: "objection_attributed", entry_id: decision, objection_event_ids: [bundledObjection(db, task.id, decision, at)], cause: "preference", evidence: "e", entries: null, round: "after_rca" },
     at,
   });
   const drafted = behavior({ title: "Short notes", source: attributed });
@@ -215,7 +216,7 @@ function objectedDecision({ db, task }: ReturnType<typeof board>, i: number) {
   const decision = logDecision(db, task, `decision ${i}`, "deckhand", at);
   db.prepare("INSERT INTO episodes (id, worker_spawned_event_id, extractor_version, task_id, agent, lines) VALUES (?, ?, '3', ?, 'deckhand', '{}')").run(i, i, task.id);
   db.prepare("INSERT INTO episode_markers (episode_id, seq, kind, position, event_id) VALUES (?, 0, 'decision', 0, ?)").run(i, decision);
-  const objection = appendEvent(db, { taskId: task.id, workerId: "human", origin: "webui", payload: { kind: "objection_raised", entry_id: decision, comment: `objection ${i}`, session_id: 1 }, at });
+  const objection = bundledObjection(db, task.id, decision, at, `objection ${i}`);
   return { decision, objection };
 }
 

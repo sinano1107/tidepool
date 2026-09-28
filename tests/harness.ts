@@ -24,7 +24,7 @@ import type { CliAuthCheck } from "../src/cli-auth.js";
 import { type CodexAppServerProbe, codexLoginAbsence } from "../src/codex-app-server.js";
 import { type Db, openDb } from "../src/db.js";
 import type { DraftClient } from "../src/draft.js";
-import { appendEvent, type EventRow } from "../src/events.js";
+import { appendEvent, type EventPayload, type EventRow } from "../src/events.js";
 import type { GitHubAuth } from "../src/github-auth.js";
 import type { HarnessContainmentCheck } from "../src/harness-containment.js";
 import { recordKnowledge } from "../src/memory.js";
@@ -471,6 +471,8 @@ export async function tempDir(prefix: string): Promise<string> {
 }
 
 export const FIXTURE_TASK = "6b4c0b23-289e-4f9f-ade1-995fb27f3c0e";
+/** seedFixtureBoard が FIXTURE_TASK の隣に置くもう1つのタスク。 */
+export const FIXTURE_OTHER_TASK = "609d9475-0191-4a7f-b5bf-5b939695315a";
 export const FIXTURE_SPAWNED_EVENT_ID = 5;
 
 // 2.1.237 の実セッションの記録。init 行の `memory_paths` だけは除いてある —
@@ -490,7 +492,7 @@ export function seedFixtureBoard(handoffDoc: string | null = null): Db {
      VALUES (?, 'work', 'done', ?, ?, 'fixture', 'fixture', 'fixture', 0, 0, 1, '2026-08-20T05:50:48.374Z', ?)`,
   );
   insertTask.run(FIXTURE_TASK, "tako", "sandbox", handoffDoc);
-  insertTask.run("609d9475-0191-4a7f-b5bf-5b939695315a", "tidepool", "sandbox", null);
+  insertTask.run(FIXTURE_OTHER_TASK, "tidepool", "sandbox", null);
   const insertEvent = db.prepare(
     "INSERT INTO events (id, task_id, worker_id, origin, kind, payload, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
   );
@@ -637,6 +639,10 @@ export async function registerWork(
   return res.json;
 }
 
+/** 次の poll を起こす: 第2回と起草を撃つのは poll の sweep だけで(ADR 0169)、RCA 子の決着の扉は親が拾えるときしか poll を
+ *  促さない。人間の登録は常に促す(ADR 0119 決定2)—— 人間担当の行なので slot は取らない。 */
+export const nextPoll = (t: Tidepool) => registerWork(t, "a pickup trigger", undefined, undefined, "human");
+
 /** `registerWork` と同じ行を、人間の扉を通さずに置く。扉の登録は自身が pickup の契機なので
  *  (ADR 0119 決定2)、「todo のまま待っている行」を前提にするテストはこちらを使う。 */
 export function queueWork(
@@ -680,17 +686,34 @@ export function rememberedNote(t: Tidepool, title: string): number {
   ).entry_id;
 }
 
-/** `entryId` に異議を打ってセッションを閉じ(束ね済みにし)、`entries` を名指す memory の帰責を最新として足す。
+/** `entryId` に異議を打ってセッションを閉じ(束ね済みにし)、その異議群に `entries` を名指す memory の帰責を足す。
  *  setup のみ —— 門を通った帰責を直に置き、Board call は撃たない。 */
 export async function memoryAttributedObjection(t: Tidepool, taskId: string, entryId: number, entries: number[]): Promise<void> {
-  await api(t.baseUrl, "POST", "/api/triage/objection", { entry_id: entryId, comment: "そのメモが間違っています" });
+  const objection = await object(t, entryId, "そのメモが間違っています");
   await api(t.baseUrl, "POST", "/api/triage/close");
   appendEvent(t.db, {
     taskId,
     workerId: "tidepool",
     origin: "board",
     at: t.clock.now(),
-    payload: { kind: "objection_attributed", entry_id: entryId, objection_event_ids: [], cause: "memory", evidence: "followed the note", entries, round: "after_rca" },
+    payload: { kind: "objection_attributed", entry_id: entryId, objection_event_ids: [objection], cause: "memory", evidence: "followed the note", entries, round: "after_rca" },
+  });
+}
+
+/** setup のみ: `entryId` に束ね済みの異議を1つ置き、その異議 event の id(異議群の名前)を返す —— commit 済みの triage session を
+ *  1行足し、その session の `objection_raised` を書く(Board call も修理子・RCA 子も立たない)。呼ぶたびに別の session なので、
+ *  2回呼べば同じ entry の2つの異議群になる。帰責の fixture はこの id を `objection_event_ids` に名指す。 */
+export function bundledObjection(db: Db, taskId: string, entryId: number, at: Date, comment = "redo it"): number {
+  const iso = at.toISOString();
+  const session = db
+    .prepare("INSERT INTO triage_sessions (started_at, last_activity_at, committed_at, closed_by) VALUES (?, ?, ?, 'commit')")
+    .run(iso, iso, iso);
+  return appendEvent(db, {
+    taskId,
+    workerId: "human",
+    origin: "webui",
+    payload: { kind: "objection_raised", entry_id: entryId, comment, session_id: Number(session.lastInsertRowid) },
+    at,
   });
 }
 
@@ -845,15 +868,30 @@ export async function children(t: Tidepool, taskId: string) {
   return (await api(t.baseUrl, "GET", "/api/tasks")).json.filter((x: any) => x.parent_id === taskId);
 }
 
+/** worker session の記録(偽の worker は `worker_spawned` を刻まないので、episode の要る盤面が置く)。 */
+export const WORKER_SPAWNED: Extract<EventPayload, { kind: "worker_spawned" }> = {
+  kind: "worker_spawned",
+  registry_commit: "commit",
+  definition_version: "1",
+  advisor: "fable",
+  provider: "anthropic",
+  model: "opus",
+  effort: "high",
+  source: { tier: "task", provider: "only" },
+  harness: "claude-code",
+  cli_version: "1",
+};
+
 /** 起草 client つきの盤面で、work(既定 workspace charts)に1行 log → 完了 → 異議まで進める(commit は呼び手)。
- *  `registrant` を渡すと agent が登録した task(decompose と同じ登録者の形)、`human` は人間が担当して人間の扉で完了。 */
+ *  `registrant` を渡すと agent が登録した task(decompose と同じ登録者の形)、`human` は人間が担当して人間の扉で完了。
+ *  `allocationClient` を渡すと work に worker session を置き、統合点レビューの完了で配分評価が撃たれる。 */
 export async function objectedForDraft(
   title: string,
-  opts: { initial?: { cause: Cause; evidence: string }; registrant?: string; workspace?: string | null; human?: true } = {},
+  opts: { initial?: { cause: Cause; evidence: string }; registrant?: string; workspace?: string | null; human?: true; allocationClient?: AllocationClient } = {},
 ) {
   const attributionClient = new FakeAttributionClient();
   const behaviorDraftClient = new FakeBehaviorDraftClient();
-  const t = await bootTidepool({ attributionClient, behaviorDraftClient });
+  const t = await bootTidepool({ attributionClient, behaviorDraftClient, allocationClient: opts.allocationClient });
   const workspace = opts.workspace === null ? undefined : (opts.workspace ?? "charts");
   const task = opts.registrant
     ? registerTask(t.db, { type: "work", title, purpose: "p", completion_criteria: "c", workspace }, t.clock.now(), opts.registrant, "worker")
@@ -864,6 +902,7 @@ export async function objectedForDraft(
     entry = (await api(t.baseUrl, "GET", `/api/tasks/${task.id}/events`)).json.find((e: any) => e.kind === "task_completed");
   } else {
     await t.clock.advance(HOURLY);
+    if (opts.allocationClient) appendEvent(t.db, { taskId: task.id, workerId: t.worker.id, origin: "board", at: t.clock.now(), payload: WORKER_SPAWNED });
     entry = await loggedEntry(t, task.id, "skipped the fixtures");
     await completeViaMcp(t, task.id);
   }
@@ -884,6 +923,30 @@ export async function commit(t: Tidepool, taskId: string, title: string) {
     auditor: kids.find((x: any) => x.title === `rca (auditor): ${title}`),
   };
 }
+
+/** slot を占めている task を順に完了させてから、先頭での2回の move で `taskId` を Run now。 */
+export async function runNow(t: Tidepool, taskId: string) {
+  for (;;) {
+    const running = (await api(t.baseUrl, "GET", "/api/tasks")).json.find((x: any) => x.status === "in_progress");
+    if (!running || running.id === taskId) break;
+    await completeViaMcp(t, running.id, running.type === "work");
+  }
+  await api(t.baseUrl, "POST", `/api/tasks/${taskId}/move`, { after: null });
+  await api(t.baseUrl, "POST", `/api/tasks/${taskId}/move`, { after: null });
+}
+
+/** `taskId` の task として RCA の起草 verb `propose_from_objection` を呼ぶ(起草の中身は固定)。 */
+export async function propose(t: Tidepool, taskId: string, args: Record<string, unknown>) {
+  const client = await mcpClient(t.mcpBaseUrl, taskId);
+  try {
+    return (await client.callTool({ name: "propose_from_objection", arguments: { path: "testing/fixtures", title: "Keep fixtures", text: "Never skip the fixtures.", ...args } })) as any;
+  } finally {
+    await client.close();
+  }
+}
+
+/** settings の撃ち直しを打ち切った件の一覧。 */
+export const haltedRefires = async (t: Tidepool) => (await api(t.baseUrl, "GET", "/api/settings/execution/halted-refires")).json.halted;
 
 /** 起草 client の成功の応答。 */
 export const KEEP_FIXTURES = { path: "testing/fixtures", title: "Keep fixtures", text: "Always keep the fixtures.", addressee: "all" } as const;

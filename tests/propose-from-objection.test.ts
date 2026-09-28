@@ -5,6 +5,7 @@ import { type Db, openDb } from "../src/db.js";
 import { appendEvent } from "../src/events.js";
 import { listMemoryEntries } from "../src/memory.js";
 import { BOARD_WORKER_ID, DomainError, HUMAN_WORKER_ID, logDecision, registerTask, type Task, type TaskType } from "../src/tasks.js";
+import { bundledObjection } from "./harness.js";
 
 /** RCA の起草 verb `propose_from_objection` の門(issue #1077)と成功経路(issue #1092)のドメイン層。
  *  tool error への写像はサーバ境界(tests/mcp-propose-from-objection.test.ts)が言う。 */
@@ -14,8 +15,11 @@ const draft = { path: "testing/fixtures", title: "Keep fixtures", text: "Never s
 
 const task = (db: Db, type: TaskType, title: string, registrant = HUMAN_WORKER_ID, parent_id?: string): Task =>
   registerTask(db, { type, title, purpose: "p", completion_criteria: "c", workspace: "charts", parent_id }, at, registrant);
-const attribute = (db: Db, taskId: string, entry_id: number, cause: Cause, entries: number[] | null = null): number =>
-  appendEvent(db, { taskId, workerId: BOARD_WORKER_ID, origin: "board", payload: { kind: "objection_attributed", entry_id, objection_event_ids: [], cause, evidence: "e", entries, round: "initial" }, at });
+/** entry に束ね済みの異議群を1つ足し、その異議群に cause を帰責する(呼ぶたびに後の異議群)。 */
+const attribute = (db: Db, taskId: string, entry_id: number, cause: Cause, entries: number[] | null = null): number => {
+  const objection = bundledObjection(db, taskId, entry_id, at);
+  return appendEvent(db, { taskId, workerId: BOARD_WORKER_ID, origin: "board", payload: { kind: "objection_attributed", entry_id, objection_event_ids: [objection], cause, evidence: "e", entries, round: "initial" }, at });
+};
 /** 異議されたエントリ(agent の記入)に cause を帰責する。 */
 const objected = (db: Db, parent: Task, cause: Cause, worker = "deckhand"): number => {
   const entry = logDecision(db, parent, `decided as ${cause}`, worker, at);
@@ -38,7 +42,7 @@ it("学習に向かない cause・異議済みで未帰責のエントリ・宛�
   const unattributed = appendEvent(db, { taskId: mixed.id, workerId: "deckhand", origin: "worker", payload: { kind: "task_completed", handoff_present: true, result: null }, at });
   // 異議されたが初回の帰責が無い(撃てなかった / 失敗した)エントリは uncertain と同じに読む(ADR 0168 決定3)
   const objectedUnattributed = logDecision(db, mixed, "decided before the Board call failed", "deckhand", at);
-  appendEvent(db, { taskId: mixed.id, workerId: HUMAN_WORKER_ID, origin: "webui", payload: { kind: "objection_raised", entry_id: objectedUnattributed, comment: "keep the fixtures", session_id: 1 }, at });
+  bundledObjection(db, mixed.id, objectedUnattributed, at, "keep the fixtures");
   const byHuman = objected(db, mixed, "capability", HUMAN_WORKER_ID);
   const notDecision = attribute(db, mixed.id, capability, "capability");
   const otherEntry = objected(db, task(db, "work", "other"), "capability");
@@ -88,7 +92,7 @@ it("capability・preference は agent 登録の task でも entry の worker 宛
   const db = openDb(":memory:");
   const mixed = task(db, "work", "mixed", "tako");
   const capabilityEntry = objected(db, mixed, "capability");
-  const latest = attribute(db, mixed.id, capabilityEntry, "capability"); // 2度目の帰責 —— 出所は最新を指す
+  const latest = attribute(db, mixed.id, capabilityEntry, "capability"); // 後の異議群の帰責 —— 出所は最後の異議群の帰責を指す
   const preferenceEntry = objected(db, mixed, "preference", "helmsman");
   const self = registerTask(db, { type: "review", title: "rca (self): mixed", purpose: "p", completion_criteria: "c", workspace: "elsewhere", parent_id: mixed.id }, at, HUMAN_WORKER_ID).id;
 

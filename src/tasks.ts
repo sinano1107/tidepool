@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { Db } from "./db.js";
 import { DEFAULT_AUDITOR_NAME } from "./defaults.js";
-import { appendEvent, type EventOrigin, type EventPayload, getEvent, type TaskScopedPayload, taskDecisionLog } from "./events.js";
+import { appendEvent, type EventOrigin, type EventPayload, getEvent, latestEventOfTask, type TaskScopedPayload, taskDecisionLog } from "./events.js";
 import { type ExecutionSettingRow, PRIORITIES, type Priority, type RoutingRowChange, TIERS, type Tier } from "./execution-setting.js";
 import type { GitHubClient, Issue, IssueRef } from "./github.js";
 import type { MemoryAmendment } from "./memory.js";
@@ -2730,14 +2730,9 @@ export function taskHistory(
     }
   }
   for (const child of listChildren(db, taskId)) {
-    const registered = db
-      .prepare("SELECT id, payload FROM events WHERE task_id = ? AND kind = 'task_registered'")
-      .get(child.id) as { id: number; payload: string } | undefined;
+    const registered = latestEventOfTask(db, child.id, "task_registered");
     if (!registered) continue;
-    const { based_on_decision } = JSON.parse(registered.payload) as Extract<
-      EventPayload,
-      { kind: "task_registered" }
-    >;
+    const { based_on_decision } = registered.payload;
     const context: HistoryChildContext = {
       title: child.title,
       purpose: child.purpose,
@@ -2787,11 +2782,8 @@ export function taskHistory(
  *  redecompose acted on (ADR 0121) — the single hop back is the entire "why" a
  *  resumed parent needs. */
 function cancelOrigin(db: Db, taskId: string): Pick<SettledChildContext, "origin_question" | "origin_breach"> {
-  const row = db
-    .prepare("SELECT payload FROM events WHERE task_id = ? AND kind = 'task_cancelled'")
-    .get(taskId) as { payload: string } | undefined;
-  if (!row) return { origin_question: null };
-  const payload = JSON.parse(row.payload) as Extract<EventPayload, { kind: "task_cancelled" }>;
+  const payload = latestEventOfTask(db, taskId, "task_cancelled")?.payload;
+  if (!payload) return { origin_question: null };
   if ("origin_breach_task_id" in payload) {
     const declarer = getTask(db, payload.origin_breach_task_id)!;
     return { origin_breach: { title: declarer.title, reason: premiseBreachReason(db, declarer.id) } };
@@ -2802,10 +2794,7 @@ function cancelOrigin(db: Db, taskId: string): Pick<SettledChildContext, "origin
 
 /** そのタスクの最新の前提の破綻の理由。 */
 function premiseBreachReason(db: Db, taskId: string): string {
-  const { payload } = db
-    .prepare("SELECT payload FROM events WHERE task_id = ? AND kind = 'premise_breached' ORDER BY id DESC LIMIT 1")
-    .get(taskId) as { payload: string };
-  return (JSON.parse(payload) as Extract<EventPayload, { kind: "premise_breached" }>).line;
+  return latestEventOfTask(db, taskId, "premise_breached")!.payload.line;
 }
 
 /** Every direct child of `parentId`, any status, in board order (issue #129's

@@ -1,7 +1,7 @@
 import type { Allocation } from "./allocation-review.js";
 import type { Cause } from "./cause.js";
 import type { Db } from "./db.js";
-import { type EventPayload, type EventRow, latestAttributions, listEventsOfKinds } from "./events.js";
+import { type EventPayload, type EventRow, listEventsOfKinds, objectionBundles } from "./events.js";
 import { type ExecutionSetting, type Priority, windowMatchesModel } from "./execution-setting.js";
 import { sessionWindow } from "./precedent.js";
 import type { Provider } from "./registry.js";
@@ -198,18 +198,20 @@ export function loadEpisodes(db: Db): RoutingEpisode[] {
   // work task だけに絞る(spawn を持つ work task —— session の窓も配分の評価も spawn のタスクの event しか見ない)
   const workIds = new Set<string | null>(tasks.map((t) => t.id));
   const events = listEventsOfKinds(db, ["worker_spawned", "worker_exited", "allocation_reviewed"]).filter((e) => workIds.has(e.task_id));
-  const attributions = [...latestAttributions(db).values()];
+  // 異議群ごとの有効な判定(同じ異議群では後の event が有効)をすべて —— 前の異議群の capability を後の異議群の
+  // preference で消さない(ADR 0170 決定3)
+  const attributions = [...objectionBundles(db).values()].flat().flatMap((b) => (b.attribution ? [{ ...b.attribution, task_id: b.task_id }] : []));
   const spawns = events.filter((e): e is Spawned => e.payload.kind === "worker_spawned");
   return spawns.map((spawned) => {
     const task = tasks.find((t) => t.id === spawned.task_id)!;
     const { exited, hasNextSpawn, inSession } = sessionWindow(events, spawned);
-    // 帰責 event のタスクで窓に入れる(書き手はどれも entry のタスクに書く)
+    // 異議群のタスク(= entry のタスク)で窓に入れる
     const causes = attributions.filter((a) => inSession({ id: a.entry_id, task_id: a.task_id })).map((a) => a.cause);
     const allocations: { allocation: Allocation; cause: Cause }[] = [];
     for (const e of events) {
       if (e.task_id !== spawned.task_id) continue;
       const p = e.payload;
-      if (p.kind === "allocation_reviewed" && p.worker_spawned_event_id === spawned.id && "allocation" in p) {
+      if (p.kind === "allocation_reviewed" && p.worker_spawned_event_id === spawned.id) {
         allocations.push({ allocation: p.allocation, cause: p.cause });
       }
     }

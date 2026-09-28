@@ -335,8 +335,8 @@ export interface ServerOptions {
   /** The display-time translation seam (issue #47 / ADR 0015). Absent →
    *  POST /api/translate reports the LLM as unreachable. */
   translationClient?: TranslationClient;
-  /** The allocation review's Board call seam (ADR 0111 決定4 / issue #547).
-   *  Absent → integration reviews complete without an allocation annotation. */
+  /** The allocation review's Board call seam (ADR 0111 決定4 / ADR 0172): only
+   *  the poll's sweep fires it. Absent → no allocation annotation is written. */
   allocationClient?: AllocationClient;
   /** The attribution's Board call seam (ADR 0115 / issue #574). Absent → a
    *  commit bundles every objection as `uncertain` (RCA stands as before). */
@@ -615,8 +615,9 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
   // 人間 verb には後始末の deps 一式ではなく、束ねた callback ひとつを渡す
   // (`containment` / `registryReachability` と同じ配線)。
   const teardownQuarantine = (taskId: string) => acceptTeardownQuarantine(teardownDeps, taskId);
-  // 帰責と起草の Board call の束: scheduler・worker MCP・WebUI・管理 MCP へ同じ1つを渡す
+  // 振り返り Board call の束: scheduler(poll の sweep)と WebUI(triage close)へ同じ1つを渡す
   const attributionCalls: AttributionCallDeps = {
+    allocationClient: options.allocationClient,
     attributionClient: options.attributionClient,
     behaviorDraftClient: options.behaviorDraftClient,
     workspace: options.workspace,
@@ -766,7 +767,6 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
       github: options.github,
       landing,
       draftClient: options.draftClient,
-      attributionCalls,
       defaultAgentName: worker.id,
       auditorName,
       agentRegistered: options.agentRegistered,
@@ -807,8 +807,6 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
       agentRegistered: options.agentRegistered,
       isProtectedWorkspace: options.isProtectedWorkspace,
       listAgents: options.listAgents,
-      allocationClient: options.allocationClient,
-      attributionCalls,
       agentAdmin,
       pollNow,
     }),
