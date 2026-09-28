@@ -744,7 +744,7 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
         const input = {
           ...fields,
           scope: memoryScope(deps, getTask(deps.db, task.parent_id)!),
-          source: { event_id: based_on_decision === undefined ? attribution.id : requireDecision(deps.db, based_on_decision) },
+          source: { event_id: based_on_decision === undefined ? attribution.id : requireDecision(deps.db, based_on_decision, task.id) },
           author: { activity: "rca" as const, name: attributedWorkerId(deps, task) },
         };
         return target.kind === "knowledge"
@@ -1050,7 +1050,7 @@ function registerMemoryMetaReviewVerbs(server: McpServer, deps: McpDeps, run: Me
       },
     },
     async (input) =>
-      run((reader, now) => foldMemory(deps.db, { ...input, scope: input.scope && registeredScope(deps, input.scope), author: author(reader) }, "worker", now)),
+      run((reader, now) => foldMemory(deps.db, reader.taskId, { ...input, scope: input.scope && registeredScope(deps, input.scope), author: author(reader) }, "worker", now)),
   );
 
   server.registerTool(
