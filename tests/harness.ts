@@ -880,5 +880,29 @@ export async function commit(t: Tidepool, taskId: string, title: string) {
   };
 }
 
+/** slot を占めている task を順に完了させてから、先頭での2回の move で `taskId` を Run now。 */
+export async function runNow(t: Tidepool, taskId: string) {
+  for (;;) {
+    const running = (await api(t.baseUrl, "GET", "/api/tasks")).json.find((x: any) => x.status === "in_progress");
+    if (!running || running.id === taskId) break;
+    await completeViaMcp(t, running.id, running.type === "work");
+  }
+  await api(t.baseUrl, "POST", `/api/tasks/${taskId}/move`, { after: null });
+  await api(t.baseUrl, "POST", `/api/tasks/${taskId}/move`, { after: null });
+}
+
+/** `taskId` の task として RCA の起草 verb `propose_from_objection` を呼ぶ(起草の中身は固定)。 */
+export async function propose(t: Tidepool, taskId: string, args: Record<string, unknown>) {
+  const client = await mcpClient(t.mcpBaseUrl, taskId);
+  try {
+    return (await client.callTool({ name: "propose_from_objection", arguments: { path: "testing/fixtures", title: "Keep fixtures", text: "Never skip the fixtures.", ...args } })) as any;
+  } finally {
+    await client.close();
+  }
+}
+
+/** settings の撃ち直しを打ち切った件の一覧。 */
+export const haltedRefires = async (t: Tidepool) => (await api(t.baseUrl, "GET", "/api/settings/memory/halted-refires")).json.halted;
+
 /** 起草 client の成功の応答。 */
 export const KEEP_FIXTURES = { path: "testing/fixtures", title: "Keep fixtures", text: "Always keep the fixtures.", addressee: "all" } as const;

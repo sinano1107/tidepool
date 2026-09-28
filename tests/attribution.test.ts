@@ -17,6 +17,7 @@ import {
   completeViaMcp,
   FULL_HANDOFF,
   HOUR,
+  haltedRefires,
   KEEP_FIXTURES,
   loggedEntry,
   managementMcpClient,
@@ -24,7 +25,9 @@ import {
   memoryEntries,
   object,
   objectedForDraft,
+  propose,
   registerWork,
+  runNow,
   type Tidepool,
 } from "./harness.js";
 
@@ -1028,8 +1031,6 @@ async function settleOpenRcas(t: Tidepool, taskId: string) {
   }
 }
 
-const halted = async (t: Tidepool) => (await api(t.baseUrl, "GET", "/api/settings/memory/halted-refires")).json.halted;
-
 it("初回と第2回の失敗 event は異議群の名前を持ち、第2回の回数は異議群ごとに数える —— 前の異議群が2回・後が1回失敗しても打ち切りは無く、次の tick で3回目に達した前の異議群だけが打ち切られる", async () => {
   const s = await objectedForDraft("per bundle");
   t = s.t;
@@ -1048,32 +1049,15 @@ it("初回と第2回の失敗 event は異議群の名前を持ち、第2回の�
     [again, "initial"],
     [again, "after_rca"],
   ]);
-  expect(await halted(t)).toEqual([]);
+  expect(await haltedRefires(t)).toEqual([]);
 
   await t.clock.advance(HOUR);
 
-  expect((await halted(t)).map((r: any) => [r.refire, r.target])).toEqual([["second_round", s.objection]]);
+  expect((await haltedRefires(t)).map((r: any) => [r.refire, r.target])).toEqual([["second_round", s.objection]]);
 });
 
 const logCause = async (t: Tidepool, entryId: number) =>
   (await api(t.baseUrl, "GET", "/api/log")).json.entries.find((e: any) => e.id === entryId).cause;
-
-/** slot を占めている task を順に完了させてから review を Run now し、その review として `propose_from_objection` を呼ぶ。 */
-async function proposeAs(t: Tidepool, reviewId: string, entryId: number) {
-  for (;;) {
-    const running = (await api(t.baseUrl, "GET", "/api/tasks")).json.find((x: any) => x.status === "in_progress");
-    if (!running || running.id === reviewId) break;
-    await completeViaMcp(t, running.id, running.type === "work");
-  }
-  await api(t.baseUrl, "POST", `/api/tasks/${reviewId}/move`, { after: null });
-  await api(t.baseUrl, "POST", `/api/tasks/${reviewId}/move`, { after: null });
-  const client = await mcpClient(t.mcpBaseUrl, reviewId);
-  try {
-    return (await client.callTool({ name: "propose_from_objection", arguments: { entry_id: entryId, path: "testing/fixtures", title: "Keep fixtures", text: "Never skip the fixtures." } })) as any;
-  } finally {
-    await client.close();
-  }
-}
 
 it("前の異議群で capability と判定された entry を後の session が再異議して close-only で閉じると、一覧の cause は空になり起草 verb は uncertain と同じ文言で拒む。RCA 群の決着後の tick で後の異議だけを steering に第2回が撃たれ、着地後の cause は後の判定", async () => {
   const s = await objectedForDraft("reobjected capability", { initial: { cause: "capability", evidence: "skipped a named criterion" } });
@@ -1085,7 +1069,8 @@ it("前の異議群で capability と判定された entry を後の session が
 
   expect(await logCause(t, s.entry.id)).toBeNull();
   const self = (await children(t, s.task.id)).find((x: any) => x.title === "rca (self): reobjected capability" && x.id !== firstSelf.id);
-  expect(await proposeAs(t, self.id, s.entry.id)).toMatchObject({
+  await runNow(t, self.id);
+  expect(await propose(t, self.id, { entry_id: s.entry.id })).toMatchObject({
     isError: true,
     content: [{ text: expect.stringContaining("the entry's cause is uncertain: nothing to learn from it") }],
   });
@@ -1105,7 +1090,7 @@ it("前の異議群の第2回が打ち切られていても後の異議群の第
   await settleOpenRcas(t, s.task.id);
   await t.clock.advance(HOUR);
   await t.clock.advance(HOUR);
-  expect((await halted(t)).map((r: any) => r.target)).toEqual([s.objection]);
+  expect((await haltedRefires(t)).map((r: any) => r.target)).toEqual([s.objection]);
   const again = await reobject(t, s.entry.id, "and name the fixtures in the report", true);
 
   await settleOpenRcas(t, s.task.id);
@@ -1116,7 +1101,7 @@ it("前の異議群の第2回が打ち切られていても後の異議群の第
     ...Array(4).fill(["always keep the fixtures"]),
     ...Array(3).fill(["and name the fixtures in the report"]),
   ]);
-  expect((await halted(t)).map((r: any) => [r.refire, r.target, r.entry.id, r.cause])).toEqual([
+  expect((await haltedRefires(t)).map((r: any) => [r.refire, r.target, r.entry.id, r.cause])).toEqual([
     ["second_round", s.objection, s.entry.id, null],
     ["second_round", again, s.entry.id, null],
   ]);
@@ -1129,7 +1114,7 @@ it("前の異議群の第2回が打ち切られていても後の異議群の第
   await registerWork(t, "a pickup trigger");
 
   expect((await attributions(t, s.task.id)).map((e: any) => [e.payload.cause, e.payload.objection_event_ids])).toEqual([["capability", [again]]]);
-  expect(await halted(t)).toEqual([]);
+  expect(await haltedRefires(t)).toEqual([]);
   expect(await logCause(t, s.entry.id)).toBe("capability");
 });
 
