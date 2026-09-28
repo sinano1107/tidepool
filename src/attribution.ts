@@ -172,14 +172,14 @@ function refireDue(db: Db, key: RefireKey, now: Date): boolean {
  *  帰責の障害は commit を止めない。 */
 export async function attributeObjections(
   db: Db,
-  client: AttributionClient | undefined,
+  deps: AttributionCallDeps = {},
   sessionId: number,
   now: Date,
 ): Promise<Map<number, GatedJudgment>> {
   const objected = listObjectedEntries(db, sessionId);
   const judgments = new Map<number, GatedJudgment>();
   if (objected.length === 0) return judgments;
-  const call = boardCallSetting(db, client);
+  const call = boardCallSetting(db, deps.attributionClient, deps.containers);
   if ("unavailable" in call) return judgments;
   await Promise.all(
     objected.map(async (o) => {

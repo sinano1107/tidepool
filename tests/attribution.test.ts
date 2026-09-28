@@ -151,6 +151,27 @@ it("初回の Board call の失敗は帰責を書かず round initial の失敗 
   expect(kids.find((x: any) => x.title === "rca (self): flaky").purpose).not.toContain("--dry");
 });
 
+it("容器の前提が成り立たない間の commit は初回の Board call を撃たず、帰責も失敗 event も書かず、RCA が立つ", async () => {
+  const attributionClient = new FakeAttributionClient();
+  t = await bootTidepool({ attributionClient });
+  const { task, entries } = await objectedWork(t, "no containment", ["skipped the fixtures"]);
+  // 実物の client は前提が不成立だと spawn できずに投げる
+  attributionClient.scriptJudgment(entries[0].id, new Error("Board call container precondition failed"));
+  await object(t, entries[0].id, "bring the fixtures back");
+  t.containers.scriptPreflight("cgroup v2 is not mounted at /sys/fs/cgroup");
+
+  await api(t.baseUrl, "POST", "/api/triage/close");
+
+  expect(attributionClient.calls).toEqual([]);
+  expect(await attributions(t, task.id)).toEqual([]);
+  expect(await attributionsFailed(t, task.id)).toEqual([]);
+  expect((await children(t, task.id)).map((x: any) => x.title).sort()).toEqual([
+    "rca (auditor): no containment",
+    "rca (self): no containment",
+    "repair: no containment",
+  ]);
+});
+
 it.each([
   ["close-only", () => api(t.baseUrl, "POST", "/api/triage/close", { close_only: true })],
   ["the timeout watchdog", () => t.clock.advance(TRIAGE_TIMEOUT)],
@@ -818,18 +839,20 @@ it("throttle の間は第2回の帰責を撃たず、失敗 event も after_rca 
   ]);
 });
 
-it("容器の前提が成り立たない間は起草を撃たず、失敗 event も書かない。前提が戻れば撃って candidate が載る", async () => {
+it("容器の前提が成り立たない間は起草を撃ち直さず、失敗 event も増えない。前提が戻れば撃って candidate が載る", async () => {
   const s = await objectedForDraft("no containment", { initial: { cause: "preference", evidence: "taste" } });
   t = s.t;
-  s.behaviorDraftClient.scriptDraft(s.entry.id, KEEP_FIXTURES);
+  // 初回の帰責も前提を見る(ADR 0168 追記)ので、帰責は前提が成り立つ間に済ませ、起草は撃ち直しを待たせる
+  s.behaviorDraftClient.scriptDraft(s.entry.id, new Error("claude CLI timed out"));
+  await commit(t, s.task.id, "no containment");
   t.containers.scriptPreflight("cgroup v2 is not mounted at /sys/fs/cgroup");
 
-  await commit(t, s.task.id, "no containment");
   await t.clock.advance(HOUR);
 
-  expect(s.behaviorDraftClient.calls).toEqual([]);
-  expect(await draftsFailed(t, s.task.id)).toEqual([]);
+  expect(s.behaviorDraftClient.calls).toHaveLength(1);
+  expect(await draftsFailed(t, s.task.id)).toHaveLength(1);
 
+  s.behaviorDraftClient.scriptDraft(s.entry.id, KEEP_FIXTURES);
   t.containers.scriptPreflight();
   await t.clock.advance(HOUR);
 
@@ -1028,7 +1051,7 @@ it("帰責の入力の読んだ記憶は、異議された decision と同じ wo
   b.read(later);
   const client = new FakeAttributionClient();
 
-  await attributeObjections(b.db, client, b.objectTo(decision), at);
+  await attributeObjections(b.db, { attributionClient: client }, b.objectTo(decision), at);
 
   expect(client.calls.map((c) => c.input.memory_read)).toEqual([
     [{ id: mine, kind: "knowledge", title: "Squash before merge", text: "Squash before merge." }],
@@ -1059,7 +1082,7 @@ it.each<[string, (ids: { read: number; unread: number }) => { cause: Cause; entr
   const client = new FakeAttributionClient();
   client.scriptJudgment(b.decision, { ...judgment(b), evidence: "followed the note" });
 
-  commitTriage(b.db, at, [], await attributeObjections(b.db, client, b.sessionId, at));
+  commitTriage(b.db, at, [], await attributeObjections(b.db, { attributionClient: client }, b.sessionId, at));
 
   expect(attributed(b.db, b.task.id)).toEqual([
     expect.objectContaining({ cause: "uncertain", evidence: expect.stringContaining(reason), entries: null }),
@@ -1071,7 +1094,7 @@ it("初回: 読んだ集合の中の entry を名指す memory は entries ご�
   const client = new FakeAttributionClient();
   client.scriptJudgment(b.decision, { cause: "memory", evidence: "followed the squash note", entries: [b.read] });
 
-  commitTriage(b.db, at, [], await attributeObjections(b.db, client, b.sessionId, at));
+  commitTriage(b.db, at, [], await attributeObjections(b.db, { attributionClient: client }, b.sessionId, at));
 
   expect(attributed(b.db, b.task.id)).toEqual([
     { kind: "objection_attributed", entry_id: b.decision, objection_event_ids: [expect.any(Number)], cause: "memory", evidence: "followed the squash note", entries: [b.read], round: "initial" },
@@ -1085,7 +1108,7 @@ it.each<[string, (ids: { read: number; unread: number }) => number[], Partial<Ga
 ])("第2回: %s", async (_, entries, expected) => {
   const b = objectedAfterReading();
   const client = new FakeAttributionClient();
-  commitTriage(b.db, at, [], await attributeObjections(b.db, client, b.sessionId, at));
+  commitTriage(b.db, at, [], await attributeObjections(b.db, { attributionClient: client }, b.sessionId, at));
   client.scriptJudgment(b.decision, { cause: "memory", evidence: "the RCA traced it to the note", entries: entries(b) });
   const drafter = new FakeBehaviorDraftClient();
   const rca = listChildren(b.db, b.task.id).filter((c) => c.title.startsWith("rca ("));
