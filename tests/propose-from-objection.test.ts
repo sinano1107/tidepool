@@ -10,7 +10,7 @@ import { BOARD_WORKER_ID, DomainError, HUMAN_WORKER_ID, logDecision, registerTas
  *  写像はサーバ境界(tests/mcp-propose-from-objection.test.ts)が言う。 */
 const at = new Date("2026-09-15T00:00:00.000Z");
 
-it("学習に向かない cause・宛先の agent が無い Behavior・as と based_on_decision の過不足・decision でない / 別の task の decision の based_on_decision・帰責の無い / 他 task の / 存在しない / 人間が書いたエントリ・work task や parent の無い review からの呼び出しは DomainError で拒否され、店には何も載らない", () => {
+it("学習に向かない cause・異議済みで未帰責のエントリ・宛先の agent が無い Behavior・as と based_on_decision の過不足・decision でない / 別の task の decision の based_on_decision・帰責の無い / 他 task の / 存在しない / 人間が書いたエントリ・work task や parent の無い review からの呼び出しは DomainError で拒否され、店には何も載らない", () => {
   const db = openDb(":memory:");
   const task = (type: TaskType, title: string, registrant = HUMAN_WORKER_ID, parent_id?: string) =>
     registerTask(db, { type, title, purpose: "p", completion_criteria: "c", workspace: "charts", parent_id }, at, registrant);
@@ -34,6 +34,9 @@ it("学習に向かない cause・宛先の agent が無い Behavior・as と ba
   const memory = logDecision(db, mixed, "decided as memory", "deckhand", at);
   attribute(mixed.id, memory, "memory", [1]);
   const unattributed = appendEvent(db, { taskId: mixed.id, workerId: "deckhand", origin: "worker", payload: { kind: "task_completed", handoff_present: true, result: null }, at });
+  // 異議されたが初回の帰責が無い(撃てなかった / 失敗した)エントリは uncertain と同じに読む(ADR 0168 決定3)
+  const objectedUnattributed = logDecision(db, mixed, "decided before the Board call failed", "deckhand", at);
+  appendEvent(db, { taskId: mixed.id, workerId: HUMAN_WORKER_ID, origin: "webui", payload: { kind: "objection_raised", entry_id: objectedUnattributed, comment: "keep the fixtures", session_id: 1 }, at });
   const byHuman = objected(mixed, "capability", HUMAN_WORKER_ID);
   const notDecision = attribute(mixed.id, capability, "capability");
   const otherEntry = objected(task("work", "other"), "capability");
@@ -50,6 +53,7 @@ it("学習に向かない cause・宛先の agent が無い Behavior・as と ba
 
   for (const [reviewId, args, error] of [
     [self, { entry_id: uncertain }, "the entry's cause is uncertain: nothing to learn from it"],
+    [self, { entry_id: objectedUnattributed }, "the entry's cause is uncertain: nothing to learn from it"],
     [self, { entry_id: requirementChange }, "the entry's cause is requirement_change: nothing to learn from it"],
     [self, { entry_id: environment }, "the entry's cause is environment: nothing to learn from it"],
     [self, { entry_id: memory }, "the entry's cause is memory: nothing to learn from it"],

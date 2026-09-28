@@ -222,7 +222,8 @@ export function listObjectedEntries(db: Db, sessionId: number): ObjectionPair[] 
 
 /** RCA を要する cause(ADR 0115 決定3): worker か登録者に落ち度がありうる側と、まだ
  *  判定できていない側。`preference` / `requirement_change` / `environment` / `memory`(ADR 0166 決定4)では
- *  self RCA の問い「なぜ自分はそう判断したか」が空である。 */
+ *  self RCA の問い「なぜ自分はそう判断したか」が空である。判断の無い entry も
+ *  `uncertain` と同じくこちら側(ADR 0168 決定3)。 */
 const RCA_CAUSES: readonly Cause[] = ["capability", "task_ambiguity", "missing_information", "uncertain"];
 
 /** One RCA review, always a child of `objected` sharing its workspace
@@ -257,14 +258,16 @@ function registerRcaReview(
 /** One repair task per objected task: every direction comment raised against a
  *  task's log entries this session lands in a single work task's purpose.
  *
- *  Before anything is registered, every objected entry gets its attribution
- *  written as an `objection_attributed` event (ADR 0115 決定1〜2): the Board
- *  call's judgment when the commit path asked for one, otherwise `uncertain`
- *  with the reason (`unattributed`) as evidence — close-only / timeout closes
- *  never ask, and an entry the Board call returned nothing for falls the same
- *  way. The set of causes then decides what stands beside the repair (決定3):
- *  only the entries whose cause needs an RCA (`RCA_CAUSES`) feed the two RCA
- *  reviews below, and a task with none of them gets the repair alone.
+ *  Before anything is registered, every objected entry the Board call judged
+ *  gets that judgment written as an `objection_attributed` event (ADR 0115
+ *  決定1〜2). An entry without one — close-only / timeout closes never ask, and
+ *  the commit path's call can be unavailable or fail — gets no event at all:
+ *  the record holds judgments only (ADR 0168 決定2). The set of causes then
+ *  decides what stands beside the repair (0115 決定3): only the entries whose
+ *  cause needs an RCA (`RCA_CAUSES`) or that carry no judgment (read as
+ *  `uncertain`, ADR 0168 決定3) feed the two RCA reviews below, and a task
+ *  with none of them gets the repair alone. The second attribution round picks
+ *  the unjudged ones up once those RCAs settle.
  *
  *  Layer 2 RCA (issue #15): in parallel, two kinds of read-only RCA review
  *  are generated as children of the objected task, same shape as layer 1's
@@ -294,7 +297,6 @@ function bundleObjections(
   sessionId: number,
   now: Date,
   judgments: Map<number, GatedJudgment>,
-  unattributed: string,
 ): void {
   const byTask = new Map<string, ObjectionPair[]>();
   for (const pair of listObjectedEntries(db, sessionId)) {
@@ -305,11 +307,9 @@ function bundleObjections(
     if (!objected) continue;
     const rcaPairs: ObjectionPair[] = [];
     for (const pair of pairs) {
-      const judgment = judgments.get(pair.entry.id) ?? {
-        cause: "uncertain",
-        evidence: `not attributed: ${unattributed}`,
-        entries: null,
-      };
+      const judgment = judgments.get(pair.entry.id);
+      if (!judgment || RCA_CAUSES.includes(judgment.cause)) rcaPairs.push(pair);
+      if (!judgment) continue;
       appendEvent(db, {
         taskId,
         workerId: BOARD_WORKER_ID,
@@ -323,7 +323,6 @@ function bundleObjections(
         },
         at: now,
       });
-      if (RCA_CAUSES.includes(judgment.cause)) rcaPairs.push(pair);
     }
     registerTask(
       db,
@@ -521,17 +520,15 @@ export function triagePreview(
 /** Apply the steering held by one session and record who closed it.
  *  Callers own the transaction so Commit can include scratchpad dispositions.
  *  `judgments` is what the Board call answered per objected entry (gathered
- *  before this transaction); `unattributed` is the evidence an entry without
- *  one is bundled `uncertain` with. */
+ *  before this transaction); an entry without one is bundled unattributed. */
 function closeTriageSession(
   db: Db,
   open: TriageSession,
   now: Date,
   closedBy: "commit" | "timeout",
   judgments: Map<number, GatedJudgment>,
-  unattributed: string,
 ): void {
-  bundleObjections(db, open.id, now, judgments, unattributed);
+  bundleObjections(db, open.id, now, judgments);
   // apply in reverse staging order so the first-staged task ends up on top
   for (const taskId of stagedFrontInserts(db, open.id).reverse()) {
     const task = getTask(db, taskId);
@@ -546,8 +543,8 @@ function closeTriageSession(
 
 /** Close a live session without performing the rest of the Triage terminal —
  *  the close-only door and the timeout watchdog. Neither asks the Board call
- *  (spec #563): their objections are bundled `uncertain`, evidence naming the
- *  path, and the RCAs stand as before. */
+ *  (spec #563): their objections are bundled unattributed — no attribution
+ *  event — and the RCAs stand as before (ADR 0168 決定2). */
 export function closeTriageSessionOnly(
   db: Db,
   now: Date,
@@ -555,17 +552,7 @@ export function closeTriageSessionOnly(
 ): TriageCommitResult {
   const open = activeTriageSession(db);
   if (!open) return { outcome: "no_open_session", closed_at: null, created_tasks: 0 };
-  const path = closedBy === "timeout" ? "the timeout watchdog" : "close-only";
-  db.transaction(() =>
-    closeTriageSession(
-      db,
-      open,
-      now,
-      closedBy,
-      new Map(),
-      `the session was closed by ${path} without a Board call`,
-    ),
-  )();
+  db.transaction(() => closeTriageSession(db, open, now, closedBy, new Map()))();
   return { outcome: "closed_now", closed_at: now.toISOString(), created_tasks: 0 };
 }
 
@@ -603,14 +590,7 @@ export function commitTriage(
   let created = 0;
   db.transaction(() => {
     created = applyScratchpad(db, scratchpad, now);
-    closeTriageSession(
-      db,
-      open,
-      now,
-      "commit",
-      judgments,
-      "the Board call returned no judgment for this entry",
-    );
+    closeTriageSession(db, open, now, "commit", judgments);
   })();
   return { outcome: "closed_now", closed_at: now.toISOString(), created_tasks: created };
 }
