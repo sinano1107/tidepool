@@ -611,16 +611,15 @@ async function settleSecondRound(t: Tidepool, s: { attributionClient: FakeAttrib
   return api(t.baseUrl, "POST", `/api/tasks/${auditor.id}/cancel`, {});
 }
 
-it("workspace を持たない task は Board call を呼ばずに memory_draft_failed を残す", async () => {
+it("workspace を持たない task は Memory の置き場が無いので、起草の呼び出しも失敗 event も無い(1時間後の tick でも)", async () => {
   const s = await objectedForDraft("undraftable", { workspace: null });
   t = s.t;
 
   await settleSecondRound(t, s, "undraftable", "preference");
+  await t.clock.advance(HOUR);
 
   expect(s.behaviorDraftClient.calls).toEqual([]);
-  expect((await draftsFailed(t, s.task.id)).map((e: any) => e.payload)).toEqual([
-    { kind: "memory_draft_failed", entry_id: s.entry.id, round: "after_rca", attribution_event_id: expect.any(Number), reason: expect.stringMatching(/workspace/) },
-  ]);
+  expect(await draftsFailed(t, s.task.id)).toEqual([]);
 });
 
 it("人間が登録した task の task_ambiguity は宛先の agent がいないので、起草の呼び出しも失敗 event も無い(1時間後の tick でも)", async () => {
@@ -828,4 +827,72 @@ it("第2回の帰責が判断として uncertain を返したら、それが aft
   ]);
   expect(s.attributionClient.calls).toHaveLength(2);
   expect(await attributionsFailed(t, s.task.id)).toEqual([]);
+});
+
+it("throttle の間は第2回の帰責を撃たず、失敗 event も after_rca も書かない。窓が開けば撃って確定する", async () => {
+  const s = await objectedForDraft("throttled rca");
+  t = s.t;
+  const { self, auditor } = await commit(t, s.task.id, "throttled rca");
+  s.attributionClient.scriptJudgment(s.entry.id, { cause: "capability", evidence: "the RCA decided it" });
+  reportFableWindow(t, true);
+
+  await api(t.baseUrl, "POST", `/api/tasks/${self.id}/cancel`, {});
+  const cancelled = await api(t.baseUrl, "POST", `/api/tasks/${auditor.id}/cancel`, {});
+  await t.clock.advance(HOUR);
+
+  expect(cancelled.status).toBe(200);
+  expect(s.attributionClient.calls).toHaveLength(1);
+  expect((await attributions(t, s.task.id)).map((e: any) => e.payload.round)).toEqual(["initial"]);
+  expect(await attributionsFailed(t, s.task.id)).toEqual([]);
+
+  reportFableWindow(t, false);
+  await t.clock.advance(HOUR);
+
+  expect((await attributions(t, s.task.id)).map((e: any) => [e.payload.cause, e.payload.round])).toEqual([
+    ["uncertain", "initial"],
+    ["capability", "after_rca"],
+  ]);
+});
+
+it("容器の前提が成り立たない間は起草を撃たず、失敗 event も書かない。前提が戻れば撃って candidate が載る", async () => {
+  const s = await objectedForDraft("no containment", { initial: { cause: "preference", evidence: "taste" } });
+  t = s.t;
+  s.behaviorDraftClient.scriptDraft(s.entry.id, KEEP_FIXTURES);
+  t.containers.scriptPreflight("cgroup v2 is not mounted at /sys/fs/cgroup");
+
+  await commit(t, s.task.id, "no containment");
+  await t.clock.advance(HOUR);
+
+  expect(s.behaviorDraftClient.calls).toEqual([]);
+  expect(await draftsFailed(t, s.task.id)).toEqual([]);
+
+  t.containers.scriptPreflight();
+  await t.clock.advance(HOUR);
+
+  const [attribution] = await attributions(t, s.task.id);
+  expect(await behaviors(t)).toEqual([expect.objectContaining({ source: { kind: "event", ref: attribution.id } })]);
+});
+
+it("第2回の帰責が確定した entry は、同じタスクに新しい RCA 群が決着しても問い直されず、新しい entry だけが問われる", async () => {
+  const s = await objectedAndCommitted("settled-rca");
+  t = s.t;
+  s.attributionClient.scriptJudgment(s.entry.id, { cause: "capability", evidence: "the RCA decided it" });
+  await api(t.baseUrl, "POST", `/api/tasks/${s.self.id}/cancel`, {});
+  await api(t.baseUrl, "POST", `/api/tasks/${s.auditor.id}/cancel`, {});
+  expect(s.attributionClient.calls).toHaveLength(2);
+
+  await completeIntegrationReviews(t, s.task.id);
+  const second = (await api(t.baseUrl, "GET", `/api/tasks/${s.task.id}/events`)).json.find(
+    (e: any) => e.kind === "task_completed",
+  );
+  await api(t.baseUrl, "POST", "/api/triage/start");
+  await object(t, second.id, "the report should name the fixtures");
+  await api(t.baseUrl, "POST", "/api/triage/close");
+  const fresh = (await children(t, s.task.id)).filter(
+    (x: any) => x.title.startsWith("rca (") && x.status === "todo",
+  );
+  for (const rca of fresh) await api(t.baseUrl, "POST", `/api/tasks/${rca.id}/cancel`, {});
+  await t.clock.advance(HOUR);
+
+  expect(s.attributionClient.calls.slice(2).map((c) => c.input.entry_id)).toEqual([second.id, second.id]);
 });

@@ -96,12 +96,12 @@ const REFIRE_INTERVAL_MS = 60 * 60 * 1000;
 
 /** 撃っている最中の呼び出しの鍵(ADR 0164 決定1)。盤面(db)ごとに1つ —— 1 process に盤面が
  *  複数立つテストで event id が重ならないように。再起動で消えてよい(呼び出しも殺される、ADR 0136)。 */
-const inFlight = new WeakMap<Db, Set<string>>();
+const firingKeys = new WeakMap<Db, Set<string>>();
 
 /** 同じ鍵の呼び出しを同時に1本までにする。鍵は同期で取る —— 呼び手が同じ tick で読んだ「結果が無い」と重ならないように。 */
-async function exclusive(db: Db, key: string, fire: () => Promise<void>): Promise<void> {
-  let keys = inFlight.get(db);
-  if (!keys) inFlight.set(db, (keys = new Set()));
+async function singleFlight(db: Db, key: string, fire: () => Promise<void>): Promise<void> {
+  let keys = firingKeys.get(db);
+  if (!keys) firingKeys.set(db, (keys = new Set()));
   if (keys.has(key)) return;
   keys.add(key);
   try {
@@ -111,11 +111,14 @@ async function exclusive(db: Db, key: string, fire: () => Promise<void>): Promis
   }
 }
 
+/** 失敗 event の kind ごとの、撃ち直しの対象を指す欄(起草は帰責、第2回は entry)。 */
+const FAILURE_TARGET = { memory_draft_failed: "attribution_event_id", objection_attribution_failed: "entry_id" } as const;
+
 /** 撃ってよいか(ADR 0164 決定4・5): その対象の失敗 event が3件未満で、最後の失敗から1時間以上経っている。 */
-function refireDue(db: Db, kind: "memory_draft_failed" | "objection_attribution_failed", field: string, value: number, now: Date): boolean {
+function refireDue(db: Db, kind: keyof typeof FAILURE_TARGET, target: number, now: Date): boolean {
   const { n, last } = db
     .prepare(`SELECT COUNT(*) AS n, MAX(created_at) AS last FROM events WHERE kind = ? AND json_extract(payload, ?) = ?`)
-    .get(kind, `$.${field}`, value) as { n: number; last: string | null };
+    .get(kind, `$.${FAILURE_TARGET[kind]}`, target) as { n: number; last: string | null };
   return n < MAX_FIRED_FAILURES && (last === null || now.getTime() - Date.parse(last) >= REFIRE_INTERVAL_MS);
 }
 
@@ -190,8 +193,8 @@ export async function attributeAfterRca(
  *  同じ entry への新しい event(round = after_rca)として追記し、起草へ進む(ADR 0120 決定1(b)(c))。
  *  撃てなかったら何も書かず、撃って失敗したら `objection_attribution_failed` だけを残す(ADR 0164 決定3・6)。 */
 async function attributeSecondRound(db: Db, deps: BoardCallDeps, objectedId: string, initial: Attribution, now: Date): Promise<void> {
-  await exclusive(db, `after_rca:${initial.entry_id}`, async () => {
-    if (!refireDue(db, "objection_attribution_failed", "entry_id", initial.entry_id, now)) return;
+  await singleFlight(db, `after_rca:${initial.entry_id}`, async () => {
+    if (!refireDue(db, "objection_attribution_failed", initial.entry_id, now)) return;
     const call = boardCallSetting(db, deps.attributionClient, deps.containers);
     if ("unavailable" in call) return;
     const input = secondRoundInput(db, objectedId, initial);
@@ -278,7 +281,7 @@ function objectionInput(
 /** 帰責が起草に向くエントリから Board call で Behavior candidate を起草する(ADR 0120 決定1(b)(c) /
  *  issue #617): 初回は `preference` だけ、第2回は学習向きの cause すべて(入力に RCA の findings を足す)。
  *  人間エントリ・起草 client の無い盤面・宛先の agent がいない起草(登録者が人間か盤面の
- *  `task_ambiguity` / `missing_information`、ADR 0164 決定2)は何もしない。宛先は cause から導出し
+ *  `task_ambiguity` / `missing_information`、ADR 0164 決定2)・workspace の無い task は何もしない。宛先は cause から導出し
  *  (ADR 0115 決定4)、Board call の `addressee` は `preference` だけが読む。撃てなかったら何も書かず、
  *  撃って失敗したら `memory_draft_failed` を残す(ADR 0164 決定3)。帰責の transaction の後に走り、
  *  commit も settlement も止めない。 */
@@ -297,30 +300,24 @@ export async function draftBehaviorCandidate(db: Db, deps: BoardCallDeps, attrib
       return;
     }
   }
-  await exclusive(db, `draft:${attribution.id}`, async () => {
-    if (!refireDue(db, "memory_draft_failed", "attribution_event_id", attribution.id, now)) return;
+  const task = getTask(db, taskId)!;
+  let scope: string;
+  try {
+    scope = memoryScope(deps, task);
+  } catch {
+    return; // workspace の無い task は Memory の置き場が無く、何度撃っても同じ —— 宛先の無い起草と同じく何も残さない
+  }
+  await singleFlight(db, `draft:${attribution.id}`, async () => {
+    if (!refireDue(db, "memory_draft_failed", attribution.id, now)) return;
     // 入力が組めない帰責(出所の異議が壊れている)は撃って失敗したのではないので、失敗 event に畳まず投げる
     const input = round === "initial" ? objectionInput(db, attribution) : secondRoundInput(db, taskId, attribution);
     const call = boardCallSetting(db, deps.behaviorDraftClient, deps.containers);
     if ("unavailable" in call) return;
+    // INDEX は撃つ時点のもの(ADR 0164 決定4)
+    const index = buildMemoryInjection(db, task, scope, entry.worker_id).section;
+    let draft: BehaviorDraft;
     try {
-      const task = getTask(db, taskId)!;
-      const scope = memoryScope(deps, task);
-      // INDEX は撃つ時点のもの(ADR 0164 決定4)
-      const index = buildMemoryInjection(db, task, scope, entry.worker_id).section;
-      const { addressee, ...draft } = await call.client.draft({ ...input, index }, call.setting);
-      createBehaviorCandidate(
-        db,
-        {
-          ...draft,
-          scope,
-          addressee: derived?.kind === "behavior" ? derived.addressee : addressee === "all" ? null : entry.worker_id,
-          source: { event_id: attribution.id },
-          author: { activity: "board", name: BOARD_WORKER_ID },
-        },
-        "board",
-        now,
-      );
+      draft = await call.client.draft({ ...input, index }, call.setting);
     } catch (err) {
       appendEvent(db, {
         taskId,
@@ -329,7 +326,21 @@ export async function draftBehaviorCandidate(db: Db, deps: BoardCallDeps, attrib
         payload: { kind: "memory_draft_failed", entry_id, round, attribution_event_id: attribution.id, reason: message(err) },
         at: now,
       });
+      return;
     }
+    const { addressee, ...fields } = draft;
+    createBehaviorCandidate(
+      db,
+      {
+        ...fields,
+        scope,
+        addressee: derived?.kind === "behavior" ? derived.addressee : addressee === "all" ? null : entry.worker_id,
+        source: { event_id: attribution.id },
+        author: { activity: "board", name: BOARD_WORKER_ID },
+      },
+      "board",
+      now,
+    );
   });
 }
 
@@ -345,7 +356,7 @@ function decisionLogText(db: Db, taskId: string, before = Number.POSITIVE_INFINI
 export function latestAttribution(
   db: Db,
   entry: { id: number; task_id: string },
-): ({ id: number } & Extract<EventPayload, { kind: "objection_attributed" }>) | undefined {
+): Attribution | undefined {
   let latest: ReturnType<typeof latestAttribution>;
   for (const e of listEvents(db, entry.task_id)) {
     if (e.payload.kind === "objection_attributed" && e.payload.entry_id === entry.id) latest = { id: e.id, ...e.payload };

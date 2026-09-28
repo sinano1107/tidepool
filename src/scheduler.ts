@@ -1,5 +1,5 @@
 import { quarantineAgent, UnknownAgentError } from "./agent.js";
-import { type BoardCallDeps, refireAttributions } from "./attribution.js";
+import { type AttributionClient, type BehaviorDraftClient, refireAttributions } from "./attribution.js";
 import { boardHalts } from "./board-halt.js";
 import { type CliAuthCheck, quarantineCliAuthForProvider } from "./cli-auth.js";
 import type { Clock } from "./clock.js";
@@ -271,8 +271,8 @@ export function startScheduler(deps: {
   /** registry の agent 一覧(issue #920): routing の due 判定の直前に tier の提案の pin を照合する。Absent → registry の無い盤面。 */
   agents?: ListAgentTiers;
   /** 帰責と起草の Board call(ADR 0164): poll が結果の無い帰責を撃ち直す。Absent → 撃ち直すものが無い盤面。 */
-  attributionClient?: BoardCallDeps["attributionClient"];
-  behaviorDraftClient?: BoardCallDeps["behaviorDraftClient"];
+  attributionClient?: AttributionClient;
+  behaviorDraftClient?: BehaviorDraftClient;
 }): Scheduler {
   const {
     db,
