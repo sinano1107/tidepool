@@ -294,6 +294,8 @@ export interface WireContract {
       invalidated_by: { question_id: string } | { activity: string } | { worker: string } | null;
       /** 復元の複製の id(ADR 0163 追記 #1059)。復元していなければ null。 */
       restored_as: number | null;
+      /** superseded でこの行を後継に指す id(ADR 0162 の畳みの跡)。 */
+      replaced_ids: number[];
       cause: string | null;
       /** 値集合の正本は src/memory.ts の MemorySource。event の ref が自身の id なら出所は作成 event(事例なし)。 */
       source: { kind: "commit"; ref: string } | { kind: "event" | "decision"; ref: number };

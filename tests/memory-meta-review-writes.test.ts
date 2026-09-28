@@ -365,7 +365,7 @@ it("出所を添えずに人間が書いた Behavior だけを replaces に取�
   ).entry_id;
 
   expect(entry(db, consolidate([human], { text: "Pin the toolchain." }).candidate_id)).toMatchObject({ source: { kind: "decision", ref: decision } });
-  expect(() => consolidate([human], { kind: "exemplar", annotations })).toThrow(/case the board can render/);
+  expect(() => consolidate([human], { kind: "exemplar", annotations })).toThrow(/share one source/);
 });
 
 it("kind を省いた consolidate は Behavior candidate を作り、replaces(Exemplar も取れる)の出所が揃えばそれを継ぎ、揃わなければ meta-review の推論(decision)を出所にする", () => {
@@ -548,7 +548,7 @@ it.each([
 it("define_memory の supersedes は path を問わず Definition を置き換える(ADR 0161 決定2)", () => {
   const { db } = board();
   const old = definitionEntry(db);
-  const { entry_id } = defineMemoryBranch(db, { scope: "tidepool", path: "toolchain", text: "Which toolchain it pins.", supersedes: old, author: metaReview }, "worker", at);
+  const { entry_id } = defineMemoryBranch(db, { scope: "tidepool", path: "toolchain", text: "Which toolchain it pins.", supersedes: [old], author: metaReview }, "worker", at);
 
   expect(entry(db, old)).toMatchObject({ invalidation_reason: "superseded", successor_id: entry_id });
 });

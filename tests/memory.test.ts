@@ -8,6 +8,7 @@ import {
   createBehaviorCandidate,
   defineMemoryBranch,
   ensureMemoryIndex,
+  foldMemoryEntries,
   humanEntryInput,
   invalidateMemoryEntry,
   listMemoryEntries,
@@ -327,12 +328,20 @@ it("同じ枝・同じスコープに approved の定義があれば domain erro
   expect(approvedMemoryEntries(db).map((e) => e.id)).toEqual([boardWide, revised]);
 });
 
-it("同じ枝の定義は supersedes で書き直し、旧定義は superseded + 後継で無効化される —— 1つの枝に approved は1つのまま", () => {
+it("同じ枝の定義は supersedes にその生きた定義を含めれば書き直せ、supersedes の各定義は superseded + 後継で無効化される —— 含めなければ domain error で何も変わらない(ADR 0162 決定1)", () => {
   const { db } = board();
   const old = defineMemoryBranch(db, definition, "worker", at).entry_id;
-  const revised = defineMemoryBranch(db, { ...definition, text: "Another line.", supersedes: old }, "webui", at).entry_id;
+  const elsewhere = defineMemoryBranch(db, { ...definition, path: "ci", text: "How CI runs." }, "worker", at).entry_id;
+  const before = listMemoryEntries(db, {});
+  expect(() => defineMemoryBranch(db, { ...definition, text: "Third line.", supersedes: [elsewhere] }, "webui", at)).toThrow(/already defined/);
+  expect(listMemoryEntries(db, {})).toEqual(before);
+
+  const revised = defineMemoryBranch(db, { ...definition, text: "Another line.", supersedes: [old, elsewhere] }, "webui", at).entry_id;
   expect(approvedMemoryEntries(db)).toMatchObject([{ id: revised, path: "build", text: "Another line." }]);
-  expect(() => defineMemoryBranch(db, { ...definition, text: "Third line.", supersedes: old }, "webui", at)).toThrow(/already defined/);
+  expect(listMemoryEntries(db, { state: "invalidated" })).toMatchObject([
+    { id: old, invalidation_reason: "superseded", successor_id: revised },
+    { id: elsewhere, invalidation_reason: "superseded", successor_id: revised },
+  ]);
 });
 
 it("定義の別の枝への付け替えは、枝の改名が移動(path_moved + 複製)、別の枝への統合が superseded + 後継", () => {
@@ -423,9 +432,9 @@ it("人間が書く Behavior は任意で decision_logged か worker_spawned の
   ]);
 });
 
-it("人間の Behavior は supersedes で approved の Behavior を書き直し、旧を人間名義の superseded + 後継で無効化する —— candidate・無効化済み・Knowledge・Definition を指すと domain error で何も変わらない(ADR 0152 決定4)", () => {
+it("人間の Behavior は supersedes で approved の Behavior を書き直し、旧を人間名義の superseded + 後継で無効化する —— candidate・無効化済み・Knowledge・Definition を指すと domain error で何も変わらない(ADR 0152 決定4 / ADR 0162 決定2)", () => {
   const { db } = board();
-  const write = (title: string, supersedes?: number) =>
+  const write = (title: string, supersedes?: number[]) =>
     recordBehavior(db, { ...humanEntryInput(db, { ...humanKnowledge, title }), addressee: "deckhand", ...(supersedes === undefined ? {} : { supersedes }) }, "webui", at).entry_id;
   const old = write("old rule");
   const candidate = createBehaviorCandidate(db, { ...knowledge, addressee: null, source: { commit: "0a46a46" }, author: { activity: "rca", name: "auditor" } }, "board", at).entry_id;
@@ -435,10 +444,10 @@ it("人間の Behavior は supersedes で approved の Behavior を書き直し�
   const branch = defineMemoryBranch(db, { scope: "tidepool", path: "build", text: "How the build runs.", author: human }, "webui", at).entry_id;
   const before = listMemoryEntries(db, {});
 
-  for (const target of [candidate, dead, fact, branch]) expect(() => write("new rule", target)).toThrow(DomainError);
+  for (const target of [candidate, dead, fact, branch]) expect(() => write("new rule", [old, target])).toThrow(DomainError);
   expect(listMemoryEntries(db, {})).toEqual(before);
 
-  const revised = write("new rule", old);
+  const revised = write("new rule", [old]);
   expect(listMemoryEntries(db, { kind: "behavior" })).toMatchObject([
     { id: old, invalidation_reason: "superseded", successor_id: revised },
     { id: candidate },
@@ -449,35 +458,40 @@ it("人間の Behavior は supersedes で approved の Behavior を書き直し�
   expect(getEvent(db, revised + 1)).toMatchObject({ worker_id: "human", payload: { kind: "memory_entry_invalidated", entry_id: old, activity: "human" } });
 });
 
-it("人間の Behavior の編集は出所を渡さなければ旧の出所(RCA 起草の帰責 event も)を継ぎ、渡せば置き換える —— 旧の出所が自身の作成 event なら後継も自身の作成 event(ADR 0153 決定3)", () => {
+it("人間の Behavior の出所は、渡せばそれ、渡さなければ supersedes の出所が1つに揃うとき(1件の編集も、RCA 起草の帰責 event も)それを継ぎ、揃わない・自身の作成 event なら後継自身の作成 event(ADR 0162 決定3)", () => {
   const { db, task } = board();
   const decision = logDecision(db, task, "split the migration", "deckhand", at);
+  const other = logDecision(db, task, "keep the schema first", "deckhand", at);
   const registered = listEvents(db, task.id)[0]!.id;
   const drafted = createBehaviorCandidate(db, { ...knowledge, addressee: null, source: { event_id: registered }, author: { activity: "rca", name: "auditor" } }, "board", at).entry_id;
   approveMemoryProposal(db, { kind: "memory", op: "approve", candidate_id: drafted, replaces: [] }, "question-1", "webui", at);
-  const edit = (supersedes: number, source_event_id?: number) =>
+  const write = (supersedes?: number[], source_event_id?: number) =>
     recordBehavior(db, { ...humanEntryInput(db, humanKnowledge), addressee: null, supersedes, ...(source_event_id === undefined ? {} : { source_event_id }) }, "webui", at).entry_id;
 
-  const inherited = edit(drafted);
-  const replaced = edit(inherited, decision);
-  const own = recordBehavior(db, { ...humanEntryInput(db, humanKnowledge), addressee: null }, "webui", at).entry_id;
-  const ownEdited = edit(own);
+  const inherited = write([drafted]);
+  const replaced = write([inherited], decision);
+  const shared = write([replaced, write(undefined, decision)]);
+  const unshared = write([shared, write(undefined, other)]);
+  const ownEdited = write([write()]);
 
   expect(approvedMemoryEntries(db).map((e) => [e.id, e.source])).toEqual([
-    [replaced, { kind: "event", ref: decision }],
+    [unshared, { kind: "event", ref: unshared }],
     [ownEdited, { kind: "event", ref: ownEdited }],
   ]);
-  expect(listMemoryEntries(db, { kind: "behavior" }).find((e) => e.id === inherited)?.source).toEqual({ kind: "event", ref: registered });
+  expect([inherited, replaced, shared].map((id) => entryById(db, id)?.source)).toEqual([
+    { kind: "event", ref: registered },
+    { kind: "event", ref: decision },
+    { kind: "event", ref: decision },
+  ]);
 });
 
 it("直接編集で superseded になった approved Behavior を pin する open な提案 question は、観測で決着し回答は残らない(ADR 0152 決定4)", () => {
   const { db, task } = board();
-  const write = (supersedes?: number) =>
-    recordBehavior(db, { ...humanEntryInput(db, humanKnowledge), addressee: null, ...(supersedes === undefined ? {} : { supersedes }) }, "webui", at).entry_id;
+  const write = (supersedes?: number[]) => recordBehavior(db, { ...humanEntryInput(db, humanKnowledge), addressee: null, supersedes }, "webui", at).entry_id;
   const old = write();
   const { question_id } = proposeMemoryChange(db, task.id, { op: "invalidate", target_id: old, reason: "requirement_change", rationale: "r" }, "auditor", at);
 
-  write(old);
+  write([old]);
 
   expect(getTask(db, question_id)).toMatchObject({ status: "done", question_answer: null });
   expect(listEvents(db, question_id).map((e) => e.kind)).toEqual(["task_registered", "memory_proposal_stale"]);
@@ -1387,6 +1401,132 @@ it("watermark 再生と rebuild は復元した複製(4種別、approved と can
   const current = approvedMemoryEntries(db);
   const listed = listMemoryEntries(db, {});
   expect(current).toHaveLength(6);
+
+  expect(approvedMemoryEntries(db, Number.MAX_SAFE_INTEGER)).toEqual(current);
+  // setup のみ: 版の古い店を模して rebuild を走らせる
+  db.prepare("UPDATE memory_index_version SET preprocess_version = 'cjk-bigram-0'").run();
+  ensureMemoryIndex(db, at);
+  expect(listMemoryEntries(db, {})).toEqual(listed);
+});
+
+/** 人間の畳み(ADR 0162 決定1・2)の4種別の書き込み: 各種別の置き換えられる approved 2件と、supersedes を取る書き込み。
+ *  Behavior と Exemplar の組は互いを混ぜる(種別の線、ADR 0161 決定1)。 */
+function folds() {
+  const { db, task } = board();
+  const decision = logDecision(db, task, "split the migration into two commits", "deckhand", at);
+  const fact = (title: string, supersedes?: number[]) => recordKnowledge(db, { ...humanEntryInput(db, { ...humanKnowledge, title }), supersedes }, "webui", at).entry_id;
+  const branch = (path: string, supersedes?: number[]) =>
+    defineMemoryBranch(db, { ...humanEntryInput(db, { workspace: "tidepool", path, text: `How ${path} works.` }), supersedes }, "webui", at).entry_id;
+  const rule = (title: string, supersedes?: number[]) =>
+    recordBehavior(db, { ...humanEntryInput(db, { ...humanKnowledge, title }), addressee: null, source_event_id: decision, supersedes }, "webui", at).entry_id;
+  const example = (supersedes?: number[]) =>
+    recordExemplar(db, { ...humanEntryInput(db, { workspace: "tidepool", path: "habits", title: "Split", addressee: null, source_event_id: decision, annotations: [whole] }), supersedes }, "webui", at)
+      .entry_id;
+  const writes = [
+    ["knowledge", [fact("a"), fact("b")], (supersedes: number[]) => fact("folded", supersedes)],
+    ["definition", [branch("build"), branch("ci")], (supersedes: number[]) => branch("build", supersedes)],
+    ["behavior", [rule("a"), example()], (supersedes: number[]) => rule("folded", supersedes)],
+    ["exemplar", [rule("b"), example()], (supersedes: number[]) => example(supersedes)],
+  ] as const;
+  return { db, writes, pending: candidate(db, "Pending") };
+}
+
+it("4種別の書き込みは supersedes の各要素を新エントリの superseded(書き手 human の印)にし、1件でも candidate・種別の線の外なら新エントリも無効化も残さない(ADR 0162 決定1・2 / ADR 0161 決定1)", () => {
+  const { db, writes, pending } = folds();
+  const [[, facts], [, branches]] = writes;
+  const before = listMemoryEntries(db, {});
+
+  for (const [kind, replaced, write] of writes) {
+    const acrossTheLine = kind === "knowledge" ? branches[0] : facts[0];
+    for (const bad of [pending, acrossTheLine]) expect(() => write([...replaced, bad])).toThrow(DomainError);
+  }
+  expect(listMemoryEntries(db, {})).toEqual(before);
+
+  for (const [kind, replaced, write] of writes) {
+    const successor = write([...replaced]);
+    expect(entryById(db, successor)).toMatchObject({ kind, state: "approved", invalidation_reason: null });
+    expect(replaced.map((id) => entryById(db, id))).toMatchObject(
+      replaced.map(() => ({ invalidation_reason: "superseded", successor_id: successor, invalidated_by: { activity: "human" } })),
+    );
+  }
+});
+
+it("人間の Exemplar は source_event_id を省くと supersedes の揃った出所(RCA 起草の帰責 event も)を事例に継ぎ、注釈はその case で検査する —— 揃わない・supersedes も無いなら domain error で何も書かない(#1041)", () => {
+  const { db, task } = board();
+  const decision = logDecision(db, task, "split the migration into two commits", "deckhand", at);
+  const other = logDecision(db, task, "read the schema first", "deckhand", at);
+  // setup のみ: RCA の帰責 event(起草の出所)
+  const attributed = appendEvent(db, {
+    taskId: task.id,
+    workerId: "tidepool",
+    origin: "board",
+    payload: { kind: "objection_attributed", entry_id: decision, objection_event_ids: [], cause: "preference", evidence: "e", entries: null, round: "after_rca" },
+    at,
+  });
+  const drafted = createBehaviorCandidate(db, { ...knowledge, addressee: null, source: { event_id: attributed }, author: { activity: "rca", name: "auditor" } }, "board", at).entry_id;
+  approve(db, drafted);
+  const cited = exemplar(db, other, [whole]);
+  const quoting = (quote: string) => [{ anchor: { field: "decision", quote }, polarity: "imitate", text: "Split it." }];
+  const write = (supersedes?: number[], annotations = quoting("two commits")) =>
+    recordExemplar(db, { ...humanEntryInput(db, { workspace: "tidepool", path: "habits", title: "Split", addressee: null, annotations }), supersedes }, "webui", at).entry_id;
+  const before = listMemoryEntries(db, {});
+
+  expect(() => write([drafted, cited])).toThrow(/share one source/);
+  expect(() => write()).toThrow(DomainError);
+  expect(() => write([drafted], quoting("schema first"))).toThrow(/not verbatim/);
+  expect(listMemoryEntries(db, {})).toEqual(before);
+
+  const id = write([drafted]);
+  expect(entryById(db, id)).toMatchObject({ kind: "exemplar", source: { kind: "event", ref: attributed } });
+  expect(entryById(db, drafted)).toMatchObject({ invalidation_reason: "superseded", successor_id: id });
+});
+
+it("既にある後継への人間の畳みは approved も candidate も replaces に取り、各要素を後継つき superseded(畳んだ者の印)にして新しい entry を作らない —— 種別の線の外・candidate の後継・空の replaces は domain error で何も変わらない(ADR 0162 決定1・2)", () => {
+  const { db, task } = board();
+  const decision = logDecision(db, task, "split the migration into two commits", "deckhand", at);
+  const successor = exemplar(db, decision, [whole]);
+  const rule = recordBehavior(db, { ...humanEntryInput(db, humanKnowledge), addressee: null }, "webui", at).entry_id;
+  const [pending, other] = [candidate(db, "Pending"), candidate(db, "Other")];
+  const fact = record(db, "fact");
+  const fold = (replaces: number[], successor_id = successor) => () => foldMemoryEntries(db, { replaces, successor_id, author: human }, "webui", at);
+  const before = listMemoryEntries(db, {});
+
+  expect(fold([pending, fact])).toThrow(`knowledge entry ${fact} cannot be superseded by exemplar entry ${successor}`);
+  expect(fold([pending], other)).toThrow(DomainError);
+  expect(fold([])).toThrow(DomainError);
+  expect(listMemoryEntries(db, {})).toEqual(before);
+
+  expect(fold([pending, rule])()).toEqual({ entry_id: successor, event_ids: [expect.any(Number), expect.any(Number)] });
+  expect(listMemoryEntries(db, {})).toHaveLength(before.length);
+  expect([pending, rule].map((id) => entryById(db, id))).toMatchObject([
+    { invalidation_reason: "superseded", successor_id: successor, invalidated_by: { activity: "human" } },
+    { invalidation_reason: "superseded", successor_id: successor, invalidated_by: { activity: "human" } },
+  ]);
+});
+
+it("一覧の replaced_ids は後継の行に superseded で置き換えた id を持ち(path_moved は数えない)、ほかの行は空", () => {
+  const { db } = board();
+  const [a, b, c] = ["a", "b", "c"].map((title) => record(db, title)) as [number, number, number];
+  const written = recordKnowledge(db, { ...humanEntryInput(db, humanKnowledge), supersedes: [a, b] }, "webui", at).entry_id;
+  const moved = moveMemory(db, { entry_id: c, scope: null, path: "moved", mover: human }, "webui", at).entry_id;
+  foldMemoryEntries(db, { replaces: [moved], successor_id: written, author: human }, "webui", at);
+
+  expect(listMemoryEntries(db, {}).map((e) => [e.id, e.replaced_ids])).toEqual([
+    [a, []],
+    [b, []],
+    [c, []],
+    [written, [a, b, moved]],
+    [moved, []],
+  ]);
+  expect(listMemoryEntries(db, { state: "approved" }).map((e) => [e.id, e.replaced_ids])).toEqual([[written, [a, b, moved]]]);
+});
+
+it("watermark 再生と rebuild は4種別の supersedes と既にある後継への畳みの結果を表と同じに戻す", () => {
+  const { db, writes, pending } = folds();
+  const successors = writes.map(([, replaced, write]) => write([...replaced]));
+  foldMemoryEntries(db, { replaces: [pending], successor_id: successors[2]!, author: human }, "webui", at);
+  const current = approvedMemoryEntries(db);
+  const listed = listMemoryEntries(db, {});
 
   expect(approvedMemoryEntries(db, Number.MAX_SAFE_INTEGER)).toEqual(current);
   // setup のみ: 版の古い店を模して rebuild を走らせる

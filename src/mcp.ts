@@ -991,7 +991,13 @@ function registerMemoryMetaReviewVerbs(server: McpServer, deps: McpDeps, run: Me
       run((reader, now) =>
         defineMemoryBranch(
           deps.db,
-          { scope: registeredScope(deps, input.scope), path: input.path, text: input.definition, supersedes: input.supersedes, author: author(reader) },
+          {
+            scope: registeredScope(deps, input.scope),
+            path: input.path,
+            text: input.definition,
+            supersedes: input.supersedes === undefined ? undefined : [input.supersedes],
+            author: author(reader),
+          },
           "worker",
           now,
         ),
@@ -1088,7 +1094,7 @@ function registerMemoryMetaReviewVerbs(server: McpServer, deps: McpDeps, run: Me
         replaces: z.array(z.number().int()).optional(),
         based_on_decision: z.number().int().optional(),
         target_id: z.number().int().optional(),
-        reason: invalidationSchema.shape.reason.exclude(["superseded"]).optional(),
+        reason: invalidationSchema.shape.reason.optional(),
         rationale: z.string().min(1),
       },
     },

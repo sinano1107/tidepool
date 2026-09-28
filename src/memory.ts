@@ -99,6 +99,13 @@ function inheritableSource(entry: MemoryEntry): MemorySource | undefined {
   return entry.source.ref === entry.id ? undefined : entry.source;
 }
 
+/** 置き換えられるエントリが1つに揃えて持つ継げる出所(kind と ref が同一 —— ADR 0162 決定3)。meta-review の consolidate と
+ *  人間の書き込みの supersedes が共有する。workspace を跨ぐ統合は帰責 event が揃わないので無い。 */
+function sharedSource(entries: MemoryEntry[]): MemorySource | undefined {
+  const [head, ...rest] = entries;
+  return head && rest.every(({ source }) => source.kind === head.source.kind && source.ref === head.source.ref) ? inheritableSource(head) : undefined;
+}
+
 /** 版 = 承認 event の id。表の投影と watermark 再生が同じ1つを読む。`carried` は移動の複製が作成 event で運ぶ旧の版。 */
 function versionOf(state: MemoryEntryFields["state"], createdEventId: number, carried?: number): number | null {
   return state === "approved" ? (carried ?? createdEventId) : null;
@@ -181,43 +188,72 @@ function createEntry(
   })();
 }
 
-/** Knowledge の書き込み(spec #586 E)。承認不要なので書いた瞬間に approved。 */
-export function recordKnowledge(db: Db, input: EntryInput, origin: EventOrigin, at: Date): { entry_id: number; event_id: number } {
-  const id = createEntry(db, { ...input, kind: "knowledge", state: "approved", original: input.original ?? null, addressee: null }, origin, at);
-  return { entry_id: id, event_id: id };
-}
-
-/** 枝の定義(spec #600 A): その枝の下に何を保存するかの1行。承認不要で書いた瞬間に approved、
- *  出所は持たない(自身の作成 event)。同じ枝・同じスコープの approved は1つだけ —— 改訂は
- *  `supersedes` に旧定義(path は問わない、ADR 0161 決定2)を渡し、書くのと superseded + 後継の無効化を1つの transaction で行う。 */
-export function defineMemoryBranch(
+/** 書き込みの `supersedes`(ADR 0162 決定1・2): write で新エントリを書き、supersedes の各要素をその superseded にするのを
+ *  1 transaction。要素は未無効化の approved だけ —— candidate を新しい文言で置き換えるのは提案 question の修正値(ADR 0152 決定3)。
+ *  種別の線は無効化の門が持つ。write は置き換えられるエントリ(出所を継ぐ書き込みが読む)を受け、新エントリの id を返す。 */
+function writeSuperseding(
   db: Db,
-  input: Omit<EntryInput, "title"> & { supersedes?: number },
+  supersedes: number[] | undefined,
+  author: Actor,
   origin: EventOrigin,
   at: Date,
+  write: (replaced: MemoryEntry[]) => number,
 ): { entry_id: number; event_id: number } {
-  if (/[\r\n]/.test(input.text)) throw new DomainError("a definition must be one line");
   return db.transaction(() => {
-    const defined = db
-      .prepare(
-        `SELECT id FROM memory_entries WHERE kind = 'definition' AND state = 'approved' AND invalidation_reason IS NULL
-          AND path = ? AND scope IS ?`,
-      )
-      .get(input.path, input.scope) as { id: number } | undefined;
-    if (defined && defined.id !== input.supersedes) throw new DomainError(`branch ${input.path} is already defined in this scope by entry ${defined.id}; revise it with supersedes`);
-    const { supersedes, ...fields } = input;
-    const id = createEntry(db, { ...fields, title: fields.text, kind: "definition", state: "approved", original: fields.original ?? null, addressee: null }, origin, at);
-    if (supersedes !== undefined) {
-      invalidateMemoryEntry(db, { entry_id: supersedes, reason: "superseded", successor_id: id }, fields.author.name, origin, at, { activity: fields.author.activity });
-    }
+    const replaced = (supersedes ?? []).map((id) => rowToEntry(requireLive(db, id, undefined, "approved")));
+    const id = write(replaced);
+    if (supersedes?.length) foldMemoryEntries(db, { replaces: supersedes, successor_id: id, author }, origin, at);
     return { entry_id: id, event_id: id };
   })();
 }
 
-/** meta-review の畳み(issue #619 / ADR 0122 決定1 / ADR 0161 決定2): replaces(1つ以上)を1つの後継の superseded にする。1 transaction。
+/** Knowledge の書き込み(spec #586 E)。承認不要なので書いた瞬間に approved。 */
+export function recordKnowledge(db: Db, input: EntryInput & { supersedes?: number[] }, origin: EventOrigin, at: Date): { entry_id: number; event_id: number } {
+  const { supersedes, ...fields } = input;
+  return writeSuperseding(db, supersedes, fields.author, origin, at, () =>
+    createEntry(db, { ...fields, kind: "knowledge", state: "approved", original: fields.original ?? null, addressee: null }, origin, at),
+  );
+}
+
+/** 枝の定義(spec #600 A): その枝の下に何を保存するかの1行。承認不要で書いた瞬間に approved、
+ *  出所は持たない(自身の作成 event)。同じ枝・同じスコープの approved は1つだけ —— 改訂は
+ *  `supersedes` に旧定義(path は問わない、ADR 0161 決定2)を含める。 */
+export function defineMemoryBranch(
+  db: Db,
+  input: Omit<EntryInput, "title"> & { supersedes?: number[] },
+  origin: EventOrigin,
+  at: Date,
+): { entry_id: number; event_id: number } {
+  if (/[\r\n]/.test(input.text)) throw new DomainError("a definition must be one line");
+  const { supersedes, ...fields } = input;
+  return writeSuperseding(db, supersedes, fields.author, origin, at, () => {
+    const defined = liveDefinitions(db, fields.scope, fields.path).find((id) => !supersedes?.includes(id));
+    if (defined) throw new DomainError(`branch ${fields.path} is already defined in this scope by entry ${defined}; revise it with supersedes`);
+    return createEntry(db, { ...fields, title: fields.text, kind: "definition", state: "approved", original: fields.original ?? null, addressee: null }, origin, at);
+  });
+}
+
+/** 既にある後継への畳み(ADR 0162 決定1・2): replaces(1つ以上、approved も candidate も)を successor_id の superseded にする。
+ *  1 transaction。後継が approved・未無効化であることと種別の線は無効化の門が持つ。人間の面と書き込みの supersedes が直接、
+ *  meta-review は foldMemory の門を通して呼ぶ。返り値の event_ids は replaces の memory_entry_invalidated。 */
+export function foldMemoryEntries(
+  db: Db,
+  input: { replaces: number[]; successor_id: number; author: Actor },
+  origin: EventOrigin,
+  at: Date,
+): { entry_id: number; event_ids: number[] } {
+  const { replaces, successor_id, author } = input;
+  if (replaces.length === 0) throw new DomainError("a fold needs at least one entry to replace");
+  return db.transaction(() => ({
+    entry_id: successor_id,
+    event_ids: replaces.map((id) => invalidateMemoryEntry(db, { entry_id: id, reason: "superseded", successor_id }, author.name, origin, at, { activity: author.activity })),
+  }))();
+}
+
+/** meta-review の畳み(issue #619 / ADR 0122 決定1 / ADR 0161 決定2): foldMemoryEntries に meta-review の門を掛ける。
  *  後継は新しく書く Knowledge(`based_on_decision` の decision(推論)を出所に)か、既にある approved の `successor_id` のどちらか一方。
  *  組(Knowledge → Knowledge、Definition → Definition、Behavior / Exemplar ↔)は種別の線が持ち、approved の Behavior / Exemplar は
- *  承認の線なので consolidate の提案へ回す。返り値の event_ids は replaces の memory_entry_invalidated。 */
+ *  承認の線なので consolidate の提案へ回す。 */
 export function foldMemory(
   db: Db,
   metaReviewId: string,
@@ -229,11 +265,11 @@ export function foldMemory(
   at: Date,
 ): { entry_id: number; event_ids: number[] } {
   const { replaces, successor_id, author, ...draft } = input;
-  if (replaces.length === 0) throw new DomainError("fold_memory needs at least one entry to replace");
   if ((successor_id === undefined) === Object.values(draft).every((value) => value === undefined)) {
     throw new DomainError("fold_memory takes exactly one of successor_id (an existing approved entry) and scope, path, title, text and based_on_decision (a new knowledge entry)");
   }
   return db.transaction(() => {
+    for (const id of replaces) requireNotApprovedBehaviorOrExemplar(db, id);
     let successor = successor_id;
     if (successor === undefined) {
       const { scope, path, title, text, based_on_decision } = draft;
@@ -242,10 +278,7 @@ export function foldMemory(
       }
       successor = recordKnowledge(db, { scope, path, title, text, author, source: { event_id: requireDecision(db, based_on_decision, metaReviewId) } }, origin, at).entry_id;
     }
-    const event_ids = replaces.map((id) =>
-      invalidateMemoryEntry(db, { entry_id: requireNotApprovedBehaviorOrExemplar(db, id).id, reason: "superseded", successor_id: successor }, author.name, origin, at, { activity: author.activity }),
-    );
-    return { entry_id: successor, event_ids };
+    return foldMemoryEntries(db, { replaces, successor_id: successor, author }, origin, at);
   })();
 }
 
@@ -417,13 +450,14 @@ const humanEntryFields = {
   path: z.string(),
   text: z.string(),
   original_text: z.string().optional(),
+  /** 新エントリが置き換える approved のエントリ(ADR 0162 決定1)。 */
+  supersedes: z.array(z.number().int().positive()).optional(),
 };
 export const humanKnowledgeSchema = z.object({ ...humanEntryFields, title: z.string(), original_title: z.string().optional() });
-export const humanDefinitionSchema = z.object({ ...humanEntryFields, supersedes: z.number().int().positive().optional() });
-/** Behavior は Knowledge の欄 + 宛先(null = 全員)、任意の編集先と出所の Episode(ADR 0152 / ADR 0153 決定3)。 */
+export const humanDefinitionSchema = z.object(humanEntryFields);
+/** Behavior は Knowledge の欄 + 宛先(null = 全員)と任意の出所の Episode(ADR 0152 / ADR 0153 決定3)。 */
 export const humanBehaviorSchema = humanKnowledgeSchema.extend({
   addressee: z.string().min(1).nullable(),
-  supersedes: z.number().int().positive().optional(),
   source_event_id: z.number().int().positive().optional(),
 });
 /** Exemplar の注釈(ADR 0153 決定1・3)。anchor は case 描画の欄に結ぶ —— `whole` か、欄(decision / steering / handoff /
@@ -437,9 +471,9 @@ export const exemplarAnnotationSchema = z.object({
 type ExemplarAnnotation = Omit<z.infer<typeof exemplarAnnotationSchema>, "original"> & { original?: { text: string; language: string } };
 /** meta-review の consolidate の注釈: 原文は人間のものなので持たない(渡されたら黙って捨てず断る)。 */
 export const metaReviewAnnotationSchema = exemplarAnnotationSchema.omit({ original: true }).strict();
-/** Exemplar は Behavior の置き場・title・宛先 + 必須の出所の Episode と注釈の list。英語の title の原文は持たない。 */
-export const humanExemplarSchema = humanBehaviorSchema.pick({ workspace: true, path: true, title: true, addressee: true }).extend({
-  source_event_id: z.number().int().positive(),
+/** Exemplar は Behavior の置き場・title・宛先・supersedes・出所の Episode + 注釈の list。英語の title の原文は持たない。出所は
+ *  supersedes の揃った出所を継ぐときだけ省ける(recordExemplar)。 */
+export const humanExemplarSchema = humanBehaviorSchema.pick({ workspace: true, path: true, title: true, addressee: true, supersedes: true, source_event_id: true }).extend({
   annotations: z.array(exemplarAnnotationSchema),
 });
 
@@ -460,14 +494,17 @@ export function parseMemoryAmendment(input: unknown): MemoryAmendment {
   return parsed.data;
 }
 
-// `rejected` は提案 question の reject と、meta-review の candidate の引退(issue #954)だけが書く —— 人間の面からは渡せない。
-// `path_moved` は移動(moveMemory / moveMemoryBranch)だけが書く(ADR 0161 決定4)
-export const invalidationSchema = z.object({ reason: z.enum(INVALIDATION_REASONS).exclude(["rejected", "path_moved"]), successor_id: z.number().int().positive().optional() });
+/** meta-review の invalidate_memory は後継なしで落とすだけ(ADR 0161 決定2): 後継 id は黙って捨てず断る。置き換えは畳みと
+ *  定義の supersedes、置き場の変更は移動(`path_moved` を書くのは移動だけ)が持つ。 */
+export const metaReviewInvalidationSchema = z.object({ reason: z.enum(INVALIDATION_REASONS).exclude(["superseded", "path_moved"]) }).strict();
+/** 人間の面の無効化(ADR 0161 決定4)と提案の invalidate op の理由: meta-review と同じく後継なしで落とすだけで、`rejected` は
+ *  提案 question の reject と meta-review の candidate の引退(issue #954)だけが書く。 */
+export const invalidationSchema = metaReviewInvalidationSchema.extend({ reason: metaReviewInvalidationSchema.shape.reason.exclude(["rejected"]) });
 /** 人間の面の移動(ADR 0162 決定4)。workspace null = 盤面全体。エントリ1件は移動先(扉が entry_id を足す)、枝ごとは移動元と移動先。 */
 export const memoryMoveSchema = z.object({ workspace: humanEntryFields.workspace, path: z.string() });
 export const memoryBranchMoveSchema = z.object({ workspace: humanEntryFields.workspace, path: z.string(), to_workspace: humanEntryFields.workspace, to_path: z.string() });
-/** meta-review の invalidate_memory は後継なしで落とすだけ(ADR 0161 決定2): 後継 id は黙って捨てず断る。 */
-export const metaReviewInvalidationSchema = z.object({ reason: z.enum(INVALIDATION_REASONS).exclude(["superseded", "path_moved"]) }).strict();
+/** 人間の面の既にある後継への畳み(ADR 0162 決定1)。 */
+export const memoryFoldSchema = z.object({ replaces: z.array(z.number().int().positive()), successor_id: z.number().int().positive() });
 
 /** 一覧の絞り込み(HTTP の query と管理MCP が共有)。workspace は完全一致、board_wide は盤面全体だけ。 */
 export const memoryListFilterSchema = z.object({
@@ -518,13 +555,12 @@ export function createBehaviorCandidate(
 }
 
 /** 人間が書く Behavior(ADR 0152 決定3・4): 書いた時点で approved。出所は任意で事例の Episode(decision_logged か
- *  worker_spawned の event、ADR 0153 決定3)、無ければ自身の作成 event。`supersedes` は編集 —— 未無効化の approved
- *  Behavior を指し、書くのと superseded + 後継の無効化を1 transaction(defineMemoryBranch と同じ形)。編集は出所を渡さなければ
- *  旧の出所(RCA 起草の帰責 event も)を継ぐので、case は編集後も引ける。旧の出所が自身の作成 event なら後継も自身の作成 event。
- *  `amends` は修正値つき approve の candidate(approveMemoryProposal だけが渡す): 出所の継ぎ方は編集と同じで、無効化は呼び手が持つ。 */
+ *  worker_spawned の event、ADR 0153 決定3)。渡さなければ `supersedes` の出所が1つに揃うとき(1件の編集も)それを継ぎ
+ *  (RCA 起草の帰責 event も —— case は編集後も引ける)、揃わなければ自身の作成 event(ADR 0162 決定3)。
+ *  `amends` は修正値つき approve の candidate(approveMemoryProposal だけが渡す): 出所の継ぎ方は1件の編集と同じで、無効化は呼び手が持つ。 */
 export function recordBehavior(
   db: Db,
-  input: Omit<EntryInput, "source"> & { addressee: string | null; source_event_id?: number; supersedes?: number },
+  input: Omit<EntryInput, "source"> & { addressee: string | null; source_event_id?: number; supersedes?: number[] },
   origin: EventOrigin,
   at: Date,
   mark?: { question_id: string },
@@ -532,16 +568,10 @@ export function recordBehavior(
 ): { entry_id: number; event_id: number } {
   const { source_event_id, supersedes, ...fields } = input;
   const cited = source_event_id === undefined ? undefined : citedEpisode(db, source_event_id);
-  return db.transaction(() => {
-    // candidate を直す口は提案 question の修正値だけ(ADR 0152 決定3)
-    const old = supersedes === undefined ? (amends && rowToEntry(amends)) : rowToEntry(requireLive(db, supersedes, ["behavior"], "approved"));
-    const source = cited ?? (old && inheritableSource(old));
-    const id = createEntry(db, { ...fields, source, kind: "behavior", state: "approved", original: fields.original ?? null }, origin, at, mark);
-    if (supersedes !== undefined) {
-      invalidateMemoryEntry(db, { entry_id: supersedes, reason: "superseded", successor_id: id }, fields.author.name, origin, at, { activity: fields.author.activity });
-    }
-    return { entry_id: id, event_id: id };
-  })();
+  return writeSuperseding(db, supersedes, fields.author, origin, at, (replaced) => {
+    const source = cited ?? sharedSource(amends ? [rowToEntry(amends)] : replaced);
+    return createEntry(db, { ...fields, source, kind: "behavior", state: "approved", original: fields.original ?? null }, origin, at, mark);
+  });
 }
 
 /** Exemplar の注釈の検査(人間の write と meta-review の consolidate が共有、ADR 0153 決定3)。各 anchor の quote は書く時点の
@@ -572,23 +602,26 @@ function checkedAnnotations<T extends z.infer<typeof metaReviewAnnotationSchema>
   return { annotations: parsed.data, text: parsed.data.map((a) => a.text).join("\n") };
 }
 
-/** 人間が書く Exemplar(ADR 0153 決定1・3): 書いた時点で approved。出所は事例の Episode(必須)。
+/** 人間が書く Exemplar(ADR 0153 決定1・3): 書いた時点で approved。出所は事例の Episode(必須)で、渡さなければ `supersedes` の
+ *  揃った出所を継ぐ(RCA 起草の帰責 event は事例に選べないので、それを出所に持つ approved の書き直しはこれだけが言える)。
  *  `amends` は注釈の修正値つき approve の candidate(approveMemoryProposal だけが渡す): 出所は candidate のものを継ぎ、無効化は呼び手が持つ。 */
 export function recordExemplar(
   db: Db,
-  input: Omit<EntryInput, "text" | "source" | "original"> & { addressee: string | null; source_event_id?: number; annotations: unknown },
+  input: Omit<EntryInput, "text" | "source" | "original"> & { addressee: string | null; source_event_id?: number; supersedes?: number[]; annotations: unknown },
   origin: EventOrigin,
   at: Date,
   mark?: { question_id: string },
   amends?: EntryRow,
 ): { entry_id: number; event_id: number } {
-  const { source_event_id, annotations: raw, ...fields } = input;
-  const source = amends ? rowToEntry(amends).source : citedEpisode(db, source_event_id!);
-  const { annotations: checked, text } = checkedAnnotations(db, source, raw, exemplarAnnotationSchema);
-  const language = getDisplayLanguage(db);
-  const annotations = checked.map(({ original, ...annotation }) => (original?.trim() ? { ...annotation, original: { text: original, language } } : annotation));
-  const id = createEntry(db, { ...fields, kind: "exemplar", state: "approved", text, original: null, annotations, source }, origin, at, mark);
-  return { entry_id: id, event_id: id };
+  const { source_event_id, supersedes, annotations: raw, ...fields } = input;
+  return writeSuperseding(db, supersedes, fields.author, origin, at, (replaced) => {
+    const source = amends ? rowToEntry(amends).source : source_event_id !== undefined ? citedEpisode(db, source_event_id) : sharedSource(replaced);
+    if (!source) throw new DomainError("an exemplar needs source_event_id, or supersedes whose entries share one source: it keeps that as its case");
+    const { annotations: checked, text } = checkedAnnotations(db, source, raw, exemplarAnnotationSchema);
+    const language = getDisplayLanguage(db);
+    const annotations = checked.map(({ original, ...annotation }) => (original?.trim() ? { ...annotation, original: { text: original, language } } : annotation));
+    return createEntry(db, { ...fields, kind: "exemplar", state: "approved", text, original: null, annotations, source }, origin, at, mark);
+  });
 }
 
 /** 人間の面の case preview(ADR 0153 決定3): 事例に選べる event の描画。anchor の quote はここから選ぶ。帰責 event は
@@ -787,11 +820,11 @@ export function deferMemoryProposal(comment: string | undefined): void {
   if (!comment?.trim()) throw new DomainError("deferring a memory proposal requires a comment saying what is still undecided");
 }
 
-/** 無効化されていない kinds のどれかで、state を渡せばその state の entry(提案が名指す entry と、Behavior の編集の supersedes)。 */
-function requireLive(db: Db, id: number, kinds: Array<MemoryEntryFields["kind"]>, state?: MemoryEntryFields["state"]): EntryRow {
+/** 無効化されていない kinds(省略 = 種別を問わない)のどれかで、state を渡せばその state の entry(提案が名指す entry と、書き込みの supersedes)。 */
+function requireLive(db: Db, id: number, kinds: Array<MemoryEntryFields["kind"]> | undefined, state?: MemoryEntryFields["state"]): EntryRow {
   const row = requireEntry(db, id);
-  if (!kinds.includes(row.kind) || row.invalidation_reason !== null || (state !== undefined && row.state !== state)) {
-    throw new DomainError(`memory entry ${id} is not a non-invalidated ${kinds.join(" or ")}${state ? ` in state ${state}` : ""}`);
+  if ((kinds && !kinds.includes(row.kind)) || row.invalidation_reason !== null || (state !== undefined && row.state !== state)) {
+    throw new DomainError(`memory entry ${id} is not a non-invalidated ${kinds?.join(" or ") ?? "entry"}${state ? ` in state ${state}` : ""}`);
   }
   return row;
 }
@@ -872,10 +905,9 @@ export function proposeMemoryChange(
       } else {
         const decision = requireDecision(db, need(input.based_on_decision, "based_on_decision"), metaReviewId);
         const { kind = "behavior", text, annotations, ...draft } = need(input.text, "text");
-        // replaces が1つの出所を共有するなら新 candidate はそれを継ぐ(rule ↔ case の関係を共有 Episode から導ける)。workspace を
-        // 跨ぐ統合(ADR 0120)は帰責 event が揃わないので meta-review の推論のまま。自身の作成 event の出所は継ぐ事例を持たない
-        const [head, ...rest] = replaced as [MemoryEntry, ...MemoryEntry[]];
-        const shared = rest.every(({ source }) => source.kind === head.source.kind && source.ref === head.source.ref) ? head.source : undefined;
+        // replaces が1つの出所を共有するなら新 candidate はそれを継ぐ(rule ↔ case の関係を共有 Episode から導ける)。揃わなければ
+        // meta-review の推論のまま
+        const shared = sharedSource(replaced);
         const author = { activity: "meta_review" as const, name: workerId };
         let created: number;
         if (kind === "exemplar") {
@@ -886,7 +918,7 @@ export function proposeMemoryChange(
           created = createEntry(db, { ...draft, ...checked, kind, state: "candidate", original: null, source: shared, author }, "worker", now);
         } else {
           if (annotations !== undefined) throw new DomainError("only an exemplar takes annotations");
-          const source = (shared && inheritableSource(head)) ?? { event_id: decision };
+          const source = shared ?? { event_id: decision };
           created = createEntry(db, { ...draft, text: need(text, "text.text"), kind, state: "candidate", original: null, source, author }, "worker", now);
         }
         proposal = { kind: "memory", op: "consolidate", candidate_id: created, replaces: pins };
@@ -1033,7 +1065,17 @@ type InvalidatedBy = { question_id: string } | { activity: MemoryEntryFields["au
 export function listMemoryEntries(
   db: Db,
   filter: { scope?: string | null; kind?: MemoryEntryFields["kind"]; state?: MemoryEntryFields["state"] | "invalidated" },
-): Array<MemoryEntry & { invalidation_reason: InvalidationReason | null; successor_id: number | null; invalidated_by: InvalidatedBy | null; restored_as: number | null; cause: Cause | null }> {
+): Array<
+  MemoryEntry & {
+    invalidation_reason: InvalidationReason | null;
+    successor_id: number | null;
+    invalidated_by: InvalidatedBy | null;
+    restored_as: number | null;
+    /** superseded でこの行を後継に指す id(ADR 0162 の畳みの跡)。列は持たず読むときに引く。 */
+    replaced_ids: number[];
+    cause: Cause | null;
+  }
+> {
   const { scope, kind, state } = filter;
   // エントリの無効化は高々1度(invalidateMemoryEntry の門)なので entry_id で引ける。印は event が正本で列は持たない
   const invalidatedBy = new Map(
@@ -1046,15 +1088,19 @@ export function listMemoryEntries(
   );
   const restored = restoredAs(db);
   // cause = 出所 event が帰責(objection_attributed)のときのその cause(spec #615 G)
-  return (
-    db
-      .prepare(
-        `SELECT m.*, json_extract(e.payload, '$.cause') AS cause FROM memory_entries m
-           LEFT JOIN events e ON m.source_kind = 'event' AND e.id = CAST(m.source_ref AS INTEGER) AND e.kind = 'objection_attributed'
-          ORDER BY m.id`,
-      )
-      .all() as Array<EntryRow & { cause: Cause | null }>
-  )
+  const rows = db
+    .prepare(
+      `SELECT m.*, json_extract(e.payload, '$.cause') AS cause FROM memory_entries m
+         LEFT JOIN events e ON m.source_kind = 'event' AND e.id = CAST(m.source_ref AS INTEGER) AND e.kind = 'objection_attributed'
+        ORDER BY m.id`,
+    )
+    .all() as Array<EntryRow & { cause: Cause | null }>;
+  // 絞り込みの前に引く —— 置き換えられた行は無効化済みで、approved の絞り込みでは落ちる
+  const replacedIds = new Map<number, number[]>();
+  for (const row of rows) {
+    if (row.invalidation_reason === "superseded") replacedIds.set(row.successor_id!, [...(replacedIds.get(row.successor_id!) ?? []), row.id]);
+  }
+  return rows
     .filter(
       (row) =>
         (scope === undefined || row.scope === scope) &&
@@ -1067,6 +1113,7 @@ export function listMemoryEntries(
       successor_id: row.successor_id,
       invalidated_by: invalidatedBy.get(row.id) ?? null,
       restored_as: restored.get(row.id) ?? null,
+      replaced_ids: replacedIds.get(row.id) ?? [],
       cause: row.cause,
     }));
 }

@@ -42,6 +42,7 @@ import { type Landing, landingAnnotation } from "./landing.js";
 import {
   changeMemorySettings,
   defineMemoryBranch,
+  foldMemoryEntries,
   HUMAN_AUTHOR,
   humanBehaviorSchema,
   humanDefinitionSchema,
@@ -52,6 +53,7 @@ import {
   invalidationSchema,
   listMemoryEntries,
   memoryBranchMoveSchema,
+  memoryFoldSchema,
   memoryListFilterSchema,
   memoryMoveSchema,
   memorySettingsChangeSchema,
@@ -1705,6 +1707,8 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       event_id: invalidateMemoryEntry(db, input, HUMAN_WORKER_ID, "webui", clock.now()),
     })),
   );
+  // ADR 0162 決定1: 既にある後継への畳み。畳んだ者(human)は無効化 event の activity に載る
+  router.post("/settings/memory/fold", validatedWrite(memoryFoldSchema, (input) => foldMemoryEntries(db, { ...input, author: HUMAN_AUTHOR }, "webui", clock.now())));
   // ADR 0162 決定4: 盤面が本文を写す移動。移した者(human)は event の activity に載り、書き手は旧を継ぐ
   router.post(
     "/settings/memory/entries/:entry_id/move",
