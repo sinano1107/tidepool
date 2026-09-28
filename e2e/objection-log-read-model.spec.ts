@@ -131,7 +131,9 @@ test("memory の帰責は異議バッジに cause と名指された entry へ�
   const row = page.locator(".tp-log-entry").filter({ hasText: "誤ったメモに従った判断" });
   await expect(row.getByText("cause: memory")).toBeVisible();
   // リンクは行の Object 押下面の入れ子にならない(issue #1090)
-  await expect(row.getByRole("button", { name: /誤ったメモに従った判断/ }).getByRole("link")).toHaveCount(0);
+  const objectSurface = row.getByRole("button", { name: /誤ったメモに従った判断/ });
+  await expect(objectSurface).toHaveCount(1);
+  await expect(objectSurface.getByRole("link")).toHaveCount(0);
   await row.getByRole("link", { name: `#${note}` }).click();
 
   await expect(page.getByTestId(`memory-entry-${note}`)).toBeInViewport();

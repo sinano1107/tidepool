@@ -19,6 +19,7 @@ export function LogEntry({ entry = {}, onObject, onExpand, onOpenMemoryEntry, ac
   ));
   // 注記の帯は Object 押下面の外に置く(issue #1090)—— role="button" の子孫に
   // interactive な要素を入れない。subgrid で帯を本文の列に揃える。
+  // 列は 時刻 / chip / 本文 / Expand(onExpand があるときだけ)。押下面は 1〜3 列、帯は 3 列目。
   return (
     <div
       className="tp-log-entry"
