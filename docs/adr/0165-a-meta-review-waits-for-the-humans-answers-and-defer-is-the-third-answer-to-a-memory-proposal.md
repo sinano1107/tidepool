@@ -19,9 +19,9 @@
    approve は文言の保証、reject は candidate の引退で、人間に「まだ決めない」を表す手が無く、門を残す以上それは
    人間が詰まりを解くための reject を強いる(ADR 0120 決定4 が避けた形)。routing の提案には足さない ——
    reject しても行は残り、保留との差が無い。
-4. **提案 question の detail の末尾に固定の1文を置く**: この question が open な間は次の memory meta-review が
-   登録されず、判断できないなら defer で戻せる。人間の操作が変わるのは答えを先送りにしている場面で、そのとき
-   読んでいるのは question の本文。飛ばした事実の event や settings の表示は足さない(ADR 0120 の「材料が無ければ
+4. **提案 question の detail の末尾に固定の1文を置く**: この question が open な間は同主題の次の meta-review が
+   登録されない。両主題の提案 question に載せ(門が両主題に効くので)、memory の提案ではさらに「判断できないなら
+   defer で戻せる」と続ける。人間の操作が変わるのは答えを先送りにしている場面で、そのとき読んでいるのは question の本文。飛ばした事実の event や settings の表示は足さない(ADR 0120 の「材料が無ければ
    event も残さない」を保つ)。
 
 ## 退けた案
