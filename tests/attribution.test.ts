@@ -848,7 +848,6 @@ it("容器の前提が成り立たない間は起草を撃たず、失敗 event 
   t.containers.scriptPreflight("cgroup v2 is not mounted at /sys/fs/cgroup");
 
   await t.clock.advance(HOUR);
-  await t.clock.advance(HOUR);
 
   expect(s.behaviorDraftClient.calls).toHaveLength(1);
   expect(await draftsFailed(t, s.task.id)).toHaveLength(1);
