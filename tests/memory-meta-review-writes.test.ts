@@ -44,6 +44,8 @@ const knowledgeEntry = (db: ReturnType<typeof openDb>) =>
   recordKnowledge(db, { scope: null, path: "habits", title: "k", text: "k.", source: { commit: "0a46a46" }, author: metaReview }, "worker", at).entry_id;
 const definitionEntry = (db: ReturnType<typeof openDb>) =>
   defineMemoryBranch(db, { scope: "tidepool", path: "build", text: "How it builds.", author: metaReview }, "worker", at).entry_id;
+const decisionOfAnotherTask = (db: ReturnType<typeof openDb>) =>
+  logDecision(db, registerTask(db, { type: "work", title: "o", purpose: "p", completion_criteria: "c" }, at), "someone else's reasoning", "deckhand", at);
 
 it("fold_memory は新しい Knowledge を decision(推論)を出所に作り、replaces をその後継つき superseded にする", () => {
   const { db, task, decision, knowledge } = board();
@@ -52,7 +54,8 @@ it("fold_memory は新しい Knowledge を decision(推論)を出所に作り、
 
   const { entry_id } = foldMemory(
     db,
-    { scope: null, path: "build", title: "Node 22 only", text: "Tests run on Node 22 only.", replaces: [a, b], based_on_decision: decision, author: metaReview, task_id: task.id },
+    task.id,
+    { scope: null, path: "build", title: "Node 22 only", text: "Tests run on Node 22 only.", replaces: [a, b], based_on_decision: decision, author: metaReview },
     "worker",
     at,
   );
@@ -86,14 +89,14 @@ it("fold_memory の replaces に畳めないものが1つでもあれば domain 
   ).entry_id;
   const before = listMemoryEntries(db, {});
   const fold = (replaces: number[], based_on_decision = decision) => () =>
-    foldMemory(db, { scope: "tidepool", path: "build", title: "Folded", text: "Folded.", replaces, based_on_decision, author: metaReview, task_id: task.id }, "worker", at);
+    foldMemory(db, task.id, { scope: "tidepool", path: "build", title: "Folded", text: "Folded.", replaces, based_on_decision, author: metaReview }, "worker", at);
 
   for (const replaces of [[kept, dead], [kept, definition], [kept, candidate], [kept, 999], []]) {
     expect(fold(replaces)).toThrow(DomainError);
   }
   // 出所は decision_logged の event に限る(それ以外の event は推論として載せない)。それも自分の task の decision に限る(ADR 0115 追記)
   expect(fold([kept], kept)).toThrow(DomainError);
-  const othersDecision = logDecision(db, registerTask(db, { type: "work", title: "o", purpose: "p", completion_criteria: "c" }, at), "someone else's reasoning", "deckhand", at);
+  const othersDecision = decisionOfAnotherTask(db);
   expect(fold([kept], othersDecision)).toThrow(`event ${othersDecision} is not a decision of this task`);
   expect(listMemoryEntries(db, {})).toEqual(before);
 });
@@ -503,8 +506,7 @@ it("既存の後継は pin に入り、提案の open 中に無効化される�
 });
 
 /** fold_memory の既にある後継(ADR 0161 決定2)。 */
-const foldInto = (f: Fixture) => (input: Omit<Parameters<typeof foldMemory>[1], "author" | "task_id">) =>
-  foldMemory(f.db, { ...input, author: metaReview, task_id: f.task.id }, "worker", at);
+const foldInto = (f: Fixture) => (input: Omit<Parameters<typeof foldMemory>[2], "author">) => foldMemory(f.db, f.task.id, { ...input, author: metaReview }, "worker", at);
 
 it("fold_memory の successor_id は replaces を既にある approved の後継つき superseded(meta_review の印)にし、新しい entry を作らない —— Knowledge → Knowledge、Definition → Definition、candidate の Behavior / Exemplar → approved の Behavior / Exemplar(ADR 0161 決定2)", () => {
   const fixture = approvedPair();
@@ -594,7 +596,7 @@ it("consolidate の based_on_decision が decision_logged でない event か別
   const { db, task, decision, drafted } = drafts();
   const replaces = [drafted("Good", { commit: "0a46a46" })];
   const notDecision = listEvents(db, task.id)[0]!.id; // task_registered
-  const othersDecision = logDecision(db, registerTask(db, { type: "work", title: "o", purpose: "p", completion_criteria: "c" }, at), "someone else's reasoning", "deckhand", at);
+  const othersDecision = decisionOfAnotherTask(db);
   const propose = (based_on_decision: number) =>
     proposeMemoryChange(
       db,

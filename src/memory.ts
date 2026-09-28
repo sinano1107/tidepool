@@ -220,16 +220,15 @@ export function defineMemoryBranch(
  *  承認の線なので consolidate の提案へ回す。返り値の event_ids は replaces の memory_entry_invalidated。 */
 export function foldMemory(
   db: Db,
+  metaReviewId: string,
   input: Partial<Omit<EntryInput, "source" | "original" | "author"> & { based_on_decision: number; successor_id: number }> & {
     replaces: number[];
     author: MemoryEntryFields["author"];
-    /** 書き手の meta-review task(based_on_decision はこの task の decision に限る)。 */
-    task_id: string;
   },
   origin: EventOrigin,
   at: Date,
 ): { entry_id: number; event_ids: number[] } {
-  const { replaces, successor_id, author, task_id, ...draft } = input;
+  const { replaces, successor_id, author, ...draft } = input;
   if (replaces.length === 0) throw new DomainError("fold_memory needs at least one entry to replace");
   if ((successor_id === undefined) === Object.values(draft).every((value) => value === undefined)) {
     throw new DomainError("fold_memory takes exactly one of successor_id (an existing approved entry) and scope, path, title, text and based_on_decision (a new knowledge entry)");
@@ -241,7 +240,7 @@ export function foldMemory(
       if (scope === undefined || path === undefined || title === undefined || text === undefined || based_on_decision === undefined) {
         throw new DomainError("a new knowledge entry needs scope, path, title, text and based_on_decision");
       }
-      successor = recordKnowledge(db, { scope, path, title, text, author, source: { event_id: requireDecision(db, based_on_decision, task_id) } }, origin, at).entry_id;
+      successor = recordKnowledge(db, { scope, path, title, text, author, source: { event_id: requireDecision(db, based_on_decision, metaReviewId) } }, origin, at).entry_id;
     }
     const event_ids = replaces.map((id) =>
       invalidateMemoryEntry(db, { entry_id: requireNotApprovedBehaviorOrExemplar(db, id).id, reason: "superseded", successor_id: successor }, author.name, origin, at, { activity: author.activity }),

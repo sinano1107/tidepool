@@ -1050,7 +1050,7 @@ function registerMemoryMetaReviewVerbs(server: McpServer, deps: McpDeps, run: Me
       },
     },
     async (input) =>
-      run((reader, now) => foldMemory(deps.db, { ...input, scope: input.scope && registeredScope(deps, input.scope), author: author(reader), task_id: reader.taskId }, "worker", now)),
+      run((reader, now) => foldMemory(deps.db, reader.taskId, { ...input, scope: input.scope && registeredScope(deps, input.scope), author: author(reader) }, "worker", now)),
   );
 
   server.registerTool(
