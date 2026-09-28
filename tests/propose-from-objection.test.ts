@@ -30,7 +30,7 @@ it("学習に向かない cause・宛先の agent が無い Behavior・as と ba
   const environment = objected(mixed, "environment");
   const taskAmbiguity = objected(mixed, "task_ambiguity");
   const missingInformation = objected(mixed, "missing_information");
-  const unattributed = logDecision(db, mixed, "never objected", "deckhand", at);
+  const unattributed = appendEvent(db, { taskId: mixed.id, workerId: "deckhand", origin: "worker", payload: { kind: "task_completed", handoff_present: true, result: null }, at });
   const byHuman = objected(mixed, "capability", HUMAN_WORKER_ID);
   const notDecision = attribute(mixed.id, capability, "capability");
   const otherEntry = objected(task("work", "other"), "capability");
