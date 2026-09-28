@@ -1720,17 +1720,18 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       restoreMemoryEntry(db, { entry_id, restorer: HUMAN_AUTHOR }, "webui", clock.now()),
     ),
   );
-  // ADR 0164 決定5 / issue #1066: 撃ち直しを打ち切った起草と第2回の帰責。Retry / Dismiss は打ち切りの行にだけ効き、他は DomainError で 400
-  router.get("/settings/memory/halted-refires", (_req, res) => {
-    res.json({ halted: listHaltedRefires(db) } satisfies WireContract["GET /api/settings/memory/halted-refires"]);
+  // ADR 0164 決定5 / ADR 0172 決定3: 撃ち直しを打ち切った振り返り Board call(起草・第2回の帰責・配分評価)。
+  // Retry / Dismiss は打ち切りの行にだけ効き、他は DomainError で 400
+  router.get("/settings/execution/halted-refires", (_req, res) => {
+    res.json({ halted: listHaltedRefires(db) } satisfies WireContract["GET /api/settings/execution/halted-refires"]);
   });
   const haltedRefireKey = refireKeySchema.extend({ target: z.coerce.number().int().positive() });
   router.post(
-    "/settings/memory/halted-refires/:refire/:target/retry",
+    "/settings/execution/halted-refires/:refire/:target/retry",
     validatedWrite(haltedRefireKey, (key) => ({ event_id: markHaltedRefire(db, "refire_retried", key, "webui", clock.now()) })),
   );
   router.post(
-    "/settings/memory/halted-refires/:refire/:target/dismiss",
+    "/settings/execution/halted-refires/:refire/:target/dismiss",
     validatedWrite(haltedRefireKey, (key) => ({ event_id: markHaltedRefire(db, "refire_dismissed", key, "webui", clock.now()) })),
   );
   router.post(

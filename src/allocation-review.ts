@@ -1,15 +1,9 @@
 import type { Cause } from "./cause.js";
-import type { Clock } from "./clock.js";
 import type { Db } from "./db.js";
-import { appendEvent, type EventPayload, listEvents } from "./events.js";
-import {
-  type ExecutionSettingRow,
-  retrospectiveBoardCallRow,
-  type Tier,
-} from "./execution-setting.js";
+import { type EventPayload, getEvent, listEvents } from "./events.js";
+import type { ExecutionSettingRow, Tier } from "./execution-setting.js";
 import { episodeMarkerKinds, type MarkerKind } from "./precedent.js";
-import { BOARD_WORKER_ID, getTask, type Task } from "./tasks.js";
-import { isAnthropicBoardCallBlocked } from "./throttle.js";
+import { getTask } from "./tasks.js";
 
 /** 「この結果に対する実行設定は適切だったか」の4値(CONTEXT.md「配分評価」)。
  *  `overpowered` は成功 episode からの唯一の下方向信号(ADR 0111 決定4)。 */
@@ -81,90 +75,46 @@ export function buildAllocationReviewInput(data: {
   };
 }
 
-/** 判定が得られなかったときの理由コード(issue #547 受け入れ基準: 空と区別する)。
- *  `no_session` = 被レビュー task に worker session の記録が無い、`throttled` =
- *  Anthropic の窓が閉じていて Board call を撃たなかった、`board_call_failed` =
- *  撃ったが答えが得られなかった(CLI の失敗・語彙の外の応答)。 */
-export type AllocationUnevaluatedReason = "no_session" | "throttled" | "board_call_failed";
+/** 配分評価の sweep の対象(ADR 0172 決定1): 統合点レビューの `task_completed`(書き手は問わない)のうち、被レビュー task に
+ *  その完了より前の `worker_spawned` があり、その review を指す `allocation_reviewed` がまだ無いもの。評価する session は
+ *  完了より前の最新の spawn に固定する —— 撃ち直しの時点で再 spawn されていても同じ session を問う。 */
+export interface AllocationTarget {
+  completed_event_id: number;
+  review_task_id: string;
+  reviewed_task_id: string;
+  spawned_event_id: number;
+}
+// ponytail: poll の sweep のたびに全 review 完了と全注釈を json_extract で走査する。event が数万に育ったら索引か結果の不在の表に寄せる
+export function allocationTargets(db: Db): AllocationTarget[] {
+  return (
+    db
+      .prepare(
+        `SELECT c.id AS completed_event_id, c.task_id AS review_task_id, t.parent_id AS reviewed_task_id,
+                (SELECT MAX(s.id) FROM events s WHERE s.task_id = t.parent_id AND s.kind = 'worker_spawned' AND s.id < c.id) AS spawned_event_id
+           FROM events c JOIN tasks t ON t.id = c.task_id
+          WHERE c.kind = 'task_completed'
+            AND EXISTS (SELECT 1 FROM events r WHERE r.task_id = c.task_id AND r.kind = 'task_registered' AND json_extract(r.payload, '$.integration_review') = 1)
+            AND NOT EXISTS (SELECT 1 FROM events a WHERE a.kind = 'allocation_reviewed' AND json_extract(a.payload, '$.review_task_id') = c.task_id)`,
+      )
+      .all() as Array<Omit<AllocationTarget, "spawned_event_id"> & { spawned_event_id: number | null }>
+  ).filter((r): r is AllocationTarget => r.spawned_event_id !== null);
+}
 
-/** 盤面境界の1本(issue #547): 統合点レビューの完了を契機に入力を組み、Board call
- *  に問い、被レビュー task の episode へ注釈を1件だけ載せる。統合点レビュー以外の
- *  review(人間登録のルート review 等)には何もしない —— 注釈を載せる episode が
- *  無い。Board call の失敗は注釈の理由コードになるだけで、ここからは投げない。 */
-export async function reviewAllocation(
-  db: Db,
-  client: AllocationClient,
-  review: Task,
-  clock: Clock,
-): Promise<void> {
-  if (review.type !== "review" || review.parent_id === null) return;
-  const reviewEvents = listEvents(db, review.id).map((e) => e.payload);
-  if (!reviewEvents.some((p) => p.kind === "task_registered" && p.integration_review)) return;
-  const reviewed = getTask(db, review.parent_id)!;
-  const reviewedEvents = listEvents(db, reviewed.id);
-  const spawnedEvent = reviewedEvents.filter((e) => e.payload.kind === "worker_spawned").at(-1);
-  // Board call の Provider / ティアは盤面設定の固定値で、**selector を通らない**
-  // (ADR 0111 決定4)—— 判定者が学習器に選ばれる輪をここで切る。ティアは振り返り
-  // Board call 3用途が共有する盤面設定(ADR 0111 追記4、issue #914)、model / effort は
-  // 表の行から呼び出しごとに解決するので、#545 の編集が次の評価から効く。行は注釈の
-  // judge になる(ADR 0150 決定8)ので、評価できない注釈にも載るよう先に解決する
-  let setting: ExecutionSettingRow | null = null;
-  try {
-    setting = retrospectiveBoardCallRow(db);
-  } catch {
-    // 表の行が欠けた盤面は judge 無し、撃てなかった(board_call_failed)に畳む
-  }
-  const judge = setting && { provider: setting.provider, model: setting.model, effort: setting.effort };
-  // 注釈の時刻は判断が書かれた瞬間(Board call の返答後)であって review 完了ではない
-  const annotate = (outcome: AllocationJudgment | { unevaluated: AllocationUnevaluatedReason }) =>
-    appendEvent(db, {
-      taskId: reviewed.id,
-      workerId: BOARD_WORKER_ID,
-      origin: "board",
-      payload: {
-        kind: "allocation_reviewed",
-        review_task_id: review.id,
-        worker_spawned_event_id: spawnedEvent?.id ?? null,
-        judge,
-        ...outcome,
-      },
-      at: clock.now(),
-    });
-  if (spawnedEvent?.payload.kind !== "worker_spawned") {
-    annotate({ unevaluated: "no_session" });
-    return;
-  }
-  if (setting === null) {
-    annotate({ unevaluated: "board_call_failed" });
-    return;
-  }
-  const spawned = spawnedEvent.payload;
-  let judgment: AllocationJudgment;
-  try {
-    if (isAnthropicBoardCallBlocked(db, setting.model)) {
-      annotate({ unevaluated: "throttled" });
-      return;
-    }
-    let verdict: string | null = null;
-    for (const p of reviewEvents) if (p.kind === "task_completed") verdict = p.result;
-    const exited = reviewedEvents
-      .map((e) => e.payload)
-      .find(
-        (p): p is Extract<EventPayload, { kind: "worker_exited" }> =>
-          p.kind === "worker_exited" && p.worker_spawned_event_id === spawnedEvent.id,
-      );
-    const input = buildAllocationReviewInput({
-      verdict,
-      findings: review.handoff_doc,
-      requestedTier: reviewed.tier,
-      spawned,
-      exited,
-      markers: episodeMarkerKinds(db, spawnedEvent.id),
-    });
-    judgment = await client.judge(input, setting);
-  } catch {
-    annotate({ unevaluated: "board_call_failed" });
-    return;
-  }
-  annotate(judgment);
+/** 対象1件の入力: verdict は review の完了 event の result、findings は review の handoff doc、実行設定は固定した session の
+ *  spawn、usage はその session の `worker_exited`、行動列はその session の Precedent のマーカー。 */
+export function allocationInput(db: Db, target: AllocationTarget): AllocationReviewInput {
+  const exited = listEvents(db, target.reviewed_task_id)
+    .map((e) => e.payload)
+    .find(
+      (p): p is Extract<EventPayload, { kind: "worker_exited" }> =>
+        p.kind === "worker_exited" && p.worker_spawned_event_id === target.spawned_event_id,
+    );
+  return buildAllocationReviewInput({
+    verdict: (getEvent(db, target.completed_event_id)!.payload as Extract<EventPayload, { kind: "task_completed" }>).result,
+    findings: getTask(db, target.review_task_id)!.handoff_doc,
+    requestedTier: getTask(db, target.reviewed_task_id)!.tier,
+    spawned: getEvent(db, target.spawned_event_id)!.payload as Extract<EventPayload, { kind: "worker_spawned" }>,
+    exited,
+    markers: episodeMarkerKinds(db, target.spawned_event_id),
+  });
 }

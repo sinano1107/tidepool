@@ -24,7 +24,7 @@ import type { CliAuthCheck } from "../src/cli-auth.js";
 import { type CodexAppServerProbe, codexLoginAbsence } from "../src/codex-app-server.js";
 import { type Db, openDb } from "../src/db.js";
 import type { DraftClient } from "../src/draft.js";
-import { appendEvent, type EventRow } from "../src/events.js";
+import { appendEvent, type EventPayload, type EventRow } from "../src/events.js";
 import type { GitHubAuth } from "../src/github-auth.js";
 import type { HarnessContainmentCheck } from "../src/harness-containment.js";
 import { recordKnowledge } from "../src/memory.js";
@@ -863,15 +863,30 @@ export async function children(t: Tidepool, taskId: string) {
   return (await api(t.baseUrl, "GET", "/api/tasks")).json.filter((x: any) => x.parent_id === taskId);
 }
 
+/** worker session の記録(偽の worker は `worker_spawned` を刻まないので、episode の要る盤面が置く)。 */
+export const WORKER_SPAWNED: Extract<EventPayload, { kind: "worker_spawned" }> = {
+  kind: "worker_spawned",
+  registry_commit: "commit",
+  definition_version: "1",
+  advisor: "fable",
+  provider: "anthropic",
+  model: "opus",
+  effort: "high",
+  source: { tier: "task", provider: "only" },
+  harness: "claude-code",
+  cli_version: "1",
+};
+
 /** 起草 client つきの盤面で、work(既定 workspace charts)に1行 log → 完了 → 異議まで進める(commit は呼び手)。
- *  `registrant` を渡すと agent が登録した task(decompose と同じ登録者の形)、`human` は人間が担当して人間の扉で完了。 */
+ *  `registrant` を渡すと agent が登録した task(decompose と同じ登録者の形)、`human` は人間が担当して人間の扉で完了。
+ *  `allocationClient` を渡すと work に worker session を置き、統合点レビューの完了で配分評価が撃たれる。 */
 export async function objectedForDraft(
   title: string,
-  opts: { initial?: { cause: Cause; evidence: string }; registrant?: string; workspace?: string | null; human?: true } = {},
+  opts: { initial?: { cause: Cause; evidence: string }; registrant?: string; workspace?: string | null; human?: true; allocationClient?: AllocationClient } = {},
 ) {
   const attributionClient = new FakeAttributionClient();
   const behaviorDraftClient = new FakeBehaviorDraftClient();
-  const t = await bootTidepool({ attributionClient, behaviorDraftClient });
+  const t = await bootTidepool({ attributionClient, behaviorDraftClient, allocationClient: opts.allocationClient });
   const workspace = opts.workspace === null ? undefined : (opts.workspace ?? "charts");
   const task = opts.registrant
     ? registerTask(t.db, { type: "work", title, purpose: "p", completion_criteria: "c", workspace }, t.clock.now(), opts.registrant, "worker")
@@ -882,6 +897,7 @@ export async function objectedForDraft(
     entry = (await api(t.baseUrl, "GET", `/api/tasks/${task.id}/events`)).json.find((e: any) => e.kind === "task_completed");
   } else {
     await t.clock.advance(HOURLY);
+    if (opts.allocationClient) appendEvent(t.db, { taskId: task.id, workerId: t.worker.id, origin: "board", at: t.clock.now(), payload: WORKER_SPAWNED });
     entry = await loggedEntry(t, task.id, "skipped the fixtures");
     await completeViaMcp(t, task.id);
   }
@@ -925,7 +941,7 @@ export async function propose(t: Tidepool, taskId: string, args: Record<string, 
 }
 
 /** settings の撃ち直しを打ち切った件の一覧。 */
-export const haltedRefires = async (t: Tidepool) => (await api(t.baseUrl, "GET", "/api/settings/memory/halted-refires")).json.halted;
+export const haltedRefires = async (t: Tidepool) => (await api(t.baseUrl, "GET", "/api/settings/execution/halted-refires")).json.halted;
 
 /** 起草 client の成功の応答。 */
 export const KEEP_FIXTURES = { path: "testing/fixtures", title: "Keep fixtures", text: "Always keep the fixtures.", addressee: "all" } as const;

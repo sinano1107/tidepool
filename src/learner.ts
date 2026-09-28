@@ -211,7 +211,7 @@ export function loadEpisodes(db: Db): RoutingEpisode[] {
     for (const e of events) {
       if (e.task_id !== spawned.task_id) continue;
       const p = e.payload;
-      if (p.kind === "allocation_reviewed" && p.worker_spawned_event_id === spawned.id && "allocation" in p) {
+      if (p.kind === "allocation_reviewed" && p.worker_spawned_event_id === spawned.id) {
         allocations.push({ allocation: p.allocation, cause: p.cause });
       }
     }

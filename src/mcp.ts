@@ -2,7 +2,6 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Router } from "express";
 import { z } from "zod";
 import type { AgentAdmin } from "./agent-create.js";
-import { type AllocationClient, reviewAllocation } from "./allocation-review.js";
 import { proposeFromObjection } from "./attribution.js";
 import type { Clock } from "./clock.js";
 import type { Db } from "./db.js";
@@ -160,10 +159,6 @@ export interface McpDeps {
    *  definition). Absent → no registry configured, so `list_agents` reports
    *  only the fixed `human` line. */
   listAgents?: () => RosterAgent[];
-  /** The allocation review's Board call seam (ADR 0111 決定4 / issue #547),
-   *  asked after an integration review completes. Absent → no annotation is
-   *  written (a board with no Board call configured, same as translation). */
-  allocationClient?: AllocationClient;
   /** registry の agent 一覧(issue #920): routing meta-review の tier の提案が agent の定義を読む。Absent → registry の無い盤面。 */
   agentAdmin?: Partial<Pick<AgentAdmin, "list">>;
 }
@@ -486,15 +481,6 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
         attributedTaskId,
         (task, workerId, now) => {
           const done = completeTask(deps.db, task, handoff, workerId, now, "worker");
-          // 配分評価(ADR 0111 決定4): 完了の transaction が commit した後に始まり、
-          // Board call の返答は response を待たせない(入力の読み取りと no_session /
-          // throttled の注釈は response より前に同期で済む)。失敗は注釈の理由コードに
-          // 畳まれ(reviewAllocation)、それでも漏れた例外は完了も process も倒さない
-          if (deps.allocationClient) {
-            void reviewAllocation(deps.db, deps.allocationClient, done, deps.clock).catch((err) =>
-              console.error(`[allocation-review] ${done.id}: ${String(err)}`),
-            );
-          }
           return { id: done.id, status: done.status };
         },
         (task, workspace) => assertWorkTreeCommitted(deps, task, workspace),

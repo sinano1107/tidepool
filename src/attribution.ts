@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { type AllocationClient, type AllocationJudgment, type AllocationTarget, allocationInput, allocationTargets } from "./allocation-review.js";
 import type { Cause } from "./cause.js";
 import type { Db } from "./db.js";
 import {
@@ -76,9 +77,11 @@ export interface BehaviorDraftClient {
   draft(input: BehaviorDraftInput, setting: Pick<ExecutionSettingRow, "model" | "effort">): Promise<BehaviorDraft>;
 }
 
-/** 帰責と起草の Board call が受け取るもの。合成 root が一度だけ組み、scheduler(poll の sweep)と triage close に同じ束を渡す
- *  (ADR 0169)。欄は必須で値に `undefined` を許す —— 扉の deps を丸ごと渡す取り違えを型で落とすため。 */
+/** 振り返り Board call(帰責・起草・配分評価)が受け取るもの。合成 root が一度だけ組み、scheduler(poll の sweep)と triage close に
+ *  同じ束を渡す(ADR 0169 / ADR 0172)。欄は必須で値に `undefined` を許す —— 扉の deps を丸ごと渡す取り違えを型で落とすため。 */
 export interface AttributionCallDeps {
+  /** 配分評価の Board call(ADR 0111 決定4 / ADR 0172)。sweep だけが撃つ。undefined → 撃てなかった扱いで何も書かない。 */
+  allocationClient: AllocationClient | undefined;
   /** 帰責の Board call(ADR 0115 / issue #574・#575)。undefined → commit は異議を `uncertain` で束ね(RCA は帰責以前のまま立つ)、第2回も撃たない。 */
   attributionClient: AttributionClient | undefined;
   /** Behavior candidate 起草の Board call(ADR 0120 / issue #617)。sweep が帰責の後に撃つ。undefined → 何も起草しない。 */
@@ -110,9 +113,9 @@ function boardCallSetting<C>(
   db: Db,
   client: C | undefined,
   containers?: AttributionCallDeps["containers"],
-): { client: C; setting: Pick<ExecutionSettingRow, "model" | "effort"> } | { unavailable: string } {
+): { client: C; setting: ExecutionSettingRow } | { unavailable: string } {
   if (!client) return { unavailable: "Board call not made: no client is configured" };
-  let setting: Pick<ExecutionSettingRow, "model" | "effort">;
+  let setting: ExecutionSettingRow;
   try {
     setting = retrospectiveBoardCallRow(db);
   } catch (err) {
@@ -147,13 +150,14 @@ async function singleFlight(db: Db, key: string, fire: () => Promise<void>): Pro
   }
 }
 
-/** 撃ち直しの種別ごとの失敗 event の kind と、撃ち直しの対象を指す欄(起草は帰責、第2回は異議群、ADR 0170 決定4)。 */
+/** 撃ち直しの種別ごとの失敗 event の kind と、撃ち直しの対象を指す欄(起草は帰責、第2回は異議群(ADR 0170 決定4)、配分評価は review の完了)。 */
 const REFIRE = {
   draft: { failed: "memory_draft_failed", target: "attribution_event_id" },
   second_round: { failed: "objection_attribution_failed", target: "objection_event_id" },
+  allocation: { failed: "allocation_review_failed", target: "review_completed_event_id" },
 } as const;
-/** 打ち切りの行を指す鍵: 種別と対象(起草は帰責 event の id、第2回は異議群の最初の異議 event の id)。 */
-export const refireKeySchema = z.object({ refire: z.enum(["draft", "second_round"]), target: z.number().int().positive() });
+/** 打ち切りの行を指す鍵: 種別と対象(起草は帰責 event の id、第2回は異議群の最初の異議 event の id、配分評価は review の task_completed event の id)。 */
+export const refireKeySchema = z.object({ refire: z.enum(["draft", "second_round", "allocation"]), target: z.number().int().positive() });
 export type RefireKey = z.infer<typeof refireKeySchema>;
 
 /** 対象の失敗の数え(ADR 0164 決定5): 直近の Retry より後の失敗 event の数・最後の失敗、Dismiss の有無。
@@ -296,14 +300,39 @@ const secondRoundInput = (db: Db, objectedId: string, attribution: SecondRoundSo
   rca_findings: rcaChildren(db, objectedId).flatMap((r) => decisionLogText(db, r.id)),
 });
 
-const fireAndForget = (fired: Promise<void>, entryId: number) =>
-  void fired.catch((err) => console.error(`[attribution] entry ${entryId}: ${String(err)}`));
+const fireAndForget = (fired: Promise<void>, target: string) => void fired.catch((err) => console.error(`[attribution] ${target}: ${String(err)}`));
+
+/** 配分評価を1 review ぶん撃つ(ADR 0172): 判断が返れば注釈を被レビュー task に載せ、撃てなかったら何も書かず、
+ *  撃って失敗したら `allocation_review_failed` だけを残す。入力が組めないのは撃って失敗したのではないので投げる。 */
+async function reviewAllocation(db: Db, deps: AttributionCallDeps, target: AllocationTarget, now: Date): Promise<void> {
+  await singleFlight(db, `allocation:${target.completed_event_id}`, async () => {
+    if (!refireDue(db, { refire: "allocation", target: target.completed_event_id }, now)) return;
+    const call = boardCallSetting(db, deps.allocationClient, deps.containers);
+    if ("unavailable" in call) return;
+    const input = allocationInput(db, target);
+    const { review_task_id, reviewed_task_id } = target;
+    const record = (payload: Extract<EventPayload, { kind: "allocation_reviewed" | "allocation_review_failed" }>) => appendEvent(db, { taskId: reviewed_task_id, workerId: BOARD_WORKER_ID, origin: "board", payload, at: now });
+    let judgment: AllocationJudgment;
+    try {
+      judgment = await call.client.judge(input, call.setting);
+    } catch (err) {
+      record({ kind: "allocation_review_failed", review_completed_event_id: target.completed_event_id, review_task_id, reviewed_task_id, reason: message(err) });
+      return;
+    }
+    const { provider, model, effort } = call.setting;
+    record({ kind: "allocation_reviewed", review_task_id, worker_spawned_event_id: target.spawned_event_id, judge: { provider, model, effort }, ...judgment });
+  });
+}
 
 /** sweep の対象(ADR 0164 決定1): 異議群ごとの帰責の状態のうち、あるべき結果が無いもの —— 第2回を待つ異議群
  *  (初回の `uncertain` と未帰責、ADR 0168 決定3)で RCA 子がすべて決着したものは第2回、確定した異議群は
- *  その帰責を出所とする candidate が無いもの の起草(後の異議群があっても外さない、ADR 0170 決定1)。
- *  sweep と打ち切りの一覧が同じ集合を読む。 */
-type RefireTarget = { task_id: string } & ({ refire: "second_round"; source: SecondRoundSource } | { refire: "draft"; attribution: Attribution });
+ *  その帰責を出所とする candidate が無いもの の起草(後の異議群があっても外さない、ADR 0170 決定1)—— と、
+ *  注釈の無い統合点レビューの配分評価(ADR 0172 決定1)。sweep と打ち切りの一覧が同じ集合を読む。 */
+type RefireTarget = { task_id: string } & (
+  | { refire: "second_round"; source: SecondRoundSource }
+  | { refire: "draft"; attribution: Attribution }
+  | { refire: "allocation"; allocation: AllocationTarget }
+);
 function refireTargets(db: Db): RefireTarget[] {
   const drafted = new Set(
     (db.prepare("SELECT CAST(source_ref AS INTEGER) AS id FROM memory_entries WHERE source_kind = 'event'").all() as { id: number }[]).map((r) => r.id),
@@ -314,43 +343,57 @@ function refireTargets(db: Db): RefireTarget[] {
       return rca.length > 0 && settledAll(rca) ? [{ task_id: state.task_id, refire: "second_round", source: state.awaiting }] : [];
     }
     return drafted.has(state.confirmed.id) ? [] : [{ task_id: state.task_id, refire: "draft", attribution: state.confirmed }];
-  });
+  }).concat(allocationTargets(db).map((a) => ({ task_id: a.reviewed_task_id, refire: "allocation", allocation: a })));
 }
 
-/** sweep(ADR 0164 決定1・4): 第2回の帰責と起草を撃つ唯一の契機(ADR 0169 決定1)。pickup の poll が同期で呼び、
+/** sweep(ADR 0164 決定1・4): 第2回の帰責・起草・配分評価を撃つ唯一の契機(ADR 0169 決定1 / ADR 0172 決定1)。pickup の poll が同期で呼び、
  *  対象を fire-and-forget で撃つ —— 1回目も撃ち直しもここから出る。
  *  起草の規則・回数・間隔・in-flight・撃てるか は撃つ側(`draftBehaviorCandidate` / `attributeSecondRound`)が見る。
  *  初回の帰責は撃ち直さない(ADR 0168 決定1)。 */
 export function refireAttributions(db: Db, deps: AttributionCallDeps, now: Date): void {
   for (const target of refireTargets(db)) {
     if (target.refire === "second_round") {
-      fireAndForget(attributeSecondRound(db, deps, target.task_id, target.source, now), target.source.entry_id);
+      fireAndForget(attributeSecondRound(db, deps, target.task_id, target.source, now), `entry ${target.source.entry_id}`);
+    } else if (target.refire === "draft") {
+      fireAndForget(draftBehaviorCandidate(db, deps, target.attribution, now), `entry ${target.attribution.entry_id}`);
     } else {
-      fireAndForget(draftBehaviorCandidate(db, deps, target.attribution, now), target.attribution.entry_id);
+      fireAndForget(reviewAllocation(db, deps, target.allocation, now), `allocation review ${target.allocation.review_task_id}`);
     }
   }
 }
 
-/** 撃ち直しを打ち切った起草と第2回の帰責(ADR 0164 決定5): 撃ち直しの対象のうち、直近の Retry 以降に撃って3回失敗し
- *  Dismiss が無いもの。行が閉じるのは撃ち直しの成功(対象から外れる)と Dismiss だけ。 */
-export function listHaltedRefires(db: Db) {
+type Titled = { id: string; title: string };
+/** 打ち切りの行: 配分評価は review と被レビュー task、起草と第2回は異議された entry とその帰責。 */
+type HaltedRefire = { target: number; task: Titled; last_failure: { reason: string; at: string } } & (
+  | { refire: "allocation"; review: Titled }
+  | { refire: "draft" | "second_round"; entry: { id: number; text: string }; cause: Cause | null; round: "initial" | "after_rca" }
+);
+
+/** 撃ち直しを打ち切った振り返り Board call(ADR 0164 決定5 / ADR 0172 決定3): 撃ち直しの対象のうち、直近の Retry 以降に撃って
+ *  3回失敗し Dismiss が無いもの。行が閉じるのは撃ち直しの成功(対象から外れる)と Dismiss だけ。 */
+export function listHaltedRefires(db: Db): HaltedRefire[] {
   const current = currentAttributions(db);
-  return refireTargets(db).flatMap((t) => {
-    const key: RefireKey = { refire: t.refire, target: t.refire === "draft" ? t.attribution.id : bundleName(t.source) };
-    const { n, last_id, dismissed } = refireFailures(db, key);
+  const titled = (id: string) => ({ id, title: getTask(db, id)!.title });
+  return refireTargets(db).flatMap((t): HaltedRefire[] => {
+    const target = t.refire === "draft" ? t.attribution.id : t.refire === "second_round" ? bundleName(t.source) : t.allocation.completed_event_id;
+    const { n, last_id, dismissed } = refireFailures(db, { refire: t.refire, target });
     if (dismissed || n < MAX_FIRED_FAILURES) return [];
     const failure = getEvent(db, last_id!)!;
-    const { entry_id, round, reason } = failure.payload as Extract<EventPayload, { kind: "memory_draft_failed" | "objection_attribution_failed" }>;
+    const payload = failure.payload as Extract<EventPayload, { kind: (typeof REFIRE)[keyof typeof REFIRE]["failed"] }>;
+    const last_failure = { reason: payload.reason, at: failure.created_at };
+    if (t.refire === "allocation") return [{ refire: t.refire, target, review: titled(t.allocation.review_task_id), task: titled(t.task_id), last_failure }];
+    const { entry_id, round } = payload as Extract<EventPayload, { kind: "memory_draft_failed" | "objection_attribution_failed" }>;
     const entry = getEvent(db, entry_id) as DecisionLogEntry;
     return [
       {
-        ...key,
+        refire: t.refire,
+        target,
         entry: { id: entry_id, text: objectedEntryText(entry) },
-        task: { id: t.task_id, title: getTask(db, t.task_id)!.title },
+        task: titled(t.task_id),
         // 最後の異議群が未帰責の entry は cause が空(ADR 0168 決定3 / ADR 0170 決定2)
         cause: current.get(entry_id)?.cause ?? null,
         round,
-        last_failure: { reason, at: failure.created_at },
+        last_failure,
       },
     ];
   });

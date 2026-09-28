@@ -1082,7 +1082,7 @@ it("前の異議群の第2回が打ち切られていても後の異議群の第
     ["second_round", again, s.entry.id, null],
   ]);
   const post = async (target: number, verb: "retry" | "dismiss") =>
-    (await api(t.baseUrl, "POST", `/api/settings/memory/halted-refires/second_round/${target}/${verb}`)).status;
+    (await api(t.baseUrl, "POST", `/api/settings/execution/halted-refires/second_round/${target}/${verb}`)).status;
   expect(await post(s.objection, "dismiss")).toBe(200);
   expect(await post(s.objection, "retry")).toBe(400);
   s.attributionClient.scriptJudgment(s.entry.id, { cause: "capability", evidence: "the second RCA decided it" });
