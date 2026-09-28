@@ -1,11 +1,12 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { registerTask } from "../src/tasks.js";
 import {
   api,
   bootTidepool,
   FULL_HANDOFF as fullHandoff,
+  GIT_FIXTURE_TEST_TIMEOUT,
   git,
   HOUR,
   makeWorkspace,
@@ -13,6 +14,8 @@ import {
   registerWork,
   type Tidepool,
 } from "./harness.js";
+
+vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 
 let t: Tidepool;
 afterEach(async () => {

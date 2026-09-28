@@ -1,5 +1,5 @@
 import { PassThrough } from "node:stream";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { ClaudeCodeWorker } from "../src/claude-worker.js";
 import { getTask } from "../src/tasks.js";
 import { TranscriptStore } from "../src/transcript-store.js";
@@ -7,6 +7,7 @@ import { FakeContainerRuntime, healthyUsageText } from "./fakes.js";
 import {
   api,
   bootTidepool,
+  GIT_FIXTURE_TEST_TIMEOUT,
   git,
   HOUR,
   makeWorkspace,
@@ -17,6 +18,8 @@ import {
   tempDir,
 } from "./harness.js";
 import { makeRegistry } from "./registry-fixture.js";
+
+vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 
 /** ADR 0118(issue #570)。worker が1度も走らなかった pickup は、盤面が失敗を観測した
  *  瞬間に failure question を立て、後始末で枠を空ける —— タスク種別の時間制限の梯子には

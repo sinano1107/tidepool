@@ -507,6 +507,11 @@ export function writeFixtureTranscript(dir: string, name: string): string {
   return path;
 }
 
+/** 実 git の fixture を組むテストの上限。macOS CI の runner の速さのばらつき用
+ *  (ADR 0155 追記 / issue #1127)。値は 9/26〜28 の macOS CI 288 job でケースごとの
+ *  最大 4951ms(timeout 分 5645ms)の約3倍。 */
+export const GIT_FIXTURE_TEST_TIMEOUT = 15_000;
+
 /** `git init` + one commit into an already-created dir. Shared by `makeWorkspace`
  *  (a self-cleaning `tempDir`) and `buildRemoteTemplate` (a dir that must
  *  outlive a single test, so it creates its own non-self-cleaning dir). */

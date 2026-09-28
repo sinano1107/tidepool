@@ -1,6 +1,6 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { type Db, openDb } from "../src/db.js";
 import { listBoard, pickupTask, registerTask, type Task, type TaskType } from "../src/tasks.js";
 import {
@@ -11,7 +11,9 @@ import {
   type WorkspaceConfig,
   workspaceNeedsHuman,
 } from "../src/workspace.js";
-import { commitWork, git, makeWorkspace } from "./harness.js";
+import { commitWork, GIT_FIXTURE_TEST_TIMEOUT, git, makeWorkspace } from "./harness.js";
+
+vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 
 /** 完了経路の後始末が tree rule の代わりに走らせる**検査**(ADR 0109 決定3)。
  *  退避するかしないかを決めるのは `completionTreeGateApplies` の述語ひとつで、

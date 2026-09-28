@@ -1,10 +1,12 @@
 import { rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { openDb } from "../src/db.js";
 import { registerTask } from "../src/tasks.js";
 import { prepareWorkspaceAtPickup, verifyWorkspaceClean } from "../src/workspace.js";
-import { makeWorkspace } from "./harness.js";
+import { GIT_FIXTURE_TEST_TIMEOUT, makeWorkspace } from "./harness.js";
+
+vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 
 /** linked worktree / submodule の形: `.git` がディレクトリでなくファイル(ADR 0146)。
  *  本物の `.git` は脇へ退けておき、直す側のテストが戻せるようにする。 */

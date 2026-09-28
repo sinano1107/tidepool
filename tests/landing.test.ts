@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { type Db, openDb } from "../src/db.js";
 import { appendEvent, listEvents } from "../src/events.js";
 import {
@@ -20,12 +20,15 @@ import { FakeClock, FakeGitHubClient } from "./fakes.js";
 import {
   commitWork,
   FULL_HANDOFF,
+  GIT_FIXTURE_TEST_TIMEOUT,
   git,
   makeRemoteBackedWorkspace,
   makeWorkspace,
   squashTaskIntoOrigin,
   tempDir,
 } from "./harness.js";
+
+vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 
 let db: Db | undefined;
 

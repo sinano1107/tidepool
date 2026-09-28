@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { openDb } from "../src/db.js";
 import { startServer, type TidepoolServer } from "../src/server.js";
 import { implicitTaskExecutionCandidates } from "../src/server-options.js";
@@ -7,7 +7,9 @@ import { pickupTask, registerTask } from "../src/tasks.js";
 import { TranscriptStore } from "../src/transcript-store.js";
 import { ensureTaskBranch, UnknownWorkspaceError, type WorkspaceConfig } from "../src/workspace.js";
 import { FakeClock, FakeContainerRuntime, ScriptedWorker } from "./fakes.js";
-import { git, makeWorkspace, TEST_CREDENTIAL, tempDir } from "./harness.js";
+import { GIT_FIXTURE_TEST_TIMEOUT, git, makeWorkspace, TEST_CREDENTIAL, tempDir } from "./harness.js";
+
+vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 
 let server: TidepoolServer | undefined;
 afterEach(async () => {

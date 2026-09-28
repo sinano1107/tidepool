@@ -1,5 +1,5 @@
 import { writeFile } from "node:fs/promises";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { boardHalts } from "../src/board-halt.js";
 import { type Db, openDb } from "../src/db.js";
 import { quarantineFailedTeardown } from "../src/failed-teardown.js";
@@ -16,7 +16,9 @@ import {
   workspaceNeedsHuman,
 } from "../src/workspace.js";
 import { FakeClock, FakeContainerRuntime, ScriptedWorker } from "./fakes.js";
-import { commitWork, FULL_HANDOFF, git, makeWorkspace } from "./harness.js";
+import { commitWork, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, makeWorkspace } from "./harness.js";
+
+vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 
 /** 後始末の時限(ADR 0109 決定5)と、その底に落ちた完了済み session(ADR 0099 決定3)。
  *  梯子の底では**解放の門は確認 question ただ1つ**であり、遅れて届いた回収済み観測が

@@ -1,11 +1,12 @@
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import {
   api,
   bootTidepool,
   commitWork,
   FULL_HANDOFF,
+  GIT_FIXTURE_TEST_TIMEOUT,
   git,
   HOUR,
   makeRemoteBackedWorkspace,
@@ -17,6 +18,8 @@ import {
   type Tidepool,
   tempDir,
 } from "./harness.js";
+
+vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 
 let t: Tidepool;
 const MINUTE = 60 * 1000;

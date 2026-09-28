@@ -1,4 +1,4 @@
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { TRIAGE_TIMEOUT } from "../src/triage.js";
 import {
   api,
@@ -7,6 +7,7 @@ import {
   commitWork,
   completeIntegrationReviews,
   completeViaMcp,
+  GIT_FIXTURE_TEST_TIMEOUT,
   git,
   HOUR,
   makeRemoteBackedWorkspace,
@@ -16,6 +17,8 @@ import {
   registerWork,
   type Tidepool,
 } from "./harness.js";
+
+vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 
 let t: Tidepool;
 
