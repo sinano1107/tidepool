@@ -18,6 +18,7 @@ import {
 } from "../src/auth.js";
 import type { BoardCall } from "../src/board-call.js";
 import type { BoardStatePath } from "../src/board-state.js";
+import type { Cause } from "../src/cause.js";
 import { moonshotKeyAbsence } from "../src/claude-worker.js";
 import type { CliAuthCheck } from "../src/cli-auth.js";
 import { type CodexAppServerProbe, codexLoginAbsence } from "../src/codex-app-server.js";
@@ -36,7 +37,7 @@ import type {
   RegistrySource,
   RosterAgent,
 } from "../src/registry.js";
-import type { TaskExecutionCandidates } from "../src/scheduler.js";
+import { HOURLY, type TaskExecutionCandidates } from "../src/scheduler.js";
 import { startServer } from "../src/server.js";
 import { implicitTaskExecutionCandidates } from "../src/server-options.js";
 import {
@@ -53,6 +54,8 @@ import type { WatchdogConfig } from "../src/watchdog.js";
 import type { WorkspaceConfig } from "../src/workspace.js";
 import type { WorkspaceAdmin } from "../src/workspace-create.js";
 import {
+  FakeAttributionClient,
+  FakeBehaviorDraftClient,
   FakeClock,
   FakeContainerRuntime,
   FakeGitHubClient,
@@ -798,3 +801,59 @@ export const FULL_HANDOFF = {
   resume_context: "n/a",
   known_issues: "n/a",
 };
+
+// 帰責・起草の撃ち直しの setup(tests/attribution.test.ts と tests/memory-settings-endpoints.test.ts が共有する)
+
+/** triage session の中で entry に異議を打ち、異議 event の id を返す。 */
+export async function object(t: Tidepool, entryId: number, comment: string) {
+  return (await api(t.baseUrl, "POST", "/api/triage/objection", { entry_id: entryId, comment }))
+    .json.id as number;
+}
+
+/** 盤面が今持つ `taskId` の子すべて。 */
+export async function children(t: Tidepool, taskId: string) {
+  return (await api(t.baseUrl, "GET", "/api/tasks")).json.filter((x: any) => x.parent_id === taskId);
+}
+
+/** 起草 client つきの盤面で、work(既定 workspace charts)に1行 log → 完了 → 異議まで進める(commit は呼び手)。
+ *  `registrant` を渡すと agent が登録した task(decompose と同じ登録者の形)、`human` は人間が担当して人間の扉で完了。 */
+export async function objectedForDraft(
+  title: string,
+  opts: { initial?: { cause: Cause; evidence: string }; registrant?: string; workspace?: string | null; human?: true } = {},
+) {
+  const attributionClient = new FakeAttributionClient();
+  const behaviorDraftClient = new FakeBehaviorDraftClient();
+  const t = await bootTidepool({ attributionClient, behaviorDraftClient });
+  const workspace = opts.workspace === null ? undefined : (opts.workspace ?? "charts");
+  const task = opts.registrant
+    ? registerTask(t.db, { type: "work", title, purpose: "p", completion_criteria: "c", workspace }, t.clock.now(), opts.registrant, "worker")
+    : await registerWork(t, title, workspace, undefined, opts.human && "human");
+  let entry: any;
+  if (opts.human) {
+    await api(t.baseUrl, "POST", `/api/tasks/${task.id}/complete`, { handoff: FULL_HANDOFF });
+    entry = (await api(t.baseUrl, "GET", `/api/tasks/${task.id}/events`)).json.find((e: any) => e.kind === "task_completed");
+  } else {
+    await t.clock.advance(HOURLY);
+    entry = await loggedEntry(t, task.id, "skipped the fixtures");
+    await completeViaMcp(t, task.id);
+  }
+  await completeIntegrationReviews(t, task.id);
+  if (opts.initial) attributionClient.scriptJudgment(entry.id, opts.initial);
+  await api(t.baseUrl, "POST", "/api/triage/start");
+  const objection = await object(t, entry.id, "always keep the fixtures");
+  return { t, attributionClient, behaviorDraftClient, task, entry, objection };
+}
+
+/** commit して RCA 子を返す。 */
+export async function commit(t: Tidepool, taskId: string, title: string) {
+  const res = await api(t.baseUrl, "POST", "/api/triage/close");
+  const kids = await children(t, taskId);
+  return {
+    res,
+    self: kids.find((x: any) => x.title === `rca (self): ${title}`),
+    auditor: kids.find((x: any) => x.title === `rca (auditor): ${title}`),
+  };
+}
+
+/** 起草 client の成功の応答。 */
+export const KEEP_FIXTURES = { path: "testing/fixtures", title: "Keep fixtures", text: "Always keep the fixtures.", addressee: "all" } as const;

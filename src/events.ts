@@ -467,7 +467,10 @@ export type EventPayload =
   // ADR 0164 決定3 / ADR 0168 決定2: 帰責の Board call が撃って失敗した(異議されたタスクに帰属)。
   // 判断ではないので `objection_attributed` には書かない。撃ち直すのは第2回だけで、その回数と間隔は
   // entry ごとに `round = after_rca` のこれで数える —— 初回(`initial`)は撃ち直さない。
-  | { kind: "objection_attribution_failed"; entry_id: number; round: "initial" | "after_rca"; reason: string };
+  | { kind: "objection_attribution_failed"; entry_id: number; round: "initial" | "after_rca"; reason: string }
+  // ADR 0164 決定5 / issue #1066: 撃ち直しを打ち切った起草(target = 帰責 event の id)/ 第2回の帰責(target = entry の id)への
+  // 人間の Retry(以後の失敗を数え直す)と Dismiss(二度と撃たない)。異議されたタスクに帰属。
+  | { kind: "refire_retried" | "refire_dismissed"; refire: "draft" | "second_round"; target: number };
 
 export type EventKind = EventPayload["kind"];
 

@@ -11,13 +11,18 @@ import { FakeAttributionClient, FakeBehaviorDraftClient } from "./fakes.js";
 import {
   api,
   bootTidepool,
+  children,
+  commit,
   completeIntegrationReviews,
   completeViaMcp,
   FULL_HANDOFF,
   HOUR,
+  KEEP_FIXTURES,
   loggedEntry,
   managementMcpClient,
   mcpClient,
+  object,
+  objectedForDraft,
   registerWork,
   type Tidepool,
 } from "./harness.js";
@@ -32,15 +37,6 @@ async function objectedWork(t: Tidepool, title: string, lines: string[]) {
   for (const line of lines) entries.push(await loggedEntry(t, task.id, line));
   await api(t.baseUrl, "POST", "/api/triage/start");
   return { task, entries };
-}
-
-async function object(t: Tidepool, entryId: number, comment: string) {
-  return (await api(t.baseUrl, "POST", "/api/triage/objection", { entry_id: entryId, comment }))
-    .json.id as number;
-}
-
-async function children(t: Tidepool, taskId: string) {
-  return (await api(t.baseUrl, "GET", "/api/tasks")).json.filter((x: any) => x.parent_id === taskId);
 }
 
 async function attributions(t: Tidepool, taskId: string) {
@@ -401,46 +397,6 @@ const memoryEntries = async (t: Tidepool) => (await api(t.baseUrl, "GET", "/api/
 const draftsFailed = async (t: Tidepool, taskId: string) =>
   (await api(t.baseUrl, "GET", `/api/tasks/${taskId}/events`)).json.filter((e: any) => e.kind === "memory_draft_failed");
 
-/** 起草 client つきの盤面で、work(既定 workspace charts)に1行 log → 完了 → 異議まで進める(commit は呼び手)。
- *  `registrant` を渡すと agent が登録した task(decompose と同じ登録者の形)、`human` は人間が担当して人間の扉で完了。 */
-async function objectedForDraft(
-  title: string,
-  opts: { initial?: { cause: Cause; evidence: string }; registrant?: string; workspace?: string | null; human?: true } = {},
-) {
-  const attributionClient = new FakeAttributionClient();
-  const behaviorDraftClient = new FakeBehaviorDraftClient();
-  const t = await bootTidepool({ attributionClient, behaviorDraftClient });
-  const workspace = opts.workspace === null ? undefined : (opts.workspace ?? "charts");
-  const task = opts.registrant
-    ? registerTask(t.db, { type: "work", title, purpose: "p", completion_criteria: "c", workspace }, t.clock.now(), opts.registrant, "worker")
-    : await registerWork(t, title, workspace, undefined, opts.human && "human");
-  let entry: any;
-  if (opts.human) {
-    await api(t.baseUrl, "POST", `/api/tasks/${task.id}/complete`, { handoff: FULL_HANDOFF });
-    entry = (await api(t.baseUrl, "GET", `/api/tasks/${task.id}/events`)).json.find((e: any) => e.kind === "task_completed");
-  } else {
-    await t.clock.advance(HOUR);
-    entry = await loggedEntry(t, task.id, "skipped the fixtures");
-    await completeViaMcp(t, task.id);
-  }
-  await completeIntegrationReviews(t, task.id);
-  if (opts.initial) attributionClient.scriptJudgment(entry.id, opts.initial);
-  await api(t.baseUrl, "POST", "/api/triage/start");
-  const objection = await object(t, entry.id, "always keep the fixtures");
-  return { t, attributionClient, behaviorDraftClient, task, entry, objection };
-}
-
-/** commit して RCA 子を返す。 */
-async function commit(t: Tidepool, taskId: string, title: string) {
-  const res = await api(t.baseUrl, "POST", "/api/triage/close");
-  const kids = await children(t, taskId);
-  return {
-    res,
-    self: kids.find((x: any) => x.title === `rca (self): ${title}`),
-    auditor: kids.find((x: any) => x.title === `rca (auditor): ${title}`),
-  };
-}
-
 it.each([
   ["worker", (t: Tidepool) => t.worker.id],
   ["all", () => null],
@@ -649,8 +605,6 @@ it("人間が登録した task の task_ambiguity は宛先の agent がいな�
 });
 
 // 起草と第2回の帰責の撃ち直し(ADR 0164 / issue #1065)
-
-const KEEP_FIXTURES = { path: "testing/fixtures", title: "Keep fixtures", text: "Always keep the fixtures.", addressee: "all" } as const;
 
 const behaviors = async (t: Tidepool) => (await memoryEntries(t)).filter((e: any) => e.kind === "behavior");
 

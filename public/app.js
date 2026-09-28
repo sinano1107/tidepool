@@ -1873,6 +1873,35 @@ function MemorySettingsCard({ settings, say, onSaved, edit }) {
     }
   )));
 }
+function HaltedRefiresCard({ say }) {
+  const { Button, Card } = window.TidepoolDesignSystem_8a0ead;
+  const [rows, setRows] = React.useState([]);
+  const [busy, setBusy] = React.useState(false);
+  const load = async () => {
+    try {
+      setRows((await api("GET /api/settings/memory/halted-refires")).halted);
+    } catch (err) {
+      say("danger", "halted refires load failed", String(err.message || err));
+    }
+  };
+  React.useEffect(() => {
+    load();
+  }, []);
+  const act = async (row, verb) => {
+    setBusy(true);
+    try {
+      await api(`/api/settings/memory/halted-refires/${row.refire}/${row.target}/${verb}`, {});
+      say("success", verb === "retry" ? "refire retried" : "refire dismissed", `entry #${row.entry.id}`);
+      await load();
+    } catch (err) {
+      say("danger", `${verb} failed`, String(err.message || err));
+    }
+    setBusy(false);
+  };
+  if (rows.length === 0) return null;
+  const muted = { margin: 0, fontSize: "var(--text-xs)", color: "var(--text-muted)" };
+  return /* @__PURE__ */ React.createElement(Card, { style: { display: "flex", flexDirection: "column", gap: 10 } }, /* @__PURE__ */ React.createElement("span", { style: settingsCardLabel }, "halted refires"), /* @__PURE__ */ React.createElement("p", { style: muted }, "the board stopped retrying these after 3 failed calls. retry to fire again, dismiss to stop learning from it."), rows.map((row) => /* @__PURE__ */ React.createElement("div", { key: `${row.refire}:${row.target}`, style: { display: "flex", flexDirection: "column", gap: 4, borderTop: "1px solid var(--border-default)", paddingTop: 10 } }, /* @__PURE__ */ React.createElement("p", { style: { ...muted, fontFamily: "var(--font-mono)" } }, row.refire === "draft" ? "behavior draft" : "second-round attribution", " \xB7 entry #", row.entry.id, " \xB7 ", row.task.title, " \xB7 ", row.cause ?? "unattributed", " \xB7 ", row.round), /* @__PURE__ */ React.createElement("p", { style: { margin: 0, fontSize: "var(--text-sm)" } }, row.entry.text), /* @__PURE__ */ React.createElement("p", { style: muted }, "last failure ", new Date(row.last_failure.at).toLocaleString(), ": ", row.last_failure.reason), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8 } }, /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", disabled: busy, onClick: () => act(row, "retry") }, "Retry"), /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "sm", disabled: busy, onClick: () => act(row, "dismiss") }, "Dismiss")))));
+}
 function MetaReviewSettingsCard({ settings, say, onSaved, edit }) {
   const { Card, FieldRow, Input } = window.TidepoolDesignSystem_8a0ead;
   const id = "board:meta-review";
@@ -2981,7 +3010,7 @@ function SettingsScreen({ say, memoryFocus, registerLeaveGuard }) {
         edit,
         focus: boardLoaded ? memoryFocus : null
       }
-    ), metaReviewSettings && /* @__PURE__ */ React.createElement(MetaReviewSettingsCard, { settings: metaReviewSettings, say, onSaved: loadMetaReviewSettings, edit }), !boardLoaded && /* @__PURE__ */ React.createElement(Card, { style: { fontSize: "var(--text-sm)", color: "var(--text-secondary)" } }, "loading\u2026"), /* @__PURE__ */ React.createElement("p", { style: settingsFootnote }, "applies to every task the board picks up"), (githubLoggedIn !== null || translateUsage !== null || translateUsageFailed) && /* @__PURE__ */ React.createElement("p", { style: settingsCardLabel }, "board state"), githubLoggedIn !== null && /* @__PURE__ */ React.createElement(GitHubLoginCard, { loggedIn: githubLoggedIn }), (translateUsage !== null || translateUsageFailed) && /* @__PURE__ */ React.createElement(TranslateUsageCard, { records: translateUsage }));
+    ), metaReviewSettings && /* @__PURE__ */ React.createElement(MetaReviewSettingsCard, { settings: metaReviewSettings, say, onSaved: loadMetaReviewSettings, edit }), !boardLoaded && /* @__PURE__ */ React.createElement(Card, { style: { fontSize: "var(--text-sm)", color: "var(--text-secondary)" } }, "loading\u2026"), /* @__PURE__ */ React.createElement("p", { style: settingsFootnote }, "applies to every task the board picks up"), (githubLoggedIn !== null || translateUsage !== null || translateUsageFailed) && /* @__PURE__ */ React.createElement("p", { style: settingsCardLabel }, "board state"), githubLoggedIn !== null && /* @__PURE__ */ React.createElement(GitHubLoginCard, { loggedIn: githubLoggedIn }), (translateUsage !== null || translateUsageFailed) && /* @__PURE__ */ React.createElement(TranslateUsageCard, { records: translateUsage }), /* @__PURE__ */ React.createElement(HaltedRefiresCard, { say }));
   } else if (!sec) {
     body = /* @__PURE__ */ React.createElement(ScreenHeader, { title: "Settings", backLabel: "Settings", onBack: () => go([]) });
   } else if (recordName === void 0) {

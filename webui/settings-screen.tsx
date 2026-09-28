@@ -1348,6 +1348,55 @@ function MemorySettingsCard({ settings, say, onSaved, edit }: {
   );
 }
 
+// Halted refires (ADR 0164 決定5 / issue #1066): behavior drafts and second-round attributions the board
+// stopped refiring after 3 failed calls. Retry fires it again (3 more tries); Dismiss closes it for good.
+// Hidden while nothing is halted.
+function HaltedRefiresCard({ say }: { say: AppSay }) {
+  const { Button, Card } = window.TidepoolDesignSystem_8a0ead;
+  const [rows, setRows] = React.useState<WireContract['GET /api/settings/memory/halted-refires']['halted']>([]);
+  const [busy, setBusy] = React.useState(false);
+  const load = async () => {
+    try {
+      setRows((await api('GET /api/settings/memory/halted-refires')).halted);
+    } catch (err) {
+      say('danger', 'halted refires load failed', String((err as Error).message || err));
+    }
+  };
+  React.useEffect(() => { load(); }, []);
+  const act = async (row: (typeof rows)[number], verb: 'retry' | 'dismiss') => {
+    setBusy(true);
+    try {
+      await api(`/api/settings/memory/halted-refires/${row.refire}/${row.target}/${verb}`, {});
+      say('success', verb === 'retry' ? 'refire retried' : 'refire dismissed', `entry #${row.entry.id}`);
+      await load();
+    } catch (err) {
+      say('danger', `${verb} failed`, String((err as Error).message || err));
+    }
+    setBusy(false);
+  };
+  if (rows.length === 0) return null;
+  const muted = { margin: 0, fontSize: 'var(--text-xs)', color: 'var(--text-muted)' };
+  return (
+    <Card style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      <span style={settingsCardLabel}>halted refires</span>
+      <p style={muted}>the board stopped retrying these after 3 failed calls. retry to fire again, dismiss to stop learning from it.</p>
+      {rows.map((row) => (
+        <div key={`${row.refire}:${row.target}`} style={{ display: 'flex', flexDirection: 'column', gap: 4, borderTop: '1px solid var(--border-default)', paddingTop: 10 }}>
+          <p style={{ ...muted, fontFamily: 'var(--font-mono)' }}>
+            {row.refire === 'draft' ? 'behavior draft' : 'second-round attribution'} · entry #{row.entry.id} · {row.task.title} · {row.cause ?? 'unattributed'} · {row.round}
+          </p>
+          <p style={{ margin: 0, fontSize: 'var(--text-sm)' }}>{row.entry.text}</p>
+          <p style={muted}>last failure {new Date(row.last_failure.at).toLocaleString()}: {row.last_failure.reason}</p>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <Button variant="secondary" size="sm" disabled={busy} onClick={() => act(row, 'retry')}>Retry</Button>
+            <Button variant="ghost" size="sm" disabled={busy} onClick={() => act(row, 'dismiss')}>Dismiss</Button>
+          </div>
+        </div>
+      ))}
+    </Card>
+  );
+}
+
 // Meta-review (issue #924) as a record card: the one period shared by every
 // subject's periodic meta-review (memory and routing).
 function MetaReviewSettingsCard({ settings, say, onSaved, edit }: {
@@ -2661,6 +2710,8 @@ function SettingsScreen({ say, memoryFocus, registerLeaveGuard }: {
         )}
         {githubLoggedIn !== null && <GitHubLoginCard loggedIn={githubLoggedIn} />}
         {(translateUsage !== null || translateUsageFailed) && <TranslateUsageCard records={translateUsage} />}
+        {/* board state too, and below the entries: a card that appears later must not push a focused entry out of view */}
+        <HaltedRefiresCard say={say} />
       </React.Fragment>
     );
   } else if (!sec) {
