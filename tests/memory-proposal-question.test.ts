@@ -260,31 +260,36 @@ it("consolidate の提案は meta_review 名義の新 candidate を作り、そ�
   }
 });
 
+/** RCA の帰責 event を出所に共有する2つの candidate を consolidate の kind exemplar で統合する提案 question を立てる。 */
+async function proposeExemplar(board: Awaited<ReturnType<typeof boardWithMetaReview>>): Promise<string> {
+  const objected = (await board.call("log_decision", { line: "split the migration into two commits" })).event_id;
+  // setup のみ: RCA の帰責 event(起草の出所)
+  const attributed = appendEvent(t.db, {
+    taskId: board.review.id,
+    workerId: "tidepool",
+    origin: "board",
+    payload: { kind: "objection_attributed", entry_id: objected, objection_event_ids: [], cause: "preference", evidence: "e", entries: null, round: "after_rca" },
+    at: t.clock.now(),
+  });
+  const replaces = [candidate(t, "Split migrations", null, { event_id: attributed }), candidate(t, "Two commits", null, { event_id: attributed })];
+  const annotations = [
+    { anchor: { field: "decision", quote: "two commits" }, polarity: "imitate", text: "Split schema changes from data changes." },
+    { anchor: "whole", polarity: "avoid", text: "Do not mix in unrelated refactors." },
+  ];
+  const { question_id } = await board.call("propose_memory_change", {
+    op: "consolidate",
+    text: { scope: null, path: "habits/migrations", title: "Split the migration", addressee: null, kind: "exemplar", annotations },
+    replaces,
+    based_on_decision: (await board.call("log_decision", { line: "too particular for a rule" })).event_id,
+    rationale: "Too particular for a rule.",
+  });
+  return question_id;
+}
+
 it("consolidate の kind exemplar は注釈つきの Exemplar candidate を作り、detail に注釈と case を載せ、list_memory_candidates は kind exemplar で それを引く(issue #954)", async () => {
   const board = await boardWithMetaReview();
   try {
-    const objected = (await board.call("log_decision", { line: "split the migration into two commits" })).event_id;
-    // setup のみ: RCA の帰責 event(起草の出所)
-    const attributed = appendEvent(t.db, {
-      taskId: board.review.id,
-      workerId: "tidepool",
-      origin: "board",
-      payload: { kind: "objection_attributed", entry_id: objected, objection_event_ids: [], cause: "preference", evidence: "e", entries: null, round: "after_rca" },
-      at: t.clock.now(),
-    });
-    const replaces = [candidate(t, "Split migrations", null, { event_id: attributed }), candidate(t, "Two commits", null, { event_id: attributed })];
-    const annotations = [
-      { anchor: { field: "decision", quote: "two commits" }, polarity: "imitate", text: "Split schema changes from data changes." },
-      { anchor: "whole", polarity: "avoid", text: "Do not mix in unrelated refactors." },
-    ];
-
-    const { question_id } = await board.call("propose_memory_change", {
-      op: "consolidate",
-      text: { scope: null, path: "habits/migrations", title: "Split the migration", addressee: null, kind: "exemplar", annotations },
-      replaces,
-      based_on_decision: (await board.call("log_decision", { line: "too particular for a rule" })).event_id,
-      rationale: "Too particular for a rule.",
-    });
+    const question_id = await proposeExemplar(board);
 
     const question = await task(question_id);
     const candidateId = question.question_proposal.candidate_id;
@@ -433,6 +438,20 @@ it("HTTP の回答と管理MCP の answer_question は memory の修正値を受
     });
   } finally {
     await management.close();
+    await board.client.close();
+  }
+});
+
+it("HTTP の回答の注釈の修正値は Exemplar の candidate の後継に届く(issue #950)", async () => {
+  const board = await boardWithMetaReview();
+  try {
+    const questionId = await proposeExemplar(board);
+    const candidateId = (await task(questionId)).question_proposal.candidate_id;
+    const annotations = [{ anchor: { field: "decision", quote: "the migration" }, polarity: "avoid", text: "Do not bundle the migration." }];
+
+    expect((await answer(questionId, "approve", { amendment: { annotations } })).status).toBe(200);
+    expect(await entry((await entry(candidateId))!.successor_id)).toMatchObject({ kind: "exemplar", annotations });
+  } finally {
     await board.client.close();
   }
 });

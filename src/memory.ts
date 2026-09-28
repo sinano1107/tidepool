@@ -443,9 +443,11 @@ export const humanExemplarSchema = humanBehaviorSchema.pick({ workspace: true, p
   annotations: z.array(exemplarAnnotationSchema),
 });
 
-/** memory の提案の approve に添える修正値(ADR 0152 決定2): 文言と宛先だけ。置き場(path / scope)は動かさない。 */
+/** memory の提案の approve に添える修正値(ADR 0152 決定2): 文言と宛先と Exemplar の注釈 list。置き場(path / scope)は動かさない。
+ *  扉は形だけを見る —— candidate の種別ごとの拒否(Exemplar に text・原文、Behavior に注釈)は approveMemoryProposal が持つ。 */
 const memoryAmendmentSchema = humanBehaviorSchema
   .pick({ title: true, text: true, addressee: true, original_title: true, original_text: true })
+  .extend({ annotations: z.array(exemplarAnnotationSchema) })
   .partial()
   .strict()
   .refine((amendment) => Object.keys(amendment).length > 0, { message: "name at least one field" });
@@ -454,7 +456,7 @@ export type MemoryAmendment = z.infer<typeof memoryAmendmentSchema>;
 /** 回答の `amendment` の検査。schema 違反は DomainError(扉は形を緩く受ける)。 */
 export function parseMemoryAmendment(input: unknown): MemoryAmendment {
   const parsed = memoryAmendmentSchema.safeParse(input);
-  if (!parsed.success) throw new DomainError(`a memory amendment takes title, text, addressee and original_title + original_text, nothing else: ${parsed.error.issues.map((i) => i.message).join("; ")}`);
+  if (!parsed.success) throw new DomainError(`a memory amendment takes title, text, addressee, original_title + original_text and annotations, nothing else: ${parsed.error.issues.map((i) => i.message).join("; ")}`);
   return parsed.data;
 }
 
@@ -570,25 +572,34 @@ function checkedAnnotations<T extends z.infer<typeof metaReviewAnnotationSchema>
   return { annotations: parsed.data, text: parsed.data.map((a) => a.text).join("\n") };
 }
 
-/** 人間が書く Exemplar(ADR 0153 決定1・3): 書いた時点で approved。出所は事例の Episode(必須)。 */
+/** 人間が書く Exemplar(ADR 0153 決定1・3): 書いた時点で approved。出所は事例の Episode(必須)。
+ *  `amends` は注釈の修正値つき approve の candidate(approveMemoryProposal だけが渡す): 出所は candidate のものを継ぎ、無効化は呼び手が持つ。 */
 export function recordExemplar(
   db: Db,
-  input: Omit<EntryInput, "text" | "source" | "original"> & { addressee: string | null; source_event_id: number; annotations: unknown },
+  input: Omit<EntryInput, "text" | "source" | "original"> & { addressee: string | null; source_event_id?: number; annotations: unknown },
   origin: EventOrigin,
   at: Date,
+  mark?: { question_id: string },
+  amends?: EntryRow,
 ): { entry_id: number; event_id: number } {
   const { source_event_id, annotations: raw, ...fields } = input;
-  const source = citedEpisode(db, source_event_id);
+  if (!amends && source_event_id === undefined) throw new DomainError("an exemplar needs source_event_id: the case it annotates");
+  const source = amends ? rowToEntry(amends).source : citedEpisode(db, source_event_id!);
   const { annotations: checked, text } = checkedAnnotations(db, source, raw, exemplarAnnotationSchema);
   const language = getDisplayLanguage(db);
   const annotations = checked.map(({ original, ...annotation }) => (original?.trim() ? { ...annotation, original: { text: original, language } } : annotation));
-  const id = createEntry(db, { ...fields, kind: "exemplar", state: "approved", text, original: null, annotations, source }, origin, at);
+  const id = createEntry(db, { ...fields, kind: "exemplar", state: "approved", text, original: null, annotations, source }, origin, at, mark);
   return { entry_id: id, event_id: id };
 }
 
-/** 人間の面の case preview(ADR 0153 決定3): 事例に選べる event の描画。anchor の quote はここから選ぶ。 */
+/** 人間の面の case preview(ADR 0153 決定3): 事例に選べる event の描画。anchor の quote はここから選ぶ。帰責 event は
+ *  選べないが RCA 起草から継いだ Exemplar の candidate の出所で、その注釈の修正値(issue #950)の anchor を選ぶために描く
+ *  —— 決定に解かず帰責そのものを描く(steering はその帰責の分だけ、checkedAnnotations が照らすのと同じ描画)。 */
 export function previewCase(db: Db, eventId: number): MemoryCase {
-  return renderCase(db, citedEpisode(db, eventId))!;
+  const source = getEvent(db, eventId)?.kind === "objection_attributed" ? { kind: "event" as const, ref: eventId } : citedEpisode(db, eventId);
+  const rendered = renderCase(db, source);
+  if (!rendered) throw new DomainError(`event ${eventId} has no case the board can render`);
+  return rendered;
 }
 
 function requireEntry(db: Db, id: number): EntryRow {
@@ -734,11 +745,19 @@ export function approveMemoryProposal(db: Db, proposal: MemoryProposal, question
       supersede(replaced, named.id);
       return named.id;
     }
-    // 注釈の修正は #944 の拡張 —— 修正値の欄(文言・宛先)を Exemplar に当てる口はまだ無いので断る
-    if (amendment && named.kind === "exemplar") throw new DomainError("an exemplar proposal takes no amendment: approve or reject it as drafted");
     if (amendment) {
-      const { addressee = named.addressee, title = named.title, text = named.text, ...original } = amendment;
-      const { entry_id } = recordBehavior(db, { ...humanEntryInput(db, { workspace: named.scope, path: named.path, title, text, ...original }), addressee }, origin, at, mark, named);
+      const { addressee = named.addressee, title = named.title, text, annotations, ...original } = amendment;
+      let entry_id: number;
+      if (named.kind === "exemplar") {
+        // text は注釈の英語 text の連結で、英語の title の原文は持たない(ADR 0153 決定1)—— 黙って捨てず断る
+        if (text !== undefined || Object.keys(original).length > 0) throw new DomainError("an exemplar amendment takes title, addressee and annotations: its text is derived from the annotations");
+        const fields = { scope: named.scope, path: named.path, title, addressee, author: HUMAN_AUTHOR, annotations: annotations ?? rowToEntry(named).annotations };
+        entry_id = recordExemplar(db, fields, origin, at, mark, named).entry_id;
+      } else {
+        if (annotations !== undefined) throw new DomainError("only an exemplar amendment takes annotations");
+        const input = humanEntryInput(db, { workspace: named.scope, path: named.path, title, text: text ?? named.text, ...original });
+        entry_id = recordBehavior(db, { ...input, addressee }, origin, at, mark, named).entry_id;
+      }
       supersede([named.id, ...replaced], entry_id);
       return entry_id;
     }

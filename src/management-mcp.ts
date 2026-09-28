@@ -637,7 +637,8 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
     {
       description:
         "Render the case an exemplar can cite: event_id is a decision_logged event (its decision text, the steering of its objections, " +
-        "and its session's handoff and result) or a worker_spawned event (that session's decisions in order, handoff and result).",
+        "and its session's handoff and result) or a worker_spawned event (that session's decisions in order, handoff and result). An " +
+        "objection_attributed event (the source an exemplar candidate may carry) renders its decision with only that attribution's steering.",
       inputSchema: { event_id: z.number().int().positive() },
     },
     async ({ event_id }) => memoryVerb(() => previewCase(deps.db, event_id)),
@@ -882,8 +883,9 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
         "Answer every item of a question task as the human. amendment is accepted only with approve: on a routing row proposal, " +
         "tier and/or effort to apply instead of the proposed values; on an agent tier proposal, to — any tier below the agent's current one; " +
         "on a memory approve or consolidate proposal, title, text and/or addressee (null = every agent) to approve instead of the candidate's, " +
-        "with original_title + original_text together if you wrote it in another language. An amended memory approval is written as your own " +
-        "approved behavior and supersedes the candidate. Rejecting a memory proposal requires a comment saying why.",
+        "with original_title + original_text together if you wrote it in another language; an exemplar candidate takes title, addressee " +
+        "and/or annotations (the whole list, each quote verbatim in its case — see preview_case) instead of text and originals. An amended " +
+        "memory approval is written as your own approved entry and supersedes the candidate. Rejecting a memory proposal requires a comment saying why.",
       inputSchema: {
         task_id: z.string(),
         answers: z.array(z.string()),

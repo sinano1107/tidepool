@@ -255,7 +255,7 @@ async function translateMemoryWording(translate, english, originals) {
 function TpMemoryAmendment({ candidateId, onTranslate, onChange }) {
   const { Button, Input, Select } = window.TidepoolDesignSystem_8a0ead;
   const [base, setBase] = React.useState(null);
-  const [draft, setDraft] = React.useState({ title: "", text: "", addressee: "", originalTitle: "", originalText: "" });
+  const [draft, setDraft] = React.useState({ title: "", text: "", addressee: "", originalTitle: "", originalText: "", annotations: [] });
   const [back, setBack] = React.useState(null);
   const [error, setError] = React.useState(null);
   const [agentNames, setAgentNames] = React.useState([]);
@@ -264,11 +264,16 @@ function TpMemoryAmendment({ candidateId, onTranslate, onChange }) {
     api("GET /api/agents").then(({ agents }) => setAgentNames(agents.map((a) => a.name))).catch((err) => setAgentsError(String(err.message || err)));
   }, []);
   React.useEffect(() => {
-    api("GET /api/settings/memory/entries", { query: { kind: "behavior", state: "candidate" } }).then(({ entries }) => {
+    api("GET /api/settings/memory/entries", { query: { state: "candidate" } }).then(({ entries }) => {
       const candidate = entries.find((e) => e.id === candidateId);
       if (!candidate) return;
-      const wording = { title: candidate.title.trim(), text: candidate.text.trim(), addressee: candidate.addressee?.trim() ?? "" };
-      setBase(wording);
+      const wording = {
+        title: candidate.title.trim(),
+        text: candidate.text.trim(),
+        addressee: candidate.addressee?.trim() ?? "",
+        annotations: (candidate.annotations ?? []).map(({ anchor, polarity, text }) => ({ anchor, polarity, text: text.trim(), original: "", back: null }))
+      };
+      setBase({ ...wording, source: candidate.kind === "exemplar" && typeof candidate.source.ref === "number" ? candidate.source.ref : null });
       setDraft({ ...wording, originalTitle: "", originalText: "" });
     }).catch((err) => setError(String(err.message || err)));
   }, [candidateId]);
@@ -278,6 +283,8 @@ function TpMemoryAmendment({ candidateId, onTranslate, onChange }) {
     if (draft.title.trim() !== base.title) changed.title = draft.title.trim();
     if (draft.text.trim() !== base.text) changed.text = draft.text.trim();
     if (draft.addressee.trim() !== base.addressee) changed.addressee = draft.addressee.trim() || null;
+    const annotations = annotationsToSend(draft.annotations);
+    if (JSON.stringify(annotations) !== JSON.stringify(annotationsToSend(base.annotations))) changed.annotations = annotations;
     if (draft.originalTitle.trim()) changed.original_title = draft.originalTitle.trim();
     if (draft.originalText.trim()) changed.original_text = draft.originalText.trim();
     onChange(changed);
@@ -297,7 +304,7 @@ function TpMemoryAmendment({ candidateId, onTranslate, onChange }) {
       setError(String(err.message || err));
     }
   };
-  return /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 8, marginBottom: 14 } }, onTranslate && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(Input, { label: "Amend original title (optional)", value: draft.originalTitle, onChange: set("originalTitle") }), /* @__PURE__ */ React.createElement(Input, { label: "Amend original (optional)", multiline: true, rows: 3, value: draft.originalText, onChange: set("originalText") }), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", disabled: !draft.originalTitle.trim() || !draft.originalText.trim(), onClick: () => translate(true) }, "Translate")), /* @__PURE__ */ React.createElement(Input, { label: "Title (English)", value: draft.title, onChange: set("title") }), /* @__PURE__ */ React.createElement(Input, { label: "English (approved as the canonical text)", multiline: true, rows: 3, value: draft.text, onChange: set("text") }), /* @__PURE__ */ React.createElement(
+  const addressee = /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(
     Select,
     {
       label: "Addressee",
@@ -305,7 +312,21 @@ function TpMemoryAmendment({ candidateId, onTranslate, onChange }) {
       onChange: set("addressee"),
       options: [{ value: "", label: "every agent" }, .../* @__PURE__ */ new Set([...agentNames, ...draft.addressee ? [draft.addressee] : []])]
     }
-  ), agentsError && /* @__PURE__ */ React.createElement("div", { style: { fontSize: "var(--text-xs)", color: "var(--coral-4)" } }, agentsError), onTranslate && /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", disabled: !draft.title.trim() || !draft.text.trim(), onClick: () => translate(false) }, "Back-translate"), back && /* @__PURE__ */ React.createElement("p", { style: { margin: 0, fontSize: "var(--text-xs)", color: "var(--text-muted)" }, "data-testid": "amendment-back-translation" }, "back: ", back), error && /* @__PURE__ */ React.createElement("div", { style: { fontSize: "var(--text-xs)", color: "var(--coral-4)" } }, error));
+  ), agentsError && /* @__PURE__ */ React.createElement("div", { style: { fontSize: "var(--text-xs)", color: "var(--coral-4)" } }, agentsError));
+  if (base.source !== null) {
+    return /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 8, marginBottom: 14 } }, /* @__PURE__ */ React.createElement(Input, { label: "Title (English)", value: draft.title, onChange: set("title") }), addressee, /* @__PURE__ */ React.createElement(
+      MemoryExemplarAnnotations,
+      {
+        workspace: "",
+        source: base.source,
+        annotations: draft.annotations,
+        onChange: (update) => setDraft((d) => ({ ...d, annotations: update(d.annotations) })),
+        translate: onTranslate,
+        onError: setError
+      }
+    ), error && /* @__PURE__ */ React.createElement("div", { style: { fontSize: "var(--text-xs)", color: "var(--coral-4)" } }, error));
+  }
+  return /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 8, marginBottom: 14 } }, onTranslate && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(Input, { label: "Amend original title (optional)", value: draft.originalTitle, onChange: set("originalTitle") }), /* @__PURE__ */ React.createElement(Input, { label: "Amend original (optional)", multiline: true, rows: 3, value: draft.originalText, onChange: set("originalText") }), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", disabled: !draft.originalTitle.trim() || !draft.originalText.trim(), onClick: () => translate(true) }, "Translate")), /* @__PURE__ */ React.createElement(Input, { label: "Title (English)", value: draft.title, onChange: set("title") }), /* @__PURE__ */ React.createElement(Input, { label: "English (approved as the canonical text)", multiline: true, rows: 3, value: draft.text, onChange: set("text") }), addressee, onTranslate && /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", disabled: !draft.title.trim() || !draft.text.trim(), onClick: () => translate(false) }, "Back-translate"), back && /* @__PURE__ */ React.createElement("p", { style: { margin: 0, fontSize: "var(--text-xs)", color: "var(--text-muted)" }, "data-testid": "amendment-back-translation" }, "back: ", back), error && /* @__PURE__ */ React.createElement("div", { style: { fontSize: "var(--text-xs)", color: "var(--coral-4)" } }, error));
 }
 function TpQuestionCard({ q, answer, onAnswer, locked = false, onTranslate }) {
   const { Card, AgentChip, Switch, Select, Input } = window.TidepoolDesignSystem_8a0ead;
@@ -1938,7 +1959,7 @@ function MemoryCasePicker({ workspace, value, onChange, onQuote }) {
   }, []);
   if (value !== null) {
     const fields = rendered === null || typeof rendered === "string" ? [] : "decisions" in rendered ? [["decision", rendered.decisions], ["handoff", [rendered.handoff]], ["result", [rendered.result]]] : [["decision", [rendered.decision]], ["steering", rendered.steering], ["handoff", [rendered.handoff]], ["result", [rendered.result]]];
-    return /* @__PURE__ */ React.createElement("div", { ref: caseBox, "data-testid": "memory-case", style: { display: "flex", flexDirection: "column", gap: 6 } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8 } }, /* @__PURE__ */ React.createElement("span", { style: muted }, "case: event #", value), /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "sm", onClick: () => onChange(null) }, "Pick another")), rendered === null && /* @__PURE__ */ React.createElement("p", { style: muted }, "loading\u2026"), typeof rendered === "string" && /* @__PURE__ */ React.createElement("p", { style: muted }, rendered), fields.map(([name, texts]) => texts.filter((t) => t).map((text, i) => /* @__PURE__ */ React.createElement("div", { key: `${name}-${i}` }, /* @__PURE__ */ React.createElement("span", { style: muted }, name), /* @__PURE__ */ React.createElement("pre", { "data-field": name, style: { margin: 0, whiteSpace: "pre-wrap", fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", lineHeight: 1.6 } }, text)))));
+    return /* @__PURE__ */ React.createElement("div", { ref: caseBox, "data-testid": "memory-case", style: { display: "flex", flexDirection: "column", gap: 6 } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8 } }, /* @__PURE__ */ React.createElement("span", { style: muted }, "case: event #", value), onChange && /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "sm", onClick: () => onChange(null) }, "Pick another")), rendered === null && /* @__PURE__ */ React.createElement("p", { style: muted }, "loading\u2026"), typeof rendered === "string" && /* @__PURE__ */ React.createElement("p", { style: muted }, rendered), fields.map(([name, texts]) => texts.filter((t) => t).map((text, i) => /* @__PURE__ */ React.createElement("div", { key: `${name}-${i}` }, /* @__PURE__ */ React.createElement("span", { style: muted }, name), /* @__PURE__ */ React.createElement("pre", { "data-field": name, style: { margin: 0, whiteSpace: "pre-wrap", fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", lineHeight: 1.6 } }, text)))));
   }
   const shown = typeof log === "string" || log === null ? [] : log.filter((e) => !workspace || e.workspace === workspace).reverse();
   return /* @__PURE__ */ React.createElement("div", { "data-testid": "memory-case-picker", style: { display: "flex", flexDirection: "column", gap: 6, maxHeight: 360, overflowY: "auto" } }, log === null && /* @__PURE__ */ React.createElement("p", { style: muted }, "loading\u2026"), typeof log === "string" && /* @__PURE__ */ React.createElement("p", { style: muted }, log), log !== null && shown.length === 0 && /* @__PURE__ */ React.createElement("p", { style: muted }, "no log entries"), shown.map((e) => /* @__PURE__ */ React.createElement("div", { key: e.id, "data-testid": `memory-case-row-${e.id}` }, /* @__PURE__ */ React.createElement(LogEntry, { entry: {
@@ -1949,7 +1970,66 @@ function MemoryCasePicker({ workspace, value, onChange, onQuote }) {
     text: e.payload.kind === "task_completed" ? e.payload.result ?? "(no outcome recorded)" : e.payload.line,
     cause: e.cause ?? void 0,
     objection: objectionBadge(e.objections.map((o) => o.comment))
-  } }), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8 } }, e.payload.kind === "decision_logged" && /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "sm", onClick: () => onChange(e.id) }, "This entry"), e.session_event_id !== null && /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "sm", onClick: () => onChange(e.session_event_id) }, "This session")))));
+  } }), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8 } }, e.payload.kind === "decision_logged" && /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "sm", onClick: () => onChange?.(e.id) }, "This entry"), e.session_event_id !== null && /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "sm", onClick: () => onChange?.(e.session_event_id) }, "This session")))));
+}
+const annotationsToSend = (annotations) => annotations.map(({ anchor, polarity, text, original }) => ({ anchor, polarity, text: text.trim(), ...original.trim() ? { original: original.trim() } : {} }));
+function MemoryExemplarAnnotations({ workspace, source, onSource, annotations, onChange, language, translate, onError }) {
+  const { Button, Input, Select } = window.TidepoolDesignSystem_8a0ead;
+  const muted = { margin: 0, fontSize: "var(--text-xs)", color: "var(--text-muted)" };
+  const [current, setCurrent] = React.useState(0);
+  const [busy, setBusy] = React.useState(false);
+  const blank = { anchor: "whole", polarity: "", text: "", original: "", back: null };
+  const set = (i, patch) => onChange((list) => list.map((a, j) => j === i ? { ...a, ...patch } : a));
+  const quote = (anchor) => onChange((list) => list.length === 0 ? [{ ...blank, anchor }] : list.map((a, j) => j === Math.min(current, list.length - 1) ? { ...a, anchor } : a));
+  const translateOne = async (i, toEnglish) => {
+    setBusy(true);
+    try {
+      const a = annotations[i];
+      const { english, back } = await translateMemoryWording(translate, { text: a.text }, toEnglish ? { text: a.original } : null);
+      set(i, { text: english.text, back: back.text });
+    } catch (err) {
+      onError(String(err.message || err));
+    }
+    setBusy(false);
+  };
+  return /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("span", { style: muted }, onSource ? "case \u2014 pick one, then select text in it to anchor the current annotation" : "case \u2014 select text in it to anchor the current annotation"), /* @__PURE__ */ React.createElement(
+    MemoryCasePicker,
+    {
+      workspace,
+      value: source,
+      onQuote: quote,
+      onChange: onSource && ((picked) => {
+        onSource(picked);
+        onChange((list) => list.map((a) => ({ ...a, anchor: "whole" })));
+      })
+    }
+  ), annotations.map((a, i) => /* @__PURE__ */ React.createElement(
+    "div",
+    {
+      key: i,
+      "data-testid": `exemplar-annotation-${i}`,
+      onFocus: () => setCurrent(i),
+      style: { display: "flex", flexDirection: "column", gap: 6, paddingLeft: 8, borderLeft: `2px solid ${i === current ? "var(--tide-4)" : "var(--border-default)"}` }
+    },
+    /* @__PURE__ */ React.createElement("p", { style: muted, "data-testid": "exemplar-anchor" }, "anchor: ", a.anchor === "whole" ? "whole" : `${a.anchor.field} \u201C${a.anchor.quote}\u201D`, a.anchor !== "whole" && /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "sm", onClick: () => set(i, { anchor: "whole" }) }, "Use whole")),
+    /* @__PURE__ */ React.createElement(
+      Select,
+      {
+        label: "Polarity",
+        value: a.polarity,
+        onChange: (e) => set(i, { polarity: e.target.value }),
+        options: [{ value: "", label: "choose\u2026" }, "imitate", "avoid"]
+      }
+    ),
+    translate && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(Input, { label: language ? `Original (${language})` : "Original", multiline: true, rows: 2, value: a.original, onChange: (e) => set(i, { original: e.target.value }) }), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", disabled: busy || !a.original.trim(), onClick: () => translateOne(i, true) }, "Translate")),
+    /* @__PURE__ */ React.createElement(Input, { label: "Annotation (English)", multiline: true, rows: 2, value: a.text, onChange: (e) => set(i, { text: e.target.value, back: null }) }),
+    translate && /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", disabled: busy || !a.text.trim(), onClick: () => translateOne(i, false) }, "Back-translate"),
+    a.back && /* @__PURE__ */ React.createElement("p", { style: muted }, "back", language ? ` in ${language}` : "", ": ", a.back),
+    /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "sm", onClick: () => onChange((list) => list.filter((_, j) => j !== i)) }, "Remove annotation")
+  )), /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "sm", onClick: () => {
+    setCurrent(annotations.length);
+    onChange((list) => [...list, blank]);
+  } }, "Add annotation"));
 }
 const MEMORY_KINDS = ["knowledge", "behavior", "definition", "exemplar"];
 const MEMORY_INVALIDATION_REASONS = ["superseded", "capability", "environment", "requirement_change"];
@@ -1993,18 +2073,6 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit, fo
   const writing = edit.isOpen(writeId);
   const blank = { kind: "knowledge", workspace: "", path: "", originalTitle: "", originalText: "", title: "", text: "", backTranslation: null, supersedes: "", addressee: "", source: null, inheritedSource: null, annotations: [] };
   const [draft, setDraft] = React.useState(blank);
-  const [currentAnnotation, setCurrentAnnotation] = React.useState(0);
-  const setAnnotation = (i, patch) => setDraft((d) => ({ ...d, annotations: d.annotations.map((a, j) => j === i ? { ...a, ...patch } : a) }));
-  const blankAnnotation = { anchor: "whole", polarity: "", text: "", original: "", back: null };
-  const quoteAnchor = (anchor) => setDraft((d) => {
-    if (d.annotations.length === 0) return { ...d, annotations: [{ ...blankAnnotation, anchor }] };
-    const current = Math.min(currentAnnotation, d.annotations.length - 1);
-    return { ...d, annotations: d.annotations.map((a, j) => j === current ? { ...a, anchor } : a) };
-  });
-  const addAnnotation = () => {
-    setCurrentAnnotation(draft.annotations.length);
-    setDraft((d) => ({ ...d, annotations: [...d.annotations, blankAnnotation] }));
-  };
   const [busy, setBusy] = React.useState(false);
   const setDraftField = (key) => (e) => setDraft({ ...draft, [key]: e.target.value, ...key === "title" || key === "text" ? { backTranslation: null } : {}, ...key === "kind" ? { supersedes: "" } : {}, ...key === "workspace" ? { source: null } : {} });
   useDirtySignal(edit, writing, [draft.originalTitle, draft.originalText, draft.title, draft.text, ...draft.annotations.map((a) => a.text)].some((v) => v.trim() !== ""));
@@ -2017,17 +2085,6 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit, fo
     try {
       const { english, back } = await translateMemoryWording(translateTarget, Object.fromEntries(fields.map((key) => [key, draft[key]])), toEnglish ? originalOf : null);
       setDraft({ ...draft, ...english, backTranslation: back });
-    } catch (err) {
-      say("danger", "translate failed", String(err.message || err));
-    }
-    setBusy(false);
-  };
-  const translateAnnotation = async (i, toEnglish) => {
-    setBusy(true);
-    try {
-      const a = draft.annotations[i];
-      const { english, back } = await translateMemoryWording(translateTarget, { text: a.text }, toEnglish ? { text: a.original } : null);
-      setAnnotation(i, { text: english.text, back: back.text });
     } catch (err) {
       say("danger", "translate failed", String(err.message || err));
     }
@@ -2050,7 +2107,7 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit, fo
           title: draft.title.trim(),
           addressee: draft.addressee || null,
           source_event_id: draft.source,
-          annotations: draft.annotations.map(({ anchor, polarity, text, original }) => ({ anchor, polarity, text: text.trim(), ...original.trim() ? { original: original.trim() } : {} }))
+          annotations: annotationsToSend(draft.annotations)
         });
       } else await api("/api/settings/memory/definitions", { ...body, ...supersedes });
       say("success", `${draft.kind} saved`, body.path);
@@ -2121,38 +2178,19 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit, fo
       onChange: setDraftField("addressee"),
       options: [{ value: "", label: "every agent" }, .../* @__PURE__ */ new Set([...agentNames, ...draft.addressee ? [draft.addressee] : []])]
     }
-  ), draft.kind === "definition" && /* @__PURE__ */ React.createElement(Input, { label: "Supersedes (entry id, to revise the branch's current definition)", mono: true, value: draft.supersedes, onChange: setDraftField("supersedes") }), (draft.kind === "behavior" || draft.kind === "exemplar") && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("span", { style: muted }, draft.kind === "exemplar" ? "case \u2014 pick one, then select text in it to anchor the current annotation" : "case (optional)"), /* @__PURE__ */ React.createElement(
-    MemoryCasePicker,
+  ), draft.kind === "definition" && /* @__PURE__ */ React.createElement(Input, { label: "Supersedes (entry id, to revise the branch's current definition)", mono: true, value: draft.supersedes, onChange: setDraftField("supersedes") }), draft.kind === "behavior" && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("span", { style: muted }, "case (optional)"), /* @__PURE__ */ React.createElement(MemoryCasePicker, { workspace: draft.workspace, value: draft.source, onChange: (source) => setDraft((d) => ({ ...d, source })) }), draft.source === null && draft.inheritedSource !== null && /* @__PURE__ */ React.createElement("p", { style: muted }, "saving without a pick keeps #", draft.supersedes, "'s case")), draft.kind === "exemplar" && /* @__PURE__ */ React.createElement(
+    MemoryExemplarAnnotations,
     {
       workspace: draft.workspace,
-      value: draft.source,
-      onChange: (source) => setDraft((d) => ({ ...d, source, annotations: d.annotations.map((a) => ({ ...a, anchor: "whole" })) })),
-      onQuote: draft.kind === "exemplar" ? quoteAnchor : void 0
+      source: draft.source,
+      onSource: (source) => setDraft((d) => ({ ...d, source })),
+      annotations: draft.annotations,
+      onChange: (update) => setDraft((d) => ({ ...d, annotations: update(d.annotations) })),
+      language,
+      translate: translatable ? translateTarget : void 0,
+      onError: (message) => say("danger", "translate failed", message)
     }
-  ), draft.source === null && draft.inheritedSource !== null && /* @__PURE__ */ React.createElement("p", { style: muted }, "saving without a pick keeps #", draft.supersedes, "'s case")), draft.kind === "exemplar" && draft.annotations.map((a, i) => /* @__PURE__ */ React.createElement(
-    "div",
-    {
-      key: i,
-      "data-testid": `exemplar-annotation-${i}`,
-      onFocus: () => setCurrentAnnotation(i),
-      style: { display: "flex", flexDirection: "column", gap: 6, paddingLeft: 8, borderLeft: `2px solid ${i === currentAnnotation ? "var(--tide-4)" : "var(--border-default)"}` }
-    },
-    /* @__PURE__ */ React.createElement("p", { style: muted, "data-testid": "exemplar-anchor" }, "anchor: ", a.anchor === "whole" ? "whole" : `${a.anchor.field} \u201C${a.anchor.quote}\u201D`, a.anchor !== "whole" && /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "sm", onClick: () => setAnnotation(i, { anchor: "whole" }) }, "Use whole")),
-    /* @__PURE__ */ React.createElement(
-      Select,
-      {
-        label: "Polarity",
-        value: a.polarity,
-        onChange: (e) => setAnnotation(i, { polarity: e.target.value }),
-        options: [{ value: "", label: "choose\u2026" }, "imitate", "avoid"]
-      }
-    ),
-    translatable && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(Input, { label: `Original (${language})`, multiline: true, rows: 2, value: a.original, onChange: (e) => setAnnotation(i, { original: e.target.value }) }), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", disabled: busy || !a.original.trim(), onClick: () => translateAnnotation(i, true) }, "Translate")),
-    /* @__PURE__ */ React.createElement(Input, { label: "Annotation (English)", multiline: true, rows: 2, value: a.text, onChange: (e) => setAnnotation(i, { text: e.target.value, back: null }) }),
-    translatable && /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", disabled: busy || !a.text.trim(), onClick: () => translateAnnotation(i, false) }, "Back-translate"),
-    a.back && /* @__PURE__ */ React.createElement("p", { style: muted }, "back in ", language, ": ", a.back),
-    /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "sm", onClick: () => setDraft((d) => ({ ...d, annotations: d.annotations.filter((_, j) => j !== i) })) }, "Remove annotation")
-  )), draft.kind === "exemplar" && /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "sm", onClick: addAnnotation }, "Add annotation"), translatable && draft.kind !== "exemplar" && /* @__PURE__ */ React.createElement(React.Fragment, null, draft.kind !== "definition" && /* @__PURE__ */ React.createElement(Input, { label: `Original title (${language})`, value: draft.originalTitle, onChange: setDraftField("originalTitle") }), /* @__PURE__ */ React.createElement(Input, { label: `Original (${language})`, multiline: true, rows: 3, value: draft.originalText, onChange: setDraftField("originalText") }), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", disabled: busy || fields.some((key) => !originalOf[key].trim()), onClick: () => runTranslation(true) }, "Translate")), draft.kind !== "definition" && /* @__PURE__ */ React.createElement(Input, { label: "Title (English)", value: draft.title, onChange: setDraftField("title") }), draft.kind !== "exemplar" && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(Input, { label: "English (saved as the canonical text)", multiline: true, rows: 3, value: draft.text, onChange: setDraftField("text") }), translatable && /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", disabled: busy || fields.some((key) => !draft[key].trim()), onClick: () => runTranslation(false) }, "Back-translate")), draft.backTranslation && /* @__PURE__ */ React.createElement("p", { style: muted, "data-testid": "memory-back-translation" }, "back in ", language, ": ", fields.map((key) => draft.backTranslation[key]).join(" \u2014 ")), /* @__PURE__ */ React.createElement(
+  ), translatable && draft.kind !== "exemplar" && /* @__PURE__ */ React.createElement(React.Fragment, null, draft.kind !== "definition" && /* @__PURE__ */ React.createElement(Input, { label: `Original title (${language})`, value: draft.originalTitle, onChange: setDraftField("originalTitle") }), /* @__PURE__ */ React.createElement(Input, { label: `Original (${language})`, multiline: true, rows: 3, value: draft.originalText, onChange: setDraftField("originalText") }), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", disabled: busy || fields.some((key) => !originalOf[key].trim()), onClick: () => runTranslation(true) }, "Translate")), draft.kind !== "definition" && /* @__PURE__ */ React.createElement(Input, { label: "Title (English)", value: draft.title, onChange: setDraftField("title") }), draft.kind !== "exemplar" && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(Input, { label: "English (saved as the canonical text)", multiline: true, rows: 3, value: draft.text, onChange: setDraftField("text") }), translatable && /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", disabled: busy || fields.some((key) => !draft[key].trim()), onClick: () => runTranslation(false) }, "Back-translate")), draft.backTranslation && /* @__PURE__ */ React.createElement("p", { style: muted, "data-testid": "memory-back-translation" }, "back in ", language, ": ", fields.map((key) => draft.backTranslation[key]).join(" \u2014 ")), /* @__PURE__ */ React.createElement(
     EditActions,
     {
       busy,
