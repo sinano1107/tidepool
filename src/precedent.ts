@@ -2,7 +2,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Cause } from "./cause.js";
 import type { Db } from "./db.js";
-import { type EventRow, getEvent, listEvents } from "./events.js";
+import { type EventRow, getEvent, latestAttributions, listEvents } from "./events.js";
 import { isAdvisorBlock, parseStreamLine, readInitVersion } from "./stream-json.js";
 import { entryObjections } from "./triage.js";
 
@@ -704,20 +704,18 @@ function decisionOutcomes(db: Db, markerRows: MarkerRow[]): Map<number, Decision
   for (const o of entryObjections(db, ids)) out.get(o.entry_id)!.objections.push(o.comment);
   for (const row of db
     .prepare(
-      `SELECT kind, json_extract(payload, '$.entry_id') AS entry_id,
-              json_extract(payload, '$.cause') AS cause, json_extract(payload, '$.entries') AS entries
-         FROM events
-        WHERE kind IN ('log_entry_displayed', 'objection_attributed')
-          AND json_extract(payload, '$.entry_id') IN (${placeholders})
-        ORDER BY id`,
+      `SELECT json_extract(payload, '$.entry_id') AS entry_id FROM events
+        WHERE kind = 'log_entry_displayed' AND json_extract(payload, '$.entry_id') IN (${placeholders})`,
     )
-    .all(...ids) as Array<{ kind: string; entry_id: number; cause: Cause | null; entries: string | null }>) {
-    const entry = out.get(row.entry_id);
-    if (!entry) continue;
-    if (row.kind === "log_entry_displayed") entry.displayed = true;
-    else if (row.cause !== null) {
-      entry.cause = row.cause;
-      entry.entries = JSON.parse(row.entries ?? "null") as number[] | null;
+    .all(...ids) as Array<{ entry_id: number }>) {
+    out.get(row.entry_id)!.displayed = true;
+  }
+  const attributions = latestAttributions(db);
+  for (const [id, entry] of out) {
+    const attribution = attributions.get(id);
+    if (attribution) {
+      entry.cause = attribution.cause;
+      entry.entries = attribution.entries;
     }
   }
   return out;

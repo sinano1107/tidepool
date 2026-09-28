@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { Cause } from "./cause.js";
 import type { Db } from "./db.js";
-import { appendEvent, type DecisionLogEntry, type EventPayload, getEvent, isDecisionLogEntry, listEvents, taskDecisionLog } from "./events.js";
+import { appendEvent, type DecisionLogEntry, type EventPayload, getEvent, isDecisionLogEntry, latestAttributions, listEvents, taskDecisionLog } from "./events.js";
 import { type ExecutionSettingRow, retrospectiveBoardCallRow } from "./execution-setting.js";
 import { buildMemoryInjection, createBehaviorCandidate, listMemoryEntries, memoryScope, recordKnowledge, requireDecision } from "./memory.js";
 import { sessionSpawnOf, sessionWindow } from "./precedent.js";
@@ -234,11 +234,7 @@ const repairRegistered = (db: Db, objectedId: string, after: number) =>
  *  いないので見ない。それ以外は最新の帰責(`latest`、同じ entry への追記は最新が有効 —— spec #563)。 */
 // ponytail: poll の sweep と RCA の決着の扉のたびに全帰責と全異議を読む。帰責が数万に育ったら結果の不在を SQL 1本に寄せる
 function attributionStates(db: Db): Array<{ task_id: string } & ({ awaiting: SecondRoundSource } | { latest: Attribution })> {
-  const latest = new Map<number, Attribution>();
-  for (const row of db.prepare("SELECT id, payload FROM events WHERE kind = 'objection_attributed' ORDER BY id").all() as Array<{ id: number; payload: string }>) {
-    const payload = JSON.parse(row.payload) as Attribution;
-    latest.set(payload.entry_id, { ...payload, id: row.id });
-  }
+  const latest = latestAttributions(db);
   const bundled = new Map<number, { task_id: string; session_id: number; ids: number[] }>();
   for (const o of db
     .prepare(
@@ -360,6 +356,7 @@ export function refireAttributions(db: Db, deps: AttributionCallDeps = {}, now: 
 /** 撃ち直しを打ち切った起草と第2回の帰責(ADR 0164 決定5): 撃ち直しの対象のうち、直近の Retry 以降に撃って3回失敗し
  *  Dismiss が無いもの。行が閉じるのは撃ち直しの成功(対象から外れる)と Dismiss だけ。 */
 export function listHaltedRefires(db: Db) {
+  const latest = latestAttributions(db);
   return refireTargets(db).flatMap((t) => {
     const key: RefireKey = { refire: t.refire, target: t.refire === "draft" ? t.attribution.id : t.source.entry_id };
     const { n, last_id, dismissed } = refireFailures(db, key);
@@ -373,7 +370,7 @@ export function listHaltedRefires(db: Db) {
         entry: { id: entry_id, text: objectedEntryText(entry) },
         task: { id: t.task_id, title: getTask(db, t.task_id)!.title },
         // 未帰責の entry は cause が空(ADR 0168 決定3)
-        cause: latestAttribution(db, entry)?.cause ?? null,
+        cause: latest.get(entry_id)?.cause ?? null,
         round,
         last_failure: { reason, at: failure.created_at },
       },
@@ -495,18 +492,6 @@ function decisionLogText(db: Db, taskId: string, before = Number.POSITIVE_INFINI
     .map(objectedEntryText);
 }
 
-/** entry への最新の帰責(同じ entry への追記は最新が有効 —— spec #563)。無ければ undefined。 */
-function latestAttribution(
-  db: Db,
-  entry: { id: number; task_id: string },
-): Attribution | undefined {
-  let latest: ReturnType<typeof latestAttribution>;
-  for (const e of listEvents(db, entry.task_id)) {
-    if (e.payload.kind === "objection_attributed" && e.payload.entry_id === entry.id) latest = { id: e.id, ...e.payload };
-  }
-  return latest;
-}
-
 /** 人間が書いたエントリか —— 宛先となる agent を持たない(self RCA も立たない)。 */
 const isHumanEntry = (entry: { worker_id: string }) => entry.worker_id === HUMAN_WORKER_ID;
 
@@ -563,7 +548,7 @@ export function proposeFromObjection(
   if (!isDecisionLogEntry(entry) || entry.task_id !== task.parent_id) {
     throw new DomainError(`entry ${entry_id} is not a decision-log entry of your parent task`);
   }
-  const attribution = latestAttribution(db, { id: entry_id, task_id: task.parent_id });
+  const attribution = latestAttributions(db).get(entry_id);
   if (!attribution && entryObjections(db, [entry_id]).length === 0) {
     throw new DomainError(`entry ${entry_id} carries no attributed objection`);
   }

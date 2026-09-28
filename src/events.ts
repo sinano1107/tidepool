@@ -579,9 +579,8 @@ export function listLog(db: Db, defaultWorkspaceName?: string): LogEntry[] {
          FROM events JOIN tasks ON tasks.id = events.task_id
         WHERE events.kind IN (${placeholders}) ORDER BY events.id`,
     )
-    .all(defaultWorkspaceName ?? null, ...HUMAN_FACING_KINDS) as Array<
-    Omit<EventRow, "payload" | "task_id"> & { task_id: string; payload: string; workspace: string | null }
-  >;
+    .all(defaultWorkspaceName ?? null, ...HUMAN_FACING_KINDS)
+    .map((r) => parseEventRow<{ workspace: string | null }>(r));
   // a second, flat query rather than N+1 per entry — grouped in JS below
   const objectionsByEntry = new Map<number, { comment: string; session_id: number }[]>();
   for (const o of entryObjections(db)) {
@@ -589,28 +588,18 @@ export function listLog(db: Db, defaultWorkspaceName?: string): LogEntry[] {
     list.push({ comment: o.comment, session_id: o.session_id });
     objectionsByEntry.set(o.entry_id, list);
   }
-  const causesByEntry = new Map<number, { cause: Cause; entries: number[] | null }>();
-  for (const row of db
-    .prepare(
-      `SELECT json_extract(payload, '$.entry_id') AS entry_id,
-              json_extract(payload, '$.cause') AS cause,
-              json_extract(payload, '$.entries') AS entries
-         FROM events WHERE kind = 'objection_attributed' ORDER BY id`,
-    )
-    .all() as Array<{ entry_id: number; cause: Cause; entries: string | null }>) {
-    causesByEntry.set(row.entry_id, { cause: row.cause, entries: JSON.parse(row.entries ?? "null") as number[] | null });
-  }
+  const attributions = latestAttributions(db);
   // session の窓を切るのに要るのは spawn と exit だけ。窓の規則は task で絞るので盤面全体を1回で引いて渡す
   // ponytail: エントリ数 × session 数の走査。盤面が育って一覧が重くなったら task ごとに束ねる
-  const sessionEvents = (
-    db.prepare("SELECT * FROM events WHERE kind IN ('worker_spawned', 'worker_exited') ORDER BY id").all() as Array<Omit<EventRow, "payload"> & { payload: string }>
-  ).map((e): EventRow => ({ ...e, payload: JSON.parse(e.payload) as EventPayload }));
-  return rows.map((r) => {
-    const entry = { ...r, payload: JSON.parse(r.payload) as LogEntry["payload"] };
+  const sessionEvents = listEventsOfKinds(db, ["worker_spawned", "worker_exited"]);
+  return rows.flatMap((entry) => {
+    if (!isDecisionLogEntry(entry)) return []; // SQL で kind を絞り済み —— 型の絞り込みのためだけ
+    const attribution = attributions.get(entry.id);
     return {
       ...entry,
-      objections: objectionsByEntry.get(r.id) ?? [],
-      ...(causesByEntry.get(r.id) ?? { cause: null, entries: null }),
+      objections: objectionsByEntry.get(entry.id) ?? [],
+      cause: attribution?.cause ?? null,
+      entries: attribution?.entries ?? null,
       session_event_id: sessionSpawnOf(sessionEvents, entry)?.id ?? null,
     };
   });
@@ -637,19 +626,44 @@ export function advanceLogCursor(db: Db, lastRead: number): number {
  *  human-facing entry, verbatim. */
 export function taskDecisionLog(db: Db, taskId: string): DecisionLogEntry[] {
   const placeholders = HUMAN_FACING_KINDS.map(() => "?").join(", ");
-  const rows = db
+  return db
     .prepare(
       `SELECT * FROM events WHERE task_id = ? AND kind IN (${placeholders}) ORDER BY id`,
     )
-    .all(taskId, ...HUMAN_FACING_KINDS) as Array<Omit<DecisionLogEntry, "payload"> & { payload: string }>;
-  return rows.map((r) => ({ ...r, payload: JSON.parse(r.payload) as LogEntry["payload"] }));
+    .all(taskId, ...HUMAN_FACING_KINDS)
+    .map((r) => parseEventRow(r))
+    .filter(isDecisionLogEntry); // SQL で kind を絞り済み —— 型の絞り込みのためだけ
+}
+
+/** events 表の生の行(payload が文字列)を EventRow に戻す。SELECT で足した列(listLog の workspace)は `Extra` としてそのまま通す。 */
+function parseEventRow<Extra = unknown>(row: unknown): EventRow & Extra {
+  const raw = row as Omit<EventRow, "payload"> & { payload: string };
+  return { ...raw, payload: JSON.parse(raw.payload) as EventPayload } as EventRow & Extra;
 }
 
 export function getEvent(db: Db, id: number): EventRow | undefined {
-  const row = db.prepare("SELECT * FROM events WHERE id = ?").get(id) as
-    | (Omit<EventRow, "payload"> & { payload: string })
-    | undefined;
-  return row && { ...row, payload: JSON.parse(row.payload) as EventPayload };
+  const row = db.prepare("SELECT * FROM events WHERE id = ?").get(id);
+  return row === undefined ? undefined : parseEventRow(row);
+}
+
+/** kind(複数可)で盤面全体の event を id 順に引く。 */
+export function listEventsOfKinds(db: Db, kinds: readonly EventKind[]): EventRow[] {
+  return db
+    .prepare(`SELECT * FROM events WHERE kind IN (${kinds.map(() => "?").join(", ")}) ORDER BY id`)
+    .all(...kinds)
+    .map((r) => parseEventRow(r));
+}
+
+/** entry ごとの最新の帰責(同じ entry への追記は最新が有効 —— spec #563)。盤面全体を id 順に畳む。
+ *  `task_id` は帰責 event のもの(書き手はどれも entry のタスクに書く)。 */
+export function latestAttributions(
+  db: Db,
+): Map<number, Extract<EventPayload, { kind: "objection_attributed" }> & Pick<EventRow, "id" | "task_id">> {
+  const latest: ReturnType<typeof latestAttributions> = new Map();
+  for (const e of listEventsOfKinds(db, ["objection_attributed"])) {
+    if (e.payload.kind === "objection_attributed") latest.set(e.payload.entry_id, { ...e.payload, id: e.id, task_id: e.task_id });
+  }
+  return latest;
 }
 
 /** 盤面の最新 event id(event が無ければ 0)。 */
@@ -657,8 +671,8 @@ export const lastEventId = (db: Db): number =>
   (db.prepare("SELECT COALESCE(MAX(id), 0) AS id FROM events").get() as { id: number }).id;
 
 export function listEvents(db: Db, taskId: string): EventRow[] {
-  const rows = db
+  return db
     .prepare("SELECT * FROM events WHERE task_id = ? ORDER BY id")
-    .all(taskId) as Array<Omit<EventRow, "payload"> & { payload: string }>;
-  return rows.map((r) => ({ ...r, payload: JSON.parse(r.payload) as EventPayload }));
+    .all(taskId)
+    .map((r) => parseEventRow(r));
 }
