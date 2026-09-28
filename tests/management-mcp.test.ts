@@ -97,16 +97,14 @@ it("update_workspace は confirm を持たず、危険な値は WebUI への案�
     expect(unconfirmed.content[0].text).toContain("review_allowed_commands_set");
     expect(unconfirmed.content[0].text).toContain("WebUI's settings screen");
 
-    // 扉の zod スキーマは confirm を知らない — 忍ばせても剥がれてドメインに届く
+    // 扉の zod スキーマは confirm を知らない — 忍ばせると未知の引数として拒まれ、ドメインに届かない(issue #1075)
     const smuggled: any = await client.callTool({
       name: "update_workspace",
       arguments: { name: "lagoon", review_allowed_commands: ["npm test"], confirm: true },
     });
     expect(smuggled.isError).toBe(true);
-    expect(calls).toEqual([
-      { name: "lagoon", review_allowed_commands: ["npm test"] },
-      { name: "lagoon", review_allowed_commands: ["npm test"] },
-    ]);
+    expect(smuggled.content[0].text).toContain("confirm");
+    expect(calls).toEqual([{ name: "lagoon", review_allowed_commands: ["npm test"] }]);
 
     const { tools } = await client.listTools();
     expect((tools.find((tool) => tool.name === "update_workspace") as any).inputSchema.properties.confirm).toBeUndefined();
@@ -428,14 +426,15 @@ it("管理MCP は危険な profile の確認を持たず、常にドメインの
     expect(create).toHaveBeenCalledWith(dangerous);
     create.mockClear();
 
-    // 扉の zod スキーマは confirm_dangerous を知らない — 忍ばせても剥がれ、
-    // ドメインには confirmDangerous 抜きのまま届いて同じ門に当たる
+    // 扉の zod スキーマは confirm_dangerous を知らない — 忍ばせると未知の引数として
+    // 拒まれ、ドメインに届かない(issue #1075)
     const smuggled: any = await client.callTool({
       name: "create_profile",
       arguments: { ...dangerous, confirm_dangerous: true },
     });
     expect(smuggled.isError).toBe(true);
-    expect(create).toHaveBeenCalledWith(dangerous);
+    expect(smuggled.content[0].text).toContain("confirm_dangerous");
+    expect(create).not.toHaveBeenCalled();
 
     const { tools } = await client.listTools();
     expect(tools.find((tool) => tool.name === "create_profile")?.description).not.toContain("confirm");
@@ -943,7 +942,7 @@ it("管理MCP の update_profile は部分パッチ(issue #266 / ADR 0086)", asy
     expect(update).toHaveBeenCalledWith({ name: "roamer", guidance: "Reworded." });
 
     // 危険な値を書いたパッチはこの扉から通せない —— confirm_dangerous を
-    // 忍ばせても zod スキーマに無いので剥がれ、ドメインの門に当たる
+    // 忍ばせても zod スキーマに無いので拒まれ、ドメインに届かない(issue #1075)
     update.mockClear();
     const denied: any = await client.callTool({
       name: "update_profile",
@@ -960,7 +959,8 @@ it("管理MCP の update_profile は部分パッチ(issue #266 / ADR 0086)", asy
       arguments: { name: "roamer", merge: "auto_if_ci_green", confirm_dangerous: true },
     });
     expect(smuggled.isError).toBe(true);
-    expect(update).toHaveBeenCalledWith({ name: "roamer", merge: "auto_if_ci_green" });
+    expect(smuggled.content[0].text).toContain("confirm_dangerous");
+    expect(update).not.toHaveBeenCalled();
 
     // 空配列は安全側 — 確認なしで通る
     update.mockClear();
@@ -1051,10 +1051,10 @@ it("create_workspace は生きた dev checkout の信号でも登録を通し、
   const client = await managementMcpClient(t.baseUrl);
   try {
     // 確認をエージェントに肩代わりさせる経路は作らない: スキーマに `confirm` が
-    // 無いので、エージェントが送っても届かない(下の calls[0] が undefined)
+    // 無い(送れば未知の引数として拒まれる、issue #1075)
     const create: any = await client.callTool({
       name: "create_workspace",
-      arguments: { name: "tidepool", mode: "register", path: "/home/masaki/tidepool", confirm: true },
+      arguments: { name: "tidepool", mode: "register", path: "/home/masaki/tidepool" },
     });
 
     // 拒否ではない —— 登録は通る(issue #383 の「やらないこと」: 自動拒否)
