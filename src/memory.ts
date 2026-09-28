@@ -583,7 +583,6 @@ export function recordExemplar(
   amends?: EntryRow,
 ): { entry_id: number; event_id: number } {
   const { source_event_id, annotations: raw, ...fields } = input;
-  if (!amends && source_event_id === undefined) throw new DomainError("an exemplar needs source_event_id: the case it annotates");
   const source = amends ? rowToEntry(amends).source : citedEpisode(db, source_event_id!);
   const { annotations: checked, text } = checkedAnnotations(db, source, raw, exemplarAnnotationSchema);
   const language = getDisplayLanguage(db);
@@ -596,10 +595,8 @@ export function recordExemplar(
  *  選べないが RCA 起草から継いだ Exemplar の candidate の出所で、その注釈の修正値(issue #950)の anchor を選ぶために描く
  *  —— 決定に解かず帰責そのものを描く(steering はその帰責の分だけ、checkedAnnotations が照らすのと同じ描画)。 */
 export function previewCase(db: Db, eventId: number): MemoryCase {
-  const source = getEvent(db, eventId)?.kind === "objection_attributed" ? { kind: "event" as const, ref: eventId } : citedEpisode(db, eventId);
-  const rendered = renderCase(db, source);
-  if (!rendered) throw new DomainError(`event ${eventId} has no case the board can render`);
-  return rendered;
+  if (getEvent(db, eventId)?.kind !== "objection_attributed") citedEpisode(db, eventId);
+  return renderCase(db, { kind: "event", ref: eventId })!;
 }
 
 function requireEntry(db: Db, id: number): EntryRow {
