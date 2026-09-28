@@ -110,13 +110,11 @@ it("capability の異議エントリに RCA が呼ぶと、宛先 = エントリ
 });
 
 it("propose_from_objection の拒否は tool error として返る(何を断るかは domain 層 —— tests/propose-from-objection.test.ts が言う)", async () => {
-  const attributionClient = new FakeAttributionClient();
-  t = await bootTidepool({ attributionClient });
-  const [{ kids }]: any[] = await objectedTasks(attributionClient, [{ title: "capable", causes: ["capability"] }]);
-  const self = kids.find((x: any) => x.title === "rca (self): capable");
-  await runNow(self.id);
+  t = await bootTidepool();
+  const work = await registerWork(t, "not a review", "charts");
+  await t.clock.advance(HOUR);
 
-  expect(await propose(self.id, { entry_id: 999_999 })).toMatchObject({ isError: true, content: [{ text: expect.any(String) }] });
+  expect(await propose(work.id, { entry_id: 999_999 })).toMatchObject({ isError: true, content: [{ text: expect.any(String) }] });
 });
 
 it("agent 登録の task では task_ambiguity と missing_information の Behavior が登録者宛て、missing_information の Knowledge は宛先なしで即 approved・出所は RCA が log_decision した推論(based_on_decision、cause は無い)、preference は worker 宛てになり、settings の一覧(HTTP / 管理MCP)が author の活動と出所の cause を運ぶ", async () => {
