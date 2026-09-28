@@ -677,10 +677,6 @@ export function latestAttributions(
   return latest;
 }
 
-/** 盤面の最新 event id(event が無ければ 0)。 */
-export const lastEventId = (db: Db): number =>
-  (db.prepare("SELECT COALESCE(MAX(id), 0) AS id FROM events").get() as { id: number }).id;
-
 export function listEvents(db: Db, taskId: string): EventRow[] {
   return db
     .prepare("SELECT * FROM events WHERE task_id = ? ORDER BY id")

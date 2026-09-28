@@ -5,7 +5,7 @@ import { implicitTaskExecutionCandidates } from "../src/server-options.js";
 import { Slot } from "../src/slot.js";
 import { listBoard, registerTask, type Task } from "../src/tasks.js";
 import type { WorkerAdapter } from "../src/worker.js";
-import { FakeClock, fakeContainers, healthyUsageText, ScriptedWorker } from "./fakes.js";
+import { FakeClock, fakeContainers, healthyUsageText, noAttributionCalls, ScriptedWorker } from "./fakes.js";
 import { api, bootTidepool, HOUR, registerWork } from "./harness.js";
 import { makeRemoteBackedRegistry } from "./registry-fixture.js";
 
@@ -40,6 +40,7 @@ it("次の pickup は spawn の手前で registry を refresh する(ADR 0052)",
     },
   };
   const scheduler = startScheduler({
+    attributionCalls: noAttributionCalls,
     db,
     clock,
     slot: new Slot(),
@@ -73,6 +74,7 @@ it("registry に到達できない間は盤面全体の pickup を止め、確�
   const clock = new FakeClock();
   const worker = new ScriptedWorker(clock);
   const scheduler = startScheduler({
+    attributionCalls: noAttributionCalls,
     db,
     clock,
     slot: new Slot(),

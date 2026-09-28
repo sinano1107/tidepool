@@ -2,7 +2,7 @@ import { afterEach, expect, it } from "vitest";
 import { previewCase, recordKnowledge } from "../src/memory.js";
 import { logDecision, registerTask } from "../src/tasks.js";
 import { FakeTranslationClient } from "./fakes.js";
-import { api, bootTidepool, commit, HOUR, KEEP_FIXTURES, managementMcpClient, objectedForDraft, registerWork, type Tidepool } from "./harness.js";
+import { api, bootTidepool, commit, HOUR, KEEP_FIXTURES, managementMcpClient, nextPoll, objectedForDraft, registerWork, type Tidepool } from "./harness.js";
 
 let t: Tidepool;
 afterEach(() => t?.stop());
@@ -400,6 +400,7 @@ it("第2回の帰責が撃って3回失敗すると両方の一覧に出て、�
   s.attributionClient.scriptJudgment(s.entry.id, new Error("claude CLI timed out"));
   await api(t.baseUrl, "POST", `/api/tasks/${self.id}/cancel`, {});
   await api(t.baseUrl, "POST", `/api/tasks/${auditor.id}/cancel`, {});
+  await nextPoll(t);
   await t.clock.advance(HOUR);
   await t.clock.advance(HOUR);
 
@@ -442,7 +443,7 @@ it("POST .../retry で打ち切りの起草はすぐ次の poll で撃たれ、�
   const retried = await api(t.baseUrl, "POST", `/api/settings/memory/halted-refires/draft/${s.attribution.id}/retry`);
   expect(retried).toEqual({ status: 200, json: { event_id: expect.any(Number) } });
   expect(await halted(t)).toEqual([]);
-  await registerWork(t, "a pickup trigger");
+  await nextPoll(t);
   expect(s.behaviorDraftClient.calls).toHaveLength(4);
   await t.clock.advance(HOUR);
   await t.clock.advance(HOUR);

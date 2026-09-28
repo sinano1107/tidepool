@@ -7,7 +7,7 @@ import {
   InvalidAgentIconError,
   UnknownAuthorityProfileError,
 } from "./agent-create.js";
-import { type AttributionCallDeps, attributeObjections, draftAfterCommit, listHaltedRefires, markHaltedRefire, refireKeySchema } from "./attribution.js";
+import { type AttributionCallDeps, attributeObjections, listHaltedRefires, markHaltedRefire, refireKeySchema } from "./attribution.js";
 import { boardHalts } from "./board-halt.js";
 import { quarantineCliAuthFailure } from "./cli-auth.js";
 import type { Clock } from "./clock.js";
@@ -18,7 +18,7 @@ import {
   setDisplayLanguage,
 } from "./display-language.js";
 import type { ChildDraftContext, DraftClient } from "./draft.js";
-import { advanceLogCursor, getLogCursor, lastEventId, listEvents, listLog } from "./events.js";
+import { advanceLogCursor, getLogCursor, listEvents, listLog } from "./events.js";
 import {
   applyExecutionSettingsChange,
   executionSettingsChangeSchema,
@@ -618,10 +618,9 @@ export interface ApiRouterDeps {
    *  POST /api/translate reports the LLM as unreachable, same 503 posture as
    *  no draftClient configured. */
   translationClient?: TranslationClient;
-  /** The attribution / drafting Board calls: the commit half of POST
-   *  /triage/close awaits the attribution client, then fires drafting; the
-   *  cancel / answer / complete doors fire the second round. */
-  attributionCalls?: AttributionCallDeps;
+  /** The attribution Board call: the commit half of POST /triage/close awaits
+   *  the attribution client (ADR 0168). Drafting is the poll sweep's (ADR 0169). */
+  attributionCalls: AttributionCallDeps;
   /** Whether an explicitly named workspace is protected (CONTEXT.md's
    *  protected workspace / ADR 0013), threaded straight to human decompose's
    *  own call into decomposeTask (issue #129) — same resource-side invariant
@@ -1348,7 +1347,6 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
         auditorName,
         quarantineResolvers,
         landing,
-        attributionCalls,
       },
       req.params.id,
       parsed.data.reason,
@@ -1389,7 +1387,6 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
           landing,
           reclaim,
           quarantineChecks,
-          attributionCalls,
           agentAdmin,
         },
         task,
@@ -1418,7 +1415,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       return;
     }
     const result = await completeThroughHumanDoor(
-      { db, pollNow, landing, attributionCalls },
+      { db, pollNow, landing },
       req.params.id,
       parsed.data.handoff,
       () => clock.now(),
@@ -1947,10 +1944,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
         // transaction that bundles and registers with the judgments in hand
         const open = activeTriageSession(db);
         const judgments = open && (await attributeObjections(db, attributionCalls, open.id, clock.now()));
-        const since = lastEventId(db);
         result = commitTriage(db, clock.now(), parsed.data.scratchpad, judgments);
-        // ADR 0120 決定1(b): 帰責の transaction の後に起草を fire-and-forget(応答を待たせない)
-        draftAfterCommit(db, attributionCalls, since, clock.now());
       }
       // Closing an open session re-opens pickup. A sessionless triage never
       // stopped it, so its terminal commit is not a "run now" trigger — but a
