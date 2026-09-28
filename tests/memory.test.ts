@@ -1130,6 +1130,21 @@ it("superseded のエントリは後継が生きている間は domain error で
   expect(approvedMemoryEntries(db).map((e) => [e.id, e.title])).toEqual([[entry_id, "old wording"]]);
 });
 
+it("後継の superseded の鎖はたどらない —— 後継が落ちていれば、その後継の後継が生きていても復元できる(ADR 0163 決定2)", () => {
+  const { db } = board();
+  const old = record(db, "first wording");
+  const middle = record(db, "second wording");
+  const latest = record(db, "third wording");
+  invalidateMemoryEntry(db, { entry_id: old, reason: "superseded", successor_id: middle }, "human", "webui", at);
+  invalidateMemoryEntry(db, { entry_id: middle, reason: "superseded", successor_id: latest }, "human", "webui", at);
+
+  const { entry_id } = restoreMemoryEntry(db, { entry_id: old, restorer: human }, "webui", at);
+  expect(approvedMemoryEntries(db).map((e) => [e.id, e.title])).toEqual([
+    [latest, "third wording"],
+    [entry_id, "first wording"],
+  ]);
+});
+
 it("path_moved のエントリ・無効化されていないエントリの復元は domain error で何も変わらない —— 移されたものは複製の側を扱う(ADR 0163 決定1)", () => {
   const { db } = board();
   const fact = record(db, "fact");

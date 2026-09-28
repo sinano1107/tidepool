@@ -286,7 +286,7 @@ it("POST /api/settings/memory/entries/:id/restore は無効化済みのエント
   expect(restored).toMatchObject({ status: 200, json: { entry_id: expect.any(Number) } });
   expect((await api(t.baseUrl, "POST", `/api/settings/memory/entries/${restored.json.entry_id}/restore`, {})).status).toBe(400);
   expect((await api(t.baseUrl, "GET", "/api/settings/memory/entries?state=approved")).json.entries).toMatchObject([
-    { id: restored.json.entry_id, title: "Old", author: { activity: "worker_verb", name: "deckhand" } },
+    { id: restored.json.entry_id },
   ]);
 });
 

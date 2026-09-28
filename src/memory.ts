@@ -248,7 +248,7 @@ export function foldMemory(
   })();
 }
 
-type Mover = MemoryEntryFields["author"];
+type Actor = MemoryEntryFields["author"];
 
 /** 移動の本体(ADR 0162 決定4・5)。盤面が本文の側 —— title・text・原文・宛先・注釈・出所・書き手・状態・版 —— を写して新しい
  *  scope / path に複製を作り、旧を `path_moved` で複製へ指す(「本文は同じ」は申告でなくここが保証する)。複製は新規の書き込みでは
@@ -258,7 +258,7 @@ type Mover = MemoryEntryFields["author"];
 function moveEntries(
   db: Db,
   moves: Array<{ old: EntryRow; scope: string | null; path: string }>,
-  mover: Mover,
+  mover: Actor,
   origin: EventOrigin,
   at: Date,
 ): Array<{ entry_id: number; successor_id: number }> {
@@ -293,7 +293,7 @@ function copyBody(
   db: Db,
   old: MemoryEntry,
   place: Pick<MemoryEntryFields, "scope" | "path">,
-  actor: Mover,
+  actor: Actor,
   origin: EventOrigin,
   at: Date,
   mark: { version?: number; restored_from?: number },
@@ -311,7 +311,7 @@ function copyBody(
  *  拒む —— 後継の `path_moved` の鎖は末尾までたどる(`superseded` はたどらない)。Definition は同じ枝に生きた Definition があれば拒む。 */
 export function restoreMemoryEntry(
   db: Db,
-  input: { entry_id: number; restorer: Mover },
+  input: { entry_id: number; restorer: Actor },
   origin: EventOrigin,
   at: Date,
 ): { entry_id: number; event_id: number } {
@@ -338,7 +338,7 @@ export function restoreMemoryEntry(
  *  人間の面と meta-review の `move_memory`(moveMemoryByMetaReview)が共有する。返り値は複製。 */
 export function moveMemory(
   db: Db,
-  input: { entry_id: number; scope: string | null; path: string; mover: Mover },
+  input: { entry_id: number; scope: string | null; path: string; mover: Actor },
   origin: EventOrigin,
   at: Date,
 ): { entry_id: number; event_id: number } {
@@ -350,7 +350,7 @@ export function moveMemory(
  *  to_path + 残りの path へ1 transaction で。無効化済みは元の置き場に残る。返り値は旧 id → 複製の id。 */
 export function moveMemoryBranch(
   db: Db,
-  input: { scope: string | null; path: string; to_scope: string | null; to_path: string; mover: Mover },
+  input: { scope: string | null; path: string; to_scope: string | null; to_path: string; mover: Actor },
   origin: EventOrigin,
   at: Date,
 ): { moved: Array<{ entry_id: number; successor_id: number }> } {
@@ -446,7 +446,7 @@ export const memoryListFilterSchema = z.object({
 });
 
 /** 人間の面(settings の HTTP / 管理MCP)の書き手・移した者。 */
-export const HUMAN_AUTHOR = { activity: "human", name: HUMAN_WORKER_ID } as const satisfies Mover;
+export const HUMAN_AUTHOR = { activity: "human", name: HUMAN_WORKER_ID } as const satisfies Actor;
 
 /** 原文は title と text の揃いで持つか持たないか。英語の title を持たない Definition は、英語側と
  *  同じく原文も title = text(ADR 0015 五度目の精密化)。 */

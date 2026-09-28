@@ -2059,7 +2059,7 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit }) 
     try {
       await api(path, body);
       say("success", title, detail);
-      close();
+      close?.();
       await load();
     } catch (err) {
       say("danger", failed, String(err.message || err));
@@ -2215,8 +2215,7 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit }) 
           variant: "ghost",
           size: "sm",
           disabled: busy,
-          onClick: () => submit(`/api/settings/memory/entries/${entry.id}/restore`, {}, ["entry restored", `#${entry.id}`], "restore failed", () => {
-          })
+          onClick: () => submit(`/api/settings/memory/entries/${entry.id}/restore`, {}, ["entry restored", `#${entry.id}`], "restore failed")
         },
         "Restore"
       )),
