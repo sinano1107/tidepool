@@ -90,6 +90,7 @@ function makeTask(
     question_quarantine_value: null,
     question_cli_auth_expiry_warning: null,
     github_issue_number: null,
+    meta_review_subject: null,
     created_at: "2026-07-08T00:00:00.000Z",
   };
 }

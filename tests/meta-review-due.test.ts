@@ -13,7 +13,7 @@ import {
   rejectMemoryProposal,
 } from "../src/memory.js";
 import { type MetaReviewSubject, registerDueMetaReviews, registerMetaReview } from "../src/meta-review.js";
-import { HUMAN_WORKER_ID, logDecision, registerTask } from "../src/tasks.js";
+import { HUMAN_WORKER_ID, listBoard, logDecision, registerTask } from "../src/tasks.js";
 
 /** 周期の due 判定(ADR 0120 決定2・ADR 0151)のドメイン層: 同じ主題の meta-review 自身の産物は材料に数えない。 */
 const at = new Date("2026-09-24T00:00:00.000Z");
@@ -26,8 +26,11 @@ function previousReview(db: Db, subject: MetaReviewSubject) {
   db.prepare("UPDATE tasks SET status = 'done' WHERE meta_review_subject = ?").run(subject);
 }
 
-const registered = (db: Db, subject: MetaReviewSubject) =>
-  (db.prepare("SELECT COUNT(*) AS n FROM events WHERE kind = 'meta_review_registered' AND json_extract(payload, '$.subject') = ?").get(subject) as { n: number }).n;
+/** board 上に開いている主題ごとの meta-review の数。listBoard は settled なツリー(root と子孫が
+ *  すべて done / cancelled)を除くので、previousReview が done にした前回の meta-review は数えない —
+ *  ここで数えるのは新しく登録された、まだ開いている meta-review だけ。 */
+const openMetaReviews = (db: Db, subject: MetaReviewSubject) =>
+  listBoard(db).filter((task) => task.meta_review_subject === subject).length;
 
 it("routing の行の提案への approve(修正値つきも)の適用だけでは、周期が過ぎても次の routing meta-review を登録しない", () => {
   const db = openDb(":memory:");
@@ -38,7 +41,7 @@ it("routing の行の提案への approve(修正値つきも)の適用だけで�
 
   registerDueMetaReviews(db, afterPeriod);
 
-  expect(registered(db, "routing")).toBe(1);
+  expect(openMetaReviews(db, "routing")).toBe(0);
 });
 
 it("settings タブ / 管理MCP からの人間の行の直接編集は材料で、周期が過ぎれば次の routing meta-review を登録する", () => {
@@ -48,7 +51,7 @@ it("settings タブ / 管理MCP からの人間の行の直接編集は材料で
 
   registerDueMetaReviews(db, afterPeriod);
 
-  expect(registered(db, "routing")).toBe(2);
+  expect(openMetaReviews(db, "routing")).toBe(1);
 });
 
 const deckhand = { activity: "worker_verb" as const, name: "deckhand" };
@@ -74,7 +77,7 @@ it("memory の提案 question への回答(置換つき approve の superseded�
   rejectMemoryProposal(db, { kind: "memory", op: "approve", candidate_id: rejected, replaces: [] }, "question-4", "webui", at, "Too vague.");
   registerDueMetaReviews(db, afterPeriod);
 
-  expect(registered(db, "memory")).toBe(1);
+  expect(openMetaReviews(db, "memory")).toBe(0);
 });
 
 it("memory meta-review の直接書き込み(define・fold・move・invalidate)だけでは、次の memory meta-review を登録しない", () => {
@@ -94,7 +97,7 @@ it("memory meta-review の直接書き込み(define・fold・move・invalidate)�
   invalidateMemoryByMetaReview(db, { entry_id: invalidated, reason: "environment" }, "auditor", "worker", at);
   registerDueMetaReviews(db, afterPeriod);
 
-  expect(registered(db, "memory")).toBe(1);
+  expect(openMetaReviews(db, "memory")).toBe(0);
 });
 
 it("人間の memory の直接の無効化は材料で、周期が過ぎれば次の memory meta-review を登録する", () => {
@@ -105,5 +108,5 @@ it("人間の memory の直接の無効化は材料で、周期が過ぎれば�
   invalidateMemoryEntry(db, { entry_id: entry, reason: "environment" }, HUMAN_WORKER_ID, "webui", at);
   registerDueMetaReviews(db, afterPeriod);
 
-  expect(registered(db, "memory")).toBe(2);
+  expect(openMetaReviews(db, "memory")).toBe(1);
 });
