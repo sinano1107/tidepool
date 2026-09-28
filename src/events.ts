@@ -561,8 +561,11 @@ export interface ObjectionBundle {
   attribution?: Attribution;
 }
 
-/** entry ごとの異議群を古い順に(`entryIds` を省けば全 entry)。帰責の名指す異議群も異議群に数える —— 帰責は束ねた異議群に
- *  しか書かれないので、束ねた session の異議から組んだ異議群と重なる。 */
+/** 異議群の名前(最初の異議 event の id、ADR 0170 決定4)—— 帰責の `objection_event_ids` の先頭も同じ異議群を名指す。 */
+export const bundleName = (b: { objection_event_ids: number[] }) => b.objection_event_ids[0]!;
+
+/** entry ごとの異議群を古い順に(`entryIds` を省けば全 entry)。帰責は束ねた異議群にしか書かれず、`objection_event_ids` の
+ *  先頭で自分の異議群を名指す。 */
 export function objectionBundles(db: Db, entryIds?: number[]): Map<number, ObjectionBundle[]> {
   const only = (column: string) => (entryIds ? `AND json_extract(${column}, '$.entry_id') IN (${entryIds.map(() => "?").join(", ")})` : "");
   const params = entryIds ?? [];
@@ -579,20 +582,18 @@ export function objectionBundles(db: Db, entryIds?: number[]): Map<number, Objec
     if (bundle) bundle.objection_event_ids.push(o.id);
     else bySession.set(key, { entry_id: o.entry_id, task_id: o.task_id, objection_event_ids: [o.id] });
   }
-  const name = (b: { objection_event_ids: number[] }) => b.objection_event_ids[0] ?? 0;
-  const byName = new Map([...bySession.values()].map((b) => [`${b.entry_id}:${name(b)}`, b]));
+  const byName = new Map([...bySession.values()].map((b) => [`${b.entry_id}:${bundleName(b)}`, b]));
   for (const e of db
     .prepare(`SELECT * FROM events WHERE kind = 'objection_attributed' ${only("payload")} ORDER BY id`)
     .all(...params)
     .map((r) => parseEventRow(r))) {
     if (e.payload.kind !== "objection_attributed") continue; // SQL で kind を絞り済み —— 型の絞り込みのためだけ
     const attribution: Attribution = { ...e.payload, id: e.id };
-    const key = `${attribution.entry_id}:${name(attribution)}`;
-    const bundle = byName.get(key) ?? { entry_id: attribution.entry_id, task_id: e.task_id!, objection_event_ids: attribution.objection_event_ids };
-    byName.set(key, { ...bundle, attribution });
+    const bundle = byName.get(`${attribution.entry_id}:${bundleName(attribution)}`);
+    if (bundle) bundle.attribution = attribution;
   }
   const byEntry = new Map<number, ObjectionBundle[]>();
-  for (const b of [...byName.values()].sort((a, b) => name(a) - name(b))) byEntry.set(b.entry_id, [...(byEntry.get(b.entry_id) ?? []), b]);
+  for (const b of [...byName.values()].sort((a, b) => bundleName(a) - bundleName(b))) byEntry.set(b.entry_id, [...(byEntry.get(b.entry_id) ?? []), b]);
   return byEntry;
 }
 

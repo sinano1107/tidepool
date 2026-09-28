@@ -679,17 +679,34 @@ export function rememberedNote(t: Tidepool, title: string): number {
   ).entry_id;
 }
 
-/** `entryId` に異議を打ってセッションを閉じ(束ね済みにし)、`entries` を名指す memory の帰責を最新として足す。
+/** `entryId` に異議を打ってセッションを閉じ(束ね済みにし)、その異議群に `entries` を名指す memory の帰責を足す。
  *  setup のみ —— 門を通った帰責を直に置き、Board call は撃たない。 */
 export async function memoryAttributedObjection(t: Tidepool, taskId: string, entryId: number, entries: number[]): Promise<void> {
-  await api(t.baseUrl, "POST", "/api/triage/objection", { entry_id: entryId, comment: "そのメモが間違っています" });
+  const objection = await object(t, entryId, "そのメモが間違っています");
   await api(t.baseUrl, "POST", "/api/triage/close");
   appendEvent(t.db, {
     taskId,
     workerId: "tidepool",
     origin: "board",
     at: t.clock.now(),
-    payload: { kind: "objection_attributed", entry_id: entryId, objection_event_ids: [], cause: "memory", evidence: "followed the note", entries, round: "after_rca" },
+    payload: { kind: "objection_attributed", entry_id: entryId, objection_event_ids: [objection], cause: "memory", evidence: "followed the note", entries, round: "after_rca" },
+  });
+}
+
+/** setup のみ: `entryId` に束ね済みの異議を1つ置き、その異議 event の id(異議群の名前)を返す —— commit 済みの triage session を
+ *  1行足し、その session の `objection_raised` を書く(Board call も修理子・RCA 子も立たない)。呼ぶたびに別の session なので、
+ *  2回呼べば同じ entry の2つの異議群になる。帰責の fixture はこの id を `objection_event_ids` に名指す。 */
+export function bundledObjection(db: Db, taskId: string, entryId: number, at: Date, comment = "redo it"): number {
+  const iso = at.toISOString();
+  const session = db
+    .prepare("INSERT INTO triage_sessions (started_at, last_activity_at, committed_at, closed_by) VALUES (?, ?, ?, 'commit')")
+    .run(iso, iso, iso);
+  return appendEvent(db, {
+    taskId,
+    workerId: "human",
+    origin: "webui",
+    payload: { kind: "objection_raised", entry_id: entryId, comment, session_id: Number(session.lastInsertRowid) },
+    at,
   });
 }
 

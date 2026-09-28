@@ -147,7 +147,7 @@ export interface WireContract {
       unread: boolean;
       workspace: string | null;
       cause: Cause | null;
-      /** 最新の帰責が memory のとき名指された entry の id 列(src/events.ts の LogEntry)。他は null。 */
+      /** 今の判定(最後の異議群の帰責)が memory のとき名指された entry の id 列(src/events.ts の LogEntry)。他は null。 */
       entries: number[] | null;
       objections: Array<{ comment: string; session_id: number }>;
       /** エントリを含む worker session の worker_spawned の id(src/events.ts の LogEntry)。窓の外なら null。 */

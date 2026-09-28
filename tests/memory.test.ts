@@ -26,6 +26,7 @@ import {
   restoreMemoryEntry,
 } from "../src/memory.js";
 import { countUnsettledAttachedChildren, DomainError, getTask, logDecision, registerTask } from "../src/tasks.js";
+import { bundledObjection } from "./harness.js";
 
 const at = new Date("2026-09-14T00:00:00.000Z");
 
@@ -660,9 +661,9 @@ it("決定ログの各エントリは、それを含む worker session の worke
 it("決定ログの各エントリは最新の帰責の entries を持つ —— memory なら名指された id 列、他の cause と帰責の無いエントリは null(ADR 0166 決定6)", () => {
   const { db, task } = board();
   const [followed, overturned, plain] = ["followed the note", "followed then overturned", "no objection"].map((line) => logDecision(db, task, line, "deckhand", at));
-  // setup のみ: 帰責の event(同じ entry への追記は最新が有効)
+  // setup のみ: 束ね済みの異議群を1つ足して帰責する(呼ぶたびに後の異議群 —— 最後の異議群の判定が有効、ADR 0170)
   const attribute = (entry_id: number, cause: "memory" | "capability", entries: number[] | null) =>
-    appendEvent(db, { taskId: task.id, workerId: "tidepool", origin: "board", at, payload: { kind: "objection_attributed", entry_id, objection_event_ids: [], cause, evidence: "e", entries, round: "initial" } });
+    appendEvent(db, { taskId: task.id, workerId: "tidepool", origin: "board", at, payload: { kind: "objection_attributed", entry_id, objection_event_ids: [bundledObjection(db, task.id, entry_id, at)], cause, evidence: "e", entries, round: "initial" } });
   attribute(followed!, "memory", [41, 42]);
   attribute(overturned!, "memory", [41]);
   attribute(overturned!, "capability", null);
@@ -979,7 +980,7 @@ it("RCA が起草した candidate(出所は帰責 event)を修正値つきで ap
     taskId: task.id,
     workerId: "tidepool",
     origin: "board",
-    payload: { kind: "objection_attributed", entry_id: decision, objection_event_ids: [], cause: "preference", evidence: "e", entries: null, round: "after_rca" },
+    payload: { kind: "objection_attributed", entry_id: decision, objection_event_ids: [bundledObjection(db, task.id, decision, at)], cause: "preference", evidence: "e", entries: null, round: "after_rca" },
     at,
   });
   const drafted = createBehaviorCandidate(db, { ...knowledge, addressee: null, source: { event_id: attributed }, author: { activity: "rca", name: "auditor" } }, "board", at).entry_id;
@@ -1011,7 +1012,7 @@ function exemplarProposal() {
     taskId: task.id,
     workerId: "tidepool",
     origin: "board",
-    payload: { kind: "objection_attributed", entry_id: decision, objection_event_ids: [], cause: "preference", evidence: "e", entries: null, round: "after_rca" },
+    payload: { kind: "objection_attributed", entry_id: decision, objection_event_ids: [bundledObjection(db, task.id, decision, at)], cause: "preference", evidence: "e", entries: null, round: "after_rca" },
     at,
   });
   const replaces = ["Split migrations", "Two commits"].map(
@@ -1119,7 +1120,7 @@ it("Behavior の candidate への修正値の注釈は domain error で何も変
 
 it("case preview は帰責 event も描く —— RCA 起草の出所を継いだ Exemplar の candidate の case で、修正値の anchor はそこから選ぶ", () => {
   const { db, attributed } = exemplarProposal();
-  expect(previewCase(db, attributed)).toEqual({ decision: "split the migration into two commits", steering: [], handoff: null, result: null });
+  expect(previewCase(db, attributed)).toEqual({ decision: "split the migration into two commits", steering: ["redo it"], handoff: null, result: null });
 });
 
 /** 移動(ADR 0162 決定4・5)の4種別のエントリ: 出所の違う Knowledge 2つ(worker の commit・人間の自身の宣言)、Definition、
@@ -1460,7 +1461,7 @@ it("人間の Exemplar は source_event_id を省くと supersedes の揃った�
     taskId: task.id,
     workerId: "tidepool",
     origin: "board",
-    payload: { kind: "objection_attributed", entry_id: decision, objection_event_ids: [], cause: "preference", evidence: "e", entries: null, round: "after_rca" },
+    payload: { kind: "objection_attributed", entry_id: decision, objection_event_ids: [bundledObjection(db, task.id, decision, at)], cause: "preference", evidence: "e", entries: null, round: "after_rca" },
     at,
   });
   const drafted = createBehaviorCandidate(db, { ...knowledge, addressee: null, source: { event_id: attributed }, author: { activity: "rca", name: "auditor" } }, "board", at).entry_id;

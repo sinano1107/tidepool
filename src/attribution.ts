@@ -4,6 +4,7 @@ import type { Db } from "./db.js";
 import {
   type Attribution,
   appendEvent,
+  bundleName,
   currentAttributions,
   type DecisionLogEntry,
   type EventPayload,
@@ -208,7 +209,7 @@ export async function attributeObjections(
         const payload = {
           kind: "objection_attribution_failed" as const,
           entry_id: o.entry.id,
-          objection_event_id: o.objection_event_ids[0]!,
+          objection_event_id: bundleName(o),
           round: "initial" as const,
           reason: `Board call failed: ${message(err)}`,
         };
@@ -253,9 +254,6 @@ function attributionStates(db: Db): Array<{ task_id: string } & ({ awaiting: Sec
     return attribution.round === "initial" && attribution.cause === "uncertain" ? { task_id, awaiting: attribution } : { task_id, confirmed: attribution };
   });
 }
-
-/** 第2回の撃ち直しと Retry / Dismiss の鍵になる異議群の名前(最初の異議 event の id、ADR 0170 決定4)。 */
-const bundleName = (source: SecondRoundSource) => source.objection_event_ids[0]!;
 
 /** 帰責の第2回を1異議群ぶん撃つ: RCA の findings を証拠にした判断(`uncertain` も判断として)を
  *  その異議群を名指す新しい event(round = after_rca)として追記し、起草へ進む(ADR 0120 決定1(b)(c))。

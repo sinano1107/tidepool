@@ -5,7 +5,7 @@ import { appendEvent, getEvent, type TaskScopedPayload } from "../src/events.js"
 import { listPrecedents } from "../src/memory.js";
 import { registerMetaReview } from "../src/meta-review.js";
 import { backfillEpisodes, listEpisodes, projectAndPersist } from "../src/precedent.js";
-import { FIXTURE_SPAWNED_EVENT_ID, FIXTURE_TASK, seedFixtureBoard, tempDir, writeFixtureTranscript } from "./harness.js";
+import { bundledObjection, FIXTURE_SPAWNED_EVENT_ID, FIXTURE_TASK, seedFixtureBoard, tempDir, writeFixtureTranscript } from "./harness.js";
 
 const logDir = () => tempDir("tidepool-precedent-");
 
@@ -109,13 +109,7 @@ it("decision マーカーの outcome は読み出し時に entry_id で結ばれ
       at,
     });
   }
-  const objectionId = appendEvent(db, {
-    taskId: FIXTURE_TASK,
-    workerId: "human",
-    origin: "webui",
-    payload: { kind: "objection_raised", entry_id: 7, comment: "2回目は要らない", session_id: 1 },
-    at,
-  });
+  const objectionId = bundledObjection(db, FIXTURE_TASK, 7, at, "2回目は要らない");
   appendEvent(db, {
     taskId: FIXTURE_TASK,
     workerId: "tidepool",
@@ -202,9 +196,9 @@ it("list_precedents は異議つき decision を cause・outcome・読んだ / �
   const event = (payload: TaskScopedPayload) =>
     appendEvent(db, { taskId: FIXTURE_TASK, workerId: "human", origin: "webui", payload, at });
   event({ kind: "memory_injected", worker_spawned_event_id: FIXTURE_SPAWNED_EVENT_ID, watermark: 0, entries: [{ id: 42, version: 42 }], tokens: 10, index_depth: 1, index_max_depth: 1, omitted: 0, tokenizer: "t", tokenizer_version: "1" });
-  event({ kind: "objection_raised", entry_id: 6, comment: "前の周期の異議", session_id: 1 });
+  bundledObjection(db, FIXTURE_TASK, 6, at, "前の周期の異議");
   registerMetaReview(db, "memory", at); // 前回の meta-review
-  const objection = event({ kind: "objection_raised", entry_id: 7, comment: "2回目は要らない", session_id: 1 });
+  const objection = bundledObjection(db, FIXTURE_TASK, 7, at, "2回目は要らない");
   event({ kind: "objection_attributed", entry_id: 7, objection_event_ids: [objection], cause: "preference", evidence: "e", entries: null, round: "after_rca" });
   registerMetaReview(db, "memory", at); // 今回の meta-review(読み手)
   // setup のみ: 登録した task の id を引く
@@ -257,8 +251,8 @@ it("前の異議群の after_rca が後の異議群の initial より後の id �
   const at = new Date("2026-09-28T00:00:00.000Z");
   const event = (payload: TaskScopedPayload) =>
     appendEvent(db, { taskId: FIXTURE_TASK, workerId: "human", origin: "webui", payload, at });
-  const first = event({ kind: "objection_raised", entry_id: 7, comment: "2回目は要らない", session_id: 1 });
-  const second = event({ kind: "objection_raised", entry_id: 7, comment: "箇条書きは5つに", session_id: 2 });
+  const first = bundledObjection(db, FIXTURE_TASK, 7, at, "2回目は要らない");
+  const second = bundledObjection(db, FIXTURE_TASK, 7, at, "箇条書きは5つに");
   event({ kind: "objection_attributed", entry_id: 7, objection_event_ids: [second], cause: "preference", evidence: "e", entries: null, round: "initial" });
   event({ kind: "objection_attributed", entry_id: 7, objection_event_ids: [first], cause: "capability", evidence: "e", entries: null, round: "after_rca" });
   registerMetaReview(db, "memory", at);

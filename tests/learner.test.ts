@@ -8,6 +8,7 @@ import { listRoutingShadow } from "../src/routing-review.js";
 import { healthyOpenai } from "./fakes.js";
 import {
   bootTidepool,
+  bundledObjection,
   completeIntegrationReviews,
   completeMetaReviews,
   completeViaMcp,
@@ -218,8 +219,7 @@ async function rejectOpusSession(t: Tidepool, causes: Cause[] = ["capability"]) 
   const entry = await loggedEntry(t, earlier.id, "took the shortcut");
   expect(entry.id).toBeGreaterThan(spawnedId);
   for (const [i, cause] of causes.entries()) {
-    const objection: EventPayload = { kind: "objection_raised", entry_id: entry.id, comment: `objection ${i}`, session_id: i + 1 };
-    const objectionId = appendEvent(t.db, { taskId: earlier.id, workerId: "human", origin: "webui", at: t.clock.now(), payload: objection });
+    const objectionId = bundledObjection(t.db, earlier.id, entry.id, t.clock.now(), `objection ${i}`);
     const attributed: EventPayload = {
       kind: "objection_attributed",
       entry_id: entry.id,
@@ -296,7 +296,7 @@ it("advisor pin ありで相談0回の session は、盤面の記録から読ん
   const attributed: EventPayload = {
     kind: "objection_attributed",
     entry_id: entry.id,
-    objection_event_ids: [],
+    objection_event_ids: [bundledObjection(t.db, earlier.id, entry.id, t.clock.now())],
     cause: "capability",
     evidence: "the shortcut missed the second criterion",
     entries: null,
@@ -362,7 +362,7 @@ it("セルの model は観測された具体 id —— pin が alias でも、�
   const attributed: EventPayload = {
     kind: "objection_attributed",
     entry_id: entry.id,
-    objection_event_ids: [],
+    objection_event_ids: [bundledObjection(t.db, earlier.id, entry.id, t.clock.now())],
     cause: "capability",
     evidence: "the shortcut missed the second criterion",
     entries: null,
