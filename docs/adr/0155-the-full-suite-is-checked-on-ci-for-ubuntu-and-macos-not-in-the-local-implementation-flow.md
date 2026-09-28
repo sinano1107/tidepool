@@ -23,3 +23,12 @@ timeout することが続いていた(#842・#883・#967 ほか)。単独実行
 - **ローカルの full suite を合否の場所に残し、worker 数を絞るか `testTimeout` を上げる** — 並べる本数が増えるたびに目標が
   破れる。`testTimeout` を上げれば、本当の hang を見逃す幅も広がる。
 - **CI は ubuntu だけにして、macOS はローカルの任意実行で拾う** — 上の決定3の理由で退けた。
+
+## 追記(2026-09-28 のトリアージ、issue #1127)
+
+**git fixture を組むテストには、CI の macOS runner の速さのばらつきに見合う個別の timeout を置く。全体の `testTimeout`
+は変えない。** 決定3 のとおり macOS の CI が 5000ms timeout を拾った(9/26〜28 に4回、どれも macOS の shard、ubuntu は
+0回)。原因は runner 機体の速さの差で、同じ shard の実行時間が約2.5倍振れる。スイートが自分でかける負荷ではない。
+Considered options で `testTimeout` の引き上げを退けた理由(並べる本数が増えるたびに目標が破れる)はローカルの並走負荷の
+話で、台数の固定された CI runner には当たらない。hang を見逃す懸念は残るが、範囲を実 git の fixture を使うテストに限り、
+上限を有限に置けば hang は捕まる。計測は #1127 に置く。

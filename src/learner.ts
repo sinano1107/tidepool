@@ -1,7 +1,7 @@
 import type { Allocation } from "./allocation-review.js";
 import type { Cause } from "./cause.js";
 import type { Db } from "./db.js";
-import type { EventPayload, EventRow } from "./events.js";
+import { type EventPayload, type EventRow, listEventsOfKinds, objectionBundles } from "./events.js";
 import { type ExecutionSetting, type Priority, windowMatchesModel } from "./execution-setting.js";
 import { sessionWindow } from "./precedent.js";
 import type { Provider } from "./registry.js";
@@ -195,27 +195,22 @@ export function loadEpisodes(db: Db): RoutingEpisode[] {
         WHERE type = 'work' AND EXISTS (SELECT 1 FROM events WHERE task_id = tasks.id AND kind = 'worker_spawned')`,
     )
     .all() as Array<Pick<Task, "id" | "workspace"> & { accepted: number }>;
-  const events = (
-    db
-      .prepare(
-        `SELECT * FROM events
-          WHERE kind IN ('worker_spawned', 'worker_exited', 'objection_attributed', 'allocation_reviewed')
-            AND task_id IN (SELECT id FROM tasks WHERE type = 'work') ORDER BY id`,
-      )
-      .all() as Array<Omit<EventRow, "payload"> & { payload: string }>
-  ).map((r) => ({ ...r, payload: JSON.parse(r.payload) as EventPayload }));
+  // work task だけに絞る(spawn を持つ work task —— session の窓も配分の評価も spawn のタスクの event しか見ない)
+  const workIds = new Set<string | null>(tasks.map((t) => t.id));
+  const events = listEventsOfKinds(db, ["worker_spawned", "worker_exited", "allocation_reviewed"]).filter((e) => workIds.has(e.task_id));
+  // 異議群ごとの有効な判定(同じ異議群では後の event が有効)をすべて —— 前の異議群の capability を後の異議群の
+  // preference で消さない(ADR 0170 決定3)
+  const attributions = [...objectionBundles(db).values()].flat().flatMap((b) => (b.attribution ? [{ ...b.attribution, task_id: b.task_id }] : []));
   const spawns = events.filter((e): e is Spawned => e.payload.kind === "worker_spawned");
   return spawns.map((spawned) => {
     const task = tasks.find((t) => t.id === spawned.task_id)!;
     const { exited, hasNextSpawn, inSession } = sessionWindow(events, spawned);
-    // 異議群ごとの有効な判定をすべて見る(同じ異議群では後の event が有効、ADR 0170 決定3)—— 前の異議群の capability を
-    // 後の異議群の preference で消さない。異議群は帰責の `objection_event_ids` の先頭が名指す
-    const causes = new Map<string, Cause>();
+    // 異議群のタスク(= entry のタスク)で窓に入れる
+    const causes = attributions.filter((a) => inSession({ id: a.entry_id, task_id: a.task_id })).map((a) => a.cause);
     const allocations: { allocation: Allocation; cause: Cause }[] = [];
     for (const e of events) {
       if (e.task_id !== spawned.task_id) continue;
       const p = e.payload;
-      if (p.kind === "objection_attributed" && inSession({ id: p.entry_id, task_id: spawned.task_id })) causes.set(`${p.entry_id}:${p.objection_event_ids[0]}`, p.cause);
       if (p.kind === "allocation_reviewed" && p.worker_spawned_event_id === spawned.id && "allocation" in p) {
         allocations.push({ allocation: p.allocation, cause: p.cause });
       }
@@ -236,7 +231,7 @@ export function loadEpisodes(db: Db): RoutingEpisode[] {
       workspace: task.workspace,
       outcome: episodeOutcome({
         accepted: task.accepted === 1 && !hasNextSpawn,
-        causes: [...causes.values()],
+        causes,
         allocations,
       }),
       cost_usd: usage?.estimated_cost_usd ?? null,

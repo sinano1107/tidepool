@@ -270,8 +270,8 @@ export function startScheduler(deps: {
   registry?: RegistrySource;
   /** registry の agent 一覧(issue #920): routing の due 判定の直前に tier の提案の pin を照合する。Absent → registry の無い盤面。 */
   agents?: ListAgentTiers;
-  /** 帰責と起草の Board call(ADR 0164): poll が結果の無い帰責を撃ち直す。Absent → 撃ち直すものが無い盤面。 */
-  attributionCalls?: AttributionCallDeps;
+  /** 帰責と起草の Board call(ADR 0164 / ADR 0169): 第2回の帰責と起草を撃つのは poll の sweep だけ。 */
+  attributionCalls: AttributionCallDeps;
 }): Scheduler {
   const {
     db,
@@ -564,7 +564,7 @@ export function startScheduler(deps: {
       // 読み取りより前なので同じ pass で拾われる。slot 占有・halt より手前(空の盤面でも登録する)。
       // **同期**に保つ —— ADR 0119 決定5 の「最初の await より前に slot を読む」を崩さない。
       registerDueMetaReviews(db, clock.now(), agents);
-      // ADR 0164 決定4: 結果の無い帰責の撃ち直しも同じく同期で相乗りし、Board call は待たない
+      // ADR 0164 決定4 / ADR 0169: 第2回の帰責と起草の sweep も同じく同期で相乗りし、Board call は待たない
       refireAttributions(db, attributionCalls, clock.now());
       if (await pickupBlocked()) return;
       // agent 名で外れるのは、定義が成立しない agent(quarantineAgent)だけである

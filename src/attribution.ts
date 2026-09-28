@@ -75,16 +75,17 @@ export interface BehaviorDraftClient {
   draft(input: BehaviorDraftInput, setting: Pick<ExecutionSettingRow, "model" | "effort">): Promise<BehaviorDraft>;
 }
 
-/** 帰責と起草の Board call が扉から受け取るもの。合成 root が一度だけ組み、各扉の deps の `attributionCalls` に同じ束を渡す。 */
+/** 帰責と起草の Board call が受け取るもの。合成 root が一度だけ組み、scheduler(poll の sweep)と triage close に同じ束を渡す
+ *  (ADR 0169)。欄は必須で値に `undefined` を許す —— 扉の deps を丸ごと渡す取り違えを型で落とすため。 */
 export interface AttributionCallDeps {
-  /** 帰責の Board call(ADR 0115 / issue #574・#575)。Absent → commit は異議を `uncertain` で束ね(RCA は帰責以前のまま立つ)、第2回も撃たない。 */
-  attributionClient?: AttributionClient;
-  /** Behavior candidate 起草の Board call(ADR 0120 / issue #617)。commit の後と帰責の第2回の後に撃つ。Absent → 何も起草しない。 */
-  behaviorDraftClient?: BehaviorDraftClient;
+  /** 帰責の Board call(ADR 0115 / issue #574・#575)。undefined → commit は異議を `uncertain` で束ね(RCA は帰責以前のまま立つ)、第2回も撃たない。 */
+  attributionClient: AttributionClient | undefined;
+  /** Behavior candidate 起草の Board call(ADR 0120 / issue #617)。sweep が帰責の後に撃つ。undefined → 何も起草しない。 */
+  behaviorDraftClient: BehaviorDraftClient | undefined;
   /** 起草の scope が null の workspace で継ぐ盤面の既定(issue #617)。 */
-  workspace?: { name: string };
-  /** 容器の前提(ADR 0136 決定7)。不成立なら撃てなかった扱い。Absent → 前提を検査しない盤面。 */
-  containers?: Pick<ProcessContainers, "preflight">;
+  workspace: { name: string } | undefined;
+  /** 容器の前提(ADR 0136 決定7)。不成立なら撃てなかった扱い。undefined → 前提を検査しない盤面。 */
+  containers: Pick<ProcessContainers, "preflight"> | undefined;
 }
 
 const uncertain = (evidence: string): GatedJudgment => ({ cause: "uncertain", evidence, entries: null });
@@ -183,7 +184,7 @@ function refireDue(db: Db, key: RefireKey, now: Date): boolean {
  *  帰責の障害は commit を止めない。 */
 export async function attributeObjections(
   db: Db,
-  deps: AttributionCallDeps = {},
+  deps: AttributionCallDeps,
   sessionId: number,
   now: Date,
 ): Promise<Map<number, GatedJudgment>> {
@@ -245,7 +246,7 @@ const repairRegistered = (db: Db, objectedId: string, after: number) =>
 /** 異議群ごとの帰責の状態(ADR 0168 決定3 / ADR 0170 決定1)。第2回を待つ(`awaiting`)のは、帰責が初回の `uncertain` の
  *  異議群と未帰責の異議群 —— 後者の出所はその異議群で、当時の decision log は修理子の登録で切る。それ以外は確定
  *  (`confirmed`、同じ異議群では after_rca が有効)。前の異議群の状態は後の異議群があっても落とさない。 */
-// ponytail: poll の sweep と RCA の決着の扉のたびに全帰責と全異議を読む。帰責が数万に育ったら結果の不在を SQL 1本に寄せる
+// ponytail: poll の sweep のたびに全帰責と全異議を読む。帰責が数万に育ったら結果の不在を SQL 1本に寄せる
 function attributionStates(db: Db): Array<{ task_id: string } & ({ awaiting: SecondRoundSource } | { confirmed: Attribution })> {
   return [...objectionBundles(db).values()].flat().map(({ task_id, entry_id, objection_event_ids: ids, attribution }) => {
     if (!attribution) return { task_id, awaiting: { id: repairRegistered(db, task_id, ids.at(-1)!), entry_id, objection_event_ids: ids } };
@@ -255,24 +256,6 @@ function attributionStates(db: Db): Array<{ task_id: string } & ({ awaiting: Sec
 
 /** 第2回の撃ち直しと Retry / Dismiss の鍵になる異議群の名前(最初の異議 event の id、ADR 0170 決定4)。 */
 const bundleName = (source: SecondRoundSource) => source.objection_event_ids[0]!;
-
-/** 帰責の第2回(ADR 0115 決定2 / issue #575)の扉側の契機: `settled` が異議されたタスクの RCA 子で、
- *  それを最後にその RCA 子がすべて決着(完了 / 取り消し)したとき、第2回を待つ異議群(初回の `uncertain` と
- *  未帰責、ADR 0168 決定3 / ADR 0170 決定1)ごとに第2回を撃つ。後から同じタスクの統合 review が決着しても撃たない。
- *  取りこぼし(撃てなかった・失敗・再起動)は poll の sweep が結果の不在で拾い直す(ADR 0164 決定1)。 */
-export async function attributeAfterRca(
-  db: Db,
-  deps: AttributionCallDeps = {},
-  settled: Task,
-  now: Date,
-): Promise<void> {
-  if (settled.type !== "review" || settled.parent_id === null) return;
-  const objectedId = settled.parent_id;
-  const rca = rcaChildren(db, objectedId);
-  if (!rca.some((r) => r.id === settled.id) || !settledAll(rca)) return;
-  const pending = attributionStates(db).flatMap((s) => (s.task_id === objectedId && "awaiting" in s ? [s.awaiting] : []));
-  await Promise.all(pending.map((source) => attributeSecondRound(db, deps, objectedId, source, now)));
-}
 
 /** 帰責の第2回を1異議群ぶん撃つ: RCA の findings を証拠にした判断(`uncertain` も判断として)を
  *  その異議群を名指す新しい event(round = after_rca)として追記し、起草へ進む(ADR 0120 決定1(b)(c))。
@@ -315,21 +298,10 @@ const secondRoundInput = (db: Db, objectedId: string, attribution: SecondRoundSo
   rca_findings: rcaChildren(db, objectedId).flatMap((r) => decisionLogText(db, r.id)),
 });
 
-/** commit が書いた初回の帰責(`since` より後の event)ごとに起草を fire-and-forget する。境で切るのは、
- *  commit が束ねなかった entry の古い帰責から二度起草しないため。 */
-export function draftAfterCommit(db: Db, deps: AttributionCallDeps = {}, since: number, now: Date): void {
-  const rows = db.prepare("SELECT id FROM events WHERE kind = 'objection_attributed' AND id > ? ORDER BY id").all(since) as { id: number }[];
-  for (const { id } of rows) {
-    const payload = getEvent(db, id)!.payload;
-    if (payload.kind !== "objection_attributed") continue;
-    fireAndForget(draftBehaviorCandidate(db, deps, { id, ...payload }, now), payload.entry_id);
-  }
-}
-
 const fireAndForget = (fired: Promise<void>, entryId: number) =>
   void fired.catch((err) => console.error(`[attribution] entry ${entryId}: ${String(err)}`));
 
-/** 撃ち直しの対象(ADR 0164 決定1): 異議群ごとの帰責の状態のうち、あるべき結果が無いもの —— 第2回を待つ異議群
+/** sweep の対象(ADR 0164 決定1): 異議群ごとの帰責の状態のうち、あるべき結果が無いもの —— 第2回を待つ異議群
  *  (初回の `uncertain` と未帰責、ADR 0168 決定3)で RCA 子がすべて決着したものは第2回、確定した異議群は
  *  その帰責を出所とする candidate が無いもの の起草(後の異議群があっても外さない、ADR 0170 決定1)。
  *  sweep と打ち切りの一覧が同じ集合を読む。 */
@@ -347,10 +319,11 @@ function refireTargets(db: Db): RefireTarget[] {
   });
 }
 
-/** 撃ち直しの sweep(ADR 0164 決定1・4): pickup の poll が同期で呼び、撃ち直しの対象を fire-and-forget で撃つ。
+/** sweep(ADR 0164 決定1・4): 第2回の帰責と起草を撃つ唯一の契機(ADR 0169 決定1)。pickup の poll が同期で呼び、
+ *  対象を fire-and-forget で撃つ —— 1回目も撃ち直しもここから出る。
  *  起草の規則・回数・間隔・in-flight・撃てるか は撃つ側(`draftBehaviorCandidate` / `attributeSecondRound`)が見る。
  *  初回の帰責は撃ち直さない(ADR 0168 決定1)。 */
-export function refireAttributions(db: Db, deps: AttributionCallDeps = {}, now: Date): void {
+export function refireAttributions(db: Db, deps: AttributionCallDeps, now: Date): void {
   for (const target of refireTargets(db)) {
     if (target.refire === "second_round") {
       fireAndForget(attributeSecondRound(db, deps, target.task_id, target.source, now), target.source.entry_id);
@@ -363,6 +336,7 @@ export function refireAttributions(db: Db, deps: AttributionCallDeps = {}, now: 
 /** 撃ち直しを打ち切った起草と第2回の帰責(ADR 0164 決定5): 撃ち直しの対象のうち、直近の Retry 以降に撃って3回失敗し
  *  Dismiss が無いもの。行が閉じるのは撃ち直しの成功(対象から外れる)と Dismiss だけ。 */
 export function listHaltedRefires(db: Db) {
+  const current = currentAttributions(db);
   return refireTargets(db).flatMap((t) => {
     const key: RefireKey = { refire: t.refire, target: t.refire === "draft" ? t.attribution.id : bundleName(t.source) };
     const { n, last_id, dismissed } = refireFailures(db, key);
@@ -376,7 +350,7 @@ export function listHaltedRefires(db: Db) {
         entry: { id: entry_id, text: objectedEntryText(entry) },
         task: { id: t.task_id, title: getTask(db, t.task_id)!.title },
         // 最後の異議群が未帰責の entry は cause が空(ADR 0168 決定3 / ADR 0170 決定2)
-        cause: currentAttributions(db, [entry_id]).get(entry_id)?.cause ?? null,
+        cause: current.get(entry_id)?.cause ?? null,
         round,
         last_failure: { reason, at: failure.created_at },
       },
@@ -429,8 +403,8 @@ function memoryRead(db: Db, entry: DecisionLogEntry): AttributionInput["memory_r
  *  人間エントリ・起草 client の無い盤面・宛先の agent がいない起草(登録者が人間か盤面の
  *  `task_ambiguity` / `missing_information`、ADR 0164 決定2)・workspace の無い task は何もしない。宛先は cause から導出し
  *  (ADR 0115 決定4)、Board call の `addressee` は `preference` だけが読む。撃てなかったら何も書かず、
- *  撃って失敗したら `memory_draft_failed` を残す(ADR 0164 決定3)。帰責の transaction の後に走り、
- *  commit も settlement も止めない。 */
+ *  撃って失敗したら `memory_draft_failed` を残す(ADR 0164 決定3)。poll の sweep が fire-and-forget で撃つ
+ *  (第2回は帰責の追記の直後、ADR 0169)ので poll を止めない。 */
 export async function draftBehaviorCandidate(db: Db, deps: AttributionCallDeps, attribution: Attribution, now: Date): Promise<void> {
   const { cause, round, entry_id } = attribution;
   const drafts = round === "initial" ? cause === "preference" : LEARNING_CAUSES.includes(cause);

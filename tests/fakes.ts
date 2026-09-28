@@ -7,6 +7,7 @@ import type {
   AllocationReviewInput,
 } from "../src/allocation-review.js";
 import type {
+  AttributionCallDeps,
   AttributionClient,
   AttributionInput,
   AttributionJudgment,
@@ -72,6 +73,14 @@ export const unusedLanding: Landing = {
     return false;
   },
   async tick() {},
+};
+
+/** Board call を持たない盤面の束(帰責も起草も撃たない)。 */
+export const noAttributionCalls: AttributionCallDeps = {
+  attributionClient: undefined,
+  behaviorDraftClient: undefined,
+  workspace: undefined,
+  containers: undefined,
 };
 
 /** A reading well under the default threshold — the harness default so tests

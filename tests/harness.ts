@@ -632,6 +632,10 @@ export async function registerWork(
   return res.json;
 }
 
+/** 次の poll を起こす: 第2回と起草を撃つのは poll の sweep だけで(ADR 0169)、RCA 子の決着の扉は親が拾えるときしか poll を
+ *  促さない。人間の登録は常に促す(ADR 0119 決定2)—— 人間担当の行なので slot は取らない。 */
+export const nextPoll = (t: Tidepool) => registerWork(t, "a pickup trigger", undefined, undefined, "human");
+
 /** `registerWork` と同じ行を、人間の扉を通さずに置く。扉の登録は自身が pickup の契機なので
  *  (ADR 0119 決定2)、「todo のまま待っている行」を前提にするテストはこちらを使う。 */
 export function queueWork(

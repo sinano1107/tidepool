@@ -704,7 +704,7 @@ function decisionOutcomes(db: Db, markerRows: MarkerRow[]): Map<number, Decision
   for (const o of entryObjections(db, ids)) out.get(o.entry_id)!.objections.push(o.comment);
   for (const row of db
     .prepare(
-      `SELECT DISTINCT json_extract(payload, '$.entry_id') AS entry_id FROM events
+      `SELECT json_extract(payload, '$.entry_id') AS entry_id FROM events
         WHERE kind = 'log_entry_displayed' AND json_extract(payload, '$.entry_id') IN (${placeholders})`,
     )
     .all(...ids) as Array<{ entry_id: number }>) {
