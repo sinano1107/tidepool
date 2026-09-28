@@ -504,7 +504,7 @@ export const invalidationSchema = metaReviewInvalidationSchema.extend({ reason: 
 export const memoryMoveSchema = z.object({ workspace: humanEntryFields.workspace, path: z.string() });
 export const memoryBranchMoveSchema = z.object({ workspace: humanEntryFields.workspace, path: z.string(), to_workspace: humanEntryFields.workspace, to_path: z.string() });
 /** 人間の面の既にある後継への畳み(ADR 0162 決定1)。 */
-export const memoryFoldSchema = z.object({ replaces: z.array(z.number().int().positive()).min(1), successor_id: z.number().int().positive() });
+export const memoryFoldSchema = z.object({ replaces: z.array(z.number().int().positive()), successor_id: z.number().int().positive() });
 
 /** 一覧の絞り込み(HTTP の query と管理MCP が共有)。workspace は完全一致、board_wide は盤面全体だけ。 */
 export const memoryListFilterSchema = z.object({
