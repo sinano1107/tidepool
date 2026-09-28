@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { Cause } from "./cause.js";
 import type { Db } from "./db.js";
-import { appendEvent, type DecisionLogEntry, type EventPayload, getEvent, isDecisionLogEntry, latestAttributions, listEvents, taskDecisionLog } from "./events.js";
+import { appendEvent, type DecisionLogEntry, type EventPayload, getEvent, isDecisionLogEntry, latestAttributions, listEvents, listEventsOfKinds, taskDecisionLog } from "./events.js";
 import { type ExecutionSettingRow, retrospectiveBoardCallRow } from "./execution-setting.js";
 import { buildMemoryInjection, createBehaviorCandidate, listMemoryEntries, memoryScope, recordKnowledge, requireDecision } from "./memory.js";
 import { sessionSpawnOf, sessionWindow } from "./precedent.js";
@@ -312,10 +312,7 @@ const secondRoundInput = (db: Db, objectedId: string, attribution: SecondRoundSo
 /** commit が書いた初回の帰責(`since` より後の event)ごとに起草を fire-and-forget する。境で切るのは、
  *  commit が束ねなかった entry の古い帰責から二度起草しないため。 */
 export function draftAfterCommit(db: Db, deps: AttributionCallDeps = {}, since: number, now: Date): void {
-  const rows = db.prepare("SELECT id FROM events WHERE kind = 'objection_attributed' AND id > ? ORDER BY id").all(since) as { id: number }[];
-  for (const { id } of rows) {
-    const payload = getEvent(db, id)!.payload;
-    if (payload.kind !== "objection_attributed") continue;
+  for (const { id, payload } of listEventsOfKinds(db, ["objection_attributed"], { after: since })) {
     fireAndForget(draftBehaviorCandidate(db, deps, { id, ...payload }, now), payload.entry_id);
   }
 }

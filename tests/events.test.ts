@@ -1,5 +1,5 @@
 import { afterEach, expect, it } from "vitest";
-import { appendEvent, latestAttributions, listEventsOfKinds } from "../src/events.js";
+import { appendEvent, latestAttributions, latestEventOfTask, listEventsOfKinds } from "../src/events.js";
 import { api, bootTidepool, FIXTURE_TASK, HOUR, mcpClient, seedFixtureBoard, type Tidepool } from "./harness.js";
 
 let t: Tidepool;
@@ -71,6 +71,31 @@ it("kind で引く読み口は、指定した kind の event だけを盤面全�
     [8, "decision_logged"],
     [11, "worker_exited"],
   ]);
+});
+
+it("kind で引く読み口の id の範囲は、下限の id ちょうどを含まず上限の id ちょうどを含み、省略すれば全件(issue #1126)", () => {
+  const db = seedFixtureBoard();
+  const ids = (range?: { after?: number; upTo?: number }) => listEventsOfKinds(db, ["worker_exited", "decision_logged"], range).map((e) => e.id);
+  expect(ids({ after: 7 })).toEqual([8, 11]);
+  expect(ids({ upTo: 7 })).toEqual([6, 7]);
+  expect(ids({ after: 6, upTo: 8 })).toEqual([7, 8]);
+  expect(ids({})).toEqual([6, 7, 8, 11]);
+});
+
+it("タスク単位の最新1件の読み口は、同じタスク・同じ kind の後の方を返し、他タスクの event は返さず、無ければ undefined(issue #1126)", () => {
+  const db = seedFixtureBoard();
+  const other = "609d9475-0191-4a7f-b5bf-5b939695315a";
+  const later = appendEvent(db, {
+    taskId: other,
+    workerId: "tidepool",
+    origin: "worker",
+    payload: { kind: "decision_logged", line: "other task" },
+    at: new Date("2026-09-28T00:00:00.000Z"),
+  });
+  // FIXTURE_TASK の decision_logged は 6 / 7 / 8。他タスクの後の event(later)は返さない
+  expect(latestEventOfTask(db, FIXTURE_TASK, "decision_logged")?.id).toBe(8);
+  expect(latestEventOfTask(db, other, "decision_logged")?.id).toBe(later);
+  expect(latestEventOfTask(db, other, "worker_spawned")).toBeUndefined();
 });
 
 it("最新の帰責の読み口は、同じ entry に2件の帰責があるとき後の方を返す(spec #563 / issue #1073)", () => {

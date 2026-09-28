@@ -4,7 +4,7 @@ import { z } from "zod";
 import type { Cause } from "./cause.js";
 import { type Db, MEMORY_FTS_DDL, MEMORY_FTS_TOKENIZER, MEMORY_PREPROCESS_VERSION } from "./db.js";
 import { getDisplayLanguage } from "./display-language.js";
-import { appendEvent, type EventOrigin, type EventPayload, type EventRow, getEvent, isDecisionLogEntry, listEvents } from "./events.js";
+import { appendEvent, type EventOrigin, type EventPayload, type EventRow, getEvent, isDecisionLogEntry, listEvents, listEventsOfKinds } from "./events.js";
 import { metaReviewSubjectOf, paged, previousMetaReviewWatermark } from "./meta-review.js";
 import { entriesReadBefore, entriesSeenBefore, listEpisodes, sessionSpawnOf, sessionWindow } from "./precedent.js";
 import { BOARD_WORKER_ID, DomainError, getTask, HUMAN_WORKER_ID, type MemoryProposal, registerTask, settleQuestionAsObserved, type Task } from "./tasks.js";
@@ -1019,16 +1019,10 @@ function rowToEntry(row: EntryRow): MemoryEntry {
 }
 
 /** 店を変える memory 系 event の種別。watermark(snapshot 識別子)と再生が同じ列を読む。 */
-const STORE_EVENT_KINDS = "('memory_entry_created', 'memory_entry_approved', 'memory_entry_invalidated')";
+const STORE_EVENT_KINDS = ["memory_entry_created", "memory_entry_approved", "memory_entry_invalidated"] as const;
 
 /** 店を変える memory 系 events(id 順)。watermark の再生と rebuild が同じ列を読む。 */
-function storeEvents(db: Db, watermark = Number.MAX_SAFE_INTEGER) {
-  return (
-    db
-      .prepare(`SELECT id, payload FROM events WHERE kind IN ${STORE_EVENT_KINDS} AND id <= ? ORDER BY id`)
-      .all(watermark) as Array<{ id: number; payload: string }>
-  ).map(({ id, payload }) => ({ id, event: JSON.parse(payload) as Extract<EventPayload, { kind: `memory_entry_${string}` }> }));
-}
+const storeEvents = (db: Db, watermark?: number) => listEventsOfKinds(db, STORE_EVENT_KINDS, { upTo: watermark });
 
 /** approved かつ無効化されていないエントリ(id 順)。`watermark`(memory 系 event の id)を
  *  渡すと、その時点までの events を再生して当時の集合を返す —— 表は投影なので、指定が
@@ -1036,7 +1030,7 @@ function storeEvents(db: Db, watermark = Number.MAX_SAFE_INTEGER) {
 export function approvedMemoryEntries(db: Db, watermark?: number): MemoryEntry[] {
   if (watermark !== undefined) {
     const entries = new Map<number, MemoryEntry>();
-    for (const { id, event } of storeEvents(db, watermark)) {
+    for (const { id, payload: event } of storeEvents(db, watermark)) {
       if (event.kind === "memory_entry_created") {
         entries.set(id, { ...event.entry, id, source: sourceOf(event.entry, id), version: versionOf(event.entry.state, id, event.version) });
       } else if (event.kind === "memory_entry_approved") {
@@ -1079,11 +1073,8 @@ export function listMemoryEntries(
   const { scope, kind, state } = filter;
   // エントリの無効化は高々1度(invalidateMemoryEntry の門)なので entry_id で引ける。印は event が正本で列は持たない
   const invalidatedBy = new Map(
-    (db.prepare("SELECT worker_id, payload FROM events WHERE kind = 'memory_entry_invalidated'").all() as Array<{ worker_id: string; payload: string }>).map(
-      ({ worker_id, payload }) => {
-        const { entry_id, question_id, activity } = JSON.parse(payload) as Extract<EventPayload, { kind: "memory_entry_invalidated" }>;
-        return [entry_id, question_id ? { question_id } : activity ? { activity } : { worker: worker_id }] as const;
-      },
+    listEventsOfKinds(db, ["memory_entry_invalidated"]).map(({ worker_id, payload: { entry_id, question_id, activity } }) =>
+      [entry_id, question_id ? { question_id } : activity ? { activity } : { worker: worker_id }] as const,
     ),
   );
   const restored = restoredAs(db);
@@ -1150,8 +1141,8 @@ export type MemoryDropReason = "addressee" | "invalidated" | "page_limit";
 function memoryWatermark(db: Db): number {
   return (
     db
-      .prepare(`SELECT COALESCE(MAX(id), 0) AS id FROM events WHERE kind IN ${STORE_EVENT_KINDS}`)
-      .get() as { id: number }
+      .prepare(`SELECT COALESCE(MAX(id), 0) AS id FROM events WHERE kind IN (${STORE_EVENT_KINDS.map(() => "?").join(", ")})`)
+      .get(...STORE_EVENT_KINDS) as { id: number }
   ).id;
 }
 
@@ -1726,7 +1717,7 @@ export const WORKER_MEMORY_VERBS = ["record_knowledge", "define_memory_branch", 
 export function rebuildMemoryIndex(db: Db, workerId: string, origin: EventOrigin, at: Date): number {
   return db.transaction(() => {
     db.exec(`DELETE FROM memory_entries; DROP TABLE memory_fts; ${MEMORY_FTS_DDL};`);
-    for (const { id, event } of storeEvents(db)) {
+    for (const { id, payload: event } of storeEvents(db)) {
       if (event.kind === "memory_entry_created") insertEntry(db, id, event.entry, event.version);
       else if (event.kind === "memory_entry_approved") markApproved(db, event.entry_id, id);
       else markInvalidated(db, event.entry_id, event.reason, event.successor_id);
