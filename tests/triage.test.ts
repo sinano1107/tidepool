@@ -1,7 +1,19 @@
 import { afterEach, expect, it } from "vitest";
-import { appendEvent } from "../src/events.js";
-import { entryObjections, objectionsById, TRIAGE_TIMEOUT } from "../src/triage.js";
-import { api, bootTidepool, FIXTURE_TASK, HOUR, loggedEntry, mcpClient, queueWork, registerWork, seedFixtureBoard, type Tidepool } from "./harness.js";
+import { appendEvent, listEvents } from "../src/events.js";
+import { entryObjections, objectionsById, raiseObjection, recordDisplayedEntries, TRIAGE_TIMEOUT, TriageError } from "../src/triage.js";
+import {
+  api,
+  bootTidepool,
+  FIXTURE_SPAWNED_EVENT_ID,
+  FIXTURE_TASK,
+  HOUR,
+  loggedEntry,
+  mcpClient,
+  queueWork,
+  registerWork,
+  seedFixtureBoard,
+  type Tidepool,
+} from "./harness.js";
 
 let t: Tidepool;
 afterEach(() => t?.stop());
@@ -799,3 +811,30 @@ it("異議 event id 列に objection_raised でない id・存在しない id・
   expect(() => objectionsById(db, 6, [a, 9999])).toThrow("event 9999 is not an objection");
   expect(() => objectionsById(db, 6, [a, b])).toThrow(`objection ${b} is against entry 8, not 6`);
 });
+
+/** decision-log entry でない2種の id: 存在しない id と、human-facing でない
+ *  kind(worker_spawned)の id。 */
+const NOT_A_LOG_ENTRY: Array<[string, number]> = [
+  ["存在しない id", 9999],
+  ["human-facing でない kind の id", FIXTURE_SPAWNED_EVENT_ID],
+];
+
+const notALogEntry = (entryId: number) => new TriageError(`event ${entryId} is not a decision-log entry`);
+
+it.each(NOT_A_LOG_ENTRY)("raiseObjection は%sを decision-log entry でないとして拒否し、event を書かない", (_, entryId) => {
+  const db = seedFixtureBoard();
+  const before = listEvents(db, FIXTURE_TASK);
+  expect(() => raiseObjection(db, entryId, "comment", new Date())).toThrow(notALogEntry(entryId));
+  expect(listEvents(db, FIXTURE_TASK)).toEqual(before);
+});
+
+it.each(NOT_A_LOG_ENTRY)(
+  "recordDisplayedEntries は%sを decision-log entry でないとして拒否し、正しい id と混ざっても transaction ごと何も書かない",
+  (_, entryId) => {
+    const db = seedFixtureBoard();
+    const before = listEvents(db, FIXTURE_TASK);
+    expect(() => recordDisplayedEntries(db, [entryId], new Date())).toThrow(notALogEntry(entryId));
+    expect(() => recordDisplayedEntries(db, [6, entryId], new Date())).toThrow(notALogEntry(entryId));
+    expect(listEvents(db, FIXTURE_TASK)).toEqual(before);
+  },
+);
