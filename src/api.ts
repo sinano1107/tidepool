@@ -1939,7 +1939,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
         // the same await the draft endpoint does), then enters the one
         // transaction that bundles and registers with the judgments in hand
         const open = activeTriageSession(db);
-        const judgments = open && (await attributeObjections(db, attributionClient, open.id));
+        const judgments = open && (await attributeObjections(db, attributionClient, open.id, clock.now()));
         const since = lastEventId(db);
         result = commitTriage(db, clock.now(), parsed.data.scratchpad, judgments);
         // ADR 0120 決定1(b): 帰責の transaction の後に起草を fire-and-forget(応答を待たせない)

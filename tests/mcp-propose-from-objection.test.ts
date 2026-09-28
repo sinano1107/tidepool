@@ -25,7 +25,8 @@ const body = (result: any) => JSON.parse(result.content[0].text);
 
 interface Objected {
   title: string;
-  causes: Cause[];
+  /** Error = 初回の Board call が失敗して未帰責のまま束ねられる entry。 */
+  causes: (Cause | Error)[];
   /** 人間が担当して人間の扉で完了した task(完了エントリ1つに cause[0])。 */
   human?: true;
   /** agent が登録した task(decompose と同じ登録者の形)。省略 = 人間が登録。 */
@@ -49,7 +50,7 @@ async function objectedTasks(attributionClient: FakeAttributionClient, specs: Ob
       await completeViaMcp(t, task.id);
     }
     await completeIntegrationReviews(t, task.id);
-    spec.causes.forEach((cause, i) => attributionClient.scriptJudgment(entries[i].id, { cause, evidence: `scripted ${cause}` }));
+    spec.causes.forEach((cause, i) => attributionClient.scriptJudgment(entries[i].id, cause instanceof Error ? cause : { cause, evidence: `scripted ${cause}` }));
     made.push({ task, entries });
   }
   await api(t.baseUrl, "POST", "/api/triage/start");
@@ -117,14 +118,14 @@ it("capability の異議エントリに RCA が呼ぶと、宛先 = エントリ
   ]);
 });
 
-it("学習に向かない cause・人間登録の task_ambiguity / missing_information の Behavior・as と based_on_decision の過不足・decision でない based_on_decision・親の異議エントリでない id は domain error で拒否され、work task から呼んでも拒否され、店には何も載らない", async () => {
+it("学習に向かない cause・初回の帰責が失敗した未帰責・人間登録の task_ambiguity / missing_information の Behavior・as と based_on_decision の過不足・decision でない based_on_decision・親の異議エントリでない id は domain error で拒否され、work task から呼んでも拒否され、店には何も載らない", async () => {
   const attributionClient = new FakeAttributionClient();
   t = await bootTidepool({ attributionClient });
   const [mixed, other]: any[] = await objectedTasks(attributionClient, [
-    { title: "mixed", causes: ["capability", "uncertain", "requirement_change", "environment", "task_ambiguity", "missing_information"] },
+    { title: "mixed", causes: ["capability", "uncertain", "requirement_change", "environment", "task_ambiguity", "missing_information", new Error("claude CLI timed out")] },
     { title: "other", causes: ["capability"] },
   ]);
-  const [capability, uncertain, requirementChange, environment, taskAmbiguity, missingInformation] = mixed.entries.map((e: any) => e.id);
+  const [capability, uncertain, requirementChange, environment, taskAmbiguity, missingInformation, unattributed] = mixed.entries.map((e: any) => e.id);
   const completion = (await api(t.baseUrl, "GET", `/api/tasks/${mixed.task.id}/events`)).json.find((e: any) => e.kind === "task_completed").id;
   const repair = mixed.kids.find((x: any) => x.title === "repair: mixed");
   await runNow(repair.id);
@@ -137,6 +138,7 @@ it("学習に向かない cause・人間登録の task_ambiguity / missing_infor
   const decision = (await loggedEntry(t, self.id, "the fixture rule was never written down")).id;
   for (const [args, error] of [
     [{ entry_id: uncertain }, "the entry's cause is uncertain: nothing to learn from it"],
+    [{ entry_id: unattributed }, "the entry's cause is uncertain: nothing to learn from it"],
     [{ entry_id: requirementChange }, "the entry's cause is requirement_change: nothing to learn from it"],
     [{ entry_id: environment }, "the entry's cause is environment: nothing to learn from it"],
     [{ entry_id: taskAmbiguity }, "the task was not registered by an agent: there is no agent to address a behavior to"],

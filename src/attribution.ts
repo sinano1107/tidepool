@@ -65,8 +65,6 @@ export interface BoardCallDeps {
   containers?: Pick<ProcessContainers, "preflight">;
 }
 
-const uncertain = (evidence: string): AttributionJudgment => ({ cause: "uncertain", evidence });
-
 /** Board call を撃てるか。Provider は盤面設定の固定値(ADR 0111 決定4 と同じ枠)、ティアは
  *  振り返り Board call 3用途が共有する盤面設定(ADR 0111 追記4、issue #914)で、
  *  client 未設定・表の行の欠落・窓の閉鎖・容器の前提の不成立は「撃てなかった」として理由を返す。 */
@@ -114,31 +112,35 @@ async function singleFlight(db: Db, key: string, fire: () => Promise<void>): Pro
 /** 失敗 event の kind ごとの、撃ち直しの対象を指す欄(起草は帰責、第2回は entry)。 */
 const FAILURE_TARGET = { memory_draft_failed: "attribution_event_id", objection_attribution_failed: "entry_id" } as const;
 
-/** 撃ってよいか(ADR 0164 決定4・5): その対象の失敗 event が3件未満で、最後の失敗から1時間以上経っている。 */
+/** 撃ってよいか(ADR 0164 決定4・5): その対象の失敗 event が3件未満で、最後の失敗から1時間以上経っている。
+ *  帰責の初回の失敗は数えない —— 撃ち直すのは第2回だけ(ADR 0168 決定1)。 */
 function refireDue(db: Db, kind: keyof typeof FAILURE_TARGET, target: number, now: Date): boolean {
   const { n, last } = db
-    .prepare(`SELECT COUNT(*) AS n, MAX(created_at) AS last FROM events WHERE kind = ? AND json_extract(payload, ?) = ?`)
+    .prepare(
+      `SELECT COUNT(*) AS n, MAX(created_at) AS last FROM events WHERE kind = ? AND json_extract(payload, ?) = ?
+          AND NOT (kind = 'objection_attribution_failed' AND json_extract(payload, '$.round') = 'initial')`,
+    )
     .get(kind, `$.${FAILURE_TARGET[kind]}`, target) as { n: number; last: string | null };
   return n < MAX_FIRED_FAILURES && (last === null || now.getTime() - Date.parse(last) >= REFIRE_INTERVAL_MS);
 }
 
 /** commit の前半(spec #563「commit の流れ」): open session の異議されたエントリを
  *  1度だけ集め、Board call を並列に問う。transaction の外で待ち、結果の map を持って
- *  従来の transaction に入る。撃てない・失敗した entry は `uncertain` + 理由の
- *  evidence に倒れ、ここからは投げない —— 帰責の障害は commit を止めない(決定2)。 */
+ *  従来の transaction に入る。撃てなかった・撃って失敗した entry は map に載らず(判断ではない)、
+ *  失敗だけが `objection_attribution_failed`(round = initial)に残る。初回は撃ち直さない ——
+ *  その entry は未帰責のまま RCA に倒れ、第2回が拾う(ADR 0168 決定1・2)。ここからは投げない ——
+ *  帰責の障害は commit を止めない。 */
 export async function attributeObjections(
   db: Db,
   client: AttributionClient | undefined,
   sessionId: number,
+  now: Date,
 ): Promise<Map<number, AttributionJudgment>> {
   const objected = listObjectedEntries(db, sessionId);
   const judgments = new Map<number, AttributionJudgment>();
   if (objected.length === 0) return judgments;
   const call = boardCallSetting(db, client);
-  if ("unavailable" in call) {
-    for (const o of objected) judgments.set(o.entry.id, uncertain(call.unavailable));
-    return judgments;
-  }
+  if ("unavailable" in call) return judgments;
   await Promise.all(
     objected.map(async (o) => {
       const input: AttributionInput = {
@@ -150,7 +152,8 @@ export async function attributeObjections(
       try {
         judgments.set(o.entry.id, await call.client.judge(input, call.setting));
       } catch (err) {
-        judgments.set(o.entry.id, uncertain(`Board call failed: ${message(err)}`));
+        const payload = { kind: "objection_attribution_failed" as const, entry_id: o.entry.id, round: "initial" as const, reason: `Board call failed: ${message(err)}` };
+        appendEvent(db, { taskId: o.entry.task_id, workerId: BOARD_WORKER_ID, origin: "board", payload, at: now });
       }
     }),
   );
@@ -166,9 +169,57 @@ const rcaChildren = (db: Db, objectedId: string) =>
 
 const settledAll = (tasks: Task[]) => tasks.every((r) => r.status === "done" || r.status === "cancelled");
 
+/** 第2回の出所: 入力を組む異議群と、「当時の decision log」の切れ目になる event の `id`。 */
+type SecondRoundSource = Pick<Attribution, "id" | "entry_id" | "objection_event_ids">;
+
+/** 異議群を束ねた commit が立てた修理子の `task_registered`(その異議群の最後より後で最初のもの)。
+ *  初回の帰責 event が書かれるはずだった位置 —— 同じ transaction の中にある。 */
+// ponytail: 修理子の目印も題の接頭辞だけ(rcaChildren と同じ)
+const repairRegistered = (db: Db, objectedId: string, after: number) =>
+  (
+    db
+      .prepare(
+        `SELECT MIN(e.id) AS id FROM events e JOIN tasks t ON t.id = e.task_id
+          WHERE e.kind = 'task_registered' AND t.parent_id = ? AND t.type = 'work' AND t.title LIKE 'repair: %' AND e.id > ?`,
+      )
+      .get(objectedId, after) as { id: number }
+  ).id;
+
+/** 束ね済みの異議を持つ entry ごとの帰責の状態(ADR 0168 決定3)。第2回を待つ(`awaiting`)のは、最新の帰責が
+ *  初回の `uncertain` の entry と、最後に束ねられた異議群(session が閉じた `objection_raised`)より後に帰責が
+ *  無い entry —— 後者の出所はその異議群で、当時の decision log は修理子の登録で切る。open session の異議は
+ *  まだ束ねられていないので見ない。それ以外は最新の帰責(`latest`、同じ entry への追記は最新が有効 —— spec #563)。 */
+// ponytail: 毎 poll で全帰責と全異議を読む。帰責が数万に育ったら結果の不在を SQL 1本に寄せる
+function attributionStates(db: Db): Array<{ task_id: string } & ({ awaiting: SecondRoundSource } | { latest: Attribution })> {
+  const latest = new Map<number, Attribution>();
+  for (const row of db.prepare("SELECT id, payload FROM events WHERE kind = 'objection_attributed' ORDER BY id").all() as Array<{ id: number; payload: string }>) {
+    const payload = JSON.parse(row.payload) as Attribution;
+    latest.set(payload.entry_id, { ...payload, id: row.id });
+  }
+  const bundled = new Map<number, { task_id: string; session_id: number; ids: number[] }>();
+  for (const o of db
+    .prepare(
+      `SELECT o.id, o.task_id, json_extract(o.payload, '$.entry_id') AS entry_id, s.id AS session_id
+         FROM events o JOIN triage_sessions s ON s.id = json_extract(o.payload, '$.session_id')
+        WHERE o.kind = 'objection_raised' AND s.committed_at IS NOT NULL ORDER BY o.id`,
+    )
+    .all() as Array<{ id: number; task_id: string; entry_id: number; session_id: number }>) {
+    const last = bundled.get(o.entry_id);
+    if (last?.session_id === o.session_id) last.ids.push(o.id);
+    else bundled.set(o.entry_id, { task_id: o.task_id, session_id: o.session_id, ids: [o.id] });
+  }
+  return [...bundled].map(([entryId, { task_id, ids }]) => {
+    const attribution = latest.get(entryId);
+    if (!attribution || attribution.id < ids.at(-1)!) {
+      return { task_id, awaiting: { id: repairRegistered(db, task_id, ids.at(-1)!), entry_id: entryId, objection_event_ids: ids } };
+    }
+    return attribution.round === "initial" && attribution.cause === "uncertain" ? { task_id, awaiting: attribution } : { task_id, latest: attribution };
+  });
+}
+
 /** 帰責の第2回(ADR 0115 決定2 / issue #575)の扉側の契機: `settled` が異議されたタスクの RCA 子で、
- *  それを最後にその RCA 子がすべて決着(完了 / 取り消し)したとき、最新の帰責が初回の `uncertain` の
- *  entry ごとに第2回を撃つ。後から同じタスクの統合 review が決着しても撃たない。
+ *  それを最後にその RCA 子がすべて決着(完了 / 取り消し)したとき、第2回を待つ entry(初回の `uncertain` と
+ *  束ね済みの未帰責、ADR 0168 決定3)ごとに第2回を撃つ。後から同じタスクの統合 review が決着しても撃たない。
  *  取りこぼし(撃てなかった・失敗・再起動)は poll の sweep が結果の不在で拾い直す(ADR 0164 決定1)。 */
 export async function attributeAfterRca(
   db: Db,
@@ -180,19 +231,14 @@ export async function attributeAfterRca(
   const objectedId = settled.parent_id;
   const rca = rcaChildren(db, objectedId);
   if (!rca.some((r) => r.id === settled.id) || !settledAll(rca)) return;
-  // 最新の帰責が entry ごとに有効(spec #563): 初回の uncertain だけが第2回の対象
-  const latest = new Map<number, Attribution>();
-  for (const e of listEvents(db, objectedId)) {
-    if (e.payload.kind === "objection_attributed") latest.set(e.payload.entry_id, { id: e.id, ...e.payload });
-  }
-  const pending = [...latest.values()].filter((e) => e.cause === "uncertain" && e.round === "initial");
-  await Promise.all(pending.map((initial) => attributeSecondRound(db, deps, objectedId, initial, now)));
+  const pending = attributionStates(db).flatMap((s) => (s.task_id === objectedId && "awaiting" in s ? [s.awaiting] : []));
+  await Promise.all(pending.map((source) => attributeSecondRound(db, deps, objectedId, source, now)));
 }
 
 /** 帰責の第2回を1 entry ぶん撃つ: RCA の findings を証拠にした判断(`uncertain` も判断として)を
  *  同じ entry への新しい event(round = after_rca)として追記し、起草へ進む(ADR 0120 決定1(b)(c))。
  *  撃てなかったら何も書かず、撃って失敗したら `objection_attribution_failed` だけを残す(ADR 0164 決定3・6)。 */
-async function attributeSecondRound(db: Db, deps: BoardCallDeps, objectedId: string, initial: Attribution, now: Date): Promise<void> {
+async function attributeSecondRound(db: Db, deps: BoardCallDeps, objectedId: string, initial: SecondRoundSource, now: Date): Promise<void> {
   await singleFlight(db, `after_rca:${initial.entry_id}`, async () => {
     if (!refireDue(db, "objection_attribution_failed", initial.entry_id, now)) return;
     const call = boardCallSetting(db, deps.attributionClient, deps.containers);
@@ -202,7 +248,7 @@ async function attributeSecondRound(db: Db, deps: BoardCallDeps, objectedId: str
     try {
       judgment = await call.client.judge(input, call.setting);
     } catch (err) {
-      const payload = { kind: "objection_attribution_failed" as const, entry_id: initial.entry_id, reason: `Board call failed: ${message(err)}` };
+      const payload = { kind: "objection_attribution_failed" as const, entry_id: initial.entry_id, round: "after_rca" as const, reason: `Board call failed: ${message(err)}` };
       appendEvent(db, { taskId: objectedId, workerId: BOARD_WORKER_ID, origin: "board", payload, at: now });
       return;
     }
@@ -219,7 +265,7 @@ async function attributeSecondRound(db: Db, deps: BoardCallDeps, objectedId: str
 }
 
 /** 第2回の入力: 帰責の入力(当時の decision log = その注釈より前の entry)に RCA 子の decision log と完了 result を足す。 */
-const secondRoundInput = (db: Db, objectedId: string, attribution: Attribution): AttributionInput => ({
+const secondRoundInput = (db: Db, objectedId: string, attribution: SecondRoundSource): AttributionInput => ({
   ...objectionInput(db, attribution),
   rca_findings: rcaChildren(db, objectedId).flatMap((r) => decisionLogText(db, r.id)),
 });
@@ -238,28 +284,23 @@ export function draftAfterCommit(db: Db, deps: BoardCallDeps, since: number, now
 const fireAndForget = (fired: Promise<void>, entryId: number) =>
   void fired.catch((err) => console.error(`[attribution] entry ${entryId}: ${String(err)}`));
 
-/** 撃ち直しの sweep(ADR 0164 決定1・4): pickup の poll が同期で呼ぶ。entry ごとの最新の帰責のうち、
- *  あるべき結果が無いものを fire-and-forget で撃ち直す —— 初回の `uncertain` で RCA 子がすべて決着したものは
- *  第2回、それ以外はそれを出所とする candidate が無いもの の起草。起草の規則・回数・間隔・in-flight・撃てるか は
- *  撃つ側(`draftBehaviorCandidate` / `attributeSecondRound`)が見る。 */
+/** 撃ち直しの sweep(ADR 0164 決定1・4): pickup の poll が同期で呼ぶ。entry ごとの帰責の状態のうち、
+ *  あるべき結果が無いものを fire-and-forget で撃ち直す —— 第2回を待つ entry(初回の `uncertain` と束ね済みの
+ *  未帰責、ADR 0168 決定3)で RCA 子がすべて決着したものは第2回、それ以外は最新の帰責を出所とする candidate が
+ *  無いもの の起草。起草の規則・回数・間隔・in-flight・撃てるか は撃つ側(`draftBehaviorCandidate` /
+ *  `attributeSecondRound`)が見る。初回の帰責は撃ち直さない(ADR 0168 決定1)。 */
 export function refireAttributions(db: Db, deps: BoardCallDeps, now: Date): void {
-  // ponytail: 毎 poll で全帰責と全 candidate の出所を読む。帰責が数万に育ったら結果の不在を SQL 1本に寄せる
-  const latest = new Map<number, Attribution & { task_id: string }>();
-  for (const row of db.prepare("SELECT id, task_id, payload FROM events WHERE kind = 'objection_attributed' ORDER BY id").all() as Array<{ id: number; task_id: string; payload: string }>) {
-    const payload = JSON.parse(row.payload) as Attribution;
-    latest.set(payload.entry_id, { ...payload, id: row.id, task_id: row.task_id });
-  }
   const drafted = new Set(
     (db.prepare("SELECT CAST(source_ref AS INTEGER) AS id FROM memory_entries WHERE source_kind = 'event'").all() as { id: number }[]).map((r) => r.id),
   );
-  for (const attribution of latest.values()) {
-    if (attribution.round === "initial" && attribution.cause === "uncertain") {
-      const rca = rcaChildren(db, attribution.task_id);
+  for (const state of attributionStates(db)) {
+    if ("awaiting" in state) {
+      const rca = rcaChildren(db, state.task_id);
       if (rca.length > 0 && settledAll(rca)) {
-        fireAndForget(attributeSecondRound(db, deps, attribution.task_id, attribution, now), attribution.entry_id);
+        fireAndForget(attributeSecondRound(db, deps, state.task_id, state.awaiting, now), state.awaiting.entry_id);
       }
-    } else if (!drafted.has(attribution.id)) {
-      fireAndForget(draftBehaviorCandidate(db, deps, attribution, now), attribution.entry_id);
+    } else if (!drafted.has(state.latest.id)) {
+      fireAndForget(draftBehaviorCandidate(db, deps, state.latest, now), state.latest.entry_id);
     }
   }
 }

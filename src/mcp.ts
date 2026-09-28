@@ -61,6 +61,7 @@ import {
   taskHistory,
 } from "./tasks.js";
 import { markTeardown, runTeardown, type TeardownDeps, teardownStep } from "./teardown.js";
+import { entryObjections } from "./triage.js";
 import {
   buildWorkspaceResolver,
   completionTreeGateApplies,
@@ -735,16 +736,19 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
           throw new DomainError(`entry ${entry_id} is not a decision-log entry of your parent task`);
         }
         const attribution = latestAttribution(deps.db, { id: entry_id, task_id: task.parent_id });
-        if (!attribution) throw new DomainError(`entry ${entry_id} carries no attributed objection`);
+        if (!attribution && entryObjections(deps.db, [entry_id]).length === 0) {
+          throw new DomainError(`entry ${entry_id} carries no attributed objection`);
+        }
         if (isHumanEntry(entry)) throw new DomainError(`entry ${entry_id} was written by a human`);
-        const target = learningTarget(attribution.cause, entry.worker_id, getRegistrant(deps.db, entry.task_id), as);
+        // 異議済みで未帰責の entry は uncertain と同じに読む(ADR 0168 決定3)—— learningTarget が拒否する
+        const target = learningTarget(attribution?.cause ?? "uncertain", entry.worker_id, getRegistrant(deps.db, entry.task_id), as);
         if ((target.kind === "knowledge") !== (based_on_decision !== undefined)) {
           throw new DomainError("based_on_decision is required for a knowledge entry and only for it");
         }
         const input = {
           ...fields,
           scope: memoryScope(deps, getTask(deps.db, task.parent_id)!),
-          source: { event_id: based_on_decision === undefined ? attribution.id : requireDecision(deps.db, based_on_decision) },
+          source: { event_id: based_on_decision === undefined ? attribution!.id : requireDecision(deps.db, based_on_decision) },
           author: { activity: "rca" as const, name: attributedWorkerId(deps, task) },
         };
         return target.kind === "knowledge"
