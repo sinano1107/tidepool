@@ -993,9 +993,7 @@ type InvalidatedBy = { question_id: string } | { activity: MemoryEntryFields["au
 export function listMemoryEntries(
   db: Db,
   filter: { scope?: string | null; kind?: MemoryEntryFields["kind"]; state?: MemoryEntryFields["state"] | "invalidated" },
-): Array<
-  MemoryEntry & { invalidation_reason: InvalidationReason | null; successor_id: number | null; invalidated_by: InvalidatedBy | null; restored_as: number | null; cause: Cause | null }
-> {
+): Array<MemoryEntry & { invalidation_reason: InvalidationReason | null; successor_id: number | null; invalidated_by: InvalidatedBy | null; restored_as: number | null; cause: Cause | null }> {
   const { scope, kind, state } = filter;
   // エントリの無効化は高々1度(invalidateMemoryEntry の門)なので entry_id で引ける。印は event が正本で列は持たない
   const invalidatedBy = new Map(
