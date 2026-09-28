@@ -978,9 +978,10 @@ function registerMemoryMetaReviewVerbs(server: McpServer, deps: McpDeps, run: Me
     {
       description:
         "Draft or revise a branch definition in the given scope: one line declaring what is filed under the path. " +
-        "A branch has one definition per scope; revise it with supersedes, which may point at a definition in another scope or at another path. " +
+        "A branch has one definition per scope; revise it with supersedes, which may point at a definition in another scope or at another path, " +
+        "or list several definitions to consolidate into this one. " +
         BOARD_WRITE_LANGUAGE_RULE,
-      inputSchema: { scope, path: z.string(), definition: z.string(), supersedes: z.number().int().optional() },
+      inputSchema: { scope, path: z.string(), definition: z.string(), supersedes: z.array(z.number().int()).min(1).optional() },
     },
     async (input) =>
       run((reader, now) =>
@@ -990,7 +991,7 @@ function registerMemoryMetaReviewVerbs(server: McpServer, deps: McpDeps, run: Me
             scope: registeredScope(deps, input.scope),
             path: input.path,
             text: input.definition,
-            supersedes: input.supersedes === undefined ? undefined : [input.supersedes],
+            supersedes: input.supersedes,
             author: author(reader),
           },
           "worker",
