@@ -118,7 +118,7 @@ it("翻訳 client が無くても Knowledge の書き込みは原文つき・書
   ]);
 });
 
-it("POST /api/settings/memory/definitions は1行の定義を書き、supersedes で同じ枝を書き直す(issue #593)", async () => {
+it("POST /api/settings/memory/definitions は1行の定義を書き、supersedes の list で同じ枝を書き直す(issue #593 / ADR 0162 決定1)", async () => {
   t = await bootTidepool();
   const first = await api(t.baseUrl, "POST", "/api/settings/memory/definitions", { workspace: "tidepool", path: "build", text: "Builds." });
   expect((await api(t.baseUrl, "POST", "/api/settings/memory/definitions", { workspace: "tidepool", path: "build", text: "One.\nTwo." })).status).toBe(400);
@@ -126,7 +126,7 @@ it("POST /api/settings/memory/definitions は1行の定義を書き、supersedes
     workspace: "tidepool",
     path: "build",
     text: "Builds and tests.",
-    supersedes: first.json.entry_id,
+    supersedes: [first.json.entry_id],
   });
   expect(revised.status).toBe(200);
   expect((await api(t.baseUrl, "GET", "/api/settings/memory/entries?state=approved")).json.entries).toMatchObject([
@@ -134,21 +134,36 @@ it("POST /api/settings/memory/definitions は1行の定義を書き、supersedes
   ]);
 });
 
-it("POST /api/settings/memory/entries/:id/invalidate は理由コードと後継 id で無効化し、不正と path_moved(移動の口が持つ)は 400(issue #593 / ADR 0161 決定4)", async () => {
+it("POST /api/settings/memory/entries/:id/invalidate は後継なしの理由コードで無効化し、superseded・path_moved(畳みと移動の口が持つ)・後継 id・不正な理由は 400(issue #593 / ADR 0161 決定4)", async () => {
   t = await bootTidepool();
   const old = agentKnowledge(t, "Old");
   const successor = agentKnowledge(t, "New");
-  expect((await api(t.baseUrl, "POST", `/api/settings/memory/entries/${old}/invalidate`, { reason: "superseded" })).status).toBe(400);
-  expect((await api(t.baseUrl, "POST", `/api/settings/memory/entries/${old}/invalidate`, { reason: "path_moved", successor_id: successor })).status).toBe(400);
-  expect((await api(t.baseUrl, "POST", `/api/settings/memory/entries/${old}/invalidate`, { reason: "wrong" })).status).toBe(400);
-  const invalidated = await api(t.baseUrl, "POST", `/api/settings/memory/entries/${old}/invalidate`, { reason: "superseded", successor_id: successor });
-  expect(invalidated.status).toBe(200);
+  const invalidate = async (body: Record<string, unknown>) => (await api(t.baseUrl, "POST", `/api/settings/memory/entries/${old}/invalidate`, body)).status;
+  for (const body of [{ reason: "superseded", successor_id: successor }, { reason: "path_moved", successor_id: successor }, { reason: "capability", successor_id: successor }, { reason: "wrong" }]) {
+    expect(await invalidate(body)).toBe(400);
+  }
+  expect(await invalidate({ reason: "capability" })).toBe(200);
   expect((await api(t.baseUrl, "GET", "/api/settings/memory/entries?state=invalidated")).json.entries).toMatchObject([
-    { id: old, invalidation_reason: "superseded", successor_id: successor },
+    { id: old, invalidation_reason: "capability", successor_id: null },
   ]);
 });
 
-it("管理MCP で Knowledge を書き、枝を定義し、一覧で読み、無効化し(path_moved は断る)、rebuild できる —— approve の verb は無い(issue #593)", async () => {
+it("POST /api/settings/memory/fold は replaces を既にある後継へ畳む domain に渡して無効化の event id を返し、種別の線を跨ぐ畳みは 400(ADR 0162 決定1)", async () => {
+  t = await bootTidepool();
+  const [a, b, kept] = [agentKnowledge(t, "A"), agentKnowledge(t, "B"), agentKnowledge(t, "Kept")];
+  const branch = await api(t.baseUrl, "POST", "/api/settings/memory/definitions", { workspace: "tidepool", path: "build", text: "Builds." });
+
+  expect((await api(t.baseUrl, "POST", "/api/settings/memory/fold", { replaces: [a], successor_id: branch.json.entry_id })).status).toBe(400);
+  const folded = await api(t.baseUrl, "POST", "/api/settings/memory/fold", { replaces: [a, b], successor_id: kept });
+
+  expect(folded).toMatchObject({ status: 200, json: { entry_id: kept, event_ids: [expect.any(Number), expect.any(Number)] } });
+  expect((await api(t.baseUrl, "GET", "/api/settings/memory/entries?state=invalidated")).json.entries).toMatchObject([
+    { id: a, invalidation_reason: "superseded", successor_id: kept },
+    { id: b, invalidation_reason: "superseded", successor_id: kept },
+  ]);
+});
+
+it("管理MCP で Knowledge を書き(supersedes の list は domain に渡る)、枝を定義し、一覧で読み、既にある後継へ畳み、無効化し(superseded・path_moved・後継 id は断る)、rebuild できる —— approve の verb は無い(issue #593 / ADR 0162 決定1)", async () => {
   t = await bootTidepool();
   const client = await managementMcpClient(t.baseUrl);
   const call = toolCaller(client);
@@ -162,19 +177,39 @@ it("管理MCP で Knowledge を書き、枝を定義し、一覧で読み、無�
       original_text: "スイートは Node 22 で走らせる",
     });
     expect((await call("record_knowledge", { workspace: null, path: "a", title: "t", text: "x", original_text: "原文の text だけ" })).isError).toBe(true);
+    const draft = await call("record_knowledge", { workspace: "tidepool", path: "build/tests", title: "Node 22", text: "Node 22." });
+    const revised = await call("record_knowledge", { workspace: "tidepool", path: "build/tests", title: "Node 22 only", text: "Node 22 only.", supersedes: [draft.json.entry_id] });
+    expect((await call("record_knowledge", { workspace: null, path: "a", title: "t", text: "x", supersedes: [draft.json.entry_id] })).isError).toBe(true);
     const branch = await call("define_memory_branch", { workspace: null, path: "build", text: "How things are built." });
     expect((await call("define_memory_branch", { workspace: null, path: "build", text: "Again." })).isError).toBe(true);
 
+    expect(await call("fold_memory_entries", { replaces: [revised.json.entry_id], successor_id: knowledge.json.entry_id })).toMatchObject({
+      isError: false,
+      json: { entry_id: knowledge.json.entry_id, event_ids: [expect.any(Number)] },
+    });
+    expect((await call("fold_memory_entries", { replaces: [knowledge.json.entry_id], successor_id: branch.json.entry_id })).isError).toBe(true);
     expect((await call("list_memory_entries", { kind: "knowledge" })).json).toMatchObject([
       {
         id: knowledge.json.entry_id,
         original: { title: "Node 22 を使う", text: "スイートは Node 22 で走らせる", language: "Japanese" },
         author: { activity: "human", name: "human" },
       },
+      { id: draft.json.entry_id, invalidation_reason: "superseded", successor_id: revised.json.entry_id },
+      { id: revised.json.entry_id, invalidation_reason: "superseded", successor_id: knowledge.json.entry_id },
     ]);
-    expect((await call("invalidate_memory_entry", { entry_id: branch.json.entry_id, reason: "path_moved", successor_id: knowledge.json.entry_id })).isError).toBe(true);
+    for (const args of [
+      { reason: "path_moved", successor_id: knowledge.json.entry_id },
+      { reason: "superseded", successor_id: knowledge.json.entry_id },
+      { reason: "capability", successor_id: knowledge.json.entry_id },
+    ]) {
+      expect((await call("invalidate_memory_entry", { entry_id: branch.json.entry_id, ...args })).isError).toBe(true);
+    }
     expect((await call("invalidate_memory_entry", { entry_id: branch.json.entry_id, reason: "requirement_change" })).isError).toBe(false);
-    expect((await call("list_memory_entries", {})).json).toMatchObject([{ id: knowledge.json.entry_id }, { id: branch.json.entry_id, invalidation_reason: "requirement_change" }]);
+    expect((await call("list_memory_entries", { state: "invalidated" })).json.map((e: { id: number }) => e.id)).toEqual([
+      draft.json.entry_id,
+      revised.json.entry_id,
+      branch.json.entry_id,
+    ]);
     expect((await call("list_memory_entries", { board_wide: true, state: "invalidated" })).json.map((e: { id: number }) => e.id)).toEqual([
       branch.json.entry_id,
     ]);
@@ -188,27 +223,27 @@ it("管理MCP で Knowledge を書き、枝を定義し、一覧で読み、無�
   }
 });
 
-it("POST /api/settings/memory/behaviors と管理MCP の record_behavior は Behavior を書いて supersedes を domain に渡し、domain error は 400 / tool error(ADR 0152)", async () => {
+it("POST /api/settings/memory/behaviors と管理MCP の record_behavior は Behavior を書いて supersedes の list を domain に渡し、domain error は 400 / tool error(ADR 0152 / ADR 0162 決定1)", async () => {
   t = await bootTidepool();
   const behavior = { workspace: "tidepool", path: "habits/commits", title: "Split migrations", text: "Commit schema changes on their own.", addressee: "deckhand" };
   const written = await api(t.baseUrl, "POST", "/api/settings/memory/behaviors", behavior);
   expect(written.status).toBe(200);
-  expect((await api(t.baseUrl, "POST", "/api/settings/memory/behaviors", { ...behavior, supersedes: 999 })).status).toBe(400);
+  expect((await api(t.baseUrl, "POST", "/api/settings/memory/behaviors", { ...behavior, supersedes: [999] })).status).toBe(400);
   expect((await api(t.baseUrl, "POST", "/api/settings/memory/behaviors", { ...behavior, addressee: undefined })).status).toBe(400);
 
   const client = await managementMcpClient(t.baseUrl);
   try {
-    const edited = (await client.callTool({ name: "record_behavior", arguments: { ...behavior, addressee: null, supersedes: written.json.entry_id } })) as any;
+    const edited = (await client.callTool({ name: "record_behavior", arguments: { ...behavior, addressee: null, supersedes: [written.json.entry_id] } })) as any;
     expect(edited.isError).toBeFalsy();
     // 既に superseded になった先をもう一度指すと拒否される —— supersedes が domain に届いている
-    const rejected = (await client.callTool({ name: "record_behavior", arguments: { ...behavior, supersedes: written.json.entry_id } })) as any;
+    const rejected = (await client.callTool({ name: "record_behavior", arguments: { ...behavior, supersedes: [written.json.entry_id] } })) as any;
     expect(rejected.isError).toBe(true);
   } finally {
     await client.close();
   }
 });
 
-it("Exemplar の write(POST /api/settings/memory/exemplars・管理MCP の record_exemplar)と case preview(GET /api/settings/memory/cases/:event_id・preview_case)は domain の結果を返し、domain error は 400 / tool error(ADR 0153)", async () => {
+it("Exemplar の write(POST /api/settings/memory/exemplars・管理MCP の record_exemplar、supersedes の list も)と case preview(GET /api/settings/memory/cases/:event_id・preview_case)は domain の結果を返し、domain error は 400 / tool error(ADR 0153 / ADR 0162 決定1)", async () => {
   t = await bootTidepool();
   const task = registerTask(t.db, { type: "work", title: "t", purpose: "p", completion_criteria: "c" }, t.clock.now());
   const decision = logDecision(t.db, task, "split the migration into two commits", "deckhand", t.clock.now());
@@ -225,12 +260,14 @@ it("Exemplar の write(POST /api/settings/memory/exemplars・管理MCP の recor
   const written = await api(t.baseUrl, "POST", "/api/settings/memory/exemplars", exemplar);
   expect(written).toMatchObject({ status: 200, json: { entry_id: expect.any(Number) } });
   expect((await api(t.baseUrl, "POST", "/api/settings/memory/exemplars", { ...exemplar, source_event_id: 1 })).status).toBe(400);
+  expect((await api(t.baseUrl, "POST", "/api/settings/memory/exemplars", { ...exemplar, source_event_id: undefined })).status).toBe(400);
   expect(await api(t.baseUrl, "GET", `/api/settings/memory/cases/${decision}`)).toMatchObject({ status: 200, json: preview });
   expect((await api(t.baseUrl, "GET", "/api/settings/memory/cases/1")).status).toBe(400);
 
   const client = await managementMcpClient(t.baseUrl);
   try {
-    const recorded = (await client.callTool({ name: "record_exemplar", arguments: exemplar })) as any;
+    const { source_event_id: _, ...unsourced } = exemplar;
+    const recorded = (await client.callTool({ name: "record_exemplar", arguments: { ...unsourced, supersedes: [written.json.entry_id] } })) as any;
     expect(recorded.isError).toBeFalsy();
     const mismatched = { ...exemplar, annotations: [{ ...exemplar.annotations[0], anchor: { field: "decision", quote: "three commits" } }] };
     expect(((await client.callTool({ name: "record_exemplar", arguments: mismatched })) as any).isError).toBe(true);
@@ -241,8 +278,8 @@ it("Exemplar の write(POST /api/settings/memory/exemplars・管理MCP の recor
     await client.close();
   }
   expect((await api(t.baseUrl, "GET", "/api/settings/memory/entries?kind=exemplar")).json.entries).toMatchObject([
-    { id: written.json.entry_id },
-    { id: expect.any(Number) },
+    { id: written.json.entry_id, invalidation_reason: "superseded" },
+    { id: expect.any(Number), source: { kind: "event", ref: decision } },
   ]);
 });
 

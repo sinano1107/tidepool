@@ -36,6 +36,7 @@ import { toolError, toolResult } from "./mcp.js";
 import {
   changeMemorySettings,
   defineMemoryBranch,
+  foldMemoryEntries,
   HUMAN_AUTHOR,
   humanBehaviorSchema,
   humanDefinitionSchema,
@@ -46,6 +47,7 @@ import {
   invalidationSchema,
   listMemoryEntries,
   memoryBranchMoveSchema,
+  memoryFoldSchema,
   memoryListFilterSchema,
   memoryMoveSchema,
   memorySettingsChangeSchema,
@@ -586,6 +588,9 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
   const writtenAs =
     "Written as the human, approved at once. The original_* fields, when given, are the human's own wording, recorded in the " +
     "board's display language. workspace null = the whole board.";
+  const supersedesEffect =
+    "supersedes optionally lists approved entries the new one replaces: each is invalidated as superseded by it in the same step " +
+    "(candidates are refused; Behavior and Exemplar entries replace each other, Knowledge and Definitions only their own kind).";
   server.registerTool(
     "list_memory_entries",
     {
@@ -602,7 +607,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
     "record_knowledge",
     {
       description: `Record a Knowledge entry: a fact filed under path (a "/"-separated hierarchy such as build/tests). title and text are the ` +
-        `English canonical wording; original_title and original_text go together (both or neither). ${writtenAs}`,
+        `English canonical wording; original_title and original_text go together (both or neither). ${supersedesEffect} ${writtenAs}`,
       inputSchema: humanKnowledgeSchema.shape,
     },
     async (input) => memoryVerb(() => recordKnowledge(deps.db, humanEntryInput(deps.db, input), "mcp", deps.clock.now())),
@@ -611,8 +616,9 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
     "define_memory_branch",
     {
       description:
-        "Define a memory branch: one line at the branch's path declaring what is filed under it. To revise a branch's " +
-        `definition, pass the current one's id as supersedes. text is the English canonical line; original_text is optional. ${writtenAs}`,
+        "Define a memory branch: one line at the branch's path declaring what is filed under it. A branch has one definition per " +
+        "workspace: to revise it, include the current one in supersedes. text is the English canonical line; original_text is optional. " +
+        `${supersedesEffect} ${writtenAs}`,
       inputSchema: humanDefinitionSchema.shape,
     },
     async (input) => memoryVerb(() => defineMemoryBranch(deps.db, humanEntryInput(deps.db, input), "mcp", deps.clock.now())),
@@ -622,10 +628,10 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
     {
       description:
         "Record a Behavior entry: how agents should act, injected into the workers of addressee (an agent name, or null for every agent). " +
-        "To edit an approved behavior, pass its id as supersedes: the new entry replaces it and the old one is invalidated as superseded. " +
-        "Candidates cannot be edited here. source_event_id optionally cites the episode the rule comes from: a decision_logged or " +
-        "worker_spawned event id; an edit without it keeps the old entry's cited source (an entry that cited none stays without one). title and text are the English canonical wording; " +
-        `original_title and original_text go together (both or neither). ${writtenAs}`,
+        "To edit an approved behavior, pass [its id] as supersedes. source_event_id optionally cites the episode the rule comes from: a " +
+        "decision_logged or worker_spawned event id; without it the entry keeps the cited source the superseded entries share (one " +
+        "superseded entry always shares its own), and cites none otherwise. title and text are the English canonical wording; " +
+        `original_title and original_text go together (both or neither). ${supersedesEffect} ${writtenAs}`,
       inputSchema: humanBehaviorSchema.shape,
     },
     async (input) => memoryVerb(() => recordBehavior(deps.db, humanEntryInput(deps.db, input), "mcp", deps.clock.now())),
@@ -646,7 +652,8 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
     {
       description:
         "Record an Exemplar entry: a concrete case agents should learn from, injected into the workers of addressee (an agent name, or null " +
-        "for every agent). source_event_id is the case: a decision_logged or worker_spawned event id (see preview_case). annotations is a " +
+        "for every agent). source_event_id is the case: a decision_logged or worker_spawned event id (see preview_case); it may be " +
+        `omitted only with supersedes whose entries share one source, which the exemplar then keeps. ${supersedesEffect} annotations is a ` +
         "non-empty list; each has a polarity (imitate or avoid), an English text, an optional original (the human's own wording), and an " +
         "anchor: \"whole\" or { field, quote } where quote is a verbatim substring of that field (decision, steering, handoff or result) " +
         `of the rendered case. title is the English one-line label. Written as the human, approved at once; an annotation's original is ` +
@@ -656,13 +663,27 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
     async (input) => memoryVerb(() => recordExemplar(deps.db, humanEntryInput(deps.db, input), "mcp", deps.clock.now())),
   );
   server.registerTool(
+    "fold_memory_entries",
+    {
+      description:
+        "Fold the entries in replaces into successor_id, an existing approved, non-invalidated entry: each is invalidated as superseded " +
+        "by it and nothing new is written. Behavior and Exemplar entries fold into each other; Knowledge only into Knowledge and " +
+        "Definitions only into a Definition. replaces may hold candidates as well as approved entries: a candidate an approved entry " +
+        "already covers retires pointing at it. To replace entries with one you write now, pass them as supersedes on the write.",
+      inputSchema: memoryFoldSchema.shape,
+    },
+    async (input) => memoryVerb(() => foldMemoryEntries(deps.db, { ...input, author: HUMAN_AUTHOR }, "mcp", deps.clock.now())),
+  );
+  server.registerTool(
     "invalidate_memory_entry",
     {
       description:
-        "Invalidate a memory entry so it is no longer injected or pulled (nothing is deleted). reason is superseded " +
-        "(requires successor_id), capability (it was wrong), or environment / requirement_change (it went stale). " +
-        "To change where an entry is filed, use move_memory_entry or move_memory_branch.",
-      inputSchema: invalidationSchema.extend({ entry_id: z.number().int().positive() }).shape,
+        "Invalidate a memory entry with no successor, so it is no longer injected or pulled (nothing is deleted). reason is " +
+        "capability (it was wrong), or environment / requirement_change (it went stale). To replace entries, pass them as " +
+        "supersedes when you write the new one, or fold them into an existing entry with fold_memory_entries. To change where " +
+        "an entry is filed, use move_memory_entry or move_memory_branch.",
+      // strict な object ごと渡す —— .shape だと迷い込んだ successor_id が黙って捨てられる
+      inputSchema: invalidationSchema.extend({ entry_id: z.number().int().positive() }),
     },
     async (input) => memoryVerb(() => ({ event_id: invalidateMemoryEntry(deps.db, input, HUMAN_WORKER_ID, "mcp", deps.clock.now()) })),
   );
