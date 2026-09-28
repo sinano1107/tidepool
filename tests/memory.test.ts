@@ -1071,6 +1071,15 @@ it("Exemplar の candidate への注釈の修正値つき approve は、注釈 l
   ]);
 });
 
+it("Exemplar の candidate への title だけの修正値は candidate の注釈を継ぐ", () => {
+  const { db, proposal } = exemplarProposal();
+  const drafted = entryById(db, proposal.candidate_id)!;
+
+  const created = approveMemoryProposal(db, proposal, "question-1", "webui", at, { title: "Keep the migration apart" });
+
+  expect(entryById(db, created)).toMatchObject({ kind: "exemplar", title: "Keep the migration apart", text: drafted.text, annotations: drafted.annotations, author: { activity: "human" } });
+});
+
 it.each<[string, MemoryAmendment]>([
   ["anchor の quote が case の逐語部分文字列でない", { annotations: [{ anchor: { field: "decision", quote: "three commits" }, polarity: "avoid", text: "x" }] }],
   ["Exemplar に text", { text: "Split it." }],

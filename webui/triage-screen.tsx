@@ -221,10 +221,11 @@ function TpMemoryAmendment({ candidateId, onTranslate, onChange }: {
 }) {
   const { Button, Input, Select } = window.TidepoolDesignSystem_8a0ead;
   type Wording = { title: string; text: string; addressee: string; annotations: TpDraftAnnotation[] };
-  const [base, setBase] = React.useState<(Wording & { source: number | null }) | null>(null);
+  const [base, setBase] = React.useState<(Wording & { kind: string; source: number | null }) | null>(null);
   const [draft, setDraft] = React.useState({ title: '', text: '', addressee: '', originalTitle: '', originalText: '', annotations: [] as TpDraftAnnotation[] });
   const [back, setBack] = React.useState<string | null>(null);
   const [error, setError] = React.useState<string | null>(null);
+  const [busy, setBusy] = React.useState(false);
   // settings の Behavior フォーム(#943)と同じ registry 引き —— このカードは agent 一覧を持たないので自分で引く
   // 取得の失敗は翻訳の失敗と別に持つ —— 翻訳の setError(null) で消えると、選択肢が欠けたまま理由が見えなくなる
   const [agentNames, setAgentNames] = React.useState<string[]>([]);
@@ -245,7 +246,7 @@ function TpMemoryAmendment({ candidateId, onTranslate, onChange }: {
           annotations: (candidate.annotations ?? []).map(({ anchor, polarity, text }) => ({ anchor, polarity, text: text.trim(), original: '', back: null })),
         };
         // Exemplar の出所は常に event(case を描けない出所は Exemplar にならない)
-        setBase({ ...wording, source: candidate.kind === 'exemplar' && typeof candidate.source.ref === 'number' ? candidate.source.ref : null });
+        setBase({ ...wording, kind: candidate.kind, source: typeof candidate.source.ref === 'number' ? candidate.source.ref : null });
         setDraft({ ...wording, originalTitle: '', originalText: '' });
       })
       .catch((err) => setError(String(err.message || err)));
@@ -287,13 +288,14 @@ function TpMemoryAmendment({ candidateId, onTranslate, onChange }: {
       {agentsError && <div style={{ fontSize: 'var(--text-xs)', color: 'var(--coral-4)' }}>{agentsError}</div>}
     </React.Fragment>
   );
-  if (base.source !== null) {
+  if (base.kind === 'exemplar') {
     return (
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 14 }}>
         <Input label="Title (English)" value={draft.title} onChange={set('title')} />
         {addressee}
         <MemoryExemplarAnnotations workspace="" source={base.source} annotations={draft.annotations}
-          onChange={(update) => setDraft((d) => ({ ...d, annotations: update(d.annotations) }))} translate={onTranslate} onError={setError} />
+          onChange={(update) => setDraft((d) => ({ ...d, annotations: update(d.annotations) }))} translate={onTranslate} onError={setError}
+          busy={busy} setBusy={setBusy} />
         {error && <div style={{ fontSize: 'var(--text-xs)', color: 'var(--coral-4)' }}>{error}</div>}
       </div>
     );

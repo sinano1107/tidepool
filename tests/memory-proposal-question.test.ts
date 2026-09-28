@@ -442,15 +442,14 @@ it("HTTP の回答と管理MCP の answer_question は memory の修正値を受
   }
 });
 
-it("HTTP の回答の注釈の修正値は Exemplar の candidate の後継に届く(issue #950)", async () => {
+it("HTTP の回答は Exemplar の candidate への注釈の修正値を受け、回答に残す(issue #950)", async () => {
   const board = await boardWithMetaReview();
   try {
     const questionId = await proposeExemplar(board);
-    const candidateId = (await task(questionId)).question_proposal.candidate_id;
     const annotations = [{ anchor: { field: "decision", quote: "the migration" }, polarity: "avoid", text: "Do not bundle the migration." }];
 
     expect((await answer(questionId, "approve", { amendment: { annotations } })).status).toBe(200);
-    expect(await entry((await entry(candidateId))!.successor_id)).toMatchObject({ kind: "exemplar", annotations });
+    expect((await events(questionId)).find((e) => e.kind === "question_answered").payload).toMatchObject({ amendment: { annotations } });
   } finally {
     await board.client.close();
   }

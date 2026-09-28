@@ -1424,6 +1424,8 @@ function MemoryCasePicker({ workspace, value, onChange, onQuote }: {
   const [log, setLog] = React.useState<WireContract['GET /api/log']['entries'] | string | null>(null); // string → load error
   const [rendered, setRendered] = React.useState<WireContract['GET /api/settings/memory/cases/:event_id'] | string | null>(null);
   React.useEffect(() => {
+    // a fixed case never shows the list to pick from
+    if (!onChange) return;
     api('GET /api/log').then(({ entries }) => setLog(entries)).catch((err) => setLog(String(err.message || err)));
   }, []);
   React.useEffect(() => {
@@ -1506,7 +1508,7 @@ const annotationsToSend = (annotations: TpDraftAnnotation[]) =>
 // amendment (#950). A selection in the case anchors the current annotation (the last one added or focused,
 // clamped after a removal) and starts one when there is none yet. `onChange` takes an updater so a burst of
 // selectionchange events never works from a stale list. Without `translate` (an English board) there is no original.
-function MemoryExemplarAnnotations({ workspace, source, onSource, annotations, onChange, language, translate, onError }: {
+function MemoryExemplarAnnotations({ workspace, source, onSource, annotations, onChange, language, translate, onError, busy, setBusy }: {
   workspace: string;
   source: number | null;
   /** absent: the case is fixed */
@@ -1516,11 +1518,13 @@ function MemoryExemplarAnnotations({ workspace, source, onSource, annotations, o
   language?: string;
   translate?: TpTranslateFn;
   onError: (message: string) => void;
+  /** the holder's busy flag: a translation here and the holder's save wait on each other */
+  busy: boolean;
+  setBusy: (busy: boolean) => void;
 }) {
   const { Button, Input, Select } = window.TidepoolDesignSystem_8a0ead;
   const muted = { margin: 0, fontSize: 'var(--text-xs)', color: 'var(--text-muted)' };
   const [current, setCurrent] = React.useState(0);
-  const [busy, setBusy] = React.useState(false);
   const blank: TpDraftAnnotation = { anchor: 'whole', polarity: '', text: '', original: '', back: null };
   const set = (i: number, patch: Partial<TpDraftAnnotation>) => onChange((list) => list.map((a, j) => (j === i ? { ...a, ...patch } : a)));
   const quote = (anchor: TpMemoryAnchor) => onChange((list) =>
@@ -1774,7 +1778,8 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit, fo
           {draft.kind === 'exemplar' && (
             <MemoryExemplarAnnotations workspace={draft.workspace} source={draft.source} onSource={(source) => setDraft((d) => ({ ...d, source }))}
               annotations={draft.annotations} onChange={(update) => setDraft((d) => ({ ...d, annotations: update(d.annotations) }))}
-              language={language} translate={translatable ? translateTarget : undefined} onError={(message) => say('danger', 'translate failed', message)} />
+              language={language} translate={translatable ? translateTarget : undefined} onError={(message) => say('danger', 'translate failed', message)}
+              busy={busy} setBusy={setBusy} />
           )}
           {translatable && draft.kind !== 'exemplar' && (
             <React.Fragment>

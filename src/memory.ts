@@ -596,7 +596,9 @@ export function recordExemplar(
  *  —— 決定に解かず帰責そのものを描く(steering はその帰責の分だけ、checkedAnnotations が照らすのと同じ描画)。 */
 export function previewCase(db: Db, eventId: number): MemoryCase {
   if (getEvent(db, eventId)?.kind !== "objection_attributed") citedEpisode(db, eventId);
-  return renderCase(db, { kind: "event", ref: eventId })!;
+  const rendered = renderCase(db, { kind: "event", ref: eventId });
+  if (!rendered) throw new DomainError(`event ${eventId} is not a case the board can render`);
+  return rendered;
 }
 
 function requireEntry(db: Db, id: number): EntryRow {
