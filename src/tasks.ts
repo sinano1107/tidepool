@@ -139,6 +139,10 @@ export interface Task {
    *  number this task is a live reference to, or null for an ordinary task.
    *  `workspace` doubles as the repo half of the reference for such a task. */
   github_issue_number: number | null;
+  /** Board-internal only (ADR 0120 決定2 / issue #618): the subject this task
+   *  is the periodic meta-review for, or null for an ordinary task. Never
+   *  written from MCP / the JSON API. */
+  meta_review_subject: "memory" | "routing" | null;
   created_at: string;
 }
 
@@ -675,6 +679,7 @@ export function registerTask(
     question_quarantine_value: input.quarantine?.value ?? null,
     question_cli_auth_expiry_warning: input.cli_auth_expiry_warning ?? null,
     github_issue_number: input.github_issue_number ?? null,
+    meta_review_subject: input.meta_review_subject ?? null,
     created_at: now.toISOString(),
   };
   db.transaction(() => {
@@ -703,7 +708,6 @@ export function registerTask(
       question_pending_child:
         task.question_pending_child && JSON.stringify(task.question_pending_child),
       question_proposal: task.question_proposal && JSON.stringify(task.question_proposal),
-      meta_review_subject: input.meta_review_subject ?? null,
     });
     appendEvent(db, {
       taskId: task.id,
