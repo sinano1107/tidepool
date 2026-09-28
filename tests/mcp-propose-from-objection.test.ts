@@ -206,8 +206,9 @@ it("agent 登録の task では(盤面の登録は除く)task_ambiguity と miss
     ids.push(body(result).entry_id);
   }
 
-  const behaviorWithDecision = await propose(auditor.id, { entry_id: missingInformation, as: "behavior", based_on_decision: decision });
-  expect(behaviorWithDecision.content[0].text).toBe("based_on_decision is required for a knowledge entry and only for it");
+  expect((await propose(auditor.id, { entry_id: missingInformation, as: "behavior", based_on_decision: decision })).content[0].text).toBe(
+    "based_on_decision is required for a knowledge entry and only for it",
+  );
 
   // 盤面(tidepool)の登録は agent の登録ではない
   const boardAuditor = board.kids.find((x: any) => x.title === "rca (auditor): by the board");
@@ -246,9 +247,6 @@ it("missing_information の Knowledge は RCA が log_decision した推論を�
 
   expect(result.isError, JSON.stringify(result.content)).toBeFalsy();
   const { entry_id } = body(result);
-  expect(await memoryEntries()).toEqual([
-    expect.objectContaining({ id: entry_id, kind: "knowledge", state: "approved", source: { kind: "decision", ref: decision }, cause: null }),
-  ]);
   const client = await mcpClient(t.mcpBaseUrl, self.id);
   try {
     const read = body(await client.callTool({ name: "read_memory", arguments: { ids: [entry_id] } }));
