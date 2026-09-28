@@ -208,13 +208,14 @@ export function loadEpisodes(db: Db): RoutingEpisode[] {
   return spawns.map((spawned) => {
     const task = tasks.find((t) => t.id === spawned.task_id)!;
     const { exited, hasNextSpawn, inSession } = sessionWindow(events, spawned);
-    // 最新の帰責が entry ごとに有効(append-only、attribution.ts と同じ読み方)
-    const causes = new Map<number, Cause>();
+    // 異議群ごとの有効な判定をすべて見る(同じ異議群では後の event が有効、ADR 0170 決定3)—— 前の異議群の capability を
+    // 後の異議群の preference で消さない。異議群は帰責の `objection_event_ids` の先頭が名指す
+    const causes = new Map<string, Cause>();
     const allocations: { allocation: Allocation; cause: Cause }[] = [];
     for (const e of events) {
       if (e.task_id !== spawned.task_id) continue;
       const p = e.payload;
-      if (p.kind === "objection_attributed" && inSession({ id: p.entry_id, task_id: spawned.task_id })) causes.set(p.entry_id, p.cause);
+      if (p.kind === "objection_attributed" && inSession({ id: p.entry_id, task_id: spawned.task_id })) causes.set(`${p.entry_id}:${p.objection_event_ids[0]}`, p.cause);
       if (p.kind === "allocation_reviewed" && p.worker_spawned_event_id === spawned.id && "allocation" in p) {
         allocations.push({ allocation: p.allocation, cause: p.cause });
       }

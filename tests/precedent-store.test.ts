@@ -247,3 +247,25 @@ it("list_precedents は異議つき decision を cause・outcome・読んだ / �
     [7, "preference"],
   ]);
 });
+
+it("前の異議群の after_rca が後の異議群の initial より後の id で着地しても、Precedent の cause は最後の異議群の判定(ADR 0170)", async () => {
+  const db = seedFixtureBoard();
+  projectAndPersist(db, {
+    workerSpawnedEventId: FIXTURE_SPAWNED_EVENT_ID,
+    transcriptPath: writeFixtureTranscript(await logDir(), `${FIXTURE_TASK}.${FIXTURE_SPAWNED_EVENT_ID}.stream.jsonl`),
+  });
+  const at = new Date("2026-09-28T00:00:00.000Z");
+  const event = (payload: TaskScopedPayload) =>
+    appendEvent(db, { taskId: FIXTURE_TASK, workerId: "human", origin: "webui", payload, at });
+  const first = event({ kind: "objection_raised", entry_id: 7, comment: "2回目は要らない", session_id: 1 });
+  const second = event({ kind: "objection_raised", entry_id: 7, comment: "箇条書きは5つに", session_id: 2 });
+  event({ kind: "objection_attributed", entry_id: 7, objection_event_ids: [second], cause: "preference", evidence: "e", entries: null, round: "initial" });
+  event({ kind: "objection_attributed", entry_id: 7, objection_event_ids: [first], cause: "capability", evidence: "e", entries: null, round: "after_rca" });
+  registerMetaReview(db, "memory", at);
+  // setup のみ: 登録した task の id を引く
+  const { id } = db.prepare("SELECT id FROM tasks WHERE meta_review_subject = 'memory'").get() as { id: string };
+
+  expect(listPrecedents(db, { taskId: id, agent: "auditor" }, { since_watermark: 0 }, at).precedents.map((p) => [p.decision_event_id, p.cause])).toEqual([
+    [7, "preference"],
+  ]);
+});

@@ -1,4 +1,5 @@
 import { afterEach, expect, it } from "vitest";
+import type { Cause } from "../src/cause.js";
 import type { CodexAppServerProbeResult } from "../src/codex-app-server.js";
 import { appendEvent, type EventPayload } from "../src/events.js";
 import { applyExecutionSettingsChange, type ExecutionSetting } from "../src/execution-setting.js";
@@ -190,8 +191,9 @@ it("work task の pickup ごとに shadow 行が1件記録され、selector の�
   expect(shadowRows(t)).toHaveLength(1);
 });
 
-/** opus の session が1つ capability と帰責された盤面にする —— 学習器は opus を下げ、sol を推薦するようになる。 */
-async function rejectOpusSession(t: Tidepool) {
+/** opus の session の1つの entry が、異議群ごとに `causes` と帰責された盤面にする(既定は capability の1つ)——
+ *  capability があれば学習器は opus を下げ、sol を推薦するようになる。 */
+async function rejectOpusSession(t: Tidepool, causes: Cause[] = ["capability"]) {
   const earlier = await registerWork(t, "earlier");
   await t.clock.advance(HOUR);
   // ScriptedWorker は spawn しないので、その session の記録(spawn + 決定 + 帰責)を setup として置く
@@ -215,16 +217,20 @@ async function rejectOpusSession(t: Tidepool) {
   });
   const entry = await loggedEntry(t, earlier.id, "took the shortcut");
   expect(entry.id).toBeGreaterThan(spawnedId);
-  const attributed: EventPayload = {
-    kind: "objection_attributed",
-    entry_id: entry.id,
-    objection_event_ids: [],
-    cause: "capability",
-    evidence: "the shortcut missed the second criterion",
-    entries: null,
-    round: "initial",
-  };
-  appendEvent(t.db, { taskId: earlier.id, workerId: "board", origin: "board", at: t.clock.now(), payload: attributed });
+  for (const [i, cause] of causes.entries()) {
+    const objection: EventPayload = { kind: "objection_raised", entry_id: entry.id, comment: `objection ${i}`, session_id: i + 1 };
+    const objectionId = appendEvent(t.db, { taskId: earlier.id, workerId: "human", origin: "webui", at: t.clock.now(), payload: objection });
+    const attributed: EventPayload = {
+      kind: "objection_attributed",
+      entry_id: entry.id,
+      objection_event_ids: [objectionId],
+      cause,
+      evidence: "the shortcut missed the second criterion",
+      entries: null,
+      round: "initial",
+    };
+    appendEvent(t.db, { taskId: earlier.id, workerId: "board", origin: "board", at: t.clock.now(), payload: attributed });
+  }
   await completeViaMcp(t, earlier.id);
   await completeIntegrationReviews(t, earlier.id);
   await completeMetaReviews(t);
@@ -244,6 +250,20 @@ it("観測が効くと shadow 行は selector と乖離しうるが、選択は�
     recommended: { provider: "openai", model: "gpt-5.6-sol", effort: "high", advisor: null },
     actual: { provider: "anthropic", model: "opus", effort: "high", advisor: null },
     source: opus.source,
+    basis: "data",
+  });
+});
+
+it("同じ entry の前の異議群が capability、後の異議群が preference と帰責された session も負として数える —— 学習器は opus の行を下げる(ADR 0170 決定3)", async () => {
+  t = await bootTidepool({ taskExecutionCandidates: () => [opus, sol] });
+  await rejectOpusSession(t, ["capability", "preference"]);
+
+  const later = await registerWork(t, "later");
+  await t.clock.advance(HOUR);
+
+  expect(shadowRows(t).at(-1)).toMatchObject({
+    task_id: later.id,
+    recommended: { provider: "openai", model: "gpt-5.6-sol", effort: "high", advisor: null },
     basis: "data",
   });
 });

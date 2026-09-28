@@ -1383,7 +1383,7 @@ function HaltedRefiresCard({ say }: { say: AppSay }) {
       {rows.map((row) => (
         <div key={`${row.refire}:${row.target}`} style={{ display: 'flex', flexDirection: 'column', gap: 4, borderTop: '1px solid var(--border-default)', paddingTop: 10 }}>
           <p style={{ ...muted, fontFamily: 'var(--font-mono)' }}>
-            {row.refire === 'draft' ? 'behavior draft' : 'second-round attribution'} · entry #{row.entry.id} · {row.task.title} · {row.cause ?? 'unattributed'} · {row.round}
+            {row.refire === 'draft' ? 'behavior draft' : `second-round attribution · objection #${row.target}`} · entry #{row.entry.id} · {row.task.title} · {row.cause ?? 'unattributed'} · {row.round}
           </p>
           <p style={{ margin: 0, fontSize: 'var(--text-sm)' }}>{row.entry.text}</p>
           <p style={muted}>last failure {new Date(row.last_failure.at).toLocaleString()}: {row.last_failure.reason}</p>

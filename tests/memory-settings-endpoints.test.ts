@@ -406,7 +406,7 @@ it("第2回の帰責が撃って3回失敗すると両方の一覧に出て、�
   const [, , last] = await taskEvents(t, s.task.id, "objection_attribution_failed");
   const row = {
     refire: "second_round",
-    target: s.entry.id,
+    target: s.objection,
     entry: { id: s.entry.id, text: "skipped the fixtures" },
     task: { id: s.task.id, title: "flaky-rca" },
     cause: "uncertain",
@@ -419,7 +419,7 @@ it("第2回の帰責が撃って3回失敗すると両方の一覧に出て、�
     const call = toolCaller(client);
     expect(await call("list_halted_refires", {})).toEqual({ isError: false, json: { halted: [row] } });
 
-    expect(await call("dismiss_halted_refire", { refire: "second_round", target: s.entry.id })).toEqual({ isError: false, json: { event_id: expect.any(Number) } });
+    expect(await call("dismiss_halted_refire", { refire: "second_round", target: s.objection })).toEqual({ isError: false, json: { event_id: expect.any(Number) } });
     expect(await call("list_halted_refires", {})).toEqual({ isError: false, json: { halted: [] } });
   } finally {
     await client.close();
@@ -431,7 +431,7 @@ it("第2回の帰責が撃って3回失敗すると両方の一覧に出て、�
 
   expect(s.attributionClient.calls).toHaveLength(4);
   expect((await taskEvents(t, s.task.id, "refire_dismissed")).map((e: any) => [e.worker_id, e.origin, e.payload])).toEqual([
-    ["human", "mcp", { kind: "refire_dismissed", refire: "second_round", target: s.entry.id }],
+    ["human", "mcp", { kind: "refire_dismissed", refire: "second_round", target: s.objection }],
   ]);
 });
 
@@ -482,7 +482,7 @@ it("打ち切りでない件への Retry / Dismiss は 400 / tool error: 3回未
   const client = await managementMcpClient(t.baseUrl);
   try {
     // 第2回を撃ったことのない entry(3回未満)。管理MCP では tool error(対応づけはこの1件で見る)
-    const neverFired = { refire: "second_round", target: s.entry.id };
+    const neverFired = { refire: "second_round", target: s.objection };
     expect([await post("retry", neverFired), await post("dismiss", neverFired)]).toEqual([400, 400]);
     expect((await toolCaller(client)("retry_halted_refire", neverFired)).isError).toBe(true);
   } finally {

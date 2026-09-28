@@ -140,7 +140,7 @@ it("初回の Board call の失敗は帰責を書かず round initial の失敗 
     [entries[0].id, "preference"],
   ]);
   expect((await attributionsFailed(t, task.id)).map((e: any) => [e.worker_id, e.origin, e.payload])).toEqual([
-    ["tidepool", "board", { kind: "objection_attribution_failed", entry_id: entries[1].id, round: "initial", reason: "Board call failed: claude CLI timed out" }],
+    ["tidepool", "board", { kind: "objection_attribution_failed", entry_id: entries[1].id, objection_event_id: expect.any(Number), round: "initial", reason: "Board call failed: claude CLI timed out" }],
   ]);
   const kids = await children(t, task.id);
   expect(kids.map((x: any) => x.title).sort()).toEqual([
@@ -659,7 +659,7 @@ it("第2回の帰責の失敗は after_rca を書かず失敗 event を残し、
   expect([cancelled.status, cancelled.json.status]).toEqual([200, "cancelled"]);
   expect((await attributions(t, s.task.id)).map((e: any) => e.payload.round)).toEqual(["initial"]);
   expect((await attributionsFailed(t, s.task.id)).map((e: any) => [e.worker_id, e.origin, e.payload])).toEqual([
-    ["tidepool", "board", { kind: "objection_attribution_failed", entry_id: s.entry.id, round: "after_rca", reason: "Board call failed: claude CLI timed out" }],
+    ["tidepool", "board", { kind: "objection_attribution_failed", entry_id: s.entry.id, objection_event_id: s.objection, round: "after_rca", reason: "Board call failed: claude CLI timed out" }],
   ]);
   s.attributionClient.scriptJudgment(s.entry.id, { cause: "capability", evidence: "the RCA decided it" });
   s.behaviorDraftClient.scriptDraft(s.entry.id, KEEP_FIXTURES);
@@ -779,23 +779,22 @@ it("commit 直後の起草が error handling の外で投げても(失敗 event 
   expect(await behaviors(t)).toEqual([expect.objectContaining({ source: { kind: "event", ref: attribution.id } })]);
 });
 
-it("帰責が新しいものに置き換わった entry では、古い帰責から起草し直さない", async () => {
+it("前の異議群の起草が失敗した後に同じ entry が再異議されても、後の異議群が第2回を待つ間に次の tick で前の異議群の帰責から起草し直し、candidate の出所は前の帰責", async () => {
   const s = await objectedForDraft("superseded", { initial: { cause: "preference", evidence: "taste" } });
   t = s.t;
   s.behaviorDraftClient.scriptDraft(s.entry.id, new Error("claude CLI timed out"));
   await commit(t, s.task.id, "superseded");
-  // 同じ entry への2度目の異議が、学習に向かない cause の帰責で置き換える
-  s.attributionClient.scriptJudgment(s.entry.id, { cause: "environment", evidence: "the mirror was down" });
+  const [first] = await attributions(t, s.task.id);
+  // 同じ entry への2度目の異議を close-only で束ねる —— 後の異議群は未帰責のまま第2回を待つ
   await api(t.baseUrl, "POST", "/api/triage/start");
-  await object(t, s.entry.id, "the mirror was down, not your fault");
-  await commit(t, s.task.id, "superseded");
-  expect((await attributions(t, s.task.id)).map((e: any) => e.payload.cause)).toEqual(["preference", "environment"]);
+  await object(t, s.entry.id, "and name the fixtures in the report");
+  await api(t.baseUrl, "POST", "/api/triage/close", { close_only: true });
+  s.behaviorDraftClient.scriptDraft(s.entry.id, KEEP_FIXTURES);
 
   await t.clock.advance(HOUR);
-  await t.clock.advance(HOUR);
 
-  expect(s.behaviorDraftClient.calls).toHaveLength(1);
-  expect(await behaviors(t)).toEqual([]);
+  expect(s.behaviorDraftClient.calls).toHaveLength(2);
+  expect(await behaviors(t)).toEqual([expect.objectContaining({ source: { kind: "event", ref: first.id } })]);
 });
 
 it("第2回の帰責が判断として uncertain を返したら、それが after_rca として残り撃ち直されない", async () => {
@@ -983,7 +982,7 @@ it("前の RCA 群の第2回が次の session の開いている間に確定し�
   ]);
 });
 
-it("初回の帰責の失敗は poll で撃ち直されず、round initial の失敗が3つあっても第2回の回数と間隔には数えない", async () => {
+it("初回の帰責の失敗は poll で撃ち直されず、round initial の失敗が3つあっても第2回の回数と間隔には数えず、3つの異議群はそれぞれ第2回で確定する", async () => {
   const s = await objectedForDraft("failing first");
   t = s.t;
   s.attributionClient.scriptJudgment(s.entry.id, new Error("claude CLI timed out"));
@@ -991,9 +990,10 @@ it("初回の帰責の失敗は poll で撃ち直されず、round initial の�
   await t.clock.advance(HOUR);
   await t.clock.advance(HOUR);
   expect(s.attributionClient.calls).toHaveLength(1);
+  const bundles = [s.objection];
   for (const comment of ["still no fixtures", "the fixtures, please"]) {
     await api(t.baseUrl, "POST", "/api/triage/start");
-    await object(t, s.entry.id, comment);
+    bundles.push(await object(t, s.entry.id, comment));
     await commit(t, s.task.id, "failing first");
   }
   expect((await attributionsFailed(t, s.task.id)).map((e: any) => e.payload.round)).toEqual(["initial", "initial", "initial"]);
@@ -1003,7 +1003,162 @@ it("初回の帰責の失敗は poll で撃ち直されず、round initial の�
   for (const rca of rcas) await api(t.baseUrl, "POST", `/api/tasks/${rca.id}/cancel`, {});
 
   expect(rcas).toHaveLength(6);
-  expect((await attributions(t, s.task.id)).map((e: any) => [e.payload.cause, e.payload.round])).toEqual([["capability", "after_rca"]]);
+  expect((await attributions(t, s.task.id)).map((e: any) => [e.payload.cause, e.payload.round, e.payload.objection_event_ids])).toEqual(
+    bundles.map((id) => ["capability", "after_rca", [id]]),
+  );
+});
+
+// 帰責の単位は異議群(ADR 0170 / issue #1129)
+
+/** 同じ entry に後の triage session で異議を打って閉じ、後の異議群の名前(その異議 event の id)を返す。 */
+async function reobject(t: Tidepool, entryId: number, comment: string, closeOnly = false) {
+  await api(t.baseUrl, "POST", "/api/triage/start");
+  const id = await object(t, entryId, comment);
+  await api(t.baseUrl, "POST", "/api/triage/close", closeOnly ? { close_only: true } : undefined);
+  return id;
+}
+
+/** まだ決着していない RCA 子をすべて決着させる: 待っているものは取り消し、走っているものは完了させる。 */
+async function settleOpenRcas(t: Tidepool, taskId: string) {
+  for (;;) {
+    const rca = (await children(t, taskId)).find((x: any) => x.title.startsWith("rca (") && ["todo", "in_progress"].includes(x.status));
+    if (!rca) return;
+    if (rca.status === "todo") await api(t.baseUrl, "POST", `/api/tasks/${rca.id}/cancel`, {});
+    else await completeViaMcp(t, rca.id, false);
+  }
+}
+
+const halted = async (t: Tidepool) => (await api(t.baseUrl, "GET", "/api/settings/memory/halted-refires")).json.halted;
+
+it("初回と第2回の失敗 event は異議群の名前を持ち、第2回の回数は異議群ごとに数える —— 前の異議群が2回・後が1回失敗しても打ち切りは無く、次の tick で3回目に達した前の異議群だけが打ち切られる", async () => {
+  const s = await objectedForDraft("per bundle");
+  t = s.t;
+  s.attributionClient.scriptJudgment(s.entry.id, new Error("claude CLI timed out"));
+  await commit(t, s.task.id, "per bundle");
+  await settleOpenRcas(t, s.task.id);
+  await t.clock.advance(HOUR);
+  const again = await reobject(t, s.entry.id, "and name the fixtures in the report");
+
+  await settleOpenRcas(t, s.task.id);
+
+  expect((await attributionsFailed(t, s.task.id)).map((e: any) => [e.payload.objection_event_id, e.payload.round])).toEqual([
+    [s.objection, "initial"],
+    [s.objection, "after_rca"],
+    [s.objection, "after_rca"],
+    [again, "initial"],
+    [again, "after_rca"],
+  ]);
+  expect(await halted(t)).toEqual([]);
+
+  await t.clock.advance(HOUR);
+
+  expect((await halted(t)).map((r: any) => [r.refire, r.target])).toEqual([["second_round", s.objection]]);
+});
+
+const logCause = async (t: Tidepool, entryId: number) =>
+  (await api(t.baseUrl, "GET", "/api/log")).json.entries.find((e: any) => e.id === entryId).cause;
+
+/** slot を占めている task を順に完了させてから review を Run now し、その review として `propose_from_objection` を呼ぶ。 */
+async function proposeAs(t: Tidepool, reviewId: string, entryId: number) {
+  for (;;) {
+    const running = (await api(t.baseUrl, "GET", "/api/tasks")).json.find((x: any) => x.status === "in_progress");
+    if (!running || running.id === reviewId) break;
+    await completeViaMcp(t, running.id, running.type === "work");
+  }
+  await api(t.baseUrl, "POST", `/api/tasks/${reviewId}/move`, { after: null });
+  await api(t.baseUrl, "POST", `/api/tasks/${reviewId}/move`, { after: null });
+  const client = await mcpClient(t.mcpBaseUrl, reviewId);
+  try {
+    return (await client.callTool({ name: "propose_from_objection", arguments: { entry_id: entryId, path: "testing/fixtures", title: "Keep fixtures", text: "Never skip the fixtures." } })) as any;
+  } finally {
+    await client.close();
+  }
+}
+
+it("前の異議群で capability と判定された entry を後の session が再異議して close-only で閉じると、一覧の cause は空になり起草 verb は uncertain と同じ文言で拒む。RCA 群の決着後の tick で後の異議だけを steering に第2回が撃たれ、着地後の cause は後の判定", async () => {
+  const s = await objectedForDraft("reobjected capability", { initial: { cause: "capability", evidence: "skipped a named criterion" } });
+  t = s.t;
+  const { self: firstSelf } = await commit(t, s.task.id, "reobjected capability");
+  expect(await logCause(t, s.entry.id)).toBe("capability");
+
+  await reobject(t, s.entry.id, "and name the fixtures in the report", true);
+
+  expect(await logCause(t, s.entry.id)).toBeNull();
+  const self = (await children(t, s.task.id)).find((x: any) => x.title === "rca (self): reobjected capability" && x.id !== firstSelf.id);
+  expect(await proposeAs(t, self.id, s.entry.id)).toMatchObject({
+    isError: true,
+    content: [{ text: expect.stringContaining("the entry's cause is uncertain: nothing to learn from it") }],
+  });
+  s.attributionClient.scriptJudgment(s.entry.id, { cause: "task_ambiguity", evidence: "the second RCA decided it" });
+  await settleOpenRcas(t, s.task.id);
+  await t.clock.advance(HOUR);
+
+  expect(s.attributionClient.calls.map((c) => c.input.steering)).toEqual([["always keep the fixtures"], ["and name the fixtures in the report"]]);
+  expect(await logCause(t, s.entry.id)).toBe("task_ambiguity");
+});
+
+it("前の異議群の第2回が打ち切られていても後の異議群の第2回は撃たれ、打ち切りの一覧には異議群ごとの行が異議の id を target に並ぶ。前の Dismiss の後、前への Retry は拒まれ、後への Retry は効いて確定する", async () => {
+  const s = await objectedForDraft("halted bundles");
+  t = s.t;
+  s.attributionClient.scriptJudgment(s.entry.id, new Error("claude CLI timed out"));
+  await commit(t, s.task.id, "halted bundles");
+  await settleOpenRcas(t, s.task.id);
+  await t.clock.advance(HOUR);
+  await t.clock.advance(HOUR);
+  expect((await halted(t)).map((r: any) => r.target)).toEqual([s.objection]);
+  const again = await reobject(t, s.entry.id, "and name the fixtures in the report", true);
+
+  await settleOpenRcas(t, s.task.id);
+  await t.clock.advance(HOUR);
+  await t.clock.advance(HOUR);
+
+  expect(s.attributionClient.calls.map((c) => c.input.steering)).toEqual([
+    ...Array(4).fill(["always keep the fixtures"]),
+    ...Array(3).fill(["and name the fixtures in the report"]),
+  ]);
+  expect((await halted(t)).map((r: any) => [r.refire, r.target, r.entry.id, r.cause])).toEqual([
+    ["second_round", s.objection, s.entry.id, null],
+    ["second_round", again, s.entry.id, null],
+  ]);
+  const post = async (target: number, verb: "retry" | "dismiss") =>
+    (await api(t.baseUrl, "POST", `/api/settings/memory/halted-refires/second_round/${target}/${verb}`)).status;
+  expect(await post(s.objection, "dismiss")).toBe(200);
+  expect(await post(s.objection, "retry")).toBe(400);
+  s.attributionClient.scriptJudgment(s.entry.id, { cause: "capability", evidence: "the second RCA decided it" });
+  expect(await post(again, "retry")).toBe(200);
+  await registerWork(t, "a pickup trigger");
+
+  expect((await attributions(t, s.task.id)).map((e: any) => [e.payload.cause, e.payload.objection_event_ids])).toEqual([["capability", [again]]]);
+  expect(await halted(t)).toEqual([]);
+  expect(await logCause(t, s.entry.id)).toBe("capability");
+});
+
+it("後の異議群の第2回が確定した後に前の異議群の第2回が遅れて着地しても、一覧の cause は後の判定のままで、追加の第2回は撃たれない", async () => {
+  const s = await objectedForDraft("late landing");
+  t = s.t;
+  s.attributionClient.scriptJudgment(s.entry.id, new Error("claude CLI timed out"));
+  await commit(t, s.task.id, "late landing");
+  await settleOpenRcas(t, s.task.id);
+  const again = await reobject(t, s.entry.id, "and name the fixtures in the report", true);
+  s.attributionClient.scriptJudgment(s.entry.id, { cause: "capability", evidence: "the second RCA decided it" });
+  await settleOpenRcas(t, s.task.id);
+  await registerWork(t, "a pickup trigger");
+  s.attributionClient.scriptJudgment(s.entry.id, { cause: "task_ambiguity", evidence: "the first RCA decided it, late" });
+
+  await t.clock.advance(HOUR);
+  await t.clock.advance(HOUR);
+
+  expect((await attributions(t, s.task.id)).map((e: any) => [e.payload.cause, e.payload.objection_event_ids])).toEqual([
+    ["capability", [again]],
+    ["task_ambiguity", [s.objection]],
+  ]);
+  expect(await logCause(t, s.entry.id)).toBe("capability");
+  expect(s.attributionClient.calls.map((c) => c.input.steering)).toEqual([
+    ["always keep the fixtures"],
+    ["always keep the fixtures"],
+    ["and name the fixtures in the report"],
+    ["always keep the fixtures"],
+  ]);
 });
 
 // 読んだ記憶への帰責(ADR 0166 / issue #1045)—— ドメイン層
