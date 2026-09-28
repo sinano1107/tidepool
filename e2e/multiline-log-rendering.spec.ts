@@ -25,7 +25,7 @@ const MULTILINE_DECISION = `全面 pre-wrap を採用し、markdown は描かな
 // `overflowWrap` の指定が無いと行が画面横にはみ出す。`scrollWidth <=
 // clientWidth` で行の中に収まっていることを主張する(vitest では CSS の効き目を
 // 測れないので e2e の層で言う)。
-const LONG_TOKEN = Array.from({ length: 200 }, (_, i) => "abcdefghijklmnopqrstuvwxyz0123456789"[i % 36]).join("");
+const LONG_TOKEN = "x".repeat(200);
 
 test("question 本文が空行とインデントを含む複数行のまま描画される(issue #230)", async ({
   boot,
