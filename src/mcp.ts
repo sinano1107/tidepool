@@ -38,7 +38,7 @@ import type { ProcessContainers } from "./process-container.js";
 import { type AuthorityProfile, REVIEWER_AUTHORITY_PROFILE, type RosterAgent } from "./registry.js";
 import { listAllocations, listRoutingCells, listRoutingProposals, listRoutingShadow, proposeRoutingChange } from "./routing-review.js";
 import type { Slot } from "./slot.js";
-import { createStatelessMcpRouter } from "./stateless-mcp.js";
+import { createStatelessMcpRouter, rejectUnknownArguments } from "./stateless-mcp.js";
 import {
   assigneeNeedsApproval,
   completeTask,
@@ -411,7 +411,7 @@ const decomposeChildrenSchema = z.array(
 /** Domain verbs only, no generic CRUD (ADR 0002). Attribution comes from the
  *  spawn-time ?task= URL param and must match the current slot task. */
 function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServer {
-  const server = new McpServer({ name: "tidepool", version: "0.0.0" });
+  const server = rejectUnknownArguments(new McpServer({ name: "tidepool", version: "0.0.0" }));
   // ADR 0122 決定2: meta-review には worker の memory verb を登録せず、主題の専用 verb で置き換える
   const subject = attributedTaskId === null ? null : metaReviewSubjectOf(deps.db, attributedTaskId);
 

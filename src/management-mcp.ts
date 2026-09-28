@@ -79,7 +79,7 @@ import {
   entryExclusionPredicate,
   type TaskExecutionCandidates,
 } from "./scheduler.js";
-import { createStatelessMcpRouter } from "./stateless-mcp.js";
+import { createStatelessMcpRouter, rejectUnknownArguments } from "./stateless-mcp.js";
 import {
   DomainError,
   getTask,
@@ -252,9 +252,8 @@ WebUI themselves. This implies:
   appear in their next triage session.`;
 
 function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
-  const server = new McpServer(
-    { name: "tidepool-management", version: "0.0.0" },
-    { instructions: MANAGEMENT_MCP_INSTRUCTIONS },
+  const server = rejectUnknownArguments(
+    new McpServer({ name: "tidepool-management", version: "0.0.0" }, { instructions: MANAGEMENT_MCP_INSTRUCTIONS }),
   );
   server.registerTool("list_board", { description: "List the current task board." }, async () =>
     toolResult(listBoard(deps.db, deps.defaultAgentName, deps.auditorName)),
