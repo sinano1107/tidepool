@@ -45,3 +45,20 @@ worker の失敗として Behavior と実行設定の学習に流すと、記憶
 - **candidate は常に書き、帰責を添えて meta-review が捨てる** —— 「要件が変わったとき、…」という Behavior は書きようが
   なく、書けば meta-review の読み物が汚れる。門は起草時に引く。
 - **異議用に別の cause 語彙を立てる** —— 「なぜ外れたか」の分類が2本あると必ず漂流する。
+
+## 追記(2026-09-28 の triage、issue #1051)
+
+**`missing_information` の Knowledge の出所は異議 event ではなく、RCA 自身の decision(推論)。** 決定4 は「欠けていた事実を
+Knowledge(出所は異議 event)」と置いたが、その本文を書くのは RCA(LLM)であり、帰責 event を出所にすると出所の種別が事実
+(記録の引用)になって、worker には記録を引用した Knowledge と同じ重みで届く。meta-review が合成する Knowledge は自身の
+decision を出所にして推論と表示される(ADR 0120 決定1(c)、ADR 0122 決定1)ので、RCA だけが規則の外にいた。RCA は `log_decision`
+で findings を記し、その event id を Knowledge の出所に渡す(`fold_memory` の `based_on_decision` と同じ形)。Behavior candidate
+の出所は帰責 event のまま —— case 描画が指す記録であって、本文の証拠ではない(ADR 0153 決定3 の線)。
+
+出所の種別は状態ではない(ADR 0083 追記3): 推論を事実に切り替える操作は無く、人間がその内容を保証するなら人間名義の Knowledge
+で置き換える(出所 = 自身の宣言 = 事実、ADR 0083 追記5 / ADR 0162 決定1)。帰責からの由来は Knowledge → RCA の decision →
+RCA task → 親の異議エントリで辿れ、人間の一覧の `cause` 列(出所が帰責 event のときだけ埋まる)はこの Knowledge では空になる。
+
+退けた案: **出所は帰責 event のまま、種別の導出だけを「判定 event も推論」に変える** —— 出所の型1本(commit / event = 事実、
+decision = 推論)に event 種別の例外が入り、同じ帰責 event を出所に持つ Behavior の case 描画と食い違う。**今のまま「事実 = 記録の
+引用、検証済みの意味ではない」と明記する** —— meta-review の合成と RCA の合成で印が違う理由を説明で温存することになる。
