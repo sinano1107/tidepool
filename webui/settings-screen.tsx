@@ -1383,7 +1383,7 @@ function HaltedRefiresCard({ rows, say, onChanged }: {
           ) : (
             <React.Fragment>
               <p style={{ ...muted, fontFamily: 'var(--font-mono)' }}>
-                {row.refire === 'draft' ? 'behavior draft' : 'second-round attribution'} · entry #{row.entry.id} · {row.task.title} · {row.cause ?? 'unattributed'} · {row.round}
+                {row.refire === 'draft' ? 'behavior draft' : `second-round attribution · objection #${row.target}`} · entry #{row.entry.id} · {row.task.title} · {row.cause ?? 'unattributed'} · {row.round}
               </p>
               <p style={{ margin: 0, fontSize: 'var(--text-sm)' }}>{row.entry.text}</p>
             </React.Fragment>

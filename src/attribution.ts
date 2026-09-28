@@ -2,7 +2,19 @@ import { z } from "zod";
 import { type AllocationClient, type AllocationJudgment, type AllocationTarget, allocationInput, allocationTargets } from "./allocation-review.js";
 import type { Cause } from "./cause.js";
 import type { Db } from "./db.js";
-import { appendEvent, type DecisionLogEntry, type EventPayload, getEvent, isDecisionLogEntry, latestAttributions, listEvents, taskDecisionLog } from "./events.js";
+import {
+  type Attribution,
+  appendEvent,
+  bundleName,
+  currentAttributions,
+  type DecisionLogEntry,
+  type EventPayload,
+  getEvent,
+  isDecisionLogEntry,
+  listEvents,
+  objectionBundles,
+  taskDecisionLog,
+} from "./events.js";
 import { type ExecutionSettingRow, retrospectiveBoardCallRow } from "./execution-setting.js";
 import { buildMemoryInjection, createBehaviorCandidate, listMemoryEntries, memoryScope, recordKnowledge, requireDecision } from "./memory.js";
 import { sessionSpawnOf, sessionWindow } from "./precedent.js";
@@ -138,13 +150,13 @@ async function singleFlight(db: Db, key: string, fire: () => Promise<void>): Pro
   }
 }
 
-/** 撃ち直しの種別ごとの失敗 event の kind と、撃ち直しの対象を指す欄(起草は帰責、第2回は entry、配分評価は review の完了)。 */
+/** 撃ち直しの種別ごとの失敗 event の kind と、撃ち直しの対象を指す欄(起草は帰責、第2回は異議群(ADR 0170 決定4)、配分評価は review の完了)。 */
 const REFIRE = {
   draft: { failed: "memory_draft_failed", target: "attribution_event_id" },
-  second_round: { failed: "objection_attribution_failed", target: "entry_id" },
+  second_round: { failed: "objection_attribution_failed", target: "objection_event_id" },
   allocation: { failed: "allocation_review_failed", target: "review_completed_event_id" },
 } as const;
-/** 打ち切りの行を指す鍵: 種別と対象(起草は帰責 event の id、第2回は entry の id、配分評価は review の task_completed event の id)。 */
+/** 打ち切りの行を指す鍵: 種別と対象(起草は帰責 event の id、第2回は異議群の最初の異議 event の id、配分評価は review の task_completed event の id)。 */
 export const refireKeySchema = z.object({ refire: z.enum(["draft", "second_round", "allocation"]), target: z.number().int().positive() });
 export type RefireKey = z.infer<typeof refireKeySchema>;
 
@@ -198,15 +210,19 @@ export async function attributeObjections(
       try {
         judgments.set(o.entry.id, gate(await call.client.judge(input, call.setting), input.memory_read));
       } catch (err) {
-        const payload = { kind: "objection_attribution_failed" as const, entry_id: o.entry.id, round: "initial" as const, reason: `Board call failed: ${message(err)}` };
+        const payload = {
+          kind: "objection_attribution_failed" as const,
+          entry_id: o.entry.id,
+          objection_event_id: bundleName(o),
+          round: "initial" as const,
+          reason: `Board call failed: ${message(err)}`,
+        };
         appendEvent(db, { taskId: o.entry.task_id, workerId: BOARD_WORKER_ID, origin: "board", payload, at: now });
       }
     }),
   );
   return judgments;
 }
-
-type Attribution = { id: number } & Extract<EventPayload, { kind: "objection_attributed" }>;
 
 /** 異議されたタスクの RCA 子(self / auditor —— `registerRcaReview` が付ける `rca (` の題)。 */
 // ponytail: RCA 子の目印は題の接頭辞だけ —— task_registered に構造化された印が無い
@@ -232,41 +248,23 @@ const repairRegistered = (db: Db, objectedId: string, after: number) =>
       .get(objectedId, after) as { id: number }
   ).id;
 
-/** 束ね済みの異議を持つ entry ごとの帰責の状態(ADR 0168 決定3)。第2回を待つ(`awaiting`)のは、最新の帰責が
- *  初回の `uncertain` の entry と、最後に束ねられた異議群(session が閉じた `objection_raised`)を最新の帰責が
- *  出所に持たない entry —— 後者の出所はその異議群で、当時の decision log は修理子の登録で切る。前後は id でなく
- *  出所で見る: 前の RCA 群の第2回は次の session の開いている間にも着地する。open session の異議はまだ束ねられて
- *  いないので見ない。それ以外は最新の帰責(`latest`、同じ entry への追記は最新が有効 —— spec #563)。 */
+/** 異議群ごとの帰責の状態(ADR 0168 決定3 / ADR 0170 決定1)。第2回を待つ(`awaiting`)のは、帰責が初回の `uncertain` の
+ *  異議群と未帰責の異議群 —— 後者の出所はその異議群で、当時の decision log は修理子の登録で切る。それ以外は確定
+ *  (`confirmed`、同じ異議群では after_rca が有効)。前の異議群の状態は後の異議群があっても落とさない。 */
 // ponytail: poll の sweep のたびに全帰責と全異議を読む。帰責が数万に育ったら結果の不在を SQL 1本に寄せる
-function attributionStates(db: Db): Array<{ task_id: string } & ({ awaiting: SecondRoundSource } | { latest: Attribution })> {
-  const latest = latestAttributions(db);
-  const bundled = new Map<number, { task_id: string; session_id: number; ids: number[] }>();
-  for (const o of db
-    .prepare(
-      `SELECT o.id, o.task_id, json_extract(o.payload, '$.entry_id') AS entry_id, s.id AS session_id
-         FROM events o JOIN triage_sessions s ON s.id = json_extract(o.payload, '$.session_id')
-        WHERE o.kind = 'objection_raised' AND s.committed_at IS NOT NULL ORDER BY o.id`,
-    )
-    .all() as Array<{ id: number; task_id: string; entry_id: number; session_id: number }>) {
-    const last = bundled.get(o.entry_id);
-    if (last?.session_id === o.session_id) last.ids.push(o.id);
-    else bundled.set(o.entry_id, { task_id: o.task_id, session_id: o.session_id, ids: [o.id] });
-  }
-  return [...bundled].map(([entryId, { task_id, ids }]) => {
-    const attribution = latest.get(entryId);
-    if (!attribution?.objection_event_ids.includes(ids[0]!)) {
-      return { task_id, awaiting: { id: repairRegistered(db, task_id, ids.at(-1)!), entry_id: entryId, objection_event_ids: ids } };
-    }
-    return attribution.round === "initial" && attribution.cause === "uncertain" ? { task_id, awaiting: attribution } : { task_id, latest: attribution };
+function attributionStates(db: Db): Array<{ task_id: string } & ({ awaiting: SecondRoundSource } | { confirmed: Attribution })> {
+  return [...objectionBundles(db).values()].flat().map(({ task_id, entry_id, objection_event_ids: ids, attribution }) => {
+    if (!attribution) return { task_id, awaiting: { id: repairRegistered(db, task_id, ids.at(-1)!), entry_id, objection_event_ids: ids } };
+    return attribution.round === "initial" && attribution.cause === "uncertain" ? { task_id, awaiting: attribution } : { task_id, confirmed: attribution };
   });
 }
 
-/** 帰責の第2回を1 entry ぶん撃つ: RCA の findings を証拠にした判断(`uncertain` も判断として)を
- *  同じ entry への新しい event(round = after_rca)として追記し、起草へ進む(ADR 0120 決定1(b)(c))。
+/** 帰責の第2回を1異議群ぶん撃つ: RCA の findings を証拠にした判断(`uncertain` も判断として)を
+ *  その異議群を名指す新しい event(round = after_rca)として追記し、起草へ進む(ADR 0120 決定1(b)(c))。
  *  撃てなかったら何も書かず、撃って失敗したら `objection_attribution_failed` だけを残す(ADR 0164 決定3・6)。 */
 async function attributeSecondRound(db: Db, deps: AttributionCallDeps, objectedId: string, source: SecondRoundSource, now: Date): Promise<void> {
-  await singleFlight(db, `after_rca:${source.entry_id}`, async () => {
-    if (!refireDue(db, { refire: "second_round", target: source.entry_id }, now)) return;
+  await singleFlight(db, `after_rca:${bundleName(source)}`, async () => {
+    if (!refireDue(db, { refire: "second_round", target: bundleName(source) }, now)) return;
     const call = boardCallSetting(db, deps.attributionClient, deps.containers);
     if ("unavailable" in call) return;
     const input = secondRoundInput(db, objectedId, source);
@@ -274,7 +272,13 @@ async function attributeSecondRound(db: Db, deps: AttributionCallDeps, objectedI
     try {
       judgment = gate(await call.client.judge(input, call.setting), input.memory_read);
     } catch (err) {
-      const payload = { kind: "objection_attribution_failed" as const, entry_id: source.entry_id, round: "after_rca" as const, reason: `Board call failed: ${message(err)}` };
+      const payload = {
+        kind: "objection_attribution_failed" as const,
+        entry_id: source.entry_id,
+        objection_event_id: bundleName(source),
+        round: "after_rca" as const,
+        reason: `Board call failed: ${message(err)}`,
+      };
       appendEvent(db, { taskId: objectedId, workerId: BOARD_WORKER_ID, origin: "board", payload, at: now });
       return;
     }
@@ -320,10 +324,10 @@ async function reviewAllocation(db: Db, deps: AttributionCallDeps, target: Alloc
   });
 }
 
-/** sweep の対象(ADR 0164 決定1): entry ごとの帰責の状態のうち、あるべき結果が無いもの —— 第2回を待つ entry
- *  (初回の `uncertain` と束ね済みの未帰責、ADR 0168 決定3)で RCA 子がすべて決着したものは第2回、それ以外は
- *  最新の帰責を出所とする candidate が無いもの の起草 —— と、注釈の無い統合点レビューの配分評価(ADR 0172 決定1)。
- *  sweep と打ち切りの一覧が同じ集合を読む。 */
+/** sweep の対象(ADR 0164 決定1): 異議群ごとの帰責の状態のうち、あるべき結果が無いもの —— 第2回を待つ異議群
+ *  (初回の `uncertain` と未帰責、ADR 0168 決定3)で RCA 子がすべて決着したものは第2回、確定した異議群は
+ *  その帰責を出所とする candidate が無いもの の起草(後の異議群があっても外さない、ADR 0170 決定1)—— と、
+ *  注釈の無い統合点レビューの配分評価(ADR 0172 決定1)。sweep と打ち切りの一覧が同じ集合を読む。 */
 type RefireTarget = { task_id: string } & (
   | { refire: "second_round"; source: SecondRoundSource }
   | { refire: "draft"; attribution: Attribution }
@@ -338,7 +342,7 @@ function refireTargets(db: Db): RefireTarget[] {
       const rca = rcaChildren(db, state.task_id);
       return rca.length > 0 && settledAll(rca) ? [{ task_id: state.task_id, refire: "second_round", source: state.awaiting }] : [];
     }
-    return drafted.has(state.latest.id) ? [] : [{ task_id: state.task_id, refire: "draft", attribution: state.latest }];
+    return drafted.has(state.confirmed.id) ? [] : [{ task_id: state.task_id, refire: "draft", attribution: state.confirmed }];
   }).concat(allocationTargets(db).map((a) => ({ task_id: a.reviewed_task_id, refire: "allocation", allocation: a })));
 }
 
@@ -368,10 +372,10 @@ type HaltedRefire = { target: number; task: Titled; last_failure: { reason: stri
 /** 撃ち直しを打ち切った振り返り Board call(ADR 0164 決定5 / ADR 0172 決定3): 撃ち直しの対象のうち、直近の Retry 以降に撃って
  *  3回失敗し Dismiss が無いもの。行が閉じるのは撃ち直しの成功(対象から外れる)と Dismiss だけ。 */
 export function listHaltedRefires(db: Db): HaltedRefire[] {
-  const latest = latestAttributions(db);
+  const current = currentAttributions(db);
   const titled = (id: string) => ({ id, title: getTask(db, id)!.title });
   return refireTargets(db).flatMap((t): HaltedRefire[] => {
-    const target = t.refire === "draft" ? t.attribution.id : t.refire === "second_round" ? t.source.entry_id : t.allocation.completed_event_id;
+    const target = t.refire === "draft" ? t.attribution.id : t.refire === "second_round" ? bundleName(t.source) : t.allocation.completed_event_id;
     const { n, last_id, dismissed } = refireFailures(db, { refire: t.refire, target });
     if (dismissed || n < MAX_FIRED_FAILURES) return [];
     const failure = getEvent(db, last_id!)!;
@@ -386,8 +390,8 @@ export function listHaltedRefires(db: Db): HaltedRefire[] {
         target,
         entry: { id: entry_id, text: objectedEntryText(entry) },
         task: titled(t.task_id),
-        // 未帰責の entry は cause が空(ADR 0168 決定3)
-        cause: latest.get(entry_id)?.cause ?? null,
+        // 最後の異議群が未帰責の entry は cause が空(ADR 0168 決定3 / ADR 0170 決定2)
+        cause: current.get(entry_id)?.cause ?? null,
         round,
         last_failure,
       },
@@ -547,7 +551,7 @@ function learningTarget(
 }
 
 /** RCA の起草 verb `propose_from_objection`(spec #615 B / issue #1077): 異議エントリへの所見を記憶にする。
- *  門は列を足さず構造で引き(ADR 0120 決定1(a))、kind と宛先は最新の cause から導く(ADR 0115 決定4)。 */
+ *  門は列を足さず構造で引き(ADR 0120 決定1(a))、kind と宛先は今の判定(最後の異議群の cause)から導く(ADR 0115 決定4)。 */
 export function proposeFromObjection(
   db: Db,
   reviewId: string,
@@ -565,12 +569,12 @@ export function proposeFromObjection(
   if (!isDecisionLogEntry(entry) || entry.task_id !== task.parent_id) {
     throw new DomainError(`entry ${entry_id} is not a decision-log entry of your parent task`);
   }
-  const attribution = latestAttributions(db).get(entry_id);
+  const attribution = currentAttributions(db, [entry_id]).get(entry_id);
   if (!attribution && entryObjections(db, [entry_id]).length === 0) {
     throw new DomainError(`entry ${entry_id} carries no attributed objection`);
   }
   if (isHumanEntry(entry)) throw new DomainError(`entry ${entry_id} was written by a human`);
-  // 異議済みで未帰責の entry は uncertain と同じに読む(ADR 0168 決定3)—— learningTarget が拒否する
+  // 最後の異議群が未帰責の entry は uncertain と同じに読む(ADR 0168 決定3 / ADR 0170 決定2)—— learningTarget が拒否する
   const target = learningTarget(attribution?.cause ?? "uncertain", entry.worker_id, getRegistrant(db, entry.task_id), as);
   if ((target.kind === "knowledge") !== (based_on_decision !== undefined)) {
     throw new DomainError("based_on_decision is required for a knowledge entry and only for it");
