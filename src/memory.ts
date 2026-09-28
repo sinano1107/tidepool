@@ -220,6 +220,7 @@ export function defineMemoryBranch(
  *  承認の線なので consolidate の提案へ回す。返り値の event_ids は replaces の memory_entry_invalidated。 */
 export function foldMemory(
   db: Db,
+  metaReviewId: string,
   input: Partial<Omit<EntryInput, "source" | "original" | "author"> & { based_on_decision: number; successor_id: number }> & {
     replaces: number[];
     author: MemoryEntryFields["author"];
@@ -239,7 +240,7 @@ export function foldMemory(
       if (scope === undefined || path === undefined || title === undefined || text === undefined || based_on_decision === undefined) {
         throw new DomainError("a new knowledge entry needs scope, path, title, text and based_on_decision");
       }
-      successor = recordKnowledge(db, { scope, path, title, text, author, source: { event_id: requireDecision(db, based_on_decision) } }, origin, at).entry_id;
+      successor = recordKnowledge(db, { scope, path, title, text, author, source: { event_id: requireDecision(db, based_on_decision, metaReviewId) } }, origin, at).entry_id;
     }
     const event_ids = replaces.map((id) =>
       invalidateMemoryEntry(db, { entry_id: requireNotApprovedBehaviorOrExemplar(db, id).id, reason: "superseded", successor_id: successor }, author.name, origin, at, { activity: author.activity }),
@@ -394,9 +395,12 @@ export function moveMemoryByMetaReview(db: Db, input: Parameters<typeof moveMemo
   return moveMemory(db, input, origin, at);
 }
 
-/** LLM が合成した本文の出所 = 書き手が log_decision で書いた推論(meta-review の畳みと統合、RCA の Knowledge —— ADR 0115 追記)。 */
-export function requireDecision(db: Db, eventId: number): number {
-  if (getEvent(db, eventId)?.kind !== "decision_logged") throw new DomainError(`event ${eventId} is not a logged decision`);
+/** LLM が合成した本文の出所 = 書き手が log_decision で書いた推論(meta-review の畳みと統合、RCA の Knowledge —— ADR 0115 追記)。
+ *  書き手は呼んだ task で引く(events.task_id —— ADR 0120 決定1(a))。他 task の decision だと由来の連鎖が別の task に着地する。 */
+export function requireDecision(db: Db, eventId: number, taskId: string): number {
+  const event = getEvent(db, eventId);
+  if (event?.kind !== "decision_logged") throw new DomainError(`event ${eventId} is not a logged decision`);
+  if (event.task_id !== taskId) throw new DomainError(`event ${eventId} is not a decision of this task`);
   return eventId;
 }
 
@@ -848,7 +852,7 @@ export function proposeMemoryChange(
         shown = successor;
         heading = [`Consolidate into existing ${successor.kind} #${successor.id}, replacing:`, ...replacing];
       } else {
-        const decision = requireDecision(db, need(input.based_on_decision, "based_on_decision"));
+        const decision = requireDecision(db, need(input.based_on_decision, "based_on_decision"), metaReviewId);
         const { kind = "behavior", text, annotations, ...draft } = need(input.text, "text");
         // replaces が1つの出所を共有するなら新 candidate はそれを継ぐ(rule ↔ case の関係を共有 Episode から導ける)。workspace を
         // 跨ぐ統合(ADR 0120)は帰責 event が揃わないので meta-review の推論のまま。自身の作成 event の出所は継ぐ事例を持たない

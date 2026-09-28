@@ -38,7 +38,7 @@ import type { ProcessContainers } from "./process-container.js";
 import { type AuthorityProfile, REVIEWER_AUTHORITY_PROFILE, type RosterAgent } from "./registry.js";
 import { listAllocations, listRoutingCells, listRoutingProposals, listRoutingShadow, proposeRoutingChange } from "./routing-review.js";
 import type { Slot } from "./slot.js";
-import { createStatelessMcpRouter } from "./stateless-mcp.js";
+import { createStatelessMcpRouter, rejectUnknownArguments } from "./stateless-mcp.js";
 import {
   assigneeNeedsApproval,
   completeTask,
@@ -412,7 +412,7 @@ const decomposeChildrenSchema = z.array(
 /** Domain verbs only, no generic CRUD (ADR 0002). Attribution comes from the
  *  spawn-time ?task= URL param and must match the current slot task. */
 function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServer {
-  const server = new McpServer({ name: "tidepool", version: "0.0.0" });
+  const server = rejectUnknownArguments(new McpServer({ name: "tidepool", version: "0.0.0" }));
   // ADR 0122 決定2: meta-review には worker の memory verb を登録せず、主題の専用 verb で置き換える
   const subject = attributedTaskId === null ? null : metaReviewSubjectOf(deps.db, attributedTaskId);
 
@@ -748,7 +748,7 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
         const input = {
           ...fields,
           scope: memoryScope(deps, getTask(deps.db, task.parent_id)!),
-          source: { event_id: based_on_decision === undefined ? attribution!.id : requireDecision(deps.db, based_on_decision) },
+          source: { event_id: based_on_decision === undefined ? attribution!.id : requireDecision(deps.db, based_on_decision, task.id) },
           author: { activity: "rca" as const, name: attributedWorkerId(deps, task) },
         };
         return target.kind === "knowledge"
@@ -1054,7 +1054,7 @@ function registerMemoryMetaReviewVerbs(server: McpServer, deps: McpDeps, run: Me
       },
     },
     async (input) =>
-      run((reader, now) => foldMemory(deps.db, { ...input, scope: input.scope && registeredScope(deps, input.scope), author: author(reader) }, "worker", now)),
+      run((reader, now) => foldMemory(deps.db, reader.taskId, { ...input, scope: input.scope && registeredScope(deps, input.scope), author: author(reader) }, "worker", now)),
   );
 
   server.registerTool(
