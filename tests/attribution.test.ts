@@ -839,7 +839,7 @@ it("throttle の間は第2回の帰責を撃たず、失敗 event も after_rca 
   ]);
 });
 
-it("容器の前提が成り立たない間は起草を撃たず、失敗 event も書かない。前提が戻れば撃って candidate が載る", async () => {
+it("容器の前提が成り立たない間は起草を撃ち直さず、失敗 event も増えない。前提が戻れば撃って candidate が載る", async () => {
   const s = await objectedForDraft("no containment", { initial: { cause: "preference", evidence: "taste" } });
   t = s.t;
   // 初回の帰責も前提を見る(ADR 0168 追記)ので、帰責は前提が成り立つ間に済ませ、起草は撃ち直しを待たせる
