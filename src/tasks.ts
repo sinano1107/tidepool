@@ -1996,7 +1996,8 @@ function hasAgentRegisteredChild(db: Db, parentId: string): boolean {
  *  agent's only path to registering a task at all is the `decompose` MCP tool,
  *  so a `task_registered` event by `HUMAN_WORKER_ID` is exactly "a human
  *  registered this task" (a root the human registered, or a child they added
- *  via human decompose). No separate provenance marker is needed. */
+ *  via human decompose). No separate provenance marker is needed. registerTask
+ *  writes exactly one `task_registered`, so the latest is the task's only one. */
 function isHumanRegistered(db: Db, taskId: string): boolean {
   return latestEventOfTask(db, taskId, "task_registered")?.worker_id === HUMAN_WORKER_ID;
 }
