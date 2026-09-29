@@ -199,6 +199,7 @@ function writeSuperseding(
   at: Date,
   write: (replaced: MemoryEntry[]) => number,
 ): { entry_id: number; event_id: number } {
+  if (supersedes?.length === 0) throw new DomainError("supersedes needs at least one entry to replace; omit it to write without replacing");
   return db.transaction(() => {
     const replaced = (supersedes ?? []).map((id) => rowToEntry(requireLive(db, id, undefined, "approved")));
     const id = write(replaced);

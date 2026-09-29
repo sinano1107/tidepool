@@ -1452,6 +1452,17 @@ it("4種別の書き込みは supersedes の各要素を新エントリの super
   }
 });
 
+it("supersedes: [] は domain error で、エントリも event も足さない —— 省略(supersedes なし)は通常の新規のまま(ADR 0162 決定1 は1件以上 / #1135)", () => {
+  const { db } = board();
+  const count = () => db.prepare("SELECT count(*) AS n FROM events").get();
+  const before = { entries: listMemoryEntries(db, {}), events: count() };
+
+  expect(() => recordKnowledge(db, { ...humanEntryInput(db, humanKnowledge), supersedes: [] }, "webui", at)).toThrow(DomainError);
+  expect({ entries: listMemoryEntries(db, {}), events: count() }).toEqual(before);
+
+  recordKnowledge(db, { ...humanEntryInput(db, humanKnowledge), supersedes: undefined }, "webui", at);
+});
+
 it("人間の Exemplar は source_event_id を省くと supersedes の揃った出所(RCA 起草の帰責 event も)を事例に継ぎ、注釈はその case で検査する —— 揃わない・supersedes も無いなら domain error で何も書かない(#1041)", () => {
   const { db, task } = board();
   const decision = logDecision(db, task, "split the migration into two commits", "deckhand", at);
