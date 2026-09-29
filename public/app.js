@@ -2232,13 +2232,14 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit, fo
   const [moving, setMoving] = React.useState(null);
   const [branchMove, setBranchMove] = React.useState(null);
   const workspaceOptions = [{ value: "", label: "board-wide" }, ...workspaceNames];
+  const orphanedFrom = [...new Set((entries ?? []).filter((e) => e.invalidation_reason === null).map((e) => deadRefs(e).workspace))].filter((name) => name !== null && !workspaceNames.includes(name)).map((name) => ({ value: name, label: `${name} (not registered)` }));
   const move = (path, body, detail, close) => submit(path, body, ["moved", detail], "move failed", close);
   return /* @__PURE__ */ React.createElement(Card, { style: { display: "flex", flexDirection: "column", gap: 14 } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8, minHeight: 26 } }, /* @__PURE__ */ React.createElement("span", { style: settingsCardLabel }, "memory entries"), !writing && /* @__PURE__ */ React.createElement("div", { style: { marginLeft: "auto", display: "flex", gap: 8 } }, !branchMove && /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "sm", onClick: () => setBranchMove({ workspace: "", path: "", to_workspace: "", to_path: "" }) }, "Move branch"), /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "sm", onClick: () => edit.open(writeId, () => setDraft(blank)) }, "Write"))), branchMove && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("p", { style: muted }, "moves the branch and every live entry under it in one workspace; invalidated entries stay where they are"), /* @__PURE__ */ React.createElement(
     Select,
     {
       label: "From workspace",
       value: branchMove.workspace,
-      options: workspaceOptions,
+      options: [...workspaceOptions, ...orphanedFrom],
       onChange: (e) => setBranchMove({ ...branchMove, workspace: e.target.value })
     }
   ), /* @__PURE__ */ React.createElement(Input, { label: "From branch path", mono: true, value: branchMove.path, onChange: (e) => setBranchMove({ ...branchMove, path: e.target.value }), placeholder: "build" }), /* @__PURE__ */ React.createElement(
