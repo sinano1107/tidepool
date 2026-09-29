@@ -7,7 +7,6 @@ import {
   InvalidAgentIconError,
   UnknownAuthorityProfileError,
 } from "./agent-create.js";
-import { type AttributionCallDeps, attributeObjections, listHaltedRefires, markHaltedRefire, refireKeySchema } from "./attribution.js";
 import { boardHalts } from "./board-halt.js";
 import { quarantineCliAuthFailure } from "./cli-auth.js";
 import type { Clock } from "./clock.js";
@@ -34,6 +33,7 @@ import {
   completeThroughHumanDoor,
   editThroughHumanDoor,
   type GateFailure,
+  listMemoryEntriesForHuman,
   registerThroughHumanDoor,
   submitAnswer,
 } from "./human-verbs.js";
@@ -51,7 +51,6 @@ import {
   humanKnowledgeSchema,
   invalidateMemoryEntry,
   invalidationSchema,
-  listMemoryEntries,
   memoryBranchMoveSchema,
   memoryFoldSchema,
   memoryListFilterSchema,
@@ -97,6 +96,7 @@ import {
   DeletionConfirmationRequiredError,
 } from "./registry-write.js";
 import { RepoAccessMissingError } from "./repo-access.js";
+import { attributeObjections, listHaltedRefires, markHaltedRefire, type RetrospectiveCallDeps, refireKeySchema } from "./retrospective.js";
 import {
   entryExclusionPredicate,
   type TaskExecutionCandidates,
@@ -618,9 +618,9 @@ export interface ApiRouterDeps {
    *  POST /api/translate reports the LLM as unreachable, same 503 posture as
    *  no draftClient configured. */
   translationClient?: TranslationClient;
-  /** The attribution Board call: the commit half of POST /triage/close awaits
-   *  the attribution client (ADR 0168). Drafting is the poll sweep's (ADR 0169). */
-  attributionCalls: AttributionCallDeps;
+  /** The retrospective Board calls: POST /triage/close awaits attribution (ADR 0168);
+   *  drafting and allocation review are fired by the poll sweep (ADR 0169 / ADR 0172). */
+  retrospectiveCalls: RetrospectiveCallDeps;
   /** Whether an explicitly named workspace is protected (CONTEXT.md's
    *  protected workspace / ADR 0013), threaded straight to human decompose's
    *  own call into decomposeTask (issue #129) — same resource-side invariant
@@ -676,7 +676,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     hostSkills,
     githubTokenFile,
     translationClient,
-    attributionCalls,
+    retrospectiveCalls,
     quarantineResolvers,
     taskExecutionCandidates,
     isProtectedWorkspace,
@@ -1647,9 +1647,9 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       res.status(400).json({ error: z.treeifyError(parsed.error) });
       return;
     }
-    const { workspace, board_wide, ...filter } = parsed.data;
+    const { workspace: scope, board_wide, ...filter } = parsed.data;
     res.json({
-      entries: listMemoryEntries(db, { ...filter, scope: board_wide ? null : workspace }),
+      entries: listMemoryEntriesForHuman({ db, agentRegistered, workspace, resolveWorkspace }, { ...filter, scope: board_wide ? null : scope }),
     } satisfies WireContract["GET /api/settings/memory/entries"]);
   });
 
@@ -1944,7 +1944,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
         // the same await the draft endpoint does), then enters the one
         // transaction that bundles and registers with the judgments in hand
         const open = activeTriageSession(db);
-        const judgments = open && (await attributeObjections(db, attributionCalls, open.id, clock.now()));
+        const judgments = open && (await attributeObjections(db, retrospectiveCalls, open.id, clock.now()));
         result = commitTriage(db, clock.now(), parsed.data.scratchpad, judgments);
       }
       // Closing an open session re-opens pickup. A sessionless triage never

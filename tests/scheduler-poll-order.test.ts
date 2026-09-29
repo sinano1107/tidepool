@@ -5,7 +5,7 @@ import { startScheduler } from "../src/scheduler.js";
 import { implicitTaskExecutionCandidates } from "../src/server-options.js";
 import { Slot } from "../src/slot.js";
 import { registerTask } from "../src/tasks.js";
-import { FakeClock, fakeContainers, noAttributionCalls, ScriptedWorker } from "./fakes.js";
+import { FakeClock, fakeContainers, noRetrospectiveCalls, ScriptedWorker } from "./fakes.js";
 
 /** ADR 0119 決定5: poll 中に届いた契機は捨てる(合体しない)。それで取りこぼさないのは、poll が
  *  最初の await より前に slot を読み、候補の読み取りを await の後に置いているからである ——
@@ -16,7 +16,7 @@ it("poll が封じ込め検査の await に居る間に登録されたタスク�
   const worker = new ScriptedWorker(clock);
   let release!: (capability: ContainmentCapability) => void;
   const scheduler = startScheduler({
-    attributionCalls: noAttributionCalls,
+    retrospectiveCalls: noRetrospectiveCalls,
     db,
     clock,
     slot: new Slot(),

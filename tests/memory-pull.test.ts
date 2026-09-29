@@ -1,5 +1,4 @@
 import { expect, it } from "vitest";
-import { attributeObjections, refireAttributions } from "../src/attribution.js";
 import { openDb } from "../src/db.js";
 import { appendEvent, getEvent, listEvents, type TaskScopedPayload } from "../src/events.js";
 import {
@@ -21,9 +20,10 @@ import {
   searchMemory,
 } from "../src/memory.js";
 import { projectAndPersist } from "../src/precedent.js";
+import { attributeObjections, refireRetrospectiveCalls } from "../src/retrospective.js";
 import { DomainError, logDecision, registerTask } from "../src/tasks.js";
 import { commitTriage, raiseObjection, startTriage } from "../src/triage.js";
-import { FakeAttributionClient, FakeBehaviorDraftClient, noAttributionCalls } from "./fakes.js";
+import { FakeAttributionClient, FakeBehaviorDraftClient, noRetrospectiveCalls } from "./fakes.js";
 import { FIXTURE_SPAWNED_EVENT_ID, FIXTURE_TASK, seedFixtureBoard, tempDir, writeFixtureTranscript } from "./harness.js";
 
 const at = new Date("2026-09-14T00:00:00.000Z");
@@ -317,7 +317,7 @@ async function objectedInTwoCommittedSessions() {
     const session = startTriage(db, at);
     raiseObjection(db, 6, comment, at);
     attributionClient.scriptJudgment(6, { cause, evidence: "e" });
-    commitTriage(db, at, [], await attributeObjections(db, { ...noAttributionCalls, attributionClient }, session.id, at));
+    commitTriage(db, at, [], await attributeObjections(db, { ...noRetrospectiveCalls, attributionClient }, session.id, at));
   };
   await settle("three bullets is too few", "requirement_change");
   await settle("cover the tide cycle too", "preference");
@@ -327,7 +327,7 @@ async function objectedInTwoCommittedSessions() {
 it("2つ目の session の帰責を出所に持つ Behavior の case の steering は、その session の異議だけで、同じ帰責の AttributionInput.steering と一致する", async () => {
   const { db, reader } = await objectedInTwoCommittedSessions();
   const behaviorDraftClient = new FakeBehaviorDraftClient();
-  refireAttributions(db, { ...noAttributionCalls, behaviorDraftClient, workspace: { name: "sandbox" } }, at);
+  refireRetrospectiveCalls(db, { ...noRetrospectiveCalls, behaviorDraftClient, workspace: { name: "sandbox" } }, at);
   // sweep は fire-and-forget: fake の返答が着地するまで回す
   await new Promise((resolve) => setImmediate(resolve));
   const preference = listEvents(db, FIXTURE_TASK).find((e) => e.payload.kind === "objection_attributed" && e.payload.cause === "preference");

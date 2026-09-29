@@ -1,5 +1,4 @@
 import { quarantineAgent, UnknownAgentError } from "./agent.js";
-import { type AttributionCallDeps, refireAttributions } from "./attribution.js";
 import { boardHalts } from "./board-halt.js";
 import { type CliAuthCheck, quarantineCliAuthForProvider } from "./cli-auth.js";
 import type { Clock } from "./clock.js";
@@ -36,6 +35,7 @@ import {
 } from "./registry.js";
 import { registryReachabilityPickupBlocked } from "./registry-reachability.js";
 import { parseGitHubRepo, repairRepoAccess } from "./repo-access.js";
+import { type RetrospectiveCallDeps, refireRetrospectiveCalls } from "./retrospective.js";
 import type { Slot } from "./slot.js";
 import { expireSpendDown } from "./spend-down.js";
 import {
@@ -270,8 +270,8 @@ export function startScheduler(deps: {
   registry?: RegistrySource;
   /** registry の agent 一覧(issue #920): routing の due 判定の直前に tier の提案の pin を照合する。Absent → registry の無い盤面。 */
   agents?: ListAgentTiers;
-  /** 帰責と起草の Board call(ADR 0164 / ADR 0169): 第2回の帰責と起草を撃つのは poll の sweep だけ。 */
-  attributionCalls: AttributionCallDeps;
+  /** 振り返り Board call(帰責・起草・配分評価、ADR 0172): 発火は poll の sweep だけ。 */
+  retrospectiveCalls: RetrospectiveCallDeps;
 }): Scheduler {
   const {
     db,
@@ -294,7 +294,7 @@ export function startScheduler(deps: {
     githubAuth,
     registry,
     agents,
-    attributionCalls,
+    retrospectiveCalls,
   } = deps;
   let inFlight = false;
   const resumeTimer = createResumeTimers(clock, pollNow);
@@ -564,8 +564,8 @@ export function startScheduler(deps: {
       // 読み取りより前なので同じ pass で拾われる。slot 占有・halt より手前(空の盤面でも登録する)。
       // **同期**に保つ —— ADR 0119 決定5 の「最初の await より前に slot を読む」を崩さない。
       registerDueMetaReviews(db, clock.now(), agents);
-      // ADR 0164 決定4 / ADR 0169: 第2回の帰責と起草の sweep も同じく同期で相乗りし、Board call は待たない
-      refireAttributions(db, attributionCalls, clock.now());
+      // ADR 0164 決定4 / ADR 0169 / ADR 0172: 振り返り Board call の sweep も同じく同期で相乗りし、Board call は待たない
+      refireRetrospectiveCalls(db, retrospectiveCalls, clock.now());
       if (await pickupBlocked()) return;
       // agent 名で外れるのは、定義が成立しない agent(quarantineAgent)だけである
       // (ADR 0110 決定3 / issue #544)。

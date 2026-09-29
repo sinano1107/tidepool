@@ -8,7 +8,6 @@ import {
   InvalidAgentIconError,
   UnknownAuthorityProfileError,
 } from "./agent-create.js";
-import { listHaltedRefires, markHaltedRefire, refireKeySchema } from "./attribution.js";
 import { boardHalts } from "./board-halt.js";
 import type { Clock } from "./clock.js";
 import type { Db } from "./db.js";
@@ -28,6 +27,7 @@ import {
   completeThroughHumanDoor,
   decomposeThroughHumanDoor,
   editThroughHumanDoor,
+  listMemoryEntriesForHuman,
   registerThroughHumanDoor,
   submitAnswer,
 } from "./human-verbs.js";
@@ -45,7 +45,6 @@ import {
   humanKnowledgeSchema,
   invalidateMemoryEntry,
   invalidationSchema,
-  listMemoryEntries,
   memoryBranchMoveSchema,
   memoryFoldSchema,
   memoryListFilterSchema,
@@ -77,6 +76,7 @@ import {
   MERGE_DIAL_VALUES,
 } from "./registry.js";
 import { RepoAccessMissingError } from "./repo-access.js";
+import { listHaltedRefires, markHaltedRefire, refireKeySchema } from "./retrospective.js";
 import {
   entryExclusionPredicate,
   type TaskExecutionCandidates,
@@ -595,11 +595,12 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
       description:
         "List the board's memory entries, including candidates, invalidated ones (with invalidation_reason and successor_id), the ids each entry replaced (replaced_ids) " +
         "and board-wide definitions a workspace definition shadows. workspace matches exactly; board_wide lists only board-wide entries; " +
-        "state invalidated lists invalidated entries, approved / candidate the rest.",
+        "state invalidated lists invalidated entries, approved / candidate the rest. On a board with a registry each entry carries orphaned: " +
+        "\"addressee\", \"scope\" or \"both\" when its addressee agent or scope workspace is no longer registered, null otherwise.",
       inputSchema: memoryListFilterSchema.extend({ board_wide: z.boolean().optional() }).shape,
     },
     async ({ workspace, board_wide, ...filter }) =>
-      toolResult(listMemoryEntries(deps.db, { ...filter, scope: board_wide ? null : workspace })),
+      toolResult(listMemoryEntriesForHuman(deps, { ...filter, scope: board_wide ? null : workspace })),
   );
   server.registerTool(
     "record_knowledge",

@@ -1,9 +1,9 @@
 import { expect, it } from "vitest";
-import { proposeFromObjection } from "../src/attribution.js";
 import type { Cause } from "../src/cause.js";
 import { type Db, openDb } from "../src/db.js";
 import { appendEvent } from "../src/events.js";
 import { listMemoryEntries } from "../src/memory.js";
+import { proposeFromObjection } from "../src/retrospective.js";
 import { BOARD_WORKER_ID, DomainError, HUMAN_WORKER_ID, logDecision, registerTask, type Task, type TaskType } from "../src/tasks.js";
 import { bundledObjection } from "./harness.js";
 

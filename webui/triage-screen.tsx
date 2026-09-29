@@ -214,14 +214,16 @@ async function translateMemoryWording(translate: TpTranslateFn, english: Record<
 // memory の提案の修正値(ADR 0152 決定2・5): candidate の文言を初期値に、settings と同じ英語 + 原文の2欄と逆翻訳。
 // Exemplar の candidate(#950)は settings の Exemplar の扉と同じ注釈の form で、case は candidate の出所に固定。
 // candidate から変えた欄(と原文)だけを修正値として上に渡す —— 何も変えなければ素の approve になる。
-function TpMemoryAmendment({ candidateId, onTranslate, onChange }: {
+function TpMemoryAmendment({ candidateId, onTranslate, onChange, onDeadAddressee }: {
   candidateId: number;
   onTranslate?: TpTranslateFn;
   onChange: (amendment: TpAmendment) => void;
+  /** 宛先が孤立した現在値のままか(ADR 0173 決定3)—— その間 approve は送れない */
+  onDeadAddressee: (dead: boolean) => void;
 }) {
   const { Button, Input, Select } = window.TidepoolDesignSystem_8a0ead;
   type Wording = { title: string; text: string; addressee: string; annotations: TpDraftAnnotation[] };
-  const [base, setBase] = React.useState<(Wording & { kind: string; source: number | null }) | null>(null);
+  const [base, setBase] = React.useState<(Wording & { kind: string; source: number | null; dead: string | null }) | null>(null);
   const [draft, setDraft] = React.useState({ title: '', text: '', addressee: '', originalTitle: '', originalText: '', annotations: [] as TpDraftAnnotation[] });
   const [back, setBack] = React.useState<string | null>(null);
   const [error, setError] = React.useState<string | null>(null);
@@ -246,7 +248,7 @@ function TpMemoryAmendment({ candidateId, onTranslate, onChange }: {
           annotations: (candidate.annotations ?? []).map(({ anchor, polarity, text }) => ({ anchor, polarity, text: text.trim(), original: '', back: null })),
         };
         // Exemplar の出所は常に event(case を描けない出所は Exemplar にならない)
-        setBase({ ...wording, kind: candidate.kind, source: typeof candidate.source.ref === 'number' ? candidate.source.ref : null });
+        setBase({ ...wording, kind: candidate.kind, source: typeof candidate.source.ref === 'number' ? candidate.source.ref : null, dead: deadRefs(candidate).addressee?.trim() ?? null });
         setDraft({ ...wording, originalTitle: '', originalText: '' });
       })
       .catch((err) => setError(String(err.message || err)));
@@ -264,6 +266,7 @@ function TpMemoryAmendment({ candidateId, onTranslate, onChange }: {
     if (draft.originalTitle.trim()) changed.original_title = draft.originalTitle.trim();
     if (draft.originalText.trim()) changed.original_text = draft.originalText.trim();
     onChange(changed);
+    onDeadAddressee(draft.addressee === base.dead);
   }, [base, draft]);
   if (!base) return error ? <div style={{ fontSize: 'var(--text-xs)', color: 'var(--coral-4)', marginBottom: 14 }}>{error}</div> : null;
   const set = (key: keyof typeof draft) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => {
@@ -280,11 +283,11 @@ function TpMemoryAmendment({ candidateId, onTranslate, onChange }: {
       setError(String((err as Error).message || err));
     }
   };
-  // the current addressee stays offered even if its agent has left the registry
+  // a current addressee whose agent has left the registry is shown but cannot be approved again
   const addressee = (
     <React.Fragment>
       <Select label="Addressee" value={draft.addressee} onChange={set('addressee')}
-        options={[{ value: '', label: 'every agent' }, ...new Set([...agentNames, ...(draft.addressee ? [draft.addressee] : [])])]} />
+        options={[{ value: '', label: 'every agent' }, ...offerNames(agentNames, draft.addressee, base.dead)]} />
       {agentsError && <div style={{ fontSize: 'var(--text-xs)', color: 'var(--coral-4)' }}>{agentsError}</div>}
     </React.Fragment>
   );
@@ -351,6 +354,7 @@ function TpQuestionCard({ q, answer, onAnswer, locked = false, onTranslate }: {
   // a server-confirmed answer (locked) always wins over in-progress local picks
   React.useEffect(() => { if (answer) setDraft(answer); }, [answer]);
   const [amendment, setAmendment] = React.useState<TpAmendment>({});
+  const [deadAddressee, setDeadAddressee] = React.useState(false);
   const [comment, setComment] = React.useState('');
   const setItemAnswer = (i: number, value: string | null) => {
     const next = draft.slice();
@@ -404,7 +408,7 @@ function TpQuestionCard({ q, answer, onAnswer, locked = false, onTranslate }: {
         </div>
       )}
       {q.amendable === 'memory' && !locked && (
-        <TpMemoryAmendment candidateId={q.candidateId!} onTranslate={onTranslate} onChange={setAmendment} />
+        <TpMemoryAmendment candidateId={q.candidateId!} onTranslate={onTranslate} onChange={setAmendment} onDeadAddressee={setDeadAddressee} />
       )}
       {q.amendable === 'row' && !locked && (
         <div style={{ display: 'flex', gap: 8, marginBottom: 14 }}>
@@ -428,7 +432,8 @@ function TpQuestionCard({ q, answer, onAnswer, locked = false, onTranslate }: {
       <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
         {items.map((item, i) => (
           <TpQuestionItemPicker key={i} item={item} value={draft[i]} locked={locked} onChange={(v) => setItemAnswer(i, v)}
-            translated={translatedItems ? translatedItems[i] : null} disabled={comment.trim() ? [] : q.needsComment} />
+            translated={translatedItems ? translatedItems[i] : null}
+            disabled={[...(comment.trim() ? [] : q.needsComment ?? []), ...(deadAddressee ? ['approve'] : [])]} />
         ))}
       </div>
     </Card>
