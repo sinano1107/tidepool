@@ -499,5 +499,6 @@ it("受理された work task の episode は、後から別の work task が sp
   await t.clock.advance(HOUR);
   recordSpawn(b.id);
 
-  expect(loadEpisodes(t.db).find((e) => e.worker_spawned_event_id === aSpawnedId)?.outcome).toBe("accepted");
+  const episodes = loadEpisodes(t.db);
+  expect(episodes.find((e) => e.worker_spawned_event_id === aSpawnedId)?.outcome).toBe("accepted");
 });
