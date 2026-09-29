@@ -16,6 +16,7 @@ import {
   loggedEntry,
   registerWork,
   type Tidepool,
+  WORKER_SPAWNED,
 } from "./harness.js";
 
 /** selector が並べた候補(除外を当てた後)。表の綴り —— anthropic は alias 行。 */
@@ -454,35 +455,18 @@ it("昇格中も学習器の選択は Throttle の除外を通る —— 選ん�
 });
 
 it("別タスクの entry への帰責は、id 窓が重なっても開いたままの session の episode に混ざらない —— cause はタスクの照合で決まる(loadEpisodes)", async () => {
-  t = await bootTidepool({ taskExecutionCandidates: () => [opus, sol] });
-  const spawn = (taskId: string) =>
-    appendEvent(t.db, {
-      taskId,
-      workerId: "fake-worker",
-      origin: "board",
-      at: t.clock.now(),
-      payload: {
-        kind: "worker_spawned",
-        registry_commit: "commit",
-        definition_version: "1",
-        advisor: null,
-        provider: "anthropic",
-        model: "opus",
-        effort: "high",
-        source: { tier: "board", provider: "rank" },
-        harness: "claude-code",
-        cli_version: "1",
-      },
-    });
+  t = await bootTidepool();
+  const recordSpawn = (taskId: string) =>
+    appendEvent(t.db, { taskId, workerId: "fake-worker", origin: "board", at: t.clock.now(), payload: WORKER_SPAWNED });
   // A は完了しても session は開いたまま(exit も次の spawn も無い)。その後ろで B が spawn して帰責される —— A の id 窓は B の帰責を含む
   const a = await registerWork(t, "a");
   await t.clock.advance(HOUR);
-  const aSpawnedId = spawn(a.id);
+  const aSpawnedId = recordSpawn(a.id);
   await completeViaMcp(t, a.id);
   await completeIntegrationReviews(t, a.id);
   const b = await registerWork(t, "b");
   await t.clock.advance(HOUR);
-  const bSpawnedId = spawn(b.id);
+  const bSpawnedId = recordSpawn(b.id);
   const entry = await loggedEntry(t, b.id, "took the shortcut");
   const attributed: EventPayload = {
     kind: "objection_attributed",
@@ -494,9 +478,6 @@ it("別タスクの entry への帰責は、id 窓が重なっても開いたま
     round: "initial",
   };
   appendEvent(t.db, { taskId: b.id, workerId: "board", origin: "board", at: t.clock.now(), payload: attributed });
-  await completeViaMcp(t, b.id);
-  await completeIntegrationReviews(t, b.id);
-  await completeMetaReviews(t);
 
   const episodes = loadEpisodes(t.db);
   const outcomeOf = (spawnedId: number) => episodes.find((e) => e.worker_spawned_event_id === spawnedId)?.outcome;
