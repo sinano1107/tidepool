@@ -74,3 +74,22 @@ replaces ごとの scope と宛先を載せて人間が見比べる。直接適�
 - **覆いの門を Behavior / Exemplar にだけ掛ける** —— workspace の Knowledge を別 workspace の Knowledge に畳めば元の
   workspace の注入から消えるので狭まりは同じ。盤面全体の Definition は workspace を影として覆うので同じ規則で言える。
 
+
+## 追記(2026-09-29 の triage、issue #1131)
+
+7. **`define_memory` の `supersedes` にも覆いの門を掛ける。** 新しい定義の scope が盤面全体か、置き換える各定義の scope と同じときだけ
+   置き換えられる(Definition は宛先を持たないので門は scope だけ)。path は問わないまま(決定2)。門は meta-review の口にだけ掛け、
+   人間の面が呼ぶ `defineMemoryBranch` そのものには置かない(追記6 と同じ線)。
+
+### なぜ `define_memory` の `supersedes` も直接の畳みなのか
+
+書き込みの `supersedes` は新しく書く後継への畳みそのもの(ADR 0162 決定1)で、決定2 は `define_memory` の `supersedes` を
+`fold_memory` の `text` と同じ形と置いた。追記6 が verb を列挙したとき `define_memory` が漏れただけで、除く判断は無かった。
+狭める置き換えは要らない —— 同じ path に workspace と盤面全体の定義が並べば INDEX は workspace を採るので、workspace 向けの
+定義は `supersedes` なしで書けば影として覆え、盤面全体の定義は他の workspace に残る。`supersedes` で盤面全体を workspace の
+定義に置き換えるのは、他の workspace から定義を消す操作であり、それは人間の判断。
+
+### 退けた案
+
+- **`define_memory` は門の外に置き、`fold_memory` の `text` と扱いを分ける** —— 分ける理由を挙げられず、決定2 の「同じ形」と
+  食い違ったまま残る。
