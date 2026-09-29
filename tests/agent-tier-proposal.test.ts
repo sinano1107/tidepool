@@ -59,7 +59,7 @@ function spawned(tp: Tidepool, workerId: string, provider: "openai" | "moonshot"
     workerId,
     origin: "board",
     at: tp.clock.now(),
-    payload: { ...WORKER_SPAWNED, provider, model, source: { tier: tierSource, provider: "only" } },
+    payload: { ...WORKER_SPAWNED, provider, model, source: { tier: tierSource, provider: "only" }, harness: "codex" },
   });
 }
 
