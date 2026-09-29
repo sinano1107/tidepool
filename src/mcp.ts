@@ -1083,7 +1083,7 @@ function registerMemoryMetaReviewVerbs(server: McpServer, deps: McpDeps, run: Me
     async (input) =>
       run((reader, now) => {
         // 宛先も scope と同じく registry と照合する(ADR 0173 決定2)—— typo の宛先を人間の approve へ回さない
-        if (input.text) assertMemoryReferencesKnown(deps, { addressee: input.text.addressee });
+        assertMemoryReferencesKnown(deps, { addressee: input.text?.addressee });
         return proposeMemoryChange(
           deps.db,
           reader.taskId,

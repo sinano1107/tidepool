@@ -278,7 +278,7 @@ export function humanMemoryInput<T extends { workspace: string | null; addressee
  *  workspace のどちらが registry で解決できないかを読むときに導出する(保存しない)。null の宛先・scope は孤立しない。
  *  registry の無い盤面(agentRegistered が無い)では欄ごと付けない。registry は名前ごとに1度だけ引く。 */
 export function listMemoryEntriesForHuman(
-  deps: { db: Db; agentRegistered?: (name: string) => boolean; workspace?: WorkspaceConfig; resolveWorkspace?: (taskWorkspace: string | null) => WorkspaceConfig },
+  deps: MemoryReferenceDeps & { db: Db },
   filter: Parameters<typeof listMemoryEntries>[1],
 ): Array<ReturnType<typeof listMemoryEntries>[number] & { orphaned?: "addressee" | "scope" | "both" | null }> {
   const entries = listMemoryEntries(deps.db, filter);

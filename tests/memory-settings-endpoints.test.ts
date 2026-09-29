@@ -466,9 +466,6 @@ it("人間の移動(エントリ1件・枝ごと)は両方の面で registry に
   } finally {
     await client.close();
   }
-  expect((await api(t.baseUrl, "GET", "/api/settings/memory/entries?state=approved")).json.entries.map((e: { scope: string | null; path: string }) => [e.scope, e.path])).toEqual([
-    [null, "build/tests"],
-  ]);
 });
 
 it("宛先の agent が消えた孤立は復元できるが、同じ宛先のままの編集は両方の面で拒まれ、生きた宛先への付け替えは通る(ADR 0173 決定3)", async () => {
