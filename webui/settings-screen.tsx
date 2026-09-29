@@ -1663,27 +1663,32 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit, fo
   const [filter, setFilter] = React.useState({ workspace: '', kind: '', state: '' });
   const [entries, setEntries] = React.useState<TpMemoryEntry[] | null>(null); // null → still loading
   const [translations, setTranslations] = React.useState<Record<number, Extract<TpTranslation, { status: 'translated' }>>>({});
+  const displayed = entries?.filter((entry) =>
+    (!filter.workspace || entry.scope === (filter.workspace === '(board)' ? null : filter.workspace)) &&
+    (!filter.kind || entry.kind === filter.kind) &&
+    (!filter.state || (filter.state === 'invalidated' ? entry.invalidation_reason !== null : entry.invalidation_reason === null && entry.state === filter.state)));
   const load = async () => {
-    const query: Record<string, string> = {};
-    if (filter.workspace === '(board)') query.board_wide = 'true';
-    else if (filter.workspace) query.workspace = filter.workspace;
-    if (filter.kind) query.kind = filter.kind;
-    if (filter.state) query.state = filter.state;
     try {
-      const loaded = (await api('GET /api/settings/memory/entries', { query })).entries;
-      setEntries(loaded);
-      if (language === 'English') return;
-      for (const entry of loaded.filter((e) => e.original === null)) {
-        translateTarget({ type: 'memory_entry', entry_id: entry.id })
-          .then((out) => out.status === 'translated' && setTranslations((t) => ({ ...t, [entry.id]: out })))
-          .catch(() => {});
-      }
+      setEntries((await api('GET /api/settings/memory/entries')).entries);
     } catch (err) {
       say('danger', 'memory entries load failed', String((err as Error).message || err));
     }
   };
-  React.useEffect(() => { load(); }, [filter.workspace, filter.kind, filter.state]);
-  // once per visit: a later reload (a save, a filter change) must not pull the list back to the entry
+  React.useEffect(() => { load(); }, []);
+  // only displayed entries need a translation; keep completed and in-flight work across filters and reloads
+  const translating = React.useRef(new Set<number>());
+  React.useEffect(() => {
+    if (language === 'English') return;
+    for (const entry of displayed ?? []) {
+      if (entry.original !== null || translations[entry.id] || translating.current.has(entry.id)) continue;
+      translating.current.add(entry.id);
+      translateTarget({ type: 'memory_entry', entry_id: entry.id })
+        .then((out) => out.status === 'translated' && setTranslations((t) => ({ ...t, [entry.id]: out })))
+        .catch(() => {})
+        .finally(() => translating.current.delete(entry.id));
+    }
+  }, [entries, filter.workspace, filter.kind, filter.state, language]);
+  // once per visit: a later reload (a save, a move) must not pull the list back to the entry
   const focused = React.useRef(false);
   React.useEffect(() => {
     if (focused.current || focus === null || !entries) return;
@@ -1817,9 +1822,10 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit, fo
   const workspaceOptions = [{ value: '', label: 'board-wide' }, ...workspaceNames];
   // a branch left in a workspace that has since left the registry is still a valid move source (ADR 0173 決定2 gates
   // only the destination): offer each such scope that still holds a live entry, enabled
-  const orphanedFrom = [...new Set((entries ?? []).filter((e) => e.invalidation_reason === null).map((e) => deadRefs(e).workspace))]
+  const orphanedOptions = (rows: TpMemoryEntry[]) => [...new Set(rows.map((e) => deadRefs(e).workspace))]
     .filter((name): name is string => name !== null && !workspaceNames.includes(name))
     .map((name) => ({ value: name, label: `${name} (not registered)` }));
+  const orphanedFrom = orphanedOptions((entries ?? []).filter((e) => e.invalidation_reason === null));
   const move = (path: `/${string}`, body: Record<string, unknown>, detail: string, close: () => void) => submit(path, body, ['moved', detail], 'move failed', close);
 
   return (
@@ -1927,15 +1933,15 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit, fo
       )}
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
         <Select label="Workspace" value={filter.workspace} onChange={setFilterField('workspace')} style={{ flex: '1 1 120px' }}
-          options={[{ value: '', label: 'all' }, { value: '(board)', label: 'board-wide' }, ...workspaceNames]} />
+          options={[{ value: '', label: 'all' }, { value: '(board)', label: 'board-wide' }, ...workspaceNames, ...orphanedOptions(entries ?? [])]} />
         <Select label="Kind" value={filter.kind} onChange={setFilterField('kind')} style={{ flex: '1 1 120px' }}
           options={[{ value: '', label: 'all' }, ...MEMORY_KINDS]} />
         <Select label="State" value={filter.state} onChange={setFilterField('state')} style={{ flex: '1 1 120px' }}
           options={[{ value: '', label: 'all' }, 'approved', 'candidate', 'invalidated']} />
       </div>
       {entries === null && <p style={muted}>loading…</p>}
-      {entries?.length === 0 && <p style={muted}>no entries</p>}
-      {entries?.map((entry) => {
+      {displayed?.length === 0 && <p style={muted}>no entries</p>}
+      {displayed?.map((entry) => {
         const shown = entry.original ?? translations[entry.id];
         return (
         <div key={entry.id} data-testid={`memory-entry-${entry.id}`}
