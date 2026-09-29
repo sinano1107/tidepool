@@ -1819,13 +1819,7 @@ export function reviewedTaskExecutor(db: Db, task: Task): string | undefined {
   if (!reviewed) return undefined;
   if (reviewed.assignee !== null) return reviewed.assignee;
   return (
-    db
-      .prepare(
-        `SELECT worker_id FROM events
-         WHERE task_id = ? AND kind IN ('task_completed', 'task_picked_up')
-         ORDER BY CASE kind WHEN 'task_completed' THEN 0 ELSE 1 END, id DESC LIMIT 1`,
-      )
-      .get(task.parent_id) as { worker_id: string } | undefined
+    latestEventOfTask(db, task.parent_id, "task_completed") ?? latestEventOfTask(db, task.parent_id, "task_picked_up")
   )?.worker_id;
 }
 
@@ -2002,15 +1996,10 @@ function hasAgentRegisteredChild(db: Db, parentId: string): boolean {
  *  agent's only path to registering a task at all is the `decompose` MCP tool,
  *  so a `task_registered` event by `HUMAN_WORKER_ID` is exactly "a human
  *  registered this task" (a root the human registered, or a child they added
- *  via human decompose). No separate provenance marker is needed. */
+ *  via human decompose). No separate provenance marker is needed. registerTask
+ *  writes exactly one `task_registered`, so the latest is the task's only one. */
 function isHumanRegistered(db: Db, taskId: string): boolean {
-  const row = db
-    .prepare(
-      `SELECT 1 FROM events
-       WHERE task_id = ? AND kind = 'task_registered' AND worker_id = ? LIMIT 1`,
-    )
-    .get(taskId, HUMAN_WORKER_ID);
-  return row !== undefined;
+  return latestEventOfTask(db, taskId, "task_registered")?.worker_id === HUMAN_WORKER_ID;
 }
 
 /** The status half of the human-decompose gate (issue #129), split out so the
@@ -2431,10 +2420,7 @@ function isHeld(db: Db, taskId: string): boolean {
 /** Who registered `taskId` — its own `task_registered` event's worker id.
  *  registerTask always writes exactly one, so an existing task always has one. */
 export function getRegistrant(db: Db, taskId: string): string {
-  const { worker_id } = db
-    .prepare("SELECT worker_id FROM events WHERE task_id = ? AND kind = 'task_registered'")
-    .get(taskId) as { worker_id: string };
-  return worker_id;
+  return latestEventOfTask(db, taskId, "task_registered")!.worker_id;
 }
 
 /** Whether materializing `child` under `parent` raises the parent's risk
