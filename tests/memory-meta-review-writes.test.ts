@@ -559,9 +559,8 @@ it.each([
 /** 覆いの門(ADR 0161 決定6): 後継の scope が盤面全体か replaces と同じ、宛先が全員か replaces と同じ。宛先の組は Behavior /
  *  Exemplar だけで、新しく書く後継は Knowledge なので、宛先の行は successor_id の形だけ。 */
 function covering() {
-  const { db, task, decision } = board();
-  const knowledgeIn = (scope: string | null) =>
-    recordKnowledge(db, { scope, path: "build", title: "k", text: "k.", source: { commit: "0a46a46" }, author: metaReview }, "worker", at).entry_id;
+  const { db, task, decision, knowledge } = board();
+  const knowledgeIn = (scope: string | null) => knowledge("k", scope);
   const candidateFor = (addressee: string | null) =>
     createBehaviorCandidate(
       db,
