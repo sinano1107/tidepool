@@ -30,6 +30,7 @@ import {
   registerWork,
   runNow,
   type Tidepool,
+  WORKER_SPAWNED,
 } from "./harness.js";
 
 let t: Tidepool;
@@ -1159,7 +1160,7 @@ function memoryBoard() {
       workerId: "deckhand",
       origin: "board",
       at,
-      payload: { kind: "worker_spawned", registry_commit: "c", definition_version: "1", advisor: null, provider: "anthropic", model: "opus", effort: "high", source: { tier: "task", provider: "only" }, harness: "claude-code", cli_version: "1" },
+      payload: WORKER_SPAWNED,
     });
   const knowledge = (title: string) =>
     recordKnowledge(db, { scope: null, path: "build", title, text: `${title}.`, source: { commit: "0a46a46" }, author: { activity: "worker_verb", name: "deckhand" } }, "worker", at).entry_id;

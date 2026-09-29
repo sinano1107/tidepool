@@ -2,7 +2,7 @@ import { afterEach, expect, it } from "vitest";
 import { appendEvent } from "../src/events.js";
 import { createBehaviorCandidate, proposeMemoryChange, WORKER_MEMORY_VERBS } from "../src/memory.js";
 import { BOARD_WORKER_ID, registerTask } from "../src/tasks.js";
-import { api, bootTidepool, completeViaMcp, HOUR, mcpClient, registerWork, type Tidepool } from "./harness.js";
+import { api, bootTidepool, completeViaMcp, HOUR, mcpClient, registerWork, type Tidepool, WORKER_SPAWNED } from "./harness.js";
 
 /** 主題 routing の周期 meta-review(issue #917 / ADR 0150 決定7・ADR 0120 決定2)のサーバ境界: 周期登録、
  *  接続ごとの verb の可視性、読み口の写像。読み物の集計はドメイン層(tests/routing-meta-review-reads.test.ts)が言う。 */
@@ -51,18 +51,7 @@ it("worker_spawned だけでは routing の材料にならない", async () => {
     workerId: "deckhand",
     origin: "board",
     at: t.clock.now(),
-    payload: {
-      kind: "worker_spawned",
-      registry_commit: "c",
-      definition_version: "1",
-      advisor: null,
-      provider: "anthropic",
-      model: "sonnet",
-      effort: "high",
-      source: { tier: "board", provider: "only" },
-      harness: "claude-code",
-      cli_version: "1",
-    },
+    payload: WORKER_SPAWNED,
   });
 
   await t.clock.advance(HOUR);

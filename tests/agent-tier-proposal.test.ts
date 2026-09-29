@@ -3,7 +3,7 @@ import { AgentTierMismatchError, type AgentView, type ChangeAgentTierInput } fro
 import { appendEvent } from "../src/events.js";
 import { RegistryPushFailedError } from "../src/registry-write.js";
 import { registerTask } from "../src/tasks.js";
-import { api, bootTidepool, completeViaMcp, HOUR, mcpClient, type Tidepool } from "./harness.js";
+import { api, bootTidepool, completeViaMcp, HOUR, mcpClient, type Tidepool, WORKER_SPAWNED } from "./harness.js";
 
 /** agent の既定 tier の提案(issue #920 / ADR 0150 決定1・2・5)のサーバ境界: 提案 verb、回答での registry への commit と修正値、
  *  push 失敗・前提の崩れ、due 判定時と表の編集での陳腐化。registry 書き込みは fake(`agentAdmin.changeTier`)、実 git の書き込みは
@@ -59,18 +59,7 @@ function spawned(tp: Tidepool, workerId: string, provider: "openai" | "moonshot"
     workerId,
     origin: "board",
     at: tp.clock.now(),
-    payload: {
-      kind: "worker_spawned",
-      registry_commit: "c",
-      definition_version: "1",
-      advisor: null,
-      provider,
-      model,
-      effort: "high",
-      source: { tier: tierSource, provider: "only" },
-      harness: "codex",
-      cli_version: "1",
-    },
+    payload: { ...WORKER_SPAWNED, provider, model, source: { tier: tierSource, provider: "only" }, harness: "codex" },
   });
 }
 

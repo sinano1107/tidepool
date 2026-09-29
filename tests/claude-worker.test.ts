@@ -47,7 +47,7 @@ import {
   recordingPty,
   recordingSpawn,
 } from "./fakes.js";
-import { GIT_FIXTURE_TEST_TIMEOUT, git, makeWorkspace, tempDir } from "./harness.js";
+import { GIT_FIXTURE_TEST_TIMEOUT, git, makeWorkspace, tempDir, WORKER_SPAWNED } from "./harness.js";
 import { makeRegistry, makeRemoteBackedRegistry } from "./registry-fixture.js";
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
@@ -2578,18 +2578,7 @@ describe("ClaudeCodeWorker", () => {
       taskId: objected.id,
       workerId: "deckhand",
         origin: "webui",
-      payload: {
-        kind: "worker_spawned",
-        registry_commit: oldHash,
-        definition_version: "0.3.1",
-        advisor: null,
-        provider: "anthropic",
-        model: "sonnet",
-        effort: "high",
-        source: { tier: "board", provider: "only" },
-        harness: "claude-code",
-        cli_version: "test",
-      },
+      payload: { ...WORKER_SPAWNED, registry_commit: oldHash },
       at: new FakeClock().now(),
     });
     const decisionId = appendEvent(db, {
@@ -2633,7 +2622,7 @@ describe("ClaudeCodeWorker", () => {
       taskId: objected.id,
       workerId: "deckhand",
         origin: "webui",
-      payload: { kind: "worker_spawned", registry_commit: v1Hash, definition_version: "0.3.1", advisor: null, provider: "anthropic", model: "sonnet", effort: "high", source: { tier: "board", provider: "only" }, harness: "claude-code", cli_version: "test" },
+      payload: { ...WORKER_SPAWNED, registry_commit: v1Hash },
       at: new FakeClock().now(),
     });
     const decisionId = appendEvent(db, {
@@ -2663,7 +2652,7 @@ describe("ClaudeCodeWorker", () => {
       taskId: objected.id,
       workerId: "deckhand",
         origin: "webui",
-      payload: { kind: "worker_spawned", registry_commit: v2Hash, definition_version: "0.4.0", advisor: null, provider: "anthropic", model: "sonnet", effort: "high", source: { tier: "board", provider: "only" }, harness: "claude-code", cli_version: "test" },
+      payload: { ...WORKER_SPAWNED, registry_commit: v2Hash },
       at: new FakeClock().now(),
     });
 
@@ -2690,7 +2679,7 @@ describe("ClaudeCodeWorker", () => {
       taskId: objected.id,
       workerId: "deckhand",
         origin: "webui",
-      payload: { kind: "worker_spawned", registry_commit: v1Hash, definition_version: "0.3.1", advisor: null, provider: "anthropic", model: "sonnet", effort: "high", source: { tier: "board", provider: "only" }, harness: "claude-code", cli_version: "test" },
+      payload: { ...WORKER_SPAWNED, registry_commit: v1Hash },
       at: new FakeClock().now(),
     });
     const decision1 = appendEvent(db, {
@@ -2712,7 +2701,7 @@ describe("ClaudeCodeWorker", () => {
       taskId: objected.id,
       workerId: "deckhand",
         origin: "webui",
-      payload: { kind: "worker_spawned", registry_commit: v2Hash, definition_version: "0.4.0", advisor: null, provider: "anthropic", model: "sonnet", effort: "high", source: { tier: "board", provider: "only" }, harness: "claude-code", cli_version: "test" },
+      payload: { ...WORKER_SPAWNED, registry_commit: v2Hash },
       at: new FakeClock().now(),
     });
     const decision2 = appendEvent(db, {
@@ -2776,18 +2765,7 @@ describe("ClaudeCodeWorker", () => {
       taskId: objected.id,
       workerId: "deckhand",
         origin: "webui",
-      payload: {
-        kind: "worker_spawned",
-        registry_commit: "0000000000000000000000000000000000000000",
-        definition_version: "0.2.0",
-        advisor: null,
-        provider: "anthropic",
-        model: "sonnet",
-        effort: "high",
-        source: { tier: "board", provider: "only" },
-        harness: "claude-code",
-        cli_version: "test",
-      },
+      payload: { ...WORKER_SPAWNED, registry_commit: "0000000000000000000000000000000000000000" },
       at: new FakeClock().now(),
     });
     const decision1 = appendEvent(db, {
@@ -2802,7 +2780,7 @@ describe("ClaudeCodeWorker", () => {
       taskId: objected.id,
       workerId: "deckhand",
         origin: "webui",
-      payload: { kind: "worker_spawned", registry_commit: main, definition_version: "0.3.1", advisor: null, provider: "anthropic", model: "sonnet", effort: "high", source: { tier: "board", provider: "only" }, harness: "claude-code", cli_version: "test" },
+      payload: { ...WORKER_SPAWNED, registry_commit: main },
       at: new FakeClock().now(),
     });
     const decision2 = appendEvent(db, {
@@ -2856,7 +2834,7 @@ describe("ClaudeCodeWorker", () => {
       taskId: objected.id,
       workerId: "deckhand",
         origin: "webui",
-      payload: { kind: "worker_spawned", registry_commit: oldHash, definition_version: "0.3.1", advisor: null, provider: "anthropic", model: "sonnet", effort: "high", source: { tier: "board", provider: "only" }, harness: "claude-code", cli_version: "test" },
+      payload: { ...WORKER_SPAWNED, registry_commit: oldHash },
       at: new FakeClock().now(),
     });
     // independent review: unset assignee → resolves to the Auditor pointer
