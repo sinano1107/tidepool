@@ -203,7 +203,7 @@ function writeSuperseding(
   return db.transaction(() => {
     const replaced = (supersedes ?? []).map((id) => rowToEntry(requireLive(db, id, undefined, "approved")));
     const id = write(replaced);
-    if (supersedes?.length) foldMemoryEntries(db, { replaces: supersedes, successor_id: id, author }, origin, at);
+    if (supersedes) foldMemoryEntries(db, { replaces: supersedes, successor_id: id, author }, origin, at);
     return { entry_id: id, event_id: id };
   })();
 }
