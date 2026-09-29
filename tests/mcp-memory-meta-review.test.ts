@@ -1,9 +1,10 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { defineMemoryBranch, recordKnowledge, WORKER_MEMORY_VERBS } from "../src/memory.js";
+import { createBehaviorCandidate, defineMemoryBranch, recordKnowledge, WORKER_MEMORY_VERBS } from "../src/memory.js";
 import { MEMORY_META_REVIEW_VERBS } from "../src/meta-review.js";
 import { DEFAULT_AUDITOR_NAME } from "../src/tasks.js";
 import { UnknownWorkspaceError } from "../src/workspace.js";
 import { api, bootTidepool, GIT_FIXTURE_TEST_TIMEOUT, HOUR, makeWorkspace, mcpClient, memoryEntries, registerWork, type Tidepool } from "./harness.js";
+import { makeRegistryAgentCheck } from "./registry-fixture.js";
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 
@@ -21,10 +22,11 @@ const WORKER_MEMORY: string[] = [...WORKER_MEMORY_VERBS];
 const META_REVIEW_MEMORY: string[] = [...MEMORY_META_REVIEW_VERBS];
 
 /** registry に sandbox だけがある盤面と、slot に入った memory meta-review(材料の Knowledge を1件書いて poll させる)。 */
-async function boardWithMetaReview() {
+async function boardWithMetaReview(agentRegistered?: (name: string) => boolean) {
   const sandbox = await makeWorkspace("sandbox");
   t = await bootTidepool({
     workspace: sandbox,
+    agentRegistered,
     resolveWorkspace: (name) => {
       if ((name ?? "sandbox") !== "sandbox") throw new UnknownWorkspaceError(name!);
       return sandbox;
@@ -186,6 +188,26 @@ it("list_memory_entries は scope の名前 / null(盤面全体)/ 省略(すべ�
     }
     expect((await call("list_memory_candidates", { include_invalidated: true, page: 1 })).isError).toBe(false);
     expect((await call("list_precedents", { since_watermark: 0, page: 1 })).isError).toBe(false);
+  } finally {
+    await client.close();
+  }
+});
+
+it("consolidate の新 candidate の宛先が registry に無ければ名前つきの tool error で question は立たず、registry にある宛先・null・組み込みの auditor なら立つ(ADR 0173 決定1・2)", async () => {
+  const { client, call } = await boardWithMetaReview(await makeRegistryAgentCheck());
+  const candidate = { scope: "sandbox", path: "habits", title: "Split migrations", text: "Split migrations.", addressee: "deckhand" };
+  try {
+    const { event_id: decision } = (await call("log_decision", { line: "one rule is enough" })).body;
+    // 1回ごとに置換対象の candidate を新しく作る —— open な提案 question が名指す entry は次の提案に使えない
+    const consolidate = (addressee: string | null) => {
+      const replaced = createBehaviorCandidate(t.db, { ...candidate, source: { commit: "0a46a46" }, author: { activity: "rca", name: "auditor" } }, "worker", t.clock.now()).entry_id;
+      return call("propose_memory_change", { op: "consolidate", text: { ...candidate, addressee }, replaces: [replaced], based_on_decision: decision, rationale: "Same rule." });
+    };
+
+    expect(await consolidate("deckhnad")).toEqual({ isError: true, body: "unknown agent: deckhnad" });
+    for (const addressee of ["deckhand", null, DEFAULT_AUDITOR_NAME]) {
+      expect(await consolidate(addressee)).toMatchObject({ isError: false, body: { question_id: expect.any(String) } });
+    }
   } finally {
     await client.close();
   }

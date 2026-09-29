@@ -52,7 +52,7 @@ import {
 import { TranscriptStore } from "../src/transcript-store.js";
 import type { TranslationClient } from "../src/translate.js";
 import type { WatchdogConfig } from "../src/watchdog.js";
-import type { WorkspaceConfig } from "../src/workspace.js";
+import { UnknownWorkspaceError, type WorkspaceConfig } from "../src/workspace.js";
 import type { WorkspaceAdmin } from "../src/workspace-create.js";
 import {
   FakeAttributionClient,
@@ -882,16 +882,27 @@ export const WORKER_SPAWNED: Extract<EventPayload, { kind: "worker_spawned" }> =
   cli_version: "1",
 };
 
+/** agent 名と workspace 名の集合を registry として注入する boot の欄(集合を後から減らすと削除を模せる)。null の workspace は盤面の既定。 */
+export function registryOf(agents: Set<string>, workspaces: Set<string>): Pick<BootOptions, "agentRegistered" | "resolveWorkspace"> {
+  return {
+    agentRegistered: (name) => agents.has(name),
+    resolveWorkspace: (name) => {
+      if (name === null || workspaces.has(name)) return { name: name ?? "tidepool", path: "/workspaces/known" };
+      throw new UnknownWorkspaceError(name);
+    },
+  };
+}
+
 /** 起草 client つきの盤面で、work(既定 workspace charts)に1行 log → 完了 → 異議まで進める(commit は呼び手)。
  *  `registrant` を渡すと agent が登録した task(decompose と同じ登録者の形)、`human` は人間が担当して人間の扉で完了。
  *  `allocationClient` を渡すと work に worker session を置き、統合点レビューの完了で配分評価が撃たれる。 */
 export async function objectedForDraft(
   title: string,
-  opts: { initial?: { cause: Cause; evidence: string }; registrant?: string; workspace?: string | null; human?: true; allocationClient?: AllocationClient } = {},
+  opts: Pick<BootOptions, "allocationClient" | "agentRegistered"> & { initial?: { cause: Cause; evidence: string }; registrant?: string; workspace?: string | null; human?: true } = {},
 ) {
   const attributionClient = new FakeAttributionClient();
   const behaviorDraftClient = new FakeBehaviorDraftClient();
-  const t = await bootTidepool({ attributionClient, behaviorDraftClient, allocationClient: opts.allocationClient });
+  const t = await bootTidepool({ attributionClient, behaviorDraftClient, allocationClient: opts.allocationClient, agentRegistered: opts.agentRegistered });
   const workspace = opts.workspace === null ? undefined : (opts.workspace ?? "charts");
   const task = opts.registrant
     ? registerTask(t.db, { type: "work", title, purpose: "p", completion_criteria: "c", workspace }, t.clock.now(), opts.registrant, "worker")

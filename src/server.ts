@@ -622,6 +622,7 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
     behaviorDraftClient: options.behaviorDraftClient,
     workspace: options.workspace,
     containers,
+    agentRegistered: options.agentRegistered,
   };
   const scheduler = startScheduler({
     db,

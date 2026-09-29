@@ -614,6 +614,28 @@ it("人間が登録した task の task_ambiguity は宛先の agent がいな�
   expect(await draftsFailed(t, s.task.id)).toEqual([]);
 });
 
+it.each([
+  ["preference", false],
+  ["capability", false],
+  ["preference", true],
+  ["capability", true],
+] as const)("第2回で %s に確定した起草は、entry の worker が registry にいる(%s)ときだけ撃ち、いなければ呼び出しも失敗 event も candidate も残さない(ADR 0173 決定4)", async (cause, registered) => {
+  let gone: string | undefined;
+  const s = await objectedForDraft("learner", { agentRegistered: (name) => name !== gone });
+  t = s.t;
+  if (!registered) gone = t.worker.id;
+  const drafts = registered ? 1 : 0;
+  s.behaviorDraftClient.scriptDraft(s.entry.id, KEEP_FIXTURES);
+
+  await settleSecondRound(t, s, "learner", cause);
+  await t.clock.advance(HOUR);
+
+  expect((await attributions(t, s.task.id)).map((e: any) => e.payload.cause)).toEqual(["uncertain", cause]);
+  expect(s.behaviorDraftClient.calls).toHaveLength(drafts);
+  expect(await draftsFailed(t, s.task.id)).toEqual([]);
+  expect(await behaviors(t)).toHaveLength(drafts);
+});
+
 // 起草と第2回の帰責の撃ち直し(ADR 0164 / issue #1065)
 
 const behaviors = async (t: Tidepool) => (await memoryEntries(t)).filter((e: any) => e.kind === "behavior");

@@ -23,10 +23,12 @@ import {
 import type { GitHubClient } from "./github.js";
 import {
   addIssueCommentThroughHumanDoor,
+  assertMemoryReferencesKnown,
   cancelThroughHumanDoor,
   completeThroughHumanDoor,
   decomposeThroughHumanDoor,
   editThroughHumanDoor,
+  gatedHumanEntryInput,
   listMemoryEntriesForHuman,
   registerThroughHumanDoor,
   submitAnswer,
@@ -40,7 +42,6 @@ import {
   HUMAN_AUTHOR,
   humanBehaviorSchema,
   humanDefinitionSchema,
-  humanEntryInput,
   humanExemplarSchema,
   humanKnowledgeSchema,
   invalidateMemoryEntry,
@@ -609,7 +610,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
         `English canonical wording; original_title and original_text go together (both or neither). ${supersedesEffect} ${writtenAs}`,
       inputSchema: humanKnowledgeSchema.shape,
     },
-    async (input) => memoryVerb(() => recordKnowledge(deps.db, humanEntryInput(deps.db, input), "mcp", deps.clock.now())),
+    async (input) => memoryVerb(() => recordKnowledge(deps.db, gatedHumanEntryInput(deps, input), "mcp", deps.clock.now())),
   );
   server.registerTool(
     "define_memory_branch",
@@ -620,7 +621,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
         `${supersedesEffect} ${writtenAs}`,
       inputSchema: humanDefinitionSchema.shape,
     },
-    async (input) => memoryVerb(() => defineMemoryBranch(deps.db, humanEntryInput(deps.db, input), "mcp", deps.clock.now())),
+    async (input) => memoryVerb(() => defineMemoryBranch(deps.db, gatedHumanEntryInput(deps, input), "mcp", deps.clock.now())),
   );
   server.registerTool(
     "record_behavior",
@@ -633,7 +634,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
         `original_title and original_text go together (both or neither). ${supersedesEffect} ${writtenAs}`,
       inputSchema: humanBehaviorSchema.shape,
     },
-    async (input) => memoryVerb(() => recordBehavior(deps.db, humanEntryInput(deps.db, input), "mcp", deps.clock.now())),
+    async (input) => memoryVerb(() => recordBehavior(deps.db, gatedHumanEntryInput(deps, input), "mcp", deps.clock.now())),
   );
   server.registerTool(
     "preview_case",
@@ -659,7 +660,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
         "recorded in the board's display language. workspace null = the whole board.",
       inputSchema: humanExemplarSchema.shape,
     },
-    async (input) => memoryVerb(() => recordExemplar(deps.db, humanEntryInput(deps.db, input), "mcp", deps.clock.now())),
+    async (input) => memoryVerb(() => recordExemplar(deps.db, gatedHumanEntryInput(deps, input), "mcp", deps.clock.now())),
   );
   server.registerTool(
     "fold_memory_entries",
@@ -699,7 +700,10 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
       inputSchema: memoryMoveSchema.extend({ entry_id: z.number().int().positive() }).shape,
     },
     async ({ entry_id, workspace, path }) =>
-      memoryVerb(() => moveMemory(deps.db, { entry_id, scope: workspace, path, mover: HUMAN_AUTHOR }, "mcp", deps.clock.now())),
+      memoryVerb(() => {
+        assertMemoryReferencesKnown(deps, { workspace });
+        return moveMemory(deps.db, { entry_id, scope: workspace, path, mover: HUMAN_AUTHOR }, "mcp", deps.clock.now());
+      }),
   );
   server.registerTool(
     "move_memory_branch",
@@ -710,8 +714,12 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
         `each moved entry_id with the successor_id of its copy. ${moveEffect}`,
       inputSchema: memoryBranchMoveSchema.shape,
     },
+    // 門は行き先だけ —— 移動元が消えた workspace の孤立を生きた置き場へ移せるように(ADR 0173 決定2)
     async ({ workspace, path, to_workspace, to_path }) =>
-      memoryVerb(() => moveMemoryBranch(deps.db, { scope: workspace, path, to_scope: to_workspace, to_path, mover: HUMAN_AUTHOR }, "mcp", deps.clock.now())),
+      memoryVerb(() => {
+        assertMemoryReferencesKnown(deps, { workspace: to_workspace });
+        return moveMemoryBranch(deps.db, { scope: workspace, path, to_scope: to_workspace, to_path, mover: HUMAN_AUTHOR }, "mcp", deps.clock.now());
+      }),
   );
   server.registerTool(
     "restore_memory_entry",
@@ -965,6 +973,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
               reclaim: deps.reclaim,
               quarantineChecks: deps.quarantineChecks,
               agentAdmin: deps.agentAdmin,
+              agentRegistered: deps.agentRegistered,
             },
             task,
             answers,

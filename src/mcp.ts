@@ -7,7 +7,7 @@ import type { Db } from "./db.js";
 import { PRIORITY_FIELD_DESCRIPTION, readExecutionSettings, TIER_FIELD_DESCRIPTION, TIERS } from "./execution-setting.js";
 import type { GitHubClient } from "./github.js";
 import type { GitHubAuth } from "./github-auth.js";
-import { assertReviewerKnown, assertWorkspaceKnown } from "./human-verbs.js";
+import { assertMemoryReferencesKnown, assertReviewerKnown, assertWorkspaceKnown } from "./human-verbs.js";
 import type { Landing } from "./landing.js";
 import {
   browseMemory,
@@ -1085,15 +1085,17 @@ function registerMemoryMetaReviewVerbs(server: McpServer, deps: McpDeps, run: Me
       },
     },
     async (input) =>
-      run((reader, now) =>
-        proposeMemoryChange(
+      run((reader, now) => {
+        // 宛先も scope と同じく registry と照合する(ADR 0173 決定2)—— typo の宛先を人間の approve へ回さない
+        assertMemoryReferencesKnown(deps, { addressee: input.text?.addressee });
+        return proposeMemoryChange(
           deps.db,
           reader.taskId,
           { ...input, text: input.text && { ...input.text, scope: registeredScope(deps, input.text.scope) } },
           reader.agent,
           now,
-        ),
-      ),
+        );
+      }),
   );
 }
 

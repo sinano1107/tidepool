@@ -29,10 +29,12 @@ import { type GitHubClient, OPEN_ISSUES_LIMIT } from "./github.js";
 import { githubLoggedIn } from "./github-auth.js";
 import {
   addIssueCommentThroughHumanDoor,
+  assertMemoryReferencesKnown,
   cancelThroughHumanDoor,
   completeThroughHumanDoor,
   editThroughHumanDoor,
   type GateFailure,
+  gatedHumanEntryInput,
   listMemoryEntriesForHuman,
   registerThroughHumanDoor,
   submitAnswer,
@@ -46,7 +48,6 @@ import {
   HUMAN_AUTHOR,
   humanBehaviorSchema,
   humanDefinitionSchema,
-  humanEntryInput,
   humanExemplarSchema,
   humanKnowledgeSchema,
   invalidateMemoryEntry,
@@ -681,6 +682,8 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     taskExecutionCandidates,
     isProtectedWorkspace,
   } = deps;
+  // registry で名前を引く人間の扉(task の編集・記憶の書き込みと一覧)が共有する束
+  const memoryRefDeps = { db, agentRegistered, workspace, resolveWorkspace };
   const router = Router();
   router.use(json());
   // one cache per router = per process (the API is booted once per board)
@@ -1316,7 +1319,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       return;
     }
     const result = editThroughHumanDoor(
-      { db, agentRegistered, workspace, resolveWorkspace },
+      memoryRefDeps,
       req.params.id,
       parsed.data,
       () => clock.now(),
@@ -1388,6 +1391,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
           reclaim,
           quarantineChecks,
           agentAdmin,
+          agentRegistered,
         },
         task,
         parsed.data.answers,
@@ -1649,7 +1653,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     }
     const { workspace: scope, board_wide, ...filter } = parsed.data;
     res.json({
-      entries: listMemoryEntriesForHuman({ db, agentRegistered, workspace, resolveWorkspace }, { ...filter, scope: board_wide ? null : scope }),
+      entries: listMemoryEntriesForHuman(memoryRefDeps, { ...filter, scope: board_wide ? null : scope }),
     } satisfies WireContract["GET /api/settings/memory/entries"]);
   });
 
@@ -1687,10 +1691,10 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       return readMetaReviewSettings(db) satisfies WireContract["POST /api/settings/meta-review"];
     }),
   );
-  router.post("/settings/memory/knowledge", validatedWrite(humanKnowledgeSchema, (input) => recordKnowledge(db, humanEntryInput(db, input), "webui", clock.now())));
-  router.post("/settings/memory/definitions", validatedWrite(humanDefinitionSchema, (input) => defineMemoryBranch(db, humanEntryInput(db, input), "webui", clock.now())));
-  router.post("/settings/memory/behaviors", validatedWrite(humanBehaviorSchema, (input) => recordBehavior(db, humanEntryInput(db, input), "webui", clock.now())));
-  router.post("/settings/memory/exemplars", validatedWrite(humanExemplarSchema, (input) => recordExemplar(db, humanEntryInput(db, input), "webui", clock.now())));
+  router.post("/settings/memory/knowledge", validatedWrite(humanKnowledgeSchema, (input) => recordKnowledge(db, gatedHumanEntryInput(memoryRefDeps, input), "webui", clock.now())));
+  router.post("/settings/memory/definitions", validatedWrite(humanDefinitionSchema, (input) => defineMemoryBranch(db, gatedHumanEntryInput(memoryRefDeps, input), "webui", clock.now())));
+  router.post("/settings/memory/behaviors", validatedWrite(humanBehaviorSchema, (input) => recordBehavior(db, gatedHumanEntryInput(memoryRefDeps, input), "webui", clock.now())));
+  router.post("/settings/memory/exemplars", validatedWrite(humanExemplarSchema, (input) => recordExemplar(db, gatedHumanEntryInput(memoryRefDeps, input), "webui", clock.now())));
   // ADR 0153 決定3: Exemplar の anchor を選ぶための case 描画。読むだけだが検査と DomainError の写し方は書き込みと同じ
   router.get(
     "/settings/memory/cases/:event_id",
@@ -1709,9 +1713,10 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   // ADR 0162 決定4: 盤面が本文を写す移動。移した者(human)は event の activity に載り、書き手は旧を継ぐ
   router.post(
     "/settings/memory/entries/:entry_id/move",
-    validatedWrite(memoryMoveSchema.extend({ entry_id: z.coerce.number().int().positive() }), ({ entry_id, workspace, path }) =>
-      moveMemory(db, { entry_id, scope: workspace, path, mover: HUMAN_AUTHOR }, "webui", clock.now()),
-    ),
+    validatedWrite(memoryMoveSchema.extend({ entry_id: z.coerce.number().int().positive() }), ({ entry_id, workspace, path }) => {
+      assertMemoryReferencesKnown(memoryRefDeps, { workspace });
+      return moveMemory(db, { entry_id, scope: workspace, path, mover: HUMAN_AUTHOR }, "webui", clock.now());
+    }),
   );
   // ADR 0163: 無効化済みのエントリの本文の側を同じ置き場に写す復元。復元した者(human)は作成 event の activity に載る
   router.post(
@@ -1736,9 +1741,11 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   );
   router.post(
     "/settings/memory/branches/move",
-    validatedWrite(memoryBranchMoveSchema, ({ workspace, path, to_workspace, to_path }) =>
-      moveMemoryBranch(db, { scope: workspace, path, to_scope: to_workspace, to_path, mover: HUMAN_AUTHOR }, "webui", clock.now()),
-    ),
+    // 門は行き先だけ —— 移動元が消えた workspace の孤立を生きた置き場へ移せるように(ADR 0173 決定2)
+    validatedWrite(memoryBranchMoveSchema, ({ workspace, path, to_workspace, to_path }) => {
+      assertMemoryReferencesKnown(memoryRefDeps, { workspace: to_workspace });
+      return moveMemoryBranch(db, { scope: workspace, path, to_scope: to_workspace, to_path, mover: HUMAN_AUTHOR }, "webui", clock.now());
+    }),
   );
 
   router.get("/settings/timezone", (_req, res) => {

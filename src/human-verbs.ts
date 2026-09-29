@@ -21,7 +21,7 @@ import {
 import { type GitHubClient, IssueGoneError } from "./github.js";
 import type { HarnessContainmentCheck } from "./harness-containment.js";
 import { type Landing, type LandingVerdict, landingBlock } from "./landing.js";
-import { approveMemoryProposal, deferMemoryProposal, listMemoryEntries, type MemoryAmendment, parseMemoryAmendment, rejectMemoryProposal } from "./memory.js";
+import { approveMemoryProposal, deferMemoryProposal, humanEntryInput, listMemoryEntries, type MemoryAmendment, parseMemoryAmendment, rejectMemoryProposal, requireEntry } from "./memory.js";
 import { type QuarantineChecks, type QuarantineKind, type QuarantineResolvers, quarantineStops } from "./quarantine.js";
 import type { Harness, Provider, RegistryReachabilityCheck } from "./registry.js";
 import { RegistryFetchFailedError, RegistryPushFailedError } from "./registry-write.js";
@@ -254,11 +254,31 @@ export function assertWorkspaceKnown(
   if (!workspaceKnown(workspaceName, resolveWorkspace, workspace)) throw new DomainError(`unknown workspace: ${workspaceName}`);
 }
 
+type MemoryReferenceDeps = { agentRegistered?: (name: string) => boolean; workspace?: WorkspaceConfig; resolveWorkspace?: (taskWorkspace: string | null) => WorkspaceConfig };
+
+/** 人間と meta-review が記憶に書く参照名 —— 宛先の agent・scope の workspace —— は書く瞬間に registry で解決できなければ拒む
+ *  (ADR 0173 決定1・2)。null(全員 / 盤面全体)は常に可、registry の無い盤面では通す。門は選択の入る操作の呼び手が掛け、
+ *  domain 層の書き込み・写しは registry を知らない。 */
+export function assertMemoryReferencesKnown(deps: MemoryReferenceDeps, { addressee, workspace }: { addressee?: string | null; workspace?: string | null }): void {
+  if (addressee != null && deps.agentRegistered && !deps.agentRegistered(addressee)) throw new DomainError(`unknown agent: ${addressee}`);
+  if (workspace != null) assertWorkspaceKnown(workspace, deps.resolveWorkspace, deps.workspace);
+}
+
+/** 人間の面(settings の HTTP / 管理MCP)の直書きの入力: 参照名の門を通してから humanEntryInput。編集(supersedes)も
+ *  同じ門を通り、削除済みの宛先・scope のままの編集は拒む(ADR 0173 決定3)。 */
+export function gatedHumanEntryInput<T extends { workspace: string | null; addressee?: string | null; original_title?: string; original_text?: string }>(
+  deps: MemoryReferenceDeps & { db: Db },
+  input: T,
+) {
+  assertMemoryReferencesKnown(deps, input);
+  return humanEntryInput(deps.db, input);
+}
+
 /** 人間の面(WebUI と管理MCP)が共有する記憶の一覧(ADR 0173 決定5)。孤立の印 orphaned は宛先の agent・scope の
  *  workspace のどちらが registry で解決できないかを読むときに導出する(保存しない)。null の宛先・scope は孤立しない。
  *  registry の無い盤面(agentRegistered が無い)では欄ごと付けない。registry は名前ごとに1度だけ引く。 */
 export function listMemoryEntriesForHuman(
-  deps: { db: Db; agentRegistered?: (name: string) => boolean; workspace?: WorkspaceConfig; resolveWorkspace?: (taskWorkspace: string | null) => WorkspaceConfig },
+  deps: MemoryReferenceDeps & { db: Db },
   filter: Parameters<typeof listMemoryEntries>[1],
 ): Array<ReturnType<typeof listMemoryEntries>[number] & { orphaned?: "addressee" | "scope" | "both" | null }> {
   const entries = listMemoryEntries(deps.db, filter);
@@ -411,6 +431,8 @@ export interface SubmitAnswerDeps {
   quarantineChecks?: QuarantineChecks;
   /** registry の agent 一覧と tier の書き込み(issue #920): tier の提案への approve が使う。Absent → registry の無い盤面。 */
   agentAdmin?: Partial<Pick<AgentAdmin, "list" | "changeTier">>;
+  /** memory の提案の approve が candidate の宛先を照合する(ADR 0173 決定2)。Absent → registry の無い盤面。 */
+  agentRegistered?: (name: string) => boolean;
 }
 
 /** 門の検査の材料。合成 root が一度だけ `quarantineChecks` に束ね、回答の口
@@ -807,6 +829,11 @@ export async function submitAnswer(
     else if (answers[0] === "approve" && proposal?.kind === "registry") amended = { to: parseAgentTierAmendment(proposal, amendment) };
     else if (answers[0] === "approve" && proposal?.kind === "memory" && "candidate_id" in proposal) amended = parseMemoryAmendment(amendment);
     else throw new DomainError("only an approve answer to a routing row, agent tier, or memory proposal with a candidate takes an amendment");
+  }
+  // approve は「これを注入する」宣言 —— candidate の宛先(修正値があればそれ)と scope が解決できなければ、付け替えるか reject する(ADR 0173 決定2)
+  if (answers[0] === "approve" && proposal?.kind === "memory" && "candidate_id" in proposal) {
+    const named = requireEntry(deps.db, proposal.candidate_id);
+    assertMemoryReferencesKnown(deps, { addressee: amended && "addressee" in amended ? amended.addressee : named.addressee, workspace: named.scope });
   }
 
   const promotionTaskId = task.question_pending_pr_promotion_task_id;
