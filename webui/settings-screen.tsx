@@ -1815,6 +1815,11 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit, fo
   const [moving, setMoving] = React.useState<{ id: number; workspace: string; path: string } | null>(null);
   const [branchMove, setBranchMove] = React.useState<{ workspace: string; path: string; to_workspace: string; to_path: string } | null>(null);
   const workspaceOptions = [{ value: '', label: 'board-wide' }, ...workspaceNames];
+  // a branch left in a workspace that has since left the registry is still a valid move source (ADR 0173 決定2 gates
+  // only the destination): offer each such scope that still holds a live entry, enabled
+  const orphanedFrom = [...new Set((entries ?? []).filter((e) => e.invalidation_reason === null).map((e) => deadRefs(e).workspace))]
+    .filter((name): name is string => name !== null && !workspaceNames.includes(name))
+    .map((name) => ({ value: name, label: `${name} (not registered)` }));
   const move = (path: `/${string}`, body: Record<string, unknown>, detail: string, close: () => void) => submit(path, body, ['moved', detail], 'move failed', close);
 
   return (
@@ -1833,7 +1838,7 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit, fo
       {branchMove && (
         <React.Fragment>
           <p style={muted}>moves the branch and every live entry under it in one workspace; invalidated entries stay where they are</p>
-          <Select label="From workspace" value={branchMove.workspace} options={workspaceOptions}
+          <Select label="From workspace" value={branchMove.workspace} options={[...workspaceOptions, ...orphanedFrom]}
             onChange={(e) => setBranchMove({ ...branchMove, workspace: e.target.value })} />
           <Input label="From branch path" mono value={branchMove.path} onChange={(e) => setBranchMove({ ...branchMove, path: e.target.value })} placeholder="build" />
           <Select label="To workspace" value={branchMove.to_workspace} options={workspaceOptions}
