@@ -18,6 +18,14 @@ const files = readdirSync(ADR_DIR)
   .filter((name) => /^\d{4}-.*\.md$/.test(name))
   .sort();
 
+// Two sessions can each take the next free number (issue #1148: two 0172s), and
+// a duplicate makes "ADR NNNN" ambiguous. Fail in both modes so CI catches it.
+const duplicates = files.map((f) => f.slice(0, 4)).filter((num, i, nums) => nums.indexOf(num) !== i);
+if (duplicates.length) {
+  console.error(`duplicate ADR number(s): ${[...new Set(duplicates)].join(', ')} — renumber the later one`);
+  process.exit(1);
+}
+
 // The Status block is the run of paragraphs directly after the H1 (past the
 // blank separator line) whose lines open with **Status ...**. Mentioning
 // "Status" elsewhere — unbolded, mid-paragraph prose (e.g. ADR 0028) — is not
