@@ -446,7 +446,7 @@ function memoryRead(db: Db, entry: DecisionLogEntry): AttributionInput["memory_r
  *  (ADR 0115 決定4)、Board call の `addressee` は `preference` だけが読む。撃てなかったら何も書かず、
  *  撃って失敗したら `memory_draft_failed` を残す(ADR 0164 決定3)。poll の sweep が fire-and-forget で撃つ
  *  (第2回は帰責の追記の直後、ADR 0169)ので poll を止めない。 */
-export async function draftBehaviorCandidate(db: Db, deps: AttributionCallDeps, attribution: Attribution, now: Date): Promise<void> {
+async function draftBehaviorCandidate(db: Db, deps: AttributionCallDeps, attribution: Attribution, now: Date): Promise<void> {
   const { cause, round, entry_id } = attribution;
   const drafts = round === "initial" ? cause === "preference" : LEARNING_CAUSES.includes(cause);
   const entry = requireLogEntry(db, entry_id);
