@@ -2,7 +2,6 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Router } from "express";
 import { z } from "zod";
 import type { AgentAdmin } from "./agent-create.js";
-import { proposeFromObjection } from "./attribution.js";
 import type { Clock } from "./clock.js";
 import type { Db } from "./db.js";
 import { PRIORITY_FIELD_DESCRIPTION, readExecutionSettings, TIER_FIELD_DESCRIPTION, TIERS } from "./execution-setting.js";
@@ -32,6 +31,7 @@ import {
 import { type MetaReviewSubject, metaReviewSubjectOf, PROMOTION_RULE } from "./meta-review.js";
 import type { ProcessContainers } from "./process-container.js";
 import { type AuthorityProfile, REVIEWER_AUTHORITY_PROFILE, type RosterAgent } from "./registry.js";
+import { proposeFromObjection } from "./retrospective.js";
 import { listAllocations, listRoutingCells, listRoutingProposals, listRoutingShadow, proposeRoutingChange } from "./routing-review.js";
 import type { Slot } from "./slot.js";
 import { createStatelessMcpRouter, rejectUnknownArguments } from "./stateless-mcp.js";

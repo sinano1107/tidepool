@@ -1,7 +1,7 @@
-import type { GatedJudgment } from "./attribution.js";
 import type { Cause } from "./cause.js";
 import type { Db } from "./db.js";
 import { appendEvent, type DecisionLogEntry, getEvent, isDecisionLogEntry } from "./events.js";
+import type { GatedJudgment } from "./retrospective.js";
 import {
   BOARD_WORKER_ID,
   type BoardTask,

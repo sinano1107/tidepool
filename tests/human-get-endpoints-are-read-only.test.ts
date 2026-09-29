@@ -2,7 +2,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { createApiRouter } from "../src/api.js";
 import type { Db } from "../src/db.js";
 import { getTask, logDecision } from "../src/tasks.js";
-import { FakeClock, FakeTranslationClient, noAttributionCalls, unusedLanding } from "./fakes.js";
+import { FakeClock, FakeTranslationClient, noRetrospectiveCalls, unusedLanding } from "./fakes.js";
 import {
   AUTH_HEADERS,
   bootTidepool,
@@ -31,7 +31,7 @@ const STATIC_GET_PATHS = ["/", "/styles.css", "/_ds_bundle.js"];
 // 同じ源から出ていれば、新しい GET は登録された瞬間からここを通る。
 function listGetRoutes(db: Db): string[] {
   const router = createApiRouter({
-    attributionCalls: noAttributionCalls,
+    retrospectiveCalls: noRetrospectiveCalls,
     db,
     clock: new FakeClock(),
     pollNow: () => {},

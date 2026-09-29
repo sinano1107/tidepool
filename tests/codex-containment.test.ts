@@ -31,7 +31,7 @@ import {
   FakeClock,
   FakeContainerRuntime,
   healthyUsageText,
-  noAttributionCalls,
+  noRetrospectiveCalls,
   passthroughContainers,
   recordingSpawn,
   unusedLanding,
@@ -446,7 +446,7 @@ it("a failed Codex Harness preflight skips that route and starts a Claude-route 
     ["claude-agent", "anthropic"],
   ]);
   const scheduler = startScheduler({
-    attributionCalls: noAttributionCalls,
+    retrospectiveCalls: noRetrospectiveCalls,
     db,
     clock,
     slot: new Slot(),

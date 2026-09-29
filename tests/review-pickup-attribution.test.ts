@@ -17,7 +17,7 @@ import {
   FakeContainerRuntime,
   fakeContainers,
   healthyUsageText,
-  noAttributionCalls,
+  noRetrospectiveCalls,
   ScriptedWorker,
 } from "./fakes.js";
 import { api, GIT_FIXTURE_TEST_TIMEOUT, HOUR, makeWorkspace, TEST_CREDENTIAL, tempDir } from "./harness.js";
@@ -135,7 +135,7 @@ it("startScheduler を直接構築しても、省略された Auditor は既定�
   const clock = new FakeClock();
   const worker = new ScriptedWorker(clock);
   const scheduler = startScheduler({
-    attributionCalls: noAttributionCalls,
+    retrospectiveCalls: noRetrospectiveCalls,
     db,
     clock,
     slot: new Slot(),
