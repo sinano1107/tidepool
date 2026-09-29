@@ -1,6 +1,6 @@
 import { expect, it } from "vitest";
-import type { BehaviorDraftInput } from "../src/attribution.js";
 import { ClaudeBehaviorDraftClient } from "../src/claude-behavior-draft-client.js";
+import type { BehaviorDraftInput } from "../src/retrospective.js";
 
 const input: BehaviorDraftInput = {
   entry_id: 7,

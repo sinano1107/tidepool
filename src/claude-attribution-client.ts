@@ -1,9 +1,9 @@
 import { z } from "zod";
-import type { AttributionClient, AttributionInput, AttributionJudgment } from "./attribution.js";
 import { CAUSES } from "./cause.js";
 import { runOneShotJsonPrompt } from "./claude-draft-client.js";
 import type { ExecFn } from "./claude-worker.js";
 import type { ExecutionSettingRow } from "./execution-setting.js";
+import type { AttributionClient, AttributionInput, AttributionJudgment } from "./retrospective.js";
 
 // mirrors AttributionJudgment: the model's reply is untrusted input, and only a
 // value inside the shared vocabulary may land on the objected task as a judgment

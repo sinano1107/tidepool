@@ -308,7 +308,7 @@ export interface WireContract {
       }>;
     }>;
   };
-  /** 撃ち直しを打ち切った振り返り Board call(src/attribution.ts の listHaltedRefires、ADR 0164 決定5 / ADR 0172 決定3)。
+  /** 撃ち直しを打ち切った振り返り Board call(src/retrospective.ts の listHaltedRefires、ADR 0164 決定5 / ADR 0172 決定3)。
    *  配分評価の行は review と被レビュー task(target は review の task_completed event の id)、起草と第2回の行は entry と
    *  その帰責(target は起草なら帰責 event の id、第2回なら異議群の最初の異議 event の id(ADR 0170 決定4)、cause は entry の
    *  今の判定で、最後の異議群が未帰責なら null)。 */

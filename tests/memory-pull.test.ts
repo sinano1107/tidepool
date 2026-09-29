@@ -1,5 +1,4 @@
 import { expect, it } from "vitest";
-import { draftBehaviorCandidate } from "../src/attribution.js";
 import { openDb } from "../src/db.js";
 import { appendEvent, getEvent, type TaskScopedPayload } from "../src/events.js";
 import {
@@ -21,9 +20,10 @@ import {
   searchMemory,
 } from "../src/memory.js";
 import { projectAndPersist } from "../src/precedent.js";
+import { draftBehaviorCandidate } from "../src/retrospective.js";
 import { DomainError, logDecision, registerTask } from "../src/tasks.js";
 import { TriageError } from "../src/triage.js";
-import { FakeBehaviorDraftClient, noAttributionCalls } from "./fakes.js";
+import { FakeBehaviorDraftClient, noRetrospectiveCalls } from "./fakes.js";
 import { FIXTURE_SPAWNED_EVENT_ID, FIXTURE_TASK, seedFixtureBoard, tempDir, writeFixtureTranscript } from "./harness.js";
 
 const at = new Date("2026-09-14T00:00:00.000Z");
@@ -314,7 +314,7 @@ async function objectedInTwoSessions() {
 it("2つ目の session の帰責を出所に持つ Behavior の case の steering は、その session の異議だけで、同じ帰責の AttributionInput.steering と一致する", async () => {
   const { db, reader, attribution } = await objectedInTwoSessions();
   const behaviorDraftClient = new FakeBehaviorDraftClient();
-  await draftBehaviorCandidate(db, { ...noAttributionCalls, behaviorDraftClient, workspace: { name: "sandbox" } }, attribution, at);
+  await draftBehaviorCandidate(db, { ...noRetrospectiveCalls, behaviorDraftClient, workspace: { name: "sandbox" } }, attribution, at);
   const id = approvedBehavior(db, "Cover the topic", { event_id: attribution.id });
 
   const steering = (readMemory(db, reader, { ids: [id] }, at).entries[0]?.case as { steering: string[] } | undefined)?.steering;
@@ -327,7 +327,7 @@ it("帰責の objection_event_ids に objection_raised でない id があると
   const behaviorDraftClient = new FakeBehaviorDraftClient();
 
   await expect(
-    draftBehaviorCandidate(db, { ...noAttributionCalls, behaviorDraftClient, workspace: { name: "sandbox" } }, { ...attribution, objection_event_ids: [6] }, at),
+    draftBehaviorCandidate(db, { ...noRetrospectiveCalls, behaviorDraftClient, workspace: { name: "sandbox" } }, { ...attribution, objection_event_ids: [6] }, at),
   ).rejects.toThrow(TriageError);
   expect(behaviorDraftClient.calls).toEqual([]);
 });
@@ -337,7 +337,7 @@ it("帰責の entry_id が decision-log entry でないと、不変条件違反�
   const behaviorDraftClient = new FakeBehaviorDraftClient();
 
   await expect(
-    draftBehaviorCandidate(db, { ...noAttributionCalls, behaviorDraftClient, workspace: { name: "sandbox" } }, { ...attribution, entry_id: FIXTURE_SPAWNED_EVENT_ID }, at),
+    draftBehaviorCandidate(db, { ...noRetrospectiveCalls, behaviorDraftClient, workspace: { name: "sandbox" } }, { ...attribution, entry_id: FIXTURE_SPAWNED_EVENT_ID }, at),
   ).rejects.toThrow(/not a decision-log entry/);
   expect(behaviorDraftClient.calls).toEqual([]);
 });

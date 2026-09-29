@@ -1,13 +1,13 @@
 import { afterEach, expect, it } from "vitest";
-import { attributeObjections, type GatedJudgment, refireAttributions } from "../src/attribution.js";
 import type { Cause } from "../src/cause.js";
 import { openDb } from "../src/db.js";
 import { appendEvent, listEvents } from "../src/events.js";
 import { readMemory, recordKnowledge, searchMemory } from "../src/memory.js";
+import { attributeObjections, type GatedJudgment, refireRetrospectiveCalls } from "../src/retrospective.js";
 import { cancelTaskDirectly, listChildren, logDecision, registerTask } from "../src/tasks.js";
 import { reportProviderUsage } from "../src/throttle.js";
 import { commitTriage, raiseObjection, startTriage, TRIAGE_TIMEOUT } from "../src/triage.js";
-import { FakeAttributionClient, FakeBehaviorDraftClient, noAttributionCalls } from "./fakes.js";
+import { FakeAttributionClient, FakeBehaviorDraftClient, noRetrospectiveCalls } from "./fakes.js";
 import {
   api,
   bootTidepool,
@@ -1166,7 +1166,7 @@ it("帰責の入力の読んだ記憶は、異議された decision と同じ wo
   b.read(later);
   const client = new FakeAttributionClient();
 
-  await attributeObjections(b.db, { ...noAttributionCalls, attributionClient: client }, b.objectTo(decision), at);
+  await attributeObjections(b.db, { ...noRetrospectiveCalls, attributionClient: client }, b.objectTo(decision), at);
 
   expect(client.calls.map((c) => c.input.memory_read)).toEqual([
     [{ id: mine, kind: "knowledge", title: "Squash before merge", text: "Squash before merge." }],
@@ -1197,7 +1197,7 @@ it.each<[string, (ids: { read: number; unread: number }) => { cause: Cause; entr
   const client = new FakeAttributionClient();
   client.scriptJudgment(b.decision, { ...judgment(b), evidence: "followed the note" });
 
-  commitTriage(b.db, at, [], await attributeObjections(b.db, { ...noAttributionCalls, attributionClient: client }, b.sessionId, at));
+  commitTriage(b.db, at, [], await attributeObjections(b.db, { ...noRetrospectiveCalls, attributionClient: client }, b.sessionId, at));
 
   expect(attributed(b.db, b.task.id)).toEqual([
     expect.objectContaining({ cause: "uncertain", evidence: expect.stringContaining(reason), entries: null }),
@@ -1209,7 +1209,7 @@ it("初回: 読んだ集合の中の entry を名指す memory は entries ご�
   const client = new FakeAttributionClient();
   client.scriptJudgment(b.decision, { cause: "memory", evidence: "followed the squash note", entries: [b.read] });
 
-  commitTriage(b.db, at, [], await attributeObjections(b.db, { ...noAttributionCalls, attributionClient: client }, b.sessionId, at));
+  commitTriage(b.db, at, [], await attributeObjections(b.db, { ...noRetrospectiveCalls, attributionClient: client }, b.sessionId, at));
 
   expect(attributed(b.db, b.task.id)).toEqual([
     { kind: "objection_attributed", entry_id: b.decision, objection_event_ids: [expect.any(Number)], cause: "memory", evidence: "followed the squash note", entries: [b.read], round: "initial" },
@@ -1223,13 +1223,13 @@ it.each<[string, (ids: { read: number; unread: number }) => number[], Partial<Ga
 ])("第2回: %s", async (_, entries, expected) => {
   const b = objectedAfterReading();
   const client = new FakeAttributionClient();
-  commitTriage(b.db, at, [], await attributeObjections(b.db, { ...noAttributionCalls, attributionClient: client }, b.sessionId, at));
+  commitTriage(b.db, at, [], await attributeObjections(b.db, { ...noRetrospectiveCalls, attributionClient: client }, b.sessionId, at));
   client.scriptJudgment(b.decision, { cause: "memory", evidence: "the RCA traced it to the note", entries: entries(b) });
   const drafter = new FakeBehaviorDraftClient();
   const rca = listChildren(b.db, b.task.id).filter((c) => c.title.startsWith("rca ("));
   for (const r of rca) cancelTaskDirectly(b.db, r, null, at, {});
 
-  refireAttributions(b.db, { ...noAttributionCalls, attributionClient: client, behaviorDraftClient: drafter, workspace: { name: "charts" } }, at);
+  refireRetrospectiveCalls(b.db, { ...noRetrospectiveCalls, attributionClient: client, behaviorDraftClient: drafter, workspace: { name: "charts" } }, at);
   // sweep は fire-and-forget: fake の返答が着地するまで回す
   await new Promise((resolve) => setImmediate(resolve));
 

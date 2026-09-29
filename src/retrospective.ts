@@ -79,7 +79,7 @@ export interface BehaviorDraftClient {
 
 /** 振り返り Board call(帰責・起草・配分評価)が受け取るもの。合成 root が一度だけ組み、scheduler(poll の sweep)と triage close に
  *  同じ束を渡す(ADR 0169 / ADR 0172)。欄は必須で値に `undefined` を許す —— 扉の deps を丸ごと渡す取り違えを型で落とすため。 */
-export interface AttributionCallDeps {
+export interface RetrospectiveCallDeps {
   /** 配分評価の Board call(ADR 0111 決定4 / ADR 0172)。sweep だけが撃つ。undefined → 撃てなかった扱いで何も書かない。 */
   allocationClient: AllocationClient | undefined;
   /** 帰責の Board call(ADR 0115 / issue #574・#575)。undefined → commit は異議を `uncertain` で束ね(RCA は帰責以前のまま立つ)、第2回も撃たない。 */
@@ -112,7 +112,7 @@ function gate({ entries, ...judgment }: AttributionJudgment, read: AttributionIn
 function boardCallSetting<C>(
   db: Db,
   client: C | undefined,
-  containers?: AttributionCallDeps["containers"],
+  containers?: RetrospectiveCallDeps["containers"],
 ): { client: C; setting: ExecutionSettingRow } | { unavailable: string } {
   if (!client) return { unavailable: "Board call not made: no client is configured" };
   let setting: ExecutionSettingRow;
@@ -189,7 +189,7 @@ function refireDue(db: Db, key: RefireKey, now: Date): boolean {
  *  帰責の障害は commit を止めない。 */
 export async function attributeObjections(
   db: Db,
-  deps: AttributionCallDeps,
+  deps: RetrospectiveCallDeps,
   sessionId: number,
   now: Date,
 ): Promise<Map<number, GatedJudgment>> {
@@ -262,7 +262,7 @@ function attributionStates(db: Db): Array<{ task_id: string } & ({ awaiting: Sec
 /** 帰責の第2回を1異議群ぶん撃つ: RCA の findings を証拠にした判断(`uncertain` も判断として)を
  *  その異議群を名指す新しい event(round = after_rca)として追記し、起草へ進む(ADR 0120 決定1(b)(c))。
  *  撃てなかったら何も書かず、撃って失敗したら `objection_attribution_failed` だけを残す(ADR 0164 決定3・6)。 */
-async function attributeSecondRound(db: Db, deps: AttributionCallDeps, objectedId: string, source: SecondRoundSource, now: Date): Promise<void> {
+async function attributeSecondRound(db: Db, deps: RetrospectiveCallDeps, objectedId: string, source: SecondRoundSource, now: Date): Promise<void> {
   await singleFlight(db, `after_rca:${bundleName(source)}`, async () => {
     if (!refireDue(db, { refire: "second_round", target: bundleName(source) }, now)) return;
     const call = boardCallSetting(db, deps.attributionClient, deps.containers);
@@ -300,11 +300,11 @@ const secondRoundInput = (db: Db, objectedId: string, attribution: SecondRoundSo
   rca_findings: rcaChildren(db, objectedId).flatMap((r) => decisionLogText(db, r.id)),
 });
 
-const fireAndForget = (fired: Promise<void>, target: string) => void fired.catch((err) => console.error(`[attribution] ${target}: ${String(err)}`));
+const fireAndForget = (fired: Promise<void>, target: string) => void fired.catch((err) => console.error(`[retrospective] ${target}: ${String(err)}`));
 
 /** 配分評価を1 review ぶん撃つ(ADR 0172): 判断が返れば注釈を被レビュー task に載せ、撃てなかったら何も書かず、
  *  撃って失敗したら `allocation_review_failed` だけを残す。入力が組めないのは撃って失敗したのではないので投げる。 */
-async function reviewAllocation(db: Db, deps: AttributionCallDeps, target: AllocationTarget, now: Date): Promise<void> {
+async function reviewAllocation(db: Db, deps: RetrospectiveCallDeps, target: AllocationTarget, now: Date): Promise<void> {
   await singleFlight(db, `allocation:${target.completed_event_id}`, async () => {
     if (!refireDue(db, { refire: "allocation", target: target.completed_event_id }, now)) return;
     const call = boardCallSetting(db, deps.allocationClient, deps.containers);
@@ -350,7 +350,7 @@ function refireTargets(db: Db): RefireTarget[] {
  *  対象を fire-and-forget で撃つ —— 1回目も撃ち直しもここから出る。
  *  起草の規則・回数・間隔・in-flight・撃てるか は撃つ側(`draftBehaviorCandidate` / `attributeSecondRound`)が見る。
  *  初回の帰責は撃ち直さない(ADR 0168 決定1)。 */
-export function refireAttributions(db: Db, deps: AttributionCallDeps, now: Date): void {
+export function refireRetrospectiveCalls(db: Db, deps: RetrospectiveCallDeps, now: Date): void {
   for (const target of refireTargets(db)) {
     if (target.refire === "second_round") {
       fireAndForget(attributeSecondRound(db, deps, target.task_id, target.source, now), `entry ${target.source.entry_id}`);
@@ -446,7 +446,7 @@ function memoryRead(db: Db, entry: DecisionLogEntry): AttributionInput["memory_r
  *  (ADR 0115 決定4)、Board call の `addressee` は `preference` だけが読む。撃てなかったら何も書かず、
  *  撃って失敗したら `memory_draft_failed` を残す(ADR 0164 決定3)。poll の sweep が fire-and-forget で撃つ
  *  (第2回は帰責の追記の直後、ADR 0169)ので poll を止めない。 */
-export async function draftBehaviorCandidate(db: Db, deps: AttributionCallDeps, attribution: Attribution, now: Date): Promise<void> {
+export async function draftBehaviorCandidate(db: Db, deps: RetrospectiveCallDeps, attribution: Attribution, now: Date): Promise<void> {
   const { cause, round, entry_id } = attribution;
   const drafts = round === "initial" ? cause === "preference" : LEARNING_CAUSES.includes(cause);
   const entry = requireLogEntry(db, entry_id);

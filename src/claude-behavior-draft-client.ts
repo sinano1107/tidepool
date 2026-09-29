@@ -1,8 +1,8 @@
 import { z } from "zod";
-import type { BehaviorDraft, BehaviorDraftClient, BehaviorDraftInput } from "./attribution.js";
 import { runOneShotJsonPrompt } from "./claude-draft-client.js";
 import type { ExecFn } from "./claude-worker.js";
 import type { ExecutionSettingRow } from "./execution-setting.js";
+import type { BehaviorDraft, BehaviorDraftClient, BehaviorDraftInput } from "./retrospective.js";
 
 // mirrors BehaviorDraft: the model's reply is untrusted input and lands in the memory store
 const draftSchema = z.object({

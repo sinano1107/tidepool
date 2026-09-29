@@ -8,7 +8,6 @@ import {
   InvalidAgentIconError,
   UnknownAuthorityProfileError,
 } from "./agent-create.js";
-import { listHaltedRefires, markHaltedRefire, refireKeySchema } from "./attribution.js";
 import { boardHalts } from "./board-halt.js";
 import type { Clock } from "./clock.js";
 import type { Db } from "./db.js";
@@ -77,6 +76,7 @@ import {
   MERGE_DIAL_VALUES,
 } from "./registry.js";
 import { RepoAccessMissingError } from "./repo-access.js";
+import { listHaltedRefires, markHaltedRefire, refireKeySchema } from "./retrospective.js";
 import {
   entryExclusionPredicate,
   type TaskExecutionCandidates,
