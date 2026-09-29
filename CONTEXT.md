@@ -135,7 +135,7 @@ _Avoid_: constraint、guidance(前者は registry の authority / profile、後�
 
 **人間が書いたエントリは未読に数えない**(2026-08-11 の grilling、issue #278 / ADR 0065)— この面の目的はエージェントが権限内で下した判断を人間が流し読むことであり、自分が書いた判断を読み返す対象にする理由がない(単一人間の系なので「人間が書いた」= 「自分が書いた」。`origin` は問わない)。畳みを開けば残っており、自分のエントリへの異議も従来どおり打てる。人間の回答そのものは載らない — エスカレーションへの**応答**であって権限内判断ではなく、記録は question タスクに残る。
 
-**イベント履歴の読みの線**(issue #1073 → #1126 → #1137): イベントの行を型付きの record(payload の parse)に戻すのは events モジュールだけで、その外に payload の parse は置かない —— 例外は tasks との join を理由に #1126 が残した routing / memory の提案一覧の2か所。events 表の自分の列に対する SQL —— 存在・件数・MAX・他の表との join —— は呼び手に残してよい。呼び手の SQL が `json_extract` で payload の形を参照するのはこの線の灰色地帯(issue #1150)。
+**イベント履歴の読みの線**(issue #1073 → #1126 → #1137): イベントの行を型付きの record(payload の parse)に戻すのは events モジュールだけで、その外に payload の parse は置かない —— 例外は tasks との join を理由に #1126 が残した routing / memory の提案一覧の2か所。events 表の自分の列に対する SQL —— 存在・件数・MAX・他の表との join —— は呼び手に残してよい。呼び手の SQL が `json_extract` で payload のフィールドを述語・列に使うのもこの線の内側で、payload の rename からの守りは型ではなく振る舞いのテストが担う(issue #1150)。
 
 ## Triage(トリアージ)
 
