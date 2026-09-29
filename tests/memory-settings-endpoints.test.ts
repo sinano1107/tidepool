@@ -1,9 +1,11 @@
 import { afterEach, expect, it } from "vitest";
+import { DEFAULT_AUDITOR_NAME } from "../src/defaults.js";
 import { previewCase, recordKnowledge } from "../src/memory.js";
+import { loadRegistry, ownEntry } from "../src/registry.js";
 import { logDecision, registerTask } from "../src/tasks.js";
-import { UnknownWorkspaceError } from "../src/workspace.js";
 import { FakeTranslationClient } from "./fakes.js";
-import { api, bootTidepool, managementMcpClient, type Tidepool } from "./harness.js";
+import { api, bootTidepool, managementMcpClient, registryOf, type Tidepool } from "./harness.js";
+import { makeRegistry } from "./registry-fixture.js";
 
 let t: Tidepool;
 afterEach(() => t?.stop());
@@ -358,13 +360,7 @@ it("管理MCP の restore_memory_entry は無効化済みのエントリを doma
 it("宛先の agent や scope の workspace が registry から消えると、両方の人間の面の一覧はその行にだけ孤立の印(addressee / scope / both)を付け、無効化済みの行にも付ける(ADR 0173 決定5)", async () => {
   const agents = new Set(["deckhand", "anemone"]);
   const workspaces = new Set(["tidepool", "reef"]);
-  t = await bootTidepool({
-    agentRegistered: (name) => agents.has(name),
-    resolveWorkspace: (name) => {
-      if (name === null || workspaces.has(name)) return { name: name ?? "tidepool", path: "/workspaces/known" };
-      throw new UnknownWorkspaceError(name);
-    },
-  });
+  t = await bootTidepool(registryOf(agents, workspaces));
   const behavior = async (workspace: string | null, addressee: string | null) =>
     (await api(t.baseUrl, "POST", "/api/settings/memory/behaviors", { workspace, path: "habits", title: "t", text: "x", addressee })).json.entry_id;
   const gone = await behavior("tidepool", "deckhand");
@@ -395,5 +391,115 @@ it("registry の無い盤面では、両方の人間の面の一覧に孤立の�
   for (const entries of await listFromBothSurfaces(t, {})) {
     expect(entries).toHaveLength(1);
     expect("orphaned" in entries[0]).toBe(false);
+  }
+});
+
+/** 直書き4つを両方の人間の面(settings の HTTP と管理MCP)で撃ち、[HTTP, 管理MCP] の拒否の文言(通れば null)を返す。
+ *  置き場の path は撃つたびに変える(定義は枝ごとに1つ)。Exemplar の出所は decision を1つ作って使う。 */
+function directWriter(tp: Tidepool) {
+  const task = registerTask(tp.db, { type: "work", title: "t", purpose: "p", completion_criteria: "c" }, tp.clock.now());
+  const decision = logDecision(tp.db, task, "split the migration", "deckhand", tp.clock.now());
+  const routes = {
+    knowledge: ["knowledge", "record_knowledge", { title: "t", text: "x" }],
+    definition: ["definitions", "define_memory_branch", { text: "x" }],
+    behavior: ["behaviors", "record_behavior", { title: "t", text: "x", addressee: null }],
+    exemplar: ["exemplars", "record_exemplar", { title: "t", addressee: null, source_event_id: decision, annotations: [{ anchor: "whole", polarity: "imitate", text: "Split it." }] }],
+  } as const;
+  let n = 0;
+  return async (kind: keyof typeof routes, ref: { workspace: string | null; addressee?: string | null }) => {
+    const [route, tool, body] = routes[kind];
+    const http = await api(tp.baseUrl, "POST", `/api/settings/memory/${route}`, { ...body, ...ref, path: `habits/${n++}` });
+    const client = await managementMcpClient(tp.baseUrl);
+    try {
+      const mcp = await toolCaller(client)(tool, { ...body, ...ref, path: `habits/${n++}` });
+      return [http.status === 200 ? null : http.json.error, mcp.isError ? mcp.json : null];
+    } finally {
+      await client.close();
+    }
+  };
+}
+
+it("直書き4つは両方の人間の面で registry に無い宛先・workspace を名前つきで拒み、null と registry にある名前は通す(ADR 0173 決定1)", async () => {
+  t = await bootTidepool(registryOf(new Set(["deckhand"]), new Set(["tidepool"])));
+  const write = directWriter(t);
+
+  for (const kind of ["behavior", "exemplar"] as const) {
+    expect(await write(kind, { workspace: "tidepool", addressee: "deckhnad" })).toEqual(["unknown agent: deckhnad", "unknown agent: deckhnad"]);
+    expect(await write(kind, { workspace: "tidepool", addressee: "deckhand" })).toEqual([null, null]);
+  }
+  for (const kind of ["knowledge", "definition", "behavior", "exemplar"] as const) {
+    expect(await write(kind, { workspace: "tidepol" })).toEqual(["unknown workspace: tidepol", "unknown workspace: tidepol"]);
+    expect(await write(kind, { workspace: null })).toEqual([null, null]);
+  }
+});
+
+it("registry の無い盤面では、直書き4つはどの宛先・workspace の名前も両方の人間の面で通す(ADR 0173 決定1)", async () => {
+  t = await bootTidepool();
+  const write = directWriter(t);
+
+  for (const kind of ["behavior", "exemplar"] as const) {
+    expect(await write(kind, { workspace: "tidepol", addressee: "deckhnad" })).toEqual([null, null]);
+  }
+  for (const kind of ["knowledge", "definition"] as const) {
+    expect(await write(kind, { workspace: "tidepol" })).toEqual([null, null]);
+  }
+});
+
+it("人間の移動(エントリ1件・枝ごと)は両方の面で registry に無い行き先の workspace を名前つきで拒み、移動元の workspace が消えた枝は生きた行き先へ移せる(ADR 0173 決定2)", async () => {
+  const workspaces = new Set(["tidepool", "reef"]);
+  t = await bootTidepool(registryOf(new Set(), workspaces));
+  const entry = agentKnowledge(t, "One");
+  const client = await managementMcpClient(t.baseUrl);
+  const call = toolCaller(client);
+  try {
+    expect((await api(t.baseUrl, "POST", `/api/settings/memory/entries/${entry}/move`, { workspace: "reeef", path: "x" })).json.error).toBe("unknown workspace: reeef");
+    expect((await call("move_memory_entry", { entry_id: entry, workspace: "reeef", path: "x" })).json).toBe("unknown workspace: reeef");
+    const toTypo = { workspace: "tidepool", path: "build", to_workspace: "reeef", to_path: "ci" };
+    expect((await api(t.baseUrl, "POST", "/api/settings/memory/branches/move", toTypo)).json.error).toBe("unknown workspace: reeef");
+    expect((await call("move_memory_branch", toTypo)).json).toBe("unknown workspace: reeef");
+
+    workspaces.delete("tidepool");
+    expect((await call("move_memory_branch", { ...toTypo, to_workspace: "reef" })).isError).toBe(false);
+    workspaces.delete("reef");
+    const home = await api(t.baseUrl, "POST", "/api/settings/memory/branches/move", { workspace: "reef", path: "ci", to_workspace: null, to_path: "build" });
+    expect(home.status).toBe(200);
+  } finally {
+    await client.close();
+  }
+  expect((await api(t.baseUrl, "GET", "/api/settings/memory/entries?state=approved")).json.entries.map((e: { scope: string | null; path: string }) => [e.scope, e.path])).toEqual([
+    [null, "build/tests"],
+  ]);
+});
+
+it("宛先の agent が消えた孤立は復元できるが、同じ宛先のままの編集は両方の面で拒まれ、生きた宛先への付け替えは通る(ADR 0173 決定3)", async () => {
+  const agents = new Set(["deckhand", "anemone"]);
+  t = await bootTidepool(registryOf(agents, new Set(["tidepool"])));
+  const behavior = { workspace: "tidepool", path: "habits", title: "t", text: "x", addressee: "deckhand" };
+  const old = (await api(t.baseUrl, "POST", "/api/settings/memory/behaviors", behavior)).json.entry_id;
+  await api(t.baseUrl, "POST", `/api/settings/memory/entries/${old}/invalidate`, { reason: "capability" });
+  agents.delete("deckhand");
+
+  const restored = await api(t.baseUrl, "POST", `/api/settings/memory/entries/${old}/restore`, {});
+  expect(restored).toMatchObject({ status: 200, json: { entry_id: expect.any(Number) } });
+  const edit = { ...behavior, text: "y", supersedes: [restored.json.entry_id] };
+  expect((await api(t.baseUrl, "POST", "/api/settings/memory/behaviors", edit)).json.error).toBe("unknown agent: deckhand");
+  const client = await managementMcpClient(t.baseUrl);
+  const call = toolCaller(client);
+  try {
+    expect((await call("record_behavior", edit)).json).toBe("unknown agent: deckhand");
+    expect((await call("record_behavior", { ...edit, addressee: "anemone" })).isError).toBe(false);
+  } finally {
+    await client.close();
+  }
+});
+
+it("組み込みの auditor は registry の合成エントリとして宛先に通る(ADR 0173 決定1)", async () => {
+  const dir = await makeRegistry();
+  t = await bootTidepool({ agentRegistered: (name) => ownEntry(loadRegistry(dir, "purely-local").agents, name) !== undefined });
+  const write = directWriter(t);
+
+  for (const kind of ["behavior", "exemplar"] as const) {
+    expect(await write(kind, { workspace: null, addressee: DEFAULT_AUDITOR_NAME })).toEqual([null, null]);
+    expect(await write(kind, { workspace: null, addressee: "ghost" })).toEqual(["unknown agent: ghost", "unknown agent: ghost"]);
   }
 });

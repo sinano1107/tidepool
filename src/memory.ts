@@ -636,7 +636,7 @@ export function previewCase(db: Db, eventId: number): MemoryCase {
   return rendered;
 }
 
-function requireEntry(db: Db, id: number): EntryRow {
+export function requireEntry(db: Db, id: number): EntryRow {
   const row = db.prepare("SELECT * FROM memory_entries WHERE id = ?").get(id) as EntryRow | undefined;
   if (!row) throw new DomainError(`no memory entry ${id}`);
   return row;

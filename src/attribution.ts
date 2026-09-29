@@ -90,6 +90,8 @@ export interface AttributionCallDeps {
   workspace: { name: string } | undefined;
   /** 容器の前提(ADR 0136 決定7)。不成立なら撃てなかった扱い。undefined → 前提を検査しない盤面。 */
   containers: Pick<ProcessContainers, "preflight"> | undefined;
+  /** 起草の宛先の agent が registry にいるか(ADR 0173 決定4)。undefined → registry の無い盤面で、照合せずに起草する。 */
+  agentRegistered: ((name: string) => boolean) | undefined;
 }
 
 const uncertain = (evidence: string): GatedJudgment => ({ cause: "uncertain", evidence, entries: null });
@@ -461,6 +463,10 @@ export async function draftBehaviorCandidate(db: Db, deps: AttributionCallDeps, 
       return;
     }
   }
+  // 宛先の agent が registry から消えていれば学ぶ相手がいない —— 登録者が人間のときと同じく起草しない(ADR 0173 決定4)。
+  // preference の宛先は Board call が選ぶが、学ぶのは entry の worker
+  const learner = derived ? (derived.kind === "behavior" ? derived.addressee : null) : entry.worker_id;
+  if (learner !== null && deps.agentRegistered && !deps.agentRegistered(learner)) return;
   const task = getTask(db, taskId)!;
   let scope: string;
   try {

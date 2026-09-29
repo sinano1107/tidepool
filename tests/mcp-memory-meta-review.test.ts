@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { defineMemoryBranch, recordKnowledge, WORKER_MEMORY_VERBS } from "../src/memory.js";
+import { createBehaviorCandidate, defineMemoryBranch, recordKnowledge, WORKER_MEMORY_VERBS } from "../src/memory.js";
 import { MEMORY_META_REVIEW_VERBS } from "../src/meta-review.js";
 import { DEFAULT_AUDITOR_NAME } from "../src/tasks.js";
 import { UnknownWorkspaceError } from "../src/workspace.js";
@@ -21,10 +21,11 @@ const WORKER_MEMORY: string[] = [...WORKER_MEMORY_VERBS];
 const META_REVIEW_MEMORY: string[] = [...MEMORY_META_REVIEW_VERBS];
 
 /** registry に sandbox だけがある盤面と、slot に入った memory meta-review(材料の Knowledge を1件書いて poll させる)。 */
-async function boardWithMetaReview() {
+async function boardWithMetaReview(agentRegistered?: (name: string) => boolean) {
   const sandbox = await makeWorkspace("sandbox");
   t = await bootTidepool({
     workspace: sandbox,
+    agentRegistered,
     resolveWorkspace: (name) => {
       if ((name ?? "sandbox") !== "sandbox") throw new UnknownWorkspaceError(name!);
       return sandbox;
@@ -185,6 +186,22 @@ it("list_memory_entries は scope の名前 / null(盤面全体)/ 省略(すべ�
     }
     expect((await call("list_memory_candidates", { include_invalidated: true, page: 1 })).isError).toBe(false);
     expect((await call("list_precedents", { since_watermark: 0, page: 1 })).isError).toBe(false);
+  } finally {
+    await client.close();
+  }
+});
+
+it("consolidate の新 candidate の宛先が registry に無ければ名前つきの tool error で question は立たず、registry にある宛先なら立つ(ADR 0173 決定2)", async () => {
+  const { client, call } = await boardWithMetaReview((name) => name === "deckhand");
+  const candidate = { scope: "sandbox", path: "habits", title: "Split migrations", text: "Split migrations.", addressee: "deckhand" };
+  const replaced = createBehaviorCandidate(t.db, { ...candidate, source: { commit: "0a46a46" }, author: { activity: "rca", name: "auditor" } }, "worker", t.clock.now()).entry_id;
+  try {
+    const { event_id: decision } = (await call("log_decision", { line: "one rule is enough" })).body;
+    const consolidate = (addressee: string) =>
+      call("propose_memory_change", { op: "consolidate", text: { ...candidate, addressee }, replaces: [replaced], based_on_decision: decision, rationale: "Same rule." });
+
+    expect(await consolidate("deckhnad")).toEqual({ isError: true, body: "unknown agent: deckhnad" });
+    expect(await consolidate("deckhand")).toMatchObject({ isError: false, body: { question_id: expect.any(String) } });
   } finally {
     await client.close();
   }
