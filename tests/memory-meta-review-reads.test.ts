@@ -153,6 +153,8 @@ it("list_memory_proposals は過去の memory 提案を approve・修正つき a
   answer(refused, "reject", { comment: "Notes are not about volume." });
   const kept = propose({ op: "invalidate", target_id: approved!, reason: "environment", rationale: "r" });
   answer(kept, "reject", { comment: "The CI still squashes." });
+  // 既にある後継の consolidate の replaces は approved だけ(ADR 0161 決定5)—— question を立てずに承認して提案の一覧に足さない
+  approveMemoryProposal(db, { kind: "memory", op: "approve", candidate_id: replaced!, replaces: [] }, "question-replaced", "webui", at);
   const merged = propose({ op: "consolidate", successor_id: approved!, replaces: [replaced!], rationale: "r" });
   answer(merged, "approve");
   const settled = propose({ op: "approve", candidate_id: stale!, rationale: "r" });

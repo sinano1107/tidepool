@@ -12,6 +12,7 @@ import type { Landing } from "./landing.js";
 import {
   browseMemory,
   defineMemoryBranch,
+  defineMemoryByMetaReview,
   foldMemory,
   invalidateMemoryByMetaReview,
   invalidationSchema,
@@ -964,14 +965,15 @@ function registerMemoryMetaReviewVerbs(server: McpServer, deps: McpDeps, run: Me
     {
       description:
         "Draft or revise a branch definition in the given scope: one line declaring what is filed under the path. " +
-        "A branch has one definition per scope; revise it with supersedes, which may point at a definition in another scope or at another path, " +
-        "or list several definitions to consolidate into this one. " +
+        "A branch has one definition per scope; revise it with supersedes, or list several definitions to consolidate into this one. " +
+        "supersedes may point at a definition at another path, but only in the same scope or, when this definition is whole-board, in any scope. " +
+        "To override a whole-board definition for one workspace, write the workspace definition without supersedes: it shadows the whole-board one there. " +
         BOARD_WRITE_LANGUAGE_RULE,
       inputSchema: { scope, path: z.string(), definition: z.string(), supersedes: z.array(z.number().int()).min(1).optional() },
     },
     async (input) =>
       run((reader, now) =>
-        defineMemoryBranch(
+        defineMemoryByMetaReview(
           deps.db,
           {
             scope: registeredScope(deps, input.scope),
@@ -994,7 +996,8 @@ function registerMemoryMetaReviewVerbs(server: McpServer, deps: McpDeps, run: Me
         "scope, path, title, text and based_on_decision, to write a new Knowledge entry replacing Knowledge entries (based_on_decision " +
         "is the event id log_decision returned for your reasoning; it becomes the source, an inference); or successor_id, an existing " +
         "approved entry: Knowledge into Knowledge, Definitions into a Definition, Behavior and Exemplar candidates into an approved " +
-        "Behavior or Exemplar. An approved Behavior or Exemplar cannot be replaced here — propose a consolidate instead. " +
+        "Behavior or Exemplar. The successor must cover every entry in replaces: its scope is whole-board or the same scope, and its addressee " +
+        "is every agent or the same agent. An approved Behavior or Exemplar cannot be replaced here — propose a consolidate instead. " +
         BOARD_WRITE_LANGUAGE_RULE,
       inputSchema: {
         replaces: z.array(z.number().int()),
@@ -1042,7 +1045,8 @@ function registerMemoryMetaReviewVerbs(server: McpServer, deps: McpDeps, run: Me
         "Propose a Behavior or Exemplar change to the human as one approve / reject / defer question attached to this task. op approve asks to " +
         "approve a Behavior candidate exactly as worded (candidate_id). op consolidate replaces the candidates, approved Behaviors and " +
         "Exemplars in replaces with one successor: either text, drafted as a new candidate, or successor_id, an approved Behavior or " +
-        "Exemplar you keep instead. With text, based_on_decision is the event id log_decision returned for your reasoning; the new " +
+        "Exemplar you keep instead. With successor_id, replaces takes approved entries only; fold a candidate into an existing approved " +
+        "entry with fold_memory's successor_id. With text, based_on_decision is the event id log_decision returned for your reasoning; the new " +
         "candidate keeps the source the replaced entries share, and takes based_on_decision as its source when they share none. With " +
         "text.kind exemplar it is an Exemplar: give annotations instead of text.text; the replaced entries must share a source that " +
         "renders a case. op invalidate asks to drop the approved Behavior or Exemplar target_id, with no successor, for reason " +
