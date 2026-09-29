@@ -190,7 +190,8 @@ function createEntry(
 
 /** 書き込みの `supersedes`(ADR 0162 決定1・2): write で新エントリを書き、supersedes の各要素をその superseded にするのを
  *  1 transaction。要素は未無効化の approved だけ —— candidate を新しい文言で置き換えるのは提案 question の修正値(ADR 0152 決定3)。
- *  種別の線は無効化の門が持つ。write は置き換えられるエントリ(出所を継ぐ書き込みが読む)を受け、新エントリの id を返す。 */
+ *  種別の線は無効化の門が持つ。write は置き換えられるエントリ(出所を継ぐ書き込みが読む)を受け、新エントリの id を返す。
+ *  supersedes は省略か1件以上 —— 空配列は書く前に拒否する(#1135)。 */
 function writeSuperseding(
   db: Db,
   supersedes: number[] | undefined,
