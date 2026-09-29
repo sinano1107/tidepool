@@ -1,7 +1,6 @@
 import { expect, it } from "vitest";
-import { draftBehaviorCandidate } from "../src/attribution.js";
 import { openDb } from "../src/db.js";
-import { appendEvent, getEvent, type TaskScopedPayload } from "../src/events.js";
+import { appendEvent, getEvent, listEvents, type TaskScopedPayload } from "../src/events.js";
 import {
   approvedMemoryEntries,
   approveMemoryProposal,
@@ -21,9 +20,10 @@ import {
   searchMemory,
 } from "../src/memory.js";
 import { projectAndPersist } from "../src/precedent.js";
+import { attributeObjections, refireRetrospectiveCalls } from "../src/retrospective.js";
 import { DomainError, logDecision, registerTask } from "../src/tasks.js";
-import { TriageError } from "../src/triage.js";
-import { FakeBehaviorDraftClient, noAttributionCalls } from "./fakes.js";
+import { commitTriage, raiseObjection, startTriage } from "../src/triage.js";
+import { FakeAttributionClient, FakeBehaviorDraftClient, noRetrospectiveCalls } from "./fakes.js";
 import { FIXTURE_SPAWNED_EVENT_ID, FIXTURE_TASK, seedFixtureBoard, tempDir, writeFixtureTranscript } from "./harness.js";
 
 const at = new Date("2026-09-14T00:00:00.000Z");
@@ -299,47 +299,43 @@ it("RCA が起草した Behavior の read は、帰責 event から辿った異�
   ]);
 });
 
-/** 同じ entry 6 に session 1 と session 2 から異議を積み、session 2 で帰責した盤面(#958)。 */
+/** 同じ entry 6 に session 1 と session 2 から異議を積んだ盤面(#958)。 */
 async function objectedInTwoSessions() {
   const { db, reader } = await projectedBoard();
   const objection = (comment: string, session_id: number) =>
     appendEvent(db, { taskId: FIXTURE_TASK, workerId: "human", origin: "webui", payload: { kind: "objection_raised", entry_id: 6, comment, session_id }, at });
   objection("three bullets is too few", 1);
-  const second = objection("cover the tide cycle too", 2);
-  const payload = { kind: "objection_attributed" as const, entry_id: 6, objection_event_ids: [second], cause: "preference" as const, evidence: "e", entries: null, round: "initial" as const };
-  const attributed = appendEvent(db, { taskId: FIXTURE_TASK, workerId: "board", origin: "board", payload, at });
-  return { db, reader, attribution: { id: attributed, ...payload } };
+  objection("cover the tide cycle too", 2);
+  return { db, reader };
+}
+
+/** 同じ entry 6 に、commit 済みの triage session 1(requirement_change = 起草しない)と session 2(preference)から異議を通した盤面(#1132)。 */
+async function objectedInTwoCommittedSessions() {
+  const { db, reader } = await projectedBoard();
+  const attributionClient = new FakeAttributionClient();
+  const settle = async (comment: string, cause: "requirement_change" | "preference") => {
+    const session = startTriage(db, at);
+    raiseObjection(db, 6, comment, at);
+    attributionClient.scriptJudgment(6, { cause, evidence: "e" });
+    commitTriage(db, at, [], await attributeObjections(db, { ...noRetrospectiveCalls, attributionClient }, session.id, at));
+  };
+  await settle("three bullets is too few", "requirement_change");
+  await settle("cover the tide cycle too", "preference");
+  return { db, reader };
 }
 
 it("2つ目の session の帰責を出所に持つ Behavior の case の steering は、その session の異議だけで、同じ帰責の AttributionInput.steering と一致する", async () => {
-  const { db, reader, attribution } = await objectedInTwoSessions();
+  const { db, reader } = await objectedInTwoCommittedSessions();
   const behaviorDraftClient = new FakeBehaviorDraftClient();
-  await draftBehaviorCandidate(db, { ...noAttributionCalls, behaviorDraftClient, workspace: { name: "sandbox" } }, attribution, at);
-  const id = approvedBehavior(db, "Cover the topic", { event_id: attribution.id });
+  refireRetrospectiveCalls(db, { ...noRetrospectiveCalls, behaviorDraftClient, workspace: { name: "sandbox" } }, at);
+  // sweep は fire-and-forget: fake の返答が着地するまで回す
+  await new Promise((resolve) => setImmediate(resolve));
+  const preference = listEvents(db, FIXTURE_TASK).find((e) => e.payload.kind === "objection_attributed" && e.payload.cause === "preference");
+  const id = approvedBehavior(db, "Cover the topic", { event_id: preference!.id });
 
   const steering = (readMemory(db, reader, { ids: [id] }, at).entries[0]?.case as { steering: string[] } | undefined)?.steering;
   expect(steering).toEqual(["cover the tide cycle too"]);
   expect(behaviorDraftClient.calls.map((c) => c.input.steering)).toEqual([steering]);
-});
-
-it("帰責の objection_event_ids に objection_raised でない id があると、帰責の入力を組む段で例外になり起草は撃たれない", async () => {
-  const { db, attribution } = await objectedInTwoSessions();
-  const behaviorDraftClient = new FakeBehaviorDraftClient();
-
-  await expect(
-    draftBehaviorCandidate(db, { ...noAttributionCalls, behaviorDraftClient, workspace: { name: "sandbox" } }, { ...attribution, objection_event_ids: [6] }, at),
-  ).rejects.toThrow(TriageError);
-  expect(behaviorDraftClient.calls).toEqual([]);
-});
-
-it("帰責の entry_id が decision-log entry でないと、不変条件違反として例外になり起草は撃たれない", async () => {
-  const { db, attribution } = await objectedInTwoSessions();
-  const behaviorDraftClient = new FakeBehaviorDraftClient();
-
-  await expect(
-    draftBehaviorCandidate(db, { ...noAttributionCalls, behaviorDraftClient, workspace: { name: "sandbox" } }, { ...attribution, entry_id: FIXTURE_SPAWNED_EVENT_ID }, at),
-  ).rejects.toThrow(/not a decision-log entry/);
-  expect(behaviorDraftClient.calls).toEqual([]);
 });
 
 it("decision entry を直接出所に持つ Behavior の case の steering は、全 session の異議を event 順に並べたもの", async () => {

@@ -1,6 +1,6 @@
 import { expect, it } from "vitest";
-import type { AttributionInput } from "../src/attribution.js";
 import { ClaudeAttributionClient } from "../src/claude-attribution-client.js";
+import type { AttributionInput } from "../src/retrospective.js";
 
 const input: AttributionInput = {
   entry_id: 7,

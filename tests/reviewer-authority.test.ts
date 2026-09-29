@@ -1,6 +1,8 @@
 import { afterEach, expect, it } from "vitest";
+import { openDb } from "../src/db.js";
+import { appendEvent, type TaskScopedPayload } from "../src/events.js";
 import type { AuthorityProfile } from "../src/registry.js";
-import { type RegisterTaskInput, registerTask } from "../src/tasks.js";
+import { type RegisterTaskInput, registerTask, reviewedTaskExecutor } from "../src/tasks.js";
 import { api, bootTidepool, FULL_HANDOFF, HOUR, mcpClient, type Tidepool } from "./harness.js";
 
 let t: Tidepool;
@@ -364,4 +366,19 @@ it("review タスクの分解子を、レビュー対象タスクの assignee �
   expect(board.find((x: any) => x.title === "fix handed to someone else")).toBeUndefined();
   const question = board.find((x: any) => x.type === "question" && x.parent_id === review.id);
   expect(question).toBeDefined();
+});
+
+it("assignee の無い被レビュータスクの Executor は、最後の pickup ではなく最新の task_completed の worker になる(ADR 0054 / issue #1137)", () => {
+  const db = openDb(":memory:");
+  const at = new Date("2026-01-01T00:00:00Z");
+  const work = registerTask(db, { type: "work", title: "w", purpose: "p", completion_criteria: "c" }, at);
+  const review = registerTask(db, { type: "review", title: "r", purpose: "p", completion_criteria: "c", parent_id: work.id }, at);
+  const write = (workerId: string, payload: TaskScopedPayload) =>
+    appendEvent(db, { taskId: work.id, workerId, origin: "board", at, payload });
+  write("worker-a", { kind: "task_picked_up" });
+  write("worker-b", { kind: "task_completed", handoff_present: true, result: null });
+  write("worker-c", { kind: "task_picked_up" });
+
+  expect(work.assignee).toBeNull();
+  expect(reviewedTaskExecutor(db, review)).toBe("worker-b");
 });

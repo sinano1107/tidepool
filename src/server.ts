@@ -5,7 +5,6 @@ import express from "express";
 import type { AgentAdmin } from "./agent-create.js";
 import type { AllocationClient } from "./allocation-review.js";
 import { createApiRouter } from "./api.js";
-import type { AttributionCallDeps, AttributionClient, BehaviorDraftClient } from "./attribution.js";
 import { createHumanSurfaceAuth, type HumanCredential } from "./auth.js";
 import { type BoardCall, createBoardCalls } from "./board-call.js";
 import { type BoardStatePath, sweepBoardStateOverlap } from "./board-state.js";
@@ -51,6 +50,7 @@ import {
   type RosterAgent,
   remoteTrackingRef,
 } from "./registry.js";
+import type { AttributionClient, BehaviorDraftClient, RetrospectiveCallDeps } from "./retrospective.js";
 import { type Scheduler, startScheduler, type TaskExecutionCandidates } from "./scheduler.js";
 import { Slot } from "./slot.js";
 import { DEFAULT_AUDITOR_NAME, getTask } from "./tasks.js";
@@ -616,7 +616,7 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
   // (`containment` / `registryReachability` と同じ配線)。
   const teardownQuarantine = (taskId: string) => acceptTeardownQuarantine(teardownDeps, taskId);
   // 振り返り Board call の束: scheduler(poll の sweep)と WebUI(triage close)へ同じ1つを渡す
-  const attributionCalls: AttributionCallDeps = {
+  const retrospectiveCalls: RetrospectiveCallDeps = {
     allocationClient: options.allocationClient,
     attributionClient: options.attributionClient,
     behaviorDraftClient: options.behaviorDraftClient,
@@ -644,7 +644,7 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
     githubAuth: options.githubAuth,
     registry: options.registry,
     agents: agentAdmin?.list,
-    attributionCalls,
+    retrospectiveCalls,
   });
   // an abandoned triage session may not pause pickup forever: the watchdog
   // closes it past the timeout, and reopening pickup is a "run now" trigger
@@ -751,7 +751,7 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
       hostSkills: options.hostSkills && (() => options.hostSkills!(boardCalls.call)),
       githubTokenFile: options.githubTokenFile,
       translationClient: options.translationClient,
-      attributionCalls,
+      retrospectiveCalls,
       quarantineResolvers: options.quarantineResolvers,
       taskExecutionCandidates: options.taskExecutionCandidates,
       isProtectedWorkspace: options.isProtectedWorkspace,

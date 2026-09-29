@@ -1,6 +1,6 @@
 import type { Clock } from "./clock.js";
 import type { Db } from "./db.js";
-import { appendEvent } from "./events.js";
+import { appendEvent, latestEventOfTask } from "./events.js";
 import type { GitHubClient } from "./github.js";
 import type { AuthorityProfile } from "./registry.js";
 import {
@@ -305,10 +305,7 @@ function recordLandingDeferred(
   block: { kind: "attached_children" | "objections"; count: number },
   now: Date,
 ): void {
-  const already = db
-    .prepare("SELECT 1 FROM events WHERE task_id = ? AND kind = 'landing_deferred'")
-    .get(taskId);
-  if (already) return;
+  if (latestEventOfTask(db, taskId, "landing_deferred")) return;
   appendEvent(db, {
     taskId,
     workerId: BOARD_WORKER_ID,

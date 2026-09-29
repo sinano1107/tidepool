@@ -6,15 +6,6 @@ import type {
   AllocationJudgment,
   AllocationReviewInput,
 } from "../src/allocation-review.js";
-import type {
-  AttributionCallDeps,
-  AttributionClient,
-  AttributionInput,
-  AttributionJudgment,
-  BehaviorDraft,
-  BehaviorDraftClient,
-  BehaviorDraftInput,
-} from "../src/attribution.js";
 import { type BoardCall, createBoardCalls } from "../src/board-call.js";
 import type { Clock } from "../src/clock.js";
 import type { CodexAppServerProbeResult } from "../src/codex-app-server.js";
@@ -53,6 +44,15 @@ import {
   type PtyFn,
 } from "../src/process-container.js";
 import type { PushClient, PushPayload, PushSubscription } from "../src/push.js";
+import type {
+  AttributionClient,
+  AttributionInput,
+  AttributionJudgment,
+  BehaviorDraft,
+  BehaviorDraftClient,
+  BehaviorDraftInput,
+  RetrospectiveCallDeps,
+} from "../src/retrospective.js";
 import type { Task } from "../src/tasks.js";
 import type { TranslationClient, TranslationResult } from "../src/translate.js";
 import { RECLAIM_TIMEOUT } from "../src/watchdog.js";
@@ -76,7 +76,7 @@ export const unusedLanding: Landing = {
 };
 
 /** Board call を持たない盤面の束(帰責も起草も配分評価も撃たない)。 */
-export const noAttributionCalls: AttributionCallDeps = {
+export const noRetrospectiveCalls: RetrospectiveCallDeps = {
   allocationClient: undefined,
   attributionClient: undefined,
   behaviorDraftClient: undefined,

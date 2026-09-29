@@ -9,7 +9,6 @@ import { afterAll, expect, onTestFinished } from "vitest";
 import { quarantineAgent } from "../src/agent.js";
 import type { AgentAdmin } from "../src/agent-create.js";
 import type { AllocationClient } from "../src/allocation-review.js";
-import type { AttributionClient, BehaviorDraftClient } from "../src/attribution.js";
 import {
   bootstrapUrl as authBootstrapUrl,
   generateToken,
@@ -38,6 +37,7 @@ import type {
   RegistrySource,
   RosterAgent,
 } from "../src/registry.js";
+import type { AttributionClient, BehaviorDraftClient } from "../src/retrospective.js";
 import { HOURLY, type TaskExecutionCandidates } from "../src/scheduler.js";
 import { startServer } from "../src/server.js";
 import { implicitTaskExecutionCandidates } from "../src/server-options.js";
@@ -855,7 +855,7 @@ export const FULL_HANDOFF = {
   known_issues: "n/a",
 };
 
-// 帰責・起草の撃ち直しの setup(tests/attribution.test.ts と tests/memory-settings-endpoints.test.ts が共有する)
+// 帰責・起草の撃ち直しの setup(tests/retrospective.test.ts と tests/memory-settings-endpoints.test.ts が共有する)
 
 /** triage session の中で entry に異議を打ち、異議 event の id を返す。 */
 export async function object(t: Tidepool, entryId: number, comment: string) {

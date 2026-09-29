@@ -3,7 +3,7 @@ import type { Cause } from "../src/cause.js";
 import type { CodexAppServerProbeResult } from "../src/codex-app-server.js";
 import { appendEvent, type EventPayload } from "../src/events.js";
 import { applyExecutionSettingsChange, type ExecutionSetting } from "../src/execution-setting.js";
-import { aggregateCells, episodeOutcome, type LearnerEpisode, recommend, selectorBranch } from "../src/learner.js";
+import { aggregateCells, episodeOutcome, type LearnerEpisode, loadEpisodes, recommend, selectorBranch } from "../src/learner.js";
 import { listRoutingShadow } from "../src/routing-review.js";
 import { healthyOpenai } from "./fakes.js";
 import {
@@ -16,6 +16,7 @@ import {
   loggedEntry,
   registerWork,
   type Tidepool,
+  WORKER_SPAWNED,
 } from "./harness.js";
 
 /** selector が並べた候補(除外を当てた後)。表の綴り —— anthropic は alias 行。 */
@@ -451,4 +452,36 @@ it("昇格中も学習器の選択は Throttle の除外を通る —— 選ん�
 
   expect(settingsOf(t, later.id)).toEqual(byLearner(opus));
   expect(shadowRows(t).at(-1)).toMatchObject({ task_id: later.id, recommended: cellOf(opus), actual: cellOf(opus) });
+});
+
+it("別タスクの entry への帰責は、id 窓が重なっても開いたままの session の episode に混ざらない —— cause はタスクの照合で決まる(loadEpisodes)", async () => {
+  t = await bootTidepool();
+  const recordSpawn = (taskId: string) =>
+    appendEvent(t.db, { taskId, workerId: "fake-worker", origin: "board", at: t.clock.now(), payload: WORKER_SPAWNED });
+  // A は完了しても session は開いたまま(exit も次の spawn も無い)。その後ろで B が spawn して帰責される —— A の id 窓は B の帰責を含む
+  const a = await registerWork(t, "a");
+  await t.clock.advance(HOUR);
+  const aSpawnedId = recordSpawn(a.id);
+  await completeViaMcp(t, a.id);
+  await completeIntegrationReviews(t, a.id);
+  const b = await registerWork(t, "b");
+  await t.clock.advance(HOUR);
+  const bSpawnedId = recordSpawn(b.id);
+  const entry = await loggedEntry(t, b.id, "took the shortcut");
+  const attributed: EventPayload = {
+    kind: "objection_attributed",
+    entry_id: entry.id,
+    objection_event_ids: [bundledObjection(t.db, b.id, entry.id, t.clock.now())],
+    cause: "capability",
+    evidence: "the shortcut missed the second criterion",
+    entries: null,
+    round: "initial",
+  };
+  appendEvent(t.db, { taskId: b.id, workerId: "board", origin: "board", at: t.clock.now(), payload: attributed });
+
+  const episodes = loadEpisodes(t.db);
+  const outcomeOf = (spawnedId: number) => episodes.find((e) => e.worker_spawned_event_id === spawnedId)?.outcome;
+  expect(episodes).toHaveLength(2);
+  expect(outcomeOf(bSpawnedId)).toBe("rejected");
+  expect(outcomeOf(aSpawnedId)).not.toBe("rejected");
 });
