@@ -172,6 +172,10 @@ it("advisor pin ありの episode は advisor 無しのセルに合流しない 
 let t: Tidepool;
 afterEach(() => t?.stop());
 
+/** ScriptedWorker は spawn しないので、その session の開始を setup として置く。 */
+const recordSpawn = (taskId: string) =>
+  appendEvent(t.db, { taskId, workerId: "fake-worker", origin: "board", at: t.clock.now(), payload: WORKER_SPAWNED });
+
 const shadowRows = (t: Tidepool) =>
   listRoutingShadow(t.db, "", { since_watermark: 0 }).shadow.map(({ task_id, recommended, actual, source, basis }) => ({ task_id, recommended, actual, source, basis }));
 
@@ -456,8 +460,6 @@ it("昇格中も学習器の選択は Throttle の除外を通る —— 選ん�
 
 it("別タスクの entry への帰責は、id 窓が重なっても開いたままの session の episode に混ざらない —— cause はタスクの照合で決まる(loadEpisodes)", async () => {
   t = await bootTidepool();
-  const recordSpawn = (taskId: string) =>
-    appendEvent(t.db, { taskId, workerId: "fake-worker", origin: "board", at: t.clock.now(), payload: WORKER_SPAWNED });
   // A は完了しても session は開いたまま(exit も次の spawn も無い)。その後ろで B が spawn して帰責される —— A の id 窓は B の帰責を含む
   const a = await registerWork(t, "a");
   await t.clock.advance(HOUR);
@@ -484,4 +486,19 @@ it("別タスクの entry への帰責は、id 窓が重なっても開いたま
   expect(episodes).toHaveLength(2);
   expect(outcomeOf(bSpawnedId)).toBe("rejected");
   expect(outcomeOf(aSpawnedId)).not.toBe("rejected");
+});
+
+it("受理された work task の episode は、後から別の work task が spawn しても accepted のまま —— 次の spawn はタスクの照合で決まる(loadEpisodes)", async () => {
+  t = await bootTidepool();
+  const a = await registerWork(t, "a");
+  await t.clock.advance(HOUR);
+  const aSpawnedId = recordSpawn(a.id);
+  await completeViaMcp(t, a.id);
+  await completeIntegrationReviews(t, a.id);
+  const b = await registerWork(t, "b");
+  await t.clock.advance(HOUR);
+  recordSpawn(b.id);
+
+  const episodes = loadEpisodes(t.db);
+  expect(episodes.find((e) => e.worker_spawned_event_id === aSpawnedId)?.outcome).toBe("accepted");
 });
