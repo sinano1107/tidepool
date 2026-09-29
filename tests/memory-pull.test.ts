@@ -299,16 +299,14 @@ it("RCA が起草した Behavior の read は、帰責 event から辿った異�
   ]);
 });
 
-/** 同じ entry 6 に session 1 と session 2 から異議を積み、session 2 で帰責した盤面(#958)。 */
+/** 同じ entry 6 に session 1 と session 2 から異議を積んだ盤面(#958)。 */
 async function objectedInTwoSessions() {
   const { db, reader } = await projectedBoard();
   const objection = (comment: string, session_id: number) =>
     appendEvent(db, { taskId: FIXTURE_TASK, workerId: "human", origin: "webui", payload: { kind: "objection_raised", entry_id: 6, comment, session_id }, at });
   objection("three bullets is too few", 1);
-  const second = objection("cover the tide cycle too", 2);
-  const payload = { kind: "objection_attributed" as const, entry_id: 6, objection_event_ids: [second], cause: "preference" as const, evidence: "e", entries: null, round: "initial" as const };
-  const attributed = appendEvent(db, { taskId: FIXTURE_TASK, workerId: "board", origin: "board", payload, at });
-  return { db, reader, attribution: { id: attributed, ...payload } };
+  objection("cover the tide cycle too", 2);
+  return { db, reader };
 }
 
 /** 同じ entry 6 に、commit 済みの triage session 1(requirement_change = 起草しない)と session 2(preference)から異議を通した盤面(#1132)。 */
@@ -329,7 +327,6 @@ async function objectedInTwoCommittedSessions() {
 it("2つ目の session の帰責を出所に持つ Behavior の case の steering は、その session の異議だけで、同じ帰責の AttributionInput.steering と一致する", async () => {
   const { db, reader } = await objectedInTwoCommittedSessions();
   const behaviorDraftClient = new FakeBehaviorDraftClient();
-  behaviorDraftClient.scriptDraft(6, { path: "notes", title: "Cover the topic", text: "Keep notes short.", addressee: "all" });
   refireAttributions(db, { ...noAttributionCalls, behaviorDraftClient, workspace: { name: "sandbox" } }, at);
   // sweep は fire-and-forget: fake の返答が着地するまで回す
   await new Promise((resolve) => setImmediate(resolve));
