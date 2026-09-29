@@ -36,9 +36,9 @@ export const ROUTING_META_REVIEW_VERBS = [
 
 /** 昇格規則の5択(spec #949 / issue #954 / ADR 0161 決定3): propose_memory_change の記述と memory meta-review の purpose が同じ文を載せる。 */
 export const PROMOTION_RULE =
-  "For each candidate, promote it to a Behavior when its scope and criterion can be stated so they hold for any future task; " +
+  "For each candidate, first fold it into an existing approved Behavior or Exemplar that already says the same (fold_memory with successor_id); " +
+  "otherwise promote it to a Behavior when its scope and criterion can be stated so they hold for any future task; " +
   "fold it into an Exemplar (consolidate with kind exemplar) when that cannot be said but the concrete case carries quality worth reusing; " +
-  "fold it into an existing approved Behavior or Exemplar that already says the same (fold_memory with successor_id); " +
   "retire it with invalidate_memory reason rejected when it will become neither; leave it unpromoted while more material could still " +
   "change the judgment — there is no threshold or deadline.";
 

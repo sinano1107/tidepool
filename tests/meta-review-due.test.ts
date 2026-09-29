@@ -5,6 +5,7 @@ import {
   approveMemoryProposal,
   createBehaviorCandidate,
   defineMemoryBranch,
+  defineMemoryByMetaReview,
   foldMemory,
   invalidateMemoryByMetaReview,
   invalidateMemoryEntry,
@@ -90,7 +91,7 @@ it("memory meta-review の直接書き込み(define・fold・move・invalidate)�
   const definition = defineMemoryBranch(db, { scope: null, path: "build", text: "How it builds.", author: deckhand }, "worker", at).entry_id;
   previousReview(db, "memory");
 
-  defineMemoryBranch(db, { scope: null, path: "build", text: "How the board builds.", supersedes: [definition], author: metaReview }, "worker", at);
+  defineMemoryByMetaReview(db, { scope: null, path: "build", text: "How the board builds.", supersedes: [definition], author: metaReview }, "worker", at);
   foldMemory(db, task.id, { scope: null, path: "build", title: "Folded", text: "Folded.", replaces: [a, b], based_on_decision: decision, author: metaReview }, "worker", at);
   moveMemoryByMetaReview(db, { entry_id: moved, scope: null, path: "toolchain", mover: metaReview }, "worker", at);
   invalidateMemoryByMetaReview(db, { entry_id: invalidated, reason: "environment" }, "auditor", "worker", at);

@@ -219,7 +219,7 @@ export function recordKnowledge(db: Db, input: EntryInput & { supersedes?: numbe
 
 /** 枝の定義(spec #600 A): その枝の下に何を保存するかの1行。承認不要で書いた瞬間に approved、
  *  出所は持たない(自身の作成 event)。同じ枝・同じスコープの approved は1つだけ —— 改訂は
- *  `supersedes` に旧定義(path は問わない、ADR 0161 決定2)を含める。 */
+ *  `supersedes` に旧定義(path は問わない、ADR 0161 決定2)を含める。meta-review は defineMemoryByMetaReview の門を通して呼ぶ。 */
 export function defineMemoryBranch(
   db: Db,
   input: Omit<EntryInput, "title"> & { supersedes?: number[] },
@@ -233,6 +233,13 @@ export function defineMemoryBranch(
     if (defined) throw new DomainError(`branch ${fields.path} is already defined in this scope by entry ${defined}; revise it with supersedes`);
     return createEntry(db, { ...fields, title: fields.text, kind: "definition", state: "approved", original: fields.original ?? null, addressee: null }, origin, at);
   });
+}
+
+/** meta-review の `define_memory`(ADR 0161 追記7): defineMemoryBranch に覆いの門を掛ける。Definition は宛先を持たないので
+ *  門は scope だけで、path は問わない。人間の面は defineMemoryBranch を直接呼ぶ。 */
+export function defineMemoryByMetaReview(db: Db, input: Parameters<typeof defineMemoryBranch>[1], origin: EventOrigin, at: Date): { entry_id: number; event_id: number } {
+  requireCovers({ scope: input.scope, addressee: null }, (input.supersedes ?? []).map((id) => requireLive(db, id, undefined, "approved")));
+  return defineMemoryBranch(db, input, origin, at);
 }
 
 /** 既にある後継への畳み(ADR 0162 決定1・2): replaces(1つ以上、approved も candidate も)を successor_id の superseded にする。
@@ -252,10 +259,23 @@ export function foldMemoryEntries(
   }))();
 }
 
-/** meta-review の畳み(issue #619 / ADR 0122 決定1 / ADR 0161 決定2): foldMemoryEntries に meta-review の門を掛ける。
- *  後継は新しく書く Knowledge(`based_on_decision` の decision(推論)を出所に)か、既にある approved の `successor_id` のどちらか一方。
- *  組(Knowledge → Knowledge、Definition → Definition、Behavior / Exemplar ↔)は種別の線が持ち、approved の Behavior / Exemplar は
- *  承認の線なので consolidate の提案へ回す。 */
+/** 覆いの門(ADR 0161 決定6・追記7): meta-review の直接の畳みは、後継の scope が盤面全体か各 replaces と同じで、宛先が全員か
+ *  各 replaces と同じときだけ。scope を変える畳みは移動の側で、狭める置き換えは人間の判断。 */
+function requireCovers(successor: { scope: string | null; addressee: string | null }, replaced: EntryRow[]): void {
+  for (const row of replaced) {
+    if (successor.scope !== null && successor.scope !== row.scope) {
+      throw new DomainError(`the successor in scope ${successor.scope} does not cover memory entry ${row.id} in scope ${row.scope ?? "whole board"}: the successor must be whole-board or in the same scope`);
+    }
+    if (successor.addressee !== null && successor.addressee !== row.addressee) {
+      throw new DomainError(`the successor addressed to ${successor.addressee} does not cover memory entry ${row.id} addressed to ${row.addressee ?? "every agent"}: the successor must address every agent or the same agent`);
+    }
+  }
+}
+
+/** meta-review の畳み(issue #619 / ADR 0122 決定1 / ADR 0161 決定2・6): foldMemoryEntries に meta-review の門を掛ける。
+ *  後継は新しく書く Knowledge(`based_on_decision` の decision(推論)を出所に)か、既にある approved の `successor_id` のどちらか一方で、
+ *  どちらも replaces を覆う(requireCovers)。組(Knowledge → Knowledge、Definition → Definition、Behavior / Exemplar ↔)は種別の線が
+ *  持ち、approved の Behavior / Exemplar は承認の線なので consolidate の提案へ回す。 */
 export function foldMemory(
   db: Db,
   metaReviewId: string,
@@ -271,7 +291,7 @@ export function foldMemory(
     throw new DomainError("fold_memory takes exactly one of successor_id (an existing approved entry) and scope, path, title, text and based_on_decision (a new knowledge entry)");
   }
   return db.transaction(() => {
-    for (const id of replaces) requireNotApprovedBehaviorOrExemplar(db, id);
+    const replaced = replaces.map((id) => requireNotApprovedBehaviorOrExemplar(db, id));
     let successor = successor_id;
     if (successor === undefined) {
       const { scope, path, title, text, based_on_decision } = draft;
@@ -280,6 +300,7 @@ export function foldMemory(
       }
       successor = recordKnowledge(db, { scope, path, title, text, author, source: { event_id: requireDecision(db, based_on_decision, metaReviewId) } }, origin, at).entry_id;
     }
+    requireCovers(requireEntry(db, successor), replaced);
     return foldMemoryEntries(db, { replaces, successor_id: successor, author }, origin, at);
   })();
 }
@@ -694,9 +715,11 @@ export function invalidateMemoryEntry(
   })();
 }
 
-/** meta-review が直接落とせるエントリ(ADR 0160 決定1): approved の Behavior / Exemplar は承認の線なので提案へ回す。 */
+/** meta-review が直接落とせるエントリ(ADR 0160 決定1): approved の Behavior / Exemplar は承認の線なので提案へ回す。
+ *  無効化済みは提案にも回せないので先に断る。 */
 function requireNotApprovedBehaviorOrExemplar(db: Db, id: number): EntryRow {
   const row = requireEntry(db, id);
+  if (row.invalidation_reason !== null) throw new DomainError(`memory entry ${row.id} is already invalidated`);
   if ((row.kind === "behavior" || row.kind === "exemplar") && row.state === "approved") throw new DomainError(`memory entry ${row.id} is an approved ${row.kind}: propose it instead`);
   return row;
 }
@@ -866,7 +889,7 @@ export function proposeMemoryChange(
     candidate_id?: number;
     /** kind 省略 = behavior。exemplar は text を持たず注釈を持つ(text は注釈から導く)。 */
     text?: { scope: string | null; path: string; title: string; text?: string; addressee: string | null; kind?: "behavior" | "exemplar"; annotations?: unknown };
-    /** 既存の approved の Behavior / Exemplar を後継に名指す(text の代わり、ADR 0160 決定2)。 */
+    /** 既存の approved の Behavior / Exemplar を後継に名指す(text の代わり、ADR 0160 決定2)。replaces は approved だけ(ADR 0161 決定5)。 */
     successor_id?: number;
     replaces?: number[];
     based_on_decision?: number;
@@ -900,6 +923,9 @@ export function proposeMemoryChange(
         // 新しい entry を書かないので、出所にする推論は要らない
         if (input.based_on_decision !== undefined) throw new DomainError("a consolidation into an existing entry writes no entry, so it takes no based_on_decision");
         const successor = requireLive(db, input.successor_id, ["behavior", "exemplar"], "approved");
+        // candidate を既にある approved へ寄せるのは fold_memory だけ(ADR 0161 決定5)
+        const candidate = replaced.find((row) => row.state !== "approved");
+        if (candidate) throw new DomainError(`memory entry ${candidate.id} is a candidate: fold it into ${successor.id} with fold_memory's successor_id instead`);
         if (pins.some(({ id }) => id === successor.id)) throw new DomainError(`successor ${successor.id} cannot be one of the entries it replaces`);
         proposal = { kind: "memory", op: "consolidate", successor: { id: successor.id, version: successor.version! }, replaces: pins };
         shown = successor;

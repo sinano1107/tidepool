@@ -82,22 +82,23 @@ it("直接適用4つは引数の scope(null = 盤面全体 / registry の worksp
   const { client, call, material } = await boardWithMetaReview();
   const author = { activity: "meta_review", name: DEFAULT_AUDITOR_NAME };
   try {
-    const boardWide = await call("define_memory", { scope: null, path: "build", definition: "How every workspace builds." });
-    const revised = await call("define_memory", { scope: "sandbox", path: "build", definition: "How sandbox builds.", supersedes: [boardWide.body.entry_id] });
+    const sandbox = await call("define_memory", { scope: "sandbox", path: "build", definition: "How sandbox builds." });
+    const boardWide = await call("define_memory", { scope: null, path: "build", definition: "How every workspace builds.", supersedes: [sandbox.body.entry_id] });
+    expect(await call("define_memory", { scope: "sandbox", path: "build", definition: "How sandbox builds now.", supersedes: [boardWide.body.entry_id] })).toMatchObject({ isError: true });
     expect(await call("define_memory", { scope: "charts", path: "build", definition: "How charts builds." })).toMatchObject({ isError: true });
 
     const { event_id: decision } = (await call("log_decision", { line: "the build note belongs board-wide" })).body;
     const folded = await call("fold_memory", { scope: null, path: "toolchain", title: "Node 22", text: "Use Node 22.", replaces: [material], based_on_decision: decision });
     const moved = await call("move_memory", { entry_id: folded.body.entry_id, scope: "sandbox", path: "toolchain/node" });
-    expect(await call("invalidate_memory", { entry_id: revised.body.entry_id, reason: "requirement_change" })).toMatchObject({
+    expect(await call("invalidate_memory", { entry_id: boardWide.body.entry_id, reason: "requirement_change" })).toMatchObject({
       isError: false,
       body: { event_id: expect.any(Number) },
     });
 
     expect((await memoryEntries(t)).map((e) => [e.id, e.scope, e.author, e.invalidation_reason])).toEqual([
       [material, "sandbox", { activity: "worker_verb", name: "deckhand" }, "superseded"],
-      [boardWide.body.entry_id, null, author, "superseded"],
-      [revised.body.entry_id, "sandbox", author, "requirement_change"],
+      [sandbox.body.entry_id, "sandbox", author, "superseded"],
+      [boardWide.body.entry_id, null, author, "requirement_change"],
       [folded.body.entry_id, null, author, "path_moved"],
       [moved.body.entry_id, "sandbox", author, null],
     ]);
