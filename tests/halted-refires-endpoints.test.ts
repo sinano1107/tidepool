@@ -25,8 +25,8 @@ async function draftHalted(title: string) {
   await commit(s.t, s.task.id, title);
   await s.t.clock.advance(HOUR);
   await s.t.clock.advance(HOUR);
-  const [attribution] = await taskEvents(s.t, s.task.id, "objection_attributed");
-  return { ...s, attribution };
+  const [attributionEvent] = await taskEvents(s.t, s.task.id, "objection_attributed");
+  return { ...s, attribution: attributionEvent };
 }
 
 it("起草が撃って3回失敗すると、settings の一覧と管理MCP の一覧に同じ行が出る(2回ではまだ出ない)", async () => {
@@ -39,13 +39,13 @@ it("起草が撃って3回失敗すると、settings の一覧と管理MCP の�
 
   await t.clock.advance(HOUR);
 
-  const [attribution] = await taskEvents(t, s.task.id, "objection_attributed");
+  const [attributionEvent] = await taskEvents(t, s.task.id, "objection_attributed");
   const [, , last] = await taskEvents(t, s.task.id, "memory_draft_failed");
   const rows = await haltedRefires(t);
   expect(rows).toEqual([
     {
       refire: "draft",
-      target: attribution.id,
+      target: attributionEvent.id,
       entry: { id: s.entry.id, text: "skipped the fixtures" },
       task: { id: s.task.id, title: "hopeless" },
       cause: "preference",

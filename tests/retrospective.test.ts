@@ -418,7 +418,7 @@ it.each([
 
     await commit(t, s.task.id, "naming");
 
-    const [attribution] = await attributions(t, s.task.id);
+    const [attributionEvent] = await attributions(t, s.task.id);
     expect((await memoryEntries(t)).filter((e: any) => e.kind === "behavior")).toEqual([
       expect.objectContaining({
         state: "candidate",
@@ -427,7 +427,7 @@ it.each([
         title: "Keep fixtures",
         text: "Always keep the fixtures.",
         addressee: expected(t),
-        source: { kind: "event", ref: attribution.id },
+        source: { kind: "event", ref: attributionEvent.id },
         author: { activity: "board", name: "tidepool" },
       }),
     ]);
@@ -623,16 +623,16 @@ it("起草が1回失敗すると帰責 id つきの memory_draft_failed が残�
   t = s.t;
   s.behaviorDraftClient.scriptDraft(s.entry.id, new Error("claude CLI timed out"));
   await commit(t, s.task.id, "retried");
-  const [attribution] = await attributions(t, s.task.id);
+  const [attributionEvent] = await attributions(t, s.task.id);
   expect((await draftsFailed(t, s.task.id)).map((e: any) => e.payload)).toEqual([
-    { kind: "memory_draft_failed", entry_id: s.entry.id, round: "initial", attribution_event_id: attribution.id, reason: "claude CLI timed out" },
+    { kind: "memory_draft_failed", entry_id: s.entry.id, round: "initial", attribution_event_id: attributionEvent.id, reason: "claude CLI timed out" },
   ]);
   s.behaviorDraftClient.scriptDraft(s.entry.id, KEEP_FIXTURES);
 
   await t.clock.advance(HOUR);
 
   expect(await behaviors(t)).toEqual([
-    expect.objectContaining({ source: { kind: "event", ref: attribution.id }, author: { activity: "board", name: "tidepool" } }),
+    expect.objectContaining({ source: { kind: "event", ref: attributionEvent.id }, author: { activity: "board", name: "tidepool" } }),
   ]);
   expect(s.behaviorDraftClient.calls).toHaveLength(2);
 });
@@ -765,8 +765,8 @@ it("commit 直後の起草が error handling の外で投げても(失敗 event 
 
   await t.clock.advance(HOUR);
 
-  const [attribution] = await attributions(t, s.task.id);
-  expect(await behaviors(t)).toEqual([expect.objectContaining({ source: { kind: "event", ref: attribution.id } })]);
+  const [attributionEvent] = await attributions(t, s.task.id);
+  expect(await behaviors(t)).toEqual([expect.objectContaining({ source: { kind: "event", ref: attributionEvent.id } })]);
 });
 
 it("前の異議群の起草が失敗した後に同じ entry が再異議されても、後の異議群が第2回を待つ間に次の tick で前の異議群の帰責から起草し直し、candidate の出所は前の帰責", async () => {
@@ -845,8 +845,8 @@ it("容器の前提が成り立たない間は起草を撃ち直さず、失敗 
   t.containers.scriptPreflight();
   await t.clock.advance(HOUR);
 
-  const [attribution] = await attributions(t, s.task.id);
-  expect(await behaviors(t)).toEqual([expect.objectContaining({ source: { kind: "event", ref: attribution.id } })]);
+  const [attributionEvent] = await attributions(t, s.task.id);
+  expect(await behaviors(t)).toEqual([expect.objectContaining({ source: { kind: "event", ref: attributionEvent.id } })]);
 });
 
 it("第2回の帰責が確定した entry は、同じタスクに新しい RCA 群が決着しても問い直されず、新しい entry だけが問われる", async () => {
