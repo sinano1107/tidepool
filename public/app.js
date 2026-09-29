@@ -252,7 +252,7 @@ async function translateMemoryWording(translate, english, originals) {
   }
   return { english: out, back };
 }
-function TpMemoryAmendment({ candidateId, onTranslate, onChange }) {
+function TpMemoryAmendment({ candidateId, onTranslate, onChange, onDeadAddressee }) {
   const { Button, Input, Select } = window.TidepoolDesignSystem_8a0ead;
   const [base, setBase] = React.useState(null);
   const [draft, setDraft] = React.useState({ title: "", text: "", addressee: "", originalTitle: "", originalText: "", annotations: [] });
@@ -274,7 +274,7 @@ function TpMemoryAmendment({ candidateId, onTranslate, onChange }) {
         addressee: candidate.addressee?.trim() ?? "",
         annotations: (candidate.annotations ?? []).map(({ anchor, polarity, text }) => ({ anchor, polarity, text: text.trim(), original: "", back: null }))
       };
-      setBase({ ...wording, kind: candidate.kind, source: typeof candidate.source.ref === "number" ? candidate.source.ref : null });
+      setBase({ ...wording, kind: candidate.kind, source: typeof candidate.source.ref === "number" ? candidate.source.ref : null, dead: deadRefs(candidate).addressee?.trim() ?? null });
       setDraft({ ...wording, originalTitle: "", originalText: "" });
     }).catch((err) => setError(String(err.message || err)));
   }, [candidateId]);
@@ -289,6 +289,7 @@ function TpMemoryAmendment({ candidateId, onTranslate, onChange }) {
     if (draft.originalTitle.trim()) changed.original_title = draft.originalTitle.trim();
     if (draft.originalText.trim()) changed.original_text = draft.originalText.trim();
     onChange(changed);
+    onDeadAddressee(draft.addressee === base.dead);
   }, [base, draft]);
   if (!base) return error ? /* @__PURE__ */ React.createElement("div", { style: { fontSize: "var(--text-xs)", color: "var(--coral-4)", marginBottom: 14 } }, error) : null;
   const set = (key) => (e) => {
@@ -311,7 +312,7 @@ function TpMemoryAmendment({ candidateId, onTranslate, onChange }) {
       label: "Addressee",
       value: draft.addressee,
       onChange: set("addressee"),
-      options: [{ value: "", label: "every agent" }, .../* @__PURE__ */ new Set([...agentNames, ...draft.addressee ? [draft.addressee] : []])]
+      options: [{ value: "", label: "every agent" }, ...offerNames(agentNames, draft.addressee, base.dead)]
     }
   ), agentsError && /* @__PURE__ */ React.createElement("div", { style: { fontSize: "var(--text-xs)", color: "var(--coral-4)" } }, agentsError));
   if (base.kind === "exemplar") {
@@ -339,6 +340,7 @@ function TpQuestionCard({ q, answer, onAnswer, locked = false, onTranslate }) {
     if (answer) setDraft(answer);
   }, [answer]);
   const [amendment, setAmendment] = React.useState({});
+  const [deadAddressee, setDeadAddressee] = React.useState(false);
   const [comment, setComment] = React.useState("");
   const setItemAnswer = (i, value) => {
     const next = draft.slice();
@@ -366,7 +368,7 @@ function TpQuestionCard({ q, answer, onAnswer, locked = false, onTranslate }) {
       onChange: (e) => setAmendment({ ...amendment, to: e.target.value }),
       options: [{ value: "", label: "as proposed" }, ...["economy", "standard"].map((tier) => ({ value: tier, label: tier }))]
     }
-  )), q.amendable === "memory" && !locked && /* @__PURE__ */ React.createElement(TpMemoryAmendment, { candidateId: q.candidateId, onTranslate, onChange: setAmendment }), q.amendable === "row" && !locked && /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8, marginBottom: 14 } }, /* @__PURE__ */ React.createElement(
+  )), q.amendable === "memory" && !locked && /* @__PURE__ */ React.createElement(TpMemoryAmendment, { candidateId: q.candidateId, onTranslate, onChange: setAmendment, onDeadAddressee: setDeadAddressee }), q.amendable === "row" && !locked && /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8, marginBottom: 14 } }, /* @__PURE__ */ React.createElement(
     Select,
     {
       label: "Amend tier (optional)",
@@ -402,7 +404,7 @@ function TpQuestionCard({ q, answer, onAnswer, locked = false, onTranslate }) {
       locked,
       onChange: (v) => setItemAnswer(i, v),
       translated: translatedItems ? translatedItems[i] : null,
-      disabled: comment.trim() ? [] : q.needsComment
+      disabled: [...comment.trim() ? [] : q.needsComment ?? [], ...deadAddressee ? ["approve"] : []]
     }
   ))));
 }
@@ -2071,6 +2073,11 @@ function MemoryExemplarAnnotations({ workspace, source, onSource, annotations, o
 const MEMORY_KINDS = ["knowledge", "behavior", "definition", "exemplar"];
 const MEMORY_INVALIDATION_REASONS = ["capability", "environment", "requirement_change"];
 const invalidatedBy = (by) => !by ? "" : ` by ${"question_id" in by ? `answer to ${by.question_id}` : "activity" in by ? by.activity : by.worker}`;
+const deadRefs = ({ orphaned, addressee, scope }) => ({
+  addressee: orphaned === "addressee" || orphaned === "both" ? addressee : null,
+  workspace: orphaned === "scope" || orphaned === "both" ? scope : null
+});
+const offerNames = (names, current, dead) => [.../* @__PURE__ */ new Set([...names, ...current ? [current] : []])].map((name) => name === dead ? { value: name, label: `${name} (not registered)`, disabled: true } : name);
 const successorKinds = (kinds) => kinds.every((k) => k === "behavior" || k === "exemplar") ? ["behavior", "exemplar"] : new Set(kinds).size === 1 ? [kinds[0]] : [];
 const sharedCase = ([head, ...rest]) => head && head.source.kind === "event" && head.source.ref !== head.id && rest.every((e) => e.source.kind === "event" && e.source.ref === head.source.ref) ? head.source.ref : null;
 function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit, focus }) {
@@ -2109,7 +2116,7 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit, fo
   const muted = { margin: 0, fontSize: "var(--text-xs)", color: "var(--text-muted)" };
   const writeId = "board:memory-write";
   const writing = edit.isOpen(writeId);
-  const blank = { kind: "knowledge", kinds: MEMORY_KINDS, workspace: "", path: "", originalTitle: "", originalText: "", title: "", text: "", backTranslation: null, supersedes: [], addressee: "", source: null, inheritedSource: null, annotations: [] };
+  const blank = { kind: "knowledge", kinds: MEMORY_KINDS, workspace: "", path: "", originalTitle: "", originalText: "", title: "", text: "", backTranslation: null, supersedes: [], addressee: "", source: null, inheritedSource: null, annotations: [], dead: { addressee: null, workspace: null } };
   const [draft, setDraft] = React.useState(blank);
   const [busy, setBusy] = React.useState(false);
   const setDraftField = (key) => (e) => setDraft({ ...draft, [key]: e.target.value, ...key === "title" || key === "text" ? { backTranslation: null } : {}, ...key === "workspace" ? { source: null } : {} });
@@ -2191,7 +2198,8 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit, fo
     workspace: selected[0].scope ?? "",
     path: selected[0].path,
     supersedes: selected.map((e) => e.id),
-    inheritedSource: sharedCase(selected)
+    inheritedSource: sharedCase(selected),
+    dead: deadRefs(selected[0])
   }));
   const foldIntoExisting = () => submit(
     "/api/settings/memory/fold",
@@ -2216,6 +2224,7 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit, fo
     addressee: entry.addressee ?? "",
     supersedes: [entry.id],
     inheritedSource: sharedCase([entry]),
+    dead: deadRefs(entry),
     annotations: (entry.annotations ?? []).map(({ anchor, polarity, text, original }) => ({ anchor, polarity, text, original: original?.text ?? "", back: null }))
   }));
   const [moving, setMoving] = React.useState(null);
@@ -2252,14 +2261,22 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit, fo
       }, `${branchMove.path.trim()} \u2192 ${branchMove.to_path.trim()}`, () => setBranchMove(null))
     },
     "Move branch"
-  ), /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "sm", disabled: busy, onClick: () => setBranchMove(null) }, "Cancel"))), selected.length > 0 && !writing && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("p", { style: muted }, "selected ", selectedIds), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8, alignItems: "flex-end", flexWrap: "wrap" } }, /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", disabled: busy || foldKinds.length === 0, onClick: foldIntoNew }, "Fold into a new entry"), /* @__PURE__ */ React.createElement(Input, { label: "Fold into existing (entry id)", mono: true, value: foldTarget, onChange: (e) => setFoldTarget(e.target.value) }), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", disabled: busy || !/^[1-9]\d*$/.test(foldTarget), onClick: foldIntoExisting }, "Fold into #", foldTarget || "\u2026"), /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "sm", disabled: busy, onClick: () => setSelected([]) }, "Clear")), foldKinds.length === 0 && /* @__PURE__ */ React.createElement("p", { style: muted }, candidateSelected ? "a candidate cannot be replaced by a new entry; fold it into an existing approved one" : "no one kind may replace all of these; fold them into an existing entry of their kind")), writing && /* @__PURE__ */ React.createElement(React.Fragment, null, replacing && /* @__PURE__ */ React.createElement("p", { style: muted }, "replacing ", replacing, " \u2014 saving writes a new approved entry and supersedes ", draft.supersedes.length === 1 ? "it" : "them"), draft.kinds.length > 1 && /* @__PURE__ */ React.createElement(Select, { label: "Kind", value: draft.kind, onChange: setDraftField("kind"), options: draft.kinds }), /* @__PURE__ */ React.createElement(Select, { label: "Workspace", value: draft.workspace, onChange: setDraftField("workspace"), options: workspaceOptions }), /* @__PURE__ */ React.createElement(Input, { label: draft.kind === "definition" ? "Branch path" : "Path", mono: true, value: draft.path, onChange: setDraftField("path"), placeholder: "build/tests" }), (draft.kind === "behavior" || draft.kind === "exemplar") && // the current addressee stays offered even if its agent has left the registry
+  ), /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "sm", disabled: busy, onClick: () => setBranchMove(null) }, "Cancel"))), selected.length > 0 && !writing && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("p", { style: muted }, "selected ", selectedIds), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8, alignItems: "flex-end", flexWrap: "wrap" } }, /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", disabled: busy || foldKinds.length === 0, onClick: foldIntoNew }, "Fold into a new entry"), /* @__PURE__ */ React.createElement(Input, { label: "Fold into existing (entry id)", mono: true, value: foldTarget, onChange: (e) => setFoldTarget(e.target.value) }), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", disabled: busy || !/^[1-9]\d*$/.test(foldTarget), onClick: foldIntoExisting }, "Fold into #", foldTarget || "\u2026"), /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "sm", disabled: busy, onClick: () => setSelected([]) }, "Clear")), foldKinds.length === 0 && /* @__PURE__ */ React.createElement("p", { style: muted }, candidateSelected ? "a candidate cannot be replaced by a new entry; fold it into an existing approved one" : "no one kind may replace all of these; fold them into an existing entry of their kind")), writing && /* @__PURE__ */ React.createElement(React.Fragment, null, replacing && /* @__PURE__ */ React.createElement("p", { style: muted }, "replacing ", replacing, " \u2014 saving writes a new approved entry and supersedes ", draft.supersedes.length === 1 ? "it" : "them"), draft.kinds.length > 1 && /* @__PURE__ */ React.createElement(Select, { label: "Kind", value: draft.kind, onChange: setDraftField("kind"), options: draft.kinds }), /* @__PURE__ */ React.createElement(
+    Select,
+    {
+      label: "Workspace",
+      value: draft.workspace,
+      onChange: setDraftField("workspace"),
+      options: [workspaceOptions[0], ...offerNames(workspaceNames, draft.workspace, draft.dead.workspace)]
+    }
+  ), /* @__PURE__ */ React.createElement(Input, { label: draft.kind === "definition" ? "Branch path" : "Path", mono: true, value: draft.path, onChange: setDraftField("path"), placeholder: "build/tests" }), (draft.kind === "behavior" || draft.kind === "exemplar") && // a current addressee whose agent has left the registry is shown but cannot be saved again
   /* @__PURE__ */ React.createElement(
     Select,
     {
       label: "Addressee",
       value: draft.addressee,
       onChange: setDraftField("addressee"),
-      options: [{ value: "", label: "every agent" }, .../* @__PURE__ */ new Set([...agentNames, ...draft.addressee ? [draft.addressee] : []])]
+      options: [{ value: "", label: "every agent" }, ...offerNames(agentNames, draft.addressee, draft.dead.addressee)]
     }
   ), draft.kind === "behavior" && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("span", { style: muted }, "case (optional)"), /* @__PURE__ */ React.createElement(MemoryCasePicker, { workspace: draft.workspace, value: draft.source, onChange: (source) => setDraft((d) => ({ ...d, source })) }), draft.source === null && draft.inheritedSource !== null && /* @__PURE__ */ React.createElement("p", { style: muted }, "saving without a pick keeps the case of ", replacing)), draft.kind === "exemplar" && // a shared case of the replaced entries stays fixed and is not sent: the server keeps it
   /* @__PURE__ */ React.createElement(
@@ -2281,7 +2298,7 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit, fo
     {
       busy,
       saveLabel: `Save ${draft.kind}`,
-      ok: draft.kind === "exemplar" ? !!draft.title.trim() && (draft.source ?? draft.inheritedSource) !== null && draft.annotations.length > 0 && draft.annotations.every((a) => a.polarity && a.text.trim()) : fields.every((key) => draft[key].trim() !== ""),
+      ok: draft.workspace !== draft.dead.workspace && !((draft.kind === "behavior" || draft.kind === "exemplar") && draft.addressee === draft.dead.addressee) && (draft.kind === "exemplar" ? !!draft.title.trim() && (draft.source ?? draft.inheritedSource) !== null && draft.annotations.length > 0 && draft.annotations.every((a) => a.polarity && a.text.trim()) : fields.every((key) => draft[key].trim() !== "")),
       onSave: save,
       onCancel: () => edit.close()
     }
@@ -2321,7 +2338,7 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit, fo
         "data-testid": `memory-entry-${entry.id}`,
         style: { display: "flex", flexDirection: "column", gap: 4, borderTop: "1px solid var(--border-default)", paddingTop: 10 }
       },
-      /* @__PURE__ */ React.createElement("p", { style: { ...muted, fontFamily: "var(--font-mono)" } }, "#", entry.id, " \xB7 ", entry.kind, " \xB7 ", entry.invalidation_reason ? `invalidated: ${entry.invalidation_reason}${entry.successor_id ? ` \u2192 #${entry.successor_id}` : ""}${invalidatedBy(entry.invalidated_by)}${entry.restored_as ? ` \xB7 restored \u2192 #${entry.restored_as}` : ""}` : entry.state, " \xB7 ", entry.scope ?? "board-wide", " \xB7 ", entry.path, (entry.kind === "behavior" || entry.kind === "exemplar") && ` \xB7 to ${entry.addressee ?? "every agent"}`, " \xB7 ", entry.author.activity, entry.cause && ` \xB7 ${entry.cause}`, entry.replaced_ids.length > 0 && ` \xB7 replaces ${entry.replaced_ids.map((id) => `#${id}`).join(", ")}`),
+      /* @__PURE__ */ React.createElement("p", { style: { ...muted, fontFamily: "var(--font-mono)" } }, "#", entry.id, " \xB7 ", entry.kind, " \xB7 ", entry.invalidation_reason ? `invalidated: ${entry.invalidation_reason}${entry.successor_id ? ` \u2192 #${entry.successor_id}` : ""}${invalidatedBy(entry.invalidated_by)}${entry.restored_as ? ` \xB7 restored \u2192 #${entry.restored_as}` : ""}` : entry.state, " \xB7 ", entry.scope ?? "board-wide", " \xB7 ", entry.path, (entry.kind === "behavior" || entry.kind === "exemplar") && ` \xB7 to ${entry.addressee ?? "every agent"}`, entry.orphaned && ` \xB7 orphaned: ${entry.orphaned}`, " \xB7 ", entry.author.activity, entry.cause && ` \xB7 ${entry.cause}`, entry.replaced_ids.length > 0 && ` \xB7 replaces ${entry.replaced_ids.map((id) => `#${id}`).join(", ")}`),
       entry.kind !== "definition" && /* @__PURE__ */ React.createElement("strong", { style: { fontSize: "var(--text-sm)" } }, entry.title),
       /* @__PURE__ */ React.createElement("p", { style: { margin: 0, fontSize: "var(--text-sm)" } }, entry.text),
       shown && // a definition's title is its text, so the Set shows it once
@@ -2342,7 +2359,7 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit, fo
         {
           label: "Workspace",
           value: moving.workspace,
-          options: [.../* @__PURE__ */ new Set([...workspaceOptions, ...entry.scope ? [entry.scope] : []])],
+          options: [workspaceOptions[0], ...offerNames(workspaceNames, moving.workspace, deadRefs(entry).workspace)],
           onChange: (e) => setMoving({ ...moving, workspace: e.target.value })
         }
       ), /* @__PURE__ */ React.createElement(Input, { label: "Path", mono: true, value: moving.path, onChange: (e) => setMoving({ ...moving, path: e.target.value }) }), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8 } }, /* @__PURE__ */ React.createElement(
@@ -2350,7 +2367,7 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit, fo
         {
           variant: "secondary",
           size: "sm",
-          disabled: busy || !moving.path.trim(),
+          disabled: busy || !moving.path.trim() || moving.workspace === deadRefs(entry).workspace,
           onClick: () => move(`/api/settings/memory/entries/${entry.id}/move`, { workspace: moving.workspace || null, path: moving.path.trim() }, `#${entry.id} \u2192 ${moving.path.trim()}`, () => setMoving(null))
         },
         "Move #",

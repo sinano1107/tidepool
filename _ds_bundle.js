@@ -574,7 +574,7 @@ function Select({ label, options = [], value, onChange, disabled = false, style 
     },
     options.map((o) => {
       const opt = typeof o === "string" ? { value: o, label: o } : o;
-      return /* @__PURE__ */ React.createElement("option", { key: opt.value, value: opt.value }, opt.label);
+      return /* @__PURE__ */ React.createElement("option", { key: opt.value, value: opt.value, disabled: opt.disabled }, opt.label);
     })
   ), /* @__PURE__ */ React.createElement("span", { style: { position: "absolute", right: 12, top: "50%", transform: "translateY(-50%)", pointerEvents: "none", color: "var(--text-muted)", fontSize: 10 } }, "\u25BE")));
 }

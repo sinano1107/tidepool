@@ -21,7 +21,7 @@ import {
 import { type GitHubClient, IssueGoneError } from "./github.js";
 import type { HarnessContainmentCheck } from "./harness-containment.js";
 import { type Landing, type LandingVerdict, landingBlock } from "./landing.js";
-import { approveMemoryProposal, deferMemoryProposal, type MemoryAmendment, parseMemoryAmendment, rejectMemoryProposal } from "./memory.js";
+import { approveMemoryProposal, deferMemoryProposal, listMemoryEntries, type MemoryAmendment, parseMemoryAmendment, rejectMemoryProposal } from "./memory.js";
 import { type QuarantineChecks, type QuarantineKind, type QuarantineResolvers, quarantineStops } from "./quarantine.js";
 import type { Harness, Provider, RegistryReachabilityCheck } from "./registry.js";
 import { RegistryFetchFailedError, RegistryPushFailedError } from "./registry-write.js";
@@ -229,19 +229,50 @@ export function assertReviewerKnown(
   }
 }
 
+/** resolver が無い盤面は workspace を追跡しないので、どの名前も通す。 */
+function workspaceKnown(
+  workspaceName: string,
+  resolveWorkspace: ((taskWorkspace: string | null) => WorkspaceConfig) | undefined,
+  workspace: WorkspaceConfig | undefined,
+): boolean {
+  const resolve = buildWorkspaceResolver(resolveWorkspace, workspace);
+  if (!resolve) return true;
+  try {
+    resolve(workspaceName);
+    return true;
+  } catch (err) {
+    if (!(err instanceof UnknownWorkspaceError)) throw err;
+    return false;
+  }
+}
+
 export function assertWorkspaceKnown(
   workspaceName: string,
   resolveWorkspace: ((taskWorkspace: string | null) => WorkspaceConfig) | undefined,
   workspace: WorkspaceConfig | undefined,
 ): void {
-  const resolve = buildWorkspaceResolver(resolveWorkspace, workspace);
-  if (!resolve) return;
-  try {
-    resolve(workspaceName);
-  } catch (err) {
-    if (!(err instanceof UnknownWorkspaceError)) throw err;
-    throw new DomainError(`unknown workspace: ${workspaceName}`);
-  }
+  if (!workspaceKnown(workspaceName, resolveWorkspace, workspace)) throw new DomainError(`unknown workspace: ${workspaceName}`);
+}
+
+/** 人間の面(WebUI と管理MCP)が共有する記憶の一覧(ADR 0173 決定5)。孤立の印 orphaned は宛先の agent・scope の
+ *  workspace のどちらが registry で解決できないかを読むときに導出する(保存しない)。null の宛先・scope は孤立しない。
+ *  registry の無い盤面(agentRegistered が無い)では欄ごと付けない。registry は名前ごとに1度だけ引く。 */
+export function listMemoryEntriesForHuman(
+  deps: { db: Db; agentRegistered?: (name: string) => boolean; workspace?: WorkspaceConfig; resolveWorkspace?: (taskWorkspace: string | null) => WorkspaceConfig },
+  filter: Parameters<typeof listMemoryEntries>[1],
+): Array<ReturnType<typeof listMemoryEntries>[number] & { orphaned?: "addressee" | "scope" | "both" | null }> {
+  const entries = listMemoryEntries(deps.db, filter);
+  const { agentRegistered } = deps;
+  if (!agentRegistered) return entries;
+  const dead = (names: Array<string | null>, known: (name: string) => boolean) =>
+    new Set([...new Set(names)].filter((name): name is string => name !== null && !known(name)));
+  const deadAddressees = dead(entries.map((e) => e.addressee), agentRegistered);
+  const deadScopes = dead(entries.map((e) => e.scope), (name) => workspaceKnown(name, deps.resolveWorkspace, deps.workspace));
+  return entries.map((entry) => {
+    const addressee = entry.addressee !== null && deadAddressees.has(entry.addressee);
+    const scope = entry.scope !== null && deadScopes.has(entry.scope);
+    return { ...entry, orphaned: addressee && scope ? "both" : addressee ? "addressee" : scope ? "scope" : null };
+  });
 }
 
 /**
