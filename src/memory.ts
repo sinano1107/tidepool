@@ -238,7 +238,7 @@ export function defineMemoryBranch(
 /** meta-review の `define_memory`(ADR 0161 追記7): defineMemoryBranch に覆いの門を掛ける。Definition は宛先を持たないので
  *  門は scope だけで、path は問わない。人間の面は defineMemoryBranch を直接呼ぶ。 */
 export function defineMemoryByMetaReview(db: Db, input: Parameters<typeof defineMemoryBranch>[1], origin: EventOrigin, at: Date): { entry_id: number; event_id: number } {
-  requireCovers({ scope: input.scope, addressee: null }, (input.supersedes ?? []).map((id) => requireEntry(db, id)));
+  requireCovers({ scope: input.scope, addressee: null }, (input.supersedes ?? []).map((id) => requireLive(db, id, undefined, "approved")));
   return defineMemoryBranch(db, input, origin, at);
 }
 
@@ -267,7 +267,7 @@ function requireCovers(successor: { scope: string | null; addressee: string | nu
       throw new DomainError(`the successor in scope ${successor.scope} does not cover memory entry ${row.id} in scope ${row.scope ?? "whole board"}: the successor must be whole-board or in the same scope`);
     }
     if (successor.addressee !== null && successor.addressee !== row.addressee) {
-      throw new DomainError(`the successor addressed to ${successor.addressee} does not cover memory entry ${row.id} addressed to ${row.addressee ?? "every agent"}`);
+      throw new DomainError(`the successor addressed to ${successor.addressee} does not cover memory entry ${row.id} addressed to ${row.addressee ?? "every agent"}: the successor must address every agent or the same agent`);
     }
   }
 }

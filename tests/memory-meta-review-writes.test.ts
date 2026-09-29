@@ -45,7 +45,7 @@ const entry = (db: ReturnType<typeof openDb>, id: number) => listMemoryEntries(d
 const knowledgeEntry = (db: ReturnType<typeof openDb>) =>
   recordKnowledge(db, { scope: null, path: "habits", title: "k", text: "k.", source: { commit: "0a46a46" }, author: metaReview }, "worker", at).entry_id;
 const definitionEntry = (db: ReturnType<typeof openDb>) =>
-  defineMemoryBranch(db, { scope: "tidepool", path: "build", text: "How it builds.", author: metaReview }, "worker", at).entry_id;
+  defineMemoryByMetaReview(db, { scope: "tidepool", path: "build", text: "How it builds.", author: metaReview }, "worker", at).entry_id;
 const decisionOfAnotherTask = (db: ReturnType<typeof openDb>) =>
   logDecision(db, registerTask(db, { type: "work", title: "o", purpose: "p", completion_criteria: "c" }, at), "someone else's reasoning", "deckhand", at);
 
@@ -82,7 +82,7 @@ it("fold_memory の replaces に畳めないものが1つでもあれば domain 
   const kept = knowledge("kept");
   const dead = knowledge("dead");
   invalidateMemoryEntry(db, { entry_id: dead, reason: "environment" }, "human", "webui", at);
-  const definition = defineMemoryBranch(db, { scope: "tidepool", path: "build", text: "How it builds.", author: metaReview }, "worker", at).entry_id;
+  const definition = defineMemoryByMetaReview(db, { scope: "tidepool", path: "build", text: "How it builds.", author: metaReview }, "worker", at).entry_id;
   const candidate = createBehaviorCandidate(
     db,
     { scope: null, path: "habits", title: "Small commits", text: "Commit small.", addressee: null, source: { event_id: decision }, author: { activity: "rca", name: "auditor" } },
@@ -125,7 +125,7 @@ it("move_memory は Knowledge を別の scope・path へ移し、書き手は移
 
 it("move_memory は Definition・Behavior・Exemplar を domain error で拒み、何も書かない", () => {
   const { db, behavior, exemplar } = approvedPair();
-  const definition = defineMemoryBranch(db, { scope: "tidepool", path: "build", text: "How it builds.", author: metaReview }, "worker", at).entry_id;
+  const definition = defineMemoryByMetaReview(db, { scope: "tidepool", path: "build", text: "How it builds.", author: metaReview }, "worker", at).entry_id;
   const before = listMemoryEntries(db, {});
   for (const entry_id of [definition, behavior, exemplar]) {
     expect(() => moveMemoryByMetaReview(db, { entry_id, scope: null, path: "elsewhere", mover: metaReview }, "worker", at)).toThrow(DomainError);
@@ -137,7 +137,7 @@ it("meta-review の無効化は candidate・Knowledge・Definition に効き、a
   const { db, decision, knowledge } = board();
   const fact = knowledge("stale fact");
   const successor = knowledge("fresh fact", null);
-  const definition = defineMemoryBranch(db, { scope: "tidepool", path: "build", text: "How it builds.", author: metaReview }, "worker", at).entry_id;
+  const definition = defineMemoryByMetaReview(db, { scope: "tidepool", path: "build", text: "How it builds.", author: metaReview }, "worker", at).entry_id;
   const behavior = (title: string) =>
     createBehaviorCandidate(
       db,
@@ -514,7 +514,7 @@ it("fold_memory の successor_id は replaces を既にある approved の後継
   const { db, attributed, drafted, consolidate, exemplar, behavior, replaced } = fixture;
   const [fact, kept] = [knowledgeEntry(db), knowledgeEntry(db)];
   const branch = definitionEntry(db);
-  const merged = defineMemoryBranch(db, { scope: "tidepool", path: "ci", text: "How CI runs.", author: metaReview }, "worker", at).entry_id;
+  const merged = defineMemoryByMetaReview(db, { scope: "tidepool", path: "ci", text: "How CI runs.", author: metaReview }, "worker", at).entry_id;
   const candidateBehavior = replaced("Two commits per migration");
   const candidateExemplar = consolidate([drafted("Keep it split", { event_id: attributed("kept the two commits apart") })], { kind: "exemplar", annotations }).candidate_id;
   const before = listMemoryEntries(db, {}).length;

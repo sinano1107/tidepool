@@ -84,6 +84,7 @@ it("直接適用4つは引数の scope(null = 盤面全体 / registry の worksp
   try {
     const sandbox = await call("define_memory", { scope: "sandbox", path: "build", definition: "How sandbox builds." });
     const boardWide = await call("define_memory", { scope: null, path: "build", definition: "How every workspace builds.", supersedes: [sandbox.body.entry_id] });
+    expect(await call("define_memory", { scope: "sandbox", path: "build", definition: "How sandbox builds now.", supersedes: [boardWide.body.entry_id] })).toMatchObject({ isError: true });
     expect(await call("define_memory", { scope: "charts", path: "build", definition: "How charts builds." })).toMatchObject({ isError: true });
 
     const { event_id: decision } = (await call("log_decision", { line: "the build note belongs board-wide" })).body;
