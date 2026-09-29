@@ -26,7 +26,7 @@ import {
   restoreMemoryEntry,
 } from "../src/memory.js";
 import { countUnsettledAttachedChildren, DomainError, getTask, logDecision, registerTask } from "../src/tasks.js";
-import { bundledObjection } from "./harness.js";
+import { bundledObjection, WORKER_SPAWNED } from "./harness.js";
 
 const at = new Date("2026-09-14T00:00:00.000Z");
 
@@ -415,7 +415,7 @@ it("人間が書く Behavior は任意で decision_logged か worker_spawned の
     workerId: "deckhand",
     origin: "board",
     at,
-    payload: { kind: "worker_spawned", registry_commit: "c", definition_version: "1", advisor: null, provider: "anthropic", model: "opus", effort: "high", source: { tier: "task", provider: "only" }, harness: "claude-code", cli_version: "1" },
+    payload: WORKER_SPAWNED,
   });
   const write = (source_event_id?: number) =>
     recordBehavior(db, { ...humanEntryInput(db, humanKnowledge), addressee: null, ...(source_event_id === undefined ? {} : { source_event_id }) }, "webui", at).entry_id;
@@ -576,7 +576,7 @@ it("worker_spawned を出所に持つ Exemplar の decision の quote はその 
     workerId: "deckhand",
     origin: "board",
     at,
-    payload: { kind: "worker_spawned", registry_commit: "c", definition_version: "1", advisor: null, provider: "anthropic", model: "opus", effort: "high", source: { tier: "task", provider: "only" }, harness: "claude-code", cli_version: "1" },
+    payload: WORKER_SPAWNED,
   });
   logDecision(db, task, "read the schema first", "deckhand", at);
   logDecision(db, task, "split the migration into two commits", "deckhand", at);
@@ -639,7 +639,7 @@ it("決定ログの各エントリは、それを含む worker session の worke
     workerId: "deckhand",
     origin: "board",
     at,
-    payload: { kind: "worker_spawned", registry_commit: "c", definition_version: "1", advisor: null, provider: "anthropic", model: "opus", effort: "high", source: { tier: "task", provider: "only" }, harness: "claude-code", cli_version: "1" },
+    payload: WORKER_SPAWNED,
   });
   const inside = logDecision(db, task, "inside the session", "deckhand", at);
   appendEvent(db, {

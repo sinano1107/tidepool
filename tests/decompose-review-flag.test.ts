@@ -20,6 +20,7 @@ import {
   registerWork,
   type Tidepool,
   tempDir,
+  WORKER_SPAWNED,
 } from "./harness.js";
 import { makeRegistry } from "./registry-fixture.js";
 
@@ -181,18 +182,7 @@ it("review の公開注入 context は対象 worker のモデル・価格・実�
     workerId: "reef-crab",
     origin: "board",
     at: t.clock.now(),
-    payload: {
-      kind: "worker_spawned",
-      registry_commit: "commit",
-      definition_version: "1",
-      advisor: null,
-      provider: "anthropic",
-      model: "subject-model-secret",
-      effort: "high",
-      source: { tier: "task", provider: "only" },
-      harness: "claude-code",
-      cli_version: "1",
-    },
+    payload: { ...WORKER_SPAWNED, model: "subject-model-secret" },
   });
   await completeVia(t, task.id);
   appendEvent(t.db, {

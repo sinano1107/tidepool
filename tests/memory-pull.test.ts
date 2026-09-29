@@ -24,7 +24,7 @@ import { attributeObjections, refireRetrospectiveCalls } from "../src/retrospect
 import { DomainError, logDecision, registerTask } from "../src/tasks.js";
 import { commitTriage, raiseObjection, startTriage } from "../src/triage.js";
 import { FakeAttributionClient, FakeBehaviorDraftClient, noRetrospectiveCalls } from "./fakes.js";
-import { FIXTURE_SPAWNED_EVENT_ID, FIXTURE_TASK, seedFixtureBoard, tempDir, writeFixtureTranscript } from "./harness.js";
+import { FIXTURE_SPAWNED_EVENT_ID, FIXTURE_TASK, seedFixtureBoard, tempDir, WORKER_SPAWNED, writeFixtureTranscript } from "./harness.js";
 
 const at = new Date("2026-09-14T00:00:00.000Z");
 const approve = (db: ReturnType<typeof openDb>, candidate_id: number) =>
@@ -385,23 +385,11 @@ it("episode 行の無い session の decision / 完了 entry の case も、even
 it("episode 行の無い同じ task の複数 session は、それぞれの窓の decision(event id 順)と完了だけを case に持ち、前後の session と混ざらない", () => {
   const db = seedFixtureBoard("## Outcome\nCreated notes.md.");
   const append = (payload: TaskScopedPayload) => appendEvent(db, { taskId: FIXTURE_TASK, workerId: "tako", origin: "worker", payload, at });
-  const spawned: TaskScopedPayload = {
-    kind: "worker_spawned",
-    registry_commit: "commit",
-    definition_version: "1",
-    advisor: null,
-    provider: "openai",
-    model: "gpt",
-    effort: "high",
-    source: { tier: "task", provider: "only" },
-    harness: "codex",
-    cli_version: "1",
-  };
   // 2つ目の session: decision を書かずに exit
-  const silent = append(spawned);
+  const silent = append(WORKER_SPAWNED);
   append({ kind: "worker_exited", exit_code: 1, signal: null, stderr_tail: null, worker_spawned_event_id: silent, usage: null });
   // 3つ目の session: decision を書いたが完了していない(exit も無い)
-  const open = append(spawned);
+  const open = append(WORKER_SPAWNED);
   const retried = append({ kind: "decision_logged", line: "retried with a shorter note" });
   const ids = [FIXTURE_SPAWNED_EVENT_ID, silent, open, retried].map((ref) => citedBehavior(db, `Session ${ref}`, ref));
 

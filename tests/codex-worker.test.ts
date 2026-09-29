@@ -16,7 +16,7 @@ import { registerTask, type Task } from "../src/tasks.js";
 import { TranscriptStore } from "../src/transcript-store.js";
 import type { WorkerExit } from "../src/worker.js";
 import { driveCodexPreflight, FakeClock, passthroughContainers, recordingSpawn } from "./fakes.js";
-import { bootTidepool, mcpClient, type Tidepool, tempDir } from "./harness.js";
+import { bootTidepool, mcpClient, type Tidepool, tempDir, WORKER_SPAWNED } from "./harness.js";
 import { makeRegistry } from "./registry-fixture.js";
 
 const CLI_VERSION = "codex-cli 0.147.0";
@@ -490,18 +490,7 @@ thread's history always fails.`));
       taskId: objected.id,
       workerId: "codex-agent",
       origin: "board",
-      payload: {
-        kind: "worker_spawned",
-        registry_commit: objectedCommit,
-        definition_version: "1.2.3",
-        advisor: null,
-        provider: "openai",
-        model: "gpt-5.6-terra",
-        effort: "high",
-        source: { tier: "board", provider: "only" },
-        harness: "codex",
-        cli_version: CLI_VERSION,
-      },
+      payload: { ...WORKER_SPAWNED, registry_commit: objectedCommit },
       at,
     });
     const decision = appendEvent(f.db, {

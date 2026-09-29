@@ -6,6 +6,7 @@ import { recordShadow } from "../src/learner.js";
 import { registerMetaReview } from "../src/meta-review.js";
 import { listAllocations, listRoutingCells, listRoutingShadow } from "../src/routing-review.js";
 import { registerTask } from "../src/tasks.js";
+import { WORKER_SPAWNED } from "./harness.js";
 
 /** 主題 routing の meta-review の読み口(issue #917 / spec #916 C)のドメイン層。verb への写像はサーバ境界
  *  (tests/routing-meta-review.test.ts)が言う。 */
@@ -31,16 +32,13 @@ function board() {
       origin: "board",
       at,
       payload: {
-        kind: "worker_spawned",
-        registry_commit: "c",
-        definition_version: "1",
+        ...WORKER_SPAWNED,
         advisor: null,
         provider: run.provider,
         model: run.model,
         effort: run.effort,
         source: { tier, provider: "rank" },
         harness: run.provider === "openai" ? "codex" : "claude-code",
-        cli_version: "1",
       },
     });
   const exit = (taskId: string, spawned: number, models: string[] = [], cost = 0.5) => {

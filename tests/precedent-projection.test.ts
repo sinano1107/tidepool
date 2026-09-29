@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { expect, it } from "vitest";
 import type { EventRow } from "../src/events.js";
 import { entriesReadBefore, entriesSeenBefore, projectEpisode } from "../src/precedent.js";
+import { WORKER_SPAWNED } from "./harness.js";
 
 /** #386 が取った実物の worker session — 2.1.237 の CLI が書いた transcript と、
  *  その session を挟む盤面のイベント。Precedent の投影は決定論的なので、期待値は
@@ -158,7 +159,7 @@ it("同じタスクの別 worker session の decision は、この Episode の�
     // 2本目の session — retry / 統合復帰 / quarantine 復帰のいずれでも同じ形
     {
       id: 12, task_id: task, worker_id: "tako", origin: "board", kind: "worker_spawned",
-      payload: { kind: "worker_spawned", registry_commit: "abc", definition_version: "0.1.1", advisor: null, provider: "anthropic", model: "opus", effort: "high", source: { tier: "board", provider: "only" }, harness: "claude-code", cli_version: "test" },
+      payload: WORKER_SPAWNED,
       created_at: at,
     },
     {
@@ -251,7 +252,7 @@ it("worker_exited が無いまま終わった session の窓は、次の worker_
     ...fixtureEvents().filter((e) => e.kind !== "worker_exited"),
     {
       id: 12, task_id: task, worker_id: "tako", origin: "board", kind: "worker_spawned",
-      payload: { kind: "worker_spawned", registry_commit: "abc", definition_version: "0.1.1", advisor: null, provider: "anthropic", model: "opus", effort: "high", source: { tier: "board", provider: "only" }, harness: "claude-code", cli_version: "test" },
+      payload: WORKER_SPAWNED,
       created_at: at,
     },
     {

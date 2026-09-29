@@ -204,18 +204,7 @@ async function rejectOpusSession(t: Tidepool, causes: Cause[] = ["capability"]) 
     workerId: "fake-worker",
     origin: "board",
     at: t.clock.now(),
-    payload: {
-      kind: "worker_spawned",
-      registry_commit: "commit",
-      definition_version: "1",
-      advisor: null,
-      provider: "anthropic",
-      model: "opus",
-      effort: "high",
-      source: { tier: "board", provider: "rank" },
-      harness: "claude-code",
-      cli_version: "1",
-    },
+    payload: { ...WORKER_SPAWNED, advisor: null, provider: "anthropic", model: "opus", effort: "high" },
   });
   const entry = await loggedEntry(t, earlier.id, "took the shortcut");
   expect(entry.id).toBeGreaterThan(spawnedId);
@@ -280,18 +269,7 @@ it("advisor pin ありで相談0回の session は、盤面の記録から読ん
     workerId: "fake-worker",
     origin: "board",
     at: t.clock.now(),
-    payload: {
-      kind: "worker_spawned",
-      registry_commit: "commit",
-      definition_version: "1",
-      advisor: "fable",
-      provider: "anthropic",
-      model: "opus",
-      effort: "high",
-      source: { tier: "board", provider: "rank" },
-      harness: "claude-code",
-      cli_version: "1",
-    },
+    payload: { ...WORKER_SPAWNED, advisor: "fable", provider: "anthropic", model: "opus", effort: "high" },
   });
   const entry = await loggedEntry(t, earlier.id, "took the shortcut");
   const attributed: EventPayload = {
@@ -346,18 +324,7 @@ it("セルの model は観測された具体 id —— pin が alias でも、�
     workerId: "fake-worker",
     origin: "board",
     at: t.clock.now(),
-    payload: {
-      kind: "worker_spawned",
-      registry_commit: "commit",
-      definition_version: "1",
-      advisor: null,
-      provider: "anthropic",
-      model: "opus",
-      effort: "high",
-      source: { tier: "board", provider: "rank" },
-      harness: "claude-code",
-      cli_version: "1",
-    },
+    payload: { ...WORKER_SPAWNED, advisor: null, provider: "anthropic", model: "opus", effort: "high" },
   });
   const entry = await loggedEntry(t, earlier.id, "took the shortcut");
   const attributed: EventPayload = {
