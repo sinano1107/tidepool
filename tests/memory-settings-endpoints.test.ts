@@ -1,11 +1,10 @@
 import { afterEach, expect, it } from "vitest";
 import { DEFAULT_AUDITOR_NAME } from "../src/defaults.js";
 import { previewCase, recordKnowledge } from "../src/memory.js";
-import { loadRegistry, ownEntry } from "../src/registry.js";
 import { logDecision, registerTask } from "../src/tasks.js";
 import { FakeTranslationClient } from "./fakes.js";
 import { api, bootTidepool, managementMcpClient, registryOf, type Tidepool } from "./harness.js";
-import { makeRegistry } from "./registry-fixture.js";
+import { makeRegistryAgentCheck } from "./registry-fixture.js";
 
 let t: Tidepool;
 afterEach(() => t?.stop());
@@ -466,6 +465,15 @@ it("人間の移動(エントリ1件・枝ごと)は両方の面で registry に
   } finally {
     await client.close();
   }
+
+  // registry の無い盤面は行き先の名前を照合しない
+  await t.stop();
+  t = await bootTidepool();
+  const [one, other] = [agentKnowledge(t, "One"), agentKnowledge(t, "Other")];
+  expect((await api(t.baseUrl, "POST", `/api/settings/memory/entries/${one}/move`, { workspace: "reeef", path: "x" })).status).toBe(200);
+  expect((await api(t.baseUrl, "POST", "/api/settings/memory/branches/move", { workspace: "tidepool", path: "build", to_workspace: "reeef", to_path: "ci" })).json).toEqual({
+    moved: [{ entry_id: other, successor_id: expect.any(Number) }],
+  });
 });
 
 it("宛先の agent が消えた孤立は復元できるが、同じ宛先のままの編集は両方の面で拒まれ、生きた宛先への付け替えは通る(ADR 0173 決定3)", async () => {
@@ -491,8 +499,7 @@ it("宛先の agent が消えた孤立は復元できるが、同じ宛先のま
 });
 
 it("組み込みの auditor は registry の合成エントリとして宛先に通る(ADR 0173 決定1)", async () => {
-  const dir = await makeRegistry();
-  t = await bootTidepool({ agentRegistered: (name) => ownEntry(loadRegistry(dir, "purely-local").agents, name) !== undefined });
+  t = await bootTidepool({ agentRegistered: await makeRegistryAgentCheck() });
   const write = directWriter(t);
 
   for (const kind of ["behavior", "exemplar"] as const) {

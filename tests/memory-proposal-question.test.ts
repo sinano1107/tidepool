@@ -1,4 +1,5 @@
 import { afterEach, expect, it } from "vitest";
+import { DEFAULT_AUDITOR_NAME } from "../src/defaults.js";
 import { appendEvent } from "../src/events.js";
 import { approveMemoryProposal, createBehaviorCandidate } from "../src/memory.js";
 import {
@@ -14,6 +15,7 @@ import {
   registryOf,
   type Tidepool,
 } from "./harness.js";
+import { makeRegistryAgentCheck } from "./registry-fixture.js";
 
 /** 提案 question の扉(issue #620・#621 / ADR 0120 決定3・4): meta-review の提案 verb、付帯子としての question、回答での適用、
  *  pin の陳腐化。承認の transaction と再生はドメイン層(tests/memory.test.ts)が言う。 */
@@ -498,26 +500,34 @@ it("HTTP の回答で comment の無い memory 提案の reject は 409 で断�
   }
 });
 
-it("修正値の宛先が registry に無い approve は HTTP・管理MCP の両方で名前つきで拒まれ question は未回答のまま、生きた宛先への修正は通る(ADR 0173 決定2)", async () => {
-  const board = await boardWithMetaReview(undefined, registryOf(new Set(["deckhand", "anemone"]), new Set()));
+/** 拒否の検査用: 同じ回答を HTTP と管理MCP の answer_question の両方に送り、[HTTP, 管理MCP] の拒否の文言(通れば null)を返す。 */
+async function answerOnBothSurfaces(id: string, option: string, extra: { amendment?: Record<string, unknown> } = {}) {
+  const http = await answer(id, option, extra);
   const management = await managementMcpClient(t.baseUrl);
   try {
-    const questionId = await board.propose(board.ids[0]!);
-    const typo = { amendment: { addressee: "anenome" } };
-
-    expect(await answer(questionId, "approve", typo)).toMatchObject({ status: 409, json: { error: "unknown agent: anenome" } });
-    const viaMcp: any = await management.callTool({ name: "answer_question", arguments: { task_id: questionId, answers: ["approve"], ...typo } });
-    expect(viaMcp).toMatchObject({ isError: true, content: [{ text: "unknown agent: anenome" }] });
-    expect((await events(questionId)).map((e) => e.kind)).toEqual(["task_registered"]);
-
-    expect((await answer(questionId, "approve", { amendment: { addressee: "anemone" } })).status).toBe(200);
+    const mcp: any = await management.callTool({ name: "answer_question", arguments: { task_id: id, answers: [option], ...extra } });
+    return [http.status === 200 ? null : http.json.error, mcp.isError ? mcp.content[0].text : null];
   } finally {
     await management.close();
+  }
+}
+
+it("修正値の宛先が registry に無い approve は HTTP・管理MCP の両方で名前つきで拒まれ question は未回答のまま、null と組み込みの auditor への修正は通る(ADR 0173 決定1・2)", async () => {
+  const board = await boardWithMetaReview(["Keep migrations in their own commit", "Split schema changes"], { agentRegistered: await makeRegistryAgentCheck() });
+  try {
+    const [everyone, auditor] = [await board.propose(board.ids[0]!), await board.propose(board.ids[1]!)];
+
+    expect(await answerOnBothSurfaces(everyone, "approve", { amendment: { addressee: "anenome" } })).toEqual(["unknown agent: anenome", "unknown agent: anenome"]);
+    expect((await events(everyone)).map((e) => e.kind)).toEqual(["task_registered"]);
+
+    expect((await answer(everyone, "approve", { amendment: { addressee: null } })).status).toBe(200);
+    expect((await answer(auditor, "approve", { amendment: { addressee: DEFAULT_AUDITOR_NAME } })).status).toBe(200);
+  } finally {
     await board.client.close();
   }
 });
 
-it("candidate の宛先や scope が registry から消えた後の修正なしの approve は拒まれ、宛先は生きた名前へ修正すれば通り、scope が消えた candidate は修正でも通らない(ADR 0173 決定2)", async () => {
+it("candidate の宛先や scope が registry から消えた後の修正なしの approve は両方の面で拒まれ、宛先は生きた名前へ修正すれば通り、scope が消えた candidate は修正でも通らない(ADR 0173 決定2)", async () => {
   const agents = new Set(["deckhand", "anemone"]);
   const workspaces = new Set(["reef"]);
   const board = await boardWithMetaReview(undefined, registryOf(agents, workspaces));
@@ -527,8 +537,8 @@ it("candidate の宛先や scope が registry から消えた後の修正なし�
     agents.delete("deckhand");
     workspaces.delete("reef");
 
-    expect(await answer(addressed, "approve")).toMatchObject({ status: 409, json: { error: "unknown agent: deckhand" } });
-    expect(await answer(scoped, "approve", { amendment: { addressee: "anemone" } })).toMatchObject({ status: 409, json: { error: "unknown workspace: reef" } });
+    expect(await answerOnBothSurfaces(addressed, "approve")).toEqual(["unknown agent: deckhand", "unknown agent: deckhand"]);
+    expect(await answerOnBothSurfaces(scoped, "approve", { amendment: { addressee: "anemone" } })).toEqual(["unknown workspace: reef", "unknown workspace: reef"]);
     expect(await task(scoped)).toMatchObject({ status: "todo", question_answer: null });
 
     expect((await answer(addressed, "approve", { amendment: { addressee: "anemone" } })).status).toBe(200);

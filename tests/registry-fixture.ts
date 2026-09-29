@@ -3,7 +3,7 @@ import { writeFileSync } from "node:fs";
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { SKILL_WILDCARD } from "../src/registry.js";
+import { loadRegistry, ownEntry, SKILL_WILDCARD } from "../src/registry.js";
 import { AUTHORITY_WILDCARD } from "../src/tasks.js";
 import { tempDir } from "./harness.js";
 
@@ -173,6 +173,13 @@ export async function makeRegistry(
 ): Promise<string> {
   const dir = await tempDir("tidepool-registry-");
   return populateRegistry(dir, files, defaults);
+}
+
+/** `makeRegistry` の既定の registry(agent は deckhand)を合成 root(agentRegisteredChecker)と同じく毎回読み直す
+ *  agent の照合。組み込みの auditor は読み込みが合成するので通る。 */
+export async function makeRegistryAgentCheck(): Promise<(name: string) => boolean> {
+  const dir = await makeRegistry();
+  return (name) => ownEntry(loadRegistry(dir, "purely-local").agents, name) !== undefined;
 }
 
 /** ADR 0052 の remote-backed 盤面の fixture: bare な origin を持ち、`main` を

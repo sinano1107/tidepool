@@ -266,7 +266,7 @@ export function assertMemoryReferencesKnown(deps: MemoryReferenceDeps, { address
 
 /** 人間の面(settings の HTTP / 管理MCP)の直書きの入力: 参照名の門を通してから humanEntryInput。編集(supersedes)も
  *  同じ門を通り、削除済みの宛先・scope のままの編集は拒む(ADR 0173 決定3)。 */
-export function humanMemoryInput<T extends { workspace: string | null; addressee?: string | null; original_title?: string; original_text?: string }>(
+export function gatedHumanEntryInput<T extends { workspace: string | null; addressee?: string | null; original_title?: string; original_text?: string }>(
   deps: MemoryReferenceDeps & { db: Db },
   input: T,
 ) {

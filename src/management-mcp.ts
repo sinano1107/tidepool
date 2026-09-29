@@ -29,7 +29,7 @@ import {
   completeThroughHumanDoor,
   decomposeThroughHumanDoor,
   editThroughHumanDoor,
-  humanMemoryInput,
+  gatedHumanEntryInput,
   listMemoryEntriesForHuman,
   registerThroughHumanDoor,
   submitAnswer,
@@ -610,7 +610,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
         `English canonical wording; original_title and original_text go together (both or neither). ${supersedesEffect} ${writtenAs}`,
       inputSchema: humanKnowledgeSchema.shape,
     },
-    async (input) => memoryVerb(() => recordKnowledge(deps.db, humanMemoryInput(deps, input), "mcp", deps.clock.now())),
+    async (input) => memoryVerb(() => recordKnowledge(deps.db, gatedHumanEntryInput(deps, input), "mcp", deps.clock.now())),
   );
   server.registerTool(
     "define_memory_branch",
@@ -621,7 +621,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
         `${supersedesEffect} ${writtenAs}`,
       inputSchema: humanDefinitionSchema.shape,
     },
-    async (input) => memoryVerb(() => defineMemoryBranch(deps.db, humanMemoryInput(deps, input), "mcp", deps.clock.now())),
+    async (input) => memoryVerb(() => defineMemoryBranch(deps.db, gatedHumanEntryInput(deps, input), "mcp", deps.clock.now())),
   );
   server.registerTool(
     "record_behavior",
@@ -634,7 +634,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
         `original_title and original_text go together (both or neither). ${supersedesEffect} ${writtenAs}`,
       inputSchema: humanBehaviorSchema.shape,
     },
-    async (input) => memoryVerb(() => recordBehavior(deps.db, humanMemoryInput(deps, input), "mcp", deps.clock.now())),
+    async (input) => memoryVerb(() => recordBehavior(deps.db, gatedHumanEntryInput(deps, input), "mcp", deps.clock.now())),
   );
   server.registerTool(
     "preview_case",
@@ -660,7 +660,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
         "recorded in the board's display language. workspace null = the whole board.",
       inputSchema: humanExemplarSchema.shape,
     },
-    async (input) => memoryVerb(() => recordExemplar(deps.db, humanMemoryInput(deps, input), "mcp", deps.clock.now())),
+    async (input) => memoryVerb(() => recordExemplar(deps.db, gatedHumanEntryInput(deps, input), "mcp", deps.clock.now())),
   );
   server.registerTool(
     "fold_memory_entries",
