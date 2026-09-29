@@ -262,15 +262,14 @@ export function listMemoryEntriesForHuman(
   filter: Parameters<typeof listMemoryEntries>[1],
 ): Array<ReturnType<typeof listMemoryEntries>[number] & { orphaned?: "addressee" | "scope" | "both" | null }> {
   const entries = listMemoryEntries(deps.db, filter);
-  const { agentRegistered } = deps;
-  if (!agentRegistered) return entries;
+  if (!deps.agentRegistered) return entries;
   const dead = (names: Array<string | null>, known: (name: string) => boolean) =>
-    new Set([...new Set(names)].filter((name): name is string => name !== null && !known(name)));
-  const deadAddressees = dead(entries.map((e) => e.addressee), agentRegistered);
+    new Set([...new Set(names)].filter((name) => name !== null && !known(name)));
+  const deadAddressees = dead(entries.map((e) => e.addressee), deps.agentRegistered);
   const deadScopes = dead(entries.map((e) => e.scope), (name) => workspaceKnown(name, deps.resolveWorkspace, deps.workspace));
   return entries.map((entry) => {
-    const addressee = entry.addressee !== null && deadAddressees.has(entry.addressee);
-    const scope = entry.scope !== null && deadScopes.has(entry.scope);
+    const addressee = deadAddressees.has(entry.addressee);
+    const scope = deadScopes.has(entry.scope);
     return { ...entry, orphaned: addressee && scope ? "both" : addressee ? "addressee" : scope ? "scope" : null };
   });
 }
