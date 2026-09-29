@@ -1,7 +1,7 @@
 import type { Clock } from "./clock.js";
 import { quarantineContainment } from "./containment.js";
 import type { Db } from "./db.js";
-import { appendEvent, getEvent } from "./events.js";
+import { appendEvent, getEvent, latestEventOfTask } from "./events.js";
 import type { GitHubAuth } from "./github-auth.js";
 import type { Landing } from "./landing.js";
 import type { ProcessContainers } from "./process-container.js";
@@ -68,11 +68,7 @@ export interface Watchdog extends PendingReclaim {
  *  again after its earlier kill, and the watchdog must time the new run, not
  *  the original one. */
 function pickedUpAt(db: Db, taskId: string): number {
-  const row = db
-    .prepare(
-      "SELECT created_at FROM events WHERE task_id = ? AND kind = 'task_picked_up' ORDER BY id DESC LIMIT 1",
-    )
-    .get(taskId) as { created_at: string } | undefined;
+  const row = latestEventOfTask(db, taskId, "task_picked_up");
   return row ? new Date(row.created_at).getTime() : 0;
 }
 
