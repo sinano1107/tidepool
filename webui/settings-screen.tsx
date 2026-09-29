@@ -1717,6 +1717,11 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit, fo
   // a definition is one line with no title: its original and English are the text alone (ADR 0015)
   const fields: ('title' | 'text')[] = draft.kind === 'definition' ? ['text'] : ['title', 'text'];
   const replacing = draft.supersedes.map((id) => `#${id}`).join(', ');
+  // an orphaned reference the replaced entry held is never saved again (ADR 0173 決定3)
+  const holdsOrphan = draft.workspace === draft.dead.workspace || ((draft.kind === 'behavior' || draft.kind === 'exemplar') && draft.addressee === draft.dead.addressee);
+  const filled = draft.kind === 'exemplar'
+    ? !!draft.title.trim() && (draft.source ?? draft.inheritedSource) !== null && draft.annotations.length > 0 && draft.annotations.every((a) => a.polarity && a.text.trim())
+    : fields.every((key) => draft[key].trim() !== '');
   const originalOf: Record<'title' | 'text', string> = { title: draft.originalTitle, text: draft.originalText };
 
   // Translate fills both English fields from the original title + text; Back-translate re-checks English the
@@ -1911,9 +1916,7 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit, fo
             <p style={muted} data-testid="memory-back-translation">back in {language}: {fields.map((key) => draft.backTranslation![key]).join(' — ')}</p>
           )}
           <EditActions busy={busy} saveLabel={`Save ${draft.kind}`}
-            ok={draft.workspace !== draft.dead.workspace && !((draft.kind === 'behavior' || draft.kind === 'exemplar') && draft.addressee === draft.dead.addressee) && (draft.kind === 'exemplar'
-              ? !!draft.title.trim() && (draft.source ?? draft.inheritedSource) !== null && draft.annotations.length > 0 && draft.annotations.every((a) => a.polarity && a.text.trim())
-              : fields.every((key) => draft[key].trim() !== ''))}
+            ok={!holdsOrphan && filled}
             onSave={save} onCancel={() => edit.close()} />
         </React.Fragment>
       )}

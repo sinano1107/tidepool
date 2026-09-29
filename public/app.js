@@ -2124,6 +2124,8 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit, fo
   const translatable = language !== "English";
   const fields = draft.kind === "definition" ? ["text"] : ["title", "text"];
   const replacing = draft.supersedes.map((id) => `#${id}`).join(", ");
+  const holdsOrphan = draft.workspace === draft.dead.workspace || (draft.kind === "behavior" || draft.kind === "exemplar") && draft.addressee === draft.dead.addressee;
+  const filled = draft.kind === "exemplar" ? !!draft.title.trim() && (draft.source ?? draft.inheritedSource) !== null && draft.annotations.length > 0 && draft.annotations.every((a) => a.polarity && a.text.trim()) : fields.every((key) => draft[key].trim() !== "");
   const originalOf = { title: draft.originalTitle, text: draft.originalText };
   const runTranslation = async (toEnglish) => {
     setBusy(true);
@@ -2298,7 +2300,7 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit, fo
     {
       busy,
       saveLabel: `Save ${draft.kind}`,
-      ok: draft.workspace !== draft.dead.workspace && !((draft.kind === "behavior" || draft.kind === "exemplar") && draft.addressee === draft.dead.addressee) && (draft.kind === "exemplar" ? !!draft.title.trim() && (draft.source ?? draft.inheritedSource) !== null && draft.annotations.length > 0 && draft.annotations.every((a) => a.polarity && a.text.trim()) : fields.every((key) => draft[key].trim() !== "")),
+      ok: !holdsOrphan && filled,
       onSave: save,
       onCancel: () => edit.close()
     }
