@@ -485,3 +485,19 @@ it("別タスクの entry への帰責は、id 窓が重なっても開いたま
   expect(outcomeOf(bSpawnedId)).toBe("rejected");
   expect(outcomeOf(aSpawnedId)).not.toBe("rejected");
 });
+
+it("受理された work task の episode は、後から別の work task が spawn しても accepted のまま —— 次の spawn はタスクの照合で決まる(loadEpisodes)", async () => {
+  t = await bootTidepool();
+  const recordSpawn = (taskId: string) =>
+    appendEvent(t.db, { taskId, workerId: "fake-worker", origin: "board", at: t.clock.now(), payload: WORKER_SPAWNED });
+  const a = await registerWork(t, "a");
+  await t.clock.advance(HOUR);
+  const aSpawnedId = recordSpawn(a.id);
+  await completeViaMcp(t, a.id);
+  await completeIntegrationReviews(t, a.id);
+  const b = await registerWork(t, "b");
+  await t.clock.advance(HOUR);
+  recordSpawn(b.id);
+
+  expect(loadEpisodes(t.db).find((e) => e.worker_spawned_event_id === aSpawnedId)?.outcome).toBe("accepted");
+});
