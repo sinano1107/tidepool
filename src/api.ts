@@ -34,6 +34,7 @@ import {
   completeThroughHumanDoor,
   editThroughHumanDoor,
   type GateFailure,
+  listMemoryEntriesForHuman,
   registerThroughHumanDoor,
   submitAnswer,
 } from "./human-verbs.js";
@@ -51,7 +52,6 @@ import {
   humanKnowledgeSchema,
   invalidateMemoryEntry,
   invalidationSchema,
-  listMemoryEntries,
   memoryBranchMoveSchema,
   memoryFoldSchema,
   memoryListFilterSchema,
@@ -1647,9 +1647,9 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       res.status(400).json({ error: z.treeifyError(parsed.error) });
       return;
     }
-    const { workspace, board_wide, ...filter } = parsed.data;
+    const { workspace: scope, board_wide, ...filter } = parsed.data;
     res.json({
-      entries: listMemoryEntries(db, { ...filter, scope: board_wide ? null : workspace }),
+      entries: listMemoryEntriesForHuman({ db, agentRegistered, workspace, resolveWorkspace }, { ...filter, scope: board_wide ? null : scope }),
     } satisfies WireContract["GET /api/settings/memory/entries"]);
   });
 

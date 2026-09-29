@@ -3,8 +3,8 @@
  */
 export interface SelectProps {
   label?: string;
-  /** Strings or { value, label } pairs. */
-  options?: Array<string | { value: string; label: string }>;
+  /** Strings or { value, label } pairs; a disabled pair is shown but cannot be picked. */
+  options?: Array<string | { value: string; label: string; disabled?: boolean }>;
   value?: string;
   disabled?: boolean;
   onChange?: (e: React.ChangeEvent<HTMLSelectElement>) => void;

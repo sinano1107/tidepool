@@ -1632,6 +1632,15 @@ type TpMemoryEntry = WireContract['GET /api/settings/memory/entries']['entries']
 // who invalidated it (ADR 0159): a human answering a proposal question, a meta-review writing, or a direct invalidation
 const invalidatedBy = (by: TpMemoryEntry['invalidated_by']) =>
   !by ? '' : ` by ${'question_id' in by ? `answer to ${by.question_id}` : 'activity' in by ? by.activity : by.worker}`;
+// the references the server marked orphaned (ADR 0173 決定5)
+const deadRefs = ({ orphaned, addressee, scope }: TpMemoryEntry) => ({
+  addressee: orphaned === 'addressee' || orphaned === 'both' ? addressee : null,
+  workspace: orphaned === 'scope' || orphaned === 'both' ? scope : null,
+});
+// a name picker keeps its current value visible; a dead one (ADR 0173 決定3) is shown but not offered, so the human
+// picks a live name, or every agent / board-wide, before submitting
+const offerNames = (names: string[], current: string, dead: string | null) =>
+  [...new Set([...names, ...(current ? [current] : [])])].map((name) => (name === dead ? { value: name, label: `${name} (not registered)`, disabled: true } : name));
 // the kinds a new entry may be to supersede every one of these (ADR 0161 決定1): behavior ↔ exemplar, the others only their own
 const successorKinds = (kinds: string[]) =>
   kinds.every((k) => k === 'behavior' || k === 'exemplar') ? ['behavior', 'exemplar'] : new Set(kinds).size === 1 ? [kinds[0]!] : [];
@@ -1697,7 +1706,9 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit, fo
     /** the cited case (a behavior's optional source, an exemplar's required one); `inheritedSource` is the one the replaced
      *  entries share, which the server keeps when no source is sent */
     source: number | null; inheritedSource: number | null; annotations: TpDraftAnnotation[];
-  } = { kind: 'knowledge', kinds: MEMORY_KINDS, workspace: '', path: '', originalTitle: '', originalText: '', title: '', text: '', backTranslation: null, supersedes: [], addressee: '', source: null, inheritedSource: null, annotations: [] };
+    /** the replaced entry's orphaned references, which the form will not submit again */
+    dead: ReturnType<typeof deadRefs>;
+  } = { kind: 'knowledge', kinds: MEMORY_KINDS, workspace: '', path: '', originalTitle: '', originalText: '', title: '', text: '', backTranslation: null, supersedes: [], addressee: '', source: null, inheritedSource: null, annotations: [], dead: { addressee: null, workspace: null } };
   const [draft, setDraft] = React.useState(blank);
   const [busy, setBusy] = React.useState(false);
   const setDraftField = (key: string) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => setDraft({ ...draft, [key]: e.target.value, ...(key === 'title' || key === 'text' ? { backTranslation: null } : {}), ...(key === 'workspace' ? { source: null } : {}) });
@@ -1706,6 +1717,11 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit, fo
   // a definition is one line with no title: its original and English are the text alone (ADR 0015)
   const fields: ('title' | 'text')[] = draft.kind === 'definition' ? ['text'] : ['title', 'text'];
   const replacing = draft.supersedes.map((id) => `#${id}`).join(', ');
+  // an orphaned reference the replaced entry held is never saved again (ADR 0173 決定3)
+  const holdsOrphan = draft.workspace === draft.dead.workspace || ((draft.kind === 'behavior' || draft.kind === 'exemplar') && draft.addressee === draft.dead.addressee);
+  const filled = draft.kind === 'exemplar'
+    ? !!draft.title.trim() && (draft.source ?? draft.inheritedSource) !== null && draft.annotations.length > 0 && draft.annotations.every((a) => a.polarity && a.text.trim())
+    : fields.every((key) => draft[key].trim() !== '');
   const originalOf: Record<'title' | 'text', string> = { title: draft.originalTitle, text: draft.originalText };
 
   // Translate fills both English fields from the original title + text; Back-translate re-checks English the
@@ -1782,7 +1798,7 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit, fo
     setSelected((s) => (s.some((e) => e.id === entry.id) ? s.filter((e) => e.id !== entry.id) : [...s, entry]));
   const foldIntoNew = () => edit.open(writeId, () => setDraft({
     ...blank, kind: foldKinds[0]!, kinds: foldKinds, workspace: selected[0]!.scope ?? '', path: selected[0]!.path,
-    supersedes: selected.map((e) => e.id), inheritedSource: sharedCase(selected),
+    supersedes: selected.map((e) => e.id), inheritedSource: sharedCase(selected), dead: deadRefs(selected[0]!),
   }));
   const foldIntoExisting = () => submit('/api/settings/memory/fold', { replaces: selected.map((e) => e.id), successor_id: Number(foldTarget) },
     ['folded', `${selectedIds} → #${foldTarget}`], 'fold failed', () => { setSelected([]); setFoldTarget(''); });
@@ -1790,7 +1806,7 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit, fo
   const startEntryEdit = (entry: TpMemoryEntry) => edit.open(writeId, () => setDraft({
     ...blank, kind: entry.kind, kinds: [entry.kind], workspace: entry.scope ?? '', path: entry.path, title: entry.title, text: entry.text,
     originalTitle: entry.original?.title ?? '', originalText: entry.original?.text ?? '',
-    addressee: entry.addressee ?? '', supersedes: [entry.id], inheritedSource: sharedCase([entry]),
+    addressee: entry.addressee ?? '', supersedes: [entry.id], inheritedSource: sharedCase([entry]), dead: deadRefs(entry),
     annotations: (entry.annotations ?? []).map(({ anchor, polarity, text, original }) => ({ anchor, polarity, text, original: original?.text ?? '', back: null })),
   }));
 
@@ -1853,12 +1869,13 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit, fo
         <React.Fragment>
           {replacing && <p style={muted}>replacing {replacing} — saving writes a new approved entry and supersedes {draft.supersedes.length === 1 ? 'it' : 'them'}</p>}
           {draft.kinds.length > 1 && <Select label="Kind" value={draft.kind} onChange={setDraftField('kind')} options={draft.kinds} />}
-          <Select label="Workspace" value={draft.workspace} onChange={setDraftField('workspace')} options={workspaceOptions} />
+          <Select label="Workspace" value={draft.workspace} onChange={setDraftField('workspace')}
+            options={[workspaceOptions[0]!, ...offerNames(workspaceNames, draft.workspace, draft.dead.workspace)]} />
           <Input label={draft.kind === 'definition' ? 'Branch path' : 'Path'} mono value={draft.path} onChange={setDraftField('path')} placeholder="build/tests" />
           {(draft.kind === 'behavior' || draft.kind === 'exemplar') && (
-            // the current addressee stays offered even if its agent has left the registry
+            // a current addressee whose agent has left the registry is shown but cannot be saved again
             <Select label="Addressee" value={draft.addressee} onChange={setDraftField('addressee')}
-              options={[{ value: '', label: 'every agent' }, ...new Set([...agentNames, ...(draft.addressee ? [draft.addressee] : [])])]} />
+              options={[{ value: '', label: 'every agent' }, ...offerNames(agentNames, draft.addressee, draft.dead.addressee)]} />
           )}
           {draft.kind === 'behavior' && (
             <React.Fragment>
@@ -1899,9 +1916,7 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit, fo
             <p style={muted} data-testid="memory-back-translation">back in {language}: {fields.map((key) => draft.backTranslation![key]).join(' — ')}</p>
           )}
           <EditActions busy={busy} saveLabel={`Save ${draft.kind}`}
-            ok={draft.kind === 'exemplar'
-              ? !!draft.title.trim() && (draft.source ?? draft.inheritedSource) !== null && draft.annotations.length > 0 && draft.annotations.every((a) => a.polarity && a.text.trim())
-              : fields.every((key) => draft[key].trim() !== '')}
+            ok={!holdsOrphan && filled}
             onSave={save} onCancel={() => edit.close()} />
         </React.Fragment>
       )}
@@ -1923,7 +1938,7 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit, fo
           <p style={{ ...muted, fontFamily: 'var(--font-mono)' }}>
             #{entry.id} · {entry.kind} · {entry.invalidation_reason
               ? `invalidated: ${entry.invalidation_reason}${entry.successor_id ? ` → #${entry.successor_id}` : ''}${invalidatedBy(entry.invalidated_by)}${entry.restored_as ? ` · restored → #${entry.restored_as}` : ''}`
-              : entry.state} · {entry.scope ?? 'board-wide'} · {entry.path}{(entry.kind === 'behavior' || entry.kind === 'exemplar') && ` · to ${entry.addressee ?? 'every agent'}`} · {entry.author.activity}{entry.cause && ` · ${entry.cause}`}
+              : entry.state} · {entry.scope ?? 'board-wide'} · {entry.path}{(entry.kind === 'behavior' || entry.kind === 'exemplar') && ` · to ${entry.addressee ?? 'every agent'}`}{entry.orphaned && ` · orphaned: ${entry.orphaned}`} · {entry.author.activity}{entry.cause && ` · ${entry.cause}`}
             {entry.replaced_ids.length > 0 && ` · replaces ${entry.replaced_ids.map((id) => `#${id}`).join(', ')}`}
           </p>
           {entry.kind !== 'definition' && <strong style={{ fontSize: 'var(--text-sm)' }}>{entry.title}</strong>}
@@ -1951,12 +1966,12 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit, fo
           )}
           {moving?.id === entry.id && (
             <React.Fragment>
-              {/* the entry's current workspace stays offered even if it has left the registry */}
-              <Select label="Workspace" value={moving!.workspace} options={[...new Set([...workspaceOptions, ...(entry.scope ? [entry.scope] : [])])]}
+              {/* the entry's current workspace, if it has left the registry, is shown but cannot be the destination */}
+              <Select label="Workspace" value={moving!.workspace} options={[workspaceOptions[0]!, ...offerNames(workspaceNames, moving!.workspace, deadRefs(entry).workspace)]}
                 onChange={(e) => setMoving({ ...moving!, workspace: e.target.value })} />
               <Input label="Path" mono value={moving!.path} onChange={(e) => setMoving({ ...moving!, path: e.target.value })} />
               <div style={{ display: 'flex', gap: 8 }}>
-                <Button variant="secondary" size="sm" disabled={busy || !moving!.path.trim()}
+                <Button variant="secondary" size="sm" disabled={busy || !moving!.path.trim() || moving!.workspace === deadRefs(entry).workspace}
                   onClick={() => move(`/api/settings/memory/entries/${entry.id}/move`, { workspace: moving!.workspace || null, path: moving!.path.trim() }, `#${entry.id} → ${moving!.path.trim()}`, () => setMoving(null))}>
                   Move #{entry.id}
                 </Button>

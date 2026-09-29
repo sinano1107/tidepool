@@ -1,11 +1,23 @@
 import { afterEach, expect, it } from "vitest";
 import { previewCase, recordKnowledge } from "../src/memory.js";
 import { logDecision, registerTask } from "../src/tasks.js";
+import { UnknownWorkspaceError } from "../src/workspace.js";
 import { FakeTranslationClient } from "./fakes.js";
 import { api, bootTidepool, managementMcpClient, type Tidepool } from "./harness.js";
 
 let t: Tidepool;
 afterEach(() => t?.stop());
+
+/** 人間の面の一覧を2つとも読む(GET /api/settings/memory/entries と管理MCP の list_memory_entries)。 */
+async function listFromBothSurfaces(tp: Tidepool, query: Record<string, string>) {
+  const http = (await api(tp.baseUrl, "GET", `/api/settings/memory/entries?${new URLSearchParams(query)}`)).json.entries;
+  const client = await managementMcpClient(tp.baseUrl);
+  try {
+    return [http, (await toolCaller(client)("list_memory_entries", query)).json];
+  } finally {
+    await client.close();
+  }
+}
 
 /** 管理MCP の tool を呼び、tool error か JSON の結果を返す。 */
 function toolCaller(client: Awaited<ReturnType<typeof managementMcpClient>>) {
@@ -340,5 +352,48 @@ it("管理MCP の restore_memory_entry は無効化済みのエントリを doma
     expect((await call("list_memory_entries", { state: "approved" })).json).toMatchObject([{ id: restored.json.entry_id, title: "Old" }]);
   } finally {
     await client.close();
+  }
+});
+
+it("宛先の agent や scope の workspace が registry から消えると、両方の人間の面の一覧はその行にだけ孤立の印(addressee / scope / both)を付け、無効化済みの行にも付ける(ADR 0173 決定5)", async () => {
+  const agents = new Set(["deckhand", "anemone"]);
+  const workspaces = new Set(["tidepool", "reef"]);
+  t = await bootTidepool({
+    agentRegistered: (name) => agents.has(name),
+    resolveWorkspace: (name) => {
+      if (name === null || workspaces.has(name)) return { name: name ?? "tidepool", path: "/workspaces/known" };
+      throw new UnknownWorkspaceError(name);
+    },
+  });
+  const behavior = async (workspace: string | null, addressee: string | null) =>
+    (await api(t.baseUrl, "POST", "/api/settings/memory/behaviors", { workspace, path: "habits", title: "t", text: "x", addressee })).json.entry_id;
+  const gone = await behavior("tidepool", "deckhand");
+  const moved = await behavior("reef", "anemone");
+  const both = await behavior("reef", "deckhand");
+  const live = await behavior("tidepool", "anemone");
+  const everyone = await behavior(null, null);
+  await api(t.baseUrl, "POST", `/api/settings/memory/entries/${both}/invalidate`, { reason: "capability" });
+
+  agents.delete("deckhand");
+  workspaces.delete("reef");
+
+  for (const entries of await listFromBothSurfaces(t, { kind: "behavior" })) {
+    expect(entries.map((e: { id: number; orphaned: unknown }) => [e.id, e.orphaned])).toEqual([
+      [gone, "addressee"],
+      [moved, "scope"],
+      [both, "both"],
+      [live, null],
+      [everyone, null],
+    ]);
+  }
+});
+
+it("registry の無い盤面では、両方の人間の面の一覧に孤立の印の欄そのものが無い(ADR 0173 決定5)", async () => {
+  t = await bootTidepool();
+  await api(t.baseUrl, "POST", "/api/settings/memory/behaviors", { workspace: "tidepool", path: "habits", title: "t", text: "x", addressee: "deckhand" });
+
+  for (const entries of await listFromBothSurfaces(t, {})) {
+    expect(entries).toHaveLength(1);
+    expect("orphaned" in entries[0]).toBe(false);
   }
 });
