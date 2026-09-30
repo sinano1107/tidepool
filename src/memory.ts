@@ -337,7 +337,7 @@ function moveEntries(
   })();
 }
 
-/** scope / path に生きている Definition の id(移動と復元の置き場の門)。 */
+/** scope / path に生きている Definition の id(定義の書き込み・移動・復元の置き場の門と、read の影の判定)。 */
 function liveDefinitions(db: Db, scope: string | null, path: string): number[] {
   return (
     db.prepare("SELECT id FROM memory_entries WHERE kind = 'definition' AND invalidation_reason IS NULL AND path = ? AND scope IS ?").all(path, scope) as Array<{ id: number }>
@@ -1272,7 +1272,8 @@ function dropReason(row: EntryRow, reader: Pick<MemoryReader, "agent">): MemoryD
 }
 
 /** INDEX(browse と注入)のフィルタ(spec #586 B): approved、未無効化、スコープ(task の
- *  workspace or 盤面全体)、宛先(agent 名一致 or 全員)。search は rankedEntries と dropReason に、read は inSight に同じ条件を持つ。 */
+ *  workspace or 盤面全体)、宛先(agent 名一致 or 全員)。search は rankedEntries と dropReason に、read は inSight に同じ条件を持つ ——
+ *  ただし Definition は INDEX にだけ出る: search は当てず、read は影(shadowed)を落とす(ADR 0083 追記7)。 */
 function visibleEntries(db: Db, reader: Omit<MemoryReader, "taskId">): EntryRow[] {
   return db
     .prepare(
@@ -1291,7 +1292,8 @@ function inSight(row: EntryRow, reader: Omit<MemoryReader, "taskId">): boolean {
 }
 
 /** 影(ADR 0083 追記4・追記7): 盤面全体の Definition で、同じ path に読み手の workspace の未無効化の Definition がある
- *  (Definition は approved でしか書かれない)。inSight とは別の条件で、read はこれも見えない id と同じく黙って省く。
+ *  (Definition は approved でしか書かれない)。indexChildren の「workspace が勝つ」の read 側の写し。inSight とは別の条件で、
+ *  read はこれも見えない id と同じく黙って省く。
  *  scope null の読み手に影は無い。 */
 function shadowed(db: Db, row: EntryRow, reader: Pick<MemoryReader, "scope">): boolean {
   return row.kind === "definition" && row.scope === null && reader.scope !== null && liveDefinitions(db, reader.scope, row.path).length > 0;
@@ -1521,8 +1523,8 @@ function caseSession(db: Db, anchor: EventRow): { events: EventRow[]; handoff: s
 
 /** id で本文を読む(ADR 0167)。無効化済みの id は本文が同じ後継(`path_moved` の鎖・復元の複製)を見える行の内側でたどり、
  *  末尾の本文に requested_id(求めた旧 id)を添える —— 同じ行は1件で、自身を求めた id が勝つ。末尾が無効化済みなら本文は返さず
- *  dropped に末尾の理由と、見える後継を載せる。見えない id(スコープ・宛先・candidate・存在しない)と影の Definition(求めた id か
- *  鎖の末尾が影なら —— ADR 0083 追記7)は黙って落とす。case は
+ *  dropped に末尾の理由と、見える後継を載せる。見えない id(スコープ・宛先・candidate・存在しない)と、末尾が影の Definition の id
+ *  (ADR 0083 追記7 —— 影の外へ移された旧 id は移動先を返す)は黙って落とし、影の後継も見えない後継と同じく載せない。case は
  *  Behavior と Exemplar が、annotations は Exemplar が持つ。 */
 export function readMemory(
   db: Db,
@@ -1550,18 +1552,18 @@ export function readMemory(
     const dropped: Array<{ id: number; reason: InvalidationReason; successor: number | null }> = [];
     for (const id of new Set(input.ids)) {
       const row = db.prepare("SELECT * FROM memory_entries WHERE id = ?").get(id) as EntryRow | undefined;
-      if (!row || !inSight(row, reader) || shadowed(db, row, reader)) continue;
+      if (!row || !inSight(row, reader)) continue;
       const chain = sameBodyChain(db, row, restored);
       const cut = chain.findIndex((link) => !inSight(link, reader));
       const tail = (cut === -1 ? chain : chain.slice(0, cut)).at(-1)!;
+      if (shadowed(db, tail, reader)) continue;
       if (tail.invalidation_reason === null) {
-        if (shadowed(db, tail, reader)) continue;
         if (tail.id === id) found.set(id, { row: tail });
         else if (!found.has(tail.id)) found.set(tail.id, { row: tail, requested_id: id });
         continue;
       }
       const successor = tail.successor_id === null ? undefined : requireEntry(db, tail.successor_id);
-      dropped.push({ id, reason: tail.invalidation_reason, successor: successor && inSight(successor, reader) ? successor.id : null });
+      dropped.push({ id, reason: tail.invalidation_reason, successor: successor && inSight(successor, reader) && !shadowed(db, successor, reader) ? successor.id : null });
     }
     const entries = [...found.values()]
       .sort((a, b) => a.row.id - b.row.id)
