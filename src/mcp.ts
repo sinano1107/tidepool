@@ -24,6 +24,7 @@ import {
   moveMemoryBranchByMetaReview,
   moveMemoryByMetaReview,
   proposeMemoryChange,
+  pullMemoryBranches,
   pullMemoryList,
   pullMemoryProposals,
   readMemory,
@@ -75,6 +76,13 @@ import {
 export const BOARD_WRITE_LANGUAGE_RULE =
   "Write in English even when the task's payload is in another language; " +
   "human-authored text you quote stays in its original language.";
+
+/** 枝の一覧(ADR 0122 追記 #1209): meta-review と管理MCP が同じ説明を載せる。 */
+export const MEMORY_BRANCHES_DESCRIPTION =
+  "List every branch of the board's memory in tree order: its path, the Definitions at that path (id, scope, text), and the scopes " +
+  "that hold approved entries at or under it (null = the whole board). A whole-board Definition defines the branch for every scope; " +
+  "a branch is undefined for a scope that holds entries under it and has neither its own Definition there nor a whole-board one. " +
+  "Candidates and invalidated entries make no branch.";
 
 /** ADR 0109 決定6: 最終 verb の返り値に置く終了の指示。**送達であって保証ではない**
  *  —— 不変条件は attribution の門・完了経路の検査・強制回収が持ち、この一文が守るのは
@@ -940,15 +948,23 @@ function registerMemoryMetaReviewVerbs(server: McpServer, deps: McpDeps, run: Me
     {
       description:
         "List the memory entries the human settings view lists, each entry's original wording omitted — candidates and invalidated entries " +
-        "included. scope: a workspace name, null for board-wide only, omit for all.",
+        "included. scope: a workspace name, null for board-wide only, omit for all. " +
+        "path: only the entries at that branch or under it (path/…).",
       inputSchema: {
         scope: scope.optional(),
         kind: memoryListFilterSchema.shape.kind,
         state: memoryListFilterSchema.shape.state,
+        path: memoryListFilterSchema.shape.path,
         page,
       },
     },
     async (input) => run((reader, now) => pullMemoryList(deps.db, reader, "list_memory_entries", input, now)),
+  );
+
+  server.registerTool(
+    "list_memory_branches",
+    { description: MEMORY_BRANCHES_DESCRIPTION },
+    async () => run((reader, now) => pullMemoryBranches(deps.db, reader, now)),
   );
 
   server.registerTool(

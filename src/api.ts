@@ -1653,9 +1653,15 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       return;
     }
     const { workspace: scope, board_wide, ...filter } = parsed.data;
-    res.json({
-      entries: listMemoryEntriesForHuman(memoryRefDeps, { ...filter, scope: board_wide ? null : scope }),
-    } satisfies WireContract["GET /api/settings/memory/entries"]);
+    try {
+      res.json({
+        entries: listMemoryEntriesForHuman(memoryRefDeps, { ...filter, scope: board_wide ? null : scope }),
+      } satisfies WireContract["GET /api/settings/memory/entries"]);
+    } catch (err) {
+      // 不正な path(#1209)
+      if (!(err instanceof DomainError)) throw err;
+      res.status(400).json({ error: err.message });
+    }
   });
 
   // 人間の書き込み(schema で弾けば 400、DomainError も 400)。memory の書き込み(書き手 human、原文の言語は表示言語)と無効化、盤面設定が使う。保存は翻訳 client に依存しない

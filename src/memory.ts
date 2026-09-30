@@ -149,6 +149,9 @@ function checkedPath(path: string): string {
   return path.normalize("NFC");
 }
 
+/** path が枝 branch そのものか、その配下 branch/… にあるか(`branch-x` は別の枝)。 */
+const atOrUnder = (path: string, branch: string) => path === branch || path.startsWith(`${branch}/`);
+
 function createEntry(
   db: Db,
   fields: Omit<MemoryEntryFields, "source"> & { source?: SourceInput | MemorySource },
@@ -552,9 +555,7 @@ export function moveMemoryBranch(
 /** 枝ごとの移動が移す行(移動と meta-review の門が同じ集合を見る): scope(完全一致)で path が P か P/… の未無効化エントリ。
  *  盤面全体 → 盤面全体で盤面全体に1件でもあれば、全 workspace の同じ配下も足す(ADR 0177 決定5)。id 順。 */
 function branchRows(db: Db, { scope, path, to_scope }: { scope: string | null; path: string; to_scope: string | null }): EntryRow[] {
-  const under = (db.prepare("SELECT * FROM memory_entries WHERE invalidation_reason IS NULL ORDER BY id").all() as EntryRow[]).filter(
-    (row) => row.path === path || row.path.startsWith(`${path}/`),
-  );
+  const under = (db.prepare("SELECT * FROM memory_entries WHERE invalidation_reason IS NULL ORDER BY id").all() as EntryRow[]).filter((row) => atOrUnder(row.path, path));
   const own = under.filter((row) => row.scope === scope);
   return scope === null && to_scope === null && own.length > 0 ? under : own;
 }
@@ -688,6 +689,7 @@ export const memoryListFilterSchema = z.object({
   workspace: z.string().min(1).optional(),
   kind: z.enum(["knowledge", "behavior", "definition", "exemplar"]).optional(),
   state: z.enum(["candidate", "approved", "invalidated"]).optional(),
+  path: z.string().optional(),
 });
 
 /** 人間の面(settings の HTTP / 管理MCP)の書き手・移した者。 */
@@ -1284,10 +1286,10 @@ type InvalidatedBy = { question_id: string } | { activity: MemoryEntryFields["au
 
 /** 人間の面の一覧(spec #586 F): candidate・無効化済みも出す(id 順)。
  *  scope は完全一致(null = 盤面全体、省略 = すべて)、state の invalidated は無効化済み、
- *  approved / candidate は無効化されていないもの。 */
+ *  approved / candidate は無効化されていないもの。path はその枝と配下 P/…(#1209)。 */
 export function listMemoryEntries(
   db: Db,
-  filter: { scope?: string | null; kind?: MemoryEntryFields["kind"]; state?: MemoryEntryFields["state"] | "invalidated" },
+  filter: { scope?: string | null; kind?: MemoryEntryFields["kind"]; state?: MemoryEntryFields["state"] | "invalidated"; path?: string },
 ): Array<
   MemoryEntry & {
     invalidation_reason: InvalidationReason | null;
@@ -1300,6 +1302,7 @@ export function listMemoryEntries(
   }
 > {
   const { scope, kind, state } = filter;
+  const path = filter.path === undefined ? undefined : checkedPath(filter.path);
   // エントリの無効化は高々1度(invalidateMemoryEntry の門)なので entry_id で引ける。印は event が正本で列は持たない
   const invalidatedBy = new Map(
     listEventsOfKinds(db, ["memory_entry_invalidated"]).map(({ worker_id, payload: { entry_id, question_id, activity } }) =>
@@ -1325,6 +1328,7 @@ export function listMemoryEntries(
       (row) =>
         (scope === undefined || row.scope === scope) &&
         (kind === undefined || row.kind === kind) &&
+        (path === undefined || atOrUnder(row.path, path)) &&
         (state === undefined || (state === "invalidated" ? row.invalidation_reason !== null : row.invalidation_reason === null && row.state === state)),
     )
     .map((row) => ({
@@ -1572,6 +1576,34 @@ export function browseMemory(
       },
       at,
     );
+  })();
+}
+
+/** 枝の一覧(ADR 0122 追記 #1209): approved・未無効化のエントリ(4種別・全 scope・宛先を問わない)の path とすべての上位の prefix を
+ *  1枝1行、木の順(親の直後に配下、同じ階層は segment の名前順)で。行はその path の Definition と、その path か配下にエントリ
+ *  (Definition も)を持つ scope(null = 盤面全体)。件数・未定義の印・leaf は載せない。人間の面はこのまま、meta-review は
+ *  pullMemoryBranches が原文を落とす。 */
+export function listMemoryBranches(db: Db) {
+  const entries = approvedMemoryEntries(db);
+  const paths = new Set(entries.flatMap((e) => e.path.split("/").map((_, i, segments) => segments.slice(0, i + 1).join("/"))));
+  const bySegments = (a: string, b: string) => {
+    const [x, y] = [a.split("/"), b.split("/")];
+    const i = x.findIndex((segment, j) => segment !== y[j]);
+    return i === -1 ? x.length - y.length : y[i] === undefined || x[i]! > y[i]! ? 1 : -1;
+  };
+  return [...paths].sort(bySegments).map((path) => ({
+    path,
+    definitions: entries.filter((e) => e.kind === "definition" && e.path === path).map(({ id, scope, text, original }) => ({ id, scope, text, original })),
+    scopes: [...new Set(entries.filter((e) => atOrUnder(e.path, path)).map((e) => e.scope))],
+  }));
+}
+
+/** meta-review の枝の一覧: 返した id は行の Definition の id。Definition の原文は人間の面にだけ残す(一覧と同じ線、#1052)。 */
+export function pullMemoryBranches(db: Db, reader: Pick<MemoryReader, "taskId" | "agent">, at: Date) {
+  return db.transaction(() => {
+    const branches = listMemoryBranches(db).map((row) => ({ ...row, definitions: row.definitions.map(({ original: _, ...d }) => d) }));
+    const returned_ids = branches.flatMap((row) => row.definitions.map((d) => d.id));
+    return recordPull(db, reader, { verb: "list_memory_branches", input: {}, returned_ids }, { branches }, at);
   })();
 }
 

@@ -103,6 +103,26 @@ it("GET /api/settings/memory/entries は絞り込みを受け、原文の無い 
   expect((await api(t.baseUrl, "POST", "/api/translate", { type: "memory_entry", entry_id: agent })).status).toBe(503);
 });
 
+it("人間の面の一覧は2つとも path を domain に渡し(不正な path は HTTP で 400、管理MCP で tool error)、管理MCP の list_memory_branches は Definition の原文つきの枝の行を返す(#1209)", async () => {
+  t = await bootTidepool();
+  const agent = agentKnowledge(t, "Tests need Node 22");
+  const written = await api(t.baseUrl, "POST", "/api/settings/memory/definitions", { workspace: null, path: "build", text: "How things are built.", original_text: "ビルドの仕方" });
+
+  for (const entries of await listFromBothSurfaces(t, { path: "build/tests" })) expect(entries.map((e: { id: number }) => e.id)).toEqual([agent]);
+  expect((await api(t.baseUrl, "GET", "/api/settings/memory/entries?path=build/")).status).toBe(400);
+  const client = await managementMcpClient(t.baseUrl);
+  try {
+    expect(await toolCaller(client)("list_memory_entries", { path: "build/" })).toMatchObject({ isError: true, json: expect.stringContaining("path must be") });
+    expect((await toolCaller(client)("list_memory_branches", {})).json).toMatchObject({
+      branches: expect.arrayContaining([
+        expect.objectContaining({ path: "build", definitions: [expect.objectContaining({ id: written.json.entry_id, original: expect.objectContaining({ text: "ビルドの仕方" }) })] }),
+      ]),
+    });
+  } finally {
+    await client.close();
+  }
+});
+
 it("翻訳 client が無くても Knowledge の書き込みは原文つき・書き手 human で保存できる(issue #593)", async () => {
   t = await bootTidepool();
   const written = await api(t.baseUrl, "POST", "/api/settings/memory/knowledge", {
@@ -236,7 +256,7 @@ it("管理MCP で Knowledge を書き(supersedes の list は domain に渡る)�
   }
 });
 
-it("管理MCP の define_memory_branch は重ねた木の門と畳み方を言い、list_memory_entries は影に触れない(ADR 0178)", async () => {
+it("管理MCP の define_memory_branch は重ねた木の門と畳み方を言い、list_memory_entries は影に触れず path の意味を言い、list_memory_branches は枝の一覧と原文を言う(ADR 0178 / #1209)", async () => {
   t = await bootTidepool();
   const client = await managementMcpClient(t.baseUrl);
   try {
@@ -247,6 +267,8 @@ it("管理MCP の define_memory_branch は重ねた木の門と畳み方を言�
         "defines: to clear the way, write a whole-board definition at that path with the workspace definitions in supersedes.",
     );
     expect(description("list_memory_entries")).not.toContain("shadow");
+    expect(description("list_memory_entries")).toContain("path lists only the entries at that branch or under it (path/…).");
+    expect(description("list_memory_branches")).toMatch(/^List every branch of the board's memory in tree order: .* Each Definition carries the human's original wording \(original\) when it has one\.$/);
   } finally {
     await client.close();
   }

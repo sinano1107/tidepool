@@ -66,7 +66,7 @@ it("主題 memory の task の接続の tool 一覧は、普通の task の一�
   }
 });
 
-it("define_memory は重ねた木の門と畳み方・改名を言い、list_memory_entries は影に触れず、memory meta-review の purpose は複数の workspace が同じ path を定義したときの畳み方と改名を言う(ADR 0178)", async () => {
+it("define_memory は重ねた木の門と畳み方・改名を言い、list_memory_entries は影に触れず path の意味を言い、list_memory_branches は枝の一覧を言い、memory meta-review の purpose は枝の一覧と path の読み方と、複数の workspace が同じ path を定義したときの畳み方と改名を言う(ADR 0178 / #1209)", async () => {
   const { review, client } = await boardWithMetaReview();
   try {
     const { tools } = await client.listTools();
@@ -77,6 +77,17 @@ it("define_memory は重ねた木の門と畳み方・改名を言い、list_mem
     );
     expect(description("define_memory")).not.toContain("shadow");
     expect(description("list_memory_entries")).not.toContain("shadow");
+    expect(description("list_memory_entries")).toContain("path: only the entries at that branch or under it (path/…).");
+    expect(description("list_memory_branches")).toBe(
+      "List every branch of the board's memory in tree order: its path, the Definitions at that path (id, scope, text), and the scopes " +
+        "that hold approved entries at or under it (null = the whole board). A whole-board Definition defines the branch for every scope; " +
+        "a branch is undefined for a scope that holds entries under it and has neither its own Definition there nor a whole-board one. " +
+        "Candidates and invalidated entries make no branch.",
+    );
+    expect(review.purpose).toContain(
+      "Read the tree with list_memory_branches — every branch with the Definitions at its path and the scopes that hold entries under it — " +
+        "and a branch's entries with list_memory_entries (path). For a Definition, ask whether it holds true whatever leaf sits under its branch.",
+    );
     expect(review.purpose).toContain(
       "When two or more workspaces define the same path, read the definitions: fold them into one whole-board definition when they mean the same " +
         "(define_memory with scope null and supersedes), and rename one branch when they do not (move_memory_branch).",
@@ -224,7 +235,7 @@ it("invalidate_memory は cause の memory を理由コードに取らず tool e
   }
 });
 
-it("list_memory_entries は scope の名前 / null(盤面全体)/ 省略(すべて)を区別して渡し、読み口5つは event id を載せる", async () => {
+it("list_memory_entries は scope の名前 / null(盤面全体)/ 省略(すべて)を区別して渡して path も渡し、読み口6つは event id を載せる", async () => {
   const { client, call, material } = await boardWithMetaReview();
   const now = t.clock.now();
   const human = { activity: "human" as const, name: "human" };
@@ -235,10 +246,12 @@ it("list_memory_entries は scope の名前 / null(盤面全体)/ 省略(すべ�
     expect(await ids({})).toEqual([material, boardWide, sandboxDefinition]);
     expect(await ids({ scope: null })).toEqual([boardWide]);
     expect(await ids({ scope: "sandbox", kind: "definition", page: 1 })).toEqual([sandboxDefinition]);
+    expect(await ids({ path: "deploy" })).toEqual([boardWide]);
 
     for (const verb of ["list_memory_entries", "list_memory_candidates", "list_memory_behaviors", "list_memory_proposals", "list_precedents"]) {
       expect(await call(verb)).toMatchObject({ isError: false, body: { truncated: false, event_id: expect.any(Number) } });
     }
+    expect(await call("list_memory_branches")).toMatchObject({ isError: false, body: { branches: expect.any(Array), event_id: expect.any(Number) } });
     expect((await call("list_memory_candidates", { include_invalidated: true, page: 1 })).isError).toBe(false);
     expect((await call("list_precedents", { since_watermark: 0, page: 1 })).isError).toBe(false);
   } finally {

@@ -17,6 +17,7 @@ export const MEMORY_META_REVIEW_VERBS = [
   "list_memory_behaviors",
   "list_precedents",
   "list_memory_entries",
+  "list_memory_branches",
   "list_memory_proposals",
   "define_memory",
   "fold_memory",
@@ -51,6 +52,8 @@ export const META_REVIEW_SUBJECTS = {
       title: "Memory meta-review",
       purpose:
         "Periodic meta-review of the board's memory store. Judge repeats among candidates and exemplars, redundant examples included, by reading them, not by counting. " +
+        "Read the tree with list_memory_branches — every branch with the Definitions at its path and the scopes that hold entries under it — " +
+        "and a branch's entries with list_memory_entries (path). " +
         "For a Definition, ask whether it holds true whatever leaf sits under its branch. " +
         "Where a branch holds entries but has no Definition in their scope or whole-board, write one that passes the same test " +
         "(define_memory) — in the workspace when the entries are all in one, whole-board otherwise. " +
