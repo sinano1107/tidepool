@@ -243,3 +243,17 @@ worker の `record_knowledge` の「出所ちょうど1つ」は変えない。
 注入節の前文は、関連 leaf が順位つきのポインタであることと、効くものは行動の前に `read_memory` で読むことを1文で言う —
 全件読めとは言わない(読まなかった事実が観測される設計)。`memory_injected` の欄は変えない(entries は seen の記録)。
 測定と実装の walk-through は #604 のコメントに置く。
+
+## 追記 7(2026-09-30 の triage、issue #1053)
+
+**Definition が worker に届くのは INDEX(spawn 注入と `browse_memory`)だけ。`search_memory` は Definition を返さず、
+`read_memory` は影に入った Definition を見えない id と同じく黙って省く。** 追記4 の「worker は影の定義に気づかない」は
+`indexChildren` の1箇所にしか実装されておらず、search は影の盤面全体の Definition を FTS の当たりとして返し、read は
+id を渡せばその本文を返していた(spec #600 B が「read / search では見える」と置き、テストがそれを固定した — ADR 0122 の
+退けた案と ADR 0161 追記7 は追記4 の読みで積まれているので、直すのは実装の側)。search から除くのは影だけでなく Definition
+全部: 定義は1行で全文が INDEX に出ており、削られた枝は browse で降りられるので、search で定義を当てる価値が無く、影だけを
+除くには search の中で同 path の workspace 定義を引く処理が要る。read は Definition を返すこと自体は変えない(エントリを
+読む verb で、issue の主題でもない)— 変えるのは影だけで、同 path に自分の workspace の approved な Definition があれば
+その盤面全体の Definition は `entries` にも `dropped` にも載せない。`dropped` は無効化の reason code と後継を伝える欄で、
+影には後継が無く、理由を載せれば「他の workspace ではこの枝の定義が違う」を worker に教えることになる。影の Definition は
+店・人間の一覧・meta-review の `list_memory_entries` には残る(ADR 0122 決定1)。
