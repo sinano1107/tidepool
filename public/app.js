@@ -3267,7 +3267,7 @@ function toQuestionCardShape(q, icons) {
   const registrant = q.registrant;
   const isBoard = registrant === "tidepool";
   const moved = q.moved ?? [];
-  const movedNote = moved.map((m) => `#${m.id} moved \u2192 #${m.head_id} at ${m.path} (${m.scope ?? "whole board"})`).join("\n");
+  const movedNote = moved.map((m) => `#${m.id} moved \u2192 #${m.tail_id} at ${m.path} (${m.scope ?? "whole board"})`).join("\n");
   const candidateId = q.question_proposal?.kind === "memory" ? q.question_proposal.candidate_id : void 0;
   return {
     // 付帯子の提案 question は親を塞がない — 塞ぐ親は盤面の `blocking` が答える(issue #935)
@@ -3289,8 +3289,8 @@ function toQuestionCardShape(q, icons) {
     // 盤面の `approval` 注釈が答える(issue #757)— ここは描画の形に写すだけ
     ...q.question_proposal?.kind === "routing" && q.question_proposal.op === "row" && { amendable: "row" },
     ...q.question_proposal?.kind === "registry" && { amendable: "agent_tier" },
-    // 修正値の初期値は candidate の今の本文 —— 移されていれば先頭の複製
-    ...candidateId !== void 0 && { amendable: "memory", candidateId: moved.find((m) => m.id === candidateId)?.head_id ?? candidateId },
+    // 修正値の初期値は candidate の今の本文 —— 移されていれば末尾の複製
+    ...candidateId !== void 0 && { amendable: "memory", candidateId: moved.find((m) => m.id === candidateId)?.tail_id ?? candidateId },
     ...q.question_proposal?.kind === "memory" && { needsComment: ["reject", "defer"] },
     ...q.approval && {
       kind: "approval",

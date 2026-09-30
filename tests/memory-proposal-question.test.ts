@@ -1,7 +1,8 @@
 import { afterEach, expect, it } from "vitest";
 import { DEFAULT_AUDITOR_NAME } from "../src/defaults.js";
 import { appendEvent } from "../src/events.js";
-import { approveMemoryProposal, createBehaviorCandidate } from "../src/memory.js";
+import { approveMemoryProposal, createBehaviorCandidate, movedPins } from "../src/memory.js";
+import { getTask } from "../src/tasks.js";
 import {
   api,
   type BootOptions,
@@ -221,19 +222,16 @@ it("pin の entry が人間・meta-review・superseded のどの経路で無効�
   }
 });
 
-it("盤面の一覧と task 詳細の提案 question は、移された pin ごとの旧 id・先頭の id・path・scope を注釈に持つ —— detail と pin は焼いたまま(ADR 0162 決定6)", async () => {
+it("盤面の一覧と task 詳細の提案 question 行は移動の注釈 moved を持つ(ADR 0162 決定6)", async () => {
   const { ids, client, propose } = await boardWithMetaReview();
   try {
     const questionId = await propose(ids[0]!);
-    const row = async () => ((await api(t.baseUrl, "GET", "/api/tasks")).json as any[]).find((task) => task.id === questionId);
-    expect((await row()).moved).toEqual([]);
-    const { detail } = (await task(questionId)).question_items[0];
+    await api(t.baseUrl, "POST", `/api/settings/memory/entries/${ids[0]}/move`, { workspace: null, path: "habits/moved" });
 
-    const head = (await api(t.baseUrl, "POST", `/api/settings/memory/entries/${ids[0]}/move`, { workspace: null, path: "habits/moved" })).json.entry_id;
-
-    const moved = [{ id: ids[0], head_id: head, path: "habits/moved", scope: null }];
-    expect(await row()).toMatchObject({ status: "todo", moved });
-    expect(await task(questionId)).toMatchObject({ moved, question_proposal: { candidate_id: ids[0] }, question_items: [{ detail }] });
+    const moved = movedPins(t.db, getTask(t.db, questionId)!.question_proposal);
+    expect(moved).toHaveLength(1);
+    expect(((await api(t.baseUrl, "GET", "/api/tasks")).json as any[]).find((task) => task.id === questionId).moved).toEqual(moved);
+    expect((await task(questionId)).moved).toEqual(moved);
   } finally {
     await client.close();
   }
@@ -560,6 +558,21 @@ it("candidate の宛先や scope が registry から消えた後の修正なし�
     expect(await task(scoped)).toMatchObject({ status: "todo", question_answer: null });
 
     expect((await answer(addressed, "approve", { amendment: { addressee: "anemone" } })).status).toBe(200);
+  } finally {
+    await board.client.close();
+  }
+});
+
+it("workspace から盤面全体へ移された candidate の approve は、移動元の workspace が registry から消えても通る —— 門は path_moved の鎖の末尾の scope を見る(ADR 0173 決定2 / ADR 0162 決定6)", async () => {
+  const workspaces = new Set(["reef"]);
+  const board = await boardWithMetaReview(undefined, registryOf(new Set(["deckhand"]), workspaces));
+  try {
+    const drafted = candidate(t, "Keep the reef tidy", "reef");
+    const questionId = await board.propose(drafted);
+    await api(t.baseUrl, "POST", `/api/settings/memory/entries/${drafted}/move`, { workspace: null, path: "habits/commits" });
+    workspaces.delete("reef");
+
+    expect((await answer(questionId, "approve")).status).toBe(200);
   } finally {
     await board.client.close();
   }

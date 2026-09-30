@@ -1546,39 +1546,40 @@ it("watermark 再生と rebuild は4種別の supersedes と既にある後継�
   expect(listMemoryEntries(db, {})).toEqual(listed);
 });
 
-/** 移したエントリを pin する提案 question(ADR 0162 決定6): pin は `path_moved` の鎖の先頭で照合・適用する。 */
+/** 移したエントリを pin する提案 question(ADR 0162 決定6): pin は `path_moved` の鎖の末尾で照合・適用する。 */
 function movedCandidateProposal() {
   const { db, task } = board();
   const drafted = candidate(db, "Keep migrations apart");
   const { question_id } = proposeMemoryChange(db, task.id, { op: "approve", candidate_id: drafted, rationale: "r" }, "auditor", at);
   const moved = moveMemory(db, { entry_id: drafted, scope: "tidepool", path: "habits/moved", mover: human }, "webui", at).entry_id;
-  const head = moveMemory(db, { entry_id: moved, scope: null, path: "habits/again", mover: human }, "webui", at).entry_id;
+  const tail = moveMemory(db, { entry_id: moved, scope: null, path: "habits/again", mover: human }, "webui", at).entry_id;
   const proposal = getTask(db, question_id)!.question_proposal as MemoryProposal;
-  return { db, task, drafted, head, question_id, proposal };
+  return { db, task, drafted, tail, question_id, proposal };
 }
 
-it("pin した candidate を移しても(2度でも)提案 question は陳腐化せず、approve は path_moved の鎖の先頭を承認する(ADR 0162 決定6)", () => {
-  const { db, drafted, head, question_id, proposal } = movedCandidateProposal();
+it("pin した candidate を移しても(2度でも)提案 question は陳腐化せず pin と detail は移す前のまま、approve は path_moved の鎖の末尾を承認する(ADR 0162 決定6)", () => {
+  const { db, drafted, tail, question_id, proposal } = movedCandidateProposal();
   expect(getTask(db, question_id)).toMatchObject({ status: "todo" });
   expect(proposal).toMatchObject({ candidate_id: drafted });
+  expect(getTask(db, question_id)!.question_items![0]!.detail).toContain("Scope: whole board\nPath: habits\n");
 
   const eventId = approveMemoryProposal(db, proposal, question_id, "webui", at);
 
-  expect(approvedMemoryEntries(db)).toMatchObject([{ id: head, scope: null, path: "habits/again", version: eventId }]);
+  expect(approvedMemoryEntries(db)).toMatchObject([{ id: tail, scope: null, path: "habits/again", version: eventId }]);
 });
 
-it("移した candidate への修正値つき approve は先頭の置き場に人間名義のエントリを作って先頭を superseded にし、reject は先頭を rejected にする(ADR 0162 決定6)", () => {
+it("移した candidate への修正値つき approve は末尾の置き場に人間名義のエントリを作って末尾を superseded にし、reject は末尾を rejected にする(ADR 0162 決定6)", () => {
   const amended = movedCandidateProposal();
   const created = approveMemoryProposal(amended.db, amended.proposal, amended.question_id, "webui", at, { text: "Keep migrations in their own commit." });
   expect(entryById(amended.db, created)).toMatchObject({ state: "approved", scope: null, path: "habits/again", author: { activity: "human" } });
-  expect(entryById(amended.db, amended.head)).toMatchObject({ invalidation_reason: "superseded", successor_id: created });
+  expect(entryById(amended.db, amended.tail)).toMatchObject({ invalidation_reason: "superseded", successor_id: created });
 
   const rejected = movedCandidateProposal();
   rejectMemoryProposal(rejected.db, rejected.proposal, rejected.question_id, "webui", at, "Too broad.");
-  expect(entryById(rejected.db, rejected.head)).toMatchObject({ invalidation_reason: "rejected", successor_id: null });
+  expect(entryById(rejected.db, rejected.tail)).toMatchObject({ invalidation_reason: "rejected", successor_id: null });
 });
 
-it("移した approved を pin する invalidate と既にある後継の consolidate の approve は、先頭の版で照合して先頭を無効化・畳む(ADR 0162 決定6)", () => {
+it("移した approved を pin する invalidate と既にある後継の consolidate の approve は、末尾の版で照合して末尾を無効化・畳む(ADR 0162 決定6)", () => {
   const { db, task } = board();
   const approved = (title: string) => {
     const id = candidate(db, title);
@@ -1589,13 +1590,13 @@ it("移した approved を pin する invalidate と既にある後継の consol
   const [target, successor, replaced] = [approved("Stale rule"), approved("Kept rule"), approved("Covered rule")];
   const invalidate = proposeMemoryChange(db, task.id, { op: "invalidate", target_id: target, reason: "environment", rationale: "r" }, "auditor", at).question_id;
   const consolidate = proposeMemoryChange(db, task.id, { op: "consolidate", successor_id: successor, replaces: [replaced], rationale: "r" }, "auditor", at).question_id;
-  const [targetHead, successorHead, replacedHead] = [target, successor, replaced].map(move) as [number, number, number];
+  const [targetTail, successorTail, replacedTail] = [target, successor, replaced].map(move) as [number, number, number];
 
   for (const id of [invalidate, consolidate]) approveMemoryProposal(db, getTask(db, id)!.question_proposal as MemoryProposal, id, "webui", at);
 
-  expect(entryById(db, targetHead)).toMatchObject({ invalidation_reason: "environment", successor_id: null });
-  expect(entryById(db, replacedHead)).toMatchObject({ invalidation_reason: "superseded", successor_id: successorHead });
-  expect(approvedMemoryEntries(db).map((e) => e.id)).toEqual([successorHead]);
+  expect(entryById(db, targetTail)).toMatchObject({ invalidation_reason: "environment", successor_id: null });
+  expect(entryById(db, replacedTail)).toMatchObject({ invalidation_reason: "superseded", successor_id: successorTail });
+  expect(approvedMemoryEntries(db).map((e) => e.id)).toEqual([successorTail]);
 });
 
 it("移した後の複製が superseded になると、移す前の id を pin する open な提案 question は観測で決着する(ADR 0162 決定6)", () => {
@@ -1603,31 +1604,31 @@ it("移した後の複製が superseded になると、移す前の id を pin �
   const write = (supersedes?: number[]) => recordBehavior(db, { ...humanEntryInput(db, humanKnowledge), addressee: null, supersedes }, "webui", at).entry_id;
   const old = write();
   const { question_id } = proposeMemoryChange(db, task.id, { op: "invalidate", target_id: old, reason: "requirement_change", rationale: "r" }, "auditor", at);
-  const head = moveMemory(db, { entry_id: old, scope: null, path: "moved", mover: human }, "webui", at).entry_id;
+  const tail = moveMemory(db, { entry_id: old, scope: null, path: "moved", mover: human }, "webui", at).entry_id;
 
-  write([head]);
+  write([tail]);
 
   expect(getTask(db, question_id)).toMatchObject({ status: "done", question_answer: null });
   expect(listEvents(db, question_id).map((e) => e.kind)).toEqual(["task_registered", "memory_proposal_stale"]);
 });
 
 it("移す前の id を pin する open な提案 question があれば、移した後の複製への提案は domain error(ADR 0162 決定6)", () => {
-  const { db, task, head } = movedCandidateProposal();
+  const { db, task, tail } = movedCandidateProposal();
 
-  expect(() => proposeMemoryChange(db, task.id, { op: "approve", candidate_id: head, rationale: "r" }, "auditor", at)).toThrow(`memory entry ${head} is already in an open proposal question`);
+  expect(() => proposeMemoryChange(db, task.id, { op: "approve", candidate_id: tail, rationale: "r" }, "auditor", at)).toThrow(`memory entry ${tail} is already in an open proposal question`);
 });
 
-it("移動の注釈は移された pin ごとに旧 id と先頭の id・path・scope を持ち、移されていない pin と memory 以外の提案は載せない(ADR 0162 決定6)", () => {
-  const { db, drafted, head, proposal } = movedCandidateProposal();
-  expect(movedPins(db, proposal)).toEqual([{ id: drafted, head_id: head, path: "habits/again", scope: null }]);
+it("移動の注釈は移された pin ごとに旧 id と末尾の id・path・scope を持ち、移されていない pin と memory 以外の提案は載せない(ADR 0162 決定6)", () => {
+  const { db, drafted, tail, proposal } = movedCandidateProposal();
+  expect(movedPins(db, proposal)).toEqual([{ id: drafted, tail_id: tail, path: "habits/again", scope: null }]);
 
   const [kept, moved, stays] = ["Kept rule", "Covered rule", "Other rule"].map((title) => candidate(db, title)) as [number, number, number];
   const pins = [kept, moved, stays].map((id) => ({ id, version: approve(db, id) }));
   const consolidate: MemoryProposal = { kind: "memory", op: "consolidate", successor: { id: kept, version: pins[0]!.version }, replaces: pins.slice(1) };
-  const [keptHead, movedHead] = [kept, moved].map((entry_id) => moveMemory(db, { entry_id, scope: "tidepool", path: "habits/moved", mover: human }, "webui", at).entry_id);
+  const [keptTail, movedTail] = [kept, moved].map((entry_id) => moveMemory(db, { entry_id, scope: "tidepool", path: "habits/moved", mover: human }, "webui", at).entry_id);
   expect(movedPins(db, consolidate)).toEqual([
-    { id: kept, head_id: keptHead, path: "habits/moved", scope: "tidepool" },
-    { id: moved, head_id: movedHead, path: "habits/moved", scope: "tidepool" },
+    { id: kept, tail_id: keptTail, path: "habits/moved", scope: "tidepool" },
+    { id: moved, tail_id: movedTail, path: "habits/moved", scope: "tidepool" },
   ]);
 
   expect(movedPins(db, null)).toEqual([]);
