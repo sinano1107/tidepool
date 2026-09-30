@@ -1052,8 +1052,8 @@ function registerMemoryMetaReviewVerbs(server: McpServer, deps: McpDeps, run: Me
         "replaces you now judge right. With text, based_on_decision is the event id log_decision returned for your reasoning; the new " +
         "candidate keeps the source the replaced entries share, and takes based_on_decision as its source when they share none. With " +
         "text.kind exemplar it is an Exemplar: give annotations instead of text.text; the replaced entries must share a source that " +
-        "renders a case; an Exemplar candidate_id likewise needs replaces that share its source. op invalidate asks to drop the approved Behavior or Exemplar target_id, with no successor, for reason " +
-        "capability / environment / requirement_change. rationale is why you propose it (the question's context). " +
+        "renders a case; an Exemplar candidate_id likewise needs replaces that share its source. op invalidate asks to drop the " +
+        "approved Behavior or Exemplar target_id, with no successor, for reason capability / environment / requirement_change. rationale is why you propose it (the question's context). " +
         PROMOTION_RULE +
         " " +
         "The board applies the answer itself, so you can complete this task without waiting for it. Returns the question id. " +
