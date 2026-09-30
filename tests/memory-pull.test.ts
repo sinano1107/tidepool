@@ -123,19 +123,14 @@ it("CJK の連なりの内側は bigram の隣接を保つので、query 東京�
   expect(searchMemory(db, reader, { query: "東京都" }, at).results).toEqual([]);
 });
 
-it.each(["設定を直す。", "「設定を直す」", "設定を直す〜"])(
-  "句読点・記号は CJK の連なりを切って bigram に入らないので、query %j は text「設定を直す」の leaf に当たる(#1180)",
-  (query) => {
-    const { db, reader, record } = board();
-    record({ title: "leaf", text: "設定を直す" });
-    expect(searchMemory(db, reader, { query }, at).results.map((r) => r.title)).toEqual(["leaf"]);
-  },
-);
-
 it.each([
+  ["設定を直す", "設定を直す。"],
+  ["設定を直す", "「設定を直す」"],
+  ["設定を直す", "設定を直す〜"],
   ["設定を直すとき", "設定を直す。"],
   ["サーバー", "サーバー。"],
-])("句点は query の phrase に余分な1文字語を足さないので、text %j の leaf は query %j で当たる(#1180)", (text, query) => {
+  ["時々の人々", "人々"],
+])("CJK の連なりは文字・数字だけで作り、句読点・記号は連なりを切って bigram に入らないので、text %j の leaf は query %j で当たる(#1180)", (text, query) => {
   const { db, reader, record } = board();
   record({ title: "leaf", text });
   expect(searchMemory(db, reader, { query }, at).results.map((r) => r.title)).toEqual(["leaf"]);
@@ -155,12 +150,6 @@ it.each([
   const { db, reader, record } = board();
   record({ title: "leaf", text });
   expect(searchMemory(db, reader, { query }, at).results).toEqual([]);
-});
-
-it("踊り字 々 は句読点と違って連なりに残るので、query 人々 は text「時々の人々」の leaf に当たる(#1180)", () => {
-  const { db, reader, record } = board();
-  record({ title: "leaf", text: "時々の人々" });
-  expect(searchMemory(db, reader, { query: "人々" }, at).results.map((r) => r.title)).toEqual(["leaf"]);
 });
 
 it.each([

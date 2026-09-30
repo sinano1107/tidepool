@@ -1173,13 +1173,13 @@ export function listMemoryEntries(
  *  前処理後もそのまま残って unicode61 の区切りになる。捕獲グループは ftsQuery の split が連なりを結果に残すためにある
  *  (外すと CJK の語が query から消える)。 */
 const CJK_RUN = /((?:(?=[\p{L}\p{N}\p{Mn}])[\p{scx=Han}\p{scx=Hiragana}\p{scx=Katakana}\p{scx=Hangul}])+)/gu;
-/** query の語の切れ目 = 空白と、CJK_RUN から外した CJK の句読点・記号。`注入（src/memory.ts）、drift。` の `drift` も
- *  識別子と別の語になる(#1180 の前は句読点も連なりとして割れていた)。 */
+/** query の語の切れ目 = 空白と、CJK_RUN から外した CJK の句読点・記号(`注入（src/memory.ts）、drift。` の `drift` も
+ *  識別子と別の語になる)。 */
 const QUERY_BREAK = /(?:\s|(?![\p{L}\p{N}\p{Mn}])[\p{scx=Han}\p{scx=Hiragana}\p{scx=Katakana}\p{scx=Hangul}])+/u;
 
 /** 索引と query の共通の前処理(spec #586 B / #606 / #608 / #610 / #1180)。まず CJK の連なりを重なりつきの2文字語に割り(LWC 式)
  *  空白で囲む。unicode61 は CJK を語に切らない。1文字の連なりはそのまま。長音符 ー は Script=Common なので
- *  Script_Extensions で拾う(拾わないと「サーバ」が割れて当たらない)。ー と踊り字 々 ゝ は Lm、〇 は Nl なので連なりに残る。
+ *  Script_Extensions で拾う(拾わないと「サーバ」が割れて当たらない)。
  *  句読点は連なりの外なので `設定を直す。` の `す。` のような余分な1文字語は出ない。その後で . - _ の連なりを、連なりの外側の隣が
  *  unicode61 の token にならない文字(空白・文字列の端・`)` `"` などの記号)のとき連なりごと落とす(tokenchars なので
  *  文末の `narrow.)` が `narrow` に当たらない。語中は `foo__bar` のような連なりも残す。unicode61 は結合文字 Mn を
