@@ -1275,7 +1275,7 @@ function everyWorkspaceUnderBuild() {
   const ids = [define(null), fact(null), define("tidepool"), fact("tidepool"), fact("charts", "build/ci")];
   const move = (scope: string | null, to_scope: string | null, to_path = "toolchain", merge?: boolean) => () =>
     moveMemoryBranch(db, { scope, path: "build", to_scope, to_path, merge, mover: human }, "webui", at);
-  return { db, task, fact, define, ids, move };
+  return { db, task, define, ids, move };
 }
 
 it("盤面全体 → 盤面全体の枝ごとの移動は、全 workspace の同じ path 配下(workspace 自身の定義も)をそれぞれの scope のまま to_path + 残りへ写し、workspace の worker の INDEX に旧 path が残らない(ADR 0177 決定5)", () => {
