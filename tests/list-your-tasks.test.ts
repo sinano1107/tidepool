@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { openDb } from "../src/db.js";
-import { completeTask, listYourTasks, registerTask } from "../src/tasks.js";
+import { completeTask, listYourTasks, presentTask, registerTask } from "../src/tasks.js";
 
 describe("listYourTasks は human 宛ての未決着タスクを返す(issue #13)", () => {
   it("human 宛ての todo は含まれ、他 assignee 宛て・決着済みの human タスクは含まれない", () => {
@@ -107,6 +107,60 @@ describe("listYourTasks は human 宛ての未決着タスクを返す(issue #13
     expect(blocking.get(lone.id)).toBeNull();
     expect(blocking.get(awaited.id)).toBe(parent.id);
     expect(blocking.get(attached.id)).toBeNull();
+
+    db.close();
+  });
+
+  it("人間担当の親に待たれる子が付くと、行は盤面と同じ解決で blocked に見える(issue #1221)", () => {
+    const db = openDb(":memory:");
+    const parent = registerTask(
+      db,
+      { type: "work", title: "rebuild the tide gauge", purpose: "p", completion_criteria: "c", assignee: "human" },
+      new Date(0),
+    );
+    registerTask(
+      db,
+      {
+        type: "work",
+        title: "order the replacement sensor",
+        purpose: "p",
+        completion_criteria: "c",
+        assignee: "human",
+        parent_id: parent.id,
+        based_on_decision: 1,
+      },
+      new Date(1),
+    );
+
+    const row = listYourTasks(db).find((t) => t.id === parent.id)!;
+    const board = presentTask(db, parent);
+    expect(row).toMatchObject({ status: "blocked", assignee: "human", raw_assignee: "human" });
+    expect({ status: row.status, assignee: row.assignee, raw_assignee: row.raw_assignee }).toEqual({
+      status: board.status,
+      assignee: board.assignee,
+      raw_assignee: board.raw_assignee,
+    });
+
+    db.close();
+  });
+
+  it("未回答の question は解決後の assignee が human でも載らない —— 載るかは保存値で決まる(issue #1220)", () => {
+    const db = openDb(":memory:");
+    const question = registerTask(
+      db,
+      {
+        type: "question",
+        title: "which tide gauge?",
+        purpose: "choose the data source",
+        completion_criteria: "one source is selected",
+        question: [{ title: "source", options: ["NOAA", "JMA"], recommendation: "JMA" }],
+      },
+      new Date(0),
+      "planner",
+    );
+
+    expect(presentTask(db, question).assignee).toBe("human");
+    expect(listYourTasks(db).map((t) => t.id)).not.toContain(question.id);
 
     db.close();
   });

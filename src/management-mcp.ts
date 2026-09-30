@@ -984,18 +984,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
       try {
         return toolResult(
           await submitAnswer(
-            {
-              db: deps.db,
-              pollNow: deps.pollNow,
-              workspace: deps.workspace,
-              resolveWorkspace: deps.resolveWorkspace,
-              github: deps.github,
-              landing: deps.landing,
-              reclaim: deps.reclaim,
-              quarantineChecks: deps.quarantineChecks,
-              agentAdmin: deps.agentAdmin,
-              agentRegistered: deps.agentRegistered,
-            },
+            deps,
             task,
             answers,
             comment,

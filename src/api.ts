@@ -1393,6 +1393,8 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
           quarantineChecks,
           agentAdmin,
           agentRegistered,
+          defaultAgentName,
+          auditorName,
         },
         task,
         parsed.data.answers,
@@ -1402,7 +1404,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
         parsed.data.triage,
         parsed.data.amendment,
       );
-      res.json(presentTask(db, question, defaultAgentName, auditorName));
+      res.json(question);
     } catch (err) {
       if (err instanceof DomainError) {
         res.status(409).json({ error: err.message });

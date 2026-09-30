@@ -437,6 +437,8 @@ export interface SubmitAnswerDeps {
   agentAdmin?: Partial<Pick<AgentAdmin, "list" | "changeTier">>;
   /** memory の提案の approve が candidate の宛先を照合する(ADR 0173 決定2)。Absent → registry の無い盤面。 */
   agentRegistered?: (name: string) => boolean;
+  defaultAgentName?: string;
+  auditorName?: string;
 }
 
 /** 門の検査の材料。合成 root が一度だけ `quarantineChecks` に束ね、回答の口
@@ -825,7 +827,7 @@ export async function submitAnswer(
   origin: EventOrigin = "webui",
   openTriage = false,
   amendment?: unknown,
-): Promise<Task> {
+): Promise<BoardTask> {
   // Every special-case side effect below must come after this validation.
   // Otherwise a malformed answer can retry promotion, inspect/merge a PR, or
   // verify quarantine before answerQuestion eventually rejects the payload.
@@ -895,7 +897,7 @@ export async function submitAnswer(
   // 置換するだけの機構なので、workspace が引けない・網が届かない場合は今日どおりの
   // 経路に落ちる(正しさは失われない: merge 実行は依然失敗し question は開いたまま)。
   if (await deps.landing.observeMergedPullRequest(task)) {
-    return getTask(deps.db, task.id)!;
+    return presentTask(deps.db, task, deps.defaultAgentName, deps.auditorName);
   }
   const wantsMerge = mergePr !== null && answers[0] === MERGE_QUESTION_OPTIONS[0];
   if (wantsMerge) {
@@ -1005,5 +1007,5 @@ export async function submitAnswer(
   // An unblocked parent or a released quarantine can make the queue
   // head pickable immediately. During triage, staging keeps both flags false.
   if (parentUnblocked || pickupResumed) deps.pollNow();
-  return question;
+  return presentTask(deps.db, task, deps.defaultAgentName, deps.auditorName);
 }
