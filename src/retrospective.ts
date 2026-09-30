@@ -235,8 +235,7 @@ const COVERING_CHILD = `FROM events e JOIN tasks t ON t.id = e.task_id
 
 /** 異議群を覆う RCA 子(self / auditor、ADR 0171 決定2)。 */
 const rcaChildren = (db: Db, objectedId: string, bundle: number) => {
-  const rows = db.prepare(`SELECT e.task_id ${COVERING_CHILD}`).all({ objectedId, type: "review", bundle }) as { task_id: string }[];
-  const covering = new Set(rows.map((r) => r.task_id));
+  const covering = new Set(db.prepare(`SELECT e.task_id ${COVERING_CHILD}`).pluck().all({ objectedId, type: "review", bundle }));
   return listChildren(db, objectedId).filter((c) => covering.has(c.id));
 };
 
@@ -248,7 +247,7 @@ type SecondRoundSource = Pick<Attribution, "id" | "entry_id" | "objection_event_
 /** 異議群を束ねた commit が立てた修理子の `task_registered`(ADR 0171 決定2)。初回の帰責 event が書かれるはずだった位置 ——
  *  同じ transaction の中にある。束ねた異議群には必ず修理子がある(task は消えず、`bundleObjections` が飛ばすのは task の無い異議だけ)。 */
 const repairRegistered = (db: Db, objectedId: string, bundle: number) =>
-  (db.prepare(`SELECT MIN(e.id) AS id ${COVERING_CHILD}`).get({ objectedId, type: "work", bundle }) as { id: number }).id;
+  db.prepare(`SELECT MIN(e.id) ${COVERING_CHILD}`).pluck().get({ objectedId, type: "work", bundle }) as number;
 
 /** 異議群ごとの帰責の状態(ADR 0168 決定3 / ADR 0170 決定1)。第2回を待つ(`awaiting`)のは、帰責が初回の `uncertain` の
  *  異議群と未帰責の異議群 —— 後者の出所はその異議群で、当時の decision log は修理子の登録で切る。それ以外は確定
