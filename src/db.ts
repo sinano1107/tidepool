@@ -7,7 +7,7 @@ export type Db = Database.Database;
  *  (spec #586 B、実測は #357 / #606、順序は #610)。
  *  どちらかを変えたら、boot の ensureMemoryIndex が索引を作り直す。索引の列を変えたときも前処理の版を上げる。
  *  categories の Mn は前処理の正規表現と結合文字の扱いを揃えるため(#1200)。M* にしないのは、正規表現が扱わない Mc / Me
- *  まで語に入って逆向きに食い違うから。 */
+ *  まで語に入れて逆向きの食い違いを広げるから。 */
 export const MEMORY_FTS_TOKENIZER = "unicode61 categories 'L* N* Co Mn' tokenchars '_-.'";
 export const MEMORY_PREPROCESS_VERSION = "cjk-bigram-8";
 // Shared between the fresh-board CREATE and the memory index rebuild (memory.ts).

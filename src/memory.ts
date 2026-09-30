@@ -1279,9 +1279,9 @@ const QUERY_BREAK = new RegExp(String.raw`(?:\s|(?!${RUN_CATEGORY})${CJK_SCRIPT}
  *  連なりを、連なりの外側の隣が unicode61 の token にならない文字(空白・文字列の端・`)` `"` などの記号)のとき連なりごと
  *  落とす(tokenchars なので文末の `narrow.)` が `narrow` に当たらない。語中は `foo__bar` のような連なりも残す)。
  *  下の正規表現は結合文字 Mn を token になる隣として扱い、tokenizer も categories で Mn を直前の字と同じ語に入れる(NFC の
- *  後も残る `a` + U+030D + `-b` は1語、#1200)ので、両者は同じ集合を見る。残る差は、V8 の Unicode 版では Mn だが同梱
- *  SQLite の版では語を切る4字(U+1A1B, U+1BAC, U+1BAD, U+A9BD)だけ。bigram が先なので、CJK に接した `東京.csv` の `.` も
- *  隣が空白になって落ちる。 */
+ *  後も残る `a` + U+030D + `-b` は1語、#1200)ので、Mn について両者は同じ集合を見る。Mn で残る差は、V8 の Unicode 版では
+ *  Mn だが同梱 SQLite の版では語を切る4字(U+1A1B, U+1BAC, U+1BAD, U+A9BD、Node 22 / SQLite 3.53.2 で実測)だけ。
+ *  bigram が先なので、CJK に接した `東京.csv` の `.` も隣が空白になって落ちる。 */
 function ftsText(value: string): string {
   return value
     .normalize("NFC")
