@@ -426,7 +426,7 @@ function readEventId(content: unknown): number | null {
 
 /** 投影器の版(ADR 0083 追記 2 決定7)。読み方を変えたらここを上げる — 派生表は
  *  記録から何度でも作り直せるので、古い版の Episode を消す必要はない。 */
-export const EXTRACTOR_VERSION = "3";
+export const EXTRACTOR_VERSION = "4";
 
 /** 1つの worker session を投影して派生表に書く。同じ session を同じ投影器の版で
  *  二度書くことはない(`UNIQUE (worker_spawned_event_id, extractor_version)`)—

@@ -25,7 +25,7 @@ import {
   rejectMemoryProposal,
   restoreMemoryEntry,
 } from "../src/memory.js";
-import { entriesReadBefore, entriesSeenBefore, projectEpisode } from "../src/precedent.js";
+import { EXTRACTOR_VERSION, entriesReadBefore, entriesSeenBefore, projectEpisode } from "../src/precedent.js";
 import { answerQuestion, DomainError, getTask, logDecision, type MemoryProposal, registerTask } from "../src/tasks.js";
 import { bundledObjection, WORKER_SPAWNED } from "./harness.js";
 
@@ -357,7 +357,7 @@ it("meta-review の枝の一覧は memory_pulled を残して返した id = 行�
 /** setup のみ: 1 marker = 1 episode の直挿しで異議つき decision を安く並べる(#356 の投影は使わない)。異議の event id と decision を返す。 */
 function objectedDecision({ db, task }: ReturnType<typeof board>, i: number) {
   const decision = logDecision(db, task, `decision ${i}`, "deckhand", at);
-  db.prepare("INSERT INTO episodes (id, worker_spawned_event_id, extractor_version, task_id, agent, lines) VALUES (?, ?, '3', ?, 'deckhand', '{}')").run(i, i, task.id);
+  db.prepare("INSERT INTO episodes (id, worker_spawned_event_id, extractor_version, task_id, agent, lines) VALUES (?, ?, ?, ?, 'deckhand', '{}')").run(i, i, EXTRACTOR_VERSION, task.id);
   db.prepare("INSERT INTO episode_markers (episode_id, seq, kind, position, event_id) VALUES (?, 0, 'decision', 0, ?)").run(i, decision);
   const objection = bundledObjection(db, task.id, decision, at, `objection ${i}`);
   return { decision, objection };
