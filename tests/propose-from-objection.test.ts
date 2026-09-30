@@ -46,7 +46,7 @@ it("学習に向かない cause・異議済みで未帰責のエントリ・宛�
   // memory の帰責は読んだ記憶を名指す(門は cause だけで断るので、entries の中身は見ない)
   const memory = logDecision(db, mixed, "decided as memory", "deckhand", at);
   attribute(db, mixed.id, memory, "memory", [1]);
-  const unattributed = appendEvent(db, { taskId: mixed.id, workerId: "deckhand", origin: "worker", payload: { kind: "task_completed", handoff_present: true, result: null }, at });
+  const unobjected = appendEvent(db, { taskId: mixed.id, workerId: "deckhand", origin: "worker", payload: { kind: "task_completed", handoff_present: true, result: null }, at });
   // 異議されたが初回の帰責が無い(撃てなかった / 失敗した)エントリは uncertain と同じに読む(ADR 0168 決定3)
   const objectedUnattributed = logDecision(db, mixed, "decided before the Board call failed", "deckhand", at);
   bundledObjection(db, mixed.id, objectedUnattributed, at, "keep the fixtures");
@@ -78,7 +78,7 @@ it("学習に向かない cause・異議済みで未帰責のエントリ・宛�
     [self, { entry_id: missingInformation, as: "knowledge", based_on_decision: notDecision }, `event ${notDecision} is not a logged decision`],
     [self, { entry_id: missingInformation, as: "knowledge", based_on_decision: capability }, `event ${capability} is not a decision of this task`],
     [self, { entry_id: capability, based_on_decision: decision }, decisionRule],
-    [self, { entry_id: unattributed }, `entry ${unattributed} carries no attributed objection`],
+    [self, { entry_id: unobjected }, `entry ${unobjected} carries no objection`],
     [self, { entry_id: otherEntry }, `entry ${otherEntry} is not a decision-log entry of your parent task`],
     [self, { entry_id: 999_999 }, "entry 999999 is not a decision-log entry of your parent task"],
     [task(db, "work", "repair: mixed", HUMAN_WORKER_ID, mixed.id).id, { entry_id: capability }, "propose_from_objection is only for a review of an objected task"],
