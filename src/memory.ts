@@ -213,7 +213,8 @@ export function recordKnowledge(db: Db, input: EntryInput & { supersedes?: numbe
 
 /** 枝の定義(spec #600 A): その枝の下に何を保存するかの1行。承認不要で書いた瞬間に approved、
  *  出所は持たない(自身の作成 event)。同じ枝・同じスコープの approved は1つだけ —— 改訂は
- *  `supersedes` に旧定義(path は問わない、ADR 0161 決定2)を含める。meta-review は defineMemoryByMetaReview の門を通して呼ぶ。 */
+ *  `supersedes` に旧定義を含める。別 path の定義を置き換えられるのは、書く先の同じ scope・path に生きた定義があるとき(枝の統合)
+ *  だけで、枝の改名は枝ごとの移動が持つ(ADR 0176 決定6)。meta-review は defineMemoryByMetaReview の門を通して呼ぶ。 */
 export function defineMemoryBranch(
   db: Db,
   input: Omit<EntryInput, "title"> & { supersedes?: number[] },
@@ -222,15 +223,23 @@ export function defineMemoryBranch(
 ): { entry_id: number; event_id: number } {
   if (/[\r\n]/.test(input.text)) throw new DomainError("a definition must be one line");
   const { supersedes, ...fields } = input;
-  return writeSuperseding(db, supersedes, fields.author, origin, at, () => {
-    const defined = liveDefinitions(db, fields.scope, fields.path).find((id) => !supersedes?.includes(id));
+  return writeSuperseding(db, supersedes, fields.author, origin, at, (replaced) => {
+    const live = liveDefinitions(db, fields.scope, fields.path);
+    const defined = live.find((id) => !supersedes?.includes(id));
     if (defined) throw new DomainError(`branch ${fields.path} is already defined in this scope by entry ${defined}; revise it with supersedes`);
+    const elsewhere = replaced.find((entry) => entry.path !== fields.path);
+    if (elsewhere && live.length === 0) {
+      throw new DomainError(
+        `branch ${fields.path} has no definition in this scope to merge definition ${elsewhere.id} at ${elsewhere.path} into: rename a branch with move_memory_branch, then revise its definition in place`,
+      );
+    }
     return createEntry(db, { ...fields, title: fields.text, kind: "definition", state: "approved", original: fields.original ?? null, addressee: null }, origin, at);
   });
 }
 
 /** meta-review の `define_memory`(ADR 0161 追記7): defineMemoryBranch に覆いの門を掛ける。Definition は宛先を持たないので
- *  門は scope だけで、path は問わない。人間の面は defineMemoryBranch を直接呼ぶ。 */
+ *  門は scope だけを見る —— 別 path の定義を置き換える線は defineMemoryBranch が両方の面に持つ(ADR 0176 決定6)。人間の面は
+ *  defineMemoryBranch を直接呼ぶ。 */
 export function defineMemoryByMetaReview(db: Db, input: Parameters<typeof defineMemoryBranch>[1], origin: EventOrigin, at: Date): { entry_id: number; event_id: number } {
   requireCovers({ scope: input.scope, addressee: null }, (input.supersedes ?? []).map((id) => requireLive(db, id, undefined, "approved")));
   return defineMemoryBranch(db, input, origin, at);
@@ -417,6 +426,7 @@ export function restoreMemoryEntry(
 }
 
 /** エントリ1件の移動(ADR 0162 決定4): 4種別の未無効化の approved か candidate を、scope(null = 盤面全体)と path へ。
+ *  Definition で変えられるのは scope だけ —— path を変えると配下の leaf が旧 path に残るので枝ごとの移動へ(ADR 0176 決定7)。
  *  人間の面と meta-review の `move_memory`(moveMemoryByMetaReview)が共有する。返り値は複製。 */
 export function moveMemory(
   db: Db,
@@ -424,7 +434,11 @@ export function moveMemory(
   origin: EventOrigin,
   at: Date,
 ): { entry_id: number; event_id: number } {
-  const { successor_id } = moveEntries(db, [{ old: requireEntry(db, input.entry_id), scope: input.scope, path: input.path }], input.mover, origin, at)[0]!;
+  const old = requireEntry(db, input.entry_id);
+  if (old.kind === "definition" && old.path !== input.path) {
+    throw new DomainError(`memory entry ${old.id} is the definition of branch ${old.path}: move the whole branch with move_memory_branch to change its path`);
+  }
+  const { successor_id } = moveEntries(db, [{ old, scope: input.scope, path: input.path }], input.mover, origin, at)[0]!;
   return { entry_id: successor_id, event_id: successor_id };
 }
 
@@ -437,18 +451,61 @@ export function moveMemoryBranch(
   at: Date,
 ): { moved: Array<{ entry_id: number; successor_id: number }> } {
   const { scope, path, to_scope, to_path, mover } = input;
-  const rows = (db.prepare("SELECT * FROM memory_entries WHERE invalidation_reason IS NULL AND scope IS ? ORDER BY id").all(scope) as EntryRow[]).filter(
-    (row) => row.path === path || row.path.startsWith(`${path}/`),
-  );
+  const rows = branchRows(db, scope, path);
   if (rows.length === 0) throw new DomainError(`no live memory entry at ${path} or under it in this scope`);
   return { moved: moveEntries(db, rows.map((old) => ({ old, scope: to_scope, path: to_path + old.path.slice(path.length) })), mover, origin, at) };
 }
 
-/** meta-review の `move_memory`(ADR 0122 決定1): Knowledge だけ(ほかの種別は #1039)。書き手は継ぎ、移した meta-review は
- *  activity に載るので自身の移動は次の周期の材料にならない(ADR 0151)。 */
+/** 枝ごとの移動が移す行: scope(完全一致)で path が P か P/… の未無効化エントリ。 */
+function branchRows(db: Db, scope: string | null, path: string): EntryRow[] {
+  return (db.prepare("SELECT * FROM memory_entries WHERE invalidation_reason IS NULL AND scope IS ? ORDER BY id").all(scope) as EntryRow[]).filter(
+    (row) => row.path === path || row.path.startsWith(`${path}/`),
+  );
+}
+
+/** meta-review の `move_memory`(ADR 0176 決定1〜4): 4種別の approved / candidate を同じ scope の中で直接移せ、scope を跨ぐのは
+ *  盤面全体へ広げる向きだけ(requireWidening)。書き手は継ぎ、移した meta-review は activity に載るので自身の移動は次の周期の
+ *  材料にならない(ADR 0151)。人間の面は moveMemory を直接呼ぶ。 */
 export function moveMemoryByMetaReview(db: Db, input: Parameters<typeof moveMemory>[1], origin: EventOrigin, at: Date): { entry_id: number; event_id: number } {
-  requireKnowledge(db, input.entry_id);
-  return moveMemory(db, input, origin, at);
+  return db.transaction(() => {
+    const old = requireEntry(db, input.entry_id);
+    requireWidening(db, [old], old.scope, input.scope);
+    return moveMemory(db, input, origin, at);
+  })();
+}
+
+/** meta-review の `move_memory_branch`(ADR 0176 決定1・5): 移す行すべてに scope の門を掛けてから、人間の面と同じ本体で移す。
+ *  1件でも門に掛かれば何も書かない —— 枝を自分で割らない。 */
+export function moveMemoryBranchByMetaReview(
+  db: Db,
+  input: Parameters<typeof moveMemoryBranch>[1],
+  origin: EventOrigin,
+  at: Date,
+): ReturnType<typeof moveMemoryBranch> {
+  return db.transaction(() => {
+    requireWidening(db, branchRows(db, input.scope, input.path), input.scope, input.to_scope);
+    return moveMemoryBranch(db, input, origin, at);
+  })();
+}
+
+/** meta-review の scope の門(ADR 0176 決定2〜5): 行き先の scope は移動元と同じか盤面全体だけ。scope が変わるなら、approved の
+ *  Behavior / Exemplar と open な提案 question が名指すエントリ(既存の後継も数える)を1件でも含めば全体を拒み、すべて名指す。 */
+function requireWidening(db: Db, rows: EntryRow[], from: string | null, to: string | null): void {
+  if (to === from) return;
+  if (to !== null) {
+    throw new DomainError(
+      `a meta-review moves entries in scope ${from ?? "whole board"} only within it or to the whole board: narrowing to a workspace or moving between workspaces is the human's — say so with log_decision and leave the entries in place`,
+    );
+  }
+  const blocked = rows.flatMap((row) => {
+    const questions = openProposalsPinning(db, row.id, true);
+    if (questions.length > 0) return [`memory entry ${row.id} (named by open proposal question ${questions.join(", ")})`];
+    if ((row.kind === "behavior" || row.kind === "exemplar") && row.state === "approved") return [`memory entry ${row.id} (an approved ${row.kind})`];
+    return [];
+  });
+  if (blocked.length > 0) {
+    throw new DomainError(`a meta-review cannot change the scope of ${blocked.join(", ")}: say so with log_decision and leave the entries in place`);
+  }
 }
 
 /** LLM が合成した本文の出所 = 書き手が log_decision で書いた推論(meta-review の畳みと統合、RCA の Knowledge —— ADR 0115 追記)。
@@ -458,12 +515,6 @@ export function requireDecision(db: Db, eventId: number, taskId: string): number
   if (event?.kind !== "decision_logged") throw new DomainError(`event ${eventId} is not a logged decision`);
   if (event.task_id !== taskId) throw new DomainError(`event ${eventId} is not a decision of this task`);
   return eventId;
-}
-
-function requireKnowledge(db: Db, id: number): EntryRow {
-  const row = requireEntry(db, id);
-  if (row.kind !== "knowledge" || row.invalidation_reason !== null) throw new DomainError(`memory entry ${id} is not an approved, non-invalidated knowledge entry`);
-  return row;
 }
 
 /** 人間の面(settings の HTTP / 管理MCP)の書き込み欄(spec #586 F)。workspace は null = 盤面全体、

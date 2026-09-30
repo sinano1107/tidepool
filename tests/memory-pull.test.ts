@@ -11,6 +11,7 @@ import {
   humanEntryInput,
   invalidateMemoryEntry,
   moveMemory,
+  moveMemoryBranch,
   previewCase,
   readMemory,
   recordBehavior,
@@ -608,7 +609,7 @@ it("盤面全体の Definition が、読み手の workspace に Definition の�
   const { db, reader, define } = board();
   const old = define("staging", "Board-wide build conventions.", null);
   define("build", "How this workspace is built.");
-  moveMemory(db, { entry_id: old, scope: null, path: "build", mover: human }, "webui", at);
+  moveMemoryBranch(db, { scope: null, path: "staging", to_scope: null, to_path: "build", mover: human }, "webui", at);
 
   expect(readMemory(db, reader, { ids: [old] }, at)).toMatchObject({ entries: [], dropped: [] });
 });
@@ -626,7 +627,7 @@ it("影の path へ移された後に無効化された盤面全体の Definitio
   const { db, reader, define } = board();
   const old = define("staging", "Board-wide build conventions.", null);
   define("build", "How this workspace is built.");
-  const copy = moveMemory(db, { entry_id: old, scope: null, path: "build", mover: human }, "webui", at).entry_id;
+  const copy = moveMemoryBranch(db, { scope: null, path: "staging", to_scope: null, to_path: "build", mover: human }, "webui", at).moved[0]!.successor_id;
   invalidateMemoryEntry(db, { entry_id: copy, reason: "environment" }, "human", "webui", at);
 
   expect(readMemory(db, reader, { ids: [old] }, at)).toMatchObject({ entries: [], dropped: [] });
@@ -635,7 +636,7 @@ it("影の path へ移された後に無効化された盤面全体の Definitio
 it("影の path から影の外へ移された盤面全体の Definition の旧 id は、移動先を requested_id つきで返す", () => {
   const { db, reader, define } = board();
   const old = define("build", "Board-wide build conventions.", null);
-  const copy = moveMemory(db, { entry_id: old, scope: null, path: "staging", mover: human }, "webui", at).entry_id;
+  const copy = moveMemoryBranch(db, { scope: null, path: "build", to_scope: null, to_path: "staging", mover: human }, "webui", at).moved[0]!.successor_id;
   define("build", "How this workspace is built.");
 
   expect(readMemory(db, reader, { ids: [old] }, at)).toMatchObject({ entries: [{ id: copy, requested_id: old }], dropped: [] });
@@ -645,7 +646,8 @@ it("置き換えられた Definition の後継が影の盤面全体の Definitio
   const { db, reader, define } = board();
   const old = define("deploy", "Board-wide deploy conventions.", null);
   define("build", "How this workspace is built.");
-  defineMemoryBranch(db, { scope: null, path: "build", text: "Board-wide build conventions.", supersedes: [old], author: human }, "webui", at);
+  const successor = define("build", "Board-wide build conventions.", null);
+  invalidateMemoryEntry(db, { entry_id: old, reason: "superseded", successor_id: successor }, "human", "webui", at);
 
   expect(readMemory(db, reader, { ids: [old] }, at)).toMatchObject({ entries: [], dropped: [{ id: old, reason: "superseded", successor: null }] });
 });

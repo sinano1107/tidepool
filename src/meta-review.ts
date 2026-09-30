@@ -21,6 +21,7 @@ export const MEMORY_META_REVIEW_VERBS = [
   "define_memory",
   "fold_memory",
   "move_memory",
+  "move_memory_branch",
   "invalidate_memory",
   "propose_memory_change",
 ] as const;
@@ -50,11 +51,16 @@ export const META_REVIEW_SUBJECTS = {
       title: "Memory meta-review",
       purpose:
         "Periodic meta-review of the board's memory store. Judge repeats among candidates and exemplars, redundant examples included, by reading them, not by counting. " +
-        "For a Behavior, ask whether it holds true whatever leaf sits under its branch. " +
+        "For a Definition, ask whether it holds true whatever leaf sits under its branch. " +
         PROMOTION_RULE +
         " Changes to approved Behaviors and Exemplars go through the proposal verb: consolidate redundant ones into the one you keep (propose_memory_change's successor_id), " +
         "into a new candidate when they share a source, or into an existing candidate (candidate_id). Apply fixes to Knowledge and Definitions directly, and retire or fold a candidate directly " +
         "(fold_memory's successor_id folds it into an approved Behavior or Exemplar). " +
+        "Fix placement by moving, not by rewriting: move an entry that sits under the wrong branch (move_memory), rename a " +
+        "branch by moving it whole (move_memory_branch), and widen an entry every workspace needs to the whole board — " +
+        "widen a candidate before you propose it, so the question shows the human the scope it will have. You cannot narrow " +
+        "an entry to a workspace, move it between workspaces, or change the scope of an approved Behavior or Exemplar: when " +
+        "you judge one of those right, say so with log_decision and leave the entry in place. " +
         "A Precedent with cause memory names the wrong entries it followed (entries): read them, then drop the wrong entry (reason capability) or replace it — " +
         "a Behavior or Exemplar through propose_memory_change, Knowledge through fold_memory or invalidate_memory. First read the past memory proposals with the human's answers and comments (list_memory_proposals) " +
         "and the invalidated candidates with invalidated_by, so you do not re-propose what a human rejected and do not repeat a retirement of your own. " +
@@ -63,7 +69,7 @@ export const META_REVIEW_SUBJECTS = {
         "or approve the Behavior or Exemplar candidate alone to leave the entries it would have replaced in place. " +
         "Where a human amended a candidate when approving it (a superseded candidate whose invalidated_by is a question and whose successor a human wrote — not one you folded into an existing entry), draft closer to the human's wording.",
       completion_criteria:
-        "every candidate and store change since the previous meta-review is either proposed, retired, folded, applied (Knowledge / Definitions), or deliberately left as is",
+        "every candidate and store change since the previous meta-review is either proposed, retired, folded, moved, applied (Knowledge / Definitions), or deliberately left as is",
       review_tier: "frontier",
     },
     material: ["memory_entry_created", "memory_entry_invalidated", "objection_attributed"],
