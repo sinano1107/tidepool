@@ -53,12 +53,14 @@ export const META_REVIEW_SUBJECTS = {
         "For a Behavior, ask whether it holds true whatever leaf sits under its branch. " +
         PROMOTION_RULE +
         " Changes to approved Behaviors and Exemplars go through the proposal verb: consolidate redundant ones into the one you keep (propose_memory_change's successor_id), " +
-        "or into a new candidate when they share a source. Apply fixes to Knowledge and Definitions directly, and retire or fold a candidate directly " +
+        "into a new candidate when they share a source, or into an existing candidate (candidate_id). Apply fixes to Knowledge and Definitions directly, and retire or fold a candidate directly " +
         "(fold_memory's successor_id folds it into an approved Behavior or Exemplar). " +
         "A Precedent with cause memory names the wrong entries it followed (entries): read them, then drop the wrong entry (reason capability) or replace it — " +
         "a Behavior or Exemplar through propose_memory_change, Knowledge through fold_memory or invalidate_memory. First read the past memory proposals with the human's answers and comments (list_memory_proposals) " +
         "and the invalidated candidates with invalidated_by, so you do not re-propose what a human rejected and do not repeat a retirement of your own. " +
         "A deferred proposal is one the human did not decide: read their comment, then propose it again when you still judge it right, or fold or retire it. " +
+        "A consolidation that went stale or was deferred keeps its candidate: propose it again with candidate_id and the replaces you now judge right, " +
+        "or approve the Behavior or Exemplar candidate alone to leave the entries it would have replaced in place. " +
         "Where a human amended a candidate when approving it (a superseded candidate whose invalidated_by is a question and whose successor a human wrote — not one you folded into an existing entry), draft closer to the human's wording.",
       completion_criteria:
         "every candidate and store change since the previous meta-review is either proposed, retired, folded, applied (Knowledge / Definitions), or deliberately left as is",

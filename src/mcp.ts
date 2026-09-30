@@ -1044,14 +1044,16 @@ function registerMemoryMetaReviewVerbs(server: McpServer, deps: McpDeps, run: Me
     {
       description:
         "Propose a Behavior or Exemplar change to the human as one approve / reject / defer question attached to this task. op approve asks to " +
-        "approve a Behavior candidate exactly as worded (candidate_id). op consolidate replaces the candidates, approved Behaviors and " +
-        "Exemplars in replaces with one successor: either text, drafted as a new candidate, or successor_id, an approved Behavior or " +
-        "Exemplar you keep instead. With successor_id, replaces takes approved entries only; fold a candidate into an existing approved " +
-        "entry with fold_memory's successor_id. With text, based_on_decision is the event id log_decision returned for your reasoning; the new " +
+        "approve a Behavior or Exemplar candidate exactly as worded (candidate_id), even while entries it once proposed to replace are " +
+        "still live. op consolidate replaces the candidates, approved Behaviors and Exemplars in replaces with one successor: text, " +
+        "drafted as a new candidate; successor_id, an approved Behavior or Exemplar you keep instead; or candidate_id, an existing " +
+        "Behavior or Exemplar candidate. With successor_id, replaces takes approved entries only; fold a candidate into an existing approved " +
+        "entry with fold_memory's successor_id. Re-propose a consolidation that went stale or was deferred with its candidate_id and the " +
+        "replaces you now judge right. With text, based_on_decision is the event id log_decision returned for your reasoning; the new " +
         "candidate keeps the source the replaced entries share, and takes based_on_decision as its source when they share none. With " +
         "text.kind exemplar it is an Exemplar: give annotations instead of text.text; the replaced entries must share a source that " +
-        "renders a case. op invalidate asks to drop the approved Behavior or Exemplar target_id, with no successor, for reason " +
-        "capability / environment / requirement_change. rationale is why you propose it (the question's context). " +
+        "renders a case; an Exemplar candidate_id likewise needs replaces that share its source. op invalidate asks to drop the " +
+        "approved Behavior or Exemplar target_id, with no successor, for reason capability / environment / requirement_change. rationale is why you propose it (the question's context). " +
         PROMOTION_RULE +
         " " +
         "The board applies the answer itself, so you can complete this task without waiting for it. Returns the question id. " +
