@@ -93,3 +93,8 @@ replaces ごとの scope と宛先を載せて人間が見比べる。直接適�
 
 - **`define_memory` は門の外に置き、`fold_memory` の `text` と扱いを分ける** —— 分ける理由を挙げられず、決定2 の「同じ形」と
   食い違ったまま残る。
+
+## 追記(2026-09-30 の triage / grilling、issue #1212)
+
+追記7 の「workspace 向けの定義は `supersedes` なしで書けば影として覆える」は ADR 0178 で改めた —— 盤面全体のエントリがある
+path に workspace は Definition を持てない。覆いの門そのもの(追記7 の本体)は変えない。

@@ -266,3 +266,9 @@ id を渡せばその本文を返していた(spec #600 B が「read / search �
 状態で、周期ごとに畳んでは作り直す `path_moved` が積もる。「深すぎる」は閾値なしに書けない(決定9)。検査項目を worker に
 運ぶ場所は memory meta-review の purpose —— worker が読むのは purpose と verb の説明だけで、Auditor の agent 定義は主題を
 持たない。
+
+## 追記 9(2026-09-30 の triage / grilling、issue #1212)
+
+**追記4 の「同じ枝で重なれば workspace が勝ち、盤面全体は影に入る」と、追記7 の「`read_memory` は影の Definition を省く」は
+ADR 0178 で改めた。** 盤面全体のエントリがある path とその上位に workspace は Definition を持てず、影は作れない。検査項目の
+「workspace と盤面全体の定義の矛盾」も同じ ADR で「複数の workspace が同じ path を定義している」に入れ替えた。
