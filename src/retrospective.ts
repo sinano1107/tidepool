@@ -11,6 +11,7 @@ import {
   type EventPayload,
   getEvent,
   isDecisionLogEntry,
+  latestEventOfTask,
   listEvents,
   objectionBundles,
   taskDecisionLog,
@@ -27,7 +28,7 @@ import { entryObjections, listObjectedEntries, objectedEntryText, objectionsById
  *  当時の decision log(異議されたタスクの decision_logged と完了エントリ)。agent
  *  定義本文・model 名・価格は渡さない —— 判断に要らず、配分評価の線と同じ。
  *  `entry_id` は Fake が entry ごとに応答を引く鍵で、model に意味は無い。
- *  `rca_findings` は第2回(#575)だけが足す: RCA 子(self / auditor)の decision log と
+ *  `rca_findings` は第2回(#575)だけが足す: その異議群を覆う RCA 子(self / auditor、ADR 0171 決定2)の decision log と
  *  完了 result を並べたもの。`memory_read` は worker がその decision の前に読んだ記憶(ADR 0166 決定2)。 */
 export interface AttributionInput {
   entry_id: number;
@@ -226,37 +227,36 @@ export async function attributeObjections(
   return judgments;
 }
 
-/** 異議されたタスクの RCA 子(self / auditor —— `registerRcaReview` が付ける `rca (` の題)。 */
-// ponytail: RCA 子の目印は題の接頭辞だけ —— task_registered に構造化された印が無い
-const rcaChildren = (db: Db, objectedId: string) =>
-  listChildren(db, objectedId).filter((c) => c.type === "review" && c.title.startsWith("rca ("));
+/** 異議された task の子の登録 event のうち、その子が異議群を覆うもの(ADR 0171 決定1): `task_registered` の
+ *  `objection_event_ids` が異議群の名前(最初の異議 id)を含む。 */
+const COVERING_CHILD = `FROM events e JOIN tasks t ON t.id = e.task_id
+  WHERE e.kind = 'task_registered' AND t.parent_id = @objectedId AND t.type = @type
+    AND EXISTS (SELECT 1 FROM json_each(e.payload, '$.objection_event_ids') WHERE value = @bundle)`;
+
+/** 異議群を覆う RCA 子(self / auditor、ADR 0171 決定2)。 */
+const rcaChildren = (db: Db, objectedId: string, bundle: number) => {
+  const rows = db.prepare(`SELECT e.task_id ${COVERING_CHILD}`).all({ objectedId, type: "review", bundle }) as { task_id: string }[];
+  const covering = new Set(rows.map((r) => r.task_id));
+  return listChildren(db, objectedId).filter((c) => covering.has(c.id));
+};
 
 const settledAll = (tasks: Task[]) => tasks.every((r) => r.status === "done" || r.status === "cancelled");
 
 /** 第2回の出所: 入力を組む異議群と、「当時の decision log」の切れ目になる event の `id`。 */
 type SecondRoundSource = Pick<Attribution, "id" | "entry_id" | "objection_event_ids">;
 
-/** 異議群を束ねた commit が立てた修理子の `task_registered`(その異議群の最後より後で最初のもの)。
- *  初回の帰責 event が書かれるはずだった位置 —— 同じ transaction の中にある。束ねた異議群には必ず
- *  修理子がある(task は消えず、`bundleObjections` が飛ばすのは task の無い異議だけ)。 */
-// ponytail: 修理子の目印も題の接頭辞だけ(rcaChildren と同じ)
-const repairRegistered = (db: Db, objectedId: string, after: number) =>
-  (
-    db
-      .prepare(
-        `SELECT MIN(e.id) AS id FROM events e JOIN tasks t ON t.id = e.task_id
-          WHERE e.kind = 'task_registered' AND t.parent_id = ? AND t.type = 'work' AND t.title LIKE 'repair: %' AND e.id > ?`,
-      )
-      .get(objectedId, after) as { id: number }
-  ).id;
+/** 異議群を束ねた commit が立てた修理子の `task_registered`(ADR 0171 決定2)。初回の帰責 event が書かれるはずだった位置 ——
+ *  同じ transaction の中にある。束ねた異議群には必ず修理子がある(task は消えず、`bundleObjections` が飛ばすのは task の無い異議だけ)。 */
+const repairRegistered = (db: Db, objectedId: string, bundle: number) =>
+  (db.prepare(`SELECT MIN(e.id) AS id ${COVERING_CHILD}`).get({ objectedId, type: "work", bundle }) as { id: number }).id;
 
 /** 異議群ごとの帰責の状態(ADR 0168 決定3 / ADR 0170 決定1)。第2回を待つ(`awaiting`)のは、帰責が初回の `uncertain` の
  *  異議群と未帰責の異議群 —— 後者の出所はその異議群で、当時の decision log は修理子の登録で切る。それ以外は確定
  *  (`confirmed`、同じ異議群では after_rca が有効)。前の異議群の状態は後の異議群があっても落とさない。 */
 // ponytail: poll の sweep のたびに全帰責と全異議を読む。帰責が数万に育ったら結果の不在を SQL 1本に寄せる
 function attributionStates(db: Db): Array<{ task_id: string } & ({ awaiting: SecondRoundSource } | { confirmed: Attribution })> {
-  return [...objectionBundles(db).values()].flat().map(({ task_id, entry_id, objection_event_ids: ids, attribution }) => {
-    if (!attribution) return { task_id, awaiting: { id: repairRegistered(db, task_id, ids.at(-1)!), entry_id, objection_event_ids: ids } };
+  return [...objectionBundles(db).values()].flat().map(({ task_id, entry_id, objection_event_ids, attribution }) => {
+    if (!attribution) return { task_id, awaiting: { id: repairRegistered(db, task_id, bundleName({ objection_event_ids })), entry_id, objection_event_ids } };
     return attribution.round === "initial" && attribution.cause === "uncertain" ? { task_id, awaiting: attribution } : { task_id, confirmed: attribution };
   });
 }
@@ -296,10 +296,10 @@ async function attributeSecondRound(db: Db, deps: RetrospectiveCallDeps, objecte
   });
 }
 
-/** 第2回の入力: 帰責の入力(当時の decision log = その注釈より前の entry)に RCA 子の decision log と完了 result を足す。 */
+/** 第2回の入力: 帰責の入力(当時の decision log = その注釈より前の entry)に、その異議群を覆う RCA 子の decision log と完了 result を足す。 */
 const secondRoundInput = (db: Db, objectedId: string, attribution: SecondRoundSource): AttributionInput => ({
   ...objectionInput(db, attribution),
-  rca_findings: rcaChildren(db, objectedId).flatMap((r) => decisionLogText(db, r.id)),
+  rca_findings: rcaChildren(db, objectedId, bundleName(attribution)).flatMap((r) => decisionLogText(db, r.id)),
 });
 
 const fireAndForget = (fired: Promise<void>, target: string) => void fired.catch((err) => console.error(`[retrospective] ${target}: ${String(err)}`));
@@ -327,7 +327,7 @@ async function reviewAllocation(db: Db, deps: RetrospectiveCallDeps, target: All
 }
 
 /** sweep の対象(ADR 0164 決定1): 異議群ごとの帰責の状態のうち、あるべき結果が無いもの —— 第2回を待つ異議群
- *  (初回の `uncertain` と未帰責、ADR 0168 決定3)で RCA 子がすべて決着したものは第2回、確定した異議群は
+ *  (初回の `uncertain` と未帰責、ADR 0168 決定3)で、その異議群を覆う RCA 子(ADR 0171 決定2)がすべて決着したものは第2回、確定した異議群は
  *  その帰責を出所とする candidate が無いもの の起草(後の異議群があっても外さない、ADR 0170 決定1)—— と、
  *  注釈の無い統合点レビューの配分評価(ADR 0172 決定1)。sweep と打ち切りの一覧が同じ集合を読む。 */
 type RefireTarget = { task_id: string } & (
@@ -341,7 +341,7 @@ function refireTargets(db: Db): RefireTarget[] {
   );
   return attributionStates(db).flatMap((state): RefireTarget[] => {
     if ("awaiting" in state) {
-      const rca = rcaChildren(db, state.task_id);
+      const rca = rcaChildren(db, state.task_id, bundleName(state.awaiting));
       return rca.length > 0 && settledAll(rca) ? [{ task_id: state.task_id, refire: "second_round", source: state.awaiting }] : [];
     }
     return drafted.has(state.confirmed.id) ? [] : [{ task_id: state.task_id, refire: "draft", attribution: state.confirmed }];
@@ -557,7 +557,8 @@ function learningTarget(
 }
 
 /** RCA の起草 verb `propose_from_objection`(spec #615 B / issue #1077): 異議エントリへの所見を記憶にする。
- *  門は列を足さず構造で引き(ADR 0120 決定1(a))、kind と宛先は今の判定(最後の異議群の cause)から導く(ADR 0115 決定4)。 */
+ *  門は列を足さず構造で引き(ADR 0120 決定1(a))、kind と宛先はその review が材料にした異議群の判定(ADR 0171 決定3)の
+ *  cause から導く(ADR 0115 決定4)。材料に無い entry(同じ task で別 session に異議されたもの)は拒む。 */
 export function proposeFromObjection(
   db: Db,
   reviewId: string,
@@ -575,12 +576,13 @@ export function proposeFromObjection(
   if (!isDecisionLogEntry(entry) || entry.task_id !== task.parent_id) {
     throw new DomainError(`entry ${entry_id} is not a decision-log entry of your parent task`);
   }
-  const attribution = currentAttributions(db, [entry_id]).get(entry_id);
-  if (!attribution && entryObjections(db, [entry_id]).length === 0) {
-    throw new DomainError(`entry ${entry_id} carries no attributed objection`);
-  }
+  if (entryObjections(db, [entry_id]).length === 0) throw new DomainError(`entry ${entry_id} carries no attributed objection`);
   if (isHumanEntry(entry)) throw new DomainError(`entry ${entry_id} was written by a human`);
-  // 最後の異議群が未帰責の entry は uncertain と同じに読む(ADR 0168 決定3 / ADR 0170 決定2)—— learningTarget が拒否する
+  const material = latestEventOfTask(db, reviewId, "task_registered")!.payload.objection_event_ids ?? [];
+  const bundle = objectionBundles(db, [entry_id]).get(entry_id)?.find((b) => material.includes(bundleName(b)));
+  if (!bundle) throw new DomainError(`entry ${entry_id} is not in this review's material`);
+  const { attribution } = bundle;
+  // 覆う異議群が未帰責なら uncertain と同じに読む(ADR 0168 決定3)—— learningTarget が拒否する
   const target = learningTarget(attribution?.cause ?? "uncertain", entry.worker_id, getRegistrant(db, entry.task_id), as);
   if ((target.kind === "knowledge") !== (based_on_decision !== undefined)) {
     throw new DomainError("based_on_decision is required for a knowledge entry and only for it");

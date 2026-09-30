@@ -3,7 +3,7 @@ import type { Cause } from "../src/cause.js";
 import { openDb } from "../src/db.js";
 import { appendEvent, listEvents } from "../src/events.js";
 import { readMemory, recordKnowledge, searchMemory } from "../src/memory.js";
-import { attributeObjections, type GatedJudgment, refireRetrospectiveCalls } from "../src/retrospective.js";
+import { attributeObjections, type GatedJudgment, listHaltedRefires, refireRetrospectiveCalls } from "../src/retrospective.js";
 import { cancelTaskDirectly, listChildren, logDecision, registerTask } from "../src/tasks.js";
 import { reportProviderUsage } from "../src/throttle.js";
 import { commitTriage, raiseObjection, startTriage, TRIAGE_TIMEOUT } from "../src/triage.js";
@@ -1259,4 +1259,80 @@ it.each<[string, (ids: { read: number; unread: number }) => number[], Partial<Ga
   expect(attributed(b.db, b.task.id).map((p) => p.round)).toEqual(["initial", "after_rca"]);
   expect(attributed(b.db, b.task.id)[1]).toMatchObject({ entries: entries(b), ...expected });
   expect(drafter.calls).toEqual([]);
+});
+
+// 異議群を覆う RCA 子(ADR 0171 / issue #1124)—— ドメイン層
+
+/** 同じ task に2つの異議群を並べる: session A が entry X を異議して commit し、A の RCA が未決着のうちに session B が
+ *  `same` なら同じ X を、でなければ entry Y を異議して commit する。どちらも初回は未帰責(第2回を待つ)。
+ *  各 RCA 子には異議群ごとに見分けのつく decision を書く。子は題でなく登録の異議 id 列で見分ける。 */
+function twoBundles(same: boolean) {
+  const db = openDb(":memory:");
+  const task = registerTask(db, { type: "work", title: "t", purpose: "p", completion_criteria: "c" }, at);
+  const x = logDecision(db, task, "picked X", "deckhand", at);
+  const y = same ? x : logDecision(db, task, "picked Y", "deckhand", at);
+  const objectAndCommit = (entry: number, comment: string) => {
+    startTriage(db, at);
+    const objection = raiseObjection(db, entry, comment, at);
+    commitTriage(db, at, [], new Map());
+    return objection;
+  };
+  const rcasOf = (objection: number) =>
+    listChildren(db, task.id).filter((c) => {
+      const registered = listEvents(db, c.id).find((e) => e.kind === "task_registered")!.payload;
+      return c.type === "review" && "objection_event_ids" in registered && registered.objection_event_ids!.includes(objection);
+    });
+  const a = objectAndCommit(x, "A's direction");
+  const b = objectAndCommit(y, "B's direction");
+  for (const [objection, name] of [[a, "A"], [b, "B"]] as const) {
+    for (const r of rcasOf(objection)) logDecision(db, r, `${name}'s finding from ${r.title}`, "auditor", at);
+  }
+  const settle = (objection: number) => {
+    for (const r of rcasOf(objection)) cancelTaskDirectly(db, r, null, at, {});
+  };
+  const client = new FakeAttributionClient();
+  const sweep = async (now = at) => {
+    refireRetrospectiveCalls(db, { ...noRetrospectiveCalls, attributionClient: client }, now);
+    // sweep は fire-and-forget: fake の返答が着地するまで回す
+    await new Promise((resolve) => setImmediate(resolve));
+  };
+  return { db, task, x, a, b, settle, client, sweep };
+}
+
+it.each([
+  ["別の entry Y", false],
+  ["同じ entry X", true],
+])("B が %s を異議して RCA が未決着でも、A の RCA 子の決着で A の第2回が撃たれ、rca_findings は A の RCA 子の decision だけ", async (_, same) => {
+  const s = twoBundles(same);
+  s.settle(s.a);
+
+  await s.sweep();
+
+  expect(s.client.calls.map((c) => [c.input.entry_id, c.input.steering, c.input.rca_findings])).toEqual([
+    [s.x, ["A's direction"], ["A's finding from rca (self): t", "A's finding from rca (auditor): t"]],
+  ]);
+});
+
+it.each([
+  ["別の entry Y", false],
+  ["同じ entry X", true],
+])("B が %s を異議したとき、B の RCA 子だけを決着させても A の第2回は撃たれない", async (_, same) => {
+  const s = twoBundles(same);
+  s.settle(s.b);
+
+  await s.sweep();
+
+  expect(s.client.calls.map((c) => [c.input.steering, c.input.rca_findings])).toEqual([
+    [["B's direction"], ["B's finding from rca (self): t", "B's finding from rca (auditor): t"]],
+  ]);
+});
+
+it("打ち切りの一覧も同じ照合で読む —— B の RCA が未決着でも、A の RCA 子の決着後に3回失敗した A の異議群は second_round の行になる", async () => {
+  const s = twoBundles(false);
+  s.client.scriptJudgment(s.x, new Error("claude CLI timed out"));
+  s.settle(s.a);
+
+  for (const hours of [0, 1, 2]) await s.sweep(new Date(at.getTime() + hours * HOUR));
+
+  expect(listHaltedRefires(s.db).map((r) => [r.refire, r.target])).toEqual([["second_round", s.a]]);
 });
