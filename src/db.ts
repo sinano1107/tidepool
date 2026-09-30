@@ -7,7 +7,7 @@ export type Db = Database.Database;
  *  (spec #586 B、実測は #357 / #606、順序は #610)。
  *  どちらかを変えたら、boot の ensureMemoryIndex が索引を作り直す。索引の列を変えたときも前処理の版を上げる。 */
 export const MEMORY_FTS_TOKENIZER = "unicode61 tokenchars '_-.'";
-export const MEMORY_PREPROCESS_VERSION = "cjk-bigram-6";
+export const MEMORY_PREPROCESS_VERSION = "cjk-bigram-7";
 // Shared between the fresh-board CREATE and the memory index rebuild (memory.ts).
 export const MEMORY_FTS_DDL = `CREATE VIRTUAL TABLE memory_fts USING fts5(text, title, path, tokenize = "${MEMORY_FTS_TOKENIZER}")`;
 
