@@ -1741,9 +1741,9 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   router.post(
     "/settings/memory/branches/move",
     // 門は行き先だけ —— 移動元が消えた workspace の孤立を生きた置き場へ移せるように(ADR 0173 決定2)
-    validatedWrite(memoryBranchMoveSchema, ({ workspace, path, to_workspace, to_path }) => {
+    validatedWrite(memoryBranchMoveSchema, ({ workspace, path, to_workspace, to_path, merge }) => {
       assertMemoryReferencesKnown(memoryRefDeps, { workspace: to_workspace });
-      return moveMemoryBranch(db, { scope: workspace, path, to_scope: to_workspace, to_path, mover: HUMAN_AUTHOR }, "webui", clock.now());
+      return moveMemoryBranch(db, { scope: workspace, path, to_scope: to_workspace, to_path, merge, mover: HUMAN_AUTHOR }, "webui", clock.now());
     }),
   );
 

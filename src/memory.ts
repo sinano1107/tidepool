@@ -213,8 +213,8 @@ export function recordKnowledge(db: Db, input: EntryInput & { supersedes?: numbe
 
 /** 枝の定義(spec #600 A): その枝の下に何を保存するかの1行。承認不要で書いた瞬間に approved、
  *  出所は持たない(自身の作成 event)。同じ枝・同じスコープの approved は1つだけ —— 改訂は
- *  `supersedes` に旧定義を含める。別 path の定義を置き換えられるのは、書く先の同じ scope・path に生きた定義があるとき(枝の統合)
- *  だけで、枝の改名は枝ごとの移動が持つ(ADR 0176 決定6)。meta-review は defineMemoryByMetaReview の門を通して呼ぶ。 */
+ *  `supersedes` に旧定義を含める。置き換えられるのは同じ path の定義だけで(畳みの線 —— foldMemoryEntries)、枝の改名と統合は
+ *  枝ごとの移動が持つ(ADR 0177 決定6)。meta-review は defineMemoryByMetaReview の門を通して呼ぶ。 */
 export function defineMemoryBranch(
   db: Db,
   input: Omit<EntryInput, "title"> & { supersedes?: number[] },
@@ -223,22 +223,15 @@ export function defineMemoryBranch(
 ): { entry_id: number; event_id: number } {
   if (/[\r\n]/.test(input.text)) throw new DomainError("a definition must be one line");
   const { supersedes, ...fields } = input;
-  return writeSuperseding(db, supersedes, fields.author, origin, at, (replaced) => {
-    const live = liveDefinitions(db, fields.scope, fields.path);
-    const defined = live.find((id) => !supersedes?.includes(id));
+  return writeSuperseding(db, supersedes, fields.author, origin, at, () => {
+    const defined = liveDefinitions(db, fields.scope, fields.path).find((id) => !supersedes?.includes(id));
     if (defined) throw new DomainError(`branch ${fields.path} is already defined in this scope by entry ${defined}; revise it with supersedes`);
-    const elsewhere = replaced.find((entry) => entry.kind === "definition" && entry.path !== fields.path);
-    if (elsewhere && live.length === 0) {
-      throw new DomainError(
-        `branch ${fields.path} has no definition in this scope to merge definition ${elsewhere.id} at ${elsewhere.path} into: rename a branch with move_memory_branch, then revise its definition in place`,
-      );
-    }
     return createEntry(db, { ...fields, title: fields.text, kind: "definition", state: "approved", original: fields.original ?? null, addressee: null }, origin, at);
   });
 }
 
 /** meta-review の `define_memory`(ADR 0161 追記7): defineMemoryBranch に覆いの門を掛ける。Definition は宛先を持たないので
- *  門は scope だけを見る —— 別 path の定義を置き換える線は defineMemoryBranch が両方の面に持つ(ADR 0176 決定6)。人間の面は
+ *  門は scope だけを見る —— 別 path の定義を置き換えない線は foldMemoryEntries が両方の面に持つ(ADR 0177 決定6)。人間の面は
  *  defineMemoryBranch を直接呼ぶ。 */
 export function defineMemoryByMetaReview(db: Db, input: Parameters<typeof defineMemoryBranch>[1], origin: EventOrigin, at: Date): { entry_id: number; event_id: number } {
   requireCovers({ scope: input.scope, addressee: null }, (input.supersedes ?? []).map((id) => requireLive(db, id, undefined, "approved")));
@@ -246,7 +239,8 @@ export function defineMemoryByMetaReview(db: Db, input: Parameters<typeof define
 }
 
 /** 既にある後継への畳み(ADR 0162 決定1・2): replaces(1つ以上、approved も candidate も)を successor_id の superseded にする。
- *  1 transaction。後継が approved・未無効化であることと種別の線は無効化の門が持つ。人間の面と書き込みの supersedes が直接、
+ *  1 transaction。後継が approved・未無効化であることと種別の線は無効化の門が持つ。Definition を別 path の Definition へは畳まない
+ *  —— path を跨ぐ定義の superseded は枝ごとの移動の統合だけが書く(ADR 0177 決定6)。人間の面と書き込みの supersedes が直接、
  *  meta-review は foldMemory の門を通して呼ぶ。返り値の event_ids は replaces の memory_entry_invalidated。 */
 export function foldMemoryEntries(
   db: Db,
@@ -256,10 +250,20 @@ export function foldMemoryEntries(
 ): { entry_id: number; event_ids: number[] } {
   const { replaces, successor_id, author } = input;
   if (replaces.length === 0) throw new DomainError("a fold needs at least one entry to replace");
-  return db.transaction(() => ({
-    entry_id: successor_id,
-    event_ids: replaces.map((id) => invalidateMemoryEntry(db, { entry_id: id, reason: "superseded", successor_id }, author.name, origin, at, { activity: author.activity })),
-  }))();
+  return db.transaction(() => {
+    const successor = requireEntry(db, successor_id);
+    for (const row of replaces.map((id) => requireEntry(db, id))) {
+      if (row.kind === "definition" && successor.kind === "definition" && row.path !== successor.path) {
+        throw new DomainError(
+          `definition ${row.id} at ${row.path} cannot be replaced by a definition at ${successor.path}: a definition is replaced only at its own path — merge branches with move_memory_branch and merge: true`,
+        );
+      }
+    }
+    return {
+      entry_id: successor_id,
+      event_ids: replaces.map((id) => invalidateMemoryEntry(db, { entry_id: id, reason: "superseded", successor_id }, author.name, origin, at, { activity: author.activity })),
+    };
+  })();
 }
 
 /** 覆いの門(ADR 0161 決定6・追記7): meta-review の直接の畳みは、後継の scope が盤面全体か各 replaces と同じで、宛先が全員か
@@ -314,29 +318,48 @@ type Actor = MemoryEntryFields["author"];
  *  scope / path に複製を作り、旧を `path_moved` で複製へ指す(「本文は同じ」は申告でなくここが保証する)。複製は新規の書き込みでは
  *  ないので書き込みの門(approved の Behavior / Exemplar は人間だけ・人間の Knowledge は出所なし・注釈の再検査)を掛けない。出所が
  *  自身の宣言なら複製も自身の宣言(ADR 0162 追記)。移した者は両方の event の activity に載る。移される Definition の置き場に、
- *  一緒に移されない生きた Definition があれば全体を拒む —— 2つの定義をまとめるのは畳む。1 transaction。 */
+ *  一緒に移されない生きた Definition があれば衝突 —— エントリ1件の移動(merge が undefined)は畳むよう促して拒む。枝ごとの移動は
+ *  merge なら衝突する各 Definition を置き場の定義の `superseded` にし(複製は作らない)、merge が無ければ衝突の組をすべて名指して
+ *  拒み、merge で衝突が無くても拒む(ADR 0177 決定1〜3)。1 transaction。 */
 function moveEntries(
   db: Db,
   moves: Array<{ old: EntryRow; scope: string | null; path: string }>,
   mover: Actor,
   origin: EventOrigin,
   at: Date,
-): Array<{ entry_id: number; successor_id: number }> {
+  merge?: boolean,
+) {
   const moving = new Set(moves.map(({ old }) => old.id));
   return db.transaction(() => {
+    const into = new Map<number, number>();
+    const collisions: string[] = [];
     for (const { old, scope, path } of moves) {
       if (old.scope === scope && old.path === path) throw new DomainError(`memory entry ${old.id} is already at ${path} in this scope`);
       checkPath(path);
       if (old.kind !== "definition") continue;
       const defined = liveDefinitions(db, scope, path).find((id) => !moving.has(id));
-      if (defined) throw new DomainError(`branch ${path} is already defined in that scope by entry ${defined}: fold the two definitions into one instead of moving`);
+      if (defined === undefined) continue;
+      if (merge === undefined) throw new DomainError(`branch ${path} is already defined in that scope by entry ${defined}: fold the two definitions into one instead of moving`);
+      into.set(old.id, defined);
+      collisions.push(`definition ${old.id} onto definition ${defined} at ${path} in scope ${scope ?? "whole board"}`);
     }
-    return moves.map(({ old: row, scope, path }) => {
-      const old = rowToEntry(row);
-      const copy = copyBody(db, old, { scope, path }, mover, origin, at, old.version === null ? {} : { version: old.version });
-      invalidateMemoryEntry(db, { entry_id: old.id, reason: "path_moved", successor_id: copy }, mover.name, origin, at, { activity: mover.activity });
-      return { entry_id: old.id, successor_id: copy };
+    if (!merge && collisions.length > 0) {
+      throw new DomainError(`the move would land ${collisions.join(", ")}: pass merge: true to fold each into the definition already there and move the rest`);
+    }
+    if (merge && collisions.length === 0) throw new DomainError("merge: true, but no moved definition lands on a path already defined in its scope: move without merge");
+    const folded = [...into].map(([entry_id, successor_id]) => {
+      invalidateMemoryEntry(db, { entry_id, reason: "superseded", successor_id }, mover.name, origin, at, { activity: mover.activity });
+      return { entry_id, successor_id };
     });
+    const moved = moves
+      .filter(({ old }) => !into.has(old.id))
+      .map(({ old: row, scope, path }) => {
+        const old = rowToEntry(row);
+        const copy = copyBody(db, old, { scope, path }, mover, origin, at, old.version === null ? {} : { version: old.version });
+        invalidateMemoryEntry(db, { entry_id: old.id, reason: "path_moved", successor_id: copy }, mover.name, origin, at, { activity: mover.activity });
+        return { entry_id: old.id, successor_id: copy };
+      });
+    return { moved, folded };
   })();
 }
 
@@ -438,22 +461,23 @@ export function moveMemory(
   if (old.kind === "definition" && old.path !== input.path) {
     throw new DomainError(`memory entry ${old.id} is the definition of branch ${old.path}: move the whole branch with move_memory_branch to change its path`);
   }
-  const { successor_id } = moveEntries(db, [{ old, scope: input.scope, path: input.path }], input.mover, origin, at)[0]!;
+  const { successor_id } = moveEntries(db, [{ old, scope: input.scope, path: input.path }], input.mover, origin, at).moved[0]!;
   return { entry_id: successor_id, event_id: successor_id };
 }
 
-/** 枝ごとの移動(ADR 0162 決定4): scope(完全一致、null = 盤面全体)で path が P か P/… の未無効化エントリすべてを、to_scope の
- *  to_path + 残りの path へ1 transaction で。無効化済みは元の置き場に残る。返り値は旧 id → 複製の id。 */
+/** 枝ごとの移動(ADR 0162 決定4 / ADR 0177 決定1〜4): scope(完全一致、null = 盤面全体)で path が P か P/… の未無効化エントリすべてを、
+ *  to_scope の to_path + 残りの path へ1 transaction で。merge は行き先に定義があるという申告で、衝突する定義は行き先の定義へ畳む
+ *  (moveEntries)。無効化済みは元の置き場に残る。返り値は旧 id → 複製の id と、畳んだ定義 → 畳み先の定義。 */
 export function moveMemoryBranch(
   db: Db,
-  input: { scope: string | null; path: string; to_scope: string | null; to_path: string; mover: Actor },
+  input: { scope: string | null; path: string; to_scope: string | null; to_path: string; merge?: boolean; mover: Actor },
   origin: EventOrigin,
   at: Date,
-): { moved: Array<{ entry_id: number; successor_id: number }> } {
-  const { scope, path, to_scope, to_path, mover } = input;
+): ReturnType<typeof moveEntries> {
+  const { scope, path, to_scope, to_path, merge, mover } = input;
   const rows = branchRows(db, scope, path);
   if (rows.length === 0) throw new DomainError(`no live memory entry at ${path} or under it in this scope`);
-  return { moved: moveEntries(db, rows.map((old) => ({ old, scope: to_scope, path: to_path + old.path.slice(path.length) })), mover, origin, at) };
+  return moveEntries(db, rows.map((old) => ({ old, scope: to_scope, path: to_path + old.path.slice(path.length) })), mover, origin, at, merge ?? false);
 }
 
 /** 枝ごとの移動が移す行: scope(完全一致)で path が P か P/… の未無効化エントリ。 */
@@ -574,9 +598,16 @@ export const metaReviewInvalidationSchema = z.object({ reason: z.enum(INVALIDATI
 /** 人間の面の無効化(ADR 0161 決定4)と提案の invalidate op の理由: meta-review と同じく後継なしで落とすだけで、`rejected` は
  *  提案 question の reject と meta-review の candidate の引退(issue #954)だけが書く。 */
 export const invalidationSchema = metaReviewInvalidationSchema.extend({ reason: metaReviewInvalidationSchema.shape.reason.exclude(["rejected"]) });
-/** 人間の面の移動(ADR 0162 決定4)。workspace null = 盤面全体。エントリ1件は移動先(扉が entry_id を足す)、枝ごとは移動元と移動先。 */
+/** 人間の面の移動(ADR 0162 決定4)。workspace null = 盤面全体。エントリ1件は移動先(扉が entry_id を足す)、枝ごとは移動元と移動先と
+ *  統合の申告 merge(ADR 0177 決定2)。 */
 export const memoryMoveSchema = z.object({ workspace: humanEntryFields.workspace, path: z.string() });
-export const memoryBranchMoveSchema = z.object({ workspace: humanEntryFields.workspace, path: z.string(), to_workspace: humanEntryFields.workspace, to_path: z.string() });
+export const memoryBranchMoveSchema = z.object({
+  workspace: humanEntryFields.workspace,
+  path: z.string(),
+  to_workspace: humanEntryFields.workspace,
+  to_path: z.string(),
+  merge: z.boolean().optional(),
+});
 /** 人間の面の既にある後継への畳み(ADR 0162 決定1)。 */
 export const memoryFoldSchema = z.object({ replaces: z.array(z.number().int().positive()), successor_id: z.number().int().positive() });
 

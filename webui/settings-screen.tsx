@@ -1818,7 +1818,7 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit, fo
   // moves (ADR 0162 決定4): the board copies the body to the new place — one entry, or a whole branch of one scope.
   // '' is board-wide in both workspace fields
   const [moving, setMoving] = React.useState<{ id: number; workspace: string; path: string } | null>(null);
-  const [branchMove, setBranchMove] = React.useState<{ workspace: string; path: string; to_workspace: string; to_path: string } | null>(null);
+  const [branchMove, setBranchMove] = React.useState<{ workspace: string; path: string; to_workspace: string; to_path: string; merge: boolean } | null>(null);
   const workspaceOptions = [{ value: '', label: 'board-wide' }, ...workspaceNames];
   // a branch left in a workspace that has since left the registry is still a valid move source (ADR 0173 決定2 gates
   // only the destination): offer each such scope that still holds a live entry, enabled
@@ -1835,7 +1835,7 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit, fo
         {!writing && (
           <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
             {!branchMove && (
-              <Button variant="ghost" size="sm" onClick={() => setBranchMove({ workspace: '', path: '', to_workspace: '', to_path: '' })}>Move branch</Button>
+              <Button variant="ghost" size="sm" onClick={() => setBranchMove({ workspace: '', path: '', to_workspace: '', to_path: '', merge: false })}>Move branch</Button>
             )}
             <Button variant="ghost" size="sm" onClick={() => edit.open(writeId, () => setDraft(blank))}>Write</Button>
           </div>
@@ -1850,11 +1850,12 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit, fo
           <Select label="To workspace" value={branchMove.to_workspace} options={workspaceOptions}
             onChange={(e) => setBranchMove({ ...branchMove, to_workspace: e.target.value })} />
           <Input label="To branch path" mono value={branchMove.to_path} onChange={(e) => setBranchMove({ ...branchMove, to_path: e.target.value })} placeholder="toolchain" />
+          <Checkbox label="Merge into the branch already defined there" checked={branchMove.merge} onChange={() => setBranchMove({ ...branchMove, merge: !branchMove.merge })} />
           <div style={{ display: 'flex', gap: 8 }}>
             <Button variant="secondary" size="sm" disabled={busy || !branchMove.path.trim() || !branchMove.to_path.trim()}
               onClick={() => move('/api/settings/memory/branches/move', {
                 workspace: branchMove.workspace || null, path: branchMove.path.trim(),
-                to_workspace: branchMove.to_workspace || null, to_path: branchMove.to_path.trim(),
+                to_workspace: branchMove.to_workspace || null, to_path: branchMove.to_path.trim(), merge: branchMove.merge,
               }, `${branchMove.path.trim()} → ${branchMove.to_path.trim()}`, () => setBranchMove(null))}>
               Move branch
             </Button>

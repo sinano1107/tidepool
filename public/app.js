@@ -2235,7 +2235,7 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit, fo
   const orphanedOptions = (rows) => [...new Set(rows.map((e) => deadRefs(e).workspace))].filter((name) => name !== null && !workspaceNames.includes(name)).map((name) => ({ value: name, label: `${name} (not registered)` }));
   const orphanedFrom = orphanedOptions((entries ?? []).filter((e) => e.invalidation_reason === null));
   const move = (path, body, detail, close) => submit(path, body, ["moved", detail], "move failed", close);
-  return /* @__PURE__ */ React.createElement(Card, { style: { display: "flex", flexDirection: "column", gap: 14 } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8, minHeight: 26 } }, /* @__PURE__ */ React.createElement("span", { style: settingsCardLabel }, "memory entries"), !writing && /* @__PURE__ */ React.createElement("div", { style: { marginLeft: "auto", display: "flex", gap: 8 } }, !branchMove && /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "sm", onClick: () => setBranchMove({ workspace: "", path: "", to_workspace: "", to_path: "" }) }, "Move branch"), /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "sm", onClick: () => edit.open(writeId, () => setDraft(blank)) }, "Write"))), branchMove && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("p", { style: muted }, "moves the branch and every live entry under it in one workspace; invalidated entries stay where they are"), /* @__PURE__ */ React.createElement(
+  return /* @__PURE__ */ React.createElement(Card, { style: { display: "flex", flexDirection: "column", gap: 14 } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8, minHeight: 26 } }, /* @__PURE__ */ React.createElement("span", { style: settingsCardLabel }, "memory entries"), !writing && /* @__PURE__ */ React.createElement("div", { style: { marginLeft: "auto", display: "flex", gap: 8 } }, !branchMove && /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "sm", onClick: () => setBranchMove({ workspace: "", path: "", to_workspace: "", to_path: "", merge: false }) }, "Move branch"), /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "sm", onClick: () => edit.open(writeId, () => setDraft(blank)) }, "Write"))), branchMove && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("p", { style: muted }, "moves the branch and every live entry under it in one workspace; invalidated entries stay where they are"), /* @__PURE__ */ React.createElement(
     Select,
     {
       label: "From workspace",
@@ -2251,7 +2251,7 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit, fo
       options: workspaceOptions,
       onChange: (e) => setBranchMove({ ...branchMove, to_workspace: e.target.value })
     }
-  ), /* @__PURE__ */ React.createElement(Input, { label: "To branch path", mono: true, value: branchMove.to_path, onChange: (e) => setBranchMove({ ...branchMove, to_path: e.target.value }), placeholder: "toolchain" }), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8 } }, /* @__PURE__ */ React.createElement(
+  ), /* @__PURE__ */ React.createElement(Input, { label: "To branch path", mono: true, value: branchMove.to_path, onChange: (e) => setBranchMove({ ...branchMove, to_path: e.target.value }), placeholder: "toolchain" }), /* @__PURE__ */ React.createElement(Checkbox, { label: "Merge into the branch already defined there", checked: branchMove.merge, onChange: () => setBranchMove({ ...branchMove, merge: !branchMove.merge }) }), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8 } }, /* @__PURE__ */ React.createElement(
     Button,
     {
       variant: "secondary",
@@ -2261,7 +2261,8 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit, fo
         workspace: branchMove.workspace || null,
         path: branchMove.path.trim(),
         to_workspace: branchMove.to_workspace || null,
-        to_path: branchMove.to_path.trim()
+        to_path: branchMove.to_path.trim(),
+        merge: branchMove.merge
       }, `${branchMove.path.trim()} \u2192 ${branchMove.to_path.trim()}`, () => setBranchMove(null))
     },
     "Move branch"

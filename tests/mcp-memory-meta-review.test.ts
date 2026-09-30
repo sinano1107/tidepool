@@ -126,6 +126,21 @@ it("move_memory_branch は枝を to_scope の to_path へ移して旧 id → 複
   }
 });
 
+it("move_memory_branch の merge は domain に届き、移される定義を行き先の定義へ畳んで folded を返す(ADR 0177 決定7)", async () => {
+  const { client, call, material } = await boardWithMetaReview();
+  try {
+    const build = await call("define_memory", { scope: "sandbox", path: "build", definition: "How sandbox builds." });
+    const toolchain = await call("define_memory", { scope: "sandbox", path: "toolchain", definition: "What toolchain sandbox uses." });
+
+    expect(await call("move_memory_branch", { scope: "sandbox", path: "build", to_scope: "sandbox", to_path: "toolchain", merge: true })).toMatchObject({
+      isError: false,
+      body: { moved: [{ entry_id: material }], folded: [{ entry_id: build.body.entry_id, successor_id: toolchain.body.entry_id }] },
+    });
+  } finally {
+    await client.close();
+  }
+});
+
 it("fold_memory の successor_id は既にある後継に畳んで無効化の event id を返し、invalidate_memory は superseded も後継 id も tool error で断る(ADR 0161 決定2)", async () => {
   const { client, call, material } = await boardWithMetaReview();
   const kept = recordKnowledge(
@@ -147,17 +162,17 @@ it("fold_memory の successor_id は既にある後継に畳んで無効化の e
   }
 });
 
-it("define_memory の supersedes は list で、同じ scope の複数の Definition を1回で1つの新しい定義に畳み、空配列とスカラーは tool error で何も書かれない(ADR 0161 決定2)", async () => {
+it("define_memory の supersedes は list で、同じ path の複数の Definition(workspace と盤面全体)を1回で1つの新しい定義に畳み、空配列とスカラーは tool error で何も書かれない(ADR 0161 決定2)", async () => {
   const { client, call, material } = await boardWithMetaReview();
   try {
     const build = await call("define_memory", { scope: "sandbox", path: "build", definition: "How sandbox builds." });
-    const toolchain = await call("define_memory", { scope: "sandbox", path: "toolchain", definition: "What toolchain sandbox uses." });
+    const boardWide = await call("define_memory", { scope: null, path: "build", definition: "How every workspace builds." });
 
     const combined = await call("define_memory", {
-      scope: "sandbox",
+      scope: null,
       path: "build",
-      definition: "How sandbox builds and what it uses.",
-      supersedes: [build.body.entry_id, toolchain.body.entry_id],
+      definition: "How every workspace, sandbox included, builds.",
+      supersedes: [build.body.entry_id, boardWide.body.entry_id],
     });
     expect(combined.isError).toBe(false);
 
@@ -165,7 +180,7 @@ it("define_memory の supersedes は list で、同じ scope の複数の Defini
     const consolidated = [
       [material, null, null],
       [build.body.entry_id, "superseded", combined.body.entry_id],
-      [toolchain.body.entry_id, "superseded", combined.body.entry_id],
+      [boardWide.body.entry_id, "superseded", combined.body.entry_id],
       [combined.body.entry_id, null, null],
     ];
     expect(await rows()).toEqual(consolidated);

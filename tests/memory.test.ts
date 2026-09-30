@@ -330,45 +330,57 @@ it("同じ枝・同じスコープに approved の定義があれば domain erro
   expect(approvedMemoryEntries(db).map((e) => e.id)).toEqual([boardWide, revised]);
 });
 
-it("同じ枝の定義は supersedes にその生きた定義を含めれば書き直せ、supersedes の各定義は superseded + 後継で無効化される —— 含めなければ domain error で何も変わらない(ADR 0162 決定1)", () => {
+it("同じ枝の定義は supersedes にその生きた定義を含めれば書き直せ、supersedes の各定義(同じ path の別 scope も)は superseded + 後継で無効化される —— 含めなければ domain error で何も変わらない(ADR 0162 決定1)", () => {
   const { db } = board();
   const old = defineMemoryBranch(db, definition, "worker", at).entry_id;
-  const elsewhere = defineMemoryBranch(db, { ...definition, path: "ci", text: "How CI runs." }, "worker", at).entry_id;
+  const boardWide = defineMemoryBranch(db, { ...definition, scope: null, text: "How the board builds." }, "worker", at).entry_id;
   const before = listMemoryEntries(db, {});
-  expect(() => defineMemoryBranch(db, { ...definition, text: "Third line.", supersedes: [elsewhere] }, "webui", at)).toThrow(/already defined/);
+  expect(() => defineMemoryBranch(db, { ...definition, text: "Third line.", supersedes: [boardWide] }, "webui", at)).toThrow(/already defined/);
   expect(listMemoryEntries(db, {})).toEqual(before);
 
-  const revised = defineMemoryBranch(db, { ...definition, text: "Another line.", supersedes: [old, elsewhere] }, "webui", at).entry_id;
+  const revised = defineMemoryBranch(db, { ...definition, text: "Another line.", supersedes: [old, boardWide] }, "webui", at).entry_id;
   expect(approvedMemoryEntries(db)).toMatchObject([{ id: revised, path: "build", text: "Another line." }]);
   expect(listMemoryEntries(db, { state: "invalidated" })).toMatchObject([
     { id: old, invalidation_reason: "superseded", successor_id: revised },
-    { id: elsewhere, invalidation_reason: "superseded", successor_id: revised },
+    { id: boardWide, invalidation_reason: "superseded", successor_id: revised },
   ]);
 });
 
-it("定義の書き込みの supersedes が別 path の定義を置き換えられるのは、書く先の同じ scope・path に生きた定義があるとき(枝の統合)だけ —— 定義の無い path(盤面全体の定義は workspace の書き込みにとって数えない)への付け替えは domain error で枝ごとの移動へ案内し、何も書かない(ADR 0176 決定6)", () => {
+it("定義の書き込みの supersedes に別 path の定義があれば、書く先の定義の有無を問わず domain error で枝ごとの移動へ案内して何も書かず、同じ path・別 scope の定義は置き換えられる(ADR 0177 決定6)", () => {
   const { db } = board();
   const old = defineMemoryBranch(db, definition, "worker", at).entry_id;
-  defineMemoryBranch(db, { ...definition, scope: null, path: "toolchain", text: "The board's toolchain." }, "worker", at);
+  const target = defineMemoryBranch(db, { ...definition, path: "toolchain", text: "The toolchain." }, "worker", at).entry_id;
   const before = listMemoryEntries(db, {});
 
-  expect(() => defineMemoryBranch(db, { ...definition, path: "toolchain", text: "The toolchain.", supersedes: [old] }, "webui", at)).toThrow(/move_memory_branch/);
+  expect(() => defineMemoryBranch(db, { ...definition, path: "ci", text: "How CI runs.", supersedes: [old] }, "webui", at)).toThrow(/move_memory_branch/);
+  expect(() => defineMemoryBranch(db, { ...definition, path: "toolchain", text: "Both.", supersedes: [old, target] }, "webui", at)).toThrow(/move_memory_branch/);
   expect(listMemoryEntries(db, {})).toEqual(before);
 
-  const target = defineMemoryBranch(db, { ...definition, path: "toolchain", text: "The toolchain." }, "worker", at).entry_id;
-  const merged = defineMemoryBranch(db, { ...definition, path: "toolchain", text: "How it builds, with which toolchain.", supersedes: [old, target] }, "webui", at).entry_id;
-  expect(listMemoryEntries(db, { state: "invalidated" })).toMatchObject([
-    { id: old, invalidation_reason: "superseded", successor_id: merged },
-    { id: target, invalidation_reason: "superseded", successor_id: merged },
-  ]);
+  const lifted = defineMemoryBranch(db, { ...definition, scope: null, text: "How the board builds.", supersedes: [old] }, "webui", at).entry_id;
+  expect(listMemoryEntries(db, { state: "invalidated" })).toMatchObject([{ id: old, invalidation_reason: "superseded", successor_id: lifted }]);
 });
 
-it("定義の別の枝への付け替えは、枝の改名が枝ごとの移動(path_moved + 複製)、別の枝への統合が superseded + 後継(ADR 0176 決定7)", () => {
+it("既にある後継への畳みは Definition を別 path の Definition へ畳むと domain error で枝ごとの移動へ案内して何も変えず、同じ path・別 scope の Definition へは畳める(ADR 0177 決定6)", () => {
+  const { db } = board();
+  const old = defineMemoryBranch(db, definition, "worker", at).entry_id;
+  const elsewhere = defineMemoryBranch(db, { ...definition, path: "toolchain" }, "worker", at).entry_id;
+  const boardWide = defineMemoryBranch(db, { ...definition, scope: null }, "worker", at).entry_id;
+  const before = listMemoryEntries(db, {});
+  const fold = (successor_id: number) => () => foldMemoryEntries(db, { replaces: [old], successor_id, author: human }, "webui", at);
+
+  expect(fold(elsewhere)).toThrow(/move_memory_branch/);
+  expect(listMemoryEntries(db, {})).toEqual(before);
+  fold(boardWide)();
+  expect(entryById(db, old)).toMatchObject({ invalidation_reason: "superseded", successor_id: boardWide });
+});
+
+it("定義の別の枝への付け替えは、枝の改名が枝ごとの移動(path_moved + 複製)、別の枝への統合が枝ごとの移動の merge(superseded + 行き先の定義が後継)(ADR 0176 決定7 / ADR 0177 決定1)", () => {
   const { db } = board();
   defineMemoryBranch(db, definition, "worker", at);
   const renamed = moveMemoryBranch(db, { scope: "tidepool", path: "build", to_scope: "tidepool", to_path: "toolchain", mover: human }, "webui", at).moved[0]!.successor_id;
   const merged = defineMemoryBranch(db, { ...definition, path: "ci" }, "worker", at).entry_id;
-  invalidateMemoryEntry(db, { entry_id: renamed, reason: "superseded", successor_id: merged }, "human", "webui", at);
+  const { folded } = moveMemoryBranch(db, { scope: "tidepool", path: "toolchain", to_scope: "tidepool", to_path: "ci", merge: true, mover: human }, "webui", at);
+  expect(folded).toEqual([{ entry_id: renamed, successor_id: merged }]);
   expect(approvedMemoryEntries(db).map((e) => e.id)).toEqual([merged]);
 });
 
@@ -1255,25 +1267,66 @@ it("枝ごとの移動は移動元の scope(完全一致)で path が P か P/�
   expect(kept.map((id) => entries.get(id)?.invalidation_reason)).toEqual([null, null]);
 });
 
-it("枝ごとの移動は、移される Definition の置き場に生きた Definition があれば全体を domain error で拒んで畳むよう促し、移すものが無い・同じ置き場も domain error —— どれも何も変わらない", () => {
+it("枝ごとの移動は、移される Definition の置き場に生きた Definition があれば merge なしでは全体を domain error で拒んで衝突する組(根も子も)をすべて名指し、merge ありで衝突が無い・移すものが無い・同じ置き場も domain error —— どれも何も変わらない(ADR 0177 決定2)", () => {
   const { db } = board();
-  defineMemoryBranch(db, definition, "worker", at);
+  const [build, buildX] = ["build", "build/x"].map((path) => defineMemoryBranch(db, { ...definition, path }, "worker", at).entry_id);
   record(db, "fact");
-  defineMemoryBranch(db, { ...definition, scope: null, path: "toolchain" }, "worker", at);
+  const [toolchain, toolchainX] = ["toolchain", "toolchain/x"].map((path) => defineMemoryBranch(db, { ...definition, scope: null, path }, "worker", at).entry_id);
   const before = listMemoryEntries(db, {});
-  const move = (path: string, to_scope: string | null, to_path: string) => () =>
-    moveMemoryBranch(db, { scope: "tidepool", path, to_scope, to_path, mover: human }, "webui", at);
+  const move = (path: string, to_scope: string | null, to_path: string, merge?: boolean) => () =>
+    moveMemoryBranch(db, { scope: "tidepool", path, to_scope, to_path, merge, mover: human }, "webui", at);
 
-  expect(move("build", null, "toolchain")).toThrow(/fold/);
+  expect(move("build", null, "toolchain")).toThrow(
+    `definition ${build} onto definition ${toolchain} at toolchain in scope whole board, definition ${buildX} onto definition ${toolchainX} at toolchain/x in scope whole board: pass merge: true`,
+  );
+  expect(move("build", "tidepool", "elsewhere", true)).toThrow(/move without merge/);
   expect(move("nothing", null, "elsewhere")).toThrow(/no live memory entry/);
   expect(move("build", "tidepool", "build")).toThrow(/already at/);
   expect(listMemoryEntries(db, {})).toEqual(before);
 });
 
-it("watermark 再生と rebuild は移した複製(1件・枝ごと、2度の移動も)を表と同じ版・状態・書き手・出所に戻す", () => {
+/** 枝の統合(ADR 0177 決定1〜4)の盤面: 同じ scope の2枝 build と toolchain が根と子 x の両方に定義を持ち、build/tests に leaf。 */
+function merging() {
+  const { db } = board();
+  const define = (path: string) => defineMemoryBranch(db, { ...definition, path, text: `What ${path} holds.` }, "worker", at).entry_id;
+  const [build, buildX, toolchain, toolchainX] = ["build", "build/x", "toolchain", "toolchain/x"].map(define) as [number, number, number, number];
+  const tests = record(db, "fact");
+  const move = (merge?: boolean) => () =>
+    moveMemoryBranch(db, { scope: "tidepool", path: "build", to_scope: "tidepool", to_path: "toolchain", merge, mover: human }, "webui", at);
+  return { db, build, buildX, toolchain, toolchainX, tests, move };
+}
+
+it("枝ごとの移動の merge は、移される定義の行き先(同じ scope・path)の生きた定義へ根も子も一度に superseded(移した者の印)で畳み、残りを写して moved と folded を返す —— 行き先の定義は版も文言も変わらない(ADR 0177 決定1〜4)", () => {
+  const { db, build, buildX, toolchain, toolchainX, tests, move } = merging();
+  const destinations = () => [toolchain, toolchainX].map((id) => entryById(db, id)).map((e) => [e?.version, e?.text]);
+  const before = destinations();
+
+  const { moved, folded } = move(true)();
+
+  expect(folded).toEqual([
+    { entry_id: build, successor_id: toolchain },
+    { entry_id: buildX, successor_id: toolchainX },
+  ]);
+  expect(moved).toEqual([{ entry_id: tests, successor_id: expect.any(Number) }]);
+  expect([build, buildX, tests].map((id) => entryById(db, id))).toMatchObject([
+    { invalidation_reason: "superseded", successor_id: toolchain, invalidated_by: { activity: "human" } },
+    { invalidation_reason: "superseded", successor_id: toolchainX, invalidated_by: { activity: "human" } },
+    { invalidation_reason: "path_moved", successor_id: moved[0]!.successor_id },
+  ]);
+  expect(approvedMemoryEntries(db).map((e) => [e.id, e.path])).toEqual([
+    [toolchain, "toolchain"],
+    [toolchainX, "toolchain/x"],
+    [moved[0]!.successor_id, "toolchain/tests"],
+  ]);
+  expect(destinations()).toEqual(before);
+});
+
+it("watermark 再生と rebuild は移した複製(1件・枝ごと、2度の移動も)と統合の畳みを表と同じ版・状態・書き手・出所・後継に戻す", () => {
   const db = movable();
   for (const { id, kind, path } of listMemoryEntries(db, {})) moveMemory(db, { entry_id: id, scope: "charts", path: kind === "definition" ? path : "moved", mover: human }, "webui", at);
-  moveMemoryBranch(db, { scope: "charts", path: "moved", to_scope: null, to_path: "again", mover: human }, "webui", at);
+  defineMemoryBranch(db, { ...definition, scope: "charts", path: "moved" }, "worker", at);
+  defineMemoryBranch(db, { ...definition, scope: null, path: "again" }, "worker", at);
+  moveMemoryBranch(db, { scope: "charts", path: "moved", to_scope: null, to_path: "again", merge: true, mover: human }, "webui", at);
   const current = approvedMemoryEntries(db);
   const listed = listMemoryEntries(db, {});
 
@@ -1449,8 +1502,8 @@ function folds() {
   const { db, task } = board();
   const decision = logDecision(db, task, "split the migration into two commits", "deckhand", at);
   const fact = (title: string, supersedes?: number[]) => recordKnowledge(db, { ...humanEntryInput(db, { ...humanKnowledge, title }), supersedes }, "webui", at).entry_id;
-  const branch = (path: string, supersedes?: number[]) =>
-    defineMemoryBranch(db, { ...humanEntryInput(db, { workspace: "tidepool", path, text: `How ${path} works.` }), supersedes }, "webui", at).entry_id;
+  const branch = (workspace: string | null, supersedes?: number[]) =>
+    defineMemoryBranch(db, { ...humanEntryInput(db, { workspace, path: "build", text: `How ${workspace ?? "the board"} builds.` }), supersedes }, "webui", at).entry_id;
   const rule = (title: string, supersedes?: number[]) =>
     recordBehavior(db, { ...humanEntryInput(db, { ...humanKnowledge, title }), addressee: null, source_event_id: decision, supersedes }, "webui", at).entry_id;
   const example = (supersedes?: number[]) =>
@@ -1458,7 +1511,7 @@ function folds() {
       .entry_id;
   const writes = [
     ["knowledge", [fact("a"), fact("b")], (supersedes: number[]) => fact("folded", supersedes)],
-    ["definition", [branch("build"), branch("ci")], (supersedes: number[]) => branch("build", supersedes)],
+    ["definition", [branch("tidepool"), branch(null)], (supersedes: number[]) => branch("tidepool", supersedes)],
     ["behavior", [rule("a"), example()], (supersedes: number[]) => rule("folded", supersedes)],
     ["exemplar", [rule("b"), example()], (supersedes: number[]) => example(supersedes)],
   ] as const;
