@@ -5,8 +5,7 @@ export type Db = Database.Database;
 
 /** Memory の FTS5 tokenizer と、TS 側の前処理(CJK bigram + 語の先頭・末尾の . - _ 落とし)の版
  *  (spec #586 B、実測は #357 / #606、順序は #610)。
- *  どちらかを変えたら、boot の ensureMemoryIndex が索引を作り直す。索引の列を変えたときも前処理の版を上げる
- *  (-6 は original 列を外した版、#1052)。 */
+ *  どちらかを変えたら、boot の ensureMemoryIndex が索引を作り直す。索引の列を変えたときも前処理の版を上げる。 */
 export const MEMORY_FTS_TOKENIZER = "unicode61 tokenchars '_-.'";
 export const MEMORY_PREPROCESS_VERSION = "cjk-bigram-6";
 // Shared between the fresh-board CREATE and the memory index rebuild (memory.ts).

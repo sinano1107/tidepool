@@ -1366,8 +1366,7 @@ export function pullMemoryList(
                 .map((e) => withSuccessor(e, all)))(listMemoryEntries(db, {}));
     const { rows: shown, truncated } = paged(entries, input.page);
     // 原文は人間の面にだけ残す —— meta-review が読むのは英語の正文(#1052、readMemory と同じ側)
-    const english = shown.map(({ original: _original, ...e }) => e);
-    return recordPull(db, reader, { verb, input, returned_ids: shown.map((e) => e.id) }, { entries: english, truncated }, at);
+    return recordPull(db, reader, { verb, input, returned_ids: shown.map((e) => e.id) }, { entries: shown.map(({ original: _original, ...e }) => e), truncated }, at);
   })();
 }
 
