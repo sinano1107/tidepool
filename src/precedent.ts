@@ -293,7 +293,7 @@ export function projectEpisode(input: ProjectEpisodeInput): Episode {
         // decision / memory として結ばれないようにするため
         const boundAt = /__log_decision$/.test(action.tool)
           ? loggedAt
-          : /__(browse|search|read)_memory$/.test(action.tool)
+          : /__((browse|search|read)_memory|read_memory_entries)$/.test(action.tool)
             ? pulledAt
             : null;
         const eventId = boundAt && readEventId((block as Record<string, unknown>).content);
@@ -528,8 +528,8 @@ function pullsBefore(
 const sortedIds = (ids: number[]) => [...new Set(ids)].sort((a, b) => a - b);
 
 /** 「decision D より前に読んだ記憶」= read(spec #586 D / ADR 0083 決定10・追記6): D より前の
- *  `read_memory` の pull が返した id(昇順)。本文を読む経路は read_memory だけなので、注入や
- *  browse / search で見ただけの id は含まない(それは seen)。自己申告の列は持たない。D がこの
+ *  `read_memory` の pull が返した id(昇順)。worker が本文を読む経路は read_memory だけなので、注入や
+ *  browse / search で見ただけの id は含まない(それは seen。meta-review の read_memory_entries も seen —— ADR 0122 追記 #1225)。自己申告の列は持たない。D がこの
  *  Episode で位置を持たなければ null(「何も読まなかった」と混ぜない)。 */
 export function entriesReadBefore(
   episode: Pick<Episode, "markers">,

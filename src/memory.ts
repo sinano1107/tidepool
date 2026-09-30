@@ -1609,6 +1609,14 @@ export function pullMemoryBranches(db: Db, reader: Pick<MemoryReader, "taskId" |
 
 type ListedEntry = ReturnType<typeof listMemoryEntries>[number];
 
+const withoutOriginal = <T extends { original?: unknown }>({ original: _, ...rest }: T) => rest;
+
+/** meta-review の読み口の行: エントリの原文と Exemplar の注釈の原文は人間の面と正本にだけ残す(#1052 / ADR 0122 追記 #1225)。 */
+function metaReviewRow<T extends ListedEntry>(entry: T) {
+  const { annotations, ...rest } = withoutOriginal(entry);
+  return { ...rest, annotations: annotations?.map(withoutOriginal) };
+}
+
 /** meta-review の一覧3つ(issue #619): 人間の面と同じ一覧を verb ごとに絞ってページで返す。scope・宛先では
  *  絞らない(両方を見る必要があるのは workspace を跨いで構造を見る人間と meta-review だけ —— ADR 0178 決定8)。 */
 export function pullMemoryList(
@@ -1635,8 +1643,7 @@ export function pullMemoryList(
                 .filter((e) => e.state === "candidate" && (input.kind === undefined || e.kind === input.kind) && (input.include_invalidated || e.invalidation_reason === null))
                 .map((e) => withSuccessor(e, all)))(listMemoryEntries(db, {}));
     const { rows: shown, truncated } = paged(entries, input.page);
-    // エントリの原文(original)は人間の面にだけ残す —— readMemory と同じ側(#1052)
-    return recordPull(db, reader, { verb, input, returned_ids: shown.map((e) => e.id) }, { entries: shown.map(({ original: _, ...e }) => e), truncated }, at);
+    return recordPull(db, reader, { verb, input, returned_ids: shown.map((e) => e.id) }, { entries: shown.map(metaReviewRow), truncated }, at);
   })();
 }
 
@@ -1661,8 +1668,10 @@ export function pullMemoryProposals(db: Db, reader: Pick<MemoryReader, "taskId" 
         question_id: row.id,
         proposal: JSON.parse(row.question_proposal) as MemoryProposal,
         answer: answered?.answers[0]?.answer ?? null,
-        // 人間の原文(original_*)は人間の面と正本の event にだけ残す —— 一覧3 verb と同じ側(#1173)
-        amendment: answered?.amendment ? (({ original_title: _t, original_text: _x, ...rest }) => rest)(answered.amendment as MemoryAmendment) : null,
+        // 人間の原文(original_* と注釈の original)は人間の面と正本の event にだけ残す —— 一覧3 verb と同じ側(#1173 / ADR 0122 追記 #1225)
+        amendment: answered?.amendment
+          ? (({ original_title: _t, original_text: _x, annotations, ...rest }) => ({ ...rest, annotations: annotations?.map(withoutOriginal) }))(answered.amendment as MemoryAmendment)
+          : null,
         comment: answered?.comment ?? null,
         observed: stale && { entry_id: stale.entry_id, observed_event_id: stale.observed_event_id },
       };
@@ -1837,6 +1846,37 @@ export function readMemory(
         };
       });
     return recordPull(db, reader, { verb: "read_memory", input, returned_ids: entries.map((e) => e.id), dropped }, { entries, dropped }, at);
+  })();
+}
+
+/** meta-review の id 読み(ADR 0122 追記 #1225): 一覧と同じ行(全 scope・全宛先・全状態)に readMemory と同じ case を足す。
+ *  本文が同じ鎖は視界で切らず末尾までたどって requested_id を添え(末尾が無効化済みでも返す)、それ以外の無効化は行そのものを
+ *  返す。同じ行は1件で自身を求めた id が勝つ(readMemory と同じ)。存在しない id は missing。 */
+export function readMemoryEntries(db: Db, reader: Pick<MemoryReader, "taskId" | "agent">, input: { ids: number[] }, at: Date) {
+  return db.transaction(() => {
+    const restored = restoredAs(db);
+    const found = new Map<number, number | undefined>();
+    const missing: number[] = [];
+    for (const id of new Set(input.ids)) {
+      const row = db.prepare("SELECT * FROM memory_entries WHERE id = ?").get(id) as EntryRow | undefined;
+      if (!row) {
+        missing.push(id);
+        continue;
+      }
+      const tail = sameBodyChain(db, row, restored).at(-1)!;
+      if (tail.id === id) found.set(id, undefined);
+      else if (!found.has(tail.id)) found.set(tail.id, id);
+    }
+    // ponytail: 一覧を全件材料化して id で引く —— コストは #1056
+    const listed = new Map(listMemoryEntries(db, {}).map((e) => [e.id, e]));
+    const entries = [...found]
+      .sort(([a], [b]) => a - b)
+      .map(([id, requested_id]) => {
+        const entry = listed.get(id)!;
+        const shown = entry.kind === "behavior" || entry.kind === "exemplar" ? renderCase(db, entry.source) : null;
+        return { ...metaReviewRow(entry), requested_id, case: shown };
+      });
+    return recordPull(db, reader, { verb: "read_memory_entries", input, returned_ids: entries.map((e) => e.id) }, { entries, missing }, at);
   })();
 }
 

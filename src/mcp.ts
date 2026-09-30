@@ -28,6 +28,7 @@ import {
   pullMemoryList,
   pullMemoryProposals,
   readMemory,
+  readMemoryEntries,
   recordKnowledge,
   searchMemory,
 } from "./memory.js";
@@ -962,6 +963,21 @@ function registerMemoryMetaReviewVerbs(server: McpServer, deps: McpDeps, run: Me
   );
 
   server.registerTool(
+    "read_memory_entries",
+    {
+      description:
+        "Read memory entries by id, across every scope, addressee and state: the row list_memory_entries returns, plus case for a Behavior " +
+        "or Exemplar — the example it was drafted from (the decision, the steering objections raised against it, and that session's handoff " +
+        "and result, or a whole session's decisions in order with the handoff and result); null when there is none. An id whose entry was " +
+        "moved or restored returns the entry it now lives as, with requested_id set to the id you asked for. Any other invalidated entry comes " +
+        "back as it is, text included, with its invalidation_reason and successor_id. Ids that do not exist are listed in missing. A case can " +
+        "be long: read a few entries at a time.",
+      inputSchema: { ids: z.array(z.number().int()).min(1) },
+    },
+    async (input) => run((reader, now) => readMemoryEntries(deps.db, reader, input, now)),
+  );
+
+  server.registerTool(
     "list_memory_branches",
     { description: MEMORY_BRANCHES_DESCRIPTION },
     async () => run((reader, now) => pullMemoryBranches(deps.db, reader, now)),
@@ -1119,7 +1135,7 @@ function registerMemoryMetaReviewVerbs(server: McpServer, deps: McpDeps, run: Me
               .optional()
               .describe(
                 "kind exemplar only. anchor is whole, or a case field (decision / steering / handoff / result) with a quote copied verbatim " +
-                  "from it; polarity is imitate or avoid; text says what to imitate or avoid.",
+                  "from it — read the case with read_memory_entries (any entry in replaces carries it); polarity is imitate or avoid; text says what to imitate or avoid.",
               ),
           })
           .optional()

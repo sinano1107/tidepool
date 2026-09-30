@@ -3,7 +3,7 @@ import { createBehaviorCandidate, defineMemoryBranch, recordKnowledge, WORKER_ME
 import { MEMORY_META_REVIEW_VERBS } from "../src/meta-review.js";
 import { DEFAULT_AUDITOR_NAME } from "../src/tasks.js";
 import { UnknownWorkspaceError } from "../src/workspace.js";
-import { api, bootTidepool, GIT_FIXTURE_TEST_TIMEOUT, HOUR, makeWorkspace, mcpClient, memoryEntries, registerWork, type Tidepool } from "./harness.js";
+import { api, bootTidepool, GIT_FIXTURE_TEST_TIMEOUT, HOUR, makeWorkspace, managementMcpClient, mcpClient, memoryEntries, registerWork, type Tidepool } from "./harness.js";
 import { makeRegistryAgentCheck } from "./registry-fixture.js";
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
@@ -94,6 +94,34 @@ it("define_memory は重ねた木の門と畳み方・改名を言い、list_mem
     );
   } finally {
     await client.close();
+  }
+});
+
+it("read_memory_entries は主題 memory の接続に出て管理MCP には出ず、呼ぶと行と missing を返す —— 説明は読める範囲・case・鎖のたどり・missing を言い、purpose と propose_memory_change の注釈の説明はこの verb で case を読むと言う(ADR 0122 追記 #1225)", async () => {
+  const { review, client, call, material } = await boardWithMetaReview();
+  const management = await managementMcpClient(t.baseUrl);
+  try {
+    const { tools } = await client.listTools();
+    expect(tools.find((tool) => tool.name === "read_memory_entries")?.description).toBe(
+      "Read memory entries by id, across every scope, addressee and state: the row list_memory_entries returns, plus case for a Behavior " +
+        "or Exemplar — the example it was drafted from (the decision, the steering objections raised against it, and that session's handoff " +
+        "and result, or a whole session's decisions in order with the handoff and result); null when there is none. An id whose entry was " +
+        "moved or restored returns the entry it now lives as, with requested_id set to the id you asked for. Any other invalidated entry comes " +
+        "back as it is, text included, with its invalidation_reason and successor_id. Ids that do not exist are listed in missing. A case can " +
+        "be long: read a few entries at a time.",
+    );
+    expect((await management.listTools()).tools.map((tool) => tool.name)).not.toContain("read_memory_entries");
+    expect(await call("read_memory_entries", { ids: [material, 9999] })).toMatchObject({
+      isError: false,
+      body: { entries: [{ id: material, case: null }], missing: [9999], event_id: expect.any(Number) },
+    });
+    expect(review.purpose).toContain("A Precedent with cause memory names the wrong entries it followed (entries): read them with read_memory_entries, then drop");
+    expect(review.purpose).toContain("Read the case of a candidate or an Exemplar — the example it was drafted from — with read_memory_entries.");
+    const propose = tools.find((tool) => tool.name === "propose_memory_change")!.inputSchema as any;
+    expect(propose.properties.text.properties.annotations.description).toContain("read the case with read_memory_entries");
+  } finally {
+    await client.close();
+    await management.close();
   }
 });
 
