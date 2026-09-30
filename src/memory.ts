@@ -255,7 +255,7 @@ export function foldMemoryEntries(
     for (const row of replaces.map((id) => requireEntry(db, id))) {
       if (row.kind === "definition" && successor.kind === "definition" && row.path !== successor.path) {
         throw new DomainError(
-          `definition ${row.id} at ${row.path} cannot be replaced by definition ${successor.id} at ${successor.path}: a definition is replaced only at its own path — merge branches with move_memory_branch and merge: true`,
+          `definition ${row.id} at ${row.path} cannot be replaced by a definition at ${successor.path}: a definition is replaced only at its own path — merge branches with move_memory_branch and merge: true`,
         );
       }
     }

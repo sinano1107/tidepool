@@ -704,16 +704,15 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
   );
   const moveEffect =
     "The board copies the body — title, text, originals, addressee, annotations, source, author, state and approval — to the new place " +
-    "and invalidates the old entry as path_moved; you are recorded as the one who moved it. A candidate stays a candidate. A Definition " +
-    "cannot move onto a path that already has a live Definition in that workspace: fold it into that one with fold_memory_entries " +
-    "instead. A Definition's path changes " +
-    "only with move_memory_branch, which carries the entries under it; move_memory_entry changes only its workspace.";
+    "and invalidates the old entry as path_moved; you are recorded as the one who moved it. A candidate stays a candidate. " +
+    "A Definition's path changes only with move_memory_branch, which carries the entries under it; move_memory_entry changes only its workspace.";
   server.registerTool(
     "move_memory_entry",
     {
       description:
         "Move one live memory entry (any kind, approved or candidate) to another workspace and path. workspace null = the whole board. " +
-        moveEffect,
+        "A Definition cannot move onto a path that already has a live Definition in that workspace: fold it into that one with " +
+        `fold_memory_entries instead. ${moveEffect}`,
       inputSchema: memoryMoveSchema.extend({ entry_id: z.number().int().positive() }).shape,
     },
     async ({ entry_id, workspace, path }) =>
