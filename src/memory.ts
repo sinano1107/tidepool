@@ -1168,12 +1168,19 @@ export function listMemoryEntries(
     }));
 }
 
-/** CJK の連なり。捕獲グループは ftsQuery の split が連なりを結果に残すためにある(外すと CJK の語が query から消える)。 */
-const CJK_RUN = /([\p{scx=Han}\p{scx=Hiragana}\p{scx=Katakana}\p{scx=Hangul}]+)/gu;
+/** CJK の連なり = Script_Extensions が Han / Hiragana / Katakana / Hangul で、一般カテゴリが文字・数字・Mn の字(#1180)。
+ *  scx だけだと 、。「」・〜 や ㈱ など句読点・記号(P / S / Mc)も入って bigram に混ざるので、それらは連なりを切り、
+ *  前処理後もそのまま残って unicode61 の区切りになる。捕獲グループは ftsQuery の split が連なりを結果に残すためにある
+ *  (外すと CJK の語が query から消える)。 */
+const CJK_RUN = /((?:(?=[\p{L}\p{N}\p{Mn}])[\p{scx=Han}\p{scx=Hiragana}\p{scx=Katakana}\p{scx=Hangul}])+)/gu;
+/** query の語の切れ目 = 空白と、CJK_RUN から外した CJK の句読点・記号。`注入（src/memory.ts）、drift。` の `drift` も
+ *  識別子と別の語になる(#1180 の前は句読点も連なりとして割れていた)。 */
+const QUERY_BREAK = /(?:\s|(?![\p{L}\p{N}\p{Mn}])[\p{scx=Han}\p{scx=Hiragana}\p{scx=Katakana}\p{scx=Hangul}])+/u;
 
-/** 索引と query の共通の前処理(spec #586 B / #606 / #608 / #610)。まず CJK の連なりを重なりつきの2文字語に割り(LWC 式)
+/** 索引と query の共通の前処理(spec #586 B / #606 / #608 / #610 / #1180)。まず CJK の連なりを重なりつきの2文字語に割り(LWC 式)
  *  空白で囲む。unicode61 は CJK を語に切らない。1文字の連なりはそのまま。長音符 ー は Script=Common なので
- *  Script_Extensions で拾う(拾わないと「サーバ」が割れて当たらない)。その後で . - _ の連なりを、連なりの外側の隣が
+ *  Script_Extensions で拾う(拾わないと「サーバ」が割れて当たらない)。ー と踊り字 々 ゝ は Lm、〇 は Nl なので連なりに残る。
+ *  句読点は連なりの外なので `設定を直す。` の `す。` のような余分な1文字語は出ない。その後で . - _ の連なりを、連なりの外側の隣が
  *  unicode61 の token にならない文字(空白・文字列の端・`)` `"` などの記号)のとき連なりごと落とす(tokenchars なので
  *  文末の `narrow.)` が `narrow` に当たらない。語中は `foo__bar` のような連なりも残す。unicode61 は結合文字 Mn を
  *  token に含め、Mc / Me では切る)。bigram が先なので、CJK に接した `東京.csv` の `.` も隣が空白になって落ちる。 */
@@ -1241,12 +1248,12 @@ const STOPWORDS = new Set(
 );
 
 /** query を前処理して stopword を落とし、語ごとに引用符で囲む(識別子の / . - を FTS の構文として
- *  読ませない)。語は空白と、CJK の連なりとそれ以外の境目で割る(`src/memory.tsの注入` の識別子も独立の語、#1178)。
- *  CJK の連なりは bigram の1 phrase のまま(隣接を保ち、`東京都` は「京都と東京」に当たらない)。語は既定で AND、
- *  注入は OR で繋ぐ。残る語が無ければ null。 */
+ *  読ませない)。語は空白と CJK の句読点・記号(、。「」 など)と、CJK の連なりとそれ以外の境目で割る(`src/memory.tsの注入`
+ *  の識別子も独立の語、#1178 / #1180)。CJK の連なりは bigram の1 phrase のまま(隣接を保ち、`東京都` は「京都と東京」に
+ *  当たらない)。語は既定で AND、注入は OR で繋ぐ。残る語が無ければ null。 */
 function ftsQuery(query: string, join: " " | " OR " = " "): string | null {
   const terms = query
-    .split(/\s+/)
+    .split(QUERY_BREAK)
     .flatMap((word) => word.split(CJK_RUN))
     .map((word) => ftsText(word).trim())
     // 語の端の記号を除いて見る(`it,` も FTS には `it` として届く。記号だけの語は消える)

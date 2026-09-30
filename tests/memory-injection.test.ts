@@ -190,6 +190,16 @@ it.each([
   expect(injection.entries.map((e) => e.id).sort()).toEqual(expected.map((key) => ids[key]).sort());
 });
 
+it("句読点で切れた title は切れ目ごとの phrase の OR で引くので、title「設定を直す、テストを通す。」の task には text「設定を直す」の leaf が関連 leaf に並ぶ(#1180)", () => {
+  const { db, task, record } = board({ title: "設定を直す、テストを通す。", purpose: "chart drifts", completion_criteria: "tests pass" });
+  const leaf = record({ path: "settings", title: "Settings fix", text: "設定を直す" });
+  record({ path: "deploy", title: "Deploy to the Pi", text: "It runs on the Pi." });
+
+  const injection = buildMemoryInjection(db, task, "tidepool", "deckhand");
+
+  expect(injection.entries.map((e) => e.id)).toEqual([leaf]);
+});
+
 it("title / purpose / completion criteria が stopword だけの task は、関連 leaf なし・INDEX ありの節を組む", () => {
   const { db, task, record } = board({ title: "The", purpose: "it is", completion_criteria: "a" });
   record({ path: "deploy", title: "Deploy to the Pi", text: "It is on the Pi." });
