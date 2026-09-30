@@ -7,7 +7,7 @@ import { getDisplayLanguage } from "./display-language.js";
 import { appendEvent, type EventOrigin, type EventPayload, type EventRow, getEvent, isDecisionLogEntry, listEvents, listEventsOfKinds } from "./events.js";
 import { metaReviewSubjectOf, paged, previousMetaReviewWatermark } from "./meta-review.js";
 import { entriesReadBefore, entriesSeenBefore, listEpisodes, sessionSpawnOf, sessionWindow } from "./precedent.js";
-import { BOARD_WORKER_ID, DomainError, getTask, HUMAN_WORKER_ID, type MemoryProposal, registerTask, settleQuestionAsObserved, type Task } from "./tasks.js";
+import { BOARD_WORKER_ID, DomainError, getTask, HUMAN_WORKER_ID, type MemoryProposal, type QuestionProposal, registerTask, settleQuestionAsObserved, type Task } from "./tasks.js";
 import { entryObjections, objectedEntryText, objectionsById } from "./triage.js";
 
 /** 無効化の理由コード(spec #586 A)。自由記述は持たない。置換と path の付け替えは後継 id
@@ -380,6 +380,12 @@ function sameBodyChain(db: Db, row: EntryRow, restored?: Map<number, number>): E
   }
 }
 
+/** id の `path_moved` の鎖の末尾(id 自身か、最後に移した複製)。提案 question の pin の照合・適用(ADR 0162 決定6)と、
+ *  復元が見る後継の生死が読む。 */
+export function movedTail(db: Db, id: number): EntryRow {
+  return sameBodyChain(db, requireEntry(db, id)).at(-1)!;
+}
+
 /** 復元(ADR 0163): 無効化済みのエントリ(4種別、状態は問わない)の本文の側を同じ scope / path に写して新エントリにする ——
  *  移動の複製と同じ形で新規の書き込みの門は掛けず、版は継がない(approved なら版は複製の作成 event)。旧の行は触らず、旧を pin して
  *  いた提案 question も戻さない。`path_moved` と一度復元した旧は複製の側を扱う(移し戻すか、落ちた複製を復元する —— 追記 #1059)
@@ -398,7 +404,7 @@ export function restoreMemoryEntry(
     }
     const copy = restoredAs(db).get(row.id);
     if (copy !== undefined) throw new DomainError(`memory entry ${row.id} was already restored as entry ${copy}: handle that copy instead`);
-    const successor = row.successor_id === null ? undefined : sameBodyChain(db, requireEntry(db, row.successor_id)).at(-1);
+    const successor = row.successor_id === null ? undefined : movedTail(db, row.successor_id);
     if (successor && successor.invalidation_reason === null) {
       throw new DomainError(`memory entry ${row.id} was replaced by the live successor ${successor.id}: invalidate that first`);
     }
@@ -651,7 +657,7 @@ export function previewCase(db: Db, eventId: number): MemoryCase {
   return rendered;
 }
 
-export function requireEntry(db: Db, id: number): EntryRow {
+function requireEntry(db: Db, id: number): EntryRow {
   const row = db.prepare("SELECT * FROM memory_entries WHERE id = ?").get(id) as EntryRow | undefined;
   if (!row) throw new DomainError(`no memory entry ${id}`);
   return row;
@@ -701,9 +707,12 @@ export function invalidateMemoryEntry(
       at,
     });
     // pin の陳腐化(ADR 0120 決定4): この entry を pin する open な提案 question を観測で決着させる。回答中の question は
-    // answerQuestion が先に done にしているので、reject や承認の superseded が自分自身を決着させることは無い
-    for (const id of openProposalsPinning(db, entry_id, true)) {
-      settleQuestionAsObserved(db, id, { kind: "memory_proposal_stale", question_id: id, entry_id, observed_event_id: eventId }, at);
+    // answerQuestion が先に done にしているので、reject や承認の superseded が自分自身を決着させることは無い。移動は本文が
+    // 同じなので決着させない —— pin は複製へたどる(ADR 0162 決定6)
+    if (reason !== "path_moved") {
+      for (const id of openProposalsPinning(db, entry_id, true)) {
+        settleQuestionAsObserved(db, id, { kind: "memory_proposal_stale", question_id: id, entry_id, observed_event_id: eventId }, at);
+      }
     }
     return eventId;
   })();
@@ -736,38 +745,49 @@ export function invalidateMemoryByMetaReview(
 }
 
 /** この entry を pin する open な提案 question の id(陳腐化の hook と、同じ entry への二重提案の拒否が読む)。既存の後継は
- *  陳腐化の hook だけが数える(ADR 0160 決定3)。 */
+ *  陳腐化の hook だけが数える(ADR 0160 決定3)。pin は `path_moved` の鎖の末尾で見る —— 移す前の id を pin する question も
+ *  複製を pin している(ADR 0162 決定6)。 */
 function openProposalsPinning(db: Db, entryId: number, successors: boolean): string[] {
-  return (
-    db
-      .prepare(
-        `SELECT id FROM tasks WHERE status = 'todo' AND json_extract(question_proposal, '$.kind') = 'memory'
-           AND (json_extract(question_proposal, '$.candidate_id') = @entryId
-             OR json_extract(question_proposal, '$.target.id') = @entryId
-             OR (@successors AND json_extract(question_proposal, '$.successor.id') = @entryId)
-             OR EXISTS (SELECT 1 FROM json_each(question_proposal, '$.replaces') WHERE json_extract(value, '$.id') = @entryId))`,
-      )
-      .all({ entryId, successors: Number(successors) }) as Array<{ id: string }>
-  ).map(({ id }) => id);
+  const open = db
+    .prepare("SELECT id, question_proposal FROM tasks WHERE status = 'todo' AND json_extract(question_proposal, '$.kind') = 'memory'")
+    .all() as Array<{ id: string; question_proposal: string }>;
+  return open
+    .filter(({ question_proposal }) => pinnedIds(JSON.parse(question_proposal) as MemoryProposal, successors).some((id) => movedTail(db, id).id === entryId))
+    .map(({ id }) => id);
+}
+
+/** 提案が pin した entry の id: 名指す entry(candidate・invalidate の target・既存の後継 —— 後継は successors のときだけ)と replaces。 */
+function pinnedIds(proposal: MemoryProposal, successors: boolean): number[] {
+  const named = "candidate_id" in proposal ? proposal.candidate_id : proposal.op === "invalidate" ? proposal.target.id : successors ? proposal.successor.id : undefined;
+  return [...(named === undefined ? [] : [named]), ...proposal.replaces.map(({ id }) => id)];
+}
+
+/** 提案 question の移動の注釈(ADR 0162 決定6): 移された pin ごとに旧 id と末尾の id・path・scope。pin と detail は見せた時点の
+ *  まま焼いてあるので、今の置き場は読むときにここで引く(承認 question の `approval` 注釈と同じ位置、issue #757)。 */
+export function movedPins(db: Db, proposal: QuestionProposal | null): Array<{ id: number; tail_id: number; path: string; scope: string | null }> {
+  if (proposal?.kind !== "memory") return [];
+  return pinnedIds(proposal, true).flatMap((id) => {
+    const tail = movedTail(db, id);
+    return tail.id === id ? [] : [{ id, tail_id: tail.id, path: tail.path, scope: tail.scope }];
+  });
 }
 
 /** pin 検査(ADR 0120 決定4): candidate が未無効化の Behavior / Exemplar candidate(invalidate op は target、既存の後継の
- *  consolidate は後継の版が一致し未無効化)で、replaces の版が現在と一致し未無効化。
+ *  consolidate は後継の版が一致し未無効化)で、replaces の版が現在と一致し未無効化。各 pin は `path_moved` の鎖の末尾で
+ *  照合し(ADR 0162 決定6)、返した末尾(名指す entry と replaces の id)へ適用する。
  *  approve も reject も、見せた状態に対してだけ適用する。 */
-function assertProposalFresh(db: Db, proposal: MemoryProposal): EntryRow {
-  const unchanged = ({ id, version }: { id: number; version: number | null }) => {
-    const row = requireEntry(db, id);
-    return row.version === version && row.invalidation_reason === null;
-  };
+function assertProposalFresh(db: Db, proposal: MemoryProposal): { named: EntryRow; replaced: number[] } {
+  const unchanged = (row: EntryRow, version: number | null) => row.version === version && row.invalidation_reason === null;
   const pinned = "candidate_id" in proposal ? undefined : proposal.op === "invalidate" ? proposal.target : proposal.successor;
-  const named = requireEntry(db, "candidate_id" in proposal ? proposal.candidate_id : pinned!.id);
+  const named = movedTail(db, "candidate_id" in proposal ? proposal.candidate_id : pinned!.id);
+  const replaced = proposal.replaces.map(({ id, version }) => ({ row: movedTail(db, id), version }));
   const fresh =
     (pinned
-      ? unchanged(pinned)
+      ? unchanged(named, pinned.version)
       : (named.kind === "behavior" || named.kind === "exemplar") && named.state === "candidate" && named.invalidation_reason === null) &&
-    proposal.replaces.every(unchanged);
+    replaced.every(({ row, version }) => unchanged(row, version));
   if (!fresh) throw new DomainError("this proposal is stale: a memory entry it names changed since it was proposed");
-  return named;
+  return { named, replaced: replaced.map(({ row }) => row.id) };
 }
 
 function markApproved(db: Db, id: number, version: number): void {
@@ -784,11 +804,10 @@ function markApproved(db: Db, id: number, version: number): void {
 export function approveMemoryProposal(db: Db, proposal: MemoryProposal, questionId: string, origin: EventOrigin, at: Date, amendment?: MemoryAmendment): number {
   const mark = { question_id: questionId };
   return db.transaction(() => {
-    const named = assertProposalFresh(db, proposal);
+    const { named, replaced } = assertProposalFresh(db, proposal);
     const supersede = (ids: number[], successor_id: number) => {
       for (const id of ids) invalidateMemoryEntry(db, { entry_id: id, reason: "superseded", successor_id }, HUMAN_WORKER_ID, origin, at, mark);
     };
-    const replaced = proposal.replaces.map((r) => r.id);
     if (!("candidate_id" in proposal)) {
       // 文言を承認しないので修正値を持たない(ADR 0152 決定2 / ADR 0160)—— 扉の外から呼ばれても黙って捨てず断る
       if (amendment) throw new DomainError("a proposal without a candidate takes no amendment: approve or reject it as proposed");
@@ -830,8 +849,8 @@ export function approveMemoryProposal(db: Db, proposal: MemoryProposal, question
  *  選び直す材料で、question_answered に残る(`pullMemoryProposals`)。 */
 export function rejectMemoryProposal(db: Db, proposal: MemoryProposal, questionId: string, origin: EventOrigin, at: Date, comment: string | undefined): void {
   if (!comment?.trim()) throw new DomainError("rejecting a memory proposal requires a comment saying why");
-  assertProposalFresh(db, proposal);
-  if ("candidate_id" in proposal) invalidateMemoryEntry(db, { entry_id: proposal.candidate_id, reason: "rejected" }, HUMAN_WORKER_ID, origin, at, { question_id: questionId });
+  const { named } = assertProposalFresh(db, proposal);
+  if ("candidate_id" in proposal) invalidateMemoryEntry(db, { entry_id: named.id, reason: "rejected" }, HUMAN_WORKER_ID, origin, at, { question_id: questionId });
 }
 
 /** 提案の defer(ADR 0165 決定3): 決めないので店には何もせず(pin 検査も要らない)、comment だけを reject と同じく必須にする。 */

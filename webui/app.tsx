@@ -196,7 +196,7 @@ function liveTitle(t: Pick<import('../src/wire-contract').QueueTask, 'title' | '
 // Maps one raw question task into TpQuestionCard's shape — shared by the board's
 // question list (mapData) and the push deep-link's single-question view.
 function toQuestionCardShape(
-  q: Pick<WireContract['GET /api/tasks/:id'], 'id' | 'parent_id' | 'blocking' | 'registrant' | 'purpose' | 'question_items' | 'approval' | 'question_proposal'>,
+  q: Pick<WireContract['GET /api/tasks/:id'], 'id' | 'parent_id' | 'blocking' | 'registrant' | 'purpose' | 'question_items' | 'approval' | 'moved' | 'question_proposal'>,
   icons: AppIcons,
 ): TpQuestion {
   // who issued the question — the board itself (issue #261) or an agent
@@ -204,6 +204,10 @@ function toQuestionCardShape(
   // 盤面の行も task 詳細も registrant を必ず載せる(サーバ型の optional は内部の事情)
   const registrant = q.registrant!;
   const isBoard = registrant === 'tidepool';
+  // 移された pin(ADR 0162 決定6): detail は提案時の置き場のまま焼いてあるので、今の置き場は盤面の `moved` 注釈が答える
+  const moved = q.moved ?? [];
+  const movedNote = moved.map((m) => `#${m.id} moved → #${m.tail_id} at ${m.path} (${m.scope ?? 'whole board'})`).join('\n');
+  const candidateId = q.question_proposal?.kind === 'memory' ? q.question_proposal.candidate_id : undefined;
   return {
     // 付帯子の提案 question は親を塞がない — 塞ぐ親は盤面の `blocking` が答える(issue #935)
     id: q.id, blocking: q.blocking,
@@ -214,14 +218,15 @@ function toQuestionCardShape(
     // 1-4 items, each with its own title/detail/options (issue #30) — a
     // single-item bundle is the degenerate, most common case
     items: (q.question_items ?? []).map((item) => ({
-      title: item.title, detail: item.detail,
+      title: item.title, detail: item.detail, ...(movedNote && { movedNote }),
       options: item.options.map((o: string) => ({ label: o, recommended: o === item.recommendation })),
     })),
     // 承認 question(決裁権外の子の登録)と、approve で親の risk が上がるかは
     // 盤面の `approval` 注釈が答える(issue #757)— ここは描画の形に写すだけ
     ...(q.question_proposal?.kind === 'routing' && q.question_proposal.op === 'row' && { amendable: 'row' as const }),
     ...(q.question_proposal?.kind === 'registry' && { amendable: 'agent_tier' as const }),
-    ...(q.question_proposal?.kind === 'memory' && q.question_proposal.candidate_id !== undefined && { amendable: 'memory' as const, candidateId: q.question_proposal.candidate_id }),
+    // 修正値の初期値は candidate の今の本文 —— 移されていれば末尾の複製
+    ...(candidateId !== undefined && { amendable: 'memory' as const, candidateId: moved.find((m) => m.id === candidateId)?.tail_id ?? candidateId }),
     ...(q.question_proposal?.kind === 'memory' && { needsComment: ['reject', 'defer'] }),
     ...(q.approval && {
       kind: 'approval',

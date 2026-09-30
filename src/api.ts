@@ -57,6 +57,7 @@ import {
   memoryListFilterSchema,
   memoryMoveSchema,
   memorySettingsChangeSchema,
+  movedPins,
   moveMemory,
   moveMemoryBranch,
   previewCase,
@@ -2023,6 +2024,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
               ...task,
               landing: landingAnnotation(db, task),
               approval: approvalAnnotation(db, task),
+              moved: movedPins(db, task.question_proposal),
               blocking: questionBlocking(db, task.id),
             }
           : task,
@@ -2079,6 +2081,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       ...presented!,
       ...(task.type === "question" && {
         approval: approvalAnnotation(db, task),
+        moved: movedPins(db, task.question_proposal),
         blocking: questionBlocking(db, task.id),
       }),
     } satisfies WireContract["GET /api/tasks/:id"]);

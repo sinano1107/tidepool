@@ -10,6 +10,8 @@
 interface TpQuestionItem {
   title: string;
   detail?: string | null;
+  /** memory の提案 question で移された pin の今の置き場(ADR 0162 決定6)—— detail の下に出す。 */
+  movedNote?: string;
   options: { label: string; recommended: boolean }[];
 }
 interface TpQuestion {
@@ -119,6 +121,7 @@ function TpQuestionItemPicker({ item, value, locked, onChange, translated, disab
       {translated && <div style={{ fontSize: 'var(--text-sm)', color: 'var(--tide-5)', marginBottom: item.detail ? 3 : 8, whiteSpace: 'pre-wrap' }}>{translated.title}</div>}
       {item.detail && <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)', marginBottom: 8, whiteSpace: 'pre-wrap' }}>{item.detail}</div>}
       {translated && item.detail && <div style={{ fontSize: 'var(--text-xs)', color: 'var(--tide-5)', marginBottom: 8, whiteSpace: 'pre-wrap' }}>{translated.detail}</div>}
+      {item.movedNote && <div style={{ fontSize: 'var(--text-xs)', color: 'var(--sun-4)', marginBottom: 8, whiteSpace: 'pre-wrap' }}>{item.movedNote}</div>}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
         {item.options.map((o) => {
           const picked = value === o.label;
