@@ -2624,15 +2624,12 @@ type YourTask = BoardTask & { blocking: string | null };
  *  at all. Ordered by `sort_key` like every other board view. Rows are the
  *  board's derivation (issue #1221); which rows appear is the *stored*
  *  assignee — a question resolves to `human` but is not a your-task (#1220). */
-export function listYourTasks(
-  db: Db,
-  defaultAgentName?: string,
-  auditorName: string = DEFAULT_AUDITOR_NAME,
-): YourTask[] {
+export function listYourTasks(db: Db): YourTask[] {
   const rows = boardRows(
     db,
     "",
-    [{ defaultAgentName: defaultAgentName ?? null, auditorName }],
+    // 保存値が human の行だけなので既定 agent へは落ちない —— SQL が参照する名前を埋めるだけ
+    [{ defaultAgentName: null, auditorName: null }],
     `tasks.assignee = '${HUMAN_WORKER_ID}' AND tasks.status NOT IN ('done', 'cancelled')`,
     `, ${blockingSql("tasks")} AS blocking`,
   ) as Array<BoardRow & { blocking: string | null }>;

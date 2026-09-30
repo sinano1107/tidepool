@@ -296,7 +296,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
     });
   });
   server.registerTool("list_your_tasks", { description: "List unsettled tasks assigned to the human." }, async () =>
-    toolResult(listYourTasks(deps.db, deps.defaultAgentName, deps.auditorName)),
+    toolResult(listYourTasks(deps.db)),
   );
   server.registerTool(
     "get_task",
@@ -975,20 +975,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
       try {
         return toolResult(
           await submitAnswer(
-            {
-              db: deps.db,
-              pollNow: deps.pollNow,
-              workspace: deps.workspace,
-              resolveWorkspace: deps.resolveWorkspace,
-              github: deps.github,
-              landing: deps.landing,
-              reclaim: deps.reclaim,
-              quarantineChecks: deps.quarantineChecks,
-              agentAdmin: deps.agentAdmin,
-              agentRegistered: deps.agentRegistered,
-              defaultAgentName: deps.defaultAgentName,
-              auditorName: deps.auditorName,
-            },
+            deps,
             task,
             answers,
             comment,
