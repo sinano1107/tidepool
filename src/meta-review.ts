@@ -53,7 +53,9 @@ export const META_REVIEW_SUBJECTS = {
         "Periodic meta-review of the board's memory store. Judge repeats among candidates and exemplars, redundant examples included, by reading them, not by counting. " +
         "For a Definition, ask whether it holds true whatever leaf sits under its branch. " +
         "Where a branch holds entries but has no Definition in their scope or whole-board, write one that passes the same test " +
-        "(define_memory) — in the workspace when the entries are all in one, whole-board otherwise." +
+        "(define_memory) — in the workspace when the entries are all in one, whole-board otherwise. " +
+        "When two or more workspaces define the same path, read the definitions: fold them into one whole-board definition when they mean the same " +
+        "(define_memory with scope null and supersedes), and rename one branch when they do not (move_memory_branch). " +
         PROMOTION_RULE +
         " Changes to approved Behaviors and Exemplars go through the proposal verb: consolidate redundant ones into the one you keep (propose_memory_change's successor_id), " +
         "into a new candidate when they share a source, or into an existing candidate (candidate_id). Apply fixes to Knowledge and Definitions directly, and retire or fold a candidate directly " +

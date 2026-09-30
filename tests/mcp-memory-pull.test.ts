@@ -117,6 +117,20 @@ it("search_memory の description は、索引が英語だと言う(#1052)", asy
   }
 });
 
+it("define_memory_branch の description は、盤面全体のエントリがある path とその上位は定義できず、枝の下に置くか子の枝を定義するよう言う(ADR 0178)", async () => {
+  t = await bootTidepool();
+  const task = await registerWork(t, "index the tide charts");
+  const client = await mcpClient(t.mcpBaseUrl, task.id);
+  try {
+    const { tools } = await client.listTools();
+    expect(tools.find((tool) => tool.name === "define_memory_branch")?.description).toContain(
+      "A path that holds whole-board entries at or under it cannot be defined for this workspace: file under the branch as it is, or define a sub-branch.",
+    );
+  } finally {
+    await client.close();
+  }
+});
+
 it("record_knowledge の description は、新しい枝を切るときは先に define_memory_branch で定義を書くよう言う", async () => {
   t = await bootTidepool();
   const task = await registerWork(t, "index the tide charts");

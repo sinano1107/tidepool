@@ -218,7 +218,7 @@ const liveUnder = (db: ReturnType<typeof openDb>, scope: string | null, path: st
 it("meta-review の move_memory_branch は同じ scope の中で枝を改名し、4種別(approved / candidate、open な提案が名指すものも)を配下ごと移して旧 id → 複製の id を返す(ADR 0176 決定1)", () => {
   const f = rescoping();
   const ids = [
-    defineMemoryByMetaReview(f.db, { scope: "tidepool", path: "habits", text: "How we work.", author: metaReview }, "worker", at).entry_id,
+    defineMemoryByMetaReview(f.db, { scope: "tidepool", path: "habits/workflow", text: "How we work.", author: metaReview }, "worker", at).entry_id,
     f.approvedReplaced("Pin npm"),
     f.workspaceExemplar(),
     f.consolidate([f.replaced("Pin pnpm")], { scope: "tidepool", text: "Pin pnpm." }).candidate_id,
@@ -238,7 +238,7 @@ it("meta-review の move_memory_branch は同じ scope の中で枝を改名し�
 
 it("meta-review の move_memory_branch は approved の Behavior / Exemplar も名指されたエントリも無い workspace の枝を盤面全体へ広げる(ADR 0176 決定2)", () => {
   const f = rescoping();
-  defineMemoryByMetaReview(f.db, { scope: "tidepool", path: "habits", text: "How we work.", author: metaReview }, "worker", at);
+  defineMemoryByMetaReview(f.db, { scope: "tidepool", path: "habits/workflow", text: "How we work.", author: metaReview }, "worker", at);
   knowledgeEntry(f.db, "tidepool");
   f.replaced("Rebase before push");
   const under = liveUnder(f.db, "tidepool", "habits");
@@ -264,7 +264,7 @@ it("meta-review の move_memory_branch の盤面全体 → 盤面全体の移動
 
 it("meta-review の move_memory_branch は scope が変わるとき、配下に approved の Behavior / Exemplar か open な提案が名指すエントリが1件でもあれば全体を domain error で拒んでそのすべてを名指し、行き先が別 workspace・狭める向きも拒む —— どれも何も変わらない(ADR 0176 決定2・5)", () => {
   const f = rescoping();
-  defineMemoryByMetaReview(f.db, { scope: "tidepool", path: "habits", text: "How we work.", author: metaReview }, "worker", at);
+  defineMemoryByMetaReview(f.db, { scope: "tidepool", path: "habits/workflow", text: "How we work.", author: metaReview }, "worker", at);
   knowledgeEntry(f.db, "tidepool");
   const approved = f.approvedReplaced("Pin npm");
   const exemplar = f.workspaceExemplar();
@@ -312,9 +312,9 @@ it.each([
 
 it("meta-review の move_memory_branch の merge も、scope の門に掛かる行(approved の Behavior)が配下にあれば全体を domain error で拒み何も変わらない(ADR 0177 決定7 / ADR 0176 決定2)", () => {
   const f = rescoping();
-  defineMemoryByMetaReview(f.db, { scope: "tidepool", path: "habits", text: "How we work.", author: metaReview }, "worker", at);
+  defineMemoryByMetaReview(f.db, { scope: "tidepool", path: "habits/workflow", text: "How we work.", author: metaReview }, "worker", at);
   const approved = f.approvedReplaced("Pin npm");
-  defineMemoryByMetaReview(f.db, { scope: null, path: "practices", text: "How we practise.", author: metaReview }, "worker", at);
+  defineMemoryByMetaReview(f.db, { scope: null, path: "practices/workflow", text: "How we practise.", author: metaReview }, "worker", at);
   const before = listMemoryEntries(f.db, {});
 
   expect(() => moveBranch(f.db, "tidepool", null, "practices", true)).toThrow(`memory entry ${approved} (an approved behavior)`);
@@ -336,7 +336,7 @@ it("meta-review の無効化は candidate・Knowledge・Definition に効き、a
   const { db, decision, knowledge } = board();
   const fact = knowledge("stale fact");
   const successor = knowledge("fresh fact", null);
-  const definition = defineMemoryByMetaReview(db, { scope: "tidepool", path: "build", text: "How it builds.", author: metaReview }, "worker", at).entry_id;
+  const definition = defineMemoryByMetaReview(db, { scope: "tidepool", path: "deploy", text: "How it builds.", author: metaReview }, "worker", at).entry_id;
   const behavior = (title: string) =>
     createBehaviorCandidate(
       db,
@@ -853,25 +853,21 @@ it.each([
 /** fold_memory の既にある後継(ADR 0161 決定2)。 */
 const foldInto = (f: Fixture) => (input: Omit<Parameters<typeof foldMemory>[2], "author">) => foldMemory(f.db, f.task.id, { ...input, author: metaReview }, "worker", at);
 
-it("fold_memory の successor_id は replaces を既にある approved の後継つき superseded(meta_review の印)にし、新しい entry を作らない —— Knowledge → Knowledge、Definition → Definition、candidate の Behavior / Exemplar → approved の Behavior / Exemplar(ADR 0161 決定2)", () => {
+it("fold_memory の successor_id は replaces を既にある approved の後継つき superseded(meta_review の印)にし、新しい entry を作らない —— Knowledge → Knowledge、candidate の Behavior / Exemplar → approved の Behavior / Exemplar(ADR 0161 決定2)", () => {
   const fixture = approvedPair();
   const { db, attributed, drafted, consolidate, exemplar, behavior, replaced } = fixture;
   const [fact, kept] = [knowledgeEntry(db), knowledgeEntry(db)];
-  const branch = definitionEntry(db);
-  const merged = defineMemoryByMetaReview(db, { scope: null, path: "build", text: "How the board builds.", author: metaReview }, "worker", at).entry_id;
   const candidateBehavior = replaced("Two commits per migration");
   const candidateExemplar = consolidate([drafted("Keep it split", { event_id: attributed("kept the two commits apart") })], { kind: "exemplar", annotations }).candidate_id;
   const before = listMemoryEntries(db, {}).length;
 
   expect(foldInto(fixture)({ successor_id: kept, replaces: [fact] })).toEqual({ entry_id: kept, event_ids: [expect.any(Number)] });
-  foldInto(fixture)({ successor_id: merged, replaces: [branch] });
   foldInto(fixture)({ successor_id: exemplar, replaces: [candidateBehavior] });
   foldInto(fixture)({ successor_id: behavior, replaces: [candidateExemplar] });
 
   expect(listMemoryEntries(db, {})).toHaveLength(before);
-  expect([fact, branch, candidateBehavior, candidateExemplar].map((id) => entry(db, id))).toMatchObject([
+  expect([fact, candidateBehavior, candidateExemplar].map((id) => entry(db, id))).toMatchObject([
     { invalidation_reason: "superseded", successor_id: kept, invalidated_by: { activity: "meta_review" } },
-    { invalidation_reason: "superseded", successor_id: merged, invalidated_by: { activity: "meta_review" } },
     { invalidation_reason: "superseded", successor_id: exemplar, invalidated_by: { activity: "meta_review" } },
     { invalidation_reason: "superseded", successor_id: behavior, invalidated_by: { activity: "meta_review" } },
   ]);

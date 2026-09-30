@@ -716,6 +716,7 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
         "Define a memory branch (a path prefix such as build/tests) for this workspace: one line declaring " +
         "what is filed under it — not a summary of what is there now, but a sentence that stays true as " +
         "entries come and go. It is kept as-is (no approval step). " +
+        "A path that holds whole-board entries at or under it cannot be defined for this workspace: file under the branch as it is, or define a sub-branch. " +
         BOARD_WRITE_LANGUAGE_RULE,
       inputSchema: { prefix: z.string(), definition: z.string() },
     },
@@ -938,8 +939,8 @@ function registerMemoryMetaReviewVerbs(server: McpServer, deps: McpDeps, run: Me
     "list_memory_entries",
     {
       description:
-        "List the memory entries the human settings view lists, each entry's original wording omitted — candidates, invalidated entries, and board-wide " +
-        "definitions shadowed by a workspace one included. scope: a workspace name, null for board-wide only, omit for all.",
+        "List the memory entries the human settings view lists, each entry's original wording omitted — candidates and invalidated entries " +
+        "included. scope: a workspace name, null for board-wide only, omit for all.",
       inputSchema: {
         scope: scope.optional(),
         kind: memoryListFilterSchema.shape.kind,
@@ -971,7 +972,8 @@ function registerMemoryMetaReviewVerbs(server: McpServer, deps: McpDeps, run: Me
         "definition at another path is refused. To rename a branch or merge two, use move_memory_branch, then revise the " +
         "definition in place. A definition in supersedes must " +
         "be in the same scope or, when this definition is whole-board, in any scope. " +
-        "To override a whole-board definition for one workspace, write the workspace definition without supersedes: it shadows the whole-board one there. " +
+        "A workspace definition is refused at a path that holds whole-board entries at or under it, and a whole-board entry is refused at or under a path a workspace defines. " +
+        "To clear the way, write a whole-board definition at the workspace definition's path with supersedes, or rename the workspace branch with move_memory_branch. " +
         BOARD_WRITE_LANGUAGE_RULE,
       inputSchema: { scope, path: z.string(), definition: z.string(), supersedes: z.array(z.number().int()).min(1).optional() },
     },
@@ -999,9 +1001,7 @@ function registerMemoryMetaReviewVerbs(server: McpServer, deps: McpDeps, run: Me
         "Fold the entries in replaces into one successor: each is invalidated as superseded by it. Give exactly one of: " +
         "scope, path, title, text and based_on_decision, to write a new Knowledge entry replacing Knowledge entries (based_on_decision " +
         "is the event id log_decision returned for your reasoning; it becomes the source, an inference); or successor_id, an existing " +
-        "approved entry: Knowledge into Knowledge, a Definition into the Definition at the same path in another scope (to merge " +
-        "branches at different paths, use move_memory_branch with merge), Behavior and Exemplar candidates into an approved " +
-        "Behavior or Exemplar. The successor must cover every entry in replaces: its scope is whole-board or the same scope, and its addressee " +
+        "approved entry: Knowledge into Knowledge, Behavior and Exemplar candidates into an approved Behavior or Exemplar. The successor must cover every entry in replaces: its scope is whole-board or the same scope, and its addressee " +
         "is every agent or the same agent. An approved Behavior or Exemplar cannot be replaced here — propose a consolidate instead. " +
         BOARD_WRITE_LANGUAGE_RULE,
       inputSchema: {

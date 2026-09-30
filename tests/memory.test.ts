@@ -7,7 +7,9 @@ import {
   buildMemoryInjection,
   createBehaviorCandidate,
   defineMemoryBranch,
+  defineMemoryByMetaReview,
   ensureMemoryIndex,
+  foldMemory,
   foldMemoryEntries,
   humanEntryInput,
   invalidateMemoryEntry,
@@ -321,28 +323,28 @@ it.each([
 it("同じ枝・同じスコープに approved の定義があれば domain error —— スコープが違えば共存し、無効化の後なら書ける", () => {
   const { db } = board();
   const workspace = defineMemoryBranch(db, definition, "worker", at).entry_id;
-  const boardWide = defineMemoryBranch(db, { ...definition, scope: null }, "worker", at).entry_id;
+  const other = defineMemoryBranch(db, { ...definition, scope: "charts" }, "worker", at).entry_id;
   expect(() => defineMemoryBranch(db, { ...definition, text: "Another line." }, "worker", at)).toThrow(/already defined/);
-  expect(() => defineMemoryBranch(db, { ...definition, scope: null, text: "Another line." }, "worker", at)).toThrow(/already defined/);
+  expect(() => defineMemoryBranch(db, { ...definition, scope: "charts", text: "Another line." }, "worker", at)).toThrow(/already defined/);
 
   invalidateMemoryEntry(db, { entry_id: workspace, reason: "requirement_change" }, "human", "webui", at);
   const revised = defineMemoryBranch(db, { ...definition, text: "Another line." }, "worker", at).entry_id;
-  expect(approvedMemoryEntries(db).map((e) => e.id)).toEqual([boardWide, revised]);
+  expect(approvedMemoryEntries(db).map((e) => e.id)).toEqual([other, revised]);
 });
 
 it("同じ枝の定義は supersedes にその生きた定義を含めれば書き直せ、supersedes の各定義(同じ path の別 scope も)は superseded + 後継で無効化される —— 含めなければ domain error で何も変わらない(ADR 0162 決定1)", () => {
   const { db } = board();
   const old = defineMemoryBranch(db, definition, "worker", at).entry_id;
-  const boardWide = defineMemoryBranch(db, { ...definition, scope: null, text: "How the board builds." }, "worker", at).entry_id;
+  const other = defineMemoryBranch(db, { ...definition, scope: "charts", text: "How charts builds." }, "worker", at).entry_id;
   const before = listMemoryEntries(db, {});
-  expect(() => defineMemoryBranch(db, { ...definition, text: "Third line.", supersedes: [boardWide] }, "webui", at)).toThrow(/already defined/);
+  expect(() => defineMemoryBranch(db, { ...definition, text: "Third line.", supersedes: [other] }, "webui", at)).toThrow(/already defined/);
   expect(listMemoryEntries(db, {})).toEqual(before);
 
-  const revised = defineMemoryBranch(db, { ...definition, text: "Another line.", supersedes: [old, boardWide] }, "webui", at).entry_id;
+  const revised = defineMemoryBranch(db, { ...definition, text: "Another line.", supersedes: [old, other] }, "webui", at).entry_id;
   expect(approvedMemoryEntries(db)).toMatchObject([{ id: revised, path: "build", text: "Another line." }]);
   expect(listMemoryEntries(db, { state: "invalidated" })).toMatchObject([
     { id: old, invalidation_reason: "superseded", successor_id: revised },
-    { id: boardWide, invalidation_reason: "superseded", successor_id: revised },
+    { id: other, invalidation_reason: "superseded", successor_id: revised },
   ]);
 });
 
@@ -364,14 +366,14 @@ it("既にある後継への畳みは Definition を別 path の Definition へ�
   const { db } = board();
   const old = defineMemoryBranch(db, definition, "worker", at).entry_id;
   const elsewhere = defineMemoryBranch(db, { ...definition, path: "toolchain" }, "worker", at).entry_id;
-  const boardWide = defineMemoryBranch(db, { ...definition, scope: null }, "worker", at).entry_id;
+  const other = defineMemoryBranch(db, { ...definition, scope: "charts" }, "worker", at).entry_id;
   const before = listMemoryEntries(db, {});
   const fold = (successor_id: number) => () => foldMemoryEntries(db, { replaces: [old], successor_id, author: human }, "webui", at);
 
   expect(fold(elsewhere)).toThrow(/move_memory_branch/);
   expect(listMemoryEntries(db, {})).toEqual(before);
-  fold(boardWide)();
-  expect(entryById(db, old)).toMatchObject({ invalidation_reason: "superseded", successor_id: boardWide });
+  fold(other)();
+  expect(entryById(db, old)).toMatchObject({ invalidation_reason: "superseded", successor_id: other });
 });
 
 it("定義の別の枝への付け替えは、枝の改名が枝ごとの移動(path_moved + 複製)、別の枝への統合が枝ごとの移動の merge(superseded + 行き先の定義が後継)(ADR 0176 決定7 / ADR 0177 決定1)", () => {
@@ -713,10 +715,10 @@ it("人間が書く定義の原文は title = text で持つ", () => {
   ]);
 });
 
-it("一覧は candidate と無効化済み(理由コード・後継 id つき)と影になった盤面全体の定義も出し、スコープ・種別・状態で絞れる", () => {
+it("一覧は candidate と無効化済み(理由コード・後継 id つき)も出し、スコープ・種別・状態で絞れる", () => {
   const { db } = board();
   const boardWide = defineMemoryBranch(db, { ...definition, scope: null }, "worker", at).entry_id;
-  const workspace = defineMemoryBranch(db, definition, "worker", at).entry_id;
+  const workspace = defineMemoryBranch(db, { ...definition, path: "deploy" }, "worker", at).entry_id;
   const old = record(db, "old");
   const successor = record(db, "new");
   invalidateMemoryEntry(db, { entry_id: old, reason: "superseded", successor_id: successor }, "human", "webui", at);
@@ -750,10 +752,10 @@ it("rebuild は一覧を無効化の理由コード・後継 id ごと同じに�
 });
 
 /** 承認の export(issue #620 / spec #615 A)。pin の一致 / 不一致は回答の挙動としてサーバ境界が言う。 */
-function candidate(db: ReturnType<typeof openDb>, title: string, scope: string | null = null, addressee: string | null = null) {
+function candidate(db: ReturnType<typeof openDb>, title: string, scope: string | null = null, addressee: string | null = null, path = "habits") {
   return createBehaviorCandidate(
     db,
-    { scope, path: "habits", title, text: `${title}.`, addressee, source: { commit: "0a46a46" }, author: { activity: "rca", name: "auditor" } },
+    { scope, path, title, text: `${title}.`, addressee, source: { commit: "0a46a46" }, author: { activity: "rca", name: "auditor" } },
     "worker",
     at,
   ).entry_id;
@@ -1228,13 +1230,13 @@ it("エントリ1件の移動は Definition の path を変えると domain erro
 it("Definition を生きた Definition のある scope へ移すと domain error で畳むよう促し、何も変わらない —— 別の scope なら移せる", () => {
   const { db } = board();
   const moving = defineMemoryBranch(db, definition, "worker", at).entry_id;
-  defineMemoryBranch(db, { ...definition, scope: null, text: "The board's build." }, "worker", at);
+  defineMemoryBranch(db, { ...definition, scope: "charts", text: "The charts build." }, "worker", at);
   const before = listMemoryEntries(db, {});
 
-  expect(() => moveMemory(db, { entry_id: moving, scope: null, path: "build", mover: human }, "webui", at)).toThrow(/fold/);
+  expect(() => moveMemory(db, { entry_id: moving, scope: "charts", path: "build", mover: human }, "webui", at)).toThrow(/fold/);
   expect(listMemoryEntries(db, {})).toEqual(before);
-  moveMemory(db, { entry_id: moving, scope: "charts", path: "build", mover: human }, "webui", at);
-  expect(approvedMemoryEntries(db).map((e) => [e.scope, e.path])).toEqual([[null, "build"], ["charts", "build"]]);
+  moveMemory(db, { entry_id: moving, scope: "lagoon", path: "build", mover: human }, "webui", at);
+  expect(approvedMemoryEntries(db).map((e) => [e.scope, e.path])).toEqual([["charts", "build"], ["lagoon", "build"]]);
 });
 
 it("枝ごとの移動は移動元の scope(完全一致)で path が P か P/… の未無効化エントリを4種別とも to_scope の to_path + 残りへ写し、旧 id → 複製の id を返す —— 無効化済み・隣の枝・別の scope は残る", () => {
@@ -1252,7 +1254,7 @@ it("枝ごとの移動は移動元の scope(完全一致)で path が P か P/�
     "webui",
     at,
   ).entry_id;
-  const kept = [fact("buildx"), fact("build/tests", null)];
+  const kept = [fact("buildx"), fact("build/tests", "charts")];
 
   const { moved } = moveMemoryBranch(db, { scope: "tidepool", path: "build", to_scope: null, to_path: "toolchain", mover: human }, "webui", at);
 
@@ -1267,12 +1269,13 @@ it("枝ごとの移動は移動元の scope(完全一致)で path が P か P/�
   expect(kept.map((id) => entries.get(id)?.invalidation_reason)).toEqual([null, null]);
 });
 
-/** 盤面全体と2つの workspace に同じ枝 build: 盤面全体と tidepool は定義と leaf、charts は leaf だけ(盤面全体の定義に頼る)。 */
+/** 盤面全体と2つの workspace に同じ枝 build: 盤面全体は定義と leaf、tidepool は子の枝 build/lint の定義と leaf、charts は leaf だけ
+ *  (どちらも build は盤面全体の定義に頼る —— workspace は盤面全体のエントリの path とその上位を定義できない、ADR 0178)。 */
 function everyWorkspaceUnderBuild() {
   const { db, task } = board();
   const fact = (scope: string | null, path = "build/tests") => recordKnowledge(db, { ...knowledge, scope, path, source: { commit: "0a46a46" } }, "worker", at).entry_id;
   const define = (scope: string | null, path = "build") => defineMemoryBranch(db, { ...definition, scope, path, text: `What ${path} holds in ${scope ?? "the board"}.` }, "worker", at).entry_id;
-  const ids = [define(null), fact(null), define("tidepool"), fact("tidepool"), fact("charts", "build/ci")];
+  const ids = [define(null), fact(null), define("tidepool", "build/lint"), fact("tidepool"), fact("charts", "build/ci")];
   const move = (scope: string | null, to_scope: string | null, to_path = "toolchain", merge?: boolean) =>
     moveMemoryBranch(db, { scope, path: "build", to_scope, to_path, merge, mover: human }, "webui", at);
   return { db, task, define, ids, move };
@@ -1287,32 +1290,33 @@ it("盤面全体 → 盤面全体の枝ごとの移動は、全 workspace の同
   expect(moved.map(({ successor_id }) => entryById(db, successor_id))).toMatchObject([
     { kind: "definition", scope: null, path: "toolchain" },
     { kind: "knowledge", scope: null, path: "toolchain/tests" },
-    { kind: "definition", scope: "tidepool", path: "toolchain" },
+    { kind: "definition", scope: "tidepool", path: "toolchain/lint" },
     { kind: "knowledge", scope: "tidepool", path: "toolchain/tests" },
     { kind: "knowledge", scope: "charts", path: "toolchain/ci" },
   ]);
   for (const scope of ["tidepool", "charts"]) {
     const { section } = buildMemoryInjection(db, task, scope, "deckhand");
     expect(section).not.toContain("- build/");
-    expect(section).toContain(`- toolchain/ — What build holds in ${scope === "tidepool" ? "tidepool" : "the board"}.`);
+    expect(section).toContain("- toolchain/ — What build holds in the board.");
   }
+  expect(buildMemoryInjection(db, task, "tidepool", "deckhand").section).toContain("  - lint/ — What build/lint holds in tidepool.");
 });
 
 it("盤面全体 → 盤面全体の枝ごとの移動の merge は、workspace の中の衝突もその workspace の行き先の定義へ畳んで folded に載せる(ADR 0177 決定5)", () => {
   const { db, ids, define, move } = everyWorkspaceUnderBuild();
-  const [boardBuild, boardTests, workspaceBuild, workspaceTests, chartsCi] = ids;
-  const [boardToolchain, workspaceToolchain] = [define(null, "toolchain"), define("tidepool", "toolchain")];
+  const [boardBuild, boardTests, workspaceLint, workspaceTests, chartsCi] = ids;
+  const [boardToolchain, workspaceToolchainLint] = [define(null, "toolchain"), define("tidepool", "toolchain/lint")];
 
   const { moved, folded } = move(null, null, "toolchain", true);
 
   expect(folded).toEqual([
     { entry_id: boardBuild, successor_id: boardToolchain },
-    { entry_id: workspaceBuild, successor_id: workspaceToolchain },
+    { entry_id: workspaceLint, successor_id: workspaceToolchainLint },
   ]);
   expect(moved.map(({ entry_id }) => entry_id)).toEqual([boardTests, workspaceTests, chartsCi]);
   expect(approvedMemoryEntries(db).map((e) => [e.scope, e.path])).toEqual([
     [null, "toolchain"],
-    ["tidepool", "toolchain"],
+    ["tidepool", "toolchain/lint"],
     [null, "toolchain/tests"],
     ["tidepool", "toolchain/tests"],
     ["charts", "toolchain/ci"],
@@ -1321,10 +1325,10 @@ it("盤面全体 → 盤面全体の枝ごとの移動の merge は、workspace 
 
 it("盤面全体に path 配下の未無効化エントリが無ければ、workspace に配下があっても盤面全体 → 盤面全体の枝ごとの移動は domain error で何も変わらない(ADR 0177 決定5)", () => {
   const { db } = board();
-  defineMemoryBranch(db, definition, "worker", at);
-  record(db, "fact");
   const gone = recordKnowledge(db, { ...knowledge, scope: null, source: { commit: "0a46a46" } }, "worker", at).entry_id;
   invalidateMemoryEntry(db, { entry_id: gone, reason: "environment" }, "human", "webui", at);
+  defineMemoryBranch(db, definition, "worker", at);
+  record(db, "fact");
   const before = listMemoryEntries(db, {});
 
   expect(() => moveMemoryBranch(db, { scope: null, path: "build", to_scope: null, to_path: "toolchain", mover: human }, "webui", at)).toThrow(/no live memory entry/);
@@ -1347,7 +1351,7 @@ it.each([
 it("watermark 再生と rebuild は、全 workspace を運んだ盤面全体 → 盤面全体の統合の畳みと複製を表と同じに戻す(ADR 0177 決定5)", () => {
   const { db, define, move } = everyWorkspaceUnderBuild();
   define(null, "toolchain");
-  define("tidepool", "toolchain");
+  define("tidepool", "toolchain/lint");
   move(null, null, "toolchain", true);
   const current = approvedMemoryEntries(db);
   const listed = listMemoryEntries(db, {});
@@ -1603,7 +1607,7 @@ function folds() {
       .entry_id;
   const writes = [
     ["knowledge", [fact("a"), fact("b")], (supersedes: number[]) => fact("folded", supersedes)],
-    ["definition", [branch("tidepool"), branch(null)], (supersedes: number[]) => branch("tidepool", supersedes)],
+    ["definition", [branch("tidepool"), branch("charts")], (supersedes: number[]) => branch("tidepool", supersedes)],
     ["behavior", [rule("a"), example()], (supersedes: number[]) => rule("folded", supersedes)],
     ["exemplar", [rule("b"), example()], (supersedes: number[]) => example(supersedes)],
   ] as const;
@@ -1810,4 +1814,163 @@ it("移動の注釈は移された pin ごとに旧 id と末尾の id・path・
 
   expect(movedPins(db, null)).toEqual([]);
   expect(movedPins(db, { kind: "routing", op: "promote", pin: { promoted: false } })).toEqual([]);
+});
+
+/** 重ねた1本の木の門(ADR 0178 決定2〜5): 盤面全体のエントリを種別と状態・宛先を変えて path に置く。 */
+const wholeBoard: Array<[string, (db: ReturnType<typeof openDb>, path: string) => number]> = [
+  ["Definition", (db, path) => defineMemoryBranch(db, { ...definition, scope: null, path }, "worker", at).entry_id],
+  ["Knowledge", (db, path) => recordKnowledge(db, { ...knowledge, scope: null, path, source: { commit: "0a46a46" } }, "worker", at).entry_id],
+  ["宛先つきの approved Behavior", (db, path) => recordBehavior(db, { ...humanEntryInput(db, { ...humanKnowledge, workspace: null, path }), addressee: "deckhand" }, "webui", at).entry_id],
+  ["Behavior candidate", (db, path) => candidate(db, "Rebase before push", null, null, path)],
+];
+
+it.each(wholeBoard)("盤面全体の %s がある path に workspace の Definition を置く書き込みは domain error で、当たった組を名指して何も書かない", (_, place) => {
+  const { db } = board();
+  const blocking = place(db, "build");
+  const before = listMemoryEntries(db, {});
+
+  const define = () => defineMemoryBranch(db, definition, "worker", at);
+
+  expect(define).toThrow(DomainError);
+  expect(define).toThrow(`entry ${blocking} at build`);
+  expect(define).toThrow(/file under the branch as it is, or define a sub-branch/);
+  expect(listMemoryEntries(db, {})).toEqual(before);
+});
+
+it("盤面全体のエントリが P/x にあれば workspace の Definition を P に置けない —— 盤面全体の枝 P の下で配下に盤面全体のエントリが無い子の path は定義でき、workspace の leaf はどこにでも置ける", () => {
+  const { db } = board();
+  defineMemoryBranch(db, { ...definition, scope: null }, "worker", at);
+  const leaf = recordKnowledge(db, { ...knowledge, scope: null, path: "build/x", source: { commit: "0a46a46" } }, "worker", at).entry_id;
+  const deep = recordKnowledge(db, { ...knowledge, scope: null, path: "tools/node/x", source: { commit: "0a46a46" } }, "worker", at).entry_id;
+
+  expect(() => defineMemoryBranch(db, { ...definition, path: "tools" }, "worker", at)).toThrow(`entry ${deep} at tools/node/x lies at or under the workspace definition being placed at tools`);
+  expect(() => defineMemoryBranch(db, { ...definition, path: "build/x" }, "worker", at)).toThrow(`entry ${leaf} at build/x`);
+  const [child, sibling] = ["build/tests", "tool"].map((path) => defineMemoryBranch(db, { ...definition, path }, "worker", at).entry_id);
+  const leaves = ["build", "build/x", "build/tests"].map((path) => recordKnowledge(db, { ...knowledge, path, source: { commit: "0a46a46" } }, "worker", at).entry_id);
+
+  expect(listMemoryEntries(db, { scope: "tidepool" }).map((e) => e.id)).toEqual([child, sibling, ...leaves]);
+});
+
+const metaReview = { activity: "meta_review" as const, name: "auditor" };
+const workspaceKnowledge = (db: ReturnType<typeof openDb>, path: string) => recordKnowledge(db, { ...knowledge, path, source: { commit: "0a46a46" } }, "worker", at).entry_id;
+
+/** 盤面全体のエントリを置く操作ごとに、workspace の定義(返り値の defined)が塞ぐ置き場への1手(返り値の place)を組む。 */
+const placingWholeBoard: Array<[string, (db: ReturnType<typeof openDb>, task: ReturnType<typeof board>["task"]) => { defined: number; place: () => unknown }]> = [
+  ["直書きの Knowledge", (db) => ({ defined: defineMemoryBranch(db, definition, "worker", at).entry_id, place: () => recordKnowledge(db, { ...knowledge, scope: null, path: "build", source: { commit: "0a46a46" } }, "worker", at) })],
+  ["meta-review の define_memory", (db) => ({ defined: defineMemoryBranch(db, definition, "worker", at).entry_id, place: () => defineMemoryByMetaReview(db, { ...definition, scope: null, path: "build/x", author: metaReview }, "worker", at) })],
+  ["RCA が起草する Behavior candidate", (db) => ({ defined: defineMemoryBranch(db, definition, "worker", at).entry_id, place: () => candidate(db, "Rebase before push", null, null, "build/x") })],
+  [
+    "提案が起草する盤面全体の candidate",
+    (db, task) => {
+      const replaces = [candidate(db, "Keep migrations apart", "tidepool")];
+      const based_on_decision = logDecision(db, task, "one rule", "auditor", at);
+      const text = { scope: null, path: "build/x", title: "One rule", text: "One rule.", addressee: null };
+      return { defined: defineMemoryBranch(db, definition, "worker", at).entry_id, place: () => proposeMemoryChange(db, task.id, { op: "consolidate", text, replaces, based_on_decision, rationale: "r" }, "auditor", at) };
+    },
+  ],
+  [
+    "meta-review の fold_memory の新しい本文",
+    (db, task) => {
+      const replaces = [workspaceKnowledge(db, "notes")];
+      const based_on_decision = logDecision(db, task, "same fact", "auditor", at);
+      const fold = { scope: null, path: "build/x", title: "Folded", text: "Folded.", replaces, based_on_decision, author: metaReview };
+      return { defined: defineMemoryBranch(db, definition, "worker", at).entry_id, place: () => foldMemory(db, task.id, fold, "worker", at) };
+    },
+  ],
+  [
+    "盤面全体へ広げる1件の移動",
+    (db) => {
+      const entry_id = workspaceKnowledge(db, "build/x");
+      return { defined: defineMemoryBranch(db, definition, "worker", at).entry_id, place: () => moveMemory(db, { entry_id, scope: null, path: "build/x", mover: human }, "webui", at) };
+    },
+  ],
+  [
+    "盤面全体へ広げる枝ごとの移動",
+    (db) => {
+      workspaceKnowledge(db, "notes/x");
+      return { defined: defineMemoryBranch(db, definition, "worker", at).entry_id, place: () => moveMemoryBranch(db, { scope: "tidepool", path: "notes", to_scope: null, to_path: "build", mover: human }, "webui", at) };
+    },
+  ],
+  [
+    "盤面全体のエントリの復元",
+    (db) => {
+      const entry_id = recordKnowledge(db, { ...knowledge, scope: null, path: "build/x", source: { commit: "0a46a46" } }, "worker", at).entry_id;
+      invalidateMemoryEntry(db, { entry_id, reason: "environment" }, "human", "webui", at);
+      return { defined: defineMemoryBranch(db, definition, "worker", at).entry_id, place: () => restoreMemoryEntry(db, { entry_id, restorer: human }, "webui", at) };
+    },
+  ],
+];
+
+it.each(placingWholeBoard)("workspace が build を定義していれば、%s で盤面全体のエントリを build かその配下に置く操作は domain error で、塞ぐ定義を名指して何も書かない", (_, arrange) => {
+  const { db, task } = board();
+  const { defined, place } = arrange(db, task);
+  const before = listMemoryEntries(db, {});
+
+  expect(place).toThrow(DomainError);
+  expect(place).toThrow(`workspace definition ${defined} at build in scope tidepool`);
+  expect(place).toThrow(/write a whole-board definition at the workspace definition's path with supersedes, rename the workspace branch with move_memory_branch, or choose another path/);
+  expect(listMemoryEntries(db, {})).toEqual(before);
+});
+
+it("盤面全体の Definition を書き、その path の workspace の Definition をすべて supersedes に並べる書き込みは1手で通る —— 1つ漏らせば漏れた定義を名指して拒み、何も書かない(ADR 0178 決定5)", () => {
+  const { db } = board();
+  const [tidepool, charts] = ["tidepool", "charts"].map((scope) => defineMemoryBranch(db, { ...definition, scope }, "worker", at).entry_id) as [number, number];
+  const fold = (supersedes: number[]) => () => defineMemoryBranch(db, { ...definition, scope: null, text: "How the board builds.", supersedes }, "webui", at);
+  const before = listMemoryEntries(db, {});
+
+  expect(fold([tidepool])).toThrow(`lies at or under workspace definition ${charts} at build in scope charts`);
+  expect(fold([tidepool])).not.toThrow(`definition ${tidepool}`);
+  expect(listMemoryEntries(db, {})).toEqual(before);
+
+  const { entry_id } = fold([tidepool, charts])();
+  expect(approvedMemoryEntries(db).map((e) => [e.id, e.scope])).toEqual([[entry_id, null]]);
+});
+
+it("人間が盤面全体の Definition を workspace の Definition で置き換える(supersedes)のは、その path と配下に盤面全体のエントリが他に残らなければ通り、残れば拒む", () => {
+  const { db } = board();
+  const boardWide = defineMemoryBranch(db, { ...definition, scope: null }, "worker", at).entry_id;
+  const leaf = recordKnowledge(db, { ...knowledge, scope: null, path: "build/x", source: { commit: "0a46a46" } }, "worker", at).entry_id;
+  const replace = () => defineMemoryBranch(db, { ...definition, supersedes: [boardWide] }, "webui", at);
+
+  expect(replace).toThrow(`whole-board knowledge entry ${leaf} at build/x lies at or under the workspace definition being placed at build in scope tidepool`);
+  expect(replace).toThrow(/file under the branch as it is, or define a sub-branch/);
+  invalidateMemoryEntry(db, { entry_id: leaf, reason: "environment" }, "human", "webui", at);
+  const { entry_id } = replace();
+  expect(approvedMemoryEntries(db).map((e) => [e.id, e.scope])).toEqual([[entry_id, "tidepool"]]);
+});
+
+it("盤面全体 → 盤面全体の枝ごとの移動が運ぶ workspace の子の定義が行き先の盤面全体のエントリに当たれば、当たった組をすべて名指して全体を拒み、何も書かない(ADR 0178 決定5 / ADR 0177 決定5)", () => {
+  const { db } = board();
+  defineMemoryBranch(db, { ...definition, scope: null }, "worker", at);
+  defineMemoryBranch(db, { ...definition, path: "build/tests" }, "worker", at);
+  defineMemoryBranch(db, { ...definition, scope: "charts", path: "build/lint" }, "worker", at);
+  const [tests, lint] = ["ci/tests", "ci/lint"].map((path) => recordKnowledge(db, { ...knowledge, scope: null, path, source: { commit: "0a46a46" } }, "worker", at).entry_id);
+  const before = listMemoryEntries(db, {});
+  const move = () => moveMemoryBranch(db, { scope: null, path: "build", to_scope: null, to_path: "ci", mover: human }, "webui", at);
+
+  expect(move).toThrow(
+    `whole-board knowledge entry ${tests} at ci/tests lies at or under the workspace definition being placed at ci/tests in scope tidepool; ` +
+      `whole-board knowledge entry ${lint} at ci/lint lies at or under the workspace definition being placed at ci/lint in scope charts: `,
+  );
+  expect(move).toThrow(/rename the workspace branch with move_memory_branch, or choose another path/);
+  expect(listMemoryEntries(db, {})).toEqual(before);
+});
+
+it("watermark 再生と rebuild は記録済みの event を写すだけで門を掛けない —— 門を破る並びの event も表にそのまま戻る(ADR 0178)", () => {
+  const { db } = board();
+  // setup のみ: どの export でも作れない並びを event で直に置く
+  const created = (entry: Parameters<typeof recordKnowledge>[1] & { kind: "knowledge" | "definition" }) =>
+    appendEvent(db, { taskId: null, workerId: "deckhand", origin: "worker", payload: { kind: "memory_entry_created", entry: { ...entry, state: "approved", original: null, addressee: null, source: null } }, at });
+  const leaf = created({ ...knowledge, scope: null, path: "build/x", kind: "knowledge" });
+  const defined = created({ ...definition, title: definition.text, kind: "definition" });
+
+  expect(approvedMemoryEntries(db, Number.MAX_SAFE_INTEGER).map((e) => [e.id, e.scope, e.path])).toEqual([
+    [leaf, null, "build/x"],
+    [defined, "tidepool", "build"],
+  ]);
+  rebuildMemoryIndex(db, "human", "mcp", at);
+  expect(listMemoryEntries(db, {}).map((e) => [e.id, e.invalidation_reason])).toEqual([
+    [leaf, null],
+    [defined, null],
+  ]);
 });

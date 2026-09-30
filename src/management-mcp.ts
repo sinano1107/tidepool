@@ -607,8 +607,8 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
     "list_memory_entries",
     {
       description:
-        "List the board's memory entries, including candidates, invalidated ones (with invalidation_reason and successor_id), the ids each entry replaced (replaced_ids) " +
-        "and board-wide definitions a workspace definition shadows. workspace matches exactly; board_wide lists only board-wide entries; " +
+        "List the board's memory entries, including candidates, invalidated ones (with invalidation_reason and successor_id) and the ids each entry replaced (replaced_ids). " +
+        "workspace matches exactly; board_wide lists only board-wide entries; " +
         "state invalidated lists invalidated entries, approved / candidate the rest. On a board with a registry each entry carries orphaned: " +
         "\"addressee\", \"scope\" or \"both\" when its addressee agent or scope workspace is no longer registered, null otherwise.",
       inputSchema: memoryListFilterSchema.extend({ board_wide: z.boolean().optional() }).shape,
@@ -631,7 +631,9 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
       description:
         "Define a memory branch: one line at the branch's path declaring what is filed under it. A branch has one definition per " +
         "workspace: to revise it, include the current one in supersedes. supersedes lists definitions at this path only; a " +
-        "definition at another path is refused. To rename a branch or merge two, use move_memory_branch. text is the English " +
+        "definition at another path is refused. To rename a branch or merge two, use move_memory_branch. A workspace definition is " +
+        "refused at a path that holds whole-board entries at or under it, and a whole-board entry at or under a path a workspace " +
+        "defines: to clear the way, write a whole-board definition at that path with the workspace definitions in supersedes. text is the English " +
         "canonical line; original_text is optional. " +
         `${supersedesEffect} ${writtenAs}`,
       inputSchema: humanDefinitionSchema.shape,
