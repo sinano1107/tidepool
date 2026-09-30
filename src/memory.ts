@@ -465,9 +465,10 @@ export function moveMemory(
   return { entry_id: successor_id, event_id: successor_id };
 }
 
-/** 枝ごとの移動(ADR 0162 決定4 / ADR 0177 決定1〜4): scope(完全一致、null = 盤面全体)で path が P か P/… の未無効化エントリすべてを、
- *  to_scope の to_path + 残りの path へ1 transaction で。merge は行き先に定義があるという申告で、衝突する定義は行き先の定義へ畳む
- *  (moveEntries)。無効化済みは元の置き場に残る。返り値は旧 id → 複製の id と、畳んだ定義 → 畳み先の定義。 */
+/** 枝ごとの移動(ADR 0162 決定4 / ADR 0177 決定1〜5): scope(null = 盤面全体)で path が P か P/… の未無効化エントリすべてを、
+ *  to_scope の to_path + 残りの path へ1 transaction で。盤面全体 → 盤面全体なら全 workspace の同じ配下も運び、それぞれ自分の scope に
+ *  残す(branchRows —— それ以外は scope の完全一致)。merge は行き先に定義があるという申告で、衝突する定義は行き先の定義へ畳む(moveEntries —— 衝突は scope ごと)。
+ *  無効化済みは元の置き場に残る。返り値は旧 id → 複製の id と、畳んだ定義 → 畳み先の定義。 */
 export function moveMemoryBranch(
   db: Db,
   input: { scope: string | null; path: string; to_scope: string | null; to_path: string; merge?: boolean; mover: Actor },
@@ -475,16 +476,20 @@ export function moveMemoryBranch(
   at: Date,
 ): ReturnType<typeof moveEntries> {
   const { scope, path, to_scope, to_path, merge, mover } = input;
-  const rows = branchRows(db, scope, path);
+  const rows = branchRows(db, input);
   if (rows.length === 0) throw new DomainError(`no live memory entry at ${path} or under it in this scope`);
-  return moveEntries(db, rows.map((old) => ({ old, scope: to_scope, path: to_path + old.path.slice(path.length) })), mover, origin, at, merge ?? false);
+  const moves = rows.map((old) => ({ old, scope: old.scope === scope ? to_scope : old.scope, path: to_path + old.path.slice(path.length) }));
+  return moveEntries(db, moves, mover, origin, at, merge ?? false);
 }
 
-/** 枝ごとの移動が移す行: scope(完全一致)で path が P か P/… の未無効化エントリ。 */
-function branchRows(db: Db, scope: string | null, path: string): EntryRow[] {
-  return (db.prepare("SELECT * FROM memory_entries WHERE invalidation_reason IS NULL AND scope IS ? ORDER BY id").all(scope) as EntryRow[]).filter(
+/** 枝ごとの移動が移す行(移動と meta-review の門が同じ集合を見る): scope(完全一致)で path が P か P/… の未無効化エントリ。
+ *  盤面全体 → 盤面全体で盤面全体に1件でもあれば、全 workspace の同じ配下も足す(ADR 0177 決定5)。id 順。 */
+function branchRows(db: Db, { scope, path, to_scope }: { scope: string | null; path: string; to_scope: string | null }): EntryRow[] {
+  const under = (db.prepare("SELECT * FROM memory_entries WHERE invalidation_reason IS NULL ORDER BY id").all() as EntryRow[]).filter(
     (row) => row.path === path || row.path.startsWith(`${path}/`),
   );
+  const own = under.filter((row) => row.scope === scope);
+  return scope === null && to_scope === null && own.length > 0 ? under : own;
 }
 
 /** meta-review の `move_memory`(ADR 0176 決定1〜4): 4種別の approved / candidate を同じ scope の中で直接移せ、scope を跨ぐのは
@@ -498,8 +503,8 @@ export function moveMemoryByMetaReview(db: Db, input: Parameters<typeof moveMemo
   })();
 }
 
-/** meta-review の `move_memory_branch`(ADR 0176 決定1・5): 移す行すべてに scope の門を掛けてから、人間の面と同じ本体で移す。
- *  1件でも門に掛かれば何も書かない —— 枝を自分で割らない。 */
+/** meta-review の `move_memory_branch`(ADR 0176 決定1・5 / ADR 0177 決定5): 移す行すべて(盤面全体 → 盤面全体で運ぶ workspace の行も)
+ *  に scope の門を掛けてから、人間の面と同じ本体で移す。1件でも門に掛かれば何も書かない —— 枝を自分で割らない。 */
 export function moveMemoryBranchByMetaReview(
   db: Db,
   input: Parameters<typeof moveMemoryBranch>[1],
@@ -507,7 +512,7 @@ export function moveMemoryBranchByMetaReview(
   at: Date,
 ): ReturnType<typeof moveMemoryBranch> {
   return db.transaction(() => {
-    requireWidening(db, branchRows(db, input.scope, input.path), input.scope, input.to_scope);
+    requireWidening(db, branchRows(db, input), input.scope, input.to_scope);
     return moveMemoryBranch(db, input, origin, at);
   })();
 }

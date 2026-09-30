@@ -1843,7 +1843,7 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit, fo
       </div>
       {branchMove && (
         <React.Fragment>
-          <p style={muted}>moves the branch and every live entry under it in one workspace; invalidated entries stay where they are</p>
+          <p style={muted}>moves the branch and every live entry under it in the workspace (moving a whole-board branch to another whole-board path also carries every workspace's entries under it); invalidated entries stay where they are</p>
           <Select label="From workspace" value={branchMove.workspace} options={[...workspaceOptions, ...orphanedFrom]}
             onChange={(e) => setBranchMove({ ...branchMove, workspace: e.target.value })} />
           <Input label="From branch path" mono value={branchMove.path} onChange={(e) => setBranchMove({ ...branchMove, path: e.target.value })} placeholder="build" />

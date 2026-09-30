@@ -1040,14 +1040,15 @@ function registerMemoryMetaReviewVerbs(server: McpServer, deps: McpDeps, run: Me
         "Move a branch — every live entry at path or under it in scope — to to_path in to_scope, in one step. This is how " +
         "a branch is renamed and how two branches are merged. to_scope is scope or null (whole-board); widening is refused " +
         "as a whole when the branch holds an approved Behavior or Exemplar or an entry an open proposal question names. " +
-        "When a moved Definition would land on a path already defined in its scope, the move is refused and names every " +
-        "such pair. To merge, pass merge: true: each of those Definitions is folded into the one already there (superseded " +
-        "— the destination's wording stays; revise it in place with define_memory before or after) and everything else " +
-        "moves. merge: true is refused when no such pair exists. Returns moved (each old id with its copy's id) and folded " +
-        "(each folded Definition's id with the id of the Definition it was folded into).",
+        "Moving a whole-board branch to another whole-board path also carries every workspace's entries under path, each " +
+        "staying in its own scope. When a moved Definition would land on a path already defined in its scope, the move is " +
+        "refused and names every such pair. To merge, pass merge: true: each of those Definitions is folded into the one " +
+        "already there (superseded — the destination's wording stays; revise it in place with define_memory before or " +
+        "after) and everything else moves. merge: true is refused when no such pair exists. Returns moved (each old id " +
+        "with its copy's id) and folded (each folded Definition's id with the id of the Definition it was folded into).",
       inputSchema: { scope, path: z.string(), to_scope: scope, to_path: z.string(), merge: z.boolean().optional() },
     },
-    // 照合は行き先の scope だけ —— 移動元は完全一致で行を引くだけ(人間の面の枝ごとの移動と同じ、ADR 0173 決定2)
+    // 照合は行き先の scope だけ —— 移動元は行を引くだけ(人間の面の枝ごとの移動と同じ、ADR 0173 決定2)
     async (input) =>
       run((reader, now) =>
         moveMemoryBranchByMetaReview(deps.db, { ...input, to_scope: registeredScope(deps, input.to_scope), mover: author(reader) }, "worker", now),

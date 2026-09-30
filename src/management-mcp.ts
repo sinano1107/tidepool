@@ -725,12 +725,13 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
     "move_memory_branch",
     {
       description:
-        "Move a whole branch: every live entry in workspace (exact match; null = the whole board) whose path is path or under path/ " +
-        "moves to to_workspace, with path's prefix replaced by to_path, in one step. Invalidated entries stay where they are. When a " +
-        "moved Definition would land on a path already defined in its workspace, the move is refused and names every such pair; pass " +
-        "merge: true to fold each of them into the Definition already there (the destination's wording stays) and move the rest. " +
-        "merge: true is refused when no such pair exists. Returns moved (each entry_id with the successor_id of its copy) and folded " +
-        `(each folded Definition with its successor_id). ${moveEffect}`,
+        "Move a whole branch: every live entry in workspace (null = the whole board) whose path is path or under path/ moves to " +
+        "to_workspace, with path's prefix replaced by to_path, in one step. Invalidated entries stay where they are. Moving a " +
+        "whole-board branch to another whole-board path also carries every workspace's entries under path, each staying in its " +
+        "workspace. When a moved Definition would land on a path already defined in its workspace, the move is refused and names " +
+        "every such pair; pass merge: true to fold each of them into the Definition already there (the destination's wording " +
+        "stays) and move the rest. merge: true is refused when no such pair exists. Returns moved (each entry_id with the " +
+        `successor_id of its copy) and folded (each folded Definition with its successor_id). ${moveEffect}`,
       inputSchema: memoryBranchMoveSchema.shape,
     },
     // 門は行き先だけ —— 移動元が消えた workspace の孤立を生きた置き場へ移せるように(ADR 0173 決定2)
