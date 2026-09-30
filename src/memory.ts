@@ -1172,15 +1172,16 @@ export function listMemoryEntries(
  *  scx だけだと 、。「」・〜 や ㈱ など句読点・記号(P / S / Mc)も入って bigram に混ざるので、それらは連なりを切り、
  *  前処理後もそのまま残って unicode61 の区切りになる。捕獲グループは ftsQuery の split が連なりを結果に残すためにある
  *  (外すと CJK の語が query から消える)。 */
-const CJK_RUN = /((?:(?=[\p{L}\p{N}\p{Mn}])[\p{scx=Han}\p{scx=Hiragana}\p{scx=Katakana}\p{scx=Hangul}])+)/gu;
+const CJK_SCRIPT = String.raw`[\p{scx=Han}\p{scx=Hiragana}\p{scx=Katakana}\p{scx=Hangul}]`;
+const RUN_CATEGORY = String.raw`[\p{L}\p{N}\p{Mn}]`;
+const CJK_RUN = new RegExp(String.raw`((?:(?=${RUN_CATEGORY})${CJK_SCRIPT})+)`, "gu");
 /** query の語の切れ目 = 空白と、CJK_RUN から外した CJK の句読点・記号(`注入（src/memory.ts）、drift。` の `drift` も
- *  識別子と別の語になる)。 */
-const QUERY_BREAK = /(?:\s|(?![\p{L}\p{N}\p{Mn}])[\p{scx=Han}\p{scx=Hiragana}\p{scx=Katakana}\p{scx=Hangul}])+/u;
+ *  識別子と別の語になる)。CJK_RUN と文字集合を共有するので、片方だけ字種が変わることはない。 */
+const QUERY_BREAK = new RegExp(String.raw`(?:\s|(?!${RUN_CATEGORY})${CJK_SCRIPT})+`, "u");
 
 /** 索引と query の共通の前処理(spec #586 B / #606 / #608 / #610 / #1180)。まず CJK の連なりを重なりつきの2文字語に割り(LWC 式)
  *  空白で囲む。unicode61 は CJK を語に切らない。1文字の連なりはそのまま。長音符 ー は Script=Common なので
- *  Script_Extensions で拾う(拾わないと「サーバ」が割れて当たらない)。
- *  句読点は連なりの外なので `設定を直す。` の `す。` のような余分な1文字語は出ない。その後で . - _ の連なりを、連なりの外側の隣が
+ *  Script_Extensions で拾う(拾わないと「サーバ」が割れて当たらない)。その後で . - _ の連なりを、連なりの外側の隣が
  *  unicode61 の token にならない文字(空白・文字列の端・`)` `"` などの記号)のとき連なりごと落とす(tokenchars なので
  *  文末の `narrow.)` が `narrow` に当たらない。語中は `foo__bar` のような連なりも残す。unicode61 は結合文字 Mn を
  *  token に含め、Mc / Me では切る)。bigram が先なので、CJK に接した `東京.csv` の `.` も隣が空白になって落ちる。 */
