@@ -382,7 +382,7 @@ const agent = (name: string, provider: string) =>
 const BOTH = "\n  - name: anthropic\n  - name: openai";
 
 async function quarantineResolversFor(files: Record<string, string>) {
-  const registryDir = await makeRegistry({ ...files });
+  const registryDir = await makeRegistry(files);
   const options = await buildOptions({ ...composition(), registryDir, workspaceName: "tidepool", defaultAgentName: "deckhand" });
   return options.quarantineResolvers!;
 }
