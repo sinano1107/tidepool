@@ -227,7 +227,7 @@ export function defineMemoryBranch(
     const live = liveDefinitions(db, fields.scope, fields.path);
     const defined = live.find((id) => !supersedes?.includes(id));
     if (defined) throw new DomainError(`branch ${fields.path} is already defined in this scope by entry ${defined}; revise it with supersedes`);
-    const elsewhere = replaced.find((entry) => entry.path !== fields.path);
+    const elsewhere = replaced.find((entry) => entry.kind === "definition" && entry.path !== fields.path);
     if (elsewhere && live.length === 0) {
       throw new DomainError(
         `branch ${fields.path} has no definition in this scope to merge definition ${elsewhere.id} at ${elsewhere.path} into: rename a branch with move_memory_branch, then revise its definition in place`,
@@ -779,7 +779,7 @@ function requireNotApprovedBehaviorOrExemplar(db: Db, id: number): EntryRow {
 }
 
 /** meta-review の無効化(ADR 0122 決定1 / ADR 0160 決定1 / ADR 0161 決定2): 後継なしで落とすだけ —— 置き換えは `fold_memory`・
- *  `define_memory` の supersedes・`moveMemory` が持つ。`rejected` は Behavior にも Exemplar にもならない candidate の引退(issue #954)。 */
+ *  `define_memory` の supersedes・`moveMemory`・`moveMemoryBranch` が持つ。`rejected` は Behavior にも Exemplar にもならない candidate の引退(issue #954)。 */
 export function invalidateMemoryByMetaReview(
   db: Db,
   input: Parameters<typeof invalidateMemoryEntry>[1],
@@ -788,7 +788,7 @@ export function invalidateMemoryByMetaReview(
   at: Date,
 ): number {
   if (input.reason === "superseded" || input.reason === "path_moved") {
-    throw new DomainError(`invalidate_memory does not take ${input.reason}: replace with fold_memory, define_memory's supersedes or move_memory`);
+    throw new DomainError(`invalidate_memory does not take ${input.reason}: replace with fold_memory, define_memory's supersedes, move_memory or move_memory_branch`);
   }
   const row = requireNotApprovedBehaviorOrExemplar(db, input.entry_id);
   if (input.reason === "rejected" && row.state !== "candidate") throw new DomainError(`rejected retires only a candidate; memory entry ${row.id} is not one`);

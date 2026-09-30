@@ -1057,7 +1057,7 @@ function registerMemoryMetaReviewVerbs(server: McpServer, deps: McpDeps, run: Me
       description:
         "Drop a candidate (Behavior or Exemplar), Knowledge entry, or Definition with no successor. reason is " +
         "capability / environment / requirement_change, or rejected — only for a candidate that will become neither a Behavior nor an Exemplar. " +
-        "To replace an entry, use fold_memory, define_memory's supersedes, or move_memory. " +
+        "To replace an entry, use fold_memory, define_memory's supersedes, move_memory or move_memory_branch. " +
         "An approved Behavior or Exemplar cannot be invalidated here — propose it instead.",
       inputSchema: metaReviewInvalidationSchema.extend({ entry_id: z.number().int() }),
     },

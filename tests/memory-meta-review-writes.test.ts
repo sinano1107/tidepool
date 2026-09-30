@@ -268,6 +268,17 @@ it("meta-review の move_memory_branch は scope が変わるとき、配下に 
   expect(listMemoryEntries(f.db, {})).toEqual(before);
 });
 
+it("meta-review の move_memory_branch は Knowledge だけの枝でも、別 workspace へ・盤面全体から workspace へは domain error で拒み何も変わらない(ADR 0176 決定2)", () => {
+  const { db } = board();
+  knowledgeEntry(db, "tidepool");
+  knowledgeEntry(db, null);
+  const before = listMemoryEntries(db, {});
+
+  expect(() => moveBranch(db, "tidepool", "charts")).toThrow("only within it or to the whole board");
+  expect(() => moveBranch(db, null, "tidepool")).toThrow("only within it or to the whole board");
+  expect(listMemoryEntries(db, {})).toEqual(before);
+});
+
 it("meta-review の無効化は candidate・Knowledge・Definition に効き、approved の Behavior と後継つきの理由(superseded / path_moved)は domain error で拒む(ADR 0161 決定2)", () => {
   const { db, decision, knowledge } = board();
   const fact = knowledge("stale fact");

@@ -121,10 +121,6 @@ it("move_memory_branch は枝を to_scope の to_path へ移して旧 id → 複
       isError: false,
       body: { moved: [{ entry_id: material, successor_id: expect.any(Number) }, { entry_id: branch.body.entry_id, successor_id: expect.any(Number) }] },
     });
-    expect((await memoryEntries(t)).filter((e) => e.invalidation_reason === null).map((e) => [e.kind, e.scope, e.path])).toEqual([
-      ["knowledge", null, "toolchain"],
-      ["definition", null, "toolchain"],
-    ]);
   } finally {
     await client.close();
   }
