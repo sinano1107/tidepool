@@ -555,9 +555,7 @@ export function moveMemoryBranch(
 /** 枝ごとの移動が移す行(移動と meta-review の門が同じ集合を見る): scope(完全一致)で path が P か P/… の未無効化エントリ。
  *  盤面全体 → 盤面全体で盤面全体に1件でもあれば、全 workspace の同じ配下も足す(ADR 0177 決定5)。id 順。 */
 function branchRows(db: Db, { scope, path, to_scope }: { scope: string | null; path: string; to_scope: string | null }): EntryRow[] {
-  const under = (db.prepare("SELECT * FROM memory_entries WHERE invalidation_reason IS NULL ORDER BY id").all() as EntryRow[]).filter(
-    (row) => row.path === path || row.path.startsWith(`${path}/`),
-  );
+  const under = (db.prepare("SELECT * FROM memory_entries WHERE invalidation_reason IS NULL ORDER BY id").all() as EntryRow[]).filter((row) => atOrUnder(row.path, path));
   const own = under.filter((row) => row.scope === scope);
   return scope === null && to_scope === null && own.length > 0 ? under : own;
 }
