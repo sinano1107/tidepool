@@ -30,3 +30,7 @@
 - **open な question が周期を超えて放置されたら回す** —— 判断の材料を時刻で代替する(ADR 0120 の退けた案と同じ筋)。
 - **defer で consolidate の起草 candidate を引退させる** —— defer と reject の差が店の上で消え、理由コード `rejected` が
   「人間が退けた」に読める。起草 candidate を同じ replaces で再提案できない穴は陳腐化でも同じで、issue #1054 が持つ。
+
+## 追記(2026-10-01 の triage / grilling、issue #1030)
+
+決定3 の defer の comment 検査は、reject と同じ回答の門へ移る(ADR 0179 決定4)。必須であることは変わらない。

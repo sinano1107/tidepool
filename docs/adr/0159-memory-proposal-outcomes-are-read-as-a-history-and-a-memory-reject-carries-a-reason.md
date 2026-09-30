@@ -26,3 +26,8 @@
 - **candidate の一覧に提案の履歴を相乗りさせる** —— invalidate op の提案が指すのは approved エントリで、candidate ではない。
   kind・状態の filter とページも提案の軸と噛み合わない。routing が既存の read に相乗りできたのは読み口が1つだったからである。
 - **無効化の書き手を投影の列に持つ** —— event が正本で、印は既にそこにある。一覧は後継の文言を既に読み出し時に組んでいる。
+
+## 追記(2026-10-01 の triage / grilling、issue #1030)
+
+決定3 の理由必須は、提案 question と承認 question の reject すべてに広がった(ADR 0179 決定1・2)。門の置き場も reject の
+domain 関数から回答の domain 関数の1か所へ移る(ADR 0179 決定4)。
