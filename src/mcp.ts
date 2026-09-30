@@ -967,10 +967,9 @@ function registerMemoryMetaReviewVerbs(server: McpServer, deps: McpDeps, run: Me
     {
       description:
         "Draft or revise a branch definition in the given scope: one line declaring what is filed under the path. " +
-        "A branch has one definition per scope; revise it with supersedes, or list several definitions to consolidate into this one. " +
-        "supersedes may list definitions at other paths only when this path already has a definition (list it too): that " +
-        "merges the branches, and what is left under the old paths is moved with move_memory_branch afterwards. To rename " +
-        "a branch, move it with move_memory_branch and then revise its definition in place. A definition in supersedes must " +
+        "A branch has one definition per scope; revise it with supersedes. supersedes lists definitions at this path only; a " +
+        "definition at another path is refused. To rename a branch or merge two, use move_memory_branch, then revise the " +
+        "definition in place. A definition in supersedes must " +
         "be in the same scope or, when this definition is whole-board, in any scope. " +
         "To override a whole-board definition for one workspace, write the workspace definition without supersedes: it shadows the whole-board one there. " +
         BOARD_WRITE_LANGUAGE_RULE,
@@ -1000,7 +999,8 @@ function registerMemoryMetaReviewVerbs(server: McpServer, deps: McpDeps, run: Me
         "Fold the entries in replaces into one successor: each is invalidated as superseded by it. Give exactly one of: " +
         "scope, path, title, text and based_on_decision, to write a new Knowledge entry replacing Knowledge entries (based_on_decision " +
         "is the event id log_decision returned for your reasoning; it becomes the source, an inference); or successor_id, an existing " +
-        "approved entry: Knowledge into Knowledge, Definitions into a Definition, Behavior and Exemplar candidates into an approved " +
+        "approved entry: Knowledge into Knowledge, a Definition into the Definition at the same path in another scope (to merge " +
+        "branches at different paths, use move_memory_branch with merge), Behavior and Exemplar candidates into an approved " +
         "Behavior or Exemplar. The successor must cover every entry in replaces: its scope is whole-board or the same scope, and its addressee " +
         "is every agent or the same agent. An approved Behavior or Exemplar cannot be replaced here — propose a consolidate instead. " +
         BOARD_WRITE_LANGUAGE_RULE,
@@ -1038,11 +1038,14 @@ function registerMemoryMetaReviewVerbs(server: McpServer, deps: McpDeps, run: Me
     {
       description:
         "Move a branch — every live entry at path or under it in scope — to to_path in to_scope, in one step. This is how " +
-        "a branch is renamed. to_scope is scope or null (whole-board); widening is refused as a whole when the branch holds " +
-        "an approved Behavior or Exemplar or an entry an open proposal question names. Refused when a moved Definition would " +
-        "land on a branch already defined there: merge the two Definitions first (define_memory's supersedes or " +
-        "fold_memory's successor_id), then move what is left. Returns each old id with its copy's id.",
-      inputSchema: { scope, path: z.string(), to_scope: scope, to_path: z.string() },
+        "a branch is renamed and how two branches are merged. to_scope is scope or null (whole-board); widening is refused " +
+        "as a whole when the branch holds an approved Behavior or Exemplar or an entry an open proposal question names. " +
+        "When a moved Definition would land on a path already defined in its scope, the move is refused and names every " +
+        "such pair. To merge, pass merge: true: each of those Definitions is folded into the one already there (superseded " +
+        "— the destination's wording stays; revise it in place with define_memory before or after) and everything else " +
+        "moves. merge: true is refused when no such pair exists. Returns moved (each old id with its copy's id) and folded " +
+        "(each folded Definition's id with the id of the Definition it was folded into).",
+      inputSchema: { scope, path: z.string(), to_scope: scope, to_path: z.string(), merge: z.boolean().optional() },
     },
     // 照合は行き先の scope だけ —— 移動元は完全一致で行を引くだけ(人間の面の枝ごとの移動と同じ、ADR 0173 決定2)
     async (input) =>

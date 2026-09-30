@@ -57,7 +57,8 @@ export const META_REVIEW_SUBJECTS = {
         "into a new candidate when they share a source, or into an existing candidate (candidate_id). Apply fixes to Knowledge and Definitions directly, and retire or fold a candidate directly " +
         "(fold_memory's successor_id folds it into an approved Behavior or Exemplar). " +
         "Fix placement by moving, not by rewriting: move an entry that sits under the wrong branch (move_memory), rename a " +
-        "branch by moving it whole (move_memory_branch), and widen an entry every workspace needs to the whole board — " +
+        "branch by moving it whole, and merge two branches that hold the same thing by moving one into the other with " +
+        "merge: true (move_memory_branch), and widen an entry every workspace needs to the whole board — " +
         "widen a candidate before you propose it, so the question shows the human the scope it will have. You cannot narrow " +
         "an entry to a workspace, move it between workspaces, or change the scope of an approved Behavior or Exemplar: when " +
         "you judge one of those right, say so with log_decision and leave the entry in place. " +

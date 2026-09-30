@@ -210,8 +210,8 @@ it.each([
   expect(entry(fixture.db, fixture.move(id, own)().entry_id)).toMatchObject({ scope: own, path: "moved" });
 });
 
-const moveBranch = (db: ReturnType<typeof openDb>, scope: string | null, to_scope: string | null, to_path = "habits") =>
-  moveMemoryBranchByMetaReview(db, { scope, path: "habits", to_scope, to_path, mover: metaReview }, "worker", at);
+const moveBranch = (db: ReturnType<typeof openDb>, scope: string | null, to_scope: string | null, to_path = "habits", merge?: boolean) =>
+  moveMemoryBranchByMetaReview(db, { scope, path: "habits", to_scope, to_path, merge, mover: metaReview }, "worker", at);
 const liveUnder = (db: ReturnType<typeof openDb>, scope: string | null, path: string) =>
   listMemoryEntries(db, {}).filter((e) => e.scope === scope && e.invalidation_reason === null && (e.path === path || e.path.startsWith(`${path}/`)));
 
@@ -265,6 +265,34 @@ it("meta-review の move_memory_branch は scope が変わるとき、配下に 
   expect(() => moveBranch(f.db, "tidepool", "charts")).toThrow(DomainError);
   // 盤面全体の枝(approvedPair の approved の Behavior / Exemplar)を workspace へ
   expect(() => moveBranch(f.db, null, "tidepool")).toThrow(DomainError);
+  expect(listMemoryEntries(f.db, {})).toEqual(before);
+});
+
+it.each([
+  ["同じ scope の中で", "tidepool"],
+  ["盤面全体へ広げる向きで", null],
+] as const)("meta-review の move_memory_branch の merge は%s、移される定義を行き先の定義へ meta_review の印で畳み、残りを移す(ADR 0177 決定7)", (_, to_scope) => {
+  const { db } = board();
+  const old = defineMemoryByMetaReview(db, { scope: "tidepool", path: "habits", text: "How we work.", author: metaReview }, "worker", at).entry_id;
+  const fact = knowledgeEntry(db, "tidepool");
+  const kept = defineMemoryByMetaReview(db, { scope: to_scope, path: "practices", text: "How we practise.", author: metaReview }, "worker", at).entry_id;
+
+  const { moved, folded } = moveBranch(db, "tidepool", to_scope, "practices", true);
+
+  expect(folded).toEqual([{ entry_id: old, successor_id: kept }]);
+  expect(entry(db, old)).toMatchObject({ invalidation_reason: "superseded", successor_id: kept, invalidated_by: { activity: "meta_review" } });
+  expect(moved).toEqual([{ entry_id: fact, successor_id: expect.any(Number) }]);
+  expect(entry(db, moved[0]!.successor_id)).toMatchObject({ scope: to_scope, path: "practices", invalidation_reason: null });
+});
+
+it("meta-review の move_memory_branch の merge も、scope の門に掛かる行(approved の Behavior)が配下にあれば全体を domain error で拒み何も変わらない(ADR 0177 決定7 / ADR 0176 決定2)", () => {
+  const f = rescoping();
+  defineMemoryByMetaReview(f.db, { scope: "tidepool", path: "habits", text: "How we work.", author: metaReview }, "worker", at);
+  const approved = f.approvedReplaced("Pin npm");
+  defineMemoryByMetaReview(f.db, { scope: null, path: "practices", text: "How we practise.", author: metaReview }, "worker", at);
+  const before = listMemoryEntries(f.db, {});
+
+  expect(() => moveBranch(f.db, "tidepool", null, "practices", true)).toThrow(`memory entry ${approved} (an approved behavior)`);
   expect(listMemoryEntries(f.db, {})).toEqual(before);
 });
 
@@ -805,7 +833,7 @@ it("fold_memory の successor_id は replaces を既にある approved の後継
   const { db, attributed, drafted, consolidate, exemplar, behavior, replaced } = fixture;
   const [fact, kept] = [knowledgeEntry(db), knowledgeEntry(db)];
   const branch = definitionEntry(db);
-  const merged = defineMemoryByMetaReview(db, { scope: "tidepool", path: "ci", text: "How CI runs.", author: metaReview }, "worker", at).entry_id;
+  const merged = defineMemoryByMetaReview(db, { scope: null, path: "build", text: "How the board builds.", author: metaReview }, "worker", at).entry_id;
   const candidateBehavior = replaced("Two commits per migration");
   const candidateExemplar = consolidate([drafted("Keep it split", { event_id: attributed("kept the two commits apart") })], { kind: "exemplar", annotations }).candidate_id;
   const before = listMemoryEntries(db, {}).length;
@@ -900,14 +928,13 @@ const defineByMetaReview = (db: ReturnType<typeof openDb>, scope: string | null,
   defineMemoryByMetaReview(db, { scope, path, text: `What ${path} holds.`, supersedes, author: metaReview }, "worker", at).entry_id;
 
 it.each([
-  ["同じ scope で path の違う定義を、書く先の定義と一緒に(ADR 0161 決定2 / ADR 0176 決定6)", "tidepool", "tidepool", "toolchain", true],
-  ["workspace の定義を盤面全体の定義で(ADR 0161 追記7)", "tidepool", null, "build", false],
-] as const)("define_memory の supersedes は%s置き換える", (_, from, to, path, merge) => {
+  ["同じ scope・同じ path の定義を(改訂、ADR 0161 決定2)", "tidepool", "tidepool"],
+  ["workspace の定義を盤面全体の定義で(ADR 0161 追記7)", "tidepool", null],
+] as const)("define_memory の supersedes は%s置き換える", (_, from, to) => {
   const { db } = board();
   const old = defineByMetaReview(db, from, "build");
-  const target = merge ? [defineByMetaReview(db, to, path)] : [];
 
-  const successor = defineByMetaReview(db, to, path, [old, ...target]);
+  const successor = defineByMetaReview(db, to, "build", [old]);
 
   expect(entry(db, old)).toMatchObject({ invalidation_reason: "superseded", successor_id: successor });
 });

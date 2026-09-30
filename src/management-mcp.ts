@@ -629,9 +629,9 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
     {
       description:
         "Define a memory branch: one line at the branch's path declaring what is filed under it. A branch has one definition per " +
-        "workspace: to revise it, include the current one in supersedes. supersedes may list definitions at other paths only when " +
-        "this path already has a definition in this workspace (list it too): that merges the branches. To rename a branch, move it " +
-        "with move_memory_branch. text is the English canonical line; original_text is optional. " +
+        "workspace: to revise it, include the current one in supersedes. supersedes lists definitions at this path only; a " +
+        "definition at another path is refused. To rename a branch or merge two, use move_memory_branch. text is the English " +
+        "canonical line; original_text is optional. " +
         `${supersedesEffect} ${writtenAs}`,
       inputSchema: humanDefinitionSchema.shape,
     },
@@ -682,7 +682,8 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
       description:
         "Fold the entries in replaces into successor_id, an existing approved, non-invalidated entry: each is invalidated as superseded " +
         "by it and nothing new is written. Behavior and Exemplar entries fold into each other; Knowledge only into Knowledge and " +
-        "Definitions only into a Definition. replaces may hold candidates as well as approved entries: a candidate an approved entry " +
+        "a Definition only into the Definition at the same path in another workspace (merge branches at different paths with " +
+        "move_memory_branch). replaces may hold candidates as well as approved entries: a candidate an approved entry " +
         "already covers retires pointing at it. To replace entries with one you write now, pass them as supersedes on the write.",
       inputSchema: memoryFoldSchema.shape,
     },
@@ -704,7 +705,8 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
   const moveEffect =
     "The board copies the body — title, text, originals, addressee, annotations, source, author, state and approval — to the new place " +
     "and invalidates the old entry as path_moved; you are recorded as the one who moved it. A candidate stays a candidate. A Definition " +
-    "cannot move onto a branch that already has a live Definition in that scope: fold the two instead. A Definition's path changes " +
+    "cannot move onto a path that already has a live Definition in that workspace: fold it into that one with fold_memory_entries " +
+    "instead. A Definition's path changes " +
     "only with move_memory_branch, which carries the entries under it; move_memory_entry changes only its workspace.";
   server.registerTool(
     "move_memory_entry",
@@ -725,15 +727,18 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
     {
       description:
         "Move a whole branch: every live entry in workspace (exact match; null = the whole board) whose path is path or under path/ " +
-        "moves to to_workspace, with path's prefix replaced by to_path, in one step. Invalidated entries stay where they are. Returns " +
-        `each moved entry_id with the successor_id of its copy. ${moveEffect}`,
+        "moves to to_workspace, with path's prefix replaced by to_path, in one step. Invalidated entries stay where they are. When a " +
+        "moved Definition would land on a path already defined in its workspace, the move is refused and names every such pair; pass " +
+        "merge: true to fold each of them into the Definition already there (the destination's wording stays) and move the rest. " +
+        "merge: true is refused when no such pair exists. Returns moved (each entry_id with the successor_id of its copy) and folded " +
+        `(each folded Definition with its successor_id). ${moveEffect}`,
       inputSchema: memoryBranchMoveSchema.shape,
     },
     // 門は行き先だけ —— 移動元が消えた workspace の孤立を生きた置き場へ移せるように(ADR 0173 決定2)
-    async ({ workspace, path, to_workspace, to_path }) =>
+    async ({ workspace, path, to_workspace, to_path, merge }) =>
       memoryVerb(() => {
         assertMemoryReferencesKnown(deps, { workspace: to_workspace });
-        return moveMemoryBranch(deps.db, { scope: workspace, path, to_scope: to_workspace, to_path, mover: HUMAN_AUTHOR }, "mcp", deps.clock.now());
+        return moveMemoryBranch(deps.db, { scope: workspace, path, to_scope: to_workspace, to_path, merge, mover: HUMAN_AUTHOR }, "mcp", deps.clock.now());
       }),
   );
   server.registerTool(
