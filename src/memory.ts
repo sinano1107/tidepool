@@ -1290,16 +1290,11 @@ function inSight(row: EntryRow, reader: Omit<MemoryReader, "taskId">): boolean {
   return row.state === "approved" && (row.scope === null || row.scope === reader.scope) && (row.addressee === null || row.addressee === reader.agent);
 }
 
-/** 影(ADR 0083 追記4・追記7): 盤面全体の Definition で、同じ path に読み手の workspace の approved・未無効化の Definition がある。
- *  inSight とは別の条件で、read はこれも見えない id と同じく黙って省く。scope null の読み手には `scope = NULL` が偽なので影は無い。 */
+/** 影(ADR 0083 追記4・追記7): 盤面全体の Definition で、同じ path に読み手の workspace の未無効化の Definition がある
+ *  (Definition は approved でしか書かれない)。inSight とは別の条件で、read はこれも見えない id と同じく黙って省く。
+ *  scope null の読み手に影は無い。 */
 function shadowed(db: Db, row: EntryRow, reader: Pick<MemoryReader, "scope">): boolean {
-  return (
-    row.kind === "definition" &&
-    row.scope === null &&
-    db
-      .prepare("SELECT 1 FROM memory_entries WHERE kind = 'definition' AND path = ? AND scope = ? AND state = 'approved' AND invalidation_reason IS NULL")
-      .get(row.path, reader.scope) !== undefined
-  );
+  return row.kind === "definition" && row.scope === null && reader.scope !== null && liveDefinitions(db, reader.scope, row.path).length > 0;
 }
 
 /** INDEX の枝: prefix の path と、その path に置かれた定義(workspace が盤面全体に勝つ —— 見える

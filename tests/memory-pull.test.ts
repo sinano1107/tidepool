@@ -205,6 +205,13 @@ it("影でない Definition の read は今までどおり本文を返す", () =
   expect(readMemory(db, reader, { ids: [own, boardWide] }, at).entries.map((e) => e.text)).toEqual(["How this workspace is built.", "Board-wide deploy conventions."]);
 });
 
+it("scope null の読み手には影が無く、盤面全体の Definition の read は本文を返す", () => {
+  const { db, reader, define } = board();
+  const boardWide = define("deploy", "Board-wide deploy conventions.", null);
+
+  expect(readMemory(db, { ...reader, scope: null }, { ids: [boardWide] }, at).entries.map((e) => e.text)).toEqual(["Board-wide deploy conventions."]);
+});
+
 it("read は本文・path・出所の参照と、参照の型から導いた出所の種別(commit / event = fact、decision = inference)を返す", () => {
   const { db, task, reader, record } = board();
   const fact = record({ path: "build", title: "Build uses tsc", text: "The build runs tsc." });
