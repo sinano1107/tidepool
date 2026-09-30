@@ -32,6 +32,7 @@ import type {
   RepoSlug,
 } from "../src/github.js";
 import type { Landing } from "../src/landing.js";
+import type { InjectionQuery } from "../src/memory.js";
 import {
   type ContainedProcess,
   type ContainerRuntime,
@@ -206,6 +207,8 @@ export class ScriptedWorker implements WorkerAdapter {
    *  これを spawn にピン留めして `worker_spawned` に刻む —— 盤面境界で観測できるのは
    *  「何を渡したか」までで、刻まれることは adapter の seam が1度だけ言う。 */
   readonly startedSettings: ExecutionSetting[] = [];
+  /** 関連 leaf を何で引くか(ADR 0175)。記録に刻むのは adapter の seam が言う。 */
+  readonly startedQueries: Array<InjectionQuery | undefined> = [];
   readonly gracefulStops: string[] = [];
   readonly exits: string[] = [];
   private containers: ProcessContainers | undefined;
@@ -223,9 +226,10 @@ export class ScriptedWorker implements WorkerAdapter {
     readonly id = "fake-worker",
   ) {}
 
-  start(task: Task, setting: ExecutionSetting): void {
+  start(task: Task, setting: ExecutionSetting, query?: InjectionQuery): void {
     this.started.push(task);
     this.startedSettings.push(setting);
+    this.startedQueries.push(query);
     const failure = this.startFailure;
     this.startFailure = undefined;
     if (failure) throw failure;

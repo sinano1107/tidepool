@@ -447,7 +447,8 @@ export type EventPayload =
   // spec #586 C: spawn 時の注入(task 帰属、worker_spawned の直後)。注入した entry(定義を含む)の
   // id と版、組んだ時点の watermark、計数したトークン数と計数器、出した INDEX の深さ・木の全深さ・
   // 落とした関連 leaf の件数(#600 D。再生できない event なので消費者の着地を待たずに持つ)。
-  // 注入ゼロでも entries 空で残す。
+  // 注入ゼロでも entries 空で残す。`query` は関連 leaf を何で引いたか(ADR 0175 決定5): 英語の view で引いた
+  // ならその文面、訳す対象だが訳せなかったなら理由(throttled = 撃たなかった / failed = 撃って失敗)。対象外なら欄なし。
   | {
       kind: "memory_injected";
       worker_spawned_event_id: number;
@@ -459,6 +460,7 @@ export type EventPayload =
       omitted: number;
       tokenizer: string;
       tokenizer_version: string;
+      query?: { view: string } | { reason: "throttled" } | { reason: "failed"; message: string };
     }
   // ADR 0120 決定2 / issue #618: 盤面が主題の meta-review を登録した(登録した task に帰属)。
   // material_watermark = 登録時の events の最大 id —— 次の周期の材料はこれより後の event。

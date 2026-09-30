@@ -645,6 +645,7 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
     registry: options.registry,
     agents: agentAdmin?.list,
     retrospectiveCalls,
+    translationClient: options.translationClient,
   });
   // an abandoned triage session may not pause pickup forever: the watchdog
   // closes it past the timeout, and reopening pickup is a "run now" trigger

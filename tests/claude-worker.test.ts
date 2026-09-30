@@ -17,7 +17,7 @@ import { DEFAULT_AUDITOR_NAME } from "../src/defaults.js";
 import { appendEvent, type EventPayload, listEvents } from "../src/events.js";
 import { resolveExecutionSetting } from "../src/execution-setting.js";
 import { BOARD_WRITE_LANGUAGE_RULE } from "../src/mcp.js";
-import { buildMemoryInjection, recordKnowledge } from "../src/memory.js";
+import { buildMemoryInjection, type InjectionQuery, recordKnowledge } from "../src/memory.js";
 import { listEpisodes } from "../src/precedent.js";
 import { ProcessContainers, type PtyFn } from "../src/process-container.js";
 import {
@@ -243,6 +243,7 @@ async function makeWorker(
     workspace: string | null = null,
     assignee: string | null = "deckhand",
     type: Task["type"] = "work",
+    query?: InjectionQuery,
   ): Task => {
     const task = makeTask(id, workspace, assignee, type);
     insertTask(db, task);
@@ -250,7 +251,7 @@ async function makeWorker(
     // 1つずつ順に走らせるので、前の session の slot は次の pickup で明け渡す。
     slot.release();
     slot.occupy(task.id);
-    worker.start(task, setting(task));
+    worker.start(task, setting(task), query);
     return task;
   };
   const setting = (task: Task) =>
@@ -619,6 +620,25 @@ describe("ClaudeCodeWorker", () => {
     const events = listEvents(db, task.id);
     const spawned = events.findIndex((e) => e.kind === "worker_spawned");
     expect(events[spawned + 1]?.payload).toMatchObject({ kind: "memory_injected", worker_spawned_event_id: events[spawned]!.id });
+  });
+
+  it("start の入力が英語の view を持てば関連 leaf はその view で引き、memory_injected はその文面を持つ。持たなければ query の欄は無い(ADR 0175)", async () => {
+    const { start, calls, db } = await makeWorker();
+    const { entry_id } = recordKnowledge(
+      db,
+      { scope: "tidepool", path: "attic", title: "Attic ladder", text: "The attic ladder folds down.", author: { activity: "human", name: "human" } },
+      "webui",
+      new FakeClock().now(),
+    );
+    const viewed = start("task-view", null, "deckhand", "work", { view: "Find the attic ladder" });
+    const bare = start("task-bare");
+
+    const systemPrompt = (i: number) => calls[i]!.args[calls[i]!.args.indexOf("--append-system-prompt") + 1]!;
+    expect(systemPrompt(0)).toContain(`- #${entry_id} Attic ladder`);
+    expect(systemPrompt(1)).not.toContain(`- #${entry_id} Attic ladder`);
+    const injected = (id: string) => listEvents(db, id).find((e) => e.kind === "memory_injected")!.payload;
+    expect(injected(viewed.id)).toMatchObject({ query: { view: "Find the attic ladder" } });
+    expect(injected(bare.id)).not.toHaveProperty("query");
   });
 
   it("見える approved の記憶が無ければ注入節を置かず、memory_injected は entries 空で残る(issue #592)", async () => {

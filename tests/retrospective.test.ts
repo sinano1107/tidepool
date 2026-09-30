@@ -2,7 +2,7 @@ import { afterEach, expect, it } from "vitest";
 import type { Cause } from "../src/cause.js";
 import { openDb } from "../src/db.js";
 import { appendEvent, listEvents } from "../src/events.js";
-import { readMemory, recordKnowledge, searchMemory } from "../src/memory.js";
+import { buildMemoryInjection, readMemory, recordKnowledge, recordMemoryInjection, searchMemory } from "../src/memory.js";
 import { attributeObjections, type GatedJudgment, listHaltedRefires, refireRetrospectiveCalls } from "../src/retrospective.js";
 import { cancelTaskDirectly, listChildren, logDecision, registerTask } from "../src/tasks.js";
 import { reportProviderUsage } from "../src/throttle.js";
@@ -28,6 +28,7 @@ import {
   objectedForDraft,
   propose,
   registerWork,
+  rememberedNote,
   runNow,
   type Tidepool,
   WORKER_SPAWNED,
@@ -447,6 +448,21 @@ it.each([
     ]);
   },
 );
+
+it.each([
+  ["英語の view があれば、その view で引いた", { view: "Fetch the attic ladder" }, true],
+  ["view が無ければ、原語で引いた", { reason: "throttled" }, false],
+] as const)("起草に渡す注入節は、task の最新の注入の記録から%s節(翻訳は撃たない —— ADR 0175 決定6)", async (_, query, hit) => {
+  const s = await objectedForDraft("naming", { initial: { cause: "preference", evidence: "taste" } });
+  t = s.t;
+  const ladder = rememberedNote(t, "Attic ladder");
+  recordMemoryInjection(t.db, s.task.id, t.worker.id, 0, buildMemoryInjection(t.db, s.task, "charts", t.worker.id, query), t.clock.now());
+  s.behaviorDraftClient.scriptDraft(s.entry.id, KEEP_FIXTURES);
+
+  await commit(t, s.task.id, "naming");
+
+  expect(s.behaviorDraftClient.calls[0]!.input.index!.includes(`- #${ladder} Attic ladder`)).toBe(hit);
+});
 
 it("盤面設定 retrospective_tier を standard にすると、帰責の判定も Behavior candidate の起草も anthropic × standard の行で撃たれる(issue #914)", async () => {
   const s = await objectedForDraft("tiered-draft", { initial: { cause: "preference", evidence: "taste" } });

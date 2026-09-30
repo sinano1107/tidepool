@@ -1,5 +1,5 @@
 import { afterEach, expect, it } from "vitest";
-import { getTask, logDecision } from "../src/tasks.js";
+import { logDecision, registerTask } from "../src/tasks.js";
 import { reportProviderUsage } from "../src/throttle.js";
 import { FakeTranslationClient } from "./fakes.js";
 import { api, bootTidepool, registerQuestion, type Tidepool } from "./harness.js";
@@ -22,15 +22,11 @@ it("decision log の一行を翻訳する(type: log_entry)", async () => {
   translationClient.scriptTranslation("アプローチAを採用することにした");
   t = await bootTidepool({ translationClient });
 
-  const registered = await api(t.baseUrl, "POST", "/api/tasks", {
-    type: "work",
-    title: "t",
-    purpose: "p",
-    completion_criteria: "c",
-  });
+  // 扉を通さずに置く —— 扉の登録は pickup の契機で、その pickup も view を訳す(ADR 0175)
+  const registered = registerTask(t.db, { type: "work", title: "t", purpose: "p", completion_criteria: "c" }, t.clock.now());
   const eventId = logDecision(
     t.db,
-    getTask(t.db, registered.json.id)!,
+    registered,
     "decided to use approach A",
     "tako",
     t.clock.now(),

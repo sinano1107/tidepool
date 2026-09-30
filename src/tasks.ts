@@ -2001,7 +2001,7 @@ function hasAgentRegisteredChild(db: Db, parentId: string): boolean {
  *  registered this task" (a root the human registered, or a child they added
  *  via human decompose). No separate provenance marker is needed. registerTask
  *  writes exactly one `task_registered`, so the latest is the task's only one. */
-function isHumanRegistered(db: Db, taskId: string): boolean {
+export function isHumanRegistered(db: Db, taskId: string): boolean {
   return latestEventOfTask(db, taskId, "task_registered")?.worker_id === HUMAN_WORKER_ID;
 }
 
