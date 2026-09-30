@@ -13,8 +13,6 @@ import { api, bootTidepool, GIT_FIXTURE_TEST_TIMEOUT, HOUR, makeWorkspace, quest
 let t: Tidepool;
 afterEach(() => t?.stop());
 
-const settle = () => new Promise((resolve) => setImmediate(resolve));
-
 it("表示言語 Japanese の盤面で人間が登録した task は、title / purpose / 完了基準を1つの文面として英語へ1回訳し、その view を start に渡す。worker に渡る task の文面は原語のまま", async () => {
   const translationClient = new FakeTranslationClient();
   translationClient.scriptTranslation("Fix the tide chart drift");
@@ -96,7 +94,7 @@ it("同じ task の2回目の session は cache に当たって翻訳を撃た�
   // spawn 失敗の question に retry で答えると、同じ task が次の pickup で新しい session になる
   const rerun = async (edit?: () => Promise<unknown>) => {
     t.worker.failSpawn(task.id, "ENOENT", "spawn claude ENOENT");
-    await settle();
+    await new Promise((resolve) => setImmediate(resolve));
     const question = (await questions(t)).find((q) => q.status === "todo");
     await edit?.();
     await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, { answers: ["retry"] });

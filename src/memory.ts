@@ -1724,8 +1724,7 @@ export function recordMemoryInjection(
   injection: MemoryInjection,
   at: Date,
 ): number {
-  // 対象外は欄を持たない(undefined の鍵も残さない)
-  const { section: _, query, ...recorded } = injection;
+  const { section: _, ...recorded } = injection;
   return appendEvent(db, {
     taskId,
     workerId: agent,
@@ -1734,7 +1733,6 @@ export function recordMemoryInjection(
       kind: "memory_injected",
       worker_spawned_event_id: workerSpawnedEventId,
       ...recorded,
-      ...(query && { query }),
       tokenizer: TOKENIZER.id,
       tokenizer_version: TOKENIZER.version,
     },
