@@ -110,6 +110,19 @@ it.each([
   expect(searchMemory(db, reader, { query }, at).results.map((r) => r.title)).toEqual(["hit"]);
 });
 
+it("CJK に空白なしで接した識別子は独立の語として AND で当たるので、識別子と CJK の連なりの両方を含む leaf にだけ当たる(#1178)", () => {
+  const { db, reader, record } = board();
+  record({ title: "both", text: "設定の注入は memory.ts で組む" });
+  record({ title: "identifier only", text: "memory.ts を読む" });
+  expect(searchMemory(db, reader, { query: "memory.tsの注入" }, at).results.map((r) => r.title)).toEqual(["both"]);
+});
+
+it("CJK の連なりの内側は bigram の隣接を保つので、query 東京都 は text「京都と東京」の leaf に当たらない(#1178)", () => {
+  const { db, reader, record } = board();
+  record({ title: "leaf", text: "京都と東京" });
+  expect(searchMemory(db, reader, { query: "東京都" }, at).results).toEqual([]);
+});
+
 it.each([
   ["The chart reads tides.csv.", "csv"],
   ["Use foo__bar here", "foobar"],
