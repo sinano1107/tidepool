@@ -181,7 +181,7 @@ it.each([
   ["Việt Nam note".normalize("NFD"), "Việt".normalize("NFC")],
   ["한국어 메모".normalize("NFC"), "한국어".normalize("NFD")],
   ["한국어 메모".normalize("NFD"), "한국어".normalize("NFC")],
-  ["神社の記録", "神社"],
+  ["\uFA19社の記録", "\u795E社"],
 ])("半濁点・重なる付加記号・ハングル・互換漢字も NFC に揃うので、text %j の leaf は query %j で当たる(#1189)", (text, query) => {
   const { db, reader, record } = board();
   record({ title: "leaf", text });
@@ -194,10 +194,10 @@ it("NFD のラテン文字も NFC に揃えてから割るので、語の途中�
   expect(searchMemory(db, reader, { query: "Vie" }, at).results).toEqual([]);
 });
 
-it("NFC で合成形の無い並びは索引と query で同じに割れるので、text あ゙いう の leaf は query あ゙い で当たる(#1189)", () => {
+it("NFC で合成形の無い並びは索引と query で同じに割れるので、text あ + U+3099 + いう の leaf は query あ + U+3099 + い で当たる(#1189)", () => {
   const { db, reader, record } = board();
-  record({ title: "leaf", text: "あ゙いう" });
-  expect(searchMemory(db, reader, { query: "あ゙い" }, at).results.map((r) => r.title)).toEqual(["leaf"]);
+  record({ title: "leaf", text: "\u3042\u3099\u3044\u3046" });
+  expect(searchMemory(db, reader, { query: "\u3042\u3099\u3044" }, at).results.map((r) => r.title)).toEqual(["leaf"]);
 });
 
 it("NFD の title / path を持つ leaf は NFC の query で当たり、正規化は FTS の中だけなので title / path / text と memory_pulled の query は入力の形のまま返る(#1189)", () => {
