@@ -1598,18 +1598,18 @@ export function listMemoryBranches(db: Db) {
   }));
 }
 
+const withoutOriginal = <T extends { original?: unknown }>({ original: _, ...rest }: T) => rest;
+
 /** meta-review の枝の一覧: 返した id は行の Definition の id。Definition の原文は人間の面にだけ残す(一覧と同じ線、#1052)。 */
 export function pullMemoryBranches(db: Db, reader: Pick<MemoryReader, "taskId" | "agent">, at: Date) {
   return db.transaction(() => {
-    const branches = listMemoryBranches(db).map((row) => ({ ...row, definitions: row.definitions.map(({ original: _, ...d }) => d) }));
+    const branches = listMemoryBranches(db).map((row) => ({ ...row, definitions: row.definitions.map(withoutOriginal) }));
     const returned_ids = branches.flatMap((row) => row.definitions.map((d) => d.id));
     return recordPull(db, reader, { verb: "list_memory_branches", input: {}, returned_ids }, { branches }, at);
   })();
 }
 
 type ListedEntry = ReturnType<typeof listMemoryEntries>[number];
-
-const withoutOriginal = <T extends { original?: unknown }>({ original: _, ...rest }: T) => rest;
 
 /** meta-review の読み口の行: エントリの原文と Exemplar の注釈の原文は人間の面と正本にだけ残す(#1052 / ADR 0122 追記 #1225)。 */
 function metaReviewRow<T extends ListedEntry>(entry: T) {
@@ -1842,7 +1842,7 @@ export function readMemory(
           source_kind: SOURCE_KIND[source.kind],
           case: kind === "behavior" || kind === "exemplar" ? renderCase(db, source) : null,
           // 原文は人間の面のもの —— worker には英語の正文だけ(ADR 0015)
-          annotations: annotations?.map(({ original: _, ...annotation }) => annotation),
+          annotations: annotations?.map(withoutOriginal),
         };
       });
     return recordPull(db, reader, { verb: "read_memory", input, returned_ids: entries.map((e) => e.id), dropped }, { entries, dropped }, at);
