@@ -249,6 +249,19 @@ it("meta-review の move_memory_branch は approved の Behavior / Exemplar も�
   expect(liveUnder(f.db, "tidepool", "habits")).toEqual([]);
 });
 
+it("meta-review の move_memory_branch の盤面全体 → 盤面全体の移動は、workspace の approved の Behavior / Exemplar を運んでも scope が変わらないので門に掛からず、それぞれの scope のまま移す(ADR 0177 決定5)", () => {
+  const f = rescoping();
+  const carried = [f.approvedReplaced("Pin npm"), f.workspaceExemplar()];
+
+  const { moved } = moveBranch(f.db, null, null, "practices");
+
+  expect(carried.map((id) => entry(f.db, moved.find((m) => m.entry_id === id)!.successor_id))).toMatchObject([
+    { kind: "behavior", state: "approved", scope: "tidepool", path: "practices" },
+    { kind: "exemplar", state: "approved", scope: "tidepool", path: "practices" },
+  ]);
+  expect(liveUnder(f.db, "tidepool", "habits")).toEqual([]);
+});
+
 it("meta-review の move_memory_branch は scope が変わるとき、配下に approved の Behavior / Exemplar か open な提案が名指すエントリが1件でもあれば全体を domain error で拒んでそのすべてを名指し、行き先が別 workspace・狭める向きも拒む —— どれも何も変わらない(ADR 0176 決定2・5)", () => {
   const f = rescoping();
   defineMemoryByMetaReview(f.db, { scope: "tidepool", path: "habits", text: "How we work.", author: metaReview }, "worker", at);

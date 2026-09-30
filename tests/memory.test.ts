@@ -1267,6 +1267,98 @@ it("枝ごとの移動は移動元の scope(完全一致)で path が P か P/�
   expect(kept.map((id) => entries.get(id)?.invalidation_reason)).toEqual([null, null]);
 });
 
+/** 盤面全体と2つの workspace に同じ枝 build: 盤面全体と tidepool は定義と leaf、charts は leaf だけ(盤面全体の定義に頼る)。 */
+function everyWorkspaceUnderBuild() {
+  const { db, task } = board();
+  const fact = (scope: string | null, path = "build/tests") => recordKnowledge(db, { ...knowledge, scope, path, source: { commit: "0a46a46" } }, "worker", at).entry_id;
+  const define = (scope: string | null, path = "build") => defineMemoryBranch(db, { ...definition, scope, path, text: `What ${path} holds in ${scope ?? "the board"}.` }, "worker", at).entry_id;
+  const ids = [define(null), fact(null), define("tidepool"), fact("tidepool"), fact("charts", "build/ci")];
+  const move = (scope: string | null, to_scope: string | null, to_path = "toolchain", merge?: boolean) => () =>
+    moveMemoryBranch(db, { scope, path: "build", to_scope, to_path, merge, mover: human }, "webui", at);
+  return { db, task, fact, define, ids, move };
+}
+
+it("盤面全体 → 盤面全体の枝ごとの移動は、全 workspace の同じ path 配下(workspace 自身の定義も)をそれぞれの scope のまま to_path + 残りへ写し、workspace の worker の INDEX に旧 path が残らない(ADR 0177 決定5)", () => {
+  const { db, task, ids, move } = everyWorkspaceUnderBuild();
+
+  const { moved } = move(null, null)();
+
+  expect(moved.map(({ entry_id }) => entry_id)).toEqual(ids);
+  expect(moved.map(({ successor_id }) => entryById(db, successor_id))).toMatchObject([
+    { kind: "definition", scope: null, path: "toolchain" },
+    { kind: "knowledge", scope: null, path: "toolchain/tests" },
+    { kind: "definition", scope: "tidepool", path: "toolchain" },
+    { kind: "knowledge", scope: "tidepool", path: "toolchain/tests" },
+    { kind: "knowledge", scope: "charts", path: "toolchain/ci" },
+  ]);
+  for (const scope of ["tidepool", "charts"]) {
+    const { section } = buildMemoryInjection(db, task, scope, "deckhand");
+    expect(section).not.toContain("- build/");
+    expect(section).toContain(`- toolchain/ — What build holds in ${scope === "tidepool" ? "tidepool" : "the board"}.`);
+  }
+});
+
+it("盤面全体 → 盤面全体の枝ごとの移動の merge は、workspace の中の衝突もその workspace の行き先の定義へ畳んで folded に載せる(ADR 0177 決定5)", () => {
+  const { db, ids, define, move } = everyWorkspaceUnderBuild();
+  const [boardBuild, boardTests, workspaceBuild, workspaceTests, chartsCi] = ids;
+  const [boardToolchain, workspaceToolchain] = [define(null, "toolchain"), define("tidepool", "toolchain")];
+
+  const { moved, folded } = move(null, null, "toolchain", true)();
+
+  expect(folded).toEqual([
+    { entry_id: boardBuild, successor_id: boardToolchain },
+    { entry_id: workspaceBuild, successor_id: workspaceToolchain },
+  ]);
+  expect(moved.map(({ entry_id }) => entry_id)).toEqual([boardTests, workspaceTests, chartsCi]);
+  expect(approvedMemoryEntries(db).map((e) => [e.scope, e.path])).toEqual([
+    [null, "toolchain"],
+    ["tidepool", "toolchain"],
+    [null, "toolchain/tests"],
+    ["tidepool", "toolchain/tests"],
+    ["charts", "toolchain/ci"],
+  ]);
+});
+
+it("盤面全体に path 配下の未無効化エントリが無ければ、workspace に配下があっても盤面全体 → 盤面全体の枝ごとの移動は domain error で何も変わらない(ADR 0177 決定5)", () => {
+  const { db } = board();
+  defineMemoryBranch(db, definition, "worker", at);
+  record(db, "fact");
+  const gone = recordKnowledge(db, { ...knowledge, scope: null, source: { commit: "0a46a46" } }, "worker", at).entry_id;
+  invalidateMemoryEntry(db, { entry_id: gone, reason: "environment" }, "human", "webui", at);
+  const before = listMemoryEntries(db, {});
+
+  expect(() => moveMemoryBranch(db, { scope: null, path: "build", to_scope: null, to_path: "toolchain", mover: human }, "webui", at)).toThrow(/no live memory entry/);
+  expect(listMemoryEntries(db, {})).toEqual(before);
+});
+
+it.each([
+  ["workspace の枝の移動", "tidepool", "tidepool", [2, 3]],
+  ["盤面全体から workspace へ scope を変える移動", null, "tidepool", [0, 1]],
+  ["workspace から盤面全体へ scope を変える移動", "tidepool", null, [2, 3]],
+] as const)("%sは移動元の scope のエントリだけを運び、他の scope の配下は旧 path に残る(ADR 0177 決定5)", (_, scope, to_scope, carried) => {
+  const { db, ids, move } = everyWorkspaceUnderBuild();
+
+  const { moved } = move(scope, to_scope)();
+
+  expect(moved.map(({ entry_id }) => entry_id)).toEqual(carried.map((i) => ids[i]));
+  expect(ids.filter((id) => !moved.some((m) => m.entry_id === id)).map((id) => entryById(db, id)?.invalidation_reason)).toEqual([null, null, null]);
+});
+
+it("watermark 再生と rebuild は、全 workspace を運んだ盤面全体 → 盤面全体の統合の畳みと複製を表と同じに戻す(ADR 0177 決定5)", () => {
+  const { db, define, move } = everyWorkspaceUnderBuild();
+  define(null, "toolchain");
+  define("tidepool", "toolchain");
+  move(null, null, "toolchain", true)();
+  const current = approvedMemoryEntries(db);
+  const listed = listMemoryEntries(db, {});
+
+  expect(approvedMemoryEntries(db, Number.MAX_SAFE_INTEGER)).toEqual(current);
+  // setup のみ: 版の古い店を模して rebuild を走らせる
+  db.prepare("UPDATE memory_index_version SET preprocess_version = 'cjk-bigram-0'").run();
+  ensureMemoryIndex(db, at);
+  expect(listMemoryEntries(db, {})).toEqual(listed);
+});
+
 it("枝ごとの移動は、移される Definition の置き場に生きた Definition があれば merge なしでは全体を domain error で拒んで衝突する組(根も子も)をすべて名指し、merge ありで衝突が無い・移すものが無い・同じ置き場も domain error —— どれも何も変わらない(ADR 0177 決定2)", () => {
   const { db } = board();
   const [build, buildX] = ["build", "build/x"].map((path) => defineMemoryBranch(db, { ...definition, path }, "worker", at).entry_id);
