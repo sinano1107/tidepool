@@ -157,11 +157,65 @@ it.each([
   ["The chart reads tides.csv.", "csv"],
   ["Use foo__bar here", "foobar"],
   ["Pin v1..2 now", "v12"],
-  ["Visit the cafe\u0301.x page", "cafe\u0301x"],
+  ["Visit the x\u0301.y page", "x\u0301y"],
 ])("語中の . - _ は連なりでも結合文字の隣でも残るので、text %j の leaf は query %j では当たらない", (text, query) => {
   const { db, reader, record } = board();
   record({ title: "leaf", text });
   expect(searchMemory(db, reader, { query }, at).results).toEqual([]);
+});
+
+it.each([
+  ["NFC", "NFC"],
+  ["NFC", "NFD"],
+  ["NFD", "NFC"],
+  ["NFD", "NFD"],
+] as const)("索引と query は NFC に揃えてから語に割るので、text「ガイドを読む」(%s)の leaf は query ガイド(%s)で当たる(#1189)", (textForm, queryForm) => {
+  const { db, reader, record } = board();
+  record({ title: "leaf", text: "ガイドを読む".normalize(textForm) });
+  expect(searchMemory(db, reader, { query: "ガイド".normalize(queryForm) }, at).results.map((r) => r.title)).toEqual(["leaf"]);
+});
+
+it.each([
+  ["パイプを繋ぐ".normalize("NFC"), "パイプ".normalize("NFD")],
+  ["Việt Nam note".normalize("NFC"), "Việt".normalize("NFD")],
+  ["Việt Nam note".normalize("NFD"), "Việt".normalize("NFC")],
+  ["한국어 메모".normalize("NFC"), "한국어".normalize("NFD")],
+  ["한국어 메모".normalize("NFD"), "한국어".normalize("NFC")],
+  ["\uFA19社の記録", "\u795E社"],
+])("半濁点・重なる付加記号・ハングル・互換漢字も NFC に揃うので、text %j の leaf は query %j で当たる(#1189)", (text, query) => {
+  const { db, reader, record } = board();
+  record({ title: "leaf", text });
+  expect(searchMemory(db, reader, { query }, at).results.map((r) => r.title)).toEqual(["leaf"]);
+});
+
+it("NFD のラテン文字も NFC に揃えてから割るので、語の途中で割れず、text「Việt Nam note」(NFD)の leaf は query Vie で当たらない(#1189)", () => {
+  const { db, reader, record } = board();
+  record({ title: "leaf", text: "Việt Nam note".normalize("NFD") });
+  expect(searchMemory(db, reader, { query: "Vie" }, at).results).toEqual([]);
+});
+
+it("NFC で合成形の無い並びは索引と query で同じに割れるので、text あ + U+3099 + いう の leaf は query あ + U+3099 + い で当たる(#1189)", () => {
+  const { db, reader, record } = board();
+  record({ title: "leaf", text: "\u3042\u3099\u3044\u3046" });
+  expect(searchMemory(db, reader, { query: "\u3042\u3099\u3044" }, at).results.map((r) => r.title)).toEqual(["leaf"]);
+});
+
+it("NFD の title / path を持つ leaf は NFC の query で当たり、正規化は FTS の中だけなので title / path / text と memory_pulled の query は入力の形のまま返る(#1189)", () => {
+  const { db, reader, record } = board();
+  const title = "ガイドを読む".normalize("NFD");
+  const path = "ガイド".normalize("NFD");
+  const text = "ガイドの本文".normalize("NFD");
+  const byTitle = record({ title, text: "x" });
+  const byPath = record({ path, title: "t", text: "y" });
+  const both = record({ path, title, text });
+  const query = "ガイド".normalize("NFD");
+
+  const search = searchMemory(db, reader, { query: "ガイド".normalize("NFC") }, at);
+  expect(search.results.map((r) => r.id).sort()).toEqual([byTitle, byPath, both].sort());
+  expect(search.results.find((r) => r.id === both)).toMatchObject({ title, path });
+  expect(readMemory(db, reader, { ids: [both] }, at).entries[0]).toMatchObject({ title, path, text });
+  const pulled = searchMemory(db, reader, { query }, at);
+  expect(getEvent(db, pulled.event_id)?.payload).toMatchObject({ kind: "memory_pulled", input: { query } });
 });
 
 it("search は英語の stopword を query から落として AND で当て、stopword と記号だけの query は memory_pulled を残さず DomainError になる", () => {
@@ -790,7 +844,7 @@ it("rebuild はエントリ表と FTS を events から作り直し、無効化�
   expect(() => invalidateMemoryEntry(db, { entry_id: old, reason: "environment" }, "human", "webui", at)).toThrow(/already invalidated/);
   expect(getEvent(db, eventId!)).toMatchObject({
     task_id: null,
-    payload: { kind: "memory_index_rebuilt", tokenizer: "unicode61 tokenchars '_-.'", preprocess_version: "cjk-bigram-7" },
+    payload: { kind: "memory_index_rebuilt", tokenizer: "unicode61 tokenchars '_-.'", preprocess_version: "cjk-bigram-8" },
   });
 });
 
@@ -804,7 +858,7 @@ it("原文 original の列を持つ旧い FTS の店は、open 後の照合が�
   db.prepare("UPDATE memory_index_version SET preprocess_version = 'cjk-bigram-5'").run();
   const eventId = ensureMemoryIndex(db, at);
 
-  expect(getEvent(db, eventId!)).toMatchObject({ payload: { kind: "memory_index_rebuilt", preprocess_version: "cjk-bigram-7" } });
+  expect(getEvent(db, eventId!)).toMatchObject({ payload: { kind: "memory_index_rebuilt", preprocess_version: "cjk-bigram-8" } });
   expect(searchMemory(db, reader, { query: "道具" }, at).results).toEqual([]);
   expect(searchMemory(db, reader, { query: "Toolchain" }, at).results.map((r) => r.title)).toEqual(["Toolchain"]);
 });

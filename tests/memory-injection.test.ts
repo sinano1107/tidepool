@@ -200,6 +200,16 @@ it("句読点で切れた title は切れ目ごとの phrase の OR で引くの
   expect(injection.entries.map((e) => e.id)).toEqual([leaf]);
 });
 
+it("task の title も NFC に揃えてから引くので、title ガイド(NFD)の task には text「ガイドを読む」(NFC)の leaf が関連 leaf に並ぶ(#1189)", () => {
+  const { db, task, record } = board({ title: "ガイド".normalize("NFD"), purpose: "chart drifts", completion_criteria: "tests pass" });
+  const leaf = record({ path: "guide", title: "Guide", text: "ガイドを読む".normalize("NFC") });
+  record({ path: "deploy", title: "Deploy to the Pi", text: "It runs on the Pi." });
+
+  const injection = buildMemoryInjection(db, task, "tidepool", "deckhand");
+
+  expect(injection.entries.map((e) => e.id)).toEqual([leaf]);
+});
+
 it("title / purpose / completion criteria が stopword だけの task は、関連 leaf なし・INDEX ありの節を組む", () => {
   const { db, task, record } = board({ title: "The", purpose: "it is", completion_criteria: "a" });
   record({ path: "deploy", title: "Deploy to the Pi", text: "It is on the Pi." });
