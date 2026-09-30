@@ -639,12 +639,12 @@ function settingsFile(
  *  beats `denyRead`, a workspace can re-open anything it names. Neither
  *  `--setting-sources user` nor `--setting-sources ""` stops it.
  *
- *  A `work` session can write its own checkout, so left alone this is a
- *  two-session escalation: widen the floor in session N, walk out in N+1 (and
- *  the slot-release tree rule would helpfully commit the file). The board's
- *  answer is to refuse the spawn instead — a workspace that redefines the
- *  sandbox is a broken resource, quarantined like any other (the caller does
- *  that; this returns the offending file names).
+ *  The worker itself cannot write either settings file (ADR 0037 mechanism 2);
+ *  this guard is the second wall — a file already in the checkout, whoever put
+ *  it there, is caught before the CLI merges it. The board's answer is to
+ *  refuse the spawn — a workspace that redefines the sandbox is a broken
+ *  resource, quarantined like any other (the caller does that; this returns
+ *  the offending file names).
  *
  *  `permissions` joins `sandbox` as a guarded key once review runs under
  *  `--permission-mode manual` (ADR 0035). Measured on 2.1.220: a
@@ -656,7 +656,7 @@ function settingsFile(
  *  change under us, and this guard exists precisely so a change there is not a
  *  silent floor loss. Under `auto` this was harmless (the classifier
  *  self-approved anyway); under `manual` the permission layer *is* the floor,
- *  so the same two-session escalation applies.
+ *  so the same guard applies.
  *
  *  Fail-closed on a file it cannot parse: the CLI's own reader may accept more
  *  than `JSON.parse` does, and "we couldn't tell" must not read as "clean".

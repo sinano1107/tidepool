@@ -1646,11 +1646,10 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     // own `.claude/settings.json` with the per-task `--settings` floor below,
     // and both floor-defining keys leak through — `sandbox.filesystem.allowRead`
     // entries win, and a `permissions.allow` entry lifts review's manual write
-    // floor (both measured — see workspaceSettingsDisposition). A work session can
-    // write its own checkout, so this would be a two-session escalation: widen
-    // the floor in session N, walk out in N+1. A workspace whose local or
-    // untracked settings redefine the floor is a broken resource — quarantined
-    // like a dirty tree, and no session starts in it meanwhile. A tracked
+    // floor (both measured — see workspaceSettingsDisposition). A workspace whose
+    // local or untracked settings redefine the floor is a broken resource —
+    // quarantined like a dirty tree, since sparse-checkout cannot safely hide
+    // them, and no session starts in it meanwhile. A tracked
     // settings.json is hidden for the session instead, whatever it holds (ADR 0158).
     // issue #149 / ADR 0040: 盤面自身の状態(DB・worker-logs・token ファイル・
     // 実行 checkout)が workspace と交差していたら、この workspace で走る worker は
