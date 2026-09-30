@@ -260,14 +260,7 @@ it("list_memory_proposals の amendment は人間の原文 original_title / orig
   const amendment = { title: "Short notes", text: "Keep notes to one line.", original_title: "短いメモ", original_text: "メモは1行にする" };
   answer(question, "approve", { amendment });
   // setup のみ: Exemplar の candidate(出所は帰責 event)を注釈の原文つきの修正値で approve する
-  const attributed = appendEvent(db, {
-    taskId: task.id,
-    workerId: "tidepool",
-    origin: "board",
-    payload: { kind: "objection_attributed", entry_id: decision, objection_event_ids: [bundledObjection(db, task.id, decision, at)], cause: "preference", evidence: "e", entries: null, round: "after_rca" },
-    at,
-  });
-  const drafted = behavior({ title: "Short note", source: attributed });
+  const drafted = behavior({ title: "Short note", source: attribution({ db, task, decision }) });
   const text = { scope: null, path: "habits", title: "Short note", addressee: null, kind: "exemplar" as const, annotations: [{ anchor: "whole" as const, polarity: "imitate" as const, text: "Keep it short." }] };
   const exemplar = propose({ op: "consolidate", text, replaces: [drafted], based_on_decision: decision, rationale: "r" });
   const annotated = { annotations: [{ anchor: "whole" as const, polarity: "imitate" as const, text: "Keep it this short.", original: "この短さで" }] };
@@ -403,7 +396,7 @@ const approve = (db: ReturnType<typeof openDb>, candidate_id: number) =>
   approveMemoryProposal(db, { kind: "memory", op: "approve", candidate_id, replaces: [] }, "question-1", "webui", at);
 
 /** setup のみ: board の decision への異議の帰責 event(RCA 起草の出所)。 */
-const attribution = ({ db, task, decision }: ReturnType<typeof board>, comment?: string) =>
+const attribution = ({ db, task, decision }: Pick<ReturnType<typeof board>, "db" | "task" | "decision">, comment?: string) =>
   appendEvent(db, {
     taskId: task.id,
     workerId: "tidepool",

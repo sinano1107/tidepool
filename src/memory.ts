@@ -1873,8 +1873,7 @@ export function readMemoryEntries(db: Db, reader: Pick<MemoryReader, "taskId" | 
       .sort(([a], [b]) => a - b)
       .map(([id, requested_id]) => {
         const entry = listed.get(id)!;
-        const shown = entry.kind === "behavior" || entry.kind === "exemplar" ? renderCase(db, entry.source) : null;
-        return { ...metaReviewRow(entry), requested_id, case: shown };
+        return { ...metaReviewRow(entry), requested_id, case: entry.kind === "behavior" || entry.kind === "exemplar" ? renderCase(db, entry.source) : null };
       });
     return recordPull(db, reader, { verb: "read_memory_entries", input, returned_ids: entries.map((e) => e.id) }, { entries, missing }, at);
   })();
