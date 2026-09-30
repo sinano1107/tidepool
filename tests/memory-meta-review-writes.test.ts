@@ -506,6 +506,151 @@ it("既存の後継は pin に入り、提案の open 中に無効化される�
   expect(entry(db, replaces[0]!)).toMatchObject({ invalidation_reason: null });
 });
 
+/** 既存 candidate の consolidate(ADR 0174 決定1)。陳腐化で閉じた統合の提案の candidate を、生き残った replaces で出し直す。 */
+function staled() {
+  const fixture = approvedPair();
+  const { db, replaced, consolidate } = fixture;
+  const [kept, dropped] = [replaced("Split migrations"), replaced("Two commits per migration")];
+  const { candidate_id } = consolidate([kept, dropped], { text: "Split schema and data changes." });
+  invalidateMemoryEntry(db, { entry_id: dropped, reason: "requirement_change" }, "human", "webui", at);
+  return { ...fixture, candidate_id, kept, dropped, repropose: fixture.propose };
+}
+
+it("consolidate の candidate_id は陳腐化で閉じた提案の既存 candidate を後継に名指し、replaces を選び直して新しい entry を作らない(ADR 0174 決定1)", () => {
+  const { db, candidate_id, kept, repropose } = staled();
+  const before = listMemoryEntries(db, {});
+
+  const question = repropose({ candidate_id, replaces: [kept] });
+
+  expect(listMemoryEntries(db, {})).toEqual(before);
+  expect(question.question_proposal).toEqual({ kind: "memory", op: "consolidate", candidate_id, replaces: [{ id: kept, version: null }] });
+  expect(question.question_items![0]!.detail).toContain(
+    `Consolidate into existing behavior candidate #${candidate_id}, replacing:\n#${kept} (scope: tidepool, addressee: every agent): Split migrations.`,
+  );
+});
+
+type Staled = ReturnType<typeof staled>;
+
+it.each([
+  ["text と candidate_id の両方を渡す", (f: Staled) => ({ candidate_id: f.candidate_id, text: { scope: null, path: "habits", title: "Split", text: "Split it.", addressee: null } })],
+  ["successor_id と candidate_id の両方を渡す", (f: Staled) => ({ candidate_id: f.candidate_id, successor_id: f.behavior })],
+  ["candidate_id に based_on_decision を添える(新しい entry を作らないので出所は要らない)", (f: Staled) => ({ candidate_id: f.candidate_id, based_on_decision: f.decision })],
+  ["名指す entry が approved", (f: Staled) => ({ candidate_id: f.behavior })],
+  ["名指す candidate が無効化済み", (f: Staled) => ({ candidate_id: f.dropped })],
+  ["名指す entry が Knowledge", (f: Staled) => ({ candidate_id: knowledgeEntry(f.db) })],
+  ["名指す entry が Definition", (f: Staled) => ({ candidate_id: definitionEntry(f.db) })],
+  ["名指す candidate が replaces に含まれる", (f: Staled) => ({ candidate_id: f.candidate_id, replaces: [f.kept, f.candidate_id] })],
+] as const)("consolidate の candidate_id で%sと domain error で、何も pin せず entry も書かない(ADR 0174 決定1)", (_, input) => {
+  const fixture = staled();
+  const { db, candidate_id, kept, repropose } = fixture;
+  const bad = input(fixture);
+  const before = listMemoryEntries(db, {});
+
+  expect(() => repropose({ replaces: [kept], ...bad })).toThrow(DomainError);
+  expect(listMemoryEntries(db, {})).toEqual(before);
+  expect(repropose({ candidate_id, replaces: [kept] }).question_proposal).toMatchObject({ candidate_id });
+});
+
+it("consolidate の candidate_id の replaces は text の形と同じ門で、approved の Behavior / Exemplar も取れる —— successor_id の形の approved 限定は掛けない(ADR 0174 決定1)", () => {
+  const { candidate_id, kept, behavior, exemplar, repropose } = staled();
+
+  expect(repropose({ candidate_id, replaces: [kept, behavior, exemplar] }).question_proposal).toMatchObject({
+    candidate_id,
+    replaces: [{ id: kept }, { id: behavior }, { id: exemplar }],
+  });
+});
+
+it("既存 candidate の consolidate は初回の統合と同じく、approve で candidate を approved にして replaces をそれを後継とする superseded にし、reject は candidate だけを rejected にし、defer は何も変えない(ADR 0174 決定1)", () => {
+  const settle = (answer: (db: ReturnType<typeof openDb>, proposal: MemoryProposal, questionId: string) => void) => {
+    const { db, candidate_id, kept, behavior, repropose } = staled();
+    const question = repropose({ candidate_id, replaces: [kept, behavior] });
+    answer(db, question.question_proposal as MemoryProposal, question.id);
+    return [candidate_id, kept, behavior].map((id) => entry(db, id));
+  };
+
+  const [approved, ...superseded] = settle((db, proposal, questionId) => approveMemoryProposal(db, proposal, questionId, "webui", at));
+  expect(approved).toMatchObject({ state: "approved", invalidation_reason: null });
+  expect(superseded).toMatchObject(superseded.map(() => ({ invalidation_reason: "superseded", successor_id: approved!.id })));
+
+  expect(settle((db, proposal, questionId) => rejectMemoryProposal(db, proposal, questionId, "webui", at, "Two rules after all."))).toMatchObject([
+    { state: "candidate", invalidation_reason: "rejected" },
+    { state: "candidate", invalidation_reason: null },
+    { state: "approved", invalidation_reason: null },
+  ]);
+
+  expect(settle(() => deferMemoryProposal("Not sure yet."))).toMatchObject([
+    { state: "candidate", invalidation_reason: null },
+    { state: "candidate", invalidation_reason: null },
+    { state: "approved", invalidation_reason: null },
+  ]);
+});
+
+it("既存 candidate の consolidate の修正値つき approve は人間名義の approved を作り、candidate と replaces をそれを後継とする superseded にする(ADR 0174 決定1)", () => {
+  const { db, candidate_id, kept, repropose } = staled();
+  const question = repropose({ candidate_id, replaces: [kept] });
+
+  const amended = approveMemoryProposal(db, question.question_proposal as MemoryProposal, question.id, "webui", at, { text: "Keep schema and data changes apart." });
+
+  expect(entry(db, amended)).toMatchObject({ kind: "behavior", state: "approved", text: "Keep schema and data changes apart." });
+  expect([candidate_id, kept].map((id) => entry(db, id))).toMatchObject([
+    { invalidation_reason: "superseded", successor_id: amended },
+    { invalidation_reason: "superseded", successor_id: amended },
+  ]);
+});
+
+/** 陳腐化で閉じた Exemplar の統合の提案の candidate。 */
+function staledExemplar() {
+  const fixture = approvedPair();
+  const { db, attributed, drafted, consolidate } = fixture;
+  const source = attributed("split the migration into two commits again");
+  const [kept, dropped] = [drafted("Split migrations", { event_id: source }), drafted("Two commits per migration", { event_id: source })];
+  const { candidate_id } = consolidate([kept, dropped], { kind: "exemplar", annotations: [annotations[1]] });
+  invalidateMemoryEntry(db, { entry_id: dropped, reason: "requirement_change" }, "human", "webui", at);
+  const approveQuestion = () => getTask(db, approve(fixture)(candidate_id).question_id)!;
+  return { ...fixture, candidate_id, kept, approveQuestion };
+}
+
+it("approve は Exemplar candidate を受けて見出しに kind を出し、前に置き換えようとした entry が生きていても承認で approved にし、その entry はそのまま残す(ADR 0174 決定2・3)", () => {
+  const { db, candidate_id, kept, approveQuestion } = staledExemplar();
+
+  const question = approveQuestion();
+  expect(question.question_items![0]!.detail).toContain(`Approve exemplar candidate #${candidate_id} as worded.`);
+
+  approveMemoryProposal(db, question.question_proposal as MemoryProposal, question.id, "webui", at);
+  expect([candidate_id, kept].map((id) => entry(db, id))).toMatchObject([
+    { kind: "exemplar", state: "approved", invalidation_reason: null },
+    { state: "candidate", invalidation_reason: null },
+  ]);
+});
+
+it("approve の Exemplar candidate は修正値つきでも承認でき、前に置き換えようとした entry はそのまま残す(ADR 0174 決定2・3)", () => {
+  const { db, candidate_id, kept, approveQuestion } = staledExemplar();
+  const question = approveQuestion();
+
+  const amended = approveMemoryProposal(db, question.question_proposal as MemoryProposal, question.id, "webui", at, { title: "Split the migration in two" });
+
+  expect([amended, candidate_id, kept].map((id) => entry(db, id))).toMatchObject([
+    { kind: "exemplar", state: "approved", title: "Split the migration in two" },
+    { invalidation_reason: "superseded", successor_id: amended },
+    { state: "candidate", invalidation_reason: null },
+  ]);
+});
+
+it.each([
+  ["出所の違う candidate", (f: Fixture) => f.drafted("Pin Node", { event_id: f.attributed("pinned Node 22") })],
+  ["出所の違う approved の Exemplar", (f: Fixture) => f.exemplar],
+  ["出所を添えずに人間が書いた Behavior", (f: Fixture) => recordBehavior(f.db, { ...humanEntryInput(f.db, { workspace: "tidepool", path: "habits", title: "Pin", text: "Pin." }), addressee: null }, "webui", at).entry_id],
+] as const)("consolidate の candidate_id が Exemplar のとき replaces に%sを含めると、candidate の出所を共有しないので domain error(ADR 0174 決定1)", (_, makeBad) => {
+  const fixture = staledExemplar();
+  const { db, candidate_id, kept, propose } = fixture;
+  const bad = makeBad(fixture);
+  const before = listMemoryEntries(db, {});
+
+  expect(() => propose({ candidate_id, replaces: [kept, bad] })).toThrow(DomainError);
+  expect(listMemoryEntries(db, {})).toEqual(before);
+  expect(propose({ candidate_id, replaces: [kept] }).question_items![0]!.detail).toContain(`Consolidate into existing exemplar candidate #${candidate_id}, replacing:`);
+});
+
 /** fold_memory の既にある後継(ADR 0161 決定2)。 */
 const foldInto = (f: Fixture) => (input: Omit<Parameters<typeof foldMemory>[2], "author">) => foldMemory(f.db, f.task.id, { ...input, author: metaReview }, "worker", at);
 
@@ -742,6 +887,15 @@ it.each([
     },
   ],
   ["consolidate が作った新 candidate を approve する", (f: Fixture) => ({ pinned: replacing(f)(f.replaced("A")).candidate_id, free: f.replaced("B"), propose: approve(f) })],
+  [
+    "approve の candidate を既存 candidate の consolidate で名指す(ADR 0174 決定1)",
+    (f: Fixture) => {
+      const pinned = f.replaced("A");
+      approve(f)(pinned);
+      const replaces = [f.replaced("C")];
+      return { pinned, free: f.replaced("B"), propose: (candidate_id: number) => f.propose({ candidate_id, replaces }) };
+    },
+  ],
 ] as const)("%sと、既に open な提案に pin されているので domain error で entry も書かない", (_, setup) => {
   const fixture = approvedPair();
   const { pinned, free, propose } = setup(fixture);
@@ -758,4 +912,11 @@ it("op approve に consolidate の欄(replaces)を渡すと、黙って捨てず
 
   expect(() => proposeMemoryChange(db, task.id, { op: "approve", candidate_id, replaces: [999999], rationale: "r" }, "auditor", at)).toThrow(DomainError);
   expect(proposeMemoryChange(db, task.id, { op: "approve", candidate_id, rationale: "r" }, "auditor", at)).toMatchObject({ question_id: expect.any(String) });
+});
+
+it("op consolidate に invalidate の欄(target_id)を渡すと、candidate_id は両方の op の欄でも、今の op に無い欄として domain error で断る(ADR 0174 決定1)", () => {
+  const { candidate_id, kept, behavior, repropose } = staled();
+
+  expect(() => repropose({ candidate_id, replaces: [kept], target_id: behavior })).toThrow("op consolidate does not take target_id");
+  expect(repropose({ candidate_id, replaces: [kept] }).question_proposal).toMatchObject({ candidate_id });
 });
