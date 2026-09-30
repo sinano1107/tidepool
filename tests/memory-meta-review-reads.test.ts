@@ -1,6 +1,6 @@
 import { expect, it } from "vitest";
 import { openDb } from "../src/db.js";
-import { appendEvent, getEvent } from "../src/events.js";
+import { appendEvent, getEvent, latestEventOfTask } from "../src/events.js";
 import {
   approveMemoryProposal,
   createBehaviorCandidate,
@@ -134,7 +134,7 @@ it("list_memory_candidates は kind で絞れる —— exemplar なら Exemplar
 function proposals() {
   const { db, task, reader, behavior } = board();
   const propose = (input: Parameters<typeof proposeMemoryChange>[2]) => proposeMemoryChange(db, task.id, input, "auditor", at).question_id;
-  const answer = (questionId: string, option: "approve" | "reject", rest: { comment?: string; amendment?: { text: string } } = {}) => {
+  const answer = (questionId: string, option: "approve" | "reject", rest: { comment?: string; amendment?: { title?: string; text: string; original_title?: string; original_text?: string } } = {}) => {
     const question = getTask(db, questionId)!;
     answerQuestion(db, question, [option], at, undefined, rest.comment, rest.amendment);
     const proposal = question.question_proposal as MemoryProposal;
@@ -221,6 +221,18 @@ it("一覧3つの返却はエントリの原文 original を持たない —— 
     expect(entries.length).toBeGreaterThan(0);
     for (const entry of entries) expect(entry).not.toHaveProperty("original");
   }
+});
+
+it("list_memory_proposals の amendment は人間の原文 original_title / original_text を持たない —— 正本の question_answered には残る(#1173)", () => {
+  const { reader, db, behavior, propose, answer } = proposals();
+  const candidate = behavior({ title: "Long notes" });
+  const question = propose({ op: "approve", candidate_id: candidate, rationale: "r" });
+  const amendment = { title: "Short notes", text: "Keep notes to one line.", original_title: "短いメモ", original_text: "メモは1行にする" };
+  answer(question, "approve", { amendment });
+
+  const [pulled] = pullMemoryProposals(db, reader, {}, at).proposals;
+  expect(pulled!.amendment).toEqual({ title: "Short notes", text: "Keep notes to one line." });
+  expect(latestEventOfTask(db, question, "question_answered")!.payload.amendment).toMatchObject(amendment);
 });
 
 it("一覧はページ長で切り、truncated が次のページを言う", () => {

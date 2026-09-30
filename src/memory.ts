@@ -1401,7 +1401,8 @@ export function pullMemoryProposals(db: Db, reader: Pick<MemoryReader, "taskId" 
         question_id: row.id,
         proposal: JSON.parse(row.question_proposal) as MemoryProposal,
         answer: answered?.answers[0]?.answer ?? null,
-        amendment: answered?.amendment ?? null,
+        // 人間の原文(original_*)は人間の面と正本の event にだけ残す —— 一覧3 verb と同じ側(#1173)
+        amendment: answered?.amendment ? (({ original_title: _t, original_text: _x, ...rest }) => rest)(answered.amendment as MemoryAmendment) : null,
         comment: answered?.comment ?? null,
         observed: stale && { entry_id: stale.entry_id, observed_event_id: stale.observed_event_id },
       };
