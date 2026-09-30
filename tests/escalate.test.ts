@@ -164,7 +164,7 @@ it("answering while the slot is busy parks the parent at the queue head until th
   expect(todos.map((x: any) => x.id)).toEqual([parent.id]);
 });
 
-it("a one-tap answer matching the recommendation is recorded as acceptance in the events", async () => {
+it("a picked option matching the recommendation is recorded as acceptance in the events", async () => {
   t = await bootTidepool();
   const parent = await registerWork(t, "parent");
   await t.clock.advance(HOUR);

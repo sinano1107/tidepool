@@ -382,7 +382,7 @@ export interface RegisterTaskInput extends Partial<TaskContent> {
  *  recommendation among them, whichever door it enters by (escalate, or a
  *  tidepool-internal registerTask call — watchdog/quarantine/merge/decompose;
  *  the JSON API refuses `type: "question"` outright, issue #38) — the answer
- *  view is one-tap first, free text only as an override. The degraded
+ *  view offers the options first, free text only as an override. The degraded
  *  free-text-only question is reserved for the watchdog's auto-escalation
  *  safety valve (#17).
  *
@@ -1226,7 +1226,7 @@ export function assertAnswerable(question: Task, answers: string[]): void {
 /** The human steering channel: answer a question from the WebUI. One answer
  *  per item, in item order — the submission is atomic (issue #30): a length
  *  mismatch is refused outright and nothing is persisted, so a partial-answer
- *  state never exists. Each answer is either a one-tap option or a free-text
+ *  state never exists. Each answer is either a picked option or a free-text
  *  override, either way a plain string. The question completes only once
  *  every item is answered; only a parent this answer actually unblocks
  *  returns to the queue head (the caller fires the immediate poll on

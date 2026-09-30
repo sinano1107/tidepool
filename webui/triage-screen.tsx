@@ -330,9 +330,8 @@ function TpMemoryAmendment({ candidateId, onTranslate, onChange, onDeadAddressee
 // most common case). The card owns its own in-progress picks as a draft that
 // is never persisted, and fires onAnswer(answers) — one array entry per item,
 // in item order — only from its Submit button, which stays disabled until
-// every item has a pick. A pick used to fire the answer on the spot; an
-// answer can merge a PR or cancel a tree with no way back, so a mis-tap now
-// only changes the draft (issue #1233). Still one submission for the whole
+// every item has a pick. An answer can merge a PR or cancel a tree with no
+// way back, so a mis-tap only ever changes the draft (issue #1233). Still one submission for the whole
 // bundle, never a partial-answer state (CONTEXT.md's Question).
 // onTranslate(target): the display-time translation seam (issue #47 / ADR
 // 0015), a POST /api/translate caller — absent in the standalone kit (no
@@ -346,7 +345,7 @@ function TpQuestionCard({ q, answer, onAnswer, locked = false, onTranslate }: {
   /** 盤面が確定した回答 —— 未回答は null(呼び手は id 引きの map)。 */
   answer?: string[] | null;
   /** amendment は修正値を添えられる提案を approve したときだけ、入力があれば渡る。 */
-  onAnswer: (answers: string[], amendment?: TpAmendment, comment?: string) => void;
+  onAnswer: (answers: string[], amendment?: TpAmendment, comment?: string) => Promise<void>;
   /** 回答済みのカードは選び直せない。 */
   locked?: boolean;
   onTranslate?: TpTranslateFn;
@@ -362,13 +361,13 @@ function TpQuestionCard({ q, answer, onAnswer, locked = false, onTranslate }: {
   const setItemAnswer = (i: number, value: string | null) => setDraft(draft.map((v, j) => (j === i ? value : v)));
   const disabledOptions = [...(comment.trim() ? [] : q.needsComment ?? []), ...(deadAddressee ? ['approve'] : [])];
   // a pick made before the comment was cleared or the addressee turned out dead is not submittable
-  const canSubmit = draft.every(Boolean) && !disabledOptions.includes(draft[0]!);
+  const canSubmit = draft.every(Boolean) && !draft.some((v) => disabledOptions.includes(v!));
   // triage marks the card answered only after the POST resolves, so Submit stays pressable until then
   const [submitting, setSubmitting] = React.useState(false);
   const submit = () => {
     setSubmitting(true);
     const filled = q.amendable === 'memory' ? amendment : Object.fromEntries(Object.entries(amendment).filter(([, v]) => v)) as TpAmendment;
-    Promise.resolve(onAnswer(draft as string[], q.amendable && draft[0] === 'approve' && Object.keys(filled).length > 0 ? filled : undefined, comment.trim() ? comment : undefined))
+    onAnswer(draft as string[], q.amendable && draft[0] === 'approve' && Object.keys(filled).length > 0 ? filled : undefined, comment.trim() ? comment : undefined)
       .finally(() => setSubmitting(false));
   };
   const answeredCount = draft.filter(Boolean).length;

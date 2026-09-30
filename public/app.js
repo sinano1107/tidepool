@@ -344,12 +344,12 @@ function TpQuestionCard({ q, answer, onAnswer, locked = false, onTranslate }) {
   const [comment, setComment] = React.useState("");
   const setItemAnswer = (i, value) => setDraft(draft.map((v, j) => j === i ? value : v));
   const disabledOptions = [...comment.trim() ? [] : q.needsComment ?? [], ...deadAddressee ? ["approve"] : []];
-  const canSubmit = draft.every(Boolean) && !disabledOptions.includes(draft[0]);
+  const canSubmit = draft.every(Boolean) && !draft.some((v) => disabledOptions.includes(v));
   const [submitting, setSubmitting] = React.useState(false);
   const submit = () => {
     setSubmitting(true);
     const filled = q.amendable === "memory" ? amendment : Object.fromEntries(Object.entries(amendment).filter(([, v]) => v));
-    Promise.resolve(onAnswer(draft, q.amendable && draft[0] === "approve" && Object.keys(filled).length > 0 ? filled : void 0, comment.trim() ? comment : void 0)).finally(() => setSubmitting(false));
+    onAnswer(draft, q.amendable && draft[0] === "approve" && Object.keys(filled).length > 0 ? filled : void 0, comment.trim() ? comment : void 0).finally(() => setSubmitting(false));
   };
   const answeredCount = draft.filter(Boolean).length;
   const [translateOn, setTranslateOn] = React.useState(false);
@@ -3469,7 +3469,6 @@ function QuestionDeepLinkView({ questionId, onDone, onTranslate }) {
   const { Button, Card } = window.TidepoolDesignSystem_8a0ead;
   const [q, setQ] = React.useState(void 0);
   const [rawTask, setRawTask] = React.useState(null);
-  const [busy, setBusy] = React.useState(false);
   const [err, setErr] = React.useState(null);
   React.useEffect(() => {
     let cancelled = false;
@@ -3490,15 +3489,12 @@ function QuestionDeepLinkView({ questionId, onDone, onTranslate }) {
     };
   }, [questionId]);
   const answer = async (answers, amendment, comment) => {
-    if (busy) return;
-    setBusy(true);
     setErr(null);
     try {
       await api(`/api/tasks/${questionId}/answer`, { answers, amendment, comment });
       onDone(rawTask);
     } catch (e) {
       setErr(String(e.message || e));
-      setBusy(false);
     }
   };
   if (q === void 0) {

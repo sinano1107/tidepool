@@ -464,7 +464,6 @@ function QuestionDeepLinkView({ questionId, onDone, onTranslate }: {
   const { Button, Card } = window.TidepoolDesignSystem_8a0ead;
   const [q, setQ] = React.useState<TpQuestion | null | undefined>(undefined); // undefined = loading, null = gone
   const [rawTask, setRawTask] = React.useState<WireContract['GET /api/tasks/:id'] | null>(null);
-  const [busy, setBusy] = React.useState(false);
   const [err, setErr] = React.useState<string | null>(null);
 
   React.useEffect(() => {
@@ -483,15 +482,13 @@ function QuestionDeepLinkView({ questionId, onDone, onTranslate }: {
   }, [questionId]);
 
   const answer = async (answers: string[], amendment?: TpAmendment, comment?: string) => {
-    if (busy) return; // guards the design component's button against a double-tap
-    setBusy(true);
+    // TpQuestionCard keeps its own Submit disabled while this is in flight (#1233)
     setErr(null);
     try {
       await api(`/api/tasks/${questionId}/answer`, { answers, amendment, comment });
       onDone(rawTask);
     } catch (e) {
       setErr(String((e as Error).message || e));
-      setBusy(false);
     }
   };
 
