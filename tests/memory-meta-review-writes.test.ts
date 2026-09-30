@@ -281,6 +281,18 @@ it("meta-review の move_memory_branch は scope が変わるとき、配下に 
   expect(listMemoryEntries(f.db, {})).toEqual(before);
 });
 
+it("meta-review の move_memory_branch は NFD の path でも NFC で記録した配下に scope の門を掛けるので、approved の Behavior を含む枝を盤面全体へ広げられない(#1191)", () => {
+  const f = approvedPair();
+  const proposal = f.consolidate([f.replaced("Pin npm")], { scope: "tidepool", path: "ガイド".normalize("NFC"), title: "Pin npm", text: "Pin npm." });
+  approveMemoryProposal(f.db, proposal, "question-guide", "webui", at);
+  const before = listMemoryEntries(f.db, {});
+
+  expect(() =>
+    moveMemoryBranchByMetaReview(f.db, { scope: "tidepool", path: "ガイド".normalize("NFD"), to_scope: null, to_path: "ガイド", mover: metaReview }, "worker", at),
+  ).toThrow(`memory entry ${proposal.candidate_id} (an approved behavior)`);
+  expect(listMemoryEntries(f.db, {})).toEqual(before);
+});
+
 it.each([
   ["同じ scope の中で", "tidepool"],
   ["盤面全体へ広げる向きで", null],
