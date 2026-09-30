@@ -121,6 +121,7 @@ test("タイムアウト済みの Triage は閉じた時刻と適用済みの操
 
   await page.goto(t.baseUrl);
   await page.getByRole("button", { name: /^left/ }).click();
+  await page.getByRole("button", { name: "Submit", exact: true }).click();
   await expect
     .poll(async () => (await api(t.baseUrl, "GET", "/api/triage")).json.session)
     .not.toBe(null);
@@ -166,6 +167,7 @@ test("開いているセッションを Triage の Commit が今閉じたと伝�
 
   await page.goto(t.baseUrl);
   await page.getByRole("button", { name: /^left/ }).click();
+  await page.getByRole("button", { name: "Submit", exact: true }).click();
   await page.getByRole("button", { name: "Log skim" }).click();
   await page.getByRole("button", { name: "Merge decisions" }).click();
   await page.getByRole("button", { name: "Queue check" }).click();
@@ -254,6 +256,7 @@ test("Triage の最初の回答でセッションが開き pickup が止まる(i
   await page.goto(t.baseUrl);
   const answer = page.getByRole("button", { name: /^left/ });
   await answer.click();
+  await page.getByRole("button", { name: "Submit", exact: true }).click();
   await expect
     .poll(async () => (await api(t.baseUrl, "GET", `/api/tasks/${question.id}`)).json.status)
     .toBe("done");
@@ -307,6 +310,7 @@ test("回答が唯一の項目だった triage も再読み込み後に Commit �
 
   await page.goto(t.baseUrl);
   await page.getByRole("button", { name: /^left/ }).click();
+  await page.getByRole("button", { name: "Submit", exact: true }).click();
   await expect
     .poll(async () => (await api(t.baseUrl, "GET", "/api/triage")).json.session)
     .not.toBe(null);

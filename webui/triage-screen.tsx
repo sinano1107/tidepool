@@ -93,11 +93,11 @@ function TpSegmentGauge({ total, filled }: { total: number; filled: number }) {
   );
 }
 
-// One question item's option list — one-tap pick, or a free-text override.
-// Fires onChange(label) the instant a pick is made; TpQuestionCard above
-// decides when every item in the bundle has a pick and submits the whole
-// answer set atomically (issue #30) — this component only ever reports its
-// own item's value, never submits on its own.
+// One question item's option list — a pick, or a free-text override.
+// Fires onChange(label) on every pick; a pick only changes TpQuestionCard's
+// local draft and can be re-picked freely — the card's Submit sends the whole
+// answer set atomically (issue #30 / #1233). This component only ever reports
+// its own item's value, never submits on its own.
 // translated: { title, detail } for this item (issue #47), shown as a second
 // line under each original — the options below never take a translated
 // variant (CONTEXT.md's scope exclusion: a mistranslated option is a
@@ -327,13 +327,13 @@ function TpMemoryAmendment({ candidateId, onTranslate, onChange, onDeadAddressee
 
 // One question task's card: the shared context (its `purpose`) once, then
 // every item's picker (issue #30 — a single-item bundle is the degenerate,
-// most common case). The card owns its own in-progress picks and fires
-// onAnswer(answers) — one array entry per item, in item order — the instant
-// every item has a pick, submitting the whole bundle in one shot. This keeps
-// the existing one-tap ethos for the common single-item case (it fires on
-// that one tap) and generalizes it to a multi-item bundle (it fires on
-// whichever tap completes the set) — there is never a separate "submit"
-// button, and never a partial-answer state (CONTEXT.md's Question).
+// most common case). The card owns its own in-progress picks as a draft that
+// is never persisted, and fires onAnswer(answers) — one array entry per item,
+// in item order — only from its Submit button, which stays disabled until
+// every item has a pick. A pick used to fire the answer on the spot; an
+// answer can merge a PR or cancel a tree with no way back, so a mis-tap now
+// only changes the draft (issue #1233). Still one submission for the whole
+// bundle, never a partial-answer state (CONTEXT.md's Question).
 // onTranslate(target): the display-time translation seam (issue #47 / ADR
 // 0015), a POST /api/translate caller — absent in the standalone kit (no
 // toggle rendered), passed through by both TriageScreen (section 0) and
@@ -351,7 +351,7 @@ function TpQuestionCard({ q, answer, onAnswer, locked = false, onTranslate }: {
   locked?: boolean;
   onTranslate?: TpTranslateFn;
 }) {
-  const { Card, AgentChip, Switch, Select, Input } = window.TidepoolDesignSystem_8a0ead;
+  const { Card, AgentChip, Switch, Select, Input, Button } = window.TidepoolDesignSystem_8a0ead;
   const items = q.items;
   const [draft, setDraft] = React.useState<(string | null)[]>(() => answer ?? items.map(() => null));
   // a server-confirmed answer (locked) always wins over in-progress local picks
@@ -363,9 +363,17 @@ function TpQuestionCard({ q, answer, onAnswer, locked = false, onTranslate }: {
     const next = draft.slice();
     next[i] = value;
     setDraft(next);
-    if (!next.every(Boolean)) return;
+  };
+  const disabledOptions = [...(comment.trim() ? [] : q.needsComment ?? []), ...(deadAddressee ? ['approve'] : [])];
+  // a pick made before the comment was cleared or the addressee turned out dead is not submittable
+  const canSubmit = draft.every(Boolean) && !disabledOptions.includes(draft[0]!);
+  // triage marks the card answered only after the POST resolves, so Submit stays pressable until then
+  const [submitting, setSubmitting] = React.useState(false);
+  const submit = () => {
+    setSubmitting(true);
     const filled = q.amendable === 'memory' ? amendment : Object.fromEntries(Object.entries(amendment).filter(([, v]) => v)) as TpAmendment;
-    onAnswer(next as string[], q.amendable && next[0] === 'approve' && Object.keys(filled).length > 0 ? filled : undefined, comment.trim() ? comment : undefined);
+    Promise.resolve(onAnswer(draft as string[], q.amendable && draft[0] === 'approve' && Object.keys(filled).length > 0 ? filled : undefined, comment.trim() ? comment : undefined))
+      .finally(() => setSubmitting(false));
   };
   const answeredCount = draft.filter(Boolean).length;
 
@@ -429,16 +437,21 @@ function TpQuestionCard({ q, answer, onAnswer, locked = false, onTranslate }: {
       )}
       {items.length > 1 && !locked && (
         <div style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--tide-4)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 12 }}>
-          {answeredCount} of {items.length} answered — submits together once every item is
+          {answeredCount} of {items.length} answered — sent together on Submit
         </div>
       )}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
         {items.map((item, i) => (
           <TpQuestionItemPicker key={i} item={item} value={draft[i]} locked={locked} onChange={(v) => setItemAnswer(i, v)}
             translated={translatedItems ? translatedItems[i] : null}
-            disabled={[...(comment.trim() ? [] : q.needsComment ?? []), ...(deadAddressee ? ['approve'] : [])]} />
+            disabled={disabledOptions} />
         ))}
       </div>
+      {!locked && (
+        <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 16 }}>
+          <Button variant="primary" disabled={!canSubmit || submitting} onClick={submit}>Submit</Button>
+        </div>
+      )}
     </Card>
   );
 }

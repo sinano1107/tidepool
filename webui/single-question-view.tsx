@@ -1,12 +1,13 @@
 // Single-question push flow — TpSingleQuestion is the one-question(-bundle)
 // answer screen a daytime push tap opens straight into: no triage transaction.
 // Reuses TpQuestionCard (triage-screen.tsx), which owns the atomic submit
-// itself (issue #30) — the card fires onAnswer once every item in the bundle
-// has a pick, same one-tap-through model as triage.
+// itself (issue #30) — picks only change the card's draft and its Submit
+// fires onAnswer once every item in the bundle has a pick, same as triage
+// (issue #1233).
 
 // onAnswer(answers) receives one array entry per item, in item order, fired
-// by TpQuestionCard the instant the bundle is fully answered — a live caller
-// POSTs that array straight to /api/tasks/:id/answer.
+// by TpQuestionCard's Submit — a live caller POSTs that array straight to
+// /api/tasks/:id/answer.
 // q の形は webui/app.tsx の toQuestionCardShape が作る —— 写しを書かずにそこから引く。
 // onTranslate も同様に実体から引く。
 interface TpSingleQuestionProps {
