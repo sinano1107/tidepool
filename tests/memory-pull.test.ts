@@ -225,6 +225,37 @@ it("NFD の title / path を持つ leaf は NFC の query で当たり、正規�
   expect(getEvent(db, pulled.event_id)?.payload).toMatchObject({ kind: "memory_pulled", input: { query } });
 });
 
+it.each([
+  ["ｶﾞｲﾄﾞを読む", "ガイド"],
+  ["ガイドを読む", "ｶﾞｲﾄﾞ"],
+  ["ｔｉｄｅｐｏｏｌ の設定", "tidepool"],
+  ["tidepool の設定", "ｔｉｄｅｐｏｏｌ"],
+  ["ADR ０１２０ を読む", "0120"],
+  ["ADR 0120 を読む", "０１２０"],
+  ["wait.done", "ｗａｉｔ．ｄｏｎｅ"],
+  ["かﾞいどを読む", "かﾞいど"],
+  ["かﾞいどを読む", "がいど"],
+])("索引と query は全角・半角形の字を NFKC で畳んでから語に割るので、text %j の leaf は query %j で当たる(#1192)", (text, query) => {
+  const { db, reader, record } = board();
+  record({ title: "leaf", text });
+  expect(searchMemory(db, reader, { query }, at).results.map((r) => r.title)).toEqual(["leaf"]);
+});
+
+it.each(["done", "wait"])("畳むのは全角・半角形の字だけで … は開かないので、text「wait…done here」の leaf は query %j で当たる(#1192)", (query) => {
+  const { db, reader, record } = board();
+  record({ title: "leaf", text: "wait…done here" });
+  expect(searchMemory(db, reader, { query }, at).results.map((r) => r.title)).toEqual(["leaf"]);
+});
+
+it("全角・半角形を畳むのは FTS の中だけなので、leaf の text は書いた形のまま返る(#1192)", () => {
+  const { db, reader, record } = board();
+  const text = "ｶﾞｲﾄﾞと ｔｉｄｅｐｏｏｌ ０１２０";
+  const id = record({ title: "leaf", text });
+
+  expect(searchMemory(db, reader, { query: "ガイド tidepool 0120" }, at).results.map((r) => r.id)).toEqual([id]);
+  expect(readMemory(db, reader, { ids: [id] }, at).entries[0]).toMatchObject({ text });
+});
+
 it("search は英語の stopword を query から落として AND で当て、stopword と記号だけの query は memory_pulled を残さず DomainError になる", () => {
   const { db, reader, record } = board();
   record({ title: "Settings tab is the admin surface", text: "Admin settings live in one tab." });
@@ -851,7 +882,7 @@ it("rebuild はエントリ表と FTS を events から作り直し、無効化�
   expect(() => invalidateMemoryEntry(db, { entry_id: old, reason: "environment" }, "human", "webui", at)).toThrow(/already invalidated/);
   expect(getEvent(db, eventId!)).toMatchObject({
     task_id: null,
-    payload: { kind: "memory_index_rebuilt", tokenizer: "unicode61 categories 'L* N* Co Mn' tokenchars '_-.'", preprocess_version: "cjk-bigram-8" },
+    payload: { kind: "memory_index_rebuilt", tokenizer: "unicode61 categories 'L* N* Co Mn' tokenchars '_-.'", preprocess_version: "cjk-bigram-9" },
   });
 });
 
@@ -865,7 +896,7 @@ it("原文 original の列を持つ旧い FTS の店は、open 後の照合が�
   db.prepare("UPDATE memory_index_version SET preprocess_version = 'cjk-bigram-5'").run();
   const eventId = ensureMemoryIndex(db, at);
 
-  expect(getEvent(db, eventId!)).toMatchObject({ payload: { kind: "memory_index_rebuilt", preprocess_version: "cjk-bigram-8" } });
+  expect(getEvent(db, eventId!)).toMatchObject({ payload: { kind: "memory_index_rebuilt", preprocess_version: "cjk-bigram-9" } });
   expect(searchMemory(db, reader, { query: "道具" }, at).results).toEqual([]);
   expect(searchMemory(db, reader, { query: "Toolchain" }, at).results.map((r) => r.title)).toEqual(["Toolchain"]);
 });

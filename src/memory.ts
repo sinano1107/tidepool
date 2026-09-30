@@ -1276,9 +1276,19 @@ const CJK_RUN = new RegExp(String.raw`((?:(?=${RUN_CATEGORY})${CJK_SCRIPT})+)`, 
  *  識別子と別の語になる)。CJK_RUN と文字集合を共有するので、片方だけ字種が変わることはない。 */
 const QUERY_BREAK = new RegExp(String.raw`(?:\s|(?!${RUN_CATEGORY})${CJK_SCRIPT})+`, "u");
 
-/** 索引と query の共通の前処理(spec #586 B / #606 / #608 / #610 / #1180 / #1189)。まず NFC に正規化する(NFD の
- *  `カ` + U+3099 と `ガ`、ハングルの字母と音節、互換漢字 U+FA19 と U+795E が同じ語になる。NFKC は `…` を tokenchars の
- *  `...` に開くので使わない)。揃えるのは FTS に渡す投影だけで、保存する正文・title・path は書き換えない。次に CJK の
+/** 索引と query の共通の正規化(#1189 / #1192)。query は語に割る前に通すので、語の割り方は正規化の後の字で決まる。
+ *  まず全角・半角形 U+FF01–FFEE の連なりだけを NFKC で畳む(`ｶﾞｲﾄﾞ` と `ガイド`、`ｔｉｄｅｐｏｏｌ` と `tidepool`、`０１２０`
+ *  と `0120` が同じ語になる)。NFKC 全体にしないのは `…` が tokenchars の `...` に開いて `wait…done` が `wait` にも
+ *  `done` にも当たらなくなるから。この範囲で tokenchars を含む形になるのは `－` `．` `＿` だけで、ASCII で書いたのと同じ語に
+ *  なる。次に NFC(NFD の `カ` + U+3099 と `ガ`、ハングルの字母と音節、互換漢字 U+FA19 と U+795E が同じ語になる)。NFC を
+ *  畳みの後に置くのは、孤立した `ﾞ` `ﾟ` が開いた結合文字を前の字と合成させるため(query は語ごとにもう一度通るので、1度で
+ *  形が定まらないと `かﾞいど` の leaf が自分の text で当たらない)。揃えるのは FTS に渡す投影だけで、保存する正文・title・
+ *  path は書き換えない。 */
+function ftsNormalize(value: string): string {
+  return value.replace(/[\uFF01-\uFFEE]+/g, (run) => run.normalize("NFKC")).normalize("NFC");
+}
+
+/** 索引と query の共通の前処理(spec #586 B / #606 / #608 / #610 / #1180)。まず ftsNormalize で正規化する。次に CJK の
  *  連なりを重なりつきの2文字語に割り(LWC 式)空白で囲む。unicode61 は CJK を語に切らない。1文字の連なりはそのまま。
  *  長音符 ー は Script=Common なので Script_Extensions で拾う(拾わないと「サーバ」が割れて当たらない)。その後で . - _ の
  *  連なりを、連なりの外側の隣が unicode61 の token にならない文字(空白・文字列の端・`)` `"` などの記号)のとき連なりごと
@@ -1288,8 +1298,7 @@ const QUERY_BREAK = new RegExp(String.raw`(?:\s|(?!${RUN_CATEGORY})${CJK_SCRIPT}
  *  Mn だが同梱 SQLite の版では語を切る4字(U+1A1B, U+1BAC, U+1BAD, U+A9BD、Node 22 / SQLite 3.53.2 で実測)だけ。
  *  bigram が先なので、CJK に接した `東京.csv` の `.` も隣が空白になって落ちる。 */
 function ftsText(value: string): string {
-  return value
-    .normalize("NFC")
+  return ftsNormalize(value)
     .replace(CJK_RUN, (run) => {
       const chars = [...run];
       const grams = chars.length === 1 ? chars : chars.slice(1).map((char, i) => chars[i] + char);
@@ -1354,11 +1363,10 @@ const STOPWORDS = new Set(
 /** query を前処理して stopword を落とし、語ごとに引用符で囲む(識別子の / . - を FTS の構文として
  *  読ませない)。語は空白と CJK の句読点・記号(、。「」 など)と、CJK の連なりとそれ以外の境目で割る(`src/memory.tsの注入`
  *  の識別子も独立の語、#1178 / #1180)。CJK の連なりは bigram の1 phrase のまま(隣接を保ち、`東京都` は「京都と東京」に
- *  当たらない)。語に割る前に query 全体を NFC にする(割った後だと、NFD の `Việt` が CJK の連なりに入る U+0323 で先に
- *  割れて NFC の leaf に当たらない、#1189)。語は既定で AND、注入は OR で繋ぐ。残る語が無ければ null。 */
+ *  当たらない)。語に割る前に query 全体を ftsNormalize にかける(割った後だと、NFD の `Việt` が CJK の連なりに入る U+0323
+ *  で先に割れて NFC の leaf に当たらない、#1189)。語は既定で AND、注入は OR で繋ぐ。残る語が無ければ null。 */
 function ftsQuery(query: string, join: " " | " OR " = " "): string | null {
-  const terms = query
-    .normalize("NFC")
+  const terms = ftsNormalize(query)
     .split(QUERY_BREAK)
     .flatMap((word) => word.split(CJK_RUN))
     .map((word) => ftsText(word).trim())
