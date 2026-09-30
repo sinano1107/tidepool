@@ -31,6 +31,7 @@ import {
   assertAnswerable,
   assertNoUnsettledIssueRef,
   assertUnsettledNotInProgress,
+  type BoardTask,
   type CancelDefaults,
   type ChildSpec,
   cancelTaskDirectly,
@@ -48,6 +49,7 @@ import {
   MERGE_QUESTION_OPTIONS,
   PR_PROMOTION_FAILURE_OPTIONS,
   type ProposalAmendment,
+  presentTask,
   type RegisterTaskInput,
   type RegistryProposal,
   registerTask,
@@ -80,6 +82,8 @@ export interface RegisterThroughHumanDoorDeps {
   isProtectedWorkspace?: (name: string) => boolean;
   /** 登録の成功は pickup の契機である(ADR 0119 決定2)。門で弾かれた登録は撃たない。 */
   pollNow: () => void;
+  defaultAgentName?: string;
+  auditorName?: string;
 }
 
 export interface HumanRegisterInput extends RegisterTaskInput {
@@ -99,7 +103,7 @@ export type GateFailure =
     };
 
 export type RegisterThroughHumanDoorResult =
-  | { ok: true; task: Task }
+  | { ok: true; task: BoardTask }
   | { ok: false; failure: GateFailure };
 
 export type HumanVerbResult<T> =
@@ -348,7 +352,7 @@ export async function registerThroughHumanDoor(
       }
       const task = result.value[0] ?? latestChild(deps.db, input.parent_id!);
       if (!task) throw new Error("human decompose did not register a child or approval question");
-      return { ok: true, task };
+      return { ok: true, task: presentTask(deps.db, task, deps.defaultAgentName, deps.auditorName) };
     }
     if (input.workspace !== undefined) {
       assertWorkspaceKnown(input.workspace, deps.resolveWorkspace, deps.workspace);
@@ -408,7 +412,7 @@ export async function registerThroughHumanDoor(
     }
     const task = registerTask(deps.db, input, now(), HUMAN_WORKER_ID, origin);
     deps.pollNow();
-    return { ok: true, task };
+    return { ok: true, task: presentTask(deps.db, task, deps.defaultAgentName, deps.auditorName) };
   } catch (err) {
     if (err instanceof DomainError) {
       return { ok: false, failure: { kind: "invalid", error: err.message } };
@@ -665,12 +669,16 @@ export interface EditThroughHumanDoorDeps {
   agentRegistered?: (name: string) => boolean;
   workspace?: WorkspaceConfig;
   resolveWorkspace?: (taskWorkspace: string | null) => WorkspaceConfig;
+  defaultAgentName?: string;
+  auditorName?: string;
 }
 
 export interface CompleteThroughHumanDoorDeps {
   db: Db;
   pollNow: () => void;
   landing: Landing;
+  defaultAgentName?: string;
+  auditorName?: string;
 }
 
 /** Shared human-surface completion for human-assignee tasks. */
@@ -680,7 +688,7 @@ export async function completeThroughHumanDoor(
   handoff: Partial<HandoffDoc> | undefined,
   now: () => Date,
   origin: EventOrigin,
-): Promise<HumanVerbResult<Task>> {
+): Promise<HumanVerbResult<BoardTask>> {
   const task = getTask(deps.db, taskId);
   if (!task) return { ok: false, failure: { kind: "not_found", error: "task not found" } };
   try {
@@ -693,7 +701,7 @@ export async function completeThroughHumanDoor(
     const done = completeTask(deps.db, task, handoff, HUMAN_WORKER_ID, now(), origin);
     pollIfParentUnblocked(deps.db, done, deps.pollNow);
     await deps.landing.relandAncestors(done);
-    return { ok: true, value: done };
+    return { ok: true, value: presentTask(deps.db, done, deps.defaultAgentName, deps.auditorName) };
   } catch (err) {
     if (err instanceof DomainError) {
       return { ok: false, failure: { kind: "domain_error", error: err.message } };
@@ -709,7 +717,7 @@ export function editThroughHumanDoor(
   input: EditTaskInput,
   now: () => Date,
   origin: EventOrigin,
-): HumanVerbResult<Task> {
+): HumanVerbResult<BoardTask> {
   const task = getTask(deps.db, taskId);
   if (!task) return { ok: false, failure: { kind: "not_found", error: "task not found" } };
   try {
@@ -717,7 +725,8 @@ export function editThroughHumanDoor(
     if (input.workspace) {
       assertWorkspaceKnown(input.workspace, deps.resolveWorkspace, deps.workspace);
     }
-    return { ok: true, value: editTask(deps.db, task, input, now(), origin) };
+    editTask(deps.db, task, input, now(), origin);
+    return { ok: true, value: presentTask(deps.db, task, deps.defaultAgentName, deps.auditorName) };
   } catch (err) {
     if (err instanceof DomainError) {
       return { ok: false, failure: { kind: "domain_error", error: err.message } };
@@ -733,7 +742,7 @@ export async function cancelThroughHumanDoor(
   reason: string | undefined,
   now: () => Date,
   origin: EventOrigin,
-): Promise<HumanVerbResult<Task>> {
+): Promise<HumanVerbResult<BoardTask>> {
   const task = getTask(deps.db, taskId);
   if (!task) return { ok: false, failure: { kind: "not_found", error: "task not found" } };
   try {
@@ -753,7 +762,7 @@ export async function cancelThroughHumanDoor(
     );
     pollIfParentUnblocked(deps.db, task, deps.pollNow);
     await deps.landing.relandAncestors(task);
-    return { ok: true, value: getTask(deps.db, task.id)! };
+    return { ok: true, value: presentTask(deps.db, task, deps.defaultAgentName, deps.auditorName) };
   } catch (err) {
     if (err instanceof DomainError) {
       return { ok: false, failure: { kind: "domain_error", error: err.message } };

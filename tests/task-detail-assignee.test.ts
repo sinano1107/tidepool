@@ -1,6 +1,15 @@
 import { afterEach, expect, it } from "vitest";
 import { registerTask } from "../src/tasks.js";
-import { api, bootTidepool, managementMcpClient, queueWork, registerQuestion, type Tidepool } from "./harness.js";
+import {
+  api,
+  bootTidepool,
+  HOUR,
+  managementMcpClient,
+  queueChild,
+  queueWork,
+  registerQuestion,
+  type Tidepool,
+} from "./harness.js";
 
 let t: Tidepool;
 afterEach(() => t?.stop());
@@ -78,4 +87,36 @@ it("管理MCP の get_task は assignee 未指定のタスクを list_board と�
   } finally {
     await client.close();
   }
+});
+
+const resolution = ({ assignee, raw_assignee, status }: any) => ({ assignee, raw_assignee, status });
+
+it("POST /api/tasks と move の応答は assignee 未指定のタスクを GET /api/tasks/:id と同じ解決で返す(issue #1215)", async () => {
+  t = await bootTidepool({ auditorName: AUDITOR });
+  // 登録と先頭への move は pickup の契機なので(ADR 0119 決定2)、slot を埋めて行を todo のまま置く
+  queueWork(t, "occupies the slot");
+  await t.clock.advance(HOUR);
+
+  const registered = await api(t.baseUrl, "POST", "/api/tasks", {
+    type: "work",
+    title: "unset work",
+    purpose: "resolve on every mouth",
+    completion_criteria: "the response matches the detail",
+  });
+  expect(registered.status).toBe(201);
+  const detail = async () => resolution((await api(t.baseUrl, "GET", `/api/tasks/${registered.json.id}`)).json);
+  expect(resolution(registered.json)).toEqual({ assignee: "fake-worker", raw_assignee: null, status: "todo" });
+  expect(resolution(registered.json)).toEqual(await detail());
+
+  const moved = await api(t.baseUrl, "POST", `/api/tasks/${registered.json.id}/move`, { after: null });
+  expect(resolution(moved.json)).toEqual(await detail());
+});
+
+it("分解済みの親を move した応答の status は保存値ではなく導出された blocked になる(issue #1215)", async () => {
+  t = await bootTidepool();
+  const parent = queueWork(t, "parent");
+  queueChild(t, "child", parent.id);
+
+  const moved = await api(t.baseUrl, "POST", `/api/tasks/${parent.id}/move`, { after: null });
+  expect(moved.json.status).toBe("blocked");
 });

@@ -20,6 +20,7 @@ import { FakeDraftClient } from "./fakes.js";
 import {
   api,
   bootTidepool,
+  HOUR,
   holdChildren,
   managementMcpClient,
   queueChild,
@@ -702,6 +703,28 @@ it("cancel_task は人間名義かつ mcp origin で human task を cancel す�
         ]),
       }),
     );
+  } finally {
+    await client.close();
+  }
+});
+
+it("register_task と cancel_task の結果は assignee 未指定のタスクを解決された assignee と raw_assignee で返す(issue #1215)", async () => {
+  t = await bootTidepool();
+  // 登録は pickup の契機なので(ADR 0119 決定2)、slot を埋めて行を取り消せる todo のまま置く
+  queueWork(t, "occupies the slot");
+  await t.clock.advance(HOUR);
+  const client = await managementMcpClient(t.baseUrl);
+  try {
+    const registered = readToolPayload(
+      await client.callTool({
+        name: "register_task",
+        arguments: { type: "work", title: "unset work", purpose: "resolve on every mouth", completion_criteria: "done" },
+      }),
+    ) as { id: string };
+    expect(registered).toMatchObject({ assignee: "fake-worker", raw_assignee: null });
+
+    const cancelled = readToolPayload(await client.callTool({ name: "cancel_task", arguments: { task_id: registered.id } }));
+    expect(cancelled).toMatchObject({ status: "cancelled", assignee: "fake-worker", raw_assignee: null });
   } finally {
     await client.close();
   }
