@@ -271,7 +271,7 @@ it("list_memory_entries の path は P とその配下 P/… だけを返して 
 });
 
 /** 行の scope の欄は集合として比べる(並びは言わない)。 */
-const branchRows = (rows: ReturnType<typeof listMemoryBranches>) => rows.map((row) => ({ ...row, scopes: new Set(row.scopes) }));
+const withScopeSets = (rows: ReturnType<typeof listMemoryBranches>) => rows.map((row) => ({ ...row, scopes: new Set(row.scopes) }));
 
 it("枝の一覧は approved・未無効化のエントリ(宛先つきも)の path とその上位の prefix を1枝1行・木の順で返し、candidate だけ・無効化済みだけの path は行を作らない —— 未定義の枝は Definition の欄が空で scope の欄に配下の scope(盤面全体は null)が並ぶ(#1209)", () => {
   const { db, behavior, knowledge } = board();
@@ -283,7 +283,7 @@ it("枝の一覧は approved・未無効化のエントリ(宛先つきも)の p
   invalidateMemoryEntry(db, { entry_id: knowledge("tidepool", "gone"), reason: "environment" }, "human", "webui", at);
   recordBehavior(db, humanEntryInput(db, { workspace: "charts", path: "addressed", title: "Pin Node", text: "Pin Node 22.", addressee: "deckhand" }), "webui", at);
 
-  expect(branchRows(listMemoryBranches(db))).toEqual([
+  expect(withScopeSets(listMemoryBranches(db))).toEqual([
     { path: "a", definitions: [], scopes: new Set(["tidepool", "charts", null]) },
     { path: "a/b", definitions: [], scopes: new Set(["charts", null]) },
     { path: "a/b/c", definitions: [], scopes: new Set(["charts"]) },
@@ -301,7 +301,7 @@ it("枝の一覧の行はその path の Definition をすべて並べ(同じ pa
   const child = define("charts", "build/y");
 
   const definition = (id: number, scope: string | null, path: string) => ({ id, scope, text: `What ${path} holds.`, original: null });
-  expect(branchRows(listMemoryBranches(db))).toEqual([
+  expect(withScopeSets(listMemoryBranches(db))).toEqual([
     { path: "build", definitions: [], scopes: new Set([null, "charts"]) },
     { path: "build/x", definitions: [], scopes: new Set([null]) },
     { path: "build/y", definitions: [definition(child, "charts", "build/y")], scopes: new Set(["charts"]) },

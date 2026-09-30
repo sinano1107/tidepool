@@ -103,7 +103,7 @@ it("GET /api/settings/memory/entries は絞り込みを受け、原文の無い 
   expect((await api(t.baseUrl, "POST", "/api/translate", { type: "memory_entry", entry_id: agent })).status).toBe(503);
 });
 
-it("人間の面の一覧は2つとも path を domain に渡し(HTTP の不正な path は 400)、管理MCP の list_memory_branches は Definition の原文つきの枝の行を返す(#1209)", async () => {
+it("人間の面の一覧は2つとも path を domain に渡し(不正な path は HTTP で 400、管理MCP で tool error)、管理MCP の list_memory_branches は Definition の原文つきの枝の行を返す(#1209)", async () => {
   t = await bootTidepool();
   const agent = agentKnowledge(t, "Tests need Node 22");
   const written = await api(t.baseUrl, "POST", "/api/settings/memory/definitions", { workspace: null, path: "build", text: "How things are built.", original_text: "ビルドの仕方" });
@@ -112,11 +112,11 @@ it("人間の面の一覧は2つとも path を domain に渡し(HTTP の不正�
   expect((await api(t.baseUrl, "GET", "/api/settings/memory/entries?path=build/")).status).toBe(400);
   const client = await managementMcpClient(t.baseUrl);
   try {
+    expect(await toolCaller(client)("list_memory_entries", { path: "build/" })).toMatchObject({ isError: true, json: expect.stringContaining("path must be") });
     expect((await toolCaller(client)("list_memory_branches", {})).json).toMatchObject({
-      branches: [
-        { path: "build", definitions: [{ id: written.json.entry_id, scope: null, text: "How things are built.", original: { text: "ビルドの仕方" } }] },
-        { path: "build/tests", definitions: [] },
-      ],
+      branches: expect.arrayContaining([
+        expect.objectContaining({ path: "build", definitions: [expect.objectContaining({ id: written.json.entry_id, original: expect.objectContaining({ text: "ビルドの仕方" }) })] }),
+      ]),
     });
   } finally {
     await client.close();

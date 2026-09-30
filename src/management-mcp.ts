@@ -616,7 +616,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
       inputSchema: memoryListFilterSchema.extend({ board_wide: z.boolean().optional() }).shape,
     },
     async ({ workspace, board_wide, ...filter }) =>
-      toolResult(listMemoryEntriesForHuman(deps, { ...filter, scope: board_wide ? null : workspace })),
+      memoryVerb(() => listMemoryEntriesForHuman(deps, { ...filter, scope: board_wide ? null : workspace })),
   );
   server.registerTool(
     "list_memory_branches",

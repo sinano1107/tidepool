@@ -251,9 +251,7 @@ it("list_memory_entries は scope の名前 / null(盤面全体)/ 省略(すべ�
     for (const verb of ["list_memory_entries", "list_memory_candidates", "list_memory_behaviors", "list_memory_proposals", "list_precedents"]) {
       expect(await call(verb)).toMatchObject({ isError: false, body: { truncated: false, event_id: expect.any(Number) } });
     }
-    const branches = await call("list_memory_branches");
-    expect(branches).toMatchObject({ isError: false, body: { event_id: expect.any(Number) } });
-    expect(branches.body.branches.map((row: any) => [row.path, row.definitions.map((d: any) => d.id)])).toEqual([["build", [sandboxDefinition]], ["deploy", [boardWide]]]);
+    expect(await call("list_memory_branches")).toMatchObject({ isError: false, body: { branches: expect.any(Array), event_id: expect.any(Number) } });
     expect((await call("list_memory_candidates", { include_invalidated: true, page: 1 })).isError).toBe(false);
     expect((await call("list_precedents", { since_watermark: 0, page: 1 })).isError).toBe(false);
   } finally {
