@@ -465,9 +465,9 @@ export function moveMemory(
   return { entry_id: successor_id, event_id: successor_id };
 }
 
-/** 枝ごとの移動(ADR 0162 決定4 / ADR 0177 決定1〜5): scope(完全一致、null = 盤面全体)で path が P か P/… の未無効化エントリすべてを、
+/** 枝ごとの移動(ADR 0162 決定4 / ADR 0177 決定1〜5): scope(null = 盤面全体)で path が P か P/… の未無効化エントリすべてを、
  *  to_scope の to_path + 残りの path へ1 transaction で。盤面全体 → 盤面全体なら全 workspace の同じ配下も運び、それぞれ自分の scope に
- *  残す(branchRows)。merge は行き先に定義があるという申告で、衝突する定義は行き先の定義へ畳む(moveEntries —— 衝突は scope ごと)。
+ *  残す(branchRows —— それ以外は scope の完全一致)。merge は行き先に定義があるという申告で、衝突する定義は行き先の定義へ畳む(moveEntries —— 衝突は scope ごと)。
  *  無効化済みは元の置き場に残る。返り値は旧 id → 複製の id と、畳んだ定義 → 畳み先の定義。 */
 export function moveMemoryBranch(
   db: Db,

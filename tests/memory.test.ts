@@ -1273,7 +1273,7 @@ function everyWorkspaceUnderBuild() {
   const fact = (scope: string | null, path = "build/tests") => recordKnowledge(db, { ...knowledge, scope, path, source: { commit: "0a46a46" } }, "worker", at).entry_id;
   const define = (scope: string | null, path = "build") => defineMemoryBranch(db, { ...definition, scope, path, text: `What ${path} holds in ${scope ?? "the board"}.` }, "worker", at).entry_id;
   const ids = [define(null), fact(null), define("tidepool"), fact("tidepool"), fact("charts", "build/ci")];
-  const move = (scope: string | null, to_scope: string | null, to_path = "toolchain", merge?: boolean) => () =>
+  const move = (scope: string | null, to_scope: string | null, to_path = "toolchain", merge?: boolean) =>
     moveMemoryBranch(db, { scope, path: "build", to_scope, to_path, merge, mover: human }, "webui", at);
   return { db, task, define, ids, move };
 }
@@ -1281,7 +1281,7 @@ function everyWorkspaceUnderBuild() {
 it("盤面全体 → 盤面全体の枝ごとの移動は、全 workspace の同じ path 配下(workspace 自身の定義も)をそれぞれの scope のまま to_path + 残りへ写し、workspace の worker の INDEX に旧 path が残らない(ADR 0177 決定5)", () => {
   const { db, task, ids, move } = everyWorkspaceUnderBuild();
 
-  const { moved } = move(null, null)();
+  const { moved } = move(null, null);
 
   expect(moved.map(({ entry_id }) => entry_id)).toEqual(ids);
   expect(moved.map(({ successor_id }) => entryById(db, successor_id))).toMatchObject([
@@ -1303,7 +1303,7 @@ it("盤面全体 → 盤面全体の枝ごとの移動の merge は、workspace 
   const [boardBuild, boardTests, workspaceBuild, workspaceTests, chartsCi] = ids;
   const [boardToolchain, workspaceToolchain] = [define(null, "toolchain"), define("tidepool", "toolchain")];
 
-  const { moved, folded } = move(null, null, "toolchain", true)();
+  const { moved, folded } = move(null, null, "toolchain", true);
 
   expect(folded).toEqual([
     { entry_id: boardBuild, successor_id: boardToolchain },
@@ -1338,7 +1338,7 @@ it.each([
 ] as const)("%sは移動元の scope のエントリだけを運び、他の scope の配下は旧 path に残る(ADR 0177 決定5)", (_, scope, to_scope, carried) => {
   const { db, ids, move } = everyWorkspaceUnderBuild();
 
-  const { moved } = move(scope, to_scope)();
+  const { moved } = move(scope, to_scope);
 
   expect(moved.map(({ entry_id }) => entry_id)).toEqual(carried.map((i) => ids[i]));
   expect(ids.filter((id) => !moved.some((m) => m.entry_id === id)).map((id) => entryById(db, id)?.invalidation_reason)).toEqual([null, null, null]);
@@ -1348,7 +1348,7 @@ it("watermark 再生と rebuild は、全 workspace を運んだ盤面全体 →
   const { db, define, move } = everyWorkspaceUnderBuild();
   define(null, "toolchain");
   define("tidepool", "toolchain");
-  move(null, null, "toolchain", true)();
+  move(null, null, "toolchain", true);
   const current = approvedMemoryEntries(db);
   const listed = listMemoryEntries(db, {});
 
