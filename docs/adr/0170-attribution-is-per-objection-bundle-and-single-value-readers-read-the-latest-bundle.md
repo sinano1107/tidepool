@@ -1,5 +1,7 @@
 # 帰責の単位は異議群で、entry を1つの値で読む読み手は最後の異議群の判定を読む
 
+**Status: 決定5 は ADR 0171 が置き換え、決定2 の読み手の列挙から `propose_from_objection` を外した。**
+
 2026-09-28 の grilling(issue #1087、ADR 0168 の派生)で決定。同じ判断への2度目の異議は正当で、別の session なら別の修理タスクへ
 束ねられる(ADR 0085)。書く側は既に異議群単位だった —— 帰責 event は材料にした異議の id 列を持ち、case 描画もその帰責の steering だけを
 読む(#958)。一方、読み手(一覧・Precedent・`propose_from_objection`・打ち切りの行の cause)は entry への最新の帰責を id 順で読み、
