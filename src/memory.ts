@@ -1221,9 +1221,8 @@ const STOPWORDS = new Set(
 );
 
 /** query を前処理して stopword を落とし、語ごとに引用符で囲む(識別子の / . - を FTS の構文として
- *  読ませない)。語は空白で割ったうえで CJK の連なりとそれ以外の境目でも割る(#1178)—— 日本語は識別子の前後に
- *  空白を置かないので、`src/memory.tsの注入` を1つの phrase にすると識別子だけの leaf に当たらない。CJK の連なりは
- *  bigram の phrase のまま(隣接を保つ。bigram ごとに割ると `東京都` が「京都と東京」に当たる)。語は既定で AND、
+ *  読ませない)。語は空白と、CJK の連なりとそれ以外の境目で割る(`src/memory.tsの注入` の識別子も独立の語、#1178)。
+ *  CJK の連なりは bigram の1 phrase のまま(隣接を保ち、`東京都` は「京都と東京」に当たらない)。語は既定で AND、
  *  注入は OR で繋ぐ。残る語が無ければ null。 */
 function ftsQuery(query: string, join: " " | " OR " = " "): string | null {
   const terms = query
