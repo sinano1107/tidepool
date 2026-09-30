@@ -33,7 +33,7 @@ it("前回登録が無く routing の材料があれば、poll が盤面名義�
     meta_review_subject: "routing",
     review_tier: "frontier",
     workspace: null,
-    assignee: null,
+    raw_assignee: null,
     registrant: BOARD_WORKER_ID,
   });
   const events = (await api(t.baseUrl, "GET", `/api/tasks/${id}/events`)).json as any[];
