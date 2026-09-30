@@ -590,14 +590,10 @@ it.each([
     const viaMcp: any = readToolPayload(await client.callTool({ name: "get_task", arguments: { task_id: targetId } }));
     const viaHttp = (await api(t.baseUrl, "GET", `/api/tasks/${targetId}`)).json;
 
-    expect(viaMcp.status).toBe(status);
+    expect(viaHttp.status).toBe(status);
+    expect(viaMcp).toMatchObject({ status, accepted: viaHttp.accepted, registrant: viaHttp.registrant });
     expect(viaMcp).toHaveProperty("accepted");
     expect(viaMcp).toHaveProperty("registrant");
-    expect({ status: viaMcp.status, accepted: viaMcp.accepted, registrant: viaMcp.registrant }).toEqual({
-      status: viaHttp.status,
-      accepted: viaHttp.accepted,
-      registrant: viaHttp.registrant,
-    });
   } finally {
     await client.close();
   }
