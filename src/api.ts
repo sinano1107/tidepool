@@ -1222,7 +1222,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
         // board never special-cases an issue-backed parent — CONTEXT.md's
         // Decompose point 6), same short-TTL cache/resolver GET routes use
         const live = await issueContent.present(
-          presentTask(db, parent),
+          presentTask(db, parent, defaultAgentName, auditorName),
           github,
           displayWorkspacePath(parent.workspace),
           clock.now(),
@@ -1330,7 +1330,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
         .json({ error: result.failure.error });
       return;
     }
-    res.json((await presentLive([presentTask(db, result.value)]))[0]);
+    res.json((await presentLive([presentTask(db, result.value, defaultAgentName, auditorName)]))[0]);
   });
 
   // Human direct cancel: schema and HTTP response mapping around the shared door.
@@ -1361,7 +1361,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
         .json({ error: result.failure.error });
       return;
     }
-    res.json(presentTask(db, result.value));
+    res.json(presentTask(db, result.value, defaultAgentName, auditorName));
   });
 
   // human-verbs is the canonical implementation shared by the WebUI and the
@@ -1400,7 +1400,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
         parsed.data.triage,
         parsed.data.amendment,
       );
-      res.json(presentTask(db, question));
+      res.json(presentTask(db, question, defaultAgentName, auditorName));
     } catch (err) {
       if (err instanceof DomainError) {
         res.status(409).json({ error: err.message });
@@ -1430,7 +1430,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
         .json({ error: result.failure.error });
       return;
     }
-    res.json(presentTask(db, result.value));
+    res.json(presentTask(db, result.value, defaultAgentName, auditorName));
   });
 
   // the handoff-draft route (issue #13): same propose-don't-commit shape as
@@ -2071,7 +2071,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       res.status(404).json({ error: "task not found" });
       return;
     }
-    const [presented] = await presentLive([presentTask(db, task)]);
+    const [presented] = await presentLive([presentTask(db, task, defaultAgentName, auditorName)]);
     // push の単体ビューは親の行を持たない — 承認 question の判定は一覧と同じくここで載せる
     res.json({
       ...presented!,

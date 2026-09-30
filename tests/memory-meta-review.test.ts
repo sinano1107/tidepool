@@ -39,7 +39,7 @@ it("前回登録が無く材料があれば、poll が盤面名義で memory met
     meta_review_subject: "memory",
     review_tier: "frontier",
     workspace: null,
-    assignee: null,
+    raw_assignee: null,
     status: "in_progress",
     registrant: BOARD_WORKER_ID,
   });

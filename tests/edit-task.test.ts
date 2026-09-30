@@ -57,11 +57,11 @@ it("assignee を編集でき、登録時と同じ registry 解決の検査が再
   const after = (await api(t.baseUrl, "GET", `/api/tasks/${task.id}`)).json;
   expect(after.assignee).toBe("coder");
 
-  // empty string means "unset — resolve to the board default" (null), exempt
-  // from the registry check
+  // empty string means "unset — resolve to the board default" (stored as null),
+  // exempt from the registry check
   const unset = await api(t.baseUrl, "PATCH", `/api/tasks/${task.id}`, { assignee: "" });
   expect(unset.status).toBe(200);
-  expect(unset.json.assignee).toBe(null);
+  expect(unset.json.raw_assignee).toBe(null);
 });
 
 it("通常タスクの workspace を編集でき、未知の workspace 名は拒否される", async () => {
