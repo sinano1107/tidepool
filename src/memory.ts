@@ -1240,14 +1240,20 @@ const CJK_RUN = new RegExp(String.raw`((?:(?=${RUN_CATEGORY})${CJK_SCRIPT})+)`, 
  *  識別子と別の語になる)。CJK_RUN と文字集合を共有するので、片方だけ字種が変わることはない。 */
 const QUERY_BREAK = new RegExp(String.raw`(?:\s|(?!${RUN_CATEGORY})${CJK_SCRIPT})+`, "u");
 
-/** 索引と query の共通の前処理(spec #586 B / #606 / #608 / #610 / #1180)。まず CJK の連なりを重なりつきの2文字語に割り(LWC 式)
- *  空白で囲む。unicode61 は CJK を語に切らない。1文字の連なりはそのまま。長音符 ー は Script=Common なので
- *  Script_Extensions で拾う(拾わないと「サーバ」が割れて当たらない)。その後で . - _ の連なりを、連なりの外側の隣が
- *  unicode61 の token にならない文字(空白・文字列の端・`)` `"` などの記号)のとき連なりごと落とす(tokenchars なので
- *  文末の `narrow.)` が `narrow` に当たらない。語中は `foo__bar` のような連なりも残す。unicode61 は結合文字 Mn を
- *  token に含め、Mc / Me では切る)。bigram が先なので、CJK に接した `東京.csv` の `.` も隣が空白になって落ちる。 */
+/** 索引と query の共通の前処理(spec #586 B / #606 / #608 / #610 / #1180 / #1189)。まず NFC に正規化する(NFD の
+ *  `カ` + U+3099 と `ガ`、ハングルの字母と音節、互換漢字 U+FA19 と U+795E が同じ語になる。NFKC は `…` を tokenchars の
+ *  `...` に開くので使わない)。揃えるのは FTS に渡す投影だけで、保存する正文・title・path は書き換えない。次に CJK の
+ *  連なりを重なりつきの2文字語に割り(LWC 式)空白で囲む。unicode61 は CJK を語に切らない。1文字の連なりはそのまま。
+ *  長音符 ー は Script=Common なので Script_Extensions で拾う(拾わないと「サーバ」が割れて当たらない)。その後で . - _ の
+ *  連なりを、連なりの外側の隣が unicode61 の token にならない文字(空白・文字列の端・`)` `"` などの記号)のとき連なりごと
+ *  落とす(tokenchars なので文末の `narrow.)` が `narrow` に当たらない。語中は `foo__bar` のような連なりも残す)。
+ *  unicode61 は結合文字 Mn を字によって語の一部にも区切りにもする(`café` の U+0301 は語に含め、`がく` の U+3099 では
+ *  `か` / `く` に切る)が、下の正規表現は Mn をすべて token になる隣として扱う。食い違うのは CJK の連なりの外で語を切る
+ *  Mn が . - _ に接したとき(`a` + U+030D + `-b`)だけ —— 連なりに入る Mn は bigram が先に空白で囲む。bigram が先なので、
+ *  CJK に接した `東京.csv` の `.` も隣が空白になって落ちる。 */
 function ftsText(value: string): string {
   return value
+    .normalize("NFC")
     .replace(CJK_RUN, (run) => {
       const chars = [...run];
       const grams = chars.length === 1 ? chars : chars.slice(1).map((char, i) => chars[i] + char);
@@ -1312,9 +1318,11 @@ const STOPWORDS = new Set(
 /** query を前処理して stopword を落とし、語ごとに引用符で囲む(識別子の / . - を FTS の構文として
  *  読ませない)。語は空白と CJK の句読点・記号(、。「」 など)と、CJK の連なりとそれ以外の境目で割る(`src/memory.tsの注入`
  *  の識別子も独立の語、#1178 / #1180)。CJK の連なりは bigram の1 phrase のまま(隣接を保ち、`東京都` は「京都と東京」に
- *  当たらない)。語は既定で AND、注入は OR で繋ぐ。残る語が無ければ null。 */
+ *  当たらない)。語に割る前に query 全体を NFC にする(割った後だと、NFD の `Việt` が CJK の連なりに入る U+0323 で先に
+ *  割れて NFC の leaf に当たらない、#1189)。語は既定で AND、注入は OR で繋ぐ。残る語が無ければ null。 */
 function ftsQuery(query: string, join: " " | " OR " = " "): string | null {
   const terms = query
+    .normalize("NFC")
     .split(QUERY_BREAK)
     .flatMap((word) => word.split(CJK_RUN))
     .map((word) => ftsText(word).trim())
