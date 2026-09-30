@@ -5,8 +5,10 @@ export type Db = Database.Database;
 
 /** Memory の FTS5 tokenizer と、TS 側の前処理(NFC + CJK bigram + 語の先頭・末尾の . - _ 落とし)の版
  *  (spec #586 B、実測は #357 / #606、順序は #610)。
- *  どちらかを変えたら、boot の ensureMemoryIndex が索引を作り直す。索引の列を変えたときも前処理の版を上げる。 */
-export const MEMORY_FTS_TOKENIZER = "unicode61 tokenchars '_-.'";
+ *  どちらかを変えたら、boot の ensureMemoryIndex が索引を作り直す。索引の列を変えたときも前処理の版を上げる。
+ *  categories の Mn は前処理の正規表現と結合文字の扱いを揃えるため(#1200)。M* にしないのは、正規表現が扱わない Mc / Me
+ *  まで語に入れて逆向きの食い違いを広げるから。 */
+export const MEMORY_FTS_TOKENIZER = "unicode61 categories 'L* N* Co Mn' tokenchars '_-.'";
 export const MEMORY_PREPROCESS_VERSION = "cjk-bigram-8";
 // Shared between the fresh-board CREATE and the memory index rebuild (memory.ts).
 export const MEMORY_FTS_DDL = `CREATE VIRTUAL TABLE memory_fts USING fts5(text, title, path, tokenize = "${MEMORY_FTS_TOKENIZER}")`;

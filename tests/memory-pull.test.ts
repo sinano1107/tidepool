@@ -164,6 +164,13 @@ it.each([
   expect(searchMemory(db, reader, { query }, at).results).toEqual([]);
 });
 
+it.each(["a\u030Db", "a-b", "a\u030D-b"])("結合文字 Mn も語中の - も語に入って1語になるので、text %j の leaf は同じ query で当たり、query b では当たらない(#1200)", (text) => {
+  const { db, reader, record } = board();
+  record({ title: "leaf", text });
+  expect(searchMemory(db, reader, { query: text }, at).results.map((r) => r.title)).toEqual(["leaf"]);
+  expect(searchMemory(db, reader, { query: "b" }, at).results).toEqual([]);
+});
+
 it.each([
   ["NFC", "NFC"],
   ["NFC", "NFD"],
@@ -844,7 +851,7 @@ it("rebuild はエントリ表と FTS を events から作り直し、無効化�
   expect(() => invalidateMemoryEntry(db, { entry_id: old, reason: "environment" }, "human", "webui", at)).toThrow(/already invalidated/);
   expect(getEvent(db, eventId!)).toMatchObject({
     task_id: null,
-    payload: { kind: "memory_index_rebuilt", tokenizer: "unicode61 tokenchars '_-.'", preprocess_version: "cjk-bigram-8" },
+    payload: { kind: "memory_index_rebuilt", tokenizer: "unicode61 categories 'L* N* Co Mn' tokenchars '_-.'", preprocess_version: "cjk-bigram-8" },
   });
 });
 
