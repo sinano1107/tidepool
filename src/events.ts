@@ -82,8 +82,9 @@ export interface TokenUsage {
  *  union, which is what kills the "wrote to log but forgot stats" bug class. */
 export type EventPayload =
   // based_on_decision points at the decision-log entry (event id) a decomposed
-  // child rests on — stamped at registration so provenance never needs a join
-  | { kind: "task_registered"; type: TaskType; title: string; based_on_decision?: number; integration_review?: boolean }
+  // child rests on — stamped at registration so provenance never needs a join.
+  // objection_event_ids: a repair / RCA child's material objections (ADR 0171 決定1)
+  | { kind: "task_registered"; type: TaskType; title: string; based_on_decision?: number; integration_review?: boolean; objection_event_ids?: number[] }
   | { kind: "decision_logged"; line: string }
   | { kind: "task_picked_up" }
   | { kind: "task_moved"; after: string | null }
@@ -362,7 +363,7 @@ export type EventPayload =
   // 異議されたタスク、`entry_id` は異議されたエントリ、`objection_event_ids` は出所の
   // 異議 event(すべての注釈が記録に遡れる)で、先頭がその異議群の名前(ADR 0170)。同じ異議群への2回目は新しい
   // event を追記し後が有効 —— `round` がそれを言う(`initial` = commit 時、`after_rca` = その
-  // タスクの RCA 子が決着した後に findings を証拠に `uncertain` を問い直した回、#575)。entry を1つの値で読む読み手は
+  // 異議群を覆う RCA 子が決着した後に findings を証拠に `uncertain` を問い直した回、#575 / ADR 0171)。entry を1つの値で読む読み手は
   // 最後の異議群の判定を読む(`currentAttributions`)。
   // どちらの回も判断が返ったときだけ書く —— 撃てなかった entry には何も書かず、撃って失敗したら
   // `objection_attribution_failed` だけを残す(ADR 0164 決定3 / ADR 0168 決定2)。初回の帰責が無い entry は
@@ -600,7 +601,8 @@ export function objectionBundles(db: Db, entryIds?: number[]): Map<number, Objec
 }
 
 /** entry の今の判定(ADR 0170 決定2): 最後の異議群の帰責。最後の異議群が未帰責なら entry は未帰責で、Map に載らない。
- *  entry を1つの値で読む読み手(一覧・Precedent・起草 verb・打ち切りの行)はすべてこれを読む。 */
+ *  entry を1つの値で読む読み手(一覧・Precedent・打ち切りの行)はすべてこれを読む —— 起草 verb は review 子が材料にした
+ *  異議群の判定を読む(ADR 0171 決定3)。 */
 export function currentAttributions(db: Db, entryIds?: number[]): Map<number, Attribution> {
   return new Map([...objectionBundles(db, entryIds)].flatMap(([entryId, bundles]) => {
     const attribution = bundles.at(-1)!.attribution;

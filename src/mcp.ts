@@ -685,7 +685,7 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
     "propose_from_objection",
     {
       description:
-        "Review only: turn your finding about an objected entry into memory — objected entries of your parent task only. The board derives the entry kind and addressee from the entry's attributed cause, " +
+        "Review only: turn your finding about an objected entry into memory — only the objected entries your review was opened on (its material). The board derives the entry kind and addressee from the cause attributed to those objections, " +
         "except for a missing_information cause, where you pass as (behavior or knowledge) and must not otherwise. " +
         "With as knowledge, pass based_on_decision (the event id log_decision returned for your reasoning), and not otherwise; it becomes the knowledge entry's source, an inference. " +
         "A behavior is a candidate a human approves later. path is a \"/\"-separated hierarchy (e.g. build/tests). " +
