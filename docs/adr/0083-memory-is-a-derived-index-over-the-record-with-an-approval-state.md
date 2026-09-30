@@ -257,3 +257,12 @@ id を渡せばその本文を返していた(spec #600 B が「read / search �
 その盤面全体の Definition は `entries` にも `dropped` にも載せない。`dropped` は無効化の reason code と後継を伝える欄で、
 影には後継が無く、理由を載せれば「他の workspace ではこの枝の定義が違う」を worker に教えることになる。影の Definition は
 店・人間の一覧・meta-review の `list_memory_entries` には残る(ADR 0122 決定1)。
+
+## 追記 8(2026-09-30 の triage、issue #1187)
+
+**記憶構造の健全性の検査項目から「子が1つの枝・深すぎる枝」を落とす。** 追記4 は6項目を挙げたが、CONTEXT.md「書き手」は
+最初から5項目で、落とした決定の記録が無かった。定義は「この枝に何を置くか」の宣言で、今ある leaf の数に依らない —— 子の数で
+枝を評価すると、定義と要約を分けた線(どの leaf があっても真か)の反対側に立つ。エントリの少ない盤面では子が1つの枝が普通の
+状態で、周期ごとに畳んでは作り直す `path_moved` が積もる。「深すぎる」は閾値なしに書けない(決定9)。検査項目を worker に
+運ぶ場所は memory meta-review の purpose —— worker が読むのは purpose と verb の説明だけで、Auditor の agent 定義は主題を
+持たない。
