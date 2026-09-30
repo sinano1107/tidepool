@@ -171,6 +171,25 @@ it("英語の自然文の task では、stopword しか共有しない leaf は�
   expect(injection.entries.map((e) => e.id).sort()).toEqual([admin, breakpoints].sort());
 });
 
+it.each([
+  ["src/memory.tsの注入を直す", ["injection"]],
+  ["`buildMemoryInjection`を直す", ["injection"]],
+  ["決定は0083の決定9に沿う", ["threshold"]],
+  ["潮汐のdriftを直す", ["drift"]],
+  ["注入（src/memory.ts）、drift。", ["injection", "drift"]],
+])("CJK に空白なしで接した識別子・英単語も独立の語として引くので、title %j の task には leaf %j が関連 leaf に並ぶ(#1178)", (title, expected) => {
+  const { db, task, record } = board({ title, purpose: "注入の不具合を直す", completion_criteria: "テストが通る" });
+  const ids: Record<string, number> = {
+    injection: record({ path: "memory", title: "Injection", text: "buildMemoryInjection in src/memory.ts joins the index and the relevant entries." }),
+    threshold: record({ path: "adr", title: "No threshold", text: "ADR 0083 decision 9: no relevance threshold." }),
+    drift: record({ path: "tide", title: "Tide chart", text: "The tide chart shows drift when the clock skews." }),
+  };
+
+  const injection = buildMemoryInjection(db, task, "tidepool", "deckhand");
+
+  expect(injection.entries.map((e) => e.id).sort()).toEqual(expected.map((key) => ids[key]).sort());
+});
+
 it("title / purpose / completion criteria が stopword だけの task は、関連 leaf なし・INDEX ありの節を組む", () => {
   const { db, task, record } = board({ title: "The", purpose: "it is", completion_criteria: "a" });
   record({ path: "deploy", title: "Deploy to the Pi", text: "It is on the Pi." });

@@ -1149,6 +1149,8 @@ export function listMemoryEntries(
     }));
 }
 
+const CJK_RUN = /([\p{scx=Han}\p{scx=Hiragana}\p{scx=Katakana}\p{scx=Hangul}]+)/gu;
+
 /** 索引と query の共通の前処理(spec #586 B / #606 / #608 / #610)。まず CJK の連なりを重なりつきの2文字語に割り(LWC 式)
  *  空白で囲む。unicode61 は CJK を語に切らない。1文字の連なりはそのまま。長音符 ー は Script=Common なので
  *  Script_Extensions で拾う(拾わないと「サーバ」が割れて当たらない)。その後で . - _ の連なりを、連なりの外側の隣が
@@ -1157,7 +1159,7 @@ export function listMemoryEntries(
  *  token に含め、Mc / Me では切る)。bigram が先なので、CJK に接した `東京.csv` の `.` も隣が空白になって落ちる。 */
 function ftsText(value: string): string {
   return value
-    .replace(/[\p{scx=Han}\p{scx=Hiragana}\p{scx=Katakana}\p{scx=Hangul}]+/gu, (run) => {
+    .replace(CJK_RUN, (run) => {
       const chars = [...run];
       const grams = chars.length === 1 ? chars : chars.slice(1).map((char, i) => chars[i] + char);
       return ` ${grams.join(" ")} `;
@@ -1219,10 +1221,14 @@ const STOPWORDS = new Set(
 );
 
 /** query を前処理して stopword を落とし、語ごとに引用符で囲む(識別子の / . - を FTS の構文として
- *  読ませない)。語は既定で AND、注入は OR で繋ぐ。残る語が無ければ null。 */
+ *  読ませない)。語は空白で割ったうえで CJK の連なりとそれ以外の境目でも割る(#1178)—— 日本語は識別子の前後に
+ *  空白を置かないので、`src/memory.tsの注入` を1つの phrase にすると識別子だけの leaf に当たらない。CJK の連なりは
+ *  bigram の phrase のまま(隣接を保つ。bigram ごとに割ると `東京都` が「京都と東京」に当たる)。語は既定で AND、
+ *  注入は OR で繋ぐ。残る語が無ければ null。 */
 function ftsQuery(query: string, join: " " | " OR " = " "): string | null {
   const terms = query
     .split(/\s+/)
+    .flatMap((word) => word.split(CJK_RUN))
     .map((word) => ftsText(word).trim())
     // 語の端の記号を除いて見る(`it,` も FTS には `it` として届く。記号だけの語は消える)
     .filter((term) => {
