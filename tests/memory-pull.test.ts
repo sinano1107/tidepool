@@ -164,14 +164,7 @@ it.each([
   expect(searchMemory(db, reader, { query }, at).results).toEqual([]);
 });
 
-it("tokenizer は結合文字 Mn を語に入れるので、text a + U+030D + b の leaf は query a + U+030D + b で当たり、query b では当たらない(#1200)", () => {
-  const { db, reader, record } = board();
-  record({ title: "leaf", text: "a̍b" });
-  expect(searchMemory(db, reader, { query: "a̍b" }, at).results.map((r) => r.title)).toEqual(["leaf"]);
-  expect(searchMemory(db, reader, { query: "b" }, at).results).toEqual([]);
-});
-
-it.each(["a-b", "a̍-b"])("語中の - は結合文字 Mn の隣でも残って1語になるので、text %j の leaf は同じ query で当たり、query b では当たらない(#1200)", (text) => {
+it.each(["a\u030Db", "a-b", "a\u030D-b"])("結合文字 Mn も語中の - も語に入って1語になるので、text %j の leaf は同じ query で当たり、query b では当たらない(#1200)", (text) => {
   const { db, reader, record } = board();
   record({ title: "leaf", text });
   expect(searchMemory(db, reader, { query: text }, at).results.map((r) => r.title)).toEqual(["leaf"]);
