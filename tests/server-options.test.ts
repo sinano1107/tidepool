@@ -374,12 +374,12 @@ it("worker ログの置き場は、盤面が守っているパスと同じ1つ�
 
 /** `quarantineResolvers` の2つの写像を実 registry から撃つ(#1013)。手書きの lambda で
  *  差し替えるテストしか無いと、導出が壊れても全部緑のまま起動時の検査が codex を
- *  黙って飛ばす。`agent()` は provider 行だけ違う agent の md を作る。
+ *  黙って飛ばす。`agentMd()` は provider 行だけ違う agent の md を作る。
  *  組み込みの auditor は provider を省略した展開(anthropic / moonshot、@workspace
  *  skill が openai を外す)なので、claude-code / anthropic 側にだけ入る(実測: 名前は fugu)。 */
-const agent = (name: string, provider: string) =>
-  `---\nname: ${name}\ndescription: d\nversion: "1"\nauthority: standard\nprovider:${provider}\nskills: []\n---\nbody\n`;
-const BOTH = "\n  - name: anthropic\n  - name: openai";
+const agentMd = (name: string, provider: string) =>
+  `---\nname: ${name}\ndescription: d\nversion: "1"\nauthority: standard\nprovider: ${provider}\nskills: []\n---\nbody\n`;
+const BOTH_PROVIDERS = "\n  - name: anthropic\n  - name: openai";
 
 async function quarantineResolversFor(files: Record<string, string>) {
   const registryDir = await makeRegistry(files);
@@ -389,8 +389,8 @@ async function quarantineResolversFor(files: Record<string, string>) {
 
 it("harnessContainment は entry の Provider を正準 Harness に通し、どれか1つ該当すれば返す(#1013)", async () => {
   const { harnessContainment } = await quarantineResolversFor({
-    "agents/gpt.md": agent("gpt", " openai"),
-    "agents/both.md": agent("both", BOTH),
+    "agents/gpt.md": agentMd("gpt", "openai"),
+    "agents/both.md": agentMd("both", BOTH_PROVIDERS),
   });
   // entry の名前を canonicalHarness に通さず比べる変異: "openai" !== "codex" で codex が空になり赤
   expect(harnessContainment?.(["codex"])).toEqual(["both", "gpt"]);
@@ -406,7 +406,7 @@ it("harnessContainment は anthropic だけの registry では codex を空で�
 
 it("harnessContainment は不正な定義の agent を throw せず除く(#1013)", async () => {
   const { harnessContainment } = await quarantineResolversFor({
-    "agents/bogus.md": agent("bogus", " bogus"),
+    "agents/bogus.md": agentMd("bogus", "bogus"),
   });
   // assertValidAgentDefinition の門を外すと canonicalHarness が未知の Provider で落ち、
   // throw して赤。registry の読み込みは倒れない(ADR 0097 決定3)
@@ -415,8 +415,8 @@ it("harnessContainment は不正な定義の agent を throw せず除く(#1013)
 
 it("providerAuth は entry の Provider 名を文字列のまま突き合わせ、どれか1つ該当すれば返す(#1013)", async () => {
   const { providerAuth } = await quarantineResolversFor({
-    "agents/gpt.md": agent("gpt", " openai"),
-    "agents/both.md": agent("both", BOTH),
+    "agents/gpt.md": agentMd("gpt", "openai"),
+    "agents/both.md": agentMd("both", BOTH_PROVIDERS),
   });
   // some → every の変異: both が落ちて赤。全 agent を返す変異は下の anthropic 側で赤
   expect(providerAuth?.(["openai"])).toEqual(["both", "gpt"]);
