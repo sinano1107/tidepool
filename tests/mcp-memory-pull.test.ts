@@ -105,6 +105,18 @@ it("define_memory_branch は attributed task の workspace をスコープ、wor
   }
 });
 
+it("search_memory の description は、索引が英語だと言う(#1052)", async () => {
+  t = await bootTidepool();
+  const task = await registerWork(t, "index the tide charts");
+  const client = await mcpClient(t.mcpBaseUrl, task.id);
+  try {
+    const { tools } = await client.listTools();
+    expect(tools.find((tool) => tool.name === "search_memory")?.description).toContain("The index is English; query in English.");
+  } finally {
+    await client.close();
+  }
+});
+
 it("record_knowledge の description は、新しい枝を切るときは先に define_memory_branch で定義を書くよう言う", async () => {
   t = await bootTidepool();
   const task = await registerWork(t, "index the tide charts");

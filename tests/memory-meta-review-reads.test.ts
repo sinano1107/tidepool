@@ -4,6 +4,7 @@ import { appendEvent, getEvent } from "../src/events.js";
 import {
   approveMemoryProposal,
   createBehaviorCandidate,
+  humanEntryInput,
   invalidateMemoryByMetaReview,
   invalidateMemoryEntry,
   listMemoryEntries,
@@ -11,6 +12,7 @@ import {
   proposeMemoryChange,
   pullMemoryList,
   pullMemoryProposals,
+  recordBehavior,
   rejectMemoryProposal,
 } from "../src/memory.js";
 import { answerQuestion, getTask, logDecision, type MemoryProposal, registerTask } from "../src/tasks.js";
@@ -202,6 +204,23 @@ it("list_memory_behaviors は approved の Behavior を宛先・scope で絞ら�
   invalidateMemoryEntry(db, { entry_id: retired, reason: "environment" }, "human", "webui", at);
 
   expect(pullMemoryList(db, reader, "list_memory_behaviors", {}, at).entries.map((e) => e.id)).toEqual(approved);
+});
+
+it("一覧3つの返却はエントリの原文 original を持たない —— meta-review が読むのは英語の正文だけ(#1052)", () => {
+  const { db, reader, behavior } = board();
+  behavior({ title: "Still a candidate" });
+  recordBehavior(
+    db,
+    humanEntryInput(db, { workspace: "tidepool", path: "habits", title: "Pin Node", text: "Pin Node 22.", addressee: "deckhand", original_title: "Node を固定", original_text: "Node 22 に固定する" }),
+    "webui",
+    at,
+  );
+
+  for (const verb of ["list_memory_candidates", "list_memory_behaviors", "list_memory_entries"] as const) {
+    const { entries } = pullMemoryList(db, reader, verb, {}, at);
+    expect(entries.length).toBeGreaterThan(0);
+    for (const entry of entries) expect(entry).not.toHaveProperty("original");
+  }
 });
 
 it("一覧はページ長で切り、truncated が次のページを言う", () => {

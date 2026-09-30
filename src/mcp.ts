@@ -756,8 +756,8 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
     {
       description:
         "Search the board's memory for this workspace by full-text query; results are " +
-        "{id, title, path} in rank order, and truncated says a next page exists. Read an " +
-        "entry's text with read_memory.",
+        "{id, title, path} in rank order, and truncated says a next page exists. The index is " +
+        "English; query in English. Read an entry's text with read_memory.",
       inputSchema: { query: z.string().min(1), page },
     },
     async (input) => runVerb(deps, attributedTaskId, (task) => searchMemory(deps.db, reader(task), input, deps.clock.now())),

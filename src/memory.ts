@@ -137,13 +137,7 @@ function insertEntry(db: Db, id: number, entry: MemoryEntryFields, carried?: num
     entry.author.name,
     versionOf(entry.state, id, carried),
   );
-  db.prepare("INSERT INTO memory_fts (rowid, text, title, path, original) VALUES (?, ?, ?, ?, ?)").run(
-    id,
-    ftsText(entry.text),
-    ftsText(entry.title),
-    ftsText(entry.path),
-    `${ftsText(entry.original?.title ?? "")} ${ftsText(entry.original?.text ?? "")}`,
-  );
+  db.prepare("INSERT INTO memory_fts (rowid, text, title, path) VALUES (?, ?, ?, ?)").run(id, ftsText(entry.text), ftsText(entry.title), ftsText(entry.path));
 }
 
 function checkPath(path: string): void {
@@ -1371,7 +1365,9 @@ export function pullMemoryList(
                 .filter((e) => e.state === "candidate" && (input.kind === undefined || e.kind === input.kind) && (input.include_invalidated || e.invalidation_reason === null))
                 .map((e) => withSuccessor(e, all)))(listMemoryEntries(db, {}));
     const { rows: shown, truncated } = paged(entries, input.page);
-    return recordPull(db, reader, { verb, input, returned_ids: shown.map((e) => e.id) }, { entries: shown, truncated }, at);
+    // 原文は人間の面にだけ残す —— meta-review が読むのは英語の正文(#1052、readMemory と同じ側)
+    const english = shown.map(({ original: _original, ...e }) => e);
+    return recordPull(db, reader, { verb, input, returned_ids: shown.map((e) => e.id) }, { entries: english, truncated }, at);
   })();
 }
 
