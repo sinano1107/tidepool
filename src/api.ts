@@ -698,7 +698,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       return;
     }
     // human-verbs is the canonical registration door shared by the WebUI and
-    // the future management MCP; this route owns only HTTP status mapping.
+    // the management MCP; this route owns only HTTP status mapping.
     const result = await registerThroughHumanDoor(
       {
         db,
@@ -1367,7 +1367,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   });
 
   // human-verbs is the canonical implementation shared by the WebUI and the
-  // future management MCP (ADR 0032 / issue #188). This route owns only the
+  // management MCP (ADR 0032 / issue #188). This route owns only the
   // HTTP boundary: input validation, lookup, and status/response mapping.
   router.post("/tasks/:id/answer", async (req, res) => {
     const parsed = answerSchema.safeParse(req.body);
