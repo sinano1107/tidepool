@@ -157,7 +157,7 @@ it.each([
   ["The chart reads tides.csv.", "csv"],
   ["Use foo__bar here", "foobar"],
   ["Pin v1..2 now", "v12"],
-  ["Visit the cafe\u0301.x page", "cafe\u0301x"],
+  ["Visit the x\u0301.y page", "x\u0301y"],
 ])("語中の . - _ は連なりでも結合文字の隣でも残るので、text %j の leaf は query %j では当たらない", (text, query) => {
   const { db, reader, record } = board();
   record({ title: "leaf", text });
