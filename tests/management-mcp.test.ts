@@ -20,7 +20,9 @@ import { FakeDraftClient } from "./fakes.js";
 import {
   api,
   bootTidepool,
+  holdChildren,
   managementMcpClient,
+  queueChild,
   queueWork,
   registerQuestion,
   registerWork,
@@ -565,6 +567,37 @@ it("管理MCP の読取 tool は盤面データを返して DB を変えない(i
     expect(readToolPayload(resultByName.get("read_decision_log"))).toEqual(
       expect.objectContaining({ entries: expect.any(Array), cursor: expect.any(Number) }),
     );
+  } finally {
+    await client.close();
+  }
+});
+
+it.each([
+  ["未完の子を持つ親", "blocked"],
+  ["兄弟の question に held された子", "held"],
+  ["どちらでもない todo", "todo"],
+])("get_task は %s の導出した status と accepted・registrant を GET /api/tasks/:id と同じに返す(issue #1190)", async (situation, status) => {
+  t = await bootTidepool();
+  const subject = queueWork(t, "get_task presents status");
+  let targetId = subject.id;
+  if (situation === "未完の子を持つ親") queueChild(t, "unfinished child", subject.id);
+  if (situation === "兄弟の question に held された子") {
+    targetId = queueChild(t, "held child", subject.id).id;
+    holdChildren(t, subject.id);
+  }
+  const client = await managementMcpClient(t.baseUrl);
+  try {
+    const viaMcp: any = readToolPayload(await client.callTool({ name: "get_task", arguments: { task_id: targetId } }));
+    const viaHttp = (await api(t.baseUrl, "GET", `/api/tasks/${targetId}`)).json;
+
+    expect(viaMcp.status).toBe(status);
+    expect(viaMcp).toHaveProperty("accepted");
+    expect(viaMcp).toHaveProperty("registrant");
+    expect({ status: viaMcp.status, accepted: viaMcp.accepted, registrant: viaMcp.registrant }).toEqual({
+      status: viaHttp.status,
+      accepted: viaHttp.accepted,
+      registrant: viaHttp.registrant,
+    });
   } finally {
     await client.close();
   }
