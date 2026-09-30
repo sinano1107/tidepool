@@ -60,7 +60,7 @@ it("fresh 盤面に Memory の FTS 仮想表と、tokenizer id + 前処理の版
     sql: expect.stringMatching(/fts5\(text, title, path, tokenize = "unicode61 categories 'L\* N\* Co Mn' tokenchars '_-\.'"\)/),
   });
   expect(db.prepare("SELECT tokenizer, preprocess_version FROM memory_index_version").all()).toEqual([
-    { tokenizer: "unicode61 categories 'L* N* Co Mn' tokenchars '_-.'", preprocess_version: "cjk-bigram-8" },
+    { tokenizer: "unicode61 categories 'L* N* Co Mn' tokenchars '_-.'", preprocess_version: "cjk-bigram-9" },
   ]);
   db.close();
 });
