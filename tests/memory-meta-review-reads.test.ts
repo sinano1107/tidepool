@@ -4,18 +4,22 @@ import { appendEvent, getEvent, latestEventOfTask } from "../src/events.js";
 import {
   approveMemoryProposal,
   createBehaviorCandidate,
+  defineMemoryBranch,
   humanEntryInput,
   invalidateMemoryByMetaReview,
   invalidateMemoryEntry,
+  listMemoryBranches,
   listMemoryEntries,
   listPrecedents,
   proposeMemoryChange,
+  pullMemoryBranches,
   pullMemoryList,
   pullMemoryProposals,
   recordBehavior,
+  recordKnowledge,
   rejectMemoryProposal,
 } from "../src/memory.js";
-import { answerQuestion, getTask, logDecision, type MemoryProposal, registerTask } from "../src/tasks.js";
+import { answerQuestion, DomainError, getTask, logDecision, type MemoryProposal, registerTask } from "../src/tasks.js";
 import { bundledObjection } from "./harness.js";
 
 /** meta-review の読み口(issue #619 / ADR 0120 決定2)のドメイン層。verb への写像はサーバ境界
@@ -27,12 +31,12 @@ function board() {
   const task = registerTask(db, { type: "review", title: "t", purpose: "p", completion_criteria: "c", meta_review_subject: "memory" }, at);
   const decision = logDecision(db, task, "kept the note short", "deckhand", at);
   const reader = { taskId: task.id, agent: "auditor" };
-  const behavior = (fields: { title: string; scope?: string | null; addressee?: string | null; source?: number }) =>
+  const behavior = (fields: { title: string; scope?: string | null; addressee?: string | null; source?: number; path?: string }) =>
     createBehaviorCandidate(
       db,
       {
         scope: fields.scope ?? null,
-        path: "habits",
+        path: fields.path ?? "habits",
         title: fields.title,
         text: `${fields.title}.`,
         addressee: fields.addressee ?? null,
@@ -42,7 +46,10 @@ function board() {
       "worker",
       at,
     ).entry_id;
-  return { db, task, decision, reader, behavior };
+  const knowledge = (scope: string | null, path: string) =>
+    recordKnowledge(db, { scope, path, title: path, text: `${path}.`, source: { commit: "0a46a46" }, author: { activity: "worker_verb", name: "deckhand" } }, "worker", at).entry_id;
+  const define = (scope: string | null, path: string) => defineMemoryBranch(db, { scope, path, text: `What ${path} holds.`, author: { activity: "worker_verb", name: "deckhand" } }, "worker", at).entry_id;
+  return { db, task, decision, reader, behavior, knowledge, define };
 }
 
 it("list_memory_candidates は candidate を cause・author・出所つきで返し、include_invalidated で無効化済みを理由コードと後継ごと足す。pull は memory_pulled に載る", () => {
@@ -242,6 +249,78 @@ it("一覧はページ長で切り、truncated が次のページを言う", () 
   const second = pullMemoryList(db, reader, "list_memory_candidates", { page: 2 }, at);
   expect([first.entries.length, first.truncated]).toEqual([20, true]);
   expect([second.entries.map((e) => e.id), second.truncated]).toEqual([[ids[20]], false]);
+});
+
+it("list_memory_entries の path は P とその配下 P/… だけを返して P-x を返さず、scope / kind / state と同時に効く —— NFD の入力は NFC の枝に当たり、不正な path は domain error(#1209)", () => {
+  const { db, behavior, knowledge, define } = board();
+  const own = knowledge("tidepool", "habits");
+  const child = knowledge("tidepool", "habits/tests");
+  const other = knowledge("charts", "habits/tests");
+  knowledge("tidepool", "habits-x");
+  const candidate = behavior({ title: "Short notes", scope: "tidepool" });
+  const defined = define("tidepool", "habits");
+  const guide = knowledge("tidepool", "ガイド");
+  const ids = (filter: Parameters<typeof listMemoryEntries>[1]) => listMemoryEntries(db, filter).map((e) => e.id);
+
+  expect(ids({ path: "habits" })).toEqual([own, child, other, candidate, defined]);
+  expect(ids({ path: "habits", scope: "tidepool" })).toEqual([own, child, candidate, defined]);
+  expect(ids({ path: "habits", kind: "definition" })).toEqual([defined]);
+  expect(ids({ path: "habits", state: "candidate" })).toEqual([candidate]);
+  expect(ids({ path: "ガイド".normalize("NFD") })).toEqual([guide]);
+  expect(() => listMemoryEntries(db, { path: "habits/" })).toThrow(DomainError);
+});
+
+/** 行の scope の欄は集合として比べる(並びは言わない)。 */
+const branchRows = (rows: ReturnType<typeof listMemoryBranches>) => rows.map((row) => ({ ...row, scopes: new Set(row.scopes) }));
+
+it("枝の一覧は approved・未無効化のエントリ(宛先つきも)の path とその上位の prefix を1枝1行・木の順で返し、candidate だけ・無効化済みだけの path は行を作らない —— 未定義の枝は Definition の欄が空で scope の欄に配下の scope(盤面全体は null)が並ぶ(#1209)", () => {
+  const { db, behavior, knowledge } = board();
+  knowledge("tidepool", "a");
+  knowledge("tidepool", "a-x");
+  knowledge("charts", "a/b/c");
+  knowledge(null, "a/b");
+  behavior({ title: "Short notes", scope: "tidepool", path: "pending" });
+  invalidateMemoryEntry(db, { entry_id: knowledge("tidepool", "gone"), reason: "environment" }, "human", "webui", at);
+  recordBehavior(db, humanEntryInput(db, { workspace: "charts", path: "addressed", title: "Pin Node", text: "Pin Node 22.", addressee: "deckhand" }), "webui", at);
+
+  expect(branchRows(listMemoryBranches(db))).toEqual([
+    { path: "a", definitions: [], scopes: new Set(["tidepool", "charts", null]) },
+    { path: "a/b", definitions: [], scopes: new Set(["charts", null]) },
+    { path: "a/b/c", definitions: [], scopes: new Set(["charts"]) },
+    { path: "a-x", definitions: [], scopes: new Set(["tidepool"]) },
+    { path: "addressed", definitions: [], scopes: new Set(["charts"]) },
+  ]);
+});
+
+it("枝の一覧の行はその path の Definition をすべて並べ(同じ path を定義する workspace が2つなら2つ)、scope の欄は Definition もエントリとして数える —— 子の枝の Definition だけを持つ workspace も親の行に並ぶ(#1209)", () => {
+  const { db, knowledge, define } = board();
+  const tidepool = define("tidepool", "tools");
+  const charts = define("charts", "tools");
+  const docs = define(null, "docs");
+  knowledge(null, "build/x");
+  const child = define("charts", "build/y");
+
+  const definition = (id: number, scope: string | null, path: string) => ({ id, scope, text: `What ${path} holds.`, original: null });
+  expect(branchRows(listMemoryBranches(db))).toEqual([
+    { path: "build", definitions: [], scopes: new Set([null, "charts"]) },
+    { path: "build/x", definitions: [], scopes: new Set([null]) },
+    { path: "build/y", definitions: [definition(child, "charts", "build/y")], scopes: new Set(["charts"]) },
+    { path: "docs", definitions: [definition(docs, null, "docs")], scopes: new Set([null]) },
+    { path: "tools", definitions: [definition(tidepool, "tidepool", "tools"), definition(charts, "charts", "tools")], scopes: new Set(["tidepool", "charts"]) },
+  ]);
+});
+
+it("meta-review の枝の一覧は memory_pulled を残して返した id = 行の Definition の id とし、Definition の原文 original を運ばない(#1209)", () => {
+  const { db, reader, knowledge, define } = board();
+  knowledge("tidepool", "build/tests");
+  const human = defineMemoryBranch(db, humanEntryInput(db, { workspace: "tidepool", path: "tools", text: "Tools.", original_text: "道具" }), "webui", at).entry_id;
+  const whole = define(null, "docs");
+
+  const pulled = pullMemoryBranches(db, reader, at);
+
+  expect(pulled.branches.map((row) => row.definitions)).toEqual([[], [], [{ id: whole, scope: null, text: "What docs holds." }], [{ id: human, scope: "tidepool", text: "Tools." }]]);
+  expect(listMemoryBranches(db).find((row) => row.path === "tools")!.definitions[0]!.original).toMatchObject({ text: "道具" });
+  expect(getEvent(db, pulled.event_id)!.payload).toMatchObject({ kind: "memory_pulled", verb: "list_memory_branches", input: {}, returned_ids: [whole, human] });
 });
 
 /** setup のみ: 1 marker = 1 episode の直挿しで異議つき decision を安く並べる(#356 の投影は使わない)。異議の event id と decision を返す。 */

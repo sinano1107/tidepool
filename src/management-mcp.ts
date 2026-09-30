@@ -34,7 +34,7 @@ import {
   submitAnswer,
 } from "./human-verbs.js";
 import { type Landing, landingAnnotation } from "./landing.js";
-import { toolError, toolResult } from "./mcp.js";
+import { MEMORY_BRANCHES_DESCRIPTION, toolError, toolResult } from "./mcp.js";
 import {
   changeMemorySettings,
   defineMemoryBranch,
@@ -46,6 +46,7 @@ import {
   humanKnowledgeSchema,
   invalidateMemoryEntry,
   invalidationSchema,
+  listMemoryBranches,
   memoryBranchMoveSchema,
   memoryFoldSchema,
   memoryListFilterSchema,
@@ -610,11 +611,17 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
         "List the board's memory entries, including candidates, invalidated ones (with invalidation_reason and successor_id) and the ids each entry replaced (replaced_ids). " +
         "workspace matches exactly; board_wide lists only board-wide entries; " +
         "state invalidated lists invalidated entries, approved / candidate the rest. On a board with a registry each entry carries orphaned: " +
-        "\"addressee\", \"scope\" or \"both\" when its addressee agent or scope workspace is no longer registered, null otherwise.",
+        "\"addressee\", \"scope\" or \"both\" when its addressee agent or scope workspace is no longer registered, null otherwise. " +
+        "path lists only the entries at that branch or under it (path/…).",
       inputSchema: memoryListFilterSchema.extend({ board_wide: z.boolean().optional() }).shape,
     },
     async ({ workspace, board_wide, ...filter }) =>
       toolResult(listMemoryEntriesForHuman(deps, { ...filter, scope: board_wide ? null : workspace })),
+  );
+  server.registerTool(
+    "list_memory_branches",
+    { description: `${MEMORY_BRANCHES_DESCRIPTION} Each Definition carries the human's original wording (original) when it has one.` },
+    async () => toolResult({ branches: listMemoryBranches(deps.db) }),
   );
   server.registerTool(
     "record_knowledge",
