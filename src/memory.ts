@@ -1149,6 +1149,7 @@ export function listMemoryEntries(
     }));
 }
 
+/** CJK の連なり。捕獲グループは ftsQuery の split が連なりを結果に残すためにある(外すと CJK の語が query から消える)。 */
 const CJK_RUN = /([\p{scx=Han}\p{scx=Hiragana}\p{scx=Katakana}\p{scx=Hangul}]+)/gu;
 
 /** 索引と query の共通の前処理(spec #586 B / #606 / #608 / #610)。まず CJK の連なりを重なりつきの2文字語に割り(LWC 式)
