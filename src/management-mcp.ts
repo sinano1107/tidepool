@@ -93,6 +93,7 @@ import {
   listBoard,
   listQueue,
   listYourTasks,
+  presentTask,
 } from "./tasks.js";
 import { sessionInTeardown } from "./teardown.js";
 import type { PendingReclaim } from "./watchdog.js";
@@ -303,7 +304,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
     async ({ task_id }) => {
       const task = getTask(deps.db, task_id);
       if (!task) return toolError("task not found");
-      return toolResult({ ...task, ...(task.type === "question" && questionAnnotations(deps.db, task)), events: listEvents(deps.db, task.id) });
+      return toolResult({ ...presentTask(deps.db, task), ...(task.type === "question" && questionAnnotations(deps.db, task)), events: listEvents(deps.db, task.id) });
     },
   );
   server.registerTool(
