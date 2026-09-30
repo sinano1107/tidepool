@@ -342,11 +342,7 @@ function TpQuestionCard({ q, answer, onAnswer, locked = false, onTranslate }) {
   const [amendment, setAmendment] = React.useState({});
   const [deadAddressee, setDeadAddressee] = React.useState(false);
   const [comment, setComment] = React.useState("");
-  const setItemAnswer = (i, value) => {
-    const next = draft.slice();
-    next[i] = value;
-    setDraft(next);
-  };
+  const setItemAnswer = (i, value) => setDraft(draft.map((v, j) => j === i ? value : v));
   const disabledOptions = [...comment.trim() ? [] : q.needsComment ?? [], ...deadAddressee ? ["approve"] : []];
   const canSubmit = draft.every(Boolean) && !disabledOptions.includes(draft[0]);
   const [submitting, setSubmitting] = React.useState(false);

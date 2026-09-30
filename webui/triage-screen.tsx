@@ -359,11 +359,7 @@ function TpQuestionCard({ q, answer, onAnswer, locked = false, onTranslate }: {
   const [amendment, setAmendment] = React.useState<TpAmendment>({});
   const [deadAddressee, setDeadAddressee] = React.useState(false);
   const [comment, setComment] = React.useState('');
-  const setItemAnswer = (i: number, value: string | null) => {
-    const next = draft.slice();
-    next[i] = value;
-    setDraft(next);
-  };
+  const setItemAnswer = (i: number, value: string | null) => setDraft(draft.map((v, j) => (j === i ? value : v)));
   const disabledOptions = [...(comment.trim() ? [] : q.needsComment ?? []), ...(deadAddressee ? ['approve'] : [])];
   // a pick made before the comment was cleared or the addressee turned out dead is not submittable
   const canSubmit = draft.every(Boolean) && !disabledOptions.includes(draft[0]!);
