@@ -617,7 +617,9 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
     {
       description:
         "Define a memory branch: one line at the branch's path declaring what is filed under it. A branch has one definition per " +
-        "workspace: to revise it, include the current one in supersedes. text is the English canonical line; original_text is optional. " +
+        "workspace: to revise it, include the current one in supersedes. supersedes may list definitions at other paths only when " +
+        "this path already has a definition in this workspace (list it too): that merges the branches. To rename a branch, move it " +
+        "with move_memory_branch. text is the English canonical line; original_text is optional. " +
         `${supersedesEffect} ${writtenAs}`,
       inputSchema: humanDefinitionSchema.shape,
     },
@@ -690,7 +692,8 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
   const moveEffect =
     "The board copies the body — title, text, originals, addressee, annotations, source, author, state and approval — to the new place " +
     "and invalidates the old entry as path_moved; you are recorded as the one who moved it. A candidate stays a candidate. A Definition " +
-    "cannot move onto a branch that already has a live Definition in that scope: fold the two instead.";
+    "cannot move onto a branch that already has a live Definition in that scope: fold the two instead. A Definition's path changes " +
+    "only with move_memory_branch, which carries the entries under it; move_memory_entry changes only its workspace.";
   server.registerTool(
     "move_memory_entry",
     {

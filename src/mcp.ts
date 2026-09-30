@@ -21,6 +21,7 @@ import {
   memoryScope,
   metaReviewAnnotationSchema,
   metaReviewInvalidationSchema,
+  moveMemoryBranchByMetaReview,
   moveMemoryByMetaReview,
   proposeMemoryChange,
   pullMemoryList,
@@ -967,7 +968,10 @@ function registerMemoryMetaReviewVerbs(server: McpServer, deps: McpDeps, run: Me
       description:
         "Draft or revise a branch definition in the given scope: one line declaring what is filed under the path. " +
         "A branch has one definition per scope; revise it with supersedes, or list several definitions to consolidate into this one. " +
-        "supersedes may point at a definition at another path, but only in the same scope or, when this definition is whole-board, in any scope. " +
+        "supersedes may list definitions at other paths only when this path already has a definition (list it too): that " +
+        "merges the branches, and what is left under the old paths is moved with move_memory_branch afterwards. To rename " +
+        "a branch, move it with move_memory_branch and then revise its definition in place. A definition in supersedes must " +
+        "be in the same scope or, when this definition is whole-board, in any scope. " +
         "To override a whole-board definition for one workspace, write the workspace definition without supersedes: it shadows the whole-board one there. " +
         BOARD_WRITE_LANGUAGE_RULE,
       inputSchema: { scope, path: z.string(), definition: z.string(), supersedes: z.array(z.number().int()).min(1).optional() },
@@ -1018,12 +1022,33 @@ function registerMemoryMetaReviewVerbs(server: McpServer, deps: McpDeps, run: Me
     "move_memory",
     {
       description:
-        "Move a Knowledge entry to another scope and path: the board copies it — title, text, source and author included — into a new " +
-        "entry and invalidates the old one as path_moved. Definitions, Behaviors and Exemplars cannot be moved here.",
+        "Move one entry to another path in its scope, or widen it to the whole board: the board copies it — title, text, " +
+        "source, author, state and approval included — into a new entry and invalidates the old one as path_moved. Any kind, " +
+        "approved or candidate. scope is the entry's own scope or null (whole-board). Refused: narrowing to a workspace or " +
+        "moving between workspaces; changing the scope of an approved Behavior or Exemplar, or of an entry an open proposal " +
+        "question names; changing a Definition's path (use move_memory_branch).",
       inputSchema: { entry_id: z.number().int(), scope, path: z.string() },
     },
     async (input) =>
       run((reader, now) => moveMemoryByMetaReview(deps.db, { ...input, scope: registeredScope(deps, input.scope), mover: author(reader) }, "worker", now)),
+  );
+
+  server.registerTool(
+    "move_memory_branch",
+    {
+      description:
+        "Move a branch — every live entry at path or under it in scope — to to_path in to_scope, in one step. This is how " +
+        "a branch is renamed. to_scope is scope or null (whole-board); widening is refused as a whole when the branch holds " +
+        "an approved Behavior or Exemplar or an entry an open proposal question names. Refused when a moved Definition would " +
+        "land on a branch already defined there: merge the two Definitions first (define_memory's supersedes or " +
+        "fold_memory's successor_id), then move what is left. Returns each old id with its copy's id.",
+      inputSchema: { scope, path: z.string(), to_scope: scope, to_path: z.string() },
+    },
+    // 照合は行き先の scope だけ —— 移動元は完全一致で行を引くだけ(人間の面の枝ごとの移動と同じ、ADR 0173 決定2)
+    async (input) =>
+      run((reader, now) =>
+        moveMemoryBranchByMetaReview(deps.db, { ...input, to_scope: registeredScope(deps, input.to_scope), mover: author(reader) }, "worker", now),
+      ),
   );
 
   server.registerTool(
@@ -1032,7 +1057,7 @@ function registerMemoryMetaReviewVerbs(server: McpServer, deps: McpDeps, run: Me
       description:
         "Drop a candidate (Behavior or Exemplar), Knowledge entry, or Definition with no successor. reason is " +
         "capability / environment / requirement_change, or rejected — only for a candidate that will become neither a Behavior nor an Exemplar. " +
-        "To replace an entry, use fold_memory, define_memory's supersedes, or move_memory. " +
+        "To replace an entry, use fold_memory, define_memory's supersedes, move_memory or move_memory_branch. " +
         "An approved Behavior or Exemplar cannot be invalidated here — propose it instead.",
       inputSchema: metaReviewInvalidationSchema.extend({ entry_id: z.number().int() }),
     },

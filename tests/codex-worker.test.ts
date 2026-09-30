@@ -302,6 +302,7 @@ describe("CodexWorker (ADR 0098)", () => {
       "define_memory",
       "fold_memory",
       "move_memory",
+      "move_memory_branch",
       "invalidate_memory",
       "propose_memory_change",
     ]);

@@ -346,10 +346,27 @@ it("同じ枝の定義は supersedes にその生きた定義を含めれば書�
   ]);
 });
 
-it("定義の別の枝への付け替えは、枝の改名が移動(path_moved + 複製)、別の枝への統合が superseded + 後継", () => {
+it("定義の書き込みの supersedes が別 path の定義を置き換えられるのは、書く先の同じ scope・path に生きた定義があるとき(枝の統合)だけ —— 定義の無い path(盤面全体の定義は workspace の書き込みにとって数えない)への付け替えは domain error で枝ごとの移動へ案内し、何も書かない(ADR 0176 決定6)", () => {
   const { db } = board();
   const old = defineMemoryBranch(db, definition, "worker", at).entry_id;
-  const renamed = moveMemory(db, { entry_id: old, scope: "tidepool", path: "toolchain", mover: human }, "webui", at).entry_id;
+  defineMemoryBranch(db, { ...definition, scope: null, path: "toolchain", text: "The board's toolchain." }, "worker", at);
+  const before = listMemoryEntries(db, {});
+
+  expect(() => defineMemoryBranch(db, { ...definition, path: "toolchain", text: "The toolchain.", supersedes: [old] }, "webui", at)).toThrow(/move_memory_branch/);
+  expect(listMemoryEntries(db, {})).toEqual(before);
+
+  const target = defineMemoryBranch(db, { ...definition, path: "toolchain", text: "The toolchain." }, "worker", at).entry_id;
+  const merged = defineMemoryBranch(db, { ...definition, path: "toolchain", text: "How it builds, with which toolchain.", supersedes: [old, target] }, "webui", at).entry_id;
+  expect(listMemoryEntries(db, { state: "invalidated" })).toMatchObject([
+    { id: old, invalidation_reason: "superseded", successor_id: merged },
+    { id: target, invalidation_reason: "superseded", successor_id: merged },
+  ]);
+});
+
+it("定義の別の枝への付け替えは、枝の改名が枝ごとの移動(path_moved + 複製)、別の枝への統合が superseded + 後継(ADR 0176 決定7)", () => {
+  const { db } = board();
+  defineMemoryBranch(db, definition, "worker", at);
+  const renamed = moveMemoryBranch(db, { scope: "tidepool", path: "build", to_scope: "tidepool", to_path: "toolchain", mover: human }, "webui", at).moved[0]!.successor_id;
   const merged = defineMemoryBranch(db, { ...definition, path: "ci" }, "worker", at).entry_id;
   invalidateMemoryEntry(db, { entry_id: renamed, reason: "superseded", successor_id: merged }, "human", "webui", at);
   expect(approvedMemoryEntries(db).map((e) => e.id)).toEqual([merged]);
@@ -1140,7 +1157,7 @@ function movable() {
   return db;
 }
 
-it("移動は4種別の未無効化の approved / candidate を写し、複製は本文の側(書き手・状態・出所・版・宛先・注釈・原文)を継いで scope と path だけを変え、旧は path_moved + 複製 —— 移した者は両方の event の activity に載る(ADR 0162 決定4・5)", () => {
+it("移動は4種別の未無効化の approved / candidate を写し、複製は本文の側(書き手・状態・出所・版・宛先・注釈・原文)を継いで scope と path(Definition は scope)だけを変え、旧は path_moved + 複製 —— 移した者は両方の event の activity に載る(ADR 0162 決定4・5 / ADR 0176 決定7)", () => {
   const db = movable();
   const before = listMemoryEntries(db, {});
   expect(before.map((e) => [e.kind, e.state])).toEqual([
@@ -1155,12 +1172,13 @@ it("移動は4種別の未無効化の approved / candidate を写し、複製�
   // 自身の宣言の出所(人間の Knowledge・Definition・出所を添えない人間の Behavior)は、複製では複製自身の作成 event(ADR 0162 追記)
   expect(before.filter((e) => e.source.ref === e.id).map((e) => e.kind)).toEqual(["knowledge", "definition", "behavior"]);
 
-  const copies = before.map(({ id }) => moveMemory(db, { entry_id: id, scope: null, path: "moved/here", mover: human }, "webui", at).entry_id);
+  const place = (old: (typeof before)[number]) => (old.kind === "definition" ? old.path : "moved/here");
+  const copies = before.map((old) => moveMemory(db, { entry_id: old.id, scope: null, path: place(old), mover: human }, "webui", at).entry_id);
 
   const after = new Map(listMemoryEntries(db, {}).map((e) => [e.id, e]));
   before.forEach((old, i) => {
     const copy = copies[i]!;
-    expect(after.get(copy)).toEqual({ ...old, id: copy, scope: null, path: "moved/here", source: old.source.ref === old.id ? { kind: "event", ref: copy } : old.source });
+    expect(after.get(copy)).toEqual({ ...old, id: copy, scope: null, path: place(old), source: old.source.ref === old.id ? { kind: "event", ref: copy } : old.source });
     expect(after.get(old.id)).toMatchObject({ invalidation_reason: "path_moved", successor_id: copy, invalidated_by: { activity: "human" } });
     expect(getEvent(db, copy)).toMatchObject({ worker_id: "human", payload: { kind: "memory_entry_created", activity: "human", entry: { author: old.author } } });
   });
@@ -1181,16 +1199,30 @@ it("移動先が今の置き場と同じ・無効化済み・存在しないエ�
   expect(listMemoryEntries(db, {})).toEqual(before);
 });
 
-it("Definition を生きた Definition のある path / scope へ移すと domain error で畳むよう促し、何も変わらない —— scope が違えば移せる", () => {
+it("エントリ1件の移動は Definition の path を変えると domain error で枝ごとの移動へ案内して何も変わらず、path が同じで scope だけを変える移動は通る(ADR 0176 決定7)", () => {
   const { db } = board();
-  const moving = defineMemoryBranch(db, definition, "worker", at).entry_id;
-  defineMemoryBranch(db, { ...definition, path: "toolchain", text: "The toolchain." }, "worker", at);
+  const branch = defineMemoryBranch(db, definition, "worker", at).entry_id;
   const before = listMemoryEntries(db, {});
 
-  expect(() => moveMemory(db, { entry_id: moving, scope: "tidepool", path: "toolchain", mover: human }, "webui", at)).toThrow(/fold/);
+  for (const scope of ["tidepool", null]) {
+    expect(() => moveMemory(db, { entry_id: branch, scope, path: "toolchain", mover: human }, "webui", at)).toThrow(/move_memory_branch/);
+  }
   expect(listMemoryEntries(db, {})).toEqual(before);
-  moveMemory(db, { entry_id: moving, scope: null, path: "toolchain", mover: human }, "webui", at);
-  expect(approvedMemoryEntries(db).map((e) => [e.scope, e.path])).toEqual([["tidepool", "toolchain"], [null, "toolchain"]]);
+
+  const widened = moveMemory(db, { entry_id: branch, scope: null, path: "build", mover: human }, "webui", at).entry_id;
+  expect(approvedMemoryEntries(db)).toMatchObject([{ id: widened, kind: "definition", scope: null, path: "build" }]);
+});
+
+it("Definition を生きた Definition のある scope へ移すと domain error で畳むよう促し、何も変わらない —— 別の scope なら移せる", () => {
+  const { db } = board();
+  const moving = defineMemoryBranch(db, definition, "worker", at).entry_id;
+  defineMemoryBranch(db, { ...definition, scope: null, text: "The board's build." }, "worker", at);
+  const before = listMemoryEntries(db, {});
+
+  expect(() => moveMemory(db, { entry_id: moving, scope: null, path: "build", mover: human }, "webui", at)).toThrow(/fold/);
+  expect(listMemoryEntries(db, {})).toEqual(before);
+  moveMemory(db, { entry_id: moving, scope: "charts", path: "build", mover: human }, "webui", at);
+  expect(approvedMemoryEntries(db).map((e) => [e.scope, e.path])).toEqual([[null, "build"], ["charts", "build"]]);
 });
 
 it("枝ごとの移動は移動元の scope(完全一致)で path が P か P/… の未無効化エントリを4種別とも to_scope の to_path + 残りへ写し、旧 id → 複製の id を返す —— 無効化済み・隣の枝・別の scope は残る", () => {
@@ -1240,7 +1272,7 @@ it("枝ごとの移動は、移される Definition の置き場に生きた Def
 
 it("watermark 再生と rebuild は移した複製(1件・枝ごと、2度の移動も)を表と同じ版・状態・書き手・出所に戻す", () => {
   const db = movable();
-  for (const { id } of listMemoryEntries(db, {})) moveMemory(db, { entry_id: id, scope: "charts", path: "moved", mover: human }, "webui", at);
+  for (const { id, kind, path } of listMemoryEntries(db, {})) moveMemory(db, { entry_id: id, scope: "charts", path: kind === "definition" ? path : "moved", mover: human }, "webui", at);
   moveMemoryBranch(db, { scope: "charts", path: "moved", to_scope: null, to_path: "again", mover: human }, "webui", at);
   const current = approvedMemoryEntries(db);
   const listed = listMemoryEntries(db, {});

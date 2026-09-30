@@ -91,7 +91,7 @@ it("直接適用4つは引数の scope(null = 盤面全体 / registry の worksp
 
     const { event_id: decision } = (await call("log_decision", { line: "the build note belongs board-wide" })).body;
     const folded = await call("fold_memory", { scope: null, path: "toolchain", title: "Node 22", text: "Use Node 22.", replaces: [material], based_on_decision: decision });
-    const moved = await call("move_memory", { entry_id: folded.body.entry_id, scope: "sandbox", path: "toolchain/node" });
+    const moved = await call("move_memory", { entry_id: folded.body.entry_id, scope: null, path: "toolchain/node" });
     expect(await call("invalidate_memory", { entry_id: boardWide.body.entry_id, reason: "requirement_change" })).toMatchObject({
       isError: false,
       body: { event_id: expect.any(Number) },
@@ -102,8 +102,25 @@ it("直接適用4つは引数の scope(null = 盤面全体 / registry の worksp
       [sandbox.body.entry_id, "sandbox", author, "superseded"],
       [boardWide.body.entry_id, null, author, "requirement_change"],
       [folded.body.entry_id, null, author, "path_moved"],
-      [moved.body.entry_id, "sandbox", author, null],
+      [moved.body.entry_id, null, author, null],
     ]);
+  } finally {
+    await client.close();
+  }
+});
+
+it("move_memory_branch は枝を to_scope の to_path へ移して旧 id → 複製の id を返し、registry に無い行き先の scope は名前つきの tool error(ADR 0176 決定1 / ADR 0173 決定2)", async () => {
+  const { client, call, material } = await boardWithMetaReview();
+  try {
+    const branch = await call("define_memory", { scope: "sandbox", path: "build", definition: "How sandbox builds." });
+
+    expect(await call("move_memory_branch", { scope: "sandbox", path: "build", to_scope: "charts", to_path: "toolchain" })).toEqual({ isError: true, body: "unknown workspace: charts" });
+    const moved = await call("move_memory_branch", { scope: "sandbox", path: "build", to_scope: null, to_path: "toolchain" });
+
+    expect(moved).toMatchObject({
+      isError: false,
+      body: { moved: [{ entry_id: material, successor_id: expect.any(Number) }, { entry_id: branch.body.entry_id, successor_id: expect.any(Number) }] },
+    });
   } finally {
     await client.close();
   }
@@ -138,7 +155,7 @@ it("define_memory の supersedes は list で、同じ scope の複数の Defini
 
     const combined = await call("define_memory", {
       scope: "sandbox",
-      path: "build-and-toolchain",
+      path: "build",
       definition: "How sandbox builds and what it uses.",
       supersedes: [build.body.entry_id, toolchain.body.entry_id],
     });
