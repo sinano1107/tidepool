@@ -7,7 +7,7 @@ import { getDisplayLanguage } from "./display-language.js";
 import { appendEvent, type EventOrigin, type EventPayload, type EventRow, getEvent, isDecisionLogEntry, listEvents, listEventsOfKinds } from "./events.js";
 import { metaReviewSubjectOf, paged, previousMetaReviewWatermark } from "./meta-review.js";
 import { entriesReadBefore, entriesSeenBefore, listEpisodes, sessionSpawnOf, sessionWindow } from "./precedent.js";
-import { BOARD_WORKER_ID, DomainError, getTask, HUMAN_WORKER_ID, type MemoryProposal, type QuestionProposal, registerTask, settleQuestionAsObserved, type Task } from "./tasks.js";
+import { approvalAnnotation, BOARD_WORKER_ID, DomainError, getTask, HUMAN_WORKER_ID, type MemoryProposal, type QuestionProposal, questionBlocking, registerTask, settleQuestionAsObserved, type Task } from "./tasks.js";
 import { entryObjections, objectedEntryText, objectionsById } from "./triage.js";
 
 /** 無効化の理由コード(spec #586 A)。自由記述は持たない。置換と path の付け替えは後継 id
@@ -770,6 +770,16 @@ export function movedPins(db: Db, proposal: QuestionProposal | null): Array<{ id
     const tail = movedTail(db, id);
     return tail.id === id ? [] : [{ id, tail_id: tail.id, path: tail.path, scope: tail.scope }];
   });
+}
+
+/** question 行が読むときに運ぶ注釈のうち、一覧と単体ビューの両方の口が足す3つ(issue #1179)。HTTP の `GET /api/tasks`・
+ *  `GET /api/tasks/:id` と管理MCP の `list_board`・`get_task` がここを呼ぶ。`landing` は一覧の口だけが別に足す。 */
+export function questionAnnotations(db: Db, task: Pick<Task, "id" | "parent_id" | "question_pending_child" | "question_proposal">) {
+  return {
+    approval: approvalAnnotation(db, task),
+    moved: movedPins(db, task.question_proposal),
+    blocking: questionBlocking(db, task.id),
+  };
 }
 
 /** pin 検査(ADR 0120 決定4): candidate が未無効化の Behavior / Exemplar candidate(invalidate op は target、既存の後継の

@@ -57,10 +57,10 @@ import {
   memoryListFilterSchema,
   memoryMoveSchema,
   memorySettingsChangeSchema,
-  movedPins,
   moveMemory,
   moveMemoryBranch,
   previewCase,
+  questionAnnotations,
   readMemorySettings,
   recordBehavior,
   recordExemplar,
@@ -105,7 +105,6 @@ import {
 } from "./scheduler.js";
 import { clearSpendDown, getSpendDown, isKnownSpendDownTarget, setSpendDown } from "./spend-down.js";
 import {
-  approvalAnnotation,
   type BoardTask,
   countUnsettledTasksReferencing,
   DEFAULT_AUDITOR_NAME,
@@ -120,7 +119,6 @@ import {
   moveTask,
   nextSlotTask,
   presentTask,
-  questionBlocking,
   type Task,
 } from "./tasks.js";
 import { sessionInTeardown } from "./teardown.js";
@@ -2023,9 +2021,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
           ? {
               ...task,
               landing: landingAnnotation(db, task),
-              approval: approvalAnnotation(db, task),
-              moved: movedPins(db, task.question_proposal),
-              blocking: questionBlocking(db, task.id),
+              ...questionAnnotations(db, task),
             }
           : task,
       ) satisfies WireContract["GET /api/tasks"],
@@ -2079,11 +2075,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     // push の単体ビューは親の行を持たない — 承認 question の判定は一覧と同じくここで載せる
     res.json({
       ...presented!,
-      ...(task.type === "question" && {
-        approval: approvalAnnotation(db, task),
-        moved: movedPins(db, task.question_proposal),
-        blocking: questionBlocking(db, task.id),
-      }),
+      ...(task.type === "question" && questionAnnotations(db, task)),
     } satisfies WireContract["GET /api/tasks/:id"]);
   });
 
