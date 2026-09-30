@@ -1854,18 +1854,18 @@ it("盤面全体のエントリが P/x にあれば workspace の Definition を
 const metaReview = { activity: "meta_review" as const, name: "auditor" };
 const workspaceKnowledge = (db: ReturnType<typeof openDb>, path: string) => recordKnowledge(db, { ...knowledge, path, source: { commit: "0a46a46" } }, "worker", at).entry_id;
 
-/** 盤面全体のエントリを置く操作ごとに、workspace の定義(返り値の defined)が塞ぐ置き場への1手(返り値の place)を組む。 */
-const placingWholeBoard: Array<[string, (db: ReturnType<typeof openDb>, task: ReturnType<typeof board>["task"]) => { defined: number; place: () => unknown }]> = [
-  ["直書きの Knowledge", (db) => ({ defined: defineMemoryBranch(db, definition, "worker", at).entry_id, place: () => recordKnowledge(db, { ...knowledge, scope: null, path: "build", source: { commit: "0a46a46" } }, "worker", at) })],
-  ["meta-review の define_memory", (db) => ({ defined: defineMemoryBranch(db, definition, "worker", at).entry_id, place: () => defineMemoryByMetaReview(db, { ...definition, scope: null, path: "build/x", author: metaReview }, "worker", at) })],
-  ["RCA が起草する Behavior candidate", (db) => ({ defined: defineMemoryBranch(db, definition, "worker", at).entry_id, place: () => candidate(db, "Rebase before push", null, null, "build/x") })],
+/** 盤面全体のエントリを置く操作ごとに、その前の setup を済ませて、workspace の定義(テストが次に書く build)が塞ぐ置き場への1手を返す。 */
+const placingWholeBoard: Array<[string, (db: ReturnType<typeof openDb>, task: ReturnType<typeof board>["task"]) => () => unknown]> = [
+  ["直書きの Knowledge", (db) => () => recordKnowledge(db, { ...knowledge, scope: null, path: "build", source: { commit: "0a46a46" } }, "worker", at)],
+  ["meta-review の define_memory", (db) => () => defineMemoryByMetaReview(db, { ...definition, scope: null, path: "build/x", author: metaReview }, "worker", at)],
+  ["RCA が起草する Behavior candidate", (db) => () => candidate(db, "Rebase before push", null, null, "build/x")],
   [
     "提案が起草する盤面全体の candidate",
     (db, task) => {
       const replaces = [candidate(db, "Keep migrations apart", "tidepool")];
       const based_on_decision = logDecision(db, task, "one rule", "auditor", at);
       const text = { scope: null, path: "build/x", title: "One rule", text: "One rule.", addressee: null };
-      return { defined: defineMemoryBranch(db, definition, "worker", at).entry_id, place: () => proposeMemoryChange(db, task.id, { op: "consolidate", text, replaces, based_on_decision, rationale: "r" }, "auditor", at) };
+      return () => proposeMemoryChange(db, task.id, { op: "consolidate", text, replaces, based_on_decision, rationale: "r" }, "auditor", at);
     },
   ],
   [
@@ -1873,22 +1873,21 @@ const placingWholeBoard: Array<[string, (db: ReturnType<typeof openDb>, task: Re
     (db, task) => {
       const replaces = [workspaceKnowledge(db, "notes")];
       const based_on_decision = logDecision(db, task, "same fact", "auditor", at);
-      const fold = { scope: null, path: "build/x", title: "Folded", text: "Folded.", replaces, based_on_decision, author: metaReview };
-      return { defined: defineMemoryBranch(db, definition, "worker", at).entry_id, place: () => foldMemory(db, task.id, fold, "worker", at) };
+      return () => foldMemory(db, task.id, { scope: null, path: "build/x", title: "Folded", text: "Folded.", replaces, based_on_decision, author: metaReview }, "worker", at);
     },
   ],
   [
     "盤面全体へ広げる1件の移動",
     (db) => {
       const entry_id = workspaceKnowledge(db, "build/x");
-      return { defined: defineMemoryBranch(db, definition, "worker", at).entry_id, place: () => moveMemory(db, { entry_id, scope: null, path: "build/x", mover: human }, "webui", at) };
+      return () => moveMemory(db, { entry_id, scope: null, path: "build/x", mover: human }, "webui", at);
     },
   ],
   [
     "盤面全体へ広げる枝ごとの移動",
     (db) => {
       workspaceKnowledge(db, "notes/x");
-      return { defined: defineMemoryBranch(db, definition, "worker", at).entry_id, place: () => moveMemoryBranch(db, { scope: "tidepool", path: "notes", to_scope: null, to_path: "build", mover: human }, "webui", at) };
+      return () => moveMemoryBranch(db, { scope: "tidepool", path: "notes", to_scope: null, to_path: "build", mover: human }, "webui", at);
     },
   ],
   [
@@ -1896,14 +1895,15 @@ const placingWholeBoard: Array<[string, (db: ReturnType<typeof openDb>, task: Re
     (db) => {
       const entry_id = recordKnowledge(db, { ...knowledge, scope: null, path: "build/x", source: { commit: "0a46a46" } }, "worker", at).entry_id;
       invalidateMemoryEntry(db, { entry_id, reason: "environment" }, "human", "webui", at);
-      return { defined: defineMemoryBranch(db, definition, "worker", at).entry_id, place: () => restoreMemoryEntry(db, { entry_id, restorer: human }, "webui", at) };
+      return () => restoreMemoryEntry(db, { entry_id, restorer: human }, "webui", at);
     },
   ],
 ];
 
 it.each(placingWholeBoard)("workspace が build を定義していれば、%s で盤面全体のエントリを build かその配下に置く操作は domain error で、塞ぐ定義を名指して何も書かない", (_, arrange) => {
   const { db, task } = board();
-  const { defined, place } = arrange(db, task);
+  const place = arrange(db, task);
+  const defined = defineMemoryBranch(db, definition, "worker", at).entry_id;
   const before = listMemoryEntries(db, {});
 
   expect(place).toThrow(DomainError);
