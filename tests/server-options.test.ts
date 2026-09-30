@@ -372,6 +372,63 @@ it("worker ログの置き場は、盤面が守っているパスと同じ1つ�
   expect(options.boardState?.map((p) => p.path)).toContain(options.logDir);
 });
 
+/** `quarantineResolvers` の2つの写像を実 registry から撃つ(#1013)。手書きの lambda で
+ *  差し替えるテストしか無いと、導出が壊れても全部緑のまま起動時の検査が codex を
+ *  黙って飛ばす。`agent()` は provider 行だけ違う agent の md を作る。
+ *  組み込みの auditor は provider を省略した展開(anthropic / moonshot、@workspace
+ *  skill が openai を外す)なので、claude-code / anthropic 側にだけ入る(実測: 名前は fugu)。 */
+const agent = (name: string, provider: string) =>
+  `---\nname: ${name}\ndescription: d\nversion: "1"\nauthority: standard\nprovider:${provider}\nskills: []\n---\nbody\n`;
+const BOTH = "\n  - name: anthropic\n  - name: openai";
+
+async function quarantineResolversFor(files: Record<string, string>) {
+  const registryDir = await makeRegistry({ ...files });
+  const options = await buildOptions({ ...composition(), registryDir, workspaceName: "tidepool", defaultAgentName: "deckhand" });
+  return options.quarantineResolvers!;
+}
+
+it("harnessContainment は entry の Provider を正準 Harness に通し、どれか1つ該当すれば返す(#1013)", async () => {
+  const { harnessContainment } = await quarantineResolversFor({
+    "agents/gpt.md": agent("gpt", " openai"),
+    "agents/both.md": agent("both", BOTH),
+  });
+  // entry の名前を canonicalHarness に通さず比べる変異: "openai" !== "codex" で codex が空になり赤
+  expect(harnessContainment?.(["codex"])).toEqual(["both", "gpt"]);
+  // some → every の変異: both がどちらの Harness にも入らなくなって赤
+  expect(harnessContainment?.(["claude-code"])).toEqual(["both", "deckhand", "fugu"]);
+});
+
+it("harnessContainment は anthropic だけの registry では codex を空で返す(#1013)", async () => {
+  const { harnessContainment } = await quarantineResolversFor({});
+  // 全 agent を返す / 絞り込みを落とす変異で赤(auditor も codex には入らない)
+  expect(harnessContainment?.(["codex"])).toEqual([]);
+});
+
+it("harnessContainment は不正な定義の agent を throw せず除く(#1013)", async () => {
+  const { harnessContainment } = await quarantineResolversFor({
+    "agents/bogus.md": agent("bogus", " bogus"),
+  });
+  // assertValidAgentDefinition の門を外すと canonicalHarness が未知の Provider で落ち、
+  // throw して赤。registry の読み込みは倒れない(ADR 0097 決定3)
+  expect(harnessContainment?.(["claude-code"])).toEqual(["deckhand", "fugu"]);
+});
+
+it("providerAuth は entry の Provider 名を文字列のまま突き合わせ、どれか1つ該当すれば返す(#1013)", async () => {
+  const { providerAuth } = await quarantineResolversFor({
+    "agents/gpt.md": agent("gpt", " openai"),
+    "agents/both.md": agent("both", BOTH),
+  });
+  // some → every の変異: both が落ちて赤。全 agent を返す変異は下の anthropic 側で赤
+  expect(providerAuth?.(["openai"])).toEqual(["both", "gpt"]);
+  expect(providerAuth?.(["anthropic"])).toEqual(["both", "deckhand", "fugu"]);
+});
+
+it("providerAuth は anthropic だけの registry では openai を空で返す(#1013)", async () => {
+  const { providerAuth } = await quarantineResolversFor({});
+  // 常に全 agent を返す変異で赤
+  expect(providerAuth?.(["openai"])).toEqual([]);
+});
+
 /** 上の網羅テストは `registryDir` 未設定で走る — registry 由来の口が**すべて**
  *  そこ1つに掛かっているので、13本の解決子はどれも早期 return しか通らない。
  *  つまりキーが揃っていることは分かっても、**どのキーにどの解決子が刺さって
