@@ -1912,6 +1912,47 @@ it.each(placingWholeBoard)("workspace が build を定義していれば、%s �
   expect(listMemoryEntries(db, {})).toEqual(before);
 });
 
+/** workspace の Definition を置く操作ごとに setup を済ませ、盤面全体の leaf(テストが次に書く build/x)の上位に定義を置く1手を返す。 */
+const placingWorkspaceDefinition: Array<[string, (db: ReturnType<typeof openDb>) => { place: () => unknown; named: string }]> = [
+  [
+    "盤面全体の Definition を workspace へ狭める1件の移動",
+    (db) => {
+      const entry_id = defineMemoryBranch(db, { ...definition, scope: null }, "worker", at).entry_id;
+      return { place: () => moveMemory(db, { entry_id, scope: "tidepool", path: "build", mover: human }, "webui", at), named: `workspace definition ${entry_id} moving to build in scope tidepool` };
+    },
+  ],
+  [
+    "workspace の枝ごとの移動",
+    (db) => {
+      const entry_id = defineMemoryBranch(db, { ...definition, path: "notes" }, "worker", at).entry_id;
+      return {
+        place: () => moveMemoryBranch(db, { scope: "tidepool", path: "notes", to_scope: "tidepool", to_path: "build", mover: human }, "webui", at),
+        named: `workspace definition ${entry_id} moving to build in scope tidepool`,
+      };
+    },
+  ],
+  [
+    "workspace の Definition の復元",
+    (db) => {
+      const entry_id = defineMemoryBranch(db, definition, "worker", at).entry_id;
+      invalidateMemoryEntry(db, { entry_id, reason: "environment" }, "human", "webui", at);
+      return { place: () => restoreMemoryEntry(db, { entry_id, restorer: human }, "webui", at), named: "the workspace definition being placed at build in scope tidepool" };
+    },
+  ],
+];
+
+it.each(placingWorkspaceDefinition)("盤面全体の leaf が build/x にあれば、%s で workspace の Definition を build に置く操作は domain error で、当たった組を名指して何も書かない", (_, arrange) => {
+  const { db } = board();
+  const { place, named } = arrange(db);
+  const leaf = recordKnowledge(db, { ...knowledge, scope: null, path: "build/x", source: { commit: "0a46a46" } }, "worker", at).entry_id;
+  const before = listMemoryEntries(db, {});
+
+  expect(place).toThrow(DomainError);
+  expect(place).toThrow(`whole-board knowledge entry ${leaf} at build/x lies at or under ${named}`);
+  expect(place).toThrow(/file under the branch as it is, or define a sub-branch/);
+  expect(listMemoryEntries(db, {})).toEqual(before);
+});
+
 it("盤面全体の Definition を書き、その path の workspace の Definition をすべて supersedes に並べる書き込みは1手で通る —— 1つ漏らせば漏れた定義を名指して拒み、何も書かない(ADR 0178 決定5)", () => {
   const { db } = board();
   const [tidepool, charts] = ["tidepool", "charts"].map((scope) => defineMemoryBranch(db, { ...definition, scope }, "worker", at).entry_id) as [number, number];
@@ -1942,15 +1983,15 @@ it("人間が盤面全体の Definition を workspace の Definition で置き�
 it("盤面全体 → 盤面全体の枝ごとの移動が運ぶ workspace の子の定義が行き先の盤面全体のエントリに当たれば、当たった組をすべて名指して全体を拒み、何も書かない(ADR 0178 決定5 / ADR 0177 決定5)", () => {
   const { db } = board();
   defineMemoryBranch(db, { ...definition, scope: null }, "worker", at);
-  defineMemoryBranch(db, { ...definition, path: "build/tests" }, "worker", at);
-  defineMemoryBranch(db, { ...definition, scope: "charts", path: "build/lint" }, "worker", at);
+  const tidepoolTests = defineMemoryBranch(db, { ...definition, path: "build/tests" }, "worker", at).entry_id;
+  const chartsLint = defineMemoryBranch(db, { ...definition, scope: "charts", path: "build/lint" }, "worker", at).entry_id;
   const [tests, lint] = ["ci/tests", "ci/lint"].map((path) => recordKnowledge(db, { ...knowledge, scope: null, path, source: { commit: "0a46a46" } }, "worker", at).entry_id);
   const before = listMemoryEntries(db, {});
   const move = () => moveMemoryBranch(db, { scope: null, path: "build", to_scope: null, to_path: "ci", mover: human }, "webui", at);
 
   expect(move).toThrow(
-    `whole-board knowledge entry ${tests} at ci/tests lies at or under the workspace definition being placed at ci/tests in scope tidepool; ` +
-      `whole-board knowledge entry ${lint} at ci/lint lies at or under the workspace definition being placed at ci/lint in scope charts: `,
+    `whole-board knowledge entry ${tests} at ci/tests lies at or under workspace definition ${tidepoolTests} moving to ci/tests in scope tidepool; ` +
+      `whole-board knowledge entry ${lint} at ci/lint lies at or under workspace definition ${chartsLint} moving to ci/lint in scope charts: `,
   );
   expect(move).toThrow(/rename the workspace branch with move_memory_branch, or choose another path/);
   expect(listMemoryEntries(db, {})).toEqual(before);

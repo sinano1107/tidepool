@@ -216,23 +216,46 @@ function writeSuperseding(
 function requireOneTree(db: Db, since: number): void {
   const pairs = db
     .prepare(
-      `SELECT e.id AS e_id, e.kind AS e_kind, e.path AS e_path, d.id AS d_id, d.path AS d_path, d.scope AS d_scope
+      `SELECT e.id AS e_id, e.kind AS e_kind, e.path AS e_path, ef.id AS e_from,
+              d.id AS d_id, d.path AS d_path, d.scope AS d_scope, df.id AS d_from
          FROM memory_entries e JOIN memory_entries d
            ON d.kind = 'definition' AND d.scope IS NOT NULL AND d.invalidation_reason IS NULL
           AND (e.path = d.path OR substr(e.path, 1, length(d.path) + 1) = d.path || '/')
+         LEFT JOIN memory_entries ef ON ef.invalidation_reason = 'path_moved' AND ef.successor_id = e.id
+         LEFT JOIN memory_entries df ON df.invalidation_reason = 'path_moved' AND df.successor_id = d.id
         WHERE e.scope IS NULL AND e.invalidation_reason IS NULL AND (e.id > ? OR d.id > ?)
         ORDER BY e.id, d.id`,
     )
-    .all(since, since) as Array<{ e_id: number; e_kind: string; e_path: string; d_id: number; d_path: string; d_scope: string }>;
+    .all(since, since) as Array<{
+    e_id: number;
+    e_kind: string;
+    e_path: string;
+    e_from: number | null;
+    d_id: number;
+    d_path: string;
+    d_scope: string;
+    d_from: number | null;
+  }>;
   if (pairs.length === 0) return;
-  const named = pairs.map(({ e_id, e_kind, e_path, d_id, d_path, d_scope }) => {
-    const entry = e_id > since ? `the whole-board ${e_kind} being placed at ${e_path}` : `whole-board ${e_kind} entry ${e_id} at ${e_path}`;
-    const def = d_id > since ? `the workspace definition being placed at ${d_path} in scope ${d_scope}` : `workspace definition ${d_id} at ${d_path} in scope ${d_scope}`;
+  // 置かれる側は巻き戻る id でなく、移動なら移動元の id で名指す
+  const hits = pairs.map((p) => {
+    const entry =
+      p.e_id <= since
+        ? `whole-board ${p.e_kind} entry ${p.e_id} at ${p.e_path}`
+        : p.e_from === null
+          ? `the whole-board ${p.e_kind} being placed at ${p.e_path}`
+          : `whole-board ${p.e_kind} entry ${p.e_from} moving to ${p.e_path}`;
+    const def =
+      p.d_id <= since
+        ? `workspace definition ${p.d_id} at ${p.d_path} in scope ${p.d_scope}`
+        : p.d_from === null
+          ? `the workspace definition being placed at ${p.d_path} in scope ${p.d_scope}`
+          : `workspace definition ${p.d_from} moving to ${p.d_path} in scope ${p.d_scope}`;
     return `${entry} lies at or under ${def}`;
   });
   const placesWholeBoard = db.prepare("SELECT 1 FROM memory_entries WHERE scope IS NULL AND id > ?").get(since) !== undefined;
   throw new DomainError(
-    `${named.join("; ")}: a workspace cannot define a path that holds whole-board entries at or under it — ` +
+    `${hits.join("; ")}: a workspace cannot define a path that holds whole-board entries at or under it — ` +
       (placesWholeBoard
         ? "write a whole-board definition at the workspace definition's path with supersedes, rename the workspace branch with move_memory_branch, or choose another path"
         : "file under the branch as it is, or define a sub-branch"),
@@ -318,8 +341,9 @@ function requireCovers(successor: { scope: string | null; addressee: string | nu
 
 /** meta-review の畳み(issue #619 / ADR 0122 決定1 / ADR 0161 決定2・6): foldMemoryEntries に meta-review の門を掛ける。
  *  後継は新しく書く Knowledge(`based_on_decision` の decision(推論)を出所に)か、既にある approved の `successor_id` のどちらか一方で、
- *  どちらも replaces を覆う(requireCovers)。組(Knowledge → Knowledge、Definition → Definition、Behavior / Exemplar ↔)は種別の線が
- *  持ち、approved の Behavior / Exemplar は承認の線なので consolidate の提案へ回す。 */
+ *  どちらも replaces を覆う(requireCovers)。組(Knowledge → Knowledge、Behavior / Exemplar ↔)は種別の線が持ち、approved の
+ *  Behavior / Exemplar は承認の線なので consolidate の提案へ回す。Definition → Definition は同じ path に限られ、覆う後継(盤面全体か
+ *  同じ scope)は同じ path に並べない(ADR 0178)ので、ここでは起きない。 */
 export function foldMemory(
   db: Db,
   metaReviewId: string,
