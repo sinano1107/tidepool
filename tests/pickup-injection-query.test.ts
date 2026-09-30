@@ -48,10 +48,17 @@ it.each([
   expect(t.worker.startedQueries).toEqual([undefined]);
 });
 
-it.each([
-  ["翻訳 client の無い盤面", undefined],
-  ["Provider anthropic が使えない間", new FakeTranslationClient()],
-])("%s は翻訳を撃たず、理由 throttled を start に渡し、spawn は成立する", async (_, translationClient) => {
+it("翻訳 client の無い盤面は撃たなかったのと同じ理由 throttled を start に渡し、spawn は成立する", async () => {
+  t = await bootTidepool();
+  queueWork(t, "潮汐グラフのずれを直す");
+
+  await t.clock.advance(HOUR);
+
+  expect(t.worker.startedQueries).toEqual([{ reason: "throttled" }]);
+});
+
+it("Provider anthropic が使えない間は翻訳を撃たず、理由 throttled を start に渡し、spawn は成立する", async () => {
+  const translationClient = new FakeTranslationClient();
   // anthropic が止まっていても、openai で走る task は pickup される
   const openai: ExecutionSetting = { provider: "openai", model: "gpt-5.6-sol", effort: "high", advisor: undefined, source: { tier: "board", provider: "only" } };
   t = await bootTidepool({ translationClient, openaiUsage: healthyOpenai, taskExecutionCandidates: () => [openai] });
@@ -69,7 +76,7 @@ it.each([
   await t.clock.advance(HOUR);
 
   expect(t.worker.started.map((x) => x.id)).toEqual([task.id]);
-  expect(translationClient?.calls ?? []).toEqual([]);
+  expect(translationClient.calls).toEqual([]);
   expect(t.worker.startedQueries).toEqual([{ reason: "throttled" }]);
 });
 

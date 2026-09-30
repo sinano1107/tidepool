@@ -390,21 +390,13 @@ describe("CodexWorker (ADR 0098)", () => {
     expect(listEvents(f.db, bare.id).find((e) => e.kind === "memory_injected")?.payload).toMatchObject({ entries: [] });
   });
 
-  it("start の入力が英語の view を持てば関連 leaf はその view で引き、memory_injected はその文面を持つ。持たなければ query の欄は無い(Claude と同じ —— ADR 0175)", async () => {
+  it("start の入力が英語の view を持てば memory_injected はその文面を持ち、持たなければ query の欄は無い(Claude と同じ —— ADR 0175)", async () => {
     const f = await fixture();
-    const { entry_id } = recordKnowledge(
-      f.db,
-      { scope: "work", path: "attic", title: "Attic ladder", text: "The attic ladder folds down.", author: { activity: "human", name: "human" } },
-      "webui",
-      new Date("2026-08-24T00:00:00.000Z"),
-    );
     const viewed = task(f.db, "codex-view");
     const bare = task(f.db, "codex-bare");
     f.start(viewed, { view: "Find the attic ladder" });
     f.start(bare);
 
-    expect(developerInstructions(f.process.calls[0]!.args)).toContain(`- #${entry_id} Attic ladder`);
-    expect(developerInstructions(f.process.calls[1]!.args)).not.toContain(`- #${entry_id} Attic ladder`);
     const injected = (id: string) => listEvents(f.db, id).find((e) => e.kind === "memory_injected")!.payload;
     expect(injected(viewed.id)).toMatchObject({ query: { view: "Find the attic ladder" } });
     expect(injected(bare.id)).not.toHaveProperty("query");

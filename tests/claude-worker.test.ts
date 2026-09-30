@@ -622,20 +622,11 @@ describe("ClaudeCodeWorker", () => {
     expect(events[spawned + 1]?.payload).toMatchObject({ kind: "memory_injected", worker_spawned_event_id: events[spawned]!.id });
   });
 
-  it("start の入力が英語の view を持てば関連 leaf はその view で引き、memory_injected はその文面を持つ。持たなければ query の欄は無い(ADR 0175)", async () => {
-    const { start, calls, db } = await makeWorker();
-    const { entry_id } = recordKnowledge(
-      db,
-      { scope: "tidepool", path: "attic", title: "Attic ladder", text: "The attic ladder folds down.", author: { activity: "human", name: "human" } },
-      "webui",
-      new FakeClock().now(),
-    );
+  it("start の入力が英語の view を持てば memory_injected はその文面を持ち、持たなければ query の欄は無い(view で引くことは memory-injection.test.ts —— ADR 0175)", async () => {
+    const { start, db } = await makeWorker();
     const viewed = start("task-view", null, "deckhand", "work", { view: "Find the attic ladder" });
     const bare = start("task-bare");
 
-    const systemPrompt = (i: number) => calls[i]!.args[calls[i]!.args.indexOf("--append-system-prompt") + 1]!;
-    expect(systemPrompt(0)).toContain(`- #${entry_id} Attic ladder`);
-    expect(systemPrompt(1)).not.toContain(`- #${entry_id} Attic ladder`);
     const injected = (id: string) => listEvents(db, id).find((e) => e.kind === "memory_injected")!.payload;
     expect(injected(viewed.id)).toMatchObject({ query: { view: "Find the attic ladder" } });
     expect(injected(bare.id)).not.toHaveProperty("query");
