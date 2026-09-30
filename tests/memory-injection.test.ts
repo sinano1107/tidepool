@@ -121,6 +121,14 @@ it("人間が書いた Behavior は書いた時点で approved になり、宛�
   expect(buildMemoryInjection(db, task, "tidepool", "someone-else").entries).toEqual([]);
 });
 
+it("人間が書いたエントリは、原文にだけある語では関連 leaf に並ばない —— 索引は英語だけ(#1052)", () => {
+  const { db, task } = board({ title: "道具立て", purpose: "見直す", completion_criteria: "揃う" });
+  const input = { workspace: "tidepool", path: "notes", title: "Toolchain", text: "Use Node 22.", original_title: "道具立て", original_text: "Node 22 を使う" };
+  recordKnowledge(db, humanEntryInput(db, input), "webui", at);
+
+  expect(buildMemoryInjection(db, task, "tidepool", "deckhand").entries).toEqual([]);
+});
+
 it("decision entry を出所に持つ Exemplar も、注釈の text で関連 leaf のポインタに並び、出所の種別は fact(ADR 0153)", () => {
   const { db, task } = board();
   const decision = logDecision(db, task, "reset the chart clock", "deckhand", at);

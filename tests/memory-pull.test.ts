@@ -75,11 +75,18 @@ it("長音符 ー を含むカタカナ語も、それ単独の query で当た�
   expect(searchMemory(db, reader, { query: "サーバ" }, at).results.map((r) => r.title)).toEqual(["boundary"]);
 });
 
-it("人間が書いた原文の title にだけある語でも当たる", () => {
+const toolchain = { workspace: "tidepool", path: "notes", title: "Toolchain", text: "Use Node 22.", original_title: "道具立て", original_text: "Node 22 を使う" };
+
+it("人間が書いた原文にだけある語では当たらない —— 索引は英語の text / title / path だけ(#1052)", () => {
   const { db, reader } = board();
-  const input = { workspace: "tidepool", path: "notes", title: "Toolchain", text: "Use Node 22.", original_title: "道具立て", original_text: "Node 22 を使う" };
-  recordKnowledge(db, humanEntryInput(db, input), "webui", at);
-  expect(searchMemory(db, reader, { query: "道具" }, at).results.map((r) => r.title)).toEqual(["Toolchain"]);
+  recordKnowledge(db, humanEntryInput(db, toolchain), "webui", at);
+  expect(searchMemory(db, reader, { query: "道具" }, at).results).toEqual([]);
+});
+
+it.each(["Toolchain", "Use Node"])("人間が書いたエントリも英語の title / text の語 %j では当たる", (query) => {
+  const { db, reader } = board();
+  recordKnowledge(db, humanEntryInput(db, toolchain), "webui", at);
+  expect(searchMemory(db, reader, { query }, at).results.map((r) => r.title)).toEqual(["Toolchain"]);
 });
 
 it.each([
@@ -739,8 +746,23 @@ it("rebuild はエントリ表と FTS を events から作り直し、無効化�
   expect(() => invalidateMemoryEntry(db, { entry_id: old, reason: "environment" }, "human", "webui", at)).toThrow(/already invalidated/);
   expect(getEvent(db, eventId!)).toMatchObject({
     task_id: null,
-    payload: { kind: "memory_index_rebuilt", tokenizer: "unicode61 tokenchars '_-.'", preprocess_version: "cjk-bigram-5" },
+    payload: { kind: "memory_index_rebuilt", tokenizer: "unicode61 tokenchars '_-.'", preprocess_version: "cjk-bigram-6" },
   });
+});
+
+it("原文 original の列を持つ旧い FTS の店は、open 後の照合が作り直して event を残し、以後は原文の語で当たらない(#1052)", () => {
+  const { db, reader } = board();
+  const { entry_id } = recordKnowledge(db, humanEntryInput(db, toolchain), "webui", at);
+
+  // setup のみ: original 列を索引していた版(cjk-bigram-5)の店を模す
+  db.exec(`DROP TABLE memory_fts; CREATE VIRTUAL TABLE memory_fts USING fts5(text, title, path, original, tokenize = "unicode61 tokenchars '_-.'")`);
+  db.prepare("INSERT INTO memory_fts (rowid, text, title, path, original) VALUES (?, 'use node 22.', 'toolchain', 'notes', '道具 具立 立て')").run(entry_id);
+  db.prepare("UPDATE memory_index_version SET preprocess_version = 'cjk-bigram-5'").run();
+  const eventId = ensureMemoryIndex(db, at);
+
+  expect(getEvent(db, eventId!)).toMatchObject({ payload: { kind: "memory_index_rebuilt", preprocess_version: "cjk-bigram-6" } });
+  expect(searchMemory(db, reader, { query: "道具" }, at).results).toEqual([]);
+  expect(searchMemory(db, reader, { query: "Toolchain" }, at).results.map((r) => r.title)).toEqual(["Toolchain"]);
 });
 
 it("店に刻まれた tokenizer id が今の版と違えば、open 後の照合が rebuild を走らせ event を残す —— 一致していれば何もしない", () => {

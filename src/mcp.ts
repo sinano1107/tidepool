@@ -756,9 +756,9 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
     {
       description:
         "Search the board's memory for this workspace by full-text query; results are " +
-        "{id, title, path} in rank order, and truncated says a next page exists. Read an " +
-        "entry's text with read_memory. Definitions are not searched; the index in your Memory " +
-        "section and browse_memory carry them.",
+        "{id, title, path} in rank order, and truncated says a next page exists. Entries are " +
+        "searched by their English text; query in English. Read an entry's text with read_memory. " +
+        "Definitions are not searched; the index in your Memory section and browse_memory carry them.",
       inputSchema: { query: z.string().min(1), page },
     },
     async (input) => runVerb(deps, attributedTaskId, (task) => searchMemory(deps.db, reader(task), input, deps.clock.now())),
@@ -937,7 +937,7 @@ function registerMemoryMetaReviewVerbs(server: McpServer, deps: McpDeps, run: Me
     "list_memory_entries",
     {
       description:
-        "List memory entries as the human settings view does — candidates, invalidated entries, and board-wide " +
+        "List the memory entries the human settings view lists, each entry's original wording omitted — candidates, invalidated entries, and board-wide " +
         "definitions shadowed by a workspace one included. scope: a workspace name, null for board-wide only, omit for all.",
       inputSchema: {
         scope: scope.optional(),
