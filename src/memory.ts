@@ -1578,7 +1578,7 @@ export function browseMemory(
 type ListedEntry = ReturnType<typeof listMemoryEntries>[number];
 
 /** meta-review の一覧3つ(issue #619): 人間の面と同じ一覧を verb ごとに絞ってページで返す。scope・宛先では
- *  絞らない(両方を見る必要があるのは矛盾を見る人間と meta-review だけ —— ADR 0083 追記4)。 */
+ *  絞らない(両方を見る必要があるのは workspace を跨いで構造を見る人間と meta-review だけ —— ADR 0178 決定8)。 */
 export function pullMemoryList(
   db: Db,
   reader: Pick<MemoryReader, "taskId" | "agent">,
