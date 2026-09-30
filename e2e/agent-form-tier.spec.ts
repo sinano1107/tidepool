@@ -79,8 +79,7 @@ test("tier も advisor も書かない agent は既定の見え方を出し、ad
 
   await page.getByRole("button", { name: "Edit" }).click();
   await expect(saveButton(page)).toBeDisabled();
-  // testId は label 側に付いている(input 自体も getByLabel で掴める)
-  await page.getByTestId("agent-advisor").click();
+  await page.getByLabel(/^advisor/).check();
   await expect(saveButton(page)).toBeEnabled();
 });
 
@@ -91,7 +90,7 @@ test("新規 agent フォームも同じ2つの入力を持ち、描画で落ち
   await page.getByRole("button", { name: "Add" }).click();
 
   await expect(page.getByLabel("Default tier")).toBeVisible();
-  await expect(page.getByTestId("agent-advisor")).toBeVisible();
+  await expect(page.getByLabel(/^advisor/)).toBeVisible();
   // model / effort はもう入力面に無い(ADR 0110 決定1 —— 表が決める)。exact
   // でないと advisor の説明文に含まれる "model" を拾う
   await expect(page.getByLabel("Model", { exact: true })).toHaveCount(0);
