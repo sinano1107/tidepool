@@ -575,7 +575,7 @@ export function proposeFromObjection(
   if (!isDecisionLogEntry(entry) || entry.task_id !== task.parent_id) {
     throw new DomainError(`entry ${entry_id} is not a decision-log entry of your parent task`);
   }
-  if (entryObjections(db, [entry_id]).length === 0) throw new DomainError(`entry ${entry_id} carries no attributed objection`);
+  if (entryObjections(db, [entry_id]).length === 0) throw new DomainError(`entry ${entry_id} carries no objection`);
   if (isHumanEntry(entry)) throw new DomainError(`entry ${entry_id} was written by a human`);
   const material = latestEventOfTask(db, reviewId, "task_registered")!.payload.objection_event_ids ?? [];
   const bundle = objectionBundles(db, [entry_id]).get(entry_id)?.find((b) => material.includes(bundleName(b)));
