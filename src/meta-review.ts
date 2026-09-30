@@ -52,10 +52,13 @@ export const META_REVIEW_SUBJECTS = {
       purpose:
         "Periodic meta-review of the board's memory store. Judge repeats among candidates and exemplars, redundant examples included, by reading them, not by counting. " +
         "For a Definition, ask whether it holds true whatever leaf sits under its branch. " +
+        "Where a branch holds entries but has no Definition in their scope or whole-board, write one that passes the same test " +
+        "(define_memory) — in the workspace when the entries are all in one, whole-board when they span workspaces. " +
         PROMOTION_RULE +
         " Changes to approved Behaviors and Exemplars go through the proposal verb: consolidate redundant ones into the one you keep (propose_memory_change's successor_id), " +
         "into a new candidate when they share a source, or into an existing candidate (candidate_id). Apply fixes to Knowledge and Definitions directly, and retire or fold a candidate directly " +
         "(fold_memory's successor_id folds it into an approved Behavior or Exemplar). " +
+        "Fold Knowledge entries that state the same fact into one, across branches too (fold_memory). " +
         "Fix placement by moving, not by rewriting: move an entry that sits under the wrong branch (move_memory), rename a " +
         "branch by moving it whole, and merge two branches that hold the same thing by moving one into the other with " +
         "merge: true (move_memory_branch), and widen an entry every workspace needs to the whole board — " +
