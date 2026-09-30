@@ -207,7 +207,7 @@ it("NFC で合成形の無い並びは索引と query で同じに割れるの�
   expect(searchMemory(db, reader, { query: "\u3042\u3099\u3044" }, at).results.map((r) => r.title)).toEqual(["leaf"]);
 });
 
-it("NFD の title / path を持つ leaf は NFC の query で当たり、正規化は FTS の中だけなので title / path / text と memory_pulled の query は入力の形のまま返る(#1189)", () => {
+it("NFD の title / path を持つ leaf は NFC の query で当たり、title / text と memory_pulled の query は入力の形のまま、path は NFC で返る(#1189 / #1191)", () => {
   const { db, reader, record } = board();
   const title = "ガイドを読む".normalize("NFD");
   const path = "ガイド".normalize("NFD");
@@ -219,10 +219,76 @@ it("NFD の title / path を持つ leaf は NFC の query で当たり、正規�
 
   const search = searchMemory(db, reader, { query: "ガイド".normalize("NFC") }, at);
   expect(search.results.map((r) => r.id).sort()).toEqual([byTitle, byPath, both].sort());
-  expect(search.results.find((r) => r.id === both)).toMatchObject({ title, path });
-  expect(readMemory(db, reader, { ids: [both] }, at).entries[0]).toMatchObject({ title, path, text });
+  expect(search.results.find((r) => r.id === both)).toMatchObject({ title, path: path.normalize("NFC") });
+  expect(readMemory(db, reader, { ids: [both] }, at).entries[0]).toMatchObject({ title, path: path.normalize("NFC"), text });
   const pulled = searchMemory(db, reader, { query }, at);
   expect(getEvent(db, pulled.event_id)?.payload).toMatchObject({ kind: "memory_pulled", input: { query } });
+});
+
+it.each(["NFC", "NFD"])("NFC で記録した ガイド/読み方 は、%s の prefix ガイド の browse でも同じ子として返る(#1191)", (form) => {
+  const { db, reader, record } = board();
+  record({ path: "ガイド/読み方".normalize("NFC"), title: "t" });
+
+  expect(browseMemory(db, reader, { prefix: "ガイド".normalize(form) }, at).children).toEqual([{ name: "ガイド/読み方".normalize("NFC"), definition: null }]);
+});
+
+it.each(["ガイド/", " ガイド"])("browse の prefix も path と同じ検査を通るので、形の崩れた prefix %j は空の子でなく拒否になる(#1191)", (prefix) => {
+  const { db, reader } = board();
+
+  expect(() => browseMemory(db, reader, { prefix }, at)).toThrow(/path must be/);
+});
+
+it("NFC と NFD の ガイド/読み方 を1件ずつ記録すると、最上位の browse が返す ガイド の枝は NFC の1つ(#1191)", () => {
+  const { db, reader, record } = board();
+  record({ path: "ガイド/読み方".normalize("NFC"), title: "t" });
+  record({ path: "ガイド/読み方".normalize("NFD"), title: "t" });
+
+  expect(browseMemory(db, reader, {}, at).children).toEqual([{ name: "ガイド".normalize("NFC"), definition: null }]);
+});
+
+it("path は NFC にだけ揃え全角・半角は畳まないので、ｶﾞｲﾄﾞ と ガイド は別の枝のまま(#1191)", () => {
+  const { db, reader, record } = board();
+  record({ path: "ｶﾞｲﾄﾞ/読み方", title: "t" });
+  record({ path: "ガイド/読み方".normalize("NFC"), title: "t" });
+
+  expect(browseMemory(db, reader, {}, at).children.map((c) => c.name)).toEqual(["ガイド".normalize("NFC"), "ｶﾞｲﾄﾞ"]);
+});
+
+it("NFC の ガイド に生きた定義があるとき、NFD の ガイド への定義は supersedes なしでは既に定義があるとして断られる(#1191)", () => {
+  const { define } = board();
+  const defined = define("ガイド".normalize("NFC"), "How to read the guide.");
+
+  expect(() => define("ガイド".normalize("NFD"), "Another line.")).toThrow(new DomainError(`branch ${"ガイド".normalize("NFC")} is already defined in this scope by entry ${defined}; revise it with supersedes`));
+});
+
+it("NFD の path で枝ごと移すと NFC で記録した配下も含めて枝全体が動き、NFD の to_path は NFC で保存される(#1191)", () => {
+  const { db, reader, record, define } = board();
+  const definition = define("ガイド".normalize("NFC"), "How to read the guide.");
+  const leaf = record({ path: "ガイド/読み方".normalize("NFC"), title: "t" });
+
+  const { moved } = moveMemoryBranch(
+    db,
+    { scope: "tidepool", path: "ガイド".normalize("NFD"), to_scope: "tidepool", to_path: "資料/ガイド".normalize("NFD"), mover: human },
+    "webui",
+    at,
+  );
+
+  expect(moved.map(({ entry_id }) => entry_id)).toEqual([definition, leaf]);
+  expect(readMemory(db, reader, { ids: moved.map(({ successor_id }) => successor_id) }, at).entries.map((e) => e.path)).toEqual([
+    "資料/ガイド".normalize("NFC"),
+    "資料/ガイド/読み方".normalize("NFC"),
+  ]);
+});
+
+it("エントリ1件の移動に NFD の path を渡すと NFC で保存され、NFC の定義に同じ path の NFD を渡しても path を変えるとは扱わず scope だけを移す(#1191)", () => {
+  const { db, reader, record, define } = board();
+  const leaf = record({ path: "notes", title: "t" });
+  const definition = define("ガイド".normalize("NFC"), "How to read the guide.");
+
+  const movedLeaf = moveMemory(db, { entry_id: leaf, scope: "tidepool", path: "ガイド/読み方".normalize("NFD"), mover: human }, "webui", at).entry_id;
+  const movedDefinition = moveMemory(db, { entry_id: definition, scope: null, path: "ガイド".normalize("NFD"), mover: human }, "webui", at).entry_id;
+
+  expect(readMemory(db, reader, { ids: [movedLeaf, movedDefinition] }, at).entries.map((e) => e.path)).toEqual(["ガイド/読み方".normalize("NFC"), "ガイド".normalize("NFC")]);
 });
 
 it.each([
