@@ -17,6 +17,7 @@ export const MEMORY_META_REVIEW_VERBS = [
   "list_memory_behaviors",
   "list_precedents",
   "list_memory_entries",
+  "read_memory_entries",
   "list_memory_branches",
   "list_memory_proposals",
   "define_memory",
@@ -52,6 +53,7 @@ export const META_REVIEW_SUBJECTS = {
       title: "Memory meta-review",
       purpose:
         "Periodic meta-review of the board's memory store. Judge repeats among candidates and exemplars, redundant examples included, by reading them, not by counting. " +
+        "Read the case of a candidate or an Exemplar — the example it was drafted from — with read_memory_entries. " +
         "Read the tree with list_memory_branches — every branch with the Definitions at its path and the scopes that hold entries under it — " +
         "and a branch's entries with list_memory_entries (path). " +
         "For a Definition, ask whether it holds true whatever leaf sits under its branch. " +
@@ -70,7 +72,7 @@ export const META_REVIEW_SUBJECTS = {
         "widen a candidate before you propose it, so the question shows the human the scope it will have. You cannot narrow " +
         "an entry to a workspace, move it between workspaces, or change the scope of an approved Behavior or Exemplar: when " +
         "you judge one of those right, say so with log_decision and leave the entry in place. " +
-        "A Precedent with cause memory names the wrong entries it followed (entries): read them, then drop the wrong entry (reason capability) or replace it — " +
+        "A Precedent with cause memory names the wrong entries it followed (entries): read them with read_memory_entries, then drop the wrong entry (reason capability) or replace it — " +
         "a Behavior or Exemplar through propose_memory_change, Knowledge through fold_memory or invalidate_memory. First read the past memory proposals with the human's answers and comments (list_memory_proposals) " +
         "and the invalidated candidates with invalidated_by, so you do not re-propose what a human rejected and do not repeat a retirement of your own. " +
         "A deferred proposal is one the human did not decide: read their comment, then propose it again when you still judge it right, or fold or retire it. " +

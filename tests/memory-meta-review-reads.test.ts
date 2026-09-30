@@ -1,6 +1,6 @@
 import { expect, it } from "vitest";
 import { openDb } from "../src/db.js";
-import { appendEvent, getEvent, latestEventOfTask } from "../src/events.js";
+import { appendEvent, getEvent, latestEventOfTask, listEvents } from "../src/events.js";
 import {
   approveMemoryProposal,
   createBehaviorCandidate,
@@ -11,16 +11,23 @@ import {
   listMemoryBranches,
   listMemoryEntries,
   listPrecedents,
+  type MemoryAmendment,
+  moveMemory,
   proposeMemoryChange,
   pullMemoryBranches,
   pullMemoryList,
   pullMemoryProposals,
+  readMemory,
+  readMemoryEntries,
   recordBehavior,
+  recordExemplar,
   recordKnowledge,
   rejectMemoryProposal,
+  restoreMemoryEntry,
 } from "../src/memory.js";
+import { EXTRACTOR_VERSION, entriesReadBefore, entriesSeenBefore, projectEpisode } from "../src/precedent.js";
 import { answerQuestion, DomainError, getTask, logDecision, type MemoryProposal, registerTask } from "../src/tasks.js";
-import { bundledObjection } from "./harness.js";
+import { bundledObjection, WORKER_SPAWNED } from "./harness.js";
 
 /** meta-review の読み口(issue #619 / ADR 0120 決定2)のドメイン層。verb への写像はサーバ境界
  *  (tests/mcp-memory-meta-review.test.ts)が言う。 */
@@ -139,16 +146,16 @@ it("list_memory_candidates は kind で絞れる —— exemplar なら Exemplar
 
 /** 提案 question を立て、回答(question_answered)と適用を人間の扉と同じ順で書く。 */
 function proposals() {
-  const { db, task, reader, behavior } = board();
+  const { db, task, decision, reader, behavior } = board();
   const propose = (input: Parameters<typeof proposeMemoryChange>[2]) => proposeMemoryChange(db, task.id, input, "auditor", at).question_id;
-  const answer = (questionId: string, option: "approve" | "reject", rest: { comment?: string; amendment?: { title?: string; text: string; original_title?: string; original_text?: string } } = {}) => {
+  const answer = (questionId: string, option: "approve" | "reject", rest: { comment?: string; amendment?: MemoryAmendment } = {}) => {
     const question = getTask(db, questionId)!;
     answerQuestion(db, question, [option], at, undefined, rest.comment, rest.amendment);
     const proposal = question.question_proposal as MemoryProposal;
     if (option === "approve") approveMemoryProposal(db, proposal, questionId, "webui", at, rest.amendment);
     else rejectMemoryProposal(db, proposal, questionId, "webui", at, rest.comment);
   };
-  return { db, reader, behavior, propose, answer };
+  return { db, task, decision, reader, behavior, propose, answer };
 }
 
 it("list_memory_proposals は過去の memory 提案を approve・修正つき approve・comment つき reject・invalidate の reject・既存の後継の consolidate・陳腐化の決着ごと返し、returned_ids は各提案が名指す entry(ADR 0159 決定1 / ADR 0160 決定2)", () => {
@@ -213,33 +220,57 @@ it("list_memory_behaviors は approved の Behavior を宛先・scope で絞ら�
   expect(pullMemoryList(db, reader, "list_memory_behaviors", {}, at).entries.map((e) => e.id)).toEqual(approved);
 });
 
-it("一覧3つの返却はエントリの原文 original を持たない —— meta-review が読むのは英語の正文だけ(#1052)", () => {
-  const { db, reader, behavior } = board();
-  behavior({ title: "Still a candidate" });
-  recordBehavior(
+/** 人間が原文つきで書いた Behavior と、注釈の原文つきで書いた Exemplar(出所は board の decision)。 */
+function humanOriginals({ db, decision }: ReturnType<typeof board>) {
+  const behavior = recordBehavior(
     db,
     humanEntryInput(db, { workspace: "tidepool", path: "habits", title: "Pin Node", text: "Pin Node 22.", addressee: "deckhand", original_title: "Node を固定", original_text: "Node 22 に固定する" }),
     "webui",
     at,
-  );
+  ).entry_id;
+  const annotations = [{ anchor: { field: "decision", quote: "short" }, polarity: "imitate", text: "Keep the note short.", original: "メモは短く" }];
+  const exemplar = recordExemplar(db, humanEntryInput(db, { workspace: null, path: "habits", title: "Short note", addressee: null, source_event_id: decision, annotations }), "webui", at).entry_id;
+  return { behavior, exemplar };
+}
+
+it("一覧3つの返却はエントリの原文 original も Exemplar の注釈の原文 annotations[].original も持たない —— 人間の面の一覧は注釈の原文を返し続ける(#1052 / ADR 0122 追記 #1225)", () => {
+  const b = board();
+  const { db, reader, behavior } = b;
+  behavior({ title: "Still a candidate" });
+  const { exemplar } = humanOriginals(b);
 
   for (const verb of ["list_memory_candidates", "list_memory_behaviors", "list_memory_entries"] as const) {
     const { entries } = pullMemoryList(db, reader, verb, {}, at);
     expect(entries.length).toBeGreaterThan(0);
-    for (const entry of entries) expect(entry).not.toHaveProperty("original");
+    for (const entry of entries) {
+      expect(entry).not.toHaveProperty("original");
+      for (const annotation of entry.annotations ?? []) expect(annotation).not.toHaveProperty("original");
+    }
   }
+  expect(pullMemoryList(db, reader, "list_memory_entries", {}, at).entries.find((e) => e.id === exemplar)!.annotations).toEqual([
+    { anchor: { field: "decision", quote: "short" }, polarity: "imitate", text: "Keep the note short." },
+  ]);
+  expect(listMemoryEntries(db, {}).find((e) => e.id === exemplar)!.annotations![0]!.original).toMatchObject({ text: "メモは短く" });
 });
 
-it("list_memory_proposals の amendment は人間の原文 original_title / original_text を持たない —— 正本の question_answered には残る(#1173)", () => {
-  const { reader, db, behavior, propose, answer } = proposals();
+it("list_memory_proposals の amendment は人間の原文 original_title / original_text も注釈の原文 annotations[].original も持たない —— 正本の question_answered には残る(#1173 / ADR 0122 追記 #1225)", () => {
+  const { reader, db, task, decision, behavior, propose, answer } = proposals();
   const candidate = behavior({ title: "Long notes" });
   const question = propose({ op: "approve", candidate_id: candidate, rationale: "r" });
   const amendment = { title: "Short notes", text: "Keep notes to one line.", original_title: "短いメモ", original_text: "メモは1行にする" };
   answer(question, "approve", { amendment });
+  // setup のみ: Exemplar の candidate(出所は帰責 event)を注釈の原文つきの修正値で approve する
+  const drafted = behavior({ title: "Short note", source: attribution({ db, task, decision }) });
+  const text = { scope: null, path: "habits", title: "Short note", addressee: null, kind: "exemplar" as const, annotations: [{ anchor: "whole" as const, polarity: "imitate" as const, text: "Keep it short." }] };
+  const exemplar = propose({ op: "consolidate", text, replaces: [drafted], based_on_decision: decision, rationale: "r" });
+  const annotated = { annotations: [{ anchor: "whole" as const, polarity: "imitate" as const, text: "Keep it this short.", original: "この短さで" }] };
+  answer(exemplar, "approve", { amendment: annotated });
 
-  const [pulled] = pullMemoryProposals(db, reader, {}, at).proposals;
+  const [pulled, pulledExemplar] = pullMemoryProposals(db, reader, {}, at).proposals;
   expect(pulled!.amendment).toEqual({ title: "Short notes", text: "Keep notes to one line." });
+  expect(pulledExemplar!.amendment).toEqual({ annotations: [{ anchor: "whole", polarity: "imitate", text: "Keep it this short." }] });
   expect(latestEventOfTask(db, question, "question_answered")!.payload.amendment).toMatchObject(amendment);
+  expect(latestEventOfTask(db, exemplar, "question_answered")!.payload.amendment).toMatchObject(annotated);
 });
 
 it("一覧はページ長で切り、truncated が次のページを言う", () => {
@@ -326,7 +357,7 @@ it("meta-review の枝の一覧は memory_pulled を残して返した id = 行�
 /** setup のみ: 1 marker = 1 episode の直挿しで異議つき decision を安く並べる(#356 の投影は使わない)。異議の event id と decision を返す。 */
 function objectedDecision({ db, task }: ReturnType<typeof board>, i: number) {
   const decision = logDecision(db, task, `decision ${i}`, "deckhand", at);
-  db.prepare("INSERT INTO episodes (id, worker_spawned_event_id, extractor_version, task_id, agent, lines) VALUES (?, ?, '3', ?, 'deckhand', '{}')").run(i, i, task.id);
+  db.prepare("INSERT INTO episodes (id, worker_spawned_event_id, extractor_version, task_id, agent, lines) VALUES (?, ?, ?, ?, 'deckhand', '{}')").run(i, i, EXTRACTOR_VERSION, task.id);
   db.prepare("INSERT INTO episode_markers (episode_id, seq, kind, position, event_id) VALUES (?, 0, 'decision', 0, ?)").run(i, decision);
   const objection = bundledObjection(db, task.id, decision, at, `objection ${i}`);
   return { decision, objection };
@@ -359,4 +390,166 @@ it("Precedent は最新の帰責の entries を運ぶ —— memory なら名指
     [followed, "memory", [41, 42]],
     [own, "capability", null],
   ]);
+});
+
+const approve = (db: ReturnType<typeof openDb>, candidate_id: number) =>
+  approveMemoryProposal(db, { kind: "memory", op: "approve", candidate_id, replaces: [] }, "question-1", "webui", at);
+
+/** setup のみ: board の decision への異議の帰責 event(RCA 起草の出所)。 */
+const attribution = ({ db, task, decision }: Pick<ReturnType<typeof board>, "db" | "task" | "decision">, comment?: string) =>
+  appendEvent(db, {
+    taskId: task.id,
+    workerId: "tidepool",
+    origin: "board",
+    payload: { kind: "objection_attributed", entry_id: decision, objection_event_ids: [bundledObjection(db, task.id, decision, at, comment)], cause: "preference", evidence: "e", entries: null, round: "after_rca" },
+    at,
+  });
+
+const human = { activity: "human" as const, name: "human" };
+
+it("read_memory_entries は別の workspace のエントリ・別の agent 宛ての Behavior・candidate を id で返し、行は list_memory_entries の行に case を足したもの(id 昇順)—— Knowledge と Definition は出所が事例でも case が null(ADR 0122 追記 #1225)", () => {
+  const b = board();
+  const { db, reader, behavior, knowledge, define } = b;
+  const attributed = attribution(b);
+  const other = knowledge("charts", "build");
+  const addressed = behavior({ title: "Deckhand pins Node", scope: "tidepool", addressee: "deckhand" });
+  approve(db, addressed);
+  const candidate = behavior({ title: "Still a candidate" });
+  const cited = recordKnowledge(
+    db,
+    { scope: null, path: "habits", title: "Short notes", text: "Notes are short.", source: { event_id: attributed }, author: { activity: "worker_verb", name: "deckhand" } },
+    "worker",
+    at,
+  ).entry_id;
+  const defined = define(null, "habits");
+
+  const read = readMemoryEntries(db, reader, { ids: [defined, candidate, other, cited, addressed] }, at);
+
+  const listed = pullMemoryList(db, reader, "list_memory_entries", {}, at).entries;
+  expect(read.entries).toEqual([other, addressed, candidate, cited, defined].map((id) => ({ ...listed.find((e) => e.id === id), case: null })));
+  expect(read.missing).toEqual([]);
+});
+
+it("read_memory_entries の approved の Behavior と Exemplar の case は、同じエントリを worker の read_memory で読んだ case と一致する(ADR 0153 決定3)", () => {
+  const b = board();
+  const { db, task, reader, behavior } = b;
+  const drafted = behavior({ title: "Short notes", source: attribution(b) });
+  approve(db, drafted);
+  const { exemplar } = humanOriginals(b);
+
+  const worker = readMemory(db, { taskId: task.id, scope: null, agent: "auditor" }, { ids: [drafted, exemplar] }, at).entries.map((e) => e.case);
+  expect(worker).toEqual([expect.objectContaining({ decision: "kept the note short" }), expect.objectContaining({ decision: "kept the note short" })]);
+  expect(readMemoryEntries(db, reader, { ids: [drafted, exemplar] }, at).entries.map((e) => e.case)).toEqual(worker);
+});
+
+it("出所が帰責 event の Behavior candidate(worker の read_memory では読めない)も read_memory_entries では case を返し、異議された decision の本文と steering を含む", () => {
+  const b = board();
+  const { db, task, reader, behavior } = b;
+  const candidate = behavior({ title: "Short notes", source: attribution(b, "say why it is short") });
+
+  expect(readMemory(db, { taskId: task.id, scope: null, agent: "auditor" }, { ids: [candidate] }, at).entries).toEqual([]);
+  expect(readMemoryEntries(db, reader, { ids: [candidate] }, at).entries[0]!.case).toMatchObject({ decision: "kept the note short", steering: ["say why it is short"] });
+});
+
+it("read_memory_entries は path_moved の id に鎖の末尾の行を requested_id つきで返す —— 2度移した id も末尾に着き、末尾の scope が求めた行と違っても返る。pull は求めた ids とたどった先の returned_ids を memory_pulled に残す(ADR 0167 決定1)", () => {
+  const { db, reader, knowledge } = board();
+  const once = knowledge("tidepool", "notes");
+  const twice = knowledge("tidepool", "tools");
+  const copy = moveMemory(db, { entry_id: once, scope: "tidepool", path: "elsewhere", mover: human }, "webui", at).entry_id;
+  const middle = moveMemory(db, { entry_id: twice, scope: "tidepool", path: "a", mover: human }, "webui", at).entry_id;
+  const tail = moveMemory(db, { entry_id: middle, scope: null, path: "b", mover: human }, "webui", at).entry_id;
+
+  const read = readMemoryEntries(db, reader, { ids: [once, twice] }, at);
+
+  expect(read.entries.map(({ id, scope, text, requested_id }) => ({ id, scope, text, requested_id }))).toEqual([
+    { id: copy, scope: "tidepool", text: "notes.", requested_id: once },
+    { id: tail, scope: null, text: "tools.", requested_id: twice },
+  ]);
+  const pulled = getEvent(db, read.event_id)!;
+  expect(pulled).toMatchObject({ task_id: reader.taskId, worker_id: "auditor", payload: { kind: "memory_pulled", verb: "read_memory_entries", input: { ids: [once, twice] }, returned_ids: [copy, tail] } });
+  expect(pulled.payload).not.toHaveProperty("dropped");
+});
+
+it("read_memory_entries は理由コードで無効化したあと復元した id に復元の複製を、移したあと末尾が理由コードで無効化された id に末尾の行を本文と invalidation_reason ごと、どちらも requested_id つきで返す", () => {
+  const { db, reader, knowledge } = board();
+  const old = knowledge("tidepool", "notes");
+  invalidateMemoryEntry(db, { entry_id: old, reason: "capability" }, "human", "webui", at);
+  const copy = restoreMemoryEntry(db, { entry_id: old, restorer: human }, "webui", at).entry_id;
+  const moved = knowledge("tidepool", "tools");
+  const tail = moveMemory(db, { entry_id: moved, scope: "tidepool", path: "elsewhere", mover: human }, "webui", at).entry_id;
+  invalidateMemoryEntry(db, { entry_id: tail, reason: "environment" }, "human", "webui", at);
+
+  expect(readMemoryEntries(db, reader, { ids: [old, moved] }, at).entries).toMatchObject([
+    { id: copy, requested_id: old, text: "notes.", invalidation_reason: null },
+    { id: tail, requested_id: moved, text: "tools.", invalidation_reason: "environment" },
+  ]);
+});
+
+it("read_memory_entries は superseded と理由コードで無効化された id に、その行自身を本文・invalidation_reason・successor_id・invalidated_by ごと返し、requested_id は付かない", () => {
+  const { db, reader, knowledge } = board();
+  const replaced = knowledge("tidepool", "notes");
+  const successor = knowledge("tidepool", "notes/short");
+  invalidateMemoryEntry(db, { entry_id: replaced, reason: "superseded", successor_id: successor }, "human", "webui", at);
+  const retired = knowledge("tidepool", "tools");
+  invalidateMemoryByMetaReview(db, { entry_id: retired, reason: "capability" }, "auditor", "worker", at);
+
+  const { entries } = readMemoryEntries(db, reader, { ids: [replaced, retired] }, at);
+
+  expect(entries).toMatchObject([
+    { id: replaced, text: "notes.", invalidation_reason: "superseded", successor_id: successor, invalidated_by: { worker: "human" } },
+    { id: retired, text: "tools.", invalidation_reason: "capability", successor_id: null, invalidated_by: { activity: "meta_review" } },
+  ]);
+  for (const entry of entries) expect(entry.requested_id).toBeUndefined();
+});
+
+it("read_memory_entries に旧 id とそれが着く先の id を同時に求めると、行は1件で requested_id は付かない", () => {
+  const { db, reader, knowledge } = board();
+  const old = knowledge("tidepool", "notes");
+  const tail = moveMemory(db, { entry_id: old, scope: "tidepool", path: "elsewhere", mover: human }, "webui", at).entry_id;
+
+  expect(readMemoryEntries(db, reader, { ids: [old, tail] }, at).entries.map(({ id, requested_id }) => ({ id, requested_id }))).toEqual([{ id: tail, requested_id: undefined }]);
+});
+
+it("read_memory_entries の存在しない id は missing に並び、ほかの id の行は返る", () => {
+  const { db, reader, knowledge } = board();
+  const id = knowledge("tidepool", "notes");
+
+  const read = readMemoryEntries(db, reader, { ids: [9999, id, 9998] }, at);
+
+  expect(read.entries.map((e) => e.id)).toEqual([id]);
+  expect(read.missing).toEqual([9999, 9998]);
+});
+
+it("read_memory_entries の行は、人間が原文つきで書いたエントリの原文 original も Exemplar の注釈の原文 annotations[].original も持たない", () => {
+  const b = board();
+  const { behavior, exemplar } = humanOriginals(b);
+
+  const { entries } = readMemoryEntries(b.db, b.reader, { ids: [behavior, exemplar] }, at);
+
+  expect(entries).toHaveLength(2);
+  for (const entry of entries) expect(entry).not.toHaveProperty("original");
+  expect(entries[1]!.annotations).toEqual([{ anchor: { field: "decision", quote: "short" }, polarity: "imitate", text: "Keep the note short." }]);
+});
+
+it("session の中で read_memory_entries が返した id は、その session の Precedent の entries_seen に入り entries_read に入らない(ADR 0122 追記 #1225)", () => {
+  const { db, task, reader, knowledge } = board();
+  const spawned = appendEvent(db, { taskId: task.id, workerId: "auditor", origin: "board", payload: WORKER_SPAWNED, at });
+  const id = knowledge("tidepool", "notes");
+  const read = readMemoryEntries(db, reader, { ids: [id] }, at);
+  const decision = logDecision(db, task, "retired the stale note", "auditor", at);
+  const toolCall = (n: number, name: string, eventId: number) => [
+    `{"type":"assistant","uuid":"a${n}","message":{"content":[{"type":"tool_use","id":"t${n}","name":"${name}","input":{}}]}}`,
+    `{"type":"user","uuid":"r${n}","message":{"content":[{"type":"tool_result","tool_use_id":"t${n}","content":[{"type":"text","text":"{\\"event_id\\":${eventId}}"}]}]}}`,
+  ];
+  const events = listEvents(db, task.id);
+
+  const episode = projectEpisode({
+    transcriptLines: [...toolCall(1, "mcp__tidepool__read_memory_entries", read.event_id), ...toolCall(2, "mcp__tidepool__log_decision", decision)],
+    events,
+    workerSpawnedEventId: spawned,
+    extractorVersion: "test",
+  });
+
+  expect(entriesSeenBefore(episode, events, decision)).toEqual([id]);
+  expect(entriesReadBefore(episode, events, decision)).toEqual([]);
 });
