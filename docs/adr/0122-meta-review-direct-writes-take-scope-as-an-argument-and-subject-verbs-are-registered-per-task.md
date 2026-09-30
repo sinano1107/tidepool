@@ -74,3 +74,33 @@ workspace のままでは他の workspace の記憶を取り違える — どち
 - **人間の面(管理MCP)にも同じ読み口を出す。** 決定1 の「人間の面と同じ一覧」と同じ線。WebUI の viewer は #1219。
 
 名指された id を読む口が無い点は #1225。tool 応答の上限の実測は #1209 のコメントに置く。
+
+## 追記(2026-09-30 の triage / grilling、issue #1225)
+
+**読み口に `read_memory_entries(ids)` を足す —— 名指された id の行を返し、Behavior / Exemplar は case 描画ごと返す。** 決定2 が
+worker の `read_memory` を置き換えたので、meta-review には id で読む口も case を読む口も無かった。purpose は cause `memory` の
+Precedent が名指す entry を「読め」と言い(ADR 0166 決定5)、`propose_memory_change` は Exemplar の注釈の引用を case の欄から
+逐語で写せと言うが、本文を返すのは一覧のページだけで、case はどの verb も返さなかった。実測は #1225 のコメントに置く。
+
+- **case を同じ口で返す。** case を要る仕事 —— 名指された Behavior / Exemplar の判断、candidate を Exemplar に畳むときの注釈、
+  事例の重複の判断 —— はどれも「一覧で id を得て、選んだものを読む」形で、id を鍵にした読み口は1本で足りる。一覧の行には
+  載せない(1ページ分の handoff が tool 応答の上限を超えうる)。
+- **専用の verb にし、一覧の `ids` の絞り込みにも、worker と同じ名前にもしない。** 絞り込みは case も鎖のたどりも運べない。
+  `read_memory` は「読んで従った記憶」の列(Precedent の `entries_read`、帰責の入力 —— ADR 0166 決定2)が数える verb で、
+  meta-review が読む行は判断の材料であって従う指針ではない(meta-review は spawn 注入を受けない)。別の名前なら、一覧と同じく
+  seen にだけ入る。
+- **本文が同じ鎖(`path_moved`・復元の複製)だけ末尾までたどり、`requested_id` を添える。それ以外の無効化は行そのものを本文ごと
+  返す。** 書き込みの verb は生きた id しか受けないので、移された行は手を打つ相手が末尾になる —— meta-review 自身が同じ run で
+  枝ごと移した後にも起こる。ADR 0167 と同じ「本文が同じならたどる」の線で、違いは2つ: 視界の門が無い(一覧と同じ全 scope・
+  全宛先・全状態)ことと、`dropped` の代わりに本文を返すこと —— worker に本文を返さないのは視界の線で、meta-review は無効化
+  済みの行も読む(決定1)。
+- **存在しない id は黙って落とさず `missing` に返す。** worker の「黙って落とす」は視界の外を見せないためで、門の無い読み手には
+  当たらない。
+- **件数の上限もページも持たない。** 応答の上限を超えるかは件数でなく case の長さで決まり、件数の上限では防げない。上限で
+  弾かれた応答の pull も記録に残る点は #1229。
+- **Exemplar の注釈の原文は返さず、一覧3 verb と過去の提案の修正値も同じ側に揃える。** meta-review は注釈の原文を書けず
+  (schema が拒む)、読んで使う先が無い —— #1052 が現状維持とした点を改める。
+- **`list_precedents` の `entries` に本文は載せない。** case ごと載せれば1ページが応答の上限に近づき、名指された id は
+  1呼び出しで読める。後継・置き換えた id・提案が名指す id も同じ口で読む。
+- **人間の面(管理MCP)には出さない。** 管理MCP の一覧は全件を1応答で返すので id の行は今も拾え、case は行の出所の event
+  から preview で引ける(帰責 event も通る)。
