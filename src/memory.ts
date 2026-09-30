@@ -1365,8 +1365,8 @@ export function pullMemoryList(
                 .filter((e) => e.state === "candidate" && (input.kind === undefined || e.kind === input.kind) && (input.include_invalidated || e.invalidation_reason === null))
                 .map((e) => withSuccessor(e, all)))(listMemoryEntries(db, {}));
     const { rows: shown, truncated } = paged(entries, input.page);
-    // 原文は人間の面にだけ残す —— meta-review が読むのは英語の正文(#1052、readMemory と同じ側)
-    return recordPull(db, reader, { verb, input, returned_ids: shown.map((e) => e.id) }, { entries: shown.map(({ original: _original, ...e }) => e), truncated }, at);
+    // エントリの原文(original)は人間の面にだけ残す —— readMemory と同じ側(#1052)
+    return recordPull(db, reader, { verb, input, returned_ids: shown.map((e) => e.id) }, { entries: shown.map(({ original: _, ...e }) => e), truncated }, at);
   })();
 }
 

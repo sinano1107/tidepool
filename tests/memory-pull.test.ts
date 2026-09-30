@@ -679,10 +679,11 @@ it("rebuild はエントリ表と FTS を events から作り直し、無効化�
 
 it("原文 original の列を持つ旧い FTS の店は、open 後の照合が作り直して event を残し、以後は原文の語で当たらない(#1052)", () => {
   const { db, reader } = board();
-  recordKnowledge(db, humanEntryInput(db, toolchain), "webui", at);
+  const { entry_id } = recordKnowledge(db, humanEntryInput(db, toolchain), "webui", at);
 
   // setup のみ: original 列を索引していた版(cjk-bigram-5)の店を模す
   db.exec(`DROP TABLE memory_fts; CREATE VIRTUAL TABLE memory_fts USING fts5(text, title, path, original, tokenize = "unicode61 tokenchars '_-.'")`);
+  db.prepare("INSERT INTO memory_fts (rowid, text, title, path, original) VALUES (?, 'use node 22.', 'toolchain', 'notes', '道具 具立 立て')").run(entry_id);
   db.prepare("UPDATE memory_index_version SET preprocess_version = 'cjk-bigram-5'").run();
   const eventId = ensureMemoryIndex(db, at);
 

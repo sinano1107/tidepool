@@ -936,7 +936,7 @@ function registerMemoryMetaReviewVerbs(server: McpServer, deps: McpDeps, run: Me
     "list_memory_entries",
     {
       description:
-        "List memory entries as the human settings view does — candidates, invalidated entries, and board-wide " +
+        "List the memory entries the human settings view lists, without the human's original wording — candidates, invalidated entries, and board-wide " +
         "definitions shadowed by a workspace one included. scope: a workspace name, null for board-wide only, omit for all.",
       inputSchema: {
         scope: scope.optional(),
