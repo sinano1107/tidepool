@@ -2501,7 +2501,7 @@ type BoardRow = Omit<TaskRow, "status"> & {
   registrant: string;
 };
 
-/** The shared shape behind `listBoard`/`listQueue`/`presentTask`: the same CTE
+/** The shared shape behind `listBoard`/`listQueue`/`presentTask`/`listYourTasks`: the same CTE
  *  and the same blocked/held derivation, with room for one extra `CASE` branch
  *  injected before the fallback so a view can layer on one more display-only
  *  state. `where` defaults to the list's unsettled filter; the single-task view
