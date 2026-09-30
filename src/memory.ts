@@ -142,7 +142,7 @@ function insertEntry(db: Db, id: number, entry: MemoryEntryFields, carried?: num
 
 /** 入口の path / prefix の検査と正規化(#1191): 正準等価な path は同じ枝なので NFC にして返し、以後の比較・保存はそれを使う。
  *  全角・半角は見た目が違うので畳まない(NFKC にしない)。 */
-function normalPath(path: string): string {
+function checkedPath(path: string): string {
   if (path.split("/").some((segment) => segment === "" || segment.trim() !== segment)) {
     throw new DomainError(`path must be "/"-separated non-empty segments without surrounding spaces: ${JSON.stringify(path)}`);
   }
@@ -156,7 +156,7 @@ function createEntry(
   at: Date,
   mark?: { question_id: string },
 ): number {
-  const path = normalPath(fields.path);
+  const path = checkedPath(fields.path);
   if (fields.title.trim() === "" || fields.text.trim() === "") throw new DomainError("title and text must be non-empty");
   // board = Board call の起草(ADR 0120 決定1(b)(c))は Behavior candidate だけ
   if (fields.author.activity === "board" && fields.kind !== "behavior") throw new DomainError("a board-drafted entry can only be a behavior candidate");
@@ -226,7 +226,7 @@ export function defineMemoryBranch(
 ): { entry_id: number; event_id: number } {
   if (/[\r\n]/.test(input.text)) throw new DomainError("a definition must be one line");
   const { supersedes, ...rest } = input;
-  const fields = { ...rest, path: normalPath(rest.path) };
+  const fields = { ...rest, path: checkedPath(rest.path) };
   return writeSuperseding(db, supersedes, fields.author, origin, at, () => {
     const defined = liveDefinitions(db, fields.scope, fields.path).find((id) => !supersedes?.includes(id));
     if (defined) throw new DomainError(`branch ${fields.path} is already defined in this scope by entry ${defined}; revise it with supersedes`);
@@ -461,7 +461,7 @@ export function moveMemory(
   at: Date,
 ): { entry_id: number; event_id: number } {
   const old = requireEntry(db, input.entry_id);
-  const path = normalPath(input.path);
+  const path = checkedPath(input.path);
   if (old.kind === "definition" && old.path !== path) {
     throw new DomainError(`memory entry ${old.id} is the definition of branch ${old.path}: move the whole branch with move_memory_branch to change its path`);
   }
@@ -480,8 +480,8 @@ export function moveMemoryBranch(
   at: Date,
 ): ReturnType<typeof moveEntries> {
   const { scope, to_scope, merge, mover } = input;
-  const path = normalPath(input.path);
-  const to_path = normalPath(input.to_path);
+  const path = checkedPath(input.path);
+  const to_path = checkedPath(input.to_path);
   const rows = branchRows(db, { scope, path, to_scope });
   if (rows.length === 0) throw new DomainError(`no live memory entry at ${path} or under it in this scope`);
   const moves = rows.map((old) => ({ old, scope: old.scope === scope ? to_scope : old.scope, path: to_path + old.path.slice(path.length) }));
@@ -518,7 +518,7 @@ export function moveMemoryBranchByMetaReview(
   at: Date,
 ): ReturnType<typeof moveMemoryBranch> {
   return db.transaction(() => {
-    requireWidening(db, branchRows(db, { ...input, path: normalPath(input.path) }), input.scope, input.to_scope);
+    requireWidening(db, branchRows(db, { ...input, path: checkedPath(input.path) }), input.scope, input.to_scope);
     return moveMemoryBranch(db, input, origin, at);
   })();
 }
@@ -1498,7 +1498,7 @@ export function browseMemory(
   truncated: boolean;
   event_id: number;
 } {
-  const prefix = input.prefix ? normalPath(input.prefix) : "";
+  const prefix = input.prefix ? checkedPath(input.prefix) : "";
   return db.transaction(() => {
     const children = indexChildren(visibleEntries(db, reader), prefix);
     const { rows: shown, truncated } = paged(children, input.page);

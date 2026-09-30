@@ -232,6 +232,12 @@ it.each(["NFC", "NFD"])("NFC で記録した ガイド/読み方 は、%s の pr
   expect(browseMemory(db, reader, { prefix: "ガイド".normalize(form) }, at).children).toEqual([{ name: "ガイド/読み方".normalize("NFC"), definition: null }]);
 });
 
+it.each(["ガイド/", " ガイド"])("browse の prefix も path と同じ検査を通るので、形の崩れた prefix %j は空の子でなく拒否になる(#1191)", (prefix) => {
+  const { db, reader } = board();
+
+  expect(() => browseMemory(db, reader, { prefix }, at)).toThrow(/path must be/);
+});
+
 it("NFC と NFD の ガイド/読み方 を1件ずつ記録すると、最上位の browse が返す ガイド の枝は NFC の1つ(#1191)", () => {
   const { db, reader, record } = board();
   record({ path: "ガイド/読み方".normalize("NFC"), title: "t" });
