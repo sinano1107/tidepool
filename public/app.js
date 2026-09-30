@@ -333,7 +333,7 @@ function TpMemoryAmendment({ candidateId, onTranslate, onChange, onDeadAddressee
   return /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 8, marginBottom: 14 } }, onTranslate && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(Input, { label: "Amend original title (optional)", value: draft.originalTitle, onChange: set("originalTitle") }), /* @__PURE__ */ React.createElement(Input, { label: "Amend original (optional)", multiline: true, rows: 3, value: draft.originalText, onChange: set("originalText") }), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", disabled: !draft.originalTitle.trim() || !draft.originalText.trim(), onClick: () => translate(true) }, "Translate")), /* @__PURE__ */ React.createElement(Input, { label: "Title (English)", value: draft.title, onChange: set("title") }), /* @__PURE__ */ React.createElement(Input, { label: "English (approved as the canonical text)", multiline: true, rows: 3, value: draft.text, onChange: set("text") }), addressee, onTranslate && /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", disabled: !draft.title.trim() || !draft.text.trim(), onClick: () => translate(false) }, "Back-translate"), back && /* @__PURE__ */ React.createElement("p", { style: { margin: 0, fontSize: "var(--text-xs)", color: "var(--text-muted)" }, "data-testid": "amendment-back-translation" }, "back: ", back), error && /* @__PURE__ */ React.createElement("div", { style: { fontSize: "var(--text-xs)", color: "var(--coral-4)" } }, error));
 }
 function TpQuestionCard({ q, answer, onAnswer, locked = false, onTranslate }) {
-  const { Card, AgentChip, Switch, Select, Input } = window.TidepoolDesignSystem_8a0ead;
+  const { Card, AgentChip, Switch, Select, Input, Button } = window.TidepoolDesignSystem_8a0ead;
   const items = q.items;
   const [draft, setDraft] = React.useState(() => answer ?? items.map(() => null));
   React.useEffect(() => {
@@ -342,13 +342,14 @@ function TpQuestionCard({ q, answer, onAnswer, locked = false, onTranslate }) {
   const [amendment, setAmendment] = React.useState({});
   const [deadAddressee, setDeadAddressee] = React.useState(false);
   const [comment, setComment] = React.useState("");
-  const setItemAnswer = (i, value) => {
-    const next = draft.slice();
-    next[i] = value;
-    setDraft(next);
-    if (!next.every(Boolean)) return;
+  const setItemAnswer = (i, value) => setDraft(draft.map((v, j) => j === i ? value : v));
+  const disabledOptions = [...comment.trim() ? [] : q.needsComment ?? [], ...deadAddressee ? ["approve"] : []];
+  const canSubmit = draft.every(Boolean) && !draft.some((v) => disabledOptions.includes(v));
+  const [submitting, setSubmitting] = React.useState(false);
+  const submit = () => {
+    setSubmitting(true);
     const filled = q.amendable === "memory" ? amendment : Object.fromEntries(Object.entries(amendment).filter(([, v]) => v));
-    onAnswer(next, q.amendable && next[0] === "approve" && Object.keys(filled).length > 0 ? filled : void 0, comment.trim() ? comment : void 0);
+    onAnswer(draft, q.amendable && draft[0] === "approve" && Object.keys(filled).length > 0 ? filled : void 0, comment.trim() ? comment : void 0).finally(() => setSubmitting(false));
   };
   const answeredCount = draft.filter(Boolean).length;
   const [translateOn, setTranslateOn] = React.useState(false);
@@ -395,7 +396,7 @@ function TpQuestionCard({ q, answer, onAnswer, locked = false, onTranslate }) {
       onChange: (e) => setComment(e.target.value),
       placeholder: "why, or what is still undecided \u2014 the next memory meta-review reads it"
     }
-  )), items.length > 1 && !locked && /* @__PURE__ */ React.createElement("div", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--tide-4)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 12 } }, answeredCount, " of ", items.length, " answered \u2014 submits together once every item is"), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 18 } }, items.map((item, i) => /* @__PURE__ */ React.createElement(
+  )), items.length > 1 && !locked && /* @__PURE__ */ React.createElement("div", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--tide-4)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 12 } }, answeredCount, " of ", items.length, " answered \u2014 sent together on Submit"), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 18 } }, items.map((item, i) => /* @__PURE__ */ React.createElement(
     TpQuestionItemPicker,
     {
       key: i,
@@ -404,9 +405,9 @@ function TpQuestionCard({ q, answer, onAnswer, locked = false, onTranslate }) {
       locked,
       onChange: (v) => setItemAnswer(i, v),
       translated: translatedItems ? translatedItems[i] : null,
-      disabled: [...comment.trim() ? [] : q.needsComment ?? [], ...deadAddressee ? ["approve"] : []]
+      disabled: disabledOptions
     }
-  ))));
+  ))), !locked && /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "flex-end", marginTop: 16 } }, /* @__PURE__ */ React.createElement(Button, { variant: "primary", disabled: !canSubmit || submitting, onClick: submit }, "Submit")));
 }
 function TpScratchpad({ lines, onAdd, onRemove }) {
   const { Button, Input } = window.TidepoolDesignSystem_8a0ead;
@@ -3468,7 +3469,6 @@ function QuestionDeepLinkView({ questionId, onDone, onTranslate }) {
   const { Button, Card } = window.TidepoolDesignSystem_8a0ead;
   const [q, setQ] = React.useState(void 0);
   const [rawTask, setRawTask] = React.useState(null);
-  const [busy, setBusy] = React.useState(false);
   const [err, setErr] = React.useState(null);
   React.useEffect(() => {
     let cancelled = false;
@@ -3489,15 +3489,12 @@ function QuestionDeepLinkView({ questionId, onDone, onTranslate }) {
     };
   }, [questionId]);
   const answer = async (answers, amendment, comment) => {
-    if (busy) return;
-    setBusy(true);
     setErr(null);
     try {
       await api(`/api/tasks/${questionId}/answer`, { answers, amendment, comment });
       onDone(rawTask);
     } catch (e) {
       setErr(String(e.message || e));
-      setBusy(false);
     }
   };
   if (q === void 0) {
