@@ -1,10 +1,11 @@
 import { expect, it } from "vitest";
 import type { Cause } from "../src/cause.js";
 import { type Db, openDb } from "../src/db.js";
-import { appendEvent } from "../src/events.js";
+import { appendEvent, listEvents, objectionBundles } from "../src/events.js";
 import { listMemoryEntries } from "../src/memory.js";
 import { proposeFromObjection } from "../src/retrospective.js";
-import { BOARD_WORKER_ID, DomainError, HUMAN_WORKER_ID, logDecision, registerTask, type Task, type TaskType } from "../src/tasks.js";
+import { BOARD_WORKER_ID, DomainError, HUMAN_WORKER_ID, listChildren, logDecision, registerTask, type Task, type TaskType } from "../src/tasks.js";
+import { commitTriage, raiseObjection, startTriage } from "../src/triage.js";
 import { bundledObjection } from "./harness.js";
 
 /** RCA の起草 verb `propose_from_objection` の門(issue #1077)と成功経路(issue #1092)のドメイン層。
@@ -26,6 +27,12 @@ const objected = (db: Db, parent: Task, cause: Cause, worker = "deckhand"): numb
   attribute(db, parent.id, entry, cause);
   return entry;
 };
+/** 親の entry ごとの最後の異議群の異議 id —— commit が立てる RCA 子と同じく、1本の RCA 子が覆う異議群は entry ごとに1つ(ADR 0171 決定1)。 */
+const material = (db: Db, parentId: string): number[] =>
+  [...objectionBundles(db).values()].flatMap((bundles) => (bundles.at(-1)!.task_id === parentId ? bundles.at(-1)!.objection_event_ids : []));
+/** 親のいまの異議群を材料にした RCA 子。 */
+const rca = (db: Db, title: string, parent: Task): Task =>
+  registerTask(db, { type: "review", title, purpose: "p", completion_criteria: "c", workspace: "charts", parent_id: parent.id, objection_event_ids: material(db, parent.id) }, at, HUMAN_WORKER_ID);
 
 it("学習に向かない cause・異議済みで未帰責のエントリ・宛先の agent が無い Behavior・as と based_on_decision の過不足・decision でない / 別の task の decision の based_on_decision・帰責の無い / 他 task の / 存在しない / 人間が書いたエントリ・work task や parent の無い review からの呼び出しは DomainError で拒否され、店には何も載らない", () => {
   const db = openDb(":memory:");
@@ -51,7 +58,7 @@ it("学習に向かない cause・異議済みで未帰責のエントリ・宛�
   const byBoard = task(db, "work", "by the board", BOARD_WORKER_ID);
   const byBoardEntry = objected(db, byBoard, "task_ambiguity");
 
-  const self = task(db, "review", "rca (self): mixed", HUMAN_WORKER_ID, mixed.id).id;
+  const self = rca(db, "rca (self): mixed", mixed).id;
   const decision = logDecision(db, task(db, "review", "rca (auditor): mixed", HUMAN_WORKER_ID, mixed.id), "the fixture rule was never written down", "auditor", at);
   const notAgent = "the task was not registered by an agent: there is no agent to address a behavior to";
   const asRule = 'as ("behavior" or "knowledge") is required for a missing_information entry and only for it';
@@ -77,9 +84,9 @@ it("学習に向かない cause・異議済みで未帰責のエントリ・宛�
     [task(db, "work", "repair: mixed", HUMAN_WORKER_ID, mixed.id).id, { entry_id: capability }, "propose_from_objection is only for a review of an objected task"],
     [task(db, "review", "loose review").id, { entry_id: capability }, "propose_from_objection is only for a review of an objected task"],
     [self, { entry_id: byHuman }, `entry ${byHuman} was written by a human`],
-    [task(db, "review", "rca (auditor): delegated", HUMAN_WORKER_ID, delegated.id).id, { entry_id: delegatedEntry, as: "behavior", based_on_decision: decision }, decisionRule],
+    [rca(db, "rca (auditor): delegated", delegated).id, { entry_id: delegatedEntry, as: "behavior", based_on_decision: decision }, decisionRule],
     // 盤面(tidepool)の登録は agent の登録ではない
-    [task(db, "review", "rca (auditor): by the board", HUMAN_WORKER_ID, byBoard.id).id, { entry_id: byBoardEntry }, notAgent],
+    [rca(db, "rca (auditor): by the board", byBoard).id, { entry_id: byBoardEntry }, notAgent],
   ] as const) {
     const propose = () => proposeFromObjection(db, reviewId, { ...draft, ...args }, {}, "auditor", at);
     expect(propose).toThrow(DomainError);
@@ -94,7 +101,7 @@ it("capability・preference は agent 登録の task でも entry の worker 宛
   const capabilityEntry = objected(db, mixed, "capability");
   const latest = attribute(db, mixed.id, capabilityEntry, "capability"); // 後の異議群の帰責 —— 出所は最後の異議群の帰責を指す
   const preferenceEntry = objected(db, mixed, "preference", "helmsman");
-  const self = registerTask(db, { type: "review", title: "rca (self): mixed", purpose: "p", completion_criteria: "c", workspace: "elsewhere", parent_id: mixed.id }, at, HUMAN_WORKER_ID).id;
+  const self = registerTask(db, { type: "review", title: "rca (self): mixed", purpose: "p", completion_criteria: "c", workspace: "elsewhere", parent_id: mixed.id, objection_event_ids: material(db, mixed.id) }, at, HUMAN_WORKER_ID).id;
 
   const capabilityResult = proposeFromObjection(db, self, { ...draft, entry_id: capabilityEntry }, {}, "auditor", at);
   const preferenceResult = proposeFromObjection(db, self, { ...draft, entry_id: preferenceEntry }, {}, "auditor", at);
@@ -111,7 +118,7 @@ it("agent 登録の task では task_ambiguity と missing_information(as: behav
   const delegated = task(db, "work", "delegated", "tako");
   const taskAmbiguityEntry = objected(db, delegated, "task_ambiguity");
   const missingInformationEntry = objected(db, delegated, "missing_information");
-  const auditor = task(db, "review", "rca (auditor): delegated", HUMAN_WORKER_ID, delegated.id);
+  const auditor = rca(db, "rca (auditor): delegated", delegated);
   const decision = logDecision(db, auditor, "the fixture rule was never written down", "auditor", at);
 
   const ambiguityResult = proposeFromObjection(db, auditor.id, { ...draft, entry_id: taskAmbiguityEntry }, {}, "auditor", at);
@@ -122,6 +129,33 @@ it("agent 登録の task では task_ambiguity と missing_information(as: behav
     expect.objectContaining({ id: ambiguityResult.entry_id, kind: "behavior", state: "candidate", addressee: "tako", cause: "task_ambiguity" }),
     expect.objectContaining({ id: behaviorResult.entry_id, kind: "behavior", state: "candidate", addressee: "tako", cause: "missing_information" }),
     expect.objectContaining({ id: knowledgeResult.entry_id, kind: "knowledge", state: "approved", addressee: null, source: { kind: "decision", ref: decision }, cause: null }),
+  ]);
+});
+
+it("RCA reviewer は自分の RCA が覆う異議群の判定から起草する —— 後の session が同じ entry を異議して未帰責でも前の判定から起草し、後の異議群にしか無い entry は材料にないとして拒む(ADR 0171 決定3)", () => {
+  const db = openDb(":memory:");
+  const parent = task(db, "work", "reobjected");
+  const x = logDecision(db, parent, "picked X", "deckhand", at);
+  const y = logDecision(db, parent, "picked Y", "deckhand", at);
+  startTriage(db, at);
+  const a = raiseObjection(db, x, "A's direction", at);
+  commitTriage(db, at, [], new Map([[x, { cause: "capability", evidence: "e", entries: null }]]));
+  startTriage(db, at);
+  raiseObjection(db, x, "B's direction on X", at);
+  raiseObjection(db, y, "B's direction on Y", at);
+  commitTriage(db, at, []);
+  const aSelf = listChildren(db, parent.id).find((c) => {
+    const registered = listEvents(db, c.id)[0]!.payload;
+    return c.type === "review" && c.assignee === "deckhand" && registered.kind === "task_registered" && registered.objection_event_ids?.includes(a);
+  })!.id;
+  const aJudgment = listEvents(db, parent.id).find((e) => e.payload.kind === "objection_attributed")!.id;
+
+  const result = proposeFromObjection(db, aSelf, { ...draft, entry_id: x }, {}, "auditor", at);
+  const outside = () => proposeFromObjection(db, aSelf, { ...draft, entry_id: y }, {}, "auditor", at);
+
+  expect(outside).toThrow(new DomainError(`entry ${y} is not in this review's material`));
+  expect(listMemoryEntries(db, {})).toEqual([
+    expect.objectContaining({ id: result.entry_id, kind: "behavior", addressee: "deckhand", source: { kind: "event", ref: aJudgment }, cause: "capability" }),
   ]);
 });
 
@@ -138,7 +172,7 @@ it("premise_breached の宣言への異議エントリからも提案できる",
     at,
   });
   const attribution = attribute(db, child.id, entry, "capability");
-  const self = task(db, "review", "rca (self): A", HUMAN_WORKER_ID, child.id).id;
+  const self = rca(db, "rca (self): A", child).id;
 
   const result = proposeFromObjection(db, self, { ...draft, entry_id: entry }, {}, "auditor", at);
 

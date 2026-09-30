@@ -331,7 +331,7 @@ function moveEntries(
   })();
 }
 
-/** scope / path に生きている Definition の id(移動と復元の置き場の門)。 */
+/** scope / path に生きている Definition の id(定義の書き込み・移動・復元の置き場の門と、read の影の判定)。 */
 function liveDefinitions(db: Db, scope: string | null, path: string): number[] {
   return (
     db.prepare("SELECT id FROM memory_entries WHERE kind = 'definition' AND invalidation_reason IS NULL AND path = ? AND scope IS ?").all(path, scope) as Array<{ id: number }>
@@ -1214,13 +1214,14 @@ function ftsQuery(query: string, join: " " | " OR " = " "): string | null {
   return terms.length === 0 ? null : terms.map((term) => `"${term.replaceAll('"', '""')}"`).join(join);
 }
 
-/** FTS に当たったスコープ内の approved(順位順)。宛先と無効化はここで落とさない —— search は
+/** FTS に当たったスコープ内の approved(順位順)。Definition は当てない —— worker に届くのは INDEX だけで、
+ *  search の候補にも注入の関連 leaf にもならない(ADR 0083 追記7)。宛先と無効化はここで落とさない —— search は
  *  それを候補の落ちた理由として残す。 */
 function rankedEntries(db: Db, match: string, scope: string | null): EntryRow[] {
   return db
     .prepare(
       `SELECT e.* FROM memory_fts JOIN memory_entries e ON e.id = memory_fts.rowid
-        WHERE memory_fts MATCH ? AND e.state = 'approved' AND (e.scope IS NULL OR e.scope = ?)
+        WHERE memory_fts MATCH ? AND e.state = 'approved' AND e.kind != 'definition' AND (e.scope IS NULL OR e.scope = ?)
         ORDER BY memory_fts.rank, e.id`,
     )
     .all(match, scope) as EntryRow[];
@@ -1265,7 +1266,8 @@ function dropReason(row: EntryRow, reader: Pick<MemoryReader, "agent">): MemoryD
 }
 
 /** INDEX(browse と注入)のフィルタ(spec #586 B): approved、未無効化、スコープ(task の
- *  workspace or 盤面全体)、宛先(agent 名一致 or 全員)。search は rankedEntries と dropReason に、read は inSight に同じ条件を持つ。 */
+ *  workspace or 盤面全体)、宛先(agent 名一致 or 全員)。search は rankedEntries と dropReason に、read は inSight に同じ条件を持つ ——
+ *  ただし Definition は INDEX にだけ出る: search は当てず、read は影(shadowed)を落とす(ADR 0083 追記7)。 */
 function visibleEntries(db: Db, reader: Omit<MemoryReader, "taskId">): EntryRow[] {
   return db
     .prepare(
@@ -1281,6 +1283,14 @@ function visibleEntries(db: Db, reader: Omit<MemoryReader, "taskId">): EntryRow[
  *  後継を同じ門で見る。 */
 function inSight(row: EntryRow, reader: Omit<MemoryReader, "taskId">): boolean {
   return row.state === "approved" && (row.scope === null || row.scope === reader.scope) && (row.addressee === null || row.addressee === reader.agent);
+}
+
+/** 影(ADR 0083 追記4・追記7): 盤面全体の Definition で、同じ path に読み手の workspace の未無効化の Definition がある
+ *  (Definition は approved でしか書かれない)。indexChildren の「workspace が勝つ」の read 側の写し。inSight とは別の条件で、
+ *  read はこれも見えない id と同じく黙って省く。
+ *  scope null の読み手に影は無い。 */
+function shadowed(db: Db, row: EntryRow, reader: Pick<MemoryReader, "scope">): boolean {
+  return row.kind === "definition" && row.scope === null && reader.scope !== null && liveDefinitions(db, reader.scope, row.path).length > 0;
 }
 
 /** INDEX の枝: prefix の path と、その path に置かれた定義(workspace が盤面全体に勝つ —— 見える
@@ -1508,7 +1518,8 @@ function caseSession(db: Db, anchor: EventRow): { events: EventRow[]; handoff: s
 
 /** id で本文を読む(ADR 0167)。無効化済みの id は本文が同じ後継(`path_moved` の鎖・復元の複製)を見える行の内側でたどり、
  *  末尾の本文に requested_id(求めた旧 id)を添える —— 同じ行は1件で、自身を求めた id が勝つ。末尾が無効化済みなら本文は返さず
- *  dropped に末尾の理由と、見える後継を載せる。見えない id(スコープ・宛先・candidate・存在しない)は黙って落とす。case は
+ *  dropped に末尾の理由と、見える後継を載せる。見えない id(スコープ・宛先・candidate・存在しない)と、末尾が影の Definition の id
+ *  (ADR 0083 追記7 —— 影の外へ移された旧 id は移動先を返す)は黙って落とし、影の後継も見えない後継と同じく載せない。case は
  *  Behavior と Exemplar が、annotations は Exemplar が持つ。 */
 export function readMemory(
   db: Db,
@@ -1540,13 +1551,14 @@ export function readMemory(
       const chain = sameBodyChain(db, row, restored);
       const cut = chain.findIndex((link) => !inSight(link, reader));
       const tail = (cut === -1 ? chain : chain.slice(0, cut)).at(-1)!;
+      if (shadowed(db, tail, reader)) continue;
       if (tail.invalidation_reason === null) {
         if (tail.id === id) found.set(id, { row: tail });
         else if (!found.has(tail.id)) found.set(tail.id, { row: tail, requested_id: id });
         continue;
       }
       const successor = tail.successor_id === null ? undefined : requireEntry(db, tail.successor_id);
-      dropped.push({ id, reason: tail.invalidation_reason, successor: successor && inSight(successor, reader) ? successor.id : null });
+      dropped.push({ id, reason: tail.invalidation_reason, successor: successor && inSight(successor, reader) && !shadowed(db, successor, reader) ? successor.id : null });
     }
     const entries = [...found.values()]
       .sort((a, b) => a.row.id - b.row.id)
@@ -1620,7 +1632,7 @@ export function buildMemoryInjection(
     const relevant =
       match === null
         ? []
-        : rankedEntries(db, match, scope).filter((row) => row.kind !== "definition" && dropReason(row, { agent }) === null);
+        : rankedEntries(db, match, scope).filter((row) => dropReason(row, { agent }) === null);
     const render = (shown: EntryRow[], depth: number) => {
       const omitted = relevant.length - shown.length;
       const omissionNote = [

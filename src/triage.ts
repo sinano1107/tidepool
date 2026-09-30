@@ -244,6 +244,7 @@ function registerRcaReview(
       parent_id: taskId,
       assignee: spec.assignee,
       workspace: objected.workspace ?? undefined,
+      objection_event_ids: spec.pairs.flatMap((p) => p.objection_event_ids),
     },
     now,
   );
@@ -330,6 +331,7 @@ function bundleObjections(
         completion_criteria: "every objection direction above is addressed",
         parent_id: taskId,
         workspace: objected.workspace ?? undefined,
+        objection_event_ids: pairs.flatMap((p) => p.objection_event_ids),
       },
       now,
     );

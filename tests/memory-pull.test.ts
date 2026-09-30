@@ -176,7 +176,7 @@ it("定義だけの枝も子として出て、定義は親の子一覧でもそ�
   expect(browseMemory(db, reader, { prefix: "runbooks/deploy" }, at)).toMatchObject({ children: [], entries: [] });
 });
 
-it("同じ枝に workspace と盤面全体の定義があれば workspace が勝ち、影の盤面全体の定義は browse に出ないが read / search では見える", () => {
+it("同じ枝に workspace と盤面全体の定義があれば workspace が勝ち、影の盤面全体の定義は browse にも search にも出ず、read は見えない id と同じく entries にも dropped にも載せない", () => {
   const { db, reader, define } = board();
   const shadowed = define("build", "Board-wide build conventions.", null);
   define("build", "How this workspace is built.");
@@ -188,8 +188,35 @@ it("同じ枝に workspace と盤面全体の定義があれば workspace が勝
       { name: "deploy", definition: "Board-wide deploy conventions." },
     ],
   });
-  expect(readMemory(db, reader, { ids: [shadowed] }, at).entries.map((e) => e.text)).toEqual(["Board-wide build conventions."]);
-  expect(searchMemory(db, reader, { query: "build" }, at).results.map((r) => r.id)).toContain(shadowed);
+  expect(readMemory(db, reader, { ids: [shadowed] }, at)).toMatchObject({ entries: [], dropped: [] });
+  expect(searchMemory(db, reader, { query: "build" }, at).results.map((r) => r.id)).not.toContain(shadowed);
+});
+
+it("search は影でない Definition も workspace・盤面全体のどちらも当てず、memory_pulled の候補にも載せない", () => {
+  const { db, reader, record, define } = board();
+  define("build", "How this workspace builds tides.");
+  define("deploy", "Board-wide deploy of tides.", null);
+  const leaf = record({ path: "build", title: "tides leaf", text: "tides" });
+
+  const search = searchMemory(db, reader, { query: "tides" }, at);
+
+  expect(search.results.map((r) => r.id)).toEqual([leaf]);
+  expect(getEvent(db, search.event_id)?.payload).toMatchObject({ candidates: [{ id: leaf, dropped: null }] });
+});
+
+it("影でない Definition の read は今までどおり本文を返す", () => {
+  const { db, reader, define } = board();
+  const own = define("build", "How this workspace is built.");
+  const boardWide = define("deploy", "Board-wide deploy conventions.", null);
+
+  expect(readMemory(db, reader, { ids: [own, boardWide] }, at).entries.map((e) => e.text)).toEqual(["How this workspace is built.", "Board-wide deploy conventions."]);
+});
+
+it("scope null の読み手には影が無く、盤面全体の Definition の read は本文を返す", () => {
+  const { db, reader, define } = board();
+  const boardWide = define("deploy", "Board-wide deploy conventions.", null);
+
+  expect(readMemory(db, { ...reader, scope: null }, { ids: [boardWide] }, at).entries.map((e) => e.text)).toEqual(["Board-wide deploy conventions."]);
 });
 
 it("read は本文・path・出所の参照と、参照の型から導いた出所の種別(commit / event = fact、decision = inference)を返す", () => {
@@ -562,6 +589,52 @@ it("後継が読み手に見えない scope へ移された id は、本文を�
   moveMemory(db, { entry_id: old, scope: "sandbox", path: "notes", mover: human }, "webui", at);
 
   expect(readMemory(db, reader, { ids: [old] }, at)).toMatchObject({ entries: [], dropped: [{ id: old, reason: "path_moved", successor: null }] });
+});
+
+it("盤面全体の Definition が、読み手の workspace に Definition のある path へ移されていれば、旧 id の read も移動先を返さず dropped にも載せない", () => {
+  const { db, reader, define } = board();
+  const old = define("staging", "Board-wide build conventions.", null);
+  define("build", "How this workspace is built.");
+  moveMemory(db, { entry_id: old, scope: null, path: "build", mover: human }, "webui", at);
+
+  expect(readMemory(db, reader, { ids: [old] }, at)).toMatchObject({ entries: [], dropped: [] });
+});
+
+it("影の盤面全体の Definition は無効化済みでも、read の dropped に理由を載せない", () => {
+  const { db, reader, define } = board();
+  const old = define("build", "Board-wide build conventions.", null);
+  define("build", "How this workspace is built.");
+  invalidateMemoryEntry(db, { entry_id: old, reason: "environment" }, "human", "webui", at);
+
+  expect(readMemory(db, reader, { ids: [old] }, at)).toMatchObject({ entries: [], dropped: [] });
+});
+
+it("影の path へ移された後に無効化された盤面全体の Definition の旧 id も、read の dropped に理由を載せない", () => {
+  const { db, reader, define } = board();
+  const old = define("staging", "Board-wide build conventions.", null);
+  define("build", "How this workspace is built.");
+  const copy = moveMemory(db, { entry_id: old, scope: null, path: "build", mover: human }, "webui", at).entry_id;
+  invalidateMemoryEntry(db, { entry_id: copy, reason: "environment" }, "human", "webui", at);
+
+  expect(readMemory(db, reader, { ids: [old] }, at)).toMatchObject({ entries: [], dropped: [] });
+});
+
+it("影の path から影の外へ移された盤面全体の Definition の旧 id は、移動先を requested_id つきで返す", () => {
+  const { db, reader, define } = board();
+  const old = define("build", "Board-wide build conventions.", null);
+  const copy = moveMemory(db, { entry_id: old, scope: null, path: "staging", mover: human }, "webui", at).entry_id;
+  define("build", "How this workspace is built.");
+
+  expect(readMemory(db, reader, { ids: [old] }, at)).toMatchObject({ entries: [{ id: copy, requested_id: old }], dropped: [] });
+});
+
+it("置き換えられた Definition の後継が影の盤面全体の Definition なら、dropped の後継は見えない後継と同じく null", () => {
+  const { db, reader, define } = board();
+  const old = define("deploy", "Board-wide deploy conventions.", null);
+  define("build", "How this workspace is built.");
+  defineMemoryBranch(db, { scope: null, path: "build", text: "Board-wide build conventions.", supersedes: [old], author: human }, "webui", at);
+
+  expect(readMemory(db, reader, { ids: [old] }, at)).toMatchObject({ entries: [], dropped: [{ id: old, reason: "superseded", successor: null }] });
 });
 
 it("scope・宛先・candidate で見えない無効化済みの id と存在しない id は、結果の dropped にも event にも載らない", () => {

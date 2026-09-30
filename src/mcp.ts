@@ -685,7 +685,7 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
     "propose_from_objection",
     {
       description:
-        "Review only: turn your finding about an objected entry into memory — objected entries of your parent task only. The board derives the entry kind and addressee from the entry's attributed cause, " +
+        "Review only: turn your finding about an objected entry into memory — only the objected entries your review was opened on (its material). The board derives the entry kind and addressee from the cause attributed to those objections, " +
         "except for a missing_information cause, where you pass as (behavior or knowledge) and must not otherwise. " +
         "With as knowledge, pass based_on_decision (the event id log_decision returned for your reasoning), and not otherwise; it becomes the knowledge entry's source, an inference. " +
         "A behavior is a candidate a human approves later. path is a \"/\"-separated hierarchy (e.g. build/tests). " +
@@ -756,8 +756,9 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
     {
       description:
         "Search the board's memory for this workspace by full-text query; results are " +
-        "{id, title, path} in rank order, and truncated says a next page exists. The index is " +
-        "English; query in English. Read an entry's text with read_memory.",
+        "{id, title, path} in rank order, and truncated says a next page exists. Entries are " +
+        "searched by their English text; query in English. Read an entry's text with read_memory. " +
+        "Definitions are not searched; the index in your Memory section and browse_memory carry them.",
       inputSchema: { query: z.string().min(1), page },
     },
     async (input) => runVerb(deps, attributedTaskId, (task) => searchMemory(deps.db, reader(task), input, deps.clock.now())),

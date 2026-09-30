@@ -111,7 +111,7 @@ it("search_memory の description は、索引が英語だと言う(#1052)", asy
   const client = await mcpClient(t.mcpBaseUrl, task.id);
   try {
     const { tools } = await client.listTools();
-    expect(tools.find((tool) => tool.name === "search_memory")?.description).toContain("The index is English; query in English.");
+    expect(tools.find((tool) => tool.name === "search_memory")?.description).toContain("Entries are searched by their English text; query in English.");
   } finally {
     await client.close();
   }
