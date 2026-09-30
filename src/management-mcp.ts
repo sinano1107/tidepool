@@ -944,18 +944,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
     },
     async (input) => {
       const result = await registerThroughHumanDoor(
-        {
-          db: deps.db,
-          workspace: deps.workspace,
-          resolveWorkspace: deps.resolveWorkspace,
-          github: deps.github,
-          draftClient: deps.draftClient,
-          agentRegistered: deps.agentRegistered,
-          isProtectedWorkspace: deps.isProtectedWorkspace,
-          pollNow: deps.pollNow,
-          defaultAgentName: deps.defaultAgentName,
-          auditorName: deps.auditorName,
-        },
+        deps,
         input as import("./human-verbs.js").HumanRegisterInput,
         () => deps.clock.now(),
         "mcp",
