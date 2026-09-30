@@ -479,8 +479,9 @@ async function draftBehaviorCandidate(db: Db, deps: RetrospectiveCallDeps, attri
     const input = round === "initial" ? objectionInput(db, attribution) : secondRoundInput(db, taskId, attribution);
     const call = boardCallSetting(db, deps.behaviorDraftClient, deps.containers);
     if ("unavailable" in call) return;
-    // INDEX は撃つ時点のもの(ADR 0164 決定4)
-    const index = buildMemoryInjection(db, task, scope, entry.worker_id).section;
+    // INDEX は撃つ時点のもの(ADR 0164 決定4)。関連 leaf は spawn 時の view で引き、ここでは訳さない(ADR 0175 決定6)
+    const query = latestEventOfTask(db, taskId, "memory_injected")?.payload.query;
+    const index = buildMemoryInjection(db, task, scope, entry.worker_id, query).section;
     let draft: BehaviorDraft;
     try {
       draft = await call.client.draft({ ...input, index }, call.setting);

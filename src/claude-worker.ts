@@ -21,7 +21,7 @@ import {
   MOONSHOT_DEFAULT_MODEL,
   resolveExecutionSetting,
 } from "./execution-setting.js";
-import { buildMemoryInjection, recordMemoryInjection } from "./memory.js";
+import { buildMemoryInjection, type InjectionQuery, recordMemoryInjection } from "./memory.js";
 import { projectAndPersist } from "./precedent.js";
 import type { ProcessContainers, PtyFn, PtyProcess } from "./process-container.js";
 import {
@@ -1609,7 +1609,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     if (setting) assertKnownEffort(setting.effort);
   }
 
-  start(task: Task, setting: ExecutionSetting): void {
+  start(task: Task, setting: ExecutionSetting, query?: InjectionQuery): void {
     // loaded per pickup so a registry update takes effect on the next task —
     // remote-backed 盤面では、直前の pickup ゲートが撃った fetch で更新された
     // `origin/main` を読む(ADR 0052 決定2: 観測点と refresh 点は同じ ref)
@@ -1760,7 +1760,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
         // nothing is denied, so ADR 0033's sandbox may open the skill roots
         // wholesale — there is no allowlist for a `cat` to route around
         permittedSkills: "all",
-      }, routing);
+      }, routing, query);
       return;
     }
     if (skills.length === 0) {
@@ -1768,7 +1768,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
         deny: [],
         disableSlashCommands: true,
         permittedSkills: [],
-      }, routing);
+      }, routing, query);
       return;
     }
     // a rejected probe is the same "could not enumerate" as null — never the old wedge
@@ -1809,7 +1809,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
           deny,
           disableSlashCommands: false,
           permittedSkills,
-        }, routing);
+        }, routing, query);
       } catch (err) {
         this.recordSpawnFailed(task, agent, {
           error_code: (err as NodeJS.ErrnoException).code ?? null,
@@ -1859,6 +1859,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
       permittedSkills: string[] | "all";
     },
     routing: ProviderRouting,
+    query: InjectionQuery | undefined,
   ): void {
     const { definition, profile } = agent;
     // the ?task= param is the attribution the MCP router checks against the
@@ -1922,7 +1923,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     const cliVersion = typeof this.options.cliVersion === "function"
       ? this.options.cliVersion()
       : (this.options.cliVersion ?? CLAUDE_CLI_VERSION);
-    const memory = buildMemoryInjection(this.options.db, task, workspace.name, agent.name);
+    const memory = buildMemoryInjection(this.options.db, task, workspace.name, agent.name, query);
     // issue #379: 1タスクに複数の worker session(retry・decompose からの統合
     // 復帰・quarantine 復帰)がありうるため、`worker_spawned` の event id で
     // transcript / stderr のファイル名をセッションごとに一意にする。イベント

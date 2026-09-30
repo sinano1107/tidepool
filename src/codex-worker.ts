@@ -22,7 +22,7 @@ import type { ContainmentCapability } from "./containment.js";
 import type { Db } from "./db.js";
 import { appendEvent, type EventPayload } from "./events.js";
 import type { ExecutionSetting } from "./execution-setting.js";
-import { buildMemoryInjection, recordMemoryInjection, WORKER_MEMORY_VERBS } from "./memory.js";
+import { buildMemoryInjection, type InjectionQuery, recordMemoryInjection, WORKER_MEMORY_VERBS } from "./memory.js";
 import { META_REVIEW_SUBJECTS, metaReviewSubjectOf } from "./meta-review.js";
 import type { ContainedProcess, ContainerSpawn, ProcessContainers } from "./process-container.js";
 import { loadRegistry, type RegistrySource } from "./registry.js";
@@ -969,7 +969,7 @@ export class CodexWorker implements WorkerAdapter {
     mkdirSync(options.codexHome, { recursive: true });
   }
 
-  start(task: Task, setting: ExecutionSetting): void {
+  start(task: Task, setting: ExecutionSetting, query?: InjectionQuery): void {
     const registry = loadRegistry(this.options.registry.dir, this.options.registry.mode);
     const workspace = resolveOrQuarantine(
       this.options.db,
@@ -1000,7 +1000,7 @@ export class CodexWorker implements WorkerAdapter {
     if (setting.provider !== "openai") {
       throw new Error(`CodexWorker refuses provider ${setting.provider}; no Harness fallback (ADR 0098)`);
     }
-    const memory = buildMemoryInjection(this.options.db, task, workspace.name, agent.name);
+    const memory = buildMemoryInjection(this.options.db, task, workspace.name, agent.name, query);
     const taskTemp = realpathSync(mkdtempSync(join(tmpdir(), `tidepool-codex-${task.id}-`)));
     // 削除の失敗で session の後始末を止めない(issue #705)
     const removeTaskTemp = () => {

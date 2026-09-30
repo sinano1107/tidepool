@@ -1,5 +1,6 @@
 import type { EventPayload } from "./events.js";
 import type { ExecutionSetting } from "./execution-setting.js";
+import type { InjectionQuery } from "./memory.js";
 import { canonicalHarness, type Harness } from "./registry.js";
 import type { Task } from "./tasks.js";
 
@@ -26,8 +27,11 @@ export interface WorkerAdapter {
    *  `setting` は selector が pickup の瞬間に選んだ実行設定(ADR 0110 決定3)。
    *  adapter はこれをそのまま使い、spawn 時に解決し直さない —— 除外の文脈を
    *  持たない再解決は scheduler と違う entry を選びうる(温存中の Provider で
-   *  走る)。 */
-  start(task: Task, setting: ExecutionSetting): void;
+   *  走る)。
+   *
+   *  `query` は関連 leaf を何で引くか(ADR 0175): pickup が訳した英語の view か、訳せなかった理由。
+   *  無ければ訳す対象外。task の文面は原語のまま運ぶ。 */
+  start(task: Task, setting: ExecutionSetting, query?: InjectionQuery): void;
   /** 畳み込み停止(graceful stop): `taskId` の session に、自己終了と作業の
    *  畳み込みを促す合図を送る。**送達のみで、従われる保証はない** — 合図の
    *  選択(Claude なら SIGTERM)は Harness の性質なので adapter の実装詳細に
@@ -57,10 +61,10 @@ export class CanonicalWorkerRouter implements WorkerAdapter {
     this.adapters = options.adapters;
   }
 
-  start(task: Task, setting: ExecutionSetting): void {
+  start(task: Task, setting: ExecutionSetting, query?: InjectionQuery): void {
     // 選ばれた実行設定の Provider の正準経路へ出す —— 「どの Harness で
     // 走るか」を Provider と別に解決すると、選択と dispatch がずれる(ADR 0098)。
-    this.adapters[canonicalHarness(setting.provider)].start(task, setting);
+    this.adapters[canonicalHarness(setting.provider)].start(task, setting, query);
   }
 
   gracefulStop(taskId: string): void {

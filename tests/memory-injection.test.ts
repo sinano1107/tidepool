@@ -277,7 +277,31 @@ it("INDEX を浅くせずに関連 leaf だけ落としたときは、印は件�
   expect(injection.section).toMatch(/- tide\/ — \(undefined\)\n\n2 relevant entries omitted$/);
 });
 
-it("注入の記録は task 帰属・agent 名義の memory_injected で、worker_spawned の event id・組んだ時点の watermark・entry の id と版・トークン数・INDEX の深さと全深さ・落とした件数・計数器の id と版を持つ", () => {
+it("関連 leaf は呼び手が渡した英語の view で引く —— 日本語だけの task の語では当たらない leaf も、view の語で並ぶ(ADR 0175 決定1)", () => {
+  const { db, task, record } = board({ title: "潮汐グラフのずれを直す", purpose: "タイムゾーンの補正が二重にかかる", completion_criteria: "テストが通る" });
+  const drift = record({ path: "tide", title: "Chart drift", text: "The tide chart drifts when the timezone offset is applied twice." });
+
+  expect(buildMemoryInjection(db, task, "tidepool", "deckhand").entries).toEqual([]);
+  expect(buildMemoryInjection(db, task, "tidepool", "deckhand", { view: "Fix the tide chart drift" }).entries).toEqual([{ id: drift, version: drift }]);
+});
+
+it.each([
+  ["英語の view で引いた", { view: "Deploy to the Pi" }, "deploy"],
+  ["訳す対象だが撃たなかった", { reason: "throttled" }, "chart"],
+  ["訳す対象だが撃って失敗した", { reason: "failed", message: "translation timed out" }, "chart"],
+] as const)("%s注入は、記録の query にその文面か理由を持ち、訳せなかったときは task の原語で引く(ADR 0175 決定4・5)", (_, query, hit) => {
+  const { db, task, record } = board();
+  const ids = {
+    chart: record({ path: "tide", title: "Chart source", text: "The chart reads tides.csv." }),
+    deploy: record({ path: "deploy", title: "Deploy to the Pi", text: "Run deploy-pi." }),
+  };
+
+  const eventId = recordMemoryInjection(db, task.id, "deckhand", 42, buildMemoryInjection(db, task, "tidepool", "deckhand", query), at);
+
+  expect(getEvent(db, eventId)!.payload).toMatchObject({ entries: [{ id: ids[hit], version: ids[hit] }], query });
+});
+
+it("注入の記録は task 帰属・agent 名義の memory_injected で、worker_spawned の event id・組んだ時点の watermark・entry の id と版・トークン数・INDEX の深さと全深さ・落とした件数・計数器の id と版を持つ。訳す対象でない注入は query の欄を持たない", () => {
   const { db, task, record } = board();
   const chart = record({ path: "tide", title: "Chart source", text: "The chart reads tides.csv." });
   const injection = buildMemoryInjection(db, task, "tidepool", "deckhand");
@@ -302,6 +326,7 @@ it("注入の記録は task 帰属・agent 名義の memory_injected で、worke
     },
   });
   expect(injection.tokens).toBeGreaterThan(0);
+  expect(getEvent(db, eventId)!.payload).not.toHaveProperty("query");
 });
 
 it("注入上限は未設定なら 2,000 トークンで、変更は読み口に効き、人間名義・task 無しの memory_settings_changed を残し、周期は載らない(issue #924)", () => {

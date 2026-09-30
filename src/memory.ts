@@ -1616,7 +1616,17 @@ const INJECTION_PREAMBLE =
   "rest. Relevant entries are pointers ranked by relevance, without their text: read the ones that bear on " +
   "your task with read_memory before acting.";
 
+/** 関連 leaf を何で引くか(ADR 0175 決定5)。無ければ訳す対象外で、task の原語で引く。 */
+export type InjectionQuery = NonNullable<Extract<EventPayload, { kind: "memory_injected" }>["query"]>;
+
+/** task の title / purpose / 完了基準を1つの文面に(ADR 0175 決定2): 翻訳の元と、原語で引く query の両方。
+ *  同じ文面なので翻訳の cache の鍵が揃う。 */
+export function injectionQueryText(task: Pick<Task, "title" | "purpose" | "completion_criteria">): string {
+  return `${task.title}\n${task.purpose}\n${task.completion_criteria}`;
+}
+
 type MemoryInjection = {
+  query?: InjectionQuery;
   /** null = 見える approved が無い(節を出さない)。 */
   section: string | null;
   watermark: number;
@@ -1632,8 +1642,8 @@ type MemoryInjection = {
 
 /** spawn 注入の節(spec #586 C / #600 C、provider 非依存): 全階層の定義つき INDEX + 関連 leaf の
  *  ポインタ(title・path・出所の種別、本文は運ばない —— 読むのは read_memory だけ、#604)を上限内に
- *  組む。関連度の query は task の title + purpose + completion criteria の語の OR で、順位は search と
- *  同じ FTS の rank。削り順は固定 —— 関連 leaf を順位の下から1件ずつ → INDEX を深い階層から1段ずつ。
+ *  組む。関連度の query は渡された英語の view(ADR 0175)、無ければ task の title + purpose + completion criteria
+ *  の語の OR で、順位は search と同じ FTS の rank。削り順は固定 —— 関連 leaf を順位の下から1件ずつ → INDEX を深い階層から1段ずつ。
  *  最上位 INDEX はそれだけで上限を超えても残す(枝が無いと pull で降りられない)。meta-review(どの主題も)には組まない ——
  *  節は scope を task から解決し、案内する pull verb はその接続に無い(ADR 0122 決定2)。 */
 export function buildMemoryInjection(
@@ -1641,11 +1651,12 @@ export function buildMemoryInjection(
   task: Pick<Task, "id" | "title" | "purpose" | "completion_criteria">,
   scope: string | null,
   agent: string,
+  query?: InjectionQuery,
 ): MemoryInjection {
   return db.transaction(() => {
     const watermark = memoryWatermark(db);
     const visible = metaReviewSubjectOf(db, task.id) !== null ? [] : visibleEntries(db, { scope, agent });
-    if (visible.length === 0) return { section: null, watermark, entries: [], tokens: 0, index_depth: 0, index_max_depth: 0, omitted: 0 };
+    if (visible.length === 0) return { query, section: null, watermark, entries: [], tokens: 0, index_depth: 0, index_max_depth: 0, omitted: 0 };
     const tree = (prefix: string, depth: number): Array<IndexBranch & { depth: number }> =>
       indexChildren(visible, prefix)
         .filter(isBranch)
@@ -1653,7 +1664,7 @@ export function buildMemoryInjection(
     const branches = tree("", 1);
     const maxDepth = Math.max(...branches.map((b) => b.depth));
     // 語が残らなければ(空 / stopword だけ)関連 leaf は無い。spawn は落とさない
-    const match = ftsQuery(`${task.title} ${task.purpose} ${task.completion_criteria}`, " OR ");
+    const match = ftsQuery(query && "view" in query ? query.view : injectionQueryText(task), " OR ");
     const relevant =
       match === null
         ? []
@@ -1698,6 +1709,7 @@ export function buildMemoryInjection(
     }
     const definitions = branches.flatMap((b) => (b.depth <= depth && b.definition ? [b.definition] : []));
     return {
+      query,
       section,
       watermark,
       entries: [...definitions, ...leaves].map((row) => ({ id: row.id, version: row.version! })),

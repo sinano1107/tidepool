@@ -8,7 +8,7 @@ import { CODEX_FEATURE_SNAPSHOT, CodexWorker, resolveCodexExecutable } from "../
 import { openDb } from "../src/db.js";
 import { appendEvent, listEvents } from "../src/events.js";
 import { resolveExecutionSetting } from "../src/execution-setting.js";
-import { buildMemoryInjection, recordKnowledge } from "../src/memory.js";
+import { buildMemoryInjection, type InjectionQuery, recordKnowledge } from "../src/memory.js";
 import type { ContainerSpawn } from "../src/process-container.js";
 import { openQuarantineValues } from "../src/quarantine.js";
 import { loadRegistry, REVIEWER_AUTHORITY_PROFILE } from "../src/registry.js";
@@ -112,7 +112,7 @@ You are the Codex worker.`,
   });
   // scheduler が pickup の瞬間に選ぶ実行設定(除外なし)を渡す
   const agent = loadRegistry(registry, "purely-local").agents["codex-agent"]!;
-  const start = (value: Task) => worker.start(value, resolveExecutionSetting(db, agent, value)!);
+  const start = (value: Task, query?: InjectionQuery) => worker.start(value, resolveExecutionSetting(db, agent, value)!, query);
   return { db, worker, start, process, codexHome, codexSystemDir, workspace, logDir, registry };
 }
 
@@ -388,6 +388,18 @@ describe("CodexWorker (ADR 0098)", () => {
       expect(events[spawned + 1]?.payload).toMatchObject({ kind: "memory_injected", worker_spawned_event_id: events[spawned]!.id });
     }
     expect(listEvents(f.db, bare.id).find((e) => e.kind === "memory_injected")?.payload).toMatchObject({ entries: [] });
+  });
+
+  it("start の入力が英語の view を持てば memory_injected はその文面を持ち、持たなければ query の欄は無い(Claude と同じ —— ADR 0175)", async () => {
+    const f = await fixture();
+    const viewed = task(f.db, "codex-view");
+    const bare = task(f.db, "codex-bare");
+    f.start(viewed, { view: "Find the attic ladder" });
+    f.start(bare);
+
+    const injected = (id: string) => listEvents(f.db, id).find((e) => e.kind === "memory_injected")!.payload;
+    expect(injected(viewed.id)).toMatchObject({ query: { view: "Find the attic ladder" } });
+    expect(injected(bare.id)).not.toHaveProperty("query");
   });
 
   it("Board doctrine は Claude と同じ正本から、委譲先を subagent と訳して届き、Workflow 段落を持たず fork_turns の1文で終わる(ADR 0157 決定2・3)", async () => {

@@ -8,6 +8,7 @@ import {
   containmentPickupBlocked,
 } from "./containment.js";
 import type { Db } from "./db.js";
+import { getDisplayLanguage } from "./display-language.js";
 import { appendEvent } from "./events.js";
 import {
   BOARD_DEFAULT_PRIORITY,
@@ -23,6 +24,7 @@ import { type GitHubClient, IssueGoneError } from "./github.js";
 import type { GitHubAuth } from "./github-auth.js";
 import { type HarnessContainmentCheck, harnessContainmentPickupBlocked } from "./harness-containment.js";
 import { aggregateCells, type CellStats, loadEpisodes, type RoutingEpisode, recordShadow, selectorBranch } from "./learner.js";
+import { type InjectionQuery, injectionQueryText } from "./memory.js";
 import { registerDueMetaReviews } from "./meta-review.js";
 import type { ProcessContainers } from "./process-container.js";
 import { quarantineExcludedProviders, quarantineStops } from "./quarantine.js";
@@ -43,6 +45,7 @@ import {
   contentSourceFor,
   DEFAULT_AUDITOR_NAME,
   escalateTask,
+  isHumanRegistered,
   nextSlotTask,
   pickupTask,
   resolveTaskAgent,
@@ -55,6 +58,8 @@ import {
   type ProviderUsageObservation,
   reportProviderUsage,
 } from "./throttle.js";
+import type { TranslationClient } from "./translate.js";
+import { translateSource } from "./translation.js";
 import { claudeUsageObservation, parseUsage, type UsageSnapshot } from "./usage.js";
 import type { WorkerAdapter } from "./worker.js";
 import {
@@ -272,6 +277,8 @@ export function startScheduler(deps: {
   agents?: ListAgentTiers;
   /** 振り返り Board call(帰責・起草・配分評価、ADR 0172): 発火は poll の sweep だけ。 */
   retrospectiveCalls: RetrospectiveCallDeps;
+  /** 表示時翻訳と同じ Board call(ADR 0175 決定1): 注入の関連 leaf を引く英語の view を pickup で作る。 */
+  translationClient?: TranslationClient;
 }): Scheduler {
   const {
     db,
@@ -295,6 +302,7 @@ export function startScheduler(deps: {
     registry,
     agents,
     retrospectiveCalls,
+    translationClient,
   } = deps;
   let inFlight = false;
   const resumeTimer = createResumeTimers(clock, pollNow);
@@ -403,8 +411,10 @@ export function startScheduler(deps: {
         return;
       }
     }
+    const started = { ...picked, ...content };
+    const query = await injectionQuery(started);
     try {
-      worker.start({ ...picked, ...content }, setting);
+      worker.start(started, setting, query);
     } catch (err) {
       // ADR 0118: worker が1度も走らなかった pickup。観測点がこの event を書き、
       // 記録と後始末は adapter の非同期 spawn 失敗と同じ一撃に落とす
@@ -418,6 +428,20 @@ export function startScheduler(deps: {
         at: clock.now(),
       });
       return () => onSpawnFailed(picked.id, failure);
+    }
+  }
+
+  /** 関連 leaf を何で引くか(ADR 0175 決定2〜4): 人間が登録した task を、表示言語が English でない盤面でだけ、
+   *  title / purpose / 完了基準の1つの文面として英語へ訳す。訳せなければ理由を返し、pickup は止めない ——
+   *  client の無い盤面は撃たなかったのと同じ throttled。 */
+  async function injectionQuery(task: Task): Promise<InjectionQuery | undefined> {
+    if (!isHumanRegistered(db, task.id) || getDisplayLanguage(db) === "English") return undefined;
+    if (!translationClient) return { reason: "throttled" };
+    try {
+      const outcome = await translateSource(db, translationClient, injectionQueryText(task), "English", clock.now());
+      return outcome.status === "translated" ? { view: outcome.text } : { reason: "throttled" };
+    } catch (err) {
+      return { reason: "failed", message: err instanceof Error ? err.message : String(err) };
     }
   }
 
