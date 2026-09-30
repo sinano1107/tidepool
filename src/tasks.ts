@@ -2455,7 +2455,7 @@ export function presentTask(
   task: Pick<Task, "id">,
   defaultAgentName?: string,
   auditorName: string = DEFAULT_AUDITOR_NAME,
-): PresentedTask {
+) {
   const [row] = boardRows(
     db,
     "",
@@ -2494,11 +2494,6 @@ export function acceptedSql(taskId: string): string {
     )), 0)`;
 }
 
-/** The shared shape behind `listBoard`/`listQueue`/`presentTask`: the same CTE
- *  and the same blocked/held derivation, with room for one extra `CASE` branch
- *  injected before the fallback so a view can layer on one more display-only
- *  state. `where` defaults to the list's unsettled filter; the single-task view
- *  replaces it with its id. */
 type BoardRow = Omit<TaskRow, "status"> & {
   accepted: number;
   status: TaskStatus | "blocked" | "held" | "skipped";
@@ -2506,10 +2501,11 @@ type BoardRow = Omit<TaskRow, "status"> & {
   registrant: string;
 };
 
-/** A board task as every presenting read口 returns it — `raw_assignee` and
- *  `registrant` always present. */
-type PresentedTask = BoardTask & { raw_assignee: string | null; registrant: string };
-
+/** The shared shape behind `listBoard`/`listQueue`/`presentTask`: the same CTE
+ *  and the same blocked/held derivation, with room for one extra `CASE` branch
+ *  injected before the fallback so a view can layer on one more display-only
+ *  state. `where` defaults to the list's unsettled filter; the single-task view
+ *  replaces it with its id. */
 function boardRows(
   db: Db,
   extraCase: string,
@@ -2536,7 +2532,7 @@ function boardRows(
     .all(...params) as BoardRow[];
 }
 
-function toBoardTask(row: BoardRow): PresentedTask {
+function toBoardTask(row: BoardRow) {
   return {
     ...fillContentPlaceholder(row),
     accepted: row.accepted === 1,

@@ -47,7 +47,7 @@ it("GET /api/tasks/:id は assignee 未指定のタスクを一覧と同じ解�
   const list = (await api(t.baseUrl, "GET", "/api/tasks")).json;
   for (const [id, resolved] of listed) {
     const single = (await api(t.baseUrl, "GET", `/api/tasks/${id}`)).json;
-    expect(single).toMatchObject({ assignee: resolved, raw_assignee: listedRow(list, id).raw_assignee });
+    expect(single).toMatchObject({ assignee: resolved });
     expect(single).toEqual(listedRow(list, id));
   }
 
@@ -67,7 +67,7 @@ it("管理MCP の get_task は assignee 未指定のタスクを list_board と�
     const list = await read("list_board", {});
     for (const [id, resolved] of listed) {
       const { events: _events, ...single } = await read("get_task", { task_id: id });
-      expect(single).toMatchObject({ assignee: resolved, raw_assignee: listedRow(list, id).raw_assignee });
+      expect(single).toMatchObject({ assignee: resolved });
       expect(single).toEqual(listedRow(list, id));
     }
     expect(await read("get_task", { task_id: cancelled })).toMatchObject({
