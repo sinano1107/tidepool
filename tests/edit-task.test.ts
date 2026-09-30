@@ -61,7 +61,7 @@ it("assignee を編集でき、登録時と同じ registry 解決の検査が再
   // from the registry check
   const unset = await api(t.baseUrl, "PATCH", `/api/tasks/${task.id}`, { assignee: "" });
   expect(unset.status).toBe(200);
-  expect(unset.json.assignee).toBe(null);
+  expect(unset.json.raw_assignee).toBe(null);
 });
 
 it("通常タスクの workspace を編集でき、未知の workspace 名は拒否される", async () => {

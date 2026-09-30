@@ -2413,13 +2413,6 @@ export type BoardTask = Omit<Task, "status"> & {
   registrant?: string;
 };
 
-function isHeld(db: Db, taskId: string): boolean {
-  const { held } = db
-    .prepare(`WITH RECURSIVE ${HELD_IDS_CTE} SELECT (${heldSql("?")}) AS held`)
-    .get(taskId) as { held: number };
-  return held === 1;
-}
-
 /** Who registered `taskId` — its own `task_registered` event's worker id.
  *  registerTask always writes exactly one, so an existing task always has one. */
 export function getRegistrant(db: Db, taskId: string): string {
@@ -2454,15 +2447,22 @@ export function questionBlocking(db: Db, taskId: string): string | null {
     .get(taskId) as string | null;
 }
 
-export function presentTask(db: Db, task: Task): BoardTask {
-  const { accepted } = db
-    .prepare(`SELECT ${acceptedSql("tasks.id")} AS accepted FROM tasks WHERE id = ?`)
-    .get(task.id) as { accepted: number };
-  const presented = { ...task, accepted: accepted === 1, registrant: getRegistrant(db, task.id) };
-  if (task.status !== "todo") return presented;
-  if (hasUnfinishedChildren(db, task.id)) return { ...presented, status: "blocked" };
-  if (isHeld(db, task.id)) return { ...presented, status: "held" };
-  return presented;
+/** The single-task view: the same assembly as `listBoard`, filtered to one id
+ *  and without the list's cancelled/settled filter (issue #1208). The names
+ *  resolve an unset assignee exactly as `listBoard` does. */
+export function presentTask(
+  db: Db,
+  task: Pick<Task, "id">,
+  defaultAgentName?: string,
+  auditorName: string = DEFAULT_AUDITOR_NAME,
+): PresentedTask {
+  const [row] = boardRows(
+    db,
+    "",
+    [{ defaultAgentName: defaultAgentName ?? null, auditorName, id: task.id }],
+    "tasks.id = @id",
+  );
+  return toBoardTask(row!);
 }
 
 /** Registration records the generated review set so independent audits and RCA
@@ -2494,14 +2494,28 @@ export function acceptedSql(taskId: string): string {
     )), 0)`;
 }
 
-/** The shared shape behind `listBoard`/`listQueue`: the same CTE and the same
- *  blocked/held derivation, with room for one extra `CASE` branch injected
- *  before the fallback so a view can layer on one more display-only state. */
+/** The shared shape behind `listBoard`/`listQueue`/`presentTask`: the same CTE
+ *  and the same blocked/held derivation, with room for one extra `CASE` branch
+ *  injected before the fallback so a view can layer on one more display-only
+ *  state. `where` defaults to the list's unsettled filter; the single-task view
+ *  replaces it with its id. */
+type BoardRow = Omit<TaskRow, "status"> & {
+  accepted: number;
+  status: TaskStatus | "blocked" | "held" | "skipped";
+  raw_assignee: string | null;
+  registrant: string;
+};
+
+/** A board task as every presenting read口 returns it — `raw_assignee` and
+ *  `registrant` always present. */
+type PresentedTask = BoardTask & { raw_assignee: string | null; registrant: string };
+
 function boardRows(
   db: Db,
   extraCase: string,
   params: unknown[] = [],
-): Array<Omit<TaskRow, "status"> & { accepted: number; status: TaskStatus | "blocked" | "held" | "skipped" }> {
+  where = `status <> 'cancelled' AND NOT ${settledTreeSql("tasks.id")}`,
+): BoardRow[] {
   const fallback = typeAwareDefaultAgentSql("tasks.type", "@defaultAgentName", "@auditorName");
   return db
     .prepare(
@@ -2516,12 +2530,22 @@ function boardRows(
               ELSE status END AS status
        FROM tasks
        JOIN events registered ON registered.task_id = tasks.id AND registered.kind = 'task_registered'
-       WHERE status <> 'cancelled' AND NOT ${settledTreeSql("tasks.id")}
+       WHERE ${where}
        ORDER BY sort_key`,
     )
-    .all(...params) as Array<
-    Omit<TaskRow, "status"> & { accepted: number; status: TaskStatus | "blocked" | "held" | "skipped" }
-  >;
+    .all(...params) as BoardRow[];
+}
+
+function toBoardTask(row: BoardRow): PresentedTask {
+  return {
+    ...fillContentPlaceholder(row),
+    accepted: row.accepted === 1,
+    review_by: parseJson<string[]>(row.review_by),
+    question_items: parseJson<QuestionItem[]>(row.question_items),
+    question_answer: parseJson<string[]>(row.question_answer),
+    question_pending_child: parseJson<PendingChildSpec>(row.question_pending_child),
+    question_proposal: parseJson<QuestionProposal>(row.question_proposal),
+  };
 }
 
 /** The whole board in one query — the list view derives blocked/held in SQL
@@ -2531,16 +2555,7 @@ export function listBoard(
   defaultAgentName?: string,
   auditorName: string = DEFAULT_AUDITOR_NAME,
 ): BoardTask[] {
-  const rows = boardRows(db, "", [{ defaultAgentName: defaultAgentName ?? null, auditorName }]);
-  return rows.map((row) => ({
-    ...fillContentPlaceholder(row),
-    accepted: row.accepted === 1,
-    review_by: parseJson<string[]>(row.review_by),
-    question_items: parseJson<QuestionItem[]>(row.question_items),
-    question_answer: parseJson<string[]>(row.question_answer),
-    question_pending_child: parseJson<PendingChildSpec>(row.question_pending_child),
-    question_proposal: parseJson<QuestionProposal>(row.question_proposal),
-  }));
+  return boardRows(db, "", [{ defaultAgentName: defaultAgentName ?? null, auditorName }]).map(toBoardTask);
 }
 
 /** The queue view (issue #10): the board plus `skipped`, a todo-pickable task
@@ -2592,15 +2607,7 @@ export function listQueue(
   );
   return rows
     .filter((row) => row.assignee !== HUMAN_WORKER_ID)
-    .map((row) => ({
-      ...fillContentPlaceholder(row),
-      accepted: row.accepted === 1,
-      review_by: parseJson<string[]>(row.review_by),
-      question_items: parseJson<QuestionItem[]>(row.question_items),
-      question_answer: parseJson<string[]>(row.question_answer),
-      question_pending_child: parseJson<PendingChildSpec>(row.question_pending_child),
-      question_proposal: parseJson<QuestionProposal>(row.question_proposal),
-    }))
+    .map(toBoardTask)
     .map((task) =>
       task.status === "todo" && isSkipped?.(task) ? { ...task, status: "skipped" as const } : task,
     );

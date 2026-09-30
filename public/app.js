@@ -3532,7 +3532,7 @@ function EditTaskDialog({ taskCard, onSaved, onClose, say }) {
         title: t.title ?? "",
         purpose: t.purpose ?? "",
         completion_criteria: t.completion_criteria ?? "",
-        assignee: t.assignee ?? "",
+        assignee: t.raw_assignee ?? "",
         workspace: t.workspace ?? "",
         risk_flag: !!t.risk_flag,
         review_flag: !!t.review_flag
@@ -3553,7 +3553,7 @@ function EditTaskDialog({ taskCard, onSaved, onClose, say }) {
       if (fields.completion_criteria !== (full.completion_criteria ?? "")) out.completion_criteria = fields.completion_criteria;
       if (fields.workspace !== (full.workspace ?? "")) out.workspace = fields.workspace;
     }
-    if (fields.assignee !== (full.assignee ?? "")) out.assignee = fields.assignee;
+    if (fields.assignee !== (full.raw_assignee ?? "")) out.assignee = fields.assignee;
     if (fields.risk_flag !== !!full.risk_flag) out.risk_flag = fields.risk_flag;
     if (fields.review_flag !== !!full.review_flag) out.review_flag = fields.review_flag;
     return out;
