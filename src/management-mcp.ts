@@ -251,9 +251,9 @@ WebUI themselves. This implies:
   you for log awareness, relay what you read; the same entries will still
   appear in their next triage session.`;
 
-const LANDING_ANNOTATION =
+const LANDING_ANNOTATION_DESCRIPTION =
   "In this list a question also carries `landing`: null for a general question; for a landing question, `blocked_by` says why a `merge` answer would be rejected right now (`attached_children` or `objections`), or null when it would be accepted.";
-const QUESTION_ANNOTATIONS =
+const QUESTION_ANNOTATIONS_DESCRIPTION =
   "A question also carries `approval` (for a child-approval question, whether approving raises the parent's risk; otherwise null), `blocking` (the id of the parent task it holds up, or null), and `moved` (for a memory proposal, one element per pinned entry moved since the proposal was shown: `id` is the entry as pinned, `tail_id` is where it lives now with its current `path` / `scope`, and an answer applies to `tail_id`). A non-question task carries none of these.";
 
 function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
@@ -261,7 +261,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
     new McpServer({ name: "tidepool-management", version: "0.0.0" }, { instructions: MANAGEMENT_MCP_INSTRUCTIONS }),
   );
   // issue #1179: 各口は対応する HTTP の口(GET /api/tasks・GET /api/tasks/:id)と同じ注釈を持つ
-  server.registerTool("list_board", { description: `List the current task board. ${QUESTION_ANNOTATIONS} ${LANDING_ANNOTATION}` }, async () =>
+  server.registerTool("list_board", { description: `List the current task board. ${QUESTION_ANNOTATIONS_DESCRIPTION} ${LANDING_ANNOTATION_DESCRIPTION}` }, async () =>
     toolResult(
       listBoard(deps.db, deps.defaultAgentName, deps.auditorName).map((task) =>
         task.type === "question" ? { ...task, landing: landingAnnotation(deps.db, task), ...questionAnnotations(deps.db, task) } : task,
@@ -299,7 +299,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
   );
   server.registerTool(
     "get_task",
-    { description: `Get a task and its complete event history. ${QUESTION_ANNOTATIONS}`, inputSchema: { task_id: z.string() } },
+    { description: `Get a task and its complete event history. ${QUESTION_ANNOTATIONS_DESCRIPTION}`, inputSchema: { task_id: z.string() } },
     async ({ task_id }) => {
       const task = getTask(deps.db, task_id);
       if (!task) return toolError("task not found");

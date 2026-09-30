@@ -21,6 +21,7 @@ vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 // `GET /api/tasks` の4つ(landing・approval・moved・blocking)、`get_task` は
 // `GET /api/tasks/:id` の3つ(landing を除く)。注釈の値そのものは HTTP 側のテスト
 // (#757・ADR 0162 決定6・ADR 0092 決定4)が言うので、ここは HTTP の同じ行との一致だけを言う。
+// 各テストの値の assert は、fixture が狙ったケース(承認・移動・着地・通常)になっていることの確認である。
 
 let t: Tidepool;
 afterEach(() => t?.stop());
@@ -52,7 +53,7 @@ function expectSameAnnotations(read: Awaited<ReturnType<typeof readFourWays>>) {
     expect(read.mcpRow).toHaveProperty(key);
     expect(read.mcpRow[key]).toEqual(read.httpRow[key]);
   }
-  for (const key of ANNOTATIONS.filter((key) => key !== "landing")) {
+  for (const key of ANNOTATIONS.filter((k) => k !== "landing")) {
     expect(read.mcpSingle).toHaveProperty(key);
     expect(read.mcpSingle[key]).toEqual(read.httpSingle[key]);
   }
