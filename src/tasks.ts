@@ -2505,12 +2505,14 @@ type BoardRow = Omit<TaskRow, "status"> & {
  *  and the same blocked/held derivation, with room for one extra `CASE` branch
  *  injected before the fallback so a view can layer on one more display-only
  *  state. `where` defaults to the list's unsettled filter; the single-task view
- *  replaces it with its id. */
+ *  replaces it with its id. `extraSelect` appends columns a read口 carries of
+ *  its own (`listYourTasks`'s `blocking`). */
 function boardRows(
   db: Db,
   extraCase: string,
   params: unknown[] = [],
   where = `status <> 'cancelled' AND NOT ${settledTreeSql("tasks.id")}`,
+  extraSelect = "",
 ): BoardRow[] {
   const fallback = typeAwareDefaultAgentSql("tasks.type", "@defaultAgentName", "@auditorName");
   return db
@@ -2523,7 +2525,7 @@ function boardRows(
          CASE WHEN status = 'todo' AND ${unfinishedChildSql("tasks.id")} THEN 'blocked'
               WHEN status = 'todo' AND ${heldSql("tasks.id")} THEN 'held'
               ${extraCase}
-              ELSE status END AS status
+              ELSE status END AS status${extraSelect}
        FROM tasks
        JOIN events registered ON registered.task_id = tasks.id AND registered.kind = 'task_registered'
        WHERE ${where}
@@ -2614,22 +2616,27 @@ export function listQueue(
  *  null when it holds up nobody. Presentation of this read口 only, not a column
  *  on `Task`: it decides which completion door the human surface opens (one tap
  *  vs. the handoff dialog). */
-type YourTask = Task & { blocking: string | null; accepted: boolean };
+type YourTask = BoardTask & { blocking: string | null };
 
 /** The your-tasks list (issue #13): every unsettled `human`-assignee task,
  *  the persistent home the Assignee/Slot glossary entries promise them — they
  *  never enter the execution queue (`listQueue`) or the slot (`nextSlotTask`)
- *  at all. Ordered by `sort_key` like every other board view. */
-export function listYourTasks(db: Db): YourTask[] {
-  const rows = db
-    .prepare(
-      `SELECT tasks.*,
-         ${blockingSql("tasks")} AS blocking
-       FROM tasks WHERE assignee = @humanWorkerId
-         AND status NOT IN ('done', 'cancelled') ORDER BY sort_key`,
-    )
-    .all({ humanWorkerId: HUMAN_WORKER_ID }) as Array<TaskRow & { blocking: string | null }>;
-  return rows.map((row) => ({ ...rowToTask(row), blocking: row.blocking, accepted: false }));
+ *  at all. Ordered by `sort_key` like every other board view. Rows are the
+ *  board's derivation (issue #1221); which rows appear is the *stored*
+ *  assignee — a question resolves to `human` but is not a your-task (#1220). */
+export function listYourTasks(
+  db: Db,
+  defaultAgentName?: string,
+  auditorName: string = DEFAULT_AUDITOR_NAME,
+): YourTask[] {
+  const rows = boardRows(
+    db,
+    "",
+    [{ defaultAgentName: defaultAgentName ?? null, auditorName }],
+    `tasks.assignee = '${HUMAN_WORKER_ID}' AND tasks.status NOT IN ('done', 'cancelled')`,
+    `, ${blockingSql("tasks")} AS blocking`,
+  ) as Array<BoardRow & { blocking: string | null }>;
+  return rows.map((row) => ({ ...toBoardTask(row), blocking: row.blocking }));
 }
 
 export function getTask(db: Db, id: string): Task | undefined {

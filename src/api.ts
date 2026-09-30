@@ -1393,6 +1393,8 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
           quarantineChecks,
           agentAdmin,
           agentRegistered,
+          defaultAgentName,
+          auditorName,
         },
         task,
         parsed.data.answers,
@@ -1402,7 +1404,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
         parsed.data.triage,
         parsed.data.amendment,
       );
-      res.json(presentTask(db, question, defaultAgentName, auditorName));
+      res.json(question);
     } catch (err) {
       if (err instanceof DomainError) {
         res.status(409).json({ error: err.message });
@@ -2035,7 +2037,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   // every other board read口 (issue #301) — an issue-backed human task must
   // show the issue's own title, not the "#N" placeholder.
   router.get("/your-tasks", async (_req, res) => {
-    res.json((await presentLive(listYourTasks(db))) satisfies WireContract["GET /api/your-tasks"]);
+    res.json((await presentLive(listYourTasks(db, defaultAgentName, auditorName))) satisfies WireContract["GET /api/your-tasks"]);
   });
 
   // the queue view (#10): an envelope (ADR 0068 決定3) — `halts` says why the

@@ -296,7 +296,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
     });
   });
   server.registerTool("list_your_tasks", { description: "List unsettled tasks assigned to the human." }, async () =>
-    toolResult(listYourTasks(deps.db)),
+    toolResult(listYourTasks(deps.db, deps.defaultAgentName, deps.auditorName)),
   );
   server.registerTool(
     "get_task",
@@ -986,6 +986,8 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
               quarantineChecks: deps.quarantineChecks,
               agentAdmin: deps.agentAdmin,
               agentRegistered: deps.agentRegistered,
+              defaultAgentName: deps.defaultAgentName,
+              auditorName: deps.auditorName,
             },
             task,
             answers,
