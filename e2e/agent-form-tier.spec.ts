@@ -79,7 +79,7 @@ test("tier も advisor も書かない agent は既定の見え方を出し、ad
 
   await page.getByRole("button", { name: "Edit" }).click();
   await expect(saveButton(page)).toBeDisabled();
-  // DS の Checkbox は本物の input を視覚的に隠すので、testId は label 側に付いている
+  // testId は label 側に付いている(input 自体も getByLabel で掴める)
   await page.getByTestId("agent-advisor").click();
   await expect(saveButton(page)).toBeEnabled();
 });

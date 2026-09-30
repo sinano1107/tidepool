@@ -425,7 +425,7 @@ function Checkbox({ label, checked = false, onChange, disabled = false, style, t
     alignItems: "center",
     justifyContent: "center",
     transition: "background var(--duration-quick) var(--ease-tidal), border-color var(--duration-quick) var(--ease-tidal)"
-  } }, checked && /* @__PURE__ */ React.createElement("svg", { width: "11", height: "11", viewBox: "0 0 12 12", fill: "none", "aria-hidden": "true" }, /* @__PURE__ */ React.createElement("path", { d: "M2.5 6.5L5 9L9.5 3.5", stroke: "#fff", strokeWidth: "1.8", strokeLinecap: "round", strokeLinejoin: "round" }))), /* @__PURE__ */ React.createElement("input", { type: "checkbox", checked, onChange, disabled, style: { position: "absolute", opacity: 0, width: 0, height: 0 } }), label && /* @__PURE__ */ React.createElement("span", { style: { fontSize: "var(--text-sm)", color: "var(--text-body)" } }, label));
+  } }, checked && /* @__PURE__ */ React.createElement("svg", { width: "11", height: "11", viewBox: "0 0 12 12", fill: "none", "aria-hidden": "true" }, /* @__PURE__ */ React.createElement("path", { d: "M2.5 6.5L5 9L9.5 3.5", stroke: "#fff", strokeWidth: "1.8", strokeLinecap: "round", strokeLinejoin: "round" }))), /* @__PURE__ */ React.createElement("input", { type: "checkbox", checked, onChange, disabled, style: { position: "absolute", opacity: 0, width: 1, height: 1 } }), label && /* @__PURE__ */ React.createElement("span", { style: { fontSize: "var(--text-sm)", color: "var(--text-body)" } }, label));
 }
 Object.assign(__ds_scope, { Checkbox });
 })(); } catch (e) { __ds_ns.__errors.push({ path: "design-system/components/forms/Checkbox.jsx", error: String((e && e.message) || e) }); }

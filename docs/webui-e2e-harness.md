@@ -102,7 +102,8 @@ Playwright への移行で **消えた**もの:
 (日本語 UI コピーは変わりうる)。クリティカルな導線で壊れやすい要素にだけ
 所有するコンポーネント(`webui/*.tsx`、共有部品なら `design-system/components/`) に
 `data-testid` を足して文言変更に強くする。Design System の掴み方:
-`Select` は native `<select>`(`selectOption`)、`Input` は placeholder 付き native `<input>`。
+`Select` は native `<select>`(`selectOption`)、`Input` は placeholder 付き native `<input>`、
+`Checkbox` は native `<input type="checkbox">`(`getByLabel(...).check()`)。
 
 ## 参照
 
