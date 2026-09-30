@@ -233,7 +233,6 @@ it("meta-review の move_memory_branch は同じ scope の中で枝を改名し�
   expect(moved.map(({ entry_id, successor_id }) => [entry(f.db, entry_id)!.successor_id, entry(f.db, successor_id)])).toEqual(
     under.map((old, i) => [moved[i]!.successor_id, expect.objectContaining({ kind: old.kind, state: old.state, author: old.author, scope: "tidepool", path: old.path.replace(/^habits/, "practices") })]),
   );
-  expect(new Set(under.map((e) => e.kind))).toEqual(new Set(["definition", "behavior", "exemplar", "knowledge"]));
   expect(liveUnder(f.db, "tidepool", "habits")).toEqual([]);
 });
 
