@@ -709,6 +709,8 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
         agentRegistered,
         isProtectedWorkspace,
         pollNow,
+        defaultAgentName,
+        auditorName,
       },
       parsed.data,
       () => clock.now(),
@@ -1306,7 +1308,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     if (after === null && moved.status === "todo" && headBefore === task.id) {
       pollNow();
     }
-    res.json(moved);
+    res.json(presentTask(db, moved, defaultAgentName, auditorName));
   });
 
   // The shared human door owns lookup, registry checks, and domain rules;
@@ -1318,7 +1320,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       return;
     }
     const result = editThroughHumanDoor(
-      memoryRefDeps,
+      { ...memoryRefDeps, defaultAgentName, auditorName },
       req.params.id,
       parsed.data,
       () => clock.now(),
@@ -1330,7 +1332,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
         .json({ error: result.failure.error });
       return;
     }
-    res.json((await presentLive([presentTask(db, result.value, defaultAgentName, auditorName)]))[0]);
+    res.json(result.value);
   });
 
   // Human direct cancel: schema and HTTP response mapping around the shared door.
@@ -1361,7 +1363,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
         .json({ error: result.failure.error });
       return;
     }
-    res.json(presentTask(db, result.value, defaultAgentName, auditorName));
+    res.json(result.value);
   });
 
   // human-verbs is the canonical implementation shared by the WebUI and the
@@ -1418,7 +1420,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       return;
     }
     const result = await completeThroughHumanDoor(
-      { db, pollNow, landing },
+      { db, pollNow, landing, defaultAgentName, auditorName },
       req.params.id,
       parsed.data.handoff,
       () => clock.now(),
@@ -1430,7 +1432,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
         .json({ error: result.failure.error });
       return;
     }
-    res.json(presentTask(db, result.value, defaultAgentName, auditorName));
+    res.json(result.value);
   });
 
   // the handoff-draft route (issue #13): same propose-don't-commit shape as

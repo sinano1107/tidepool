@@ -953,6 +953,8 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
           agentRegistered: deps.agentRegistered,
           isProtectedWorkspace: deps.isProtectedWorkspace,
           pollNow: deps.pollNow,
+          defaultAgentName: deps.defaultAgentName,
+          auditorName: deps.auditorName,
         },
         input as import("./human-verbs.js").HumanRegisterInput,
         () => deps.clock.now(),
