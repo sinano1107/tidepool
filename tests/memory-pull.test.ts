@@ -233,11 +233,15 @@ it.each([
   ["ADR ０１２０ を読む", "0120"],
   ["ADR 0120 を読む", "０１２０"],
   ["wait.done", "ｗａｉｔ．ｄｏｎｅ"],
-  ["かﾞいどを読む", "かﾞいど"],
-  ["かﾞいどを読む", "がいど"],
 ])("索引と query は全角・半角形の字を NFKC で畳んでから語に割るので、text %j の leaf は query %j で当たる(#1192)", (text, query) => {
   const { db, reader, record } = board();
   record({ title: "leaf", text });
+  expect(searchMemory(db, reader, { query }, at).results.map((r) => r.title)).toEqual(["leaf"]);
+});
+
+it.each(["かﾞいど", "がいど"])("孤立した ﾞ が畳みで開く結合文字は、畳みの後の NFC で前の字と合成されるので、text「かﾞいどを読む」の leaf は query %j で当たる(#1192)", (query) => {
+  const { db, reader, record } = board();
+  record({ title: "leaf", text: "かﾞいどを読む" });
   expect(searchMemory(db, reader, { query }, at).results.map((r) => r.title)).toEqual(["leaf"]);
 });
 
