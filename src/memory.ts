@@ -199,11 +199,67 @@ function writeSuperseding(
 ): { entry_id: number; event_id: number } {
   if (supersedes?.length === 0) throw new DomainError("supersedes needs at least one entry to replace; omit it to write without replacing");
   return db.transaction(() => {
+    const since = memoryWatermark(db);
     const replaced = (supersedes ?? []).map((id) => rowToEntry(requireLive(db, id, undefined, "approved")));
     const id = write(replaced);
     if (supersedes) foldMemoryEntries(db, { replaces: supersedes, successor_id: id, author }, origin, at);
+    requireOneTree(db, since);
     return { entry_id: id, event_id: id };
   })();
+}
+
+/** 重ねた1本の木の門(ADR 0178 決定2〜5): 無効化されていない盤面全体のエントリ(種別・状態・宛先を問わない)の path かその上位に、
+ *  無効化されていない workspace の Definition があってはならない。操作が残す状態で見る —— エントリを置く操作の transaction の終わりに、
+ *  since(操作の前の watermark)より後に置かれたエントリを片側に含む組を探す。同じ操作で畳まれた定義・一緒に動いたエントリは当たらない。
+ *  組はすべて名指し、出口は操作が盤面全体のエントリを置いたかで選ぶ。registry は見ない。rebuild と watermark 再生は掛けない。
+ *  ponytail: 生きたエントリの自己結合を書き込みごとに走らせる。店が大きくなったら path の索引か、置いた行だけから引く形へ */
+function requireOneTree(db: Db, since: number): void {
+  const pairs = db
+    .prepare(
+      `SELECT e.id AS e_id, e.kind AS e_kind, e.path AS e_path, ef.id AS e_from,
+              d.id AS d_id, d.path AS d_path, d.scope AS d_scope, df.id AS d_from
+         FROM memory_entries e JOIN memory_entries d
+           ON d.kind = 'definition' AND d.scope IS NOT NULL AND d.invalidation_reason IS NULL
+          AND (e.path = d.path OR substr(e.path, 1, length(d.path) + 1) = d.path || '/')
+         LEFT JOIN memory_entries ef ON ef.invalidation_reason = 'path_moved' AND ef.successor_id = e.id
+         LEFT JOIN memory_entries df ON df.invalidation_reason = 'path_moved' AND df.successor_id = d.id
+        WHERE e.scope IS NULL AND e.invalidation_reason IS NULL AND (e.id > ? OR d.id > ?)
+        ORDER BY e.id, d.id`,
+    )
+    .all(since, since) as Array<{
+    e_id: number;
+    e_kind: string;
+    e_path: string;
+    e_from: number | null;
+    d_id: number;
+    d_path: string;
+    d_scope: string;
+    d_from: number | null;
+  }>;
+  if (pairs.length === 0) return;
+  // 置かれる側は巻き戻る id でなく、移動なら移動元の id で名指す
+  const hits = pairs.map((p) => {
+    const entry =
+      p.e_id <= since
+        ? `whole-board ${p.e_kind} entry ${p.e_id} at ${p.e_path}`
+        : p.e_from === null
+          ? `the whole-board ${p.e_kind} being placed at ${p.e_path}`
+          : `whole-board ${p.e_kind} entry ${p.e_from} moving to ${p.e_path}`;
+    const def =
+      p.d_id <= since
+        ? `workspace definition ${p.d_id} at ${p.d_path} in scope ${p.d_scope}`
+        : p.d_from === null
+          ? `the workspace definition being placed at ${p.d_path} in scope ${p.d_scope}`
+          : `workspace definition ${p.d_from} moving to ${p.d_path} in scope ${p.d_scope}`;
+    return `${entry} lies at or under ${def}`;
+  });
+  const placesWholeBoard = db.prepare("SELECT 1 FROM memory_entries WHERE scope IS NULL AND id > ?").get(since) !== undefined;
+  throw new DomainError(
+    `${hits.join("; ")}: a workspace cannot define a path that holds whole-board entries at or under it — ` +
+      (placesWholeBoard
+        ? "write a whole-board definition at the workspace definition's path with supersedes, rename the workspace branch with move_memory_branch, or choose another path"
+        : "file under the branch as it is, or define a sub-branch"),
+  );
 }
 
 /** Knowledge の書き込み(spec #586 E)。承認不要なので書いた瞬間に approved。 */
@@ -285,8 +341,9 @@ function requireCovers(successor: { scope: string | null; addressee: string | nu
 
 /** meta-review の畳み(issue #619 / ADR 0122 決定1 / ADR 0161 決定2・6): foldMemoryEntries に meta-review の門を掛ける。
  *  後継は新しく書く Knowledge(`based_on_decision` の decision(推論)を出所に)か、既にある approved の `successor_id` のどちらか一方で、
- *  どちらも replaces を覆う(requireCovers)。組(Knowledge → Knowledge、Definition → Definition、Behavior / Exemplar ↔)は種別の線が
- *  持ち、approved の Behavior / Exemplar は承認の線なので consolidate の提案へ回す。 */
+ *  どちらも replaces を覆う(requireCovers)。組(Knowledge → Knowledge、Behavior / Exemplar ↔)は種別の線が持ち、approved の
+ *  Behavior / Exemplar は承認の線なので consolidate の提案へ回す。Definition → Definition は同じ path に限られ、覆う後継(盤面全体か
+ *  同じ scope)は同じ path に並べない(ADR 0178)ので、ここでは起きない。 */
 export function foldMemory(
   db: Db,
   metaReviewId: string,
@@ -335,6 +392,7 @@ function moveEntries(
 ) {
   const moving = new Set(moves.map(({ old }) => old.id));
   return db.transaction(() => {
+    const since = memoryWatermark(db);
     const into = new Map<number, number>();
     const collisions: string[] = [];
     for (const { old, scope, path } of moves) {
@@ -362,11 +420,12 @@ function moveEntries(
         invalidateMemoryEntry(db, { entry_id: old.id, reason: "path_moved", successor_id: copy }, mover.name, origin, at, { activity: mover.activity });
         return { entry_id: old.id, successor_id: copy };
       });
+    requireOneTree(db, since);
     return { moved, folded };
   })();
 }
 
-/** scope / path に生きている Definition の id(定義の書き込み・移動・復元の置き場の門と、read の影の判定)。 */
+/** scope / path に生きている Definition の id(定義の書き込み・移動・復元の置き場の門)。 */
 function liveDefinitions(db: Db, scope: string | null, path: string): number[] {
   return (
     db.prepare("SELECT id FROM memory_entries WHERE kind = 'definition' AND invalidation_reason IS NULL AND path = ? AND scope IS ?").all(path, scope) as Array<{ id: number }>
@@ -432,6 +491,7 @@ export function restoreMemoryEntry(
   at: Date,
 ): { entry_id: number; event_id: number } {
   return db.transaction(() => {
+    const since = memoryWatermark(db);
     const row = requireEntry(db, input.entry_id);
     if (row.invalidation_reason === null) throw new DomainError(`memory entry ${row.id} is not invalidated`);
     if (row.invalidation_reason === "path_moved") {
@@ -447,6 +507,7 @@ export function restoreMemoryEntry(
     if (defined) throw new DomainError(`branch ${row.path} is already defined in that scope by entry ${defined}: invalidate it first`);
     const old = rowToEntry(row);
     const id = copyBody(db, old, { scope: old.scope, path: old.path }, input.restorer, origin, at, { restored_from: old.id });
+    requireOneTree(db, since);
     return { entry_id: id, event_id: id };
   })();
 }
@@ -666,8 +727,12 @@ export function createBehaviorCandidate(
   origin: EventOrigin,
   at: Date,
 ): { entry_id: number; event_id: number } {
-  const id = createEntry(db, { ...input, kind: "behavior", state: "candidate", original: null }, origin, at);
-  return { entry_id: id, event_id: id };
+  return db.transaction(() => {
+    const since = memoryWatermark(db);
+    const id = createEntry(db, { ...input, kind: "behavior", state: "candidate", original: null }, origin, at);
+    requireOneTree(db, since);
+    return { entry_id: id, event_id: id };
+  })();
 }
 
 /** 人間が書く Behavior(ADR 0152 決定3・4): 書いた時点で approved。出所は任意で事例の Episode(decision_logged か
@@ -1025,6 +1090,7 @@ export function proposeMemoryChange(
   const stray = [...new Set(Object.values(PROPOSAL_FIELDS).flat())].filter((f) => !own.includes(f) && input[f] !== undefined);
   if (stray.length > 0) throw new DomainError(`op ${input.op} does not take ${stray.join(", ")}`);
   return db.transaction(() => {
+    const since = memoryWatermark(db);
     let proposal: MemoryProposal;
     let heading: string[];
     let shown: EntryRow;
@@ -1103,6 +1169,7 @@ export function proposeMemoryChange(
     for (const id of [...("successor" in proposal ? [] : [shown.id]), ...proposal.replaces.map(({ id }) => id)]) {
       if (openProposalsPinning(db, id, false).length > 0) throw new DomainError(`memory entry ${id} is already in an open proposal question`);
     }
+    requireOneTree(db, since);
     const detail = [
       ...heading,
       `Scope: ${shown.scope ?? "whole board"}`,
@@ -1215,7 +1282,7 @@ export function approvedMemoryEntries(db: Db, watermark?: number): MemoryEntry[]
  *  印の無い無効化(settings タブ / 管理MCP の直接の無効化)は event の worker。 */
 type InvalidatedBy = { question_id: string } | { activity: MemoryEntryFields["author"]["activity"] } | { worker: string };
 
-/** 人間の面の一覧(spec #586 F): candidate・無効化済み・影になった盤面全体の定義も出す(id 順)。
+/** 人間の面の一覧(spec #586 F): candidate・無効化済みも出す(id 順)。
  *  scope は完全一致(null = 盤面全体、省略 = すべて)、state の invalidated は無効化済み、
  *  approved / candidate は無効化されていないもの。 */
 export function listMemoryEntries(
@@ -1437,7 +1504,7 @@ function dropReason(row: EntryRow, reader: Pick<MemoryReader, "agent">): MemoryD
 
 /** INDEX(browse と注入)のフィルタ(spec #586 B): approved、未無効化、スコープ(task の
  *  workspace or 盤面全体)、宛先(agent 名一致 or 全員)。search は rankedEntries と dropReason に、read は inSight に同じ条件を持つ ——
- *  ただし Definition は INDEX にだけ出る: search は当てず、read は影(shadowed)を落とす(ADR 0083 追記7)。 */
+ *  ただし search は Definition を当てない(ADR 0083 追記7)。 */
 function visibleEntries(db: Db, reader: Omit<MemoryReader, "taskId">): EntryRow[] {
   return db
     .prepare(
@@ -1455,16 +1522,8 @@ function inSight(row: EntryRow, reader: Omit<MemoryReader, "taskId">): boolean {
   return row.state === "approved" && (row.scope === null || row.scope === reader.scope) && (row.addressee === null || row.addressee === reader.agent);
 }
 
-/** 影(ADR 0083 追記4・追記7): 盤面全体の Definition で、同じ path に読み手の workspace の未無効化の Definition がある
- *  (Definition は approved でしか書かれない)。indexChildren の「workspace が勝つ」の read 側の写し。inSight とは別の条件で、
- *  read はこれも見えない id と同じく黙って省く。
- *  scope null の読み手に影は無い。 */
-function shadowed(db: Db, row: EntryRow, reader: Pick<MemoryReader, "scope">): boolean {
-  return row.kind === "definition" && row.scope === null && reader.scope !== null && liveDefinitions(db, reader.scope, row.path).length > 0;
-}
-
-/** INDEX の枝: prefix の path と、その path に置かれた定義(workspace が盤面全体に勝つ —— 見える
- *  スコープは task の workspace と盤面全体の2つだけ)。null = 未定義。 */
+/** INDEX の枝: prefix の path と、その path に置かれた定義(読み手に見えるのは高々1つ —— 門が盤面全体のエントリの path に
+ *  workspace の定義を置かせない、ADR 0178)。null = 未定義。 */
 interface IndexBranch {
   name: string;
   definition: EntryRow | null;
@@ -1477,10 +1536,9 @@ function indexChildren(entries: EntryRow[], prefix: string): Array<IndexBranch |
   const below = prefix === "" ? entries : entries.filter((e) => e.path.startsWith(`${prefix}/`));
   const depth = prefix === "" ? 1 : prefix.split("/").length + 1;
   return [
-    ...[...new Set(below.map((e) => e.path.split("/").slice(0, depth).join("/")))].sort().map((name) => {
-      const own = entries.filter((e) => e.kind === "definition" && e.path === name);
-      return { name, definition: own.find((e) => e.scope !== null) ?? own[0] ?? null };
-    }),
+    ...[...new Set(below.map((e) => e.path.split("/").slice(0, depth).join("/")))]
+      .sort()
+      .map((name) => ({ name, definition: entries.find((e) => e.kind === "definition" && e.path === name) ?? null })),
     ...entries.filter((e) => e.path === prefix && e.kind !== "definition"),
   ];
 }
@@ -1520,7 +1578,7 @@ export function browseMemory(
 type ListedEntry = ReturnType<typeof listMemoryEntries>[number];
 
 /** meta-review の一覧3つ(issue #619): 人間の面と同じ一覧を verb ごとに絞ってページで返す。scope・宛先では
- *  絞らない(両方を見る必要があるのは矛盾を見る人間と meta-review だけ —— ADR 0083 追記4)。 */
+ *  絞らない(両方を見る必要があるのは workspace を跨いで構造を見る人間と meta-review だけ —— ADR 0178 決定8)。 */
 export function pullMemoryList(
   db: Db,
   reader: Pick<MemoryReader, "taskId" | "agent">,
@@ -1689,8 +1747,7 @@ function caseSession(db: Db, anchor: EventRow): { events: EventRow[]; handoff: s
 
 /** id で本文を読む(ADR 0167)。無効化済みの id は本文が同じ後継(`path_moved` の鎖・復元の複製)を見える行の内側でたどり、
  *  末尾の本文に requested_id(求めた旧 id)を添える —— 同じ行は1件で、自身を求めた id が勝つ。末尾が無効化済みなら本文は返さず
- *  dropped に末尾の理由と、見える後継を載せる。見えない id(スコープ・宛先・candidate・存在しない)と、末尾が影の Definition の id
- *  (ADR 0083 追記7 —— 影の外へ移された旧 id は移動先を返す)は黙って落とし、影の後継も見えない後継と同じく載せない。case は
+ *  dropped に末尾の理由と、見える後継を載せる。見えない id(スコープ・宛先・candidate・存在しない)は黙って落とす。case は
  *  Behavior と Exemplar が、annotations は Exemplar が持つ。 */
 export function readMemory(
   db: Db,
@@ -1722,14 +1779,13 @@ export function readMemory(
       const chain = sameBodyChain(db, row, restored);
       const cut = chain.findIndex((link) => !inSight(link, reader));
       const tail = (cut === -1 ? chain : chain.slice(0, cut)).at(-1)!;
-      if (shadowed(db, tail, reader)) continue;
       if (tail.invalidation_reason === null) {
         if (tail.id === id) found.set(id, { row: tail });
         else if (!found.has(tail.id)) found.set(tail.id, { row: tail, requested_id: id });
         continue;
       }
       const successor = tail.successor_id === null ? undefined : requireEntry(db, tail.successor_id);
-      dropped.push({ id, reason: tail.invalidation_reason, successor: successor && inSight(successor, reader) && !shadowed(db, successor, reader) ? successor.id : null });
+      dropped.push({ id, reason: tail.invalidation_reason, successor: successor && inSight(successor, reader) ? successor.id : null });
     }
     const entries = [...found.values()]
       .sort((a, b) => a.row.id - b.row.id)

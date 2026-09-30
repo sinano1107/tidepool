@@ -1643,7 +1643,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     res.json(readMemorySettings(db) satisfies WireContract["GET /api/settings/memory"]);
   });
 
-  // spec #586 F / issue #593: 記憶の一覧(candidate・無効化済み・影の定義も)。GET は盤面を変異させない
+  // spec #586 F / issue #593: 記憶の一覧(candidate・無効化済みも)。GET は盤面を変異させない
   // (ADR 0036)ので、原文の無い agent 由来の表示翻訳は他の面と同じく POST /translate の memory_entry
   const memoryListQuery = memoryListFilterSchema.extend({ board_wide: z.literal("true").optional() });
   router.get("/settings/memory/entries", (req, res) => {

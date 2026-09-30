@@ -236,6 +236,22 @@ it("管理MCP で Knowledge を書き(supersedes の list は domain に渡る)�
   }
 });
 
+it("管理MCP の define_memory_branch は重ねた木の門と畳み方を言い、list_memory_entries は影に触れない(ADR 0178)", async () => {
+  t = await bootTidepool();
+  const client = await managementMcpClient(t.baseUrl);
+  try {
+    const { tools } = await client.listTools();
+    const description = (name: string) => tools.find((tool) => tool.name === name)?.description;
+    expect(description("define_memory_branch")).toContain(
+      "A workspace definition is refused at a path that holds whole-board entries at or under it, and a whole-board entry at or under a path a workspace " +
+        "defines: to clear the way, write a whole-board definition at that path with the workspace definitions in supersedes.",
+    );
+    expect(description("list_memory_entries")).not.toContain("shadow");
+  } finally {
+    await client.close();
+  }
+});
+
 it("POST /api/settings/memory/behaviors と管理MCP の record_behavior は Behavior を書いて supersedes の list を domain に渡し、domain error は 400 / tool error(ADR 0152 / ADR 0162 決定1)", async () => {
   t = await bootTidepool();
   const behavior = { workspace: "tidepool", path: "habits/commits", title: "Split migrations", text: "Commit schema changes on their own.", addressee: "deckhand" };

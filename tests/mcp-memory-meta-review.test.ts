@@ -66,6 +66,26 @@ it("主題 memory の task の接続の tool 一覧は、普通の task の一�
   }
 });
 
+it("define_memory は重ねた木の門と畳み方・改名を言い、list_memory_entries は影に触れず、memory meta-review の purpose は複数の workspace が同じ path を定義したときの畳み方と改名を言う(ADR 0178)", async () => {
+  const { review, client } = await boardWithMetaReview();
+  try {
+    const { tools } = await client.listTools();
+    const description = (name: string) => tools.find((tool) => tool.name === name)?.description;
+    expect(description("define_memory")).toContain(
+      "A workspace definition is refused at a path that holds whole-board entries at or under it, and a whole-board entry is refused at or under a path a workspace defines. " +
+        "To clear the way, write a whole-board definition at the workspace definition's path with supersedes, or rename the workspace branch with move_memory_branch.",
+    );
+    expect(description("define_memory")).not.toContain("shadow");
+    expect(description("list_memory_entries")).not.toContain("shadow");
+    expect(review.purpose).toContain(
+      "When two or more workspaces define the same path, read the definitions: fold them into one whole-board definition when they mean the same " +
+        "(define_memory with scope null and supersedes), and rename one branch when they do not (move_memory_branch).",
+    );
+  } finally {
+    await client.close();
+  }
+});
+
 it("主題外の task から専用 verb を呼ぶと tool error で、何も書かれない", async () => {
   t = await bootTidepool();
   const work = await registerWork(t, "index the tide charts");
@@ -162,17 +182,18 @@ it("fold_memory の successor_id は既にある後継に畳んで無効化の e
   }
 });
 
-it("define_memory の supersedes は list で、同じ path の複数の Definition(workspace と盤面全体)を1回で1つの新しい定義に畳み、空配列とスカラーは tool error で何も書かれない(ADR 0161 決定2)", async () => {
+it("define_memory の supersedes は list で、同じ path の複数の Definition(複数の workspace)を1回で1つの新しい定義に畳み、空配列とスカラーは tool error で何も書かれない(ADR 0161 決定2)", async () => {
   const { client, call, material } = await boardWithMetaReview();
   try {
     const build = await call("define_memory", { scope: "sandbox", path: "build", definition: "How sandbox builds." });
-    const boardWide = await call("define_memory", { scope: null, path: "build", definition: "How every workspace builds." });
+    // setup のみ: registry に無い workspace の定義(門は registry を見ない)
+    const other = defineMemoryBranch(t.db, { scope: "lagoon", path: "build", text: "How lagoon builds.", author: { activity: "human", name: "human" } }, "webui", t.clock.now()).entry_id;
 
     const combined = await call("define_memory", {
       scope: null,
       path: "build",
       definition: "How every workspace, sandbox included, builds.",
-      supersedes: [build.body.entry_id, boardWide.body.entry_id],
+      supersedes: [build.body.entry_id, other],
     });
     expect(combined.isError).toBe(false);
 
@@ -180,7 +201,7 @@ it("define_memory の supersedes は list で、同じ path の複数の Definit
     const consolidated = [
       [material, null, null],
       [build.body.entry_id, "superseded", combined.body.entry_id],
-      [boardWide.body.entry_id, "superseded", combined.body.entry_id],
+      [other, "superseded", combined.body.entry_id],
       [combined.body.entry_id, null, null],
     ];
     expect(await rows()).toEqual(consolidated);
@@ -207,13 +228,13 @@ it("list_memory_entries は scope の名前 / null(盤面全体)/ 省略(すべ�
   const { client, call, material } = await boardWithMetaReview();
   const now = t.clock.now();
   const human = { activity: "human" as const, name: "human" };
-  const boardWide = defineMemoryBranch(t.db, { scope: null, path: "build", text: "How every workspace builds.", author: human }, "webui", now).entry_id;
-  const shadowing = defineMemoryBranch(t.db, { scope: "sandbox", path: "build", text: "How sandbox builds.", author: human }, "webui", now).entry_id;
+  const boardWide = defineMemoryBranch(t.db, { scope: null, path: "deploy", text: "How every workspace deploys.", author: human }, "webui", now).entry_id;
+  const sandboxDefinition = defineMemoryBranch(t.db, { scope: "sandbox", path: "build", text: "How sandbox builds.", author: human }, "webui", now).entry_id;
   try {
     const ids = async (args: Record<string, unknown>) => (await call("list_memory_entries", args)).body.entries.map((e: any) => e.id);
-    expect(await ids({})).toEqual([material, boardWide, shadowing]);
+    expect(await ids({})).toEqual([material, boardWide, sandboxDefinition]);
     expect(await ids({ scope: null })).toEqual([boardWide]);
-    expect(await ids({ scope: "sandbox", kind: "definition", page: 1 })).toEqual([shadowing]);
+    expect(await ids({ scope: "sandbox", kind: "definition", page: 1 })).toEqual([sandboxDefinition]);
 
     for (const verb of ["list_memory_entries", "list_memory_candidates", "list_memory_behaviors", "list_memory_proposals", "list_precedents"]) {
       expect(await call(verb)).toMatchObject({ isError: false, body: { truncated: false, event_id: expect.any(Number) } });
