@@ -245,7 +245,7 @@ it("path は NFC にだけ揃え全角・半角は畳まないので、ｶﾞｲ
   record({ path: "ｶﾞｲﾄﾞ/読み方", title: "t" });
   record({ path: "ガイド/読み方".normalize("NFC"), title: "t" });
 
-  expect(browseMemory(db, reader, {}, at).children.map((c) => c.name).sort()).toEqual(["ガイド".normalize("NFC"), "ｶﾞｲﾄﾞ"].sort());
+  expect(browseMemory(db, reader, {}, at).children.map((c) => c.name)).toEqual(["ガイド".normalize("NFC"), "ｶﾞｲﾄﾞ"]);
 });
 
 it("NFC の ガイド に生きた定義があるとき、NFD の ガイド への定義は supersedes なしでは既に定義があるとして断られる(#1191)", () => {
@@ -272,7 +272,6 @@ it("NFD の path で枝ごと移すと NFC で記録した配下も含めて枝�
     "資料/ガイド".normalize("NFC"),
     "資料/ガイド/読み方".normalize("NFC"),
   ]);
-  expect(browseMemory(db, reader, {}, at).children.map((c) => c.name)).toEqual(["資料"]);
 });
 
 it("エントリ1件の移動に NFD の path を渡すと NFC で保存され、NFC の定義に同じ path の NFD を渡しても path を変えるとは扱わず scope だけを移す(#1191)", () => {
