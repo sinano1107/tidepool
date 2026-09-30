@@ -927,10 +927,11 @@ export function proposeMemoryChange(
       if (input.text === undefined && input.based_on_decision !== undefined) {
         throw new DomainError("a consolidation into an existing entry writes no entry, so it takes no based_on_decision");
       }
+      const existing = input.candidate_id ?? input.successor_id;
+      if (pins.some(({ id }) => id === existing)) throw new DomainError(`successor ${existing} cannot be one of the entries it replaces`);
       if (input.candidate_id !== undefined) {
         // 陳腐化・defer で閉じた提案の再提案の形(ADR 0174 決定1)。replaces の門は text の形と同じで、approved 限定は掛けない
         const candidate = requireLive(db, input.candidate_id, ["behavior", "exemplar"], "candidate");
-        if (pins.some(({ id }) => id === candidate.id)) throw new DomainError(`candidate ${candidate.id} cannot be one of the entries it replaces`);
         // Exemplar は出所が case なので、text の形の起草と同じく replaces がその出所を共有する
         if (candidate.kind === "exemplar" && !sharedSource([rowToEntry(candidate), ...replaced])) {
           throw new DomainError(`an exemplar consolidation needs replaces that share candidate ${candidate.id}'s source: the exemplar keeps it as its case`);
@@ -943,7 +944,6 @@ export function proposeMemoryChange(
         // candidate を既にある approved へ寄せるのは fold_memory だけ(ADR 0161 決定5)
         const candidate = replaced.find((row) => row.state !== "approved");
         if (candidate) throw new DomainError(`memory entry ${candidate.id} is a candidate: fold it into ${successor.id} with fold_memory's successor_id instead`);
-        if (pins.some(({ id }) => id === successor.id)) throw new DomainError(`successor ${successor.id} cannot be one of the entries it replaces`);
         proposal = { kind: "memory", op: "consolidate", successor: { id: successor.id, version: successor.version! }, replaces: pins };
         shown = successor;
         heading = [`Consolidate into existing ${successor.kind} #${successor.id}, replacing:`, ...replacing];

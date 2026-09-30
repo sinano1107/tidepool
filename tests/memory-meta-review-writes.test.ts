@@ -513,14 +513,14 @@ function staled() {
   const [kept, dropped] = [replaced("Split migrations"), replaced("Two commits per migration")];
   const { candidate_id } = consolidate([kept, dropped], { text: "Split schema and data changes." });
   invalidateMemoryEntry(db, { entry_id: dropped, reason: "requirement_change" }, "human", "webui", at);
-  return { ...fixture, candidate_id, kept, dropped, repropose: fixture.propose };
+  return { ...fixture, candidate_id, kept, dropped };
 }
 
 it("consolidate の candidate_id は陳腐化で閉じた提案の既存 candidate を後継に名指し、replaces を選び直して新しい entry を作らない(ADR 0174 決定1)", () => {
-  const { db, candidate_id, kept, repropose } = staled();
+  const { db, candidate_id, kept, propose } = staled();
   const before = listMemoryEntries(db, {});
 
-  const question = repropose({ candidate_id, replaces: [kept] });
+  const question = propose({ candidate_id, replaces: [kept] });
 
   expect(listMemoryEntries(db, {})).toEqual(before);
   expect(question.question_proposal).toEqual({ kind: "memory", op: "consolidate", candidate_id, replaces: [{ id: kept, version: null }] });
@@ -542,19 +542,19 @@ it.each([
   ["名指す candidate が replaces に含まれる", (f: Staled) => ({ candidate_id: f.candidate_id, replaces: [f.kept, f.candidate_id] })],
 ] as const)("consolidate の candidate_id で%sと domain error で、何も pin せず entry も書かない(ADR 0174 決定1)", (_, input) => {
   const fixture = staled();
-  const { db, candidate_id, kept, repropose } = fixture;
+  const { db, candidate_id, kept, propose } = fixture;
   const bad = input(fixture);
   const before = listMemoryEntries(db, {});
 
-  expect(() => repropose({ replaces: [kept], ...bad })).toThrow(DomainError);
+  expect(() => propose({ replaces: [kept], ...bad })).toThrow(DomainError);
   expect(listMemoryEntries(db, {})).toEqual(before);
-  expect(repropose({ candidate_id, replaces: [kept] }).question_proposal).toMatchObject({ candidate_id });
+  expect(propose({ candidate_id, replaces: [kept] }).question_proposal).toMatchObject({ candidate_id });
 });
 
 it("consolidate の candidate_id の replaces は text の形と同じ門で、approved の Behavior / Exemplar も取れる —— successor_id の形の approved 限定は掛けない(ADR 0174 決定1)", () => {
-  const { candidate_id, kept, behavior, exemplar, repropose } = staled();
+  const { candidate_id, kept, behavior, exemplar, propose } = staled();
 
-  expect(repropose({ candidate_id, replaces: [kept, behavior, exemplar] }).question_proposal).toMatchObject({
+  expect(propose({ candidate_id, replaces: [kept, behavior, exemplar] }).question_proposal).toMatchObject({
     candidate_id,
     replaces: [{ id: kept }, { id: behavior }, { id: exemplar }],
   });
@@ -562,8 +562,8 @@ it("consolidate の candidate_id の replaces は text の形と同じ門で、a
 
 it("既存 candidate の consolidate は初回の統合と同じく、approve で candidate を approved にして replaces をそれを後継とする superseded にし、reject は candidate だけを rejected にし、defer は何も変えない(ADR 0174 決定1)", () => {
   const settle = (answer: (db: ReturnType<typeof openDb>, proposal: MemoryProposal, questionId: string) => void) => {
-    const { db, candidate_id, kept, behavior, repropose } = staled();
-    const question = repropose({ candidate_id, replaces: [kept, behavior] });
+    const { db, candidate_id, kept, behavior, propose } = staled();
+    const question = propose({ candidate_id, replaces: [kept, behavior] });
     answer(db, question.question_proposal as MemoryProposal, question.id);
     return [candidate_id, kept, behavior].map((id) => entry(db, id));
   };
@@ -586,8 +586,8 @@ it("既存 candidate の consolidate は初回の統合と同じく、approve �
 });
 
 it("既存 candidate の consolidate の修正値つき approve は人間名義の approved を作り、candidate と replaces をそれを後継とする superseded にする(ADR 0174 決定1)", () => {
-  const { db, candidate_id, kept, repropose } = staled();
-  const question = repropose({ candidate_id, replaces: [kept] });
+  const { db, candidate_id, kept, propose } = staled();
+  const question = propose({ candidate_id, replaces: [kept] });
 
   const amended = approveMemoryProposal(db, question.question_proposal as MemoryProposal, question.id, "webui", at, { text: "Keep schema and data changes apart." });
 
@@ -915,8 +915,8 @@ it("op approve に consolidate の欄(replaces)を渡すと、黙って捨てず
 });
 
 it("op consolidate に invalidate の欄(target_id)を渡すと、candidate_id は両方の op の欄でも、今の op に無い欄として domain error で断る(ADR 0174 決定1)", () => {
-  const { candidate_id, kept, behavior, repropose } = staled();
+  const { candidate_id, kept, behavior, propose } = staled();
 
-  expect(() => repropose({ candidate_id, replaces: [kept], target_id: behavior })).toThrow("op consolidate does not take target_id");
-  expect(repropose({ candidate_id, replaces: [kept] }).question_proposal).toMatchObject({ candidate_id });
+  expect(() => propose({ candidate_id, replaces: [kept], target_id: behavior })).toThrow("op consolidate does not take target_id");
+  expect(propose({ candidate_id, replaces: [kept] }).question_proposal).toMatchObject({ candidate_id });
 });
