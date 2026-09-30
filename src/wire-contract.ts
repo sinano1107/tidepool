@@ -104,6 +104,15 @@ interface ApprovalAnnotation {
   raises_parent_risk: boolean;
 }
 
+/** memory の提案 question の移動の注釈(ADR 0162 決定6, src/memory.ts の movedPins)。移された pin ごとに旧 id と `path_moved` の
+ *  鎖の先頭の id・path・scope。question 行にだけ載り、移された pin が無ければ空。 */
+interface MovedPin {
+  id: number;
+  head_id: number;
+  path: string;
+  scope: string | null;
+}
+
 export interface WireContract {
   "GET /api/queue": {
     halts: BoardHalt[];
@@ -115,11 +124,13 @@ export interface WireContract {
     BoardTask & {
       landing?: { blocked_by: "attached_children" | "objections" | null } | null;
       approval?: ApprovalAnnotation | null;
+      moved?: MovedPin[];
       blocking?: string | null;
     }
   >;
   "GET /api/tasks/:id": BoardTask & {
     approval?: ApprovalAnnotation | null;
+    moved?: MovedPin[];
     blocking?: string | null;
     completion_criteria: string;
     workspace: string | null;

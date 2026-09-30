@@ -221,6 +221,24 @@ it("pin の entry が人間・meta-review・superseded のどの経路で無効�
   }
 });
 
+it("盤面の一覧と task 詳細の提案 question は、移された pin ごとの旧 id・先頭の id・path・scope を注釈に持つ —— detail と pin は焼いたまま(ADR 0162 決定6)", async () => {
+  const { ids, client, propose } = await boardWithMetaReview();
+  try {
+    const questionId = await propose(ids[0]!);
+    const row = async () => ((await api(t.baseUrl, "GET", "/api/tasks")).json as any[]).find((task) => task.id === questionId);
+    expect((await row()).moved).toEqual([]);
+    const { detail } = (await task(questionId)).question_items[0];
+
+    const head = (await api(t.baseUrl, "POST", `/api/settings/memory/entries/${ids[0]}/move`, { workspace: null, path: "habits/moved" })).json.entry_id;
+
+    const moved = [{ id: ids[0], head_id: head, path: "habits/moved", scope: null }];
+    expect(await row()).toMatchObject({ status: "todo", moved });
+    expect(await task(questionId)).toMatchObject({ moved, question_proposal: { candidate_id: ids[0] }, question_items: [{ detail }] });
+  } finally {
+    await client.close();
+  }
+});
+
 /** 統合・無効化の提案(issue #621)。approved の Behavior は approve の提案と回答で作る。 */
 async function approvedBehavior(board: Awaited<ReturnType<typeof boardWithMetaReview>>, title: string, scope: string | null = null) {
   const id = candidate(t, title, scope);

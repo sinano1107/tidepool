@@ -182,7 +182,7 @@ function TpQuestionItemPicker({ item, value, locked, onChange, translated, disab
   const { Input, Button } = window.TidepoolDesignSystem_8a0ead;
   const [override, setOverride] = React.useState(false);
   const [overrideText, setOverrideText] = React.useState("");
-  return /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: { fontSize: "var(--text-md)", fontWeight: "var(--weight-semibold)", color: "var(--text-heading)", marginBottom: item.detail ? 3 : 8, whiteSpace: "pre-wrap" } }, item.title), translated && /* @__PURE__ */ React.createElement("div", { style: { fontSize: "var(--text-sm)", color: "var(--tide-5)", marginBottom: item.detail ? 3 : 8, whiteSpace: "pre-wrap" } }, translated.title), item.detail && /* @__PURE__ */ React.createElement("div", { style: { fontSize: "var(--text-xs)", color: "var(--text-secondary)", marginBottom: 8, whiteSpace: "pre-wrap" } }, item.detail), translated && item.detail && /* @__PURE__ */ React.createElement("div", { style: { fontSize: "var(--text-xs)", color: "var(--tide-5)", marginBottom: 8, whiteSpace: "pre-wrap" } }, translated.detail), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 8 } }, item.options.map((o) => {
+  return /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: { fontSize: "var(--text-md)", fontWeight: "var(--weight-semibold)", color: "var(--text-heading)", marginBottom: item.detail ? 3 : 8, whiteSpace: "pre-wrap" } }, item.title), translated && /* @__PURE__ */ React.createElement("div", { style: { fontSize: "var(--text-sm)", color: "var(--tide-5)", marginBottom: item.detail ? 3 : 8, whiteSpace: "pre-wrap" } }, translated.title), item.detail && /* @__PURE__ */ React.createElement("div", { style: { fontSize: "var(--text-xs)", color: "var(--text-secondary)", marginBottom: 8, whiteSpace: "pre-wrap" } }, item.detail), translated && item.detail && /* @__PURE__ */ React.createElement("div", { style: { fontSize: "var(--text-xs)", color: "var(--tide-5)", marginBottom: 8, whiteSpace: "pre-wrap" } }, translated.detail), item.movedNote && /* @__PURE__ */ React.createElement("div", { style: { fontSize: "var(--text-xs)", color: "var(--sun-4)", marginBottom: 8, whiteSpace: "pre-wrap" } }, item.movedNote), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 8 } }, item.options.map((o) => {
     const picked = value === o.label;
     const off = disabled.includes(o.label);
     return /* @__PURE__ */ React.createElement(
@@ -3266,6 +3266,9 @@ function liveTitle(t) {
 function toQuestionCardShape(q, icons) {
   const registrant = q.registrant;
   const isBoard = registrant === "tidepool";
+  const moved = q.moved ?? [];
+  const movedNote = moved.map((m) => `#${m.id} moved \u2192 #${m.head_id} at ${m.path} (${m.scope ?? "whole board"})`).join("\n");
+  const candidateId = q.question_proposal?.kind === "memory" ? q.question_proposal.candidate_id : void 0;
   return {
     // 付帯子の提案 question は親を塞がない — 塞ぐ親は盤面の `blocking` が答える(issue #935)
     id: q.id,
@@ -3279,13 +3282,15 @@ function toQuestionCardShape(q, icons) {
     items: (q.question_items ?? []).map((item) => ({
       title: item.title,
       detail: item.detail,
+      ...movedNote && { movedNote },
       options: item.options.map((o) => ({ label: o, recommended: o === item.recommendation }))
     })),
     // 承認 question(決裁権外の子の登録)と、approve で親の risk が上がるかは
     // 盤面の `approval` 注釈が答える(issue #757)— ここは描画の形に写すだけ
     ...q.question_proposal?.kind === "routing" && q.question_proposal.op === "row" && { amendable: "row" },
     ...q.question_proposal?.kind === "registry" && { amendable: "agent_tier" },
-    ...q.question_proposal?.kind === "memory" && q.question_proposal.candidate_id !== void 0 && { amendable: "memory", candidateId: q.question_proposal.candidate_id },
+    // 修正値の初期値は candidate の今の本文 —— 移されていれば先頭の複製
+    ...candidateId !== void 0 && { amendable: "memory", candidateId: moved.find((m) => m.id === candidateId)?.head_id ?? candidateId },
     ...q.question_proposal?.kind === "memory" && { needsComment: ["reject", "defer"] },
     ...q.approval && {
       kind: "approval",

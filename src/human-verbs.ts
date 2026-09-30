@@ -21,7 +21,7 @@ import {
 import { type GitHubClient, IssueGoneError } from "./github.js";
 import type { HarnessContainmentCheck } from "./harness-containment.js";
 import { type Landing, type LandingVerdict, landingBlock } from "./landing.js";
-import { approveMemoryProposal, deferMemoryProposal, humanEntryInput, listMemoryEntries, type MemoryAmendment, parseMemoryAmendment, rejectMemoryProposal, requireEntry } from "./memory.js";
+import { approveMemoryProposal, deferMemoryProposal, humanEntryInput, listMemoryEntries, type MemoryAmendment, movedHead, parseMemoryAmendment, rejectMemoryProposal } from "./memory.js";
 import { type QuarantineChecks, type QuarantineKind, type QuarantineResolvers, quarantineStops } from "./quarantine.js";
 import type { Harness, Provider, RegistryReachabilityCheck } from "./registry.js";
 import { RegistryFetchFailedError, RegistryPushFailedError } from "./registry-write.js";
@@ -830,9 +830,10 @@ export async function submitAnswer(
     else if (answers[0] === "approve" && proposal?.kind === "memory" && "candidate_id" in proposal) amended = parseMemoryAmendment(amendment);
     else throw new DomainError("only an approve answer to a routing row, agent tier, or memory proposal with a candidate takes an amendment");
   }
-  // approve は「これを注入する」宣言 —— candidate の宛先(修正値があればそれ)と scope が解決できなければ、付け替えるか reject する(ADR 0173 決定2)
+  // approve は「これを注入する」宣言 —— candidate の宛先(修正値があればそれ)と scope が解決できなければ、付け替えるか reject する(ADR 0173 決定2)。
+  // 移された candidate は複製の scope で見る(ADR 0162 決定6)
   if (answers[0] === "approve" && proposal?.kind === "memory" && "candidate_id" in proposal) {
-    const named = requireEntry(deps.db, proposal.candidate_id);
+    const named = movedHead(deps.db, proposal.candidate_id);
     assertMemoryReferencesKnown(deps, { addressee: amended && "addressee" in amended ? amended.addressee : named.addressee, workspace: named.scope });
   }
 
