@@ -328,7 +328,7 @@ function moveEntries(
   origin: EventOrigin,
   at: Date,
   merge?: boolean,
-): { moved: Array<{ entry_id: number; successor_id: number }>; folded: Array<{ entry_id: number; successor_id: number }> } {
+) {
   const moving = new Set(moves.map(({ old }) => old.id));
   return db.transaction(() => {
     const into = new Map<number, number>();
@@ -347,20 +347,18 @@ function moveEntries(
       throw new DomainError(`the move would land ${collisions.join(", ")}: pass merge: true to fold each into the definition already there and move the rest`);
     }
     if (merge && collisions.length === 0) throw new DomainError("merge: true, but no moved definition lands on a path already defined in its scope: move without merge");
-    const moved: Array<{ entry_id: number; successor_id: number }> = [];
-    const folded: Array<{ entry_id: number; successor_id: number }> = [];
-    for (const { old: row, scope, path } of moves) {
-      const successor = into.get(row.id);
-      if (successor !== undefined) {
-        invalidateMemoryEntry(db, { entry_id: row.id, reason: "superseded", successor_id: successor }, mover.name, origin, at, { activity: mover.activity });
-        folded.push({ entry_id: row.id, successor_id: successor });
-        continue;
-      }
-      const old = rowToEntry(row);
-      const copy = copyBody(db, old, { scope, path }, mover, origin, at, old.version === null ? {} : { version: old.version });
-      invalidateMemoryEntry(db, { entry_id: old.id, reason: "path_moved", successor_id: copy }, mover.name, origin, at, { activity: mover.activity });
-      moved.push({ entry_id: old.id, successor_id: copy });
-    }
+    const folded = [...into].map(([entry_id, successor_id]) => {
+      invalidateMemoryEntry(db, { entry_id, reason: "superseded", successor_id }, mover.name, origin, at, { activity: mover.activity });
+      return { entry_id, successor_id };
+    });
+    const moved = moves
+      .filter(({ old }) => !into.has(old.id))
+      .map(({ old: row, scope, path }) => {
+        const old = rowToEntry(row);
+        const copy = copyBody(db, old, { scope, path }, mover, origin, at, old.version === null ? {} : { version: old.version });
+        invalidateMemoryEntry(db, { entry_id: old.id, reason: "path_moved", successor_id: copy }, mover.name, origin, at, { activity: mover.activity });
+        return { entry_id: old.id, successor_id: copy };
+      });
     return { moved, folded };
   })();
 }
