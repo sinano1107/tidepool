@@ -1,5 +1,15 @@
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { test as base } from "@playwright/test";
-import { type BootOptions, bootstrapUrl, bootTidepool, type Tidepool } from "../tests/harness.js";
+import type { WorkspaceConfig } from "../src/workspace.js";
+import {
+  type BootOptions,
+  bootstrapUrl,
+  bootTidepool,
+  initWorkspaceCheckout,
+  type Tidepool,
+} from "../tests/harness.js";
 
 // Playwright から使う bootTidepool の口。事前起動したインスタンスを配るのでは
 // なく `boot(opts)` 関数を配るのは、画面ごとに要る seam が違うから(skills
@@ -7,6 +17,7 @@ import { type BootOptions, bootstrapUrl, bootTidepool, type Tidepool } from "../
 // フェイクで差してボードを一台起こす。起こした台は fixture 側で全部 stop する。
 type Fixtures = {
   boot: (opts?: BootOptions) => Promise<Tidepool>;
+  workspace: (name: string) => Promise<WorkspaceConfig>;
 };
 
 export const test = base.extend<Fixtures>({
@@ -25,6 +36,19 @@ export const test = base.extend<Fixtures>({
       return t;
     });
     for (const t of booted) await t.stop();
+  },
+  // `tests/harness.ts` の `makeWorkspace` の Playwright 版(issue #1307)。あちらの
+  // 後始末は vitest の `onTestFinished` なので Playwright の spec からは呼べない。
+  // 中身(git init + 最初の commit)は同じ関数を使い、後始末だけ fixture が持つ。
+  // biome-ignore lint/correctness/noEmptyPattern: Playwright requires the first fixture argument to be a destructuring pattern
+  workspace: async ({}, use) => {
+    const dirs: string[] = [];
+    await use(async (name) => {
+      const dir = await mkdtemp(join(tmpdir(), `tidepool-${name}-`));
+      dirs.push(dir);
+      return initWorkspaceCheckout(dir, name);
+    });
+    for (const dir of dirs) await rm(dir, { recursive: true, force: true });
   },
 });
 
