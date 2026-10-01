@@ -183,7 +183,9 @@ export function reviewToolDenials(taskType: Task["type"]): string[] {
 // ツール許可リスト(CONTEXT.md の Tool allowlist / ADR 0039)。**盤面のコード
 // 定数**であって registry データではない — 床はデータの状態に依存しない
 // (ADR 0013、`REVIEW_BASH_WRITE_DENIALS` / `src/sandbox.ts` と同じ位置づけ)。
-// agent には依らず、task type にのみ依る。
+// 面を決めるのは task type で、agent のデータが面を広げることはない。agent に依る
+// のは1点だけで、skill 許可リストが空なら `Skill` が外れる(ADR 0185 — 空リストに
+// 付く `--disable-slash-commands` が CLI の面から `Skill` を外すので、宣言をそれに合わせる)。
 //
 // ADR 0038 の「床 = 残余の既定」は、ファイル操作でない in-process ツールには
 // **届いていない**。`acceptEdits` + 本番フラグ一式の下で `CronCreate` が承認要求
@@ -210,7 +212,7 @@ export function reviewToolDenials(taskType: Task["type"]): string[] {
 // import せず独立した literal で書いている(`REVIEW_BASH_WRITE_DENIALS` と同じ線 —
 // import して比べるとコードが計算する通りに期待値も計算するトートロジーになる)ので、
 // 置いてある場所は1つではない: tests/spawn-tools.test.ts(正)、
-// tests/claude-worker.test.ts(spawn 引数と init 行、ファイル冒頭の2定数)、
+// tests/claude-worker.test.ts(spawn 引数と init 行、ファイル冒頭の3定数)、
 // tests/tool-surface-containment.test.ts(WORK_SURFACE)。
 //
 // テストが保証できないのは**綴りの正しさ**である — 実在しない名前は警告なく不活性に
@@ -248,13 +250,18 @@ const REVIEW_REMOVED_TOOLS: readonly string[] = ["Write", "Edit", "NotebookEdit"
  *  純関数、配線は `launch()`」の分離。
  *
  *  review 以外はすべて work と同じ面である — read-only は review という task
- *  type の性質であって実行エージェントの性質ではない(ADR 0013)。 */
-export function spawnTools(taskType: Task["type"]): string[] {
-  // どちらの分岐も**新しい配列**を返す — 床の定数そのものを呼び出し側に渡すと、
+ *  type の性質であって実行エージェントの性質ではない(ADR 0013)。`skills` は
+ *  agent の skill 許可リストで、見るのは空かどうかだけ(空なら `Skill` を外す、
+ *  ADR 0185)。spawn の `--tools` と init 行の照合はこの同じ入力でここを呼ぶ。 */
+export function spawnTools(taskType: Task["type"], skills: readonly string[]): string[] {
+  // filter は毎回**新しい配列**を返す — 床の定数そのものを呼び出し側に渡すと、
   // 呼び出し側の `sort()` や `push()` が床を書き換えられてしまう(`reviewToolDenials`
   // が毎回組み立て直しているのと同じ理由)。
-  if (taskType !== "review") return [...WORKER_TOOLS];
-  return WORKER_TOOLS.filter((tool) => !REVIEW_REMOVED_TOOLS.includes(tool));
+  return WORKER_TOOLS.filter(
+    (tool) =>
+      !(taskType === "review" && REVIEW_REMOVED_TOOLS.includes(tool)) &&
+      !(skills.length === 0 && tool === "Skill"),
+  );
 }
 
 /** 比較対象から外す接頭辞。MCP verb は `--tools` を生き残る別軸なので(ADR 0039
@@ -296,9 +303,10 @@ const MCP_TOOL_PREFIX = "mcp__";
 function checkToolSurface(
   observed: string[],
   taskType: Task["type"],
+  skills: readonly string[],
   mcpServers: string[],
 ): ContainmentCapability {
-  const expected = spawnTools(taskType);
+  const expected = spawnTools(taskType, skills);
   const builtIn = observed.filter((tool) => !tool.startsWith(MCP_TOOL_PREFIX));
   const unexpected = builtIn.filter((tool) => !expected.includes(tool));
   const missing = expected.filter((tool) => !builtIn.includes(tool));
@@ -1271,7 +1279,8 @@ const TOOL_SURFACE_PROBE_ARGS = [
   "--settings",
   JSON.stringify(AUTO_MEMORY_CLOSED),
   "--tools",
-  spawnTools("work").join(","),
+  // 測るのはホストの CLI であって agent の形ではない — `Skill` を含む面で撃つ(ADR 0185)
+  spawnTools("work", [SKILL_WILDCARD]).join(","),
 ];
 
 // この ping の timeout は skill 列挙と**分ける**。失敗の重さが違う:
@@ -1344,7 +1353,7 @@ export async function probeToolSurfaceCapability(
     };
   }
   // work プロファイルで撃っている(TOOL_SURFACE_PROBE_ARGS のコメント参照)
-  const surface = checkToolSurface(observed.tools, "work", observed.mcpServers);
+  const surface = checkToolSurface(observed.tools, "work", [SKILL_WILDCARD], observed.mcpServers);
   return surface.available ? checkAutoMemoryClosed(observed.autoMemoryPath) : surface;
 }
 
@@ -2054,7 +2063,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
         // immediately before the next `--flag` because the option is variadic
         // (`--tools <tools...>`) — a bare token after it would be swallowed.
         "--tools",
-        spawnTools(task.type).join(","),
+        spawnTools(task.type, definition.skills).join(","),
         // the empty-allowlist shape: one flag disables every slash command
         // (skills included), so no per-skill enumeration is needed (ADR 0025
         // point 5).
@@ -2157,7 +2166,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
         advisorObserved.consultations += countAdvisorConsultations(parsed);
         advisorObserved.mainModel = readInitModel(parsed) ?? advisorObserved.mainModel;
         if (!toolSurfaceObserved) {
-          toolSurfaceObserved = this.checkSessionToolSurface(task, parsed);
+          toolSurfaceObserved = this.checkSessionToolSurface(task, definition.skills, parsed);
         }
       }
     });
@@ -2313,12 +2322,16 @@ export class ClaudeCodeWorker implements WorkerAdapter {
    *  決定3)。正本の probe は閉じる2キーを inline で運ぶので、per-task の `--settings`
    *  ファイルが丸ごと黙って無視されたことは probe には見えず、ここが初めての実行時の
    *  観測面になる。不成立の扱いはツール面のずれとまったく同じ(強制回収 + quarantine)。 */
-  private checkSessionToolSurface(task: Task, parsed: Record<string, unknown> | null): boolean {
+  private checkSessionToolSurface(
+    task: Task,
+    skills: readonly string[],
+    parsed: Record<string, unknown> | null,
+  ): boolean {
     const tools = readInitField(parsed, "tools");
     if (!tools) return false;
     const mcpServers = readInitMcpServers(parsed);
     const toolSurface: ContainmentCapability = mcpServers
-      ? checkToolSurface(tools, task.type, mcpServers)
+      ? checkToolSurface(tools, task.type, skills, mcpServers)
       : {
           available: false,
           reason:

@@ -349,6 +349,27 @@ const REVIEW_SURFACE = [
   "TaskStop",
 ];
 
+/** skill 許可リストが空の agent の work の面(ADR 0185): `--disable-slash-commands` の下では
+ *  CLI が `Skill` を面から外すので、宣言からも外す。上の2つと同じく独立した literal。 */
+const WORK_SURFACE_WITHOUT_SKILL = [
+  "Bash",
+  "Read",
+  "Write",
+  "Edit",
+  "NotebookEdit",
+  "Glob",
+  "Grep",
+  "Task",
+  "WebFetch",
+  "WebSearch",
+  "TaskCreate",
+  "TaskGet",
+  "TaskList",
+  "TaskUpdate",
+  "TaskOutput",
+  "TaskStop",
+];
+
 describe("ClaudeCodeWorker", () => {
   it("タスクの workspace を cwd に、stream-json 出力のヘッドレス Claude Code を起動する", async () => {
     const { start, calls } = await makeWorker();
@@ -1017,6 +1038,13 @@ describe("ClaudeCodeWorker", () => {
     expect(calls[0]!.args).toContain("--disable-slash-commands");
   });
 
+  it("skills が空リストの agent の --tools には Skill が載らない — disable フラグが外す面に宣言を合わせる(ADR 0185)", async () => {
+    const { start, calls } = await makeWorker({ "agents/deckhand.md": skilledMd("  []\n") });
+    start("task-noskills-tools", null, "deckhand", "work");
+    expect(spawnedTools(calls[0]!.args)).toEqual(WORK_SURFACE_WITHOUT_SKILL);
+    expect(calls[0]!.args).toContain("--disable-slash-commands");
+  });
+
   it("有限の許可リストは列挙 ping の全集合から許可の補集合を Skill(名前) で deny する(ADR 0025 point 3)", async () => {
     const rec = recordingEnumerator(["code-review", "tdd", "grilling"]);
     const { start, calls } = await makeWorker(
@@ -1473,6 +1501,35 @@ describe("ClaudeCodeWorker", () => {
       initLine([...WORK_SURFACE, "mcp__tidepool__get_current_task"]),
     );
     await vi.waitFor(() => expect(containmentQuestion(db)).toBeUndefined());
+  });
+
+  it("skills が空リストの agent の、Skill を含まない init 行では何も起きない — question も kill も無い(ADR 0185)", async () => {
+    // `--disable-slash-commands` の下で CLI が返す面そのもの(#1268 の実測)。盤面の
+    // 宣言がこれに合っていれば、照合は食い違いを見ない。
+    const { start, processes, killed, db } = await makeWorker({
+      "agents/deckhand.md": skilledMd("  []\n"),
+    });
+    start("task-init-noskills-ok", null, "deckhand", "work");
+    processes[0]!.stdout.write(
+      initLine([...WORK_SURFACE_WITHOUT_SKILL, "mcp__tidepool__get_current_task"]),
+    );
+    processes[0]!.stdout.write(`{"type":"result","result":"done"}\n`);
+    await vi.waitFor(() => expect(killed).toEqual([]));
+    await vi.waitFor(() => expect(containmentQuestion(db)).toBeUndefined());
+  });
+
+  it("skills が空リストの agent の init 行に Skill があれば不成立 — CLI が disable フラグを守らなくなった(ADR 0185)", async () => {
+    const { start, processes, db } = await makeWorker({
+      "agents/deckhand.md": skilledMd("  []\n"),
+    });
+    start("task-init-noskills-drift", null, "deckhand", "work");
+    processes[0]!.stdout.write(initLine(WORK_SURFACE));
+    const question = await vi.waitFor(() => {
+      const q = containmentQuestion(db);
+      expect(q).toBeDefined();
+      return q!;
+    });
+    expect(question.purpose).toContain("Skill");
   });
 
   it("init 行に allowlist 外のツールが並んでいたら封じ込め能力の question が立つ(ADR 0039 決定3)", async () => {
