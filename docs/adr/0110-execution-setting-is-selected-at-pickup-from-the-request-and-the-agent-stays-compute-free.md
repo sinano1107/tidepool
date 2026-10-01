@@ -2,6 +2,8 @@
 
 **Status 追記: 決定1 の省略の定義(「盤面が資格情報を持つ全 Provider を床の構成で」)は ADR 0116 決定1・3 で置き換え** —— 省略は「正準経路が宣言(skills)を満たす全 Provider」の静的な集合になり、資格情報は entry 集合の定義ではなく決定3 の除外条件「Provider 認証」に帰属する。advisor は entry の性質だけで、トップレベルの `advisor` は退役(ADR 0116 決定2)。
 
+**Status 追記: 決定3 の表の「alias または model」と決定4 の「セルは観測された具体 id」は ADR 0182 で置き換え** —— 表の行は具体 id だけになり、セルは pin の綴りで持って行に完全一致で当てる。決定4 の「昇格後もデータの無いセルでは表と一致」は ADR 0181 で置き換え済み。
+
 2026-09-10 の grilling(issue #238 / #357)で決定。観測された痛みは「tidepool の開発を tidepool に任せる」— `/implement-tidepool`
 が issue ごとに決めているモデル / effort / review 強度に、agent 単位で model を固定する今の盤面には置き場が無い。
 検討記録(ChatGPT との設計会話の第3版 HTML)は ADR 0083 を読まずに作られており、その再提案の扱いは ADR 0083 追記3 に置く。
