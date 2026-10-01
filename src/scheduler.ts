@@ -2,7 +2,7 @@ import { quarantineAgent, UnknownAgentError } from "./agent.js";
 import { boardHalts } from "./board-halt.js";
 import { type CliAuthCheck, quarantineCliAuthForProvider } from "./cli-auth.js";
 import type { Clock } from "./clock.js";
-import { type CodexAppServerProbe, type CodexAppServerProbeResult, modelUnlisted } from "./codex-app-server.js";
+import { type CodexAppServerProbe, type CodexAppServerProbeResult, unlistedModelReason } from "./codex-app-server.js";
 import {
   type ContainmentCheck,
   containmentPickupBlocked,
@@ -550,7 +550,7 @@ export function startScheduler(deps: {
       // ADR 0184 決定3: 観測のたびに表の openai の行すべてを一覧と照合する —— 選ばれていない行も外れる
       for (const row of loadExecutionSettingTable(db)) {
         if (row.provider !== "openai" || result.models.includes(row.model)) continue;
-        registerQuarantine(db, "tableRow", tableRowValue("openai", row.model), modelUnlisted(result.cliVersion), now);
+        registerQuarantine(db, "tableRow", tableRowValue("openai", row.model), unlistedModelReason(result.cliVersion), now);
       }
       return evaluateAndReportProviderUsage(
         db,

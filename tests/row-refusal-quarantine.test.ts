@@ -199,10 +199,10 @@ async function bootOpenai(probe: (now: Date) => Promise<CodexAppServerProbeResul
   });
 }
 
-const listing = (models: string[]) => async (now: Date) => ({ ...(await healthyOpenai(now)), models });
+const listingProbe = (models: string[]) => async (now: Date) => ({ ...(await healthyOpenai(now)), models });
 
 it("一覧に無い openai の行は選ばれていてもいなくても Quarantine され、1行に1枚の question が立ち、同じ poll の task は一覧にある行で走る", async () => {
-  await bootOpenai(listing(MEASURED_OPENAI_MODELS));
+  await bootOpenai(listingProbe(MEASURED_OPENAI_MODELS));
   // 同じ economy ティアの先頭(安い)に一覧に無い行を置く —— 選ばれた行が外れる側
   applyExecutionSettingsChange(
     t.db,
@@ -223,26 +223,25 @@ it("一覧に無い openai の行は選ばれていてもいなくても Quarant
   expect(t.worker.startedSettings.map((setting) => setting.model)).toEqual(["gpt-5.6-terra"]);
 });
 
-it("一覧が読めない観測は行の Quarantine を立てず、openai の候補を provider 全体で外す", async () => {
+// provider 全体の fail-closed は provider-scheduler.test.ts の観測不能の釘が言う。ここは表に一覧外の行
+// (種の gpt-6-astra)があっても行の Quarantine が立たないことだけ
+it("一覧が読めない観測は、表に一覧外の行があっても行の Quarantine を立てない", async () => {
   await bootOpenai(async () => ({
     status: "unobservable",
     provider: "openai",
     cliVersion: "codex-cli 0.147.0",
     reason: "App Server response drift: Error: model/list failed: models manager unavailable",
   }));
-  const task = queueWork(t, "unreadable list");
+  queueWork(t, "unreadable list");
 
   await t.clock.advance(HOUR);
 
   expect(await questions(t)).toEqual([]);
-  expect(t.worker.started).toEqual([]);
-  const queue = (await api(t.baseUrl, "GET", "/api/queue")).json.tasks as any[];
-  expect(queue.find((row) => row.id === task.id)?.status).toBe("skipped");
 });
 
 it("openai の行の question への回答は一覧を読み直し、id が載っていなければ拒まれて question は開いたまま、載れば受理される", async () => {
   let models = MEASURED_OPENAI_MODELS;
-  await bootOpenai(async (now) => listing(models)(now));
+  await bootOpenai(async (now) => listingProbe(models)(now));
   queueWork(t, "observes the list");
   await t.clock.advance(HOUR);
   const [question] = await questions(t);

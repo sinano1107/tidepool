@@ -15,7 +15,7 @@ import {
   warnCliAuthExpiry,
 } from "./cli-auth.js";
 import type { Clock } from "./clock.js";
-import { type CodexAppServerProbe, modelUnlisted } from "./codex-app-server.js";
+import { type CodexAppServerProbe, unlistedModelReason } from "./codex-app-server.js";
 import {
   type ContainmentCapability,
   checkHumanSurfaceRefusesAnonymous,
@@ -568,7 +568,7 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
           }
           return result.models.includes(model)
             ? { status: "runs" }
-            : { status: "refused", reason: modelUnlisted(result.cliVersion) };
+            : { status: "refused", reason: unlistedModelReason(result.cliVersion) };
         },
         ...options.modelProbes,
       }

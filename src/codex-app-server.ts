@@ -51,7 +51,7 @@ export type CodexAppServerProbeResult =
 export type CodexAppServerProbe = (now: Date) => Promise<CodexAppServerProbeResult>;
 
 /** 一覧に無い行の理由(ADR 0184 決定3・5)。登録と回答の拒否が同じ観測を同じ文で言う。原因は断言しない(決定1)。 */
-export const modelUnlisted = (cliVersion: string) =>
+export const unlistedModelReason = (cliVersion: string) =>
   `the Codex App Server model list (${cliVersion}, hidden models included) does not include this model id`;
 
 const PLAN_VALUES = [
