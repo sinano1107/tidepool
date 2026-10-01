@@ -17,8 +17,7 @@ describe("spawnTools", () => {
     // `Glob` / `Grep` は 2.1.220 の既定の面には出ていない(測定7)。work セッションに
     // 本物の検索ツールを与えられるのは、この allowlist を書くからである。
     // `Task`(Agent)は boardDoctrine(board-prose.ts)が意図的に開いている既決事項(ADR 0010 追記)、
-    // バックグラウンドのタスクの出力はファイルのパスが tool result と `<task-notification>`
-    // で返り、`Bash` ならそれを `Read` で読む。`TaskStop` はそのタスクを止める口(ADR 0039 追記、#1269)。
+    // `TaskStop` はバックグラウンドのタスクを止める口(出力は `Read` で読む — ADR 0039 追記、#1269)。
     expect(spawnTools("work", false)).toEqual([
       "Bash",
       "Read",

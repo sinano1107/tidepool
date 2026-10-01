@@ -142,8 +142,6 @@ it("観測 ⊂ 期待も不成立 — 黙って不活性化した名前を挙げ
 });
 
 it("2.1.241 の形の init 行(`TaskOutput` が面に有る)は観測 ⊃ 期待で不成立 — `TaskOutput` を名指す(#1269)", async () => {
-  // 2.1.284 以降の CLI は `TaskOutput` を面に出さないので宣言から外した。古い CLI の面は
-  // 宣言より1本多く、黙って通さずに名指しで止まる。
   const result = await probeToolSurfaceCapability(async () => ({
     tools: [...WORK_SURFACE, "TaskOutput"],
     mcpServers: [],
