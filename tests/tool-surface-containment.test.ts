@@ -9,8 +9,8 @@ import { api, bootTidepool, HOUR, registerWork, type Tidepool } from "./harness.
 let t: Tidepool;
 afterEach(() => t?.stop());
 
-/** 宣言どおりの work セッションの面(ADR 0039 の測定と同じ17本)。ここでも実装を
- *  import せず独立した literal で書く。 */
+/** 宣言どおりの work セッションの面(16本 — ADR 0039 の測定の17本から `TaskOutput` を
+ *  除いたもの、#1269)。ここでも実装を import せず独立した literal で書く。 */
 const WORK_SURFACE = [
   "Bash",
   "Read",
@@ -27,7 +27,6 @@ const WORK_SURFACE = [
   "TaskGet",
   "TaskList",
   "TaskUpdate",
-  "TaskOutput",
   "TaskStop",
 ];
 
@@ -124,22 +123,24 @@ it("ping は Board call の口を通り、口が答えを返さなければ(上�
 });
 
 it("ping が allowlist 外のツールを観測したら不成立 — 具体名が残る", async () => {
+  // `TaskOutput` は 2.1.241 の形の init 行(宣言から外した名前がまだ面に有る — #1269)
   const result = await probeToolSurfaceCapability(async () => ({
-    tools: [...WORK_SURFACE, "CronCreate"],
+    tools: [...WORK_SURFACE, "CronCreate", "TaskOutput"],
     mcpServers: [],
     autoMemoryPath: null,
   }));
   expect(result.available === false && result.reason).toContain("CronCreate");
+  expect(result.available === false && result.reason).toContain("TaskOutput");
 });
 
 it("観測 ⊂ 期待も不成立 — 黙って不活性化した名前を挙げる(測定8)", async () => {
   const result = await probeToolSurfaceCapability(async () => ({
-    tools: WORK_SURFACE.filter((tool) => tool !== "Glob" && tool !== "TaskOutput"),
+    tools: WORK_SURFACE.filter((tool) => tool !== "Glob" && tool !== "TaskStop"),
     mcpServers: [],
     autoMemoryPath: null,
   }));
   expect(result.available === false && result.reason).toContain("Glob");
-  expect(result.available === false && result.reason).toContain("TaskOutput");
+  expect(result.available === false && result.reason).toContain("TaskStop");
 });
 
 it("過不足が同時に起きたら両方を挙げる(綴りの取り違えの形そのもの)", async () => {

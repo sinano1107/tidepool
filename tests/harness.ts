@@ -478,9 +478,10 @@ export const FIXTURE_TASK = "6b4c0b23-289e-4f9f-ade1-995fb27f3c0e";
 export const FIXTURE_OTHER_TASK = "609d9475-0191-4a7f-b5bf-5b939695315a";
 export const FIXTURE_SPAWNED_EVENT_ID = 5;
 
-// 2.1.237 の実セッションの記録。init 行の `memory_paths` だけは除いてある —
+// 2.1.237 の実セッションの記録。init 行の `memory_paths` は除いてある —
 // auto-memory を閉じた今の spawn 形では出ない項目で、残すと再生のたびに封じ込めが
-// 不成立になる(ADR 0156、#994)。
+// 不成立になる(ADR 0156、#994)。init 行の `tools` の `TaskOutput` も同じ理由で除いた —
+// 2.1.284 以降の CLI は面に出さず、盤面の宣言からも外した(#1269)。
 const sessionFixture = (name: string) =>
   readFileSync(join(import.meta.dirname, "fixtures", `worker-session-2.1.237.${name}`), "utf8");
 

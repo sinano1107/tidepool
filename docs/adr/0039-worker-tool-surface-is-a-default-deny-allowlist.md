@@ -242,3 +242,17 @@ stream には1本しか出ない)。決定4 の SIGKILL がこの1本で決ま�
 - リストの保守は人間の merge が門になる — コード定数なので registry データのように agent が書き換える経路は無い
 - 決定4 が発火した deploy では、人間は封じ込めの確認 question と、殺されたセッションの
   失敗 question の**2枚**を見る。前者が盤面を止め、後者がそのタスクのリトライを持つ
+
+## 追記: `TaskOutput` を宣言から外す(issue #1269、2026-10-02)
+
+`TaskOutput` は廃止予告ののちに CLI の面から消えた: 2.1.284 以降は `--tools` に挙げても
+面に出ない。バックグラウンドのタスクは出力ファイルのパスを tool result と
+`<task-notification>` で返し、`Bash` のタスクはそのファイルを `Read` で読む — `TaskOutput` が
+面に無くても出力は得られる(測定は #1269)。
+
+したがって宣言から `TaskOutput` を外す — work は16本、review は13本になる。既定拒否の
+allowlist という決定は変わらない。決定1 の「`TaskOutput` / `TaskStop` … 落とすとバック
+グラウンド実行が使えない」と、`Monitor` の理由のうち「`run_in_background` + `TaskOutput` で
+足り」はこの追記で置き換わる。`Monitor` を落とす結論はそのまま立つ —
+`run_in_background` と `<task-notification>` で足りる。`TaskStop` はバックグラウンドの
+タスクを止める口として残す。
