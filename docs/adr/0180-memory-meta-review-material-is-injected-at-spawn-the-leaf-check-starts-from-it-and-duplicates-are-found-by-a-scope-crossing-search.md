@@ -41,3 +41,9 @@ candidate と店の変更をすべて」処理せよと言うが、その集合�
   検索が要る。検索の回数が痛むと観測されたら足す(派生 issue)。
 - **purpose で verb を名指して読ませる** —— 読まれるかが review の規律に戻る。
 - **注入に上限を置く** —— 残りを verb で読む2経路になり、守るのは session の開始だけ。
+
+## 追記(2026-10-01 の triage、issue #1240)
+
+- **`list_memory_behaviors` は外す。** 用途だった「candidate を畳む相手探し」は決定3 の検索に移り、同じ行は
+  `list_memory_entries` の `kind: behavior, state: approved` が返す。決定2 が verb を残す理由(無効化済みの candidate・遡る
+  読み・書き込みの後の読み直し)のどれにも、この verb にしかない読み方は無い。
