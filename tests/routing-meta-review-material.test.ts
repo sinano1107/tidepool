@@ -221,7 +221,7 @@ it("決着した提案は回答か陳腐化が窓の中にあるものだけを 
   applyExecutionSettingsChange(db, { setting: "row", row: { provider: "anthropic", tier: "standard", model: "claude-opus-5-5", effort: "max", price_in: 5, price_out: 25 } }, "webui", at);
   answer(registry, ["reject"], "Keep it.");
   const review = register(db);
-  answer(late, ["reject"]);
+  answer(late, ["reject"], "Too late.");
 
   const { parts } = routingMaterialOf(db, review);
 
@@ -247,7 +247,7 @@ it("節を組んだ記録は主題 routing と、乖離した shadow 行の id�
   applyExecutionSettingsChange(db, { setting: "priority", value: "cost" }, "webui", at);
   const rowEdit = applyExecutionSettingsChange(db, { setting: "row", row: { provider: "anthropic", tier: "economy", model: "claude-haiku-4-5", effort: "low", price_in: 1, price_out: 5 } }, "webui", at)!;
   const question = proposeRoutingChange(db, previous, { op: "promote", rationale: "r" }, "auditor", at).question_id;
-  answerQuestion(db, getTask(db, question)!, ["reject"], at);
+  answerQuestion(db, getTask(db, question)!, ["reject"], at, undefined, "Not yet.");
   const review = register(db);
   const [first, second] = listEventsOfKinds(db, ["meta_review_registered"]).map((e) => e.payload.material_watermark);
   const material = routingMaterialOf(db, review);

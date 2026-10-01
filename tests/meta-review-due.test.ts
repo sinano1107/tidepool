@@ -74,7 +74,7 @@ it("memory の提案 question への回答(置換つき approve の superseded�
 
   approveMemoryProposal(db, { kind: "memory", op: "consolidate", candidate_id: merged, replaces: [{ id: old, version }] }, "question-2", "webui", at);
   approveMemoryProposal(db, { kind: "memory", op: "invalidate", target: { id: target, version: targetVersion }, reason: "environment", replaces: [] }, "question-3", "webui", at);
-  rejectMemoryProposal(db, { kind: "memory", op: "approve", candidate_id: rejected, replaces: [] }, "question-4", "webui", at, "Too vague.");
+  rejectMemoryProposal(db, { kind: "memory", op: "approve", candidate_id: rejected, replaces: [] }, "question-4", "webui", at);
   registerDueMetaReviews(db, afterPeriod);
 
   expect(openMetaReviews(db, "memory")).toBe(0);

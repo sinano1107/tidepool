@@ -900,10 +900,10 @@ it("reject は consolidate の新 candidate だけを後継なしの rejected �
   const merged = candidate(db, "merged wording");
   const before = listMemoryEntries(db, {});
 
-  rejectMemoryProposal(db, { kind: "memory", op: "invalidate", target: { id: old, version }, reason: "environment", replaces: [] }, "question-1", "webui", at, "Still true.");
+  rejectMemoryProposal(db, { kind: "memory", op: "invalidate", target: { id: old, version }, reason: "environment", replaces: [] }, "question-1", "webui", at);
   expect(listMemoryEntries(db, {})).toEqual(before);
 
-  rejectMemoryProposal(db, { kind: "memory", op: "consolidate", candidate_id: merged, replaces: [{ id: old, version }] }, "question-2", "webui", at, "Loses a case.");
+  rejectMemoryProposal(db, { kind: "memory", op: "consolidate", candidate_id: merged, replaces: [{ id: old, version }] }, "question-2", "webui", at);
   expect(listMemoryEntries(db, { state: "invalidated" })).toMatchObject([{ id: merged, invalidation_reason: "rejected", successor_id: null }]);
   expect(approvedMemoryEntries(db).map((e) => e.id)).toEqual([old]);
 });
@@ -1756,7 +1756,7 @@ it("移した candidate への修正値つき approve は末尾の置き場に�
   expect(entryById(amended.db, amended.tail)).toMatchObject({ invalidation_reason: "superseded", successor_id: created });
 
   const rejected = movedCandidateProposal();
-  rejectMemoryProposal(rejected.db, rejected.proposal, rejected.question_id, "webui", at, "Too broad.");
+  rejectMemoryProposal(rejected.db, rejected.proposal, rejected.question_id, "webui", at);
   expect(entryById(rejected.db, rejected.tail)).toMatchObject({ invalidation_reason: "rejected", successor_id: null });
 });
 

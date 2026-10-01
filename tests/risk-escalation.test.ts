@@ -133,6 +133,7 @@ it("rejecting a risk-approval question leaves the child unregistered and the par
 
   const answered = await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, {
     answers: ["reject"],
+    comment: "not needed",
   });
   expect(answered.status).toBe(200);
 

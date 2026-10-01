@@ -1180,15 +1180,16 @@ export function cancelTaskDirectly(
   }, origin);
 }
 
-/** The four pure preconditions an answer submission must clear before any
+/** The five pure preconditions an answer submission must clear before any
  *  caller may run a side effect on its behalf (issue #111): type is
  *  "question", status is still "todo", the answer count matches the
- *  question's item count, and — for a fixed-choice question — every answer
- *  is one of its item's declared options. `answerQuestion` below calls this
+ *  question's item count, for a fixed-choice question every answer is one
+ *  of its item's declared options, and an answer `needsComment` lists
+ *  carries a non-blank comment (ADR 0179). `answerQuestion` below calls this
  *  first as its own self-defense (a direct caller, e.g. a test, gets the
  *  same rejection it always has); see its call site in human-verbs.ts
  *  for why this must also run there, before any side effect. */
-export function assertAnswerable(question: Task, answers: string[]): void {
+export function assertAnswerable(question: Task, answers: string[], comment: string | undefined): void {
   if (question.type !== "question") {
     throw new DomainError("only a question task can be answered");
   }
@@ -1227,6 +1228,16 @@ export function assertAnswerable(question: Task, answers: string[]): void {
       }
     }
   }
+  const needs = needsComment(question).filter((option) => answers.includes(option));
+  if (needs.length > 0 && !comment?.trim()) {
+    throw new DomainError(`answering ${needs.join(" / ")} to this question requires a non-blank comment: why, or for a defer what is still undecided`);
+  }
+}
+
+/** この question で理由の comment が要る選択肢(ADR 0179 決定1〜4)。門(assertAnswerable)と読み口(questionAnnotations)が使う。 */
+export function needsComment(question: Pick<Task, "question_proposal" | "question_pending_child">): string[] {
+  if (question.question_proposal?.kind === "memory") return ["reject", "defer"];
+  return question.question_proposal || question.question_pending_child ? ["reject"] : [];
 }
 
 /** The human steering channel: answer a question from the WebUI. One answer
@@ -1267,9 +1278,10 @@ export function answerQuestion(
   answers: string[],
   now: Date,
   stageUnblock?: (taskId: string) => void,
-  /** The reject-reason steering channel (issue #40): optional, one per
-   *  submission (not per item) — a reject often needs no more than the
-   *  option name, so this is never required. Carried verbatim onto the
+  /** The reject-reason steering channel (issue #40): one per submission
+   *  (not per item). Required — non-blank — only for the options
+   *  `needsComment` lists for this question (ADR 0179); optional for every
+   *  other answer. Carried verbatim onto the
    *  `question_answered` event; omitted from the event payload entirely
    *  when absent, rather than stored as null, so an unanswered comment
    *  leaves the event shape exactly as it was before this existed. */
@@ -1279,7 +1291,7 @@ export function answerQuestion(
   amendment?: ProposalAmendment,
   origin: EventOrigin = "webui",
 ): { question: Task; parentUnblocked: boolean; pickupResumed: boolean } {
-  assertAnswerable(question, answers);
+  assertAnswerable(question, answers, comment);
   const items = question.question_items!;
   const answer = answers[0]!;
   let parentUnblocked = false;

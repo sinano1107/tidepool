@@ -8,7 +8,7 @@ import { appendEvent, type EventOrigin, type EventPayload, type EventRow, getEve
 import { inWindow, type MetaReviewWindow, materialEvents, materialSection, metaReviewSubjectOf, metaReviewWindow, paged, previousMetaReviewWatermark } from "./meta-review.js";
 import { entriesReadBefore, entriesSeenBefore, listEpisodes, sessionSpawnOf, sessionWindow } from "./precedent.js";
 import { routingMaterial } from "./routing-review.js";
-import { approvalAnnotation, BOARD_WORKER_ID, DomainError, getTask, HUMAN_WORKER_ID, type MemoryProposal, type QuestionProposal, questionBlocking, registerTask, settleQuestionAsObserved, type Task } from "./tasks.js";
+import { approvalAnnotation, BOARD_WORKER_ID, DomainError, getTask, HUMAN_WORKER_ID, type MemoryProposal, needsComment, type QuestionProposal, questionBlocking, registerTask, settleQuestionAsObserved, type Task } from "./tasks.js";
 import { entryObjections, objectedEntryText, objectionsById } from "./triage.js";
 
 /** 無効化の理由コード(spec #586 A)。自由記述は持たない。置換と path の付け替えは後継 id
@@ -933,13 +933,14 @@ export function movedPins(db: Db, proposal: QuestionProposal | null): Array<{ id
   });
 }
 
-/** question 行が読むときに運ぶ注釈のうち、一覧と単体ビューの両方の口が足す3つ(issue #1179)。HTTP の `GET /api/tasks`・
+/** question 行が読むときに運ぶ注釈のうち、一覧と単体ビューの両方の口が足す4つ(issue #1179・ADR 0179 決定4)。HTTP の `GET /api/tasks`・
  *  `GET /api/tasks/:id` と管理MCP の `list_board`・`get_task` がここを呼ぶ。`landing` は HTTP の2つと `list_board` が別に足す。 */
 export function questionAnnotations(db: Db, task: Pick<Task, "id" | "parent_id" | "question_pending_child" | "question_proposal">) {
   return {
     approval: approvalAnnotation(db, task),
     moved: movedPins(db, task.question_proposal),
     blocking: questionBlocking(db, task.id),
+    needs_comment: needsComment(task),
   };
 }
 
@@ -1016,17 +1017,10 @@ export function approveMemoryProposal(db: Db, proposal: MemoryProposal, question
 }
 
 /** 提案の reject(spec #615 F): 同じ pin 検査の後、candidate を持つ approve / consolidate は candidate だけを `rejected` で無効化し
- *  (consolidate の replaces は残る)、invalidate と既存の後継の consolidate は何もしない。comment は必須(ADR 0159 決定3)—— 次の meta-review が
- *  選び直す材料で、question_answered に残る(`pullMemoryProposals`)。 */
-export function rejectMemoryProposal(db: Db, proposal: MemoryProposal, questionId: string, origin: EventOrigin, at: Date, comment: string | undefined): void {
-  if (!comment?.trim()) throw new DomainError("rejecting a memory proposal requires a comment saying why");
+ *  (consolidate の replaces は残る)、invalidate と既存の後継の consolidate は何もしない。必須の comment の門は回答の側(`needsComment`、ADR 0179 決定4)。 */
+export function rejectMemoryProposal(db: Db, proposal: MemoryProposal, questionId: string, origin: EventOrigin, at: Date): void {
   const { named } = assertProposalFresh(db, proposal);
   if ("candidate_id" in proposal) invalidateMemoryEntry(db, { entry_id: named.id, reason: "rejected" }, HUMAN_WORKER_ID, origin, at, { question_id: questionId });
-}
-
-/** 提案の defer(ADR 0165 決定3): 決めないので店には何もせず(pin 検査も要らない)、comment だけを reject と同じく必須にする。 */
-export function deferMemoryProposal(comment: string | undefined): void {
-  if (!comment?.trim()) throw new DomainError("deferring a memory proposal requires a comment saying what is still undecided");
 }
 
 /** 無効化されていない kinds(省略 = 種別を問わない)のどれかで、state を渡せばその state の entry(提案が名指す entry と、書き込みの supersedes)。 */

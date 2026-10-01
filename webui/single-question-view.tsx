@@ -5,9 +5,9 @@
 // fires onAnswer once every item in the bundle has a pick, same as triage
 // (issue #1233).
 
-// onAnswer(answers) receives one array entry per item, in item order, fired
-// by TpQuestionCard's Submit — a live caller POSTs that array straight to
-// /api/tasks/:id/answer.
+// onAnswer(answers, amendment, comment) receives one array entry per item, in
+// item order, fired by TpQuestionCard's Submit — a live caller POSTs them
+// straight to /api/tasks/:id/answer.
 // q の形は webui/app.tsx の toQuestionCardShape が作る —— 写しを書かずにそこから引く。
 // onTranslate も同様に実体から引く。
 interface TpSingleQuestionProps {

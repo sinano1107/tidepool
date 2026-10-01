@@ -170,7 +170,7 @@ it("異議つき判断は窓の中に異議のある decision だけを list_pre
   const answer = (questionId: string) => {
     const question = getTask(db, questionId)!;
     answerQuestion(db, question, ["reject"], at, undefined, "Not ours.");
-    rejectMemoryProposal(db, question.question_proposal as MemoryProposal, questionId, "webui", at, "Not ours.");
+    rejectMemoryProposal(db, question.question_proposal as MemoryProposal, questionId, "webui", at);
   };
   const [answered, stale, open, late2] = ["Answered", "Stale", "Open", "Late"].map((title) => candidate(db, title));
   bundledObjection(db, work, inWindow!, at);
@@ -209,7 +209,7 @@ it("節を組んだ記録は task 帰属・agent 名義の meta_review_material_
   const [drafted, rejected] = ["Drafted", "Rejected"].map((title) => candidate(db, title));
   const question = proposeMemoryChange(db, previous, { op: "approve", candidate_id: rejected!, rationale: "r" }, "auditor", at).question_id;
   answerQuestion(db, getTask(db, question)!, ["reject"], at, undefined, "No.");
-  rejectMemoryProposal(db, getTask(db, question)!.question_proposal as MemoryProposal, question, "webui", at, "No.");
+  rejectMemoryProposal(db, getTask(db, question)!.question_proposal as MemoryProposal, question, "webui", at);
   const review = register(db, "memory");
   const [first, second] = listEventsOfKinds(db, ["meta_review_registered"]).map((e) => e.payload.material_watermark);
   const material = memoryMaterialOf(db, review);
