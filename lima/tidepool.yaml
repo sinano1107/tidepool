@@ -33,14 +33,20 @@ provision:
     script: |
       #!/bin/bash
       set -eux -o pipefail
-      if [ ! -x "$HOME/.local/bin/claude" ]; then
-        curl -fsSL https://claude.ai/install.sh | bash
-      fi
-      grep -q '.local/bin' "$HOME/.bashrc" || echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$HOME/.bashrc"
       if [ ! -d "$HOME/tidepool" ]; then
         git clone https://github.com/sinano1107/tidepool.git "$HOME/tidepool"
         (cd "$HOME/tidepool" && npm install)
       fi
+      # The CLI follows the version the checkout pins (ADR 0186 決定5). Once a
+      # claude is installed, switch with its own `install`: install.sh does not
+      # repoint the launcher at a version that is already downloaded.
+      pinned="$(cat "$HOME/tidepool/claude-cli-version")"
+      if [ ! -x "$HOME/.local/bin/claude" ]; then
+        curl -fsSL https://claude.ai/install.sh | bash -s "$pinned"
+      elif [ "$("$HOME/.local/bin/claude" --version | cut -d' ' -f1)" != "$pinned" ]; then
+        "$HOME/.local/bin/claude" install "$pinned"
+      fi
+      grep -q '.local/bin' "$HOME/.bashrc" || echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$HOME/.bashrc"
       # The board's state belongs on the VM's own disk, never on the read-only
       # mount of the Mac home (ADR 0090 決定3). Written once; the owner may edit
       # it afterwards, so a later boot leaves it alone.

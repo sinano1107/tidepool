@@ -30,8 +30,15 @@ Also check `authority/*.yaml` conforms to the current `authorityProfileSchema` i
 
 ```bash
 ssh $PI "sudo apt-get install -y gh"
-ssh $PI "sudo npm install -g @anthropic-ai/claude-code"   # sudo required, /usr/lib/node_modules needs root
 ```
+
+After step 1's clone, install the `claude` version the checkout pins (sudo required, `/usr/lib/node_modules` needs root):
+
+```bash
+ssh $PI 'sudo npm install -g @anthropic-ai/claude-code@$(cat /mnt/ssd/tidepool/claude-cli-version)'
+```
+
+Every deploy then keeps it on that version (`scripts/deploy-pi.sh`).
 
 Both need an **interactive browser login** — cannot be done non-interactively by an agent. Two options:
 

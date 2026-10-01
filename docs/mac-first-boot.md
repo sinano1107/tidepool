@@ -82,6 +82,10 @@ Updating is your decision, never a side effect of starting the VM. When you want
 limactl shell tidepool -- bash -lc 'cd ~/tidepool && git pull && npm install'
 ```
 
+Then run `limactl restart tidepool`. Each VM start installs the `claude` CLI version that
+`~/tidepool/claude-cli-version` names; on any other version the board stops picking up tasks for
+agents that run on `claude`.
+
 ## Checklist
 
 In a second terminal on the Mac, with the board still running:

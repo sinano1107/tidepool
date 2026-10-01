@@ -109,6 +109,20 @@ describe("createMoonshotCliAuthCheck(issue #446 — quarantine 回答受理時�
     expect(observed?.env.ANTHROPIC_API_KEY).toBeUndefined();
   });
 
+  // ADR 0186 決定4
+  it("probe の env は CLI の自動更新を閉じる", async () => {
+    const keyFile = await keyFileWith("sk-moonshot-test-key");
+    let observedEnv: NodeJS.ProcessEnv | undefined;
+    const check = createMoonshotCliAuthCheck(keyFile, async (_command, _args, options) => {
+      observedEnv = options.env;
+      return { exitCode: 0, stdout: JSON.stringify({ is_error: false, result: "OK" }) };
+    });
+
+    await check();
+
+    expect(observedEnv?.DISABLE_AUTOUPDATER).toBe("1");
+  });
+
   it("probe の予算は $0.25 — kimi-k3[1m] の最小1ターン実測($0.057〜$0.122、issue #447)を $0.01 では必ず踏む(issue #466)", async () => {
     const keyFile = await keyFileWith("sk-moonshot-test-key");
     let observedArgs: string[] | undefined;
