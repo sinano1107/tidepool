@@ -503,7 +503,7 @@ function QuestionDeepLinkView({ questionId, onDone, onTranslate, onOpenSettings 
     );
   }
 
-  // ADR 0190 決定4: 着地 question はここで答えさせない — merge の判断は triage の流し読みの後ろ
+  // ADR 0190 決定4: 着地 question はここで答えさせない — merge の判断は triage の流し読みの後ろ(ADR 0092 決定4)
   if (q === null || rawTask?.landing) {
     return (
       <div style={{ height: '100vh', display: 'flex', flexDirection: 'column', justifyContent: 'center', padding: 24, boxSizing: 'border-box', background: 'var(--surface-page)' }}>
