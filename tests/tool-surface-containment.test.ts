@@ -151,8 +151,8 @@ it("過不足が同時に起きたら両方を挙げる(綴りの取り違えの
     mcpServers: [],
     autoMemoryPath: null,
   }));
-  expect(result.available === false && result.reason).toContain("Bogus");
-  expect(result.available === false && result.reason).toContain("Grep");
+  expect(result.available === false && result.reason).toContain("offered Bogus on top of the allowlist");
+  expect(result.available === false && result.reason).toContain("named Grep but the session never got them");
 });
 
 it("空の観測は不成立 — 「測れなかった」を「無事」と読ませない(ping が失敗した null とは別の形)", async () => {
