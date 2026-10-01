@@ -162,7 +162,7 @@ it("走っている間に表から消えた行の 404 は行の Quarantine を�
 
   expect(openQuarantineValues(db, "tableRow")).toEqual([]);
   expect(listEvents(db, task.id).some((e) => e.kind === "row_refused")).toBe(true);
-  expect(nextSlotTask(db, "deckhand")?.id).toBe(task.id);
+  expect(nextSlotTask(db)?.id).toBe(task.id);
   expect(questions(db)).toEqual([]);
 });
 

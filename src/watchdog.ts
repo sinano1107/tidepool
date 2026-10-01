@@ -160,7 +160,8 @@ export function rowRefusalHandler(
     if (task?.status !== "in_progress") return;
     const now = deps.clock.now();
     deps.db.transaction(() => {
-      // 走っている間に表から消えた行には立てない —— 解除の門1の前提「開いている行の Quarantine は表にある行に限る」(ADR 0184 決定5)
+      // 走っている間に表から消えた行には立てない —— 表に無い行の Quarantine は直す行が無いまま開き、次の無関係な表の編集が
+      // 解除の門1(ADR 0184 決定5)で決着させてしまう(issue #1265)
       if (loadExecutionSettingTable(deps.db).some((row) => row.provider === refusal.provider && row.model === refusal.model)) {
         registerQuarantine(
           deps.db,
