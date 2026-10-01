@@ -1,6 +1,7 @@
 import { afterEach, expect, it } from "vitest";
 import { applyExecutionSettingsChange, executionSettingsFor, SEED_EXECUTION_SETTINGS } from "../src/execution-setting.js";
-import { PROVIDER_VALUES } from "../src/registry.js";
+import { openQuarantineQuestion, registerQuarantine, tableRowValue } from "../src/quarantine.js";
+import { PROVIDER_VALUES, type Provider } from "../src/registry.js";
 import { healthyOpenai } from "./fakes.js";
 import {
   api,
@@ -23,9 +24,9 @@ it("GET /api/settings/execution は種の表と盤面既定(frontier advisor 無
   const res = await api(t.baseUrl, "GET", "/api/settings/execution");
   expect(res.status).toBe(200);
   expect(res.json).toEqual({
-    table: [...SEED_EXECUTION_SETTINGS].sort(
-      (a, b) => a.provider.localeCompare(b.provider) || a.model.localeCompare(b.model),
-    ),
+    table: [...SEED_EXECUTION_SETTINGS]
+      .sort((a, b) => a.provider.localeCompare(b.provider) || a.model.localeCompare(b.model))
+      .map((row) => ({ ...row, quarantine_question_id: null })),
     frontierAdvisor: false,
     providerRank: [...PROVIDER_VALUES],
     priority: "quality",
@@ -76,8 +77,8 @@ it("表の行は (provider, model) を鍵に追加・編集(upsert)・削除で�
 
   const { table } = await state();
   expect(table.filter((row: any) => row.provider === "anthropic" && row.tier === "economy")).toEqual([
-    { ...haiku, effort: "high" },
-    { provider: "anthropic", tier: "economy", model: "claude-sonnet-5-5", effort: "high", price_in: 2, price_out: 10 },
+    { ...haiku, effort: "high", quarantine_question_id: null },
+    { provider: "anthropic", tier: "economy", model: "claude-sonnet-5-5", effort: "high", price_in: 2, price_out: 10, quarantine_question_id: null },
   ]);
   expect(table.find((row: any) => row.model === "gpt-6-astra")).toBeUndefined();
 });
@@ -296,4 +297,77 @@ it("人間の直接の降格は open な降格提案を観測で決着させ、r
     changed: ["learner_promoted"],
     observed_event_id: expect.any(Number),
   });
+});
+
+/** 行の Quarantine(行の拒否、ADR 0184)の解除の門1。404 は fake worker で起こさず、Quarantine を直に登録する。 */
+const quarantineRow = (provider: Provider, model: string) => {
+  registerQuarantine(t.db, "tableRow", tableRowValue(provider, model), "refused in a test", t.clock.now());
+  return openQuarantineQuestion(t.db, "tableRow", tableRowValue(provider, model))!.id;
+};
+const SONNET = { provider: "anthropic", tier: "economy", model: "claude-sonnet-5-5", effort: "high", price_in: 2, price_out: 10 } as const;
+
+/** settings タブと管理MCP —— 1つの変更を撃つ2つの扉。 */
+const doors: Array<[string, (change: unknown) => Promise<void>]> = [
+  [
+    "POST /api/settings/execution",
+    async (change) => {
+      expect((await api(t.baseUrl, "POST", "/api/settings/execution", change)).status).toBe(200);
+    },
+  ],
+  [
+    "管理MCP の change_execution_settings",
+    async (change) => {
+      const client = await managementMcpClient(t.baseUrl);
+      try {
+        expect(((await client.callTool({ name: "change_execution_settings", arguments: { change } })) as any).isError).not.toBe(true);
+      } finally {
+        await client.close();
+      }
+    },
+  ],
+];
+
+it.each(doors)("Quarantine 中の行の model を WebUI と同じ順(新しい行の upsert → 古い行の delete_row)で差し替えると、question は回答なしで盤面名義に決着する(%s)", async (_door, change) => {
+  t = await bootTidepool();
+  const questionId = quarantineRow("anthropic", "claude-sonnet-5-5");
+
+  await change({ setting: "row", row: { ...SONNET, model: "claude-sonnet-5" } });
+  expect((await api(t.baseUrl, "GET", `/api/tasks/${questionId}`)).json.status).toBe("todo");
+  await change({ setting: "delete_row", provider: "anthropic", model: "claude-sonnet-5-5" });
+
+  expect((await api(t.baseUrl, "GET", `/api/tasks/${questionId}`)).json).toMatchObject({ status: "done", question_answer: null });
+  const deleted = t.db
+    .prepare("SELECT id FROM events WHERE kind = 'execution_settings_changed' AND json_extract(payload, '$.setting') = 'delete_row'")
+    .pluck()
+    .get();
+  const timeline = (await api(t.baseUrl, "GET", `/api/tasks/${questionId}/events`)).json as any[];
+  expect(timeline.find((e) => e.kind === "quarantine_released")).toMatchObject({
+    worker_id: "tidepool",
+    origin: "board",
+    payload: { kind: "quarantine_released", quarantine: "tableRow", value: "anthropic/claude-sonnet-5-5", observed_event_id: deleted },
+  });
+  expect(timeline.map((e) => e.kind)).not.toContain("question_answered");
+  expect(timeline.map((e) => e.kind)).not.toContain("decision_logged");
+});
+
+it("Quarantine 中の行の effort / 価格 / ティアだけを書き換えても question は開いたまま", async () => {
+  t = await bootTidepool();
+  const questionId = quarantineRow("anthropic", "claude-sonnet-5-5");
+
+  for (const row of [{ ...SONNET, effort: "max" }, { ...SONNET, price_in: 3, price_out: 15 }, { ...SONNET, tier: "standard" }]) {
+    expect((await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "row", row })).status).toBe(200);
+  }
+
+  expect((await api(t.baseUrl, "GET", `/api/tasks/${questionId}`)).json.status).toBe("todo");
+});
+
+it("GET /api/settings/execution は Quarantine 中の行にその question の id を、他の行に null を載せる", async () => {
+  t = await bootTidepool();
+  const questionId = quarantineRow("anthropic", "claude-sonnet-5-5");
+
+  const { table } = await state();
+  expect(table.find((row: any) => row.model === "claude-sonnet-5-5").quarantine_question_id).toBe(questionId);
+  expect(table.filter((row: any) => row.model !== "claude-sonnet-5-5").map((row: any) => row.quarantine_question_id)).toEqual(
+    SEED_EXECUTION_SETTINGS.slice(1).map(() => null),
+  );
 });

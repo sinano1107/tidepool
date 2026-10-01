@@ -196,7 +196,7 @@ function liveTitle(t: Pick<import('../src/wire-contract').QueueTask, 'title' | '
 // Maps one raw question task into TpQuestionCard's shape — shared by the board's
 // question list (mapData) and the push deep-link's single-question view.
 function toQuestionCardShape(
-  q: Pick<WireContract['GET /api/tasks/:id'], 'id' | 'parent_id' | 'blocking' | 'registrant' | 'purpose' | 'question_items' | 'approval' | 'moved' | 'question_proposal'>,
+  q: Pick<WireContract['GET /api/tasks/:id'], 'id' | 'parent_id' | 'blocking' | 'registrant' | 'purpose' | 'question_items' | 'approval' | 'moved' | 'question_proposal' | 'question_quarantine_kind'>,
   icons: AppIcons,
 ): TpQuestion {
   // who issued the question — the board itself (issue #261) or an agent
@@ -228,6 +228,8 @@ function toQuestionCardShape(
     // 修正値の初期値は candidate の今の本文 —— 移されていれば末尾の複製
     ...(candidateId !== undefined && { amendable: 'memory' as const, candidateId: moved.find((m) => m.id === candidateId)?.tail_id ?? candidateId }),
     ...(q.question_proposal?.kind === 'memory' && { needsComment: ['reject', 'defer'] }),
+    // 行の Quarantine の修復は表の修正が先頭(ADR 0184 決定6)
+    ...(q.question_quarantine_kind === 'tableRow' && { opensSettings: true }),
     ...(q.approval && {
       kind: 'approval',
       ...(q.approval.raises_parent_risk && { note: `approving raises ${q.parent_id} risk (upward propagation)` }),
@@ -456,10 +458,11 @@ function PortalDialog(props: import('../design-system/components/surfaces/Dialog
 // single-question-view.tsx) is the same screen the kit demo simulates a push
 // into; answering it here POSTs to the real /api/tasks/:id/answer instead of
 // touching mock data, so front-insert + the immediate poll fire for real.
-function QuestionDeepLinkView({ questionId, onDone, onTranslate }: {
+function QuestionDeepLinkView({ questionId, onDone, onTranslate, onOpenSettings }: {
   questionId: string;
   onDone: (answeredTask: WireContract['GET /api/tasks/:id'] | null) => void;
   onTranslate?: TpTranslateFn;
+  onOpenSettings: () => void;
 }) {
   const { Button, Card } = window.TidepoolDesignSystem_8a0ead;
   const [q, setQ] = React.useState<TpQuestion | null | undefined>(undefined); // undefined = loading, null = gone
@@ -518,7 +521,7 @@ function QuestionDeepLinkView({ questionId, onDone, onTranslate }: {
     // kit's own shell) — needs this positioned, width-capped ancestor so it
     // covers the 440px column instead of the full viewport.
     <div style={{ height: '100vh', position: 'relative', overflow: 'hidden', background: 'var(--surface-page)' }}>
-      <TpSingleQuestion q={q} onAnswer={answer} onClose={() => onDone(null)} onTranslate={onTranslate} />
+      <TpSingleQuestion q={q} onAnswer={answer} onClose={() => onDone(null)} onTranslate={onTranslate} onOpenSettings={onOpenSettings} />
       {err && (
         <div style={{ position: 'fixed', bottom: 24, left: '50%', transform: 'translateX(-50%)', zIndex: 60, fontSize: 'var(--text-sm)', color: '#fff', background: 'var(--danger-fg, #c0392b)', borderRadius: 'var(--radius-md)', padding: '10px 16px' }}>
           {err}
@@ -1270,6 +1273,11 @@ function App() {
           setDeepLinkQuestionId(null);
           refreshFull();
         }}
+        onOpenSettings={() => {
+          history.replaceState(null, '', location.pathname);
+          setDeepLinkQuestionId(null);
+          setTab('settings');
+        }}
       />
     );
   }
@@ -1318,7 +1326,8 @@ function App() {
           ? <TriageScreen data={data} onCommit={commitTriage} loadHandoff={loadHandoff}
               onAnswer={answerNow} onObject={objectNow} onScratchAdd={scratchAdd} onDisplayed={reportDisplayed} loadPreview={loadPreview} loadLanding={loadLanding}
               onTranslate={onTranslateProp}
-              onOpenMemoryEntry={(id: number) => { setMemoryFocus(id); setTab('settings'); }} />
+              onOpenMemoryEntry={(id: number) => { setMemoryFocus(id); setTab('settings'); }}
+              onOpenSettings={() => setTab('settings')} />
           : <div style={{ padding: '64px 24px', textAlign: 'center' }}>
               <div style={{ fontSize: 28, marginBottom: 6 }}>🐚</div>
               <div style={{ fontFamily: 'var(--font-display)', fontStyle: 'italic', fontSize: 'var(--text-2xl)', color: 'var(--tide-5)', marginBottom: 8 }}>Low tide. Go enjoy your coffee.</div>

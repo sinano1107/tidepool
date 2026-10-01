@@ -61,6 +61,9 @@ export interface BoardTask extends QueueTask {
    *  memory の approve / consolidate のうち `candidate_id` を持つもの(その文言、Exemplar なら注釈 list —— 種別は画面が candidate から引く)は
    *  approve に修正値を添えられる。 */
   question_proposal: { kind: "memory" | "routing" | "registry"; op: string; candidate_id?: number } | null;
+  /** 確認 question の Quarantine の種別(src/quarantine.ts の QuarantineKind)。行の Quarantine(`tableRow`)の question だけが
+   *  settings タブを開くボタンを持つ(ADR 0184 決定6)。 */
+  question_quarantine_kind: string | null;
 }
 
 export interface ScratchpadLine {
@@ -274,7 +277,8 @@ export interface WireContract {
   "POST /api/settings/quiet-hours": { start: string; end: string };
   "GET /api/settings/provider-pace-offsets": { offsets: Array<{ provider: string; window: string; offset: number }> };
   "GET /api/settings/execution": {
-    table: ReadonlyArray<{ provider: string; tier: string; model: string; effort: string; price_in: number; price_out: number }>;
+    /** quarantine_question_id: 行の Quarantine(ADR 0184 決定6)の開いている question。null = 走れる行。 */
+    table: ReadonlyArray<{ provider: string; tier: string; model: string; effort: string; price_in: number; price_out: number; quarantine_question_id: string | null }>;
     frontierAdvisor: boolean;
     providerRank: readonly string[];
     priority: string;

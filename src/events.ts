@@ -253,8 +253,10 @@ export type EventPayload =
   // one (CONTEXT.md's Quarantine: 1資源につき確認は最大1枚)
   | { kind: "quarantine_refired"; cause: string }
   // ADR 0137 決定4: a quarantine Confirmation question's answer passed its
-  // kind's check and was accepted — pickup resumes for what that kind stops
-  | { kind: "quarantine_released"; quarantine: string; value: string | null }
+  // kind's check and was accepted — pickup resumes for what that kind stops.
+  // ADR 0184 決定5 の門1: 行の Quarantine は、表の編集がその行を消したときにも盤面名義で
+  // 決着する —— そのときだけ observed_event_id = 行を消した execution_settings_changed の id
+  | { kind: "quarantine_released"; quarantine: string; value: string | null; observed_event_id?: number }
   // issue #32: pairs with worker_spawned to close out a worker session
   // (spawn~exit) — usage is null when the session ended without a final
   // stream-json `result` event (e.g. watchdog kill); the event itself is

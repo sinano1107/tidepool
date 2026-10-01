@@ -84,8 +84,12 @@ it("提案 question が open でも meta-review は完了できる", async () =>
 
 const answer = (id: string, body: Record<string, unknown>) => api(t.baseUrl, "POST", `/api/tasks/${id}/answer`, body);
 const events = async (id: string) => (await api(t.baseUrl, "GET", `/api/tasks/${id}/events`)).json as any[];
-const row = async (model: string) =>
-  ((await api(t.baseUrl, "GET", "/api/settings/execution")).json.table as any[]).find((r) => r.provider === "anthropic" && r.model === model);
+/** 行の欄だけ(行の Quarantine の question id は落とす)。 */
+const row = async (model: string) => {
+  const found = ((await api(t.baseUrl, "GET", "/api/settings/execution")).json.table as any[]).find((r) => r.provider === "anthropic" && r.model === model);
+  const { quarantine_question_id: _, ...fields } = found;
+  return fields;
+};
 
 it("approve で表の行が提案の値になり、推奨どおりに数えられる", async () => {
   const { client, call, propose } = await boardWithRoutingReview();

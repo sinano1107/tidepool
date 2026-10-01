@@ -70,6 +70,7 @@ test("表の行を消す・価格を直す・行を足すのが1回の保存で�
     effort: "low",
     price_in: 0.5,
     price_out: 2,
+    quarantine_question_id: null,
   });
 });
 
