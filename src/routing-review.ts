@@ -12,7 +12,7 @@ import {
   windowMatchesModel,
 } from "./execution-setting.js";
 import { type Cell, cellJson, loadEpisodes, type RoutingEpisode } from "./learner.js";
-import { type MetaReviewWindow, materialSection, paged, previousMetaReviewWatermark } from "./meta-review.js";
+import { inWindow, type MetaReviewWindow, materialSection, paged, previousMetaReviewWatermark } from "./meta-review.js";
 import { DomainError, type RegistryProposal, type RoutingProposal, registerTask } from "./tasks.js";
 
 /** 主題 routing の meta-review の読み口(issue #917 / spec #916 C)。どれも既定の `since_watermark` は読み手と同主題の
@@ -106,7 +106,7 @@ export function listRoutingCells(db: Db, readerTaskId: string, input: ReadWindow
 }
 
 /** list_routing_cells の2種の行(ページ割り前): 初観測が窓 `(after, upTo]` にあるセルと、窓の中の人間の行の編集。 */
-function cellRows(db: Db, { after, upTo = Number.MAX_SAFE_INTEGER }: MetaReviewWindow) {
+function cellRows(db: Db, window: MetaReviewWindow) {
   const firstSeen = new Map<string, { cell: Cell; first_observed_event_id: number }>();
   for (const e of loadEpisodes(db)) {
     if (e.worker_exited_event_id === null) continue;
@@ -114,10 +114,10 @@ function cellRows(db: Db, { after, upTo = Number.MAX_SAFE_INTEGER }: MetaReviewW
     const seen = firstSeen.get(key);
     if (!seen || e.worker_exited_event_id < seen.first_observed_event_id) firstSeen.set(key, { cell: e.cell, first_observed_event_id: e.worker_exited_event_id });
   }
-  const rows = listEventsOfKinds(db, ["execution_settings_changed"], { after, upTo }).flatMap(({ id, origin, created_at, payload: p }) =>
+  const rows = listEventsOfKinds(db, ["execution_settings_changed"], window).flatMap(({ id, origin, created_at, payload: p }) =>
     p.setting === "row" && p.question_id === undefined ? [{ event_id: id, origin, created_at, row: p.row }] : [],
   );
-  const cells = [...firstSeen.values()].filter((c) => c.first_observed_event_id > after && c.first_observed_event_id <= upTo);
+  const cells = [...firstSeen.values()].filter((c) => inWindow(c.first_observed_event_id, window));
   return { cells, rows };
 }
 
@@ -125,7 +125,7 @@ function cellRows(db: Db, { after, upTo = Number.MAX_SAFE_INTEGER }: MetaReviewW
  *  (routing_proposal_stale)、registry へ適用した tier の提案なら着地した commit(agent_tier_changed)。提案の表は持たず question と
  *  event から組む。verb は窓で切らない —— 退けられた提案を繰り返さないための読み物なので、全期間を返す。window を渡すと、回答か
  *  陳腐化の event がその窓 `(after, upTo]` にある提案だけ(材料の節の決着した提案、ADR 0180 追記 #1239)。 */
-export function listRoutingProposals(db: Db, window?: Required<MetaReviewWindow>) {
+export function listRoutingProposals(db: Db, window?: MetaReviewWindow) {
   const rows = db
     .prepare(
       `SELECT t.id, t.question_proposal,
@@ -136,7 +136,7 @@ export function listRoutingProposals(db: Db, window?: Required<MetaReviewWindow>
        FROM tasks t WHERE json_extract(t.question_proposal, '$.kind') IN ('routing', 'registry') ORDER BY t.rowid`,
     )
     .all() as Array<{ id: string; question_proposal: string; answered: string | null; stale: string | null; applied: string | null; settled_id: number | null }>;
-  const settled = rows.filter(({ settled_id }) => !window || (settled_id !== null && settled_id > window.after && settled_id <= window.upTo));
+  const settled = rows.filter(({ settled_id }) => !window || inWindow(settled_id, window));
   return settled.map((row) => {
     const answered = row.answered === null ? null : (JSON.parse(row.answered) as Extract<EventPayload, { kind: "question_answered" }>);
     const stale = row.stale === null ? null : (JSON.parse(row.stale) as Extract<EventPayload, { kind: "routing_proposal_stale" }>);

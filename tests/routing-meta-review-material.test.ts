@@ -21,7 +21,7 @@ function register(db: Db, done = false): string {
 }
 
 /** 主題 routing の材料の節(型を routing の部分に絞る)。 */
-function routingMaterial(db: Db, taskId: string) {
+function routingMaterialOf(db: Db, taskId: string) {
   const material = buildMetaReviewMaterial(db, taskId);
   if (material?.subject !== "routing") throw new Error(`no routing material for ${taskId}`);
   return material;
@@ -33,7 +33,7 @@ it("材料の節は両端の watermark と5つの部分の見出しを持ち、�
   const review = register(db);
   const [first, second] = listEventsOfKinds(db, ["meta_review_registered"]).map((e) => e.payload.material_watermark);
 
-  const material = routingMaterial(db, review);
+  const material = routingMaterialOf(db, review);
 
   expect([material.previous_watermark, material.material_watermark]).toEqual([first, second]);
   for (const line of [
@@ -105,7 +105,7 @@ it("表と設定は read_routing_settings の提案以外の全部で、窓で�
   const review = register(db);
   applyExecutionSettingsChange(db, { setting: "priority", value: "cost" }, "webui", at);
 
-  const { parts, section } = routingMaterial(db, review);
+  const { parts, section } = routingMaterialOf(db, review);
 
   expect(parts.settings).toEqual(readExecutionSettings(db));
   expect(parts.settings).toMatchObject({ table: expect.arrayContaining([row]), priority: "cost" });
@@ -132,7 +132,7 @@ it("shadow の部分は窓 `前回 <= event_watermark < 今回` の乖離した�
   shadowAt("at-up-to", upTo);
   shadowAt("later", upTo + 1);
 
-  const { parts, section } = routingMaterial(db, review);
+  const { parts, section } = routingMaterialOf(db, review);
 
   expect(parts.shadow.map((row) => row.task_id)).toEqual([atAfter, inside]);
   expect(parts.shadow_rows).toBe(3);
@@ -151,7 +151,7 @@ it("配分評価の分布は窓の中の注釈だけを list_allocations の行�
   const review = register(db);
   allocate(task, spawn(task, "reef-crab", opus), "overpowered");
 
-  const { parts, section } = routingMaterial(db, review);
+  const { parts, section } = routingMaterialOf(db, review);
 
   expect(parts.allocations.groups).toEqual([{ source_tier: "agent", agent: "reef-crab", allocation: "overpowered", cause: "uncertain", count: 1, judged_by_same_model: 0 }]);
   expect(parts.allocations.counted).toEqual([counted]);
@@ -173,7 +173,7 @@ it("新しいセルは初観測が窓の中のものだけ、人間が変えた�
   exit(task, spawn(task, "deckhand", setting("moonshot", "kimi-k3")));
   applyExecutionSettingsChange(db, { setting: "row", row: { ...row, effort: "low" } }, "mcp", at);
 
-  const { parts, section } = routingMaterial(db, review);
+  const { parts, section } = routingMaterialOf(db, review);
 
   expect(parts.cells).toEqual([{ cell: { provider: "openai", model: "gpt-5.6-sol", effort: "high", advisor: null }, first_observed_event_id: seen }]);
   expect(parts.rows.map((r) => r.event_id)).toEqual([edited]);
@@ -212,7 +212,7 @@ it("決着した提案は回答か陳腐化が窓の中にあるものだけを 
   const review = register(db);
   answer(late, ["reject"]);
 
-  const { parts } = routingMaterial(db, review);
+  const { parts } = routingMaterialOf(db, review);
 
   expect(parts.proposals.map((p) => p.question_id)).toEqual([rejected, stale, registry]);
   expect(parts.proposals).toEqual(listRoutingProposals(db).filter((p) => [rejected, stale, registry].includes(p.question_id)));
@@ -228,8 +228,7 @@ it("節を組んだ記録は主題 routing と、乖離した shadow 行の id�
   const { db, work, spawn, exit, allocate } = board();
   const previous = register(db, true);
   const task = work("t");
-  recordShadow(db, task, { recommended: sol, actual: opus, basis: "prior" }, at);
-  const diverged = (db.prepare("SELECT MAX(id) AS id FROM learner_shadow").get() as { id: number }).id;
+  const diverged = recordShadow(db, task, { recommended: sol, actual: opus, basis: "prior" }, at);
   recordShadow(db, task, { recommended: opus, actual: opus, basis: "prior" }, at);
   const spawned = spawn(task, "deckhand", opus);
   const seen = exit(task, spawned);
@@ -240,7 +239,7 @@ it("節を組んだ記録は主題 routing と、乖離した shadow 行の id�
   answerQuestion(db, getTask(db, question)!, ["reject"], at);
   const review = register(db);
   const [first, second] = listEventsOfKinds(db, ["meta_review_registered"]).map((e) => e.payload.material_watermark);
-  const material = routingMaterial(db, review);
+  const material = routingMaterialOf(db, review);
 
   const eventId = recordMetaReviewMaterial(db, review, "auditor", 42, material, at);
 

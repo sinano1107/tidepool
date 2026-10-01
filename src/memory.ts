@@ -5,7 +5,7 @@ import type { Cause } from "./cause.js";
 import { type Db, MEMORY_FTS_DDL, MEMORY_FTS_TOKENIZER, MEMORY_PREPROCESS_VERSION } from "./db.js";
 import { getDisplayLanguage } from "./display-language.js";
 import { appendEvent, type EventOrigin, type EventPayload, type EventRow, getEvent, isDecisionLogEntry, listEvents, listEventsOfKinds } from "./events.js";
-import { type MetaReviewWindow, materialEvents, materialSection, metaReviewSubjectOf, metaReviewWindow, paged, previousMetaReviewWatermark } from "./meta-review.js";
+import { inWindow, type MetaReviewWindow, materialEvents, materialSection, metaReviewSubjectOf, metaReviewWindow, paged, previousMetaReviewWatermark } from "./meta-review.js";
 import { entriesReadBefore, entriesSeenBefore, listEpisodes, sessionSpawnOf, sessionWindow } from "./precedent.js";
 import { routingMaterial } from "./routing-review.js";
 import { approvalAnnotation, BOARD_WORKER_ID, DomainError, getTask, HUMAN_WORKER_ID, type MemoryProposal, type QuestionProposal, questionBlocking, registerTask, settleQuestionAsObserved, type Task } from "./tasks.js";
@@ -1703,7 +1703,7 @@ function memoryProposalRows(db: Db, window?: MetaReviewWindow) {
     )
     .all() as Array<{ id: string; question_proposal: string; answered: string | null; stale: string | null; settled_id: number | null }>;
   return rows
-    .filter(({ settled_id }) => !window || (settled_id !== null && settled_id > window.after && settled_id <= (window.upTo ?? Infinity)))
+    .filter(({ settled_id }) => !window || inWindow(settled_id, window))
     .map((row) => {
       const answered = row.answered === null ? null : (JSON.parse(row.answered) as Extract<EventPayload, { kind: "question_answered" }>);
       const stale = row.stale === null ? null : (JSON.parse(row.stale) as Extract<EventPayload, { kind: "memory_proposal_stale" }>);

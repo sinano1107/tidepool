@@ -145,6 +145,9 @@ export function previousMetaReviewWatermark(db: Db, readerTaskId: string): numbe
 /** 材料の窓 `(after, upTo]`。upTo 省略 = 上限なし(due の判定と verb の既定)。 */
 export type MetaReviewWindow = { after: number; upTo?: number };
 
+/** event id が窓 `(after, upTo]` の中にあるか(null は外)。 */
+export const inWindow = (id: number | null, { after, upTo = Number.MAX_SAFE_INTEGER }: MetaReviewWindow) => id !== null && id > after && id <= upTo;
+
 /** 読み手の task の材料の窓 `(after, upTo]`(ADR 0180 決定1): after = 前回の登録の watermark、upTo = 読み手自身の登録の
  *  watermark —— 登録から spawn までに入った変更は次の周期の材料。登録 event の無い task(registerMetaReview を通らない)は今まで。 */
 export function metaReviewWindow(db: Db, readerTaskId: string): Required<MetaReviewWindow> {
