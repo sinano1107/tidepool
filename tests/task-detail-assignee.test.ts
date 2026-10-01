@@ -43,7 +43,7 @@ async function unsetAssigneeBoard(t: Tidepool) {
   };
 }
 
-/** 一覧だけが載せる注釈(着地 question の `landing`)を外した一覧の行。 */
+/** 管理MCP の一覧だけが載せる注釈(着地 question の `landing`、HTTP は単体にも載る — ADR 0190)を外した一覧の行。 */
 function listedRow(list: any[], id: string) {
   const { landing: _landing, ...row } = list.find((x) => x.id === id);
   return row;
@@ -57,7 +57,7 @@ it("GET /api/tasks/:id は assignee 未指定のタスクを一覧と同じ解�
   for (const [id, resolved] of listed) {
     const single = (await api(t.baseUrl, "GET", `/api/tasks/${id}`)).json;
     expect(single).toMatchObject({ assignee: resolved });
-    expect(single).toEqual(listedRow(list, id));
+    expect(single).toEqual(list.find((x: any) => x.id === id));
   }
 
   // 一覧の絞り込みは単体に持ち込まない —— 取り消したタスクも返り、同じ解決を通る

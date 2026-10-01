@@ -31,7 +31,7 @@ import {
   enumerateToolsThrough,
   execThrough,
   moonshotKeyAbsence,
-  probeToolSurfaceCapability,
+  probeClaudeHarnessCapability,
 } from "./claude-worker.js";
 import type { Clock } from "./clock.js";
 import {
@@ -99,6 +99,9 @@ import {
   updateWorkspace,
   type WorkspaceAdmin,
 } from "./workspace-create.js";
+
+/** このホストの `claude --version`。worker_spawned の記録と封じ込めの版の門(ADR 0186 決定2)が読む。 */
+const claudeCliVersion = () => execFileSync("claude", ["--version"], { encoding: "utf8" }).trim();
 
 /** 盤面の watchdog(#9 / CONTEXT.md の Watchdog)を本番で成立させる時間リミット。
  *  **コード定数であってホストごとの設定ではない** — ADR 0037 と同じ軸で、盤面の
@@ -268,7 +271,7 @@ export function buildWorkerOptions(
     workspacesDir: board.workspacesDir,
     mcpUrl: `http://127.0.0.1:${board.mcpPort}/mcp`,
     logDir: board.logDir,
-    cliVersion: () => execFileSync("claude", ["--version"], { encoding: "utf8" }).trim(),
+    cliVersion: claudeCliVersion,
     // ADR 0040: 床そのもの — 重なっている workspace では spawn せず quarantine
     boardState: board.boardState,
     // issue #33 判断8: 不在が「マスクされていない」を意味する口なので、渡し忘れは
@@ -687,7 +690,7 @@ function boardCallers(board: BoardComposition, workspace: WorkspaceConfig | unde
   });
   const claudeContainment = async (): Promise<ContainmentCapability> => {
     const sandbox = checkSandboxCapability(platform);
-    return sandbox.available ? probeToolSurfaceCapability(enumerateToolsThrough(call)) : sandbox;
+    return sandbox.available ? probeClaudeHarnessCapability(claudeCliVersion, enumerateToolsThrough(call)) : sandbox;
   };
   return {
     draftClient: draftClientFactory(board, call),

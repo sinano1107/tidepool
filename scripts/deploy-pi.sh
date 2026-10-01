@@ -94,6 +94,17 @@ sync_app() {
   sudo -u masaki mkdir -p "$DST/data" "$DST/worker-logs"
 }
 
+# The host's claude follows the version the checkout pins (ADR 0186 決定5);
+# skipped when it is already that version.
+sync_cli() {
+  local pinned
+  pinned="$(cat "$SRC/claude-cli-version")"
+  if [[ "$(claude --version 2>/dev/null | cut -d' ' -f1)" != "$pinned" ]]; then
+    log "install claude $pinned"
+    sudo npm install -g --no-audit --no-fund "@anthropic-ai/claude-code@$pinned"
+  fi
+}
+
 sync_unit() {
   [[ -f "$UNIT_SRC" ]] || fail "missing unit source: $UNIT_SRC"
   if ! sudo cmp -s "$UNIT_SRC" "$UNIT_DST" 2>/dev/null; then
@@ -162,6 +173,7 @@ verify() {
 main() {
   preflight
   sync_app
+  sync_cli
   sync_unit
   restart
   verify

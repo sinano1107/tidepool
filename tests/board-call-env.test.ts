@@ -14,6 +14,11 @@ describe("Board call の env", () => {
     expect(boardCallEnv().CLAUDE_CODE_DISABLE_ADVISOR_TOOL).toBe("1");
   });
 
+  // ADR 0186 決定4: 盤面が起こす `claude` は自分で更新しない(`DISABLE_UPDATES` ではない)
+  it("CLI の自動更新を閉じる", () => {
+    expect(boardCallEnv().DISABLE_AUTOUPDATER).toBe("1");
+  });
+
   // 差分ではなく完全な env を返す契約(ADR 0044 決定3)。呼び出し側が
   // `{ ...process.env, ...boardCallEnv() }` と綴る形にすると、`...process.env` を
   // 書き忘れたサイトが PATH も認証も失って壊れる —— 書き忘れられる余地を残さない。

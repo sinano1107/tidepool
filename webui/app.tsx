@@ -504,12 +504,15 @@ function QuestionDeepLinkView({ questionId, onDone, onTranslate, onOpenSettings 
     );
   }
 
-  if (q === null) {
+  // ADR 0190 決定4: 着地 question はここで答えさせない — merge の判断は triage の流し読みの後ろ(ADR 0092 決定4)
+  if (q === null || rawTask?.landing) {
     return (
       <div style={{ height: '100vh', display: 'flex', flexDirection: 'column', justifyContent: 'center', padding: 24, boxSizing: 'border-box', background: 'var(--surface-page)' }}>
         <Card style={{ textAlign: 'center', padding: 24, display: 'flex', flexDirection: 'column', gap: 14 }}>
           <div style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)' }}>
-            This question is no longer available — it may already be answered.
+            {q === null
+              ? 'This question is no longer available — it may already be answered.'
+              : 'Merge decisions are made in triage, after the log.'}
           </div>
           <Button variant="primary" onClick={() => onDone(null)}>Open board</Button>
         </Card>

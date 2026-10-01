@@ -59,6 +59,24 @@ it("読み口は着地 question に回答可否を添え、一般 question は l
   expect(rows.find((q: any) => q.question_items[0].title === "which way?").landing).toBe(null);
 });
 
+it("単体ビューの読み口は一覧と同じ landing を返す(ADR 0190)", async () => {
+  const task = await landedQuestion();
+  attachChild(t, task.id, "repair: ship the feature", "human");
+  registerQuestion(t, {
+    title: "which way?",
+    purpose: "a human decides the direction",
+    completion_criteria: "the answer is recorded",
+    question: [{ title: "which way?", options: ["left", "right"], recommendation: "left" }],
+  });
+
+  const rows = await questions(t);
+
+  for (const row of rows) {
+    expect((await api(t.baseUrl, "GET", `/api/tasks/${row.id}`)).json.landing).toEqual(row.landing);
+  }
+  expect(rows.map((q: any) => q.landing)).toEqual(expect.arrayContaining([{ blocked_by: "attached_children" }, null]));
+});
+
 it("未決着の付帯子を持つ着地 question は attached_children で回答不能として返る", async () => {
   const task = await landedQuestion();
   attachChild(t, task.id, "repair: ship the feature", "human");

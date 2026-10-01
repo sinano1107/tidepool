@@ -25,6 +25,7 @@ function questionTask(overrides: Partial<Task> = {}): Task {
     question_cancel_option: null,
     question_pending_child: null,
     question_pending_merge_pr: null,
+    question_pending_local_merge_task_id: null,
     question_quarantine_kind: null,
     question_quarantine_value: null,
     created_at: new Date(0).toISOString(),
@@ -39,6 +40,18 @@ describe("buildQuestionPushPayload(issue #14): 通知タップで単発回答ビ
       title: "workspace を quarantine 解除していい?",
       body: "registry に復活していることを確認済み",
       url: "/?question=q-1",
+    });
+  });
+
+  // ADR 0190: 着地 question の通知は単体の回答ビューへ開かず、流し読みの前にある盤面へ導く
+  it.each([
+    ["PR の merge question", { question_pending_merge_pr: 42 }],
+    ["purely-local の land question", { question_pending_local_merge_task_id: "w-1" }],
+  ])("%s は url が盤面のルート、title / body は変わらない", (_label, landing) => {
+    expect(buildQuestionPushPayload(questionTask(landing))).toEqual({
+      title: "workspace を quarantine 解除していい?",
+      body: "registry に復活していることを確認済み",
+      url: "/",
     });
   });
 });

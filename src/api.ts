@@ -2081,10 +2081,13 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       return;
     }
     const [presented] = await presentLive([presentTask(db, task, defaultAgentName, auditorName)]);
-    // push の単体ビューは親の行を持たない — 承認 question の判定は一覧と同じくここで載せる
+    // push の単体ビューは親の行を持たない — 承認 question・着地 question の判定は一覧と同じくここで載せる
     res.json({
       ...presented!,
-      ...(task.type === "question" && questionAnnotations(db, task)),
+      ...(task.type === "question" && {
+        landing: landingAnnotation(db, task),
+        ...questionAnnotations(db, task),
+      }),
     } satisfies WireContract["GET /api/tasks/:id"]);
   });
 

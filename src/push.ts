@@ -48,9 +48,13 @@ export interface PushClient {
 /** A question task's push notification content (issue #14): title is the
  *  question itself, body the purpose a human needs to decide, url a deep
  *  link the service worker opens straight into that single question's
- *  answer view on tap. */
+ *  answer view on tap. A landing question (PR merge or purely-local land)
+ *  instead lands on the board root: the merge decision belongs after the
+ *  log skim, so the push must not open its answer view (ADR 0190). */
 export function buildQuestionPushPayload(task: Task): PushPayload {
-  return { title: task.title, body: task.purpose, url: `/?question=${task.id}` };
+  const landing =
+    task.question_pending_merge_pr !== null || task.question_pending_local_merge_task_id !== null;
+  return { title: task.title, body: task.purpose, url: landing ? "/" : `/?question=${task.id}` };
 }
 
 /** An agent-registered human task's push notification content (issue #116):

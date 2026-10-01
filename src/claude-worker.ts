@@ -65,7 +65,8 @@ import {
 // ever-growing set of aliases/full names) it's safe and worth validating
 // here — the adapter is where vendor-specific knowledge belongs (ADR 0005)
 const EFFORT_LEVELS: readonly string[] = ["low", "medium", "high", "xhigh", "max"];
-export const CLAUDE_CLI_VERSION = "2.1.241 (Claude Code)";
+/** 盤面が検証した Claude CLI の版(ADR 0186 決定5)。正本は repo 直下の1か所で、導入スクリプトも同じファイルを読む。 */
+const CLAUDE_CLI_VERSION = readFileSync(new URL("../claude-cli-version", import.meta.url), "utf8").trim();
 
 /** Shared by boot-time default validation and every per-task spawn — one
  *  check, not a copy at each call site. 検査する値の出所は盤面の表になったが
@@ -480,6 +481,10 @@ const ADVISOR_DISABLE_ENV = "CLAUDE_CODE_DISABLE_ADVISOR_TOOL";
  *  the same call). No CLI flag spells this; the env is the only spelling. */
 const MAX_THINKING_TOKENS_ENV = "MAX_THINKING_TOKENS";
 
+/** 盤面が起動する `claude` の自動更新を閉じる env(ADR 0186 決定4)。`ADVISOR_DISABLE_ENV` と
+ *  同じ理由で1か所に名付ける —— 3つの env 関数のどこかで綴りを誤れば、黙って開く。 */
+const AUTOUPDATER_DISABLE_ENV = "DISABLE_AUTOUPDATER";
+
 /** The Moonshot routing pair (ADR 0096 / issue #445): the endpoint and the
  *  Bearer token envs a `provider: moonshot` spawn carries — and that an
  *  anthropic spawn must never inherit (ADR 0097 決定4 の双方向 scrub)。env 名は
@@ -592,7 +597,7 @@ function readMoonshotApiKey(keyFile: string): string {
  *  `MOONSHOT_ROUTING_ENV` the moonshot spawn injects, so the symmetry is
  *  structural, not a discipline. */
 export function boardCallEnv(): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = { ...process.env, [ADVISOR_DISABLE_ENV]: "1" };
+  const env: NodeJS.ProcessEnv = { ...process.env, [ADVISOR_DISABLE_ENV]: "1", [AUTOUPDATER_DISABLE_ENV]: "1" };
   for (const name of MOONSHOT_ROUTING_ENV) delete env[name];
   return env;
 }
@@ -681,6 +686,7 @@ export function workerSpawnEnv(
     ...process.env,
     CLAUDE_STREAM_IDLE_TIMEOUT_MS: String(STREAM_IDLE_TIMEOUT_MS),
     API_TIMEOUT_MS: String(STREAM_IDLE_TIMEOUT_MS),
+    [AUTOUPDATER_DISABLE_ENV]: "1",
   };
   if (advisor === undefined) env[ADVISOR_DISABLE_ENV] = "1";
   else delete env[ADVISOR_DISABLE_ENV];
@@ -717,7 +723,7 @@ export function workerSpawnEnv(
  *  a guess to bake in. Throws MoonshotApiKeyMissingError when there is no
  *  credential to authenticate with. */
 export function moonshotCliAuthEnv(keyFile: string | undefined): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = { ...process.env, [ADVISOR_DISABLE_ENV]: "1" };
+  const env: NodeJS.ProcessEnv = { ...process.env, [ADVISOR_DISABLE_ENV]: "1", [AUTOUPDATER_DISABLE_ENV]: "1" };
   for (const name of CLAUDE_SUBSCRIPTION_ENV) delete env[name];
   env[ANTHROPIC_BASE_URL_ENV] = MOONSHOT_BASE_URL;
   env[ANTHROPIC_AUTH_TOKEN_ENV] = readMoonshotApiKey(resolveMoonshotApiKeyFile(keyFile));
@@ -1246,7 +1252,7 @@ export type EnumerateToolsFn = () => Promise<{
   mcpServers: string[];
   /** ADR 0156: `memory_paths.auto`, read off the same init line — null is closed. */
   autoMemoryPath: string | null;
-} | null>;
+} | { retired: true } | null>;
 
 // 3つ目の問いの正本の ping(ADR 0039 決定3)。**work のリストで撃つ — review 用に
 // 2本目は撃たない。** review は work の真部分集合なので、改名で不活性化した名前
@@ -1345,6 +1351,8 @@ export const toolSurfaceProbeSpec = (cwd: string): BoardCallSpec => ({
 export function readToolSurface(
   parsed: Record<string, unknown> | null,
 ): Awaited<ReturnType<EnumerateToolsFn>> {
+  // ADR 0186 決定6: ベンダーの最低版の門で起動を断った result 行(is_error なので readResultEvent は通さない)
+  if (parsed?.type === "result" && parsed.startup_failure_reason === "cli_version_too_old") return { retired: true };
   const tools = readInitField(parsed, "tools");
   const mcpServers = readInitMcpServers(parsed);
   return tools && mcpServers ? { tools, mcpServers, autoMemoryPath: readInitAutoMemoryPath(parsed) } : null;
@@ -1376,9 +1384,41 @@ export async function probeToolSurfaceCapability(
         "(ADR 0039)",
     };
   }
+  if ("retired" in observed) {
+    return {
+      available: false,
+      reason:
+        "the vendor retired this host's `claude` CLI version — the tool-surface probe's CLI refused to start " +
+        "(startup_failure_reason `cli_version_too_old`); raise the pinned version in `claude-cli-version` (ADR 0186)",
+    };
+  }
   // work プロファイルで撃っている(TOOL_SURFACE_PROBE_ARGS のコメント参照)
   const surface = checkToolSurface(observed.tools, "work", false, observed.mcpServers);
   return surface.available ? checkAutoMemoryClosed(observed.autoMemoryPath) : surface;
+}
+
+/** Claude Harness の封じ込めの問いのうち、版の一致とツール面(ADR 0186 決定2)。版は
+ *  完全一致で比べ、違えばツール面の probe を撃たない。版の門を
+ *  `probeToolSurfaceCapability` の外に置くのは、適合試験が固定の版を変える前の新しい版で
+ *  そちらを撃つからである。`readVersion` は `claude --version` の出力。 */
+export async function probeClaudeHarnessCapability(
+  readVersion: () => string,
+  enumerate: EnumerateToolsFn,
+): Promise<ContainmentCapability> {
+  let observed: string;
+  try {
+    observed = readVersion().split(/\s+/)[0] ?? "";
+  } catch (error) {
+    observed = `unreadable (${String(error)})`;
+  }
+  if (observed === CLAUDE_CLI_VERSION) return probeToolSurfaceCapability(enumerate);
+  return {
+    available: false,
+    reason:
+      `the board pins Claude CLI ${CLAUDE_CLI_VERSION}, but this host's \`claude --version\` is ${observed || "empty"} — ` +
+      `install the pinned version (native install / Lima VM: \`claude install ${CLAUDE_CLI_VERSION}\`; ` +
+      `npm: \`npm install -g @anthropic-ai/claude-code@${CLAUDE_CLI_VERSION}\`) (ADR 0186)`,
+  };
 }
 
 /** The skills-picker candidate source (issue #106 / ADR 0025): the `@host`
