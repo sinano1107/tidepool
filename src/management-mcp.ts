@@ -23,13 +23,13 @@ import {
 import type { GitHubClient } from "./github.js";
 import {
   addIssueCommentThroughHumanDoor,
+  answerInputSchema,
   assertMemoryReferencesKnown,
   cancelThroughHumanDoor,
   completeThroughHumanDoor,
   decomposeThroughHumanDoor,
   editThroughHumanDoor,
   gatedHumanEntryInput,
-  answerInputSchema,
   listMemoryEntriesForHuman,
   registerThroughHumanDoor,
   submitAnswer,
