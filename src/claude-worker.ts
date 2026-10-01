@@ -882,6 +882,22 @@ export function readResultEvent(parsed: Record<string, unknown> | null): StreamR
   return isStreamResultEvent(parsed) ? parsed : null;
 }
 
+/** ADR 0188: the failure the CLI reported on an `is_error` result line, verbatim — the
+ *  API error's `result` (with its status when numeric), else the CLI-side `errors`.
+ *  Display only, read separately so `readResultEvent` keeps dropping these lines (#534).
+ *  The last `is_error` line is kept whole, so one without text leaves null, not an earlier line's text. */
+function readErrorResult(parsed: Record<string, unknown> | null): Record<string, unknown> | null {
+  return parsed?.type === "result" && parsed.is_error === true ? parsed : null;
+}
+
+function reportedError(line: Record<string, unknown> | null): string | null {
+  if (line === null) return null;
+  const { result, errors, api_error_status: status } = line;
+  const text = (typeof result === "string" && result) || (Array.isArray(errors) ? errors.join("\n") : "");
+  if (!text) return null;
+  return typeof status === "number" ? `API error status ${status}: ${text}` : text;
+}
+
 function isCliAuthFailure(parsed: Record<string, unknown> | null): boolean {
   return parsed?.type === "result" && isCliAuthFailureEnvelope(parsed);
 }
@@ -2152,6 +2168,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     let cliAuthFailed = false;
     let capInterrupted = false;
     let refusalCause: RowRefusalCause | null = null;
+    let lastErrorResult: Record<string, unknown> | null = null;
     let buffered = "";
     // 面の照合は init 行1本で答えが出る(それ以降の行を JSON.parse し直す理由がない)
     let toolSurfaceObserved = false;
@@ -2171,6 +2188,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
         cliAuthFailed ||= isCliAuthFailure(parsed);
         capInterrupted ||= isCapInterruption(parsed);
         refusalCause ??= rowRefusalOf(parsed);
+        lastErrorResult = readErrorResult(parsed) ?? lastErrorResult;
         advisorObserved.consultations += countAdvisorConsultations(parsed);
         advisorObserved.mainModel = readInitModel(parsed) ?? advisorObserved.mainModel;
         if (!toolSurfaceObserved) {
@@ -2211,10 +2229,16 @@ export class ClaudeCodeWorker implements WorkerAdapter {
       cliAuthFailed ||= isCliAuthFailure(finalParsed);
       capInterrupted ||= isCapInterruption(finalParsed);
       refusalCause ??= rowRefusalOf(finalParsed);
+      lastErrorResult = readErrorResult(finalParsed) ?? lastErrorResult;
       // 文字の途中で stream が閉じた場合の未完バイト列を flush(この場合の
       // 置換文字は捏造ではなく「途中で切れた」事実そのもの)
       stderrBuffered = trimStderrTail(stderrBuffered + stderrDecoder.end());
-      const exit: WorkerExit = { exit_code: code, signal, stderr_tail: stderrTail(stderrBuffered) };
+      const exit: WorkerExit = {
+        exit_code: code,
+        signal,
+        stderr_tail: stderrTail(stderrBuffered),
+        reported_error: reportedError(lastErrorResult),
+      };
       // this diagnostic used to live in defaultSpawn (console.error only);
       // promoted here alongside the worker_exited write so an operator
       // tailing logs still sees a crash, not just the audit record (issue #32)

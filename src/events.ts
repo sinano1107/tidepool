@@ -292,6 +292,11 @@ export type EventPayload =
       // adapter alongside its transcript (adapter-specific layout — ADR
       // 0005); this field is the event-side pointer into it.
       stderr_tail: string | null;
+      // ADR 0188: the failure the CLI itself reported on stdout (Claude's
+      // `is_error` result line, Codex's `turn.failed`), verbatim, last one
+      // only. null means the CLI reported no failure. Display only — no
+      // judgment on the board reads it (ADR 0104 決定2 / ADR 0184 決定3).
+      reported_error: string | null;
       // issue #379: the id of the `worker_spawned` event that opened this
       // same session — a task can have several worker sessions (retry /
       // decompose 統合復帰 / quarantine 復帰), and the adapter now names each

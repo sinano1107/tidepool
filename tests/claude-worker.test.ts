@@ -2314,6 +2314,7 @@ describe("ClaudeCodeWorker", () => {
       // stderr を一切書かず終わったセッション — 「stderr が無かった」ことが
       // null で残る(空文字とは違い、捕捉の欠落と区別できる — issue #125)
       stderr_tail: null,
+      reported_error: null,
       // このセッションを開いた worker_spawned を指す(issue #379)
       worker_spawned_event_id: spawned?.id,
       usage: {
@@ -2473,7 +2474,7 @@ describe("ClaudeCodeWorker", () => {
     f.emitExit(0, null);
 
     expect(calls).toEqual([
-      ["task-exit-without-report", { exit_code: 0, signal: null, stderr_tail: "boom" }, { exitedRecorded: true, forced: true }],
+      ["task-exit-without-report", { exit_code: 0, signal: null, stderr_tail: "boom", reported_error: null }, { exitedRecorded: true, forced: true }],
     ]);
   });
 
@@ -2518,6 +2519,68 @@ describe("ClaudeCodeWorker", () => {
     expect(exited?.payload).toMatchObject({ stderr_tail: null });
   });
 
+  /** ADR 0188: stdout の result 行を1本流して exit し、worker_exited の reported_error を読む。 */
+  async function reportedErrorAfter(lines: object[]): Promise<unknown> {
+    const { start, processes, emitExit, db } = await makeWorker();
+    start("task-reported-error");
+    processes[0]!.stdout.write(lines.map((line) => `${JSON.stringify(line)}\n`).join(""));
+    emitExit(1, null);
+    const exited = listEvents(db, "task-reported-error").find((e) => e.kind === "worker_exited");
+    return (exited!.payload as { reported_error?: unknown }).reported_error;
+  }
+
+  it("is_error の success 行は result を、api_error_status が数値なら前に添えて reported_error に載せる(ADR 0188)", async () => {
+    expect(
+      await reportedErrorAfter([
+        { type: "result", subtype: "success", is_error: true, api_error_status: 400, result: "model is not available" },
+      ]),
+    ).toBe("API error status 400: model is not available");
+  });
+
+  it("api_error_status の無い is_error 行は result だけを reported_error に載せる(ADR 0188)", async () => {
+    expect(
+      await reportedErrorAfter([{ type: "result", subtype: "success", is_error: true, result: "Invalid API key" }]),
+    ).toBe("Invalid API key");
+  });
+
+  it("error_max_turns の行は errors を改行で連結して reported_error に載せる(ADR 0188)", async () => {
+    expect(
+      await reportedErrorAfter([
+        { type: "result", subtype: "error_max_turns", is_error: true, errors: ["first failure", "second failure"] },
+      ]),
+    ).toBe("first failure\nsecond failure");
+  });
+
+  it("result が空文字なら errors を載せる(ADR 0188)", async () => {
+    expect(
+      await reportedErrorAfter([{ type: "result", subtype: "error_during_execution", is_error: true, result: "", errors: ["failed"] }]),
+    ).toBe("failed");
+  });
+
+  it("is_error でない result 行・result も errors も無い is_error 行・result 行の無い exit は reported_error null(ADR 0188)", async () => {
+    expect(await reportedErrorAfter([{ type: "result", subtype: "success", is_error: false, result: "done" }])).toBeNull();
+    expect(await reportedErrorAfter([{ type: "result", subtype: "error_during_execution", is_error: true }])).toBeNull();
+    expect(await reportedErrorAfter([{ type: "result", subtype: "error_during_execution", is_error: true, errors: [] }])).toBeNull();
+    expect(await reportedErrorAfter([])).toBeNull();
+    // 最後の is_error 行が文を持たなければ、前の行の文を残さない
+    expect(
+      await reportedErrorAfter([
+        { type: "result", is_error: true, result: "earlier" },
+        { type: "result", subtype: "error_during_execution", is_error: true },
+      ]),
+    ).toBeNull();
+  });
+
+  it("is_error の行が2本あれば最後の1本を、改行で終わらない最終行も拾う(ADR 0188)", async () => {
+    const { start, processes, emitExit, db } = await makeWorker();
+    start("task-reported-error-last");
+    processes[0]!.stdout.write(`${JSON.stringify({ type: "result", is_error: true, result: "earlier" })}\n`);
+    processes[0]!.stdout.write(JSON.stringify({ type: "result", is_error: true, result: "later" }));
+    emitExit(1, null);
+    const exited = listEvents(db, "task-reported-error-last").find((e) => e.kind === "worker_exited");
+    expect(exited?.payload).toMatchObject({ reported_error: "later" });
+  });
+
   it("最終 result イベントが出ないまま終了したセッション(watchdog kill 等)は usage null で worker_exited を記録する(issue #32)", async () => {
     const { start, emitExit, db } = await makeWorker();
     start("task-killed");
@@ -2529,6 +2592,7 @@ describe("ClaudeCodeWorker", () => {
       exit_code: null,
       signal: "SIGKILL",
       stderr_tail: null,
+      reported_error: null,
       worker_spawned_event_id: spawned?.id,
       usage: null,
     });

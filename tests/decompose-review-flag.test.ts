@@ -195,6 +195,7 @@ it("review の公開注入 context は対象 worker のモデル・価格・実�
       exit_code: 0,
       signal: null,
       stderr_tail: null,
+      reported_error: null,
       worker_spawned_event_id: spawned,
       usage: {
         input_tokens: 100,

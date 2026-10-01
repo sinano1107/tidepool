@@ -445,6 +445,7 @@ export function startWatchdog(deps: {
       `worker exited without reporting: ${task.title}`,
       `the worker for task "${task.title}" (${task.id}) exited (${how}) without a final report — ` +
         "it did not complete, decompose, or escalate. No self-report is possible." +
+        (exit.reported_error ? `\n\nerror reported by the CLI:\n${exit.reported_error}` : "") +
         (exit.stderr_tail ? `\n\nstderr tail:\n${exit.stderr_tail}` : ""),
       now,
     );

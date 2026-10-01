@@ -930,6 +930,15 @@ function readUsage(value: unknown): CodexUsage | null {
     : null;
 }
 
+/** ADR 0188: `turn.failed` の message を逐語で(入れ子の JSON は解かない)。`error` event は
+ *  再試行のたびにも流れるので代用しない —— `turn.failed` が自分で代用している。 */
+function readTurnFailure(value: unknown): string | null {
+  if (!value || typeof value !== "object") return null;
+  const event = value as { type?: unknown; error?: { message?: unknown } };
+  const message = event.type === "turn.failed" ? event.error?.message : undefined;
+  return typeof message === "string" ? message : null;
+}
+
 function consumeJsonl(
   buffered: string,
   chunk: string,
@@ -1101,8 +1110,10 @@ export class CodexWorker implements WorkerAdapter {
     let stdout = "";
     let stderr = "";
     let usage: CodexUsage | null = null;
+    let reportedError: string | null = null;
     const observe = (event: unknown) => {
       usage = readUsage(event) ?? usage;
+      reportedError = readTurnFailure(event) ?? reportedError;
     };
     child.stdout.on("data", (chunk: Buffer | string) => {
       const text = chunk.toString();
@@ -1136,7 +1147,12 @@ export class CodexWorker implements WorkerAdapter {
     child.on("exit", (code, signal) => {
       this.running.delete(task.id);
       consumeJsonl(stdout, "", observe, true);
-      const tail = stderr.trim().split("\n").slice(-20).join("\n") || null;
+      const exit: WorkerExit = {
+        exit_code: code,
+        signal,
+        stderr_tail: stderr.trim().split("\n").slice(-20).join("\n") || null,
+        reported_error: reportedError,
+      };
       const normalized: Extract<EventPayload, { kind: "worker_exited" }>["usage"] = usage
         ? {
             input_tokens: usage.input_tokens,
@@ -1153,9 +1169,7 @@ export class CodexWorker implements WorkerAdapter {
         origin: "board",
         payload: {
           kind: "worker_exited",
-          exit_code: code,
-          signal,
-          stderr_tail: tail,
+          ...exit,
           worker_spawned_event_id: spawned,
           usage: normalized,
         },
@@ -1165,7 +1179,7 @@ export class CodexWorker implements WorkerAdapter {
       // transcript を書いた後に強制回収を撃つ。Harness 非依存に、盤面 supervisor 経由。
       this.containers.forceReclaim(task.id);
       removeTaskTemp();
-      this.options.onWorkerExited?.(task.id, { exit_code: code, signal, stderr_tail: tail });
+      this.options.onWorkerExited?.(task.id, exit);
     });
   }
 
