@@ -32,7 +32,7 @@ interface TpQuestion {
   /** comment が要る選択肢 —— 盤面の `needs_comment` 注釈(ADR 0179 決定4)。 */
   needsComment?: string[];
   /** 自由記述の override を受けるか —— 盤面の `free_text` 注釈(issue #1309)。固定選択肢の question は false。 */
-  freeText?: boolean;
+  freeText: boolean;
   /** 行の Quarantine の question(ADR 0184 決定6)—— settings タブを開くボタンを持つ。 */
   opensSettings?: boolean;
 }
@@ -452,7 +452,7 @@ function TpQuestionCard({ q, answer, onAnswer, locked = false, onTranslate, onOp
       )}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
         {items.map((item, i) => (
-          <TpQuestionItemPicker key={i} item={item} value={draft[i]} locked={locked} freeText={q.freeText ?? true} onChange={(v) => setItemAnswer(i, v)}
+          <TpQuestionItemPicker key={i} item={item} value={draft[i]} locked={locked} freeText={q.freeText} onChange={(v) => setItemAnswer(i, v)}
             translated={translatedItems ? translatedItems[i] : null}
             disabled={disabledOptions} />
         ))}

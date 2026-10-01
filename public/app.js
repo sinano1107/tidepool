@@ -404,7 +404,7 @@ function TpQuestionCard({ q, answer, onAnswer, locked = false, onTranslate, onOp
       item,
       value: draft[i],
       locked,
-      freeText: q.freeText ?? true,
+      freeText: q.freeText,
       onChange: (v) => setItemAnswer(i, v),
       translated: translatedItems ? translatedItems[i] : null,
       disabled: disabledOptions
