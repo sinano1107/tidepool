@@ -855,7 +855,7 @@ export function containerHarness(
       clock,
       reclaimTimeout: RECLAIM_TIMEOUT,
       onReclaimTimeout: () => {},
-      cliVersion: pinnedCliVersions,
+      checkCliVersion: pinnedCliVersions,
       onCliVersionMismatch: () => {},
     }).call,
   };

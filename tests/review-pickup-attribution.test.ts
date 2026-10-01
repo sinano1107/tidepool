@@ -86,7 +86,7 @@ You are Fugu.
     auditorName: "fugu",
     containerRuntime: new FakeContainerRuntime(spawn),
     transcripts: new TranscriptStore(logDir),
-    harnessCliVersion: pinnedCliVersions,
+    checkHarnessCliVersion: pinnedCliVersions,
     worker: ({ db, containers, boardCall }): WorkerAdapter => {
       const worker = new ClaudeCodeWorker({
         db,

@@ -117,7 +117,7 @@ export function createBoardCalls(deps: {
   /** Harness の CLI の版の検査(ADR 0186 決定3)。口は呼び出しのたびにこれを呼ぶ ——
    *  封じ込めの検査が最後に観測した版を使い回すと、pickup の無い間の人間の手による更新を
    *  見逃す。版の読みは口の中で spawn せず、合成側が注入する。 */
-  cliVersion: (harness: Harness) => Promise<ContainmentCapability>;
+  checkCliVersion: (harness: Harness) => Promise<ContainmentCapability>;
   /** 版の不一致で断ったことを盤面へ返す口。配線先はその Harness の封じ込めの隔離である。 */
   onCliVersionMismatch: (harness: Harness, reason: string) => void;
 }): BoardCalls {
@@ -165,14 +165,19 @@ export function createBoardCalls(deps: {
     if (!deps.containers.preflight().available) return null;
     if (!spec.bypassVersionGate) {
       // 読めない版は一致とは読まない(fail-closed)
-      const version = await deps.cliVersion(spec.harness).catch(
+      const version = await deps.checkCliVersion(spec.harness).catch(
         (error: unknown): ContainmentCapability => ({
           available: false,
           reason: `the board could not read this host's ${spec.harness} CLI version: ${String(error)} (ADR 0186)`,
         }),
       );
       if (!version.available) {
-        deps.onCliVersionMismatch(spec.harness, version.reason);
+        // 報告が投げても口の契約(null = fail-closed)は壊さない —— 失敗は `report` と同じく結果とは別に盤面へ上げる
+        try {
+          deps.onCliVersionMismatch(spec.harness, version.reason);
+        } catch (error) {
+          void Promise.reject(error);
+        }
         return null;
       }
     }

@@ -40,7 +40,7 @@ const { call } = createBoardCalls({
   clock: new SystemClock(),
   reclaimTimeout: RECLAIM_TIMEOUT,
   onReclaimTimeout: (reason) => console.warn(reason),
-  cliVersion: async () => ({ available: true }),
+  checkCliVersion: async () => ({ available: true }),
   onCliVersionMismatch: () => {},
 });
 const scratch = mkdtempSync(join(tmpdir(), "tidepool-conformance-"));

@@ -286,7 +286,7 @@ export interface ServerOptions {
   harnessContainment?: HarnessContainmentCheck;
   /** ADR 0186 決定3: Board call の口が呼び出しのたびに読む Harness の CLI の版の検査。
    *  **省略できない** —— 渡し忘れで版の門が開かないように。 */
-  harnessCliVersion: HarnessContainmentCheck;
+  checkHarnessCliVersion: HarnessContainmentCheck;
   /** ADR 0097 決定2 / issue #446: per-provider authentication probes — the
    *  re-verification a provider-auth Confirmation question's answer fires.
    *  The board's own provider (anthropic) is folded in from `cliAuth` below —
@@ -412,11 +412,13 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
     clock: given.clock,
     reclaimTimeout: given.watchdog?.reclaimTimeout ?? RECLAIM_TIMEOUT,
     onReclaimTimeout: (reason) => quarantineContainment(db, reason, given.clock.now()),
-    cliVersion: given.harnessCliVersion,
+    checkCliVersion: given.checkHarnessCliVersion,
     // ADR 0186 決定3: 版の不一致で断ったら、pickup の検査と同じ鍵の封じ込めの隔離へ(1資源につき1枚)。
-    // その Harness を通る agent が居なければ立てない —— 起動時の検査(下)と同じ線で、codex を
-    // 入れていない盤面に、解けない codex の question を App Server の互換性検査が立てないため
+    // 封じ込めの検査を持たない盤面(registry 無し)と、その Harness を通る agent が居ない盤面では立てない ——
+    // 起動時の検査(下)と同じ線。立てても回答の再検査が無く解けない question になり、codex を入れていない
+    // 盤面では App Server の互換性検査が起動時に立ててしまう
     onCliVersionMismatch: (harness, reason) => {
+      if (!given.harnessContainment) return;
       if (given.quarantineResolvers?.harnessContainment?.([harness]).length === 0) return;
       registerQuarantine(db, "harnessContainment", harness, reason, given.clock.now());
     },

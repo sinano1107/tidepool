@@ -55,7 +55,7 @@ describe("restart 割り込みの failTask が task.workspace を解決する", 
       worker: () => new ScriptedWorker(bootClock),
       containerRuntime: new FakeContainerRuntime(),
       transcripts: new TranscriptStore(boardDir),
-      harnessCliVersion: pinnedCliVersions,
+      checkHarnessCliVersion: pinnedCliVersions,
       workspace: sandbox,
       resolveWorkspace: (name) => {
         const ws = registry[name ?? "sandbox"];

@@ -29,7 +29,7 @@ it("/mcp は web/api ポートでは待ち受けず、mcpPort 専用ポートで
     worker: () => new ScriptedWorker(bootClock),
     containerRuntime: new FakeContainerRuntime(),
     transcripts: new TranscriptStore(dir),
-    harnessCliVersion: pinnedCliVersions,
+    checkHarnessCliVersion: pinnedCliVersions,
   });
 
   // credential を提示したうえで 404 であること(issue #153): 無認証の 401 は

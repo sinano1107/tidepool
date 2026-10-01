@@ -123,7 +123,7 @@ async function bootWithTokenFile(tokenFile: string): Promise<TidepoolServer> {
     worker: () => new ScriptedWorker(clock),
     containerRuntime: new FakeContainerRuntime(),
     transcripts: new TranscriptStore(dir),
-    harnessCliVersion: pinnedCliVersions,
+    checkHarnessCliVersion: pinnedCliVersions,
   });
 }
 

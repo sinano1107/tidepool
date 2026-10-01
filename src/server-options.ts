@@ -782,7 +782,7 @@ export async function buildServerOptions(board: BoardComposition, db: Db): Promi
     // ADR 0136 決定2: Board call を撃つ口はどれも Board call の口から組む
     boardCallers: (call) => boardCallers(board, workspace, call),
     // ADR 0186 決定3: 口が呼び出しのたびに読む版の検査。Codex は App Server の互換性検査と同じ固定の版と比べる
-    harnessCliVersion: (harness) =>
+    checkHarnessCliVersion: (harness) =>
       harness === "codex"
         ? checkCodexCliVersion(readCliVersion(board.codexExecutable))
         : checkClaudeCliVersion(readCliVersion("claude")),

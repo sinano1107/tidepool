@@ -50,7 +50,7 @@ function setup() {
     clock,
     reclaimTimeout: RECLAIM_TIMEOUT,
     onReclaimTimeout: (reason) => quarantined.push(reason),
-    cliVersion: async (harness) => versions[harness],
+    checkCliVersion: async (harness) => versions[harness],
     onCliVersionMismatch: (harness, reason) => mismatches.push([harness, reason]),
   });
   const spawned = (n: number) => vi.waitFor(() => expect(spawns.length).toBe(n));
@@ -94,7 +94,7 @@ it("版の検査が投げたら、不一致として断る", async () => {
     clock: t.clock,
     reclaimTimeout: RECLAIM_TIMEOUT,
     onReclaimTimeout: () => {},
-    cliVersion: async () => {
+    checkCliVersion: async () => {
       throw new Error("spawn claude ENOENT");
     },
     onCliVersionMismatch: (harness, reason) => t.mismatches.push([harness, reason]),
@@ -368,4 +368,23 @@ it("呼び手の done で強制回収が撃たれ、呼び出しは読み手の�
   // 上限到達の null ではなく読み手の答え(ADR 0074 のベストエフォート画面を失わない)
   expect(await call).toBe("screen (exit null)");
   expect(t.runtime.forceReclaims).toEqual(t.runtime.created);
+});
+
+it("断ったことの報告が投げても、口は null を返す —— 失敗は結果とは別に上がる(ADR 0136 の契約)", async () => {
+  const t = setup();
+  const failure = new Error("registerQuarantine failed");
+  const raised = new Promise((resolve) => process.once("unhandledRejection", resolve));
+  const calls = createBoardCalls({
+    containers: t.containers,
+    clock: t.clock,
+    reclaimTimeout: RECLAIM_TIMEOUT,
+    onReclaimTimeout: () => {},
+    checkCliVersion: async () => DRIFTED,
+    onCliVersionMismatch: () => {
+      throw failure;
+    },
+  });
+
+  expect(await calls.call(spec, readAll)).toBeNull();
+  expect(await raised).toBe(failure);
 });
