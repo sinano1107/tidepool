@@ -29,8 +29,8 @@ try/catch)。review task では学習器を参照しない(ADR 0111 決定3)。�
   alias の行は、pin の綴りのまま自分の行にだけ当たる。
 
 文脈のうちセルを割るのは **workspace** だけ(プーリングの段)。要求ティアは候補集合を既に絞って
-いる(ティアは床、ADR 0114 決定3)。優先順位は推薦の呼び手が task から
-渡す。agent / interview 種別はセルを割らず episode にも持たない —— 読み手(routing meta-review)が
+いる(ティアは床、ADR 0114 決定3)。優先順位は selector の並びに既に入っていて、推薦には渡さない
+(ADR 0183)。agent / interview 種別はセルを割らず episode にも持たない —— 読み手(routing meta-review)が
 生えたら tasks と events から引ける。
 
 ## outcome
@@ -51,7 +51,8 @@ try/catch)。review task では学習器を参照しない(ADR 0111 決定3)。�
 - ADR 0115 決定5: 帰責が worker の落ち度でない異議は負の信号に数えない。配分評価の cause で環境要因
   を除くのと同じ機構。
 - 費用 = `worker_exited.usage.estimated_cost_usd`(session 合計、advisor の帰属は要らない。codex は null)。
-  時間 = `worker_exited.created_at − worker_spawned.created_at`。どちらも観測された平均として運ぶ。
+  時間 = `worker_exited.created_at − worker_spawned.created_at`。どちらも session ごとに運び、セルの集計は持たない ——
+  推薦は読まず、routing meta-review の shadow 行の読み口が読む(ADR 0183)。
 
 ## 事前分布と事後分布(Beta-Bernoulli)
 
@@ -86,11 +87,10 @@ pool として扱う。
 2. 先頭が未観測(数えた受理・却下が0件)なら推薦は先頭。先頭に観測があれば、観測のある候補が先頭に勝つかを
    1つずつ比べる —— 未観測の候補へは移らない(ADR 0181)。先頭の観測数が候補より少ないあいだは却下数で比べ、
    先頭の却下が多いときだけ候補が勝つ(先頭が残りを全部受理しても追いつけない、ADR 0182 決定4)。それ以外は
-   事後平均で比べる。勝つ候補が無ければ先頭、あればその中で事後平均の降順の1番目。同点は selector の並びのまま。
-3. task の優先順位が `cost` のときだけ、同点の間で観測された session 費用の平均(小さい順)が鍵になる。
-   **両方に観測があるときに限る**。`quality` では Provider 順位が selector の並びに既に入っている
-   ので費用は読まない。
-4. `basis` は `data`(候補のどれかに数えた episode が1件以上ある)か `prior`(表そのまま)。
+   事後平均で比べる。勝つ候補が無ければ先頭、あればその中で事後平均の降順の1番目。同点は優先順位が `cost` でも
+   selector の並びのまま —— 観測された session 費用は鍵にしない(`cost` の鍵は表の価格で、selector の並びに既に入っている、
+   ADR 0183)。
+3. `basis` は `data`(候補のどれかに数えた episode が1件以上ある)か `prior`(表そのまま)。
 
 **乱数は持たない**。spec の「乱数は seed 注入で決定論に」は Thompson sampling を採る場合の条件で、
 事後平均で並べる限り seed は要らない(AC2)。Thompson sampling に切り替えるなら seed を入力に足す。

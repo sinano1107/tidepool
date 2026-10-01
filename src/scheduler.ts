@@ -11,7 +11,6 @@ import type { Db } from "./db.js";
 import { getDisplayLanguage } from "./display-language.js";
 import { appendEvent } from "./events.js";
 import {
-  BOARD_DEFAULT_PRIORITY,
   type ExecutionExclusions,
   type ExecutionSetting,
   firstSelectable,
@@ -620,7 +619,6 @@ export function startScheduler(deps: {
           candidates: pool,
           board,
           workspace: aggregateCells(inWorkspace),
-          priority: task.priority ?? BOARD_DEFAULT_PRIORITY,
         });
       };
       let branched: ReturnType<typeof branch> | undefined;

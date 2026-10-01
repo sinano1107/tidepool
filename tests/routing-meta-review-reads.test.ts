@@ -127,7 +127,7 @@ it("shadow 行は書いた時点の両セルの受理数・却下数と除外後
   const later = work("later");
   const branch = (promoted: boolean) => {
     const episodes = loadEpisodes(db);
-    return selectorBranch({ promoted, candidates: [opus, sol], board: aggregateCells(episodes), workspace: aggregateCells(episodes.filter((e) => e.workspace === null)), priority: "quality" }).shadow;
+    return selectorBranch({ promoted, candidates: [opus, sol], board: aggregateCells(episodes), workspace: aggregateCells(episodes.filter((e) => e.workspace === null)) }).shadow;
   };
   recordShadow(db, later.id, branch(false), at);
   recordShadow(db, later.id, branch(true), at);

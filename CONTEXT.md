@@ -452,7 +452,7 @@ _Avoid_: 計算資源、execution profile
 
 ## 要求(Execution request)
 
-task が持つ2列 — **必要品質**(ティア: `economy` / `standard` / `frontier` = 廉価 / 主力 / 上位)と**優先順位**(`quality` / `cost`、既定 `quality` —— ADR 0114。旧・`speed` は落とした: 締め切りはティアの申告で表し、所要時間は学習器の outcome として観測される)。ティアは**床**であり、優先順位はその床の候補を並べる鍵であって床を下回る許可ではない。`cost` の鍵は**表の価格**であり、観測された session 費用ではない —— 単価が安くトークンを多く使う行は先頭のまま走る(issue #1250 / ADR 0183)。登録者(人間の Register、decompose の ChildSpec、triage)が書き、未指定は盤面既定(未指定と既定選択は記録上区別する — 要求ティアは難易度の申告として学習の文脈変数になる)。agent.md の `tier` は task に要求が無いときの既定。制約(外部送信可・予算・温存)は task に置かない — workspace と盤面設定の側。review の要求は `review_tier`(task に1つ)。
+task が持つ2列 — **必要品質**(ティア: `economy` / `standard` / `frontier` = 廉価 / 主力 / 上位)と**優先順位**(`quality` / `cost`、既定 `quality` —— ADR 0114。旧・`speed` は落とした: 締め切りはティアの申告で表し、所要時間は session ごとの観測として残る)。ティアは**床**であり、優先順位はその床の候補を並べる鍵であって床を下回る許可ではない。`cost` の鍵は**表の価格**であり、観測された session 費用ではない —— 単価が安くトークンを多く使う行は先頭のまま走る(issue #1250 / ADR 0183)。登録者(人間の Register、decompose の ChildSpec、triage)が書き、未指定は盤面既定(未指定と既定選択は記録上区別する — 要求ティアは難易度の申告として学習の文脈変数になる)。agent.md の `tier` は task に要求が無いときの既定。制約(外部送信可・予算・温存)は task に置かない — workspace と盤面設定の側。review の要求は `review_tier`(task に1つ)。
 _Avoid_: 具体モデル名の指定
 
 ## Selector(選択器)
