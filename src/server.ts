@@ -40,7 +40,7 @@ import { ensureMemoryIndex } from "./memory.js";
 import { type ContainerRuntime, ProcessContainers } from "./process-container.js";
 import type { ProfileAdmin } from "./profile-create.js";
 import { createNotificationTick, type PushClient } from "./push.js";
-import { openQuarantineValues, type QuarantineResolvers } from "./quarantine.js";
+import { openQuarantineValues, type QuarantineResolvers, registerQuarantine } from "./quarantine.js";
 import type { Harness } from "./registry.js";
 import {
   type AuthorityProfile,
@@ -284,6 +284,9 @@ export interface ServerOptions {
    *  prepended to each Harness result, and the four questions are re-run at
    *  boot, pickup, and its Confirmation answer time. */
   harnessContainment?: HarnessContainmentCheck;
+  /** ADR 0186 決定3: Board call の口が呼び出しのたびに読む Harness の CLI の版の検査。
+   *  **省略できない** —— 渡し忘れで版の門が開かないように。 */
+  checkHarnessCliVersion: HarnessContainmentCheck;
   /** ADR 0097 決定2 / issue #446: per-provider authentication probes — the
    *  re-verification a provider-auth Confirmation question's answer fires.
    *  The board's own provider (anthropic) is folded in from `cliAuth` below —
@@ -409,6 +412,16 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
     clock: given.clock,
     reclaimTimeout: given.watchdog?.reclaimTimeout ?? RECLAIM_TIMEOUT,
     onReclaimTimeout: (reason) => quarantineContainment(db, reason, given.clock.now()),
+    checkCliVersion: given.checkHarnessCliVersion,
+    // ADR 0186 決定3: 版の不一致で断ったら、pickup の検査と同じ鍵の封じ込めの隔離へ(1資源につき1枚)。
+    // 封じ込めの検査を持たない盤面(registry 無し)と、その Harness を通る agent が居ない盤面では立てない ——
+    // 起動時の検査(下)と同じ線。立てても回答の再検査が無く解けない question になり、codex を入れていない
+    // 盤面では App Server の互換性検査が起動時に立ててしまう
+    onCliVersionMismatch: (harness, reason) => {
+      if (!given.harnessContainment) return;
+      if (given.quarantineResolvers?.harnessContainment?.([harness]).length === 0) return;
+      registerQuarantine(db, "harnessContainment", harness, reason, given.clock.now());
+    },
   });
   const options: ServerOptions = { ...given, ...given.boardCallers?.(boardCalls.call) };
   // ADR 0099 決定5: boot 時の機構前提検査。不成立の platform を黙って弱い回収へ

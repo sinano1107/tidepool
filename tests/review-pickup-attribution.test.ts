@@ -18,6 +18,7 @@ import {
   fakeContainers,
   healthyUsageText,
   noRetrospectiveCalls,
+  pinnedCliVersions,
   ScriptedWorker,
 } from "./fakes.js";
 import { api, GIT_FIXTURE_TEST_TIMEOUT, HOUR, makeWorkspace, TEST_CREDENTIAL, tempDir } from "./harness.js";
@@ -85,6 +86,7 @@ You are Fugu.
     auditorName: "fugu",
     containerRuntime: new FakeContainerRuntime(spawn),
     transcripts: new TranscriptStore(logDir),
+    checkHarnessCliVersion: pinnedCliVersions,
     worker: ({ db, containers, boardCall }): WorkerAdapter => {
       const worker = new ClaudeCodeWorker({
         db,

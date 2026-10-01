@@ -8,7 +8,7 @@ import { startServer, type TidepoolServer } from "../src/server.js";
 import { implicitTaskExecutionCandidates } from "../src/server-options.js";
 import { TranscriptStore } from "../src/transcript-store.js";
 import type { WorkerAdapter } from "../src/worker.js";
-import { FakeClock, FakeContainerRuntime, healthyUsageText } from "./fakes.js";
+import { FakeClock, FakeContainerRuntime, healthyUsageText, pinnedCliVersions } from "./fakes.js";
 import {
   api,
   bootTidepool,
@@ -231,6 +231,7 @@ You are Tako.
     clock,
     containerRuntime: new FakeContainerRuntime(spawn),
     transcripts: new TranscriptStore(logDir),
+    checkHarnessCliVersion: pinnedCliVersions,
     worker: ({ db, containers, boardCall }): WorkerAdapter => {
       const worker = new ClaudeCodeWorker({
         db,

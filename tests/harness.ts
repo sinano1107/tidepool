@@ -61,6 +61,7 @@ import {
   FakeContainerRuntime,
   FakeGitHubClient,
   FakePushClient,
+  pinnedCliVersions,
   ScriptedWorker,
 } from "./fakes.js";
 
@@ -209,6 +210,9 @@ export interface BootOptions {
   /** Adapter-owned sandbox/tool-surface capability seam. Passing it arms the
    *  shared container and human-surface checks too. */
   harnessContainment?: HarnessContainmentCheck;
+  /** ADR 0186 決定3: Board call の口が呼び出しのたびに読む Harness の CLI の版の検査。
+   *  Absent → 常に一致(版の門を駆動するテストだけが渡す)。 */
+  checkHarnessCliVersion?: HarnessContainmentCheck;
   /** ADR 0097 決定2 / issue #446: per-provider auth probes for the
    *  answer-time re-verification of a provider-auth Confirmation question. */
   providerCliAuth?: Partial<Record<Provider, CliAuthCheck>>;
@@ -306,6 +310,7 @@ export async function bootTidepool(options: BootOptions = {}): Promise<Tidepool>
     },
     taskExecutionCandidates: options.taskExecutionCandidates ?? implicitTaskExecutionCandidates(db),
     harnessContainment: options.harnessContainment,
+    checkHarnessCliVersion: options.checkHarnessCliVersion ?? pinnedCliVersions,
     providerCliAuth: options.providerCliAuth,
     modelProbes: options.modelProbes,
     registryReachability: options.registryReachability,

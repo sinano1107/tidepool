@@ -1,5 +1,6 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { hashToken } from "../src/auth.js";
+import { enumerateHostSkills } from "../src/claude-worker.js";
 import {
   api,
   bootTidepool,
@@ -138,5 +139,47 @@ it("認証が効いている盤面は素通り — 自己検査が 401 を観測
 
   await t.clock.advance(HOUR);
   await vi.waitFor(() => expect(t.worker.started.map((x) => x.id)).toEqual([task.id]));
+  expect(await questions(t)).toEqual([]);
+});
+
+const CLAUDE_VERSION_DRIFT = "the board pins Claude CLI 2.1.280, but this host's `claude --version` is 2.1.290";
+
+const claudeVersionDrift = {
+  ...HARNESS_OPTIONS,
+  checkHarnessCliVersion: async (harness: string) =>
+    harness === "claude-code" ? ({ available: false, reason: CLAUDE_VERSION_DRIFT } as const) : ({ available: true } as const),
+  // GET /api/skills が本番と同じ skill 列挙の Board call を撃つ
+  hostSkills: enumerateHostSkills,
+};
+
+it("Claude の CLI の版が合わない盤面で Board call が2回断られると、Claude Harness の封じ込めの確認 question が1枚だけ開く(ADR 0186 決定3)", async () => {
+  t = await bootTidepool(claudeVersionDrift);
+
+  expect((await api(t.baseUrl, "GET", "/api/skills")).json).toEqual({ skills: [], degraded: true });
+  await api(t.baseUrl, "GET", "/api/skills");
+
+  const open = await questions(t);
+  expect(open.map((item) => [item.question_quarantine_kind, item.question_quarantine_value])).toEqual([
+    ["harnessContainment", "claude-code"],
+  ]);
+  expect(open[0].purpose).toContain(CLAUDE_VERSION_DRIFT);
+});
+
+it("Claude Harness を通る agent が居ない盤面では、版の不一致で Board call は断られるが question は開かない", async () => {
+  t = await bootTidepool({
+    ...claudeVersionDrift,
+    quarantineResolvers: { harnessContainment: (harnesses) => (harnesses.includes("claude-code") ? [] : ["tako"]) },
+  });
+
+  expect((await api(t.baseUrl, "GET", "/api/skills")).json).toEqual({ skills: [], degraded: true });
+
+  expect(await questions(t)).toEqual([]);
+});
+
+it("封じ込めの検査を持たない盤面(registry 無し)では、版の不一致で Board call は断られるが、解けない question は開かない", async () => {
+  t = await bootTidepool({ ...claudeVersionDrift, harnessContainment: undefined });
+
+  expect((await api(t.baseUrl, "GET", "/api/skills")).json).toEqual({ skills: [], degraded: true });
+
   expect(await questions(t)).toEqual([]);
 });

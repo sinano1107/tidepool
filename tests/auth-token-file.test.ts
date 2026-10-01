@@ -15,7 +15,7 @@ import { openDb } from "../src/db.js";
 import { startServer, type TidepoolServer } from "../src/server.js";
 import { implicitTaskExecutionCandidates } from "../src/server-options.js";
 import { TranscriptStore } from "../src/transcript-store.js";
-import { FakeClock, FakeContainerRuntime, ScriptedWorker } from "./fakes.js";
+import { FakeClock, FakeContainerRuntime, pinnedCliVersions, ScriptedWorker } from "./fakes.js";
 import { tempDir } from "./harness.js";
 
 let server: TidepoolServer | undefined;
@@ -123,6 +123,7 @@ async function bootWithTokenFile(tokenFile: string): Promise<TidepoolServer> {
     worker: () => new ScriptedWorker(clock),
     containerRuntime: new FakeContainerRuntime(),
     transcripts: new TranscriptStore(dir),
+    checkHarnessCliVersion: pinnedCliVersions,
   });
 }
 

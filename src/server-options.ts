@@ -1,5 +1,6 @@
-import { execFileSync } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import { platform } from "node:process";
+import { promisify } from "node:util";
 import { resolveExecutionAgent, UnknownAgentError } from "./agent.js";
 import {
   type AgentAdmin,
@@ -27,6 +28,7 @@ import { ClaudeDraftClient } from "./claude-draft-client.js";
 import {
   ClaudeCodeWorker,
   type ClaudeWorkerOptions,
+  checkClaudeCliVersion,
   enumerateHostSkills,
   enumerateToolsThrough,
   execThrough,
@@ -36,6 +38,7 @@ import {
 import type { Clock } from "./clock.js";
 import {
   CODEX_APP_SERVER_LIMIT_MS,
+  checkCodexCliVersion,
   codexCommandThrough,
   codexLoginAbsence,
   createCodexAppServerProbe,
@@ -100,8 +103,17 @@ import {
   type WorkspaceAdmin,
 } from "./workspace-create.js";
 
-/** このホストの `claude --version`。worker_spawned の記録と封じ込めの版の門(ADR 0186 決定2)が読む。 */
-const claudeCliVersion = () => execFileSync("claude", ["--version"], { encoding: "utf8" }).trim();
+// `--version` の読みの上限。CLI が詰まっても盤面を塞がない(#1277)
+const VERSION_READ_TIMEOUT_MS = 10_000;
+
+/** このホストの `claude --version`。worker_spawned の記録が読む。 */
+const claudeCliVersion = () =>
+  execFileSync("claude", ["--version"], { encoding: "utf8", timeout: VERSION_READ_TIMEOUT_MS }).trim();
+
+/** `<command> --version` の非同期の読み。封じ込めの検査と Board call の口の版の門(ADR 0186 決定2・3)が読む ——
+ *  門は呼び出しのたびに読むので、event loop を塞がない。 */
+const readCliVersion = (command: string) => async () =>
+  (await promisify(execFile)(command, ["--version"], { encoding: "utf8", timeout: VERSION_READ_TIMEOUT_MS })).stdout;
 
 /** 盤面の watchdog(#9 / CONTEXT.md の Watchdog)を本番で成立させる時間リミット。
  *  **コード定数であってホストごとの設定ではない** — ADR 0037 と同じ軸で、盤面の
@@ -690,7 +702,7 @@ function boardCallers(board: BoardComposition, workspace: WorkspaceConfig | unde
   });
   const claudeContainment = async (): Promise<ContainmentCapability> => {
     const sandbox = checkSandboxCapability(platform);
-    return sandbox.available ? probeClaudeHarnessCapability(claudeCliVersion, enumerateToolsThrough(call)) : sandbox;
+    return sandbox.available ? probeClaudeHarnessCapability(readCliVersion("claude"), enumerateToolsThrough(call)) : sandbox;
   };
   return {
     draftClient: draftClientFactory(board, call),
@@ -769,6 +781,11 @@ export async function buildServerOptions(board: BoardComposition, db: Db): Promi
     registryCandidates: () => registryCandidates(board),
     // ADR 0136 決定2: Board call を撃つ口はどれも Board call の口から組む
     boardCallers: (call) => boardCallers(board, workspace, call),
+    // ADR 0186 決定3: 口が呼び出しのたびに読む版の検査。Codex は App Server の互換性検査と同じ固定の版と比べる
+    checkHarnessCliVersion: (harness) =>
+      harness === "codex"
+        ? checkCodexCliVersion(readCliVersion(board.codexExecutable))
+        : checkClaudeCliVersion(readCliVersion("claude")),
     // issue #14: 3点セットが揃わなければ push は off。公開鍵も同じ1つから導く
     // ので、「送れないのに購読だけできる」状態が構造的に作れない。
     push: board.vapid && new WebPushClient(board.vapid),

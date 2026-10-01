@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { z } from "zod";
 import { type BoardCall, readOutput } from "./board-call.js";
+import type { ContainmentCapability } from "./containment.js";
 
 export const CODEX_APP_SERVER_VERSION = "codex-cli 0.147.0";
 
@@ -131,7 +132,7 @@ export const codexCommandThrough =
   (call: BoardCall, kind: string, limitMs: number): CodexCliCommand =>
   async (executable, args, options) =>
     (await call(
-      { kind, command: executable, args, cwd: process.cwd(), env: options.env, limitMs, stdin: "pipe" },
+      { kind, harness: "codex", command: executable, args, cwd: process.cwd(), env: options.env, limitMs, stdin: "pipe" },
       (proc) => {
         const read = readOutput(proc);
         const stdin = proc.stdin!;
@@ -221,6 +222,16 @@ function schemasConform(requests: any, account: any, rateLimits: any, modelList:
     model?.required?.includes("id") &&
     model?.properties?.id?.type === "string"
   );
+}
+
+/** Codex CLI の版の照合(ADR 0186 決定3 / ADR 0098 決定4): trim した `codex --version` と
+ *  `CODEX_APP_SERVER_VERSION` の完全一致。Board call の口の門が使う(読めなければ投げ、口が不一致に倒す)。
+ *  文面は下の互換性検査と同じ形。 */
+export async function checkCodexCliVersion(readVersion: () => Promise<string>): Promise<ContainmentCapability> {
+  const observed = (await readVersion()).trim();
+  return observed === CODEX_APP_SERVER_VERSION
+    ? { available: true }
+    : { available: false, reason: `expected ${CODEX_APP_SERVER_VERSION}, observed ${observed}` };
 }
 
 async function compatibilityCheck(

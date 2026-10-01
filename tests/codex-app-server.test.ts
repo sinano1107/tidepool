@@ -5,6 +5,7 @@ import {
   CODEX_APP_SERVER_LIMIT_MS,
   CODEX_APP_SERVER_VERSION,
   type CodexCliCommand,
+  checkCodexCliVersion,
   codexCommandThrough,
   createCodexAppServerProbe,
 } from "../src/codex-app-server.js";
@@ -685,4 +686,14 @@ it("口が答えを返さなかった App Server probe は観測不能に倒れ�
   })(new Date(1_000));
 
   expect(result).toMatchObject({ status: "unobservable", provider: "openai", cliVersion: null });
+});
+
+it("Codex の版の照合は trim した `codex --version` と CODEX_APP_SERVER_VERSION の完全一致", async () => {
+  expect(await checkCodexCliVersion(async () => `${CODEX_APP_SERVER_VERSION}\n`)).toEqual({ available: true });
+  expect(await checkCodexCliVersion(async () => "codex-cli 0.148.0\n")).toEqual({
+    available: false,
+    reason: `expected ${CODEX_APP_SERVER_VERSION}, observed codex-cli 0.148.0`,
+  });
+  // 前方一致は一致ではない
+  expect((await checkCodexCliVersion(async () => `${CODEX_APP_SERVER_VERSION}-beta`)).available).toBe(false);
 });

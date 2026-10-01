@@ -3,8 +3,9 @@
  *  合否を Markdown の表で出す(種の anthropic 行が走るかも、ADR 0187 決定4)。1つでも不合格なら exit 1。
  *
  *  サブスクリプションの認証が要るので CI では回さない。Lima VM で `Delegate=yes` の scope の
- *  中から走らせる(手順は docs/claude-cli-version-bump.md)。版の門は通さない —— 試すのは
- *  まだ固定していない版である。
+ *  中から走らせる(手順は docs/claude-cli-version-bump.md)。口の版の門(ADR 0186 決定3)には
+ *  常に一致を返す検査を渡して外す —— 試すのはまだ固定していない版であり、門を外す印の無い
+ *  注文(result 行・404 の probe・使用量画面・下書き・翻訳)も撃つからである。
  *
  *  使い方: systemd-run --user --scope -p Delegate=yes -- npx tsx scripts/claude-cli-conformance.ts */
 import { mkdtempSync } from "node:fs";
@@ -39,6 +40,8 @@ const { call } = createBoardCalls({
   clock: new SystemClock(),
   reclaimTimeout: RECLAIM_TIMEOUT,
   onReclaimTimeout: (reason) => console.warn(reason),
+  checkCliVersion: async () => ({ available: true }),
+  onCliVersionMismatch: () => {},
 });
 const scratch = mkdtempSync(join(tmpdir(), "tidepool-conformance-"));
 

@@ -1,7 +1,9 @@
 import { expect, it, vi } from "vitest";
 import { type BoardCallSpec, createBoardCalls, type PtyBoardCallSpec } from "../src/board-call.js";
+import type { ContainmentCapability } from "../src/containment.js";
 import type { ContainedProcess, PtyFn, PtyProcess } from "../src/process-container.js";
 import { ProcessContainers } from "../src/process-container.js";
+import type { Harness } from "../src/registry.js";
 import { RECLAIM_TIMEOUT } from "../src/watchdog.js";
 import { FakeClock, FakeContainerRuntime, recordingPty, recordingSpawn } from "./fakes.js";
 
@@ -13,6 +15,7 @@ const LIMIT = 15_000;
 
 const spec: BoardCallSpec = {
   kind: "skill enumeration",
+  harness: "claude-code",
   command: "claude",
   args: ["-p", "/usage"],
   cwd: "/workspaces/sandbox",
@@ -36,11 +39,19 @@ function setup() {
   const runtime = new FakeContainerRuntime(recorder.spawn);
   const containers = new ProcessContainers(runtime);
   const quarantined: string[] = [];
+  /** Harness ごとの版の検査の答え。テストは呼び出しの合間に書き換える。 */
+  const versions: Record<Harness, ContainmentCapability> = {
+    "claude-code": { available: true },
+    codex: { available: true },
+  };
+  const mismatches: Array<[Harness, string]> = [];
   const calls = createBoardCalls({
     containers,
     clock,
     reclaimTimeout: RECLAIM_TIMEOUT,
     onReclaimTimeout: (reason) => quarantined.push(reason),
+    checkCliVersion: async (harness) => versions[harness],
+    onCliVersionMismatch: (harness, reason) => mismatches.push([harness, reason]),
   });
   const spawned = (n: number) => vi.waitFor(() => expect(spawns.length).toBe(n));
   /** stdout に1行流して、reader がそれを受け取るまで待つ(PassThrough の data は
@@ -50,8 +61,84 @@ function setup() {
     recorder.processes[0]!.stdout.write(text);
     await new Promise((resolve) => setImmediate(resolve));
   };
-  return { ...recorder, spawns, clock, runtime, containers, calls, quarantined, spawned, say };
+  return { ...recorder, spawns, clock, runtime, containers, calls, quarantined, versions, mismatches, spawned, say };
 }
+
+const DRIFTED = { available: false, reason: "the board pins Claude CLI 2.1.280, but this host's is 2.1.290" } as const;
+
+it("Harness の CLI の版が一致すれば、口は今までどおり起動する", async () => {
+  const t = setup();
+  const call = t.calls.call(spec, readAll);
+  await t.spawned(1);
+
+  await t.say("skills");
+  t.emitExit(0, null);
+  expect(await call).toBe("skills");
+  expect(t.mismatches).toEqual([]);
+});
+
+it("版が一致しなければ起動せずに fail-closed の結果を返し、Harness と理由を盤面へ渡す", async () => {
+  const t = setup();
+  t.versions["claude-code"] = DRIFTED;
+
+  expect(await t.calls.call(spec, readAll)).toBeNull();
+  expect(t.spawns).toEqual([]);
+  expect(t.runtime.created).toEqual([]);
+  expect(t.mismatches).toEqual([["claude-code", DRIFTED.reason]]);
+});
+
+it("版の検査が投げたら、不一致として断る", async () => {
+  const t = setup();
+  const calls = createBoardCalls({
+    containers: t.containers,
+    clock: t.clock,
+    reclaimTimeout: RECLAIM_TIMEOUT,
+    onReclaimTimeout: () => {},
+    checkCliVersion: async () => {
+      throw new Error("spawn claude ENOENT");
+    },
+    onCliVersionMismatch: (harness, reason) => t.mismatches.push([harness, reason]),
+  });
+
+  expect(await calls.call(spec, readAll)).toBeNull();
+  expect(t.spawns).toEqual([]);
+  expect(t.mismatches).toHaveLength(1);
+  expect(t.mismatches[0]![1]).toContain("ENOENT");
+});
+
+it("門を外した注文(封じ込めの probe)は、版が一致しなくても起動する", async () => {
+  const t = setup();
+  t.versions["claude-code"] = DRIFTED;
+  const call = t.calls.call({ ...spec, kind: "tool-surface probe", bypassVersionGate: true }, readAll);
+  await t.spawned(1);
+
+  t.emitExit(0, null);
+  await call;
+  expect(t.mismatches).toEqual([]);
+});
+
+it("版は呼び出しのたびに読まれる — 2回目の前に版が変われば、2回目が断られる", async () => {
+  const t = setup();
+  const first = t.calls.call(spec, readAll);
+  await t.spawned(1);
+  t.emitExit(0, null);
+  await first;
+
+  t.versions["claude-code"] = DRIFTED;
+
+  expect(await t.calls.call(spec, readAll)).toBeNull();
+  expect(t.spawns).toHaveLength(1);
+  expect(t.mismatches).toEqual([["claude-code", DRIFTED.reason]]);
+});
+
+it("codex の注文も同じ門を通る — 読むのは codex の版で、claude の版ではない", async () => {
+  const t = setup();
+  t.versions.codex = { available: false, reason: "expected codex-cli 0.147.0, observed codex-cli 0.148.0" };
+
+  expect(await t.calls.call({ ...spec, harness: "codex", command: "codex" }, readAll)).toBeNull();
+  expect(t.spawns).toEqual([]);
+  expect(t.mismatches).toEqual([["codex", "expected codex-cli 0.147.0, observed codex-cli 0.148.0"]]);
+});
 
 it("呼び出し1回につき容器が1つ開き、重なった呼び出しは別の容器を持つ", async () => {
   const t = setup();
@@ -281,4 +368,23 @@ it("呼び手の done で強制回収が撃たれ、呼び出しは読み手の�
   // 上限到達の null ではなく読み手の答え(ADR 0074 のベストエフォート画面を失わない)
   expect(await call).toBe("screen (exit null)");
   expect(t.runtime.forceReclaims).toEqual(t.runtime.created);
+});
+
+it("断ったことの報告が投げても、口は null を返す —— 失敗は結果とは別に上がる(ADR 0136 の契約)", async () => {
+  const t = setup();
+  const failure = new Error("registerQuarantine failed");
+  const raised = new Promise((resolve) => process.once("unhandledRejection", resolve));
+  const calls = createBoardCalls({
+    containers: t.containers,
+    clock: t.clock,
+    reclaimTimeout: RECLAIM_TIMEOUT,
+    onReclaimTimeout: () => {},
+    checkCliVersion: async () => DRIFTED,
+    onCliVersionMismatch: () => {
+      throw failure;
+    },
+  });
+
+  expect(await calls.call(spec, readAll)).toBeNull();
+  expect(await raised).toBe(failure);
 });
