@@ -125,7 +125,7 @@ function cellRows(db: Db, { after, upTo = Number.MAX_SAFE_INTEGER }: MetaReviewW
  *  (routing_proposal_stale)、registry へ適用した tier の提案なら着地した commit(agent_tier_changed)。提案の表は持たず question と
  *  event から組む。verb は窓で切らない —— 退けられた提案を繰り返さないための読み物なので、全期間を返す。window を渡すと、回答か
  *  陳腐化の event がその窓 `(after, upTo]` にある提案だけ(材料の節の決着した提案、ADR 0180 追記 #1239)。 */
-export function listRoutingProposals(db: Db, window?: MetaReviewWindow) {
+export function listRoutingProposals(db: Db, window?: Required<MetaReviewWindow>) {
   const rows = db
     .prepare(
       `SELECT t.id, t.question_proposal,
@@ -136,7 +136,7 @@ export function listRoutingProposals(db: Db, window?: MetaReviewWindow) {
        FROM tasks t WHERE json_extract(t.question_proposal, '$.kind') IN ('routing', 'registry') ORDER BY t.rowid`,
     )
     .all() as Array<{ id: string; question_proposal: string; answered: string | null; stale: string | null; applied: string | null; settled_id: number | null }>;
-  const settled = rows.filter(({ settled_id }) => !window || (settled_id !== null && settled_id > window.after && settled_id <= (window.upTo ?? Infinity)));
+  const settled = rows.filter(({ settled_id }) => !window || (settled_id !== null && settled_id > window.after && settled_id <= window.upTo));
   return settled.map((row) => {
     const answered = row.answered === null ? null : (JSON.parse(row.answered) as Extract<EventPayload, { kind: "question_answered" }>);
     const stale = row.stale === null ? null : (JSON.parse(row.stale) as Extract<EventPayload, { kind: "routing_proposal_stale" }>);

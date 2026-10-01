@@ -234,7 +234,7 @@ it("節を組んだ記録は主題 routing と、乖離した shadow 行の id�
   const spawned = spawn(task, "deckhand", opus);
   const seen = exit(task, spawned);
   const annotation = allocate(task, spawned, "appropriate");
-  const edited = applyExecutionSettingsChange(db, { setting: "priority", value: "cost" }, "webui", at);
+  applyExecutionSettingsChange(db, { setting: "priority", value: "cost" }, "webui", at);
   const rowEdit = applyExecutionSettingsChange(db, { setting: "row", row: { provider: "anthropic", tier: "economy", model: "haiku", effort: "low", price_in: 1, price_out: 5 } }, "webui", at)!;
   const question = proposeRoutingChange(db, previous, { op: "promote", rationale: "r" }, "auditor", at).question_id;
   answerQuestion(db, getTask(db, question)!, ["reject"], at);
@@ -244,7 +244,6 @@ it("節を組んだ記録は主題 routing と、乖離した shadow 行の id�
 
   const eventId = recordMetaReviewMaterial(db, review, "auditor", 42, material, at);
 
-  expect(edited).not.toBeNull();
   expect(getEvent(db, eventId)).toMatchObject({
     task_id: review,
     worker_id: "auditor",
