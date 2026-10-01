@@ -191,7 +191,7 @@ export const QUARANTINES = [
           "1. Fix the table: in the settings tab, change this row's model or delete the row. " +
           "This question then closes on its own.\n" +
           "2. If the model id is right, update the CLI or restore the account, then answer — the " +
-          "board runs one minimal turn with this model id before it accepts the answer.",
+          "board checks this model id again before it accepts the answer.",
         completion_criteria: `${row} can run on this board again`,
         question: [
           {

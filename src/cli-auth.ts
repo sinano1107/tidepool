@@ -11,8 +11,9 @@ export type CliAuthResult =
 
 export type CliAuthCheck = () => Promise<CliAuthResult>;
 
-/** 行の Quarantine の解除の門(ADR 0184 決定5): その model id で最小の1ターンを走らせた判定。
- *  `refused` は 404(行の拒否)、`unauthorized` は 401。 */
+/** 行の Quarantine の解除の門(ADR 0184 決定5): その model id を検査し直した判定。Claude CLI を喋る
+ *  Provider は最小の1ターン(`refused` は 404、`unauthorized` は 401)、openai は model 一覧の読み直し
+ *  (`refused` は一覧に無い)。 */
 export type ModelProbeResult =
   | { status: "runs" }
   | { status: "refused" | "unauthorized" | "unknown"; reason: string };
