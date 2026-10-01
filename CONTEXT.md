@@ -462,7 +462,7 @@ _Avoid_: Router、Allocation Policy
 
 ## 学習器(Learner)
 
-selector の候補として **shadow** で走る統計層。pickup ごとに「自分ならこう選ぶ」を記録だけし、routing meta-review の判断 + 提案 question で昇格して selector になる(製品の形であり実験用ではない — Memory の candidate → approved と同型)。事前分布は表(観測1件分の重み)、盤面全体の事後分布が各 workspace の事前分布。受理率は pin で条件づけ(相談の有無で割らない)、費用は session 合計、相談回数は費用の3値帰属(0回 / advisor ≠ main の内訳 / 分離不能)と配分評価にのみ使う。昇格後もデータの無いセルでは表と一致する。昇格フラグは盤面設定の1列で盤面全体に1つ —— **昇格は routing meta-review の提案 question だけ、降格は人間が settings タブ / 管理MCP から直接もできる**(信頼の過程は上り方向にだけ要る、ADR 0150)。昇格後は shadow の役割が反転する: 学習器の推薦が走り、shadow 行には「表ならこう選んだ」が残り(`worker_spawned.source.provider` = `learner`)、降格の読み物は「表と分かれた episode の outcome」になる。配分評価の `overpowered` は推薦に入らない —— 反実仮想であって観測ではなく、候補が要求ティアの行に限られる以上効かせる場所も無い。その episode は受理として数え、下方向の信号は routing meta-review が出所(`worker_spawned.source.tier`)で割って読み、`agent` 出所は agent.md の既定 `tier` を下げる registry diff の提案になる。`task` / `board` 出所は読み物のみ(ADR 0111 追記・追記2、issue #582 / #583、登録者 agent の Behavior 化は #584)。
+selector の候補として **shadow** で走る統計層。pickup ごとに「自分ならこう選ぶ」を記録だけし、routing meta-review の判断 + 提案 question で昇格して selector になる(製品の形であり実験用ではない — Memory の candidate → approved と同型)。事前分布は表(観測1件分の重み)、盤面全体の事後分布が各 workspace の事前分布。受理率は pin で条件づけ(相談の有無で割らない)、費用は session 合計、相談回数は費用の3値帰属(0回 / advisor ≠ main の内訳 / 分離不能)と配分評価にのみ使う。**学習器は未観測の候補へ移らない**: 先頭を離れるのは、先頭と移る先の両方に観測があり、移る先の事後平均が上のときだけで、未観測の先頭はそのまま走る(人間が先頭に置いた新しい行を旧い行へ戻さない)。観測の薄さは比較に入れず、shadow 行が両セルのその時点の実績を運んで、昇格の前後とも読み手に見せる。未観測のセルを最初に走らせるのは学習器ではなく、Interview・先頭が除外された pickup・人間の表の編集である。Interview の子の outcome は**同じセルの観測**として本番の episode と並んで数え、種別は episode に残る(issue #1243 / ADR 0181 — 旧・「昇格後もデータの無いセルでは表と一致する」は、どの候補にも観測が無いときにしか成り立っていなかった)。昇格前の shadow で推薦と実際が分かれた行の outcome は**走った側(表)の結果**であって、推薦した設定の結果ではない。昇格フラグは盤面設定の1列で盤面全体に1つ —— **昇格は routing meta-review の提案 question だけ、降格は人間が settings タブ / 管理MCP から直接もできる**(信頼の過程は上り方向にだけ要る、ADR 0150)。昇格後は shadow の役割が反転する: 学習器の推薦が走り、shadow 行には「表ならこう選んだ」が残り(`worker_spawned.source.provider` = `learner`)、降格の読み物は「表と分かれた episode の outcome」になる。配分評価の `overpowered` は推薦に入らない —— 反実仮想であって観測ではなく、候補が要求ティアの行に限られる以上効かせる場所も無い。その episode は受理として数え、下方向の信号は routing meta-review が出所(`worker_spawned.source.tier`)で割って読み、`agent` 出所は agent.md の既定 `tier` を下げる registry diff の提案になる。`task` / `board` 出所は読み物のみ(ADR 0111 追記・追記2、issue #582 / #583、登録者 agent の Behavior 化は #584)。
 _Avoid_: bandit、optimizer
 
 ## 配分評価(Allocation review)
@@ -472,7 +472,7 @@ _Avoid_: Supervisor、Phase 2
 
 ## Interview(面接)
 
-実績の無いセル(新モデル)を本番を賭けずに測る review type のルート task。発火は事象駆動(新セルの出現、meta-review / 人間の要求)で閾値は置かず、meta-review の提案は付帯子の提案 question(種別 Interview)で、approve が人間名義の root review を登録する(ADR 0150 — 旧・escalation 経由の線は pending child が work 固定・親の子固定なので使えない)。probe + rubric を先に decision log に書き、候補セルごとの work 子を使い捨てブランチで走らせ(PR 無し、ブランチは残す)、統合復帰後に agent / model を伏せた handoff を採点する。結果は interview 種別の outcome。probe の著者は常に agent(ADR 0111)。
+実績の無いセル(新モデル)を本番を賭けずに測る review type のルート task。発火は事象駆動(新セルの出現、meta-review / 人間の要求)で閾値は置かず、meta-review の提案は付帯子の提案 question(種別 Interview)で、approve が人間名義の root review を登録する(ADR 0150 — 旧・escalation 経由の線は pending child が work 固定・親の子固定なので使えない)。probe + rubric を先に decision log に書き、候補セルごとの work 子を使い捨てブランチで走らせ(PR 無し、ブランチは残す)、統合復帰後に agent / model を伏せた handoff を採点する。結果は interview 種別の outcome で、学習器は同じセルの観測に数える(ADR 0181)。probe の著者は常に agent(ADR 0111)。
 
 ## Question(質問)
 
