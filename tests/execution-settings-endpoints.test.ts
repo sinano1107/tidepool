@@ -119,12 +119,12 @@ it("anthropic の alias の行は settings タブと管理MCP の両方の扉で
 
   const refused = await api(t.baseUrl, "POST", "/api/settings/execution", row("anthropic", "opus"));
   expect(refused.status).toBe(400);
-  expect(refused.json.error).toContain("ADR 0182");
+  expect(refused.json.error).toContain("concrete model id");
   const client = await managementMcpClient(t.baseUrl);
   try {
     const viaMcp = (await client.callTool({ name: "change_execution_settings", arguments: { change: row("anthropic", "opus") } })) as any;
     expect(viaMcp.isError).toBe(true);
-    expect(viaMcp.content[0].text).toContain("ADR 0182");
+    expect(viaMcp.content[0].text).toContain("concrete model id");
     expect(await state()).toEqual(before);
 
     expect((await api(t.baseUrl, "POST", "/api/settings/execution", row("anthropic", "claude-opus-5-5"))).status).toBe(200);

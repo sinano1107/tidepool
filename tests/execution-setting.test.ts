@@ -271,7 +271,7 @@ it("温存中の Provider の entry は飛ばされ、除外されていない e
   ).toMatchObject({ provider: "openai", source: { provider: "rank" } });
 });
 
-it("モデル窓の除外は entry の解決した model に当たる —— 同じ Provider でもティアが違えば当たらない", () => {
+it("モデル窓の除外は entry の解決した model に当たる —— 窓 fable は部分一致で claude-fable-5-1 の行に当たり(Throttle の窓は系列単位の枠、ADR 0182 決定3)、同じ Provider でもティアが違えば当たらない", () => {
   const excluded = { providers: [], models: [{ provider: "anthropic" as const, model: "fable" }] };
   expect(
     selectExecutionSetting(input({ agentTier: "frontier" }), table, excluded),
@@ -279,15 +279,6 @@ it("モデル窓の除外は entry の解決した model に当たる —— 同
   expect(
     selectExecutionSetting(input({ agentTier: "standard" }), table, excluded)?.model,
   ).toBe("claude-opus-5-5");
-});
-
-it("fable の窓は model 名の部分一致で claude-fable-5-1 の行に当たる —— Throttle の窓は系列単位の枠(ADR 0182 決定3)", () => {
-  expect(
-    selectExecutionSetting(input({ agentTier: "frontier" }), table, {
-      providers: [],
-      models: [{ provider: "anthropic", model: "fable" }],
-    }),
-  ).toBeNull();
 });
 
 it("全 entry が除外されたら null —— 例外ではない(全除外は正常な skipped の枝であって設定の穴ではない)", () => {

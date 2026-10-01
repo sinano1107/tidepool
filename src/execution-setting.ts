@@ -470,7 +470,7 @@ export function applyExecutionSettingsChange(db: Db, change: ExecutionSettingsCh
       case "row": {
         const { provider, tier, model, effort, price_in, price_out } = change.row;
         if (provider === "anthropic" && isClaudeModelAlias(model)) {
-          throw new DomainError(`"${model}" is a Claude CLI alias whose target moves with CLI updates; a table row takes a concrete model id (e.g. claude-opus-5-5) (ADR 0182)`);
+          throw new DomainError(`"${model}" is a Claude CLI alias whose target moves with CLI updates; a table row takes a concrete model id (e.g. claude-opus-5-5)`);
         }
         db.prepare(
           `INSERT INTO execution_settings (provider, tier, model, effort, price_in, price_out) VALUES (?, ?, ?, ?, ?, ?)

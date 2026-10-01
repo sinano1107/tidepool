@@ -388,60 +388,9 @@ it("advisor pin ありで相談0回の session は、盤面の記録から読ん
   });
 });
 
-it("行との照合は完全一致 —— 行 claude-opus-5 は pin claude-opus-5-5 の session の却下を数えない(ADR 0182 決定3)", async () => {
+it("行との照合は完全一致 —— 行 claude-opus-5 は claude-opus-5-5 のセルの却下を数えず、未観測の先頭のまま(ADR 0182 決定3)", () => {
   const opus5 = candidate("anthropic", "claude-opus-5");
-  t = await bootTidepool({ taskExecutionCandidates: () => [opus5, sol] });
-  await settledSession(t, sol);
-  const earlier = await registerWork(t, "earlier");
-  await t.clock.advance(HOUR);
-  // ScriptedWorker は spawn しないので、その session の記録(spawn + 帰責 + exit)を setup として置く
-  const spawnedId = appendEvent(t.db, {
-    taskId: earlier.id,
-    workerId: "fake-worker",
-    origin: "board",
-    at: t.clock.now(),
-    payload: { ...WORKER_SPAWNED, advisor: null, provider: "anthropic", model: "claude-opus-5-5", effort: "high" },
-  });
-  const entry = await loggedEntry(t, earlier.id, "took the shortcut");
-  const attributed: EventPayload = {
-    kind: "objection_attributed",
-    entry_id: entry.id,
-    objection_event_ids: [bundledObjection(t.db, earlier.id, entry.id, t.clock.now())],
-    cause: "capability",
-    evidence: "the shortcut missed the second criterion",
-    entries: null,
-    round: "initial",
-  };
-  appendEvent(t.db, { taskId: earlier.id, workerId: "board", origin: "board", at: t.clock.now(), payload: attributed });
-  const tokens = { input_tokens: 1, output_tokens: 1, cache_read_tokens: 0, cache_creation_tokens: 0, estimated_cost_usd: 0.5 };
-  appendEvent(t.db, {
-    taskId: earlier.id,
-    workerId: "fake-worker",
-    origin: "board",
-    at: t.clock.now(),
-    payload: {
-      kind: "worker_exited",
-      exit_code: 0,
-      signal: null,
-      stderr_tail: null,
-      worker_spawned_event_id: spawnedId,
-      usage: { ...tokens, advisor: null, models: { "claude-opus-5-5": tokens } },
-    },
-  });
-  await completeViaMcp(t, earlier.id);
-  await completeIntegrationReviews(t, earlier.id);
-  await completeMetaReviews(t);
-
-  const later = await registerWork(t, "later");
-  await t.clock.advance(HOUR);
-
-  // 却下が claude-opus-5 の行に当たれば観測のある sol へ移る —— 当たらないので未観測の先頭のまま
-  expect(t.worker.startedSettings.at(-1)).toEqual(opus5);
-  expect(shadowRows(t).at(-1)).toMatchObject({
-    task_id: later.id,
-    recommended: { provider: "anthropic", model: "claude-opus-5", effort: "high", advisor: null },
-    basis: "data",
-  });
+  expect(recommendFor([episode({ outcome: "rejected" }), solAccepted], [opus5, sol])).toEqual({ recommended: opus5, basis: "data" });
 });
 
 /** 学習器を昇格させる —— approve の適用と同じ書き口。設定の変更は routing meta-review の材料なので、登録されたそれを先に済ませる。 */
