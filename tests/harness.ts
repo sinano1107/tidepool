@@ -519,9 +519,11 @@ export function writeFixtureTranscript(dir: string, name: string): string {
 export const GIT_FIXTURE_TEST_TIMEOUT = 15_000;
 
 /** `git init` + one commit into an already-created dir. Shared by `makeWorkspace`
- *  (a self-cleaning `tempDir`) and `buildRemoteTemplate` (a dir that must
- *  outlive a single test, so it creates its own non-self-cleaning dir). */
-async function initWorkspaceCheckout(path: string, name: string): Promise<WorkspaceConfig> {
+ *  (a self-cleaning `tempDir`), `buildRemoteTemplate` (a dir that must
+ *  outlive a single test, so it creates its own non-self-cleaning dir) and the
+ *  `workspace` fixture in `e2e/fixtures.ts` (Playwright, where `tempDir`'s
+ *  `onTestFinished` cannot run — issue #1307). */
+export async function initWorkspaceCheckout(path: string, name: string): Promise<WorkspaceConfig> {
   git(path, "init", "-b", "main");
   await writeFile(join(path, "README.md"), "workspace\n");
   git(path, "add", "-A");

@@ -95,6 +95,11 @@ Playwright への移行で **消えた**もの:
   `defaultValue`(= textContent)にも写すため、入力欄に同じ文言があると一覧行の `<span>` と
   二重に解決し、「行がまだある」系の判定が偽陽性になる(issue #825)。`span:text-is(...)` や
   ロール・スコープで要素種別を絞る。`<input>` の値は属性なので当たらない。
+- **`tests/harness.ts` の一時ディレクトリ系は vitest 専用。** `makeWorkspace` /
+  `makeRemoteBackedWorkspace` / `squashTaskIntoOrigin` は後始末に vitest の `onTestFinished` を
+  呼ぶので、Playwright の spec からは `can only be called inside a test` で落ちる(issue #1307)。
+  git workspace が要る盤面状態(着地 question など)は `e2e/fixtures.ts` の `workspace(name)`
+  fixture で作る。remote 付きの版はまだ無い。
 
 ## セレクタ戦略
 
