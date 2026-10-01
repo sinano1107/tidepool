@@ -21,7 +21,7 @@ import {
   MOONSHOT_DEFAULT_MODEL,
   resolveExecutionSetting,
 } from "./execution-setting.js";
-import { buildMemoryInjection, type InjectionQuery, recordMemoryInjection } from "./memory.js";
+import { buildMemoryInjection, buildMetaReviewMaterial, type InjectionQuery, recordMemoryInjection, recordMetaReviewMaterial } from "./memory.js";
 import { projectAndPersist } from "./precedent.js";
 import type { ProcessContainers, PtyFn, PtyProcess } from "./process-container.js";
 import {
@@ -1923,6 +1923,8 @@ export class ClaudeCodeWorker implements WorkerAdapter {
       ? this.options.cliVersion()
       : (this.options.cliVersion ?? CLAUDE_CLI_VERSION);
     const memory = buildMemoryInjection(this.options.db, task, workspace.name, agent.name, query);
+    // ADR 0180 決定2: memory meta-review は worker の記憶の節の代わりに材料の節を同じ枠で受ける
+    const material = buildMetaReviewMaterial(this.options.db, task.id);
     // issue #379: 1タスクに複数の worker session(retry・decompose からの統合
     // 復帰・quarantine 復帰)がありうるため、`worker_spawned` の event id で
     // transcript / stderr のファイル名をセッションごとに一意にする。イベント
@@ -1963,6 +1965,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
       at: this.options.clock.now(),
     });
     recordMemoryInjection(this.options.db, task.id, agent.name, spawnedEventId, memory, this.options.clock.now());
+    if (material) recordMetaReviewMaterial(this.options.db, task.id, agent.name, spawnedEventId, material, this.options.clock.now());
     // ADR 0149 決定2: 記録の口は spawn より先に開く。開けなければ例外が呼び手へ返り、
     // process は1つも起きない(ADR 0118 の族)
     const transcript = this.options.transcripts.open(task.id, spawnedEventId);
@@ -2079,7 +2082,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
           // ADR 0157 決定2: 委譲先は Agent tool、Workflow tool も実在するので禁止の段落が出る
           doctrine: boardDoctrine({ delegate: "the Agent tool", workflow: true }),
           allowedDomains: workspace.allowed_domains,
-          memorySection: memory.section,
+          memorySection: memory.section ?? material?.section ?? null,
         }),
       ],
       // the agent's own commits are stamped with the agent's identity (issue

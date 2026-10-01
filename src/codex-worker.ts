@@ -22,7 +22,7 @@ import type { ContainmentCapability } from "./containment.js";
 import type { Db } from "./db.js";
 import { appendEvent, type EventPayload } from "./events.js";
 import type { ExecutionSetting } from "./execution-setting.js";
-import { buildMemoryInjection, type InjectionQuery, recordMemoryInjection, WORKER_MEMORY_VERBS } from "./memory.js";
+import { buildMemoryInjection, buildMetaReviewMaterial, type InjectionQuery, recordMemoryInjection, recordMetaReviewMaterial, WORKER_MEMORY_VERBS } from "./memory.js";
 import { META_REVIEW_SUBJECTS, metaReviewSubjectOf } from "./meta-review.js";
 import type { ContainedProcess, ContainerSpawn, ProcessContainers } from "./process-container.js";
 import { loadRegistry, type RegistrySource } from "./registry.js";
@@ -1001,6 +1001,8 @@ export class CodexWorker implements WorkerAdapter {
       throw new Error(`CodexWorker refuses provider ${setting.provider}; no Harness fallback (ADR 0098)`);
     }
     const memory = buildMemoryInjection(this.options.db, task, workspace.name, agent.name, query);
+    // ADR 0180 決定2: memory meta-review は worker の記憶の節の代わりに材料の節を同じ枠で受ける
+    const material = buildMetaReviewMaterial(this.options.db, task.id);
     const taskTemp = realpathSync(mkdtempSync(join(tmpdir(), `tidepool-codex-${task.id}-`)));
     // 削除の失敗で session の後始末を止めない(issue #705)
     const removeTaskTemp = () => {
@@ -1032,7 +1034,7 @@ export class CodexWorker implements WorkerAdapter {
           profile: agent.profile,
           doctrine: CODEX_DOCTRINE,
           allowedDomains: workspace.allowed_domains,
-          memorySection: memory.section,
+          memorySection: memory.section ?? material?.section ?? null,
         })}\n\n`,
         mcpUrl: taskMcpUrl.toString(),
         // ADR 0122 決定2: MCP の登録と同じ差を写す。宣言と盤面の面が集合として一致することは
@@ -1070,6 +1072,7 @@ export class CodexWorker implements WorkerAdapter {
         at: this.options.clock.now(),
       });
       recordMemoryInjection(this.options.db, task.id, agent.name, spawned, memory, this.options.clock.now());
+      if (material) recordMetaReviewMaterial(this.options.db, task.id, agent.name, spawned, material, this.options.clock.now());
       transcript = this.options.transcripts.open(task.id, spawned);
       child = this.containers.open(task.id).spawn(
         this.options.executable,

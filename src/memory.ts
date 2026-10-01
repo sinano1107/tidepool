@@ -5,7 +5,7 @@ import type { Cause } from "./cause.js";
 import { type Db, MEMORY_FTS_DDL, MEMORY_FTS_TOKENIZER, MEMORY_PREPROCESS_VERSION } from "./db.js";
 import { getDisplayLanguage } from "./display-language.js";
 import { appendEvent, type EventOrigin, type EventPayload, type EventRow, getEvent, isDecisionLogEntry, listEvents, listEventsOfKinds } from "./events.js";
-import { metaReviewSubjectOf, paged, previousMetaReviewWatermark } from "./meta-review.js";
+import { materialEvents, metaReviewSubjectOf, metaReviewWindow, paged, previousMetaReviewWatermark } from "./meta-review.js";
 import { entriesReadBefore, entriesSeenBefore, listEpisodes, sessionSpawnOf, sessionWindow } from "./precedent.js";
 import { approvalAnnotation, BOARD_WORKER_ID, DomainError, getTask, HUMAN_WORKER_ID, type MemoryProposal, type QuestionProposal, questionBlocking, registerTask, settleQuestionAsObserved, type Task } from "./tasks.js";
 import { entryObjections, objectedEntryText, objectionsById } from "./triage.js";
@@ -1500,6 +1500,31 @@ export function searchMemory(
   })();
 }
 
+/** meta-review の scope を通した検索(ADR 0180 決定3): 全 scope・全宛先の Knowledge / Behavior / Exemplar を語の OR で引き、
+ *  FTS の順位 → id の順にポインタで返す。 */
+export function searchMemoryEntries(db: Db, reader: Pick<MemoryReader, "taskId" | "agent">, input: { query?: string; like?: number; page?: number }, at: Date) {
+  if ((input.query === undefined) === (input.like === undefined)) throw new DomainError("search_memory_entries takes exactly one of query and like");
+  return db.transaction(() => {
+    const restored = restoredAs(db);
+    // like の行と本文が同じ鎖(両向き)は末尾が一致する
+    const tailOf = (row: EntryRow) => sameBodyChain(db, row, restored).at(-1)!.id;
+    const like = input.like === undefined ? undefined : requireEntry(db, input.like);
+    const match = ftsQuery(like ? `${like.title}\n${like.text}` : input.query!, " OR ");
+    if (match === null) throw new DomainError("query has no searchable terms: it is empty or only stopwords");
+    const likeTail = like && tailOf(like);
+    const hits = (db
+      .prepare(
+        `SELECT e.* FROM memory_fts JOIN memory_entries e ON e.id = memory_fts.rowid
+          WHERE memory_fts MATCH ? AND e.kind != 'definition' AND (e.invalidation_reason IS NULL OR e.successor_id IS NULL)
+          ORDER BY memory_fts.rank, e.id`,
+      )
+      .all(match) as EntryRow[]).filter((row) => likeTail === undefined || tailOf(row) !== likeTail);
+    const { rows: shown, truncated } = paged(hits, input.page);
+    const results = shown.map(({ id, kind, state, scope, path, title, addressee, invalidation_reason }) => ({ id, kind, state, scope, path, title, addressee, invalidation_reason }));
+    return recordPull(db, reader, { verb: "search_memory_entries", input, returned_ids: results.map((r) => r.id) }, { results, truncated }, at);
+  })();
+}
+
 function dropReason(row: EntryRow, reader: Pick<MemoryReader, "agent">): MemoryDropReason | null {
   if (row.invalidation_reason !== null) return "invalidated";
   if (row.addressee !== null && row.addressee !== reader.agent) return "addressee";
@@ -1603,11 +1628,13 @@ const withoutOriginal = <T extends { original?: unknown }>({ original: _, ...res
 /** meta-review の枝の一覧: 返した id は行の Definition の id。Definition の原文は人間の面にだけ残す(一覧と同じ線、#1052)。 */
 export function pullMemoryBranches(db: Db, reader: Pick<MemoryReader, "taskId" | "agent">, at: Date) {
   return db.transaction(() => {
-    const branches = listMemoryBranches(db).map((row) => ({ ...row, definitions: row.definitions.map(withoutOriginal) }));
+    const branches = metaReviewBranches(db);
     const returned_ids = branches.flatMap((row) => row.definitions.map((d) => d.id));
     return recordPull(db, reader, { verb: "list_memory_branches", input: {}, returned_ids }, { branches }, at);
   })();
 }
+
+const metaReviewBranches = (db: Db) => listMemoryBranches(db).map((row) => ({ ...row, definitions: row.definitions.map(withoutOriginal) }));
 
 type ListedEntry = ReturnType<typeof listMemoryEntries>[number];
 
@@ -1627,24 +1654,29 @@ export function pullMemoryList(
   at: Date,
 ) {
   return db.transaction(() => {
-    // 過去の提案の読み物(ADR 0152 決定2): 後継の文言を載せる —— 人間名義の後継なら修正つきで承認された candidate
-    // (か、修正つきの統合に置き換えられた candidate)
-    const withSuccessor = (e: ListedEntry, all: ListedEntry[]) => {
-      const next = e.successor_id === null ? undefined : all.find((s) => s.id === e.successor_id);
-      return next ? { ...e, successor: { title: next.title, text: next.text, addressee: next.addressee, author: next.author } } : e;
-    };
-    const entries =
-      verb === "list_memory_entries"
-        ? listMemoryEntries(db, input)
-        : verb === "list_memory_behaviors"
-          ? listMemoryEntries(db, { kind: "behavior", state: "approved" })
-          : ((all) =>
-              all
-                .filter((e) => e.state === "candidate" && (input.kind === undefined || e.kind === input.kind) && (input.include_invalidated || e.invalidation_reason === null))
-                .map((e) => withSuccessor(e, all)))(listMemoryEntries(db, {}));
-    const { rows: shown, truncated } = paged(entries, input.page);
-    return recordPull(db, reader, { verb, input, returned_ids: shown.map((e) => e.id) }, { entries: shown.map(metaReviewRow), truncated }, at);
+    const { rows: shown, truncated } = paged(memoryListRows(db, verb, input), input.page);
+    return recordPull(db, reader, { verb, input, returned_ids: shown.map((e) => e.id) }, { entries: shown, truncated }, at);
   })();
+}
+
+/** 一覧3つの行(ページ割り前、meta-review の行の形)。pull と材料の節の candidate の部分が共有する。 */
+function memoryListRows(db: Db, verb: Parameters<typeof pullMemoryList>[2], input: Parameters<typeof pullMemoryList>[3]) {
+  // 過去の提案の読み物(ADR 0152 決定2): 後継の文言を載せる —— 人間名義の後継なら修正つきで承認された candidate
+  // (か、修正つきの統合に置き換えられた candidate)
+  const withSuccessor = (e: ListedEntry, all: ListedEntry[]) => {
+    const next = e.successor_id === null ? undefined : all.find((s) => s.id === e.successor_id);
+    return next ? { ...e, successor: { title: next.title, text: next.text, addressee: next.addressee, author: next.author } } : e;
+  };
+  const entries =
+    verb === "list_memory_entries"
+      ? listMemoryEntries(db, input)
+      : verb === "list_memory_behaviors"
+        ? listMemoryEntries(db, { kind: "behavior", state: "approved" })
+        : ((all) =>
+            all
+              .filter((e) => e.state === "candidate" && (input.kind === undefined || e.kind === input.kind) && (input.include_invalidated || e.invalidation_reason === null))
+              .map((e) => withSuccessor(e, all)))(listMemoryEntries(db, {}));
+  return entries.map(metaReviewRow);
 }
 
 /** list_memory_proposals(ADR 0159 決定1): 過去の memory 提案 —— 提案、回答(question_answered の答え・修正値・コメント)、
@@ -1653,15 +1685,27 @@ export function pullMemoryList(
  *  返した id は各提案が名指す entry(candidate か invalidate の target か既存の後継)。 */
 export function pullMemoryProposals(db: Db, reader: Pick<MemoryReader, "taskId" | "agent">, input: { page?: number }, at: Date) {
   return db.transaction(() => {
-    const rows = db
-      .prepare(
-        `SELECT t.id, t.question_proposal,
-           (SELECT payload FROM events WHERE task_id = t.id AND kind = 'question_answered') AS answered,
-           (SELECT payload FROM events WHERE task_id = t.id AND kind = 'memory_proposal_stale') AS stale
-         FROM tasks t WHERE json_extract(t.question_proposal, '$.kind') = 'memory' ORDER BY t.rowid`,
-      )
-      .all() as Array<{ id: string; question_proposal: string; answered: string | null; stale: string | null }>;
-    const proposals = rows.map((row) => {
+    const { rows: page, truncated } = paged(memoryProposalRows(db), input.page);
+    const returned_ids = [...new Set(page.map(({ proposal }) => (proposal.op === "invalidate" ? proposal.target.id : "successor" in proposal ? proposal.successor.id : proposal.candidate_id)))];
+    return recordPull(db, reader, { verb: "list_memory_proposals", input, returned_ids }, { proposals: page, truncated }, at);
+  })();
+}
+
+/** list_memory_proposals の行(ページ割り前)。window を渡すと、回答か陳腐化の event がその窓 `(after, upTo]` にある提案だけ
+ *  (材料の節の決着した提案、ADR 0180 決定2)。 */
+function memoryProposalRows(db: Db, window?: { after: number; upTo: number }) {
+  const rows = db
+    .prepare(
+      `SELECT t.id, t.question_proposal,
+         (SELECT payload FROM events WHERE task_id = t.id AND kind = 'question_answered') AS answered,
+         (SELECT payload FROM events WHERE task_id = t.id AND kind = 'memory_proposal_stale') AS stale,
+         (SELECT MAX(id) FROM events WHERE task_id = t.id AND kind IN ('question_answered', 'memory_proposal_stale')) AS settled_id
+       FROM tasks t WHERE json_extract(t.question_proposal, '$.kind') = 'memory' ORDER BY t.rowid`,
+    )
+    .all() as Array<{ id: string; question_proposal: string; answered: string | null; stale: string | null; settled_id: number | null }>;
+  return rows
+    .filter(({ settled_id }) => !window || (settled_id !== null && settled_id > window.after && settled_id <= window.upTo))
+    .map((row) => {
       const answered = row.answered === null ? null : (JSON.parse(row.answered) as Extract<EventPayload, { kind: "question_answered" }>);
       const stale = row.stale === null ? null : (JSON.parse(row.stale) as Extract<EventPayload, { kind: "memory_proposal_stale" }>);
       return {
@@ -1676,10 +1720,6 @@ export function pullMemoryProposals(db: Db, reader: Pick<MemoryReader, "taskId" 
         observed: stale && { entry_id: stale.entry_id, observed_event_id: stale.observed_event_id },
       };
     });
-    const { rows: page, truncated } = paged(proposals, input.page);
-    const returned_ids = [...new Set(page.map(({ proposal }) => (proposal.op === "invalidate" ? proposal.target.id : "successor" in proposal ? proposal.successor.id : proposal.candidate_id)))];
-    return recordPull(db, reader, { verb: "list_memory_proposals", input, returned_ids }, { proposals: page, truncated }, at);
-  })();
 }
 
 /** meta-review の Precedent の読み口(issue #619): 異議つき decision マーカーを cause・outcome と、その decision より前に
@@ -1693,32 +1733,7 @@ export function listPrecedents(
 ) {
   return db.transaction(() => {
     const since = input.since_watermark ?? previousMetaReviewWatermark(db, reader.taskId);
-    const lastObjection = db.prepare(
-      `SELECT MAX(id) AS id FROM events WHERE kind IN ('objection_raised', 'objection_attributed') AND json_extract(payload, '$.entry_id') = ?`,
-    );
-    const precedents = listEpisodes(db, {}).flatMap((episode) => {
-      const objected = episode.markers.filter(
-        (m) => m.kind === "decision" && ((lastObjection.get(m.eventId) as { id: number | null }).id ?? -1) > since,
-      );
-      const events = objected.length === 0 ? [] : listEvents(db, episode.taskId);
-      return objected.map((m) => ({
-        task_id: episode.taskId,
-        workspace: episode.workspace,
-        agent: episode.agent,
-        worker_spawned_event_id: episode.workerSpawnedEventId,
-        decision_event_id: m.eventId!,
-        line: m.line,
-        displayed: m.displayed,
-        objections: m.objections,
-        cause: m.cause,
-        entries: m.entries,
-        completed: episode.completed,
-        pr_merged: episode.prMerged,
-        entries_read: entriesReadBefore(episode, events, m.eventId!),
-        entries_seen: entriesSeenBefore(episode, events, m.eventId!),
-      }));
-    });
-    const { rows: shown, truncated } = paged(precedents, input.page);
+    const { rows: shown, truncated } = paged(precedentRows(db, { after: since }), input.page);
     return recordPull(
       db,
       reader,
@@ -1727,6 +1742,34 @@ export function listPrecedents(
       at,
     );
   })();
+}
+
+/** list_precedents の行(ページ割り前): 異議の event が窓 `(after, upTo]` にある decision。verb は上限を持たず、材料の節は
+ *  読み手の登録の watermark を上限にする(ADR 0180 決定2)。 */
+function precedentRows(db: Db, { after, upTo = Number.MAX_SAFE_INTEGER }: { after: number; upTo?: number }) {
+  const objectedIn = db.prepare(
+    `SELECT 1 FROM events WHERE kind IN ('objection_raised', 'objection_attributed') AND json_extract(payload, '$.entry_id') = ? AND id > ? AND id <= ?`,
+  );
+  return listEpisodes(db, {}).flatMap((episode) => {
+    const objected = episode.markers.filter((m) => m.kind === "decision" && objectedIn.get(m.eventId, after, upTo) !== undefined);
+    const events = objected.length === 0 ? [] : listEvents(db, episode.taskId);
+    return objected.map((m) => ({
+      task_id: episode.taskId,
+      workspace: episode.workspace,
+      agent: episode.agent,
+      worker_spawned_event_id: episode.workerSpawnedEventId,
+      decision_event_id: m.eventId!,
+      line: m.line,
+      displayed: m.displayed,
+      objections: m.objections,
+      cause: m.cause,
+      entries: m.entries,
+      completed: episode.completed,
+      pr_merged: episode.prMerged,
+      entries_read: entriesReadBefore(episode, events, m.eventId!),
+      entries_seen: entriesSeenBefore(episode, events, m.eventId!),
+    }));
+  });
 }
 
 /** 出所の種別(ADR 0083 追記3): commit / event の参照は事実、decision の参照は推論。 */
@@ -2012,6 +2055,95 @@ export function recordMemoryInjection(
       kind: "memory_injected",
       worker_spawned_event_id: workerSpawnedEventId,
       ...recorded,
+      tokenizer: TOKENIZER.id,
+      tokenizer_version: TOKENIZER.version,
+    },
+    at,
+  });
+}
+
+/** 材料の節の店の変更(ADR 0180 決定1): 窓の中に作成か無効化の材料の event(meta-review 自身の産物は除く —— due と同じ述語)が
+ *  あるエントリを、本文が同じ鎖の末尾の行1つにまとめ、材料になった変更を添える。移動の `path_moved` は本文の変更でないので数えない。
+ *  candidate の行は candidate の部分が持つので載せない。 */
+function storeChanges(db: Db, window: { after: number; upTo: number }) {
+  const restored = restoredAs(db);
+  const changes = new Map<number, Set<"created" | "invalidated">>();
+  for (const { id, payload } of materialEvents(db, ["memory_entry_created", "memory_entry_invalidated"], window)) {
+    if (payload.kind === "memory_entry_invalidated" && payload.reason === "path_moved") continue;
+    const tail = sameBodyChain(db, requireEntry(db, payload.kind === "memory_entry_created" ? id : payload.entry_id), restored).at(-1)!;
+    changes.set(tail.id, (changes.get(tail.id) ?? new Set()).add(payload.kind === "memory_entry_created" ? "created" : "invalidated"));
+  }
+  return listMemoryEntries(db, {})
+    .filter((entry) => changes.has(entry.id) && entry.state !== "candidate")
+    .map((entry) => ({ ...metaReviewRow(entry), changes: (["created", "invalidated"] as const).filter((c) => changes.get(entry.id)!.has(c)) }));
+}
+
+/** memory meta-review の材料の節(ADR 0180 決定2、provider 非依存): 窓 `(前回, 今回]` の店の変更・生きている candidate・異議つき
+ *  判断・決着した提案と、枝の一覧を、それぞれの読み口と同じ行で組む。上限は置かない。主題 memory の meta-review でなければ null。 */
+export function buildMetaReviewMaterial(db: Db, taskId: string) {
+  if (metaReviewSubjectOf(db, taskId) !== "memory") return null;
+  return db.transaction(() => {
+    const window = metaReviewWindow(db, taskId);
+    const parts = {
+      store_changes: storeChanges(db, window),
+      candidates: memoryListRows(db, "list_memory_candidates", {}),
+      precedents: precedentRows(db, window),
+      proposals: memoryProposalRows(db, window),
+      branches: metaReviewBranches(db),
+    };
+    const part = (heading: string, note: string, rows: unknown[], empty: string) => [
+      "",
+      `### ${heading}`,
+      "",
+      note,
+      ...(rows.length === 0 ? [`(${empty})`] : rows.map((row) => JSON.stringify(row))),
+    ];
+    const section = [
+      "## Memory meta-review material",
+      "",
+      `This cycle's material, gathered by the board when this session started: changes after event ${window.after} up to and including event ` +
+        `${window.upTo} — the registrations of the previous memory meta-review and of this one. Each row is one JSON object with the fields of the read verb named under its heading.`,
+      ...part(
+        "Store changes",
+        "Rows of list_memory_entries whose entry was created or invalidated in this window, except by a memory meta-review or by the answer to its " +
+          "proposal; changes says which. A moved or restored entry is shown as its latest copy. Candidates are in the next part.",
+        parts.store_changes,
+        "no store changes",
+      ),
+      ...part("Live candidates", "Rows of list_memory_candidates: every candidate not invalidated, whenever it was drafted.", parts.candidates, "no live candidates"),
+      ...part("Objected decisions", "Rows of list_precedents for the objections raised in this window.", parts.precedents, "no objected decisions"),
+      ...part("Settled proposals", "Rows of list_memory_proposals answered or settled as stale in this window.", parts.proposals, "no settled proposals"),
+      ...part("Branches", "Rows of list_memory_branches: the whole tree.", parts.branches, "no branches"),
+    ].join("\n");
+    return { section, previous_watermark: window.after, material_watermark: window.upTo, parts, tokens: countTokens(section) };
+  })();
+}
+
+/** 材料の節の記録(task 帰属、memory_injected の直後に両 adapter が書く): 両端の watermark、部分ごとに載せた id、token 量。 */
+export function recordMetaReviewMaterial(
+  db: Db,
+  taskId: string,
+  agent: string,
+  workerSpawnedEventId: number,
+  material: NonNullable<ReturnType<typeof buildMetaReviewMaterial>>,
+  at: Date,
+): number {
+  const { previous_watermark, material_watermark, parts, tokens } = material;
+  return appendEvent(db, {
+    taskId,
+    workerId: agent,
+    origin: "board",
+    payload: {
+      kind: "meta_review_material_injected",
+      worker_spawned_event_id: workerSpawnedEventId,
+      previous_watermark,
+      material_watermark,
+      store_changes: parts.store_changes.map((e) => e.id),
+      candidates: parts.candidates.map((e) => e.id),
+      precedents: parts.precedents.map((p) => p.decision_event_id),
+      proposals: parts.proposals.map((p) => p.question_id),
+      branches: parts.branches.flatMap((b) => b.definitions.map((d) => d.id)),
+      tokens,
       tokenizer: TOKENIZER.id,
       tokenizer_version: TOKENIZER.version,
     },

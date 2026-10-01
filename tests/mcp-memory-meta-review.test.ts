@@ -1,7 +1,7 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { createBehaviorCandidate, defineMemoryBranch, recordKnowledge, WORKER_MEMORY_VERBS } from "../src/memory.js";
 import { MEMORY_META_REVIEW_VERBS } from "../src/meta-review.js";
-import { DEFAULT_AUDITOR_NAME } from "../src/tasks.js";
+import { DEFAULT_AUDITOR_NAME, registerTask } from "../src/tasks.js";
 import { UnknownWorkspaceError } from "../src/workspace.js";
 import { api, bootTidepool, GIT_FIXTURE_TEST_TIMEOUT, HOUR, makeWorkspace, managementMcpClient, mcpClient, memoryEntries, registerWork, type Tidepool } from "./harness.js";
 import { makeRegistryAgentCheck } from "./registry-fixture.js";
@@ -85,8 +85,9 @@ it("define_memory は重ねた木の門と畳み方・改名を言い、list_mem
         "Candidates and invalidated entries make no branch.",
     );
     expect(review.purpose).toContain(
-      "Read the tree with list_memory_branches — every branch with the Definitions at its path and the scopes that hold entries under it — " +
-        "and a branch's entries with list_memory_entries (path). For a Definition, ask whether it holds true whatever leaf sits under its branch.",
+      "Where a store change rewrote a Definition, read the entries under its branch with list_memory_entries (path). " +
+        "The branch list shows every branch with the Definitions at its path and the scopes that hold entries under it. " +
+        "For a Definition, ask whether it holds true whatever leaf sits under its branch.",
     );
     expect(review.purpose).toContain(
       "When two or more workspaces define the same path, read the definitions: fold them into one whole-board definition when they mean the same " +
@@ -122,6 +123,57 @@ it("read_memory_entries は主題 memory の接続に出て管理MCP には出�
   } finally {
     await client.close();
     await management.close();
+  }
+});
+
+it("search_memory_entries は主題 memory の接続に出て、主題 routing の接続と管理MCP には出ず、呼ぶとポインタと event id を返す —— 説明は範囲・query と like・ポインタだけ・Definition を探さないことを言う(ADR 0180 決定3)", async () => {
+  const { client, call, material } = await boardWithMetaReview();
+  const management = await managementMcpClient(t.baseUrl);
+  const routing = registerTask(
+    t.db,
+    { type: "review", title: "Routing meta-review", purpose: "p", completion_criteria: "c", meta_review_subject: "routing" },
+    t.clock.now(),
+  );
+  const routingClient = await mcpClient(t.mcpBaseUrl, routing.id);
+  try {
+    const { tools } = await client.listTools();
+    expect(tools.find((tool) => tool.name === "search_memory_entries")?.description).toBe(
+      "Search the board's memory across every scope and addressee: Knowledge, Behaviors and Exemplars that are live (approved or candidate) " +
+        "or were dropped without a successor, with the reason. Pass query (free text; terms are OR-ed and ranked) or like (an entry id: searches " +
+        "with that entry's own title and text, excluding the entry itself). Returns pointers only — read the text with read_memory_entries. " +
+        "Definitions are not searched: the branch list carries them.",
+    );
+    for (const other of [management, routingClient]) {
+      expect((await other.listTools()).tools.map((tool) => tool.name)).not.toContain("search_memory_entries");
+    }
+    expect(await call("search_memory_entries", { query: "Node", page: 1 })).toMatchObject({
+      isError: false,
+      body: { results: [{ id: material, invalidation_reason: null }], truncated: false, event_id: expect.any(Number) },
+    });
+    expect(await call("search_memory_entries", { like: material })).toMatchObject({ isError: false, body: { results: [] } });
+  } finally {
+    await client.close();
+    await management.close();
+    await routingClient.close();
+  }
+});
+
+it("memory meta-review の purpose は材料の節とその5つの部分を名指し、店の変更の各行を like で重複と照らして落とされたエントリの理由を読むと言い、completion_criteria は変わらない(ADR 0180)", async () => {
+  const { review, client } = await boardWithMetaReview();
+  try {
+    expect(review.purpose).toContain(
+      "This cycle's material is in your prompt, in the Memory meta-review material section: the store changes since the previous memory " +
+        "meta-review, every live candidate, the decisions objected to since then, the memory proposals answered or settled since then, and the branch list.",
+    );
+    expect(review.purpose).toContain("search_memory_entries with like");
+    expect(review.purpose).toContain("read why it was dropped (its invalidation_reason, and for a rejected candidate the human's comment in list_memory_proposals)");
+    expect(review.purpose).toContain("list_memory_entries (path)");
+    expect(review.purpose).not.toContain("First read the past memory proposals");
+    expect(review.completion_criteria).toBe(
+      "every candidate and store change since the previous meta-review is either proposed, retired, folded, moved, applied (Knowledge / Definitions), or deliberately left as is",
+    );
+  } finally {
+    await client.close();
   }
 });
 

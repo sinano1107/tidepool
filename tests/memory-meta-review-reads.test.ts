@@ -24,6 +24,8 @@ import {
   recordKnowledge,
   rejectMemoryProposal,
   restoreMemoryEntry,
+  searchMemory,
+  searchMemoryEntries,
 } from "../src/memory.js";
 import { EXTRACTOR_VERSION, entriesReadBefore, entriesSeenBefore, projectEpisode } from "../src/precedent.js";
 import { answerQuestion, DomainError, getTask, logDecision, type MemoryProposal, registerTask } from "../src/tasks.js";
@@ -146,7 +148,7 @@ it("list_memory_candidates は kind で絞れる —— exemplar なら Exemplar
 
 /** 提案 question を立て、回答(question_answered)と適用を人間の扉と同じ順で書く。 */
 function proposals() {
-  const { db, task, decision, reader, behavior } = board();
+  const { db, task, decision, reader, behavior, knowledge } = board();
   const propose = (input: Parameters<typeof proposeMemoryChange>[2]) => proposeMemoryChange(db, task.id, input, "auditor", at).question_id;
   const answer = (questionId: string, option: "approve" | "reject", rest: { comment?: string; amendment?: MemoryAmendment } = {}) => {
     const question = getTask(db, questionId)!;
@@ -155,7 +157,7 @@ function proposals() {
     if (option === "approve") approveMemoryProposal(db, proposal, questionId, "webui", at, rest.amendment);
     else rejectMemoryProposal(db, proposal, questionId, "webui", at, rest.comment);
   };
-  return { db, task, decision, reader, behavior, propose, answer };
+  return { db, task, decision, reader, behavior, knowledge, propose, answer };
 }
 
 it("list_memory_proposals は過去の memory 提案を approve・修正つき approve・comment つき reject・invalidate の reject・既存の後継の consolidate・陳腐化の決着ごと返し、returned_ids は各提案が名指す entry(ADR 0159 決定1 / ADR 0160 決定2)", () => {
@@ -552,4 +554,111 @@ it("session の中で read_memory_entries が返した id は、その session �
 
   expect(entriesSeenBefore(episode, events, decision)).toEqual([id]);
   expect(entriesReadBefore(episode, events, decision)).toEqual([]);
+});
+
+it("search_memory_entries の query は全 scope・全宛先の approved と candidate の Knowledge・Behavior・Exemplar を返し、Definition は返さない —— 行はポインタで本文・原文を持たない(ADR 0180 決定3)", () => {
+  const { db, reader, behavior, knowledge, define } = board();
+  const other = knowledge("charts", "tide");
+  const addressed = behavior({ title: "Deckhand reads the tide", scope: "tidepool", addressee: "deckhand" });
+  approve(db, addressed);
+  const candidate = behavior({ title: "Check the tide first", scope: null });
+  define(null, "tide");
+  knowledge("tidepool", "harbor");
+
+  const { results, truncated } = searchMemoryEntries(db, reader, { query: "tide" }, at);
+
+  expect(new Set(results.map((r) => r.id))).toEqual(new Set([other, addressed, candidate]));
+  expect(results.find((r) => r.id === addressed)).toEqual({
+    id: addressed,
+    kind: "behavior",
+    state: "approved",
+    scope: "tidepool",
+    path: "habits",
+    title: "Deckhand reads the tide",
+    addressee: "deckhand",
+    invalidation_reason: null,
+  });
+  expect(truncated).toBe(false);
+});
+
+it("search_memory_entries は後継なしで落とされたエントリ(capability の Knowledge・reject された candidate)を理由つきで返し、superseded と path_moved の行は返さない", () => {
+  const { db, reader, behavior, knowledge, propose, answer } = proposals();
+  const dropped = knowledge("tidepool", "tide/dropped");
+  invalidateMemoryEntry(db, { entry_id: dropped, reason: "capability" }, "human", "webui", at);
+  const rejected = behavior({ title: "Wait for the tide" });
+  answer(propose({ op: "approve", candidate_id: rejected, rationale: "r" }), "reject", { comment: "The tide is not ours to wait for." });
+  const replaced = knowledge("tidepool", "tide/replaced");
+  const successor = knowledge("tidepool", "tide/kept");
+  invalidateMemoryEntry(db, { entry_id: replaced, reason: "superseded", successor_id: successor }, "human", "webui", at);
+  const moved = knowledge("tidepool", "tide/moved");
+  const copy = moveMemory(db, { entry_id: moved, scope: null, path: "tide/copied", mover: human }, "webui", at).entry_id;
+
+  const { results } = searchMemoryEntries(db, reader, { query: "tide" }, at);
+
+  expect(new Map(results.map((r) => [r.id, r.invalidation_reason]))).toEqual(
+    new Map<number, string | null>([
+      [dropped, "capability"],
+      [rejected, "rejected"],
+      [successor, null],
+      [copy, null],
+    ]),
+  );
+});
+
+/** setup のみ: title と text を指定した Knowledge。 */
+const fact = (db: ReturnType<typeof openDb>, scope: string | null, title: string, text: string) =>
+  recordKnowledge(db, { scope, path: "build", title, text, source: { commit: "0a46a46" }, author: { activity: "worker_verb", name: "deckhand" } }, "worker", at).entry_id;
+
+it("言い換えのエントリの like は元のエントリを返す —— 同じ語の組を worker の search_memory(AND)で引くと元のエントリには当たらない(#1226 の実測)", () => {
+  const { db, task, reader } = board();
+  const original = fact(db, "tidepool", "Tests need Node 22", "Run the suite on Node 22 or the sqlite binding breaks.");
+  const paraphrase = fact(db, "tidepool", "Node version for the test suite", "The test suite must run under Node 22.");
+  const terms = "Node version for the test suite\nThe test suite must run under Node 22.";
+
+  expect(searchMemory(db, { taskId: task.id, scope: "tidepool", agent: "deckhand" }, { query: terms }, at).results.map((r) => r.id)).not.toContain(original);
+  expect(searchMemoryEntries(db, reader, { like: paraphrase }, at).results.map((r) => r.id)).toEqual([original]);
+});
+
+it("like の結果にそのエントリ自身も、本文が同じ鎖(path_moved の複製・復元の複製と復元元)も出ない —— 無効化済みの id も like に取れる", () => {
+  const { db, reader } = board();
+  const other = fact(db, "tidepool", "Tide tables", "Tide tables come from the harbor office.");
+  const moved = fact(db, "tidepool", "Tide charts", "Tide charts come from the harbor office.");
+  const copy = moveMemory(db, { entry_id: moved, scope: null, path: "charts", mover: human }, "webui", at).entry_id;
+  const dropped = fact(db, "tidepool", "Tide clocks", "Tide clocks come from the harbor office.");
+  invalidateMemoryEntry(db, { entry_id: dropped, reason: "capability" }, "human", "webui", at);
+  const restored = restoreMemoryEntry(db, { entry_id: dropped, restorer: human }, "webui", at).entry_id;
+  const ids = (like: number) => searchMemoryEntries(db, reader, { like }, at).results.map((r) => r.id);
+
+  expect(new Set(ids(moved))).toEqual(new Set([other, dropped, restored]));
+  expect(new Set(ids(copy))).toEqual(new Set([other, dropped, restored]));
+  expect(new Set(ids(restored))).toEqual(new Set([other, copy]));
+  expect(new Set(ids(dropped))).toEqual(new Set([other, copy]));
+});
+
+it("search_memory_entries は query と like の両方・どちらも無し・存在しない like・引ける語の無い query を domain error で断り、memory_pulled を残さない", () => {
+  const { db, reader, knowledge } = board();
+  const id = knowledge("tidepool", "tide");
+  const pulls = () => listEvents(db, reader.taskId).filter((e) => e.kind === "memory_pulled").length;
+
+  for (const input of [{ query: "tide", like: id }, {}, { like: 9999 }, { query: "the of and" }]) {
+    expect(() => searchMemoryEntries(db, reader, input, at)).toThrow(DomainError);
+  }
+  expect(pulls()).toBe(0);
+});
+
+it("search_memory_entries は 20 件ごとのページで truncated を言い、呼び出しは verb・input・返した id を memory_pulled に残して event id を返す", () => {
+  const { db, reader, knowledge } = board();
+  const ids = Array.from({ length: 21 }, (_, i) => knowledge("tidepool", `tide/n${i}`));
+
+  const first = searchMemoryEntries(db, reader, { query: "tide" }, at);
+  const second = searchMemoryEntries(db, reader, { query: "tide", page: 2 }, at);
+
+  expect([first.results.length, first.truncated]).toEqual([20, true]);
+  expect([second.results.length, second.truncated]).toEqual([1, false]);
+  expect(new Set([...first.results, ...second.results].map((r) => r.id))).toEqual(new Set(ids));
+  expect(getEvent(db, second.event_id)).toMatchObject({
+    task_id: reader.taskId,
+    worker_id: "auditor",
+    payload: { kind: "memory_pulled", verb: "search_memory_entries", input: { query: "tide", page: 2 }, returned_ids: second.results.map((r) => r.id) },
+  });
 });
