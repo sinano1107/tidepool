@@ -1,5 +1,7 @@
 import type { Clock } from "./clock.js";
+import type { ContainmentCapability } from "./containment.js";
 import type { ContainedProcess, ProcessContainers, PtyFn, PtyProcess } from "./process-container.js";
+import type { Harness } from "./registry.js";
 
 /** 1回の Board call の注文(ADR 0136 決定4)。「何を・どの cwd で・どの env で
  *  起こすか」と「時間上限」「結果をいつ返すか」だけを言い、容器・force・観測の
@@ -9,6 +11,12 @@ export interface BoardCallSpec {
    *  「原因が worker なのか、どの probe なのか」が読める唯一の手掛かりなので、
    *  人間がその文面で読んで分かる綴りにする(例: "skill enumeration")。 */
   kind: string;
+  /** どの Harness の CLI を起こすか。口は起動の前にこの Harness の CLI の版を読んで
+   *  固定の版と比べる(ADR 0186 決定3)。 */
+  harness: Harness;
+  /** 版の門を外す印。立てるのは封じ込めの probe(ツール面の probe)だけ —— 版が戻ったことを
+   *  確かめる手段がそれだからである(ADR 0186 決定3)。 */
+  bypassVersionGate?: true;
   command: string;
   args: string[];
   cwd: string;
@@ -106,6 +114,12 @@ export function createBoardCalls(deps: {
    *  worker session の回収失敗と同じ経路である(新しい quarantine 族は立てない
    *  —— ADR 0136 決定6)。 */
   onReclaimTimeout: (reason: string) => void;
+  /** Harness の CLI の版の検査(ADR 0186 決定3)。口は呼び出しのたびにこれを呼ぶ ——
+   *  封じ込めの検査が最後に観測した版を使い回すと、pickup の無い間の人間の手による更新を
+   *  見逃す。版の読みは口の中で spawn せず、合成側が注入する。 */
+  cliVersion: (harness: Harness) => Promise<ContainmentCapability>;
+  /** 版の不一致で断ったことを盤面へ返す口。配線先はその Harness の封じ込めの隔離である。 */
+  onCliVersionMismatch: (harness: Harness, reason: string) => void;
 }): BoardCalls {
   let counter = 0;
   /** 回収 timeout まで空を観測できなかった容器 id → 呼び出しの種類。 */
@@ -149,6 +163,19 @@ export function createBoardCalls(deps: {
     // ADR 0136 決定7: 機構前提が不成立の platform では Board call を起こさない。
     // 容器なしで起こすのは ADR 0099 決定5 が禁じた「黙って弱い回収へ落ちる」形である。
     if (!deps.containers.preflight().available) return null;
+    if (!spec.bypassVersionGate) {
+      // 読めない版は一致とは読まない(fail-closed)
+      const version = await deps.cliVersion(spec.harness).catch(
+        (error: unknown): ContainmentCapability => ({
+          available: false,
+          reason: `the board could not read this host's ${spec.harness} CLI version: ${String(error)} (ADR 0186)`,
+        }),
+      );
+      if (!version.available) {
+        deps.onCliVersionMismatch(spec.harness, version.reason);
+        return null;
+      }
+    }
     const id = BOARD_CALL_PREFIX + ++counter;
     const container = deps.containers.open(id);
 

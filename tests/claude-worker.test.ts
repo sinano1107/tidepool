@@ -1946,6 +1946,7 @@ describe("ClaudeCodeWorker", () => {
     vi.useFakeTimers();
     try {
       const pending = worker.checkUsage();
+      await vi.waitFor(() => expect(rec.calls).toHaveLength(1)); // 版の門を通ってから起きる
 
       // プロンプト未到達の間は何も送らない
       rec.emitData("Booting…\n");
@@ -1977,6 +1978,7 @@ describe("ClaudeCodeWorker", () => {
     vi.useFakeTimers();
     try {
       const pending = worker.checkUsage();
+      await vi.waitFor(() => expect(rec.calls).toHaveLength(1)); // 版の門を通ってから起きる
 
       rec.emitData(PROMPT_READY_MARKER);
       await vi.advanceTimersByTimeAsync(5_000); // settle を過ぎて /usage 送信
@@ -2010,6 +2012,7 @@ describe("ClaudeCodeWorker", () => {
     vi.useFakeTimers();
     try {
       const pending = worker.checkUsage();
+      await vi.waitFor(() => expect(rec.calls).toHaveLength(1)); // 版の門を通ってから起きる
       rec.emitData(PROMPT_READY_MARKER);
       await vi.advanceTimersByTimeAsync(5_000);
 
@@ -2037,6 +2040,7 @@ describe("ClaudeCodeWorker", () => {
     vi.useFakeTimers();
     try {
       const pending = worker.checkUsage();
+      await vi.waitFor(() => expect(rec.calls).toHaveLength(1)); // 版の門を通ってから起きる
       rec.emitData(PROMPT_READY_MARKER);
       await vi.advanceTimersByTimeAsync(5_000);
 
@@ -2068,6 +2072,7 @@ describe("ClaudeCodeWorker", () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     try {
       const pending = worker.checkUsage();
+      await vi.waitFor(() => expect(rec.calls).toHaveLength(1)); // 版の門を通ってから起きる
       rec.emitData(PROMPT_READY_MARKER);
       await vi.advanceTimersByTimeAsync(5_000);
       rec.emitData(
@@ -2109,6 +2114,7 @@ describe("ClaudeCodeWorker", () => {
       const rec = recordingPty();
       const { worker, runtime } = await makeUsageWorker(rec.pty);
       const pending = worker.checkUsage();
+      await vi.waitFor(() => expect(rec.calls).toHaveLength(1)); // 版の門を通ってから起きる
 
       // プロンプトには着いたが /usage パネルが返ってこない(CLI ハング相当)
       rec.emitData(PROMPT_READY_MARKER);
@@ -2134,6 +2140,7 @@ describe("ClaudeCodeWorker", () => {
       const rec = recordingPty();
       const { worker } = await makeUsageWorker(rec.pty);
       const pending = worker.checkUsage();
+      await vi.waitFor(() => expect(rec.calls).toHaveLength(1)); // 版の門を通ってから起きる
 
       // 初回対話(テーマ選択)が REPL より手前に出て、プロンプトに一度も着かない。
       // #738 の実測どおり、門を名指しする行はスプラッシュの ASCII アートの下にある
@@ -2180,6 +2187,7 @@ describe("ClaudeCodeWorker", () => {
     const rec = recordingPty();
     const { worker } = await makeUsageWorker(rec.pty);
     const pending = worker.checkUsage();
+    await vi.waitFor(() => expect(rec.calls).toHaveLength(1)); // 版の門を通ってから起きる
 
     rec.emitExit();
 
@@ -2228,6 +2236,7 @@ describe("ClaudeCodeWorker", () => {
     vi.useFakeTimers();
     try {
       const pending = worker.checkUsage();
+      await vi.waitFor(() => expect(rec.calls).toHaveLength(1)); // 版の門を通ってから起きる
       rec.emitData(PROMPT_READY_MARKER);
       await vi.advanceTimersByTimeAsync(5_000);
       rec.emitData("Current session: 1%\nCurrent week: 1%\n");
@@ -2264,6 +2273,7 @@ describe("ClaudeCodeWorker", () => {
     vi.useFakeTimers();
     try {
       const pending = worker.checkUsage();
+      await vi.waitFor(() => expect(rec.calls).toHaveLength(1)); // 版の門を通ってから起きる
       // プレースホルダの語が ANSI カーソル移動で分断され、raw に "Try \"" が
       // 連続部分文字列として現れないケース
       rec.emitData('❯ Try\x1b[6G"refactor <filepath>"');

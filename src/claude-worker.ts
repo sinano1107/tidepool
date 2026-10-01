@@ -1210,6 +1210,7 @@ function enumerateSkillsThrough(
   return call(
     {
       kind: "skill enumeration",
+      harness: "claude-code",
       command: "claude",
       args: SKILL_ENUM_ARGS,
       cwd,
@@ -1335,6 +1336,9 @@ export const enumerateToolsThrough =
 /** tool-surface probe の Board call の注文。適合試験(ADR 0186 決定7)も同じこれで撃つ。 */
 export const toolSurfaceProbeSpec = (cwd: string): BoardCallSpec => ({
   kind: "tool-surface probe",
+  harness: "claude-code",
+  // 版の門を外す唯一の注文: 版が戻ったことを確かめる手段がこの probe である(ADR 0186 決定3)
+  bypassVersionGate: true,
   command: "claude",
   args: TOOL_SURFACE_PROBE_ARGS,
   cwd,
@@ -1397,21 +1401,28 @@ export async function probeToolSurfaceCapability(
   return surface.available ? checkAutoMemoryClosed(observed.autoMemoryPath) : surface;
 }
 
-/** Claude Harness の封じ込めの問いのうち、版の一致とツール面(ADR 0186 決定2)。版は
- *  完全一致で比べ、違えばツール面の probe を撃たない。版の門を
- *  `probeToolSurfaceCapability` の外に置くのは、適合試験が固定の版を変える前の新しい版で
- *  そちらを撃つからである。`readVersion` は `claude --version` の出力。 */
+/** Claude Harness の封じ込めの問いのうち、版の一致とツール面(ADR 0186 決定2)。版が
+ *  違えばツール面の probe を撃たない。版の門を `probeToolSurfaceCapability` の外に置くのは、
+ *  適合試験が固定の版を変える前の新しい版でそちらを撃つからである。 */
 export async function probeClaudeHarnessCapability(
-  readVersion: () => string,
+  readVersion: () => Promise<string>,
   enumerate: EnumerateToolsFn,
 ): Promise<ContainmentCapability> {
+  const version = await checkClaudeCliVersion(readVersion);
+  return version.available ? probeToolSurfaceCapability(enumerate) : version;
+}
+
+/** Claude CLI の版の照合(ADR 0186 決定2・3)。`claude --version` の先頭の語と固定の版の
+ *  完全一致。封じ込めの検査と Board call の口の門が共有する —— 暇な盤面では門が先に
+ *  question を登録するので、文面を分けると入れるためのコマンドが運用者に届かない。 */
+export async function checkClaudeCliVersion(readVersion: () => Promise<string>): Promise<ContainmentCapability> {
   let observed: string;
   try {
-    observed = readVersion().split(/\s+/)[0] ?? "";
+    observed = (await readVersion()).split(/\s+/)[0] ?? "";
   } catch (error) {
     observed = `unreadable (${String(error)})`;
   }
-  if (observed === CLAUDE_CLI_VERSION) return probeToolSurfaceCapability(enumerate);
+  if (observed === CLAUDE_CLI_VERSION) return { available: true };
   return {
     available: false,
     reason:
@@ -1472,7 +1483,7 @@ export const execThrough =
   (call: BoardCall, kind: string): ExecFn =>
   async (command, args, env) => {
     const output = await call(
-      { kind, command, args, cwd: process.cwd(), env, limitMs: ANSWER_CALL_LIMIT_MS },
+      { kind, harness: "claude-code", command, args, cwd: process.cwd(), env, limitMs: ANSWER_CALL_LIMIT_MS },
       readOutput,
     );
     if (!output) throw new Error(`the ${kind} Board call produced no answer (limit, spawn failure, or no container)`);
@@ -2485,6 +2496,7 @@ export async function checkUsageThrough(
   const capture = await call(
     {
       kind: "usage TUI",
+      harness: "claude-code",
       command: "claude",
       args: ["--safe-mode", "--settings", settingsPath],
       cwd: process.cwd(),

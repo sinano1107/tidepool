@@ -591,6 +591,7 @@ async function runFile(
   const output = await call(
     {
       kind: PREFLIGHT_KIND,
+      harness: "codex",
       command,
       args: [...args],
       cwd: options.cwd ?? process.cwd(),

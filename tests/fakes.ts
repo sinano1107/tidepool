@@ -31,6 +31,7 @@ import type {
   RepoRef,
   RepoSlug,
 } from "../src/github.js";
+import type { HarnessContainmentCheck } from "../src/harness-containment.js";
 import type { Landing } from "../src/landing.js";
 import type { InjectionQuery } from "../src/memory.js";
 import {
@@ -834,6 +835,10 @@ function passthroughContainerRuntime(spawn: ContainerSpawn): ContainerRuntime {
   };
 }
 
+/** Harness の CLI の版が常に固定の版と一致する検査(ADR 0186 決定3)。版の門を駆動しない
+ *  テストの盤面・口が渡す —— 門を駆動するテストだけが別の答えを渡す。 */
+export const pinnedCliVersions: HarnessContainmentCheck = async () => ({ available: true });
+
 /** 実 adapter1台ぶんの容器まわり: 容器 supervisor と、その上に載る Board call の
  *  口(ADR 0136)。**2つを別々に組ませない** —— 口を別の supervisor から組むと、
  *  skill 列挙の容器を `hold` しても launch が止まらない(門が別の帳簿を読む)。
@@ -850,6 +855,8 @@ export function containerHarness(
       clock,
       reclaimTimeout: RECLAIM_TIMEOUT,
       onReclaimTimeout: () => {},
+      cliVersion: pinnedCliVersions,
+      onCliVersionMismatch: () => {},
     }).call,
   };
 }

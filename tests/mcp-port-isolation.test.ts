@@ -6,7 +6,7 @@ import { openDb } from "../src/db.js";
 import { startServer, type TidepoolServer } from "../src/server.js";
 import { implicitTaskExecutionCandidates } from "../src/server-options.js";
 import { TranscriptStore } from "../src/transcript-store.js";
-import { FakeClock, FakeContainerRuntime, ScriptedWorker } from "./fakes.js";
+import { FakeClock, FakeContainerRuntime, pinnedCliVersions, ScriptedWorker } from "./fakes.js";
 import { AUTH_HEADERS, TEST_CREDENTIAL, tempDir } from "./harness.js";
 
 let server: TidepoolServer | undefined;
@@ -29,6 +29,7 @@ it("/mcp は web/api ポートでは待ち受けず、mcpPort 専用ポートで
     worker: () => new ScriptedWorker(bootClock),
     containerRuntime: new FakeContainerRuntime(),
     transcripts: new TranscriptStore(dir),
+    harnessCliVersion: pinnedCliVersions,
   });
 
   // credential を提示したうえで 404 であること(issue #153): 無認証の 401 は

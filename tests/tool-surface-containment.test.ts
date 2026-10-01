@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { afterEach, expect, it, vi } from "vitest";
 import {
+  checkClaudeCliVersion,
   enumerateToolsThrough,
   probeClaudeHarnessCapability,
   probeToolSurfaceCapability,
@@ -350,7 +351,7 @@ const PINNED = readFileSync(new URL("../claude-cli-version", import.meta.url), "
 
 it("版が固定の版と違えば、ツール面の probe を撃たずに不成立 — 期待した版・観測した版・入れるコマンドを言う", async () => {
   const enumerate = vi.fn(async () => ({ tools: WORK_SURFACE, mcpServers: [], autoMemoryPath: null }));
-  const result = await probeClaudeHarnessCapability(() => "2.1.290 (Claude Code)", enumerate);
+  const result = await probeClaudeHarnessCapability(async () => "2.1.290 (Claude Code)", enumerate);
   expect(enumerate).not.toHaveBeenCalled();
   expect(result.available).toBe(false);
   const reason = result.available === false ? result.reason : "";
@@ -362,14 +363,14 @@ it("版が固定の版と違えば、ツール面の probe を撃たずに不成
 
 it("版が固定の版と一致すれば、ツール面の probe を撃ち、その答えがそのまま返る", async () => {
   const enumerate = vi.fn(async () => ({ tools: [...WORK_SURFACE, "CronCreate"], mcpServers: [], autoMemoryPath: null }));
-  const result = await probeClaudeHarnessCapability(() => `${PINNED} (Claude Code)`, enumerate);
+  const result = await probeClaudeHarnessCapability(async () => `${PINNED} (Claude Code)`, enumerate);
   expect(enumerate).toHaveBeenCalledTimes(1);
   expect(result.available === false && result.reason).toContain("CronCreate");
 });
 
 it("`claude --version` が読めなければ不成立 — ツール面の probe は撃たない", async () => {
   const enumerate = vi.fn(async () => ({ tools: WORK_SURFACE, mcpServers: [], autoMemoryPath: null }));
-  const result = await probeClaudeHarnessCapability(() => {
+  const result = await probeClaudeHarnessCapability(async () => {
     throw new Error("spawnSync claude ENOENT");
   }, enumerate);
   expect(enumerate).not.toHaveBeenCalled();
@@ -378,6 +379,19 @@ it("`claude --version` が読めなければ不成立 — ツール面の probe 
 });
 
 it("`claude --version` の出力が版として読めなければ不成立", async () => {
-  const result = await probeClaudeHarnessCapability(() => "", async () => ({ tools: WORK_SURFACE, mcpServers: [], autoMemoryPath: null }));
+  const result = await probeClaudeHarnessCapability(async () => "", async () => ({ tools: WORK_SURFACE, mcpServers: [], autoMemoryPath: null }));
   expect(result.available).toBe(false);
+});
+
+it("Claude の版の照合は `claude --version` の先頭の語と固定の版の完全一致 — 一致すれば成立", async () => {
+  expect(await checkClaudeCliVersion(async () => `${PINNED} (Claude Code)\n`)).toEqual({ available: true });
+});
+
+it("Claude の版が一致しなければ不成立 — 理由は期待した版・観測した版・入れるコマンドを言う", async () => {
+  const result = await checkClaudeCliVersion(async () => `${PINNED}.1 (Claude Code)`);
+  expect(result.available).toBe(false);
+  const reason = result.available === false ? result.reason : "";
+  expect(reason).toContain(`${PINNED}.1`);
+  expect(reason).toContain(`claude install ${PINNED}`);
+  expect(reason).toContain(`npm install -g @anthropic-ai/claude-code@${PINNED}`);
 });

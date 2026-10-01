@@ -6,7 +6,7 @@ import { implicitTaskExecutionCandidates } from "../src/server-options.js";
 import { pickupTask, registerTask } from "../src/tasks.js";
 import { TranscriptStore } from "../src/transcript-store.js";
 import { ensureTaskBranch, UnknownWorkspaceError, type WorkspaceConfig } from "../src/workspace.js";
-import { FakeClock, FakeContainerRuntime, ScriptedWorker } from "./fakes.js";
+import { FakeClock, FakeContainerRuntime, pinnedCliVersions, ScriptedWorker } from "./fakes.js";
 import { GIT_FIXTURE_TEST_TIMEOUT, git, makeWorkspace, TEST_CREDENTIAL, tempDir } from "./harness.js";
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
@@ -55,6 +55,7 @@ describe("restart 割り込みの failTask が task.workspace を解決する", 
       worker: () => new ScriptedWorker(bootClock),
       containerRuntime: new FakeContainerRuntime(),
       transcripts: new TranscriptStore(boardDir),
+      harnessCliVersion: pinnedCliVersions,
       workspace: sandbox,
       resolveWorkspace: (name) => {
         const ws = registry[name ?? "sandbox"];

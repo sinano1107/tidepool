@@ -38,7 +38,7 @@ export const cliAuthCommandThrough =
   (call: BoardCall, kind: string): CliAuthCommand =>
   async (command, args, options) =>
     (await call(
-      { kind, command, args, cwd: options.cwd, env: options.env, limitMs: CLI_AUTH_PROBE_LIMIT_MS },
+      { kind, harness: "claude-code", command, args, cwd: options.cwd, env: options.env, limitMs: CLI_AUTH_PROBE_LIMIT_MS },
       readOutput,
     )) ?? { exitCode: null, stdout: "" };
 
