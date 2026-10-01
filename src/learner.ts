@@ -266,13 +266,13 @@ export function selectorBranch(input: Parameters<typeof recommend>[0] & { promot
 } {
   const table = input.candidates[0]!;
   const { recommended, basis } = recommend(input);
-  const records = [trackRecord(recommended, input.board, input.workspace), trackRecord(table, input.board, input.workspace)] as const;
-  const candidates = input.candidates.length;
-  if (!input.promoted) {
-    return { chosen: table, shadow: { recommended, actual: table, basis, recommended_record: records[0], actual_record: records[1], candidates } };
-  }
-  const chosen = { ...recommended, source: { ...recommended.source, provider: "learner" as const } };
-  return { chosen, shadow: { recommended: table, actual: chosen, basis, recommended_record: records[1], actual_record: records[0], candidates } };
+  const chosen = input.promoted ? { ...recommended, source: { ...recommended.source, provider: "learner" as const } } : table;
+  const other = input.promoted ? table : recommended;
+  const record = (s: ExecutionSetting) => trackRecord(s, input.board, input.workspace);
+  return {
+    chosen,
+    shadow: { recommended: other, actual: chosen, basis, recommended_record: record(other), actual_record: record(chosen), candidates: input.candidates.length },
+  };
 }
 
 /** shadow 行の書き手(盤面境界、spec #541): work task の pickup 直前に、selector の分岐が決めた組を1行残す。返り値は行の id。 */
