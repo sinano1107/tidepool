@@ -68,7 +68,7 @@ const oneTurnStdout = () =>
     boardCallEnv(),
   );
 
-const { rows, ok } = await judgeConformance(
+const { rows } = await judgeConformance(
   {
     initLine: probeStdout,
     resultLine: oneTurnStdout,
@@ -89,9 +89,12 @@ const { rows, ok } = await judgeConformance(
   new Date(),
 );
 
-// 種の anthropic 行は、盤面が答え時の再確認に使うのと同じ probe で撃つ(ADR 0187 決定4)
-const seed = await judgeSeedRows(createClaudeModelProbe(cliAuthCommandThrough(call, "conformance seed row probe")));
+// 種の anthropic 行は、盤面が回答時の再検査に使うのと同じ probe で撃つ(ADR 0187 決定4)
+const table = [
+  ...rows,
+  ...(await judgeSeedRows(createClaudeModelProbe(cliAuthCommandThrough(call, "conformance seed row probe")))),
+];
 
 console.log("| surface | result | detail |\n|---|---|---|");
-for (const row of [...rows, ...seed.rows]) console.log(`| ${row.surface} | ${row.pass ? "合格" : "不合格"} | ${row.detail.replaceAll("|", "\\|")} |`);
-process.exit(ok && seed.ok ? 0 : 1);
+for (const row of table) console.log(`| ${row.surface} | ${row.pass ? "合格" : "不合格"} | ${row.detail.replaceAll("|", "\\|")} |`);
+process.exit(table.every((row) => row.pass) ? 0 : 1);

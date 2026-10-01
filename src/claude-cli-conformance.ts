@@ -100,18 +100,20 @@ export async function judgeConformance(
   return { rows, ok: rows.every((row) => row.pass) };
 }
 
-/** 種の anthropic 行ごとに、盤面が答え時の再確認に使う model probe をこの版で撃つ(ADR 0187 決定4)。
+/** 種の anthropic 行ごとに、盤面が回答時の再検査に使う model probe をこの版で撃つ(ADR 0187 決定4)。
  *  走ったときだけ合格 —— 判定は probe の答えそのものである。1行ずつ順に撃つ。 */
-export async function judgeSeedRows(probe: ModelProbe): Promise<{ rows: Row[]; ok: boolean }> {
+export async function judgeSeedRows(probe: ModelProbe): Promise<Row[]> {
   const rows: Row[] = [];
   for (const { provider, model } of SEED_EXECUTION_SETTINGS) {
     if (provider !== "anthropic") continue;
     rows.push(
       await rowOf(`seed row ${model}`, async () => {
         const result = await probe(model);
-        return { pass: result.status === "runs", detail: result.status === "runs" ? "runs" : `${result.status}: ${result.reason}` };
+        return result.status === "runs"
+          ? { pass: true, detail: "runs" }
+          : { pass: false, detail: `${result.status}: ${result.reason}` };
       }),
     );
   }
-  return { rows, ok: rows.every((row) => row.pass) };
+  return rows;
 }
