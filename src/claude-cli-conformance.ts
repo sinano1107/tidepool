@@ -22,12 +22,6 @@ export interface ConformanceObservations {
   translation: () => Promise<unknown>;
 }
 
-export interface ConformanceRow {
-  surface: string;
-  pass: boolean;
-  detail: string;
-}
-
 /** 記録された stdout を、盤面の init 行の読み手と同じ「最後に読めた行が勝つ」で読む。 */
 async function replay<T>(stdout: string, project: (parsed: Record<string, unknown> | null) => T | null) {
   const stream = Readable.from([stdout]);
@@ -45,13 +39,9 @@ const SURFACES: Array<[string, (obs: ConformanceObservations, now: Date) => Prom
       const stdout = await obs.initLine();
       const surface = await probeToolSurfaceCapability(() => replay(stdout, readToolSurface));
       const skills = await replay(stdout, (parsed) => readInitField(parsed, "skills"));
-      const failures = [
-        ...(surface.available ? [] : [surface.reason]),
-        ...(skills === null ? ["the init line carries no readable `skills`"] : []),
-      ];
-      return failures.length === 0
-        ? { pass: true, detail: `tools / mcp_servers / memory_paths as declared, ${skills!.length} skills` }
-        : { pass: false, detail: failures.join("; ") };
+      if (!surface.available) return { pass: false, detail: surface.reason };
+      if (skills === null) return { pass: false, detail: "the init line carries no readable `skills`" };
+      return { pass: true, detail: `tools / mcp_servers / memory_paths as declared, ${skills.length} skills` };
     },
   ],
   [
@@ -93,8 +83,8 @@ const SURFACES: Array<[string, (obs: ConformanceObservations, now: Date) => Prom
 export async function judgeConformance(
   obs: ConformanceObservations,
   now: Date,
-): Promise<{ rows: ConformanceRow[]; ok: boolean }> {
-  const rows: ConformanceRow[] = [];
+): Promise<{ rows: Array<Verdict & { surface: string }>; ok: boolean }> {
+  const rows: Array<Verdict & { surface: string }> = [];
   for (const [surface, judge] of SURFACES) {
     try {
       rows.push({ surface, ...(await judge(obs, now)) });
