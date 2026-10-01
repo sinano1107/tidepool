@@ -153,11 +153,8 @@ it.each([
   ["registry", "reject"],
   ["approval", "reject"],
 ] as const)("%s の question への %s は comment が空・空白だけなら domain error で断り、comment があれば通る(ADR 0179 決定1・2・4)", (kind, answer) => {
-  for (const comment of [undefined, "", " \n "]) {
-    const { db, question } = domainQuestion(kind);
-    expect(() => answerQuestion(db, question, [answer], at, undefined, comment)).toThrow(DomainError);
-  }
   const { db, question } = domainQuestion(kind);
+  for (const comment of [undefined, "", " \n "]) expect(() => answerQuestion(db, question, [answer], at, undefined, comment)).toThrow(DomainError);
   expect(answerQuestion(db, question, [answer], at, undefined, "why").question.status).toBe("done");
 });
 
