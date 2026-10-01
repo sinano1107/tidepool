@@ -315,7 +315,7 @@ it("invalidate_memory は cause の memory を理由コードに取らず tool e
   }
 });
 
-it("list_memory_entries は scope の名前 / null(盤面全体)/ 省略(すべて)を区別して渡して path も渡し、読み口6つは event id を載せる", async () => {
+it("list_memory_entries は scope の名前 / null(盤面全体)/ 省略(すべて)を区別して渡して path も渡し、読み口5つは event id を載せる", async () => {
   const { client, call, material } = await boardWithMetaReview();
   const now = t.clock.now();
   const human = { activity: "human" as const, name: "human" };
