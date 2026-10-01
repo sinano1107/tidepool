@@ -106,8 +106,13 @@ export const META_REVIEW_SUBJECTS = {
         "with list_routing_shadow, list_allocations and list_routing_cells (since_watermark). The allocation reviews are split by tier " +
         "source and agent (an overpowered verdict under an agent's default tier is not a registrant's declaration), and " +
         "judged_by_same_model counts those whose judge ran on the worker's own model. Record each judgment with log_decision. " +
-        "When the evidence says a row's tier or effort is wrong, propose replacing it with propose_routing_change. Base any " +
-        "case for promoting the learner on the outcomes of the diverged episodes. When overpowered verdicts pile up under an " +
+        "When the evidence says a row's tier or effort is wrong, propose replacing it with propose_routing_change. " +
+        "The learner leaves the table's first choice only when both that choice and the cell it moves to have observations, and " +
+        "each diverged row carries the track records of the recommended and the actual cell as of that pickup (accepted and rejected, " +
+        "board and workspace stage) and how many candidates the pickup had. While the learner is not promoted, a diverged row's outcome " +
+        "is the result of the setting the table chose, not of the one the learner recommended. Base any case for promoting the learner " +
+        "on whether the recommended cells' track records, counts included, justify leaving the table. Of the section's shadow rows, " +
+        "a pickup with one candidate always matches the table, so do not count it as evidence of agreement. When overpowered verdicts pile up under an " +
         "agent's own tier, propose lowering that agent's tier by exactly one step, never more. The section holds only the proposals " +
         "settled since the previous meta-review: before you propose a change to a row, the learner flag or an agent's tier, read the " +
         "earlier proposals on it, with their answers, amendments and comments, with read_routing_settings, so you do not re-propose " +

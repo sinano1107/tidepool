@@ -2145,6 +2145,7 @@ export function recordMetaReviewMaterial(
             subject: "routing",
             shadow: material.parts.shadow.map((row) => row.id),
             shadow_rows: material.parts.shadow_rows,
+            shadow_rows_multi_candidate: material.parts.shadow_rows_multi_candidate,
             allocations: material.parts.allocations.counted,
             cells: material.parts.cells.map((c) => c.first_observed_event_id),
             rows: material.parts.rows.map((r) => r.event_id),
