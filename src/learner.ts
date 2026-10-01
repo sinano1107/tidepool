@@ -83,19 +83,15 @@ const cellOf = (s: ExecutionSetting): Cell => ({
 
 /** episode 列 → セルの集計(純関数)。`excluded` は数えない。 */
 export function aggregateCells(episodes: readonly LearnerEpisode[]): CellStats[] {
-  const byKey = new Map<string, { cell: Cell; episodes: LearnerEpisode[] }>();
+  const byKey = new Map<string, CellStats>();
   for (const e of episodes) {
     if (e.outcome === "excluded") continue;
     const key = cellJson(e.cell);
-    const group = byKey.get(key) ?? { cell: e.cell, episodes: [] };
-    group.episodes.push(e);
-    byKey.set(key, group);
+    const stats = byKey.get(key) ?? { cell: e.cell, accepted: 0, rejected: 0 };
+    stats[e.outcome]++;
+    byKey.set(key, stats);
   }
-  return [...byKey.values()].map(({ cell, episodes: group }) => ({
-    cell,
-    accepted: group.filter((e) => e.outcome === "accepted").length,
-    rejected: group.filter((e) => e.outcome === "rejected").length,
-  }));
+  return [...byKey.values()];
 }
 
 /** セルが表の候補行に当たるか: model も advisor も完全一致(ADR 0182 決定3)—— 部分一致だと `claude-opus-5` の行が
