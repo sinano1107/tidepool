@@ -360,19 +360,19 @@ it.each([
   {
     reviewTier: "frontier",
     agentTier: "economy",
-    model: "fable",
+    model: "claude-fable-5-1",
     source: "review_tier",
   },
   {
     reviewTier: undefined,
     agentTier: "standard",
-    model: "opus",
+    model: "claude-opus-5-5",
     source: "agent",
   },
   {
     reviewTier: undefined,
     agentTier: undefined,
-    model: "sonnet",
+    model: "claude-sonnet-5-5",
     source: "board",
   },
 ])(

@@ -268,7 +268,7 @@ You are Tako.
   const events = (await api(baseUrl, "GET", `/api/tasks/${task.id}/events`)).json;
   // agent は economy を宣言しているが、task の要求が勝つ
   expect(events.find((e: any) => e.kind === "worker_spawned").payload).toMatchObject({
-    model: "fable",
+    model: "claude-fable-5-1",
     source: { tier: "task", provider: "only" },
   });
 });

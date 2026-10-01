@@ -47,7 +47,7 @@ test("表の行を消す・価格を直す・行を足すのが1回の保存で�
   await card.getByRole("button", { name: "Edit" }).click();
 
   await card.getByTestId("execution-row-moonshot:kimi-k3[1m]").getByRole("button", { name: "Remove" }).click();
-  await card.getByTestId("execution-row-anthropic:sonnet").getByLabel("Price out").fill("8");
+  await card.getByTestId("execution-row-anthropic:claude-sonnet-5-5").getByLabel("Price out").fill("8");
   await card.getByRole("button", { name: "Add row" }).click();
   const added = card.getByTestId("execution-row-new");
   await added.getByLabel("Provider").selectOption("openai");
@@ -62,7 +62,7 @@ test("表の行を消す・価格を直す・行を足すのが1回の保存で�
   await expect(card).not.toContainText("kimi-k3[1m]");
   const { table } = (await api(t.baseUrl, "GET", "/api/settings/execution")).json;
   expect(table.some((row: { provider: string }) => row.provider === "moonshot")).toBe(false);
-  expect(table.find((row: { model: string }) => row.model === "sonnet")).toMatchObject({ price_out: 8 });
+  expect(table.find((row: { model: string }) => row.model === "claude-sonnet-5-5")).toMatchObject({ price_out: 8 });
   expect(table.find((row: { model: string }) => row.model === "gpt-5.6-luna")).toEqual({
     provider: "openai",
     tier: "economy",
@@ -84,7 +84,7 @@ test("表の行ごとに Remove の aria-label が一意で、model が空の新
   await card.getByRole("button", { name: "Edit" }).click();
 
   // 種の表だけで既に複数行 — 行ごとに一意な名前で exact match が1件に絞れる
-  const removeSonnet = card.getByRole("button", { name: "remove anthropic economy sonnet", exact: true });
+  const removeSonnet = card.getByRole("button", { name: "remove anthropic economy claude-sonnet-5-5", exact: true });
   const removeKimi = card.getByRole("button", { name: "remove moonshot economy kimi-k3[1m]", exact: true });
   await expect(removeSonnet).toHaveCount(1);
   await expect(removeKimi).toHaveCount(1);

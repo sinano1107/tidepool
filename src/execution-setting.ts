@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { isClaudeModelAlias } from "./claude-model-alias.js";
 import type { Db } from "./db.js";
 import { appendEvent, type EventOrigin } from "./events.js";
 import { PROVIDER_VALUES, type Provider } from "./provider.js";
@@ -64,9 +65,9 @@ const BOARD_DEFAULT_RETROSPECTIVE_TIER: Tier = "frontier";
 
 /** 表の1行 = モデル分類の行(ADR 0114 決定2): この model はこの provider のこの
  *  ティアの品質を満たす、という分類と、そこで使う effort・価格(USD per MTok)。
- *  同じ (provider, tier) に複数行あってよい。「alias か具体 id か」の判別子は
- *  **持たない** —— どちらも CLI に渡す文字列であることに変わりはなく、区別が要る
- *  場面が盤面には無い。 */
+ *  同じ (provider, tier) に複数行あってよい。model は具体 id だけ —— 行を書く扉
+ *  (`applyExecutionSettingsChange`)が anthropic の adapter の拒否一覧で alias を
+ *  拒む(ADR 0182 決定1)。 */
 export interface ExecutionSettingRow {
   provider: Provider;
   tier: Tier;
@@ -89,19 +90,18 @@ export const MOONSHOT_DEFAULT_MODEL = "kimi-k3[1m]";
 /** 配布される種の表。`/implementation-delegation` §4 / §5 の表と**同じ内容・同じ
  *  鮮度管理**で、ズレたら片方を直す(ADR 0110 / spec #541)。
  *
- *  anthropic は alias 行 —— `sonnet` / `opus` / `fable` は CLI の更新で世代が
- *  前進するので手入れが要らない。openai は具体 id 行 —— 2026-09-10 の実測で
- *  Codex の `-m` は `Astra` / `Sol` / `Terra` / `Luna` を alias として受けず
- *  (ChatGPT account では API が 400 を返し `turn.failed` で終わる)、世代交代の
- *  たびに手入れが要る。moonshot は kimi-k3 を economy に1行 —— 分類は価格帯では
+ *  anthropic も openai も具体 id 行で、世代交代のたびに手入れが要る —— anthropic の
+ *  alias は扉が拒む(ADR 0182 決定1)。openai は 2026-09-10 の実測で Codex の `-m` が
+ *  `Astra` / `Sol` / `Terra` / `Luna` を alias として受けない(ChatGPT account では
+ *  API が 400 を返し `turn.failed` で終わる)。moonshot は kimi-k3 を economy に1行 —— 分類は価格帯では
  *  なく性能で行い(第三者の同一ハーネス測定はすべて Sonnet 5 / Terra の帯)、
  *  「moonshot に frontier 級は無い」は表の穴として正直に書く(ADR 0114 決定2)。
  *  effort が全行 `high` なのは、fallback の出所が adapter 定数から表へ移った結果
  *  として既定が `medium` から上がったということである。価格の根拠と出典は #556。 */
 export const SEED_EXECUTION_SETTINGS: ExecutionSettingTable = [
-  { provider: "anthropic", tier: "economy", model: "sonnet", effort: "high", price_in: 2, price_out: 10 },
-  { provider: "anthropic", tier: "standard", model: "opus", effort: "high", price_in: 5, price_out: 25 },
-  { provider: "anthropic", tier: "frontier", model: "fable", effort: "high", price_in: 10, price_out: 50 },
+  { provider: "anthropic", tier: "economy", model: "claude-sonnet-5-5", effort: "high", price_in: 2, price_out: 10 },
+  { provider: "anthropic", tier: "standard", model: "claude-opus-5-5", effort: "high", price_in: 5, price_out: 25 },
+  { provider: "anthropic", tier: "frontier", model: "claude-fable-5-1", effort: "high", price_in: 10, price_out: 50 },
   { provider: "moonshot", tier: "economy", model: MOONSHOT_DEFAULT_MODEL, effort: "high", price_in: 3, price_out: 15 },
   { provider: "openai", tier: "economy", model: "gpt-5.6-terra", effort: "high", price_in: 2, price_out: 12 },
   { provider: "openai", tier: "standard", model: "gpt-5.6-sol", effort: "high", price_in: 4, price_out: 20 },
@@ -132,9 +132,8 @@ export interface ExecutionSetting {
  *  provider 全体の窓は agent を丸ごと外すのではなくその entry を外す。 */
 export interface ExecutionExclusions {
   providers: readonly Provider[];
-  /** `model` は表が返す綴り。`"fable"` のような alias 行は、解決された model 名の
-   *  部分一致でも当たる(ADR 0030: CLI の `--model` は開かれた文字列で、世代が
-   *  進めば `claude-fable-5` のような具体 id になる)。 */
+  /** `model` は窓の綴り。Throttle の窓は系列単位の枠なので、`"fable"` の窓は
+   *  `claude-fable-5-1` の行に部分一致で当たる(ADR 0182 決定3)。 */
   models: readonly { provider: Provider; model: string }[];
 }
 
@@ -146,9 +145,9 @@ const NO_EXCLUSIONS: ExecutionExclusions = { providers: [], models: [] };
  *  filter が別々の式を持つと、保存された観測を読む表示と同じ poll で観測し直す
  *  ゲートが、全テスト緑のまま非 fable の model 名でズレる。
  *
- *  部分一致を持つのは ADR 0030 の線 —— CLI の `--model` は開かれた文字列で、
- *  表の `fable` のような alias 行は世代が進めば `claude-fable-5` のような具体 id
- *  として観測される。 */
+ *  部分一致を持つのは、Throttle の窓が系列単位の枠だから —— `fable` の窓は
+ *  `claude-fable-5-1` の行に当たる。学習器の行との照合は完全一致で、この式を
+ *  使わない(ADR 0182 決定3)。 */
 export function windowMatchesModel(windowModel: string, model: string): boolean {
   return windowModel === model || model.toLowerCase().includes(windowModel.toLowerCase());
 }
@@ -470,6 +469,9 @@ export function applyExecutionSettingsChange(db: Db, change: ExecutionSettingsCh
     switch (change.setting) {
       case "row": {
         const { provider, tier, model, effort, price_in, price_out } = change.row;
+        if (provider === "anthropic" && isClaudeModelAlias(model)) {
+          throw new DomainError(`"${model}" is a Claude CLI alias whose target moves with CLI updates; a table row takes a concrete model id (e.g. claude-opus-5-5) (ADR 0182)`);
+        }
         db.prepare(
           `INSERT INTO execution_settings (provider, tier, model, effort, price_in, price_out) VALUES (?, ?, ?, ?, ?, ?)
            ON CONFLICT(provider, model) DO UPDATE SET tier = excluded.tier, effort = excluded.effort,

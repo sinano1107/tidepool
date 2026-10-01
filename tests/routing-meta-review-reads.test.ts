@@ -19,7 +19,7 @@ const setting = (provider: ExecutionSetting["provider"], model: string): Executi
   advisor: undefined,
   source: { tier: "agent", provider: "rank" },
 });
-const opus = setting("anthropic", "opus");
+const opus = setting("anthropic", "claude-opus-5-5");
 const sol = setting("openai", "gpt-5.6-sol");
 
 function board() {
@@ -75,7 +75,7 @@ function board() {
   return { db, work, spawn, exit, allocate, routingReview };
 }
 
-const judge = { provider: "anthropic" as const, model: "fable", effort: "high" };
+const judge = { provider: "anthropic" as const, model: "claude-fable-5-1", effort: "high" };
 
 const none = { board: { accepted: 0, rejected: 0 }, workspace: { accepted: 0, rejected: 0 } };
 /** recordShadow へ渡す組(setup のみ): 実績は空、候補は2行。 */
@@ -135,8 +135,8 @@ it("shadow 行は書いた時点の両セルの受理数・却下数と除外後
   const opusRecord = { board: { accepted: 0, rejected: 2 }, workspace: { accepted: 0, rejected: 2 } };
   const solRecord = { board: { accepted: 0, rejected: 1 }, workspace: { accepted: 0, rejected: 1 } };
   const expected = [
-    { recommended: { model: "gpt-5.6-sol" }, actual: { model: "opus" }, recommended_record: solRecord, actual_record: opusRecord, candidates: 2 },
-    { recommended: { model: "opus" }, actual: { model: "gpt-5.6-sol" }, source: { provider: "learner" }, recommended_record: opusRecord, actual_record: solRecord, candidates: 2 },
+    { recommended: { model: "gpt-5.6-sol" }, actual: { model: "claude-opus-5-5" }, recommended_record: solRecord, actual_record: opusRecord, candidates: 2 },
+    { recommended: { model: "claude-opus-5-5" }, actual: { model: "gpt-5.6-sol" }, source: { provider: "learner" }, recommended_record: opusRecord, actual_record: solRecord, candidates: 2 },
   ];
   expect(listRoutingShadow(db, reader, { since_watermark: 0 }).shadow).toMatchObject(expected);
 
@@ -158,7 +158,7 @@ it("読み口の既定の窓は読み手より前の routing の登録の waterm
   const after = work("after");
   recordShadow(db, after.id, shadow(opus, opus, "prior"), at);
   const fresh = spawn(after.id, "deckhand", opus);
-  exit(after.id, fresh, ["claude-opus-4-1"]);
+  exit(after.id, fresh, ["claude-opus-5-5-20261001"]); // セルは使用量の内訳の鍵でなく pin の綴り(ADR 0182 決定3)
   allocate(after.id, fresh, { judge, allocation: "overpowered", cause: "uncertain", evidence: "e" });
   applyExecutionSettingsChange(db, { setting: "row", row: { provider: "anthropic", tier: "frontier", model: "claude-opus-4-1", effort: "max", price_in: 5, price_out: 25 } }, "mcp", at);
   applyExecutionSettingsChange(db, { setting: "priority", value: "cost" }, "webui", at);
@@ -168,7 +168,7 @@ it("読み口の既定の窓は読み手より前の routing の登録の waterm
   expect(listRoutingShadow(db, reader, {}).shadow.map((r) => r.task_id)).toEqual([after.id]);
   expect(listAllocations(db, reader, {}).allocations.map((a) => a.allocation)).toEqual(["overpowered"]);
   expect(listRoutingCells(db, reader, {})).toMatchObject({
-    cells: [{ cell: { provider: "anthropic", model: "claude-opus-4-1" } }],
+    cells: [{ cell: { provider: "anthropic", model: "claude-opus-5-5" } }],
     rows: [{ origin: "mcp", row: { model: "claude-opus-4-1", effort: "max" } }],
   });
   // since_watermark を渡せば前回より前も読める
@@ -176,12 +176,13 @@ it("読み口の既定の窓は読み手より前の routing の登録の waterm
 });
 
 it("list_allocations は評価された注釈を source.tier × agent × allocation × cause で数え、judge の model が worker のセルと同じ件数を添える", () => {
-  const { db, work, spawn, exit, allocate, routingReview } = board();
+  const { db, work, spawn, allocate, routingReview } = board();
   const task = work("t");
-  // 観測された具体 id(claude-fable-5)は表の alias 行(fable)の judge と同じ model
-  const selfJudged = spawn(task.id, "reef-crab", setting("anthropic", "fable"));
-  exit(task.id, selfJudged, ["claude-fable-5"]);
+  // judge と同じ綴りの pin だけが同じ model —— 照合は学習器のセルと同じ完全一致で、前方一致する綴りは数えない(ADR 0182 決定3)
+  const selfJudged = spawn(task.id, "reef-crab", setting("anthropic", "claude-fable-5-1"));
   allocate(task.id, selfJudged, { judge, allocation: "overpowered", cause: "uncertain", evidence: "e" });
+  const longContext = spawn(task.id, "reef-crab", setting("anthropic", "claude-fable-5-1[1m]"));
+  allocate(task.id, longContext, { judge, allocation: "overpowered", cause: "uncertain", evidence: "e" });
   const other = spawn(task.id, "reef-crab", opus);
   allocate(task.id, other, { judge, allocation: "overpowered", cause: "uncertain", evidence: "e" });
   const declared = spawn(task.id, "reef-crab", opus, "task");
@@ -191,7 +192,7 @@ it("list_allocations は評価された注釈を source.tier × agent × allocat
 
   expect(listAllocations(db, routingReview(), {})).toEqual({
     allocations: [
-      { source_tier: "agent", agent: "reef-crab", allocation: "overpowered", cause: "uncertain", count: 2, judged_by_same_model: 1 },
+      { source_tier: "agent", agent: "reef-crab", allocation: "overpowered", cause: "uncertain", count: 3, judged_by_same_model: 1 },
       { source_tier: "task", agent: "reef-crab", allocation: "overpowered", cause: "uncertain", count: 1, judged_by_same_model: 0 },
       { source_tier: "agent", agent: "deckhand", allocation: "appropriate", cause: "uncertain", count: 1, judged_by_same_model: 0 },
     ],
@@ -202,9 +203,9 @@ it("list_allocations は評価された注釈を source.tier × agent × allocat
 it("list_routing_cells の新セルは終わった session で初めて観測されたセルで、窓より前に観測済みのセルは再び走っても出ない", () => {
   const { db, work, spawn, exit, routingReview } = board();
   const task = work("t");
-  exit(task.id, spawn(task.id, "deckhand", opus), ["claude-opus-4-1"]);
+  exit(task.id, spawn(task.id, "deckhand", opus), ["claude-opus-5-5"]);
   routingReview();
-  exit(task.id, spawn(task.id, "deckhand", opus), ["claude-opus-4-1"]); // 既知
+  exit(task.id, spawn(task.id, "deckhand", opus), ["claude-opus-5-5"]); // 既知
   spawn(task.id, "deckhand", sol); // 終わっていない session は観測ではない
   const seen = exit(task.id, spawn(task.id, "deckhand", setting("moonshot", "kimi-k3")), []);
 

@@ -23,7 +23,7 @@ it("実行設定の表は種の7行から DB へ初期化される —— 価格
     ),
   );
   expect(db.prepare("SELECT tier FROM execution_settings WHERE provider = 'moonshot'").all()).toEqual([{ tier: "economy" }]);
-  expect(resolveExecutionSetting(db, deckhand, undefined)).toMatchObject({ model: "sonnet", effort: "high" });
+  expect(resolveExecutionSetting(db, deckhand, undefined)).toMatchObject({ model: "claude-sonnet-5-5", effort: "high" });
   db.close();
 });
 
@@ -85,8 +85,8 @@ it("「上位ティアの行を advisor に使える」フラグの既定は fal
   const path = await boardPath("frontier-advisor-default");
   const db = openDb(path);
   const withAdvisor = { provider: [{ name: "anthropic", advisor: true }], tier: "economy" };
-  expect(resolveExecutionSetting(db, withAdvisor, undefined)?.advisor).toBe("sonnet");
+  expect(resolveExecutionSetting(db, withAdvisor, undefined)?.advisor).toBe("claude-sonnet-5-5");
   db.prepare("INSERT INTO execution_defaults (id, frontier_advisor) VALUES (1, 1)").run();
-  expect(resolveExecutionSetting(db, withAdvisor, undefined)?.advisor).toBe("fable");
+  expect(resolveExecutionSetting(db, withAdvisor, undefined)?.advisor).toBe("claude-fable-5-1");
   db.close();
 });

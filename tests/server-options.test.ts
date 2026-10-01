@@ -490,7 +490,7 @@ it("registry があるとき、各口には対応する解決子が刺さって�
   // ADR 0110 決定3: model は agent の宣言ではなく盤面の表から来る —— fixture の
   // agent は tier を書いていないので盤面既定の行になる。
   expect(options.taskExecutionCandidates({ assignee: "deckhand" } as any)).toMatchObject([
-    { provider: "anthropic", model: "sonnet" },
+    { provider: "anthropic", model: "claude-sonnet-5-5" },
   ]);
   expect(callers?.openaiUsage).toBeTypeOf("function");
   expect(options.agentAdmin?.authorityProfiles?.()).toEqual(["standard"]);

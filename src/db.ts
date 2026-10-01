@@ -243,8 +243,8 @@ export function openDb(path: string): Db {
     -- 同じ provider × ティアに複数行を許す。配布物の種(execution-setting.ts の
     -- SEED_EXECUTION_SETTINGS)から**一度だけ**初期化し、以後は DB が正本で、
     -- 消した行も再オープンで戻らない(settings タブと管理MCP が編集する、#545)。
-    -- model が alias(anthropic)か具体 id(openai)か
-    -- の判別子は持たない —— どちらも CLI に渡す文字列である。
+    -- model は具体 id だけ —— alias は行を書く扉が anthropic の adapter の拒否一覧で
+    -- 拒む(ADR 0182 決定1)。
     CREATE TABLE IF NOT EXISTS execution_settings (
       provider  TEXT NOT NULL CHECK (provider IN ('anthropic', 'moonshot', 'openai')),
       model     TEXT NOT NULL,

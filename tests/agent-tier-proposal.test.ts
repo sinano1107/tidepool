@@ -253,7 +253,7 @@ it("根拠の行の編集は tier の提案を観測で決着させ、無関係�
   const { client, call } = await boardWithRoutingReview();
   try {
     const questionId = await proposeDeckhand(call);
-    const opus = { provider: "anthropic", tier: "standard", model: "opus", effort: "max", price_in: 5, price_out: 25 };
+    const opus = { provider: "anthropic", tier: "standard", model: "claude-opus-5-5", effort: "max", price_in: 5, price_out: 25 };
     expect((await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "row", row: opus })).status).toBe(200);
     expect(await task(questionId)).toMatchObject({ status: "todo" });
 

@@ -2,13 +2,14 @@ import type { Allocation } from "./allocation-review.js";
 import type { Cause } from "./cause.js";
 import type { Db } from "./db.js";
 import { type EventPayload, type EventRow, listEventsOfKinds, objectionBundles } from "./events.js";
-import { type ExecutionSetting, type Priority, windowMatchesModel } from "./execution-setting.js";
+import type { ExecutionSetting, Priority } from "./execution-setting.js";
 import { sessionWindow } from "./precedent.js";
 import type { Provider } from "./registry.js";
 import { acceptedSql, type Task } from "./tasks.js";
 
-/** 学習器のセル(CONTEXT.md「学習器」/ ADR 0110 決定4): 観測された具体の
- *  (provider, model id, effort, advisor model)。advisor は spawn 時の **pin**
+/** 学習器のセル(CONTEXT.md「学習器」/ ADR 0110 決定4): spawn 時の pin の綴りの
+ *  (provider, model id, effort, advisor model)—— 表の行は具体 id だけなので、pin が世代を
+ *  名指す(ADR 0182 決定3)。advisor も spawn 時の **pin**
  *  であって相談回数ではない —— 「pin あり・相談0回」を advisor 無しのセルに
  *  合流させると両セルの受理率が歪む(ADR 0110 退けた案)。 */
 export interface Cell {
@@ -103,16 +104,14 @@ export function aggregateCells(episodes: readonly LearnerEpisode[]): CellStats[]
   }));
 }
 
-/** セルが表の候補行に当たるか。model は alias 行の部分一致(`windowMatchesModel`、
- *  ADR 0030 の線)、advisor は pin どうしの同じ照合。 */
+/** セルが表の候補行に当たるか: model も advisor も完全一致(ADR 0182 決定3)—— 部分一致だと `claude-opus-5` の行が
+ *  `claude-opus-5-5` の実績を拾う。Throttle の窓の部分一致(`windowMatchesModel`)とは別の式。 */
 function cellMatches(candidate: ExecutionSetting, cell: Cell): boolean {
   return (
     cell.provider === candidate.provider &&
     cell.effort === candidate.effort &&
-    windowMatchesModel(candidate.model, cell.model) &&
-    (candidate.advisor === undefined
-      ? cell.advisor === null
-      : cell.advisor !== null && windowMatchesModel(candidate.advisor, cell.advisor))
+    cell.model === candidate.model &&
+    cell.advisor === (candidate.advisor ?? null)
   );
 }
 
@@ -136,10 +135,12 @@ const trackRecord = (candidate: ExecutionSetting, board: readonly CellStats[], w
 /** 推薦(純関数): 候補行ごとの事後分布(Beta-Bernoulli)を並べる。事前分布は表の行 = 受理1件分の疑似観測(固定慣習、
  *  設定に出さない)。盤面全体の事後分布が workspace の事前分布なので、この workspace の episode は盤面の段と workspace の段で
  *  2度数えられる —— それが「自分の workspace の観測を他所より重く見る」機構そのものである。
- *  学習器は未観測の候補へ移らない(ADR 0181 決定1・2): 先頭(selector の並びの1番目)が未観測ならそれが推薦、先頭に観測が
- *  あれば観測のある候補の中で事後平均の1番目。同点は selector の並びのまま。乱数は持たない(Thompson sampling をしないので
- *  seed も無い)。`priority` が cost のときだけ、同点の間で観測された費用の平均が鍵になる —— 両方に観測があるときに限る
- *  (quality では Provider 順位が selector の並びに既に入っている)。 */
+ *  学習器は未観測の候補へ移らない(ADR 0181 決定1・2): 先頭(selector の並びの1番目)が未観測ならそれが推薦。先頭に観測が
+ *  あれば、観測のある候補が先頭に勝つかを1つずつ比べる —— 先頭の観測数が候補より少ないあいだは却下数(先頭の却下が多いときだけ
+ *  勝つ —— 先頭が残りを全部受理しても追いつけない、ADR 0182 決定4)、それ以外は事後平均の並べ方で先頭より前に来るとき。
+ *  勝つ候補が無ければ先頭、あればその中で並べ方の1番目。並べ方は事後平均 → `priority` が cost のときだけ観測された費用の
+ *  平均(両方に観測があるときに限る。quality では Provider 順位が selector の並びに既に入っている)→ selector の並び。
+ *  乱数は持たない(Thompson sampling をしないので seed も無い)。 */
 export function recommend(input: {
   candidates: readonly ExecutionSetting[];
   board: readonly CellStats[];
@@ -149,34 +150,30 @@ export function recommend(input: {
   const scored = input.candidates.map((candidate, order) => {
     const { board, workspace } = trackRecord(candidate, input.board, input.workspace);
     const accepted = board.accepted + workspace.accepted;
-    const observed = accepted + board.rejected + workspace.rejected;
+    const rejected = board.rejected + workspace.rejected;
+    const observed = accepted + rejected;
     const costs = [...input.board, ...input.workspace].filter((s) => cellMatches(candidate, s.cell)).flatMap((s) => (s.cost_usd_mean === null ? [] : [s.cost_usd_mean]));
-    return { candidate, order, observed, accepted: 1 + accepted, total: 1 + observed, cost: mean(costs) };
+    return { candidate, order, observed, rejected, accepted: 1 + accepted, total: 1 + observed, cost: mean(costs) };
   });
-  // 候補が空なら来ない —— 全 entry 除外は selector が先に skipped にしている
-  const head = scored[0]!;
-  const pool = head.observed > 0 ? scored.filter((s) => s.observed > 0) : [head];
+  type Scored = (typeof scored)[number];
   // 事後平均の比較は整数の交差乗算 —— 浮動小数の「同点」で決定論が崩れない
-  const ranked = pool.sort((a, b) => {
+  const byOrdering = (a: Scored, b: Scored) => {
     const byMean = b.accepted * a.total - a.accepted * b.total;
     if (byMean !== 0) return byMean;
     if (input.priority === "cost" && a.cost !== null && b.cost !== null && a.cost !== b.cost) {
       return a.cost - b.cost;
     }
     return a.order - b.order;
-  });
+  };
+  // 候補が空なら来ない —— 全 entry 除外は selector が先に skipped にしている
+  const [head, ...rest] = scored as [Scored, ...Scored[]];
+  const beatsHead = (c: Scored) =>
+    c.observed > 0 && (head.observed < c.observed ? head.rejected > c.rejected : byOrdering(c, head) < 0);
+  const winners = head.observed > 0 ? rest.filter(beatsHead).sort(byOrdering) : [];
   return {
-    recommended: ranked[0]!.candidate,
+    recommended: (winners[0] ?? head).candidate,
     basis: scored.some((s) => s.observed > 0) ? "data" : "prior",
   };
-}
-
-/** 観測された具体 id: `worker_exited.usage.models` の鍵のうち pin に当たるものが
- *  **ちょうど1つ**ならそれ、そうでなければ pin の綴りのまま。内訳から advisor を
- *  推定しない(events.ts の `models` の注記)ので、advisor は常に pin である。 */
-function observedModel(pin: string, models: Record<string, unknown> | undefined): string {
-  const hits = Object.keys(models ?? {}).filter((id) => windowMatchesModel(pin, id));
-  return hits.length === 1 ? hits[0]! : pin;
 }
 
 type Spawned = EventRow & { payload: Extract<EventPayload, { kind: "worker_spawned" }> };
@@ -232,7 +229,7 @@ export function loadEpisodes(db: Db): RoutingEpisode[] {
       source: spawned.payload.source,
       cell: {
         provider: spawned.payload.provider,
-        model: observedModel(spawned.payload.model, usage?.models),
+        model: spawned.payload.model,
         effort: spawned.payload.effort,
         advisor: spawned.payload.advisor,
       },

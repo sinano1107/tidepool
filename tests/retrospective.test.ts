@@ -229,7 +229,7 @@ it("Board call は異議されたエントリ本文・steering 列・当時の d
         memory_read: [],
       },
       // the board's own frontier row (seed) pins the judge, never the worker's model
-      setting: expect.objectContaining({ model: "fable", effort: "high" }),
+      setting: expect.objectContaining({ model: "claude-fable-5-1", effort: "high" }),
     },
   ]);
 });
@@ -443,7 +443,7 @@ it.each([
           memory_read: [],
           index: expect.stringContaining("testing/ — how tests are run"),
         },
-        setting: expect.objectContaining({ model: "fable", effort: "high" }),
+        setting: expect.objectContaining({ model: "claude-fable-5-1", effort: "high" }),
       },
     ]);
   },
@@ -473,10 +473,10 @@ it("盤面設定 retrospective_tier を standard にすると、帰責の判定�
   await commit(t, s.task.id, "tiered-draft");
 
   expect(s.attributionClient.calls).toEqual([
-    expect.objectContaining({ setting: expect.objectContaining({ model: "opus", effort: "high" }) }),
+    expect.objectContaining({ setting: expect.objectContaining({ model: "claude-opus-5-5", effort: "high" }) }),
   ]);
   expect(s.behaviorDraftClient.calls).toEqual([
-    expect.objectContaining({ setting: expect.objectContaining({ model: "opus", effort: "high" }) }),
+    expect.objectContaining({ setting: expect.objectContaining({ model: "claude-opus-5-5", effort: "high" }) }),
   ]);
 });
 
@@ -486,7 +486,7 @@ it("選んだティアの anthropic 行が無ければ、帰責も起草も clie
   const s = await objectedForDraft("tiered-draft-fail", { initial: { cause: "preference", evidence: "taste" } });
   t = s.t;
   expect((await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "retrospective_tier", value: "standard" })).status).toBe(200);
-  expect((await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "delete_row", provider: "anthropic", model: "opus" })).status).toBe(200);
+  expect((await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "delete_row", provider: "anthropic", model: "claude-opus-5-5" })).status).toBe(200);
 
   const { res } = await commit(t, s.task.id, "tiered-draft-fail");
 

@@ -1635,7 +1635,14 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       res.status(400).json({ error: z.treeifyError(parsed.error) });
       return;
     }
-    applyExecutionSettingsChange(db, parsed.data, "webui", clock.now());
+    try {
+      applyExecutionSettingsChange(db, parsed.data, "webui", clock.now());
+    } catch (err) {
+      // alias の行(ADR 0182)
+      if (!(err instanceof DomainError)) throw err;
+      res.status(400).json({ error: err.message });
+      return;
+    }
     pollNow();
     res.json(readExecutionSettings(db));
   });
