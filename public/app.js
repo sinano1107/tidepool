@@ -178,7 +178,7 @@ function TpWaterline({ progress }) {
 function TpSegmentGauge({ total, filled }) {
   return /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 5 } }, Array.from({ length: total }).map((_, i) => /* @__PURE__ */ React.createElement("div", { key: i, style: { flex: 1, height: 6, borderRadius: 999, background: i < filled ? "var(--tide-4)" : "var(--tide-2)", transition: "background var(--duration-calm) var(--ease-tidal)" } })));
 }
-function TpQuestionItemPicker({ item, value, locked, onChange, translated, disabled = [] }) {
+function TpQuestionItemPicker({ item, value, locked, freeText, onChange, translated, disabled = [] }) {
   const { Input, Button } = window.TidepoolDesignSystem_8a0ead;
   const [override, setOverride] = React.useState(false);
   const [overrideText, setOverrideText] = React.useState("");
@@ -214,7 +214,7 @@ function TpQuestionItemPicker({ item, value, locked, onChange, translated, disab
       /* @__PURE__ */ React.createElement("span", { style: { flex: 1 } }, o.label),
       o.recommended && /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: picked ? "var(--tide-2)" : "var(--tide-4)" } }, "recommended")
     );
-  }), locked && value && !item.options.some((o) => o.label === value) && /* @__PURE__ */ React.createElement("div", { style: { fontSize: "var(--text-sm)", color: "#fff", background: "var(--tide-4)", borderRadius: "var(--radius-full)", padding: "11px 18px", boxShadow: "var(--shadow-primary)" } }, value), locked ? null : override ? /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 6, alignItems: "flex-end" } }, /* @__PURE__ */ React.createElement(Input, { multiline: true, rows: 2, placeholder: "override answer \u2014 free text", value: overrideText, onChange: (e) => setOverrideText(e.target.value), style: { flex: 1 } }), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", disabled: !overrideText.trim(), onClick: () => {
+  }), locked && value && !item.options.some((o) => o.label === value) && /* @__PURE__ */ React.createElement("div", { style: { fontSize: "var(--text-sm)", color: "#fff", background: "var(--tide-4)", borderRadius: "var(--radius-full)", padding: "11px 18px", boxShadow: "var(--shadow-primary)" } }, value), locked || !freeText ? null : override ? /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 6, alignItems: "flex-end" } }, /* @__PURE__ */ React.createElement(Input, { multiline: true, rows: 2, placeholder: "override answer \u2014 free text", value: overrideText, onChange: (e) => setOverrideText(e.target.value), style: { flex: 1 } }), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", disabled: !overrideText.trim(), onClick: () => {
     onChange(overrideText.trim());
     setOverride(false);
     setOverrideText("");
@@ -404,6 +404,7 @@ function TpQuestionCard({ q, answer, onAnswer, locked = false, onTranslate, onOp
       item,
       value: draft[i],
       locked,
+      freeText: q.freeText ?? true,
       onChange: (v) => setItemAnswer(i, v),
       translated: translatedItems ? translatedItems[i] : null,
       disabled: disabledOptions
@@ -3295,6 +3296,8 @@ function toQuestionCardShape(q, icons) {
     ...candidateId !== void 0 && { amendable: "memory", candidateId: moved.find((m) => m.id === candidateId)?.tail_id ?? candidateId },
     // 理由必須の選択肢は盤面の `needs_comment` 注釈が答える(ADR 0179 決定4)
     needsComment: q.needs_comment ?? [],
+    // 自由記述を受けるかも盤面の `free_text` 注釈が答える(issue #1309)
+    freeText: q.free_text ?? true,
     // 行の Quarantine の修復は表の修正が先頭(ADR 0184 決定6)
     ...q.question_quarantine_kind === "tableRow" && { opensSettings: true },
     ...q.approval && {

@@ -18,15 +18,15 @@ import {
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 
 // 管理MCP の各口は、対応する HTTP の口と同じ注釈を持つ(issue #1179): `list_board` は
-// `GET /api/tasks` の5つ(landing・approval・moved・blocking・needs_comment)、`get_task` は
-// `GET /api/tasks/:id` の4つ(landing を除く)。注釈の値そのものは HTTP 側のテスト
-// (#757・ADR 0162 決定6・ADR 0092 決定4・ADR 0179 決定4)が言うので、ここは HTTP の同じ行との一致だけを言う。
+// `GET /api/tasks` の6つ(landing・approval・moved・blocking・needs_comment・free_text)、`get_task` は
+// `GET /api/tasks/:id` の5つ(landing を除く)。注釈の値そのものは HTTP 側のテスト
+// (#757・ADR 0162 決定6・ADR 0092 決定4・ADR 0179 決定4・#1309)が言うので、ここは HTTP の同じ行との一致だけを言う。
 // 各テストの値の assert は、fixture が狙ったケース(承認・移動・着地・通常)になっていることの確認である。
 
 let t: Tidepool;
 afterEach(() => t?.stop());
 
-const ANNOTATIONS = ["landing", "approval", "moved", "blocking", "needs_comment"] as const;
+const ANNOTATIONS = ["landing", "approval", "moved", "blocking", "needs_comment", "free_text"] as const;
 
 /** 同じ task を HTTP の一覧・単体ビューと管理MCP の list_board・get_task から読む。
  *  MCP の読取は DB を変えない — 共有 connection を read-only にしてから読む。 */
@@ -47,7 +47,7 @@ async function readFourWays(t: Tidepool, taskId: string) {
   }
 }
 
-/** 一覧の口どうしは5つ、単体の口どうしは4つの注釈が同じ値で、単体の口は landing を持たない。 */
+/** 一覧の口どうしは6つ、単体の口どうしは5つの注釈が同じ値で、単体の口は landing を持たない。 */
 function expectSameAnnotations(read: Awaited<ReturnType<typeof readFourWays>>) {
   for (const key of ANNOTATIONS) {
     expect(read.mcpRow).toHaveProperty(key);
@@ -160,7 +160,7 @@ it("通常の escalate question は list_board と get_task で approval: null�
   for (const view of [read.mcpRow, read.mcpSingle]) expect(view).toMatchObject({ approval: null, moved: [] });
 });
 
-it("question でないタスクは list_board にも get_task にも5つの注釈のキーを持たない", async () => {
+it("question でないタスクは list_board にも get_task にも6つの注釈のキーを持たない", async () => {
   t = await bootTidepool();
   const task = await registerWork(t, "plain work");
 

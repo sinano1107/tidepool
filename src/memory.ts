@@ -8,7 +8,7 @@ import { appendEvent, type EventOrigin, type EventPayload, type EventRow, getEve
 import { inWindow, type MetaReviewWindow, materialEvents, materialSection, metaReviewSubjectOf, metaReviewWindow, paged, previousMetaReviewWatermark } from "./meta-review.js";
 import { entriesReadBefore, entriesSeenBefore, listEpisodes, sessionSpawnOf, sessionWindow } from "./precedent.js";
 import { routingMaterial } from "./routing-review.js";
-import { approvalAnnotation, BOARD_WORKER_ID, DomainError, getTask, HUMAN_WORKER_ID, type MemoryProposal, needsComment, type QuestionProposal, questionBlocking, registerTask, settleQuestionAsObserved, type Task } from "./tasks.js";
+import { approvalAnnotation, BOARD_WORKER_ID, DomainError, getTask, HUMAN_WORKER_ID, isFixedChoiceQuestion, type MemoryProposal, needsComment, type QuestionProposal, questionBlocking, registerTask, settleQuestionAsObserved, type Task } from "./tasks.js";
 import { entryObjections, objectedEntryText, objectionsById } from "./triage.js";
 
 /** 無効化の理由コード(spec #586 A)。自由記述は持たない。置換と path の付け替えは後継 id
@@ -933,14 +933,15 @@ export function movedPins(db: Db, proposal: QuestionProposal | null): Array<{ id
   });
 }
 
-/** question 行が読むときに運ぶ注釈のうち、一覧と単体ビューの両方の口が足す4つ(issue #1179・ADR 0179 決定4)。HTTP の `GET /api/tasks`・
+/** question 行が読むときに運ぶ注釈のうち、一覧と単体ビューの両方の口が足す5つ(issue #1179・ADR 0179 決定4・issue #1309)。HTTP の `GET /api/tasks`・
  *  `GET /api/tasks/:id` と管理MCP の `list_board`・`get_task` がここを呼ぶ。`landing` は HTTP の2つと `list_board` が別に足す。 */
-export function questionAnnotations(db: Db, task: Pick<Task, "id" | "parent_id" | "question_pending_child" | "question_proposal">) {
+export function questionAnnotations(db: Db, task: Pick<Task, "id" | "parent_id"> & Parameters<typeof isFixedChoiceQuestion>[0]) {
   return {
     approval: approvalAnnotation(db, task),
     moved: movedPins(db, task.question_proposal),
     blocking: questionBlocking(db, task.id),
     needs_comment: needsComment(task),
+    free_text: !isFixedChoiceQuestion(task),
   };
 }
 

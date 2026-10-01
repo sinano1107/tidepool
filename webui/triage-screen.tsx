@@ -31,6 +31,8 @@ interface TpQuestion {
   candidateId?: number;
   /** comment が要る選択肢 —— 盤面の `needs_comment` 注釈(ADR 0179 決定4)。 */
   needsComment?: string[];
+  /** 自由記述の override を受けるか —— 盤面の `free_text` 注釈(issue #1309)。固定選択肢の question は false。 */
+  freeText?: boolean;
   /** 行の Quarantine の question(ADR 0184 決定6)—— settings タブを開くボタンを持つ。 */
   opensSettings?: boolean;
 }
@@ -104,13 +106,15 @@ function TpSegmentGauge({ total, filled }: { total: number; filled: number }) {
 // line under each original — the options below never take a translated
 // variant (CONTEXT.md's scope exclusion: a mistranslated option is a
 // 30-second decision an agent reads back).
-function TpQuestionItemPicker({ item, value, locked, onChange, translated, disabled = [] }: {
+function TpQuestionItemPicker({ item, value, locked, freeText, onChange, translated, disabled = [] }: {
   item: TpQuestionItem;
   /** 今は選べない選択肢(宛先が死んでいる memory 提案の approve)。 */
   disabled?: string[];
   /** 未選択は null / undefined のどちらでも来る(呼び手は配列の添字)。 */
   value?: string | null;
   locked: boolean;
+  /** false なら override のリンクも入力欄も出さない(issue #1309)。 */
+  freeText: boolean;
   onChange: (value: string | null) => void;
   translated?: { title: string; detail?: string } | null;
 }) {
@@ -150,7 +154,7 @@ function TpQuestionItemPicker({ item, value, locked, onChange, translated, disab
         {locked && value && !item.options.some((o) => o.label === value) && (
           <div style={{ fontSize: 'var(--text-sm)', color: '#fff', background: 'var(--tide-4)', borderRadius: 'var(--radius-full)', padding: '11px 18px', boxShadow: 'var(--shadow-primary)' }}>{value}</div>
         )}
-        {locked ? null : override
+        {locked || !freeText ? null : override
           ? <div style={{ display: 'flex', gap: 6, alignItems: 'flex-end' }}>
               <Input multiline rows={2} placeholder="override answer — free text" value={overrideText} onChange={(e) => setOverrideText(e.target.value)} style={{ flex: 1 }} />
               <Button variant="secondary" size="sm" disabled={!overrideText.trim()} onClick={() => { onChange(overrideText.trim()); setOverride(false); setOverrideText(''); }}>Set</Button>
@@ -448,7 +452,7 @@ function TpQuestionCard({ q, answer, onAnswer, locked = false, onTranslate, onOp
       )}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
         {items.map((item, i) => (
-          <TpQuestionItemPicker key={i} item={item} value={draft[i]} locked={locked} onChange={(v) => setItemAnswer(i, v)}
+          <TpQuestionItemPicker key={i} item={item} value={draft[i]} locked={locked} freeText={q.freeText ?? true} onChange={(v) => setItemAnswer(i, v)}
             translated={translatedItems ? translatedItems[i] : null}
             disabled={disabledOptions} />
         ))}
