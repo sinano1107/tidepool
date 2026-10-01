@@ -198,13 +198,11 @@ export const QUARANTINES = [
       return {
         title: `execution-setting row ${row} cannot run on this board`,
         purpose:
-          `${reason}. ${why} This row is out of ` +
-          "pickup and of advisor derivation while this stands; other rows keep running.\n\n" +
-          "Repair one of two ways:\n\n" +
+          `${reason}. ${why} This row is out of pickup and of advisor derivation while this stands; ` +
+          "other rows keep running.\n\nRepair one of two ways:\n\n" +
           "1. Fix the table: in the settings tab, change this row's model or delete the row. " +
           "This question then closes on its own.\n" +
-          `2. ${keepRow} — the ` +
-          "board checks this model id again before it accepts the answer.",
+          `2. ${keepRow} — the board checks this model id again before it accepts the answer.`,
         completion_criteria: `${row} can run on this board again`,
         question: [
           {

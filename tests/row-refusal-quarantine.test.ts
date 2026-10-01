@@ -79,7 +79,8 @@ async function bootClaude(options: { provider?: Provider; modelProbes?: Partial<
   return proc;
 }
 
-it("404 で終わった session は行の Quarantine を1枚立て、failure question も cap_interrupted も無く先頭へ戻り、次の pickup は同じティアの別の行で走る", async () => {
+/** economy ティアに2行ある盤面で、先頭の行(種の claude-sonnet-5-5)の session が `resultLine` で終わる。 */
+async function refuseFirstOfTwoRows(resultLine: string) {
   const proc = await bootClaude();
   // 同じ economy ティアに2行目(高いので先頭は種の claude-sonnet-5-5)
   applyExecutionSettingsChange(
@@ -94,9 +95,14 @@ it("404 で終わった session は行の Quarantine を1枚立て、failure que
   const other = queueWork(t, "queued after");
   await api(t.baseUrl, "POST", `/api/tasks/${other.id}/move`, { after: null });
 
-  proc.processes[0]!.stdout.write(REFUSED_404);
+  proc.processes[0]!.stdout.write(resultLine);
   proc.emitExit(1, null);
   await settle();
+  return refused;
+}
+
+it("404 で終わった session は行の Quarantine を1枚立て、failure question も cap_interrupted も無く先頭へ戻り、次の pickup は同じティアの別の行で走る", async () => {
+  const refused = await refuseFirstOfTwoRows(REFUSED_404);
 
   const [question, ...more] = await questions(t);
   expect(more).toEqual([]);
@@ -128,21 +134,7 @@ it("404 で終わった session は行の Quarantine を1枚立て、failure que
 });
 
 it("CLI の版の古さで終わった session も行の Quarantine を1枚立てて先頭へ戻り、question は原因を名指して tidepool の更新を2番目に促す(ADR 0187)", async () => {
-  const proc = await bootClaude();
-  applyExecutionSettingsChange(
-    t.db,
-    { setting: "row", row: { provider: "anthropic", tier: "economy", model: "claude-sonnet-5", effort: "high", price_in: 3, price_out: 15 } },
-    "webui",
-    t.clock.now(),
-  );
-  const refused = queueWork(t, "refused task");
-  await t.clock.advance(HOUR);
-  const other = queueWork(t, "queued after");
-  await api(t.baseUrl, "POST", `/api/tasks/${other.id}/move`, { after: null });
-
-  proc.processes[0]!.stdout.write(VERSION_TOO_OLD);
-  proc.emitExit(1, null);
-  await settle();
+  const refused = await refuseFirstOfTwoRows(VERSION_TOO_OLD);
 
   const [question, ...more] = await questions(t);
   expect(more).toEqual([]);
