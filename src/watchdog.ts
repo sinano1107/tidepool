@@ -2,6 +2,7 @@ import type { Clock } from "./clock.js";
 import { quarantineContainment } from "./containment.js";
 import type { Db } from "./db.js";
 import { appendEvent, getEvent, latestEventOfTask, type RowRefusal } from "./events.js";
+import { loadExecutionSettingTable } from "./execution-setting.js";
 import type { GitHubAuth } from "./github-auth.js";
 import type { Landing } from "./landing.js";
 import type { ProcessContainers } from "./process-container.js";
@@ -147,7 +148,7 @@ export function capInterruptionHandler(deps: TeardownDeps): (taskId: string, rec
 
 /** 行の拒否(CONTEXT.md / ADR 0184 決定4)の盤面側の一撃。上限到達による中断と同じく失敗では
  *  なく failure question を立てないが、**記録と status の決着を後始末より前に**置く: 行の
- *  Quarantine・`row_refused`・`todo` 先頭への復帰を1 transaction で済ませてから後始末に入るので、
+ *  Quarantine(行が表に残っているときだけ)・`row_refused`・`todo` 先頭への復帰を1 transaction で済ませてから後始末に入るので、
  *  後始末中の status は `todo` で、経路は解放の step に読まれる(ADR 0113 決定3)—— `in_progress` の
  *  まま入れば中断と読まれ `cap_interrupted` が書かれる。slot の解放は回収済み観測の後ろ。 */
 export function rowRefusalHandler(
@@ -159,13 +160,16 @@ export function rowRefusalHandler(
     if (task?.status !== "in_progress") return;
     const now = deps.clock.now();
     deps.db.transaction(() => {
-      registerQuarantine(
-        deps.db,
-        "tableRow",
-        tableRowValue(refusal.provider, refusal.model),
-        `The worker session for task ${taskId} ended with API error 404 for this model id`,
-        now,
-      );
+      // 走っている間に表から消えた行には立てない —— 解除の門1の前提「開いている行の Quarantine は表にある行に限る」(ADR 0184 決定5)
+      if (loadExecutionSettingTable(deps.db).some((row) => row.provider === refusal.provider && row.model === refusal.model)) {
+        registerQuarantine(
+          deps.db,
+          "tableRow",
+          tableRowValue(refusal.provider, refusal.model),
+          `The worker session for task ${taskId} ended with API error 404 for this model id`,
+          now,
+        );
+      }
       returnToQueueHead(deps.db, task, { kind: "row_refused", ...refusal }, now);
       // 同じ transaction に置く —— 間で落ちると後始末の印の無い todo が残り、起動時の復旧が後始末を走らせない
       markTeardown(deps.db, taskId, now);
