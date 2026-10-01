@@ -2551,11 +2551,24 @@ describe("ClaudeCodeWorker", () => {
     ).toBe("first failure\nsecond failure");
   });
 
+  it("result が空文字なら errors を載せる(ADR 0188)", async () => {
+    expect(
+      await reportedErrorAfter([{ type: "result", subtype: "error_during_execution", is_error: true, result: "", errors: ["failed"] }]),
+    ).toBe("failed");
+  });
+
   it("is_error でない result 行・result も errors も無い is_error 行・result 行の無い exit は reported_error null(ADR 0188)", async () => {
     expect(await reportedErrorAfter([{ type: "result", subtype: "success", is_error: false, result: "done" }])).toBeNull();
     expect(await reportedErrorAfter([{ type: "result", subtype: "error_during_execution", is_error: true }])).toBeNull();
     expect(await reportedErrorAfter([{ type: "result", subtype: "error_during_execution", is_error: true, errors: [] }])).toBeNull();
     expect(await reportedErrorAfter([])).toBeNull();
+    // 最後の is_error 行が文を持たなければ、前の行の文を残さない
+    expect(
+      await reportedErrorAfter([
+        { type: "result", is_error: true, result: "earlier" },
+        { type: "result", subtype: "error_during_execution", is_error: true },
+      ]),
+    ).toBeNull();
   });
 
   it("is_error の行が2本あれば最後の1本を、改行で終わらない最終行も拾う(ADR 0188)", async () => {
