@@ -199,8 +199,9 @@ export function reviewToolDenials(taskType: Task["type"]): string[] {
 // 名前は `Task` で(init の `tools` もそう返す)、モデル側に現れる名前が `Agent`
 // である(実測: セッション自身は「I have Agent」と列挙しつつ、サブエージェントの
 // spawn は成功する)。`Agent` と書き換えると黙って不活性になる(測定8)。
-// `TaskOutput` / `TaskStop` は todo リストの仲間ではなく `Bash` の
-// `run_in_background` の受け口。`Glob` / `Grep` は
+// バックグラウンドのタスクの出力はファイルのパスが tool result と `<task-notification>` で
+// 返り、`Bash` ならそれを `Read` で読む。`TaskStop` はそのタスクを止める口(ADR 0039
+// 追記、#1269 — `TaskOutput` は 2.1.284 以降の CLI が面に出さない)。`Glob` / `Grep` は
 // 2.1.220 の既定の面に出ていないが名指しすれば現れる(測定7)ので、work
 // セッションに本物の検索ツールを与えられるのはこのリストを書くからである。
 //
@@ -233,7 +234,6 @@ const WORKER_TOOLS: readonly string[] = [
   "TaskGet",
   "TaskList",
   "TaskUpdate",
-  "TaskOutput",
   "TaskStop",
 ];
 
@@ -1245,7 +1245,7 @@ export type EnumerateToolsFn = () => Promise<{
 // honor するか」であり、`--settings` ファイルまで含んだ**実際の spawn 形**を測るのは深層防御側
 // (実セッションの init 行)である。2つで面の全体を覆う、という分担であって取りこぼし
 // ではない — ADR 0039 の測定は本番フラグ一式で 18本(組み込み17 + MCP verb 1)を観測
-// しており、正本の側はその MCP verb が無い 17本を見る(`mcp__` は比較対象外なので
+// しており、正本の側はその MCP verb を除いた組み込みの面を見る(`mcp__` は比較対象外なので
 // どちらでも同じ答えになる)。
 //
 // `--setting-sources project` を足すのは**本番と同じ tier を読ませる**ため。足さないと

@@ -9,8 +9,8 @@ import { api, bootTidepool, HOUR, registerWork, type Tidepool } from "./harness.
 let t: Tidepool;
 afterEach(() => t?.stop());
 
-/** 宣言どおりの work セッションの面(ADR 0039 の測定と同じ17本)。ここでも実装を
- *  import せず独立した literal で書く。 */
+/** 宣言どおりの work セッションの面(16本 — ADR 0039 の測定の17本から `TaskOutput` を
+ *  除いたもの、#1269)。ここでも実装を import せず独立した literal で書く。 */
 const WORK_SURFACE = [
   "Bash",
   "Read",
@@ -27,7 +27,6 @@ const WORK_SURFACE = [
   "TaskGet",
   "TaskList",
   "TaskUpdate",
-  "TaskOutput",
   "TaskStop",
 ];
 
@@ -134,11 +133,22 @@ it("ping が allowlist 外のツールを観測したら不成立 — 具体名�
 
 it("観測 ⊂ 期待も不成立 — 黙って不活性化した名前を挙げる(測定8)", async () => {
   const result = await probeToolSurfaceCapability(async () => ({
-    tools: WORK_SURFACE.filter((tool) => tool !== "Glob" && tool !== "TaskOutput"),
+    tools: WORK_SURFACE.filter((tool) => tool !== "Glob" && tool !== "TaskStop"),
     mcpServers: [],
     autoMemoryPath: null,
   }));
   expect(result.available === false && result.reason).toContain("Glob");
+  expect(result.available === false && result.reason).toContain("TaskStop");
+});
+
+it("2.1.241 の形の init 行(`TaskOutput` が面に有る)は観測 ⊃ 期待で不成立 — `TaskOutput` を名指す(#1269)", async () => {
+  // 2.1.284 以降の CLI は `TaskOutput` を面に出さないので宣言から外した。古い CLI の面は
+  // 宣言より1本多く、黙って通さずに名指しで止まる。
+  const result = await probeToolSurfaceCapability(async () => ({
+    tools: [...WORK_SURFACE, "TaskOutput"],
+    mcpServers: [],
+    autoMemoryPath: null,
+  }));
   expect(result.available === false && result.reason).toContain("TaskOutput");
 });
 

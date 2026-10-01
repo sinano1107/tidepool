@@ -10,15 +10,15 @@ import { spawnTools } from "../src/claude-worker.js";
  *  `spawnAllowedTools` / `reviewToolDenials` と同じ「組み立ては純関数、配線は
  *  launch() 側」の分離。**期待値はこのファイル側の独立した literal** で書く —
  *  実装を import して組み立て直すとコードが計算する通りに期待値も計算する
- *  トートロジーになる(tests/review-tool-denials.test.ts の線)。review の14本も
+ *  トートロジーになる(tests/review-tool-denials.test.ts の線)。review の13本も
  *  「work から3本引いた」ではなく手で全量を綴る。 */
 describe("spawnTools", () => {
-  it("work は17本 — 検索ツールとバックグラウンド実行の受け口まで含む(ADR 0039 決定1)", () => {
+  it("work は16本 — 検索ツールとバックグラウンドのタスクを止める口まで含む(ADR 0039 決定1)", () => {
     // `Glob` / `Grep` は 2.1.220 の既定の面には出ていない(測定7)。work セッションに
     // 本物の検索ツールを与えられるのは、この allowlist を書くからである。
     // `Task`(Agent)は boardDoctrine(board-prose.ts)が意図的に開いている既決事項(ADR 0010 追記)、
-    // `TaskOutput` / `TaskStop` は todo リストの仲間ではなく `Bash` の
-    // `run_in_background` の受け口。
+    // バックグラウンドのタスクの出力はファイルのパスが tool result と `<task-notification>`
+    // で返り、`Bash` ならそれを `Read` で読む。`TaskStop` はそのタスクを止める口(ADR 0039 追記、#1269)。
     expect(spawnTools("work", false)).toEqual([
       "Bash",
       "Read",
@@ -35,12 +35,11 @@ describe("spawnTools", () => {
       "TaskGet",
       "TaskList",
       "TaskUpdate",
-      "TaskOutput",
       "TaskStop",
     ]);
   });
 
-  it("review は14本 — 編集系3本が面から消える(深層防御・ADR 0039 決定2)", () => {
+  it("review は13本 — 編集系3本が面から消える(深層防御・ADR 0039 決定2)", () => {
     // 床そのものは permission 層(`--permission-mode manual` + `autoAllowBashIfSandboxed:
     // false`)に残る。ここが2層目である理由は冗長性ではなく性質の違い: deny 層は
     // **黙って**効かなくなりうる(ADR 0037 追記)のに対し、`--tools` による除去は
@@ -58,14 +57,13 @@ describe("spawnTools", () => {
       "TaskGet",
       "TaskList",
       "TaskUpdate",
-      "TaskOutput",
       "TaskStop",
     ]);
   });
 
   // ADR 0185: 空の skill 許可リストには `--disable-slash-commands` が付き、CLI はその
   // フラグで面から `Skill` を外す。宣言を実際の面に合わせるので、ここでも外れる。
-  it("skill 許可リストが空の agent の work は16本 — Skill だけが面から外れる(ADR 0185)", () => {
+  it("skill 許可リストが空の agent の work は15本 — Skill だけが面から外れる(ADR 0185)", () => {
     expect(spawnTools("work", true)).toEqual([
       "Bash",
       "Read",
@@ -81,12 +79,11 @@ describe("spawnTools", () => {
       "TaskGet",
       "TaskList",
       "TaskUpdate",
-      "TaskOutput",
       "TaskStop",
     ]);
   });
 
-  it("skill 許可リストが空の agent の review は13本 — 編集系3本に加えて Skill も外れる(ADR 0185)", () => {
+  it("skill 許可リストが空の agent の review は12本 — 編集系3本に加えて Skill も外れる(ADR 0185)", () => {
     expect(spawnTools("review", true)).toEqual([
       "Bash",
       "Read",
@@ -99,7 +96,6 @@ describe("spawnTools", () => {
       "TaskGet",
       "TaskList",
       "TaskUpdate",
-      "TaskOutput",
       "TaskStop",
     ]);
   });

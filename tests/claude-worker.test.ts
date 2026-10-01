@@ -308,7 +308,7 @@ function spawnedTools(args: string[]): string[] {
 
 /** 盤面が宣言するツール面(ADR 0039 決定1)。**実装を import せず独立した literal**
  *  で書く — import して組み立て直すとコードが計算する通りに期待値も計算するトートロジー
- *  になる(tests/review-tool-denials.test.ts の線)。review の14本も「work から3本
+ *  になる(tests/review-tool-denials.test.ts の線)。review の13本も「work から3本
  *  引いた」ではなく手で全量を綴る。この2つはこのファイル内の spawn 引数の主張と
  *  init 行の主張が共有する — 同じ literal をテストごとに書き写すと、リストを1本
  *  足したときに直す場所がテスト本文の数だけ増える。 */
@@ -328,7 +328,6 @@ const WORK_SURFACE = [
   "TaskGet",
   "TaskList",
   "TaskUpdate",
-  "TaskOutput",
   "TaskStop",
 ];
 
@@ -345,7 +344,6 @@ const REVIEW_SURFACE = [
   "TaskGet",
   "TaskList",
   "TaskUpdate",
-  "TaskOutput",
   "TaskStop",
 ];
 
@@ -366,7 +364,6 @@ const WORK_SURFACE_WITHOUT_SKILL = [
   "TaskGet",
   "TaskList",
   "TaskUpdate",
-  "TaskOutput",
   "TaskStop",
 ];
 
@@ -914,13 +911,13 @@ describe("ClaudeCodeWorker", () => {
   // 独立した literal で書く(tests/spawn-tools.test.ts と同じ線): ここが確かめるのは
   // 「盤面が emit するフラグ列」までで、面が実際にそうなったかは実セッションの init
   // 行しか答えられない(ADR 0027)。
-  it("work タスクの spawn は --tools に work の17本を渡す(ADR 0039 決定1)", async () => {
+  it("work タスクの spawn は --tools に work の16本を渡す(ADR 0039 決定1)", async () => {
     const { start, calls } = await makeWorker();
     start("task-work-tools", null, "deckhand", "work");
     expect(spawnedTools(calls[0]!.args)).toEqual(WORK_SURFACE);
   });
 
-  it("review タスクの spawn は --tools に review の14本を渡す — 編集系が面から消える(ADR 0039 決定2)", async () => {
+  it("review タスクの spawn は --tools に review の13本を渡す — 編集系が面から消える(ADR 0039 決定2)", async () => {
     const { start, calls } = await makeWorker();
     start("task-review-tools", null, "deckhand", "review");
     expect(spawnedTools(calls[0]!.args)).toEqual(REVIEW_SURFACE);
@@ -3652,8 +3649,9 @@ describe("上限到達による中断(issue #467 / ADR 0104)", () => {
   /** #447 のライブ検証(2026-08-24、Claude Code 2.1.241)の逐語。判定の根拠は
    *  最終行 `result` の `api_error_status: 429` 一点で、その手前の
    *  `rate_limit_event` や本文の「session limit」は見ない。ただし init 行の
-   *  `memory_paths` だけは除いてある — auto-memory を閉じた今の spawn 形では出ない項目で、
-   *  残すと再生のたびに封じ込めが不成立になる(ADR 0156、#994)。 */
+   *  `memory_paths` は除いてある — auto-memory を閉じた今の spawn 形では出ない項目で、
+   *  残すと再生のたびに封じ込めが不成立になる(ADR 0156、#994)。`tools` の `TaskOutput` も
+   *  同じ理由で除いた — 2.1.284 以降の CLI は面に出さず、盤面の宣言からも外した(#1269)。 */
   const CAP_STREAM = readFileSync(
     join(import.meta.dirname, "fixtures", "worker-session-cap-429.stream.jsonl"),
     "utf8",
