@@ -109,7 +109,7 @@ it("店の変更: 前回の登録より後に worker が書いた Knowledge と�
   expect(section).toContain(JSON.stringify(parts.store_changes[1]));
 });
 
-it("店の変更: 人間が移したエントリは複製の行だけで path_moved の旧は載らず、人間が編集(supersede)したエントリは新しい行だけが載り、置き換えられた旧は載らない(後継が代表する)。窓の中に書かれて前の review が移したエントリは、複製の行に作成の変更を添える", () => {
+it("店の変更: 人間が移したエントリは複製の行だけで path_moved の旧は載らず、人間が編集(supersede)したエントリは新しい行が載る —— 置き換えられた旧は無効化の行として並ぶ。窓の中に書かれて前の review が移したエントリは、複製の行に作成の変更を添える", () => {
   const db = openDb(":memory:");
   const moved = knowledge(db, "moved");
   const edited = knowledge(db, "edited");
@@ -124,6 +124,7 @@ it("店の変更: 人間が移したエントリは複製の行だけで path_mo
   const { parts } = buildMetaReviewMaterial(db, review)!;
 
   expect(parts.store_changes.map(({ id, changes, invalidation_reason }) => ({ id, changes, invalidation_reason }))).toEqual([
+    { id: edited, changes: ["invalidated"], invalidation_reason: "superseded" },
     { id: copy, changes: ["created"], invalidation_reason: null },
     { id: edit, changes: ["created"], invalidation_reason: null },
     { id: freshCopy, changes: ["created"], invalidation_reason: null },

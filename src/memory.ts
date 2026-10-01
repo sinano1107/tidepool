@@ -2063,15 +2063,14 @@ export function recordMemoryInjection(
 }
 
 /** 材料の節の店の変更(ADR 0180 決定1): 窓の中に作成か無効化の材料の event(meta-review 自身の産物は除く —— due と同じ述語)が
- *  あるエントリを、本文が同じ鎖の末尾の行1つにまとめ、材料になった変更を添える。移動の `path_moved` は本文の変更でないので数えず、
- *  `superseded` は同じ窓に書かれた後継が代表する(ADR 0180 決定3 の「置き換えられた行」と同じ線)ので数えない。
+ *  あるエントリを、本文が同じ鎖の末尾の行1つにまとめ、材料になった変更を添える。移動の `path_moved` は本文の変更でないので数えない。
  *  candidate の行は candidate の部分が持つので載せない。 */
 function storeChanges(db: Db, window: MetaReviewWindow) {
   const restored = restoredAs(db);
   const changes = new Map<number, Set<"created" | "invalidated">>();
   for (const { id, payload } of materialEvents(db, ["memory_entry_created", "memory_entry_invalidated"], window)) {
     const created = payload.kind === "memory_entry_created";
-    if (!created && (payload.reason === "path_moved" || payload.reason === "superseded")) continue;
+    if (!created && payload.reason === "path_moved") continue;
     const tail = sameBodyChain(db, requireEntry(db, created ? id : payload.entry_id), restored).at(-1)!;
     changes.set(tail.id, (changes.get(tail.id) ?? new Set()).add(created ? "created" : "invalidated"));
   }
