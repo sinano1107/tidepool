@@ -876,7 +876,7 @@ function isStreamResultEvent(value: unknown): value is StreamResultEvent {
  *  doesn't match, simply isn't one — the last *accepted* result line already
  *  seen wins. `is_error: true` is not a usage self-report either (issue
  *  #534). */
-function readResultEvent(parsed: Record<string, unknown> | null): StreamResultEvent | null {
+export function readResultEvent(parsed: Record<string, unknown> | null): StreamResultEvent | null {
   if (parsed === null || parsed.type !== "result") return null;
   if (parsed.is_error === true) return null;
   return isStreamResultEvent(parsed) ? parsed : null;
@@ -1152,7 +1152,7 @@ const SKILL_ENUM_TIMEOUT_MS = 15_000;
  *  **projector** を取るのは、tool-surface probe が1本の init 行から2つ読むため
  *  (ADR 0108 決定2)。field 名では1つの配列しか答えられず、この ping は起動時と
  *  pickup ごとに走るので、2つ目の読みが2本目の ping を要してはならない。 */
-function readInitReport<T>(
+export function readInitReport<T>(
   stdout: NodeJS.ReadableStream,
   project: (parsed: Record<string, unknown> | null) => T | null,
 ): () => T | null {
@@ -1271,7 +1271,10 @@ export type EnumerateToolsFn = () => Promise<{
 // ADR 0156 決定3)。worker 設定と同じ定数から作るので閉じ方が食い違わず、CLI がキーを
 // 改名すれば init 報告に `memory_paths.auto` が現れて pickup の前に不成立になる。書きの
 // deny は init に出ないので運ばない(deploy 時の canary の仕事)。
-const TOOL_SURFACE_PROBE_ARGS = [
+//
+// `/usage` ping の引数ごと1本にして export する: 適合試験(ADR 0186 決定7)が同じフラグで init 行を取る。
+export const TOOL_SURFACE_PROBE_ARGS = [
+  ...SKILL_ENUM_ARGS,
   "--permission-mode",
   "acceptEdits",
   "--setting-sources",
@@ -1291,7 +1294,7 @@ const TOOL_SURFACE_PROBE_ARGS = [
 // 起動がどこまで伸びうるかはホスト依存(ADR 0028 が Pi を macOS より遅い側として実測
 // している)なので、上限は「詰まりを検知する」役だけを残して広く取る。ping 自体が
 // 遅いぶんは poll が待つだけで、誤停止よりはるかに安い。
-const TOOL_SURFACE_PROBE_TIMEOUT_MS = 60_000;
+export const TOOL_SURFACE_PROBE_TIMEOUT_MS = 60_000;
 
 /** `EnumerateToolsFn` の本番の実装: `/usage` ping を Board call の口に1回通す
  *  (ADR 0136 決定2)。口が答えを返さなければ null —— 呼び出し側はそれを不成立に倒す。 */
@@ -1307,25 +1310,28 @@ export const enumerateToolsThrough =
         {
           kind: "tool-surface probe",
           command: "claude",
-          args: [...SKILL_ENUM_ARGS, ...TOOL_SURFACE_PROBE_ARGS],
+          args: TOOL_SURFACE_PROBE_ARGS,
           cwd,
           env: boardCallEnv(),
           limitMs: TOOL_SURFACE_PROBE_TIMEOUT_MS,
         },
-        (proc) =>
-          readInitReport(proc.stdout, (parsed) => {
-            // 1本の init 行から読む。tools / mcp_servers の片方でも読めなければ観測
-            // そのものが無かったとして null に倒す — 呼び出し側の「観測できなかった =
-            // 不成立」がそのまま受ける(ADR 0108 決定2)。auto-memory は null が「閉じて
-            // いる」なので、この門には加えない(ADR 0156)。
-            const tools = readInitField(parsed, "tools");
-            const mcpServers = readInitMcpServers(parsed);
-            return tools && mcpServers
-              ? { tools, mcpServers, autoMemoryPath: readInitAutoMemoryPath(parsed) }
-              : null;
-          }),
+        (proc) => readInitReport(proc.stdout, readToolSurface),
       ),
     );
+
+/** tool-surface probe の init 行の読み手。適合試験(ADR 0186 決定7)も同じこれで読む。
+ *
+ *  1本の init 行から読む。tools / mcp_servers の片方でも読めなければ観測そのものが
+ *  無かったとして null に倒す — 呼び出し側の「観測できなかった = 不成立」がそのまま
+ *  受ける(ADR 0108 決定2)。auto-memory は null が「閉じている」なので、この門には
+ *  加えない(ADR 0156)。 */
+export function readToolSurface(
+  parsed: Record<string, unknown> | null,
+): Awaited<ReturnType<EnumerateToolsFn>> {
+  const tools = readInitField(parsed, "tools");
+  const mcpServers = readInitMcpServers(parsed);
+  return tools && mcpServers ? { tools, mcpServers, autoMemoryPath: readInitAutoMemoryPath(parsed) } : null;
+}
 
 /** 封じ込め能力の3つ目の問い(ADR 0039 決定3)の正本: `/usage` ping を**その場で
  *  撃ち**、観測されたツール面を `checkToolSurface` に渡す。
@@ -2361,130 +2367,139 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     this.running.get(taskId)?.kill("SIGTERM");
   }
 
-  /** Scrapes the interactive /usage panel over a PTY (issue #81 / ADR 0028).
-   *  The panel renders only under a TTY, and only the interactive session
-   *  keeps the OAuth subscription auth that draws the % figures (`--bare`
-   *  drops to API billing and the panel disappears). Runs in the board's own
-   *  cwd (unlike start(), which pins cwd to the task's workspace) with
-   *  --safe-mode so the board repo's CLAUDE.md/skills/MCP never leak into the
-   *  probe. Auth/tokens are never touched — refresh is left to the CLI's own
-   *  startup (ADR 0028's core constraint). Returns the composed terminal
-   *  screen; parseUsage reads that plain text (ADR 0074). Spawn failure or exit
-   *  before the panel appears resolves null so the scheduler fails closed. A
-   *  timeout after panel observation returns the latest composed screen as a
-   *  best effort. A timeout *before* the CLI prompt ever renders also leaves the
-   *  head of the stuck screen in the board log, since that fail-closed null is
-   *  otherwise traceless (ADR 0131 決定3). The TUI runs as a Board call inside
-   *  its own container (ADR 0136); teardown is Ctrl-C×2, then
-   *  USAGE_EXIT_GRACE_MS for the root to exit, then the mouth's force reclaim —
-   *  never a direct kill of the root, so the CLI gets to record its exit and
-   *  the container is what guarantees no orphan. `--settings` pins the fullscreen renderer (see
-   *  USAGE_TUI_SETTINGS) so the panel stays parseable regardless of the host's
-   *  own TUI setting.
-   *
-   *  The old exec probe carried an ADR 0005 runaway *cost* ceiling
-   *  (--model haiku/--max-turns/--max-budget-usd). That's gone: the
-   *  interactive /usage panel makes no model call under subscription auth, so
-   *  there is no cost to cap — runaway is bounded instead by time
-   *  (USAGE_TIMEOUT_MS for the scrape, USAGE_LIMIT_MS for the call). */
-  async checkUsage(): Promise<string | null> {
-    const settingsPath = join(this.logDir, "usage-tui-settings.json");
-    const launch: PtyFn = (command, args, opts) => {
-      try {
-        writeFileSync(settingsPath, USAGE_TUI_SETTINGS);
-        return this.pty(command, args, opts);
-      } catch (err) {
-        // PTY が立たない(例: 新規 npm install 直後の node-pty spawn-helper に
-        // 実行ビットが無い)と観測不能 = fail-closed に畳まれるが、原因は
-        // ここでしか見えないので1行だけ残す
-        console.warn("[usage] could not spawn the usage TUI", err);
-        throw err;
-      }
-    };
-    const capture = await this.options.boardCall(
-      {
-        kind: "usage TUI",
-        command: "claude",
-        args: ["--safe-mode", "--settings", settingsPath],
-        cwd: process.cwd(),
-        // a Board call like any other (ADR 0044): this one raises no model turn
-        // today — nothing is ever typed at the prompt — but that is a property
-        // of the vendor's TUI, not one this board placed here.
-        env: boardCallEnv(),
-        limitMs: USAGE_LIMIT_MS,
-        pty: { launch, cols: PTY_COLS, rows: PTY_ROWS },
-      },
-      (session, done) => this.scrapeUsage(session, done),
-    );
-    return capture === null ? null : composeTerminalScreen(capture, PTY_COLS, PTY_ROWS).catch(() => null);
+  /** 使用量画面の読み取り(`checkUsageThrough`)を、この adapter の Board call の口・ログ dir・PTY で撃つ。 */
+  checkUsage(): Promise<string | null> {
+    return checkUsageThrough(this.options.boardCall, this.logDir, this.pty);
   }
+}
 
-  /** checkUsage の読み手: 画面を読み、読み終えたら teardown する。答え(生の capture)は
-   *  口が root の exit か `done` のあとに1度だけ読む。 */
-  private scrapeUsage(session: PtyProcess, done: () => void): () => string | null {
-    let buffer = "";
-    let capture: string | null = null;
-    let promptSeen = false;
-    let settled = false;
-    let exited = false;
-    let settleTimer: ReturnType<typeof setTimeout> | undefined;
-    let panelTimer: ReturnType<typeof setTimeout> | undefined;
-    let graceTimer: ReturnType<typeof setTimeout> | undefined;
+/** Scrapes the interactive /usage panel over a PTY (issue #81 / ADR 0028).
+ *  The panel renders only under a TTY, and only the interactive session
+ *  keeps the OAuth subscription auth that draws the % figures (`--bare`
+ *  drops to API billing and the panel disappears). Runs in the board's own
+ *  cwd (unlike start(), which pins cwd to the task's workspace) with
+ *  --safe-mode so the board repo's CLAUDE.md/skills/MCP never leak into the
+ *  probe. Auth/tokens are never touched — refresh is left to the CLI's own
+ *  startup (ADR 0028's core constraint). Returns the composed terminal
+ *  screen; parseUsage reads that plain text (ADR 0074). Spawn failure or exit
+ *  before the panel appears resolves null so the scheduler fails closed. A
+ *  timeout after panel observation returns the latest composed screen as a
+ *  best effort. A timeout *before* the CLI prompt ever renders also leaves the
+ *  head of the stuck screen in the board log, since that fail-closed null is
+ *  otherwise traceless (ADR 0131 決定3). The TUI runs as a Board call inside
+ *  its own container (ADR 0136); teardown is Ctrl-C×2, then
+ *  USAGE_EXIT_GRACE_MS for the root to exit, then the mouth's force reclaim —
+ *  never a direct kill of the root, so the CLI gets to record its exit and
+ *  the container is what guarantees no orphan. `--settings` pins the fullscreen renderer (see
+ *  USAGE_TUI_SETTINGS) so the panel stays parseable regardless of the host's
+ *  own TUI setting.
+ *
+ *  The old exec probe carried an ADR 0005 runaway *cost* ceiling
+ *  (--model haiku/--max-turns/--max-budget-usd). That's gone: the
+ *  interactive /usage panel makes no model call under subscription auth, so
+ *  there is no cost to cap — runaway is bounded instead by time
+ *  (USAGE_TIMEOUT_MS for the scrape, USAGE_LIMIT_MS for the call). */
+export async function checkUsageThrough(
+  call: BoardCall,
+  logDir: string,
+  pty: PtyFn = defaultPty,
+): Promise<string | null> {
+  const settingsPath = join(logDir, "usage-tui-settings.json");
+  const launch: PtyFn = (command, args, opts) => {
+    try {
+      writeFileSync(settingsPath, USAGE_TUI_SETTINGS);
+      return pty(command, args, opts);
+    } catch (err) {
+      // PTY が立たない(例: 新規 npm install 直後の node-pty spawn-helper に
+      // 実行ビットが無い)と観測不能 = fail-closed に畳まれるが、原因は
+      // ここでしか見えないので1行だけ残す
+      console.warn("[usage] could not spawn the usage TUI", err);
+      throw err;
+    }
+  };
+  const capture = await call(
+    {
+      kind: "usage TUI",
+      command: "claude",
+      args: ["--safe-mode", "--settings", settingsPath],
+      cwd: process.cwd(),
+      // a Board call like any other (ADR 0044): this one raises no model turn
+      // today — nothing is ever typed at the prompt — but that is a property
+      // of the vendor's TUI, not one this board placed here.
+      env: boardCallEnv(),
+      limitMs: USAGE_LIMIT_MS,
+      pty: { launch, cols: PTY_COLS, rows: PTY_ROWS },
+    },
+    (session, done) => scrapeUsage(session, done),
+  );
+  return capture === null ? null : composeTerminalScreen(capture, PTY_COLS, PTY_ROWS).catch(() => null);
+}
 
-    const finish = (result: string | null) => {
-      if (settled) return;
-      settled = true;
-      capture = result;
-      clearTimeout(timer);
-      clearTimeout(settleTimer);
+/** checkUsage の読み手: 画面を読み、読み終えたら teardown する。答え(生の capture)は
+ *  口が root の exit か `done` のあとに1度だけ読む。 */
+function scrapeUsage(session: PtyProcess, done: () => void): () => string | null {
+  let buffer = "";
+  let capture: string | null = null;
+  let promptSeen = false;
+  let settled = false;
+  let exited = false;
+  let settleTimer: ReturnType<typeof setTimeout> | undefined;
+  let panelTimer: ReturnType<typeof setTimeout> | undefined;
+  let graceTimer: ReturnType<typeof setTimeout> | undefined;
+
+  const finish = (result: string | null) => {
+    if (settled) return;
+    settled = true;
+    capture = result;
+    clearTimeout(timer);
+    clearTimeout(settleTimer);
+    clearTimeout(panelTimer);
+    if (exited) return;
+    // Ctrl-C×2 nudges the interactive session to exit cleanly; a CLI that
+    // ignores it is reclaimed by the mouth's force (ADR 0136 決定8).
+    graceTimer = setTimeout(done, USAGE_EXIT_GRACE_MS);
+    try {
+      session.write(CTRL_C + CTRL_C);
+    } catch {
+      // exiting as we speak — its exit (or the grace) settles the call
+    }
+  };
+
+  const timer = setTimeout(async () => {
+    // REPL に一度も着いていない = CLI の初回対話で止まっている見込み。fail-closed に
+    // 畳まれると痕跡が残らないので、止まった画面を1行残す(ADR 0131 決定3)。生 stream の
+    // 先頭はスプラッシュのバナーと ASCII アートで、門を名指しする文字列はその 17 行下に
+    // あるため、合成画面(ADR 0074)から文字を含む行だけを繋ぐ —— #738 の実測。
+    // 合成を待ってから畳む —— 呼び手が観測不能を記録するより先に痕跡を出す
+    if (!promptSeen) {
+      const screen = await composeTerminalScreen(buffer, PTY_COLS, PTY_ROWS).catch(() => "");
+      console.warn(`[usage] timed out before the CLI prompt: ${gates(screen)}`);
+    }
+    finish(hasUsagePanel(buffer) ? buffer : null);
+  }, USAGE_TIMEOUT_MS);
+
+  session.onExit(() => {
+    exited = true;
+    clearTimeout(graceTimer);
+    finish(hasUsagePanel(buffer) ? buffer : null);
+  });
+
+  session.onData((data) => {
+    buffer += data;
+    // pattern-wait for the prompt (never a fixed sleep), then let the box
+    // settle before sending /usage once — a command typed the instant the
+    // box renders is dropped (ADR 0028).
+    if (!promptSeen && seen(buffer, PROMPT_READY_MARKER)) {
+      promptSeen = true;
+      settleTimer = setTimeout(() => session.write(`/usage${ENTER}`), USAGE_PROMPT_SETTLE_MS);
+    }
+    if (hasUsagePanel(buffer)) {
+      // capture once the panel stops rendering (debounce), so a chunk
+      // boundary can't strand a %/reset row we haven't buffered yet
       clearTimeout(panelTimer);
-      if (exited) return;
-      // Ctrl-C×2 nudges the interactive session to exit cleanly; a CLI that
-      // ignores it is reclaimed by the mouth's force (ADR 0136 決定8).
-      graceTimer = setTimeout(done, USAGE_EXIT_GRACE_MS);
-      try {
-        session.write(CTRL_C + CTRL_C);
-      } catch {
-        // exiting as we speak — its exit (or the grace) settles the call
-      }
-    };
+      panelTimer = setTimeout(() => finish(buffer), PANEL_QUIET_MS);
+    }
+  });
 
-    const timer = setTimeout(async () => {
-      // REPL に一度も着いていない = CLI の初回対話で止まっている見込み。fail-closed に
-      // 畳まれると痕跡が残らないので、止まった画面を1行残す(ADR 0131 決定3)。生 stream の
-      // 先頭はスプラッシュのバナーと ASCII アートで、門を名指しする文字列はその 17 行下に
-      // あるため、合成画面(ADR 0074)から文字を含む行だけを繋ぐ —— #738 の実測。
-      // 合成を待ってから畳む —— 呼び手が観測不能を記録するより先に痕跡を出す
-      if (!promptSeen) {
-        const screen = await composeTerminalScreen(buffer, PTY_COLS, PTY_ROWS).catch(() => "");
-        console.warn(`[usage] timed out before the CLI prompt: ${gates(screen)}`);
-      }
-      finish(hasUsagePanel(buffer) ? buffer : null);
-    }, USAGE_TIMEOUT_MS);
-
-    session.onExit(() => {
-      exited = true;
-      clearTimeout(graceTimer);
-      finish(hasUsagePanel(buffer) ? buffer : null);
-    });
-
-    session.onData((data) => {
-      buffer += data;
-      // pattern-wait for the prompt (never a fixed sleep), then let the box
-      // settle before sending /usage once — a command typed the instant the
-      // box renders is dropped (ADR 0028).
-      if (!promptSeen && seen(buffer, PROMPT_READY_MARKER)) {
-        promptSeen = true;
-        settleTimer = setTimeout(() => session.write(`/usage${ENTER}`), USAGE_PROMPT_SETTLE_MS);
-      }
-      if (hasUsagePanel(buffer)) {
-        // capture once the panel stops rendering (debounce), so a chunk
-        // boundary can't strand a %/reset row we haven't buffered yet
-        clearTimeout(panelTimer);
-        panelTimer = setTimeout(() => finish(buffer), PANEL_QUIET_MS);
-      }
-    });
-
-    return () => capture;
-  }
+  return () => capture;
 }

@@ -78,6 +78,8 @@ ssh $PI 'git clone -q --depth 1 https://github.com/sinano1107/tidepool.git ~/tid
 
 ### Worker sandbox e2e smoke (re-run after every `claude` CLI update)
 
+A CLI update is a raise of the pinned version, done first in the Lima VM: [docs/claude-cli-version-bump.md](../../../docs/claude-cli-version-bump.md).
+
 Issue #60 / ADR 0033 confines every worker session's Bash to its workspace via the CLI's own sandbox, injected per task as `--settings <task>.sandbox.json`; issue #144 / ADR 0035 puts review's *write* floor in the permission layer on top of it (`--permission-mode manual`, plus the `autoAllowBashIfSandboxed: false` that stops the sandbox from waving Bash past that layer); issue #146 / ADR 0033's addendum re-opens loopback binding; issue #321 / ADR 0072 opens only the workspace's `allowed_domains` and leaves every other host to the CLI proxy's default deny (ADR 0139 — tidepool puts nothing in `deniedDomains`). These are vendor behaviours the board cannot assert from inside: the CLI **silently ignores a settings file that fails validation under `-p`**, and a CLI update can quietly change their meaning. Re-run this by hand after any `claude` update on the Pi, and after a first-time setup.
 
 Prerequisites: `bubblewrap` + `socat` installed and actually working — see [references/first-time-setup.md](references/first-time-setup.md) §4b.
