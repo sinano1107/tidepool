@@ -2,7 +2,7 @@ import type { Allocation } from "./allocation-review.js";
 import type { Cause } from "./cause.js";
 import type { Db } from "./db.js";
 import { type EventPayload, type EventRow, listEventsOfKinds, objectionBundles } from "./events.js";
-import type { ExecutionSetting, Priority } from "./execution-setting.js";
+import type { ExecutionSetting } from "./execution-setting.js";
 import { sessionWindow } from "./precedent.js";
 import type { Provider } from "./registry.js";
 import { acceptedSql, type Task } from "./tasks.js";
@@ -21,9 +21,10 @@ export interface Cell {
 
 /** 1つの worker session を学習器が読む形(Precedent の `Episode` と同じ session
  *  単位だが、transcript を持たず outcome だけを持つ)。文脈のうち持つのは workspace
- *  (プーリングの段)だけ —— 要求ティアは候補集合を、優先順位は推薦の呼び手が
- *  task から渡す。agent / interview 種別はセルを割らず、読み手が生えたら tasks と
- *  events から引ける。
+ *  (プーリングの段)だけ —— 要求ティアと優先順位は selector の候補集合と並びに
+ *  入っている。agent / interview 種別はセルを割らず、読み手が生えたら tasks と
+ *  events から引ける。費用と時間は session ごとの観測で、推薦の鍵にはならない
+ *  (routing meta-review の shadow 行の読み口が読む、ADR 0183)。
  *  `outcome` の `excluded` は「まだ判定が無い」「帰責が worker の落ち度でない」で、
  *  受理率の分母に入らない(ADR 0115 決定5)。 */
 export interface LearnerEpisode {
@@ -56,13 +57,11 @@ export function episodeOutcome(facts: {
   return facts.accepted ? "accepted" : "excluded";
 }
 
-/** セルごとの集計。費用と時間は観測された平均(null = 観測が1つも無い)。 */
+/** セルごとの集計: 受理数と却下数。 */
 export interface CellStats {
   cell: Cell;
   accepted: number;
   rejected: number;
-  cost_usd_mean: number | null;
-  duration_ms_mean: number | null;
 }
 
 export interface Recommendation {
@@ -82,9 +81,6 @@ const cellOf = (s: ExecutionSetting): Cell => ({
   advisor: s.advisor ?? null,
 });
 
-const mean = (values: number[]): number | null =>
-  values.length === 0 ? null : values.reduce((a, b) => a + b, 0) / values.length;
-
 /** episode 列 → セルの集計(純関数)。`excluded` は数えない。 */
 export function aggregateCells(episodes: readonly LearnerEpisode[]): CellStats[] {
   const byKey = new Map<string, { cell: Cell; episodes: LearnerEpisode[] }>();
@@ -99,8 +95,6 @@ export function aggregateCells(episodes: readonly LearnerEpisode[]): CellStats[]
     cell,
     accepted: group.filter((e) => e.outcome === "accepted").length,
     rejected: group.filter((e) => e.outcome === "rejected").length,
-    cost_usd_mean: mean(group.flatMap((e) => (e.cost_usd === null ? [] : [e.cost_usd]))),
-    duration_ms_mean: mean(group.flatMap((e) => (e.duration_ms === null ? [] : [e.duration_ms]))),
   }));
 }
 
@@ -138,33 +132,23 @@ const trackRecord = (candidate: ExecutionSetting, board: readonly CellStats[], w
  *  学習器は未観測の候補へ移らない(ADR 0181 決定1・2): 先頭(selector の並びの1番目)が未観測ならそれが推薦。先頭に観測が
  *  あれば、観測のある候補が先頭に勝つかを1つずつ比べる —— 先頭の観測数が候補より少ないあいだは却下数(先頭の却下が多いときだけ
  *  勝つ —— 先頭が残りを全部受理しても追いつけない、ADR 0182 決定4)、それ以外は事後平均の並べ方で先頭より前に来るとき。
- *  勝つ候補が無ければ先頭、あればその中で並べ方の1番目。並べ方は事後平均 → `priority` が cost のときだけ観測された費用の
- *  平均(両方に観測があるときに限る。quality では Provider 順位が selector の並びに既に入っている)→ selector の並び。
- *  乱数は持たない(Thompson sampling をしないので seed も無い)。 */
+ *  勝つ候補が無ければ先頭、あればその中で並べ方の1番目。並べ方は事後平均 → selector の並び —— 観測された session 費用は
+ *  鍵にしない(ADR 0183。cost の鍵は表の価格で、selector の並びに既に入っている)。乱数は持たない(Thompson sampling をしないので seed も無い)。 */
 export function recommend(input: {
   candidates: readonly ExecutionSetting[];
   board: readonly CellStats[];
   workspace: readonly CellStats[];
-  priority: Priority;
 }): Recommendation {
   const scored = input.candidates.map((candidate, order) => {
     const { board, workspace } = trackRecord(candidate, input.board, input.workspace);
     const accepted = board.accepted + workspace.accepted;
     const rejected = board.rejected + workspace.rejected;
     const observed = accepted + rejected;
-    const costs = [...input.board, ...input.workspace].filter((s) => cellMatches(candidate, s.cell)).flatMap((s) => (s.cost_usd_mean === null ? [] : [s.cost_usd_mean]));
-    return { candidate, order, observed, rejected, accepted: 1 + accepted, total: 1 + observed, cost: mean(costs) };
+    return { candidate, order, observed, rejected, accepted: 1 + accepted, total: 1 + observed };
   });
   type Scored = (typeof scored)[number];
   // 事後平均の比較は整数の交差乗算 —— 浮動小数の「同点」で決定論が崩れない
-  const byOrdering = (a: Scored, b: Scored) => {
-    const byMean = b.accepted * a.total - a.accepted * b.total;
-    if (byMean !== 0) return byMean;
-    if (input.priority === "cost" && a.cost !== null && b.cost !== null && a.cost !== b.cost) {
-      return a.cost - b.cost;
-    }
-    return a.order - b.order;
-  };
+  const byOrdering = (a: Scored, b: Scored) => b.accepted * a.total - a.accepted * b.total || a.order - b.order;
   // 候補が空なら来ない —— 全 entry 除外は selector が先に skipped にしている
   const [head, ...rest] = scored as [Scored, ...Scored[]];
   const beatsHead = (c: Scored) =>

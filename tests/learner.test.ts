@@ -56,17 +56,15 @@ function branchFor(episodes: LearnerEpisode[], candidates: ExecutionSetting[], p
     candidates,
     board: aggregateCells(episodes),
     workspace: aggregateCells(episodes.filter((e) => e.workspace === workspace)),
-    priority: "quality",
   });
 }
 
 /** 盤面全体の episode 列から、この workspace 向けの推薦を1回引く。 */
-function recommendFor(episodes: LearnerEpisode[], candidates: ExecutionSetting[], workspace = "tidepool", priority: "quality" | "cost" = "quality") {
+function recommendFor(episodes: LearnerEpisode[], candidates: ExecutionSetting[], workspace = "tidepool") {
   return recommend({
     candidates,
     board: aggregateCells(episodes),
     workspace: aggregateCells(episodes.filter((e) => e.workspace === workspace)),
-    priority,
   });
 }
 
@@ -158,13 +156,20 @@ it("盤面全体の事後分布が workspace の事前分布 —— 自分の wo
   expect(recommendFor(episodes, [opus, sol], "fresh").recommended).toEqual(sol);
 });
 
-it("受理率が同点のときだけ、cost の要求では観測された session 費用の平均が鍵になる —— 両方に観測があるときに限り、quality では selector の並びのまま", () => {
+it("事後平均が同点なら、両方に費用の観測があっても推薦は先頭 —— 観測された session 費用は推薦の鍵にならない(ADR 0183)", () => {
   const cheapSol = episode({ cell: { provider: "openai", model: "gpt-5.6-sol", effort: "high", advisor: null }, cost_usd: 0.5 });
   const pricyOpus = episode({ cost_usd: 2 });
-  expect(recommendFor([cheapSol, pricyOpus], [opus, sol], "tidepool", "cost").recommended).toEqual(sol);
-  expect(recommendFor([cheapSol, pricyOpus], [opus, sol], "tidepool", "quality").recommended).toEqual(opus);
-  // opus 側に費用の観測が無ければ比べられない —— 表の並びに戻る
-  expect(recommendFor([cheapSol, episode()], [opus, sol], "tidepool", "cost").recommended).toEqual(opus);
+  expect(recommendFor([cheapSol, pricyOpus], [opus, sol]).recommended).toEqual(opus);
+});
+
+it("両者無傷で相手が安いまま受理を積んでも、推薦はずっと先頭 —— 先頭 5/0・相手 3/0 から 7/0・8/0 まで pickup ごとに入れ替わらない(#1250)", () => {
+  const cheapSol = episode({ cell: { provider: "openai", model: "gpt-5.6-sol", effort: "high", advisor: null }, cost_usd: 0.5 });
+  const pricyOpus = episode({ cost_usd: 2 });
+  const steps: [number, number][] = [[5, 3], [5, 4], [5, 5], [5, 6], [6, 6], [6, 7], [7, 7], [7, 8]];
+  for (const [head, other] of steps) {
+    const episodes = [...Array.from({ length: head }, () => pricyOpus), ...Array.from({ length: other }, () => cheapSol)];
+    expect(recommendFor(episodes, [opus, sol]).recommended, `${head}/0 vs ${other}/0`).toEqual(opus);
+  }
 });
 
 it("selector の分岐: 両方に観測があり2番目が上なら、昇格前は表の先頭が走り shadow の推薦が学習器、昇格後は学習器の選択が出所 learner で走り shadow の推薦が表の先頭", () => {
@@ -190,7 +195,7 @@ it("shadow の組は推薦したセルと走ったセルの実績(盤面の段�
 });
 
 it("昇格後もどの候補にも観測が無ければ学習器の選択は表の先頭と一致する —— basis は prior で、出所の provider だけが learner", () => {
-  const { chosen, shadow } = selectorBranch({ promoted: true, candidates: [opus, sol], board: [], workspace: [], priority: "quality" });
+  const { chosen, shadow } = selectorBranch({ promoted: true, candidates: [opus, sol], board: [], workspace: [] });
   expect(chosen).toEqual({ ...opus, source: { ...opus.source, provider: "learner" } });
   expect(shadow).toMatchObject({ recommended: opus, actual: chosen, basis: "prior" });
 });
