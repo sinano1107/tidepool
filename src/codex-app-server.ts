@@ -38,6 +38,8 @@ export type CodexAppServerProbeResult =
       cliVersion: string;
       plan: string;
       windows: ProviderUsageWindow[];
+      /** `model/list`(includeHidden: true)の id。表の openai の行の照合に使う(ADR 0184 決定3)。 */
+      models: string[];
     }
   | {
       status: "unauthorized" | "unobservable";
@@ -47,6 +49,10 @@ export type CodexAppServerProbeResult =
     };
 
 export type CodexAppServerProbe = (now: Date) => Promise<CodexAppServerProbeResult>;
+
+/** 一覧に無い行の理由(ADR 0184 決定3・5)。登録と回答の拒否が同じ観測を同じ文で言う。原因は断言しない(決定1)。 */
+export const modelUnlisted = (cliVersion: string) =>
+  `the Codex App Server model list (${cliVersion}, hidden models included) does not include this model id`;
 
 const PLAN_VALUES = [
   "free",
@@ -97,6 +103,12 @@ const rateLimitsResponse = z.object({
   rateLimitResetCredits: z.unknown().nullable().optional(),
   rateLimits: rateLimitSnapshot,
   rateLimitsByLimitId: z.record(z.string(), rateLimitSnapshot).nullable().optional(),
+});
+
+// ページの続きは読まない —— 続きがあれば一覧は不完全で、照合すると走る行を外しうる
+const modelListResponse = z.object({
+  data: z.array(z.object({ id: z.string() })),
+  nextCursor: z.null().optional(),
 });
 
 const initializeResponse = z.object({
@@ -170,9 +182,11 @@ function references(schema: any, name: string): boolean {
     schema?.anyOf?.some((entry: any) => references(entry, name));
 }
 
-function schemasConform(requests: any, account: any, rateLimits: any): boolean {
+function schemasConform(requests: any, account: any, rateLimits: any, modelList: any): boolean {
   const accountRequest = requestSchema(requests, "account/read");
   const rateRequest = requestSchema(requests, "account/rateLimits/read");
+  const modelListRequest = requestSchema(requests, "model/list");
+  const model = modelList.definitions?.Model;
   const chatgpt = account.definitions?.Account?.oneOf?.find(
     (entry: any) => entry?.properties?.type?.enum?.[0] === "chatgpt",
   );
@@ -196,7 +210,16 @@ function schemasConform(requests: any, account: any, rateLimits: any): boolean {
     window?.required?.includes("usedPercent") &&
     window?.properties?.usedPercent?.type === "integer" &&
     window?.properties?.windowDurationMins?.type?.includes("integer") &&
-    window?.properties?.resetsAt?.type?.includes("integer")
+    window?.properties?.resetsAt?.type?.includes("integer") &&
+    modelListRequest?.required?.includes("params") &&
+    references(modelListRequest?.properties?.params, "ModelListParams") &&
+    requests.definitions?.ModelListParams?.properties?.includeHidden?.type?.includes("boolean") &&
+    modelList.title === "ModelListResponse" &&
+    modelList.required?.includes("data") &&
+    references(modelList.properties?.data?.items, "Model") &&
+    modelList.properties?.nextCursor?.type?.includes("string") &&
+    model?.required?.includes("id") &&
+    model?.properties?.id?.type === "string"
   );
 }
 
@@ -233,9 +256,8 @@ async function compatibilityCheck(
     const rateLimits = JSON.parse(
       readFileSync(join(schemaDir, "v2", "GetAccountRateLimitsResponse.json"), "utf8"),
     );
-    if (
-      !schemasConform(requests, account, rateLimits)
-    ) {
+    const modelList = JSON.parse(readFileSync(join(schemaDir, "v2", "ModelListResponse.json"), "utf8"));
+    if (!schemasConform(requests, account, rateLimits, modelList)) {
       return { ok: false, cliVersion: version, reason: "required App Server method or response schema drifted" };
     }
     return { ok: true, cliVersion: version };
@@ -368,10 +390,12 @@ export function createCodexAppServerProbe(options: {
       { method: "initialized" },
       { id: 2, method: "account/read", params: { refreshToken: false } },
       { id: 3, method: "account/rateLimits/read", params: null },
+      // hidden の id も走る(#1260 の実測)—— 既定の一覧で照合すると走る行が外れる
+      { id: 4, method: "model/list", params: { includeHidden: true } },
     ].map((request) => JSON.stringify(request)).join("\n") + "\n";
     let observed: CodexCliCommandResult;
     try {
-      observed = await command(options.executable, ["app-server"], { env, input, until: respondedTo([1, 2, 3]) });
+      observed = await command(options.executable, ["app-server"], { env, input, until: respondedTo([1, 2, 3, 4]) });
     } catch (error) {
       return {
         status: "unobservable",
@@ -454,6 +478,8 @@ export function createCodexAppServerProbe(options: {
           normalizeWindow("primary", null, limits.rateLimits.primary, now),
           normalizeWindow("secondary", null, limits.rateLimits.secondary, now),
         ],
+        // 一覧は最後に読む —— 失敗・ずれ・続きのページは observed を観測不能に倒すだけで、手前の分類を奪わない
+        models: modelListResponse.parse(resultOf(responses, 4, "model/list")).data.map((entry) => entry.id),
       };
     } catch (error) {
       return {

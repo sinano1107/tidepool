@@ -5,7 +5,7 @@ import { appendEvent, type EventPayload } from "../src/events.js";
 import { applyExecutionSettingsChange, type ExecutionSetting } from "../src/execution-setting.js";
 import { aggregateCells, episodeOutcome, type LearnerEpisode, loadEpisodes, recommend, selectorBranch } from "../src/learner.js";
 import { listRoutingShadow } from "../src/routing-review.js";
-import { healthyOpenai } from "./fakes.js";
+import { healthyOpenai, listedOpenaiModels } from "./fakes.js";
 import {
   bootTidepool,
   bundledObjection,
@@ -441,6 +441,7 @@ it("昇格中も学習器の選択は Throttle の除外を通る —— 選ん�
     provider: "openai",
     cliVersion: "codex-cli 0.147.0",
     plan: "plus",
+    models: listedOpenaiModels,
     windows: [{ name: "primary", model: null, usedPercent: 100, durationMs: 5 * HOUR, resetsAt: new Date(now.getTime() + 4 * HOUR).toISOString() }],
   });
   t = await bootTidepool({ openaiUsage: throttledOpenai, taskExecutionCandidates: () => [opus, sol] });

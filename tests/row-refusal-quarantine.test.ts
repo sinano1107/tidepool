@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { ClaudeCodeWorker } from "../src/claude-worker.js";
 import type { ModelProbe, ModelProbeResult } from "../src/cli-auth.js";
+import type { CodexAppServerProbeResult } from "../src/codex-app-server.js";
 import { applyExecutionSettingsChange, executionSettingsFor } from "../src/execution-setting.js";
 import { registerQuarantine, tableRowValue } from "../src/quarantine.js";
 import type { Provider } from "../src/registry.js";
@@ -181,4 +182,82 @@ it("回答時の probe が 401 なら、行の回答は拒まれて Provider 認
     board.question.title,
     "anthropic authentication is unavailable — pickup of anthropic-speaking agents is stopped",
   ]);
+});
+
+/** openai の行の照合(ADR 0184 決定3、issue #1260)。Codex は spawn 後の証拠が文言しか無いので、盤面は
+ *  App Server の `model/list` を使用量と同じ往復で読み、表の openai の行すべてを一覧と照合する。 */
+
+/** pin の版(codex-cli 0.147.0)が includeHidden: true で返した id(#1260 の実測)。種の `gpt-6-astra` は無い。 */
+const MEASURED_OPENAI_MODELS = ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-reserve", "codex-auto-review"];
+
+/** openai だけを喋る agent の盤面。`probe` は観測のたびに呼ばれ、回答時の読み直しも同じ口を通る。 */
+async function bootOpenai(probe: (now: Date) => Promise<CodexAppServerProbeResult>) {
+  t = await bootTidepool({
+    taskExecutionCandidates: (task) =>
+      executionSettingsFor(t.db, { provider: [{ name: "openai", advisor: false }], tier: undefined }, task),
+    openaiUsage: probe,
+  });
+}
+
+const listing = (models: string[]) => async (now: Date) => ({ ...(await healthyOpenai(now)), models });
+
+it("一覧に無い openai の行は選ばれていてもいなくても Quarantine され、1行に1枚の question が立ち、同じ poll の task は一覧にある行で走る", async () => {
+  await bootOpenai(listing(MEASURED_OPENAI_MODELS));
+  // 同じ economy ティアの先頭(安い)に一覧に無い行を置く —— 選ばれた行が外れる側
+  applyExecutionSettingsChange(
+    t.db,
+    { setting: "row", row: { provider: "openai", tier: "economy", model: "gpt-5.4-mini", effort: "high", price_in: 1, price_out: 4 } },
+    "webui",
+    t.clock.now(),
+  );
+  const task = queueWork(t, "economy codex task");
+
+  await t.clock.advance(HOUR);
+
+  expect((await questions(t)).map((q) => q.title).sort()).toEqual([
+    "execution-setting row openai / gpt-5.4-mini cannot run on this board",
+    // 種の frontier 行は pin の版の一覧に無く、選ばれていなくても最初の openai の観測で外れる(#696)
+    "execution-setting row openai / gpt-6-astra cannot run on this board",
+  ]);
+  expect(t.worker.started.map((started) => started.id)).toEqual([task.id]);
+  expect(t.worker.startedSettings.map((setting) => setting.model)).toEqual(["gpt-5.6-terra"]);
+});
+
+it("一覧が読めない観測は行の Quarantine を立てず、openai の候補を provider 全体で外す", async () => {
+  await bootOpenai(async () => ({
+    status: "unobservable",
+    provider: "openai",
+    cliVersion: "codex-cli 0.147.0",
+    reason: "App Server response drift: Error: model/list failed: models manager unavailable",
+  }));
+  const task = queueWork(t, "unreadable list");
+
+  await t.clock.advance(HOUR);
+
+  expect(await questions(t)).toEqual([]);
+  expect(t.worker.started).toEqual([]);
+  const queue = (await api(t.baseUrl, "GET", "/api/queue")).json.tasks as any[];
+  expect(queue.find((row) => row.id === task.id)?.status).toBe("skipped");
+});
+
+it("openai の行の question への回答は一覧を読み直し、id が載っていなければ拒まれて question は開いたまま、載れば受理される", async () => {
+  let models = MEASURED_OPENAI_MODELS;
+  await bootOpenai(async (now) => listing(models)(now));
+  queueWork(t, "observes the list");
+  await t.clock.advance(HOUR);
+  const [question] = await questions(t);
+  expect(question.title).toBe("execution-setting row openai / gpt-6-astra cannot run on this board");
+  const answer = () => api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, { answers: ["the row can run again"] });
+
+  const unlisted = await answer();
+  expect({ status: unlisted.status, error: unlisted.json.error }).toEqual({
+    status: 409,
+    error:
+      "openai / gpt-6-astra still cannot run: the Codex App Server model list (codex-cli 0.147.0, hidden models included) " +
+      "does not include this model id",
+  });
+  expect((await questions(t)).map((q) => q.status)).toEqual(["todo"]);
+
+  models = [...MEASURED_OPENAI_MODELS, "gpt-6-astra"];
+  expect((await answer()).status).toBe(200);
 });

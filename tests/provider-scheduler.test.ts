@@ -6,7 +6,7 @@ import type { ExecutionSetting } from "../src/execution-setting.js";
 import { executionSettingsFor } from "../src/execution-setting.js";
 import { InvalidAgentDefinitionError, type Provider } from "../src/registry.js";
 import { registerTask } from "../src/tasks.js";
-import { healthyOpenai, usagePanelText } from "./fakes.js";
+import { healthyOpenai, listedOpenaiModels, usagePanelText } from "./fakes.js";
 import {
   api,
   bootTidepool,
@@ -41,6 +41,7 @@ it("先頭 Provider が throttle 中でも同じ poll で次を選び、回復�
     provider: "openai",
     cliVersion: "codex-cli 0.147.0",
     plan: "plus",
+    models: listedOpenaiModels,
     windows: [
       {
         name: "primary",
@@ -101,6 +102,7 @@ const slidingWindows = (usedPercent: number) => async (now: Date): Promise<Codex
   provider: "openai",
   cliVersion: "codex-cli 0.147.0",
   plan: "plus",
+  models: listedOpenaiModels,
   windows: [
     {
       name: "primary",
@@ -158,6 +160,7 @@ it("model-specific window は同じ OpenAI Provider の対象 model だけを sk
       provider: "openai",
       cliVersion: "codex-cli 0.147.0",
       plan: "plus",
+      models: listedOpenaiModels,
       windows: [
         {
           name: "primary",
@@ -239,6 +242,7 @@ it("Provider/window ごとの catch-up timer は別 window の遅い reset に�
       provider: "openai",
       cliVersion: "codex-cli 0.147.0",
       plan: "plus",
+      models: listedOpenaiModels,
       windows: [
         {
           name: "primary",
@@ -276,6 +280,7 @@ it("Anthropic throttle は legacy board halt を残さず同じ poll と次 poll
       provider: "openai",
       cliVersion: "codex-cli 0.147.0",
       plan: "plus",
+      models: listedOpenaiModels,
       windows: [
         {
           name: "primary",
@@ -326,6 +331,7 @@ it("model-specific window が外すのは当たった task だけ —— 同じ 
       provider: "openai",
       cliVersion: "codex-cli 0.147.0",
       plan: "plus",
+      models: listedOpenaiModels,
       windows: [
         {
           name: "primary",

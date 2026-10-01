@@ -5,7 +5,7 @@ import { quarantineCliAuthForProvider } from "../src/cli-auth.js";
 import type { CodexAppServerProbeResult } from "../src/codex-app-server.js";
 import { type ExecutionSetting, executionSettingsFor } from "../src/execution-setting.js";
 import type { Provider } from "../src/registry.js";
-import { healthyOpenai } from "./fakes.js";
+import { healthyOpenai, listedOpenaiModels } from "./fakes.js";
 import {
   api,
   bootTidepool,
@@ -131,6 +131,7 @@ it("OpenAI の unauthorized は OpenAI だけの確認を立て、HTTP 回答時
           provider: "openai",
           cliVersion: "codex-cli 0.147.0",
           plan: "plus",
+          models: listedOpenaiModels,
           windows: [
             {
               name: "primary",

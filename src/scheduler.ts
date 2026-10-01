@@ -2,7 +2,7 @@ import { quarantineAgent, UnknownAgentError } from "./agent.js";
 import { boardHalts } from "./board-halt.js";
 import { type CliAuthCheck, quarantineCliAuthForProvider } from "./cli-auth.js";
 import type { Clock } from "./clock.js";
-import type { CodexAppServerProbe, CodexAppServerProbeResult } from "./codex-app-server.js";
+import { type CodexAppServerProbe, type CodexAppServerProbeResult, modelUnlisted } from "./codex-app-server.js";
 import {
   type ContainmentCheck,
   containmentPickupBlocked,
@@ -15,6 +15,7 @@ import {
   type ExecutionSetting,
   firstSelectable,
   type ListAgentTiers,
+  loadExecutionSettingTable,
   readExecutionSettings,
   selectable,
   windowMatchesModel,
@@ -26,7 +27,7 @@ import { aggregateCells, type CellStats, loadEpisodes, type RoutingEpisode, reco
 import { type InjectionQuery, injectionQueryText } from "./memory.js";
 import { registerDueMetaReviews } from "./meta-review.js";
 import type { ProcessContainers } from "./process-container.js";
-import { quarantineExcludedProviders, quarantineStops } from "./quarantine.js";
+import { quarantineExcludedProviders, quarantineStops, registerQuarantine, tableRowValue } from "./quarantine.js";
 import {
   canonicalHarness,
   InvalidAgentDefinitionError,
@@ -546,6 +547,11 @@ export function startScheduler(deps: {
         if (result.status === "unauthorized") quarantineCliAuthForProvider(db, provider, now);
         return observation;
       }
+      // ADR 0184 決定3: 観測のたびに表の openai の行すべてを一覧と照合する —— 選ばれていない行も外れる
+      for (const row of loadExecutionSettingTable(db)) {
+        if (row.provider !== "openai" || result.models.includes(row.model)) continue;
+        registerQuarantine(db, "tableRow", tableRowValue("openai", row.model), modelUnlisted(result.cliVersion), now);
+      }
       return evaluateAndReportProviderUsage(
         db,
         {
@@ -671,6 +677,12 @@ export function startScheduler(deps: {
             // Spend-down (ADR 0143) は Provider ごとの観測で、arm の後に開いた窓の対象を失効させる
             expireSpendDown(db, observation);
             observedProviders.set(setting.provider, observation);
+            if (setting.provider === "openai" && observation.status === "observed") {
+              // 候補はこの観測の前に引いたもの —— 照合で外れた行(ADR 0184 決定3)を落として選び直す
+              candidates = taskExecutionCandidates(head);
+              setting = pick(head);
+              continue;
+            }
           }
           const model = setting.model;
           const relevant = observation.windows.filter(

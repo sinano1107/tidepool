@@ -15,7 +15,7 @@ import {
   warnCliAuthExpiry,
 } from "./cli-auth.js";
 import type { Clock } from "./clock.js";
-import type { CodexAppServerProbe } from "./codex-app-server.js";
+import { type CodexAppServerProbe, modelUnlisted } from "./codex-app-server.js";
 import {
   type ContainmentCapability,
   checkHumanSurfaceRefusesAnonymous,
@@ -557,6 +557,27 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
       },
     }),
   };
+  // ADR 0184 決定5: openai の行の回答は model 一覧の読み直しで検査する —— 使用量と同じ App Server の往復
+  const modelProbes: Partial<Record<Provider, ModelProbe>> | undefined =
+    options.modelProbes || options.openaiUsage
+      ? {
+          ...(options.openaiUsage && {
+            openai: async (model: string) => {
+              const result = await options.openaiUsage!(options.clock.now());
+              if (result.status !== "observed") {
+                return {
+                  status: result.status === "unauthorized" ? ("unauthorized" as const) : ("unknown" as const),
+                  reason: result.reason,
+                };
+              }
+              return result.models.includes(model)
+                ? { status: "runs" as const }
+                : { status: "refused" as const, reason: modelUnlisted(result.cliVersion) };
+            },
+          }),
+          ...options.modelProbes,
+        }
+      : undefined;
   // resolved here for this board's actual wiring, same as `worker.id` below
   // — CONTEXT.md's Auditor never reads as unset (issue #42). Consumers built
   // directly rather than through startServer (e.g. a unit test constructing
@@ -700,7 +721,7 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
     registryReachability,
     teardownQuarantine,
     providerCliAuth,
-    modelProbes: options.modelProbes,
+    modelProbes,
     clock: options.clock,
     harnessContainment,
     // ADR 0040: quarantine 解除の検証が撃ち直す先。boot の一斉検査と pickup の

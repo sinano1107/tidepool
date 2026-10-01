@@ -1,4 +1,4 @@
-import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import {
@@ -28,7 +28,37 @@ function writeCompatibleSchemas(out: string): void {
           required: ["id", "method"],
           properties: { method: { enum: ["account/rateLimits/read"] }, params: { type: "null" } },
         },
+        {
+          required: ["id", "method", "params"],
+          properties: { method: { enum: ["model/list"] }, params: { $ref: "#/definitions/ModelListParams" } },
+        },
       ],
+      definitions: {
+        ModelListParams: {
+          properties: {
+            cursor: { type: ["string", "null"] },
+            includeHidden: { type: ["boolean", "null"] },
+            limit: { type: ["integer", "null"] },
+          },
+        },
+      },
+    }),
+  );
+  writeFileSync(
+    join(out, "v2", "ModelListResponse.json"),
+    JSON.stringify({
+      required: ["data"],
+      title: "ModelListResponse",
+      properties: {
+        data: { items: { $ref: "#/definitions/Model" }, type: "array" },
+        nextCursor: { type: ["string", "null"] },
+      },
+      definitions: {
+        Model: {
+          required: ["defaultReasoningEffort", "description", "displayName", "hidden", "id", "isDefault", "model", "supportedReasoningEfforts"],
+          properties: { id: { type: "string" }, model: { type: "string" }, hidden: { type: "boolean" } },
+        },
+      },
     }),
   );
   writeFileSync(
@@ -122,6 +152,16 @@ it("fixed Codex app-server stdio returns authenticated, normalized primary and s
             },
           },
         },
+        {
+          id: 4,
+          result: {
+            data: [
+              { id: "gpt-5.6-sol", model: "gpt-5.6-sol", hidden: false },
+              { id: "gpt-reserve", model: "gpt-reserve", hidden: true },
+            ],
+            nextCursor: null,
+          },
+        },
       ].map((line) => JSON.stringify(line)).join("\n"),
     };
   };
@@ -153,6 +193,8 @@ it("fixed Codex app-server stdio returns authenticated, normalized primary and s
         resetsAt: "1970-01-08T00:00:01.000Z",
       },
     ],
+    // hidden の id も走る(#1260 の実測)ので、一覧は includeHidden: true で読む
+    models: ["gpt-5.6-sol", "gpt-reserve"],
   });
   expect(calls.map((call) => call.args.slice(0, 2))).toEqual([
     ["--version"],
@@ -172,6 +214,7 @@ it("fixed Codex app-server stdio returns authenticated, normalized primary and s
     { method: "initialized" },
     { id: 2, method: "account/read", params: { refreshToken: false } },
     { id: 3, method: "account/rateLimits/read", params: null },
+    { id: 4, method: "model/list", params: { includeHidden: true } },
   ]);
 });
 
@@ -213,6 +256,50 @@ it("version or generated response-schema drift fails closed before App Server us
     expect(result).toMatchObject({ status: "unobservable", provider: "openai" });
     expect(appServerCalls).toBe(0);
   }
+});
+
+it.each([
+  [
+    "ModelListResponse の data が Model の配列でない",
+    (out: string) =>
+      writeFileSync(
+        join(out, "v2", "ModelListResponse.json"),
+        JSON.stringify({
+          required: ["models"],
+          title: "ModelListResponse",
+          properties: { models: { type: "array" }, nextCursor: { type: ["string", "null"] } },
+        }),
+      ),
+  ],
+  [
+    "model/list の params が includeHidden を持たない",
+    (out: string) => {
+      const path = join(out, "ClientRequest.json");
+      const requests = JSON.parse(readFileSync(path, "utf8"));
+      delete requests.definitions.ModelListParams.properties.includeHidden;
+      writeFileSync(path, JSON.stringify(requests));
+    },
+  ],
+])("model/list の生成 schema のずれは App Server を読む前に観測不能に倒れる: %s", async (_case, drift) => {
+  let appServerCalls = 0;
+  const command: CodexCliCommand = async (_executable, args) => {
+    if (args[0] === "--version") return { exitCode: 0, stdout: `${CODEX_APP_SERVER_VERSION}\n`, stderr: "" };
+    if (args[1] === "generate-json-schema") {
+      const out = args[args.indexOf("--out") + 1]!;
+      writeCompatibleSchemas(out);
+      drift(out);
+      return { exitCode: 0, stdout: "", stderr: "" };
+    }
+    appServerCalls += 1;
+    return { exitCode: 0, stdout: "", stderr: "" };
+  };
+
+  const result = await createCodexAppServerProbe({ executable: "/opt/tidepool/bin/codex", codexHome: "/tmp/codex", command })(
+    new Date(1_000),
+  );
+
+  expect(result).toMatchObject({ status: "unobservable", reason: "required App Server method or response schema drifted" });
+  expect(appServerCalls).toBe(0);
 });
 
 /** app-server の応答行だけを差し替える fake。`--version` と生成 schema は常に適合する。 */
@@ -288,6 +375,7 @@ const RATE_LIMITS = {
     },
   },
 };
+const MODEL_LIST = { id: 4, result: { data: [{ id: "gpt-5.6-sol", model: "gpt-5.6-sol", hidden: false }], nextCursor: null } };
 
 it.each([
   [
@@ -352,6 +440,22 @@ it.each([
     [INITIALIZED, { id: 2, result: { account: null, requiresOpenaiAuth: false } }, RATE_LIMITS],
     "does not use OpenAI authentication",
   ],
+  // model 一覧が読めないときは行を照合しない —— Quarantine を立てず provider 全体の fail-closed に倒す(ADR 0184 決定3)
+  [
+    "model/list が error",
+    [INITIALIZED, SIGNED_IN, RATE_LIMITS, { id: 4, error: { code: -32603, message: "models manager unavailable" } }],
+    "model/list failed",
+  ],
+  [
+    "model/list の応答が schema からずれている",
+    [INITIALIZED, SIGNED_IN, RATE_LIMITS, { id: 4, result: { models: ["gpt-5.6-sol"] } }],
+    "\"data\"",
+  ],
+  [
+    "model/list にページの続きがある",
+    [INITIALIZED, SIGNED_IN, RATE_LIMITS, { ...MODEL_LIST, result: { ...MODEL_LIST.result, nextCursor: "page-2" } }],
+    "nextCursor",
+  ],
 ])("失効と言い切れない観測は確認 question を立てず観測不能に留まる: %s", async (_case, rows, cause) => {
   expect(await probe(rows)).toMatchObject({
     status: "unobservable",
@@ -411,6 +515,7 @@ it("reset が pickup 時刻 + 窓幅を往復ぶん超えていても観測と�
         },
       },
     },
+    MODEL_LIST,
   ]);
 
   // Idle の除外は scheduler 側なので、窓は observed の結果に残る。
@@ -458,6 +563,7 @@ it("accepts the validated codex indexed view but does not guess that unknown lim
             },
           },
         },
+        MODEL_LIST,
       ].map((line) => JSON.stringify(line)).join("\n"),
     };
   };
@@ -515,6 +621,7 @@ function writeFakeCodex(root: string): string {
         secondary: { usedPercent: 20, windowDurationMins: 10_080, resetsAt: 604_801 },
       },
     },
+    4: MODEL_LIST.result,
   };
   const executable = join(root, "codex.cjs");
   writeFileSync(
