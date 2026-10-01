@@ -1,6 +1,12 @@
+import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { afterEach, expect, it, vi } from "vitest";
-import { enumerateToolsThrough, probeToolSurfaceCapability } from "../src/claude-worker.js";
+import {
+  CLAUDE_CLI_VERSION,
+  enumerateToolsThrough,
+  probeClaudeHarnessCapability,
+  probeToolSurfaceCapability,
+} from "../src/claude-worker.js";
 import type { ContainmentCapability } from "../src/containment.js";
 import { ProcessContainers } from "../src/process-container.js";
 import { containerHarness, FakeClock, FakeContainerRuntime, recordingSpawn } from "./fakes.js";
@@ -235,6 +241,21 @@ it("init 報告に memory_paths.auto が無ければ成立", async () => {
   expect((await probeWithInit({})).result).toEqual({ available: true });
 });
 
+// ADR 0186 決定6: ベンダーの最低版の門で CLI が起動を断ると、init 行は無く、result 行が理由を運ぶ。
+it("init 行が無く result 行の理由が cli_version_too_old なら、引退として名指しして不成立 — 固定の版を上げよと言う", async () => {
+  const spawn = recordingSpawn();
+  const { boardCall } = containerHarness(new ProcessContainers(new FakeContainerRuntime(spawn.spawn)));
+  const result = probeToolSurfaceCapability(enumerateToolsThrough(boardCall));
+  await vi.waitFor(() => expect(spawn.calls).toHaveLength(1));
+  spawn.processes[0]!.stdout.write(
+    `${JSON.stringify({ type: "result", subtype: "error_during_execution", is_error: true, startup_failure_reason: "cli_version_too_old" })}\n`,
+  );
+  spawn.emitExit(1, null);
+  const retired = await result;
+  expect(retired.available === false && retired.reason).toContain("retired");
+  expect(retired.available === false && retired.reason).toContain("raise the pinned version");
+});
+
 // ── 封じ込め能力の3つ目の問いとしての振る舞い(ゲートの側)──────────────
 
 it("ツール面がずれた Claude Harness は pickup が止まり、確認 question が立つ", async () => {
@@ -320,4 +341,44 @@ it("fs 半分が不成立ならツール面の ping は撃たない — 安い�
   });
   await openQuestion(t);
   expect(ok.calls()).toBe(0);
+});
+
+// ── 版の一致(ADR 0186 決定2・5)──────────────────────────────────────
+
+it("門が期待する版は repo の固定の版の1か所(claude-cli-version)を読む", () => {
+  expect(CLAUDE_CLI_VERSION).toBe(readFileSync(new URL("../claude-cli-version", import.meta.url), "utf8").trim());
+});
+
+it("版が固定の版と違えば、ツール面の probe を撃たずに不成立 — 期待した版・観測した版・入れるコマンドを言う", async () => {
+  const enumerate = vi.fn(async () => ({ tools: WORK_SURFACE, mcpServers: [], autoMemoryPath: null }));
+  const result = await probeClaudeHarnessCapability(() => "2.1.290 (Claude Code)", enumerate);
+  expect(enumerate).not.toHaveBeenCalled();
+  expect(result.available).toBe(false);
+  const reason = result.available === false ? result.reason : "";
+  expect(reason).toContain(CLAUDE_CLI_VERSION);
+  expect(reason).toContain("2.1.290");
+  expect(reason).toContain(`install.sh | bash -s ${CLAUDE_CLI_VERSION}`);
+  expect(reason).toContain(`npm install -g @anthropic-ai/claude-code@${CLAUDE_CLI_VERSION}`);
+});
+
+it("版が固定の版と一致すれば、ツール面の probe を撃ち、その答えがそのまま返る", async () => {
+  const enumerate = vi.fn(async () => ({ tools: [...WORK_SURFACE, "CronCreate"], mcpServers: [], autoMemoryPath: null }));
+  const result = await probeClaudeHarnessCapability(() => `${CLAUDE_CLI_VERSION} (Claude Code)`, enumerate);
+  expect(enumerate).toHaveBeenCalledTimes(1);
+  expect(result.available === false && result.reason).toContain("CronCreate");
+});
+
+it("`claude --version` が読めなければ不成立 — ツール面の probe は撃たない", async () => {
+  const enumerate = vi.fn(async () => ({ tools: WORK_SURFACE, mcpServers: [], autoMemoryPath: null }));
+  const result = await probeClaudeHarnessCapability(() => {
+    throw new Error("spawnSync claude ENOENT");
+  }, enumerate);
+  expect(enumerate).not.toHaveBeenCalled();
+  expect(result.available).toBe(false);
+  expect(result.available === false && result.reason).toContain("ENOENT");
+});
+
+it("`claude --version` の出力が版として読めなければ不成立", async () => {
+  const result = await probeClaudeHarnessCapability(() => "", async () => ({ tools: WORK_SURFACE, mcpServers: [], autoMemoryPath: null }));
+  expect(result.available).toBe(false);
 });

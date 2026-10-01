@@ -13,7 +13,19 @@ Run every step from the Mac, in this order. `<version>` is the CLI version you a
 limactl shell tidepool -- bash -lc '~/.local/bin/claude install <version> && ~/.local/bin/claude --version'
 ```
 
-## 2. Start the board and see the containment probe hold
+## 2. Point the VM checkout's pin at the new version
+
+The board refuses to pick up work on a version other than the one `~/tidepool/claude-cli-version`
+names. Change it in the VM checkout only:
+
+```bash
+limactl shell tidepool -- bash -lc 'echo <version> > ~/tidepool/claude-cli-version'
+```
+
+A VM restart installs whatever version this file names. Keep the change until step 6's PR merges,
+then put the file back with `git -C ~/tidepool checkout claude-cli-version` before pulling.
+
+## 3. Start the board and see the containment probe hold
 
 ```bash
 caffeinate -i -s limactl shell tidepool -- bash -lc '~/tidepool/scripts/vm-board.sh'
@@ -24,7 +36,7 @@ The board runs the containment probe at boot and on every pickup. It holds if no
 that question appears, its text names the tools or settings the new CLI no longer honours. Keep the
 board running for the next step.
 
-## 3. Run the three canaries
+## 4. Run the three canaries
 
 ```bash
 limactl shell tidepool -- bash -lc 'cd ~/tidepool && export PATH="$HOME/.local/bin:$PATH" && bash .agents/skills/deploy-pi/scripts/containment-canary.sh local'
@@ -32,11 +44,11 @@ limactl shell tidepool -- bash -lc 'cd ~/tidepool && export PATH="$HOME/.local/b
 limactl shell tidepool -- bash -lc 'cd ~/tidepool && export PATH="$HOME/.local/bin:$PATH" && bash .agents/skills/deploy-pi/scripts/tool-floor-canary.sh local'
 ```
 
-The containment canary needs the board from step 2. The deploy-pi skill explains how to read each
+The containment canary needs the board from step 3. The deploy-pi skill explains how to read each
 canary's verdict: [containment](../.agents/skills/deploy-pi/SKILL.md#containment-canary-network-layer),
 settings-floor and tool-floor.
 
-## 4. Run the conformance test
+## 5. Run the conformance test
 
 ```bash
 limactl shell tidepool -- bash -lc 'cd ~/tidepool && export PATH="$HOME/.local/bin:$PATH" && systemd-run --user --scope -p Delegate=yes -- npx tsx scripts/claude-cli-conformance.ts'
@@ -59,7 +71,7 @@ as the board: every Board call runs in its own container.
 demand, so this is an unverified surface. It is left to the existing fail-closed handling (ADR
 0186 決定7).
 
-## 5. Open the PR that changes the pinned version
+## 6. Open the PR that changes the pinned version
 
-Change the pinned version and paste the table from step 4 into the PR description. The pin's single
-location in the repo comes with #1276 (ADR 0186 決定5).
+Write the new version into `claude-cli-version` at the repo root and paste the table from step 5
+into the PR description.

@@ -3508,6 +3508,7 @@ You are Kipper, the tidepool board's Kimi work agent.
         ...process.env,
         CLAUDE_STREAM_IDLE_TIMEOUT_MS: "600000",
         API_TIMEOUT_MS: "600000",
+        DISABLE_AUTOUPDATER: "1",
         CLAUDE_CODE_DISABLE_ADVISOR_TOOL: "1",
         GIT_AUTHOR_NAME: "deckhand",
         GIT_AUTHOR_EMAIL: "deckhand@tidepool.invalid",
@@ -3564,6 +3565,18 @@ You are Kipper, the tidepool board's Kimi work agent.
     } finally {
       vi.unstubAllEnvs();
     }
+  });
+
+  // ADR 0186 決定4: worker の `claude` も自分で更新しない —— 向き先の provider に依らない
+  it("worker の spawn env は CLI の自動更新を閉じる(anthropic も moonshot も)", async () => {
+    const keyFile = await makeMoonshotKeyFile();
+    const { start, calls } = await makeWorker(
+      { "agents/kipper.md": MOONSHOT_AGENT_MD },
+      { moonshotApiKeyFile: keyFile },
+    );
+    start("task-claude");
+    start("task-kimi", null, "kipper");
+    expect(calls.map((call) => call.env.DISABLE_AUTOUPDATER)).toEqual(["1", "1"]);
   });
 
   it("moonshot agent の --model は provider のモデル表記でピン留めされ、env にも同じ値が載る(表の moonshot 行、ADR 0005 / 0110)", async () => {
