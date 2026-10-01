@@ -224,7 +224,7 @@ it("一覧に無い openai の行は選ばれていてもいなくても Quarant
 });
 
 // provider 全体の fail-closed は provider-scheduler.test.ts の観測不能の釘が言う。ここは表に一覧外の行
-// (種の gpt-6-astra)があっても行の Quarantine が立たないことだけ
+// があっても行の Quarantine が立たないことだけ
 it("一覧が読めない観測は、表に一覧外の行があっても行の Quarantine を立てない", async () => {
   await bootOpenai(async () => ({
     status: "unobservable",
@@ -232,6 +232,13 @@ it("一覧が読めない観測は、表に一覧外の行があっても行の 
     cliVersion: "codex-cli 0.147.0",
     reason: "App Server response drift: Error: model/list failed: models manager unavailable",
   }));
+  // 種の行に頼らず、一覧に無い行をこのテスト自身で置く
+  applyExecutionSettingsChange(
+    t.db,
+    { setting: "row", row: { provider: "openai", tier: "economy", model: "gpt-5.4-mini", effort: "high", price_in: 1, price_out: 4 } },
+    "webui",
+    t.clock.now(),
+  );
   queueWork(t, "unreadable list");
 
   await t.clock.advance(HOUR);
