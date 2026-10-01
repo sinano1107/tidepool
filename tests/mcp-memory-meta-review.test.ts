@@ -328,7 +328,7 @@ it("list_memory_entries は scope の名前 / null(盤面全体)/ 省略(すべ�
     expect(await ids({ scope: "sandbox", kind: "definition", page: 1 })).toEqual([sandboxDefinition]);
     expect(await ids({ path: "deploy" })).toEqual([boardWide]);
 
-    for (const verb of ["list_memory_entries", "list_memory_candidates", "list_memory_behaviors", "list_memory_proposals", "list_precedents"]) {
+    for (const verb of ["list_memory_entries", "list_memory_candidates", "list_memory_proposals", "list_precedents"]) {
       expect(await call(verb)).toMatchObject({ isError: false, body: { truncated: false, event_id: expect.any(Number) } });
     }
     expect(await call("list_memory_branches")).toMatchObject({ isError: false, body: { branches: expect.any(Array), event_id: expect.any(Number) } });

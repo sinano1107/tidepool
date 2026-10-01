@@ -206,22 +206,6 @@ it("無効化済みのエントリは書き手の印 invalidated_by を持つ �
   ]);
 });
 
-it("list_memory_behaviors は approved の Behavior を宛先・scope で絞らずに返し、candidate と無効化済みは返さない", () => {
-  const { db, reader, behavior } = board();
-  const approved = [
-    behavior({ title: "Everyone rebases", scope: null }),
-    behavior({ title: "Deckhand pins Node", scope: "charts", addressee: "deckhand" }),
-    behavior({ title: "Tako writes tests", scope: "tidepool", addressee: "tako" }),
-  ];
-  const retired = behavior({ title: "Retired habit" });
-  behavior({ title: "Still a candidate" });
-  for (const id of [...approved, retired])
-    approveMemoryProposal(db, { kind: "memory", op: "approve", candidate_id: id, replaces: [] }, "question-1", "webui", at);
-  invalidateMemoryEntry(db, { entry_id: retired, reason: "environment" }, "human", "webui", at);
-
-  expect(pullMemoryList(db, reader, "list_memory_behaviors", {}, at).entries.map((e) => e.id)).toEqual(approved);
-});
-
 /** 人間が原文つきで書いた Behavior と、注釈の原文つきで書いた Exemplar(出所は board の decision)。 */
 function humanOriginals({ db, decision }: ReturnType<typeof board>) {
   const behavior = recordBehavior(
@@ -235,13 +219,13 @@ function humanOriginals({ db, decision }: ReturnType<typeof board>) {
   return { behavior, exemplar };
 }
 
-it("一覧3つの返却はエントリの原文 original も Exemplar の注釈の原文 annotations[].original も持たない —— 人間の面の一覧は注釈の原文を返し続ける(#1052 / ADR 0122 追記 #1225)", () => {
+it("一覧2つの返却はエントリの原文 original も Exemplar の注釈の原文 annotations[].original も持たない —— 人間の面の一覧は注釈の原文を返し続ける(#1052 / ADR 0122 追記 #1225)", () => {
   const b = board();
   const { db, reader, behavior } = b;
   behavior({ title: "Still a candidate" });
   const { exemplar } = humanOriginals(b);
 
-  for (const verb of ["list_memory_candidates", "list_memory_behaviors", "list_memory_entries"] as const) {
+  for (const verb of ["list_memory_candidates", "list_memory_entries"] as const) {
     const { entries } = pullMemoryList(db, reader, verb, {}, at);
     expect(entries.length).toBeGreaterThan(0);
     for (const entry of entries) {

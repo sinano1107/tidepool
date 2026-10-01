@@ -14,7 +14,6 @@ export function paged<T>(rows: readonly T[], page = 1): { rows: T[]; truncated: 
 /** 主題 memory の meta-review の接続で worker の memory verb を置き換える専用 verb(ADR 0122 決定2)。 */
 export const MEMORY_META_REVIEW_VERBS = [
   "list_memory_candidates",
-  "list_memory_behaviors",
   "list_precedents",
   "list_memory_entries",
   "read_memory_entries",

@@ -1644,12 +1644,12 @@ function metaReviewRow<T extends ListedEntry>(entry: T) {
   return { ...rest, annotations: annotations?.map(withoutOriginal) };
 }
 
-/** meta-review の一覧3つ(issue #619): 人間の面と同じ一覧を verb ごとに絞ってページで返す。scope・宛先では
+/** meta-review の一覧2つ(issue #619): 人間の面と同じ一覧を verb ごとに絞ってページで返す。scope・宛先では
  *  絞らない(両方を見る必要があるのは workspace を跨いで構造を見る人間と meta-review だけ —— ADR 0178 決定8)。 */
 export function pullMemoryList(
   db: Db,
   reader: Pick<MemoryReader, "taskId" | "agent">,
-  verb: "list_memory_candidates" | "list_memory_behaviors" | "list_memory_entries",
+  verb: "list_memory_candidates" | "list_memory_entries",
   input: Parameters<typeof listMemoryEntries>[1] & { include_invalidated?: boolean; page?: number },
   at: Date,
 ) {
@@ -1659,7 +1659,7 @@ export function pullMemoryList(
   })();
 }
 
-/** 一覧3つの行(ページ割り前、meta-review の行の形)。pull と材料の節の candidate の部分が共有する。 */
+/** 一覧2つの行(ページ割り前、meta-review の行の形)。pull と材料の節の candidate の部分が共有する。 */
 function memoryListRows(db: Db, verb: Parameters<typeof pullMemoryList>[2], input: Parameters<typeof pullMemoryList>[3]) {
   // 過去の提案の読み物(ADR 0152 決定2): 後継の文言を載せる —— 人間名義の後継なら修正つきで承認された candidate
   // (か、修正つきの統合に置き換えられた candidate)
@@ -1670,12 +1670,10 @@ function memoryListRows(db: Db, verb: Parameters<typeof pullMemoryList>[2], inpu
   const entries =
     verb === "list_memory_entries"
       ? listMemoryEntries(db, input)
-      : verb === "list_memory_behaviors"
-        ? listMemoryEntries(db, { kind: "behavior", state: "approved" })
-        : ((all) =>
-            all
-              .filter((e) => e.state === "candidate" && (input.kind === undefined || e.kind === input.kind) && (input.include_invalidated || e.invalidation_reason === null))
-              .map((e) => withSuccessor(e, all)))(listMemoryEntries(db, {}));
+      : ((all) =>
+          all
+            .filter((e) => e.state === "candidate" && (input.kind === undefined || e.kind === input.kind) && (input.include_invalidated || e.invalidation_reason === null))
+            .map((e) => withSuccessor(e, all)))(listMemoryEntries(db, {}));
   return entries.map(metaReviewRow);
 }
 
@@ -1712,7 +1710,7 @@ function memoryProposalRows(db: Db, window?: MetaReviewWindow) {
         question_id: row.id,
         proposal: JSON.parse(row.question_proposal) as MemoryProposal,
         answer: answered?.answers[0]?.answer ?? null,
-        // 人間の原文(original_* と注釈の original)は人間の面と正本の event にだけ残す —— 一覧3 verb と同じ側(#1173 / ADR 0122 追記 #1225)
+        // 人間の原文(original_* と注釈の original)は人間の面と正本の event にだけ残す —— 一覧2 verb と同じ側(#1173 / ADR 0122 追記 #1225)
         amendment: answered?.amendment
           ? (({ original_title: _t, original_text: _x, annotations, ...rest }) => ({ ...rest, annotations: annotations?.map(withoutOriginal) }))(answered.amendment as MemoryAmendment)
           : null,

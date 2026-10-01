@@ -109,7 +109,7 @@ it("approve の回答で candidate が approved になって Behavior の pull �
 
     expect((await answer(questionId, "approve")).status).toBe(200);
     expect(await entry(ids[0]!)).toMatchObject({ state: "approved", invalidation_reason: null });
-    expect((await call("list_memory_behaviors", {})).entries.map((e: any) => e.id)).toEqual([ids[0]]);
+    expect((await call("list_memory_entries", { kind: "behavior", state: "approved" })).entries.map((e: any) => e.id)).toEqual([ids[0]]);
   } finally {
     await client.close();
   }
@@ -392,7 +392,7 @@ it("consolidate の回答は reject で新 candidate を rejected にして appr
   try {
     const approved = await approvedBehavior(board, "Split migrations", "tidepool");
     const rejected = (await task((await consolidate(board, [approved, board.ids[0]!])).question_id));
-    const behaviors = async () => (await board.call("list_memory_behaviors", {})).entries.map((e: any) => e.id);
+    const behaviors = async () => (await board.call("list_memory_entries", { kind: "behavior", state: "approved" })).entries.map((e: any) => e.id);
 
     expect((await answer(rejected.id, "reject", because)).status).toBe(200);
     expect(await entry(rejected.question_proposal.candidate_id)).toMatchObject({ invalidation_reason: "rejected" });
@@ -411,7 +411,7 @@ it("invalidate の回答は reject で approved 集合を変えず、approve で
   const board = await boardWithMetaReview();
   try {
     const target = await approvedBehavior(board, "Split migrations");
-    const behaviors = async () => (await board.call("list_memory_behaviors", {})).entries.map((e: any) => e.id);
+    const behaviors = async () => (await board.call("list_memory_entries", { kind: "behavior", state: "approved" })).entries.map((e: any) => e.id);
 
     expect((await answer((await invalidate(board, target)).question_id, "reject", because)).status).toBe(200);
     expect(await behaviors()).toEqual([target]);
