@@ -19,7 +19,7 @@ describe("spawnTools", () => {
     // `Task`(Agent)は boardDoctrine(board-prose.ts)が意図的に開いている既決事項(ADR 0010 追記)、
     // `TaskOutput` / `TaskStop` は todo リストの仲間ではなく `Bash` の
     // `run_in_background` の受け口。
-    expect(spawnTools("work", ["*"])).toEqual([
+    expect(spawnTools("work", false)).toEqual([
       "Bash",
       "Read",
       "Write",
@@ -45,7 +45,7 @@ describe("spawnTools", () => {
     // false`)に残る。ここが2層目である理由は冗長性ではなく性質の違い: deny 層は
     // **黙って**効かなくなりうる(ADR 0037 追記)のに対し、`--tools` による除去は
     // init イベントの `tools` 配列を読めば**観測できる**。
-    expect(spawnTools("review", ["*"])).toEqual([
+    expect(spawnTools("review", false)).toEqual([
       "Bash",
       "Read",
       "Glob",
@@ -66,7 +66,7 @@ describe("spawnTools", () => {
   // ADR 0185: 空の skill 許可リストには `--disable-slash-commands` が付き、CLI はその
   // フラグで面から `Skill` を外す。宣言を実際の面に合わせるので、ここでも外れる。
   it("skill 許可リストが空の agent の work は16本 — Skill だけが面から外れる(ADR 0185)", () => {
-    expect(spawnTools("work", [])).toEqual([
+    expect(spawnTools("work", true)).toEqual([
       "Bash",
       "Read",
       "Write",
@@ -87,7 +87,7 @@ describe("spawnTools", () => {
   });
 
   it("skill 許可リストが空の agent の review は13本 — 編集系3本に加えて Skill も外れる(ADR 0185)", () => {
-    expect(spawnTools("review", [])).toEqual([
+    expect(spawnTools("review", true)).toEqual([
       "Bash",
       "Read",
       "Glob",
@@ -104,16 +104,8 @@ describe("spawnTools", () => {
     ]);
   });
 
-  it("有限の skill 許可リストでは Skill は面に残る — 外れるのは空のときだけ(ADR 0185)", () => {
-    // 有限リストは complement deny で絞る。全件が deny されても `Skill` は面に残る
-    // (#1268 の実測)ので、宣言からも外さない。データが面を広げることはない。
-    // `["*"]` の面は上の literal で釘を打ってあるので、それと同じであることを見る。
-    expect(spawnTools("work", ["code-review"])).toEqual(spawnTools("work", ["*"]));
-    expect(spawnTools("review", ["code-review"])).toEqual(spawnTools("review", ["*"]));
-  });
-
   it("review 以外は work と同じ面 — read-only は review という task type の性質(ADR 0013)", () => {
-    expect(spawnTools("question", ["*"])).toEqual(spawnTools("work", ["*"]));
+    expect(spawnTools("question", false)).toEqual(spawnTools("work", false));
   });
 
   it("落としたものは面に現れない: 人間のアカウント名義や人間の注意を直接触るツール", () => {
@@ -122,7 +114,7 @@ describe("spawnTools", () => {
     // Digest を素通りする。`EnterWorktree` はセッションの cwd を branch discipline の
     // 外へ移す。`CronCreate` は測定2 でそのまま実行できてしまったものである。
     for (const taskType of ["work", "review"] as const) {
-      const tools = spawnTools(taskType, ["*"]);
+      const tools = spawnTools(taskType, false);
       expect(tools).not.toContain("RemoteTrigger");
       expect(tools).not.toContain("PushNotification");
       expect(tools).not.toContain("CronCreate");

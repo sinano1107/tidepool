@@ -1037,7 +1037,7 @@ describe("ClaudeCodeWorker", () => {
     expect(rec.calls).toEqual([]);
     expect(calls[0]!.args).toContain("--disable-slash-commands");
     // disable フラグが CLI の面から外す `Skill` を、宣言からも外す
-    expect(spawnedTools(calls[0]!.args)).toEqual(WORK_SURFACE_WITHOUT_SKILL);
+    expect(spawnedTools(calls[0]!.args)).not.toContain("Skill");
   });
 
   it("有限の許可リストは列挙 ping の全集合から許可の補集合を Skill(名前) で deny する(ADR 0025 point 3)", async () => {
@@ -1056,6 +1056,8 @@ describe("ClaudeCodeWorker", () => {
     expect(deny).toContain("Skill(grilling)");
     // 許可した skill は deny されない
     expect(deny).not.toContain("Skill(code-review)");
+    // 全件 deny されても面に残る(#1268 の実測)ので、`Skill` が外れるのは空リストだけ(ADR 0185)
+    expect(spawnedTools(calls[0]!.args)).toContain("Skill");
   });
 
   it("@workspace は checkout の .claude/skills 走査との差分でホスト由来(user + plugin)だけを deny する(ADR 0025)", async () => {

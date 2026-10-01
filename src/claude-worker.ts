@@ -250,17 +250,18 @@ const REVIEW_REMOVED_TOOLS: readonly string[] = ["Write", "Edit", "NotebookEdit"
  *  純関数、配線は `launch()`」の分離。
  *
  *  review 以外はすべて work と同じ面である — read-only は review という task
- *  type の性質であって実行エージェントの性質ではない(ADR 0013)。`skills` は
- *  agent の skill 許可リストで、見るのは空かどうかだけ(空なら `Skill` を外す、
- *  ADR 0185)。spawn の `--tools` と init 行の照合はこの同じ入力でここを呼ぶ。 */
-export function spawnTools(taskType: Task["type"], skills: readonly string[]): string[] {
+ *  type の性質であって実行エージェントの性質ではない(ADR 0013)。
+ *  `slashCommandsDisabled` は skill 許可リストが空の形(`--disable-slash-commands`)
+ *  で、CLI はそのフラグで面から `Skill` を外すので宣言からも外す(ADR 0185)。spawn の
+ *  `--tools` と init 行の照合は、フラグを決めた同じ値でここを呼ぶ。 */
+export function spawnTools(taskType: Task["type"], slashCommandsDisabled: boolean): string[] {
   // filter は毎回**新しい配列**を返す — 床の定数そのものを呼び出し側に渡すと、
   // 呼び出し側の `sort()` や `push()` が床を書き換えられてしまう(`reviewToolDenials`
   // が毎回組み立て直しているのと同じ理由)。
   return WORKER_TOOLS.filter(
     (tool) =>
       !(taskType === "review" && REVIEW_REMOVED_TOOLS.includes(tool)) &&
-      !(skills.length === 0 && tool === "Skill"),
+      !(slashCommandsDisabled && tool === "Skill"),
   );
 }
 
@@ -303,10 +304,10 @@ const MCP_TOOL_PREFIX = "mcp__";
 function checkToolSurface(
   observed: string[],
   taskType: Task["type"],
-  skills: readonly string[],
+  slashCommandsDisabled: boolean,
   mcpServers: string[],
 ): ContainmentCapability {
-  const expected = spawnTools(taskType, skills);
+  const expected = spawnTools(taskType, slashCommandsDisabled);
   const builtIn = observed.filter((tool) => !tool.startsWith(MCP_TOOL_PREFIX));
   const unexpected = builtIn.filter((tool) => !expected.includes(tool));
   const missing = expected.filter((tool) => !builtIn.includes(tool));
@@ -1280,7 +1281,7 @@ const TOOL_SURFACE_PROBE_ARGS = [
   JSON.stringify(AUTO_MEMORY_CLOSED),
   "--tools",
   // 測るのはホストの CLI であって agent の形ではない — `Skill` を含む面で撃つ(ADR 0185)
-  spawnTools("work", [SKILL_WILDCARD]).join(","),
+  spawnTools("work", false).join(","),
 ];
 
 // この ping の timeout は skill 列挙と**分ける**。失敗の重さが違う:
@@ -1353,7 +1354,7 @@ export async function probeToolSurfaceCapability(
     };
   }
   // work プロファイルで撃っている(TOOL_SURFACE_PROBE_ARGS のコメント参照)
-  const surface = checkToolSurface(observed.tools, "work", [SKILL_WILDCARD], observed.mcpServers);
+  const surface = checkToolSurface(observed.tools, "work", false, observed.mcpServers);
   return surface.available ? checkAutoMemoryClosed(observed.autoMemoryPath) : surface;
 }
 
@@ -2063,7 +2064,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
         // immediately before the next `--flag` because the option is variadic
         // (`--tools <tools...>`) — a bare token after it would be swallowed.
         "--tools",
-        spawnTools(task.type, definition.skills).join(","),
+        spawnTools(task.type, enforcement.disableSlashCommands).join(","),
         // the empty-allowlist shape: one flag disables every slash command
         // (skills included), so no per-skill enumeration is needed (ADR 0025
         // point 5).
@@ -2166,7 +2167,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
         advisorObserved.consultations += countAdvisorConsultations(parsed);
         advisorObserved.mainModel = readInitModel(parsed) ?? advisorObserved.mainModel;
         if (!toolSurfaceObserved) {
-          toolSurfaceObserved = this.checkSessionToolSurface(task, definition.skills, parsed);
+          toolSurfaceObserved = this.checkSessionToolSurface(task, enforcement.disableSlashCommands, parsed);
         }
       }
     });
@@ -2324,14 +2325,14 @@ export class ClaudeCodeWorker implements WorkerAdapter {
    *  観測面になる。不成立の扱いはツール面のずれとまったく同じ(強制回収 + quarantine)。 */
   private checkSessionToolSurface(
     task: Task,
-    skills: readonly string[],
+    slashCommandsDisabled: boolean,
     parsed: Record<string, unknown> | null,
   ): boolean {
     const tools = readInitField(parsed, "tools");
     if (!tools) return false;
     const mcpServers = readInitMcpServers(parsed);
     const toolSurface: ContainmentCapability = mcpServers
-      ? checkToolSurface(tools, task.type, skills, mcpServers)
+      ? checkToolSurface(tools, task.type, slashCommandsDisabled, mcpServers)
       : {
           available: false,
           reason:
