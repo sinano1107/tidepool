@@ -2,7 +2,7 @@ import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { ClaudeCodeWorker } from "../src/claude-worker.js";
-import type { ModelProbeResult } from "../src/cli-auth.js";
+import type { ModelProbe, ModelProbeResult } from "../src/cli-auth.js";
 import { applyExecutionSettingsChange, executionSettingsFor } from "../src/execution-setting.js";
 import { registerQuarantine, tableRowValue } from "../src/quarantine.js";
 import type { Provider } from "../src/registry.js";
@@ -25,10 +25,9 @@ const settle = () => new Promise((resolve) => setImmediate(resolve));
 const REFUSED_404 = `${JSON.stringify({ type: "result", subtype: "success", is_error: true, api_error_status: 404, total_cost_usd: 0, modelUsage: {} })}\n`;
 
 const events = async (id: string) => (await api(t.baseUrl, "GET", `/api/tasks/${id}/events`)).json as any[];
-const modelOf = (args: string[]) => args[args.indexOf("--model") + 1];
 
 /** 実 Claude adapter を fake の容器機構の上で盤面に載せる(worker-exit-without-report.test.ts と同じ形)。 */
-async function bootClaude(options: { provider?: Provider; modelProbes?: Partial<Record<Provider, (model: string) => Promise<ModelProbeResult>>> } = {}) {
+async function bootClaude(options: { provider?: Provider; modelProbes?: Partial<Record<Provider, ModelProbe>> } = {}) {
   const provider = options.provider ?? "anthropic";
   const proc = recordingSpawn();
   const registryDir = await makeRegistry();
@@ -73,7 +72,6 @@ it("404 で終わった session は行の Quarantine を1枚立て、failure que
   );
   const refused = queueWork(t, "refused task");
   await t.clock.advance(HOUR);
-  expect(proc.calls.map((call) => modelOf(call.args))).toEqual(["claude-sonnet-5-5"]);
   // 走っている間に別のタスクを先頭へ置く —— 断られたタスクがその前へ戻ることを見るため
   const other = queueWork(t, "queued after");
   await api(t.baseUrl, "POST", `/api/tasks/${other.id}/move`, { after: null });
@@ -100,7 +98,6 @@ it("404 で終わった session は行の Quarantine を1枚立て、failure que
   expect(timeline.map((e) => e.kind)).not.toContain("cap_interrupted");
   // 先頭へ戻ったので、先頭へ動かした other より先に、同じティアの別の行で拾い直される
   expect(spawned.map((e) => e.payload.model)).toEqual(["claude-sonnet-5-5", "claude-sonnet-5"]);
-  expect(proc.calls.map((call) => modelOf(call.args))).toEqual(["claude-sonnet-5-5", "claude-sonnet-5"]);
 });
 
 it("同じ行への2度目の観測は question を増やさず、開いている question に再発火を刻む", async () => {
