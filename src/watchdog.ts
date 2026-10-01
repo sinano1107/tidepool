@@ -1,7 +1,7 @@
 import type { Clock } from "./clock.js";
 import { quarantineContainment } from "./containment.js";
 import type { Db } from "./db.js";
-import { appendEvent, getEvent, latestEventOfTask, type RowRefusal } from "./events.js";
+import { appendEvent, getEvent, latestEventOfTask, type RowRefusal, type RowRefusalCause } from "./events.js";
 import type { GitHubAuth } from "./github-auth.js";
 import type { Landing } from "./landing.js";
 import type { ProcessContainers } from "./process-container.js";
@@ -145,6 +145,12 @@ export function capInterruptionHandler(deps: TeardownDeps): (taskId: string, rec
   };
 }
 
+/** 行の拒否の証拠の種類 → Quarantine の理由の後半。 */
+const ROW_REFUSAL_EVIDENCE: Record<RowRefusalCause, string> = {
+  api_404: "API error 404 for this model id",
+  cli_version_too_old: "API error code claude_code_version_too_old",
+};
+
 /** 行の拒否(CONTEXT.md / ADR 0184 決定4)の盤面側の一撃。上限到達による中断と同じく失敗では
  *  なく failure question を立てないが、**記録と status の決着を後始末より前に**置く: 行の
  *  Quarantine・`row_refused`・`todo` 先頭への復帰を1 transaction で済ませてから後始末に入るので、
@@ -163,8 +169,9 @@ export function rowRefusalHandler(
         deps.db,
         "tableRow",
         tableRowValue(refusal.provider, refusal.model),
-        `The worker session for task ${taskId} ended with API error 404 for this model id`,
+        `The worker session for task ${taskId} ended with ${ROW_REFUSAL_EVIDENCE[refusal.cause]}`,
         now,
+        refusal.cause,
       );
       returnToQueueHead(deps.db, task, { kind: "row_refused", ...refusal }, now);
       // 同じ transaction に置く —— 間で落ちると後始末の印の無い todo が残り、起動時の復旧が後始末を走らせない

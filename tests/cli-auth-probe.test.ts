@@ -7,7 +7,7 @@ import {
   createClaudeModelProbe,
   createMoonshotModelProbe,
 } from "../src/claude-cli-auth.js";
-import { isCapInterruptionEnvelope, isCliAuthFailureEnvelope, isRowRefusalEnvelope } from "../src/cli-auth.js";
+import { isCapInterruptionEnvelope, isCliAuthFailureEnvelope, rowRefusalCause } from "../src/cli-auth.js";
 import { ProcessContainers } from "../src/process-container.js";
 import { containerHarness, FakeClock, FakeContainerRuntime, recordingSpawn } from "./fakes.js";
 import { tempDir } from "./harness.js";
@@ -144,12 +144,12 @@ it("api_error_status を伴わない「session limit」の文言からは推測�
   expect(isCapInterruptionEnvelope(null)).toBe(false);
 });
 
-/** 行の拒否(CONTEXT.md / ADR 0184 決定3)の述語。401 / 429 と同じ形で、envelope の
+/** 行の拒否(CONTEXT.md / ADR 0184 決定3・ADR 0187 決定1)の証拠の分類。401 / 429 と同じ形で、envelope の
  *  構造化フィールド一点だけを見る。 */
 it("result envelope の api_error_status: 404 だけを行の拒否に分類する(ADR 0184 決定3)", () => {
   // moonshot(Claude CLI 2.1.286)が未知の id に返した envelope の形(2026-10-01 実測、#1249)
   expect(
-    isRowRefusalEnvelope({
+    rowRefusalCause({
       type: "result",
       subtype: "success",
       is_error: true,
@@ -157,18 +157,52 @@ it("result envelope の api_error_status: 404 だけを行の拒否に分類す�
       total_cost_usd: 0,
       modelUsage: {},
     }),
-  ).toBe(true);
-  expect(isRowRefusalEnvelope({ is_error: true, api_error_status: 401 })).toBe(false);
-  expect(isRowRefusalEnvelope({ is_error: true, api_error_status: 429 })).toBe(false);
+  ).toBe("api_404");
+  expect(rowRefusalCause({ is_error: true, api_error_status: 401 })).toBeNull();
+  expect(rowRefusalCause({ is_error: true, api_error_status: 429 })).toBeNull();
   expect(isCliAuthFailureEnvelope({ is_error: true, api_error_status: 404 })).toBe(false);
   expect(isCapInterruptionEnvelope({ is_error: true, api_error_status: 404 })).toBe(false);
 });
 
 it("api_error_status を伴わない文言(result の本文・stderr の unrecognized_model)からは行の拒否と推測しない", () => {
-  expect(isRowRefusalEnvelope({ is_error: true, result: "API Error: 404 model not found" })).toBe(false);
+  expect(rowRefusalCause({ is_error: true, result: "API Error: 404 model not found" })).toBeNull();
   // stderr の `[claude-code:unrecognized_model]` は走る `kimi-k3[1m]` でも出る(2026-10-01 実測)
-  expect(isRowRefusalEnvelope({ is_error: true, result: "[claude-code:unrecognized_model] kimi-k3[1m]" })).toBe(false);
-  expect(isRowRefusalEnvelope(null)).toBe(false);
+  expect(rowRefusalCause({ is_error: true, result: "[claude-code:unrecognized_model] kimi-k3[1m]" })).toBeNull();
+  expect(rowRefusalCause(null)).toBeNull();
+});
+
+/** CLI の版が model の最低版に届かない拒否の result 行。2.1.285 以降の実物の result 行は観測していない ——
+ *  2.1.286 の result 行の schema から組み立てた(#1267)。`result` の文は 2.1.241 で debug 出力に実測した API の本文。 */
+const VERSION_TOO_OLD = {
+  type: "result",
+  subtype: "success",
+  is_error: true,
+  api_error_status: 400,
+  api_error_code: "claude_code_version_too_old",
+  api_error: "claude_code_version_too_old",
+  result:
+    "Claude Code 2.1.241 does not support this model; version 2.1.251 or newer is required. " +
+    "Run 'claude update', or update the Claude desktop app, then try again.",
+  total_cost_usd: 0,
+  modelUsage: {},
+};
+
+it("result envelope の api_error_code: claude_code_version_too_old を CLI の版の古さに分類する(ADR 0187 決定1)", () => {
+  expect(rowRefusalCause(VERSION_TOO_OLD)).toBe("cli_version_too_old");
+  expect(isCliAuthFailureEnvelope(VERSION_TOO_OLD)).toBe(false);
+  expect(isCapInterruptionEnvelope(VERSION_TOO_OLD)).toBe(false);
+});
+
+it("api_error_code を伴わない 400・文言・api_error からは CLI の版の古さと推測しない", () => {
+  const { api_error_code: _, ...withoutCode } = VERSION_TOO_OLD;
+  // api_error は CLI の enum で、サーバの識別子ではない(ADR 0187 決定1)
+  expect(rowRefusalCause(withoutCode)).toBeNull();
+  expect(rowRefusalCause({ type: "result", is_error: true, api_error_status: 400 })).toBeNull();
+  expect(rowRefusalCause({ type: "result", is_error: true, result: VERSION_TOO_OLD.result })).toBeNull();
+  // 2.1.241 は API の details を result 行に載せず、api_error_code も api_error も無い(#1267 の実測)
+  expect(
+    rowRefusalCause({ type: "result", subtype: "success", is_error: true, api_error_status: 400, result: VERSION_TOO_OLD.result }),
+  ).toBeNull();
 });
 
 /** 行の Quarantine の回答時の probe(ADR 0184 決定5)。 */
@@ -193,6 +227,15 @@ it("行の probe はその id を --model に載せて1ターン走らせ、404 
 
   expect(results).toEqual(["refused", "unauthorized", "runs", "runs", "unknown"]);
   expect(args[0]!.join(" ")).toContain("--model claude-fable-5-1");
+});
+
+it("行の probe は CLI の版の古さも refused と読み、理由に原因を名指す(ADR 0187 決定3)", async () => {
+  const probe = createClaudeModelProbe(async () => ({ exitCode: 1, stdout: JSON.stringify(VERSION_TOO_OLD) }));
+
+  const result = await probe("claude-fable-5-1");
+
+  expect(result.status).toBe("refused");
+  expect(result).toMatchObject({ reason: expect.stringContaining("this board's Claude Code CLI is older than this model requires") });
 });
 
 it("moonshot の行の probe は --model と ANTHROPIC_MODEL の両方にその id を載せる(worker の spawn と同じ)", async () => {
