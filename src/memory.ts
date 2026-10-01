@@ -5,7 +5,7 @@ import type { Cause } from "./cause.js";
 import { type Db, MEMORY_FTS_DDL, MEMORY_FTS_TOKENIZER, MEMORY_PREPROCESS_VERSION } from "./db.js";
 import { getDisplayLanguage } from "./display-language.js";
 import { appendEvent, type EventOrigin, type EventPayload, type EventRow, getEvent, isDecisionLogEntry, listEvents, listEventsOfKinds } from "./events.js";
-import { materialEvents, metaReviewSubjectOf, metaReviewWindow, paged, previousMetaReviewWatermark } from "./meta-review.js";
+import { type MetaReviewWindow, materialEvents, metaReviewSubjectOf, metaReviewWindow, paged, previousMetaReviewWatermark } from "./meta-review.js";
 import { entriesReadBefore, entriesSeenBefore, listEpisodes, sessionSpawnOf, sessionWindow } from "./precedent.js";
 import { approvalAnnotation, BOARD_WORKER_ID, DomainError, getTask, HUMAN_WORKER_ID, type MemoryProposal, type QuestionProposal, questionBlocking, registerTask, settleQuestionAsObserved, type Task } from "./tasks.js";
 import { entryObjections, objectedEntryText, objectionsById } from "./triage.js";
@@ -1693,7 +1693,7 @@ export function pullMemoryProposals(db: Db, reader: Pick<MemoryReader, "taskId" 
 
 /** list_memory_proposals の行(ページ割り前)。window を渡すと、回答か陳腐化の event がその窓 `(after, upTo]` にある提案だけ
  *  (材料の節の決着した提案、ADR 0180 決定2)。 */
-function memoryProposalRows(db: Db, window?: { after: number; upTo: number }) {
+function memoryProposalRows(db: Db, window?: MetaReviewWindow) {
   const rows = db
     .prepare(
       `SELECT t.id, t.question_proposal,
@@ -1704,7 +1704,7 @@ function memoryProposalRows(db: Db, window?: { after: number; upTo: number }) {
     )
     .all() as Array<{ id: string; question_proposal: string; answered: string | null; stale: string | null; settled_id: number | null }>;
   return rows
-    .filter(({ settled_id }) => !window || (settled_id !== null && settled_id > window.after && settled_id <= window.upTo))
+    .filter(({ settled_id }) => !window || (settled_id !== null && settled_id > window.after && settled_id <= (window.upTo ?? Infinity)))
     .map((row) => {
       const answered = row.answered === null ? null : (JSON.parse(row.answered) as Extract<EventPayload, { kind: "question_answered" }>);
       const stale = row.stale === null ? null : (JSON.parse(row.stale) as Extract<EventPayload, { kind: "memory_proposal_stale" }>);
@@ -1746,7 +1746,7 @@ export function listPrecedents(
 
 /** list_precedents の行(ページ割り前): 異議の event が窓 `(after, upTo]` にある decision。verb は上限を持たず、材料の節は
  *  読み手の登録の watermark を上限にする(ADR 0180 決定2)。 */
-function precedentRows(db: Db, { after, upTo = Number.MAX_SAFE_INTEGER }: { after: number; upTo?: number }) {
+function precedentRows(db: Db, { after, upTo = Number.MAX_SAFE_INTEGER }: MetaReviewWindow) {
   const objectedIn = db.prepare(
     `SELECT 1 FROM events WHERE kind IN ('objection_raised', 'objection_attributed') AND json_extract(payload, '$.entry_id') = ? AND id > ? AND id <= ?`,
   );
@@ -2063,15 +2063,17 @@ export function recordMemoryInjection(
 }
 
 /** 材料の節の店の変更(ADR 0180 決定1): 窓の中に作成か無効化の材料の event(meta-review 自身の産物は除く —— due と同じ述語)が
- *  あるエントリを、本文が同じ鎖の末尾の行1つにまとめ、材料になった変更を添える。移動の `path_moved` は本文の変更でないので数えない。
+ *  あるエントリを、本文が同じ鎖の末尾の行1つにまとめ、材料になった変更を添える。移動の `path_moved` は本文の変更でないので数えず、
+ *  `superseded` は同じ窓に書かれた後継が代表する(ADR 0180 決定3 の「置き換えられた行」と同じ線)ので数えない。
  *  candidate の行は candidate の部分が持つので載せない。 */
-function storeChanges(db: Db, window: { after: number; upTo: number }) {
+function storeChanges(db: Db, window: MetaReviewWindow) {
   const restored = restoredAs(db);
   const changes = new Map<number, Set<"created" | "invalidated">>();
   for (const { id, payload } of materialEvents(db, ["memory_entry_created", "memory_entry_invalidated"], window)) {
-    if (payload.kind === "memory_entry_invalidated" && payload.reason === "path_moved") continue;
-    const tail = sameBodyChain(db, requireEntry(db, payload.kind === "memory_entry_created" ? id : payload.entry_id), restored).at(-1)!;
-    changes.set(tail.id, (changes.get(tail.id) ?? new Set()).add(payload.kind === "memory_entry_created" ? "created" : "invalidated"));
+    const created = payload.kind === "memory_entry_created";
+    if (!created && (payload.reason === "path_moved" || payload.reason === "superseded")) continue;
+    const tail = sameBodyChain(db, requireEntry(db, created ? id : payload.entry_id), restored).at(-1)!;
+    changes.set(tail.id, (changes.get(tail.id) ?? new Set()).add(created ? "created" : "invalidated"));
   }
   return listMemoryEntries(db, {})
     .filter((entry) => changes.has(entry.id) && entry.state !== "candidate")

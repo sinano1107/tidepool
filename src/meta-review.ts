@@ -137,9 +137,12 @@ export function previousMetaReviewWatermark(db: Db, readerTaskId: string): numbe
   )?.watermark ?? 0;
 }
 
+/** 材料の窓 `(after, upTo]`。upTo 省略 = 上限なし(due の判定と verb の既定)。 */
+export type MetaReviewWindow = { after: number; upTo?: number };
+
 /** 読み手の task の材料の窓 `(after, upTo]`(ADR 0180 決定1): after = 前回の登録の watermark、upTo = 読み手自身の登録の
  *  watermark —— 登録から spawn までに入った変更は次の周期の材料。登録 event の無い task(registerMetaReview を通らない)は今まで。 */
-export function metaReviewWindow(db: Db, readerTaskId: string): { after: number; upTo: number } {
+export function metaReviewWindow(db: Db, readerTaskId: string): Required<MetaReviewWindow> {
   const own = db
     .prepare(
       `SELECT COALESCE((SELECT json_extract(payload, '$.material_watermark') FROM events WHERE kind = 'meta_review_registered' AND task_id = ?),
@@ -151,7 +154,7 @@ export function metaReviewWindow(db: Db, readerTaskId: string): { after: number;
 
 /** 窓の中の主題の材料の event(id 順)。同じ主題の meta-review 自身の産物 —— 提案 question への回答が刻んだ question_id と、
  *  review の直接書き込みの activity —— は数えない(ADR 0151)。due の判定と memory meta-review の材料の節が共有する。 */
-export function materialEvents<K extends EventKind>(db: Db, kinds: readonly K[], window: { after: number; upTo?: number }) {
+export function materialEvents<K extends EventKind>(db: Db, kinds: readonly K[], window: MetaReviewWindow) {
   return listEventsOfKinds(db, kinds, window).filter(({ payload }) => {
     const mark = payload as { question_id?: string | null; activity?: string; entry?: { author: { activity: string } } };
     return mark.question_id == null && (mark.activity ?? mark.entry?.author.activity) !== "meta_review";
