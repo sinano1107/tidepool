@@ -29,6 +29,7 @@ import {
   decomposeThroughHumanDoor,
   editThroughHumanDoor,
   gatedHumanEntryInput,
+  answerInputSchema,
   listMemoryEntriesForHuman,
   registerThroughHumanDoor,
   submitAnswer,
@@ -978,12 +979,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
         "and/or annotations (the whole list, each quote verbatim in its case — see preview_case) instead of text and originals. An amended " +
         "memory approval is written as your own approved entry and supersedes the candidate. The answers in the question's needs_comment require a " +
         "non-blank comment: why for a reject on any proposal or approval question, what is still undecided for a defer on a memory proposal. Every other answer takes an optional comment.",
-      inputSchema: {
-        task_id: z.string(),
-        answers: z.array(z.string()),
-        comment: z.string().optional(),
-        amendment: z.record(z.string(), z.unknown()).optional(),
-      },
+      inputSchema: answerInputSchema.extend({ task_id: z.string() }),
     },
     async ({ task_id, answers, comment, amendment }) => {
       const task = getTask(deps.db, task_id);

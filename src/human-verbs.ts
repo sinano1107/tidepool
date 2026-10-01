@@ -1,3 +1,4 @@
+import { z } from "zod";
 import { verifyAgentRepaired } from "./agent.js";
 import { type AgentAdmin, AgentTierMismatchError, agentViewProviders } from "./agent-create.js";
 import { type BoardStatePath, boardStateOverlap } from "./board-state.js";
@@ -829,6 +830,21 @@ async function landAgentTier(deps: SubmitAnswerDeps, questionId: string, proposa
     throw err;
   }
 }
+
+/** 回答の入力 schema。HTTP と管理 MCP の両方の扉がこれを使い、扉ごとの食い違いを作らない(issue #1310)。 */
+export const answerInputSchema = z.object({
+  // one answer per question item, in item order (issue #30) — the domain
+  // enforces the length match against the question's own item count so callers
+  // get a domain error, not a schema error, on a partial submission
+  answers: z.array(z.string().min(1)).min(1),
+  // the steering channel for a reject's reason (issue #40) — optional here;
+  // which answers require it is the domain gate's call (ADR 0179). A blank one
+  // is folded to "no comment" by submitAnswer (issue #1310); any other is
+  // carried through verbatim onto the question_answered event
+  comment: z.string().optional(),
+  // routing の提案の approve に添える修正値(ADR 0150 決定2)。形は提案の種別ごとなので、検査は submitAnswer が持つ
+  amendment: z.record(z.string(), z.unknown()).optional(),
+});
 
 /**
  * question への人間回答を実行する正準の application seam。
