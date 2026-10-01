@@ -53,7 +53,8 @@ async function boardWithMetaReview(titles = ["Keep migrations in their own commi
   };
   const propose = async (candidate_id: number) =>
     (await call("propose_memory_change", { op: "approve", candidate_id, rationale: "Three RCAs asked for the same split." })).question_id as string;
-  return { review, ids, client, call, propose };
+  const approvedBehaviors = async () => (await call("list_memory_entries", { kind: "behavior", state: "approved" })).entries.map((e: any) => e.id);
+  return { review, ids, client, call, propose, approvedBehaviors };
 }
 
 const task = async (id: string) => (await api(t.baseUrl, "GET", `/api/tasks/${id}`)).json;
@@ -100,7 +101,7 @@ it("提案 question が open でも meta-review は完了できる", async () =>
 });
 
 it("approve の回答で candidate が approved になって Behavior の pull に届き、選択肢外の回答は拒否される", async () => {
-  const { ids, client, call, propose } = await boardWithMetaReview();
+  const { ids, client, propose, approvedBehaviors } = await boardWithMetaReview();
   try {
     const questionId = await propose(ids[0]!);
 
@@ -109,7 +110,7 @@ it("approve の回答で candidate が approved になって Behavior の pull �
 
     expect((await answer(questionId, "approve")).status).toBe(200);
     expect(await entry(ids[0]!)).toMatchObject({ state: "approved", invalidation_reason: null });
-    expect((await call("list_memory_behaviors", {})).entries.map((e: any) => e.id)).toEqual([ids[0]]);
+    expect(await approvedBehaviors()).toEqual([ids[0]]);
   } finally {
     await client.close();
   }
@@ -392,16 +393,14 @@ it("consolidate の回答は reject で新 candidate を rejected にして appr
   try {
     const approved = await approvedBehavior(board, "Split migrations", "tidepool");
     const rejected = (await task((await consolidate(board, [approved, board.ids[0]!])).question_id));
-    const behaviors = async () => (await board.call("list_memory_behaviors", {})).entries.map((e: any) => e.id);
-
     expect((await answer(rejected.id, "reject", because)).status).toBe(200);
     expect(await entry(rejected.question_proposal.candidate_id)).toMatchObject({ invalidation_reason: "rejected" });
-    expect(await behaviors()).toEqual([approved]);
+    expect(await board.approvedBehaviors()).toEqual([approved]);
 
     const { question_id } = await consolidate(board, [approved, board.ids[0]!, board.ids[1]!]);
     const merged = (await task(question_id)).question_proposal.candidate_id;
     expect((await answer(question_id, "approve")).status).toBe(200);
-    expect(await behaviors()).toEqual([merged]);
+    expect(await board.approvedBehaviors()).toEqual([merged]);
   } finally {
     await board.client.close();
   }
@@ -411,13 +410,11 @@ it("invalidate の回答は reject で approved 集合を変えず、approve で
   const board = await boardWithMetaReview();
   try {
     const target = await approvedBehavior(board, "Split migrations");
-    const behaviors = async () => (await board.call("list_memory_behaviors", {})).entries.map((e: any) => e.id);
-
     expect((await answer((await invalidate(board, target)).question_id, "reject", because)).status).toBe(200);
-    expect(await behaviors()).toEqual([target]);
+    expect(await board.approvedBehaviors()).toEqual([target]);
 
     expect((await answer((await invalidate(board, target, "capability")).question_id, "approve")).status).toBe(200);
-    expect(await behaviors()).toEqual([]);
+    expect(await board.approvedBehaviors()).toEqual([]);
   } finally {
     await board.client.close();
   }

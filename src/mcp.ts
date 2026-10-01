@@ -937,15 +937,6 @@ function registerMemoryMetaReviewVerbs(server: McpServer, deps: McpDeps, run: Me
   );
 
   server.registerTool(
-    "list_memory_behaviors",
-    {
-      description: "List every approved Behavior on the board, across all addressees and scopes.",
-      inputSchema: { page },
-    },
-    async (input) => run((reader, now) => pullMemoryList(deps.db, reader, "list_memory_behaviors", input, now)),
-  );
-
-  server.registerTool(
     "list_memory_entries",
     {
       description:

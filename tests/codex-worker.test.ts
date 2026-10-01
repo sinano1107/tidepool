@@ -296,7 +296,6 @@ describe("CodexWorker (ADR 0098)", () => {
       ...base,
       "propose_from_objection",
       "list_memory_candidates",
-      "list_memory_behaviors",
       "list_precedents",
       "list_memory_entries",
       "read_memory_entries",
