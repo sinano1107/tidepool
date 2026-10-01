@@ -10,10 +10,11 @@ import {
   type CliAuthResult,
   isCliAuthBudgetCapEnvelope,
   isCliAuthFailureEnvelope,
-  isRowRefusalEnvelope,
   type ModelProbe,
   type ModelProbeResult,
+  rowRefusalCause,
 } from "./cli-auth.js";
+import type { RowRefusalCause } from "./events.js";
 
 export interface CliAuthCommandResult {
   exitCode: number | null;
@@ -118,6 +119,13 @@ export function createMoonshotModelProbe(keyFile: string | undefined, command: C
   };
 }
 
+/** 回答の拒否(409)の本文は「… still cannot run: 」の後にこの理由を載せる。 */
+const MODEL_PROBE_REFUSAL_REASON: Record<RowRefusalCause, string> = {
+  api_404: "API returned 404 for this model id",
+  cli_version_too_old:
+    "this board's Claude Code CLI is older than this model requires (API error code claude_code_version_too_old)",
+};
+
 async function runModelProbe(
   command: CliAuthCommand,
   extraArgs: string[],
@@ -126,7 +134,8 @@ async function runModelProbe(
   const { exitCode, envelope } = await probeEnvelope(command, extraArgs, env);
   if (envelope === null) return { status: "unknown", reason: "probe did not return a JSON envelope" };
   if (isCliAuthFailureEnvelope(envelope)) return { status: "unauthorized", reason: "API returned 401" };
-  if (isRowRefusalEnvelope(envelope)) return { status: "refused", reason: "API returned 404 for this model id" };
+  const refusal = rowRefusalCause(envelope);
+  if (refusal !== null) return { status: "refused", reason: MODEL_PROBE_REFUSAL_REASON[refusal] };
   // 予算上限はターンが走った後に判定される(2026-10-01 実測: $0.0001 でも1ターン走って
   // error_max_budget_usd)—— 上限で止まったなら、その id は走った
   if (isCliAuthBudgetCapEnvelope(envelope)) return { status: "runs" };

@@ -25,6 +25,23 @@ const settle = () => new Promise((resolve) => setImmediate(resolve));
 /** moonshot(Claude CLI 2.1.286)が未知の id に返した result envelope の形(2026-10-01 実測、#1249)。 */
 const REFUSED_404 = `${JSON.stringify({ type: "result", subtype: "success", is_error: true, api_error_status: 404, total_cost_usd: 0, modelUsage: {} })}\n`;
 
+/** CLI の版が model の最低版に届かない拒否の result 行(ADR 0187)。2.1.285 以降の実物の result 行は観測して
+ *  いない —— 2.1.286 の result 行の schema から組み立てた(#1267)。`result` の文は 2.1.241 で debug 出力に実測した
+ *  API の本文。 */
+const VERSION_TOO_OLD = `${JSON.stringify({
+  type: "result",
+  subtype: "success",
+  is_error: true,
+  api_error_status: 400,
+  api_error_code: "claude_code_version_too_old",
+  api_error: "claude_code_version_too_old",
+  result:
+    "Claude Code 2.1.241 does not support this model; version 2.1.251 or newer is required. " +
+    "Run 'claude update', or update the Claude desktop app, then try again.",
+  total_cost_usd: 0,
+  modelUsage: {},
+})}\n`;
+
 const events = async (id: string) => (await api(t.baseUrl, "GET", `/api/tasks/${id}/events`)).json as any[];
 
 /** 実 Claude adapter を fake の容器機構の上で盤面に載せる(worker-exit-without-report.test.ts と同じ形)。 */
@@ -85,6 +102,16 @@ it("404 で終わった session は行の Quarantine を1枚立て、failure que
   expect(more).toEqual([]);
   expect(question.title).toBe("execution-setting row anthropic / claude-sonnet-5-5 cannot run on this board");
   expect(question.question_items[0].options).toEqual(["the row can run again"]);
+  // 404 の文面は原因を断言しない(ADR 0184 決定1)。CLI の版の古さの文面(ADR 0187)を足しても変わらない
+  expect(question.purpose).toBe(
+    `The worker session for task ${refused.id} ended with API error 404 for this model id. ` +
+      "The anthropic provider refused the model id `claude-sonnet-5-5` on this board — with this CLI version and this " +
+      "account. The board does not know why. This row is out of pickup and of advisor derivation while this stands; " +
+      "other rows keep running.\n\nRepair one of two ways:\n\n" +
+      "1. Fix the table: in the settings tab, change this row's model or delete the row. This question then closes on its own.\n" +
+      "2. If the model id is right, update the CLI or restore the account, then answer — the board checks this model id " +
+      "again before it accepts the answer.",
+  );
   const [registered] = await events(question.id);
   expect({ worker: registered.worker_id, origin: registered.origin }).toEqual({ worker: "tidepool", origin: "board" });
 
@@ -93,10 +120,54 @@ it("404 で終わった session は行の Quarantine を1枚立て、failure que
   expect(timeline.find((e) => e.kind === "row_refused")).toMatchObject({
     worker_id: "tidepool",
     origin: "board",
-    payload: { provider: "anthropic", model: "claude-sonnet-5-5", worker_spawned_event_id: spawned[0].id },
+    payload: { provider: "anthropic", model: "claude-sonnet-5-5", worker_spawned_event_id: spawned[0].id, cause: "api_404" },
   });
   expect(timeline.map((e) => e.kind)).not.toContain("cap_interrupted");
   // 先頭へ戻ったので、先頭へ動かした other より先に、同じティアの別の行で拾い直される
+  expect(spawned.map((e) => e.payload.model)).toEqual(["claude-sonnet-5-5", "claude-sonnet-5"]);
+});
+
+it("CLI の版の古さで終わった session も行の Quarantine を1枚立てて先頭へ戻り、question は原因を名指して tidepool の更新を2番目に促す(ADR 0187)", async () => {
+  const proc = await bootClaude();
+  applyExecutionSettingsChange(
+    t.db,
+    { setting: "row", row: { provider: "anthropic", tier: "economy", model: "claude-sonnet-5", effort: "high", price_in: 3, price_out: 15 } },
+    "webui",
+    t.clock.now(),
+  );
+  const refused = queueWork(t, "refused task");
+  await t.clock.advance(HOUR);
+  const other = queueWork(t, "queued after");
+  await api(t.baseUrl, "POST", `/api/tasks/${other.id}/move`, { after: null });
+
+  proc.processes[0]!.stdout.write(VERSION_TOO_OLD);
+  proc.emitExit(1, null);
+  await settle();
+
+  const [question, ...more] = await questions(t);
+  expect(more).toEqual([]);
+  // タイトル・選択肢・推奨・completion criteria は 404 と同じ
+  expect(question.title).toBe("execution-setting row anthropic / claude-sonnet-5-5 cannot run on this board");
+  expect(question.completion_criteria).toBe("anthropic / claude-sonnet-5-5 can run on this board again");
+  expect(question.question_items).toMatchObject([
+    { title: "Can anthropic / claude-sonnet-5-5 run again?", options: ["the row can run again"], recommendation: "the row can run again" },
+  ]);
+  const purpose: string = question.purpose;
+  expect(purpose).toContain("This board's Claude Code CLI is older than this model requires");
+  expect(purpose).toContain("1. Fix the table: in the settings tab");
+  expect(purpose).toContain("2. To keep this row, update tidepool to a version that supports this model, then answer");
+  // 運用者は固定の版を変えられない(ADR 0186 決定5)—— CLI の手動更新にも版の番号にも触れない
+  expect(purpose).not.toMatch(/update the CLI|claude update/i);
+  expect(purpose).not.toMatch(/\d+\.\d+\.\d+/);
+
+  const timeline = await events(refused.id);
+  const spawned = timeline.filter((e) => e.kind === "worker_spawned");
+  expect(timeline.find((e) => e.kind === "row_refused")?.payload).toMatchObject({
+    provider: "anthropic",
+    model: "claude-sonnet-5-5",
+    cause: "cli_version_too_old",
+  });
+  expect(timeline.map((e) => e.kind)).not.toContain("cap_interrupted");
   expect(spawned.map((e) => e.payload.model)).toEqual(["claude-sonnet-5-5", "claude-sonnet-5"]);
 });
 

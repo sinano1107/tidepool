@@ -6,7 +6,7 @@
  *  資源の名を持たない種類の value は NULL である。依存の向きはこの module → タスクの
  *  module であり、逆は張らない。 */
 import type { Db } from "./db.js";
-import { appendEvent } from "./events.js";
+import { appendEvent, type RowRefusalCause } from "./events.js";
 import type { HaltKind } from "./halt-kind.js";
 import { PROVIDER_VALUES, type Provider } from "./provider.js";
 import { canonicalHarness } from "./registry.js";
@@ -175,22 +175,35 @@ export const QUARANTINES = [
     }),
   },
   {
-    // 行の拒否(CONTEXT.md / ADR 0184)。値は `tableRowValue` の綴り。文面は原因を断言しない(決定1)
+    // 行の拒否(CONTEXT.md / ADR 0184)。値は `tableRowValue` の綴り。文面は原因を断言しない(決定1)——
+    // 例外は CLI の版の古さで、構造化された証拠が区別するので原因を名指す(ADR 0187 決定3)。原因は値に
+    // 入れない: 鍵は (provider, model) で、別の原因の2度目の観測は再発火だけで文面は最初の原因のまま
     kind: "tableRow",
     scope: "row",
-    prose: (value: string | null, reason: string): QuarantineProse => {
+    prose: (value: string | null, reason: string, cause?: RowRefusalCause): QuarantineProse => {
       const { provider, model } = parseTableRowValue(value!);
       const row = `${provider} / ${model}`;
+      const [why, keepRow] =
+        cause === "cli_version_too_old"
+          ? [
+              "This board's Claude Code CLI is older than this model requires, so the " +
+                `${provider} provider refused the model id \`${model}\` on this board.`,
+              "To keep this row, update tidepool to a version that supports this model, then answer",
+            ]
+          : [
+              `The ${provider} provider refused the model id \`${model}\` on this board — ` +
+                "with this CLI version and this account. The board does not know why.",
+              "If the model id is right, update the CLI or restore the account, then answer",
+            ];
       return {
         title: `execution-setting row ${row} cannot run on this board`,
         purpose:
-          `${reason}. The ${provider} provider refused the model id \`${model}\` on this board — ` +
-          "with this CLI version and this account. The board does not know why. This row is out of " +
+          `${reason}. ${why} This row is out of ` +
           "pickup and of advisor derivation while this stands; other rows keep running.\n\n" +
           "Repair one of two ways:\n\n" +
           "1. Fix the table: in the settings tab, change this row's model or delete the row. " +
           "This question then closes on its own.\n" +
-          "2. If the model id is right, update the CLI or restore the account, then answer — the " +
+          `2. ${keepRow} — the ` +
           "board checks this model id again before it accepts the answer.",
         completion_criteria: `${row} can run on this board again`,
         question: [
@@ -214,7 +227,8 @@ export const QUARANTINES = [
   /** entry 経路(ADR 0110 決定3)で値が外す Provider —— 「その Provider では走れない」
    *  種類だけが持つ。agent 名ではなく entry を外すので `QuarantineResolvers` とは別の写像。 */
   excludesProviders?: (values: string[]) => Provider[];
-  prose: (value: string | null, reason: string) => QuarantineProse;
+  /** `cause` は行の拒否の証拠の種類で、`tableRow` だけが読む。 */
+  prose: (value: string | null, reason: string, cause?: RowRefusalCause) => QuarantineProse;
 }>;
 
 export type QuarantineKind = (typeof QUARANTINES)[number]["kind"];
@@ -290,13 +304,14 @@ export function openQuarantineQuestions(db: Db, kind: QuarantineKind): Map<strin
 }
 
 /** 唯一の登録口。鍵が開いていれば既存の question に `quarantine_refired` を追記する
- *  だけで、それ以外は何もしない(1鍵につき確認は最大1枚)。 */
+ *  だけで、それ以外は何もしない(1鍵につき確認は最大1枚)。`cause` は文面へ渡す行の拒否の証拠の種類。 */
 export function registerQuarantine(
   db: Db,
   kind: QuarantineKind,
   value: string | null,
   reason: string,
   now: Date,
+  cause?: RowRefusalCause,
 ): void {
   const existing = openQuarantineQuestion(db, kind, value);
   if (existing) {
@@ -310,7 +325,7 @@ export function registerQuarantine(
     return;
   }
   const row = QUARANTINES.find((r) => r.kind === kind)!;
-  const { question, ...prose } = row.prose(value, reason);
+  const { question, ...prose } = row.prose(value, reason, cause);
   registerTask(
     db,
     {
