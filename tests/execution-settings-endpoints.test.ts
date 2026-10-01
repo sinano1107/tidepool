@@ -67,7 +67,7 @@ it("POST /api/settings/execution は1つの変更を受け、Provider 順位・�
 
 it("表の行は (provider, model) を鍵に追加・編集(upsert)・削除でき、同じ provider × tier に複数行を置ける(ADR 0114 決定2)", async () => {
   t = await bootTidepool();
-  const haiku = { provider: "anthropic", tier: "economy", model: "haiku", effort: "low", price_in: 1, price_out: 5 };
+  const haiku = { provider: "anthropic", tier: "economy", model: "claude-haiku-4-5", effort: "low", price_in: 1, price_out: 5 };
   expect((await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "row", row: haiku })).status).toBe(200);
   expect((await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "row", row: { ...haiku, effort: "high" } })).status).toBe(200);
   expect(
@@ -77,7 +77,7 @@ it("表の行は (provider, model) を鍵に追加・編集(upsert)・削除で�
   const { table } = await state();
   expect(table.filter((row: any) => row.provider === "anthropic" && row.tier === "economy")).toEqual([
     { ...haiku, effort: "high" },
-    { provider: "anthropic", tier: "economy", model: "sonnet", effort: "high", price_in: 2, price_out: 10 },
+    { provider: "anthropic", tier: "economy", model: "claude-sonnet-5-5", effort: "high", price_in: 2, price_out: 10 },
   ]);
   expect(table.find((row: any) => row.model === "gpt-6-astra")).toBeUndefined();
 });
@@ -92,7 +92,7 @@ it("ある provider × tier の行を全部消すことは許される —— �
 it("不正値(未知の Provider / ティア / 優先順位、負の価格、順列でない Provider 順位)は 400 で弾かれ、設定は変わらない", async () => {
   t = await bootTidepool();
   const before = await state();
-  const row = { provider: "anthropic", tier: "economy", model: "haiku", effort: "high", price_in: 1, price_out: 5 };
+  const row = { provider: "anthropic", tier: "economy", model: "claude-haiku-4-5", effort: "high", price_in: 1, price_out: 5 };
   for (const bad of [
     { setting: "row", row: { ...row, provider: "moonshto" } },
     { setting: "row", row: { ...row, tier: "premium" } },
@@ -112,6 +112,29 @@ it("不正値(未知の Provider / ティア / 優先順位、負の価格、順
   expect(await state()).toEqual(before);
 });
 
+it("anthropic の alias の行は settings タブと管理MCP の両方の扉で拒まれ表は変わらない —— 具体 id の行と openai の行は通る(ADR 0182 決定1)", async () => {
+  t = await bootTidepool();
+  const before = await state();
+  const row = (provider: string, model: string) => ({ setting: "row", row: { provider, tier: "standard", model, effort: "high", price_in: 5, price_out: 25 } });
+
+  const refused = await api(t.baseUrl, "POST", "/api/settings/execution", row("anthropic", "opus"));
+  expect(refused.status).toBe(400);
+  expect(refused.json.error).toContain("concrete model id");
+  const client = await managementMcpClient(t.baseUrl);
+  try {
+    const viaMcp = (await client.callTool({ name: "change_execution_settings", arguments: { change: row("anthropic", "opus") } })) as any;
+    expect(viaMcp.isError).toBe(true);
+    expect(viaMcp.content[0].text).toContain("concrete model id");
+    expect(await state()).toEqual(before);
+
+    expect((await api(t.baseUrl, "POST", "/api/settings/execution", row("anthropic", "claude-opus-5-5"))).status).toBe(200);
+    expect(((await client.callTool({ name: "change_execution_settings", arguments: { change: row("openai", "gpt-5.7-sol") } })) as any).isError).not.toBe(true);
+  } finally {
+    await client.close();
+  }
+  expect((await state()).table.map((r: any) => r.model)).toEqual(expect.arrayContaining(["claude-opus-5-5", "gpt-5.7-sol"]));
+});
+
 /** task が pickup されたときの実行設定(設定の変更は routing meta-review の材料なので、それが先に slot を取りうる)。 */
 const settingsOf = (taskId: string) => t.worker.startedSettings[t.worker.started.findIndex((task) => task.id === taskId)];
 
@@ -126,7 +149,7 @@ it("Provider 順位の変更は次の pickup から効く —— 「今週は Cl
   t = await bootTidepool(boardWith(["anthropic", "openai"]));
   const first = await registerWork(t, "before the rank change");
   await t.clock.advance(HOUR);
-  expect(t.worker.startedSettings[0]).toMatchObject({ provider: "anthropic", model: "sonnet" });
+  expect(t.worker.startedSettings[0]).toMatchObject({ provider: "anthropic", model: "claude-sonnet-5-5" });
 
   await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "provider_rank", value: ["openai", "anthropic", "moonshot"] });
   const client = await mcpClient(t.mcpBaseUrl, first.id);
@@ -148,19 +171,19 @@ it("registry なしの盤面の暗黙の entry は Selector の表に追随す�
   t = await bootTidepool();
   await api(t.baseUrl, "POST", "/api/settings/execution", {
     setting: "row",
-    row: { provider: "anthropic", tier: "economy", model: "haiku", effort: "low", price_in: 1, price_out: 5 },
+    row: { provider: "anthropic", tier: "economy", model: "claude-haiku-4-5", effort: "low", price_in: 1, price_out: 5 },
   });
-  await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "delete_row", provider: "anthropic", model: "sonnet" });
+  await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "delete_row", provider: "anthropic", model: "claude-sonnet-5-5" });
   const work = await registerWork(t, "runs on the replaced row");
   await completeMetaReviews(t);
-  expect(settingsOf(work.id)).toMatchObject({ provider: "anthropic", model: "haiku", effort: "low" });
+  expect(settingsOf(work.id)).toMatchObject({ provider: "anthropic", model: "claude-haiku-4-5", effort: "low" });
 });
 
 it("優先順位の既定を cost にすると、要求の無い task は最安の行で走り、行を消すとその行は候補から消える(ADR 0114 決定1・3)", async () => {
   t = await bootTidepool(boardWith(["anthropic", "openai"]));
   // economy の最安は openai の terra(out 12)ではなく anthropic の sonnet(out 10)なので、
   // sonnet の行を消してから cost にする —— 両方の変更が同じ pickup に効くことを1度で言う
-  await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "delete_row", provider: "anthropic", model: "sonnet" });
+  await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "delete_row", provider: "anthropic", model: "claude-sonnet-5-5" });
   await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "priority", value: "cost" });
   const work = await registerWork(t, "cheapest economy row that is left");
   await t.clock.advance(HOUR);

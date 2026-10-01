@@ -166,7 +166,7 @@ it("統合点レビューを worker が MCP で完了した後の poll で、swe
       kind: "allocation_reviewed",
       review_task_id: review.id,
       worker_spawned_event_id: spawnedId,
-      judge: { provider: "anthropic", model: "fable", effort: "high" },
+      judge: { provider: "anthropic", model: "claude-fable-5-1", effort: "high" },
       allocation: "overpowered",
       cause: "uncertain",
       evidence: "a small diff, no consultations",
@@ -189,7 +189,7 @@ it("統合点レビューを worker が MCP で完了した後の poll で、swe
         actions: null,
       },
       // the board's own frontier row (seed), never the reviewed session's model
-      setting: expect.objectContaining({ model: "fable", effort: "high" }),
+      setting: expect.objectContaining({ model: "claude-fable-5-1", effort: "high" }),
     },
   ]);
 });
@@ -320,11 +320,11 @@ it("盤面設定 retrospective_tier を standard にすると、次の配分評�
   expect((await annotations(t, task.id)).map((e: any) => e.payload)).toMatchObject([
     {
       worker_spawned_event_id: spawnedId,
-      judge: { provider: "anthropic", model: "opus", effort: "high" },
+      judge: { provider: "anthropic", model: "claude-opus-5-5", effort: "high" },
     },
   ]);
   expect(allocationClient.calls).toEqual([
-    expect.objectContaining({ setting: expect.objectContaining({ model: "opus", effort: "high" }) }),
+    expect.objectContaining({ setting: expect.objectContaining({ model: "claude-opus-5-5", effort: "high" }) }),
   ]);
 });
 
@@ -333,7 +333,7 @@ it("選んだティアの anthropic 行が無ければ、frontier に退避せ�
   t = await bootTidepool({ allocationClient });
   const { task, review } = await reviewedWork(t);
   expect((await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "retrospective_tier", value: "standard" })).status).toBe(200);
-  expect((await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "delete_row", provider: "anthropic", model: "opus" })).status).toBe(200);
+  expect((await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "delete_row", provider: "anthropic", model: "claude-opus-5-5" })).status).toBe(200);
 
   await completeReview(t, review.id);
   await nextPoll(t);

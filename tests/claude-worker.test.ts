@@ -1746,7 +1746,7 @@ describe("ClaudeCodeWorker", () => {
   it("model は常に明示的に渡す: agent が tier を書かなければ盤面既定のティアの行(ホストのモデル設定を漏らさない)", async () => {
     const { start, calls } = await makeWorker();
     start();
-    expect(calls[0]!.args.join(" ")).toContain("--model sonnet");
+    expect(calls[0]!.args.join(" ")).toContain("--model claude-sonnet-5-5");
   });
 
   it("agent が tier を書けばその行の model を使う", async () => {
@@ -1754,7 +1754,7 @@ describe("ClaudeCodeWorker", () => {
       "agents/deckhand.md": `---\nname: deckhand\nversion: 0.3.1\nauthority: standard\nprovider: anthropic\nskills:\n  - "*"\ndescription: General work agent\ntier: economy\n---\nYou are Deckhand.\n`,
     });
     start();
-    expect(calls[0]!.args.join(" ")).toContain("--model sonnet");
+    expect(calls[0]!.args.join(" ")).toContain("--model claude-sonnet-5-5");
   });
 
   it("effort は常に明示的に渡す: 値は表の行から来る(ホストの effort 設定を漏らさない)", async () => {
@@ -1770,7 +1770,7 @@ describe("ClaudeCodeWorker", () => {
       listEvents(board.db, "task-setting-board").find((e) => e.kind === "worker_spawned")!.payload,
     ).toMatchObject({
       provider: "anthropic",
-      model: "sonnet",
+      model: "claude-sonnet-5-5",
       effort: "high",
       source: { tier: "board", provider: "only" },
     });
@@ -1781,7 +1781,7 @@ describe("ClaudeCodeWorker", () => {
     agent.start("task-setting-agent");
     expect(
       listEvents(agent.db, "task-setting-agent").find((e) => e.kind === "worker_spawned")!.payload,
-    ).toMatchObject({ model: "fable", source: { tier: "agent", provider: "only" } });
+    ).toMatchObject({ model: "claude-fable-5-1", source: { tier: "agent", provider: "only" } });
   });
 
   it("worker_spawned は Provider の出所も刻む —— 単一 entry の agent は only(ADR 0110 決定5 / issue #544)", async () => {
@@ -1796,7 +1796,7 @@ describe("ClaudeCodeWorker", () => {
     const { worker, db, calls } = await makeWorker();
     const task = makeTask("task-carried-setting", null, "deckhand", "work");
     insertTask(db, task);
-    // 盤面の表の economy 行は sonnet。渡された設定はそれと違う値で、しかも
+    // 盤面の表の economy 行は claude-sonnet-5-5。渡された設定はそれと違う値で、しかも
     // 「順位で選ばれた」出所を持つ —— どちらも再解決からは出てこない
     worker.start(task, {
       provider: "anthropic",
@@ -2956,7 +2956,7 @@ describe("advisor capability (issue #33)", () => {
     const { start, calls } = await makeWorker(withAdvisor);
     start();
     const call = calls[0]!;
-    expect(advisorFlag(call.args)).toBe("sonnet");
+    expect(advisorFlag(call.args)).toBe("claude-sonnet-5-5");
     expect(call.env.CLAUDE_CODE_DISABLE_ADVISOR_TOOL).toBeUndefined();
   });
 
@@ -2973,7 +2973,7 @@ describe("advisor capability (issue #33)", () => {
       const { start, calls } = await makeWorker(withAdvisor);
       start();
       const call = calls[0]!;
-      expect(advisorFlag(call.args)).toBe("sonnet");
+      expect(advisorFlag(call.args)).toBe("claude-sonnet-5-5");
       expect(call.env.CLAUDE_CODE_DISABLE_ADVISOR_TOOL).toBeUndefined();
       // git identity は env の上に重ねられる —— 消したキーを復活させないことと、
       // 重ね順を変えたことで identity 側が落ちていないことを1本で見る(issue #53)
@@ -3016,7 +3016,7 @@ describe("advisor capability (issue #33)", () => {
 
     const unmasked = await makeWorker(withAdvisor);
     unmasked.start("task-unmasked");
-    expect(advisorFlag(unmasked.calls[0]!.args)).toBe("sonnet");
+    expect(advisorFlag(unmasked.calls[0]!.args)).toBe("claude-sonnet-5-5");
   });
 
   // ── anthropics/claude-code#69238 の回避 env ────────────────────
@@ -3053,7 +3053,7 @@ describe("advisor capability (issue #33)", () => {
     const { start, db } = await makeWorker(withAdvisor);
     start("task-spawn-advisor");
     const spawned = listEvents(db, "task-spawn-advisor").find((e) => e.kind === "worker_spawned");
-    expect(spawned!.payload).toMatchObject({ kind: "worker_spawned", advisor: "sonnet" });
+    expect(spawned!.payload).toMatchObject({ kind: "worker_spawned", advisor: "claude-sonnet-5-5" });
   });
 
   // registry_commit があるので frontmatter の文字列は後から引ける。**イベント履歴
@@ -3442,7 +3442,7 @@ You are Kipper, the tidepool board's Kimi work agent.
     // これは挙動の回帰ではなく env マップの意図的な変更である: これまでの除去は
     // 向き先・トークンの2つだったが、moonshot に注入する一式すべて(+
     // ANTHROPIC_MODEL)を相手から除去する形に対称化した(注入一覧と除去一覧は
-    // 同じ定数から導かれる)。`--model sonnet` のピン留めがある限り、env の
+    // 同じ定数から導かれる)。`--model claude-sonnet-5-5` のピン留めがある限り、env の
     // ANTHROPIC_MODEL は anthropic spawn では元々効いていない — 実効挙動は不変。
     // それ以外は導入前どおり: process.env の継承 + timeout ピン + advisor 閉じ +
     // GIT_* の名義注入だけが載る(回帰ゼロ — issue #443 user story 4)。
@@ -3471,7 +3471,7 @@ You are Kipper, the tidepool board's Kimi work agent.
       expect(calls[0]!.env.CLAUDE_CODE_OAUTH_TOKEN).toBe("claude-subscription-token");
       // 実効挙動不変の根拠: モデルは env ではなくフラグでピン留めされる
       // (値の出所は盤面の表 —— ADR 0110 決定3)
-      expect(calls[0]!.args.join(" ")).toContain("--model sonnet");
+      expect(calls[0]!.args.join(" ")).toContain("--model claude-sonnet-5-5");
       expect(calls[0]!.args.join(" ")).toContain("--effort high");
     } finally {
       vi.unstubAllEnvs();

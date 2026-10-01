@@ -543,7 +543,12 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
       inputSchema: { change: executionSettingsChangeSchema },
     },
     async ({ change }) => {
-      applyExecutionSettingsChange(deps.db, change, "mcp", deps.clock.now());
+      try {
+        applyExecutionSettingsChange(deps.db, change, "mcp", deps.clock.now());
+      } catch (err) {
+        if (err instanceof DomainError) return toolError(err.message);
+        throw err;
+      }
       deps.pollNow();
       return toolResult(readExecutionSettings(deps.db));
     },

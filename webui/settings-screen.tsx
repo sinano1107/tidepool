@@ -2143,8 +2143,9 @@ function ExecutionTableCard({ settings, say, onSaved, edit }: {
   const save = async () => {
     setBusy(true);
     try {
-      for (const row of deletes) await api('/api/settings/execution', { setting: 'delete_row', provider: row.provider, model: row.model });
+      // upserts first: the door can refuse a row (an alias, ADR 0182), and a rename must not lose the old row when it does
       for (const row of upserts) await api('/api/settings/execution', { setting: 'row', row });
+      for (const row of deletes) await api('/api/settings/execution', { setting: 'delete_row', provider: row.provider, model: row.model });
       say('success', 'execution table saved', `${upserts.length} row${upserts.length === 1 ? '' : 's'} written, ${deletes.length} removed`);
       edit.close();
       await onSaved();

@@ -109,7 +109,7 @@ function board() {
 
 it("表と設定は read_routing_settings の提案以外の全部で、窓ではなく spawn 時点の値 —— 前回より前に書かれた行も、登録より後の変更も出る", () => {
   const { db } = board();
-  const row = { provider: "anthropic" as const, tier: "economy" as const, model: "haiku", effort: "low", price_in: 1, price_out: 5 };
+  const row = { provider: "anthropic" as const, tier: "economy" as const, model: "claude-haiku-4-5", effort: "low", price_in: 1, price_out: 5 };
   applyExecutionSettingsChange(db, { setting: "row", row }, "webui", at);
   register(db, true);
   const review = register(db);
@@ -198,9 +198,9 @@ it("決着した提案は回答か陳腐化が窓の中にあるものだけを 
   const propose = (model: string) =>
     proposeRoutingChange(db, parent, { op: "row", row: { provider: "anthropic", model }, change: { tier: "frontier" }, rationale: "r" }, "auditor", at).question_id;
   const answer = (id: string, answers: string[], comment?: string, amendment?: { tier: "economy" }) => answerQuestion(db, getTask(db, id)!, answers, at, undefined, comment, amendment);
-  const early = propose("sonnet");
+  const early = propose("claude-sonnet-5-5");
   answer(early, ["reject"], "Too early.");
-  const [rejected, stale, open, late] = ["opus", "opus", "fable", "sonnet"].map(propose) as [string, string, string, string];
+  const [rejected, stale, open, late] = ["claude-opus-5-5", "claude-opus-5-5", "claude-fable-5-1", "claude-sonnet-5-5"].map(propose) as [string, string, string, string];
   const registry = registerTask(
     db,
     {
@@ -218,7 +218,7 @@ it("決着した提案は回答か陳腐化が窓の中にあるものだけを 
   ).id;
   register(db, true);
   answer(rejected, ["approve"], "Amended.", { tier: "economy" });
-  applyExecutionSettingsChange(db, { setting: "row", row: { provider: "anthropic", tier: "standard", model: "opus", effort: "max", price_in: 5, price_out: 25 } }, "webui", at);
+  applyExecutionSettingsChange(db, { setting: "row", row: { provider: "anthropic", tier: "standard", model: "claude-opus-5-5", effort: "max", price_in: 5, price_out: 25 } }, "webui", at);
   answer(registry, ["reject"], "Keep it.");
   const review = register(db);
   answer(late, ["reject"]);
@@ -245,7 +245,7 @@ it("節を組んだ記録は主題 routing と、乖離した shadow 行の id�
   const seen = exit(task, spawned);
   const annotation = allocate(task, spawned, "appropriate");
   applyExecutionSettingsChange(db, { setting: "priority", value: "cost" }, "webui", at);
-  const rowEdit = applyExecutionSettingsChange(db, { setting: "row", row: { provider: "anthropic", tier: "economy", model: "haiku", effort: "low", price_in: 1, price_out: 5 } }, "webui", at)!;
+  const rowEdit = applyExecutionSettingsChange(db, { setting: "row", row: { provider: "anthropic", tier: "economy", model: "claude-haiku-4-5", effort: "low", price_in: 1, price_out: 5 } }, "webui", at)!;
   const question = proposeRoutingChange(db, previous, { op: "promote", rationale: "r" }, "auditor", at).question_id;
   answerQuestion(db, getTask(db, question)!, ["reject"], at);
   const review = register(db);

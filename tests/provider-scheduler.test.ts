@@ -563,7 +563,7 @@ it("cost の task は要求ティアの最安の行で spawn され、Provider �
   expect(t.worker.started.filter((task) => task.type === "work").map((task) => task.id)).toEqual([cheap.id, ranked.id]);
   expect(t.worker.startedSettings.at(-1)).toMatchObject({
     provider: "anthropic",
-    model: "opus",
+    model: "claude-opus-5-5",
     source: { tier: "task", provider: "rank" },
   });
 });

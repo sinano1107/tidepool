@@ -8,7 +8,7 @@ import { api, bootTidepool, completeViaMcp, HOUR, managementMcpClient, mcpClient
 let t: Tidepool;
 afterEach(() => t?.stop());
 
-const OPUS = { provider: "anthropic", tier: "standard", model: "opus", effort: "high", price_in: 5, price_out: 25 };
+const OPUS = { provider: "anthropic", tier: "standard", model: "claude-opus-5-5", effort: "high", price_in: 5, price_out: 25 };
 
 /** routing の材料で poll させ、slot に入った routing meta-review の接続を返す。 */
 async function boardWithRoutingReview() {
@@ -21,7 +21,7 @@ async function boardWithRoutingReview() {
     const result: any = await client.callTool({ name, arguments: args });
     return result.isError ? { error: result.content[0].text } : JSON.parse(result.content[0].text);
   };
-  const propose = async (change: Record<string, unknown> = { tier: "frontier" }, row = { provider: "anthropic", model: "opus" }) =>
+  const propose = async (change: Record<string, unknown> = { tier: "frontier" }, row = { provider: "anthropic", model: "claude-opus-5-5" }) =>
     (await call("propose_routing_change", { op: "row", row, change, rationale: "12 of 14 opus episodes were underpowered." })).question_id as string;
   return { review, client, call, propose };
 }
@@ -38,12 +38,12 @@ it("行の提案は meta-review の子に1 item の question を立て、その�
       type: "question",
       status: "todo",
       parent_id: review.id,
-      question_proposal: { kind: "routing", op: "row", row: { provider: "anthropic", model: "opus" }, change: { tier: "frontier", effort: "max" }, pin: OPUS },
+      question_proposal: { kind: "routing", op: "row", row: { provider: "anthropic", model: "claude-opus-5-5" }, change: { tier: "frontier", effort: "max" }, pin: OPUS },
       question_items: [{ options: ["approve", "reject"], recommendation: "approve" }],
     });
     expect(question.question_items).toHaveLength(1);
     const { detail } = question.question_items[0];
-    for (const shown of ["anthropic / opus", "tier: standard -> frontier", "effort: high -> max", "12 of 14 opus episodes were underpowered."]) {
+    for (const shown of ["anthropic / claude-opus-5-5", "tier: standard -> frontier", "effort: high -> max", "12 of 14 opus episodes were underpowered."]) {
       expect(detail).toContain(shown);
     }
     expect(detail).toMatch(/\nWhile this question is open, the next routing meta-review is not registered\.$/);
@@ -57,7 +57,7 @@ it("表に無い行の提案と schema 違反の変更は断られ、question �
   try {
     for (const [row, change] of [
       [{ provider: "anthropic", model: "haiku" }, { tier: "economy" }],
-      [{ provider: "anthropic", model: "opus" }, { tier: "ultra" }],
+      [{ provider: "anthropic", model: "claude-opus-5-5" }, { tier: "ultra" }],
     ]) {
       expect(await call("propose_routing_change", { op: "row", row, change, rationale: "r" })).toMatchObject({
         error: expect.stringMatching(/has no row for|a row change takes tier/),
@@ -94,7 +94,7 @@ it("approve で表の行が提案の値になり、推奨どおりに数えら�
 
     expect((await answer(questionId, { answers: ["approve"] })).status).toBe(200);
 
-    expect(await row("opus")).toEqual({ ...OPUS, tier: "frontier" });
+    expect(await row("claude-opus-5-5")).toEqual({ ...OPUS, tier: "frontier" });
     // 適用は回答の印を持ち、人間が変えた行として meta-review に読まれない(ADR 0151)
     expect((await call("list_routing_cells", { since_watermark: 0 })).rows).toEqual([]);
     expect((await events(questionId)).find((e) => e.kind === "question_answered").payload).toEqual(
@@ -112,7 +112,7 @@ it("修正値つき approve では行が提案に修正値を重ねた値にな�
 
     expect((await answer(questionId, { answers: ["approve"], amendment: { effort: "max" } })).status).toBe(200);
 
-    expect(await row("opus")).toEqual({ ...OPUS, tier: "frontier", effort: "max" });
+    expect(await row("claude-opus-5-5")).toEqual({ ...OPUS, tier: "frontier", effort: "max" });
     expect((await events(questionId)).find((e) => e.kind === "question_answered").payload).toMatchObject({
       answers: [{ answer: "approve", recommendation_accepted: false }],
       amendment: { effort: "max" },
@@ -142,7 +142,7 @@ it("schema 違反の修正値・reject に添えた修正値・memory の提案�
     }
     expect(await task(questionId)).toMatchObject({ status: "todo", question_answer: null });
     expect((await events(questionId)).map((e) => e.kind)).toEqual(["task_registered"]);
-    expect(await row("opus")).toEqual(OPUS);
+    expect(await row("claude-opus-5-5")).toEqual(OPUS);
   } finally {
     await client.close();
   }
@@ -171,7 +171,7 @@ it("reject で表は変わらず、コメントが回答に残る", async () => 
 
     expect((await answer(questionId, { answers: ["reject"], comment: "opus struggled only on the migration tasks" })).status).toBe(200);
 
-    expect(await row("opus")).toEqual(OPUS);
+    expect(await row("claude-opus-5-5")).toEqual(OPUS);
     expect(await task(questionId)).toMatchObject({ status: "done", question_answer: ["reject"], question_answer_comment: "opus struggled only on the migration tasks" });
   } finally {
     await client.close();
@@ -185,10 +185,10 @@ it("pin の行を settings タブで編集する・管理MCP で消すと open �
   const management = await managementMcpClient(t.baseUrl);
   try {
     const edited = await propose({ tier: "frontier" });
-    const deleted = await propose({ effort: "max" }, { provider: "anthropic", model: "sonnet" });
+    const deleted = await propose({ effort: "max" }, { provider: "anthropic", model: "claude-sonnet-5-5" });
 
     expect((await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "row", row: { ...OPUS, price_out: 30 } })).status).toBe(200);
-    const removal: any = await management.callTool({ name: "change_execution_settings", arguments: { change: { setting: "delete_row", provider: "anthropic", model: "sonnet" } } });
+    const removal: any = await management.callTool({ name: "change_execution_settings", arguments: { change: { setting: "delete_row", provider: "anthropic", model: "claude-sonnet-5-5" } } });
     expect(removal.isError).not.toBe(true);
 
     expect(await task(edited)).toMatchObject({ status: "done", question_answer: null });
@@ -210,7 +210,7 @@ it("別の行・別の設定の編集では提案は open のまま", async () =
   try {
     const questionId = await propose({ tier: "frontier" });
 
-    const fable = { provider: "anthropic", tier: "frontier", model: "fable", effort: "max", price_in: 10, price_out: 50 };
+    const fable = { provider: "anthropic", tier: "frontier", model: "claude-fable-5-1", effort: "max", price_in: 10, price_out: 50 };
     for (const change of [{ setting: "row", row: fable }, { setting: "priority", value: "quality" }, { setting: "frontier_advisor", value: true }]) {
       expect((await api(t.baseUrl, "POST", "/api/settings/execution", change)).status).toBe(200);
     }
@@ -228,7 +228,7 @@ it("read_routing_settings は過去の routing の提案を、回答・修正値
     const amended = await propose({ tier: "frontier" });
     const rejected = await propose({ effort: "low" }, { provider: "openai", model: "gpt-5.6-sol" });
     const stale = await propose({ tier: "economy" }, { provider: "openai", model: "gpt-6-astra" });
-    const open = await propose({ effort: "max" }, { provider: "anthropic", model: "sonnet" });
+    const open = await propose({ effort: "max" }, { provider: "anthropic", model: "claude-sonnet-5-5" });
     expect((await answer(amended, { answers: ["approve"], amendment: { effort: "max" }, comment: "and give it room" })).status).toBe(200);
     expect((await answer(rejected, { answers: ["reject"], comment: "sol is fine at high" })).status).toBe(200);
     const astra = { provider: "openai", tier: "frontier", model: "gpt-6-astra", effort: "high", price_in: 12, price_out: 50 };

@@ -19,7 +19,7 @@ import {
   WORKER_SPAWNED,
 } from "./harness.js";
 
-/** selector が並べた候補(除外を当てた後)。表の綴り —— anthropic は alias 行。 */
+/** selector が並べた候補(除外を当てた後)。表の綴り —— 行は具体 id だけ(ADR 0182 決定1)。 */
 const candidate = (
   provider: ExecutionSetting["provider"],
   model: string,
@@ -31,13 +31,13 @@ const candidate = (
   advisor,
   source: { tier: "task", provider: "rank" },
 });
-const opus = candidate("anthropic", "opus");
+const opus = candidate("anthropic", "claude-opus-5-5");
 const sol = candidate("openai", "gpt-5.6-sol");
 
 /** 観測された episode の既定形。テストが言いたい1点だけを上書きする。 */
 function episode(overrides: Partial<LearnerEpisode> = {}): LearnerEpisode {
   return {
-    cell: { provider: "anthropic", model: "claude-opus-4-1", effort: "high", advisor: null },
+    cell: { provider: "anthropic", model: "claude-opus-5-5", effort: "high", advisor: null },
     workspace: "tidepool",
     outcome: "accepted",
     cost_usd: null,
@@ -75,8 +75,8 @@ it("データの無いセルでは推薦が表(selector の先頭)と一致し�
   expect(recommendFor([], [sol, opus])).toEqual({ recommended: sol, basis: "prior" });
 });
 
-it("観測された具体 id は表の alias 行に当たり、受理されなかった行は観測のある候補より下がる —— basis は data", () => {
-  const rejected = episode({ cell: { provider: "anthropic", model: "claude-opus-4-1", effort: "high", advisor: null }, outcome: "rejected" });
+it("セルは綴りの一致する表の行に当たり、受理されなかった行は観測のある候補より下がる —— basis は data", () => {
+  const rejected = episode({ outcome: "rejected" });
   expect(recommendFor([rejected, solAccepted], [opus, sol])).toEqual({ recommended: sol, basis: "data" });
 });
 
@@ -116,6 +116,22 @@ it("受理1件では表の並びを追い越さない —— 表の行は受理1
   expect(recommendFor(mixed, [opus, sol]).recommended).toEqual(sol);
 });
 
+it("先頭の観測が移る先より少ないあいだは却下数で比べる —— 0 受理 / 1 却下の先頭は 100 / 1 の相手に移らず、却下が2件で移り、相手に却下が並べば戻る(ADR 0182 決定4)", () => {
+  const solEpisodes = (accepted: number, rejected: number) => [
+    ...Array.from({ length: accepted }, () => solAccepted),
+    ...Array.from({ length: rejected }, () => ({ ...solAccepted, outcome: "rejected" as const })),
+  ];
+  const headRejected = episode({ outcome: "rejected" });
+  expect(recommendFor([headRejected, ...solEpisodes(100, 1)], [opus, sol]).recommended).toEqual(opus);
+  expect(recommendFor([headRejected, headRejected, ...solEpisodes(100, 1)], [opus, sol]).recommended).toEqual(sol);
+  expect(recommendFor([headRejected, headRejected, ...solEpisodes(100, 2)], [opus, sol]).recommended).toEqual(opus);
+});
+
+it("先頭の観測が移る先以上なら事後平均の比較 —— 101 / 1 の先頭は 2 / 0 の相手へ移る(ADR 0181 決定3)", () => {
+  const episodes = [...Array.from({ length: 101 }, () => episode()), episode({ outcome: "rejected" }), solAccepted, solAccepted];
+  expect(recommendFor(episodes, [opus, sol]).recommended).toEqual(sol);
+});
+
 it("同じ episode 列を与えると同じ推薦を返し、並び順にも依らない(AC2: 乱数を持たない)", () => {
   const episodes = [
     episode({ outcome: "rejected" }),
@@ -129,7 +145,7 @@ it("同じ episode 列を与えると同じ推薦を返し、並び順にも依�
 });
 
 it("盤面全体の事後分布が workspace の事前分布 —— 自分の workspace の観測が他所の観測より重く、観測の無い workspace は盤面の事後分布に従う", () => {
-  const opusCell = { provider: "anthropic", model: "claude-opus-4-1", effort: "high", advisor: null } as const;
+  const opusCell = { provider: "anthropic", model: "claude-opus-5-5", effort: "high", advisor: null } as const;
   const solCell = { provider: "openai", model: "gpt-5.6-sol", effort: "high", advisor: null } as const;
   const episodes = [
     ...Array.from({ length: 3 }, () => episode({ cell: opusCell, workspace: "other", outcome: "rejected" })),
@@ -202,10 +218,10 @@ it("outcome は受理 = 統合点レビューがすべて完了、負 = capabili
 });
 
 it("advisor pin ありの episode は advisor 無しのセルに合流しない —— 相談回数ではなく pin がセルを割る(AC4)", () => {
-  const opusWithAdvisor = candidate("anthropic", "opus", "fable");
+  const opusWithAdvisor = candidate("anthropic", "claude-opus-5-5", "claude-fable-5-1");
   // pin あり・相談0回で受理されなかった session。pin が同じセルだけが下がる
   const pinnedRejected = episode({
-    cell: { provider: "anthropic", model: "claude-opus-4-1", effort: "high", advisor: "fable" },
+    cell: { provider: "anthropic", model: "claude-opus-5-5", effort: "high", advisor: "claude-fable-5-1" },
     outcome: "rejected",
   });
   // 合流すれば opus 行に却下が付いて観測のある sol へ移る
@@ -234,7 +250,7 @@ it("work task の pickup ごとに shadow 行が1件記録され、selector の�
   await t.clock.advance(HOUR);
 
   expect(t.worker.startedSettings).toEqual([opus]);
-  const cell = { provider: "anthropic", model: "opus", effort: "high", advisor: null };
+  const cell = { provider: "anthropic", model: "claude-opus-5-5", effort: "high", advisor: null };
   expect(shadowRows(t)).toEqual([
     { task_id: work.id, recommended: cell, actual: cell, source: opus.source, basis: "prior", candidates: 2 },
   ]);
@@ -294,7 +310,7 @@ it("観測が効くと shadow 行は selector と乖離しうるが、選択は�
   expect(shadowRows(t).at(-1)).toEqual({
     task_id: later.id,
     recommended: { provider: "openai", model: "gpt-5.6-sol", effort: "high", advisor: null },
-    actual: { provider: "anthropic", model: "opus", effort: "high", advisor: null },
+    actual: { provider: "anthropic", model: "claude-opus-5-5", effort: "high", advisor: null },
     source: opus.source,
     basis: "data",
     candidates: 2,
@@ -316,8 +332,8 @@ it("同じ entry の前の異議群が capability、後の異議群が preferenc
   });
 });
 
-it("advisor pin ありで相談0回の session は、盤面の記録から読んでも advisor 無しのセルに合流しない —— 観測された具体 id も alias 行に当たる(AC4)", async () => {
-  const opusWithAdvisor = candidate("anthropic", "opus", "fable");
+it("advisor pin ありで相談0回の session は、盤面の記録から読んでも advisor 無しのセルに合流しない(AC4)", async () => {
+  const opusWithAdvisor = candidate("anthropic", "claude-opus-5-5", "claude-fable-5-1");
   t = await bootTidepool({ taskExecutionCandidates: () => [opusWithAdvisor, opus] });
   await settledSession(t, opus);
   const earlier = await registerWork(t, "earlier");
@@ -328,7 +344,7 @@ it("advisor pin ありで相談0回の session は、盤面の記録から読ん
     workerId: "fake-worker",
     origin: "board",
     at: t.clock.now(),
-    payload: { ...WORKER_SPAWNED, advisor: "fable", provider: "anthropic", model: "opus", effort: "high" },
+    payload: { ...WORKER_SPAWNED, advisor: "claude-fable-5-1", provider: "anthropic", model: "claude-opus-5-5", effort: "high" },
   });
   const entry = await loggedEntry(t, earlier.id, "took the shortcut");
   const attributed: EventPayload = {
@@ -353,7 +369,7 @@ it("advisor pin ありで相談0回の session は、盤面の記録から読ん
       signal: null,
       stderr_tail: null,
       worker_spawned_event_id: spawnedId,
-      usage: { ...tokens, advisor: null, models: { "claude-opus-4-1": tokens } },
+      usage: { ...tokens, advisor: null, models: { "claude-opus-5-5": tokens } },
     },
   });
   await completeViaMcp(t, earlier.id);
@@ -366,66 +382,15 @@ it("advisor pin ありで相談0回の session は、盤面の記録から読ん
   expect(t.worker.startedSettings.at(-1)).toEqual(opusWithAdvisor);
   expect(shadowRows(t).at(-1)).toMatchObject({
     task_id: later.id,
-    recommended: { provider: "anthropic", model: "opus", effort: "high", advisor: null },
-    actual: { provider: "anthropic", model: "opus", effort: "high", advisor: "fable" },
+    recommended: { provider: "anthropic", model: "claude-opus-5-5", effort: "high", advisor: null },
+    actual: { provider: "anthropic", model: "claude-opus-5-5", effort: "high", advisor: "claude-fable-5-1" },
     basis: "data",
   });
 });
 
-it("セルの model は観測された具体 id —— pin が alias でも、人間が足した具体 id の行に観測が当たる", async () => {
-  const opus41 = candidate("anthropic", "claude-opus-4-1");
-  t = await bootTidepool({ taskExecutionCandidates: () => [opus41, sol] });
-  await settledSession(t, sol);
-  const earlier = await registerWork(t, "earlier");
-  await t.clock.advance(HOUR);
-  // pin は alias の opus、CLI が報告した具体 id は claude-opus-4-1(ScriptedWorker は spawn しないので setup として置く)
-  const spawnedId = appendEvent(t.db, {
-    taskId: earlier.id,
-    workerId: "fake-worker",
-    origin: "board",
-    at: t.clock.now(),
-    payload: { ...WORKER_SPAWNED, advisor: null, provider: "anthropic", model: "opus", effort: "high" },
-  });
-  const entry = await loggedEntry(t, earlier.id, "took the shortcut");
-  const attributed: EventPayload = {
-    kind: "objection_attributed",
-    entry_id: entry.id,
-    objection_event_ids: [bundledObjection(t.db, earlier.id, entry.id, t.clock.now())],
-    cause: "capability",
-    evidence: "the shortcut missed the second criterion",
-    entries: null,
-    round: "initial",
-  };
-  appendEvent(t.db, { taskId: earlier.id, workerId: "board", origin: "board", at: t.clock.now(), payload: attributed });
-  const tokens = { input_tokens: 1, output_tokens: 1, cache_read_tokens: 0, cache_creation_tokens: 0, estimated_cost_usd: 0.5 };
-  appendEvent(t.db, {
-    taskId: earlier.id,
-    workerId: "fake-worker",
-    origin: "board",
-    at: t.clock.now(),
-    payload: {
-      kind: "worker_exited",
-      exit_code: 0,
-      signal: null,
-      stderr_tail: null,
-      worker_spawned_event_id: spawnedId,
-      usage: { ...tokens, advisor: null, models: { "claude-opus-4-1": tokens } },
-    },
-  });
-  await completeViaMcp(t, earlier.id);
-  await completeIntegrationReviews(t, earlier.id);
-  await completeMetaReviews(t);
-
-  const later = await registerWork(t, "later");
-  await t.clock.advance(HOUR);
-
-  // pin の綴り(opus)のままなら claude-opus-4-1 の行に当たらず、推薦は表の先頭のまま
-  expect(t.worker.startedSettings.at(-1)).toEqual(opus41);
-  expect(shadowRows(t).at(-1)).toMatchObject({
-    task_id: later.id,
-    recommended: { provider: "openai", model: "gpt-5.6-sol", effort: "high", advisor: null },
-    basis: "data",
-  });
+it("行との照合は完全一致 —— 行 claude-opus-5 は claude-opus-5-5 のセルの却下を数えず、未観測の先頭のまま(ADR 0182 決定3)", () => {
+  const opus5 = candidate("anthropic", "claude-opus-5");
+  expect(recommendFor([episode({ outcome: "rejected" }), solAccepted], [opus5, sol])).toEqual({ recommended: opus5, basis: "data" });
 });
 
 /** 学習器を昇格させる —— approve の適用と同じ書き口。設定の変更は routing meta-review の材料なので、登録されたそれを先に済ませる。 */

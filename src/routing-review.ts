@@ -9,7 +9,6 @@ import {
   TIERS,
   type Tier,
   tierHasRowFor,
-  windowMatchesModel,
 } from "./execution-setting.js";
 import { type Cell, cellJson, loadEpisodes, type RoutingEpisode, type TrackRecord } from "./learner.js";
 import { inWindow, type MetaReviewWindow, materialSection, paged, previousMetaReviewWatermark } from "./meta-review.js";
@@ -105,8 +104,8 @@ function allocationRows(db: Db, window: MetaReviewWindow) {
     const key = JSON.stringify([episode.source.tier, episode.agent, p.allocation, p.cause]);
     const group = groups.get(key) ?? { source_tier: episode.source.tier, agent: episode.agent, allocation: p.allocation, cause: p.cause, count: 0, judged_by_same_model: 0 };
     group.count += 1;
-    // judge は表の行の綴り(alias 可)、セルは観測された具体 id —— 表の照合と同じ部分一致
-    if (p.judge.provider === episode.cell.provider && windowMatchesModel(p.judge.model, episode.cell.model)) group.judged_by_same_model += 1;
+    // judge は表の行の綴り、セルは pin の綴り —— 学習器が行に当てるのと同じ完全一致(ADR 0182 決定3)
+    if (p.judge.provider === episode.cell.provider && p.judge.model === episode.cell.model) group.judged_by_same_model += 1;
     groups.set(key, group);
   }
   return { groups: [...groups.values()], counted };

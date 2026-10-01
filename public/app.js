@@ -2495,8 +2495,8 @@ function ExecutionTableCard({ settings, say, onSaved, edit }) {
   const save = async () => {
     setBusy(true);
     try {
-      for (const row of deletes) await api("/api/settings/execution", { setting: "delete_row", provider: row.provider, model: row.model });
       for (const row of upserts) await api("/api/settings/execution", { setting: "row", row });
+      for (const row of deletes) await api("/api/settings/execution", { setting: "delete_row", provider: row.provider, model: row.model });
       say("success", "execution table saved", `${upserts.length} row${upserts.length === 1 ? "" : "s"} written, ${deletes.length} removed`);
       edit.close();
       await onSaved();

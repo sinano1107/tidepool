@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { isClaudeModelAlias } from "../src/claude-model-alias.js";
 import { openDb } from "../src/db.js";
 import {
   AdvisorPairingError,
@@ -51,11 +52,12 @@ it("ティアは廉価 / 主力 / 上位の3段で、盤面既定は廉価 —�
   expect(BOARD_DEFAULT_TIER).toBe("economy");
 });
 
-it("種の表は `/implementation-delegation` の表と同じ7行 — anthropic は alias 行、openai は具体 id 行、moonshot は kimi-k3 を economy に1行(ADR 0114: 価格は USD per MTok)", () => {
+it("種の表は `/implementation-delegation` の表と同じ7行 — anthropic も openai も具体 id 行で、anthropic の行は alias の拒否一覧に当たらない、moonshot は kimi-k3 を economy に1行(ADR 0114: 価格は USD per MTok / ADR 0182 決定1)", () => {
+  expect(SEED_EXECUTION_SETTINGS.filter((row) => row.provider === "anthropic" && isClaudeModelAlias(row.model))).toEqual([]);
   expect(SEED_EXECUTION_SETTINGS).toEqual([
-    { provider: "anthropic", tier: "economy", model: "sonnet", effort: "high", price_in: 2, price_out: 10 },
-    { provider: "anthropic", tier: "standard", model: "opus", effort: "high", price_in: 5, price_out: 25 },
-    { provider: "anthropic", tier: "frontier", model: "fable", effort: "high", price_in: 10, price_out: 50 },
+    { provider: "anthropic", tier: "economy", model: "claude-sonnet-5-5", effort: "high", price_in: 2, price_out: 10 },
+    { provider: "anthropic", tier: "standard", model: "claude-opus-5-5", effort: "high", price_in: 5, price_out: 25 },
+    { provider: "anthropic", tier: "frontier", model: "claude-fable-5-1", effort: "high", price_in: 10, price_out: 50 },
     { provider: "moonshot", tier: "economy", model: "kimi-k3[1m]", effort: "high", price_in: 3, price_out: 15 },
     { provider: "openai", tier: "economy", model: "gpt-5.6-terra", effort: "high", price_in: 2, price_out: 12 },
     { provider: "openai", tier: "standard", model: "gpt-5.6-sol", effort: "high", price_in: 4, price_out: 20 },
@@ -68,7 +70,7 @@ it("tier を書かない agent は盤面既定のティアで解決され、出�
     select(input({ entries: [{ provider: "anthropic", advisor: false }], taskTier: undefined, agentTier: undefined, frontierAdvisor: false }), table),
   ).toEqual({
     provider: "anthropic",
-    model: "sonnet",
+    model: "claude-sonnet-5-5",
     effort: "high",
     advisor: undefined,
     source: { tier: "board", provider: "only" },
@@ -80,7 +82,7 @@ it("agent の tier は盤面既定より優先され、出所は agent", () => {
     select(input({ entries: [{ provider: "anthropic", advisor: false }], taskTier: undefined, agentTier: "economy", frontierAdvisor: false }), table),
   ).toEqual({
     provider: "anthropic",
-    model: "sonnet",
+    model: "claude-sonnet-5-5",
     effort: "high",
     advisor: undefined,
     source: { tier: "agent", provider: "only" },
@@ -102,18 +104,18 @@ it("advisor が真でも「Fable を advisor に使える」フラグが立つ�
   expect(
     select(input({ entries: [{ provider: "anthropic", advisor: true }], taskTier: undefined, agentTier: "economy", frontierAdvisor: false }), table)
       .advisor,
-  ).toBe("sonnet");
+  ).toBe("claude-sonnet-5-5");
   expect(
     select(input({ entries: [{ provider: "anthropic", advisor: true }], taskTier: undefined, agentTier: "standard", frontierAdvisor: false }), table)
       .advisor,
-  ).toBe("opus");
+  ).toBe("claude-opus-5-5");
 });
 
 it("フラグが立てば advisor は同 Provider の上位ティアの行、main が既に上位なら main と同一", () => {
   expect(
     select(input({ entries: [{ provider: "anthropic", advisor: true }], taskTier: undefined, agentTier: "standard", frontierAdvisor: true }), table)
       .advisor,
-  ).toBe("fable");
+  ).toBe("claude-fable-5-1");
   const frontier = select(
     input({ entries: [{ provider: "anthropic", advisor: true }], taskTier: undefined, agentTier: "frontier", frontierAdvisor: true }),
     table,
@@ -173,7 +175,7 @@ it("task の要求ティアは agent の tier より優先され、出所は tas
     ),
   ).toEqual({
     provider: "anthropic",
-    model: "fable",
+    model: "claude-fable-5-1",
     effort: "high",
     advisor: undefined,
     source: { tier: "task", provider: "only" },
@@ -188,7 +190,7 @@ it("task の要求ティアは agent が tier を持たなくても盤面既定�
     ),
   ).toEqual({
     provider: "anthropic",
-    model: "opus",
+    model: "claude-opus-5-5",
     effort: "high",
     advisor: undefined,
     source: { tier: "task", provider: "only" },
@@ -210,7 +212,7 @@ it("task の要求ティアは advisor の導出にも効く —— main が動�
       input({ entries: [{ provider: "anthropic", advisor: true }], taskTier: "frontier", agentTier: "economy", frontierAdvisor: true }),
       table,
     ).advisor,
-  ).toBe("fable");
+  ).toBe("claude-fable-5-1");
 });
 
 /* ------------------------------------------------------------------ *
@@ -269,28 +271,14 @@ it("温存中の Provider の entry は飛ばされ、除外されていない e
   ).toMatchObject({ provider: "openai", source: { provider: "rank" } });
 });
 
-it("モデル窓の除外は entry の解決した model に当たる —— 同じ Provider でもティアが違えば当たらない", () => {
+it("モデル窓の除外は entry の解決した model に当たる —— 窓 fable は部分一致で claude-fable-5-1 の行に当たり(Throttle の窓は系列単位の枠、ADR 0182 決定3)、同じ Provider でもティアが違えば当たらない", () => {
   const excluded = { providers: [], models: [{ provider: "anthropic" as const, model: "fable" }] };
   expect(
     selectExecutionSetting(input({ agentTier: "frontier" }), table, excluded),
   ).toBeNull();
   expect(
     selectExecutionSetting(input({ agentTier: "standard" }), table, excluded)?.model,
-  ).toBe("opus");
-});
-
-it("fable の窓は model 名の部分一致で当たる —— CLI の --model は開かれた文字列(ADR 0030)", () => {
-  const generation: ExecutionSettingTable = table.map((row) =>
-    row.provider === "anthropic" && row.tier === "frontier"
-      ? { ...row, model: "claude-fable-5" }
-      : row,
-  );
-  expect(
-    selectExecutionSetting(input({ agentTier: "frontier" }), generation, {
-      providers: [],
-      models: [{ provider: "anthropic", model: "fable" }],
-    }),
-  ).toBeNull();
+  ).toBe("claude-opus-5-5");
 });
 
 it("全 entry が除外されたら null —— 例外ではない(全除外は正常な skipped の枝であって設定の穴ではない)", () => {
@@ -318,7 +306,7 @@ it("advisor は entry ごとの宣言 —— 同じ agent でも経路が違え�
         ],
       }),
     ).advisor,
-  ).toBe("sonnet");
+  ).toBe("claude-sonnet-5-5");
   expect(
     selectExecutionSetting(
       input({
@@ -345,7 +333,7 @@ const both = [
 it("quality(既定)は Provider 順位で並べる —— standard では順位が先の opus が価格の安い sol に勝ち、出所は rank", () => {
   expect(select(input({ entries: both, taskTier: "standard" }))).toMatchObject({
     provider: "anthropic",
-    model: "opus",
+    model: "claude-opus-5-5",
     source: { tier: "task", provider: "rank" },
   });
 });
@@ -402,21 +390,21 @@ it("advisor のティアが main と同じなら main の行そのもの —— 
 });
 
 it("review の要求は priority を持たず quality の並べ方で解決される(ADR 0111 決定3)", () => {
-  expect(select(input({ entries: both, reviewTier: "standard", priority: "cost" })).model).toBe("opus");
+  expect(select(input({ entries: both, reviewTier: "standard", priority: "cost" })).model).toBe("claude-opus-5-5");
 });
 
 /** routing の行の提案(issue #918 / ADR 0150 決定1): pin はその行の全欄。 */
-const opusRow = { provider: "anthropic", tier: "standard", model: "opus", effort: "high", price_in: 5, price_out: 25 } as const;
-const rowProposal = { kind: "routing", op: "row", row: { provider: "anthropic", model: "opus" }, change: { tier: "frontier" }, pin: opusRow } as const;
+const opusRow = { provider: "anthropic", tier: "standard", model: "claude-opus-5-5", effort: "high", price_in: 5, price_out: 25 } as const;
+const rowProposal = { kind: "routing", op: "row", row: { provider: "anthropic", model: "claude-opus-5-5" }, change: { tier: "frontier" }, pin: opusRow } as const;
 
 it("pin の照合は行の全欄の一致で、崩れた欄の名前を返す —— 行が消えていれば null", () => {
   expect(routingPinChanges(rowProposal, { table: SEED_EXECUTION_SETTINGS, learnerPromoted: false })).toEqual([]);
-  const edited = SEED_EXECUTION_SETTINGS.map((row) => (row.model === "opus" ? { ...row, effort: "max", price_out: 30 } : row));
+  const edited = SEED_EXECUTION_SETTINGS.map((row) => (row.model === "claude-opus-5-5" ? { ...row, effort: "max", price_out: 30 } : row));
   expect(routingPinChanges(rowProposal, { table: edited, learnerPromoted: false })).toEqual(["effort", "price_out"]);
   // 別の行の編集は pin に触れない
-  const other = SEED_EXECUTION_SETTINGS.map((row) => (row.model === "sonnet" ? { ...row, tier: "standard" as const } : row));
+  const other = SEED_EXECUTION_SETTINGS.map((row) => (row.model === "claude-sonnet-5-5" ? { ...row, tier: "standard" as const } : row));
   expect(routingPinChanges(rowProposal, { table: other, learnerPromoted: false })).toEqual([]);
-  expect(routingPinChanges(rowProposal, { table: SEED_EXECUTION_SETTINGS.filter((row) => row.model !== "opus"), learnerPromoted: false })).toBeNull();
+  expect(routingPinChanges(rowProposal, { table: SEED_EXECUTION_SETTINGS.filter((row) => row.model !== "claude-opus-5-5"), learnerPromoted: false })).toBeNull();
 });
 
 it("昇格 / 降格の提案の pin はフラグの現在値 —— フラグが変われば learner_promoted が崩れ、表の編集では崩れない", () => {
@@ -448,7 +436,7 @@ const tierProposal: RegistryProposal = {
   op: "agent_tier",
   agent: "deckhand",
   to: "standard",
-  pin: { tier: "frontier", rows: [{ provider: "anthropic", model: "fable", tier: "frontier", effort: "high" }] },
+  pin: { tier: "frontier", rows: [{ provider: "anthropic", model: "claude-fable-5-1", tier: "frontier", effort: "high" }] },
   evidence: [7],
 };
 
@@ -465,10 +453,10 @@ it("registry の提案の pin: 根拠の行は (provider, model) の tier / effo
   expect(routingPinChanges(tierProposal, settings(SEED_EXECUTION_SETTINGS))).toEqual([]);
   // 根拠の行の effort が変わる・行が消える → rows が崩れる。価格や別の行の編集では崩れない
   const edit = (model: string, change: object) => SEED_EXECUTION_SETTINGS.map((row) => (row.model === model ? { ...row, ...change } : row));
-  expect(routingPinChanges(tierProposal, settings(edit("fable", { effort: "max" })))).toEqual(["rows"]);
-  expect(routingPinChanges(tierProposal, settings(SEED_EXECUTION_SETTINGS.filter((row) => row.model !== "fable")))).toEqual(["rows"]);
-  expect(routingPinChanges(tierProposal, settings(edit("fable", { price_out: 60 })))).toEqual([]);
-  expect(routingPinChanges(tierProposal, settings(edit("opus", { effort: "max" })))).toEqual([]);
+  expect(routingPinChanges(tierProposal, settings(edit("claude-fable-5-1", { effort: "max" })))).toEqual(["rows"]);
+  expect(routingPinChanges(tierProposal, settings(SEED_EXECUTION_SETTINGS.filter((row) => row.model !== "claude-fable-5-1")))).toEqual(["rows"]);
+  expect(routingPinChanges(tierProposal, settings(edit("claude-fable-5-1", { price_out: 60 })))).toEqual([]);
+  expect(routingPinChanges(tierProposal, settings(edit("claude-opus-5-5", { effort: "max" })))).toEqual([]);
 
   expect(registryPinChanges(tierProposal, { tier: "frontier" })).toEqual([]);
   expect(registryPinChanges(tierProposal, { tier: "standard" })).toEqual(["agent_tier"]);
