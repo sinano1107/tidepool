@@ -3769,7 +3769,7 @@ describe("上限到達による中断(issue #467 / ADR 0104)", () => {
 
     const spawned = listEvents(db, task.id).find((e) => e.kind === "worker_spawned")!;
     expect(order).toEqual([
-      { provider: "anthropic", model: "claude-sonnet-5-5", worker_spawned_event_id: spawned.id },
+      { provider: "anthropic", model: "claude-sonnet-5-5", worker_spawned_event_id: spawned.id, cause: "api_404" },
       "exited",
     ]);
   });

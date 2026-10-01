@@ -1,4 +1,5 @@
 import type { Db } from "./db.js";
+import type { RowRefusalCause } from "./events.js";
 import { registerQuarantine } from "./quarantine.js";
 import type { Provider } from "./registry.js";
 import { BOARD_WORKER_ID, registerTask } from "./tasks.js";
@@ -12,7 +13,7 @@ export type CliAuthResult =
 export type CliAuthCheck = () => Promise<CliAuthResult>;
 
 /** 行の Quarantine の解除の門(ADR 0184 決定5): その model id を検査し直した判定。Claude CLI を喋る
- *  Provider は最小の1ターン(`refused` は 404、`unauthorized` は 401)、openai は model 一覧の読み直し
+ *  Provider は最小の1ターン(`refused` は行の拒否の証拠、`unauthorized` は 401)、openai は model 一覧の読み直し
  *  (`refused` は一覧に無い)。 */
 export type ModelProbeResult =
   | { status: "runs" }
@@ -58,11 +59,15 @@ export function isCapInterruptionEnvelope(value: unknown): boolean {
   return typeof value === "object" && value !== null && "api_error_status" in value && value.api_error_status === 429;
 }
 
-/** 行の拒否(CONTEXT.md / ADR 0184 決定3): Provider がその model id を断った証拠は
- *  `result` envelope の `api_error_status: 404` 一点。401 / 429 と同じ posture で、
- *  `result` の本文や stderr の `unrecognized_model` からは推測しない。 */
-export function isRowRefusalEnvelope(value: unknown): boolean {
-  return typeof value === "object" && value !== null && "api_error_status" in value && value.api_error_status === 404;
+/** 行の拒否(CONTEXT.md / ADR 0184 決定3・ADR 0187 決定1)の証拠の分類。Provider がその model id を
+ *  断った証拠は `result` envelope の `api_error_status: 404` と、CLI の版の古さを名指すサーバの識別子
+ *  `api_error_code: claude_code_version_too_old` の2つ。401 / 429 と同じ posture で、HTTP の 400・CLI の
+ *  enum の `api_error`・`result` の本文・stderr の `unrecognized_model` からは推測しない。 */
+export function rowRefusalCause(value: unknown): RowRefusalCause | null {
+  if (typeof value !== "object" || value === null) return null;
+  if ("api_error_status" in value && value.api_error_status === 404) return "api_404";
+  if ("api_error_code" in value && value.api_error_code === "claude_code_version_too_old") return "cli_version_too_old";
+  return null;
 }
 
 /** The probe died on its own spend cap, not on an authentication verdict

@@ -8,11 +8,16 @@ import type { Provider } from "./registry.js";
 import type { MemoryProposal, ProposalAmendment, TaskType } from "./tasks.js";
 import { entryObjections } from "./triage.js";
 
+/** 行の拒否の証拠の種類: Provider が id を 404 で断った(ADR 0184 決定3)/ CLI の版が model の最低版に
+ *  届かない(result 行の `api_error_code: claude_code_version_too_old`、ADR 0187 決定1)。 */
+export type RowRefusalCause = "api_404" | "cli_version_too_old";
+
 /** 行の拒否(ADR 0184 決定4): Provider が断った spawn 時の行と、その session の worker_spawned。 */
 export interface RowRefusal {
   provider: Provider;
   model: string;
   worker_spawned_event_id: number;
+  cause: RowRefusalCause;
 }
 
 /** What the advisor **actually did** in one worker session (issue #33 判断6),

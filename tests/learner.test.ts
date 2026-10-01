@@ -510,7 +510,7 @@ it("行の拒否で落ちた session は、そのタスクが別の行で受理�
   const refusedId = recordSpawn(a.id);
   const at = t.clock.now();
   appendEvent(t.db, { taskId: a.id, workerId: "fake-worker", origin: "board", at, payload: { kind: "worker_exited", exit_code: 1, signal: null, stderr_tail: null, reported_error: null, worker_spawned_event_id: refusedId, usage: null } });
-  appendEvent(t.db, { taskId: a.id, workerId: "tidepool", origin: "board", at, payload: { kind: "row_refused", provider: "anthropic", model: WORKER_SPAWNED.model, worker_spawned_event_id: refusedId } });
+  appendEvent(t.db, { taskId: a.id, workerId: "tidepool", origin: "board", at, payload: { kind: "row_refused", provider: "anthropic", model: WORKER_SPAWNED.model, worker_spawned_event_id: refusedId, cause: "api_404" } });
   const rerunId = recordSpawn(a.id);
   await completeViaMcp(t, a.id);
   await completeIntegrationReviews(t, a.id);

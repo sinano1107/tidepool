@@ -2,14 +2,16 @@ import { writeFile } from "node:fs/promises";
 import { expect, it, vi } from "vitest";
 import { boardHalts } from "../src/board-halt.js";
 import { type Db, openDb } from "../src/db.js";
+import { listEvents } from "../src/events.js";
+import { applyExecutionSettingsChange, loadExecutionSettingTable } from "../src/execution-setting.js";
 import { quarantineFailedTeardown } from "../src/failed-teardown.js";
 import type { Landing } from "../src/landing.js";
 import { ProcessContainers } from "../src/process-container.js";
-import { FAILED_TEARDOWN_QUESTION_TITLE } from "../src/quarantine.js";
+import { FAILED_TEARDOWN_QUESTION_TITLE, openQuarantineValues } from "../src/quarantine.js";
 import { Slot } from "../src/slot.js";
-import { completeTask, escalateTask, getTask, listBoard, nextSlotTask, pickupTask, registerTask, type Task } from "../src/tasks.js";
+import { completeTask, escalateTask, getTask, listBoard, moveTask, nextSlotTask, pickupTask, registerTask, type Task } from "../src/tasks.js";
 import { markTeardown, runTeardown } from "../src/teardown.js";
-import { capInterruptionHandler, startWatchdog, type Watchdog } from "../src/watchdog.js";
+import { capInterruptionHandler, rowRefusalHandler, startWatchdog, type Watchdog } from "../src/watchdog.js";
 import {
   prepareWorkspaceAtPickup,
   type WorkspaceConfig,
@@ -144,6 +146,26 @@ it("cap settlement supersedes an already pending watchdog reclaim callback", asy
   expect(questions(db)).toEqual([]);
   expect(getTask(db, task.id)?.status).toBe("todo");
   expect(slot.currentTaskId).toBeNull();
+});
+
+it("走っている間に表から消えた行の 404 は行の Quarantine を立てず、row_refused を残して failure question 無しに先頭へ戻る(issue #1265)", async () => {
+  const db = openDb(":memory:");
+  const clock = new FakeClock();
+  const slot = new Slot();
+  const { provider, model } = loadExecutionSettingTable(db)[0]!;
+  const task = pickupTask(db, registerTask(db, { type: "work", title: "refused", purpose: "why", completion_criteria: "done" }, clock.now()), "deckhand", clock.now())!;
+  slot.occupy(task.id);
+  // 走っている間に別のタスクを先頭へ置く —— 断られたタスクがその前へ戻ることを見るため
+  moveTask(db, registerTask(db, { type: "work", title: "queued after", purpose: "why", completion_criteria: "done" }, clock.now()), null, clock.now());
+  applyExecutionSettingsChange(db, { setting: "delete_row", provider, model }, "webui", clock.now());
+
+  rowRefusalHandler({ db, clock, slot, resolve: undefined, pollNow: () => {} })(task.id, { provider, model, cause: "api_404", worker_spawned_event_id: 1 }, Promise.resolve());
+  await settle();
+
+  expect(openQuarantineValues(db, "tableRow")).toEqual([]);
+  expect(listEvents(db, task.id).some((e) => e.kind === "row_refused")).toBe(true);
+  expect(nextSlotTask(db)?.id).toBe(task.id);
+  expect(questions(db)).toEqual([]);
 });
 
 it("cap teardown reaches containment in one reclaim timeout without running the task-type ladder", async () => {
