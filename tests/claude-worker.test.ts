@@ -3637,6 +3637,27 @@ describe("上限到達による中断(issue #467 / ADR 0104)", () => {
     expect(order).toEqual(["cap", "exited"]);
   });
 
+  it("行の拒否(result 行の 404)の一撃は exit の一撃より先に、spawn 時の provider / model と worker_spawned の id を運んで呼ばれる(ADR 0184 決定4)", async () => {
+    const order: unknown[] = [];
+    const { start, processes, emitExit, db } = await makeWorker({}, {
+      onRowRefused: (_taskId, refusal) => order.push(refusal),
+      onWorkerExited: () => order.push("exited"),
+    });
+    const task = start("task-row-refused-order");
+    // 2026-10-01 実測の形(#1249): subtype は success のまま is_error と 404 が立つ
+    processes[0]!.stdout.write(
+      `${JSON.stringify({ type: "result", subtype: "success", is_error: true, api_error_status: 404, total_cost_usd: 0, modelUsage: {} })}\n`,
+    );
+
+    emitExit(1, null);
+
+    const spawned = listEvents(db, task.id).find((e) => e.kind === "worker_spawned")!;
+    expect(order).toEqual([
+      { provider: "anthropic", model: "claude-sonnet-5-5", worker_spawned_event_id: spawned.id },
+      "exited",
+    ]);
+  });
+
   it("中断の事実を盤面名義の event として worker_exited と並べて刻む(ADR 0104 決定4)", async () => {
     const { start, processes, emitExit, db, slot } = await makeWorker();
     const task = start("task-capped-event");

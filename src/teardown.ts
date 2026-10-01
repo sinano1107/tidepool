@@ -4,7 +4,7 @@ import { quarantineFailedTeardown } from "./failed-teardown.js";
 import type { GitHubAuth } from "./github-auth.js";
 import type { Landing } from "./landing.js";
 import type { Slot } from "./slot.js";
-import { DomainError, getTask, returnForCapInterruption, type Task } from "./tasks.js";
+import { DomainError, getTask, returnToQueueHead, type Task } from "./tasks.js";
 import {
   ensureWorkspaceToken,
   releaseWorkspace,
@@ -76,7 +76,7 @@ export function teardownStep(db: Db, taskId: string): TeardownStep {
   if (settlement === "interrupted") {
     return {
       ready: (current) => current.status === "in_progress",
-      transition: (current, now) => returnForCapInterruption(db, current, now),
+      transition: (current, now) => returnToQueueHead(db, current, { kind: "cap_interrupted" }, now),
     };
   }
   return { completion: settlement === "completed" };

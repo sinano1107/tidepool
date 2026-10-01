@@ -10,12 +10,13 @@ import { type BoardStatePath, boardStateOverlap } from "./board-state.js";
 import {
   isCapInterruptionEnvelope,
   isCliAuthFailureEnvelope,
+  isRowRefusalEnvelope,
   quarantineCliAuthForProvider,
 } from "./cli-auth.js";
 import type { Clock } from "./clock.js";
 import { type ContainmentCapability, quarantineContainment } from "./containment.js";
 import type { Db } from "./db.js";
-import { type AdvisorRecord, appendEvent, type EventPayload } from "./events.js";
+import { type AdvisorRecord, appendEvent, type EventPayload, type RowRefusal } from "./events.js";
 import {
   type ExecutionSetting,
   MOONSHOT_DEFAULT_MODEL,
@@ -883,6 +884,11 @@ function isCapInterruption(parsed: Record<string, unknown> | null): boolean {
   return parsed?.type === "result" && isCapInterruptionEnvelope(parsed);
 }
 
+/** 行の拒否(ADR 0184 決定3)。`isCapInterruption` と同じ形。 */
+function isRowRefusal(parsed: Record<string, unknown> | null): boolean {
+  return parsed?.type === "result" && isRowRefusalEnvelope(parsed);
+}
+
 /** What the stdout scan collected about this session's advisor while the
  *  stream ran (issue #33). Both are needed at exit and neither survives on the
  *  result line: the consultations happen in assistant lines, and the main
@@ -1061,6 +1067,9 @@ export interface ClaudeWorkerOptions {
    *  網羅テストが見張る。不在 → 中断を観測しても盤面は動かない(workspaceless な
    *  unit 盤面のための姿)。 */
   onCapInterrupted?: (taskId: string, reclaimed: Promise<void>) => void;
+  /** 行の拒否(ADR 0184 決定4)の盤面側の一撃 —— `rowRefusalHandler` 製。
+   *  `onCapInterrupted` と同じ機能フィールドで、渡すのは spawn 時の行と回収済み観測だけ。 */
+  onRowRefused?: (taskId: string, refusal: RowRefusal, reclaimed: Promise<void>) => void;
   /** worker が1度も走らなかった pickup(ADR 0118)の盤面側の一撃 —— `spawnFailureHandler` 製。
    *  `onCapInterrupted` と同じ機能フィールド。不在 → spawn 失敗を観測しても盤面は動かない。 */
   onSpawnFailed?: (taskId: string, failure: { error_code: string | null; message: string }) => void;
@@ -2125,6 +2134,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     let lastResult: StreamResultEvent | null = null;
     let cliAuthFailed = false;
     let capInterrupted = false;
+    let rowRefused = false;
     let buffered = "";
     // 面の照合は init 行1本で答えが出る(それ以降の行を JSON.parse し直す理由がない)
     let toolSurfaceObserved = false;
@@ -2143,6 +2153,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
         lastResult = readResultEvent(parsed) ?? lastResult;
         cliAuthFailed ||= isCliAuthFailure(parsed);
         capInterrupted ||= isCapInterruption(parsed);
+        rowRefused ||= isRowRefusal(parsed);
         advisorObserved.consultations += countAdvisorConsultations(parsed);
         advisorObserved.mainModel = readInitModel(parsed) ?? advisorObserved.mainModel;
         if (!toolSurfaceObserved) {
@@ -2182,6 +2193,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
       lastResult = readResultEvent(finalParsed) ?? lastResult;
       cliAuthFailed ||= isCliAuthFailure(finalParsed);
       capInterrupted ||= isCapInterruption(finalParsed);
+      rowRefused ||= isRowRefusal(finalParsed);
       // 文字の途中で stream が閉じた場合の未完バイト列を flush(この場合の
       // 置換文字は捏造ではなく「途中で切れた」事実そのもの)
       stderrBuffered = trimStderrTail(stderrBuffered + stderrDecoder.end());
@@ -2218,6 +2230,15 @@ export class ClaudeCodeWorker implements WorkerAdapter {
       // Provider も envelope が同じなのでこの1本を通る(決定5)。
       if (capInterrupted) {
         this.options.onCapInterrupted?.(task.id, this.containers.reclaimed(task.id));
+      }
+      // ADR 0184 決定4: 行の拒否も同じ位置で exit の一撃より先に渡す。帰属は spawn 時の行で、
+      // Provider では分岐しない(moonshot の 404 もこの1本を通る)。
+      if (rowRefused) {
+        this.options.onRowRefused?.(
+          task.id,
+          { provider: routing.provider, model: routing.model, worker_spawned_event_id: spawnedEventId },
+          this.containers.reclaimed(task.id),
+        );
       }
       // ADR 0109 決定4: root process の exit は、容器に残るものが**孤児である証拠**で
       // ある —— 行儀よく exit するのを待たずにここで強制回収を撃つ。usage と transcript を

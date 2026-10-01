@@ -19,7 +19,9 @@ import { ClaudeBehaviorDraftClient } from "./claude-behavior-draft-client.js";
 import {
   cliAuthCommandThrough,
   createClaudeCliAuthCheck,
+  createClaudeModelProbe,
   createMoonshotCliAuthCheck,
+  createMoonshotModelProbe,
 } from "./claude-cli-auth.js";
 import { ClaudeDraftClient } from "./claude-draft-client.js";
 import {
@@ -46,6 +48,7 @@ import {
 import type { ContainmentCapability } from "./containment.js";
 import type { Db } from "./db.js";
 import type { DraftClient } from "./draft.js";
+import type { RowRefusal } from "./events.js";
 import { executionSettingsFor } from "./execution-setting.js";
 import { GhCliClient } from "./github.js";
 import type { GitHubAuth } from "./github-auth.js";
@@ -239,6 +242,7 @@ export function buildWorkerOptions(
     containers: ProcessContainers;
     boardCall: BoardCall;
     onCapInterrupted: (taskId: string, reclaimed: Promise<void>) => void;
+    onRowRefused: (taskId: string, refusal: RowRefusal, reclaimed: Promise<void>) => void;
     onSpawnFailed: (taskId: string, failure: { error_code: string | null; message: string }) => void;
     onWorkerExited: (taskId: string, exit: WorkerExit) => void;
     transcripts: TranscriptStore;
@@ -276,6 +280,8 @@ export function buildWorkerOptions(
     // in_progress のまま watchdog 待ちになる」形で静かに fail する — advisorDisabled と
     // 同じ類なので、上の網羅テストが見張る面に載せる
     onCapInterrupted: session.onCapInterrupted,
+    // ADR 0184 決定4: 渡し忘れは「404 で断られた session が報告なき exit の failure question になる」形で静かに fail する
+    onRowRefused: session.onRowRefused,
     // ADR 0118: 渡し忘れは「spawn に失敗した pickup が in_progress のまま枠を握る」形で静かに fail する
     onSpawnFailed: session.onSpawnFailed,
     // ADR 0145: 渡し忘れは「報告なしに exit した session が時間制限まで枠を握る」形で静かに fail する
@@ -291,7 +297,7 @@ export function buildWorkerOptions(
 export function buildWorkerFactory(board: BoardComposition): WorkerFactory {
   const { registryDir } = board;
   if (!registryDir) return () => new LoggingWorker();
-  return ({ db, clock, containers, boardCall, onCapInterrupted, onSpawnFailed, onWorkerExited, transcripts }) => {
+  return ({ db, clock, containers, boardCall, onCapInterrupted, onRowRefused, onSpawnFailed, onWorkerExited, transcripts }) => {
     const registry = { dir: registryDir, mode: board.registryMode } as const;
     return new CanonicalWorkerRouter({
       id: board.defaultAgentName,
@@ -299,7 +305,7 @@ export function buildWorkerFactory(board: BoardComposition): WorkerFactory {
         "claude-code": new ClaudeCodeWorker(
           buildWorkerOptions(
             { ...board, registryDir },
-            { db, clock, containers, boardCall, onCapInterrupted, onSpawnFailed, onWorkerExited, transcripts },
+            { db, clock, containers, boardCall, onCapInterrupted, onRowRefused, onSpawnFailed, onWorkerExited, transcripts },
           ),
         ),
         codex: new CodexWorker({
@@ -714,6 +720,11 @@ function boardCallers(board: BoardComposition, workspace: WorkspaceConfig | unde
         board.moonshotApiKeyFile,
         cliAuthCommandThrough(call, "Moonshot authentication probe"),
       ),
+    },
+    // ADR 0184 決定5: 行の Quarantine の回答時の probe。openai の行は model 一覧の読み直し(#1260)で、ここには無い
+    modelProbes: {
+      anthropic: createClaudeModelProbe(cliAuthCommandThrough(call, "Claude model probe")),
+      moonshot: createMoonshotModelProbe(board.moonshotApiKeyFile, cliAuthCommandThrough(call, "Moonshot model probe")),
     },
   };
 }

@@ -10,6 +10,7 @@ import {
   composeRoutingRow,
   type ExecutionSetting,
   type ExecutionSettingTable,
+  executionSettingsFor,
   PRIORITIES,
   parseAgentTierAmendment,
   parseRoutingRowChange,
@@ -19,9 +20,11 @@ import {
   type SelectorInput,
   selectExecutionSetting,
   TIERS,
+  type Tier,
   tierHasRowFor,
 } from "../src/execution-setting.js";
-import { PROVIDER_VALUES } from "../src/registry.js";
+import { registerQuarantine, tableRowValue } from "../src/quarantine.js";
+import { PROVIDER_VALUES, type Provider } from "../src/registry.js";
 import { DomainError, type RegistryProposal } from "../src/tasks.js";
 
 const table: ExecutionSettingTable = SEED_EXECUTION_SETTINGS;
@@ -475,4 +478,42 @@ it("tier の提案の修正値は to だけで、pin の tier より下の任意
 it("存在しない行の削除は何も変えないので、操作イベントを残さず null を返す", () => {
   const db = openDb(":memory:");
   expect(applyExecutionSettingsChange(db, { setting: "delete_row", provider: "openai", model: "no-such-model" }, "webui", new Date())).toBeNull();
+});
+
+// ── 行の拒否(ADR 0184 決定2): 表の行の Quarantine が開いている行は候補にも advisor にもならない ──
+
+/** 盤面の表(種)に行を足し、指定した (provider, model) の行の Quarantine を開く。 */
+function boardWithRefusedRows(extraRows: ExecutionSettingTable, refused: Array<[Provider, string]>) {
+  const db = openDb(":memory:");
+  const now = new Date();
+  for (const row of extraRows) applyExecutionSettingsChange(db, { setting: "row", row }, "webui", now);
+  applyExecutionSettingsChange(db, { setting: "frontier_advisor", value: true }, "webui", now);
+  for (const [provider, model] of refused) registerQuarantine(db, "tableRow", tableRowValue(provider, model), "refused", now);
+  return db;
+}
+const anthropicAgent = (advisor: boolean) => ({ provider: [{ name: "anthropic", advisor }], tier: undefined });
+const workAt = (tier: Tier) => ({ type: "work" as const, tier, priority: null, review_tier: null });
+
+it("行の Quarantine の照合は完全一致 —— claude-opus-5 の Quarantine は claude-opus-5-5 の行を外さない", () => {
+  const db = boardWithRefusedRows(
+    [{ provider: "anthropic", tier: "standard", model: "claude-opus-5", effort: "high", price_in: 4, price_out: 20 }],
+    [["anthropic", "claude-opus-5"]],
+  );
+  expect(executionSettingsFor(db, anthropicAgent(false), workAt("standard")).map((s) => s.model)).toEqual(["claude-opus-5-5"]);
+});
+
+it("1枚の行の Quarantine は、その id が main に立つティアからも advisor に使われるティアからも外し、advisor は次に安い上位の行へ移る", () => {
+  const db = boardWithRefusedRows(
+    [{ provider: "anthropic", tier: "frontier", model: "claude-fable-5", effort: "high", price_in: 12, price_out: 60 }],
+    [["anthropic", "claude-fable-5-1"]],
+  );
+  expect(executionSettingsFor(db, anthropicAgent(false), workAt("frontier")).map((s) => s.model)).toEqual(["claude-fable-5"]);
+  expect(executionSettingsFor(db, anthropicAgent(true), workAt("standard"))).toMatchObject([
+    { model: "claude-opus-5-5", advisor: "claude-fable-5" },
+  ]);
+});
+
+it("上位の行がすべて Quarantine 中なら、advisor の entry は上位の行が無いときの既存の挙動どおり除外される", () => {
+  const db = boardWithRefusedRows([], [["anthropic", "claude-fable-5-1"]]);
+  expect(executionSettingsFor(db, anthropicAgent(true), workAt("standard"))).toEqual([]);
 });

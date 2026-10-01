@@ -1,8 +1,16 @@
+import { writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { expect, it, vi } from "vitest";
-import { cliAuthCommandThrough, createClaudeCliAuthCheck } from "../src/claude-cli-auth.js";
-import { isCapInterruptionEnvelope, isCliAuthFailureEnvelope } from "../src/cli-auth.js";
+import {
+  cliAuthCommandThrough,
+  createClaudeCliAuthCheck,
+  createClaudeModelProbe,
+  createMoonshotModelProbe,
+} from "../src/claude-cli-auth.js";
+import { isCapInterruptionEnvelope, isCliAuthFailureEnvelope, isRowRefusalEnvelope } from "../src/cli-auth.js";
 import { ProcessContainers } from "../src/process-container.js";
 import { containerHarness, FakeClock, FakeContainerRuntime, recordingSpawn } from "./fakes.js";
+import { tempDir } from "./harness.js";
 
 it("JSON envelope の api_error_status: 401 だけを確定的な認証失敗に分類する(ADR 0070)", async () => {
   const check = createClaudeCliAuthCheck(async () => ({
@@ -134,4 +142,69 @@ it("api_error_status を伴わない「session limit」の文言からは推測�
     }),
   ).toBe(false);
   expect(isCapInterruptionEnvelope(null)).toBe(false);
+});
+
+/** 行の拒否(CONTEXT.md / ADR 0184 決定3)の述語。401 / 429 と同じ形で、envelope の
+ *  構造化フィールド一点だけを見る。 */
+it("result envelope の api_error_status: 404 だけを行の拒否に分類する(ADR 0184 決定3)", () => {
+  // moonshot(Claude CLI 2.1.286)が未知の id に返した envelope の形(2026-10-01 実測、#1249)
+  expect(
+    isRowRefusalEnvelope({
+      type: "result",
+      subtype: "success",
+      is_error: true,
+      api_error_status: 404,
+      total_cost_usd: 0,
+      modelUsage: {},
+    }),
+  ).toBe(true);
+  expect(isRowRefusalEnvelope({ is_error: true, api_error_status: 401 })).toBe(false);
+  expect(isRowRefusalEnvelope({ is_error: true, api_error_status: 429 })).toBe(false);
+  expect(isCliAuthFailureEnvelope({ is_error: true, api_error_status: 404 })).toBe(false);
+  expect(isCapInterruptionEnvelope({ is_error: true, api_error_status: 404 })).toBe(false);
+});
+
+it("api_error_status を伴わない文言(result の本文・stderr の unrecognized_model)からは行の拒否と推測しない", () => {
+  expect(isRowRefusalEnvelope({ is_error: true, result: "API Error: 404 model not found" })).toBe(false);
+  // stderr の `[claude-code:unrecognized_model]` は走る `kimi-k3[1m]` でも出る(2026-10-01 実測)
+  expect(isRowRefusalEnvelope({ is_error: true, result: "[claude-code:unrecognized_model] kimi-k3[1m]" })).toBe(false);
+  expect(isRowRefusalEnvelope(null)).toBe(false);
+});
+
+/** 行の Quarantine の回答時の probe(ADR 0184 決定5)。 */
+it("行の probe はその id を --model に載せて1ターン走らせ、404 は refused・401 は unauthorized・予算上限は runs(上限はターンの後に判定される)", async () => {
+  const envelopes: Array<[number, object]> = [
+    [1, { is_error: true, subtype: "success", api_error_status: 404 }],
+    [1, { is_error: true, api_error_status: 401 }],
+    // 2026-10-01 実測: --max-budget-usd 0.0001 でも claude-fable-5-1 は1ターン走って上限で止まる
+    [1, { is_error: true, subtype: "error_max_budget_usd", modelUsage: { "claude-fable-5-1": {} } }],
+    [0, { is_error: false, result: "OK" }],
+    [1, { is_error: true, api_error_status: 500 }],
+  ];
+  const args: string[][] = [];
+  const probe = createClaudeModelProbe(async (_command, observed) => {
+    args.push(observed);
+    const [exitCode, envelope] = envelopes[args.length - 1]!;
+    return { exitCode, stdout: JSON.stringify(envelope) };
+  });
+
+  const results = [];
+  for (const _ of envelopes) results.push((await probe("claude-fable-5-1")).status);
+
+  expect(results).toEqual(["refused", "unauthorized", "runs", "runs", "unknown"]);
+  expect(args[0]!.join(" ")).toContain("--model claude-fable-5-1");
+});
+
+it("moonshot の行の probe は --model と ANTHROPIC_MODEL の両方にその id を載せる(worker の spawn と同じ)", async () => {
+  const keyFile = join(await tempDir("tidepool-moonshot-key-"), "moonshot-api-key");
+  writeFileSync(keyFile, "sk-moonshot-test-key\n", { mode: 0o600 });
+  let observed: { args: string[]; env: NodeJS.ProcessEnv } | undefined;
+  const probe = createMoonshotModelProbe(keyFile, async (_command, args, { env }) => {
+    observed = { args, env };
+    return { exitCode: 0, stdout: JSON.stringify({ is_error: false, result: "OK" }) };
+  });
+
+  expect(await probe("kimi-k2-5")).toEqual({ status: "runs" });
+  expect(observed!.args.join(" ")).toContain("--model kimi-k2-5");
+  expect(observed!.env.ANTHROPIC_MODEL).toBe("kimi-k2-5");
 });

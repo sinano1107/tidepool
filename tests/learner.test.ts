@@ -500,3 +500,20 @@ it("受理された work task の episode は、後から別の work task が sp
   const episodes = loadEpisodes(t.db);
   expect(episodes.find((e) => e.worker_spawned_event_id === aSpawnedId)?.outcome).toBe("accepted");
 });
+
+it("行の拒否で落ちた session は、そのタスクが別の行で受理されても excluded —— 受理されたのは次の session(ADR 0184 / ADR 0115 決定5、loadEpisodes)", async () => {
+  t = await bootTidepool();
+  const a = await registerWork(t, "a");
+  await t.clock.advance(HOUR);
+  const refusedId = recordSpawn(a.id);
+  const at = t.clock.now();
+  appendEvent(t.db, { taskId: a.id, workerId: "fake-worker", origin: "board", at, payload: { kind: "worker_exited", exit_code: 1, signal: null, stderr_tail: null, worker_spawned_event_id: refusedId, usage: null } });
+  appendEvent(t.db, { taskId: a.id, workerId: "tidepool", origin: "board", at, payload: { kind: "row_refused", provider: "anthropic", model: WORKER_SPAWNED.model, worker_spawned_event_id: refusedId } });
+  const rerunId = recordSpawn(a.id);
+  await completeViaMcp(t, a.id);
+  await completeIntegrationReviews(t, a.id);
+
+  const episodes = loadEpisodes(t.db);
+  const outcomeOf = (spawnedId: number) => episodes.find((e) => e.worker_spawned_event_id === spawnedId)?.outcome;
+  expect({ refused: outcomeOf(refusedId), rerun: outcomeOf(rerunId) }).toEqual({ refused: "excluded", rerun: "accepted" });
+});

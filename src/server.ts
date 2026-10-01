@@ -11,6 +11,7 @@ import { type BoardStatePath, sweepBoardStateOverlap } from "./board-state.js";
 import {
   CLI_AUTH_EXPIRY_WARNING_INTERVAL_MS,
   type CliAuthCheck,
+  type ModelProbe,
   warnCliAuthExpiry,
 } from "./cli-auth.js";
 import type { Clock } from "./clock.js";
@@ -24,6 +25,7 @@ import {
 } from "./containment.js";
 import type { Db } from "./db.js";
 import type { DraftClient } from "./draft.js";
+import type { RowRefusal } from "./events.js";
 import type { GitHubClient } from "./github.js";
 import type { GitHubAuth } from "./github-auth.js";
 import {
@@ -63,6 +65,7 @@ import {
   failTask,
   type PendingReclaim,
   RECLAIM_TIMEOUT,
+  rowRefusalHandler,
   spawnFailureHandler,
   startWatchdog,
   transcriptFailureHandler,
@@ -175,6 +178,8 @@ export type WorkerFactory = (deps: {
   /** ADR 0104: 上限到達による中断を受ける盤面側の一撃(`capInterruptionHandler` 製)。
    *  adapter はこれを呼ぶだけで、slot も tree rule も先頭復帰も持たない。 */
   onCapInterrupted: (taskId: string, reclaimed: Promise<void>) => void;
+  /** ADR 0184 決定4: 行の拒否を受ける盤面側の一撃(`rowRefusalHandler` 製)。 */
+  onRowRefused: (taskId: string, refusal: RowRefusal, reclaimed: Promise<void>) => void;
   /** ADR 0118: Node の `spawn()` が失敗した pickup を受ける盤面側の一撃(`spawnFailureHandler` 製)。 */
   onSpawnFailed: (taskId: string, failure: { error_code: string | null; message: string }) => void;
   /** ADR 0145: root process の exit を受ける盤面側の一撃(watchdog の `onWorkerExited`)。 */
@@ -285,6 +290,9 @@ export interface ServerOptions {
    *  every provider is resource-scoped (ADR 0098 決定6). Absent a provider's
    *  entry → its answer cannot be verified and is refused. */
   providerCliAuth?: Partial<Record<Provider, CliAuthCheck>>;
+  /** ADR 0184 決定5: 行の Quarantine への回答を受理する前に、その model id で最小の1ターンを
+   *  走らせる Provider ごとの probe。口の無い Provider の行への回答は拒まれる。 */
+  modelProbes?: Partial<Record<Provider, ModelProbe>>;
   /** ADR 0052: remote-backed registry reachability check for boot and pickup. */
   registryReachability?: RegistryReachabilityCheck;
   /** ADR 0070: live Claude authentication probe. */
@@ -378,6 +386,7 @@ export type BoardCallers = Pick<
   | "harnessContainment"
   | "cliAuth"
   | "providerCliAuth"
+  | "modelProbes"
 >;
 
 export interface TidepoolServer {
@@ -516,6 +525,8 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
     pollNow,
   };
   const onCapInterrupted = capInterruptionHandler(sessionTeardown);
+  // ADR 0184 決定4: 行の拒否の一撃。中断と同じく worker より先に組む
+  const onRowRefused = rowRefusalHandler(sessionTeardown);
   // ADR 0118: worker が1度も走らなかった pickup の一撃。scheduler と adapter の両方の観測点が呼ぶ
   const onSpawnFailed = spawnFailureHandler(sessionTeardown, containers);
   // ADR 0149: 走ってから transcript が書けなくなった session の一撃
@@ -526,6 +537,7 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
     containers,
     boardCall: boardCalls.call,
     onCapInterrupted,
+    onRowRefused,
     onSpawnFailed,
     // ADR 0145: watchdog は worker の後に組まれるので、遅延で引く(`heldForContainment` と同じ)
     onWorkerExited: (taskId, exit) => watchdog?.onWorkerExited(taskId, exit),
@@ -688,6 +700,8 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
     registryReachability,
     teardownQuarantine,
     providerCliAuth,
+    modelProbes: options.modelProbes,
+    clock: options.clock,
     harnessContainment,
     // ADR 0040: quarantine 解除の検証が撃ち直す先。boot の一斉検査と pickup の
     // 床と同じ1つの配列(3箇所で別々に組み立てない)
