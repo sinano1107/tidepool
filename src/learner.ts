@@ -129,7 +129,8 @@ const trackRecord = (candidate: ExecutionSetting, board: readonly CellStats[], w
  *  あれば、観測のある候補が先頭に勝つかを1つずつ比べる —— 先頭の観測数が候補より少ないあいだは却下数(先頭の却下が多いときだけ
  *  勝つ —— 先頭が残りを全部受理しても追いつけない、ADR 0182 決定4)、それ以外は事後平均の並べ方で先頭より前に来るとき。
  *  勝つ候補が無ければ先頭、あればその中で並べ方の1番目。並べ方は事後平均 → selector の並び —— 観測された session 費用は
- *  鍵にしない(ADR 0183。cost の鍵は表の価格で、selector の並びに既に入っている)。乱数は持たない(Thompson sampling をしないので seed も無い)。 */
+ *  鍵にしない(ADR 0183。cost の鍵は表の価格で、selector の並びに既に入っている)。
+ *  乱数は持たない(Thompson sampling をしないので seed も無い)。 */
 export function recommend(input: {
   candidates: readonly ExecutionSetting[];
   board: readonly CellStats[];

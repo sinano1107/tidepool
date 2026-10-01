@@ -156,19 +156,20 @@ it("盤面全体の事後分布が workspace の事前分布 —— 自分の wo
   expect(recommendFor(episodes, [opus, sol], "fresh").recommended).toEqual(sol);
 });
 
+/** 費用を報告する claude-code harness の2行(codex は報告しない)—— 両方に費用の観測が付く、本番で同点の起きうる組(#1250)。kimi が安い。 */
+const kimi = candidate("moonshot", "kimi-k3");
+const cheapKimi = episode({ cell: { provider: "moonshot", model: "kimi-k3", effort: "high", advisor: null }, cost_usd: 0.5 });
+const pricyOpus = episode({ cost_usd: 2 });
+
 it("事後平均が同点なら、両方に費用の観測があっても推薦は先頭 —— 観測された session 費用は推薦の鍵にならない(ADR 0183)", () => {
-  const cheapSol = episode({ cell: { provider: "openai", model: "gpt-5.6-sol", effort: "high", advisor: null }, cost_usd: 0.5 });
-  const pricyOpus = episode({ cost_usd: 2 });
-  expect(recommendFor([cheapSol, pricyOpus], [opus, sol]).recommended).toEqual(opus);
+  expect(recommendFor([cheapKimi, pricyOpus], [opus, kimi]).recommended).toEqual(opus);
 });
 
 it("両者無傷で相手が安いまま受理を積んでも、推薦はずっと先頭 —— 先頭 5/0・相手 3/0 から 7/0・8/0 まで pickup ごとに入れ替わらない(#1250)", () => {
-  const cheapSol = episode({ cell: { provider: "openai", model: "gpt-5.6-sol", effort: "high", advisor: null }, cost_usd: 0.5 });
-  const pricyOpus = episode({ cost_usd: 2 });
   const steps: [number, number][] = [[5, 3], [5, 4], [5, 5], [5, 6], [6, 6], [6, 7], [7, 7], [7, 8]];
   for (const [head, other] of steps) {
-    const episodes = [...Array.from({ length: head }, () => pricyOpus), ...Array.from({ length: other }, () => cheapSol)];
-    expect(recommendFor(episodes, [opus, sol]).recommended, `${head}/0 vs ${other}/0`).toEqual(opus);
+    const episodes = [...Array.from({ length: head }, () => pricyOpus), ...Array.from({ length: other }, () => cheapKimi)];
+    expect(recommendFor(episodes, [opus, kimi]).recommended, `${head}/0 vs ${other}/0`).toEqual(opus);
   }
 });
 
