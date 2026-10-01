@@ -134,6 +134,7 @@ export interface WireContract {
   "GET /api/tasks/:id": BoardTask & {
     /** 保存された assignee(編集フォームが読む素の値)。`assignee` は一覧と同じ解決後の値(issue #1208)。 */
     raw_assignee: string | null;
+    landing?: { blocked_by: "attached_children" | "objections" | null } | null;
     approval?: ApprovalAnnotation | null;
     moved?: MovedPin[];
     blocking?: string | null;

@@ -3502,8 +3502,8 @@ function QuestionDeepLinkView({ questionId, onDone, onTranslate, onOpenSettings 
   if (q === void 0) {
     return /* @__PURE__ */ React.createElement("div", { style: { height: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: "var(--surface-page)" } }, /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-display)", fontStyle: "italic", fontSize: "var(--text-2xl)", color: "var(--tide-5)" } }, "tidepool"));
   }
-  if (q === null) {
-    return /* @__PURE__ */ React.createElement("div", { style: { height: "100vh", display: "flex", flexDirection: "column", justifyContent: "center", padding: 24, boxSizing: "border-box", background: "var(--surface-page)" } }, /* @__PURE__ */ React.createElement(Card, { style: { textAlign: "center", padding: 24, display: "flex", flexDirection: "column", gap: 14 } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: "var(--text-sm)", color: "var(--text-secondary)" } }, "This question is no longer available \u2014 it may already be answered."), /* @__PURE__ */ React.createElement(Button, { variant: "primary", onClick: () => onDone(null) }, "Open board")));
+  if (q === null || rawTask?.landing) {
+    return /* @__PURE__ */ React.createElement("div", { style: { height: "100vh", display: "flex", flexDirection: "column", justifyContent: "center", padding: 24, boxSizing: "border-box", background: "var(--surface-page)" } }, /* @__PURE__ */ React.createElement(Card, { style: { textAlign: "center", padding: 24, display: "flex", flexDirection: "column", gap: 14 } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: "var(--text-sm)", color: "var(--text-secondary)" } }, q === null ? "This question is no longer available \u2014 it may already be answered." : "Merge decisions are made in triage, after the log."), /* @__PURE__ */ React.createElement(Button, { variant: "primary", onClick: () => onDone(null) }, "Open board")));
   }
   return (
     // TpSingleQuestion is `position: absolute; inset: 0` (same as the design
