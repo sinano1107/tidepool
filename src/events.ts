@@ -420,11 +420,12 @@ export type EventPayload =
   // memory マーカーになる。
   | {
       kind: "memory_pulled";
-      verb: "browse_memory" | "search_memory" | "read_memory" | "read_memory_entries" | "list_memory_candidates" | "list_memory_behaviors" | "list_memory_entries" | "list_memory_proposals" | "list_precedents" | "list_memory_branches";
+      verb: "browse_memory" | "search_memory" | "search_memory_entries" | "read_memory" | "read_memory_entries" | "list_memory_candidates" | "list_memory_behaviors" | "list_memory_entries" | "list_memory_proposals" | "list_precedents" | "list_memory_branches";
       input: {
         prefix?: string;
         path?: string;
         query?: string;
+        like?: number;
         page?: number;
         ids?: number[];
         scope?: string | null;
@@ -462,6 +463,23 @@ export type EventPayload =
       tokenizer: string;
       tokenizer_version: string;
       query?: { view: string } | { reason: "throttled" } | { reason: "failed"; message: string };
+    }
+  // ADR 0180 決定2: 主題 memory の meta-review の spawn に材料の節を入れた(task 帰属、memory_injected の直後)。窓の両端の
+  // watermark、部分ごとに載せた id —— 店の変更と candidate はエントリ、異議つき判断は decision の event、提案は question、
+  // 枝の一覧は Definition —— と、計数したトークン数と計数器。
+  | {
+      kind: "meta_review_material_injected";
+      worker_spawned_event_id: number;
+      previous_watermark: number;
+      material_watermark: number;
+      store_changes: number[];
+      candidates: number[];
+      precedents: number[];
+      proposals: string[];
+      branches: number[];
+      tokens: number;
+      tokenizer: string;
+      tokenizer_version: string;
     }
   // ADR 0120 決定2 / issue #618: 盤面が主題の meta-review を登録した(登録した task に帰属)。
   // material_watermark = 登録時の events の最大 id —— 次の周期の材料はこれより後の event。

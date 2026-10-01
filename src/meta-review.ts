@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { Db } from "./db.js";
-import { appendEvent, type EventOrigin } from "./events.js";
+import { appendEvent, type EventKind, type EventOrigin, listEventsOfKinds } from "./events.js";
 import { type ListAgentTiers, settleStaleProposals } from "./execution-setting.js";
 import { BOARD_WORKER_ID, HUMAN_WORKER_ID, registerTask } from "./tasks.js";
 
@@ -20,6 +20,7 @@ export const MEMORY_META_REVIEW_VERBS = [
   "read_memory_entries",
   "list_memory_branches",
   "list_memory_proposals",
+  "search_memory_entries",
   "define_memory",
   "fold_memory",
   "move_memory",
@@ -39,7 +40,7 @@ export const ROUTING_META_REVIEW_VERBS = [
 
 /** 昇格規則の5択(spec #949 / issue #954 / ADR 0161 決定3): propose_memory_change の記述と memory meta-review の purpose が同じ文を載せる。 */
 export const PROMOTION_RULE =
-  "For each candidate, first fold it into an existing approved Behavior or Exemplar that already says the same (fold_memory with successor_id); " +
+  "For each candidate, first fold it into an existing approved Behavior or Exemplar that already says the same (find it with search_memory_entries; fold_memory with successor_id); " +
   "otherwise promote it to a Behavior when its scope and criterion can be stated so they hold for any future task; " +
   "fold it into an Exemplar (consolidate with kind exemplar) when that cannot be said but the concrete case carries quality worth reusing; " +
   "retire it with invalidate_memory reason rejected when it will become neither; leave it unpromoted while more material could still " +
@@ -52,10 +53,16 @@ export const META_REVIEW_SUBJECTS = {
     task: {
       title: "Memory meta-review",
       purpose:
-        "Periodic meta-review of the board's memory store. Judge repeats among candidates and exemplars, redundant examples included, by reading them, not by counting. " +
+        "Periodic meta-review of the board's memory store. This cycle's material is in your prompt, in the Memory meta-review material section: " +
+        "the store changes since the previous memory meta-review, every live candidate, the decisions objected to since then, the memory proposals " +
+        "answered or settled since then, and the branch list. " +
+        "Judge repeats among candidates and exemplars, redundant examples included, by reading them, not by counting. " +
         "Read the case of a candidate or an Exemplar — the example it was drafted from — with read_memory_entries. " +
-        "Read the tree with list_memory_branches — every branch with the Definitions at its path and the scopes that hold entries under it — " +
-        "and a branch's entries with list_memory_entries (path). " +
+        "For each store change, check that it fits the Definition of its branch (move it with move_memory when it does not), and look for an entry " +
+        "that already says the same with search_memory_entries with like (its id). When that finds an entry that was dropped, read why it was dropped " +
+        "(its invalidation_reason, and for a rejected candidate the human's comment in list_memory_proposals) before you decide whether to keep the new one. " +
+        "Where a store change rewrote a Definition, read the entries under its branch with list_memory_entries (path). " +
+        "The branch list shows every branch with the Definitions at its path and the scopes that hold entries under it. " +
         "For a Definition, ask whether it holds true whatever leaf sits under its branch. " +
         "Where a branch holds entries but has no Definition in their scope or whole-board, write one that passes the same test " +
         "(define_memory) — in the workspace when the entries are all in one, whole-board otherwise. " +
@@ -73,8 +80,9 @@ export const META_REVIEW_SUBJECTS = {
         "an entry to a workspace, move it between workspaces, or change the scope of an approved Behavior or Exemplar: when " +
         "you judge one of those right, say so with log_decision and leave the entry in place. " +
         "A Precedent with cause memory names the wrong entries it followed (entries): read them with read_memory_entries, then drop the wrong entry (reason capability) or replace it — " +
-        "a Behavior or Exemplar through propose_memory_change, Knowledge through fold_memory or invalidate_memory. First read the past memory proposals with the human's answers and comments (list_memory_proposals) " +
-        "and the invalidated candidates with invalidated_by, so you do not re-propose what a human rejected and do not repeat a retirement of your own. " +
+        "a Behavior or Exemplar through propose_memory_change, Knowledge through fold_memory or invalidate_memory. The proposals settled since the previous meta-review are in the material section; read " +
+        "earlier ones, with the human's answers and comments, with list_memory_proposals, and the invalidated candidates with invalidated_by (list_memory_candidates " +
+        "with include_invalidated), so you do not re-propose what a human rejected and do not repeat a retirement of your own. " +
         "A deferred proposal is one the human did not decide: read their comment, then propose it again when you still judge it right, or fold or retire it. " +
         "A consolidation that went stale or was deferred keeps its candidate: propose it again with candidate_id and the replaces you now judge right, " +
         "or approve the Behavior or Exemplar candidate alone to leave the entries it would have replaced in place. " +
@@ -127,6 +135,30 @@ export function previousMetaReviewWatermark(db: Db, readerTaskId: string): numbe
       )
       .get({ task: readerTaskId }) as { watermark: number } | undefined
   )?.watermark ?? 0;
+}
+
+/** 材料の窓 `(after, upTo]`。upTo 省略 = 上限なし(due の判定と verb の既定)。 */
+export type MetaReviewWindow = { after: number; upTo?: number };
+
+/** 読み手の task の材料の窓 `(after, upTo]`(ADR 0180 決定1): after = 前回の登録の watermark、upTo = 読み手自身の登録の
+ *  watermark —— 登録から spawn までに入った変更は次の周期の材料。登録 event の無い task(registerMetaReview を通らない)は今まで。 */
+export function metaReviewWindow(db: Db, readerTaskId: string): Required<MetaReviewWindow> {
+  const own = db
+    .prepare(
+      `SELECT COALESCE((SELECT json_extract(payload, '$.material_watermark') FROM events WHERE kind = 'meta_review_registered' AND task_id = ?),
+         (SELECT MAX(id) FROM events)) AS watermark`,
+    )
+    .get(readerTaskId) as { watermark: number };
+  return { after: previousMetaReviewWatermark(db, readerTaskId), upTo: own.watermark };
+}
+
+/** 窓の中の主題の材料の event(id 順)。同じ主題の meta-review 自身の産物 —— 提案 question への回答が刻んだ question_id と、
+ *  review の直接書き込みの activity —— は数えない(ADR 0151)。due の判定と memory meta-review の材料の節が共有する。 */
+export function materialEvents<K extends EventKind>(db: Db, kinds: readonly K[], window: MetaReviewWindow) {
+  return listEventsOfKinds(db, kinds, window).filter(({ payload }) => {
+    const mark = payload as { question_id?: string | null; activity?: string; entry?: { author: { activity: string } } };
+    return mark.question_id == null && (mark.activity ?? mark.entry?.author.activity) !== "meta_review";
+  });
 }
 
 /** 主題の meta-review を盤面名義で登録する(周期が通る1本、due は見ない)。 */
@@ -199,14 +231,6 @@ export function registerDueMetaReviews(db: Db, now: Date, agents?: ListAgentTier
       )
       .get({ subject });
     if (open) continue;
-    // 同じ主題の meta-review 自身の産物(回答が刻んだ question_id、review の直接書き込みの activity)は材料でない(ADR 0151)
-    const found = db
-      .prepare(
-        `SELECT 1 FROM events WHERE id > ? AND kind IN (${material.map(() => "?").join(", ")})
-           AND json_extract(payload, '$.question_id') IS NULL
-           AND COALESCE(json_extract(payload, '$.activity'), json_extract(payload, '$.entry.author.activity')) IS NOT 'meta_review'`,
-      )
-      .get(last?.watermark ?? 0, ...material);
-    if (found) registerMetaReview(db, subject, now);
+    if (materialEvents(db, material, { after: last?.watermark ?? 0 }).length > 0) registerMetaReview(db, subject, now);
   }
 }

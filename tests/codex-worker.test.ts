@@ -8,11 +8,12 @@ import { CODEX_FEATURE_SNAPSHOT, CodexWorker, resolveCodexExecutable } from "../
 import { openDb } from "../src/db.js";
 import { appendEvent, listEvents } from "../src/events.js";
 import { resolveExecutionSetting } from "../src/execution-setting.js";
-import { buildMemoryInjection, type InjectionQuery, recordKnowledge } from "../src/memory.js";
+import { buildMemoryInjection, buildMetaReviewMaterial, type InjectionQuery, recordKnowledge } from "../src/memory.js";
+import { registerMetaReview } from "../src/meta-review.js";
 import type { ContainerSpawn } from "../src/process-container.js";
 import { openQuarantineValues } from "../src/quarantine.js";
 import { loadRegistry, REVIEWER_AUTHORITY_PROFILE } from "../src/registry.js";
-import { registerTask, type Task } from "../src/tasks.js";
+import { getTask, listBoard, registerTask, type Task } from "../src/tasks.js";
 import { TranscriptStore } from "../src/transcript-store.js";
 import type { WorkerExit } from "../src/worker.js";
 import { driveCodexPreflight, FakeClock, passthroughContainers, recordingSpawn } from "./fakes.js";
@@ -301,6 +302,7 @@ describe("CodexWorker (ADR 0098)", () => {
       "read_memory_entries",
       "list_memory_branches",
       "list_memory_proposals",
+      "search_memory_entries",
       "define_memory",
       "fold_memory",
       "move_memory",
@@ -391,6 +393,29 @@ describe("CodexWorker (ADR 0098)", () => {
       expect(events[spawned + 1]?.payload).toMatchObject({ kind: "memory_injected", worker_spawned_event_id: events[spawned]!.id });
     }
     expect(listEvents(f.db, bare.id).find((e) => e.kind === "memory_injected")?.payload).toMatchObject({ entries: [] });
+  });
+
+  it("主題 memory の meta-review の spawn は材料の節を記憶の節の枠(developer_instructions の末尾)に置き、memory_injected の直後に meta_review_material_injected を書く —— 普通の task と主題 routing の meta-review には節を置かず記録も書かない(Claude と同じ —— ADR 0180 決定2)", async () => {
+    const f = await fixture();
+    // setup のみ: 窓の上限は登録 event が運ぶので盤面名義で登録し、codex-agent に割り当てる
+    registerMetaReview(f.db, "memory", new Date("2026-08-24T00:00:00.000Z"));
+    f.db.prepare("UPDATE tasks SET assignee = 'codex-agent' WHERE meta_review_subject = 'memory'").run();
+    const memory = getTask(f.db, listBoard(f.db).find((value) => value.meta_review_subject === "memory")!.id)!;
+    const others = [task(f.db), metaReviewTask(f.db, "routing")];
+    for (const value of [memory, ...others]) f.start(value);
+
+    const { section } = buildMetaReviewMaterial(f.db, memory.id)!;
+    expect(developerInstructions(f.process.calls[0]!.args).endsWith(`\n\n${section}\n\n`)).toBe(true);
+    const events = listEvents(f.db, memory.id);
+    const spawned = events.findIndex((e) => e.kind === "worker_spawned");
+    expect(events.slice(spawned + 1, spawned + 3).map((e) => e.payload)).toMatchObject([
+      { kind: "memory_injected" },
+      { kind: "meta_review_material_injected", worker_spawned_event_id: events[spawned]!.id },
+    ]);
+    for (const [i, other] of others.entries()) {
+      expect(developerInstructions(f.process.calls[i + 1]!.args)).not.toContain("## Memory meta-review material");
+      expect(listEvents(f.db, other.id).map((e) => e.kind)).not.toContain("meta_review_material_injected");
+    }
   });
 
   it("start の入力が英語の view を持てば memory_injected はその文面を持ち、持たなければ query の欄は無い(Claude と同じ —— ADR 0175)", async () => {

@@ -17,7 +17,8 @@ import { DEFAULT_AUDITOR_NAME } from "../src/defaults.js";
 import { appendEvent, type EventPayload, listEvents } from "../src/events.js";
 import { resolveExecutionSetting } from "../src/execution-setting.js";
 import { BOARD_WRITE_LANGUAGE_RULE } from "../src/mcp.js";
-import { buildMemoryInjection, type InjectionQuery, recordKnowledge } from "../src/memory.js";
+import { buildMemoryInjection, buildMetaReviewMaterial, type InjectionQuery, recordKnowledge } from "../src/memory.js";
+import { registerMetaReview } from "../src/meta-review.js";
 import { listEpisodes } from "../src/precedent.js";
 import { ProcessContainers, type PtyFn } from "../src/process-container.js";
 import {
@@ -641,6 +642,38 @@ describe("ClaudeCodeWorker", () => {
     const events = listEvents(db, task.id);
     const spawned = events.findIndex((e) => e.kind === "worker_spawned");
     expect(events[spawned + 1]?.payload).toMatchObject({ kind: "memory_injected", worker_spawned_event_id: events[spawned]!.id, entries: [] });
+  });
+
+  it("主題 memory の meta-review の spawn は材料の節を記憶の節の枠(system prompt の連結の末尾)に置き、memory_injected の直後に meta_review_material_injected を書く —— 普通の task と主題 routing の meta-review には節を置かず記録も書かない(ADR 0180 決定2)", async () => {
+    const { worker, setting, slot, calls, db } = await makeWorker();
+    const spawn = (subject: "memory" | "routing" | null) => {
+      // setup のみ: 盤面名義の登録を deckhand に割り当てる(既定の auditor は skill の列挙 ping を挟んで spawn が非同期になる)
+      if (subject) {
+        registerMetaReview(db, subject, new FakeClock().now());
+        db.prepare("UPDATE tasks SET assignee = 'deckhand' WHERE meta_review_subject = ?").run(subject);
+      }
+      const task = subject ? getTask(db, listBoard(db).find((t) => t.meta_review_subject === subject)!.id)! : makeTask(`task-${calls.length}`);
+      if (!subject) insertTask(db, task);
+      slot.release();
+      slot.occupy(task.id);
+      worker.start(task, setting(task));
+      const args = calls.at(-1)!.args;
+      return { task, systemPrompt: args[args.indexOf("--append-system-prompt") + 1]! };
+    };
+
+    const memory = spawn("memory");
+    const { section } = buildMetaReviewMaterial(db, memory.task.id)!;
+    expect(memory.systemPrompt.endsWith(`\n\n${section}`)).toBe(true);
+    const events = listEvents(db, memory.task.id);
+    const spawned = events.findIndex((e) => e.kind === "worker_spawned");
+    expect(events.slice(spawned + 1, spawned + 3).map((e) => e.payload)).toMatchObject([
+      { kind: "memory_injected" },
+      { kind: "meta_review_material_injected", worker_spawned_event_id: events[spawned]!.id },
+    ]);
+    for (const other of [spawn("routing"), spawn(null)]) {
+      expect(other.systemPrompt).not.toContain("## Memory meta-review material");
+      expect(listEvents(db, other.task.id).map((e) => e.kind)).not.toContain("meta_review_material_injected");
+    }
   });
 
   it("worker_spawned イベントの worker_id は解決済みの assignee になる(コンストラクタの既定 agent 固定ではない)", async () => {

@@ -31,6 +31,7 @@ import {
   readMemoryEntries,
   recordKnowledge,
   searchMemory,
+  searchMemoryEntries,
 } from "./memory.js";
 import { type MetaReviewSubject, metaReviewSubjectOf, PROMOTION_RULE } from "./meta-review.js";
 import type { ProcessContainers } from "./process-container.js";
@@ -993,6 +994,19 @@ function registerMemoryMetaReviewVerbs(server: McpServer, deps: McpDeps, run: Me
       inputSchema: { page },
     },
     async (input) => run((reader, now) => pullMemoryProposals(deps.db, reader, input, now)),
+  );
+
+  server.registerTool(
+    "search_memory_entries",
+    {
+      description:
+        "Search the board's memory across every scope and addressee: Knowledge, Behaviors and Exemplars that are live (approved or candidate) " +
+        "or were dropped without a successor, with the reason. Pass query (free text; terms are OR-ed and ranked) or like (an entry id: searches " +
+        "with that entry's own title and text, excluding the entry itself). Returns pointers only — read the text with read_memory_entries. " +
+        "Definitions are not searched: the branch list carries them.",
+      inputSchema: { query: z.string().min(1).optional(), like: z.number().int().optional(), page },
+    },
+    async (input) => run((reader, now) => searchMemoryEntries(deps.db, reader, input, now)),
   );
 
   server.registerTool(
