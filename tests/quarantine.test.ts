@@ -165,3 +165,30 @@ it("行の Quarantine の文面は原因を断言しない —— 退役とは�
   const row = QUARANTINES.find((r) => r.kind === "tableRow")!;
   expect(row.prose("anthropic/claude-opus-5", "cause").purpose).not.toMatch(/retire/i);
 });
+
+const TABLE_ROW = QUARANTINES.find((r) => r.kind === "tableRow")!;
+
+it("404 の行の Quarantine の文面は、証拠の種類を渡しても渡さなくても変わらない(ADR 0184 決定1)", () => {
+  const purpose =
+    "R. The anthropic provider refused the model id `claude-opus-5` on this board — with this CLI version and this " +
+    "account. The board does not know why. This row is out of pickup and of advisor derivation while this stands; " +
+    "other rows keep running.\n\nRepair one of two ways:\n\n" +
+    "1. Fix the table: in the settings tab, change this row's model or delete the row. This question then closes on its own.\n" +
+    "2. If the model id is right, update the CLI or restore the account, then answer — the board checks this model id " +
+    "again before it accepts the answer.";
+  expect(TABLE_ROW.prose("anthropic/claude-opus-5", "R").purpose).toBe(purpose);
+  expect(TABLE_ROW.prose("anthropic/claude-opus-5", "R", "api_404").purpose).toBe(purpose);
+});
+
+it("CLI の版の古さの行の Quarantine は原因を名指し、行の差し替えを先に、tidepool の更新を2番目に促す(ADR 0187 決定3)", () => {
+  const { purpose, ...rest } = TABLE_ROW.prose("anthropic/claude-opus-5", "R", "cli_version_too_old");
+  // タイトル・選択肢・推奨・completion criteria は 404 と同じ
+  const { purpose: _, ...rest404 } = TABLE_ROW.prose("anthropic/claude-opus-5", "R", "api_404");
+  expect(rest).toEqual(rest404);
+  expect(purpose).toContain("This board's Claude Code CLI is older than this model requires");
+  expect(purpose).toContain("1. Fix the table: in the settings tab");
+  expect(purpose).toContain("2. To keep this row, update tidepool to a version that supports this model, then answer");
+  // 運用者は固定の版を変えられない(ADR 0186 決定5)—— CLI の手動更新にも版の番号にも触れない
+  expect(purpose).not.toMatch(/update the CLI|claude update/i);
+  expect(purpose).not.toMatch(/\d+\.\d+\.\d+/);
+});

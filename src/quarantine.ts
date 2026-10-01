@@ -180,11 +180,11 @@ export const QUARANTINES = [
     // 入れない: 鍵は (provider, model) で、別の原因の2度目の観測は再発火だけで文面は最初の原因のまま
     kind: "tableRow",
     scope: "row",
-    prose: (value: string | null, reason: string, cause?: RowRefusalCause): QuarantineProse => {
+    prose: (value: string | null, reason: string, refusalCause?: RowRefusalCause): QuarantineProse => {
       const { provider, model } = parseTableRowValue(value!);
       const row = `${provider} / ${model}`;
       const [why, keepRow] =
-        cause === "cli_version_too_old"
+        refusalCause === "cli_version_too_old"
           ? [
               "This board's Claude Code CLI is older than this model requires, so the " +
                 `${provider} provider refused the model id \`${model}\` on this board.`,
@@ -225,8 +225,8 @@ export const QUARANTINES = [
   /** entry 経路(ADR 0110 決定3)で値が外す Provider —— 「その Provider では走れない」
    *  種類だけが持つ。agent 名ではなく entry を外すので `QuarantineResolvers` とは別の写像。 */
   excludesProviders?: (values: string[]) => Provider[];
-  /** `cause` は行の拒否の証拠の種類で、`tableRow` だけが読む。 */
-  prose: (value: string | null, reason: string, cause?: RowRefusalCause) => QuarantineProse;
+  /** `refusalCause` は行の拒否の証拠の種類で、`tableRow` だけが読む。 */
+  prose: (value: string | null, reason: string, refusalCause?: RowRefusalCause) => QuarantineProse;
 }>;
 
 export type QuarantineKind = (typeof QUARANTINES)[number]["kind"];
@@ -302,14 +302,14 @@ export function openQuarantineQuestions(db: Db, kind: QuarantineKind): Map<strin
 }
 
 /** 唯一の登録口。鍵が開いていれば既存の question に `quarantine_refired` を追記する
- *  だけで、それ以外は何もしない(1鍵につき確認は最大1枚)。`cause` は文面へ渡す行の拒否の証拠の種類。 */
+ *  だけで、それ以外は何もしない(1鍵につき確認は最大1枚)。`refusalCause` は文面へ渡す行の拒否の証拠の種類。 */
 export function registerQuarantine(
   db: Db,
   kind: QuarantineKind,
   value: string | null,
   reason: string,
   now: Date,
-  cause?: RowRefusalCause,
+  refusalCause?: RowRefusalCause,
 ): void {
   const existing = openQuarantineQuestion(db, kind, value);
   if (existing) {
@@ -323,7 +323,7 @@ export function registerQuarantine(
     return;
   }
   const row = QUARANTINES.find((r) => r.kind === kind)!;
-  const { question, ...prose } = row.prose(value, reason, cause);
+  const { question, ...prose } = row.prose(value, reason, refusalCause);
   registerTask(
     db,
     {

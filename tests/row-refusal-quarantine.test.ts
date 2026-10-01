@@ -108,16 +108,6 @@ it("404 で終わった session は行の Quarantine を1枚立て、failure que
   expect(more).toEqual([]);
   expect(question.title).toBe("execution-setting row anthropic / claude-sonnet-5-5 cannot run on this board");
   expect(question.question_items[0].options).toEqual(["the row can run again"]);
-  // 404 の文面は原因を断言しない(ADR 0184 決定1)。CLI の版の古さの文面(ADR 0187)を足しても変わらない
-  expect(question.purpose).toBe(
-    `The worker session for task ${refused.id} ended with API error 404 for this model id. ` +
-      "The anthropic provider refused the model id `claude-sonnet-5-5` on this board — with this CLI version and this " +
-      "account. The board does not know why. This row is out of pickup and of advisor derivation while this stands; " +
-      "other rows keep running.\n\nRepair one of two ways:\n\n" +
-      "1. Fix the table: in the settings tab, change this row's model or delete the row. This question then closes on its own.\n" +
-      "2. If the model id is right, update the CLI or restore the account, then answer — the board checks this model id " +
-      "again before it accepts the answer.",
-  );
   const [registered] = await events(question.id);
   expect({ worker: registered.worker_id, origin: registered.origin }).toEqual({ worker: "tidepool", origin: "board" });
 
@@ -133,24 +123,13 @@ it("404 で終わった session は行の Quarantine を1枚立て、failure que
   expect(spawned.map((e) => e.payload.model)).toEqual(["claude-sonnet-5-5", "claude-sonnet-5"]);
 });
 
-it("CLI の版の古さで終わった session も行の Quarantine を1枚立てて先頭へ戻り、question は原因を名指して tidepool の更新を2番目に促す(ADR 0187)", async () => {
+it("CLI の版の古さで終わった session も行の Quarantine を1枚立てて先頭へ戻り、question は原因を名指す(ADR 0187)", async () => {
   const refused = await refuseFirstOfTwoRows(VERSION_TOO_OLD);
 
   const [question, ...more] = await questions(t);
   expect(more).toEqual([]);
-  // タイトル・選択肢・推奨・completion criteria は 404 と同じ
-  expect(question.title).toBe("execution-setting row anthropic / claude-sonnet-5-5 cannot run on this board");
-  expect(question.completion_criteria).toBe("anthropic / claude-sonnet-5-5 can run on this board again");
-  expect(question.question_items).toMatchObject([
-    { title: "Can anthropic / claude-sonnet-5-5 run again?", options: ["the row can run again"], recommendation: "the row can run again" },
-  ]);
-  const purpose: string = question.purpose;
-  expect(purpose).toContain("This board's Claude Code CLI is older than this model requires");
-  expect(purpose).toContain("1. Fix the table: in the settings tab");
-  expect(purpose).toContain("2. To keep this row, update tidepool to a version that supports this model, then answer");
-  // 運用者は固定の版を変えられない(ADR 0186 決定5)—— CLI の手動更新にも版の番号にも触れない
-  expect(purpose).not.toMatch(/update the CLI|claude update/i);
-  expect(purpose).not.toMatch(/\d+\.\d+\.\d+/);
+  // 文面そのものは domain の seam(quarantine.test.ts)が言う。ここは証拠の種類が question まで届くことだけ
+  expect(question.purpose).toContain("This board's Claude Code CLI is older than this model requires");
 
   const timeline = await events(refused.id);
   const spawned = timeline.filter((e) => e.kind === "worker_spawned");
