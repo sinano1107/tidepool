@@ -2,7 +2,6 @@ import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { afterEach, expect, it, vi } from "vitest";
 import {
-  CLAUDE_CLI_VERSION,
   enumerateToolsThrough,
   probeClaudeHarnessCapability,
   probeToolSurfaceCapability,
@@ -345,9 +344,9 @@ it("fs 半分が不成立ならツール面の ping は撃たない — 安い�
 
 // ── 版の一致(ADR 0186 決定2・5)──────────────────────────────────────
 
-it("門が期待する版は repo の固定の版の1か所(claude-cli-version)を読む", () => {
-  expect(CLAUDE_CLI_VERSION).toBe(readFileSync(new URL("../claude-cli-version", import.meta.url), "utf8").trim());
-});
+/** 固定の版の正本(ADR 0186 決定5)。実装の定数を import せず、ファイルから読む —
+ *  一致の it が、門の期待する版がこの1か所であることも言う。 */
+const PINNED = readFileSync(new URL("../claude-cli-version", import.meta.url), "utf8").trim();
 
 it("版が固定の版と違えば、ツール面の probe を撃たずに不成立 — 期待した版・観測した版・入れるコマンドを言う", async () => {
   const enumerate = vi.fn(async () => ({ tools: WORK_SURFACE, mcpServers: [], autoMemoryPath: null }));
@@ -355,15 +354,15 @@ it("版が固定の版と違えば、ツール面の probe を撃たずに不成
   expect(enumerate).not.toHaveBeenCalled();
   expect(result.available).toBe(false);
   const reason = result.available === false ? result.reason : "";
-  expect(reason).toContain(CLAUDE_CLI_VERSION);
+  expect(reason).toContain(PINNED);
   expect(reason).toContain("2.1.290");
-  expect(reason).toContain(`install.sh | bash -s ${CLAUDE_CLI_VERSION}`);
-  expect(reason).toContain(`npm install -g @anthropic-ai/claude-code@${CLAUDE_CLI_VERSION}`);
+  expect(reason).toContain(`install.sh | bash -s ${PINNED}`);
+  expect(reason).toContain(`npm install -g @anthropic-ai/claude-code@${PINNED}`);
 });
 
 it("版が固定の版と一致すれば、ツール面の probe を撃ち、その答えがそのまま返る", async () => {
   const enumerate = vi.fn(async () => ({ tools: [...WORK_SURFACE, "CronCreate"], mcpServers: [], autoMemoryPath: null }));
-  const result = await probeClaudeHarnessCapability(() => `${CLAUDE_CLI_VERSION} (Claude Code)`, enumerate);
+  const result = await probeClaudeHarnessCapability(() => `${PINNED} (Claude Code)`, enumerate);
   expect(enumerate).toHaveBeenCalledTimes(1);
   expect(result.available === false && result.reason).toContain("CronCreate");
 });

@@ -66,7 +66,7 @@ import {
 // here — the adapter is where vendor-specific knowledge belongs (ADR 0005)
 const EFFORT_LEVELS: readonly string[] = ["low", "medium", "high", "xhigh", "max"];
 /** 盤面が検証した Claude CLI の版(ADR 0186 決定5)。正本は repo 直下の1か所で、導入スクリプトも同じファイルを読む。 */
-export const CLAUDE_CLI_VERSION = readFileSync(new URL("../claude-cli-version", import.meta.url), "utf8").trim();
+const CLAUDE_CLI_VERSION = readFileSync(new URL("../claude-cli-version", import.meta.url), "utf8").trim();
 
 /** Shared by boot-time default validation and every per-task spawn — one
  *  check, not a copy at each call site. 検査する値の出所は盤面の表になったが
@@ -481,6 +481,10 @@ const ADVISOR_DISABLE_ENV = "CLAUDE_CODE_DISABLE_ADVISOR_TOOL";
  *  the same call). No CLI flag spells this; the env is the only spelling. */
 const MAX_THINKING_TOKENS_ENV = "MAX_THINKING_TOKENS";
 
+/** 盤面が起動する `claude` の自動更新を閉じる env(ADR 0186 決定4)。`ADVISOR_DISABLE_ENV` と
+ *  同じ理由で1か所に名付ける —— 3つの env 関数のどこかで綴りを誤れば、黙って開く。 */
+const AUTOUPDATER_DISABLE_ENV = "DISABLE_AUTOUPDATER";
+
 /** The Moonshot routing pair (ADR 0096 / issue #445): the endpoint and the
  *  Bearer token envs a `provider: moonshot` spawn carries — and that an
  *  anthropic spawn must never inherit (ADR 0097 決定4 の双方向 scrub)。env 名は
@@ -593,7 +597,7 @@ function readMoonshotApiKey(keyFile: string): string {
  *  `MOONSHOT_ROUTING_ENV` the moonshot spawn injects, so the symmetry is
  *  structural, not a discipline. */
 export function boardCallEnv(): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = { ...process.env, [ADVISOR_DISABLE_ENV]: "1", DISABLE_AUTOUPDATER: "1" };
+  const env: NodeJS.ProcessEnv = { ...process.env, [ADVISOR_DISABLE_ENV]: "1", [AUTOUPDATER_DISABLE_ENV]: "1" };
   for (const name of MOONSHOT_ROUTING_ENV) delete env[name];
   return env;
 }
@@ -682,7 +686,7 @@ export function workerSpawnEnv(
     ...process.env,
     CLAUDE_STREAM_IDLE_TIMEOUT_MS: String(STREAM_IDLE_TIMEOUT_MS),
     API_TIMEOUT_MS: String(STREAM_IDLE_TIMEOUT_MS),
-    DISABLE_AUTOUPDATER: "1",
+    [AUTOUPDATER_DISABLE_ENV]: "1",
   };
   if (advisor === undefined) env[ADVISOR_DISABLE_ENV] = "1";
   else delete env[ADVISOR_DISABLE_ENV];
@@ -719,7 +723,7 @@ export function workerSpawnEnv(
  *  a guess to bake in. Throws MoonshotApiKeyMissingError when there is no
  *  credential to authenticate with. */
 export function moonshotCliAuthEnv(keyFile: string | undefined): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = { ...process.env, [ADVISOR_DISABLE_ENV]: "1", DISABLE_AUTOUPDATER: "1" };
+  const env: NodeJS.ProcessEnv = { ...process.env, [ADVISOR_DISABLE_ENV]: "1", [AUTOUPDATER_DISABLE_ENV]: "1" };
   for (const name of CLAUDE_SUBSCRIPTION_ENV) delete env[name];
   env[ANTHROPIC_BASE_URL_ENV] = MOONSHOT_BASE_URL;
   env[ANTHROPIC_AUTH_TOKEN_ENV] = readMoonshotApiKey(resolveMoonshotApiKeyFile(keyFile));
