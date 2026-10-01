@@ -70,12 +70,12 @@ function recommendFor(episodes: LearnerEpisode[], candidates: ExecutionSetting[]
   });
 }
 
-it("データの無いセルでは推薦が表(selector の先頭)と一致し、出所は prior(AC1)", () => {
+it("データの無いセルでは推薦が表(selector の先頭)と一致し、basis は prior(AC1)", () => {
   expect(recommendFor([], [opus, sol])).toEqual({ recommended: opus, basis: "prior" });
   expect(recommendFor([], [sol, opus])).toEqual({ recommended: sol, basis: "prior" });
 });
 
-it("観測された具体 id は表の alias 行に当たり、受理されなかった行は観測のある候補より下がる —— 出所は data", () => {
+it("観測された具体 id は表の alias 行に当たり、受理されなかった行は観測のある候補より下がる —— basis は data", () => {
   const rejected = episode({ cell: { provider: "anthropic", model: "claude-opus-4-1", effort: "high", advisor: null }, outcome: "rejected" });
   expect(recommendFor([rejected, solAccepted], [opus, sol])).toEqual({ recommended: sol, basis: "data" });
 });
@@ -87,7 +87,7 @@ it("先頭に 100 受理 / 1 却下、2番目が未観測なら推薦は先頭 �
   expect(branchFor(episodes, [opus, sol], true)).toMatchObject({ chosen: byLearner(opus), shadow: { recommended: opus, actual: byLearner(opus) } });
 });
 
-it("先頭が未観測なら、ほかの候補に観測があっても推薦は先頭 —— 出所は data のまま、昇格の前後とも先頭が走る(ADR 0181 決定2)", () => {
+it("先頭が未観測なら、ほかの候補に観測があっても推薦は先頭 —— basis は data のまま、昇格の前後とも先頭が走る(ADR 0181 決定2)", () => {
   expect(recommendFor([solAccepted], [opus, sol])).toEqual({ recommended: opus, basis: "data" });
   expect(branchFor([solAccepted], [opus, sol], false)).toMatchObject({ chosen: opus, shadow: { recommended: opus, actual: opus } });
   expect(branchFor([solAccepted], [opus, sol], true)).toMatchObject({ chosen: byLearner(opus), shadow: { recommended: opus, actual: byLearner(opus) } });
@@ -173,7 +173,7 @@ it("shadow の組は推薦したセルと走ったセルの実績(盤面の段�
   });
 });
 
-it("昇格後もどの候補にも観測が無ければ学習器の選択は表の先頭と一致する —— 出所は prior で、出所の provider だけが learner", () => {
+it("昇格後もどの候補にも観測が無ければ学習器の選択は表の先頭と一致する —— basis は prior で、出所の provider だけが learner", () => {
   const { chosen, shadow } = selectorBranch({ promoted: true, candidates: [opus, sol], board: [], workspace: [], priority: "quality" });
   expect(chosen).toEqual({ ...opus, source: { ...opus.source, provider: "learner" } });
   expect(shadow).toMatchObject({ recommended: opus, actual: chosen, basis: "prior" });
@@ -226,7 +226,7 @@ const recordSpawn = (taskId: string) =>
   appendEvent(t.db, { taskId, workerId: "fake-worker", origin: "board", at: t.clock.now(), payload: WORKER_SPAWNED });
 
 const shadowRows = (t: Tidepool) =>
-  listRoutingShadow(t.db, "", { since_watermark: 0 }).shadow.map(({ task_id, recommended, actual, source, basis }) => ({ task_id, recommended, actual, source, basis }));
+  listRoutingShadow(t.db, "", { since_watermark: 0 }).shadow.map(({ task_id, recommended, actual, source, basis, candidates }) => ({ task_id, recommended, actual, source, basis, candidates }));
 
 it("work task の pickup ごとに shadow 行が1件記録され、selector の選択は変わらない —— review task では学習器を参照せず行も無い", async () => {
   t = await bootTidepool({ taskExecutionCandidates: () => [opus, sol] });
@@ -236,7 +236,7 @@ it("work task の pickup ごとに shadow 行が1件記録され、selector の�
   expect(t.worker.startedSettings).toEqual([opus]);
   const cell = { provider: "anthropic", model: "opus", effort: "high", advisor: null };
   expect(shadowRows(t)).toEqual([
-    { task_id: work.id, recommended: cell, actual: cell, source: opus.source, basis: "prior" },
+    { task_id: work.id, recommended: cell, actual: cell, source: opus.source, basis: "prior", candidates: 2 },
   ]);
 
   // 完了で統合点レビュー(review task)が生まれ、次の poll で pickup される
@@ -246,9 +246,10 @@ it("work task の pickup ごとに shadow 行が1件記録され、selector の�
   expect(shadowRows(t)).toHaveLength(1);
 });
 
-/** opus の session の1つの entry が、異議群ごとに `causes` と帰責された盤面にする(既定は capability の1つ)——
- *  capability があれば学習器は opus を下げ、sol を推薦するようになる。 */
-async function rejectOpusSession(t: Tidepool, causes: Cause[] = ["capability"]) {
+/** `run` で走って完了した session がある盤面にする。`causes` を渡すとその session の1つの entry が異議群ごとに
+ *  `causes` と帰責される —— capability があれば学習器はその行を下げる。渡さなければ受理された観測になる —— 学習器は
+ *  未観測の候補へ移らない(ADR 0181)ので、移る先に観測を置くのに使う。 */
+async function settledSession(t: Tidepool, run: ExecutionSetting, causes: Cause[] = []) {
   const earlier = await registerWork(t, "earlier");
   await t.clock.advance(HOUR);
   // ScriptedWorker は spawn しないので、その session の記録(spawn + 決定 + 帰責)を setup として置く
@@ -257,49 +258,34 @@ async function rejectOpusSession(t: Tidepool, causes: Cause[] = ["capability"]) 
     workerId: "fake-worker",
     origin: "board",
     at: t.clock.now(),
-    payload: { ...WORKER_SPAWNED, advisor: null, provider: "anthropic", model: "opus", effort: "high" },
+    payload: { ...WORKER_SPAWNED, advisor: null, provider: run.provider, model: run.model, effort: run.effort },
   });
-  const entry = await loggedEntry(t, earlier.id, "took the shortcut");
-  expect(entry.id).toBeGreaterThan(spawnedId);
-  for (const [i, cause] of causes.entries()) {
-    const objectionId = bundledObjection(t.db, earlier.id, entry.id, t.clock.now(), `objection ${i}`);
-    const attributed: EventPayload = {
-      kind: "objection_attributed",
-      entry_id: entry.id,
-      objection_event_ids: [objectionId],
-      cause,
-      evidence: "the shortcut missed the second criterion",
-      entries: null,
-      round: "initial",
-    };
-    appendEvent(t.db, { taskId: earlier.id, workerId: "board", origin: "board", at: t.clock.now(), payload: attributed });
+  if (causes.length > 0) {
+    const entry = await loggedEntry(t, earlier.id, "took the shortcut");
+    expect(entry.id).toBeGreaterThan(spawnedId);
+    for (const [i, cause] of causes.entries()) {
+      const objectionId = bundledObjection(t.db, earlier.id, entry.id, t.clock.now(), `objection ${i}`);
+      const attributed: EventPayload = {
+        kind: "objection_attributed",
+        entry_id: entry.id,
+        objection_event_ids: [objectionId],
+        cause,
+        evidence: "the shortcut missed the second criterion",
+        entries: null,
+        round: "initial",
+      };
+      appendEvent(t.db, { taskId: earlier.id, workerId: "board", origin: "board", at: t.clock.now(), payload: attributed });
+    }
   }
   await completeViaMcp(t, earlier.id);
   await completeIntegrationReviews(t, earlier.id);
   await completeMetaReviews(t);
 }
 
-/** `run` で走って受理された session がある盤面にする —— 学習器は未観測の候補へ移らない(ADR 0181)ので、移る先に観測を置く。 */
-async function acceptSession(t: Tidepool, run: ExecutionSetting) {
-  const earlier = await registerWork(t, "accepted");
-  await t.clock.advance(HOUR);
-  // ScriptedWorker は spawn しないので、その session の開始を setup として置く
-  appendEvent(t.db, {
-    taskId: earlier.id,
-    workerId: "fake-worker",
-    origin: "board",
-    at: t.clock.now(),
-    payload: { ...WORKER_SPAWNED, advisor: null, provider: run.provider, model: run.model, effort: run.effort },
-  });
-  await completeViaMcp(t, earlier.id);
-  await completeIntegrationReviews(t, earlier.id);
-  await completeMetaReviews(t);
-}
-
-it("観測が効くと shadow 行は selector と乖離しうるが、選択は変わらない —— capability と帰責された session の行が下がり、出所は data", async () => {
+it("観測が効くと shadow 行は selector と乖離しうるが、選択は変わらない —— capability と帰責された session の行が下がり、basis は data", async () => {
   t = await bootTidepool({ taskExecutionCandidates: () => [opus, sol] });
-  await rejectOpusSession(t);
-  await acceptSession(t, sol);
+  await settledSession(t, opus, ["capability"]);
+  await settledSession(t, sol);
 
   const later = await registerWork(t, "later");
   await t.clock.advance(HOUR);
@@ -311,13 +297,14 @@ it("観測が効くと shadow 行は selector と乖離しうるが、選択は�
     actual: { provider: "anthropic", model: "opus", effort: "high", advisor: null },
     source: opus.source,
     basis: "data",
+    candidates: 2,
   });
 });
 
 it("同じ entry の前の異議群が capability、後の異議群が preference と帰責された session も負として数える —— 学習器は opus の行を下げる(ADR 0170 決定3)", async () => {
   t = await bootTidepool({ taskExecutionCandidates: () => [opus, sol] });
-  await rejectOpusSession(t, ["capability", "preference"]);
-  await acceptSession(t, sol);
+  await settledSession(t, opus, ["capability", "preference"]);
+  await settledSession(t, sol);
 
   const later = await registerWork(t, "later");
   await t.clock.advance(HOUR);
@@ -332,7 +319,7 @@ it("同じ entry の前の異議群が capability、後の異議群が preferenc
 it("advisor pin ありで相談0回の session は、盤面の記録から読んでも advisor 無しのセルに合流しない —— 観測された具体 id も alias 行に当たる(AC4)", async () => {
   const opusWithAdvisor = candidate("anthropic", "opus", "fable");
   t = await bootTidepool({ taskExecutionCandidates: () => [opusWithAdvisor, opus] });
-  await acceptSession(t, opus);
+  await settledSession(t, opus);
   const earlier = await registerWork(t, "earlier");
   await t.clock.advance(HOUR);
   // ScriptedWorker は spawn しないので、その session の記録(pin あり spawn + 帰責 + 相談0回の exit)を setup として置く
@@ -388,7 +375,7 @@ it("advisor pin ありで相談0回の session は、盤面の記録から読ん
 it("セルの model は観測された具体 id —— pin が alias でも、人間が足した具体 id の行に観測が当たる", async () => {
   const opus41 = candidate("anthropic", "claude-opus-4-1");
   t = await bootTidepool({ taskExecutionCandidates: () => [opus41, sol] });
-  await acceptSession(t, sol);
+  await settledSession(t, sol);
   const earlier = await registerWork(t, "earlier");
   await t.clock.advance(HOUR);
   // pin は alias の opus、CLI が報告した具体 id は claude-opus-4-1(ScriptedWorker は spawn しないので setup として置く)
@@ -455,8 +442,8 @@ const settingsOf = (t: Tidepool, taskId: string) => t.worker.startedSettings[t.w
 it("昇格中の work task は学習器の選択で走り出所は learner、shadow 行は表の選択を推薦に・学習器の選択を実際に持つ —— review task は表のまま", async () => {
   t = await bootTidepool({ openaiUsage: healthyOpenai, taskExecutionCandidates: () => [opus, sol] });
   await promote(t);
-  await rejectOpusSession(t);
-  await acceptSession(t, sol);
+  await settledSession(t, opus, ["capability"]);
+  await settledSession(t, sol);
 
   const later = await registerWork(t, "later");
   await t.clock.advance(HOUR);
@@ -468,6 +455,7 @@ it("昇格中の work task は学習器の選択で走り出所は learner、sha
     actual: cellOf(sol),
     source: byLearner(sol).source,
     basis: "data",
+    candidates: 2,
   });
 
   await completeViaMcp(t, later.id);
@@ -486,16 +474,15 @@ it("昇格中も学習器の選択は Throttle の除外を通る —— 選ん�
   });
   t = await bootTidepool({ openaiUsage: throttledOpenai, taskExecutionCandidates: () => [opus, sol] });
   await promote(t);
-  await rejectOpusSession(t);
-  await acceptSession(t, sol);
+  await settledSession(t, opus, ["capability"]);
+  await settledSession(t, sol);
 
   const later = await registerWork(t, "later");
   await t.clock.advance(HOUR);
 
   expect(settingsOf(t, later.id)).toEqual(byLearner(opus));
   // 候補数は除外を当てた後の行の数 —— openai が外れて opus の1行だけ
-  const [row] = listRoutingShadow(t.db, "", { since_watermark: 0 }).shadow.slice(-1);
-  expect(row).toMatchObject({ task_id: later.id, recommended: cellOf(opus), actual: cellOf(opus), candidates: 1 });
+  expect(shadowRows(t).at(-1)).toMatchObject({ task_id: later.id, recommended: cellOf(opus), actual: cellOf(opus), candidates: 1 });
 });
 
 it("別タスクの entry への帰責は、id 窓が重なっても開いたままの session の episode に混ざらない —— cause はタスクの照合で決まる(loadEpisodes)", async () => {
