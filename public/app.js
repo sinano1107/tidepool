@@ -343,8 +343,9 @@ function TpQuestionCard({ q, answer, onAnswer, locked = false, onTranslate, onOp
   const [deadAddressee, setDeadAddressee] = React.useState(false);
   const [comment, setComment] = React.useState("");
   const setItemAnswer = (i, value) => setDraft(draft.map((v, j) => j === i ? value : v));
-  const disabledOptions = [...comment.trim() ? [] : q.needsComment ?? [], ...deadAddressee ? ["approve"] : []];
-  const canSubmit = draft.every(Boolean) && !draft.some((v) => disabledOptions.includes(v));
+  const disabledOptions = deadAddressee ? ["approve"] : [];
+  const needsComment = draft.filter((v) => v && q.needsComment?.includes(v));
+  const canSubmit = draft.every(Boolean) && !draft.some((v) => disabledOptions.includes(v)) && (needsComment.length === 0 || !!comment.trim());
   const [submitting, setSubmitting] = React.useState(false);
   const submit = () => {
     setSubmitting(true);
@@ -386,15 +387,15 @@ function TpQuestionCard({ q, answer, onAnswer, locked = false, onTranslate, onOp
       mono: true,
       onChange: (e) => setAmendment({ ...amendment, effort: e.target.value.trim() })
     }
-  )), q.needsComment && !locked && /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 14 } }, /* @__PURE__ */ React.createElement(
+  )), !locked && /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 14 } }, /* @__PURE__ */ React.createElement(
     Input,
     {
-      label: `Comment (required to ${q.needsComment.join(" / ")})`,
+      label: needsComment.length ? `Comment (required to ${needsComment.join(" / ")})` : "Comment (optional)",
       multiline: true,
       rows: 2,
       value: comment,
       onChange: (e) => setComment(e.target.value),
-      placeholder: "why, or what is still undecided \u2014 the next memory meta-review reads it"
+      placeholder: "why \u2014 whoever acts on this answer reads it"
     }
   )), items.length > 1 && !locked && /* @__PURE__ */ React.createElement("div", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--tide-4)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 12 } }, answeredCount, " of ", items.length, " answered \u2014 sent together on Submit"), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 18 } }, items.map((item, i) => /* @__PURE__ */ React.createElement(
     TpQuestionItemPicker,
@@ -758,7 +759,7 @@ function TriageScreen({ data, onCommit, loadHandoff, onAnswer, onObject, onScrat
         " \u2014 show"
       ), visibleReadEntries.map(renderLogRow), unreadEntries.map(renderLogRow));
     })));
-  })(), section === S_MERGE && /* @__PURE__ */ React.createElement("div", null, landingReady.map((q, i) => /* @__PURE__ */ React.createElement("div", { key: q.id, className: "tp-rise", style: { animationDelay: `${180 + i * 90}ms` } }, /* @__PURE__ */ React.createElement(TpQuestionCard, { q, answer: answers[q.id], onAnswer: (a, amendment) => answerQ(q, a, amendment), locked: !!answers[q.id], onTranslate }))), Object.keys(TP_LANDING_BLOCKED).map((kind) => {
+  })(), section === S_MERGE && /* @__PURE__ */ React.createElement("div", null, landingReady.map((q, i) => /* @__PURE__ */ React.createElement("div", { key: q.id, className: "tp-rise", style: { animationDelay: `${180 + i * 90}ms` } }, /* @__PURE__ */ React.createElement(TpQuestionCard, { q, answer: answers[q.id], onAnswer: (a, amendment, comment) => answerQ(q, a, amendment, comment), locked: !!answers[q.id], onTranslate }))), Object.keys(TP_LANDING_BLOCKED).map((kind) => {
     const blocked = landingBlocked.filter((q) => landingBlockOf(q) === kind);
     if (blocked.length === 0) return null;
     return /* @__PURE__ */ React.createElement("p", { key: kind, style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--text-muted)", margin: "0 0 8px" } }, blocked.length, " landing question", blocked.length > 1 ? "s" : "", " not yet answerable \u2014 ", TP_LANDING_BLOCKED[kind]);
@@ -3292,7 +3293,8 @@ function toQuestionCardShape(q, icons) {
     ...q.question_proposal?.kind === "registry" && { amendable: "agent_tier" },
     // 修正値の初期値は candidate の今の本文 —— 移されていれば末尾の複製
     ...candidateId !== void 0 && { amendable: "memory", candidateId: moved.find((m) => m.id === candidateId)?.tail_id ?? candidateId },
-    ...q.question_proposal?.kind === "memory" && { needsComment: ["reject", "defer"] },
+    // 理由必須の選択肢は盤面の `needs_comment` 注釈が答える(ADR 0179 決定4)
+    needsComment: q.needs_comment ?? [],
     // 行の Quarantine の修復は表の修正が先頭(ADR 0184 決定6)
     ...q.question_quarantine_kind === "tableRow" && { opensSettings: true },
     ...q.approval && {

@@ -132,7 +132,7 @@ it("schema 違反の修正値・reject に添えた修正値・memory の提案�
     const questionId = await propose({ tier: "frontier" });
     for (const body of [
       { answers: ["approve"], amendment: { tier: "ultra" } },
-      { answers: ["reject"], amendment: { effort: "max" } },
+      { answers: ["reject"], comment: "not now", amendment: { effort: "max" } },
     ]) {
       expect((await answer(questionId, body)).status).toBe(409);
     }

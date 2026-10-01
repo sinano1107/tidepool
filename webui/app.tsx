@@ -196,7 +196,7 @@ function liveTitle(t: Pick<import('../src/wire-contract').QueueTask, 'title' | '
 // Maps one raw question task into TpQuestionCard's shape — shared by the board's
 // question list (mapData) and the push deep-link's single-question view.
 function toQuestionCardShape(
-  q: Pick<WireContract['GET /api/tasks/:id'], 'id' | 'parent_id' | 'blocking' | 'registrant' | 'purpose' | 'question_items' | 'approval' | 'moved' | 'question_proposal' | 'question_quarantine_kind'>,
+  q: Pick<WireContract['GET /api/tasks/:id'], 'id' | 'parent_id' | 'blocking' | 'registrant' | 'purpose' | 'question_items' | 'approval' | 'moved' | 'needs_comment' | 'question_proposal' | 'question_quarantine_kind'>,
   icons: AppIcons,
 ): TpQuestion {
   // who issued the question — the board itself (issue #261) or an agent
@@ -227,7 +227,8 @@ function toQuestionCardShape(
     ...(q.question_proposal?.kind === 'registry' && { amendable: 'agent_tier' as const }),
     // 修正値の初期値は candidate の今の本文 —— 移されていれば末尾の複製
     ...(candidateId !== undefined && { amendable: 'memory' as const, candidateId: moved.find((m) => m.id === candidateId)?.tail_id ?? candidateId }),
-    ...(q.question_proposal?.kind === 'memory' && { needsComment: ['reject', 'defer'] }),
+    // 理由必須の選択肢は盤面の `needs_comment` 注釈が答える(ADR 0179 決定4)
+    needsComment: q.needs_comment ?? [],
     // 行の Quarantine の修復は表の修正が先頭(ADR 0184 決定6)
     ...(q.question_quarantine_kind === 'tableRow' && { opensSettings: true }),
     ...(q.approval && {

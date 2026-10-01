@@ -976,7 +976,8 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
         "on a memory approve or consolidate proposal, title, text and/or addressee (null = every agent) to approve instead of the candidate's, " +
         "with original_title + original_text together if you wrote it in another language; an exemplar candidate takes title, addressee " +
         "and/or annotations (the whole list, each quote verbatim in its case — see preview_case) instead of text and originals. An amended " +
-        "memory approval is written as your own approved entry and supersedes the candidate. Rejecting a memory proposal requires a comment saying why.",
+        "memory approval is written as your own approved entry and supersedes the candidate. The answers in the question's needs_comment require a " +
+        "non-blank comment saying why: reject on any proposal or approval question, and defer on a memory proposal. Every other answer takes an optional comment.",
       inputSchema: {
         task_id: z.string(),
         answers: z.array(z.string()),

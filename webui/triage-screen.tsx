@@ -29,7 +29,7 @@ interface TpQuestion {
    *  memory の approve / consolidate は `candidateId` の文言と宛先(Exemplar なら title・宛先と注釈 list)。 */
   amendable?: 'row' | 'agent_tier' | 'memory';
   candidateId?: number;
-  /** comment が要る選択肢(memory の提案 question の reject / defer、ADR 0159 決定3・ADR 0165 決定3)。 */
+  /** comment が要る選択肢 —— 盤面の `needs_comment` 注釈(ADR 0179 決定4)。 */
   needsComment?: string[];
   /** 行の Quarantine の question(ADR 0184 決定6)—— settings タブを開くボタンを持つ。 */
   opensSettings?: boolean;
@@ -106,7 +106,7 @@ function TpSegmentGauge({ total, filled }: { total: number; filled: number }) {
 // 30-second decision an agent reads back).
 function TpQuestionItemPicker({ item, value, locked, onChange, translated, disabled = [] }: {
   item: TpQuestionItem;
-  /** 今は選べない選択肢(comment の無い memory 提案の reject / defer)。 */
+  /** 今は選べない選択肢(宛先が死んでいる memory 提案の approve)。 */
   disabled?: string[];
   /** 未選択は null / undefined のどちらでも来る(呼び手は配列の添字)。 */
   value?: string | null;
@@ -363,9 +363,11 @@ function TpQuestionCard({ q, answer, onAnswer, locked = false, onTranslate, onOp
   const [deadAddressee, setDeadAddressee] = React.useState(false);
   const [comment, setComment] = React.useState('');
   const setItemAnswer = (i: number, value: string | null) => setDraft(draft.map((v, j) => (j === i ? value : v)));
-  const disabledOptions = [...(comment.trim() ? [] : q.needsComment ?? []), ...(deadAddressee ? ['approve'] : [])];
-  // a pick made before the comment was cleared or the addressee turned out dead is not submittable
-  const canSubmit = draft.every(Boolean) && !draft.some((v) => disabledOptions.includes(v!));
+  const disabledOptions = deadAddressee ? ['approve'] : [];
+  // picked options the board says need a reason (ADR 0179 決定5): pickable, but not submittable while the comment is blank
+  const needsComment = draft.filter((v) => v && q.needsComment?.includes(v));
+  // a pick made before the addressee turned out dead is not submittable either
+  const canSubmit = draft.every(Boolean) && !draft.some((v) => disabledOptions.includes(v!)) && (needsComment.length === 0 || !!comment.trim());
   // triage marks the card answered only after the POST resolves, so Submit stays pressable until then
   const [submitting, setSubmitting] = React.useState(false);
   const submit = () => {
@@ -433,10 +435,10 @@ function TpQuestionCard({ q, answer, onAnswer, locked = false, onTranslate, onOp
             onChange={(e) => setAmendment({ ...amendment, effort: e.target.value.trim() })} />
         </div>
       )}
-      {q.needsComment && !locked && (
+      {!locked && (
         <div style={{ marginBottom: 14 }}>
-          <Input label={`Comment (required to ${q.needsComment.join(' / ')})`} multiline rows={2} value={comment} onChange={(e) => setComment(e.target.value)}
-            placeholder="why, or what is still undecided — the next memory meta-review reads it" />
+          <Input label={needsComment.length ? `Comment (required to ${needsComment.join(' / ')})` : 'Comment (optional)'} multiline rows={2} value={comment} onChange={(e) => setComment(e.target.value)}
+            placeholder="why — whoever acts on this answer reads it" />
         </div>
       )}
       {items.length > 1 && !locked && (
@@ -1023,7 +1025,7 @@ function TriageScreen({ data, onCommit, loadHandoff, onAnswer, onObject, onScrat
         <div>
           {landingReady.map((q, i) => (
             <div key={q.id} className="tp-rise" style={{ animationDelay: `${180 + i * 90}ms` }}>
-              <TpQuestionCard q={q} answer={answers[q.id]} onAnswer={(a, amendment) => answerQ(q, a, amendment)} locked={!!answers[q.id]} onTranslate={onTranslate} />
+              <TpQuestionCard q={q} answer={answers[q.id]} onAnswer={(a, amendment, comment) => answerQ(q, a, amendment, comment)} locked={!!answers[q.id]} onTranslate={onTranslate} />
             </div>
           ))}
           {/* 回答不能な着地 question は件数と理由の1行だけ — 押せば必ず 409 になる

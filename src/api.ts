@@ -386,9 +386,9 @@ const completeTaskSchema = z.object({
 const answerSchema = z.object({
   answers: z.array(z.string().min(1)).min(1),
   triage: z.boolean().optional(),
-  // the steering channel for a reject's reason (issue #40) — never required
-  // (silence is fine on approve, and a reject often needs no more than the
-  // option name), carried through verbatim onto the question_answered event
+  // the steering channel for a reject's reason (issue #40) — optional here;
+  // which answers require it is the domain gate's call (ADR 0179), carried
+  // through verbatim onto the question_answered event
   comment: z.string().min(1).optional(),
   // routing の提案の approve に添える修正値(ADR 0150 決定2)。形は提案の種別ごとなので、検査は submitAnswer が持つ
   amendment: z.record(z.string(), z.unknown()).optional(),

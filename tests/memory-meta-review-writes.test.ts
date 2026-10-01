@@ -4,7 +4,6 @@ import { appendEvent, listEvents } from "../src/events.js";
 import {
   approveMemoryProposal,
   createBehaviorCandidate,
-  deferMemoryProposal,
   defineMemoryBranch,
   defineMemoryByMetaReview,
   foldMemory,
@@ -516,7 +515,7 @@ it("Exemplar の consolidate は approve で candidate を approved にして re
   const replaces = [drafted("Split migrations", { event_id: source }), drafted("Two commits per migration", { event_id: source })];
   const rejected = consolidate(replaces, { kind: "exemplar", annotations });
 
-  rejectMemoryProposal(db, rejected, "question-1", "webui", at, "Too particular.");
+  rejectMemoryProposal(db, rejected, "question-1", "webui", at);
   expect(listMemoryEntries(db, {}).filter((e) => e.kind !== "knowledge").map((e) => [e.id, e.state, e.invalidation_reason, e.successor_id])).toEqual([
     [replaces[0], "candidate", null, null],
     [replaces[1], "candidate", null, null],
@@ -530,20 +529,6 @@ it("Exemplar の consolidate は approve で candidate を approved にして re
     { invalidation_reason: "superseded", successor_id: approved.candidate_id },
     { invalidation_reason: "superseded", successor_id: approved.candidate_id },
   ]);
-});
-
-it("memory 提案の reject は comment が空・空白だけなら domain error で何も変えない(ADR 0159 決定3)", () => {
-  const { db, attributed, drafted, consolidate } = drafts();
-  const proposal = consolidate([drafted("Split migrations", { event_id: attributed("split the migration into two commits") })], { kind: "exemplar", annotations });
-  const before = listMemoryEntries(db, {});
-
-  for (const comment of [undefined, "", " \n "]) expect(() => rejectMemoryProposal(db, proposal, "question-1", "webui", at, comment)).toThrow(DomainError);
-  expect(listMemoryEntries(db, {})).toEqual(before);
-});
-
-it("memory 提案の defer は comment が空・空白だけなら domain error で断る(ADR 0165 決定3)", () => {
-  for (const comment of [undefined, "", " \n "]) expect(() => deferMemoryProposal(comment)).toThrow(DomainError);
-  expect(() => deferMemoryProposal("Not sure the split holds for data-only migrations.")).not.toThrow();
 });
 
 it("memory の提案 question は approve / reject / defer の3択で推奨は approve、detail は open な間の門と defer の案内の1文で終わる(ADR 0165 決定3・4)", () => {
@@ -671,7 +656,7 @@ it("既存の後継の consolidate は approve で replaces を後継つき supe
 
   const refused = propose({ successor_id: successor, replaces: kept });
   const before = listMemoryEntries(db, {});
-  rejectMemoryProposal(db, refused.question_proposal as MemoryProposal, refused.id, "webui", at, "A different case.");
+  rejectMemoryProposal(db, refused.question_proposal as MemoryProposal, refused.id, "webui", at);
   expect(listMemoryEntries(db, {})).toEqual(before);
 
   const question = propose({ successor_id: successor, replaces });
@@ -771,13 +756,13 @@ it("既存 candidate の consolidate は初回の統合と同じく、approve �
   expect(approved).toMatchObject({ state: "approved", invalidation_reason: null });
   expect(superseded).toMatchObject(superseded.map(() => ({ invalidation_reason: "superseded", successor_id: approved!.id })));
 
-  expect(settle((db, proposal, questionId) => rejectMemoryProposal(db, proposal, questionId, "webui", at, "Two rules after all."))).toMatchObject([
+  expect(settle((db, proposal, questionId) => rejectMemoryProposal(db, proposal, questionId, "webui", at))).toMatchObject([
     { state: "candidate", invalidation_reason: "rejected" },
     { state: "candidate", invalidation_reason: null },
     { state: "approved", invalidation_reason: null },
   ]);
 
-  expect(settle(() => deferMemoryProposal("Not sure yet."))).toMatchObject([
+  expect(settle(() => {})).toMatchObject([
     { state: "candidate", invalidation_reason: null },
     { state: "candidate", invalidation_reason: null },
     { state: "approved", invalidation_reason: null },

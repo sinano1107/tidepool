@@ -129,6 +129,8 @@ export interface WireContract {
       approval?: ApprovalAnnotation | null;
       moved?: MovedPin[];
       blocking?: string | null;
+      /** 理由の comment が要る選択肢(ADR 0179 決定4)。 */
+      needs_comment?: string[];
     }
   >;
   "GET /api/tasks/:id": BoardTask & {
@@ -137,6 +139,7 @@ export interface WireContract {
     approval?: ApprovalAnnotation | null;
     moved?: MovedPin[];
     blocking?: string | null;
+    needs_comment?: string[];
     completion_criteria: string;
     workspace: string | null;
     review_flag: number;

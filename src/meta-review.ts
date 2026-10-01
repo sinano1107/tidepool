@@ -81,7 +81,8 @@ export const META_REVIEW_SUBJECTS = {
         "A Precedent with cause memory names the wrong entries it followed (entries): read them with read_memory_entries, then drop the wrong entry (reason capability) or replace it — " +
         "a Behavior or Exemplar through propose_memory_change, Knowledge through fold_memory or invalidate_memory. The proposals settled since the previous meta-review are in the material section; read " +
         "earlier ones, with the human's answers and comments, with list_memory_proposals, and the invalidated candidates with invalidated_by (list_memory_candidates " +
-        "with include_invalidated), so you do not re-propose what a human rejected and do not repeat a retirement of your own. " +
+        "with include_invalidated), so you do not repeat a retirement of your own. A rejected proposal always carries the human's reason: " +
+        "propose it again only when that reason no longer holds. " +
         "A deferred proposal is one the human did not decide: read their comment, then propose it again when you still judge it right, or fold or retire it. " +
         "A consolidation that went stale or was deferred keeps its candidate: propose it again with candidate_id and the replaces you now judge right, " +
         "or approve the Behavior or Exemplar candidate alone to leave the entries it would have replaced in place. " +
@@ -115,8 +116,8 @@ export const META_REVIEW_SUBJECTS = {
         "a pickup with one candidate always matches the table, so do not count it as evidence of agreement. When overpowered verdicts pile up under an " +
         "agent's own tier, propose lowering that agent's tier by exactly one step, never more. The section holds only the proposals " +
         "settled since the previous meta-review: before you propose a change to a row, the learner flag or an agent's tier, read the " +
-        "earlier proposals on it, with their answers, amendments and comments, with read_routing_settings, so you do not re-propose " +
-        "what was rejected or amended.",
+        "earlier proposals on it, with their answers, amendments and comments, with read_routing_settings. Do not re-propose what was " +
+        "amended. A rejected proposal always carries the human's reason in its comment: propose it again only when that reason no longer holds.",
       completion_criteria:
         "every part of this cycle's material is judged, each judgment is logged as a decision, and each row change the evidence supports is proposed",
       review_tier: "frontier",

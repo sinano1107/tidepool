@@ -155,7 +155,7 @@ function proposals() {
     answerQuestion(db, question, [option], at, undefined, rest.comment, rest.amendment);
     const proposal = question.question_proposal as MemoryProposal;
     if (option === "approve") approveMemoryProposal(db, proposal, questionId, "webui", at, rest.amendment);
-    else rejectMemoryProposal(db, proposal, questionId, "webui", at, rest.comment);
+    else rejectMemoryProposal(db, proposal, questionId, "webui", at);
   };
   return { db, task, decision, reader, behavior, knowledge, propose, answer };
 }
