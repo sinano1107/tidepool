@@ -394,27 +394,28 @@ describe("CodexWorker (ADR 0098)", () => {
     expect(listEvents(f.db, bare.id).find((e) => e.kind === "memory_injected")?.payload).toMatchObject({ entries: [] });
   });
 
-  it("主題 memory の meta-review の spawn は材料の節を記憶の節の枠(developer_instructions の末尾)に置き、memory_injected の直後に meta_review_material_injected を書く —— 普通の task と主題 routing の meta-review には節を置かず記録も書かない(Claude と同じ —— ADR 0180 決定2)", async () => {
+  it("meta-review の spawn は主題の材料の節を記憶の節の枠(developer_instructions の末尾)に置き、memory_injected の直後に meta_review_material_injected を書く —— 主題 memory には routing の節が入らず、普通の task には節も記録も無い(Claude と同じ —— ADR 0180 決定2・追記 #1239)", async () => {
     const f = await fixture();
     // setup のみ: 窓の上限は登録 event が運ぶので盤面名義で登録し、codex-agent に割り当てる
-    registerMetaReview(f.db, "memory", new Date("2026-08-24T00:00:00.000Z"));
-    f.db.prepare("UPDATE tasks SET assignee = 'codex-agent' WHERE meta_review_subject = 'memory'").run();
-    const memory = getTask(f.db, listBoard(f.db).find((value) => value.meta_review_subject === "memory")!.id)!;
-    const others = [task(f.db), metaReviewTask(f.db, "routing")];
-    for (const value of [memory, ...others]) f.start(value);
+    for (const subject of ["memory", "routing"] as const) registerMetaReview(f.db, subject, new Date("2026-08-24T00:00:00.000Z"));
+    f.db.prepare("UPDATE tasks SET assignee = 'codex-agent' WHERE meta_review_subject IS NOT NULL").run();
+    const reviews = (["memory", "routing"] as const).map((subject) => getTask(f.db, listBoard(f.db).find((value) => value.meta_review_subject === subject)!.id)!);
+    const work = task(f.db);
+    for (const value of [...reviews, work]) f.start(value);
 
-    const { section } = buildMetaReviewMaterial(f.db, memory.id)!;
-    expect(developerInstructions(f.process.calls[0]!.args).endsWith(`\n\n${section}\n\n`)).toBe(true);
-    const events = listEvents(f.db, memory.id);
-    const spawned = events.findIndex((e) => e.kind === "worker_spawned");
-    expect(events.slice(spawned + 1, spawned + 3).map((e) => e.payload)).toMatchObject([
-      { kind: "memory_injected" },
-      { kind: "meta_review_material_injected", worker_spawned_event_id: events[spawned]!.id },
-    ]);
-    for (const [i, other] of others.entries()) {
-      expect(developerInstructions(f.process.calls[i + 1]!.args)).not.toContain("## Memory meta-review material");
-      expect(listEvents(f.db, other.id).map((e) => e.kind)).not.toContain("meta_review_material_injected");
+    for (const [i, review] of reviews.entries()) {
+      const { section } = buildMetaReviewMaterial(f.db, review.id)!;
+      expect(developerInstructions(f.process.calls[i]!.args).endsWith(`\n\n${section}\n\n`)).toBe(true);
+      const events = listEvents(f.db, review.id);
+      const spawned = events.findIndex((e) => e.kind === "worker_spawned");
+      expect(events.slice(spawned + 1, spawned + 3).map((e) => e.payload)).toMatchObject([
+        { kind: "memory_injected" },
+        { kind: "meta_review_material_injected", subject: review.meta_review_subject, worker_spawned_event_id: events[spawned]!.id },
+      ]);
     }
+    expect(developerInstructions(f.process.calls[0]!.args)).not.toContain("## Routing meta-review material");
+    expect(developerInstructions(f.process.calls[2]!.args)).not.toContain("meta-review material");
+    expect(listEvents(f.db, work.id).map((e) => e.kind)).not.toContain("meta_review_material_injected");
   });
 
   it("start の入力が英語の view を持てば memory_injected はその文面を持ち、持たなければ query の欄は無い(Claude と同じ —— ADR 0175)", async () => {

@@ -12,7 +12,7 @@ import {
   windowMatchesModel,
 } from "./execution-setting.js";
 import { type Cell, cellJson, loadEpisodes, type RoutingEpisode } from "./learner.js";
-import { paged, previousMetaReviewWatermark } from "./meta-review.js";
+import { inWindow, type MetaReviewWindow, materialSection, paged, previousMetaReviewWatermark } from "./meta-review.js";
 import { DomainError, type RegistryProposal, type RoutingProposal, registerTask } from "./tasks.js";
 
 /** 主題 routing の meta-review の読み口(issue #917 / spec #916 C)。どれも既定の `since_watermark` は読み手と同主題の
@@ -29,15 +29,21 @@ const since = (db: Db, readerTaskId: string, input: ReadWindow) => input.since_w
  *  shadow 行より前の最初の worker_spawned(spawn に辿り着かなかった pickup は session 無し)。`diverged` は学習器の推薦と
  *  実際に走ったセルが違う行で、`diverged_only` でそれだけに絞る。 */
 export function listRoutingShadow(db: Db, readerTaskId: string, input: ReadWindow & { diverged_only?: boolean }) {
+  const shadow = shadowRows(db, { after: since(db, readerTaskId, input) }).flatMap(({ id: _, ...row }) => (input.diverged_only && !row.diverged ? [] : [row]));
+  const { rows: shown, truncated } = paged(shadow, input.page);
+  return { shadow: shown, truncated };
+}
+
+/** list_routing_shadow の行(ページ割り前、learner_shadow の id つき)。行の watermark W は event W より後に書かれたので、窓
+ *  `(after, upTo]` の行は `after <= W < upTo`。session は窓で切らない。 */
+function shadowRows(db: Db, { after, upTo = Number.MAX_SAFE_INTEGER }: MetaReviewWindow) {
   const rows = db
-    .prepare("SELECT task_id, cell_recommended, cell_actual, source, basis, event_watermark, created_at FROM learner_shadow ORDER BY id")
-    .all() as Array<{ task_id: string; cell_recommended: string; cell_actual: string; source: string; basis: "prior" | "data"; event_watermark: number; created_at: string }>;
+    .prepare("SELECT id, task_id, cell_recommended, cell_actual, source, basis, event_watermark, created_at FROM learner_shadow ORDER BY id")
+    .all() as Array<{ id: number; task_id: string; cell_recommended: string; cell_actual: string; source: string; basis: "prior" | "data"; event_watermark: number; created_at: string }>;
   const episodes = loadEpisodes(db);
-  const from = since(db, readerTaskId, input);
-  const shadow = rows.flatMap((row, i) => {
-    if (row.event_watermark < from) return [];
+  return rows.flatMap((row, i) => {
+    if (row.event_watermark < after || row.event_watermark >= upTo) return [];
     const diverged = row.cell_recommended !== row.cell_actual;
-    if (input.diverged_only && !diverged) return [];
     // ponytail: 行ごとに後続の行と全 episode を走査する O(n²)。shadow が大きくなったら task ごとに1度だけ並べる
     const next = rows.slice(i + 1).find((r) => r.task_id === row.task_id)?.event_watermark ?? Infinity;
     const session = episodes.find(
@@ -45,6 +51,7 @@ export function listRoutingShadow(db: Db, readerTaskId: string, input: ReadWindo
     );
     return [
       {
+        id: row.id,
         task_id: row.task_id,
         recommended: JSON.parse(row.cell_recommended) as Cell,
         actual: JSON.parse(row.cell_actual) as Cell,
@@ -60,19 +67,24 @@ export function listRoutingShadow(db: Db, readerTaskId: string, input: ReadWindo
       },
     ];
   });
-  const { rows: shown, truncated } = paged(shadow, input.page);
-  return { shadow: shown, truncated };
 }
 
 /** 配分評価の分布: 注釈を worker session の (`source.tier`, agent, allocation, cause) で数え、judge の model が
  *  worker のセルの model と同じだった件数を添える(ADR 0150 決定8)。 */
 export function listAllocations(db: Db, readerTaskId: string, input: ReadWindow) {
+  const { rows, truncated } = paged(allocationRows(db, { after: since(db, readerTaskId, input) }).groups, input.page);
+  return { allocations: rows, truncated };
+}
+
+/** list_allocations の行(ページ割り前)と、数えた allocation_reviewed の event id。 */
+function allocationRows(db: Db, window: MetaReviewWindow) {
   const episodes = new Map(loadEpisodes(db).map((e) => [e.worker_spawned_event_id, e]));
-  const annotations = listEventsOfKinds(db, ["allocation_reviewed"], { after: since(db, readerTaskId, input) });
+  const counted: number[] = [];
   const groups = new Map<string, { source_tier: string; agent: string; allocation: string; cause: string; count: number; judged_by_same_model: number }>();
-  for (const { payload: p } of annotations) {
+  for (const { id, payload: p } of listEventsOfKinds(db, ["allocation_reviewed"], window)) {
     const episode = episodes.get(p.worker_spawned_event_id);
     if (!episode) continue;
+    counted.push(id);
     const key = JSON.stringify([episode.source.tier, episode.agent, p.allocation, p.cause]);
     const group = groups.get(key) ?? { source_tier: episode.source.tier, agent: episode.agent, allocation: p.allocation, cause: p.cause, count: 0, judged_by_same_model: 0 };
     group.count += 1;
@@ -80,15 +92,21 @@ export function listAllocations(db: Db, readerTaskId: string, input: ReadWindow)
     if (p.judge.provider === episode.cell.provider && windowMatchesModel(p.judge.model, episode.cell.model)) group.judged_by_same_model += 1;
     groups.set(key, group);
   }
-  const { rows, truncated } = paged([...groups.values()], input.page);
-  return { allocations: rows, truncated };
+  return { groups: [...groups.values()], counted };
 }
 
 /** 新しいセルと人間が変えた行: 観測(worker_exited)で初めて現れたのが watermark より後のセルと、watermark より後に
  *  settings タブ / 管理MCP から書かれた表の行(`execution_settings_changed` の `row`)。提案 question への approve の適用は
  *  read_routing_settings が読むので含まない(ADR 0151 決定2)。 */
 export function listRoutingCells(db: Db, readerTaskId: string, input: ReadWindow) {
-  const from = since(db, readerTaskId, input);
+  const { cells: all, rows } = cellRows(db, { after: since(db, readerTaskId, input) });
+  // 人間の行の編集は数件なのでページに割らず全部返す
+  const { rows: cells, truncated } = paged(all, input.page);
+  return { cells, rows, truncated };
+}
+
+/** list_routing_cells の2種の行(ページ割り前): 初観測が窓 `(after, upTo]` にあるセルと、窓の中の人間の行の編集。 */
+function cellRows(db: Db, window: MetaReviewWindow) {
   const firstSeen = new Map<string, { cell: Cell; first_observed_event_id: number }>();
   for (const e of loadEpisodes(db)) {
     if (e.worker_exited_event_id === null) continue;
@@ -96,28 +114,30 @@ export function listRoutingCells(db: Db, readerTaskId: string, input: ReadWindow
     const seen = firstSeen.get(key);
     if (!seen || e.worker_exited_event_id < seen.first_observed_event_id) firstSeen.set(key, { cell: e.cell, first_observed_event_id: e.worker_exited_event_id });
   }
-  const changed = listEventsOfKinds(db, ["execution_settings_changed"], { after: from }).flatMap(({ id, origin, created_at, payload: p }) =>
+  const rows = listEventsOfKinds(db, ["execution_settings_changed"], window).flatMap(({ id, origin, created_at, payload: p }) =>
     p.setting === "row" && p.question_id === undefined ? [{ event_id: id, origin, created_at, row: p.row }] : [],
   );
-  // 人間の行の編集は数件なのでページに割らず全部返す
-  const { rows: cells, truncated } = paged([...firstSeen.values()].filter((c) => c.first_observed_event_id > from), input.page);
-  return { cells, rows: changed, truncated };
+  const cells = [...firstSeen.values()].filter((c) => inWindow(c.first_observed_event_id, window));
+  return { cells, rows };
 }
 
 /** 過去の routing / registry の提案(spec #916 C): 提案、回答(question_answered の答え・修正値・コメント)、observed の理由
  *  (routing_proposal_stale)、registry へ適用した tier の提案なら着地した commit(agent_tier_changed)。提案の表は持たず question と
- *  event から組む。窓で切らない —— 退けられた提案を繰り返さないための読み物なので、全期間を返す。 */
-export function listRoutingProposals(db: Db) {
+ *  event から組む。verb は窓で切らない —— 退けられた提案を繰り返さないための読み物なので、全期間を返す。window を渡すと、回答か
+ *  陳腐化の event がその窓 `(after, upTo]` にある提案だけ(材料の節の決着した提案、ADR 0180 追記 #1239)。 */
+export function listRoutingProposals(db: Db, window?: MetaReviewWindow) {
   const rows = db
     .prepare(
       `SELECT t.id, t.question_proposal,
          (SELECT payload FROM events WHERE task_id = t.id AND kind = 'question_answered') AS answered,
          (SELECT payload FROM events WHERE task_id = t.id AND kind = 'routing_proposal_stale') AS stale,
-         (SELECT payload FROM events WHERE kind = 'agent_tier_changed' AND json_extract(payload, '$.question_id') = t.id) AS applied
+         (SELECT payload FROM events WHERE kind = 'agent_tier_changed' AND json_extract(payload, '$.question_id') = t.id) AS applied,
+         (SELECT MAX(id) FROM events WHERE task_id = t.id AND kind IN ('question_answered', 'routing_proposal_stale')) AS settled_id
        FROM tasks t WHERE json_extract(t.question_proposal, '$.kind') IN ('routing', 'registry') ORDER BY t.rowid`,
     )
-    .all() as Array<{ id: string; question_proposal: string; answered: string | null; stale: string | null; applied: string | null }>;
-  return rows.map((row) => {
+    .all() as Array<{ id: string; question_proposal: string; answered: string | null; stale: string | null; applied: string | null; settled_id: number | null }>;
+  const settled = rows.filter(({ settled_id }) => !window || inWindow(settled_id, window));
+  return settled.map((row) => {
     const answered = row.answered === null ? null : (JSON.parse(row.answered) as Extract<EventPayload, { kind: "question_answered" }>);
     const stale = row.stale === null ? null : (JSON.parse(row.stale) as Extract<EventPayload, { kind: "routing_proposal_stale" }>);
     const applied = row.applied === null ? null : (JSON.parse(row.applied) as Extract<EventPayload, { kind: "agent_tier_changed" }>);
@@ -131,6 +151,47 @@ export function listRoutingProposals(db: Db) {
       ...(applied && { applied: { registry_commit: applied.registry_commit, from: applied.from, to: applied.to } }),
     };
   });
+}
+
+/** routing の材料の節の5つの部分(ADR 0180 追記 #1239): 今の表と設定(窓でなく spawn 時点)、窓の中の乖離した shadow 行と
+ *  全行数、配分評価の分布、新しいセルと人間が変えた行、窓の中で決着した提案。行はそれぞれの読み口と同じ。 */
+export function routingMaterial(db: Db, window: Required<MetaReviewWindow>) {
+  const shadow = shadowRows(db, window);
+  const allocations = allocationRows(db, window);
+  const { cells, rows } = cellRows(db, window);
+  const parts = {
+    settings: readExecutionSettings(db),
+    shadow: shadow.filter((row) => row.diverged),
+    shadow_rows: shadow.length,
+    allocations,
+    cells,
+    rows,
+    proposals: listRoutingProposals(db, window),
+  };
+  const section = materialSection("routing", window, [
+    [
+      "Table and settings",
+      "The fields of read_routing_settings except proposals, as they stand at the start of this session, not windowed.",
+      [parts.settings],
+      "no settings",
+    ],
+    [
+      "Diverged shadow rows",
+      `Rows of list_routing_shadow written in this window where the learner's recommendation and the cell that ran differ. ${parts.shadow_rows} shadow ` +
+        "rows were written in this window, matched ones included; read the matched rows, and rows before this window, with list_routing_shadow.",
+      parts.shadow.map(({ id: _, ...row }) => row),
+      "no diverged shadow rows",
+    ],
+    ["Allocation reviews", "Rows of list_allocations counting the annotations written in this window.", allocations.groups, "no allocation reviews"],
+    [
+      "New cells and changed rows",
+      "The cells and rows of list_routing_cells: cells first observed in this window, and execution-setting rows humans wrote in this window.",
+      [...cells, ...rows],
+      "no new cells or changed rows",
+    ],
+    ["Settled proposals", "Proposals of read_routing_settings answered or settled as observed in this window.", parts.proposals, "no settled proposals"],
+  ]);
+  return { subject: "routing" as const, section, parts };
 }
 
 /** agent の tier の提案の門と pin(issue #920 / spec #916 B・C): 組み込みでない agent を、今の tier(省略は盤面既定)のちょうど

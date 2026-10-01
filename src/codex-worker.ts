@@ -1001,7 +1001,7 @@ export class CodexWorker implements WorkerAdapter {
       throw new Error(`CodexWorker refuses provider ${setting.provider}; no Harness fallback (ADR 0098)`);
     }
     const memory = buildMemoryInjection(this.options.db, task, workspace.name, agent.name, query);
-    // ADR 0180 決定2: memory meta-review は worker の記憶の節の代わりに材料の節を同じ枠で受ける
+    // ADR 0180 決定2・追記 #1239: meta-review は worker の記憶の節の代わりに主題の材料の節を同じ枠で受ける
     const material = buildMetaReviewMaterial(this.options.db, task.id);
     const taskTemp = realpathSync(mkdtempSync(join(tmpdir(), `tidepool-codex-${task.id}-`)));
     // 削除の失敗で session の後始末を止めない(issue #705)

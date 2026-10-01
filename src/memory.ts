@@ -5,8 +5,9 @@ import type { Cause } from "./cause.js";
 import { type Db, MEMORY_FTS_DDL, MEMORY_FTS_TOKENIZER, MEMORY_PREPROCESS_VERSION } from "./db.js";
 import { getDisplayLanguage } from "./display-language.js";
 import { appendEvent, type EventOrigin, type EventPayload, type EventRow, getEvent, isDecisionLogEntry, listEvents, listEventsOfKinds } from "./events.js";
-import { type MetaReviewWindow, materialEvents, metaReviewSubjectOf, metaReviewWindow, paged, previousMetaReviewWatermark } from "./meta-review.js";
+import { inWindow, type MetaReviewWindow, materialEvents, materialSection, metaReviewSubjectOf, metaReviewWindow, paged, previousMetaReviewWatermark } from "./meta-review.js";
 import { entriesReadBefore, entriesSeenBefore, listEpisodes, sessionSpawnOf, sessionWindow } from "./precedent.js";
+import { routingMaterial } from "./routing-review.js";
 import { approvalAnnotation, BOARD_WORKER_ID, DomainError, getTask, HUMAN_WORKER_ID, type MemoryProposal, type QuestionProposal, questionBlocking, registerTask, settleQuestionAsObserved, type Task } from "./tasks.js";
 import { entryObjections, objectedEntryText, objectionsById } from "./triage.js";
 
@@ -1702,7 +1703,7 @@ function memoryProposalRows(db: Db, window?: MetaReviewWindow) {
     )
     .all() as Array<{ id: string; question_proposal: string; answered: string | null; stale: string | null; settled_id: number | null }>;
   return rows
-    .filter(({ settled_id }) => !window || (settled_id !== null && settled_id > window.after && settled_id <= (window.upTo ?? Infinity)))
+    .filter(({ settled_id }) => !window || inWindow(settled_id, window))
     .map((row) => {
       const answered = row.answered === null ? null : (JSON.parse(row.answered) as Extract<EventPayload, { kind: "question_answered" }>);
       const stale = row.stale === null ? null : (JSON.parse(row.stale) as Extract<EventPayload, { kind: "memory_proposal_stale" }>);
@@ -2077,45 +2078,41 @@ function storeChanges(db: Db, window: MetaReviewWindow) {
     .map((entry) => ({ ...metaReviewRow(entry), changes: (["created", "invalidated"] as const).filter((c) => changes.get(entry.id)!.has(c)) }));
 }
 
-/** memory meta-review の材料の節(ADR 0180 決定2、provider 非依存): 窓 `(前回, 今回]` の店の変更・生きている candidate・異議つき
- *  判断・決着した提案と、枝の一覧を、それぞれの読み口と同じ行で組む。上限は置かない。主題 memory の meta-review でなければ null。 */
+/** meta-review の材料の節(ADR 0180 決定2・追記 #1239、provider 非依存): 読み手の窓 `(前回, 今回]` の材料を、主題ごとの部分に
+ *  それぞれの読み口と同じ行で組む。上限は置かない。meta-review でなければ null。 */
 export function buildMetaReviewMaterial(db: Db, taskId: string) {
-  if (metaReviewSubjectOf(db, taskId) !== "memory") return null;
+  const subject = metaReviewSubjectOf(db, taskId);
+  if (subject === null) return null;
   return db.transaction(() => {
     const window = metaReviewWindow(db, taskId);
-    const parts = {
-      store_changes: storeChanges(db, window),
-      candidates: memoryListRows(db, "list_memory_candidates", {}),
-      precedents: precedentRows(db, window),
-      proposals: memoryProposalRows(db, window),
-      branches: metaReviewBranches(db),
-    };
-    const part = (heading: string, note: string, rows: unknown[], empty: string) => [
-      "",
-      `### ${heading}`,
-      "",
-      note,
-      ...(rows.length === 0 ? [`(${empty})`] : rows.map((row) => JSON.stringify(row))),
-    ];
-    const section = [
-      "## Memory meta-review material",
-      "",
-      `This cycle's material, gathered by the board when this session started: changes after event ${window.after} up to and including event ` +
-        `${window.upTo} — the registrations of the previous memory meta-review and of this one. Each row is one JSON object with the fields of the read verb named under its heading.`,
-      ...part(
-        "Store changes",
-        "Rows of list_memory_entries whose entry was created or invalidated in this window, except by a memory meta-review or by the answer to its " +
-          "proposal; changes says which. A moved or restored entry is shown as its latest copy. Candidates are in the next part.",
-        parts.store_changes,
-        "no store changes",
-      ),
-      ...part("Live candidates", "Rows of list_memory_candidates: every candidate not invalidated, whenever it was drafted.", parts.candidates, "no live candidates"),
-      ...part("Objected decisions", "Rows of list_precedents for the objections raised in this window.", parts.precedents, "no objected decisions"),
-      ...part("Settled proposals", "Rows of list_memory_proposals answered or settled as stale in this window.", parts.proposals, "no settled proposals"),
-      ...part("Branches", "Rows of list_memory_branches: the whole tree.", parts.branches, "no branches"),
-    ].join("\n");
-    return { section, previous_watermark: window.after, material_watermark: window.upTo, parts, tokens: countTokens(section) };
+    const material = subject === "routing" ? routingMaterial(db, window) : memoryMaterial(db, window);
+    return { ...material, previous_watermark: window.after, material_watermark: window.upTo, tokens: countTokens(material.section) };
   })();
+}
+
+/** memory の5つの部分: 店の変更・生きている candidate・異議つき判断・決着した提案・枝の一覧。 */
+function memoryMaterial(db: Db, window: Required<MetaReviewWindow>) {
+  const parts = {
+    store_changes: storeChanges(db, window),
+    candidates: memoryListRows(db, "list_memory_candidates", {}),
+    precedents: precedentRows(db, window),
+    proposals: memoryProposalRows(db, window),
+    branches: metaReviewBranches(db),
+  };
+  const section = materialSection("memory", window, [
+    [
+      "Store changes",
+      "Rows of list_memory_entries whose entry was created or invalidated in this window, except by a memory meta-review or by the answer to its " +
+        "proposal; changes says which. A moved or restored entry is shown as its latest copy. Candidates are in the next part.",
+      parts.store_changes,
+      "no store changes",
+    ],
+    ["Live candidates", "Rows of list_memory_candidates: every candidate not invalidated, whenever it was drafted.", parts.candidates, "no live candidates"],
+    ["Objected decisions", "Rows of list_precedents for the objections raised in this window.", parts.precedents, "no objected decisions"],
+    ["Settled proposals", "Rows of list_memory_proposals answered or settled as stale in this window.", parts.proposals, "no settled proposals"],
+    ["Branches", "Rows of list_memory_branches: the whole tree.", parts.branches, "no branches"],
+  ]);
+  return { subject: "memory" as const, section, parts };
 }
 
 /** 材料の節の記録(task 帰属、memory_injected の直後に両 adapter が書く): 両端の watermark、部分ごとに載せた id、token 量。 */
@@ -2127,25 +2124,41 @@ export function recordMetaReviewMaterial(
   material: NonNullable<ReturnType<typeof buildMetaReviewMaterial>>,
   at: Date,
 ): number {
-  const { previous_watermark, material_watermark, parts, tokens } = material;
+  const { previous_watermark, material_watermark, tokens } = material;
+  const common = {
+    kind: "meta_review_material_injected",
+    worker_spawned_event_id: workerSpawnedEventId,
+    previous_watermark,
+    material_watermark,
+    tokens,
+    tokenizer: TOKENIZER.id,
+    tokenizer_version: TOKENIZER.version,
+  } as const;
   return appendEvent(db, {
     taskId,
     workerId: agent,
     origin: "board",
-    payload: {
-      kind: "meta_review_material_injected",
-      worker_spawned_event_id: workerSpawnedEventId,
-      previous_watermark,
-      material_watermark,
-      store_changes: parts.store_changes.map((e) => e.id),
-      candidates: parts.candidates.map((e) => e.id),
-      precedents: parts.precedents.map((p) => p.decision_event_id),
-      proposals: parts.proposals.map((p) => p.question_id),
-      branches: parts.branches.flatMap((b) => b.definitions.map((d) => d.id)),
-      tokens,
-      tokenizer: TOKENIZER.id,
-      tokenizer_version: TOKENIZER.version,
-    },
+    payload:
+      material.subject === "routing"
+        ? {
+            ...common,
+            subject: "routing",
+            shadow: material.parts.shadow.map((row) => row.id),
+            shadow_rows: material.parts.shadow_rows,
+            allocations: material.parts.allocations.counted,
+            cells: material.parts.cells.map((c) => c.first_observed_event_id),
+            rows: material.parts.rows.map((r) => r.event_id),
+            proposals: material.parts.proposals.map((p) => p.question_id),
+          }
+        : {
+            ...common,
+            subject: "memory",
+            store_changes: material.parts.store_changes.map((e) => e.id),
+            candidates: material.parts.candidates.map((e) => e.id),
+            precedents: material.parts.precedents.map((p) => p.decision_event_id),
+            proposals: material.parts.proposals.map((p) => p.question_id),
+            branches: material.parts.branches.flatMap((b) => b.definitions.map((d) => d.id)),
+          },
     at,
   });
 }
