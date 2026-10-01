@@ -356,7 +356,7 @@ it("版が固定の版と違えば、ツール面の probe を撃たずに不成
   const reason = result.available === false ? result.reason : "";
   expect(reason).toContain(PINNED);
   expect(reason).toContain("2.1.290");
-  expect(reason).toContain(`install.sh | bash -s ${PINNED}`);
+  expect(reason).toContain(`claude install ${PINNED}`);
   expect(reason).toContain(`npm install -g @anthropic-ai/claude-code@${PINNED}`);
 });
 

@@ -1399,7 +1399,7 @@ export async function probeClaudeHarnessCapability(
     available: false,
     reason:
       `the board pins Claude CLI ${CLAUDE_CLI_VERSION}, but this host's \`claude --version\` is ${observed || "empty"} — ` +
-      `install the pinned version (native install / Lima VM: \`curl -fsSL https://claude.ai/install.sh | bash -s ${CLAUDE_CLI_VERSION}\`; ` +
+      `install the pinned version (native install / Lima VM: \`claude install ${CLAUDE_CLI_VERSION}\`; ` +
       `npm: \`npm install -g @anthropic-ai/claude-code@${CLAUDE_CLI_VERSION}\`) (ADR 0186)`,
   };
 }
