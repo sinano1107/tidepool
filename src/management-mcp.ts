@@ -17,7 +17,7 @@ import {
   applyExecutionSettingsChange,
   executionSettingsChangeSchema,
   PRIORITY_FIELD_DESCRIPTION,
-  readExecutionSettings,
+  readExecutionSettingsWithQuarantine,
   TIER_FIELD_DESCRIPTION,
 } from "./execution-setting.js";
 import type { GitHubClient } from "./github.js";
@@ -524,11 +524,12 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
     "read_execution_settings",
     {
       description:
-        "Read the board's execution settings: the model table (rows of provider, model, tier, effort, price_in / price_out in USD per MTok), " +
+        "Read the board's execution settings: the model table (rows of provider, model, tier, effort, price_in / price_out in USD per MTok, " +
+        "and quarantine_question_id — the open question naming a row the provider refused to run on this board, or null), " +
         "whether the frontier row may serve as advisor, the Provider rank, the default priority (quality / cost), whether the learner is promoted, " +
         "and the retrospective tier (economy / standard / frontier) shared by the board's own retrospective Board calls (allocation review, attribution, Behavior candidate drafting).",
     },
-    async () => toolResult(readExecutionSettings(deps.db)),
+    async () => toolResult(readExecutionSettingsWithQuarantine(deps.db)),
   );
   server.registerTool(
     "change_execution_settings",
@@ -550,7 +551,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
         throw err;
       }
       deps.pollNow();
-      return toolResult(readExecutionSettings(deps.db));
+      return toolResult(readExecutionSettingsWithQuarantine(deps.db));
     },
   );
   server.registerTool(

@@ -22,7 +22,7 @@ import {
   applyExecutionSettingsChange,
   executionSettingsChangeSchema,
   PRIORITIES,
-  readExecutionSettings,
+  readExecutionSettingsWithQuarantine,
   TIERS,
 } from "./execution-setting.js";
 import { type GitHubClient, OPEN_ISSUES_LIMIT } from "./github.js";
@@ -1619,7 +1619,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   // drift しないため(/api/agents の providers と同じ配線)
   router.get("/settings/execution", (_req, res) => {
     res.json({
-      ...readExecutionSettings(db),
+      ...readExecutionSettingsWithQuarantine(db),
       providers: PROVIDER_OPTIONS,
       tiers: TIERS,
       priorities: PRIORITIES,
@@ -1651,7 +1651,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     validatedWrite(executionSettingsChangeSchema, (change) => {
       applyExecutionSettingsChange(db, change, "webui", clock.now());
       pollNow();
-      return readExecutionSettings(db);
+      return readExecutionSettingsWithQuarantine(db);
     }),
   );
 

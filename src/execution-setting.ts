@@ -3,7 +3,7 @@ import { isClaudeModelAlias } from "./claude-model-alias.js";
 import type { Db } from "./db.js";
 import { appendEvent, type EventOrigin } from "./events.js";
 import { PROVIDER_VALUES, type Provider } from "./provider.js";
-import { openQuarantineValues, tableRowValue } from "./quarantine.js";
+import { openQuarantineQuestions, openQuarantineValues, tableRowValue } from "./quarantine.js";
 import type { AgentDefinition } from "./registry.js";
 import { DomainError, HUMAN_WORKER_ID, type RegistryProposal, type RoutingProposal, type RoutingRowProposal, settleQuestionAsObserved, type Task } from "./tasks.js";
 
@@ -359,6 +359,20 @@ export function readExecutionSettings(db: Db): ExecutionDefaults & { table: Exec
   return { table: loadExecutionSettingTable(db), ...loadExecutionDefaults(db) };
 }
 
+/** 人間の2つの扉(settings タブ・管理MCP)の読み口: 各行に、開いている行の Quarantine の question id(無ければ null)を
+ *  添える(ADR 0184 決定6)。meta-review の材料と worker の読み口は `readExecutionSettings` のまま。 */
+export function readExecutionSettingsWithQuarantine(db: Db) {
+  const settings = readExecutionSettings(db);
+  const open = openQuarantineQuestions(db, "tableRow");
+  return {
+    ...settings,
+    table: settings.table.map((row) => ({
+      ...row,
+      quarantine_question_id: open.get(tableRowValue(row.provider, row.model)) ?? null,
+    })),
+  };
+}
+
 /** Provider 順位として書けるのは `PROVIDER_VALUES` の**順列**だけ —— 欠けた Provider は
  *  selector の `indexOf` が -1 になって先頭に並び、重複は順位を二重に言う。 */
 function isProviderRank(rank: readonly string[]): rank is Provider[] {
@@ -503,8 +517,19 @@ export function applyExecutionSettingsChange(db: Db, change: ExecutionSettingsCh
     });
     // 回答中の question は answerQuestion が先に done にしているので、承認した提案が自分自身を決着させることは無い
     settleStaleProposals(db, at, eventId);
+    settleRemovedRowQuarantines(db, at, eventId);
     return eventId;
   })();
+}
+
+/** 行の Quarantine の解除の門1(ADR 0184 決定5): その (provider, model) の行が表から無くなった Quarantine の question を、
+ *  回答なしで盤面名義に決着させる。誰も判断していないので decision log には載せない(CONTEXT.md「Decision log」)。 */
+function settleRemovedRowQuarantines(db: Db, at: Date, observedEventId: number): void {
+  const rows = new Set(loadExecutionSettingTable(db).map((row) => tableRowValue(row.provider, row.model)));
+  for (const [value, id] of openQuarantineQuestions(db, "tableRow")) {
+    if (rows.has(value!)) continue;
+    settleQuestionAsObserved(db, id, { kind: "quarantine_released", quarantine: "tableRow", value, observed_event_id: observedEventId }, at);
+  }
 }
 
 /** registry の agent 一覧を読む口(registry の無い盤面では無い)。registry の提案の (agent, tier) の照合が読む。 */

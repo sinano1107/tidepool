@@ -31,6 +31,8 @@ interface TpQuestion {
   candidateId?: number;
   /** comment が要る選択肢(memory の提案 question の reject / defer、ADR 0159 決定3・ADR 0165 決定3)。 */
   needsComment?: string[];
+  /** 行の Quarantine の question(ADR 0184 決定6)—— settings タブを開くボタンを持つ。 */
+  opensSettings?: boolean;
 }
 /** approve に添える修正値。空欄は送らない(memory の宛先の null = 全員は送る)。 */
 type TpAmendment = {
@@ -340,8 +342,10 @@ function TpMemoryAmendment({ candidateId, onTranslate, onChange, onDeadAddressee
 // render this same card. The question card's own toggle (one of the 3
 // switches ADR 0063's table enumerates): translates `purpose`/items'
 // title+detail, never the options an answer is picked from.
-function TpQuestionCard({ q, answer, onAnswer, locked = false, onTranslate }: {
+function TpQuestionCard({ q, answer, onAnswer, locked = false, onTranslate, onOpenSettings }: {
   q: TpQuestion;
+  /** `q.opensSettings` の question のボタンが撃つ。 */
+  onOpenSettings?: () => void;
   /** 盤面が確定した回答 —— 未回答は null(呼び手は id 引きの map)。 */
   answer?: string[] | null;
   /** amendment は修正値を添えられる提案を approve したときだけ、入力があれば渡る。 */
@@ -407,6 +411,11 @@ function TpQuestionCard({ q, answer, onAnswer, locked = false, onTranslate }: {
           : <div style={{ marginBottom: q.note ? 6 : 14 }}><TpTranslationNote result={translation} /></div>
       )}
       {q.note && <div style={{ fontSize: 'var(--text-xs)', color: 'var(--sun-4)', marginBottom: 14 }}>⚠ {q.note}</div>}
+      {q.opensSettings && onOpenSettings && !locked && (
+        <div style={{ marginBottom: 14 }}>
+          <Button variant="secondary" size="sm" onClick={onOpenSettings}>Open settings</Button>
+        </div>
+      )}
       {q.amendable === 'agent_tier' && !locked && (
         <div style={{ display: 'flex', gap: 8, marginBottom: 14 }}>
           <Select label="Amend target tier (optional)" value={amendment.to ?? ''} onChange={(e) => setAmendment({ ...amendment, to: e.target.value })}
@@ -606,7 +615,7 @@ function commitPendingObjectionKeys(log: TpLogEntry[], localObjections: Record<s
 // staged S3 queue, loadLanding re-reads the landing questions' answerability.
 // onCommit always closes the flow.
 // biome-ignore lint/correctness/noUnusedVariables: rendered by webui/app.tsx — one concatenated bundle
-function TriageScreen({ data, onCommit, loadHandoff, onAnswer, onObject, onScratchAdd, onDisplayed, loadPreview, loadLanding, onTranslate, onOpenMemoryEntry }: {
+function TriageScreen({ data, onCommit, loadHandoff, onAnswer, onObject, onScratchAdd, onDisplayed, loadPreview, loadLanding, onTranslate, onOpenMemoryEntry, onOpenSettings }: {
   data: { questions: TpTriageQuestion[]; log: TpLogEntry[]; scratchpad?: TpScratchLine[] };
   onCommit: (
     answers: Record<string, string[]>,
@@ -622,6 +631,7 @@ function TriageScreen({ data, onCommit, loadHandoff, onAnswer, onObject, onScrat
   loadLanding: () => Promise<Record<string, { blocked_by: string | null }>>;
   onTranslate?: TpTranslateFn;
   onOpenMemoryEntry: (id: number) => void;
+  onOpenSettings: () => void;
 }) {
   const { Button, Input, LogEntry, Switch } = window.TidepoolDesignSystem_8a0ead;
   // 着地 question(`landing` を持つ行)は merge 判断ステップの持ち物 — 先頭の質問
@@ -887,7 +897,7 @@ function TriageScreen({ data, onCommit, loadHandoff, onAnswer, onObject, onScrat
         <div>
           {generalQuestions.map((q, i) => (
             <div key={q.id} className="tp-rise" style={{ animationDelay: `${180 + i * 90}ms` }}>
-              <TpQuestionCard q={q} answer={answers[q.id]} onAnswer={(a, amendment, comment) => answerQ(q, a, amendment, comment)} locked={!!answers[q.id]} onTranslate={onTranslate} />
+              <TpQuestionCard q={q} answer={answers[q.id]} onAnswer={(a, amendment, comment) => answerQ(q, a, amendment, comment)} locked={!!answers[q.id]} onTranslate={onTranslate} onOpenSettings={onOpenSettings} />
             </div>
           ))}
         </div>

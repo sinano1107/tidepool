@@ -18,7 +18,8 @@ type SettingsBaseDir = WireContract['GET /api/workspaces']['workspacesBaseDir'];
 type SettingsAgent = WireContract['GET /api/agents']['agents'][number];
 type SettingsProfile = WireContract['GET /api/profiles']['profiles'][number];
 type SettingsExecution = WireContract['GET /api/settings/execution'];
-type SettingsExecutionRow = SettingsExecution['table'][number];
+/** 書ける行の欄(読み口の `quarantine_question_id` は盤面が添えるもので、書き戻さない)。 */
+type SettingsExecutionRow = Omit<SettingsExecution['table'][number], 'quarantine_question_id'>;
 
 function registryNameOk(name: string) {
   const v = name.trim();
@@ -2168,7 +2169,15 @@ function ExecutionTableCard({ settings, say, onSaved, edit }: {
         {!open && settings.table.map((row) => (
           <div key={rowKey(row)} style={{ display: 'flex', gap: 12, fontFamily: 'var(--font-mono)', fontSize: 'var(--text-xs)' }}>
             <span style={{ color: 'var(--text-muted)', minWidth: 140 }}>{row.provider} · {row.tier}</span>
-            <span>{row.model} · {row.effort} · ${row.price_in} / ${row.price_out}</span>
+            <span>
+              {row.model} · {row.effort} · ${row.price_in} / ${row.price_out}
+              {/* 行の Quarantine(ADR 0184 決定6): question は `?question=` の deep link で開く */}
+              {row.quarantine_question_id && (
+                <span style={{ color: 'var(--sun-4)' }}>
+                  {' · cannot run · '}<a href={`?question=${row.quarantine_question_id}`} style={{ color: 'var(--tide-4)' }}>see question</a>
+                </span>
+              )}
+            </span>
           </div>
         ))}
         {open && (
