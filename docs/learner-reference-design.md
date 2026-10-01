@@ -14,16 +14,19 @@ try/catch)。review task では学習器を参照しない(ADR 0111 決定3)。�
 
 ## セル
 
-セルは観測された具体の `(provider, model, effort, advisor)`。
+セルは spawn 時の pin の綴りの `(provider, model, effort, advisor)`(`worker_spawned` の値)。
 
-- `model` は `worker_exited.usage.models` の鍵のうち spawn の pin(表の綴り)に当たるものが
-  **ちょうど1つ**ならその具体 id、そうでなければ pin の綴り。alias 行(`fable`)は世代が進むと
-  `claude-fable-5` → `claude-fable-5-1` のように別セルになり、どちらも表の同じ行に当たる。
+- `model` は spawn の **pin**(表の綴り)。表の行は具体 id だけなので、pin がそのまま世代を名指す
+  (ADR 0182 決定1・3)。`worker_exited.usage.models` の内訳から id を引き当てない —— 内訳が読めない
+  session も世代を失わない。世代が進むのは人間が新しい行を足したときで、新しい行は別セルとして
+  薄く始まる。
 - `advisor` は spawn 時の **pin**(`worker_spawned.advisor`)。相談回数(`usage.advisor.consultations`)
   は読まない —— 「pin あり・相談0回」を advisor 無しのセルに合流させると両セルの受理率が歪む
   (ADR 0110 退けた案、AC4)。`usage.models` の内訳から advisor を推定しない(events.ts の注記)。
-- セルと表の候補行の照合は `windowMatchesModel(候補の綴り, 観測された id)` —— 除外の照合と同じ
-  1つの式(issue #544)。advisor も pin どうしを同じ式で照合する。
+- セルと表の候補行の照合は **完全一致**(provider / model / effort / advisor のすべて)。部分一致だと
+  `claude-opus-5` の行が `claude-opus-5-5` の観測を拾う。Throttle の窓の照合(`windowMatchesModel`)は
+  系列単位の枠なので部分一致のままで、学習器とは別の式である(ADR 0182 決定3)。拒否一覧から漏れた
+  alias の行は、pin の綴りのまま自分の行にだけ当たる。
 
 文脈のうちセルを割るのは **workspace** だけ(プーリングの段)。要求ティアは候補集合を既に絞って
 いる(ティアは床、ADR 0114 決定3)。優先順位は推薦の呼び手が task から
@@ -80,8 +83,10 @@ pool として扱う。
 
 1. 候補(除外を当てた後、selector の並び)ごとに事後平均を出す。比較は整数の交差乗算
    (`(1+A_a)(1+A_b+R_b)` vs `(1+A_b)(1+A_a+R_a)`)で、浮動小数の同点で決定論が崩れない。
-2. 先頭が未観測(数えた受理・却下が0件)なら推薦は先頭。先頭に観測があれば、観測のある候補だけを事後平均の
-   降順に並べる —— 未観測の候補へは移らない(ADR 0181)。同点は selector の並びのまま。
+2. 先頭が未観測(数えた受理・却下が0件)なら推薦は先頭。先頭に観測があれば、観測のある候補が先頭に勝つかを
+   1つずつ比べる —— 未観測の候補へは移らない(ADR 0181)。先頭の観測数が候補より少ないあいだは却下数で比べ、
+   先頭の却下が多いときだけ候補が勝つ(先頭が残りを全部受理しても追いつけない、ADR 0182 決定4)。それ以外は
+   事後平均で比べる。勝つ候補が無ければ先頭、あればその中で事後平均の降順の1番目。同点は selector の並びのまま。
 3. task の優先順位が `cost` のときだけ、同点の間で観測された session 費用の平均(小さい順)が鍵になる。
    **両方に観測があるときに限る**。`quality` では Provider 順位が selector の並びに既に入っている
    ので費用は読まない。
@@ -94,8 +99,8 @@ pool として扱う。
 
 `learner_shadow (id, task_id, cell_recommended, cell_actual, source, basis, record_recommended, record_actual, candidates, event_watermark, created_at)`。`source` は selector の出所
 `{tier, provider}`(`worker_spawned.source` と同じ綴り、spawn に辿り着かなかった pickup でも読める)。セルは
-`{provider, model, effort, advisor}` の JSON(実行設定の形 —— pickup 時点では具体 id は未観測なので
-表の綴り)。spawn 前に書くので `worker_spawned` の id は持たず、task_id と時刻で session に並ぶ。
+`{provider, model, effort, advisor}` の JSON(実行設定の形 —— 表の綴りで、episode のセルと
+同じ綴りになる)。spawn 前に書くので `worker_spawned` の id は持たず、task_id と時刻で session に並ぶ。
 `record_*` は両セルのその pickup 時点の実績(盤面の段と workspace の段の受理・却下、疑似観測を含まない)、
 `candidates` は除外を当てた後の候補の行数(ADR 0181 決定5)。読み手は routing meta-review。
 
