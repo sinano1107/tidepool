@@ -301,8 +301,9 @@ it("人間の直接の降格は open な降格提案を観測で決着させ、r
 
 /** 行の Quarantine(行の拒否、ADR 0184)の解除の門1。404 は fake worker で起こさず、Quarantine を直に登録する。 */
 const quarantineRow = (provider: Provider, model: string) => {
-  registerQuarantine(t.db, "tableRow", tableRowValue(provider, model), "refused in a test", t.clock.now());
-  return openQuarantineQuestion(t.db, "tableRow", tableRowValue(provider, model))!.id;
+  const value = tableRowValue(provider, model);
+  registerQuarantine(t.db, "tableRow", value, "refused in a test", t.clock.now());
+  return openQuarantineQuestion(t.db, "tableRow", value)!.id;
 };
 const SONNET = { provider: "anthropic", tier: "economy", model: "claude-sonnet-5-5", effort: "high", price_in: 2, price_out: 10 } as const;
 
@@ -366,8 +367,7 @@ it("GET /api/settings/execution は Quarantine 中の行にその question の i
   const questionId = quarantineRow("anthropic", "claude-sonnet-5-5");
 
   const { table } = await state();
-  expect(table.find((row: any) => row.model === "claude-sonnet-5-5").quarantine_question_id).toBe(questionId);
-  expect(table.filter((row: any) => row.model !== "claude-sonnet-5-5").map((row: any) => row.quarantine_question_id)).toEqual(
-    SEED_EXECUTION_SETTINGS.slice(1).map(() => null),
-  );
+  expect(table.filter((row: any) => row.quarantine_question_id !== null).map((row: any) => [row.model, row.quarantine_question_id])).toEqual([
+    ["claude-sonnet-5-5", questionId],
+  ]);
 });
