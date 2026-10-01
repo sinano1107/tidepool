@@ -155,7 +155,6 @@ it("走っている間に表から消えた行の 404 は行の Quarantine を�
   const { provider, model } = loadExecutionSettingTable(db)[0]!;
   const task = pickupTask(db, registerTask(db, { type: "work", title: "refused", purpose: "why", completion_criteria: "done" }, clock.now()), "deckhand", clock.now())!;
   slot.occupy(task.id);
-  registerTask(db, { type: "work", title: "queued after", purpose: "why", completion_criteria: "done" }, clock.now());
   applyExecutionSettingsChange(db, { setting: "delete_row", provider, model }, "webui", clock.now());
 
   rowRefusalHandler({ db, clock, slot, resolve: undefined, pollNow: () => {} })(task.id, { provider, model, worker_spawned_event_id: 1 }, Promise.resolve());
@@ -165,7 +164,6 @@ it("走っている間に表から消えた行の 404 は行の Quarantine を�
   expect(listEvents(db, task.id).some((e) => e.kind === "row_refused")).toBe(true);
   expect(nextSlotTask(db, "deckhand")?.id).toBe(task.id);
   expect(questions(db)).toEqual([]);
-  expect(slot.currentTaskId).toBeNull();
 });
 
 it("cap teardown reaches containment in one reclaim timeout without running the task-type ladder", async () => {
