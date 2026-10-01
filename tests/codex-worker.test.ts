@@ -723,6 +723,38 @@ thread's history always fails.`));
     }
   });
 
+  /** ADR 0188: stdout に event を流して exit し、worker_exited の reported_error を読む。 */
+  async function reportedErrorAfter(id: string, events: object[]): Promise<unknown> {
+    const f = await fixture();
+    const value = task(f.db, id);
+    f.start(value);
+    f.process.processes[0]!.stdout.write(events.map((event) => `${JSON.stringify(event)}\n`).join(""));
+    f.process.emitExit(1, null);
+    const exited = listEvents(f.db, value.id).find((event) => event.kind === "worker_exited");
+    return (exited?.payload as { reported_error?: unknown }).reported_error;
+  }
+
+  it("turn.failed の error.message を入れ子の JSON も解かず逐語で reported_error に載せる(ADR 0188 / #1256)", async () => {
+    const message =
+      '{"type":"error","status":400,"error":{"type":"invalid_request_error","message":"The \'gpt-4\' model is not supported when using Codex with a ChatGPT account."}}';
+    expect(await reportedErrorAfter("codex-turn-failed", [{ type: "turn.failed", error: { message } }])).toBe(message);
+  });
+
+  it("error event だけで turn.failed の無い exit は reported_error null —— 再試行の文で代用しない(ADR 0188 決定3)", async () => {
+    expect(
+      await reportedErrorAfter("codex-error-only", [{ type: "error", message: "Reconnecting... 1/5", will_retry: true }]),
+    ).toBeNull();
+  });
+
+  it("turn.failed が2つあれば最後の message を載せる(ADR 0188)", async () => {
+    expect(
+      await reportedErrorAfter("codex-turn-failed-twice", [
+        { type: "turn.failed", error: { message: "first" } },
+        { type: "turn.failed", error: { message: "second" } },
+      ]),
+    ).toBe("second");
+  });
+
   it("spawn 自体の失敗(syscall が \"spawn\" で始まる)は盤面側の一撃を呼び、spawn 族でない error は呼ばず spawn_failed も書かない(ADR 0118)", async () => {
     const calls: Array<[string, { error_code: string | null; message: string }]> = [];
     const f = await fixture((taskId, failure) => calls.push([taskId, failure]));
@@ -750,7 +782,7 @@ thread's history always fails.`));
     f.process.emitExit(null, "SIGSEGV");
 
     expect(calls).toEqual([
-      [value.id, { exit_code: null, signal: "SIGSEGV", stderr_tail: "boom" }, { exitedRecorded: true, forced: true }],
+      [value.id, { exit_code: null, signal: "SIGSEGV", stderr_tail: "boom", reported_error: null }, { exitedRecorded: true, forced: true }],
     ]);
   });
 

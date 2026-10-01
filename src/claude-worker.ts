@@ -882,6 +882,17 @@ export function readResultEvent(parsed: Record<string, unknown> | null): StreamR
   return isStreamResultEvent(parsed) ? parsed : null;
 }
 
+/** ADR 0188: the failure the CLI reported on an `is_error` result line, verbatim — the
+ *  API error's `result` (with its status when numeric), else the CLI-side `errors`.
+ *  Display only, read separately so `readResultEvent` keeps dropping these lines (#534). */
+function readReportedError(parsed: Record<string, unknown> | null): string | null {
+  if (parsed?.type !== "result" || parsed.is_error !== true) return null;
+  const { result, errors, api_error_status: status } = parsed;
+  const text = typeof result === "string" ? result : Array.isArray(errors) ? errors.join("\n") : "";
+  if (!text) return null;
+  return typeof status === "number" ? `API error status ${status}: ${text}` : text;
+}
+
 function isCliAuthFailure(parsed: Record<string, unknown> | null): boolean {
   return parsed?.type === "result" && isCliAuthFailureEnvelope(parsed);
 }
@@ -2151,6 +2162,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     let cliAuthFailed = false;
     let capInterrupted = false;
     let rowRefused = false;
+    let reportedError: string | null = null;
     let buffered = "";
     // 面の照合は init 行1本で答えが出る(それ以降の行を JSON.parse し直す理由がない)
     let toolSurfaceObserved = false;
@@ -2170,6 +2182,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
         cliAuthFailed ||= isCliAuthFailure(parsed);
         capInterrupted ||= isCapInterruption(parsed);
         rowRefused ||= isRowRefusal(parsed);
+        reportedError = readReportedError(parsed) ?? reportedError;
         advisorObserved.consultations += countAdvisorConsultations(parsed);
         advisorObserved.mainModel = readInitModel(parsed) ?? advisorObserved.mainModel;
         if (!toolSurfaceObserved) {
@@ -2210,10 +2223,16 @@ export class ClaudeCodeWorker implements WorkerAdapter {
       cliAuthFailed ||= isCliAuthFailure(finalParsed);
       capInterrupted ||= isCapInterruption(finalParsed);
       rowRefused ||= isRowRefusal(finalParsed);
+      reportedError = readReportedError(finalParsed) ?? reportedError;
       // 文字の途中で stream が閉じた場合の未完バイト列を flush(この場合の
       // 置換文字は捏造ではなく「途中で切れた」事実そのもの)
       stderrBuffered = trimStderrTail(stderrBuffered + stderrDecoder.end());
-      const exit: WorkerExit = { exit_code: code, signal, stderr_tail: stderrTail(stderrBuffered) };
+      const exit: WorkerExit = {
+        exit_code: code,
+        signal,
+        stderr_tail: stderrTail(stderrBuffered),
+        reported_error: reportedError,
+      };
       // this diagnostic used to live in defaultSpawn (console.error only);
       // promoted here alongside the worker_exited write so an operator
       // tailing logs still sees a crash, not just the audit record (issue #32)

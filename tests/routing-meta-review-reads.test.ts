@@ -53,6 +53,7 @@ function board() {
         exit_code: 0,
         signal: null,
         stderr_tail: null,
+        reported_error: null,
         worker_spawned_event_id: spawned,
         usage: { ...tokens, advisor: null, models: Object.fromEntries(models.map((m) => [m, tokens])) },
       },

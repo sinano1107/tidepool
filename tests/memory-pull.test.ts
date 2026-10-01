@@ -625,7 +625,7 @@ it("episode 行の無い同じ task の複数 session は、それぞれの窓�
   const append = (payload: TaskScopedPayload) => appendEvent(db, { taskId: FIXTURE_TASK, workerId: "tako", origin: "worker", payload, at });
   // 2つ目の session: decision を書かずに exit
   const silent = append(WORKER_SPAWNED);
-  append({ kind: "worker_exited", exit_code: 1, signal: null, stderr_tail: null, worker_spawned_event_id: silent, usage: null });
+  append({ kind: "worker_exited", exit_code: 1, signal: null, stderr_tail: null, reported_error: null, worker_spawned_event_id: silent, usage: null });
   // 3つ目の session: decision を書いたが完了していない(exit も無い)
   const open = append(WORKER_SPAWNED);
   const retried = append({ kind: "decision_logged", line: "retried with a shorter note" });
