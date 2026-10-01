@@ -683,6 +683,25 @@ it("answer_question は人間名義かつ mcp origin で question を回答す�
   }
 });
 
+it("answer_question は HTTP と同じ回答の schema を使い、空文字の回答を断って question を open のまま残す(issue #1310)", async () => {
+  t = await bootTidepool();
+  const question = registerQuestion(t, {
+    title: "which tide gauge?",
+    purpose: "choose the data source",
+    completion_criteria: "one source is selected",
+    question: [{ title: "source", options: ["NOAA", "JMA"], recommendation: "JMA" }],
+  });
+  const client = await managementMcpClient(t.baseUrl);
+  try {
+    const result: any = await client.callTool({ name: "answer_question", arguments: { task_id: question.id, answers: [""] } });
+    expect(result.isError).toBe(true);
+    const got: any = readToolPayload(await client.callTool({ name: "get_task", arguments: { task_id: question.id } }));
+    expect(got).toMatchObject({ status: "todo", question_answer: null });
+  } finally {
+    await client.close();
+  }
+});
+
 it("answer_question の結果は assignee 未指定の question を直後の get_task と同じ解決で返す(issue #1220)", async () => {
   t = await bootTidepool();
   const question = registerQuestion(t, {

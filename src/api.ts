@@ -29,6 +29,7 @@ import { type GitHubClient, OPEN_ISSUES_LIMIT } from "./github.js";
 import { githubLoggedIn } from "./github-auth.js";
 import {
   addIssueCommentThroughHumanDoor,
+  answerInputSchema,
   assertMemoryReferencesKnown,
   cancelThroughHumanDoor,
   completeThroughHumanDoor,
@@ -380,19 +381,7 @@ const completeTaskSchema = z.object({
   handoff: z.partialRecord(z.enum(HANDOFF_FIELDS), z.string()).optional(),
 });
 
-// one answer per question item, in item order (issue #30) — the domain
-// enforces the length match against the question's own item count so callers
-// get a domain error, not a schema error, on a partial submission
-const answerSchema = z.object({
-  answers: z.array(z.string().min(1)).min(1),
-  triage: z.boolean().optional(),
-  // the steering channel for a reject's reason (issue #40) — optional here;
-  // which answers require it is the domain gate's call (ADR 0179), carried
-  // through verbatim onto the question_answered event
-  comment: z.string().min(1).optional(),
-  // routing の提案の approve に添える修正値(ADR 0150 決定2)。形は提案の種別ごとなので、検査は submitAnswer が持つ
-  amendment: z.record(z.string(), z.unknown()).optional(),
-});
+const answerSchema = answerInputSchema.extend({ triage: z.boolean().optional() });
 
 const cursorSchema = z.object({
   last_read: z.number().int().nonnegative(),
