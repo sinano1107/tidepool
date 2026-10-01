@@ -344,8 +344,8 @@ function TpQuestionCard({ q, answer, onAnswer, locked = false, onTranslate, onOp
   const [comment, setComment] = React.useState("");
   const setItemAnswer = (i, value) => setDraft(draft.map((v, j) => j === i ? value : v));
   const disabledOptions = deadAddressee ? ["approve"] : [];
-  const needsComment = draft.filter((v) => v && q.needsComment?.includes(v));
-  const canSubmit = draft.every(Boolean) && !draft.some((v) => disabledOptions.includes(v)) && (needsComment.length === 0 || !!comment.trim());
+  const pickedNeedingComment = draft.filter((v) => v && q.needsComment?.includes(v));
+  const canSubmit = draft.every(Boolean) && !draft.some((v) => disabledOptions.includes(v)) && (pickedNeedingComment.length === 0 || !!comment.trim());
   const [submitting, setSubmitting] = React.useState(false);
   const submit = () => {
     setSubmitting(true);
@@ -390,12 +390,12 @@ function TpQuestionCard({ q, answer, onAnswer, locked = false, onTranslate, onOp
   )), !locked && /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 14 } }, /* @__PURE__ */ React.createElement(
     Input,
     {
-      label: needsComment.length ? `Comment (required to ${needsComment.join(" / ")})` : "Comment (optional)",
+      label: pickedNeedingComment.length ? `Comment (required to ${pickedNeedingComment.join(" / ")})` : "Comment (optional)",
       multiline: true,
       rows: 2,
       value: comment,
       onChange: (e) => setComment(e.target.value),
-      placeholder: "why \u2014 whoever acts on this answer reads it"
+      placeholder: "why"
     }
   )), items.length > 1 && !locked && /* @__PURE__ */ React.createElement("div", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--tide-4)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 12 } }, answeredCount, " of ", items.length, " answered \u2014 sent together on Submit"), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 18 } }, items.map((item, i) => /* @__PURE__ */ React.createElement(
     TpQuestionItemPicker,

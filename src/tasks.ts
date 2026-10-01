@@ -1230,7 +1230,7 @@ export function assertAnswerable(question: Task, answers: string[], comment: str
   }
   const needs = needsComment(question).filter((option) => answers.includes(option));
   if (needs.length > 0 && !comment?.trim()) {
-    throw new DomainError(`answering ${needs.join(" / ")} to this question requires a comment saying why`);
+    throw new DomainError(`answering ${needs.join(" / ")} to this question requires a non-blank comment: why, or for a defer what is still undecided`);
   }
 }
 

@@ -365,9 +365,9 @@ function TpQuestionCard({ q, answer, onAnswer, locked = false, onTranslate, onOp
   const setItemAnswer = (i: number, value: string | null) => setDraft(draft.map((v, j) => (j === i ? value : v)));
   const disabledOptions = deadAddressee ? ['approve'] : [];
   // picked options the board says need a reason (ADR 0179 決定5): pickable, but not submittable while the comment is blank
-  const needsComment = draft.filter((v) => v && q.needsComment?.includes(v));
+  const pickedNeedingComment = draft.filter((v) => v && q.needsComment?.includes(v));
   // a pick made before the addressee turned out dead is not submittable either
-  const canSubmit = draft.every(Boolean) && !draft.some((v) => disabledOptions.includes(v!)) && (needsComment.length === 0 || !!comment.trim());
+  const canSubmit = draft.every(Boolean) && !draft.some((v) => disabledOptions.includes(v!)) && (pickedNeedingComment.length === 0 || !!comment.trim());
   // triage marks the card answered only after the POST resolves, so Submit stays pressable until then
   const [submitting, setSubmitting] = React.useState(false);
   const submit = () => {
@@ -437,8 +437,8 @@ function TpQuestionCard({ q, answer, onAnswer, locked = false, onTranslate, onOp
       )}
       {!locked && (
         <div style={{ marginBottom: 14 }}>
-          <Input label={needsComment.length ? `Comment (required to ${needsComment.join(' / ')})` : 'Comment (optional)'} multiline rows={2} value={comment} onChange={(e) => setComment(e.target.value)}
-            placeholder="why — whoever acts on this answer reads it" />
+          <Input label={pickedNeedingComment.length ? `Comment (required to ${pickedNeedingComment.join(' / ')})` : 'Comment (optional)'} multiline rows={2} value={comment} onChange={(e) => setComment(e.target.value)}
+            placeholder="why" />
         </div>
       )}
       {items.length > 1 && !locked && (

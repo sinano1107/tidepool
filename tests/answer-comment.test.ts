@@ -1,6 +1,6 @@
 import { afterEach, expect, it } from "vitest";
 import { openDb } from "../src/db.js";
-import { answerQuestion, DomainError, type RegisterTaskInput, registerTask } from "../src/tasks.js";
+import { answerQuestion, DomainError, getTask, type RegisterTaskInput, registerTask } from "../src/tasks.js";
 import { api, bootTidepool, HOUR, mcpClient, registerWork, type Tidepool } from "./harness.js";
 
 let t: Tidepool;
@@ -92,7 +92,7 @@ it("復帰した親の get_current_task に、reject 理由の comment が answe
   }
 });
 
-it("comment が空白だけの承認 question の reject は HTTP で 409 になり、question は open のまま(ADR 0179 決定2)", async () => {
+it("comment が空白だけの承認 question の reject は HTTP で 409 になり question は open のまま、理由つきなら通り復帰した親の history に answer と comment が並ぶ(ADR 0179 決定2)", async () => {
   t = await bootTidepool();
   const parent = await registerWork(t, "parent");
   await t.clock.advance(HOUR);
@@ -108,6 +108,18 @@ it("comment が空白だけの承認 question の reject は HTTP で 409 にな
   expect((await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, { answers: ["reject"], comment: " " })).status).toBe(409);
 
   expect((await api(t.baseUrl, "GET", `/api/tasks/${question.id}`)).json).toMatchObject({ status: "todo", question_answer: null });
+
+  // 理由つきなら通り、復帰した親の history に answer と comment が並ぶ
+  expect((await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, { answers: ["reject"], comment: "別の子にしなくていい" })).status).toBe(200);
+  const resumed = await mcpClient(t.mcpBaseUrl, parent.id);
+  try {
+    const result: any = await resumed.callTool({ name: "get_current_task", arguments: {} });
+    expect(JSON.parse(result.content[0].text).history).toMatchObject([
+      { decision: "needs sign-off", children: [{ status: "done", answer: ["reject"], comment: "別の子にしなくていい" }] },
+    ]);
+  } finally {
+    await resumed.close();
+  }
 });
 
 // 理由必須の門(ADR 0179 決定1〜4)は domain 層の answerQuestion に置く —— どの扉から来ても同じ。
@@ -155,6 +167,7 @@ it.each([
 ] as const)("%s の question への %s は comment が空・空白だけなら domain error で断り、comment があれば通る(ADR 0179 決定1・2・4)", (kind, answer) => {
   const { db, question } = domainQuestion(kind);
   for (const comment of [undefined, "", " \n "]) expect(() => answerQuestion(db, question, [answer], at, undefined, comment)).toThrow(DomainError);
+  expect(getTask(db, question.id)).toMatchObject({ status: "todo", question_answer: null });
   expect(answerQuestion(db, question, [answer], at, undefined, "why").question.status).toBe("done");
 });
 
