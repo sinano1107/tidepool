@@ -731,7 +731,7 @@ thread's history always fails.`));
     f.process.processes[0]!.stdout.write(events.map((event) => `${JSON.stringify(event)}\n`).join(""));
     f.process.emitExit(1, null);
     const exited = listEvents(f.db, value.id).find((event) => event.kind === "worker_exited");
-    return (exited?.payload as { reported_error?: unknown }).reported_error;
+    return (exited!.payload as { reported_error?: unknown }).reported_error;
   }
 
   it("turn.failed の error.message を入れ子の JSON も解かず逐語で reported_error に載せる(ADR 0188 / #1256)", async () => {

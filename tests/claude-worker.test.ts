@@ -2526,7 +2526,7 @@ describe("ClaudeCodeWorker", () => {
     processes[0]!.stdout.write(lines.map((line) => `${JSON.stringify(line)}\n`).join(""));
     emitExit(1, null);
     const exited = listEvents(db, "task-reported-error").find((e) => e.kind === "worker_exited");
-    return (exited?.payload as { reported_error?: unknown }).reported_error;
+    return (exited!.payload as { reported_error?: unknown }).reported_error;
   }
 
   it("is_error の success 行は result を、api_error_status が数値なら前に添えて reported_error に載せる(ADR 0188)", async () => {
