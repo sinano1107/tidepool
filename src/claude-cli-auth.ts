@@ -47,7 +47,7 @@ export const cliAuthCommandThrough =
  * does not declare an empty tool surface. */
 export function createClaudeCliAuthCheck(command: CliAuthCommand): CliAuthCheck {
   return () =>
-    runProbe(
+    runAuthProbe(
       command,
       [
         ...pinnedModelFlags("haiku", "low"),
@@ -87,12 +87,13 @@ export function createMoonshotCliAuthCheck(
     }
     // 予算は kimi-k3[1m] 最小1ターンの実測 $0.057〜$0.122(2026-08-24 ライブ実測、issue #447)
     // の約2倍。$0.01 では probe が必ず error_max_budget_usd で止まり quarantine 解除不能になる(issue #466)
-    return runProbe(command, ["--max-turns", "1", "--max-budget-usd", "0.25", "--safe-mode"], env);
+    return runAuthProbe(command, ["--max-turns", "1", "--max-budget-usd", "0.25", "--safe-mode"], env);
   };
 }
 
 /** 行の Quarantine の回答時の probe(ADR 0184 決定5): 認証 probe と同じ形に、その id の
- *  `--model` を付ける。 */
+ *  `--model` を付ける。予算は認証 probe と同じ値で足りる —— 上限はターンが走った後に判定され、
+ *  上限で止まっても「走った」と読む(`runModelProbe`)ので、#466 の解除不能はここでは起きない。 */
 export function createClaudeModelProbe(command: CliAuthCommand): ModelProbe {
   return (model) =>
     runModelProbe(
@@ -150,7 +151,7 @@ async function probeEnvelope(
   }
 }
 
-async function runProbe(
+async function runAuthProbe(
   command: CliAuthCommand,
   extraArgs: string[],
   env: NodeJS.ProcessEnv,

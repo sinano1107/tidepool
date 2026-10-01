@@ -84,7 +84,6 @@ it("404 で終わった session は行の Quarantine を1枚立て、failure que
   expect(more).toEqual([]);
   expect(question.title).toBe("execution-setting row anthropic / claude-sonnet-5-5 cannot run on this board");
   expect(question.question_items[0].options).toEqual(["the row can run again"]);
-  expect(question.purpose).not.toMatch(/retire/i);
   const [registered] = await events(question.id);
   expect({ worker: registered.worker_id, origin: registered.origin }).toEqual({ worker: "tidepool", origin: "board" });
 

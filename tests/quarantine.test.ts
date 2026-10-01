@@ -160,3 +160,8 @@ describe("pickupExclusions の quarantine 由来の Provider", () => {
     },
   );
 });
+
+it("行の Quarantine の文面は原因を断言しない —— 退役とは言わない(ADR 0184 決定1)", () => {
+  const row = QUARANTINES.find((r) => r.kind === "tableRow")!;
+  expect(row.prose("anthropic/claude-opus-5", "cause").purpose).not.toMatch(/retire/i);
+});

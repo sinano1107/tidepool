@@ -167,8 +167,9 @@ export function rowRefusalHandler(
         now,
       );
       returnToQueueHead(deps.db, task, { kind: "row_refused", ...refusal }, now);
+      // 同じ transaction に置く —— 間で落ちると後始末の印の無い todo が残り、起動時の復旧が後始末を走らせない
+      markTeardown(deps.db, taskId, now);
     })();
-    markTeardown(deps.db, taskId, now);
     deps.slot.enterTeardown();
     void reclaimed.then(() => runTeardown(deps, taskId, teardownStep(deps.db, taskId)));
   };
