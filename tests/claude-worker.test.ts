@@ -644,7 +644,7 @@ describe("ClaudeCodeWorker", () => {
     expect(events[spawned + 1]?.payload).toMatchObject({ kind: "memory_injected", worker_spawned_event_id: events[spawned]!.id, entries: [] });
   });
 
-  it("主題 memory の meta-review の spawn は材料の節を記憶の節の枠(system prompt の連結の末尾)に置き、memory_injected の直後に meta_review_material_injected を書く —— 普通の task と主題 routing の meta-review には節を置かず記録も書かない(ADR 0180 決定2)", async () => {
+  it("meta-review の spawn は主題の材料の節を記憶の節の枠(system prompt の連結の末尾)に置き、memory_injected の直後に meta_review_material_injected を書く —— 主題 memory には routing の節が入らず、普通の task には節も記録も無い(ADR 0180 決定2・追記 #1239)", async () => {
     const { worker, setting, slot, calls, db } = await makeWorker();
     const spawn = (subject: "memory" | "routing" | null) => {
       // setup のみ: 盤面名義の登録を deckhand に割り当てる(既定の auditor は skill の列挙 ping を挟んで spawn が非同期になる)
@@ -661,19 +661,21 @@ describe("ClaudeCodeWorker", () => {
       return { task, systemPrompt: args[args.indexOf("--append-system-prompt") + 1]! };
     };
 
-    const memory = spawn("memory");
-    const { section } = buildMetaReviewMaterial(db, memory.task.id)!;
-    expect(memory.systemPrompt.endsWith(`\n\n${section}`)).toBe(true);
-    const events = listEvents(db, memory.task.id);
-    const spawned = events.findIndex((e) => e.kind === "worker_spawned");
-    expect(events.slice(spawned + 1, spawned + 3).map((e) => e.payload)).toMatchObject([
-      { kind: "memory_injected" },
-      { kind: "meta_review_material_injected", worker_spawned_event_id: events[spawned]!.id },
-    ]);
-    for (const other of [spawn("routing"), spawn(null)]) {
-      expect(other.systemPrompt).not.toContain("## Memory meta-review material");
-      expect(listEvents(db, other.task.id).map((e) => e.kind)).not.toContain("meta_review_material_injected");
+    for (const subject of ["memory", "routing"] as const) {
+      const review = spawn(subject);
+      const { section } = buildMetaReviewMaterial(db, review.task.id)!;
+      expect(review.systemPrompt.endsWith(`\n\n${section}`)).toBe(true);
+      const events = listEvents(db, review.task.id);
+      const spawned = events.findIndex((e) => e.kind === "worker_spawned");
+      expect(events.slice(spawned + 1, spawned + 3).map((e) => e.payload)).toMatchObject([
+        { kind: "memory_injected" },
+        { kind: "meta_review_material_injected", subject, worker_spawned_event_id: events[spawned]!.id },
+      ]);
+      if (subject === "memory") expect(review.systemPrompt).not.toContain("## Routing meta-review material");
     }
+    const work = spawn(null);
+    expect(work.systemPrompt).not.toContain("meta-review material");
+    expect(listEvents(db, work.task.id).map((e) => e.kind)).not.toContain("meta_review_material_injected");
   });
 
   it("worker_spawned イベントの worker_id は解決済みの assignee になる(コンストラクタの既定 agent 固定ではない)", async () => {

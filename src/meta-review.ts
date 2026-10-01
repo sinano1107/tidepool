@@ -97,17 +97,23 @@ export const META_REVIEW_SUBJECTS = {
     task: {
       title: "Routing meta-review",
       purpose:
-        "Periodic meta-review of how the board routes work to execution settings. First read the current table and settings " +
-        "with the past routing proposals, their answers, amendments and comments (read_routing_settings), so you do not " +
-        "re-propose what was rejected or amended. Then read where the learner's recommendation diverged from what ran and how " +
-        "those episodes ended, then the allocation reviews split by tier source and agent (an overpowered verdict under an " +
-        "agent's default tier is not a registrant's declaration), and whether the judge ran on the worker's own model. Finish " +
-        "with cells first seen and rows humans changed since the previous meta-review. Record each judgment with log_decision. " +
+        "Periodic meta-review of how the board routes work to execution settings. This cycle's material is in your prompt, in the " +
+        "Routing meta-review material section: the current table and settings, the shadow rows since the previous routing meta-review " +
+        "where the learner's recommendation diverged from what ran, the allocation reviews since then, the cells first seen and the rows " +
+        "humans changed since then, and the routing proposals answered or settled since then. " +
+        "A diverged row is a pickup whose recommended and actual cells differ, with how that episode ended; the section counts every " +
+        "shadow row of the window but lists only the diverged ones — read the matched rows, and anything before the previous meta-review, " +
+        "with list_routing_shadow, list_allocations and list_routing_cells (since_watermark). The allocation reviews are split by tier " +
+        "source and agent (an overpowered verdict under an agent's default tier is not a registrant's declaration), and " +
+        "judged_by_same_model counts those whose judge ran on the worker's own model. Record each judgment with log_decision. " +
         "When the evidence says a row's tier or effort is wrong, propose replacing it with propose_routing_change. Base any " +
         "case for promoting the learner on the outcomes of the diverged episodes. When overpowered verdicts pile up under an " +
-        "agent's own tier, propose lowering that agent's tier by exactly one step, never more.",
+        "agent's own tier, propose lowering that agent's tier by exactly one step, never more. The section holds only the proposals " +
+        "settled since the previous meta-review: before you propose a change to a row, the learner flag or an agent's tier, read the " +
+        "earlier proposals on it, with their answers, amendments and comments, with read_routing_settings, so you do not re-propose " +
+        "what was rejected or amended.",
       completion_criteria:
-        "every routing reading since the previous meta-review is judged, each judgment is logged as a decision, and each row change the evidence supports is proposed",
+        "every part of this cycle's material is judged, each judgment is logged as a decision, and each row change the evidence supports is proposed",
       review_tier: "frontier",
     },
     material: ["allocation_reviewed", "worker_exited", "execution_settings_changed"],
@@ -149,6 +155,18 @@ export function metaReviewWindow(db: Db, readerTaskId: string): Required<MetaRev
     )
     .get(readerTaskId) as { watermark: number };
   return { after: previousMetaReviewWatermark(db, readerTaskId), upTo: own.watermark };
+}
+
+/** 材料の節の描き方(ADR 0180 決定2、両主題共通): 両端の watermark を書き、部分ごとに見出し・読み口の注・1行1 JSON の行を
+ *  並べ、行が無ければ空の印。 */
+export function materialSection(subject: MetaReviewSubject, window: Required<MetaReviewWindow>, parts: Array<[heading: string, note: string, rows: unknown[], empty: string]>): string {
+  return [
+    `## ${META_REVIEW_SUBJECTS[subject].task.title} material`,
+    "",
+    `This cycle's material, gathered by the board when this session started: changes after event ${window.after} up to and including event ` +
+      `${window.upTo} — the registrations of the previous ${subject} meta-review and of this one. Each row is one JSON object with the fields of the read verb named under its heading.`,
+    ...parts.flatMap(([heading, note, rows, empty]) => ["", `### ${heading}`, "", note, ...(rows.length === 0 ? [`(${empty})`] : rows.map((row) => JSON.stringify(row)))]),
+  ].join("\n");
 }
 
 /** 窓の中の主題の材料の event(id 順)。同じ主題の meta-review 自身の産物 —— 提案 question への回答が刻んだ question_id と、

@@ -159,3 +159,25 @@ it("読み口4本と list_precedents は routing の task から引数ごと写�
     await client.close();
   }
 });
+
+it("routing meta-review の purpose は材料の節とその5つの部分を名指し、提案の前に過去の提案を read_routing_settings で読むと言い、一致した shadow 行と前回より前は読み口で読めると言い、読む順の文は無い —— completion_criteria は節の各部分を判断したこと(ADR 0180 追記 #1239)", async () => {
+  t = await bootTidepool();
+  await material(t);
+  await t.clock.advance(HOUR);
+
+  const [review] = await openRoutingReviews(t);
+
+  expect(review.purpose).toContain(
+    "This cycle's material is in your prompt, in the Routing meta-review material section: the current table and settings, the shadow rows " +
+      "since the previous routing meta-review where the learner's recommendation diverged from what ran, the allocation reviews since then, " +
+      "the cells first seen and the rows humans changed since then, and the routing proposals answered or settled since then.",
+  );
+  expect(review.purpose).toContain(
+    "before you propose a change to a row, the learner flag or an agent's tier, read the earlier proposals on it, with their answers, amendments and comments, with read_routing_settings",
+  );
+  expect(review.purpose).toContain("read the matched rows, and anything before the previous meta-review, with list_routing_shadow, list_allocations and list_routing_cells");
+  expect(review.purpose).not.toContain("First read");
+  expect(review.completion_criteria).toBe(
+    "every part of this cycle's material is judged, each judgment is logged as a decision, and each row change the evidence supports is proposed",
+  );
+});

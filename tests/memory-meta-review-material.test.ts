@@ -38,13 +38,20 @@ function register(db: Db, subject: MetaReviewSubject, done = false): string {
   return taskId;
 }
 
-it("材料の節は主題 memory の meta-review にだけ組まれ、両端の watermark と5つの部分の見出しを持ち、材料の無い部分は空と書く —— 普通の task と主題 routing の meta-review には null", () => {
+/** 主題 memory の材料の節(型を memory の部分に絞る)。 */
+function memoryMaterial(db: Db, taskId: string) {
+  const material = buildMetaReviewMaterial(db, taskId);
+  if (material?.subject !== "memory") throw new Error(`no memory material for ${taskId}`);
+  return material;
+}
+
+it("材料の節は主題 memory の meta-review に memory の部分で組まれ、両端の watermark と5つの部分の見出しを持ち、材料の無い部分は空と書く —— 普通の task には null、主題 routing の meta-review には routing の部分(ADR 0180 追記 #1239)", () => {
   const db = openDb(":memory:");
   const previous = register(db, "memory", true);
   const review = register(db, "memory");
   const [first, second] = listEventsOfKinds(db, ["meta_review_registered"]).map((e) => e.payload.material_watermark);
 
-  const material = buildMetaReviewMaterial(db, review)!;
+  const material = memoryMaterial(db, review);
 
   expect(previous).not.toBe(review);
   expect([material.previous_watermark, material.material_watermark]).toEqual([first, second]);
@@ -65,7 +72,7 @@ it("材料の節は主題 memory の meta-review にだけ組まれ、両端の 
   }
   const work = registerTask(db, { type: "work", title: "t", purpose: "p", completion_criteria: "c" }, at).id;
   expect(buildMetaReviewMaterial(db, work)).toBeNull();
-  expect(buildMetaReviewMaterial(db, register(db, "routing"))).toBeNull();
+  expect(buildMetaReviewMaterial(db, register(db, "routing"))?.subject).toBe("routing");
 });
 
 const deckhand = { activity: "worker_verb" as const, name: "deckhand" };
@@ -98,7 +105,7 @@ it("店の変更: 前回の登録より後に worker が書いた Knowledge と�
   const review = register(db, "memory");
   knowledge(db, "after");
 
-  const { parts, section } = buildMetaReviewMaterial(db, review)!;
+  const { parts, section } = memoryMaterial(db, review);
 
   expect(parts.store_changes.map(({ id, changes, invalidation_reason }) => ({ id, changes, invalidation_reason }))).toEqual([
     { id: toDrop, changes: ["invalidated"], invalidation_reason: "environment" },
@@ -121,7 +128,7 @@ it("店の変更: 人間が移したエントリは複製の行だけで path_mo
   const freshCopy = moveMemoryByMetaReview(db, { entry_id: fresh, scope: "tidepool", path: "settled", mover: metaReview }, "worker", at).entry_id;
   const review = register(db, "memory");
 
-  const { parts } = buildMetaReviewMaterial(db, review)!;
+  const { parts } = memoryMaterial(db, review);
 
   expect(parts.store_changes.map(({ id, changes, invalidation_reason }) => ({ id, changes, invalidation_reason }))).toEqual([
     { id: edited, changes: ["invalidated"], invalidation_reason: "superseded" },
@@ -138,7 +145,7 @@ it("店の変更に candidate は載らない —— 前回より後に起草さ
   const drafted = candidate(db, "New habit");
   const review = register(db, "memory");
 
-  const { parts } = buildMetaReviewMaterial(db, review)!;
+  const { parts } = memoryMaterial(db, review);
 
   expect(parts.store_changes).toEqual([]);
   expect(ids(parts.candidates)).toEqual([older, drafted]);
@@ -181,7 +188,7 @@ it("異議つき判断は窓の中に異議のある decision だけを list_pre
   answer(lateQuestion);
   const reader = { taskId: review, agent: "auditor" };
 
-  const { parts } = buildMetaReviewMaterial(db, review)!;
+  const { parts } = memoryMaterial(db, review);
 
   expect(parts.precedents.map((p) => p.decision_event_id)).toEqual([inWindow]);
   expect(parts.precedents).toEqual(listPrecedents(db, reader, {}, at).precedents.filter((p) => p.decision_event_id === inWindow));
@@ -191,7 +198,7 @@ it("異議つき判断は窓の中に異議のある decision だけを list_pre
   expect(parts.branches.flatMap((b) => b.definitions)).toEqual([expect.not.objectContaining({ original: expect.anything() })]);
 });
 
-it("節を組んだ記録は task 帰属・agent 名義の meta_review_material_injected で、worker_spawned の event id・両端の watermark・部分ごとの id(エントリ・decision の event・question・Definition)・トークン数と計数器を持つ", () => {
+it("節を組んだ記録は task 帰属・agent 名義の meta_review_material_injected で、主題・worker_spawned の event id・両端の watermark・部分ごとの id(エントリ・decision の event・question・Definition)・トークン数と計数器を持つ", () => {
   const db = openDb(":memory:");
   const work = registerTask(db, { type: "work", title: "w", purpose: "p", completion_criteria: "c" }, at).id;
   const objected = objectedDecision(db, work, 1);
@@ -205,7 +212,7 @@ it("節を組んだ記録は task 帰属・agent 名義の meta_review_material_
   rejectMemoryProposal(db, getTask(db, question)!.question_proposal as MemoryProposal, question, "webui", at, "No.");
   const review = register(db, "memory");
   const [first, second] = listEventsOfKinds(db, ["meta_review_registered"]).map((e) => e.payload.material_watermark);
-  const material = buildMetaReviewMaterial(db, review)!;
+  const material = memoryMaterial(db, review);
 
   const eventId = recordMetaReviewMaterial(db, review, "auditor", 42, material, at);
 
@@ -215,6 +222,7 @@ it("節を組んだ記録は task 帰属・agent 名義の meta_review_material_
     origin: "board",
     payload: {
       kind: "meta_review_material_injected",
+      subject: "memory",
       worker_spawned_event_id: 42,
       previous_watermark: first,
       material_watermark: second,
