@@ -137,6 +137,8 @@ export interface WireContract {
       blocking?: string | null;
       /** 理由の comment が要る選択肢(ADR 0179 決定4)。 */
       needs_comment?: string[];
+      /** 自由記述の回答を受けるか —— 固定選択肢の question は false(issue #1309)。 */
+      free_text?: boolean;
     }
   >;
   "GET /api/tasks/:id": BoardTask & {
@@ -147,6 +149,7 @@ export interface WireContract {
     moved?: MovedPin[];
     blocking?: string | null;
     needs_comment?: string[];
+    free_text?: boolean;
     completion_criteria: string;
     workspace: string | null;
     review_flag: number;

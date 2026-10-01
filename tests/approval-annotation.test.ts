@@ -131,6 +131,38 @@ it("理由必須の選択肢の一覧 needs_comment は memory 提案で reject 
   expect(await needsComment(byId(ids.plain))).toEqual([]);
 });
 
+it("自由記述を受けるかの free_text は固定選択肢の提案 question で false、escalate question で true で、一覧と単体ビューに載る(issue #1309)", async () => {
+  t = await bootTidepool();
+  const parent = await registerWork(t, "parent");
+  await t.clock.advance(HOUR);
+  const client = await mcpClient(t.mcpBaseUrl, parent.id);
+  await client.callTool({
+    name: "escalate",
+    arguments: { context: "ordinary escalation", questions: [{ title: "which way?", options: ["a", "b"], recommendation: "a" }] },
+  });
+  await client.close();
+  const proposal = registerTask(
+    t.db,
+    {
+      type: "question",
+      title: "q",
+      purpose: "p",
+      completion_criteria: "a human answer is recorded",
+      question: [{ title: "t", options: ["approve", "reject"], recommendation: "approve" }],
+      proposal: { kind: "routing", op: "promote", pin: { promoted: false } },
+    },
+    t.clock.now(),
+  ).id;
+  const board = (await api(t.baseUrl, "GET", "/api/tasks")).json as any[];
+  const freeText = async (row: any) => {
+    expect((await api(t.baseUrl, "GET", `/api/tasks/${row.id}`)).json.free_text).toBe(row.free_text);
+    return row.free_text;
+  };
+
+  expect(await freeText(board.find((x) => x.id === proposal))).toBe(false);
+  expect(await freeText(board.find((x) => x.type === "question" && x.parent_id === parent.id))).toBe(true);
+});
+
 it("assignee だけが理由の承認 question は、親の risk は上がらないと注釈する", async () => {
   t = await bootTidepool({
     authority: { name: "standard", guidance: "", assignable_to: ["deckhand"] },

@@ -1202,24 +1202,7 @@ export function assertAnswerable(question: Task, answers: string[], comment: str
       `this question carries ${items.length} item(s), but ${answers.length} answer(s) were submitted`,
     );
   }
-  // a system-registered question with a real external side effect (merge,
-  // PR promotion, pending-child materialization, retry-vs-abandon) commits
-  // to a fixed choice — a typo must not silently settle one as though it
-  // were an option (issue #105: a "retry" typo on a PR promotion failure
-  // question used to settle it with no retry and no recorded abandon
-  // either). This deliberately leaves two documented exceptions untouched:
-  // an agent's own escalate question, whose free-text override is a real
-  // feature (escalate.test.ts), and a Confirmation question (quarantine
-  // resolution), which takes any answer text as a repair note (CONTEXT.md's
-  // Quarantine) — neither carries this kind of consequence.
-  const isFixedChoiceQuestion =
-    question.question_pending_merge_pr !== null ||
-    question.question_pending_local_merge_task_id !== null ||
-    question.question_pending_pr_promotion_task_id !== null ||
-    question.question_pending_child !== null ||
-    question.question_proposal !== null ||
-    question.question_cancel_option !== null;
-  if (isFixedChoiceQuestion) {
+  if (isFixedChoiceQuestion(question)) {
     for (let i = 0; i < items.length; i++) {
       if (!items[i]!.options.includes(answers[i]!)) {
         throw new DomainError(
@@ -1232,6 +1215,39 @@ export function assertAnswerable(question: Task, answers: string[], comment: str
   if (needs.length > 0 && !comment?.trim()) {
     throw new DomainError(`answering ${needs.join(" / ")} to this question requires a non-blank comment: why, or for a defer what is still undecided`);
   }
+}
+
+/** 選択肢にない回答を断る固定選択肢の question か。門(assertAnswerable)と読み口(questionAnnotations の `free_text`)が使う(issue #1309)。
+ *
+ *  A system-registered question with a real external side effect (merge,
+ *  PR promotion, pending-child materialization, retry-vs-abandon) commits
+ *  to a fixed choice — a typo must not silently settle one as though it
+ *  were an option (issue #105: a "retry" typo on a PR promotion failure
+ *  question used to settle it with no retry and no recorded abandon
+ *  either). This deliberately leaves two documented exceptions untouched:
+ *  an agent's own escalate question, whose free-text override is a real
+ *  feature (escalate.test.ts), and a Confirmation question (quarantine
+ *  resolution), which takes any answer text as a repair note (CONTEXT.md's
+ *  Quarantine) — neither carries this kind of consequence. */
+export function isFixedChoiceQuestion(
+  question: Pick<
+    Task,
+    | "question_pending_merge_pr"
+    | "question_pending_local_merge_task_id"
+    | "question_pending_pr_promotion_task_id"
+    | "question_pending_child"
+    | "question_proposal"
+    | "question_cancel_option"
+  >,
+): boolean {
+  return (
+    question.question_pending_merge_pr !== null ||
+    question.question_pending_local_merge_task_id !== null ||
+    question.question_pending_pr_promotion_task_id !== null ||
+    question.question_pending_child !== null ||
+    question.question_proposal !== null ||
+    question.question_cancel_option !== null
+  );
 }
 
 /** この question で理由の comment が要る選択肢(ADR 0179 決定1〜4)。門(assertAnswerable)と読み口(questionAnnotations)が使う。 */
