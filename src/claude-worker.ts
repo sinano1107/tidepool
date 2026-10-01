@@ -4,7 +4,7 @@ import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { type ResolvedAgent, resolveAgentOrQuarantine, resolveExecutionAgent } from "./agent.js";
-import { type BoardCall, readOutput } from "./board-call.js";
+import { type BoardCall, type BoardCallSpec, readOutput } from "./board-call.js";
 import { boardDoctrine, boardProse } from "./board-prose.js";
 import { type BoardStatePath, boardStateOverlap } from "./board-state.js";
 import {
@@ -1272,8 +1272,8 @@ export type EnumerateToolsFn = () => Promise<{
 // 改名すれば init 報告に `memory_paths.auto` が現れて pickup の前に不成立になる。書きの
 // deny は init に出ないので運ばない(deploy 時の canary の仕事)。
 //
-// `/usage` ping の引数ごと1本にして export する: 適合試験(ADR 0186 決定7)が同じフラグで init 行を取る。
-export const TOOL_SURFACE_PROBE_ARGS = [
+// `/usage` ping の引数ごと1本にする: 適合試験(ADR 0186 決定7)も `toolSurfaceProbeSpec` で同じフラグを撃つ。
+const TOOL_SURFACE_PROBE_ARGS = [
   ...SKILL_ENUM_ARGS,
   "--permission-mode",
   "acceptEdits",
@@ -1294,7 +1294,7 @@ export const TOOL_SURFACE_PROBE_ARGS = [
 // 起動がどこまで伸びうるかはホスト依存(ADR 0028 が Pi を macOS より遅い側として実測
 // している)なので、上限は「詰まりを検知する」役だけを残して広く取る。ping 自体が
 // 遅いぶんは poll が待つだけで、誤停止よりはるかに安い。
-export const TOOL_SURFACE_PROBE_TIMEOUT_MS = 60_000;
+const TOOL_SURFACE_PROBE_TIMEOUT_MS = 60_000;
 
 /** `EnumerateToolsFn` の本番の実装: `/usage` ping を Board call の口に1回通す
  *  (ADR 0136 決定2)。口が答えを返さなければ null —— 呼び出し側はそれを不成立に倒す。 */
@@ -1306,18 +1306,18 @@ export const enumerateToolsThrough =
     // 封じ込め能力の不成立」に化ける。それは workspace の性質であって別の資源であり、
     // `workspaceSettingsDisposition` がすでにその担当である。
     atNeutralCwd("tidepool-tools-", (cwd) =>
-      call(
-        {
-          kind: "tool-surface probe",
-          command: "claude",
-          args: TOOL_SURFACE_PROBE_ARGS,
-          cwd,
-          env: boardCallEnv(),
-          limitMs: TOOL_SURFACE_PROBE_TIMEOUT_MS,
-        },
-        (proc) => readInitReport(proc.stdout, readToolSurface),
-      ),
+      call(toolSurfaceProbeSpec(cwd), (proc) => readInitReport(proc.stdout, readToolSurface)),
     );
+
+/** tool-surface probe の Board call の注文。適合試験(ADR 0186 決定7)も同じこれで撃つ。 */
+export const toolSurfaceProbeSpec = (cwd: string): BoardCallSpec => ({
+  kind: "tool-surface probe",
+  command: "claude",
+  args: TOOL_SURFACE_PROBE_ARGS,
+  cwd,
+  env: boardCallEnv(),
+  limitMs: TOOL_SURFACE_PROBE_TIMEOUT_MS,
+});
 
 /** tool-surface probe の init 行の読み手。適合試験(ADR 0186 決定7)も同じこれで読む。
  *

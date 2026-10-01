@@ -10,7 +10,7 @@ import { claudeUsageObservation, parseUsage } from "./usage.js";
 export interface ConformanceObservations {
   /** 封じ込めの probe と同じフラグで撃った `claude` の stdout(stream-json)。 */
   initLine: () => Promise<string>;
-  /** result 行を含む stream-json の stdout。 */
+  /** モデルの1ターンを実際に走らせた stream-json の stdout(result 行を含む)。 */
   resultLine: () => Promise<string>;
   /** 存在しない model id での行の probe の判定。 */
   unknownModel: () => Promise<ModelProbeResult>;
@@ -31,6 +31,7 @@ async function replay<T>(stdout: string, project: (parsed: Record<string, unknow
 }
 
 type Verdict = { pass: boolean; detail: string };
+type Row = Verdict & { surface: string };
 
 const SURFACES: Array<[string, (obs: ConformanceObservations, now: Date) => Promise<Verdict>]> = [
   [
@@ -83,8 +84,8 @@ const SURFACES: Array<[string, (obs: ConformanceObservations, now: Date) => Prom
 export async function judgeConformance(
   obs: ConformanceObservations,
   now: Date,
-): Promise<{ rows: Array<Verdict & { surface: string }>; ok: boolean }> {
-  const rows: Array<Verdict & { surface: string }> = [];
+): Promise<{ rows: Row[]; ok: boolean }> {
+  const rows: Row[] = [];
   for (const [surface, judge] of SURFACES) {
     try {
       rows.push({ surface, ...(await judge(obs, now)) });

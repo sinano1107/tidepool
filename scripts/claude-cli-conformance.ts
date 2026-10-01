@@ -21,8 +21,8 @@ import {
   boardCallEnv,
   checkUsageThrough,
   execThrough,
-  TOOL_SURFACE_PROBE_ARGS,
-  TOOL_SURFACE_PROBE_TIMEOUT_MS,
+  pinnedModelFlags,
+  toolSurfaceProbeSpec,
 } from "../src/claude-worker.js";
 import { SystemClock } from "../src/clock.js";
 import { ProcessContainers } from "../src/process-container.js";
@@ -42,28 +42,36 @@ const { call } = createBoardCalls({
 });
 const scratch = mkdtempSync(join(tmpdir(), "tidepool-conformance-"));
 
-// init 行と result 行は封じ込めの probe と同じ1本の `/usage` ping から読む(neutral cwd で撃つのも同じ)
-let probeRun: Promise<string> | undefined;
+// init 行は封じ込めの probe と同じ注文で撃つ(neutral cwd で撃つのも同じ)
 const probeStdout = () =>
-  (probeRun ??= call(
-    {
-      kind: "conformance tool-surface probe",
-      command: "claude",
-      args: TOOL_SURFACE_PROBE_ARGS,
-      cwd: scratch,
-      env: boardCallEnv(),
-      limitMs: TOOL_SURFACE_PROBE_TIMEOUT_MS,
-    },
-    readOutput,
-  ).then((output) => {
+  call(toolSurfaceProbeSpec(scratch), readOutput).then((output) => {
     if (output === null) throw new Error("the Board call produced no answer (limit, spawn failure, or no container)");
     return output.stdout;
-  }));
+  });
+
+// result 行は、モデルの1ターンを実際に走らせた stream-json から読む —— `/usage` ping は
+// ターンを起こさない(cost 0)ので、worker が読む usage の形を試せない
+const oneTurnStdout = () =>
+  execThrough(call, "conformance result line")(
+    "claude",
+    [
+      "-p",
+      "Reply with the single word OK.",
+      "--output-format",
+      "stream-json",
+      "--verbose",
+      ...pinnedModelFlags("haiku", "low"),
+      "--max-turns",
+      "1",
+      "--safe-mode",
+    ],
+    boardCallEnv(),
+  );
 
 const { rows, ok } = await judgeConformance(
   {
     initLine: probeStdout,
-    resultLine: probeStdout,
+    resultLine: oneTurnStdout,
     unknownModel: () =>
       createClaudeModelProbe(cliAuthCommandThrough(call, "conformance model probe"))("claude-conformance-no-such-model"),
     usageScreen: () => checkUsageThrough(call, scratch),
