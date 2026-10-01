@@ -11,6 +11,14 @@ export type CliAuthResult =
 
 export type CliAuthCheck = () => Promise<CliAuthResult>;
 
+/** 行の Quarantine の解除の門(ADR 0184 決定5): その model id で最小の1ターンを走らせた判定。
+ *  `refused` は 404(行の拒否)、`unauthorized` は 401。 */
+export type ModelProbeResult =
+  | { status: "runs" }
+  | { status: "refused" | "unauthorized" | "unknown"; reason: string };
+
+export type ModelProbe = (model: string) => Promise<ModelProbeResult>;
+
 export const CLI_AUTH_EXPIRY_WARNING_INTERVAL_MS = 30 * 60 * 1000;
 const CLI_AUTH_EXPIRY_WARNING_MS = 30 * 24 * 60 * 60 * 1000;
 const ISO_EXPIRY = /^(\d{4}-\d{2}-\d{2})(?:T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?(?:Z|[+-]\d{2}:\d{2}))?$/;
@@ -47,6 +55,13 @@ export function isCliAuthFailureEnvelope(value: unknown): boolean {
  *  `rate_limit_event` からは推測しない。 */
 export function isCapInterruptionEnvelope(value: unknown): boolean {
   return typeof value === "object" && value !== null && "api_error_status" in value && value.api_error_status === 429;
+}
+
+/** 行の拒否(CONTEXT.md / ADR 0184 決定3): Provider がその model id を断った証拠は
+ *  `result` envelope の `api_error_status: 404` 一点。401 / 429 と同じ posture で、
+ *  `result` の本文や stderr の `unrecognized_model` からは推測しない。 */
+export function isRowRefusalEnvelope(value: unknown): boolean {
+  return typeof value === "object" && value !== null && "api_error_status" in value && value.api_error_status === 404;
 }
 
 /** The probe died on its own spend cap, not on an authentication verdict

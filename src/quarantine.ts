@@ -37,6 +37,17 @@ const PROVIDER_AUTH_REPAIR_GUIDANCE: Record<Provider, string> = {
     "`CODEX_HOME`; API keys are not accepted for the canonical Codex route (ADR 0098).",
 };
 
+/** 表の行の Quarantine の値(ADR 0184 決定2): `provider/model`。Provider は閉じた列挙で `/` を
+ *  含まないので、最初の `/` で割れば model id に `/` があっても組は一意に戻る。 */
+export function tableRowValue(provider: Provider, model: string): string {
+  return `${provider}/${model}`;
+}
+
+export function parseTableRowValue(value: string): { provider: Provider; model: string } {
+  const at = value.indexOf("/");
+  return { provider: value.slice(0, at) as Provider, model: value.slice(at + 1) };
+}
+
 /** 表の並びは盤面全体の停止の列挙と同じ(containment → failedTeardown →
  *  registryReachability)で、資源単位の種類がその後に続く。 */
 export const QUARANTINES = [
@@ -163,10 +174,40 @@ export const QUARANTINES = [
       completion_criteria: `the ${harness} Harness containment is repaired by hand`,
     }),
   },
+  {
+    // 行の拒否(CONTEXT.md / ADR 0184)。値は `tableRowValue` の綴り。文面は原因を断言しない(決定1)
+    kind: "tableRow",
+    scope: "row",
+    prose: (value: string | null, reason: string): QuarantineProse => {
+      const { provider, model } = parseTableRowValue(value!);
+      const row = `${provider} / ${model}`;
+      return {
+        title: `execution-setting row ${row} cannot run on this board`,
+        purpose:
+          `${reason}. The ${provider} provider refused the model id \`${model}\` on this board — ` +
+          "with this CLI version and this account. The board does not know why. This row is out of " +
+          "pickup and of advisor derivation while this stands; other rows keep running.\n\n" +
+          "Repair one of two ways:\n\n" +
+          "1. Fix the table: in the settings tab, change this row's model or delete the row. " +
+          "This question then closes on its own.\n" +
+          "2. If the model id is right, update the CLI or restore the account, then answer — the " +
+          "board runs one minimal turn with this model id before it accepts the answer.",
+        completion_criteria: `${row} can run on this board again`,
+        question: [
+          {
+            title: `Can ${row} run again?`,
+            options: ["the row can run again"],
+            recommendation: "the row can run again",
+          },
+        ],
+      };
+    },
+  },
 ] as const satisfies ReadonlyArray<{
   kind: string;
-  /** 止まる範囲: 盤面全体 / その workspace のタスク / 値が指す assignee 群のタスク。 */
-  scope: "board" | "workspace" | "assignees";
+  /** 止まる範囲: 盤面全体 / その workspace のタスク / 値が指す assignee 群のタスク /
+   *  表の行(selector が表から外す。タスクも entry も止めないので `ResourceStops` に入らない)。 */
+  scope: "board" | "workspace" | "assignees" | "row";
   /** assignee 群単位の行が値を agent 名へ写す写像のうち、行そのものが知っているもの。
    *  無い行は合成 root の `QuarantineResolvers` から受ける(registry は読まない、ADR 0041)。 */
   resolveAssignees?: (values: string[]) => string[];
@@ -192,7 +233,7 @@ export type QuarantineResolvers = Partial<Record<QuarantineKind, (values: string
 export function quarantineStops(db: Db, resolvers: QuarantineResolvers = {}): ResourceStops {
   const stops: ResourceStops = { workspaces: [], assignees: [] };
   for (const row of QUARANTINES) {
-    if (row.scope === "board") continue;
+    if (row.scope === "board" || row.scope === "row") continue;
     const values = openQuarantineValues(db, row.kind) as string[];
     if (values.length === 0) continue;
     if (row.scope === "workspace") {

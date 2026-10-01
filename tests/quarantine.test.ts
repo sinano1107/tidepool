@@ -26,6 +26,7 @@ const SAMPLE: Record<QuarantineKind, readonly [string, string] | readonly [null]
   containment: [null],
   failedTeardown: ["task-1", "task-2"],
   registryReachability: [null],
+  tableRow: ["anthropic/claude-opus-5", "moonshot/kimi-k3[1m]"],
 };
 
 const questions = (db: ReturnType<typeof openDb>) =>
@@ -76,7 +77,8 @@ describe.each(QUARANTINES.map((row) => row.kind))("Quarantine の種類 %s", (ki
 
 /** 止まるタスクの写像(ADR 0137 決定6): 資源単位の行は、停止範囲の比べ方だけで直接 cancel の
  *  門に掛かる。assignee 群の値は resolver が agent 名へ写す(agent 名は自分自身)。 */
-describe.each(QUARANTINES.filter((row) => row.scope !== "board"))("資源単位の種類 $kind", (row) => {
+// 表の行(scope "row")はタスクを止めない —— selector が表から外す(ADR 0184 決定2、execution-setting の釘)
+describe.each(QUARANTINES.filter((row) => row.scope === "workspace" || row.scope === "assignees"))("資源単位の種類 $kind", (row) => {
   /** 開いた確認の資源を使うタスクを1つ置き、表から導いた止める集合を返す。 */
   function openOverTask() {
     const db = openDb(":memory:");

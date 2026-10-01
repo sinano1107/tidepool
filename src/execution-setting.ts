@@ -3,6 +3,7 @@ import { isClaudeModelAlias } from "./claude-model-alias.js";
 import type { Db } from "./db.js";
 import { appendEvent, type EventOrigin } from "./events.js";
 import { PROVIDER_VALUES, type Provider } from "./provider.js";
+import { openQuarantineValues, tableRowValue } from "./quarantine.js";
 import type { AgentDefinition } from "./registry.js";
 import { DomainError, HUMAN_WORKER_ID, type RegistryProposal, type RoutingProposal, type RoutingRowProposal, settleQuestionAsObserved, type Task } from "./tasks.js";
 
@@ -600,10 +601,15 @@ export function executionSettingsFor(
   definition: Pick<AgentDefinition, "provider" | "tier">,
   task: SelectorTask | undefined,
 ): ExecutionSetting[] {
-  return executionSettingCandidates(
-    selectorInputFor(db, definition, task),
-    loadExecutionSettingTable(db),
-  );
+  return executionSettingCandidates(selectorInputFor(db, definition, task), runnableTable(db));
+}
+
+/** 表から、行の Quarantine(行の拒否、ADR 0184 決定2)が開いている行を外したもの。main の候補と
+ *  advisor の導出がこの1本から引くので、走れない行はどちらにもならない。照合は (provider, model) の
+ *  完全一致 —— Throttle の窓の部分一致(`windowMatchesModel`)は使わない(ADR 0182 決定3 と同じ理由)。 */
+function runnableTable(db: Db): ExecutionSettingTable {
+  const refused = new Set(openQuarantineValues(db, "tableRow"));
+  return loadExecutionSettingTable(db).filter((row) => !refused.has(tableRowValue(row.provider, row.model)));
 }
 
 /** 除外を当てずに1つ選ぶ —— Provider 順位の先頭 entry の設定である。除外を当てた
@@ -613,8 +619,5 @@ export function resolveExecutionSetting(
   definition: Pick<AgentDefinition, "provider" | "tier">,
   task: SelectorTask | undefined,
 ): ExecutionSetting | null {
-  return selectExecutionSetting(
-    selectorInputFor(db, definition, task),
-    loadExecutionSettingTable(db),
-  );
+  return selectExecutionSetting(selectorInputFor(db, definition, task), runnableTable(db));
 }

@@ -1,7 +1,8 @@
 import { verifyAgentRepaired } from "./agent.js";
 import { type AgentAdmin, AgentTierMismatchError, agentViewProviders } from "./agent-create.js";
 import { type BoardStatePath, boardStateOverlap } from "./board-state.js";
-import { type CliAuthCheck, quarantineCliAuthFailure } from "./cli-auth.js";
+import { type CliAuthCheck, type ModelProbe, quarantineCliAuthFailure, quarantineCliAuthForProvider } from "./cli-auth.js";
+import type { Clock } from "./clock.js";
 import type { ContainmentCheck } from "./containment.js";
 import type { Db } from "./db.js";
 import type { DraftClient } from "./draft.js";
@@ -22,7 +23,7 @@ import { type GitHubClient, IssueGoneError } from "./github.js";
 import type { HarnessContainmentCheck } from "./harness-containment.js";
 import { type Landing, type LandingVerdict, landingBlock } from "./landing.js";
 import { approveMemoryProposal, deferMemoryProposal, humanEntryInput, listMemoryEntries, type MemoryAmendment, movedTail, parseMemoryAmendment, rejectMemoryProposal } from "./memory.js";
-import { type QuarantineChecks, type QuarantineKind, type QuarantineResolvers, quarantineStops } from "./quarantine.js";
+import { parseTableRowValue, type QuarantineChecks, type QuarantineKind, type QuarantineResolvers, quarantineStops } from "./quarantine.js";
 import type { Harness, Provider, RegistryReachabilityCheck } from "./registry.js";
 import { RegistryFetchFailedError, RegistryPushFailedError } from "./registry-write.js";
 import { parseGitHubRepo, repairRepoAccess } from "./repo-access.js";
@@ -462,6 +463,10 @@ export interface QuarantineCheckDeps {
   teardownQuarantine?: FailedTeardownCheck;
   /** ADR 0097 決定2 / issue #446: provider ごとの probe。その provider の口が無ければ拒む。 */
   providerCliAuth?: Partial<Record<Provider, CliAuthCheck>>;
+  /** ADR 0184 決定5: 行の Quarantine の probe。その Provider の口が無い行への回答は拒む。
+   *  `clock` は probe が 401 を返したとき Provider 認証の経路へ落とす時刻。 */
+  modelProbes?: Partial<Record<Provider, ModelProbe>>;
+  clock?: Clock;
   /** ADR 0098: re-run the named Harness check before accepting repair. */
   harnessContainment?: HarnessContainmentCheck;
 }
@@ -469,7 +474,7 @@ export interface QuarantineCheckDeps {
 /** 解除の門の map(ADR 0137 決定5)。材料が無い種類は map に載らず、その確認への
  *  回答は拒まれる —— 検証できないまま受理する経路は無い。 */
 export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
-  const { containment, registryReachability, teardownQuarantine, providerCliAuth, harnessContainment } = deps;
+  const { containment, registryReachability, teardownQuarantine, providerCliAuth, modelProbes, clock, harnessContainment } = deps;
   return {
     // resolve the named workspace fresh, then verify both its Git tree and its
     // separation from the board's own state
@@ -564,6 +569,19 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
         if (result.status !== "authenticated") {
           throw new DomainError(`${provider} authentication is still unavailable: ${result.reason}`);
         }
+      },
+    }),
+    // ADR 0184 決定5: その id で最小の1ターン。通った(予算上限で止まった = ターンは走った、を含む)
+    // ときだけ受理し、401 は Provider 認証の経路に落としてから拒む
+    ...(modelProbes && clock && {
+      tableRow: async (value) => {
+        const { provider, model } = parseTableRowValue(value!);
+        const probe = modelProbes[provider];
+        if (!probe) throw new DomainError(`this board cannot verify that ${provider} / ${model} runs`);
+        const result = await probe(model);
+        if (result.status === "runs") return;
+        if (result.status === "unauthorized") quarantineCliAuthForProvider(deps.db, provider, clock.now());
+        throw new DomainError(`${provider} / ${model} still cannot run: ${result.reason}`);
       },
     }),
     ...(harnessContainment && {

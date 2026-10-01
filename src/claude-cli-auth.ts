@@ -10,6 +10,9 @@ import {
   type CliAuthResult,
   isCliAuthBudgetCapEnvelope,
   isCliAuthFailureEnvelope,
+  isRowRefusalEnvelope,
+  type ModelProbe,
+  type ModelProbeResult,
 } from "./cli-auth.js";
 
 export interface CliAuthCommandResult {
@@ -88,20 +91,72 @@ export function createMoonshotCliAuthCheck(
   };
 }
 
-async function runProbe(
+/** 行の Quarantine の回答時の probe(ADR 0184 決定5): 認証 probe と同じ形に、その id の
+ *  `--model` を付ける。 */
+export function createClaudeModelProbe(command: CliAuthCommand): ModelProbe {
+  return (model) =>
+    runModelProbe(
+      command,
+      [...pinnedModelFlags(model, "low"), "--max-turns", "1", "--max-budget-usd", "0.025", "--safe-mode"],
+      boardCallEnv(),
+    );
+}
+
+/** moonshot の双子。model は worker の spawn と同じく `--model` と `ANTHROPIC_MODEL` の両方に載せる
+ *  (どちらが勝っても同じ id を測る)。鍵ファイルが無ければ認証 probe と同じく unauthorized。 */
+export function createMoonshotModelProbe(keyFile: string | undefined, command: CliAuthCommand): ModelProbe {
+  return async (model) => {
+    let env: NodeJS.ProcessEnv;
+    try {
+      env = { ...moonshotCliAuthEnv(keyFile), ANTHROPIC_MODEL: model };
+    } catch (err) {
+      if (err instanceof MoonshotApiKeyMissingError) return { status: "unauthorized", reason: err.message };
+      throw err;
+    }
+    return runModelProbe(command, ["--model", model, "--max-turns", "1", "--max-budget-usd", "0.25", "--safe-mode"], env);
+  };
+}
+
+async function runModelProbe(
   command: CliAuthCommand,
   extraArgs: string[],
   env: NodeJS.ProcessEnv,
-): Promise<CliAuthResult> {
+): Promise<ModelProbeResult> {
+  const { exitCode, envelope } = await probeEnvelope(command, extraArgs, env);
+  if (envelope === null) return { status: "unknown", reason: "probe did not return a JSON envelope" };
+  if (isCliAuthFailureEnvelope(envelope)) return { status: "unauthorized", reason: "API returned 401" };
+  if (isRowRefusalEnvelope(envelope)) return { status: "refused", reason: "API returned 404 for this model id" };
+  // 予算上限はターンが走った後に判定される(2026-10-01 実測: $0.0001 でも1ターン走って
+  // error_max_budget_usd)—— 上限で止まったなら、その id は走った
+  if (isCliAuthBudgetCapEnvelope(envelope)) return { status: "runs" };
+  if (exitCode === 0 && envelope.is_error !== true && typeof envelope.result === "string") return { status: "runs" };
+  return { status: "unknown", reason: "probe did not return a successful result" };
+}
+
+async function probeEnvelope(
+  command: CliAuthCommand,
+  extraArgs: string[],
+  env: NodeJS.ProcessEnv,
+): Promise<{ exitCode: number | null; envelope: Record<string, unknown> | null }> {
   const observed = await command(
     "claude",
     ["-p", "Reply with the single word OK.", "--output-format", "json", ...extraArgs],
     { cwd: process.cwd(), env },
   );
-  let envelope: Record<string, unknown>;
   try {
-    envelope = JSON.parse(observed.stdout) as Record<string, unknown>;
+    return { exitCode: observed.exitCode, envelope: JSON.parse(observed.stdout) as Record<string, unknown> };
   } catch {
+    return { exitCode: observed.exitCode, envelope: null };
+  }
+}
+
+async function runProbe(
+  command: CliAuthCommand,
+  extraArgs: string[],
+  env: NodeJS.ProcessEnv,
+): Promise<CliAuthResult> {
+  const { exitCode, envelope } = await probeEnvelope(command, extraArgs, env);
+  if (envelope === null) {
     return { status: "unknown", reason: "probe did not return a JSON envelope" };
   }
   if (isCliAuthFailureEnvelope(envelope)) {
@@ -115,7 +170,7 @@ async function runProbe(
       reason: "probe hit its budget cap before returning an authentication verdict",
     };
   }
-  if (observed.exitCode === 0 && envelope.is_error !== true && typeof envelope.result === "string") {
+  if (exitCode === 0 && envelope.is_error !== true && typeof envelope.result === "string") {
     return { status: "authenticated" };
   }
   return { status: "unknown", reason: "probe did not return a successful authentication result" };

@@ -19,7 +19,7 @@ import type { BoardCall } from "../src/board-call.js";
 import type { BoardStatePath } from "../src/board-state.js";
 import type { Cause } from "../src/cause.js";
 import { moonshotKeyAbsence } from "../src/claude-worker.js";
-import type { CliAuthCheck } from "../src/cli-auth.js";
+import type { CliAuthCheck, ModelProbe } from "../src/cli-auth.js";
 import { type CodexAppServerProbe, codexLoginAbsence } from "../src/codex-app-server.js";
 import { type Db, openDb } from "../src/db.js";
 import type { DraftClient } from "../src/draft.js";
@@ -212,6 +212,8 @@ export interface BootOptions {
   /** ADR 0097 決定2 / issue #446: per-provider auth probes for the
    *  answer-time re-verification of a provider-auth Confirmation question. */
   providerCliAuth?: Partial<Record<Provider, CliAuthCheck>>;
+  /** ADR 0184 決定5: 行の Quarantine への回答時の probe。 */
+  modelProbes?: Partial<Record<Provider, ModelProbe>>;
   /** ADR 0052: remote-backed registry reachability seam. */
   registryReachability?: RegistryReachabilityCheck;
   /** ADR 0070: Claude CLI authentication probe. */
@@ -305,6 +307,7 @@ export async function bootTidepool(options: BootOptions = {}): Promise<Tidepool>
     taskExecutionCandidates: options.taskExecutionCandidates ?? implicitTaskExecutionCandidates(db),
     harnessContainment: options.harnessContainment,
     providerCliAuth: options.providerCliAuth,
+    modelProbes: options.modelProbes,
     registryReachability: options.registryReachability,
     cliAuth: options.cliAuth,
     cliAuthExpiresAt: options.cliAuthExpiresAt,

@@ -1,13 +1,13 @@
 import type { Clock } from "./clock.js";
 import { quarantineContainment } from "./containment.js";
 import type { Db } from "./db.js";
-import { appendEvent, getEvent, latestEventOfTask } from "./events.js";
+import { appendEvent, getEvent, latestEventOfTask, type RowRefusal } from "./events.js";
 import type { GitHubAuth } from "./github-auth.js";
 import type { Landing } from "./landing.js";
 import type { ProcessContainers } from "./process-container.js";
-import { openQuarantineValues } from "./quarantine.js";
+import { openQuarantineValues, registerQuarantine, tableRowValue } from "./quarantine.js";
 import type { Slot } from "./slot.js";
-import { abandonConsequence, escalateTask, getTask, type Task, type TaskType } from "./tasks.js";
+import { abandonConsequence, escalateTask, getTask, returnToQueueHead, type Task, type TaskType } from "./tasks.js";
 import {
   markTeardown,
   runTeardown,
@@ -140,6 +140,35 @@ export function capInterruptionHandler(deps: TeardownDeps): (taskId: string, rec
     if (deps.slot.currentTaskId !== taskId || deps.slot.inTeardown) return;
     if (getTask(deps.db, taskId)?.status !== "in_progress") return;
     markTeardown(deps.db, taskId, deps.clock.now());
+    deps.slot.enterTeardown();
+    void reclaimed.then(() => runTeardown(deps, taskId, teardownStep(deps.db, taskId)));
+  };
+}
+
+/** 行の拒否(CONTEXT.md / ADR 0184 決定4)の盤面側の一撃。上限到達による中断と同じく失敗では
+ *  なく failure question を立てないが、**記録と status の決着を後始末より前に**置く: 行の
+ *  Quarantine・`row_refused`・`todo` 先頭への復帰を1 transaction で済ませてから後始末に入るので、
+ *  後始末中の status は `todo` で、経路は解放の step に読まれる(ADR 0113 決定3)—— `in_progress` の
+ *  まま入れば中断と読まれ `cap_interrupted` が書かれる。slot の解放は回収済み観測の後ろ。 */
+export function rowRefusalHandler(
+  deps: TeardownDeps,
+): (taskId: string, refusal: RowRefusal, reclaimed: Promise<void>) => void {
+  return (taskId, refusal, reclaimed) => {
+    if (deps.slot.currentTaskId !== taskId || deps.slot.inTeardown) return;
+    const task = getTask(deps.db, taskId);
+    if (task?.status !== "in_progress") return;
+    const now = deps.clock.now();
+    deps.db.transaction(() => {
+      registerQuarantine(
+        deps.db,
+        "tableRow",
+        tableRowValue(refusal.provider, refusal.model),
+        `The worker session for task ${taskId} ended with API error 404 for this model id`,
+        now,
+      );
+      returnToQueueHead(deps.db, task, { kind: "row_refused", ...refusal }, now);
+    })();
+    markTeardown(deps.db, taskId, now);
     deps.slot.enterTeardown();
     void reclaimed.then(() => runTeardown(deps, taskId, teardownStep(deps.db, taskId)));
   };

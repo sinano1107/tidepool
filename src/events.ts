@@ -8,6 +8,13 @@ import type { Provider } from "./registry.js";
 import type { MemoryProposal, ProposalAmendment, TaskType } from "./tasks.js";
 import { entryObjections } from "./triage.js";
 
+/** 行の拒否(ADR 0184 決定4): Provider が断った spawn 時の行と、その session の worker_spawned。 */
+export interface RowRefusal {
+  provider: Provider;
+  model: string;
+  worker_spawned_event_id: number;
+}
+
 /** What the advisor **actually did** in one worker session (issue #33 判断6),
  *  as against `worker_spawned.advisor`'s "what the board asked for". Carried by
  *  `worker_exited.usage.advisor`, where null means no consultation was observed
@@ -113,6 +120,9 @@ export type EventPayload =
   // これが「なぜ途中で終わったか」を次のセッションへ伝える唯一の記録である
   // (CONTEXT.md「上限到達による中断」)。
   | { kind: "cap_interrupted" }
+  // ADR 0184 決定4: Provider が spawn 時の行の model id を断り(行の拒否)、タスクが `todo` の先頭へ
+  // 戻された。cap_interrupted は流用しない —— 上限到達による中断と読み違えないための専用の記録。
+  | ({ kind: "row_refused" } & RowRefusal)
   // ADR 0073: a completed root work task had no commits to carry to its
   // protected branch. This is a board-observed fact, not a human decision.
   | { kind: "nothing_to_land"; base: string }
