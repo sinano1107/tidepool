@@ -116,39 +116,48 @@ function cellMatches(candidate: ExecutionSetting, cell: Cell): boolean {
   );
 }
 
-/** 候補行1つの事後分布(Beta-Bernoulli)。事前分布は表の行 = 受理1件分の疑似観測
- *  (固定慣習、設定に出さない)。盤面全体の事後分布が workspace の事前分布なので、
- *  この workspace の episode は盤面の段と workspace の段で2度数えられる —— それが
- *  「自分の workspace の観測を他所より重く見る」機構そのものである。 */
-function posterior(
-  candidate: ExecutionSetting,
-  board: readonly CellStats[],
-  workspace: readonly CellStats[],
-): { accepted: number; total: number; cost: number | null } {
-  const matched = [...board, ...workspace].filter((s) => cellMatches(candidate, s.cell));
-  const accepted = matched.reduce((n, s) => n + s.accepted, 0);
-  const rejected = matched.reduce((n, s) => n + s.rejected, 0);
-  const costs = matched.flatMap((s) => (s.cost_usd_mean === null ? [] : [s.cost_usd_mean]));
-  return { accepted: 1 + accepted, total: 1 + accepted + rejected, cost: mean(costs) };
-}
+/** 候補行1つの1段の実績: その段の集計のうち行に当たるセルの受理数と却下数(疑似観測を含まない)。 */
+type Tally = { accepted: number; rejected: number };
+const tally = (candidate: ExecutionSetting, stats: readonly CellStats[]): Tally => {
+  const matched = stats.filter((s) => cellMatches(candidate, s.cell));
+  return { accepted: matched.reduce((n, s) => n + s.accepted, 0), rejected: matched.reduce((n, s) => n + s.rejected, 0) };
+};
 
-/** 推薦(純関数): 候補を事後平均で並べ、同点は selector の並びのまま。乱数は
- *  持たない(Thompson sampling をしないので seed も無い)。`priority` が cost の
- *  ときだけ、同点の間で観測された費用の平均が鍵になる —— 両方に観測があるときに
- *  限る(quality では Provider 順位が selector の並びに既に入っている)。 */
+/** 候補行1つの、推薦が数えた実績(盤面の段と workspace の段を分けたまま)。shadow 行が両セルについて運ぶ(ADR 0181 決定5)。 */
+export interface TrackRecord {
+  board: Tally;
+  workspace: Tally;
+}
+const trackRecord = (candidate: ExecutionSetting, board: readonly CellStats[], workspace: readonly CellStats[]): TrackRecord => ({
+  board: tally(candidate, board),
+  workspace: tally(candidate, workspace),
+});
+
+/** 推薦(純関数): 候補行ごとの事後分布(Beta-Bernoulli)を並べる。事前分布は表の行 = 受理1件分の疑似観測(固定慣習、
+ *  設定に出さない)。盤面全体の事後分布が workspace の事前分布なので、この workspace の episode は盤面の段と workspace の段で
+ *  2度数えられる —— それが「自分の workspace の観測を他所より重く見る」機構そのものである。
+ *  学習器は未観測の候補へ移らない(ADR 0181 決定1・2): 先頭(selector の並びの1番目)が未観測ならそれが推薦、先頭に観測が
+ *  あれば観測のある候補の中で事後平均の1番目。同点は selector の並びのまま。乱数は持たない(Thompson sampling をしないので
+ *  seed も無い)。`priority` が cost のときだけ、同点の間で観測された費用の平均が鍵になる —— 両方に観測があるときに限る
+ *  (quality では Provider 順位が selector の並びに既に入っている)。 */
 export function recommend(input: {
   candidates: readonly ExecutionSetting[];
   board: readonly CellStats[];
   workspace: readonly CellStats[];
   priority: Priority;
 }): Recommendation {
-  const scored = input.candidates.map((candidate, order) => ({
-    candidate,
-    order,
-    ...posterior(candidate, input.board, input.workspace),
-  }));
+  const scored = input.candidates.map((candidate, order) => {
+    const { board, workspace } = trackRecord(candidate, input.board, input.workspace);
+    const accepted = board.accepted + workspace.accepted;
+    const observed = accepted + board.rejected + workspace.rejected;
+    const costs = [...input.board, ...input.workspace].filter((s) => cellMatches(candidate, s.cell)).flatMap((s) => (s.cost_usd_mean === null ? [] : [s.cost_usd_mean]));
+    return { candidate, order, observed, accepted: 1 + accepted, total: 1 + observed, cost: mean(costs) };
+  });
+  // 候補が空なら来ない —— 全 entry 除外は selector が先に skipped にしている
+  const head = scored[0]!;
+  const pool = head.observed > 0 ? scored.filter((s) => s.observed > 0) : [head];
   // 事後平均の比較は整数の交差乗算 —— 浮動小数の「同点」で決定論が崩れない
-  const ranked = [...scored].sort((a, b) => {
+  const ranked = pool.sort((a, b) => {
     const byMean = b.accepted * a.total - a.accepted * b.total;
     if (byMean !== 0) return byMean;
     if (input.priority === "cost" && a.cost !== null && b.cost !== null && a.cost !== b.cost) {
@@ -156,10 +165,9 @@ export function recommend(input: {
     }
     return a.order - b.order;
   });
-  // 候補が空なら来ない —— 全 entry 除外は selector が先に skipped にしている
   return {
     recommended: ranked[0]!.candidate,
-    basis: scored.some((s) => s.total > 1) ? "data" : "prior",
+    basis: scored.some((s) => s.observed > 0) ? "data" : "prior",
   };
 }
 
@@ -242,29 +250,45 @@ export function loadEpisodes(db: Db): RoutingEpisode[] {
 
 /** selector の分岐(純関数、ADR 0110 決定4 / ADR 0150 決定3): 除外を当てた候補(selector の並び)から、実際に走る設定と
  *  shadow 行の組を決める。昇格前は表の先頭が走り、shadow の推薦は学習器の選択。昇格後は学習器の選択が出所 `learner` で
- *  走り、shadow の推薦は表の先頭 —— 列は増えず意味が反転する。データの無いセルでは推薦が表と一致するので、昇格初日は表と同じ。 */
+ *  走り、shadow の推薦は表の先頭 —— 列は増えず意味が反転する。学習器は未観測の候補へ移らず未観測の先頭はそのまま走るので
+ *  (ADR 0181)、どの候補にも観測が無い昇格初日も、人間が先頭に置いた新しい行も、昇格の前後で同じ設定が走る。
+ *  組は両セルのその時点の実績と候補数(除外後の行の数)を運ぶ(ADR 0181 決定5)。 */
 export function selectorBranch(input: Parameters<typeof recommend>[0] & { promoted: boolean }): {
   chosen: ExecutionSetting;
-  shadow: { recommended: ExecutionSetting; actual: ExecutionSetting; basis: Recommendation["basis"] };
+  shadow: {
+    recommended: ExecutionSetting;
+    actual: ExecutionSetting;
+    basis: Recommendation["basis"];
+    recommended_record: TrackRecord;
+    actual_record: TrackRecord;
+    candidates: number;
+  };
 } {
   const table = input.candidates[0]!;
   const { recommended, basis } = recommend(input);
-  if (!input.promoted) return { chosen: table, shadow: { recommended, actual: table, basis } };
-  const chosen = { ...recommended, source: { ...recommended.source, provider: "learner" as const } };
-  return { chosen, shadow: { recommended: table, actual: chosen, basis } };
+  const chosen = input.promoted ? { ...recommended, source: { ...recommended.source, provider: "learner" as const } } : table;
+  const other = input.promoted ? table : recommended;
+  const record = (s: ExecutionSetting) => trackRecord(s, input.board, input.workspace);
+  return {
+    chosen,
+    shadow: { recommended: other, actual: chosen, basis, recommended_record: record(other), actual_record: record(chosen), candidates: input.candidates.length },
+  };
 }
 
 /** shadow 行の書き手(盤面境界、spec #541): work task の pickup 直前に、selector の分岐が決めた組を1行残す。返り値は行の id。 */
 export function recordShadow(db: Db, taskId: string, shadow: ReturnType<typeof selectorBranch>["shadow"], now: Date): number {
   const { lastInsertRowid } = db.prepare(
-    `INSERT INTO learner_shadow (task_id, cell_recommended, cell_actual, source, basis, event_watermark, created_at)
-     VALUES (?, ?, ?, ?, ?, (SELECT COALESCE(MAX(id), 0) FROM events), ?)`,
+    `INSERT INTO learner_shadow (task_id, cell_recommended, cell_actual, source, basis, record_recommended, record_actual, candidates, event_watermark, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, (SELECT COALESCE(MAX(id), 0) FROM events), ?)`,
   ).run(
     taskId,
     cellJson(cellOf(shadow.recommended)),
     cellJson(cellOf(shadow.actual)),
     JSON.stringify(shadow.actual.source),
     shadow.basis,
+    JSON.stringify(shadow.recommended_record),
+    JSON.stringify(shadow.actual_record),
+    shadow.candidates,
     now.toISOString(),
   );
   return Number(lastInsertRowid);

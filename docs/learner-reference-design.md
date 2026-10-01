@@ -80,7 +80,8 @@ pool として扱う。
 
 1. 候補(除外を当てた後、selector の並び)ごとに事後平均を出す。比較は整数の交差乗算
    (`(1+A_a)(1+A_b+R_b)` vs `(1+A_b)(1+A_a+R_a)`)で、浮動小数の同点で決定論が崩れない。
-2. 事後平均の降順。同点は selector の並びのまま。
+2. 先頭が未観測(数えた受理・却下が0件)なら推薦は先頭。先頭に観測があれば、観測のある候補だけを事後平均の
+   降順に並べる —— 未観測の候補へは移らない(ADR 0181)。同点は selector の並びのまま。
 3. task の優先順位が `cost` のときだけ、同点の間で観測された session 費用の平均(小さい順)が鍵になる。
    **両方に観測があるときに限る**。`quality` では Provider 順位が selector の並びに既に入っている
    ので費用は読まない。
@@ -91,11 +92,12 @@ pool として扱う。
 
 ## shadow 行
 
-`learner_shadow (id, task_id, cell_recommended, cell_actual, source, basis, created_at)`。`source` は selector の出所
+`learner_shadow (id, task_id, cell_recommended, cell_actual, source, basis, record_recommended, record_actual, candidates, event_watermark, created_at)`。`source` は selector の出所
 `{tier, provider}`(`worker_spawned.source` と同じ綴り、spawn に辿り着かなかった pickup でも読める)。セルは
 `{provider, model, effort, advisor}` の JSON(実行設定の形 —— pickup 時点では具体 id は未観測なので
 表の綴り)。spawn 前に書くので `worker_spawned` の id は持たず、task_id と時刻で session に並ぶ。
-読み手は routing meta-review(spec #541、未実装)。
+`record_*` は両セルのその pickup 時点の実績(盤面の段と workspace の段の受理・却下、疑似観測を含まない)、
+`candidates` は除外を当てた後の候補の行数(ADR 0181 決定5)。読み手は routing meta-review。
 
 ## 触らない線
 

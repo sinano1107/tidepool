@@ -478,10 +478,10 @@ export type EventPayload =
   // ADR 0180 決定2・追記 #1239: meta-review の spawn に材料の節を入れた(task 帰属、memory_injected の直後)。主題、窓の両端の
   // watermark、計数したトークン数と計数器、部分ごとに載せた id —— memory は店の変更と candidate がエントリ、異議つき判断が
   // decision の event、提案が question、枝の一覧が Definition。routing は乖離した shadow 行(learner_shadow の id)と窓の中の
-  // 全 shadow 行の数、数えた allocation_reviewed、新しいセルの初観測(worker_exited)、人間が変えた行(execution_settings_changed)、
+  // 全 shadow 行の数とそのうち候補が2行以上あった行の数(ADR 0181 決定5)、数えた allocation_reviewed、新しいセルの初観測(worker_exited)、人間が変えた行(execution_settings_changed)、
   // 提案の question。表と設定は id を持たない。
   | (MetaReviewMaterialCommon & { subject: "memory"; store_changes: number[]; candidates: number[]; precedents: number[]; proposals: string[]; branches: number[] })
-  | (MetaReviewMaterialCommon & { subject: "routing"; shadow: number[]; shadow_rows: number; allocations: number[]; cells: number[]; rows: number[]; proposals: string[] })
+  | (MetaReviewMaterialCommon & { subject: "routing"; shadow: number[]; shadow_rows: number; shadow_rows_multi_candidate: number; allocations: number[]; cells: number[]; rows: number[]; proposals: string[] })
   // ADR 0120 決定2 / issue #618: 盤面が主題の meta-review を登録した(登録した task に帰属)。
   // material_watermark = 登録時の events の最大 id —— 次の周期の材料はこれより後の event。
   | { kind: "meta_review_registered"; subject: "memory" | "routing"; material_watermark: number }

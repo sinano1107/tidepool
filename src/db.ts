@@ -465,7 +465,10 @@ export function openDb(path: string): Db {
     -- ので worker_spawned の id は持てず、task_id と時刻で session に並ぶ。
     -- source: selector の出所 {tier, provider}(worker_spawned.source と同じ綴り ——
     -- spawn に辿り着かなかった pickup でも読めるようここにも持つ)。
-    -- basis: prior = 候補のどれにもデータが無く表そのまま / data = 観測が効いた。
+    -- basis: prior = 候補のどれにも観測が無く表そのまま / data = どれかの候補に観測がある(推薦が表と同じでもよい)。
+    -- record_recommended / record_actual: 推薦したセル / 走ったセルの、その pickup の推薦が数えた実績の JSON
+    -- {board: {accepted, rejected}, workspace: {accepted, rejected}}(疑似観測を含まない、書いた時点の値で数え直さない)。
+    -- candidates: 除外を当てた後の候補の行数 —— 1 なら推薦は必ず表と一致する(ADR 0181 決定5)。
     -- event_watermark: 書いた時点の events の最大 id。同じ task の次の worker_spawned(id がこれより大きい最初のもの)が
     -- この pickup の session で、meta-review の watermark とも同じ軸で比べられる(時刻は Clock の同時刻で並ばない)。
     CREATE TABLE IF NOT EXISTS learner_shadow (
@@ -475,6 +478,9 @@ export function openDb(path: string): Db {
       cell_actual      TEXT NOT NULL,
       source           TEXT NOT NULL,
       basis            TEXT NOT NULL CHECK (basis IN ('prior', 'data')),
+      record_recommended TEXT NOT NULL,
+      record_actual    TEXT NOT NULL,
+      candidates       INTEGER NOT NULL,
       event_watermark  INTEGER NOT NULL,
       created_at       TEXT NOT NULL
     );

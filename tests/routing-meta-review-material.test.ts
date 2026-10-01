@@ -62,6 +62,16 @@ const setting = (provider: ExecutionSetting["provider"], model: string): Executi
 });
 const opus = setting("anthropic", "opus");
 const sol = setting("openai", "gpt-5.6-sol");
+const none = { board: { accepted: 0, rejected: 0 }, workspace: { accepted: 0, rejected: 0 } };
+/** recordShadow へ渡す組(setup のみ): 実績は空。 */
+const shadow = (recommended: ExecutionSetting, actual: ExecutionSetting, candidates = 2) => ({
+  recommended,
+  actual,
+  basis: "prior" as const,
+  recommended_record: none,
+  actual_record: none,
+  candidates,
+});
 const judge = { provider: "anthropic" as const, model: "fable", effort: "high" };
 
 /** setup の口(tests/routing-meta-review-reads.test.ts と同じ形)。 */
@@ -113,21 +123,21 @@ it("表と設定は read_routing_settings の提案以外の全部で、窓で�
   expect(section).toContain(JSON.stringify(readExecutionSettings(db)));
 });
 
-it("shadow の部分は窓 `前回 <= event_watermark < 今回` の乖離した行だけを list_routing_shadow の行で載せ、全行数は一致した行を含む —— 前回より前と今回以後の行は行にも数にも入らない", () => {
+it("shadow の部分は窓 `前回 <= event_watermark < 今回` の乖離した行だけを list_routing_shadow の行で載せ、全行数は一致した行を含み、候補が2行以上あった行の数を並べる —— 前回より前と今回以後の行は行にも数にも入らない", () => {
   const { db, work } = board();
   register(db, true);
   const review = register(db);
   const [after, upTo] = listEventsOfKinds(db, ["meta_review_registered"]).map((e) => e.payload.material_watermark) as [number, number];
   // setup のみ: 境界の watermark を直接置く(recordShadow は書いた時点の最大 id を焼く)
-  const shadowAt = (title: string, watermark: number, recommended = sol) => {
+  const shadowAt = (title: string, watermark: number, recommended = sol, candidates = 2) => {
     const taskId = work(title);
-    recordShadow(db, taskId, { recommended, actual: opus, basis: "prior" }, at);
+    recordShadow(db, taskId, shadow(recommended, opus, candidates), at);
     db.prepare("UPDATE learner_shadow SET event_watermark = ? WHERE id = (SELECT MAX(id) FROM learner_shadow)").run(watermark);
     return taskId;
   };
   shadowAt("before", after - 1);
   const atAfter = shadowAt("at-after", after);
-  shadowAt("matched", after + 1, opus);
+  shadowAt("matched", after + 1, opus, 1);
   const inside = shadowAt("inside", upTo - 1);
   shadowAt("at-up-to", upTo);
   shadowAt("later", upTo + 1);
@@ -136,9 +146,10 @@ it("shadow の部分は窓 `前回 <= event_watermark < 今回` の乖離した�
 
   expect(parts.shadow.map((row) => row.task_id)).toEqual([atAfter, inside]);
   expect(parts.shadow_rows).toBe(3);
+  expect(parts.shadow_rows_multi_candidate).toBe(2);
   const verbRows = listRoutingShadow(db, review, { diverged_only: true }).shadow.filter((row) => [atAfter, inside].includes(row.task_id));
   for (const row of verbRows) expect(section).toContain(JSON.stringify(row));
-  expect(section).toContain("3 shadow rows were written in this window");
+  expect(section).toContain("3 shadow rows were written in this window, 2 of them with two or more candidates");
 });
 
 it("配分評価の分布は窓の中の注釈だけを list_allocations の行で数え、前回より前とこの task の登録より後の注釈は数えない", () => {
@@ -224,12 +235,12 @@ it("決着した提案は回答か陳腐化が窓の中にあるものだけを 
   expect(listRoutingProposals(db).map((p) => p.question_id)).toEqual([early, rejected, stale, open, late, registry]);
 });
 
-it("節を組んだ記録は主題 routing と、乖離した shadow 行の id・窓の中の全 shadow 行の数・数えた注釈・新しいセルの初観測・人間が変えた行・提案の question の id、両端の watermark とトークン数を運ぶ", () => {
+it("節を組んだ記録は主題 routing と、乖離した shadow 行の id・窓の中の全 shadow 行の数と候補が2行以上あった行の数・数えた注釈・新しいセルの初観測・人間が変えた行・提案の question の id、両端の watermark とトークン数を運ぶ", () => {
   const { db, work, spawn, exit, allocate } = board();
   const previous = register(db, true);
   const task = work("t");
-  const diverged = recordShadow(db, task, { recommended: sol, actual: opus, basis: "prior" }, at);
-  recordShadow(db, task, { recommended: opus, actual: opus, basis: "prior" }, at);
+  const diverged = recordShadow(db, task, shadow(sol, opus), at);
+  recordShadow(db, task, shadow(opus, opus, 1), at);
   const spawned = spawn(task, "deckhand", opus);
   const seen = exit(task, spawned);
   const annotation = allocate(task, spawned, "appropriate");
@@ -255,6 +266,7 @@ it("節を組んだ記録は主題 routing と、乖離した shadow 行の id�
       material_watermark: second,
       shadow: [diverged],
       shadow_rows: 2,
+      shadow_rows_multi_candidate: 1,
       allocations: [annotation],
       cells: [seen],
       rows: [rowEdit],

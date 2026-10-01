@@ -160,7 +160,7 @@ it("読み口4本と list_precedents は routing の task から引数ごと写�
   }
 });
 
-it("routing meta-review の purpose は材料の節とその5つの部分を名指し、提案の前に過去の提案を read_routing_settings で読むと言い、一致した shadow 行と前回より前は読み口で読めると言い、読む順の文は無い —— completion_criteria は節の各部分を判断したこと(ADR 0180 追記 #1239)", async () => {
+it("routing meta-review の purpose は材料の節とその5つの部分を名指し、提案の前に過去の提案を read_routing_settings で読むと言い、一致した shadow 行と前回より前は読み口で読めると言い、読む順の文は無く、昇格の根拠を乖離した行の outcome でなく推薦したセルの実績に置く —— completion_criteria は節の各部分を判断したこと(ADR 0180 追記 #1239)", async () => {
   t = await bootTidepool();
   await material(t);
   await t.clock.advance(HOUR);
@@ -177,6 +177,17 @@ it("routing meta-review の purpose は材料の節とその5つの部分を名�
   );
   expect(review.purpose).toContain("read the matched rows, and anything before the previous meta-review, with list_routing_shadow, list_allocations and list_routing_cells");
   expect(review.purpose).not.toContain("First read");
+  // 昇格の根拠は推薦したセルの実績(ADR 0181 決定1・5・6)
+  expect(review.purpose).not.toContain("outcomes of the diverged episodes");
+  for (const meaning of [
+    "The learner leaves the table's first choice only when both that choice and the cell it moves to have observations",
+    "each diverged row carries the track records of the recommended and the actual cell as of that pickup",
+    "While the learner is not promoted, a diverged row's outcome is the result of the setting the table chose, not of the one the learner recommended",
+    "Base any case for promoting the learner on whether the recommended cells' track records, counts included, justify leaving the table",
+    "a pickup with one candidate always matches the table, so do not count it as evidence of agreement",
+  ]) {
+    expect(review.purpose).toContain(meaning);
+  }
   expect(review.completion_criteria).toBe(
     "every part of this cycle's material is judged, each judgment is logged as a decision, and each row change the evidence supports is proposed",
   );

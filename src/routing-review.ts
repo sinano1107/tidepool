@@ -11,7 +11,7 @@ import {
   tierHasRowFor,
   windowMatchesModel,
 } from "./execution-setting.js";
-import { type Cell, cellJson, loadEpisodes, type RoutingEpisode } from "./learner.js";
+import { type Cell, cellJson, loadEpisodes, type RoutingEpisode, type TrackRecord } from "./learner.js";
 import { inWindow, type MetaReviewWindow, materialSection, paged, previousMetaReviewWatermark } from "./meta-review.js";
 import { DomainError, type RegistryProposal, type RoutingProposal, registerTask } from "./tasks.js";
 
@@ -38,8 +38,22 @@ export function listRoutingShadow(db: Db, readerTaskId: string, input: ReadWindo
  *  `(after, upTo]` の行は `after <= W < upTo`。session は窓で切らない。 */
 function shadowRows(db: Db, { after, upTo = Number.MAX_SAFE_INTEGER }: MetaReviewWindow) {
   const rows = db
-    .prepare("SELECT id, task_id, cell_recommended, cell_actual, source, basis, event_watermark, created_at FROM learner_shadow ORDER BY id")
-    .all() as Array<{ id: number; task_id: string; cell_recommended: string; cell_actual: string; source: string; basis: "prior" | "data"; event_watermark: number; created_at: string }>;
+    .prepare(
+      "SELECT id, task_id, cell_recommended, cell_actual, source, basis, record_recommended, record_actual, candidates, event_watermark, created_at FROM learner_shadow ORDER BY id",
+    )
+    .all() as Array<{
+    id: number;
+    task_id: string;
+    cell_recommended: string;
+    cell_actual: string;
+    source: string;
+    basis: "prior" | "data";
+    record_recommended: string;
+    record_actual: string;
+    candidates: number;
+    event_watermark: number;
+    created_at: string;
+  }>;
   const episodes = loadEpisodes(db);
   return rows.flatMap((row, i) => {
     if (row.event_watermark < after || row.event_watermark >= upTo) return [];
@@ -57,6 +71,9 @@ function shadowRows(db: Db, { after, upTo = Number.MAX_SAFE_INTEGER }: MetaRevie
         actual: JSON.parse(row.cell_actual) as Cell,
         source: JSON.parse(row.source) as RoutingEpisode["source"],
         basis: row.basis,
+        recommended_record: JSON.parse(row.record_recommended) as TrackRecord,
+        actual_record: JSON.parse(row.record_actual) as TrackRecord,
+        candidates: row.candidates,
         diverged,
         created_at: row.created_at,
         worker_spawned_event_id: session?.worker_spawned_event_id ?? null,
@@ -154,7 +171,7 @@ export function listRoutingProposals(db: Db, window?: MetaReviewWindow) {
 }
 
 /** routing の材料の節の5つの部分(ADR 0180 追記 #1239): 今の表と設定(窓でなく spawn 時点)、窓の中の乖離した shadow 行と
- *  全行数、配分評価の分布、新しいセルと人間が変えた行、窓の中で決着した提案。行はそれぞれの読み口と同じ。 */
+ *  全行数と候補が2行以上あった行数(ADR 0181 決定5)、配分評価の分布、新しいセルと人間が変えた行、窓の中で決着した提案。行はそれぞれの読み口と同じ。 */
 export function routingMaterial(db: Db, window: Required<MetaReviewWindow>) {
   const shadow = shadowRows(db, window);
   const allocations = allocationRows(db, window);
@@ -163,6 +180,7 @@ export function routingMaterial(db: Db, window: Required<MetaReviewWindow>) {
     settings: readExecutionSettings(db),
     shadow: shadow.filter((row) => row.diverged),
     shadow_rows: shadow.length,
+    shadow_rows_multi_candidate: shadow.filter((row) => row.candidates > 1).length,
     allocations,
     cells,
     rows,
@@ -178,7 +196,8 @@ export function routingMaterial(db: Db, window: Required<MetaReviewWindow>) {
     [
       "Diverged shadow rows",
       `Rows of list_routing_shadow written in this window where the learner's recommendation and the cell that ran differ. ${parts.shadow_rows} shadow ` +
-        "rows were written in this window, matched ones included; read the matched rows, and rows before this window, with list_routing_shadow.",
+        `rows were written in this window, ${parts.shadow_rows_multi_candidate} of them with two or more candidates; both counts include matched rows, ` +
+        "and a row with one candidate always matches. Read the matched rows, and rows before this window, with list_routing_shadow.",
       parts.shadow.map(({ id: _, ...row }) => row),
       "no diverged shadow rows",
     ],
