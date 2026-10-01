@@ -934,7 +934,7 @@ export function movedPins(db: Db, proposal: QuestionProposal | null): Array<{ id
 }
 
 /** question 行が読むときに運ぶ注釈のうち、一覧と単体ビューの両方の口が足す3つ(issue #1179)。HTTP の `GET /api/tasks`・
- *  `GET /api/tasks/:id` と管理MCP の `list_board`・`get_task` がここを呼ぶ。`landing` は一覧の口だけが別に足す。 */
+ *  `GET /api/tasks/:id` と管理MCP の `list_board`・`get_task` がここを呼ぶ。`landing` は HTTP の2つと `list_board` が別に足す。 */
 export function questionAnnotations(db: Db, task: Pick<Task, "id" | "parent_id" | "question_pending_child" | "question_proposal">) {
   return {
     approval: approvalAnnotation(db, task),

@@ -107,6 +107,12 @@ interface ApprovalAnnotation {
   raises_parent_risk: boolean;
 }
 
+/** 着地 question の注釈(ADR 0092 決定4, src/landing.ts の landingAnnotation)。question 行にだけ載り、着地 question なら非 null で
+ *  `blocked_by` が回答可否、一般 question は null。 */
+interface LandingAnnotation {
+  blocked_by: "attached_children" | "objections" | null;
+}
+
 /** memory の提案 question の移動の注釈(ADR 0162 決定6, src/memory.ts の movedPins)。移された pin ごとに旧 id と `path_moved` の
  *  鎖の末尾の id・path・scope。question 行にだけ載り、移された pin が無ければ空。 */
 interface MovedPin {
@@ -125,7 +131,7 @@ export interface WireContract {
   };
   "GET /api/tasks": Array<
     BoardTask & {
-      landing?: { blocked_by: "attached_children" | "objections" | null } | null;
+      landing?: LandingAnnotation | null;
       approval?: ApprovalAnnotation | null;
       moved?: MovedPin[];
       blocking?: string | null;
@@ -134,6 +140,7 @@ export interface WireContract {
   "GET /api/tasks/:id": BoardTask & {
     /** 保存された assignee(編集フォームが読む素の値)。`assignee` は一覧と同じ解決後の値(issue #1208)。 */
     raw_assignee: string | null;
+    landing?: LandingAnnotation | null;
     approval?: ApprovalAnnotation | null;
     moved?: MovedPin[];
     blocking?: string | null;
