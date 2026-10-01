@@ -9,7 +9,7 @@ import type { Landing } from "../src/landing.js";
 import { ProcessContainers } from "../src/process-container.js";
 import { FAILED_TEARDOWN_QUESTION_TITLE, openQuarantineValues } from "../src/quarantine.js";
 import { Slot } from "../src/slot.js";
-import { completeTask, escalateTask, getTask, listBoard, nextSlotTask, pickupTask, registerTask, type Task } from "../src/tasks.js";
+import { completeTask, escalateTask, getTask, listBoard, moveTask, nextSlotTask, pickupTask, registerTask, type Task } from "../src/tasks.js";
 import { markTeardown, runTeardown } from "../src/teardown.js";
 import { capInterruptionHandler, rowRefusalHandler, startWatchdog, type Watchdog } from "../src/watchdog.js";
 import {
@@ -155,6 +155,8 @@ it("走っている間に表から消えた行の 404 は行の Quarantine を�
   const { provider, model } = loadExecutionSettingTable(db)[0]!;
   const task = pickupTask(db, registerTask(db, { type: "work", title: "refused", purpose: "why", completion_criteria: "done" }, clock.now()), "deckhand", clock.now())!;
   slot.occupy(task.id);
+  // 走っている間に別のタスクを先頭へ置く —— 断られたタスクがその前へ戻ることを見るため
+  moveTask(db, registerTask(db, { type: "work", title: "queued after", purpose: "why", completion_criteria: "done" }, clock.now()), null, clock.now());
   applyExecutionSettingsChange(db, { setting: "delete_row", provider, model }, "webui", clock.now());
 
   rowRefusalHandler({ db, clock, slot, resolve: undefined, pollNow: () => {} })(task.id, { provider, model, worker_spawned_event_id: 1 }, Promise.resolve());
