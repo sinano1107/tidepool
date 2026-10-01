@@ -697,10 +697,3 @@ it("Codex の版の照合は trim した `codex --version` と CODEX_APP_SERVER_
   // 前方一致は一致ではない
   expect((await checkCodexCliVersion(async () => `${CODEX_APP_SERVER_VERSION}-beta`)).available).toBe(false);
 });
-
-it("Codex の版が読めなければ不成立 — 読めなかった理由を言う", async () => {
-  const result = await checkCodexCliVersion(async () => {
-    throw new Error("spawn codex ENOENT");
-  });
-  expect(result.available === false && result.reason).toContain("ENOENT");
-});

@@ -225,14 +225,10 @@ function schemasConform(requests: any, account: any, rateLimits: any, modelList:
 }
 
 /** Codex CLI の版の照合(ADR 0186 決定3 / ADR 0098 決定4): trim した `codex --version` と
- *  `CODEX_APP_SERVER_VERSION` の完全一致。Board call の口の門が使う。文面は下の互換性検査と同じ形。 */
+ *  `CODEX_APP_SERVER_VERSION` の完全一致。Board call の口の門が使う(読めなければ投げ、口が不一致に倒す)。
+ *  文面は下の互換性検査と同じ形。 */
 export async function checkCodexCliVersion(readVersion: () => Promise<string>): Promise<ContainmentCapability> {
-  let observed: string;
-  try {
-    observed = (await readVersion()).trim();
-  } catch (error) {
-    observed = `unavailable (${String(error)})`;
-  }
+  const observed = (await readVersion()).trim();
   return observed === CODEX_APP_SERVER_VERSION
     ? { available: true }
     : { available: false, reason: `expected ${CODEX_APP_SERVER_VERSION}, observed ${observed}` };
