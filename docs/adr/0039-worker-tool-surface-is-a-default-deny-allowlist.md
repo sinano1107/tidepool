@@ -245,12 +245,10 @@ stream には1本しか出ない)。決定4 の SIGKILL がこの1本で決ま�
 
 ## 追記: `TaskOutput` を宣言から外す(issue #1269、2026-10-02)
 
-2.1.241 で session にツールの説明文を引用させると、`TaskOutput` は冒頭で DEPRECATED と
-書かれていた: バックグラウンドのタスクは出力ファイルのパスを tool result と
-`<task-notification>` で返し、`Bash` のタスクはそのファイルを `Read` で読む。2.1.284 /
-2.1.285 / 2.1.286 では `--tools` に挙げても面に出ない(消えたのは 2.1.242〜2.1.284 の
-どこか)。`TaskOutput` が面に無い状態でも、バックグラウンドの出力は `Read` で得られることを
-実測した(測定の詳細は #1269)。
+`TaskOutput` は廃止予告ののちに CLI の面から消えた: 2.1.284 以降は `--tools` に挙げても
+面に出ない。バックグラウンドのタスクは出力ファイルのパスを tool result と
+`<task-notification>` で返し、`Bash` のタスクはそのファイルを `Read` で読む — `TaskOutput` が
+面に無くても出力は得られる(測定は #1269)。
 
 したがって宣言から `TaskOutput` を外す — work は16本、review は13本になる。既定拒否の
 allowlist という決定は変わらない。決定1 の「`TaskOutput` / `TaskStop` … 落とすとバック

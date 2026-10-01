@@ -123,12 +123,14 @@ it("ping は Board call の口を通り、口が答えを返さなければ(上�
 });
 
 it("ping が allowlist 外のツールを観測したら不成立 — 具体名が残る", async () => {
+  // `TaskOutput` は 2.1.241 の形の init 行(宣言から外した名前がまだ面に有る — #1269)
   const result = await probeToolSurfaceCapability(async () => ({
-    tools: [...WORK_SURFACE, "CronCreate"],
+    tools: [...WORK_SURFACE, "CronCreate", "TaskOutput"],
     mcpServers: [],
     autoMemoryPath: null,
   }));
   expect(result.available === false && result.reason).toContain("CronCreate");
+  expect(result.available === false && result.reason).toContain("TaskOutput");
 });
 
 it("観測 ⊂ 期待も不成立 — 黙って不活性化した名前を挙げる(測定8)", async () => {
@@ -139,15 +141,6 @@ it("観測 ⊂ 期待も不成立 — 黙って不活性化した名前を挙げ
   }));
   expect(result.available === false && result.reason).toContain("Glob");
   expect(result.available === false && result.reason).toContain("TaskStop");
-});
-
-it("2.1.241 の形の init 行(`TaskOutput` が面に有る)は観測 ⊃ 期待で不成立 — `TaskOutput` を名指す(#1269)", async () => {
-  const result = await probeToolSurfaceCapability(async () => ({
-    tools: [...WORK_SURFACE, "TaskOutput"],
-    mcpServers: [],
-    autoMemoryPath: null,
-  }));
-  expect(result.available === false && result.reason).toContain("TaskOutput");
 });
 
 it("過不足が同時に起きたら両方を挙げる(綴りの取り違えの形そのもの)", async () => {
