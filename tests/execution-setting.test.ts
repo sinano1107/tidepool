@@ -281,14 +281,9 @@ it("モデル窓の除外は entry の解決した model に当たる —— 同
   ).toBe("claude-opus-5-5");
 });
 
-it("fable の窓は model 名の部分一致で当たる —— CLI の --model は開かれた文字列(ADR 0030)", () => {
-  const generation: ExecutionSettingTable = table.map((row) =>
-    row.provider === "anthropic" && row.tier === "frontier"
-      ? { ...row, model: "claude-fable-5-1" }
-      : row,
-  );
+it("fable の窓は model 名の部分一致で claude-fable-5-1 の行に当たる —— Throttle の窓は系列単位の枠(ADR 0182 決定3)", () => {
   expect(
-    selectExecutionSetting(input({ agentTier: "frontier" }), generation, {
+    selectExecutionSetting(input({ agentTier: "frontier" }), table, {
       providers: [],
       models: [{ provider: "anthropic", model: "fable" }],
     }),
