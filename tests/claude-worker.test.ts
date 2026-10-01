@@ -3705,7 +3705,7 @@ describe("上限到達による中断(issue #467 / ADR 0104)", () => {
 
     const spawned = listEvents(db, task.id).find((e) => e.kind === "worker_spawned")!;
     expect(order).toEqual([
-      { provider: "anthropic", model: "claude-sonnet-5-5", worker_spawned_event_id: spawned.id },
+      { provider: "anthropic", model: "claude-sonnet-5-5", worker_spawned_event_id: spawned.id, cause: "api_404" },
       "exited",
     ]);
   });
@@ -3797,6 +3797,8 @@ describe("上限到達による中断(issue #467 / ADR 0104)", () => {
     expect(kinds(db, task.id)).not.toContain("cap_interrupted");
     expect(getTask(db, task.id)!.status).toBe("in_progress");
     expect(slot.currentTaskId).toBe(task.id);
+    // fixture の init 行が盤面の宣言からずれると封じ込めの question が立つ(#1282)
+    expect(listBoard(db).filter((t) => t.type === "question")).toEqual([]);
   });
 
   it("slot 解放は容器の回収済み観測の後に起きる — 送達も exit も観測ではない(ADR 0099 決定3)", async () => {

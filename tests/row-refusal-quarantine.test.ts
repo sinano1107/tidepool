@@ -25,6 +25,23 @@ const settle = () => new Promise((resolve) => setImmediate(resolve));
 /** moonshot(Claude CLI 2.1.286)が未知の id に返した result envelope の形(2026-10-01 実測、#1249)。 */
 const REFUSED_404 = `${JSON.stringify({ type: "result", subtype: "success", is_error: true, api_error_status: 404, total_cost_usd: 0, modelUsage: {} })}\n`;
 
+/** CLI の版が model の最低版に届かない拒否の result 行(ADR 0187)。2.1.285 以降の実物の result 行は観測して
+ *  いない —— 2.1.286 の result 行の schema から組み立てた(#1267)。`result` の文は 2.1.241 で debug 出力に実測した
+ *  API の本文。 */
+const VERSION_TOO_OLD = `${JSON.stringify({
+  type: "result",
+  subtype: "success",
+  is_error: true,
+  api_error_status: 400,
+  api_error_code: "claude_code_version_too_old",
+  api_error: "claude_code_version_too_old",
+  result:
+    "Claude Code 2.1.241 does not support this model; version 2.1.251 or newer is required. " +
+    "Run 'claude update', or update the Claude desktop app, then try again.",
+  total_cost_usd: 0,
+  modelUsage: {},
+})}\n`;
+
 const events = async (id: string) => (await api(t.baseUrl, "GET", `/api/tasks/${id}/events`)).json as any[];
 
 /** 実 Claude adapter を fake の容器機構の上で盤面に載せる(worker-exit-without-report.test.ts と同じ形)。 */
@@ -62,7 +79,8 @@ async function bootClaude(options: { provider?: Provider; modelProbes?: Partial<
   return proc;
 }
 
-it("404 で終わった session は行の Quarantine を1枚立て、failure question も cap_interrupted も無く先頭へ戻り、次の pickup は同じティアの別の行で走る", async () => {
+/** economy ティアに2行ある盤面で、先頭の行(種の claude-sonnet-5-5)の session が `resultLine` で終わる。 */
+async function refuseFirstOfTwoRows(resultLine: string) {
   const proc = await bootClaude();
   // 同じ economy ティアに2行目(高いので先頭は種の claude-sonnet-5-5)
   applyExecutionSettingsChange(
@@ -77,9 +95,14 @@ it("404 で終わった session は行の Quarantine を1枚立て、failure que
   const other = queueWork(t, "queued after");
   await api(t.baseUrl, "POST", `/api/tasks/${other.id}/move`, { after: null });
 
-  proc.processes[0]!.stdout.write(REFUSED_404);
+  proc.processes[0]!.stdout.write(resultLine);
   proc.emitExit(1, null);
   await settle();
+  return refused;
+}
+
+it("404 で終わった session は行の Quarantine を1枚立て、failure question も cap_interrupted も無く先頭へ戻り、次の pickup は同じティアの別の行で走る", async () => {
+  const refused = await refuseFirstOfTwoRows(REFUSED_404);
 
   const [question, ...more] = await questions(t);
   expect(more).toEqual([]);
@@ -93,10 +116,29 @@ it("404 で終わった session は行の Quarantine を1枚立て、failure que
   expect(timeline.find((e) => e.kind === "row_refused")).toMatchObject({
     worker_id: "tidepool",
     origin: "board",
-    payload: { provider: "anthropic", model: "claude-sonnet-5-5", worker_spawned_event_id: spawned[0].id },
+    payload: { provider: "anthropic", model: "claude-sonnet-5-5", worker_spawned_event_id: spawned[0].id, cause: "api_404" },
   });
   expect(timeline.map((e) => e.kind)).not.toContain("cap_interrupted");
   // 先頭へ戻ったので、先頭へ動かした other より先に、同じティアの別の行で拾い直される
+  expect(spawned.map((e) => e.payload.model)).toEqual(["claude-sonnet-5-5", "claude-sonnet-5"]);
+});
+
+it("CLI の版の古さで終わった session も行の Quarantine を1枚立てて先頭へ戻り、question は原因を名指す(ADR 0187)", async () => {
+  const refused = await refuseFirstOfTwoRows(VERSION_TOO_OLD);
+
+  const [question, ...more] = await questions(t);
+  expect(more).toEqual([]);
+  // 文面そのものは domain の seam(quarantine.test.ts)が言う。ここは証拠の種類が question まで届くことだけ
+  expect(question.purpose).toContain("This board's Claude Code CLI is older than this model requires");
+
+  const timeline = await events(refused.id);
+  const spawned = timeline.filter((e) => e.kind === "worker_spawned");
+  expect(timeline.find((e) => e.kind === "row_refused")?.payload).toMatchObject({
+    provider: "anthropic",
+    model: "claude-sonnet-5-5",
+    cause: "cli_version_too_old",
+  });
+  expect(timeline.map((e) => e.kind)).not.toContain("cap_interrupted");
   expect(spawned.map((e) => e.payload.model)).toEqual(["claude-sonnet-5-5", "claude-sonnet-5"]);
 });
 

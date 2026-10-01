@@ -159,7 +159,7 @@ it("走っている間に表から消えた行の 404 は行の Quarantine を�
   moveTask(db, registerTask(db, { type: "work", title: "queued after", purpose: "why", completion_criteria: "done" }, clock.now()), null, clock.now());
   applyExecutionSettingsChange(db, { setting: "delete_row", provider, model }, "webui", clock.now());
 
-  rowRefusalHandler({ db, clock, slot, resolve: undefined, pollNow: () => {} })(task.id, { provider, model, worker_spawned_event_id: 1 }, Promise.resolve());
+  rowRefusalHandler({ db, clock, slot, resolve: undefined, pollNow: () => {} })(task.id, { provider, model, cause: "api_404", worker_spawned_event_id: 1 }, Promise.resolve());
   await settle();
 
   expect(openQuarantineValues(db, "tableRow")).toEqual([]);

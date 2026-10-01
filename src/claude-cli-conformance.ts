@@ -1,7 +1,8 @@
 import { once } from "node:events";
 import { Readable } from "node:stream";
 import { probeToolSurfaceCapability, readInitReport, readResultEvent, readToolSurface } from "./claude-worker.js";
-import type { ModelProbeResult } from "./cli-auth.js";
+import type { ModelProbe, ModelProbeResult } from "./cli-auth.js";
+import { SEED_EXECUTION_SETTINGS } from "./execution-setting.js";
 import { readInitField } from "./stream-json.js";
 import { claudeUsageObservation, parseUsage } from "./usage.js";
 
@@ -80,18 +81,39 @@ const SURFACES: Array<[string, (obs: ConformanceObservations, now: Date) => Prom
   ["translation client", async (obs) => (await obs.translation(), { pass: true, detail: "translated" })],
 ];
 
+/** 1面の観測を行にする。投げたらその面の不合格として読む。 */
+async function rowOf(surface: string, judge: () => Promise<Verdict>): Promise<Row> {
+  try {
+    return { surface, ...(await judge()) };
+  } catch (err) {
+    return { surface, pass: false, detail: `threw: ${err instanceof Error ? err.message : String(err)}` };
+  }
+}
+
 /** 面ごとの合否。面は順に1つずつ観測する —— 実物の `claude` を同時に起こさない。 */
 export async function judgeConformance(
   obs: ConformanceObservations,
   now: Date,
 ): Promise<{ rows: Row[]; ok: boolean }> {
   const rows: Row[] = [];
-  for (const [surface, judge] of SURFACES) {
-    try {
-      rows.push({ surface, ...(await judge(obs, now)) });
-    } catch (err) {
-      rows.push({ surface, pass: false, detail: `threw: ${err instanceof Error ? err.message : String(err)}` });
-    }
-  }
+  for (const [surface, judge] of SURFACES) rows.push(await rowOf(surface, () => judge(obs, now)));
   return { rows, ok: rows.every((row) => row.pass) };
+}
+
+/** 種の anthropic 行ごとに、盤面が回答時の再検査に使う model probe をこの版で撃つ(ADR 0187 決定4)。
+ *  走ったときだけ合格 —— 判定は probe の答えそのものである。1行ずつ順に撃つ。 */
+export async function judgeSeedRows(probe: ModelProbe): Promise<Row[]> {
+  const rows: Row[] = [];
+  for (const { provider, model } of SEED_EXECUTION_SETTINGS) {
+    if (provider !== "anthropic") continue;
+    rows.push(
+      await rowOf(`seed row ${model}`, async () => {
+        const result = await probe(model);
+        return result.status === "runs"
+          ? { pass: true, detail: "runs" }
+          : { pass: false, detail: `${result.status}: ${result.reason}` };
+      }),
+    );
+  }
+  return rows;
 }

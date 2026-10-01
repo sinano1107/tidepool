@@ -51,13 +51,19 @@ functions. It prints one row per surface as a Markdown table:
 - a nonexistent model id read as a row refusal (404)
 - the usage screen read as numbers
 - one draft-client call and one translation-client call
+- each anthropic seed row (ADR 0187 決定4) runs one minimal turn at this version, judged by the
+  board's own model probe
 
 The exit code is non-zero if any row is 不合格. It needs the `Delegate=yes` scope for the same reason
 as the board: every Board call runs in its own container.
 
-**Not covered: the 429 envelope.** A usage-cap interruption (ADR 0104) cannot be reproduced on
-demand, so this is an unverified surface. It is left to the existing fail-closed handling (ADR
-0186 決定7).
+**Not covered.** Two surfaces cannot be reproduced on demand, so they are unverified. Both are left
+to the existing fail-closed handling (ADR 0186 決定7, ADR 0187 決定5):
+
+- The 429 envelope: a usage-cap interruption (ADR 0104).
+- The version-too-old refusal envelope (`api_error_code: claude_code_version_too_old`): a model
+  that needs a CLI newer than the pinned version is usually not available at the time of the bump.
+  If the field disappears, the session falls to an unreported exit (ADR 0145).
 
 ## 5. Open the PR that changes the pinned version
 

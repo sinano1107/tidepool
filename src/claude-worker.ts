@@ -10,13 +10,13 @@ import { type BoardStatePath, boardStateOverlap } from "./board-state.js";
 import {
   isCapInterruptionEnvelope,
   isCliAuthFailureEnvelope,
-  isRowRefusalEnvelope,
   quarantineCliAuthForProvider,
+  rowRefusalCause,
 } from "./cli-auth.js";
 import type { Clock } from "./clock.js";
 import { type ContainmentCapability, quarantineContainment } from "./containment.js";
 import type { Db } from "./db.js";
-import { type AdvisorRecord, appendEvent, type EventPayload, type RowRefusal } from "./events.js";
+import { type AdvisorRecord, appendEvent, type EventPayload, type RowRefusal, type RowRefusalCause } from "./events.js";
 import {
   type ExecutionSetting,
   MOONSHOT_DEFAULT_MODEL,
@@ -893,9 +893,10 @@ function isCapInterruption(parsed: Record<string, unknown> | null): boolean {
   return parsed?.type === "result" && isCapInterruptionEnvelope(parsed);
 }
 
-/** 行の拒否(ADR 0184 決定3)。`isCapInterruption` と同じ形。 */
-function isRowRefusal(parsed: Record<string, unknown> | null): boolean {
-  return parsed?.type === "result" && isRowRefusalEnvelope(parsed);
+/** 行の拒否(ADR 0184 決定3・ADR 0187 決定1)の証拠の種類。`isCapInterruption` と同じく result 行だけを
+ *  読む —— 2.1.261〜2.1.284 はこの code を assistant 行にだけ載せる(#1267)。 */
+function rowRefusalOf(parsed: Record<string, unknown> | null): RowRefusalCause | null {
+  return parsed?.type === "result" ? rowRefusalCause(parsed) : null;
 }
 
 /** What the stdout scan collected about this session's advisor while the
@@ -2150,7 +2151,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     let lastResult: StreamResultEvent | null = null;
     let cliAuthFailed = false;
     let capInterrupted = false;
-    let rowRefused = false;
+    let refusalCause: RowRefusalCause | null = null;
     let buffered = "";
     // 面の照合は init 行1本で答えが出る(それ以降の行を JSON.parse し直す理由がない)
     let toolSurfaceObserved = false;
@@ -2169,7 +2170,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
         lastResult = readResultEvent(parsed) ?? lastResult;
         cliAuthFailed ||= isCliAuthFailure(parsed);
         capInterrupted ||= isCapInterruption(parsed);
-        rowRefused ||= isRowRefusal(parsed);
+        refusalCause ??= rowRefusalOf(parsed);
         advisorObserved.consultations += countAdvisorConsultations(parsed);
         advisorObserved.mainModel = readInitModel(parsed) ?? advisorObserved.mainModel;
         if (!toolSurfaceObserved) {
@@ -2209,7 +2210,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
       lastResult = readResultEvent(finalParsed) ?? lastResult;
       cliAuthFailed ||= isCliAuthFailure(finalParsed);
       capInterrupted ||= isCapInterruption(finalParsed);
-      rowRefused ||= isRowRefusal(finalParsed);
+      refusalCause ??= rowRefusalOf(finalParsed);
       // 文字の途中で stream が閉じた場合の未完バイト列を flush(この場合の
       // 置換文字は捏造ではなく「途中で切れた」事実そのもの)
       stderrBuffered = trimStderrTail(stderrBuffered + stderrDecoder.end());
@@ -2249,10 +2250,10 @@ export class ClaudeCodeWorker implements WorkerAdapter {
       }
       // ADR 0184 決定4: 行の拒否も同じ位置で exit の一撃より先に渡す。帰属は spawn 時の行で、
       // Provider では分岐しない(moonshot の 404 もこの1本を通る)。
-      if (rowRefused) {
+      if (refusalCause) {
         this.options.onRowRefused?.(
           task.id,
-          { provider: routing.provider, model: routing.model, worker_spawned_event_id: spawnedEventId },
+          { provider: routing.provider, model: routing.model, worker_spawned_event_id: spawnedEventId, cause: refusalCause },
           this.containers.reclaimed(task.id),
         );
       }
