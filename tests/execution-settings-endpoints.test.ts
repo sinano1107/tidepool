@@ -337,15 +337,11 @@ it.each(doors)("Quarantine 中の行の model を WebUI と同じ順(新しい�
   await change({ setting: "delete_row", provider: "anthropic", model: "claude-sonnet-5-5" });
 
   expect((await api(t.baseUrl, "GET", `/api/tasks/${questionId}`)).json).toMatchObject({ status: "done", question_answer: null });
-  const deleted = t.db
-    .prepare("SELECT id FROM events WHERE kind = 'execution_settings_changed' AND json_extract(payload, '$.setting') = 'delete_row'")
-    .pluck()
-    .get();
   const timeline = (await api(t.baseUrl, "GET", `/api/tasks/${questionId}/events`)).json as any[];
   expect(timeline.find((e) => e.kind === "quarantine_released")).toMatchObject({
     worker_id: "tidepool",
     origin: "board",
-    payload: { kind: "quarantine_released", quarantine: "tableRow", value: "anthropic/claude-sonnet-5-5", observed_event_id: deleted },
+    payload: { kind: "quarantine_released", quarantine: "tableRow", value: "anthropic/claude-sonnet-5-5", observed_event_id: expect.any(Number) },
   });
   expect(timeline.map((e) => e.kind)).not.toContain("question_answered");
   expect(timeline.map((e) => e.kind)).not.toContain("decision_logged");

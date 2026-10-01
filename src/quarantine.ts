@@ -278,6 +278,17 @@ export function openQuarantineValues(db: Db, kind: QuarantineKind): Array<string
     .all(kind) as Array<string | null>;
 }
 
+/** その種類で開いている確認型 question を、値 → question id で。 */
+export function openQuarantineQuestions(db: Db, kind: QuarantineKind): Map<string | null, string> {
+  const rows = db
+    .prepare(
+      `SELECT question_quarantine_value AS value, id FROM tasks
+       WHERE question_quarantine_kind = ? AND status = 'todo'`,
+    )
+    .all(kind) as Array<{ value: string | null; id: string }>;
+  return new Map(rows.map((row) => [row.value, row.id]));
+}
+
 /** 唯一の登録口。鍵が開いていれば既存の question に `quarantine_refired` を追記する
  *  だけで、それ以外は何もしない(1鍵につき確認は最大1枚)。 */
 export function registerQuarantine(

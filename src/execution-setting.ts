@@ -3,7 +3,7 @@ import { isClaudeModelAlias } from "./claude-model-alias.js";
 import type { Db } from "./db.js";
 import { appendEvent, type EventOrigin } from "./events.js";
 import { PROVIDER_VALUES, type Provider } from "./provider.js";
-import { openQuarantineQuestion, openQuarantineValues, tableRowValue } from "./quarantine.js";
+import { openQuarantineQuestions, openQuarantineValues, tableRowValue } from "./quarantine.js";
 import type { AgentDefinition } from "./registry.js";
 import { DomainError, HUMAN_WORKER_ID, type RegistryProposal, type RoutingProposal, type RoutingRowProposal, settleQuestionAsObserved, type Task } from "./tasks.js";
 
@@ -363,11 +363,12 @@ export function readExecutionSettings(db: Db): ExecutionDefaults & { table: Exec
  *  添える(ADR 0184 決定6)。meta-review の材料と worker の読み口は `readExecutionSettings` のまま。 */
 export function readExecutionSettingsWithQuarantine(db: Db) {
   const settings = readExecutionSettings(db);
+  const open = openQuarantineQuestions(db, "tableRow");
   return {
     ...settings,
     table: settings.table.map((row) => ({
       ...row,
-      quarantine_question_id: openQuarantineQuestion(db, "tableRow", tableRowValue(row.provider, row.model))?.id ?? null,
+      quarantine_question_id: open.get(tableRowValue(row.provider, row.model)) ?? null,
     })),
   };
 }
@@ -525,9 +526,8 @@ export function applyExecutionSettingsChange(db: Db, change: ExecutionSettingsCh
  *  回答なしで盤面名義に決着させる。誰も判断していないので decision log には載せない(CONTEXT.md「Decision log」)。 */
 function settleRemovedRowQuarantines(db: Db, at: Date, observedEventId: number): void {
   const rows = new Set(loadExecutionSettingTable(db).map((row) => tableRowValue(row.provider, row.model)));
-  for (const value of openQuarantineValues(db, "tableRow") as string[]) {
-    if (rows.has(value)) continue;
-    const { id } = openQuarantineQuestion(db, "tableRow", value)!;
+  for (const [value, id] of openQuarantineQuestions(db, "tableRow")) {
+    if (rows.has(value!)) continue;
     settleQuestionAsObserved(db, id, { kind: "quarantine_released", quarantine: "tableRow", value, observed_event_id: observedEventId }, at);
   }
 }
