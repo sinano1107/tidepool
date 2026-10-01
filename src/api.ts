@@ -389,7 +389,7 @@ const answerSchema = z.object({
   // the steering channel for a reject's reason (issue #40) — optional here;
   // which answers require it is the domain gate's call (ADR 0179), carried
   // through verbatim onto the question_answered event
-  comment: z.string().min(1).optional(),
+  comment: z.string().optional(),
   // routing の提案の approve に添える修正値(ADR 0150 決定2)。形は提案の種別ごとなので、検査は submitAnswer が持つ
   amendment: z.record(z.string(), z.unknown()).optional(),
 });

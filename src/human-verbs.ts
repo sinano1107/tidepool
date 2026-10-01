@@ -846,6 +846,8 @@ export async function submitAnswer(
   openTriage = false,
   amendment?: unknown,
 ): Promise<BoardTask> {
+  // 空・空白だけの comment は「comment なし」に畳む(issue #1310)。空白でない comment は手を加えない。以降はこの値だけを見る
+  if (!comment?.trim()) comment = undefined;
   // Every special-case side effect below must come after this validation.
   // Otherwise a malformed answer can retry promotion, inspect/merge a PR, or
   // verify quarantine before answerQuestion eventually rejects the payload.

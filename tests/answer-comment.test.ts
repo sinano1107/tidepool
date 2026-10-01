@@ -1,6 +1,9 @@
 import { afterEach, expect, it } from "vitest";
 import { openDb } from "../src/db.js";
+import { listEvents } from "../src/events.js";
+import { submitAnswer } from "../src/human-verbs.js";
 import { answerQuestion, DomainError, getTask, type RegisterTaskInput, registerTask } from "../src/tasks.js";
+import { unusedLanding } from "./fakes.js";
 import { api, bootTidepool, HOUR, mcpClient, registerWork, type Tidepool } from "./harness.js";
 
 let t: Tidepool;
@@ -183,4 +186,31 @@ it.each([
 ] as const)("%s の question への %s は comment なしで通る(ADR 0179 決定3)", (kind, answer) => {
   const { db, question } = domainQuestion(kind);
   expect(answerQuestion(db, question, [answer], at).question.status).toBe("done");
+});
+
+// 空・空白の comment を畳むのは submitAnswer —— HTTP と管理 MCP の両方の扉が通る application seam(門が answerQuestion にあるのとは別の層)。
+it.each([["空文字", ""], ["空白だけ", "   "]])("任意の回答の comment が%sなら comment なしに畳まれ、列は null・event に comment キーが載らない(issue #1310)", async (_name, comment) => {
+  const { db, question } = domainQuestion("escalation");
+  await submitAnswer({ db, pollNow: () => {}, landing: unusedLanding }, question, ["a"], comment, () => at);
+  expect(getTask(db, question.id)?.question_answer_comment).toBeNull();
+  const answered = listEvents(db, question.id).find((e) => e.kind === "question_answered");
+  expect(answered?.payload).not.toHaveProperty("comment");
+});
+
+it("前後に空白を含む空白でない comment は削らずそのまま保存される(issue #1310)", async () => {
+  const { db, question } = domainQuestion("escalation");
+  await submitAnswer({ db, pollNow: () => {}, landing: unusedLanding }, question, ["a"], " 理由 ", () => at);
+  expect(getTask(db, question.id)?.question_answer_comment).toBe(" 理由 ");
+  const answered = listEvents(db, question.id).find((e) => e.kind === "question_answered");
+  expect(answered?.payload).toMatchObject({ comment: " 理由 " });
+});
+
+it("HTTP の回答に comment: \"\" を送っても 400 にならず、任意の回答なら受理される(issue #1310)", async () => {
+  t = await bootTidepool();
+  const parent = await registerWork(t, "parent");
+  await t.clock.advance(HOUR);
+  const question = await escalateFrom(t, parent.id);
+
+  const res = await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, { answers: ["clerk"], comment: "" });
+  expect(res.status).toBe(200);
 });
