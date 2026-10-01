@@ -1026,7 +1026,7 @@ describe("ClaudeCodeWorker", () => {
     expect(calls[0]!.args).not.toContain("--disable-slash-commands");
   });
 
-  it("skills が空リストの agent は列挙 ping を呼ばず --disable-slash-commands 一発で全禁止する(ADR 0025 point 5)", async () => {
+  it("skills が空リストの agent は列挙 ping を呼ばず --disable-slash-commands 一発で全禁止し、--tools に Skill を載せない(ADR 0025 point 5 / ADR 0185)", async () => {
     const rec = recordingEnumerator(["code-review", "tdd"]);
     const { start, calls } = await makeWorker(
       { "agents/deckhand.md": skilledMd("  []\n") },
@@ -1036,13 +1036,8 @@ describe("ClaudeCodeWorker", () => {
     expect(calls).toHaveLength(1);
     expect(rec.calls).toEqual([]);
     expect(calls[0]!.args).toContain("--disable-slash-commands");
-  });
-
-  it("skills が空リストの agent の --tools には Skill が載らない — disable フラグが外す面に宣言を合わせる(ADR 0185)", async () => {
-    const { start, calls } = await makeWorker({ "agents/deckhand.md": skilledMd("  []\n") });
-    start("task-noskills-tools", null, "deckhand", "work");
+    // disable フラグが CLI の面から外す `Skill` を、宣言からも外す
     expect(spawnedTools(calls[0]!.args)).toEqual(WORK_SURFACE_WITHOUT_SKILL);
-    expect(calls[0]!.args).toContain("--disable-slash-commands");
   });
 
   it("有限の許可リストは列挙 ping の全集合から許可の補集合を Skill(名前) で deny する(ADR 0025 point 3)", async () => {
