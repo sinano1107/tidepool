@@ -687,14 +687,7 @@ it("未束ねの異議がある work は同じ門で理由と数を返す", asyn
   );
   git(workspace.path, "checkout", "-b", `task/${task.id}`);
   commitWork(workspace.path, "feature.txt", "ready\n");
-  const entryId = appendEvent(db, {
-    taskId: task.id,
-    workerId: "worker",
-    origin: "worker",
-    payload: { kind: "decision_logged", line: "ship this implementation" },
-    at: clock.now(),
-  });
-  raiseObjection(db, entryId, "the implementation still misses the edge case", clock.now());
+  raiseUnbundledObjection(db, clock, task.id);
 
   await expect(landing.land(task)).resolves.toEqual({
     kind: "deferred",
