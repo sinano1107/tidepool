@@ -318,7 +318,7 @@ export function startWatchdog(deps: {
   // 動く。遅れて届いた空の観測が、既に quarantine へ倒れた slot を黙って解放して
   // しまわないための門でもある(解放の門は確認 question ただ1つ)。
   const settled = new Set<string>();
-  // 梯子に入った後に観測した root の exit。梯子の底の question に添えるだけで、
+  // 今の pickup で観測した root の exit。読むのは梯子の底の question だけで、
   // どの判定にも使わない(ADR 0191)
   const exits = new Map<string, WorkerExit>();
   let pending: string | null = null;
@@ -351,8 +351,7 @@ export function startWatchdog(deps: {
       `the task hit its ${task.type} time limit (${limit}ms) and its container was ` +
         `reclaimed (graceful stop, then force reclaim after ${config.grace}ms grace). ` +
         "No self-report is possible." +
-        // root の exit は必ずここより先に観測されている: 容器の spawn は exit を adapter より
-        // 先に登録し、reclaimed の解決は microtask(#1297)
+        // root の exit は必ずここより先に観測済み(容器が exit を adapter より先に登録、reclaimed は microtask)
         exitSections(exits.get(taskId)),
       now,
     );
