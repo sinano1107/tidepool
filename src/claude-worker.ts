@@ -896,6 +896,18 @@ function readErrorResult(parsed: Record<string, unknown> | null): Record<string,
   return parsed?.type === "result" && parsed.is_error === true ? parsed : null;
 }
 
+/** ADR 0189: root のモデルが書いた最後の空でない text。CLI が合成した `<synthetic>` の行(ADR 0188 の主語)と
+ *  subagent の行は読まない。text の無い行は null —— 前の行の文を残す。 */
+function readRootText(parsed: Record<string, unknown> | null): string | null {
+  if (parsed?.type !== "assistant" || parsed.parent_tool_use_id != null) return null;
+  const message = parsed.message as { model?: unknown; content?: unknown } | undefined;
+  if (message?.model === "<synthetic>" || !Array.isArray(message?.content)) return null;
+  const texts = message.content.filter(
+    (block): block is { text: string } => block?.type === "text" && typeof block.text === "string" && block.text !== "",
+  );
+  return texts.at(-1)?.text ?? null;
+}
+
 function reportedError(line: Record<string, unknown> | null): string | null {
   if (line === null) return null;
   const { result, errors, api_error_status: status } = line;
@@ -2220,6 +2232,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     let capInterrupted = false;
     let refusalCause: RowRefusalCause | null = null;
     let lastErrorResult: Record<string, unknown> | null = null;
+    let lastMessage: string | null = null;
     let buffered = "";
     // 面の照合は init 行1本で答えが出る(それ以降の行を JSON.parse し直す理由がない)
     let toolSurfaceObserved = false;
@@ -2236,6 +2249,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
       capInterrupted ||= isCapInterruption(parsed);
       refusalCause ??= rowRefusalOf(parsed);
       lastErrorResult = readErrorResult(parsed) ?? lastErrorResult;
+      lastMessage = readRootText(parsed) ?? lastMessage;
       advisorObserved.consultations += countAdvisorConsultations(parsed);
       advisorObserved.mainModel = readInitModel(parsed) ?? advisorObserved.mainModel;
       if (!toolSurfaceObserved) {
@@ -2285,6 +2299,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
         signal,
         stderr_tail: stderrTail(stderrBuffered),
         reported_error: reportedError(lastErrorResult),
+        last_message: lastMessage,
       };
       // this diagnostic used to live in defaultSpawn (console.error only);
       // promoted here alongside the worker_exited write so an operator

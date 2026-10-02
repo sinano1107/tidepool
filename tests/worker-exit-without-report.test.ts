@@ -51,7 +51,7 @@ it("最終 verb なしに exit 0 した session は、時間制限を待たず�
   await t.clock.advance(HOUR);
   expect(started()).toEqual([task.id]);
 
-  t.worker.exitWith(task.id, { exit_code: 0, signal: null, stderr_tail: null, reported_error: null });
+  t.worker.exitWith(task.id, { exit_code: 0, signal: null, stderr_tail: null, reported_error: null, last_message: null });
   await settle();
 
   const [question, ...more] = await exitedWithoutReport();
@@ -72,7 +72,7 @@ it("signal で死んだ session は signal を、stderr が空でなければそ
   const task = queueWork(t, "crashes");
   await t.clock.advance(HOUR);
 
-  t.worker.exitWith(task.id, { exit_code: null, signal: "SIGSEGV", stderr_tail: "error: config rejected", reported_error: null });
+  t.worker.exitWith(task.id, { exit_code: null, signal: "SIGSEGV", stderr_tail: "error: config rejected", reported_error: null, last_message: null });
   await settle();
 
   const [question] = await exitedWithoutReport();
@@ -91,6 +91,7 @@ it("CLI が報告した失敗の文は、見出し付きで stderr 末尾の前�
     signal: null,
     stderr_tail: "models cache unreadable",
     reported_error: "API error status 400: model is not available",
+    last_message: null,
   });
   await settle();
 
@@ -104,12 +105,36 @@ it("CLI が報告した失敗の文は、見出し付きで stderr 末尾の前�
   );
 });
 
+it("worker の最後の発話は、見出し付きで CLI が報告した失敗の前に逐語で載る(ADR 0189)", async () => {
+  t = await bootTidepool({ watchdog: WATCHDOG });
+  const task = queueWork(t, "cancelled");
+  await t.clock.advance(HOUR);
+
+  t.worker.exitWith(task.id, {
+    exit_code: 1,
+    signal: null,
+    stderr_tail: null,
+    reported_error: "API error status 429: rate limited",
+    last_message: "tidepool_complete was cancelled by the MCP server.\nStopping here.",
+  });
+  await settle();
+
+  const [question] = await exitedWithoutReport();
+  expect(question.purpose).toBe(
+    `the worker for task "cancelled" (${task.id}) exited (exit code 1) without a final report — ` +
+      "it did not complete, decompose, or escalate. No self-report is possible." +
+      "\n\nlast message from the worker:\ntidepool_complete was cancelled by the MCP server.\nStopping here." +
+      "\n\nerror reported by the CLI:\nAPI error status 429: rate limited" +
+      '\n\n"retry" restarts this task from scratch at the queue head. "abandon" cancels this task and its remaining work.',
+  );
+});
+
 it("CLI が失敗を報告しなかった exit の文面は、その節を持たない(ADR 0188)", async () => {
   t = await bootTidepool({ watchdog: WATCHDOG });
   const task = queueWork(t, "quiet");
   await t.clock.advance(HOUR);
 
-  t.worker.exitWith(task.id, { exit_code: 1, signal: null, stderr_tail: "boom", reported_error: null });
+  t.worker.exitWith(task.id, { exit_code: 1, signal: null, stderr_tail: "boom", reported_error: null, last_message: null });
   await settle();
 
   const [question] = await exitedWithoutReport();
@@ -128,7 +153,7 @@ it("容器が空になった観測の前は枠を握ったままで、観測の�
   t.containers.hold(task.id);
   await t.clock.advance(HOUR);
 
-  t.worker.exitWith(task.id, { exit_code: 1, signal: null, stderr_tail: null, reported_error: null });
+  t.worker.exitWith(task.id, { exit_code: 1, signal: null, stderr_tail: null, reported_error: null, last_message: null });
   await settle();
 
   expect(await exitedWithoutReport()).toHaveLength(1);
@@ -157,7 +182,7 @@ it("最終 verb が着地したあとの exit では、この question は立た
     await client.close();
   }
 
-  t.worker.exitWith(task.id, { exit_code: 0, signal: null, stderr_tail: null, reported_error: null });
+  t.worker.exitWith(task.id, { exit_code: 0, signal: null, stderr_tail: null, reported_error: null, last_message: null });
   await settle();
 
   expect(await status(task.id)).not.toBe("in_progress");
@@ -172,7 +197,7 @@ it("watchdog が畳み込み停止を送達したあとの exit では、この 
   await t.clock.advance(90 * MIN); // 畳み込み停止
   expect(t.worker.gracefulStops).toEqual([task.id]);
 
-  t.worker.exitWith(task.id, { exit_code: null, signal: "SIGTERM", stderr_tail: null, reported_error: null });
+  t.worker.exitWith(task.id, { exit_code: null, signal: "SIGTERM", stderr_tail: null, reported_error: null, last_message: null });
   await settle();
   expect(await questions(t)).toEqual([]);
 
@@ -194,7 +219,7 @@ it("watchdog に殺されて retry された run が次の tick より先に exi
   await api(t.baseUrl, "POST", `/api/tasks/${killed.id}/answer`, { answers: ["retry"] });
   expect(started()).toEqual([task.id, task.id]);
 
-  t.worker.exitWith(task.id, { exit_code: 0, signal: null, stderr_tail: null, reported_error: null });
+  t.worker.exitWith(task.id, { exit_code: 0, signal: null, stderr_tail: null, reported_error: null, last_message: null });
   await settle();
 
   expect(await exitedWithoutReport()).toHaveLength(1);
@@ -206,9 +231,9 @@ it("retry の回答で task は queue 先頭へ戻り、abandon の回答で can
   const abandoned = queueWork(t, "abandoned");
   const busy = queueWork(t, "busy");
   await t.clock.advance(HOUR);
-  t.worker.exitWith(retried.id, { exit_code: 0, signal: null, stderr_tail: null, reported_error: null });
+  t.worker.exitWith(retried.id, { exit_code: 0, signal: null, stderr_tail: null, reported_error: null, last_message: null });
   await settle();
-  t.worker.exitWith(abandoned.id, { exit_code: 0, signal: null, stderr_tail: null, reported_error: null });
+  t.worker.exitWith(abandoned.id, { exit_code: 0, signal: null, stderr_tail: null, reported_error: null, last_message: null });
   await settle();
   expect(started()).toEqual([retried.id, abandoned.id, busy.id]);
   // retry の回答より前に先頭へ置いた task —— 先頭復帰なら retried がこれを追い越す

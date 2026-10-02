@@ -755,6 +755,28 @@ thread's history always fails.`));
     ).toBe("second");
   });
 
+  it("agent_message が2つあれば最後の text を、無ければ null を last_message に載せる(ADR 0189)", async () => {
+    const lastMessageAfter = async (id: string, events: object[]) => {
+      const f = await fixture();
+      const value = task(f.db, id);
+      f.start(value);
+      f.process.processes[0]!.stdout.write(events.map((event) => `${JSON.stringify(event)}\n`).join(""));
+      f.process.emitExit(0, null);
+      const exited = listEvents(f.db, value.id).find((event) => event.kind === "worker_exited");
+      return (exited!.payload as { last_message?: unknown }).last_message;
+    };
+    const said = (text: string) => ({ type: "item.completed", item: { id: "item_0", type: "agent_message", text } });
+    expect(
+      await lastMessageAfter("codex-two-messages", [
+        said("first"),
+        { type: "item.completed", item: { id: "item_1", type: "command_execution", command: "ls" } },
+        said("second"),
+        said(""),
+      ]),
+    ).toBe("second");
+    expect(await lastMessageAfter("codex-no-message", [{ type: "turn.completed", usage: {} }])).toBeNull();
+  });
+
   it("spawn 自体の失敗(syscall が \"spawn\" で始まる)は盤面側の一撃を呼び、spawn 族でない error は呼ばず spawn_failed も書かない(ADR 0118)", async () => {
     const calls: Array<[string, { error_code: string | null; message: string }]> = [];
     const f = await fixture((taskId, failure) => calls.push([taskId, failure]));
@@ -782,7 +804,7 @@ thread's history always fails.`));
     f.process.emitExit(null, "SIGSEGV");
 
     expect(calls).toEqual([
-      [value.id, { exit_code: null, signal: "SIGSEGV", stderr_tail: "boom", reported_error: null }, { exitedRecorded: true, forced: true }],
+      [value.id, { exit_code: null, signal: "SIGSEGV", stderr_tail: "boom", reported_error: null, last_message: null }, { exitedRecorded: true, forced: true }],
     ]);
   });
 

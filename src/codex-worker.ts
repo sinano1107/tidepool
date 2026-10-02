@@ -940,6 +940,14 @@ function readTurnFailure(value: unknown): string | null {
   return typeof message === "string" ? message : null;
 }
 
+/** ADR 0189: worker の発話は `item.completed` の `agent_message`(空の text は前の発話を残す)。 */
+function readAgentMessage(value: unknown): string | null {
+  if (!value || typeof value !== "object") return null;
+  const item = (value as { type?: unknown; item?: { type?: unknown; text?: unknown } }).item;
+  const completed = (value as { type?: unknown }).type === "item.completed" && item?.type === "agent_message";
+  return completed && typeof item.text === "string" && item.text !== "" ? item.text : null;
+}
+
 function consumeJsonl(
   buffered: string,
   chunk: string,
@@ -1112,9 +1120,11 @@ export class CodexWorker implements WorkerAdapter {
     let stderr = "";
     let usage: CodexUsage | null = null;
     let reportedError: string | null = null;
+    let lastMessage: string | null = null;
     const observe = (event: unknown) => {
       usage = readUsage(event) ?? usage;
       reportedError = readTurnFailure(event) ?? reportedError;
+      lastMessage = readAgentMessage(event) ?? lastMessage;
     };
     child.stdout.on("data", (chunk: Buffer | string) => {
       const text = chunk.toString();
@@ -1153,6 +1163,7 @@ export class CodexWorker implements WorkerAdapter {
         signal,
         stderr_tail: stderr.trim().split("\n").slice(-20).join("\n") || null,
         reported_error: reportedError,
+        last_message: lastMessage,
       };
       const normalized: Extract<EventPayload, { kind: "worker_exited" }>["usage"] = usage
         ? {
