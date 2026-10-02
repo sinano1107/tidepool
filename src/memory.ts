@@ -938,7 +938,7 @@ export function movedPins(db: Db, proposal: QuestionProposal | null): Array<{ id
  *  `GET /api/tasks/:id` と管理MCP の `list_board`・`get_task` がここを広げる。 */
 export function questionAnnotations(
   db: Db,
-  task: Pick<Task, "id" | "parent_id"> & Parameters<typeof isFixedChoiceQuestion>[0] & Parameters<typeof landingAnnotation>[1],
+  task: Omit<Task, "status">,
 ) {
   return {
     landing: landingAnnotation(db, task),
