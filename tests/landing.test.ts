@@ -2,8 +2,10 @@ import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { type Db, openDb } from "../src/db.js";
 import { appendEvent, listEvents } from "../src/events.js";
+import { submitAnswer } from "../src/human-verbs.js";
 import {
   createLanding,
+  landingAnnotation,
   registerLocalMergeQuestion,
   registerPrPromotionFailureQuestion,
 } from "../src/landing.js";
@@ -16,7 +18,7 @@ import {
   UnknownWorkspaceError,
   type WorkspaceConfig,
 } from "../src/workspace.js";
-import { FakeClock, FakeGitHubClient } from "./fakes.js";
+import { FakeClock, FakeGitHubClient, unusedLanding } from "./fakes.js";
 import {
   commitWork,
   FULL_HANDOFF,
@@ -871,4 +873,147 @@ it("fork 元が squash 着地した根は保護ブランチへ merge で追い�
   ).split(" ");
   expect(firstParent).toBe(before);
   expect(secondParent).toBe(git(workspace.path, "rev-parse", "refs/remotes/origin/main"));
+});
+
+// landingAnnotation は DB の状態だけで決まる — blocked_by の規則はここ(domain 層)で1度だけ述べる(ADR 0107)。
+// サーバ境界のテストは「読み口が注釈を写す」ことだけを述べる。
+function landingWork(db: Db, clock: FakeClock) {
+  return registerTask(
+    db,
+    {
+      type: "work",
+      title: "ship",
+      purpose: "ship an agreed change",
+      completion_criteria: "the change is ready",
+    },
+    clock.now(),
+  );
+}
+
+function mergeQuestion(
+  db: Db,
+  clock: FakeClock,
+  pending: { pending_local_merge_task_id: string } | { pending_merge_pr: number },
+) {
+  return registerTask(
+    db,
+    {
+      type: "question",
+      title: "land it",
+      purpose: "a human decides whether to land",
+      completion_criteria: "the answer is recorded",
+      question: [{ title: "land it", options: ["merge", "hold"], recommendation: "merge" }],
+      ...pending,
+    },
+    clock.now(),
+  );
+}
+
+function attachUnsettledChild(db: Db, clock: FakeClock, parentId: string) {
+  return registerTask(
+    db,
+    {
+      type: "work",
+      title: "repair",
+      purpose: "repair the landing task",
+      completion_criteria: "the repair is ready",
+      parent_id: parentId,
+    },
+    clock.now(),
+  );
+}
+
+function raiseUnbundledObjection(db: Db, clock: FakeClock, taskId: string) {
+  const entryId = appendEvent(db, {
+    taskId,
+    workerId: "worker",
+    origin: "worker",
+    payload: { kind: "decision_logged", line: "ship this implementation" },
+    at: clock.now(),
+  });
+  raiseObjection(db, entryId, "the implementation still misses the edge case", clock.now());
+}
+
+it("着地 question でない question には landingAnnotation が null を返す", async () => {
+  const { db, clock } = await openBoard();
+  const question = registerTask(
+    db,
+    {
+      type: "question",
+      title: "which way?",
+      purpose: "a human decides the direction",
+      completion_criteria: "the answer is recorded",
+      question: [{ title: "which way?", options: ["left", "right"], recommendation: "left" }],
+    },
+    clock.now(),
+  );
+
+  expect(landingAnnotation(db, question)).toBeNull();
+});
+
+it("付帯子も異議も無い着地 question は blocked_by が null", async () => {
+  const { db, clock } = await openBoard();
+  const work = landingWork(db, clock);
+
+  expect(
+    landingAnnotation(db, mergeQuestion(db, clock, { pending_local_merge_task_id: work.id })),
+  ).toEqual({ blocked_by: null });
+});
+
+it("未決着の付帯子を持つ着地 question は attached_children で塞がる", async () => {
+  const { db, clock } = await openBoard();
+  const work = landingWork(db, clock);
+  attachUnsettledChild(db, clock, work.id);
+
+  expect(
+    landingAnnotation(db, mergeQuestion(db, clock, { pending_local_merge_task_id: work.id })),
+  ).toEqual({ blocked_by: "attached_children" });
+});
+
+it("同じ triage で未束ねの異議を持つ着地 question は objections で塞がる", async () => {
+  const { db, clock } = await openBoard();
+  const work = landingWork(db, clock);
+  raiseUnbundledObjection(db, clock, work.id);
+
+  expect(
+    landingAnnotation(db, mergeQuestion(db, clock, { pending_local_merge_task_id: work.id })),
+  ).toEqual({ blocked_by: "objections" });
+});
+
+it("付帯子と異議が両方あれば attached_children を名乗り、回答経路の拒否理由と一致する", async () => {
+  const { db, clock } = await openBoard();
+  const work = landingWork(db, clock);
+  attachUnsettledChild(db, clock, work.id);
+  raiseUnbundledObjection(db, clock, work.id);
+  const question = mergeQuestion(db, clock, { pending_local_merge_task_id: work.id });
+
+  expect(landingAnnotation(db, question)).toEqual({ blocked_by: "attached_children" });
+  await expect(
+    submitAnswer(
+      { db, pollNow: () => {}, landing: unusedLanding },
+      question,
+      ["merge"],
+      undefined,
+      () => clock.now(),
+    ),
+  ).rejects.toThrow("attached child task(s) unsettled");
+});
+
+it("PR の merge question は PR から引いた着地タスクの付帯子で塞がる", async () => {
+  const { db, clock } = await openBoard();
+  const work = landingWork(db, clock);
+  recordPrOpened(db, work, 7, "worker", clock.now());
+  const question = mergeQuestion(db, clock, { pending_merge_pr: 7 });
+  expect(landingAnnotation(db, question)).toEqual({ blocked_by: null });
+
+  attachUnsettledChild(db, clock, work.id);
+
+  expect(landingAnnotation(db, question)).toEqual({ blocked_by: "attached_children" });
+});
+
+it("PR から着地タスクを引けない merge question は fail-closed で attached_children を名乗る", async () => {
+  const { db, clock } = await openBoard();
+  const question = mergeQuestion(db, clock, { pending_merge_pr: 99 });
+
+  expect(landingAnnotation(db, question)).toEqual({ blocked_by: "attached_children" });
 });
