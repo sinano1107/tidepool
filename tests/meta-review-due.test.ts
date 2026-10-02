@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import { type Db, openDb } from "../src/db.js";
+import { listEventsOfKinds } from "../src/events.js";
 import { applyExecutionSettingsChange, composeRoutingRow } from "../src/execution-setting.js";
 import {
   approveMemoryProposal,
@@ -14,7 +15,7 @@ import {
   rejectMemoryProposal,
 } from "../src/memory.js";
 import { type MetaReviewSubject, registerDueMetaReviews, registerMetaReview } from "../src/meta-review.js";
-import { HUMAN_WORKER_ID, listBoard, logDecision, registerTask } from "../src/tasks.js";
+import { answerQuestion, getTask, HUMAN_WORKER_ID, listBoard, logDecision, registerTask } from "../src/tasks.js";
 
 /** 周期の due 判定(ADR 0120 決定2・ADR 0151)のドメイン層: 同じ主題の meta-review 自身の産物は材料に数えない。 */
 const at = new Date("2026-09-24T00:00:00.000Z");
@@ -109,4 +110,53 @@ it("人間の memory の直接の無効化は材料で、周期が過ぎれば�
   registerDueMetaReviews(db, afterPeriod);
 
   expect(openMetaReviews(db, "memory")).toBe(1);
+});
+
+/** 最新の meta-review を failure question への abandon で取り消す(status を直接書かない、ADR 0193)。 */
+function abandonLatest(db: Db, now: Date) {
+  const review = listEventsOfKinds(db, ["meta_review_registered"]).at(-1)!.task_id!;
+  const question = registerTask(
+    db,
+    {
+      type: "question",
+      title: "failure",
+      purpose: "choose retry or abandon",
+      completion_criteria: "answered",
+      parent_id: review,
+      question: [{ title: "next step", options: ["retry", "abandon"], recommendation: "retry" }],
+      cancel_option: "abandon",
+    },
+    now,
+  );
+  answerQuestion(db, question, ["abandon"], now);
+  expect(getTask(db, review)?.status).toBe("cancelled");
+}
+
+const registrations = (db: Db) => listEventsOfKinds(db, ["meta_review_registered"]).length;
+
+it("abandon で取り消された meta-review の直後、周期が経つ前の poll では次の回を登録しない —— 周期は取り消された登録から数える(ADR 0193 決定2)", () => {
+  const db = openDb(":memory:");
+  const entry = knowledge(db, "stale");
+  previousReview(db, "memory");
+  invalidateMemoryEntry(db, { entry_id: entry, reason: "environment" }, HUMAN_WORKER_ID, "webui", at);
+  registerMetaReview(db, "memory", afterPeriod);
+  abandonLatest(db, afterPeriod);
+  knowledge(db, "after the abandon");
+
+  registerDueMetaReviews(db, new Date(afterPeriod.getTime() + 24 * 60 * 60 * 1000));
+
+  expect(registrations(db)).toBe(2);
+});
+
+it("取り消された回の窓にだけ材料があり、その後に変更が無くても、周期が経てば次の meta-review を登録する(ADR 0193 決定3)", () => {
+  const db = openDb(":memory:");
+  const entry = knowledge(db, "stale");
+  previousReview(db, "memory");
+  invalidateMemoryEntry(db, { entry_id: entry, reason: "environment" }, HUMAN_WORKER_ID, "webui", at);
+  registerMetaReview(db, "memory", afterPeriod);
+  abandonLatest(db, afterPeriod);
+
+  registerDueMetaReviews(db, new Date(afterPeriod.getTime() + 8 * 24 * 60 * 60 * 1000));
+
+  expect(registrations(db)).toBe(3);
 });

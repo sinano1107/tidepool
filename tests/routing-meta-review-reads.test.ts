@@ -65,10 +65,12 @@ function board() {
       at,
       payload: { kind: "allocation_reviewed", review_task_id: "r", worker_spawned_event_id: spawned, ...outcome } as Extract<EventPayload, { kind: "allocation_reviewed" }>,
     });
-  /** 登録された routing meta-review(読み手)。 */
-  const routingReview = () => {
+  /** 登録された routing meta-review(読み手)。done にすれば次の登録の「前回」になる(setup のみ、ADR 0193)。 */
+  const routingReview = (done = false) => {
     registerMetaReview(db, "routing", at);
-    return (db.prepare("SELECT id FROM tasks WHERE meta_review_subject = 'routing' ORDER BY rowid DESC").get() as { id: string }).id;
+    const id = (db.prepare("SELECT id FROM tasks WHERE meta_review_subject = 'routing' ORDER BY rowid DESC").get() as { id: string }).id;
+    if (done) db.prepare("UPDATE tasks SET status = 'done' WHERE id = ?").run(id);
+    return id;
   };
   return { db, work, spawn, exit, allocate, routingReview };
 }
@@ -144,7 +146,7 @@ it("shadow 行は書いた時点の両セルの受理数・却下数と除外後
   expect(listRoutingShadow(db, reader, { since_watermark: 0 }).shadow).toMatchObject(expected);
 });
 
-it("読み口の既定の窓は読み手より前の routing の登録の watermark から —— 読み手自身の登録も memory の登録も窓を動かさない", () => {
+it("読み口の既定の窓は読み手より前に完了した routing の登録の watermark から —— 読み手自身の登録も memory の登録も窓を動かさない", () => {
   const { db, work, spawn, exit, allocate, routingReview } = board();
   const before = work("before");
   recordShadow(db, before.id, shadow(opus, opus, "prior"), at);
@@ -152,7 +154,7 @@ it("読み口の既定の窓は読み手より前の routing の登録の waterm
   exit(before.id, old, ["gpt-5.6-sol"]);
   allocate(before.id, old, { judge, allocation: "appropriate", cause: "uncertain", evidence: "e" });
   applyExecutionSettingsChange(db, { setting: "row", row: { provider: "openai", tier: "standard", model: "gpt-5.6-sol", effort: "high", price_in: 1, price_out: 2 } }, "webui", at);
-  routingReview(); // 前回
+  routingReview(true); // 前回
   const after = work("after");
   recordShadow(db, after.id, shadow(opus, opus, "prior"), at);
   const fresh = spawn(after.id, "deckhand", opus);
@@ -202,7 +204,7 @@ it("list_routing_cells の新セルは終わった session で初めて観測さ
   const { db, work, spawn, exit, routingReview } = board();
   const task = work("t");
   exit(task.id, spawn(task.id, "deckhand", opus), ["claude-opus-5-5"]);
-  routingReview();
+  routingReview(true);
   exit(task.id, spawn(task.id, "deckhand", opus), ["claude-opus-5-5"]); // 既知
   spawn(task.id, "deckhand", sol); // 終わっていない session は観測ではない
   const seen = exit(task.id, spawn(task.id, "deckhand", setting("moonshot", "kimi-k3")), []);
