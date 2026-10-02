@@ -16,6 +16,7 @@ import {
   git,
   HOUR,
   mcpClient,
+  QUIET_EXIT,
   questions,
   queueWork,
   type Tidepool,
@@ -51,7 +52,7 @@ it("最終 verb なしに exit 0 した session は、時間制限を待たず�
   await t.clock.advance(HOUR);
   expect(started()).toEqual([task.id]);
 
-  t.worker.exitWith(task.id, { exit_code: 0, signal: null, stderr_tail: null, reported_error: null, last_message: null });
+  t.worker.exitWith(task.id, QUIET_EXIT);
   await settle();
 
   const [question, ...more] = await exitedWithoutReport();
@@ -72,7 +73,7 @@ it("signal で死んだ session は signal を、stderr が空でなければそ
   const task = queueWork(t, "crashes");
   await t.clock.advance(HOUR);
 
-  t.worker.exitWith(task.id, { exit_code: null, signal: "SIGSEGV", stderr_tail: "error: config rejected", reported_error: null, last_message: null });
+  t.worker.exitWith(task.id, { ...QUIET_EXIT, exit_code: null, signal: "SIGSEGV", stderr_tail: "error: config rejected" });
   await settle();
 
   const [question] = await exitedWithoutReport();
@@ -87,11 +88,10 @@ it("CLI が報告した失敗の文は、見出し付きで stderr 末尾の前�
   await t.clock.advance(HOUR);
 
   t.worker.exitWith(task.id, {
+    ...QUIET_EXIT,
     exit_code: 1,
-    signal: null,
     stderr_tail: "models cache unreadable",
     reported_error: "API error status 400: model is not available",
-    last_message: null,
   });
   await settle();
 
@@ -111,9 +111,8 @@ it("worker の最後の発話は、見出し付きで CLI が報告した失敗�
   await t.clock.advance(HOUR);
 
   t.worker.exitWith(task.id, {
+    ...QUIET_EXIT,
     exit_code: 1,
-    signal: null,
-    stderr_tail: null,
     reported_error: "API error status 429: rate limited",
     last_message: "tidepool_complete was cancelled by the MCP server.\nStopping here.",
   });
@@ -134,7 +133,7 @@ it("CLI が失敗を報告しなかった exit の文面は、その節を持た
   const task = queueWork(t, "quiet");
   await t.clock.advance(HOUR);
 
-  t.worker.exitWith(task.id, { exit_code: 1, signal: null, stderr_tail: "boom", reported_error: null, last_message: null });
+  t.worker.exitWith(task.id, { ...QUIET_EXIT, exit_code: 1, stderr_tail: "boom" });
   await settle();
 
   const [question] = await exitedWithoutReport();
@@ -153,7 +152,7 @@ it("容器が空になった観測の前は枠を握ったままで、観測の�
   t.containers.hold(task.id);
   await t.clock.advance(HOUR);
 
-  t.worker.exitWith(task.id, { exit_code: 1, signal: null, stderr_tail: null, reported_error: null, last_message: null });
+  t.worker.exitWith(task.id, { ...QUIET_EXIT, exit_code: 1 });
   await settle();
 
   expect(await exitedWithoutReport()).toHaveLength(1);
@@ -182,7 +181,7 @@ it("最終 verb が着地したあとの exit では、この question は立た
     await client.close();
   }
 
-  t.worker.exitWith(task.id, { exit_code: 0, signal: null, stderr_tail: null, reported_error: null, last_message: null });
+  t.worker.exitWith(task.id, QUIET_EXIT);
   await settle();
 
   expect(await status(task.id)).not.toBe("in_progress");
@@ -197,7 +196,7 @@ it("watchdog が畳み込み停止を送達したあとの exit では、この 
   await t.clock.advance(90 * MIN); // 畳み込み停止
   expect(t.worker.gracefulStops).toEqual([task.id]);
 
-  t.worker.exitWith(task.id, { exit_code: null, signal: "SIGTERM", stderr_tail: null, reported_error: null, last_message: null });
+  t.worker.exitWith(task.id, { ...QUIET_EXIT, exit_code: null, signal: "SIGTERM" });
   await settle();
   expect(await questions(t)).toEqual([]);
 
@@ -219,7 +218,7 @@ it("watchdog に殺されて retry された run が次の tick より先に exi
   await api(t.baseUrl, "POST", `/api/tasks/${killed.id}/answer`, { answers: ["retry"] });
   expect(started()).toEqual([task.id, task.id]);
 
-  t.worker.exitWith(task.id, { exit_code: 0, signal: null, stderr_tail: null, reported_error: null, last_message: null });
+  t.worker.exitWith(task.id, QUIET_EXIT);
   await settle();
 
   expect(await exitedWithoutReport()).toHaveLength(1);
@@ -231,9 +230,9 @@ it("retry の回答で task は queue 先頭へ戻り、abandon の回答で can
   const abandoned = queueWork(t, "abandoned");
   const busy = queueWork(t, "busy");
   await t.clock.advance(HOUR);
-  t.worker.exitWith(retried.id, { exit_code: 0, signal: null, stderr_tail: null, reported_error: null, last_message: null });
+  t.worker.exitWith(retried.id, QUIET_EXIT);
   await settle();
-  t.worker.exitWith(abandoned.id, { exit_code: 0, signal: null, stderr_tail: null, reported_error: null, last_message: null });
+  t.worker.exitWith(abandoned.id, QUIET_EXIT);
   await settle();
   expect(started()).toEqual([retried.id, abandoned.id, busy.id]);
   // retry の回答より前に先頭へ置いた task —— 先頭復帰なら retried がこれを追い越す

@@ -6,7 +6,7 @@ import { aggregateCells, loadEpisodes, recordShadow, selectorBranch } from "../s
 import { registerMetaReview } from "../src/meta-review.js";
 import { listAllocations, listRoutingCells, listRoutingShadow } from "../src/routing-review.js";
 import { registerTask } from "../src/tasks.js";
-import { WORKER_SPAWNED } from "./harness.js";
+import { QUIET_EXIT, WORKER_SPAWNED } from "./harness.js";
 
 /** 主題 routing の meta-review の読み口(issue #917 / spec #916 C)のドメイン層。verb への写像はサーバ境界
  *  (tests/routing-meta-review.test.ts)が言う。 */
@@ -50,11 +50,7 @@ function board() {
       at,
       payload: {
         kind: "worker_exited",
-        exit_code: 0,
-        signal: null,
-        stderr_tail: null,
-        reported_error: null,
-        last_message: null,
+        ...QUIET_EXIT,
         worker_spawned_event_id: spawned,
         usage: { ...tokens, advisor: null, models: Object.fromEntries(models.map((m) => [m, tokens])) },
       },

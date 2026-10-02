@@ -29,7 +29,7 @@ import {
   restoreMemoryEntry,
 } from "../src/memory.js";
 import { countUnsettledAttachedChildren, DomainError, getTask, logDecision, type MemoryProposal, registerTask } from "../src/tasks.js";
-import { bundledObjection, WORKER_SPAWNED } from "./harness.js";
+import { bundledObjection, QUIET_EXIT, WORKER_SPAWNED } from "./harness.js";
 
 const at = new Date("2026-09-14T00:00:00.000Z");
 
@@ -679,7 +679,7 @@ it("決定ログの各エントリは、それを含む worker session の worke
     workerId: "deckhand",
     origin: "board",
     at,
-    payload: { kind: "worker_exited", exit_code: 0, signal: null, stderr_tail: null, reported_error: null, last_message: null, worker_spawned_event_id: spawned, usage: null },
+    payload: { kind: "worker_exited", ...QUIET_EXIT, worker_spawned_event_id: spawned, usage: null },
   });
   const after = logDecision(db, task, "after the session exited", "human", at);
 

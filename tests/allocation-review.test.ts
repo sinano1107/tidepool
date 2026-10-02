@@ -4,7 +4,7 @@ import { appendEvent } from "../src/events.js";
 import { completeTask, getTask, HUMAN_WORKER_ID } from "../src/tasks.js";
 import { reportProviderUsage } from "../src/throttle.js";
 import { FakeAllocationClient } from "./fakes.js";
-import { api, bootTidepool, FULL_HANDOFF, HOUR, mcpClient, nextPoll, WORKER_SPAWNED as spawned, type Tidepool } from "./harness.js";
+import { api, bootTidepool, FULL_HANDOFF, HOUR, mcpClient, nextPoll, QUIET_EXIT, WORKER_SPAWNED as spawned, type Tidepool } from "./harness.js";
 
 let t: Tidepool;
 afterEach(() => t?.stop());
@@ -27,11 +27,7 @@ it("配分評価の入力は verdict・findings・実行設定と出所・要求
       spawned,
       exited: {
         kind: "worker_exited",
-        exit_code: 0,
-        signal: null,
-        stderr_tail: null,
-        reported_error: null,
-        last_message: null,
+        ...QUIET_EXIT,
         worker_spawned_event_id: 7,
         usage,
       },
@@ -99,11 +95,7 @@ async function reviewedWork(t: Tidepool, options: { session: boolean } = { sessi
       at: t.clock.now(),
       payload: {
         kind: "worker_exited",
-        exit_code: 0,
-        signal: null,
-        stderr_tail: null,
-        reported_error: null,
-        last_message: null,
+        ...QUIET_EXIT,
         worker_spawned_event_id: spawnedId,
         usage,
       },
