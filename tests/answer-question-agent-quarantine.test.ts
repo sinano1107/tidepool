@@ -67,12 +67,7 @@ describe("agent の quarantine(ADR 0012 / issue #36: workspace 版の agent 名�
       BOARD_WORKER_ID,
     );
 
-    const answered = answerQuestion(
-      db,
-      question,
-      ["repaired by hand"],
-      new Date(1),
-    );
+    const answered = answerQuestion(db, question, ["repaired by hand"], new Date(1));
 
     expect(answered.status).toBe("done");
     expect(agentNeedsHuman(db, "navigator")).toBe(false);

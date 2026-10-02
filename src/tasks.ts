@@ -1403,11 +1403,8 @@ export function answerQuestion(
       unblockTarget.status === "todo" &&
       !hasUnfinishedChildren(db, unblockTarget.id)
     ) {
-      if (stageUnblock) {
-        stageUnblock(unblockTarget.id);
-      } else {
-        moveTask(db, unblockTarget, null, now, HUMAN_WORKER_ID, origin);
-      }
+      if (stageUnblock) stageUnblock(unblockTarget.id);
+      else moveTask(db, unblockTarget, null, now, HUMAN_WORKER_ID, origin);
     }
   })();
   return getTask(db, question.id)!;
