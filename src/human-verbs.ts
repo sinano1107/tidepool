@@ -44,7 +44,6 @@ import {
   getTask,
   type HandoffDoc,
   HUMAN_WORKER_ID,
-  hasUnfinishedChildren,
   humanDecomposeTask,
   latestChild,
   logDecision,
@@ -647,15 +646,6 @@ function assertLandingAllowed(db: Db, landingTaskId: string): void {
   );
 }
 
-/** A settled child can make its parent immediately pickable on either human surface. */
-function pollIfParentUnblocked(db: Db, task: Task, pollNow: () => void): void {
-  if (!task.parent_id) return;
-  const parent = getTask(db, task.parent_id);
-  if (parent && parent.status === "todo" && !hasUnfinishedChildren(db, parent.id)) {
-    pollNow();
-  }
-}
-
 function promotionRetryError(verdict: LandingVerdict): string | undefined {
   switch (verdict.kind) {
     case "landed":
@@ -720,7 +710,7 @@ export async function completeThroughHumanDoor(
     }
     assertUnsettledNotInProgress(task, "completed");
     const done = completeTask(deps.db, task, handoff, HUMAN_WORKER_ID, now(), origin);
-    pollIfParentUnblocked(deps.db, done, deps.pollNow);
+    deps.pollNow();
     await deps.landing.relandAncestors(done);
     return { ok: true, value: presentTask(deps.db, done, deps.defaultAgentName, deps.auditorName) };
   } catch (err) {
@@ -781,7 +771,7 @@ export async function cancelThroughHumanDoor(
       ),
       origin,
     );
-    pollIfParentUnblocked(deps.db, task, deps.pollNow);
+    deps.pollNow();
     await deps.landing.relandAncestors(task);
     return { ok: true, value: presentTask(deps.db, task, deps.defaultAgentName, deps.auditorName) };
   } catch (err) {
