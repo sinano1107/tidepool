@@ -2228,24 +2228,25 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     // the init line — so they are accumulated while the stream runs. The stdout
     // scan already reads every line, so the added cost is a filter per line.
     const advisorObserved: AdvisorObservation = { consultations: 0, mainModel: null };
+    // 1行の観測はここ1か所 —— stream のループと exit の flush が同じ集合を通す(issue #1301)。
+    // 行は1度だけ decode し、全観測が同じ `parsed` を読む(see parseStreamLine)
+    const observe = (parsed: Record<string, unknown> | null) => {
+      lastResult = readResultEvent(parsed) ?? lastResult;
+      cliAuthFailed ||= isCliAuthFailure(parsed);
+      capInterrupted ||= isCapInterruption(parsed);
+      refusalCause ??= rowRefusalOf(parsed);
+      lastErrorResult = readErrorResult(parsed) ?? lastErrorResult;
+      advisorObserved.consultations += countAdvisorConsultations(parsed);
+      advisorObserved.mainModel = readInitModel(parsed) ?? advisorObserved.mainModel;
+      if (!toolSurfaceObserved) {
+        toolSurfaceObserved = this.checkSessionToolSurface(task, enforcement.disableSlashCommands, parsed);
+      }
+    };
     child.stdout.on("data", (chunk: Buffer | string) => {
       buffered += chunk.toString();
       const lines = buffered.split("\n");
       buffered = lines.pop() ?? "";
-      for (const line of lines) {
-        // decoded once, read by every concern below (see parseStreamLine)
-        const parsed = parseStreamLine(line);
-        lastResult = readResultEvent(parsed) ?? lastResult;
-        cliAuthFailed ||= isCliAuthFailure(parsed);
-        capInterrupted ||= isCapInterruption(parsed);
-        refusalCause ??= rowRefusalOf(parsed);
-        lastErrorResult = readErrorResult(parsed) ?? lastErrorResult;
-        advisorObserved.consultations += countAdvisorConsultations(parsed);
-        advisorObserved.mainModel = readInitModel(parsed) ?? advisorObserved.mainModel;
-        if (!toolSurfaceObserved) {
-          toolSurfaceObserved = this.checkSessionToolSurface(task, enforcement.disableSlashCommands, parsed);
-        }
-      }
+      for (const line of lines) observe(parseStreamLine(line));
     });
     this.running.set(task.id, child);
     // issue #127: Node's spawn() itself failing (ENOENT/EACCES/PATH
@@ -2275,12 +2276,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
       // mid-line), which would otherwise strand the last result line in
       // `buffered` forever and read as a false "missing usage" — same
       // status as an actual kill, which it isn't
-      const finalParsed = parseStreamLine(buffered);
-      lastResult = readResultEvent(finalParsed) ?? lastResult;
-      cliAuthFailed ||= isCliAuthFailure(finalParsed);
-      capInterrupted ||= isCapInterruption(finalParsed);
-      refusalCause ??= rowRefusalOf(finalParsed);
-      lastErrorResult = readErrorResult(finalParsed) ?? lastErrorResult;
+      observe(parseStreamLine(buffered));
       // 文字の途中で stream が閉じた場合の未完バイト列を flush(この場合の
       // 置換文字は捏造ではなく「途中で切れた」事実そのもの)
       stderrBuffered = trimStderrTail(stderrBuffered + stderrDecoder.end());

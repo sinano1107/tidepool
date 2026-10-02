@@ -3316,6 +3316,16 @@ describe("advisor capability (issue #33)", () => {
     expect(usageOf(db, "task-advisor-count")?.advisor).toMatchObject({ consultations: 3 });
   });
 
+  it("改行なしの最終チャンクにある相談も数える(issue #1301)", async () => {
+    const { start, processes, emitExit, db } = await makeWorker(withAdvisor);
+    start("task-advisor-final-chunk");
+    processes[0]!.stdout.write(initLine("claude-sonnet-5"));
+    processes[0]!.stdout.write(resultLine());
+    processes[0]!.stdout.write(consultation("srvtoolu_01").trimEnd());
+    emitExit(0, null);
+    expect(usageOf(db, "task-advisor-final-chunk")?.advisor).toMatchObject({ consultations: 1 });
+  });
+
   // 通常の tool_use(MCP verb 等)を advisor と数え間違えない — 数えるのは
   // `server_tool_use` かつ name が advisor のものだけ。
   it("通常の tool_use は相談として数えない", async () => {
