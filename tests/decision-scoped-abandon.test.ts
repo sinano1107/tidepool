@@ -9,6 +9,7 @@ import {
   presentTask,
   registerTask,
 } from "../src/tasks.js";
+import { failureQuestion } from "./harness.js";
 
 const at = new Date("2026-08-05T00:00:00.000Z");
 
@@ -27,29 +28,13 @@ function work(db: ReturnType<typeof openDb>, title: string, parent_id?: string, 
   );
 }
 
-function failureQuestion(db: ReturnType<typeof openDb>, failedId: string) {
-  return registerTask(
-    db,
-    {
-      type: "question",
-      title: "failure",
-      purpose: "choose retry or abandon",
-      completion_criteria: "answered",
-      parent_id: failedId,
-      question: [{ title: "next step", options: ["retry", "abandon"], recommendation: "retry" }],
-      cancel_option: "abandon",
-    },
-    at,
-  );
-}
-
 it("RCA self の abandon は独立した auditor と修理タスクを巻き込まない", () => {
   const db = openDb(":memory:");
   const target = work(db, "T");
   const selfReview = work(db, "RCA self", target.id);
   const auditorReview = work(db, "RCA auditor", target.id);
   const repair = work(db, "repair", target.id);
-  const question = failureQuestion(db, selfReview.id);
+  const question = failureQuestion(db, selfReview.id, at);
 
   answerQuestion(db, question, ["abandon"], at);
 
@@ -65,7 +50,7 @@ it("failure question は同じ分解判断の兄弟自身だけを held にし�
   const failed = work(db, "A", parent.id, 48);
   const sameDecision = work(db, "B", parent.id, 48);
   const otherDecision = work(db, "RCA auditor", parent.id);
-  failureQuestion(db, failed.id);
+  failureQuestion(db, failed.id, at);
 
   expect(presentTask(db, sameDecision).status).toBe("held");
   expect(presentTask(db, otherDecision).status).toBe("todo");
@@ -99,7 +84,7 @@ it("判断を持たない異議由来タスクの abandon は既存の分解判�
   const b = work(db, "B", parent.id, 48);
   const selfReview = work(db, "RCA self", parent.id);
   const auditorReview = work(db, "RCA auditor", parent.id);
-  const question = failureQuestion(db, selfReview.id);
+  const question = failureQuestion(db, selfReview.id, at);
 
   answerQuestion(db, question, ["abandon"], at);
 
@@ -154,7 +139,7 @@ it("承認経由で実体化した子と未回答の承認 question は同じ分
     },
     at,
   );
-  const failure = failureQuestion(db, failed.id);
+  const failure = failureQuestion(db, failed.id, at);
 
   answerQuestion(db, failure, ["abandon"], at);
 
