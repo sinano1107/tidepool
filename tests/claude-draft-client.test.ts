@@ -242,13 +242,24 @@ describe("ClaudeDraftClient", () => {
     const noRow = openDb(":memory:");
     applyExecutionSettingsChange(noRow, { setting: "delete_row", provider: "anthropic", model: "claude-sonnet-5-5" }, "webui", NOW);
     const closed = openDb(":memory:");
-    reportProviderUsage(closed, { provider: "anthropic", status: "unauthorized", plan: null, cliVersion: null, observedAt: NOW, windows: [] });
+    // 行の model の窓だけが閉じている —— Provider 全体の除外では、行の model を窓の確認に渡していることが釘にならない
+    const later = new Date(NOW.getTime() + 3_600_000);
+    reportProviderUsage(closed, {
+      provider: "anthropic",
+      status: "observed",
+      plan: null,
+      cliVersion: null,
+      observedAt: NOW,
+      windows: [
+        { window: "sonnet", model: "claude-sonnet-5-5", usedPercent: 100, durationMs: 3_600_000, resetsAt: later, throttled: true, resumesAt: later },
+      ],
+    });
 
     await expect(new ClaudeDraftClient({ db: noRow, exec }).draftTask("dump", "English")).rejects.toThrow(
-      "no row for anthropic / economy",
+      "draft not made: the board's execution-setting table has no row for anthropic / economy",
     );
     await expect(new ClaudeDraftClient({ db: closed, exec }).draftTask("dump", "English")).rejects.toThrow(
-      "the Anthropic window is closed",
+      "draft not made: the Anthropic window is closed",
     );
     expect(calls).toEqual([]);
   });

@@ -214,9 +214,15 @@ export class ClaudeDraftClient implements DraftClient {
   // runs on the table's cheapest anthropic × economy row (ADR 0192): no row or
   // a closed Anthropic window fails with the reason, never falls back to another model
   private async run(prompt: string): Promise<unknown> {
-    const row = anthropicBoardCallRow(this.db, "economy");
+    let row;
+    try {
+      row = anthropicBoardCallRow(this.db, "economy");
+    } catch (err) {
+      throw new Error(`draft not made: ${(err as Error).message}`);
+    }
+    // 窓の閉鎖は throttle だけでなく Provider 認証の除外でも起きるので、原因は名乗らない
     if (isAnthropicBoardCallBlocked(this.db, row.model)) {
-      throw new Error("draft not made: the Anthropic window is closed (throttled)");
+      throw new Error("draft not made: the Anthropic window is closed");
     }
     return runOneShotJsonPrompt(this.exec, prompt, row.model, row.effort, "draft");
   }
