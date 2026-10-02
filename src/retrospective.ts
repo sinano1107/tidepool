@@ -125,7 +125,8 @@ function boardCallSetting<C>(
     return { unavailable: `Board call not made: ${message(err)}` };
   }
   if (isAnthropicBoardCallBlocked(db, setting.model)) {
-    return { unavailable: "Board call not made: the Anthropic window is closed (throttled)" };
+    // 窓の閉鎖は throttle だけでなく Provider 認証の除外でも起きるので、原因は名乗らない
+    return { unavailable: "Board call not made: the Anthropic window is closed" };
   }
   const preflight = containers?.preflight();
   if (preflight && !preflight.available) return { unavailable: `Board call not made: ${preflight.reason}` };
