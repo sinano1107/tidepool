@@ -1652,7 +1652,7 @@ interface AuthorityContext {
   allowed_workspaces?: string[];
   /** The merge dial (issue #11, three-valued since ADR 0079 — see registry.ts):
    *  `escalate` makes recordPrOpened register a merge-decision question for
-   *  every PR; `auto_if_ci_green` queues it for the unattended poll (merge.ts);
+   *  every PR; `auto_if_ci_green` queues it for the unattended poll (landing.ts);
    *  `external` leaves it to GitHub. Undefined stays possible on this code-side
    *  type — a hand-built profile (the reviewer floor, ADR 0013) carries no dial
    *  — and is inert like `external`. */
@@ -1671,7 +1671,7 @@ export const PR_PROMOTION_FAILURE_OPTIONS = ["retry", "abandon promotion"] as co
  *  fallbacks) — only the title/purpose/recommendation differ per caller. Always
  *  under the board's name: the board's rule raises it, whoever opened the PR
  *  (ADR 0194 決定3).
- *  Exported so merge.ts's CI-failure fallback shares this exact shape too,
+ *  Exported so landing.ts's CI-failure fallback shares this exact shape too,
  *  rather than redeclaring it (they must never drift apart). */
 export function registerMergeQuestion(
   db: Db,
@@ -1744,7 +1744,7 @@ export function settleQuestionAsObserved(
 
 /** Queues a completed low-risk task's PR for the auto_if_ci_green poll (issue
  *  #11) — recordPrOpened's low-risk branch is the only writer; the poll
- *  itself (merge.ts) is the only reader/deleter. */
+ *  itself (landing.ts) is the only reader/deleter. */
 function queuePendingAutoMerge(db: Db, taskId: string, prNumber: number): void {
   db.prepare("INSERT INTO pending_auto_merges (task_id, pr_number) VALUES (?, ?)").run(
     taskId,
@@ -1761,7 +1761,7 @@ function queuePendingAutoMerge(db: Db, taskId: string, prNumber: number): void {
  *  GitHubClient dependency). `auto_if_ci_green` asks the same way for a task
  *  that carries risk (never silently auto-merges a risky change, regardless
  *  of the dial); a low-risk task instead queues for the unattended CI poll
- *  (merge.ts). `external` leaves the merge to GitHub's own PR surface: the PR
+ *  (landing.ts). `external` leaves the merge to GitHub's own PR surface: the PR
  *  opens and the board takes no further action — a declared inertness, not a
  *  residual one, so it is spelled as its own case below (ADR 0079).
  *  A task executing against a protected workspace
@@ -2010,8 +2010,8 @@ export function decomposeTask(
 /** Whether `parentId` already carries a child an agent registered (issue
  *  #129): an agent's only path to registering a child at all is the
  *  `decompose` MCP tool, so "a child whose own `task_registered` event was
- *  attributed to a non-human worker" and "an agent has already exercised its
- *  one decompose judgment here" are the same fact — no separate provenance
+ *  attributed to neither the human nor the board" and "an agent has already
+ *  exercised its one decompose judgment here" are the same fact — no separate provenance
  *  marker is needed. Any status counts (even a since-cancelled agent child
  *  still means the judgment was made); this is deliberately permanent, not
  *  reset if that child later settles. A board-named child (failure question,
@@ -2030,14 +2030,24 @@ function hasAgentRegisteredChild(db: Db, parentId: string): boolean {
 }
 
 /** Whether `taskId`'s own `task_registered` event was attributed to a human
- *  (issue #130): the mirror of `hasAgentRegisteredChild`'s technique — an
- *  agent's only path to registering a task at all is the `decompose` MCP tool,
- *  so a `task_registered` event by `HUMAN_WORKER_ID` is exactly "a human
- *  registered this task" (a root the human registered, or a child they added
- *  via human decompose). No separate provenance marker is needed. registerTask
- *  writes exactly one `task_registered`, so the latest is the task's only one. */
-export function isHumanRegistered(db: Db, taskId: string): boolean {
+ *  (issue #130): the mirror of `hasAgentRegisteredChild`'s technique — a task
+ *  is registered by the human, the board (`BOARD_WORKER_ID`, its own rules), or
+ *  an agent (only via the `decompose` MCP tool), so a `task_registered` event
+ *  by `HUMAN_WORKER_ID` is exactly "a human registered this task" (a root the
+ *  human registered, or a child they added via human decompose). No separate
+ *  provenance marker is needed. registerTask writes exactly one
+ *  `task_registered`, so the latest is the task's only one. */
+function isHumanRegistered(db: Db, taskId: string): boolean {
   return latestEventOfTask(db, taskId, "task_registered")?.worker_id === HUMAN_WORKER_ID;
+}
+
+/** Whether `taskId`'s text carries the human's words (ADR 0194 決定6): the
+ *  human registered it, or its registration record carries objection material
+ *  (ADR 0171) — an RCA review is board-named yet carries the human's direction
+ *  comments in its purpose. */
+export function carriesHumanWords(db: Db, taskId: string): boolean {
+  const registered = latestEventOfTask(db, taskId, "task_registered")!;
+  return registered.worker_id === HUMAN_WORKER_ID || !!registered.payload.objection_event_ids?.length;
 }
 
 /** The status half of the human-decompose gate (issue #129), split out so the
@@ -2075,13 +2085,14 @@ function assertHumanDecomposable(db: Db, parent: Task): void {
 
 /** The edit / direct-cancel scope gate (issue #130, CONTEXT.md's Edit and
  *  Cancel): both share one line — the task must be human-registered (an
- *  agent-registered decompose child is out of scope; the objection → repair
- *  route handles dissatisfaction with it), unsettled, and not in_progress. The
+ *  agent-registered decompose child is out of scope, the objection → repair
+ *  route handles dissatisfaction with it; a board-registered task is out of
+ *  scope until #1348 decides it), unsettled, and not in_progress. The
  *  `verb` distinguishes the two callers' error wording. */
 function assertHumanEditableScope(db: Db, task: Task, verb: string): void {
   if (!isHumanRegistered(db, task.id)) {
     throw new DomainError(
-      `only a human-registered task can be ${verb} — an agent's decompose child is out of scope`,
+      `only a human-registered task can be ${verb} — a task an agent or the board registered is out of scope`,
     );
   }
   assertUnsettledNotInProgress(task, verb);

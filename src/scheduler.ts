@@ -9,7 +9,7 @@ import {
 } from "./containment.js";
 import type { Db } from "./db.js";
 import { getDisplayLanguage } from "./display-language.js";
-import { appendEvent, latestEventOfTask } from "./events.js";
+import { appendEvent } from "./events.js";
 import {
   type ExecutionExclusions,
   type ExecutionSetting,
@@ -42,10 +42,10 @@ import type { Slot } from "./slot.js";
 import { expireSpendDown } from "./spend-down.js";
 import {
   abandonConsequence,
+  carriesHumanWords,
   contentSourceFor,
   DEFAULT_AUDITOR_NAME,
   escalateTask,
-  HUMAN_WORKER_ID,
   nextSlotTask,
   pickupTask,
   resolveTaskAgent,
@@ -435,9 +435,7 @@ export function startScheduler(deps: {
    *  異議の材料を持つ task を、表示言語が English でない盤面でだけ、title / purpose / 完了基準の1つの文面として英語へ訳す。
    *  訳せなければ理由を返し、pickup は止めない —— client の無い盤面は撃たなかったのと同じ throttled。 */
   async function injectionQuery(task: Task): Promise<InjectionQuery | undefined> {
-    const registered = latestEventOfTask(db, task.id, "task_registered")!;
-    const humanWords = registered.worker_id === HUMAN_WORKER_ID || !!registered.payload.objection_event_ids?.length;
-    if (!humanWords || getDisplayLanguage(db) === "English") return undefined;
+    if (!carriesHumanWords(db, task.id) || getDisplayLanguage(db) === "English") return undefined;
     if (!translationClient) return { reason: "throttled" };
     try {
       const outcome = await translateSource(db, translationClient, injectionQueryText(task), "English", clock.now());

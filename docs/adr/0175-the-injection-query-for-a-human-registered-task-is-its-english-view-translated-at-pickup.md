@@ -1,5 +1,7 @@
 # 注入の関連 leaf は、人間が登録した task では pickup 時に訳した英語の view で引く
 
+**Status 追記: 決定3 の「人間が登録した task だけ」は ADR-0194 決定6 で改訂済み** —— 訳すのは、人間が登録した task か、登録の記録に異議の材料を持つ task(表示言語が English でない盤面でだけ、は不変)。RCA review が盤面の名義になっても、purpose に人間の方向コメントを運ぶためである。
+
 2026-09-30 の triage / grilling(issue #1171)で決定。索引の正文は英語だけ(ADR 0015 四度目の精密化、issue #1052)だが、
 spawn 注入の関連 leaf を選ぶ query は task の title / purpose / 完了基準で、人間が登録した task ではペイロード(原語)である。
 表示言語の既定は Japanese なので、既定の盤面では人間が登録した task の関連 leaf がほぼ常に空になる。実測と `file:line` は
