@@ -25,7 +25,6 @@ export function readLines(stream: NodeJS.ReadableStream, onLine: (line: string) 
   return () => {
     take(end());
     if (buffered !== "") onLine(buffered);
-    buffered = "";
   };
 }
 

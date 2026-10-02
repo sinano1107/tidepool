@@ -952,7 +952,6 @@ function readAgentMessage(value: unknown): string | null {
 /** JSONL の1行を読む。空行は読まず、壊れた行は捨てる —— 逐語の transcript が残る証拠で、
  *  壊れた行は正規化した usage も認証の事実も運ばない。 */
 function parseJsonl(line: string): unknown {
-  if (!line.trim()) return null;
   try {
     return JSON.parse(line);
   } catch {
