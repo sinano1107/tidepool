@@ -6,10 +6,13 @@ import {
   pinnedModelFlags,
 } from "./claude-worker.js";
 import { rethrowCliAuthExecFailure } from "./cli-auth.js";
+import type { Db } from "./db.js";
 import type { ChildDraftContext, DraftClient, HandoffDraft, IssueInspection, TaskDraft } from "./draft.js";
+import { anthropicBoardCallRow } from "./execution-setting.js";
 import type { Issue } from "./github.js";
 import type { RegistryCandidates } from "./registry.js";
 import { HANDOFF_FIELDS } from "./tasks.js";
+import { isAnthropicBoardCallBlocked } from "./throttle.js";
 
 // mirrors TaskDraft (src/draft.ts): the model's response is untrusted input,
 // so every field is validated before it's allowed to reach the API layer
@@ -172,6 +175,8 @@ export interface ClaudeDraftClientOptions {
    *  the drafted assignee/workspace toward known names. Absent → the model
    *  drafts those fields freely. */
   candidates?: RegistryCandidates;
+  /** the board whose execution-setting table and Anthropic window each call reads (ADR 0192) */
+  db: Db;
   exec: ExecFn;
 }
 
@@ -179,10 +184,12 @@ export interface ClaudeDraftClientOptions {
  *  same ExecFn process boundary ClaudeCodeWorker's checkUsage() uses. */
 export class ClaudeDraftClient implements DraftClient {
   private readonly candidates?: RegistryCandidates;
+  private readonly db: Db;
   private readonly exec: ExecFn;
 
   constructor(options: ClaudeDraftClientOptions) {
     this.candidates = options.candidates;
+    this.db = options.db;
     this.exec = options.exec;
   }
 
@@ -204,10 +211,14 @@ export class ClaudeDraftClient implements DraftClient {
     return issueInspectionSchema.parse(await this.run(buildInspectionPrompt(issue)));
   }
 
-  // a real generation task, not the trivial ping checkUsage() deliberately
-  // downgrades to haiku for
-  private run(prompt: string): Promise<unknown> {
-    return runOneShotJsonPrompt(this.exec, prompt, "sonnet", "medium", "draft");
+  // runs on the table's cheapest anthropic × economy row (ADR 0192): no row or
+  // a closed Anthropic window fails with the reason, never falls back to another model
+  private async run(prompt: string): Promise<unknown> {
+    const row = anthropicBoardCallRow(this.db, "economy");
+    if (isAnthropicBoardCallBlocked(this.db, row.model)) {
+      throw new Error("draft not made: the Anthropic window is closed (throttled)");
+    }
+    return runOneShotJsonPrompt(this.exec, prompt, row.model, row.effort, "draft");
   }
 }
 

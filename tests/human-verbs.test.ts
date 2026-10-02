@@ -272,6 +272,7 @@ it("人間の登録 door は envelope の完全な LLM 診断をログに残し�
   github.scriptIssue(189, { title: "issue", body: "body", comments: [] });
   const fullError = `Failed to authenticate: ${"x".repeat(220)}`;
   const draftClient = new ClaudeDraftClient({
+    db,
     exec: async () => JSON.stringify({ is_error: true, result: fullError }),
   });
   const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -304,7 +305,7 @@ it("人間の登録 door は exec が投げた完全な LLM 診断もログに�
   const github = new FakeGitHubClient();
   github.scriptIssue(189, { title: "issue", body: "body", comments: [] });
   const fullError = "Failed to authenticate: OAuth session expired and could not be refreshed";
-  const draftClient = new ClaudeDraftClient({ exec: async () => { throw new Error(fullError); } });
+  const draftClient = new ClaudeDraftClient({ db, exec: async () => { throw new Error(fullError); } });
   const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 
   const result = await registerThroughHumanDoor(

@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { ClaudeDraftClient } from "../src/claude-draft-client.js";
+import { openDb } from "../src/db.js";
+import { applyExecutionSettingsChange } from "../src/execution-setting.js";
+import { reportProviderUsage } from "../src/throttle.js";
+
+const db = openDb(":memory:");
+const NOW = new Date("2026-10-02T00:00:00Z");
 
 describe("ClaudeDraftClient", () => {
   it("draftTask は CLI の JSON エンベロープ内から TaskDraft を組み立てて返す", async () => {
@@ -12,6 +18,7 @@ describe("ClaudeDraftClient", () => {
       risk_flag: false,
     });
     const client = new ClaudeDraftClient({
+      db,
       exec: async () => JSON.stringify({ result: draftJson }),
     });
 
@@ -34,6 +41,7 @@ describe("ClaudeDraftClient", () => {
       completion_criteria: "dashboard shows a live moisture reading",
     });
     const client = new ClaudeDraftClient({
+      db,
       exec: async () =>
         JSON.stringify({
           result: `Sure! Here's the draft:\n\n\`\`\`json\n${draftJson}\n\`\`\`\n\nLet me know if you'd like changes.`,
@@ -49,6 +57,7 @@ describe("ClaudeDraftClient", () => {
 
   it("CLI 出力が JSON でない場合、draftTask は reject する(#12 の 503 フォールバック契約を守る)", async () => {
     const client = new ClaudeDraftClient({
+      db,
       exec: async () => JSON.stringify({ result: "sure, here's your task: not actually JSON" }),
     });
 
@@ -57,6 +66,7 @@ describe("ClaudeDraftClient", () => {
 
   it("エンベロープに result フィールド(文字列)が無い場合、draftTask は reject する", async () => {
     const client = new ClaudeDraftClient({
+      db,
       exec: async () => JSON.stringify({ result: 123 }),
     });
 
@@ -65,6 +75,7 @@ describe("ClaudeDraftClient", () => {
 
   it("CLI が is_error と共に返した result は、全 one-shot 呼び出し元へ診断として運ぶ(issue #306)", async () => {
     const client = new ClaudeDraftClient({
+      db,
       exec: async () =>
         JSON.stringify({
           is_error: true,
@@ -81,6 +92,7 @@ describe("ClaudeDraftClient", () => {
 
   it("必須フィールド(title/purpose/completion_criteria)が欠けている場合、draftTask は reject する", async () => {
     const client = new ClaudeDraftClient({
+      db,
       exec: async () =>
         JSON.stringify({ result: JSON.stringify({ title: "set up the greenhouse sensor" }) }),
     });
@@ -91,6 +103,7 @@ describe("ClaudeDraftClient", () => {
   it("RegistryCandidates が渡されている場合、プロンプトに assignee/workspace 候補名が埋め込まれる", async () => {
     const calls: string[][] = [];
     const client = new ClaudeDraftClient({
+      db,
       candidates: {
         assignees: ["reef-crab", "deckhand"],
         workspaces: ["tidepool", "sandbox"],
@@ -119,6 +132,7 @@ describe("ClaudeDraftClient", () => {
   it("advisor を閉じる env を渡す(Board call / ADR 0044)", async () => {
     const envs: NodeJS.ProcessEnv[] = [];
     const client = new ClaudeDraftClient({
+      db,
       exec: async (_command, _args, env) => {
         envs.push(env);
         return JSON.stringify({
@@ -136,6 +150,7 @@ describe("ClaudeDraftClient", () => {
   it("draftTask: プロンプトにフラグメント保存 + 指定言語での散文指示が注入される(issue #46)", async () => {
     const calls: string[][] = [];
     const client = new ClaudeDraftClient({
+      db,
       exec: async (_command, args) => {
         calls.push(args);
         return JSON.stringify({
@@ -157,6 +172,7 @@ describe("ClaudeDraftClient", () => {
   it("draftTask: 言語設定を変えるとプロンプトに注入される言語名も変わる", async () => {
     const calls: string[][] = [];
     const client = new ClaudeDraftClient({
+      db,
       exec: async (_command, args) => {
         calls.push(args);
         return JSON.stringify({
@@ -171,27 +187,76 @@ describe("ClaudeDraftClient", () => {
     expect(prompt).toContain("connective prose you add yourself, write in French.");
   });
 
-  it("--model/--effort を明示指定する(ADR 0005: ホストの直前の選択に依存しない)", async () => {
+  it("下書きの3用途は、表の anthropic × economy の最安の行の --model / --effort で spawn する(ADR 0192)", async () => {
     const calls: string[][] = [];
     const client = new ClaudeDraftClient({
+      db,
       exec: async (_command, args) => {
         calls.push(args);
         return JSON.stringify({
-          result: JSON.stringify({ title: "t", purpose: "p", completion_criteria: "c" }),
+          result: JSON.stringify({ title: "t", purpose: "p", completion_criteria: "c", ok: true }),
         });
       },
     });
 
     await client.draftTask("set up the greenhouse sensor", "English");
+    await client.draftHandoff("mounted the sensor", "English");
+    await client.inspectIssue({ title: "t", body: "b", comments: [] });
 
-    const argLine = calls[0]!.join(" ");
-    expect(argLine).toContain("--model sonnet");
-    expect(argLine).toContain("--effort medium");
+    expect(calls).toHaveLength(3);
+    for (const args of calls) {
+      expect(args.join(" ")).toContain("--model claude-sonnet-5-5 --effort high");
+    }
+  });
+
+  it("settings タブの保存口で表を書き換えると、次の下書きから最安の economy 行が効く(ADR 0192)", async () => {
+    const calls: string[][] = [];
+    const board = openDb(":memory:");
+    const client = new ClaudeDraftClient({
+      db: board,
+      exec: async (_command, args) => {
+        calls.push(args);
+        return JSON.stringify({ result: JSON.stringify({ title: "t", purpose: "p", completion_criteria: "c" }) });
+      },
+    });
+
+    await client.draftTask("dump", "English");
+    applyExecutionSettingsChange(
+      board,
+      { setting: "row", row: { provider: "anthropic", tier: "economy", model: "claude-haiku-4-5", effort: "low", price_in: 1, price_out: 5 } },
+      "webui",
+      NOW,
+    );
+    await client.draftTask("dump", "English");
+
+    expect(calls[0]!.join(" ")).toContain("--model claude-sonnet-5-5 --effort high");
+    expect(calls[1]!.join(" ")).toContain("--model claude-haiku-4-5 --effort low");
+  });
+
+  it("表に anthropic × economy の行が無い・Anthropic の窓が閉じているときは、CLI を spawn せずに理由付きで reject する(ADR 0192)", async () => {
+    const calls: string[][] = [];
+    const exec = async (_command: string, args: string[]) => {
+      calls.push(args);
+      return JSON.stringify({ result: JSON.stringify({ title: "t", purpose: "p", completion_criteria: "c" }) });
+    };
+    const noRow = openDb(":memory:");
+    applyExecutionSettingsChange(noRow, { setting: "delete_row", provider: "anthropic", model: "claude-sonnet-5-5" }, "webui", NOW);
+    const closed = openDb(":memory:");
+    reportProviderUsage(closed, { provider: "anthropic", status: "unauthorized", plan: null, cliVersion: null, observedAt: NOW, windows: [] });
+
+    await expect(new ClaudeDraftClient({ db: noRow, exec }).draftTask("dump", "English")).rejects.toThrow(
+      "no row for anthropic / economy",
+    );
+    await expect(new ClaudeDraftClient({ db: closed, exec }).draftTask("dump", "English")).rejects.toThrow(
+      "the Anthropic window is closed",
+    );
+    expect(calls).toEqual([]);
   });
 
   it("--max-turns 1 を指定する(MCPツールを持たない単発JSON生成のため)", async () => {
     const calls: string[][] = [];
     const client = new ClaudeDraftClient({
+      db,
       exec: async (_command, args) => {
         calls.push(args);
         return JSON.stringify({
@@ -213,6 +278,7 @@ describe("ClaudeDraftClient", () => {
   it("--tools \"\" を渡してツール面を空と宣言する(ADR 0062 決定1)", async () => {
     const calls: string[][] = [];
     const client = new ClaudeDraftClient({
+      db,
       exec: async (_command, args) => {
         calls.push(args);
         return JSON.stringify({
@@ -230,6 +296,7 @@ describe("ClaudeDraftClient", () => {
   it("--safe-mode を指定し、ボードの起動ディレクトリの CLAUDE.md/skills/MCP を拾わない", async () => {
     const calls: string[][] = [];
     const client = new ClaudeDraftClient({
+      db,
       exec: async (_command, args) => {
         calls.push(args);
         return JSON.stringify({
@@ -246,6 +313,7 @@ describe("ClaudeDraftClient", () => {
   it("draftTask: 子の文脈(親の title/purpose/completion_criteria・兄弟 title・分解理由)がプロンプトに注入される(issue #129)", async () => {
     const calls: string[][] = [];
     const client = new ClaudeDraftClient({
+      db,
       exec: async (_command, args) => {
         calls.push(args);
         return JSON.stringify({
@@ -274,6 +342,7 @@ describe("ClaudeDraftClient", () => {
   it("draftTask: context が無いプロンプトには子の文脈セクションが含まれない(ルート登録は今までどおり)", async () => {
     const calls: string[][] = [];
     const client = new ClaudeDraftClient({
+      db,
       exec: async (_command, args) => {
         calls.push(args);
         return JSON.stringify({
@@ -296,6 +365,7 @@ describe("ClaudeDraftClient", () => {
     });
     const calls: string[][] = [];
     const client = new ClaudeDraftClient({
+      db,
       exec: async (_command, args) => {
         calls.push(args);
         return JSON.stringify({ result: verdict });
@@ -322,6 +392,7 @@ describe("ClaudeDraftClient", () => {
 
   it("inspectIssue: 合格応答は ok:true だけで通り、JSON でない応答は reject する", async () => {
     const pass = new ClaudeDraftClient({
+      db,
       exec: async () => JSON.stringify({ result: JSON.stringify({ ok: true }) }),
     });
     await expect(pass.inspectIssue({ title: "t", body: "b", comments: [] })).resolves.toEqual({
@@ -329,6 +400,7 @@ describe("ClaudeDraftClient", () => {
     });
 
     const garbage = new ClaudeDraftClient({
+      db,
       exec: async () => JSON.stringify({ result: "not json at all" }),
     });
     await expect(garbage.inspectIssue({ title: "t", body: "b", comments: [] })).rejects.toThrow();
@@ -336,6 +408,7 @@ describe("ClaudeDraftClient", () => {
 
   it("inspectIssue: ok:false なのに missing / suggested_comment を欠く応答は reject する(不合格は必ずサジェストを運ぶ — issue #49 設計点4)", async () => {
     const missingFields = new ClaudeDraftClient({
+      db,
       exec: async () => JSON.stringify({ result: JSON.stringify({ ok: false }) }),
     });
     await expect(
@@ -343,6 +416,7 @@ describe("ClaudeDraftClient", () => {
     ).rejects.toThrow();
 
     const missingComment = new ClaudeDraftClient({
+      db,
       exec: async () =>
         JSON.stringify({ result: JSON.stringify({ ok: false, missing: "no criteria" }) }),
     });

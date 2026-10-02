@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { ClaudeDraftClient } from "../src/claude-draft-client.js";
+import { openDb } from "../src/db.js";
+
+const db = openDb(":memory:");
 
 describe("ClaudeDraftClient.draftHandoff(issue #13)", () => {
   it("CLI の JSON エンベロープ内から6項目ハンドオフの部分集合を組み立てて返す", async () => {
@@ -9,6 +12,7 @@ describe("ClaudeDraftClient.draftHandoff(issue #13)", () => {
       resume_context: "spare bracket left in the shed if it falls again",
     });
     const client = new ClaudeDraftClient({
+      db,
       exec: async () => JSON.stringify({ result: draftJson }),
     });
 
@@ -23,6 +27,7 @@ describe("ClaudeDraftClient.draftHandoff(issue #13)", () => {
 
   it("CLI 出力が JSON でない場合、draftHandoff は reject する", async () => {
     const client = new ClaudeDraftClient({
+      db,
       exec: async () => JSON.stringify({ result: "not actually JSON" }),
     });
 
@@ -32,6 +37,7 @@ describe("ClaudeDraftClient.draftHandoff(issue #13)", () => {
   it("プロンプトにフラグメント保存 + 指定言語での散文指示が注入される(issue #46)", async () => {
     const calls: string[][] = [];
     const client = new ClaudeDraftClient({
+      db,
       exec: async (_command, args) => {
         calls.push(args);
         return JSON.stringify({ result: JSON.stringify({ outcome: "done" }) });
