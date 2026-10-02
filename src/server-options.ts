@@ -618,9 +618,9 @@ function registryCandidates(board: BoardComposition): RegistryCandidates | undef
  *  real Claude CLI (issue #25) only when a registry is configured — same
  *  registryDir gate as the worker factory. Without it there's no worker
  *  either, so the board runs the LoggingWorker with drafting off too. */
-function draftClientFactory(board: BoardComposition, call: BoardCall): DraftClient | undefined {
+function draftClientFactory(board: BoardComposition, call: BoardCall, db: Db): DraftClient | undefined {
   if (!board.registryDir) return undefined;
-  return new ClaudeDraftClient({ candidates: registryCandidates(board), exec: execThrough(call, "task draft") });
+  return new ClaudeDraftClient({ candidates: registryCandidates(board), db, exec: execThrough(call, "task draft") });
 }
 
 /** The settings surface's workspace verbs (issue #57), bound to this board's
@@ -691,7 +691,7 @@ function profileAdmin(board: BoardComposition): ProfileAdmin | undefined {
 
 /** Board call を撃つ口たち(ADR 0136 決定2)。どれも口 `call` を通るので、口ができる
  *  `startServer` がここを呼ぶ。 */
-function boardCallers(board: BoardComposition, workspace: WorkspaceConfig | undefined, call: BoardCall): BoardCallers {
+function boardCallers(board: BoardComposition, workspace: WorkspaceConfig | undefined, call: BoardCall, db: Db): BoardCallers {
   const codexContainment = workspace && createCodexCapabilityCheck({
     executable: board.codexExecutable,
     onPath: board.codexOnPath,
@@ -705,7 +705,7 @@ function boardCallers(board: BoardComposition, workspace: WorkspaceConfig | unde
     return sandbox.available ? probeClaudeHarnessCapability(readCliVersion("claude"), enumerateToolsThrough(call)) : sandbox;
   };
   return {
-    draftClient: draftClientFactory(board, call),
+    draftClient: draftClientFactory(board, call, db),
     translationClient: board.translationClient(call),
     // ADR 0111 決定4: 配分評価の Board call。registry にも CONTEXT.md にも依らず
     // `claude` CLI だけで組めるので、翻訳と同じく常に配線する
@@ -780,7 +780,7 @@ export async function buildServerOptions(board: BoardComposition, db: Db): Promi
     // candidates must reflect agents/workspaces created live through settings
     registryCandidates: () => registryCandidates(board),
     // ADR 0136 決定2: Board call を撃つ口はどれも Board call の口から組む
-    boardCallers: (call) => boardCallers(board, workspace, call),
+    boardCallers: (call) => boardCallers(board, workspace, call, db),
     // ADR 0186 決定3: 口が呼び出しのたびに読む版の検査。Codex は App Server の互換性検査と同じ固定の版と比べる
     checkHarnessCliVersion: (harness) =>
       harness === "codex"

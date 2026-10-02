@@ -2,6 +2,7 @@ import { afterEach, expect, it } from "vitest";
 import { ClaudeDraftClient } from "../src/claude-draft-client.js";
 import { ClaudeTranslationClient } from "../src/claude-translation-client.js";
 import { execThrough } from "../src/claude-worker.js";
+import { openDb } from "../src/db.js";
 import { ProcessContainers } from "../src/process-container.js";
 import { containerHarness, FakeContainerRuntime, passthroughContainers } from "./fakes.js";
 import { api, bootTidepool, registerQuestion, type Tidepool } from "./harness.js";
@@ -34,6 +35,7 @@ it("AI draft が api_error_status: 401 を返したら、その場で provider �
   t = await bootTidepool({
     cliAuth: async () => ({ status: "authenticated" }),
     draftClient: new ClaudeDraftClient({
+      db: openDb(":memory:"),
       exec: async () => {
         throw Object.assign(new Error("claude exited with status 1"), {
           stdout: JSON.stringify({

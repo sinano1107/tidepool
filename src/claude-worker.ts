@@ -1448,7 +1448,7 @@ function scanWorkspaceSkills(workspacePath: string): string[] {
 }
 
 // 答えを取りに行く呼び出し(下書き・翻訳・配分評価・帰責・Behavior candidate の起草)の
-// 上限 —— sonnet の medium effort で長い dump を下書きする呼び出しも収まる幅に取る。
+// 上限 —— 表の economy の行で長い dump を下書きする呼び出しも収まる幅に取る(行が high effort のときの所要は測っていない、ADR 0192 帰結)。
 const ANSWER_CALL_LIMIT_MS = 300_000;
 
 /** `ExecFn` の本番の実装: 1回を Board call の口に通す(ADR 0136 決定2)。`kind` は回収の

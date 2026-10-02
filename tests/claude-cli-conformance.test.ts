@@ -5,6 +5,7 @@ import { createClaudeModelProbe } from "../src/claude-cli-auth.js";
 import { type ConformanceObservations, judgeConformance } from "../src/claude-cli-conformance.js";
 import { ClaudeDraftClient } from "../src/claude-draft-client.js";
 import { ClaudeTranslationClient } from "../src/claude-translation-client.js";
+import { openDb } from "../src/db.js";
 import { composeTerminalScreen } from "../src/usage.js";
 import { PI_USAGE_CAPTURE_2_1_221 } from "./fixtures/usage-pi-2.1.221.js";
 
@@ -36,6 +37,7 @@ function passingObservations(): ConformanceObservations {
     usageScreen: () => composeTerminalScreen(PI_USAGE_CAPTURE_2_1_221, 200, 50),
     draft: () =>
       new ClaudeDraftClient({
+        db: openDb(":memory:"),
         exec: async () =>
           JSON.stringify({ result: JSON.stringify({ title: "t", purpose: "p", completion_criteria: "c" }) }),
       }).draftTask("water the greenhouse", "English"),

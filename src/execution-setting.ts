@@ -229,14 +229,19 @@ function rowsFor(table: ExecutionSettingTable, provider: Provider, tier: Tier): 
   return table.filter((row) => row.provider === provider && row.tier === tier).sort(byPrice);
 }
 
-/** 振り返り Board call(配分評価・帰責の判定・Behavior candidate の起草)の行。selector を通らず
- *  (ADR 0111 決定4)、Provider は anthropic 固定、ティアは3用途が共有する盤面設定(追記4)の最安の行。
- *  呼び出しごとに読むので書き換えは次の呼び出しから効く。行が無ければ投げ、呼び手が「撃てなかった」に畳む。 */
-export function retrospectiveBoardCallRow(db: Db): ExecutionSettingRow {
-  const tier = loadExecutionDefaults(db).retrospectiveTier;
+/** 表の行で走る Board call(振り返り・下書き)の行。selector を通らず(ADR 0111 決定4)、Provider は
+ *  anthropic 固定、ティアは呼び手が決め、その最安の行(ADR 0192)。呼び出しごとに読むので書き換えは
+ *  次の呼び出しから効く。行が無ければ投げ、呼び手が「撃てなかった」に畳む。 */
+export function anthropicBoardCallRow(db: Db, tier: Tier): ExecutionSettingRow {
   const row = rowsFor(loadExecutionSettingTable(db), "anthropic", tier)[0];
   if (!row) throw new Error(`the board's execution-setting table has no row for anthropic / ${tier}`);
   return row;
+}
+
+/** 振り返り Board call(配分評価・帰責の判定・Behavior candidate の起草)の行。ティアは3用途が
+ *  共有する盤面設定(ADR 0111 追記4)。 */
+export function retrospectiveBoardCallRow(db: Db): ExecutionSettingRow {
+  return anthropicBoardCallRow(db, loadExecutionDefaults(db).retrospectiveTier);
 }
 
 /** entry 集合から要求ティアの行を全部集め、優先順位の鍵で並べる(ADR 0110 決定3 /

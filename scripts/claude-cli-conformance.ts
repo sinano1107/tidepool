@@ -26,6 +26,7 @@ import {
   toolSurfaceProbeSpec,
 } from "../src/claude-worker.js";
 import { SystemClock } from "../src/clock.js";
+import { openDb } from "../src/db.js";
 import { ProcessContainers } from "../src/process-container.js";
 import { RECLAIM_TIMEOUT } from "../src/watchdog.js";
 
@@ -79,7 +80,7 @@ const { rows } = await judgeConformance(
       createClaudeModelProbe(cliAuthCommandThrough(call, "conformance model probe"))("claude-conformance-no-such-model"),
     usageScreen: () => checkUsageThrough(call, scratch),
     draft: () =>
-      new ClaudeDraftClient({ exec: execThrough(call, "conformance task draft") }).draftTask(
+      new ClaudeDraftClient({ db: openDb(":memory:"), exec: execThrough(call, "conformance task draft") }).draftTask(
         "Water the greenhouse tomatoes every morning before 9am.",
         "English",
       ),
