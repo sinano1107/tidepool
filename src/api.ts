@@ -41,7 +41,7 @@ import {
   submitAnswer,
 } from "./human-verbs.js";
 import { IssueContentCache, type Live } from "./issue-view.js";
-import { type Landing, landingAnnotation } from "./landing.js";
+import type { Landing } from "./landing.js";
 import {
   changeMemorySettings,
   defineMemoryBranch,
@@ -2015,13 +2015,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     const board = await presentLive(listBoard(db, defaultAgentName, auditorName));
     res.json(
       board.map((task) =>
-        task.type === "question"
-          ? {
-              ...task,
-              landing: landingAnnotation(db, task),
-              ...questionAnnotations(db, task),
-            }
-          : task,
+        task.type === "question" ? { ...task, ...questionAnnotations(db, task) } : task,
       ) satisfies WireContract["GET /api/tasks"],
     );
   });
@@ -2073,10 +2067,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     // push の単体ビューは親の行を持たない — 承認 question・着地 question の判定は一覧と同じくここで載せる
     res.json({
       ...presented!,
-      ...(task.type === "question" && {
-        landing: landingAnnotation(db, task),
-        ...questionAnnotations(db, task),
-      }),
+      ...(task.type === "question" && questionAnnotations(db, task)),
     } satisfies WireContract["GET /api/tasks/:id"]);
   });
 

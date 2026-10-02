@@ -17,9 +17,8 @@ import {
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 
-// 管理MCP の各口は、対応する HTTP の口と同じ注釈を持つ(issue #1179): `list_board` は
-// `GET /api/tasks` の6つ(landing・approval・moved・blocking・needs_comment・free_text)、`get_task` は
-// `GET /api/tasks/:id` の5つ(landing を除く)。注釈の値そのものは HTTP 側のテスト
+// 管理MCP の各口は、対応する HTTP の口と同じ注釈を持つ(issue #1179・#1304): `list_board` は `GET /api/tasks` と、
+// `get_task` は `GET /api/tasks/:id` と同じ6つ(landing・approval・moved・blocking・needs_comment・free_text)。注釈の値そのものは HTTP 側のテスト
 // (#757・ADR 0162 決定6・ADR 0092 決定4・ADR 0179 決定4・#1309)が言うので、ここは HTTP の同じ行との一致だけを言う。
 // 各テストの値の assert は、fixture が狙ったケース(承認・移動・着地・通常)になっていることの確認である。
 
@@ -47,17 +46,14 @@ async function readFourWays(t: Tidepool, taskId: string) {
   }
 }
 
-/** 一覧の口どうしは6つ、単体の口どうしは5つの注釈が同じ値で、単体の口は landing を持たない。 */
+/** 一覧の口どうし・単体の口どうしで、6つの注釈が同じ値。 */
 function expectSameAnnotations(read: Awaited<ReturnType<typeof readFourWays>>) {
   for (const key of ANNOTATIONS) {
     expect(read.mcpRow).toHaveProperty(key);
     expect(read.mcpRow[key]).toEqual(read.httpRow[key]);
-  }
-  for (const key of ANNOTATIONS.filter((k) => k !== "landing")) {
     expect(read.mcpSingle).toHaveProperty(key);
     expect(read.mcpSingle[key]).toEqual(read.httpSingle[key]);
   }
-  expect(read.mcpSingle).not.toHaveProperty("landing");
 }
 
 it("承認 question(risk ありの子 × risk なしの親)は list_board と get_task で HTTP と同じ approval と blocking を持つ", async () => {
@@ -118,7 +114,7 @@ it("pin した entry を移した memory の提案 question は list_board と g
   expect(read.mcpRow.moved).toHaveLength(1);
 });
 
-it("着地 question は list_board で HTTP の一覧と同じ landing を持ち、get_task には landing が無い", async () => {
+it("着地 question は list_board と get_task で HTTP と同じ landing を持つ", async () => {
   const workspace = await makeWorkspace("sandbox");
   t = await bootTidepool({ workspace });
   const task = await registerWork(t, "ship the feature");

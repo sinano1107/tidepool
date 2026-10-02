@@ -43,12 +43,6 @@ async function unsetAssigneeBoard(t: Tidepool) {
   };
 }
 
-/** 管理MCP の一覧だけが載せる注釈(着地 question の `landing`、HTTP は単体にも載る — ADR 0190)を外した一覧の行。 */
-function listedRow(list: any[], id: string) {
-  const { landing: _landing, ...row } = list.find((x) => x.id === id);
-  return row;
-}
-
 it("GET /api/tasks/:id は assignee 未指定のタスクを一覧と同じ解決後の assignee と保存値の raw_assignee で返す(issue #1208)", async () => {
   t = await bootTidepool({ auditorName: AUDITOR });
   const { cancelled, listed } = await unsetAssigneeBoard(t);
@@ -77,7 +71,7 @@ it("管理MCP の get_task は assignee 未指定のタスクを list_board と�
     for (const [id, resolved] of listed) {
       const { events: _events, ...single } = await read("get_task", { task_id: id });
       expect(single).toMatchObject({ assignee: resolved });
-      expect(single).toEqual(listedRow(list, id));
+      expect(single).toEqual(list.find((x: any) => x.id === id));
     }
     expect(await read("get_task", { task_id: cancelled })).toMatchObject({
       status: "cancelled",
