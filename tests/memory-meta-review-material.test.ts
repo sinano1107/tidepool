@@ -25,7 +25,7 @@ import {
 import { type MetaReviewSubject, registerMetaReview } from "../src/meta-review.js";
 import { EXTRACTOR_VERSION } from "../src/precedent.js";
 import { answerQuestion, getTask, HUMAN_WORKER_ID, logDecision, type MemoryProposal, registerTask } from "../src/tasks.js";
-import { bundledObjection } from "./harness.js";
+import { bundledObjection, failureQuestion } from "./harness.js";
 
 /** memory meta-review の材料の節(ADR 0180 決定1・2)のドメイン層。spawn の prompt に入ることは両 adapter のテストが言う。 */
 const at = new Date("2026-10-01T00:00:00.000Z");
@@ -167,19 +167,7 @@ it("abandon で取り消された登録は窓の起点にならない: 次の回
   register(db, "memory", true);
   bundledObjection(db, work, beforeCancelled!, at);
   const cancelled = register(db, "memory");
-  const failure = registerTask(
-    db,
-    {
-      type: "question",
-      title: "failure",
-      purpose: "choose retry or abandon",
-      completion_criteria: "answered",
-      parent_id: cancelled,
-      question: [{ title: "next step", options: ["retry", "abandon"], recommendation: "retry" }],
-      cancel_option: "abandon",
-    },
-    at,
-  );
+  const failure = failureQuestion(db, cancelled, at);
   answerQuestion(db, failure, ["abandon"], at);
   bundledObjection(db, work, afterCancelled!, at);
   const review = register(db, "memory");

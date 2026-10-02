@@ -729,6 +729,23 @@ export function bundledObjection(db: Db, taskId: string, entryId: number, at: Da
   });
 }
 
+/** `parentId` を主題とする失敗 question(retry / abandon、`cancel_option: "abandon"`)を1本立てる。 */
+export function failureQuestion(db: Db, parentId: string, at: Date): Task {
+  return registerTask(
+    db,
+    {
+      type: "question",
+      title: "failure",
+      purpose: "choose retry or abandon",
+      completion_criteria: "answered",
+      parent_id: parentId,
+      question: [{ title: "next step", options: ["retry", "abandon"], recommendation: "retry" }],
+      cancel_option: "abandon",
+    },
+    at,
+  );
+}
+
 /** A child under `parentId` — which makes the parent `blocked` (unfinished
  *  child), so the parent sits at the raw head while never being pickable. */
 /** 人間 decompose の子を1本、扉を通さずに置く(扉の登録は pickup の契機 —— ADR 0119 決定2 ——
