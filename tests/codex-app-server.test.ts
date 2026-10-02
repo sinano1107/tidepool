@@ -697,3 +697,55 @@ it("Codex の版の照合は trim した `codex --version` と CODEX_APP_SERVER_
   // 前方一致は一致ではない
   expect((await checkCodexCliVersion(async () => `${CODEX_APP_SERVER_VERSION}-beta`)).available).toBe(false);
 });
+
+/** 呼び出しごとに版と schema 生成のふるまいを切り替え、互換性検査の再実行を数える fake。 */
+function switchableCodex(initial: { version?: string; schemaFails?: boolean } = {}) {
+  const state = { version: CODEX_APP_SERVER_VERSION, schemaFails: false, versionCalls: 0, schemaCalls: 0, ...initial };
+  const appServer = fakeCodex([INITIALIZED, SIGNED_IN, RATE_LIMITS, MODEL_LIST]);
+  const command: CodexCliCommand = async (executable, args, options) => {
+    if (args[0] === "--version") {
+      state.versionCalls += 1;
+      return { exitCode: 0, stdout: `${state.version}\n`, stderr: "" };
+    }
+    if (args[1] === "generate-json-schema") {
+      state.schemaCalls += 1;
+      if (state.schemaFails) return { exitCode: 1, stdout: "", stderr: "schema generation crashed" };
+    }
+    return appServer(executable, args, options);
+  };
+  const probe = createCodexAppServerProbe({ executable: "/opt/tidepool/bin/codex", codexHome: "/tmp/codex", command });
+  return { state, probe: () => probe(new Date(1_000)) };
+}
+
+it("版の不一致で観測不能になった互換性検査は保持されず、版が直れば次の呼び出しで observed に戻る", async () => {
+  const codex = switchableCodex({ version: "codex-cli 0.148.0" });
+  expect(await codex.probe()).toMatchObject({
+    status: "unobservable",
+    cliVersion: "codex-cli 0.148.0",
+    reason: `expected ${CODEX_APP_SERVER_VERSION}, observed codex-cli 0.148.0`,
+  });
+
+  codex.state.version = CODEX_APP_SERVER_VERSION;
+  expect(await codex.probe()).toMatchObject({ status: "observed", cliVersion: CODEX_APP_SERVER_VERSION });
+  expect(codex.state).toMatchObject({ versionCalls: 2, schemaCalls: 1 });
+});
+
+it("schema 生成の失敗は保持されず、次の呼び出しが検査をやり直して observed を返す", async () => {
+  const codex = switchableCodex({ schemaFails: true });
+  expect(await codex.probe()).toMatchObject({
+    status: "unobservable",
+    cliVersion: CODEX_APP_SERVER_VERSION,
+    reason: expect.stringContaining("schema generation failed"),
+  });
+
+  codex.state.schemaFails = false;
+  expect(await codex.probe()).toMatchObject({ status: "observed" });
+  expect(codex.state).toMatchObject({ versionCalls: 2, schemaCalls: 2 });
+});
+
+it("互換性検査が一度通れば、以後の呼び出しは版も schema も読み直さない", async () => {
+  const codex = switchableCodex();
+  expect(await codex.probe()).toMatchObject({ status: "observed" });
+  expect(await codex.probe()).toMatchObject({ status: "observed" });
+  expect(codex.state).toMatchObject({ versionCalls: 1, schemaCalls: 1 });
+});
