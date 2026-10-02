@@ -2,7 +2,7 @@ import webpush from "web-push";
 import type { Db } from "./db.js";
 import { HUMAN_FACING_KINDS } from "./events.js";
 import { isQuietHours } from "./quiet-hours.js";
-import { HUMAN_WORKER_ID, rowToTask, type Task, type TaskRow } from "./tasks.js";
+import { HUMAN_WORKER_ID, isLandingQuestion, rowToTask, type Task, type TaskRow } from "./tasks.js";
 
 /** A browser's Web Push registration (the standard PushSubscription shape,
  *  flattened) — endpoint is the push service URL, p256dh/auth the keys
@@ -52,9 +52,7 @@ export interface PushClient {
  *  instead lands on the board root: the merge decision belongs after the
  *  log skim, so the push must not open its answer view (ADR 0190). */
 export function buildQuestionPushPayload(task: Task): PushPayload {
-  const landing =
-    task.question_pending_merge_pr !== null || task.question_pending_local_merge_task_id !== null;
-  return { title: task.title, body: task.purpose, url: landing ? "/" : `/?question=${task.id}` };
+  return { title: task.title, body: task.purpose, url: isLandingQuestion(task) ? "/" : `/?question=${task.id}` };
 }
 
 /** An agent-registered human task's push notification content (issue #116):
