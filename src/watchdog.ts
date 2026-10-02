@@ -65,6 +65,23 @@ export interface Watchdog extends PendingReclaim {
   onWorkerExited: (taskId: string, exit: WorkerExit) => void;
 }
 
+/** watchdog が持つ、今 slot にいるタスクの今の pickup の記録。taskId か pickup が替われば
+ *  丸ごと作り直す —— retry された run は前の run の踏み終えた梯子を引き継がず、決着した
+ *  タスクの分は残らない。slot にいないタスクの記録はどの判定にも使われない(読む入口は
+ *  どれも先に slot の主を確かめる)。 */
+interface WatchRecord {
+  taskId: string;
+  pickup: number;
+  stopSentAt?: number;
+  forceSentAt?: number;
+  /** 1回の force につき「回収済み観測」と「回収 timeout」のどちらか**一方だけ**が
+   *  動く。遅れて届いた空の観測が、既に quarantine へ倒れた slot を黙って解放して
+   *  しまわないための門でもある(解放の門は確認 question ただ1つ)。 */
+  settled: boolean;
+  /** 観測した root の exit。読むのは梯子の底の question だけで、どの判定にも使わない(ADR 0191) */
+  exit?: WorkerExit;
+}
+
 /** The task's most recent pickup, not its first: a retried task is picked up
  *  again after its earlier kill, and the watchdog must time the new run, not
  *  the original one. */
@@ -308,19 +325,8 @@ export function startWatchdog(deps: {
     landing: deps.landing,
     pollNow: deps.pollNow,
   };
-  // keyed by task id; reset whenever a fresh pickup shows up for that id so a
-  // retried run starts its own graceful-stop clock instead of inheriting
-  // the previous run's already-tripped state
-  const lastSeenPickup = new Map<string, number>();
-  const stopSentAt = new Map<string, number>();
-  const forceSentAt = new Map<string, number>();
-  // 1回の force につき「回収済み観測」と「回収 timeout」のどちらか**一方だけ**が
-  // 動く。遅れて届いた空の観測が、既に quarantine へ倒れた slot を黙って解放して
-  // しまわないための門でもある(解放の門は確認 question ただ1つ)。
-  const settled = new Set<string>();
-  // 今の pickup で観測した root の exit。読むのは梯子の底の question だけで、
-  // どの判定にも使わない(ADR 0191)
-  const exits = new Map<string, WorkerExit>();
+  // 今 slot にいるタスクの記録1件(`syncPickup` が作り直す)
+  let record: WatchRecord | null = null;
   let pending: string | null = null;
 
   /** 容器が空になった観測。ここで初めて failure question と slot 解放へ進む ——
@@ -334,7 +340,9 @@ export function startWatchdog(deps: {
    *  へ戻り、`cap_interrupted` という起きていない event が書かれる(CONTEXT.md「Watchdog」:
    *  自動リトライは存在しない)。記録を先に置けば status は決着し、決定3 はこの経路でも真になる。 */
   function onReclaimed(taskId: string, limit: number): void {
-    if (settled.has(taskId)) return;
+    // 遅れて届く観測なので、記録は既に次のタスクのものでありうる(そのときは下の枠の門で外れる)
+    const rec = record?.taskId === taskId ? record : undefined;
+    if (rec?.settled) return;
     // 強制回収の待ちの間に cap / 最終 verb が決着したなら、その後始末が観測を受ける。
     if (sessionInTeardown(db)?.taskId === taskId) return;
     // 後始末が持っていた門を、記録が先へ出た分だけこちらで読む —— 枠の主が変わっていれば
@@ -343,7 +351,8 @@ export function startWatchdog(deps: {
     const task = getTask(db, taskId);
     if (task?.status !== "in_progress") return;
     const now = clock.now();
-    settled.add(taskId);
+    // 強制回収を送った tick がこの枠の主の記録を作っている
+    rec!.settled = true;
     registerFailureQuestion(
       db,
       task,
@@ -352,7 +361,7 @@ export function startWatchdog(deps: {
         `reclaimed (graceful stop, then force reclaim after ${config.grace}ms grace). ` +
         "No self-report is possible." +
         // root の exit は必ずここより先に観測済み(容器が exit を adapter より先に登録、reclaimed は microtask)
-        exitSections(exits.get(taskId)),
+        exitSections(rec!.exit),
       now,
     );
     markTeardown(db, taskId, now);
@@ -363,8 +372,8 @@ export function startWatchdog(deps: {
   /** 空を観測できないまま timeout。失敗の記録は残すが slot は解放しない —
    *  tree rule も走らせない(まだ生きている process が書いている作業ツリーを
    *  退避しても、退避そのものが競合する)。 */
-  function onReclaimTimeout(task: Task, limit: number): void {
-    settled.add(task.id);
+  function onReclaimTimeout(task: Task, rec: WatchRecord, limit: number): void {
+    rec.settled = true;
     pending = task.id;
     failTask(
       db,
@@ -373,7 +382,7 @@ export function startWatchdog(deps: {
       `the task hit its ${task.type} time limit (${limit}ms) and its container was ` +
         `force-reclaimed, but the board could not observe the container going empty within ` +
         `${reclaimTimeout}ms. No self-report is possible.` +
-        exitSections(exits.get(task.id)),
+        exitSections(rec.exit),
       // tree rule はここでは走らない: slot が解放される瞬間 — 確認 question の
       // 受理 — まで待つ(ADR 0099 決定3 / CONTEXT.md「Slot-release tree rule」)
       undefined,
@@ -390,22 +399,22 @@ export function startWatchdog(deps: {
 
   /** 後始末に入った時刻からの backstop。最終 verb 後は強制回収 → 回収 timeout の
    *  2段、cap は exit 時に強制回収が済んでいるので回収 timeout の1段(ADR 0113)。 */
-  function teardownTick(task: Task): void {
+  function teardownTick(task: Task, rec: WatchRecord): void {
     const taskId = task.id;
     const session = sessionInTeardown(db);
-    if (session?.taskId !== taskId || settled.has(taskId)) return;
+    if (session?.taskId !== taskId || rec.settled) return;
     const now = clock.now().getTime();
     if (task.status === "in_progress") {
-      if (now - new Date(session.startedAt).getTime() >= reclaimTimeout) onTeardownReclaimTimeout(task);
+      if (now - new Date(session.startedAt).getTime() >= reclaimTimeout) onTeardownReclaimTimeout(task, rec);
       return;
     }
-    const forcedAt = forceSentAt.get(taskId);
+    const forcedAt = rec.forceSentAt;
     if (forcedAt !== undefined) {
-      if (now - forcedAt >= reclaimTimeout) onTeardownReclaimTimeout(task);
+      if (now - forcedAt >= reclaimTimeout) onTeardownReclaimTimeout(task, rec);
       return;
     }
     if (now - new Date(session.startedAt).getTime() >= reclaimTimeout) {
-      forceSentAt.set(taskId, now);
+      rec.forceSentAt = now;
       containers.forceReclaim(taskId);
     }
   }
@@ -413,9 +422,9 @@ export function startWatchdog(deps: {
   /** 決着済みの session(完了・escalate / decompose・worker が1度も走らなかった pickup)が
    *  梯子の底まで落ちたとき。**failure question は立てない** —— タスクの決着は host 側の
    *  事情で覆らない(ADR 0109 決定4)。 */
-  function onTeardownReclaimTimeout(task: Task): void {
+  function onTeardownReclaimTimeout(task: Task, rec: WatchRecord): void {
     const taskId = task.id;
-    settled.add(taskId);
+    rec.settled = true;
     pending = taskId;
     quarantineContainment(
       db,
@@ -430,18 +439,12 @@ export function startWatchdog(deps: {
     );
   }
 
-  /** 送達記録を今の pickup に合わせる。retry された task が次の tick より先に exit すると、
+  /** 記録を今の pickup に合わせる。retry された task が次の tick より先に exit すると、
    *  前の run の記録を読んでしまうので、tick と exit の観測の両方がここを通る。 */
-  function syncPickup(taskId: string): number {
+  function syncPickup(taskId: string): WatchRecord {
     const pickup = pickedUpAt(db, taskId);
-    if (lastSeenPickup.get(taskId) !== pickup) {
-      lastSeenPickup.set(taskId, pickup);
-      stopSentAt.delete(taskId);
-      forceSentAt.delete(taskId);
-      settled.delete(taskId);
-      exits.delete(taskId);
-    }
-    return pickup;
+    if (record?.taskId !== taskId || record.pickup !== pickup) record = { taskId, pickup, settled: false };
+    return record;
   }
 
   /** 報告なき exit(ADR 0145)。最終 verb・上限到達による中断は exit より先に後始末へ
@@ -450,9 +453,9 @@ export function startWatchdog(deps: {
    *  1つで見分けられる。強制回収は adapter が送達済みなので重ねない。 */
   function onWorkerExited(taskId: string, exit: WorkerExit): void {
     if (slot.currentTaskId !== taskId || slot.inTeardown) return;
-    syncPickup(taskId);
-    exits.set(taskId, exit);
-    if (stopSentAt.has(taskId)) return;
+    const rec = syncPickup(taskId);
+    rec.exit = exit;
+    if (rec.stopSentAt !== undefined) return;
     const task = getTask(db, taskId);
     if (task?.status !== "in_progress") return;
     const now = clock.now();
@@ -483,35 +486,35 @@ export function startWatchdog(deps: {
     if (openQuarantineValues(db, "failedTeardown").length > 0) return;
     const task = getTask(db, taskId);
     if (!task) return;
-    const pickup = syncPickup(taskId);
+    const rec = syncPickup(taskId);
     // cap は in_progress のまま後始末に入る(ADR 0113)。タスク種別の梯子より先に読む。
     if (sessionInTeardown(db)?.taskId === taskId) {
-      teardownTick(task);
+      teardownTick(task, rec);
       return;
     }
     if (task.status !== "in_progress") return;
     const limit = config.timeLimits[task.type];
     if (limit === undefined) return;
-    if (settled.has(taskId)) return;
+    if (rec.settled) return;
 
     const now = clock.now().getTime();
-    const forcedAt = forceSentAt.get(taskId);
+    const forcedAt = rec.forceSentAt;
     if (forcedAt !== undefined) {
       // 送達は済んでいる。ここから先を進めるのは観測だけで、tick は timeout を
       // 数えるためだけに回る。
-      if (now - forcedAt >= reclaimTimeout) onReclaimTimeout(task, limit);
+      if (now - forcedAt >= reclaimTimeout) onReclaimTimeout(task, rec, limit);
       return;
     }
-    const stoppedAt = stopSentAt.get(taskId);
+    const stoppedAt = rec.stopSentAt;
     if (stoppedAt === undefined) {
-      if (now - pickup >= limit) {
+      if (now - rec.pickup >= limit) {
         worker.gracefulStop(taskId);
-        stopSentAt.set(taskId, now);
+        rec.stopSentAt = now;
       }
       return;
     }
     if (now - stoppedAt >= config.grace) {
-      forceSentAt.set(taskId, now);
+      rec.forceSentAt = now;
       containers.forceReclaim(taskId);
       void containers.reclaimed(taskId).then(() => onReclaimed(taskId, limit));
     }
