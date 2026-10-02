@@ -983,8 +983,9 @@ export function assertValidWorkspaceName(registry: Registry, name: string): void
 }
 
 /** A candidate agent name fails the entry gate the WebUI's agent-creation
- *  verb (issue #70) uses: reused inside an existing registry, or outside the
- *  charset a file name `agents/<name>.md` safely accepts. */
+ *  verb (issue #70) uses: reused inside an existing registry, outside the
+ *  charset a file name `agents/<name>.md` safely accepts, or one of the
+ *  board's own worker ids (issue #1365). */
 export class InvalidAgentNameError extends Error {
   constructor(
     public readonly agentName: string,
