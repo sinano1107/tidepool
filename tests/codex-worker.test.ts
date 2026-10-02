@@ -723,16 +723,18 @@ thread's history always fails.`));
     }
   });
 
-  /** ADR 0188: stdout に event を流して exit し、worker_exited の reported_error を読む。 */
-  async function reportedErrorAfter(id: string, events: object[]): Promise<unknown> {
+  /** stdout に event を流して exit し、worker_exited の payload を読む(ADR 0188 / 0189)。 */
+  async function exitedAfter(id: string, events: object[]): Promise<Record<string, unknown>> {
     const f = await fixture();
     const value = task(f.db, id);
     f.start(value);
     f.process.processes[0]!.stdout.write(events.map((event) => `${JSON.stringify(event)}\n`).join(""));
     f.process.emitExit(1, null);
-    const exited = listEvents(f.db, value.id).find((event) => event.kind === "worker_exited");
-    return (exited!.payload as { reported_error?: unknown }).reported_error;
+    return listEvents(f.db, value.id).find((event) => event.kind === "worker_exited")!.payload as Record<string, unknown>;
   }
+  const reportedErrorAfter = async (id: string, events: object[]) => (await exitedAfter(id, events)).reported_error;
+  const lastMessageAfter = async (id: string, events: object[]) => (await exitedAfter(id, events)).last_message;
+  const said = (text: string) => ({ type: "item.completed", item: { id: "item_0", type: "agent_message", text } });
 
   it("turn.failed の error.message を入れ子の JSON も解かず逐語で reported_error に載せる(ADR 0188 / #1256)", async () => {
     const message =
@@ -755,17 +757,7 @@ thread's history always fails.`));
     ).toBe("second");
   });
 
-  it("agent_message が2つあれば最後の text を、無ければ null を last_message に載せる(ADR 0189)", async () => {
-    const lastMessageAfter = async (id: string, events: object[]) => {
-      const f = await fixture();
-      const value = task(f.db, id);
-      f.start(value);
-      f.process.processes[0]!.stdout.write(events.map((event) => `${JSON.stringify(event)}\n`).join(""));
-      f.process.emitExit(0, null);
-      const exited = listEvents(f.db, value.id).find((event) => event.kind === "worker_exited");
-      return (exited!.payload as { last_message?: unknown }).last_message;
-    };
-    const said = (text: string) => ({ type: "item.completed", item: { id: "item_0", type: "agent_message", text } });
+  it("agent_message が2つあれば最後の text を last_message に載せ、空の text は前の発話を残す(ADR 0189)", async () => {
     expect(
       await lastMessageAfter("codex-two-messages", [
         said("first"),
@@ -774,6 +766,9 @@ thread's history always fails.`));
         said(""),
       ]),
     ).toBe("second");
+  });
+
+  it("agent_message の無い exit は last_message null(ADR 0189)", async () => {
     expect(await lastMessageAfter("codex-no-message", [{ type: "turn.completed", usage: {} }])).toBeNull();
   });
 

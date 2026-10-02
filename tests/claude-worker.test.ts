@@ -2530,15 +2530,15 @@ describe("ClaudeCodeWorker", () => {
     expect(exited?.payload).toMatchObject({ stderr_tail: null });
   });
 
-  /** ADR 0188: stdout の result 行を1本流して exit し、worker_exited の reported_error を読む。 */
-  async function reportedErrorAfter(lines: object[]): Promise<unknown> {
+  /** stdout に行を流して exit し、worker_exited の payload を読む(ADR 0188 / 0189)。 */
+  async function exitedAfter(lines: object[]): Promise<Record<string, unknown>> {
     const { start, processes, emitExit, db } = await makeWorker();
-    start("task-reported-error");
+    start("task-exited-after");
     processes[0]!.stdout.write(lines.map((line) => `${JSON.stringify(line)}\n`).join(""));
     emitExit(1, null);
-    const exited = listEvents(db, "task-reported-error").find((e) => e.kind === "worker_exited");
-    return (exited!.payload as { reported_error?: unknown }).reported_error;
+    return listEvents(db, "task-exited-after").find((e) => e.kind === "worker_exited")!.payload as Record<string, unknown>;
   }
+  const reportedErrorAfter = async (lines: object[]) => (await exitedAfter(lines)).reported_error;
 
   it("is_error の success 行は result を、api_error_status が数値なら前に添えて reported_error に載せる(ADR 0188)", async () => {
     expect(
@@ -2592,15 +2592,7 @@ describe("ClaudeCodeWorker", () => {
     expect(exited?.payload).toMatchObject({ reported_error: "later" });
   });
 
-  /** ADR 0189: stdout に行を流して exit し、worker_exited の last_message を読む。 */
-  async function lastMessageAfter(lines: object[]): Promise<unknown> {
-    const { start, processes, emitExit, db } = await makeWorker();
-    start("task-last-message");
-    processes[0]!.stdout.write(lines.map((line) => `${JSON.stringify(line)}\n`).join(""));
-    emitExit(0, null);
-    const exited = listEvents(db, "task-last-message").find((e) => e.kind === "worker_exited");
-    return (exited!.payload as { last_message?: unknown }).last_message;
-  }
+  const lastMessageAfter = async (lines: object[]) => (await exitedAfter(lines)).last_message;
   const said = (content: object[], extra: object = {}) => ({
     type: "assistant",
     parent_tool_use_id: null,
