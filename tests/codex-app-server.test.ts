@@ -227,7 +227,7 @@ it("version or generated response-schema drift fails closed before App Server us
       codexHome: root,
       command,
     })(new Date(1_000));
-    const appServerCalls = appServerCallsIn(calls);
+    const appServerCalls = callsTo(calls, "appServer");
 
     expect(result).toMatchObject({ status: "unobservable", provider: "openai" });
     expect(appServerCalls).toBe(0);
@@ -262,24 +262,27 @@ it.each([
   const result = await createCodexAppServerProbe({ executable: "/opt/tidepool/bin/codex", codexHome: "/tmp/codex", command })(
     new Date(1_000),
   );
-  const appServerCalls = appServerCallsIn(calls);
+  const appServerCalls = callsTo(calls, "appServer");
 
   expect(result).toMatchObject({ status: "unobservable", reason: "required App Server method or response schema drifted" });
   expect(appServerCalls).toBe(0);
 });
 
+type CodexBranch = "version" | "schema" | "appServer";
 type FakeCodexOptions = { version?: string; schemaFails?: boolean; drift?: (out: string) => void; rows?: unknown[] };
 
 /** 版・schema 生成・app-server 応答の3枝を差し替えられる codex。省略した枝は適合する。
  *  options は呼び出しのたびに読むので、呼び出しの合間に書き換えて枝を切り替えられる。 */
 function fakeCodex(options: FakeCodexOptions = {}) {
-  const calls: Array<{ args: string[]; input?: string; env: NodeJS.ProcessEnv }> = [];
+  const calls: Array<{ branch: CodexBranch; args: string[]; input?: string; env: NodeJS.ProcessEnv }> = [];
   const command: CodexCliCommand = async (_executable, args, { input, env }) => {
-    calls.push({ args, input, env });
-    if (args[0] === "--version") {
+    const branch: CodexBranch =
+      args[0] === "--version" ? "version" : args[1] === "generate-json-schema" ? "schema" : "appServer";
+    calls.push({ branch, args, input, env });
+    if (branch === "version") {
       return { exitCode: 0, stdout: `${options.version ?? CODEX_APP_SERVER_VERSION}\n`, stderr: "" };
     }
-    if (args[1] === "generate-json-schema") {
+    if (branch === "schema") {
       if (options.schemaFails) return { exitCode: 1, stdout: "", stderr: "schema generation crashed" };
       const out = args[args.indexOf("--out") + 1]!;
       writeCompatibleSchemas(out);
@@ -292,8 +295,8 @@ function fakeCodex(options: FakeCodexOptions = {}) {
   return { command, calls };
 }
 
-const appServerCallsIn = (calls: Array<{ args: string[] }>) =>
-  calls.filter(({ args }) => args[0] !== "--version" && args[1] !== "generate-json-schema").length;
+const callsTo = (calls: Array<{ branch: CodexBranch }>, branch: CodexBranch) =>
+  calls.filter((call) => call.branch === branch).length;
 
 const INITIALIZED = {
   id: 1,
@@ -670,10 +673,10 @@ function switchableCodex(initial: FakeCodexOptions = {}) {
   const state = {
     ...initial,
     get versionCalls() {
-      return calls.filter(({ args }) => args[0] === "--version").length;
+      return callsTo(calls, "version");
     },
     get schemaCalls() {
-      return calls.filter(({ args }) => args[1] === "generate-json-schema").length;
+      return callsTo(calls, "schema");
     },
   };
   const { command, calls } = fakeCodex(state);
