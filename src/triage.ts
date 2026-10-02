@@ -1,6 +1,6 @@
 import type { Cause } from "./cause.js";
 import type { Db } from "./db.js";
-import { appendEvent, type DecisionLogEntry, getEvent, isDecisionLogEntry } from "./events.js";
+import { appendEvent, type DecisionLogEntry, type EventOrigin, getEvent, isDecisionLogEntry } from "./events.js";
 import type { GatedJudgment } from "./retrospective.js";
 import {
   BOARD_WORKER_ID,
@@ -247,8 +247,9 @@ function registerRcaReview(
       objection_event_ids: spec.pairs.flatMap((p) => p.objection_event_ids),
     },
     now,
-    HUMAN_WORKER_ID,
-    "webui",
+    // 盤面の規則が立てる(ADR 0194 決定3)—— どの閉じ方でも盤面名義
+    BOARD_WORKER_ID,
+    "board",
   );
 }
 
@@ -294,6 +295,7 @@ function bundleObjections(
   sessionId: number,
   now: Date,
   judgments: Map<number, GatedJudgment>,
+  origin: EventOrigin,
 ): void {
   const byTask = new Map<string, ObjectionPair[]>();
   for (const pair of listObjectedEntries(db, sessionId)) {
@@ -337,7 +339,7 @@ function bundleObjections(
       },
       now,
       HUMAN_WORKER_ID,
-      "webui",
+      origin,
     );
     if (rcaPairs.length === 0) continue;
     const byWorker = new Map<string, ObjectionPair[]>();
@@ -528,11 +530,13 @@ function closeTriageSession(
   closedBy: "commit" | "timeout",
   judgments: Map<number, GatedJudgment>,
 ): void {
-  bundleObjections(db, open.id, now, judgments);
+  // タイムアウトは盤面の watchdog が起こす(ADR 0194 決定4)
+  const origin = closedBy === "timeout" ? "board" : "webui";
+  bundleObjections(db, open.id, now, judgments, origin);
   // apply in reverse staging order so the first-staged task ends up on top
   for (const taskId of stagedFrontInserts(db, open.id).reverse()) {
     const task = getTask(db, taskId);
-    if (task && task.status === "todo") moveTask(db, task, null, now, HUMAN_WORKER_ID, "webui");
+    if (task && task.status === "todo") moveTask(db, task, null, now, HUMAN_WORKER_ID, origin);
   }
   db.prepare("UPDATE triage_sessions SET committed_at = ?, closed_by = ? WHERE id = ?").run(
     now.toISOString(),
@@ -548,7 +552,7 @@ function closeTriageSession(
 export function closeTriageSessionOnly(
   db: Db,
   now: Date,
-  closedBy: "commit" | "timeout" = "commit",
+  closedBy: "commit" | "timeout",
 ): TriageCommitResult {
   const open = activeTriageSession(db);
   if (!open) return { outcome: "no_open_session", closed_at: null, created_tasks: 0 };

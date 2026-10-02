@@ -1,5 +1,7 @@
 import { afterEach, expect, it } from "vitest";
-import { api, bootTidepool, HOUR, mcpClient, registerWork, type Tidepool } from "./harness.js";
+import { type Db, openDb } from "../src/db.js";
+import { decomposeTask, escalateTask, getTask, humanDecomposeTask, listChildren, registerTask, type Task } from "../src/tasks.js";
+import { api, bootTidepool, HOUR, HUMAN_WEBUI, mcpClient, registerWork, type Tidepool } from "./harness.js";
 
 let t: Tidepool;
 afterEach(() => t?.stop());
@@ -92,4 +94,29 @@ it("done/cancelled な親への人間の子追加は 400 で拒否される", as
   expect(res.status).toBe(400);
   const board = (await api(t.baseUrl, "GET", "/api/tasks")).json;
   expect(board.find((x: any) => x.title === "child of a done task")).toBeUndefined();
+});
+
+const at = new Date("2026-10-02T00:00:00.000Z");
+const agentChild = { title: "agent's child", purpose: "p", completion_criteria: "c" };
+
+it.each([
+  ["agent が分解した子", (db: Db, parent: Task): unknown => decomposeTask(db, parent, { reason: "split", children: [agentChild] }, "deckhand", at, undefined, undefined, "worker")],
+  // 親を超える risk の子は承認 question に変わる —— 登録者は分解した agent
+  ["承認 question", (db: Db, parent: Task): unknown => decomposeTask(db, parent, { reason: "split", children: [{ ...agentChild, risk_flag: true }] }, "deckhand", at, undefined, undefined, "worker")],
+  [
+    "agent のエスカレーション question",
+    (db: Db, parent: Task): unknown =>
+      escalateTask(db, parent, { context: "which way?", questions: [{ title: "which", options: ["a", "b"], recommendation: "a" }] }, "deckhand", at, "worker"),
+  ],
+] as const)("%sを持つ task には人間は子を足せない(ADR 0194 決定5)", (_, addAgentChild) => {
+  const db = openDb(":memory:");
+  const registered = registerTask(db, { type: "work", title: "parent", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI);
+  addAgentChild(db, registered);
+  const parent = getTask(db, registered.id)!;
+  const before = listChildren(db, parent.id);
+
+  expect(() =>
+    humanDecomposeTask(db, parent, { reason: "split", children: [{ title: "human's child", purpose: "p", completion_criteria: "c" }] }, at, undefined, "webui"),
+  ).toThrow("a task an agent has already decomposed cannot be decomposed by a human");
+  expect(listChildren(db, parent.id)).toEqual(before);
 });

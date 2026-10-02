@@ -1,6 +1,6 @@
 import { afterEach, expect, it } from "vitest";
 import { FakeAllocationClient } from "./fakes.js";
-import { api, children, commit, HOUR, haltedRefires, KEEP_FIXTURES, managementMcpClient, nextPoll, objectedForDraft, registerWork, type Tidepool } from "./harness.js";
+import { api, children, commit, HOUR, haltedRefires, KEEP_FIXTURES, managementMcpClient, nextPoll, objectedForDraft, registerWork, settleRcaByWorker, type Tidepool } from "./harness.js";
 
 let t: Tidepool;
 afterEach(() => t?.stop());
@@ -66,8 +66,8 @@ it("第2回の帰責が撃って3回失敗すると両方の一覧に出て、�
   t = s.t;
   const { self, auditor } = await commit(t, s.task.id, "flaky-rca");
   s.attributionClient.scriptJudgment(s.entry.id, new Error("claude CLI timed out"));
-  await api(t.baseUrl, "POST", `/api/tasks/${self.id}/cancel`, {});
-  await api(t.baseUrl, "POST", `/api/tasks/${auditor.id}/cancel`, {});
+  await settleRcaByWorker(t, self.id);
+  await settleRcaByWorker(t, auditor.id);
   await nextPoll(t);
   await t.clock.advance(HOUR);
   await t.clock.advance(HOUR);

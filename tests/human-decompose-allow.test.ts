@@ -1,5 +1,8 @@
 import { afterEach, expect, it } from "vitest";
-import { api, bootTidepool, HOUR, mcpClient, queueWork, registerWork, type Tidepool } from "./harness.js";
+import { type Db, openDb } from "../src/db.js";
+import { answerQuestion, BOARD_WORKER_ID, escalateTask, getTask, humanDecomposeTask, logDecision, registerTask, type Task } from "../src/tasks.js";
+import { commitTriage, raiseObjection, startTriage } from "../src/triage.js";
+import { api, bootTidepool, HOUR, HUMAN_WEBUI, mcpClient, queueWork, registerWork, type Tidepool } from "./harness.js";
 
 let t: Tidepool;
 afterEach(() => t?.stop());
@@ -127,4 +130,39 @@ it("存在しない parent_id への子追加は 404", async () => {
   });
 
   expect(res.status).toBe(404);
+});
+
+const at = new Date("2026-10-02T00:00:00.000Z");
+
+const failureQuestion = (db: Db, parent: Task) =>
+  escalateTask(
+    db,
+    parent,
+    { context: "the worker died", questions: [{ title: "failed", options: ["retry", "abandon"], recommendation: "retry" }], cancel_option: "abandon" },
+    BOARD_WORKER_ID,
+    at,
+    "board",
+  );
+
+it.each([
+  ["未回答の failure question", failureQuestion],
+  ["回答済みの failure question", (db: Db, parent: Task): unknown => answerQuestion(db, failureQuestion(db, parent), ["retry"], at, undefined, undefined, undefined, "webui")],
+  [
+    "異議が立てた RCA review",
+    (db: Db, parent: Task): unknown => {
+      const entry = logDecision(db, parent, "deckhand's call", "deckhand", at, "worker");
+      startTriage(db, at);
+      raiseObjection(db, entry, "redo it", at);
+      return commitTriage(db, at);
+    },
+  ],
+] as const)("盤面名義の子(%s)を持つ task にも人間は子を足せる —— agent の分解判断はまだ無い(ADR 0194 決定5)", (_, addBoardChild) => {
+  const db = openDb(":memory:");
+  const registered = registerTask(db, { type: "work", title: "parent", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI);
+  addBoardChild(db, registered);
+  const parent = getTask(db, registered.id)!;
+
+  const [child] = humanDecomposeTask(db, parent, { reason: "split", children: [{ title: "human's child", purpose: "p", completion_criteria: "c" }] }, at, undefined, "webui");
+
+  expect(child).toMatchObject({ parent_id: parent.id, title: "human's child" });
 });

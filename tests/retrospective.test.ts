@@ -4,10 +4,10 @@ import { openDb } from "../src/db.js";
 import { appendEvent, listEvents } from "../src/events.js";
 import { buildMemoryInjection, readMemory, recordKnowledge, recordMemoryInjection, searchMemory } from "../src/memory.js";
 import { attributeObjections, type GatedJudgment, listHaltedRefires, refireRetrospectiveCalls } from "../src/retrospective.js";
-import { cancelTaskDirectly, listChildren, logDecision, registerTask } from "../src/tasks.js";
+import { completeTask, listChildren, logDecision, registerTask } from "../src/tasks.js";
 import { reportProviderUsage } from "../src/throttle.js";
 import { commitTriage, raiseObjection, startTriage, TRIAGE_TIMEOUT } from "../src/triage.js";
-import { FakeAttributionClient, FakeBehaviorDraftClient, noRetrospectiveCalls } from "./fakes.js";
+import { FakeAttributionClient, FakeBehaviorDraftClient, healthyUsageText, noRetrospectiveCalls, usagePanelText } from "./fakes.js";
 import {
   api,
   bootTidepool,
@@ -31,12 +31,16 @@ import {
   registerWork,
   rememberedNote,
   runNow,
+  settleRcaByWorker,
   type Tidepool,
   WORKER_SPAWNED,
 } from "./harness.js";
 
 let t: Tidepool;
 afterEach(() => t?.stop());
+
+/** 所見なしで完了した RCA 子が findings に残す1行(RCA review は人間の直接 cancel の範囲外 —— ADR 0194)。 */
+const NO_OUTCOME = "completion report: (no outcome recorded)";
 
 async function objectedWork(t: Tidepool, title: string, lines: string[]) {
   const task = await registerWork(t, title);
@@ -333,7 +337,7 @@ it("uncertain の entry は RCA 子がすべて決着した後に1度だけ第2�
   expect(s.attributionClient.calls).toHaveLength(1);
   expect(await attributions(t, s.task.id)).toHaveLength(1);
 
-  await api(t.baseUrl, "POST", `/api/tasks/${s.auditor.id}/cancel`, {});
+  await settleRcaByWorker(t, s.auditor.id);
   await nextPoll(t);
 
   expect((await attributions(t, s.task.id)).map((e: any) => e.payload)).toEqual([
@@ -354,7 +358,7 @@ it("uncertain の entry は RCA 子がすべて決着した後に1度だけ第2�
     steering: ["bring the fixtures back"],
     decision_log: ["skipped the fixtures", "completion report: done as specified"],
     memory_read: [],
-    rca_findings: ["the criteria named the fixtures explicitly", "completion report: fixtures were required"],
+    rca_findings: [NO_OUTCOME, "the criteria named the fixtures explicitly", "completion report: fixtures were required"],
   });
 });
 
@@ -362,11 +366,12 @@ it("初回で uncertain が無いタスクでは RCA 子がすべて決着して
   const s = await objectedAndCommitted("decided", { cause: "capability", evidence: "clear" });
   t = s.t;
 
-  const self = await api(t.baseUrl, "POST", `/api/tasks/${s.self.id}/cancel`, {});
-  const auditor = await api(t.baseUrl, "POST", `/api/tasks/${s.auditor.id}/cancel`, {});
+  await settleRcaByWorker(t, s.self.id);
+  await settleRcaByWorker(t, s.auditor.id);
   await nextPoll(t);
 
-  expect([self.json.status, auditor.json.status]).toEqual(["cancelled", "cancelled"]);
+  const status = async (id: string) => (await api(t.baseUrl, "GET", `/api/tasks/${id}`)).json.status;
+  expect([await status(s.self.id), await status(s.auditor.id)]).toEqual(["done", "done"]);
   expect(s.attributionClient.calls).toHaveLength(1);
   expect((await attributions(t, s.task.id)).map((e: any) => e.payload.round)).toEqual(["initial"]);
 });
@@ -378,8 +383,8 @@ it("ログの HTTP / 管理 MCP 読取は異議の隣に最新の cause を返�
     cause: "capability",
     evidence: "RCA found that the implementation skipped an explicit criterion",
   });
-  await api(t.baseUrl, "POST", `/api/tasks/${s.self.id}/cancel`, {});
-  await api(t.baseUrl, "POST", `/api/tasks/${s.auditor.id}/cancel`, {});
+  await settleRcaByWorker(t, s.self.id);
+  await settleRcaByWorker(t, s.auditor.id);
   await nextPoll(t);
 
   const httpEntry = (await api(t.baseUrl, "GET", "/api/log")).json.entries.find(
@@ -518,7 +523,7 @@ it.each([
     await completeViaMcp(t, repair.id);
 
     await settleRca(t, self.id, "the criteria named the fixtures", "fixtures were required");
-    await api(t.baseUrl, "POST", `/api/tasks/${auditor.id}/cancel`, {});
+    await settleRcaByWorker(t, auditor.id);
     await nextPoll(t);
 
     const second = (await attributions(t, s.task.id)).find((e: any) => e.payload.round === "after_rca");
@@ -533,7 +538,7 @@ it.each([
     expect(s.behaviorDraftClient.calls.map((c) => c.input)).toEqual([
       expect.objectContaining({
         entry_id: s.entry.id,
-        rca_findings: ["the criteria named the fixtures", "completion report: fixtures were required"],
+        rca_findings: [NO_OUTCOME, "the criteria named the fixtures", "completion report: fixtures were required"],
       }),
     ]);
   },
@@ -547,8 +552,8 @@ it.each(["requirement_change", "environment"] as const)(
     const { self, auditor } = await commit(t, s.task.id, "unlearned");
     s.attributionClient.scriptJudgment(s.entry.id, { cause, evidence: "outside the worker" });
 
-    await api(t.baseUrl, "POST", `/api/tasks/${self.id}/cancel`, {});
-    await api(t.baseUrl, "POST", `/api/tasks/${auditor.id}/cancel`, {});
+    await settleRcaByWorker(t, self.id);
+    await settleRcaByWorker(t, auditor.id);
     await nextPoll(t);
 
     expect((await attributions(t, s.task.id)).map((e: any) => e.payload.cause)).toEqual(["uncertain", cause]);
@@ -601,12 +606,12 @@ it("commit が促す poll の起草の Board call が失敗すると memory_draf
   expect(await memoryEntries(t)).toEqual([]);
 });
 
-/** 第2回の帰責を `cause` に確定させる(RCA 子は2つとも cancel)。 */
+/** 第2回の帰責を `cause` に確定させる(RCA 子は2つとも worker の完了で決着)。 */
 async function settleSecondRound(t: Tidepool, s: { attributionClient: FakeAttributionClient; task: any; entry: any }, title: string, cause: Cause) {
   const { self, auditor } = await commit(t, s.task.id, title);
   s.attributionClient.scriptJudgment(s.entry.id, { cause, evidence: "decided after the RCA" });
-  await api(t.baseUrl, "POST", `/api/tasks/${self.id}/cancel`, {});
-  return api(t.baseUrl, "POST", `/api/tasks/${auditor.id}/cancel`, {});
+  await settleRcaByWorker(t, self.id);
+  await settleRcaByWorker(t, auditor.id);
 }
 
 it("workspace を持たない task は Memory の置き場が無いので、起草の呼び出しも失敗 event も無い(1時間後の tick でも)", async () => {
@@ -683,8 +688,8 @@ it("第2回の帰責の失敗は after_rca を書かず失敗 event を残し、
   const { self, auditor } = await commit(t, s.task.id, "flaky-rca");
   s.attributionClient.scriptJudgment(s.entry.id, new Error("claude CLI timed out"));
 
-  await api(t.baseUrl, "POST", `/api/tasks/${self.id}/cancel`, {});
-  await api(t.baseUrl, "POST", `/api/tasks/${auditor.id}/cancel`, {});
+  await settleRcaByWorker(t, self.id);
+  await settleRcaByWorker(t, auditor.id);
   await nextPoll(t);
 
   expect((await attributions(t, s.task.id)).map((e: any) => e.payload.round)).toEqual(["initial"]);
@@ -698,7 +703,7 @@ it("第2回の帰責の失敗は after_rca を書かず失敗 event を残し、
 
   const second = (await attributions(t, s.task.id)).find((e: any) => e.payload.round === "after_rca");
   expect(second.payload).toMatchObject({ cause: "capability", round: "after_rca" });
-  expect(s.attributionClient.calls.map((c) => c.input.rca_findings)).toEqual([undefined, [], []]);
+  expect(s.attributionClient.calls.map((c) => c.input.rca_findings)).toEqual([undefined, [NO_OUTCOME, NO_OUTCOME], [NO_OUTCOME, NO_OUTCOME]]);
   expect(await behaviors(t)).toEqual([
     expect.objectContaining({ addressee: t.worker.id, source: { kind: "event", ref: second.id }, author: { activity: "board", name: "tidepool" } }),
   ]);
@@ -849,17 +854,21 @@ it("throttle の間は第2回の帰責を撃たず、失敗 event も after_rca 
   const { self, auditor } = await commit(t, s.task.id, "throttled rca");
   s.attributionClient.scriptJudgment(s.entry.id, { cause: "capability", evidence: "the RCA decided it" });
   reportFableWindow(t, true);
+  // RCA を拾う pickup は usage を観測し直すので、worker の観測も同じ窓を返す
+  const later = (ms: number) => new Date(t.clock.now().getTime() + ms);
+  t.worker.scriptUsage(usagePanelText({ session: { percent: 0, resetsAt: later(3 * HOUR) }, week: { percent: 0, resetsAt: later(48 * HOUR) }, fable: { percent: 100, resetsAt: later(2 * HOUR) } }));
 
-  await api(t.baseUrl, "POST", `/api/tasks/${self.id}/cancel`, {});
-  const cancelled = await api(t.baseUrl, "POST", `/api/tasks/${auditor.id}/cancel`, {});
+  await settleRcaByWorker(t, self.id);
+  await settleRcaByWorker(t, auditor.id);
   await t.clock.advance(HOUR);
 
-  expect(cancelled.status).toBe(200);
+  expect((await api(t.baseUrl, "GET", `/api/tasks/${auditor.id}`)).json.status).toBe("done");
   expect(s.attributionClient.calls).toHaveLength(1);
   expect((await attributions(t, s.task.id)).map((e: any) => e.payload.round)).toEqual(["initial"]);
   expect(await attributionsFailed(t, s.task.id)).toEqual([]);
 
   reportFableWindow(t, false);
+  t.worker.scriptUsage(healthyUsageText(t.clock.now()));
   await t.clock.advance(HOUR);
 
   expect((await attributions(t, s.task.id)).map((e: any) => [e.payload.cause, e.payload.round])).toEqual([
@@ -893,8 +902,8 @@ it("第2回の帰責が確定した entry は、同じタスクに新しい RCA 
   const s = await objectedAndCommitted("settled-rca");
   t = s.t;
   s.attributionClient.scriptJudgment(s.entry.id, { cause: "capability", evidence: "the RCA decided it" });
-  await api(t.baseUrl, "POST", `/api/tasks/${s.self.id}/cancel`, {});
-  await api(t.baseUrl, "POST", `/api/tasks/${s.auditor.id}/cancel`, {});
+  await settleRcaByWorker(t, s.self.id);
+  await settleRcaByWorker(t, s.auditor.id);
   await nextPoll(t);
   expect(s.attributionClient.calls).toHaveLength(2);
 
@@ -908,7 +917,7 @@ it("第2回の帰責が確定した entry は、同じタスクに新しい RCA 
   const fresh = (await children(t, s.task.id)).filter(
     (x: any) => x.title.startsWith("rca (") && x.status === "todo",
   );
-  for (const rca of fresh) await api(t.baseUrl, "POST", `/api/tasks/${rca.id}/cancel`, {});
+  for (const rca of fresh) await settleRcaByWorker(t, rca.id);
   await t.clock.advance(HOUR);
 
   expect(s.attributionClient.calls.slice(2).map((c) => c.input.entry_id)).toEqual([second.id, second.id]);
@@ -925,11 +934,12 @@ it("初回の帰責が失敗した未帰責の entry は、RCA 子がすべて�
   s.attributionClient.scriptJudgment(s.entry.id, { cause: "capability", evidence: "the RCA decided it" });
   s.behaviorDraftClient.scriptDraft(s.entry.id, KEEP_FIXTURES);
   const repair = (await children(t, s.task.id)).find((x: any) => x.title === "repair: unattributed");
-  await api(t.baseUrl, "POST", `/api/tasks/${auditor.id}/cancel`, {});
+  await lineUpSelfRca(t, self.id, auditor.id);
   await completeViaMcp(t, repair.id);
   await completeIntegrationReviews(t, repair.id);
 
   await settleRca(t, self.id, "the criteria named the fixtures", "fixtures were required");
+  await settleRcaByWorker(t, auditor.id);
   await nextPoll(t);
 
   const [second] = await attributions(t, s.task.id);
@@ -948,7 +958,7 @@ it("初回の帰責が失敗した未帰責の entry は、RCA 子がすべて�
     steering: ["always keep the fixtures"],
     decision_log: ["skipped the fixtures", "completion report: done as specified"],
     memory_read: [],
-    rca_findings: ["the criteria named the fixtures", "completion report: fixtures were required"],
+    rca_findings: [NO_OUTCOME, "the criteria named the fixtures", "completion report: fixtures were required"],
   });
   expect(await behaviors(t)).toEqual([
     expect.objectContaining({ addressee: t.worker.id, source: { kind: "event", ref: second.id }, author: { activity: "board", name: "tidepool" } }),
@@ -961,12 +971,14 @@ it("open session の未帰責の異議は、同じタスクの RCA 子がすべ�
   s.attributionClient.scriptJudgment(s.entry.id, new Error("claude CLI timed out"));
   const { self, auditor } = await commit(t, s.task.id, "still open");
   const completion = (await api(t.baseUrl, "GET", `/api/tasks/${s.task.id}/events`)).json.find((e: any) => e.kind === "task_completed");
+  // session の間は pickup が止まるので、最後の RCA は開く前に slot へ入れておき、開いている間に完了させる
+  await settleRcaByWorker(t, self.id);
+  await runNow(t, auditor.id);
   await api(t.baseUrl, "POST", "/api/triage/start");
   await object(t, completion.id, "the report should name the fixtures");
   s.attributionClient.scriptJudgment(s.entry.id, { cause: "capability", evidence: "the RCA decided it" });
 
-  await api(t.baseUrl, "POST", `/api/tasks/${self.id}/cancel`, {});
-  await api(t.baseUrl, "POST", `/api/tasks/${auditor.id}/cancel`, {});
+  await completeViaMcp(t, auditor.id, false);
   await nextPoll(t);
 
   expect(s.attributionClient.calls.map((c) => c.input.entry_id)).toEqual([s.entry.id, s.entry.id]);
@@ -978,17 +990,19 @@ it("前の RCA 群の第2回が次の session の開いている間に確定し�
   t = s.t;
   s.attributionClient.scriptJudgment(s.entry.id, new Error("claude CLI timed out"));
   const first = await commit(t, s.task.id, "reobjected");
+  // session の間は pickup が止まるので、最後の RCA は開く前に slot へ入れておき、開いている間に完了させる
+  await settleRcaByWorker(t, first.self.id);
+  await runNow(t, first.auditor.id);
   await api(t.baseUrl, "POST", "/api/triage/start");
   const again = await object(t, s.entry.id, "the fixtures, again");
   s.attributionClient.scriptJudgment(s.entry.id, { cause: "capability", evidence: "the first RCA decided it" });
-  await api(t.baseUrl, "POST", `/api/tasks/${first.self.id}/cancel`, {});
-  await api(t.baseUrl, "POST", `/api/tasks/${first.auditor.id}/cancel`, {});
+  await completeViaMcp(t, first.auditor.id, false);
   await nextPoll(t);
   await api(t.baseUrl, "POST", "/api/triage/close", { close_only: true });
   s.attributionClient.scriptJudgment(s.entry.id, { cause: "task_ambiguity", evidence: "the second RCA decided it" });
 
   const fresh = (await children(t, s.task.id)).filter((x: any) => x.title.startsWith("rca (") && x.status === "todo");
-  for (const rca of fresh) await api(t.baseUrl, "POST", `/api/tasks/${rca.id}/cancel`, {});
+  for (const rca of fresh) await settleRcaByWorker(t, rca.id);
   await nextPoll(t);
 
   expect(fresh).toHaveLength(2);
@@ -1016,7 +1030,7 @@ it("初回の帰責の失敗は poll で撃ち直されず、round initial の�
   s.attributionClient.scriptJudgment(s.entry.id, { cause: "capability", evidence: "the RCA decided it" });
 
   const rcas = (await children(t, s.task.id)).filter((x: any) => x.title.startsWith("rca ("));
-  for (const rca of rcas) await api(t.baseUrl, "POST", `/api/tasks/${rca.id}/cancel`, {});
+  for (const rca of rcas) await settleRcaByWorker(t, rca.id);
   await nextPoll(t);
 
   expect(rcas).toHaveLength(6);
@@ -1041,7 +1055,7 @@ async function settleRcasThenTick(t: Tidepool, taskId: string) {
   for (;;) {
     const rca = (await children(t, taskId)).find((x: any) => x.title.startsWith("rca (") && ["todo", "in_progress"].includes(x.status));
     if (!rca) break;
-    if (rca.status === "todo") await api(t.baseUrl, "POST", `/api/tasks/${rca.id}/cancel`, {});
+    if (rca.status === "todo") await settleRcaByWorker(t, rca.id);
     else await completeViaMcp(t, rca.id, false);
   }
   await nextPoll(t);
@@ -1267,7 +1281,7 @@ it.each<[string, (ids: { read: number; unread: number }) => number[], Partial<Ga
   client.scriptJudgment(b.decision, { cause: "memory", evidence: "the RCA traced it to the note", entries: entries(b) });
   const drafter = new FakeBehaviorDraftClient();
   const rca = listChildren(b.db, b.task.id).filter((c) => c.title.startsWith("rca ("));
-  for (const r of rca) cancelTaskDirectly(b.db, r, null, at, {}, "webui");
+  for (const r of rca) completeTask(b.db, r, undefined, "auditor", at, "worker");
 
   refireRetrospectiveCalls(b.db, { ...noRetrospectiveCalls, attributionClient: client, behaviorDraftClient: drafter, workspace: { name: "charts" } }, at);
   // sweep は fire-and-forget: fake の返答が着地するまで回す
@@ -1305,7 +1319,7 @@ function twoBundles(same: boolean) {
     for (const r of rcasOf(objection)) logDecision(db, r, `${name}'s finding from ${r.title}`, "auditor", at, "worker");
   }
   const settle = (objection: number) => {
-    for (const r of rcasOf(objection)) cancelTaskDirectly(db, r, null, at, {}, "webui");
+    for (const r of rcasOf(objection)) completeTask(db, r, undefined, "auditor", at, "worker");
   };
   const client = new FakeAttributionClient();
   const sweep = async (now = at) => {
@@ -1326,7 +1340,7 @@ it.each([
   await s.sweep();
 
   expect(s.client.calls.map((c) => [c.input.entry_id, c.input.steering, c.input.rca_findings])).toEqual([
-    [s.x, ["A's direction"], ["A's finding from rca (self): t", "A's finding from rca (auditor): t"]],
+    [s.x, ["A's direction"], ["A's finding from rca (self): t", NO_OUTCOME, "A's finding from rca (auditor): t", NO_OUTCOME]],
   ]);
 });
 
@@ -1340,7 +1354,7 @@ it.each([
   await s.sweep();
 
   expect(s.client.calls.map((c) => [c.input.steering, c.input.rca_findings])).toEqual([
-    [["B's direction"], ["B's finding from rca (self): t", "B's finding from rca (auditor): t"]],
+    [["B's direction"], ["B's finding from rca (self): t", NO_OUTCOME, "B's finding from rca (auditor): t", NO_OUTCOME]],
   ]);
 });
 

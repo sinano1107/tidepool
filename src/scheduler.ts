@@ -42,10 +42,10 @@ import type { Slot } from "./slot.js";
 import { expireSpendDown } from "./spend-down.js";
 import {
   abandonConsequence,
+  carriesHumanWords,
   contentSourceFor,
   DEFAULT_AUDITOR_NAME,
   escalateTask,
-  isHumanRegistered,
   nextSlotTask,
   pickupTask,
   resolveTaskAgent,
@@ -431,11 +431,11 @@ export function startScheduler(deps: {
     }
   }
 
-  /** 関連 leaf を何で引くか(ADR 0175 決定2〜4): 人間が登録した task を、表示言語が English でない盤面でだけ、
-   *  title / purpose / 完了基準の1つの文面として英語へ訳す。訳せなければ理由を返し、pickup は止めない ——
-   *  client の無い盤面は撃たなかったのと同じ throttled。 */
+  /** 関連 leaf を何で引くか(ADR 0175 決定2〜4、決定3 は ADR 0194 決定6 で改訂): 人間が登録した task か、登録の記録に
+   *  異議の材料を持つ task を、表示言語が English でない盤面でだけ、title / purpose / 完了基準の1つの文面として英語へ訳す。
+   *  訳せなければ理由を返し、pickup は止めない —— client の無い盤面は撃たなかったのと同じ throttled。 */
   async function injectionQuery(task: Task): Promise<InjectionQuery | undefined> {
-    if (!isHumanRegistered(db, task.id) || getDisplayLanguage(db) === "English") return undefined;
+    if (!carriesHumanWords(db, task.id) || getDisplayLanguage(db) === "English") return undefined;
     if (!translationClient) return { reason: "throttled" };
     try {
       const outcome = await translateSource(db, translationClient, injectionQueryText(task), "English", clock.now());

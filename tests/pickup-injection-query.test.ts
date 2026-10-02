@@ -1,8 +1,9 @@
 import { afterEach, expect, it } from "vitest";
 import { setDisplayLanguage } from "../src/display-language.js";
+import { appendEvent } from "../src/events.js";
 import type { ExecutionSetting } from "../src/execution-setting.js";
 import { injectionQueryText } from "../src/memory.js";
-import { BOARD_WORKER_ID, registerTask } from "../src/tasks.js";
+import { BOARD_WORKER_ID, HUMAN_WORKER_ID, logDecision, registerTask } from "../src/tasks.js";
 import { reportProviderUsage } from "../src/throttle.js";
 import { FakeTranslationClient, healthyOpenai } from "./fakes.js";
 import { api, bootTidepool, GIT_FIXTURE_TEST_TIMEOUT, HOUR, HUMAN_WEBUI, makeWorkspace, questions, queueWork, type Tidepool } from "./harness.js";
@@ -24,6 +25,30 @@ it("表示言語 Japanese の盤面で人間が登録した task は、title / p
   expect(translationClient.calls).toEqual([{ source: injectionQueryText(task), language: "English" }]);
   expect(t.worker.startedQueries).toEqual([{ view: "Fix the tide chart drift" }]);
   expect(t.worker.started[0]).toMatchObject({ title: "潮汐グラフのずれを直す", purpose: task.purpose, completion_criteria: task.completion_criteria });
+});
+
+it("表示言語 Japanese の盤面で、異議の材料を持つ盤面名義の RCA review は英訳した view を start に渡す(ADR 0194 決定6)", async () => {
+  const translationClient = new FakeTranslationClient();
+  translationClient.scriptTranslation("Find the root cause of the tide chart drift");
+  t = await bootTidepool({ translationClient });
+  const now = t.clock.now();
+  // 異議された task は人間の担当にして slot に入れない —— slot に入るのは RCA review だけ
+  const objected = registerTask(t.db, { type: "work", title: "潮汐グラフ", purpose: "p", completion_criteria: "c", assignee: "human" }, now, "deckhand", "worker");
+  const entry = logDecision(t.db, objected, "補正を二重にかけた", "deckhand", now, "worker");
+  const objection = appendEvent(t.db, { taskId: objected.id, workerId: HUMAN_WORKER_ID, origin: "webui", payload: { kind: "objection_raised", entry_id: entry, comment: "補正は一度だけ", session_id: 1 }, at: now });
+  const review = registerTask(
+    t.db,
+    { type: "review", title: "rca (auditor): 潮汐グラフ", purpose: "異議: 補正は一度だけ", completion_criteria: "c", parent_id: objected.id, objection_event_ids: [objection] },
+    now,
+    BOARD_WORKER_ID,
+    "board",
+  );
+
+  await t.clock.advance(HOUR);
+
+  expect(t.worker.started.map((x) => x.id)).toEqual([review.id]);
+  expect(translationClient.calls).toEqual([{ source: injectionQueryText(review), language: "English" }]);
+  expect(t.worker.startedQueries).toEqual([{ view: "Find the root cause of the tide chart drift" }]);
 });
 
 it.each([

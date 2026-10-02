@@ -1941,7 +1941,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     try {
       let result: TriageCommitResult;
       if (parsed.data.close_only) {
-        result = closeTriageSessionOnly(db, clock.now());
+        result = closeTriageSessionOnly(db, clock.now(), "commit");
       } else {
         // ADR 0115 決定2: the commit asks the Board call for every objected
         // entry's attribution first (in parallel, outside any transaction —

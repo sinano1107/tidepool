@@ -13,6 +13,7 @@ import {
   makeWorkspace,
   mcpClient,
   registerWork,
+  settleRcaByWorker,
   type Tidepool,
 } from "./harness.js";
 
@@ -149,11 +150,14 @@ it("PR open 後の未束ね異議は CI を読まず行を残し、commit され
   const attached = (await api(t.baseUrl, "GET", "/api/tasks")).json.filter(
     (candidate: any) => candidate.parent_id === task.id && candidate.status !== "done",
   );
-  for (const child of attached) {
+  for (const child of attached.filter((candidate: any) => candidate.type !== "review")) {
     const cancelled = await api(t.baseUrl, "POST", `/api/tasks/${child.id}/cancel`);
     expect(cancelled.status, cancelled.json.error).toBe(200);
   }
   await api(t.baseUrl, "POST", "/api/pause", { paused: false });
+  for (const child of attached.filter((candidate: any) => candidate.type === "review")) {
+    await settleRcaByWorker(t, child.id);
+  }
   await runAutoMergeTick();
   expect(t.github.ciChecks).toEqual([{ path: workspace.path, number: 1 }]);
   expect(t.github.merged).toEqual([{ path: workspace.path, number: 1 }]);
