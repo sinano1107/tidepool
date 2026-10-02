@@ -224,6 +224,104 @@ it("watchdog に殺されて retry された run が次の tick より先に exi
   expect(await exitedWithoutReport()).toHaveLength(1);
 });
 
+// ── watchdog kill の question は、観測された root の exit を添える(ADR 0191) ─────────
+
+const TALKATIVE_EXIT = {
+  ...QUIET_EXIT,
+  exit_code: null,
+  signal: "SIGTERM",
+  last_message: "still bisecting the flaky test",
+  reported_error: "API error status 529: overloaded",
+  stderr_tail: "warn: retrying request",
+};
+
+const SECTIONS =
+  "\n\nlast message from the worker:\nstill bisecting the flaky test" +
+  "\n\nerror reported by the CLI:\nAPI error status 529: overloaded" +
+  "\n\nstderr tail:\nwarn: retrying request";
+
+const RETRY_OR_ABANDON =
+  '\n\n"retry" restarts this task from scratch at the queue head. "abandon" cancels this task and its remaining work.';
+
+const RECLAIMED_PURPOSE =
+  `the task hit its work time limit (${90 * MIN}ms) and its container was ` +
+  `reclaimed (graceful stop, then force reclaim after ${30 * MIN}ms grace). No self-report is possible.`;
+
+const TIMEOUT_PURPOSE =
+  `the task hit its work time limit (${90 * MIN}ms) and its container was force-reclaimed, ` +
+  `but the board could not observe the container going empty within ${5 * MIN}ms. No self-report is possible.`;
+
+const watchdogKilled = async () =>
+  (await questions(t)).filter((q: any) => q.title.startsWith("watchdog killed task:"));
+
+it("畳み込み停止のあとの exit が持つ最後の発話・CLI の失敗・stderr 末尾は、回収済み観測の question に見出し付き・この順で載る", async () => {
+  t = await bootTidepool({ watchdog: WATCHDOG });
+  const task = queueWork(t, "runs too long");
+  t.containers.hold(task.id);
+  await t.clock.advance(HOUR);
+  await t.clock.advance(90 * MIN); // 畳み込み停止
+
+  t.worker.exitWith(task.id, TALKATIVE_EXIT);
+  await settle();
+  await t.clock.advance(30 * MIN); // 強制回収
+  t.containers.fireEmpty(task.id);
+  await settle();
+
+  const [question] = await watchdogKilled();
+  expect(question.purpose).toBe(RECLAIMED_PURPOSE + SECTIONS + RETRY_OR_ABANDON);
+});
+
+it("exit が来ないまま回収 timeout に落ちた question は節を持たない", async () => {
+  t = await bootTidepool({ watchdog: WATCHDOG });
+  const task = queueWork(t, "never exits");
+  t.containers.hold(task.id);
+  await t.clock.advance(HOUR);
+  await t.clock.advance(90 * MIN); // 畳み込み停止
+  await t.clock.advance(30 * MIN); // 強制回収
+  await t.clock.advance(5 * MIN); // 回収 timeout
+
+  const [question] = await watchdogKilled();
+  expect(question.purpose).toBe(TIMEOUT_PURPOSE + RETRY_OR_ABANDON);
+});
+
+it("root は exit したが容器が空にならず回収 timeout に落ちた question にも、exit の3つが載る", async () => {
+  t = await bootTidepool({ watchdog: WATCHDOG });
+  const task = queueWork(t, "leaves a grandchild");
+  t.containers.hold(task.id);
+  await t.clock.advance(HOUR);
+  await t.clock.advance(90 * MIN); // 畳み込み停止
+
+  t.worker.exitWith(task.id, TALKATIVE_EXIT);
+  await settle();
+  await t.clock.advance(30 * MIN); // 強制回収
+  await t.clock.advance(5 * MIN); // 回収 timeout
+
+  const [question] = await watchdogKilled();
+  expect(question.purpose).toBe(TIMEOUT_PURPOSE + SECTIONS + RETRY_OR_ABANDON);
+});
+
+it("watchdog に殺されて retry された run の question に、前の run の exit は載らない", async () => {
+  t = await bootTidepool({ watchdog: WATCHDOG });
+  const task = queueWork(t, "retried");
+  await t.clock.advance(HOUR);
+  await t.clock.advance(90 * MIN); // 畳み込み停止
+  t.worker.exitWith(task.id, TALKATIVE_EXIT);
+  await settle();
+  await t.clock.advance(30 * MIN); // 強制回収 → 回収済み観測
+  await settle();
+  const [killed] = await watchdogKilled();
+  await api(t.baseUrl, "POST", `/api/tasks/${killed.id}/answer`, { answers: ["retry"] });
+  expect(started()).toEqual([task.id, task.id]);
+
+  // 2本目の run は exit しないまま時間制限に達し、強制回収で空になる
+  await t.clock.advance(90 * MIN);
+  await t.clock.advance(30 * MIN);
+  await settle();
+
+  const [question] = (await watchdogKilled()).filter((q: any) => q.id !== killed.id);
+  expect(question.purpose).toBe(RECLAIMED_PURPOSE + RETRY_OR_ABANDON);
+});
+
 it("retry の回答で task は queue 先頭へ戻り、abandon の回答で cancel される", async () => {
   t = await bootTidepool({ watchdog: WATCHDOG });
   const retried = queueWork(t, "retried");
