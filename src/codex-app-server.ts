@@ -370,8 +370,10 @@ function normalizeWindow(
   };
 }
 
-/** Fixed Codex App Server stdio adapter. The first call pins version + generated
- * schema; each call then initializes one stdio process and reads structured
+/** Fixed Codex App Server stdio adapter. Each call checks version + generated
+ * schema until one check passes, then keeps only that pass — a failed check is
+ * re-run next call, so a hand-fixed CLI is picked up without restart (#1316).
+ * Each call then initializes one stdio process and reads structured
  * account/rate-limit results. No token file, WebSocket, experimentalApi, or API
  * key fallback is involved. */
 export function createCodexAppServerProbe(options: {
@@ -381,9 +383,10 @@ export function createCodexAppServerProbe(options: {
 }): CodexAppServerProbe {
   const { command } = options;
   const env = probeEnv(options.codexHome);
-  const compatibility = compatibilityCheck(options.executable, env, command);
+  // ponytail: concurrent calls before the first pass each run their own check; share the in-flight promise if that cost shows up
+  let passed: { ok: true; cliVersion: string } | undefined;
   return async (now) => {
-    const compatible = await compatibility;
+    const compatible = passed ?? await compatibilityCheck(options.executable, env, command);
     if (!compatible.ok) {
       return {
         status: "unobservable",
@@ -392,6 +395,7 @@ export function createCodexAppServerProbe(options: {
         reason: compatible.reason,
       };
     }
+    passed = compatible;
     const input = [
       {
         id: 1,
