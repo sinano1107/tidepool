@@ -925,7 +925,8 @@ const workspacesSchema = z.record(z.string(), workspaceEntrySchema);
  *  same moment `parseAgentFile` checks a skill allowlist: a malformed widening
  *  must fail the registry read loudly, never reach a spawn quietly. */
 function assertValidWorkspaces(workspaces: z.infer<typeof workspacesSchema>): void {
-  for (const entry of Object.values(workspaces)) {
+  for (const [name, entry] of Object.entries(workspaces)) {
+    assertNameRule(name, InvalidWorkspaceNameError);
     assertValidReviewAllowedCommands(entry.review_allowed_commands ?? []);
     assertValidAllowedDomains(entry.allowed_domains ?? []);
   }
@@ -956,6 +957,19 @@ const RESERVED_REGISTRY_NAMES = new Set([".", ".."]);
 const NAME_CHARSET_REASON =
   "must contain only letters, digits, '-', '_', '.' and not be '.' or '..'";
 
+/** The name rule shared by the creation gates and `loadRegistry` (issue
+ *  #1367): the registry also changes without passing a gate (a hand commit,
+ *  a merged registry-edit PR — ADR 0061), so the load applies the very same
+ *  rule. Uniqueness is the gates' alone — at load the names are map keys. */
+function assertNameRule(
+  name: string,
+  NameError: new (name: string, reason: string) => Error,
+): void {
+  if (RESERVED_REGISTRY_NAMES.has(name) || !REGISTRY_NAME_PATTERN.test(name)) {
+    throw new NameError(name, NAME_CHARSET_REASON);
+  }
+}
+
 /** A candidate workspace name fails the entry gate the creation modes
  *  (issue #57 phase 2) will use: reused inside an existing registry, or
  *  outside the charset both a directory name and a GitHub repo name accept. */
@@ -974,9 +988,7 @@ export class InvalidWorkspaceNameError extends Error {
  *  register it. Checks uniqueness against `registry` and the shared charset —
  *  safe for both a directory name and a GitHub repository name. */
 export function assertValidWorkspaceName(registry: Registry, name: string): void {
-  if (RESERVED_REGISTRY_NAMES.has(name) || !REGISTRY_NAME_PATTERN.test(name)) {
-    throw new InvalidWorkspaceNameError(name, NAME_CHARSET_REASON);
-  }
+  assertNameRule(name, InvalidWorkspaceNameError);
   if (Object.hasOwn(registry.workspaces, name)) {
     throw new InvalidWorkspaceNameError(name, "a workspace with this name already exists");
   }
@@ -1002,17 +1014,21 @@ export class InvalidAgentNameError extends Error {
  *  registry's agents. Also refuses the board's own worker ids (issue #1365):
  *  an agent named like one would be taken for the board or the human. */
 export function assertValidAgentName(registry: Registry, name: string): void {
-  if (RESERVED_REGISTRY_NAMES.has(name) || !REGISTRY_NAME_PATTERN.test(name)) {
-    throw new InvalidAgentNameError(name, NAME_CHARSET_REASON);
-  }
-  if (isNonAgentWorkerId(name)) {
-    throw new InvalidAgentNameError(name, "this is a worker id reserved by the board");
-  }
+  assertAgentNameRule(name);
   // 組み込みのエントリは不在として扱う(ADR 0117 決定2): 気に入った名前で自作の
   // Auditor を持てるよう、作成の扉は同名を拒まない —— 拒む代わりに shadow を告げる
   const existing = ownEntry(registry.agents, name);
   if (existing && existing.builtin !== true) {
     throw new InvalidAgentNameError(name, "an agent with this name already exists");
+  }
+}
+
+/** The agent's name rule, shared with `loadRegistry` (issue #1367): the
+ *  shared charset plus the board's own worker ids. */
+function assertAgentNameRule(name: string): void {
+  assertNameRule(name, InvalidAgentNameError);
+  if (isNonAgentWorkerId(name)) {
+    throw new InvalidAgentNameError(name, "this is a worker id reserved by the board");
   }
 }
 
@@ -1035,9 +1051,7 @@ export class InvalidAuthorityProfileNameError extends Error {
  *  charset (safe as the file name `authority/<name>.yaml`), same reserved
  *  names, uniqueness against the registry's profiles. */
 export function assertValidAuthorityProfileName(registry: Registry, name: string): void {
-  if (RESERVED_REGISTRY_NAMES.has(name) || !REGISTRY_NAME_PATTERN.test(name)) {
-    throw new InvalidAuthorityProfileNameError(name, NAME_CHARSET_REASON);
-  }
+  assertNameRule(name, InvalidAuthorityProfileNameError);
   if (Object.hasOwn(registry.authority, name)) {
     throw new InvalidAuthorityProfileNameError(name, "an authority profile with this name already exists");
   }
@@ -1076,11 +1090,13 @@ export function loadRegistry(dir: string, mode: RegistryMode): Registry {
   const authority: Record<string, AuthorityProfile> = {};
   for (const [path, raw] of files) {
     if (path.startsWith("agents/")) {
-      const agent = parseAgentFile(basename(path, ".md"), raw);
-      agents[agent.name] = agent;
+      const name = basename(path, ".md");
+      assertAgentNameRule(name);
+      agents[name] = parseAgentFile(name, raw);
     } else if (path.startsWith("authority/")) {
-      const profile = parseAuthorityFile(basename(path, ".yaml"), raw);
-      authority[profile.name] = profile;
+      const name = basename(path, ".yaml");
+      assertNameRule(name, InvalidAuthorityProfileNameError);
+      authority[name] = parseAuthorityFile(name, raw);
     }
   }
   // 名前の解決は registry が先、無ければ組み込み(ADR 0117 決定2 の shadowing)。
