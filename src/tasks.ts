@@ -1217,6 +1217,13 @@ export function assertAnswerable(question: Task, answers: string[], comment: str
   }
 }
 
+/** 着地 question(PR マージ・ローカル着地)か。push の遷移先(buildQuestionPushPayload)と読み口の着地注記(landingAnnotation)が共有する(ADR 0190)。 */
+export function isLandingQuestion(
+  task: Pick<Task, "question_pending_merge_pr" | "question_pending_local_merge_task_id">,
+): boolean {
+  return task.question_pending_merge_pr !== null || task.question_pending_local_merge_task_id !== null;
+}
+
 /** 選択肢にない回答を断る固定選択肢の question か。門(assertAnswerable)と読み口(questionAnnotations の `free_text`)が使う(issue #1309)。
  *
  *  A system-registered question with a real external side effect (merge,

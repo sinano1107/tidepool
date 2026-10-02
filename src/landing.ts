@@ -11,6 +11,7 @@ import {
   DomainError,
   getTask,
   HUMAN_WORKER_ID,
+  isLandingQuestion,
   MERGE_QUESTION_OPTIONS,
   PR_PROMOTION_FAILURE_OPTIONS,
   recordPrOpened,
@@ -103,7 +104,7 @@ export function landingAnnotation(
 ): { blocked_by: LandingBlock["kind"] | null } | null {
   const local = task.question_pending_local_merge_task_id;
   const pr = task.question_pending_merge_pr;
-  if (local === null && pr === null) return null;
+  if (!isLandingQuestion(task)) return null;
   let landingTaskId: string;
   try {
     landingTaskId = local ?? taskIdForPr(db, pr as number, task.workspace);
