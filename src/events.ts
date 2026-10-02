@@ -297,6 +297,11 @@ export type EventPayload =
       // only. null means the CLI reported no failure. Display only — no
       // judgment on the board reads it (ADR 0104 決定2 / ADR 0184 決定3).
       reported_error: string | null;
+      // ADR 0189: the last text the worker's root model wrote (Claude: not a
+      // `<synthetic>` or subagent line; Codex: `agent_message`), verbatim, not
+      // truncated. null means none was observed. Display only — no judgment on
+      // the board reads it (ADR 0104 決定2 / ADR 0184 決定3).
+      last_message: string | null;
       // issue #379: the id of the `worker_spawned` event that opened this
       // same session — a task can have several worker sessions (retry /
       // decompose 統合復帰 / quarantine 復帰), and the adapter now names each

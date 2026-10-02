@@ -2325,6 +2325,7 @@ describe("ClaudeCodeWorker", () => {
       // null で残る(空文字とは違い、捕捉の欠落と区別できる — issue #125)
       stderr_tail: null,
       reported_error: null,
+      last_message: null,
       // このセッションを開いた worker_spawned を指す(issue #379)
       worker_spawned_event_id: spawned?.id,
       usage: {
@@ -2484,7 +2485,7 @@ describe("ClaudeCodeWorker", () => {
     f.emitExit(0, null);
 
     expect(calls).toEqual([
-      ["task-exit-without-report", { exit_code: 0, signal: null, stderr_tail: "boom", reported_error: null }, { exitedRecorded: true, forced: true }],
+      ["task-exit-without-report", { exit_code: 0, signal: null, stderr_tail: "boom", reported_error: null, last_message: null }, { exitedRecorded: true, forced: true }],
     ]);
   });
 
@@ -2529,15 +2530,15 @@ describe("ClaudeCodeWorker", () => {
     expect(exited?.payload).toMatchObject({ stderr_tail: null });
   });
 
-  /** ADR 0188: stdout の result 行を1本流して exit し、worker_exited の reported_error を読む。 */
-  async function reportedErrorAfter(lines: object[]): Promise<unknown> {
+  /** stdout に行を流して exit し、worker_exited の payload を読む(ADR 0188 / 0189)。 */
+  async function exitedAfter(lines: object[]): Promise<Record<string, unknown>> {
     const { start, processes, emitExit, db } = await makeWorker();
-    start("task-reported-error");
+    start("task-exited-after");
     processes[0]!.stdout.write(lines.map((line) => `${JSON.stringify(line)}\n`).join(""));
     emitExit(1, null);
-    const exited = listEvents(db, "task-reported-error").find((e) => e.kind === "worker_exited");
-    return (exited!.payload as { reported_error?: unknown }).reported_error;
+    return listEvents(db, "task-exited-after").find((e) => e.kind === "worker_exited")!.payload as Record<string, unknown>;
   }
+  const reportedErrorAfter = async (lines: object[]) => (await exitedAfter(lines)).reported_error;
 
   it("is_error の success 行は result を、api_error_status が数値なら前に添えて reported_error に載せる(ADR 0188)", async () => {
     expect(
@@ -2591,6 +2592,44 @@ describe("ClaudeCodeWorker", () => {
     expect(exited?.payload).toMatchObject({ reported_error: "later" });
   });
 
+  const lastMessageAfter = async (lines: object[]) => (await exitedAfter(lines)).last_message;
+  const said = (content: object[], extra: object = {}) => ({
+    type: "assistant",
+    parent_tool_use_id: null,
+    message: { model: "claude-sonnet-4-6", content },
+    ...extra,
+  });
+  const text = (value: string) => ({ type: "text", text: value });
+  const toolUse = { type: "tool_use", id: "toolu_1", name: "Bash", input: {} };
+
+  it("root の assistant 行の最後の text を last_message に載せ、tool_use だけの行は上書きしない(ADR 0189)", async () => {
+    expect(await lastMessageAfter([said([text("first")]), said([text("second"), toolUse, text("")])])).toBe("second");
+    expect(await lastMessageAfter([said([text("done")]), said([toolUse])])).toBe("done");
+  });
+
+  it("<synthetic> の行と subagent の行の text は載せず、その前の root の text を残す(ADR 0189 決定2)", async () => {
+    const synthetic = said([text("API Error: 429")], { message: { model: "<synthetic>", content: [text("API Error: 429")] } });
+    expect(await lastMessageAfter([said([text("working")]), synthetic])).toBe("working");
+    expect(await lastMessageAfter([synthetic])).toBeNull();
+    expect(await lastMessageAfter([said([text("root")]), said([text("from subagent")], { parent_tool_use_id: "toolu_1" })])).toBe(
+      "root",
+    );
+  });
+
+  it("assistant 行の無い exit は last_message null、result 行の result は読まない(ADR 0189)", async () => {
+    expect(await lastMessageAfter([])).toBeNull();
+    expect(await lastMessageAfter([{ type: "result", subtype: "success", is_error: false, result: "done" }])).toBeNull();
+  });
+
+  it("改行で終わらない最終行の text も exit の flush で拾う(ADR 0189)", async () => {
+    const { start, processes, emitExit, db } = await makeWorker();
+    start("task-last-message-flush");
+    processes[0]!.stdout.write(`${JSON.stringify(said([text("earlier")]))}\n${JSON.stringify(said([text("later")]))}`);
+    emitExit(0, null);
+    const exited = listEvents(db, "task-last-message-flush").find((e) => e.kind === "worker_exited");
+    expect(exited?.payload).toMatchObject({ last_message: "later" });
+  });
+
   it("最終 result イベントが出ないまま終了したセッション(watchdog kill 等)は usage null で worker_exited を記録する(issue #32)", async () => {
     const { start, emitExit, db } = await makeWorker();
     start("task-killed");
@@ -2603,6 +2642,7 @@ describe("ClaudeCodeWorker", () => {
       signal: "SIGKILL",
       stderr_tail: null,
       reported_error: null,
+      last_message: null,
       worker_spawned_event_id: spawned?.id,
       usage: null,
     });
