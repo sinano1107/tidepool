@@ -13,7 +13,7 @@ import {
   originRepo,
 } from "./github-auth.js";
 import { PROVIDER_VALUES, type Provider } from "./provider.js";
-import { BOARD_WORKER_ID, HUMAN_WORKER_ID } from "./tasks.js";
+import { isNonAgentWorkerId } from "./tasks.js";
 
 /** An agent definition file: `agents/<name>.md` in the registry clone.
  *  Frontmatter carries the machine-stamped version and the authority profile
@@ -1005,7 +1005,7 @@ export function assertValidAgentName(registry: Registry, name: string): void {
   if (RESERVED_REGISTRY_NAMES.has(name) || !REGISTRY_NAME_PATTERN.test(name)) {
     throw new InvalidAgentNameError(name, NAME_CHARSET_REASON);
   }
-  if (name === HUMAN_WORKER_ID || name === BOARD_WORKER_ID) {
+  if (isNonAgentWorkerId(name)) {
     throw new InvalidAgentNameError(name, "this is a worker id reserved by the board");
   }
   // 組み込みのエントリは不在として扱う(ADR 0117 決定2): 気に入った名前で自作の

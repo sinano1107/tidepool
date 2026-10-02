@@ -20,7 +20,7 @@ import { type ExecutionSettingRow, retrospectiveBoardCallRow } from "./execution
 import { buildMemoryInjection, createBehaviorCandidate, listMemoryEntries, memoryScope, recordKnowledge, requireDecision } from "./memory.js";
 import { sessionSpawnOf, sessionWindow } from "./precedent.js";
 import type { ProcessContainers } from "./process-container.js";
-import { BOARD_WORKER_ID, DomainError, getRegistrant, getTask, HUMAN_WORKER_ID, listChildren, type Task } from "./tasks.js";
+import { BOARD_WORKER_ID, DomainError, getRegistrant, getTask, HUMAN_WORKER_ID, isNonAgentWorkerId, listChildren, type Task } from "./tasks.js";
 import { isAnthropicBoardCallBlocked } from "./throttle.js";
 import { entryObjections, listObjectedEntries, objectedEntryText, objectionsById, requireLogEntry } from "./triage.js";
 
@@ -539,7 +539,7 @@ function learningTarget(
   }
   const toRegistrant = () => {
     // 盤面(BOARD_WORKER_ID)も agent ではない —— 宛先にしても注入はどこにも一致しない
-    if (registrant === HUMAN_WORKER_ID || registrant === BOARD_WORKER_ID) {
+    if (isNonAgentWorkerId(registrant)) {
       throw new DomainError("the task was not registered by an agent: there is no agent to address a behavior to");
     }
     return { kind: "behavior" as const, addressee: registrant };
