@@ -145,7 +145,7 @@ const failureQuestion = (db: Db, parent: Task) =>
   );
 
 it.each([
-  ["未回答の failure question", (db: Db, parent: Task): unknown => failureQuestion(db, parent)],
+  ["未回答の failure question", failureQuestion],
   ["回答済みの failure question", (db: Db, parent: Task): unknown => answerQuestion(db, failureQuestion(db, parent), ["retry"], at, undefined, undefined, undefined, "webui")],
   [
     "異議が立てた RCA review",
