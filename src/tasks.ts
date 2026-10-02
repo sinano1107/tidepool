@@ -42,6 +42,12 @@ export const HUMAN_ROSTER_AGENT: RosterAgent = {
  *  (issue #21) — a plain agent question always carries 2-4 choices. */
 export const BOARD_WORKER_ID = "tidepool";
 
+/** Worker ids that are not agents (the human and the board). Add a new
+ *  non-agent id here and every "is this an agent?" check follows. */
+const NON_AGENT_WORKER_IDS: ReadonlySet<string> = new Set([HUMAN_WORKER_ID, BOARD_WORKER_ID]);
+
+export const isNonAgentWorkerId = (id: string): boolean => NON_AGENT_WORKER_IDS.has(id);
+
 /** Fallback for the board's Auditor pointer (CONTEXT.md) when no
  *  configuration overrides it — the pointer "常に値を持ち「未設定」という状態
  *  はない" (ADR 0013's issue #15 grilling notes). The shared literal lives in
@@ -2018,14 +2024,15 @@ export function decomposeTask(
  *  premise-breach question, RCA review) is the board's rule, not an agent's
  *  decompose judgment, so it does not count (ADR 0194 決定5). */
 function hasAgentRegisteredChild(db: Db, parentId: string): boolean {
+  const placeholders = [...NON_AGENT_WORKER_IDS].map(() => "?").join(", ");
   const row = db
     .prepare(
       `SELECT 1 FROM tasks t
        JOIN events e ON e.task_id = t.id AND e.kind = 'task_registered'
-       WHERE t.parent_id = ? AND e.worker_id NOT IN (?, ?)
+       WHERE t.parent_id = ? AND e.worker_id NOT IN (${placeholders})
        LIMIT 1`,
     )
-    .get(parentId, HUMAN_WORKER_ID, BOARD_WORKER_ID);
+    .get(parentId, ...NON_AGENT_WORKER_IDS);
   return row !== undefined;
 }
 
