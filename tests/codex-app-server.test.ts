@@ -119,53 +119,39 @@ it("fixed Codex app-server stdio returns authenticated, normalized primary and s
   vi.stubEnv("OPENAI_API_KEY", "must-not-reach-codex");
   vi.stubEnv("CODEX_API_KEY", "must-not-reach-codex");
   const root = await tempDir("tidepool-codex-probe-");
-  const calls: Array<{ args: string[]; input?: string; env: NodeJS.ProcessEnv }> = [];
-  const command: CodexCliCommand = async (_executable, args, options) => {
-    calls.push({ args, input: options.input, env: options.env });
-    if (args[0] === "--version") {
-      return { exitCode: 0, stdout: `${CODEX_APP_SERVER_VERSION}\n`, stderr: "" };
-    }
-    if (args[0] === "app-server" && args[1] === "generate-json-schema") {
-      const out = args[args.indexOf("--out") + 1]!;
-      writeCompatibleSchemas(out);
-      return { exitCode: 0, stdout: "", stderr: "" };
-    }
-    return {
-      exitCode: 0,
-      stderr: "",
-      stdout: [
-        { id: 1, result: { userAgent: "codex_cli_rs/0.147.0", platformFamily: "unix", platformOs: "macos", codexHome: root } },
-        {
-          id: 2,
-          result: {
-            account: { type: "chatgpt", email: "worker@example.invalid", planType: "plus" },
-            requiresOpenaiAuth: true,
+  const { command, calls } = fakeCodex({
+    rows: [
+      { id: 1, result: { userAgent: "codex_cli_rs/0.147.0", platformFamily: "unix", platformOs: "macos", codexHome: root } },
+      {
+        id: 2,
+        result: {
+          account: { type: "chatgpt", email: "worker@example.invalid", planType: "plus" },
+          requiresOpenaiAuth: true,
+        },
+      },
+      {
+        id: 3,
+        result: {
+          rateLimits: {
+            limitId: "codex",
+            planType: "plus",
+            primary: { usedPercent: 25, windowDurationMins: 300, resetsAt: 18_001 },
+            secondary: { usedPercent: 40, windowDurationMins: 10_080, resetsAt: 604_801 },
           },
         },
-        {
-          id: 3,
-          result: {
-            rateLimits: {
-              limitId: "codex",
-              planType: "plus",
-              primary: { usedPercent: 25, windowDurationMins: 300, resetsAt: 18_001 },
-              secondary: { usedPercent: 40, windowDurationMins: 10_080, resetsAt: 604_801 },
-            },
-          },
+      },
+      {
+        id: 4,
+        result: {
+          data: [
+            { id: "gpt-5.6-sol", model: "gpt-5.6-sol", hidden: false },
+            { id: "gpt-reserve", model: "gpt-reserve", hidden: true },
+          ],
+          nextCursor: null,
         },
-        {
-          id: 4,
-          result: {
-            data: [
-              { id: "gpt-5.6-sol", model: "gpt-5.6-sol", hidden: false },
-              { id: "gpt-reserve", model: "gpt-reserve", hidden: true },
-            ],
-            nextCursor: null,
-          },
-        },
-      ].map((line) => JSON.stringify(line)).join("\n"),
-    };
-  };
+      },
+    ],
+  });
 
   const result = await createCodexAppServerProbe({
     executable: "/opt/tidepool/bin/codex",
@@ -222,18 +208,9 @@ it("fixed Codex app-server stdio returns authenticated, normalized primary and s
 it("version or generated response-schema drift fails closed before App Server usage is trusted", async () => {
   for (const drift of ["version", "schema"] as const) {
     const root = await tempDir("tidepool-codex-probe-");
-    let appServerCalls = 0;
-    const command: CodexCliCommand = async (_executable, args) => {
-      if (args[0] === "--version") {
-        return {
-          exitCode: 0,
-          stdout: `${drift === "version" ? "codex-cli 0.148.0" : CODEX_APP_SERVER_VERSION}\n`,
-          stderr: "",
-        };
-      }
-      if (args[1] === "generate-json-schema") {
-        const out = args[args.indexOf("--out") + 1]!;
-        writeCompatibleSchemas(out);
+    const { command, calls } = fakeCodex({
+      version: drift === "version" ? "codex-cli 0.148.0" : CODEX_APP_SERVER_VERSION,
+      drift: (out) =>
         writeFileSync(
           join(out, "v2", "GetAccountResponse.json"),
           JSON.stringify({
@@ -241,18 +218,15 @@ it("version or generated response-schema drift fails closed before App Server us
             required: ["requiresOpenaiAuth"],
             properties: { requiresOpenaiAuth: { type: "string" } },
           }),
-        );
-        return { exitCode: 0, stdout: "", stderr: "" };
-      }
-      appServerCalls += 1;
-      return { exitCode: 0, stdout: "", stderr: "" };
-    };
+        ),
+    });
 
     const result = await createCodexAppServerProbe({
       executable: "/opt/tidepool/bin/codex",
       codexHome: root,
       command,
     })(new Date(1_000));
+    const appServerCalls = appServerCallsIn(calls);
 
     expect(result).toMatchObject({ status: "unobservable", provider: "openai" });
     expect(appServerCalls).toBe(0);
@@ -282,40 +256,43 @@ it.each([
     },
   ],
 ])("model/list の生成 schema のずれは App Server を読む前に観測不能に倒れる: %s", async (_case, drift) => {
-  let appServerCalls = 0;
-  const command: CodexCliCommand = async (_executable, args) => {
-    if (args[0] === "--version") return { exitCode: 0, stdout: `${CODEX_APP_SERVER_VERSION}\n`, stderr: "" };
-    if (args[1] === "generate-json-schema") {
-      const out = args[args.indexOf("--out") + 1]!;
-      writeCompatibleSchemas(out);
-      drift(out);
-      return { exitCode: 0, stdout: "", stderr: "" };
-    }
-    appServerCalls += 1;
-    return { exitCode: 0, stdout: "", stderr: "" };
-  };
+  const { command, calls } = fakeCodex({ drift });
 
   const result = await createCodexAppServerProbe({ executable: "/opt/tidepool/bin/codex", codexHome: "/tmp/codex", command })(
     new Date(1_000),
   );
+  const appServerCalls = appServerCallsIn(calls);
 
   expect(result).toMatchObject({ status: "unobservable", reason: "required App Server method or response schema drifted" });
   expect(appServerCalls).toBe(0);
 });
 
-/** app-server の応答行だけを差し替える fake。`--version` と生成 schema は常に適合する。 */
-function fakeCodex(rows: unknown[]): CodexCliCommand {
-  return async (_executable, args) => {
+type FakeCodexOptions = { version?: string; schemaFails?: boolean; drift?: (out: string) => void; rows?: unknown[] };
+
+/** 版・schema 生成・app-server 応答の3枝を差し替えられる codex。省略した枝は適合する。
+ *  options は呼び出しのたびに読むので、呼び出しの合間に書き換えて枝を切り替えられる。 */
+function fakeCodex(options: FakeCodexOptions = {}) {
+  const calls: Array<{ args: string[]; input?: string; env: NodeJS.ProcessEnv }> = [];
+  const command: CodexCliCommand = async (_executable, args, { input, env }) => {
+    calls.push({ args, input, env });
     if (args[0] === "--version") {
-      return { exitCode: 0, stdout: `${CODEX_APP_SERVER_VERSION}\n`, stderr: "" };
+      return { exitCode: 0, stdout: `${options.version ?? CODEX_APP_SERVER_VERSION}\n`, stderr: "" };
     }
     if (args[1] === "generate-json-schema") {
-      writeCompatibleSchemas(args[args.indexOf("--out") + 1]!);
+      if (options.schemaFails) return { exitCode: 1, stdout: "", stderr: "schema generation crashed" };
+      const out = args[args.indexOf("--out") + 1]!;
+      writeCompatibleSchemas(out);
+      options.drift?.(out);
       return { exitCode: 0, stdout: "", stderr: "" };
     }
+    const rows = options.rows ?? [INITIALIZED, SIGNED_IN, RATE_LIMITS, MODEL_LIST];
     return { exitCode: 0, stderr: "", stdout: rows.map((row) => JSON.stringify(row)).join("\n") };
   };
+  return { command, calls };
 }
+
+const appServerCallsIn = (calls: Array<{ args: string[] }>) =>
+  calls.filter(({ args }) => args[0] !== "--version" && args[1] !== "generate-json-schema").length;
 
 const INITIALIZED = {
   id: 1,
@@ -330,7 +307,7 @@ const probe = (rows: unknown[]) =>
   createCodexAppServerProbe({
     executable: "/opt/tidepool/bin/codex",
     codexHome: "/tmp/codex",
-    command: fakeCodex(rows),
+    command: fakeCodex({ rows }).command,
   })(new Date(1_000));
 
 it.each([
@@ -531,43 +508,32 @@ it("reset が pickup 時刻 + 窓幅を往復ぶん超えていても観測と�
 
 it("accepts the validated codex indexed view but does not guess that unknown limit ids are models", async () => {
   const root = await tempDir("tidepool-codex-probe-");
-  const command: CodexCliCommand = async (_executable, args) => {
-    if (args[0] === "--version") {
-      return { exitCode: 0, stdout: `${CODEX_APP_SERVER_VERSION}\n`, stderr: "" };
-    }
-    if (args[1] === "generate-json-schema") {
-      writeCompatibleSchemas(args[args.indexOf("--out") + 1]!);
-      return { exitCode: 0, stdout: "", stderr: "" };
-    }
-    return {
-      exitCode: 0,
-      stderr: "",
-      stdout: [
-        { id: 1, result: { userAgent: "codex_cli_rs/0.147.0", platformFamily: "unix", platformOs: "macos", codexHome: root } },
-        { id: 2, result: { account: { type: "chatgpt", email: null, planType: "plus" }, requiresOpenaiAuth: true } },
-        {
-          id: 3,
-          result: {
-            rateLimits: {
+  const { command } = fakeCodex({
+    rows: [
+      { id: 1, result: { userAgent: "codex_cli_rs/0.147.0", platformFamily: "unix", platformOs: "macos", codexHome: root } },
+      { id: 2, result: { account: { type: "chatgpt", email: null, planType: "plus" }, requiresOpenaiAuth: true } },
+      {
+        id: 3,
+        result: {
+          rateLimits: {
+            limitId: "codex",
+            planType: "plus",
+            primary: { usedPercent: 10, windowDurationMins: 300, resetsAt: 18_001 },
+            secondary: { usedPercent: 20, windowDurationMins: 10_080, resetsAt: 604_801 },
+          },
+          rateLimitsByLimitId: {
+            codex: {
               limitId: "codex",
               planType: "plus",
               primary: { usedPercent: 10, windowDurationMins: 300, resetsAt: 18_001 },
               secondary: { usedPercent: 20, windowDurationMins: 10_080, resetsAt: 604_801 },
             },
-            rateLimitsByLimitId: {
-              codex: {
-                limitId: "codex",
-                planType: "plus",
-                primary: { usedPercent: 10, windowDurationMins: 300, resetsAt: 18_001 },
-                secondary: { usedPercent: 20, windowDurationMins: 10_080, resetsAt: 604_801 },
-              },
-            },
           },
         },
-        MODEL_LIST,
-      ].map((line) => JSON.stringify(line)).join("\n"),
-    };
-  };
+      },
+      MODEL_LIST,
+    ],
+  });
 
   const result = await createCodexAppServerProbe({
     executable: "/opt/tidepool/bin/codex",
@@ -699,20 +665,17 @@ it("Codex の版の照合は trim した `codex --version` と CODEX_APP_SERVER_
 });
 
 /** 呼び出しごとに版と schema 生成のふるまいを切り替え、互換性検査の再実行を数える fake。 */
-function switchableCodex(initial: { version?: string; schemaFails?: boolean } = {}) {
-  const state = { version: CODEX_APP_SERVER_VERSION, schemaFails: false, versionCalls: 0, schemaCalls: 0, ...initial };
-  const appServer = fakeCodex([INITIALIZED, SIGNED_IN, RATE_LIMITS, MODEL_LIST]);
-  const command: CodexCliCommand = async (executable, args, options) => {
-    if (args[0] === "--version") {
-      state.versionCalls += 1;
-      return { exitCode: 0, stdout: `${state.version}\n`, stderr: "" };
-    }
-    if (args[1] === "generate-json-schema") {
-      state.schemaCalls += 1;
-      if (state.schemaFails) return { exitCode: 1, stdout: "", stderr: "schema generation crashed" };
-    }
-    return appServer(executable, args, options);
+function switchableCodex(initial: FakeCodexOptions = {}) {
+  const state = {
+    ...initial,
+    get versionCalls() {
+      return calls.filter(({ args }) => args[0] === "--version").length;
+    },
+    get schemaCalls() {
+      return calls.filter(({ args }) => args[1] === "generate-json-schema").length;
+    },
   };
+  const { command, calls } = fakeCodex(state);
   const probe = createCodexAppServerProbe({ executable: "/opt/tidepool/bin/codex", codexHome: "/tmp/codex", command });
   return { state, probe: () => probe(new Date(1_000)) };
 }
