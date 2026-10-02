@@ -2229,7 +2229,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     // scan already reads every line, so the added cost is a filter per line.
     const advisorObserved: AdvisorObservation = { consultations: 0, mainModel: null };
     // 1行の観測はここ1か所 —— stream のループと exit の flush が同じ集合を通す(issue #1301)。
-    // decoded once, read by every concern below (see parseStreamLine)
+    // 行は1度だけ decode し、全観測が同じ `parsed` を読む(see parseStreamLine)
     const observe = (parsed: Record<string, unknown> | null) => {
       lastResult = readResultEvent(parsed) ?? lastResult;
       cliAuthFailed ||= isCliAuthFailure(parsed);

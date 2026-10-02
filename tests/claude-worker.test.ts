@@ -3316,7 +3316,6 @@ describe("advisor capability (issue #33)", () => {
     expect(usageOf(db, "task-advisor-count")?.advisor).toMatchObject({ consultations: 3 });
   });
 
-  // exit の flush も stream のループと同じ観測を通す(issue #1301)。
   it("改行なしの最終チャンクにある相談も数える(issue #1301)", async () => {
     const { start, processes, emitExit, db } = await makeWorker(withAdvisor);
     start("task-advisor-final-chunk");
