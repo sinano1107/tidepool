@@ -34,7 +34,7 @@ import {
   registerThroughHumanDoor,
   submitAnswer,
 } from "./human-verbs.js";
-import { type Landing, landingAnnotation } from "./landing.js";
+import type { Landing } from "./landing.js";
 import { MEMORY_BRANCHES_DESCRIPTION, toolError, toolResult } from "./mcp.js";
 import {
   changeMemorySettings,
@@ -254,20 +254,18 @@ WebUI themselves. This implies:
   you for log awareness, relay what you read; the same entries will still
   appear in their next triage session.`;
 
-const LANDING_ANNOTATION_DESCRIPTION =
-  "In this list a question also carries `landing`: null for a general question; for a landing question, `blocked_by` says why a `merge` answer would be rejected right now (`attached_children` or `objections`), or null when it would be accepted.";
 const QUESTION_ANNOTATIONS_DESCRIPTION =
-  "A question also carries `approval` (for a child-approval question, whether approving raises the parent's risk; otherwise null), `blocking` (the id of the parent task it holds up, or null), and `moved` (for a memory proposal, one element per pinned entry moved since the proposal was shown: `id` is the entry as pinned, `tail_id` is where it lives now with its current `path` / `scope`, and an answer applies to `tail_id`). A non-question task carries none of these.";
+  "A question also carries `landing` (null for a general question; for a landing question, `blocked_by` says why a `merge` answer would be rejected right now — `attached_children` or `objections` — or null when it would be accepted), `approval` (for a child-approval question, whether approving raises the parent's risk; otherwise null), `blocking` (the id of the parent task it holds up, or null), and `moved` (for a memory proposal, one element per pinned entry moved since the proposal was shown: `id` is the entry as pinned, `tail_id` is where it lives now with its current `path` / `scope`, and an answer applies to `tail_id`). A non-question task carries none of these.";
 
 function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
   const server = rejectUnknownArguments(
     new McpServer({ name: "tidepool-management", version: "0.0.0" }, { instructions: MANAGEMENT_MCP_INSTRUCTIONS }),
   );
   // issue #1179: 各口は対応する HTTP の口(GET /api/tasks・GET /api/tasks/:id)と同じ注釈を持つ
-  server.registerTool("list_board", { description: `List the current task board. ${QUESTION_ANNOTATIONS_DESCRIPTION} ${LANDING_ANNOTATION_DESCRIPTION}` }, async () =>
+  server.registerTool("list_board", { description: `List the current task board. ${QUESTION_ANNOTATIONS_DESCRIPTION}` }, async () =>
     toolResult(
       listBoard(deps.db, deps.defaultAgentName, deps.auditorName).map((task) =>
-        task.type === "question" ? { ...task, landing: landingAnnotation(deps.db, task), ...questionAnnotations(deps.db, task) } : task,
+        task.type === "question" ? { ...task, ...questionAnnotations(deps.db, task) } : task,
       ),
     ),
   );

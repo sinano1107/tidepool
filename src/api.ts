@@ -41,7 +41,7 @@ import {
   submitAnswer,
 } from "./human-verbs.js";
 import { IssueContentCache, type Live } from "./issue-view.js";
-import { type Landing, landingAnnotation } from "./landing.js";
+import type { Landing } from "./landing.js";
 import {
   changeMemorySettings,
   defineMemoryBranch,
@@ -2018,7 +2018,6 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
         task.type === "question"
           ? {
               ...task,
-              landing: landingAnnotation(db, task),
               ...questionAnnotations(db, task),
             }
           : task,
@@ -2074,7 +2073,6 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     res.json({
       ...presented!,
       ...(task.type === "question" && {
-        landing: landingAnnotation(db, task),
         ...questionAnnotations(db, task),
       }),
     } satisfies WireContract["GET /api/tasks/:id"]);

@@ -5,6 +5,7 @@ import type { Cause } from "./cause.js";
 import { type Db, MEMORY_FTS_DDL, MEMORY_FTS_TOKENIZER, MEMORY_PREPROCESS_VERSION } from "./db.js";
 import { getDisplayLanguage } from "./display-language.js";
 import { appendEvent, type EventOrigin, type EventPayload, type EventRow, getEvent, isDecisionLogEntry, listEvents, listEventsOfKinds } from "./events.js";
+import { landingAnnotation } from "./landing.js";
 import { inWindow, type MetaReviewWindow, materialEvents, materialSection, metaReviewSubjectOf, metaReviewWindow, paged, previousMetaReviewWatermark } from "./meta-review.js";
 import { entriesReadBefore, entriesSeenBefore, listEpisodes, sessionSpawnOf, sessionWindow } from "./precedent.js";
 import { routingMaterial } from "./routing-review.js";
@@ -933,10 +934,14 @@ export function movedPins(db: Db, proposal: QuestionProposal | null): Array<{ id
   });
 }
 
-/** question 行が読むときに運ぶ注釈のうち、一覧と単体ビューの両方の口が足す5つ(issue #1179・ADR 0179 決定4・issue #1309)。HTTP の `GET /api/tasks`・
- *  `GET /api/tasks/:id` と管理MCP の `list_board`・`get_task` がここを呼ぶ。`landing` は HTTP の2つと `list_board` が別に足す。 */
-export function questionAnnotations(db: Db, task: Pick<Task, "id" | "parent_id"> & Parameters<typeof isFixedChoiceQuestion>[0]) {
+/** question 行が読むときに運ぶ6つの注釈(issue #1179・ADR 0092 決定4・ADR 0179 決定4・issue #1309・#1304)。HTTP の `GET /api/tasks`・
+ *  `GET /api/tasks/:id` と管理MCP の `list_board`・`get_task` がここを広げる。 */
+export function questionAnnotations(
+  db: Db,
+  task: Pick<Task, "id" | "parent_id"> & Parameters<typeof isFixedChoiceQuestion>[0] & Parameters<typeof landingAnnotation>[1],
+) {
   return {
+    landing: landingAnnotation(db, task),
     approval: approvalAnnotation(db, task),
     moved: movedPins(db, task.question_proposal),
     blocking: questionBlocking(db, task.id),
