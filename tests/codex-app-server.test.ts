@@ -219,6 +219,7 @@ it("version or generated response-schema drift fails closed before App Server us
             properties: { requiresOpenaiAuth: { type: "string" } },
           }),
         ),
+      rows: [],
     });
 
     const result = await createCodexAppServerProbe({
@@ -256,7 +257,7 @@ it.each([
     },
   ],
 ])("model/list の生成 schema のずれは App Server を読む前に観測不能に倒れる: %s", async (_case, drift) => {
-  const { command, calls } = fakeCodex({ drift });
+  const { command, calls } = fakeCodex({ drift, rows: [] });
 
   const result = await createCodexAppServerProbe({ executable: "/opt/tidepool/bin/codex", codexHome: "/tmp/codex", command })(
     new Date(1_000),
