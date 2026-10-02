@@ -591,7 +591,7 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
   // directly rather than through startServer (e.g. a unit test constructing
   // McpDeps by hand) still carry their own `?? DEFAULT_AUDITOR_NAME` fallback
   // (mcp.ts's attributedWorkerId, claude-worker.ts's start()) — defense in
-  // depth; `defaultAgentName` has no such fallback and is required in the deps.
+  // depth.
   const auditorName = options.auditorName ?? DEFAULT_AUDITOR_NAME;
   const landing = createLanding({
     db,
