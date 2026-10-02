@@ -25,7 +25,7 @@ import { attributeObjections, refireRetrospectiveCalls } from "../src/retrospect
 import { DomainError, logDecision, registerTask } from "../src/tasks.js";
 import { commitTriage, raiseObjection, startTriage } from "../src/triage.js";
 import { FakeAttributionClient, FakeBehaviorDraftClient, noRetrospectiveCalls } from "./fakes.js";
-import { FIXTURE_SPAWNED_EVENT_ID, FIXTURE_TASK, seedFixtureBoard, tempDir, WORKER_SPAWNED, writeFixtureTranscript } from "./harness.js";
+import { FIXTURE_SPAWNED_EVENT_ID, FIXTURE_TASK, QUIET_EXIT, seedFixtureBoard, tempDir, WORKER_SPAWNED, writeFixtureTranscript } from "./harness.js";
 
 const at = new Date("2026-09-14T00:00:00.000Z");
 const approve = (db: ReturnType<typeof openDb>, candidate_id: number) =>
@@ -625,7 +625,7 @@ it("episode 行の無い同じ task の複数 session は、それぞれの窓�
   const append = (payload: TaskScopedPayload) => appendEvent(db, { taskId: FIXTURE_TASK, workerId: "tako", origin: "worker", payload, at });
   // 2つ目の session: decision を書かずに exit
   const silent = append(WORKER_SPAWNED);
-  append({ kind: "worker_exited", exit_code: 1, signal: null, stderr_tail: null, reported_error: null, last_message: null, worker_spawned_event_id: silent, usage: null });
+  append({ kind: "worker_exited", ...QUIET_EXIT, exit_code: 1, worker_spawned_event_id: silent, usage: null });
   // 3つ目の session: decision を書いたが完了していない(exit も無い)
   const open = append(WORKER_SPAWNED);
   const retried = append({ kind: "decision_logged", line: "retried with a shorter note" });

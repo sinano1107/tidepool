@@ -7,7 +7,7 @@ import { buildMetaReviewMaterial, recordMetaReviewMaterial } from "../src/memory
 import { registerMetaReview } from "../src/meta-review.js";
 import { listRoutingCells, listRoutingProposals, listRoutingShadow, proposeRoutingChange } from "../src/routing-review.js";
 import { answerQuestion, getTask, registerTask } from "../src/tasks.js";
-import { WORKER_SPAWNED } from "./harness.js";
+import { QUIET_EXIT, WORKER_SPAWNED } from "./harness.js";
 
 /** routing meta-review の材料の節(ADR 0180 追記 #1239)のドメイン層。spawn の prompt に入ることは両 adapter のテストが言う。 */
 const at = new Date("2026-10-01T00:00:00.000Z");
@@ -93,7 +93,7 @@ function board() {
       workerId: "board",
       origin: "board",
       at,
-      payload: { kind: "worker_exited", exit_code: 0, signal: null, stderr_tail: null, reported_error: null, last_message: null, worker_spawned_event_id: spawned, usage: { ...tokens, advisor: null, models: {} } },
+      payload: { kind: "worker_exited", ...QUIET_EXIT, worker_spawned_event_id: spawned, usage: { ...tokens, advisor: null, models: {} } },
     });
   };
   const allocate = (taskId: string, spawned: number, allocation: "overpowered" | "appropriate") =>

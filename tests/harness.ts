@@ -52,6 +52,7 @@ import {
 import { TranscriptStore } from "../src/transcript-store.js";
 import type { TranslationClient } from "../src/translate.js";
 import type { WatchdogConfig } from "../src/watchdog.js";
+import type { WorkerExit } from "../src/worker.js";
 import { UnknownWorkspaceError, type WorkspaceConfig } from "../src/workspace.js";
 import type { WorkspaceAdmin } from "../src/workspace-create.js";
 import {
@@ -891,6 +892,15 @@ export const WORKER_SPAWNED: Extract<EventPayload, { kind: "worker_spawned" }> =
   source: { tier: "task", provider: "only" },
   harness: "claude-code",
   cli_version: "1",
+};
+
+/** 何も観測しなかった exit(exit 0・signal なし・表示用の欄はすべて null)。各テストは上書きする欄だけを書く(issue #1333)。 */
+export const QUIET_EXIT: WorkerExit = {
+  exit_code: 0,
+  signal: null,
+  stderr_tail: null,
+  reported_error: null,
+  last_message: null,
 };
 
 /** agent 名と workspace 名の集合を registry として注入する boot の欄(集合を後から減らすと削除を模せる)。null の workspace は盤面の既定。 */
