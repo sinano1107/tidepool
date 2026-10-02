@@ -67,8 +67,8 @@ export interface Watchdog extends PendingReclaim {
 
 /** watchdog が持つ、今 slot にいるタスクの今の pickup の記録。taskId か pickup が替われば
  *  丸ごと作り直す —— retry された run は前の run の踏み終えた梯子を引き継がず、決着した
- *  タスクの分は残らない。slot にいないタスクの記録はどの判定にも使われない(読む入口は
- *  どれも先に slot の主を確かめる)。 */
+ *  タスクの分は残らない。slot にいないタスクの記録で先へ進む入口は無い(どの入口も、
+ *  question や slot の解放の前に slot の主を確かめる)。 */
 interface WatchRecord {
   taskId: string;
   pickup: number;
