@@ -1,7 +1,7 @@
 import { afterEach, expect, it } from "vitest";
 import { quarantineAgent } from "../src/agent.js";
 import { DEFAULT_AUDITOR_NAME, registerTask } from "../src/tasks.js";
-import { api, bootTidepool, HOUR, queueWork, type Tidepool } from "./harness.js";
+import { api, bootTidepool, HOUR, HUMAN_WEBUI, queueWork, type Tidepool } from "./harness.js";
 
 let t: Tidepool;
 afterEach(async () => {
@@ -18,6 +18,7 @@ function registerIndependentReview(t: Tidepool, title: string) {
     t.db,
     { type: "review", title, purpose: "independent review", completion_criteria: "root cause lands as a concrete diff" },
     t.clock.now(),
+    ...HUMAN_WEBUI,
   );
 }
 

@@ -1,7 +1,7 @@
 import { afterEach, expect, it } from "vitest";
 import { createBehaviorCandidate, proposeMemoryChange } from "../src/memory.js";
 import { registerTask } from "../src/tasks.js";
-import { api, bootTidepool, completeViaMcp, HOUR, managementMcpClient, mcpClient, type Tidepool } from "./harness.js";
+import { api, bootTidepool, completeViaMcp, HOUR, HUMAN_WEBUI, managementMcpClient, mcpClient, type Tidepool } from "./harness.js";
 
 /** routing の行の提案 question(issue #918 / ADR 0150 決定1・2)のサーバ境界: 提案 verb、付帯子としての question、回答での
  *  適用と修正値、pin の陳腐化、過去の提案の読み口。pin の照合と修正値の合成はドメイン層(tests/execution-setting.test.ts)が言う。 */
@@ -164,7 +164,7 @@ function registerMemoryProposal(tp: Tidepool): string {
     "worker",
     tp.clock.now(),
   ).entry_id;
-  const parent = registerTask(tp.db, { type: "work", title: "p", purpose: "p", completion_criteria: "c" }, tp.clock.now());
+  const parent = registerTask(tp.db, { type: "work", title: "p", purpose: "p", completion_criteria: "c" }, tp.clock.now(), ...HUMAN_WEBUI);
   return proposeMemoryChange(tp.db, parent.id, { op: "approve", candidate_id: candidate, rationale: "r" }, "auditor", tp.clock.now()).question_id;
 }
 

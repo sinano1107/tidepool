@@ -3,7 +3,7 @@ import { AgentTierMismatchError, type AgentView, type ChangeAgentTierInput } fro
 import { appendEvent } from "../src/events.js";
 import { RegistryPushFailedError } from "../src/registry-write.js";
 import { registerTask } from "../src/tasks.js";
-import { api, bootTidepool, completeViaMcp, HOUR, mcpClient, type Tidepool, WORKER_SPAWNED } from "./harness.js";
+import { api, bootTidepool, completeViaMcp, HOUR, HUMAN_WEBUI, mcpClient, type Tidepool, WORKER_SPAWNED } from "./harness.js";
 
 /** agent の既定 tier の提案(issue #920 / ADR 0150 決定1・2・5)のサーバ境界: 提案 verb、回答での registry への commit と修正値、
  *  push 失敗・前提の崩れ、due 判定時と表の編集での陳腐化。registry 書き込みは fake(`agentAdmin.changeTier`)、実 git の書き込みは
@@ -53,7 +53,7 @@ async function boardWithRoutingReview(registry = fakeRegistry()) {
 
 /** 根拠の episode(setup): agent が表の行 (provider, model) で走った worker_spawned。 */
 function spawned(tp: Tidepool, workerId: string, provider: "openai" | "moonshot", model: string, tierSource: "agent" | "task" = "agent"): number {
-  const { id } = registerTask(tp.db, { type: "work", title: "evidence", purpose: "p", completion_criteria: "c" }, tp.clock.now());
+  const { id } = registerTask(tp.db, { type: "work", title: "evidence", purpose: "p", completion_criteria: "c" }, tp.clock.now(), ...HUMAN_WEBUI);
   return appendEvent(tp.db, {
     taskId: id,
     workerId,

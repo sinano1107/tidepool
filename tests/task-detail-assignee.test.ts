@@ -4,6 +4,7 @@ import {
   api,
   bootTidepool,
   HOUR,
+  HUMAN_WEBUI,
   managementMcpClient,
   queueChild,
   queueWork,
@@ -26,6 +27,7 @@ async function unsetAssigneeBoard(t: Tidepool) {
     t.db,
     { type: "review", title: "unset review", purpose: "independent review", completion_criteria: "findings filed" },
     t.clock.now(),
+    ...HUMAN_WEBUI,
   );
   const question = registerQuestion(t, {
     title: "unset question",

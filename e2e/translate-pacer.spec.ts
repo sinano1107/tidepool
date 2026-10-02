@@ -23,7 +23,7 @@ test("流し読みで N件が未読でも、同時に飛ぶ /api/translate は2�
   const db = openDb(`${t.dir}/board.sqlite`);
   const task = getTask(db, registered.json.id)!;
   for (let i = 0; i < 6; i++) {
-    logDecision(db, task, `decision line ${i}`, "tako", t.clock.now());
+    logDecision(db, task, `decision line ${i}`, "tako", t.clock.now(), "worker");
   }
   db.close();
 

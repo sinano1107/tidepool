@@ -25,7 +25,7 @@ import { attributeObjections, refireRetrospectiveCalls } from "../src/retrospect
 import { DomainError, logDecision, registerTask } from "../src/tasks.js";
 import { commitTriage, raiseObjection, startTriage } from "../src/triage.js";
 import { FakeAttributionClient, FakeBehaviorDraftClient, noRetrospectiveCalls } from "./fakes.js";
-import { FIXTURE_SPAWNED_EVENT_ID, FIXTURE_TASK, QUIET_EXIT, seedFixtureBoard, tempDir, WORKER_SPAWNED, writeFixtureTranscript } from "./harness.js";
+import { FIXTURE_SPAWNED_EVENT_ID, FIXTURE_TASK, HUMAN_WEBUI, QUIET_EXIT, seedFixtureBoard, tempDir, WORKER_SPAWNED, writeFixtureTranscript } from "./harness.js";
 
 const at = new Date("2026-09-14T00:00:00.000Z");
 const approve = (db: ReturnType<typeof openDb>, candidate_id: number) =>
@@ -33,7 +33,7 @@ const approve = (db: ReturnType<typeof openDb>, candidate_id: number) =>
 
 function board() {
   const db = openDb(":memory:");
-  const task = registerTask(db, { type: "work", title: "t", purpose: "p", completion_criteria: "c" }, at);
+  const task = registerTask(db, { type: "work", title: "t", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI);
   const reader = { taskId: task.id, scope: "tidepool", agent: "deckhand" };
   const record = (over: { path?: string; title?: string; text?: string; scope?: string | null }) =>
     recordKnowledge(
@@ -426,7 +426,7 @@ it("scope null の読み手も盤面全体の Definition の read は本文を�
 it("read は本文・path・出所の参照と、参照の型から導いた出所の種別(commit / event = fact、decision = inference)を返す", () => {
   const { db, task, reader, record } = board();
   const fact = record({ path: "build", title: "Build uses tsc", text: "The build runs tsc." });
-  const decision = logDecision(db, task, "chose tsc over esbuild", "deckhand", at);
+  const decision = logDecision(db, task, "chose tsc over esbuild", "deckhand", at, "worker");
   const inference = recordKnowledge(
     db,
     {

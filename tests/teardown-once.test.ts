@@ -13,7 +13,7 @@ import {
   type WorkspaceConfig,
 } from "../src/workspace.js";
 import { FakeClock, unusedLanding } from "./fakes.js";
-import { FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, makeWorkspace } from "./harness.js";
+import { FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeWorkspace } from "./harness.js";
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 
@@ -36,6 +36,7 @@ async function pickedUpSession(): Promise<{
     db,
     { type: "work", title: "one", purpose: "why", completion_criteria: "done" },
     clock.now(),
+    ...HUMAN_WEBUI,
   );
   const task = pickupTask(db, registered, "deckhand", clock.now())!;
   slot.occupy(task.id);
@@ -92,6 +93,7 @@ it("門が既に解決した workspace は後始末で解決し直さない —�
       workspace: "ghost",
     },
     clock.now(),
+    ...HUMAN_WEBUI,
   );
   const task = pickupTask(db, registered, "deckhand", clock.now())!;
   slot.occupy(task.id);
@@ -130,8 +132,9 @@ function completedSession(land: () => Promise<void> = async () => {}) {
     db,
     { type: "work", title: "one", purpose: "why", completion_criteria: "done" },
     clock.now(),
+    ...HUMAN_WEBUI,
   );
-  const task = completeTask(db, pickupTask(db, registered, "deckhand", clock.now())!, FULL_HANDOFF, "deckhand", clock.now());
+  const task = completeTask(db, pickupTask(db, registered, "deckhand", clock.now())!, FULL_HANDOFF, "deckhand", clock.now(), "worker");
   slot.occupy(task.id);
   const calls: string[] = [];
   const deps: TeardownDeps = {

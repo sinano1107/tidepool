@@ -5,7 +5,7 @@ import { getTask, pickupTask, registerTask } from "../src/tasks.js";
 import { failTask } from "../src/watchdog.js";
 import { ensureTaskBranch, UnknownWorkspaceError, type WorkspaceConfig } from "../src/workspace.js";
 import { FakeClock } from "./fakes.js";
-import { GIT_FIXTURE_TEST_TIMEOUT, git, makeWorkspace } from "./harness.js";
+import { GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeWorkspace } from "./harness.js";
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 
@@ -21,6 +21,7 @@ describe("watchdog の failTask が task.workspace を解決する", () => {
       db,
       { type: "work", title: "prod work", purpose: "p", completion_criteria: "c", workspace: "prod" },
       clock.now(),
+      ...HUMAN_WEBUI,
     );
     const picked = pickupTask(db, task, "deckhand", clock.now())!;
     ensureTaskBranch(db, prod, picked);

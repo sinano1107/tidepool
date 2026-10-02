@@ -11,7 +11,7 @@ import {
   type WorkspaceConfig,
   workspaceNeedsHuman,
 } from "../src/workspace.js";
-import { commitWork, GIT_FIXTURE_TEST_TIMEOUT, git, makeWorkspace } from "./harness.js";
+import { commitWork, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeWorkspace } from "./harness.js";
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 
@@ -31,6 +31,7 @@ async function pickedUpSession(type: TaskType = "work"): Promise<{
     db,
     { type, title: "one", purpose: "why", completion_criteria: "done" },
     NOW,
+    ...HUMAN_WEBUI,
   );
   const task = pickupTask(db, registered, "deckhand", NOW)!;
   await prepareWorkspaceAtPickup(db, ws, task, {});

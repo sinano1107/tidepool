@@ -13,6 +13,7 @@ import {
   completeIntegrationReviews,
   FULL_HANDOFF,
   HOUR,
+  HUMAN_WEBUI,
   managementMcpClient,
   mcpClient,
   queueWork,
@@ -410,6 +411,7 @@ it("anthropic を温存中でも openai entry を持つ agent の task は走り
       t.db,
       { type: "work", title, purpose: "p", completion_criteria: "c", assignee, tier: "frontier" },
       t.clock.now(),
+      ...HUMAN_WEBUI,
     );
   // 先頭から: 単一 entry の frontier(全 entry 除外)→ 複数 entry の frontier →
   // 要求なし(同じ agent だが economy の行なので窓に当たらない)
@@ -448,6 +450,7 @@ it("全 entry が除外された行は Pickable head ではない —— 下の�
     t.db,
     { type: "work", title: "温存中の fable 窓に当たる frontier", purpose: "p", completion_criteria: "c", tier: "frontier" },
     t.clock.now(),
+    ...HUMAN_WEBUI,
   );
 
   t.worker.scriptUsage(fableOverPace(t.clock.now()));

@@ -4,7 +4,7 @@ import { expect, it, vi } from "vitest";
 import { openDb } from "../src/db.js";
 import { registerTask } from "../src/tasks.js";
 import { prepareWorkspaceAtPickup, verifyWorkspaceClean } from "../src/workspace.js";
-import { GIT_FIXTURE_TEST_TIMEOUT, makeWorkspace } from "./harness.js";
+import { GIT_FIXTURE_TEST_TIMEOUT, HUMAN_WEBUI, makeWorkspace } from "./harness.js";
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 
@@ -24,6 +24,7 @@ it("`.git` がファイルの checkout は pickup の準備で拒否され、理
     db,
     { type: "work", title: "work", purpose: "pick up a git-file checkout", completion_criteria: "never runs" },
     new Date("2026-09-22T00:00:00.000Z"),
+    ...HUMAN_WEBUI,
   );
 
   await expect(prepareWorkspaceAtPickup(db, workspace, task, {})).rejects.toThrow(

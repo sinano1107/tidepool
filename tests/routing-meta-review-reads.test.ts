@@ -6,7 +6,7 @@ import { aggregateCells, loadEpisodes, recordShadow, selectorBranch } from "../s
 import { registerMetaReview } from "../src/meta-review.js";
 import { listAllocations, listRoutingCells, listRoutingShadow } from "../src/routing-review.js";
 import { registerTask } from "../src/tasks.js";
-import { QUIET_EXIT, WORKER_SPAWNED } from "./harness.js";
+import { HUMAN_WEBUI, QUIET_EXIT, WORKER_SPAWNED } from "./harness.js";
 
 /** 主題 routing の meta-review の読み口(issue #917 / spec #916 C)のドメイン層。verb への写像はサーバ境界
  *  (tests/routing-meta-review.test.ts)が言う。 */
@@ -24,7 +24,7 @@ const sol = setting("openai", "gpt-5.6-sol");
 
 function board() {
   const db = openDb(":memory:");
-  const work = (title: string) => registerTask(db, { type: "work", title, purpose: "p", completion_criteria: "c" }, at);
+  const work = (title: string) => registerTask(db, { type: "work", title, purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI);
   const spawn = (taskId: string, agent: string, run: ExecutionSetting, tier: "agent" | "task" = "agent") =>
     appendEvent(db, {
       taskId,

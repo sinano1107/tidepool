@@ -3,7 +3,7 @@ import { createBehaviorCandidate, defineMemoryBranch, recordKnowledge, WORKER_ME
 import { MEMORY_META_REVIEW_VERBS } from "../src/meta-review.js";
 import { DEFAULT_AUDITOR_NAME, registerTask } from "../src/tasks.js";
 import { UnknownWorkspaceError } from "../src/workspace.js";
-import { api, bootTidepool, GIT_FIXTURE_TEST_TIMEOUT, HOUR, makeWorkspace, managementMcpClient, mcpClient, memoryEntries, registerWork, type Tidepool } from "./harness.js";
+import { api, bootTidepool, GIT_FIXTURE_TEST_TIMEOUT, HOUR, HUMAN_WEBUI, makeWorkspace, managementMcpClient, mcpClient, memoryEntries, registerWork, type Tidepool } from "./harness.js";
 import { makeRegistryAgentCheck } from "./registry-fixture.js";
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
@@ -133,6 +133,7 @@ it("search_memory_entries は主題 memory の接続に出て、主題 routing �
     t.db,
     { type: "review", title: "Routing meta-review", purpose: "p", completion_criteria: "c", meta_review_subject: "routing" },
     t.clock.now(),
+    ...HUMAN_WEBUI,
   );
   const routingClient = await mcpClient(t.mcpBaseUrl, routing.id);
   try {

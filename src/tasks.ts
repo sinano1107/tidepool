@@ -620,8 +620,8 @@ export function registerTask(
   db: Db,
   input: RegisterTaskInput,
   now: Date,
-  workerId: string = HUMAN_WORKER_ID,
-  origin: EventOrigin = "webui",
+  workerId: string,
+  origin: EventOrigin,
 ): Task {
   assertQuestionSpec(input);
   assertGithubRef(input);
@@ -840,7 +840,7 @@ export function completeTask(
   handoff: Partial<HandoffDoc> | undefined,
   workerId: string,
   now: Date,
-  origin: EventOrigin = "worker",
+  origin: EventOrigin,
 ): Task {
   if (task.type === "work" && task.assignee !== HUMAN_WORKER_ID) {
     const missing = HANDOFF_FIELDS.filter((f) => !handoff?.[f]?.trim());
@@ -914,8 +914,8 @@ export function moveTask(
   task: Task,
   after: Task | null,
   now: Date,
-  workerId: string = HUMAN_WORKER_ID,
-  origin: EventOrigin = "webui",
+  workerId: string,
+  origin: EventOrigin,
 ): Task {
   const sortKey = fractionalKeyAfter(db, task, after);
   db.transaction(() => {
@@ -994,7 +994,7 @@ export function escalateTask(
   input: EscalateInput,
   workerId: string,
   now: Date,
-  origin: EventOrigin = "worker",
+  origin: EventOrigin,
 ): Task {
   let question: Task;
   db.transaction(() => {
@@ -1073,7 +1073,7 @@ function cancelTask(
   originQuestionId: string,
   workerId: string,
   now: Date,
-  origin: EventOrigin = "webui",
+  origin: EventOrigin,
 ): void {
   cancelUnsettledSubtree(db, task.id, workerId, now, {
     kind: "task_cancelled",
@@ -1170,7 +1170,7 @@ export function cancelTaskDirectly(
   reason: string | null,
   now: Date,
   defaults: CancelDefaults,
-  origin: EventOrigin = "webui",
+  origin: EventOrigin,
 ): void {
   assertHumanEditableScope(db, task, "cancelled");
   assertNoGatingQuestion(db, task.id, defaults);
@@ -1298,7 +1298,7 @@ export function answerQuestion(
   question: Task,
   answers: string[],
   now: Date,
-  stageUnblock?: (taskId: string) => void,
+  stageUnblock: ((taskId: string) => void) | undefined,
   /** The reject-reason steering channel (issue #40): one per submission
    *  (not per item). Required — non-blank — only for the options
    *  `needsComment` lists for this question (ADR 0179); optional for every
@@ -1306,11 +1306,11 @@ export function answerQuestion(
    *  `question_answered` event; omitted from the event payload entirely
    *  when absent, rather than stored as null, so an unanswered comment
    *  leaves the event shape exactly as it was before this existed. */
-  comment?: string,
+  comment: string | undefined,
   /** 提案の approve に添えた修正値(ADR 0150 決定2・ADR 0152 決定2)。検査は呼び手(submitAnswer)が済ませ、ここは comment と
    *  同じく event に運ぶだけ。修正つきの回答は推奨どおりに数えない。 */
-  amendment?: ProposalAmendment,
-  origin: EventOrigin = "webui",
+  amendment: ProposalAmendment | undefined,
+  origin: EventOrigin,
 ): Task {
   assertAnswerable(question, answers, comment);
   const items = question.question_items!;
@@ -1437,7 +1437,7 @@ export function declarePremiseBreach(
   reason: string,
   workerId: string,
   now: Date,
-  origin: EventOrigin = "worker",
+  origin: EventOrigin,
 ): Task | undefined {
   if (task.type !== "work" || task.based_on_decision === null) {
     throw new DomainError(
@@ -1506,7 +1506,7 @@ export function continueDecomposition(
   line: string,
   workerId: string,
   now: Date,
-  origin: EventOrigin = "worker",
+  origin: EventOrigin,
 ): void {
   const declarerId = requireOpenPremiseBreachChildId(db, parent.id);
   db.transaction(() => {
@@ -1523,9 +1523,9 @@ export function redecompose(
   input: DecomposeInput,
   workerId: string,
   now: Date,
-  authority?: AuthorityContext,
-  isProtectedWorkspace?: (name: string) => boolean,
-  origin: EventOrigin = "worker",
+  authority: AuthorityContext | undefined,
+  isProtectedWorkspace: ((name: string) => boolean) | undefined,
+  origin: EventOrigin,
 ): Task[] {
   const declarerId = requireOpenPremiseBreachChildId(db, parent.id);
   return db.transaction(() => {
@@ -1603,7 +1603,7 @@ export function logDecision(
   line: string,
   workerId: string,
   now: Date,
-  origin: EventOrigin = "worker",
+  origin: EventOrigin,
 ): number {
   return appendEvent(db, {
     taskId: task.id,
@@ -1678,7 +1678,7 @@ export function registerMergeQuestion(
   recommendation: (typeof MERGE_QUESTION_OPTIONS)[number],
   workerId: string,
   now: Date,
-  origin: EventOrigin = "worker",
+  origin: EventOrigin,
 ): void {
   const title = `merge PR #${prNumber}: ${task.title}`;
   registerTask(
@@ -1774,9 +1774,9 @@ export function recordPrOpened(
   prNumber: number,
   workerId: string,
   now: Date,
-  authority?: AuthorityContext,
-  isProtected?: boolean,
-  origin: EventOrigin = "worker",
+  authority: AuthorityContext | undefined,
+  isProtected: boolean | undefined,
+  origin: EventOrigin,
 ): void {
   db.transaction(() => {
     db.prepare("UPDATE tasks SET pr_number = ? WHERE id = ?").run(prNumber, task.id);
@@ -1895,15 +1895,15 @@ export function decomposeTask(
   input: DecomposeInput,
   workerId: string,
   now: Date,
-  authority?: AuthorityContext,
+  authority: AuthorityContext | undefined,
   /** Whether an explicitly named workspace is protected (CONTEXT.md's
    *  protected workspace / ADR 0013), resolved by the caller against the
    *  registry. A protected target converts unconditionally, regardless of
    *  the registering worker's `allowed_workspaces` — "changes to it always
    *  need human approval" is a resource-side invariant independent of any
    *  profile. Absent → no workspace is protected. */
-  isProtectedWorkspace?: (name: string) => boolean,
-  origin: EventOrigin = "worker",
+  isProtectedWorkspace: ((name: string) => boolean) | undefined,
+  origin: EventOrigin,
 ): Task[] {
   if (input.children.length === 0) {
     throw new DomainError("a decomposition carries at least one child task");
@@ -2098,8 +2098,8 @@ export function humanDecomposeTask(
   parent: Task,
   input: { reason: string; children: ChildSpec[] },
   now: Date,
-  isProtectedWorkspace?: (name: string) => boolean,
-  origin: EventOrigin = "webui",
+  isProtectedWorkspace: ((name: string) => boolean) | undefined,
+  origin: EventOrigin,
 ): Task[] {
   assertHumanDecomposable(db, parent);
   return decomposeTask(
@@ -2175,7 +2175,7 @@ export function editTask(
   task: Task,
   input: EditTaskInput,
   now: Date,
-  origin: EventOrigin = "webui",
+  origin: EventOrigin,
 ): Task {
   assertHumanEditableScope(db, task, "edited");
   if (task.type === "review" && input.review_flag) {

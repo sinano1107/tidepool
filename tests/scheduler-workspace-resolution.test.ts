@@ -6,7 +6,7 @@ import { Slot } from "../src/slot.js";
 import { registerTask } from "../src/tasks.js";
 import { UnknownWorkspaceError, type WorkspaceConfig, workspaceNeedsHuman } from "../src/workspace.js";
 import { FakeClock, fakeContainers, noRetrospectiveCalls, ScriptedWorker } from "./fakes.js";
-import { GIT_FIXTURE_TEST_TIMEOUT, git, makeWorkspace } from "./harness.js";
+import { GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeWorkspace } from "./harness.js";
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 
@@ -40,6 +40,7 @@ describe("scheduler の pickup が task.workspace を解決する", () => {
       db,
       { type: "work", title: "prod work", purpose: "p", completion_criteria: "c", workspace: "prod" },
       clock.now(),
+      ...HUMAN_WEBUI,
     );
     await clock.advance(HOURLY);
 
@@ -79,6 +80,7 @@ describe("scheduler の pickup が task.workspace を解決する", () => {
       db,
       { type: "work", title: "drifted", purpose: "p", completion_criteria: "c", workspace: "ghost" },
       clock.now(),
+      ...HUMAN_WEBUI,
     );
     await clock.advance(HOURLY);
 
@@ -118,6 +120,7 @@ describe("scheduler の pickup が task.workspace を解決する", () => {
       db,
       { type: "work", title: "dangling branch", purpose: "p", completion_criteria: "c", workspace: "prod" },
       clock.now(),
+      ...HUMAN_WEBUI,
     );
     await clock.advance(HOURLY);
 

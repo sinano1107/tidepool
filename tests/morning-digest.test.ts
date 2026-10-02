@@ -3,6 +3,7 @@ import { openDb } from "../src/db.js";
 import { appendEvent } from "../src/events.js";
 import { buildMorningDigest, recordDigestSent } from "../src/push.js";
 import { answerQuestion, registerTask } from "../src/tasks.js";
+import { HUMAN_WEBUI } from "./harness.js";
 
 function registerQuestion(db: ReturnType<typeof openDb>, title: string) {
   return registerTask(
@@ -15,6 +16,7 @@ function registerQuestion(db: ReturnType<typeof openDb>, title: string) {
       question: [{ title, options: ["yes", "no"], recommendation: "yes" }],
     },
     new Date(0),
+    ...HUMAN_WEBUI,
   );
 }
 
@@ -30,6 +32,7 @@ function registerHumanTask(
     { type: "work", title, purpose: `purpose of ${title}`, completion_criteria: "n/a", assignee: "human" },
     new Date(0),
     workerId,
+    "webui",
   );
 }
 
@@ -89,7 +92,7 @@ describe("buildMorningDigest(issue #14 / #116): quiet hours 中に溜まった�
     const db = openDb(":memory:");
     const answered = registerQuestion(db, "回答済み");
     registerQuestion(db, "未回答");
-    answerQuestion(db, answered, ["yes"], new Date(0));
+    answerQuestion(db, answered, ["yes"], new Date(0), undefined, undefined, undefined, "webui");
 
     expect(buildMorningDigest(db).questionCount).toBe(1);
   });

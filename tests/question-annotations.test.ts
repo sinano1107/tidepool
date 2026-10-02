@@ -1,6 +1,7 @@
 import { expect, it } from "vitest";
 import { openDb } from "../src/db.js";
 import { answerQuestion, approvalAnnotation, getTask, needsComment, type RegisterTaskInput, registerTask } from "../src/tasks.js";
+import { HUMAN_WEBUI } from "./harness.js";
 
 // question の注釈 approval / needs_comment の規則(issue #757・ADR 0179 決定4)を domain 層で1度だけ述べる。
 // サーバ境界(tests/approval-annotation.test.ts)は口が同じ注釈を写すことだけを見る(ADR 0107)。
@@ -9,7 +10,7 @@ const at = new Date("2026-10-01T00:00:00.000Z");
 
 function board() {
   const db = openDb(":memory:");
-  const parent = registerTask(db, { type: "work", title: "parent", purpose: "p", completion_criteria: "c" }, at);
+  const parent = registerTask(db, { type: "work", title: "parent", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI);
   const question = (extra: Partial<RegisterTaskInput>) =>
     registerTask(
       db,
@@ -23,6 +24,7 @@ function board() {
         ...extra,
       },
       at,
+      ...HUMAN_WEBUI,
     );
   const approval = (title: string, child: { risk_flag?: boolean; assignee?: string } = {}) =>
     question({ pending_child: { title, purpose: "p", completion_criteria: "c", ...child } });
@@ -48,7 +50,7 @@ it("親が既に risk ありなら親の risk は上がらないと注釈する 
   expect(approvalAnnotation(db, first)).toEqual({ raises_parent_risk: true });
 
   // 1つ目の approve が親の risk を実際に上げる
-  answerQuestion(db, first, ["approve"], at);
+  answerQuestion(db, first, ["approve"], at, undefined, undefined, undefined, "webui");
   expect(getTask(db, parent.id)!.risk_flag).toBeTruthy();
 
   expect(approvalAnnotation(db, second)).toEqual({ raises_parent_risk: false });

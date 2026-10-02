@@ -3,7 +3,7 @@ import { DEFAULT_AUDITOR_NAME } from "../src/defaults.js";
 import { defineMemoryBranch, previewCase, recordKnowledge } from "../src/memory.js";
 import { logDecision, registerTask } from "../src/tasks.js";
 import { FakeTranslationClient } from "./fakes.js";
-import { api, bootTidepool, managementMcpClient, registryOf, type Tidepool } from "./harness.js";
+import { api, bootTidepool, HUMAN_WEBUI, managementMcpClient, registryOf, type Tidepool } from "./harness.js";
 import { makeRegistryAgentCheck } from "./registry-fixture.js";
 
 let t: Tidepool;
@@ -61,7 +61,7 @@ it("管理MCP の change_memory_settings で書いた注入上限は read_memory
 
 /** agent 由来の Knowledge を1つ(setup — 出所に使える event を registerTask で作る)。 */
 function agentKnowledge(tp: Tidepool, title: string) {
-  registerTask(tp.db, { type: "work", title: "t", purpose: "p", completion_criteria: "c" }, tp.clock.now());
+  registerTask(tp.db, { type: "work", title: "t", purpose: "p", completion_criteria: "c" }, tp.clock.now(), ...HUMAN_WEBUI);
   return recordKnowledge(
     tp.db,
     { scope: "tidepool", path: "build/tests", title, text: `${title}.`, source: { event_id: 1 }, author: { activity: "worker_verb", name: "deckhand" } },
@@ -296,8 +296,8 @@ it("POST /api/settings/memory/behaviors と管理MCP の record_behavior は Beh
 
 it("Exemplar の write(POST /api/settings/memory/exemplars・管理MCP の record_exemplar、supersedes の list も)と case preview(GET /api/settings/memory/cases/:event_id・preview_case)は domain の結果を返し、domain error は 400 / tool error(ADR 0153 / ADR 0162 決定1)", async () => {
   t = await bootTidepool();
-  const task = registerTask(t.db, { type: "work", title: "t", purpose: "p", completion_criteria: "c" }, t.clock.now());
-  const decision = logDecision(t.db, task, "split the migration into two commits", "deckhand", t.clock.now());
+  const task = registerTask(t.db, { type: "work", title: "t", purpose: "p", completion_criteria: "c" }, t.clock.now(), ...HUMAN_WEBUI);
+  const decision = logDecision(t.db, task, "split the migration into two commits", "deckhand", t.clock.now(), "worker");
   const exemplar = {
     workspace: "tidepool",
     path: "habits/migrations",
@@ -454,8 +454,8 @@ it("registry の無い盤面では、両方の人間の面の一覧に孤立の�
 /** 直書き4つを両方の人間の面(settings の HTTP と管理MCP)で撃ち、[HTTP, 管理MCP] の拒否の文言(通れば null)を返す。
  *  置き場の path は撃つたびに変える(定義は枝ごとに1つ)。Exemplar の出所は decision を1つ作って使う。 */
 function directWriter(tp: Tidepool) {
-  const task = registerTask(tp.db, { type: "work", title: "t", purpose: "p", completion_criteria: "c" }, tp.clock.now());
-  const decision = logDecision(tp.db, task, "split the migration", "deckhand", tp.clock.now());
+  const task = registerTask(tp.db, { type: "work", title: "t", purpose: "p", completion_criteria: "c" }, tp.clock.now(), ...HUMAN_WEBUI);
+  const decision = logDecision(tp.db, task, "split the migration", "deckhand", tp.clock.now(), "worker");
   const routes = {
     knowledge: ["knowledge", "record_knowledge", { title: "t", text: "x" }],
     definition: ["definitions", "define_memory_branch", { text: "x" }],

@@ -18,7 +18,7 @@ import {
   workspaceNeedsHuman,
 } from "../src/workspace.js";
 import { FakeClock, FakeContainerRuntime, ScriptedWorker } from "./fakes.js";
-import { commitWork, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, makeWorkspace } from "./harness.js";
+import { commitWork, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeWorkspace } from "./harness.js";
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 
@@ -60,6 +60,7 @@ async function sessionInTeardown(
     db,
     { type: "work", title: "one", purpose: "why", completion_criteria: "done" },
     clock.now(),
+    ...HUMAN_WEBUI,
   );
   const picked = pickupTask(db, registered, "deckhand", clock.now())!;
   slot.occupy(picked.id);
@@ -71,13 +72,13 @@ async function sessionInTeardown(
 
   const task =
     route === "complete"
-      ? completeTask(db, picked, FULL_HANDOFF, "deckhand", clock.now())
+      ? completeTask(db, picked, FULL_HANDOFF, "deckhand", clock.now(), "worker")
       : picked;
   if (route === "escalate") {
     escalateTask(db, picked, {
       context: "need a decision",
       questions: [{ title: "which?", options: ["a", "b"], recommendation: "a" }],
-    }, "deckhand", clock.now());
+    }, "deckhand", clock.now(), "worker");
   }
   if (route !== "cap") {
     markTeardown(db, task.id, clock.now());
@@ -133,7 +134,7 @@ it("cap settlement supersedes an already pending watchdog reclaim callback", asy
   const slot = new Slot();
   const runtime = new FakeContainerRuntime();
   const containers = new ProcessContainers(runtime);
-  const task = pickupTask(db, registerTask(db, { type: "work", title: "one", purpose: "why", completion_criteria: "done" }, clock.now()), "deckhand", clock.now())!;
+  const task = pickupTask(db, registerTask(db, { type: "work", title: "one", purpose: "why", completion_criteria: "done" }, clock.now(), ...HUMAN_WEBUI), "deckhand", clock.now())!;
   slot.occupy(task.id);
   containers.open(task.id);
   runtime.hold(task.id);
@@ -153,10 +154,10 @@ it("走っている間に表から消えた行の 404 は行の Quarantine を�
   const clock = new FakeClock();
   const slot = new Slot();
   const { provider, model } = loadExecutionSettingTable(db)[0]!;
-  const task = pickupTask(db, registerTask(db, { type: "work", title: "refused", purpose: "why", completion_criteria: "done" }, clock.now()), "deckhand", clock.now())!;
+  const task = pickupTask(db, registerTask(db, { type: "work", title: "refused", purpose: "why", completion_criteria: "done" }, clock.now(), ...HUMAN_WEBUI), "deckhand", clock.now())!;
   slot.occupy(task.id);
   // 走っている間に別のタスクを先頭へ置く —— 断られたタスクがその前へ戻ることを見るため
-  moveTask(db, registerTask(db, { type: "work", title: "queued after", purpose: "why", completion_criteria: "done" }, clock.now()), null, clock.now());
+  moveTask(db, registerTask(db, { type: "work", title: "queued after", purpose: "why", completion_criteria: "done" }, clock.now(), ...HUMAN_WEBUI), null, clock.now(), ...HUMAN_WEBUI);
   applyExecutionSettingsChange(db, { setting: "delete_row", provider, model }, "webui", clock.now());
 
   rowRefusalHandler({ db, clock, slot, resolve: undefined, pollNow: () => {} })(task.id, { provider, model, cause: "api_404", worker_spawned_event_id: 1 }, Promise.resolve());
@@ -188,7 +189,7 @@ it("cap teardown reaches containment in one reclaim timeout without running the 
 
 it("cap reclaim arriving after containment waits for acceptance before stashing WIP and returning to the queue head", async () => {
   const f = await sessionInTeardown("cap");
-  registerTask(f.db, { type: "work", title: "next", purpose: "why", completion_criteria: "done" }, f.clock.now());
+  registerTask(f.db, { type: "work", title: "next", purpose: "why", completion_criteria: "done" }, f.clock.now(), ...HUMAN_WEBUI);
   await writeFile(`${f.ws.path}/wip.txt`, "unfinished work\n");
   await f.clock.advance(5 * MIN);
   expect(f.watchdog.pendingReclaim()).toBe(`the container for task ${f.task.id}`);

@@ -16,12 +16,13 @@ import {
   recordMemoryInjection,
 } from "../src/memory.js";
 import { logDecision, registerTask } from "../src/tasks.js";
+import { HUMAN_WEBUI } from "./harness.js";
 
 const at = new Date("2026-09-14T00:00:00.000Z");
 
 function board(task = { title: "fix tide chart", purpose: "chart drifts", completion_criteria: "tests pass" }) {
   const db = openDb(":memory:");
-  const registered = registerTask(db, { type: "work", ...task }, at);
+  const registered = registerTask(db, { type: "work", ...task }, at, ...HUMAN_WEBUI);
   const record = (over: { path?: string; title?: string; text?: string; scope?: string | null; event_id?: number }) => {
     const { event_id, ...rest } = over;
     return recordKnowledge(
@@ -48,7 +49,7 @@ it("注入節は全階層の INDEX(枝の名前 + 定義、未定義は (undefin
   const { db, task, record, define } = board();
   const tide = define("tide", "Tide charts and the data that feeds them.");
   const chart = record({ path: "tide", title: "Chart source", text: "The chart reads tides.csv." });
-  const decision = logDecision(db, task, "chose csv", "deckhand", at);
+  const decision = logDecision(db, task, "chose csv", "deckhand", at, "worker");
   const drift = record({ path: "tide/drift", title: "Drift cause", text: "Clock skew causes drift.", event_id: decision });
   record({ path: "deploy", title: "Deploy to the Pi", text: "Run deploy-pi." });
 
@@ -131,7 +132,7 @@ it("人間が書いたエントリは、原文にだけある語では関連 lea
 
 it("decision entry を出所に持つ Exemplar も、注釈の text で関連 leaf のポインタに並び、出所の種別は fact(ADR 0153)", () => {
   const { db, task } = board();
-  const decision = logDecision(db, task, "reset the chart clock", "deckhand", at);
+  const decision = logDecision(db, task, "reset the chart clock", "deckhand", at, "worker");
   const { entry_id } = recordExemplar(
     db,
     humanEntryInput(db, {
@@ -225,7 +226,7 @@ it("主題 memory の meta-review には、見える approved があっても節
   const { db, task, record } = board();
   record({ path: "tide", title: "fix tide chart" });
   expect(buildMemoryInjection(db, task, "tidepool", "deckhand").section).not.toBeNull();
-  const review = registerTask(db, { type: "review", title: "fix tide chart", purpose: "p", completion_criteria: "c", meta_review_subject: "memory" }, at);
+  const review = registerTask(db, { type: "review", title: "fix tide chart", purpose: "p", completion_criteria: "c", meta_review_subject: "memory" }, at, ...HUMAN_WEBUI);
   expect(buildMemoryInjection(db, review, "tidepool", "deckhand")).toMatchObject({ section: null, entries: [] });
 });
 

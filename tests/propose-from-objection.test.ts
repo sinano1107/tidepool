@@ -15,7 +15,7 @@ const at = new Date("2026-09-15T00:00:00.000Z");
 const draft = { path: "testing/fixtures", title: "Keep fixtures", text: "Never skip the fixtures." };
 
 const task = (db: Db, type: TaskType, title: string, registrant = HUMAN_WORKER_ID, parent_id?: string): Task =>
-  registerTask(db, { type, title, purpose: "p", completion_criteria: "c", workspace: "charts", parent_id }, at, registrant);
+  registerTask(db, { type, title, purpose: "p", completion_criteria: "c", workspace: "charts", parent_id }, at, registrant, "webui");
 /** entry に束ね済みの異議群を1つ足し、その異議群に cause を帰責する(呼ぶたびに後の異議群)。 */
 const attribute = (db: Db, taskId: string, entry_id: number, cause: Cause, entries: number[] | null = null): number => {
   const objection = bundledObjection(db, taskId, entry_id, at);
@@ -23,7 +23,7 @@ const attribute = (db: Db, taskId: string, entry_id: number, cause: Cause, entri
 };
 /** 異議されたエントリ(agent の記入)に cause を帰責する。 */
 const objected = (db: Db, parent: Task, cause: Cause, worker = "deckhand"): number => {
-  const entry = logDecision(db, parent, `decided as ${cause}`, worker, at);
+  const entry = logDecision(db, parent, `decided as ${cause}`, worker, at, "worker");
   attribute(db, parent.id, entry, cause);
   return entry;
 };
@@ -32,7 +32,7 @@ const material = (db: Db, parentId: string): number[] =>
   [...objectionBundles(db).values()].flatMap((bundles) => (bundles.at(-1)!.task_id === parentId ? bundles.at(-1)!.objection_event_ids : []));
 /** 親のいまの異議群を材料にした RCA 子。 */
 const rca = (db: Db, title: string, parent: Task): Task =>
-  registerTask(db, { type: "review", title, purpose: "p", completion_criteria: "c", workspace: "charts", parent_id: parent.id, objection_event_ids: material(db, parent.id) }, at, HUMAN_WORKER_ID);
+  registerTask(db, { type: "review", title, purpose: "p", completion_criteria: "c", workspace: "charts", parent_id: parent.id, objection_event_ids: material(db, parent.id) }, at, HUMAN_WORKER_ID, "webui");
 
 it("学習に向かない cause・異議済みで未帰責のエントリ・宛先の agent が無い Behavior・as と based_on_decision の過不足・decision でない / 別の task の decision の based_on_decision・帰責の無い / 他 task の / 存在しない / 人間が書いたエントリ・work task や parent の無い review からの呼び出しは DomainError で拒否され、店には何も載らない", () => {
   const db = openDb(":memory:");
@@ -44,11 +44,11 @@ it("学習に向かない cause・異議済みで未帰責のエントリ・宛�
   const taskAmbiguity = objected(db, mixed, "task_ambiguity");
   const missingInformation = objected(db, mixed, "missing_information");
   // memory の帰責は読んだ記憶を名指す(門は cause だけで断るので、entries の中身は見ない)
-  const memory = logDecision(db, mixed, "decided as memory", "deckhand", at);
+  const memory = logDecision(db, mixed, "decided as memory", "deckhand", at, "worker");
   attribute(db, mixed.id, memory, "memory", [1]);
   const unobjected = appendEvent(db, { taskId: mixed.id, workerId: "deckhand", origin: "worker", payload: { kind: "task_completed", handoff_present: true, result: null }, at });
   // 異議されたが初回の帰責が無い(撃てなかった / 失敗した)エントリは uncertain と同じに読む(ADR 0168 決定3)
-  const objectedUnattributed = logDecision(db, mixed, "decided before the Board call failed", "deckhand", at);
+  const objectedUnattributed = logDecision(db, mixed, "decided before the Board call failed", "deckhand", at, "worker");
   bundledObjection(db, mixed.id, objectedUnattributed, at, "keep the fixtures");
   const byHuman = objected(db, mixed, "capability", HUMAN_WORKER_ID);
   const notDecision = attribute(db, mixed.id, capability, "capability");
@@ -59,7 +59,7 @@ it("学習に向かない cause・異議済みで未帰責のエントリ・宛�
   const byBoardEntry = objected(db, byBoard, "task_ambiguity");
 
   const self = rca(db, "rca (self): mixed", mixed).id;
-  const decision = logDecision(db, task(db, "review", "rca (auditor): mixed", HUMAN_WORKER_ID, mixed.id), "the fixture rule was never written down", "auditor", at);
+  const decision = logDecision(db, task(db, "review", "rca (auditor): mixed", HUMAN_WORKER_ID, mixed.id), "the fixture rule was never written down", "auditor", at, "worker");
   const notAgent = "the task was not registered by an agent: there is no agent to address a behavior to";
   const asRule = 'as ("behavior" or "knowledge") is required for a missing_information entry and only for it';
   const decisionRule = "based_on_decision is required for a knowledge entry and only for it";
@@ -101,7 +101,7 @@ it("capability・preference は agent 登録の task でも entry の worker 宛
   const capabilityEntry = objected(db, mixed, "capability");
   const latest = attribute(db, mixed.id, capabilityEntry, "capability"); // 後の異議群の帰責 —— 出所は最後の異議群の帰責を指す
   const preferenceEntry = objected(db, mixed, "preference", "helmsman");
-  const self = registerTask(db, { type: "review", title: "rca (self): mixed", purpose: "p", completion_criteria: "c", workspace: "elsewhere", parent_id: mixed.id, objection_event_ids: material(db, mixed.id) }, at, HUMAN_WORKER_ID).id;
+  const self = registerTask(db, { type: "review", title: "rca (self): mixed", purpose: "p", completion_criteria: "c", workspace: "elsewhere", parent_id: mixed.id, objection_event_ids: material(db, mixed.id) }, at, HUMAN_WORKER_ID, "webui").id;
 
   const capabilityResult = proposeFromObjection(db, self, { ...draft, entry_id: capabilityEntry }, {}, "auditor", at);
   const preferenceResult = proposeFromObjection(db, self, { ...draft, entry_id: preferenceEntry }, {}, "auditor", at);
@@ -119,7 +119,7 @@ it("agent 登録の task では task_ambiguity と missing_information(as: behav
   const taskAmbiguityEntry = objected(db, delegated, "task_ambiguity");
   const missingInformationEntry = objected(db, delegated, "missing_information");
   const auditor = rca(db, "rca (auditor): delegated", delegated);
-  const decision = logDecision(db, auditor, "the fixture rule was never written down", "auditor", at);
+  const decision = logDecision(db, auditor, "the fixture rule was never written down", "auditor", at, "worker");
 
   const ambiguityResult = proposeFromObjection(db, auditor.id, { ...draft, entry_id: taskAmbiguityEntry }, {}, "auditor", at);
   const behaviorResult = proposeFromObjection(db, auditor.id, { ...draft, entry_id: missingInformationEntry, as: "behavior" }, {}, "auditor", at);
@@ -135,8 +135,8 @@ it("agent 登録の task では task_ambiguity と missing_information(as: behav
 it("RCA reviewer は自分の RCA が覆う異議群の判定から起草する —— 後の session が同じ entry を異議して未帰責でも前の判定から起草し、後の異議群にしか無い entry は材料にないとして拒む(ADR 0171 決定3)", () => {
   const db = openDb(":memory:");
   const parent = task(db, "work", "reobjected");
-  const x = logDecision(db, parent, "picked X", "deckhand", at);
-  const y = logDecision(db, parent, "picked Y", "deckhand", at);
+  const x = logDecision(db, parent, "picked X", "deckhand", at, "worker");
+  const y = logDecision(db, parent, "picked Y", "deckhand", at, "worker");
   startTriage(db, at);
   const a = raiseObjection(db, x, "A's direction", at);
   commitTriage(db, at, [], new Map([[x, { cause: "capability", evidence: "e", entries: null }]]));
@@ -162,7 +162,7 @@ it("RCA reviewer は自分の RCA が覆う異議群の判定から起草する 
 it("premise_breached の宣言への異議エントリからも提案できる", () => {
   const db = openDb(":memory:");
   const parent = task(db, "work", "T");
-  const based_on_decision = logDecision(db, parent, "split T into A", "deckhand", at);
+  const based_on_decision = logDecision(db, parent, "split T into A", "deckhand", at, "worker");
   const child = task(db, "work", "A", HUMAN_WORKER_ID, parent.id);
   const entry = appendEvent(db, {
     taskId: child.id,

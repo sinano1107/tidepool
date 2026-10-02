@@ -11,6 +11,7 @@ import {
   FIXTURE_SPAWNED_EVENT_ID,
   FIXTURE_TASK,
   HOUR,
+  HUMAN_WEBUI,
   loggedEntry,
   mcpClient,
   queueWork,
@@ -846,10 +847,10 @@ it.each(NOT_A_LOG_ENTRY)(
 it("commit が立てる子の登録は材料の異議 id 列を持つ —— 修理は束ねた対すべて、auditor RCA は RCA 向きの対、self RCA はその worker の対(ADR 0171 決定1)", () => {
   const db = openDb(":memory:");
   const at = new Date("2026-09-30T00:00:00.000Z");
-  const task = registerTask(db, { type: "work", title: "t", purpose: "p", completion_criteria: "c" }, at);
-  const deckhand = logDecision(db, task, "deckhand's call", "deckhand", at);
-  const helmsman = logDecision(db, task, "helmsman's call", "helmsman", at);
-  const preferred = logDecision(db, task, "deckhand's naming", "deckhand", at);
+  const task = registerTask(db, { type: "work", title: "t", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI);
+  const deckhand = logDecision(db, task, "deckhand's call", "deckhand", at, "worker");
+  const helmsman = logDecision(db, task, "helmsman's call", "helmsman", at, "worker");
+  const preferred = logDecision(db, task, "deckhand's naming", "deckhand", at, "worker");
   startTriage(db, at);
   const [d, h, p] = [deckhand, helmsman, preferred].map((entry) => raiseObjection(db, entry, "redo it", at));
   const judged = (cause: Cause): GatedJudgment => ({ cause, evidence: "e", entries: null });

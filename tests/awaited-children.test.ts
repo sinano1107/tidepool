@@ -9,6 +9,7 @@ import {
   presentTask,
   registerTask,
 } from "../src/tasks.js";
+import { HUMAN_WEBUI } from "./harness.js";
 
 const HANDOFF = {
   outcome: "done",
@@ -25,6 +26,7 @@ it("an unsettled decomposition child blocks the parent and prevents completion(i
     db,
     { type: "work", title: "parent", purpose: "p", completion_criteria: "c" },
     new Date(0),
+    ...HUMAN_WEBUI,
   );
   registerTask(
     db,
@@ -37,10 +39,11 @@ it("an unsettled decomposition child blocks the parent and prevents completion(i
       based_on_decision: 48,
     },
     new Date(1),
+    ...HUMAN_WEBUI,
   );
 
   expect(presentTask(db, parent).status).toBe("blocked");
-  expect(() => completeTask(db, parent, HANDOFF, "worker", new Date(2))).toThrow(
+  expect(() => completeTask(db, parent, HANDOFF, "worker", new Date(2), "worker")).toThrow(
     "a task with unfinished children cannot complete",
   );
   db.close();
@@ -52,6 +55,7 @@ it("a completion review attached to a done child does not block its parent(issue
     db,
     { type: "work", title: "grandparent", purpose: "p", completion_criteria: "c" },
     new Date(0),
+    ...HUMAN_WEBUI,
   );
   const child = registerTask(
     db,
@@ -65,8 +69,9 @@ it("a completion review attached to a done child does not block its parent(issue
       review_flag: true,
     },
     new Date(1),
+    ...HUMAN_WEBUI,
   );
-  completeTask(db, child, HANDOFF, "worker", new Date(2));
+  completeTask(db, child, HANDOFF, "worker", new Date(2), "worker");
 
   const board = listBoard(db);
   expect(board.find((task) => task.id === grandparent.id)?.status).toBe("todo");
@@ -83,11 +88,13 @@ it("answering a question returns the parent to the queue head when only attached
     db,
     { type: "work", title: "other", purpose: "p", completion_criteria: "c" },
     new Date(0),
+    ...HUMAN_WEBUI,
   );
   const parent = registerTask(
     db,
     { type: "work", title: "parent", purpose: "p", completion_criteria: "c" },
     new Date(1),
+    ...HUMAN_WEBUI,
   );
   registerTask(
     db,
@@ -99,6 +106,7 @@ it("answering a question returns the parent to the queue head when only attached
       parent_id: parent.id,
     },
     new Date(2),
+    ...HUMAN_WEBUI,
   );
   const question = registerTask(
     db,
@@ -111,10 +119,11 @@ it("answering a question returns the parent to the queue head when only attached
       question: [{ title: "which way?", options: ["left", "right"], recommendation: "left" }],
     },
     new Date(3),
+    ...HUMAN_WEBUI,
   );
   expect(presentTask(db, parent).status).toBe("blocked");
 
-  answerQuestion(db, question, ["left"], new Date(4));
+  answerQuestion(db, question, ["left"], new Date(4), undefined, undefined, undefined, "webui");
 
   expect(listQueue(db).find((task) => task.status === "todo")?.id).toBe(parent.id);
   expect(listQueue(db).findIndex((task) => task.id === parent.id)).toBeLessThan(
@@ -130,11 +139,13 @@ it("answering a proposal question does not return its parent to the queue head(i
     db,
     { type: "work", title: "other", purpose: "p", completion_criteria: "c" },
     new Date(0),
+    ...HUMAN_WEBUI,
   );
   const parent = registerTask(
     db,
     { type: "work", title: "parent", purpose: "p", completion_criteria: "c" },
     new Date(1),
+    ...HUMAN_WEBUI,
   );
   const question = registerTask(
     db,
@@ -148,11 +159,12 @@ it("answering a proposal question does not return its parent to the queue head(i
       proposal: { kind: "memory", op: "approve", candidate_id: 1, replaces: [] },
     },
     new Date(2),
+    ...HUMAN_WEBUI,
   );
   // 提案 question は付帯子(ADR 0049 / ADR 0120 決定3)なので親を塞がない — answerQuestion がそれでも動かさないことを見るには、親が他の条件では unblock 対象になる状態が要る
   expect(presentTask(db, parent).status).toBe("todo");
 
-  answerQuestion(db, question, ["approve"], new Date(3));
+  answerQuestion(db, question, ["approve"], new Date(3), undefined, undefined, undefined, "webui");
 
   expect(listQueue(db).findIndex((task) => task.id === parent.id)).toBeGreaterThan(
     listQueue(db).findIndex((task) => task.id === other.id),

@@ -24,7 +24,7 @@ it("browse_memory / search_memory / read_memory は attributed task の workspac
   const id = record("charts", "Tests need Node 22");
   defineMemoryBranch(t.db, { scope: "charts", path: "build", text: "How charts is built.", author: { activity: "human", name: "human" } }, "webui", t.clock.now());
   record("elsewhere", "Not this workspace");
-  const decision = logDecision(t.db, task, "kept tests on Node 22", t.worker.id, t.clock.now());
+  const decision = logDecision(t.db, task, "kept tests on Node 22", t.worker.id, t.clock.now(), "worker");
   const behavior = recordBehavior(
     t.db,
     humanEntryInput(t.db, { workspace: "charts", path: "build", title: "Pin the runtime", text: "Pin the runtime version.", addressee: null, source_event_id: decision }),

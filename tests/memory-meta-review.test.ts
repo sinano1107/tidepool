@@ -1,7 +1,7 @@
 import { afterEach, expect, it } from "vitest";
 import { createBehaviorCandidate, recordKnowledge } from "../src/memory.js";
 import { BOARD_WORKER_ID, registerTask } from "../src/tasks.js";
-import { api, bootTidepool, completeViaMcp, HOUR, mcpClient, type Tidepool } from "./harness.js";
+import { api, bootTidepool, completeViaMcp, HOUR, HUMAN_WEBUI, mcpClient, type Tidepool } from "./harness.js";
 
 let t: Tidepool;
 afterEach(() => t?.stop());
@@ -10,7 +10,7 @@ const DAY = 24 * HOUR;
 
 /** 材料を1つ(setup —— 店に Knowledge を1件書く)。 */
 function material(tp: Tidepool, title: string) {
-  const { id } = registerTask(tp.db, { type: "work", title: "source", purpose: "p", completion_criteria: "c" }, tp.clock.now());
+  const { id } = registerTask(tp.db, { type: "work", title: "source", purpose: "p", completion_criteria: "c" }, tp.clock.now(), ...HUMAN_WEBUI);
   // 出所の event のためだけの task なので queue から外す
   tp.db.prepare("UPDATE tasks SET status = 'cancelled' WHERE id = ?").run(id);
   recordKnowledge(

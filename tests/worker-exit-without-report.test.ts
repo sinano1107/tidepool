@@ -15,6 +15,7 @@ import {
   FULL_HANDOFF,
   git,
   HOUR,
+  HUMAN_WEBUI,
   mcpClient,
   QUIET_EXIT,
   questions,
@@ -366,7 +367,7 @@ it("retry の回答で task は queue 先頭へ戻り、abandon の回答で can
   await settle();
   expect(started()).toEqual([retried.id, abandoned.id, busy.id]);
   // retry の回答より前に先頭へ置いた task —— 先頭復帰なら retried がこれを追い越す
-  const later = moveTask(t.db, queueWork(t, "later"), null, t.clock.now());
+  const later = moveTask(t.db, queueWork(t, "later"), null, t.clock.now(), ...HUMAN_WEBUI);
 
   const byTitle = Object.fromEntries((await exitedWithoutReport()).map((q: any) => [q.title, q]));
   await api(t.baseUrl, "POST", `/api/tasks/${byTitle["worker exited without reporting: abandoned"].id}/answer`, { answers: ["abandon"] });

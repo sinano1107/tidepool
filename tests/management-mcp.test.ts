@@ -21,6 +21,7 @@ import {
   api,
   bootTidepool,
   HOUR,
+  HUMAN_WEBUI,
   holdChildren,
   managementMcpClient,
   queueChild,
@@ -606,6 +607,7 @@ it("管理MCP は issue-backed content を保存済みプレースホルダー�
     t.db,
     { type: "work", workspace: "tidepool", github_issue_number: 49 },
     t.clock.now(),
+    ...HUMAN_WEBUI,
   );
   const client = await managementMcpClient(t.baseUrl);
   try {
@@ -919,6 +921,7 @@ it("complete_task は human assignee の task だけを mcp origin で完了す�
     },
     t.clock.now(),
     "fake-worker",
+    "webui",
   );
   const client = await managementMcpClient(t.baseUrl);
   try {

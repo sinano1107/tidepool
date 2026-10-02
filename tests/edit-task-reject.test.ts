@@ -1,6 +1,6 @@
 import { afterEach, expect, it } from "vitest";
 import { registerTask } from "../src/tasks.js";
-import { api, bootTidepool, HOUR, mcpClient, registerWork, type Tidepool } from "./harness.js";
+import { api, bootTidepool, HOUR, HUMAN_WEBUI, mcpClient, registerWork, type Tidepool } from "./harness.js";
 
 let t: Tidepool;
 afterEach(() => t?.stop());
@@ -39,6 +39,7 @@ it("issue-backed の参照番号(github_issue_number)の編集は 400 で拒否�
     db,
     { type: "work", workspace: "tidepool", github_issue_number: 49 },
     t.clock.now(),
+    ...HUMAN_WEBUI,
   );
 
   const res = await api(t.baseUrl, "PATCH", `/api/tasks/${task.id}`, {
@@ -128,6 +129,7 @@ it("issue-backed タスクの内容(title)と workspace の編集は 400 で拒�
     db,
     { type: "work", workspace: "tidepool", github_issue_number: 49 },
     t.clock.now(),
+    ...HUMAN_WEBUI,
   );
 
   const content = await api(t.baseUrl, "PATCH", `/api/tasks/${task.id}`, {

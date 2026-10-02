@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { agentNeedsHuman } from "../src/agent.js";
 import { openDb } from "../src/db.js";
 import { answerQuestion, BOARD_WORKER_ID, DomainError, registerTask } from "../src/tasks.js";
+import { HUMAN_WEBUI } from "./harness.js";
 
 describe("agent の quarantine(ADR 0012 / issue #36: workspace 版の agent 名一般化)", () => {
   it("agent の quarantine 付きの question は1択(workspace 版と同じ緩和)で登録できる", () => {
@@ -24,6 +25,7 @@ describe("agent の quarantine(ADR 0012 / issue #36: workspace 版の agent 名�
       },
       new Date(0),
       BOARD_WORKER_ID,
+      "webui",
     );
     expect(question).toMatchObject({ question_quarantine_kind: "agent", question_quarantine_value: "navigator" });
   });
@@ -41,6 +43,7 @@ describe("agent の quarantine(ADR 0012 / issue #36: workspace 版の agent 名�
           question: [{ title: "plain question", options: ["only"], recommendation: "only" }],
         },
         new Date(0),
+        ...HUMAN_WEBUI,
       ),
     ).toThrow(DomainError);
   });
@@ -65,9 +68,10 @@ describe("agent の quarantine(ADR 0012 / issue #36: workspace 版の agent 名�
       },
       new Date(0),
       BOARD_WORKER_ID,
+      "webui",
     );
 
-    const answered = answerQuestion(db, question, ["repaired by hand"], new Date(1));
+    const answered = answerQuestion(db, question, ["repaired by hand"], new Date(1), undefined, undefined, undefined, "webui");
 
     expect(answered.status).toBe("done");
     expect(agentNeedsHuman(db, "navigator")).toBe(false);

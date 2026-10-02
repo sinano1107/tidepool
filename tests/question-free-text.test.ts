@@ -2,6 +2,7 @@ import { expect, it } from "vitest";
 import { openDb } from "../src/db.js";
 import { questionAnnotations } from "../src/memory.js";
 import { BOARD_WORKER_ID, type RegisterTaskInput, registerTask } from "../src/tasks.js";
+import { HUMAN_WEBUI } from "./harness.js";
 
 // 自由記述を受けるかは盤面が決めて読み口に載せる(issue #1309・ADR 0179 決定4)。門(assertAnswerable)が
 // 選択肢にない回答を断る固定選択肢の question は false、escalate と確認型 question(quarantine 解除)は true。
@@ -20,7 +21,7 @@ const QUESTIONS = {
 
 function freeTextOf(kind: keyof typeof QUESTIONS) {
   const db = openDb(":memory:");
-  const parent = registerTask(db, { type: "work", title: "parent", purpose: "p", completion_criteria: "c" }, at);
+  const parent = registerTask(db, { type: "work", title: "parent", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI);
   const { options, ...fields } = QUESTIONS[kind];
   const question = registerTask(
     db,
@@ -35,6 +36,7 @@ function freeTextOf(kind: keyof typeof QUESTIONS) {
     },
     at,
     BOARD_WORKER_ID,
+    "webui",
   );
   return questionAnnotations(db, question).free_text;
 }

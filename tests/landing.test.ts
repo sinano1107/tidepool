@@ -24,6 +24,7 @@ import {
   FULL_HANDOFF,
   GIT_FIXTURE_TEST_TIMEOUT,
   git,
+  HUMAN_WEBUI,
   makeRemoteBackedWorkspace,
   makeWorkspace,
   squashTaskIntoOrigin,
@@ -66,6 +67,7 @@ it("work でないタスクは着地対象ではない", async () => {
       question: [{ title: "choice", options: ["yes", "no"], recommendation: "yes" }],
     },
     clock.now(),
+    ...HUMAN_WEBUI,
   );
 
   await expect(landing.land(question)).resolves.toEqual({
@@ -87,6 +89,7 @@ it("祖先の task branch へ帰る work は着地対象ではない", async () 
       completion_criteria: "the child result is integrated",
     },
     clock.now(),
+    ...HUMAN_WEBUI,
   );
   const child = registerTask(
     db,
@@ -98,6 +101,7 @@ it("祖先の task branch へ帰る work は着地対象ではない", async () 
       completion_criteria: "the part exists",
     },
     clock.now(),
+    ...HUMAN_WEBUI,
   );
 
   await expect(landing.land(child)).resolves.toEqual({
@@ -119,6 +123,7 @@ it("保護ブランチへ運ぶ内容が無い work はその事実を返して�
       completion_criteria: "the result is reported",
     },
     clock.now(),
+    ...HUMAN_WEBUI,
   );
   git(workspace.path, "branch", `task/${task.id}`);
   registerPrPromotionFailureQuestion(db, task, "first failed attempt", clock.now());
@@ -157,6 +162,7 @@ it("squash 済みで内容差が無い work は commit 差が残っていても�
       completion_criteria: "no duplicate PR is opened",
     },
     clock.now(),
+    ...HUMAN_WEBUI,
   );
   git(workspace.path, "checkout", "-b", `task/${task.id}`);
   commitWork(workspace.path, "feature.txt", "already on main\n");
@@ -185,6 +191,7 @@ it("再発火が門で止まったら failure question を開いたままにし�
       completion_criteria: "the work is ready",
     },
     clock.now(),
+    ...HUMAN_WEBUI,
   );
   git(workspace.path, "checkout", "-b", `task/${task.id}`);
   commitWork(workspace.path, "feature.txt", "ready\n");
@@ -200,6 +207,7 @@ it("再発火が門で止まったら failure question を開いたままにし�
       completion_criteria: "the review is complete",
     },
     clock.now(),
+    ...HUMAN_WEBUI,
   );
   github.scriptFailure(null);
 
@@ -233,6 +241,7 @@ it("GitHub の無い purely-local work は merge question 面へ着地する", a
       completion_criteria: "the change awaits a merge decision",
     },
     clock.now(),
+    ...HUMAN_WEBUI,
   );
   git(workspace.path, "checkout", "-b", `task/${task.id}`);
   commitWork(workspace.path, "feature.txt", "ready\n");
@@ -270,6 +279,7 @@ it("remote-backed から purely-local へ変わった再発火は local question
       completion_criteria: "a current landing surface exists",
     },
     clock.now(),
+    ...HUMAN_WEBUI,
   );
   git(workspace.path, "checkout", "-b", `task/${task.id}`);
   commitWork(workspace.path, "feature.txt", "ready\n");
@@ -301,6 +311,7 @@ it("GitHub の無い remote-backed work は閉じた理由で失敗し failure q
       completion_criteria: "a PR exists",
     },
     clock.now(),
+    ...HUMAN_WEBUI,
   );
   git(workspace.path, "checkout", "-b", `task/${task.id}`);
   commitWork(workspace.path, "feature.txt", "ready\n");
@@ -332,6 +343,7 @@ it("remote-backed work は PR を開いた面を返す", async () => {
       completion_criteria: "a PR exists",
     },
     clock.now(),
+    ...HUMAN_WEBUI,
   );
   git(workspace.path, "checkout", "-b", `task/${task.id}`);
   commitWork(workspace.path, "feature.txt", "ready\n");
@@ -361,6 +373,7 @@ it("open PR を持つ work の修理は同じ PR の branch を更新する", as
       completion_criteria: "a PR exists",
     },
     clock.now(),
+    ...HUMAN_WEBUI,
   );
   git(workspace.path, "checkout", "-b", `task/${task.id}`);
   commitWork(workspace.path, "feature.txt", "ready\n");
@@ -390,9 +403,10 @@ it("open PR 更新は盤面が動かした remote ref だけを再基準化す�
       completion_criteria: "only the board-written ref is rebaselined",
     },
     clock.now(),
+    ...HUMAN_WEBUI,
   );
   await prepareWorkspaceAtPickup(db, workspace, task, {});
-  recordPrOpened(db, task, 1, "worker", clock.now());
+  recordPrOpened(db, task, 1, "worker", clock.now(), undefined, undefined, "worker");
   commitWork(workspace.path, "repair.txt", "fixed\n");
   git(workspace.path, "tag", "worker-created-tag");
 
@@ -423,6 +437,7 @@ it("merge 済み PR に残った修理は閉じた理由で失敗し failure que
       completion_criteria: "a PR exists",
     },
     clock.now(),
+    ...HUMAN_WEBUI,
   );
   git(workspace.path, "checkout", "-b", `task/${task.id}`);
   commitWork(workspace.path, "feature.txt", "ready\n");
@@ -459,10 +474,11 @@ it("open PR branch の push 失敗は既存の着地痕跡で隠さず failure q
       completion_criteria: "the repair reaches the PR branch",
     },
     clock.now(),
+    ...HUMAN_WEBUI,
   );
   git(workspace.path, "checkout", "-b", `task/${task.id}`);
   commitWork(workspace.path, "feature.txt", "ready\n");
-  recordPrOpened(db, task, 1, "worker", clock.now());
+  recordPrOpened(db, task, 1, "worker", clock.now(), undefined, undefined, "worker");
 
   await expect(landing.land(getTask(db, task.id)!)).resolves.toEqual({
     kind: "failed",
@@ -489,6 +505,7 @@ it("PR 作成の失敗は閉じた理由で返して failure question を立て�
       completion_criteria: "a PR exists",
     },
     clock.now(),
+    ...HUMAN_WEBUI,
   );
   git(workspace.path, "checkout", "-b", `task/${task.id}`);
   commitWork(workspace.path, "feature.txt", "ready\n");
@@ -518,6 +535,7 @@ it("workspace 不在は閉じた理由で返す", async () => {
       completion_criteria: "the change is shipped",
     },
     clock.now(),
+    ...HUMAN_WEBUI,
   );
 
   await expect(landing.land(task)).resolves.toEqual({
@@ -550,6 +568,7 @@ it("再発火時の registry drift は閉じた失敗を返し、既存の failu
       completion_criteria: "the failure remains actionable",
     },
     clock.now(),
+    ...HUMAN_WEBUI,
   );
   git(workspace.path, "checkout", "-b", `task/${task.id}`);
   commitWork(workspace.path, "feature.txt", "ready\n");
@@ -590,6 +609,7 @@ it("needs-human workspace は閉じた理由で返す", async () => {
       completion_criteria: "the change is shipped",
     },
     clock.now(),
+    ...HUMAN_WEBUI,
   );
   git(workspace.path, "checkout", "-b", `task/${task.id}`);
   commitWork(workspace.path, "feature.txt", "ready\n");
@@ -621,6 +641,7 @@ it("着地判定の Git failure も throw せず閉じた失敗 verdict と ques
       completion_criteria: "the failure is actionable",
     },
     clock.now(),
+    ...HUMAN_WEBUI,
   );
   git(workspace.path, "checkout", "-b", `task/${task.id}`);
   commitWork(workspace.path, "feature.txt", "ready\n");
@@ -651,6 +672,7 @@ it("着地成立は積み上がった failure question を引退させ、回答�
       completion_criteria: "a PR exists",
     },
     clock.now(),
+    ...HUMAN_WEBUI,
   );
   git(workspace.path, "checkout", "-b", `task/${task.id}`);
   commitWork(workspace.path, "feature.txt", "ready\n");
@@ -684,6 +706,7 @@ it("未束ねの異議がある work は同じ門で理由と数を返す", asyn
       completion_criteria: "the change is ready",
     },
     clock.now(),
+    ...HUMAN_WEBUI,
   );
   git(workspace.path, "checkout", "-b", `task/${task.id}`);
   commitWork(workspace.path, "feature.txt", "ready\n");
@@ -715,9 +738,10 @@ it("祖先の再発火は open PR を持つ work だけを更新する", async (
       completion_criteria: "the tree is integrated",
     },
     clock.now(),
+    ...HUMAN_WEBUI,
   );
   git(workspace.path, "branch", `task/${root.id}`);
-  completeTask(db, root, FULL_HANDOFF, "worker", clock.now());
+  completeTask(db, root, FULL_HANDOFF, "worker", clock.now(), "worker");
   registerLocalMergeQuestion(db, root, "keep this settled surface", clock.now());
   const parent = registerTask(
     db,
@@ -729,11 +753,12 @@ it("祖先の再発火は open PR を持つ work だけを更新する", async (
       completion_criteria: "the PR is open",
     },
     clock.now(),
+    ...HUMAN_WEBUI,
   );
   git(workspace.path, "checkout", "-b", `task/${parent.id}`, "main");
   commitWork(workspace.path, "feature.txt", "ready\n");
-  completeTask(db, parent, FULL_HANDOFF, "worker", clock.now());
-  recordPrOpened(db, parent, 1, "worker", clock.now());
+  completeTask(db, parent, FULL_HANDOFF, "worker", clock.now(), "worker");
+  recordPrOpened(db, parent, 1, "worker", clock.now(), undefined, undefined, "worker");
   commitWork(workspace.path, "repair.txt", "fixed\n");
   const settled = registerTask(
     db,
@@ -745,8 +770,9 @@ it("祖先の再発火は open PR を持つ work だけを更新する", async (
       completion_criteria: "the review is complete",
     },
     clock.now(),
+    ...HUMAN_WEBUI,
   );
-  const done = completeTask(db, settled, undefined, "worker", clock.now());
+  const done = completeTask(db, settled, undefined, "worker", clock.now(), "worker");
 
   await expect(landing.relandAncestors(done)).resolves.toEqual([
     {
@@ -789,6 +815,7 @@ it("並行 retry が先に着地したら遅い再発火の失敗は failure que
       completion_criteria: "a PR exists",
     },
     clock.now(),
+    ...HUMAN_WEBUI,
   );
   git(workspace.path, "checkout", "-b", `task/${task.id}`);
   commitWork(workspace.path, "feature.txt", "ready\n");
@@ -822,11 +849,12 @@ it("fork 元が squash 着地した根は保護ブランチへ merge で追い�
       completion_criteria: "the parent PR exists",
     },
     clock.now(),
+    ...HUMAN_WEBUI,
   );
   git(workspace.path, "checkout", "-b", `task/${parent.id}`);
   commitWork(workspace.path, "feature.txt", "parent result\n");
-  completeTask(db, parent, FULL_HANDOFF, "worker", clock.now());
-  recordPrOpened(db, parent, 1, "worker", clock.now());
+  completeTask(db, parent, FULL_HANDOFF, "worker", clock.now(), "worker");
+  recordPrOpened(db, parent, 1, "worker", clock.now(), undefined, undefined, "worker");
   const repair = registerTask(
     db,
     {
@@ -837,6 +865,7 @@ it("fork 元が squash 着地した根は保護ブランチへ merge で追い�
       completion_criteria: "a repair PR exists",
     },
     clock.now(),
+    ...HUMAN_WEBUI,
   );
   git(workspace.path, "checkout", "-b", `task/${repair.id}`, `task/${parent.id}`);
   await squashTaskIntoOrigin(workspace, parent.id);
@@ -880,6 +909,7 @@ function landingWork(db: Db, clock: FakeClock) {
       completion_criteria: "the change is ready",
     },
     clock.now(),
+    ...HUMAN_WEBUI,
   );
 }
 
@@ -899,6 +929,7 @@ function mergeQuestion(
       ...pending,
     },
     clock.now(),
+    ...HUMAN_WEBUI,
   );
 }
 
@@ -913,6 +944,7 @@ function attachUnsettledChild(db: Db, clock: FakeClock, parentId: string) {
       parent_id: parentId,
     },
     clock.now(),
+    ...HUMAN_WEBUI,
   );
 }
 
@@ -939,6 +971,7 @@ it("着地 question でない question には landingAnnotation が null を返�
       question: [{ title: "which way?", options: ["left", "right"], recommendation: "left" }],
     },
     clock.now(),
+    ...HUMAN_WEBUI,
   );
 
   expect(landingAnnotation(db, question)).toBeNull();
@@ -988,6 +1021,7 @@ it("付帯子と異議が両方あれば attached_children を名乗り、回答
       ["merge"],
       undefined,
       () => clock.now(),
+      "webui",
     ),
   ).rejects.toThrow("attached child task(s) unsettled");
 });
@@ -995,7 +1029,7 @@ it("付帯子と異議が両方あれば attached_children を名乗り、回答
 it("PR の merge question は PR から引いた着地タスクの付帯子で塞がる", async () => {
   const { db, clock } = await openBoard();
   const work = landingWork(db, clock);
-  recordPrOpened(db, work, 7, "worker", clock.now());
+  recordPrOpened(db, work, 7, "worker", clock.now(), undefined, undefined, "worker");
   const question = mergeQuestion(db, clock, { pending_merge_pr: 7 });
   expect(landingAnnotation(db, question)).toEqual({ blocked_by: null });
 

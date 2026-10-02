@@ -9,6 +9,7 @@ import {
   GIT_FIXTURE_TEST_TIMEOUT,
   git,
   HOUR,
+  HUMAN_WEBUI,
   makeWorkspace,
   mcpClient,
   registerWork,
@@ -145,6 +146,7 @@ it("issue参照タスクの WIP コミット subject はプレースホルダを
     db,
     { type: "work", workspace: ws.name, github_issue_number: 240 },
     t.clock.now(),
+    ...HUMAN_WEBUI,
   );
   t.github.scriptIssue(240, { title: "workerは必ずcommitメッセージを考えてほしい", body: "", comments: [] });
   await t.clock.advance(HOUR);

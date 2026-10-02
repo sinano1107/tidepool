@@ -1,7 +1,7 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { IssueGoneError } from "../src/github.js";
 import { registerTask } from "../src/tasks.js";
-import { api, bootTidepool, GIT_FIXTURE_TEST_TIMEOUT, HOUR, makeWorkspace, type Tidepool } from "./harness.js";
+import { api, bootTidepool, GIT_FIXTURE_TEST_TIMEOUT, HOUR, HUMAN_WEBUI, makeWorkspace, type Tidepool } from "./harness.js";
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 
@@ -18,6 +18,7 @@ it("issue参照タスクの展開が一時的に失敗したら、そのサイ�
     db,
     { type: "work", workspace: "tidepool", github_issue_number: 49 },
     t.clock.now(),
+    ...HUMAN_WEBUI,
   );
 
   t.github.scriptIssueFailure(new Error("GitHub is down"));
@@ -46,6 +47,7 @@ it("issue参照の確定的失敗(not found / close 済み)では retry/abandon 
     db,
     { type: "work", workspace: "tidepool", github_issue_number: 49 },
     t.clock.now(),
+    ...HUMAN_WEBUI,
   );
 
   t.github.scriptIssueFailure(new IssueGoneError({ path: "/x", number: 49 }, "closed"));

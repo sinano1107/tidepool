@@ -3,6 +3,7 @@ import { openDb } from "../src/db.js";
 import { pollNotifications, savePushSubscription } from "../src/push.js";
 import { answerQuestion, registerTask } from "../src/tasks.js";
 import { FakePushClient } from "./fakes.js";
+import { HUMAN_WEBUI } from "./harness.js";
 
 function registerQuestion(db: ReturnType<typeof openDb>, title: string, at = new Date(0)) {
   return registerTask(
@@ -15,6 +16,7 @@ function registerQuestion(db: ReturnType<typeof openDb>, title: string, at = new
       question: [{ title, options: ["yes", "no"], recommendation: "yes" }],
     },
     at,
+    ...HUMAN_WEBUI,
   );
 }
 
@@ -64,7 +66,7 @@ describe("pollNotifications(issue #14): quiet hours 外の question を即時通
     savePushSubscription(db, { endpoint: "https://push.example/abc", p256dh: "k", auth: "a" });
     const noon = new Date(Date.UTC(2026, 0, 1, 12, 0));
     const task = registerQuestion(db, "すでに回答済み", noon);
-    answerQuestion(db, task, ["yes"], noon);
+    answerQuestion(db, task, ["yes"], noon, undefined, undefined, undefined, "webui");
 
     const push = new FakePushClient();
     await pollNotifications({ db, push }, noon);

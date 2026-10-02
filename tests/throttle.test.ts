@@ -7,6 +7,7 @@ import {
   completeIntegrationReviews,
   FULL_HANDOFF as fullHandoff,
   HOUR,
+  HUMAN_WEBUI,
   mcpClient,
   queueWork,
   type Tidepool,
@@ -173,6 +174,7 @@ it("registry なしの盤面で fable 窓に当たる task しか無いキュー
     t.db,
     { type: "work", title: "fable work", purpose: "p", completion_criteria: "c", tier: "frontier" },
     t.clock.now(),
+    ...HUMAN_WEBUI,
   );
   t.worker.scriptUsage(fableOverPace(t.clock.now()));
 

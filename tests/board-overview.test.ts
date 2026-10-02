@@ -11,6 +11,7 @@ import {
   presentTask,
   registerTask,
 } from "../src/tasks.js";
+import { HUMAN_WEBUI } from "./harness.js";
 
 describe("listBoard は進捗俯瞰に必要な形を一望できる(issue #16)", () => {
   it("全ステータス・type・親子関係が揃い、blocked は導出値、skipped は現れない", () => {
@@ -20,6 +21,7 @@ describe("listBoard は進捗俯瞰に必要な形を一望できる(issue #16)"
       db,
       { type: "work", title: "decompose the reef survey", purpose: "p", completion_criteria: "c" },
       new Date(0),
+      ...HUMAN_WEBUI,
     );
     const openChild = registerTask(
       db,
@@ -32,11 +34,13 @@ describe("listBoard は進捗俯瞰に必要な形を一望できる(issue #16)"
         based_on_decision: 48,
       },
       new Date(1),
+      ...HUMAN_WEBUI,
     );
     const doneChild = registerTask(
       db,
       { type: "review", title: "review the south reef data", purpose: "p", completion_criteria: "c", parent_id: parent.id },
       new Date(2),
+      ...HUMAN_WEBUI,
     );
     completeTask(
       db,
@@ -51,12 +55,14 @@ describe("listBoard は進捗俯瞰に必要な形を一望できる(issue #16)"
       },
       "reef-crab",
       new Date(3),
+      "worker",
     );
 
     const running = registerTask(
       db,
       { type: "work", title: "tag the drifting buoy", purpose: "p", completion_criteria: "c" },
       new Date(4),
+      ...HUMAN_WEBUI,
     );
     pickupTask(db, running, "reef-crab", new Date(5));
 
@@ -64,8 +70,9 @@ describe("listBoard は進捗俯瞰に必要な形を一望できる(issue #16)"
       db,
       { type: "work", title: "chase a dead lead", purpose: "p", completion_criteria: "c" },
       new Date(6),
+      ...HUMAN_WEBUI,
     );
-    cancelTaskDirectly(db, abandoned, null, new Date(7), {});
+    cancelTaskDirectly(db, abandoned, null, new Date(7), {}, "webui");
 
     const board = listBoard(db);
 
@@ -101,11 +108,13 @@ describe("listBoard は進捗俯瞰に必要な形を一望できる(issue #16)"
       { type: "work", title: "survey the tide pool", purpose: "p", completion_criteria: "c" },
       new Date(0),
       "reef-crab",
+      "webui",
     );
     const byHuman = registerTask(
       db,
       { type: "work", title: "log the low tide", purpose: "p", completion_criteria: "c" },
       new Date(1),
+      ...HUMAN_WEBUI,
     );
     const byBoard = registerTask(
       db,
@@ -118,6 +127,7 @@ describe("listBoard は進捗俯瞰に必要な形を一望できる(issue #16)"
       },
       new Date(2),
       "tidepool",
+      "webui",
     );
 
     const board = listBoard(db);
@@ -135,12 +145,14 @@ describe("listBoard は進捗俯瞰に必要な形を一望できる(issue #16)"
       { type: "work", title: "survey the tide pool", purpose: "p", completion_criteria: "c" },
       new Date(0),
       "reef-crab",
+      "webui",
     );
     const byHuman = registerTask(
       db,
       { type: "work", title: "log the low tide", purpose: "p", completion_criteria: "c" },
       new Date(1),
       HUMAN_WORKER_ID,
+      "webui",
     );
     const byBoard = registerTask(
       db,
@@ -153,6 +165,7 @@ describe("listBoard は進捗俯瞰に必要な形を一望できる(issue #16)"
       },
       new Date(2),
       BOARD_WORKER_ID,
+      "webui",
     );
     const running = pickupTask(db, byAgent, "reef-crab", new Date(3))!;
 

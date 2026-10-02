@@ -28,6 +28,7 @@ import {
 import { commitTriage, startTriage } from "../src/triage.js";
 import { quarantineWorkspace, UnknownWorkspaceError } from "../src/workspace.js";
 import { FakeDraftClient, FakeGitHubClient, unusedLanding } from "./fakes.js";
+import { HUMAN_WEBUI } from "./harness.js";
 
 const NOW = new Date("2026-08-06T00:00:00.000Z");
 
@@ -59,6 +60,7 @@ it("人間の登録 door は通常タスクを登録して返す", async () => {
       completion_criteria: "the change is available",
     },
     () => NOW,
+    "webui",
   );
 
   expect(result).toMatchObject({
@@ -84,6 +86,7 @@ it("人間の登録 door は未知の assignee を GateFailure として返す",
       assignee: "not-a-real-agent",
     },
     () => NOW,
+    "webui",
   );
 
   expect(result).toEqual({
@@ -113,6 +116,7 @@ it("人間の登録 door は未知の workspace を GateFailure として返す"
       workspace: "not-a-real-workspace",
     },
     () => NOW,
+    "webui",
   );
 
   expect(result).toEqual({
@@ -143,6 +147,7 @@ it("人間の登録 door は workspace を assignee より先に検査する", a
       assignee: "unknown-agent",
     },
     () => NOW,
+    "webui",
   );
 
   expect(result).toEqual({
@@ -169,6 +174,7 @@ it("人間の登録 door は issue-backed task の生存を確認してから登
     },
     { type: "work", github_issue_number: 189, workspace: "tidepool" },
     () => NOW,
+    "webui",
   );
 
   expect({ result, issueFetches: github.issueFetches }).toMatchObject({
@@ -198,6 +204,7 @@ it("人間の登録 door は外部検査後の時刻で task を登録する", a
     },
     { type: "work", github_issue_number: 189, workspace: "tidepool" },
     () => currentNow,
+    "webui",
   );
 
   expect(result).toMatchObject({
@@ -220,6 +227,7 @@ it("人間の登録 door は一時的な issue 取得失敗を retryable な Gat
     },
     { type: "work", github_issue_number: 189, workspace: "tidepool" },
     () => NOW,
+    "webui",
   );
 
   expect(result).toEqual({
@@ -254,6 +262,7 @@ it("人間の登録 door は LLM 検査の不合格をサジェスト付き Gate
     },
     { type: "work", github_issue_number: 189, workspace: "tidepool" },
     () => NOW,
+    "webui",
   );
 
   expect(result).toEqual({
@@ -289,6 +298,7 @@ it("人間の登録 door は envelope の完全な LLM 診断をログに残し�
     },
     { type: "work", github_issue_number: 189, workspace: "tidepool" },
     () => NOW,
+    "webui",
   );
 
   expect(result).toEqual({
@@ -314,6 +324,7 @@ it("人間の登録 door は exec が投げた完全な LLM 診断もログに�
     { db, pollNow: () => {}, github, draftClient, workspace: { name: "tidepool", path: "/workspaces/tidepool" } },
     { type: "work", github_issue_number: 189, workspace: "tidepool" },
     () => NOW,
+    "webui",
   );
 
   expect(result).toEqual({
@@ -334,6 +345,7 @@ it("人間の登録 door は work child を人間 decompose として登録す�
       completion_criteria: "all slices are integrated",
     },
     NOW,
+    ...HUMAN_WEBUI,
   );
 
   const result = await registerThroughHumanDoor(
@@ -347,6 +359,7 @@ it("人間の登録 door は work child を人間 decompose として登録す�
       decompose_reason: "split out the shared application seam",
     },
     () => NOW,
+    "webui",
   );
 
   expect(result).toMatchObject({
@@ -374,6 +387,7 @@ it("人間の登録 door は存在しない decompose 親を not_found として
       decompose_reason: "split the missing parent",
     },
     () => NOW,
+    "webui",
   );
 
   expect(result).toEqual({
@@ -395,6 +409,7 @@ it("人間の登録 door は decompose reason を parent の存在より先に�
       parent_id: "no-such-task",
     },
     () => NOW,
+    "webui",
   );
 
   expect(result).toEqual({
@@ -414,6 +429,7 @@ it("人間の登録 door は issue-backed decompose child を登録しない", a
       completion_criteria: "all slices are integrated",
     },
     NOW,
+    ...HUMAN_WEBUI,
   );
 
   const result = await registerThroughHumanDoor(
@@ -426,6 +442,7 @@ it("人間の登録 door は issue-backed decompose child を登録しない", a
       workspace: "tidepool",
     },
     () => NOW,
+    "webui",
   );
 
   expect(result).toEqual({
@@ -446,6 +463,7 @@ it("PR promotion の retry が失敗したら question を未決着のまま残�
       completion_criteria: "the change is available as a PR",
     },
     NOW,
+    ...HUMAN_WEBUI,
   );
   registerPrPromotionFailureQuestion(db, completedTask, "token expired", NOW);
   const question = onlyQuestion(db);
@@ -467,6 +485,7 @@ it("PR promotion の retry が失敗したら question を未決着のまま残�
       ["retry"],
       undefined,
       () => NOW,
+      "webui",
     );
   } catch (caught) {
     error = caught;
@@ -491,6 +510,7 @@ it("PR promotion の abandon を decision log に残す", async () => {
       completion_criteria: "the change is available as a PR",
     },
     NOW,
+    ...HUMAN_WEBUI,
   );
   registerPrPromotionFailureQuestion(db, completedTask, "token expired", NOW);
   const question = onlyQuestion(db);
@@ -501,6 +521,7 @@ it("PR promotion の abandon を decision log に残す", async () => {
     ["abandon promotion"],
     undefined,
     () => NOW,
+    "webui",
   );
   const decision = listEvents(db, question.id).find((event) => event.kind === "decision_logged");
 
@@ -525,10 +546,11 @@ it("merge 回答は question の workspace で live CI を確認してから実 
       workspace: "product",
     },
     NOW,
+    ...HUMAN_WEBUI,
   );
   // 本番では recordPrOpened が pr_number を書いてから question を立てる(#403 の回答時検証はこの行で着地タスクを引く)
   db.prepare("UPDATE tasks SET pr_number = 42 WHERE id = ?").run(work.id);
-  registerMergeQuestion(db, work, 42, "decide whether to merge", "merge", BOARD_WORKER_ID, NOW);
+  registerMergeQuestion(db, work, 42, "decide whether to merge", "merge", BOARD_WORKER_ID, NOW, "worker");
   const question = onlyQuestion(db);
   const github = new FakeGitHubClient();
   const afterCi = new Date(NOW.getTime() + 60_000);
@@ -558,6 +580,7 @@ it("merge 回答は question の workspace で live CI を確認してから実 
     ["merge"],
     undefined,
     () => currentNow,
+    "webui",
   );
 
   expect({
@@ -599,6 +622,7 @@ it("workspace quarantine の回答は tree が clean と確認できるまで拒
       ["repaired by hand"],
       undefined,
       () => NOW,
+      "webui",
     );
   } catch (caught) {
     error = caught;
@@ -622,6 +646,7 @@ it("agent quarantine の回答は registry 復帰か依存 task の解消まで�
       assignee: "specialist",
     },
     NOW,
+    ...HUMAN_WEBUI,
   );
   quarantineAgent(db, "specialist", new Error("agent disappeared"), NOW);
   const question = onlyQuestion(db);
@@ -639,6 +664,7 @@ it("agent quarantine の回答は registry 復帰か依存 task の解消まで�
       ["repaired by hand"],
       undefined,
       () => NOW,
+      "webui",
     );
   } catch (caught) {
     error = caught;
@@ -671,6 +697,7 @@ it("containment quarantine の回答は host 能力の再検査が通るまで�
       ["repaired by hand"],
       undefined,
       () => NOW,
+      "webui",
     );
   } catch (caught) {
     error = caught;
@@ -693,6 +720,7 @@ it("triage 中の回答は親の先頭復帰を staging し immediate poll を�
       completion_criteria: "the other work is done",
     },
     NOW,
+    ...HUMAN_WEBUI,
   );
   const parent = registerTask(
     db,
@@ -703,6 +731,7 @@ it("triage 中の回答は親の先頭復帰を staging し immediate poll を�
       completion_criteria: "the chosen direction is implemented",
     },
     NOW,
+    ...HUMAN_WEBUI,
   );
   const question = registerTask(
     db,
@@ -716,6 +745,7 @@ it("triage 中の回答は親の先頭復帰を staging し immediate poll を�
     },
     NOW,
     "worker",
+    "webui",
   );
   startTriage(db, new Date(NOW.getTime() - 60_000));
   let polls = 0;
@@ -726,6 +756,7 @@ it("triage 中の回答は親の先頭復帰を staging し immediate poll を�
     ["left"],
     undefined,
     () => NOW,
+    "webui",
   );
   const beforeCommit = listBoard(db).map((task) => task.title);
   commitTriage(db, NOW);
@@ -750,6 +781,7 @@ it("回答で親が unblock したら queue head の再評価を即時通知す�
       completion_criteria: "the chosen direction is implemented",
     },
     NOW,
+    ...HUMAN_WEBUI,
   );
   const question = registerTask(
     db,
@@ -763,6 +795,7 @@ it("回答で親が unblock したら queue head の再評価を即時通知す�
     },
     NOW,
     "worker",
+    "webui",
   );
   let polls = 0;
 
@@ -772,6 +805,7 @@ it("回答で親が unblock したら queue head の再評価を即時通知す�
     ["left"],
     undefined,
     () => NOW,
+    "webui",
   );
 
   expect({ status: answered.status, polls }).toEqual({ status: "done", polls: 1 });
@@ -782,7 +816,7 @@ it.each([
   { answer: "reject", comment: "not this child" },
 ])("承認 question への回答($answer)で held が外れた兄弟は todo に戻り、親が blocked のままでも即時 poll が撃たれる", async ({ answer, comment }) => {
   db = openDb(":memory:");
-  const parent = registerTask(db, { type: "work", title: "parent", purpose: "p", completion_criteria: "c" }, NOW);
+  const parent = registerTask(db, { type: "work", title: "parent", purpose: "p", completion_criteria: "c" }, NOW, ...HUMAN_WEBUI);
   const [sibling] = decomposeTask(
     db,
     parent,
@@ -795,11 +829,14 @@ it.each([
     },
     "tako",
     NOW,
+    undefined,
+    undefined,
+    "worker",
   );
   const before = presentTask(db, sibling!).status;
   let polls = 0;
 
-  await submitAnswer({ db, pollNow: () => polls++, landing: unusedLanding }, onlyQuestion(db), [answer], comment, () => NOW);
+  await submitAnswer({ db, pollNow: () => polls++, landing: unusedLanding }, onlyQuestion(db), [answer], comment, () => NOW, "webui");
 
   expect({ before, after: presentTask(db, sibling!).status, polls }).toEqual({ before: "held", after: "todo", polls: 1 });
 });
@@ -815,6 +852,7 @@ function registerHumanTask(db: Db): Task {
       assignee: HUMAN_WORKER_ID,
     },
     NOW,
+    ...HUMAN_WEBUI,
   );
 }
 
@@ -835,7 +873,7 @@ function completedEvents(db: Db, taskId: string) {
 it("人間の完了の扉は cancelled の task を拒否し、status も event も変えない", async () => {
   db = openDb(":memory:");
   const task = registerHumanTask(db);
-  cancelTaskDirectly(db, task, null, NOW, {});
+  cancelTaskDirectly(db, task, null, NOW, {}, "webui");
 
   const result = await completeHumanTask(db, task.id, "signed");
 
@@ -889,14 +927,14 @@ it.each<[string, (db: Db) => Task]>([
   [
     "未完の兄弟が残る子",
     (db) => {
-      const parent = registerTask(db, { type: "work", title: "parent", purpose: "p", completion_criteria: "c" }, NOW);
+      const parent = registerTask(db, { type: "work", title: "parent", purpose: "p", completion_criteria: "c" }, NOW, ...HUMAN_WEBUI);
       const [child] = humanDecomposeTask(db, parent, {
         reason: "split",
         children: [
           { title: "a", purpose: "p", completion_criteria: "c" },
           { title: "b", purpose: "p", completion_criteria: "c" },
         ],
-      }, NOW);
+      }, NOW, undefined, "webui");
       return child!;
     },
   ],
@@ -913,7 +951,7 @@ it.each<[string, (db: Db) => Task]>([
 it("人間の完了の扉と cancel の扉は拒否された呼び出しで poll を撃たない", async () => {
   db = openDb(":memory:");
   const task = registerHumanTask(db);
-  cancelTaskDirectly(db, task, null, NOW, {});
+  cancelTaskDirectly(db, task, null, NOW, {}, "webui");
   let polls = 0;
 
   const results = [

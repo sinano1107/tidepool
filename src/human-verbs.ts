@@ -307,7 +307,7 @@ export async function registerThroughHumanDoor(
   deps: RegisterThroughHumanDoorDeps,
   input: HumanRegisterInput,
   now: () => Date,
-  origin: EventOrigin = "webui",
+  origin: EventOrigin,
 ): Promise<RegisterThroughHumanDoorResult> {
   try {
     if (input.type !== "work" && input.type !== "review") {
@@ -848,7 +848,7 @@ export async function submitAnswer(
   answers: string[],
   comment: string | undefined,
   now: () => Date,
-  origin: EventOrigin = "webui",
+  origin: EventOrigin,
   openTriage = false,
   amendment?: unknown,
 ): Promise<BoardTask> {

@@ -66,7 +66,7 @@ it("人間面の全 GET エンドポイントは盤面 DB を1行も変異させ
   const task = await registerWork(t, "a task to view");
   expect(task.id).toBeTruthy();
   // case preview(ADR 0153)は decision entry の event id を引く
-  const decision = logDecision(t.db, getTask(t.db, task.id)!, "a decision to preview", "deckhand", t.clock.now());
+  const decision = logDecision(t.db, getTask(t.db, task.id)!, "a decision to preview", "deckhand", t.clock.now(), "worker");
 
   // harness の db は setup 専用。fixture を置いた後に共有 connection 自体を
   // read-only にし、どの GET からでも書き込みを試みれば 200 でなくす。
