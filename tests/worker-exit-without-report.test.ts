@@ -303,13 +303,11 @@ it("root は exit したが容器が空にならず回収 timeout に落ちた q
 it("watchdog に殺されて retry された run の question に、前の run の exit は載らない", async () => {
   t = await bootTidepool({ watchdog: WATCHDOG });
   const task = queueWork(t, "retried");
-  t.containers.hold(task.id);
   await t.clock.advance(HOUR);
   await t.clock.advance(90 * MIN); // 畳み込み停止
   t.worker.exitWith(task.id, TALKATIVE_EXIT);
   await settle();
-  await t.clock.advance(30 * MIN); // 強制回収
-  t.containers.fireEmpty(task.id);
+  await t.clock.advance(30 * MIN); // 強制回収 → 回収済み観測
   await settle();
   const [killed] = await watchdogKilled();
   await api(t.baseUrl, "POST", `/api/tasks/${killed.id}/answer`, { answers: ["retry"] });
@@ -318,7 +316,6 @@ it("watchdog に殺されて retry された run の question に、前の run �
   // 2本目の run は exit しないまま時間制限に達し、強制回収で空になる
   await t.clock.advance(90 * MIN);
   await t.clock.advance(30 * MIN);
-  t.containers.fireEmpty(task.id);
   await settle();
 
   const [question] = (await watchdogKilled()).filter((q: any) => q.id !== killed.id);
