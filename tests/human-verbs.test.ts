@@ -818,9 +818,9 @@ function registerHumanTask(db: Db): Task {
   );
 }
 
-function completeHumanTask(db: Db, taskId: string, outcome: string) {
+function completeHumanTask(db: Db, taskId: string, outcome: string, pollNow: () => void = () => {}) {
   return completeThroughHumanDoor(
-    { db, pollNow: () => {}, landing: unusedLanding },
+    { db, pollNow, landing: unusedLanding },
     taskId,
     { outcome },
     () => NOW,
@@ -879,22 +879,30 @@ it("人間の完了の扉は親の無い人間担当 task の完了でも即時 
   const task = registerHumanTask(db);
   let polls = 0;
 
-  await completeThroughHumanDoor({ db, pollNow: () => polls++, landing: unusedLanding }, task.id, { outcome: "signed" }, () => NOW, "webui");
+  await completeHumanTask(db, task.id, "signed", () => polls++);
 
   expect(polls).toBe(1);
 });
 
-it.each(["親の無い task", "未完の兄弟が残る子"])("人間の cancel の扉は親が unblock しない cancel(%s)でも即時 poll を1回撃つ", async (kind) => {
+it.each<[string, (db: Db) => Task]>([
+  ["親の無い task", registerHumanTask],
+  [
+    "未完の兄弟が残る子",
+    (db) => {
+      const parent = registerTask(db, { type: "work", title: "parent", purpose: "p", completion_criteria: "c" }, NOW);
+      const [child] = humanDecomposeTask(db, parent, {
+        reason: "split",
+        children: [
+          { title: "a", purpose: "p", completion_criteria: "c" },
+          { title: "b", purpose: "p", completion_criteria: "c" },
+        ],
+      }, NOW);
+      return child!;
+    },
+  ],
+])("人間の cancel の扉は親が unblock しない cancel(%s)でも即時 poll を1回撃つ", async (_kind, setup) => {
   db = openDb(":memory:");
-  const parent = registerTask(db, { type: "work", title: "parent", purpose: "p", completion_criteria: "c" }, NOW);
-  const [child] = humanDecomposeTask(db, parent, {
-    reason: "split",
-    children: [
-      { title: "a", purpose: "p", completion_criteria: "c" },
-      { title: "b", purpose: "p", completion_criteria: "c" },
-    ],
-  }, NOW);
-  const target = kind === "親の無い task" ? registerHumanTask(db) : child!;
+  const target = setup(db);
   let polls = 0;
 
   await cancelHumanTask(db, target.id, () => polls++);
@@ -909,7 +917,7 @@ it("人間の完了の扉と cancel の扉は拒否された呼び出しで poll
   let polls = 0;
 
   const results = [
-    await completeThroughHumanDoor({ db, pollNow: () => polls++, landing: unusedLanding }, task.id, { outcome: "x" }, () => NOW, "webui"),
+    await completeHumanTask(db, task.id, "x", () => polls++),
     await cancelHumanTask(db, task.id, () => polls++),
     await cancelHumanTask(db, "no-such-task", () => polls++),
   ];
