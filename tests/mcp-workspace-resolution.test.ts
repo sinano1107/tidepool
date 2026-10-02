@@ -8,7 +8,7 @@ import { openDb } from "../src/db.js";
 import { createLanding } from "../src/landing.js";
 import { createMcpRouter } from "../src/mcp.js";
 import { Slot } from "../src/slot.js";
-import { HUMAN_WORKER_ID, pickupTask, registerTask } from "../src/tasks.js";
+import { pickupTask, registerTask } from "../src/tasks.js";
 import { ensureTaskBranch, UnknownWorkspaceError, type WorkspaceConfig } from "../src/workspace.js";
 import { FakeClock } from "./fakes.js";
 import { commitWork, FULL_HANDOFF as fullHandoff, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeWorkspace } from "./harness.js";
@@ -45,11 +45,11 @@ describe("mcp の releasing verb が task.workspace を解決する", () => {
     app.use(
       "/mcp",
       createMcpRouter({
-        defaultAgentName: HUMAN_WORKER_ID,
+        defaultAgentName: "tako",
         db,
         slot,
         clock,
-        landing: createLanding({ defaultAgentName: HUMAN_WORKER_ID, db, clock, workspace: sandbox, resolveWorkspace, github: null }),
+        landing: createLanding({ defaultAgentName: "tako", db, clock, workspace: sandbox, resolveWorkspace, github: null }),
         workspace: sandbox,
         resolveWorkspace,
         pollNow: () => {},
