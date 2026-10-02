@@ -73,6 +73,16 @@ function pickedUpAt(db: Db, taskId: string): number {
   return row ? new Date(row.created_at).getTime() : 0;
 }
 
+/** exit が持っていた逐語 —— worker の最後の発話、CLI が報告した失敗の文、stderr 末尾 ——
+ *  を見出し付きでこの順に連結する。空の欄は節ごと出さない(ADR 0188 / 0189 / 0191)。 */
+function exitSections(exit: WorkerExit | undefined): string {
+  return (
+    (exit?.last_message ? `\n\nlast message from the worker:\n${exit.last_message}` : "") +
+    (exit?.reported_error ? `\n\nerror reported by the CLI:\n${exit.reported_error}` : "") +
+    (exit?.stderr_tail ? `\n\nstderr tail:\n${exit.stderr_tail}` : "")
+  );
+}
+
 /** The failure escalation: a question child in tidepool's own name (the agent
  *  could not self-report), with a standing "retry" option — answering it runs
  *  through the ordinary unblock-to-head path, same as any other escalation. */
@@ -308,6 +318,9 @@ export function startWatchdog(deps: {
   // 動く。遅れて届いた空の観測が、既に quarantine へ倒れた slot を黙って解放して
   // しまわないための門でもある(解放の門は確認 question ただ1つ)。
   const settled = new Set<string>();
+  // 梯子に入った後に観測した root の exit。梯子の底の question に添えるだけで、
+  // どの判定にも使わない(ADR 0191)
+  const exits = new Map<string, WorkerExit>();
   let pending: string | null = null;
 
   /** 容器が空になった観測。ここで初めて failure question と slot 解放へ進む ——
@@ -337,7 +350,10 @@ export function startWatchdog(deps: {
       `watchdog killed task: ${task.title}`,
       `the task hit its ${task.type} time limit (${limit}ms) and its container was ` +
         `reclaimed (graceful stop, then force reclaim after ${config.grace}ms grace). ` +
-        "No self-report is possible.",
+        "No self-report is possible." +
+        // root の exit は必ずここより先に観測されている: 容器の spawn は exit を adapter より
+        // 先に登録し、reclaimed の解決は microtask(#1297)
+        exitSections(exits.get(taskId)),
       now,
     );
     markTeardown(db, taskId, now);
@@ -357,7 +373,8 @@ export function startWatchdog(deps: {
       `watchdog killed task: ${task.title}`,
       `the task hit its ${task.type} time limit (${limit}ms) and its container was ` +
         `force-reclaimed, but the board could not observe the container going empty within ` +
-        `${reclaimTimeout}ms. No self-report is possible.`,
+        `${reclaimTimeout}ms. No self-report is possible.` +
+        exitSections(exits.get(task.id)),
       // tree rule はここでは走らない: slot が解放される瞬間 — 確認 question の
       // 受理 — まで待つ(ADR 0099 決定3 / CONTEXT.md「Slot-release tree rule」)
       undefined,
@@ -423,6 +440,7 @@ export function startWatchdog(deps: {
       stopSentAt.delete(taskId);
       forceSentAt.delete(taskId);
       settled.delete(taskId);
+      exits.delete(taskId);
     }
     return pickup;
   }
@@ -434,6 +452,7 @@ export function startWatchdog(deps: {
   function onWorkerExited(taskId: string, exit: WorkerExit): void {
     if (slot.currentTaskId !== taskId || slot.inTeardown) return;
     syncPickup(taskId);
+    exits.set(taskId, exit);
     if (stopSentAt.has(taskId)) return;
     const task = getTask(db, taskId);
     if (task?.status !== "in_progress") return;
@@ -445,9 +464,7 @@ export function startWatchdog(deps: {
       `worker exited without reporting: ${task.title}`,
       `the worker for task "${task.title}" (${task.id}) exited (${how}) without a final report — ` +
         "it did not complete, decompose, or escalate. No self-report is possible." +
-        (exit.last_message ? `\n\nlast message from the worker:\n${exit.last_message}` : "") +
-        (exit.reported_error ? `\n\nerror reported by the CLI:\n${exit.reported_error}` : "") +
-        (exit.stderr_tail ? `\n\nstderr tail:\n${exit.stderr_tail}` : ""),
+        exitSections(exit),
       now,
     );
     markTeardown(db, taskId, now);
