@@ -44,7 +44,7 @@ export const BOARD_WORKER_ID = "tidepool";
 
 /** Worker ids that are not agents (the human and the board). Add a new
  *  non-agent id here and every "is this an agent?" check follows. */
-export const NON_AGENT_WORKER_IDS: ReadonlySet<string> = new Set([HUMAN_WORKER_ID, BOARD_WORKER_ID]);
+const NON_AGENT_WORKER_IDS: ReadonlySet<string> = new Set([HUMAN_WORKER_ID, BOARD_WORKER_ID]);
 
 export const isNonAgentWorkerId = (id: string): boolean => NON_AGENT_WORKER_IDS.has(id);
 
