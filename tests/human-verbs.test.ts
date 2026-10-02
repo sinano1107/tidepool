@@ -5,6 +5,7 @@ import { quarantineContainment } from "../src/containment.js";
 import { type Db, openDb } from "../src/db.js";
 import { listEvents } from "../src/events.js";
 import {
+  cancelThroughHumanDoor,
   completeThroughHumanDoor,
   quarantineChecks,
   registerThroughHumanDoor,
@@ -17,6 +18,7 @@ import {
   decomposeTask,
   getTask,
   HUMAN_WORKER_ID,
+  humanDecomposeTask,
   listBoard,
   presentTask,
   registerMergeQuestion,
@@ -866,4 +868,51 @@ it("人間の完了の扉は todo の人間担当 task を完了できる", asyn
   const result = await completeHumanTask(db, task.id, "signed");
 
   expect({ ok: result.ok, status: getTask(db, task.id)?.status }).toEqual({ ok: true, status: "done" });
+});
+
+function cancelHumanTask(db: Db, taskId: string, pollNow: () => void) {
+  return cancelThroughHumanDoor({ db, pollNow, landing: unusedLanding }, taskId, undefined, () => NOW, "webui");
+}
+
+it("人間の完了の扉は親の無い人間担当 task の完了でも即時 poll を1回撃つ", async () => {
+  db = openDb(":memory:");
+  const task = registerHumanTask(db);
+  let polls = 0;
+
+  await completeThroughHumanDoor({ db, pollNow: () => polls++, landing: unusedLanding }, task.id, { outcome: "signed" }, () => NOW, "webui");
+
+  expect(polls).toBe(1);
+});
+
+it.each(["親の無い task", "未完の兄弟が残る子"])("人間の cancel の扉は親が unblock しない cancel(%s)でも即時 poll を1回撃つ", async (kind) => {
+  db = openDb(":memory:");
+  const parent = registerTask(db, { type: "work", title: "parent", purpose: "p", completion_criteria: "c" }, NOW);
+  const [child] = humanDecomposeTask(db, parent, {
+    reason: "split",
+    children: [
+      { title: "a", purpose: "p", completion_criteria: "c" },
+      { title: "b", purpose: "p", completion_criteria: "c" },
+    ],
+  }, NOW);
+  const target = kind === "親の無い task" ? registerHumanTask(db) : child!;
+  let polls = 0;
+
+  await cancelHumanTask(db, target.id, () => polls++);
+
+  expect(polls).toBe(1);
+});
+
+it("人間の完了の扉と cancel の扉は拒否された呼び出しで poll を撃たない", async () => {
+  db = openDb(":memory:");
+  const task = registerHumanTask(db);
+  cancelTaskDirectly(db, task, null, NOW, {});
+  let polls = 0;
+
+  const results = [
+    await completeThroughHumanDoor({ db, pollNow: () => polls++, landing: unusedLanding }, task.id, { outcome: "x" }, () => NOW, "webui"),
+    await cancelHumanTask(db, task.id, () => polls++),
+    await cancelHumanTask(db, "no-such-task", () => polls++),
+  ];
+
+  expect({ ok: results.map((r) => r.ok), polls }).toEqual({ ok: [false, false, false], polls: 0 });
 });
