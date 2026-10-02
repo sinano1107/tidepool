@@ -13,6 +13,7 @@ import {
   originRepo,
 } from "./github-auth.js";
 import { PROVIDER_VALUES, type Provider } from "./provider.js";
+import { BOARD_WORKER_ID, HUMAN_WORKER_ID } from "./tasks.js";
 
 /** An agent definition file: `agents/<name>.md` in the registry clone.
  *  Frontmatter carries the machine-stamped version and the authority profile
@@ -997,10 +998,14 @@ export class InvalidAgentNameError extends Error {
 /** Pure entry-gate validation for a new agent name (issue #70), the agent
  *  twin of assertValidWorkspaceName above: same charset (safe as the file
  *  name `agents/<name>.md`), same reserved names, uniqueness against the
- *  registry's agents. */
+ *  registry's agents. Also refuses the board's own worker ids (issue #1365):
+ *  an agent named like one would be taken for the board or the human. */
 export function assertValidAgentName(registry: Registry, name: string): void {
   if (RESERVED_REGISTRY_NAMES.has(name) || !REGISTRY_NAME_PATTERN.test(name)) {
     throw new InvalidAgentNameError(name, NAME_CHARSET_REASON);
+  }
+  if (name === HUMAN_WORKER_ID || name === BOARD_WORKER_ID) {
+    throw new InvalidAgentNameError(name, "this is a worker id reserved by the board");
   }
   // 組み込みのエントリは不在として扱う(ADR 0117 決定2): 気に入った名前で自作の
   // Auditor を持てるよう、作成の扉は同名を拒まない —— 拒む代わりに shadow を告げる

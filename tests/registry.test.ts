@@ -4,7 +4,10 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   assertValidAgentDefinition,
+  assertValidAgentName,
+  assertValidAuthorityProfileName,
   assertValidWorkspaceName,
+  InvalidAgentNameError,
   InvalidWorkspaceNameError,
   isBuiltInAgentName,
   loadRegistry,
@@ -53,6 +56,24 @@ describe("assertValidWorkspaceName", () => {
     const registry = makeMinimalRegistry([]);
     expect(() => assertValidWorkspaceName(registry, ".")).toThrow(InvalidWorkspaceNameError);
     expect(() => assertValidWorkspaceName(registry, "..")).toThrow(InvalidWorkspaceNameError);
+  });
+});
+
+describe("盤面の予約 worker id(human / tidepool)の名前の門", () => {
+  it("agent 名としては拒否し、盤面が予約した worker id だと理由に書く", () => {
+    const registry = makeMinimalRegistry([]);
+    for (const name of ["human", "tidepool"]) {
+      expect(() => assertValidAgentName(registry, name)).toThrow(InvalidAgentNameError);
+      expect(() => assertValidAgentName(registry, name)).toThrow(/reserved by the board/);
+    }
+  });
+
+  it("workspace 名と authority profile 名としては通す(予約は agent の worker id 衝突のためだけ)", () => {
+    const registry = makeMinimalRegistry([]);
+    for (const name of ["human", "tidepool"]) {
+      expect(() => assertValidWorkspaceName(registry, name)).not.toThrow();
+      expect(() => assertValidAuthorityProfileName(registry, name)).not.toThrow();
+    }
   });
 });
 
