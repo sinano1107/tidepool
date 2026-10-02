@@ -17,18 +17,17 @@ import {
   WorkspaceConfirmationRequiredError,
 } from "../src/workspace-create.js";
 import { FakeDraftClient } from "./fakes.js";
-import {
+import { 
   api,
   bootTidepool,
-  HOUR,
+  HOUR,HUMAN_WEBUI, 
   holdChildren,
   managementMcpClient,
   queueChild,
   queueWork,
   registerQuestion,
   registerWork,
-  type Tidepool,
-} from "./harness.js";
+  type Tidepool,} from "./harness.js";
 
 let t: Tidepool;
 afterEach(() => t?.stop());
@@ -606,6 +605,7 @@ it("管理MCP は issue-backed content を保存済みプレースホルダー�
     t.db,
     { type: "work", workspace: "tidepool", github_issue_number: 49 },
     t.clock.now(),
+    ...HUMAN_WEBUI,
   );
   const client = await managementMcpClient(t.baseUrl);
   try {
@@ -919,6 +919,7 @@ it("complete_task は human assignee の task だけを mcp origin で完了す�
     },
     t.clock.now(),
     "fake-worker",
+    "webui",
   );
   const client = await managementMcpClient(t.baseUrl);
   try {

@@ -247,6 +247,8 @@ function registerRcaReview(
       objection_event_ids: spec.pairs.flatMap((p) => p.objection_event_ids),
     },
     now,
+    HUMAN_WORKER_ID,
+    "webui",
   );
 }
 
@@ -334,6 +336,8 @@ function bundleObjections(
         objection_event_ids: pairs.flatMap((p) => p.objection_event_ids),
       },
       now,
+      HUMAN_WORKER_ID,
+      "webui",
     );
     if (rcaPairs.length === 0) continue;
     const byWorker = new Map<string, ObjectionPair[]>();
@@ -421,6 +425,8 @@ function applyScratchpad(
       db,
       { type: "work", title: line.line, purpose: "raised on the triage scratchpad", completion_criteria: "the line above is resolved" },
       now,
+      HUMAN_WORKER_ID,
+      "webui",
     );
   }
   return created;
@@ -526,7 +532,7 @@ function closeTriageSession(
   // apply in reverse staging order so the first-staged task ends up on top
   for (const taskId of stagedFrontInserts(db, open.id).reverse()) {
     const task = getTask(db, taskId);
-    if (task && task.status === "todo") moveTask(db, task, null, now);
+    if (task && task.status === "todo") moveTask(db, task, null, now, HUMAN_WORKER_ID, "webui");
   }
   db.prepare("UPDATE triage_sessions SET committed_at = ?, closed_by = ? WHERE id = ?").run(
     now.toISOString(),

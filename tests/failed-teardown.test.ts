@@ -24,7 +24,7 @@ import {
 } from "../src/teardown.js";
 import { prepareWorkspaceAtPickup, type WorkspaceConfig } from "../src/workspace.js";
 import { FakeClock, unusedLanding } from "./fakes.js";
-import { commitWork, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, makeWorkspace } from "./harness.js";
+import { commitWork, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeWorkspace } from "./harness.js";
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 
@@ -69,6 +69,7 @@ async function session(route: "complete" | "cap" | "watchdog" = "complete"): Pro
     db,
     { type: "work", title: "one", purpose: "why", completion_criteria: "done" },
     clock.now(),
+    ...HUMAN_WEBUI,
   );
   const picked = pickupTask(db, registered, "deckhand", clock.now())!;
   slot.occupy(picked.id);
@@ -76,7 +77,7 @@ async function session(route: "complete" | "cap" | "watchdog" = "complete"): Pro
   commitWork(ws.path, "deliverable.txt", "the real work\n");
   const task =
     route === "complete"
-      ? completeTask(db, picked, FULL_HANDOFF, "deckhand", clock.now())
+      ? completeTask(db, picked, FULL_HANDOFF, "deckhand", clock.now(), "worker")
       : picked;
   // watchdog の強制回収は failure question を**後始末より先に**立てる(escalate verb と
   // 同じ順)。決着した status がそのまま経路になる(ADR 0113 決定3)
@@ -138,6 +139,7 @@ const answer = (f: Fixture, question: Task, deps: TeardownDeps = f.deps) =>
     ["repaired by hand"],
     undefined,
     () => f.clock.now(),
+    "webui",
   );
 
 it("後始末が投げたら、落ちた後始末の question が1枚立つ —— 断言は3つだけで、再実行を予告する", async () => {

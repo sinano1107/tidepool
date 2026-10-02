@@ -1,16 +1,15 @@
 import { afterEach, expect, it } from "vitest";
 import { registerTask } from "../src/tasks.js";
 import { healthyUsageText, usagePanelText } from "./fakes.js";
-import {
+import { 
   api,
   bootTidepool,
   completeIntegrationReviews,
   FULL_HANDOFF as fullHandoff,
-  HOUR,
+  HOUR,HUMAN_WEBUI, 
   mcpClient,
   queueWork,
-  type Tidepool,
-} from "./harness.js";
+  type Tidepool,} from "./harness.js";
 
 let t: Tidepool;
 afterEach(async () => {
@@ -173,6 +172,7 @@ it("registry なしの盤面で fable 窓に当たる task しか無いキュー
     t.db,
     { type: "work", title: "fable work", purpose: "p", completion_criteria: "c", tier: "frontier" },
     t.clock.now(),
+    ...HUMAN_WEBUI,
   );
   t.worker.scriptUsage(fableOverPace(t.clock.now()));
 

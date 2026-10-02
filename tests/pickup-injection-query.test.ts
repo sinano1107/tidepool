@@ -5,7 +5,7 @@ import { injectionQueryText } from "../src/memory.js";
 import { BOARD_WORKER_ID, registerTask } from "../src/tasks.js";
 import { reportProviderUsage } from "../src/throttle.js";
 import { FakeTranslationClient, healthyOpenai } from "./fakes.js";
-import { api, bootTidepool, GIT_FIXTURE_TEST_TIMEOUT, HOUR, makeWorkspace, questions, queueWork, type Tidepool } from "./harness.js";
+import { api, bootTidepool, GIT_FIXTURE_TEST_TIMEOUT, HOUR, HUMAN_WEBUI, makeWorkspace, questions, queueWork, type Tidepool } from "./harness.js";
 
 /** ADR 0175: 人間が登録した task の関連 leaf は、pickup 時に訳した英語の view で引く。盤面境界で見えるのは
  *  「誰の task を訳し、何を start に渡したか」まで —— 記録に刻むことは adapter の seam が言う。 */
@@ -121,7 +121,7 @@ it("同じ task の2回目の session は cache に当たって翻訳を撃た�
 it("issue-backed の task は pickup で取った文面を訳す", { timeout: GIT_FIXTURE_TEST_TIMEOUT }, async () => {
   const translationClient = new FakeTranslationClient();
   t = await bootTidepool({ translationClient, workspace: await makeWorkspace("tidepool") });
-  registerTask(t.db, { type: "work", workspace: "tidepool", github_issue_number: 49 }, t.clock.now());
+  registerTask(t.db, { type: "work", workspace: "tidepool", github_issue_number: 49 }, t.clock.now(), ...HUMAN_WEBUI);
   t.github.scriptIssue(49, { title: "潮汐グラフのずれ", body: "タイムゾーンの補正が二重にかかる", comments: [] });
 
   await t.clock.advance(HOUR);

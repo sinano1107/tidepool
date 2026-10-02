@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { openDb } from "../src/db.js";
 import { listEvents } from "../src/events.js";
 import { getTask, pickupTask, registerTask } from "../src/tasks.js";
+import { HUMAN_WEBUI } from "./harness.js";
 
 describe("pickupTask は assignee を上書きしない(issue #36 / ADR 0012)", () => {
   it("事前割当された assignee(委譲先)は pickup 後もそのまま残る", () => {
@@ -16,6 +17,7 @@ describe("pickupTask は assignee を上書きしない(issue #36 / ADR 0012)", 
         assignee: "navigator",
       },
       new Date(0),
+      ...HUMAN_WEBUI,
     );
 
     const picked = pickupTask(db, task, "deckhand", new Date(1))!;
@@ -31,6 +33,7 @@ describe("pickupTask は assignee を上書きしない(issue #36 / ADR 0012)", 
       db,
       { type: "work", title: "unspecified assignee", purpose: "p", completion_criteria: "c" },
       new Date(0),
+      ...HUMAN_WEBUI,
     );
     expect(task.assignee).toBeNull();
 
@@ -46,6 +49,7 @@ describe("pickupTask は assignee を上書きしない(issue #36 / ADR 0012)", 
       db,
       { type: "work", title: "unspecified assignee", purpose: "p", completion_criteria: "c" },
       new Date(0),
+      ...HUMAN_WEBUI,
     );
 
     pickupTask(db, task, "deckhand", new Date(1));

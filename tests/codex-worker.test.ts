@@ -17,7 +17,7 @@ import { getTask, listBoard, registerTask, type Task } from "../src/tasks.js";
 import { TranscriptStore } from "../src/transcript-store.js";
 import type { WorkerExit } from "../src/worker.js";
 import { driveCodexPreflight, FakeClock, passthroughContainers, recordingSpawn } from "./fakes.js";
-import { bootTidepool, mcpClient, type Tidepool, tempDir, WORKER_SPAWNED } from "./harness.js";
+import { bootTidepool, HUMAN_WEBUI, mcpClient, type Tidepool, tempDir, WORKER_SPAWNED } from "./harness.js";
 import { makeRegistry } from "./registry-fixture.js";
 
 const CLI_VERSION = "codex-cli 0.147.0";
@@ -33,7 +33,7 @@ function task(db: ReturnType<typeof openDb>, title = "codex-task") {
     title,
     purpose: "keep the board correct",
     completion_criteria: "the focused tests pass",
-  }, new Date("2026-08-24T00:00:00.000Z"));
+  }, new Date("2026-08-24T00:00:00.000Z"), ...HUMAN_WEBUI);
 }
 
 /** meta-review task —— enabled_tools と盤面の tool 一覧は meta-review の主題でだけ形が変わる(ADR 0122 決定2)。 */
@@ -45,7 +45,7 @@ function metaReviewTask(db: ReturnType<typeof openDb>, subject: "memory" | "rout
     purpose: `keep the ${subject} correct`,
     completion_criteria: "it is reviewed",
     meta_review_subject: subject,
-  }, new Date("2026-08-24T00:00:00.000Z"));
+  }, new Date("2026-08-24T00:00:00.000Z"), ...HUMAN_WEBUI);
 }
 
 /** `-c <prefix><値>` を読む。値は toml() = JSON.stringify なので JSON.parse で戻す。 */
@@ -209,6 +209,7 @@ describe("CodexWorker (ADR 0098)", () => {
       f.db,
       { type: "review", assignee: "codex-agent", workspace: "work", title: "codex-review", purpose: "read the diff", completion_criteria: "findings are filed" },
       new Date("2026-08-24T00:00:00.000Z"),
+      ...HUMAN_WEBUI,
     ));
 
     const config = f.process.calls[0]!.args.filter((_, index, args) => args[index - 1] === "-c").join("\n");
@@ -222,6 +223,7 @@ describe("CodexWorker (ADR 0098)", () => {
       f.db,
       { type: "review", assignee: "codex-agent", workspace: "work", title: "codex-review", purpose: "read the diff", completion_criteria: "findings are filed" },
       new Date("2026-08-24T00:00:00.000Z"),
+      ...HUMAN_WEBUI,
     ));
 
     const filesystem = (args: string[], name: string) =>
@@ -240,6 +242,7 @@ describe("CodexWorker (ADR 0098)", () => {
       f.db,
       { type: "review", assignee: "codex-agent", workspace: "work", title: "codex-review", purpose: "read the diff", completion_criteria: "findings are filed" },
       new Date("2026-08-24T00:00:00.000Z"),
+      ...HUMAN_WEBUI,
     ));
 
     // preflight を --version・prompt-input・features list・sandbox 2本・hooks/list と通し、review 呼び出しまで進める
@@ -318,6 +321,7 @@ describe("CodexWorker (ADR 0098)", () => {
       f.db,
       { type: "review", assignee: "codex-agent", workspace: "work", title: "codex-layer-review", purpose: "read the diff", completion_criteria: "findings are filed" },
       new Date("2026-08-24T00:00:00.000Z"),
+      ...HUMAN_WEBUI,
     );
     for (const value of [work, review]) f.start(value);
 
@@ -379,6 +383,7 @@ describe("CodexWorker (ADR 0098)", () => {
       f.db,
       { type: "review", assignee: "codex-agent", workspace: "work", title: "codex-review", purpose: "keep the board correct", completion_criteria: "reviewed" },
       new Date("2026-08-24T00:00:00.000Z"),
+      ...HUMAN_WEBUI,
     );
     for (const [i, value] of [work, review].entries()) {
       f.start(value);
@@ -492,12 +497,14 @@ thread's history always fails.`));
       f.db,
       { type: "work", assignee: "deckhand", workspace: "work", title: "deckhand-work", purpose: "do it", completion_criteria: "done" },
       at,
+      ...HUMAN_WEBUI,
     );
     f.start(task(f.db, "codex-roster-work"));
     f.start(registerTask(
       f.db,
       { type: "review", assignee: "codex-agent", workspace: "work", parent_id: reviewed.id, title: "codex-roster-review", purpose: "read it", completion_criteria: "reviewed" },
       at,
+      ...HUMAN_WEBUI,
     ));
 
     const work = developerInstructions(f.process.calls[0]!.args);
@@ -557,6 +564,7 @@ thread's history always fails.`));
       f.db,
       { type: "review", assignee: "codex-agent", workspace: "work", parent_id: objected.id, title: "codex-rca", purpose: "why X", completion_criteria: "explained" },
       at,
+      ...HUMAN_WEBUI,
     );
     f.start(rca);
 

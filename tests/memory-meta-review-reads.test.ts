@@ -29,7 +29,7 @@ import {
 } from "../src/memory.js";
 import { EXTRACTOR_VERSION, entriesReadBefore, entriesSeenBefore, projectEpisode } from "../src/precedent.js";
 import { answerQuestion, DomainError, getTask, logDecision, type MemoryProposal, registerTask } from "../src/tasks.js";
-import { bundledObjection, WORKER_SPAWNED } from "./harness.js";
+import { bundledObjection, HUMAN_WEBUI, WORKER_SPAWNED } from "./harness.js";
 
 /** meta-review の読み口(issue #619 / ADR 0120 決定2)のドメイン層。verb への写像はサーバ境界
  *  (tests/mcp-memory-meta-review.test.ts)が言う。 */
@@ -37,8 +37,8 @@ const at = new Date("2026-09-15T00:00:00.000Z");
 
 function board() {
   const db = openDb(":memory:");
-  const task = registerTask(db, { type: "review", title: "t", purpose: "p", completion_criteria: "c", meta_review_subject: "memory" }, at);
-  const decision = logDecision(db, task, "kept the note short", "deckhand", at);
+  const task = registerTask(db, { type: "review", title: "t", purpose: "p", completion_criteria: "c", meta_review_subject: "memory" }, at, ...HUMAN_WEBUI);
+  const decision = logDecision(db, task, "kept the note short", "deckhand", at, "worker");
   const reader = { taskId: task.id, agent: "auditor" };
   const behavior = (fields: { title: string; scope?: string | null; addressee?: string | null; source?: number; path?: string }) =>
     createBehaviorCandidate(
@@ -152,7 +152,7 @@ function proposals() {
   const propose = (input: Parameters<typeof proposeMemoryChange>[2]) => proposeMemoryChange(db, task.id, input, "auditor", at).question_id;
   const answer = (questionId: string, option: "approve" | "reject", rest: { comment?: string; amendment?: MemoryAmendment } = {}) => {
     const question = getTask(db, questionId)!;
-    answerQuestion(db, question, [option], at, undefined, rest.comment, rest.amendment);
+    answerQuestion(db, question, [option], at, undefined, rest.comment, rest.amendment, "webui");
     const proposal = question.question_proposal as MemoryProposal;
     if (option === "approve") approveMemoryProposal(db, proposal, questionId, "webui", at, rest.amendment);
     else rejectMemoryProposal(db, proposal, questionId, "webui", at);
@@ -342,7 +342,7 @@ it("meta-review の枝の一覧は memory_pulled を残して返した id = 行�
 
 /** setup のみ: 1 marker = 1 episode の直挿しで異議つき decision を安く並べる(#356 の投影は使わない)。異議の event id と decision を返す。 */
 function objectedDecision({ db, task }: ReturnType<typeof board>, i: number) {
-  const decision = logDecision(db, task, `decision ${i}`, "deckhand", at);
+  const decision = logDecision(db, task, `decision ${i}`, "deckhand", at, "worker");
   db.prepare("INSERT INTO episodes (id, worker_spawned_event_id, extractor_version, task_id, agent, lines) VALUES (?, ?, ?, ?, 'deckhand', '{}')").run(i, i, EXTRACTOR_VERSION, task.id);
   db.prepare("INSERT INTO episode_markers (episode_id, seq, kind, position, event_id) VALUES (?, 0, 'decision', 0, ?)").run(i, decision);
   const objection = bundledObjection(db, task.id, decision, at, `objection ${i}`);
@@ -522,7 +522,7 @@ it("session の中で read_memory_entries が返した id は、その session �
   const spawned = appendEvent(db, { taskId: task.id, workerId: "auditor", origin: "board", payload: WORKER_SPAWNED, at });
   const id = knowledge("tidepool", "notes");
   const read = readMemoryEntries(db, reader, { ids: [id] }, at);
-  const decision = logDecision(db, task, "retired the stale note", "auditor", at);
+  const decision = logDecision(db, task, "retired the stale note", "auditor", at, "worker");
   const toolCall = (n: number, name: string, eventId: number) => [
     `{"type":"assistant","uuid":"a${n}","message":{"content":[{"type":"tool_use","id":"t${n}","name":"${name}","input":{}}]}}`,
     `{"type":"user","uuid":"r${n}","message":{"content":[{"type":"tool_result","tool_use_id":"t${n}","content":[{"type":"text","text":"{\\"event_id\\":${eventId}}"}]}]}}`,

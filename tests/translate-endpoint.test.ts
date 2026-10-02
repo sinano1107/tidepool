@@ -2,7 +2,7 @@ import { afterEach, expect, it } from "vitest";
 import { logDecision, registerTask } from "../src/tasks.js";
 import { reportProviderUsage } from "../src/throttle.js";
 import { FakeTranslationClient } from "./fakes.js";
-import { api, bootTidepool, registerQuestion, type Tidepool } from "./harness.js";
+import { api, bootTidepool, HUMAN_WEBUI, registerQuestion, type Tidepool } from "./harness.js";
 
 let t: Tidepool;
 afterEach(() => t?.stop());
@@ -23,13 +23,14 @@ it("decision log の一行を翻訳する(type: log_entry)", async () => {
   t = await bootTidepool({ translationClient });
 
   // 扉を通さずに置く —— 扉の登録は pickup の契機で、その pickup も view を訳す(ADR 0175)
-  const registered = registerTask(t.db, { type: "work", title: "t", purpose: "p", completion_criteria: "c" }, t.clock.now());
+  const registered = registerTask(t.db, { type: "work", title: "t", purpose: "p", completion_criteria: "c" }, t.clock.now(), ...HUMAN_WEBUI);
   const eventId = logDecision(
     t.db,
     registered,
     "decided to use approach A",
     "tako",
     t.clock.now(),
+    "worker",
   );
 
   const res = await api(t.baseUrl, "POST", "/api/translate", { type: "log_entry", event_id: eventId });

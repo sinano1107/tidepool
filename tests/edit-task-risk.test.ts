@@ -1,6 +1,6 @@
 import { afterEach, expect, it } from "vitest";
 import { getTask, humanDecomposeTask, registerTask, type Task } from "../src/tasks.js";
-import { api, bootTidepool, type Tidepool } from "./harness.js";
+import { api, bootTidepool, HUMAN_WEBUI, type Tidepool } from "./harness.js";
 
 let t: Tidepool;
 afterEach(() => t?.stop());
@@ -11,6 +11,7 @@ function registerRoot(t: Tidepool, title: string, riskFlag: boolean): Task {
     t.db,
     { type: "work", title, purpose: `purpose of ${title}`, completion_criteria: `criteria of ${title}`, risk_flag: riskFlag },
     t.clock.now(),
+    ...HUMAN_WEBUI,
   );
 }
 
@@ -20,6 +21,8 @@ function addChild(t: Tidepool, parentId: string, title: string, riskFlag: boolea
     getTask(t.db, parentId)!,
     { reason: `split ${title}`, children: [{ title, purpose: "p", completion_criteria: "c", risk_flag: riskFlag }] },
     t.clock.now(),
+    undefined,
+    "webui",
   );
   return child!;
 }

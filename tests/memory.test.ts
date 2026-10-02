@@ -29,14 +29,14 @@ import {
   restoreMemoryEntry,
 } from "../src/memory.js";
 import { countUnsettledAttachedChildren, DomainError, getTask, logDecision, type MemoryProposal, registerTask } from "../src/tasks.js";
-import { bundledObjection, QUIET_EXIT, WORKER_SPAWNED } from "./harness.js";
+import { bundledObjection, HUMAN_WEBUI, QUIET_EXIT, WORKER_SPAWNED } from "./harness.js";
 
 const at = new Date("2026-09-14T00:00:00.000Z");
 
 /** 盤面と、出所に使える event を1つ持つ task(setup だけが db を触る — ADR 0107 決定2)。 */
 function board() {
   const db = openDb(":memory:");
-  const task = registerTask(db, { type: "work", title: "t", purpose: "p", completion_criteria: "c" }, at);
+  const task = registerTask(db, { type: "work", title: "t", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI);
   return { db, task };
 }
 
@@ -79,7 +79,7 @@ it("Knowledge は書いた瞬間に approved で載り、エントリ全欄を�
 
 it("出所の種別は参照の型から導く —— decision_logged の event id は decision(推論)、それ以外の event は event(事実)", () => {
   const { db, task } = board();
-  const decision = logDecision(db, task, "kept the note short", "deckhand", at);
+  const decision = logDecision(db, task, "kept the note short", "deckhand", at, "worker");
   const registered = listEvents(db, task.id)[0]!.id;
   recordKnowledge(db, { ...knowledge, source: { event_id: decision } }, "worker", at);
   recordKnowledge(db, { ...knowledge, source: { event_id: registered } }, "worker", at);
@@ -196,7 +196,7 @@ it("author の活動 board(Board call の起草)は Knowledge と Definition で
 
 it("approved の Behavior を直接作れるのは人間名義だけ —— worker・RCA・Board call・meta-review の名義では domain error で何も残らない(ADR 0152)", () => {
   const { db, task } = board();
-  const decision = logDecision(db, task, "split the migration", "deckhand", at);
+  const decision = logDecision(db, task, "split the migration", "deckhand", at, "worker");
   for (const activity of ["worker_verb", "rca", "board", "meta_review"] as const) {
     expect(() =>
       recordBehavior(db, { ...knowledge, addressee: null, source_event_id: decision, author: { activity, name: "deckhand" } }, "worker", at),
@@ -227,7 +227,7 @@ it("watermark 指定の approved 集合は events の再生で、最新の water
 
 it("Behavior は宛先つきの candidate として作られ、承認されるまで approved 集合(表・再生とも)に入らない", () => {
   const { db, task } = board();
-  const decision = logDecision(db, task, "split the migration from the feature", "deckhand", at);
+  const decision = logDecision(db, task, "split the migration from the feature", "deckhand", at, "worker");
   const { entry_id, event_id } = createBehaviorCandidate(
     db,
     {
@@ -271,7 +271,7 @@ it("memory 系の event は決定 log の人間向け種別に入らない", () 
   // setup のみ: 版の古い店を模して rebuild を走らせる
   db.prepare("UPDATE memory_index_version SET preprocess_version = 'cjk-bigram-0'").run();
   ensureMemoryIndex(db, at);
-  logDecision(db, task, "a decision", "deckhand", at);
+  logDecision(db, task, "a decision", "deckhand", at, "worker");
   expect(listLog(db).map((e) => e.kind)).toEqual(["decision_logged"]);
 });
 
@@ -440,7 +440,7 @@ it("人間が書く Knowledge に出所を渡すと domain error —— 出所�
 
 it("人間が書く Behavior は任意で decision_logged か worker_spawned の event を出所に添えられ(decision でも種別は event)、他の種別の event は domain error —— 添えなければ出所は自身の作成 event(ADR 0153 決定3)", () => {
   const { db, task } = board();
-  const decision = logDecision(db, task, "split the migration", "deckhand", at);
+  const decision = logDecision(db, task, "split the migration", "deckhand", at, "worker");
   // setup のみ: worker session の開始 event
   const spawned = appendEvent(db, {
     taskId: task.id,
@@ -493,8 +493,8 @@ it("人間の Behavior は supersedes で approved の Behavior を書き直し�
 
 it("人間の Behavior の出所は、渡せばそれ、渡さなければ supersedes の出所が1つに揃うとき(1件の編集も、RCA 起草の帰責 event も)それを継ぎ、揃わない・自身の作成 event なら後継自身の作成 event(ADR 0162 決定3)", () => {
   const { db, task } = board();
-  const decision = logDecision(db, task, "split the migration", "deckhand", at);
-  const other = logDecision(db, task, "keep the schema first", "deckhand", at);
+  const decision = logDecision(db, task, "split the migration", "deckhand", at, "worker");
+  const other = logDecision(db, task, "keep the schema first", "deckhand", at, "worker");
   const registered = listEvents(db, task.id)[0]!.id;
   const drafted = createBehaviorCandidate(db, { ...knowledge, addressee: null, source: { event_id: registered }, author: { activity: "rca", name: "auditor" } }, "board", at).entry_id;
   approveMemoryProposal(db, { kind: "memory", op: "approve", candidate_id: drafted, replaces: [] }, "question-1", "webui", at);
@@ -541,7 +541,7 @@ const whole = { anchor: "whole", polarity: "imitate", text: "Keep the whole shap
 
 it("人間が書く Exemplar は書いた時点で approved・書き手 human・出所は事例の event(decision でも種別は event)で、text は注釈の英語 text の連結、原文は注釈ごとに表示言語つきで持つ —— 作成 event が残り watermark 再生と rebuild でも同じ(ADR 0153 決定1)", () => {
   const { db, task } = board();
-  const decision = logDecision(db, task, "split the migration into two commits", "deckhand", at);
+  const decision = logDecision(db, task, "split the migration into two commits", "deckhand", at, "worker");
   const id = exemplar(db, decision, [
     { anchor: { field: "decision", quote: "two commits" }, polarity: "imitate", text: "Split schema changes from data changes.", original: "スキーマとデータの変更を分ける" },
     { anchor: "whole", polarity: "avoid", text: "Do not mix in unrelated refactors." },
@@ -594,7 +594,7 @@ it.each([
 ] as const)("Exemplar の%sは domain error で何も書かない(ADR 0153 決定3)", (_, source, annotations) => {
   const { db, task } = board();
   const registered = listEvents(db, task.id)[0]!.id;
-  const decision = logDecision(db, task, "split the migration into two commits", "deckhand", at);
+  const decision = logDecision(db, task, "split the migration into two commits", "deckhand", at, "worker");
   const ref = source === "registered" ? registered : source === "decision" ? decision : source;
   expect(() => exemplar(db, ref, [...annotations])).toThrow(DomainError);
   expect(approvedMemoryEntries(db)).toEqual([]);
@@ -610,8 +610,8 @@ it("worker_spawned を出所に持つ Exemplar の decision の quote はその 
     at,
     payload: WORKER_SPAWNED,
   });
-  logDecision(db, task, "read the schema first", "deckhand", at);
-  logDecision(db, task, "split the migration into two commits", "deckhand", at);
+  logDecision(db, task, "read the schema first", "deckhand", at, "worker");
+  logDecision(db, task, "split the migration into two commits", "deckhand", at, "worker");
 
   expect(() => exemplar(db, spawned, [{ anchor: { field: "steering", quote: "split" }, polarity: "avoid", text: "x" }])).toThrow(DomainError);
   const id = exemplar(db, spawned, [{ anchor: { field: "decision", quote: "two commits" }, polarity: "imitate", text: "Split it." }]);
@@ -621,7 +621,7 @@ it("worker_spawned を出所に持つ Exemplar の decision の quote はその 
 /** 種別の線(ADR 0161 決定1)の各種別のエントリ。Behavior は candidate、Exemplar は人間の approved。 */
 function kinds() {
   const { db, task } = board();
-  const decision = logDecision(db, task, "split the migration into two commits", "deckhand", at);
+  const decision = logDecision(db, task, "split the migration into two commits", "deckhand", at, "worker");
   const make = {
     knowledge: () => record(db, "fact"),
     definition: () => defineMemoryBranch(db, definition, "worker", at).entry_id,
@@ -664,7 +664,7 @@ it("superseded は Behavior と Exemplar を互いに置き換え、path_moved �
 
 it("決定ログの各エントリは、それを含む worker session の worker_spawned の id を持ち、session の窓の外なら null(#953 の picker が「この session」に使う)", () => {
   const { db, task } = board();
-  const before = logDecision(db, task, "before any session", "human", at);
+  const before = logDecision(db, task, "before any session", "human", at, "worker");
   // setup のみ: worker session の開始と終了の event
   const spawned = appendEvent(db, {
     taskId: task.id,
@@ -673,7 +673,7 @@ it("決定ログの各エントリは、それを含む worker session の worke
     at,
     payload: WORKER_SPAWNED,
   });
-  const inside = logDecision(db, task, "inside the session", "deckhand", at);
+  const inside = logDecision(db, task, "inside the session", "deckhand", at, "worker");
   appendEvent(db, {
     taskId: task.id,
     workerId: "deckhand",
@@ -681,7 +681,7 @@ it("決定ログの各エントリは、それを含む worker session の worke
     at,
     payload: { kind: "worker_exited", ...QUIET_EXIT, worker_spawned_event_id: spawned, usage: null },
   });
-  const after = logDecision(db, task, "after the session exited", "human", at);
+  const after = logDecision(db, task, "after the session exited", "human", at, "worker");
 
   expect(listLog(db).map((e) => [e.id, e.session_event_id])).toEqual([
     [before, null],
@@ -692,7 +692,7 @@ it("決定ログの各エントリは、それを含む worker session の worke
 
 it("決定ログの各エントリは最新の帰責の entries を持つ —— memory なら名指された id 列、他の cause と帰責の無いエントリは null(ADR 0166 決定6)", () => {
   const { db, task } = board();
-  const [followed, overturned, plain] = ["followed the note", "followed then overturned", "no objection"].map((line) => logDecision(db, task, line, "deckhand", at));
+  const [followed, overturned, plain] = ["followed the note", "followed then overturned", "no objection"].map((line) => logDecision(db, task, line, "deckhand", at, "worker"));
   // setup のみ: 束ね済みの異議群を1つ足して帰責する(呼ぶたびに後の異議群 —— 最後の異議群の判定が有効、ADR 0170)
   const attribute = (entry_id: number, cause: "memory" | "capability", entries: number[] | null) =>
     appendEvent(db, { taskId: task.id, workerId: "tidepool", origin: "board", at, payload: { kind: "objection_attributed", entry_id, objection_event_ids: [bundledObjection(db, task.id, entry_id, at)], cause, evidence: "e", entries, round: "initial" } });
@@ -829,13 +829,14 @@ it("提案を運ぶ question は着地の門で付帯子として数え、提案
     parent_id: task.id,
     question: [{ title: "q", options: ["approve", "reject"], recommendation: "approve" }],
   };
-  registerTask(db, question, at);
+  registerTask(db, question, at, ...HUMAN_WEBUI);
   expect(countUnsettledAttachedChildren(db, task.id)).toBe(0);
 
   registerTask(
     db,
     { ...question, proposal: { kind: "memory", op: "approve", candidate_id: 1, replaces: [] } },
     at,
+    ...HUMAN_WEBUI,
   );
   expect(countUnsettledAttachedChildren(db, task.id)).toBe(1);
 });
@@ -880,7 +881,7 @@ it("consolidate op の承認は candidate と approved Behavior の混ざった 
 
 it("scope null の統合が承認されると別々の workspace の注入に届き、置換された workspace の entry は注入されなくなる", () => {
   const { db } = board();
-  const task = registerTask(db, { type: "work", title: "fix tide chart", purpose: "chart drifts", completion_criteria: "tests pass" }, at);
+  const task = registerTask(db, { type: "work", title: "fix tide chart", purpose: "chart drifts", completion_criteria: "tests pass" }, at, ...HUMAN_WEBUI);
   const local = candidate(db, "tide chart local rule", "tidepool");
   const localVersion = approve(db, local);
   const injected = (scope: string) => buildMemoryInjection(db, task, scope, "deckhand").entries.map((e) => e.id);
@@ -917,7 +918,7 @@ it("出所の揃わない統合が承認された Behavior(出所 = meta-review 
     at,
   ).entry_id;
   const text = { scope: null, path: "habits", title: "One concern per commit", text: "Keep each commit to one concern.", addressee: null };
-  const based_on_decision = logDecision(db, task, "the split rules say the same thing", "auditor", at);
+  const based_on_decision = logDecision(db, task, "the split rules say the same thing", "auditor", at, "worker");
   const { question_id } = proposeMemoryChange(db, task.id, { op: "consolidate", text, replaces: [candidate(db, "Keep migrations apart"), other], based_on_decision, rationale: "r" }, "auditor", at);
   const proposal = getTask(db, question_id)!.question_proposal as Parameters<typeof approveMemoryProposal>[1] & { candidate_id: number };
   approveMemoryProposal(db, proposal, question_id, "webui", at);
@@ -1007,7 +1008,7 @@ it("修正値つき approve が生む event(新エントリの作成と無効化
 
 it("RCA が起草した candidate(出所は帰責 event)を修正値つきで approve すると、後継は candidate の出所を継ぎ read_memory の case が引ける(ADR 0152 決定4 / ADR 0153 決定3)", () => {
   const { db, task } = board();
-  const decision = logDecision(db, task, "split the migration", "deckhand", at);
+  const decision = logDecision(db, task, "split the migration", "deckhand", at, "worker");
   const attributed = appendEvent(db, {
     taskId: task.id,
     workerId: "tidepool",
@@ -1038,7 +1039,7 @@ it("出所が自身の作成 event の candidate を修正値つきで approve �
  *  consolidate の kind exemplar で統合した Exemplar candidate への approve。 */
 function exemplarProposal() {
   const { db, task } = board();
-  const decision = logDecision(db, task, "split the migration into two commits", "deckhand", at);
+  const decision = logDecision(db, task, "split the migration into two commits", "deckhand", at, "worker");
   // setup のみ: RCA の帰責 event(起草の出所)
   const attributed = appendEvent(db, {
     taskId: task.id,
@@ -1064,7 +1065,7 @@ function exemplarProposal() {
         annotations: [{ anchor: { field: "decision", quote: "two commits" }, polarity: "imitate", text: "Split schema changes from data changes." }],
       },
       replaces,
-      based_on_decision: logDecision(db, task, "too particular for a rule", "auditor", at),
+      based_on_decision: logDecision(db, task, "too particular for a rule", "auditor", at, "worker"),
       rationale: "r",
     },
     "auditor",
@@ -1159,7 +1160,7 @@ it("case preview は帰責 event も描く —— RCA 起草の出所を継い�
  *  自身の宣言の人間の Behavior、question で承認された RCA 起草の Behavior、candidate、事例を引く Exemplar。 */
 function movable() {
   const { db, task } = board();
-  const decision = logDecision(db, task, "split the migration into two commits", "deckhand", at);
+  const decision = logDecision(db, task, "split the migration into two commits", "deckhand", at, "worker");
   const drafted = candidate(db, "Keep migrations apart");
   approve(db, drafted);
   record(db, "worker fact");
@@ -1241,7 +1242,7 @@ it("Definition を生きた Definition のある scope へ移すと domain error
 
 it("枝ごとの移動は移動元の scope(完全一致)で path が P か P/… の未無効化エントリを4種別とも to_scope の to_path + 残りへ写し、旧 id → 複製の id を返す —— 無効化済み・隣の枝・別の scope は残る", () => {
   const { db, task } = board();
-  const decision = logDecision(db, task, "split the migration into two commits", "deckhand", at);
+  const decision = logDecision(db, task, "split the migration into two commits", "deckhand", at, "worker");
   const fact = (path: string, scope: string | null = "tidepool") => recordKnowledge(db, { ...knowledge, scope, path, title: path, source: { commit: "0a46a46" } }, "worker", at).entry_id;
   const branch = defineMemoryBranch(db, definition, "worker", at).entry_id;
   const tests = fact("build/tests");
@@ -1596,7 +1597,7 @@ it("watermark 再生と rebuild は復元した複製(4種別、approved と can
  *  Behavior と Exemplar の組は互いを混ぜる(種別の線、ADR 0161 決定1)。 */
 function folds() {
   const { db, task } = board();
-  const decision = logDecision(db, task, "split the migration into two commits", "deckhand", at);
+  const decision = logDecision(db, task, "split the migration into two commits", "deckhand", at, "worker");
   const fact = (title: string, supersedes?: number[]) => recordKnowledge(db, { ...humanEntryInput(db, { ...humanKnowledge, title }), supersedes }, "webui", at).entry_id;
   const branch = (workspace: string | null, supersedes?: number[]) =>
     defineMemoryBranch(db, { ...humanEntryInput(db, { workspace, path: "build", text: `How ${workspace ?? "the board"} builds.` }), supersedes }, "webui", at).entry_id;
@@ -1645,8 +1646,8 @@ it("supersedes: [] は domain error で、エントリも event も足さない(
 
 it("人間の Exemplar は source_event_id を省くと supersedes の揃った出所(RCA 起草の帰責 event も)を事例に継ぎ、注釈はその case で検査する —— 揃わない・supersedes も無いなら domain error で何も書かない(#1041)", () => {
   const { db, task } = board();
-  const decision = logDecision(db, task, "split the migration into two commits", "deckhand", at);
-  const other = logDecision(db, task, "read the schema first", "deckhand", at);
+  const decision = logDecision(db, task, "split the migration into two commits", "deckhand", at, "worker");
+  const other = logDecision(db, task, "read the schema first", "deckhand", at, "worker");
   // setup のみ: RCA の帰責 event(起草の出所)
   const attributed = appendEvent(db, {
     taskId: task.id,
@@ -1675,7 +1676,7 @@ it("人間の Exemplar は source_event_id を省くと supersedes の揃った�
 
 it("既にある後継への人間の畳みは approved も candidate も replaces に取り、各要素を後継つき superseded(畳んだ者の印)にして新しい entry を作らない —— 種別の線の外・candidate の後継・空の replaces は domain error で何も変わらない(ADR 0162 決定1・2)", () => {
   const { db, task } = board();
-  const decision = logDecision(db, task, "split the migration into two commits", "deckhand", at);
+  const decision = logDecision(db, task, "split the migration into two commits", "deckhand", at, "worker");
   const successor = exemplar(db, decision, [whole]);
   const rule = recordBehavior(db, { ...humanEntryInput(db, humanKnowledge), addressee: null }, "webui", at).entry_id;
   const [pending, other] = [candidate(db, "Pending"), candidate(db, "Other")];
@@ -1863,7 +1864,7 @@ const placingWholeBoard: Array<[string, (db: ReturnType<typeof openDb>, task: Re
     "提案が起草する盤面全体の candidate",
     (db, task) => {
       const replaces = [candidate(db, "Keep migrations apart", "tidepool")];
-      const based_on_decision = logDecision(db, task, "one rule", "auditor", at);
+      const based_on_decision = logDecision(db, task, "one rule", "auditor", at, "worker");
       const text = { scope: null, path: "build/x", title: "One rule", text: "One rule.", addressee: null };
       return () => proposeMemoryChange(db, task.id, { op: "consolidate", text, replaces, based_on_decision, rationale: "r" }, "auditor", at);
     },
@@ -1872,7 +1873,7 @@ const placingWholeBoard: Array<[string, (db: ReturnType<typeof openDb>, task: Re
     "meta-review の fold_memory の新しい本文",
     (db, task) => {
       const replaces = [workspaceKnowledge(db, "notes")];
-      const based_on_decision = logDecision(db, task, "same fact", "auditor", at);
+      const based_on_decision = logDecision(db, task, "same fact", "auditor", at, "worker");
       return () => foldMemory(db, task.id, { scope: null, path: "build/x", title: "Folded", text: "Folded.", replaces, based_on_decision, author: metaReview }, "worker", at);
     },
   ],

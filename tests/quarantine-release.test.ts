@@ -7,6 +7,7 @@ import { openQuarantineQuestion, QUARANTINES, type QuarantineChecks, quarantineS
 import { DomainError, getTask, nextSlotTask, registerTask } from "../src/tasks.js";
 import { quarantineWorkspace, workspaceNeedsHuman } from "../src/workspace.js";
 import { unusedLanding } from "./fakes.js";
+import { HUMAN_WEBUI } from "./harness.js";
 
 /** 解除の門と受理後は表から引く(ADR 0137 決定4・5)。表を総なめするので、1行足せば
  *  このテストもその行について述べる。 */
@@ -25,6 +26,7 @@ function quarantined(kind: (typeof QUARANTINES)[number]["kind"], value: string |
       [question.question_items![0]!.options[0]!],
       undefined,
       now,
+      "webui",
     );
   return { db, question, pollNow, answer };
 }
@@ -77,11 +79,12 @@ describe("question が回答済みなら、その資源のタスクは pickup �
       ["repaired by hand"],
       undefined,
       now,
+      "webui",
     );
 
   it("workspace", async () => {
     const db = openDb(":memory:");
-    const task = registerTask(db, { ...work, workspace: "prod" }, now());
+    const task = registerTask(db, { ...work, workspace: "prod" }, now(), ...HUMAN_WEBUI);
     quarantineWorkspace(db, "prod", "tree rule failed", now());
     expect(workspaceNeedsHuman(db, "prod")).toBe(true);
     expect(nextSlotTask(db, "sandbox", undefined, undefined, quarantineStops(db))).toBeUndefined();
@@ -94,7 +97,7 @@ describe("question が回答済みなら、その資源のタスクは pickup �
 
   it("agent 名", async () => {
     const db = openDb(":memory:");
-    const task = registerTask(db, { ...work, assignee: "navigator" }, now());
+    const task = registerTask(db, { ...work, assignee: "navigator" }, now(), ...HUMAN_WEBUI);
     quarantineAgent(db, "navigator", "unknown agent", now());
     expect(agentNeedsHuman(db, "navigator")).toBe(true);
     expect(nextSlotTask(db, undefined, "deckhand", undefined, quarantineStops(db))).toBeUndefined();

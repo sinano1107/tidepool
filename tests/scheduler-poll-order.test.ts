@@ -6,6 +6,7 @@ import { implicitTaskExecutionCandidates } from "../src/server-options.js";
 import { Slot } from "../src/slot.js";
 import { registerTask } from "../src/tasks.js";
 import { FakeClock, fakeContainers, noRetrospectiveCalls, ScriptedWorker } from "./fakes.js";
+import { HUMAN_WEBUI } from "./harness.js";
 
 /** ADR 0119 決定5: poll 中に届いた契機は捨てる(合体しない)。それで取りこぼさないのは、poll が
  *  最初の await より前に slot を読み、候補の読み取りを await の後に置いているからである ——
@@ -34,6 +35,7 @@ it("poll が封じ込め検査の await に居る間に登録されたタスク�
     db,
     { type: "work", title: "arrived mid-poll", purpose: "p", completion_criteria: "c" },
     clock.now(),
+    ...HUMAN_WEBUI,
   );
   scheduler.pollNow();
   release({ available: true });

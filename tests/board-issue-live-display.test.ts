@@ -1,7 +1,7 @@
 import { afterEach, expect, it } from "vitest";
 import { registerTask } from "../src/tasks.js";
 import { UnknownWorkspaceError } from "../src/workspace.js";
-import { api, bootTidepool, type Tidepool } from "./harness.js";
+import { api, bootTidepool, HUMAN_WEBUI, type Tidepool } from "./harness.js";
 
 let t: Tidepool;
 afterEach(() => t?.stop());
@@ -14,11 +14,13 @@ it("GET /api/tasks はissue参照タスクの内容をGitHubからlive展開し 
     db,
     { type: "work", workspace: "tidepool", github_issue_number: 49 },
     t.clock.now(),
+    ...HUMAN_WEBUI,
   );
   const ordinary = registerTask(
     db,
     { type: "work", title: "ordinary todo", purpose: "p", completion_criteria: "c" },
     t.clock.now(),
+    ...HUMAN_WEBUI,
   );
 
   t.github.scriptIssue(49, {
@@ -49,6 +51,7 @@ it("issue内容は短TTL(30秒)のプロセス内キャッシュから返り、T
     db,
     { type: "work", workspace: "tidepool", github_issue_number: 49 },
     t.clock.now(),
+    ...HUMAN_WEBUI,
   );
 
   t.github.scriptIssue(49, { title: "ログイン画面のバグ", body: "b", comments: [] });
@@ -76,6 +79,7 @@ it("TTL切れ後の再取得に失敗したら、最後に成功した内容を 
     db,
     { type: "work", workspace: "tidepool", github_issue_number: 49 },
     t.clock.now(),
+    ...HUMAN_WEBUI,
   );
 
   t.github.scriptIssue(49, { title: "ログイン画面のバグ", body: "再現手順: ...", comments: [] });
@@ -104,6 +108,7 @@ it("一度も取得に成功していなければ '#N' プレースホルダー�
     db,
     { type: "work", workspace: "tidepool", github_issue_number: 49 },
     t.clock.now(),
+    ...HUMAN_WEBUI,
   );
 
   t.github.scriptIssueFailure(new Error("GitHub is down"));
@@ -132,6 +137,7 @@ it("workspace が解決できない(registry drift)issue参照タスクは unava
     db,
     { type: "work", workspace: "ghost", github_issue_number: 49 },
     t.clock.now(),
+    ...HUMAN_WEBUI,
   );
 
   t.github.scriptIssue(49, { title: "ログイン画面のバグ", body: "b", comments: [] });
@@ -156,6 +162,7 @@ it("GET /api/queue と GET /api/tasks/:id もissue参照タスクをlive展開�
     db,
     { type: "work", workspace: "tidepool", github_issue_number: 49 },
     t.clock.now(),
+    ...HUMAN_WEBUI,
   );
 
   t.github.scriptIssue(49, { title: "ログイン画面のバグ", body: "再現手順: ...", comments: [] });
@@ -179,6 +186,7 @@ it("同一issueへの並行リクエストはフェッチを共有し、GitHub�
     db,
     { type: "work", workspace: "tidepool", github_issue_number: 49 },
     t.clock.now(),
+    ...HUMAN_WEBUI,
   );
 
   t.github.scriptIssue(49, { title: "ログイン画面のバグ", body: "b", comments: [] });

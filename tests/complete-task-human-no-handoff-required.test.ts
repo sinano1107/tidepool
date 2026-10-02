@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { openDb } from "../src/db.js";
 import { completeTask, getTask, registerTask } from "../src/tasks.js";
+import { HUMAN_WEBUI } from "./harness.js";
 
 describe("completeTask は human 宛て work タスクのハンドオフ必須チェックを免除する(issue #13)", () => {
   it("human 宛てタスクはハンドオフなしで complete でき、他 assignee はこれまで通り必須のまま", () => {
@@ -15,6 +16,7 @@ describe("completeTask は human 宛て work タスクのハンドオフ必須�
         assignee: "human",
       },
       new Date(0),
+      ...HUMAN_WEBUI,
     );
     const agent = registerTask(
       db,
@@ -26,13 +28,14 @@ describe("completeTask は human 宛て work タスクのハンドオフ必須�
         assignee: "reef-crab",
       },
       new Date(1),
+      ...HUMAN_WEBUI,
     );
 
-    const done = completeTask(db, human, undefined, "human", new Date(2));
+    const done = completeTask(db, human, undefined, "human", new Date(2), "worker");
     expect(done.status).toBe("done");
     expect(getTask(db, human.id)?.status).toBe("done");
 
-    expect(() => completeTask(db, agent, undefined, "reef-crab", new Date(3))).toThrow(
+    expect(() => completeTask(db, agent, undefined, "reef-crab", new Date(3), "worker")).toThrow(
       /handoff doc/,
     );
   });

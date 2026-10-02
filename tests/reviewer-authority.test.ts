@@ -3,14 +3,14 @@ import { openDb } from "../src/db.js";
 import { appendEvent, type TaskScopedPayload } from "../src/events.js";
 import type { AuthorityProfile } from "../src/registry.js";
 import { type RegisterTaskInput, registerTask, reviewedTaskExecutor } from "../src/tasks.js";
-import { api, bootTidepool, FULL_HANDOFF, HOUR, mcpClient, type Tidepool } from "./harness.js";
+import { api, bootTidepool, FULL_HANDOFF, HOUR, HUMAN_WEBUI, mcpClient, type Tidepool } from "./harness.js";
 
 let t: Tidepool;
 afterEach(() => t?.stop());
 
 /** 人間の扉を通さない登録。扉の登録は pickup の契機(ADR 0119 決定2)なので、レビュー対象を
  *  slot に入れずに review だけを先頭へ動かすテストはこちらで行を置く。 */
-const seed = (input: RegisterTaskInput) => registerTask(t.db, input, t.clock.now());
+const seed = (input: RegisterTaskInput) => registerTask(t.db, input, t.clock.now(), ...HUMAN_WEBUI);
 
 const PERMISSIVE_AUTHORITY: AuthorityProfile = {
   name: "permissive",
@@ -371,8 +371,8 @@ it("review タスクの分解子を、レビュー対象タスクの assignee �
 it("assignee の無い被レビュータスクの Executor は、最後の pickup ではなく最新の task_completed の worker になる(ADR 0054 / issue #1137)", () => {
   const db = openDb(":memory:");
   const at = new Date("2026-01-01T00:00:00Z");
-  const work = registerTask(db, { type: "work", title: "w", purpose: "p", completion_criteria: "c" }, at);
-  const review = registerTask(db, { type: "review", title: "r", purpose: "p", completion_criteria: "c", parent_id: work.id }, at);
+  const work = registerTask(db, { type: "work", title: "w", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI);
+  const review = registerTask(db, { type: "review", title: "r", purpose: "p", completion_criteria: "c", parent_id: work.id }, at, ...HUMAN_WEBUI);
   const write = (workerId: string, payload: TaskScopedPayload) =>
     appendEvent(db, { taskId: work.id, workerId, origin: "board", at, payload });
   write("worker-a", { kind: "task_picked_up" });

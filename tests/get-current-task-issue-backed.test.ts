@@ -1,6 +1,6 @@
 import { afterEach, expect, it } from "vitest";
 import { registerTask } from "../src/tasks.js";
-import { bootTidepool, HOUR, mcpClient, type Tidepool } from "./harness.js";
+import { bootTidepool, HOUR, HUMAN_WEBUI, mcpClient, type Tidepool } from "./harness.js";
 
 let t: Tidepool;
 afterEach(() => t?.stop());
@@ -13,6 +13,7 @@ it("get_current_task はissue参照タスクの場合、GitHubのissueから解�
     db,
     { type: "work", workspace: "tidepool", github_issue_number: 49 },
     t.clock.now(),
+    ...HUMAN_WEBUI,
   );
 
   t.github.scriptIssue(49, {

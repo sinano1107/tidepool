@@ -20,7 +20,7 @@ import {
   rejectMemoryProposal,
 } from "../src/memory.js";
 import { DomainError, getTask, logDecision, type MemoryProposal, registerTask } from "../src/tasks.js";
-import { bundledObjection } from "./harness.js";
+import { bundledObjection, HUMAN_WEBUI } from "./harness.js";
 
 /** meta-review の直接適用(issue #619 / ADR 0122 決定1)のドメイン層。verb への写像はサーバ境界
  *  (tests/mcp-memory-meta-review.test.ts)が言う。 */
@@ -29,8 +29,8 @@ const metaReview = { activity: "meta_review" as const, name: "auditor" };
 
 function board() {
   const db = openDb(":memory:");
-  const task = registerTask(db, { type: "review", title: "t", purpose: "p", completion_criteria: "c", meta_review_subject: "memory" }, at);
-  const decision = logDecision(db, task, "these two notes say the same thing", "auditor", at);
+  const task = registerTask(db, { type: "review", title: "t", purpose: "p", completion_criteria: "c", meta_review_subject: "memory" }, at, ...HUMAN_WEBUI);
+  const decision = logDecision(db, task, "these two notes say the same thing", "auditor", at, "worker");
   const knowledge = (title: string, scope: string | null = "tidepool") =>
     recordKnowledge(
       db,
@@ -47,7 +47,7 @@ const knowledgeEntry = (db: ReturnType<typeof openDb>, scope: string | null = nu
 const definitionEntry = (db: ReturnType<typeof openDb>) =>
   defineMemoryByMetaReview(db, { scope: "tidepool", path: "build", text: "How it builds.", author: metaReview }, "worker", at).entry_id;
 const decisionOfAnotherTask = (db: ReturnType<typeof openDb>) =>
-  logDecision(db, registerTask(db, { type: "work", title: "o", purpose: "p", completion_criteria: "c" }, at), "someone else's reasoning", "deckhand", at);
+  logDecision(db, registerTask(db, { type: "work", title: "o", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI), "someone else's reasoning", "deckhand", at, "worker");
 
 it("fold_memory は新しい Knowledge を decision(推論)を出所に作り、replaces をその後継つき superseded にする", () => {
   const { db, task, decision, knowledge } = board();
@@ -422,7 +422,7 @@ it("invalidate の提案は approved の Exemplar も target に取り、見出�
 function drafts() {
   const { db, task, decision } = board();
   const attributed = (line: string) => {
-    const entry_id = logDecision(db, task, line, "deckhand", at);
+    const entry_id = logDecision(db, task, line, "deckhand", at, "worker");
     return appendEvent(db, {
       taskId: task.id,
       workerId: "tidepool",

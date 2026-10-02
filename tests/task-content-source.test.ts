@@ -2,6 +2,7 @@ import { expect, it } from "vitest";
 import { openDb } from "../src/db.js";
 import { contentSourceFor, registerTask, TaskContentSource } from "../src/tasks.js";
 import { FakeGitHubClient } from "./fakes.js";
+import { HUMAN_WEBUI } from "./harness.js";
 
 it("TaskContentSource.stored は保存済みの内容をそのまま解決する(通常タスクの即時パス)", async () => {
   const content = { title: "t", purpose: "p", completion_criteria: "c" };
@@ -32,6 +33,7 @@ it("contentSourceFor は通常タスクなら保存済み内容を即座に解�
     db,
     { type: "work", title: "t", purpose: "p", completion_criteria: "c" },
     new Date(0),
+    ...HUMAN_WEBUI,
   );
   let resolved = false;
 
@@ -54,6 +56,7 @@ it("contentSourceFor は issue参照タスクなら GitHub から解決した内
     db,
     { type: "work", workspace: "tidepool", github_issue_number: 49 },
     new Date(0),
+    ...HUMAN_WEBUI,
   );
   const github = new FakeGitHubClient();
   github.scriptIssue(49, {
@@ -77,6 +80,7 @@ it("contentSourceFor は issue参照タスクでも workspace が解決できな
     db,
     { type: "work", workspace: "tidepool", github_issue_number: 49 },
     new Date(0),
+    ...HUMAN_WEBUI,
   );
 
   const source = contentSourceFor(task, new FakeGitHubClient(), () => undefined);

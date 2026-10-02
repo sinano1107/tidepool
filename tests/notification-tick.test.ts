@@ -5,6 +5,7 @@ import { createNotificationTick, type PushClient, type PushPayload, type PushSub
 import { setBoardTimezone } from "../src/quiet-hours.js";
 import { registerTask } from "../src/tasks.js";
 import { FakePushClient } from "./fakes.js";
+import { HUMAN_WEBUI } from "./harness.js";
 
 /** A PushClient whose send() doesn't resolve until release() is called —
  *  for driving a genuine overlap between two tick.run() calls (the
@@ -35,6 +36,7 @@ function registerQuestion(db: ReturnType<typeof openDb>, title: string, at: Date
       question: [{ title, options: ["yes", "no"], recommendation: "yes" }],
     },
     at,
+    ...HUMAN_WEBUI,
   );
 }
 
@@ -169,6 +171,7 @@ describe("createNotificationTick(issue #14): quiet hours 明けの1通まとめ�
       },
       MIDNIGHT,
       "planner",
+      "webui",
     );
 
     await tick.run(MIDNIGHT); // still quiet hours: nothing sent

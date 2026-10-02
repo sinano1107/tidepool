@@ -19,7 +19,7 @@ import {
   translateQuestion,
 } from "../src/translation.js";
 import { FakeTranslationClient } from "./fakes.js";
-import { tempDir } from "./harness.js";
+import { HUMAN_WEBUI, tempDir } from "./harness.js";
 
 let db: Db | undefined;
 afterEach(() => db?.close());
@@ -38,8 +38,9 @@ it("decision_logged イベントの line を解決して翻訳する", async () 
     db,
     { type: "work", title: "t", purpose: "p", completion_criteria: "c" },
     NOW,
+    ...HUMAN_WEBUI,
   );
-  const eventId = logDecision(db, task, "decided to use approach A", "tako", NOW);
+  const eventId = logDecision(db, task, "decided to use approach A", "tako", NOW, "worker");
 
   const client = new FakeTranslationClient();
   client.scriptTranslation("アプローチAを採用することにした");
@@ -61,6 +62,7 @@ it("task_completed イベントの result を解決して翻訳する", async ()
     { type: "work", title: "t", purpose: "p", completion_criteria: "c" },
     NOW,
     "human",
+    "webui",
   );
   const completed = completeTask(
     db,
@@ -75,6 +77,7 @@ it("task_completed イベントの result を解決して翻訳する", async ()
     },
     "human",
     NOW,
+    "worker",
   );
   const event = listEvents(db, completed.id).find((entry) => entry.kind === "task_completed");
   expect(event).toBeDefined();
@@ -93,9 +96,9 @@ it("task_completed イベントの result を解決して翻訳する", async ()
 
 it("premise_breached イベントの宣言の理由を解決して翻訳する", async () => {
   const db = await freshDb();
-  const parent = registerTask(db, { type: "work", title: "t", purpose: "p", completion_criteria: "c" }, NOW);
-  const [child] = decomposeTask(db, parent, { reason: "split", children: [{ title: "a", purpose: "p", completion_criteria: "c" }] }, "tako", NOW);
-  declarePremiseBreach(db, child!, "module M is broken", "tako", NOW);
+  const parent = registerTask(db, { type: "work", title: "t", purpose: "p", completion_criteria: "c" }, NOW, ...HUMAN_WEBUI);
+  const [child] = decomposeTask(db, parent, { reason: "split", children: [{ title: "a", purpose: "p", completion_criteria: "c" }] }, "tako", NOW, undefined, undefined, "worker");
+  declarePremiseBreach(db, child!, "module M is broken", "tako", NOW, "worker");
   const event = listEvents(db, child!.id).find((entry) => entry.kind === "premise_breached");
 
   const client = new FakeTranslationClient();
@@ -122,11 +125,12 @@ it("splitHandoffMarkdown は completeTask の handoff の見出し+本文を復�
     db,
     { type: "work", title: "t", purpose: "p", completion_criteria: "c", assignee: "human" },
     NOW,
+    ...HUMAN_WEBUI,
   );
   const completed = completeTask(db, task, {
     outcome: "sensor reports moisture every 5 minutes",
     deliverables: "src/sensor.ts",
-  }, "human", NOW);
+  }, "human", NOW, "worker");
 
   expect(splitHandoffMarkdown(completed.handoff_doc!)).toEqual([
     { heading: "Outcome vs completion criteria", body: "sensor reports moisture every 5 minutes" },
@@ -140,11 +144,12 @@ it("splitHandoffMarkdown は completeTask の本文中の `## ` 行(コードブ
     db,
     { type: "work", title: "t", purpose: "p", completion_criteria: "c", assignee: "human" },
     NOW,
+    ...HUMAN_WEBUI,
   );
   const completed = completeTask(db, task, {
     outcome: "see the note below",
     deliverables: "```sh\n## this is a shell comment, not a heading\necho hi\n```",
-  }, "human", NOW);
+  }, "human", NOW, "worker");
 
   expect(splitHandoffMarkdown(completed.handoff_doc!)).toEqual([
     { heading: "Outcome vs completion criteria", body: "see the note below" },
@@ -161,6 +166,7 @@ it("handoff doc の見出し行はモデルに渡さず英語のまま保持し�
     db,
     { type: "work", title: "t", purpose: "p", completion_criteria: "c", assignee: "human" },
     NOW,
+    ...HUMAN_WEBUI,
   );
   const completed = completeTask(
     db,
@@ -171,6 +177,7 @@ it("handoff doc の見出し行はモデルに渡さず英語のまま保持し�
     },
     "human",
     NOW,
+    "worker",
   );
 
   const client = new FakeTranslationClient();
@@ -207,6 +214,7 @@ it("handoff_doc を持たないタスクは TranslationTargetError を投げる"
       question: [{ title: "q", options: ["a", "b"], recommendation: "a" }],
     },
     NOW,
+    ...HUMAN_WEBUI,
   );
   const client = new FakeTranslationClient();
 
@@ -235,6 +243,7 @@ it("question の purpose と各 item の title/detail を翻訳する(選択肢�
       ],
     },
     NOW,
+    ...HUMAN_WEBUI,
   );
 
   const client = new FakeTranslationClient();
@@ -270,6 +279,7 @@ it("work タスク(question ではない)の翻訳は TranslationTargetError を
     db,
     { type: "work", title: "t", purpose: "p", completion_criteria: "c" },
     NOW,
+    ...HUMAN_WEBUI,
   );
   const client = new FakeTranslationClient();
 
@@ -281,7 +291,7 @@ it("work タスク(question ではない)の翻訳は TranslationTargetError を
 it("記憶のエントリは title と text の両方を翻訳する(ADR 0015 五度目の精密化)", async () => {
   const db = await freshDb();
   // setup のみ: agent 由来の出所 event_id: 1 を実在させる
-  registerTask(db, { type: "work", title: "t", purpose: "p", completion_criteria: "c" }, NOW);
+  registerTask(db, { type: "work", title: "t", purpose: "p", completion_criteria: "c" }, NOW, ...HUMAN_WEBUI);
   const { entry_id } = recordKnowledge(
     db,
     { scope: null, path: "build", title: "Use Node 22", text: "Run tests on Node 22.", source: { event_id: 1 }, author: { activity: "worker_verb", name: "deckhand" } },

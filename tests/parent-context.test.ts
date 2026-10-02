@@ -1,6 +1,6 @@
 import { afterEach, expect, it } from "vitest";
 import { registerTask } from "../src/tasks.js";
-import { api, bootTidepool, HOUR, mcpClient, type Tidepool } from "./harness.js";
+import { api, bootTidepool, HOUR, HUMAN_WEBUI, mcpClient, type Tidepool } from "./harness.js";
 
 let t: Tidepool;
 afterEach(() => t?.stop());
@@ -17,6 +17,7 @@ it("a blocked parent is skipped and get_current_task exposes the parent context"
       completion_criteria: "widget renders on the dashboard",
     },
     t.clock.now(),
+    ...HUMAN_WEBUI,
   );
   const child = (
     await api(t.baseUrl, "POST", "/api/tasks", {

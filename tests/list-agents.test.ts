@@ -1,7 +1,7 @@
 import { afterEach, expect, it } from "vitest";
 import type { AuthorityProfile } from "../src/registry.js";
 import { registerTask } from "../src/tasks.js";
-import { api, bootTidepool, HOUR, mcpClient, queueWork, type Tidepool } from "./harness.js";
+import { api, bootTidepool, HOUR, HUMAN_WEBUI, mcpClient, queueWork, type Tidepool } from "./harness.js";
 
 let t: Tidepool;
 afterEach(() => t?.stop());
@@ -98,6 +98,7 @@ it("list_agents は review タスクでは、reviewer の assignable_to が空�
       assignee: "auditor",
     },
     t.clock.now(),
+    ...HUMAN_WEBUI,
   );
   await api(t.baseUrl, "POST", `/api/tasks/${review.id}/move`, { after: null });
   await t.clock.advance(HOUR); // review picked up

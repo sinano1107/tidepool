@@ -1285,7 +1285,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     // parent, a held row, a quarantined workspace/agent, a row whose every
     // entry is excluded) must not swallow the human's first ↑.
     const headBefore = pickableHead()?.id;
-    const moved = moveTask(db, task, after, clock.now());
+    const moved = moveTask(db, task, after, clock.now(), HUMAN_WORKER_ID, "webui");
     // "run now" is specifically a todo already at the pickable head, moved to
     // the head again — an explicit immediate-poll trigger (issue #82
     // follow-up). Promoting a *different* task to the head is pure

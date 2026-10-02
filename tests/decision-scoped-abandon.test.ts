@@ -9,7 +9,7 @@ import {
   presentTask,
   registerTask,
 } from "../src/tasks.js";
-import { failureQuestion } from "./harness.js";
+import { failureQuestion, HUMAN_WEBUI } from "./harness.js";
 
 const at = new Date("2026-08-05T00:00:00.000Z");
 
@@ -25,6 +25,7 @@ function work(db: ReturnType<typeof openDb>, title: string, parent_id?: string, 
       ...(based_on_decision !== undefined && { based_on_decision }),
     },
     at,
+    ...HUMAN_WEBUI,
   );
 }
 
@@ -36,7 +37,7 @@ it("RCA self の abandon は独立した auditor と修理タスクを巻き込�
   const repair = work(db, "repair", target.id);
   const question = failureQuestion(db, selfReview.id, at);
 
-  answerQuestion(db, question, ["abandon"], at);
+  answerQuestion(db, question, ["abandon"], at, undefined, undefined, undefined, "webui");
 
   expect(getTask(db, selfReview.id)?.status).toBe("cancelled");
   expect(getTask(db, auditorReview.id)?.status).toBe("todo");
@@ -86,7 +87,7 @@ it("判断を持たない異議由来タスクの abandon は既存の分解判�
   const auditorReview = work(db, "RCA auditor", parent.id);
   const question = failureQuestion(db, selfReview.id, at);
 
-  answerQuestion(db, question, ["abandon"], at);
+  answerQuestion(db, question, ["abandon"], at, undefined, undefined, undefined, "webui");
 
   expect(getTask(db, selfReview.id)?.status).toBe("cancelled");
   expect(getTask(db, a.id)?.status).toBe("todo");
@@ -117,8 +118,9 @@ it("承認経由で実体化した子と未回答の承認 question は同じ分
       },
     },
     at,
+    ...HUMAN_WEBUI,
   );
-  answerQuestion(db, approvedQuestion, ["approve"], at);
+  answerQuestion(db, approvedQuestion, ["approve"], at, undefined, undefined, undefined, "webui");
   const approvedChild = listChildren(db, parent.id).find((task) => task.title === "B")!;
   const unansweredQuestion = registerTask(
     db,
@@ -138,10 +140,11 @@ it("承認経由で実体化した子と未回答の承認 question は同じ分
       },
     },
     at,
+    ...HUMAN_WEBUI,
   );
   const failure = failureQuestion(db, failed.id, at);
 
-  answerQuestion(db, failure, ["abandon"], at);
+  answerQuestion(db, failure, ["abandon"], at, undefined, undefined, undefined, "webui");
 
   expect(getTask(db, approvedChild.id)?.based_on_decision).toBe(48);
   expect(getTask(db, approvedChild.id)?.status).toBe("cancelled");

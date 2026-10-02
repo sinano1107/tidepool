@@ -9,19 +9,18 @@ import type { Provider } from "../src/registry.js";
 import type { WorkerFactory } from "../src/server.js";
 import { moveTask } from "../src/tasks.js";
 import { FakeContainerRuntime, healthyOpenai, healthyUsageText, recordingSpawn } from "./fakes.js";
-import {
+import { 
   api,
   bootTidepool,
   FULL_HANDOFF,
   git,
-  HOUR,
+  HOUR,HUMAN_WEBUI, 
   mcpClient,
   QUIET_EXIT,
   questions,
   queueWork,
   type Tidepool,
-  tempDir,
-} from "./harness.js";
+  tempDir,} from "./harness.js";
 import { makeRegistry } from "./registry-fixture.js";
 
 /** ADR 0145(issue #805)。最終 verb なしに root が exit した session は、exit の瞬間に
@@ -366,7 +365,7 @@ it("retry の回答で task は queue 先頭へ戻り、abandon の回答で can
   await settle();
   expect(started()).toEqual([retried.id, abandoned.id, busy.id]);
   // retry の回答より前に先頭へ置いた task —— 先頭復帰なら retried がこれを追い越す
-  const later = moveTask(t.db, queueWork(t, "later"), null, t.clock.now());
+  const later = moveTask(t.db, queueWork(t, "later"), null, t.clock.now(), ...HUMAN_WEBUI);
 
   const byTitle = Object.fromEntries((await exitedWithoutReport()).map((q: any) => [q.title, q]));
   await api(t.baseUrl, "POST", `/api/tasks/${byTitle["worker exited without reporting: abandoned"].id}/answer`, { answers: ["abandon"] });

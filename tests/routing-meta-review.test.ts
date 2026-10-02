@@ -2,7 +2,7 @@ import { afterEach, expect, it } from "vitest";
 import { appendEvent } from "../src/events.js";
 import { createBehaviorCandidate, proposeMemoryChange, WORKER_MEMORY_VERBS } from "../src/memory.js";
 import { BOARD_WORKER_ID, registerTask } from "../src/tasks.js";
-import { api, bootTidepool, completeViaMcp, HOUR, mcpClient, registerWork, type Tidepool, WORKER_SPAWNED } from "./harness.js";
+import { api, bootTidepool, completeViaMcp, HOUR, HUMAN_WEBUI, mcpClient, registerWork, type Tidepool, WORKER_SPAWNED } from "./harness.js";
 
 /** 主題 routing の周期 meta-review(issue #917 / ADR 0150 決定7・ADR 0120 決定2)のサーバ境界: 周期登録、
  *  接続ごとの verb の可視性、読み口の写像。読み物の集計はドメイン層(tests/routing-meta-review-reads.test.ts)が言う。 */
@@ -44,7 +44,7 @@ it("前回登録が無く routing の材料があれば、poll が盤面名義�
 
 it("worker_spawned だけでは routing の材料にならない", async () => {
   t = await bootTidepool();
-  const { id } = registerTask(t.db, { type: "work", title: "source", purpose: "p", completion_criteria: "c" }, t.clock.now());
+  const { id } = registerTask(t.db, { type: "work", title: "source", purpose: "p", completion_criteria: "c" }, t.clock.now(), ...HUMAN_WEBUI);
   t.db.prepare("UPDATE tasks SET status = 'cancelled' WHERE id = ?").run(id);
   appendEvent(t.db, {
     taskId: id,

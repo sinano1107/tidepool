@@ -1,6 +1,6 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { registerTask } from "../src/tasks.js";
-import { api, bootTidepool, GIT_FIXTURE_TEST_TIMEOUT, HOUR, makeWorkspace, queueWork, type Tidepool } from "./harness.js";
+import { api, bootTidepool, GIT_FIXTURE_TEST_TIMEOUT, HOUR, HUMAN_WEBUI, makeWorkspace, queueWork, type Tidepool } from "./harness.js";
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 
@@ -16,7 +16,7 @@ it.each([
   ["直接 cancel した", (id: string) => api(t.baseUrl, "POST", `/api/tasks/${id}/cancel`, {})],
 ])("issue 本文の取得中に %s task は走らず、slot は次の task に空いたままになる(issue #972)", async (_, mutate) => {
   t = await bootTidepool({ workspace: await makeWorkspace("tidepool") });
-  const head = registerTask(t.db, { type: "work", workspace: "tidepool", github_issue_number: 49 }, t.clock.now());
+  const head = registerTask(t.db, { type: "work", workspace: "tidepool", github_issue_number: 49 }, t.clock.now(), ...HUMAN_WEBUI);
   t.github.scriptIssue(49, { title: "t", body: "b", comments: [] });
   let release!: () => void;
   t.github.scriptIssueGate(new Promise((r) => (release = r)));

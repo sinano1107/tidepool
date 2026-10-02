@@ -44,6 +44,7 @@ import { implicitTaskExecutionCandidates } from "../src/server-options.js";
 import {
   BOARD_WORKER_ID,
   getTask,
+  HUMAN_WORKER_ID,
   humanDecomposeTask,
   type RegisterTaskInput,
   registerTask,
@@ -85,6 +86,9 @@ export const TEST_TOKEN = generateToken();
 /** `startServer` を直に呼ぶテスト(harness を通さないもの)が渡す credential。
  *  ハッシュの組み立てを各所で書き直さない。 */
 export const TEST_CREDENTIAL = { tokenHash: () => hashToken(TEST_TOKEN) };
+
+/** 既定値を外した登録者・経路(#1361)を、今までの既定どおり human / webui で渡す。 */
+export const HUMAN_WEBUI = [HUMAN_WORKER_ID, "webui"] as const;
 
 export interface Tidepool {
   baseUrl: string;
@@ -676,6 +680,7 @@ export function queueWork(
       ...(assignee !== undefined && { assignee }),
     },
     t.clock.now(),
+    ...HUMAN_WEBUI,
   );
 }
 
@@ -743,6 +748,7 @@ export function failureQuestion(db: Db, parentId: string, at: Date): Task {
       cancel_option: "abandon",
     },
     at,
+    ...HUMAN_WEBUI,
   );
 }
 
@@ -759,6 +765,8 @@ export function queueChild(t: Tidepool, title: string, parentId: string): Task {
       children: [{ title, purpose: `purpose of ${title}`, completion_criteria: `criteria of ${title}` }],
     },
     t.clock.now(),
+    undefined,
+    "webui",
   );
   return child!;
 }
@@ -785,7 +793,7 @@ export function holdChildren(t: Tidepool, parentId: string): Task {
 export function registerQuestion(t: Tidepool, input: Omit<RegisterTaskInput, "type">): Task {
   const db = openDb(join(t.dir, "board.sqlite"));
   try {
-    return registerTask(db, { ...input, type: "question" }, t.clock.now(), BOARD_WORKER_ID);
+    return registerTask(db, { ...input, type: "question" }, t.clock.now(), BOARD_WORKER_ID, "webui");
   } finally {
     db.close();
   }
@@ -815,6 +823,7 @@ export function attachChild(
         ...(assignee !== undefined && { assignee }),
       },
       t.clock.now(),
+      ...HUMAN_WEBUI,
     );
   } finally {
     db.close();

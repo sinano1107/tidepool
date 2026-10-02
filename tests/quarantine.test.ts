@@ -11,6 +11,7 @@ import {
 } from "../src/quarantine.js";
 import { pickupExclusions } from "../src/scheduler.js";
 import { cancelTaskDirectly, listBoard, listQueue, nextSlotTask, registerTask } from "../src/tasks.js";
+import { HUMAN_WEBUI } from "./harness.js";
 
 /** Quarantine の種類の表(ADR 0137 決定1・2)。行を総なめにするので、1行足せば
  *  このテストも足した行について同じことを述べる —— 足すのは下の見本の値だけである。 */
@@ -93,6 +94,7 @@ describe.each(QUARANTINES.filter((row) => row.scope === "workspace" || row.scope
         ...(row.scope === "workspace" ? { workspace: value } : { assignee: "deckhand" }),
       },
       NOW,
+      ...HUMAN_WEBUI,
     );
     registerQuarantine(db, row.kind, value, "cause", NOW);
     const stops = quarantineStops(db, {
@@ -105,7 +107,7 @@ describe.each(QUARANTINES.filter((row) => row.scope === "workspace" || row.scope
   it("開いた確認が subtree のタスクの使う資源に立っている間、直接 cancel は拒まれる", () => {
     const { db, task, stops } = openOverTask();
 
-    expect(() => cancelTaskDirectly(db, task, null, NOW, { quarantined: stops })).toThrow(
+    expect(() => cancelTaskDirectly(db, task, null, NOW, { quarantined: stops }, "webui")).toThrow(
       /open quarantine confirmation/,
     );
   });

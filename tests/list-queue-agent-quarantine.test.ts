@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { openDb } from "../src/db.js";
 import { quarantineStops } from "../src/quarantine.js";
 import { listBoard, listQueue, registerTask } from "../src/tasks.js";
-import { quarantineTestAgent } from "./harness.js";
+import { HUMAN_WEBUI, quarantineTestAgent } from "./harness.js";
 
 describe("listQueue は quarantine 済み agent 宛ての todo を skipped と表示する(ADR 0012 / issue #36)", () => {
   it("quarantine 済み agent 宛ての todo はキュービューで skipped、他 agent 宛てはそのまま todo", () => {
@@ -18,6 +18,7 @@ describe("listQueue は quarantine 済み agent 宛ての todo を skipped と�
         assignee: "navigator",
       },
       new Date(0),
+      ...HUMAN_WEBUI,
     );
     const runnable = registerTask(
       db,
@@ -29,6 +30,7 @@ describe("listQueue は quarantine 済み agent 宛ての todo を skipped と�
         assignee: "deckhand",
       },
       new Date(1),
+      ...HUMAN_WEBUI,
     );
 
     const queue = listQueue(db, undefined, "deckhand", undefined, quarantineStops(db));
@@ -47,6 +49,7 @@ describe("listQueue は quarantine 済み agent 宛ての todo を skipped と�
       db,
       { type: "work", title: "no agent tracking", purpose: "p", completion_criteria: "c" },
       new Date(0),
+      ...HUMAN_WEBUI,
     );
 
     expect(listQueue(db, undefined, undefined, undefined, quarantineStops(db)).find((t) => t.id === task.id)?.status).toBe("todo");
@@ -59,11 +62,13 @@ describe("listQueue は quarantine 済み agent 宛ての todo を skipped と�
       db,
       { type: "review", title: "independent rca", purpose: "p", completion_criteria: "c" },
       new Date(0),
+      ...HUMAN_WEBUI,
     );
     const work = registerTask(
       db,
       { type: "work", title: "inherits default agent", purpose: "p", completion_criteria: "c" },
       new Date(1),
+      ...HUMAN_WEBUI,
     );
 
     const queue = listQueue(db, undefined, "deckhand", "auditor", quarantineStops(db));

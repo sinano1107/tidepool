@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { openDb } from "../src/db.js";
 import { cancelTaskDirectly, completeTask, getTask, listBoard, listQueue, registerTask } from "../src/tasks.js";
+import { HUMAN_WEBUI } from "./harness.js";
 
 const HANDOFF = {
   outcome: "done",
@@ -18,6 +19,7 @@ describe("Board は settled ツリーを退かせる(issue #35)", () => {
       db,
       { type: "work", title: "roll out the tide gauge", purpose: "p", completion_criteria: "c" },
       new Date(0),
+      ...HUMAN_WEBUI,
     );
     const stillOpen = registerTask(
       db,
@@ -30,6 +32,7 @@ describe("Board は settled ツリーを退かせる(issue #35)", () => {
         based_on_decision: 48,
       },
       new Date(1),
+      ...HUMAN_WEBUI,
     );
     const abandoned = registerTask(
       db,
@@ -42,8 +45,9 @@ describe("Board は settled ツリーを退かせる(issue #35)", () => {
         based_on_decision: 48,
       },
       new Date(2),
+      ...HUMAN_WEBUI,
     );
-    cancelTaskDirectly(db, abandoned, null, new Date(3), {});
+    cancelTaskDirectly(db, abandoned, null, new Date(3), {}, "webui");
 
     const board = listBoard(db);
 
@@ -59,10 +63,11 @@ describe("Board は settled ツリーを退かせる(issue #35)", () => {
       db,
       { type: "work", title: "flip the greenhouse valve", purpose: "p", completion_criteria: "c" },
       new Date(0),
+      ...HUMAN_WEBUI,
     );
-    completeTask(db, root, HANDOFF, "reef-crab", new Date(1));
+    completeTask(db, root, HANDOFF, "reef-crab", new Date(1), "worker");
     const review = listBoard(db).find((task) => task.type === "review")!;
-    completeTask(db, getTask(db, review.id)!, undefined, "fugu", new Date(2));
+    completeTask(db, getTask(db, review.id)!, undefined, "fugu", new Date(2), "worker");
 
     const board = listBoard(db);
 
@@ -81,8 +86,9 @@ describe("Board は settled ツリーを退かせる(issue #35)", () => {
         review_flag: true,
       },
       new Date(0),
+      ...HUMAN_WEBUI,
     );
-    completeTask(db, root, HANDOFF, "reef-crab", new Date(1));
+    completeTask(db, root, HANDOFF, "reef-crab", new Date(1), "worker");
 
     const board = listBoard(db);
     const review = board.find((t) => t.type === "review" && t.parent_id === root.id);
@@ -97,11 +103,12 @@ describe("Board は settled ツリーを退かせる(issue #35)", () => {
       db,
       { type: "work", title: "flip the greenhouse valve", purpose: "p", completion_criteria: "c" },
       new Date(0),
+      ...HUMAN_WEBUI,
     );
-    completeTask(db, root, HANDOFF, "reef-crab", new Date(1));
+    completeTask(db, root, HANDOFF, "reef-crab", new Date(1), "worker");
 
     const review = listBoard(db).find((task) => task.type === "review")!;
-    completeTask(db, getTask(db, review.id)!, undefined, "fugu", new Date(2));
+    completeTask(db, getTask(db, review.id)!, undefined, "fugu", new Date(2), "worker");
     const queue = listQueue(db);
 
     expect(queue.some((t) => t.id === root.id)).toBe(false);

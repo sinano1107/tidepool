@@ -2,18 +2,17 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { registerTask } from "../src/tasks.js";
-import {
+import { 
   api,
   bootTidepool,
   FULL_HANDOFF as fullHandoff,
   GIT_FIXTURE_TEST_TIMEOUT,
   git,
-  HOUR,
+  HOUR,HUMAN_WEBUI, 
   makeWorkspace,
   mcpClient,
   registerWork,
-  type Tidepool,
-} from "./harness.js";
+  type Tidepool,} from "./harness.js";
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 
@@ -145,6 +144,7 @@ it("issue参照タスクの WIP コミット subject はプレースホルダを
     db,
     { type: "work", workspace: ws.name, github_issue_number: 240 },
     t.clock.now(),
+    ...HUMAN_WEBUI,
   );
   t.github.scriptIssue(240, { title: "workerは必ずcommitメッセージを考えてほしい", body: "", comments: [] });
   await t.clock.advance(HOUR);

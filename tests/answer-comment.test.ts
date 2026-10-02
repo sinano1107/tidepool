@@ -4,7 +4,7 @@ import { listEvents } from "../src/events.js";
 import { submitAnswer } from "../src/human-verbs.js";
 import { answerQuestion, DomainError, getTask, type RegisterTaskInput, registerTask } from "../src/tasks.js";
 import { unusedLanding } from "./fakes.js";
-import { api, bootTidepool, HOUR, mcpClient, registerWork, type Tidepool } from "./harness.js";
+import { api, bootTidepool, HOUR, HUMAN_WEBUI, mcpClient, registerWork, type Tidepool } from "./harness.js";
 
 let t: Tidepool;
 afterEach(() => t?.stop());
@@ -143,7 +143,7 @@ const QUESTIONS = {
 
 function domainQuestion(kind: keyof typeof QUESTIONS) {
   const db = openDb(":memory:");
-  const parent = registerTask(db, { type: "work", title: "parent", purpose: "p", completion_criteria: "c" }, at);
+  const parent = registerTask(db, { type: "work", title: "parent", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI);
   const { options, ...fields } = QUESTIONS[kind];
   const question = registerTask(
     db,
@@ -157,6 +157,7 @@ function domainQuestion(kind: keyof typeof QUESTIONS) {
       ...fields,
     },
     at,
+    ...HUMAN_WEBUI,
   );
   return { db, question };
 }
@@ -169,9 +170,9 @@ it.each([
   ["approval", "reject"],
 ] as const)("%s の question への %s は comment が空・空白だけなら domain error で断り、comment があれば通る(ADR 0179 決定1・2・4)", (kind, answer) => {
   const { db, question } = domainQuestion(kind);
-  for (const comment of [undefined, "", " \n "]) expect(() => answerQuestion(db, question, [answer], at, undefined, comment)).toThrow(DomainError);
+  for (const comment of [undefined, "", " \n "]) expect(() => answerQuestion(db, question, [answer], at, undefined, comment, undefined, "webui")).toThrow(DomainError);
   expect(getTask(db, question.id)).toMatchObject({ status: "todo", question_answer: null });
-  expect(answerQuestion(db, question, [answer], at, undefined, "why").status).toBe("done");
+  expect(answerQuestion(db, question, [answer], at, undefined, "why", undefined, "webui").status).toBe("done");
 });
 
 it.each([
@@ -185,13 +186,13 @@ it.each([
   ["promotion", "abandon promotion"],
 ] as const)("%s の question への %s は comment なしで通る(ADR 0179 決定3)", (kind, answer) => {
   const { db, question } = domainQuestion(kind);
-  expect(answerQuestion(db, question, [answer], at).status).toBe("done");
+  expect(answerQuestion(db, question, [answer], at, undefined, undefined, undefined, "webui").status).toBe("done");
 });
 
 // 空・空白の comment を畳むのは submitAnswer —— HTTP と管理 MCP の両方の扉が通る application seam(門が answerQuestion にあるのとは別の層)。
 it.each([["空文字", ""], ["空白だけ", "   "]])("任意の回答の comment が%sなら comment なしに畳まれ、列は null・event に comment キーが載らない(issue #1310)", async (_name, comment) => {
   const { db, question } = domainQuestion("escalation");
-  await submitAnswer({ db, pollNow: () => {}, landing: unusedLanding }, question, ["a"], comment, () => at);
+  await submitAnswer({ db, pollNow: () => {}, landing: unusedLanding }, question, ["a"], comment, () => at, "webui");
   expect(getTask(db, question.id)?.question_answer_comment).toBeNull();
   const answered = listEvents(db, question.id).find((e) => e.kind === "question_answered");
   expect(answered?.payload).not.toHaveProperty("comment");
@@ -199,7 +200,7 @@ it.each([["空文字", ""], ["空白だけ", "   "]])("任意の回答の commen
 
 it("前後に空白を含む空白でない comment は削らずそのまま保存される(issue #1310)", async () => {
   const { db, question } = domainQuestion("escalation");
-  await submitAnswer({ db, pollNow: () => {}, landing: unusedLanding }, question, ["a"], " 理由 ", () => at);
+  await submitAnswer({ db, pollNow: () => {}, landing: unusedLanding }, question, ["a"], " 理由 ", () => at, "webui");
   expect(getTask(db, question.id)?.question_answer_comment).toBe(" 理由 ");
   const answered = listEvents(db, question.id).find((e) => e.kind === "question_answered");
   expect(answered?.payload).toMatchObject({ comment: " 理由 " });

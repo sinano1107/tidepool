@@ -6,7 +6,7 @@ import { Slot } from "../src/slot.js";
 import { listBoard, registerTask, type Task } from "../src/tasks.js";
 import type { WorkerAdapter } from "../src/worker.js";
 import { FakeClock, fakeContainers, healthyUsageText, noRetrospectiveCalls, ScriptedWorker } from "./fakes.js";
-import { api, bootTidepool, HOUR, registerWork } from "./harness.js";
+import { api, bootTidepool, HOUR, HUMAN_WEBUI, registerWork } from "./harness.js";
 import { makeRemoteBackedRegistry } from "./registry-fixture.js";
 
 let t: Awaited<ReturnType<typeof bootTidepool>>;
@@ -60,6 +60,7 @@ it("次の pickup は spawn の手前で registry を refresh する(ADR 0052)",
       completion_criteria: "the spawned worker observes version 0.4.0",
     },
     clock.now(),
+    ...HUMAN_WEBUI,
   );
 
   await clock.advance(HOURLY);
@@ -96,6 +97,7 @@ it("registry に到達できない間は盤面全体の pickup を止め、確�
       completion_criteria: "runs after repair",
     },
     clock.now(),
+    ...HUMAN_WEBUI,
   );
   registerTask(
     db,
@@ -106,6 +108,7 @@ it("registry に到達できない間は盤面全体の pickup を止め、確�
       completion_criteria: "runs after repair",
     },
     clock.now(),
+    ...HUMAN_WEBUI,
   );
 
   await clock.advance(HOURLY * 3);

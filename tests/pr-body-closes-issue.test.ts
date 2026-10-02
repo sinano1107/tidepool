@@ -1,15 +1,14 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { getTask, registerTask } from "../src/tasks.js";
-import {
+import { 
   bootTidepool,
   commitWork,
   completeIntegrationReviews,
   GIT_FIXTURE_TEST_TIMEOUT,
-  HOUR,
+  HOUR,HUMAN_WEBUI, 
   makeRemoteBackedWorkspace,
   mcpClient,
-  type Tidepool,
-} from "./harness.js";
+  type Tidepool,} from "./harness.js";
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 
@@ -37,6 +36,7 @@ async function completeIssueBackedTask(handoff: Record<string, string> = fullHan
     t.db,
     { type: "work", workspace: ws.name, github_issue_number: 49 },
     t.clock.now(),
+    ...HUMAN_WEBUI,
   );
 
   t.github.scriptIssue(49, {
@@ -109,6 +109,7 @@ it("通常タスク(github_issue_number なし)の complete_task 成立後、PR 
       completion_criteria: "notes.txt が整っていること",
     },
     t.clock.now(),
+    ...HUMAN_WEBUI,
   );
 
   await t.clock.advance(HOUR);

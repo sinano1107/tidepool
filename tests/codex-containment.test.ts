@@ -36,7 +36,7 @@ import {
   recordingSpawn,
   unusedLanding,
 } from "./fakes.js";
-import { api, bootTidepool, registerWork, type Tidepool, tempDir } from "./harness.js";
+import { api, bootTidepool, HUMAN_WEBUI, registerWork, type Tidepool, tempDir } from "./harness.js";
 
 let t: Tidepool;
 afterEach(() => t?.stop());
@@ -433,14 +433,14 @@ it("a failed Codex Harness preflight skips that route and starts a Claude-route 
     title: "Codex head",
     purpose: "exercise Codex",
     completion_criteria: "done",
-  }, clock.now());
+  }, clock.now(), ...HUMAN_WEBUI);
   const claude = registerTask(db, {
     type: "work",
     assignee: "claude-agent",
     title: "Claude next",
     purpose: "keep working",
     completion_criteria: "done",
-  }, clock.now());
+  }, clock.now(), ...HUMAN_WEBUI);
   const providers = new Map<string, "openai" | "anthropic">([
     ["codex-agent", "openai"],
     ["claude-agent", "anthropic"],
@@ -499,6 +499,7 @@ it("a Harness quarantine answer is accepted only after the same live check recov
     ["repaired by hand"],
     undefined,
     () => clock.now(),
+    "webui",
   )).rejects.toThrow("still not established");
   expect(getTask(db, questionId!)?.status).toBe("todo");
 
@@ -514,6 +515,7 @@ it("a Harness quarantine answer is accepted only after the same live check recov
     ["repaired by hand"],
     "updated the pinned CLI",
     () => clock.now(),
+    "webui",
   );
   expect(getTask(db, questionId!)?.status).toBe("done");
   expect(listEvents(db, questionId!).at(-1)?.payload).toMatchObject({

@@ -9,20 +9,19 @@ import { loadRegistry } from "../src/registry.js";
 import { registerTask } from "../src/tasks.js";
 import { TranscriptStore } from "../src/transcript-store.js";
 import { FakeClock, FakeContainerRuntime, healthyUsageText } from "./fakes.js";
-import {
+import { 
   api,
   bootTidepool,
   FULL_HANDOFF,
   GIT_FIXTURE_TEST_TIMEOUT,
-  HOUR,
+  HOUR,HUMAN_WEBUI, 
   makeWorkspace,
   mcpClient,
   QUIET_EXIT,
   registerWork,
   type Tidepool,
   tempDir,
-  WORKER_SPAWNED,
-} from "./harness.js";
+  WORKER_SPAWNED,} from "./harness.js";
 import { makeRegistry } from "./registry-fixture.js";
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
@@ -65,6 +64,7 @@ it.each([false, true])(
       t.db,
       { type: "work", title: "parent", purpose: "p", completion_criteria: "c", risk_flag: true },
       t.clock.now(),
+      ...HUMAN_WEBUI,
     );
     const child = (
       await api(t.baseUrl, "POST", "/api/tasks", {
@@ -324,6 +324,7 @@ it("更新前に生成済みの完了時 review も、完了後は受理に数�
     db,
     { type: "work", title: "legacy work", purpose: "p", completion_criteria: "c", review_flag: true },
     new Date(0),
+    ...HUMAN_WEBUI,
   );
   const completedAt = new Date(1);
   db.prepare("UPDATE tasks SET status = 'done' WHERE id = ?").run(subject.id);

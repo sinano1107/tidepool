@@ -273,6 +273,7 @@ it("a work child of a done parent receives the parent's handoff document", async
     },
     t.clock.now(),
     BOARD_WORKER_ID,
+    "webui",
   );
 
   await t.clock.advance(HOUR);

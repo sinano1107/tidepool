@@ -12,7 +12,7 @@ import {
   workspaceNeedsHuman,
 } from "../src/workspace.js";
 import { FakeContainerRuntime } from "./fakes.js";
-import { bootTidepool, commitWork, GIT_FIXTURE_TEST_TIMEOUT, git, makeWorkspace, type Tidepool } from "./harness.js";
+import { bootTidepool, commitWork, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeWorkspace, type Tidepool } from "./harness.js";
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 
@@ -44,6 +44,7 @@ it("hooks settings は slot 解放中も sparse のまま親子の WIP に混ぜ
       completion_criteria: "parent work is committed",
     },
     now,
+    ...HUMAN_WEBUI,
   );
 
   await prepareWorkspaceAtPickup(db, workspace, parent, {});
@@ -62,6 +63,7 @@ it("hooks settings は slot 解放中も sparse のまま親子の WIP に混ぜ
       completion_criteria: "child WIP is preserved",
     },
     now,
+    ...HUMAN_WEBUI,
   );
   await prepareWorkspaceAtPickup(db, workspace, child, {});
   excludeWorkspaceProjectSettings(workspace);

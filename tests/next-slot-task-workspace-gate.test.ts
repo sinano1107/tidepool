@@ -3,6 +3,7 @@ import { openDb } from "../src/db.js";
 import { quarantineStops } from "../src/quarantine.js";
 import { nextSlotTask, registerTask } from "../src/tasks.js";
 import { quarantineWorkspace } from "../src/workspace.js";
+import { HUMAN_WEBUI } from "./harness.js";
 
 function quarantine(db: ReturnType<typeof openDb>, name: string): void {
   quarantineWorkspace(db, name, "test quarantine", new Date(0));
@@ -22,6 +23,7 @@ describe("nextSlotTask の per-task workspace ゲート", () => {
         workspace: "prod",
       },
       new Date(0),
+      ...HUMAN_WEBUI,
     );
     const runnable = registerTask(
       db,
@@ -33,6 +35,7 @@ describe("nextSlotTask の per-task workspace ゲート", () => {
         workspace: "sandbox",
       },
       new Date(1),
+      ...HUMAN_WEBUI,
     );
 
     const head = nextSlotTask(db, "sandbox", undefined, undefined, quarantineStops(db));
@@ -47,6 +50,7 @@ describe("nextSlotTask の per-task workspace ゲート", () => {
       db,
       { type: "work", title: "inherits default", purpose: "p", completion_criteria: "c" },
       new Date(0),
+      ...HUMAN_WEBUI,
     );
 
     expect(nextSlotTask(db, "sandbox", undefined, undefined, quarantineStops(db))).toBeUndefined();
@@ -59,6 +63,7 @@ describe("nextSlotTask の per-task workspace ゲート", () => {
       db,
       { type: "work", title: "no workspace tracking", purpose: "p", completion_criteria: "c" },
       new Date(0),
+      ...HUMAN_WEBUI,
     );
 
     expect(nextSlotTask(db, undefined, undefined, undefined, quarantineStops(db))?.id).toBe(task.id);

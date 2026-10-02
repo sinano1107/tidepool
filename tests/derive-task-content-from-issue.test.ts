@@ -2,6 +2,7 @@ import { expect, it } from "vitest";
 import { openDb } from "../src/db.js";
 import { contentSourceFor, registerTask } from "../src/tasks.js";
 import { FakeGitHubClient } from "./fakes.js";
+import { HUMAN_WEBUI } from "./harness.js";
 
 it("issue参照タスクは issue 本文の後に全コメントを取得順で畳み込む(ADR 0016: issue は全スレッド)", async () => {
   const db = openDb(":memory:");
@@ -9,6 +10,7 @@ it("issue参照タスクは issue 本文の後に全コメントを取得順で�
     db,
     { type: "work", workspace: "tidepool", github_issue_number: 49 },
     new Date(0),
+    ...HUMAN_WEBUI,
   );
   const github = new FakeGitHubClient();
   github.scriptIssue(49, {
@@ -31,6 +33,7 @@ it("issue参照タスクはコメントがない issue に空の区切りを付�
     db,
     { type: "work", workspace: "tidepool", github_issue_number: 49 },
     new Date(0),
+    ...HUMAN_WEBUI,
   );
   const github = new FakeGitHubClient();
   github.scriptIssue(49, { title: "ログイン画面のバグ", body: "再現手順: ...", comments: [] });

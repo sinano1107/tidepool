@@ -29,6 +29,7 @@ function registerHumanTask(
     },
     at,
     workerId,
+    "webui",
   );
 }
 
@@ -79,6 +80,7 @@ describe("pollNotifications(issue #116): agent 登録の human タスクを ques
       { type: "work", title: "計画", purpose: "p", completion_criteria: "c" },
       at,
       "planner",
+      "webui",
     );
     // an out-of-authority `assignee: "human"` child converts to this approval
     // question at decompose time — answerQuestion materializes it under
@@ -104,8 +106,9 @@ describe("pollNotifications(issue #116): agent 登録の human タスクを ques
       },
       at,
       "planner",
+      "webui",
     );
-    answerQuestion(db, question, ["approve"], at);
+    answerQuestion(db, question, ["approve"], at, undefined, undefined, undefined, "webui");
 
     const push = new FakePushClient();
     await pollNotifications({ db, push }, at);
@@ -129,6 +132,7 @@ describe("pollNotifications(issue #116): agent 登録の human タスクを ques
       },
       new Date(0),
       "planner",
+      "webui",
     );
     registerHumanTask(db, "水やりして", "planner");
     const push = new FakePushClient();

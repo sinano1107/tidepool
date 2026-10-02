@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { openDb } from "../src/db.js";
 import { completeTask, listYourTasks, presentTask, registerTask } from "../src/tasks.js";
+import { HUMAN_WEBUI } from "./harness.js";
 
 describe("listYourTasks は human 宛ての未決着タスクを返す(issue #13)", () => {
   it("human 宛ての todo は含まれ、他 assignee 宛て・決着済みの human タスクは含まれない", () => {
@@ -15,6 +16,7 @@ describe("listYourTasks は human 宛ての未決着タスクを返す(issue #13
         assignee: "human",
       },
       new Date(0),
+      ...HUMAN_WEBUI,
     );
     const agent = registerTask(
       db,
@@ -26,6 +28,7 @@ describe("listYourTasks は human 宛ての未決着タスクを返す(issue #13
         assignee: "reef-crab",
       },
       new Date(1),
+      ...HUMAN_WEBUI,
     );
     const doneHuman = registerTask(
       db,
@@ -37,6 +40,7 @@ describe("listYourTasks は human 宛ての未決着タスクを返す(issue #13
         assignee: "human",
       },
       new Date(2),
+      ...HUMAN_WEBUI,
     );
     completeTask(
       db,
@@ -51,6 +55,7 @@ describe("listYourTasks は human 宛ての未決着タスクを返す(issue #13
       },
       "human",
       new Date(3),
+      "worker",
     );
 
     const yours = listYourTasks(db);
@@ -71,11 +76,13 @@ describe("listYourTasks は human 宛ての未決着タスクを返す(issue #13
         assignee: "human",
       },
       new Date(0),
+      ...HUMAN_WEBUI,
     );
     const parent = registerTask(
       db,
       { type: "work", title: "parent", purpose: "p", completion_criteria: "c" },
       new Date(1),
+      ...HUMAN_WEBUI,
     );
     const awaited = registerTask(
       db,
@@ -89,6 +96,7 @@ describe("listYourTasks は human 宛ての未決着タスクを返す(issue #13
         based_on_decision: 1,
       },
       new Date(2),
+      ...HUMAN_WEBUI,
     );
     const attached = registerTask(
       db,
@@ -101,6 +109,7 @@ describe("listYourTasks は human 宛ての未決着タスクを返す(issue #13
         parent_id: parent.id,
       },
       new Date(3),
+      ...HUMAN_WEBUI,
     );
 
     const blocking = new Map(listYourTasks(db).map((t) => [t.id, t.blocking]));
@@ -117,6 +126,7 @@ describe("listYourTasks は human 宛ての未決着タスクを返す(issue #13
       db,
       { type: "work", title: "rebuild the tide gauge", purpose: "p", completion_criteria: "c", assignee: "human" },
       new Date(0),
+      ...HUMAN_WEBUI,
     );
     registerTask(
       db,
@@ -130,6 +140,7 @@ describe("listYourTasks は human 宛ての未決着タスクを返す(issue #13
         based_on_decision: 1,
       },
       new Date(1),
+      ...HUMAN_WEBUI,
     );
 
     const row = listYourTasks(db).find((t) => t.id === parent.id)!;
@@ -157,6 +168,7 @@ describe("listYourTasks は human 宛ての未決着タスクを返す(issue #13
       },
       new Date(0),
       "planner",
+      "webui",
     );
 
     expect(presentTask(db, question).assignee).toBe("human");

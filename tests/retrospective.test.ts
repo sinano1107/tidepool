@@ -8,7 +8,7 @@ import { cancelTaskDirectly, listChildren, logDecision, registerTask } from "../
 import { reportProviderUsage } from "../src/throttle.js";
 import { commitTriage, raiseObjection, startTriage, TRIAGE_TIMEOUT } from "../src/triage.js";
 import { FakeAttributionClient, FakeBehaviorDraftClient, noRetrospectiveCalls } from "./fakes.js";
-import {
+import { 
   api,
   bootTidepool,
   children,
@@ -16,7 +16,7 @@ import {
   completeIntegrationReviews,
   completeViaMcp,
   FULL_HANDOFF,
-  HOUR,
+  HOUR,HUMAN_WEBUI, 
   haltedRefires,
   KEEP_FIXTURES,
   loggedEntry,
@@ -31,8 +31,7 @@ import {
   rememberedNote,
   runNow,
   type Tidepool,
-  WORKER_SPAWNED,
-} from "./harness.js";
+  WORKER_SPAWNED,} from "./harness.js";
 
 let t: Tidepool;
 afterEach(() => t?.stop());
@@ -1168,7 +1167,7 @@ const at = new Date("2026-09-28T00:00:00.000Z");
  *  worker_spawned を書かないので、session の開始は setup として event を直接足す)。 */
 function memoryBoard() {
   const db = openDb(":memory:");
-  const task = registerTask(db, { type: "work", title: "t", purpose: "p", completion_criteria: "c" }, at);
+  const task = registerTask(db, { type: "work", title: "t", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI);
   const reader = { taskId: task.id, scope: null, agent: "deckhand" };
   const spawn = () =>
     appendEvent(db, {
@@ -1181,7 +1180,7 @@ function memoryBoard() {
   const knowledge = (title: string) =>
     recordKnowledge(db, { scope: null, path: "build", title, text: `${title}.`, source: { commit: "0a46a46" }, author: { activity: "worker_verb", name: "deckhand" } }, "worker", at).entry_id;
   const read = (id: number) => readMemory(db, reader, { ids: [id] }, at);
-  const decide = (line: string) => logDecision(db, task, line, "deckhand", at);
+  const decide = (line: string) => logDecision(db, task, line, "deckhand", at, "worker");
   const objectTo = (entryId: number) => {
     const session = startTriage(db, at);
     raiseObjection(db, entryId, "the note was wrong", at);
@@ -1266,7 +1265,7 @@ it.each<[string, (ids: { read: number; unread: number }) => number[], Partial<Ga
   client.scriptJudgment(b.decision, { cause: "memory", evidence: "the RCA traced it to the note", entries: entries(b) });
   const drafter = new FakeBehaviorDraftClient();
   const rca = listChildren(b.db, b.task.id).filter((c) => c.title.startsWith("rca ("));
-  for (const r of rca) cancelTaskDirectly(b.db, r, null, at, {});
+  for (const r of rca) cancelTaskDirectly(b.db, r, null, at, {}, "webui");
 
   refireRetrospectiveCalls(b.db, { ...noRetrospectiveCalls, attributionClient: client, behaviorDraftClient: drafter, workspace: { name: "charts" } }, at);
   // sweep は fire-and-forget: fake の返答が着地するまで回す
@@ -1284,9 +1283,9 @@ it.each<[string, (ids: { read: number; unread: number }) => number[], Partial<Ga
  *  各 RCA 子には異議群ごとに見分けのつく decision を書く。子は題でなく登録の異議 id 列で見分ける。 */
 function twoBundles(same: boolean) {
   const db = openDb(":memory:");
-  const task = registerTask(db, { type: "work", title: "t", purpose: "p", completion_criteria: "c" }, at);
-  const x = logDecision(db, task, "picked X", "deckhand", at);
-  const y = same ? x : logDecision(db, task, "picked Y", "deckhand", at);
+  const task = registerTask(db, { type: "work", title: "t", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI);
+  const x = logDecision(db, task, "picked X", "deckhand", at, "worker");
+  const y = same ? x : logDecision(db, task, "picked Y", "deckhand", at, "worker");
   const objectAndCommit = (entry: number, comment: string) => {
     startTriage(db, at);
     const objection = raiseObjection(db, entry, comment, at);
@@ -1301,10 +1300,10 @@ function twoBundles(same: boolean) {
   const a = objectAndCommit(x, "A's direction");
   const b = objectAndCommit(y, "B's direction");
   for (const [objection, name] of [[a, "A"], [b, "B"]] as const) {
-    for (const r of rcasOf(objection)) logDecision(db, r, `${name}'s finding from ${r.title}`, "auditor", at);
+    for (const r of rcasOf(objection)) logDecision(db, r, `${name}'s finding from ${r.title}`, "auditor", at, "worker");
   }
   const settle = (objection: number) => {
-    for (const r of rcasOf(objection)) cancelTaskDirectly(db, r, null, at, {});
+    for (const r of rcasOf(objection)) cancelTaskDirectly(db, r, null, at, {}, "webui");
   };
   const client = new FakeAttributionClient();
   const sweep = async (now = at) => {
