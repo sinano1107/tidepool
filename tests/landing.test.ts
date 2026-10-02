@@ -9,7 +9,7 @@ import {
   registerLocalMergeQuestion,
   registerPrPromotionFailureQuestion,
 } from "../src/landing.js";
-import { BOARD_WORKER_ID, completeTask, getTask, listBoard, recordPrOpened, registerTask } from "../src/tasks.js";
+import { BOARD_WORKER_ID, completeTask, getTask, HUMAN_WORKER_ID, listBoard, recordPrOpened, registerTask } from "../src/tasks.js";
 import { raiseObjection } from "../src/triage.js";
 import {
   prepareWorkspaceAtPickup,
@@ -56,7 +56,7 @@ function promotionFailures(board: Db, taskId: string) {
 it("work でないタスクは着地対象ではない", async () => {
   const workspace = await makeWorkspace("landing-verdict");
   const { db, clock } = await openBoard();
-  const landing = createLanding({ db, clock, workspace, github: null });
+  const landing = createLanding({ defaultAgentName: HUMAN_WORKER_ID, db, clock, workspace, github: null });
   const question = registerTask(
     db,
     {
@@ -79,7 +79,7 @@ it("work でないタスクは着地対象ではない", async () => {
 it("祖先の task branch へ帰る work は着地対象ではない", async () => {
   const workspace = await makeWorkspace("landing-lineage");
   const { db, clock } = await openBoard();
-  const landing = createLanding({ db, clock, workspace, github: null });
+  const landing = createLanding({ defaultAgentName: HUMAN_WORKER_ID, db, clock, workspace, github: null });
   const parent = registerTask(
     db,
     {
@@ -113,7 +113,7 @@ it("祖先の task branch へ帰る work は着地対象ではない", async () 
 it("保護ブランチへ運ぶ内容が無い work はその事実を返して記録する", async () => {
   const workspace = await makeWorkspace("landing-empty");
   const { db, clock } = await openBoard();
-  const landing = createLanding({ db, clock, workspace, github: null });
+  const landing = createLanding({ defaultAgentName: HUMAN_WORKER_ID, db, clock, workspace, github: null });
   const task = registerTask(
     db,
     {
@@ -152,7 +152,7 @@ it("squash 済みで内容差が無い work は commit 差が残っていても�
   const { workspace } = await makeRemoteBackedWorkspace("landing-squashed");
   const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
-  const landing = createLanding({ db, clock, workspace, github });
+  const landing = createLanding({ defaultAgentName: HUMAN_WORKER_ID, db, clock, workspace, github });
   const task = registerTask(
     db,
     {
@@ -181,7 +181,7 @@ it("再発火が門で止まったら failure question を開いたままにし�
   const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
   github.scriptFailure(new Error("first promotion failed"));
-  const landing = createLanding({ db, clock, workspace, github });
+  const landing = createLanding({ defaultAgentName: HUMAN_WORKER_ID, db, clock, workspace, github });
   const task = registerTask(
     db,
     {
@@ -231,7 +231,7 @@ it("再発火が門で止まったら failure question を開いたままにし�
 it("GitHub の無い purely-local work は merge question 面へ着地する", async () => {
   const workspace = await makeWorkspace("landing-local");
   const { db, clock } = await openBoard();
-  const landing = createLanding({ db, clock, workspace, github: null });
+  const landing = createLanding({ defaultAgentName: HUMAN_WORKER_ID, db, clock, workspace, github: null });
   const task = registerTask(
     db,
     {
@@ -265,6 +265,7 @@ it("remote-backed から purely-local へ変わった再発火は local question
   github.scriptFailure(new Error("token expired"));
   let currentWorkspace: WorkspaceConfig = workspace;
   const landing = createLanding({
+    defaultAgentName: HUMAN_WORKER_ID,
     db,
     clock,
     resolveWorkspace: () => currentWorkspace,
@@ -301,7 +302,7 @@ it("remote-backed から purely-local へ変わった再発火は local question
 it("GitHub の無い remote-backed work は閉じた理由で失敗し failure question を立てる", async () => {
   const { workspace } = await makeRemoteBackedWorkspace("landing-no-github");
   const { db, clock } = await openBoard();
-  const landing = createLanding({ db, clock, workspace, github: null });
+  const landing = createLanding({ defaultAgentName: HUMAN_WORKER_ID, db, clock, workspace, github: null });
   const task = registerTask(
     db,
     {
@@ -333,7 +334,7 @@ it("remote-backed work は PR を開いた面を返す", async () => {
   const { workspace } = await makeRemoteBackedWorkspace("landing-pr");
   const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
-  const landing = createLanding({ db, clock, workspace, github });
+  const landing = createLanding({ defaultAgentName: HUMAN_WORKER_ID, db, clock, workspace, github });
   const task = registerTask(
     db,
     {
@@ -363,7 +364,7 @@ it("open PR を持つ work の修理は同じ PR の branch を更新する", as
   const { workspace } = await makeRemoteBackedWorkspace("landing-open-pr");
   const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
-  const landing = createLanding({ db, clock, workspace, github });
+  const landing = createLanding({ defaultAgentName: HUMAN_WORKER_ID, db, clock, workspace, github });
   const task = registerTask(
     db,
     {
@@ -393,7 +394,7 @@ it("open PR 更新は盤面が動かした remote ref だけを再基準化す�
   const { workspace } = await makeRemoteBackedWorkspace("landing-rebaseline");
   const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
-  const landing = createLanding({ db, clock, workspace, github });
+  const landing = createLanding({ defaultAgentName: HUMAN_WORKER_ID, db, clock, workspace, github });
   const task = registerTask(
     db,
     {
@@ -427,7 +428,7 @@ it("merge 済み PR に残った修理は閉じた理由で失敗し failure que
   const { workspace } = await makeRemoteBackedWorkspace("landing-merged-pr");
   const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
-  const landing = createLanding({ db, clock, workspace, github });
+  const landing = createLanding({ defaultAgentName: HUMAN_WORKER_ID, db, clock, workspace, github });
   const task = registerTask(
     db,
     {
@@ -464,7 +465,7 @@ it("open PR branch の push 失敗は既存の着地痕跡で隠さず failure q
   const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
   github.scriptPushFailure(new Error("push rejected"));
-  const landing = createLanding({ db, clock, workspace, github });
+  const landing = createLanding({ defaultAgentName: HUMAN_WORKER_ID, db, clock, workspace, github });
   const task = registerTask(
     db,
     {
@@ -495,7 +496,7 @@ it("PR 作成の失敗は閉じた理由で返して failure question を立て�
   const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
   github.scriptFailure(new Error("token expired"));
-  const landing = createLanding({ db, clock, workspace, github });
+  const landing = createLanding({ defaultAgentName: HUMAN_WORKER_ID, db, clock, workspace, github });
   const task = registerTask(
     db,
     {
@@ -525,7 +526,7 @@ it("PR 作成の失敗は閉じた理由で返して failure question を立て�
 
 it("workspace 不在は閉じた理由で返す", async () => {
   const { db, clock } = await openBoard();
-  const landing = createLanding({ db, clock, github: null });
+  const landing = createLanding({ defaultAgentName: HUMAN_WORKER_ID, db, clock, github: null });
   const task = registerTask(
     db,
     {
@@ -551,6 +552,7 @@ it("再発火時の registry drift は閉じた失敗を返し、既存の failu
   const github = new FakeGitHubClient();
   let drifted = false;
   const landing = createLanding({
+    defaultAgentName: HUMAN_WORKER_ID,
     db,
     clock,
     resolveWorkspace: (name) => {
@@ -599,7 +601,7 @@ it("再発火時の registry drift は閉じた失敗を返し、既存の failu
 it("needs-human workspace は閉じた理由で返す", async () => {
   const workspace = await makeWorkspace("landing-needs-human");
   const { db, clock } = await openBoard();
-  const landing = createLanding({ db, clock, workspace, github: null });
+  const landing = createLanding({ defaultAgentName: HUMAN_WORKER_ID, db, clock, workspace, github: null });
   const task = registerTask(
     db,
     {
@@ -631,7 +633,7 @@ it("needs-human workspace は閉じた理由で返す", async () => {
 it("着地判定の Git failure も throw せず閉じた失敗 verdict と question にする", async () => {
   const workspace = await makeWorkspace("landing-git-failure");
   const { db, clock } = await openBoard();
-  const landing = createLanding({ db, clock, workspace, github: null });
+  const landing = createLanding({ defaultAgentName: HUMAN_WORKER_ID, db, clock, workspace, github: null });
   const task = registerTask(
     db,
     {
@@ -662,7 +664,7 @@ it("着地成立は積み上がった failure question を引退させ、回答�
   const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
   github.scriptFailure(new Error("token expired"));
-  const landing = createLanding({ db, clock, workspace, github });
+  const landing = createLanding({ defaultAgentName: HUMAN_WORKER_ID, db, clock, workspace, github });
   const task = registerTask(
     db,
     {
@@ -696,7 +698,7 @@ it("着地成立は積み上がった failure question を引退させ、回答�
 it("未束ねの異議がある work は同じ門で理由と数を返す", async () => {
   const workspace = await makeWorkspace("landing-objection");
   const { db, clock } = await openBoard();
-  const landing = createLanding({ db, clock, workspace, github: null });
+  const landing = createLanding({ defaultAgentName: HUMAN_WORKER_ID, db, clock, workspace, github: null });
   const task = registerTask(
     db,
     {
@@ -728,7 +730,7 @@ it("祖先の再発火は open PR を持つ work だけを更新する", async (
   const { workspace } = await makeRemoteBackedWorkspace("landing-ancestors");
   const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
-  const landing = createLanding({ db, clock, workspace, github });
+  const landing = createLanding({ defaultAgentName: HUMAN_WORKER_ID, db, clock, workspace, github });
   const root = registerTask(
     db,
     {
@@ -805,7 +807,7 @@ it("並行 retry が先に着地したら遅い再発火の失敗は failure que
     }
     return create(input);
   };
-  const landing = createLanding({ db, clock, workspace, github });
+  const landing = createLanding({ defaultAgentName: HUMAN_WORKER_ID, db, clock, workspace, github });
   const task = registerTask(
     db,
     {
@@ -839,7 +841,7 @@ it("fork 元が squash 着地した根は保護ブランチへ merge で追い�
   const { workspace } = await makeRemoteBackedWorkspace("landing-catch-up");
   const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
-  const landing = createLanding({ db, clock, workspace, github });
+  const landing = createLanding({ defaultAgentName: HUMAN_WORKER_ID, db, clock, workspace, github });
   const parent = registerTask(
     db,
     {
@@ -1046,7 +1048,7 @@ it("PR を開いた後の merge question も、CI red で止まった auto-merge
   recordPrOpened(db, landingWork(db, clock), 1, "worker", clock.now(), { merge: "escalate" }, false, "worker");
   recordPrOpened(db, landingWork(db, clock), 2, "worker", clock.now(), { merge: "auto_if_ci_green" }, false, "worker");
 
-  await createLanding({ db, clock, workspace, github }).tick("auto_merge", clock.now());
+  await createLanding({ defaultAgentName: HUMAN_WORKER_ID, db, clock, workspace, github }).tick("auto_merge", clock.now());
 
   const registered = listBoard(db)
     .filter((q) => q.question_pending_merge_pr !== null)

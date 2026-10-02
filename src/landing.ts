@@ -132,7 +132,7 @@ export interface LandingDeps {
   github: GitHubClient | null;
   authority?: AuthorityProfile;
   resolveAuthority?: (assignee: string | null) => AuthorityProfile | undefined;
-  defaultAgentName?: string;
+  defaultAgentName: string;
   auditorName?: string;
   isProtectedWorkspace?: (name: string) => boolean;
 }
@@ -472,7 +472,7 @@ export function createLanding(deps: LandingDeps): Landing {
           pr.number,
           resolveTaskAgent(
             task,
-            deps.defaultAgentName ?? HUMAN_WORKER_ID,
+            deps.defaultAgentName,
             deps.auditorName ?? DEFAULT_AUDITOR_NAME,
           ),
           deps.clock.now(),
