@@ -8,6 +8,7 @@ import {
   assertValidAuthorityProfileName,
   assertValidWorkspaceName,
   InvalidAgentNameError,
+  InvalidAuthorityProfileNameError,
   InvalidWorkspaceNameError,
   isBuiltInAgentName,
   loadRegistry,
@@ -49,6 +50,9 @@ describe("assertValidWorkspaceName", () => {
     );
     expect(() => assertValidWorkspaceName(registry, "my/workspace")).toThrow(
       InvalidWorkspaceNameError,
+    );
+    expect(() => assertValidWorkspaceName(registry, "my workspace")).toThrow(
+      "must contain only letters, digits, '-', '_', '.' and not be '.' or '..'",
     );
   });
 
@@ -104,6 +108,50 @@ describe("loadRegistry", () => {
     expect(agent.systemPrompt).toContain("You are Deckhand");
     // frontmatter is metadata, not prompt text
     expect(agent.systemPrompt).not.toContain("version:");
+  });
+
+  // issue #1367: registry は作成の門を通らずにも変わる(手書きの commit・registry-edit PR の
+  // merge —— ADR 0061)。読み込みでも作成の門と同じ名前の規則を当て、違反は読み込み全体を倒す
+  const VALID_AGENT_MD = `---\nversion: 0.1.0\nauthority: standard\nprovider: anthropic\nskills:\n  - "*"\ndescription: An agent\n---\nBody.\n`;
+  const VALID_AUTHORITY_YAML = "guidance: x\nassignable_to: []\nallowed_workspaces: []\nmerge: external\n";
+
+  it("盤面の予約 worker id(human / tidepool)と同名の agent ファイルを含む commit は読み込みを倒す", async () => {
+    for (const name of ["human", "tidepool"]) {
+      const dir = await makeRegistry({ [`agents/${name}.md`]: VALID_AGENT_MD });
+      expect(() => loadRegistry(dir, "purely-local")).toThrow(InvalidAgentNameError);
+      expect(() => loadRegistry(dir, "purely-local")).toThrow(/reserved by the board/);
+    }
+  });
+
+  it("名前が . になる agents/..md を含む commit は読み込みを倒す", async () => {
+    const dir = await makeRegistry({ "agents/..md": VALID_AGENT_MD });
+    expect(() => loadRegistry(dir, "purely-local")).toThrow('invalid agent name "."');
+  });
+
+  it("charset 外・. ・.. の名前の authority profile を含む commit は読み込みを倒す", async () => {
+    for (const name of ["my profile", ".", ".."]) {
+      const dir = await makeRegistry({ [`authority/${name}.yaml`]: VALID_AUTHORITY_YAML });
+      expect(() => loadRegistry(dir, "purely-local")).toThrow(InvalidAuthorityProfileNameError);
+      expect(() => loadRegistry(dir, "purely-local")).toThrow(`invalid authority profile name "${name}"`);
+    }
+  });
+
+  it("charset 外・. ・.. のキーを持つ workspaces.yaml は読み込みを倒す", async () => {
+    for (const name of ["my workspace", ".", ".."]) {
+      const dir = await makeRegistry({ "workspaces.yaml": `"${name}":\n  path: /tmp/ws\n` });
+      expect(() => loadRegistry(dir, "purely-local")).toThrow(InvalidWorkspaceNameError);
+      expect(() => loadRegistry(dir, "purely-local")).toThrow(`invalid workspace name "${name}"`);
+    }
+  });
+
+  it("予約 worker id の拒否は agent だけ: human という名の authority profile と workspace は読み込める", async () => {
+    const dir = await makeRegistry({
+      "authority/human.yaml": VALID_AUTHORITY_YAML,
+      "workspaces.yaml": "human:\n  path: /tmp/human\n",
+    });
+    const registry = loadRegistry(dir, "purely-local");
+    expect(registry.authority.human).toBeDefined();
+    expect(registry.workspaces.human).toBeDefined();
   });
 
   it("本文が空の agent 定義(frontmatter のみ)を許容し、systemPrompt が空文字になる(ADR 0017: 既定エージェントの正規形は本文が空 — issue #51)", async () => {
