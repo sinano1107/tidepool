@@ -871,6 +871,7 @@ function retiredExecutionFields(raw: unknown): string[] {
 }
 
 function parseAgentFile(name: string, raw: string): AgentDefinition {
+  assertAgentNameRule(name);
   const split = splitFrontmatter(raw);
   if (!split) {
     throw new Error(`agent ${name}: missing frontmatter`);
@@ -933,6 +934,7 @@ function assertValidWorkspaces(workspaces: z.infer<typeof workspacesSchema>): vo
 }
 
 function parseAuthorityFile(name: string, raw: string): AuthorityProfile {
+  assertNameRule(name, InvalidAuthorityProfileNameError);
   const profile = authorityProfileSchema.parse(parseYaml(raw));
   return {
     name,
@@ -1090,13 +1092,11 @@ export function loadRegistry(dir: string, mode: RegistryMode): Registry {
   const authority: Record<string, AuthorityProfile> = {};
   for (const [path, raw] of files) {
     if (path.startsWith("agents/")) {
-      const name = basename(path, ".md");
-      assertAgentNameRule(name);
-      agents[name] = parseAgentFile(name, raw);
+      const agent = parseAgentFile(basename(path, ".md"), raw);
+      agents[agent.name] = agent;
     } else if (path.startsWith("authority/")) {
-      const name = basename(path, ".yaml");
-      assertNameRule(name, InvalidAuthorityProfileNameError);
-      authority[name] = parseAuthorityFile(name, raw);
+      const profile = parseAuthorityFile(basename(path, ".yaml"), raw);
+      authority[profile.name] = profile;
     }
   }
   // 名前の解決は registry が先、無ければ組み込み(ADR 0117 決定2 の shadowing)。
