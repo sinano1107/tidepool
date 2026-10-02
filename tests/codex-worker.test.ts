@@ -768,6 +768,20 @@ thread's history always fails.`));
     ).toBe("second");
   });
 
+  it("マルチバイト文字の途中で割れた stdout からも last_message が化けずに載る(#1298)", async () => {
+    const f = await fixture();
+    const value = task(f.db, "codex-stdout-mb");
+    f.start(value);
+    const bytes = Buffer.from(`${JSON.stringify(said("認証エラー"))}\n`);
+    const cut = bytes.indexOf(Buffer.from("証")) + 1;
+    f.process.processes[0]!.stdout.write(bytes.subarray(0, cut));
+    f.process.processes[0]!.stdout.write(bytes.subarray(cut));
+    f.process.emitExit(1, null);
+    expect(listEvents(f.db, value.id).find((event) => event.kind === "worker_exited")?.payload).toMatchObject({
+      last_message: "認証エラー",
+    });
+  });
+
   it("agent_message の無い exit は last_message null(ADR 0189)", async () => {
     expect(await lastMessageAfter("codex-no-message", [{ type: "turn.completed", usage: {} }])).toBeNull();
   });
