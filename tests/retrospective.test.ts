@@ -8,7 +8,7 @@ import { cancelTaskDirectly, listChildren, logDecision, registerTask } from "../
 import { reportProviderUsage } from "../src/throttle.js";
 import { commitTriage, raiseObjection, startTriage, TRIAGE_TIMEOUT } from "../src/triage.js";
 import { FakeAttributionClient, FakeBehaviorDraftClient, noRetrospectiveCalls } from "./fakes.js";
-import { 
+import {
   api,
   bootTidepool,
   children,
@@ -16,7 +16,8 @@ import {
   completeIntegrationReviews,
   completeViaMcp,
   FULL_HANDOFF,
-  HOUR,HUMAN_WEBUI, 
+  HOUR,
+  HUMAN_WEBUI,
   haltedRefires,
   KEEP_FIXTURES,
   loggedEntry,
@@ -31,7 +32,8 @@ import {
   rememberedNote,
   runNow,
   type Tidepool,
-  WORKER_SPAWNED,} from "./harness.js";
+  WORKER_SPAWNED,
+} from "./harness.js";
 
 let t: Tidepool;
 afterEach(() => t?.stop());

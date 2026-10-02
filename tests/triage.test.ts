@@ -5,18 +5,20 @@ import { appendEvent, listEvents } from "../src/events.js";
 import type { GatedJudgment } from "../src/retrospective.js";
 import { listChildren, logDecision, registerTask } from "../src/tasks.js";
 import { commitTriage, entryObjections, objectionsById, raiseObjection, recordDisplayedEntries, startTriage, TRIAGE_TIMEOUT, TriageError } from "../src/triage.js";
-import { 
+import {
   api,
   bootTidepool,
   FIXTURE_SPAWNED_EVENT_ID,
   FIXTURE_TASK,
-  HOUR,HUMAN_WEBUI, 
+  HOUR,
+  HUMAN_WEBUI,
   loggedEntry,
   mcpClient,
   queueWork,
   registerWork,
   seedFixtureBoard,
-  type Tidepool,} from "./harness.js";
+  type Tidepool,
+} from "./harness.js";
 
 let t: Tidepool;
 afterEach(() => t?.stop());

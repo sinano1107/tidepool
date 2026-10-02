@@ -1,14 +1,16 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { getTask, registerTask } from "../src/tasks.js";
-import { 
+import {
   bootTidepool,
   commitWork,
   completeIntegrationReviews,
   GIT_FIXTURE_TEST_TIMEOUT,
-  HOUR,HUMAN_WEBUI, 
+  HOUR,
+  HUMAN_WEBUI,
   makeRemoteBackedWorkspace,
   mcpClient,
-  type Tidepool,} from "./harness.js";
+  type Tidepool,
+} from "./harness.js";
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 

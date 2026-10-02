@@ -1,14 +1,16 @@
 import { afterEach, expect, it } from "vitest";
 import { registerTask } from "../src/tasks.js";
-import { 
+import {
   api,
   bootTidepool,
-  HOUR,HUMAN_WEBUI, 
+  HOUR,
+  HUMAN_WEBUI,
   managementMcpClient,
   queueChild,
   queueWork,
   registerQuestion,
-  type Tidepool,} from "./harness.js";
+  type Tidepool,
+} from "./harness.js";
 
 let t: Tidepool;
 afterEach(() => t?.stop());

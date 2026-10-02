@@ -1,15 +1,17 @@
 import { afterEach, expect, it } from "vitest";
 import { registerTask } from "../src/tasks.js";
 import { healthyUsageText, usagePanelText } from "./fakes.js";
-import { 
+import {
   api,
   bootTidepool,
   completeIntegrationReviews,
   FULL_HANDOFF as fullHandoff,
-  HOUR,HUMAN_WEBUI, 
+  HOUR,
+  HUMAN_WEBUI,
   mcpClient,
   queueWork,
-  type Tidepool,} from "./harness.js";
+  type Tidepool,
+} from "./harness.js";
 
 let t: Tidepool;
 afterEach(async () => {

@@ -17,17 +17,19 @@ import {
   WorkspaceConfirmationRequiredError,
 } from "../src/workspace-create.js";
 import { FakeDraftClient } from "./fakes.js";
-import { 
+import {
   api,
   bootTidepool,
-  HOUR,HUMAN_WEBUI, 
+  HOUR,
+  HUMAN_WEBUI,
   holdChildren,
   managementMcpClient,
   queueChild,
   queueWork,
   registerQuestion,
   registerWork,
-  type Tidepool,} from "./harness.js";
+  type Tidepool,
+} from "./harness.js";
 
 let t: Tidepool;
 afterEach(() => t?.stop());
