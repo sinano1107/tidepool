@@ -322,6 +322,38 @@ it("watchdog に殺されて retry された run の question に、前の run �
   expect(question.purpose).toBe(RECLAIMED_PURPOSE + RETRY_OR_ABANDON);
 });
 
+it("決着したタスクの遅れた exit は、枠を継いだタスクの梯子を書き換えず、question も枠の解放も起こさない —— 継いだタスクの question にも載らない", async () => {
+  t = await bootTidepool({ watchdog: WATCHDOG });
+  const first = queueWork(t, "first");
+  const second = queueWork(t, "second");
+  const third = queueWork(t, "third");
+  t.containers.hold(second.id);
+  await t.clock.advance(HOUR);
+  await t.clock.advance(90 * MIN); // first の畳み込み停止
+  t.worker.exitWith(first.id, TALKATIVE_EXIT);
+  await settle();
+  await t.clock.advance(30 * MIN); // 強制回収 → 回収済み観測 → 枠は second へ
+  await settle();
+  expect(started()).toEqual([first.id, second.id]);
+  await t.clock.advance(90 * MIN); // second の畳み込み停止
+  expect(t.worker.gracefulStops).toEqual([first.id, second.id]);
+
+  // second の梯子の途中で first の exit が遅れて届く
+  t.worker.exitWith(first.id, TALKATIVE_EXIT);
+  await settle();
+  expect(await exitedWithoutReport()).toEqual([]);
+  expect(await watchdogKilled()).toHaveLength(1);
+  expect(started()).toEqual([first.id, second.id]);
+
+  await t.clock.advance(30 * MIN); // second の強制回収
+  t.containers.fireEmpty(second.id);
+  await settle();
+  expect(t.worker.gracefulStops).toEqual([first.id, second.id]);
+  const [question] = (await watchdogKilled()).filter((q: any) => q.title === "watchdog killed task: second");
+  expect(question.purpose).toBe(RECLAIMED_PURPOSE + RETRY_OR_ABANDON);
+  expect(started()).toEqual([first.id, second.id, third.id]);
+});
+
 it("retry の回答で task は queue 先頭へ戻り、abandon の回答で cancel される", async () => {
   t = await bootTidepool({ watchdog: WATCHDOG });
   const retried = queueWork(t, "retried");
