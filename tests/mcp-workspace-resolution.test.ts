@@ -45,10 +45,11 @@ describe("mcp の releasing verb が task.workspace を解決する", () => {
     app.use(
       "/mcp",
       createMcpRouter({
+        defaultAgentName: "tako",
         db,
         slot,
         clock,
-        landing: createLanding({ db, clock, workspace: sandbox, resolveWorkspace, github: null }),
+        landing: createLanding({ defaultAgentName: "tako", db, clock, workspace: sandbox, resolveWorkspace, github: null }),
         workspace: sandbox,
         resolveWorkspace,
         pollNow: () => {},

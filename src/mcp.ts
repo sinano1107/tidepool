@@ -139,9 +139,8 @@ export interface McpDeps {
   /** The board's default agent name (ADR 0012 / issue #36): every MCP call is
    *  attributed to a real agent session (never human — that's the separate
    *  /answer route), so a task's unspecified (null) `assignee` resolves here,
-   *  not to `HUMAN_WORKER_ID`. Absent → falls back to `HUMAN_WORKER_ID`, same
-   *  as the pre-#36 shape for a board with no worker configured at all. */
-  defaultAgentName?: string;
+   *  not to `HUMAN_WORKER_ID`. Required: no default actor (ADR 0194). */
+  defaultAgentName: string;
   /** The board's Auditor pointer (CONTEXT.md / issue #15 layer 2), same shape
    *  as `defaultAgentName` above — the fallback a `review` task's unset
    *  `assignee` attributes to instead (issue #42), never `defaultAgentName`.
@@ -180,11 +179,11 @@ export interface McpDeps {
  *  the board's default agent, not `HUMAN_WORKER_ID` (ADR 0012 / issue #36) —
  *  made type-aware for `review` tasks (issue #42 / CONTEXT.md's Auditor): a
  *  review task's unset assignee attributes to the Auditor pointer instead,
- *  which — unlike `defaultAgentName` — always resolves to a value. */
+ *  which is never unset (`auditorName` falls back to `DEFAULT_AUDITOR_NAME`). */
 function attributedWorkerId(deps: McpDeps, task: Task): string {
   return resolveTaskAgent(
     task,
-    deps.defaultAgentName ?? HUMAN_WORKER_ID,
+    deps.defaultAgentName,
     deps.auditorName ?? DEFAULT_AUDITOR_NAME,
   );
 }
