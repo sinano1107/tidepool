@@ -208,19 +208,23 @@ it("fixed Codex app-server stdio returns authenticated, normalized primary and s
 it("version or generated response-schema drift fails closed before App Server usage is trusted", async () => {
   for (const drift of ["version", "schema"] as const) {
     const root = await tempDir("tidepool-codex-probe-");
-    const { command, calls } = fakeCodex({
-      version: drift === "version" ? "codex-cli 0.148.0" : CODEX_APP_SERVER_VERSION,
-      drift: (out) =>
-        writeFileSync(
-          join(out, "v2", "GetAccountResponse.json"),
-          JSON.stringify({
-            title: "GetAccountResponse",
-            required: ["requiresOpenaiAuth"],
-            properties: { requiresOpenaiAuth: { type: "string" } },
-          }),
-        ),
-      rows: [],
-    });
+    // version の周回は schema を互換のまま残す。両方ずらすと version 検査が無くても schema 側で倒れて通ってしまう。
+    const { command, calls } = fakeCodex(
+      drift === "version"
+        ? { version: "codex-cli 0.148.0", rows: [] }
+        : {
+            drift: (out) =>
+              writeFileSync(
+                join(out, "v2", "GetAccountResponse.json"),
+                JSON.stringify({
+                  title: "GetAccountResponse",
+                  required: ["requiresOpenaiAuth"],
+                  properties: { requiresOpenaiAuth: { type: "string" } },
+                }),
+              ),
+            rows: [],
+          },
+    );
 
     const result = await createCodexAppServerProbe({
       executable: "/opt/tidepool/bin/codex",
