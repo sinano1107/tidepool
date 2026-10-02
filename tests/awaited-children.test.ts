@@ -114,9 +114,8 @@ it("answering a question returns the parent to the queue head when only attached
   );
   expect(presentTask(db, parent).status).toBe("blocked");
 
-  const answered = answerQuestion(db, question, ["left"], new Date(4));
+  answerQuestion(db, question, ["left"], new Date(4));
 
-  expect(answered.parentUnblocked).toBe(true);
   expect(listQueue(db).find((task) => task.status === "todo")?.id).toBe(parent.id);
   expect(listQueue(db).findIndex((task) => task.id === parent.id)).toBeLessThan(
     listQueue(db).findIndex((task) => task.id === other.id),
@@ -153,9 +152,8 @@ it("answering a proposal question does not return its parent to the queue head(i
   // 提案 question は付帯子(ADR 0049 / ADR 0120 決定3)なので親を塞がない — answerQuestion がそれでも動かさないことを見るには、親が他の条件では unblock 対象になる状態が要る
   expect(presentTask(db, parent).status).toBe("todo");
 
-  const answered = answerQuestion(db, question, ["approve"], new Date(3));
+  answerQuestion(db, question, ["approve"], new Date(3));
 
-  expect(answered.parentUnblocked).toBe(false);
   expect(listQueue(db).findIndex((task) => task.id === parent.id)).toBeGreaterThan(
     listQueue(db).findIndex((task) => task.id === other.id),
   );

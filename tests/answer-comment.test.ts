@@ -171,7 +171,7 @@ it.each([
   const { db, question } = domainQuestion(kind);
   for (const comment of [undefined, "", " \n "]) expect(() => answerQuestion(db, question, [answer], at, undefined, comment)).toThrow(DomainError);
   expect(getTask(db, question.id)).toMatchObject({ status: "todo", question_answer: null });
-  expect(answerQuestion(db, question, [answer], at, undefined, "why").question.status).toBe("done");
+  expect(answerQuestion(db, question, [answer], at, undefined, "why").status).toBe("done");
 });
 
 it.each([
@@ -185,7 +185,7 @@ it.each([
   ["promotion", "abandon promotion"],
 ] as const)("%s の question への %s は comment なしで通る(ADR 0179 決定3)", (kind, answer) => {
   const { db, question } = domainQuestion(kind);
-  expect(answerQuestion(db, question, [answer], at).question.status).toBe("done");
+  expect(answerQuestion(db, question, [answer], at).status).toBe("done");
 });
 
 // 空・空白の comment を畳むのは submitAnswer —— HTTP と管理 MCP の両方の扉が通る application seam(門が answerQuestion にあるのとは別の層)。

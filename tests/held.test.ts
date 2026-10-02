@@ -26,11 +26,8 @@ it("祖先の未回答 question に held されたタスクは、回答される
   await t.clock.advance(HOUR);
   expect(t.worker.started).toEqual([]);
 
+  // 回答が撃つ即時 poll で拾われる —— 次の tick は待たない(#1235)
   await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, { answers: ["yes"] });
 
-  const after = (await api(t.baseUrl, "GET", "/api/tasks")).json;
-  expect(after.find((x: any) => x.id === child.id).status).toBe("todo");
-
-  await t.clock.advance(HOUR);
   expect(t.worker.started.map((x: any) => x.id)).toEqual([child.id]);
 });

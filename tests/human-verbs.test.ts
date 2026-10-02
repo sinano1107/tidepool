@@ -14,9 +14,11 @@ import { registerPrPromotionFailureQuestion } from "../src/landing.js";
 import {
   BOARD_WORKER_ID,
   cancelTaskDirectly,
+  decomposeTask,
   getTask,
   HUMAN_WORKER_ID,
   listBoard,
+  presentTask,
   registerMergeQuestion,
   registerTask,
   type Task,
@@ -770,6 +772,33 @@ it("回答で親が unblock したら queue head の再評価を即時通知す�
   );
 
   expect({ status: answered.status, polls }).toEqual({ status: "done", polls: 1 });
+});
+
+it.each([
+  { answer: "approve", comment: undefined },
+  { answer: "reject", comment: "not this child" },
+])("承認 question への回答($answer)で held が外れた兄弟は todo に戻り、親が blocked のままでも即時 poll が撃たれる", async ({ answer, comment }) => {
+  db = openDb(":memory:");
+  const parent = registerTask(db, { type: "work", title: "parent", purpose: "p", completion_criteria: "c" }, NOW);
+  const [sibling] = decomposeTask(
+    db,
+    parent,
+    {
+      reason: "split",
+      children: [
+        { title: "plain child", purpose: "p", completion_criteria: "c" },
+        { title: "risky child", purpose: "p", completion_criteria: "c", risk_flag: true },
+      ],
+    },
+    "tako",
+    NOW,
+  );
+  const before = presentTask(db, sibling!).status;
+  let polls = 0;
+
+  await submitAnswer({ db, pollNow: () => polls++, landing: unusedLanding }, onlyQuestion(db), [answer], comment, () => NOW);
+
+  expect({ before, after: presentTask(db, sibling!).status, polls }).toEqual({ before: "held", after: "todo", polls: 1 });
 });
 
 function registerHumanTask(db: Db): Task {
