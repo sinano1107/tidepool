@@ -224,14 +224,18 @@ function schemasConform(requests: any, account: any, rateLimits: any, modelList:
   );
 }
 
-/** Codex CLI の版の照合(ADR 0186 決定3 / ADR 0098 決定4): trim した `codex --version` と
- *  `CODEX_APP_SERVER_VERSION` の完全一致。Board call の口の門が使う(読めなければ投げ、口が不一致に倒す)。
- *  文面は下の互換性検査と同じ形。 */
-export async function checkCodexCliVersion(readVersion: () => Promise<string>): Promise<ContainmentCapability> {
-  const observed = (await readVersion()).trim();
+/** Codex CLI の版の照合(ADR 0186 決定3 / ADR 0098 決定4): trim 済みの版と `CODEX_APP_SERVER_VERSION` の
+ *  完全一致。一致すれば null、外れれば理由。null の観測は版が読めなかったことを表す。 */
+function codexVersionMismatch(observed: string | null): string | null {
   return observed === CODEX_APP_SERVER_VERSION
-    ? { available: true }
-    : { available: false, reason: `expected ${CODEX_APP_SERVER_VERSION}, observed ${observed}` };
+    ? null
+    : `expected ${CODEX_APP_SERVER_VERSION}, observed ${observed ?? "unavailable"}`;
+}
+
+/** Board call の口の門が使う版の照合(読めなければ投げ、口が不一致に倒す)。 */
+export async function checkCodexCliVersion(readVersion: () => Promise<string>): Promise<ContainmentCapability> {
+  const reason = codexVersionMismatch((await readVersion()).trim());
+  return reason === null ? { available: true } : { available: false, reason };
 }
 
 async function compatibilityCheck(
@@ -246,13 +250,8 @@ async function compatibilityCheck(
     return { ok: false, cliVersion: null, reason: `version check failed: ${String(error)}` };
   }
   const version = versionResult.exitCode === 0 ? versionResult.stdout.trim() : null;
-  if (version !== CODEX_APP_SERVER_VERSION) {
-    return {
-      ok: false,
-      cliVersion: version,
-      reason: `expected ${CODEX_APP_SERVER_VERSION}, observed ${version ?? "unavailable"}`,
-    };
-  }
+  const mismatch = codexVersionMismatch(version);
+  if (mismatch !== null) return { ok: false, cliVersion: version, reason: mismatch };
   const schemaDir = mkdtempSync(join(tmpdir(), "tidepool-codex-schema-"));
   try {
     const generated = await command(
@@ -271,7 +270,7 @@ async function compatibilityCheck(
     if (!schemasConform(requests, account, rateLimits, modelList)) {
       return { ok: false, cliVersion: version, reason: "required App Server method or response schema drifted" };
     }
-    return { ok: true, cliVersion: version };
+    return { ok: true, cliVersion: CODEX_APP_SERVER_VERSION };
   } catch (error) {
     return { ok: false, cliVersion: version, reason: `could not inspect generated schema: ${String(error)}` };
   } finally {
