@@ -15,6 +15,7 @@ import { resolveAgentOrQuarantine, resolveExecutionAgent } from "./agent.js";
 import { type BoardCall, readOutput } from "./board-call.js";
 import { boardDoctrine, boardProse } from "./board-prose.js";
 import { type BoardStatePath, boardStateOverlap } from "./board-state.js";
+import { readLines, readStderrTail } from "./child-stream.js";
 import { agentGitIdentityEnv } from "./claude-worker.js";
 import type { Clock } from "./clock.js";
 import { CODEX_APP_SERVER_VERSION, callAppServer, codexCommandThrough } from "./codex-app-server.js";
@@ -948,29 +949,15 @@ function readAgentMessage(value: unknown): string | null {
   return completed && typeof item.text === "string" && item.text !== "" ? item.text : null;
 }
 
-function consumeJsonl(
-  buffered: string,
-  chunk: string,
-  observe: (event: unknown) => void,
-  flush = false,
-): string {
-  const lines = (buffered + chunk).split("\n");
-  const remainder = flush ? "" : (lines.pop() ?? "");
-  for (const line of lines) {
-    if (!line.trim()) continue;
-    try {
-      observe(JSON.parse(line));
-    } catch {
-      // The verbatim transcript is the durable evidence; malformed lines
-      // carry no normalized usage or auth fact.
-    }
+/** JSONL の1行を読む。空行は読まず、壊れた行は捨てる —— 逐語の transcript が残る証拠で、
+ *  壊れた行は正規化した usage も認証の事実も運ばない。 */
+function parseJsonl(line: string): unknown {
+  if (!line.trim()) return null;
+  try {
+    return JSON.parse(line);
+  } catch {
+    return null;
   }
-  if (flush && lines.length === 0 && buffered.trim()) {
-    try {
-      observe(JSON.parse(buffered));
-    } catch {}
-  }
-  return remainder;
 }
 
 /** The OpenAI vendor adapter. The board selects it only for `provider: openai`. */
@@ -1116,8 +1103,6 @@ export class CodexWorker implements WorkerAdapter {
     }
     child.stdout.pipe(transcript.stream);
     child.stderr.pipe(transcript.stderr);
-    let stdout = "";
-    let stderr = "";
     let usage: CodexUsage | null = null;
     let reportedError: string | null = null;
     let lastMessage: string | null = null;
@@ -1126,14 +1111,8 @@ export class CodexWorker implements WorkerAdapter {
       reportedError = readTurnFailure(event) ?? reportedError;
       lastMessage = readAgentMessage(event) ?? lastMessage;
     };
-    child.stdout.on("data", (chunk: Buffer | string) => {
-      const text = chunk.toString();
-      stdout = consumeJsonl(stdout, text, observe);
-    });
-    child.stderr.on("data", (chunk: Buffer | string) => {
-      const text = chunk.toString();
-      stderr += text;
-    });
+    const flushStdout = readLines(child.stdout, (line) => observe(parseJsonl(line)));
+    const finishStderrTail = readStderrTail(child.stderr);
     this.running.set(task.id, child);
     child.on("error", (error) => {
       const errno = error as NodeJS.ErrnoException;
@@ -1157,11 +1136,11 @@ export class CodexWorker implements WorkerAdapter {
     });
     child.on("exit", (code, signal) => {
       this.running.delete(task.id);
-      consumeJsonl(stdout, "", observe, true);
+      flushStdout();
       const exit: WorkerExit = {
         exit_code: code,
         signal,
-        stderr_tail: stderr.trim().split("\n").slice(-20).join("\n") || null,
+        stderr_tail: finishStderrTail(),
         reported_error: reportedError,
         last_message: lastMessage,
       };

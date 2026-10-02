@@ -2592,6 +2592,18 @@ describe("ClaudeCodeWorker", () => {
     expect(exited?.payload).toMatchObject({ reported_error: "later" });
   });
 
+  it("マルチバイト文字の途中で割れた stdout からも reported_error が化けずに載る(#1298)", async () => {
+    const { start, processes, emitExit, db } = await makeWorker();
+    start("task-stdout-mb");
+    const bytes = Buffer.from(`${JSON.stringify({ type: "result", is_error: true, result: "認証エラー" })}\n`);
+    const cut = bytes.indexOf(Buffer.from("証")) + 1;
+    processes[0]!.stdout.write(bytes.subarray(0, cut));
+    processes[0]!.stdout.write(bytes.subarray(cut));
+    emitExit(1, null);
+    const exited = listEvents(db, "task-stdout-mb").find((e) => e.kind === "worker_exited");
+    expect(exited?.payload).toMatchObject({ reported_error: "認証エラー" });
+  });
+
   const lastMessageAfter = async (lines: object[]) => (await exitedAfter(lines)).last_message;
   const said = (content: object[], extra: object = {}) => ({
     type: "assistant",
