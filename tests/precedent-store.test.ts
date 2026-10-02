@@ -198,6 +198,7 @@ it("list_precedents は異議つき decision を cause・outcome・読んだ / �
   event({ kind: "memory_injected", worker_spawned_event_id: FIXTURE_SPAWNED_EVENT_ID, watermark: 0, entries: [{ id: 42, version: 42 }], tokens: 10, index_depth: 1, index_max_depth: 1, omitted: 0, tokenizer: "t", tokenizer_version: "1" });
   bundledObjection(db, FIXTURE_TASK, 6, at, "前の周期の異議");
   registerMetaReview(db, "memory", at); // 前回の meta-review
+  db.prepare("UPDATE tasks SET status = 'done' WHERE meta_review_subject = 'memory'").run(); // setup のみ: 完了した登録だけが窓の起点(ADR 0193)
   const objection = bundledObjection(db, FIXTURE_TASK, 7, at, "2回目は要らない");
   event({ kind: "objection_attributed", entry_id: 7, objection_event_ids: [objection], cause: "preference", evidence: "e", entries: null, round: "after_rca" });
   registerMetaReview(db, "memory", at); // 今回の meta-review(読み手)

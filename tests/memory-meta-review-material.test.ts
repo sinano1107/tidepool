@@ -160,6 +160,39 @@ function objectedDecision(db: Db, taskId: string, i: number): number {
   return decision;
 }
 
+it("abandon で取り消された登録は窓の起点にならない: 次の回の窓は完了した登録の watermark から始まり、その間の異議は既定の list_precedents と材料の節の両方に載る(ADR 0193 決定1)", () => {
+  const db = openDb(":memory:");
+  const work = registerTask(db, { type: "work", title: "w", purpose: "p", completion_criteria: "c" }, at).id;
+  const [beforeCancelled, afterCancelled] = [1, 2].map((i) => objectedDecision(db, work, i));
+  register(db, "memory", true);
+  bundledObjection(db, work, beforeCancelled!, at);
+  const cancelled = register(db, "memory");
+  const failure = registerTask(
+    db,
+    {
+      type: "question",
+      title: "failure",
+      purpose: "choose retry or abandon",
+      completion_criteria: "answered",
+      parent_id: cancelled,
+      question: [{ title: "next step", options: ["retry", "abandon"], recommendation: "retry" }],
+      cancel_option: "abandon",
+    },
+    at,
+  );
+  answerQuestion(db, failure, ["abandon"], at);
+  bundledObjection(db, work, afterCancelled!, at);
+  const review = register(db, "memory");
+  const [doneWatermark] = listEventsOfKinds(db, ["meta_review_registered"]).map((e) => e.payload.material_watermark);
+
+  const { previous_watermark, parts } = memoryMaterialOf(db, review);
+
+  expect(getTask(db, cancelled)?.status).toBe("cancelled");
+  expect(previous_watermark).toBe(doneWatermark);
+  expect(parts.precedents.map((p) => p.decision_event_id)).toEqual([beforeCancelled, afterCancelled]);
+  expect(listPrecedents(db, { taskId: review, agent: "auditor" }, {}, at).precedents.map((p) => p.decision_event_id)).toEqual([beforeCancelled, afterCancelled]);
+});
+
 it("異議つき判断は窓の中に異議のある decision だけを list_precedents の行で、決着した提案は窓の中に回答か陳腐化のあるものだけを list_memory_proposals の行で、枝の一覧は list_memory_branches の行で載せる", () => {
   const db = openDb(":memory:");
   const work = registerTask(db, { type: "work", title: "w", purpose: "p", completion_criteria: "c" }, at).id;

@@ -134,19 +134,23 @@ export function metaReviewSubjectOf(db: Db, taskId: string): MetaReviewSubject |
     ?.meta_review_subject ?? null;
 }
 
-/** 読み手の task より前の、同主題の最新の登録の watermark(読み口の既定、無ければ 0)。読み手自身の登録の watermark は
- *  「今」なので除く。 */
-export function previousMetaReviewWatermark(db: Db, readerTaskId: string): number {
+/** 同主題で完了(done)した最新の登録の watermark(無ければ 0)。取り消された登録は材料の窓の起点にならない(ADR 0193 決定1)。
+ *  `excludeTaskId` は読み手自身 —— その登録の watermark は「今」なので除く。 */
+function lastDoneWatermark(db: Db, subject: MetaReviewSubject | null, excludeTaskId: string | null): number {
   return (
     db
       .prepare(
-        `SELECT json_extract(payload, '$.material_watermark') AS watermark FROM events
-          WHERE kind = 'meta_review_registered' AND json_extract(payload, '$.subject') = (SELECT meta_review_subject FROM tasks WHERE id = @task)
-            AND task_id IS NOT @task ORDER BY id DESC LIMIT 1`,
+        `SELECT json_extract(e.payload, '$.material_watermark') AS watermark FROM events e JOIN tasks t ON t.id = e.task_id
+          WHERE e.kind = 'meta_review_registered' AND json_extract(e.payload, '$.subject') = ? AND t.status = 'done'
+            AND e.task_id IS NOT ? ORDER BY e.id DESC LIMIT 1`,
       )
-      .get({ task: readerTaskId }) as { watermark: number } | undefined
+      .get(subject, excludeTaskId) as { watermark: number } | undefined
   )?.watermark ?? 0;
 }
+
+/** 読み手の task より前の、同主題で完了した最新の登録の watermark(読み口の既定、無ければ 0)。 */
+export const previousMetaReviewWatermark = (db: Db, readerTaskId: string): number =>
+  lastDoneWatermark(db, metaReviewSubjectOf(db, readerTaskId), readerTaskId);
 
 /** 材料の窓 `(after, upTo]`。upTo 省略 = 上限なし(due の判定と verb の既定)。 */
 export type MetaReviewWindow = { after: number; upTo?: number };
@@ -231,8 +235,9 @@ export function changeMetaReviewSettings(db: Db, change: z.infer<typeof metaRevi
   })();
 }
 
-/** scheduler の poll が毎回呼ぶ: due な主題の meta-review を登録する(`agents` は registry の agent 一覧、無ければ registry の無い盤面)。due = 前回登録から周期が経ち、
- *  同主題の open な task・提案 question が無く、前回の watermark より後に主題の材料がある(前回が無ければ周期は満たす)。材料は meta-review 自身の産物 —— 提案
+/** scheduler の poll が毎回呼ぶ: due な主題の meta-review を登録する(`agents` は registry の agent 一覧、無ければ registry の無い盤面)。due = 前回登録から周期が経ち
+ *  (取り消された登録も周期の起点、ADR 0193 決定2)、同主題の open な task・提案 question が無く、完了した前回の watermark より後に主題の材料がある
+ *  (前回が無ければ周期は満たす)。材料は meta-review 自身の産物 —— 提案
  *  question への回答が刻んだものと直接書き込み —— を数えない(ADR 0151)。 */
 export function registerDueMetaReviews(db: Db, now: Date, agents?: ListAgentTiers): void {
   const periodMs = readMetaReviewSettings(db).period_days * 24 * 60 * 60 * 1000;
@@ -240,10 +245,9 @@ export function registerDueMetaReviews(db: Db, now: Date, agents?: ListAgentTier
     const { material } = META_REVIEW_SUBJECTS[subject];
     const last = db
       .prepare(
-        `SELECT created_at, json_extract(payload, '$.material_watermark') AS watermark FROM events
-          WHERE kind = 'meta_review_registered' AND json_extract(payload, '$.subject') = ? ORDER BY id DESC LIMIT 1`,
+        `SELECT created_at FROM events WHERE kind = 'meta_review_registered' AND json_extract(payload, '$.subject') = ? ORDER BY id DESC LIMIT 1`,
       )
-      .get(subject) as { created_at: string; watermark: number } | undefined;
+      .get(subject) as { created_at: string } | undefined;
     if (last && Date.parse(last.created_at) + periodMs > now.getTime()) continue;
     // registry の提案の pin は registry の変更 event が無いので、未決着を数える直前に盤面が今読んでいる registry と照合する(fetch はしない)
     if (subject === "routing" && agents) settleStaleProposals(db, now, null, agents);
@@ -257,6 +261,6 @@ export function registerDueMetaReviews(db: Db, now: Date, agents?: ListAgentTier
       )
       .get({ subject });
     if (open) continue;
-    if (materialEvents(db, material, { after: last?.watermark ?? 0 }).length > 0) registerMetaReview(db, subject, now);
+    if (materialEvents(db, material, { after: lastDoneWatermark(db, subject, null) }).length > 0) registerMetaReview(db, subject, now);
   }
 }
