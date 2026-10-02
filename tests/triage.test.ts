@@ -1,10 +1,10 @@
 import { afterEach, expect, it } from "vitest";
 import type { Cause } from "../src/cause.js";
-import { openDb } from "../src/db.js";
+import { type Db, openDb } from "../src/db.js";
 import { appendEvent, listEvents } from "../src/events.js";
 import type { GatedJudgment } from "../src/retrospective.js";
-import { listChildren, logDecision, registerTask } from "../src/tasks.js";
-import { commitTriage, entryObjections, objectionsById, raiseObjection, recordDisplayedEntries, startTriage, TRIAGE_TIMEOUT, TriageError } from "../src/triage.js";
+import { BOARD_WORKER_ID, HUMAN_WORKER_ID, listChildren, logDecision, registerTask } from "../src/tasks.js";
+import { closeStaleTriage, closeTriageSessionOnly, commitTriage, entryObjections, objectionsById, raiseObjection, recordDisplayedEntries, stageFrontInsert, startTriage, TRIAGE_TIMEOUT, TriageError } from "../src/triage.js";
 import {
   api,
   bootTidepool,
@@ -867,4 +867,32 @@ it("commit が立てる子の登録は材料の異議 id 列を持つ —— 修
     ["rca (self): t", "helmsman", [h]],
     ["rca (auditor): t", null, [d, h]],
   ]);
+});
+
+it.each([
+  ["コミット", (db: Db, at: Date): unknown => commitTriage(db, at), "webui"],
+  ["close-only", (db: Db, at: Date): unknown => closeTriageSessionOnly(db, at, "commit"), "webui"],
+  ["タイムアウト", (db: Db, at: Date): unknown => closeStaleTriage(db, new Date(at.getTime() + TRIAGE_TIMEOUT)), "board"],
+] as const)("%sで閉じた triage の RCA review は盤面名義、修理タスクと前挿しは human 名義で、登録と前挿しの経路は %s(ADR 0194 決定3・4)", (_, close, origin) => {
+  const db = openDb(":memory:");
+  const at = new Date("2026-10-02T00:00:00.000Z");
+  const task = registerTask(db, { type: "work", title: "t", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI);
+  const staged = registerTask(db, { type: "work", title: "staged", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI);
+  const entry = logDecision(db, task, "deckhand's call", "deckhand", at, "worker");
+  const session = startTriage(db, at);
+  raiseObjection(db, entry, "redo it", at);
+  stageFrontInsert(db, session.id, staged.id);
+
+  close(db, at);
+
+  const registered = listChildren(db, task.id).map((c) => {
+    const event = listEvents(db, c.id).find((e) => e.kind === "task_registered")!;
+    return [c.title, event.worker_id, event.origin];
+  });
+  expect(registered).toEqual([
+    ["repair: t", HUMAN_WORKER_ID, origin],
+    ["rca (self): t", BOARD_WORKER_ID, "board"],
+    ["rca (auditor): t", BOARD_WORKER_ID, "board"],
+  ]);
+  expect(listEvents(db, staged.id).find((e) => e.kind === "task_moved")).toMatchObject({ worker_id: HUMAN_WORKER_ID, origin });
 });

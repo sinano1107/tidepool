@@ -9,7 +9,7 @@ import {
   registerLocalMergeQuestion,
   registerPrPromotionFailureQuestion,
 } from "../src/landing.js";
-import { completeTask, getTask, listBoard, recordPrOpened, registerTask } from "../src/tasks.js";
+import { BOARD_WORKER_ID, completeTask, getTask, listBoard, recordPrOpened, registerTask } from "../src/tasks.js";
 import { raiseObjection } from "../src/triage.js";
 import {
   prepareWorkspaceAtPickup,
@@ -1036,6 +1036,28 @@ it("PR の merge question は PR から引いた着地タスクの付帯子で�
   attachUnsettledChild(db, clock, work.id);
 
   expect(landingAnnotation(db, question)).toEqual({ blocked_by: "attached_children" });
+});
+
+it("PR を開いた後の merge question も、CI red で止まった auto-merge の merge question も盤面の名義・経路で登録される(ADR 0194 決定3)", async () => {
+  const workspace = await makeWorkspace("landing-merge-question-registrant");
+  const { db, clock } = await openBoard();
+  const github = new FakeGitHubClient();
+  github.scriptCiStatus("failure");
+  recordPrOpened(db, landingWork(db, clock), 1, "worker", clock.now(), { merge: "escalate" }, false, "worker");
+  recordPrOpened(db, landingWork(db, clock), 2, "worker", clock.now(), { merge: "auto_if_ci_green" }, false, "worker");
+
+  await createLanding({ db, clock, workspace, github }).tick("auto_merge", clock.now());
+
+  const registered = listBoard(db)
+    .filter((q) => q.question_pending_merge_pr !== null)
+    .map((q) => {
+      const { worker_id, origin } = listEvents(db, q.id).find((e) => e.kind === "task_registered")!;
+      return [q.question_pending_merge_pr, worker_id, origin];
+    });
+  expect(registered).toEqual([
+    [1, BOARD_WORKER_ID, "board"],
+    [2, BOARD_WORKER_ID, "board"],
+  ]);
 });
 
 it("PR から着地タスクを引けない merge question は fail-closed で attached_children を名乗る", async () => {

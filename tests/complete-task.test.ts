@@ -1,6 +1,8 @@
 import { afterEach, expect, it } from "vitest";
-import { HANDOFF_FIELDS } from "../src/tasks.js";
-import { api, bootTidepool, HOUR, mcpClient, type Tidepool } from "./harness.js";
+import { openDb } from "../src/db.js";
+import { listEvents } from "../src/events.js";
+import { BOARD_WORKER_ID, completeTask, HANDOFF_FIELDS, listChildren, registerTask } from "../src/tasks.js";
+import { api, bootTidepool, FULL_HANDOFF, HOUR, HUMAN_WEBUI, mcpClient, type Tidepool } from "./harness.js";
 
 let t: Tidepool;
 afterEach(() => t?.stop());
@@ -89,4 +91,15 @@ it("worker 用 complete_task の description は HANDOFF_FIELDS の全フィー�
   } finally {
     await client.close();
   }
+});
+
+it("完了時レビューは完了させた agent ではなく盤面の名義・経路で登録される(ADR 0194 決定3)", () => {
+  const db = openDb(":memory:");
+  const at = new Date("2026-10-02T00:00:00.000Z");
+  const root = registerTask(db, { type: "work", title: "root", purpose: "p", completion_criteria: "c", assignee: "deckhand" }, at, ...HUMAN_WEBUI);
+
+  completeTask(db, root, FULL_HANDOFF, "deckhand", at, "worker");
+
+  const [review] = listChildren(db, root.id);
+  expect(listEvents(db, review!.id).find((e) => e.kind === "task_registered")).toMatchObject({ worker_id: BOARD_WORKER_ID, origin: "board" });
 });

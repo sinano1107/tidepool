@@ -54,7 +54,7 @@ it("flag の無いルート work の完了でも Auditor 宛ての統合点レ�
   ]);
   const review = board.find((x: any) => x.type === "review");
   const events = (await api(t.baseUrl, "GET", `/api/tasks/${review.id}/events`)).json;
-  expect(events.find((e: any) => e.kind === "task_registered").origin).toBe("worker");
+  expect(events.find((e: any) => e.kind === "task_registered").origin).toBe("board");
 });
 
 it.each([false, true])(

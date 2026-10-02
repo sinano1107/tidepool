@@ -585,9 +585,7 @@ export function createLanding(deps: LandingDeps): Landing {
           `"${task.title}"'s auto_if_ci_green auto-merge found CI red on PR #${pr_number}. ` +
             "Merge anyway, or hold?",
           "hold",
-          HUMAN_WORKER_ID,
           now,
-          "board",
         );
       }
     },

@@ -13,7 +13,6 @@ import {
 } from "../src/human-verbs.js";
 import { registerPrPromotionFailureQuestion } from "../src/landing.js";
 import {
-  BOARD_WORKER_ID,
   cancelTaskDirectly,
   decomposeTask,
   getTask,
@@ -550,7 +549,7 @@ it("merge 回答は question の workspace で live CI を確認してから実 
   );
   // 本番では recordPrOpened が pr_number を書いてから question を立てる(#403 の回答時検証はこの行で着地タスクを引く)
   db.prepare("UPDATE tasks SET pr_number = 42 WHERE id = ?").run(work.id);
-  registerMergeQuestion(db, work, 42, "decide whether to merge", "merge", BOARD_WORKER_ID, NOW, "worker");
+  registerMergeQuestion(db, work, 42, "decide whether to merge", "merge", NOW);
   const question = onlyQuestion(db);
   const github = new FakeGitHubClient();
   const afterCi = new Date(NOW.getTime() + 60_000);

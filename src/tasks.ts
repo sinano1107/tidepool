@@ -896,8 +896,9 @@ export function completeTask(
             workspace: task.workspace ?? undefined,
           },
           now,
-          workerId,
-          origin,
+          // 盤面の規則が立てる(ADR 0194 決定3)—— 完了させた agent の名義ではない
+          BOARD_WORKER_ID,
+          "board",
         );
       }
     }
@@ -1667,7 +1668,9 @@ export const PR_PROMOTION_FAILURE_OPTIONS = ["retry", "abandon promotion"] as co
 
 /** Registers the merge-decision question every merge escalation shares
  *  (the `escalate` dial, and `auto_if_ci_green`'s risky-task and CI-failure
- *  fallbacks) — only the title/purpose/recommendation differ per caller.
+ *  fallbacks) — only the title/purpose/recommendation differ per caller. Always
+ *  under the board's name: the board's rule raises it, whoever opened the PR
+ *  (ADR 0194 決定3).
  *  Exported so merge.ts's CI-failure fallback shares this exact shape too,
  *  rather than redeclaring it (they must never drift apart). */
 export function registerMergeQuestion(
@@ -1676,9 +1679,7 @@ export function registerMergeQuestion(
   prNumber: number,
   purpose: string,
   recommendation: (typeof MERGE_QUESTION_OPTIONS)[number],
-  workerId: string,
   now: Date,
-  origin: EventOrigin,
 ): void {
   const title = `merge PR #${prNumber}: ${task.title}`;
   registerTask(
@@ -1698,8 +1699,8 @@ export function registerMergeQuestion(
       workspace: task.workspace ?? undefined,
     },
     now,
-    workerId,
-    origin,
+    BOARD_WORKER_ID,
+    "board",
   );
 }
 
@@ -1788,7 +1789,7 @@ export function recordPrOpened(
       at: now,
     });
     const ask = (purpose: string) =>
-      registerMergeQuestion(db, task, prNumber, purpose, "merge", workerId, now, origin);
+      registerMergeQuestion(db, task, prNumber, purpose, "merge", now);
     if (isProtected) {
       ask(
         `"${task.title}" completed and opened PR #${prNumber} against a protected ` +
@@ -2013,16 +2014,18 @@ export function decomposeTask(
  *  one decompose judgment here" are the same fact — no separate provenance
  *  marker is needed. Any status counts (even a since-cancelled agent child
  *  still means the judgment was made); this is deliberately permanent, not
- *  reset if that child later settles. */
+ *  reset if that child later settles. A board-named child (failure question,
+ *  premise-breach question, RCA review) is the board's rule, not an agent's
+ *  decompose judgment, so it does not count (ADR 0194 決定5). */
 function hasAgentRegisteredChild(db: Db, parentId: string): boolean {
   const row = db
     .prepare(
       `SELECT 1 FROM tasks t
        JOIN events e ON e.task_id = t.id AND e.kind = 'task_registered'
-       WHERE t.parent_id = ? AND e.worker_id <> ?
+       WHERE t.parent_id = ? AND e.worker_id NOT IN (?, ?)
        LIMIT 1`,
     )
-    .get(parentId, HUMAN_WORKER_ID);
+    .get(parentId, HUMAN_WORKER_ID, BOARD_WORKER_ID);
   return row !== undefined;
 }
 

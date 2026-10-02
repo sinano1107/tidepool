@@ -793,7 +793,7 @@ export function holdChildren(t: Tidepool, parentId: string): Task {
 export function registerQuestion(t: Tidepool, input: Omit<RegisterTaskInput, "type">): Task {
   const db = openDb(join(t.dir, "board.sqlite"));
   try {
-    return registerTask(db, { ...input, type: "question" }, t.clock.now(), BOARD_WORKER_ID, "webui");
+    return registerTask(db, { ...input, type: "question" }, t.clock.now(), BOARD_WORKER_ID, "board");
   } finally {
     db.close();
   }
@@ -991,6 +991,14 @@ export async function runNow(t: Tidepool, taskId: string) {
   }
   await api(t.baseUrl, "POST", `/api/tasks/${taskId}/move`, { after: null });
   await api(t.baseUrl, "POST", `/api/tasks/${taskId}/move`, { after: null });
+}
+
+/** RCA 子を worker の完了で決着させる(所見なし)。RCA review は盤面の名義なので人間の直接 cancel は届かない
+ *  (ADR 0194)—— `runNow` で拾わせて完了する。 */
+export async function settleRcaByWorker(t: Tidepool, reviewId: string) {
+  await runNow(t, reviewId);
+  const res = await completeViaMcp(t, reviewId, false);
+  if (res.isError) throw new Error(`RCA completion failed: ${JSON.stringify(res)}`);
 }
 
 /** `taskId` の task として RCA の起草 verb `propose_from_objection` を呼ぶ(起草の中身は固定)。 */

@@ -9,7 +9,7 @@ import {
 } from "./containment.js";
 import type { Db } from "./db.js";
 import { getDisplayLanguage } from "./display-language.js";
-import { appendEvent } from "./events.js";
+import { appendEvent, latestEventOfTask } from "./events.js";
 import {
   type ExecutionExclusions,
   type ExecutionSetting,
@@ -45,7 +45,7 @@ import {
   contentSourceFor,
   DEFAULT_AUDITOR_NAME,
   escalateTask,
-  isHumanRegistered,
+  HUMAN_WORKER_ID,
   nextSlotTask,
   pickupTask,
   resolveTaskAgent,
@@ -431,11 +431,13 @@ export function startScheduler(deps: {
     }
   }
 
-  /** 関連 leaf を何で引くか(ADR 0175 決定2〜4): 人間が登録した task を、表示言語が English でない盤面でだけ、
-   *  title / purpose / 完了基準の1つの文面として英語へ訳す。訳せなければ理由を返し、pickup は止めない ——
-   *  client の無い盤面は撃たなかったのと同じ throttled。 */
+  /** 関連 leaf を何で引くか(ADR 0175 決定2〜4、決定3 は ADR 0194 決定6 で改訂): 人間が登録した task か、登録の記録に
+   *  異議の材料を持つ task を、表示言語が English でない盤面でだけ、title / purpose / 完了基準の1つの文面として英語へ訳す。
+   *  訳せなければ理由を返し、pickup は止めない —— client の無い盤面は撃たなかったのと同じ throttled。 */
   async function injectionQuery(task: Task): Promise<InjectionQuery | undefined> {
-    if (!isHumanRegistered(db, task.id) || getDisplayLanguage(db) === "English") return undefined;
+    const registered = latestEventOfTask(db, task.id, "task_registered")!;
+    const humanWords = registered.worker_id === HUMAN_WORKER_ID || !!registered.payload.objection_event_ids?.length;
+    if (!humanWords || getDisplayLanguage(db) === "English") return undefined;
     if (!translationClient) return { reason: "throttled" };
     try {
       const outcome = await translateSource(db, translationClient, injectionQueryText(task), "English", clock.now());
