@@ -777,7 +777,7 @@ it("回答で親が unblock したら queue head の再評価を即時通知す�
 it.each([
   { answer: "approve", comment: undefined },
   { answer: "reject", comment: "not this child" },
-])("承認 question への回答($answer)で held が外れた兄弟は、親が blocked のままでも即時 poll で拾われる", async ({ answer, comment }) => {
+])("承認 question への回答($answer)で held が外れた兄弟は todo に戻り、親が blocked のままでも即時 poll が撃たれる", async ({ answer, comment }) => {
   db = openDb(":memory:");
   const parent = registerTask(db, { type: "work", title: "parent", purpose: "p", completion_criteria: "c" }, NOW);
   const [sibling] = decomposeTask(
