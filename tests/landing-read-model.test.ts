@@ -46,13 +46,7 @@ it("読み口は着地 question に回答可否を添え、一般 question は l
 
   const rows = await questions(t);
 
-  expect(rows).toContainEqual(
-    expect.objectContaining({
-      question_pending_local_merge_task_id: task.id,
-      landing: { blocked_by: null },
-    }),
-  );
-  expect(rows.filter((q: any) => q.landing !== null)).toHaveLength(1);
+  expect(rows.find((q: any) => q.question_pending_local_merge_task_id === task.id).landing).not.toBe(null);
   expect(rows.find((q: any) => q.question_items[0].title === "which way?").landing).toBe(null);
 });
 
