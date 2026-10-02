@@ -976,7 +976,7 @@ export async function submitAnswer(
   // 提案 question(ADR 0120 決定3・spec #615 F / ADR 0150)は回答と適用を1 transaction にする。memory の approve は承認の
   // export(pin 不一致の DomainError は回答ごと巻き戻す)、reject は reject の export、defer は何もしない(ADR 0165)。routing の approve は表の書き口で
   // 行を書く —— 回答が先に question を done にするので、書き口の陳腐化の hook はこの question 自身を決着させない
-  const { question, parentUnblocked, pickupResumed } = deps.db.transaction(() => {
+  const question = deps.db.transaction(() => {
     const answered = answerQuestion(
       deps.db,
       task,
@@ -1039,8 +1039,8 @@ export async function submitAnswer(
   // 解放と対で走る。待っている回収を持たない Containment quarantine(ツール面のずれ
   // など)では no-op。
   if (quarantineKind === "containment") deps.reclaim?.acceptReclaimed();
-  // An unblocked parent or a released quarantine can make the queue
-  // head pickable immediately. During triage, staging keeps both flags false.
-  if (parentUnblocked || pickupResumed) deps.pollNow();
+  // 受理された回答は常に poll を撃つ —— 何が pickable になったかの判定は poll の1点で行い、契機の側は判定しない
+  // (ADR 0119 決定1)。triage 中は盤面が止まっていて、session の commit が poll を撃つ(ADR 0065 決定9)
+  if (!session) deps.pollNow();
   return presentTask(deps.db, task, deps.defaultAgentName, deps.auditorName);
 }

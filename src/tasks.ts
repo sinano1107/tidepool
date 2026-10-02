@@ -1269,8 +1269,7 @@ export function needsComment(question: Pick<Task, "question_proposal" | "questio
  *  state never exists. Each answer is either a picked option or a free-text
  *  override, either way a plain string. The question completes only once
  *  every item is answered; only a parent this answer actually unblocks
- *  returns to the queue head (the caller fires the immediate poll on
- *  `parentUnblocked`).
+ *  returns to the queue head.
  *
  *  `stageUnblock` defers the head move: when given (an open triage session),
  *  the answer is just as durable but the unblocked parent is handed to the
@@ -1293,8 +1292,7 @@ export function needsComment(question: Pick<Task, "question_proposal" | "questio
  *  repair confirmation — the caller has already run that kind's check and
  *  refused the answer if it failed (see human-verbs.ts). The open question is
  *  the quarantine's only state, so settling it is the release; every kind
- *  records the same `quarantine_released` and reports `pickupResumed` so the
- *  caller fires the immediate poll, same as `parentUnblocked`. */
+ *  records the same `quarantine_released`. */
 export function answerQuestion(
   db: Db,
   question: Task,
@@ -1313,12 +1311,10 @@ export function answerQuestion(
    *  同じく event に運ぶだけ。修正つきの回答は推奨どおりに数えない。 */
   amendment?: ProposalAmendment,
   origin: EventOrigin = "webui",
-): { question: Task; parentUnblocked: boolean; pickupResumed: boolean } {
+): Task {
   assertAnswerable(question, answers, comment);
   const items = question.question_items!;
   const answer = answers[0]!;
-  let parentUnblocked = false;
-  let pickupResumed = false;
   db.transaction(() => {
     db.prepare(
       "UPDATE tasks SET status = 'done', question_answer = ?, question_answer_comment = ? WHERE id = ?",
@@ -1351,7 +1347,6 @@ export function answerQuestion(
         payload: { kind: "quarantine_released", quarantine, value: question.question_quarantine_value },
         at: now,
       });
-      pickupResumed = true;
       return;
     }
 
@@ -1412,11 +1407,10 @@ export function answerQuestion(
         stageUnblock(unblockTarget.id);
       } else {
         moveTask(db, unblockTarget, null, now, HUMAN_WORKER_ID, origin);
-        parentUnblocked = true;
       }
     }
   })();
-  return { question: getTask(db, question.id)!, parentUnblocked, pickupResumed };
+  return getTask(db, question.id)!;
 }
 
 /** The scope shared by abandon and held (ADR 0048): the failed task itself,

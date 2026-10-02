@@ -45,7 +45,7 @@ describe("agent の quarantine(ADR 0012 / issue #36: workspace 版の agent 名�
     ).toThrow(DomainError);
   });
 
-  it("agent の quarantine の question に回答すると agent 名の quarantine が解け、pickupResumed が立つ", () => {
+  it("agent の quarantine の question に回答すると agent 名の quarantine が解ける", () => {
     const db = openDb(":memory:");
     const question = registerTask(
       db,
@@ -67,14 +67,13 @@ describe("agent の quarantine(ADR 0012 / issue #36: workspace 版の agent 名�
       BOARD_WORKER_ID,
     );
 
-    const { pickupResumed, question: answered } = answerQuestion(
+    const answered = answerQuestion(
       db,
       question,
       ["repaired by hand"],
       new Date(1),
     );
 
-    expect(pickupResumed).toBe(true);
     expect(answered.status).toBe("done");
     expect(agentNeedsHuman(db, "navigator")).toBe(false);
   });
