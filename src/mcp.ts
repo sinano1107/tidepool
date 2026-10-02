@@ -825,7 +825,7 @@ function registerMetaReviewVerbs(server: McpServer, deps: McpDeps, attributedTas
         "List objected decisions from past worker sessions: the decision line, objections and their attributed cause, " +
         "the session outcome, and the memory entry ids read (entries_read) and seen (entries_seen) before the decision. " +
         "When the cause is memory, entries names the ids of the entries the worker read and followed that were wrong; otherwise it is null. " +
-        "Defaults to objections since the previous meta-review of your subject; pass since_watermark (an event id) to look further back.",
+        "Defaults to objections since the previous completed meta-review of your subject; pass since_watermark (an event id) to look further back.",
       inputSchema: { since_watermark: z.number().int().min(0).optional(), page },
     },
     async (input) => run((reader, now) => listPrecedents(deps.db, reader, input, now)),
@@ -837,7 +837,7 @@ function registerMetaReviewVerbs(server: McpServer, deps: McpDeps, attributedTas
 
 /** 主題 routing の読み口(issue #917 / spec #916 C)。集計はドメイン層(routing-review.ts)。 */
 function registerRoutingMetaReviewVerbs(server: McpServer, deps: McpDeps, run: MetaReviewRun): void {
-  const since_watermark = z.number().int().min(0).optional().describe("An event id; defaults to the previous routing meta-review's registration.");
+  const since_watermark = z.number().int().min(0).optional().describe("An event id; defaults to the previous completed routing meta-review's registration.");
 
   server.registerTool(
     "list_routing_shadow",

@@ -146,7 +146,7 @@ it("shadow 行は書いた時点の両セルの受理数・却下数と除外後
   expect(listRoutingShadow(db, reader, { since_watermark: 0 }).shadow).toMatchObject(expected);
 });
 
-it("読み口の既定の窓は読み手より前の routing の登録の watermark から —— 読み手自身の登録も memory の登録も窓を動かさない", () => {
+it("読み口の既定の窓は読み手より前に完了した routing の登録の watermark から —— 読み手自身の登録も memory の登録も窓を動かさない", () => {
   const { db, work, spawn, exit, allocate, routingReview } = board();
   const before = work("before");
   recordShadow(db, before.id, shadow(opus, opus, "prior"), at);

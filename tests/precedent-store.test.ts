@@ -186,7 +186,7 @@ it("読み口は同じ (workspace, agent) の Episode を時系列(session を�
   ).toEqual([FIXTURE_SPAWNED_EVENT_ID, 12]);
 });
 
-it("list_precedents は異議つき decision を cause・outcome・読んだ / 見た記憶つきで返し、既定では前回の meta-review 登録より後に異議が来たものだけを返す(issue #619)", async () => {
+it("list_precedents は異議つき decision を cause・outcome・読んだ / 見た記憶つきで返し、既定では前回の完了した meta-review 登録より後に異議が来たものだけを返す(issue #619)", async () => {
   const db = seedFixtureBoard();
   projectAndPersist(db, {
     workerSpawnedEventId: FIXTURE_SPAWNED_EVENT_ID,

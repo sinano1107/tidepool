@@ -177,7 +177,7 @@ export function materialSection(subject: MetaReviewSubject, window: Required<Met
     `## ${META_REVIEW_SUBJECTS[subject].task.title} material`,
     "",
     `This cycle's material, gathered by the board when this session started: changes after event ${window.after} up to and including event ` +
-      `${window.upTo} — the registrations of the previous ${subject} meta-review and of this one. Each row is one JSON object with the fields of the read verb named under its heading.`,
+      `${window.upTo} — the registrations of the previous completed ${subject} meta-review and of this one. Each row is one JSON object with the fields of the read verb named under its heading.`,
     ...parts.flatMap(([heading, note, rows, empty]) => ["", `### ${heading}`, "", note, ...(rows.length === 0 ? [`(${empty})`] : rows.map((row) => JSON.stringify(row)))]),
   ].join("\n");
 }
