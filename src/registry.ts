@@ -922,9 +922,10 @@ export class UnknownAuthorityProfileError extends Error {
 
 const workspacesSchema = z.record(z.string(), workspaceEntrySchema);
 
-/** Grammar check across a parsed workspaces.yaml (ADR 0035). Runs at load, the
- *  same moment `parseAgentFile` checks a skill allowlist: a malformed widening
- *  must fail the registry read loudly, never reach a spawn quietly. */
+/** Grammar check across a parsed workspaces.yaml (ADR 0035), plus the shared
+ *  name rule on each key (issue #1367). Runs at load, the same moment
+ *  `parseAgentFile` checks a skill allowlist: a malformed widening must fail
+ *  the registry read loudly, never reach a spawn quietly. */
 function assertValidWorkspaces(workspaces: z.infer<typeof workspacesSchema>): void {
   for (const [name, entry] of Object.entries(workspaces)) {
     assertNameRule(name, InvalidWorkspaceNameError);
