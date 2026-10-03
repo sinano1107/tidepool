@@ -7,7 +7,7 @@ This is `/triage`'s per-issue evaluation with its maintainer checkpoints replace
 ## Workspace
 
 - **Worktree.** `git worktree add --detach "$(mktemp -d)/sweep" origin/main` (the parent has fetched), and investigate there — the main checkout belongs to other sessions and its branch moves under you. `git rev-parse --short HEAD` in the worktree is the **investigated SHA** every comment cites.
-- **Throwaway tests.** Reproduce a claim with a test written in the worktree; it dies with the worktree. To run tests there, symlink the main checkout's `node_modules` into the worktree — or `npm ci` when `package-lock.json` differs between the two — and remove the link before removing the worktree.
+- **Throwaway tests.** Reproduce a claim with a test written in the worktree; it dies with the worktree unless the outcome is Pin. To run tests there, symlink the main checkout's `node_modules` into the worktree — or `npm ci` when `package-lock.json` differs between the two — and remove the link before removing the worktree.
 - **Lima VM**, when the issue's subject only shows on Linux or in a real worker run (containers, reclaim, Containment, a real CLI — a real `claude` / `codex` run happens only inside your clone, never on the Mac — [machine-setup.md](../../../docs/agents/machine-setup.md#linux-devtest-in-the-lima-vm)):
   1. `limactl clone tidepool-sweep-base sweep-<issue> --start` — your own disposable VM. When the parent reported no base VM, the issue's outcome is **skipped**, reason "no tidepool-sweep-base".
   2. Get the code in: `git archive --format=tar.gz -o <tmp>/src.tar.gz HEAD` in the worktree, `limactl copy <tmp>/src.tar.gz sweep-<issue>:/tmp/`, extract under `/tmp/<issue>`, `npm ci` there.
@@ -52,7 +52,7 @@ Exactly one:
 - **Findings** — a `needs-info` observation is done. Say what it showed and whether that answers the issue (next step: close) or leaves something to decide (next step: `needs-triage`, with the question).
 - **Production observation** — what is left can only be seen on a running board. Say what to watch for. Next step: add `verify:production`.
 - **Won't fix** — already implemented (point to where it lives) or rejected (with the reason). Next step: close.
-- **Pin** — Won't fix or Findings would close the issue, but the reason is unpinned behaviour (step 2). Write an Agent Brief whose work is promoting your throwaway test into the suite; give the test and the break that turned it red. Next step: a test-only PR from a triage session, closing the issue.
+- **Pin** — Won't fix or Findings would close the issue, but the reason is unpinned behaviour (step 2). Promote your throwaway test into the suite yourself: `git switch -c sweep-pin-<n> origin/main` in the worktree, place the test beside the area's existing tests, run the typecheck, lint, and that test file, commit, push, and open a test-only PR (`gh pr create --body-file`) carrying `Closes #<n>` and the break that turned it red. Then `git switch --detach origin/main` before the next issue. The comment says why this is Pin rather than close and links the PR. Next step: review and merge the PR.
 - **Skipped** — you could not evaluate it (missing base VM, conflicting state labels, anything that blocks the investigation itself). Skipped issues get no comment and no label, so the next sweep picks them up again; what blocked you goes in your return line.
 
 ### 4. Post
@@ -81,8 +81,8 @@ Drop the session link when the parent said there is none, and the Related sectio
 
 ### 5. Label
 
-On each evaluated issue, add `auto-triaged`, and the category label (`bug` or `enhancement`) when the issue has none. Those two labels, the comment, and the issues you file for findings outside the issue are the whole of your write access to the tracker: the state label, `verify:*`, blocked-by edges, and closing all stay with the maintainer, who acts on your recommended next step.
+On each evaluated issue, add `auto-triaged`, and the category label (`bug` or `enhancement`) when the issue has none. Those two labels, the comment, the issues you file for findings outside the issue, and a Pin's test-only PR are the whole of your write access to the tracker: the state label, `verify:*`, blocked-by edges, merging, and closing all stay with the maintainer, who acts on your recommended next step.
 
 ## Return
 
-To the parent, one line per issue — number, outcome, recommended next step, comment URL — then the issues you filed, and any worktree or VM clone you failed to remove.
+To the parent, one line per issue — number, outcome, recommended next step, comment URL — then the issues you filed and the Pin PRs you opened, and any worktree or VM clone you failed to remove.

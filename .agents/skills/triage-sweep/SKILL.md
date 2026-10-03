@@ -42,4 +42,4 @@ One general-purpose sub-agent per cluster on Opus 5.5 (`model: opus`), at most f
 
 ## 5. Report
 
-When every sub-agent has returned, print one table — issue, outcome, recommended next step, comment URL — then the issues the sub-agents filed, then anything a sub-agent reports it could not clean up (a worktree, a VM clone), with the command that removes it.
+When every sub-agent has returned, print one table — issue, outcome, recommended next step, comment URL — then the issues the sub-agents filed and the Pin PRs they opened, then anything a sub-agent reports it could not clean up (a worktree, a VM clone), with the command that removes it.
