@@ -128,6 +128,19 @@ describe("loadRegistry", () => {
     expect(() => loadRegistry(dir, "purely-local")).toThrow('invalid agent name "."');
   });
 
+  // issue #1372: basename("agents/.md", ".md") は ".md" を返し、名前 .md の agent が
+  // agents/.md.md を指してファイルとずれる。これが起きないのは readRegistryFiles の
+  // 正規表現(`[^/]+`)が拡張子だけのファイルを読み込み前に落とすから —— その性質の釘
+  it("拡張子だけの agents/.md・authority/.yaml は読み込まず、名前 .md・.yaml の登録を作らない", async () => {
+    const dir = await makeRegistry({
+      "agents/.md": VALID_AGENT_MD,
+      "authority/.yaml": VALID_AUTHORITY_YAML,
+    });
+    const registry = loadRegistry(dir, "purely-local");
+    expect(Object.keys(registry.agents)).not.toContain(".md");
+    expect(Object.keys(registry.authority)).not.toContain(".yaml");
+  });
+
   it("charset 外・. ・.. の名前の authority profile を含む commit は読み込みを倒す", async () => {
     for (const name of ["my profile", ".", ".."]) {
       const dir = await makeRegistry({ [`authority/${name}.yaml`]: VALID_AUTHORITY_YAML });
