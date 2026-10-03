@@ -74,9 +74,10 @@ interface WatchRecord {
   pickup: number;
   stopSentAt?: number;
   forceSentAt?: number;
-  /** 1回の force につき「回収済み観測」と「回収 timeout」のどちらか**一方だけ**が
-   *  動く。遅れて届いた空の観測が、既に quarantine へ倒れた slot を黙って解放して
-   *  しまわないための門でもある(解放の門は確認 question ただ1つ)。 */
+  /** 後始末の梯子(`teardownTick`)を、底に落ちた1度で止める。立てるのは
+   *  `onTeardownReclaimTimeout` だけ —— 立たなければ以後の tick ごとに containment の
+   *  quarantine を撃ち直す(開いている間は `quarantine_refired` を積み、回答後は question を
+   *  刷り直す)。 */
   settled: boolean;
   /** 観測した root の exit。読むのは梯子の底の question だけで、どの判定にも使わない(ADR 0191) */
   exit?: WorkerExit;
@@ -340,16 +341,17 @@ export function startWatchdog(deps: {
    *  へ戻り、`cap_interrupted` という起きていない event が書かれる(CONTEXT.md「Watchdog」:
    *  自動リトライは存在しない)。記録を先に置けば status は決着し、決定3 はこの経路でも真になる。 */
   function onReclaimed(taskId: string, rec: WatchRecord, limit: number): void {
-    if (rec.settled) return;
     // 強制回収の待ちの間に cap / 最終 verb が決着したなら、その後始末が観測を受ける。
     if (sessionInTeardown(db)?.taskId === taskId) return;
     // 後始末が持っていた門を、記録が先へ出た分だけこちらで読む —— 枠の主が変わっていれば
-    // 他人の session に failure question を立ててしまう(梯子の底での保留は `settled` が兼ねる)
+    // 他人の session に failure question を立ててしまう
     if (slot.currentTaskId !== taskId || slot.inTeardown) return;
     const task = getTask(db, taskId);
+    // 回収 timeout の後に遅れて届いた空の観測はここで外れる —— failure question が status を
+    // `todo` へ動かしている。外れなければ quarantine へ倒れた slot を黙って解放する
+    // (解放の門は確認 question ただ1つ)。後始末の側に届く観測を弾くのは `heldForContainment`
     if (task?.status !== "in_progress") return;
     const now = clock.now();
-    rec.settled = true;
     registerFailureQuestion(
       db,
       task,
@@ -370,7 +372,6 @@ export function startWatchdog(deps: {
    *  tree rule も走らせない(まだ生きている process が書いている作業ツリーを
    *  退避しても、退避そのものが競合する)。 */
   function onReclaimTimeout(task: Task, rec: WatchRecord, limit: number): void {
-    rec.settled = true;
     pending = task.id;
     failTask(
       db,
@@ -491,7 +492,6 @@ export function startWatchdog(deps: {
     if (task.status !== "in_progress") return;
     const limit = config.timeLimits[task.type];
     if (limit === undefined) return;
-    if (rec.settled) return;
 
     const now = clock.now().getTime();
     if (rec.forceSentAt !== undefined) {
