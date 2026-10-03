@@ -119,6 +119,27 @@ it("破綻の question への abandon は分解判断ごと破棄して親を再
   db.close();
 });
 
+it("破綻の question に abandon + comment で答えると、親の history で cancel された子の origin_question がその comment を運ぶ", () => {
+  const db = openDb(":memory:");
+  const parent = root(db);
+  const [a] = humanDecomposeTask(db, parent, { reason: "human split", children: [spec("A"), spec("B")] }, at, undefined, "webui");
+  const question = declarePremiseBreach(db, getTask(db, a!.id)!, "module M is broken", "tako", at, "worker")!;
+
+  answerQuestion(db, question, ["abandon"], at, undefined, "M は作り直す", undefined, "webui");
+
+  const originQuestion = { title: question.title, answer: ["abandon"], comment: "M は作り直す" };
+  expect(taskHistory(db, parent.id)).toEqual([
+    {
+      decision: "human split",
+      children: [
+        expect.objectContaining({ title: "A", status: "cancelled", origin_question: originQuestion }),
+        expect.objectContaining({ title: "B", status: "cancelled", origin_question: originQuestion }),
+      ],
+    },
+  ]);
+  db.close();
+});
+
 it("親の continue は判断ログ1行で held を解いて親を blocked に戻し、同じ判断への2度目の宣言は親に戻さず question になる", () => {
   const db = openDb(":memory:");
   const parent = root(db);
