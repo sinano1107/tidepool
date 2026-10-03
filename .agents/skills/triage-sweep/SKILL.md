@@ -15,6 +15,7 @@ argument-hint: "<N>"
 
 - **ponytail.** A brief is spec writing — deciding, not building ([workflow.md](../../../docs/agents/workflow.md)). If the ponytail ruleset is in your context, stop and ask the user to relaunch with `claude-design`: the `SubagentStart` hook would carry the mode into every sub-agent this run spawns.
 - **Session link.** Read `CLAUDE_CODE_BRIDGE_SESSION_ID` from the environment. When it is set, the link is `https://claude.ai/code/<that id>` — the page shows the sub-agents' transcripts too, so this one link covers the whole run. When it is unset (Remote Control off, or another provider), the comments go out without a link.
+- **Effort.** Sub-agents inherit the session's effort. If `$CLAUDE_EFFORT` is below `medium`, ask the user to run `/effort medium` before going on.
 - **Fetch.** `git fetch origin main` once here; every sub-agent branches its worktree from `origin/main`.
 - **Base VM.** Note whether `limactl list` shows `tidepool-sweep-base` ([machine-setup.md](../../../docs/agents/machine-setup.md#triage-sweep-base-vm)); pass that to every sub-agent.
 
@@ -24,7 +25,7 @@ List open issues carrying `needs-triage` or `needs-info`, drop any carrying `aut
 
 ## 3. Cluster
 
-Read each picked issue in full (`gh issue view <n> --comments`). Group them into **clusters**: two issues share a cluster when they share a subject, touch the same code area or ADR, or when one's outcome is an input to the other's — a duplicate, or a dependency nobody has drawn as blocked-by. An issue related to nothing is a cluster of one.
+Read each picked issue in full (`gh issue view <n> --json title,labels,body,comments`). Group them into **clusters**: two issues share a cluster when they share a subject, touch the same code area or ADR, or when one's outcome is an input to the other's — a duplicate, or a dependency nobody has drawn as blocked-by. An issue related to nothing is a cluster of one.
 
 The cluster is how consistency is bought: one sub-agent judges related issues in sequence, so it cannot contradict itself across them, while unrelated clusters run in parallel. When unsure, merge — a wrong merge costs wall-clock, a wrong split costs contradicting judgements.
 
