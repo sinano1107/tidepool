@@ -113,9 +113,9 @@ it("get_current_task の history に、完了済み work 子タスクの handoff
 });
 
 it.each([
-  ["comment なし", undefined, null],
-  ["comment あり", "WHY-REASON", "WHY-REASON"],
-] as const)("get_current_task の history に、cancelled 子タスクの発端 question の title/answer/comment が含まれる(abandon 後の再計画・%s)", async (_name, comment, expectedComment) => {
+  ["comment なし", null],
+  ["comment あり", "WHY-REASON"],
+] as const)("get_current_task の history に、cancelled 子タスクの発端 question の title/answer/comment が含まれる(abandon 後の再計画・%s)", async (_name, comment) => {
   const grace = 30 * MIN;
   const ws = await makeWorkspace("sandbox");
   t = await bootTidepool({ workspace: ws, watchdog: { timeLimits: { work: WORK_LIMIT }, grace } });
@@ -165,14 +165,14 @@ it.each([
       purpose: "purpose",
       completion_criteria: "criteria",
       status: "cancelled",
-      origin_question: { title: question.title, answer: ["abandon"], comment: expectedComment },
+      origin_question: { title: question.title, answer: ["abandon"], comment },
     });
     expect(siblingChild).toEqual({
       title: "sibling",
       purpose: "purpose",
       completion_criteria: "criteria",
       status: "cancelled",
-      origin_question: { title: question.title, answer: ["abandon"], comment: expectedComment },
+      origin_question: { title: question.title, answer: ["abandon"], comment },
     });
   } finally {
     await client.close();
