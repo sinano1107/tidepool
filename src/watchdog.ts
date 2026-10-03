@@ -76,7 +76,8 @@ interface WatchRecord {
   forceSentAt?: number;
   /** 後始末の梯子(`teardownTick`)を、底に落ちた1度で止める。立てるのは
    *  `onTeardownReclaimTimeout` だけ —— 立たなければ以後の tick ごとに containment の
-   *  quarantine を登録し直す。 */
+   *  quarantine を撃ち直す(開いている間は `quarantine_refired` を積み、回答後は question を
+   *  刷り直す)。 */
   settled: boolean;
   /** 観測した root の exit。読むのは梯子の底の question だけで、どの判定にも使わない(ADR 0191) */
   exit?: WorkerExit;
@@ -348,7 +349,7 @@ export function startWatchdog(deps: {
     const task = getTask(db, taskId);
     // 回収 timeout の後に遅れて届いた空の観測はここで外れる —— failure question が status を
     // `todo` へ動かしている。外れなければ quarantine へ倒れた slot を黙って解放する
-    // (解放の門は確認 question ただ1つ)
+    // (解放の門は確認 question ただ1つ)。後始末の側に届く観測を弾くのは `heldForContainment`
     if (task?.status !== "in_progress") return;
     const now = clock.now();
     registerFailureQuestion(
