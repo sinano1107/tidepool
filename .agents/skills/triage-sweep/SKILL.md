@@ -7,7 +7,7 @@ argument-hint: "<N>"
 
 # Triage sweep
 
-`/triage`'s per-issue evaluation, run without the maintainer in the loop and stopped where the maintainer's judgement starts. Every issue it touches ends on `auto-triaged` with a comment; moving the state label is the maintainer's step ([triage-labels.md](../../../docs/agents/triage-labels.md)).
+`/triage`'s per-issue evaluation, run without the maintainer in the loop and stopped where the maintainer's judgement starts. Every issue it evaluates ends on `auto-triaged` with a comment; moving the state label is the maintainer's step ([triage-labels.md](../../../docs/agents/triage-labels.md)).
 
 `$ARGUMENTS` is N, the number of issues to process this run.
 
@@ -15,6 +15,7 @@ argument-hint: "<N>"
 
 - **ponytail.** A brief is spec writing — deciding, not building ([workflow.md](../../../docs/agents/workflow.md)). If the ponytail ruleset is in your context, stop and ask the user to relaunch with `claude-design`: the `SubagentStart` hook would carry the mode into every sub-agent this run spawns.
 - **Session link.** Read `CLAUDE_CODE_BRIDGE_SESSION_ID` from the environment. When it is set, the link is `https://claude.ai/code/<that id>` — the page shows the sub-agents' transcripts too, so this one link covers the whole run. When it is unset (Remote Control off, or another provider), the comments go out without a link.
+- **Fetch.** `git fetch origin main` once here; every sub-agent branches its worktree from `origin/main`.
 - **Base VM.** Note whether `limactl list` shows `tidepool-sweep-base` ([machine-setup.md](../../../docs/agents/machine-setup.md#triage-sweep-base-vm)); pass that to every sub-agent.
 
 ## 2. Pick the issues
