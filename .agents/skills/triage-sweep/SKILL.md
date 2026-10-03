@@ -40,6 +40,8 @@ One general-purpose sub-agent per cluster on Opus 5.5 (`model: opus`), at most f
 - the session link, or the fact that there is none;
 - whether `tidepool-sweep-base` exists.
 
+After dispatching, end your turn. Each sub-agent's report arrives as its own message; act on "start the next" and on step 5 only from those.
+
 ## 5. Report
 
 When every sub-agent has returned, print one table — issue, outcome, recommended next step, comment URL — then the issues the sub-agents filed and the Pin PRs they opened, then anything a sub-agent reports it could not clean up (a worktree, a VM clone), with the command that removes it.
