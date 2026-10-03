@@ -33,7 +33,7 @@ Read the open issues this one links to and any you meet touching the same area. 
 
 Check the claim before judging it. A bug: reproduce it from the code path or a throwaway test. A `needs-info` issue: make the observation it asks for, wherever the worktree or a VM clone can show it. An observation only a running board can give — production behaviour, whether something hurts over time — is not yours to make; it decides the outcome below.
 
-When the claim does not hold, find what in the code makes it not hold, break that one spot in the worktree, and run the suite. Nothing turning red means the verdict rests on **unpinned** behaviour: your throwaway test is the only thing holding it.
+When the claim does not hold, find what in the code makes it not hold, break that one spot in the worktree, run the suite, and restore it. Nothing turning red means the verdict rests on **unpinned** behaviour: your throwaway test is the only thing holding it.
 
 ### 3. Decide the outcome
 
@@ -52,7 +52,7 @@ Exactly one:
 - **Findings** — a `needs-info` observation is done. Say what it showed and whether that answers the issue (next step: close) or leaves something to decide (next step: `needs-triage`, with the question).
 - **Production observation** — what is left can only be seen on a running board. Say what to watch for. Next step: add `verify:production`.
 - **Won't fix** — already implemented (point to where it lives) or rejected (with the reason). Next step: close.
-- **Pin** — Won't fix or Findings would close the issue, but the reason is unpinned behaviour (step 2). Promote your throwaway test into the suite yourself: `git switch -c sweep-pin-<n> origin/main` in the worktree, place the test beside the area's existing tests, run the typecheck, lint, and that test file, commit, push, and open a test-only PR (`gh pr create --body-file`) carrying `Closes #<n>` and the break that turned it red. Then `git switch --detach origin/main` before the next issue. The comment says why this is Pin rather than close and links the PR. Next step: review and merge the PR.
+- **Pin** — Won't fix or Findings would close the issue, but the reason is unpinned behaviour (step 2). Promote your throwaway test into the suite yourself: `git switch -c sweep-pin-<n> origin/main` in the worktree, place the test beside the area's existing tests, run the typecheck, lint, and that test file, commit the test file alone, push, and open a test-only PR (`gh pr create --body-file`) carrying `Closes #<n>` and the break that turned it red. Then `git switch --detach origin/main` before the next issue. The comment says why this is Pin rather than close and links the PR. Next step: review and merge the PR.
 - **Skipped** — you could not evaluate it (missing base VM, conflicting state labels, anything that blocks the investigation itself). Skipped issues get no comment and no label, so the next sweep picks them up again; what blocked you goes in your return line.
 
 ### 4. Post

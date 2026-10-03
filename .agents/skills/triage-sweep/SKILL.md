@@ -1,6 +1,6 @@
 ---
 name: triage-sweep
-description: Triage the newest N needs-triage / needs-info issues unattended — related issues clustered, clusters investigated in parallel sub-agents, each issue left with a brief, grilling questions, or findings, and the auto-triaged label for the human to act on.
+description: Triage the newest N needs-triage / needs-info issues unattended — related issues clustered, clusters investigated in parallel sub-agents, each issue left with a comment — a brief, grilling questions, findings, or a test-only PR pinning a verdict — and the auto-triaged label for the human to act on.
 disable-model-invocation: true
 argument-hint: "<N>"
 ---
