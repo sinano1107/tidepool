@@ -75,6 +75,25 @@ describe("createAgent: 正常系(issue #70)", () => {
     expect(git(registryDir, "log", "-1", "--format=%s")).toBe("create agent tako via WebUI");
   });
 
+  it("名前 .md の agent は agents/.md.md に書かれ、読み込むと名前 .md に戻る(issue #1372)", async () => {
+    const registryDir = await makeMainRegistry();
+
+    await createAgent(
+      {
+        name: ".md",
+        authority: "standard",
+        provider: "anthropic",
+        description: "Dot agent",
+        skills: ["*"],
+        systemPrompt: "You are dot.",
+      },
+      { registry: { dir: registryDir, mode: "purely-local" } },
+    );
+
+    expect(git(registryDir, "show", "main:agents/.md.md")).toContain("You are dot.");
+    expect(loadRegistry(registryDir, "purely-local").agents[".md"]?.systemPrompt).toBe("You are dot.");
+  });
+
   it("icon/tier/advisor を省略すると frontmatter にキー自体が現れず、ラウンドトリップでも不在のまま", async () => {
     const registryDir = await makeMainRegistry();
 
