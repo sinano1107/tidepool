@@ -101,6 +101,9 @@ it("回収 timeout では failure question は立つが slot は解放されず�
   containers.fireEmpty(task.id);
   await t.clock.advance(HOUR);
   expect(t.worker.started.map((x) => x.id)).toEqual([task.id]);
+  // pickup は開いている quarantine だけで止まるので、上の assert は slot の解放を
+  // 見分けない。解放の直前に走る tree rule が作業ツリーを動かしていないことで見る
+  expect(git(ws.path, "status", "--porcelain")).not.toBe("");
   // 遅れた観測は question も刷り直さない
   const after = await questions();
   expect(after.filter((q: any) => q.title.includes("watchdog killed"))).toHaveLength(1);
