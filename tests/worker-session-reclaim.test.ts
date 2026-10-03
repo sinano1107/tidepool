@@ -101,6 +101,10 @@ it("回収 timeout では failure question は立つが slot は解放されず�
   containers.fireEmpty(task.id);
   await t.clock.advance(HOUR);
   expect(t.worker.started.map((x) => x.id)).toEqual([task.id]);
+  // 遅れた観測は question も刷り直さない
+  const after = await questions();
+  expect(after.filter((q: any) => q.title.includes("watchdog killed"))).toHaveLength(1);
+  expect(after.filter((q: any) => q.title.includes("containment"))).toHaveLength(1);
 });
 
 it("「今なぜ pickup が起きないか」の読み口が回収失敗を盤面全体の停止として答える", async () => {
