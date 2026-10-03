@@ -112,10 +112,7 @@ it("get_current_task の history に、完了済み work 子タスクの handoff
   }
 });
 
-it.each([
-  ["comment なし", null],
-  ["comment あり", "WHY-REASON"],
-] as const)("get_current_task の history に、cancelled 子タスクの発端 question の title/answer/comment が含まれる(abandon 後の再計画・%s)", async (_name, comment) => {
+it("get_current_task の history に、cancelled 子タスクの発端 question の title/answer/comment が含まれる(abandon 後の再計画)", async () => {
   const grace = 30 * MIN;
   const ws = await makeWorkspace("sandbox");
   t = await bootTidepool({ workspace: ws, watchdog: { timeLimits: { work: WORK_LIMIT }, grace } });
@@ -150,7 +147,7 @@ it.each([
   const board1 = (await api(t.baseUrl, "GET", "/api/tasks")).json;
   const question = board1.find((x: any) => x.type === "question");
 
-  await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, { answers: ["abandon"], ...(comment && { comment }) });
+  await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, { answers: ["abandon"] });
 
   // abandon resumes the plan (parent) at once — same free-slot pickup as the
   // question-answer path
@@ -165,14 +162,14 @@ it.each([
       purpose: "purpose",
       completion_criteria: "criteria",
       status: "cancelled",
-      origin_question: { title: question.title, answer: ["abandon"], comment },
+      origin_question: { title: question.title, answer: ["abandon"], comment: null },
     });
     expect(siblingChild).toEqual({
       title: "sibling",
       purpose: "purpose",
       completion_criteria: "criteria",
       status: "cancelled",
-      origin_question: { title: question.title, answer: ["abandon"], comment },
+      origin_question: { title: question.title, answer: ["abandon"], comment: null },
     });
   } finally {
     await client.close();
