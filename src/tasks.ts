@@ -2722,7 +2722,7 @@ interface SettledChildContext {
   /** The reject-reason steering channel (issue #40) — carried alongside
    *  `answer` so a resumed parent reads why, not just what. */
   comment?: string | null;
-  origin_question?: { title: string; answer: string[] | null } | null;
+  origin_question?: { title: string; answer: string[] | null; comment: string | null } | null;
   /** 再分解が破棄した子(ADR 0121): 前提の破綻を宣言した子と、その理由。 */
   origin_breach?: { title: string; reason: string };
 }
@@ -2838,7 +2838,11 @@ function cancelOrigin(db: Db, taskId: string): Pick<SettledChildContext, "origin
     return { origin_breach: { title: declarer.title, reason: premiseBreachReason(db, declarer.id) } };
   }
   const question = getTask(db, payload.origin_question_id);
-  return { origin_question: question ? { title: question.title, answer: question.question_answer } : null };
+  return {
+    origin_question: question
+      ? { title: question.title, answer: question.question_answer, comment: question.question_answer_comment }
+      : null,
+  };
 }
 
 /** そのタスクの最新の前提の破綻の理由。 */
