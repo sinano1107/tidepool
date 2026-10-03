@@ -1448,7 +1448,7 @@ function scanWorkspaceSkills(workspacePath: string): string[] {
 }
 
 // 答えを取りに行く呼び出し(下書き・翻訳・配分評価・帰責・Behavior candidate の起草)の
-// 上限 —— 表の economy の行で長い dump を下書きする呼び出しも収まる幅に取る(行が high effort のときの所要は測っていない、ADR 0192 帰結)。
+// 上限 —— 表の economy の行で長い dump を下書きする呼び出しも収まる幅に取る(行が high effort のときも、下書き3種の所要は最長 27 秒だった —— #1350 の実測)。
 const ANSWER_CALL_LIMIT_MS = 300_000;
 
 /** `ExecFn` の本番の実装: 1回を Board call の口に通す(ADR 0136 決定2)。`kind` は回収の
