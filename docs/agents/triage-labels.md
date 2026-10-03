@@ -44,10 +44,12 @@ Absent means completion needs something outside the cloud container: hardware th
 
 | Label                | Meaning                                                                                              |
 | -------------------- | ---------------------------------------------------------------------------------------------------- |
-| `verify:production`  | The change is merged; the only confirmation still missing is one that production alone can show. |
+| `verify:production`  | What is still missing is an observation only a running board can give — the confirmation of a merged change, or whether something hurts in real use. |
 
 Absent is the point: an open issue with no `verify:*` label is work not yet done, so the open set
-reads as a queue. The label comes off when the observation lands, and the issue closes with it.
+reads as a queue. The label comes off when the observation lands, and the issue moves on by the
+`needs-info` rule above — closed when the observation is the answer, `needs-triage` when it leaves a
+decision.
 
 **It rides the issue that holds the confirmation, not the implementation one.** Implementation issues
 close at merge (ADR 0126), so the issue still waiting on production is the derived one — the row whose
@@ -62,3 +64,19 @@ comment only speaks once the issue is already open. Filter the queue with
 Most implementation issues never carry it. The venue a change's subject demands is usually CI or the
 Lima VM (`docs/agents/machine-setup.md`), and the Pi is production-only — "don't make checkouts there
 to test a change". This label is for the residue: behaviour that only the deployed board can show.
+
+## Sweep label
+
+| Label          | Meaning                                                                         |
+| -------------- | ------------------------------------------------------------------------------- |
+| `auto-triaged` | `/triage-sweep` has posted its evaluation; the maintainer's move is next. |
+
+Orthogonal to the state roles: the sweep leaves the state label where it was, and its comment's
+"Recommended next step" names the move — `ready-for-agent`, close, grill, `verify:production`. The
+sweep stops here because a brief is the specification ([workflow.md](./workflow.md)) and
+`ready-for-agent` is the build queue, so moving the label approves a spec; that stays the
+maintainer's step.
+
+The sweep's queue is `needs-triage` / `needs-info` without `auto-triaged` or `verify:production`.
+Take the label off to put an issue back in it — after answering the sweep's questions in a comment,
+say.

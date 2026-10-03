@@ -9,6 +9,7 @@ Ask `/ask-matt` when the question is "which skill fits". This file answers "how 
 | The work arrives as | Start with |
 | --- | --- |
 | An issue someone else filed — a report, a request | `/triage` |
+| A backlog of `needs-triage` / `needs-info` issues | `/triage-sweep <N>` in a design session, then act on each `auto-triaged` comment |
 | Something is broken and resists a first look | `/diagnosing-bugs` |
 | An idea of your own | `/grill-with-docs` |
 | An effort too foggy to scope in one session | `/wayfinder`, rejoining at `/to-spec` when the map clears |

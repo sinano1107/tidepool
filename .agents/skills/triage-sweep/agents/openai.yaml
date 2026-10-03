@@ -1,0 +1,5 @@
+interface:
+  display_name: "Triage sweep"
+  short_description: "Triage the newest N issues unattended"
+policy:
+  allow_implicit_invocation: false

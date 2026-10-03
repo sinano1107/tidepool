@@ -50,6 +50,23 @@ its tools is [docs/mac-first-boot.md](../mac-first-boot.md); use that, don't rep
   suite re-run the deploy-pi skill does after a kernel / systemd / CLI update on the Pi (ADR 0099
   決定5 — that is production validation, not dev/test). Don't make checkouts there to test a change.
 
+### Triage sweep base VM
+
+`/triage-sweep` gives each sub-agent that needs Linux its own clone of `tidepool-sweep-base`, a
+stopped copy of the `tidepool` VM. Lima cannot clone a running instance, hence the stopped base;
+clones are copy-on-write on APFS, so they take no disk until they write, start in about 20 s, and
+inherit the base's `claude` / `gh` logins.
+
+Create it — and recreate it the same way when the base's CLIs or logins have gone stale — while
+nothing is running in `tidepool`:
+
+```zsh
+limactl stop tidepool
+limactl delete -f tidepool-sweep-base   # recreating only
+limactl clone tidepool tidepool-sweep-base
+limactl start tidepool
+```
+
 ## If you skip this
 
 Nothing breaks loudly. A design session with ponytail on still works — it just keeps steering you toward the smallest thing that could work, during the step where the point is to consider the alternatives first. That is why the grilling and spec steps are told to flag it (workflow.md), rather than the repo trying to enforce it.
