@@ -32,7 +32,7 @@ Print the clusters to the user — issue numbers and a one-line reason each — 
 
 ## 4. Dispatch
 
-One general-purpose sub-agent per cluster, at most four running at once; start the next as one returns. Each prompt carries:
+One general-purpose sub-agent per cluster on Opus 5.5 (`model: opus`), at most four running at once; start the next as one returns. The main tier is enough: every outcome is read by the maintainer before anything moves. Each prompt carries:
 
 - the absolute path of [PROCEDURE.md](PROCEDURE.md) (this skill's base directory + `PROCEDURE.md`), with the instruction to read it first and follow it;
 - the cluster's issue numbers, newest first, and the reason they were grouped;
