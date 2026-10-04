@@ -112,7 +112,7 @@ it("get_current_task の history に、完了済み work 子タスクの handoff
   }
 });
 
-it("get_current_task の history に、cancelled 子タスクの発端 question の title/answer が含まれる(abandon 後の再計画)", async () => {
+it("get_current_task の history に、cancelled 子タスクの発端 question の title/answer/comment が含まれる(abandon 後の再計画)", async () => {
   const grace = 30 * MIN;
   const ws = await makeWorkspace("sandbox");
   t = await bootTidepool({ workspace: ws, watchdog: { timeLimits: { work: WORK_LIMIT }, grace } });
@@ -162,14 +162,14 @@ it("get_current_task の history に、cancelled 子タスクの発端 question 
       purpose: "purpose",
       completion_criteria: "criteria",
       status: "cancelled",
-      origin_question: { title: question.title, answer: ["abandon"] },
+      origin_question: { title: question.title, answer: ["abandon"], comment: null },
     });
     expect(siblingChild).toEqual({
       title: "sibling",
       purpose: "purpose",
       completion_criteria: "criteria",
       status: "cancelled",
-      origin_question: { title: question.title, answer: ["abandon"] },
+      origin_question: { title: question.title, answer: ["abandon"], comment: null },
     });
   } finally {
     await client.close();
