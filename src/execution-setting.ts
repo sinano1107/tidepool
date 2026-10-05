@@ -531,7 +531,7 @@ export function applyExecutionSettingsChange(db: Db, change: ExecutionSettingsCh
         break;
       }
       case "retrospective_tier":
-        assertKnownTier(db, "tier", change.value);
+        assertKnownTier(db, "retrospective_tier", change.value);
         db.prepare("UPDATE execution_defaults SET retrospective_tier_id = (SELECT id FROM tiers WHERE name = ?)").run(change.value);
         break;
       case "delete_row":
