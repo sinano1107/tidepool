@@ -211,7 +211,7 @@ export class ClaudeDraftClient implements DraftClient {
     return issueInspectionSchema.parse(await this.run(buildInspectionPrompt(issue)));
   }
 
-  // runs on the table's cheapest anthropic row of the board default tier (ADR 0192 / ADR 0200 決定4): no row or
+  // runs on the table's cheapest runnable anthropic row of the board default tier (ADR 0192 / ADR 0200 決定4): no row or
   // a closed Anthropic window fails with the reason, never falls back to another model
   private async run(prompt: string): Promise<unknown> {
     let row;

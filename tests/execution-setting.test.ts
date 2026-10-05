@@ -3,8 +3,10 @@ import { isClaudeModelAlias } from "../src/claude-model-alias.js";
 import { openDb } from "../src/db.js";
 import { listEventsOfKinds } from "../src/events.js";
 import {
+  anthropicBoardCallRow,
   applyExecutionSettingsChange,
   assertKnownTier,
+  assertTierRunnableFor,
   BOARD_DEFAULT_PRIORITY,
   changeExecutionSettings,
   composeRoutingRow,
@@ -27,7 +29,6 @@ import {
   selectExecutionSetting,
   type Tier,
   tierFieldDescriptions,
-  tierHasRowFor,
   tierNames,
 } from "../src/execution-setting.js";
 
@@ -458,11 +459,12 @@ const tierProposal: RegistryProposal = {
 };
 
 it("下げ先の検査は、対象ティアに agent の entry のいずれかの行があるか", () => {
-  expect(tierHasRowFor(SEED_EXECUTION_SETTINGS, ["moonshot"], "economy")).toBe(true);
+  const db = openDb(":memory:");
+  expect(() => assertTierRunnableFor(db, "kimi", ["moonshot"], "economy")).not.toThrow();
   // moonshot に standard の行は無い —— entry が1つでも行があれば通る
-  expect(tierHasRowFor(SEED_EXECUTION_SETTINGS, ["moonshot"], "standard")).toBe(false);
-  expect(tierHasRowFor(SEED_EXECUTION_SETTINGS, ["moonshot", "openai"], "standard")).toBe(true);
-  expect(tierHasRowFor(SEED_EXECUTION_SETTINGS, [], "economy")).toBe(false);
+  expect(() => assertTierRunnableFor(db, "kimi", ["moonshot"], "standard")).toThrow(/no row at standard/);
+  expect(() => assertTierRunnableFor(db, "kimi", ["moonshot", "openai"], "standard")).not.toThrow();
+  expect(() => assertTierRunnableFor(db, "kimi", [], "economy")).toThrow(/no row at economy/);
 });
 
 it("registry の提案の pin: 根拠の行は (provider, model) の tier / effort で照合し、agent は tier の値で照合する", () => {
@@ -566,6 +568,19 @@ it("行の Quarantine の照合は完全一致 —— claude-opus-5 の Quaranti
 it("Fable の行が Quarantine 中でも、ほかの行の advisor は `fable` のまま", () => {
   const db = boardWithRefusedRows([], [["anthropic", "claude-fable-5-1"]]);
   expect(executionSettingsFor(db, anthropicAgent(true), workAt("standard"))).toMatchObject([{ model: "claude-opus-5-5", advisor: "fable" }]);
+});
+
+const sonnet5 = { provider: "anthropic", tier: "economy", model: "claude-sonnet-5", effort: "high", price_in: 3, price_out: 15 } as const;
+
+it("表の行で走る Board call(振り返り・下書き)は走れる行の最安で撃つ —— 最安の行が Quarantine 中なら同じティアの次の行", () => {
+  const db = boardWithRefusedRows([sonnet5], [["anthropic", "claude-sonnet-5-5"]]);
+  expect(anthropicBoardCallRow(db, "economy")).toMatchObject({ model: "claude-sonnet-5" });
+});
+
+it("そのティアの anthropic の行がすべて Quarantine 中なら、Board call の行は Quarantine を名指して投げ、行が無いときと区別する", () => {
+  const db = boardWithRefusedRows([sonnet5], [["anthropic", "claude-sonnet-5-5"], ["anthropic", "claude-sonnet-5"]]);
+  // 行が無いときの文面(quarantine を含まない)は tests/claude-draft-client.test.ts が釘付けている
+  expect(() => anthropicBoardCallRow(db, "economy")).toThrow(/under a row quarantine/);
 });
 
 // ── 1つの段に同じ model は1行まで(ADR 0200 決定5 / issue #1419): 行の鍵は (provider, model, effort) ──

@@ -7,6 +7,7 @@ import {
   assertRowFits,
   assertTierDescription,
   assertTierName,
+  assertTierRunnableFor,
   boardDefaultTier,
   composeRoutingRow,
   loadExecutionSettingTable,
@@ -16,7 +17,6 @@ import {
   readTiers,
   rowName,
   type Tier,
-  tierHasRowFor,
   tierNames,
 } from "./execution-setting.js";
 
@@ -265,10 +265,9 @@ function agentTierProposal(db: Db, agents: readonly AgentView[], input: { agent?
   const from = agent.tier ?? boardDefaultTier(db);
   const below = tiers[tiers.indexOf(from) - 1];
   if (to !== below) throw new DomainError(`an agent's tier is lowered by exactly one step: ${name} is at ${from}, so the only target is ${below ?? "none (already the lowest tier)"}`);
+  assertTierRunnableFor(db, name, agentViewProviders(agent), to);
+  // 根拠の pin は「表にあるか」の照合なので、Quarantine 中の行も含む生の表で引く
   const table = loadExecutionSettingTable(db);
-  if (!tierHasRowFor(table, agentViewProviders(agent), to)) {
-    throw new DomainError(`the execution-setting table has no row at ${to} for ${name}'s providers (${agent.provider}), so the agent would be skipped`);
-  }
   const rows = new Map<string, RegistryProposal["pin"]["rows"][number]>();
   for (const id of evidence) {
     const event = getEvent(db, id);

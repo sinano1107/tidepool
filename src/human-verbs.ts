@@ -11,6 +11,7 @@ import { appendEvent, type EventOrigin } from "./events.js";
 import {
   type AddTierAmendment,
   applyExecutionSettingsChange,
+  assertTierRunnableFor,
   composeRoutingRow,
   type ExecutionSettingsChange,
   parseAddTierAmendment,
@@ -18,10 +19,8 @@ import {
   parseRoutingRowChange,
   parseTierDescriptionAmendment,
   type RoutingRowChange,
-  readExecutionSettings,
   registryPinChanges,
   type Tier,
-  tierHasRowFor,
   tierNames,
 } from "./execution-setting.js";
 import { type GitHubClient, IssueGoneError } from "./github.js";
@@ -804,11 +803,7 @@ async function landAgentTier(deps: SubmitAnswerDeps, questionId: string, proposa
   // 根拠の行の pin は表の書き口の hook が決着させる(ADR 0150 決定1)ので、ここで照合するのは registry 側だけ
   const agent = list().find((a) => a.name === proposal.agent);
   if (registryPinChanges(proposal, agent).length) throw stale(["agent_tier"]);
-  const assertLandable = (providers: string[]) => {
-    if (!tierHasRowFor(readExecutionSettings(deps.db).table, providers, to)) {
-      throw new DomainError(`the execution-setting table has no row at ${to} for ${proposal.agent}'s providers (${providers.join(", ")}), so the agent would be skipped`);
-    }
-  };
+  const assertLandable = (providers: string[]) => assertTierRunnableFor(deps.db, proposal.agent, providers, to);
   assertLandable(agentViewProviders(agent!));
   try {
     return await changeTier({
