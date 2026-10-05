@@ -222,9 +222,6 @@ async function translateMemoryWording(translate: TpTranslateFn, english: Record<
   return { english: out, back };
 }
 
-// memory の提案の修正値(ADR 0152 決定2・5): candidate の文言を初期値に、settings と同じ英語 + 原文の2欄と逆翻訳。
-// Exemplar の candidate(#950)は settings の Exemplar の扉と同じ注釈の form で、case は candidate の出所に固定。
-// candidate から変えた欄(と原文)だけを修正値として上に渡す —— 何も変えなければ素の approve になる。
 /** 段の修正値の select(ADR 0200 決定1): 選択肢は盤面の段の一覧 —— このカードは設定を持たないので自分で引く。`below` があれば
  *  それより下の段だけ。引けなければ選択肢は「as proposed」だけで、approve はそのまま送れる。 */
 function TpTierAmendment({ label, below, value, onChange }: {
@@ -245,6 +242,9 @@ function TpTierAmendment({ label, below, value, onChange }: {
   );
 }
 
+// memory の提案の修正値(ADR 0152 決定2・5): candidate の文言を初期値に、settings と同じ英語 + 原文の2欄と逆翻訳。
+// Exemplar の candidate(#950)は settings の Exemplar の扉と同じ注釈の form で、case は candidate の出所に固定。
+// candidate から変えた欄(と原文)だけを修正値として上に渡す —— 何も変えなければ素の approve になる。
 function TpMemoryAmendment({ candidateId, onTranslate, onChange, onDeadAddressee }: {
   candidateId: number;
   onTranslate?: TpTranslateFn;

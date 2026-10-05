@@ -1,4 +1,4 @@
-import { afterEach, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import { type Db, openDb } from "../src/db.js";
 import { listEventsOfKinds } from "../src/events.js";
 import { applyExecutionSettingsChange, composeRoutingRow } from "../src/execution-setting.js";
@@ -16,7 +16,7 @@ import {
 } from "../src/memory.js";
 import { type MetaReviewSubject, registerDueMetaReviews, registerMetaReview } from "../src/meta-review.js";
 import { answerQuestion, getTask, HUMAN_WORKER_ID, listBoard, logDecision, registerTask } from "../src/tasks.js";
-import { api, bootTidepool, failureQuestion, HOUR, HUMAN_WEBUI, type Tidepool } from "./harness.js";
+import { failureQuestion, HUMAN_WEBUI } from "./harness.js";
 
 /** 周期の due 判定(ADR 0120 決定2・ADR 0151)のドメイン層: 同じ主題の meta-review 自身の産物は材料に数えない。 */
 const at = new Date("2026-09-24T00:00:00.000Z");
@@ -150,16 +150,11 @@ it("取り消された回の窓にだけ材料があり、その後に変更が�
   expect(registrations(db)).toBe(3);
 });
 
-let t: Tidepool;
-afterEach(() => t?.stop());
+it("周期 meta-review は盤面自身の判断の段(retrospective_tier の設定)を review_tier にして登録される(ADR 0200 決定4)", () => {
+  const db = openDb(":memory:");
+  applyExecutionSettingsChange(db, { setting: "retrospective_tier", value: "standard" }, "webui", at);
 
-it("周期 meta-review は盤面自身の判断の段(retrospective_tier の設定)を review_tier にして登録される(ADR 0200 決定4)", async () => {
-  t = await bootTidepool();
-  // 設定の変更そのものが routing の材料 —— 次の poll で routing meta-review が登録される
-  expect((await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "retrospective_tier", value: "standard" })).status).toBe(200);
-  await t.clock.advance(HOUR);
+  registerMetaReview(db, "routing", at);
 
-  const review = ((await api(t.baseUrl, "GET", "/api/tasks")).json as Array<{ meta_review_subject: string | null; review_tier: string | null }>)
-    .find((task) => task.meta_review_subject === "routing");
-  expect(review?.review_tier).toBe("standard");
+  expect(listBoard(db).find((task) => task.meta_review_subject === "routing")?.review_tier).toBe("standard");
 });
