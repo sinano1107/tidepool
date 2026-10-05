@@ -27,7 +27,7 @@ function charBoundary(buf: Buffer, end: number): number {
 
 const MALFORMED_NEXT = "next is malformed: pass the next string exactly as a previous response returned it";
 
-const encodeNext =(position: ReadPosition<unknown>) => Buffer.from(JSON.stringify(position)).toString("base64url");
+const encodeNext = (position: ReadPosition<unknown>) => Buffer.from(JSON.stringify(position)).toString("base64url");
 
 /** 続きを読む。盤面は状態を持たず、続きが verb・最初の引数・位置を自己記述する(ADR 0195 決定6)。 */
 export function readNext<A = Record<string, unknown>>(verb: string, next: string): ReadPosition<A> {
@@ -56,9 +56,9 @@ export function readPosition<A extends object>(verb: string, input: A & { next?:
 export type Packed<L, E = unknown> = L & Partial<E> & { next?: string; remaining?: number };
 
 /** 読み口ごとの詰め方の違い。 */
-export interface PackOptions<T> {
-  /** item の境目の鍵(既定は `item.id`)。続きはこの値で次に返す item を指す。 */
-  idOf?: (item: T) => ItemId;
+interface PackOptions<T> {
+  /** 続きの境目の鍵 —— 既定は `id`、id を持たない item(枝の行・文字列など)は item と列の位置から作る。 */
+  keyOf?: (item: T, index: number) => ItemId;
   /** item を置く列(`key` に並べた点区切りの path のどれか)。既定は `key` の先頭。 */
   listOf?: (item: T) => string;
   /** 続きの応答にも毎回載る欄(封筒と違い最初の応答だけではない)。 */
@@ -69,7 +69,21 @@ export interface PackOptions<T> {
  *  `envelope`(item の列以外の欄)は最初の読みにだけ載る。残りがあるときだけ `next` と `remaining`(残りの件数)が付く ——
  *  付かなければ読みは完結している。封筒・`next`・`remaining` の分も予算に数える。
  *  `key` を複数渡すと、item は `options.listOf` の列に分かれて載る(点区切りの path は封筒の中の欄にも置ける)。 */
-export function packItems<T extends object>(
+export function packItems<T extends { id: ItemId }>(
+  read: ReadPosition<unknown>,
+  key: string | readonly string[],
+  items: readonly T[],
+  envelope?: object,
+  options?: PackOptions<T>,
+): Record<string, unknown>;
+export function packItems<T>(
+  read: ReadPosition<unknown>,
+  key: string | readonly string[],
+  items: readonly T[],
+  envelope: object,
+  options: PackOptions<T> & Required<Pick<PackOptions<T>, "keyOf">>,
+): Record<string, unknown>;
+export function packItems<T>(
   read: ReadPosition<unknown>,
   key: string | readonly string[],
   items: readonly T[],
@@ -77,17 +91,18 @@ export function packItems<T extends object>(
   options: PackOptions<T> = {},
 ): Record<string, unknown> {
   const lists = [key].flat();
-  const { idOf = (item: T) => (item as { id: ItemId }).id, listOf = () => lists[0]!, every = {} } = options;
+  const { keyOf = (item: T) => (item as { id: ItemId }).id, listOf = () => lists[0]!, every = {} } = options;
   let start = 0;
   if (read.at !== undefined) {
-    start = items.findIndex((item) => idOf(item) === read.at);
+    start = items.findIndex((item, i) => keyOf(item, i) === read.at);
     if (start === -1) throw new DomainError(`next points at item ${read.at}, which this read no longer has`);
   }
   const firstOnly = read.at === undefined ? envelope : {};
   const head = { ...firstOnly, ...every };
   const rest = items.slice(start);
+  const keyAt = (k: number) => keyOf(rest[k]!, start + k);
   const continueFrom = (k: number) =>
-    k < rest.length ? { next: encodeNext({ verb: read.verb, args: read.args, at: idOf(rest[k]!) }), remaining: rest.length - k } : {};
+    k < rest.length ? { next: encodeNext({ verb: read.verb, args: read.args, at: keyAt(k) }), remaining: rest.length - k } : {};
   /** `head` に、選んだ item をそれぞれの列に置いた応答(列は item が無くても空で載る)。 */
   const render = (chosen: readonly T[]) => {
     const out: Record<string, any> = { ...head };
@@ -108,12 +123,17 @@ export function packItems<T extends object>(
     if (typeof value !== "string") throw new DomainError(MALFORMED_NEXT);
     const text = Buffer.from(value);
     const pageUpTo = (end: number) => {
-      const cut = structuredClone(item) as any;
-      field.slice(0, -1).reduce((node, name) => node[name], cut)[field.at(-1)!] = text.subarray(offset, end).toString();
+      // 欄の path が空なら item そのもの(文字列の item)を切る
+      let cut: any = text.subarray(offset, end).toString();
+      if (field.length > 0) {
+        const slice = cut;
+        cut = structuredClone(item);
+        field.slice(0, -1).reduce((node, name) => node[name], cut)[field.at(-1)!] = slice;
+      }
       return {
         ...render([cut]),
-        partial: { id: idOf(item), field: field.join("."), field_bytes: text.length },
-        ...(end < text.length ? { next: encodeNext({ ...read, at: idOf(item), field, offset: end }), remaining: rest.length } : continueFrom(1)),
+        partial: { id: keyAt(0), field: field.join("."), field_bytes: text.length },
+        ...(end < text.length ? { next: encodeNext({ ...read, at: keyAt(0), field, offset: end }), remaining: rest.length } : continueFrom(1)),
       };
     };
     let [lo, hi] = [offset, text.length];

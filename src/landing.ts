@@ -10,7 +10,6 @@ import {
   DEFAULT_AUDITOR_NAME,
   DomainError,
   getTask,
-  HUMAN_WORKER_ID,
   isLandingQuestion,
   MERGE_QUESTION_OPTIONS,
   PR_PROMOTION_FAILURE_OPTIONS,
@@ -568,7 +567,7 @@ export function createLanding(deps: LandingDeps): Landing {
           clearPendingAutoMerge(deps.db, task_id);
           appendEvent(deps.db, {
             taskId: task_id,
-            workerId: observed ? BOARD_WORKER_ID : HUMAN_WORKER_ID,
+            workerId: BOARD_WORKER_ID,
             origin: "board",
             payload: observed
               ? { kind: "pr_merge_observed", pr_number }

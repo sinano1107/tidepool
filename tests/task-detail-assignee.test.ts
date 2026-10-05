@@ -69,7 +69,7 @@ it("管理MCP の get_task は assignee 未指定のタスクを list_board と�
   try {
     const read = async (name: string, args: Record<string, unknown>): Promise<any> =>
       JSON.parse(((await client.callTool({ name, arguments: args })) as any).content[0].text);
-    const list = await read("list_board", {});
+    const list = (await read("list_board", {})).tasks;
     for (const [id, resolved] of listed) {
       const { events: _events, ...single } = await read("get_task", { task_id: id });
       expect(single).toMatchObject({ assignee: resolved });

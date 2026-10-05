@@ -120,3 +120,33 @@ it("欄の位置が壊れた続きも名指しの error になる", () => {
   expect(() => readNext("get_task", position({ field: ["line"], offset: "x" }))).toThrow(/next is malformed/);
   expect(() => readNext("get_task", position({ field: ["line"], offset: -10 }))).toThrow(/next is malformed/);
 });
+
+it("id を持たない item は渡した鍵(item と位置から)で続きの境目を表し、next を追うと欠けも重複もなく揃う", () => {
+  const lines = Array.from({ length: 60 }, (_, i) => `${i} ${"x".repeat(900)}`);
+  const read = { verb: "preview_case", args: { event_id: 1 } };
+  const byPosition = (_: string, i: number) => i;
+
+  const pages: any[] = [packItems(read, "decisions", lines, {}, { keyOf: byPosition })];
+  while (pages.at(-1).next) pages.push(packItems(readNext("preview_case", pages.at(-1).next), "decisions", lines, {}, { keyOf: byPosition }));
+
+  expect(pages.length).toBeGreaterThan(1);
+  for (const page of pages) expect(bytesOf(page)).toBeLessThanOrEqual(RESPONSE_BUDGET_BYTES);
+  expect(pages.flatMap((page) => page.decisions)).toEqual(lines);
+});
+
+it("1件で予算を超える文字列の item も切れで返し、つなぐと逐語の原文に戻る", () => {
+  const long = "潮".repeat(30_000);
+  const lines = ["short", long, "after"];
+  const read = { verb: "preview_case", args: { event_id: 1 } };
+  const byPosition = (_: string, i: number) => i;
+
+  const pages: any[] = [packItems(read, "decisions", lines, {}, { keyOf: byPosition })];
+  while (pages.at(-1).next) pages.push(packItems(readNext("preview_case", pages.at(-1).next), "decisions", lines, {}, { keyOf: byPosition }));
+
+  for (const page of pages) expect(bytesOf(page)).toBeLessThanOrEqual(RESPONSE_BUDGET_BYTES);
+  const pieces = pages.filter((page) => page.partial);
+  expect(pieces.length).toBeGreaterThan(1);
+  for (const piece of pieces) expect(piece.partial).toEqual({ id: 1, field: "", field_bytes: Buffer.byteLength(long) });
+  expect(pieces.map((piece) => piece.decisions[0]).join("")).toBe(long);
+  expect(pages.flatMap((page) => (page.partial ? [] : page.decisions))).toEqual(["short", "after"]);
+});

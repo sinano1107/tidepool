@@ -590,6 +590,7 @@ it("merge 回答は question の workspace で live CI を確認してから実 
     answerCreatedAt: listEvents(db, question.id).find((event) => event.kind === "question_answered")
       ?.created_at,
     mergedEvent: listEvents(db, question.id).find((event) => event.kind === "pr_merged")?.payload,
+    mergedBy: listEvents(db, question.id).find((event) => event.kind === "pr_merged")?.worker_id,
   }).toEqual({
     ciChecks: [{ path: "/workspaces/product", number: 42 }],
     merged: [{ path: "/workspaces/product", number: 42 }],
@@ -597,6 +598,7 @@ it("merge 回答は question の workspace で live CI を確認してから実 
     status: "done",
     answerCreatedAt: afterCi.toISOString(),
     mergedEvent: { kind: "pr_merged", pr_number: 42 },
+    mergedBy: "human",
   });
 });
 

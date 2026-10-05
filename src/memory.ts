@@ -1590,7 +1590,7 @@ export function browseMemory(
       isBranch(child) ? { name: child.name, definition: child.definition?.text ?? null } : { id: child.id, title: child.title },
     );
     const packed = packItems(read, ["children", "entries"], children, {}, {
-      idOf: (child) => child.id ?? child.name!,
+      keyOf: (child) => child.id ?? child.name!,
       listOf: (child) => ("name" in child ? "children" : "entries"),
       every: PENDING_EVENT_ID,
     }) as ReturnType<typeof browseMemory>;
@@ -1683,7 +1683,7 @@ export function pullMemoryProposals(db: Db, reader: Pick<MemoryReader, "taskId" 
   const read = readPosition("list_memory_proposals", input);
   return db.transaction(() => {
     const rows = memoryProposalRows(db);
-    const packed = packItems(read, "proposals", rows, {}, { idOf: (row) => row.question_id, every: PENDING_EVENT_ID }) as Packed<{ proposals: typeof rows; event_id: number }>;
+    const packed = packItems(read, "proposals", rows, {}, { keyOf: (row) => row.question_id, every: PENDING_EVENT_ID }) as Packed<{ proposals: typeof rows; event_id: number }>;
     const returned_ids = [...new Set(packed.proposals.map(({ proposal }) => (proposal.op === "invalidate" ? proposal.target.id : "successor" in proposal ? proposal.successor.id : proposal.candidate_id)))];
     return recordPull(db, reader, { verb: "list_memory_proposals", input: read.args, returned_ids }, packed, at);
   })();
@@ -1734,7 +1734,7 @@ export function listPrecedents(
     const since = read.args.since_watermark ?? previousMetaReviewWatermark(db, reader.taskId);
     const rows = precedentRows(db, { after: since });
     // 境目の鍵は decision の event id(異議つき decision マーカー1つに1行)
-    const packed = packItems(read, "precedents", rows, {}, { idOf: (p) => p.decision_event_id, every: PENDING_EVENT_ID }) as Packed<{ precedents: typeof rows; event_id: number }>;
+    const packed = packItems(read, "precedents", rows, {}, { keyOf: (p) => p.decision_event_id, every: PENDING_EVENT_ID }) as Packed<{ precedents: typeof rows; event_id: number }>;
     const returned_ids = [...new Set(packed.precedents.flatMap((p) => [...(p.entries_read ?? []), ...(p.entries_seen ?? [])]))];
     return recordPull(db, reader, { verb: "list_precedents", input: read.args, returned_ids }, packed, at);
   })();

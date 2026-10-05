@@ -246,32 +246,31 @@ it("直接適用4つは引数の scope(null = 盤面全体 / registry の worksp
   }
 });
 
-it("move_memory_branch は枝を to_scope の to_path へ移して旧 id → 複製の id を返し、registry に無い行き先の scope は名前つきの tool error(ADR 0176 決定1 / ADR 0173 決定2)", async () => {
-  const { client, call, material } = await boardWithMetaReview();
+it("move_memory_branch は枝を to_scope の to_path へ移して件数と行き先を返し、registry に無い行き先の scope は名前つきの tool error(ADR 0176 決定1 / ADR 0173 決定2 / ADR 0195)", async () => {
+  const { client, call } = await boardWithMetaReview();
   try {
-    const branch = await call("define_memory", { scope: "sandbox", path: "build", definition: "How sandbox builds." });
+    await call("define_memory", { scope: "sandbox", path: "build", definition: "How sandbox builds." });
 
     expect(await call("move_memory_branch", { scope: "sandbox", path: "build", to_scope: "charts", to_path: "toolchain" })).toEqual({ isError: true, body: "unknown workspace: charts" });
     const moved = await call("move_memory_branch", { scope: "sandbox", path: "build", to_scope: null, to_path: "toolchain" });
 
-    expect(moved).toMatchObject({
-      isError: false,
-      body: { moved: [{ entry_id: material, successor_id: expect.any(Number) }, { entry_id: branch.body.entry_id, successor_id: expect.any(Number) }] },
-    });
+    // 移るのは material と定義の2件
+    expect(moved).toEqual({ isError: false, body: { moved: 2, folded: 0, to_scope: null, to_path: "toolchain" } });
   } finally {
     await client.close();
   }
 });
 
 it("move_memory_branch の merge は domain に届き、移される定義を行き先の定義へ畳んで folded を返す(ADR 0177 決定7)", async () => {
-  const { client, call, material } = await boardWithMetaReview();
+  const { client, call } = await boardWithMetaReview();
   try {
-    const build = await call("define_memory", { scope: "sandbox", path: "build", definition: "How sandbox builds." });
-    const toolchain = await call("define_memory", { scope: "sandbox", path: "toolchain", definition: "What toolchain sandbox uses." });
+    await call("define_memory", { scope: "sandbox", path: "build", definition: "How sandbox builds." });
+    await call("define_memory", { scope: "sandbox", path: "toolchain", definition: "What toolchain sandbox uses." });
 
-    expect(await call("move_memory_branch", { scope: "sandbox", path: "build", to_scope: "sandbox", to_path: "toolchain", merge: true })).toMatchObject({
+    // material は移り、build の定義は toolchain の定義へ畳まれる
+    expect(await call("move_memory_branch", { scope: "sandbox", path: "build", to_scope: "sandbox", to_path: "toolchain", merge: true })).toEqual({
       isError: false,
-      body: { moved: [{ entry_id: material }], folded: [{ entry_id: build.body.entry_id, successor_id: toolchain.body.entry_id }] },
+      body: { moved: 1, folded: 1, to_scope: "sandbox", to_path: "toolchain" },
     });
   } finally {
     await client.close();

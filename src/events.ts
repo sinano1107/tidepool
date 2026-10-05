@@ -141,8 +141,11 @@ export type EventPayload =
   // the durable link the merge dial (escalate / auto_if_ci_green; `external`
   // leaves the PR to GitHub's own surface — ADR 0079) reads back
   | { kind: "pr_opened"; pr_number: number }
-  // issue #11: the merge dial's escalate answer actually merged this PR,
-  // right after a live CI check confirmed success immediately beforehand
+  // issue #11: the merge dial actually merged this PR — via the escalate
+  // answer (right after a live CI check confirmed success immediately
+  // beforehand) or the auto_if_ci_green poll (CI green). The actor is whose
+  // judgment decided the merge: human for escalate, board for
+  // auto_if_ci_green (ADR 0196)
   | { kind: "pr_merged"; pr_number: number }
   // ADR 0079 決定4: the board did NOT merge this PR — it found the PR already
   // merged on a surface it holds a decision on (an open merge question, the

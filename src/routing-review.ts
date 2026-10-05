@@ -36,7 +36,7 @@ export function listRoutingShadow(db: Db, readerTaskId: string, input: ReadWindo
     ids.set(row, id);
     return [row];
   });
-  return packItems(read, "shadow", shadow, {}, { idOf: (row) => ids.get(row)! }) as Packed<{ shadow: typeof shadow }>;
+  return packItems(read, "shadow", shadow, {}, { keyOf: (row) => ids.get(row)! }) as Packed<{ shadow: typeof shadow }>;
 }
 
 /** list_routing_shadow の行(ページ割り前、learner_shadow の id つき)。行の watermark W は event W より後に書かれたので、窓
@@ -97,8 +97,8 @@ export function listAllocations(db: Db, readerTaskId: string, input: ReadWindow 
   const read = readPosition<ReadWindow>("list_allocations", input);
   const { groups } = allocationRows(db, { after: since(db, readerTaskId, read.args) });
   // 境目の鍵は数える単位そのもの(tier の出所・agent・allocation・cause)
-  const idOf = (g: (typeof groups)[number]) => JSON.stringify([g.source_tier, g.agent, g.allocation, g.cause]);
-  return packItems(read, "allocations", groups, {}, { idOf }) as Packed<{ allocations: typeof groups }>;
+  const keyOf = (g: (typeof groups)[number]) => JSON.stringify([g.source_tier, g.agent, g.allocation, g.cause]);
+  return packItems(read, "allocations", groups, {}, { keyOf }) as Packed<{ allocations: typeof groups }>;
 }
 
 /** list_allocations の行(ページ割り前)と、数えた allocation_reviewed の event id。 */
@@ -127,14 +127,14 @@ export function listRoutingCells(db: Db, readerTaskId: string, input: ReadWindow
   const read = readPosition<ReadWindow>("list_routing_cells", input);
   const { cells, rows } = cellRows(db, { after: since(db, readerTaskId, read.args) });
   // 人間の行の編集は数件なので封筒として最初の応答に全部載せ、続きはセルだけ。セルの境目の鍵はセルそのもの(cellJson)
-  return packItems(read, "cells", cells, { rows }, { idOf: (c) => cellJson(c.cell) }) as Packed<{ cells: typeof cells }, { rows: typeof rows }>;
+  return packItems(read, "cells", cells, { rows }, { keyOf: (c) => cellJson(c.cell) }) as Packed<{ cells: typeof cells }, { rows: typeof rows }>;
 }
 
 /** read_routing_settings: 今の表と設定(封筒、最初の応答だけ)と、過去の提案(古い順、境目の鍵は提案の question id)。 */
 export function readRoutingSettings(db: Db, input: { next?: string }) {
   const read = readPosition("read_routing_settings", input);
   const proposals = listRoutingProposals(db);
-  return packItems(read, "proposals", proposals, readExecutionSettings(db), { idOf: (p) => p.question_id }) as Packed<
+  return packItems(read, "proposals", proposals, readExecutionSettings(db), { keyOf: (p) => p.question_id }) as Packed<
     { proposals: typeof proposals },
     ReturnType<typeof readExecutionSettings>
   >;
