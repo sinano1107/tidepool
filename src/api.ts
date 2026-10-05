@@ -1603,7 +1603,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     res.json(parsed.data);
   });
 
-  // ADR 0110 決定5 / issue #545: 表・frontier advisor・Provider 順位・優先順位の既定。
+  // ADR 0110 決定5 / issue #545: 表・advisor above main・Provider 順位・優先順位の既定。
   // 選択肢(providers / tiers / priorities)もサーバ供給 —— WebUI が列挙を直書きして
   // drift しないため(/api/agents の providers と同じ配線)
   router.get("/settings/execution", (_req, res) => {
@@ -1632,7 +1632,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       }
     };
 
-  // 1 リクエスト = 1 変更(行の upsert / 削除、frontier advisor、Provider 順位、優先
+  // 1 リクエスト = 1 変更(行の upsert / 削除、advisor above main、Provider 順位、優先
   // 順位の既定、振り返り Board call のティア)。不正値(未知の Provider / ティア / 優先順位、負の価格、順列でない
   // 順位)はこの入口で弾く。保存後は provider-pace-offsets と同じく即時再評価(issue #296)
   router.post(

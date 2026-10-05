@@ -914,7 +914,7 @@ function registerRoutingMetaReviewVerbs(server: McpServer, deps: McpDeps, run: M
     "read_routing_settings",
     {
       description:
-        "Read the current execution-setting table, the frontier advisor setting, the provider rank, the default priority and " +
+        "Read the current execution-setting table, whether a model ranked above main may serve as advisor, the provider rank, the default priority and " +
         "whether the learner is promoted, and every past routing proposal (agent tier proposals included) with its answer, the " +
         "human's amendment and comment, or why the board settled it as observed (the pinned row, learner flag or agent tier " +
         "changed, or the row was deleted). An applied agent tier proposal carries the registry commit it landed as applied. " +

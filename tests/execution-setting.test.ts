@@ -2,9 +2,7 @@ import { expect, it } from "vitest";
 import { isClaudeModelAlias } from "../src/claude-model-alias.js";
 import { openDb } from "../src/db.js";
 import {
-  AdvisorPairingError,
   applyExecutionSettingsChange,
-  assertAdvisorPairing,
   BOARD_DEFAULT_PRIORITY,
   BOARD_DEFAULT_TIER,
   composeRoutingRow,
@@ -37,7 +35,7 @@ function input(overrides: Partial<SelectorInput> = {}): SelectorInput {
     taskTier: undefined,
     priority: undefined,
     agentTier: undefined,
-    frontierAdvisor: false,
+    advisorAboveMain: false,
     ...overrides,
   };
 }
@@ -70,7 +68,7 @@ it("種の表は `/implementation-delegation` の表と同じ7行 — anthropic 
 
 it("tier を書かない agent は盤面既定のティアで解決され、出所は board", () => {
   expect(
-    select(input({ entries: [{ provider: "anthropic", advisor: false }], taskTier: undefined, agentTier: undefined, frontierAdvisor: false }), table),
+    select(input({ entries: [{ provider: "anthropic", advisor: false }], taskTier: undefined, agentTier: undefined, advisorAboveMain: false }), table),
   ).toEqual({
     provider: "anthropic",
     model: "claude-sonnet-5-5",
@@ -82,7 +80,7 @@ it("tier を書かない agent は盤面既定のティアで解決され、出�
 
 it("agent の tier は盤面既定より優先され、出所は agent", () => {
   expect(
-    select(input({ entries: [{ provider: "anthropic", advisor: false }], taskTier: undefined, agentTier: "economy", frontierAdvisor: false }), table),
+    select(input({ entries: [{ provider: "anthropic", advisor: false }], taskTier: undefined, agentTier: "economy", advisorAboveMain: false }), table),
   ).toEqual({
     provider: "anthropic",
     model: "claude-sonnet-5-5",
@@ -94,36 +92,32 @@ it("agent の tier は盤面既定より優先され、出所は agent", () => {
 
 it("provider が違えば同じティアでもその provider の表記で解決される", () => {
   expect(
-    select(input({ entries: [{ provider: "openai", advisor: false }], taskTier: undefined, agentTier: "frontier", frontierAdvisor: false }), table)
+    select(input({ entries: [{ provider: "openai", advisor: false }], taskTier: undefined, agentTier: "frontier", advisorAboveMain: false }), table)
       .model,
   ).toBe("gpt-6-astra");
   expect(
-    select(input({ entries: [{ provider: "moonshot", advisor: false }], taskTier: undefined, agentTier: "economy", frontierAdvisor: false }), table)
+    select(input({ entries: [{ provider: "moonshot", advisor: false }], taskTier: undefined, agentTier: "economy", advisorAboveMain: false }), table)
       .model,
   ).toBe("kimi-k3[1m]");
 });
 
-it("advisor が真でも「Fable を advisor に使える」フラグが立つまでは main と同一のモデルに倒れる(Fable の同意も org の availableModels も盤面から読めない)", () => {
+it("advisor が真でも「main より上の model を advisor に使える」フラグが立つまでは main と同一のモデルに倒れる(Fable の同意も org の availableModels も盤面から読めない)", () => {
   expect(
-    select(input({ entries: [{ provider: "anthropic", advisor: true }], taskTier: undefined, agentTier: "economy", frontierAdvisor: false }), table)
+    select(input({ entries: [{ provider: "anthropic", advisor: true }], taskTier: undefined, agentTier: "economy", advisorAboveMain: false }), table)
       .advisor,
   ).toBe("claude-sonnet-5-5");
   expect(
-    select(input({ entries: [{ provider: "anthropic", advisor: true }], taskTier: undefined, agentTier: "standard", frontierAdvisor: false }), table)
+    select(input({ entries: [{ provider: "anthropic", advisor: true }], taskTier: undefined, agentTier: "standard", advisorAboveMain: false }), table)
       .advisor,
   ).toBe("claude-opus-5-5");
 });
 
-it("フラグが立てば advisor は同 Provider の上位ティアの行、main が既に上位なら main と同一", () => {
-  expect(
-    select(input({ entries: [{ provider: "anthropic", advisor: true }], taskTier: undefined, agentTier: "standard", frontierAdvisor: true }), table)
-      .advisor,
-  ).toBe("claude-fable-5-1");
-  const frontier = select(
-    input({ entries: [{ provider: "anthropic", advisor: true }], taskTier: undefined, agentTier: "frontier", frontierAdvisor: true }),
-    table,
-  );
-  expect(frontier.advisor).toBe(frontier.model);
+it("フラグが立てば Sonnet / Opus の行の advisor は最上位の系列の alias `fable`、Fable の行の advisor はその行の具体 id(ADR 0200 決定6)", () => {
+  const advisorAt = (agentTier: Tier) =>
+    select(input({ entries: [{ provider: "anthropic", advisor: true }], agentTier, advisorAboveMain: true })).advisor;
+  expect(advisorAt("economy")).toBe("fable");
+  expect(advisorAt("standard")).toBe("fable");
+  expect(advisorAt("frontier")).toBe("claude-fable-5-1");
 });
 
 it("要求ティアの行を持たない Provider の entry は候補から落ち、それしか無ければ null —— 表の穴は設定漏れではなく事実で、全 entry 除外と同じ枝(ADR 0114 決定3)", () => {
@@ -146,23 +140,24 @@ it("entry が複数で片方の Provider に行が無ければ、もう片方で
   ).toMatchObject({ provider: "openai", model: "gpt-6-astra" });
 });
 
-it("advisor が真で frontier 行を持たない Provider の entry は除外される —— advisor 無しで黙って走らせない", () => {
-  const partial: ExecutionSettingTable = table.filter((row) => row.tier !== "frontier");
+it("表に Fable の行が無くても、フラグありなら advisor は `fable` —— advisor は行でなく、表を読まない", () => {
+  const noFable: ExecutionSettingTable = table.filter((row) => row.model !== "claude-fable-5-1");
   expect(
-    selectExecutionSetting(
-      input({ entries: [{ provider: "anthropic", advisor: true }], agentTier: "standard", frontierAdvisor: true }),
-      partial,
-    ),
-  ).toBeNull();
+    select(input({ entries: [{ provider: "anthropic", advisor: true }], agentTier: "standard", advisorAboveMain: true }), noFable),
+  ).toMatchObject({ model: "claude-opus-5-5", advisor: "fable" });
 });
 
-it("pairing はティアの水準だけで判定する — advisor が main 未満なら拒否、同位・上位なら通る(ADR 0042: 盤面は alias の解決先を judge しない)", () => {
-  expect(() => assertAdvisorPairing("frontier", "standard")).toThrow(
-    new AdvisorPairingError("frontier", "standard"),
-  );
-  expect(() => assertAdvisorPairing("standard", "economy")).toThrow(new AdvisorPairingError("standard", "economy"));
-  expect(() => assertAdvisorPairing("standard", "standard")).not.toThrow();
-  expect(() => assertAdvisorPairing("economy", "frontier")).not.toThrow();
+it("adapter が知らない系列の行は、advisor つきの entry ではフラグに依らず候補に入らず、advisor なしの entry では入る —— 付かない advisor を記録に残さない", () => {
+  // 知らない系列の行のほうが安いので、候補に入っていれば先に選ばれる
+  const withMythos: ExecutionSettingTable = [
+    ...table,
+    { provider: "anthropic", tier: "standard", model: "claude-mythos-1", effort: "high", price_in: 1, price_out: 1 },
+  ];
+  const standard = (advisor: boolean, advisorAboveMain: boolean) =>
+    select(input({ entries: [{ provider: "anthropic", advisor }], agentTier: "standard", advisorAboveMain }), withMythos).model;
+  expect(standard(true, false)).toBe("claude-opus-5-5");
+  expect(standard(true, true)).toBe("claude-opus-5-5");
+  expect(standard(false, true)).toBe("claude-mythos-1");
 });
 
 it("優先順位は quality / cost の2値で、既定は quality(CONTEXT.md「要求」/ ADR 0114 決定1: speed は落とした)", () => {
@@ -173,7 +168,7 @@ it("優先順位は quality / cost の2値で、既定は quality(CONTEXT.md「�
 it("task の要求ティアは agent の tier より優先され、出所は task(ADR 0110 決定2)", () => {
   expect(
     select(
-      input({ entries: [{ provider: "anthropic", advisor: false }], taskTier: "frontier", agentTier: "economy", frontierAdvisor: false }),
+      input({ entries: [{ provider: "anthropic", advisor: false }], taskTier: "frontier", agentTier: "economy", advisorAboveMain: false }),
       table,
     ),
   ).toEqual({
@@ -188,7 +183,7 @@ it("task の要求ティアは agent の tier より優先され、出所は tas
 it("task の要求ティアは agent が tier を持たなくても盤面既定より優先される", () => {
   expect(
     select(
-      input({ entries: [{ provider: "anthropic", advisor: false }], taskTier: "standard", agentTier: undefined, frontierAdvisor: false }),
+      input({ entries: [{ provider: "anthropic", advisor: false }], taskTier: "standard", agentTier: undefined, advisorAboveMain: false }),
       table,
     ),
   ).toEqual({
@@ -203,16 +198,16 @@ it("task の要求ティアは agent が tier を持たなくても盤面既定�
 it("task の要求が agent の tier と同じ値でも出所は task —— 「誰が要求したか」は値の一致で消えない", () => {
   expect(
     select(
-      input({ entries: [{ provider: "anthropic", advisor: false }], taskTier: "economy", agentTier: "economy", frontierAdvisor: false }),
+      input({ entries: [{ provider: "anthropic", advisor: false }], taskTier: "economy", agentTier: "economy", advisorAboveMain: false }),
       table,
     ).source,
   ).toEqual({ tier: "task", provider: "only" });
 });
 
-it("task の要求ティアは advisor の導出にも効く —— main が動けば pairing の基準も動く", () => {
+it("task の要求ティアは advisor の導出にも効く —— main が Fable の行に動けば advisor はその具体 id", () => {
   expect(
     select(
-      input({ entries: [{ provider: "anthropic", advisor: true }], taskTier: "frontier", agentTier: "economy", frontierAdvisor: true }),
+      input({ entries: [{ provider: "anthropic", advisor: true }], taskTier: "frontier", agentTier: "economy", advisorAboveMain: true }),
       table,
     ).advisor,
   ).toBe("claude-fable-5-1");
@@ -375,23 +370,6 @@ it("cost で out 単価が同額なら in 単価、それも同額なら Provide
   ).toBe("gpt-5.6-sol");
 });
 
-it("advisor は同 Provider の frontier 行、複数なら最安 —— 複数行でも advisor の行は一意に決まる", () => {
-  expect(
-    select(input({ entries: [{ provider: "anthropic", advisor: true }], taskTier: "standard", frontierAdvisor: true }), crowded).advisor,
-  ).toBe("fable-lite");
-});
-
-it("advisor のティアが main と同じなら main の行そのもの —— 同ティアに複数行あっても advisor が別の行へ割れない", () => {
-  const frontierTask = input({ entries: [{ provider: "anthropic", advisor: true }], taskTier: "frontier", frontierAdvisor: true });
-  const lite = selectExecutionSetting(frontierTask, crowded, { providers: [], models: [{ provider: "anthropic", model: "fable-lite" }] });
-  expect(lite).toMatchObject({ model: "fable", advisor: "fable" });
-  // フラグが立つ前は main と同一に倒れる
-  expect(select(input({ entries: [{ provider: "anthropic", advisor: true }], taskTier: "standard" }), crowded)).toMatchObject({
-    model: "opus-mini",
-    advisor: "opus-mini",
-  });
-});
-
 it("review の要求は priority を持たず quality の並べ方で解決される(ADR 0111 決定3)", () => {
   expect(select(input({ entries: both, reviewTier: "standard", priority: "cost" })).model).toBe("claude-opus-5-5");
 });
@@ -480,14 +458,14 @@ it("存在しない行の削除は何も変えないので、操作イベント�
   expect(applyExecutionSettingsChange(db, { setting: "delete_row", provider: "openai", model: "no-such-model" }, "webui", new Date())).toBeNull();
 });
 
-// ── 行の拒否(ADR 0184 決定2): 表の行の Quarantine が開いている行は候補にも advisor にもならない ──
+// ── 行の拒否(ADR 0184 決定2): 表の行の Quarantine が開いている行は候補にならない。advisor は行でないので Quarantine を見ない(ADR 0200 決定6) ──
 
 /** 盤面の表(種)に行を足し、指定した (provider, model) の行の Quarantine を開く。 */
 function boardWithRefusedRows(extraRows: ExecutionSettingTable, refused: Array<[Provider, string]>) {
   const db = openDb(":memory:");
   const now = new Date();
   for (const row of extraRows) applyExecutionSettingsChange(db, { setting: "row", row }, "webui", now);
-  applyExecutionSettingsChange(db, { setting: "frontier_advisor", value: true }, "webui", now);
+  applyExecutionSettingsChange(db, { setting: "advisor_above_main", value: true }, "webui", now);
   for (const [provider, model] of refused) registerQuarantine(db, "tableRow", tableRowValue(provider, model), "refused", now);
   return db;
 }
@@ -502,18 +480,7 @@ it("行の Quarantine の照合は完全一致 —— claude-opus-5 の Quaranti
   expect(executionSettingsFor(db, anthropicAgent(false), workAt("standard")).map((s) => s.model)).toEqual(["claude-opus-5-5"]);
 });
 
-it("1枚の行の Quarantine は、その id が main に立つティアからも advisor に使われるティアからも外し、advisor は次に安い上位の行へ移る", () => {
-  const db = boardWithRefusedRows(
-    [{ provider: "anthropic", tier: "frontier", model: "claude-fable-5", effort: "high", price_in: 12, price_out: 60 }],
-    [["anthropic", "claude-fable-5-1"]],
-  );
-  expect(executionSettingsFor(db, anthropicAgent(false), workAt("frontier")).map((s) => s.model)).toEqual(["claude-fable-5"]);
-  expect(executionSettingsFor(db, anthropicAgent(true), workAt("standard"))).toMatchObject([
-    { model: "claude-opus-5-5", advisor: "claude-fable-5" },
-  ]);
-});
-
-it("上位の行がすべて Quarantine 中なら、advisor の entry は上位の行が無いときの既存の挙動どおり除外される", () => {
+it("Fable の行が Quarantine 中でも、ほかの行の advisor は `fable` のまま", () => {
   const db = boardWithRefusedRows([], [["anthropic", "claude-fable-5-1"]]);
-  expect(executionSettingsFor(db, anthropicAgent(true), workAt("standard"))).toEqual([]);
+  expect(executionSettingsFor(db, anthropicAgent(true), workAt("standard"))).toMatchObject([{ model: "claude-opus-5-5", advisor: "fable" }]);
 });

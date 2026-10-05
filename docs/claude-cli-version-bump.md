@@ -88,3 +88,7 @@ to the existing fail-closed handling (ADR 0186 決定7, ADR 0187 決定5):
 
 Write the new version into `claude-cli-version` at the repo root and paste both tables from step 5
 into the PR description.
+
+If the new version brings a new model family, add its prefix to `FAMILY_PREFIXES` in
+`src/claude-model-alias.ts`; if the family ranks above the current top, also move `TOP_FAMILY` to
+it. Until then, its rows cannot serve agents that have an advisor (ADR 0200 決定6).
