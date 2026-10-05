@@ -539,9 +539,10 @@ function QuestionDeepLinkView({ questionId, onDone, onTranslate, onOpenSettings 
 
 // issue #130: the chooser a board task-card tap opens for a plausibly-editable
 // task — the three things a human can do to a registered task (add a child,
-// edit its unconsumed fields, cancel it). The eligibility line (human-
-// registered, unsettled, not in_progress) is enforced server-side on each
-// action; this sheet only offers them, and each action surfaces the domain
+// edit its unconsumed fields, cancel it). The eligibility lines (unsettled,
+// not in_progress; human-registered for edit, human-registered or a
+// board-registered non-question root for cancel — ADR 0198) are enforced
+// server-side on each action; this sheet only offers them, and each action surfaces the domain
 // error as a toast if the line isn't met.
 function TaskActionsDialog({ task, onAddChild, onEdit, onCancel, onClose }: {
   task: BoardScreenTask;
@@ -1236,7 +1237,8 @@ function App() {
   // correct exclusions from the board's own derived `status`/`assignee`
   // (CONTEXT.md's Decompose/Edit/Cancel share the same first two conditions);
   // the remaining conditions (no agent-decomposed child yet for add-child;
-  // human-registered for edit/cancel) need event history the board payload
+  // human-registered for edit, human-registered or a board-registered
+  // non-question root for cancel) need event history the board payload
   // doesn't carry, so they're left to the API's own gates to reject on submit.
   // An ineligible tap keeps the plain info toast this used to always show.
   const openTask = (t: BoardScreenTask) => {

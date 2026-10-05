@@ -1167,8 +1167,7 @@ function assertNoGatingQuestion(db: Db, taskId: string, defaults: CancelDefaults
  *  cancel path beside abandon. Its scope line is wider than edit's (ADR 0198,
  *  `assertDirectlyCancellableScope` — human-registered or a board-registered
  *  root other than a question, unsettled, not in_progress), the target and
- *  its unfinished descendants go cancelled
- *  together (道連れ), the reason is optional and kept on every cancelled task's
+ *  its unfinished descendants go cancelled together (道連れ), the reason is optional and kept on every cancelled task's
  *  event. It is refused while a Tidepool question with the subtree as its
  *  subject is still open (`assertNoGatingQuestion`). No "delete" exists — this
  *  is always a cancel, and the record is never erased. */
@@ -2107,13 +2106,14 @@ function assertHumanEditableScope(db: Db, task: Task): void {
 
 /** The direct-cancel scope gate (ADR 0198, CONTEXT.md's Cancel): the task must
  *  be human-registered or a root other than a question, unsettled, and not
- *  in_progress. An agent registers only decompose children, so a root the
- *  human did not register is the board's (today only a meta-review) — no
- *  worker id comparison is needed. A board-named question settles by its
+ *  in_progress. An agent registers only children (decompose children,
+ *  escalate questions), so a root the human did not register is the board's —
+ *  no worker id comparison is needed. A board-named question settles by its
  *  answer, and a board-named attached child (completion review, RCA review)
  *  is an input the rules require, so both stay out. */
 function assertDirectlyCancellableScope(db: Db, task: Task): void {
-  if (!isHumanRegistered(db, task.id) && (task.parent_id !== null || task.type === "question")) {
+  const inScope = isHumanRegistered(db, task.id) || (task.parent_id === null && task.type !== "question");
+  if (!inScope) {
     throw new DomainError(
       "only a human-registered task or a board-registered root other than a question can be directly cancelled — " +
         "an agent's decompose child, a board-named attached child, and a board-named question are out of scope",
