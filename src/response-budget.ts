@@ -45,22 +45,25 @@ export function readNext<A = Record<string, unknown>>(verb: string, next: string
 
 /** item の列を、予算に収まるだけ丸ごと `key` に詰めた応答にする(ADR 0195 決定3)。
  *  `envelope`(item の列以外の欄)は最初の読みにだけ載る。残りがあるときだけ `next` と `remaining`(残りの件数)が付く ——
- *  付かなければ読みは完結している。封筒・`next`・`remaining` の分も予算に数える。 */
-export function packItems<T extends { id: ItemId }>(
+ *  付かなければ読みは完結している。封筒・`next`・`remaining` の分も予算に数える。
+ *  続きの境目は item の鍵 —— 既定は `id`、id を持たない item(枝の行・文字列など)は `keyOf` が item と列の位置から作る。 */
+export function packItems<T>(
   read: ReadPosition,
   key: string,
   items: readonly T[],
   envelope: Record<string, unknown> = {},
+  keyOf: (item: T, index: number) => ItemId = (item) => (item as { id: ItemId }).id,
 ): Record<string, unknown> {
   let start = 0;
   if (read.at !== undefined) {
-    start = items.findIndex((item) => item.id === read.at);
+    start = items.findIndex((item, i) => keyOf(item, i) === read.at);
     if (start === -1) throw new DomainError(`next points at item ${read.at}, which this read no longer has`);
   }
   const firstOnly = read.at === undefined ? envelope : {};
   const rest = items.slice(start);
+  const keyAt = (k: number) => keyOf(rest[k]!, start + k);
   const continueFrom = (k: number) =>
-    k < rest.length ? { next: encodeNext({ verb: read.verb, args: read.args, at: rest[k]!.id }), remaining: rest.length - k } : {};
+    k < rest.length ? { next: encodeNext({ verb: read.verb, args: read.args, at: keyAt(k) }), remaining: rest.length - k } : {};
 
   /** 1件で予算を超える先頭の item の、`field` の `offset` バイト目からの1切れを単独で返す(ADR 0195 決定4)。
    *  切れの item は他の欄を全部持ち、`partial` が部分であることと欄の名前・全体のバイト数を示す。欄を切り終えたら次の item へ進む。
@@ -76,8 +79,8 @@ export function packItems<T extends { id: ItemId }>(
       return {
         ...firstOnly,
         [key]: [cut],
-        partial: { id: item.id, field: field.join("."), field_bytes: text.length },
-        ...(end < text.length ? { next: encodeNext({ ...read, at: item.id, field, offset: end }), remaining: rest.length } : continueFrom(1)),
+        partial: { id: keyAt(0), field: field.join("."), field_bytes: text.length },
+        ...(end < text.length ? { next: encodeNext({ ...read, at: keyAt(0), field, offset: end }), remaining: rest.length } : continueFrom(1)),
       };
     };
     let [lo, hi] = [offset, text.length];
@@ -108,6 +111,8 @@ export function packItems<T extends { id: ItemId }>(
     // 先頭の item が封筒と一緒に入らないだけなら、封筒だけを返してその item は次の応答で丸ごと返す ——
     // 切るのは1件で予算を超える item だけ(ADR 0195 決定4)
     if (Object.keys(firstOnly).length > 0) return { ...firstOnly, [key]: [], ...continueFrom(0) };
+    // ponytail: 切れるのは object の item の欄だけ —— 1件で予算を超える文字列の item は丸ごと返して床に任せる。観測されたら欄の分割を広げる
+    if (typeof rest[0] !== "object" || rest[0] === null) return { [key]: [rest[0]], ...continueFrom(1) };
     return piece(longestStringField(rest[0]), 0);
   }
   return { ...firstOnly, [key]: rest.slice(0, k), ...continueFrom(k) };

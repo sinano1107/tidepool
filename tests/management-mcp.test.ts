@@ -560,9 +560,9 @@ it("管理MCP の読取 tool は盤面データを返して DB を変えない(i
 
     expect(results.every((result) => result.isError !== true)).toBe(true);
     const resultByName = new Map(readTools.map((tool, index) => [tool.name, results[index]]));
-    expect(readToolPayload(resultByName.get("list_board"))).toEqual(
-      expect.arrayContaining([expect.objectContaining({ id: task.id, title: task.title })]),
-    );
+    expect(readToolPayload(resultByName.get("list_board"))).toEqual({
+      tasks: expect.arrayContaining([expect.objectContaining({ id: task.id, title: task.title })]),
+    });
     expect(readToolPayload(resultByName.get("get_task"))).toEqual(
       expect.objectContaining({ id: task.id, events: expect.any(Array) }),
     );
@@ -612,15 +612,15 @@ it("管理MCP は issue-backed content を保存済みプレースホルダー�
   const client = await managementMcpClient(t.baseUrl);
   try {
     const result: any = await client.callTool({ name: "list_board", arguments: {} });
-    expect(readToolPayload(result)).toEqual(
-      expect.arrayContaining([
+    expect(readToolPayload(result)).toEqual({
+      tasks: expect.arrayContaining([
         expect.objectContaining({
           id: issueTask.id,
           title: "#49",
           github_issue_number: 49,
         }),
       ]),
-    );
+    });
   } finally {
     await client.close();
   }

@@ -14,7 +14,7 @@ async function listFromBothSurfaces(tp: Tidepool, query: Record<string, string>)
   const http = (await api(tp.baseUrl, "GET", `/api/settings/memory/entries?${new URLSearchParams(query)}`)).json.entries;
   const client = await managementMcpClient(tp.baseUrl);
   try {
-    return [http, (await toolCaller(client)("list_memory_entries", query)).json];
+    return [http, (await toolCaller(client)("list_memory_entries", query)).json.entries];
   } finally {
     await client.close();
   }
@@ -221,7 +221,7 @@ it("管理MCP で Knowledge を書き(supersedes の list は domain に渡る)�
       json: { entry_id: knowledge.json.entry_id, event_ids: [expect.any(Number)] },
     });
     expect((await call("fold_memory_entries", { replaces: [knowledge.json.entry_id], successor_id: branch.json.entry_id })).isError).toBe(true);
-    expect((await call("list_memory_entries", { kind: "knowledge" })).json).toMatchObject([
+    expect((await call("list_memory_entries", { kind: "knowledge" })).json.entries).toMatchObject([
       {
         id: knowledge.json.entry_id,
         original: { title: "Node 22 を使う", text: "スイートは Node 22 で走らせる", language: "Japanese" },
@@ -238,12 +238,12 @@ it("管理MCP で Knowledge を書き(supersedes の list は domain に渡る)�
       expect((await call("invalidate_memory_entry", { entry_id: branch.json.entry_id, ...args })).isError).toBe(true);
     }
     expect((await call("invalidate_memory_entry", { entry_id: branch.json.entry_id, reason: "requirement_change" })).isError).toBe(false);
-    expect((await call("list_memory_entries", { state: "invalidated" })).json.map((e: { id: number }) => e.id)).toEqual([
+    expect((await call("list_memory_entries", { state: "invalidated" })).json.entries.map((e: { id: number }) => e.id)).toEqual([
       draft.json.entry_id,
       revised.json.entry_id,
       branch.json.entry_id,
     ]);
-    expect((await call("list_memory_entries", { board_wide: true, state: "invalidated" })).json.map((e: { id: number }) => e.id)).toEqual([
+    expect((await call("list_memory_entries", { board_wide: true, state: "invalidated" })).json.entries.map((e: { id: number }) => e.id)).toEqual([
       branch.json.entry_id,
     ]);
 
@@ -268,7 +268,7 @@ it("管理MCP の define_memory_branch は重ねた木の門と畳み方を言�
     );
     expect(description("list_memory_entries")).not.toContain("shadow");
     expect(description("list_memory_entries")).toContain("path lists only the entries at that branch or under it (path/…).");
-    expect(description("list_memory_branches")).toMatch(/^List every branch of the board's memory in tree order: .* Each Definition carries the human's original wording \(original\) when it has one\.$/);
+    expect(description("list_memory_branches")).toMatch(/^List every branch of the board's memory in tree order: .* Each Definition carries the human's original wording \(original\) when it has one\. /);
   } finally {
     await client.close();
   }
@@ -334,7 +334,7 @@ it("Exemplar の write(POST /api/settings/memory/exemplars・管理MCP の recor
   ]);
 });
 
-it("エントリ1件と枝ごとの移動(POST /api/settings/memory/entries/:id/move・/api/settings/memory/branches/move、管理MCP の move_memory_entry・move_memory_branch)は domain に渡り、枝ごとは旧 id → 複製の id を返し、domain error は 400 / tool error(ADR 0162 決定4)", async () => {
+it("エントリ1件と枝ごとの移動(POST /api/settings/memory/entries/:id/move・/api/settings/memory/branches/move、管理MCP の move_memory_entry・move_memory_branch)は domain に渡り、枝ごとは HTTP が旧 id → 複製の id を、管理MCP が件数と行き先を返し、domain error は 400 / tool error(ADR 0162 決定4 / ADR 0195)", async () => {
   t = await bootTidepool();
   const one = agentKnowledge(t, "One");
   const other = agentKnowledge(t, "Other");
@@ -352,9 +352,8 @@ it("エントリ1件と枝ごとの移動(POST /api/settings/memory/entries/:id/
     const entry = await call("move_memory_entry", { entry_id: moved.json.entry_id, workspace: "tidepool", path: "toolchain" });
     expect(entry).toMatchObject({ isError: false, json: { entry_id: expect.any(Number) } });
     expect((await call("move_memory_entry", { entry_id: moved.json.entry_id, workspace: null, path: "elsewhere" })).isError).toBe(true);
-    const copied = branchMoved.json.moved[0].successor_id;
     const again = await call("move_memory_branch", { workspace: "charts", path: "ci", to_workspace: null, to_path: "build" });
-    expect(again).toMatchObject({ isError: false, json: { moved: [{ entry_id: copied, successor_id: expect.any(Number) }] } });
+    expect(again).toEqual({ isError: false, json: { moved: 1, folded: 0, to_workspace: null, to_path: "build" } });
     expect((await call("move_memory_branch", { workspace: "charts", path: "ci", to_workspace: null, to_path: "build" })).isError).toBe(true);
   } finally {
     await client.close();
@@ -369,7 +368,7 @@ it("枝ごとの移動の merge は POST /api/settings/memory/branches/move と�
   t = await bootTidepool();
   const define = (path: string) =>
     defineMemoryBranch(t.db, { scope: "tidepool", path, text: `What ${path} holds.`, author: { activity: "worker_verb", name: "deckhand" } }, "worker", t.clock.now()).entry_id;
-  const [build, ci, toolchain] = ["build", "ci", "toolchain"].map(define);
+  const [build, , toolchain] = ["build", "ci", "toolchain"].map(define);
 
   const http = await api(t.baseUrl, "POST", "/api/settings/memory/branches/move", { workspace: "tidepool", path: "build", to_workspace: "tidepool", to_path: "toolchain", merge: true });
   expect(http).toMatchObject({ status: 200, json: { moved: [], folded: [{ entry_id: build, successor_id: toolchain }] } });
@@ -378,7 +377,7 @@ it("枝ごとの移動の merge は POST /api/settings/memory/branches/move と�
   try {
     expect(await toolCaller(client)("move_memory_branch", { workspace: "tidepool", path: "ci", to_workspace: "tidepool", to_path: "toolchain", merge: true })).toMatchObject({
       isError: false,
-      json: { moved: [], folded: [{ entry_id: ci, successor_id: toolchain }] },
+      json: { moved: 0, folded: 1, to_workspace: "tidepool", to_path: "toolchain" },
     });
   } finally {
     await client.close();
@@ -408,7 +407,7 @@ it("管理MCP の restore_memory_entry は無効化済みのエントリを doma
     const restored = await call("restore_memory_entry", { entry_id: old });
     expect(restored).toMatchObject({ isError: false, json: { entry_id: expect.any(Number) } });
     expect((await call("restore_memory_entry", { entry_id: restored.json.entry_id })).isError).toBe(true);
-    expect((await call("list_memory_entries", { state: "approved" })).json).toMatchObject([{ id: restored.json.entry_id, title: "Old" }]);
+    expect((await call("list_memory_entries", { state: "approved" })).json.entries).toMatchObject([{ id: restored.json.entry_id, title: "Old" }]);
   } finally {
     await client.close();
   }
