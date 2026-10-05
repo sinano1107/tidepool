@@ -930,25 +930,10 @@ describe("root の出力の読み切り(issue #1336 / ADR 0201)", () => {
     await tick();
 
     f.process.emitExitOnlyAt(0, 0, null);
-    await f.clock.advance(RECLAIM_TIMEOUT - 1);
-    expect(exitedOf(f, value.id)).toBeUndefined();
-    await f.clock.advance(1);
+    await f.clock.advance(RECLAIM_TIMEOUT);
 
     expect(exitedOf(f, value.id)).toMatchObject({ exit_code: 0, stderr_tail: "stuck", output_closed: false });
     expect(exits).toEqual([{ exit_code: 0, signal: null, stderr_tail: "stuck", reported_error: null, last_message: null }]);
-  });
-
-  it("spawn の失敗のあとに来る close(Node は error のあとに撃つ)は worker_exited を書かない", async () => {
-    const exits: WorkerExit[] = [];
-    const f = await fixture(undefined, undefined, (_taskId, exit) => exits.push(exit));
-    const value = task(f.db, "codex-spawn-enoent-close");
-    f.start(value);
-
-    f.process.emitError(Object.assign(new Error("spawn codex ENOENT"), { code: "ENOENT", syscall: "spawn codex" }));
-    f.process.emitCloseAt(0, -2, null);
-
-    expect(exitedOf(f, value.id)).toBeUndefined();
-    expect(exits).toEqual([]);
   });
 });
 

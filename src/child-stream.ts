@@ -1,7 +1,6 @@
 import { StringDecoder } from "node:string_decoder";
 import type { Clock } from "./clock.js";
 import type { ContainedProcess } from "./process-container.js";
-import { RECLAIM_TIMEOUT } from "./watchdog.js";
 
 /** 子プロセスの出力を読む vendor 中立の層(issue #1299)。chunk 単位の toString() は
  *  UTF-8 文字を境界で割ると置換文字に化ける(#1298)ので、StringDecoder が境界を
@@ -80,6 +79,7 @@ export function readStderrTail(stream: NodeJS.ReadableStream): () => string | nu
 export function settleOnOutputClose(
   child: ContainedProcess,
   clock: Clock,
+  reclaimTimeout: number,
   onExit: () => void,
   settle: (code: number | null, signal: NodeJS.Signals | null, outputClosed: boolean) => void,
 ): void {
@@ -92,7 +92,7 @@ export function settleOnOutputClose(
       cancel();
       settle(code, signal, outputClosed);
     };
-    const cancel = clock.setTimeout(() => finish(false), RECLAIM_TIMEOUT);
+    const cancel = clock.setTimeout(() => finish(false), reclaimTimeout);
     child.on("close", () => finish(true));
   });
 }

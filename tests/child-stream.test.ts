@@ -1,6 +1,7 @@
 import { PassThrough } from "node:stream";
 import { describe, expect, it } from "vitest";
-import { readLines, readStderrTail } from "../src/child-stream.js";
+import { readLines, readStderrTail, settleOnOutputClose } from "../src/child-stream.js";
+import { FakeClock, recordingSpawn } from "./fakes.js";
 
 /** 子プロセスの出力を「bytes → 行」にする vendor 中立の層(issue #1299)。 */
 describe("readLines", () => {
@@ -57,5 +58,60 @@ describe("readStderrTail", () => {
   it("マルチバイト文字が chunk 境界で割れても化けない", () => {
     const bytes = Buffer.from("認証エラー: トークン期限切れ\n");
     expect(tailOf(bytes.subarray(0, 4), bytes.subarray(4))).toBe("認証エラー: トークン期限切れ");
+  });
+});
+
+/** ADR 0201: root の exit は強制回収の契機、記録の確定点は root の出力の読み切り(close)。 */
+describe("settleOnOutputClose", () => {
+  const LIMIT = 1000;
+  const setup = () => {
+    const clock = new FakeClock();
+    const process = recordingSpawn();
+    const child = process.spawn("root", [], { cwd: "/", env: {} });
+    const order: string[] = [];
+    const settled: Array<[number | null, NodeJS.Signals | null, boolean]> = [];
+    settleOnOutputClose(
+      child,
+      clock,
+      LIMIT,
+      () => order.push("exit"),
+      (...args) => {
+        order.push("settle");
+        settled.push(args);
+      },
+    );
+    return { clock, process, order, settled };
+  };
+
+  it("exit で onExit を撃ち、確定は読み切りまで待つ", () => {
+    const t = setup();
+
+    t.process.emitExitOnlyAt(0, 1, "SIGTERM");
+    expect(t.order).toEqual(["exit"]);
+    t.process.emitCloseAt(0, 1, "SIGTERM");
+
+    expect(t.order).toEqual(["exit", "settle"]);
+    expect(t.settled).toEqual([[1, "SIGTERM", true]]);
+  });
+
+  it("読み切りが上限までに来なければ、exit の code で outputClosed: false として確定し、遅れた読み切りは無視する", async () => {
+    const t = setup();
+
+    t.process.emitExitOnlyAt(0, 0, null);
+    await t.clock.advance(LIMIT - 1);
+    expect(t.settled).toEqual([]);
+    await t.clock.advance(1);
+    t.process.emitCloseAt(0, 0, null);
+
+    expect(t.settled).toEqual([[0, null, false]]);
+  });
+
+  it("exit を見ないまま来た close(spawn の失敗で Node が error のあとに撃つ)では確定しない", async () => {
+    const t = setup();
+
+    t.process.emitCloseAt(0, -2, null);
+    await t.clock.advance(LIMIT);
+
+    expect(t.order).toEqual([]);
   });
 });

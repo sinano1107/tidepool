@@ -4100,9 +4100,7 @@ describe("root の出力の読み切り(issue #1336 / ADR 0201)", () => {
     await new Promise((resolve) => setImmediate(resolve));
 
     f.emitExitOnlyAt(0, 0, null);
-    await f.clock.advance(RECLAIM_TIMEOUT - 1);
-    expect(exitedOf(f.db, "task-never-closed")).toBeUndefined();
-    await f.clock.advance(1);
+    await f.clock.advance(RECLAIM_TIMEOUT);
 
     expect(exitedOf(f.db, "task-never-closed")).toMatchObject({
       exit_code: 0,
@@ -4111,21 +4109,5 @@ describe("root の出力の読み切り(issue #1336 / ADR 0201)", () => {
       output_closed: false,
     });
     expect(exits).toEqual([{ exit_code: 0, signal: null, stderr_tail: "stuck", reported_error: null, last_message: null }]);
-    // 遅れて来た読み切りは2度目の記録を書かない
-    f.emitCloseAt(0, 0, null);
-    expect(listEvents(f.db, "task-never-closed").filter((e) => e.kind === "worker_exited")).toHaveLength(1);
-    expect(exits).toHaveLength(1);
-  });
-
-  it("spawn の失敗のあとに来る close(Node は error のあとに撃つ)は worker_exited を書かない", async () => {
-    const exits: WorkerExit[] = [];
-    const f = await makeWorker({}, { onWorkerExited: (_taskId, exit) => exits.push(exit) });
-    f.start("task-spawn-enoent-close");
-
-    f.emitError(Object.assign(new Error("spawn claude ENOENT"), { code: "ENOENT", syscall: "spawn claude" }));
-    f.emitCloseAt(0, -2, null);
-
-    expect(exitedOf(f.db, "task-spawn-enoent-close")).toBeUndefined();
-    expect(exits).toEqual([]);
   });
 });

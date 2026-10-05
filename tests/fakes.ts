@@ -944,7 +944,6 @@ export function recordingSpawn() {
   const emitExitOnlyAt = (index: number, code: number | null, signal: NodeJS.Signals | null) => {
     for (const listener of exitListeners[index] ?? []) listener(code, signal);
   };
-  // 配列を写さずに回す —— exit の handler の中で張られた close の listener も受け取る
   const emitCloseAt = (index: number, code: number | null, signal: NodeJS.Signals | null) => {
     for (const listener of closeListeners[index] ?? []) listener(code, signal);
   };

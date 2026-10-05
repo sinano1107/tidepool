@@ -171,6 +171,8 @@ function rebaselineAfter<A extends unknown[], R>(
 export type WorkerFactory = (deps: {
   db: Db;
   clock: Clock;
+  /** ADR 0201 決定2: root の exit から出力の読み切りを待つ上限 —— watchdog の回収 timeout と同じ値。 */
+  reclaimTimeout: number;
   containers: ProcessContainers;
   /** Board call の口(ADR 0136)。skill 列挙はここを通る —— 容器と Clock は
    *  `startServer` にしか無いので、口もここで組んで adapter へ配る。 */
@@ -406,11 +408,13 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
   // 時計しか要らないが、その2つが揃うのがここだけなので組み立てもここに置く。
   // 回収済み観測の不成立は worker session の回収失敗と同じ Containment quarantine へ
   // 落とす(新しい quarantine 族は立てない — 決定6)。回収 timeout は watchdog と
-  // 同じ既定を共有する —— `options.watchdog` は任意なので定数のほうから取る。
+  // 同じ既定を共有する —— `options.watchdog` は任意なので定数のほうから取る。worker session の
+  // 読み切りの上限も同じ値(ADR 0201 決定2)。
+  const reclaimTimeout = given.watchdog?.reclaimTimeout ?? RECLAIM_TIMEOUT;
   const boardCalls = createBoardCalls({
     containers,
     clock: given.clock,
-    reclaimTimeout: given.watchdog?.reclaimTimeout ?? RECLAIM_TIMEOUT,
+    reclaimTimeout,
     onReclaimTimeout: (reason) => quarantineContainment(db, reason, given.clock.now()),
     checkCliVersion: given.checkHarnessCliVersion,
     // ADR 0186 決定3: 版の不一致で断ったら、pickup の検査と同じ鍵の封じ込めの隔離へ(1資源につき1枚)。
@@ -548,6 +552,7 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
   const worker = options.worker({
     db,
     clock: options.clock,
+    reclaimTimeout,
     containers,
     boardCall: boardCalls.call,
     onCapInterrupted,

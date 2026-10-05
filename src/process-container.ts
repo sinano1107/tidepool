@@ -16,8 +16,9 @@ export interface ContainedProcess {
   /** 畳み込み停止の合図の送達先。合図の選択は adapter の実装詳細であり
    *  (ADR 0099 決定1)、容器はどの signal かを知らない。 */
   kill(signal: NodeJS.Signals): void;
-  /** issue #32: the adapter's own exit observation point — usage/cost
-   *  recording needs to happen at the process boundary, not buried in a fake. */
+  /** issue #32: the adapter's own exit observation point at the process
+   *  boundary, not buried in a fake. ADR 0201: exit fires the force; the
+   *  usage/cost record settles at "close" below. */
   on(event: "exit", listener: (code: number | null, signal: NodeJS.Signals | null) => void): void;
   /** ADR 0201: root の出力の読み切り —— stdout / stderr が閉じ切った瞬間で、exit より後に来る。
    *  記録の確定点はここであって exit ではない。spawn の失敗でも "error" のあとに撃たれる。 */

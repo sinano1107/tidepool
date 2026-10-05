@@ -50,6 +50,7 @@ import {
 } from "./tasks.js";
 import type { TranscriptStore } from "./transcript-store.js";
 import { composeTerminalScreen } from "./usage.js";
+import { RECLAIM_TIMEOUT } from "./watchdog.js";
 import type { WorkerAdapter, WorkerExit } from "./worker.js";
 import {
   excludeWorkspaceProjectSettings,
@@ -1009,6 +1010,9 @@ function toUsage(result: StreamResultEvent, observed: AdvisorObservation): Worke
 export interface ClaudeWorkerOptions {
   db: Db;
   clock: Clock;
+  /** ADR 0201 決定2: root の exit から出力の読み切りを待つ上限。watchdog の回収 timeout と同じ値を
+   *  盤面が渡す(新しい設定値ではない)。不在は watchdog と同じ既定。 */
+  reclaimTimeout?: number;
   /** どの registry clone を spawn が読むか、そのクローンが remote 正本を持つか
    *  (ADR 0052 決定1)の組 — 必ず一緒に運ばれるので1つの型にした(issue #210
    *  レビュー — AgentAdminDeps / ProfileAdminDeps / WorkspaceAdminDeps と共有
@@ -2301,7 +2305,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
       // issue #356: この session の Precedent を投影する。**worker_exited を
       // 書いたあと**でなければ exit / usage 参照が投影に入らず、**書き込み
       // ストリームが閉じたあと**でなければ transcript の末尾が届いていない —
-      // stdout は pipe なので child の "exit" 時点でファイルが flush 済みとは
+      // stdout は pipe なので読み切り(child の "close")の時点でもファイルが flush 済みとは
       // 限らない。派生表なので失敗しても走らせて危険な状態にはならず(ADR 0083
       // 追記 2)、盤面を落とすほうが害が大きいので投影の失敗は記録して流す。
       const project = () => {
@@ -2319,7 +2323,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     // root が書き終えた出力は失われず、孤児が出力の口を握っていても読み切りが来る
     // (ADR 0201 決定1)。これは**送達であって回収の完了ではなく**、ADR 0099 決定1 の
     // 語彙は不変である: 門は回収済み観測ただ1つで、後始末はその後ろでしか走らない。
-    settleOnOutputClose(child, this.options.clock, () => this.containers.forceReclaim(task.id), settle);
+    settleOnOutputClose(child, this.options.clock, this.options.reclaimTimeout ?? RECLAIM_TIMEOUT, () => this.containers.forceReclaim(task.id), settle);
   }
 
   /** ADR 0039 決定3 の**深層防御側**: 走っているセッション自身の init 行の `tools`

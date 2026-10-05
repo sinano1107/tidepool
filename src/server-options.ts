@@ -255,6 +255,7 @@ export function buildWorkerOptions(
   session: {
     db: Db;
     clock: Clock;
+    reclaimTimeout: number;
     containers: ProcessContainers;
     boardCall: BoardCall;
     onCapInterrupted: (taskId: string, reclaimed: Promise<void>) => void;
@@ -267,6 +268,8 @@ export function buildWorkerOptions(
   return {
     db: session.db,
     clock: session.clock,
+    // ADR 0201 決定2: 読み切りの上限は watchdog の回収 timeout と同じ値
+    reclaimTimeout: session.reclaimTimeout,
     // ADR 0099 決定2: 盤面が1つだけ持つ容器の supervisor。adapter は
     // その中へ spawn し、watchdog は同じ帳簿へ force / reclaimed を撃つ。
     containers: session.containers,
@@ -313,7 +316,7 @@ export function buildWorkerOptions(
 export function buildWorkerFactory(board: BoardComposition): WorkerFactory {
   const { registryDir } = board;
   if (!registryDir) return () => new LoggingWorker();
-  return ({ db, clock, containers, boardCall, onCapInterrupted, onRowRefused, onSpawnFailed, onWorkerExited, transcripts }) => {
+  return ({ db, clock, reclaimTimeout, containers, boardCall, onCapInterrupted, onRowRefused, onSpawnFailed, onWorkerExited, transcripts }) => {
     const registry = { dir: registryDir, mode: board.registryMode } as const;
     return new CanonicalWorkerRouter({
       id: board.defaultAgentName,
@@ -321,12 +324,13 @@ export function buildWorkerFactory(board: BoardComposition): WorkerFactory {
         "claude-code": new ClaudeCodeWorker(
           buildWorkerOptions(
             { ...board, registryDir },
-            { db, clock, containers, boardCall, onCapInterrupted, onRowRefused, onSpawnFailed, onWorkerExited, transcripts },
+            { db, clock, reclaimTimeout, containers, boardCall, onCapInterrupted, onRowRefused, onSpawnFailed, onWorkerExited, transcripts },
           ),
         ),
         codex: new CodexWorker({
           db,
           clock,
+          reclaimTimeout,
           containers,
           registry,
           agent: board.defaultAgentName,

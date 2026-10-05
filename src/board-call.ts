@@ -227,7 +227,8 @@ export function createBoardCalls(deps: {
       // ADR 0109 決定4 の形: root の exit は容器が空になった証拠ではないが、
       // 残っているものが孤児である証拠ではある。行儀のよい exit は待たない。
       // 結果は exit でなく root の出力の読み切り(close)で決着させる —— exit の時点では
-      // 最後の出力がまだ届いていないことがある。読み切りの上限は時間上限(ADR 0201)。
+      // 最後の出力がまだ届いていないことがある。読み切りの上限は時間上限(ADR 0201)で、
+      // worker session の settleOnOutputClose を使わないのはこの上限がすでに張ってあるから。
       proc.on("exit", () => {
         forcedAtExit = true;
         deps.containers.forceReclaim(id);
@@ -237,7 +238,9 @@ export function createBoardCalls(deps: {
     });
 
     // root の exit 以外の force の契機(上限到達・done・spawn の失敗)はここ1箇所を通る。
-    // exit で撃ち済みなら撃ち直さない —— 同じ送達を繰り返しても回収は進まない。
+    // exit で撃ち済みなら撃ち直さない —— 送達は容器1つにつき1度と数える
+    // (board-call-containment.test.ts)。逆順(上限到達のあとに root が exit)は2度撃つが、
+    // forceReclaim は冪等なので害は無い。
     if (!forcedAtExit) deps.containers.forceReclaim(id);
     const empty = awaitEmpty(id);
     void empty.then((observed) => {
