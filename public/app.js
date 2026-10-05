@@ -2454,7 +2454,7 @@ function ExecutionDefaultsCard({ settings, say, onSaved, edit }) {
     {
       testId: "execution-advisor-above-main",
       checked: draft.advisor,
-      label: "advisor above main \u2014 an advisor may be the provider's top model even when it ranks above main",
+      label: "advisor above main \u2014 the advisor may be a model ranked above the main model (the provider's top model)",
       onChange: () => setDraft({ ...draft, advisor: !draft.advisor })
     }
   ), /* @__PURE__ */ React.createElement(

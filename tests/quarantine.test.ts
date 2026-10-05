@@ -173,7 +173,7 @@ const TABLE_ROW = QUARANTINES.find((r) => r.kind === "tableRow")!;
 it("404 の行の Quarantine の文面は、証拠の種類を渡しても渡さなくても変わらない(ADR 0184 決定1)", () => {
   const purpose =
     "R. The anthropic provider refused the model id `claude-opus-5` on this board — with this CLI version and this " +
-    "account. The board does not know why. This row is out of pickup and of advisor derivation while this stands; " +
+    "account. The board does not know why. This row is out of pickup while this stands; " +
     "other rows keep running.\n\nRepair one of two ways:\n\n" +
     "1. Fix the table: in the settings tab, change this row's model or delete the row. This question then closes on its own.\n" +
     "2. If the model id is right, update the CLI or restore the account, then answer — the board checks this model id " +

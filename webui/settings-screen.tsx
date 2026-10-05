@@ -2094,7 +2094,7 @@ function ExecutionDefaultsCard({ settings, say, onSaved, edit }: {
             <Select label="Default priority" options={[...settings.priorities]} value={draft.priority}
               onChange={(e) => setDraft({ ...draft, priority: e.target.value })} />
             <Checkbox testId="execution-advisor-above-main" checked={draft.advisor}
-              label="advisor above main — an advisor may be the provider's top model even when it ranks above main"
+              label="advisor above main — the advisor may be a model ranked above the main model (the provider's top model)"
               onChange={() => setDraft({ ...draft, advisor: !draft.advisor })} />
             <Select label="Retrospective tier" options={[...settings.tiers]} value={draft.retrospectiveTier}
               onChange={(e) => setDraft({ ...draft, retrospectiveTier: e.target.value })} />
