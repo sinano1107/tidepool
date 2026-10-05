@@ -7,10 +7,11 @@ Driving the VM is covered in [machine-setup.md](agents/machine-setup.md#linux-de
 
 Run every step from the Mac, in this order. `<version>` is the CLI version you are moving to.
 
-First make the VM checkout the code you are testing, with its dependencies installed:
+First bring the VM checkout to the current `main` with its dependencies, as in
+[Update Tidepool](mac-first-boot.md#update-tidepool):
 
 ```bash
-limactl shell tidepool -- bash -lc 'cd ~/tidepool && git pull && npm ci'
+limactl shell tidepool -- bash -lc 'cd ~/tidepool && git pull && npm install'
 ```
 
 ## 1. Install the new version in the VM
@@ -48,7 +49,7 @@ the database `~/.tidepool/env` points at was written by an older checkout. Don't
 this run on a fresh database instead:
 
 ```bash
-caffeinate -i -s limactl shell tidepool -- bash -lc 'source ~/.tidepool/env && export TIDEPOOL_DB=~/.tidepool/version-bump.sqlite PATH="$HOME/.local/bin:$PATH" && cd ~/tidepool && exec systemd-run --user --scope --unit tidepool-board -p Delegate=yes -- npm start'
+caffeinate -i -s limactl shell tidepool -- bash -lc 'source ~/.tidepool/env && export TIDEPOOL_DB=~/.tidepool/version-bump-<version>.sqlite PATH="$HOME/.local/bin:$PATH" && cd ~/tidepool && exec systemd-run --user --scope --unit tidepool-board -p Delegate=yes -- npm start'
 ```
 
 ## 4. Run the three canaries
