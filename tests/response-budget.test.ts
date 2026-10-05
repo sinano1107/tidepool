@@ -3,11 +3,11 @@ import { openDb } from "../src/db.js";
 import { listEventsOfKinds } from "../src/events.js";
 import { toolError, toolResult } from "../src/mcp.js";
 import { floorResponse, packItems, readNext } from "../src/response-budget.js";
+import { RESPONSE_BUDGET_BYTES } from "./harness.js";
 
 // 応答予算(ADR 0195): 詰める関数の境目・欄の分割・続きの error と、出口の床はここで言う(issue #1388)。
 // 大きさは MCP の text content に載るシリアライズ後の UTF-8 バイト数で測る。
 
-const RESPONSE_BUDGET_BYTES = 40_000;
 const bytesOf =(payload: unknown) => Buffer.byteLength(JSON.stringify(payload));
 const first = { verb: "get_task", args: { task_id: "t1" } };
 
@@ -27,14 +27,14 @@ it("ちょうど予算の読みは1回で全部返り next も remaining も付�
 it("1バイト超えると、予算に収まる先頭の item を丸ごと返し、next と remaining を付ける。next を追うと残りが続く", () => {
   const items = itemsTotalling(RESPONSE_BUDGET_BYTES + 1);
 
-  const page: any = packItems(first, "events", items);
-  expect(bytesOf(page)).toBeLessThanOrEqual(RESPONSE_BUDGET_BYTES);
-  expect(page.events).toEqual(items.slice(0, page.events.length));
-  expect(page.remaining).toBe(items.length - page.events.length);
-  expect(page.next).toEqual(expect.any(String));
+  const response: any = packItems(first, "events", items);
+  expect(bytesOf(response)).toBeLessThanOrEqual(RESPONSE_BUDGET_BYTES);
+  expect(response.events).toEqual(items.slice(0, response.events.length));
+  expect(response.remaining).toBe(items.length - response.events.length);
+  expect(response.next).toEqual(expect.any(String));
 
-  const rest: any = packItems(readNext("get_task", page.next), "events", items);
-  expect(rest).toEqual({ events: items.slice(page.events.length) });
+  const rest: any = packItems(readNext("get_task", response.next), "events", items);
+  expect(rest).toEqual({ events: items.slice(response.events.length) });
 });
 
 it("壊れた続き・別の verb の続き・指す item が無い続きは、それぞれ何が悪いかを名指す error になる", () => {
@@ -76,10 +76,10 @@ it("出口の床は予算以下の応答と error の応答をそのまま通し
 });
 
 /** 最初の読みから next が尽きるまで追った応答の列。 */
-function readAll(items: readonly { id: number }[], envelope?: Record<string, unknown>) {
-  const pages: any[] = [packItems(first, "events", items, envelope)];
-  while (pages.at(-1).next) pages.push(packItems(readNext("get_task", pages.at(-1).next), "events", items));
-  return pages;
+function followNext(items: readonly { id: number }[], envelope?: Record<string, unknown>) {
+  const responses: any[] = [packItems(first, "events", items, envelope)];
+  while (responses.at(-1).next) responses.push(packItems(readNext("get_task", responses.at(-1).next), "events", items));
+  return responses;
 }
 
 it("1件で予算を超える item は長い欄を UTF-8 の文字境界で切って単独で返し、部分の印を付ける。next を追ってつなぐと逐語の原文に戻る", () => {
@@ -87,10 +87,10 @@ it("1件で予算を超える item は長い欄を UTF-8 の文字境界で切�
   const long = '潮だまり🐙"\n'.repeat(9_000);
   const items = [{ id: 3, line: "short" }, { id: 2, payload: { kind: "decision_logged", line: long } }, { id: 1, line: "after" }];
 
-  const pages = readAll(items);
+  const responses = followNext(items);
 
-  for (const page of pages) expect(bytesOf(page)).toBeLessThanOrEqual(RESPONSE_BUDGET_BYTES);
-  const pieces = pages.filter((page) => page.partial);
+  for (const response of responses) expect(bytesOf(response)).toBeLessThanOrEqual(RESPONSE_BUDGET_BYTES);
+  const pieces = responses.filter((response) => response.partial);
   expect(pieces.length).toBeGreaterThan(1);
   for (const piece of pieces) {
     expect(piece.partial).toEqual({ id: 2, field: "payload.line", field_bytes: Buffer.byteLength(long) });
@@ -98,19 +98,19 @@ it("1件で予算を超える item は長い欄を UTF-8 の文字境界で切�
     expect(piece.events[0]).toMatchObject({ id: 2, payload: { kind: "decision_logged" } });
   }
   expect(pieces.map((piece) => piece.events[0].payload.line).join("")).toBe(long);
-  expect(pages.flatMap((page) => page.events.filter((e: any) => e.id !== 2))).toEqual([items[0], items[2]]);
+  expect(responses.flatMap((response) => response.events.filter((e: any) => e.id !== 2))).toEqual([items[0], items[2]]);
 });
 
 it("封筒と先頭の item が一緒に入らないとき、最初の応答は封筒だけを返し、その item は次の応答で丸ごと返る", () => {
   const envelope = { purpose: "p".repeat(30_000) };
   const items = [3, 2, 1].map((id) => ({ id, line: "x".repeat(15_000) }));
 
-  const pages = readAll(items, envelope);
+  const responses = followNext(items, envelope);
 
-  expect(pages[0]).toMatchObject({ ...envelope, events: [], remaining: 3 });
-  for (const page of pages.slice(1)) expect(page).not.toHaveProperty("purpose");
-  expect(pages.some((page) => page.partial)).toBe(false);
-  expect(pages.flatMap((page) => page.events)).toEqual(items);
+  expect(responses[0]).toMatchObject({ ...envelope, events: [], remaining: 3 });
+  for (const response of responses.slice(1)) expect(response).not.toHaveProperty("purpose");
+  expect(responses.some((response) => response.partial)).toBe(false);
+  expect(responses.flatMap((response) => response.events)).toEqual(items);
 });
 
 it("欄の位置が壊れた続きも名指しの error になる", () => {
@@ -126,12 +126,12 @@ it("id を持たない item は渡した鍵(item と位置から)で続きの境
   const read = { verb: "preview_case", args: { event_id: 1 } };
   const byPosition = (_: string, i: number) => i;
 
-  const pages: any[] = [packItems(read, "decisions", lines, {}, { keyOf: byPosition })];
-  while (pages.at(-1).next) pages.push(packItems(readNext("preview_case", pages.at(-1).next), "decisions", lines, {}, { keyOf: byPosition }));
+  const responses: any[] = [packItems(read, "decisions", lines, {}, { keyOf: byPosition })];
+  while (responses.at(-1).next) responses.push(packItems(readNext("preview_case", responses.at(-1).next), "decisions", lines, {}, { keyOf: byPosition }));
 
-  expect(pages.length).toBeGreaterThan(1);
-  for (const page of pages) expect(bytesOf(page)).toBeLessThanOrEqual(RESPONSE_BUDGET_BYTES);
-  expect(pages.flatMap((page) => page.decisions)).toEqual(lines);
+  expect(responses.length).toBeGreaterThan(1);
+  for (const response of responses) expect(bytesOf(response)).toBeLessThanOrEqual(RESPONSE_BUDGET_BYTES);
+  expect(responses.flatMap((response) => response.decisions)).toEqual(lines);
 });
 
 it("1件で予算を超える文字列の item も切れで返し、つなぐと逐語の原文に戻る", () => {
@@ -140,13 +140,46 @@ it("1件で予算を超える文字列の item も切れで返し、つなぐと
   const read = { verb: "preview_case", args: { event_id: 1 } };
   const byPosition = (_: string, i: number) => i;
 
-  const pages: any[] = [packItems(read, "decisions", lines, {}, { keyOf: byPosition })];
-  while (pages.at(-1).next) pages.push(packItems(readNext("preview_case", pages.at(-1).next), "decisions", lines, {}, { keyOf: byPosition }));
+  const responses: any[] = [packItems(read, "decisions", lines, {}, { keyOf: byPosition })];
+  while (responses.at(-1).next) responses.push(packItems(readNext("preview_case", responses.at(-1).next), "decisions", lines, {}, { keyOf: byPosition }));
 
-  for (const page of pages) expect(bytesOf(page)).toBeLessThanOrEqual(RESPONSE_BUDGET_BYTES);
-  const pieces = pages.filter((page) => page.partial);
+  for (const response of responses) expect(bytesOf(response)).toBeLessThanOrEqual(RESPONSE_BUDGET_BYTES);
+  const pieces = responses.filter((response) => response.partial);
   expect(pieces.length).toBeGreaterThan(1);
   for (const piece of pieces) expect(piece.partial).toEqual({ id: 1, field: "", field_bytes: Buffer.byteLength(long) });
   expect(pieces.map((piece) => piece.decisions[0]).join("")).toBe(long);
-  expect(pages.flatMap((page) => (page.partial ? [] : page.decisions))).toEqual(["short", "after"]);
+  expect(responses.flatMap((response) => (response.partial ? [] : response.decisions))).toEqual(["short", "after"]);
+});
+
+it("先頭の item が封筒なしでも1件で予算を超えるときは、最初の応答から封筒とその item の切れを返す —— 封筒だけの応答を挟まない", () => {
+  const envelope = { dropped: [] };
+  const long = "潮".repeat(20_000);
+  const items = [{ id: 2, line: long }, { id: 1, line: "after" }];
+
+  const responses = followNext(items, envelope);
+
+  for (const response of responses) expect(bytesOf(response)).toBeLessThanOrEqual(RESPONSE_BUDGET_BYTES);
+  expect(responses[0]).toMatchObject({ ...envelope, partial: { id: 2, field: "line" } });
+  expect(responses.filter((response) => response.partial).map((response) => response.events[0].line).join("")).toBe(long);
+  expect(responses.at(-1).events).toEqual([items[1]]);
+});
+
+it("複数の列に詰めると item は自分の列に載り(列は空でも載る)、続きは列の境を跨いで順に続く。毎回載る欄(every)はどの応答にも載り、その分も予算に数える", () => {
+  const items = Array.from({ length: 45 }, (_, i) => ({ id: i, text: "x".repeat(2_000) }));
+  const every = { event_id: Number.MAX_SAFE_INTEGER };
+  const options = { listOf: (item: { id: number }) => (item.id < 30 ? "parent.history" : "history"), every };
+  const read = { verb: "get_current_task", args: {} };
+
+  const responses: any[] = [packItems(read, ["parent.history", "history"], items, { parent: { id: "p" } }, options)];
+  while (responses.at(-1).next) responses.push(packItems(readNext("get_current_task", responses.at(-1).next), ["parent.history", "history"], items, {}, options));
+
+  expect(responses.length).toBeGreaterThan(2);
+  for (const response of responses) {
+    expect(bytesOf(response)).toBeLessThanOrEqual(RESPONSE_BUDGET_BYTES);
+    expect(response).toMatchObject({ event_id: every.event_id, parent: { history: expect.any(Array) }, history: expect.any(Array) });
+  }
+  expect(responses[0].parent.id).toBe("p");
+  for (const response of responses.slice(1)) expect(response.parent).not.toHaveProperty("id");
+  expect(responses.flatMap((response) => response.parent.history.map((item: any) => item.id))).toEqual(items.slice(0, 30).map((item) => item.id));
+  expect(responses.flatMap((response) => response.history.map((item: any) => item.id))).toEqual(items.slice(30).map((item) => item.id));
 });

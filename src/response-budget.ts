@@ -60,10 +60,18 @@ interface PackOptions<T> {
   /** 続きの境目の鍵 —— 既定は `id`、id を持たない item(枝の行・文字列など)は item と列の位置から作る。 */
   keyOf?: (item: T, index: number) => ItemId;
   /** item を置く列(`key` に並べた点区切りの path のどれか)。既定は `key` の先頭。 */
-  listOf?: (item: T) => string;
+  listOf?: (item: T, index: number) => string;
   /** 続きの応答にも毎回載る欄(封筒と違い最初の応答だけではない)。 */
   every?: Record<string, unknown>;
 }
+
+/** 予算と続きで読む口(管理MCP と Worker MCP)の description の続きの読み方(ADR 0195)。順序は各口が前に書く。 */
+export const nextDescription = (verb: string, items: string, firstOnly?: string) =>
+  `When the ${items} do not fit in one response, the response carries \`next\` and \`remaining\` (how many ${items} are not returned yet): ` +
+  `call ${verb} again with only \`next\` to read the rest, and repeat until a response carries no \`next\` — then the list is complete.` +
+  (firstOnly ? ` ${firstOnly} on the first response only.` : "") +
+  " An item too large for one response comes alone in pieces marked `partial` (`id`, the item's id or the key `next` resumes from; `field`, " +
+  "empty when the item is itself a string; and `field_bytes`, the field's full size in UTF-8 bytes): join that field across the pieces to get it verbatim.";
 
 /** item の列を、予算に収まるだけ丸ごと `key` に詰めた応答にする(ADR 0195 決定3)。
  *  `envelope`(item の列以外の欄)は最初の読みにだけ載る。残りがあるときだけ `next` と `remaining`(残りの件数)が付く ——
@@ -103,13 +111,14 @@ export function packItems<T>(
   const keyAt = (k: number) => keyOf(rest[k]!, start + k);
   const continueFrom = (k: number) =>
     k < rest.length ? { next: encodeNext({ verb: read.verb, args: read.args, at: keyAt(k) }), remaining: rest.length - k } : {};
-  /** `head` に、選んだ item をそれぞれの列に置いた応答(列は item が無くても空で載る)。 */
-  const render = (chosen: readonly T[]) => {
-    const out: Record<string, any> = { ...head };
+  /** `base`(既定は `head`)に、`rest` の先頭から選んだ item(切れは `rest[0]` の代わり)をそれぞれの列に置いた応答(列は item が
+   *  無くても空で載る)。列は位置で引く —— 切れは複製なので item そのものからは引けない。 */
+  const render = (chosen: readonly T[], base: object = head) => {
+    const out: Record<string, any> = { ...base };
     for (const list of lists) {
       const path = list.split(".");
       const parent = path.slice(0, -1).reduce((node, name) => (node[name] = { ...node[name] }), out);
-      parent[path.at(-1)!] = chosen.filter((item) => listOf(item) === list);
+      parent[path.at(-1)!] = chosen.filter((_, j) => listOf(rest[j]!, start + j) === list);
     }
     return out;
   };
@@ -156,7 +165,7 @@ export function packItems<T>(
   const filled = new Set<string>(); // 1件目の後ろにだけ `,` が要る
   let k = 0;
   while (k < rest.length - 1) {
-    const list = listOf(rest[k]!);
+    const list = listOf(rest[k]!, start + k);
     const grown = size + bytes(JSON.stringify(rest[k])) + (filled.has(list) ? 1 : 0);
     if (grown + tailBytes(k + 1) > RESPONSE_BUDGET_BYTES) break;
     size = grown;
@@ -165,8 +174,9 @@ export function packItems<T>(
   }
   if (k === 0) {
     // 先頭の item が封筒と一緒に入らないだけなら、封筒だけを返してその item は次の応答で丸ごと返す ——
-    // 切るのは1件で予算を超える item だけ(ADR 0195 決定4)。毎回載る欄(`every`)は次の応答にも載るので、ここでは数えない
-    if (Object.keys(firstOnly).length > 0) return { ...render([]), ...continueFrom(0) };
+    // 切るのは1件で予算を超える item だけ(ADR 0195 決定4)。その item は封筒と一緒に今切る(封筒だけの応答を挟まない)
+    const fitsAlone = bytes(JSON.stringify({ ...render(rest.slice(0, 1), every), ...continueFrom(1) })) <= RESPONSE_BUDGET_BYTES;
+    if (fitsAlone && Object.keys(firstOnly).length > 0) return { ...render([]), ...continueFrom(0) };
     return piece(longestStringField(rest[0]), 0);
   }
   return { ...render(rest.slice(0, k)), ...continueFrom(k) };

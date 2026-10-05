@@ -401,21 +401,16 @@ export async function mcpClient(baseUrl: string, taskId?: string): Promise<Clien
 export const RESPONSE_BUDGET_BYTES = 40_000;
 
 /** `name` を `args` で呼び、続き(next)が尽きるまで next だけを渡して追った応答(バイト数と本文)の列。 */
-export async function readAllPages(client: Client, name: string, args: Record<string, unknown> = {}) {
-  const pages: Array<{ bytes: number; payload: any }> = [];
+export async function readFollowingNext(client: Client, name: string, args: Record<string, unknown> = {}) {
+  const responses: Array<{ bytes: number; payload: any }> = [];
   let next: unknown;
   do {
     const result: any = await client.callTool({ name, arguments: next === undefined ? args : { next } });
     if (result.isError) throw new Error(`${name}: ${result.content[0].text}`);
-    pages.push({ bytes: Buffer.byteLength(result.content[0].text), payload: JSON.parse(result.content[0].text) });
-    next = pages.at(-1)!.payload.next;
+    responses.push({ bytes: Buffer.byteLength(result.content[0].text), payload: JSON.parse(result.content[0].text) });
+    next = responses.at(-1)!.payload.next;
   } while (next !== undefined);
-  return pages;
-}
-
-/** task の event の1件の payload を HTTP の events の口から読む(assert 用 —— t.db は setup 専用)。 */
-export async function taskEventPayload(tp: Tidepool, taskId: string, eventId: number): Promise<any> {
-  return ((await api(tp.baseUrl, "GET", `/api/tasks/${taskId}/events`)).json as any[]).find((e) => e.id === eventId)?.payload;
+  return responses;
 }
 
 /** Real authenticated client for the human-facing Management MCP.  Keep this

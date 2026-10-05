@@ -29,14 +29,10 @@ const since = (db: Db, readerTaskId: string, args: ReadWindow) => args.since_wat
  *  実際に走ったセルが違う行で、`diverged_only` でそれだけに絞る。 */
 export function listRoutingShadow(db: Db, readerTaskId: string, input: ReadWindow & { diverged_only?: boolean; next?: string }) {
   const read = readPosition<ReadWindow & { diverged_only?: boolean }>("list_routing_shadow", input);
-  // 境目の鍵は learner_shadow の id —— 応答の行には載せないので、行の物から引く
-  const ids = new Map<object, number>();
-  const shadow = shadowRows(db, { after: since(db, readerTaskId, read.args) }).flatMap(({ id, ...row }) => {
-    if (read.args.diverged_only && !row.diverged) return [];
-    ids.set(row, id);
-    return [row];
-  });
-  return packItems(read, "shadow", shadow, {}, { keyOf: (row) => ids.get(row)! }) as Packed<{ shadow: typeof shadow }>;
+  // 境目の鍵は learner_shadow の id —— 応答の行には載せないので、同じ位置の元の行から引く
+  const kept = shadowRows(db, { after: since(db, readerTaskId, read.args) }).filter((row) => !read.args.diverged_only || row.diverged);
+  const shadow = kept.map(({ id: _, ...row }) => row);
+  return packItems(read, "shadow", shadow, {}, { keyOf: (_, i) => kept[i]!.id }) as Packed<{ shadow: typeof shadow }>;
 }
 
 /** list_routing_shadow の行(ページ割り前、learner_shadow の id つき)。行の watermark W は event W より後に書かれたので、窓
@@ -160,7 +156,7 @@ function cellRows(db: Db, window: MetaReviewWindow) {
  *  (routing_proposal_stale)、registry へ適用した tier の提案なら着地した commit(agent_tier_changed)。提案の表は持たず question と
  *  event から組む。verb は窓で切らない —— 退けられた提案を繰り返さないための読み物なので、全期間を返す。window を渡すと、回答か
  *  陳腐化の event がその窓 `(after, upTo]` にある提案だけ(材料の節の決着した提案、ADR 0180 追記 #1239)。 */
-export function listRoutingProposals(db: Db, window?: MetaReviewWindow) {
+function listRoutingProposals(db: Db, window?: MetaReviewWindow) {
   const rows = db
     .prepare(
       `SELECT t.id, t.question_proposal,

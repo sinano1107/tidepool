@@ -2752,15 +2752,10 @@ type TaskHistoryEntry =
   | { completion: string | null }
   | { child_outside_the_decomposition: HistoryChildContext };
 
-/** One task's worker-facing history, ordered by the event stream. */
-export function taskHistory(db: Db, taskId: string, currentTaskId?: string): TaskHistoryEntry[] {
-  return joinHistory(taskHistoryRows(db, taskId, currentTaskId));
-}
-
 /** taskHistoryRows の1行: `id` は行の境目の event、`decision` は行が属する decision の event。 */
 export type HistoryRow = { id: number; decision?: number; entry: TaskHistoryEntry };
 
-/** 隣り合う同じ decision の行の子をまとめ、taskHistory の形に戻す。行の entry は書き換えない。 */
+/** 隣り合う同じ decision の行の子をまとめ、decision ごとの history の形に戻す。行の entry は書き換えない。 */
 export function joinHistory(rows: readonly Omit<HistoryRow, "id">[]): TaskHistoryEntry[] {
   const out: TaskHistoryEntry[] = [];
   let previous: number | undefined;
@@ -2773,7 +2768,7 @@ export function joinHistory(rows: readonly Omit<HistoryRow, "id">[]): TaskHistor
   return out;
 }
 
-/** taskHistory を decision の子ごとに分けた行の列(ADR 0195: 兄弟の handoff 群が応答予算を超えても続きで読めるように)。
+/** 1つの task の worker が読む history(event の順)を、decision の子ごとに分けた行の列(ADR 0195: 兄弟の handoff 群が応答予算を超えても続きで読めるように)。
  *  子を持つ decision は子1件ごとに `{ decision, children: [子] }` の行になり、`id` はその子の登録 event。子の無い decision・完了・
  *  分解外の子は1行で、`id` はそれぞれの event。 */
 export function taskHistoryRows(db: Db, taskId: string, currentTaskId?: string): HistoryRow[] {
@@ -2876,7 +2871,7 @@ function premiseBreachReason(db: Db, taskId: string): string {
 }
 
 /** Every direct child of `parentId`, any status, in board order (issue #129's
- *  sibling-title list for the human draft). taskHistory deliberately reorders
+ *  sibling-title list for the human draft). taskHistoryRows deliberately reorders
  *  these by their registration event ids instead. */
 export function listChildren(db: Db, parentId: string): Task[] {
   const rows = db

@@ -270,6 +270,30 @@ it("一覧は応答予算で切り、next と remaining が続きを言う。nex
   expect(second).not.toHaveProperty("next");
 });
 
+it("read_memory_entries と list_memory_proposals も応答予算で切り、next を追うと id 順 / 古い順に欠けも重複もなく揃う。missing は最初の応答だけに載り、各応答の memory_pulled は最初の input とその応答で返した id を持つ", () => {
+  const { db, task, reader, behavior } = board();
+  const ids = Array.from({ length: 20 }, (_, i) => behavior({ title: `tide ${i} ${"y".repeat(2_000)}` }));
+  const proposed = ids.map((candidate_id) => {
+    const { question_id } = proposeMemoryChange(db, task.id, { op: "approve", candidate_id, rationale: "r" }, "auditor", at);
+    answerQuestion(db, getTask(db, question_id)!, ["reject"], at, undefined, "c".repeat(2_000), undefined, "webui");
+    return question_id;
+  });
+  const input = { ids: [9999, ...[...ids].reverse()] };
+
+  const reads = [readMemoryEntries(db, reader, input, at)];
+  while (reads.at(-1)!.next) reads.push(readMemoryEntries(db, reader, { next: reads.at(-1)!.next }, at));
+  const proposals = [pullMemoryProposals(db, reader, {}, at)];
+  while (proposals.at(-1)!.next) proposals.push(pullMemoryProposals(db, reader, { next: proposals.at(-1)!.next }, at));
+
+  expect(reads.length).toBeGreaterThan(1);
+  expect(reads.flatMap((r) => r.entries.map((e) => e.id))).toEqual(ids);
+  expect(reads[0]!.missing).toEqual([9999]);
+  for (const r of reads.slice(1)) expect(r).not.toHaveProperty("missing");
+  for (const r of reads) expect(getEvent(db, r.event_id)?.payload).toMatchObject({ verb: "read_memory_entries", input, returned_ids: r.entries.map((e) => e.id) });
+  expect(proposals.length).toBeGreaterThan(1);
+  expect(proposals.flatMap((r) => r.proposals.map((p) => p.question_id))).toEqual(proposed);
+});
+
 it("list_memory_entries の path は P とその配下 P/… だけを返して P-x を返さず、scope / kind / state と同時に効く —— NFD の入力は NFC の枝に当たり、不正な path は domain error(#1209)", () => {
   const { db, behavior, knowledge, define } = board();
   const own = knowledge("tidepool", "habits");

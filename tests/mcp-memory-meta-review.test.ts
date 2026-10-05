@@ -13,11 +13,9 @@ import {
   managementMcpClient,
   mcpClient,
   memoryEntries,
-  RESPONSE_BUDGET_BYTES,
-  readAllPages,
+  readFollowingNext,
   registerWork,
   type Tidepool,
-  taskEventPayload,
 } from "./harness.js";
 import { makeRegistryAgentCheck } from "./registry-fixture.js";
 
@@ -124,11 +122,12 @@ it("read_memory_entries は主題 memory の接続に出て管理MCP には出�
         "and result, or a whole session's decisions in order with the handoff and result); null when there is none. An id whose entry was " +
         "moved or restored returns the entry it now lives as, with requested_id set to the id you asked for. Any other invalidated entry comes " +
         "back as it is, text included, with its invalidation_reason and successor_id. Ids that do not exist are listed in missing. " +
-        "Entries come in id order; missing comes on the first response only. " +
-        "When the result does not fit in one response, the response carries `next` and `remaining` (how many items are not returned yet): " +
-        "call this verb again with only `next` to read the rest, and repeat until a response carries no `next` — then the result is complete. " +
-        "An item too large for one response comes alone in pieces marked `partial` (`id`, `field`, and `field_bytes`, the field's full size in " +
-        "UTF-8 bytes): join that field across the pieces to get it verbatim.",
+        "Entries come in id order. " +
+        "When the entries do not fit in one response, the response carries `next` and `remaining` (how many entries are not returned yet): " +
+        "call read_memory_entries again with only `next` to read the rest, and repeat until a response carries no `next` — then the list is complete. " +
+        "`missing` comes on the first response only. " +
+        "An item too large for one response comes alone in pieces marked `partial` (`id`, the item's id or the key `next` resumes from; `field`, " +
+        "empty when the item is itself a string; and `field_bytes`, the field's full size in UTF-8 bytes): join that field across the pieces to get it verbatim.",
     );
     expect((await management.listTools()).tools.map((tool) => tool.name)).not.toContain("read_memory_entries");
     expect(await call("read_memory_entries", { ids: [material, 9999] })).toMatchObject({
@@ -162,10 +161,10 @@ it("search_memory_entries は主題 memory の接続に出て、主題 routing �
         "or were dropped without a successor, with the reason. Pass query (free text; terms are OR-ed and ranked) or like (an entry id: searches " +
         "with that entry's own title and text, excluding the entry itself). Returns pointers only — read the text with read_memory_entries. " +
         "Definitions are not searched: the branch list carries them. Results come in rank order. " +
-        "When the result does not fit in one response, the response carries `next` and `remaining` (how many items are not returned yet): " +
-        "call this verb again with only `next` to read the rest, and repeat until a response carries no `next` — then the result is complete. " +
-        "An item too large for one response comes alone in pieces marked `partial` (`id`, `field`, and `field_bytes`, the field's full size in " +
-        "UTF-8 bytes): join that field across the pieces to get it verbatim.",
+        "When the results do not fit in one response, the response carries `next` and `remaining` (how many results are not returned yet): " +
+        "call search_memory_entries again with only `next` to read the rest, and repeat until a response carries no `next` — then the list is complete. " +
+        "An item too large for one response comes alone in pieces marked `partial` (`id`, the item's id or the key `next` resumes from; `field`, " +
+        "empty when the item is itself a string; and `field_bytes`, the field's full size in UTF-8 bytes): join that field across the pieces to get it verbatim.",
     );
     for (const other of [management, routingClient]) {
       expect((await other.listTools()).tools.map((tool) => tool.name)).not.toContain("search_memory_entries");
@@ -340,7 +339,7 @@ it("invalidate_memory は cause の memory を理由コードに取らず tool e
   }
 });
 
-it("read_memory_entries と件数で切っていた読み口は予算を超える量を予算分ずつ返し、next を追うと全行が揃う。各応答の memory_pulled はその応答で返した id だけを持つ(ADR 0195)", async () => {
+it("read_memory_entries と件数で切っていた読み口は続き(next)だけを受けて続きの応答を返し、next を追うと最初の読みの行がすべて届く(写像。詰め方・順序・続きの memory_pulled はドメイン層、ADR 0195)", async () => {
   const { review, client, material } = await boardWithMetaReview();
   const candidates = Array.from(
     { length: 20 },
@@ -358,26 +357,19 @@ it("read_memory_entries と件数で切っていた読み口は予算を超え�
     expect((await api(t.baseUrl, "POST", `/api/tasks/${question_id}/answer`, { answers: ["reject"], comment: "c".repeat(2_000) })).status).toBe(200);
     proposed.push(question_id);
   }
-  const ids = (pages: Array<{ payload: any }>, key: string, id = "id") => pages.flatMap((page) => page.payload[key].map((row: any) => row[id]));
   try {
     const reads: Array<[string, Record<string, unknown>, string, string, unknown[]]> = [
-      ["read_memory_entries", { ids: [...candidates].reverse() }, "entries", "id", candidates],
+      ["read_memory_entries", { ids: candidates }, "entries", "id", candidates],
       ["list_memory_candidates", { include_invalidated: true }, "entries", "id", candidates],
       ["list_memory_entries", {}, "entries", "id", [material, ...candidates]],
       ["list_memory_proposals", {}, "proposals", "question_id", proposed],
+      ["search_memory_entries", { query: "tide" }, "results", "id", candidates],
     ];
     for (const [verb, args, key, id, expected] of reads) {
-      const pages = await readAllPages(client, verb, args);
+      const responses = await readFollowingNext(client, verb, args);
 
-      expect(pages.length, verb).toBeGreaterThan(1);
-      for (const page of pages) expect(page.bytes).toBeLessThanOrEqual(RESPONSE_BUDGET_BYTES);
-      expect(ids(pages, key, id)).toEqual(expected);
-    }
-    const searched = await readAllPages(client, "search_memory_entries", { query: "tide" });
-    expect(searched.length).toBeGreaterThan(1);
-    expect(ids(searched, "results").sort((a, b) => a - b)).toEqual(candidates);
-    for (const page of searched) {
-      expect(await taskEventPayload(t, review.id, page.payload.event_id)).toMatchObject({ verb: "search_memory_entries", input: { query: "tide" }, returned_ids: ids([page], "results") });
+      expect(responses.length, verb).toBeGreaterThan(1);
+      expect(new Set(responses.flatMap((response) => response.payload[key].map((row: any) => row[id]))), verb).toEqual(new Set(expected));
     }
   } finally {
     await client.close();

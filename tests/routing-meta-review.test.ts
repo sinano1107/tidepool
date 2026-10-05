@@ -13,8 +13,7 @@ import {
   HUMAN_WEBUI,
   mcpClient,
   QUIET_EXIT,
-  RESPONSE_BUDGET_BYTES,
-  readAllPages,
+  readFollowingNext,
   registerWork,
   type Tidepool,
   WORKER_SPAWNED,
@@ -163,33 +162,14 @@ it("主題外の task から読み口・提案 verb を呼ぶと tool error", as
   }
 });
 
-it("read_routing_settings は予算を超える量の提案を古い順に予算分ずつ返し、next を追うと欠けも重複もなく揃う。表と設定は最初の応答だけに載る(ADR 0195)", async () => {
+it("読み口4本は続き(next)だけを受けて続きの応答を返し、next を追うと最初の読みの行がすべて届く(写像。詰め方・順序・最初の応答だけの欄はドメイン層、ADR 0195)", async () => {
   const { review, client } = await boardWithRoutingReview();
+  // 長い comment の提案と、長い agent 名と model 名の 20 の session(それぞれ別の配分評価の組・別のセル・大きな shadow 行)
   const [row] = loadExecutionSettingTable(t.db);
-  const proposed: string[] = [];
-  for (let i = 0; i < 20; i++) {
-    const { question_id } = proposeRoutingChange(t.db, review.id, { op: "row", row: row!, change: { effort: "low" }, rationale: "r" }, "auditor", t.clock.now());
-    expect((await api(t.baseUrl, "POST", `/api/tasks/${question_id}/answer`, { answers: ["reject"], comment: `${i} ${"潮".repeat(1_000)}` })).status).toBe(200);
-    proposed.push(question_id);
-  }
-  try {
-    const pages = await readAllPages(client, "read_routing_settings");
-
-    expect(pages.length).toBeGreaterThan(1);
-    for (const page of pages) expect(page.bytes).toBeLessThanOrEqual(RESPONSE_BUDGET_BYTES);
-    expect(pages.flatMap((page) => page.payload.proposals.map((p: any) => p.question_id))).toEqual(proposed);
-    expect(pages[0]!.payload).toMatchObject({ priority: "cost", table: expect.any(Array) });
-    for (const page of pages.slice(1)) expect(page.payload).not.toHaveProperty("table");
-  } finally {
-    await client.close();
-  }
-});
-
-it("list_routing_shadow / list_allocations / list_routing_cells は予算を超える量を予算分ずつ返し、next を追うと全行が揃う(ADR 0195)", async () => {
-  const { client } = await boardWithRoutingReview();
-  // 長い agent 名と model 名で、20 の session がそれぞれ別の配分評価の組・別のセル・大きな shadow 行になる
   const now = t.clock.now();
   for (let i = 0; i < 20; i++) {
+    const { question_id } = proposeRoutingChange(t.db, review.id, { op: "row", row: row!, change: { effort: "low" }, rationale: "r" }, "auditor", now);
+    expect((await api(t.baseUrl, "POST", `/api/tasks/${question_id}/answer`, { answers: ["reject"], comment: `${i} ${"潮".repeat(1_000)}` })).status).toBe(200);
     const { id } = registerTask(t.db, { type: "work", title: `w${i}`, purpose: "p", completion_criteria: "c" }, now, ...HUMAN_WEBUI);
     const run = { provider: "anthropic" as const, model: `model-${i}-${"m".repeat(2_500)}`, effort: "high", advisor: undefined, source: { tier: "agent" as const, provider: "rank" as const } };
     recordShadow(t.db, id, { recommended: run, actual: run, basis: "prior", recommended_record: TRACK, actual_record: TRACK, candidates: 2 }, now);
@@ -205,12 +185,17 @@ it("list_routing_shadow / list_allocations / list_routing_cells は予算を超�
     });
   }
   try {
-    for (const [verb, key] of [["list_routing_shadow", "shadow"], ["list_allocations", "allocations"], ["list_routing_cells", "cells"]] as const) {
-      const pages = await readAllPages(client, verb, { since_watermark: 0 });
+    const reads = [
+      ["list_routing_shadow", { since_watermark: 0 }, "shadow"],
+      ["list_allocations", { since_watermark: 0 }, "allocations"],
+      ["list_routing_cells", { since_watermark: 0 }, "cells"],
+      ["read_routing_settings", {}, "proposals"],
+    ] as const;
+    for (const [verb, args, key] of reads) {
+      const responses = await readFollowingNext(client, verb, args);
 
-      expect(pages.length, verb).toBeGreaterThan(1);
-      for (const page of pages) expect(page.bytes).toBeLessThanOrEqual(RESPONSE_BUDGET_BYTES);
-      expect(pages.flatMap((page) => page.payload[key])).toHaveLength(20);
+      expect(responses.length, verb).toBeGreaterThan(1);
+      expect(responses.flatMap((response) => response.payload[key]), verb).toHaveLength(20);
     }
   } finally {
     await client.close();

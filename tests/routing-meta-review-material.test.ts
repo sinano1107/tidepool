@@ -5,7 +5,7 @@ import { applyExecutionSettingsChange, type ExecutionSetting, readExecutionSetti
 import { recordShadow } from "../src/learner.js";
 import { buildMetaReviewMaterial, recordMetaReviewMaterial } from "../src/memory.js";
 import { registerMetaReview } from "../src/meta-review.js";
-import { listRoutingCells, listRoutingProposals, listRoutingShadow, proposeRoutingChange } from "../src/routing-review.js";
+import { listRoutingCells, listRoutingShadow, proposeRoutingChange, readRoutingSettings } from "../src/routing-review.js";
 import { answerQuestion, getTask, registerTask } from "../src/tasks.js";
 import { HUMAN_WEBUI, QUIET_EXIT, WORKER_SPAWNED } from "./harness.js";
 
@@ -226,13 +226,13 @@ it("決着した提案は回答か陳腐化が窓の中にあるものだけを 
   const { parts } = routingMaterialOf(db, review);
 
   expect(parts.proposals.map((p) => p.question_id)).toEqual([rejected, stale, registry]);
-  expect(parts.proposals).toEqual(listRoutingProposals(db).filter((p) => [rejected, stale, registry].includes(p.question_id)));
+  expect(parts.proposals).toEqual(readRoutingSettings(db, {}).proposals.filter((p) => [rejected, stale, registry].includes(p.question_id)));
   expect(parts.proposals).toMatchObject([
     { answer: "approve", amendment: { tier: "economy" }, comment: "Amended.", observed: null },
     { answer: null, observed: { changed: expect.anything(), observed_event_id: expect.any(Number) } },
     { proposal: { kind: "registry" }, answer: "reject", comment: "Keep it." },
   ]);
-  expect(listRoutingProposals(db).map((p) => p.question_id)).toEqual([early, rejected, stale, open, late, registry]);
+  expect(readRoutingSettings(db, {}).proposals.map((p) => p.question_id)).toEqual([early, rejected, stale, open, late, registry]);
 });
 
 it("節を組んだ記録は主題 routing と、乖離した shadow 行の id・窓の中の全 shadow 行の数と候補が2行以上あった行の数・数えた注釈・新しいセルの初観測・人間が変えた行・提案の question の id、両端の watermark とトークン数を運ぶ", () => {
