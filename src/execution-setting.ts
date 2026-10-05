@@ -318,8 +318,9 @@ function rowsFor(table: ExecutionSettingTable, provider: Provider, tier: Tier): 
 }
 
 /** 表の行で走る Board call(振り返り・下書き)の行。selector を通らず(ADR 0111 決定4)、Provider は
- *  anthropic 固定、ティアは呼び手が決め、その走れる行の最安(ADR 0192 / ADR 0184 追記)。呼び出しごとに読むので書き換えは
- *  次の呼び出しから効く。走れる行が無ければ投げ、呼び手が「撃てなかった」に畳む —— 理由は行が無いのか、すべて Quarantine 中かを分ける。 */
+ *  anthropic 固定、ティアは呼び手が決め、その走れる行の最安(ADR 0192 / ADR 0184 追記)。呼び出しごとに
+ *  読むので書き換えは次の呼び出しから効く。走れる行が無ければ投げ、呼び手が「撃てなかった」に畳む ——
+ *  理由は行が無いのか、すべて Quarantine 中かを分ける。 */
 export function anthropicBoardCallRow(db: Db, tier: Tier): ExecutionSettingRow {
   const row = rowsFor(runnableTable(db), "anthropic", tier)[0];
   if (row) return row;
@@ -625,14 +626,13 @@ export function parseAddTierAmendment(amendment: unknown): AddTierAmendment {
   return parsed.data;
 }
 
-/** 下げ先の検査(spec #916 B): 対象ティアに agent の entry のいずれかの行があるか。無ければ下げた agent は skipped になる。
- *  提案 verb と回答時(修正後の値)の両方が呼ぶ。 */
-export function tierHasRowFor(table: ExecutionSettingTable, providers: readonly string[], tier: Tier): boolean {
+/** 対象ティアに agent の entry のいずれかの行があるか(spec #916 B)。 */
+function tierHasRowFor(table: ExecutionSettingTable, providers: readonly string[], tier: Tier): boolean {
   return table.some((row) => row.tier === tier && providers.includes(row.provider));
 }
 
-/** 下げ先の門(提案 verb と承認の検査): 下げ先に agent の Provider の走れる行が無ければ断る(ADR 0184 追記)。
- *  行が無いのか、すべて Quarantine 中なのかを文面で分ける。 */
+/** 下げ先の門(提案 verb と回答時の修正後の値の検査): 下げ先に agent の entry の走れる行が無ければ、下げた agent は
+ *  skipped になるので断る(spec #916 B / ADR 0184 追記)。行が無いのか、すべて Quarantine 中なのかを文面で分ける。 */
 export function assertTierRunnableFor(db: Db, agent: string, providers: readonly string[], tier: Tier): void {
   if (tierHasRowFor(runnableTable(db), providers, tier)) return;
   const where = `at ${tier} for ${agent}'s providers (${providers.join(", ")})`;
@@ -874,10 +874,11 @@ export function executionSettingsFor(
   return executionSettingCandidates(selectorInputFor(db, definition, task), runnableTable(db));
 }
 
-/** 表から、行の Quarantine(行の拒否、ADR 0184 決定2)が開いている行を外したもの。「この行で走れるか」の読み手
- *  (main の候補・Board call の行・下げ先の門)はこの1本を通り、生の表は「表にあるか」の読み手だけが読む(ADR 0184 追記)。advisor は行でないのでこれを読まない(ADR 0200 決定6)。照合は (provider, model) の
+/** 表から、行の Quarantine(行の拒否、ADR 0184 決定2)が開いている行を外したもの。「この行で走れるか」の
+ *  読み手(main の候補・Board call の行・下げ先の門)はこの1本を通り、生の表は「表にあるか」の読み手だけが読む
+ *  (ADR 0184 追記)。advisor は行でないのでこれを読まない(ADR 0200 決定6)。照合は (provider, model) の
  *  完全一致で、effort 違いの行もまとめて外れる(ADR 0200 決定5)—— Throttle の窓の部分一致(`windowMatchesModel`)は使わない(ADR 0182 決定3 と同じ理由)。 */
-export function runnableTable(db: Db): ExecutionSettingTable {
+function runnableTable(db: Db): ExecutionSettingTable {
   const refused = new Set(openQuarantineValues(db, "tableRow"));
   return loadExecutionSettingTable(db).filter((row) => !refused.has(tableRowValue(row.provider, row.model)));
 }

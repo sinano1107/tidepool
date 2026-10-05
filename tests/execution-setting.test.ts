@@ -6,6 +6,7 @@ import {
   anthropicBoardCallRow,
   applyExecutionSettingsChange,
   assertKnownTier,
+  assertTierRunnableFor,
   BOARD_DEFAULT_PRIORITY,
   changeExecutionSettings,
   composeRoutingRow,
@@ -28,7 +29,6 @@ import {
   selectExecutionSetting,
   type Tier,
   tierFieldDescriptions,
-  tierHasRowFor,
   tierNames,
 } from "../src/execution-setting.js";
 
@@ -459,11 +459,12 @@ const tierProposal: RegistryProposal = {
 };
 
 it("下げ先の検査は、対象ティアに agent の entry のいずれかの行があるか", () => {
-  expect(tierHasRowFor(SEED_EXECUTION_SETTINGS, ["moonshot"], "economy")).toBe(true);
+  const db = openDb(":memory:");
+  expect(() => assertTierRunnableFor(db, "kimi", ["moonshot"], "economy")).not.toThrow();
   // moonshot に standard の行は無い —— entry が1つでも行があれば通る
-  expect(tierHasRowFor(SEED_EXECUTION_SETTINGS, ["moonshot"], "standard")).toBe(false);
-  expect(tierHasRowFor(SEED_EXECUTION_SETTINGS, ["moonshot", "openai"], "standard")).toBe(true);
-  expect(tierHasRowFor(SEED_EXECUTION_SETTINGS, [], "economy")).toBe(false);
+  expect(() => assertTierRunnableFor(db, "kimi", ["moonshot"], "standard")).toThrow(/no row at standard/);
+  expect(() => assertTierRunnableFor(db, "kimi", ["moonshot", "openai"], "standard")).not.toThrow();
+  expect(() => assertTierRunnableFor(db, "kimi", [], "economy")).toThrow(/no row at economy/);
 });
 
 it("registry の提案の pin: 根拠の行は (provider, model) の tier / effort で照合し、agent は tier の値で照合する", () => {
