@@ -311,7 +311,7 @@ Board call は2種類に分かれる(2026-08-10 の grilling、issue #224)。**�
 
 ## 管理MCP(Management MCP)
 
-WebUI と同格の**もう一つの人間向け UI** で、人間が対話中のエージェントセッション(Claude Code 等)が**人間の手として**盤面を操作する入口(2026-07-27 の grilling、issue #131)。呼び出しの主体がエージェントであっても、**操作の帰属は常に人間** — question 回答・cancel・Edit・登録(work / review・issue-backed 含む)・人間 decompose・人間タスクの完了・issue コメント追記・registry 管理(agent / profile / workspace の作成・編集)は、すべて人間名義で行われる(義手モデル)。ドメインの「人間」の線はすべて無傷 — 「question 回答 = 人間の判断」「registry の人間発変更 = 盤面が main へ直接コミット」「保護 workspace への変更は人間承認」はそのまま成立する。
+WebUI と同格の**もう一つの人間向け UI** で、人間が対話中のエージェントセッション(Claude Code・Codex・ChatGPT / Claude のアプリ等、つなぐ先を問わない)が**人間の手として**盤面を操作する入口(2026-07-27 の grilling、issue #131)。呼び出しの主体がエージェントであっても、**操作の帰属は常に人間** — question 回答・cancel・Edit・登録(work / review・issue-backed 含む)・人間 decompose・人間タスクの完了・issue コメント追記・registry 管理(agent / profile / workspace の作成・編集)は、すべて人間名義で行われる(義手モデル)。ドメインの「人間」の線はすべて無傷 — 「question 回答 = 人間の判断」「registry の人間発変更 = 盤面が main へ直接コミット」「保護 workspace への変更は人間承認」はそのまま成立する。
 
 Worker MCP(slot 帰属の worker session が使う、authority profile が縛る道具)とは**別物**であり、worker session からは届かない — worker には Worker MCP の URL しか渡らず、管理MCP は人間向けリスナーに mount される(新しい credential は作らない。ADR 0032)。v1 が開くのは読取(Board・キュー・タスク詳細・Decision log)とタスクの生涯 + registry 管理 + 実行設定(表・Provider 順位・優先順位の既定・frontier advisor —— 「今週は Claude を残して Codex 優先」を対話中の session が人間名義で写す入口、ADR 0110 決定5)+ Memory の注入上限(spec #586 F)までで、triage セッション・Objection・Scratchpad・それ以外の settings・Pause / Spend-down・push・翻訳・AI ドラフト、そして**危険な値の確認と registry リソースの削除**は WebUI 専用のまま(前者は痛みが観測されたら広げる。後2つは 2026-08-18 の grilling、issue #267 / ADR 0088 — worker の handoff や objection は人間の目を経由しないまま対話エージェントが読む素材であり、そこに仕込まれた指示がエージェント自身の確認として人間名義の registry 変更に着地しうる。管理MCP は非危険な registry 編集だけを持ち、危険な値を含むペイロードはドメインの門がそのまま拒んで WebUI へ案内する)。
 
@@ -320,6 +320,12 @@ Worker MCP(slot 帰属の worker session が使う、authority profile が縛る
 ## 人間面(Human surface)
 
 WebUI・/api・そこに mount される管理MCP からなる、**操作の帰属が常に人間**である盤面の入口の総称。対は Worker MCP 面(slot 帰属の worker session が使い、authority profile が権限を縛る道具)で、両者は信頼域が異なり、**別のリスナーに立つ**。worker session から人間面へは、ツール・経路を問わず**読取も操作も到達できない**ことが不変条件で、これを執行するのは人間面が要求する credential である(2026-07-29 の再グリリング、issue #140 / ADR 0036)。credential を持つのは人間だけで、経路(loopback・tailnet・WebFetch)を問わず一律に効く — したがって tailnet は信頼境界ではない。人間面の GET が無変異であることは、この線の前提から**多層の一枚**に格下げされた(2026-07-28 時点の ADR 0034 では読取残余を受容していたため前提だった)。
+
+## 応答予算(Response budget)
+
+盤面が返す MCP 応答1回の大きさの上限で、**どの読み手にも届く大きさ**として盤面側が持つ。管理MCP と Worker MCP の両方に掛かる。読み手(harness)は応答に自分の上限を持ち、超えたときの振る舞いが読み手ごとに違う —— ファイルに逃がして全文を残すもの、中央を黙って切り詰めるもの、拒否するもの —— うえに、管理MCP の読み手は Claude Code に限らず、人間がどこからつないだ対話エージェントでもよい。そこで盤面は読み手の逃げ道に頼らず、分かっている中で最も小さい上限に収まるように返し、収まらない分は続きの呼び出しで読ませる(2026-10-05 の grilling、issue #1376)。
+
+予算は **UTF-8 バイト**で数える盤面の定数で、設定ではない —— 最も厳しい既知の読み手(Codex)がバイトで判定しており、字数は言語でトークンとの比が大きく揺れる。読み口は自然な順に、予算に収まるだけの item を丸ごと返し、**続き(next)**と残りの件数を付ける(1件で予算を超える item だけは長い欄を予算の位置で切り、続きがその欄の残りを指す —— 保存は逐語のままで、分けるのは届け方だけ)—— 小さい読みは1回で全部届き、大きいときだけ呼び出しが増える。件数で切るページングは大きさを保証しないので、この規則に寄せる。続きは読み手が持ち回る印で、盤面に状態を持たない —— 既読を表す Decision log の未読カーソルとは別物で、カーソルとは呼ばない。出口では全応答を測り、それでも予算を超えた応答は予算まで切って、切ったことを本文の目印で読み手に、盤面全体の記録で人間に残す —— これは読み口の欠陥の床であって、続きの読み方ではない。
 
 ## Slot(スロット)
 
