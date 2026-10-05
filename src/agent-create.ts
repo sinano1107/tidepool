@@ -2,7 +2,6 @@ import { readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { stringify as stringifyYaml } from "yaml";
 import { UnknownAgentError } from "./agent.js";
-import { DomainError } from "./tasks.js";
 import type { RenameAgentTiers, RenameAgentTiersInput, Tier } from "./execution-setting.js";
 import type { GitHubAuth } from "./github-auth.js";
 import {
@@ -27,6 +26,7 @@ import {
   DeletionConfirmationRequiredError,
   refreshRegistryForWrite,
 } from "./registry-write.js";
+import { DomainError } from "./tasks.js";
 
 /** The WebUI's agent-creation verb (issue #70, #54 phase 1): every field an
  *  agent definition carries except `version` — that one is machine-stamped
