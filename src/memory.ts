@@ -6,8 +6,9 @@ import { type Db, MEMORY_FTS_DDL, MEMORY_FTS_TOKENIZER, MEMORY_PREPROCESS_VERSIO
 import { getDisplayLanguage } from "./display-language.js";
 import { appendEvent, type EventOrigin, type EventPayload, type EventRow, getEvent, isDecisionLogEntry, listEvents, listEventsOfKinds } from "./events.js";
 import { landingAnnotation } from "./landing.js";
-import { inWindow, type MetaReviewWindow, materialEvents, materialSection, metaReviewSubjectOf, metaReviewWindow, paged, previousMetaReviewWatermark } from "./meta-review.js";
+import { inWindow, type MetaReviewWindow, materialEvents, materialSection, metaReviewSubjectOf, metaReviewWindow, previousMetaReviewWatermark } from "./meta-review.js";
 import { entriesReadBefore, entriesSeenBefore, listEpisodes, sessionSpawnOf, sessionWindow } from "./precedent.js";
+import { type Packed, packItems, readPosition } from "./response-budget.js";
 import { routingMaterial } from "./routing-review.js";
 import { approvalAnnotation, BOARD_WORKER_ID, DomainError, getTask, HUMAN_WORKER_ID, isFixedChoiceQuestion, type MemoryProposal, needsComment, type QuestionProposal, questionBlocking, registerTask, settleQuestionAsObserved, type Task } from "./tasks.js";
 import { entryObjections, objectedEntryText, objectionsById } from "./triage.js";
@@ -1394,8 +1395,8 @@ interface MemoryReader {
 
 /** search の候補が返らなかった理由(spec #586 D)。関連度の閾値は持たない(ADR 0083
  *  決定9)ので「関連度で切った」は FTS だけでは起きず、型にも置かない。スコープ外と
- *  candidate は候補になる前の SQL の絞り込み。 */
-export type MemoryDropReason = "addressee" | "invalidated" | "page_limit";
+ *  candidate は候補になる前の SQL の絞り込み。`response_budget` は見えるが、この応答には予算で入らなかった候補(前後の応答で返したものも含む、ADR 0195)。 */
+export type MemoryDropReason = "addressee" | "invalidated" | "response_budget";
 
 /** snapshot 識別子 = 店を変える memory 系 event の最大 id(approvedMemoryEntries が再生する種別)。 */
 function memoryWatermark(db: Db): number {
@@ -1406,8 +1407,12 @@ function memoryWatermark(db: Db): number {
   ).id;
 }
 
+/** 詰める間の event id の仮の値(ADR 0195): id は記録してからでないと分からず、記録する id は詰めてからでないと分からない。
+ *  どの event id より桁が多いので、記録の後に recordPull が本物へ差し替えても応答は縮むだけで予算を超えない。 */
+const PENDING_EVENT_ID = { event_id: Number.MAX_SAFE_INTEGER };
+
 /** pull 1回 = memory_pulled 1つ(task 帰属)。event id を結果に載せ、投影器がそれを
- *  memory マーカーに結ぶ。 */
+ *  memory マーカーに結ぶ。続き(next)の呼び出しも1回の pull で、その応答で返した id だけを記録する(ADR 0195)。 */
 function recordPull<T>(
   db: Db,
   reader: Pick<MemoryReader, "taskId" | "agent">,
@@ -1475,42 +1480,38 @@ function rankedEntries(db: Db, match: string, scope: string | null): EntryRow[] 
 export function searchMemory(
   db: Db,
   reader: MemoryReader,
-  input: { query: string; page?: number },
+  input: { query?: string; next?: string },
   at: Date,
-): { results: Array<{ id: number; title: string; path: string }>; truncated: boolean; event_id: number } {
+): Packed<{ results: Array<{ id: number; title: string; path: string }>; event_id: number }> {
+  const read = readPosition("search_memory", input);
+  if (read.args.query === undefined) throw new DomainError("pass query, or next from a previous search_memory");
+  const match = ftsQuery(read.args.query);
+  if (match === null) throw new DomainError("query has no searchable terms: it is empty or only stopwords");
   return db.transaction(() => {
-    const match = ftsQuery(input.query);
-    if (match === null) throw new DomainError("query has no searchable terms: it is empty or only stopwords");
     const hits = rankedEntries(db, match, reader.scope);
-    const visible = hits.filter((row) => dropReason(row, reader) === null);
-    const { rows: shown, truncated } = paged(visible, input.page);
+    const visible = hits.filter((row) => dropReason(row, reader) === null).map(({ id, title, path }) => ({ id, title, path }));
+    const packed = packItems(read, "results", visible, {}, { every: PENDING_EVENT_ID }) as ReturnType<typeof searchMemory>;
+    const returned = new Set(packed.results.map((r) => r.id));
     const candidates = hits.map((row) => ({
       id: row.id,
-      dropped: dropReason(row, reader) ?? (shown.includes(row) ? null : ("page_limit" as const)),
+      dropped: dropReason(row, reader) ?? (returned.has(row.id) ? null : ("response_budget" as const)),
     }));
-    return recordPull(
-      db,
-      reader,
-      { verb: "search_memory", input, returned_ids: shown.map((row) => row.id), candidates },
-      {
-        results: shown.map(({ id, title, path }) => ({ id, title, path })),
-        truncated,
-      },
-      at,
-    );
+    return recordPull(db, reader, { verb: "search_memory", input: read.args, returned_ids: [...returned], candidates }, packed, at);
   })();
 }
 
 /** meta-review の scope を通した検索(ADR 0180 決定3): 全 scope・全宛先の Knowledge / Behavior / Exemplar を語の OR で引き、
  *  FTS の順位 → id の順にポインタで返す。 */
-export function searchMemoryEntries(db: Db, reader: Pick<MemoryReader, "taskId" | "agent">, input: { query?: string; like?: number; page?: number }, at: Date) {
-  if ((input.query === undefined) === (input.like === undefined)) throw new DomainError("search_memory_entries takes exactly one of query and like");
+export function searchMemoryEntries(db: Db, reader: Pick<MemoryReader, "taskId" | "agent">, input: { query?: string; like?: number; next?: string }, at: Date) {
+  const read = readPosition("search_memory_entries", input);
+  const args = read.args;
+  if ((args.query === undefined) === (args.like === undefined)) throw new DomainError("search_memory_entries takes exactly one of query and like, or next alone");
   return db.transaction(() => {
     const restored = restoredAs(db);
     // like の行と本文が同じ鎖(両向き)は末尾が一致する
     const tailOf = (row: EntryRow) => sameBodyChain(db, row, restored).at(-1)!.id;
-    const like = input.like === undefined ? undefined : requireEntry(db, input.like);
-    const match = ftsQuery(like ? `${like.title}\n${like.text}` : input.query!, " OR ");
+    const like = args.like === undefined ? undefined : requireEntry(db, args.like);
+    const match = ftsQuery(like ? `${like.title}\n${like.text}` : args.query!, " OR ");
     if (match === null) throw new DomainError("query has no searchable terms: it is empty or only stopwords");
     const likeTail = like && tailOf(like);
     const hits = (db
@@ -1520,9 +1521,9 @@ export function searchMemoryEntries(db: Db, reader: Pick<MemoryReader, "taskId" 
           ORDER BY memory_fts.rank, e.id`,
       )
       .all(match) as EntryRow[]).filter((row) => likeTail === undefined || tailOf(row) !== likeTail);
-    const { rows: shown, truncated } = paged(hits, input.page);
-    const results = shown.map(({ id, kind, state, scope, path, title, addressee, invalidation_reason }) => ({ id, kind, state, scope, path, title, addressee, invalidation_reason }));
-    return recordPull(db, reader, { verb: "search_memory_entries", input, returned_ids: results.map((r) => r.id) }, { results, truncated }, at);
+    const results = hits.map(({ id, kind, state, scope, path, title, addressee, invalidation_reason }) => ({ id, kind, state, scope, path, title, addressee, invalidation_reason }));
+    const packed = packItems(read, "results", results, {}, { every: PENDING_EVENT_ID }) as Packed<{ results: typeof results; event_id: number }>;
+    return recordPull(db, reader, { verb: "search_memory_entries", input: args, returned_ids: packed.results.map((r) => r.id) }, packed, at);
   })();
 }
 
@@ -1578,30 +1579,22 @@ const isBranch = (child: IndexBranch | EntryRow): child is IndexBranch => "name"
 export function browseMemory(
   db: Db,
   reader: MemoryReader,
-  input: { prefix?: string; page?: number },
+  input: { prefix?: string; next?: string },
   at: Date,
-): {
-  children: Array<{ name: string; definition: string | null }>;
-  entries: Array<{ id: number; title: string }>;
-  truncated: boolean;
-  event_id: number;
-} {
-  const prefix = input.prefix ? checkedPath(input.prefix) : "";
+): Packed<{ children: Array<{ name: string; definition: string | null }>; entries: Array<{ id: number; title: string }>; event_id: number }> {
+  const read = readPosition("browse_memory", input);
+  const prefix = read.args.prefix ? checkedPath(read.args.prefix) : "";
   return db.transaction(() => {
-    const children = indexChildren(visibleEntries(db, reader), prefix);
-    const { rows: shown, truncated } = paged(children, input.page);
-    const leaves = shown.filter((child): child is EntryRow => !isBranch(child));
-    return recordPull(
-      db,
-      reader,
-      { verb: "browse_memory", input, returned_ids: leaves.map((e) => e.id) },
-      {
-        children: shown.filter(isBranch).map(({ name, definition }) => ({ name, definition: definition?.text ?? null })),
-        entries: leaves.map(({ id, title }) => ({ id, title })),
-        truncated,
-      },
-      at,
+    // 枝の後に leaf の順で1列に詰め、枝は children・leaf は entries に置く。枝の境目の鍵は名前(path)、leaf は id
+    const children = indexChildren(visibleEntries(db, reader), prefix).map((child) =>
+      isBranch(child) ? { name: child.name, definition: child.definition?.text ?? null } : { id: child.id, title: child.title },
     );
+    const packed = packItems(read, ["children", "entries"], children, {}, {
+      idOf: (child) => child.id ?? child.name!,
+      listOf: (child) => ("name" in child ? "children" : "entries"),
+      every: PENDING_EVENT_ID,
+    }) as ReturnType<typeof browseMemory>;
+    return recordPull(db, reader, { verb: "browse_memory", input: read.args, returned_ids: packed.entries.map((e) => e.id) }, packed, at);
   })();
 }
 
@@ -1645,23 +1638,27 @@ function metaReviewRow<T extends ListedEntry>(entry: T) {
   return { ...rest, annotations: annotations?.map(withoutOriginal) };
 }
 
-/** meta-review の一覧2つ(issue #619): 人間の面と同じ一覧を verb ごとに絞ってページで返す。scope・宛先では
+type MemoryListInput = Parameters<typeof listMemoryEntries>[1] & { include_invalidated?: boolean };
+
+/** meta-review の一覧2つ(issue #619): 人間の面と同じ一覧を verb ごとに絞り、応答予算と続き(next)で返す(ADR 0195)。scope・宛先では
  *  絞らない(両方を見る必要があるのは workspace を跨いで構造を見る人間と meta-review だけ —— ADR 0178 決定8)。 */
 export function pullMemoryList(
   db: Db,
   reader: Pick<MemoryReader, "taskId" | "agent">,
   verb: "list_memory_candidates" | "list_memory_entries",
-  input: Parameters<typeof listMemoryEntries>[1] & { include_invalidated?: boolean; page?: number },
+  input: MemoryListInput & { next?: string },
   at: Date,
 ) {
+  const read = readPosition<MemoryListInput>(verb, input);
   return db.transaction(() => {
-    const { rows: shown, truncated } = paged(memoryListRows(db, verb, input), input.page);
-    return recordPull(db, reader, { verb, input, returned_ids: shown.map((e) => e.id) }, { entries: shown, truncated }, at);
+    const rows = memoryListRows(db, verb, read.args);
+    const packed = packItems(read, "entries", rows, {}, { every: PENDING_EVENT_ID }) as Packed<{ entries: typeof rows; event_id: number }>;
+    return recordPull(db, reader, { verb, input: read.args, returned_ids: packed.entries.map((e) => e.id) }, packed, at);
   })();
 }
 
-/** 一覧2つの行(ページ割り前、meta-review の行の形)。pull と材料の節の candidate の部分が共有する。 */
-function memoryListRows(db: Db, verb: Parameters<typeof pullMemoryList>[2], input: Parameters<typeof pullMemoryList>[3]) {
+/** 一覧2つの行(meta-review の行の形)。pull と材料の節の candidate の部分が共有する。 */
+function memoryListRows(db: Db, verb: Parameters<typeof pullMemoryList>[2], input: MemoryListInput) {
   // 過去の提案の読み物(ADR 0152 決定2): 後継の文言を載せる —— 人間名義の後継なら修正つきで承認された candidate
   // (か、修正つきの統合に置き換えられた candidate)
   const withSuccessor = (e: ListedEntry, all: ListedEntry[]) => {
@@ -1680,17 +1677,19 @@ function memoryListRows(db: Db, verb: Parameters<typeof pullMemoryList>[2], inpu
 
 /** list_memory_proposals(ADR 0159 決定1): 過去の memory 提案 —— 提案、回答(question_answered の答え・修正値・コメント)、
  *  陳腐化の決着(memory_proposal_stale)。`listRoutingProposals` と同じく提案の表は持たず question と event から組み、全期間を
- *  ページに割って pull に載せる。invalidate の提案の reject は記憶の側に跡を残さないので、ここだけが読み口になる。
+ *  応答予算と続き(next)で pull に載せる(境目の鍵は提案の question id)。invalidate の提案の reject は記憶の側に跡を残さないので、ここだけが読み口になる。
  *  返した id は各提案が名指す entry(candidate か invalidate の target か既存の後継)。 */
-export function pullMemoryProposals(db: Db, reader: Pick<MemoryReader, "taskId" | "agent">, input: { page?: number }, at: Date) {
+export function pullMemoryProposals(db: Db, reader: Pick<MemoryReader, "taskId" | "agent">, input: { next?: string }, at: Date) {
+  const read = readPosition("list_memory_proposals", input);
   return db.transaction(() => {
-    const { rows: page, truncated } = paged(memoryProposalRows(db), input.page);
-    const returned_ids = [...new Set(page.map(({ proposal }) => (proposal.op === "invalidate" ? proposal.target.id : "successor" in proposal ? proposal.successor.id : proposal.candidate_id)))];
-    return recordPull(db, reader, { verb: "list_memory_proposals", input, returned_ids }, { proposals: page, truncated }, at);
+    const rows = memoryProposalRows(db);
+    const packed = packItems(read, "proposals", rows, {}, { idOf: (row) => row.question_id, every: PENDING_EVENT_ID }) as Packed<{ proposals: typeof rows; event_id: number }>;
+    const returned_ids = [...new Set(packed.proposals.map(({ proposal }) => (proposal.op === "invalidate" ? proposal.target.id : "successor" in proposal ? proposal.successor.id : proposal.candidate_id)))];
+    return recordPull(db, reader, { verb: "list_memory_proposals", input: read.args, returned_ids }, packed, at);
   })();
 }
 
-/** list_memory_proposals の行(ページ割り前)。window を渡すと、回答か陳腐化の event がその窓 `(after, upTo]` にある提案だけ
+/** list_memory_proposals の行。window を渡すと、回答か陳腐化の event がその窓 `(after, upTo]` にある提案だけ
  *  (材料の節の決着した提案、ADR 0180 決定2)。 */
 function memoryProposalRows(db: Db, window?: MetaReviewWindow) {
   const rows = db
@@ -1727,23 +1726,21 @@ function memoryProposalRows(db: Db, window?: MetaReviewWindow) {
 export function listPrecedents(
   db: Db,
   reader: Pick<MemoryReader, "taskId" | "agent">,
-  input: { since_watermark?: number; page?: number },
+  input: { since_watermark?: number; next?: string },
   at: Date,
 ) {
+  const read = readPosition("list_precedents", input);
   return db.transaction(() => {
-    const since = input.since_watermark ?? previousMetaReviewWatermark(db, reader.taskId);
-    const { rows: shown, truncated } = paged(precedentRows(db, { after: since }), input.page);
-    return recordPull(
-      db,
-      reader,
-      { verb: "list_precedents", input, returned_ids: [...new Set(shown.flatMap((p) => [...(p.entries_read ?? []), ...(p.entries_seen ?? [])]))] },
-      { precedents: shown, truncated },
-      at,
-    );
+    const since = read.args.since_watermark ?? previousMetaReviewWatermark(db, reader.taskId);
+    const rows = precedentRows(db, { after: since });
+    // 境目の鍵は decision の event id(異議つき decision マーカー1つに1行)
+    const packed = packItems(read, "precedents", rows, {}, { idOf: (p) => p.decision_event_id, every: PENDING_EVENT_ID }) as Packed<{ precedents: typeof rows; event_id: number }>;
+    const returned_ids = [...new Set(packed.precedents.flatMap((p) => [...(p.entries_read ?? []), ...(p.entries_seen ?? [])]))];
+    return recordPull(db, reader, { verb: "list_precedents", input: read.args, returned_ids }, packed, at);
   })();
 }
 
-/** list_precedents の行(ページ割り前): 異議の event が窓 `(after, upTo]` にある decision。verb は上限を持たず、材料の節は
+/** list_precedents の行: 異議の event が窓 `(after, upTo]` にある decision。verb は上限を持たず、材料の節は
  *  読み手の登録の watermark を上限にする(ADR 0180 決定2)。 */
 function precedentRows(db: Db, { after, upTo = Number.MAX_SAFE_INTEGER }: MetaReviewWindow) {
   const objectedIn = db.prepare(
@@ -1835,28 +1832,33 @@ function caseSession(db: Db, anchor: EventRow): { events: EventRow[]; handoff: s
 export function readMemory(
   db: Db,
   reader: MemoryReader,
-  input: { ids: number[] },
+  input: { ids?: number[]; next?: string },
   at: Date,
-): {
-  entries: Array<{
-    id: number;
-    requested_id?: number;
-    title: string;
-    path: string;
-    text: string;
-    source: MemorySource;
-    source_kind: "fact" | "inference";
-    case: MemoryCase | null;
-    annotations?: Array<Omit<ExemplarAnnotation, "original">>;
-  }>;
-  dropped: Array<{ id: number; reason: InvalidationReason; successor: number | null }>;
-  event_id: number;
-} {
+): Packed<
+  {
+    entries: Array<{
+      id: number;
+      requested_id?: number;
+      title: string;
+      path: string;
+      text: string;
+      source: MemorySource;
+      source_kind: "fact" | "inference";
+      case: MemoryCase | null;
+      annotations?: Array<Omit<ExemplarAnnotation, "original">>;
+    }>;
+    event_id: number;
+  },
+  { dropped: Array<{ id: number; reason: InvalidationReason; successor: number | null }> }
+> {
+  const read = readPosition("read_memory", input);
+  const ids = read.args.ids;
+  if (!ids?.length) throw new DomainError("pass ids, or next from a previous read_memory");
   return db.transaction(() => {
     const restored = restoredAs(db);
     const found = new Map<number, { row: EntryRow; requested_id?: number }>();
     const dropped: Array<{ id: number; reason: InvalidationReason; successor: number | null }> = [];
-    for (const id of new Set(input.ids)) {
+    for (const id of new Set(ids)) {
       const row = db.prepare("SELECT * FROM memory_entries WHERE id = ?").get(id) as EntryRow | undefined;
       if (!row || !inSight(row, reader)) continue;
       const chain = sameBodyChain(db, row, restored);
@@ -1887,19 +1889,29 @@ export function readMemory(
           annotations: annotations?.map(withoutOriginal),
         };
       });
-    return recordPull(db, reader, { verb: "read_memory", input, returned_ids: entries.map((e) => e.id), dropped }, { entries, dropped }, at);
+    const packed = packItems(read, "entries", entries, { dropped }, { every: PENDING_EVENT_ID }) as ReturnType<typeof readMemory>;
+    return recordPull(
+      db,
+      reader,
+      { verb: "read_memory", input: read.args, returned_ids: packed.entries.map((e) => e.id), dropped: packed.dropped ?? [] },
+      packed,
+      at,
+    );
   })();
 }
 
 /** meta-review の id 読み(ADR 0122 追記 #1225): 一覧と同じ行(全 scope・全宛先・全状態)に readMemory と同じ case を足す。
  *  本文が同じ鎖は視界で切らず末尾までたどって requested_id を添え(末尾が無効化済みでも返す)、それ以外の無効化は行そのものを
  *  返す。同じ行は1件で自身を求めた id が勝つ(readMemory と同じ)。存在しない id は missing。 */
-export function readMemoryEntries(db: Db, reader: Pick<MemoryReader, "taskId" | "agent">, input: { ids: number[] }, at: Date) {
+export function readMemoryEntries(db: Db, reader: Pick<MemoryReader, "taskId" | "agent">, input: { ids?: number[]; next?: string }, at: Date) {
+  const read = readPosition("read_memory_entries", input);
+  const ids = read.args.ids;
+  if (!ids?.length) throw new DomainError("pass ids, or next from a previous read_memory_entries");
   return db.transaction(() => {
     const restored = restoredAs(db);
     const found = new Map<number, number | undefined>();
     const missing: number[] = [];
-    for (const id of new Set(input.ids)) {
+    for (const id of new Set(ids)) {
       const row = db.prepare("SELECT * FROM memory_entries WHERE id = ?").get(id) as EntryRow | undefined;
       if (!row) {
         missing.push(id);
@@ -1917,7 +1929,8 @@ export function readMemoryEntries(db: Db, reader: Pick<MemoryReader, "taskId" | 
         const entry = listed.get(id)!;
         return { ...metaReviewRow(entry), requested_id, case: entry.kind === "behavior" || entry.kind === "exemplar" ? renderCase(db, entry.source) : null };
       });
-    return recordPull(db, reader, { verb: "read_memory_entries", input, returned_ids: entries.map((e) => e.id) }, { entries, missing }, at);
+    const packed = packItems(read, "entries", entries, { missing }, { every: PENDING_EVENT_ID }) as Packed<{ entries: typeof entries; event_id: number }, { missing: number[] }>;
+    return recordPull(db, reader, { verb: "read_memory_entries", input: read.args, returned_ids: packed.entries.map((e) => e.id) }, packed, at);
   })();
 }
 

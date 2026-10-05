@@ -1,9 +1,24 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { createBehaviorCandidate, defineMemoryBranch, recordKnowledge, WORKER_MEMORY_VERBS } from "../src/memory.js";
+import { createBehaviorCandidate, defineMemoryBranch, proposeMemoryChange, recordKnowledge, WORKER_MEMORY_VERBS } from "../src/memory.js";
 import { MEMORY_META_REVIEW_VERBS } from "../src/meta-review.js";
 import { DEFAULT_AUDITOR_NAME, registerTask } from "../src/tasks.js";
 import { UnknownWorkspaceError } from "../src/workspace.js";
-import { api, bootTidepool, GIT_FIXTURE_TEST_TIMEOUT, HOUR, HUMAN_WEBUI, makeWorkspace, managementMcpClient, mcpClient, memoryEntries, registerWork, type Tidepool } from "./harness.js";
+import {
+  api,
+  bootTidepool,
+  GIT_FIXTURE_TEST_TIMEOUT,
+  HOUR,
+  HUMAN_WEBUI,
+  makeWorkspace,
+  managementMcpClient,
+  mcpClient,
+  memoryEntries,
+  RESPONSE_BUDGET_BYTES,
+  readAllPages,
+  registerWork,
+  type Tidepool,
+  taskEventPayload,
+} from "./harness.js";
 import { makeRegistryAgentCheck } from "./registry-fixture.js";
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
@@ -108,8 +123,12 @@ it("read_memory_entries は主題 memory の接続に出て管理MCP には出�
         "or Exemplar — the example it was drafted from (the decision, the steering objections raised against it, and that session's handoff " +
         "and result, or a whole session's decisions in order with the handoff and result); null when there is none. An id whose entry was " +
         "moved or restored returns the entry it now lives as, with requested_id set to the id you asked for. Any other invalidated entry comes " +
-        "back as it is, text included, with its invalidation_reason and successor_id. Ids that do not exist are listed in missing. A case can " +
-        "be long: read a few entries at a time.",
+        "back as it is, text included, with its invalidation_reason and successor_id. Ids that do not exist are listed in missing. " +
+        "Entries come in id order; missing comes on the first response only. " +
+        "When the result does not fit in one response, the response carries `next` and `remaining` (how many items are not returned yet): " +
+        "call this verb again with only `next` to read the rest, and repeat until a response carries no `next` — then the result is complete. " +
+        "An item too large for one response comes alone in pieces marked `partial` (`id`, `field`, and `field_bytes`, the field's full size in " +
+        "UTF-8 bytes): join that field across the pieces to get it verbatim.",
     );
     expect((await management.listTools()).tools.map((tool) => tool.name)).not.toContain("read_memory_entries");
     expect(await call("read_memory_entries", { ids: [material, 9999] })).toMatchObject({
@@ -142,15 +161,21 @@ it("search_memory_entries は主題 memory の接続に出て、主題 routing �
       "Search the board's memory across every scope and addressee: Knowledge, Behaviors and Exemplars that are live (approved or candidate) " +
         "or were dropped without a successor, with the reason. Pass query (free text; terms are OR-ed and ranked) or like (an entry id: searches " +
         "with that entry's own title and text, excluding the entry itself). Returns pointers only — read the text with read_memory_entries. " +
-        "Definitions are not searched: the branch list carries them.",
+        "Definitions are not searched: the branch list carries them. Results come in rank order. " +
+        "When the result does not fit in one response, the response carries `next` and `remaining` (how many items are not returned yet): " +
+        "call this verb again with only `next` to read the rest, and repeat until a response carries no `next` — then the result is complete. " +
+        "An item too large for one response comes alone in pieces marked `partial` (`id`, `field`, and `field_bytes`, the field's full size in " +
+        "UTF-8 bytes): join that field across the pieces to get it verbatim.",
     );
     for (const other of [management, routingClient]) {
       expect((await other.listTools()).tools.map((tool) => tool.name)).not.toContain("search_memory_entries");
     }
-    expect(await call("search_memory_entries", { query: "Node", page: 1 })).toMatchObject({
+    const searched = await call("search_memory_entries", { query: "Node" });
+    expect(searched).toMatchObject({
       isError: false,
-      body: { results: [{ id: material, invalidation_reason: null }], truncated: false, event_id: expect.any(Number) },
+      body: { results: [{ id: material, invalidation_reason: null }], event_id: expect.any(Number) },
     });
+    expect(searched.body).not.toHaveProperty("next");
     expect(await call("search_memory_entries", { like: material })).toMatchObject({ isError: false, body: { results: [] } });
   } finally {
     await client.close();
@@ -316,6 +341,50 @@ it("invalidate_memory は cause の memory を理由コードに取らず tool e
   }
 });
 
+it("read_memory_entries と件数で切っていた読み口は予算を超える量を予算分ずつ返し、next を追うと全行が揃う。各応答の memory_pulled はその応答で返した id だけを持つ(ADR 0195)", async () => {
+  const { review, client, material } = await boardWithMetaReview();
+  const candidates = Array.from(
+    { length: 20 },
+    (_, i) =>
+      createBehaviorCandidate(
+        t.db,
+        { scope: null, path: "habits", title: `tide ${i} ${"y".repeat(2_000)}`, text: "z".repeat(2_000), addressee: null, source: { commit: "0a46a46" }, author: { activity: "rca", name: "auditor" } },
+        "worker",
+        t.clock.now(),
+      ).entry_id,
+  );
+  const proposed: string[] = [];
+  for (const candidate_id of candidates) {
+    const { question_id } = proposeMemoryChange(t.db, review.id, { op: "approve", candidate_id, rationale: "r" }, "auditor", t.clock.now());
+    expect((await api(t.baseUrl, "POST", `/api/tasks/${question_id}/answer`, { answers: ["reject"], comment: "c".repeat(2_000) })).status).toBe(200);
+    proposed.push(question_id);
+  }
+  const ids = (pages: Array<{ payload: any }>, key: string, id = "id") => pages.flatMap((page) => page.payload[key].map((row: any) => row[id]));
+  try {
+    const reads: Array<[string, Record<string, unknown>, string, string, unknown[]]> = [
+      ["read_memory_entries", { ids: [...candidates].reverse() }, "entries", "id", candidates],
+      ["list_memory_candidates", { include_invalidated: true }, "entries", "id", candidates],
+      ["list_memory_entries", {}, "entries", "id", [material, ...candidates]],
+      ["list_memory_proposals", {}, "proposals", "question_id", proposed],
+    ];
+    for (const [verb, args, key, id, expected] of reads) {
+      const pages = await readAllPages(client, verb, args);
+
+      expect(pages.length, verb).toBeGreaterThan(1);
+      for (const page of pages) expect(page.bytes).toBeLessThanOrEqual(RESPONSE_BUDGET_BYTES);
+      expect(ids(pages, key, id)).toEqual(expected);
+    }
+    const searched = await readAllPages(client, "search_memory_entries", { query: "tide" });
+    expect(searched.length).toBeGreaterThan(1);
+    expect(ids(searched, "results").sort((a, b) => a - b)).toEqual(candidates);
+    for (const page of searched) {
+      expect(await taskEventPayload(t, review.id, page.payload.event_id)).toMatchObject({ verb: "search_memory_entries", input: { query: "tide" }, returned_ids: ids([page], "results") });
+    }
+  } finally {
+    await client.close();
+  }
+});
+
 it("list_memory_entries は scope の名前 / null(盤面全体)/ 省略(すべて)を区別して渡して path も渡し、読み口5つは event id を載せる", async () => {
   const { client, call, material } = await boardWithMetaReview();
   const now = t.clock.now();
@@ -326,15 +395,17 @@ it("list_memory_entries は scope の名前 / null(盤面全体)/ 省略(すべ�
     const ids = async (args: Record<string, unknown>) => (await call("list_memory_entries", args)).body.entries.map((e: any) => e.id);
     expect(await ids({})).toEqual([material, boardWide, sandboxDefinition]);
     expect(await ids({ scope: null })).toEqual([boardWide]);
-    expect(await ids({ scope: "sandbox", kind: "definition", page: 1 })).toEqual([sandboxDefinition]);
+    expect(await ids({ scope: "sandbox", kind: "definition" })).toEqual([sandboxDefinition]);
     expect(await ids({ path: "deploy" })).toEqual([boardWide]);
 
     for (const verb of ["list_memory_entries", "list_memory_candidates", "list_memory_proposals", "list_precedents"]) {
-      expect(await call(verb)).toMatchObject({ isError: false, body: { truncated: false, event_id: expect.any(Number) } });
+      const listed = await call(verb);
+      expect(listed).toMatchObject({ isError: false, body: { event_id: expect.any(Number) } });
+      expect(listed.body).not.toHaveProperty("next");
     }
     expect(await call("list_memory_branches")).toMatchObject({ isError: false, body: { branches: expect.any(Array), event_id: expect.any(Number) } });
-    expect((await call("list_memory_candidates", { include_invalidated: true, page: 1 })).isError).toBe(false);
-    expect((await call("list_precedents", { since_watermark: 0, page: 1 })).isError).toBe(false);
+    expect((await call("list_memory_candidates", { include_invalidated: true })).isError).toBe(false);
+    expect((await call("list_precedents", { since_watermark: 0 })).isError).toBe(false);
   } finally {
     await client.close();
   }

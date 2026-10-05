@@ -288,7 +288,7 @@ it("a work child of a done parent receives the parent's handoff document", async
   }
 });
 
-it("get_current_task describes how to read history in exactly three English sentences", async () => {
+it("get_current_task describes how to read history in three English sentences, then how to read the rest with next", async () => {
   t = await bootTidepool();
   const task = await registerWork(t, "read the briefing");
   await t.clock.advance(HOUR);
@@ -300,7 +300,12 @@ it("get_current_task describes how to read history in exactly three English sent
         "in chronological order. A decision's children are the tasks registered based on that " +
         "decision. A child_outside_the_decomposition is based on no decomposition decision, " +
         "such as a repair task from a human objection, this task's own escalation, or a " +
-        "watchdog failure question.",
+        "watchdog failure question. " +
+        "When the histories do not fit in one response, the response carries `next` and `remaining` (how many history entries are not " +
+        "returned yet): call get_current_task again with only `next` to read the rest of the parent's history and then of this task's " +
+        "history, and repeat until a response carries no `next`. The task and its parent come on the first response only; a decision whose " +
+        "children continue into the next response repeats its line there. An entry too large for one response comes alone in pieces marked " +
+        "`partial` (`id`, `field`, and `field_bytes`, the field's full size in UTF-8 bytes): join that field across the pieces to get it verbatim.",
     );
   } finally {
     await client.close();

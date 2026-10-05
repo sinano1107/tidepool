@@ -27,7 +27,7 @@ function charBoundary(buf: Buffer, end: number): number {
 
 const MALFORMED_NEXT = "next is malformed: pass the next string exactly as a previous response returned it";
 
-const encodeNext =(position: ReadPosition) => Buffer.from(JSON.stringify(position)).toString("base64url");
+const encodeNext =(position: ReadPosition<unknown>) => Buffer.from(JSON.stringify(position)).toString("base64url");
 
 /** 続きを読む。盤面は状態を持たず、続きが verb・最初の引数・位置を自己記述する(ADR 0195 決定6)。 */
 export function readNext<A = Record<string, unknown>>(verb: string, next: string): ReadPosition<A> {
@@ -43,24 +43,62 @@ export function readNext<A = Record<string, unknown>>(verb: string, next: string
   return p as ReadPosition<A>;
 }
 
+/** 最初の呼び出しの引数か続き(next)から読みの位置を作る。続きは最初の引数を自分の中に持つので、他の引数と一緒には受けない。 */
+export function readPosition<A extends object>(verb: string, input: A & { next?: string }): ReadPosition<A> {
+  const { next, ...args } = input;
+  if (next === undefined) return { verb, args: args as unknown as A };
+  if (Object.values(args).some((value) => value !== undefined))
+    throw new DomainError(`pass next alone: it carries the other arguments of the first ${verb} call`);
+  return readNext<A>(verb, next);
+}
+
+/** 詰めた応答の形: 列の欄 `L` は毎回、封筒 `E` は最初の応答だけ、続きは残りがあるときだけ、部分の印は1件で予算を超える item のときだけ載る。 */
+export type Packed<L, E = unknown> = L &
+  Partial<E> & { next?: string; remaining?: number; partial?: { id: ItemId; field: string; field_bytes: number } };
+
+/** 読み口ごとの詰め方の違い。 */
+export interface PackOptions<T> {
+  /** item の境目の鍵(既定は `item.id`)。続きはこの値で次に返す item を指す。 */
+  idOf?: (item: T) => ItemId;
+  /** item を置く列(`key` に並べた点区切りの path のどれか)。既定は `key` の先頭。 */
+  listOf?: (item: T) => string;
+  /** 続きの応答にも毎回載る欄(封筒と違い最初の応答だけではない)。 */
+  every?: Record<string, unknown>;
+}
+
 /** item の列を、予算に収まるだけ丸ごと `key` に詰めた応答にする(ADR 0195 決定3)。
  *  `envelope`(item の列以外の欄)は最初の読みにだけ載る。残りがあるときだけ `next` と `remaining`(残りの件数)が付く ——
- *  付かなければ読みは完結している。封筒・`next`・`remaining` の分も予算に数える。 */
-export function packItems<T extends { id: ItemId }>(
-  read: ReadPosition,
-  key: string,
+ *  付かなければ読みは完結している。封筒・`next`・`remaining` の分も予算に数える。
+ *  `key` を複数渡すと、item は `options.listOf` の列に分かれて載る(点区切りの path は封筒の中の欄にも置ける)。 */
+export function packItems<T extends object>(
+  read: ReadPosition<unknown>,
+  key: string | readonly string[],
   items: readonly T[],
-  envelope: Record<string, unknown> = {},
+  envelope: object = {},
+  options: PackOptions<T> = {},
 ): Record<string, unknown> {
+  const lists = [key].flat();
+  const { idOf = (item: T) => (item as { id: ItemId }).id, listOf = () => lists[0]!, every = {} } = options;
   let start = 0;
   if (read.at !== undefined) {
-    start = items.findIndex((item) => item.id === read.at);
+    start = items.findIndex((item) => idOf(item) === read.at);
     if (start === -1) throw new DomainError(`next points at item ${read.at}, which this read no longer has`);
   }
   const firstOnly = read.at === undefined ? envelope : {};
+  const head = { ...firstOnly, ...every };
   const rest = items.slice(start);
   const continueFrom = (k: number) =>
-    k < rest.length ? { next: encodeNext({ verb: read.verb, args: read.args, at: rest[k]!.id }), remaining: rest.length - k } : {};
+    k < rest.length ? { next: encodeNext({ verb: read.verb, args: read.args, at: idOf(rest[k]!) }), remaining: rest.length - k } : {};
+  /** `head` に、選んだ item をそれぞれの列に置いた応答(列は item が無くても空で載る)。 */
+  const render = (chosen: readonly T[]) => {
+    const out: Record<string, any> = { ...head };
+    for (const list of lists) {
+      const path = list.split(".");
+      const parent = path.slice(0, -1).reduce((node, name) => (node[name] = { ...node[name] }), out);
+      parent[path.at(-1)!] = chosen.filter((item) => listOf(item) === list);
+    }
+    return out;
+  };
 
   /** 1件で予算を超える先頭の item の、`field` の `offset` バイト目からの1切れを単独で返す(ADR 0195 決定4)。
    *  切れの item は他の欄を全部持ち、`partial` が部分であることと欄の名前・全体のバイト数を示す。欄を切り終えたら次の item へ進む。
@@ -74,10 +112,9 @@ export function packItems<T extends { id: ItemId }>(
       const cut = structuredClone(item) as any;
       field.slice(0, -1).reduce((node, name) => node[name], cut)[field.at(-1)!] = text.subarray(offset, end).toString();
       return {
-        ...firstOnly,
-        [key]: [cut],
-        partial: { id: item.id, field: field.join("."), field_bytes: text.length },
-        ...(end < text.length ? { next: encodeNext({ ...read, at: item.id, field, offset: end }), remaining: rest.length } : continueFrom(1)),
+        ...render([cut]),
+        partial: { id: idOf(item), field: field.join("."), field_bytes: text.length },
+        ...(end < text.length ? { next: encodeNext({ ...read, at: idOf(item), field, offset: end }), remaining: rest.length } : continueFrom(1)),
       };
     };
     let [lo, hi] = [offset, text.length];
@@ -91,26 +128,29 @@ export function packItems<T extends { id: ItemId }>(
     return pageUpTo(end > offset ? end : text.length);
   };
   if (read.field !== undefined) return piece(read.field, read.offset ?? 0);
-  const whole = { ...firstOnly, [key]: rest };
+  const whole = render(rest);
   if (bytes(JSON.stringify(whole)) <= RESPONSE_BUDGET_BYTES) return whole;
 
   // 全部は入らない(最後の1件は残る): 先頭から item を足していき、続きの分まで含めて予算に収まる最後の位置で切る
   const tailBytes = (k: number) => bytes(JSON.stringify(continueFrom(k))) - 1; // 先頭の `{` を `,` に読み替える
-  let size = bytes(JSON.stringify({ ...firstOnly, [key]: [] }));
+  let size = bytes(JSON.stringify(render([])));
+  const filled = new Set<string>(); // 1件目の後ろにだけ `,` が要る
   let k = 0;
   while (k < rest.length - 1) {
-    const grown = size + bytes(JSON.stringify(rest[k])) + (k > 0 ? 1 : 0);
+    const list = listOf(rest[k]!);
+    const grown = size + bytes(JSON.stringify(rest[k])) + (filled.has(list) ? 1 : 0);
     if (grown + tailBytes(k + 1) > RESPONSE_BUDGET_BYTES) break;
     size = grown;
+    filled.add(list);
     k++;
   }
   if (k === 0) {
     // 先頭の item が封筒と一緒に入らないだけなら、封筒だけを返してその item は次の応答で丸ごと返す ——
-    // 切るのは1件で予算を超える item だけ(ADR 0195 決定4)
-    if (Object.keys(firstOnly).length > 0) return { ...firstOnly, [key]: [], ...continueFrom(0) };
+    // 切るのは1件で予算を超える item だけ(ADR 0195 決定4)。毎回載る欄(`every`)は次の応答にも載るので、ここでは数えない
+    if (Object.keys(firstOnly).length > 0) return { ...render([]), ...continueFrom(0) };
     return piece(longestStringField(rest[0]), 0);
   }
-  return { ...firstOnly, [key]: rest.slice(0, k), ...continueFrom(k) };
+  return { ...render(rest.slice(0, k)), ...continueFrom(k) };
 }
 
 /** item の中で UTF-8 バイト数が最も大きい文字列の欄の path。 */

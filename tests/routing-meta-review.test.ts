@@ -1,8 +1,24 @@
 import { afterEach, expect, it } from "vitest";
 import { appendEvent } from "../src/events.js";
+import { loadExecutionSettingTable } from "../src/execution-setting.js";
+import { recordShadow } from "../src/learner.js";
 import { createBehaviorCandidate, proposeMemoryChange, WORKER_MEMORY_VERBS } from "../src/memory.js";
+import { proposeRoutingChange } from "../src/routing-review.js";
 import { BOARD_WORKER_ID, registerTask } from "../src/tasks.js";
-import { api, bootTidepool, completeViaMcp, HOUR, HUMAN_WEBUI, mcpClient, registerWork, type Tidepool, WORKER_SPAWNED } from "./harness.js";
+import {
+  api,
+  bootTidepool,
+  completeViaMcp,
+  HOUR,
+  HUMAN_WEBUI,
+  mcpClient,
+  QUIET_EXIT,
+  RESPONSE_BUDGET_BYTES,
+  readAllPages,
+  registerWork,
+  type Tidepool,
+  WORKER_SPAWNED,
+} from "./harness.js";
 
 /** 主題 routing の周期 meta-review(issue #917 / ADR 0150 決定7・ADR 0120 決定2)のサーバ境界: 周期登録、
  *  接続ごとの verb の可視性、読み口の写像。読み物の集計はドメイン層(tests/routing-meta-review-reads.test.ts)が言う。 */
@@ -11,6 +27,7 @@ afterEach(() => t?.stop());
 
 const DAY = 24 * HOUR;
 const ROUTING_READS = ["list_routing_shadow", "list_allocations", "list_routing_cells", "read_routing_settings"];
+const TRACK = { board: { accepted: 0, rejected: 0 }, workspace: { accepted: 0, rejected: 0 } };
 
 /** routing の材料を1つ(setup —— 人間が優先順位の既定を変える)。 */
 async function material(tp: Tidepool, value: "cost" | "quality" = "cost") {
@@ -146,15 +163,73 @@ it("主題外の task から読み口・提案 verb を呼ぶと tool error", as
   }
 });
 
+it("read_routing_settings は予算を超える量の提案を古い順に予算分ずつ返し、next を追うと欠けも重複もなく揃う。表と設定は最初の応答だけに載る(ADR 0195)", async () => {
+  const { review, client } = await boardWithRoutingReview();
+  const [row] = loadExecutionSettingTable(t.db);
+  const proposed: string[] = [];
+  for (let i = 0; i < 20; i++) {
+    const { question_id } = proposeRoutingChange(t.db, review.id, { op: "row", row: row!, change: { effort: "low" }, rationale: "r" }, "auditor", t.clock.now());
+    expect((await api(t.baseUrl, "POST", `/api/tasks/${question_id}/answer`, { answers: ["reject"], comment: `${i} ${"潮".repeat(1_000)}` })).status).toBe(200);
+    proposed.push(question_id);
+  }
+  try {
+    const pages = await readAllPages(client, "read_routing_settings");
+
+    expect(pages.length).toBeGreaterThan(1);
+    for (const page of pages) expect(page.bytes).toBeLessThanOrEqual(RESPONSE_BUDGET_BYTES);
+    expect(pages.flatMap((page) => page.payload.proposals.map((p: any) => p.question_id))).toEqual(proposed);
+    expect(pages[0]!.payload).toMatchObject({ priority: "cost", table: expect.any(Array) });
+    for (const page of pages.slice(1)) expect(page.payload).not.toHaveProperty("table");
+  } finally {
+    await client.close();
+  }
+});
+
+it("list_routing_shadow / list_allocations / list_routing_cells は予算を超える量を予算分ずつ返し、next を追うと全行が揃う(ADR 0195)", async () => {
+  const { client } = await boardWithRoutingReview();
+  // 長い agent 名と model 名で、20 の session がそれぞれ別の配分評価の組・別のセル・大きな shadow 行になる
+  const now = t.clock.now();
+  for (let i = 0; i < 20; i++) {
+    const { id } = registerTask(t.db, { type: "work", title: `w${i}`, purpose: "p", completion_criteria: "c" }, now, ...HUMAN_WEBUI);
+    const run = { provider: "anthropic" as const, model: `model-${i}-${"m".repeat(2_500)}`, effort: "high", advisor: undefined, source: { tier: "agent" as const, provider: "rank" as const } };
+    recordShadow(t.db, id, { recommended: run, actual: run, basis: "prior", recommended_record: TRACK, actual_record: TRACK, candidates: 2 }, now);
+    const spawned = appendEvent(t.db, { taskId: id, workerId: `agent-${i}-${"a".repeat(2_500)}`, origin: "board", at: now, payload: { ...WORKER_SPAWNED, model: run.model, source: run.source } });
+    const tokens = { input_tokens: 1, output_tokens: 1, cache_read_tokens: 0, cache_creation_tokens: 0, estimated_cost_usd: 0 };
+    appendEvent(t.db, { taskId: id, workerId: "board", origin: "board", at: now, payload: { kind: "worker_exited", ...QUIET_EXIT, worker_spawned_event_id: spawned, usage: { ...tokens, advisor: null, models: {} } } });
+    appendEvent(t.db, {
+      taskId: id,
+      workerId: "tidepool",
+      origin: "board",
+      at: now,
+      payload: { kind: "allocation_reviewed", review_task_id: "r", worker_spawned_event_id: spawned, judge: { provider: "anthropic", model: "fable", effort: "high" }, allocation: "appropriate", cause: "uncertain", evidence: "e" },
+    });
+  }
+  try {
+    for (const [verb, key] of [["list_routing_shadow", "shadow"], ["list_allocations", "allocations"], ["list_routing_cells", "cells"]] as const) {
+      const pages = await readAllPages(client, verb, { since_watermark: 0 });
+
+      expect(pages.length, verb).toBeGreaterThan(1);
+      for (const page of pages) expect(page.bytes).toBeLessThanOrEqual(RESPONSE_BUDGET_BYTES);
+      expect(pages.flatMap((page) => page.payload[key])).toHaveLength(20);
+    }
+  } finally {
+    await client.close();
+  }
+});
+
 it("読み口4本と list_precedents は routing の task から引数ごと写る", async () => {
   const { client, call } = await boardWithRoutingReview();
   try {
     for (const verb of ["list_routing_shadow", "list_allocations", "list_routing_cells"]) {
-      expect(await call(verb, { since_watermark: 0, page: 1 })).toMatchObject({ isError: false, body: { truncated: false } });
+      const read = await call(verb, { since_watermark: 0 });
+      expect(read.isError).toBe(false);
+      expect(read.body).not.toHaveProperty("next");
     }
     expect(await call("list_routing_shadow", { diverged_only: true })).toMatchObject({ isError: false, body: { shadow: [] } });
     expect(await call("read_routing_settings")).toMatchObject({ isError: false, body: { priority: "cost", table: expect.any(Array), providerRank: expect.any(Array), frontierAdvisor: expect.any(Boolean) } });
-    expect(await call("list_precedents")).toMatchObject({ isError: false, body: { precedents: [], truncated: false } });
+    const precedents = await call("list_precedents");
+    expect(precedents).toMatchObject({ isError: false, body: { precedents: [] } });
+    expect(precedents.body).not.toHaveProperty("next");
   } finally {
     await client.close();
   }

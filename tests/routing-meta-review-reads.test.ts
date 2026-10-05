@@ -109,7 +109,6 @@ it("list_routing_shadow は shadow 行をその pickup が開いた session の 
       { task_id: diverged.id, recommended: cell(sol), actual: cell(opus), source: opus.source, basis: "prior", recommended_record: none, actual_record: none, candidates: 2, diverged: true, created_at: at.toISOString(), worker_spawned_event_id: second, agent: "reef-crab", outcome: "rejected", cost_usd: 1.25, duration_ms: 0 },
       { task_id: agreed.id, recommended: cell(opus), actual: cell(opus), source: opus.source, basis: "data", recommended_record: none, actual_record: none, candidates: 2, diverged: false, created_at: at.toISOString(), worker_spawned_event_id: expect.any(Number), agent: "deckhand", outcome: "excluded", cost_usd: null, duration_ms: null },
     ],
-    truncated: false,
   });
   expect(listRoutingShadow(db, reader, { diverged_only: true }).shadow.map((r) => r.worker_spawned_event_id)).toEqual([null, second]);
 });
@@ -196,7 +195,6 @@ it("list_allocations は評価された注釈を source.tier × agent × allocat
       { source_tier: "task", agent: "reef-crab", allocation: "overpowered", cause: "uncertain", count: 1, judged_by_same_model: 0 },
       { source_tier: "agent", agent: "deckhand", allocation: "appropriate", cause: "uncertain", count: 1, judged_by_same_model: 0 },
     ],
-    truncated: false,
   });
 });
 
@@ -212,7 +210,6 @@ it("list_routing_cells の新セルは終わった session で初めて観測さ
   expect(listRoutingCells(db, routingReview(), {})).toEqual({
     cells: [{ cell: { provider: "moonshot", model: "kimi-k3", effort: "high", advisor: null }, first_observed_event_id: seen }],
     rows: [],
-    truncated: false,
   });
 });
 

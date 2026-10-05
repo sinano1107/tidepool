@@ -1,7 +1,7 @@
 import { afterEach, expect, it } from "vitest";
 import { defineMemoryBranch, humanEntryInput, invalidateMemoryEntry, moveMemory, recordBehavior, recordKnowledge } from "../src/memory.js";
 import { logDecision } from "../src/tasks.js";
-import { bootTidepool, HOUR, mcpClient, memoryEntries, registerWork, type Tidepool } from "./harness.js";
+import { bootTidepool, HOUR, mcpClient, memoryEntries, RESPONSE_BUDGET_BYTES, readAllPages, registerWork, type Tidepool, taskEventPayload } from "./harness.js";
 
 /** worker MCP の pull 3動詞(spec #586 D / issue #591)と枝の定義(#600 E)。フィルタ・順位・event の中身は
  *  ドメイン層(tests/memory-pull.test.ts)が言うので、ここは写像だけ —— 帰属 task の
@@ -43,18 +43,15 @@ it("browse_memory / search_memory / read_memory は attributed task の workspac
     expect(await call("browse_memory", {})).toEqual({
       children: [{ name: "build", definition: "How charts is built." }],
       entries: [],
-      truncated: false,
       event_id: expect.any(Number),
     });
-    expect(await call("browse_memory", { prefix: "build/tests", page: 1 })).toEqual({
+    expect(await call("browse_memory", { prefix: "build/tests" })).toEqual({
       children: [],
       entries: [{ id, title: "Tests need Node 22" }],
-      truncated: false,
       event_id: expect.any(Number),
     });
     expect(await call("search_memory", { query: "Node" })).toEqual({
       results: [{ id, title: "Tests need Node 22", path: "build/tests" }],
-      truncated: false,
       event_id: expect.any(Number),
     });
     expect(await call("read_memory", { ids: [id] })).toEqual({
@@ -140,6 +137,68 @@ it("record_knowledge の description は、新しい枝を切るときは先に 
     expect(tools.find((tool) => tool.name === "record_knowledge")?.description).toContain(
       "When you open a new branch, define it first with define_memory_branch",
     );
+  } finally {
+    await client.close();
+  }
+});
+
+// 応答予算(ADR 0195 / issue #1390): pull の読み口は予算に収まり、収まらない分は続き(next)で読む。
+
+/** 約2KB の本文の Knowledge を `count` 件書き、id の列を返す。 */
+function recordLongKnowledge(scope: string, path: string, count: number) {
+  return Array.from(
+    { length: count },
+    (_, i) =>
+      recordKnowledge(
+        t.db,
+        { scope, path, title: `Note ${i} ${"y".repeat(2_000)}`, text: `${i} ${"潮".repeat(700)}`, source: { commit: "0a46a46" }, author: { activity: "worker_verb", name: "deckhand" } },
+        "worker",
+        t.clock.now(),
+      ).entry_id,
+  );
+}
+
+it("read_memory は予算を超える量を予算分ずつ id 順に返し、next を追うと欠けも重複もなく揃う。memory_pulled はその応答で返した id だけを持つ", async () => {
+  t = await bootTidepool();
+  const task = await registerWork(t, "index the tide charts", "charts");
+  const ids = recordLongKnowledge("charts", "build/tests", 30);
+  await t.clock.advance(HOUR);
+
+  const client = await mcpClient(t.mcpBaseUrl, task.id);
+  try {
+    const pages = await readAllPages(client, "read_memory", { ids: [...ids].reverse() });
+
+    expect(pages.length).toBeGreaterThan(1);
+    for (const page of pages) expect(page.bytes).toBeLessThanOrEqual(RESPONSE_BUDGET_BYTES);
+    expect(pages.flatMap((page) => page.payload.entries.map((e: any) => e.id))).toEqual(ids);
+    for (const page of pages) {
+      const pulled = await taskEventPayload(t, task.id, page.payload.event_id);
+      expect(pulled).toMatchObject({ kind: "memory_pulled", verb: "read_memory", input: { ids: [...ids].reverse() } });
+      expect(pulled.returned_ids).toEqual(page.payload.entries.map((e: any) => e.id));
+    }
+  } finally {
+    await client.close();
+  }
+});
+
+it("browse_memory と search_memory は予算を超える量を予算分ずつ返し、next を追うと全件が揃う。続きの memory_pulled も最初の input とその応答で返した id を持つ", async () => {
+  t = await bootTidepool();
+  const task = await registerWork(t, "index the tide charts", "charts");
+  const ids = recordLongKnowledge("charts", "build/tests", 30);
+  await t.clock.advance(HOUR);
+
+  const client = await mcpClient(t.mcpBaseUrl, task.id);
+  try {
+    for (const [verb, args, key] of [["browse_memory", { prefix: "build/tests" }, "entries"], ["search_memory", { query: "Note" }, "results"]] as const) {
+      const pages = await readAllPages(client, verb, args);
+
+      expect(pages.length, verb).toBeGreaterThan(1);
+      for (const page of pages) expect(page.bytes).toBeLessThanOrEqual(RESPONSE_BUDGET_BYTES);
+      expect(pages.flatMap((page) => page.payload[key].map((e: any) => e.id)).sort((a: number, b: number) => a - b)).toEqual(ids);
+      for (const page of pages) {
+        expect(await taskEventPayload(t, task.id, page.payload.event_id)).toMatchObject({ verb, input: args, returned_ids: page.payload[key].map((e: any) => e.id) });
+      }
+    }
   } finally {
     await client.close();
   }

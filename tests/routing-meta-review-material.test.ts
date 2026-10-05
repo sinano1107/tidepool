@@ -189,7 +189,7 @@ it("新しいセルは初観測が窓の中のものだけ、人間が変えた�
   expect(parts.cells).toEqual([{ cell: { provider: "openai", model: "gpt-5.6-sol", effort: "high", advisor: null }, first_observed_event_id: seen }]);
   expect(parts.rows.map((r) => r.event_id)).toEqual([edited]);
   const verb = listRoutingCells(db, review, {});
-  for (const shown of [verb.cells[0], verb.rows[0]]) expect(section).toContain(JSON.stringify(shown));
+  for (const shown of [verb.cells[0], verb.rows![0]]) expect(section).toContain(JSON.stringify(shown));
 });
 
 it("決着した提案は回答か陳腐化が窓の中にあるものだけを read_routing_settings の提案の行で、回答・修正値・comment・observed の理由とともに載せる —— registry 種別も含み、前回より前・この task の登録より後に決着した提案と open な提案は出ない", () => {
