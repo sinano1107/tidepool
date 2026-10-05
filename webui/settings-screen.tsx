@@ -2163,7 +2163,7 @@ function TiersCard({ settings, say, onSaved, edit }: {
     setBusy(true);
     try {
       for (const change of changes) await api('/api/settings/execution', change);
-      say('success', done, target || draft.name.trim());
+      say('success', done, draft.name.trim());
       edit.close();
       await onSaved();
     } catch (err) {

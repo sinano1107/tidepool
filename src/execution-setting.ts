@@ -677,7 +677,12 @@ export function applyExecutionSettingsChange(db: Db, change: ExecutionSettingsCh
 }
 
 /** registry の agent.md の `tier` を旧い名前から新しい名前へ書き換えて着地させる口(registry の無い盤面では無い)。 */
-export type RenameAgentTiers = (input: { from: Tier; to: Tier; message: string }) => Promise<unknown>;
+export interface RenameAgentTiersInput {
+  from: Tier;
+  to: Tier;
+  message: string;
+}
+export type RenameAgentTiers = (input: RenameAgentTiersInput) => Promise<void>;
 
 /** 扉(settings タブ / 管理MCP)が撃つ1つの変更。段の改名だけは、agent.md の `tier` が名前で書かれているので、先に registry へ
  *  書き換えを着地させてから盤面の名前を変える(ADR 0200 決定2)。push は DB transaction の外なので、着地できなければ改名ごと

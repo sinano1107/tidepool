@@ -2,7 +2,8 @@ import { readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { stringify as stringifyYaml } from "yaml";
 import { UnknownAgentError } from "./agent.js";
-import type { RenameAgentTiers, Tier } from "./execution-setting.js";
+import { DomainError } from "./tasks.js";
+import type { RenameAgentTiers, RenameAgentTiersInput, Tier } from "./execution-setting.js";
 import type { GitHubAuth } from "./github-auth.js";
 import {
   type AgentDefinition,
@@ -256,7 +257,7 @@ function rewriteAgentTier(worktreeDir: string, name: string, version: string, to
   const text = readFileSync(file, "utf8");
   const frontmatter = text.match(/^---\n[\s\S]*?\n---\n/)?.[0];
   // tier を行で書いていない frontmatter(flow 形式・字下げ)は書き換えられない —— 変わらないまま着地を成功と数えない
-  if (!frontmatter || !/^tier:/m.test(frontmatter)) throw new Error(`agents/${name}.md has no top-level tier: line to rewrite`);
+  if (!frontmatter || !/^tier:/m.test(frontmatter)) throw new DomainError(`agents/${name}.md has no top-level tier: line to rewrite`);
   writeFileSync(
     file,
     text.replace(frontmatter, frontmatter.replace(/^tier:.*$/m, `tier: ${to}`).replace(/^version:.*$/m, `version: ${JSON.stringify(bumpVersion(version))}`)),
@@ -265,7 +266,7 @@ function rewriteAgentTier(worktreeDir: string, name: string, version: string, to
 
 /** 段の改名の registry 側(ADR 0200 決定2): 入口で fetch し、`tier` に旧い名前を書いた自前の agent.md をすべて1つの commit で
  *  書き換えて着地させる。書き換える agent が無ければ何も着地しない。 */
-export async function renameAgentTiers(input: Parameters<RenameAgentTiers>[0], deps: AgentAdminDeps): Promise<void> {
+export async function renameAgentTiers(input: RenameAgentTiersInput, deps: AgentAdminDeps): Promise<void> {
   await refreshRegistryForWrite(deps.registry, deps.githubAuth);
   const agents = Object.values(loadRegistry(deps.registry.dir, deps.registry.mode).agents).filter((agent) => !agent.builtin && agent.tier === input.from);
   commitToRegistry(
