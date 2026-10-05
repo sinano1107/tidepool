@@ -16,7 +16,7 @@ import {
   objectionBundles,
   taskDecisionLog,
 } from "./events.js";
-import { type ExecutionSettingRow, retrospectiveBoardCallTier } from "./execution-setting.js";
+import { type ExecutionSettingRow, readExecutionSettings } from "./execution-setting.js";
 import { buildMemoryInjection, createBehaviorCandidate, listMemoryEntries, memoryScope, recordKnowledge, requireDecision } from "./memory.js";
 import { sessionSpawnOf, sessionWindow } from "./precedent.js";
 import type { ProcessContainers } from "./process-container.js";
@@ -120,7 +120,7 @@ function boardCallSetting<C>(
   if (!client) return { unavailable: "Board call not made: no client is configured" };
   let setting: ExecutionSettingRow;
   try {
-    setting = boardCallRow(db, retrospectiveBoardCallTier(db));
+    setting = boardCallRow(db, readExecutionSettings(db).judgementTier);
   } catch (err) {
     return { unavailable: `Board call not made: ${message(err)}` };
   }

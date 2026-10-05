@@ -336,12 +336,6 @@ export function anthropicBoardCallRow(db: Db, tier: Tier, windowClosed: (model: 
   return row;
 }
 
-/** 振り返り Board call(配分評価・帰責の判定・Behavior candidate の起草)のティア。3用途が
- *  共有する盤面設定(ADR 0111 追記4)。 */
-export function retrospectiveBoardCallTier(db: Db): Tier {
-  return loadExecutionDefaults(db).judgementTier;
-}
-
 /** entry 集合から要求ティアの行を全部集め、優先順位の鍵で並べる(ADR 0110 決定3 /
  *  ADR 0114 決定3・4)。**除外は当てない** —— 除外は観測のたびに育つので、盤面境界が
  *  候補を1度作り、除外が増えるたびに `selectable` を引き直す形にしてある。
