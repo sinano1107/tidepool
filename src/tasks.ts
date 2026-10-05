@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { Db } from "./db.js";
 import { DEFAULT_AUDITOR_NAME } from "./defaults.js";
 import { appendEvent, type EventOrigin, type EventPayload, getEvent, latestEventOfTask, type TaskScopedPayload, taskDecisionLog } from "./events.js";
-import { assertKnownTier, type ExecutionSettingRow, PRIORITIES, type Priority, type RoutingRowChange, type Tier, tierNames } from "./execution-setting.js";
+import { assertKnownTier, type ExecutionSettingRow, PRIORITIES, type Priority, type RoutingRowChange, type Tier } from "./execution-setting.js";
 import type { GitHubClient, Issue, IssueRef } from "./github.js";
 import type { MemoryAmendment } from "./memory.js";
 import type { MergeDial, RosterAgent } from "./registry.js";
@@ -453,8 +453,8 @@ function assertQuestionSpec(input: RegisterTaskInput): void {
  *  not a bad value: null is the request's absence. */
 function assertExecutionRequest(db: Db, input: Pick<RegisterTaskInput, "tier" | "priority" | "review_tier">): void {
   // 段は盤面の一覧(ADR 0200 決定2): 一覧に無い名前は、いまの一覧を添えて拒む
-  if (input.review_tier !== undefined) assertKnownTier(tierNames(db), "review_tier", input.review_tier);
-  if (input.tier !== undefined) assertKnownTier(tierNames(db), "tier", input.tier);
+  if (input.review_tier !== undefined) assertKnownTier(db, "review_tier", input.review_tier);
+  if (input.tier !== undefined) assertKnownTier(db, "tier", input.tier);
   if (input.priority !== undefined && !(PRIORITIES as readonly string[]).includes(input.priority)) {
     throw new DomainError(`unknown priority "${input.priority}" — one of ${PRIORITIES.join(", ")}`);
   }

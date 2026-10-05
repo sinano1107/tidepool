@@ -97,7 +97,8 @@ export function tierNames(db: Db): Tier[] {
 }
 
 /** 名前で喋る入口の検査(ADR 0200 決定2): 一覧に無い名前は、いまの一覧を添えて拒む。 */
-export function assertKnownTier(names: readonly Tier[], field: string, name: string): void {
+export function assertKnownTier(db: Db, field: string, name: string): void {
+  const names = tierNames(db);
   if (!names.includes(name)) throw new DomainError(`unknown ${field} "${name}" — one of ${names.join(", ")}`);
 }
 
@@ -520,7 +521,7 @@ export function applyExecutionSettingsChange(db: Db, change: ExecutionSettingsCh
         if (provider === "anthropic" && isClaudeModelAlias(model)) {
           throw new DomainError(`"${model}" is a Claude CLI alias whose target moves with CLI updates; a table row takes a concrete model id (e.g. claude-opus-5-5)`);
         }
-        assertKnownTier(tierNames(db), "tier", tier);
+        assertKnownTier(db, "tier", tier);
         db.prepare(
           `INSERT INTO execution_settings (provider, tier_id, model, effort, price_in, price_out)
            VALUES (?, (SELECT id FROM tiers WHERE name = ?), ?, ?, ?, ?)
@@ -530,7 +531,7 @@ export function applyExecutionSettingsChange(db: Db, change: ExecutionSettingsCh
         break;
       }
       case "retrospective_tier":
-        assertKnownTier(tierNames(db), "tier", change.value);
+        assertKnownTier(db, "tier", change.value);
         db.prepare("UPDATE execution_defaults SET retrospective_tier_id = (SELECT id FROM tiers WHERE name = ?)").run(change.value);
         break;
       case "delete_row":

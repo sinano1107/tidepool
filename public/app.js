@@ -256,7 +256,8 @@ function TpTierAmendment({ label, below, value, onChange }) {
   const { Select } = window.TidepoolDesignSystem_8a0ead;
   const [tiers, setTiers] = React.useState([]);
   React.useEffect(() => {
-    api("GET /api/settings/execution").then(({ tiers: tiers2 }) => setTiers(tiers2)).catch(() => setTiers([]));
+    api("GET /api/settings/execution").then(({ tiers: tiers2 }) => setTiers(tiers2)).catch(() => {
+    });
   }, []);
   const options = below === void 0 ? tiers : tiers.slice(0, Math.max(tiers.indexOf(below), 0));
   return /* @__PURE__ */ React.createElement(

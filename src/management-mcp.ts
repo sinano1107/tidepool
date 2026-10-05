@@ -286,6 +286,7 @@ const taskAck = ({ id, type, status, assignee, raw_assignee }: BoardTask) => ({ 
 const TASK_ACK_DESCRIPTION = "Returns the task's id, type, status, assignee and raw_assignee only; read the rest with get_task.";
 
 function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
+  const tierDescriptions = tierFieldDescriptions(deps.db);
   const server = floorEveryResponse(
     rejectUnknownArguments(
       new McpServer({ name: "tidepool-management", version: "0.0.0" }, { instructions: MANAGEMENT_MCP_INSTRUCTIONS }),
@@ -955,9 +956,9 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
             assignee: z.string().optional(),
             workspace: z.string().optional(),
             review_flag: z.boolean().optional(),
-            tier: z.string().optional().describe(tierFieldDescriptions(deps.db).tier),
+            tier: z.string().optional().describe(tierDescriptions.tier),
             review_by: z.array(z.string().min(1)).optional(),
-            review_tier: z.string().optional().describe(tierFieldDescriptions(deps.db).review_tier),
+            review_tier: z.string().optional().describe(tierDescriptions.review_tier),
             priority: z.string().optional().describe(PRIORITY_FIELD_DESCRIPTION),
           }),
         ),
@@ -1036,9 +1037,9 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
         workspace: z.string().optional(),
         risk_flag: z.boolean().optional(),
         review_flag: z.boolean().optional(),
-        tier: z.string().optional().describe(tierFieldDescriptions(deps.db).tier),
+        tier: z.string().optional().describe(tierDescriptions.tier),
         review_by: z.array(z.string().min(1)).optional(),
-        review_tier: z.string().optional().describe(tierFieldDescriptions(deps.db).review_tier),
+        review_tier: z.string().optional().describe(tierDescriptions.review_tier),
         priority: z.string().optional().describe(PRIORITY_FIELD_DESCRIPTION),
         decompose_reason: z.string().optional(),
       },
