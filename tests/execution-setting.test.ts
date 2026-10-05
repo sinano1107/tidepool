@@ -4,7 +4,6 @@ import { openDb } from "../src/db.js";
 import {
   applyExecutionSettingsChange,
   BOARD_DEFAULT_PRIORITY,
-  BOARD_DEFAULT_TIER,
   composeRoutingRow,
   type ExecutionSetting,
   type ExecutionSettingTable,
@@ -13,16 +12,18 @@ import {
   parseAgentTierAmendment,
   parseRoutingRowChange,
   readExecutionSettings,
+  readTiers,
   registryPinChanges,
   resolveExecutionSetting,
   routingPinChanges,
   SEED_EXECUTION_SETTINGS,
+  SEED_TIERS,
   type SelectorInput,
   selectExecutionSetting,
-  TIERS,
   type Tier,
   tierHasRowFor,
 } from "../src/execution-setting.js";
+
 import { submitAnswer } from "../src/human-verbs.js";
 import { registerMetaReview } from "../src/meta-review.js";
 import { registerQuarantine, tableRowValue } from "../src/quarantine.js";
@@ -32,6 +33,8 @@ import { DomainError, getTask, type RegistryProposal } from "../src/tasks.js";
 import { unusedLanding } from "./fakes.js";
 
 const table: ExecutionSettingTable = SEED_EXECUTION_SETTINGS;
+/** 種の盤面の段の名前(順序どおり)。 */
+const tiers = SEED_TIERS.map((tier) => tier.name);
 
 /** selector の入力の既定形。テストが言いたい1点だけを上書きする。 */
 function input(overrides: Partial<SelectorInput> = {}): SelectorInput {
@@ -41,6 +44,7 @@ function input(overrides: Partial<SelectorInput> = {}): SelectorInput {
     taskTier: undefined,
     priority: undefined,
     agentTier: undefined,
+    boardTier: "economy",
     advisorAboveMain: false,
     ...overrides,
   };
@@ -54,9 +58,12 @@ function select(request: SelectorInput, tbl: ExecutionSettingTable = table): Exe
   return setting!;
 }
 
-it("ティアは廉価 / 主力 / 上位の3段で、盤面既定は廉価 —— 配布される既定は最小の床(ADR 0094 の線)", () => {
-  expect(TIERS).toEqual(["economy", "standard", "frontier"]);
-  expect(BOARD_DEFAULT_TIER).toBe("economy");
+it("新しい盤面は種の3段を説明つきで持ち、読み口が順序どおりに返す(ADR 0200 決定1・3)", () => {
+  expect(readTiers(openDb(":memory:"))).toEqual([
+    { name: "economy", description: "Work that follows a pattern already in the codebase: adding tests, routine wiring, mechanical edits." },
+    { name: "standard", description: "Work where the approach has to be worked out: a multi-file implementation or a larger refactor." },
+    { name: "frontier", description: "A hard problem that has already resisted an attempt, or long autonomous work where a wrong call is expensive." },
+  ]);
 });
 
 it("種の表は `/implementation-delegation` の表と同じ7行 — anthropic も openai も具体 id 行で、anthropic の行は alias の拒否一覧に当たらない、moonshot は kimi-k3 を economy に1行(ADR 0114: 価格は USD per MTok / ADR 0182 決定1)", () => {
@@ -412,9 +419,9 @@ it("適用する行は pin の行に提案の変更、その上に修正値を�
 });
 
 it("行の変更・修正値の形は tier / effort の少なくとも1つだけで、それ以外は DomainError", () => {
-  expect(parseRoutingRowChange({ tier: "economy", effort: "low" })).toEqual({ tier: "economy", effort: "low" });
+  expect(parseRoutingRowChange(tiers, { tier: "economy", effort: "low" })).toEqual({ tier: "economy", effort: "low" });
   for (const bad of [{}, { tier: "ultra" }, { effort: "" }, { tier: "economy", price_in: 1 }, "frontier", null]) {
-    expect(() => parseRoutingRowChange(bad)).toThrow(DomainError);
+    expect(() => parseRoutingRowChange(tiers, bad)).toThrow(DomainError);
   }
 });
 
@@ -453,10 +460,10 @@ it("registry の提案の pin: 根拠の行は (provider, model) の tier / effo
 });
 
 it("tier の提案の修正値は to だけで、pin の tier より下の任意のティア —— 同位・上位・それ以外の欄は DomainError", () => {
-  expect(parseAgentTierAmendment(tierProposal, { to: "economy" })).toBe("economy");
-  expect(parseAgentTierAmendment(tierProposal, { to: "standard" })).toBe("standard");
+  expect(parseAgentTierAmendment(tiers, tierProposal, { to: "economy" })).toBe("economy");
+  expect(parseAgentTierAmendment(tiers, tierProposal, { to: "standard" })).toBe("standard");
   for (const bad of [{ to: "frontier" }, { to: "ultra" }, { to: "economy", effort: "low" }, {}, "economy"]) {
-    expect(() => parseAgentTierAmendment(tierProposal, bad)).toThrow(DomainError);
+    expect(() => parseAgentTierAmendment(tiers, tierProposal, bad)).toThrow(DomainError);
   }
 });
 

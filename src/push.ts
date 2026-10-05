@@ -2,7 +2,7 @@ import webpush from "web-push";
 import type { Db } from "./db.js";
 import { HUMAN_FACING_KINDS } from "./events.js";
 import { isQuietHours } from "./quiet-hours.js";
-import { HUMAN_WORKER_ID, isLandingQuestion, rowToTask, type Task, type TaskRow } from "./tasks.js";
+import { HUMAN_WORKER_ID, isLandingQuestion, rowToTask, type Task, type TaskRow, taskTierNamesSql } from "./tasks.js";
 
 /** A browser's Web Push registration (the standard PushSubscription shape,
  *  flattened) — endpoint is the push service URL, p256dh/auth the keys
@@ -75,7 +75,7 @@ export function buildHumanTaskPushPayload(task: Task): PushPayload {
 export function listUnnotifiedQuestions(db: Db): Task[] {
   const rows = db
     .prepare(
-      `SELECT t.* FROM tasks t
+      `SELECT t.*, ${taskTierNamesSql("t")} FROM tasks t
        LEFT JOIN question_notifications n ON n.task_id = t.id
        WHERE t.type = 'question' AND t.status = 'todo' AND n.task_id IS NULL
        ORDER BY t.created_at`,
@@ -106,7 +106,7 @@ export function markQuestionNotified(db: Db, taskId: string, now: Date): void {
 export function listUnnotifiedHumanTasks(db: Db): Task[] {
   const rows = db
     .prepare(
-      `SELECT t.* FROM tasks t
+      `SELECT t.*, ${taskTierNamesSql("t")} FROM tasks t
        JOIN events e ON e.task_id = t.id AND e.kind = 'task_registered'
        LEFT JOIN human_task_notifications n ON n.task_id = t.id
        WHERE t.assignee = @humanWorkerId AND t.status = 'todo'

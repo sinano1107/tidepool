@@ -7,11 +7,9 @@ import { openQuarantineQuestions, openQuarantineValues, tableRowValue } from "./
 import type { AgentDefinition } from "./registry.js";
 import { DomainError, HUMAN_WORKER_ID, type RegistryProposal, type RoutingProposal, type RoutingRowProposal, settleQuestionAsObserved, type Task } from "./tasks.js";
 
-/** 必要品質のティア(CONTEXT.md「要求」)—— 廉価 / 主力 / 上位。**順序を持つ配列**
- *  であることがこの定数の内容で、agent の既定 tier の提案が「下」を読む。advisor の
- *  導出はティアを読まない(ADR 0200 決定6)。 */
-export const TIERS = ["economy", "standard", "frontier"] as const;
-export type Tier = (typeof TIERS)[number];
+/** 必要品質のティア(CONTEXT.md「要求」/ ADR 0200 決定1)の名前。段は盤面の DB が持つ順序付きの一覧で(`readTiers`)、
+ *  コードは名前を列挙しない —— 型が言えるのは「段の名前」であることだけ。 */
+export type Tier = string;
 
 /** 要求のもう1列: 要求ティアの候補を並べる鍵(CONTEXT.md「要求」/ ADR 0114 決定1)。
  *  `quality` = Provider 順位 → 価格、`cost` = 価格 → Provider 順位。ティアは床
@@ -20,12 +18,18 @@ export type Tier = (typeof TIERS)[number];
 export const PRIORITIES = ["quality", "cost"] as const;
 export type Priority = (typeof PRIORITIES)[number];
 
-/** 要求2列を受け取る入口(管理MCP の `register_task`、worker MCP の `decompose`)が
- *  エージェントへ見せる説明。**綴りは1つ** —— 入口ごとに書くと、片方だけが古い
- *  ティア名や古い意味を喋り続ける。 */
-export const TIER_FIELD_DESCRIPTION =
-  `Required quality tier for this task: ${TIERS.join(" / ")}. ` +
-  "Omit to fall back to the agent's own tier, then the board default.";
+/** 要求2列を受け取る入口(管理MCP の `register_task` / `decompose_task`、worker MCP の `decompose`)が
+ *  エージェントへ見せる説明。**綴りは1つ** —— 入口ごとに書くと、片方だけが古い段や古い意味を喋り続ける。
+ *  段は盤面の一覧から「名前 — 説明」を順序どおりに並べる(ADR 0200 決定3)。 */
+export function tierFieldDescriptions(db: Db): { tier: string; review_tier: string } {
+  const tiers = readTiers(db).map((t) => `${t.name} — ${t.description}`).join("\n");
+  return {
+    tier: `Required quality tier for this task, one of the board's tiers (lowest first):\n${tiers}\n` +
+      "Omit to fall back to the agent's own tier, then the board default.",
+    review_tier: `Quality tier for completion reviews, one of the board's tiers (lowest first):\n${tiers}\n` +
+      "Overrides each reviewer's tier, then the board default.",
+  };
+}
 export const PRIORITY_FIELD_DESCRIPTION =
   `How the models of the required tier are ordered: ${PRIORITIES.join(" / ")}. ` +
   "quality (default) picks by the board's Provider rank, then price; cost picks the cheapest model, then Provider rank.";
@@ -41,27 +45,10 @@ export type TierSource = "task" | "review_tier" | "agent" | "board";
  *  cost で価格が Provider を決めた、`"learner"` は昇格した学習器が選んだ(ADR 0150 決定3)。 */
 export type ProviderSource = "only" | "rank" | "cost" | "learner";
 
-/** task にも agent にも要求が無いときのティア。**配布される既定は最小の床**で
- *  あり、上げるのは運用者の判断である(ADR 0094 の advisor と同じ線 ——「既定は
- *  最小の床と、運用者が足せる余地を提供するもの」)。`/implementation-delegation`
- *  §1 の「既定は主力ティア」は別の軸 —— 人間が tidepool の実装 issue を委任する
- *  ときの好みであって、盤面が全 workspace の全 agent に配る床の根拠ではない。
- *  この値のおかげで、ADR 0110 が動かしたのは fallback の**出所**(adapter 定数 →
- *  盤面の表)であって model そのものではない、という決定文どおりになる。
- *  **盤面設定ではない**(#545 は Provider 順位と優先順位の既定を設定面に出したが、
- *  ティアの既定は出していない)—— 動かす口が無い値を DB に置いても、定数に手順が
- *  1つ増えるだけである。 */
-export const BOARD_DEFAULT_TIER: Tier = "economy";
-
 /** 優先順位の既定の、さらに既定(ADR 0114 決定1): 盤面設定 `execution_defaults.priority`
  *  が未設定のときの値。task の優先順位 → 盤面設定 → この定数の順に倒れる
  *  (`selectorInputFor` / `loadExecutionDefaults`)。 */
 export const BOARD_DEFAULT_PRIORITY: Priority = "quality";
-
-/** 振り返り Board call(配分評価・帰責の判定・Behavior candidate の起草、ADR 0111 追記4)が
- *  共有するティアの、盤面設定 `execution_defaults.retrospective_tier` が未設定のときの既定。
- *  今日までコードに固定されていた `"frontier"` をそのまま倒れ先にする。 */
-const BOARD_DEFAULT_RETROSPECTIVE_TIER: Tier = "frontier";
 
 /** 表の1行 = モデル分類の行(ADR 0114 決定2): この model はこの provider のこの
  *  ティアの品質を満たす、という分類と、そこで使う effort・価格(USD per MTok)。
@@ -87,6 +74,39 @@ export type ExecutionSettingTable = readonly ExecutionSettingRow[];
  *  出しなので、表を引かずこの定数を読む —— 表は agent の実行設定を決めるもので、
  *  盤面が自分の probe を走らせる向き先ではない。 */
 export const MOONSHOT_DEFAULT_MODEL = "kimi-k3[1m]";
+
+/** 配布される種の段(ADR 0200 決定1・3)。表と同じく DB へ一度だけ初期化し、以後は DB が正本。説明は「1つ下の段では
+ *  足りず、この段なら足りる仕事」を書く(文面は #1346 のコメント)。並びが段の順序である。 */
+export const SEED_TIERS: readonly { name: string; description: string }[] = [
+  { name: "economy", description: "Work that follows a pattern already in the codebase: adding tests, routine wiring, mechanical edits." },
+  { name: "standard", description: "Work where the approach has to be worked out: a multi-file implementation or a larger refactor." },
+  { name: "frontier", description: "A hard problem that has already resisted an attempt, or long autonomous work where a wrong call is expensive." },
+];
+
+/** 種の盤面設定が指す段(ADR 0200 決定4): 盤面既定(未指定の task と下書き)と、盤面自身の判断の段(振り返り Board call と
+ *  周期 meta-review)。配布される既定は最小の床で、上げるのは運用者の判断である(ADR 0094 の線)。 */
+export const SEED_BOARD_TIERS = { default_tier: "economy", retrospective_tier: "frontier" } as const;
+
+/** 盤面の段の一覧を順序どおりに(ADR 0200 決定1)。 */
+export function readTiers(db: Db): { name: Tier; description: string }[] {
+  return db.prepare("SELECT name, description FROM tiers ORDER BY position").all() as { name: Tier; description: string }[];
+}
+
+/** 段の名前を順序どおりに。 */
+export function tierNames(db: Db): Tier[] {
+  return readTiers(db).map((tier) => tier.name);
+}
+
+/** 名前で喋る入口の検査(ADR 0200 決定2): 一覧に無い名前は、いまの一覧を添えて拒む。 */
+export function assertKnownTier(db: Db, field: string, name: string): void {
+  const names = tierNames(db);
+  if (!names.includes(name)) throw new DomainError(`unknown ${field} "${name}" — one of ${names.join(", ")}`);
+}
+
+/** 盤面既定の段(ADR 0200 決定4): 要求が無い task と下書きが読む。 */
+export function boardDefaultTier(db: Db): Tier {
+  return (db.prepare("SELECT t.name FROM execution_defaults d JOIN tiers t ON t.id = d.default_tier_id").get() as { name: Tier }).name;
+}
 
 /** 配布される種の表。`/implementation-delegation` §4 / §5 の表と**同じ内容・同じ
  *  鮮度管理**で、ズレたら片方を直す(ADR 0110 / spec #541)。
@@ -186,6 +206,8 @@ export interface SelectorInput {
   reviewTier?: Tier;
   /** agent.md の `tier`。省略 → 盤面既定。 */
   agentTier: Tier | undefined;
+  /** 盤面既定の段(盤面設定、ADR 0200 決定4)。 */
+  boardTier: Tier;
   /** 盤面設定:「main より序列が上の model を advisor に使ってよい」。立つまで advisor は
    *  main と同一に倒れる —— Fable の usage-credits 同意も org の `availableModels`
    *  も盤面からは読めず、不成立なら headless の CLI は exit せず advisor 無しで
@@ -237,7 +259,7 @@ function executionSettingCandidates(
   request: SelectorInput,
   table: ExecutionSettingTable,
 ): ExecutionSetting[] {
-  const tier = request.reviewTier ?? request.taskTier ?? request.agentTier ?? BOARD_DEFAULT_TIER;
+  const tier = request.reviewTier ?? request.taskTier ?? request.agentTier ?? request.boardTier;
   // 解決順のどの段で決まったか。値の一致では畳まない —— agent と同じティアを
   // task が要求しても出所は "task" で、それが学習の文脈変数になる。
   const tierSource: TierSource =
@@ -314,14 +336,17 @@ export function selectExecutionSetting(
  *  編集(#545)が次の pickup から効くのはそのおかげである。 */
 export function loadExecutionSettingTable(db: Db): ExecutionSettingTable {
   return db
-    .prepare("SELECT provider, tier, model, effort, price_in, price_out FROM execution_settings ORDER BY provider, model, effort")
+    .prepare(
+      `SELECT provider, t.name AS tier, model, effort, price_in, price_out
+       FROM execution_settings JOIN tiers t ON t.id = execution_settings.tier_id ORDER BY provider, model, effort`,
+    )
     .all() as ExecutionSettingRow[];
 }
 
 /** 盤面設定(ADR 0110 決定5): 「main より序列が上の model を advisor に使ってよい」、
- *  Provider 順位、優先順位の既定、学習器の昇格(ADR 0150 決定4)、振り返り Board call が
- *  共有するティア(ADR 0111 追記4)。行が無い / 列が NULL = 未設定 = コードの既定
- *  —— display_language と同じ「行が無ければ既定」の形。 */
+ *  Provider 順位、優先順位の既定、学習器の昇格(ADR 0150 決定4)、盤面自身の判断の段(振り返り Board call と
+ *  周期 meta-review が共有する、ADR 0200 決定4)。行は種で作られ、列が NULL = 未設定 = コードの既定。
+ *  盤面既定の段(`boardDefaultTier`)はこの読み口に載せない —— 動かす口は #1421 が足す。 */
 interface ExecutionDefaults {
   advisorAboveMain: boolean;
   providerRank: readonly Provider[];
@@ -390,7 +415,7 @@ export const executionSettingsChangeSchema = z.discriminatedUnion("setting", [
     key: rowKeySchema.optional(),
     row: z.object({
       provider: z.enum(PROVIDER_VALUES),
-      tier: z.enum(TIERS),
+      tier: z.string().min(1),
       model: z.string().min(1),
       effort: z.string().min(1),
       price_in: z.number().nonnegative(),
@@ -406,7 +431,7 @@ export const executionSettingsChangeSchema = z.discriminatedUnion("setting", [
     }),
   }),
   z.object({ setting: z.literal("priority"), value: z.enum(PRIORITIES) }),
-  z.object({ setting: z.literal("retrospective_tier"), value: z.enum(TIERS) }),
+  z.object({ setting: z.literal("retrospective_tier"), value: z.string().min(1) }),
   // 扉は降格だけを受ける。昇格は承認の適用が schema を通さず書く
   z.object({
     setting: z.literal("learner_promoted"),
@@ -419,16 +444,19 @@ export type ExecutionSettingsChange = z.infer<typeof executionSettingsChangeSche
 
 /** 行の提案の変更と、承認に添える修正値の形(ADR 0150 決定2): 動かせるのは分類と effort だけ。 */
 const routingRowChangeSchema = z
-  .object({ tier: z.enum(TIERS), effort: z.string().min(1) })
+  .object({ tier: z.string().min(1), effort: z.string().min(1) })
   .partial()
   .strict()
   .refine((change) => Object.keys(change).length > 0, { message: "name at least one of tier / effort" });
 export type RoutingRowChange = z.infer<typeof routingRowChangeSchema>;
 
-/** 提案 verb の `change` と回答の `amendment` の検査。schema 違反は DomainError(扉は形を緩く受ける)。 */
-export function parseRoutingRowChange(input: unknown): RoutingRowChange {
+/** 提案 verb の `change` と回答の `amendment` の検査。schema 違反と一覧に無い段は DomainError(扉は形を緩く受ける)。 */
+export function parseRoutingRowChange(tiers: readonly Tier[], input: unknown): RoutingRowChange {
   const parsed = routingRowChangeSchema.safeParse(input);
-  if (!parsed.success) throw new DomainError(`a row change takes tier (${TIERS.join(" / ")}) and/or effort, nothing else: ${parsed.error.issues.map((i) => i.message).join("; ")}`);
+  if (!parsed.success || (parsed.data.tier !== undefined && !tiers.includes(parsed.data.tier))) {
+    const problem = parsed.success ? `unknown tier "${parsed.data.tier}"` : parsed.error.issues.map((i) => i.message).join("; ");
+    throw new DomainError(`a row change takes tier (${tiers.join(" / ")}) and/or effort, nothing else: ${problem}`);
+  }
   return parsed.data;
 }
 
@@ -468,10 +496,10 @@ export function tierHasRowFor(table: ExecutionSettingTable, providers: readonly 
   return table.some((row) => row.tier === tier && providers.includes(row.provider));
 }
 
-/** tier の提案の修正値の検査(ADR 0150 決定2): `to` だけで、pin の tier より下の任意のティア。 */
-export function parseAgentTierAmendment(proposal: RegistryProposal, amendment: unknown): Tier {
-  const parsed = z.object({ to: z.enum(TIERS) }).strict().safeParse(amendment);
-  if (!parsed.success || TIERS.indexOf(parsed.data.to) >= TIERS.indexOf(proposal.pin.tier)) {
+/** tier の提案の修正値の検査(ADR 0150 決定2): `to` だけで、pin の tier より下の任意のティア(段の順序は盤面の一覧)。 */
+export function parseAgentTierAmendment(tiers: readonly Tier[], proposal: RegistryProposal, amendment: unknown): Tier {
+  const parsed = z.object({ to: z.string() }).strict().safeParse(amendment);
+  if (!parsed.success || !tiers.includes(parsed.data.to) || tiers.indexOf(parsed.data.to) >= tiers.indexOf(proposal.pin.tier)) {
     throw new DomainError(`an agent tier amendment takes only to, a tier below ${proposal.pin.tier}`);
   }
   return parsed.data.to;
@@ -489,6 +517,7 @@ export function applyExecutionSettingsChange(db: Db, change: ExecutionSettingsCh
         if (provider === "anthropic" && isClaudeModelAlias(model)) {
           throw new DomainError(`"${model}" is a Claude CLI alias whose target moves with CLI updates; a table row takes a concrete model id (e.g. claude-opus-5-5)`);
         }
+        assertKnownTier(db, "tier", tier);
         const { key } = change;
         const table = loadExecutionSettingTable(db);
         if (key && !table.some((row) => matchesRowKey(row, key))) {
@@ -497,16 +526,20 @@ export function applyExecutionSettingsChange(db: Db, change: ExecutionSettingsCh
         assertRowFits(table, change.row, key);
         if (key) {
           db.prepare(
-            `UPDATE execution_settings SET provider = ?, tier = ?, model = ?, effort = ?, price_in = ?, price_out = ?
+            `UPDATE execution_settings SET provider = ?, tier_id = (SELECT id FROM tiers WHERE name = ?), model = ?, effort = ?, price_in = ?, price_out = ?
              WHERE provider = ? AND model = ? AND effort = ?`,
           ).run(provider, tier, model, effort, price_in, price_out, key.provider, key.model, key.effort);
         } else {
-          db.prepare("INSERT INTO execution_settings (provider, tier, model, effort, price_in, price_out) VALUES (?, ?, ?, ?, ?, ?)").run(
+          db.prepare("INSERT INTO execution_settings (provider, tier_id, model, effort, price_in, price_out) VALUES (?, (SELECT id FROM tiers WHERE name = ?), ?, ?, ?, ?)").run(
             provider, tier, model, effort, price_in, price_out,
           );
         }
         break;
       }
+      case "retrospective_tier":
+        assertKnownTier(db, "retrospective_tier", change.value);
+        db.prepare("UPDATE execution_defaults SET retrospective_tier_id = (SELECT id FROM tiers WHERE name = ?)").run(change.value);
+        break;
       case "delete_row":
         // 消す行が無ければ何も変わっていないので、操作イベントも残さない
         if (db.prepare("DELETE FROM execution_settings WHERE provider = ? AND model = ? AND effort = ?").run(change.provider, change.model, change.effort).changes === 0) return null;
@@ -516,9 +549,7 @@ export function applyExecutionSettingsChange(db: Db, change: ExecutionSettingsCh
         const value =
           typeof change.value === "boolean" ? Number(change.value)
           : change.setting === "provider_rank" ? JSON.stringify(change.value) : change.value;
-        db.prepare(
-          `INSERT INTO execution_defaults (id, ${column}) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET ${column} = excluded.${column}`,
-        ).run(value);
+        db.prepare(`UPDATE execution_defaults SET ${column} = ?`).run(value);
       }
     }
     const eventId = appendEvent(db, {
@@ -585,16 +616,17 @@ export function settleStaleProposals(db: Db, at: Date, observedEventId: number |
 
 function loadExecutionDefaults(db: Db): ExecutionDefaults {
   const row = db
-    .prepare("SELECT advisor_above_main, provider_rank, priority, learner_promoted, retrospective_tier FROM execution_defaults WHERE id = 1")
-    .get() as
-    | { advisor_above_main: number; provider_rank: string | null; priority: Priority | null; learner_promoted: number; retrospective_tier: Tier | null }
-    | undefined;
+    .prepare(
+      `SELECT advisor_above_main, provider_rank, priority, learner_promoted, t.name AS retrospective_tier
+       FROM execution_defaults JOIN tiers t ON t.id = execution_defaults.retrospective_tier_id`,
+    )
+    .get() as { advisor_above_main: number; provider_rank: string | null; priority: Priority | null; learner_promoted: number; retrospective_tier: Tier };
   return {
-    advisorAboveMain: row?.advisor_above_main === 1,
-    providerRank: row?.provider_rank ? (JSON.parse(row.provider_rank) as Provider[]) : PROVIDER_VALUES,
-    priority: row?.priority ?? BOARD_DEFAULT_PRIORITY,
-    learnerPromoted: row?.learner_promoted === 1,
-    retrospectiveTier: row?.retrospective_tier ?? BOARD_DEFAULT_RETROSPECTIVE_TIER,
+    advisorAboveMain: row.advisor_above_main === 1,
+    providerRank: row.provider_rank ? (JSON.parse(row.provider_rank) as Provider[]) : PROVIDER_VALUES,
+    priority: row.priority ?? BOARD_DEFAULT_PRIORITY,
+    learnerPromoted: row.learner_promoted === 1,
+    retrospectiveTier: row.retrospective_tier,
   };
 }
 
@@ -610,7 +642,7 @@ type SelectorTask = Pick<Task, "type" | "tier" | "priority" | "review_tier">;
  *  settings タブと管理MCP が書く —— ADR 0110 決定5)。pickup ごとに読み直すので、
  *  書いた値は次の pickup / skipped 表示から効く。
  *
- *  `provider` / `tier` の文字列が列挙に収まっていることは、定義を受け入れる門
+ *  `provider` / `tier` の文字列が列挙・盤面の段の一覧に収まっていることは、定義を受け入れる門
  *  (`assertValidAgentDefinition`)が既に保証している。 */
 function selectorInputFor(
   db: Db,
@@ -627,7 +659,8 @@ function selectorInputFor(
     taskTier: task?.type === "review" ? undefined : task?.tier ?? undefined,
     priority: task?.priority ?? defaults.priority,
     reviewTier: task?.type === "review" ? task.review_tier ?? undefined : undefined,
-    agentTier: definition.tier as Tier | undefined,
+    agentTier: definition.tier,
+    boardTier: boardDefaultTier(db),
     advisorAboveMain: defaults.advisorAboveMain,
   };
 }

@@ -1,4 +1,5 @@
 import type { Db } from "./db.js";
+import type { Tier } from "./execution-setting.js";
 import { openQuarantineQuestion, registerQuarantine } from "./quarantine.js";
 import {
   type AgentDefinition,
@@ -47,11 +48,13 @@ export function resolveExecutionAgent(
   registry: Registry,
   defaultAgentName: string,
   taskAssignee: string | null,
+  /** 盤面の段の名前(ADR 0200 決定2): agent.md の `tier` を検査する一覧。 */
+  tiers: readonly Tier[],
 ): ResolvedAgent {
   const name = taskAssignee ?? defaultAgentName;
   const definition = ownEntry(registry.agents, name);
   if (!definition) throw new UnknownAgentError(name);
-  assertValidAgentDefinition(name, definition);
+  assertValidAgentDefinition(name, definition, tiers);
   // 組み込み(ADR 0117 決定1)だけは profile を registry から引かない —— 種まきは
   // auditor の profile を書かず、組み込みは授権を増やさないので、床そのものである
   // ADR 0013 の定数を直に返す(registry の authority map には注入しない: 注入すると

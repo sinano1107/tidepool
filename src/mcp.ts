@@ -4,7 +4,7 @@ import { z } from "zod";
 import type { AgentAdmin } from "./agent-create.js";
 import type { Clock } from "./clock.js";
 import type { Db } from "./db.js";
-import { PRIORITY_FIELD_DESCRIPTION, TIER_FIELD_DESCRIPTION, TIERS } from "./execution-setting.js";
+import { PRIORITY_FIELD_DESCRIPTION, tierFieldDescriptions } from "./execution-setting.js";
 import type { GitHubClient } from "./github.js";
 import type { GitHubAuth } from "./github-auth.js";
 import { assertMemoryReferencesKnown, assertReviewerKnown, assertWorkspaceKnown } from "./human-verbs.js";
@@ -337,7 +337,7 @@ async function taskContext(deps: McpDeps, task: Task) {
 const next = z.string().optional().describe("The next string from a previous response of this verb; pass it alone.");
 
 /** decompose と redecompose が共有する。 */
-function assertChildrenKnown(deps: McpDeps, children: z.infer<typeof decomposeChildrenSchema>): void {
+function assertChildrenKnown(deps: McpDeps, children: z.infer<ReturnType<typeof decomposeChildrenSchema>>): void {
   // an explicitly named child workspace must exist in the registry
   // (issue #26) — this is the registering agent's own mistake, not an
   // authority question, so it's rejected outright before anything
@@ -377,36 +377,38 @@ function assertChildrenKnown(deps: McpDeps, children: z.infer<typeof decomposeCh
   }
 }
 
-/** decompose と redecompose が共有する子の入力。 */
-const decomposeChildrenSchema = z.array(
-  z.object({
-    title: z.string().min(1),
-    purpose: z.string().min(1),
-    completion_criteria: z.string().min(1),
-    risk_flag: z.boolean().optional(),
-    assignee: z
-      .string()
-      .optional()
-      .describe(
-        "Who to delegate to. Your own system prompt's Roster section lists who " +
-          "you can assign directly; call list_agents for the full board.",
-      ),
-    workspace: z.string().optional(),
-    review_flag: z
-      .boolean()
-      .optional()
-      .describe(
-        "Opt this child into an independent review of its deliverable on completion. " +
-          "No authority check applies — declaring it is never out of scope.",
-      ),
-    tier: z.string().optional().describe(TIER_FIELD_DESCRIPTION),
-    review_by: z.array(z.string().min(1)).optional()
-      .describe("Reviewer agent names; one completion review per name. Omit to use the board Auditor."),
-    review_tier: z.string().optional()
-      .describe("Quality tier for completion reviews; overrides each reviewer's tier, then the board default."),
-    priority: z.string().optional().describe(PRIORITY_FIELD_DESCRIPTION),
-  }),
-);
+/** decompose と redecompose が共有する子の入力。段の説明は盤面の一覧から組む(ADR 0200 決定3)。 */
+function decomposeChildrenSchema(db: Db) {
+  const tierDescriptions = tierFieldDescriptions(db);
+  return z.array(
+    z.object({
+      title: z.string().min(1),
+      purpose: z.string().min(1),
+      completion_criteria: z.string().min(1),
+      risk_flag: z.boolean().optional(),
+      assignee: z
+        .string()
+        .optional()
+        .describe(
+          "Who to delegate to. Your own system prompt's Roster section lists who " +
+            "you can assign directly; call list_agents for the full board.",
+        ),
+      workspace: z.string().optional(),
+      review_flag: z
+        .boolean()
+        .optional()
+        .describe(
+          "Opt this child into an independent review of its deliverable on completion. " +
+            "No authority check applies — declaring it is never out of scope.",
+        ),
+      tier: z.string().optional().describe(tierDescriptions.tier),
+      review_by: z.array(z.string().min(1)).optional()
+        .describe("Reviewer agent names; one completion review per name. Omit to use the board Auditor."),
+      review_tier: z.string().optional().describe(tierDescriptions.review_tier),
+      priority: z.string().optional().describe(PRIORITY_FIELD_DESCRIPTION),
+    }),
+  );
+}
 
 /** Domain verbs only, no generic CRUD (ADR 0002). Attribution comes from the
  *  spawn-time ?task= URL param and must match the current slot task. */
@@ -560,7 +562,7 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
         BOARD_WRITE_LANGUAGE_RULE,
       inputSchema: {
         reason: z.string().min(1),
-        children: decomposeChildrenSchema,
+        children: decomposeChildrenSchema(deps.db),
       },
     },
     async (input) =>
@@ -661,7 +663,7 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
         "decomposes the remaining work exactly as decompose does, and frees the slot. Only " +
         "while a child of this task has an open premise breach. " +
         BOARD_WRITE_LANGUAGE_RULE,
-      inputSchema: { reason: z.string().min(1), children: decomposeChildrenSchema },
+      inputSchema: { reason: z.string().min(1), children: decomposeChildrenSchema(deps.db) },
     },
     async (input) =>
       runReleasingVerb(deps, attributedTaskId, (task, workerId, now) => {
@@ -930,11 +932,11 @@ function registerRoutingMetaReviewVerbs(server: McpServer, deps: McpDeps, run: M
     {
       description:
         "Propose a routing change to the human as one approve / reject question attached to this task. op row replaces the " +
-        "tier (economy / standard / frontier) and/or effort of one existing execution-setting row, named by provider, model and effort; " +
+        "tier (one of the board's tiers) and/or effort of one existing execution-setting row, named by provider, model and effort; " +
         "change takes only those two fields, and the human may amend them when approving. A change that would give the model a second row in one tier, or the same effort twice, is refused. op promote makes work tasks run on the " +
         "learner's recommendation and is only accepted while the learner is not promoted; op demote returns them to the table and " +
         "is only accepted while it is promoted; neither takes row, change, or an amendment. op agent_tier lowers a non-built-in " +
-        "agent's default tier by exactly one step (an agent with no tier runs at economy and cannot be lowered): agent names it, " +
+        "agent's default tier by exactly one step (an agent with no tier runs at the board default tier): agent names it, " +
         "to is the tier one step below, and evidence lists the worker_spawned event ids of that agent's sessions your case rests " +
         "on; it is refused when the execution-setting table has no row at the target tier for any of the agent's providers. The " +
         "human may amend to with any lower tier when approving, and approval commits the new tier to the registry. rationale is your evidence summary " +
@@ -946,7 +948,7 @@ function registerRoutingMetaReviewVerbs(server: McpServer, deps: McpDeps, run: M
         row: z.object({ provider: z.string(), model: z.string(), effort: z.string() }).optional().describe("op row only."),
         change: z.record(z.string(), z.unknown()).optional().describe("op row only: tier and/or effort, nothing else."),
         agent: z.string().optional().describe("op agent_tier only: the agent whose default tier to lower."),
-        to: z.enum(TIERS).optional().describe("op agent_tier only: the tier one step below the agent's current tier."),
+        to: z.string().optional().describe("op agent_tier only: the tier one step below the agent's current tier."),
         evidence: z.array(z.number().int()).optional().describe("op agent_tier only: worker_spawned event ids of the agent's sessions."),
         rationale: z.string().min(1),
       },

@@ -1866,7 +1866,7 @@ describe("ClaudeCodeWorker", () => {
   it("表の行を書き換えれば次の spawn の model / effort が変わる — 正本は DB であって adapter の定数ではない", async () => {
     const { start, calls, db } = await makeWorker();
     db.prepare(
-      "UPDATE execution_settings SET model = 'claude-opus-5', effort = 'max' WHERE provider = 'anthropic' AND tier = 'economy'",
+      "UPDATE execution_settings SET model = 'claude-opus-5', effort = 'max' WHERE provider = 'anthropic' AND tier_id = (SELECT id FROM tiers WHERE name = 'economy')",
     ).run();
     start();
     expect(calls[0]!.args.join(" ")).toContain("--model claude-opus-5");
@@ -1877,7 +1877,7 @@ describe("ClaudeCodeWorker", () => {
     const registryDir = await makeRegistry();
     const db = openDb(":memory:");
     db.prepare(
-      "UPDATE execution_settings SET effort = 'super-fast' WHERE provider = 'anthropic' AND tier = 'economy'",
+      "UPDATE execution_settings SET effort = 'super-fast' WHERE provider = 'anthropic' AND tier_id = (SELECT id FROM tiers WHERE name = 'economy')",
     ).run();
     const logDir = await tempDir("tidepool-worker-logs-");
     expect(
@@ -1900,7 +1900,7 @@ describe("ClaudeCodeWorker", () => {
     const registryDir = await makeRegistry();
     const db = openDb(":memory:");
     db.prepare(
-      "UPDATE execution_settings SET effort = 'ultracode' WHERE provider = 'anthropic' AND tier = 'economy'",
+      "UPDATE execution_settings SET effort = 'ultracode' WHERE provider = 'anthropic' AND tier_id = (SELECT id FROM tiers WHERE name = 'economy')",
     ).run();
     const logDir = await tempDir("tidepool-worker-logs-");
     expect(

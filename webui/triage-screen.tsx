@@ -28,6 +28,8 @@ interface TpQuestion {
   /** 修正値を添えられる提案 question(ADR 0150 決定2・ADR 0152 決定2): 表の行の提案は tier / effort、agent の tier の提案は下げ先 `to`、
    *  memory の approve / consolidate は `candidateId` の文言と宛先(Exemplar なら title・宛先と注釈 list)。 */
   amendable?: 'row' | 'agent_tier' | 'memory';
+  /** agent の tier の提案の pin の tier —— 下げ先の選択肢はこれより下の段(ADR 0150 決定2)。 */
+  amendBelow?: string;
   candidateId?: number;
   /** comment が要る選択肢 —— 盤面の `needs_comment` 注釈(ADR 0179 決定4)。 */
   needsComment?: string[];
@@ -220,6 +222,26 @@ async function translateMemoryWording(translate: TpTranslateFn, english: Record<
   return { english: out, back };
 }
 
+/** 段の修正値の select(ADR 0200 決定1): 選択肢は盤面の段の一覧 —— このカードは設定を持たないので自分で引く。`below` があれば
+ *  それより下の段だけ。引けなければ選択肢は「as proposed」だけで、approve はそのまま送れる。 */
+function TpTierAmendment({ label, below, value, onChange }: {
+  label: string;
+  below?: string;
+  value: string;
+  onChange: (tier: string) => void;
+}) {
+  const { Select } = window.TidepoolDesignSystem_8a0ead;
+  const [tiers, setTiers] = React.useState<readonly string[]>([]);
+  React.useEffect(() => {
+    api('GET /api/settings/execution').then(({ tiers }) => setTiers(tiers)).catch(() => {});
+  }, []);
+  const options = below === undefined ? tiers : tiers.slice(0, Math.max(tiers.indexOf(below), 0));
+  return (
+    <Select label={label} value={value} onChange={(e) => onChange(e.target.value)}
+      options={[{ value: '', label: 'as proposed' }, ...options.map((tier) => ({ value: tier, label: tier }))]} />
+  );
+}
+
 // memory の提案の修正値(ADR 0152 決定2・5): candidate の文言を初期値に、settings と同じ英語 + 原文の2欄と逆翻訳。
 // Exemplar の candidate(#950)は settings の Exemplar の扉と同じ注釈の form で、case は candidate の出所に固定。
 // candidate から変えた欄(と原文)だけを修正値として上に渡す —— 何も変えなければ素の approve になる。
@@ -358,7 +380,7 @@ function TpQuestionCard({ q, answer, onAnswer, locked = false, onTranslate, onOp
   locked?: boolean;
   onTranslate?: TpTranslateFn;
 }) {
-  const { Card, AgentChip, Switch, Select, Input, Button } = window.TidepoolDesignSystem_8a0ead;
+  const { Card, AgentChip, Switch, Input, Button } = window.TidepoolDesignSystem_8a0ead;
   const items = q.items;
   const [draft, setDraft] = React.useState<(string | null)[]>(() => answer ?? items.map(() => null));
   // a server-confirmed answer (locked) always wins over in-progress local picks
@@ -424,8 +446,8 @@ function TpQuestionCard({ q, answer, onAnswer, locked = false, onTranslate, onOp
       )}
       {q.amendable === 'agent_tier' && !locked && (
         <div style={{ display: 'flex', gap: 8, marginBottom: 14 }}>
-          <Select label="Amend target tier (optional)" value={amendment.to ?? ''} onChange={(e) => setAmendment({ ...amendment, to: e.target.value })}
-            options={[{ value: '', label: 'as proposed' }, ...['economy', 'standard'].map((tier) => ({ value: tier, label: tier }))]} />
+          <TpTierAmendment label="Amend target tier (optional)" below={q.amendBelow} value={amendment.to ?? ''}
+            onChange={(to) => setAmendment({ ...amendment, to })} />
         </div>
       )}
       {q.amendable === 'memory' && !locked && (
@@ -433,8 +455,8 @@ function TpQuestionCard({ q, answer, onAnswer, locked = false, onTranslate, onOp
       )}
       {q.amendable === 'row' && !locked && (
         <div style={{ display: 'flex', gap: 8, marginBottom: 14 }}>
-          <Select label="Amend tier (optional)" value={amendment.tier ?? ''} onChange={(e) => setAmendment({ ...amendment, tier: e.target.value })}
-            options={[{ value: '', label: 'as proposed' }, ...['economy', 'standard', 'frontier'].map((tier) => ({ value: tier, label: tier }))]} />
+          <TpTierAmendment label="Amend tier (optional)" value={amendment.tier ?? ''}
+            onChange={(tier) => setAmendment({ ...amendment, tier })} />
           <Input label="Amend effort (optional)" value={amendment.effort ?? ''} placeholder="as proposed" mono
             onChange={(e) => setAmendment({ ...amendment, effort: e.target.value.trim() })} />
         </div>

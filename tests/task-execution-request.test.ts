@@ -50,6 +50,18 @@ it("ティアの不正値は登録を拒否する — 表に無いティアで�
   ).toThrow(DomainError);
 });
 
+it("盤面の段の一覧に無い review_tier も登録を拒否し、エラーはいまの一覧を返す(ADR 0200 決定2)", () => {
+  const db = openDb(":memory:");
+  expect(() =>
+    registerTask(
+      db,
+      { type: "review", title: "t", purpose: "p", completion_criteria: "c", review_tier: "platinum" },
+      new Date(0),
+      ...HUMAN_WEBUI,
+    ),
+  ).toThrow(new DomainError('unknown review_tier "platinum" — one of economy, standard, frontier'));
+});
+
 it("優先順位の不正値も登録を拒否する — 保存するだけの列でも不発の値は持たない", () => {
   const db = openDb(":memory:");
   expect(() =>

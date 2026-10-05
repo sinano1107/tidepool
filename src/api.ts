@@ -23,7 +23,7 @@ import {
   executionSettingsChangeSchema,
   PRIORITIES,
   readExecutionSettingsWithQuarantine,
-  TIERS,
+  tierNames,
 } from "./execution-setting.js";
 import { type GitHubClient, OPEN_ISSUES_LIMIT } from "./github.js";
 import { githubLoggedIn } from "./github-auth.js";
@@ -1604,13 +1604,13 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   });
 
   // ADR 0110 決定5 / issue #545: 表・advisor above main・Provider 順位・優先順位の既定。
-  // 選択肢(providers / tiers / priorities)もサーバ供給 —— WebUI が列挙を直書きして
+  // 選択肢(providers / 盤面の段 / priorities)もサーバ供給 —— WebUI が列挙を直書きして
   // drift しないため(/api/agents の providers と同じ配線)
   router.get("/settings/execution", (_req, res) => {
     res.json({
       ...readExecutionSettingsWithQuarantine(db),
       providers: PROVIDER_OPTIONS,
-      tiers: TIERS,
+      tiers: tierNames(db),
       priorities: PRIORITIES,
     } satisfies WireContract["GET /api/settings/execution"]);
   });

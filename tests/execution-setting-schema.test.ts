@@ -6,7 +6,8 @@ import { tempDir } from "./harness.js";
 
 /** 表を読む口は production の呼び手(`resolveExecutionSetting`)しかない
  *  (ADR 0107 決定5)。schema 層のテストは行を SQL で直に言い、読めていることは
- *  その呼び手を通して確かめる。 */
+ *  その呼び手を通して確かめる。行は段を id で指すので(ADR 0200 決定2)、SQL は段の名前を tiers から引く。 */
+const tierId = (name: string) => `(SELECT id FROM tiers WHERE name = '${name}')`;
 const deckhand = { provider: [{ name: "anthropic", advisor: false }], tier: undefined };
 
 async function boardPath(name: string): Promise<string> {
@@ -16,13 +17,19 @@ async function boardPath(name: string): Promise<string> {
 it("実行設定の表は種の7行から DB へ初期化される —— 価格2列つきのモデル分類の行で、moonshot は economy の1行(ADR 0110 決定3 / ADR 0114 決定2)", async () => {
   const db = openDb(await boardPath("execution-settings-seed"));
   expect(
-    db.prepare("SELECT provider, tier, model, effort, price_in, price_out FROM execution_settings ORDER BY provider, model").all(),
+    db
+      .prepare(
+        "SELECT provider, t.name AS tier, model, effort, price_in, price_out FROM execution_settings JOIN tiers t ON t.id = tier_id ORDER BY provider, model",
+      )
+      .all(),
   ).toEqual(
     [...SEED_EXECUTION_SETTINGS].sort(
       (a, b) => a.provider.localeCompare(b.provider) || a.model.localeCompare(b.model),
     ),
   );
-  expect(db.prepare("SELECT tier FROM execution_settings WHERE provider = 'moonshot'").all()).toEqual([{ tier: "economy" }]);
+  expect(db.prepare("SELECT t.name AS tier FROM execution_settings JOIN tiers t ON t.id = tier_id WHERE provider = 'moonshot'").all()).toEqual([
+    { tier: "economy" },
+  ]);
   expect(resolveExecutionSetting(db, deckhand, undefined)).toMatchObject({ model: "claude-sonnet-5-5", effort: "high" });
   db.close();
 });
@@ -30,7 +37,7 @@ it("実行設定の表は種の7行から DB へ初期化される —— 価格
 it("主キーは (provider, model) —— 同じ Provider × ティアに複数行を置ける。負の価格は拒む", async () => {
   const db = openDb(await boardPath("execution-settings-pk"));
   const insert = db.prepare(
-    "INSERT INTO execution_settings (provider, tier, model, effort, price_in, price_out) VALUES (?, ?, ?, ?, ?, ?)",
+    "INSERT INTO execution_settings (provider, tier_id, model, effort, price_in, price_out) VALUES (?, (SELECT id FROM tiers WHERE name = ?), ?, ?, ?, ?)",
   );
   insert.run("anthropic", "economy", "haiku", "high", 1, 5);
   expect(() => insert.run("anthropic", "standard", "haiku", "high", 1, 5)).toThrow(/UNIQUE|PRIMARY KEY/);
@@ -41,16 +48,16 @@ it("主キーは (provider, model) —— 同じ Provider × ティアに複数�
 it("初期化の後は DB が正本 — 書き換えた行は再オープンで種へ戻らない", async () => {
   const path = await boardPath("execution-settings-authority");
   const first = openDb(path);
-  first.prepare("UPDATE execution_settings SET model = 'haiku' WHERE provider = 'anthropic' AND tier = 'economy'").run();
-  first.prepare("DELETE FROM execution_settings WHERE provider = 'openai' AND tier = 'frontier'").run();
+  first.prepare(`UPDATE execution_settings SET model = 'haiku' WHERE provider = 'anthropic' AND tier_id = ${tierId("economy")}`).run();
+  first.prepare(`DELETE FROM execution_settings WHERE provider = 'openai' AND tier_id = ${tierId("frontier")}`).run();
   first.close();
 
   const second = openDb(path);
   expect(
-    second.prepare("SELECT model FROM execution_settings WHERE provider = 'anthropic' AND tier = 'economy'").get(),
+    second.prepare(`SELECT model FROM execution_settings WHERE provider = 'anthropic' AND tier_id = ${tierId("economy")}`).get(),
   ).toEqual({ model: "haiku" });
   expect(
-    second.prepare("SELECT count(*) AS n FROM execution_settings WHERE provider = 'openai' AND tier = 'frontier'").get(),
+    second.prepare(`SELECT count(*) AS n FROM execution_settings WHERE provider = 'openai' AND tier_id = ${tierId("frontier")}`).get(),
   ).toEqual({ n: 0 });
   second.close();
 });
@@ -68,7 +75,7 @@ it("全行を消した表も再オープンで種へ戻らない —— 種で�
 
 it("execution_defaults の priority 列は quality / cost 以外を拒む(ADR 0114 決定1 / issue #545)", async () => {
   const db = openDb(await boardPath("execution-defaults-columns"));
-  expect(() => db.prepare("INSERT INTO execution_defaults (id, priority) VALUES (1, 'speed')").run()).toThrow(/CHECK/);
+  expect(() => db.prepare("UPDATE execution_defaults SET priority = 'speed'").run()).toThrow(/CHECK/);
   db.close();
 });
 
@@ -86,7 +93,7 @@ it("「main より序列が上の model を advisor に使える」フラグの�
   const db = openDb(path);
   const withAdvisor = { provider: [{ name: "anthropic", advisor: true }], tier: "economy" };
   expect(resolveExecutionSetting(db, withAdvisor, undefined)?.advisor).toBe("claude-sonnet-5-5");
-  db.prepare("INSERT INTO execution_defaults (id, advisor_above_main) VALUES (1, 1)").run();
+  db.prepare("UPDATE execution_defaults SET advisor_above_main = 1").run();
   expect(resolveExecutionSetting(db, withAdvisor, undefined)?.advisor).toBe("fable");
   db.close();
 });

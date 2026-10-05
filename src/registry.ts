@@ -5,7 +5,7 @@ import { parse as parseTwemoji } from "@twemoji/parser";
 import { parse as parseYaml } from "yaml";
 import { z } from "zod";
 import { DEFAULT_AUDITOR_NAME } from "./defaults.js";
-import { TIERS } from "./execution-setting.js";
+import type { Tier } from "./execution-setting.js";
 import {
   authedGitBounded,
   GIT_NETWORK_TIMEOUT_MS,
@@ -42,10 +42,10 @@ export interface AgentDefinition {
   provider: readonly AgentProviderEntry[];
   /** 既定の要求ティア(CONTEXT.md「要求」/ ADR 0110 決定1): この agent の
    *  セッションが既定でどの品質ティアを要求するか。省略 → 盤面既定
-   *  (`BOARD_DEFAULT_TIER`)。「常に上位で」と言いたい Auditor のような役割の
+   *  (盤面設定、ADR 0200 決定4)。「常に上位で」と言いたい Auditor のような役割の
    *  ための1行であり、model 名ではない —— 具体の model / effort は pickup 時に
    *  selector が盤面の表から選ぶ。ここでは `provider` と同じく自由文字列のまま
-   *  持ち、列挙の検査は登録と pickup の門(`assertValidAgentDefinition`)が行う。 */
+   *  持ち、盤面の段の一覧に対する検査は登録と pickup の門(`assertValidAgentDefinition`)が行う。 */
   tier?: string;
   /** ピン留めが退役した後も agent.md に残っている値の名前(ADR 0110 決定1)。
    *  `model` / `effort`(実行設定へ移った)と、トップレベルの `advisor`(entry の
@@ -307,6 +307,8 @@ export interface AgentDefinitionCheck {
 export function assertValidAgentDefinition(
   agentName: string,
   definition: AgentDefinitionCheck,
+  /** 盤面の段の名前(ADR 0200 決定2): agent.md の `tier` はこの一覧に対して検査する。 */
+  tiers: readonly Tier[],
 ): void {
   const { provider: entries, tier, skills = [], retiredFields = [] } = definition;
   if (retiredFields.length > 0) {
@@ -315,7 +317,7 @@ export function assertValidAgentDefinition(
       `agent.md no longer carries the execution setting: ${retiredFields.join(" / ")} (ADR 0110 決定1). ` +
         "model and effort are chosen at pickup from the board's provider × tier table, and advisor is a " +
         "property of a provider entry whose model is derived from that same table (ADR 0116 決定2) — " +
-        `declare a tier (${TIERS.join(" / ")}) and/or write the advisor on its entry, e.g. ` +
+        `declare a tier (${tiers.join(" / ")}) and/or write the advisor on its entry, e.g. ` +
         "`provider: [{ name: anthropic, advisor: true }]`, instead",
     );
   }
@@ -326,10 +328,10 @@ export function assertValidAgentDefinition(
         "route satisfies, leaves no route this agent could ever run on (ADR 0116 決定1)",
     );
   }
-  if (tier !== undefined && !(TIERS as readonly string[]).includes(tier)) {
+  if (tier !== undefined && !tiers.includes(tier)) {
     throw new InvalidAgentDefinitionError(
       agentName,
-      `unknown tier "${tier}" (expected one of ${TIERS.join(" / ")}) — ADR 0110 決定1`,
+      `unknown tier "${tier}" (expected one of the board's tiers: ${tiers.join(" / ")}) — ADR 0110 決定1 / ADR 0200 決定2`,
     );
   }
   // entry 単位(ADR 0110 決定1): advisor も skill も**その経路**の性質なので、

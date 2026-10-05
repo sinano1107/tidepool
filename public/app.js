@@ -252,6 +252,24 @@ async function translateMemoryWording(translate, english, originals) {
   }
   return { english: out, back };
 }
+function TpTierAmendment({ label, below, value, onChange }) {
+  const { Select } = window.TidepoolDesignSystem_8a0ead;
+  const [tiers, setTiers] = React.useState([]);
+  React.useEffect(() => {
+    api("GET /api/settings/execution").then(({ tiers: tiers2 }) => setTiers(tiers2)).catch(() => {
+    });
+  }, []);
+  const options = below === void 0 ? tiers : tiers.slice(0, Math.max(tiers.indexOf(below), 0));
+  return /* @__PURE__ */ React.createElement(
+    Select,
+    {
+      label,
+      value,
+      onChange: (e) => onChange(e.target.value),
+      options: [{ value: "", label: "as proposed" }, ...options.map((tier) => ({ value: tier, label: tier }))]
+    }
+  );
+}
 function TpMemoryAmendment({ candidateId, onTranslate, onChange, onDeadAddressee }) {
   const { Button, Input, Select } = window.TidepoolDesignSystem_8a0ead;
   const [base, setBase] = React.useState(null);
@@ -333,7 +351,7 @@ function TpMemoryAmendment({ candidateId, onTranslate, onChange, onDeadAddressee
   return /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 8, marginBottom: 14 } }, onTranslate && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(Input, { label: "Amend original title (optional)", value: draft.originalTitle, onChange: set("originalTitle") }), /* @__PURE__ */ React.createElement(Input, { label: "Amend original (optional)", multiline: true, rows: 3, value: draft.originalText, onChange: set("originalText") }), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", disabled: !draft.originalTitle.trim() || !draft.originalText.trim(), onClick: () => translate(true) }, "Translate")), /* @__PURE__ */ React.createElement(Input, { label: "Title (English)", value: draft.title, onChange: set("title") }), /* @__PURE__ */ React.createElement(Input, { label: "English (approved as the canonical text)", multiline: true, rows: 3, value: draft.text, onChange: set("text") }), addressee, onTranslate && /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", disabled: !draft.title.trim() || !draft.text.trim(), onClick: () => translate(false) }, "Back-translate"), back && /* @__PURE__ */ React.createElement("p", { style: { margin: 0, fontSize: "var(--text-xs)", color: "var(--text-muted)" }, "data-testid": "amendment-back-translation" }, "back: ", back), error && /* @__PURE__ */ React.createElement("div", { style: { fontSize: "var(--text-xs)", color: "var(--coral-4)" } }, error));
 }
 function TpQuestionCard({ q, answer, onAnswer, locked = false, onTranslate, onOpenSettings }) {
-  const { Card, AgentChip, Switch, Select, Input, Button } = window.TidepoolDesignSystem_8a0ead;
+  const { Card, AgentChip, Switch, Input, Button } = window.TidepoolDesignSystem_8a0ead;
   const items = q.items;
   const [draft, setDraft] = React.useState(() => answer ?? items.map(() => null));
   React.useEffect(() => {
@@ -363,20 +381,19 @@ function TpQuestionCard({ q, answer, onAnswer, locked = false, onTranslate, onOp
   }, [translateOn]);
   const translatedItems = translation && translation.status === "translated" ? translation.items : null;
   return /* @__PURE__ */ React.createElement(Card, { style: { marginBottom: 12 } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "baseline", gap: 8, marginBottom: 6 } }, /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--text-muted)" } }, q.id), /* @__PURE__ */ React.createElement(AgentChip, { name: q.agent, icon: q.agentIcon, board: q.board, size: "sm" }), /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--text-secondary)" } }, q.agent), q.blocking && /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--text-muted)", marginLeft: "auto" } }, "blocks ", q.blocking)), q.kind === "approval" && /* @__PURE__ */ React.createElement("span", { style: { display: "inline-block", fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--sun-4)", background: "var(--sun-1)", borderRadius: "var(--radius-full)", padding: "2px 10px", marginBottom: 6 } }, "out-of-authority \u2192 approval"), onTranslate && /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "flex-end", marginBottom: 6 } }, /* @__PURE__ */ React.createElement(Switch, { label: "\u8A33\u3092\u6DFB\u3048\u308B", checked: translateOn, onChange: setTranslateOn })), /* @__PURE__ */ React.createElement("div", { style: { fontSize: "var(--text-sm)", color: "var(--text-secondary)", marginBottom: q.note ? 6 : 14, whiteSpace: "pre-wrap" } }, q.context), translateOn && translation && (translation.status === "translated" ? /* @__PURE__ */ React.createElement("div", { style: { fontSize: "var(--text-sm)", color: "var(--tide-5)", marginBottom: q.note ? 6 : 14, whiteSpace: "pre-wrap" } }, translation.purpose) : /* @__PURE__ */ React.createElement("div", { style: { marginBottom: q.note ? 6 : 14 } }, /* @__PURE__ */ React.createElement(TpTranslationNote, { result: translation }))), q.note && /* @__PURE__ */ React.createElement("div", { style: { fontSize: "var(--text-xs)", color: "var(--sun-4)", marginBottom: 14 } }, "\u26A0 ", q.note), q.opensSettings && onOpenSettings && !locked && /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 14 } }, /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", onClick: onOpenSettings }, "Open settings")), q.amendable === "agent_tier" && !locked && /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8, marginBottom: 14 } }, /* @__PURE__ */ React.createElement(
-    Select,
+    TpTierAmendment,
     {
       label: "Amend target tier (optional)",
+      below: q.amendBelow,
       value: amendment.to ?? "",
-      onChange: (e) => setAmendment({ ...amendment, to: e.target.value }),
-      options: [{ value: "", label: "as proposed" }, ...["economy", "standard"].map((tier) => ({ value: tier, label: tier }))]
+      onChange: (to) => setAmendment({ ...amendment, to })
     }
   )), q.amendable === "memory" && !locked && /* @__PURE__ */ React.createElement(TpMemoryAmendment, { candidateId: q.candidateId, onTranslate, onChange: setAmendment, onDeadAddressee: setDeadAddressee }), q.amendable === "row" && !locked && /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8, marginBottom: 14 } }, /* @__PURE__ */ React.createElement(
-    Select,
+    TpTierAmendment,
     {
       label: "Amend tier (optional)",
       value: amendment.tier ?? "",
-      onChange: (e) => setAmendment({ ...amendment, tier: e.target.value }),
-      options: [{ value: "", label: "as proposed" }, ...["economy", "standard", "frontier"].map((tier) => ({ value: tier, label: tier }))]
+      onChange: (tier) => setAmendment({ ...amendment, tier })
     }
   ), /* @__PURE__ */ React.createElement(
     Input,
@@ -1282,13 +1299,10 @@ function agentDraftDirty(d, base) {
   return d.icon !== base.icon || d.description.trim() !== base.description || d.systemPrompt !== base.systemPrompt || d.authority !== base.authority || d.provider !== base.provider || d.tier !== base.tier || d.advisor !== base.advisor || !sameStrings(d.skills, base.skills);
 }
 const PROVIDER_PLACEHOLDER = { value: "", label: "choose one \u2014 provider is required" };
-const TIER_OPTIONS = [
-  { value: "", label: "board default \u2014 standard, unless the board's table says otherwise" },
-  { value: "economy", label: "economy \u2014 the cheap tier" },
-  { value: "standard", label: "standard \u2014 the workhorse tier" },
-  { value: "frontier", label: "frontier \u2014 the top tier" }
-];
-function AgentFields({ draft, set, authorityOptions, providerOptions, hostSkills, hostSkillsDegraded }) {
+function tierOptions(tiers) {
+  return [{ value: "", label: "board default" }, ...tiers.map((tier) => ({ value: tier, label: tier }))];
+}
+function AgentFields({ draft, set, authorityOptions, providerOptions, tiers, hostSkills, hostSkillsDegraded }) {
   const { Checkbox, Input, Select } = window.TidepoolDesignSystem_8a0ead;
   return /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(AgentIconPicker, { value: draft.icon, onChange: (v) => set("icon", v) }), /* @__PURE__ */ React.createElement(
     Input,
@@ -1307,7 +1321,7 @@ function AgentFields({ draft, set, authorityOptions, providerOptions, hostSkills
       value: draft.systemPrompt,
       onChange: (e) => set("systemPrompt", e.target.value)
     }
-  ), /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 } }, /* @__PURE__ */ React.createElement(Select, { label: "Authority", options: authorityOptions, value: draft.authority, onChange: (e) => set("authority", e.target.value) }), /* @__PURE__ */ React.createElement(Select, { label: "Provider", options: [PROVIDER_PLACEHOLDER, ...providerOptions], value: draft.provider, onChange: (e) => set("provider", e.target.value) })), /* @__PURE__ */ React.createElement(Select, { label: "Default tier", options: TIER_OPTIONS, value: draft.tier, onChange: (e) => set("tier", e.target.value) }), /* @__PURE__ */ React.createElement(
+  ), /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 } }, /* @__PURE__ */ React.createElement(Select, { label: "Authority", options: authorityOptions, value: draft.authority, onChange: (e) => set("authority", e.target.value) }), /* @__PURE__ */ React.createElement(Select, { label: "Provider", options: [PROVIDER_PLACEHOLDER, ...providerOptions], value: draft.provider, onChange: (e) => set("provider", e.target.value) })), /* @__PURE__ */ React.createElement(Select, { label: "Default tier", options: tierOptions(tiers), value: draft.tier, onChange: (e) => set("tier", e.target.value) }), /* @__PURE__ */ React.createElement(
     Checkbox,
     {
       label: "advisor \u2014 this agent may consult a stronger model at decision points",
@@ -1316,7 +1330,7 @@ function AgentFields({ draft, set, authorityOptions, providerOptions, hostSkills
     }
   ), /* @__PURE__ */ React.createElement(SkillListInput, { candidates: hostSkills, degraded: hostSkillsDegraded, values: draft.skills, onChange: (v) => set("skills", v) }));
 }
-function AgentRecord({ agent, authorityProfiles, providerOptions, hostSkills, hostSkillsDegraded, say, onChanged, edit }) {
+function AgentRecord({ agent, authorityProfiles, providerOptions, tiers, hostSkills, hostSkillsDegraded, say, onChanged, edit }) {
   const { Card, FieldRow } = window.TidepoolDesignSystem_8a0ead;
   const { AgentChip } = window.TidepoolDesignSystem_8a0ead;
   const id = `agent:${agent.name}`;
@@ -1372,6 +1386,7 @@ function AgentRecord({ agent, authorityProfiles, providerOptions, hostSkills, ho
       set,
       authorityOptions: authorityProfiles,
       providerOptions,
+      tiers,
       hostSkills,
       hostSkillsDegraded
     }
@@ -2643,7 +2658,7 @@ function NewWorkspaceForm({ baseDir, say, onCreated, edit }) {
     }
   ), dialog);
 }
-function NewAgentForm({ authorityProfiles, providerOptions, hostSkills, hostSkillsDegraded, say, onCreated, edit }) {
+function NewAgentForm({ authorityProfiles, providerOptions, tiers, hostSkills, hostSkillsDegraded, say, onCreated, edit }) {
   const { Card, Input } = window.TidepoolDesignSystem_8a0ead;
   const [name, setName] = React.useState("");
   const [draft, setDraft] = React.useState(() => ({ ...NEW_AGENT_DRAFT }));
@@ -2687,6 +2702,7 @@ function NewAgentForm({ authorityProfiles, providerOptions, hostSkills, hostSkil
       set,
       authorityOptions: authorityCreateOptions,
       providerOptions,
+      tiers,
       hostSkills,
       hostSkillsDegraded
     }
@@ -2985,6 +3001,7 @@ function SettingsScreen({ say, memoryFocus, registerLeaveGuard }) {
           agent: rec,
           authorityProfiles,
           providerOptions,
+          tiers: executionSettings?.tiers ?? [],
           hostSkills,
           hostSkillsDegraded,
           say,
@@ -2997,6 +3014,7 @@ function SettingsScreen({ say, memoryFocus, registerLeaveGuard }) {
         {
           authorityProfiles,
           providerOptions,
+          tiers: executionSettings?.tiers ?? [],
           hostSkills,
           hostSkillsDegraded,
           say,
@@ -3295,7 +3313,7 @@ function toQuestionCardShape(q, icons) {
     // 承認 question(決裁権外の子の登録)と、approve で親の risk が上がるかは
     // 盤面の `approval` 注釈が答える(issue #757)— ここは描画の形に写すだけ
     ...q.question_proposal?.kind === "routing" && q.question_proposal.op === "row" && { amendable: "row" },
-    ...q.question_proposal?.kind === "registry" && { amendable: "agent_tier" },
+    ...q.question_proposal?.kind === "registry" && { amendable: "agent_tier", amendBelow: q.question_proposal.pin && "tier" in q.question_proposal.pin ? q.question_proposal.pin.tier : void 0 },
     // 修正値の初期値は candidate の今の本文 —— 移されていれば末尾の複製
     ...candidateId !== void 0 && { amendable: "memory", candidateId: moved.find((m) => m.id === candidateId)?.tail_id ?? candidateId },
     // 理由必須の選択肢は盤面の `needs_comment` 注釈が答える(ADR 0179 決定4)

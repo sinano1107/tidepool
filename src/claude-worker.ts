@@ -21,6 +21,7 @@ import {
   type ExecutionSetting,
   MOONSHOT_DEFAULT_MODEL,
   resolveExecutionSetting,
+  tierNames,
 } from "./execution-setting.js";
 import { buildMemoryInjection, buildMetaReviewMaterial, type InjectionQuery, recordMemoryInjection, recordMetaReviewMaterial } from "./memory.js";
 import { projectAndPersist } from "./precedent.js";
@@ -1670,7 +1671,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
    *  ADR 0012 / issue #36) — drift there quarantines instead of throwing. */
   private validateDefaults(registry: Registry): void {
     resolveExecutionWorkspace(registry, this.options.workspace, null, this.workspacesDir);
-    const agent = resolveExecutionAgent(registry, this.options.agent, null);
+    const agent = resolveExecutionAgent(registry, this.options.agent, null, tierNames(this.options.db));
     // 表から解決した値を検査する(ADR 0110 決定3): 既定 agent が走るティアの行の
     // effort が閉じた5値の外なら、盤面は最初のタスクで詰まる前に起動を拒む。
     // 起動時検査なので task は無い —— 既定 agent の既定ティアの行を見る。行が無い
@@ -1786,7 +1787,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     );
     const agent = resolveAgentOrQuarantine(
       this.options.db,
-      (taskAssignee) => resolveExecutionAgent(registry, this.options.agent, taskAssignee),
+      (taskAssignee) => resolveExecutionAgent(registry, this.options.agent, taskAssignee, tierNames(this.options.db)),
       taskAgent,
       this.options.clock.now(),
     );

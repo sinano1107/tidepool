@@ -399,21 +399,20 @@ const PROVIDER_PLACEHOLDER = { value: '', label: 'choose one — provider is req
 // blank entry is the real "no default of my own", which resolves to the board's
 // default tier at pickup. Model and effort are not fields here at all any more —
 // the board's provider × tier table decides them, and #545 opens that table for
-// editing.
-const TIER_OPTIONS = [
-  { value: '', label: "board default — standard, unless the board's table says otherwise" },
-  { value: 'economy', label: 'economy — the cheap tier' },
-  { value: 'standard', label: 'standard — the workhorse tier' },
-  { value: 'frontier', label: 'frontier — the top tier' },
-];
+// editing. The tiers themselves are the board's list (ADR 0200 決定1), server-supplied
+// on GET /api/settings/execution.
+function tierOptions(tiers: readonly string[]): SettingsOption[] {
+  return [{ value: '', label: 'board default' }, ...tiers.map((tier) => ({ value: tier, label: tier }))];
+}
 
 // Those fields as controls, shared by the record card and the create form so
 // the two never drift — the agent analogue of ProfileFields.
-function AgentFields({ draft, set, authorityOptions, providerOptions, hostSkills, hostSkillsDegraded }: {
+function AgentFields({ draft, set, authorityOptions, providerOptions, tiers, hostSkills, hostSkillsDegraded }: {
   draft: AgentDraft;
   set: (key: keyof AgentDraft, value: AgentDraftValue) => void;
   authorityOptions: (string | SettingsOption)[];
   providerOptions: SettingsOption[];
+  tiers: readonly string[];
   hostSkills: string[];
   hostSkillsDegraded: boolean;
 }) {
@@ -429,7 +428,7 @@ function AgentFields({ draft, set, authorityOptions, providerOptions, hostSkills
         <Select label="Authority" options={authorityOptions} value={draft.authority} onChange={(e) => set('authority', e.target.value)} />
         <Select label="Provider" options={[PROVIDER_PLACEHOLDER, ...providerOptions]} value={draft.provider} onChange={(e) => set('provider', e.target.value)} />
       </div>
-      <Select label="Default tier" options={TIER_OPTIONS} value={draft.tier} onChange={(e) => set('tier', e.target.value)} />
+      <Select label="Default tier" options={tierOptions(tiers)} value={draft.tier} onChange={(e) => set('tier', e.target.value)} />
       <Checkbox label="advisor — this agent may consult a stronger model at decision points"
         checked={draft.advisor} onChange={() => set('advisor', !draft.advisor)} />
       <SkillListInput candidates={hostSkills} degraded={hostSkillsDegraded} values={draft.skills} onChange={(v) => set('skills', v)} />
@@ -441,10 +440,11 @@ function AgentFields({ draft, set, authorityOptions, providerOptions, hostSkills
 // WorkspaceRecord's twin: read-only until Edit, and then the draft above,
 // prefilled from the GET /api/agents list. `name` is shown via AgentChip only —
 // renaming isn't offered here at all (it's the file name, parent issue #54).
-function AgentRecord({ agent, authorityProfiles, providerOptions, hostSkills, hostSkillsDegraded, say, onChanged, edit }: {
+function AgentRecord({ agent, authorityProfiles, providerOptions, tiers, hostSkills, hostSkillsDegraded, say, onChanged, edit }: {
   agent: SettingsAgent;
   authorityProfiles: string[];
   providerOptions: SettingsOption[];
+  tiers: readonly string[];
   hostSkills: string[];
   hostSkillsDegraded: boolean;
   say: AppSay;
@@ -514,7 +514,7 @@ function AgentRecord({ agent, authorityProfiles, providerOptions, hostSkills, ho
       {open && (
         <React.Fragment>
           <AgentFields draft={draft} set={set} authorityOptions={authorityProfiles}
-            providerOptions={providerOptions}
+            providerOptions={providerOptions} tiers={tiers}
             hostSkills={hostSkills} hostSkillsDegraded={hostSkillsDegraded} />
           <EditActions dirty={dirty} ok={ok} busy={busy} saveLabel="Save changes — commits to the registry"
             onSave={save} onCancel={() => edit.close()} />
@@ -2325,9 +2325,10 @@ function NewWorkspaceForm({ baseDir, say, onCreated, edit }: {
 // The agent create form (issue #72), NewWorkspaceForm's twin. `name` is its own
 // field — it becomes agents/<name>.md and is never editable afterwards; the
 // rest is the same draft the record card edits.
-function NewAgentForm({ authorityProfiles, providerOptions, hostSkills, hostSkillsDegraded, say, onCreated, edit }: {
+function NewAgentForm({ authorityProfiles, providerOptions, tiers, hostSkills, hostSkillsDegraded, say, onCreated, edit }: {
   authorityProfiles: string[];
   providerOptions: SettingsOption[];
+  tiers: readonly string[];
   hostSkills: string[];
   hostSkillsDegraded: boolean;
   say: AppSay;
@@ -2373,7 +2374,7 @@ function NewAgentForm({ authorityProfiles, providerOptions, hostSkills, hostSkil
       <Input label="Name" value={name} onChange={(e) => setName(e.target.value)}
         placeholder="letters, digits, - _ . — becomes agents/<name>.md, not renameable later" />
       <AgentFields draft={draft} set={set} authorityOptions={authorityCreateOptions}
-        providerOptions={providerOptions}
+        providerOptions={providerOptions} tiers={tiers}
         hostSkills={hostSkills} hostSkillsDegraded={hostSkillsDegraded} />
       <EditActions ok={ok} busy={busy} saveLabel="Add agent — commits to the registry"
         onSave={submit} onCancel={() => edit.close()} />
@@ -2695,12 +2696,12 @@ function SettingsScreen({ say, memoryFocus, registerLeaveGuard }: {
       rowSummary: (a) =>
         a.builtin ? 'built-in' : a.shadowsBuiltIn ? `${a.authority} · shadows built-in` : a.authority,
       record: (rec) => (
-        <AgentRecord agent={rec} authorityProfiles={authorityProfiles} providerOptions={providerOptions}
+        <AgentRecord agent={rec} authorityProfiles={authorityProfiles} providerOptions={providerOptions} tiers={executionSettings?.tiers ?? []}
           hostSkills={hostSkills}
           hostSkillsDegraded={hostSkillsDegraded} say={say} onChanged={loadAgents} edit={edit} />
       ),
       createForm: () => (
-        <NewAgentForm authorityProfiles={authorityProfiles} providerOptions={providerOptions}
+        <NewAgentForm authorityProfiles={authorityProfiles} providerOptions={providerOptions} tiers={executionSettings?.tiers ?? []}
           hostSkills={hostSkills}
           hostSkillsDegraded={hostSkillsDegraded} say={say} onCreated={loadAgents} edit={edit} />
       ),
