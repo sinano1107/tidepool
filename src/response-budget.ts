@@ -3,7 +3,7 @@ import { appendEvent, type EventPayload } from "./events.js";
 import { BOARD_WORKER_ID, DomainError } from "./tasks.js";
 
 /** 盤面が返す MCP 応答1回の大きさの上限(ADR 0195 決定2)。text content に載るシリアライズ後の UTF-8 バイト数で測る。 */
-const RESPONSE_BUDGET_BYTES = 40_000;
+export const RESPONSE_BUDGET_BYTES = 40_000;
 
 type ItemId = string | number;
 
