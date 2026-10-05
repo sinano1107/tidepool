@@ -52,9 +52,8 @@ export function readPosition<A extends object>(verb: string, input: A & { next?:
   return readNext<A>(verb, next);
 }
 
-/** 詰めた応答の形: 列の欄 `L` は毎回、封筒 `E` は最初の応答だけ、続きは残りがあるときだけ、部分の印は1件で予算を超える item のときだけ載る。 */
-export type Packed<L, E = unknown> = L &
-  Partial<E> & { next?: string; remaining?: number; partial?: { id: ItemId; field: string; field_bytes: number } };
+/** 詰めた応答の形: 列の欄 `L` は毎回、封筒 `E` は最初の応答だけ、続きは残りがあるときだけ載る。 */
+export type Packed<L, E = unknown> = L & Partial<E> & { next?: string; remaining?: number };
 
 /** 読み口ごとの詰め方の違い。 */
 export interface PackOptions<T> {
