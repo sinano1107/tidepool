@@ -5,9 +5,6 @@ import { parseStreamLine } from "./stream-json.js";
 
 export type Markers = { middle: string; tail: string };
 
-/** 埋め草の1行。実際の応答(event の列)と同じく、小さい object に引用符が多い。 */
-const ROW = { kind: "decision_logged", line: "canary filler" };
-
 /** 1行の JSON の本文。CallToolResult に包んだ大きさ(盤面の予算と同じ測り方、ADR 0195 追記1)が予算ちょうどになるように、
  *  小さい object の列を詰めて残りを `pad` で埋める —— 包み方が1段の読み手は合格し、それより多く包む読み手は欠ける。
  *  目印は呼び出しごとの乱数で、中央と末尾に1つずつ置く —— Codex は中央を切り詰めるので、末尾だけでは欠けを見逃す。 */
@@ -15,7 +12,8 @@ export function buildCanaryPayload(): Markers & { text: string } {
   const middle = `MIDDLE-${randomUUID()}`;
   const tail = `TAIL-${randomUUID()}`;
   const page = (rows: number, pad: string) => {
-    const half = Array<typeof ROW>(rows).fill(ROW);
+    // 埋め草は実際の応答(event の列)と同じく、引用符の多い小さい object
+    const half = Array(rows).fill({ kind: "decision_logged", line: "canary filler" });
     return JSON.stringify({ events: [...half, { marker: middle }, ...half], pad, tail });
   };
   const empty = responseBytes(page(0, ""));

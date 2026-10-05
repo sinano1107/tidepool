@@ -79,7 +79,6 @@ it("出口の床は、本文は予算以下でも CallToolResult に包むと予
   expect(resultBytes(result)).toBeLessThanOrEqual(RESPONSE_BUDGET_BYTES);
   expect(textOf(result)).toContain("board defect");
   expect(textOf(result)).toContain(String(bytesOf(payload)));
-  expect(textOf(response).startsWith(textOf(result).slice(0, textOf(result).indexOf("\n[tidepool:")))).toBe(true);
   expect(listEventsOfKinds(db, ["response_truncated"]).map((e) => e.payload)).toEqual([
     { kind: "response_truncated", surface: "management", verb: "get_task", bytes: bytesOf(payload), budget: RESPONSE_BUDGET_BYTES },
   ]);

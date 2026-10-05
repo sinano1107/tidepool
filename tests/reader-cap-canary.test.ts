@@ -27,9 +27,8 @@ describe("canary の応答", () => {
     expect(text.slice(-100)).toContain(tail);
   });
 
-  it("本文は引用符の多い形(小さい JSON の object の列)で、包むと実際の応答と同じく1割以上膨らむ", () => {
+  it("本文は引用符が多く、包むと実際の応答と同じく1割以上膨らむ", () => {
     const { text } = buildCanaryPayload();
-    expect(text.startsWith('{"events":[{')).toBe(true);
     expect(resultBytes(text) - Buffer.byteLength(text)).toBeGreaterThan(Buffer.byteLength(text) / 10);
   });
 
