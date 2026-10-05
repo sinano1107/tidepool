@@ -4,7 +4,7 @@ import { z } from "zod";
 import type { AgentAdmin } from "./agent-create.js";
 import type { Clock } from "./clock.js";
 import type { Db } from "./db.js";
-import { PRIORITY_FIELD_DESCRIPTION, tierFieldDescriptions } from "./execution-setting.js";
+import { newTierSchema, PRIORITY_FIELD_DESCRIPTION, tierFieldDescriptions } from "./execution-setting.js";
 import type { GitHubClient } from "./github.js";
 import type { GitHubAuth } from "./github-auth.js";
 import { assertMemoryReferencesKnown, assertReviewerKnown, assertWorkspaceKnown } from "./human-verbs.js";
@@ -949,10 +949,7 @@ function registerRoutingMetaReviewVerbs(server: McpServer, deps: McpDeps, run: M
       inputSchema: {
         op: z.enum(["row", "promote", "demote", "agent_tier", "add_tier"]),
         row: z.object({ provider: z.string(), model: z.string(), effort: z.string() }).optional().describe("op row and op add_tier only."),
-        tier: z
-          .object({ name: z.string(), description: z.string(), position: z.number().int().nonnegative() })
-          .optional()
-          .describe("op add_tier only: the new tier."),
+        tier: newTierSchema.optional().describe("op add_tier only: the new tier."),
         change: z.record(z.string(), z.unknown()).optional().describe("op row only: tier and/or effort, nothing else."),
         agent: z.string().optional().describe("op agent_tier only: the agent whose default tier to lower."),
         to: z.string().optional().describe("op agent_tier only: the tier one step below the agent's current tier."),

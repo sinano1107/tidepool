@@ -6,7 +6,7 @@ import { appendEvent, type EventOrigin } from "./events.js";
 import { PROVIDER_VALUES, type Provider } from "./provider.js";
 import { openQuarantineQuestions, openQuarantineValues, tableRowValue } from "./quarantine.js";
 import type { AgentDefinition } from "./registry.js";
-import { DomainError, HUMAN_WORKER_ID, type RegistryProposal, type RoutingProposal, type RoutingRowProposal, settleQuestionAsObserved, type Task } from "./tasks.js";
+import { DomainError, HUMAN_WORKER_ID, type RegistryProposal, type RoutingProposal, type RoutingRowProposal, settleQuestionAsObserved, type Task, type TierNeighbour } from "./tasks.js";
 
 /** 必要品質のティア(CONTEXT.md「要求」/ ADR 0200 決定1)の名前。段は盤面の DB が持つ順序付きの一覧で(`readTiers`)、
  *  コードは名前を列挙しない —— 型が言えるのは「段の名前」であることだけ。 */
@@ -446,7 +446,7 @@ export function readExecutionSettings(db: Db) {
 }
 
 /** 人間の2つの扉(settings タブ・管理MCP)の読み口: 各行に、開いている行の Quarantine の question id(無ければ null)を
- *  添える(ADR 0184 決定6)。meta-review の材料と worker の読み口は `readExecutionSettings` のまま。 */
+ *  添える(ADR 0184 決定6)。meta-review の材料と worker の読み口は Quarantine を添えない `readExecutionSettings`。 */
 export function readExecutionSettingsWithQuarantine(db: Db) {
   const settings = readExecutionSettings(db);
   const open = openQuarantineQuestions(db, "tableRow");
@@ -490,6 +490,9 @@ export function assertRowFits(table: ExecutionSettingTable, row: ExecutionSettin
   }
 }
 
+/** 足す段の名前・説明・位置。段の挿入、段を足す提案(MCP の入力と修正値)が同じ形を通る。 */
+export const newTierSchema = z.object({ name: z.string(), description: z.string(), position: z.number().int().nonnegative() });
+
 /** settings タブ / 管理MCP が撃つ1つの変更(ADR 0110 決定5)。**綴りは1つ** —— /api と
  *  MCP tool が同じ schema を通り、同じ関数が書き、同じ payload が操作イベントになる。
  *  `key` の無い `row` は追加、`key` つきの `row` はその行の編集、`delete_row` は削除。段は `insert_tier`(一覧の添字の位置へ)・
@@ -516,7 +519,7 @@ export const executionSettingsChangeSchema = z.discriminatedUnion("setting", [
     }),
   }),
   z.object({ setting: z.literal("priority"), value: z.enum(PRIORITIES) }),
-  z.object({ setting: z.literal("insert_tier"), name: z.string(), description: z.string(), position: z.number().int().nonnegative() }),
+  newTierSchema.extend({ setting: z.literal("insert_tier") }),
   z.object({
     setting: z.literal("edit_tier"),
     name: z.string().min(1),
@@ -560,7 +563,7 @@ export function parseRoutingRowChange(tiers: readonly Tier[], input: unknown): R
  *  段を足す提案は移す行を行の提案と同じに比べ、隣の段が入れ替わっていれば `neighbours`(issue #1424)。 */
 export function routingPinChanges(
   proposal: RoutingProposal | RegistryProposal,
-  settings: { table: ExecutionSettingTable; learnerPromoted: boolean; tiers: readonly { name: Tier; description: string }[] },
+  settings: { table: ExecutionSettingTable; learnerPromoted: boolean; tiers: readonly TierNeighbour[] },
 ): Array<"tier" | "price_in" | "price_out" | "learner_promoted" | "rows" | "neighbours"> | null {
   if (proposal.kind === "registry") {
     const held = proposal.pin.rows.every((pinned) =>
@@ -576,7 +579,7 @@ export function routingPinChanges(
   if (proposal.op === "add_tier") {
     // 隣は提案時点の添字にいまいる段 —— 改名・説明の編集・移動・挿入・削除のどれで入れ替わっても崩れる
     const { position } = proposal.tier;
-    const same = (pinned: { name: Tier; description: string } | null, now: { name: Tier; description: string } | undefined) =>
+    const same = (pinned: TierNeighbour | null, now: TierNeighbour | undefined) =>
       pinned?.name === now?.name && pinned?.description === now?.description;
     if (!same(proposal.pin.below, settings.tiers[position - 1]) || !same(proposal.pin.above, settings.tiers[position])) changed.push("neighbours");
   }
@@ -595,11 +598,10 @@ export function registryPinChanges(proposal: RegistryProposal, agent: { tier?: s
 
 /** 段を足す提案の修正値(ADR 0200 決定8 / ADR 0150 決定2): 名前・説明・位置の少なくとも1つ。値の検査(名前の一意など)は
  *  回答時に段の挿入の扉がやり直す。 */
-const addTierAmendmentSchema = z
-  .object({ name: z.string(), description: z.string(), position: z.number().int().nonnegative() })
+const addTierAmendmentSchema = newTierSchema
   .partial()
   .strict()
-  .refine((amendment) => Object.keys(amendment).length > 0, { message: "name at least one of name / description / position" });
+  .refine((amendment) => Object.keys(amendment).length > 0, { message: "give at least one of name / description / position" });
 export type AddTierAmendment = z.infer<typeof addTierAmendmentSchema>;
 
 export function parseAddTierAmendment(amendment: unknown): AddTierAmendment {

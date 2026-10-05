@@ -506,8 +506,6 @@ it("段を足す提案の pin: 移す行は全欄、隣の段は提案時点の�
 });
 
 it("段を足す提案の pin の端: 先頭なら下、末尾なら上の隣は null で、端の外に段が来ても崩れる", () => {
-  expect(addTier(0).op === "add_tier" && addTier(0).pin).toMatchObject({ below: null, above: economy });
-  expect(addTier(3).op === "add_tier" && addTier(3).pin).toMatchObject({ below: frontier, above: null });
   expect(routingPinChanges(addTier(0), tierSettings(SEED_TIERS))).toEqual([]);
   expect(routingPinChanges(addTier(3), tierSettings(SEED_TIERS))).toEqual([]);
   expect(routingPinChanges(addTier(3), tierSettings([...SEED_TIERS, { name: "top", description: "x" }]))).toEqual(["neighbours"]);

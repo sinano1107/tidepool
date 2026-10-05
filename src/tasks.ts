@@ -197,7 +197,8 @@ export interface RoutingAddTierProposal {
   evidence: number[];
   pin: { row: ExecutionSettingRow; below: TierNeighbour | null; above: TierNeighbour | null };
 }
-type TierNeighbour = { name: Tier; description: string };
+/** 段の名前と説明(段を足す提案の隣の段の pin)。 */
+export type TierNeighbour = { name: Tier; description: string };
 
 /** routing の提案(ADR 0150 決定1): 表の1行、段の追加、または学習器の昇格 / 降格。昇格 / 降格の pin はフラグの現在値。 */
 export type RoutingProposal = RoutingRowProposal | RoutingAddTierProposal | { kind: "routing"; op: "promote" | "demote"; pin: { promoted: boolean } };
