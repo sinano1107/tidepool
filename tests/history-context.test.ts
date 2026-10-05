@@ -288,7 +288,7 @@ it("a work child of a done parent receives the parent's handoff document", async
   }
 });
 
-it("get_current_task describes how to read history in three English sentences, then how to read the rest with next", async () => {
+it("get_current_task describes how to read history in English: its entries, its rows, then how to read the rest with next", async () => {
   t = await bootTidepool();
   const task = await registerWork(t, "read the briefing");
   await t.clock.advance(HOUR);
