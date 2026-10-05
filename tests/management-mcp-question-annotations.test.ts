@@ -39,7 +39,7 @@ async function readFourWays(t: Tidepool, taskId: string) {
     const single: any = await client.callTool({ name: "get_task", arguments: { task_id: taskId } });
     expect(board.isError ?? false).toBe(false);
     expect(single.isError ?? false).toBe(false);
-    const mcpRow = (JSON.parse(board.content[0].text) as any[]).find((x) => x.id === taskId);
+    const mcpRow = (JSON.parse(board.content[0].text).tasks as any[]).find((x) => x.id === taskId);
     return { httpRow, httpSingle, mcpRow, mcpSingle: JSON.parse(single.content[0].text) };
   } finally {
     await client.close();

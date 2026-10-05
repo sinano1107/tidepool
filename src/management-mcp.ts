@@ -80,7 +80,7 @@ import {
   MERGE_DIAL_VALUES,
 } from "./registry.js";
 import { RepoAccessMissingError } from "./repo-access.js";
-import { packItems, readNext } from "./response-budget.js";
+import { packItems, type ReadPosition, readNext } from "./response-budget.js";
 import { listHaltedRefires, markHaltedRefire, refireKeySchema } from "./retrospective.js";
 import {
   entryExclusionPredicate,
@@ -88,6 +88,7 @@ import {
 } from "./scheduler.js";
 import { createStatelessMcpRouter, floorEveryResponse, rejectUnknownArguments } from "./stateless-mcp.js";
 import {
+  type BoardTask,
   DomainError,
   describeHandoffFields,
   getTask,
@@ -258,6 +259,40 @@ WebUI themselves. This implies:
 const QUESTION_ANNOTATIONS_DESCRIPTION =
   "A question also carries `landing` (null for a general question; for a landing question, `blocked_by` says why a `merge` answer would be rejected right now — `attached_children` or `objections` — or null when it would be accepted), `approval` (for a child-approval question, whether approving raises the parent's risk; otherwise null), `blocking` (the id of the parent task it holds up, or null), `moved` (for a memory proposal, one element per pinned entry moved since the proposal was shown: `id` is the entry as pinned, `tail_id` is where it lives now with its current `path` / `scope`, and an answer applies to `tail_id`), `needs_comment` (the answers that `answer_question` refuses without a non-blank comment; empty when every answer takes an optional one), and `free_text` (false when an answer must match one of the item's options verbatim; true when free text is accepted). A non-question task carries none of these.";
 
+/** 予算と続きで読む口の description の続きの読み方(ADR 0195)。順序は各口が前に書く。 */
+const nextDescription = (verb: string, items: string, firstOnly?: string) =>
+  `When the ${items} do not fit in one response, the response carries \`next\` and \`remaining\` (how many ${items} are not returned yet): ` +
+  `call ${verb} again with only \`next\` to read the rest, and repeat until a response carries no \`next\` — then the list is complete.` +
+  (firstOnly ? ` ${firstOnly} on the first response only.` : "") +
+  " An item too large for one response comes alone in pieces marked `partial` (`id`, the item's id or the key `next` resumes from; `field`, " +
+  "empty when the item is itself a string; and `field_bytes`, the field's full size in UTF-8 bytes): join that field across the pieces to get it verbatim.";
+
+/** 結果を返し、DomainError は tool error にする。 */
+const domainResult = (write: () => unknown) => {
+  try {
+    return toolResult(write());
+  } catch (err) {
+    if (err instanceof DomainError) return toolError(err.message);
+    throw err;
+  }
+};
+
+/** 予算と続きで読む口(ADR 0195): 最初の引数か続き(next)のどちらか一方から読みの位置を作り、`read` が詰めた応答を返す。
+ *  続きは最初の引数を自分の中から戻すので渡し直しは要らない。 */
+function readBudgeted<A extends Record<string, unknown>>(
+  verb: string,
+  { next, ...args }: A & { next?: string },
+  read: (position: ReadPosition<A>) => Record<string, unknown>,
+) {
+  const given = Object.keys(args).filter((name) => args[name] !== undefined);
+  if (next !== undefined && given.length > 0) return toolError(`pass ${given.join(", ")} or next, not both`);
+  return domainResult(() => read(next === undefined ? { verb, args: args as unknown as A } : readNext<A>(verb, next)));
+}
+
+/** 書き込みの ack に載せる task の識別と状態(ADR 0195)。本文(purpose・完了基準・handoff など)は呼び手が持っているか get_task で読む。 */
+const taskAck = ({ id, type, status, assignee, raw_assignee }: BoardTask) => ({ id, type, status, assignee, raw_assignee });
+const TASK_ACK_DESCRIPTION = "Returns the task's id, type, status, assignee and raw_assignee only; read the rest with get_task.";
+
 function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
   const server = floorEveryResponse(
     rejectUnknownArguments(
@@ -266,12 +301,22 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
     { db: deps.db, clock: deps.clock, surface: "management" },
   );
   // issue #1179: 各口は対応する HTTP の口(GET /api/tasks・GET /api/tasks/:id)と同じ注釈を持つ
-  server.registerTool("list_board", { description: `List the current task board. ${QUESTION_ANNOTATIONS_DESCRIPTION}` }, async () =>
-    toolResult(
-      listBoard(deps.db, deps.defaultAgentName, deps.auditorName).map((task) =>
-        task.type === "question" ? { ...task, ...questionAnnotations(deps.db, task) } : task,
+  server.registerTool(
+    "list_board",
+    {
+      description: `List the current task board as \`tasks\`, in board order. ${nextDescription("list_board", "tasks")} ${QUESTION_ANNOTATIONS_DESCRIPTION}`,
+      inputSchema: { next: z.string().optional() },
+    },
+    async (input) =>
+      readBudgeted("list_board", input, (read) =>
+        packItems(
+          read,
+          "tasks",
+          listBoard(deps.db, deps.defaultAgentName, deps.auditorName).map((task) =>
+            task.type === "question" ? { ...task, ...questionAnnotations(deps.db, task) } : task,
+          ),
+        ),
       ),
-    ),
   );
   // ADR 0068 決定3: the envelope is this ADR's real fix — an agent reading the
   // queue here receives "why is it quiet" in the same one read, since MCP has
@@ -280,25 +325,32 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
   const skippedByEntries = (deps: ManagementMcpDeps) =>
     entryExclusionPredicate(deps.db, deps.taskExecutionCandidates);
 
-  server.registerTool("list_queue", { description: "List the execution queue and pickup state." }, async () => {
-    // 停止ではないが pickup を待たせているもの(ADR 0109 決定2)。列挙には加えない ——
-    // ただし**落ちた**後始末は列挙の側にも出る(ADR 0112 決定1)。このフィールドが言う
-    // のは「いつ後始末に入ったか」、列挙が言うのは「止まっている」で、同時に出る重複は
-    // 承知の上である
-    const teardown = sessionInTeardown(deps.db);
-    return toolResult({
-      halts: boardHalts(deps.db),
-      ...(teardown ? { teardown } : {}),
-      tasks: listQueue(
-        deps.db,
-        deps.workspace?.name,
-        deps.defaultAgentName,
-        deps.auditorName,
-        quarantineStops(deps.db),
-        skippedByEntries(deps),
-      ),
-    });
-  });
+  server.registerTool(
+    "list_queue",
+    {
+      description:
+        "List the execution queue and pickup state: `halts` (and `teardown` while a session is being torn down) say why pickup " +
+        `is waiting, \`tasks\` lists the queue in board order. ${nextDescription("list_queue", "tasks", "`halts` and `teardown` come")}`,
+      inputSchema: { next: z.string().optional() },
+    },
+    async (input) =>
+      readBudgeted("list_queue", input, (read) => {
+        // 停止ではないが pickup を待たせているもの(ADR 0109 決定2)。列挙には加えない ——
+        // ただし**落ちた**後始末は列挙の側にも出る(ADR 0112 決定1)。このフィールドが言う
+        // のは「いつ後始末に入ったか」、列挙が言うのは「止まっている」で、同時に出る重複は
+        // 承知の上である
+        const teardown = sessionInTeardown(deps.db);
+        const tasks = listQueue(
+          deps.db,
+          deps.workspace?.name,
+          deps.defaultAgentName,
+          deps.auditorName,
+          quarantineStops(deps.db),
+          skippedByEntries(deps),
+        );
+        return packItems(read, "tasks", tasks, { halts: boardHalts(deps.db), ...(teardown ? { teardown } : {}) });
+      }),
+  );
   server.registerTool("list_your_tasks", { description: "List unsettled tasks assigned to the human." }, async () =>
     toolResult(listYourTasks(deps.db)),
   );
@@ -314,30 +366,28 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
         QUESTION_ANNOTATIONS_DESCRIPTION,
       inputSchema: { task_id: z.string().optional(), next: z.string().optional() },
     },
-    async ({ task_id, next }) => {
-      try {
-        // ADR 0195: 続きは最初の引数(task_id)を自分の中から戻す
-        if (task_id !== undefined && next !== undefined) return toolError("pass task_id or next, not both");
-        const read = next === undefined ? { verb: "get_task", args: { task_id } } : readNext<{ task_id?: string }>("get_task", next);
-        if (read.args.task_id === undefined) return toolError("pass task_id, or next from a previous get_task");
+    async (input) =>
+      readBudgeted("get_task", input, (read) => {
+        if (read.args.task_id === undefined) throw new DomainError("pass task_id, or next from a previous get_task");
         const task = getTask(deps.db, read.args.task_id);
-        if (!task) return toolError("task not found");
+        if (!task) throw new DomainError("task not found");
         const envelope = { ...presentTask(deps.db, task, deps.defaultAgentName, deps.auditorName), ...(task.type === "question" && questionAnnotations(deps.db, task)) };
-        return toolResult(packItems(read, "events", listEvents(deps.db, task.id).reverse(), envelope));
-      } catch (err) {
-        if (err instanceof DomainError) return toolError(err.message);
-        throw err;
-      }
-    },
+        return packItems(read, "events", listEvents(deps.db, task.id).reverse(), envelope);
+      }),
   );
   server.registerTool(
     "read_decision_log",
     {
       description:
-        "Read the decision log without marking it seen. Each entry carries every objection ever raised against it (bundled and still commit-pending alike).",
+        "Read the decision log without marking it seen, newest first (entry id descending). Each entry carries every objection ever " +
+        "raised against it (bundled and still commit-pending alike). `cursor` is the human's unread cursor, unrelated to `next`. " +
+        nextDescription("read_decision_log", "entries", "`cursor` comes"),
+      inputSchema: { next: z.string().optional() },
     },
-    async () =>
-      toolResult({ entries: listLog(deps.db, deps.workspace?.name), cursor: getLogCursor(deps.db) }),
+    async (input) =>
+      readBudgeted("read_decision_log", input, (read) =>
+        packItems(read, "entries", listLog(deps.db, deps.workspace?.name).reverse(), { cursor: getLogCursor(deps.db) }),
+      ),
   );
   server.registerTool(
     "create_workspace",
@@ -617,15 +667,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
   );
   // spec #586 F / issue #593: the human's memory surface. No approve verb (ADR 0152):
   // wording the human writes here is approved on write, and AI-drafted wording is approved
-  // only through a proposal question. Domain errors come back as tool errors.
-  const memoryVerb = (write: () => unknown) => {
-    try {
-      return toolResult(write());
-    } catch (err) {
-      if (err instanceof DomainError) return toolError(err.message);
-      throw err;
-    }
-  };
+  // only through a proposal question. Domain errors come back as tool errors (domainResult).
   const writtenAs =
     "Written as the human, approved at once. The original_* fields, when given, are the human's own wording, recorded in the " +
     "board's display language. workspace null = the whole board.";
@@ -640,16 +682,26 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
         "workspace matches exactly; board_wide lists only board-wide entries; " +
         "state invalidated lists invalidated entries, approved / candidate the rest. On a board with a registry each entry carries orphaned: " +
         "\"addressee\", \"scope\" or \"both\" when its addressee agent or scope workspace is no longer registered, null otherwise. " +
-        "path lists only the entries at that branch or under it (path/…).",
-      inputSchema: memoryListFilterSchema.extend({ board_wide: z.boolean().optional() }).shape,
+        "path lists only the entries at that branch or under it (path/…). Entries come as `entries`, oldest first (id ascending). " +
+        `${nextDescription("list_memory_entries", "entries")} \`next\` keeps the filters of the first call: pass it alone.`,
+      inputSchema: memoryListFilterSchema.extend({ board_wide: z.boolean().optional(), next: z.string().optional() }).shape,
     },
-    async ({ workspace, board_wide, ...filter }) =>
-      memoryVerb(() => listMemoryEntriesForHuman(deps, { ...filter, scope: board_wide ? null : workspace })),
+    async (input) =>
+      readBudgeted("list_memory_entries", input, (read) => {
+        const { workspace, board_wide, ...filter } = read.args;
+        return packItems(read, "entries", listMemoryEntriesForHuman(deps, { ...filter, scope: board_wide ? null : workspace }));
+      }),
   );
   server.registerTool(
     "list_memory_branches",
-    { description: `${MEMORY_BRANCHES_DESCRIPTION} Each Definition carries the human's original wording (original) when it has one.` },
-    async () => toolResult({ branches: listMemoryBranches(deps.db) }),
+    {
+      description:
+        `${MEMORY_BRANCHES_DESCRIPTION} Each Definition carries the human's original wording (original) when it has one. ` +
+        nextDescription("list_memory_branches", "branches"),
+      inputSchema: { next: z.string().optional() },
+    },
+    // 枝の行は id を持たない —— 続きの境目は path(木の中で1行1つ)
+    async (input) => readBudgeted("list_memory_branches", input, (read) => packItems(read, "branches", listMemoryBranches(deps.db), {}, (row) => row.path)),
   );
   server.registerTool(
     "record_knowledge",
@@ -658,7 +710,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
         `English canonical wording; original_title and original_text go together (both or neither). ${supersedesEffect} ${writtenAs}`,
       inputSchema: humanKnowledgeSchema.shape,
     },
-    async (input) => memoryVerb(() => recordKnowledge(deps.db, gatedHumanEntryInput(deps, input), "mcp", deps.clock.now())),
+    async (input) => domainResult(() => recordKnowledge(deps.db, gatedHumanEntryInput(deps, input), "mcp", deps.clock.now())),
   );
   server.registerTool(
     "define_memory_branch",
@@ -673,7 +725,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
         `${supersedesEffect} ${writtenAs}`,
       inputSchema: humanDefinitionSchema.shape,
     },
-    async (input) => memoryVerb(() => defineMemoryBranch(deps.db, gatedHumanEntryInput(deps, input), "mcp", deps.clock.now())),
+    async (input) => domainResult(() => defineMemoryBranch(deps.db, gatedHumanEntryInput(deps, input), "mcp", deps.clock.now())),
   );
   server.registerTool(
     "record_behavior",
@@ -686,7 +738,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
         `original_title and original_text go together (both or neither). ${supersedesEffect} ${writtenAs}`,
       inputSchema: humanBehaviorSchema.shape,
     },
-    async (input) => memoryVerb(() => recordBehavior(deps.db, gatedHumanEntryInput(deps, input), "mcp", deps.clock.now())),
+    async (input) => domainResult(() => recordBehavior(deps.db, gatedHumanEntryInput(deps, input), "mcp", deps.clock.now())),
   );
   server.registerTool(
     "preview_case",
@@ -694,10 +746,22 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
       description:
         "Render the case an exemplar can cite: event_id is a decision_logged event (its decision text, the steering of its objections, " +
         "and its session's handoff and result) or a worker_spawned event (that session's decisions in order, handoff and result). An " +
-        "objection_attributed event (the source an exemplar candidate may carry) renders its decision with only that attribution's steering.",
-      inputSchema: { event_id: z.number().int().positive() },
+        "objection_attributed event (the source an exemplar candidate may carry) renders its decision with only that attribution's steering. " +
+        `steering and decisions come in event order. ${nextDescription("preview_case", "steering or decisions lines", "The rest of the case comes")}`,
+      inputSchema: { event_id: z.number().int().positive().optional(), next: z.string().optional() },
     },
-    async ({ event_id }) => memoryVerb(() => previewCase(deps.db, event_id)),
+    async (input) =>
+      readBudgeted("preview_case", input, (read) => {
+        if (read.args.event_id === undefined) throw new DomainError("pass event_id, or next from a previous preview_case");
+        // item は steering か decisions の文(文字列で id を持たない)。続きの境目は列の位置 —— どちらも event 順で積み足されるだけ
+        const rendered = previewCase(deps.db, read.args.event_id);
+        if ("decisions" in rendered) {
+          const { decisions, ...envelope } = rendered;
+          return packItems(read, "decisions", decisions, envelope, (_, i) => i);
+        }
+        const { steering, ...envelope } = rendered;
+        return packItems(read, "steering", steering, envelope, (_, i) => i);
+      }),
   );
   server.registerTool(
     "record_exemplar",
@@ -712,7 +776,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
         "recorded in the board's display language. workspace null = the whole board.",
       inputSchema: humanExemplarSchema.shape,
     },
-    async (input) => memoryVerb(() => recordExemplar(deps.db, gatedHumanEntryInput(deps, input), "mcp", deps.clock.now())),
+    async (input) => domainResult(() => recordExemplar(deps.db, gatedHumanEntryInput(deps, input), "mcp", deps.clock.now())),
   );
   server.registerTool(
     "fold_memory_entries",
@@ -725,7 +789,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
         "already covers retires pointing at it. To replace entries with one you write now, pass them as supersedes on the write.",
       inputSchema: memoryFoldSchema.shape,
     },
-    async (input) => memoryVerb(() => foldMemoryEntries(deps.db, { ...input, author: HUMAN_AUTHOR }, "mcp", deps.clock.now())),
+    async (input) => domainResult(() => foldMemoryEntries(deps.db, { ...input, author: HUMAN_AUTHOR }, "mcp", deps.clock.now())),
   );
   server.registerTool(
     "invalidate_memory_entry",
@@ -738,7 +802,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
       // strict な object ごと渡す —— .shape だと迷い込んだ successor_id が黙って捨てられる
       inputSchema: invalidationSchema.extend({ entry_id: z.number().int().positive() }),
     },
-    async (input) => memoryVerb(() => ({ event_id: invalidateMemoryEntry(deps.db, input, HUMAN_WORKER_ID, "mcp", deps.clock.now()) })),
+    async (input) => domainResult(() => ({ event_id: invalidateMemoryEntry(deps.db, input, HUMAN_WORKER_ID, "mcp", deps.clock.now()) })),
   );
   const moveEffect =
     "The board copies the body — title, text, originals, addressee, annotations, source, author, state and approval — to the new place " +
@@ -754,7 +818,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
       inputSchema: memoryMoveSchema.extend({ entry_id: z.number().int().positive() }).shape,
     },
     async ({ entry_id, workspace, path }) =>
-      memoryVerb(() => {
+      domainResult(() => {
         assertMemoryReferencesKnown(deps, { workspace });
         return moveMemory(deps.db, { entry_id, scope: workspace, path, mover: HUMAN_AUTHOR }, "mcp", deps.clock.now());
       }),
@@ -768,15 +832,17 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
         "whole-board branch to another whole-board path also carries every workspace's entries under path, each staying in its " +
         "workspace. When a moved Definition would land on a path already defined in its workspace, the move is refused and names " +
         "every such pair; pass merge: true to fold each of them into the Definition already there (the destination's wording " +
-        "stays) and move the rest. merge: true is refused when no such pair exists. Returns moved (each entry_id with the " +
-        `successor_id of its copy) and folded (each folded Definition with its successor_id). ${moveEffect}`,
+        "stays) and move the rest. merge: true is refused when no such pair exists. Returns moved and folded (how many entries " +
+        "were moved and how many Definitions were folded) with to_workspace and to_path; read the moved entries with " +
+        `list_memory_entries. ${moveEffect}`,
       inputSchema: memoryBranchMoveSchema.shape,
     },
     // 門は行き先だけ —— 移動元が消えた workspace の孤立を生きた置き場へ移せるように(ADR 0173 決定2)
     async ({ workspace, path, to_workspace, to_path, merge }) =>
-      memoryVerb(() => {
+      domainResult(() => {
         assertMemoryReferencesKnown(deps, { workspace: to_workspace });
-        return moveMemoryBranch(deps.db, { scope: workspace, path, to_scope: to_workspace, to_path, merge, mover: HUMAN_AUTHOR }, "mcp", deps.clock.now());
+        const { moved, folded } = moveMemoryBranch(deps.db, { scope: workspace, path, to_scope: to_workspace, to_path, merge, mover: HUMAN_AUTHOR }, "mcp", deps.clock.now());
+        return { moved: moved.length, folded: folded.length, to_workspace, to_path };
       }),
   );
   server.registerTool(
@@ -790,7 +856,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
         "a Definition whose branch already has a live Definition in that workspace.",
       inputSchema: { entry_id: z.number().int().positive() },
     },
-    async ({ entry_id }) => memoryVerb(() => restoreMemoryEntry(deps.db, { entry_id, restorer: HUMAN_AUTHOR }, "mcp", deps.clock.now())),
+    async ({ entry_id }) => domainResult(() => restoreMemoryEntry(deps.db, { entry_id, restorer: HUMAN_AUTHOR }, "mcp", deps.clock.now())),
   );
   server.registerTool(
     "list_halted_refires",
@@ -801,9 +867,15 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
         "and second-round attributions (refire second_round, target = the id of the first objection event of the bundle — the objections one " +
         "triage session raised against the entry). An allocation row shows the review and the reviewed task; a draft or second-round row shows " +
         "the objected entry, its task, cause (the latest bundle's judgment; null = unattributed) and round. Every row shows the last failure's " +
-        "reason and time.",
+        "reason and time. Rows come as `halted`: draft and second-round rows first, in the order of the objections they answer, " +
+        `then allocation reviews. ${nextDescription("list_halted_refires", "rows")}`,
+      inputSchema: { next: z.string().optional() },
     },
-    async () => toolResult({ halted: listHaltedRefires(deps.db) }),
+    // 行は id を持たない —— 続きの境目は refire と target の鍵(Retry / Dismiss が行を指すのと同じ)
+    async (input) =>
+      readBudgeted("list_halted_refires", input, (read) =>
+        packItems(read, "halted", listHaltedRefires(deps.db), {}, (row) => `${row.refire}:${row.target}`),
+      ),
   );
   server.registerTool(
     "retry_halted_refire",
@@ -814,7 +886,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
         "Key it as list_halted_refires does (second_round: target = the bundle's first objection event id). Refused for anything not currently in list_halted_refires.",
       inputSchema: refireKeySchema.shape,
     },
-    async (key) => memoryVerb(() => ({ event_id: markHaltedRefire(deps.db, "refire_retried", key, "mcp", deps.clock.now()) })),
+    async (key) => domainResult(() => ({ event_id: markHaltedRefire(deps.db, "refire_retried", key, "mcp", deps.clock.now()) })),
   );
   server.registerTool(
     "dismiss_halted_refire",
@@ -825,7 +897,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
         "Key it as list_halted_refires does (second_round: target = the bundle's first objection event id). Refused for anything not currently in list_halted_refires.",
       inputSchema: refireKeySchema.shape,
     },
-    async (key) => memoryVerb(() => ({ event_id: markHaltedRefire(deps.db, "refire_dismissed", key, "mcp", deps.clock.now()) })),
+    async (key) => domainResult(() => ({ event_id: markHaltedRefire(deps.db, "refire_dismissed", key, "mcp", deps.clock.now()) })),
   );
   server.registerTool(
     "rebuild_memory_index",
@@ -835,7 +907,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
   server.registerTool(
     "cancel_task",
     {
-      description: "Cancel a human-registered task and its unsettled descendants.",
+      description: `Cancel a human-registered task and its unsettled descendants. ${TASK_ACK_DESCRIPTION}`,
       inputSchema: { task_id: z.string(), reason: z.string().optional() },
     },
     async ({ task_id, reason }) => {
@@ -846,7 +918,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
         () => deps.clock.now(),
         "mcp",
       );
-      return result.ok ? toolResult(result.value) : toolError(result.failure.error);
+      return result.ok ? toolResult(taskAck(result.value)) : toolError(result.failure.error);
     },
   );
   server.registerTool(
@@ -918,7 +990,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
       description:
         "Complete a task assigned to the human, optionally with the handoff doc: " +
         describeHandoffFields() +
-        ".",
+        `. ${TASK_ACK_DESCRIPTION}`,
       inputSchema: {
         task_id: z.string(),
         handoff: z.partialRecord(z.enum(HANDOFF_FIELDS), z.string()).optional(),
@@ -932,7 +1004,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
         () => deps.clock.now(),
         "mcp",
       );
-      return result.ok ? toolResult(result.value) : toolError(result.failure.error);
+      return result.ok ? toolResult(taskAck(result.value)) : toolError(result.failure.error);
     },
   );
   server.registerTool(
@@ -960,7 +1032,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
   server.registerTool(
     "register_task",
     {
-      description: "Register a human work or review task, optionally backed by a GitHub issue.",
+      description: `Register a human work or review task, optionally backed by a GitHub issue. ${TASK_ACK_DESCRIPTION}`,
       inputSchema: {
         type: z.string(),
         title: z.string().optional(),
@@ -986,7 +1058,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
         () => deps.clock.now(),
         "mcp",
       );
-      return result.ok ? toolResult(result.task) : toolError(JSON.stringify(result.failure));
+      return result.ok ? toolResult(taskAck(result.task)) : toolError(JSON.stringify(result.failure));
     },
   );
   server.registerTool(

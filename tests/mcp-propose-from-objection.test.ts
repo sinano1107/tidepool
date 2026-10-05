@@ -92,7 +92,7 @@ it("auditor RCA では author = RCA task の agent 名(auditorName の盤面)に
 
   const client = await managementMcpClient(t.baseUrl);
   try {
-    expect(body(await client.callTool({ name: "list_memory_entries", arguments: {} }))).toEqual(listed);
+    expect(body(await client.callTool({ name: "list_memory_entries", arguments: {} }))).toEqual({ entries: listed });
   } finally {
     await client.close();
   }
