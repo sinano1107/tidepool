@@ -39,7 +39,7 @@ async function unreclaimedSkillEnumeration() {
   await settle();
   recorder.emitExit(0, null);
 
-  // 中立 cwd の呼び出しの結果は root の exit で返る(待つのは workspace cwd だけ)
+  // 中立 cwd の呼び出しの結果は root の出力の読み切りで返る(待つのは workspace cwd だけ)
   expect((await pending).json).toEqual({ skills: ["tdd"], degraded: false });
   return { recorder, runtime, container };
 }

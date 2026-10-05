@@ -312,6 +312,11 @@ export type EventPayload =
       // `.stderr.log`, so this is what lets a reader of worker_exited
       // reconstruct which file belongs to it.
       worker_spawned_event_id: number;
+      // ADR 0201: whether the board read the root's output to the end (the
+      // child's `close`). false means it did not arrive within the reclaim
+      // timeout after the root's exit, so this record holds only what had
+      // been read by then.
+      output_closed: boolean;
       usage: TokenUsage & {
         /** issue #33 判断6: what the advisor **actually did** this session, as
          *  against worker_spawned.advisor's "what the board asked for". null

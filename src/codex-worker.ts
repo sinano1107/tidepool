@@ -15,7 +15,7 @@ import { resolveAgentOrQuarantine, resolveExecutionAgent } from "./agent.js";
 import { type BoardCall, readOutput } from "./board-call.js";
 import { boardDoctrine, boardProse } from "./board-prose.js";
 import { type BoardStatePath, boardStateOverlap } from "./board-state.js";
-import { readLines, readStderrTail } from "./child-stream.js";
+import { readLines, readStderrTail, settleOnOutputClose } from "./child-stream.js";
 import { agentGitIdentityEnv } from "./claude-worker.js";
 import type { Clock } from "./clock.js";
 import { CODEX_APP_SERVER_VERSION, callAppServer, codexCommandThrough } from "./codex-app-server.js";
@@ -29,6 +29,7 @@ import type { ContainedProcess, ContainerSpawn, ProcessContainers } from "./proc
 import { loadRegistry, type RegistrySource } from "./registry.js";
 import { DEFAULT_AUDITOR_NAME, resolveTaskAgent, type Task } from "./tasks.js";
 import type { Transcript, TranscriptStore } from "./transcript-store.js";
+import { RECLAIM_TIMEOUT } from "./watchdog.js";
 import type { WorkerAdapter, WorkerExit } from "./worker.js";
 import {
   quarantineWorkspace,
@@ -257,6 +258,9 @@ export type CodexSpawnFn = ContainerSpawn;
 export interface CodexWorkerOptions {
   db: Db;
   clock: Clock;
+  /** ADR 0201 決定2: root の exit から出力の読み切りを待つ上限。watchdog の回収 timeout と同じ値を
+   *  盤面が渡す(新しい設定値ではない)。不在は watchdog と同じ既定。 */
+  reclaimTimeout?: number;
   registry: RegistrySource;
   agent: string;
   auditorName?: string;
@@ -1133,7 +1137,8 @@ export class CodexWorker implements WorkerAdapter {
       });
       this.options.onSpawnFailed?.(task.id, failure);
     });
-    child.on("exit", (code, signal) => {
+    // ADR 0201: 確定点は exit でなく root の出力の読み切り(see settleOnOutputClose)。
+    const settle = (code: number | null, signal: NodeJS.Signals | null, outputClosed: boolean) => {
       this.running.delete(task.id);
       flushStdout();
       const exit: WorkerExit = {
@@ -1161,16 +1166,17 @@ export class CodexWorker implements WorkerAdapter {
           kind: "worker_exited",
           ...exit,
           worker_spawned_event_id: spawned,
+          output_closed: outputClosed,
           usage: normalized,
         },
         at: this.options.clock.now(),
       });
-      // ADR 0109 決定4: root の exit は容器に残るものが孤児である証拠 —— usage と
-      // transcript を書いた後に強制回収を撃つ。Harness 非依存に、盤面 supervisor 経由。
-      this.containers.forceReclaim(task.id);
       removeTaskTemp();
       this.options.onWorkerExited?.(task.id, exit);
-    });
+    };
+    // ADR 0109 決定4: root の exit は容器に残るものが孤児である証拠 —— 読み切りを待たずに
+    // 強制回収を撃つ(ADR 0201 決定1)。Harness 非依存に、盤面 supervisor 経由。
+    settleOnOutputClose(child, this.options.clock, this.options.reclaimTimeout ?? RECLAIM_TIMEOUT, () => this.containers.forceReclaim(task.id), settle);
   }
 
   /** Codex folds up on SIGINT; force/reclaimed belong to ProcessContainers. */

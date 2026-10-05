@@ -374,6 +374,7 @@ it("advisor pin ありで相談0回の session は、盤面の記録から読ん
       kind: "worker_exited",
       ...QUIET_EXIT,
       worker_spawned_event_id: spawnedId,
+      output_closed: true,
       usage: { ...tokens, advisor: null, models: { "claude-opus-5-5": tokens } },
     },
   });
@@ -507,7 +508,7 @@ it("行の拒否で落ちた session は、そのタスクが別の行で受理�
   await t.clock.advance(HOUR);
   const refusedId = recordSpawn(a.id);
   const at = t.clock.now();
-  appendEvent(t.db, { taskId: a.id, workerId: "fake-worker", origin: "board", at, payload: { kind: "worker_exited", ...QUIET_EXIT, exit_code: 1, worker_spawned_event_id: refusedId, usage: null } });
+  appendEvent(t.db, { taskId: a.id, workerId: "fake-worker", origin: "board", at, payload: { kind: "worker_exited", ...QUIET_EXIT, exit_code: 1, worker_spawned_event_id: refusedId, output_closed: true, usage: null } });
   appendEvent(t.db, { taskId: a.id, workerId: "tidepool", origin: "board", at, payload: { kind: "row_refused", provider: "anthropic", model: WORKER_SPAWNED.model, worker_spawned_event_id: refusedId, cause: "api_404" } });
   const rerunId = recordSpawn(a.id);
   await completeViaMcp(t, a.id);

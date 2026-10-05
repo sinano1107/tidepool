@@ -1,5 +1,5 @@
 import { expect, it, vi } from "vitest";
-import { type BoardCallSpec, createBoardCalls, type PtyBoardCallSpec } from "../src/board-call.js";
+import { type BoardCallSpec, createBoardCalls, type PtyBoardCallSpec, readOutput } from "../src/board-call.js";
 import type { ContainmentCapability } from "../src/containment.js";
 import type { ContainedProcess, PtyFn, PtyProcess } from "../src/process-container.js";
 import { ProcessContainers } from "../src/process-container.js";
@@ -387,4 +387,52 @@ it("断ったことの報告が投げても、口は null を返す —— 失�
 
   expect(await calls.call(spec, readAll)).toBeNull();
   expect(await raised).toBe(failure);
+});
+
+it("root の exit のあと、出力の読み切りの前に届いた stdout / stderr も結果に入る(ADR 0201)", async () => {
+  const t = setup();
+  const call = t.calls.call(spec, readOutput);
+  await t.spawned(1);
+
+  t.emitExitOnlyAt(0, 0, null);
+  // exit で決着させる実装が、遅れて届く出力を読む前に決着し終えるように間を挟む
+  await new Promise((resolve) => setImmediate(resolve));
+  t.processes[0]!.stdout.write("late answer");
+  t.processes[0]!.stderr.write("late warning");
+  await new Promise((resolve) => setImmediate(resolve));
+  t.emitCloseAt(0, 0, null);
+
+  expect(await call).toEqual({ exitCode: 0, stdout: "late answer", stderr: "late warning" });
+});
+
+it("強制回収は root の exit の時点で撃たれ、結果は出力の読み切りまで返らない(ADR 0201)", async () => {
+  const t = setup();
+  const call = t.calls.call(spec, readAll);
+  await t.spawned(1);
+  let settled = false;
+  void call.then(() => {
+    settled = true;
+  });
+
+  t.emitExitOnlyAt(0, 0, null);
+  expect(t.runtime.forceReclaims).toEqual(t.runtime.created);
+  await t.say("skills");
+  expect(settled).toBe(false);
+  t.emitCloseAt(0, 0, null);
+
+  expect(await call).toBe("skills");
+  // 読み切りの後ろの force は2度目で、空になった容器には届かない
+  expect(t.runtime.forceReclaims).toEqual(t.runtime.created);
+});
+
+it("root が exit しても、出力の読み切りが時間上限までに来なければ結果は無い(ADR 0201)", async () => {
+  const t = setup();
+  const call = t.calls.call(spec, readAll);
+  await t.spawned(1);
+  await t.say("half an answer");
+  t.emitExitOnlyAt(0, 0, null);
+
+  await t.clock.advance(LIMIT);
+
+  expect(await call).toBeNull();
 });
