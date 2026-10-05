@@ -1,6 +1,7 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { AgentTierMismatchError, type AgentView, type ChangeAgentTierInput } from "../src/agent-create.js";
 import { appendEvent } from "../src/events.js";
+import { registerQuarantine, tableRowValue } from "../src/quarantine.js";
 import { RegistryPushFailedError } from "../src/registry-write.js";
 import { registerTask } from "../src/tasks.js";
 import { api, bootTidepool, completeViaMcp, HOUR, HUMAN_WEBUI, mcpClient, type Tidepool, WORKER_SPAWNED } from "./harness.js";
@@ -172,6 +173,41 @@ it("修正値 to で2段下げられ、推奨どおりに数えない —— 下
     expect((await events(questionId)).find((e) => e.kind === "question_answered").payload).toMatchObject({
       answers: [{ answer: "approve", recommendation_accepted: false }],
     });
+  } finally {
+    await client.close();
+  }
+});
+
+/** 行の拒否(setup): openai standard の唯一の行 gpt-5.6-sol の行の Quarantine を開く。 */
+const refuseSol = () => registerQuarantine(t.db, "tableRow", tableRowValue("openai", "gpt-5.6-sol"), "refused", t.clock.now());
+
+it("下げ先ティアの、agent の Provider の行がすべて Quarantine 中なら、tier の提案は Quarantine を名指して断られ question は立たない", async () => {
+  const { review, client, call } = await boardWithRoutingReview();
+  try {
+    refuseSol();
+    const evidence = [spawned(t, "deckhand", "openai", "gpt-6-astra")];
+    expect(await call("propose_routing_change", { op: "agent_tier", agent: "deckhand", to: "standard", evidence, rationale: "r" })).toMatchObject({
+      error: expect.stringMatching(/quarantine/),
+    });
+    expect(((await api(t.baseUrl, "GET", "/api/tasks")).json as any[]).filter((q) => q.parent_id === review.id)).toEqual([]);
+  } finally {
+    await client.close();
+  }
+});
+
+it("提案の後で下げ先の行がすべて Quarantine 中になれば、承認は断られ question は open のまま陳腐化の決着も残らない", async () => {
+  const { client, call, changeTier } = await boardWithRoutingReview();
+  try {
+    const questionId = await proposeDeckhand(call);
+    refuseSol();
+
+    const res = await answer(questionId, { answers: ["approve"] });
+
+    expect(res.status).toBe(409);
+    expect(res.json.error).toMatch(/quarantine/);
+    expect(await task(questionId)).toMatchObject({ status: "todo", question_answer: null });
+    expect((await events(questionId)).map((e) => e.kind)).toEqual(["task_registered"]);
+    expect(changeTier).not.toHaveBeenCalled();
   } finally {
     await client.close();
   }

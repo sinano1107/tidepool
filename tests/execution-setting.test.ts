@@ -3,6 +3,7 @@ import { isClaudeModelAlias } from "../src/claude-model-alias.js";
 import { openDb } from "../src/db.js";
 import { listEventsOfKinds } from "../src/events.js";
 import {
+  anthropicBoardCallRow,
   applyExecutionSettingsChange,
   assertKnownTier,
   BOARD_DEFAULT_PRIORITY,
@@ -566,6 +567,21 @@ it("行の Quarantine の照合は完全一致 —— claude-opus-5 の Quaranti
 it("Fable の行が Quarantine 中でも、ほかの行の advisor は `fable` のまま", () => {
   const db = boardWithRefusedRows([], [["anthropic", "claude-fable-5-1"]]);
   expect(executionSettingsFor(db, anthropicAgent(true), workAt("standard"))).toMatchObject([{ model: "claude-opus-5-5", advisor: "fable" }]);
+});
+
+const sonnet5 = { provider: "anthropic", tier: "economy", model: "claude-sonnet-5", effort: "high", price_in: 3, price_out: 15 } as const;
+
+it("表の行で走る Board call(振り返り・下書き)は走れる行の最安で撃つ —— 最安の行が Quarantine 中なら同じティアの次の行", () => {
+  const db = boardWithRefusedRows([sonnet5], [["anthropic", "claude-sonnet-5-5"]]);
+  expect(anthropicBoardCallRow(db, "economy")).toMatchObject({ model: "claude-sonnet-5" });
+});
+
+it("そのティアの anthropic の行がすべて Quarantine 中なら、Board call の行は Quarantine を名指して投げ、行が無いときと区別する", () => {
+  const db = boardWithRefusedRows([sonnet5], [["anthropic", "claude-sonnet-5-5"], ["anthropic", "claude-sonnet-5"]]);
+  expect(() => anthropicBoardCallRow(db, "economy")).toThrow(/quarantine/);
+  applyExecutionSettingsChange(db, { setting: "delete_row", provider: "anthropic", model: "claude-sonnet-5", effort: "high" }, "webui", new Date());
+  applyExecutionSettingsChange(db, { setting: "delete_row", provider: "anthropic", model: "claude-sonnet-5-5", effort: "high" }, "webui", new Date());
+  expect(() => anthropicBoardCallRow(db, "economy")).toThrow(/has no row/);
 });
 
 // ── 1つの段に同じ model は1行まで(ADR 0200 決定5 / issue #1419): 行の鍵は (provider, model, effort) ──

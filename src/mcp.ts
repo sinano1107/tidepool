@@ -939,7 +939,7 @@ function registerRoutingMetaReviewVerbs(server: McpServer, deps: McpDeps, run: M
         "is only accepted while it is promoted; neither takes row, change, or an amendment. op agent_tier lowers a non-built-in " +
         "agent's default tier by exactly one step (an agent with no tier runs at the board default tier): agent names it, " +
         "to is the tier one step below, and evidence lists the worker_spawned event ids of that agent's sessions your case rests " +
-        "on; it is refused when the execution-setting table has no row at the target tier for any of the agent's providers. The " +
+        "on; it is refused when the execution-setting table has no runnable row (one not under a row quarantine) at the target tier for any of the agent's providers. The " +
         "human may amend to with any lower tier when approving, and approval commits the new tier to the registry. op tier_description rewrites " +
         "the description of one of the board's tiers (tier) to description, one line: a tier's description defines it for everyone who requests it, " +
         "so propose it when requests for that tier across workspaces or writers show its definition is off. evidence lists the worker_spawned event ids " +
