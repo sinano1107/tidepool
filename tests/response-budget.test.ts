@@ -6,12 +6,14 @@ import { floorResponse, packItems, readNext } from "../src/response-budget.js";
 import { RESPONSE_BUDGET_BYTES } from "./harness.js";
 
 // 応答予算(ADR 0195): 詰める関数の境目・欄の分割・続きの error と、出口の床はここで言う(issue #1388)。
-// 大きさは MCP の text content に載るシリアライズ後の UTF-8 バイト数で測る。
+// 大きさは盤面が返す CallToolResult を丸ごとシリアライズした UTF-8 バイト数で測る(ADR 0195 追記1)。
 
-const bytesOf =(payload: unknown) => Buffer.byteLength(JSON.stringify(payload));
+const resultBytes = (result: unknown) => Buffer.byteLength(JSON.stringify(result));
+/** payload を `toolResult` に包んだ CallToolResult の大きさ。 */
+const bytesOf = (payload: unknown) => resultBytes(toolResult(payload));
 const first = { verb: "get_task", args: { task_id: "t1" } };
 
-/** シリアライズ後がちょうど `total` バイトになる `{ events }` の item 列。 */
+/** `{ events }` を CallToolResult に包んだ大きさがちょうど `total` バイトになる item 列。 */
 function itemsTotalling(total: number) {
   const items = Array.from({ length: 40 }, (_, i) => ({ id: 40 - i, line: "x".repeat(900) }));
   items[0]!.line += "x".repeat(total - bytesOf({ events: items }));
@@ -56,12 +58,38 @@ it("出口の床は予算を超える応答を予算まで切り、盤面の欠�
   const result = floorResponse(toolResult(payload), { db, surface: "worker", verb: "complete_task", taskId: "t1", at });
 
   expect(result).not.toHaveProperty("isError");
-  expect(Buffer.byteLength(textOf(result))).toBeLessThanOrEqual(RESPONSE_BUDGET_BYTES);
+  expect(resultBytes(result)).toBeLessThanOrEqual(RESPONSE_BUDGET_BYTES);
   expect(textOf(result)).toContain("board defect");
   expect(textOf(result)).toContain(String(bytesOf(payload)));
   expect(textOf(result)).toContain("complete_task");
   expect(listEventsOfKinds(db, ["response_truncated"]).map((e) => [e.task_id, e.payload])).toEqual([
     [null, { kind: "response_truncated", surface: "worker", verb: "complete_task", bytes: bytesOf(payload), budget: RESPONSE_BUDGET_BYTES, task_id: "t1" }],
+  ]);
+});
+
+it("出口の床は本文を UTF-8 の文字の途中で切らない", () => {
+  // 切る位置が多バイト文字のどの位置にも当たるよう、先頭の ASCII で揃え方をずらす。
+  // 4バイトの文字の切れ端は U+FFFD(3バイト)に化けて小さく見えるので、文字境界へ戻さないと予算の際で切れ端が残る
+  for (const lead of ["", "a", "aa", "aaa"]) {
+    const result = floorResponse(toolResult({ line: lead + "🐙".repeat(15_000) }), { db: openDb(":memory:"), surface: "worker", verb: "complete_task", at });
+    expect(textOf(result)).not.toContain("\uFFFD");
+  }
+});
+
+it("出口の床は、本文は予算以下でも CallToolResult に包むと予算を超える応答を切り、切ったあとの CallToolResult も目印込みで予算以下にする", () => {
+  const db = openDb(":memory:");
+  // 本文で `\"` の2バイトが、包むと4バイトになる
+  const payload = { line: '"'.repeat(15_000) };
+  const response = toolResult(payload);
+  expect(Buffer.byteLength(textOf(response))).toBeLessThanOrEqual(RESPONSE_BUDGET_BYTES);
+
+  const result = floorResponse(response, { db, surface: "management", verb: "get_task", at });
+
+  expect(resultBytes(result)).toBeLessThanOrEqual(RESPONSE_BUDGET_BYTES);
+  expect(textOf(result)).toContain("board defect");
+  expect(textOf(result)).toContain(String(bytesOf(payload)));
+  expect(listEventsOfKinds(db, ["response_truncated"]).map((e) => e.payload)).toEqual([
+    { kind: "response_truncated", surface: "management", verb: "get_task", bytes: bytesOf(payload), budget: RESPONSE_BUDGET_BYTES },
   ]);
 });
 
@@ -182,4 +210,35 @@ it("複数の列に詰めると item は自分の列に載り(列は空でも載
   for (const response of responses.slice(1)) expect(response.parent).not.toHaveProperty("id");
   expect(responses.flatMap((response) => response.parent.history.map((item: any) => item.id))).toEqual(items.slice(0, 30).map((item) => item.id));
   expect(responses.flatMap((response) => response.history.map((item: any) => item.id))).toEqual(items.slice(30).map((item) => item.id));
+});
+
+it("引用符の多い item で詰めても、包んだ CallToolResult は最初の応答も続きの応答も予算以下で、next を追うと欠けも重複もなく揃う", () => {
+  // 小さい object を多数 —— 本文では1バイトの `"` が、CallToolResult に包むと `\"` の2バイトになる
+  const items = Array.from({ length: 1_500 }, (_, i) => ({ id: i, kind: "decision_logged", line: `"${i}" said "ok"` }));
+  // 封筒の大きさを1バイトずつずらし、詰め終わりと予算の隙間がどの幅にもなるようにする(続きの欄の引用符の分も境目で効く)
+  for (let pad = 0; pad < 80; pad++) {
+    const envelope = { title: `"quoted" title ${"x".repeat(pad)}` };
+
+    const responses = followNext(items, envelope);
+
+    expect(responses.length).toBeGreaterThan(2);
+    for (const response of responses) expect(bytesOf(response)).toBeLessThanOrEqual(RESPONSE_BUDGET_BYTES);
+    expect(responses[0]).toMatchObject(envelope);
+    expect(responses.flatMap((response) => response.events)).toEqual(items);
+  }
+});
+
+it("1件で予算を超える item の欄が包むと膨らむ文字(引用符・バックスラッシュ・改行)だらけでも、切れの CallToolResult は予算以下で、つなぐと逐語の原文に戻る", () => {
+  // 本文で2バイトの `\"` `\\` `\n` は、CallToolResult に包むとそれぞれ4バイトになる。多バイト文字も混ぜ、文字の途中で切れうるようにする
+  const long = '"\\\n潮🐙"'.repeat(8_000);
+  const items = [{ id: 3, line: "short" }, { id: 2, payload: { kind: "decision_logged", line: long } }, { id: 1, line: "after" }];
+
+  const responses = followNext(items);
+
+  for (const response of responses) expect(bytesOf(response)).toBeLessThanOrEqual(RESPONSE_BUDGET_BYTES);
+  const pieces = responses.filter((response) => response.partial);
+  expect(pieces.length).toBeGreaterThan(1);
+  for (const piece of pieces) expect(piece.partial).toEqual({ id: 2, field: "payload.line", field_bytes: Buffer.byteLength(long) });
+  expect(pieces.map((piece) => piece.events[0].payload.line).join("")).toBe(long);
+  expect(responses.flatMap((response) => response.events.filter((e: any) => e.id !== 2))).toEqual([items[0], items[2]]);
 });

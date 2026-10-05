@@ -529,7 +529,7 @@ export type EventPayload =
   // Dismiss(二度と撃たない)。失敗 event と同じタスクに帰属。
   | { kind: "refire_retried" | "refire_dismissed"; refire: "draft" | "second_round" | "allocation"; target: number }
   // ADR 0195 決定5 / issue #1388: 出口の床が応答予算を超えた成功の応答を切った(盤面スコープ)。読み口の欠陥の記録 ——
-  // bytes = 切る前のバイト数。worker の面では session の task id を載せる。
+  // bytes = 切る前の CallToolResult を丸ごとシリアライズしたバイト数(ADR 0195 追記1)。worker の面では session の task id を載せる。
   | { kind: "response_truncated"; surface: "management" | "worker"; verb: string; bytes: number; budget: number; task_id?: string };
 
 export type EventKind = EventPayload["kind"];

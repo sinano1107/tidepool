@@ -2,7 +2,8 @@ import type { Db } from "./db.js";
 import { appendEvent, type EventPayload } from "./events.js";
 import { BOARD_WORKER_ID, DomainError } from "./tasks.js";
 
-/** 盤面が返す MCP 応答1回の大きさの上限(ADR 0195 決定2)。text content に載るシリアライズ後の UTF-8 バイト数で測る。 */
+/** 盤面が返す MCP 応答1回の大きさの上限(ADR 0195 決定2)。text content の本文ではなく、盤面が返す CallToolResult を丸ごと
+ *  シリアライズした UTF-8 バイト数(`responseBytes`)で測る(ADR 0195 追記1)。 */
 export const RESPONSE_BUDGET_BYTES = 40_000;
 
 type ItemId = string | number;
@@ -19,10 +20,27 @@ export interface ReadPosition<A = Record<string, unknown>> {
 
 const bytes = (text: string) => Buffer.byteLength(text);
 
+/** 本文 `text` を載せて盤面が返す CallToolResult(`toolResult` の形)を丸ごとシリアライズした UTF-8 バイト数 —— 予算が測る大きさ
+ *  (ADR 0195 追記1)。JSON の文字列の escape は1文字ずつなので、本文の断片をつないだ大きさは断片ごとの増分の和になる。 */
+export const responseBytes = (text: string) => bytes(JSON.stringify({ content: [{ type: "text", text }] }));
+/** 本文に `fragment` を足したときに CallToolResult が増える分(escape 後のバイト数)。 */
+const grownBy = (fragment: string) => responseBytes(fragment) - responseBytes("");
+
 /** `end` が文字の途中(UTF-8 の継続バイト)に当たっていたら、手前の文字境界へ戻す。 */
 function charBoundary(buf: Buffer, end: number): number {
   while (end < buf.length && (buf[end]! & 0xc0) === 0x80) end--;
   return end;
+}
+
+/** `buf` の `from` から先で、`fits` が成り立つ最も遠い文字境界。1文字も入らなければ `from`。 */
+function fitEnd(buf: Buffer, from: number, fits: (end: number) => boolean): number {
+  let [lo, hi] = [from, buf.length];
+  while (lo < hi) {
+    const mid = Math.ceil((lo + hi) / 2);
+    if (fits(charBoundary(buf, mid))) lo = mid;
+    else hi = mid - 1;
+  }
+  return charBoundary(buf, lo);
 }
 
 const MALFORMED_NEXT = "next is malformed: pass the next string exactly as a previous response returned it";
@@ -145,28 +163,22 @@ export function packItems<T>(
         ...(end < text.length ? { next: encodeNext({ ...read, at: keyAt(0), field, offset: end }), remaining: rest.length } : continueFrom(1)),
       };
     };
-    let [lo, hi] = [offset, text.length];
-    while (lo < hi) {
-      const mid = Math.ceil((lo + hi) / 2);
-      if (bytes(JSON.stringify(pageUpTo(charBoundary(text, mid)))) <= RESPONSE_BUDGET_BYTES) lo = mid;
-      else hi = mid - 1;
-    }
     // 他の欄だけで予算を超えると1文字も入らない —— 欄の残りを丸ごと返して床に任せ、続きが同じ位置を指し続けないようにする
-    const end = charBoundary(text, lo);
+    const end = fitEnd(text, offset, (to) => responseBytes(JSON.stringify(pageUpTo(to))) <= RESPONSE_BUDGET_BYTES);
     return pageUpTo(end > offset ? end : text.length);
   };
   if (read.field !== undefined) return piece(read.field, read.offset ?? 0);
   const whole = render(rest);
-  if (bytes(JSON.stringify(whole)) <= RESPONSE_BUDGET_BYTES) return whole;
+  if (responseBytes(JSON.stringify(whole)) <= RESPONSE_BUDGET_BYTES) return whole;
 
   // 全部は入らない(最後の1件は残る): 先頭から item を足していき、続きの分まで含めて予算に収まる最後の位置で切る
-  const tailBytes = (k: number) => bytes(JSON.stringify(continueFrom(k))) - 1; // 先頭の `{` を `,` に読み替える
-  let size = bytes(JSON.stringify(render([])));
+  const tailBytes = (k: number) => grownBy(JSON.stringify(continueFrom(k))) - 1; // 先頭の `{` を `,` に読み替える
+  let size = responseBytes(JSON.stringify(render([])));
   const filled = new Set<string>(); // 1件目の後ろにだけ `,` が要る
   let k = 0;
   while (k < rest.length - 1) {
     const list = listOf(rest[k]!, start + k);
-    const grown = size + bytes(JSON.stringify(rest[k])) + (filled.has(list) ? 1 : 0);
+    const grown = size + grownBy(JSON.stringify(rest[k])) + (filled.has(list) ? 1 : 0);
     if (grown + tailBytes(k + 1) > RESPONSE_BUDGET_BYTES) break;
     size = grown;
     filled.add(list);
@@ -175,7 +187,7 @@ export function packItems<T>(
   if (k === 0) {
     // 先頭の item が封筒と一緒に入らないだけなら、封筒だけを返してその item は次の応答で丸ごと返す ——
     // 切るのは1件で予算を超える item だけ(ADR 0195 決定4)。その item は封筒と一緒に今切る(封筒だけの応答を挟まない)
-    const fitsAlone = bytes(JSON.stringify({ ...render(rest.slice(0, 1), every), ...continueFrom(1) })) <= RESPONSE_BUDGET_BYTES;
+    const fitsAlone = responseBytes(JSON.stringify({ ...render(rest.slice(0, 1), every), ...continueFrom(1) })) <= RESPONSE_BUDGET_BYTES;
     if (fitsAlone && Object.keys(firstOnly).length > 0) return { ...render([]), ...continueFrom(0) };
     return piece(longestStringField(rest[0]), 0);
   }
@@ -198,28 +210,32 @@ export type ResponseSurface = Extract<EventPayload, { kind: "response_truncated"
 
 type ToolResponse = { isError?: boolean; content: { type: string; text?: string }[] };
 
-/** 出口の床(ADR 0195 決定5): 成功の応答が予算を超えていたら、本文を予算まで切って英語の目印を付け、盤面スコープの event を
- *  1件書く。読み口の欠陥の床であって続きの読み方ではない。error にはしない —— 書き込み verb なら書き込みは済んでいる。
- *  error の応答(`toolError`)と予算以下の応答はそのまま返す。
- *  ponytail: 測るのは先頭の text content だけ —— 盤面の応答は `toolResult` の1切れしか持たない */
+/** 出口の床(ADR 0195 決定5): 成功の応答の CallToolResult が予算を超えていたら、目印込みの CallToolResult が予算に収まるまで
+ *  本文を切って英語の目印を付け、盤面スコープの event を1件書く。読み口の欠陥の床であって続きの読み方ではない。
+ *  error にはしない —— 書き込み verb なら書き込みは済んでいる。error の応答(`toolError`)と予算以下の応答はそのまま返す。
+ *  ponytail: 測るのは先頭の text content を `toolResult` の形に包んだ大きさだけ —— 盤面の応答は `toolResult` の1切れしか持たない。
+ *  他の欄(`structuredContent` 等)を返す応答が出たら CallToolResult そのものを測る */
 export function floorResponse<R extends ToolResponse>(
   result: R,
   context: { db: Db; surface: ResponseSurface; verb: string; taskId?: string | null; at: Date },
 ): R {
   const text = result.content[0]?.text;
-  if (result.isError || text === undefined || bytes(text) <= RESPONSE_BUDGET_BYTES) return result;
+  if (result.isError || text === undefined) return result;
+  const size = responseBytes(text);
+  if (size <= RESPONSE_BUDGET_BYTES) return result;
   const { db, surface, verb, taskId, at } = context;
-  const original = Buffer.from(text);
   const marker =
     `\n[tidepool: response cut to the ${RESPONSE_BUDGET_BYTES}-byte response budget by a board defect — ` +
-    `${verb} returned ${original.length} bytes. The text above is incomplete.]`;
+    `${verb} returned ${size} bytes. The text above is incomplete.]`;
   appendEvent(db, {
     taskId: null,
     workerId: BOARD_WORKER_ID,
     origin: "board",
     at,
-    payload: { kind: "response_truncated", surface, verb, bytes: original.length, budget: RESPONSE_BUDGET_BYTES, ...(taskId ? { task_id: taskId } : {}) },
+    payload: { kind: "response_truncated", surface, verb, bytes: size, budget: RESPONSE_BUDGET_BYTES, ...(taskId ? { task_id: taskId } : {}) },
   });
-  const kept = original.subarray(0, charBoundary(original, RESPONSE_BUDGET_BYTES - bytes(marker))).toString();
+  const original = Buffer.from(text);
+  const keptUpTo = (end: number) => original.subarray(0, end).toString();
+  const kept = keptUpTo(fitEnd(original, 0, (end) => responseBytes(keptUpTo(end) + marker) <= RESPONSE_BUDGET_BYTES));
   return { ...result, content: [{ ...result.content[0], text: kept + marker }] };
 }

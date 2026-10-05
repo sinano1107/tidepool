@@ -3,6 +3,7 @@ import { openDb } from "../src/db.js";
 import { appendEvent, type EventPayload } from "../src/events.js";
 import { applyExecutionSettingsChange, type ExecutionSetting, loadExecutionSettingTable } from "../src/execution-setting.js";
 import { aggregateCells, loadEpisodes, recordShadow, selectorBranch } from "../src/learner.js";
+import { toolResult } from "../src/mcp.js";
 import { registerMetaReview } from "../src/meta-review.js";
 import { listAllocations, listRoutingCells, listRoutingShadow, proposeRoutingChange, readRoutingSettings } from "../src/routing-review.js";
 import { answerQuestion, getTask, registerTask } from "../src/tasks.js";
@@ -245,7 +246,7 @@ it("read_routing_settings は予算を超える量の提案を古い順に予算
   const responses = followNext((input) => readRoutingSettings(db, input), {});
 
   expect(responses.length).toBeGreaterThan(1);
-  for (const response of responses) expect(Buffer.byteLength(JSON.stringify(response))).toBeLessThanOrEqual(RESPONSE_BUDGET_BYTES);
+  for (const response of responses) expect(Buffer.byteLength(JSON.stringify(toolResult(response)))).toBeLessThanOrEqual(RESPONSE_BUDGET_BYTES);
   expect(responses.flatMap((response) => response.proposals.map((p) => p.question_id))).toEqual(proposed);
   expect(responses[0]).toMatchObject({ table: expect.any(Array) });
   for (const response of responses.slice(1)) expect(response).not.toHaveProperty("table");
@@ -272,7 +273,7 @@ it("list_routing_shadow / list_allocations / list_routing_cells は予算を超�
 
   for (const responses of [shadows, allocations, cells]) {
     expect(responses.length).toBeGreaterThan(1);
-    for (const response of responses) expect(Buffer.byteLength(JSON.stringify(response))).toBeLessThanOrEqual(RESPONSE_BUDGET_BYTES);
+    for (const response of responses) expect(Buffer.byteLength(JSON.stringify(toolResult(response)))).toBeLessThanOrEqual(RESPONSE_BUDGET_BYTES);
   }
   expect(shadows.flatMap((response) => response.shadow.map((r) => r.task_id))).toEqual(tasks);
   expect(new Set(allocations.flatMap((response) => response.allocations.map((g) => g.agent))).size).toBe(20);
