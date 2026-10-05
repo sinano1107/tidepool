@@ -25,6 +25,7 @@ interface RegisterScreenIssueFields {
   type: 'work';
   workspace: string;
   github_issue_number: number;
+  /** 要求ティア(盤面の段の名前)。issue 由来は常に work なので常に `tier` として送る。 */
   tier?: string;
 }
 interface RegisterScreenManualFields {
@@ -324,7 +325,10 @@ function RegisterScreen({ onRegister, parentTask, onClose }: RegisterScreenProps
       <Card style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
         {!childMode && (
           <Select label="Source" options={['manual', 'github issue']} value={source} onChange={(e) => {
-            setSource(e.target.value === 'github issue' ? 'github issue' : 'manual'); setGate(null); setTier('');
+            setSource(e.target.value === 'github issue' ? 'github issue' : 'manual'); setGate(null);
+            // tier state is shared by both paths — reset it so an issue-path
+            // tier never leaks into a manual review task as its review_tier
+            setTier('');
             // switching away from the pending-dump's own manual content: a
             // later registration (e.g. an unrelated issue reference) must not
             // consume a dump it was never built from
