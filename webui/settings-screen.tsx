@@ -2151,8 +2151,8 @@ function ExecutionTableCard({ settings, say, onSaved, edit }: {
   const save = async () => {
     setBusy(true);
     try {
-      // deletes first so a write can take a removed row's effort or tier.
-      // ponytail: swapping effort / tier between two kept rows collides mid-sequence and the door refuses it; do it in two saves
+      // 削除を先に送る —— 書く行が、消した行の effort や段を引き継げるように。
+      // ponytail: 残す2行の間で effort / 段を入れ替えると途中で衝突して扉が拒む。2回の保存に分ける(一括の扉ができたら1回で済む)
       for (const row of deletes) await api('/api/settings/execution', { setting: 'delete_row', provider: row.provider, model: row.model, effort: row.effort });
       for (const write of writes) await api('/api/settings/execution', { setting: 'row', ...write });
       say('success', 'execution table saved', `${writes.length} row${writes.length === 1 ? '' : 's'} written, ${deletes.length} removed`);

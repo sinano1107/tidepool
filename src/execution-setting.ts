@@ -389,16 +389,22 @@ function isProviderRank(rank: readonly string[]): rank is Provider[] {
 const rowKeySchema = z.object({ provider: z.enum(PROVIDER_VALUES), model: z.string().min(1), effort: z.string().min(1) });
 type RowKey = z.infer<typeof rowKeySchema>;
 
+/** 鍵として読める3欄(提案の行・spawn の記録も同じ3欄を持つ)。 */
+type RowKeyFields = { provider: string; model: string; effort: string };
+
 /** この行が鍵の行か。 */
-export const isRow = (row: ExecutionSettingRow, key: { provider: string; model: string; effort: string }) =>
+export const matchesRowKey = (row: ExecutionSettingRow, key: RowKeyFields) =>
   row.provider === key.provider && row.model === key.model && row.effort === key.effort;
+
+/** 行を文面で名指す綴り(エラー・question の diff)。 */
+export const rowName = (key: RowKeyFields) => `${key.provider} / ${key.model} at effort ${key.effort}`;
 
 /** `row` を表に書けるか(ADR 0200 決定5): 1つの (model, effort) の組が属する段は1つ、1つの段に同じ model は1行まで。
  *  `key` は編集で置き換わる行で、照合から外す。行を書く扉と routing の行の提案が同じこの1本を通る。 */
 export function assertRowFits(table: ExecutionSettingTable, row: ExecutionSettingRow, key?: RowKey): void {
   for (const other of table) {
-    if ((key && isRow(other, key)) || other.provider !== row.provider || other.model !== row.model) continue;
-    const name = `${other.provider} / ${other.model} at effort ${other.effort} in tier ${other.tier}`;
+    if ((key && matchesRowKey(other, key)) || other.provider !== row.provider || other.model !== row.model) continue;
+    const name = `${rowName(other)} in tier ${other.tier}`;
     if (other.effort === row.effort) throw new DomainError(`the execution-setting table already has the row ${name}; a (model, effort) pair belongs to one tier, so edit that row instead`);
     if (other.tier === row.tier) throw new DomainError(`the execution-setting table already has the row ${name}; a tier holds at most one row per model`);
   }
@@ -464,13 +470,13 @@ export function routingPinChanges(
 ): Array<"tier" | "price_in" | "price_out" | "learner_promoted" | "rows"> | null {
   if (proposal.kind === "registry") {
     const held = proposal.pin.rows.every((pinned) =>
-      settings.table.some((row) => row.provider === pinned.provider && row.model === pinned.model && row.tier === pinned.tier && row.effort === pinned.effort),
+      settings.table.some((row) => matchesRowKey(row, pinned) && row.tier === pinned.tier),
     );
     return held ? [] : ["rows"];
   }
   if (proposal.op !== "row") return proposal.pin.promoted === settings.learnerPromoted ? [] : ["learner_promoted"];
   const { pin } = proposal;
-  const current = settings.table.find((row) => isRow(row, pin));
+  const current = settings.table.find((row) => matchesRowKey(row, pin));
   if (!current) return null;
   return (["tier", "price_in", "price_out"] as const).filter((field) => current[field] !== pin[field]);
 }
@@ -514,8 +520,8 @@ export function applyExecutionSettingsChange(db: Db, change: ExecutionSettingsCh
         }
         const { key } = change;
         const table = loadExecutionSettingTable(db);
-        if (key && !table.some((row) => isRow(row, key))) {
-          throw new DomainError(`the execution-setting table has no row ${key.provider} / ${key.model} at effort ${key.effort} to edit`);
+        if (key && !table.some((row) => matchesRowKey(row, key))) {
+          throw new DomainError(`the execution-setting table has no row ${rowName(key)} to edit`);
         }
         assertRowFits(table, change.row, key);
         if (key) {

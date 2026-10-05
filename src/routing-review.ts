@@ -5,10 +5,11 @@ import {
   assertRowFits,
   BOARD_DEFAULT_TIER,
   composeRoutingRow,
-  isRow,
   loadExecutionSettingTable,
+  matchesRowKey,
   parseRoutingRowChange,
   readExecutionSettings,
+  rowName,
   TIERS,
   type Tier,
   tierHasRowFor,
@@ -253,8 +254,8 @@ function agentTierProposal(db: Db, agents: readonly AgentView[], input: { agent?
     const spawned = event.payload;
     // 根拠は床を agent の既定ティアが決めた episode だけ(ADR 0111 追記2)—— 他の出所の tier は agent の宣言の過剰を言わない
     if (spawned.source.tier !== "agent") throw new DomainError(`evidence ${id} took its tier from ${spawned.source.tier}, not from ${name}'s default tier`);
-    const row = table.find((r) => isRow(r, spawned));
-    if (!row) throw new DomainError(`evidence ${id} ran on ${spawned.provider} / ${spawned.model} at effort ${spawned.effort}, which is no longer in the execution-setting table`);
+    const row = table.find((r) => matchesRowKey(r, spawned));
+    if (!row) throw new DomainError(`evidence ${id} ran on ${rowName(spawned)}, which is no longer in the execution-setting table`);
     rows.set(`${row.provider}/${row.model}/${row.effort}`, { provider: row.provider, model: row.model, tier: row.tier, effort: row.effort });
   }
   // agent が tier を書いていれば from はその値(書いていなければ economy で、下げ先が無く上で断っている)
@@ -303,18 +304,18 @@ export function proposeRoutingChange(
       "The routing meta-review proposes lowering an agent's default tier by one step. Approve commits the new tier to the registry, " +
       "with your amendment (any lower tier) if you give one; reject leaves the agent as it is.";
   } else if (input.op === "row") {
-    if (!input.row) throw new DomainError("op row names the row to change (provider, model and effort)");
+    const key = input.row;
+    if (!key) throw new DomainError("op row names the row to change (provider, model and effort)");
     const change = parseRoutingRowChange(input.change);
-    const { provider, model, effort } = input.row;
     const table = loadExecutionSettingTable(db);
-    const pin = table.find((row) => isRow(row, input.row!));
-    if (!pin) throw new DomainError(`the execution-setting table has no row for ${provider} / ${model} at effort ${effort}`);
-    proposal = { kind: "routing", op: "row", row: { provider: pin.provider, model, effort }, change, pin };
+    const pin = table.find((row) => matchesRowKey(row, key));
+    if (!pin) throw new DomainError(`the execution-setting table has no row for ${rowName(key)}`);
+    proposal = { kind: "routing", op: "row", row: { provider: pin.provider, model: pin.model, effort: pin.effort }, change, pin };
     // 承認の修正値は回答時に行を書く扉が同じ検査で拒む
     assertRowFits(table, composeRoutingRow(proposal), proposal.row);
     title = `Change routing row: ${pin.provider} / ${pin.model} / ${pin.effort}`;
     diff = [
-      `Execution-setting row ${pin.provider} / ${pin.model} at effort ${pin.effort} (price ${pin.price_in} / ${pin.price_out} USD per MTok):`,
+      `Execution-setting row ${rowName(pin)} (price ${pin.price_in} / ${pin.price_out} USD per MTok):`,
       ...Object.entries(change).map(([field, to]) => `${field}: ${pin[field as keyof typeof change]} -> ${to}`),
     ];
     purpose = "The routing meta-review proposes changing one row of the execution-setting table. Approve applies it, with your amendment if you give one; reject leaves the table as is.";
