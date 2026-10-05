@@ -1087,15 +1087,16 @@ function registerMemoryMetaReviewVerbs(server: McpServer, deps: McpDeps, run: Me
         "staying in its own scope. When a moved Definition would land on a path already defined in its scope, the move is " +
         "refused and names every such pair. To merge, pass merge: true: each of those Definitions is folded into the one " +
         "already there (superseded — the destination's wording stays; revise it in place with define_memory before or " +
-        "after) and everything else moves. merge: true is refused when no such pair exists. Returns moved (each old id " +
-        "with its copy's id) and folded (each folded Definition's id with the id of the Definition it was folded into).",
+        "after) and everything else moves. merge: true is refused when no such pair exists. Returns moved and folded (how " +
+        "many entries were moved and how many Definitions were folded) with to_scope and to_path.",
       inputSchema: { scope, path: z.string(), to_scope: scope, to_path: z.string(), merge: z.boolean().optional() },
     },
     // 照合は行き先の scope だけ —— 移動元は行を引くだけ(人間の面の枝ごとの移動と同じ、ADR 0173 決定2)
     async (input) =>
-      run((reader, now) =>
-        moveMemoryBranchByMetaReview(deps.db, { ...input, to_scope: registeredScope(deps, input.to_scope), mover: author(reader) }, "worker", now),
-      ),
+      run((reader, now) => {
+        const { moved, folded } = moveMemoryBranchByMetaReview(deps.db, { ...input, to_scope: registeredScope(deps, input.to_scope), mover: author(reader) }, "worker", now);
+        return { moved: moved.length, folded: folded.length, to_scope: input.to_scope, to_path: input.to_path };
+      }),
   );
 
   server.registerTool(

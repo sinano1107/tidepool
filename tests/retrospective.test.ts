@@ -4,7 +4,7 @@ import { openDb } from "../src/db.js";
 import { appendEvent, listEvents } from "../src/events.js";
 import { buildMemoryInjection, readMemory, recordKnowledge, recordMemoryInjection, searchMemory } from "../src/memory.js";
 import { attributeObjections, type GatedJudgment, listHaltedRefires, refireRetrospectiveCalls } from "../src/retrospective.js";
-import { completeTask, listChildren, logDecision, registerTask } from "../src/tasks.js";
+import { completeTask, HUMAN_WORKER_ID, listChildren, logDecision, registerTask } from "../src/tasks.js";
 import { reportProviderUsage } from "../src/throttle.js";
 import { commitTriage, raiseObjection, startTriage, TRIAGE_TIMEOUT } from "../src/triage.js";
 import { FakeAttributionClient, FakeBehaviorDraftClient, healthyUsageText, noRetrospectiveCalls, usagePanelText } from "./fakes.js";
@@ -635,6 +635,23 @@ it("人間が登録した task の task_ambiguity は宛先の agent がいな�
   expect((await attributions(t, s.task.id)).map((e: any) => e.payload.cause)).toEqual(["uncertain", "task_ambiguity"]);
   expect(s.behaviorDraftClient.calls).toEqual([]);
   expect(await draftsFailed(t, s.task.id)).toEqual([]);
+});
+
+it.each([
+  ["承認で実体化した子(Registrant は human)は文面の書き手 = 分解した agent 宛てに起草する", "planner", 1],
+  ["人間の分解の子は文面の書き手が人間なので起草しない", HUMAN_WORKER_ID, 0],
+] as const)("第2回で task_ambiguity に確定したとき、%s(ADR 0197)", async (_, decomposedBy, drafts) => {
+  const s = await objectedForDraft("decomposed", { decomposedBy });
+  t = s.t;
+  s.behaviorDraftClient.scriptDraft(s.entry.id, KEEP_FIXTURES);
+
+  await settleSecondRound(t, s, "decomposed", "task_ambiguity");
+  await t.clock.advance(HOUR);
+
+  expect((await attributions(t, s.task.id)).map((e: any) => e.payload.cause)).toEqual(["uncertain", "task_ambiguity"]);
+  expect(s.behaviorDraftClient.calls).toHaveLength(drafts);
+  expect(await draftsFailed(t, s.task.id)).toEqual([]);
+  expect((await behaviors(t)).map((e: any) => e.addressee)).toEqual(drafts ? ["planner"] : []);
 });
 
 it.each([
