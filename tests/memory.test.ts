@@ -679,7 +679,7 @@ it("決定ログの各エントリは、それを含む worker session の worke
     workerId: "deckhand",
     origin: "board",
     at,
-    payload: { kind: "worker_exited", ...QUIET_EXIT, worker_spawned_event_id: spawned, usage: null },
+    payload: { kind: "worker_exited", ...QUIET_EXIT, worker_spawned_event_id: spawned, output_closed: true, usage: null },
   });
   const after = logDecision(db, task, "after the session exited", "human", at, "worker");
 

@@ -33,7 +33,7 @@ import { getTask, listBoard, nextSlotTask, resolveTaskAgent, type Task } from ".
 import { sessionInTeardown } from "../src/teardown.js";
 import { getProviderUsage, reportProviderUsage } from "../src/throttle.js";
 import { TranscriptStore } from "../src/transcript-store.js";
-import { capInterruptionHandler } from "../src/watchdog.js";
+import { capInterruptionHandler, RECLAIM_TIMEOUT } from "../src/watchdog.js";
 import type { WorkerExit } from "../src/worker.js";
 import {
   prepareWorkspaceAtPickup,
@@ -263,7 +263,7 @@ async function makeWorker(
       extraOptions.agent,
       extraOptions.auditorName,
     );
-  return { worker, start, setting, logDir, db, slot, registryDir, containers, ...recorder };
+  return { worker, start, setting, logDir, db, slot, clock, registryDir, containers, ...recorder };
 }
 
 /** Scripted stand-in at the skill-enumeration boundary (issue #56 / ADR 0025):
@@ -2328,6 +2328,7 @@ describe("ClaudeCodeWorker", () => {
       last_message: null,
       // このセッションを開いた worker_spawned を指す(issue #379)
       worker_spawned_event_id: spawned?.id,
+      output_closed: true,
       usage: {
         input_tokens: 100,
         output_tokens: 50,
@@ -2656,6 +2657,7 @@ describe("ClaudeCodeWorker", () => {
       reported_error: null,
       last_message: null,
       worker_spawned_event_id: spawned?.id,
+      output_closed: true,
       usage: null,
     });
   });
@@ -3997,5 +3999,133 @@ describe("上限到達による中断(issue #467 / ADR 0104)", () => {
     expect(git(ws.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main");
     expect(git(ws.path, "show", `task/${task.id}:wip.txt`)).toBe("half-done work");
     expect(listBoard(db).filter((t) => t.type === "question")).toEqual([]);
+  });
+});
+
+describe("root の出力の読み切り(issue #1336 / ADR 0201)", () => {
+  const resultLine = (fields: Record<string, unknown>) =>
+    `${JSON.stringify({
+      type: "result",
+      is_error: false,
+      total_cost_usd: 0.25,
+      usage: { input_tokens: 7, output_tokens: 3, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
+      ...fields,
+    })}\n`;
+  const exitedOf = (db: ReturnType<typeof openDb>, taskId: string) =>
+    listEvents(db, taskId).find((e) => e.kind === "worker_exited")?.payload;
+  /** root の exit を撃ったあと、読み切りの前に stdout / stderr を流す。間に macrotask を挟む ——
+   *  exit の時点で記録を確定させる実装が、遅れて届く出力を読む前に確定し終えるように。 */
+  const lateOutput = async (f: Awaited<ReturnType<typeof makeWorker>>, out: { stdout?: string; stderr?: string }, code = 0) => {
+    f.emitExitOnlyAt(0, code, null);
+    await new Promise((resolve) => setImmediate(resolve));
+    if (out.stdout) f.processes[0]!.stdout.write(out.stdout);
+    if (out.stderr) f.processes[0]!.stderr.write(out.stderr);
+    await new Promise((resolve) => setImmediate(resolve));
+    f.emitCloseAt(0, code, null);
+  };
+
+  it("exit のあと読み切りの前に届いた result 行の消費が worker_exited に載り、読み切った事実が残る", async () => {
+    const f = await makeWorker();
+    f.start("task-late-result");
+
+    await lateOutput(f, { stdout: resultLine({}) });
+
+    expect(exitedOf(f.db, "task-late-result")).toMatchObject({
+      usage: { input_tokens: 7, output_tokens: 3, estimated_cost_usd: 0.25 },
+      output_closed: true,
+    });
+  });
+
+  it("exit のあと読み切りの前に届いた stderr の末尾が stderr_tail に載る", async () => {
+    const f = await makeWorker();
+    f.start("task-late-stderr");
+
+    await lateOutput(f, { stderr: "early\nLAST-STDERR\n" }, 1);
+
+    expect(exitedOf(f.db, "task-late-stderr")).toMatchObject({ stderr_tail: "early\nLAST-STDERR" });
+  });
+
+  it("exit のあと読み切りの前に届いた 429 の result 行で、上限到達の一撃が exit の一撃より先に撃たれる", async () => {
+    const order: string[] = [];
+    const f = await makeWorker({}, {
+      onCapInterrupted: () => order.push("cap"),
+      onWorkerExited: () => order.push("exited"),
+    });
+    f.start("task-late-429");
+
+    await lateOutput(f, { stdout: resultLine({ is_error: true, api_error_status: 429 }) }, 1);
+
+    expect(order).toEqual(["cap", "exited"]);
+  });
+
+  it("exit のあと読み切りの前に届いた 404 の result 行で、行の拒否の一撃が撃たれる", async () => {
+    const refused: unknown[] = [];
+    const f = await makeWorker({}, { onRowRefused: (_taskId, refusal) => refused.push(refusal.cause) });
+    f.start("task-late-404");
+
+    await lateOutput(f, { stdout: resultLine({ is_error: true, api_error_status: 404 }) }, 1);
+
+    expect(refused).toEqual(["api_404"]);
+  });
+
+  it("exit のあと読み切りの前に届いた 401 の result 行で、Provider 認証停止へ昇格する", async () => {
+    const f = await makeWorker();
+    f.start("task-late-401");
+
+    await lateOutput(f, { stdout: resultLine({ is_error: true, api_error_status: 401 }) }, 1);
+
+    expect(listBoard(f.db).filter((task) => task.type === "question").map((task) => task.title)).toEqual([
+      "anthropic authentication is unavailable — pickup of anthropic-speaking agents is stopped",
+    ]);
+  });
+
+  it("強制回収は root の exit の時点で撃たれ、worker_exited は読み切りまで書かれない", async () => {
+    const f = await makeWorker();
+    f.start("task-force-at-exit");
+
+    f.emitExitOnlyAt(0, 0, null);
+
+    expect(f.killed).toEqual(["SIGKILL"]);
+    expect(exitedOf(f.db, "task-force-at-exit")).toBeUndefined();
+    f.emitCloseAt(0, 0, null);
+    expect(exitedOf(f.db, "task-force-at-exit")).toMatchObject({ exit_code: 0, output_closed: true });
+  });
+
+  it("読み切りが回収 timeout までに来なければ、それまでに読めた分で worker_exited を書き、盤面側の一撃を呼ぶ", async () => {
+    const exits: WorkerExit[] = [];
+    const f = await makeWorker({}, { onWorkerExited: (_taskId, exit) => exits.push(exit) });
+    f.start("task-never-closed");
+    f.processes[0]!.stdout.write(resultLine({}));
+    f.processes[0]!.stderr.write("stuck\n");
+    await new Promise((resolve) => setImmediate(resolve));
+
+    f.emitExitOnlyAt(0, 0, null);
+    await f.clock.advance(RECLAIM_TIMEOUT - 1);
+    expect(exitedOf(f.db, "task-never-closed")).toBeUndefined();
+    await f.clock.advance(1);
+
+    expect(exitedOf(f.db, "task-never-closed")).toMatchObject({
+      exit_code: 0,
+      stderr_tail: "stuck",
+      usage: { input_tokens: 7 },
+      output_closed: false,
+    });
+    expect(exits).toEqual([{ exit_code: 0, signal: null, stderr_tail: "stuck", reported_error: null, last_message: null }]);
+    // 遅れて来た読み切りは2度目の記録を書かない
+    f.emitCloseAt(0, 0, null);
+    expect(listEvents(f.db, "task-never-closed").filter((e) => e.kind === "worker_exited")).toHaveLength(1);
+    expect(exits).toHaveLength(1);
+  });
+
+  it("spawn の失敗のあとに来る close(Node は error のあとに撃つ)は worker_exited を書かない", async () => {
+    const exits: WorkerExit[] = [];
+    const f = await makeWorker({}, { onWorkerExited: (_taskId, exit) => exits.push(exit) });
+    f.start("task-spawn-enoent-close");
+
+    f.emitError(Object.assign(new Error("spawn claude ENOENT"), { code: "ENOENT", syscall: "spawn claude" }));
+    f.emitCloseAt(0, -2, null);
+
+    expect(exitedOf(f.db, "task-spawn-enoent-close")).toBeUndefined();
+    expect(exits).toEqual([]);
   });
 });

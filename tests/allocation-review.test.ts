@@ -29,6 +29,7 @@ it("配分評価の入力は verdict・findings・実行設定と出所・要求
         kind: "worker_exited",
         ...QUIET_EXIT,
         worker_spawned_event_id: 7,
+        output_closed: true,
         usage,
       },
       markers: ["decision", "advisor", "commit", "advisor", "compaction"],
@@ -97,6 +98,7 @@ async function reviewedWork(t: Tidepool, options: { session: boolean } = { sessi
         kind: "worker_exited",
         ...QUIET_EXIT,
         worker_spawned_event_id: spawnedId,
+        output_closed: true,
         usage,
       },
     });

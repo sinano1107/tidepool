@@ -15,6 +15,7 @@ import { openQuarantineValues } from "../src/quarantine.js";
 import { loadRegistry, REVIEWER_AUTHORITY_PROFILE } from "../src/registry.js";
 import { getTask, listBoard, registerTask, type Task } from "../src/tasks.js";
 import { TranscriptStore } from "../src/transcript-store.js";
+import { RECLAIM_TIMEOUT } from "../src/watchdog.js";
 import type { WorkerExit } from "../src/worker.js";
 import { driveCodexPreflight, FakeClock, passthroughContainers, recordingSpawn } from "./fakes.js";
 import { bootTidepool, HUMAN_WEBUI, mcpClient, type Tidepool, tempDir, WORKER_SPAWNED } from "./harness.js";
@@ -94,9 +95,10 @@ You are the Codex worker.`,
   const codexHome = await tempDir("tidepool-codex-home-");
   const logDir = await tempDir("tidepool-codex-logs-");
   const codexSystemDir = await tempDir("tidepool-codex-system-");
+  const clock = new FakeClock();
   const worker = new CodexWorker({
     db,
-    clock: new FakeClock(),
+    clock,
     registry: { dir: registry, mode: "purely-local" },
     agent: "codex-agent",
     workspace: "work",
@@ -114,7 +116,7 @@ You are the Codex worker.`,
   // scheduler が pickup の瞬間に選ぶ実行設定(除外なし)を渡す
   const agent = loadRegistry(registry, "purely-local").agents["codex-agent"]!;
   const start = (value: Task, query?: InjectionQuery) => worker.start(value, resolveExecutionSetting(db, agent, value)!, query);
-  return { db, worker, start, process, codexHome, codexSystemDir, workspace, logDir, registry };
+  return { db, worker, start, process, clock, codexHome, codexSystemDir, workspace, logDir, registry };
 }
 
 describe("CodexWorker (ADR 0098)", () => {
@@ -874,6 +876,79 @@ thread's history always fails.`));
 
     expect(() => f.start(value)).toThrow("spawn blew up");
     expect(readdirSync(tmpdir()).filter((name) => name.startsWith(`tidepool-codex-${value.id}-`))).toEqual([]);
+  });
+});
+
+describe("root の出力の読み切り(issue #1336 / ADR 0201)", () => {
+  const exitedOf = (f: Awaited<ReturnType<typeof fixture>>, taskId: string) =>
+    listEvents(f.db, taskId).find((event) => event.kind === "worker_exited")?.payload;
+  const tick = () => new Promise((resolve) => setImmediate(resolve));
+
+  it("exit のあと読み切りの前に届いた usage / turn.failed / stderr の末尾が worker_exited に載る", async () => {
+    const f = await fixture();
+    const value = task(f.db, "codex-late-output");
+    f.start(value);
+
+    f.process.emitExitOnlyAt(0, 1, null);
+    // exit の時点で確定させる実装が、遅れて届く出力を読む前に確定し終えるように間を挟む
+    await tick();
+    f.process.processes[0]!.stdout.write(
+      `${JSON.stringify({ type: "turn.failed", error: { message: "boom" } })}\n` +
+        `${JSON.stringify({ type: "turn.completed", usage: { input_tokens: 9, cached_input_tokens: 1, output_tokens: 4 } })}\n`,
+    );
+    f.process.processes[0]!.stderr.write("LAST-STDERR\n");
+    await tick();
+    f.process.emitCloseAt(0, 1, null);
+
+    expect(exitedOf(f, value.id)).toMatchObject({
+      reported_error: "boom",
+      stderr_tail: "LAST-STDERR",
+      usage: { input_tokens: 9, output_tokens: 4, cache_read_tokens: 1 },
+      output_closed: true,
+    });
+  });
+
+  it("強制回収は root の exit の時点で撃たれ、worker_exited は読み切りまで書かれない", async () => {
+    const f = await fixture();
+    const value = task(f.db, "codex-force-at-exit");
+    f.start(value);
+
+    f.process.emitExitOnlyAt(0, 0, null);
+
+    expect(f.process.killed).toEqual(["SIGKILL"]);
+    expect(exitedOf(f, value.id)).toBeUndefined();
+    f.process.emitCloseAt(0, 0, null);
+    expect(exitedOf(f, value.id)).toMatchObject({ exit_code: 0, output_closed: true });
+  });
+
+  it("読み切りが回収 timeout までに来なければ、それまでに読めた分で worker_exited を書き、盤面側の一撃を呼ぶ", async () => {
+    const exits: WorkerExit[] = [];
+    const f = await fixture(undefined, undefined, (_taskId, exit) => exits.push(exit));
+    const value = task(f.db, "codex-never-closed");
+    f.start(value);
+    f.process.processes[0]!.stderr.write("stuck\n");
+    await tick();
+
+    f.process.emitExitOnlyAt(0, 0, null);
+    await f.clock.advance(RECLAIM_TIMEOUT - 1);
+    expect(exitedOf(f, value.id)).toBeUndefined();
+    await f.clock.advance(1);
+
+    expect(exitedOf(f, value.id)).toMatchObject({ exit_code: 0, stderr_tail: "stuck", output_closed: false });
+    expect(exits).toEqual([{ exit_code: 0, signal: null, stderr_tail: "stuck", reported_error: null, last_message: null }]);
+  });
+
+  it("spawn の失敗のあとに来る close(Node は error のあとに撃つ)は worker_exited を書かない", async () => {
+    const exits: WorkerExit[] = [];
+    const f = await fixture(undefined, undefined, (_taskId, exit) => exits.push(exit));
+    const value = task(f.db, "codex-spawn-enoent-close");
+    f.start(value);
+
+    f.process.emitError(Object.assign(new Error("spawn codex ENOENT"), { code: "ENOENT", syscall: "spawn codex" }));
+    f.process.emitCloseAt(0, -2, null);
+
+    expect(exitedOf(f, value.id)).toBeUndefined();
+    expect(exits).toEqual([]);
   });
 });
 

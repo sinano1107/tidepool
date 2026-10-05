@@ -194,6 +194,7 @@ it("review の公開注入 context は対象 worker のモデル・価格・実�
       kind: "worker_exited",
       ...QUIET_EXIT,
       worker_spawned_event_id: spawned,
+      output_closed: true,
       usage: {
         input_tokens: 100,
         output_tokens: 20,

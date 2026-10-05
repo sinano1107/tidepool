@@ -183,6 +183,7 @@ export function createBoardCalls(deps: {
     }
     const id = BOARD_CALL_PREFIX + ++counter;
     const container = deps.containers.open(id);
+    let forcedAtExit = false;
 
     const finish = await new Promise<() => T | null>((resolve) => {
       let settled = false;
@@ -225,12 +226,19 @@ export function createBoardCalls(deps: {
       observed = read(proc as ContainedProcess & PtyProcess, done);
       // ADR 0109 決定4 の形: root の exit は容器が空になった証拠ではないが、
       // 残っているものが孤児である証拠ではある。行儀のよい exit は待たない。
-      proc.on("exit", (code) => settle(() => observed(code)));
+      // 結果は exit でなく root の出力の読み切り(close)で決着させる —— exit の時点では
+      // 最後の出力がまだ届いていないことがある。読み切りの上限は時間上限(ADR 0201)。
+      proc.on("exit", () => {
+        forcedAtExit = true;
+        deps.containers.forceReclaim(id);
+      });
+      proc.on("close", (code) => settle(() => observed(code)));
       proc.on("error", () => settle(() => null));
     });
 
-    // 2つ目の force の契機(上限到達)も1つ目(root の exit)も、ここ1箇所を通る。
-    deps.containers.forceReclaim(id);
+    // root の exit 以外の force の契機(上限到達・done・spawn の失敗)はここ1箇所を通る。
+    // exit で撃ち済みなら撃ち直さない —— 同じ送達を繰り返しても回収は進まない。
+    if (!forcedAtExit) deps.containers.forceReclaim(id);
     const empty = awaitEmpty(id);
     void empty.then((observed) => {
       if (!observed) report(id, spec.kind);

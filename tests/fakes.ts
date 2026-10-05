@@ -911,55 +911,54 @@ export interface RecordedProcess {
   stdin: PassThrough;
 }
 /** Scripted stand-in at the process boundary: records the spawn recipe.
- *  容器の中で走る process の代わりで、stdout / exit / error をテストが撃つ。spawn の
+ *  容器の中で走る process の代わりで、stdout / exit / close / error をテストが撃つ。spawn の
  *  たびに新しい stdio を作る —— process ごとの答えは `processes[i]` で個別に読み書き
- *  する。 */
+ *  する。`emitExit` / `emitExitAt` は root の exit と出力の読み切り(close)を続けて撃つ。
+ *  2つの間に出力を流すテストだけが `emitExitOnlyAt` / `emitCloseAt` を別々に撃つ(ADR 0201)。 */
 export function recordingSpawn() {
+  type ExitListener = (code: number | null, signal: NodeJS.Signals | null) => void;
   const calls: SpawnCall[] = [];
   const processes: RecordedProcess[] = [];
   const killed: NodeJS.Signals[] = [];
-  const exitListeners: Array<
-    Array<(code: number | null, signal: NodeJS.Signals | null) => void>
-  > = [];
+  const exitListeners: ExitListener[][] = [];
+  const closeListeners: ExitListener[][] = [];
   const errorListeners: Array<(err: Error) => void> = [];
   const spawn: ContainerSpawn = (command, args, opts) => {
     calls.push({ command, args, cwd: opts.cwd, env: opts.env, ...(opts.stdin && { stdin: opts.stdin }) });
     const io: RecordedProcess = { stdout: new PassThrough(), stderr: new PassThrough(), stdin: new PassThrough() };
     processes.push(io);
-    const processExitListeners: Array<
-      (code: number | null, signal: NodeJS.Signals | null) => void
-    > = [];
-    exitListeners.push(processExitListeners);
+    const onExit: ExitListener[] = [];
+    const onClose: ExitListener[] = [];
+    exitListeners.push(onExit);
+    closeListeners.push(onClose);
     return {
       ...io,
       kill: (signal) => killed.push(signal),
-      on: (
-        event: "exit" | "error",
-        listener:
-          | ((code: number | null, signal: NodeJS.Signals | null) => void)
-          | ((err: Error) => void),
-      ) => {
-        if (event === "exit") {
-          processExitListeners.push(
-            listener as (code: number | null, signal: NodeJS.Signals | null) => void,
-          );
-        }
+      on: (event: "exit" | "close" | "error", listener: ExitListener | ((err: Error) => void)) => {
+        if (event === "exit") onExit.push(listener as ExitListener);
+        if (event === "close") onClose.push(listener as ExitListener);
         if (event === "error") errorListeners.push(listener as (err: Error) => void);
       },
     };
   };
-  const emitExit = (code: number | null, signal: NodeJS.Signals | null) => {
-    for (const processListeners of exitListeners) {
-      for (const listener of processListeners) listener(code, signal);
-    }
+  const emitExitOnlyAt = (index: number, code: number | null, signal: NodeJS.Signals | null) => {
+    for (const listener of exitListeners[index] ?? []) listener(code, signal);
+  };
+  // 配列を写さずに回す —— exit の handler の中で張られた close の listener も受け取る
+  const emitCloseAt = (index: number, code: number | null, signal: NodeJS.Signals | null) => {
+    for (const listener of closeListeners[index] ?? []) listener(code, signal);
   };
   const emitExitAt = (index: number, code: number | null, signal: NodeJS.Signals | null) => {
-    for (const listener of exitListeners[index] ?? []) listener(code, signal);
+    emitExitOnlyAt(index, code, signal);
+    emitCloseAt(index, code, signal);
+  };
+  const emitExit = (code: number | null, signal: NodeJS.Signals | null) => {
+    for (let index = 0; index < exitListeners.length; index++) emitExitAt(index, code, signal);
   };
   const emitError = (err: Error) => {
     for (const listener of errorListeners) listener(err);
   };
-  return { calls, processes, killed, spawn, emitExit, emitExitAt, emitError };
+  return { calls, processes, killed, spawn, emitExit, emitExitAt, emitExitOnlyAt, emitCloseAt, emitError };
 }
 
 /** `createCodexCapabilityCheck(options)()` を `recordingSpawn` + `passthroughContainers`

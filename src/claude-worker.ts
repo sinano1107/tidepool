@@ -50,6 +50,7 @@ import {
 } from "./tasks.js";
 import type { TranscriptStore } from "./transcript-store.js";
 import { composeTerminalScreen } from "./usage.js";
+import { RECLAIM_TIMEOUT } from "./watchdog.js";
 import type { WorkerAdapter, WorkerExit } from "./worker.js";
 import {
   excludeWorkspaceProjectSettings,
@@ -2234,10 +2235,16 @@ export class ClaudeCodeWorker implements WorkerAdapter {
       console.error(`[worker] failed to spawn claude for task ${task.id}:`, err);
       this.recordSpawnFailed(task, agent, { error_code: errno.code ?? null, message: err.message });
     });
-    // usage is settled at process exit — after task_completed via MCP, not
-    // before (issue #32) — so kill/crash sessions still get a worker_exited
-    // with usage: null rather than losing the exit fact entirely
-    child.on("exit", (code, signal) => {
+    // usage is settled at the root's output close — after task_completed via MCP,
+    // not before (issue #32) — so kill/crash sessions still get a worker_exited
+    // with usage: null rather than losing the exit fact entirely.
+    // ADR 0201: exit は強制回収の契機、記録の確定点は root の出力の読み切り(close)。
+    // exit の時点では、pipe の先が詰まっている間の最後の出力(result 行)がまだ届いていない
+    // ことがある。読み切りが回収 timeout までに来なければ、それまでに読めた分で確定させる。
+    let settled = false;
+    const settle = (code: number | null, signal: NodeJS.Signals | null, outputClosed: boolean) => {
+      if (settled) return;
+      settled = true;
       this.running.delete(task.id);
       // the final stdout chunk may not end in "\n" (stream simply closes
       // mid-line), which would otherwise strand the last result line unread
@@ -2270,6 +2277,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
           kind: "worker_exited",
           ...exit,
           worker_spawned_event_id: spawnedEventId,
+          output_closed: outputClosed,
           usage: lastResult ? toUsage(lastResult, advisorObserved) : null,
         },
         at: this.options.clock.now(),
@@ -2293,13 +2301,6 @@ export class ClaudeCodeWorker implements WorkerAdapter {
           this.containers.reclaimed(task.id),
         );
       }
-      // ADR 0109 決定4: root process の exit は、容器に残るものが**孤児である証拠**で
-      // ある —— 行儀よく exit するのを待たずにここで強制回収を撃つ。usage と transcript を
-      // 書いた後であること(上の worker_exited がその両方を確定させている)。これは
-      // **送達であって回収の完了ではなく**、ADR 0099 決定1 の語彙は不変である: 門は
-      // 回収済み観測ただ1つで、後始末はその後ろでしか走らない。この force が pickup を
-      // 進めることは無く、そこへ早く到達させるだけである。
-      this.containers.forceReclaim(task.id);
       // ADR 0145: 盤面に exit を渡す。上限到達の一撃が**先**に後始末へ入れているので、
       // 盤面側の判定はその session を報告なき exit として拾わない。
       this.options.onWorkerExited?.(task.id, exit);
@@ -2318,6 +2319,20 @@ export class ClaudeCodeWorker implements WorkerAdapter {
       };
       if (transcript.stream.closed) project();
       else transcript.stream.once("close", project);
+    };
+    child.on("exit", (code, signal) => {
+      // ADR 0109 決定4: root process の exit は、容器に残るものが**孤児である証拠**で
+      // ある —— 行儀よく exit するのを待たずにここで強制回収を撃つ。読み切りより先に撃っても
+      // root が書き終えた出力は失われず、孤児が出力の口を握っていても読み切りが来る
+      // (ADR 0201 決定1)。これは**送達であって回収の完了ではなく**、ADR 0099 決定1 の
+      // 語彙は不変である: 門は回収済み観測ただ1つで、後始末はその後ろでしか走らない。
+      this.containers.forceReclaim(task.id);
+      const cancel = this.options.clock.setTimeout(() => settle(code, signal, false), RECLAIM_TIMEOUT);
+      // close は exit を見てからだけ数える —— spawn の失敗も "error" のあとに close を撃つ
+      child.on("close", () => {
+        cancel();
+        settle(code, signal, true);
+      });
     });
   }
 

@@ -19,6 +19,9 @@ export interface ContainedProcess {
   /** issue #32: the adapter's own exit observation point — usage/cost
    *  recording needs to happen at the process boundary, not buried in a fake. */
   on(event: "exit", listener: (code: number | null, signal: NodeJS.Signals | null) => void): void;
+  /** ADR 0201: root の出力の読み切り —— stdout / stderr が閉じ切った瞬間で、exit より後に来る。
+   *  記録の確定点はここであって exit ではない。spawn の失敗でも "error" のあとに撃たれる。 */
+  on(event: "close", listener: (code: number | null, signal: NodeJS.Signals | null) => void): void;
   /** issue #127: the adapter's own spawn-failure observation point — a spawn()
    *  that never produces a process (ENOENT/EACCES/PATH misconfig) fires this
    *  instead of "exit". Node's ChildProcess satisfies this structurally. */
