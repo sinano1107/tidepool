@@ -291,7 +291,7 @@ function readBudgeted<A extends Record<string, unknown>>(
 
 /** 書き込みの ack に載せる task の識別と状態(ADR 0195)。本文(purpose・完了基準・handoff など)は呼び手が持っているか get_task で読む。 */
 const taskAck = ({ id, type, status, assignee, raw_assignee }: BoardTask) => ({ id, type, status, assignee, raw_assignee });
-const TASK_ACK_DESCRIPTION = "Returns the task's id, type, status and assignee only; read the rest with get_task.";
+const TASK_ACK_DESCRIPTION = "Returns the task's id, type, status, assignee and raw_assignee only; read the rest with get_task.";
 
 function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
   const server = floorEveryResponse(
@@ -865,7 +865,8 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
         "and second-round attributions (refire second_round, target = the id of the first objection event of the bundle — the objections one " +
         "triage session raised against the entry). An allocation row shows the review and the reviewed task; a draft or second-round row shows " +
         "the objected entry, its task, cause (the latest bundle's judgment; null = unattributed) and round. Every row shows the last failure's " +
-        `reason and time. Rows come as \`halted\`. ${readByNext("list_halted_refires", "rows")}`,
+        "reason and time. Rows come as `halted`: draft and second-round rows first, in the order of the objections they answer, " +
+        `then allocation reviews. ${readByNext("list_halted_refires", "rows")}`,
       inputSchema: { next: z.string().optional() },
     },
     // 行は id を持たない —— 続きの境目は refire と target の鍵(Retry / Dismiss が行を指すのと同じ)
