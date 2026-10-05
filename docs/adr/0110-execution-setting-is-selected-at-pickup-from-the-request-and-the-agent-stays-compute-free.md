@@ -6,6 +6,8 @@
 
 **Status 追記: 決定4 の新セルの出どころのうち「観測された未知の id」は ADR 0199 で置き換え** —— 行が具体 id になってから未知の id は観測されず、新しく観測されるセルは Interview が走らせた行でない対象である。Interview は表の行でない対象を走らせられ、meta-review の提案は根拠の episode から出る。「人間が足した行」が Interview の発火事象であることは変わらない(促し方は #1246)。
 
+**Status 追記: 決定2 のティアの値域(固定の3段)と、決定3 の advisor の導出・ティア水準の検査は ADR 0200 で置き換え** —— ティアは盤面が持つ順序付きの段の一覧になり、advisor は段を読まず Provider の最上位の系列の alias から導出する。ティアが床であること、選択が pickup 時の決定論であることは変わらない。
+
 2026-09-10 の grilling(issue #238 / #357)で決定。観測された痛みは「tidepool の開発を tidepool に任せる」— `/implement-tidepool`
 が issue ごとに決めているモデル / effort / review 強度に、agent 単位で model を固定する今の盤面には置き場が無い。
 検討記録(ChatGPT との設計会話の第3版 HTML)は ADR 0083 を読まずに作られており、その再提案の扱いは ADR 0083 追記3 に置く。

@@ -2,6 +2,8 @@
 
 **Status 追記: 決定4 の「本当の費用は学習器の session 合計が持つ」は観測の置き場であって推薦の鍵ではない(ADR 0183)** —— `cost` の鍵は表の価格のままで、学習器の同点は `cost` でも selector の並びのままである。
 
+**Status 追記: 決定2 の表の主キー、決定4 の「advisor の行は同 Provider の frontier 行」、決定5 は ADR 0200 で置き換え** —— 主キーは (provider, model, effort) で1つの段に同じ model は1行まで、advisor は段を読まない。4段目の再開条件は Interview での実測(#1415)になり、段は盤面が足せる。
+
 2026-09-11 の grilling(issue #556、従属して #553)で決定。ADR 0110 決定2 が置いた task の優先順位(quality / cost / speed)は、
 #544 の selector が読める材料を持たず記録だけの列になっていた —— 表が `Provider × ティア → model` しか持たず、価格も速度も軸に
 無い。ティアは価格で揃えて作られているので、同ティアの候補間に cost が区別できる差もほぼ無かった(価格・速度の実測表と出典は
