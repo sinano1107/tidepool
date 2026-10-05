@@ -264,8 +264,8 @@ const nextDescription = (verb: string, items: string, firstOnly?: string) =>
   `When the ${items} do not fit in one response, the response carries \`next\` and \`remaining\` (how many ${items} are not returned yet): ` +
   `call ${verb} again with only \`next\` to read the rest, and repeat until a response carries no \`next\` — then the list is complete.` +
   (firstOnly ? ` ${firstOnly} on the first response only.` : "") +
-  " An item too large for one response comes alone in pieces marked `partial` (`id`, `field`, and `field_bytes`, the field's full size " +
-  "in UTF-8 bytes): join that field across the pieces to get it verbatim.";
+  " An item too large for one response comes alone in pieces marked `partial` (`id`, the item's id or the key `next` resumes from; `field`, " +
+  "empty when the item is itself a string; and `field_bytes`, the field's full size in UTF-8 bytes): join that field across the pieces to get it verbatim.";
 
 /** 結果を返し、DomainError は tool error にする。 */
 const domainResult = (write: () => unknown) => {
