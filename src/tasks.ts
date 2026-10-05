@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { Db } from "./db.js";
 import { DEFAULT_AUDITOR_NAME } from "./defaults.js";
 import { appendEvent, type EventOrigin, type EventPayload, getEvent, latestEventOfTask, type TaskScopedPayload, taskDecisionLog } from "./events.js";
-import { assertKnownTier, type ExecutionSettingRow, liveTierId, PRIORITIES, type Priority, type RoutingRowChange, type Tier } from "./execution-setting.js";
+import { type AddTierAmendment, assertKnownTier, type ExecutionSettingRow, liveTierId, PRIORITIES, type Priority, type RoutingRowChange, type Tier } from "./execution-setting.js";
 import type { GitHubClient, Issue, IssueRef } from "./github.js";
 import type { MemoryAmendment } from "./memory.js";
 import type { MergeDial, RosterAgent } from "./registry.js";
@@ -187,8 +187,20 @@ export interface RoutingRowProposal {
   pin: ExecutionSettingRow;
 }
 
-/** routing の提案(ADR 0150 決定1): 表の1行、または学習器の昇格 / 降格。昇格 / 降格の pin はフラグの現在値。 */
-export type RoutingProposal = RoutingRowProposal | { kind: "routing"; op: "promote" | "demote"; pin: { promoted: boolean } };
+/** 段を足して行を移す提案(issue #1424 / ADR 0200 決定8)。pin = 移す行の全欄と、提案時点の一覧で `position` の隣にいる段
+ *  (添字 `position - 1` と `position`、端なら null)。 */
+export interface RoutingAddTierProposal {
+  kind: "routing";
+  op: "add_tier";
+  tier: { name: Tier; description: string; position: number };
+  row: Pick<ExecutionSettingRow, "provider" | "model" | "effort">;
+  evidence: number[];
+  pin: { row: ExecutionSettingRow; below: TierNeighbour | null; above: TierNeighbour | null };
+}
+type TierNeighbour = { name: Tier; description: string };
+
+/** routing の提案(ADR 0150 決定1): 表の1行、段の追加、または学習器の昇格 / 降格。昇格 / 降格の pin はフラグの現在値。 */
+export type RoutingProposal = RoutingRowProposal | RoutingAddTierProposal | { kind: "routing"; op: "promote" | "demote"; pin: { promoted: boolean } };
 
 /** agent の既定 tier を1段下げる提案(issue #920 / ADR 0150 決定1・5)。承認は registry へ commit する。pin = agent の tier の
  *  現在値と、根拠(`worker_spawned` の event id)の episode が走った表の行。 */
@@ -201,8 +213,8 @@ export interface RegistryProposal {
   evidence: number[];
 }
 
-/** 提案の approve に添える修正値(ADR 0150 決定2・ADR 0152 決定2): 行の提案は tier / effort、tier の提案は下げ先、memory は文言と宛先。 */
-export type ProposalAmendment = RoutingRowChange | { to: Tier } | MemoryAmendment;
+/** 提案の approve に添える修正値(ADR 0150 決定2・ADR 0152 決定2): 行の提案は tier / effort、tier の提案は下げ先、段の追加は名前・説明・位置、memory は文言と宛先。 */
+export type ProposalAmendment = RoutingRowChange | { to: Tier } | AddTierAmendment | MemoryAmendment;
 
 interface PendingChildSpec extends TaskContent {
   review_by?: string[];

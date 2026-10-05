@@ -118,7 +118,7 @@ export function boardDefaultTier(db: Db): Tier {
 
 /** 段の名前の線(ADR 0200 決定2): agent.md の `tier` に書ける文字列 —— 英小文字で始まり英小文字・数字・`-`・`_` だけで、
  *  YAML が同じ文字列として読み戻すもの(`true` / `null` は YAML では文字列でない)。 */
-function assertTierName(db: Db, name: string): void {
+export function assertTierName(db: Db, name: string): void {
   if (!/^[a-z][a-z0-9_-]*$/.test(name) || parseYaml(name) !== name) {
     throw new DomainError(`tier name "${name}" must start with a lowercase letter and use only a-z, 0-9, - and _ (and not be a YAML keyword such as true / null), so agent.md can write it as its tier`);
   }
@@ -126,7 +126,7 @@ function assertTierName(db: Db, name: string): void {
 }
 
 /** 段の説明の線(ADR 0200 決定3): 必須の1行。 */
-function assertTierDescription(description: string): void {
+export function assertTierDescription(description: string): void {
   if (description.trim() === "" || /[\r\n]/.test(description)) throw new DomainError("a tier's description is one non-empty line");
 }
 
@@ -136,7 +136,7 @@ function liveTierIds(db: Db): number[] {
 }
 
 /** 一覧の位置は生きている段の中の添字で、`max` までを受ける。 */
-function assertPosition(position: number, max: number): void {
+export function assertPosition(position: number, max: number): void {
   if (position > max) throw new DomainError(`a tier position is an index into the board's list, 0 to ${max}`);
 }
 
@@ -439,21 +439,19 @@ interface ExecutionDefaults {
   judgementTier: Tier;
 }
 
-/** settings タブ / 管理MCP の読み口(ADR 0110 決定5): 表と盤面設定4値を1往復で。
+/** settings タブ / 管理MCP の読み口(ADR 0110 決定5): 表と段の一覧(説明つき、順序どおり —— ADR 0200 決定3)と盤面設定を1往復で。
  *  表は (provider, model, effort) 順 —— 主キーの順で、UI も MCP も同じ並びを見る。 */
-export function readExecutionSettings(db: Db): ExecutionDefaults & { table: ExecutionSettingTable } {
-  return { table: loadExecutionSettingTable(db), ...loadExecutionDefaults(db) };
+export function readExecutionSettings(db: Db): ExecutionDefaults & { table: ExecutionSettingTable; tiers: ReturnType<typeof readTiers> } {
+  return { table: loadExecutionSettingTable(db), tiers: readTiers(db), ...loadExecutionDefaults(db) };
 }
 
 /** 人間の2つの扉(settings タブ・管理MCP)の読み口: 各行に、開いている行の Quarantine の question id(無ければ null)を
- *  添え(ADR 0184 決定6)、段の一覧を説明つきで順序どおりに載せる(ADR 0200 決定3)。meta-review の材料と worker の読み口は
- *  `readExecutionSettings` のまま。 */
+ *  添える(ADR 0184 決定6)。meta-review の材料と worker の読み口は `readExecutionSettings` のまま。 */
 export function readExecutionSettingsWithQuarantine(db: Db) {
   const settings = readExecutionSettings(db);
   const open = openQuarantineQuestions(db, "tableRow");
   return {
     ...settings,
-    tiers: readTiers(db),
     table: settings.table.map((row) => ({
       ...row,
       quarantine_question_id: open.get(tableRowValue(row.provider, row.model)) ?? null,
@@ -558,22 +556,31 @@ export function parseRoutingRowChange(tiers: readonly Tier[], input: unknown): R
 
 /** pin の照合(ADR 0150 決定1): 提案が焼いた行と表の現在の行を全欄で比べ、崩れた欄の名前を返す(空 = pin は生きている)。
  *  行は鍵 (provider, model, effort) で引き、消えていれば(effort の書き換えも含む)null。昇格 / 降格の提案の pin はフラグの現在値。
- *  tier の提案は根拠の行を全欄で比べる(消えた行も `rows` —— agent の側の pin は表からは見えないので `registryPinChanges` が言う)。 */
+ *  tier の提案は根拠の行を全欄で比べる(消えた行も `rows` —— agent の側の pin は表からは見えないので `registryPinChanges` が言う)。
+ *  段を足す提案は移す行を行の提案と同じに比べ、隣の段が入れ替わっていれば `neighbours`(issue #1424)。 */
 export function routingPinChanges(
   proposal: RoutingProposal | RegistryProposal,
-  settings: { table: ExecutionSettingTable; learnerPromoted: boolean },
-): Array<"tier" | "price_in" | "price_out" | "learner_promoted" | "rows"> | null {
+  settings: { table: ExecutionSettingTable; learnerPromoted: boolean; tiers: readonly { name: Tier; description: string }[] },
+): Array<"tier" | "price_in" | "price_out" | "learner_promoted" | "rows" | "neighbours"> | null {
   if (proposal.kind === "registry") {
     const held = proposal.pin.rows.every((pinned) =>
       settings.table.some((row) => matchesRowKey(row, pinned) && row.tier === pinned.tier),
     );
     return held ? [] : ["rows"];
   }
-  if (proposal.op !== "row") return proposal.pin.promoted === settings.learnerPromoted ? [] : ["learner_promoted"];
-  const { pin } = proposal;
+  if (proposal.op !== "row" && proposal.op !== "add_tier") return proposal.pin.promoted === settings.learnerPromoted ? [] : ["learner_promoted"];
+  const pin = proposal.op === "row" ? proposal.pin : proposal.pin.row;
   const current = settings.table.find((row) => matchesRowKey(row, pin));
   if (!current) return null;
-  return (["tier", "price_in", "price_out"] as const).filter((field) => current[field] !== pin[field]);
+  const changed: Array<"tier" | "price_in" | "price_out" | "neighbours"> = (["tier", "price_in", "price_out"] as const).filter((field) => current[field] !== pin[field]);
+  if (proposal.op === "add_tier") {
+    // 隣は提案時点の添字にいまいる段 —— 改名・説明の編集・移動・挿入・削除のどれで入れ替わっても崩れる
+    const { position } = proposal.tier;
+    const same = (pinned: { name: Tier; description: string } | null, now: { name: Tier; description: string } | undefined) =>
+      pinned?.name === now?.name && pinned?.description === now?.description;
+    if (!same(proposal.pin.below, settings.tiers[position - 1]) || !same(proposal.pin.above, settings.tiers[position])) changed.push("neighbours");
+  }
+  return changed;
 }
 
 /** 修正値の合成(ADR 0150 決定2): 適用する行 = pin の行に提案の変更、その上に人間の修正値を重ねたもの。 */
@@ -584,6 +591,21 @@ export function composeRoutingRow(proposal: RoutingRowProposal, amendment?: Rout
 /** tier の提案の agent 側の pin(issue #920): registry の agent の tier が焼いた値のままか。agent が消えていても崩れている。 */
 export function registryPinChanges(proposal: RegistryProposal, agent: { tier?: string } | undefined): Array<"agent_tier"> {
   return agent?.tier === proposal.pin.tier ? [] : ["agent_tier"];
+}
+
+/** 段を足す提案の修正値(ADR 0200 決定8 / ADR 0150 決定2): 名前・説明・位置の少なくとも1つ。値の検査(名前の一意など)は
+ *  回答時に段の挿入の扉がやり直す。 */
+const addTierAmendmentSchema = z
+  .object({ name: z.string(), description: z.string(), position: z.number().int().nonnegative() })
+  .partial()
+  .strict()
+  .refine((amendment) => Object.keys(amendment).length > 0, { message: "name at least one of name / description / position" });
+export type AddTierAmendment = z.infer<typeof addTierAmendmentSchema>;
+
+export function parseAddTierAmendment(amendment: unknown): AddTierAmendment {
+  const parsed = addTierAmendmentSchema.safeParse(amendment);
+  if (!parsed.success) throw new DomainError(`an add-tier amendment takes name, description and/or position, nothing else: ${parsed.error.issues.map((i) => i.message).join("; ")}`);
+  return parsed.data;
 }
 
 /** 下げ先の検査(spec #916 B): 対象ティアに agent の entry のいずれかの行があるか。無ければ下げた agent は skipped になる。
