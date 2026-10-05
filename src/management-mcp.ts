@@ -80,7 +80,7 @@ import {
   MERGE_DIAL_VALUES,
 } from "./registry.js";
 import { RepoAccessMissingError } from "./repo-access.js";
-import { packItems, type ReadPosition, readNext } from "./response-budget.js";
+import { nextDescription, packItems, type ReadPosition, readNext } from "./response-budget.js";
 import { listHaltedRefires, markHaltedRefire, refireKeySchema } from "./retrospective.js";
 import {
   entryExclusionPredicate,
@@ -258,14 +258,6 @@ WebUI themselves. This implies:
 
 const QUESTION_ANNOTATIONS_DESCRIPTION =
   "A question also carries `landing` (null for a general question; for a landing question, `blocked_by` says why a `merge` answer would be rejected right now — `attached_children` or `objections` — or null when it would be accepted), `approval` (for a child-approval question, whether approving raises the parent's risk; otherwise null), `blocking` (the id of the parent task it holds up, or null), `moved` (for a memory proposal, one element per pinned entry moved since the proposal was shown: `id` is the entry as pinned, `tail_id` is where it lives now with its current `path` / `scope`, and an answer applies to `tail_id`), `needs_comment` (the answers that `answer_question` refuses without a non-blank comment; empty when every answer takes an optional one), and `free_text` (false when an answer must match one of the item's options verbatim; true when free text is accepted). A non-question task carries none of these.";
-
-/** 予算と続きで読む口の description の続きの読み方(ADR 0195)。順序は各口が前に書く。 */
-const nextDescription = (verb: string, items: string, firstOnly?: string) =>
-  `When the ${items} do not fit in one response, the response carries \`next\` and \`remaining\` (how many ${items} are not returned yet): ` +
-  `call ${verb} again with only \`next\` to read the rest, and repeat until a response carries no \`next\` — then the list is complete.` +
-  (firstOnly ? ` ${firstOnly} on the first response only.` : "") +
-  " An item too large for one response comes alone in pieces marked `partial` (`id`, the item's id or the key `next` resumes from; `field`, " +
-  "empty when the item is itself a string; and `field_bytes`, the field's full size in UTF-8 bytes): join that field across the pieces to get it verbatim.";
 
 /** 結果を返し、DomainError は tool error にする。 */
 const domainResult = (write: () => unknown) => {
@@ -701,7 +693,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
       inputSchema: { next: z.string().optional() },
     },
     // 枝の行は id を持たない —— 続きの境目は path(木の中で1行1つ)
-    async (input) => readBudgeted("list_memory_branches", input, (read) => packItems(read, "branches", listMemoryBranches(deps.db), {}, (row) => row.path)),
+    async (input) => readBudgeted("list_memory_branches", input, (read) => packItems(read, "branches", listMemoryBranches(deps.db), {}, { keyOf: (row) => row.path })),
   );
   server.registerTool(
     "record_knowledge",
@@ -757,10 +749,10 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
         const rendered = previewCase(deps.db, read.args.event_id);
         if ("decisions" in rendered) {
           const { decisions, ...envelope } = rendered;
-          return packItems(read, "decisions", decisions, envelope, (_, i) => i);
+          return packItems(read, "decisions", decisions, envelope, { keyOf: (_, i) => i });
         }
         const { steering, ...envelope } = rendered;
-        return packItems(read, "steering", steering, envelope, (_, i) => i);
+        return packItems(read, "steering", steering, envelope, { keyOf: (_, i) => i });
       }),
   );
   server.registerTool(
@@ -874,7 +866,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
     // 行は id を持たない —— 続きの境目は refire と target の鍵(Retry / Dismiss が行を指すのと同じ)
     async (input) =>
       readBudgeted("list_halted_refires", input, (read) =>
-        packItems(read, "halted", listHaltedRefires(deps.db), {}, (row) => `${row.refire}:${row.target}`),
+        packItems(read, "halted", listHaltedRefires(deps.db), {}, { keyOf: (row) => `${row.refire}:${row.target}` }),
       ),
   );
   server.registerTool(

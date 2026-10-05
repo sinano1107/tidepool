@@ -2770,12 +2770,26 @@ type TaskHistoryEntry =
   | { completion: string | null }
   | { child_outside_the_decomposition: HistoryChildContext };
 
-/** One task's worker-facing history, ordered by the event stream. */
-export function taskHistory(
-  db: Db,
-  taskId: string,
-  currentTaskId?: string,
-): TaskHistoryEntry[] {
+/** taskHistoryRows の1行: `id` は行の境目の event、`decision` は行が属する decision の event。 */
+export type HistoryRow = { id: number; decision?: number; entry: TaskHistoryEntry };
+
+/** 隣り合う同じ decision の行の子をまとめ、decision ごとの history の形に戻す。行の entry は書き換えない。 */
+export function joinHistory(rows: readonly Omit<HistoryRow, "id">[]): TaskHistoryEntry[] {
+  const out: TaskHistoryEntry[] = [];
+  let previous: number | undefined;
+  for (const { decision, entry } of rows) {
+    const last = out.at(-1);
+    if (decision !== undefined && decision === previous && last && "children" in last && "children" in entry) last.children.push(...entry.children);
+    else out.push("children" in entry ? { ...entry, children: [...entry.children] } : entry);
+    previous = decision;
+  }
+  return out;
+}
+
+/** 1つの task の worker が読む history(event の順)を、decision の子ごとに分けた行の列(ADR 0195: 兄弟の handoff 群が応答予算を超えても続きで読めるように)。
+ *  子を持つ decision は子1件ごとに `{ decision, children: [子] }` の行になり、`id` はその子の登録 event。子の無い decision・完了・
+ *  分解外の子は1行で、`id` はそれぞれの event。 */
+export function taskHistoryRows(db: Db, taskId: string, currentTaskId?: string): HistoryRow[] {
   type WorkingDecision = {
     decision: string;
     children: Array<{ eventId: number; child: HistoryChildContext }>;
@@ -2840,14 +2854,13 @@ export function taskHistory(
   }
   return timeline
     .sort((a, b) => a.eventId - b.eventId)
-    .map((item) => {
-      if (item.kind === "entry") return item.value;
-      return {
-        decision: item.value.decision,
-        children: item.value.children
-          .sort((a, b) => a.eventId - b.eventId)
-          .map(({ child }) => child),
-      };
+    .flatMap((item): HistoryRow[] => {
+      if (item.kind === "entry") return [{ id: item.eventId, entry: item.value }];
+      const { decision, children } = item.value;
+      if (children.length === 0) return [{ id: item.eventId, decision: item.eventId, entry: { decision, children: [] } }];
+      return children
+        .sort((a, b) => a.eventId - b.eventId)
+        .map(({ eventId, child }) => ({ id: eventId, decision: item.eventId, entry: { decision, children: [child] } }));
     });
 }
 
@@ -2876,7 +2889,7 @@ function premiseBreachReason(db: Db, taskId: string): string {
 }
 
 /** Every direct child of `parentId`, any status, in board order (issue #129's
- *  sibling-title list for the human draft). taskHistory deliberately reorders
+ *  sibling-title list for the human draft). taskHistoryRows deliberately reorders
  *  these by their registration event ids instead. */
 export function listChildren(db: Db, parentId: string): Task[] {
   const rows = db

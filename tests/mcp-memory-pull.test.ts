@@ -1,7 +1,7 @@
 import { afterEach, expect, it } from "vitest";
 import { defineMemoryBranch, humanEntryInput, invalidateMemoryEntry, moveMemory, recordBehavior, recordKnowledge } from "../src/memory.js";
 import { logDecision } from "../src/tasks.js";
-import { bootTidepool, HOUR, mcpClient, memoryEntries, registerWork, type Tidepool } from "./harness.js";
+import { bootTidepool, HOUR, mcpClient, memoryEntries, readFollowingNext, registerWork, type Tidepool } from "./harness.js";
 
 /** worker MCP の pull 3動詞(spec #586 D / issue #591)と枝の定義(#600 E)。フィルタ・順位・event の中身は
  *  ドメイン層(tests/memory-pull.test.ts)が言うので、ここは写像だけ —— 帰属 task の
@@ -43,18 +43,15 @@ it("browse_memory / search_memory / read_memory は attributed task の workspac
     expect(await call("browse_memory", {})).toEqual({
       children: [{ name: "build", definition: "How charts is built." }],
       entries: [],
-      truncated: false,
       event_id: expect.any(Number),
     });
-    expect(await call("browse_memory", { prefix: "build/tests", page: 1 })).toEqual({
+    expect(await call("browse_memory", { prefix: "build/tests" })).toEqual({
       children: [],
       entries: [{ id, title: "Tests need Node 22" }],
-      truncated: false,
       event_id: expect.any(Number),
     });
     expect(await call("search_memory", { query: "Node" })).toEqual({
       results: [{ id, title: "Tests need Node 22", path: "build/tests" }],
-      truncated: false,
       event_id: expect.any(Number),
     });
     expect(await call("read_memory", { ids: [id] })).toEqual({
@@ -140,6 +137,43 @@ it("record_knowledge の description は、新しい枝を切るときは先に 
     expect(tools.find((tool) => tool.name === "record_knowledge")?.description).toContain(
       "When you open a new branch, define it first with define_memory_branch",
     );
+  } finally {
+    await client.close();
+  }
+});
+
+// 応答予算(ADR 0195 / issue #1390): 詰め方・順序・続きの memory_pulled はドメイン層が言う。ここは続き(next)が tool を通り、
+// 続きの応答が読み手に届くことだけ。
+
+it("browse_memory / search_memory / read_memory は続き(next)だけを受けて続きの応答を返し、next を追うと最初の読みの entry がすべて届く", async () => {
+  t = await bootTidepool();
+  const task = await registerWork(t, "index the tide charts", "charts");
+  // 約2KB の本文の Knowledge が 30 件で、どの読みも予算を超える
+  const ids = Array.from(
+    { length: 30 },
+    (_, i) =>
+      recordKnowledge(
+        t.db,
+        { scope: "charts", path: "build/tests", title: `Note ${i} ${"y".repeat(2_000)}`, text: `${i} ${"潮".repeat(700)}`, source: { commit: "0a46a46" }, author: { activity: "worker_verb", name: "deckhand" } },
+        "worker",
+        t.clock.now(),
+      ).entry_id,
+  );
+  await t.clock.advance(HOUR);
+
+  const client = await mcpClient(t.mcpBaseUrl, task.id);
+  try {
+    const reads = [
+      ["browse_memory", { prefix: "build/tests" }, "entries"],
+      ["search_memory", { query: "Note" }, "results"],
+      ["read_memory", { ids }, "entries"],
+    ] as const;
+    for (const [verb, args, key] of reads) {
+      const responses = await readFollowingNext(client, verb, args);
+
+      expect(responses.length, verb).toBeGreaterThan(1);
+      expect(new Set(responses.flatMap((response) => response.payload[key].map((e: any) => e.id))), verb).toEqual(new Set(ids));
+    }
   } finally {
     await client.close();
   }

@@ -11,26 +11,28 @@ import {
   tierHasRowFor,
 } from "./execution-setting.js";
 import { type Cell, cellJson, loadEpisodes, type RoutingEpisode, type TrackRecord } from "./learner.js";
-import { inWindow, type MetaReviewWindow, materialSection, paged, previousMetaReviewWatermark } from "./meta-review.js";
+import { inWindow, type MetaReviewWindow, materialSection, previousMetaReviewWatermark } from "./meta-review.js";
+import { type Packed, packItems, readPosition } from "./response-budget.js";
 import { DomainError, type RegistryProposal, type RoutingProposal, registerTask } from "./tasks.js";
 
 /** 主題 routing の meta-review の読み口(issue #917 / spec #916 C)。どれも既定の `since_watermark` は読み手と同主題の
- *  前回の登録の watermark(event id)で、ページ長は memory の読み口と同じ定数。 */
+ *  前回の登録の watermark(event id)で、応答予算と続き(next)で返す(ADR 0195)。 */
 
 interface ReadWindow {
   since_watermark?: number;
-  page?: number;
 }
 
-const since = (db: Db, readerTaskId: string, input: ReadWindow) => input.since_watermark ?? previousMetaReviewWatermark(db, readerTaskId);
+const since = (db: Db, readerTaskId: string, args: ReadWindow) => args.since_watermark ?? previousMetaReviewWatermark(db, readerTaskId);
 
 /** shadow 行を、その pickup が開いた session の outcome と結ぶ。session = 同じ task の、行の watermark より後で次の
  *  shadow 行より前の最初の worker_spawned(spawn に辿り着かなかった pickup は session 無し)。`diverged` は学習器の推薦と
  *  実際に走ったセルが違う行で、`diverged_only` でそれだけに絞る。 */
-export function listRoutingShadow(db: Db, readerTaskId: string, input: ReadWindow & { diverged_only?: boolean }) {
-  const shadow = shadowRows(db, { after: since(db, readerTaskId, input) }).flatMap(({ id: _, ...row }) => (input.diverged_only && !row.diverged ? [] : [row]));
-  const { rows: shown, truncated } = paged(shadow, input.page);
-  return { shadow: shown, truncated };
+export function listRoutingShadow(db: Db, readerTaskId: string, input: ReadWindow & { diverged_only?: boolean; next?: string }) {
+  const read = readPosition<ReadWindow & { diverged_only?: boolean }>("list_routing_shadow", input);
+  // 境目の鍵は learner_shadow の id —— 応答の行には載せないので、同じ位置の元の行から引く
+  const kept = shadowRows(db, { after: since(db, readerTaskId, read.args) }).filter((row) => !read.args.diverged_only || row.diverged);
+  const shadow = kept.map(({ id: _, ...row }) => row);
+  return packItems(read, "shadow", shadow, {}, { keyOf: (_, i) => kept[i]!.id }) as Packed<{ shadow: typeof shadow }>;
 }
 
 /** list_routing_shadow の行(ページ割り前、learner_shadow の id つき)。行の watermark W は event W より後に書かれたので、窓
@@ -87,9 +89,12 @@ function shadowRows(db: Db, { after, upTo = Number.MAX_SAFE_INTEGER }: MetaRevie
 
 /** 配分評価の分布: 注釈を worker session の (`source.tier`, agent, allocation, cause) で数え、judge の model が
  *  worker のセルの model と同じだった件数を添える(ADR 0150 決定8)。 */
-export function listAllocations(db: Db, readerTaskId: string, input: ReadWindow) {
-  const { rows, truncated } = paged(allocationRows(db, { after: since(db, readerTaskId, input) }).groups, input.page);
-  return { allocations: rows, truncated };
+export function listAllocations(db: Db, readerTaskId: string, input: ReadWindow & { next?: string }) {
+  const read = readPosition<ReadWindow>("list_allocations", input);
+  const { groups } = allocationRows(db, { after: since(db, readerTaskId, read.args) });
+  // 境目の鍵は数える単位そのもの(tier の出所・agent・allocation・cause)
+  const keyOf = (g: (typeof groups)[number]) => JSON.stringify([g.source_tier, g.agent, g.allocation, g.cause]);
+  return packItems(read, "allocations", groups, {}, { keyOf }) as Packed<{ allocations: typeof groups }>;
 }
 
 /** list_allocations の行(ページ割り前)と、数えた allocation_reviewed の event id。 */
@@ -114,11 +119,21 @@ function allocationRows(db: Db, window: MetaReviewWindow) {
 /** 新しいセルと人間が変えた行: 観測(worker_exited)で初めて現れたのが watermark より後のセルと、watermark より後に
  *  settings タブ / 管理MCP から書かれた表の行(`execution_settings_changed` の `row`)。提案 question への approve の適用は
  *  read_routing_settings が読むので含まない(ADR 0151 決定2)。 */
-export function listRoutingCells(db: Db, readerTaskId: string, input: ReadWindow) {
-  const { cells: all, rows } = cellRows(db, { after: since(db, readerTaskId, input) });
-  // 人間の行の編集は数件なのでページに割らず全部返す
-  const { rows: cells, truncated } = paged(all, input.page);
-  return { cells, rows, truncated };
+export function listRoutingCells(db: Db, readerTaskId: string, input: ReadWindow & { next?: string }) {
+  const read = readPosition<ReadWindow>("list_routing_cells", input);
+  const { cells, rows } = cellRows(db, { after: since(db, readerTaskId, read.args) });
+  // 人間の行の編集は数件なので封筒として最初の応答に全部載せ、続きはセルだけ。セルの境目の鍵はセルそのもの(cellJson)
+  return packItems(read, "cells", cells, { rows }, { keyOf: (c) => cellJson(c.cell) }) as Packed<{ cells: typeof cells }, { rows: typeof rows }>;
+}
+
+/** read_routing_settings: 今の表と設定(封筒、最初の応答だけ)と、過去の提案(古い順、境目の鍵は提案の question id)。 */
+export function readRoutingSettings(db: Db, input: { next?: string }) {
+  const read = readPosition("read_routing_settings", input);
+  const proposals = listRoutingProposals(db);
+  return packItems(read, "proposals", proposals, readExecutionSettings(db), { keyOf: (p) => p.question_id }) as Packed<
+    { proposals: typeof proposals },
+    ReturnType<typeof readExecutionSettings>
+  >;
 }
 
 /** list_routing_cells の2種の行(ページ割り前): 初観測が窓 `(after, upTo]` にあるセルと、窓の中の人間の行の編集。 */
@@ -141,7 +156,7 @@ function cellRows(db: Db, window: MetaReviewWindow) {
  *  (routing_proposal_stale)、registry へ適用した tier の提案なら着地した commit(agent_tier_changed)。提案の表は持たず question と
  *  event から組む。verb は窓で切らない —— 退けられた提案を繰り返さないための読み物なので、全期間を返す。window を渡すと、回答か
  *  陳腐化の event がその窓 `(after, upTo]` にある提案だけ(材料の節の決着した提案、ADR 0180 追記 #1239)。 */
-export function listRoutingProposals(db: Db, window?: MetaReviewWindow) {
+function listRoutingProposals(db: Db, window?: MetaReviewWindow) {
   const rows = db
     .prepare(
       `SELECT t.id, t.question_proposal,

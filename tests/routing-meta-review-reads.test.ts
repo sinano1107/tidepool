@@ -1,12 +1,12 @@
 import { expect, it } from "vitest";
 import { openDb } from "../src/db.js";
 import { appendEvent, type EventPayload } from "../src/events.js";
-import { applyExecutionSettingsChange, type ExecutionSetting } from "../src/execution-setting.js";
+import { applyExecutionSettingsChange, type ExecutionSetting, loadExecutionSettingTable } from "../src/execution-setting.js";
 import { aggregateCells, loadEpisodes, recordShadow, selectorBranch } from "../src/learner.js";
 import { registerMetaReview } from "../src/meta-review.js";
-import { listAllocations, listRoutingCells, listRoutingShadow } from "../src/routing-review.js";
-import { registerTask } from "../src/tasks.js";
-import { HUMAN_WEBUI, QUIET_EXIT, WORKER_SPAWNED } from "./harness.js";
+import { listAllocations, listRoutingCells, listRoutingShadow, proposeRoutingChange, readRoutingSettings } from "../src/routing-review.js";
+import { answerQuestion, getTask, registerTask } from "../src/tasks.js";
+import { HUMAN_WEBUI, QUIET_EXIT, RESPONSE_BUDGET_BYTES, WORKER_SPAWNED } from "./harness.js";
 
 /** 主題 routing の meta-review の読み口(issue #917 / spec #916 C)のドメイン層。verb への写像はサーバ境界
  *  (tests/routing-meta-review.test.ts)が言う。 */
@@ -109,7 +109,6 @@ it("list_routing_shadow は shadow 行をその pickup が開いた session の 
       { task_id: diverged.id, recommended: cell(sol), actual: cell(opus), source: opus.source, basis: "prior", recommended_record: none, actual_record: none, candidates: 2, diverged: true, created_at: at.toISOString(), worker_spawned_event_id: second, agent: "reef-crab", outcome: "rejected", cost_usd: 1.25, duration_ms: 0 },
       { task_id: agreed.id, recommended: cell(opus), actual: cell(opus), source: opus.source, basis: "data", recommended_record: none, actual_record: none, candidates: 2, diverged: false, created_at: at.toISOString(), worker_spawned_event_id: expect.any(Number), agent: "deckhand", outcome: "excluded", cost_usd: null, duration_ms: null },
     ],
-    truncated: false,
   });
   expect(listRoutingShadow(db, reader, { diverged_only: true }).shadow.map((r) => r.worker_spawned_event_id)).toEqual([null, second]);
 });
@@ -196,7 +195,6 @@ it("list_allocations は評価された注釈を source.tier × agent × allocat
       { source_tier: "task", agent: "reef-crab", allocation: "overpowered", cause: "uncertain", count: 1, judged_by_same_model: 0 },
       { source_tier: "agent", agent: "deckhand", allocation: "appropriate", cause: "uncertain", count: 1, judged_by_same_model: 0 },
     ],
-    truncated: false,
   });
 });
 
@@ -212,7 +210,6 @@ it("list_routing_cells の新セルは終わった session で初めて観測さ
   expect(listRoutingCells(db, routingReview(), {})).toEqual({
     cells: [{ cell: { provider: "moonshot", model: "kimi-k3", effort: "high", advisor: null }, first_observed_event_id: seen }],
     rows: [],
-    truncated: false,
   });
 });
 
@@ -224,4 +221,60 @@ it("list_routing_cells の人間が変えた行は settings タブ / 管理MCP �
   const reader = routingReview();
 
   expect(listRoutingCells(db, reader, { since_watermark: 0 }).rows).toMatchObject([{ origin: "mcp", row: { effort: "max" } }]);
+});
+
+// 応答予算(ADR 0195 / issue #1390): 読み口は予算に収まるだけ返し、収まらない分は続き(next)で読む。
+
+/** `first` の読みから next が尽きるまで追った応答の列。 */
+function followNext<I, R extends { next?: string }>(read: (input: I | { next: string }) => R, first: I): R[] {
+  const responses = [read(first)];
+  while (responses.at(-1)!.next) responses.push(read({ next: responses.at(-1)!.next! }));
+  return responses;
+}
+
+it("read_routing_settings は予算を超える量の提案を古い順に予算分ずつ返し、next を追うと欠けも重複もなく揃う。表と設定は最初の応答だけに載る", () => {
+  const { db, routingReview } = board();
+  const review = routingReview();
+  const [row] = loadExecutionSettingTable(db);
+  const proposed = Array.from({ length: 20 }, (_, i) => {
+    const { question_id } = proposeRoutingChange(db, review, { op: "row", row: row!, change: { effort: "low" }, rationale: "r" }, "auditor", at);
+    answerQuestion(db, getTask(db, question_id)!, ["reject"], at, undefined, `${i} ${"潮".repeat(1_000)}`, undefined, "webui");
+    return question_id;
+  });
+
+  const responses = followNext((input) => readRoutingSettings(db, input), {});
+
+  expect(responses.length).toBeGreaterThan(1);
+  for (const response of responses) expect(Buffer.byteLength(JSON.stringify(response))).toBeLessThanOrEqual(RESPONSE_BUDGET_BYTES);
+  expect(responses.flatMap((response) => response.proposals.map((p) => p.question_id))).toEqual(proposed);
+  expect(responses[0]).toMatchObject({ table: expect.any(Array) });
+  for (const response of responses.slice(1)) expect(response).not.toHaveProperty("table");
+});
+
+it("list_routing_shadow / list_allocations / list_routing_cells は予算を超える量を予算分ずつ返し、next を追うと全行が揃う", () => {
+  const { db, work, spawn, exit, allocate, routingReview } = board();
+  // 長い agent 名と model 名で、20 の session がそれぞれ別の配分評価の組・別のセル・大きな shadow 行になる
+  const tasks = Array.from({ length: 20 }, (_, i) => {
+    const task = work(`w${i}`);
+    const run = setting("anthropic", `model-${i}-${"m".repeat(2_500)}`);
+    recordShadow(db, task.id, shadow(run, run, "prior"), at);
+    const spawned = spawn(task.id, `agent-${i}-${"a".repeat(2_500)}`, run);
+    exit(task.id, spawned);
+    allocate(task.id, spawned, { judge, allocation: "appropriate", cause: "uncertain", evidence: "e" });
+    return task.id;
+  });
+  const reader = routingReview();
+  const window = { since_watermark: 0 };
+
+  const shadows = followNext((input) => listRoutingShadow(db, reader, input), window);
+  const allocations = followNext((input) => listAllocations(db, reader, input), window);
+  const cells = followNext((input) => listRoutingCells(db, reader, input), window);
+
+  for (const responses of [shadows, allocations, cells]) {
+    expect(responses.length).toBeGreaterThan(1);
+    for (const response of responses) expect(Buffer.byteLength(JSON.stringify(response))).toBeLessThanOrEqual(RESPONSE_BUDGET_BYTES);
+  }
+  expect(shadows.flatMap((response) => response.shadow.map((r) => r.task_id))).toEqual(tasks);
+  expect(new Set(allocations.flatMap((response) => response.allocations.map((g) => g.agent))).size).toBe(20);
+  expect(new Set(cells.flatMap((response) => response.cells.map((c) => c.cell.model))).size).toBe(20);
 });

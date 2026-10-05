@@ -230,7 +230,6 @@ it("list_precedents は異議つき decision を cause・outcome・読んだ / �
         entries_seen: [42],
       },
     ],
-    truncated: false,
     event_id: expect.any(Number),
   });
   expect(getEvent(db, result.event_id)).toMatchObject({

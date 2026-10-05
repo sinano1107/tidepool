@@ -288,7 +288,7 @@ it("a work child of a done parent receives the parent's handoff document", async
   }
 });
 
-it("get_current_task describes how to read history in exactly three English sentences", async () => {
+it("get_current_task describes how to read history in English: its entries, its rows, then how to read the rest with next", async () => {
   t = await bootTidepool();
   const task = await registerWork(t, "read the briefing");
   await t.clock.advance(HOUR);
@@ -300,7 +300,15 @@ it("get_current_task describes how to read history in exactly three English sent
         "in chronological order. A decision's children are the tasks registered based on that " +
         "decision. A child_outside_the_decomposition is based on no decomposition decision, " +
         "such as a repair task from a human objection, this task's own escalation, or a " +
-        "watchdog failure question.",
+        "watchdog failure question. " +
+        "A history is read in rows: each child of a decision is one row (a decision without children is one row), and every other entry is " +
+        "one row; the parent's rows come first, then this task's. A decision whose children continue into the next response repeats its " +
+        "line there, and once the parent's rows are all read a response carries no parent. " +
+        "When the history rows do not fit in one response, the response carries `next` and `remaining` (how many history rows are not returned yet): " +
+        "call get_current_task again with only `next` to read the rest, and repeat until a response carries no `next` — then the list is complete. " +
+        "The task and the parent's other fields come on the first response only. " +
+        "An item too large for one response comes alone in pieces marked `partial` (`id`, the item's id or the key `next` resumes from; `field`, " +
+        "empty when the item is itself a string; and `field_bytes`, the field's full size in UTF-8 bytes): join that field across the pieces to get it verbatim.",
     );
   } finally {
     await client.close();

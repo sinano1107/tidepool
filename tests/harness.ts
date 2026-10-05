@@ -397,6 +397,22 @@ export async function mcpClient(baseUrl: string, taskId?: string): Promise<Clien
   return client;
 }
 
+/** 応答予算(ADR 0195)。読み口の応答は MCP の text content の UTF-8 バイト数でこれ以下に収まる。 */
+export const RESPONSE_BUDGET_BYTES = 40_000;
+
+/** `name` を `args` で呼び、続き(next)が尽きるまで next だけを渡して追った応答(バイト数と本文)の列。 */
+export async function readFollowingNext(client: Client, name: string, args: Record<string, unknown> = {}) {
+  const responses: Array<{ bytes: number; payload: any }> = [];
+  let next: unknown;
+  do {
+    const result: any = await client.callTool({ name, arguments: next === undefined ? args : { next } });
+    if (result.isError) throw new Error(`${name}: ${result.content[0].text}`);
+    responses.push({ bytes: Buffer.byteLength(result.content[0].text), payload: JSON.parse(result.content[0].text) });
+    next = responses.at(-1)!.payload.next;
+  } while (next !== undefined);
+  return responses;
+}
+
 /** Real authenticated client for the human-facing Management MCP.  Keep this
  * distinct from `mcpClient`: the worker and human surfaces are separate trust
  * domains (ADR 0032 / ADR 0036). */

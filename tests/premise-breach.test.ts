@@ -14,13 +14,14 @@ import {
   getTask,
   HUMAN_WORKER_ID,
   humanDecomposeTask,
+  joinHistory,
   logDecision,
   nextSlotTask,
   presentTask,
   redecompose,
   registerTask,
   type Task,
-  taskHistory,
+  taskHistoryRows,
 } from "../src/tasks.js";
 import { HUMAN_WEBUI } from "./harness.js";
 
@@ -128,7 +129,7 @@ it("破綻の question に abandon + comment で答えると、親の history �
   answerQuestion(db, question, ["abandon"], at, undefined, "M は作り直す", undefined, "webui");
 
   const originQuestion = { title: question.title, answer: ["abandon"], comment: "M は作り直す" };
-  expect(taskHistory(db, parent.id)).toEqual([
+  expect(joinHistory(taskHistoryRows(db, parent.id))).toEqual([
     {
       decision: "human split",
       children: [
@@ -180,7 +181,7 @@ it("再分解は破綻した判断の未決着の子を宣言の出自つきで 
   expect(() =>
     redecompose(db, getTask(db, parent.id)!, { reason: "replan", children: [{ ...spec("X"), tier: "bogus" }] }, "tako", at, undefined, undefined, "worker"),
   ).toThrow(DomainError);
-  expect(taskHistory(db, parent.id)).toEqual([
+  expect(joinHistory(taskHistoryRows(db, parent.id))).toEqual([
     {
       decision: "split T",
       children: [
@@ -194,7 +195,7 @@ it("再分解は破綻した判断の未決着の子を宣言の出自つきで 
   redecompose(db, getTask(db, parent.id)!, { reason: "replan around M", children: [spec("X")] }, "tako", at, undefined, undefined, "worker");
 
   const breach = { title: "A", reason: "module M is broken" };
-  expect(taskHistory(db, parent.id)).toEqual([
+  expect(joinHistory(taskHistoryRows(db, parent.id))).toEqual([
     {
       decision: "split T",
       children: [
@@ -217,7 +218,7 @@ it("続行の後、親の時系列は宣言の欄を持たず、親の続行の1
 
   continueDecomposition(db, getTask(db, parent.id)!, "M is fine", "tako", at, "worker");
 
-  expect(taskHistory(db, parent.id, a!.id)).toEqual([
+  expect(joinHistory(taskHistoryRows(db, parent.id, a!.id))).toEqual([
     { decision: "split T", children: [expect.not.objectContaining({ premise_breach: expect.anything() })] },
     { decision: "M is fine", children: [] },
   ]);
@@ -242,7 +243,7 @@ it("破綻が開いたまま木が直接 cancel されると、cancel された�
 
   cancelTaskDirectly(db, getTask(db, parent.id)!, null, at, {}, "webui");
 
-  expect(taskHistory(db, parent.id)).toEqual([
+  expect(joinHistory(taskHistoryRows(db, parent.id))).toEqual([
     {
       decision: "split T",
       children: [

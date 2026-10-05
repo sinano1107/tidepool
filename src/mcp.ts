@@ -4,7 +4,7 @@ import { z } from "zod";
 import type { AgentAdmin } from "./agent-create.js";
 import type { Clock } from "./clock.js";
 import type { Db } from "./db.js";
-import { PRIORITY_FIELD_DESCRIPTION, readExecutionSettings, TIER_FIELD_DESCRIPTION, TIERS } from "./execution-setting.js";
+import { PRIORITY_FIELD_DESCRIPTION, TIER_FIELD_DESCRIPTION, TIERS } from "./execution-setting.js";
 import type { GitHubClient } from "./github.js";
 import type { GitHubAuth } from "./github-auth.js";
 import { assertMemoryReferencesKnown, assertReviewerKnown, assertWorkspaceKnown } from "./human-verbs.js";
@@ -36,8 +36,9 @@ import {
 import { type MetaReviewSubject, metaReviewSubjectOf, PROMOTION_RULE } from "./meta-review.js";
 import type { ProcessContainers } from "./process-container.js";
 import { type AuthorityProfile, REVIEWER_AUTHORITY_PROFILE, type RosterAgent } from "./registry.js";
+import { nextDescription, packItems, readPosition } from "./response-budget.js";
 import { proposeFromObjection } from "./retrospective.js";
-import { listAllocations, listRoutingCells, listRoutingProposals, listRoutingShadow, proposeRoutingChange } from "./routing-review.js";
+import { listAllocations, listRoutingCells, listRoutingShadow, proposeRoutingChange, readRoutingSettings } from "./routing-review.js";
 import type { Slot } from "./slot.js";
 import { createStatelessMcpRouter, floorEveryResponse, rejectUnknownArguments } from "./stateless-mcp.js";
 import {
@@ -53,13 +54,15 @@ import {
   escalateTask,
   getTask,
   HANDOFF_FIELDS,
+  type HistoryRow,
   HUMAN_ROSTER_AGENT,
   HUMAN_WORKER_ID,
+  joinHistory,
   logDecision,
   redecompose,
   resolveTaskAgent,
   type Task,
-  taskHistory,
+  taskHistoryRows,
 } from "./tasks.js";
 import { markTeardown, runTeardown, type TeardownDeps, teardownStep } from "./teardown.js";
 import {
@@ -330,8 +333,8 @@ async function taskContext(deps: McpDeps, task: Task) {
   return { id: task.id, ...content };
 }
 
-/** pull の読み口のページ番号(1 始まり)。 */
-const page = z.number().int().min(1).optional();
+/** 応答予算で読む読み口の続き(ADR 0195)。 */
+const next = z.string().optional().describe("The next string from a previous response of this verb; pass it alone.");
 
 /** decompose と redecompose が共有する。 */
 function assertChildrenKnown(deps: McpDeps, children: z.infer<typeof decomposeChildrenSchema>): void {
@@ -425,22 +428,40 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
         "in chronological order. A decision's children are the tasks registered based on that " +
         "decision. A child_outside_the_decomposition is based on no decomposition decision, " +
         "such as a repair task from a human objection, this task's own escalation, or a " +
-        "watchdog failure question.",
+        "watchdog failure question. " +
+        "A history is read in rows: each child of a decision is one row (a decision without children is one row), and every other entry is " +
+        "one row; the parent's rows come first, then this task's. A decision whose children continue into the next response repeats its " +
+        "line there, and once the parent's rows are all read a response carries no parent. " +
+        nextDescription("get_current_task", "history rows", "The task and the parent's other fields come"),
+      inputSchema: { next },
     },
-    async () =>
+    async (input) =>
       runVerb(deps, attributedTaskId, async (task) => {
+        const read = readPosition("get_current_task", input);
         const parent = task.parent_id ? (getTask(deps.db, task.parent_id) ?? null) : null;
-        const parentContext = parent && {
-          ...(await taskContext(deps, parent)),
-          handoff_doc: parent.handoff_doc,
-          history: taskHistory(deps.db, parent.id, task.id),
-        };
-        return {
-          ...(await taskContext(deps, task)),
-          type: task.type,
-          parent: parentContext,
-          history: taskHistory(deps.db, task.id),
-        };
+        // 親の history の後に task の history を、decision の子ごとの行で1列に詰める(ADR 0195)。境目の鍵は行の event id
+        const rows = [
+          ...(parent ? taskHistoryRows(deps.db, parent.id, task.id).map((row) => ({ ...row, list: "parent.history" })) : []),
+          ...taskHistoryRows(deps.db, task.id).map((row) => ({ ...row, list: "history" })),
+        ];
+        const rowOf = new Map(rows.map((row) => [row.entry, row]));
+        const envelope =
+          read.at === undefined && {
+            ...(await taskContext(deps, task)),
+            type: task.type,
+            parent: parent && { ...(await taskContext(deps, parent)), handoff_doc: parent.handoff_doc },
+          };
+        const packed = packItems(read, parent ? ["parent.history", "history"] : ["history"], rows.map((row) => row.entry), envelope || {}, {
+          keyOf: (_, i) => rows[i]!.id,
+          listOf: (_, i) => rows[i]!.list,
+        }) as { parent?: { history: HistoryRow["entry"][] }; history: HistoryRow["entry"][] };
+        // 同じ decision の子の行を1つの decision に戻す —— 応答は縮むだけ。切れた1件(partial)は複製なので戻す相手が無い
+        const join = (entries: HistoryRow["entry"][]) => joinHistory(entries.map((entry) => ({ decision: rowOf.get(entry)?.decision, entry })));
+        if (packed.parent) packed.parent.history = join(packed.parent.history);
+        packed.history = join(packed.history);
+        // 続きで親の history を読み終えたら親の欄ごと載せない(続きの最初の item は必ず載るので、空なら読み終えている)
+        if (read.at !== undefined && packed.parent?.history.length === 0) delete packed.parent;
+        return packed;
       }),
   );
 
@@ -761,8 +782,10 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
         "Browse the board's memory index for this workspace: the direct children of a path " +
         "prefix — children (a deeper prefix you can browse next, with its one-line definition of what is " +
         "filed under it, or null if undefined), and entries (id + title) filed at that " +
-        "path. Omit prefix for the top level. Read an entry's text with read_memory.",
-      inputSchema: { prefix: z.string().optional(), page },
+        "path. Omit prefix for the top level. Read an entry's text with read_memory. " +
+        "Children come first, by name, then entries, by id. " +
+        nextDescription("browse_memory", "children and entries"),
+      inputSchema: { prefix: z.string().optional(), next },
     },
     async (input) => runVerb(deps, attributedTaskId, (task) => browseMemory(deps.db, reader(task), input, deps.clock.now())),
   );
@@ -772,10 +795,11 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
     {
       description:
         "Search the board's memory for this workspace by full-text query; results are " +
-        "{id, title, path} in rank order, and truncated says a next page exists. Entries are " +
+        "{id, title, path} in rank order. Entries are " +
         "searched by their English text; query in English. Read an entry's text with read_memory. " +
-        "Definitions are not searched; the index in your Memory section and browse_memory carry them.",
-      inputSchema: { query: z.string().min(1), page },
+        "Definitions are not searched; the index in your Memory section and browse_memory carry them. " +
+        nextDescription("search_memory", "results"),
+      inputSchema: { query: z.string().min(1).optional(), next },
     },
     async (input) => runVerb(deps, attributedTaskId, (task) => searchMemory(deps.db, reader(task), input, deps.clock.now())),
   );
@@ -793,8 +817,9 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
         "set to the id you asked for. Any other invalidated id returns no entry but a dropped item with " +
         "the reason — superseded, capability (it was wrong), environment / requirement_change (it went " +
         "stale), or path_moved (moved where you cannot see) — and the successor id when you can see it. " +
-        "Ids you cannot see are omitted.",
-      inputSchema: { ids: z.array(z.number().int()).min(1) },
+        "Ids you cannot see are omitted. Entries come in id order. " +
+        nextDescription("read_memory", "entries", "`dropped` comes"),
+      inputSchema: { ids: z.array(z.number().int()).min(1).optional(), next },
     },
     async (input) => runVerb(deps, attributedTaskId, (task) => readMemory(deps.db, reader(task), input, deps.clock.now())),
   );
@@ -829,8 +854,9 @@ function registerMetaReviewVerbs(server: McpServer, deps: McpDeps, attributedTas
         "List objected decisions from past worker sessions: the decision line, objections and their attributed cause, " +
         "the session outcome, and the memory entry ids read (entries_read) and seen (entries_seen) before the decision. " +
         "When the cause is memory, entries names the ids of the entries the worker read and followed that were wrong; otherwise it is null. " +
-        "Defaults to objections since the previous completed meta-review of your subject; pass since_watermark (an event id) to look further back.",
-      inputSchema: { since_watermark: z.number().int().min(0).optional(), page },
+        "Defaults to objections since the previous completed meta-review of your subject; pass since_watermark (an event id) to look further back. " +
+        nextDescription("list_precedents", "precedents"),
+      inputSchema: { since_watermark: z.number().int().min(0).optional(), next },
     },
     async (input) => run((reader, now) => listPrecedents(deps.db, reader, input, now)),
   );
@@ -852,8 +878,9 @@ function registerRoutingMetaReviewVerbs(server: McpServer, deps: McpDeps, run: M
         "recommended_record and actual_record are the two cells' track records as of that pickup (accepted and rejected, board and " +
         "workspace stage), and candidates is how many rows the pickup could choose from after exclusions — with one, the two cells always match. " +
         "diverged marks rows where the two cells differ; diverged_only returns only those. When source.provider is learner, the " +
-        "learner was promoted and chose what ran, and recommended is what the table would have chosen instead.",
-      inputSchema: { since_watermark, diverged_only: z.boolean().optional(), page },
+        "learner was promoted and chose what ran, and recommended is what the table would have chosen instead. Rows come oldest first. " +
+        nextDescription("list_routing_shadow", "rows"),
+      inputSchema: { since_watermark, diverged_only: z.boolean().optional(), next },
     },
     async (input) => run((reader) => listRoutingShadow(deps.db, reader.taskId, input)),
   );
@@ -864,8 +891,9 @@ function registerRoutingMetaReviewVerbs(server: McpServer, deps: McpDeps, run: M
       description:
         "List the allocation-review distribution: evaluated annotations counted by the session's tier source, agent, " +
         "allocation and cause, with judged_by_same_model counting those whose judge ran on the worker's own model. " +
-        "Unevaluated annotations are not counted.",
-      inputSchema: { since_watermark, page },
+        "Unevaluated annotations are not counted. " +
+        nextDescription("list_allocations", "allocations"),
+      inputSchema: { since_watermark, next },
     },
     async (input) => run((reader) => listAllocations(deps.db, reader.taskId, input)),
   );
@@ -875,8 +903,9 @@ function registerRoutingMetaReviewVerbs(server: McpServer, deps: McpDeps, run: M
     {
       description:
         "List cells (provider, model, effort, advisor) first observed in a finished session since the watermark, and the " +
-        "execution-setting table rows humans wrote since then. Only cells are paged; the rows always come back in full.",
-      inputSchema: { since_watermark, page },
+        "execution-setting table rows humans wrote since then. " +
+        nextDescription("list_routing_cells", "cells", "The rows come in full"),
+      inputSchema: { since_watermark, next },
     },
     async (input) => run((reader) => listRoutingCells(deps.db, reader.taskId, input)),
   );
@@ -888,9 +917,12 @@ function registerRoutingMetaReviewVerbs(server: McpServer, deps: McpDeps, run: M
         "Read the current execution-setting table, the frontier advisor setting, the provider rank, the default priority and " +
         "whether the learner is promoted, and every past routing proposal (agent tier proposals included) with its answer, the " +
         "human's amendment and comment, or why the board settled it as observed (the pinned row, learner flag or agent tier " +
-        "changed, or the row was deleted). An applied agent tier proposal carries the registry commit it landed as applied.",
+        "changed, or the row was deleted). An applied agent tier proposal carries the registry commit it landed as applied. " +
+        "Proposals come oldest first. " +
+        nextDescription("read_routing_settings", "proposals", "The table and settings come"),
+      inputSchema: { next },
     },
-    async () => run(() => ({ ...readExecutionSettings(deps.db), proposals: listRoutingProposals(deps.db) })),
+    async (input) => run(() => readRoutingSettings(deps.db, input)),
   );
 
   server.registerTool(
@@ -936,8 +968,9 @@ function registerMemoryMetaReviewVerbs(server: McpServer, deps: McpDeps, run: Me
         "candidates with their invalidation reason, successor, and invalidated_by: question_id when a human answered a proposal " +
         "(read its comment in list_memory_proposals), activity when a meta-review retired or replaced it, worker otherwise. A candidate superseded " +
           "by a successor a human wrote was approved with the human's amendment, or replaced by a consolidation the human amended; successor " +
-          "shows the wording they approved instead.",
-      inputSchema: { include_invalidated: z.boolean().optional(), kind: z.enum(["behavior", "exemplar"]).optional(), page },
+          "shows the wording they approved instead. Candidates come in id order. " +
+        nextDescription("list_memory_candidates", "candidates"),
+      inputSchema: { include_invalidated: z.boolean().optional(), kind: z.enum(["behavior", "exemplar"]).optional(), next },
     },
     async (input) => run((reader, now) => pullMemoryList(deps.db, reader, "list_memory_candidates", input, now)),
   );
@@ -948,13 +981,14 @@ function registerMemoryMetaReviewVerbs(server: McpServer, deps: McpDeps, run: Me
       description:
         "List the memory entries the human settings view lists, each entry's original wording omitted — candidates and invalidated entries " +
         "included. scope: a workspace name, null for board-wide only, omit for all. " +
-        "path: only the entries at that branch or under it (path/…).",
+        "path: only the entries at that branch or under it (path/…). " +
+        nextDescription("list_memory_entries", "entries"),
       inputSchema: {
         scope: scope.optional(),
         kind: memoryListFilterSchema.shape.kind,
         state: memoryListFilterSchema.shape.state,
         path: memoryListFilterSchema.shape.path,
-        page,
+        next,
       },
     },
     async (input) => run((reader, now) => pullMemoryList(deps.db, reader, "list_memory_entries", input, now)),
@@ -968,9 +1002,10 @@ function registerMemoryMetaReviewVerbs(server: McpServer, deps: McpDeps, run: Me
         "or Exemplar — the example it was drafted from (the decision, the steering objections raised against it, and that session's handoff " +
         "and result, or a whole session's decisions in order with the handoff and result); null when there is none. An id whose entry was " +
         "moved or restored returns the entry it now lives as, with requested_id set to the id you asked for. Any other invalidated entry comes " +
-        "back as it is, text included, with its invalidation_reason and successor_id. Ids that do not exist are listed in missing. A case can " +
-        "be long: read a few entries at a time.",
-      inputSchema: { ids: z.array(z.number().int()).min(1) },
+        "back as it is, text included, with its invalidation_reason and successor_id. Ids that do not exist are listed in missing. " +
+        "Entries come in id order. " +
+        nextDescription("read_memory_entries", "entries", "`missing` comes"),
+      inputSchema: { ids: z.array(z.number().int()).min(1).optional(), next },
     },
     async (input) => run((reader, now) => readMemoryEntries(deps.db, reader, input, now)),
   );
@@ -987,8 +1022,10 @@ function registerMemoryMetaReviewVerbs(server: McpServer, deps: McpDeps, run: Me
       description:
         "List every past memory proposal (approve, consolidate, invalidate) with the human's answer, amendment and comment, or " +
         "why the board settled it as observed (an entry it pinned was invalidated first). A rejected or deferred proposal always carries the " +
-        "human's reason or what is still undecided in comment — read it so you re-propose a rejected one only when that reason no longer holds, and can redraft closer to what they want.",
-      inputSchema: { page },
+        "human's reason or what is still undecided in comment — read it so you re-propose a rejected one only when that reason no longer holds, and can redraft closer to what they want. " +
+        "Proposals come oldest first. " +
+        nextDescription("list_memory_proposals", "proposals"),
+      inputSchema: { next },
     },
     async (input) => run((reader, now) => pullMemoryProposals(deps.db, reader, input, now)),
   );
@@ -1000,8 +1037,9 @@ function registerMemoryMetaReviewVerbs(server: McpServer, deps: McpDeps, run: Me
         "Search the board's memory across every scope and addressee: Knowledge, Behaviors and Exemplars that are live (approved or candidate) " +
         "or were dropped without a successor, with the reason. Pass query (free text; terms are OR-ed and ranked) or like (an entry id: searches " +
         "with that entry's own title and text, excluding the entry itself). Returns pointers only — read the text with read_memory_entries. " +
-        "Definitions are not searched: the branch list carries them.",
-      inputSchema: { query: z.string().min(1).optional(), like: z.number().int().optional(), page },
+        "Definitions are not searched: the branch list carries them. Results come in rank order. " +
+        nextDescription("search_memory_entries", "results"),
+      inputSchema: { query: z.string().min(1).optional(), like: z.number().int().optional(), next },
     },
     async (input) => run((reader, now) => searchMemoryEntries(deps.db, reader, input, now)),
   );

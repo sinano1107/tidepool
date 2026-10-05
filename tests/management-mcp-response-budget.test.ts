@@ -3,12 +3,10 @@ import { afterEach, expect, it } from "vitest";
 import { appendEvent } from "../src/events.js";
 import { listMemoryBranches } from "../src/memory.js";
 import { registerTask } from "../src/tasks.js";
-import { api, bootTidepool, HOUR, haltedRefires, managementMcpClient, queueWork, type Tidepool, WORKER_SPAWNED } from "./harness.js";
+import { api, bootTidepool, HOUR, haltedRefires, managementMcpClient, queueWork, RESPONSE_BUDGET_BYTES, type Tidepool, WORKER_SPAWNED } from "./harness.js";
 
 // 管理MCP の読み口は応答予算(UTF-8 で 40,000 バイト、ADR 0195)に収まり、収まらない分は続き(next)で読む(issue #1388)。
 // 詰め方の境目・欄の分割・続きの error は tests/response-budget.test.ts が言う。ここは読み口ごとの写像を言う。
-
-const BUDGET = 40_000;
 
 let t: Tidepool;
 afterEach(() => t?.stop());
@@ -28,10 +26,10 @@ async function call(client: Client, args: Record<string, unknown>, verb = "get_t
 }
 
 /** 最初の呼び出しから next が尽きるまで追った応答の列。 */
-async function readAll(client: Client, verb: string, args: Record<string, unknown> = {}) {
-  const pages = [await call(client, args, verb)];
-  while (pages.at(-1)!.payload.next) pages.push(await call(client, { next: pages.at(-1)!.payload.next }, verb));
-  return pages;
+async function followNext(client: Client, verb: string, args: Record<string, unknown> = {}) {
+  const responses = [await call(client, args, verb)];
+  while (responses.at(-1)!.payload.next) responses.push(await call(client, { next: responses.at(-1)!.payload.next }, verb));
+  return responses;
 }
 
 /** HTTP の events の口(古い順)を新しい順にした id の列。 */
@@ -45,15 +43,15 @@ it("get_task は予算を超える量の event を新しい順に予算分ずつ
   logLines(task.id, 100);
   const client = await managementMcpClient(t.baseUrl);
   try {
-    const pages = [await call(client, { task_id: task.id })];
-    while (pages.at(-1)!.payload.next) pages.push(await call(client, { next: pages.at(-1)!.payload.next }));
+    const responses = [await call(client, { task_id: task.id })];
+    while (responses.at(-1)!.payload.next) responses.push(await call(client, { next: responses.at(-1)!.payload.next }));
 
-    expect(pages.length).toBeGreaterThan(2);
-    for (const page of pages) expect(page.bytes).toBeLessThanOrEqual(BUDGET);
+    expect(responses.length).toBeGreaterThan(2);
+    for (const response of responses) expect(response.bytes).toBeLessThanOrEqual(RESPONSE_BUDGET_BYTES);
     const ids = await newestFirstIds(task.id);
-    expect(pages.flatMap((page) => page.payload.events.map((e: any) => e.id))).toEqual(ids);
-    expect(pages[0]!.payload).toMatchObject({ id: task.id, title: "long history", purpose: task.purpose });
-    for (const page of pages.slice(1)) expect(Object.keys(page.payload).filter((k) => !["events", "next", "remaining"].includes(k))).toEqual([]);
+    expect(responses.flatMap((response) => response.payload.events.map((e: any) => e.id))).toEqual(ids);
+    expect(responses[0]!.payload).toMatchObject({ id: task.id, title: "long history", purpose: task.purpose });
+    for (const response of responses.slice(1)) expect(Object.keys(response.payload).filter((k) => !["events", "next", "remaining"].includes(k))).toEqual([]);
   } finally {
     await client.close();
   }
@@ -66,11 +64,11 @@ it("get_task を読んでいる途中に event が積まれても、next を追�
   const before = await newestFirstIds(task.id);
   const client = await managementMcpClient(t.baseUrl);
   try {
-    const pages = [await call(client, { task_id: task.id })];
+    const responses = [await call(client, { task_id: task.id })];
     logLines(task.id, 5);
-    while (pages.at(-1)!.payload.next) pages.push(await call(client, { next: pages.at(-1)!.payload.next }));
+    while (responses.at(-1)!.payload.next) responses.push(await call(client, { next: responses.at(-1)!.payload.next }));
 
-    expect(pages.flatMap((page) => page.payload.events.map((e: any) => e.id))).toEqual(before);
+    expect(responses.flatMap((response) => response.payload.events.map((e: any) => e.id))).toEqual(before);
   } finally {
     await client.close();
   }
@@ -194,12 +192,12 @@ it.each(reads)("$verb は予算を超える量を予算分ずつ返し、next �
   const client = await managementMcpClient(t.baseUrl);
   try {
     const args = await pile(client, 60);
-    const pages = await readAll(client, verb, args);
+    const responses = await followNext(client, verb, args);
 
-    expect(pages.length).toBeGreaterThan(1);
-    for (const page of pages) expect(page.bytes).toBeLessThanOrEqual(BUDGET);
-    expect(pages.flatMap((page) => page.payload[key].map(keyOf))).toEqual(await expected(args));
-    for (const page of pages.slice(1)) expect(Object.keys(page.payload).filter((k) => ![key, "next", "remaining"].includes(k))).toEqual([]);
+    expect(responses.length).toBeGreaterThan(1);
+    for (const response of responses) expect(response.bytes).toBeLessThanOrEqual(RESPONSE_BUDGET_BYTES);
+    expect(responses.flatMap((response) => response.payload[key].map(keyOf))).toEqual(await expected(args));
+    for (const response of responses.slice(1)) expect(Object.keys(response.payload).filter((k) => ![key, "next", "remaining"].includes(k))).toEqual([]);
   } finally {
     await client.close();
   }
@@ -227,12 +225,12 @@ it("read_decision_log を読んでいる途中に entry が積まれても、nex
   const before = (await http("/api/log")).entries.map((e: any) => e.id).reverse();
   const client = await managementMcpClient(t.baseUrl);
   try {
-    const pages = [await call(client, {}, "read_decision_log")];
+    const responses = [await call(client, {}, "read_decision_log")];
     logLines(task.id, 5);
-    while (pages.at(-1)!.payload.next) pages.push(await call(client, { next: pages.at(-1)!.payload.next }, "read_decision_log"));
+    while (responses.at(-1)!.payload.next) responses.push(await call(client, { next: responses.at(-1)!.payload.next }, "read_decision_log"));
 
-    expect(pages.flatMap((page) => page.payload.entries.map((e: any) => e.id))).toEqual(before);
-    expect(pages[0]!.payload.cursor).toEqual(expect.any(Number));
+    expect(responses.flatMap((response) => response.payload.entries.map((e: any) => e.id))).toEqual(before);
+    expect(responses[0]!.payload.cursor).toEqual(expect.any(Number));
   } finally {
     await client.close();
   }

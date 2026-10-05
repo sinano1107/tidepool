@@ -347,21 +347,21 @@ it("INDEX は prefix 直下の子だけ —— sub-prefix の名前と定義(未
   record({ path: "build/lint", title: "Lint is biome" });
   record({ path: "deploy", title: "Deploy to the Pi" });
 
-  expect(browseMemory(db, reader, {}, at)).toMatchObject({
+  expect(browseMemory(db, reader, {}, at)).toEqual({
     children: [
       { name: "build", definition: null },
       { name: "deploy", definition: null },
     ],
     entries: [],
-    truncated: false,
+    event_id: expect.any(Number),
   });
-  expect(browseMemory(db, reader, { prefix: "build" }, at)).toMatchObject({
+  expect(browseMemory(db, reader, { prefix: "build" }, at)).toEqual({
     children: [
       { name: "build/lint", definition: null },
       { name: "build/tests", definition: "How the test suite runs." },
     ],
     entries: [{ id: node, title: "Build uses tsc" }],
-    truncated: false,
+    event_id: expect.any(Number),
   });
 });
 
@@ -841,7 +841,7 @@ it.each([
   expect(dropped).toEqual([]);
 });
 
-it("search の memory_pulled は FTS の順位どおりの候補と、返さなかった理由(宛先で外れた / 無効化済み / 上限で溢れた)を持つ", () => {
+it("search の memory_pulled は FTS の順位どおりの候補と、返さなかった理由(宛先で外れた / 無効化済み / 応答予算で溢れた)を持つ", () => {
   const { db, reader, record } = board();
   const invalidated = record({ title: "tide invalidated", text: "tide tide tide tide" });
   invalidateMemoryEntry(db, { entry_id: invalidated, reason: "capability" }, "human", "webui", at);
@@ -852,40 +852,80 @@ it("search の memory_pulled は FTS の順位どおりの候補と、返さな�
     at,
   ).entry_id;
   approve(db, elsewhere);
-  const pages = Array.from({ length: 21 }, (_, i) => record({ title: `tide ${i}`, text: `tide and ${"filler ".repeat(i + 1)}` }));
+  // 長い title で 21 件が応答予算(40,000 バイト)を超える
+  const pages = Array.from({ length: 21 }, (_, i) => record({ title: `tide ${i} ${"y".repeat(2_000)}`, text: `tide and ${"filler ".repeat(i + 1)}` }));
 
   const search = searchMemory(db, reader, { query: "tide" }, at);
+  const shown = pages.slice(0, search.results.length);
 
-  expect(search.truncated).toBe(true);
-  expect(search.results.map((r) => r.id)).toEqual(pages.slice(0, 20));
+  expect(search.results.length).toBeLessThan(21);
+  expect(search.remaining).toBe(21 - shown.length);
+  expect(search.results.map((r) => r.id)).toEqual(shown);
   expect(getEvent(db, search.event_id)?.payload).toEqual({
     kind: "memory_pulled",
     verb: "search_memory",
     input: { query: "tide" },
-    returned_ids: pages.slice(0, 20),
+    returned_ids: shown,
     watermark: pages[20],
     candidates: [
       { id: invalidated, dropped: "invalidated" },
       { id: elsewhere, dropped: "addressee" },
-      ...pages.slice(0, 20).map((id) => ({ id, dropped: null })),
-      { id: pages[20], dropped: "page_limit" },
+      ...shown.map((id) => ({ id, dropped: null })),
+      ...pages.slice(shown.length).map((id) => ({ id, dropped: "response_budget" })),
     ],
   });
-  expect(searchMemory(db, reader, { query: "tide", page: 2 }, at)).toMatchObject({ results: [{ id: pages[20] }], truncated: false });
+  const rest = searchMemory(db, reader, { next: search.next }, at);
+  expect(rest.results.map((r) => r.id)).toEqual(pages.slice(shown.length));
+  expect(rest).not.toHaveProperty("next");
+  // 続きの呼び出しも1回の pull: input は最初の呼び出しの引数、returned_ids はその応答で返した id
+  // candidates は前の応答で返した候補を持たない —— それらは前の応答の pull に dropped: null で残っている
+  expect(getEvent(db, rest.event_id)?.payload).toMatchObject({
+    verb: "search_memory",
+    input: { query: "tide" },
+    returned_ids: pages.slice(shown.length),
+    candidates: [
+      { id: invalidated, dropped: "invalidated" },
+      { id: elsewhere, dropped: "addressee" },
+      ...pages.slice(shown.length).map((id) => ({ id, dropped: null })),
+    ],
+  });
 });
 
-it("browse の children も page 単位で切られ、2 ページ目に残りが出る", () => {
-  const { db, reader, record } = board();
+it("browse の children と entries も応答予算で切られ、続き(next)に children の残り、その後に entries が出る。memory_pulled はその応答で返した entry の id だけを持つ", () => {
+  const { db, reader, record, define } = board();
   const names = Array.from({ length: 25 }, (_, i) => `wide/c${String(i).padStart(2, "0")}`);
-  for (const name of names) record({ path: name, title: name });
+  for (const name of names) {
+    record({ path: name, title: name });
+    define(name, `${name} ${"d".repeat(2_000)}`);
+  }
+  const leaves = Array.from({ length: 25 }, (_, i) => record({ path: "wide", title: `leaf ${i} ${"y".repeat(2_000)}` }));
 
   const first = browseMemory(db, reader, { prefix: "wide" }, at);
-  expect(first.truncated).toBe(true);
-  expect(first.children.map((c) => c.name)).toEqual(names.slice(0, 20));
+  expect(first.remaining).toBe(names.length + leaves.length - first.children.length - first.entries.length);
+  expect(first.children.map((c) => c.name)).toEqual(names.slice(0, first.children.length));
 
-  const second = browseMemory(db, reader, { prefix: "wide", page: 2 }, at);
-  expect(second.truncated).toBe(false);
-  expect(second.children.map((c) => c.name)).toEqual(names.slice(20));
+  const responses = [first];
+  while (responses.at(-1)!.next) responses.push(browseMemory(db, reader, { next: responses.at(-1)!.next }, at));
+  expect(responses.flatMap((r) => r.children.map((c) => c.name))).toEqual(names);
+  expect(responses.flatMap((r) => r.entries.map((e) => e.id))).toEqual(leaves);
+  for (const r of responses) expect(getEvent(db, r.event_id)?.payload).toMatchObject({ input: { prefix: "wide" }, returned_ids: r.entries.map((e) => e.id) });
+});
+
+it("read_memory は予算を超える量を予算分ずつ id 順に返し、next を追うと欠けも重複もなく揃う。dropped は最初の応答だけに載り、各応答の memory_pulled は最初の input とその応答で返した id を持つ", () => {
+  const { db, reader, record } = board();
+  const ids = Array.from({ length: 30 }, (_, i) => record({ title: `Note ${i} ${"y".repeat(2_000)}`, text: `${i} ${"潮".repeat(700)}` }));
+  const gone = record({ title: "gone" });
+  invalidateMemoryEntry(db, { entry_id: gone, reason: "capability" }, "human", "webui", at);
+  const input = { ids: [gone, ...[...ids].reverse()] };
+
+  const responses = [readMemory(db, reader, input, at)];
+  while (responses.at(-1)!.next) responses.push(readMemory(db, reader, { next: responses.at(-1)!.next }, at));
+
+  expect(responses.length).toBeGreaterThan(1);
+  expect(responses.flatMap((r) => r.entries.map((e) => e.id))).toEqual(ids);
+  expect(responses[0]!.dropped).toEqual([{ id: gone, reason: "capability", successor: null }]);
+  for (const r of responses.slice(1)) expect(r).not.toHaveProperty("dropped");
+  for (const r of responses) expect(getEvent(db, r.event_id)?.payload).toMatchObject({ verb: "read_memory", input, returned_ids: r.entries.map((e) => e.id) });
 });
 
 /** 読取面の export で見た店の姿(版つきの approved 集合、INDEX、search の順位と候補)。 */

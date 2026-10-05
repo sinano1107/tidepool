@@ -91,8 +91,8 @@ it("list_memory_candidates は candidate を cause・author・出所つきで返
         successor_id: null,
       },
     ],
-    truncated: false,
   });
+  expect(current).not.toHaveProperty("next");
   expect(current.entries).toHaveLength(1);
   expect(getEvent(db, current.event_id)).toMatchObject({
     task_id: task.id,
@@ -259,13 +259,39 @@ it("list_memory_proposals の amendment は人間の原文 original_title / orig
   expect(latestEventOfTask(db, exemplar, "question_answered")!.payload.amendment).toMatchObject(annotated);
 });
 
-it("一覧はページ長で切り、truncated が次のページを言う", () => {
+it("一覧は応答予算で切り、next と remaining が続きを言う。next を追うと残りが続く", () => {
   const { db, reader, behavior } = board();
-  const ids = Array.from({ length: 21 }, (_, i) => behavior({ title: `habit ${i}` }));
+  const ids = Array.from({ length: 21 }, (_, i) => behavior({ title: `habit ${i} ${"y".repeat(1_000)}` }));
   const first = pullMemoryList(db, reader, "list_memory_candidates", {}, at);
-  const second = pullMemoryList(db, reader, "list_memory_candidates", { page: 2 }, at);
-  expect([first.entries.length, first.truncated]).toEqual([20, true]);
-  expect([second.entries.map((e) => e.id), second.truncated]).toEqual([[ids[20]], false]);
+  const second = pullMemoryList(db, reader, "list_memory_candidates", { next: first.next }, at);
+  expect(first.entries.map((e) => e.id)).toEqual(ids.slice(0, first.entries.length));
+  expect(first.remaining).toBe(21 - first.entries.length);
+  expect(second.entries.map((e) => e.id)).toEqual(ids.slice(first.entries.length));
+  expect(second).not.toHaveProperty("next");
+});
+
+it("read_memory_entries と list_memory_proposals も応答予算で切り、next を追うと id 順 / 古い順に欠けも重複もなく揃う。missing は最初の応答だけに載り、各応答の memory_pulled は最初の input とその応答で返した id を持つ", () => {
+  const { db, task, reader, behavior } = board();
+  const ids = Array.from({ length: 20 }, (_, i) => behavior({ title: `tide ${i} ${"y".repeat(2_000)}` }));
+  const proposed = ids.map((candidate_id) => {
+    const { question_id } = proposeMemoryChange(db, task.id, { op: "approve", candidate_id, rationale: "r" }, "auditor", at);
+    answerQuestion(db, getTask(db, question_id)!, ["reject"], at, undefined, "c".repeat(2_000), undefined, "webui");
+    return question_id;
+  });
+  const input = { ids: [9999, ...[...ids].reverse()] };
+
+  const reads = [readMemoryEntries(db, reader, input, at)];
+  while (reads.at(-1)!.next) reads.push(readMemoryEntries(db, reader, { next: reads.at(-1)!.next }, at));
+  const proposals = [pullMemoryProposals(db, reader, {}, at)];
+  while (proposals.at(-1)!.next) proposals.push(pullMemoryProposals(db, reader, { next: proposals.at(-1)!.next }, at));
+
+  expect(reads.length).toBeGreaterThan(1);
+  expect(reads.flatMap((r) => r.entries.map((e) => e.id))).toEqual(ids);
+  expect(reads[0]!.missing).toEqual([9999]);
+  for (const r of reads.slice(1)) expect(r).not.toHaveProperty("missing");
+  for (const r of reads) expect(getEvent(db, r.event_id)?.payload).toMatchObject({ verb: "read_memory_entries", input, returned_ids: r.entries.map((e) => e.id) });
+  expect(proposals.length).toBeGreaterThan(1);
+  expect(proposals.flatMap((r) => r.proposals.map((p) => p.question_id))).toEqual(proposed);
 });
 
 it("list_memory_entries の path は P とその配下 P/… だけを返して P-x を返さず、scope / kind / state と同時に効く —— NFD の入力は NFC の枝に当たり、不正な path は domain error(#1209)", () => {
@@ -341,23 +367,25 @@ it("meta-review の枝の一覧は memory_pulled を残して返した id = 行�
 });
 
 /** setup のみ: 1 marker = 1 episode の直挿しで異議つき decision を安く並べる(#356 の投影は使わない)。異議の event id と decision を返す。 */
-function objectedDecision({ db, task }: ReturnType<typeof board>, i: number) {
-  const decision = logDecision(db, task, `decision ${i}`, "deckhand", at, "worker");
+function objectedDecision({ db, task }: ReturnType<typeof board>, i: number, padding = "") {
+  const decision = logDecision(db, task, `decision ${i}${padding}`, "deckhand", at, "worker");
   db.prepare("INSERT INTO episodes (id, worker_spawned_event_id, extractor_version, task_id, agent, lines) VALUES (?, ?, ?, ?, 'deckhand', '{}')").run(i, i, EXTRACTOR_VERSION, task.id);
   db.prepare("INSERT INTO episode_markers (episode_id, seq, kind, position, event_id) VALUES (?, 0, 'decision', 0, ?)").run(i, decision);
   const objection = bundledObjection(db, task.id, decision, at, `objection ${i}`);
   return { decision, objection };
 }
 
-it("Precedent もページ長で切り、2 ページ目に残りが出る", () => {
+it("Precedent も応答予算で切り、next を追うと残りが出る", () => {
   const b = board();
   const { db, reader } = b;
-  const decisions = Array.from({ length: 21 }, (_, i) => objectedDecision(b, i + 1).decision);
+  const decisions = Array.from({ length: 21 }, (_, i) => objectedDecision(b, i + 1, ` ${"y".repeat(2_000)}`).decision);
 
   const first = listPrecedents(db, reader, {}, at);
-  const second = listPrecedents(db, reader, { page: 2 }, at);
-  expect([first.precedents.length, first.truncated]).toEqual([20, true]);
-  expect([second.precedents.map((p) => p.decision_event_id), second.truncated]).toEqual([[decisions[20]], false]);
+  const second = listPrecedents(db, reader, { next: first.next }, at);
+  expect(first.precedents.map((p) => p.decision_event_id)).toEqual(decisions.slice(0, first.precedents.length));
+  expect(first.remaining).toBe(21 - first.precedents.length);
+  expect(second.precedents.map((p) => p.decision_event_id)).toEqual(decisions.slice(first.precedents.length));
+  expect(second).not.toHaveProperty("next");
 });
 
 it("Precedent は最新の帰責の entries を運ぶ —— memory なら名指された id 列、他の cause は null(ADR 0166 決定5)", () => {
@@ -549,7 +577,8 @@ it("search_memory_entries の query は全 scope・全宛先の approved と can
   define(null, "tide");
   knowledge("tidepool", "harbor");
 
-  const { results, truncated } = searchMemoryEntries(db, reader, { query: "tide" }, at);
+  const searched = searchMemoryEntries(db, reader, { query: "tide" }, at);
+  const { results } = searched;
 
   expect(new Set(results.map((r) => r.id))).toEqual(new Set([other, addressed, candidate]));
   expect(results.find((r) => r.id === addressed)).toEqual({
@@ -562,7 +591,7 @@ it("search_memory_entries の query は全 scope・全宛先の approved と can
     addressee: "deckhand",
     invalidation_reason: null,
   });
-  expect(truncated).toBe(false);
+  expect(searched).not.toHaveProperty("next");
 });
 
 it("search_memory_entries は後継なしで落とされたエントリ(capability の Knowledge・reject された candidate)を理由つきで返し、superseded と path_moved の行は返さない", () => {
@@ -630,19 +659,19 @@ it("search_memory_entries は query と like の両方・どちらも無し・�
   expect(pulls()).toBe(0);
 });
 
-it("search_memory_entries は 20 件ごとのページで truncated を言い、呼び出しは verb・input・返した id を memory_pulled に残して event id を返す", () => {
-  const { db, reader, knowledge } = board();
-  const ids = Array.from({ length: 21 }, (_, i) => knowledge("tidepool", `tide/n${i}`));
+it("search_memory_entries は応答予算で切って next と remaining を言い、呼び出しは verb・最初の input・その応答で返した id を memory_pulled に残して event id を返す", () => {
+  const { db, reader, behavior } = board();
+  const ids = Array.from({ length: 21 }, (_, i) => behavior({ title: `tide ${i} ${"y".repeat(2_000)}` }));
 
   const first = searchMemoryEntries(db, reader, { query: "tide" }, at);
-  const second = searchMemoryEntries(db, reader, { query: "tide", page: 2 }, at);
+  const second = searchMemoryEntries(db, reader, { next: first.next }, at);
 
-  expect([first.results.length, first.truncated]).toEqual([20, true]);
-  expect([second.results.length, second.truncated]).toEqual([1, false]);
-  expect(new Set([...first.results, ...second.results].map((r) => r.id))).toEqual(new Set(ids));
+  expect(first.remaining).toBe(21 - first.results.length);
+  expect(second).not.toHaveProperty("next");
+  expect([...first.results, ...second.results].map((r) => r.id).sort((a, b) => a - b)).toEqual(ids);
   expect(getEvent(db, second.event_id)).toMatchObject({
     task_id: reader.taskId,
     worker_id: "auditor",
-    payload: { kind: "memory_pulled", verb: "search_memory_entries", input: { query: "tide", page: 2 }, returned_ids: second.results.map((r) => r.id) },
+    payload: { kind: "memory_pulled", verb: "search_memory_entries", input: { query: "tide" }, returned_ids: second.results.map((r) => r.id) },
   });
 });

@@ -458,7 +458,8 @@ export type EventPayload =
   // spec #586 D: worker の pull 1回(task 帰属)。返した id と snapshot watermark、search は
   // 候補ごとの落ちた理由(null = 返した)、read は求めた id のうち本文を返さなかった無効化済みの理由と見える後継
   // (ADR 0167 決定4。returned_ids はたどった先の id)。event id は tool 結果に載り、Precedent の
-  // memory マーカーになる。
+  // memory マーカーになる。続き(next)の呼び出しも1回の pull で、input は最初の呼び出しの引数、returned_ids はその応答で
+  // 返した id だけ(ADR 0195)。
   | {
       kind: "memory_pulled";
       verb: "browse_memory" | "search_memory" | "search_memory_entries" | "read_memory" | "read_memory_entries" | "list_memory_candidates" | "list_memory_entries" | "list_memory_proposals" | "list_precedents" | "list_memory_branches";
@@ -467,7 +468,6 @@ export type EventPayload =
         path?: string;
         query?: string;
         like?: number;
-        page?: number;
         ids?: number[];
         scope?: string | null;
         kind?: MemoryEntryFields["kind"];
