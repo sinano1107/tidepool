@@ -26,7 +26,9 @@ function buildPrompt(input: BehaviorDraftInput): string {
     "under an existing branch of the index when one fits), " +
     '"title" (string — a short name for the rule), "text" (string — the rule itself, in English, ' +
     'stated so it stays true wherever it applies), and "addressee" ("worker" when the rule is for the ' +
-    'worker who wrote the entry, "all" when every agent should follow it). The index is the ' +
+    'worker who wrote the entry, "all" when every agent should follow it). ' +
+    "A tier's definition is not a Behavior: it belongs in the tier's description. A habit of declaring tiers " +
+    "specific to one workspace or writer may be a Behavior. The index is the " +
     "workspace's memory branches with their definitions (null when the store is empty).\n\n" +
     `Input:\n${JSON.stringify(input, null, 2)}`
   );

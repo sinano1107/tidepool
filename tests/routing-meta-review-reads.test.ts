@@ -25,7 +25,7 @@ const sol = setting("openai", "gpt-5.6-sol");
 
 function board() {
   const db = openDb(":memory:");
-  const work = (title: string) => registerTask(db, { type: "work", title, purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI);
+  const work = (title: string, tier?: string) => registerTask(db, { type: "work", title, purpose: "p", completion_criteria: "c", tier }, at, ...HUMAN_WEBUI);
   const spawn = (taskId: string, agent: string, run: ExecutionSetting, tier: "agent" | "task" = "agent") =>
     appendEvent(db, {
       taskId,
@@ -176,9 +176,9 @@ it("読み口の既定の窓は読み手より前に完了した routing の登�
   expect(listRoutingShadow(db, reader, { since_watermark: 0 }).shadow.map((r) => r.task_id)).toEqual([before.id, after.id]);
 });
 
-it("list_allocations は評価された注釈を source.tier × agent × allocation × cause で数え、judge の model が worker のセルと同じ件数を添える", () => {
+it("list_allocations は評価された注釈を source.tier × 段 × agent × allocation × cause で数え、judge の model が worker のセルと同じ件数を添える —— 段は出所が task の注釈だけに付く", () => {
   const { db, work, spawn, allocate, routingReview } = board();
-  const task = work("t");
+  const task = work("t", "standard");
   // judge と同じ綴りの pin だけが同じ model —— 照合は学習器のセルと同じ完全一致で、前方一致する綴りは数えない(ADR 0182 決定3)
   const selfJudged = spawn(task.id, "reef-crab", setting("anthropic", "claude-fable-5-1"));
   allocate(task.id, selfJudged, { judge, allocation: "overpowered", cause: "uncertain", evidence: "e" });
@@ -193,11 +193,36 @@ it("list_allocations は評価された注釈を source.tier × agent × allocat
 
   expect(listAllocations(db, routingReview(), {})).toEqual({
     allocations: [
-      { source_tier: "agent", agent: "reef-crab", allocation: "overpowered", cause: "uncertain", count: 3, judged_by_same_model: 1 },
-      { source_tier: "task", agent: "reef-crab", allocation: "overpowered", cause: "uncertain", count: 1, judged_by_same_model: 0 },
-      { source_tier: "agent", agent: "deckhand", allocation: "appropriate", cause: "uncertain", count: 1, judged_by_same_model: 0 },
+      { source_tier: "agent", tier: null, agent: "reef-crab", allocation: "overpowered", cause: "uncertain", count: 3, judged_by_same_model: 1 },
+      { source_tier: "task", tier: "standard", agent: "reef-crab", allocation: "overpowered", cause: "uncertain", count: 1, judged_by_same_model: 0 },
+      { source_tier: "agent", tier: null, agent: "deckhand", allocation: "appropriate", cause: "uncertain", count: 1, judged_by_same_model: 0 },
     ],
   });
+});
+
+it("list_allocations は書き手が人間の task の申告も段ごとに数え、消した段と同じ名前で足し直した段の注釈を混ぜない(ADR 0200 決定7・追記)", () => {
+  const { db, work, spawn, allocate, routingReview } = board();
+  const insertScratch = () => applyExecutionSettingsChange(db, { setting: "insert_tier", name: "scratch", description: "d", position: 0 }, "webui", at);
+  const declared = (title: string, tier: string) => {
+    const task = work(title, tier);
+    allocate(task.id, spawn(task.id, "deckhand", opus, "task"), { judge, allocation: "overpowered", cause: "uncertain", evidence: "e" });
+    return task;
+  };
+  insertScratch();
+  const retired = declared("retired", "scratch");
+  // setup のみ: 決着した task は段の削除を止めない
+  db.prepare("UPDATE tasks SET status = 'done' WHERE id = ?").run(retired.id);
+  applyExecutionSettingsChange(db, { setting: "delete_tier", name: "scratch" }, "webui", at);
+  insertScratch();
+  declared("live", "scratch");
+  declared("economy", "economy");
+
+  const group = { source_tier: "task", agent: "deckhand", allocation: "overpowered", cause: "uncertain", count: 1, judged_by_same_model: 0 };
+  expect(listAllocations(db, routingReview(), {}).allocations).toEqual([
+    { ...group, tier: "scratch", tier_retired: true },
+    { ...group, tier: "scratch" },
+    { ...group, tier: "economy" },
+  ]);
 });
 
 it("list_routing_cells の新セルは終わった session で初めて観測されたセルで、窓より前に観測済みのセルは再び走っても出ない", () => {

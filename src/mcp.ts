@@ -726,7 +726,7 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
         "Review only: turn your finding about an objected entry into memory — only the objected entries your review was opened on (its material). The board derives the entry kind and addressee from the cause attributed to those objections, " +
         "except for a missing_information cause, where you pass as (behavior or knowledge) and must not otherwise. " +
         "With as knowledge, pass based_on_decision (the event id log_decision returned for your reasoning), and not otherwise; it becomes the knowledge entry's source, an inference. " +
-        "A behavior is a candidate a human approves later. path is a \"/\"-separated hierarchy (e.g. build/tests). " +
+        "A behavior is a candidate a human approves later. A tier's definition is not a Behavior: it belongs in the tier's description. A habit of declaring tiers specific to one workspace or writer may be a Behavior. path is a \"/\"-separated hierarchy (e.g. build/tests). " +
         BOARD_WRITE_LANGUAGE_RULE,
       inputSchema: {
         entry_id: z.number().int(),
@@ -891,8 +891,9 @@ function registerRoutingMetaReviewVerbs(server: McpServer, deps: McpDeps, run: M
     "list_allocations",
     {
       description:
-        "List the allocation-review distribution: evaluated annotations counted by the session's tier source, agent, " +
-        "allocation and cause, with judged_by_same_model counting those whose judge ran on the worker's own model. " +
+        "List the allocation-review distribution: evaluated annotations counted by the session's tier source, tier, agent, " +
+        "allocation and cause, with judged_by_same_model counting those whose judge ran on the worker's own model. tier is the tier " +
+        "the task requested when the tier source is task, null otherwise; tier_retired marks a deleted tier, counted apart from a live tier of the same name. " +
         "Unevaluated annotations are not counted. " +
         nextDescription("list_allocations", "allocations"),
       inputSchema: { since_watermark, next },
@@ -916,7 +917,7 @@ function registerRoutingMetaReviewVerbs(server: McpServer, deps: McpDeps, run: M
     "read_routing_settings",
     {
       description:
-        "Read the current execution-setting table, whether a model ranked above main may serve as advisor, the provider rank, the default priority and " +
+        "Read the current execution-setting table, the board's tiers with their descriptions in order, whether a model ranked above main may serve as advisor, the provider rank, the default priority and " +
         "whether the learner is promoted, and every past routing proposal (agent tier proposals included) with its answer, the " +
         "human's amendment and comment, or why the board settled it as observed (the pinned row, learner flag or agent tier " +
         "changed, or the row is gone: deleted, or its effort changed). An applied agent tier proposal carries the registry commit it landed as applied. " +
@@ -939,17 +940,26 @@ function registerRoutingMetaReviewVerbs(server: McpServer, deps: McpDeps, run: M
         "agent's default tier by exactly one step (an agent with no tier runs at the board default tier): agent names it, " +
         "to is the tier one step below, and evidence lists the worker_spawned event ids of that agent's sessions your case rests " +
         "on; it is refused when the execution-setting table has no row at the target tier for any of the agent's providers. The " +
-        "human may amend to with any lower tier when approving, and approval commits the new tier to the registry. rationale is your evidence summary " +
+        "human may amend to with any lower tier when approving, and approval commits the new tier to the registry. op tier_description rewrites " +
+        "the description of one of the board's tiers (tier) to description, one line: a tier's description defines it for everyone who requests it, " +
+        "so propose it when requests for that tier across workspaces or writers show its definition is off. evidence lists the worker_spawned event ids " +
+        "of sessions whose tier source is task on tasks that requested that tier (list_allocations, tier source task); the human may amend the " +
+        "description when approving. rationale is your evidence summary " +
         "(episode count, tier source, period) and is shown with the diff. The board applies the answer itself, so you can complete " +
         "this task without waiting for it. Returns the question id. " +
         BOARD_WRITE_LANGUAGE_RULE,
       inputSchema: {
-        op: z.enum(["row", "promote", "demote", "agent_tier"]),
+        op: z.enum(["row", "promote", "demote", "agent_tier", "tier_description"]),
         row: z.object({ provider: z.string(), model: z.string(), effort: z.string() }).optional().describe("op row only."),
         change: z.record(z.string(), z.unknown()).optional().describe("op row only: tier and/or effort, nothing else."),
         agent: z.string().optional().describe("op agent_tier only: the agent whose default tier to lower."),
         to: z.string().optional().describe("op agent_tier only: the tier one step below the agent's current tier."),
-        evidence: z.array(z.number().int()).optional().describe("op agent_tier only: worker_spawned event ids of the agent's sessions."),
+        evidence: z
+          .array(z.number().int())
+          .optional()
+          .describe("op agent_tier and tier_description only: worker_spawned event ids of the agent's sessions, or of sessions on tasks that requested the tier."),
+        tier: z.string().optional().describe("op tier_description only: the tier whose description to rewrite."),
+        description: z.string().optional().describe("op tier_description only: the tier's new description, one line."),
         rationale: z.string().min(1),
       },
     },

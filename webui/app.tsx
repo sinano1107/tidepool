@@ -224,6 +224,7 @@ function toQuestionCardShape(
     // 承認 question(決裁権外の子の登録)と、approve で親の risk が上がるかは
     // 盤面の `approval` 注釈が答える(issue #757)— ここは描画の形に写すだけ
     ...(q.question_proposal?.kind === 'routing' && q.question_proposal.op === 'row' && { amendable: 'row' as const }),
+    ...(q.question_proposal?.kind === 'routing' && q.question_proposal.op === 'tier_description' && { amendable: 'tier_description' as const }),
     ...(q.question_proposal?.kind === 'registry' && { amendable: 'agent_tier' as const, amendBelow: q.question_proposal.pin && 'tier' in q.question_proposal.pin ? q.question_proposal.pin.tier : undefined }),
     // 修正値の初期値は candidate の今の本文 —— 移されていれば末尾の複製
     ...(candidateId !== undefined && { amendable: 'memory' as const, candidateId: moved.find((m) => m.id === candidateId)?.tail_id ?? candidateId }),

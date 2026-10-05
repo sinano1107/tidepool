@@ -380,6 +380,14 @@ function TpQuestionCard({ q, answer, onAnswer, locked = false, onTranslate, onOp
       value: amendment.to ?? "",
       onChange: (to) => setAmendment({ ...amendment, to })
     }
+  )), q.amendable === "tier_description" && !locked && /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 14 } }, /* @__PURE__ */ React.createElement(
+    Input,
+    {
+      label: "Amend description (optional)",
+      value: amendment.description ?? "",
+      placeholder: "as proposed",
+      onChange: (e) => setAmendment({ description: e.target.value })
+    }
   )), q.amendable === "memory" && !locked && /* @__PURE__ */ React.createElement(TpMemoryAmendment, { candidateId: q.candidateId, onTranslate, onChange: setAmendment, onDeadAddressee: setDeadAddressee }), q.amendable === "row" && !locked && /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8, marginBottom: 14 } }, /* @__PURE__ */ React.createElement(
     TpTierAmendment,
     {
@@ -3405,6 +3413,7 @@ function toQuestionCardShape(q, icons) {
     // 承認 question(決裁権外の子の登録)と、approve で親の risk が上がるかは
     // 盤面の `approval` 注釈が答える(issue #757)— ここは描画の形に写すだけ
     ...q.question_proposal?.kind === "routing" && q.question_proposal.op === "row" && { amendable: "row" },
+    ...q.question_proposal?.kind === "routing" && q.question_proposal.op === "tier_description" && { amendable: "tier_description" },
     ...q.question_proposal?.kind === "registry" && { amendable: "agent_tier", amendBelow: q.question_proposal.pin && "tier" in q.question_proposal.pin ? q.question_proposal.pin.tier : void 0 },
     // 修正値の初期値は candidate の今の本文 —— 移されていれば末尾の複製
     ...candidateId !== void 0 && { amendable: "memory", candidateId: moved.find((m) => m.id === candidateId)?.tail_id ?? candidateId },
