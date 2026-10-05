@@ -42,10 +42,13 @@ import { HOURLY, type TaskExecutionCandidates } from "../src/scheduler.js";
 import { startServer } from "../src/server.js";
 import { implicitTaskExecutionCandidates } from "../src/server-options.js";
 import {
+  answerQuestion,
   BOARD_WORKER_ID,
+  decomposeTask,
   getTask,
   HUMAN_WORKER_ID,
   humanDecomposeTask,
+  listChildren,
   type RegisterTaskInput,
   registerTask,
   type Task,
@@ -945,15 +948,24 @@ export function registryOf(agents: Set<string>, workspaces: Set<string>): Pick<B
  *  `allocationClient` を渡すと work に worker session を置き、統合点レビューの完了で配分評価が撃たれる。 */
 export async function objectedForDraft(
   title: string,
-  opts: Pick<BootOptions, "allocationClient" | "agentRegistered"> & { initial?: { cause: Cause; evidence: string }; registrant?: string; workspace?: string | null; human?: true } = {},
+  opts: Pick<BootOptions, "allocationClient" | "agentRegistered"> & {
+    initial?: { cause: Cause; evidence: string };
+    registrant?: string;
+    /** task を `decomposedBy` の分解判断に乗る子にする(decomposedChild)。workspace が要る。 */
+    decomposedBy?: string;
+    workspace?: string | null;
+    human?: true;
+  } = {},
 ) {
   const attributionClient = new FakeAttributionClient();
   const behaviorDraftClient = new FakeBehaviorDraftClient();
   const t = await bootTidepool({ attributionClient, behaviorDraftClient, allocationClient: opts.allocationClient, agentRegistered: opts.agentRegistered });
   const workspace = opts.workspace === null ? undefined : (opts.workspace ?? "charts");
-  const task = opts.registrant
-    ? registerTask(t.db, { type: "work", title, purpose: "p", completion_criteria: "c", workspace }, t.clock.now(), opts.registrant, "worker")
-    : await registerWork(t, title, workspace, undefined, opts.human && "human");
+  const task = opts.decomposedBy
+    ? decomposedChild(t.db, registerTask(t.db, { type: "work", title: `parent of ${title}`, purpose: "p", completion_criteria: "c", workspace }, t.clock.now(), ...HUMAN_WEBUI), title, opts.decomposedBy, t.clock.now())
+    : opts.registrant
+      ? registerTask(t.db, { type: "work", title, purpose: "p", completion_criteria: "c", workspace }, t.clock.now(), opts.registrant, "worker")
+      : await registerWork(t, title, workspace, undefined, opts.human && "human");
   let entry: any;
   if (opts.human) {
     await api(t.baseUrl, "POST", `/api/tasks/${task.id}/complete`, { handoff: FULL_HANDOFF });
@@ -969,6 +981,21 @@ export async function objectedForDraft(
   await api(t.baseUrl, "POST", "/api/triage/start");
   const objection = await object(t, entry.id, "always keep the fixtures");
   return { t, attributionClient, behaviorDraftClient, task, entry, objection };
+}
+
+/** `decomposer` の分解判断に乗る `parent` の子(workspace は parent のもの)。agent の分解は allowed_workspaces の外の子を
+ *  承認 question に変え、人間が approve して実体化させる —— 子の登録者は human、文面の書き手は分解した agent(ADR 0197)。
+ *  人間の分解は子を直接登録する。 */
+export function decomposedChild(db: Db, parent: Task, title: string, decomposer: string, now: Date): Task {
+  const viaApproval = decomposer !== HUMAN_WORKER_ID;
+  const child = { title, purpose: "p", completion_criteria: "c", workspace: parent.workspace ?? undefined };
+  const authority = viaApproval ? { allowed_workspaces: [] } : undefined;
+  decomposeTask(db, parent, { reason: "split it", children: [child] }, decomposer, now, authority, undefined, viaApproval ? "worker" : "webui");
+  if (viaApproval) {
+    const question = listChildren(db, parent.id).find((x) => x.type === "question")!;
+    answerQuestion(db, question, ["approve"], now, undefined, undefined, undefined, "webui");
+  }
+  return listChildren(db, parent.id).find((x) => x.type === "work" && x.title === title)!;
 }
 
 /** commit して RCA 子を返す。 */

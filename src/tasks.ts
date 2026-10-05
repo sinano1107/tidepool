@@ -2472,6 +2472,13 @@ export function getRegistrant(db: Db, taskId: string): string {
   return latestEventOfTask(db, taskId, "task_registered")!.worker_id;
 }
 
+/** 文面の書き手(CONTEXT.md の Registrant / ADR 0197): 分解判断に乗る task ならその分解判断の書き手、
+ *  無ければ登録者。承認で実体化した子は登録者が human でも、書き手は分解した agent。 */
+export function getTextAuthor(db: Db, taskId: string): string {
+  const decision = getTask(db, taskId)!.based_on_decision;
+  return decision === null ? getRegistrant(db, taskId) : getEvent(db, decision)!.worker_id;
+}
+
 /** Whether materializing `child` under `parent` raises the parent's risk
  *  (issue #11's upward propagation) — the child carries risk the parent does
  *  not. Approval evaluates it against the parent's current flag. */

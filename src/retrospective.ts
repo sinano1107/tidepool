@@ -20,7 +20,7 @@ import { type ExecutionSettingRow, retrospectiveBoardCallRow } from "./execution
 import { buildMemoryInjection, createBehaviorCandidate, listMemoryEntries, memoryScope, recordKnowledge, requireDecision } from "./memory.js";
 import { sessionSpawnOf, sessionWindow } from "./precedent.js";
 import type { ProcessContainers } from "./process-container.js";
-import { BOARD_WORKER_ID, DomainError, getRegistrant, getTask, HUMAN_WORKER_ID, isNonAgentWorkerId, listChildren, type Task } from "./tasks.js";
+import { BOARD_WORKER_ID, DomainError, getTask, getTextAuthor, HUMAN_WORKER_ID, isNonAgentWorkerId, listChildren, type Task } from "./tasks.js";
 import { isAnthropicBoardCallBlocked } from "./throttle.js";
 import { entryObjections, listObjectedEntries, objectedEntryText, objectionsById, requireLogEntry } from "./triage.js";
 
@@ -443,7 +443,7 @@ function memoryRead(db: Db, entry: DecisionLogEntry): AttributionInput["memory_r
 
 /** 帰責が起草に向くエントリから Board call で Behavior candidate を起草する(ADR 0120 決定1(b)(c) /
  *  issue #617): 初回は `preference` だけ、第2回は学習向きの cause すべて(入力に RCA の findings を足す)。
- *  人間エントリ・起草 client の無い盤面・宛先の agent がいない起草(登録者が人間か盤面の
+ *  人間エントリ・起草 client の無い盤面・宛先の agent がいない起草(文面の書き手が人間か盤面の
  *  `task_ambiguity` / `missing_information`、ADR 0164 決定2)・workspace の無い task は何もしない。宛先は cause から導出し
  *  (ADR 0115 決定4)、Board call の `addressee` は `preference` だけが読む。撃てなかったら何も書かず、
  *  撃って失敗したら `memory_draft_failed` を残す(ADR 0164 決定3)。poll の sweep が fire-and-forget で撃つ
@@ -454,16 +454,16 @@ async function draftBehaviorCandidate(db: Db, deps: RetrospectiveCallDeps, attri
   const entry = requireLogEntry(db, entry_id);
   if (!deps.behaviorDraftClient || !drafts || isHumanEntry(entry)) return;
   const taskId = entry.task_id;
-  // preference の宛先は Board call が選ぶ。他の cause は導出し、登録者が agent でなければ起草しない
+  // preference の宛先は Board call が選ぶ。他の cause は導出し、文面の書き手が agent でなければ起草しない
   let derived: ReturnType<typeof learningTarget> | null = null;
   if (cause !== "preference") {
     try {
-      derived = learningTarget(cause, entry.worker_id, getRegistrant(db, taskId), cause === "missing_information" ? "behavior" : undefined);
+      derived = learningTarget(cause, entry.worker_id, getTextAuthor(db, taskId), cause === "missing_information" ? "behavior" : undefined);
     } catch {
       return;
     }
   }
-  // 宛先の agent が registry から消えていれば学ぶ相手がいない —— 登録者が人間のときと同じく起草しない(ADR 0173 決定4)。
+  // 宛先の agent が registry から消えていれば学ぶ相手がいない —— 文面の書き手が人間のときと同じく起草しない(ADR 0173 決定4)。
   // preference の宛先は Board call が選ぶが、学ぶのは entry の worker
   const learner = derived ? (derived.kind === "behavior" ? derived.addressee : null) : entry.worker_id;
   if (learner !== null && deps.agentRegistered && !deps.agentRegistered(learner)) return;
@@ -530,28 +530,28 @@ const LEARNING_CAUSES: readonly Cause[] = ["capability", "preference", "task_amb
 function learningTarget(
   cause: Cause,
   entryWorker: string,
-  registrant: string,
+  textAuthor: string,
   as?: "behavior" | "knowledge",
 ): { kind: "behavior"; addressee: string } | { kind: "knowledge" } {
   if (!LEARNING_CAUSES.includes(cause)) throw new DomainError(`the entry's cause is ${cause}: nothing to learn from it`);
   if ((cause === "missing_information") !== (as !== undefined)) {
     throw new DomainError('as ("behavior" or "knowledge") is required for a missing_information entry and only for it');
   }
-  const toRegistrant = () => {
+  const toTextAuthor = () => {
     // 盤面(BOARD_WORKER_ID)も agent ではない —— 宛先にしても注入はどこにも一致しない
-    if (isNonAgentWorkerId(registrant)) {
-      throw new DomainError("the task was not registered by an agent: there is no agent to address a behavior to");
+    if (isNonAgentWorkerId(textAuthor)) {
+      throw new DomainError("the task's text was not written by an agent: there is no agent to address a behavior to");
     }
-    return { kind: "behavior" as const, addressee: registrant };
+    return { kind: "behavior" as const, addressee: textAuthor };
   };
   switch (cause) {
     case "capability":
     case "preference":
       return { kind: "behavior", addressee: entryWorker };
     case "task_ambiguity":
-      return toRegistrant();
+      return toTextAuthor();
     case "missing_information":
-      return as === "knowledge" ? { kind: "knowledge" } : toRegistrant();
+      return as === "knowledge" ? { kind: "knowledge" } : toTextAuthor();
     default:
       throw new DomainError(`the entry's cause is ${cause}: nothing to learn from it`);
   }
@@ -584,7 +584,7 @@ export function proposeFromObjection(
   if (!bundle) throw new DomainError(`entry ${entry_id} is not in this review's material`);
   const { attribution } = bundle;
   // 覆う異議群が未帰責なら uncertain と同じに読む(ADR 0168 決定3)—— learningTarget が拒否する
-  const target = learningTarget(attribution?.cause ?? "uncertain", entry.worker_id, getRegistrant(db, entry.task_id), as);
+  const target = learningTarget(attribution?.cause ?? "uncertain", entry.worker_id, getTextAuthor(db, entry.task_id), as);
   if ((target.kind === "knowledge") !== (based_on_decision !== undefined)) {
     throw new DomainError("based_on_decision is required for a knowledge entry and only for it");
   }
