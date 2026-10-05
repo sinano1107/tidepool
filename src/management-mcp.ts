@@ -590,7 +590,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
       description:
         "Read the board's execution settings: the model table (rows of provider, model, tier, effort, price_in / price_out in USD per MTok, " +
         "and quarantine_question_id — the open question naming a row the provider refused to run on this board, or null), " +
-        "whether the frontier row may serve as advisor, the Provider rank, the default priority (quality / cost), whether the learner is promoted, " +
+        "whether a model ranked above main may serve as advisor, the Provider rank, the default priority (quality / cost), whether the learner is promoted, " +
         "and the retrospective tier (economy / standard / frontier) shared by the board's own retrospective Board calls (allocation review, attribution, Behavior candidate drafting).",
     },
     async () => toolResult(readExecutionSettingsWithQuarantine(deps.db)),
@@ -602,7 +602,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
         "Apply one change to the board's execution settings as the human: add a table row (`row`; a model has at most one row per tier and one per effort), edit one (`row` with `key`, " +
         "the provider + model + effort of the row to replace), delete one (`delete_row`, named by provider + model + effort — deleting " +
         "every row of a provider × tier just excludes that provider for tasks of that tier), " +
-        "or set `frontier_advisor`, `provider_rank` (every provider exactly once, first = preferred), the default `priority`, or `retrospective_tier` " +
+        "or set `advisor_above_main`, `provider_rank` (every provider exactly once, first = preferred), the default `priority`, or `retrospective_tier` " +
         "(economy / standard / frontier — the tier the board's own retrospective Board calls resolve on the anthropic row; unset = frontier), " +
         "or demote the learner (`learner_promoted: false` — promotion only comes from approving a routing meta-review's proposal). " +
         "Takes effect at the next pickup or Board call.",

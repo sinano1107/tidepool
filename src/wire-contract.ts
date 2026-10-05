@@ -292,7 +292,7 @@ export interface WireContract {
   "GET /api/settings/execution": {
     /** quarantine_question_id: 行の Quarantine(ADR 0184 決定6)の開いている question。null = 走れる行。 */
     table: ReadonlyArray<{ provider: string; tier: string; model: string; effort: string; price_in: number; price_out: number; quarantine_question_id: string | null }>;
-    frontierAdvisor: boolean;
+    advisorAboveMain: boolean;
     providerRank: readonly string[];
     priority: string;
     learnerPromoted: boolean;

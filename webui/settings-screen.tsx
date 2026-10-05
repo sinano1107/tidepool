@@ -2012,7 +2012,7 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit, fo
 }
 
 // Execution defaults (issue #545 / ADR 0110 決定5) as a record card: Provider
-// rank, the default priority and the frontier-advisor flag. Each differing
+// rank, the default priority and the advisor-above-main flag. Each differing
 // value is one POST — the API takes one change per request.
 function ExecutionDefaultsCard({ settings, say, onSaved, edit }: {
   settings: SettingsExecution;
@@ -2023,7 +2023,7 @@ function ExecutionDefaultsCard({ settings, say, onSaved, edit }: {
   const { Button, Card, Checkbox, FieldRow, Select } = window.TidepoolDesignSystem_8a0ead;
   const id = 'board:execution-defaults';
   const open = edit.isOpen(id);
-  const current = { rank: settings.providerRank, priority: settings.priority, advisor: settings.frontierAdvisor, retrospectiveTier: settings.retrospectiveTier };
+  const current = { rank: settings.providerRank, priority: settings.priority, advisor: settings.advisorAboveMain, retrospectiveTier: settings.retrospectiveTier };
   const [draft, setDraft] = React.useState(current);
   const [busy, setBusy] = React.useState(false);
   const rankChanged = draft.rank.join() !== current.rank.join();
@@ -2039,7 +2039,7 @@ function ExecutionDefaultsCard({ settings, say, onSaved, edit }: {
       const changes = [
         rankChanged && { setting: 'provider_rank', value: draft.rank },
         draft.priority !== current.priority && { setting: 'priority', value: draft.priority },
-        draft.advisor !== current.advisor && { setting: 'frontier_advisor', value: draft.advisor },
+        draft.advisor !== current.advisor && { setting: 'advisor_above_main', value: draft.advisor },
         draft.retrospectiveTier !== current.retrospectiveTier && { setting: 'retrospective_tier', value: draft.retrospectiveTier },
       ].filter(Boolean);
       for (const change of changes) await api('/api/settings/execution', change);
@@ -2074,7 +2074,7 @@ function ExecutionDefaultsCard({ settings, say, onSaved, edit }: {
           <React.Fragment>
             <FieldRow label="provider rank" kind="mono" value={settings.providerRank.join(' › ')} />
             <FieldRow label="default priority" kind="mono" value={settings.priority} />
-            <FieldRow label="frontier advisor" kind="mono" value={settings.frontierAdvisor ? 'on' : 'off'} />
+            <FieldRow label="advisor above main" kind="mono" value={settings.advisorAboveMain ? 'on' : 'off'} />
             <FieldRow label="retrospective tier" kind="mono" value={settings.retrospectiveTier} />
             {/* promotion only comes from approving a routing meta-review's question (ADR 0150 決定4); this card only demotes */}
             <FieldRow label="learner" kind="mono" value={settings.learnerPromoted ? 'promoted — chooses work tasks' : 'shadow — the table chooses'} />
@@ -2093,8 +2093,8 @@ function ExecutionDefaultsCard({ settings, say, onSaved, edit }: {
             </div>
             <Select label="Default priority" options={[...settings.priorities]} value={draft.priority}
               onChange={(e) => setDraft({ ...draft, priority: e.target.value })} />
-            <Checkbox testId="execution-frontier-advisor" checked={draft.advisor}
-              label="frontier advisor — an advisor may use the frontier row even when the main model is a lower tier"
+            <Checkbox testId="execution-advisor-above-main" checked={draft.advisor}
+              label="advisor above main — the advisor may be a model ranked above the main model (the provider's top model)"
               onChange={() => setDraft({ ...draft, advisor: !draft.advisor })} />
             <Select label="Retrospective tier" options={[...settings.tiers]} value={draft.retrospectiveTier}
               onChange={(e) => setDraft({ ...draft, retrospectiveTier: e.target.value })} />

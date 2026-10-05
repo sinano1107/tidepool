@@ -11,7 +11,7 @@ async function openBoardSettings(page: import("@playwright/test").Page, baseUrl:
   await page.getByTestId("settings-section-board").click();
 }
 
-test("Provider 順位・優先順位の既定・frontier advisor を1カードで編集して保存できる", async ({ boot, page }) => {
+test("Provider 順位・優先順位の既定・advisor above main を1カードで編集して保存できる", async ({ boot, page }) => {
   const t = await boot();
   await openBoardSettings(page, t.baseUrl);
 
@@ -26,7 +26,7 @@ test("Provider 順位・優先順位の既定・frontier advisor を1カード�
   await expect(save).toBeDisabled();
   await card.getByLabel("Rank 3").selectOption("anthropic");
   await card.getByLabel("Default priority").selectOption("cost");
-  await card.getByTestId("execution-frontier-advisor").click();
+  await card.getByTestId("execution-advisor-above-main").click();
   await expect(save).toBeEnabled();
   await save.click();
 
@@ -34,7 +34,7 @@ test("Provider 順位・優先順位の既定・frontier advisor を1カード�
   expect((await api(t.baseUrl, "GET", "/api/settings/execution")).json).toMatchObject({
     providerRank: ["openai", "moonshot", "anthropic"],
     priority: "cost",
-    frontierAdvisor: true,
+    advisorAboveMain: true,
   });
 });
 

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { isClaudeModelAlias } from "./claude-model-alias.js";
+import { claudeAdvisorFor, isClaudeModelAlias } from "./claude-model-alias.js";
 import type { Db } from "./db.js";
 import { appendEvent, type EventOrigin } from "./events.js";
 import { PROVIDER_VALUES, type Provider } from "./provider.js";
@@ -8,9 +8,8 @@ import type { AgentDefinition } from "./registry.js";
 import { DomainError, HUMAN_WORKER_ID, type RegistryProposal, type RoutingProposal, type RoutingRowProposal, settleQuestionAsObserved, type Task } from "./tasks.js";
 
 /** 必要品質のティア(CONTEXT.md「要求」)—— 廉価 / 主力 / 上位。**順序を持つ配列**
- *  であることがこの定数の内容で、advisor の pairing はこの並びの添字だけで判定する
- *  (ADR 0042 は生きている —— 盤面が順序を主張してよいのは自分の表のティア行に
- *  対してだけで、alias が実際にどのモデルへ解決されるかは今も judge しない)。 */
+ *  であることがこの定数の内容で、agent の既定 tier の提案が「下」を読む。advisor の
+ *  導出はティアを読まない(ADR 0200 決定6)。 */
 export const TIERS = ["economy", "standard", "frontier"] as const;
 export type Tier = (typeof TIERS)[number];
 
@@ -187,35 +186,11 @@ export interface SelectorInput {
   reviewTier?: Tier;
   /** agent.md の `tier`。省略 → 盤面既定。 */
   agentTier: Tier | undefined;
-  /** 盤面設定:「上位ティアの行を advisor に使ってよい」。立つまで advisor は
+  /** 盤面設定:「main より序列が上の model を advisor に使ってよい」。立つまで advisor は
    *  main と同一に倒れる —— Fable の usage-credits 同意も org の `availableModels`
    *  も盤面からは読めず、不成立なら headless の CLI は exit せず advisor 無しで
    *  黙って起動する(2026-09-10 実測: stream-json は未 attach を通知しない)。 */
-  frontierAdvisor: boolean;
-}
-
-/** advisor のティアが main 未満。headless の CLI はこの組み合わせを exit ではなく
- *  **advisor 無しの完走**で返すので(2026-09-10 実測: stderr に警告1行、stream-json
- *  には何も出ない)、盤面から見て成功セッションと区別が付かない。黙って advisor
- *  無しで走らせないために spawn 前に倒す。 */
-export class AdvisorPairingError extends Error {
-  constructor(mainTier: Tier, advisorTier: Tier) {
-    super(
-      `advisor tier ${advisorTier} cannot advise a ${mainTier} main model ` +
-        "(the advisor must be at least as capable), so the session would run with no advisor at all (ADR 0110 決定3)",
-    );
-    this.name = "AdvisorPairingError";
-  }
-}
-
-/** advisor のティアが main 以上であることの検査(ADR 0110 決定3)。**judge するのは
- *  ティアの水準だけ** —— model 文字列の意味は判定に入らない。ADR 0042 が却下した
- *  のは「盤面が知らない文字列(alias の解決先)を表で judge すること」であって、
- *  盤面が自分で組んだ表の行の順序を読むことではない。 */
-export function assertAdvisorPairing(mainTier: Tier, advisorTier: Tier): void {
-  if (TIERS.indexOf(advisorTier) < TIERS.indexOf(mainTier)) {
-    throw new AdvisorPairingError(mainTier, advisorTier);
-  }
+  advisorAboveMain: boolean;
 }
 
 /** 価格の鍵(ADR 0114 決定4): out 単価、同額なら in 単価。 */
@@ -250,9 +225,10 @@ export function retrospectiveBoardCallRow(db: Db): ExecutionSettingRow {
  *  候補を1度作り、除外が増えるたびに `selectable` を引き直す形にしてある。
  *  要求ティアの行を持たない entry は候補に入らない(Throttle と同じ「除外」)。
  *
- *  advisor の model は agent.md には書かれない: 真のときだけ表から導出し、同
- *  Provider の frontier 行(複数なら最安、main が既に frontier ならその行そのもの)
- *  を採る。frontier 行が無ければその entry は除外 —— advisor 無しで黙って走らせない。
+ *  advisor の model は agent.md には書かれない: 真のときだけ main の行から導出する
+ *  (`claudeAdvisorFor`、ADR 0200 決定6 —— 表もティアも読まない)。advisor を宣言
+ *  できるのは anthropic の entry だけで(ADR 0097)、adapter が系列を知らない行は
+ *  advisor つきの entry の候補にしない —— advisor 無しで黙って走らせない。
  *
  *  kill switch(ADR 0043)はここでは見ない —— 「この session に advisor は無い」
  *  という盤面ホストの運用マスクは registry の宣言とは別の層で、選んだ**後**に
@@ -273,18 +249,13 @@ function executionSettingCandidates(
     request.entries.length === 1 ? "only" : priority === "cost" ? "cost" : "rank";
   const byRank = (a: ExecutionSettingRow, b: ExecutionSettingRow) =>
     request.providerRank.indexOf(a.provider) - request.providerRank.indexOf(b.provider);
-  const advisorTier: Tier = request.frontierAdvisor ? "frontier" : tier;
-  assertAdvisorPairing(tier, advisorTier);
   return request.entries
-    .flatMap((entry) => {
-      const frontier = entry.advisor ? rowsFor(table, entry.provider, advisorTier)[0]?.model : undefined;
-      if (entry.advisor && frontier === undefined) return [];
-      // advisor のティアが main と同じなら main の行そのもの —— 同ティアに複数行あっても別の行へ割れない
-      return rowsFor(table, entry.provider, tier).map((main) => ({
-        main,
-        advisor: entry.advisor && advisorTier === tier ? main.model : frontier,
-      }));
-    })
+    .flatMap((entry) =>
+      rowsFor(table, entry.provider, tier).flatMap((main) => {
+        const advisor = entry.advisor ? claudeAdvisorFor(main.model, request.advisorAboveMain) : undefined;
+        return entry.advisor && advisor === undefined ? [] : [{ main, advisor }];
+      }),
+    )
     .sort((a, b) =>
       priority === "cost" ? byPrice(a.main, b.main) || byRank(a.main, b.main) : byRank(a.main, b.main) || byPrice(a.main, b.main),
     )
@@ -347,12 +318,12 @@ export function loadExecutionSettingTable(db: Db): ExecutionSettingTable {
     .all() as ExecutionSettingRow[];
 }
 
-/** 盤面設定(ADR 0110 決定5): 「上位ティアの行を advisor に使ってよい」、
+/** 盤面設定(ADR 0110 決定5): 「main より序列が上の model を advisor に使ってよい」、
  *  Provider 順位、優先順位の既定、学習器の昇格(ADR 0150 決定4)、振り返り Board call が
  *  共有するティア(ADR 0111 追記4)。行が無い / 列が NULL = 未設定 = コードの既定
  *  —— display_language と同じ「行が無ければ既定」の形。 */
 interface ExecutionDefaults {
-  frontierAdvisor: boolean;
+  advisorAboveMain: boolean;
   providerRank: readonly Provider[];
   priority: Priority;
   learnerPromoted: boolean;
@@ -427,7 +398,7 @@ export const executionSettingsChangeSchema = z.discriminatedUnion("setting", [
     }),
   }),
   z.object({ setting: z.literal("delete_row"), ...rowKeySchema.shape }),
-  z.object({ setting: z.literal("frontier_advisor"), value: z.boolean() }),
+  z.object({ setting: z.literal("advisor_above_main"), value: z.boolean() }),
   z.object({
     setting: z.literal("provider_rank"),
     value: z.array(z.enum(PROVIDER_VALUES)).refine(isProviderRank, {
@@ -614,12 +585,12 @@ export function settleStaleProposals(db: Db, at: Date, observedEventId: number |
 
 function loadExecutionDefaults(db: Db): ExecutionDefaults {
   const row = db
-    .prepare("SELECT frontier_advisor, provider_rank, priority, learner_promoted, retrospective_tier FROM execution_defaults WHERE id = 1")
+    .prepare("SELECT advisor_above_main, provider_rank, priority, learner_promoted, retrospective_tier FROM execution_defaults WHERE id = 1")
     .get() as
-    | { frontier_advisor: number; provider_rank: string | null; priority: Priority | null; learner_promoted: number; retrospective_tier: Tier | null }
+    | { advisor_above_main: number; provider_rank: string | null; priority: Priority | null; learner_promoted: number; retrospective_tier: Tier | null }
     | undefined;
   return {
-    frontierAdvisor: row?.frontier_advisor === 1,
+    advisorAboveMain: row?.advisor_above_main === 1,
     providerRank: row?.provider_rank ? (JSON.parse(row.provider_rank) as Provider[]) : PROVIDER_VALUES,
     priority: row?.priority ?? BOARD_DEFAULT_PRIORITY,
     learnerPromoted: row?.learner_promoted === 1,
@@ -635,7 +606,7 @@ type SelectorTask = Pick<Task, "type" | "tier" | "priority" | "review_tier">;
  *  「その agent は何のモデルで走るのか」の答えが2つあってはならない(モデル窓の
  *  除外は、答えがずれた瞬間に全テスト緑のまま黙って効かなくなる面である)。
  *
- *  Provider 順位・優先順位の既定・frontier advisor は盤面設定(`execution_defaults`、
+ *  Provider 順位・優先順位の既定・advisor above main は盤面設定(`execution_defaults`、
  *  settings タブと管理MCP が書く —— ADR 0110 決定5)。pickup ごとに読み直すので、
  *  書いた値は次の pickup / skipped 表示から効く。
  *
@@ -657,7 +628,7 @@ function selectorInputFor(
     priority: task?.priority ?? defaults.priority,
     reviewTier: task?.type === "review" ? task.review_tier ?? undefined : undefined,
     agentTier: definition.tier as Tier | undefined,
-    frontierAdvisor: defaults.frontierAdvisor,
+    advisorAboveMain: defaults.advisorAboveMain,
   };
 }
 
@@ -671,8 +642,8 @@ export function executionSettingsFor(
   return executionSettingCandidates(selectorInputFor(db, definition, task), runnableTable(db));
 }
 
-/** 表から、行の Quarantine(行の拒否、ADR 0184 決定2)が開いている行を外したもの。main の候補と
- *  advisor の導出がこの1本から引くので、走れない行はどちらにもならない。照合は (provider, model) の
+/** 表から、行の Quarantine(行の拒否、ADR 0184 決定2)が開いている行を外したもの。main の候補はこの1本から
+ *  引くので、走れない行は main にならない。advisor は行でないのでこれを読まない(ADR 0200 決定6)。照合は (provider, model) の
  *  完全一致で、effort 違いの行もまとめて外れる(ADR 0200 決定5)—— Throttle の窓の部分一致(`windowMatchesModel`)は使わない(ADR 0182 決定3 と同じ理由)。 */
 function runnableTable(db: Db): ExecutionSettingTable {
   const refused = new Set(openQuarantineValues(db, "tableRow"));
