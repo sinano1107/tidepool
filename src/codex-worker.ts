@@ -15,7 +15,7 @@ import { resolveAgentOrQuarantine, resolveExecutionAgent } from "./agent.js";
 import { type BoardCall, readOutput } from "./board-call.js";
 import { boardDoctrine, boardProse } from "./board-prose.js";
 import { type BoardStatePath, boardStateOverlap } from "./board-state.js";
-import { readLines, readStderrTail } from "./child-stream.js";
+import { readLines, readStderrTail, settleOnOutputClose } from "./child-stream.js";
 import { agentGitIdentityEnv } from "./claude-worker.js";
 import type { Clock } from "./clock.js";
 import { CODEX_APP_SERVER_VERSION, callAppServer, codexCommandThrough } from "./codex-app-server.js";
@@ -29,7 +29,6 @@ import type { ContainedProcess, ContainerSpawn, ProcessContainers } from "./proc
 import { loadRegistry, type RegistrySource } from "./registry.js";
 import { DEFAULT_AUDITOR_NAME, resolveTaskAgent, type Task } from "./tasks.js";
 import type { Transcript, TranscriptStore } from "./transcript-store.js";
-import { RECLAIM_TIMEOUT } from "./watchdog.js";
 import type { WorkerAdapter, WorkerExit } from "./worker.js";
 import {
   quarantineWorkspace,
@@ -1134,12 +1133,8 @@ export class CodexWorker implements WorkerAdapter {
       });
       this.options.onSpawnFailed?.(task.id, failure);
     });
-    // ADR 0201: exit は強制回収の契機、記録の確定点は root の出力の読み切り(close)。
-    // 読み切りが回収 timeout までに来なければ、それまでに読めた分で確定させる(Claude adapter と同じ)。
-    let settled = false;
+    // ADR 0201: 確定点は exit でなく root の出力の読み切り(see settleOnOutputClose)。
     const settle = (code: number | null, signal: NodeJS.Signals | null, outputClosed: boolean) => {
-      if (settled) return;
-      settled = true;
       this.running.delete(task.id);
       flushStdout();
       const exit: WorkerExit = {
@@ -1175,17 +1170,9 @@ export class CodexWorker implements WorkerAdapter {
       removeTaskTemp();
       this.options.onWorkerExited?.(task.id, exit);
     };
-    child.on("exit", (code, signal) => {
-      // ADR 0109 決定4: root の exit は容器に残るものが孤児である証拠 —— 読み切りを待たずに
-      // 強制回収を撃つ(ADR 0201 決定1)。Harness 非依存に、盤面 supervisor 経由。
-      this.containers.forceReclaim(task.id);
-      const cancel = this.options.clock.setTimeout(() => settle(code, signal, false), RECLAIM_TIMEOUT);
-      // close は exit を見てからだけ数える —— spawn の失敗も "error" のあとに close を撃つ
-      child.on("close", () => {
-        cancel();
-        settle(code, signal, true);
-      });
-    });
+    // ADR 0109 決定4: root の exit は容器に残るものが孤児である証拠 —— 読み切りを待たずに
+    // 強制回収を撃つ(ADR 0201 決定1)。Harness 非依存に、盤面 supervisor 経由。
+    settleOnOutputClose(child, this.options.clock, () => this.containers.forceReclaim(task.id), settle);
   }
 
   /** Codex folds up on SIGINT; force/reclaimed belong to ProcessContainers. */

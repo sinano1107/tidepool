@@ -6,7 +6,7 @@ import { type ResolvedAgent, resolveAgentOrQuarantine, resolveExecutionAgent } f
 import { type BoardCall, type BoardCallSpec, readOutput } from "./board-call.js";
 import { boardDoctrine, boardProse } from "./board-prose.js";
 import { type BoardStatePath, boardStateOverlap } from "./board-state.js";
-import { readLines, readStderrTail } from "./child-stream.js";
+import { readLines, readStderrTail, settleOnOutputClose } from "./child-stream.js";
 import {
   isCapInterruptionEnvelope,
   isCliAuthFailureEnvelope,
@@ -50,7 +50,6 @@ import {
 } from "./tasks.js";
 import type { TranscriptStore } from "./transcript-store.js";
 import { composeTerminalScreen } from "./usage.js";
-import { RECLAIM_TIMEOUT } from "./watchdog.js";
 import type { WorkerAdapter, WorkerExit } from "./worker.js";
 import {
   excludeWorkspaceProjectSettings,
@@ -2238,13 +2237,8 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     // usage is settled at the root's output close — after task_completed via MCP,
     // not before (issue #32) — so kill/crash sessions still get a worker_exited
     // with usage: null rather than losing the exit fact entirely.
-    // ADR 0201: exit は強制回収の契機、記録の確定点は root の出力の読み切り(close)。
-    // exit の時点では、pipe の先が詰まっている間の最後の出力(result 行)がまだ届いていない
-    // ことがある。読み切りが回収 timeout までに来なければ、それまでに読めた分で確定させる。
-    let settled = false;
+    // ADR 0201: 確定点は exit でなく root の出力の読み切り(see settleOnOutputClose)。
     const settle = (code: number | null, signal: NodeJS.Signals | null, outputClosed: boolean) => {
-      if (settled) return;
-      settled = true;
       this.running.delete(task.id);
       // the final stdout chunk may not end in "\n" (stream simply closes
       // mid-line), which would otherwise strand the last result line unread
@@ -2320,20 +2314,12 @@ export class ClaudeCodeWorker implements WorkerAdapter {
       if (transcript.stream.closed) project();
       else transcript.stream.once("close", project);
     };
-    child.on("exit", (code, signal) => {
-      // ADR 0109 決定4: root process の exit は、容器に残るものが**孤児である証拠**で
-      // ある —— 行儀よく exit するのを待たずにここで強制回収を撃つ。読み切りより先に撃っても
-      // root が書き終えた出力は失われず、孤児が出力の口を握っていても読み切りが来る
-      // (ADR 0201 決定1)。これは**送達であって回収の完了ではなく**、ADR 0099 決定1 の
-      // 語彙は不変である: 門は回収済み観測ただ1つで、後始末はその後ろでしか走らない。
-      this.containers.forceReclaim(task.id);
-      const cancel = this.options.clock.setTimeout(() => settle(code, signal, false), RECLAIM_TIMEOUT);
-      // close は exit を見てからだけ数える —— spawn の失敗も "error" のあとに close を撃つ
-      child.on("close", () => {
-        cancel();
-        settle(code, signal, true);
-      });
-    });
+    // ADR 0109 決定4: root process の exit は、容器に残るものが**孤児である証拠**で
+    // ある —— 行儀よく exit するのを待たずに強制回収を撃つ。読み切りより先に撃っても
+    // root が書き終えた出力は失われず、孤児が出力の口を握っていても読み切りが来る
+    // (ADR 0201 決定1)。これは**送達であって回収の完了ではなく**、ADR 0099 決定1 の
+    // 語彙は不変である: 門は回収済み観測ただ1つで、後始末はその後ろでしか走らない。
+    settleOnOutputClose(child, this.options.clock, () => this.containers.forceReclaim(task.id), settle);
   }
 
   /** ADR 0039 決定3 の**深層防御側**: 走っているセッション自身の init 行の `tools`

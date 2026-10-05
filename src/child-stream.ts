@@ -1,4 +1,7 @@
 import { StringDecoder } from "node:string_decoder";
+import type { Clock } from "./clock.js";
+import type { ContainedProcess } from "./process-container.js";
+import { RECLAIM_TIMEOUT } from "./watchdog.js";
 
 /** 子プロセスの出力を読む vendor 中立の層(issue #1299)。chunk 単位の toString() は
  *  UTF-8 文字を境界で割ると置換文字に化ける(#1298)ので、StringDecoder が境界を
@@ -67,4 +70,29 @@ export function readStderrTail(stream: NodeJS.ReadableStream): () => string | nu
     buffered = trimStderrTail(buffered + text);
   });
   return () => stderrTail(buffered + end());
+}
+
+/** ADR 0201: root の exit は強制回収の契機(`onExit`)、記録の確定点は root の出力の読み切り(close)。
+ *  exit の時点では、pipe の先が詰まっている間の最後の出力がまだ届いていないことがある。読み切りが
+ *  回収 timeout までに来なければ、それまでに読めた分で `settle` する(`outputClosed: false`)。
+ *  `settle` は1度だけ呼ばれ、close は exit を見てからだけ数える —— spawn の失敗でも Node は
+ *  "error" のあとに close を撃つ。 */
+export function settleOnOutputClose(
+  child: ContainedProcess,
+  clock: Clock,
+  onExit: () => void,
+  settle: (code: number | null, signal: NodeJS.Signals | null, outputClosed: boolean) => void,
+): void {
+  let settled = false;
+  child.on("exit", (code, signal) => {
+    onExit();
+    const finish = (outputClosed: boolean) => {
+      if (settled) return;
+      settled = true;
+      cancel();
+      settle(code, signal, outputClosed);
+    };
+    const cancel = clock.setTimeout(() => finish(false), RECLAIM_TIMEOUT);
+    child.on("close", () => finish(true));
+  });
 }
