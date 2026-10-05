@@ -970,7 +970,7 @@ function RegisterScreen({ onRegister, parentTask, onClose }) {
       type: "work",
       workspace: gate.workspace,
       github_issue_number: gate.github_issue_number,
-      ...gate.tier ? { tier: gate.tier } : {}
+      tier: gate.tier
     });
   };
   const draftFields = async () => {
