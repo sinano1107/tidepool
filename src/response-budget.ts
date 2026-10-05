@@ -29,13 +29,10 @@ const encodeNext = (position: ReadPosition) => Buffer.from(JSON.stringify(positi
 
 /** 続きを読む。盤面は状態を持たず、続きが verb・最初の引数・位置を自己記述する(ADR 0195 決定6)。 */
 export function readNext<A = Record<string, unknown>>(verb: string, next: string): ReadPosition<A> {
-  let position: unknown;
+  let p: Partial<ReadPosition> | undefined;
   try {
-    position = JSON.parse(Buffer.from(next, "base64url").toString());
-  } catch {
-    position = undefined;
-  }
-  const p = position as Partial<ReadPosition> | undefined;
+    p = JSON.parse(Buffer.from(next, "base64url").toString());
+  } catch {}
   if (typeof p?.verb !== "string" || typeof p.args !== "object" || p.args === null || !["string", "number"].includes(typeof p.at))
     throw new DomainError("next is malformed: pass the next string exactly as a previous response returned it");
   if (p.verb !== verb) throw new DomainError(`next belongs to ${p.verb}, not ${verb}: pass it to ${p.verb}`);
@@ -60,7 +57,36 @@ export function packItems<T extends { id: ItemId }>(
   const rest = items.slice(start);
   const nextAt = (k: number) =>
     k < rest.length ? { next: encodeNext({ verb: read.verb, args: read.args, at: rest[k]!.id }), remaining: rest.length - k } : {};
-  if (read.field !== undefined) return piece(read, read.field, read.offset ?? 0, head, key, rest, nextAt);
+
+  /** 1件で予算を超える先頭の item の、`field` の `offset` バイト目からの1切れを単独で返す(ADR 0195 決定4)。
+   *  切れの item は他の欄を全部持ち、`partial` が部分であることと欄の名前・全体のバイト数を示す。欄を切り終えたら次の item へ進む。
+   *  ponytail: 切るのは1欄だけ —— その欄を空にしても予算を超える item(長い欄が2つある等)は出口の床に落ちる。観測されたら欄を順に切る */
+  const piece = (field: string[], offset: number) => {
+    const item = rest[0]!;
+    const value = field.reduce<any>((node, name) => node?.[name], item);
+    if (typeof value !== "string") throw new DomainError("next is malformed: pass the next string exactly as a previous response returned it");
+    const text = Buffer.from(value);
+    const pageUpTo = (end: number) => {
+      const cut = structuredClone(item) as any;
+      field.slice(0, -1).reduce((node, name) => node[name], cut)[field.at(-1)!] = text.subarray(offset, end).toString();
+      return {
+        ...head,
+        [key]: [cut],
+        partial: { id: item.id, field: field.join("."), field_bytes: text.length },
+        ...(end < text.length ? { next: encodeNext({ ...read, at: item.id, field, offset: end }), remaining: rest.length } : nextAt(1)),
+      };
+    };
+    let [lo, hi] = [offset, text.length];
+    while (lo < hi) {
+      const mid = Math.ceil((lo + hi) / 2);
+      if (bytes(JSON.stringify(pageUpTo(charBoundary(text, mid)))) <= RESPONSE_BUDGET_BYTES) lo = mid;
+      else hi = mid - 1;
+    }
+    // 他の欄だけで予算を超えると1文字も入らない —— 欄の残りを丸ごと返して床に任せ、続きが同じ位置を指し続けないようにする
+    const end = charBoundary(text, lo);
+    return pageUpTo(end > offset ? end : text.length);
+  };
+  if (read.field !== undefined) return piece(read.field, read.offset ?? 0);
   const whole = { ...head, [key]: rest };
   if (bytes(JSON.stringify(whole)) <= RESPONSE_BUDGET_BYTES) return whole;
 
@@ -74,47 +100,8 @@ export function packItems<T extends { id: ItemId }>(
     size = grown;
     k++;
   }
-  if (k === 0) return piece(read, longestStringField(rest[0]), 0, head, key, rest, nextAt);
+  if (k === 0) return piece(longestStringField(rest[0]), 0);
   return { ...head, [key]: rest.slice(0, k), ...nextAt(k) };
-}
-
-/** 1件で予算を超える item の、`field` の `offset` バイト目からの1切れを単独で返す(ADR 0195 決定4)。
- *  切れの item は他の欄を全部持ち、`partial` が部分であることと欄の名前・全体のバイト数を示す。欄を切り終えたら次の item へ進む。
- *  ponytail: 切るのは1欄だけ —— その欄を空にしても予算を超える item(長い欄が2つある等)は出口の床に落ちる。観測されたら欄を順に切る */
-function piece(
-  read: ReadPosition,
-  field: string[],
-  offset: number,
-  head: Record<string, unknown>,
-  key: string,
-  rest: readonly { id: ItemId }[],
-  nextAt: (k: number) => Record<string, unknown>,
-): Record<string, unknown> {
-  const item = rest[0]!;
-  const value = field.reduce<any>((node, name) => node?.[name], item);
-  if (typeof value !== "string") throw new DomainError("next is malformed: pass the next string exactly as a previous response returned it");
-  const text = Buffer.from(value);
-  const pageUpTo = (end: number) => {
-    const cut = structuredClone(item) as any;
-    field.slice(0, -1).reduce((node, name) => node[name], cut)[field.at(-1)!] = text.subarray(offset, end).toString();
-    return {
-      ...head,
-      [key]: [cut],
-      partial: { id: item.id, field: field.join("."), field_bytes: text.length },
-      ...(end < text.length ? { next: encodeNext({ ...read, at: item.id, field, offset: end }), remaining: rest.length } : nextAt(1)),
-    };
-  };
-  const boundary = (end: number) => charBoundary(text, end);
-  let [lo, hi] = [offset, text.length];
-  while (lo < hi) {
-    const mid = Math.ceil((lo + hi) / 2);
-    if (bytes(JSON.stringify(pageUpTo(boundary(mid)))) <= RESPONSE_BUDGET_BYTES) lo = mid;
-    else hi = mid - 1;
-  }
-  // 他の欄だけで予算を超えると1文字も入らない —— それでも1文字は進め、続きが同じ位置を指し続けないようにする(応答は床に落ちる)
-  let end = boundary(lo);
-  if (end === offset) for (end++; end < text.length && (text[end]! & 0xc0) === 0x80; ) end++;
-  return pageUpTo(end);
 }
 
 /** item の中で UTF-8 バイト数が最も大きい文字列の欄の path。 */
@@ -153,5 +140,5 @@ export function floorResponse<R extends ToolResponse>(
     payload: { kind: "response_truncated", surface, verb, bytes: original.length, budget: RESPONSE_BUDGET_BYTES, ...(taskId ? { task_id: taskId } : {}) },
   });
   const kept = original.subarray(0, charBoundary(original, RESPONSE_BUDGET_BYTES - bytes(marker))).toString();
-  return { ...result, content: [{ ...result.content[0], text: kept + marker }, ...result.content.slice(1)] };
+  return { ...result, content: [{ ...result.content[0], text: kept + marker }] };
 }
