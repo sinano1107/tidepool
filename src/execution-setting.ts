@@ -387,7 +387,7 @@ function isProviderRank(rank: readonly string[]): rank is Provider[] {
 
 /** 表の行の鍵 = 主キー (provider, model, effort)(ADR 0200 決定5)。行を名指す面はこの3欄で名指す。 */
 const rowKeySchema = z.object({ provider: z.enum(PROVIDER_VALUES), model: z.string().min(1), effort: z.string().min(1) });
-export type RowKey = z.infer<typeof rowKeySchema>;
+type RowKey = z.infer<typeof rowKeySchema>;
 
 /** この行が鍵の行か。 */
 export const isRow = (row: ExecutionSettingRow, key: { provider: string; model: string; effort: string }) =>
