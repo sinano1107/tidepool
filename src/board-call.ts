@@ -27,7 +27,7 @@ export interface BoardCallSpec {
    *  あって通常の遅延を縛ることではない —— 切りすぎた上限は呼び出しを失敗側へ倒す
    *  ので、値は冷えた CLI の起動込みの遅い側に広く取る。 */
   limitMs: number;
-  /** 結果を回収済み観測のあとに返すか。既定は root の exit で返す —— 答えの
+  /** 結果を回収済み観測のあとに返すか。既定は root の出力の読み切りで返す(ADR 0201)—— 答えの
    *  正しさは残存の有無で変わらない。true にするのは workspace を cwd にする
    *  呼び出しだけで、その workspace で次に起きる worker と残存を同居させない
    *  ために門を1つ手前に置く(ADR 0136 決定5)。 */
@@ -44,8 +44,8 @@ export interface PtyBoardCallSpec extends BoardCallSpec {
 }
 
 /** 呼び出し1回。`read` は spawn 直後に呼ばれ、「今までに観測した答え」を返す
- *  関数を渡す —— 口はそれを root の exit のあとに1度だけ、その exit code を添えて
- *  呼ぶ。答えの形(stream か1つの文字列か)は呼び出し側の話なので口は知らない。
+ *  関数を渡す —— 口はそれを root の出力の読み切り(stream の close。pty は exit)のあとに
+ *  1度だけ、その exit code を添えて呼ぶ。答えの形(stream か1つの文字列か)は呼び出し側の話なので口は知らない。
  *
  *  `read` の2つ目の引数 `done` は「呼び手はもう終わった —— 今 force を撃て」で、
  *  root の exit と同じく読み手の答えで決着する(exit code は null —— pty の exit も同じ)。root が合図に
