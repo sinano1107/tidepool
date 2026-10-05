@@ -2,7 +2,7 @@ import { readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { stringify as stringifyYaml } from "yaml";
 import { UnknownAgentError } from "./agent.js";
-import type { Tier } from "./execution-setting.js";
+import type { RenameAgentTiers, Tier } from "./execution-setting.js";
 import type { GitHubAuth } from "./github-auth.js";
 import {
   type AgentDefinition,
@@ -265,7 +265,7 @@ function rewriteAgentTier(worktreeDir: string, name: string, version: string, to
 
 /** 段の改名の registry 側(ADR 0200 決定2): 入口で fetch し、`tier` に旧い名前を書いた自前の agent.md をすべて1つの commit で
  *  書き換えて着地させる。書き換える agent が無ければ何も着地しない。 */
-export async function renameAgentTiers(input: { from: string; to: string; message: string }, deps: AgentAdminDeps): Promise<void> {
+export async function renameAgentTiers(input: Parameters<RenameAgentTiers>[0], deps: AgentAdminDeps): Promise<void> {
   await refreshRegistryForWrite(deps.registry, deps.githubAuth);
   const agents = Object.values(loadRegistry(deps.registry.dir, deps.registry.mode).agents).filter((agent) => !agent.builtin && agent.tier === input.from);
   commitToRegistry(
@@ -410,7 +410,7 @@ export interface AgentAdmin {
   /** tier の提案への approve の書き込み(issue #920)。着地した commit を返す。 */
   changeTier: (input: ChangeAgentTierInput) => Promise<string>;
   /** 段の改名の registry 側(issue #1422)。 */
-  renameTier: (input: { from: string; to: string; message: string }) => Promise<void>;
+  renameTier: RenameAgentTiers;
 }
 
 function assertKnownAuthority(registry: Registry, profileName: string): void {
