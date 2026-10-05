@@ -878,7 +878,17 @@ it("search の memory_pulled は FTS の順位どおりの候補と、返さな�
   expect(rest.results.map((r) => r.id)).toEqual(pages.slice(shown.length));
   expect(rest).not.toHaveProperty("next");
   // 続きの呼び出しも1回の pull: input は最初の呼び出しの引数、returned_ids はその応答で返した id
-  expect(getEvent(db, rest.event_id)?.payload).toMatchObject({ verb: "search_memory", input: { query: "tide" }, returned_ids: pages.slice(shown.length) });
+  // candidates は前の応答で返した候補を持たない —— それらは前の応答の pull に dropped: null で残っている
+  expect(getEvent(db, rest.event_id)?.payload).toMatchObject({
+    verb: "search_memory",
+    input: { query: "tide" },
+    returned_ids: pages.slice(shown.length),
+    candidates: [
+      { id: invalidated, dropped: "invalidated" },
+      { id: elsewhere, dropped: "addressee" },
+      ...pages.slice(shown.length).map((id) => ({ id, dropped: null })),
+    ],
+  });
 });
 
 it("browse の children と entries も応答予算で切られ、続き(next)に children の残り、その後に entries が出る。memory_pulled はその応答で返した entry の id だけを持つ", () => {

@@ -1395,7 +1395,7 @@ interface MemoryReader {
 
 /** search の候補が返らなかった理由(spec #586 D)。関連度の閾値は持たない(ADR 0083
  *  決定9)ので「関連度で切った」は FTS だけでは起きず、型にも置かない。スコープ外と
- *  candidate は候補になる前の SQL の絞り込み。`response_budget` は見えるが、この応答には予算で入らなかった候補(前後の応答で返したものも含む、ADR 0195)。 */
+ *  candidate は候補になる前の SQL の絞り込み。`response_budget` は見えるが、この応答には予算で入らず、続きに回った候補(ADR 0195)。 */
 export type MemoryDropReason = "addressee" | "invalidated" | "response_budget";
 
 /** snapshot 識別子 = 店を変える memory 系 event の最大 id(approvedMemoryEntries が再生する種別)。 */
@@ -1492,7 +1492,9 @@ export function searchMemory(
     const visible = hits.filter((row) => dropReason(row, reader) === null).map(({ id, title, path }) => ({ id, title, path }));
     const packed = packItems(read, "results", visible, {}, { every: PENDING_EVENT_ID }) as ReturnType<typeof searchMemory>;
     const returned = new Set(packed.results.map((r) => r.id));
-    const candidates = hits.map((row) => ({
+    // 前の応答で返した候補は外す —— それらは前の応答の pull に dropped: null で残っている
+    const earlier = new Set(visible.slice(0, Math.max(0, visible.findIndex((r) => r.id === read.at))).map((r) => r.id));
+    const candidates = hits.filter((row) => !earlier.has(row.id)).map((row) => ({
       id: row.id,
       dropped: dropReason(row, reader) ?? (returned.has(row.id) ? null : ("response_budget" as const)),
     }));
