@@ -26,8 +26,8 @@ interface TpQuestion {
   kind?: 'approval';
   note?: string;
   /** 修正値を添えられる提案 question(ADR 0150 決定2・ADR 0152 決定2): 表の行の提案は tier / effort、agent の tier の提案は下げ先 `to`、
-   *  memory の approve / consolidate は `candidateId` の文言と宛先(Exemplar なら title・宛先と注釈 list)。 */
-  amendable?: 'row' | 'agent_tier' | 'memory';
+   *  段の説明の提案は文面、memory の approve / consolidate は `candidateId` の文言と宛先(Exemplar なら title・宛先と注釈 list)。 */
+  amendable?: 'row' | 'agent_tier' | 'tier_description' | 'memory';
   /** agent の tier の提案の pin の tier —— 下げ先の選択肢はこれより下の段(ADR 0150 決定2)。 */
   amendBelow?: string;
   candidateId?: number;
@@ -40,7 +40,7 @@ interface TpQuestion {
 }
 /** approve に添える修正値。空欄は送らない(memory の宛先の null = 全員は送る)。 */
 type TpAmendment = {
-  tier?: string; effort?: string; to?: string;
+  tier?: string; effort?: string; to?: string; description?: string;
   title?: string; text?: string; addressee?: string | null; original_title?: string; original_text?: string;
   annotations?: ReturnType<typeof annotationsToSend>;
 };
@@ -445,6 +445,12 @@ function TpQuestionCard({ q, answer, onAnswer, locked = false, onTranslate, onOp
         <div style={{ display: 'flex', gap: 8, marginBottom: 14 }}>
           <TpTierAmendment label="Amend target tier (optional)" below={q.amendBelow} value={amendment.to ?? ''}
             onChange={(to) => setAmendment({ ...amendment, to })} />
+        </div>
+      )}
+      {q.amendable === 'tier_description' && !locked && (
+        <div style={{ marginBottom: 14 }}>
+          <Input label="Amend description (optional)" value={amendment.description ?? ''} placeholder="as proposed"
+            onChange={(e) => setAmendment({ description: e.target.value })} />
         </div>
       )}
       {q.amendable === 'memory' && !locked && (

@@ -1,7 +1,8 @@
 import { afterEach, expect, it } from "vitest";
+import { appendEvent } from "../src/events.js";
 import { createBehaviorCandidate, proposeMemoryChange } from "../src/memory.js";
 import { registerTask } from "../src/tasks.js";
-import { api, bootTidepool, completeViaMcp, HOUR, HUMAN_WEBUI, managementMcpClient, mcpClient, type Tidepool } from "./harness.js";
+import { api, bootTidepool, completeViaMcp, HOUR, HUMAN_WEBUI, managementMcpClient, mcpClient, type Tidepool, WORKER_SPAWNED } from "./harness.js";
 
 /** routing の行の提案 question(issue #918 / ADR 0150 決定1・2)のサーバ境界: 提案 verb、付帯子としての question、回答での
  *  適用と修正値、pin の陳腐化、過去の提案の読み口。pin の照合と修正値の合成はドメイン層(tests/execution-setting.test.ts)が言う。 */
@@ -322,6 +323,109 @@ it("昇格 / 降格の approve に添えた修正値は回答ごと断られ、�
 
     expect(await task(questionId)).toMatchObject({ status: "todo", question_answer: null });
     expect(await learnerPromoted()).toBe(false);
+  } finally {
+    await client.close();
+  }
+});
+
+// 段の説明の書き換えの提案(ADR 0200 決定7): 根拠は床を task の申告が決めた episode。
+
+/** 根拠の episode(setup): 書き手が人間の task が `tier` を要求し、床の出所が `tierSource` の worker_spawned。 */
+function declaredSession(tp: Tidepool, tier: string, tierSource: "task" | "agent" = "task"): number {
+  const { id } = registerTask(tp.db, { type: "work", title: "evidence", purpose: "p", completion_criteria: "c", tier }, tp.clock.now(), ...HUMAN_WEBUI);
+  return appendEvent(tp.db, {
+    taskId: id,
+    workerId: "deckhand",
+    origin: "board",
+    at: tp.clock.now(),
+    payload: { ...WORKER_SPAWNED, source: { tier: tierSource, provider: "rank" } },
+  });
+}
+
+const tierDescription = async (name: string) =>
+  ((await api(t.baseUrl, "GET", "/api/settings/execution")).json.tiers as Array<{ name: string; description: string }>).find((tier) => tier.name === name)?.description;
+const NEW_STANDARD = "Work where the approach has to be worked out, including any change that spans more than one module.";
+
+async function proposeTierDescription(call: (name: string, args: Record<string, unknown>) => Promise<any>, evidence = [declaredSession(t, "standard")]) {
+  return call("propose_routing_change", { op: "tier_description", tier: "standard", description: NEW_STANDARD, evidence, rationale: "5 of 6 standard declarations were overpowered." });
+}
+
+it("段の説明の提案は説明のいまの文面を pin に焼き、approve で説明が書き換わる", async () => {
+  const { review, client, call } = await boardWithRoutingReview();
+  try {
+    const current = await tierDescription("standard");
+    const evidence = declaredSession(t, "standard");
+    const { question_id } = await proposeTierDescription(call, [evidence]);
+
+    const question = await task(question_id);
+    expect(question).toMatchObject({
+      status: "todo",
+      parent_id: review.id,
+      question_proposal: { kind: "routing", op: "tier_description", tier: "standard", description: NEW_STANDARD, evidence: [evidence], pin: { description: current } },
+    });
+    for (const shown of [current, NEW_STANDARD, "5 of 6 standard declarations were overpowered."]) expect(question.question_items[0].detail).toContain(shown);
+
+    expect((await answer(question_id, { answers: ["approve"] })).status).toBe(200);
+    expect(await tierDescription("standard")).toBe(NEW_STANDARD);
+  } finally {
+    await client.close();
+  }
+});
+
+it("段の説明の提案の修正値つき approve は修正後の文面を書き、reject は何も書かず、形の違う修正値は回答ごと断られる", async () => {
+  const { client, call } = await boardWithRoutingReview();
+  try {
+    const current = await tierDescription("standard");
+    const rejected = (await proposeTierDescription(call)).question_id;
+    expect((await answer(rejected, { answers: ["reject"], comment: "keep it" })).status).toBe(200);
+    expect(await tierDescription("standard")).toBe(current);
+
+    const amended = (await proposeTierDescription(call)).question_id;
+    for (const amendment of [{ description: "two\nlines" }, { description: "ok", tier: "economy" }, { tier: "frontier" }]) {
+      expect((await answer(amended, { answers: ["approve"], amendment })).status).toBe(409);
+    }
+    expect(await task(amended)).toMatchObject({ status: "todo" });
+    expect((await answer(amended, { answers: ["approve"], amendment: { description: "Amended by the human." } })).status).toBe(200);
+    expect(await tierDescription("standard")).toBe("Amended by the human.");
+  } finally {
+    await client.close();
+  }
+});
+
+it("人間が先に段の説明を直すと提案は回答なしで観測で決着し、別の段・行・同じ段の位置の編集では open のまま", async () => {
+  const { client, call } = await boardWithRoutingReview();
+  try {
+    const { question_id } = await proposeTierDescription(call);
+    const fable = { provider: "anthropic", tier: "frontier", model: "claude-fable-5-1", effort: "max", price_in: 10, price_out: 50 };
+    for (const change of [
+      { setting: "edit_tier", name: "economy", description: "Edited economy." },
+      { setting: "edit_tier", name: "standard", position: 0 },
+      { setting: "row", key: { provider: "anthropic", model: "claude-fable-5-1", effort: "high" }, row: fable },
+    ]) {
+      expect((await api(t.baseUrl, "POST", "/api/settings/execution", change)).status).toBe(200);
+    }
+    expect(await task(question_id)).toMatchObject({ status: "todo" });
+
+    expect((await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "edit_tier", name: "standard", description: "Edited by a human." })).status).toBe(200);
+
+    expect(await task(question_id)).toMatchObject({ status: "done", question_answer: null });
+    expect(await staleEvents(question_id)).toEqual([
+      ["routing_proposal_stale", "tidepool", { kind: "routing_proposal_stale", question_id, proposal_kind: "routing", changed: ["description"], observed_event_id: expect.any(Number) }],
+    ]);
+  } finally {
+    await client.close();
+  }
+});
+
+it("段の説明の提案の根拠が task の申告で床を決めていない・別の段を要求した task の session なら、また文面がいまの説明と同じなら断られ、question は立たない", async () => {
+  const { review, client, call } = await boardWithRoutingReview();
+  try {
+    expect(await proposeTierDescription(call, [declaredSession(t, "standard", "agent")])).toMatchObject({ error: expect.stringContaining("not from its task") });
+    expect(await proposeTierDescription(call, [declaredSession(t, "economy")])).toMatchObject({ error: expect.stringContaining("did not request standard") });
+    expect(
+      await call("propose_routing_change", { op: "tier_description", tier: "standard", description: await tierDescription("standard"), evidence: [declaredSession(t, "standard")], rationale: "no change" }),
+    ).toMatchObject({ error: expect.stringContaining("already reads") });
+    expect(((await api(t.baseUrl, "GET", "/api/tasks")).json as any[]).filter((q) => q.parent_id === review.id)).toEqual([]);
   } finally {
     await client.close();
   }

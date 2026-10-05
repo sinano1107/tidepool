@@ -187,8 +187,18 @@ export interface RoutingRowProposal {
   pin: ExecutionSettingRow;
 }
 
-/** routing の提案(ADR 0150 決定1): 表の1行、または学習器の昇格 / 降格。昇格 / 降格の pin はフラグの現在値。 */
-export type RoutingProposal = RoutingRowProposal | { kind: "routing"; op: "promote" | "demote"; pin: { promoted: boolean } };
+/** 段の説明の書き換えの提案(ADR 0200 決定7)。根拠は床を task の申告が決めた worker_spawned の event id、pin = 説明のいまの文面。 */
+export interface TierDescriptionProposal {
+  kind: "routing";
+  op: "tier_description";
+  tier: Tier;
+  description: string;
+  evidence: number[];
+  pin: { description: string };
+}
+
+/** routing の提案(ADR 0150 決定1): 表の1行、学習器の昇格 / 降格、または段の説明。昇格 / 降格の pin はフラグの現在値。 */
+export type RoutingProposal = RoutingRowProposal | TierDescriptionProposal | { kind: "routing"; op: "promote" | "demote"; pin: { promoted: boolean } };
 
 /** agent の既定 tier を1段下げる提案(issue #920 / ADR 0150 決定1・5)。承認は registry へ commit する。pin = agent の tier の
  *  現在値と、根拠(`worker_spawned` の event id)の episode が走った表の行。 */
@@ -201,8 +211,8 @@ export interface RegistryProposal {
   evidence: number[];
 }
 
-/** 提案の approve に添える修正値(ADR 0150 決定2・ADR 0152 決定2): 行の提案は tier / effort、tier の提案は下げ先、memory は文言と宛先。 */
-export type ProposalAmendment = RoutingRowChange | { to: Tier } | MemoryAmendment;
+/** 提案の approve に添える修正値(ADR 0150 決定2・ADR 0152 決定2): 行の提案は tier / effort、tier の提案は下げ先、段の説明の提案は文面、memory は文言と宛先。 */
+export type ProposalAmendment = RoutingRowChange | { to: Tier } | { description: string } | MemoryAmendment;
 
 interface PendingChildSpec extends TaskContent {
   review_by?: string[];

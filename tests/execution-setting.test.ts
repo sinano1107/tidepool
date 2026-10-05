@@ -36,7 +36,7 @@ import { registerQuarantine, tableRowValue } from "../src/quarantine.js";
 import { assertValidAgentDefinition, PROVIDER_VALUES, type Provider } from "../src/registry.js";
 import { RegistryPushFailedError } from "../src/registry-write.js";
 import { proposeRoutingChange } from "../src/routing-review.js";
-import { cancelTaskDirectly, DomainError, getTask, type RegistryProposal, registerTask } from "../src/tasks.js";
+import { cancelTaskDirectly, DomainError, getTask, type RegistryProposal, registerTask, type TierDescriptionProposal } from "../src/tasks.js";
 import { unusedLanding } from "./fakes.js";
 import { HUMAN_WEBUI } from "./harness.js";
 
@@ -400,18 +400,18 @@ const opusRow = { provider: "anthropic", tier: "standard", model: "claude-opus-5
 const rowProposal = { kind: "routing", op: "row", row: { provider: "anthropic", model: "claude-opus-5-5", effort: "high" }, change: { tier: "frontier" }, pin: opusRow } as const;
 
 it("pin の照合は鍵 (provider, model, effort) で引いた行の全欄の一致で、崩れた欄の名前を返す —— 行が消えていれば(effort の書き換えも)null", () => {
-  expect(routingPinChanges(rowProposal, { table: SEED_EXECUTION_SETTINGS, learnerPromoted: false })).toEqual([]);
+  expect(routingPinChanges(rowProposal, { table: SEED_EXECUTION_SETTINGS, learnerPromoted: false, tiers: SEED_TIERS })).toEqual([]);
   const edit = (change: object) => SEED_EXECUTION_SETTINGS.map((row) => (row.model === "claude-opus-5-5" ? { ...row, ...change } : row));
-  expect(routingPinChanges(rowProposal, { table: edit({ tier: "frontier", price_out: 30 }), learnerPromoted: false })).toEqual(["tier", "price_out"]);
-  expect(routingPinChanges(rowProposal, { table: edit({ effort: "max" }), learnerPromoted: false })).toBeNull();
+  expect(routingPinChanges(rowProposal, { table: edit({ tier: "frontier", price_out: 30 }), learnerPromoted: false, tiers: SEED_TIERS })).toEqual(["tier", "price_out"]);
+  expect(routingPinChanges(rowProposal, { table: edit({ effort: "max" }), learnerPromoted: false, tiers: SEED_TIERS })).toBeNull();
   // 別の行の編集は pin に触れない
   const other = SEED_EXECUTION_SETTINGS.map((row) => (row.model === "claude-sonnet-5-5" ? { ...row, tier: "standard" as const } : row));
-  expect(routingPinChanges(rowProposal, { table: other, learnerPromoted: false })).toEqual([]);
-  expect(routingPinChanges(rowProposal, { table: SEED_EXECUTION_SETTINGS.filter((row) => row.model !== "claude-opus-5-5"), learnerPromoted: false })).toBeNull();
+  expect(routingPinChanges(rowProposal, { table: other, learnerPromoted: false, tiers: SEED_TIERS })).toEqual([]);
+  expect(routingPinChanges(rowProposal, { table: SEED_EXECUTION_SETTINGS.filter((row) => row.model !== "claude-opus-5-5"), learnerPromoted: false, tiers: SEED_TIERS })).toBeNull();
 });
 
 it("昇格 / 降格の提案の pin はフラグの現在値 —— フラグが変われば learner_promoted が崩れ、表の編集では崩れない", () => {
-  const settings = (learnerPromoted: boolean, t: ExecutionSettingTable = SEED_EXECUTION_SETTINGS) => ({ table: t, learnerPromoted });
+  const settings = (learnerPromoted: boolean, t: ExecutionSettingTable = SEED_EXECUTION_SETTINGS) => ({ table: t, learnerPromoted, tiers: SEED_TIERS });
   const promote = { kind: "routing", op: "promote", pin: { promoted: false } } as const;
   const demote = { kind: "routing", op: "demote", pin: { promoted: true } } as const;
   expect(routingPinChanges(promote, settings(false, []))).toEqual([]);
@@ -433,6 +433,19 @@ it("行の変更・修正値の形は tier / effort の少なくとも1つだけ
   }
 });
 
+/** 段の説明の書き換えの提案(ADR 0200 決定7): pin は説明のいまの文面。 */
+it("段の説明の提案の pin は名前で引いた生きている段の説明 —— 文面が変われば description、段が無ければ null、別の段・位置・表の編集では崩れない", () => {
+  const proposal: TierDescriptionProposal = { kind: "routing", op: "tier_description", tier: "standard", description: "new", evidence: [7], pin: { description: SEED_TIERS[1]!.description } };
+  const settings = (tiers: readonly { name: string; description: string }[], t: ExecutionSettingTable = SEED_EXECUTION_SETTINGS) => ({ table: t, learnerPromoted: false, tiers });
+  const edit = (name: string, change: object) => SEED_TIERS.map((tier) => (tier.name === name ? { ...tier, ...change } : tier));
+  expect(routingPinChanges(proposal, settings(SEED_TIERS))).toEqual([]);
+  expect(routingPinChanges(proposal, settings(edit("standard", { description: "edited" })))).toEqual(["description"]);
+  expect(routingPinChanges(proposal, settings(SEED_TIERS.filter((tier) => tier.name !== "standard")))).toBeNull();
+  expect(routingPinChanges(proposal, settings(edit("economy", { description: "edited" })))).toEqual([]);
+  expect(routingPinChanges(proposal, settings([...SEED_TIERS].reverse()))).toEqual([]);
+  expect(routingPinChanges(proposal, settings(SEED_TIERS, SEED_EXECUTION_SETTINGS.filter((row) => row.tier !== "standard")))).toEqual([]);
+});
+
 /** agent の既定 tier の提案(issue #920 / ADR 0150 決定1・5): pin は (agent, tier) と根拠の episode が走った行。 */
 const tierProposal: RegistryProposal = {
   kind: "registry",
@@ -452,7 +465,7 @@ it("下げ先の検査は、対象ティアに agent の entry のいずれか�
 });
 
 it("registry の提案の pin: 根拠の行は (provider, model) の tier / effort で照合し、agent は tier の値で照合する", () => {
-  const settings = (t: ExecutionSettingTable) => ({ table: t, learnerPromoted: false });
+  const settings = (t: ExecutionSettingTable) => ({ table: t, learnerPromoted: false, tiers: SEED_TIERS });
   expect(routingPinChanges(tierProposal, settings(SEED_EXECUTION_SETTINGS))).toEqual([]);
   // 根拠の行の effort が変わる・行が消える → rows が崩れる。価格や別の行の編集では崩れない
   const edit = (model: string, change: object) => SEED_EXECUTION_SETTINGS.map((row) => (row.model === model ? { ...row, ...change } : row));

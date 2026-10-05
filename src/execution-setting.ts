@@ -127,7 +127,7 @@ function assertTierName(db: Db, name: string): void {
 }
 
 /** 段の説明の線(ADR 0200 決定3): 必須の1行。 */
-function assertTierDescription(description: string): void {
+export function assertTierDescription(description: string): void {
   if (description.trim() === "" || /[\r\n]/.test(description)) throw new DomainError("a tier's description is one non-empty line");
 }
 
@@ -447,19 +447,17 @@ interface ExecutionDefaults {
 
 /** settings タブ / 管理MCP の読み口(ADR 0110 決定5): 表と盤面設定4値を1往復で。
  *  表は (provider, model, effort) 順 —— 主キーの順で、UI も MCP も同じ並びを見る。 */
-export function readExecutionSettings(db: Db): ExecutionDefaults & { table: ExecutionSettingTable } {
-  return { table: loadExecutionSettingTable(db), ...loadExecutionDefaults(db) };
+export function readExecutionSettings(db: Db): ExecutionDefaults & { table: ExecutionSettingTable; tiers: ReturnType<typeof readTiers> } {
+  return { table: loadExecutionSettingTable(db), tiers: readTiers(db), ...loadExecutionDefaults(db) };
 }
 
 /** 人間の2つの扉(settings タブ・管理MCP)の読み口: 各行に、開いている行の Quarantine の question id(無ければ null)を
- *  添え(ADR 0184 決定6)、段の一覧を説明つきで順序どおりに載せる(ADR 0200 決定3)。meta-review の材料と worker の読み口は
- *  `readExecutionSettings` のまま。 */
+ *  添える(ADR 0184 決定6)。meta-review の材料と worker の読み口は `readExecutionSettings` のまま。 */
 export function readExecutionSettingsWithQuarantine(db: Db) {
   const settings = readExecutionSettings(db);
   const open = openQuarantineQuestions(db, "tableRow");
   return {
     ...settings,
-    tiers: readTiers(db),
     table: settings.table.map((row) => ({
       ...row,
       quarantine_question_id: open.get(tableRowValue(row.provider, row.model)) ?? null,
@@ -565,16 +563,21 @@ export function parseRoutingRowChange(tiers: readonly Tier[], input: unknown): R
 
 /** pin の照合(ADR 0150 決定1): 提案が焼いた行と表の現在の行を全欄で比べ、崩れた欄の名前を返す(空 = pin は生きている)。
  *  行は鍵 (provider, model, effort) で引き、消えていれば(effort の書き換えも含む)null。昇格 / 降格の提案の pin はフラグの現在値。
- *  tier の提案は根拠の行を全欄で比べる(消えた行も `rows` —— agent の側の pin は表からは見えないので `registryPinChanges` が言う)。 */
+ *  tier の提案は根拠の行を全欄で比べる(消えた行も `rows` —— agent の側の pin は表からは見えないので `registryPinChanges` が言う)。
+ *  段の説明の提案は名前で引いた生きている段の説明を比べ、段が消えていれば null(ADR 0200 決定7)。 */
 export function routingPinChanges(
   proposal: RoutingProposal | RegistryProposal,
-  settings: { table: ExecutionSettingTable; learnerPromoted: boolean },
-): Array<"tier" | "price_in" | "price_out" | "learner_promoted" | "rows"> | null {
+  settings: { table: ExecutionSettingTable; learnerPromoted: boolean; tiers: readonly { name: Tier; description: string }[] },
+): Array<"tier" | "price_in" | "price_out" | "learner_promoted" | "rows" | "description"> | null {
   if (proposal.kind === "registry") {
     const held = proposal.pin.rows.every((pinned) =>
       settings.table.some((row) => matchesRowKey(row, pinned) && row.tier === pinned.tier),
     );
     return held ? [] : ["rows"];
+  }
+  if (proposal.op === "tier_description") {
+    const tier = settings.tiers.find((t) => t.name === proposal.tier);
+    return tier ? (tier.description === proposal.pin.description ? [] : ["description"]) : null;
   }
   if (proposal.op !== "row") return proposal.pin.promoted === settings.learnerPromoted ? [] : ["learner_promoted"];
   const { pin } = proposal;
@@ -606,6 +609,14 @@ export function parseAgentTierAmendment(tiers: readonly Tier[], proposal: Regist
     throw new DomainError(`an agent tier amendment takes only to, a tier below ${proposal.pin.tier}`);
   }
   return parsed.data.to;
+}
+
+/** 段の説明の提案の修正値の検査(ADR 0200 決定7): `description` だけで、段の説明の線に収まる文面。 */
+export function parseTierDescriptionAmendment(amendment: unknown): string {
+  const parsed = z.object({ description: z.string() }).strict().safeParse(amendment);
+  if (!parsed.success) throw new DomainError("a tier description amendment takes only description");
+  assertTierDescription(parsed.data.description);
+  return parsed.data.description;
 }
 
 /** 変更を書き、操作イベントとして経路つきで残す(CONTEXT.md「管理MCP」)。task を

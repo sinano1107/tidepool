@@ -2,13 +2,16 @@ import { type AgentView, agentViewProviders } from "./agent-create.js";
 import type { Db } from "./db.js";
 import { type EventPayload, getEvent, listEventsOfKinds } from "./events.js";
 import {
+  assertKnownTier,
   assertRowFits,
+  assertTierDescription,
   boardDefaultTier,
   composeRoutingRow,
   loadExecutionSettingTable,
   matchesRowKey,
   parseRoutingRowChange,
   readExecutionSettings,
+  readTiers,
   rowName,
   type Tier,
   tierHasRowFor,
@@ -18,7 +21,7 @@ import {
 import { type Cell, cellJson, loadEpisodes, type RoutingEpisode, type TrackRecord } from "./learner.js";
 import { inWindow, type MetaReviewWindow, materialSection, previousMetaReviewWatermark } from "./meta-review.js";
 import { type Packed, packItems, readPosition } from "./response-budget.js";
-import { DomainError, type RegistryProposal, type RoutingProposal, registerTask } from "./tasks.js";
+import { DomainError, type RegistryProposal, type RoutingProposal, registerTask, type TierDescriptionProposal } from "./tasks.js";
 
 /** 主題 routing の meta-review の読み口(issue #917 / spec #916 C)。どれも既定の `since_watermark` は読み手と同主題の
  *  前回の登録の watermark(event id)で、応答予算と続き(next)で返す(ADR 0195)。 */
@@ -92,33 +95,47 @@ function shadowRows(db: Db, { after, upTo = Number.MAX_SAFE_INTEGER }: MetaRevie
   });
 }
 
-/** 配分評価の分布: 注釈を worker session の (`source.tier`, agent, allocation, cause) で数え、judge の model が
- *  worker のセルの model と同じだった件数を添える(ADR 0150 決定8)。 */
+/** 配分評価の分布: 注釈を worker session の (`source.tier`, 段, agent, allocation, cause) で数え、judge の model が
+ *  worker のセルの model と同じだった件数を添える(ADR 0150 決定8)。段は出所が `task` の session だけに付き、その task が
+ *  要求した段(worker_spawned は解決した段を持たない —— ADR 0200 決定7)。段は id で割り、消した段には `tier_retired` が付く。 */
 export function listAllocations(db: Db, readerTaskId: string, input: ReadWindow & { next?: string }) {
   const read = readPosition<ReadWindow>("list_allocations", input);
-  const { groups } = allocationRows(db, { after: since(db, readerTaskId, read.args) });
-  // 境目の鍵は数える単位そのもの(tier の出所・agent・allocation・cause)
-  const keyOf = (g: (typeof groups)[number]) => JSON.stringify([g.source_tier, g.agent, g.allocation, g.cause]);
-  return packItems(read, "allocations", groups, {}, { keyOf }) as Packed<{ allocations: typeof groups }>;
+  const { groups, keys } = allocationRows(db, { after: since(db, readerTaskId, read.args) });
+  // 境目の鍵は数える単位そのもの(tier の出所・段の id・agent・allocation・cause)
+  return packItems(read, "allocations", groups, {}, { keyOf: (_, i) => keys[i]! }) as Packed<{ allocations: typeof groups }>;
 }
 
-/** list_allocations の行(ページ割り前)と、数えた allocation_reviewed の event id。 */
+/** list_allocations の行(ページ割り前)とその鍵と、数えた allocation_reviewed の event id。 */
 function allocationRows(db: Db, window: MetaReviewWindow) {
   const episodes = new Map(loadEpisodes(db).map((e) => [e.worker_spawned_event_id, e]));
+  const requested = db.prepare("SELECT tiers.id, tiers.name, tiers.position IS NULL AS retired FROM tasks JOIN tiers ON tiers.id = tasks.tier_id WHERE tasks.id = ?");
   const counted: number[] = [];
-  const groups = new Map<string, { source_tier: string; agent: string; allocation: string; cause: string; count: number; judged_by_same_model: number }>();
+  const groups = new Map<
+    string,
+    { source_tier: string; tier: Tier | null; tier_retired?: true; agent: string; allocation: string; cause: string; count: number; judged_by_same_model: number }
+  >();
   for (const { id, payload: p } of listEventsOfKinds(db, ["allocation_reviewed"], window)) {
     const episode = episodes.get(p.worker_spawned_event_id);
     if (!episode) continue;
     counted.push(id);
-    const key = JSON.stringify([episode.source.tier, episode.agent, p.allocation, p.cause]);
-    const group = groups.get(key) ?? { source_tier: episode.source.tier, agent: episode.agent, allocation: p.allocation, cause: p.cause, count: 0, judged_by_same_model: 0 };
+    const tier = episode.source.tier === "task" ? (requested.get(episode.task_id) as { id: number; name: Tier; retired: number } | undefined) : undefined;
+    const key = JSON.stringify([episode.source.tier, tier?.id ?? null, episode.agent, p.allocation, p.cause]);
+    const group = groups.get(key) ?? {
+      source_tier: episode.source.tier,
+      tier: tier?.name ?? null,
+      ...(tier?.retired ? { tier_retired: true as const } : {}),
+      agent: episode.agent,
+      allocation: p.allocation,
+      cause: p.cause,
+      count: 0,
+      judged_by_same_model: 0,
+    };
     group.count += 1;
     // judge は表の行の綴り、セルは pin の綴り —— 学習器が行に当てるのと同じ完全一致(ADR 0182 決定3)
     if (p.judge.provider === episode.cell.provider && p.judge.model === episode.cell.model) group.judged_by_same_model += 1;
     groups.set(key, group);
   }
-  return { groups: [...groups.values()], counted };
+  return { groups: [...groups.values()], keys: [...groups.keys()], counted };
 }
 
 /** 新しいセルと人間が変えた行: 観測(worker_exited)で初めて現れたのが watermark より後のセルと、watermark より後に
@@ -265,9 +282,31 @@ function agentTierProposal(db: Db, agents: readonly AgentView[], input: { agent?
   return { kind: "registry", op: "agent_tier", agent: name, to, pin: { tier: from, rows: [...rows.values()] }, evidence };
 }
 
-/** 提案 verb(issue #918 / #919 / #920 / ADR 0150 決定1・2・4・5): 表の既存の1行の tier / effort の置換(op row)、学習器の
- *  昇格 / 降格、または agent の既定 tier の1段引き下げ(op agent_tier)を、meta-review の付帯子の question として立てる。pin は
- *  row ならその行の全欄、昇格 / 降格ならフラグの現在値、agent_tier なら (agent, tier) と根拠の行。
+/** 段の説明の提案の門と pin(ADR 0200 決定7): 生きている段の説明を1行の新しい文面へ。根拠は、床を task の申告が決めて
+ *  (`source.tier` が task)その task がこの段を要求した worker_spawned だけで、書き手が人間の task も数える。pin は説明のいまの文面。 */
+function tierDescriptionProposal(db: Db, input: { tier?: string; description?: string; evidence?: number[] }): TierDescriptionProposal {
+  const { tier, description, evidence } = input;
+  if (!tier || description === undefined || !evidence?.length) {
+    throw new DomainError("op tier_description names the tier, its new description and at least one evidence worker_spawned event id");
+  }
+  assertKnownTier(db, "tier", tier);
+  assertTierDescription(description);
+  const current = readTiers(db).find((t) => t.name === tier)!.description;
+  if (description === current) throw new DomainError(`tier ${tier}'s description already reads: ${current}`);
+  const requested = db.prepare("SELECT 1 FROM tasks JOIN tiers ON tiers.id = tasks.tier_id WHERE tasks.id = ? AND tiers.name = ? AND tiers.position IS NOT NULL");
+  for (const id of evidence) {
+    const event = getEvent(db, id);
+    if (event?.payload.kind !== "worker_spawned") throw new DomainError(`evidence ${id} is not a worker_spawned event`);
+    if (event.payload.source.tier !== "task") throw new DomainError(`evidence ${id} took its tier from ${event.payload.source.tier}, not from its task's request`);
+    if (!requested.get(event.task_id, tier)) throw new DomainError(`evidence ${id} is a session of a task that did not request ${tier}`);
+  }
+  return { kind: "routing", op: "tier_description", tier, description, evidence, pin: { description: current } };
+}
+
+/** 提案 verb(issue #918 / #919 / #920 / ADR 0150 決定1・2・4・5 / ADR 0200 決定7): 表の既存の1行の tier / effort の置換(op row)、学習器の
+ *  昇格 / 降格、agent の既定 tier の1段引き下げ(op agent_tier)、または段の説明の書き換え(op tier_description)を、meta-review の付帯子の
+ *  question として立てる。pin は row ならその行の全欄、昇格 / 降格ならフラグの現在値、agent_tier なら (agent, tier) と根拠の行、
+ *  tier_description なら説明のいまの文面。
  *  同じ行への提案は重ねてよい —— 片方の承認が表を変えれば、もう片方は陳腐化の hook で決着する。
  *  `agents` は registry の agent 一覧(registry の無い盤面では無く、agent_tier は断る)。 */
 export function proposeRoutingChange(
@@ -280,6 +319,8 @@ export function proposeRoutingChange(
     agent?: string;
     to?: Tier;
     evidence?: number[];
+    tier?: Tier;
+    description?: string;
     rationale: string;
   },
   workerId: string,
@@ -290,10 +331,23 @@ export function proposeRoutingChange(
   let title: string;
   let diff: string[];
   let purpose: string;
-  if (input.op !== "agent_tier" && (input.agent !== undefined || input.to !== undefined || input.evidence !== undefined)) {
-    throw new DomainError(`op ${input.op} takes no agent, to or evidence`);
-  }
-  if (input.op === "agent_tier") {
+  if (input.op !== "agent_tier" && (input.agent !== undefined || input.to !== undefined)) throw new DomainError(`op ${input.op} takes no agent and no to`);
+  if (input.op !== "agent_tier" && input.op !== "tier_description" && input.evidence !== undefined) throw new DomainError(`op ${input.op} takes no evidence`);
+  if (input.op !== "tier_description" && (input.tier !== undefined || input.description !== undefined)) throw new DomainError(`op ${input.op} takes no tier or description`);
+  if (input.op === "tier_description") {
+    if (input.row !== undefined || input.change !== undefined) throw new DomainError("op tier_description takes no row and no change");
+    proposal = tierDescriptionProposal(db, input);
+    title = `Rewrite tier ${proposal.tier}'s description`;
+    diff = [
+      `Tier ${proposal.tier}, description:`,
+      `current: ${proposal.pin.description}`,
+      `proposed: ${proposal.description}`,
+      `Evidence: ${proposal.evidence.length} worker session(s) whose floor the task's requested tier set`,
+    ];
+    purpose =
+      "The routing meta-review proposes rewriting one tier's description, which defines the tier for everyone who requests it. " +
+      "Approve writes the new description, with your amendment (one line) if you give one; reject leaves the description as it is.";
+  } else if (input.op === "agent_tier") {
     if (input.row !== undefined || input.change !== undefined) throw new DomainError("op agent_tier takes no row and no change");
     if (!agents) throw new DomainError("this board has no registry, so there is no agent definition to change");
     proposal = agentTierProposal(db, agents(), input);

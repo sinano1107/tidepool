@@ -164,9 +164,9 @@ it("配分評価の分布は窓の中の注釈だけを list_allocations の行�
 
   const { parts, section } = routingMaterialOf(db, review);
 
-  expect(parts.allocations.groups).toEqual([{ source_tier: "agent", agent: "reef-crab", allocation: "overpowered", cause: "uncertain", count: 1, judged_by_same_model: 0 }]);
+  expect(parts.allocations.groups).toEqual([{ source_tier: "agent", tier: null, agent: "reef-crab", allocation: "overpowered", cause: "uncertain", count: 1, judged_by_same_model: 0 }]);
   expect(parts.allocations.counted).toEqual([counted]);
-  expect(section).toContain('{"source_tier":"agent","agent":"reef-crab","allocation":"overpowered","cause":"uncertain","count":1,"judged_by_same_model":0}');
+  expect(section).toContain('{"source_tier":"agent","tier":null,"agent":"reef-crab","allocation":"overpowered","cause":"uncertain","count":1,"judged_by_same_model":0}');
 });
 
 it("新しいセルは初観測が窓の中のものだけ、人間が変えた行は窓の中の直接編集だけで、提案への approve の適用は出ない", () => {
