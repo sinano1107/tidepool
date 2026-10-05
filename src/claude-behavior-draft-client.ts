@@ -2,6 +2,7 @@ import { z } from "zod";
 import { runOneShotJsonPrompt } from "./claude-draft-client.js";
 import type { ExecFn } from "./claude-worker.js";
 import type { ExecutionSettingRow } from "./execution-setting.js";
+import { TIER_DEFINITION_RULE } from "./meta-review.js";
 import type { BehaviorDraft, BehaviorDraftClient, BehaviorDraftInput } from "./retrospective.js";
 
 // mirrors BehaviorDraft: the model's reply is untrusted input and lands in the memory store
@@ -26,7 +27,8 @@ function buildPrompt(input: BehaviorDraftInput): string {
     "under an existing branch of the index when one fits), " +
     '"title" (string — a short name for the rule), "text" (string — the rule itself, in English, ' +
     'stated so it stays true wherever it applies), and "addressee" ("worker" when the rule is for the ' +
-    'worker who wrote the entry, "all" when every agent should follow it). The index is the ' +
+    'worker who wrote the entry, "all" when every agent should follow it). ' +
+    `${TIER_DEFINITION_RULE} The index is the ` +
     "workspace's memory branches with their definitions (null when the store is empty).\n\n" +
     `Input:\n${JSON.stringify(input, null, 2)}`
   );

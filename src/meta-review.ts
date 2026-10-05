@@ -38,6 +38,10 @@ export const PROMOTION_RULE =
   "retire it with invalidate_memory reason rejected when it will become neither; leave it unpromoted while more material could still " +
   "change the judgment — there is no threshold or deadline.";
 
+/** 段の定義の置き場(ADR 0200 決定7): Behavior の起草側(RCA の propose_from_objection・Board call)と memory meta-review が同じ文を載せる。 */
+export const TIER_DEFINITION_RULE =
+  "A tier's definition is not a Behavior: it belongs in the tier's description. A habit of declaring tiers specific to one workspace or writer may be a Behavior.";
+
 /** 周期 meta-review の主題(ADR 0120 決定2・ADR 0150 決定7): 登録する task の欄(文面と review のティア)、due 判定が数える
  *  材料の event 種別、接続で worker の memory verb を置き換える専用 verb。 */
 export const META_REVIEW_SUBJECTS = {
@@ -61,6 +65,8 @@ export const META_REVIEW_SUBJECTS = {
         "When two or more workspaces define the same path, read the definitions: fold them into one whole-board definition when they mean the same " +
         "(define_memory with scope null and supersedes), and rename one branch when they do not (move_memory_branch). " +
         PROMOTION_RULE +
+        " " +
+        TIER_DEFINITION_RULE +
         " Changes to approved Behaviors and Exemplars go through the proposal verb: consolidate redundant ones into the one you keep (propose_memory_change's successor_id), " +
         "into a new candidate when they share a source, or into an existing candidate (candidate_id). Apply fixes to Knowledge and Definitions directly, and retire or fold a candidate directly " +
         "(fold_memory's successor_id folds it into an approved Behavior or Exemplar). " +
@@ -97,7 +103,8 @@ export const META_REVIEW_SUBJECTS = {
         "A diverged row is a pickup whose recommended and actual cells differ, with how that episode ended; the section counts every " +
         "shadow row of the window but lists only the diverged ones — read the matched rows, and anything before the previous meta-review, " +
         "with list_routing_shadow, list_allocations and list_routing_cells (since_watermark). The allocation reviews are split by tier " +
-        "source and agent (an overpowered verdict under an agent's default tier is not a registrant's declaration), and " +
+        "source and agent (an overpowered verdict under an agent's default tier is not a registrant's declaration), those under tier source task " +
+        "also by the tier the task requested, and " +
         "judged_by_same_model counts those whose judge ran on the worker's own model. Record each judgment with log_decision. " +
         "When the evidence says a row's tier or effort is wrong, propose replacing it with propose_routing_change. " +
         "When rows in the same tier split in their results and no existing tier fits the split, propose adding a tier and moving one " +
@@ -108,8 +115,9 @@ export const META_REVIEW_SUBJECTS = {
         "is the result of the setting the table chose, not of the one the learner recommended. Base any case for promoting the learner " +
         "on whether the recommended cells' track records, counts included, justify leaving the table. Of the section's shadow rows, " +
         "a pickup with one candidate always matches the table, so do not count it as evidence of agreement. When overpowered verdicts pile up under an " +
-        "agent's own tier, propose lowering that agent's tier by exactly one step, never more. The section holds only the proposals " +
-        "settled since the previous meta-review: before you propose a change to a row, the learner flag or an agent's tier, read the " +
+        "agent's own tier, propose lowering that agent's tier by exactly one step, never more. When verdicts under tier source task show a " +
+        "tier's description draws the wrong work across workspaces and writers, propose rewriting that description; a habit of one workspace or writer is a Behavior, not the tier's definition. The section holds only the proposals " +
+        "settled since the previous meta-review: before you propose a change to a row, the learner flag, an agent's tier or a tier's description, read the " +
         "earlier proposals on it, with their answers, amendments and comments, with read_routing_settings. Do not re-propose what was " +
         "amended. A rejected proposal always carries the human's reason in its comment: propose it again only when that reason no longer holds.",
       completion_criteria:

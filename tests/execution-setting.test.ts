@@ -37,7 +37,7 @@ import { registerQuarantine, tableRowValue } from "../src/quarantine.js";
 import { assertValidAgentDefinition, PROVIDER_VALUES, type Provider } from "../src/registry.js";
 import { RegistryPushFailedError } from "../src/registry-write.js";
 import { proposeRoutingChange } from "../src/routing-review.js";
-import { cancelTaskDirectly, DomainError, getTask, type RegistryProposal, type RoutingProposal, registerTask } from "../src/tasks.js";
+import { cancelTaskDirectly, DomainError, getTask, type RegistryProposal, type RoutingProposal, registerTask, type TierDescriptionProposal } from "../src/tasks.js";
 import { unusedLanding } from "./fakes.js";
 import { HUMAN_WEBUI } from "./harness.js";
 
@@ -432,6 +432,19 @@ it("行の変更・修正値の形は tier / effort の少なくとも1つだけ
   for (const bad of [{}, { tier: "ultra" }, { effort: "" }, { tier: "economy", price_in: 1 }, "frontier", null]) {
     expect(() => parseRoutingRowChange(tiers, bad)).toThrow(DomainError);
   }
+});
+
+/** 段の説明の書き換えの提案(ADR 0200 決定7): pin は説明のいまの文面。 */
+it("段の説明の提案の pin は名前で引いた生きている段の説明 —— 文面が変われば description、段が無ければ null、別の段・位置・表の編集では崩れない", () => {
+  const proposal: TierDescriptionProposal = { kind: "routing", op: "tier_description", tier: "standard", description: "new", evidence: [7], pin: { description: SEED_TIERS[1]!.description } };
+  const settings = (tiers: readonly { name: string; description: string }[], t: ExecutionSettingTable = SEED_EXECUTION_SETTINGS) => ({ table: t, learnerPromoted: false, tiers });
+  const edit = (name: string, change: object) => SEED_TIERS.map((tier) => (tier.name === name ? { ...tier, ...change } : tier));
+  expect(routingPinChanges(proposal, settings(SEED_TIERS))).toEqual([]);
+  expect(routingPinChanges(proposal, settings(edit("standard", { description: "edited" })))).toEqual(["description"]);
+  expect(routingPinChanges(proposal, settings(SEED_TIERS.filter((tier) => tier.name !== "standard")))).toBeNull();
+  expect(routingPinChanges(proposal, settings(edit("economy", { description: "edited" })))).toEqual([]);
+  expect(routingPinChanges(proposal, settings([...SEED_TIERS].reverse()))).toEqual([]);
+  expect(routingPinChanges(proposal, settings(SEED_TIERS, SEED_EXECUTION_SETTINGS.filter((row) => row.tier !== "standard")))).toEqual([]);
 });
 
 /** agent の既定 tier の提案(issue #920 / ADR 0150 決定1・5): pin は (agent, tier) と根拠の episode が走った行。 */

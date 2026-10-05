@@ -4,7 +4,7 @@ import { z } from "zod";
 import type { AgentAdmin } from "./agent-create.js";
 import type { Clock } from "./clock.js";
 import type { Db } from "./db.js";
-import { newTierSchema, PRIORITY_FIELD_DESCRIPTION, tierFieldDescriptions } from "./execution-setting.js";
+import { PRIORITY_FIELD_DESCRIPTION, tierFieldDescriptions } from "./execution-setting.js";
 import type { GitHubClient } from "./github.js";
 import type { GitHubAuth } from "./github-auth.js";
 import { assertMemoryReferencesKnown, assertReviewerKnown, assertWorkspaceKnown } from "./human-verbs.js";
@@ -33,7 +33,7 @@ import {
   searchMemory,
   searchMemoryEntries,
 } from "./memory.js";
-import { type MetaReviewSubject, metaReviewSubjectOf, PROMOTION_RULE } from "./meta-review.js";
+import { type MetaReviewSubject, metaReviewSubjectOf, PROMOTION_RULE, TIER_DEFINITION_RULE } from "./meta-review.js";
 import type { ProcessContainers } from "./process-container.js";
 import { type AuthorityProfile, REVIEWER_AUTHORITY_PROFILE, type RosterAgent } from "./registry.js";
 import { nextDescription, packItems, readPosition } from "./response-budget.js";
@@ -726,7 +726,7 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
         "Review only: turn your finding about an objected entry into memory — only the objected entries your review was opened on (its material). The board derives the entry kind and addressee from the cause attributed to those objections, " +
         "except for a missing_information cause, where you pass as (behavior or knowledge) and must not otherwise. " +
         "With as knowledge, pass based_on_decision (the event id log_decision returned for your reasoning), and not otherwise; it becomes the knowledge entry's source, an inference. " +
-        "A behavior is a candidate a human approves later. path is a \"/\"-separated hierarchy (e.g. build/tests). " +
+        `A behavior is a candidate a human approves later. ${TIER_DEFINITION_RULE} path is a "/"-separated hierarchy (e.g. build/tests). ` +
         BOARD_WRITE_LANGUAGE_RULE,
       inputSchema: {
         entry_id: z.number().int(),
@@ -891,8 +891,9 @@ function registerRoutingMetaReviewVerbs(server: McpServer, deps: McpDeps, run: M
     "list_allocations",
     {
       description:
-        "List the allocation-review distribution: evaluated annotations counted by the session's tier source, agent, " +
-        "allocation and cause, with judged_by_same_model counting those whose judge ran on the worker's own model. " +
+        "List the allocation-review distribution: evaluated annotations counted by the session's tier source, tier, agent, " +
+        "allocation and cause, with judged_by_same_model counting those whose judge ran on the worker's own model. tier is the tier " +
+        "the task requested when the tier source is task, null otherwise; tier_retired marks a deleted tier, counted apart from a live tier of the same name. " +
         "Unevaluated annotations are not counted. " +
         nextDescription("list_allocations", "allocations"),
       inputSchema: { since_watermark, next },
@@ -916,10 +917,10 @@ function registerRoutingMetaReviewVerbs(server: McpServer, deps: McpDeps, run: M
     "read_routing_settings",
     {
       description:
-        "Read the current execution-setting table, whether a model ranked above main may serve as advisor, the provider rank, the default priority and " +
+        "Read the current execution-setting table, the board's tiers with their descriptions in order, whether a model ranked above main may serve as advisor, the provider rank, the default priority and " +
         "whether the learner is promoted, and every past routing proposal (agent tier proposals included) with its answer, the " +
-        "human's amendment and comment, or why the board settled it as observed (the pinned row, learner flag or agent tier " +
-        "changed, or the row is gone: deleted, or its effort changed). An applied agent tier proposal carries the registry commit it landed as applied. " +
+        "human's amendment and comment, or why the board settled it as observed (the pinned row, learner flag, agent tier or tier description " +
+        "changed, or what it pinned is gone: the row deleted or its effort changed, or the tier deleted). An applied agent tier proposal carries the registry commit it landed as applied. " +
         "Proposals come oldest first. " +
         nextDescription("read_routing_settings", "proposals", "The table and settings come"),
       inputSchema: { next },
@@ -939,21 +940,30 @@ function registerRoutingMetaReviewVerbs(server: McpServer, deps: McpDeps, run: M
         "agent's default tier by exactly one step (an agent with no tier runs at the board default tier): agent names it, " +
         "to is the tier one step below, and evidence lists the worker_spawned event ids of that agent's sessions your case rests " +
         "on; it is refused when the execution-setting table has no row at the target tier for any of the agent's providers. The " +
-        "human may amend to with any lower tier when approving, and approval commits the new tier to the registry. op add_tier adds a " +
-        "tier to the board's list at position (an index into the list, lowest first; 0 puts it at the bottom) and moves the row named by " +
-        "provider, model and effort into it, both at once; tier gives its name and its one-line description, and evidence lists the " +
-        "worker_spawned event ids your case rests on. The human may amend the tier's name, description and position when approving. rationale is your evidence summary " +
+        "human may amend to with any lower tier when approving, and approval commits the new tier to the registry. op tier_description rewrites " +
+        "the description of one of the board's tiers (tier) to description, one line: a tier's description defines it for everyone who requests it, " +
+        "so propose it when requests for that tier across workspaces or writers show its definition is off. evidence lists the worker_spawned event ids " +
+        "of sessions whose tier source is task on tasks that requested that tier (list_allocations, tier source task); the human may amend the " +
+        "description when approving. op add_tier adds a tier named tier, with description as its one-line description, to the board's list at " +
+        "position (an index into the list, lowest first; 0 puts it at the bottom) and moves the row named by provider, model and effort into " +
+        "it, both at once; evidence lists the worker_spawned event ids your case rests on, and the human may amend the tier's name, " +
+        "description and position when approving. rationale is your evidence summary " +
         "(episode count, tier source, period) and is shown with the diff. The board applies the answer itself, so you can complete " +
         "this task without waiting for it. Returns the question id. " +
         BOARD_WRITE_LANGUAGE_RULE,
       inputSchema: {
-        op: z.enum(["row", "promote", "demote", "agent_tier", "add_tier"]),
-        row: z.object({ provider: z.string(), model: z.string(), effort: z.string() }).optional().describe("op row and op add_tier only."),
-        tier: newTierSchema.optional().describe("op add_tier only: the new tier."),
+        op: z.enum(["row", "promote", "demote", "agent_tier", "tier_description", "add_tier"]),
+        row: z.object({ provider: z.string(), model: z.string(), effort: z.string() }).optional().describe("op row and add_tier only."),
         change: z.record(z.string(), z.unknown()).optional().describe("op row only: tier and/or effort, nothing else."),
         agent: z.string().optional().describe("op agent_tier only: the agent whose default tier to lower."),
         to: z.string().optional().describe("op agent_tier only: the tier one step below the agent's current tier."),
-        evidence: z.array(z.number().int()).optional().describe("op agent_tier and op add_tier only: worker_spawned event ids of the sessions your case rests on."),
+        evidence: z
+          .array(z.number().int())
+          .optional()
+          .describe("op agent_tier, tier_description and add_tier only: worker_spawned event ids of the sessions your case rests on."),
+        tier: z.string().optional().describe("op tier_description: the tier whose description to rewrite. op add_tier: the new tier's name."),
+        description: z.string().optional().describe("op tier_description and add_tier only: the tier's description, one line."),
+        position: z.number().int().nonnegative().optional().describe("op add_tier only: where the new tier goes, an index into the board's list (lowest first)."),
         rationale: z.string().min(1),
       },
     },

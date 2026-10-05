@@ -22,8 +22,10 @@ async function boardWithAddTierProposal() {
   await t.clock.advance(HOUR);
   const review = ((await api(t.baseUrl, "GET", "/api/tasks")).json as any[]).find((task) => task.meta_review_subject === "routing");
   const client = await mcpClient(t.mcpBaseUrl, review.id);
-  const call = async (args: Record<string, unknown>) => {
-    const result: any = await client.callTool({ name: "propose_routing_change", arguments: { op: "add_tier", rationale: "opus split 6 / 6 on standard work.", ...args } });
+  // 足す段は tool の平たい欄(tier = 名前、description、position)で渡す
+  const call = async ({ tier, ...args }: { tier?: { name: string; description: string; position: number } } & Record<string, unknown>) => {
+    const flat = tier && { tier: tier.name, description: tier.description, position: tier.position };
+    const result: any = await client.callTool({ name: "propose_routing_change", arguments: { op: "add_tier", rationale: "opus split 6 / 6 on standard work.", ...args, ...flat } });
     return result.isError ? { error: result.content[0].text } : JSON.parse(result.content[0].text);
   };
   return { review, client, call };
