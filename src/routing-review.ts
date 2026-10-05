@@ -255,7 +255,7 @@ function agentTierProposal(db: Db, agents: readonly AgentView[], input: { agent?
     if (spawned.source.tier !== "agent") throw new DomainError(`evidence ${id} took its tier from ${spawned.source.tier}, not from ${name}'s default tier`);
     const row = table.find((r) => isRow(r, spawned));
     if (!row) throw new DomainError(`evidence ${id} ran on ${spawned.provider} / ${spawned.model} at effort ${spawned.effort}, which is no longer in the execution-setting table`);
-    rows.set(`${row.provider}/${row.model}/${row.effort}`,{ provider: row.provider, model: row.model, tier: row.tier, effort: row.effort });
+    rows.set(`${row.provider}/${row.model}/${row.effort}`, { provider: row.provider, model: row.model, tier: row.tier, effort: row.effort });
   }
   // agent が tier を書いていれば from はその値(書いていなければ economy で、下げ先が無く上で断っている)
   return { kind: "registry", op: "agent_tier", agent: name, to, pin: { tier: from, rows: [...rows.values()] }, evidence };
