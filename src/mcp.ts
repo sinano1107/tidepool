@@ -917,8 +917,10 @@ function registerRoutingMetaReviewVerbs(server: McpServer, deps: McpDeps, run: M
     "read_routing_settings",
     {
       description:
-        "Read the current execution-setting table, the board's tiers with their descriptions in order, whether a model ranked above main may serve as advisor, the provider rank, the default priority and " +
-        "whether the learner is promoted, and every past routing proposal (agent tier proposals included) with its answer, the " +
+        "Read the current execution-setting table, the board's tiers with their descriptions in order, whether a model ranked above main may serve as advisor, the provider rank, the default priority, " +
+        "whether the learner is promoted, the board's default tier (`defaultTier` — the tier of tasks that request none and whose agent declares none, " +
+        "and of the board's drafts) and judgement tier (`judgementTier` — the tier the board's own judgement runs on: retrospective Board calls resolve " +
+        "on its anthropic row, and periodic meta-reviews request it), and every past routing proposal (agent tier proposals included) with its answer, the " +
         "human's amendment and comment, or why the board settled it as observed (the pinned row, learner flag, agent tier or tier description " +
         "changed, or what it pinned is gone: the row deleted or its effort changed, or the tier deleted). An applied agent tier proposal carries the registry commit it landed as applied. " +
         "Proposals come oldest first. " +
