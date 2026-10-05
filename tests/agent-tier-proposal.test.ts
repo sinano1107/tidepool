@@ -158,7 +158,7 @@ it("修正値 to で2段下げられ、推奨どおりに数えない —— 下
   try {
     const questionId = await proposeDeckhand(call);
     // openai の economy の行を消す(根拠の行ではないので提案は open のまま)
-    expect((await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "delete_row", provider: "openai", model: "gpt-5.6-terra" })).status).toBe(200);
+    expect((await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "delete_row", provider: "openai", model: "gpt-5.6-terra", effort: "high" })).status).toBe(200);
     expect((await answer(questionId, { answers: ["approve"], amendment: { to: "economy" } })).status).toBe(409);
     expect(await task(questionId)).toMatchObject({ status: "todo", question_answer: null });
     expect(changeTier).not.toHaveBeenCalled();
@@ -254,11 +254,11 @@ it("根拠の行の編集は tier の提案を観測で決着させ、無関係�
   try {
     const questionId = await proposeDeckhand(call);
     const opus = { provider: "anthropic", tier: "standard", model: "claude-opus-5-5", effort: "max", price_in: 5, price_out: 25 };
-    expect((await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "row", row: opus })).status).toBe(200);
+    expect((await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "row", key: { ...opus, effort: "high" }, row: opus })).status).toBe(200);
     expect(await task(questionId)).toMatchObject({ status: "todo" });
 
     const astra = { provider: "openai", tier: "frontier", model: "gpt-6-astra", effort: "max", price_in: 10, price_out: 50 };
-    expect((await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "row", row: astra })).status).toBe(200);
+    expect((await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "row", key: { ...astra, effort: "high" }, row: astra })).status).toBe(200);
 
     expect(await task(questionId)).toMatchObject({ status: "done", question_answer: null });
     expect((await events(questionId)).find((e) => e.kind === "routing_proposal_stale").payload).toMatchObject({

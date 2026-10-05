@@ -66,13 +66,13 @@ it("POST /api/settings/execution は1つの変更を受け、Provider 順位・�
   });
 });
 
-it("表の行は (provider, model) を鍵に追加・編集(upsert)・削除でき、同じ provider × tier に複数行を置ける(ADR 0114 決定2)", async () => {
+it("表の行は (provider, model, effort) を鍵に追加・編集(key つき)・削除でき、同じ provider × tier に複数行を置ける(ADR 0114 決定2 / ADR 0200 決定5)", async () => {
   t = await bootTidepool();
   const haiku = { provider: "anthropic", tier: "economy", model: "claude-haiku-4-5", effort: "low", price_in: 1, price_out: 5 };
   expect((await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "row", row: haiku })).status).toBe(200);
-  expect((await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "row", row: { ...haiku, effort: "high" } })).status).toBe(200);
+  expect((await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "row", key: { ...haiku, effort: "low" }, row: { ...haiku, effort: "high" } })).status).toBe(200);
   expect(
-    (await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "delete_row", provider: "openai", model: "gpt-6-astra" })).status,
+    (await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "delete_row", provider: "openai", model: "gpt-6-astra", effort: "high" })).status,
   ).toBe(200);
 
   const { table } = await state();
@@ -85,7 +85,7 @@ it("表の行は (provider, model) を鍵に追加・編集(upsert)・削除で�
 
 it("ある provider × tier の行を全部消すことは許される —— その Provider はそのティアの task で除外されるだけ(ADR 0114 決定3)", async () => {
   t = await bootTidepool();
-  const res = await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "delete_row", provider: "moonshot", model: "kimi-k3[1m]" });
+  const res = await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "delete_row", provider: "moonshot", model: "kimi-k3[1m]", effort: "high" });
   expect(res.status).toBe(200);
   expect((await state()).table.some((row: any) => row.provider === "moonshot")).toBe(false);
 });
@@ -99,7 +99,7 @@ it("不正値(未知の Provider / ティア / 優先順位、負の価格、順
     { setting: "row", row: { ...row, tier: "premium" } },
     { setting: "row", row: { ...row, price_in: -1 } },
     { setting: "row", row: { ...row, price_out: -0.5 } },
-    { setting: "delete_row", provider: "typo", model: "sonnet" },
+    { setting: "delete_row", provider: "typo", model: "sonnet", effort: "high" },
     { setting: "priority", value: "speed" },
     { setting: "provider_rank", value: ["anthropic", "openai"] }, // moonshot が欠ける → indexOf -1 で先頭に来てしまう
     { setting: "provider_rank", value: ["anthropic", "anthropic", "openai"] },
@@ -128,7 +128,8 @@ it("anthropic の alias の行は settings タブと管理MCP の両方の扉で
     expect(viaMcp.content[0].text).toContain("concrete model id");
     expect(await state()).toEqual(before);
 
-    expect((await api(t.baseUrl, "POST", "/api/settings/execution", row("anthropic", "claude-opus-5-5"))).status).toBe(200);
+    const opusKey = { provider: "anthropic", model: "claude-opus-5-5", effort: "high" };
+    expect((await api(t.baseUrl, "POST", "/api/settings/execution", { ...row("anthropic", "claude-opus-5-5"), key: opusKey })).status).toBe(200);
     expect(((await client.callTool({ name: "change_execution_settings", arguments: { change: row("openai", "gpt-5.7-sol") } })) as any).isError).not.toBe(true);
   } finally {
     await client.close();
@@ -174,7 +175,7 @@ it("registry なしの盤面の暗黙の entry は Selector の表に追随す�
     setting: "row",
     row: { provider: "anthropic", tier: "economy", model: "claude-haiku-4-5", effort: "low", price_in: 1, price_out: 5 },
   });
-  await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "delete_row", provider: "anthropic", model: "claude-sonnet-5-5" });
+  await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "delete_row", provider: "anthropic", model: "claude-sonnet-5-5", effort: "high" });
   const work = await registerWork(t, "runs on the replaced row");
   await completeMetaReviews(t);
   expect(settingsOf(work.id)).toMatchObject({ provider: "anthropic", model: "claude-haiku-4-5", effort: "low" });
@@ -184,7 +185,7 @@ it("優先順位の既定を cost にすると、要求の無い task は最安�
   t = await bootTidepool(boardWith(["anthropic", "openai"]));
   // economy の最安は openai の terra(out 12)ではなく anthropic の sonnet(out 10)なので、
   // sonnet の行を消してから cost にする —— 両方の変更が同じ pickup に効くことを1度で言う
-  await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "delete_row", provider: "anthropic", model: "claude-sonnet-5-5" });
+  await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "delete_row", provider: "anthropic", model: "claude-sonnet-5-5", effort: "high" });
   await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "priority", value: "cost" });
   const work = await registerWork(t, "cheapest economy row that is left");
   await t.clock.advance(HOUR);
@@ -328,13 +329,13 @@ const doors: Array<[string, (change: unknown) => Promise<void>]> = [
   ],
 ];
 
-it.each(doors)("Quarantine 中の行の model を WebUI と同じ順(新しい行の upsert → 古い行の delete_row)で差し替えると、question は回答なしで盤面名義に決着する(%s)", async (_door, change) => {
+it.each(doors)("Quarantine 中の行の model を新しい行の追加 → 古い行の delete_row で差し替えると、question は回答なしで盤面名義に決着する(%s)", async (_door, change) => {
   t = await bootTidepool();
   const questionId = quarantineRow("anthropic", "claude-sonnet-5-5");
 
   await change({ setting: "row", row: { ...SONNET, model: "claude-sonnet-5" } });
   expect((await api(t.baseUrl, "GET", `/api/tasks/${questionId}`)).json.status).toBe("todo");
-  await change({ setting: "delete_row", provider: "anthropic", model: "claude-sonnet-5-5" });
+  await change({ setting: "delete_row", provider: "anthropic", model: "claude-sonnet-5-5", effort: "high" });
 
   expect((await api(t.baseUrl, "GET", `/api/tasks/${questionId}`)).json).toMatchObject({ status: "done", question_answer: null });
   const timeline = (await api(t.baseUrl, "GET", `/api/tasks/${questionId}/events`)).json as any[];
@@ -351,8 +352,9 @@ it("Quarantine 中の行の effort / 価格 / ティアだけを書き換えて�
   t = await bootTidepool();
   const questionId = quarantineRow("anthropic", "claude-sonnet-5-5");
 
-  for (const row of [{ ...SONNET, effort: "max" }, { ...SONNET, price_in: 3, price_out: 15 }, { ...SONNET, tier: "standard" }]) {
-    expect((await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "row", row })).status).toBe(200);
+  // 鍵は1つ前の編集の後の effort
+  for (const [effort, row] of [["high", { ...SONNET, effort: "max" }], ["max", { ...SONNET, price_in: 3, price_out: 15 }], ["high", { ...SONNET, tier: "standard" }]] as const) {
+    expect((await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "row", key: { ...SONNET, effort }, row })).status).toBe(200);
   }
 
   expect((await api(t.baseUrl, "GET", `/api/tasks/${questionId}`)).json.status).toBe("todo");

@@ -37,9 +37,9 @@ const openMetaReviews = (db: Db, subject: MetaReviewSubject) =>
 it("routing の行の提案への approve(修正値つきも)の適用だけでは、周期が過ぎても次の routing meta-review を登録しない", () => {
   const db = openDb(":memory:");
   previousReview(db, "routing");
-  const proposal = { kind: "routing" as const, op: "row" as const, row: { provider: row.provider, model: row.model }, pin: row, change: { tier: "frontier" as const } };
+  const proposal = { kind: "routing" as const, op: "row" as const, row: { provider: row.provider, model: row.model, effort: row.effort }, pin: row, change: { tier: "frontier" as const } };
   applyExecutionSettingsChange(db, { setting: "row", row: composeRoutingRow(proposal) }, "webui", at, "question-1");
-  applyExecutionSettingsChange(db, { setting: "row", row: composeRoutingRow(proposal, { effort: "max" }) }, "webui", at, "question-2");
+  applyExecutionSettingsChange(db, { setting: "row", key: proposal.row, row: composeRoutingRow(proposal, { effort: "max" }) }, "webui", at, "question-2");
 
   registerDueMetaReviews(db, afterPeriod);
 

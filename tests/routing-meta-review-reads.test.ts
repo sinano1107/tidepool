@@ -153,7 +153,8 @@ it("読み口の既定の窓は読み手より前に完了した routing の登�
   const old = spawn(before.id, "deckhand", sol);
   exit(before.id, old, ["gpt-5.6-sol"]);
   allocate(before.id, old, { judge, allocation: "appropriate", cause: "uncertain", evidence: "e" });
-  applyExecutionSettingsChange(db, { setting: "row", row: { provider: "openai", tier: "standard", model: "gpt-5.6-sol", effort: "high", price_in: 1, price_out: 2 } }, "webui", at);
+  const solKey = { provider: "openai", model: "gpt-5.6-sol", effort: "high" } as const;
+  applyExecutionSettingsChange(db, { setting: "row", key: solKey, row: { ...solKey, tier: "standard", price_in: 1, price_out: 2 } }, "webui", at);
   routingReview(true); // 前回
   const after = work("after");
   recordShadow(db, after.id, shadow(opus, opus, "prior"), at);
@@ -218,7 +219,7 @@ it("list_routing_cells の人間が変えた行は settings タブ / 管理MCP �
   const { db, routingReview } = board();
   const row = { provider: "anthropic" as const, tier: "standard" as const, model: "claude-opus-4-1", effort: "high", price_in: 5, price_out: 25 };
   applyExecutionSettingsChange(db, { setting: "row", row: { ...row, tier: "frontier" } }, "webui", at, "question-1");
-  applyExecutionSettingsChange(db, { setting: "row", row: { ...row, effort: "max" } }, "mcp", at);
+  applyExecutionSettingsChange(db, { setting: "row", key: { provider: row.provider, model: row.model, effort: "high" }, row: { ...row, effort: "max" } }, "mcp", at);
   const reader = routingReview();
 
   expect(listRoutingCells(db, reader, { since_watermark: 0 }).rows).toMatchObject([{ origin: "mcp", row: { effort: "max" } }]);

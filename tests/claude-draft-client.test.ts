@@ -240,7 +240,7 @@ describe("ClaudeDraftClient", () => {
       return JSON.stringify({ result: JSON.stringify({ title: "t", purpose: "p", completion_criteria: "c" }) });
     };
     const noRow = openDb(":memory:");
-    applyExecutionSettingsChange(noRow, { setting: "delete_row", provider: "anthropic", model: "claude-sonnet-5-5" }, "webui", NOW);
+    applyExecutionSettingsChange(noRow, { setting: "delete_row", provider: "anthropic", model: "claude-sonnet-5-5", effort: "high" }, "webui", NOW);
     const closed = openDb(":memory:");
     // 行の model の窓だけが閉じている —— Provider 全体の除外では、行の model を窓の確認に渡していることが釘にならない
     const later = new Date(NOW.getTime() + 3_600_000);

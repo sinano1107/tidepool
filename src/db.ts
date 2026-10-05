@@ -240,7 +240,8 @@ export function openDb(path: string): Db {
     );
     -- ADR 0110 決定3 / ADR 0114 決定2: 実行設定の表 —— モデル分類の行(この model は
     -- この provider のこのティアの品質を満たす)と、既定 effort・価格(USD per MTok)。
-    -- 同じ provider × ティアに複数行を許す。配布物の種(execution-setting.ts の
+    -- 同じ provider × ティアに複数行を許す。行は (model, effort) の組の分類で、鍵は
+    -- (provider, model, effort)、1つの段に同じ model は1行まで(ADR 0200 決定5)。配布物の種(execution-setting.ts の
     -- SEED_EXECUTION_SETTINGS)から**一度だけ**初期化し、以後は DB が正本で、
     -- 消した行も再オープンで戻らない(settings タブと管理MCP が編集する、#545)。
     -- model は具体 id だけ —— alias は行を書く扉が anthropic の adapter の拒否一覧で
@@ -252,7 +253,8 @@ export function openDb(path: string): Db {
       effort    TEXT NOT NULL,
       price_in  REAL NOT NULL CHECK (price_in >= 0),
       price_out REAL NOT NULL CHECK (price_out >= 0),
-      PRIMARY KEY (provider, model)
+      PRIMARY KEY (provider, model, effort),
+      UNIQUE (provider, model, tier)
     );
 
     -- ADR 0110 決定3 / 決定5 の盤面設定側(1行): 「上位ティアの行を advisor に

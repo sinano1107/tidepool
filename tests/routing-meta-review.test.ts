@@ -155,7 +155,7 @@ it("主題外の task から読み口・提案 verb を呼ぶと tool error", as
   const client = await mcpClient(t.mcpBaseUrl, work.id);
   try {
     for (const name of ROUTING_READS) expect((await client.callTool({ name, arguments: {} })).isError).toBe(true);
-    const proposal = { op: "row", row: { provider: "anthropic", model: "opus" }, change: { tier: "frontier" }, rationale: "r" };
+    const proposal = { op: "row", row: { provider: "anthropic", model: "opus", effort: "high" }, change: { tier: "frontier" }, rationale: "r" };
     expect((await client.callTool({ name: "propose_routing_change", arguments: proposal })).isError).toBe(true);
   } finally {
     await client.close();

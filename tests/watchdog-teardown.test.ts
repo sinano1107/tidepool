@@ -153,12 +153,12 @@ it("走っている間に表から消えた行の 404 は行の Quarantine を�
   const db = openDb(":memory:");
   const clock = new FakeClock();
   const slot = new Slot();
-  const { provider, model } = loadExecutionSettingTable(db)[0]!;
+  const { provider, model, effort } = loadExecutionSettingTable(db)[0]!;
   const task = pickupTask(db, registerTask(db, { type: "work", title: "refused", purpose: "why", completion_criteria: "done" }, clock.now(), ...HUMAN_WEBUI), "deckhand", clock.now())!;
   slot.occupy(task.id);
   // 走っている間に別のタスクを先頭へ置く —— 断られたタスクがその前へ戻ることを見るため
   moveTask(db, registerTask(db, { type: "work", title: "queued after", purpose: "why", completion_criteria: "done" }, clock.now(), ...HUMAN_WEBUI), null, clock.now(), ...HUMAN_WEBUI);
-  applyExecutionSettingsChange(db, { setting: "delete_row", provider, model }, "webui", clock.now());
+  applyExecutionSettingsChange(db, { setting: "delete_row", provider, model, effort }, "webui", clock.now());
 
   rowRefusalHandler({ db, clock, slot, resolve: undefined, pollNow: () => {} })(task.id, { provider, model, cause: "api_404", worker_spawned_event_id: 1 }, Promise.resolve());
   await settle();

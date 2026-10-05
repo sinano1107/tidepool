@@ -492,7 +492,7 @@ it("選んだティアの anthropic 行が無ければ、帰責も起草も clie
   const s = await objectedForDraft("tiered-draft-fail", { initial: { cause: "preference", evidence: "taste" } });
   t = s.t;
   expect((await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "retrospective_tier", value: "standard" })).status).toBe(200);
-  expect((await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "delete_row", provider: "anthropic", model: "claude-opus-5-5" })).status).toBe(200);
+  expect((await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "delete_row", provider: "anthropic", model: "claude-opus-5-5", effort: "high" })).status).toBe(200);
 
   const { res } = await commit(t, s.task.id, "tiered-draft-fail");
 
