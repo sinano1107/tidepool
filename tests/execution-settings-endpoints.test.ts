@@ -1,8 +1,9 @@
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { listEventsOfKinds } from "../src/events.js";
 import { applyExecutionSettingsChange, executionSettingsFor, SEED_EXECUTION_SETTINGS, SEED_TIERS } from "../src/execution-setting.js";
 import { openQuarantineQuestion, registerQuarantine, tableRowValue } from "../src/quarantine.js";
 import { PROVIDER_VALUES, type Provider } from "../src/registry.js";
+import { RegistryPushFailedError } from "../src/registry-write.js";
 import { healthyOpenai } from "./fakes.js";
 import {
   api,
@@ -441,4 +442,37 @@ it("挿入した段は、人間の Register・register_task・decompose が受�
   }
   const tasks = (await api(t.baseUrl, "GET", "/api/tasks")).json as any[];
   expect(tasks.filter((task) => task.tier === "premium").map((task) => task.title).sort()).toEqual(["c", "m", "w"]);
+});
+
+it("段の改名は両方の扉に乗り、registry の書き換えを通ってから盤面の名前を変える —— push の失敗は 400 / toolError で名前は変わらない(ADR 0200 決定2)", async () => {
+  const renameTier = vi.fn(async (_input: { from: string; to: string; message: string }) => {});
+  t = await bootTidepool({ agentAdmin: { renameTier } });
+  expect((await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "rename_tier", name: "standard", to: "mid" })).status).toBe(200);
+  expect(renameTier).toHaveBeenLastCalledWith(expect.objectContaining({ from: "standard", to: "mid" }));
+
+  renameTier.mockRejectedValueOnce(new RegistryPushFailedError("remote rejected"));
+  const refused = await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "rename_tier", name: "mid", to: "middle" });
+  expect(refused.status).toBe(400);
+  expect(refused.json.error).toContain("remote rejected");
+
+  const client = await managementMcpClient(t.baseUrl);
+  try {
+    const call = async (change: object) => (await client.callTool({ name: "change_execution_settings", arguments: { change } })) as any;
+    renameTier.mockRejectedValueOnce(new RegistryPushFailedError("remote rejected"));
+    const viaMcp = await call({ setting: "rename_tier", name: "mid", to: "middle" });
+    expect(viaMcp.isError).toBe(true);
+    expect(viaMcp.content[0].text).toContain("remote rejected");
+    expect((await call({ setting: "rename_tier", name: "frontier", to: "top" })).isError).not.toBe(true);
+  } finally {
+    await client.close();
+  }
+
+  expect(renameTier).toHaveBeenLastCalledWith(expect.objectContaining({ from: "frontier", to: "top" }));
+  expect((await state()).tiers.map((tier: { name: string }) => tier.name)).toEqual(["economy", "mid", "top"]);
+});
+
+it("registry の無い盤面では段の改名は盤面の名前だけを変える", async () => {
+  t = await bootTidepool();
+  expect((await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "rename_tier", name: "standard", to: "mid" })).status).toBe(200);
+  expect((await state()).tiers.map((tier: { name: string }) => tier.name)).toEqual(["economy", "mid", "frontier"]);
 });

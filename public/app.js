@@ -2519,19 +2519,21 @@ function TiersCard({ settings, say, onSaved, edit }) {
   const original = tiers[index];
   const others = tiers.filter((tier) => tier.name !== target);
   const isNew = target === "";
-  const dirty = isNew ? !!draft.name.trim() || !!draft.description.trim() : draft.description !== original?.description || draft.position !== index;
-  const ok = !!draft.description.trim() && (!isNew || !!draft.name.trim());
+  const renamed = !isNew && draft.name.trim() !== target;
+  const edited = !isNew && (draft.description !== original?.description || draft.position !== index);
+  const dirty = isNew ? !!draft.name.trim() || !!draft.description.trim() : renamed || edited;
+  const ok = !!draft.description.trim() && !!draft.name.trim();
   useDirtySignal(edit, open, dirty);
   const start = (name) => edit.open(`board:tier:${name}`, () => {
     const at = tiers.findIndex((tier) => tier.name === name);
     setTarget(name);
-    setDraft({ name: "", description: at < 0 ? "" : tiers[at].description, position: at < 0 ? tiers.length : at });
+    setDraft({ name, description: at < 0 ? "" : tiers[at].description, position: at < 0 ? tiers.length : at });
   });
-  const send = async (change, done) => {
+  const send = async (changes, done) => {
     setBusy(true);
     try {
-      await api("/api/settings/execution", change);
-      say("success", done, target || draft.name.trim());
+      for (const change of changes) await api("/api/settings/execution", change);
+      say("success", done, draft.name.trim());
       edit.close();
       await onSaved();
     } catch (err) {
@@ -2539,15 +2541,18 @@ function TiersCard({ settings, say, onSaved, edit }) {
     }
     setBusy(false);
   };
-  const save = () => send(isNew ? { setting: "insert_tier", name: draft.name.trim(), description: draft.description.trim(), position: draft.position } : {
-    setting: "edit_tier",
-    name: target,
-    ...draft.description !== original?.description && { description: draft.description.trim() },
-    ...draft.position !== index && { position: draft.position }
-  }, isNew ? "tier added" : "tier saved");
+  const save = () => send(isNew ? [{ setting: "insert_tier", name: draft.name.trim(), description: draft.description.trim(), position: draft.position }] : [
+    ...renamed ? [{ setting: "rename_tier", name: target, to: draft.name.trim() }] : [],
+    ...edited ? [{
+      setting: "edit_tier",
+      name: draft.name.trim(),
+      ...draft.description !== original?.description && { description: draft.description.trim() },
+      ...draft.position !== index && { position: draft.position }
+    }] : []
+  ], isNew ? "tier added" : "tier saved");
   const positionLabel = (p) => p === 0 ? others[0] ? `lowest \u2014 below ${others[0].name}` : "lowest" : p === others.length ? `highest \u2014 above ${others[p - 1].name}` : `between ${others[p - 1].name} and ${others[p].name}`;
   const neighbour = (label, tier) => /* @__PURE__ */ React.createElement("p", { style: { margin: 0, fontSize: "var(--text-xs)", color: "var(--text-muted)" } }, label, ": ", tier ? /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)" } }, tier.name), " \u2014 ", tier.description) : "none");
-  return /* @__PURE__ */ React.createElement("div", { "data-testid": "execution-tiers" }, /* @__PURE__ */ React.createElement(Card, { style: { display: "flex", flexDirection: "column", gap: 14 } }, /* @__PURE__ */ React.createElement("span", { style: settingsCardLabel }, open ? isNew ? "add a tier" : `tier ${target}` : "tiers"), !open && /* @__PURE__ */ React.createElement(React.Fragment, null, tiers.map((tier) => /* @__PURE__ */ React.createElement("div", { key: tier.name, style: { display: "flex", gap: 12, alignItems: "baseline", fontSize: "var(--text-xs)" } }, /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", minWidth: 90 } }, tier.name), /* @__PURE__ */ React.createElement("span", { style: { color: "var(--text-muted)", flex: 1 } }, tier.description), /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "sm", onClick: () => start(tier.name), "aria-label": `edit tier ${tier.name}` }, "Edit"))), /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "sm", onClick: () => start("") }, "Add tier"), /* @__PURE__ */ React.createElement("p", { style: { margin: 0, fontSize: "var(--text-xs)", color: "var(--text-muted)" } }, "lowest first. a description says what work the tier right below cannot do and this one can \u2014 task writers read it to request a tier.")), open && /* @__PURE__ */ React.createElement(React.Fragment, null, isNew && /* @__PURE__ */ React.createElement(
+  return /* @__PURE__ */ React.createElement("div", { "data-testid": "execution-tiers" }, /* @__PURE__ */ React.createElement(Card, { style: { display: "flex", flexDirection: "column", gap: 14 } }, /* @__PURE__ */ React.createElement("span", { style: settingsCardLabel }, open ? isNew ? "add a tier" : `tier ${target}` : "tiers"), !open && /* @__PURE__ */ React.createElement(React.Fragment, null, tiers.map((tier) => /* @__PURE__ */ React.createElement("div", { key: tier.name, style: { display: "flex", gap: 12, alignItems: "baseline", fontSize: "var(--text-xs)" } }, /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", minWidth: 90 } }, tier.name), /* @__PURE__ */ React.createElement("span", { style: { color: "var(--text-muted)", flex: 1 } }, tier.description), /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "sm", onClick: () => start(tier.name), "aria-label": `edit tier ${tier.name}` }, "Edit"))), /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "sm", onClick: () => start("") }, "Add tier"), /* @__PURE__ */ React.createElement("p", { style: { margin: 0, fontSize: "var(--text-xs)", color: "var(--text-muted)" } }, "lowest first. a description says what work the tier right below cannot do and this one can \u2014 task writers read it to request a tier.")), open && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(
     Input,
     {
       label: "Name",
@@ -2582,7 +2587,7 @@ function TiersCard({ settings, say, onSaved, edit }) {
       onSave: save,
       onCancel: () => edit.close()
     }
-  ), !isNew && /* @__PURE__ */ React.createElement(Button, { variant: "danger", size: "sm", disabled: busy, onClick: () => send({ setting: "delete_tier", name: target }, "tier deleted") }, "Delete tier"))));
+  ), !isNew && /* @__PURE__ */ React.createElement(Button, { variant: "danger", size: "sm", disabled: busy, onClick: () => send([{ setting: "delete_tier", name: target }], "tier deleted") }, "Delete tier"))));
 }
 function ExecutionTableCard({ settings, say, onSaved, edit }) {
   const { Button, Card, Input, Select } = window.TidepoolDesignSystem_8a0ead;

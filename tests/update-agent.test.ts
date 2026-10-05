@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 import { UnknownAgentError } from "../src/agent.js";
-import { AgentTierMismatchError, changeAgentTier, UnknownAuthorityProfileError, updateAgent } from "../src/agent-create.js";
+import { AgentTierMismatchError, changeAgentTier, renameAgentTiers, UnknownAuthorityProfileError, updateAgent } from "../src/agent-create.js";
 import { InvalidAgentDefinitionError, loadRegistry } from "../src/registry.js";
 import { RegistryPushFailedError } from "../src/registry-write.js";
 import { seedTierNames } from "./fakes.js";
@@ -365,5 +365,50 @@ You are Crab.
     ).rejects.toThrow("no row at economy");
     expect(seen).toEqual([["anthropic"]]);
     expect(git(registryDir, "rev-parse", "HEAD")).toBe(before);
+  });
+});
+
+describe("renameAgentTiers: 段の改名が registry の agent.md の tier を書き換える口(ADR 0200 決定2 / issue #1422)", () => {
+  const agentAt = (name: string, tier: string) => `---
+description: ${name}
+# hand-written comment stays
+version: 0.3.1
+authority: standard
+tier: ${tier}
+provider: anthropic
+skills:
+  - "*"
+---
+You are ${name}.
+`;
+
+  it("旧い名前を tier に書いた agent だけを、tier と version の行だけ書き換えて、リモートの main へ1つの commit で着地させる", async () => {
+    const { registryDir, publish } = await makeRemoteBackedRegistry();
+    publish("agents/crab.md", agentAt("crab", "standard"), "add crab");
+    publish("agents/shrimp.md", agentAt("shrimp", "standard"), "add shrimp");
+    const before = publish("agents/lobster.md", agentAt("lobster", "frontier"), "add lobster");
+
+    await renameAgentTiers({ from: "standard", to: "mid", message: "rename tier standard to mid" }, { registry: { dir: registryDir, mode: "remote-backed" } });
+
+    const remoteMain = git(registryDir, "rev-parse", "refs/remotes/origin/main");
+    expect(git(registryDir, "rev-parse", `${remoteMain}~1`)).toBe(before);
+    expect(git(registryDir, "log", "-1", "--format=%s", remoteMain)).toBe("rename tier standard to mid");
+    const changed = git(registryDir, "diff", "--unified=0", before, remoteMain)
+      .split("\n")
+      .filter((line) => /^[-+][^-+]/.test(line));
+    const oneAgent = ["-version: 0.3.1", '+version: "0.3.2"', "-tier: standard", "+tier: mid"];
+    expect(changed).toEqual([...oneAgent, ...oneAgent]);
+    expect(git(registryDir, "diff", "--name-only", before, remoteMain).split("\n")).toEqual(["agents/crab.md", "agents/shrimp.md"]);
+  });
+
+  it("push が失敗すると RegistryPushFailedError で、リモートの main は動かない", async () => {
+    const { registryDir, publish } = await makeRemoteBackedRegistry();
+    const before = publish("agents/crab.md", agentAt("crab", "standard"), "add crab");
+    git(registryDir, "remote", "set-url", "--push", "origin", "/no/such/remote");
+
+    await expect(
+      renameAgentTiers({ from: "standard", to: "mid", message: "m" }, { registry: { dir: registryDir, mode: "remote-backed" } }),
+    ).rejects.toThrow(RegistryPushFailedError);
+    expect(git(registryDir, "rev-parse", "refs/remotes/origin/main")).toBe(before);
   });
 });
