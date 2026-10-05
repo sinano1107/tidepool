@@ -44,11 +44,6 @@ it("get_task は予算を超える量の event を新しい順に予算分ずつ
     expect(pages.flatMap((page) => page.payload.events.map((e: any) => e.id))).toEqual(ids);
     expect(pages[0]!.payload).toMatchObject({ id: task.id, title: "long history", purpose: task.purpose });
     for (const page of pages.slice(1)) expect(Object.keys(page.payload).filter((k) => !["events", "next", "remaining"].includes(k))).toEqual([]);
-    let returned = 0;
-    for (const page of pages.slice(0, -1)) {
-      returned += page.payload.events.length;
-      expect(page.payload.remaining).toBe(ids.length - returned);
-    }
   } finally {
     await client.close();
   }

@@ -1,9 +1,9 @@
 import type { Db } from "./db.js";
-import { appendEvent } from "./events.js";
+import { appendEvent, type EventPayload } from "./events.js";
 import { BOARD_WORKER_ID, DomainError } from "./tasks.js";
 
 /** 盤面が返す MCP 応答1回の大きさの上限(ADR 0195 決定2)。text content に載るシリアライズ後の UTF-8 バイト数で測る。 */
-export const RESPONSE_BUDGET_BYTES = 40_000;
+const RESPONSE_BUDGET_BYTES = 40_000;
 
 type ItemId = string | number;
 
@@ -25,7 +25,9 @@ function charBoundary(buf: Buffer, end: number): number {
   return end;
 }
 
-const encodeNext = (position: ReadPosition) => Buffer.from(JSON.stringify(position)).toString("base64url");
+const MALFORMED_NEXT = "next is malformed: pass the next string exactly as a previous response returned it";
+
+const encodeNext =(position: ReadPosition) => Buffer.from(JSON.stringify(position)).toString("base64url");
 
 /** 続きを読む。盤面は状態を持たず、続きが verb・最初の引数・位置を自己記述する(ADR 0195 決定6)。 */
 export function readNext<A = Record<string, unknown>>(verb: string, next: string): ReadPosition<A> {
@@ -33,8 +35,10 @@ export function readNext<A = Record<string, unknown>>(verb: string, next: string
   try {
     p = JSON.parse(Buffer.from(next, "base64url").toString());
   } catch {}
-  if (typeof p?.verb !== "string" || typeof p.args !== "object" || p.args === null || !["string", "number"].includes(typeof p.at))
-    throw new DomainError("next is malformed: pass the next string exactly as a previous response returned it");
+  const fieldIsWellFormed =
+    p?.field === undefined || (Array.isArray(p.field) && p.field.every((name) => typeof name === "string") && Number.isInteger(p.offset) && p.offset! >= 0);
+  if (typeof p?.verb !== "string" || typeof p.args !== "object" || p.args === null || !["string", "number"].includes(typeof p.at) || !fieldIsWellFormed)
+    throw new DomainError(MALFORMED_NEXT);
   if (p.verb !== verb) throw new DomainError(`next belongs to ${p.verb}, not ${verb}: pass it to ${p.verb}`);
   return p as ReadPosition<A>;
 }
@@ -53,9 +57,9 @@ export function packItems<T extends { id: ItemId }>(
     start = items.findIndex((item) => item.id === read.at);
     if (start === -1) throw new DomainError(`next points at item ${read.at}, which this read no longer has`);
   }
-  const head = read.at === undefined ? envelope : {};
+  const firstOnly = read.at === undefined ? envelope : {};
   const rest = items.slice(start);
-  const nextAt = (k: number) =>
+  const continueFrom = (k: number) =>
     k < rest.length ? { next: encodeNext({ verb: read.verb, args: read.args, at: rest[k]!.id }), remaining: rest.length - k } : {};
 
   /** 1件で予算を超える先頭の item の、`field` の `offset` バイト目からの1切れを単独で返す(ADR 0195 決定4)。
@@ -64,16 +68,16 @@ export function packItems<T extends { id: ItemId }>(
   const piece = (field: string[], offset: number) => {
     const item = rest[0]!;
     const value = field.reduce<any>((node, name) => node?.[name], item);
-    if (typeof value !== "string") throw new DomainError("next is malformed: pass the next string exactly as a previous response returned it");
+    if (typeof value !== "string") throw new DomainError(MALFORMED_NEXT);
     const text = Buffer.from(value);
     const pageUpTo = (end: number) => {
       const cut = structuredClone(item) as any;
       field.slice(0, -1).reduce((node, name) => node[name], cut)[field.at(-1)!] = text.subarray(offset, end).toString();
       return {
-        ...head,
+        ...firstOnly,
         [key]: [cut],
         partial: { id: item.id, field: field.join("."), field_bytes: text.length },
-        ...(end < text.length ? { next: encodeNext({ ...read, at: item.id, field, offset: end }), remaining: rest.length } : nextAt(1)),
+        ...(end < text.length ? { next: encodeNext({ ...read, at: item.id, field, offset: end }), remaining: rest.length } : continueFrom(1)),
       };
     };
     let [lo, hi] = [offset, text.length];
@@ -87,12 +91,12 @@ export function packItems<T extends { id: ItemId }>(
     return pageUpTo(end > offset ? end : text.length);
   };
   if (read.field !== undefined) return piece(read.field, read.offset ?? 0);
-  const whole = { ...head, [key]: rest };
+  const whole = { ...firstOnly, [key]: rest };
   if (bytes(JSON.stringify(whole)) <= RESPONSE_BUDGET_BYTES) return whole;
 
   // 全部は入らない(最後の1件は残る): 先頭から item を足していき、続きの分まで含めて予算に収まる最後の位置で切る
-  const tailBytes = (k: number) => bytes(JSON.stringify(nextAt(k))) - 1; // 先頭の `{` を `,` に読み替える
-  let size = bytes(JSON.stringify({ ...head, [key]: [] }));
+  const tailBytes = (k: number) => bytes(JSON.stringify(continueFrom(k))) - 1; // 先頭の `{` を `,` に読み替える
+  let size = bytes(JSON.stringify({ ...firstOnly, [key]: [] }));
   let k = 0;
   while (k < rest.length - 1) {
     const grown = size + bytes(JSON.stringify(rest[k])) + (k > 0 ? 1 : 0);
@@ -100,8 +104,13 @@ export function packItems<T extends { id: ItemId }>(
     size = grown;
     k++;
   }
-  if (k === 0) return piece(longestStringField(rest[0]), 0);
-  return { ...head, [key]: rest.slice(0, k), ...nextAt(k) };
+  if (k === 0) {
+    // 先頭の item が封筒と一緒に入らないだけなら、封筒だけを返してその item は次の応答で丸ごと返す ——
+    // 切るのは1件で予算を超える item だけ(ADR 0195 決定4)
+    if (Object.keys(firstOnly).length > 0) return { ...firstOnly, [key]: [], ...continueFrom(0) };
+    return piece(longestStringField(rest[0]), 0);
+  }
+  return { ...firstOnly, [key]: rest.slice(0, k), ...continueFrom(k) };
 }
 
 /** item の中で UTF-8 バイト数が最も大きい文字列の欄の path。 */
@@ -115,6 +124,9 @@ function longestStringField(item: unknown): string[] {
   return best.path;
 }
 
+/** 応答を返す面(床の event の `surface`)。 */
+export type ResponseSurface = Extract<EventPayload, { kind: "response_truncated" }>["surface"];
+
 type ToolResponse = { isError?: boolean; content: { type: string; text?: string }[] };
 
 /** 出口の床(ADR 0195 決定5): 成功の応答が予算を超えていたら、本文を予算まで切って英語の目印を付け、盤面スコープの event を
@@ -123,7 +135,7 @@ type ToolResponse = { isError?: boolean; content: { type: string; text?: string 
  *  ponytail: 測るのは先頭の text content だけ —— 盤面の応答は `toolResult` の1切れしか持たない */
 export function floorResponse<R extends ToolResponse>(
   result: R,
-  context: { db: Db; surface: "management" | "worker"; verb: string; taskId?: string | null; at: Date },
+  context: { db: Db; surface: ResponseSurface; verb: string; taskId?: string | null; at: Date },
 ): R {
   const text = result.content[0]?.text;
   if (result.isError || text === undefined || bytes(text) <= RESPONSE_BUDGET_BYTES) return result;

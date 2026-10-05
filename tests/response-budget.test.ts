@@ -2,12 +2,13 @@ import { expect, it } from "vitest";
 import { openDb } from "../src/db.js";
 import { listEventsOfKinds } from "../src/events.js";
 import { toolError, toolResult } from "../src/mcp.js";
-import { floorResponse, packItems, RESPONSE_BUDGET_BYTES, readNext } from "../src/response-budget.js";
+import { floorResponse, packItems, readNext } from "../src/response-budget.js";
 
 // 応答予算(ADR 0195): 詰める関数の境目・欄の分割・続きの error と、出口の床はここで言う(issue #1388)。
 // 大きさは MCP の text content に載るシリアライズ後の UTF-8 バイト数で測る。
 
-const bytesOf = (payload: unknown) => Buffer.byteLength(JSON.stringify(payload));
+const RESPONSE_BUDGET_BYTES = 40_000;
+const bytesOf =(payload: unknown) => Buffer.byteLength(JSON.stringify(payload));
 const first = { verb: "get_task", args: { task_id: "t1" } };
 
 /** シリアライズ後がちょうど `total` バイトになる `{ events }` の item 列。 */
@@ -75,8 +76,8 @@ it("出口の床は予算以下の応答と error の応答をそのまま通し
 });
 
 /** 最初の読みから next が尽きるまで追った応答の列。 */
-function readAll(items: readonly { id: number }[]) {
-  const pages: any[] = [packItems(first, "events", items)];
+function readAll(items: readonly { id: number }[], envelope?: Record<string, unknown>) {
+  const pages: any[] = [packItems(first, "events", items, envelope)];
   while (pages.at(-1).next) pages.push(packItems(readNext("get_task", pages.at(-1).next), "events", items));
   return pages;
 }
@@ -98,4 +99,24 @@ it("1件で予算を超える item は長い欄を UTF-8 の文字境界で切�
   }
   expect(pieces.map((piece) => piece.events[0].payload.line).join("")).toBe(long);
   expect(pages.flatMap((page) => page.events.filter((e: any) => e.id !== 2))).toEqual([items[0], items[2]]);
+});
+
+it("封筒と先頭の item が一緒に入らないとき、最初の応答は封筒だけを返し、その item は次の応答で丸ごと返る", () => {
+  const envelope = { purpose: "p".repeat(30_000) };
+  const items = [3, 2, 1].map((id) => ({ id, line: "x".repeat(15_000) }));
+
+  const pages = readAll(items, envelope);
+
+  expect(pages[0]).toMatchObject({ ...envelope, events: [], remaining: 3 });
+  for (const page of pages.slice(1)) expect(page).not.toHaveProperty("purpose");
+  expect(pages.some((page) => page.partial)).toBe(false);
+  expect(pages.flatMap((page) => page.events)).toEqual(items);
+});
+
+it("欄の位置が壊れた続きも名指しの error になる", () => {
+  const position = (p: object) => Buffer.from(JSON.stringify({ ...first, at: 2, ...p })).toString("base64url");
+
+  expect(() => readNext("get_task", position({ field: "line" }))).toThrow(/next is malformed/);
+  expect(() => readNext("get_task", position({ field: ["line"], offset: "x" }))).toThrow(/next is malformed/);
+  expect(() => readNext("get_task", position({ field: ["line"], offset: -10 }))).toThrow(/next is malformed/);
 });

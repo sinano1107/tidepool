@@ -317,6 +317,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
     async ({ task_id, next }) => {
       try {
         // ADR 0195: 続きは最初の引数(task_id)を自分の中から戻す
+        if (task_id !== undefined && next !== undefined) return toolError("pass task_id or next, not both");
         const read = next === undefined ? { verb: "get_task", args: { task_id } } : readNext<{ task_id?: string }>("get_task", next);
         if (read.args.task_id === undefined) return toolError("pass task_id, or next from a previous get_task");
         const task = getTask(deps.db, read.args.task_id);
