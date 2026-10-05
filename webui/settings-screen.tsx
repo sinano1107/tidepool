@@ -2147,8 +2147,8 @@ function TiersCard({ settings, say, onSaved, edit }: {
   const others = tiers.filter((tier) => tier.name !== target);
   const isNew = target === '';
   const dirty = isNew ? !!draft.name.trim() || !!draft.description.trim() : draft.description !== original?.description || draft.position !== index;
-  // the server's line (a lowercase letter, then a-z 0-9 - _) mirrored so Save only enables on a sendable name
-  const ok = !!draft.description.trim() && (!isNew || /^[a-z][a-z0-9_-]*$/.test(draft.name.trim()));
+  // the name's charset is the server's to check — its refusal names the rule
+  const ok = !!draft.description.trim() && (!isNew || !!draft.name.trim());
   useDirtySignal(edit, open, dirty);
 
   const start = (name: string) => edit.open(`board:tier:${name}`, () => {
@@ -2188,9 +2188,7 @@ function TiersCard({ settings, say, onSaved, edit }: {
   return (
     <div data-testid="execution-tiers">
       <Card style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-        <RecordCardHead editing={open}>
-          <span style={settingsCardLabel}>{open ? (isNew ? 'add a tier' : `tier ${target}`) : 'tiers'}</span>
-        </RecordCardHead>
+        <span style={settingsCardLabel}>{open ? (isNew ? 'add a tier' : `tier ${target}`) : 'tiers'}</span>
         {!open && (
           <React.Fragment>
             {tiers.map((tier) => (
