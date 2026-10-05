@@ -251,7 +251,7 @@ function executionSettingCandidates(
   return request.entries
     .flatMap((entry) =>
       rowsFor(table, entry.provider, tier).flatMap((main) => {
-        const advisor = entry.advisor && entry.provider === "anthropic" ? claudeAdvisorFor(main.model, request.advisorAboveMain) : undefined;
+        const advisor = entry.advisor ? claudeAdvisorFor(main.model, request.advisorAboveMain) : undefined;
         return entry.advisor && advisor === undefined ? [] : [{ main, advisor }];
       }),
     )

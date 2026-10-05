@@ -348,8 +348,8 @@ it("cost は価格で並べる —— standard では順位が後の sol(4 / 20)
 const crowded: ExecutionSettingTable = [
   { provider: "anthropic", tier: "standard", model: "opus", effort: "high", price_in: 5, price_out: 25 },
   { provider: "anthropic", tier: "standard", model: "opus-mini", effort: "high", price_in: 3, price_out: 20 },
-  { provider: "anthropic", tier: "frontier", model: "claude-fable-5-1", effort: "high", price_in: 10, price_out: 50 },
-  { provider: "anthropic", tier: "frontier", model: "claude-fable-5-lite", effort: "high", price_in: 6, price_out: 30 },
+  { provider: "anthropic", tier: "frontier", model: "fable", effort: "high", price_in: 10, price_out: 50 },
+  { provider: "anthropic", tier: "frontier", model: "fable-lite", effort: "high", price_in: 6, price_out: 30 },
   { provider: "openai", tier: "standard", model: "gpt-5.6-sol", effort: "high", price_in: 4, price_out: 20 },
 ];
 
@@ -368,13 +368,6 @@ it("cost で out 単価が同額なら in 単価、それも同額なら Provide
   expect(
     select(input({ entries: both, taskTier: "standard", priority: "cost", providerRank: ["openai", "anthropic", "moonshot"] }), tied).model,
   ).toBe("gpt-5.6-sol");
-});
-
-it("Fable の行が複数あれば、advisor はそれぞれの行自身の具体 id —— 別の Fable の行へ割れない", () => {
-  const frontierTask = input({ entries: [{ provider: "anthropic", advisor: true }], taskTier: "frontier", advisorAboveMain: true });
-  expect(select(frontierTask, crowded)).toMatchObject({ model: "claude-fable-5-lite", advisor: "claude-fable-5-lite" });
-  const excluded = { providers: [], models: [{ provider: "anthropic" as const, model: "claude-fable-5-lite" }] };
-  expect(selectExecutionSetting(frontierTask, crowded, excluded)).toMatchObject({ model: "claude-fable-5-1", advisor: "claude-fable-5-1" });
 });
 
 it("review の要求は priority を持たず quality の並べ方で解決される(ADR 0111 決定3)", () => {
@@ -487,11 +480,7 @@ it("行の Quarantine の照合は完全一致 —— claude-opus-5 の Quaranti
   expect(executionSettingsFor(db, anthropicAgent(false), workAt("standard")).map((s) => s.model)).toEqual(["claude-opus-5-5"]);
 });
 
-it("Fable の行が Quarantine 中でも、main の候補から外れるだけで、ほかの行の advisor は `fable` のまま", () => {
-  const db = boardWithRefusedRows(
-    [{ provider: "anthropic", tier: "frontier", model: "claude-fable-5", effort: "high", price_in: 12, price_out: 60 }],
-    [["anthropic", "claude-fable-5-1"]],
-  );
-  expect(executionSettingsFor(db, anthropicAgent(false), workAt("frontier")).map((s) => s.model)).toEqual(["claude-fable-5"]);
+it("Fable の行が Quarantine 中でも、ほかの行の advisor は `fable` のまま", () => {
+  const db = boardWithRefusedRows([], [["anthropic", "claude-fable-5-1"]]);
   expect(executionSettingsFor(db, anthropicAgent(true), workAt("standard"))).toMatchObject([{ model: "claude-opus-5-5", advisor: "fable" }]);
 });
