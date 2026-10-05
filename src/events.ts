@@ -420,7 +420,7 @@ export type EventPayload =
       round: "initial" | "after_rca";
     }
   // ADR 0110 決定5 / issue #545: 人間が settings タブ / 管理MCP から実行設定(表の
-  // 行・frontier advisor・Provider 順位・優先順位の既定)を変えた操作イベント。
+  // 行・advisor above main・Provider 順位・優先順位の既定)を変えた操作イベント。
   // `origin` がどの手から入ったか(webui / mcp)を機械記録する(CONTEXT.md「管理MCP」)。
   // question_id = 提案 question への approve の適用(ADR 0151: meta-review の材料にも「人間が変えた行」にも数えない)。
   | ({ kind: "execution_settings_changed"; question_id?: string } & ExecutionSettingsChange)

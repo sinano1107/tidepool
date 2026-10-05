@@ -2396,7 +2396,7 @@ function ExecutionDefaultsCard({ settings, say, onSaved, edit }) {
   const { Button, Card, Checkbox, FieldRow, Select } = window.TidepoolDesignSystem_8a0ead;
   const id = "board:execution-defaults";
   const open = edit.isOpen(id);
-  const current = { rank: settings.providerRank, priority: settings.priority, advisor: settings.frontierAdvisor, retrospectiveTier: settings.retrospectiveTier };
+  const current = { rank: settings.providerRank, priority: settings.priority, advisor: settings.advisorAboveMain, retrospectiveTier: settings.retrospectiveTier };
   const [draft, setDraft] = React.useState(current);
   const [busy, setBusy] = React.useState(false);
   const rankChanged = draft.rank.join() !== current.rank.join();
@@ -2409,7 +2409,7 @@ function ExecutionDefaultsCard({ settings, say, onSaved, edit }) {
       const changes = [
         rankChanged && { setting: "provider_rank", value: draft.rank },
         draft.priority !== current.priority && { setting: "priority", value: draft.priority },
-        draft.advisor !== current.advisor && { setting: "frontier_advisor", value: draft.advisor },
+        draft.advisor !== current.advisor && { setting: "advisor_above_main", value: draft.advisor },
         draft.retrospectiveTier !== current.retrospectiveTier && { setting: "retrospective_tier", value: draft.retrospectiveTier }
       ].filter(Boolean);
       for (const change of changes) await api("/api/settings/execution", change);
@@ -2432,7 +2432,7 @@ function ExecutionDefaultsCard({ settings, say, onSaved, edit }) {
     }
     setBusy(false);
   };
-  return /* @__PURE__ */ React.createElement("div", { "data-testid": "execution-defaults" }, /* @__PURE__ */ React.createElement(Card, { style: { display: "flex", flexDirection: "column", gap: 14 } }, /* @__PURE__ */ React.createElement(RecordCardHead, { editing: open, onEdit: () => edit.open(id, () => setDraft(current)) }, /* @__PURE__ */ React.createElement("span", { style: settingsCardLabel }, "execution defaults")), !open && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(FieldRow, { label: "provider rank", kind: "mono", value: settings.providerRank.join(" \u203A ") }), /* @__PURE__ */ React.createElement(FieldRow, { label: "default priority", kind: "mono", value: settings.priority }), /* @__PURE__ */ React.createElement(FieldRow, { label: "frontier advisor", kind: "mono", value: settings.frontierAdvisor ? "on" : "off" }), /* @__PURE__ */ React.createElement(FieldRow, { label: "retrospective tier", kind: "mono", value: settings.retrospectiveTier }), /* @__PURE__ */ React.createElement(FieldRow, { label: "learner", kind: "mono", value: settings.learnerPromoted ? "promoted \u2014 chooses work tasks" : "shadow \u2014 the table chooses" }), settings.learnerPromoted && /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", disabled: busy, onClick: demote }, "Demote learner")), open && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 12 } }, draft.rank.map((provider, i) => /* @__PURE__ */ React.createElement(
+  return /* @__PURE__ */ React.createElement("div", { "data-testid": "execution-defaults" }, /* @__PURE__ */ React.createElement(Card, { style: { display: "flex", flexDirection: "column", gap: 14 } }, /* @__PURE__ */ React.createElement(RecordCardHead, { editing: open, onEdit: () => edit.open(id, () => setDraft(current)) }, /* @__PURE__ */ React.createElement("span", { style: settingsCardLabel }, "execution defaults")), !open && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(FieldRow, { label: "provider rank", kind: "mono", value: settings.providerRank.join(" \u203A ") }), /* @__PURE__ */ React.createElement(FieldRow, { label: "default priority", kind: "mono", value: settings.priority }), /* @__PURE__ */ React.createElement(FieldRow, { label: "advisor above main", kind: "mono", value: settings.advisorAboveMain ? "on" : "off" }), /* @__PURE__ */ React.createElement(FieldRow, { label: "retrospective tier", kind: "mono", value: settings.retrospectiveTier }), /* @__PURE__ */ React.createElement(FieldRow, { label: "learner", kind: "mono", value: settings.learnerPromoted ? "promoted \u2014 chooses work tasks" : "shadow \u2014 the table chooses" }), settings.learnerPromoted && /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", disabled: busy, onClick: demote }, "Demote learner")), open && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 12 } }, draft.rank.map((provider, i) => /* @__PURE__ */ React.createElement(
     Select,
     {
       key: i,
@@ -2452,9 +2452,9 @@ function ExecutionDefaultsCard({ settings, say, onSaved, edit }) {
   ), /* @__PURE__ */ React.createElement(
     Checkbox,
     {
-      testId: "execution-frontier-advisor",
+      testId: "execution-advisor-above-main",
       checked: draft.advisor,
-      label: "frontier advisor \u2014 an advisor may use the frontier row even when the main model is a lower tier",
+      label: "advisor above main \u2014 an advisor may be the provider's top model even when it ranks above main",
       onChange: () => setDraft({ ...draft, advisor: !draft.advisor })
     }
   ), /* @__PURE__ */ React.createElement(

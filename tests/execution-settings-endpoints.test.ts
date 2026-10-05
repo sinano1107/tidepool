@@ -19,7 +19,7 @@ import {
 let t: Tidepool;
 afterEach(() => t?.stop());
 
-it("GET /api/settings/execution は種の表と盤面既定(frontier advisor 無し・Provider 順位は宣言順・優先順位 quality)と選択肢を返す(ADR 0110 決定5)", async () => {
+it("GET /api/settings/execution は種の表と盤面既定(advisor above main 無し・Provider 順位は宣言順・優先順位 quality)と選択肢を返す(ADR 0110 決定5)", async () => {
   t = await bootTidepool();
   const res = await api(t.baseUrl, "GET", "/api/settings/execution");
   expect(res.status).toBe(200);
@@ -27,7 +27,7 @@ it("GET /api/settings/execution は種の表と盤面既定(frontier advisor 無
     table: [...SEED_EXECUTION_SETTINGS]
       .sort((a, b) => a.provider.localeCompare(b.provider) || a.model.localeCompare(b.model))
       .map((row) => ({ ...row, quarantine_question_id: null })),
-    frontierAdvisor: false,
+    advisorAboveMain: false,
     providerRank: [...PROVIDER_VALUES],
     priority: "quality",
     learnerPromoted: false,
@@ -48,12 +48,12 @@ const state = async () => {
   return rest;
 };
 
-it("POST /api/settings/execution は1つの変更を受け、Provider 順位・優先順位・frontier advisor は GET に反映される", async () => {
+it("POST /api/settings/execution は1つの変更を受け、Provider 順位・優先順位・advisor above main は GET に反映される", async () => {
   t = await bootTidepool();
   for (const change of [
     { setting: "provider_rank", value: ["openai", "anthropic", "moonshot"] },
     { setting: "priority", value: "cost" },
-    { setting: "frontier_advisor", value: true },
+    { setting: "advisor_above_main", value: true },
     { setting: "retrospective_tier", value: "standard" },
   ]) {
     expect((await api(t.baseUrl, "POST", "/api/settings/execution", change)).status).toBe(200);
@@ -61,7 +61,7 @@ it("POST /api/settings/execution は1つの変更を受け、Provider 順位・�
   expect(await state()).toMatchObject({
     providerRank: ["openai", "anthropic", "moonshot"],
     priority: "cost",
-    frontierAdvisor: true,
+    advisorAboveMain: true,
     retrospectiveTier: "standard",
   });
 });
@@ -104,7 +104,7 @@ it("不正値(未知の Provider / ティア / 優先順位、負の価格、順
     { setting: "provider_rank", value: ["anthropic", "openai"] }, // moonshot が欠ける → indexOf -1 で先頭に来てしまう
     { setting: "provider_rank", value: ["anthropic", "anthropic", "openai"] },
     { setting: "provider_rank", value: ["anthropic", "openai", "moonshot", "openai"] },
-    { setting: "frontier_advisor", value: "yes" },
+    { setting: "advisor_above_main", value: "yes" },
     { setting: "tier", value: "frontier" }, // ティアの既定は設定ではない(BOARD_DEFAULT_TIER)
     { setting: "retrospective_tier", value: "premium" }, // ティア語彙の外(issue #914)
   ]) {
