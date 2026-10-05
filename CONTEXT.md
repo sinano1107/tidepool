@@ -184,6 +184,8 @@ _Avoid_: 異議の重み、severity、worker evaluation
 
 盤面の記録に主体として現れうるものの総称(2026-08-10 の grilling、issue #222)。3種 — registry の agent、human、そして盤面自身(Tidepool)。Worker より1つ広く、Roster とは行の意味が違う: **盤面は決して assignee にならず、委譲もされない**(したがって Roster には現れない)が、Tidepool 名義の question の登録者として盤面上に現れる。「実行しうる主体」でも「委譲できる相手」でもなく、「記録に名前が残りうる主体」の集合である。
 
+記録に名前が残る行為者は、**その行為を決めた判断の主**であって、実行した主体ではない(2026-10-05 の grilling、issue #1359 / ADR 0196)。GitHub 上の操作はすべて盤面が実行するが、人間が回答して決めた merge は human の名義である。その個別の対象について判断した主体がいなければ、盤面の名義になる — ダイヤル・保護・周期のような常設の設定は、個別の対象についての判断ではない。`auto_if_ci_green` の無人 merge は、ダイヤルを選んだのが人間でも盤面の名義である。
+
 各登場人物は**視覚的身元** — 名前と記号の対 — を持つ。記号の語彙そのものが種別を言う: agent は絵文字(Agent emoji 参照)、human は人型のグリフと二人称のラベル、盤面はアプリのマーク。盤面が絵文字を持たないのは選好ではない。絵文字は**住人の語彙**であり(ADR 0017 の命名の世界観 — 既定のピッカーが海の生き物から始まるのはその現れ)、盤面は住人ではなく**場**だからである。語彙を分けることで、盤面が住人でないことを見た目そのものが言う。
 
 視覚的身元は記録の読み口すべてに要求される — 名前しか持たない登場人物が1つでもあると、その名義の記録だけが読み手に「誰の言葉か」を解かせる。
@@ -222,7 +224,7 @@ workspace が宣言する、**worker session のサンドボックスから外�
 
 ## Merge ダイヤル(Merge dial)
 
-authority profile の必須フィールド。**人間の merge 判断がどの面に住むかの宣言**であり、3値をとる(2026-08-14 の grilling、issue #235 / ADR 0079。初出は issue #11) — `escalate`: 判断は盤面の question 面に住み、決定は decision log に残り、執行は盤面の GitHub 身元。`auto_if_ci_green`: CI 緑を条件とした決裁権内(無人 merge。Risk flag のあるタスクは question に倒れる)。`external`: 判断と執行は盤面の外 — GitHub の PR 面のネイティブな統治(レビュー・required reviews・merge queue、あるいは盤面の外の merge 権者)に委ね、盤面は question を立てず、観測も記録もしない。省略は不正 — 省略 = 意味を持つという footgun を作らない(issue #41 の線)。保護 workspace への PR はダイヤルの値に依らず常に人間が merge する(Workspace 参照 — 資源側の不変条件)。purely-local な workspace では全状態が根拠を失い、着地は常に merge question を通る(ADR 0053)。ダイヤルの値に依らず、着地は付帯子の決着と異議の束ねを待ってから走る — `external` の PR もレビュー後に開く(ADR 0092 / ADR 0106)。`auto_if_ci_green` の無人 merge は**merge の瞬間にも**付帯子の門を読み直す(2026-08-29 の grilling、issue #504): PR が開いた後に立った異議修理が走行中、または未束ねの異議があるなら、CI が緑でも merge せずキューに残す — 人間の merge 回答が回答時に検証される条件(ADR 0092 決定5)と同一で、無人 merge だけが回答時検証を持たない面だった。
+authority profile の必須フィールド。**人間の merge 判断がどの面に住むかの宣言**であり、3値をとる(2026-08-14 の grilling、issue #235 / ADR 0079。初出は issue #11) — `escalate`: 判断は盤面の question 面に住み、決定は decision log に残り、執行は盤面の GitHub 身元。`auto_if_ci_green`: CI 緑を条件に盤面の規則が merge する(無人 merge。Risk flag のあるタスクは question に倒れる。merge は盤面の名義 — 登場人物 参照)。`external`: 判断と執行は盤面の外 — GitHub の PR 面のネイティブな統治(レビュー・required reviews・merge queue、あるいは盤面の外の merge 権者)に委ね、盤面は question を立てず、観測も記録もしない。省略は不正 — 省略 = 意味を持つという footgun を作らない(issue #41 の線)。保護 workspace への PR はダイヤルの値に依らず常に人間が merge する(Workspace 参照 — 資源側の不変条件)。purely-local な workspace では全状態が根拠を失い、着地は常に merge question を通る(ADR 0053)。ダイヤルの値に依らず、着地は付帯子の決着と異議の束ねを待ってから走る — `external` の PR もレビュー後に開く(ADR 0092 / ADR 0106)。`auto_if_ci_green` の無人 merge は**merge の瞬間にも**付帯子の門を読み直す(2026-08-29 の grilling、issue #504): PR が開いた後に立った異議修理が走行中、または未束ねの異議があるなら、CI が緑でも merge せずキューに残す — 人間の merge 回答が回答時に検証される条件(ADR 0092 決定5)と同一で、無人 merge だけが回答時検証を持たない面だった。
 
 盤面が決裁を持つ状態(`escalate` の open question、`auto_if_ci_green` の CI 待ち)で、盤面の外で先に merge されていた事実は、盤面が**観測**として記録し決裁を引退させる — 検出は遅い走査と回答受理直前の検証で行われ、観測は執行と区別して綴られる。走査は快適性のための機構であり、正しさは回答時の検証が担う(ADR 0079)。
 
