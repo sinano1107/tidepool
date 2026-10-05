@@ -27,7 +27,7 @@ function charBoundary(buf: Buffer, end: number): number {
 
 const MALFORMED_NEXT = "next is malformed: pass the next string exactly as a previous response returned it";
 
-const encodeNext =(position: ReadPosition) => Buffer.from(JSON.stringify(position)).toString("base64url");
+const encodeNext = (position: ReadPosition) => Buffer.from(JSON.stringify(position)).toString("base64url");
 
 /** 続きを読む。盤面は状態を持たず、続きが verb・最初の引数・位置を自己記述する(ADR 0195 決定6)。 */
 export function readNext<A = Record<string, unknown>>(verb: string, next: string): ReadPosition<A> {
@@ -47,6 +47,14 @@ export function readNext<A = Record<string, unknown>>(verb: string, next: string
  *  `envelope`(item の列以外の欄)は最初の読みにだけ載る。残りがあるときだけ `next` と `remaining`(残りの件数)が付く ——
  *  付かなければ読みは完結している。封筒・`next`・`remaining` の分も予算に数える。
  *  続きの境目は item の鍵 —— 既定は `id`、id を持たない item(枝の行・文字列など)は `keyOf` が item と列の位置から作る。 */
+export function packItems<T extends { id: ItemId }>(read: ReadPosition, key: string, items: readonly T[], envelope?: Record<string, unknown>): Record<string, unknown>;
+export function packItems<T>(
+  read: ReadPosition,
+  key: string,
+  items: readonly T[],
+  envelope: Record<string, unknown>,
+  keyOf: (item: T, index: number) => ItemId,
+): Record<string, unknown>;
 export function packItems<T>(
   read: ReadPosition,
   key: string,
@@ -74,8 +82,13 @@ export function packItems<T>(
     if (typeof value !== "string") throw new DomainError(MALFORMED_NEXT);
     const text = Buffer.from(value);
     const pageUpTo = (end: number) => {
-      const cut = structuredClone(item) as any;
-      field.slice(0, -1).reduce((node, name) => node[name], cut)[field.at(-1)!] = text.subarray(offset, end).toString();
+      // 欄の path が空なら item そのもの(文字列の item)を切る
+      let cut: any = text.subarray(offset, end).toString();
+      if (field.length > 0) {
+        const slice = cut;
+        cut = structuredClone(item);
+        field.slice(0, -1).reduce((node, name) => node[name], cut)[field.at(-1)!] = slice;
+      }
       return {
         ...firstOnly,
         [key]: [cut],
@@ -111,8 +124,6 @@ export function packItems<T>(
     // 先頭の item が封筒と一緒に入らないだけなら、封筒だけを返してその item は次の応答で丸ごと返す ——
     // 切るのは1件で予算を超える item だけ(ADR 0195 決定4)
     if (Object.keys(firstOnly).length > 0) return { ...firstOnly, [key]: [], ...continueFrom(0) };
-    // ponytail: 切れるのは object の item の欄だけ —— 1件で予算を超える文字列の item は丸ごと返して床に任せる。観測されたら欄の分割を広げる
-    if (typeof rest[0] !== "object" || rest[0] === null) return { [key]: [rest[0]], ...continueFrom(1) };
     return piece(longestStringField(rest[0]), 0);
   }
   return { ...firstOnly, [key]: rest.slice(0, k), ...continueFrom(k) };

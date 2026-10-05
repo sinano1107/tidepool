@@ -260,7 +260,7 @@ const QUESTION_ANNOTATIONS_DESCRIPTION =
   "A question also carries `landing` (null for a general question; for a landing question, `blocked_by` says why a `merge` answer would be rejected right now — `attached_children` or `objections` — or null when it would be accepted), `approval` (for a child-approval question, whether approving raises the parent's risk; otherwise null), `blocking` (the id of the parent task it holds up, or null), `moved` (for a memory proposal, one element per pinned entry moved since the proposal was shown: `id` is the entry as pinned, `tail_id` is where it lives now with its current `path` / `scope`, and an answer applies to `tail_id`), `needs_comment` (the answers that `answer_question` refuses without a non-blank comment; empty when every answer takes an optional one), and `free_text` (false when an answer must match one of the item's options verbatim; true when free text is accepted). A non-question task carries none of these.";
 
 /** 予算と続きで読む口の description の続きの読み方(ADR 0195)。順序は各口が前に書く。 */
-const readByNext = (verb: string, items: string, firstOnly?: string) =>
+const nextDescription = (verb: string, items: string, firstOnly?: string) =>
   `When the ${items} do not fit in one response, the response carries \`next\` and \`remaining\` (how many ${items} are not returned yet): ` +
   `call ${verb} again with only \`next\` to read the rest, and repeat until a response carries no \`next\` — then the list is complete.` +
   (firstOnly ? ` ${firstOnly} on the first response only.` : "") +
@@ -268,7 +268,7 @@ const readByNext = (verb: string, items: string, firstOnly?: string) =>
   "in UTF-8 bytes): join that field across the pieces to get it verbatim.";
 
 /** 結果を返し、DomainError は tool error にする。 */
-const memoryVerb = (write: () => unknown) => {
+const domainResult = (write: () => unknown) => {
   try {
     return toolResult(write());
   } catch (err) {
@@ -286,7 +286,7 @@ function readBudgeted<A extends Record<string, unknown>>(
 ) {
   const given = Object.keys(args).filter((name) => args[name] !== undefined);
   if (next !== undefined && given.length > 0) return toolError(`pass ${given.join(", ")} or next, not both`);
-  return memoryVerb(() => read(next === undefined ? { verb, args: args as unknown as A } : readNext<A>(verb, next)));
+  return domainResult(() => read(next === undefined ? { verb, args: args as unknown as A } : readNext<A>(verb, next)));
 }
 
 /** 書き込みの ack に載せる task の識別と状態(ADR 0195)。本文(purpose・完了基準・handoff など)は呼び手が持っているか get_task で読む。 */
@@ -304,7 +304,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
   server.registerTool(
     "list_board",
     {
-      description: `List the current task board as \`tasks\`, in board order. ${readByNext("list_board", "tasks")} ${QUESTION_ANNOTATIONS_DESCRIPTION}`,
+      description: `List the current task board as \`tasks\`, in board order. ${nextDescription("list_board", "tasks")} ${QUESTION_ANNOTATIONS_DESCRIPTION}`,
       inputSchema: { next: z.string().optional() },
     },
     async (input) =>
@@ -330,7 +330,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
     {
       description:
         "List the execution queue and pickup state: `halts` (and `teardown` while a session is being torn down) say why pickup " +
-        `is waiting, \`tasks\` lists the queue in board order. ${readByNext("list_queue", "tasks", "`halts` and `teardown` come")}`,
+        `is waiting, \`tasks\` lists the queue in board order. ${nextDescription("list_queue", "tasks", "`halts` and `teardown` come")}`,
       inputSchema: { next: z.string().optional() },
     },
     async (input) =>
@@ -381,7 +381,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
       description:
         "Read the decision log without marking it seen, newest first (entry id descending). Each entry carries every objection ever " +
         "raised against it (bundled and still commit-pending alike). `cursor` is the human's unread cursor, unrelated to `next`. " +
-        readByNext("read_decision_log", "entries", "`cursor` comes"),
+        nextDescription("read_decision_log", "entries", "`cursor` comes"),
       inputSchema: { next: z.string().optional() },
     },
     async (input) =>
@@ -667,7 +667,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
   );
   // spec #586 F / issue #593: the human's memory surface. No approve verb (ADR 0152):
   // wording the human writes here is approved on write, and AI-drafted wording is approved
-  // only through a proposal question. Domain errors come back as tool errors (memoryVerb).
+  // only through a proposal question. Domain errors come back as tool errors (domainResult).
   const writtenAs =
     "Written as the human, approved at once. The original_* fields, when given, are the human's own wording, recorded in the " +
     "board's display language. workspace null = the whole board.";
@@ -683,7 +683,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
         "state invalidated lists invalidated entries, approved / candidate the rest. On a board with a registry each entry carries orphaned: " +
         "\"addressee\", \"scope\" or \"both\" when its addressee agent or scope workspace is no longer registered, null otherwise. " +
         "path lists only the entries at that branch or under it (path/…). Entries come as `entries`, oldest first (id ascending). " +
-        `${readByNext("list_memory_entries", "entries")} \`next\` keeps the filters of the first call: pass it alone.`,
+        `${nextDescription("list_memory_entries", "entries")} \`next\` keeps the filters of the first call: pass it alone.`,
       inputSchema: memoryListFilterSchema.extend({ board_wide: z.boolean().optional(), next: z.string().optional() }).shape,
     },
     async (input) =>
@@ -697,7 +697,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
     {
       description:
         `${MEMORY_BRANCHES_DESCRIPTION} Each Definition carries the human's original wording (original) when it has one. ` +
-        readByNext("list_memory_branches", "branches"),
+        nextDescription("list_memory_branches", "branches"),
       inputSchema: { next: z.string().optional() },
     },
     // 枝の行は id を持たない —— 続きの境目は path(木の中で1行1つ)
@@ -710,7 +710,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
         `English canonical wording; original_title and original_text go together (both or neither). ${supersedesEffect} ${writtenAs}`,
       inputSchema: humanKnowledgeSchema.shape,
     },
-    async (input) => memoryVerb(() => recordKnowledge(deps.db, gatedHumanEntryInput(deps, input), "mcp", deps.clock.now())),
+    async (input) => domainResult(() => recordKnowledge(deps.db, gatedHumanEntryInput(deps, input), "mcp", deps.clock.now())),
   );
   server.registerTool(
     "define_memory_branch",
@@ -725,7 +725,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
         `${supersedesEffect} ${writtenAs}`,
       inputSchema: humanDefinitionSchema.shape,
     },
-    async (input) => memoryVerb(() => defineMemoryBranch(deps.db, gatedHumanEntryInput(deps, input), "mcp", deps.clock.now())),
+    async (input) => domainResult(() => defineMemoryBranch(deps.db, gatedHumanEntryInput(deps, input), "mcp", deps.clock.now())),
   );
   server.registerTool(
     "record_behavior",
@@ -738,7 +738,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
         `original_title and original_text go together (both or neither). ${supersedesEffect} ${writtenAs}`,
       inputSchema: humanBehaviorSchema.shape,
     },
-    async (input) => memoryVerb(() => recordBehavior(deps.db, gatedHumanEntryInput(deps, input), "mcp", deps.clock.now())),
+    async (input) => domainResult(() => recordBehavior(deps.db, gatedHumanEntryInput(deps, input), "mcp", deps.clock.now())),
   );
   server.registerTool(
     "preview_case",
@@ -747,18 +747,20 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
         "Render the case an exemplar can cite: event_id is a decision_logged event (its decision text, the steering of its objections, " +
         "and its session's handoff and result) or a worker_spawned event (that session's decisions in order, handoff and result). An " +
         "objection_attributed event (the source an exemplar candidate may carry) renders its decision with only that attribution's steering. " +
-        "steering and decisions come in event order. When they do not fit in one response, the response carries `next` and `remaining` " +
-        "(how many are not returned yet): call preview_case again with only `next` to read the rest, and repeat until a response carries " +
-        "no `next`. The rest of the case comes on the first response only.",
+        `steering and decisions come in event order. ${nextDescription("preview_case", "steering or decisions lines", "The rest of the case comes")}`,
       inputSchema: { event_id: z.number().int().positive().optional(), next: z.string().optional() },
     },
     async (input) =>
       readBudgeted("preview_case", input, (read) => {
         if (read.args.event_id === undefined) throw new DomainError("pass event_id, or next from a previous preview_case");
         // item は steering か decisions の文(文字列で id を持たない)。続きの境目は列の位置 —— どちらも event 順で積み足されるだけ
-        const { steering, decisions, ...envelope } = previewCase(deps.db, read.args.event_id) as Partial<Record<"steering" | "decisions", string[]>>;
-        const key = decisions ? "decisions" : "steering";
-        return packItems(read, key, decisions ?? steering!, envelope, (_, i) => i);
+        const rendered = previewCase(deps.db, read.args.event_id);
+        if ("decisions" in rendered) {
+          const { decisions, ...envelope } = rendered;
+          return packItems(read, "decisions", decisions, envelope, (_, i) => i);
+        }
+        const { steering, ...envelope } = rendered;
+        return packItems(read, "steering", steering, envelope, (_, i) => i);
       }),
   );
   server.registerTool(
@@ -774,7 +776,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
         "recorded in the board's display language. workspace null = the whole board.",
       inputSchema: humanExemplarSchema.shape,
     },
-    async (input) => memoryVerb(() => recordExemplar(deps.db, gatedHumanEntryInput(deps, input), "mcp", deps.clock.now())),
+    async (input) => domainResult(() => recordExemplar(deps.db, gatedHumanEntryInput(deps, input), "mcp", deps.clock.now())),
   );
   server.registerTool(
     "fold_memory_entries",
@@ -787,7 +789,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
         "already covers retires pointing at it. To replace entries with one you write now, pass them as supersedes on the write.",
       inputSchema: memoryFoldSchema.shape,
     },
-    async (input) => memoryVerb(() => foldMemoryEntries(deps.db, { ...input, author: HUMAN_AUTHOR }, "mcp", deps.clock.now())),
+    async (input) => domainResult(() => foldMemoryEntries(deps.db, { ...input, author: HUMAN_AUTHOR }, "mcp", deps.clock.now())),
   );
   server.registerTool(
     "invalidate_memory_entry",
@@ -800,7 +802,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
       // strict な object ごと渡す —— .shape だと迷い込んだ successor_id が黙って捨てられる
       inputSchema: invalidationSchema.extend({ entry_id: z.number().int().positive() }),
     },
-    async (input) => memoryVerb(() => ({ event_id: invalidateMemoryEntry(deps.db, input, HUMAN_WORKER_ID, "mcp", deps.clock.now()) })),
+    async (input) => domainResult(() => ({ event_id: invalidateMemoryEntry(deps.db, input, HUMAN_WORKER_ID, "mcp", deps.clock.now()) })),
   );
   const moveEffect =
     "The board copies the body — title, text, originals, addressee, annotations, source, author, state and approval — to the new place " +
@@ -816,7 +818,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
       inputSchema: memoryMoveSchema.extend({ entry_id: z.number().int().positive() }).shape,
     },
     async ({ entry_id, workspace, path }) =>
-      memoryVerb(() => {
+      domainResult(() => {
         assertMemoryReferencesKnown(deps, { workspace });
         return moveMemory(deps.db, { entry_id, scope: workspace, path, mover: HUMAN_AUTHOR }, "mcp", deps.clock.now());
       }),
@@ -837,7 +839,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
     },
     // 門は行き先だけ —— 移動元が消えた workspace の孤立を生きた置き場へ移せるように(ADR 0173 決定2)
     async ({ workspace, path, to_workspace, to_path, merge }) =>
-      memoryVerb(() => {
+      domainResult(() => {
         assertMemoryReferencesKnown(deps, { workspace: to_workspace });
         const { moved, folded } = moveMemoryBranch(deps.db, { scope: workspace, path, to_scope: to_workspace, to_path, merge, mover: HUMAN_AUTHOR }, "mcp", deps.clock.now());
         return { moved: moved.length, folded: folded.length, to_workspace, to_path };
@@ -854,7 +856,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
         "a Definition whose branch already has a live Definition in that workspace.",
       inputSchema: { entry_id: z.number().int().positive() },
     },
-    async ({ entry_id }) => memoryVerb(() => restoreMemoryEntry(deps.db, { entry_id, restorer: HUMAN_AUTHOR }, "mcp", deps.clock.now())),
+    async ({ entry_id }) => domainResult(() => restoreMemoryEntry(deps.db, { entry_id, restorer: HUMAN_AUTHOR }, "mcp", deps.clock.now())),
   );
   server.registerTool(
     "list_halted_refires",
@@ -866,7 +868,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
         "triage session raised against the entry). An allocation row shows the review and the reviewed task; a draft or second-round row shows " +
         "the objected entry, its task, cause (the latest bundle's judgment; null = unattributed) and round. Every row shows the last failure's " +
         "reason and time. Rows come as `halted`: draft and second-round rows first, in the order of the objections they answer, " +
-        `then allocation reviews. ${readByNext("list_halted_refires", "rows")}`,
+        `then allocation reviews. ${nextDescription("list_halted_refires", "rows")}`,
       inputSchema: { next: z.string().optional() },
     },
     // 行は id を持たない —— 続きの境目は refire と target の鍵(Retry / Dismiss が行を指すのと同じ)
@@ -884,7 +886,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
         "Key it as list_halted_refires does (second_round: target = the bundle's first objection event id). Refused for anything not currently in list_halted_refires.",
       inputSchema: refireKeySchema.shape,
     },
-    async (key) => memoryVerb(() => ({ event_id: markHaltedRefire(deps.db, "refire_retried", key, "mcp", deps.clock.now()) })),
+    async (key) => domainResult(() => ({ event_id: markHaltedRefire(deps.db, "refire_retried", key, "mcp", deps.clock.now()) })),
   );
   server.registerTool(
     "dismiss_halted_refire",
@@ -895,7 +897,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
         "Key it as list_halted_refires does (second_round: target = the bundle's first objection event id). Refused for anything not currently in list_halted_refires.",
       inputSchema: refireKeySchema.shape,
     },
-    async (key) => memoryVerb(() => ({ event_id: markHaltedRefire(deps.db, "refire_dismissed", key, "mcp", deps.clock.now()) })),
+    async (key) => domainResult(() => ({ event_id: markHaltedRefire(deps.db, "refire_dismissed", key, "mcp", deps.clock.now()) })),
   );
   server.registerTool(
     "rebuild_memory_index",
