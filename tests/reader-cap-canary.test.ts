@@ -3,6 +3,8 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { buildCanaryPayload, judgeReceived, readClaudeReceived, readCodexReceived } from "../src/reader-cap-canary.js";
 
+/** 一時 MCP が返す CallToolResult の大きさ。 */
+const resultBytes = (text: string) => Buffer.byteLength(JSON.stringify({ content: [{ type: "text", text }] }));
 const fixture = (name: string) => readFileSync(join(import.meta.dirname, "fixtures", name), "utf8");
 
 // 実 CLI の記録(2026-10-05 にこの canary の一時 MCP を通して採取、tool_use / tool_result の行だけに削った)
@@ -14,15 +16,21 @@ const CODEX_ROLLOUT = fixture("reader-cap-codex-0.147.0.rollout.jsonl");
 const CODEX_MARKERS = { middle: "MIDDLE-8872f510-04b6-4b39-ba8f-cc34363ecb06", tail: "TAIL-9df07b5c-5e2a-4721-bdfe-ce20c79b9bb3" };
 
 describe("canary の応答", () => {
-  it("盤面の予算(40,000 バイト)ちょうどの1行の JSON で、中央と末尾に目印を持つ", () => {
+  it("CallToolResult に包んだ大きさが盤面の予算(40,000 バイト)ちょうどの1行の JSON で、中央と末尾に目印を持つ", () => {
     const { text, middle, tail } = buildCanaryPayload();
-    expect(Buffer.byteLength(text)).toBe(40_000);
+    expect(resultBytes(text)).toBe(40_000);
     expect(text).not.toContain("\n");
     expect(() => JSON.parse(text)).not.toThrow();
     const at = text.indexOf(middle) / text.length;
     expect(at).toBeGreaterThan(0.4);
     expect(at).toBeLessThan(0.6);
     expect(text.slice(-100)).toContain(tail);
+  });
+
+  it("本文は引用符の多い形(小さい JSON の object の列)で、包むと実際の応答と同じく1割以上膨らむ", () => {
+    const { text } = buildCanaryPayload();
+    expect(text.startsWith('{"events":[{')).toBe(true);
+    expect(resultBytes(text) - Buffer.byteLength(text)).toBeGreaterThan(Buffer.byteLength(text) / 10);
   });
 
   it("目印は呼び出しごとに変わる", () => {

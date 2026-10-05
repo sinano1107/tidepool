@@ -22,7 +22,7 @@ async function call(client: Client, args: Record<string, unknown>, verb = "get_t
   const result: any = await client.callTool({ name: verb, arguments: args });
   expect(result.isError ?? false, result.content[0].text).toBe(false);
   const text: string = result.content[0].text;
-  return { bytes: Buffer.byteLength(text), payload: JSON.parse(text) };
+  return { bytes: Buffer.byteLength(JSON.stringify(result)), payload: JSON.parse(text) };
 }
 
 /** 最初の呼び出しから next が尽きるまで追った応答の列。 */
