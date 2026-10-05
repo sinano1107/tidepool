@@ -92,3 +92,10 @@ event に judge を足す(ADR 0150 決定8)。
 
 **Provider は `anthropic` 固定のまま残す。** 答えを取りに行く Board call の client は Claude しか無く、Provider を選べる欄は
 `anthropic` 以外を受け取れない。Codex 版の client と用途ごとの Provider の宣言は #456 の範囲で、その時に欄を足す。
+
+## 追記5(2026-10-05 の triage / grilling、issue #1347 / ADR 0199)
+
+決定6 の「候補セル」は **Interview の対象** —— (provider, model, effort, tier) で、表の行でなくてよい(ADR 0199 決定1・2)。
+advisor は名指さず本番と同じ規則で導出する。root review が対象の一覧を欄で持ち、子が走れるのはその一覧の対象だけである
+(決定3)。発火事象の「新セルの出現」は外れた: 行が具体 id になってから未知の id は観測されず(ADR 0182)、meta-review の
+提案は根拠の episode から出て、対象は表にある model の別の effort か別のティアに限る(ADR 0199 決定5)。
