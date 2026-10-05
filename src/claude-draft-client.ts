@@ -8,7 +8,7 @@ import {
 import { rethrowCliAuthExecFailure } from "./cli-auth.js";
 import type { Db } from "./db.js";
 import type { ChildDraftContext, DraftClient, HandoffDraft, IssueInspection, TaskDraft } from "./draft.js";
-import { anthropicBoardCallRow } from "./execution-setting.js";
+import { anthropicBoardCallRow, boardDefaultTier } from "./execution-setting.js";
 import type { Issue } from "./github.js";
 import type { RegistryCandidates } from "./registry.js";
 import { HANDOFF_FIELDS } from "./tasks.js";
@@ -211,12 +211,12 @@ export class ClaudeDraftClient implements DraftClient {
     return issueInspectionSchema.parse(await this.run(buildInspectionPrompt(issue)));
   }
 
-  // runs on the table's cheapest anthropic × economy row (ADR 0192): no row or
+  // runs on the table's cheapest anthropic row of the board default tier (ADR 0192 / ADR 0200 決定4): no row or
   // a closed Anthropic window fails with the reason, never falls back to another model
   private async run(prompt: string): Promise<unknown> {
     let row;
     try {
-      row = anthropicBoardCallRow(this.db, "economy");
+      row = anthropicBoardCallRow(this.db, boardDefaultTier(this.db));
     } catch (err) {
       throw new Error(`draft not made: ${(err as Error).message}`);
     }

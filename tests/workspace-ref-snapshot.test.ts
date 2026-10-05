@@ -6,6 +6,7 @@ import { openDb } from "../src/db.js";
 import { GitHubAuth } from "../src/github-auth.js";
 import type { WorkspaceConfig } from "../src/workspace.js";
 import { publishWorkspace } from "../src/workspace-create.js";
+import { seedTierNames } from "./fakes.js";
 import {
   api,
   bootTidepool,
@@ -229,7 +230,7 @@ it("セッション中の registry 書き込みで、registry clone の workspac
     registry: { dir: registryDir, mode: "purely-local" },
     boardState: { paths: [], listWorkspaces: () => [workspace] },
     agentAdmin: {
-      create: (input) => createAgent(input, { registry: { dir: registryDir, mode: "purely-local" } }),
+      create: (input) => createAgent(input, { registry: { dir: registryDir, mode: "purely-local" }, tiers: () => seedTierNames }),
     },
   });
   const task = await registerWork(t, "runs in the registry clone");
@@ -297,7 +298,7 @@ it("盤面が origin/main を撮り直しても、連動する origin/HEAD で q
     workspace,
     registry,
     boardState: { paths: [], listWorkspaces: () => [workspace] },
-    agentAdmin: { create: (input) => createAgent(input, { registry }) },
+    agentAdmin: { create: (input) => createAgent(input, { registry, tiers: () => seedTierNames }) },
   });
   const task = await registerWork(t, "runs in the registry clone");
   await t.clock.advance(HOUR);

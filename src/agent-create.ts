@@ -2,6 +2,7 @@ import { readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { stringify as stringifyYaml } from "yaml";
 import { UnknownAgentError } from "./agent.js";
+import type { Tier } from "./execution-setting.js";
 import type { GitHubAuth } from "./github-auth.js";
 import {
   type AgentDefinition,
@@ -106,9 +107,14 @@ export interface AgentAdminDeps {
   githubAuth?: GitHubAuth;
 }
 
+/** 定義を検査する verb が読む盤面の段の名前(ADR 0200 決定2)。呼び出しごとに読む —— deps は起動時に1度組まれる。 */
+export interface BoardTiers {
+  tiers: () => readonly Tier[];
+}
+
 /** ADR 0020's agent half: write `agents/<name>.md` to the registry — a
  *  WebUI-initiated registry change is the human's explicit act. */
-export async function createAgent(input: CreateAgentInput, deps: AgentAdminDeps): Promise<void> {
+export async function createAgent(input: CreateAgentInput, deps: AgentAdminDeps & BoardTiers): Promise<void> {
   // 入口で fetch してから読む(ADR 0052 決定2/4): fetch できなければ push もでき
   // ず、その編集は最初から成立していない — workspace-create と同じ二段検査
   await refreshRegistryForWrite(deps.registry, deps.githubAuth);
@@ -118,7 +124,7 @@ export async function createAgent(input: CreateAgentInput, deps: AgentAdminDeps)
   assertValidIcon(input.icon);
   assertValidSkillAllowlist(input.skills);
   const definition = normalizedDefinition(input);
-  assertValidAgentDefinition(input.name, definition);
+  assertValidAgentDefinition(input.name, definition, deps.tiers());
   commitAgentFile(deps, { ...definition, retiredFields: [], version: "1" }, `create agent ${input.name} via WebUI`);
 }
 
@@ -130,7 +136,7 @@ export async function createAgent(input: CreateAgentInput, deps: AgentAdminDeps)
  *  numeric segment of the stored version + 1. */
 export type UpdateAgentInput = CreateAgentInput;
 
-export async function updateAgent(input: UpdateAgentInput, deps: AgentAdminDeps): Promise<void> {
+export async function updateAgent(input: UpdateAgentInput, deps: AgentAdminDeps & BoardTiers): Promise<void> {
   await refreshRegistryForWrite(deps.registry, deps.githubAuth);
   const registry = loadRegistry(deps.registry.dir, deps.registry.mode);
   const existing = ownEntry(registry.agents, input.name);
@@ -150,7 +156,7 @@ export async function updateAgent(input: UpdateAgentInput, deps: AgentAdminDeps)
   // だけになる。人間面の credential(ADR 0036)を通った編集であり、フォームは
   // 定義を丸ごと提出するので、黙って直したことにはならない。
   const definition = normalizedDefinition(input);
-  assertValidAgentDefinition(input.name, definition);
+  assertValidAgentDefinition(input.name, definition, deps.tiers());
   if (!sameEffectiveFields(existing, definition)) {
     commitAgentFile(
       deps,

@@ -7,6 +7,7 @@ import {
   loadRegistry,
   REVIEWER_AUTHORITY_PROFILE,
 } from "../src/registry.js";
+import { seedTierNames } from "./fakes.js";
 import { makeRegistry } from "./registry-fixture.js";
 
 it("agents/fugu.md の無い registry を読むと、組み込みの fugu が印つきで map に居る(ADR 0117 決定1/2)", async () => {
@@ -60,7 +61,7 @@ it("組み込みの fugu は authority/auditor.yaml の無い registry でも re
   const dir = await makeRegistry();
   const registry = loadRegistry(dir, "purely-local");
 
-  const resolved = resolveExecutionAgent(registry, "deckhand", "fugu");
+  const resolved = resolveExecutionAgent(registry, "deckhand", "fugu", seedTierNames);
 
   expect(resolved.name).toBe("fugu");
   expect(resolved.profile).toEqual(REVIEWER_AUTHORITY_PROFILE);

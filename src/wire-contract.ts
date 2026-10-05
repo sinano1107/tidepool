@@ -59,8 +59,8 @@ export interface BoardTask extends QueueTask {
   question_items: Array<{ title: string; detail?: string; options: string[]; recommendation: string }> | null;
   /** 提案 question の種別(ADR 0120 決定4 / ADR 0150 決定2 / ADR 0152 決定2)。routing の行の提案(op row)と registry の tier の提案、
    *  memory の approve / consolidate のうち `candidate_id` を持つもの(その文言、Exemplar なら注釈 list —— 種別は画面が candidate から引く)は
-   *  approve に修正値を添えられる。 */
-  question_proposal: { kind: "memory" | "routing" | "registry"; op: string; candidate_id?: number } | null;
+   *  approve に修正値を添えられる。registry の tier の提案の `pin.tier` は下げ先の選択肢の上端(ADR 0200 決定4)。 */
+  question_proposal: { kind: "memory" | "routing" | "registry"; op: string; candidate_id?: number; pin?: { tier: string } | { promoted: boolean } } | null;
   /** 確認 question の Quarantine の種別(src/quarantine.ts の QuarantineKind)。行の Quarantine(`tableRow`)の question だけが
    *  settings タブを開くボタンを持つ(ADR 0184 決定6)。 */
   question_quarantine_kind: string | null;

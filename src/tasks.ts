@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { Db } from "./db.js";
 import { DEFAULT_AUDITOR_NAME } from "./defaults.js";
 import { appendEvent, type EventOrigin, type EventPayload, getEvent, latestEventOfTask, type TaskScopedPayload, taskDecisionLog } from "./events.js";
-import { type ExecutionSettingRow, PRIORITIES, type Priority, type RoutingRowChange, TIERS, type Tier } from "./execution-setting.js";
+import { assertKnownTier, type ExecutionSettingRow, PRIORITIES, type Priority, type RoutingRowChange, type Tier, tierNames } from "./execution-setting.js";
 import type { GitHubClient, Issue, IssueRef } from "./github.js";
 import type { MemoryAmendment } from "./memory.js";
 import type { MergeDial, RosterAgent } from "./registry.js";
@@ -244,6 +244,8 @@ export type TaskRow = Omit<
   Task,
   "question_items" | "question_answer" | "question_pending_child" | "question_proposal" | "title" | "purpose" | "completion_criteria" | "review_by"
 > & {
+  tier_id: number | null;
+  review_tier_id: number | null;
   review_by: string | null;
   question_items: string | null;
   question_answer: string | null;
@@ -288,7 +290,13 @@ function fillContentPlaceholder<
   };
 }
 
-export function rowToTask(row: TaskRow): Task {
+/** 要求の段は id で持ち(ADR 0200 決定2)、Task は名前で返す —— 行を Task に写す読み口は、この列を足して SELECT し、
+ *  id の列は写像で落とす(`rowToTask` / `toBoardTask`)。`t` は tasks の別名。 */
+export function taskTierNamesSql(t: string): string {
+  return `(SELECT name FROM tiers WHERE id = ${t}.tier_id) AS tier, (SELECT name FROM tiers WHERE id = ${t}.review_tier_id) AS review_tier`;
+}
+
+export function rowToTask({ tier_id: _tierId, review_tier_id: _reviewTierId, ...row }: TaskRow): Task {
   return {
     ...fillContentPlaceholder(row),
     review_by: parseJson<string[]>(row.review_by),
@@ -443,13 +451,10 @@ function assertQuestionSpec(input: RegisterTaskInput): void {
  *  a DomainError from this layer — spelling the enum per door would mean
  *  three places to update when the vocabulary moves. An unstated column is
  *  not a bad value: null is the request's absence. */
-function assertExecutionRequest(input: Pick<RegisterTaskInput, "tier" | "priority" | "review_tier">): void {
-  if (input.review_tier !== undefined && !(TIERS as readonly string[]).includes(input.review_tier)) {
-    throw new DomainError(`unknown review_tier "${input.review_tier}" — one of ${TIERS.join(", ")}`);
-  }
-  if (input.tier !== undefined && !(TIERS as readonly string[]).includes(input.tier)) {
-    throw new DomainError(`unknown tier "${input.tier}" — one of ${TIERS.join(", ")}`);
-  }
+function assertExecutionRequest(db: Db, input: Pick<RegisterTaskInput, "tier" | "priority" | "review_tier">): void {
+  // 段は盤面の一覧(ADR 0200 決定2): 一覧に無い名前は、いまの一覧を添えて拒む
+  if (input.review_tier !== undefined) assertKnownTier(tierNames(db), "review_tier", input.review_tier);
+  if (input.tier !== undefined) assertKnownTier(tierNames(db), "tier", input.tier);
   if (input.priority !== undefined && !(PRIORITIES as readonly string[]).includes(input.priority)) {
     throw new DomainError(`unknown priority "${input.priority}" — one of ${PRIORITIES.join(", ")}`);
   }
@@ -631,7 +636,7 @@ export function registerTask(
 ): Task {
   assertQuestionSpec(input);
   assertGithubRef(input);
-  assertExecutionRequest(input);
+  assertExecutionRequest(db, input);
   if (input.type === "review" && input.review_flag) {
     throw new DomainError("a review task cannot carry review_flag");
   }
@@ -665,7 +670,7 @@ export function registerTask(
     review_flag: input.review_flag ? 1 : 0,
     review_by: input.review_by ?? null,
     review_tier: (input.review_tier as Tier | undefined) ?? null,
-    // assertExecutionRequest above has already closed these to the enums
+    // assertExecutionRequest above has already closed these to the board's tiers and the priorities
     tier: (input.tier as Tier | undefined) ?? null,
     priority: (input.priority as Priority | undefined) ?? null,
     parent_id: input.parent_id ?? null,
@@ -693,12 +698,12 @@ export function registerTask(
   db.transaction(() => {
     db.prepare(
       `INSERT INTO tasks (id, type, status, assignee, workspace, title, purpose, completion_criteria,
-         risk_flag, review_flag, review_by, review_tier, tier, priority, parent_id, based_on_decision, sort_key, handoff_doc, pr_number,
+         risk_flag, review_flag, review_by, review_tier_id, tier_id, priority, parent_id, based_on_decision, sort_key, handoff_doc, pr_number,
          question_items, question_answer, question_answer_comment, question_cancel_option,
          question_pending_child, question_proposal, question_pending_merge_pr, question_pending_local_merge_task_id, question_pending_pr_promotion_task_id, question_quarantine_kind,
          question_quarantine_value, question_cli_auth_expiry_warning, github_issue_number, meta_review_subject, created_at)
        VALUES (@id, @type, @status, @assignee, @workspace, @title, @purpose, @completion_criteria,
-         @risk_flag, @review_flag, @review_by, @review_tier, @tier, @priority, @parent_id, @based_on_decision, @sort_key, @handoff_doc, @pr_number,
+         @risk_flag, @review_flag, @review_by, (SELECT id FROM tiers WHERE name = @review_tier), (SELECT id FROM tiers WHERE name = @tier), @priority, @parent_id, @based_on_decision, @sort_key, @handoff_doc, @pr_number,
          @question_items, @question_answer, @question_answer_comment, @question_cancel_option,
          @question_pending_child, @question_proposal, @question_pending_merge_pr, @question_pending_local_merge_task_id, @question_pending_pr_promotion_task_id, @question_quarantine_kind,
          @question_quarantine_value, @question_cli_auth_expiry_warning, @github_issue_number, @meta_review_subject, @created_at)`,
@@ -1922,7 +1927,7 @@ export function decomposeTask(
   // survive as a pending_child on an approval question, where it would only
   // throw at the moment a human clicks approve (registerTask validates the
   // *question*, not the spec it carries).
-  for (const child of input.children) assertExecutionRequest(child);
+  for (const child of input.children) assertExecutionRequest(db, child);
   if (input.reason.length === 0) {
     throw new DomainError("a decomposition requires a reason");
   }
@@ -2596,7 +2601,7 @@ function boardRows(
   return db
     .prepare(
       `WITH RECURSIVE ${HELD_IDS_CTE}, ${SETTLED_TREE_CTE}
-       SELECT tasks.*, tasks.assignee AS raw_assignee, registered.worker_id AS registrant,
+       SELECT tasks.*, ${taskTierNamesSql("tasks")}, tasks.assignee AS raw_assignee, registered.worker_id AS registrant,
          ${acceptedSql("tasks.id")} AS accepted,
          CASE WHEN tasks.type = 'question' THEN '${HUMAN_WORKER_ID}'
               ELSE COALESCE(tasks.assignee, ${fallback}) END AS assignee,
@@ -2612,7 +2617,7 @@ function boardRows(
     .all(...params) as BoardRow[];
 }
 
-function toBoardTask(row: BoardRow) {
+function toBoardTask({ tier_id: _tierId, review_tier_id: _reviewTierId, ...row }: BoardRow) {
   return {
     ...fillContentPlaceholder(row),
     accepted: row.accepted === 1,
@@ -2715,7 +2720,7 @@ export function listYourTasks(db: Db): YourTask[] {
 }
 
 export function getTask(db: Db, id: string): Task | undefined {
-  const row = db.prepare("SELECT * FROM tasks WHERE id = ?").get(id) as TaskRow | undefined;
+  const row = db.prepare(`SELECT *, ${taskTierNamesSql("tasks")} FROM tasks WHERE id = ?`).get(id) as TaskRow | undefined;
   return row && rowToTask(row);
 }
 
@@ -2728,7 +2733,7 @@ export function getTask(db: Db, id: string): Task | undefined {
  *  same single-Task response shape the plain registration door already has. */
 export function latestChild(db: Db, parentId: string): Task | undefined {
   const row = db
-    .prepare("SELECT * FROM tasks WHERE parent_id = ? ORDER BY sort_key DESC LIMIT 1")
+    .prepare(`SELECT *, ${taskTierNamesSql("tasks")} FROM tasks WHERE parent_id = ? ORDER BY sort_key DESC LIMIT 1`)
     .get(parentId) as TaskRow | undefined;
   return row && rowToTask(row);
 }
@@ -2893,7 +2898,7 @@ function premiseBreachReason(db: Db, taskId: string): string {
  *  these by their registration event ids instead. */
 export function listChildren(db: Db, parentId: string): Task[] {
   const rows = db
-    .prepare("SELECT * FROM tasks WHERE parent_id = ? ORDER BY sort_key")
+    .prepare(`SELECT *, ${taskTierNamesSql("tasks")} FROM tasks WHERE parent_id = ? ORDER BY sort_key`)
     .all(parentId) as TaskRow[];
   return rows.map(rowToTask);
 }
@@ -2940,7 +2945,7 @@ export function nextSlotTask(
   const row = db
     .prepare(
       `WITH RECURSIVE ${HELD_IDS_CTE}
-       SELECT * FROM tasks t
+       SELECT t.*, ${taskTierNamesSql("t")} FROM tasks t
        WHERE t.status = 'todo'
          AND t.type <> 'question'
          AND t.assignee IS NOT @humanWorkerId

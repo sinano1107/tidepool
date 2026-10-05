@@ -15,6 +15,7 @@ import {
   type Registry,
   refreshRegistry,
 } from "../src/registry.js";
+import { seedTierNames } from "./fakes.js";
 import { makeRegistry, makeRemoteBackedRegistry } from "./registry-fixture.js";
 
 function makeMinimalRegistry(workspaceNames: string[]): Registry {
@@ -239,7 +240,7 @@ describe("loadRegistry", () => {
     const agent = loadRegistry(dir, "purely-local").agents.deckhand!;
     expect(agent.provider).toEqual([{ name: "anthropic", advisor: false }]);
     expect(agent.retiredFields).toEqual(["advisor"]);
-    expect(() => assertValidAgentDefinition("deckhand", agent)).toThrow(
+    expect(() => assertValidAgentDefinition("deckhand", agent, seedTierNames)).toThrow(
       "provider: [{ name: anthropic, advisor: true }]",
     );
   });

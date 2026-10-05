@@ -1,5 +1,5 @@
 import Database from "better-sqlite3";
-import { SEED_EXECUTION_SETTINGS } from "./execution-setting.js";
+import { SEED_BOARD_TIERS, SEED_EXECUTION_SETTINGS, SEED_TIERS } from "./execution-setting.js";
 
 export type Db = Database.Database;
 
@@ -16,12 +16,22 @@ export const MEMORY_FTS_DDL = `CREATE VIRTUAL TABLE memory_fts USING fts5(text, 
 export function openDb(path: string): Db {
   const db = new Database(path);
   db.pragma("journal_mode = WAL");
-  // 種の表で初期化するのは表を作ったときだけ —— 空かどうかで判定すると、運用者が
+  // 種の段・表・盤面設定で初期化するのは表を作ったときだけ —— 空かどうかで判定すると、運用者が
   // settings から全行を消した表が再オープンで生え直す(#545)
   const seedExecutionSettings = !db
     .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'execution_settings'")
     .get();
   db.exec(`
+    -- ADR 0200 決定1・2: ティアは盤面が持つ順序付きの段の一覧。表の行・task の要求・盤面設定は内部の id で段を指し、
+    -- 名前・説明・位置は編集できる(HTTP・MCP・agent.md は名前で喋り、書き込みの入口で id に解決する)。
+    -- 種(execution-setting.ts の SEED_TIERS)から一度だけ初期化し、以後は DB が正本。
+    CREATE TABLE IF NOT EXISTS tiers (
+      id          INTEGER PRIMARY KEY,
+      name        TEXT NOT NULL UNIQUE CHECK (name <> ''),
+      description TEXT NOT NULL CHECK (description <> ''),
+      position    INTEGER NOT NULL UNIQUE
+    );
+
     CREATE TABLE IF NOT EXISTS tasks (
       id                  TEXT PRIMARY KEY,
       type                TEXT NOT NULL CHECK (type IN ('work', 'question', 'review')),
@@ -43,7 +53,7 @@ export function openDb(path: string): Db {
       risk_flag           INTEGER NOT NULL DEFAULT 0,
       review_flag         INTEGER NOT NULL DEFAULT 0,
       review_by           TEXT,
-      review_tier         TEXT,
+      review_tier_id      INTEGER REFERENCES tiers(id),
       parent_id           TEXT REFERENCES tasks(id),
       -- Immutable provenance: the decision-log event this decomposed child
       -- rests on. Null for tasks outside a decomposition decision.
@@ -111,11 +121,12 @@ export function openDb(path: string): Db {
       -- either null for "unstated". Null is the *absence* of a request, and
       -- is distinguished in the record from "the board default was chosen" —
       -- the latter shows up as worker_spawned.source.tier, never here.
-      -- Deliberately no CHECK: the enum is stated once in the domain
-      -- (registerTask / decomposeTask throw DomainError, ADR 0110 決定2).
+      -- The tier points at the board's tier list by id (ADR 0200 決定2); the
+      -- name is checked once in the domain (registerTask / decomposeTask throw
+      -- DomainError listing the current names, ADR 0110 決定2).
       -- Constraints (provider限定・予算) are deliberately NOT columns
       -- here: those live on the workspace and the board settings.
-      tier                TEXT,
+      tier_id             INTEGER REFERENCES tiers(id),
       priority            TEXT,
       -- board-internal only (ADR 0120 決定2 / issue #618): この task が主題 X の周期 meta-review であること。
       -- 盤面の登録関数だけが書き、MCP / JSON API からは書けない。
@@ -248,7 +259,7 @@ export function openDb(path: string): Db {
     CREATE TABLE IF NOT EXISTS execution_settings (
       provider  TEXT NOT NULL CHECK (provider IN ('anthropic', 'moonshot', 'openai')),
       model     TEXT NOT NULL,
-      tier      TEXT NOT NULL CHECK (tier IN ('economy', 'standard', 'frontier')),
+      tier_id   INTEGER NOT NULL REFERENCES tiers(id),
       effort    TEXT NOT NULL,
       price_in  REAL NOT NULL CHECK (price_in >= 0),
       price_out REAL NOT NULL CHECK (price_out >= 0),
@@ -259,7 +270,7 @@ export function openDb(path: string): Db {
     -- 使ってよい」(Fable の usage-credits 同意も org の availableModels も盤面
     -- からは読めないので、立つまでは advisor を main と同一に倒す)、Provider
     -- 順位(JSON 配列、PROVIDER_VALUES の順列)、優先順位の既定(ADR 0114 決定1)。
-    -- 行が無い / 列が NULL = 未設定 = コードの既定(false / 宣言順 / quality)。
+    -- 行は種で作り、列が NULL = 未設定 = コードの既定(宣言順 / quality)。
     -- settings タブと管理MCP が書く(#545)。
     CREATE TABLE IF NOT EXISTS execution_defaults (
       id               INTEGER PRIMARY KEY CHECK (id = 1),
@@ -268,9 +279,10 @@ export function openDb(path: string): Db {
       priority         TEXT CHECK (priority IN ('quality', 'cost')),
       -- 学習器の昇格(ADR 0150 決定4)
       learner_promoted INTEGER NOT NULL DEFAULT 0 CHECK (learner_promoted IN (0, 1)),
-      -- 振り返り Board call(配分評価・帰責の判定・起草)が共有する1つのティア(ADR 0111 追記4、issue #914)。
-      -- 列が NULL = 未設定 = frontier(今日と同じ挙動)。Provider は anthropic 固定のまま(#456 まで)。
-      retrospective_tier TEXT CHECK (retrospective_tier IN ('economy', 'standard', 'frontier'))
+      -- 盤面既定の段(要求の無い task と下書き)と、盤面自身の判断の段(振り返り Board call と周期 meta-review、
+      -- ADR 0200 決定4)。どちらも「未設定」を持たない —— 行は種で作る。Provider は anthropic 固定のまま(#456 まで)。
+      default_tier_id       INTEGER NOT NULL REFERENCES tiers(id),
+      retrospective_tier_id INTEGER NOT NULL REFERENCES tiers(id)
     );
 
     CREATE TABLE IF NOT EXISTS provider_pace_offsets (
@@ -553,12 +565,19 @@ export function openDb(path: string): Db {
   // 行ごとの INSERT OR IGNORE にしないのは、運用者が消した行が再オープンの
   // たびに生え直すのが「正本は DB」と矛盾するためである。
   if (seedExecutionSettings) {
+    const tierId = "(SELECT id FROM tiers WHERE name = ?)";
+    const insertTier = db.prepare("INSERT INTO tiers (name, description, position) VALUES (?, ?, ?)");
+    SEED_TIERS.forEach((tier, position) => insertTier.run(tier.name, tier.description, position));
     const insert = db.prepare(
-      "INSERT INTO execution_settings (provider, tier, model, effort, price_in, price_out) VALUES (?, ?, ?, ?, ?, ?)",
+      `INSERT INTO execution_settings (provider, tier_id, model, effort, price_in, price_out) VALUES (?, ${tierId}, ?, ?, ?, ?)`,
     );
     for (const row of SEED_EXECUTION_SETTINGS) {
       insert.run(row.provider, row.tier, row.model, row.effort, row.price_in, row.price_out);
     }
+    db.prepare(`INSERT INTO execution_defaults (id, default_tier_id, retrospective_tier_id) VALUES (1, ${tierId}, ${tierId})`).run(
+      SEED_BOARD_TIERS.default_tier,
+      SEED_BOARD_TIERS.retrospective_tier,
+    );
   }
   return db;
 }

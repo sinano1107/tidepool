@@ -6,6 +6,7 @@ import { createAgent, listAgentViews, updateAgent } from "../src/agent-create.js
 import { createProfile, listProfileViews, updateProfile } from "../src/profile-create.js";
 import { loadRegistry } from "../src/registry.js";
 import { createWorkspace, listWorkspaceViews, updateWorkspace } from "../src/workspace-create.js";
+import { seedTierNames } from "./fakes.js";
 import { bootstrapUrl, bootTidepool } from "./harness.js";
 import { makePreviewRegistry } from "./registry-fixture.js";
 
@@ -39,7 +40,7 @@ export async function bootPreview(): Promise<Preview> {
     // (ADR 0050)、リモート正本という役をそもそも持たない。
     const registry = { dir: registryDir, mode: "purely-local" as const };
     const workspaceDeps = { registry, workspacesBaseDir: workspacesDir };
-    const agentDeps = { registry };
+    const agentDeps = { registry, tiers: () => seedTierNames };
     const profileDeps = { registry };
     const board = await bootTidepool({
       workspaceAdmin: {

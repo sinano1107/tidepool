@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { Db } from "./db.js";
 import { appendEvent, type EventKind, type EventOrigin, listEventsOfKinds } from "./events.js";
-import { type ListAgentTiers, settleStaleProposals } from "./execution-setting.js";
+import { type ListAgentTiers, readExecutionSettings, settleStaleProposals } from "./execution-setting.js";
 import { BOARD_WORKER_ID, HUMAN_WORKER_ID, registerTask } from "./tasks.js";
 
 /** 主題 memory の meta-review の接続で worker の memory verb を置き換える専用 verb(ADR 0122 決定2)。 */
@@ -82,7 +82,6 @@ export const META_REVIEW_SUBJECTS = {
         "Where a human amended a candidate when approving it (a superseded candidate whose invalidated_by is a question and whose successor a human wrote — not one you folded into an existing entry), draft closer to the human's wording.",
       completion_criteria:
         "every candidate and store change since the previous meta-review is either proposed, retired, folded, moved, applied (Knowledge / Definitions), or deliberately left as is",
-      review_tier: "frontier",
     },
     material: ["memory_entry_created", "memory_entry_invalidated", "objection_attributed"],
     verbs: MEMORY_META_REVIEW_VERBS,
@@ -113,7 +112,6 @@ export const META_REVIEW_SUBJECTS = {
         "amended. A rejected proposal always carries the human's reason in its comment: propose it again only when that reason no longer holds.",
       completion_criteria:
         "every part of this cycle's material is judged, each judgment is logged as a decision, and each row change the evidence supports is proposed",
-      review_tier: "frontier",
     },
     material: ["allocation_reviewed", "worker_exited", "execution_settings_changed"],
     verbs: ROUTING_META_REVIEW_VERBS,
@@ -187,7 +185,9 @@ export function materialEvents<K extends EventKind>(db: Db, kinds: readonly K[],
 /** 主題の meta-review を盤面名義で登録する(周期が通る1本、due は見ない)。 */
 export function registerMetaReview(db: Db, subject: MetaReviewSubject, now: Date): void {
   db.transaction(() => {
-    const task = registerTask(db, { type: "review", ...META_REVIEW_SUBJECTS[subject].task, meta_review_subject: subject }, now, BOARD_WORKER_ID, "board");
+    // 盤面自身の判断の段で走る —— 振り返り Board call と1つの設定を共有する(ADR 0200 決定4)
+    const review_tier = readExecutionSettings(db).retrospectiveTier;
+    const task = registerTask(db, { type: "review", ...META_REVIEW_SUBJECTS[subject].task, review_tier, meta_review_subject: subject }, now, BOARD_WORKER_ID, "board");
     const { watermark } = db.prepare("SELECT MAX(id) AS watermark FROM events").get() as { watermark: number };
     appendEvent(db, {
       taskId: task.id,

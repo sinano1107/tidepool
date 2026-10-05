@@ -2,13 +2,13 @@ import { type AgentView, agentViewProviders } from "./agent-create.js";
 import type { Db } from "./db.js";
 import { type EventPayload, getEvent, listEventsOfKinds } from "./events.js";
 import {
-  BOARD_DEFAULT_TIER,
+  boardDefaultTier,
   loadExecutionSettingTable,
   parseRoutingRowChange,
   readExecutionSettings,
-  TIERS,
   type Tier,
   tierHasRowFor,
+  tierNames,
 } from "./execution-setting.js";
 import { type Cell, cellJson, loadEpisodes, type RoutingEpisode, type TrackRecord } from "./learner.js";
 import { inWindow, type MetaReviewWindow, materialSection, previousMetaReviewWatermark } from "./meta-review.js";
@@ -236,8 +236,10 @@ function agentTierProposal(db: Db, agents: readonly AgentView[], input: { agent?
   const agent = agents.find((a) => a.name === name);
   if (!agent) throw new DomainError(`unknown agent: ${name}`);
   if (agent.builtin) throw new DomainError(`agent ${name} is built-in; its definition is the board's code, not a registry file`);
-  const from = (agent.tier ?? BOARD_DEFAULT_TIER) as Tier;
-  const below = TIERS[TIERS.indexOf(from) - 1];
+  // 「1段下」は盤面の一覧の順序(ADR 0200 決定4)
+  const tiers = tierNames(db);
+  const from = agent.tier ?? boardDefaultTier(db);
+  const below = tiers[tiers.indexOf(from) - 1];
   if (to !== below) throw new DomainError(`an agent's tier is lowered by exactly one step: ${name} is at ${from}, so the only target is ${below ?? "none (already the lowest tier)"}`);
   const table = loadExecutionSettingTable(db);
   if (!tierHasRowFor(table, agentViewProviders(agent), to)) {
@@ -254,7 +256,7 @@ function agentTierProposal(db: Db, agents: readonly AgentView[], input: { agent?
     if (!row) throw new DomainError(`evidence ${id} ran on ${spawned.provider} / ${spawned.model}, which is no longer in the execution-setting table`);
     rows.set(`${row.provider}/${row.model}`, { provider: row.provider, model: row.model, tier: row.tier, effort: row.effort });
   }
-  // agent が tier を書いていれば from はその値(書いていなければ economy で、下げ先が無く上で断っている)
+  // agent が tier を書いていれば from はその値(書いていなければ盤面既定の段)
   return { kind: "registry", op: "agent_tier", agent: name, to, pin: { tier: from, rows: [...rows.values()] }, evidence };
 }
 
@@ -301,7 +303,7 @@ export function proposeRoutingChange(
       "with your amendment (any lower tier) if you give one; reject leaves the agent as it is.";
   } else if (input.op === "row") {
     if (!input.row) throw new DomainError("op row names the row to change (provider and model)");
-    const change = parseRoutingRowChange(input.change);
+    const change = parseRoutingRowChange(tierNames(db), input.change);
     const { provider, model } = input.row;
     const pin = loadExecutionSettingTable(db).find((row) => row.provider === provider && row.model === model);
     if (!pin) throw new DomainError(`the execution-setting table has no row for ${provider} / ${model}`);

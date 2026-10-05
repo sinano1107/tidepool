@@ -18,7 +18,7 @@ import {
   executionSettingsChangeSchema,
   PRIORITY_FIELD_DESCRIPTION,
   readExecutionSettingsWithQuarantine,
-  TIER_FIELD_DESCRIPTION,
+  tierFieldDescriptions,
 } from "./execution-setting.js";
 import type { GitHubClient } from "./github.js";
 import {
@@ -591,7 +591,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
         "Read the board's execution settings: the model table (rows of provider, model, tier, effort, price_in / price_out in USD per MTok, " +
         "and quarantine_question_id — the open question naming a row the provider refused to run on this board, or null), " +
         "whether the frontier row may serve as advisor, the Provider rank, the default priority (quality / cost), whether the learner is promoted, " +
-        "and the retrospective tier (economy / standard / frontier) shared by the board's own retrospective Board calls (allocation review, attribution, Behavior candidate drafting).",
+        "and the retrospective tier — the board's own judgement tier, shared by its retrospective Board calls (allocation review, attribution, Behavior candidate drafting) and its periodic meta-reviews.",
     },
     async () => toolResult(readExecutionSettingsWithQuarantine(deps.db)),
   );
@@ -602,7 +602,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
         "Apply one change to the board's execution settings as the human: upsert a table row (`row`, keyed by provider + model), " +
         "delete one (`delete_row` — deleting every row of a provider × tier just excludes that provider for tasks of that tier), " +
         "or set `frontier_advisor`, `provider_rank` (every provider exactly once, first = preferred), the default `priority`, or `retrospective_tier` " +
-        "(economy / standard / frontier — the tier the board's own retrospective Board calls resolve on the anthropic row; unset = frontier), " +
+        "(a tier name from the board's list — the tier the board's own judgement runs on: retrospective Board calls resolve on its anthropic row, and periodic meta-reviews request it), " +
         "or demote the learner (`learner_promoted: false` — promotion only comes from approving a routing meta-review's proposal). " +
         "Takes effect at the next pickup or Board call.",
       inputSchema: { change: executionSettingsChangeSchema },
@@ -955,9 +955,9 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
             assignee: z.string().optional(),
             workspace: z.string().optional(),
             review_flag: z.boolean().optional(),
-            tier: z.string().optional().describe(TIER_FIELD_DESCRIPTION),
+            tier: z.string().optional().describe(tierFieldDescriptions(deps.db).tier),
             review_by: z.array(z.string().min(1)).optional(),
-            review_tier: z.string().optional(),
+            review_tier: z.string().optional().describe(tierFieldDescriptions(deps.db).review_tier),
             priority: z.string().optional().describe(PRIORITY_FIELD_DESCRIPTION),
           }),
         ),
@@ -1036,9 +1036,9 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
         workspace: z.string().optional(),
         risk_flag: z.boolean().optional(),
         review_flag: z.boolean().optional(),
-        tier: z.string().optional().describe(TIER_FIELD_DESCRIPTION),
+        tier: z.string().optional().describe(tierFieldDescriptions(deps.db).tier),
         review_by: z.array(z.string().min(1)).optional(),
-        review_tier: z.string().optional(),
+        review_tier: z.string().optional().describe(tierFieldDescriptions(deps.db).review_tier),
         priority: z.string().optional().describe(PRIORITY_FIELD_DESCRIPTION),
         decompose_reason: z.string().optional(),
       },

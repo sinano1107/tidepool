@@ -19,6 +19,7 @@ import {
   registryPinChanges,
   type Tier,
   tierHasRowFor,
+  tierNames,
 } from "./execution-setting.js";
 import { type GitHubClient, IssueGoneError } from "./github.js";
 import type { HarnessContainmentCheck } from "./harness-containment.js";
@@ -862,8 +863,8 @@ export async function submitAnswer(
   // 修正値は approve だけが種別ごとの schema で受ける(ADR 0150 決定2・ADR 0152 決定2)。昇格 / 降格・candidate を持たない memory の提案(invalidate・既存の後継の consolidate)・reject の修正値も黙って捨てず断る
   let amended: ProposalAmendment | undefined;
   if (amendment !== undefined) {
-    if (answers[0] === "approve" && proposal?.kind === "routing" && proposal.op === "row") amended = parseRoutingRowChange(amendment);
-    else if (answers[0] === "approve" && proposal?.kind === "registry") amended = { to: parseAgentTierAmendment(proposal, amendment) };
+    if (answers[0] === "approve" && proposal?.kind === "routing" && proposal.op === "row") amended = parseRoutingRowChange(tierNames(deps.db), amendment);
+    else if (answers[0] === "approve" && proposal?.kind === "registry") amended = { to: parseAgentTierAmendment(tierNames(deps.db), proposal, amendment) };
     else if (answers[0] === "approve" && proposal?.kind === "memory" && "candidate_id" in proposal) amended = parseMemoryAmendment(amendment);
     else throw new DomainError("only an approve answer to a routing row, agent tier, or memory proposal with a candidate takes an amendment");
   }

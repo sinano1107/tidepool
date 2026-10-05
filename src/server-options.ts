@@ -52,7 +52,7 @@ import type { ContainmentCapability } from "./containment.js";
 import type { Db } from "./db.js";
 import type { DraftClient } from "./draft.js";
 import type { RowRefusal } from "./events.js";
-import { executionSettingsFor } from "./execution-setting.js";
+import { executionSettingsFor, tierNames } from "./execution-setting.js";
 import { GhCliClient } from "./github.js";
 import type { GitHubAuth } from "./github-auth.js";
 import type { ProcessContainers } from "./process-container.js";
@@ -356,7 +356,7 @@ function taskExecutionCandidatesResolver(board: BoardComposition, db: Db): TaskE
   return (task) => {
     const registry = loadBoardRegistry(board);
     const name = resolveTaskAgent(task, board.defaultAgentName, board.auditorName);
-    const agent = resolveExecutionAgent(registry, board.defaultAgentName, name);
+    const agent = resolveExecutionAgent(registry, board.defaultAgentName, name, tierNames(db));
     return executionSettingsFor(db, agent.definition, task);
   };
 }
@@ -371,13 +371,14 @@ export function implicitTaskExecutionCandidates(db: Db): TaskExecutionCandidates
 
 function agentsUsingHarnessesResolver(
   board: BoardComposition,
+  db: Db,
 ): ((harnesses: readonly string[]) => string[]) | undefined {
   if (!board.registryDir) return undefined;
   return (harnesses) =>
     Object.values(loadBoardRegistry(board).agents)
       .filter((agent) => {
         try {
-          assertValidAgentDefinition(agent.name, agent);
+          assertValidAgentDefinition(agent.name, agent, tierNames(db));
           // entry のどれか1つでもその Harness なら該当する(ADR 0110 決定1)
           return agent.provider.some((entry) =>
             harnesses.includes(canonicalHarness(entry.name as Provider)),
@@ -540,12 +541,13 @@ function agentsSpeakingProvidersResolver(
  *  Without a registry, no agent's authority is knowable at all — unrestricted. */
 function authorityResolver(
   board: BoardComposition,
+  db: Db,
 ): ((assignee: string | null) => AuthorityProfile | undefined) | undefined {
   const { registryDir, defaultAgentName } = board;
   if (!registryDir) return undefined;
   return (assignee) => {
     try {
-      return resolveExecutionAgent(loadBoardRegistry(board), defaultAgentName, assignee).profile;
+      return resolveExecutionAgent(loadBoardRegistry(board), defaultAgentName, assignee, tierNames(db)).profile;
     } catch (err) {
       if (!(err instanceof UnknownAgentError) && !(err instanceof InvalidAgentDefinitionError)) {
         throw err;
@@ -657,10 +659,10 @@ function workspaceAdmin(
  *  bound to this board's registry clone — the API layer only ever sees the
  *  finished callbacks. Without a registry there is nowhere to administer
  *  agents at all. */
-function agentAdmin(board: BoardComposition): AgentAdmin | undefined {
+function agentAdmin(board: BoardComposition, db: Db): AgentAdmin | undefined {
   const registry = registrySource(board);
   if (!registry) return undefined;
-  const deps = { registry, githubAuth: board.githubAuth };
+  const deps = { registry, githubAuth: board.githubAuth, tiers: () => tierNames(db) };
   return {
     create: (input) => createAgent(input, deps),
     list: () => listAgentViews(deps),
@@ -770,9 +772,9 @@ export async function buildServerOptions(board: BoardComposition, db: Db): Promi
     resolveWorkspace: workspaceResolver(board),
     github,
     workspaceAdmin: workspaceAdmin(board, github),
-    agentAdmin: agentAdmin(board),
+    agentAdmin: agentAdmin(board, db),
     profileAdmin: profileAdmin(board),
-    resolveAuthority: authorityResolver(board),
+    resolveAuthority: authorityResolver(board, db),
     agentRegistered: agentRegisteredChecker(board),
     isProtectedWorkspace: protectedWorkspaceChecker(board),
     listAgents: listAgentsResolver(board),
@@ -798,7 +800,7 @@ export async function buildServerOptions(board: BoardComposition, db: Db): Promi
     // registry を読む写像を要るのは provider / Harness の行だけ(agent 名の行は表が自分で持つ)
     quarantineResolvers: {
       providerAuth: agentsSpeakingProvidersResolver(board),
-      harnessContainment: agentsUsingHarnessesResolver(board),
+      harnessContainment: agentsUsingHarnessesResolver(board, db),
     },
     credentialAbsence: {
       moonshot: () => moonshotKeyAbsence(board.moonshotApiKeyFile),
