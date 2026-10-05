@@ -7,6 +7,12 @@ Driving the VM is covered in [machine-setup.md](agents/machine-setup.md#linux-de
 
 Run every step from the Mac, in this order. `<version>` is the CLI version you are moving to.
 
+First make the VM checkout the code you are testing, with its dependencies installed:
+
+```bash
+limactl shell tidepool -- bash -lc 'cd ~/tidepool && git pull && npm ci'
+```
+
 ## 1. Install the new version in the VM
 
 ```bash
@@ -32,9 +38,18 @@ caffeinate -i -s limactl shell tidepool -- bash -lc '~/tidepool/scripts/vm-board
 ```
 
 The board runs the containment probe at boot and on every pickup. It holds if no
-"worker containment is not established — pickup is stopped" question appears on the board. If
-that question appears, its text names the tools or settings the new CLI no longer honours. Keep the
-board running for the next step.
+"claude-code Harness containment is not established" question appears on the board. If that
+question appears, its text names the tools or settings the new CLI no longer honours, or the
+mismatch between the pinned version and `claude --version`. Keep the board running for the next
+step.
+
+If the board fails at boot on a database error (e.g. `SqliteError: NOT NULL constraint failed`),
+the database `~/.tidepool/env` points at was written by an older checkout. Don't delete it; start
+this run on a fresh database instead:
+
+```bash
+caffeinate -i -s limactl shell tidepool -- bash -lc 'source ~/.tidepool/env && export TIDEPOOL_DB=~/.tidepool/version-bump.sqlite PATH="$HOME/.local/bin:$PATH" && cd ~/tidepool && exec systemd-run --user --scope --unit tidepool-board -p Delegate=yes -- npm start'
+```
 
 ## 4. Run the three canaries
 
