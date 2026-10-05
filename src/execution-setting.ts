@@ -441,7 +441,7 @@ interface ExecutionDefaults {
 
 /** settings タブ / 管理MCP の読み口(ADR 0110 決定5): 表と段の一覧(説明つき、順序どおり —— ADR 0200 決定3)と盤面設定を1往復で。
  *  表は (provider, model, effort) 順 —— 主キーの順で、UI も MCP も同じ並びを見る。 */
-export function readExecutionSettings(db: Db): ExecutionDefaults & { table: ExecutionSettingTable; tiers: ReturnType<typeof readTiers> } {
+export function readExecutionSettings(db: Db) {
   return { table: loadExecutionSettingTable(db), tiers: readTiers(db), ...loadExecutionDefaults(db) };
 }
 

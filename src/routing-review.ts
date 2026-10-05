@@ -286,7 +286,7 @@ function addTierProposal(db: Db, input: { tier?: RoutingAddTierProposal["tier"];
   return {
     kind: "routing",
     op: "add_tier",
-    tier: { name: tier.name, description: tier.description, position: tier.position },
+    tier,
     row: { provider: row.provider, model: row.model, effort: row.effort },
     evidence,
     pin: { row, below: tiers[tier.position - 1] ?? null, above: tiers[tier.position] ?? null },
