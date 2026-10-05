@@ -1,9 +1,8 @@
 import { expect, it, vi } from "vitest";
 import { isClaudeModelAlias } from "../src/claude-model-alias.js";
-import { openDb } from "../src/db.js";
+import { type Db, openDb } from "../src/db.js";
 import { listEventsOfKinds } from "../src/events.js";
 import {
-  anthropicBoardCallRow,
   applyExecutionSettingsChange,
   assertKnownTier,
   assertTierRunnableFor,
@@ -39,6 +38,7 @@ import { assertValidAgentDefinition, PROVIDER_VALUES, type Provider } from "../s
 import { RegistryPushFailedError } from "../src/registry-write.js";
 import { proposeRoutingChange } from "../src/routing-review.js";
 import { cancelTaskDirectly, DomainError, getTask, type RegistryProposal, type RoutingProposal, registerTask, type TierDescriptionProposal } from "../src/tasks.js";
+import { boardCallRow, reportProviderUsage } from "../src/throttle.js";
 import { unusedLanding } from "./fakes.js";
 import { HUMAN_WEBUI } from "./harness.js";
 
@@ -574,13 +574,55 @@ const sonnet5 = { provider: "anthropic", tier: "economy", model: "claude-sonnet-
 
 it("表の行で走る Board call(振り返り・下書き)は走れる行の最安で撃つ —— 最安の行が Quarantine 中なら同じティアの次の行", () => {
   const db = boardWithRefusedRows([sonnet5], [["anthropic", "claude-sonnet-5-5"]]);
-  expect(anthropicBoardCallRow(db, "economy")).toMatchObject({ model: "claude-sonnet-5" });
+  expect(boardCallRow(db, "economy")).toMatchObject({ model: "claude-sonnet-5" });
 });
 
 it("そのティアの anthropic の行がすべて Quarantine 中なら、Board call の行は Quarantine を名指して投げ、行が無いときと区別する", () => {
   const db = boardWithRefusedRows([sonnet5], [["anthropic", "claude-sonnet-5-5"], ["anthropic", "claude-sonnet-5"]]);
   // 行が無いときの文面(quarantine を含まない)は tests/claude-draft-client.test.ts が釘付けている
-  expect(() => anthropicBoardCallRow(db, "economy")).toThrow(/under a row quarantine/);
+  expect(() => boardCallRow(db, "economy")).toThrow(/under a row quarantine/);
+});
+
+/** Anthropic の窓を閉じる観測を1件置く。`model` を省くと Provider 全体の窓(model 固有の窓は部分一致で当たる)。 */
+function closeAnthropicWindow(db: Db, model?: string) {
+  const now = new Date();
+  const until = new Date(now.getTime() + 60 * 60 * 1000);
+  reportProviderUsage(db, {
+    provider: "anthropic",
+    status: "observed",
+    plan: null,
+    cliVersion: null,
+    observedAt: now,
+    windows: [{ window: model ?? "five_hour", model: model ?? null, usedPercent: 100, durationMs: 60 * 60 * 1000, resetsAt: until, throttled: true, resumesAt: until }],
+  });
+}
+
+it("Board call の行は、最安の行の model 固有の窓だけが閉じていれば同じティアの次に安い行(#1445)", () => {
+  const db = boardWithRefusedRows([sonnet5], []);
+  closeAnthropicWindow(db, "sonnet-5-5");
+  expect(boardCallRow(db, "economy")).toMatchObject({ model: "claude-sonnet-5" });
+});
+
+it("そのティアの走れる行すべてで窓が閉じていれば、Board call の行は窓を名指して投げる(model 固有の窓・Provider 全体の窓)", () => {
+  const byModel = boardWithRefusedRows([sonnet5], []);
+  closeAnthropicWindow(byModel, "sonnet-5");
+  expect(() => boardCallRow(byModel, "economy")).toThrow("the Anthropic window is closed");
+
+  const providerWide = boardWithRefusedRows([sonnet5], []);
+  closeAnthropicWindow(providerWide);
+  expect(() => boardCallRow(providerWide, "economy")).toThrow("the Anthropic window is closed");
+});
+
+it("最安の行が Quarantine 中で残りの行すべてで窓が閉じていれば、理由は Quarantine でなく窓", () => {
+  const db = boardWithRefusedRows([sonnet5], [["anthropic", "claude-sonnet-5-5"]]);
+  closeAnthropicWindow(db, "claude-sonnet-5");
+  expect(() => boardCallRow(db, "economy")).toThrow("the Anthropic window is closed");
+});
+
+it("行がすべて Quarantine 中なら、窓が閉じていても理由は Quarantine のまま", () => {
+  const db = boardWithRefusedRows([sonnet5], [["anthropic", "claude-sonnet-5-5"], ["anthropic", "claude-sonnet-5"]]);
+  closeAnthropicWindow(db);
+  expect(() => boardCallRow(db, "economy")).toThrow(/under a row quarantine/);
 });
 
 // ── 1つの段に同じ model は1行まで(ADR 0200 決定5 / issue #1419): 行の鍵は (provider, model, effort) ──

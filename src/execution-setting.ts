@@ -318,22 +318,28 @@ function rowsFor(table: ExecutionSettingTable, provider: Provider, tier: Tier): 
 }
 
 /** 表の行で走る Board call(振り返り・下書き)の行。selector を通らず(ADR 0111 決定4)、Provider は
- *  anthropic 固定、ティアは呼び手が決め、その走れる行の最安(ADR 0192 / ADR 0184 追記)。呼び出しごとに
- *  読むので書き換えは次の呼び出しから効く。走れる行が無ければ投げ、呼び手が「撃てなかった」に畳む ——
- *  理由は行が無いのか、すべて Quarantine 中かを分ける。 */
-export function anthropicBoardCallRow(db: Db, tier: Tier): ExecutionSettingRow {
-  const row = rowsFor(runnableTable(db), "anthropic", tier)[0];
-  if (row) return row;
-  if (rowsFor(loadExecutionSettingTable(db), "anthropic", tier).length) {
-    throw new Error(`every row for anthropic / ${tier} in the board's execution-setting table is under a row quarantine`);
+ *  anthropic 固定、ティアは呼び手が決め、その走れる行のうち窓の閉じていない行の最安(ADR 0192 / ADR 0184 追記 /
+ *  #1445)。窓は走れる行の表に入れず、ここでだけ当てる —— 判定は Throttle の観測を読む側が渡す(throttle.ts が
+ *  このモジュールを import するので、直接読むと循環になる)。呼び出しごとに読むので書き換えは次の呼び出しから効く。
+ *  撃てる行が無ければ投げ、呼び手が「撃てなかった」に畳む —— 理由は行が無い → すべて Quarantine 中 → 窓の順で分ける。 */
+export function anthropicBoardCallRow(db: Db, tier: Tier, windowClosed: (model: string) => boolean): ExecutionSettingRow {
+  const runnable = rowsFor(runnableTable(db), "anthropic", tier);
+  if (!runnable.length) {
+    if (rowsFor(loadExecutionSettingTable(db), "anthropic", tier).length) {
+      throw new Error(`every row for anthropic / ${tier} in the board's execution-setting table is under a row quarantine`);
+    }
+    throw new Error(`the board's execution-setting table has no row for anthropic / ${tier}`);
   }
-  throw new Error(`the board's execution-setting table has no row for anthropic / ${tier}`);
+  const row = runnable.find((r) => !windowClosed(r.model));
+  // 窓の閉鎖は throttle だけでなく Provider 認証の除外でも起きるので、原因は名乗らない
+  if (!row) throw new Error("the Anthropic window is closed");
+  return row;
 }
 
-/** 振り返り Board call(配分評価・帰責の判定・Behavior candidate の起草)の行。ティアは3用途が
+/** 振り返り Board call(配分評価・帰責の判定・Behavior candidate の起草)のティア。3用途が
  *  共有する盤面設定(ADR 0111 追記4)。 */
-export function retrospectiveBoardCallRow(db: Db): ExecutionSettingRow {
-  return anthropicBoardCallRow(db, loadExecutionDefaults(db).judgementTier);
+export function retrospectiveBoardCallTier(db: Db): Tier {
+  return loadExecutionDefaults(db).judgementTier;
 }
 
 /** entry 集合から要求ティアの行を全部集め、優先順位の鍵で並べる(ADR 0110 決定3 /
