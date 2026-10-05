@@ -944,22 +944,26 @@ function registerRoutingMetaReviewVerbs(server: McpServer, deps: McpDeps, run: M
         "the description of one of the board's tiers (tier) to description, one line: a tier's description defines it for everyone who requests it, " +
         "so propose it when requests for that tier across workspaces or writers show its definition is off. evidence lists the worker_spawned event ids " +
         "of sessions whose tier source is task on tasks that requested that tier (list_allocations, tier source task); the human may amend the " +
-        "description when approving. rationale is your evidence summary " +
+        "description when approving. op add_tier adds a tier named tier, with description as its one-line description, to the board's list at " +
+        "position (an index into the list, lowest first; 0 puts it at the bottom) and moves the row named by provider, model and effort into " +
+        "it, both at once; evidence lists the worker_spawned event ids your case rests on, and the human may amend the tier's name, " +
+        "description and position when approving. rationale is your evidence summary " +
         "(episode count, tier source, period) and is shown with the diff. The board applies the answer itself, so you can complete " +
         "this task without waiting for it. Returns the question id. " +
         BOARD_WRITE_LANGUAGE_RULE,
       inputSchema: {
-        op: z.enum(["row", "promote", "demote", "agent_tier", "tier_description"]),
-        row: z.object({ provider: z.string(), model: z.string(), effort: z.string() }).optional().describe("op row only."),
+        op: z.enum(["row", "promote", "demote", "agent_tier", "tier_description", "add_tier"]),
+        row: z.object({ provider: z.string(), model: z.string(), effort: z.string() }).optional().describe("op row and add_tier only."),
         change: z.record(z.string(), z.unknown()).optional().describe("op row only: tier and/or effort, nothing else."),
         agent: z.string().optional().describe("op agent_tier only: the agent whose default tier to lower."),
         to: z.string().optional().describe("op agent_tier only: the tier one step below the agent's current tier."),
         evidence: z
           .array(z.number().int())
           .optional()
-          .describe("op agent_tier and tier_description only: worker_spawned event ids of the agent's sessions, or of sessions on tasks that requested the tier."),
-        tier: z.string().optional().describe("op tier_description only: the tier whose description to rewrite."),
-        description: z.string().optional().describe("op tier_description only: the tier's new description, one line."),
+          .describe("op agent_tier, tier_description and add_tier only: worker_spawned event ids of the sessions your case rests on."),
+        tier: z.string().optional().describe("op tier_description: the tier whose description to rewrite. op add_tier: the new tier's name."),
+        description: z.string().optional().describe("op tier_description and add_tier only: the tier's description, one line."),
+        position: z.number().int().nonnegative().optional().describe("op add_tier only: where the new tier goes, an index into the board's list (lowest first)."),
         rationale: z.string().min(1),
       },
     },

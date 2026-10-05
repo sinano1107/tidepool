@@ -13,6 +13,7 @@ import {
   type ExecutionSettingTable,
   executionSettingsFor,
   PRIORITIES,
+  parseAddTierAmendment,
   parseAgentTierAmendment,
   parseRoutingRowChange,
   readExecutionSettings,
@@ -36,7 +37,7 @@ import { registerQuarantine, tableRowValue } from "../src/quarantine.js";
 import { assertValidAgentDefinition, PROVIDER_VALUES, type Provider } from "../src/registry.js";
 import { RegistryPushFailedError } from "../src/registry-write.js";
 import { proposeRoutingChange } from "../src/routing-review.js";
-import { cancelTaskDirectly, DomainError, getTask, type RegistryProposal, registerTask, type TierDescriptionProposal } from "../src/tasks.js";
+import { cancelTaskDirectly, DomainError, getTask, type RegistryProposal, type RoutingProposal, registerTask, type TierDescriptionProposal } from "../src/tasks.js";
 import { unusedLanding } from "./fakes.js";
 import { HUMAN_WEBUI } from "./harness.js";
 
@@ -485,6 +486,53 @@ it("tier の提案の修正値は to だけで、pin の tier より下の任意
   expect(parseAgentTierAmendment(tiers, tierProposal, { to: "standard" })).toBe("standard");
   for (const bad of [{ to: "frontier" }, { to: "ultra" }, { to: "economy", effort: "low" }, {}, "economy"]) {
     expect(() => parseAgentTierAmendment(tiers, tierProposal, bad)).toThrow(DomainError);
+  }
+});
+
+/** 段を足して行を移す提案(issue #1424 / ADR 0200 決定8): pin は移す行の全欄と、提案時点の位置の隣の段(名前と説明)。 */
+const [economy, standard, frontier] = SEED_TIERS;
+const sonnetRow = SEED_EXECUTION_SETTINGS.find((row) => row.model === "claude-sonnet-5-5")!;
+const addTier = (position: number): RoutingProposal => ({
+  kind: "routing",
+  op: "add_tier",
+  tier: { name: "routine", description: "Work one step above routine wiring.", position },
+  row: { provider: sonnetRow.provider, model: sonnetRow.model, effort: sonnetRow.effort },
+  evidence: [7],
+  pin: { row: sonnetRow, below: SEED_TIERS[position - 1] ?? null, above: SEED_TIERS[position] ?? null },
+});
+const tierSettings = (tierList: readonly { name: string; description: string }[], t: ExecutionSettingTable = SEED_EXECUTION_SETTINGS) => ({
+  table: t,
+  learnerPromoted: false,
+  tiers: tierList,
+});
+
+it("段を足す提案の pin: 移す行は全欄、隣の段は提案時点の添字にいまいる段の名前と説明で照合する", () => {
+  expect(routingPinChanges(addTier(1), tierSettings(SEED_TIERS))).toEqual([]);
+  // 移す行の編集・削除
+  const edit = (change: object) => SEED_EXECUTION_SETTINGS.map((row) => (row.model === sonnetRow.model ? { ...row, ...change } : row));
+  expect(routingPinChanges(addTier(1), tierSettings(SEED_TIERS, edit({ price_in: 9 })))).toEqual(["price_in"]);
+  expect(routingPinChanges(addTier(1), tierSettings(SEED_TIERS, edit({ effort: "max" })))).toBeNull();
+  // 隣の段の説明の編集・改名
+  expect(routingPinChanges(addTier(1), tierSettings([{ ...economy!, description: "changed" }, standard!, frontier!]))).toEqual(["neighbours"]);
+  expect(routingPinChanges(addTier(1), tierSettings([economy!, { ...standard!, name: "middle" }, frontier!]))).toEqual(["neighbours"]);
+  // 下に段が挿入されて添字がずれる
+  expect(routingPinChanges(addTier(1), tierSettings([{ name: "lowest", description: "x" }, ...SEED_TIERS]))).toEqual(["neighbours"]);
+  // 隣でない段の説明の編集は崩さない
+  expect(routingPinChanges(addTier(1), tierSettings([economy!, standard!, { ...frontier!, description: "changed" }]))).toEqual([]);
+});
+
+it("段を足す提案の pin の端: 先頭なら下、末尾なら上の隣は null で、端の外に段が来ても崩れる", () => {
+  expect(routingPinChanges(addTier(0), tierSettings(SEED_TIERS))).toEqual([]);
+  expect(routingPinChanges(addTier(3), tierSettings(SEED_TIERS))).toEqual([]);
+  expect(routingPinChanges(addTier(3), tierSettings([...SEED_TIERS, { name: "top", description: "x" }]))).toEqual(["neighbours"]);
+  expect(routingPinChanges(addTier(3), tierSettings(SEED_TIERS.slice(1)))).toEqual(["neighbours"]);
+  expect(routingPinChanges(addTier(0), tierSettings([{ name: "lowest", description: "x" }, ...SEED_TIERS]))).toEqual(["neighbours"]);
+});
+
+it("段を足す提案の修正値は名前・説明・位置の少なくとも1つだけで、それ以外は DomainError", () => {
+  expect(parseAddTierAmendment({ name: "routine", position: 0 })).toEqual({ name: "routine", position: 0 });
+  for (const bad of [{}, { name: "x", tier: "economy" }, { position: -1 }, { position: 1.5 }, "routine", null]) {
+    expect(() => parseAddTierAmendment(bad)).toThrow(DomainError);
   }
 });
 

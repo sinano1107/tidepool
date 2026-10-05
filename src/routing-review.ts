@@ -3,8 +3,10 @@ import type { Db } from "./db.js";
 import { type EventPayload, getEvent, listEventsOfKinds } from "./events.js";
 import {
   assertKnownTier,
+  assertPosition,
   assertRowFits,
   assertTierDescription,
+  assertTierName,
   boardDefaultTier,
   composeRoutingRow,
   loadExecutionSettingTable,
@@ -21,7 +23,7 @@ import {
 import { type Cell, cellJson, loadEpisodes, type RoutingEpisode, type TrackRecord } from "./learner.js";
 import { inWindow, type MetaReviewWindow, materialSection, previousMetaReviewWatermark } from "./meta-review.js";
 import { type Packed, packItems, readPosition } from "./response-budget.js";
-import { DomainError, type RegistryProposal, type RoutingProposal, registerTask, type TierDescriptionProposal } from "./tasks.js";
+import { DomainError, type RegistryProposal, type RoutingAddTierProposal, type RoutingProposal, registerTask, type TierDescriptionProposal } from "./tasks.js";
 
 /** 主題 routing の meta-review の読み口(issue #917 / spec #916 C)。どれも既定の `since_watermark` は読み手と同主題の
  *  前回の登録の watermark(event id)で、応答予算と続き(next)で返す(ADR 0195)。 */
@@ -282,6 +284,36 @@ function agentTierProposal(db: Db, agents: readonly AgentView[], input: { agent?
   return { kind: "registry", op: "agent_tier", agent: name, to, pin: { tier: from, rows: [...rows.values()] }, evidence };
 }
 
+/** 段を足して行を移す提案の門と pin(issue #1424 / ADR 0200 決定8): 段の名前・説明・位置は段の挿入と同じ線、行は表にあり、
+ *  根拠は worker_spawned。pin は行の全欄と、いまの一覧で位置の隣にいる段。 */
+function addTierProposal(
+  db: Db,
+  input: { tier?: string; description?: string; position?: number; row?: { provider: string; model: string; effort: string }; evidence?: number[] },
+): RoutingAddTierProposal {
+  const { tier: name, description, position, row: key, evidence } = input;
+  if (name === undefined || description === undefined || position === undefined || !key || !evidence?.length) {
+    throw new DomainError("op add_tier names the new tier (tier, description, position), the row to move into it and at least one evidence worker_spawned event id");
+  }
+  const tier = { name, description, position };
+  assertTierName(db, tier.name);
+  assertTierDescription(tier.description);
+  const tiers = readTiers(db);
+  assertPosition(tier.position, tiers.length);
+  const row = loadExecutionSettingTable(db).find((r) => matchesRowKey(r, key));
+  if (!row) throw new DomainError(`the execution-setting table has no row for ${rowName(key)}`);
+  for (const id of evidence) {
+    if (getEvent(db, id)?.payload.kind !== "worker_spawned") throw new DomainError(`evidence ${id} is not a worker_spawned event`);
+  }
+  return {
+    kind: "routing",
+    op: "add_tier",
+    tier,
+    row: { provider: row.provider, model: row.model, effort: row.effort },
+    evidence,
+    pin: { row, below: tiers[tier.position - 1] ?? null, above: tiers[tier.position] ?? null },
+  };
+}
+
 /** 段の説明の提案の門と pin(ADR 0200 決定7): 生きている段の説明を1行の新しい文面へ。根拠は、床を task の申告が決めて
  *  (`source.tier` が task)その task がこの段を要求した worker_spawned だけで、書き手が人間の task も数える。pin は説明のいまの文面。 */
 function tierDescriptionProposal(db: Db, input: { tier?: string; description?: string; evidence?: number[] }): TierDescriptionProposal {
@@ -303,10 +335,10 @@ function tierDescriptionProposal(db: Db, input: { tier?: string; description?: s
   return { kind: "routing", op: "tier_description", tier, description, evidence, pin: { description: current } };
 }
 
-/** 提案 verb(issue #918 / #919 / #920 / ADR 0150 決定1・2・4・5 / ADR 0200 決定7): 表の既存の1行の tier / effort の置換(op row)、学習器の
- *  昇格 / 降格、agent の既定 tier の1段引き下げ(op agent_tier)、または段の説明の書き換え(op tier_description)を、meta-review の付帯子の
- *  question として立てる。pin は row ならその行の全欄、昇格 / 降格ならフラグの現在値、agent_tier なら (agent, tier) と根拠の行、
- *  tier_description なら説明のいまの文面。
+/** 提案 verb(issue #918 / #919 / #920 / #1424 / ADR 0150 決定1・2・4・5 / ADR 0200 決定7・8): 表の既存の1行の tier / effort の置換(op row)、
+ *  学習器の昇格 / 降格、agent の既定 tier の1段引き下げ(op agent_tier)、段の説明の書き換え(op tier_description)、または段の追加と
+ *  行の移動(op add_tier)を、meta-review の付帯子の question として立てる。pin は row ならその行の全欄、昇格 / 降格ならフラグの現在値、
+ *  agent_tier なら (agent, tier) と根拠の行、tier_description なら説明のいまの文面、add_tier なら移す行の全欄と隣の段。
  *  同じ行への提案は重ねてよい —— 片方の承認が表を変えれば、もう片方は陳腐化の hook で決着する。
  *  `agents` は registry の agent 一覧(registry の無い盤面では無く、agent_tier は断る)。 */
 export function proposeRoutingChange(
@@ -321,6 +353,7 @@ export function proposeRoutingChange(
     evidence?: number[];
     tier?: Tier;
     description?: string;
+    position?: number;
     rationale: string;
   },
   workerId: string,
@@ -332,8 +365,12 @@ export function proposeRoutingChange(
   let diff: string[];
   let purpose: string;
   if (input.op !== "agent_tier" && (input.agent !== undefined || input.to !== undefined)) throw new DomainError(`op ${input.op} takes no agent and no to`);
-  if (input.op !== "agent_tier" && input.op !== "tier_description" && input.evidence !== undefined) throw new DomainError(`op ${input.op} takes no evidence`);
-  if (input.op !== "tier_description" && (input.tier !== undefined || input.description !== undefined)) throw new DomainError(`op ${input.op} takes no tier or description`);
+  if (input.op === "row" || input.op === "promote" || input.op === "demote") {
+    if (input.evidence !== undefined) throw new DomainError(`op ${input.op} takes no evidence`);
+    if (input.tier !== undefined || input.description !== undefined) throw new DomainError(`op ${input.op} takes no tier or description`);
+  }
+  if (input.op !== "add_tier" && input.position !== undefined) throw new DomainError(`op ${input.op} takes no position`);
+  if (input.op === "agent_tier" && (input.tier !== undefined || input.description !== undefined)) throw new DomainError("op agent_tier takes no tier or description");
   if (input.op === "tier_description") {
     if (input.row !== undefined || input.change !== undefined) throw new DomainError("op tier_description takes no row and no change");
     proposal = tierDescriptionProposal(db, input);
@@ -360,6 +397,20 @@ export function proposeRoutingChange(
     purpose =
       "The routing meta-review proposes lowering an agent's default tier by one step. Approve commits the new tier to the registry, " +
       "with your amendment (any lower tier) if you give one; reject leaves the agent as it is.";
+  } else if (input.op === "add_tier") {
+    if (input.change !== undefined) throw new DomainError("op add_tier takes no change");
+    proposal = addTierProposal(db, input);
+    const { tier, pin } = proposal;
+    const place = [pin.below && `above ${pin.below.name}`, pin.above && `below ${pin.above.name}`].filter(Boolean).join(" and ") || "as the only tier";
+    title = `Add tier ${tier.name} and move ${pin.row.provider} / ${pin.row.model} into it`;
+    diff = [
+      `New tier ${tier.name}, ${place}: ${tier.description}`,
+      `Execution-setting row ${rowName(pin.row)}, tier: ${pin.row.tier} -> ${tier.name}`,
+      `Evidence: ${proposal.evidence.length} worker session(s)`,
+    ];
+    purpose =
+      "The routing meta-review proposes adding a tier to the board's list and moving one row into it. Approve does both at once, " +
+      "with your amendment of the tier's name, description or position if you give one; reject leaves the tiers and the table as they are.";
   } else if (input.op === "row") {
     const key = input.row;
     if (!key) throw new DomainError("op row names the row to change (provider, model and effort)");

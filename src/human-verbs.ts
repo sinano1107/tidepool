@@ -9,9 +9,11 @@ import type { Db } from "./db.js";
 import type { DraftClient } from "./draft.js";
 import { appendEvent, type EventOrigin } from "./events.js";
 import {
+  type AddTierAmendment,
   applyExecutionSettingsChange,
   composeRoutingRow,
   type ExecutionSettingsChange,
+  parseAddTierAmendment,
   parseAgentTierAmendment,
   parseRoutingRowChange,
   parseTierDescriptionAmendment,
@@ -865,10 +867,11 @@ export async function submitAnswer(
   let amended: ProposalAmendment | undefined;
   if (amendment !== undefined) {
     if (answers[0] === "approve" && proposal?.kind === "routing" && proposal.op === "row") amended = parseRoutingRowChange(tierNames(deps.db), amendment);
+    else if (answers[0] === "approve" && proposal?.kind === "routing" && proposal.op === "add_tier") amended = parseAddTierAmendment(amendment);
     else if (answers[0] === "approve" && proposal?.kind === "routing" && proposal.op === "tier_description") amended = { description: parseTierDescriptionAmendment(amendment) };
     else if (answers[0] === "approve" && proposal?.kind === "registry") amended = { to: parseAgentTierAmendment(tierNames(deps.db), proposal, amendment) };
     else if (answers[0] === "approve" && proposal?.kind === "memory" && "candidate_id" in proposal) amended = parseMemoryAmendment(amendment);
-    else throw new DomainError("only an approve answer to a routing row, tier description, agent tier, or memory proposal with a candidate takes an amendment");
+    else throw new DomainError("only an approve answer to a routing row, add-tier, tier description, agent tier, or memory proposal with a candidate takes an amendment");
   }
   // approve は「これを注入する」宣言 —— candidate の宛先(修正値があればそれ)と scope が解決できなければ、付け替えるか reject する(ADR 0173 決定2)。
   // 移された candidate は複製の scope で見る(ADR 0162 決定6)
@@ -984,13 +987,20 @@ export async function submitAnswer(
       if (answers[0] === "approve") approveMemoryProposal(deps.db, proposal, task.id, origin, now(), amended as MemoryAmendment | undefined);
       else if (answers[0] === "reject") rejectMemoryProposal(deps.db, proposal, task.id, origin, now());
     } else if (proposal?.kind === "routing" && answers[0] === "approve") {
-      const change: ExecutionSettingsChange =
-        proposal.op === "row"
-          ? { setting: "row", key: proposal.row, row: composeRoutingRow(proposal, amended as RoutingRowChange | undefined) }
-          : proposal.op === "tier_description"
-            ? { setting: "edit_tier", name: proposal.tier, description: (amended as { description: string } | undefined)?.description ?? proposal.description }
-            : { setting: "learner_promoted", value: proposal.op === "promote" };
-      applyExecutionSettingsChange(deps.db, change, origin, now(), task.id);
+      if (proposal.op === "add_tier") {
+        // 段の挿入と行の移動を1つの transaction で(ADR 0200 決定8)。修正後の値の検査は挿入の扉がやり直し、拒めば回答ごと巻き戻る
+        const tier = { ...proposal.tier, ...(amended as AddTierAmendment | undefined) };
+        applyExecutionSettingsChange(deps.db, { setting: "insert_tier", ...tier }, origin, now(), task.id);
+        applyExecutionSettingsChange(deps.db, { setting: "row", key: proposal.row, row: { ...proposal.pin.row, tier: tier.name } }, origin, now(), task.id);
+      } else {
+        const change: ExecutionSettingsChange =
+          proposal.op === "row"
+            ? { setting: "row", key: proposal.row, row: composeRoutingRow(proposal, amended as RoutingRowChange | undefined) }
+            : proposal.op === "tier_description"
+              ? { setting: "edit_tier", name: proposal.tier, description: (amended as { description: string } | undefined)?.description ?? proposal.description }
+              : { setting: "learner_promoted", value: proposal.op === "promote" };
+        applyExecutionSettingsChange(deps.db, change, origin, now(), task.id);
+      }
     } else if (proposal?.kind === "registry" && registryCommit) {
       appendEvent(deps.db, {
         taskId: null,

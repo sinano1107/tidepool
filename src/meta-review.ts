@@ -107,6 +107,8 @@ export const META_REVIEW_SUBJECTS = {
         "also by the tier the task requested, and " +
         "judged_by_same_model counts those whose judge ran on the worker's own model. Record each judgment with log_decision. " +
         "When the evidence says a row's tier or effort is wrong, propose replacing it with propose_routing_change. " +
+        "When rows in the same tier split in their results and no existing tier fits the split, propose adding a tier and moving one " +
+        "row into it (op add_tier); write the new tier's description as the work that the tier below is not enough for and this tier is. " +
         "The learner leaves the table's first choice only when both that choice and the cell it moves to have observations, and " +
         "each diverged row carries the track records of the recommended and the actual cell as of that pickup (accepted and rejected, " +
         "board and workspace stage) and how many candidates the pickup had. While the learner is not promoted, a diverged row's outcome " +
