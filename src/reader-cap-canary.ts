@@ -5,7 +5,9 @@ import { parseStreamLine } from "./stream-json.js";
 
 /** 盤面の予算ちょうどの1行の JSON。盤面と同じく text content のシリアライズ後の UTF-8 バイト数で測る。
  *  目印は呼び出しごとの乱数で、中央と末尾に1つずつ置く —— Codex は中央を切り詰めるので、末尾だけでは欠けを見逃す。 */
-export function buildCanaryPayload(): { text: string; middle: string; tail: string } {
+export type Markers = { middle: string; tail: string };
+
+export function buildCanaryPayload(): Markers & { text: string } {
   const middle = `MIDDLE-${randomUUID()}`;
   const tail = `TAIL-${randomUUID()}`;
   const fill = RESPONSE_BUDGET_BYTES - Buffer.byteLength(JSON.stringify({ canary: middle + tail }));
@@ -53,19 +55,23 @@ export function readCodexReceived(rollout: string): string | null {
   return output === undefined ? null : textOf(output.output);
 }
 
-/** 読み手のモデルが実際に受け取った本文に、記録した目印が逐語で揃っているか。中央か末尾のどちらかが欠けたら不合格。 */
+/** 読み手のモデルが実際に受け取った本文に、記録した目印が逐語で揃っているか。中央か末尾のどちらかが欠けたら不合格。
+ *  `calls` は一時 MCP が呼び出しごとに記録した目印で、2回呼ばれたら最後の受け取りを最後の目印と突き合わせる。 */
 export function judgeReceived(
   received: string | null,
-  markers: { middle: string; tail: string },
+  calls: Markers[],
 ): { pass: boolean; middle: boolean; tail: boolean; detail: string } {
+  const markers = calls.at(-1);
+  if (markers === undefined) return { pass: false, middle: false, tail: false, detail: "the reader never called the canary tool" };
   if (received === null) return { pass: false, middle: false, tail: false, detail: "no tool result found in the reader's record" };
   const middle = received.includes(markers.middle);
   const tail = received.includes(markers.tail);
   const missing = [middle ? null : "middle", tail ? null : "tail"].filter(Boolean);
+  const repeated = calls.length > 1 ? ` (called ${calls.length} times; last call judged)` : "";
   return {
     pass: missing.length === 0,
     middle,
     tail,
-    detail: `${Buffer.byteLength(received)} bytes received${missing.length ? `, ${missing.join(" and ")} marker missing` : ""}`,
+    detail: `${Buffer.byteLength(received)} bytes received${missing.length ? `, ${missing.join(" and ")} marker missing` : ""}${repeated}`,
   };
 }

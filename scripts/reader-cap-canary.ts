@@ -37,7 +37,7 @@ if (process.argv[2] === "serve") {
 } else {
   const scratch = mkdtempSync(join(tmpdir(), "tidepool-reader-cap-"));
   /** 子の MCP は、この script 自身を同じ node と tsx の loader で立てる。 */
-  const serve = (markersFile: string) => {
+  const canaryServerSpec = (markersFile: string) => {
     writeFileSync(markersFile, "");
     return { command: process.execPath, args: [...process.execArgv, import.meta.filename, "serve", markersFile] };
   };
@@ -54,7 +54,7 @@ if (process.argv[2] === "serve") {
   // Claude Code: 安いモデルで、この canary の MCP だけを載せる
   const claudeMarkers = join(scratch, "claude-markers.jsonl");
   const mcpConfig = join(scratch, "claude-mcp.json");
-  writeFileSync(mcpConfig, JSON.stringify({ mcpServers: { [CANARY_SERVER]: serve(claudeMarkers) } }));
+  writeFileSync(mcpConfig, JSON.stringify({ mcpServers: { [CANARY_SERVER]: canaryServerSpec(claudeMarkers) } }));
   const claudeStdout = run(
     "claude",
     [
@@ -77,58 +77,56 @@ if (process.argv[2] === "serve") {
   );
   writeFileSync(join(scratch, "claude.stream.jsonl"), claudeStdout);
 
-  // Codex: 上限はモデルの metadata で決まる(ADR 0195 決定7)ので、盤面の種の openai economy 行のモデルで測る。
-  // 一時的な CODEX_HOME で回し、rollout はそこに残る
-  const codexModel = SEED_EXECUTION_SETTINGS.find((row) => row.provider === "openai" && row.tier === "economy")!.model;
+  // Codex: 上限はモデルの metadata で決まり(ADR 0195 決定7)、code mode ではモデルが書くコードでも受け取りが変わるので、
+  // 盤面の種の openai 行のモデルを1行ずつ測る。一時的な CODEX_HOME で回し、rollout はそこに残る
   const codexHome = mkdtempSync(join(tmpdir(), "tidepool-reader-cap-codex-"));
   copyFileSync(join(process.env.CODEX_HOME ?? join(homedir(), ".codex"), "auth.json"), join(codexHome, "auth.json"));
-  const codexMarkers = join(scratch, "codex-markers.jsonl");
-  const codexServer = serve(codexMarkers);
-  run(
-    "codex",
-    [
-      "exec",
-      "-m",
-      codexModel,
-      "-s",
-      "read-only",
-      "--skip-git-repo-check",
-      "-c",
-      `mcp_servers.${CANARY_SERVER}.command=${JSON.stringify(codexServer.command)}`,
-      "-c",
-      `mcp_servers.${CANARY_SERVER}.args=${JSON.stringify(codexServer.args)}`,
-      "-c",
-      `mcp_servers.${CANARY_SERVER}.tools.${CANARY_TOOL}.approval_mode="approve"`,
-      PROMPT,
-    ],
-    { ...process.env, CODEX_HOME: codexHome },
-  );
-  const rollout = globSync(join(codexHome, "sessions/**/rollout-*.jsonl"))[0];
+  const codexRows = SEED_EXECUTION_SETTINGS.filter((row) => row.provider === "openai").map(({ model }) => {
+    const markersFile = join(scratch, `codex-${model}-markers.jsonl`);
+    const server = canaryServerSpec(markersFile);
+    const before = new Set(globSync(join(codexHome, "sessions/**/rollout-*.jsonl")));
+    run(
+      "codex",
+      [
+        "exec",
+        "-m",
+        model,
+        "-s",
+        "read-only",
+        "--skip-git-repo-check",
+        "-c",
+        `mcp_servers.${CANARY_SERVER}.command=${JSON.stringify(server.command)}`,
+        "-c",
+        `mcp_servers.${CANARY_SERVER}.args=${JSON.stringify(server.args)}`,
+        "-c",
+        `mcp_servers.${CANARY_SERVER}.tools.${CANARY_TOOL}.approval_mode="approve"`,
+        PROMPT,
+      ],
+      { ...process.env, CODEX_HOME: codexHome },
+    );
+    const rollout = globSync(join(codexHome, "sessions/**/rollout-*.jsonl")).find((path) => !before.has(path));
+    return {
+      reader: `codex exec (${model})`,
+      bin: "codex",
+      markersFile,
+      received: rollout === undefined ? null : readCodexReceived(readFileSync(rollout, "utf8")),
+    };
+  });
 
   const rows = [
     { reader: "claude -p (haiku)", bin: "claude", markersFile: claudeMarkers, received: readClaudeReceived(claudeStdout) },
-    {
-      reader: `codex exec (${codexModel})`,
-      bin: "codex",
-      markersFile: codexMarkers,
-      received: rollout === undefined ? null : readCodexReceived(readFileSync(rollout, "utf8")),
-    },
+    ...codexRows,
   ];
   console.error(`records kept in ${scratch} and ${codexHome}`);
   console.log("| reader | version | middle marker | tail marker | result | detail |\n|---|---|---|---|---|---|");
   let ok = true;
   for (const row of rows) {
-    // 2回呼ばれたら、最後の受け取りを最後の目印と突き合わせる
-    const calls = readFileSync(row.markersFile, "utf8").split("\n").filter(Boolean);
-    const verdict =
-      calls.length === 0
-        ? { pass: false, middle: false, tail: false, detail: "the reader never called the canary tool" }
-        : judgeReceived(row.received, JSON.parse(calls.at(-1)!));
-    const detail = calls.length > 1 ? `${verdict.detail} (called ${calls.length} times; last call judged)` : verdict.detail;
+    const calls = readFileSync(row.markersFile, "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line));
+    const verdict = judgeReceived(row.received, calls);
     const version = execFileSync(row.bin, ["--version"], { encoding: "utf8" }).trim();
     const mark = (present: boolean) => (present ? "present" : "missing");
     console.log(
-      `| ${row.reader} | ${version} | ${mark(verdict.middle)} | ${mark(verdict.tail)} | ${verdict.pass ? "合格" : "不合格"} | ${detail} |`,
+      `| ${row.reader} | ${version} | ${mark(verdict.middle)} | ${mark(verdict.tail)} | ${verdict.pass ? "合格" : "不合格"} | ${verdict.detail} |`,
     );
     ok &&= verdict.pass;
   }

@@ -37,23 +37,33 @@ describe("読み手が受け取った本文の判定", () => {
   const markers = { middle: "MIDDLE-1", tail: "TAIL-1" };
 
   it("中央と末尾の目印が逐語で揃えば合格", () => {
-    expect(judgeReceived('{"canary":"xxMIDDLE-1xxTAIL-1"}', markers)).toMatchObject({ pass: true, middle: true, tail: true });
+    expect(judgeReceived('{"canary":"xxMIDDLE-1xxTAIL-1"}', [markers])).toMatchObject({ pass: true, middle: true, tail: true });
   });
 
   it("中央が切り詰められて中央の目印が欠けたら、末尾が残っていても不合格", () => {
-    const verdict = judgeReceived('{"canary":"xx…4000 tokens truncated…xxTAIL-1"}', markers);
+    const verdict = judgeReceived('{"canary":"xx…4000 tokens truncated…xxTAIL-1"}', [markers]);
     expect(verdict).toMatchObject({ pass: false, middle: false, tail: true });
     expect(verdict.detail).toContain("middle");
   });
 
   it("末尾の目印が欠けても不合格", () => {
-    expect(judgeReceived('{"canary":"xxMIDDLE-1xx', markers)).toMatchObject({ pass: false, middle: true, tail: false });
+    expect(judgeReceived('{"canary":"xxMIDDLE-1xx', [markers])).toMatchObject({ pass: false, middle: true, tail: false });
   });
 
   it("読み手の受け取りが見つからなければ不合格", () => {
-    const verdict = judgeReceived(null, markers);
+    const verdict = judgeReceived(null, [markers]);
     expect(verdict).toMatchObject({ pass: false, middle: false, tail: false });
     expect(verdict.detail).toContain("no tool result");
+  });
+
+  it("読み手が canary を一度も呼ばなければ不合格", () => {
+    expect(judgeReceived(null, [])).toMatchObject({ pass: false, detail: "the reader never called the canary tool" });
+  });
+
+  it("2回呼ばれたら、最後の受け取りを最後の目印と突き合わせる", () => {
+    const verdict = judgeReceived('{"canary":"xxMIDDLE-2xxTAIL-2"}', [markers, { middle: "MIDDLE-2", tail: "TAIL-2" }]);
+    expect(verdict).toMatchObject({ pass: true });
+    expect(verdict.detail).toContain("called 2 times");
   });
 });
 
@@ -61,7 +71,7 @@ describe("Claude Code の受け取り", () => {
   it("canary の tool_use に対応する tool_result の本文を読む(ToolSearch の tool_result は読まない)", () => {
     const received = readClaudeReceived(CLAUDE_STREAM);
     expect(received?.startsWith('{"canary":"x')).toBe(true);
-    expect(judgeReceived(received, CLAUDE_MARKERS)).toMatchObject({ pass: true });
+    expect(judgeReceived(received, [CLAUDE_MARKERS])).toMatchObject({ pass: true });
   });
 
   it("canary を呼んでいない stdout からは何も読まない", () => {
@@ -74,7 +84,17 @@ describe("Codex の受け取り", () => {
     expect(CODEX_ROLLOUT).toContain(CODEX_MARKERS.middle); // 切り詰め前の本文は rollout の別の行にある
     const received = readCodexReceived(CODEX_ROLLOUT);
     expect(received).toContain("tokens truncated");
-    expect(judgeReceived(received, CODEX_MARKERS)).toMatchObject({ pass: false, middle: false, tail: true });
+    expect(judgeReceived(received, [CODEX_MARKERS])).toMatchObject({ pass: false, middle: false, tail: true });
+  });
+
+  it("code mode でない直接の MCP 呼び出しなら function_call_output を読む", () => {
+    const rollout = [
+      { type: "response_item", payload: { type: "function_call", name: "mcp__canary__read_canary", arguments: "{}", call_id: "c1" } },
+      { type: "response_item", payload: { type: "function_call_output", call_id: "c1", output: "xxMIDDLE-1xx…truncated…" } },
+    ]
+      .map((line) => JSON.stringify(line))
+      .join("\n");
+    expect(readCodexReceived(rollout)).toBe("xxMIDDLE-1xx…truncated…");
   });
 
   it("canary を呼んでいない rollout からは何も読まない", () => {
