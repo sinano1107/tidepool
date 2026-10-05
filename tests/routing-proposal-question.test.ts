@@ -417,11 +417,14 @@ it("人間が先に段の説明を直すと提案は回答なしで観測で決�
   }
 });
 
-it("段の説明の提案の根拠が task の申告で床を決めていない・別の段を要求した task の session なら断られ、question は立たない", async () => {
+it("段の説明の提案の根拠が task の申告で床を決めていない・別の段を要求した task の session なら、また文面がいまの説明と同じなら断られ、question は立たない", async () => {
   const { review, client, call } = await boardWithRoutingReview();
   try {
     expect(await proposeTierDescription(call, [declaredSession(t, "standard", "agent")])).toMatchObject({ error: expect.stringContaining("not from its task") });
     expect(await proposeTierDescription(call, [declaredSession(t, "economy")])).toMatchObject({ error: expect.stringContaining("did not request standard") });
+    expect(
+      await call("propose_routing_change", { op: "tier_description", tier: "standard", description: await tierDescription("standard"), evidence: [declaredSession(t, "standard")], rationale: "no change" }),
+    ).toMatchObject({ error: expect.stringContaining("already reads") });
     expect(((await api(t.baseUrl, "GET", "/api/tasks")).json as any[]).filter((q) => q.parent_id === review.id)).toEqual([]);
   } finally {
     await client.close();

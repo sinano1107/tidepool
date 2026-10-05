@@ -233,7 +233,7 @@ it("routing meta-review の purpose は材料の節とその5つの部分を名�
       "the cells first seen and the rows humans changed since then, and the routing proposals answered or settled since then.",
   );
   expect(review.purpose).toContain(
-    "before you propose a change to a row, the learner flag or an agent's tier, read the earlier proposals on it, with their answers, amendments and comments, with read_routing_settings",
+    "before you propose a change to a row, the learner flag, an agent's tier or a tier's description, read the earlier proposals on it, with their answers, amendments and comments, with read_routing_settings",
   );
   expect(review.purpose).toContain("read the matched rows, and anything before the previous meta-review, with list_routing_shadow, list_allocations and list_routing_cells");
   expect(review.purpose).not.toContain("First read");

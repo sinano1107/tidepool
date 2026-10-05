@@ -33,7 +33,7 @@ import {
   searchMemory,
   searchMemoryEntries,
 } from "./memory.js";
-import { type MetaReviewSubject, metaReviewSubjectOf, PROMOTION_RULE } from "./meta-review.js";
+import { type MetaReviewSubject, metaReviewSubjectOf, PROMOTION_RULE, TIER_DEFINITION_RULE } from "./meta-review.js";
 import type { ProcessContainers } from "./process-container.js";
 import { type AuthorityProfile, REVIEWER_AUTHORITY_PROFILE, type RosterAgent } from "./registry.js";
 import { nextDescription, packItems, readPosition } from "./response-budget.js";
@@ -726,7 +726,7 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
         "Review only: turn your finding about an objected entry into memory — only the objected entries your review was opened on (its material). The board derives the entry kind and addressee from the cause attributed to those objections, " +
         "except for a missing_information cause, where you pass as (behavior or knowledge) and must not otherwise. " +
         "With as knowledge, pass based_on_decision (the event id log_decision returned for your reasoning), and not otherwise; it becomes the knowledge entry's source, an inference. " +
-        "A behavior is a candidate a human approves later. A tier's definition is not a Behavior: it belongs in the tier's description. A habit of declaring tiers specific to one workspace or writer may be a Behavior. path is a \"/\"-separated hierarchy (e.g. build/tests). " +
+        `A behavior is a candidate a human approves later. ${TIER_DEFINITION_RULE} path is a "/"-separated hierarchy (e.g. build/tests). ` +
         BOARD_WRITE_LANGUAGE_RULE,
       inputSchema: {
         entry_id: z.number().int(),
@@ -919,8 +919,8 @@ function registerRoutingMetaReviewVerbs(server: McpServer, deps: McpDeps, run: M
       description:
         "Read the current execution-setting table, the board's tiers with their descriptions in order, whether a model ranked above main may serve as advisor, the provider rank, the default priority and " +
         "whether the learner is promoted, and every past routing proposal (agent tier proposals included) with its answer, the " +
-        "human's amendment and comment, or why the board settled it as observed (the pinned row, learner flag or agent tier " +
-        "changed, or the row is gone: deleted, or its effort changed). An applied agent tier proposal carries the registry commit it landed as applied. " +
+        "human's amendment and comment, or why the board settled it as observed (the pinned row, learner flag, agent tier or tier description " +
+        "changed, or what it pinned is gone: the row deleted or its effort changed, or the tier deleted). An applied agent tier proposal carries the registry commit it landed as applied. " +
         "Proposals come oldest first. " +
         nextDescription("read_routing_settings", "proposals", "The table and settings come"),
       inputSchema: { next },

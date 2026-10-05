@@ -291,6 +291,8 @@ function tierDescriptionProposal(db: Db, input: { tier?: string; description?: s
   }
   assertKnownTier(db, "tier", tier);
   assertTierDescription(description);
+  const current = readTiers(db).find((t) => t.name === tier)!.description;
+  if (description === current) throw new DomainError(`tier ${tier}'s description already reads: ${current}`);
   const requested = db.prepare("SELECT 1 FROM tasks JOIN tiers ON tiers.id = tasks.tier_id WHERE tasks.id = ? AND tiers.name = ? AND tiers.position IS NOT NULL");
   for (const id of evidence) {
     const event = getEvent(db, id);
@@ -298,7 +300,7 @@ function tierDescriptionProposal(db: Db, input: { tier?: string; description?: s
     if (event.payload.source.tier !== "task") throw new DomainError(`evidence ${id} took its tier from ${event.payload.source.tier}, not from its task's request`);
     if (!requested.get(event.task_id, tier)) throw new DomainError(`evidence ${id} is a session of a task that did not request ${tier}`);
   }
-  return { kind: "routing", op: "tier_description", tier, description, evidence, pin: { description: readTiers(db).find((t) => t.name === tier)!.description } };
+  return { kind: "routing", op: "tier_description", tier, description, evidence, pin: { description: current } };
 }
 
 /** 提案 verb(issue #918 / #919 / #920 / ADR 0150 決定1・2・4・5 / ADR 0200 決定7): 表の既存の1行の tier / effort の置換(op row)、学習器の
@@ -329,9 +331,8 @@ export function proposeRoutingChange(
   let title: string;
   let diff: string[];
   let purpose: string;
-  if (input.op !== "agent_tier" && (input.agent !== undefined || input.to !== undefined || (input.op !== "tier_description" && input.evidence !== undefined))) {
-    throw new DomainError(`op ${input.op} takes no agent, to or evidence`);
-  }
+  if (input.op !== "agent_tier" && (input.agent !== undefined || input.to !== undefined)) throw new DomainError(`op ${input.op} takes no agent and no to`);
+  if (input.op !== "agent_tier" && input.op !== "tier_description" && input.evidence !== undefined) throw new DomainError(`op ${input.op} takes no evidence`);
   if (input.op !== "tier_description" && (input.tier !== undefined || input.description !== undefined)) throw new DomainError(`op ${input.op} takes no tier or description`);
   if (input.op === "tier_description") {
     if (input.row !== undefined || input.change !== undefined) throw new DomainError("op tier_description takes no row and no change");
