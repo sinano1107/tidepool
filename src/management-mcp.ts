@@ -267,21 +267,26 @@ const readByNext = (verb: string, items: string, firstOnly?: string) =>
   " An item too large for one response comes alone in pieces marked `partial` (`id`, `field`, and `field_bytes`, the field's full size " +
   "in UTF-8 bytes): join that field across the pieces to get it verbatim.";
 
+/** 結果を返し、DomainError は tool error にする。 */
+const memoryVerb = (write: () => unknown) => {
+  try {
+    return toolResult(write());
+  } catch (err) {
+    if (err instanceof DomainError) return toolError(err.message);
+    throw err;
+  }
+};
+
 /** 予算と続きで読む口(ADR 0195): 最初の引数か続き(next)のどちらか一方から読みの位置を作り、`read` が詰めた応答を返す。
- *  続きは最初の引数を自分の中から戻すので渡し直しは要らない。DomainError は tool error にする。 */
+ *  続きは最初の引数を自分の中から戻すので渡し直しは要らない。 */
 function readBudgeted<A extends Record<string, unknown>>(
   verb: string,
   { next, ...args }: A & { next?: string },
   read: (position: ReadPosition<A>) => Record<string, unknown>,
 ) {
-  try {
-    const given = Object.keys(args).filter((name) => args[name] !== undefined);
-    if (next !== undefined && given.length > 0) return toolError(`pass ${given.join(", ")} or next, not both`);
-    return toolResult(read(next === undefined ? { verb, args: args as unknown as A } : readNext<A>(verb, next)));
-  } catch (err) {
-    if (err instanceof DomainError) return toolError(err.message);
-    throw err;
-  }
+  const given = Object.keys(args).filter((name) => args[name] !== undefined);
+  if (next !== undefined && given.length > 0) return toolError(`pass ${given.join(", ")} or next, not both`);
+  return memoryVerb(() => read(next === undefined ? { verb, args: args as unknown as A } : readNext<A>(verb, next)));
 }
 
 /** 書き込みの ack に載せる task の識別と状態(ADR 0195)。本文(purpose・完了基準・handoff など)は呼び手が持っているか get_task で読む。 */
@@ -662,15 +667,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
   );
   // spec #586 F / issue #593: the human's memory surface. No approve verb (ADR 0152):
   // wording the human writes here is approved on write, and AI-drafted wording is approved
-  // only through a proposal question. Domain errors come back as tool errors.
-  const memoryVerb = (write: () => unknown) => {
-    try {
-      return toolResult(write());
-    } catch (err) {
-      if (err instanceof DomainError) return toolError(err.message);
-      throw err;
-    }
-  };
+  // only through a proposal question. Domain errors come back as tool errors (memoryVerb).
   const writtenAs =
     "Written as the human, approved at once. The original_* fields, when given, are the human's own wording, recorded in the " +
     "board's display language. workspace null = the whole board.";
