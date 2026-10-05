@@ -599,8 +599,9 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
     "change_execution_settings",
     {
       description:
-        "Apply one change to the board's execution settings as the human: upsert a table row (`row`, keyed by provider + model), " +
-        "delete one (`delete_row` — deleting every row of a provider × tier just excludes that provider for tasks of that tier), " +
+        "Apply one change to the board's execution settings as the human: add a table row (`row`; a model has at most one row per tier and one per effort), edit one (`row` with `key`, " +
+        "the provider + model + effort of the row to replace), delete one (`delete_row`, named by provider + model + effort — deleting " +
+        "every row of a provider × tier just excludes that provider for tasks of that tier), " +
         "or set `advisor_above_main`, `provider_rank` (every provider exactly once, first = preferred), the default `priority`, or `retrospective_tier` " +
         "(economy / standard / frontier — the tier the board's own retrospective Board calls resolve on the anthropic row; unset = frontier), " +
         "or demote the learner (`learner_promoted: false` — promotion only comes from approving a routing meta-review's proposal). " +

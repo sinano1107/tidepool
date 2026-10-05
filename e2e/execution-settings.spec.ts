@@ -46,8 +46,8 @@ test("表の行を消す・価格を直す・行を足すのが1回の保存で�
   await expect(card).toContainText("kimi-k3[1m]");
   await card.getByRole("button", { name: "Edit" }).click();
 
-  await card.getByTestId("execution-row-moonshot:kimi-k3[1m]").getByRole("button", { name: "Remove" }).click();
-  await card.getByTestId("execution-row-anthropic:claude-sonnet-5-5").getByLabel("Price out").fill("8");
+  await card.getByTestId("execution-row-moonshot:kimi-k3[1m]:high").getByRole("button", { name: "Remove" }).click();
+  await card.getByTestId("execution-row-anthropic:claude-sonnet-5-5:high").getByLabel("Price out").fill("8");
   await card.getByRole("button", { name: "Add row" }).click();
   const added = card.getByTestId("execution-row-new");
   await added.getByLabel("Provider").selectOption("openai");

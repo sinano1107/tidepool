@@ -21,7 +21,7 @@ async function boardWithRoutingReview() {
     const result: any = await client.callTool({ name, arguments: args });
     return result.isError ? { error: result.content[0].text } : JSON.parse(result.content[0].text);
   };
-  const propose = async (change: Record<string, unknown> = { tier: "frontier" }, row = { provider: "anthropic", model: "claude-opus-5-5" }) =>
+  const propose = async (change: Record<string, unknown> = { tier: "frontier" }, row = { provider: "anthropic", model: "claude-opus-5-5", effort: "high" }) =>
     (await call("propose_routing_change", { op: "row", row, change, rationale: "12 of 14 opus episodes were underpowered." })).question_id as string;
   return { review, client, call, propose };
 }
@@ -38,7 +38,7 @@ it("行の提案は meta-review の子に1 item の question を立て、その�
       type: "question",
       status: "todo",
       parent_id: review.id,
-      question_proposal: { kind: "routing", op: "row", row: { provider: "anthropic", model: "claude-opus-5-5" }, change: { tier: "frontier", effort: "max" }, pin: OPUS },
+      question_proposal: { kind: "routing", op: "row", row: { provider: "anthropic", model: "claude-opus-5-5", effort: "high" }, change: { tier: "frontier", effort: "max" }, pin: OPUS },
       question_items: [{ options: ["approve", "reject"], recommendation: "approve" }],
     });
     expect(question.question_items).toHaveLength(1);
@@ -56,8 +56,8 @@ it("表に無い行の提案と schema 違反の変更は断られ、question �
   const { review, client, call } = await boardWithRoutingReview();
   try {
     for (const [row, change] of [
-      [{ provider: "anthropic", model: "haiku" }, { tier: "economy" }],
-      [{ provider: "anthropic", model: "claude-opus-5-5" }, { tier: "ultra" }],
+      [{ provider: "anthropic", model: "haiku", effort: "high" }, { tier: "economy" }],
+      [{ provider: "anthropic", model: "claude-opus-5-5", effort: "high" }, { tier: "ultra" }],
     ]) {
       expect(await call("propose_routing_change", { op: "row", row, change, rationale: "r" })).toMatchObject({
         error: expect.stringMatching(/has no row for|a row change takes tier/),
@@ -189,10 +189,10 @@ it("pin の行を settings タブで編集する・管理MCP で消すと open �
   const management = await managementMcpClient(t.baseUrl);
   try {
     const edited = await propose({ tier: "frontier" });
-    const deleted = await propose({ effort: "max" }, { provider: "anthropic", model: "claude-sonnet-5-5" });
+    const deleted = await propose({ effort: "max" }, { provider: "anthropic", model: "claude-sonnet-5-5", effort: "high" });
 
-    expect((await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "row", row: { ...OPUS, price_out: 30 } })).status).toBe(200);
-    const removal: any = await management.callTool({ name: "change_execution_settings", arguments: { change: { setting: "delete_row", provider: "anthropic", model: "claude-sonnet-5-5" } } });
+    expect((await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "row", key: { provider: "anthropic", model: "claude-opus-5-5", effort: "high" }, row: { ...OPUS, price_out: 30 } })).status).toBe(200);
+    const removal: any = await management.callTool({ name: "change_execution_settings", arguments: { change: { setting: "delete_row", provider: "anthropic", model: "claude-sonnet-5-5", effort: "high" } } });
     expect(removal.isError).not.toBe(true);
 
     expect(await task(edited)).toMatchObject({ status: "done", question_answer: null });
@@ -215,7 +215,7 @@ it("別の行・別の設定の編集では提案は open のまま", async () =
     const questionId = await propose({ tier: "frontier" });
 
     const fable = { provider: "anthropic", tier: "frontier", model: "claude-fable-5-1", effort: "max", price_in: 10, price_out: 50 };
-    for (const change of [{ setting: "row", row: fable }, { setting: "priority", value: "quality" }, { setting: "advisor_above_main", value: true }]) {
+    for (const change of [{ setting: "row", key: { provider: "anthropic", model: "claude-fable-5-1", effort: "high" }, row: fable }, { setting: "priority", value: "quality" }, { setting: "advisor_above_main", value: true }]) {
       expect((await api(t.baseUrl, "POST", "/api/settings/execution", change)).status).toBe(200);
     }
 
@@ -230,13 +230,13 @@ it("read_routing_settings は過去の routing の提案を、回答・修正値
   const { client, call, propose } = await boardWithRoutingReview();
   try {
     const amended = await propose({ tier: "frontier" });
-    const rejected = await propose({ effort: "low" }, { provider: "openai", model: "gpt-5.6-sol" });
-    const stale = await propose({ tier: "economy" }, { provider: "openai", model: "gpt-6-astra" });
-    const open = await propose({ effort: "max" }, { provider: "anthropic", model: "claude-sonnet-5-5" });
+    const rejected = await propose({ effort: "low" }, { provider: "openai", model: "gpt-5.6-sol", effort: "high" });
+    const stale = await propose({ tier: "economy" }, { provider: "openai", model: "gpt-6-astra", effort: "high" });
+    const open = await propose({ effort: "max" }, { provider: "anthropic", model: "claude-sonnet-5-5", effort: "high" });
     expect((await answer(amended, { answers: ["approve"], amendment: { effort: "max" }, comment: "and give it room" })).status).toBe(200);
     expect((await answer(rejected, { answers: ["reject"], comment: "sol is fine at high" })).status).toBe(200);
     const astra = { provider: "openai", tier: "frontier", model: "gpt-6-astra", effort: "high", price_in: 12, price_out: 50 };
-    expect((await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "row", row: astra })).status).toBe(200);
+    expect((await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "row", key: { provider: "openai", model: "gpt-6-astra", effort: "high" }, row: astra })).status).toBe(200);
 
     const proposal = async (id: string) => (await task(id)).question_proposal;
     expect((await call("read_routing_settings")).proposals).toEqual([

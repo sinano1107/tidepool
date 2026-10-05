@@ -181,7 +181,8 @@ export type MemoryProposal = {
 export interface RoutingRowProposal {
   kind: "routing";
   op: "row";
-  row: Pick<ExecutionSettingRow, "provider" | "model">;
+  /** 行の鍵(ADR 0200 決定5)。承認はこの行を編集する。 */
+  row: Pick<ExecutionSettingRow, "provider" | "model" | "effort">;
   change: RoutingRowChange;
   pin: ExecutionSettingRow;
 }
