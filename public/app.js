@@ -278,7 +278,16 @@ function TpAddTierAmendment({ proposed, onChange }) {
     onChange(changed);
   }, [draft]);
   if (!tiers) return null;
-  return /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 8, marginBottom: 14 } }, /* @__PURE__ */ React.createElement(Input, { label: "Name", mono: true, value: draft.name, onChange: (e) => setDraft({ ...draft, name: e.target.value }) }), /* @__PURE__ */ React.createElement(
+  return /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 8, marginBottom: 14 } }, /* @__PURE__ */ React.createElement(
+    Input,
+    {
+      label: "Name",
+      mono: true,
+      value: draft.name,
+      onChange: (e) => setDraft({ ...draft, name: e.target.value }),
+      placeholder: "a lowercase letter, then a-z 0-9 - _ \u2014 agent.md writes it as its tier"
+    }
+  ), /* @__PURE__ */ React.createElement(
     Select,
     {
       label: "Position",
@@ -286,7 +295,15 @@ function TpAddTierAmendment({ proposed, onChange }) {
       options: Array.from({ length: tiers.length + 1 }, (_, p) => ({ value: String(p), label: tierPositionLabel(tiers, p) })),
       onChange: (e) => setDraft({ ...draft, position: Number(e.target.value) })
     }
-  ), tierNeighbour("next tier above", tiers[draft.position]), /* @__PURE__ */ React.createElement(Input, { label: "Description", value: draft.description, onChange: (e) => setDraft({ ...draft, description: e.target.value }) }), tierNeighbour("next tier below", tiers[draft.position - 1]));
+  ), tierNeighbour("next tier above", tiers[draft.position]), /* @__PURE__ */ React.createElement(
+    Input,
+    {
+      label: "Description",
+      value: draft.description,
+      onChange: (e) => setDraft({ ...draft, description: e.target.value }),
+      placeholder: "one line: the work the tier below cannot do and this one can"
+    }
+  ), tierNeighbour("next tier below", tiers[draft.position - 1]));
 }
 function TpMemoryAmendment({ candidateId, onTranslate, onChange, onDeadAddressee }) {
   const { Button, Input, Select } = window.TidepoolDesignSystem_8a0ead;
