@@ -23,7 +23,6 @@ import {
   executionSettingsChangeSchema,
   PRIORITIES,
   readExecutionSettingsWithQuarantine,
-  tierNames,
 } from "./execution-setting.js";
 import { type GitHubClient, OPEN_ISSUES_LIMIT } from "./github.js";
 import { githubLoggedIn } from "./github-auth.js";
@@ -1610,7 +1609,6 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     res.json({
       ...readExecutionSettingsWithQuarantine(db),
       providers: PROVIDER_OPTIONS,
-      tiers: tierNames(db),
       priorities: PRIORITIES,
     } satisfies WireContract["GET /api/settings/execution"]);
   });
@@ -1632,8 +1630,8 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       }
     };
 
-  // 1 リクエスト = 1 変更(行の upsert / 削除、advisor above main、Provider 順位、優先
-  // 順位の既定、振り返り Board call のティア)。不正値(未知の Provider / ティア / 優先順位、負の価格、順列でない
+  // 1 リクエスト = 1 変更(行の upsert / 削除、段の挿入・編集・削除、advisor above main、Provider 順位、優先
+  // 順位の既定、盤面既定の段、判断の段)。不正値(未知の Provider / ティア / 優先順位、負の価格、順列でない
   // 順位)はこの入口で弾く。保存後は provider-pace-offsets と同じく即時再評価(issue #296)
   router.post(
     "/settings/execution",

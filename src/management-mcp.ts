@@ -592,7 +592,9 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
         "Read the board's execution settings: the model table (rows of provider, model, tier, effort, price_in / price_out in USD per MTok, " +
         "and quarantine_question_id — the open question naming a row the provider refused to run on this board, or null), " +
         "whether a model ranked above main may serve as advisor, the Provider rank, the default priority (quality / cost), whether the learner is promoted, " +
-        "and the retrospective tier — the board's own judgement tier, shared by its retrospective Board calls (allocation review, attribution, Behavior candidate drafting) and its periodic meta-reviews.",
+        "the default tier (tasks requesting no tier whose agent declares none, and the board's drafts run on it), " +
+        "the judgement tier — the board's own judgement tier, shared by its retrospective Board calls (allocation review, attribution, Behavior candidate drafting) and its periodic meta-reviews — " +
+        "and the board's tiers in order (lowest first), each with its one-line description.",
     },
     async () => toolResult(readExecutionSettingsWithQuarantine(deps.db)),
   );
@@ -603,7 +605,11 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
         "Apply one change to the board's execution settings as the human: add a table row (`row`; a model has at most one row per tier and one per effort), edit one (`row` with `key`, " +
         "the provider + model + effort of the row to replace), delete one (`delete_row`, named by provider + model + effort — deleting " +
         "every row of a provider × tier just excludes that provider for tasks of that tier), " +
-        "or set `advisor_above_main`, `provider_rank` (every provider exactly once, first = preferred), the default `priority`, or `retrospective_tier` " +
+        "insert a tier (`insert_tier`: name — a lowercase letter, then a-z / 0-9 / - / _ — a one-line description, and position, an index into the tier list, 0 = lowest), " +
+        "edit one (`edit_tier`, named by name: a new description and/or position), delete one (`delete_tier`; refused with the reasons while the tier has table rows, " +
+        "is the default or judgement tier, or an unsettled task requests it), " +
+        "or set `advisor_above_main`, `provider_rank` (every provider exactly once, first = preferred), the default `priority`, `default_tier` " +
+        "(a tier name from the board's list — the tier of tasks that request none and whose agent declares none, and of the board's drafts), or `judgement_tier` " +
         "(a tier name from the board's list — the tier the board's own judgement runs on: retrospective Board calls resolve on its anthropic row, and periodic meta-reviews request it), " +
         "or demote the learner (`learner_promoted: false` — promotion only comes from approving a routing meta-review's proposal). " +
         "Takes effect at the next pickup or Board call.",

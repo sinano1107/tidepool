@@ -186,7 +186,7 @@ export function materialEvents<K extends EventKind>(db: Db, kinds: readonly K[],
 export function registerMetaReview(db: Db, subject: MetaReviewSubject, now: Date): void {
   db.transaction(() => {
     // 盤面自身の判断の段で走る —— 振り返り Board call と1つの設定を共有する(ADR 0200 決定4)
-    const review_tier = readExecutionSettings(db).retrospectiveTier;
+    const review_tier = readExecutionSettings(db).judgementTier;
     const task = registerTask(db, { type: "review", ...META_REVIEW_SUBJECTS[subject].task, review_tier, meta_review_subject: subject }, now, BOARD_WORKER_ID, "board");
     const { watermark } = db.prepare("SELECT MAX(id) AS watermark FROM events").get() as { watermark: number };
     appendEvent(db, {

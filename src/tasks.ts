@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { Db } from "./db.js";
 import { DEFAULT_AUDITOR_NAME } from "./defaults.js";
 import { appendEvent, type EventOrigin, type EventPayload, getEvent, latestEventOfTask, type TaskScopedPayload, taskDecisionLog } from "./events.js";
-import { assertKnownTier, type ExecutionSettingRow, PRIORITIES, type Priority, type RoutingRowChange, type Tier } from "./execution-setting.js";
+import { assertKnownTier, type ExecutionSettingRow, liveTierId, PRIORITIES, type Priority, type RoutingRowChange, type Tier } from "./execution-setting.js";
 import type { GitHubClient, Issue, IssueRef } from "./github.js";
 import type { MemoryAmendment } from "./memory.js";
 import type { MergeDial, RosterAgent } from "./registry.js";
@@ -704,7 +704,7 @@ export function registerTask(
          question_pending_child, question_proposal, question_pending_merge_pr, question_pending_local_merge_task_id, question_pending_pr_promotion_task_id, question_quarantine_kind,
          question_quarantine_value, question_cli_auth_expiry_warning, github_issue_number, meta_review_subject, created_at)
        VALUES (@id, @type, @status, @assignee, @workspace, @title, @purpose, @completion_criteria,
-         @risk_flag, @review_flag, @review_by, (SELECT id FROM tiers WHERE name = @review_tier), (SELECT id FROM tiers WHERE name = @tier), @priority, @parent_id, @based_on_decision, @sort_key, @handoff_doc, @pr_number,
+         @risk_flag, @review_flag, @review_by, ${liveTierId("@review_tier")}, ${liveTierId("@tier")}, @priority, @parent_id, @based_on_decision, @sort_key, @handoff_doc, @pr_number,
          @question_items, @question_answer, @question_answer_comment, @question_cancel_option,
          @question_pending_child, @question_proposal, @question_pending_merge_pr, @question_pending_local_merge_task_id, @question_pending_pr_promotion_task_id, @question_quarantine_kind,
          @question_quarantine_value, @question_cli_auth_expiry_warning, @github_issue_number, @meta_review_subject, @created_at)`,

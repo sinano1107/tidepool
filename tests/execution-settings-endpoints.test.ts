@@ -1,5 +1,5 @@
 import { afterEach, expect, it } from "vitest";
-import { applyExecutionSettingsChange, executionSettingsFor, SEED_EXECUTION_SETTINGS } from "../src/execution-setting.js";
+import { applyExecutionSettingsChange, executionSettingsFor, SEED_EXECUTION_SETTINGS, SEED_TIERS } from "../src/execution-setting.js";
 import { openQuarantineQuestion, registerQuarantine, tableRowValue } from "../src/quarantine.js";
 import { PROVIDER_VALUES, type Provider } from "../src/registry.js";
 import { healthyOpenai } from "./fakes.js";
@@ -31,20 +31,21 @@ it("GET /api/settings/execution は種の表と盤面既定(advisor above main �
     providerRank: [...PROVIDER_VALUES],
     priority: "quality",
     learnerPromoted: false,
-    retrospectiveTier: "frontier",
+    defaultTier: "economy",
+    judgementTier: "frontier",
     providers: [
       { value: "anthropic", label: "anthropic — Claude models, Anthropic billing" },
       { value: "moonshot", label: "moonshot — Kimi models, Moonshot Platform billing" },
       { value: "openai", label: "openai — Codex models, OpenAI billing" },
     ],
-    tiers: ["economy", "standard", "frontier"],
+    tiers: SEED_TIERS,
     priorities: ["quality", "cost"],
   });
 });
 
-/** 盤面境界の読み口(GET)から見た状態。選択肢は落とす。 */
+/** 盤面境界の読み口(GET)から見た状態。選択肢は落とす(段の一覧は状態なので残す)。 */
 const state = async () => {
-  const { providers: _p, tiers: _t, priorities: _q, ...rest } = (await api(t.baseUrl, "GET", "/api/settings/execution")).json;
+  const { providers: _p, priorities: _q, ...rest } = (await api(t.baseUrl, "GET", "/api/settings/execution")).json;
   return rest;
 };
 
@@ -54,7 +55,7 @@ it("POST /api/settings/execution は1つの変更を受け、Provider 順位・�
     { setting: "provider_rank", value: ["openai", "anthropic", "moonshot"] },
     { setting: "priority", value: "cost" },
     { setting: "advisor_above_main", value: true },
-    { setting: "retrospective_tier", value: "standard" },
+    { setting: "judgement_tier", value: "standard" },
   ]) {
     expect((await api(t.baseUrl, "POST", "/api/settings/execution", change)).status).toBe(200);
   }
@@ -62,7 +63,7 @@ it("POST /api/settings/execution は1つの変更を受け、Provider 順位・�
     providerRank: ["openai", "anthropic", "moonshot"],
     priority: "cost",
     advisorAboveMain: true,
-    retrospectiveTier: "standard",
+    judgementTier: "standard",
   });
 });
 
@@ -106,7 +107,7 @@ it("不正値(未知の Provider / ティア / 優先順位、負の価格、順
     { setting: "provider_rank", value: ["anthropic", "openai", "moonshot", "openai"] },
     { setting: "advisor_above_main", value: "yes" },
     { setting: "tier", value: "frontier" }, // ティアの既定は設定ではない(BOARD_DEFAULT_TIER)
-    { setting: "retrospective_tier", value: "premium" }, // ティア語彙の外(issue #914)
+    { setting: "judgement_tier", value: "premium" }, // ティア語彙の外(issue #914)
   ]) {
     expect((await api(t.baseUrl, "POST", "/api/settings/execution", bad)).status, JSON.stringify(bad)).toBe(400);
   }
@@ -218,20 +219,20 @@ it("管理MCP の read_execution_settings / change_execution_settings は同じ�
     expect(rejected.isError).toBe(true);
     expect((await state()).priority).toBe("quality");
 
-    // retrospective_tier(issue #914): 両方の扉から設定でき、語彙の外は両方の扉で拒否される
+    // judgement_tier(issue #914): 両方の扉から設定でき、語彙の外は両方の扉で拒否される
     const changedTier = (await client.callTool({
       name: "change_execution_settings",
-      arguments: { change: { setting: "retrospective_tier", value: "standard" } },
+      arguments: { change: { setting: "judgement_tier", value: "standard" } },
     })) as any;
     expect(changedTier.isError).not.toBe(true);
-    expect((await state()).retrospectiveTier).toBe("standard");
+    expect((await state()).judgementTier).toBe("standard");
 
     const rejectedTier = (await client.callTool({
       name: "change_execution_settings",
-      arguments: { change: { setting: "retrospective_tier", value: "premium" } },
+      arguments: { change: { setting: "judgement_tier", value: "premium" } },
     })) as any;
     expect(rejectedTier.isError).toBe(true);
-    expect((await state()).retrospectiveTier).toBe("standard");
+    expect((await state()).judgementTier).toBe("standard");
   } finally {
     await client.close();
   }
@@ -368,4 +369,75 @@ it("GET /api/settings/execution は Quarantine 中の行にその question の i
   expect(table.filter((row: any) => row.quarantine_question_id !== null).map((row: any) => [row.model, row.quarantine_question_id])).toEqual([
     ["claude-sonnet-5-5", questionId],
   ]);
+});
+
+// ── 段の編集(ADR 0200 決定2 / issue #1421): settings タブと管理MCP の両方の扉 ──
+
+const premium = { name: "premium", description: "Work only the newest frontier model gets right." };
+
+it("段の挿入・編集・削除と盤面既定の段は両方の扉に乗り、拒否は理由つきの 400 / toolError、操作イベントは扉の origin で残る", async () => {
+  t = await bootTidepool();
+  expect((await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "insert_tier", ...premium, position: 2 })).status).toBe(200);
+  const refused = await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "delete_tier", name: "standard" });
+  expect(refused.status).toBe(400);
+  expect(refused.json.error).toContain("it has execution-setting rows");
+
+  const client = await managementMcpClient(t.baseUrl);
+  try {
+    const call = async (change: object) => (await client.callTool({ name: "change_execution_settings", arguments: { change } })) as any;
+    expect((await call({ setting: "edit_tier", name: "premium", description: "Edited." })).isError).not.toBe(true);
+    expect((await call({ setting: "default_tier", value: "standard" })).isError).not.toBe(true);
+    const viaMcp = await call({ setting: "delete_tier", name: "standard" });
+    expect(viaMcp.isError).toBe(true);
+    expect(viaMcp.content[0].text).toContain("it is the board's default tier");
+  } finally {
+    await client.close();
+  }
+
+  expect(await state()).toMatchObject({
+    defaultTier: "standard",
+    tiers: [SEED_TIERS[0], SEED_TIERS[1], { name: "premium", description: "Edited." }, SEED_TIERS[2]],
+  });
+  const events = t.db.prepare("SELECT origin, payload FROM events WHERE kind = 'execution_settings_changed' ORDER BY id").all() as any[];
+  expect(events.map((e) => [e.origin, JSON.parse(e.payload).setting])).toEqual([
+    ["webui", "insert_tier"],
+    ["mcp", "edit_tier"],
+    ["mcp", "default_tier"],
+  ]);
+});
+
+it("挿入した段は、人間の Register・register_task・decompose が受け、その段の行で走り、新しい MCP session の説明に並び、一覧に無い段のエラーはいまの一覧を返す", async () => {
+  t = await bootTidepool();
+  await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "insert_tier", ...premium, position: 3 });
+  await api(t.baseUrl, "POST", "/api/settings/execution", {
+    setting: "row",
+    row: { provider: "anthropic", tier: "premium", model: "claude-opus-5-5", effort: "max", price_in: 5, price_out: 25 },
+  });
+  const work = (await api(t.baseUrl, "POST", "/api/tasks", { type: "work", title: "w", purpose: "p", completion_criteria: "c", tier: "premium" })).json;
+  await t.clock.advance(HOUR);
+  await completeMetaReviews(t);
+  expect(settingsOf(work.id)).toMatchObject({ model: "claude-opus-5-5", effort: "max", source: { tier: "task" } });
+
+  const worker = await mcpClient(t.mcpBaseUrl, work.id);
+  const management = await managementMcpClient(t.baseUrl);
+  try {
+    const decompose = (await worker.listTools()).tools.find((tool) => tool.name === "decompose")!;
+    expect(JSON.stringify(decompose.inputSchema)).toContain(`premium — ${premium.description}`);
+    const child = (tier: string) => ({ title: "c", purpose: "p", completion_criteria: "c", tier });
+    const unknown = (await worker.callTool({ name: "decompose", arguments: { reason: "r", children: [child("platinum")] } })) as any;
+    expect(unknown.isError).toBe(true);
+    expect(unknown.content[0].text).toContain('unknown tier "platinum" — one of economy, standard, frontier, premium');
+    expect(((await worker.callTool({ name: "decompose", arguments: { reason: "r", children: [child("premium")] } })) as any).isError ?? false).toBe(false);
+
+    const registered = (await management.callTool({
+      name: "register_task",
+      arguments: { type: "work", title: "m", purpose: "p", completion_criteria: "c", tier: "premium" },
+    })) as any;
+    expect(registered.isError ?? false).toBe(false);
+  } finally {
+    await worker.close();
+    await management.close();
+  }
+  const tasks = (await api(t.baseUrl, "GET", "/api/tasks")).json as any[];
+  expect(tasks.filter((task) => task.tier === "premium").map((task) => task.title).sort()).toEqual(["c", "m", "w"]);
 });

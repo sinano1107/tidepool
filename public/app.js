@@ -259,16 +259,8 @@ function TpTierAmendment({ label, below, value, onChange }) {
     api("GET /api/settings/execution").then(({ tiers: tiers2 }) => setTiers(tiers2)).catch(() => {
     });
   }, []);
-  const options = below === void 0 ? tiers : tiers.slice(0, Math.max(tiers.indexOf(below), 0));
-  return /* @__PURE__ */ React.createElement(
-    Select,
-    {
-      label,
-      value,
-      onChange: (e) => onChange(e.target.value),
-      options: [{ value: "", label: "as proposed" }, ...options.map((tier) => ({ value: tier, label: tier }))]
-    }
-  );
+  const options = below === void 0 ? tiers : tiers.slice(0, Math.max(tiers.findIndex((tier) => tier.name === below), 0));
+  return /* @__PURE__ */ React.createElement(Select, { label, value, onChange: (e) => onChange(e.target.value), options: tierOptions(options, "as proposed") });
 }
 function TpMemoryAmendment({ candidateId, onTranslate, onChange, onDeadAddressee }) {
   const { Button, Input, Select } = window.TidepoolDesignSystem_8a0ead;
@@ -830,6 +822,7 @@ function RegisterScreen({ onRegister, parentTask, onClose }) {
   const [criteria, setCriteria] = React.useState("");
   const [assignee, setAssignee] = React.useState("");
   const [workspace, setWorkspace] = React.useState("");
+  const [tier, setTier] = React.useState("");
   const [risk, setRisk] = React.useState(false);
   const [review, setReview] = React.useState(false);
   const [reason, setReason] = React.useState("");
@@ -843,6 +836,11 @@ function RegisterScreen({ onRegister, parentTask, onClose }) {
   const [candidates, setCandidates] = React.useState({ assignees: [], workspaces: [] });
   React.useEffect(() => {
     api("GET /api/registry/candidates").then(setCandidates).catch(() => {
+    });
+  }, []);
+  const [tiers, setTiers] = React.useState([]);
+  React.useEffect(() => {
+    api("GET /api/settings/execution").then((d) => setTiers(d.tiers)).catch(() => {
     });
   }, []);
   const issueMode = !childMode && source === "github issue";
@@ -899,6 +897,7 @@ function RegisterScreen({ onRegister, parentTask, onClose }) {
     // unknown-workspace 400 never fires on a field the human left blank
     ...assignee ? { assignee } : {},
     ...workspace.trim() ? { workspace: workspace.trim() } : {},
+    ...tier ? type === "review" ? { review_tier: tier } : { tier } : {},
     ...childExtras()
   };
   const resetContent = () => {
@@ -911,6 +910,7 @@ function RegisterScreen({ onRegister, parentTask, onClose }) {
     setCriteria("");
     setAssignee("");
     setWorkspace("");
+    setTier("");
     setIssueNumber("");
     setReason("");
     setRisk(false);
@@ -1032,7 +1032,7 @@ function RegisterScreen({ onRegister, parentTask, onClose }) {
     },
     /* @__PURE__ */ React.createElement("span", { style: { color: "var(--text-muted)" } }, "#", i.number),
     /* @__PURE__ */ React.createElement("span", null, i.title)
-  )), workspace.trim() && !issuesFailed && truncated && /* @__PURE__ */ React.createElement("span", { style: issueListHintStyle }, "older issues exist \u2014 type the number directly"))), !issueMode && !plainFormActive && !drafted && /* @__PURE__ */ React.createElement(Input, { multiline: true, rows: 4, placeholder: "what needs doing, in your own words \u2014 sloppy is fine here, sloppy completion criteria are not", value: dump, onChange: (e) => setDump(e.target.value) }), !issueMode && (plainFormActive || drafted) && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: drafted ? "var(--tide-4)" : "var(--sun-4)", textTransform: "uppercase", letterSpacing: "0.08em" } }, drafted ? "drafted \u2014 edit freely" : "plain form \u2014 same fields, no draft"), /* @__PURE__ */ React.createElement(Input, { label: "Title", value: title, onChange: (e) => setTitle(e.target.value) }), /* @__PURE__ */ React.createElement(Input, { label: "Purpose", multiline: true, rows: 2, value: purpose, onChange: (e) => setPurpose(e.target.value), placeholder: "state prerequisites here \u2014 the agent verifies and escalates cheaply" }), /* @__PURE__ */ React.createElement(Input, { label: "Completion criteria", multiline: true, rows: 2, value: criteria, onChange: (e) => setCriteria(e.target.value), placeholder: "sloppy completion criteria are the expensive kind" }), !childMode && /* @__PURE__ */ React.createElement(Select, { label: "Type", options: ["work", "review"], value: type, onChange: (e) => setType(e.target.value === "review" ? "review" : "work") }), /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 } }, /* @__PURE__ */ React.createElement(Select, { label: "Assignee", options: assigneeOptions, value: assignee, onChange: (e) => setAssignee(e.target.value) }), /* @__PURE__ */ React.createElement(Select, { label: "Workspace", options: workspaceOptions, value: workspace, onChange: (e) => setWorkspace(e.target.value) })), /* @__PURE__ */ React.createElement(Checkbox, { label: "risk flag \u2014 this task has irreversible external effects", checked: risk, onChange: () => setRisk(!risk) }), /* @__PURE__ */ React.createElement(Checkbox, { label: "review flag \u2014 request an on-completion review", checked: review, onChange: () => setReview(!review) })), /* @__PURE__ */ React.createElement(Button, { variant: "primary", size: "lg", full: true, disabled: primaryAction.disabled, onClick: primaryAction.onClick }, primaryAction.label), childMode && /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "lg", full: true, disabled: busy, onClick: onClose }, "Cancel")), !issueMode && /* @__PURE__ */ React.createElement(
+  )), workspace.trim() && !issuesFailed && truncated && /* @__PURE__ */ React.createElement("span", { style: issueListHintStyle }, "older issues exist \u2014 type the number directly"))), !issueMode && !plainFormActive && !drafted && /* @__PURE__ */ React.createElement(Input, { multiline: true, rows: 4, placeholder: "what needs doing, in your own words \u2014 sloppy is fine here, sloppy completion criteria are not", value: dump, onChange: (e) => setDump(e.target.value) }), !issueMode && (plainFormActive || drafted) && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: drafted ? "var(--tide-4)" : "var(--sun-4)", textTransform: "uppercase", letterSpacing: "0.08em" } }, drafted ? "drafted \u2014 edit freely" : "plain form \u2014 same fields, no draft"), /* @__PURE__ */ React.createElement(Input, { label: "Title", value: title, onChange: (e) => setTitle(e.target.value) }), /* @__PURE__ */ React.createElement(Input, { label: "Purpose", multiline: true, rows: 2, value: purpose, onChange: (e) => setPurpose(e.target.value), placeholder: "state prerequisites here \u2014 the agent verifies and escalates cheaply" }), /* @__PURE__ */ React.createElement(Input, { label: "Completion criteria", multiline: true, rows: 2, value: criteria, onChange: (e) => setCriteria(e.target.value), placeholder: "sloppy completion criteria are the expensive kind" }), !childMode && /* @__PURE__ */ React.createElement(Select, { label: "Type", options: ["work", "review"], value: type, onChange: (e) => setType(e.target.value === "review" ? "review" : "work") }), /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 } }, /* @__PURE__ */ React.createElement(Select, { label: "Assignee", options: assigneeOptions, value: assignee, onChange: (e) => setAssignee(e.target.value) }), /* @__PURE__ */ React.createElement(Select, { label: "Workspace", options: workspaceOptions, value: workspace, onChange: (e) => setWorkspace(e.target.value) })), /* @__PURE__ */ React.createElement(Select, { label: "Tier", options: tierOptions(tiers, "(agent's tier, then board default)"), value: tier, onChange: (e) => setTier(e.target.value) }), /* @__PURE__ */ React.createElement(Checkbox, { label: "risk flag \u2014 this task has irreversible external effects", checked: risk, onChange: () => setRisk(!risk) }), /* @__PURE__ */ React.createElement(Checkbox, { label: "review flag \u2014 request an on-completion review", checked: review, onChange: () => setReview(!review) })), /* @__PURE__ */ React.createElement(Button, { variant: "primary", size: "lg", full: true, disabled: primaryAction.disabled, onClick: primaryAction.onClick }, primaryAction.label), childMode && /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "lg", full: true, disabled: busy, onClick: onClose }, "Cancel")), !issueMode && /* @__PURE__ */ React.createElement(
     "button",
     {
       onClick: togglePlainForm,
@@ -1299,8 +1299,8 @@ function agentDraftDirty(d, base) {
   return d.icon !== base.icon || d.description.trim() !== base.description || d.systemPrompt !== base.systemPrompt || d.authority !== base.authority || d.provider !== base.provider || d.tier !== base.tier || d.advisor !== base.advisor || !sameStrings(d.skills, base.skills);
 }
 const PROVIDER_PLACEHOLDER = { value: "", label: "choose one \u2014 provider is required" };
-function tierOptions(tiers) {
-  return [{ value: "", label: "board default" }, ...tiers.map((tier) => ({ value: tier, label: tier }))];
+function tierOptions(tiers, blank = "board default") {
+  return [{ value: "", label: blank }, ...tiers.map((tier) => ({ value: tier.name, label: `${tier.name} \u2014 ${tier.description}` }))];
 }
 function AgentFields({ draft, set, authorityOptions, providerOptions, tiers, hostSkills, hostSkillsDegraded }) {
   const { Checkbox, Input, Select } = window.TidepoolDesignSystem_8a0ead;
@@ -2411,11 +2411,18 @@ function ExecutionDefaultsCard({ settings, say, onSaved, edit }) {
   const { Button, Card, Checkbox, FieldRow, Select } = window.TidepoolDesignSystem_8a0ead;
   const id = "board:execution-defaults";
   const open = edit.isOpen(id);
-  const current = { rank: settings.providerRank, priority: settings.priority, advisor: settings.advisorAboveMain, retrospectiveTier: settings.retrospectiveTier };
+  const current = {
+    rank: settings.providerRank,
+    priority: settings.priority,
+    advisor: settings.advisorAboveMain,
+    defaultTier: settings.defaultTier,
+    judgementTier: settings.judgementTier
+  };
   const [draft, setDraft] = React.useState(current);
   const [busy, setBusy] = React.useState(false);
   const rankChanged = draft.rank.join() !== current.rank.join();
-  const dirty = rankChanged || draft.priority !== current.priority || draft.advisor !== current.advisor || draft.retrospectiveTier !== current.retrospectiveTier;
+  const dirty = rankChanged || draft.priority !== current.priority || draft.advisor !== current.advisor || draft.defaultTier !== current.defaultTier || draft.judgementTier !== current.judgementTier;
+  const tierNames = settings.tiers.map((tier) => tier.name);
   const ok = new Set(draft.rank).size === settings.providers.length;
   useDirtySignal(edit, open, dirty);
   const save = async () => {
@@ -2425,7 +2432,8 @@ function ExecutionDefaultsCard({ settings, say, onSaved, edit }) {
         rankChanged && { setting: "provider_rank", value: draft.rank },
         draft.priority !== current.priority && { setting: "priority", value: draft.priority },
         draft.advisor !== current.advisor && { setting: "advisor_above_main", value: draft.advisor },
-        draft.retrospectiveTier !== current.retrospectiveTier && { setting: "retrospective_tier", value: draft.retrospectiveTier }
+        draft.defaultTier !== current.defaultTier && { setting: "default_tier", value: draft.defaultTier },
+        draft.judgementTier !== current.judgementTier && { setting: "judgement_tier", value: draft.judgementTier }
       ].filter(Boolean);
       for (const change of changes) await api("/api/settings/execution", change);
       say("success", "execution defaults saved", `${changes.length} setting${changes.length === 1 ? "" : "s"} updated`);
@@ -2447,7 +2455,7 @@ function ExecutionDefaultsCard({ settings, say, onSaved, edit }) {
     }
     setBusy(false);
   };
-  return /* @__PURE__ */ React.createElement("div", { "data-testid": "execution-defaults" }, /* @__PURE__ */ React.createElement(Card, { style: { display: "flex", flexDirection: "column", gap: 14 } }, /* @__PURE__ */ React.createElement(RecordCardHead, { editing: open, onEdit: () => edit.open(id, () => setDraft(current)) }, /* @__PURE__ */ React.createElement("span", { style: settingsCardLabel }, "execution defaults")), !open && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(FieldRow, { label: "provider rank", kind: "mono", value: settings.providerRank.join(" \u203A ") }), /* @__PURE__ */ React.createElement(FieldRow, { label: "default priority", kind: "mono", value: settings.priority }), /* @__PURE__ */ React.createElement(FieldRow, { label: "advisor above main", kind: "mono", value: settings.advisorAboveMain ? "on" : "off" }), /* @__PURE__ */ React.createElement(FieldRow, { label: "retrospective tier", kind: "mono", value: settings.retrospectiveTier }), /* @__PURE__ */ React.createElement(FieldRow, { label: "learner", kind: "mono", value: settings.learnerPromoted ? "promoted \u2014 chooses work tasks" : "shadow \u2014 the table chooses" }), settings.learnerPromoted && /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", disabled: busy, onClick: demote }, "Demote learner")), open && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 12 } }, draft.rank.map((provider, i) => /* @__PURE__ */ React.createElement(
+  return /* @__PURE__ */ React.createElement("div", { "data-testid": "execution-defaults" }, /* @__PURE__ */ React.createElement(Card, { style: { display: "flex", flexDirection: "column", gap: 14 } }, /* @__PURE__ */ React.createElement(RecordCardHead, { editing: open, onEdit: () => edit.open(id, () => setDraft(current)) }, /* @__PURE__ */ React.createElement("span", { style: settingsCardLabel }, "execution defaults")), !open && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(FieldRow, { label: "provider rank", kind: "mono", value: settings.providerRank.join(" \u203A ") }), /* @__PURE__ */ React.createElement(FieldRow, { label: "default priority", kind: "mono", value: settings.priority }), /* @__PURE__ */ React.createElement(FieldRow, { label: "advisor above main", kind: "mono", value: settings.advisorAboveMain ? "on" : "off" }), /* @__PURE__ */ React.createElement(FieldRow, { label: "default tier", kind: "mono", value: settings.defaultTier }), /* @__PURE__ */ React.createElement(FieldRow, { label: "judgement tier", kind: "mono", value: settings.judgementTier }), /* @__PURE__ */ React.createElement(FieldRow, { label: "learner", kind: "mono", value: settings.learnerPromoted ? "promoted \u2014 chooses work tasks" : "shadow \u2014 the table chooses" }), settings.learnerPromoted && /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", disabled: busy, onClick: demote }, "Demote learner")), open && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 12 } }, draft.rank.map((provider, i) => /* @__PURE__ */ React.createElement(
     Select,
     {
       key: i,
@@ -2475,12 +2483,20 @@ function ExecutionDefaultsCard({ settings, say, onSaved, edit }) {
   ), /* @__PURE__ */ React.createElement(
     Select,
     {
-      label: "Retrospective tier",
-      options: [...settings.tiers],
-      value: draft.retrospectiveTier,
-      onChange: (e) => setDraft({ ...draft, retrospectiveTier: e.target.value })
+      label: "Default tier",
+      options: tierNames,
+      value: draft.defaultTier,
+      onChange: (e) => setDraft({ ...draft, defaultTier: e.target.value })
     }
-  ), /* @__PURE__ */ React.createElement("p", { style: { margin: 0, fontSize: "var(--text-xs)", color: "var(--text-muted)" } }, "rank orders the providers a task may run on (first = preferred; every provider exactly once). priority is the default for tasks that request none: quality = rank then price, cost = price then rank. retrospective tier is the anthropic row the board's own retrospective Board calls (allocation review, attribution, Behavior candidate drafting) resolve on."), /* @__PURE__ */ React.createElement(
+  ), /* @__PURE__ */ React.createElement(
+    Select,
+    {
+      label: "Judgement tier",
+      options: tierNames,
+      value: draft.judgementTier,
+      onChange: (e) => setDraft({ ...draft, judgementTier: e.target.value })
+    }
+  ), /* @__PURE__ */ React.createElement("p", { style: { margin: 0, fontSize: "var(--text-xs)", color: "var(--text-muted)" } }, "rank orders the providers a task may run on (first = preferred; every provider exactly once). priority is the default for tasks that request none: quality = rank then price, cost = price then rank. default tier is the tier of tasks that request none and whose agent declares none, and of the board's drafts. judgement tier is the tier the board's own judgement runs on: its retrospective Board calls (allocation review, attribution, Behavior candidate drafting) and its periodic meta-reviews."), /* @__PURE__ */ React.createElement(
     EditActions,
     {
       dirty,
@@ -2491,6 +2507,82 @@ function ExecutionDefaultsCard({ settings, say, onSaved, edit }) {
       onCancel: () => edit.close()
     }
   ))));
+}
+function TiersCard({ settings, say, onSaved, edit }) {
+  const { Button, Card, Input, Select } = window.TidepoolDesignSystem_8a0ead;
+  const { tiers } = settings;
+  const [target, setTarget] = React.useState(null);
+  const [draft, setDraft] = React.useState({ name: "", description: "", position: 0 });
+  const [busy, setBusy] = React.useState(false);
+  const open = target !== null && edit.isOpen(`board:tier:${target}`);
+  const index = tiers.findIndex((tier) => tier.name === target);
+  const original = tiers[index];
+  const others = tiers.filter((tier) => tier.name !== target);
+  const isNew = target === "";
+  const dirty = isNew ? !!draft.name.trim() || !!draft.description.trim() : draft.description !== original?.description || draft.position !== index;
+  const ok = !!draft.description.trim() && (!isNew || /^[a-z][a-z0-9_-]*$/.test(draft.name.trim()));
+  useDirtySignal(edit, open, dirty);
+  const start = (name) => edit.open(`board:tier:${name}`, () => {
+    const at = tiers.findIndex((tier) => tier.name === name);
+    setTarget(name);
+    setDraft({ name: "", description: at < 0 ? "" : tiers[at].description, position: at < 0 ? tiers.length : at });
+  });
+  const send = async (change, done) => {
+    setBusy(true);
+    try {
+      await api("/api/settings/execution", change);
+      say("success", done, target || draft.name.trim());
+      edit.close();
+      await onSaved();
+    } catch (err) {
+      say("danger", "tier change refused", String(err.message || err));
+    }
+    setBusy(false);
+  };
+  const save = () => send(isNew ? { setting: "insert_tier", name: draft.name.trim(), description: draft.description.trim(), position: draft.position } : {
+    setting: "edit_tier",
+    name: target,
+    ...draft.description !== original?.description && { description: draft.description.trim() },
+    ...draft.position !== index && { position: draft.position }
+  }, isNew ? "tier added" : "tier saved");
+  const positionLabel = (p) => p === 0 ? others[0] ? `lowest \u2014 below ${others[0].name}` : "lowest" : p === others.length ? `highest \u2014 above ${others[p - 1].name}` : `between ${others[p - 1].name} and ${others[p].name}`;
+  const neighbour = (label, tier) => /* @__PURE__ */ React.createElement("p", { style: { margin: 0, fontSize: "var(--text-xs)", color: "var(--text-muted)" } }, label, ": ", tier ? /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)" } }, tier.name), " \u2014 ", tier.description) : "none");
+  return /* @__PURE__ */ React.createElement("div", { "data-testid": "execution-tiers" }, /* @__PURE__ */ React.createElement(Card, { style: { display: "flex", flexDirection: "column", gap: 14 } }, /* @__PURE__ */ React.createElement(RecordCardHead, { editing: open }, /* @__PURE__ */ React.createElement("span", { style: settingsCardLabel }, open ? isNew ? "add a tier" : `tier ${target}` : "tiers")), !open && /* @__PURE__ */ React.createElement(React.Fragment, null, tiers.map((tier) => /* @__PURE__ */ React.createElement("div", { key: tier.name, style: { display: "flex", gap: 12, alignItems: "baseline", fontSize: "var(--text-xs)" } }, /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", minWidth: 90 } }, tier.name), /* @__PURE__ */ React.createElement("span", { style: { color: "var(--text-muted)", flex: 1 } }, tier.description), /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "sm", onClick: () => start(tier.name), "aria-label": `edit tier ${tier.name}` }, "Edit"))), /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "sm", onClick: () => start("") }, "Add tier"), /* @__PURE__ */ React.createElement("p", { style: { margin: 0, fontSize: "var(--text-xs)", color: "var(--text-muted)" } }, "lowest first. a description says what work the tier right below cannot do and this one can \u2014 task writers read it to request a tier.")), open && /* @__PURE__ */ React.createElement(React.Fragment, null, isNew && /* @__PURE__ */ React.createElement(
+    Input,
+    {
+      label: "Name",
+      mono: true,
+      value: draft.name,
+      onChange: (e) => setDraft({ ...draft, name: e.target.value }),
+      placeholder: "a lowercase letter, then a-z 0-9 - _ \u2014 agent.md writes it as its tier"
+    }
+  ), /* @__PURE__ */ React.createElement(
+    Select,
+    {
+      label: "Position",
+      value: String(draft.position),
+      options: Array.from({ length: others.length + 1 }, (_, p) => ({ value: String(p), label: positionLabel(p) })),
+      onChange: (e) => setDraft({ ...draft, position: Number(e.target.value) })
+    }
+  ), neighbour("next tier above", others[draft.position]), /* @__PURE__ */ React.createElement(
+    Input,
+    {
+      label: "Description",
+      value: draft.description,
+      onChange: (e) => setDraft({ ...draft, description: e.target.value }),
+      placeholder: "one line: the work the tier below cannot do and this one can"
+    }
+  ), neighbour("next tier below", others[draft.position - 1]), /* @__PURE__ */ React.createElement(
+    EditActions,
+    {
+      dirty,
+      ok,
+      busy,
+      saveLabel: isNew ? "Add tier" : "Save tier",
+      onSave: save,
+      onCancel: () => edit.close()
+    }
+  ), !isNew && /* @__PURE__ */ React.createElement(Button, { variant: "danger", size: "sm", disabled: busy, onClick: () => send({ setting: "delete_tier", name: target }, "tier deleted") }, "Delete tier"))));
 }
 function ExecutionTableCard({ settings, say, onSaved, edit }) {
   const { Button, Card, Input, Select } = window.TidepoolDesignSystem_8a0ead;
@@ -2530,7 +2622,7 @@ function ExecutionTableCard({ settings, say, onSaved, edit }) {
   const addRow = () => setDraft([...draft, {
     key: "new",
     provider: settings.providers[0].value,
-    tier: settings.tiers[0],
+    tier: settings.tiers[0].name,
     model: "",
     effort: "high",
     price_in: "",
@@ -2544,7 +2636,7 @@ function ExecutionTableCard({ settings, say, onSaved, edit }) {
       style: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(110px, 1fr))", gap: 8, alignItems: "end", paddingBottom: 8, borderBottom: "1px solid var(--border-default)" }
     },
     /* @__PURE__ */ React.createElement(Select, { label: "Provider", options: settings.providers.map((p) => p.value), value: d.provider, onChange: (e) => update(i, { provider: e.target.value }) }),
-    /* @__PURE__ */ React.createElement(Select, { label: "Tier", options: [...settings.tiers], value: d.tier, onChange: (e) => update(i, { tier: e.target.value }) }),
+    /* @__PURE__ */ React.createElement(Select, { label: "Tier", options: settings.tiers.map((tier) => tier.name), value: d.tier, onChange: (e) => update(i, { tier: e.target.value }) }),
     /* @__PURE__ */ React.createElement(Input, { label: "Model", mono: true, value: d.model, onChange: (e) => update(i, { model: e.target.value }), placeholder: "alias or model id" }),
     /* @__PURE__ */ React.createElement(Input, { label: "Effort", mono: true, value: d.effort, onChange: (e) => update(i, { effort: e.target.value }), placeholder: "high" }),
     /* @__PURE__ */ React.createElement(Input, { label: "Price in", mono: true, value: d.price_in, onChange: (e) => update(i, { price_in: e.target.value }), placeholder: "USD / MTok" }),
@@ -3116,7 +3208,7 @@ function SettingsScreen({ say, memoryFocus, registerLeaveGuard }) {
         onSaved: loadQuietHours,
         edit
       }
-    ), providerPaceOffsets && /* @__PURE__ */ React.createElement(PaceOffsetsCard, { offsets: providerPaceOffsets, say, onSaved: loadPaceOffsets, edit }), executionSettings && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(ExecutionDefaultsCard, { settings: executionSettings, say, onSaved: loadExecutionSettings, edit }), haltedRefires && /* @__PURE__ */ React.createElement(HaltedRefiresCard, { rows: haltedRefires, say, onChanged: loadHaltedRefires }), /* @__PURE__ */ React.createElement(ExecutionTableCard, { settings: executionSettings, say, onSaved: loadExecutionSettings, edit })), memorySettings && /* @__PURE__ */ React.createElement(MemorySettingsCard, { settings: memorySettings, say, onSaved: loadMemorySettings, edit }), displayLanguageLoaded && // the focus waits for every card above: one that loads later would push the entry back out of view
+    ), providerPaceOffsets && /* @__PURE__ */ React.createElement(PaceOffsetsCard, { offsets: providerPaceOffsets, say, onSaved: loadPaceOffsets, edit }), executionSettings && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(ExecutionDefaultsCard, { settings: executionSettings, say, onSaved: loadExecutionSettings, edit }), haltedRefires && /* @__PURE__ */ React.createElement(HaltedRefiresCard, { rows: haltedRefires, say, onChanged: loadHaltedRefires }), /* @__PURE__ */ React.createElement(TiersCard, { settings: executionSettings, say, onSaved: loadExecutionSettings, edit }), /* @__PURE__ */ React.createElement(ExecutionTableCard, { settings: executionSettings, say, onSaved: loadExecutionSettings, edit })), memorySettings && /* @__PURE__ */ React.createElement(MemorySettingsCard, { settings: memorySettings, say, onSaved: loadMemorySettings, edit }), displayLanguageLoaded && // the focus waits for every card above: one that loads later would push the entry back out of view
     /* @__PURE__ */ React.createElement(
       MemoryEntriesCard,
       {

@@ -36,6 +36,9 @@ interface RegisterScreenManualFields {
   review_flag: boolean;
   assignee?: string;
   workspace?: string;
+  /** 要求ティア(盤面の段の名前)。review task はレビューの要求(`review_tier`)として送る。 */
+  tier?: string;
+  review_tier?: string;
   /** issue 由来の経路にしか無い —— 不在を型で明示して union を絞れるようにする。 */
   github_issue_number?: never;
   parent_id?: string;
@@ -67,6 +70,7 @@ function RegisterScreen({ onRegister, parentTask, onClose }: RegisterScreenProps
   const [criteria, setCriteria] = React.useState('');
   const [assignee, setAssignee] = React.useState('');
   const [workspace, setWorkspace] = React.useState('');
+  const [tier, setTier] = React.useState('');
   const [risk, setRisk] = React.useState(false);
   const [review, setReview] = React.useState(false);
   const [reason, setReason] = React.useState('');
@@ -85,6 +89,11 @@ function RegisterScreen({ onRegister, parentTask, onClose }: RegisterScreenProps
   const [candidates, setCandidates] = React.useState<AppCandidates>({ assignees: [], workspaces: [] });
   React.useEffect(() => {
     api('GET /api/registry/candidates').then(setCandidates).catch(() => {});
+  }, []);
+  // the board's tiers with their descriptions (ADR 0200 決定3) — the registrant reads them to request one
+  const [tiers, setTiers] = React.useState<SettingsExecution['tiers']>([]);
+  React.useEffect(() => {
+    api('GET /api/settings/execution').then((d) => setTiers(d.tiers)).catch(() => {});
   }, []);
   const issueMode = !childMode && source === 'github issue';
   // the parent_id/decompose_reason pair every childMode request (draft and
@@ -160,12 +169,13 @@ function RegisterScreen({ onRegister, parentTask, onClose }: RegisterScreenProps
           // unknown-workspace 400 never fires on a field the human left blank
           ...(assignee ? { assignee } : {}),
           ...(workspace.trim() ? { workspace: workspace.trim() } : {}),
+          ...(tier ? (type === 'review' ? { review_tier: tier } : { tier }) : {}),
           ...childExtras(),
         };
   const resetContent = () => {
     setDump(''); setDrafted(false); setPlainFormActive(false);
     setType('work'); setTitle(''); setPurpose(''); setCriteria('');
-    setAssignee(''); setWorkspace(''); setIssueNumber(''); setReason('');
+    setAssignee(''); setWorkspace(''); setTier(''); setIssueNumber(''); setReason('');
     setRisk(false); setReview(false);
     // backing out of a pending dump's content leaves the row itself alone —
     // it is unconsumed and stays listed, pickable again later
@@ -363,6 +373,7 @@ function RegisterScreen({ onRegister, parentTask, onClose }: RegisterScreenProps
               <Select label="Assignee" options={assigneeOptions} value={assignee} onChange={(e) => setAssignee(e.target.value)} />
               <Select label="Workspace" options={workspaceOptions} value={workspace} onChange={(e) => setWorkspace(e.target.value)} />
             </div>
+            <Select label="Tier" options={tierOptions(tiers, "(agent's tier, then board default)")} value={tier} onChange={(e) => setTier(e.target.value)} />
             <Checkbox label="risk flag — this task has irreversible external effects" checked={risk} onChange={() => setRisk(!risk)} />
             <Checkbox label="review flag — request an on-completion review" checked={review} onChange={() => setReview(!review)} />
           </React.Fragment>
