@@ -80,12 +80,13 @@ import {
   MERGE_DIAL_VALUES,
 } from "./registry.js";
 import { RepoAccessMissingError } from "./repo-access.js";
+import { packItems, readNext } from "./response-budget.js";
 import { listHaltedRefires, markHaltedRefire, refireKeySchema } from "./retrospective.js";
 import {
   entryExclusionPredicate,
   type TaskExecutionCandidates,
 } from "./scheduler.js";
-import { createStatelessMcpRouter, rejectUnknownArguments } from "./stateless-mcp.js";
+import { createStatelessMcpRouter, floorEveryResponse, rejectUnknownArguments } from "./stateless-mcp.js";
 import {
   DomainError,
   describeHandoffFields,
@@ -258,8 +259,11 @@ const QUESTION_ANNOTATIONS_DESCRIPTION =
   "A question also carries `landing` (null for a general question; for a landing question, `blocked_by` says why a `merge` answer would be rejected right now — `attached_children` or `objections` — or null when it would be accepted), `approval` (for a child-approval question, whether approving raises the parent's risk; otherwise null), `blocking` (the id of the parent task it holds up, or null), `moved` (for a memory proposal, one element per pinned entry moved since the proposal was shown: `id` is the entry as pinned, `tail_id` is where it lives now with its current `path` / `scope`, and an answer applies to `tail_id`), `needs_comment` (the answers that `answer_question` refuses without a non-blank comment; empty when every answer takes an optional one), and `free_text` (false when an answer must match one of the item's options verbatim; true when free text is accepted). A non-question task carries none of these.";
 
 function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
-  const server = rejectUnknownArguments(
-    new McpServer({ name: "tidepool-management", version: "0.0.0" }, { instructions: MANAGEMENT_MCP_INSTRUCTIONS }),
+  const server = floorEveryResponse(
+    rejectUnknownArguments(
+      new McpServer({ name: "tidepool-management", version: "0.0.0" }, { instructions: MANAGEMENT_MCP_INSTRUCTIONS }),
+    ),
+    { db: deps.db, clock: deps.clock, surface: "management" },
   );
   // issue #1179: 各口は対応する HTTP の口(GET /api/tasks・GET /api/tasks/:id)と同じ注釈を持つ
   server.registerTool("list_board", { description: `List the current task board. ${QUESTION_ANNOTATIONS_DESCRIPTION}` }, async () =>
@@ -300,11 +304,29 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
   );
   server.registerTool(
     "get_task",
-    { description: `Get a task and its complete event history. ${QUESTION_ANNOTATIONS_DESCRIPTION}`, inputSchema: { task_id: z.string() } },
-    async ({ task_id }) => {
-      const task = getTask(deps.db, task_id);
-      if (!task) return toolError("task not found");
-      return toolResult({ ...presentTask(deps.db, task, deps.defaultAgentName, deps.auditorName), ...(task.type === "question" && questionAnnotations(deps.db, task)), events: listEvents(deps.db, task.id) });
+    {
+      description:
+        "Get a task and its event history, newest first (event id descending). " +
+        "When the history does not fit in one response, the response carries `next` and `remaining` (how many events are not returned yet): " +
+        "call get_task again with only `next` to read the older events, and repeat until a response carries no `next` — then the history is complete. " +
+        "The task itself comes on the first response only. An event too large for one response comes alone in pieces marked `partial` " +
+        "(`id`, `field`, and `field_bytes`, the field's full size in UTF-8 bytes): join that field across the pieces to get it verbatim. " +
+        QUESTION_ANNOTATIONS_DESCRIPTION,
+      inputSchema: { task_id: z.string().optional(), next: z.string().optional() },
+    },
+    async ({ task_id, next }) => {
+      try {
+        // ADR 0195: 続きは最初の引数(task_id)を自分の中から戻す
+        const read = next === undefined ? { verb: "get_task", args: { task_id } } : readNext<{ task_id?: string }>("get_task", next);
+        if (read.args.task_id === undefined) return toolError("pass task_id, or next from a previous get_task");
+        const task = getTask(deps.db, read.args.task_id);
+        if (!task) return toolError("task not found");
+        const envelope = { ...presentTask(deps.db, task, deps.defaultAgentName, deps.auditorName), ...(task.type === "question" && questionAnnotations(deps.db, task)) };
+        return toolResult(packItems(read, "events", listEvents(deps.db, task.id).reverse(), envelope));
+      } catch (err) {
+        if (err instanceof DomainError) return toolError(err.message);
+        throw err;
+      }
     },
   );
   server.registerTool(

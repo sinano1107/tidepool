@@ -2,6 +2,9 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { json, type Request, Router } from "express";
 import { z } from "zod";
+import type { Clock } from "./clock.js";
+import type { Db } from "./db.js";
+import { floorResponse } from "./response-budget.js";
 
 /** issue #1075: 登録の入口で inputSchema を strict にし、未知の引数を tool error にする。
  *  schema の無い verb も空の strict object を持つ。共有 schema は `.strict()` の複製なので変わらない。
@@ -14,6 +17,19 @@ export function rejectUnknownArguments(server: McpServer): McpServer {
     const inputSchema = schema instanceof z.ZodObject ? schema.strict() : z.strictObject(schema ?? {});
     return register(name, { ...config, inputSchema }, cb);
   }) as McpServer["registerTool"];
+  return server;
+}
+
+/** ADR 0195 決定5: 全 verb の応答を出口の床に掛ける。verb の名前を知っているのは登録の層だけなので、ここで callback を包む。 */
+export function floorEveryResponse(
+  server: McpServer,
+  context: { db: Db; clock: Clock; surface: "management" | "worker"; taskId?: string | null },
+): McpServer {
+  const register = server.registerTool.bind(server) as (...args: any[]) => any;
+  server.registerTool = ((name: string, config: unknown, cb: (...args: any[]) => any) =>
+    register(name, config, async (...args: any[]) =>
+      floorResponse(await cb(...args), { ...context, verb: name, at: context.clock.now() }),
+    )) as McpServer["registerTool"];
   return server;
 }
 
