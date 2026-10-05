@@ -11,8 +11,10 @@ import {
   PRIORITIES,
   parseAgentTierAmendment,
   parseRoutingRowChange,
+  readExecutionSettings,
   readTiers,
   registryPinChanges,
+  resolveExecutionSetting,
   routingPinChanges,
   SEED_EXECUTION_SETTINGS,
   SEED_TIERS,
@@ -21,9 +23,14 @@ import {
   type Tier,
   tierHasRowFor,
 } from "../src/execution-setting.js";
+
+import { submitAnswer } from "../src/human-verbs.js";
+import { registerMetaReview } from "../src/meta-review.js";
 import { registerQuarantine, tableRowValue } from "../src/quarantine.js";
 import { PROVIDER_VALUES, type Provider } from "../src/registry.js";
-import { DomainError, type RegistryProposal } from "../src/tasks.js";
+import { proposeRoutingChange } from "../src/routing-review.js";
+import { DomainError, getTask, type RegistryProposal } from "../src/tasks.js";
+import { unusedLanding } from "./fakes.js";
 
 const table: ExecutionSettingTable = SEED_EXECUTION_SETTINGS;
 /** 種の盤面の段の名前(順序どおり)。 */
@@ -382,12 +389,13 @@ it("review の要求は priority を持たず quality の並べ方で解決さ�
 
 /** routing の行の提案(issue #918 / ADR 0150 決定1): pin はその行の全欄。 */
 const opusRow = { provider: "anthropic", tier: "standard", model: "claude-opus-5-5", effort: "high", price_in: 5, price_out: 25 } as const;
-const rowProposal = { kind: "routing", op: "row", row: { provider: "anthropic", model: "claude-opus-5-5" }, change: { tier: "frontier" }, pin: opusRow } as const;
+const rowProposal = { kind: "routing", op: "row", row: { provider: "anthropic", model: "claude-opus-5-5", effort: "high" }, change: { tier: "frontier" }, pin: opusRow } as const;
 
-it("pin の照合は行の全欄の一致で、崩れた欄の名前を返す —— 行が消えていれば null", () => {
+it("pin の照合は鍵 (provider, model, effort) で引いた行の全欄の一致で、崩れた欄の名前を返す —— 行が消えていれば(effort の書き換えも)null", () => {
   expect(routingPinChanges(rowProposal, { table: SEED_EXECUTION_SETTINGS, learnerPromoted: false })).toEqual([]);
-  const edited = SEED_EXECUTION_SETTINGS.map((row) => (row.model === "claude-opus-5-5" ? { ...row, effort: "max", price_out: 30 } : row));
-  expect(routingPinChanges(rowProposal, { table: edited, learnerPromoted: false })).toEqual(["effort", "price_out"]);
+  const edit = (change: object) => SEED_EXECUTION_SETTINGS.map((row) => (row.model === "claude-opus-5-5" ? { ...row, ...change } : row));
+  expect(routingPinChanges(rowProposal, { table: edit({ tier: "frontier", price_out: 30 }), learnerPromoted: false })).toEqual(["tier", "price_out"]);
+  expect(routingPinChanges(rowProposal, { table: edit({ effort: "max" }), learnerPromoted: false })).toBeNull();
   // 別の行の編集は pin に触れない
   const other = SEED_EXECUTION_SETTINGS.map((row) => (row.model === "claude-sonnet-5-5" ? { ...row, tier: "standard" as const } : row));
   expect(routingPinChanges(rowProposal, { table: other, learnerPromoted: false })).toEqual([]);
@@ -461,7 +469,7 @@ it("tier の提案の修正値は to だけで、pin の tier より下の任意
 
 it("存在しない行の削除は何も変えないので、操作イベントを残さず null を返す", () => {
   const db = openDb(":memory:");
-  expect(applyExecutionSettingsChange(db, { setting: "delete_row", provider: "openai", model: "no-such-model" }, "webui", new Date())).toBeNull();
+  expect(applyExecutionSettingsChange(db, { setting: "delete_row", provider: "openai", model: "no-such-model", effort: "high" }, "webui", new Date())).toBeNull();
 });
 
 // ── 行の拒否(ADR 0184 決定2): 表の行の Quarantine が開いている行は候補にならない。advisor は行でないので Quarantine を見ない(ADR 0200 決定6) ──
@@ -489,4 +497,81 @@ it("行の Quarantine の照合は完全一致 —— claude-opus-5 の Quaranti
 it("Fable の行が Quarantine 中でも、ほかの行の advisor は `fable` のまま", () => {
   const db = boardWithRefusedRows([], [["anthropic", "claude-fable-5-1"]]);
   expect(executionSettingsFor(db, anthropicAgent(true), workAt("standard"))).toMatchObject([{ model: "claude-opus-5-5", advisor: "fable" }]);
+});
+
+// ── 1つの段に同じ model は1行まで(ADR 0200 決定5 / issue #1419): 行の鍵は (provider, model, effort) ──
+
+const opusMax = { provider: "anthropic", tier: "frontier", model: "claude-opus-5-5", effort: "max", price_in: 5, price_out: 25 } as const;
+const opusKey = (effort: string) => ({ provider: "anthropic", model: "claude-opus-5-5", effort }) as const;
+/** 種の表に opus の max 行を frontier へ足した盤面。 */
+function boardWithOpusMax() {
+  const db = openDb(":memory:");
+  applyExecutionSettingsChange(db, { setting: "row", row: opusMax }, "webui", new Date());
+  return db;
+}
+const opusRows = (db: ReturnType<typeof openDb>) => readExecutionSettings(db).table.filter((row) => row.model === "claude-opus-5-5");
+
+it("同じ model を effort 違いで別の段に2行置け、それぞれの段の要求でその行が選ばれる", () => {
+  const db = boardWithOpusMax();
+  expect(resolveExecutionSetting(db, anthropicAgent(false), workAt("standard"))).toMatchObject({ model: "claude-opus-5-5", effort: "high" });
+  expect(resolveExecutionSetting(db, anthropicAgent(false), workAt("frontier"))).toMatchObject({ model: "claude-opus-5-5", effort: "max" });
+});
+
+it("行を書く扉は、同じ段に同じ model の2行目と、同じ (model, effort) の2行目の追加を拒み、表は変わらない", () => {
+  const db = openDb(":memory:");
+  const add = (row: ExecutionSettingTable[number]) => applyExecutionSettingsChange(db, { setting: "row", row }, "webui", new Date());
+  expect(() => add({ ...opusRow, effort: "max" })).toThrow(/one row per model/);
+  expect(() => add({ ...opusRow, tier: "frontier" })).toThrow(/belongs to one tier/);
+  expect(opusRows(db)).toEqual([opusRow]);
+});
+
+it("鍵つきの編集は名指した行が無ければ、また effort / tier の書き換えが別の行と衝突すれば拒まれ、表は変わらない", () => {
+  const db = boardWithOpusMax();
+  const edit = (key: ReturnType<typeof opusKey>, row: ExecutionSettingTable[number]) =>
+    applyExecutionSettingsChange(db, { setting: "row", key, row }, "webui", new Date());
+  expect(() => edit(opusKey("high"), { ...opusRow, effort: "max" })).toThrow(DomainError);
+  expect(() => edit(opusKey("high"), { ...opusRow, tier: "frontier" })).toThrow(DomainError);
+  expect(() => edit(opusKey("low"), opusRow)).toThrow(/no row/);
+  expect(opusRows(db)).toEqual([opusRow, opusMax]);
+});
+
+it("鍵つきの編集は、同じ model の2行のうち名指した行だけを変える —— effort を書き換えても別の行と衝突しなければ通る", () => {
+  const db = boardWithOpusMax();
+  applyExecutionSettingsChange(db, { setting: "row", key: opusKey("high"), row: { ...opusRow, effort: "low", price_out: 30 } }, "webui", new Date());
+  expect(opusRows(db)).toEqual([{ ...opusRow, effort: "low", price_out: 30 }, opusMax]);
+  applyExecutionSettingsChange(db, { setting: "delete_row", ...opusKey("max") }, "webui", new Date());
+  expect(opusRows(db)).toEqual([{ ...opusRow, effort: "low", price_out: 30 }]);
+});
+
+/** routing meta-review を1つ登録し、その子に opus の `effort` の行の提案を立てる。 */
+function proposeOnOpus(db: ReturnType<typeof openDb>, effort: string, change: object) {
+  const now = new Date();
+  registerMetaReview(db, "routing", now);
+  const review = (db.prepare("SELECT id FROM tasks WHERE meta_review_subject = 'routing'").get() as { id: string }).id;
+  const { question_id } = proposeRoutingChange(db, review, { op: "row", row: opusKey(effort), change, rationale: "r" }, "auditor", now);
+  const answer = (amendment?: object) =>
+    submitAnswer({ db, pollNow() {}, landing: unusedLanding }, getTask(db, question_id)!, ["approve"], undefined, () => now, "webui", false, amendment);
+  return { question_id, answer };
+}
+
+it("行の提案は3欄で名指した行を pin し、その承認は同じ model の2行のうち名指した行だけを変える", async () => {
+  const db = boardWithOpusMax();
+  const { answer } = proposeOnOpus(db, "max", { effort: "xhigh" });
+  await answer();
+  expect(opusRows(db)).toEqual([opusRow, { ...opusMax, effort: "xhigh" }]);
+});
+
+it("提案は合成した行が別の行と衝突すれば立たず、承認は修正値が衝突すれば回答ごと巻き戻って question は open のまま", async () => {
+  const db = boardWithOpusMax();
+  expect(() => proposeOnOpus(db, "max", { tier: "standard" })).toThrow(DomainError);
+  const { question_id, answer } = proposeOnOpus(db, "max", { effort: "low" });
+  await expect(answer({ effort: "high" })).rejects.toThrow(DomainError);
+  expect(getTask(db, question_id)).toMatchObject({ status: "todo" });
+  expect(opusRows(db)).toEqual([opusRow, opusMax]);
+});
+
+it("行の Quarantine の鍵は (provider, model) で、effort 違いの行も候補から外れる", () => {
+  const db = boardWithRefusedRows([opusMax], [["anthropic", "claude-opus-5-5"]]);
+  expect(executionSettingsFor(db, anthropicAgent(false), workAt("standard"))).toEqual([]);
+  expect(executionSettingsFor(db, anthropicAgent(false), workAt("frontier")).map((s) => s.model)).toEqual(["claude-fable-5-1"]);
 });

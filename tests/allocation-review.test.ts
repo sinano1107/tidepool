@@ -329,7 +329,7 @@ it("選んだティアの anthropic 行が無ければ、frontier に退避せ�
   t = await bootTidepool({ allocationClient });
   const { task, review } = await reviewedWork(t);
   expect((await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "retrospective_tier", value: "standard" })).status).toBe(200);
-  expect((await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "delete_row", provider: "anthropic", model: "claude-opus-5-5" })).status).toBe(200);
+  expect((await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "delete_row", provider: "anthropic", model: "claude-opus-5-5", effort: "high" })).status).toBe(200);
 
   await completeReview(t, review.id);
   await nextPoll(t);

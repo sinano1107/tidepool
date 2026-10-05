@@ -2113,8 +2113,8 @@ function ExecutionDefaultsCard({ settings, say, onSaved, edit }: {
 }
 
 // The execution-setting table (issue #545 / ADR 0114 決定2) as a record card:
-// model rows keyed by provider + model. Save diffs the draft against the
-// current table — rows gone → delete_row, rows new or changed → row upsert.
+// model rows keyed by provider + model + effort (ADR 0200 決定5). Save diffs the draft against the
+// current table — rows gone → delete_row, rows changed → row with the original key, new rows → row.
 function ExecutionTableCard({ settings, say, onSaved, edit }: {
   settings: SettingsExecution;
   say: AppSay;
@@ -2124,7 +2124,7 @@ function ExecutionTableCard({ settings, say, onSaved, edit }: {
   const { Button, Card, Input, Select } = window.TidepoolDesignSystem_8a0ead;
   const id = 'board:execution-table';
   const open = edit.isOpen(id);
-  const rowKey = (row: Pick<SettingsExecutionRow, 'provider' | 'model'>) => `${row.provider}:${row.model}`;
+  const rowKey = (row: Pick<SettingsExecutionRow, 'provider' | 'model' | 'effort'>) => `${row.provider}:${row.model}:${row.effort}`;
   // 下書きの行は価格を入力欄の文字列で持つ —— サーバの行と下書きの行を toRow で同じ形に揃えて比べる
   type DraftRow = Omit<SettingsExecutionRow, 'price_in' | 'price_out'> & { key: string; price_in: string; price_out: string };
   const asDraft = (table: SettingsExecution['table']): DraftRow[] => table.map((row) => ({ ...row, key: rowKey(row), price_in: String(row.price_in), price_out: String(row.price_out) }));
@@ -2132,22 +2132,30 @@ function ExecutionTableCard({ settings, say, onSaved, edit }: {
   const [busy, setBusy] = React.useState(false);
   const current = new Map(settings.table.map((row) => [rowKey(row), row]));
   const toRow = (d: DraftRow): SettingsExecutionRow => ({ provider: d.provider, tier: d.tier, model: d.model.trim(), effort: d.effort.trim(), price_in: Number(d.price_in), price_out: Number(d.price_out) });
-  const same = (a: SettingsExecutionRow | undefined, b: SettingsExecutionRow) => a && a.tier === b.tier && a.effort === b.effort && a.price_in === b.price_in && a.price_out === b.price_out;
-  const upserts = draft.map(toRow).filter((row) => !same(current.get(rowKey(row)), row));
-  const deletes = [...current.values()].filter((row) => !draft.some((d) => rowKey(toRow(d)) === rowKey(row)));
-  const dirty = upserts.length > 0 || deletes.length > 0;
+  const same = (a: SettingsExecutionRow | undefined, b: SettingsExecutionRow) => a && rowKey(a) === rowKey(b) && a.tier === b.tier && a.price_in === b.price_in && a.price_out === b.price_out;
+  // 既存の行は下書きの key(元の3欄)で名指して編集し、新しい行は key なしで足す
+  const writes = draft.filter((d) => !same(current.get(d.key), toRow(d)))
+    .map((d) => {
+      const original = current.get(d.key);
+      return original ? { key: { provider: original.provider, model: original.model, effort: original.effort }, row: toRow(d) } : { row: toRow(d) };
+    });
+  const deletes = [...current.values()].filter((row) => !draft.some((d) => d.key === rowKey(row)));
+  const dirty = writes.length > 0 || deletes.length > 0;
   const validPrice = (v: string) => /^\d+(\.\d+)?$/.test(v.trim());
+  // 1つの (model, effort) は1行、1つの段に同じ model は1行まで(ADR 0200 決定5)
+  const unique = (of: (row: SettingsExecutionRow) => string) => new Set(draft.map((d) => of(toRow(d)))).size === draft.length;
   const ok = draft.every((d) => d.model.trim() && d.effort.trim() && validPrice(d.price_in) && validPrice(d.price_out))
-    && new Set(draft.map((d) => rowKey(toRow(d)))).size === draft.length;
+    && unique(rowKey) && unique((row) => `${row.provider}:${row.model}:${row.tier}`);
   useDirtySignal(edit, open, dirty);
 
   const save = async () => {
     setBusy(true);
     try {
-      // upserts first: the door can refuse a row (an alias, ADR 0182), and a rename must not lose the old row when it does
-      for (const row of upserts) await api('/api/settings/execution', { setting: 'row', row });
-      for (const row of deletes) await api('/api/settings/execution', { setting: 'delete_row', provider: row.provider, model: row.model });
-      say('success', 'execution table saved', `${upserts.length} row${upserts.length === 1 ? '' : 's'} written, ${deletes.length} removed`);
+      // 削除を先に送る —— 書く行が、消した行の effort や段を引き継げるように。
+      // ponytail: 残す2行の間で effort / 段を入れ替えると途中で衝突して扉が拒む。2回の保存に分ける(一括の扉ができたら1回で済む)
+      for (const row of deletes) await api('/api/settings/execution', { setting: 'delete_row', provider: row.provider, model: row.model, effort: row.effort });
+      for (const write of writes) await api('/api/settings/execution', { setting: 'row', ...write });
+      say('success', 'execution table saved', `${writes.length} row${writes.length === 1 ? '' : 's'} written, ${deletes.length} removed`);
       edit.close();
       await onSaved();
     } catch (err) {

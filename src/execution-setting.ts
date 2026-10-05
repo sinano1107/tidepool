@@ -52,7 +52,8 @@ export const BOARD_DEFAULT_PRIORITY: Priority = "quality";
 
 /** 表の1行 = モデル分類の行(ADR 0114 決定2): この model はこの provider のこの
  *  ティアの品質を満たす、という分類と、そこで使う effort・価格(USD per MTok)。
- *  同じ (provider, tier) に複数行あってよい。model は具体 id だけ —— 行を書く扉
+ *  同じ (provider, tier) に複数行あってよい。行の鍵は (provider, model, effort) で、1つの段に
+ *  同じ model は1行まで(ADR 0200 決定5)。model は具体 id だけ —— 行を書く扉
  *  (`applyExecutionSettingsChange`)が anthropic の adapter の拒否一覧で alias を
  *  拒む(ADR 0182 決定1)。 */
 export interface ExecutionSettingRow {
@@ -337,7 +338,7 @@ export function loadExecutionSettingTable(db: Db): ExecutionSettingTable {
   return db
     .prepare(
       `SELECT provider, t.name AS tier, model, effort, price_in, price_out
-       FROM execution_settings JOIN tiers t ON t.id = execution_settings.tier_id ORDER BY provider, model`,
+       FROM execution_settings JOIN tiers t ON t.id = execution_settings.tier_id ORDER BY provider, model, effort`,
     )
     .all() as ExecutionSettingRow[];
 }
@@ -355,7 +356,7 @@ interface ExecutionDefaults {
 }
 
 /** settings タブ / 管理MCP の読み口(ADR 0110 決定5): 表と盤面設定4値を1往復で。
- *  表は (provider, model) 順 —— 主キーの順で、UI も MCP も同じ並びを見る。 */
+ *  表は (provider, model, effort) 順 —— 主キーの順で、UI も MCP も同じ並びを見る。 */
 export function readExecutionSettings(db: Db): ExecutionDefaults & { table: ExecutionSettingTable } {
   return { table: loadExecutionSettingTable(db), ...loadExecutionDefaults(db) };
 }
@@ -380,13 +381,38 @@ function isProviderRank(rank: readonly string[]): rank is Provider[] {
   return rank.length === PROVIDER_VALUES.length && PROVIDER_VALUES.every((provider) => rank.includes(provider));
 }
 
+/** 表の行の鍵 = 主キー (provider, model, effort)(ADR 0200 決定5)。行を名指す面はこの3欄で名指す。 */
+const rowKeySchema = z.object({ provider: z.enum(PROVIDER_VALUES), model: z.string().min(1), effort: z.string().min(1) });
+type RowKey = z.infer<typeof rowKeySchema>;
+
+/** 鍵として読める3欄(提案の行・spawn の記録も同じ3欄を持つ)。 */
+type RowKeyFields = { provider: string; model: string; effort: string };
+
+/** この行が鍵の行か。 */
+export const matchesRowKey = (row: ExecutionSettingRow, key: RowKeyFields) =>
+  row.provider === key.provider && row.model === key.model && row.effort === key.effort;
+
+/** 行を文面で名指す綴り(エラー・question の diff)。 */
+export const rowName = (key: RowKeyFields) => `${key.provider} / ${key.model} at effort ${key.effort}`;
+
+/** `row` を表に書けるか(ADR 0200 決定5): 1つの (model, effort) の組が属する段は1つ、1つの段に同じ model は1行まで。
+ *  `key` は編集で置き換わる行で、照合から外す。行を書く扉と routing の行の提案が同じこの1本を通る。 */
+export function assertRowFits(table: ExecutionSettingTable, row: ExecutionSettingRow, key?: RowKey): void {
+  for (const other of table) {
+    if ((key && matchesRowKey(other, key)) || other.provider !== row.provider || other.model !== row.model) continue;
+    const name = `${rowName(other)} in tier ${other.tier}`;
+    if (other.effort === row.effort) throw new DomainError(`the execution-setting table already has the row ${name}; a (model, effort) pair belongs to one tier, so edit that row instead`);
+    if (other.tier === row.tier) throw new DomainError(`the execution-setting table already has the row ${name}; a tier holds at most one row per model`);
+  }
+}
+
 /** settings タブ / 管理MCP が撃つ1つの変更(ADR 0110 決定5)。**綴りは1つ** —— /api と
  *  MCP tool が同じ schema を通り、同じ関数が書き、同じ payload が操作イベントになる。
- *  行の鍵は主キー (provider, model): `row` は upsert、`delete_row` は削除で、model 名の
- *  変更は「消して足す」。 */
+ *  `key` の無い `row` は追加、`key` つきの `row` はその行の編集、`delete_row` は削除。 */
 export const executionSettingsChangeSchema = z.discriminatedUnion("setting", [
   z.object({
     setting: z.literal("row"),
+    key: rowKeySchema.optional(),
     row: z.object({
       provider: z.enum(PROVIDER_VALUES),
       tier: z.string().min(1),
@@ -396,7 +422,7 @@ export const executionSettingsChangeSchema = z.discriminatedUnion("setting", [
       price_out: z.number().nonnegative(),
     }),
   }),
-  z.object({ setting: z.literal("delete_row"), provider: z.enum(PROVIDER_VALUES), model: z.string().min(1) }),
+  z.object({ setting: z.literal("delete_row"), ...rowKeySchema.shape }),
   z.object({ setting: z.literal("advisor_above_main"), value: z.boolean() }),
   z.object({
     setting: z.literal("provider_rank"),
@@ -435,23 +461,23 @@ export function parseRoutingRowChange(tiers: readonly Tier[], input: unknown): R
 }
 
 /** pin の照合(ADR 0150 決定1): 提案が焼いた行と表の現在の行を全欄で比べ、崩れた欄の名前を返す(空 = pin は生きている)。
- *  行が消えていれば null。昇格 / 降格の提案の pin はフラグの現在値。tier の提案は根拠の行を (provider, model) の tier / effort で
- *  比べる(消えた行も `rows` —— agent の側の pin は表からは見えないので `registryPinChanges` が言う)。 */
+ *  行は鍵 (provider, model, effort) で引き、消えていれば(effort の書き換えも含む)null。昇格 / 降格の提案の pin はフラグの現在値。
+ *  tier の提案は根拠の行を全欄で比べる(消えた行も `rows` —— agent の側の pin は表からは見えないので `registryPinChanges` が言う)。 */
 export function routingPinChanges(
   proposal: RoutingProposal | RegistryProposal,
   settings: { table: ExecutionSettingTable; learnerPromoted: boolean },
-): Array<"tier" | "effort" | "price_in" | "price_out" | "learner_promoted" | "rows"> | null {
+): Array<"tier" | "price_in" | "price_out" | "learner_promoted" | "rows"> | null {
   if (proposal.kind === "registry") {
     const held = proposal.pin.rows.every((pinned) =>
-      settings.table.some((row) => row.provider === pinned.provider && row.model === pinned.model && row.tier === pinned.tier && row.effort === pinned.effort),
+      settings.table.some((row) => matchesRowKey(row, pinned) && row.tier === pinned.tier),
     );
     return held ? [] : ["rows"];
   }
   if (proposal.op !== "row") return proposal.pin.promoted === settings.learnerPromoted ? [] : ["learner_promoted"];
   const { pin } = proposal;
-  const current = settings.table.find((row) => row.provider === pin.provider && row.model === pin.model);
+  const current = settings.table.find((row) => matchesRowKey(row, pin));
   if (!current) return null;
-  return (["tier", "effort", "price_in", "price_out"] as const).filter((field) => current[field] !== pin[field]);
+  return (["tier", "price_in", "price_out"] as const).filter((field) => current[field] !== pin[field]);
 }
 
 /** 修正値の合成(ADR 0150 決定2): 適用する行 = pin の行に提案の変更、その上に人間の修正値を重ねたもの。 */
@@ -492,12 +518,22 @@ export function applyExecutionSettingsChange(db: Db, change: ExecutionSettingsCh
           throw new DomainError(`"${model}" is a Claude CLI alias whose target moves with CLI updates; a table row takes a concrete model id (e.g. claude-opus-5-5)`);
         }
         assertKnownTier(db, "tier", tier);
-        db.prepare(
-          `INSERT INTO execution_settings (provider, tier_id, model, effort, price_in, price_out)
-           VALUES (?, (SELECT id FROM tiers WHERE name = ?), ?, ?, ?, ?)
-           ON CONFLICT(provider, model) DO UPDATE SET tier_id = excluded.tier_id, effort = excluded.effort,
-             price_in = excluded.price_in, price_out = excluded.price_out`,
-        ).run(provider, tier, model, effort, price_in, price_out);
+        const { key } = change;
+        const table = loadExecutionSettingTable(db);
+        if (key && !table.some((row) => matchesRowKey(row, key))) {
+          throw new DomainError(`the execution-setting table has no row ${rowName(key)} to edit`);
+        }
+        assertRowFits(table, change.row, key);
+        if (key) {
+          db.prepare(
+            `UPDATE execution_settings SET provider = ?, tier_id = (SELECT id FROM tiers WHERE name = ?), model = ?, effort = ?, price_in = ?, price_out = ?
+             WHERE provider = ? AND model = ? AND effort = ?`,
+          ).run(provider, tier, model, effort, price_in, price_out, key.provider, key.model, key.effort);
+        } else {
+          db.prepare("INSERT INTO execution_settings (provider, tier_id, model, effort, price_in, price_out) VALUES (?, (SELECT id FROM tiers WHERE name = ?), ?, ?, ?, ?)").run(
+            provider, tier, model, effort, price_in, price_out,
+          );
+        }
         break;
       }
       case "retrospective_tier":
@@ -506,7 +542,7 @@ export function applyExecutionSettingsChange(db: Db, change: ExecutionSettingsCh
         break;
       case "delete_row":
         // 消す行が無ければ何も変わっていないので、操作イベントも残さない
-        if (db.prepare("DELETE FROM execution_settings WHERE provider = ? AND model = ?").run(change.provider, change.model).changes === 0) return null;
+        if (db.prepare("DELETE FROM execution_settings WHERE provider = ? AND model = ? AND effort = ?").run(change.provider, change.model, change.effort).changes === 0) return null;
         break;
       default: {
         const column = change.setting;
@@ -641,7 +677,7 @@ export function executionSettingsFor(
 
 /** 表から、行の Quarantine(行の拒否、ADR 0184 決定2)が開いている行を外したもの。main の候補はこの1本から
  *  引くので、走れない行は main にならない。advisor は行でないのでこれを読まない(ADR 0200 決定6)。照合は (provider, model) の
- *  完全一致 —— Throttle の窓の部分一致(`windowMatchesModel`)は使わない(ADR 0182 決定3 と同じ理由)。 */
+ *  完全一致で、effort 違いの行もまとめて外れる(ADR 0200 決定5)—— Throttle の窓の部分一致(`windowMatchesModel`)は使わない(ADR 0182 決定3 と同じ理由)。 */
 function runnableTable(db: Db): ExecutionSettingTable {
   const refused = new Set(openQuarantineValues(db, "tableRow"));
   return loadExecutionSettingTable(db).filter((row) => !refused.has(tableRowValue(row.provider, row.model)));

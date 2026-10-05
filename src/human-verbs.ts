@@ -984,7 +984,7 @@ export async function submitAnswer(
     } else if (proposal?.kind === "routing" && answers[0] === "approve") {
       const change: ExecutionSettingsChange =
         proposal.op === "row"
-          ? { setting: "row", row: composeRoutingRow(proposal, amended as RoutingRowChange | undefined) }
+          ? { setting: "row", key: proposal.row, row: composeRoutingRow(proposal, amended as RoutingRowChange | undefined) }
           : { setting: "learner_promoted", value: proposal.op === "promote" };
       applyExecutionSettingsChange(deps.db, change, origin, now(), task.id);
     } else if (proposal?.kind === "registry" && registryCommit) {

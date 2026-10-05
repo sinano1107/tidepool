@@ -178,11 +178,12 @@ it("新しいセルは初観測が窓の中のものだけ、人間が変えた�
   register(db, true);
   exit(task, spawn(task, "deckhand", opus)); // 既知のセル
   const seen = exit(task, spawn(task, "deckhand", sol));
-  const edited = applyExecutionSettingsChange(db, { setting: "row", row: { ...row, effort: "max" } }, "mcp", at)!;
-  applyExecutionSettingsChange(db, { setting: "row", row: { ...row, tier: "frontier" } }, "webui", at, "question-1");
+  const key = (effort: string) => ({ provider: row.provider, model: row.model, effort });
+  const edited = applyExecutionSettingsChange(db, { setting: "row", key: key("high"), row: { ...row, effort: "max" } }, "mcp", at)!;
+  applyExecutionSettingsChange(db, { setting: "row", key: key("max"), row: { ...row, tier: "frontier" } }, "webui", at, "question-1");
   const review = register(db);
   exit(task, spawn(task, "deckhand", setting("moonshot", "kimi-k3")));
-  applyExecutionSettingsChange(db, { setting: "row", row: { ...row, effort: "low" } }, "mcp", at);
+  applyExecutionSettingsChange(db, { setting: "row", key: key("high"), row: { ...row, effort: "low" } }, "mcp", at);
 
   const { parts, section } = routingMaterialOf(db, review);
 
@@ -196,7 +197,7 @@ it("決着した提案は回答か陳腐化が窓の中にあるものだけを 
   const { db } = board();
   const parent = register(db, true);
   const propose = (model: string) =>
-    proposeRoutingChange(db, parent, { op: "row", row: { provider: "anthropic", model }, change: { tier: "frontier" }, rationale: "r" }, "auditor", at).question_id;
+    proposeRoutingChange(db, parent, { op: "row", row: { provider: "anthropic", model, effort: "high" }, change: { tier: "frontier" }, rationale: "r" }, "auditor", at).question_id;
   const answer = (id: string, answers: string[], comment?: string, amendment?: { tier: "economy" }) => answerQuestion(db, getTask(db, id)!, answers, at, undefined, comment, amendment, "webui");
   const early = propose("claude-sonnet-5-5");
   answer(early, ["reject"], "Too early.");
@@ -218,7 +219,12 @@ it("決着した提案は回答か陳腐化が窓の中にあるものだけを 
   ).id;
   register(db, true);
   answer(rejected, ["approve"], "Amended.", { tier: "economy" });
-  applyExecutionSettingsChange(db, { setting: "row", row: { provider: "anthropic", tier: "standard", model: "claude-opus-5-5", effort: "max", price_in: 5, price_out: 25 } }, "webui", at);
+  applyExecutionSettingsChange(
+    db,
+    { setting: "row", key: { provider: "anthropic", model: "claude-opus-5-5", effort: "high" }, row: { provider: "anthropic", tier: "frontier", model: "claude-opus-5-5", effort: "high", price_in: 5, price_out: 25 } },
+    "webui",
+    at,
+  );
   answer(registry, ["reject"], "Keep it.");
   const review = register(db);
   answer(late, ["reject"], "Too late.");

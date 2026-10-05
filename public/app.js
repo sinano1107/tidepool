@@ -2496,25 +2496,29 @@ function ExecutionTableCard({ settings, say, onSaved, edit }) {
   const { Button, Card, Input, Select } = window.TidepoolDesignSystem_8a0ead;
   const id = "board:execution-table";
   const open = edit.isOpen(id);
-  const rowKey = (row) => `${row.provider}:${row.model}`;
+  const rowKey = (row) => `${row.provider}:${row.model}:${row.effort}`;
   const asDraft = (table) => table.map((row) => ({ ...row, key: rowKey(row), price_in: String(row.price_in), price_out: String(row.price_out) }));
   const [draft, setDraft] = React.useState(() => asDraft(settings.table));
   const [busy, setBusy] = React.useState(false);
   const current = new Map(settings.table.map((row) => [rowKey(row), row]));
   const toRow = (d) => ({ provider: d.provider, tier: d.tier, model: d.model.trim(), effort: d.effort.trim(), price_in: Number(d.price_in), price_out: Number(d.price_out) });
-  const same = (a, b) => a && a.tier === b.tier && a.effort === b.effort && a.price_in === b.price_in && a.price_out === b.price_out;
-  const upserts = draft.map(toRow).filter((row) => !same(current.get(rowKey(row)), row));
-  const deletes = [...current.values()].filter((row) => !draft.some((d) => rowKey(toRow(d)) === rowKey(row)));
-  const dirty = upserts.length > 0 || deletes.length > 0;
+  const same = (a, b) => a && rowKey(a) === rowKey(b) && a.tier === b.tier && a.price_in === b.price_in && a.price_out === b.price_out;
+  const writes = draft.filter((d) => !same(current.get(d.key), toRow(d))).map((d) => {
+    const original = current.get(d.key);
+    return original ? { key: { provider: original.provider, model: original.model, effort: original.effort }, row: toRow(d) } : { row: toRow(d) };
+  });
+  const deletes = [...current.values()].filter((row) => !draft.some((d) => d.key === rowKey(row)));
+  const dirty = writes.length > 0 || deletes.length > 0;
   const validPrice = (v) => /^\d+(\.\d+)?$/.test(v.trim());
-  const ok = draft.every((d) => d.model.trim() && d.effort.trim() && validPrice(d.price_in) && validPrice(d.price_out)) && new Set(draft.map((d) => rowKey(toRow(d)))).size === draft.length;
+  const unique = (of) => new Set(draft.map((d) => of(toRow(d)))).size === draft.length;
+  const ok = draft.every((d) => d.model.trim() && d.effort.trim() && validPrice(d.price_in) && validPrice(d.price_out)) && unique(rowKey) && unique((row) => `${row.provider}:${row.model}:${row.tier}`);
   useDirtySignal(edit, open, dirty);
   const save = async () => {
     setBusy(true);
     try {
-      for (const row of upserts) await api("/api/settings/execution", { setting: "row", row });
-      for (const row of deletes) await api("/api/settings/execution", { setting: "delete_row", provider: row.provider, model: row.model });
-      say("success", "execution table saved", `${upserts.length} row${upserts.length === 1 ? "" : "s"} written, ${deletes.length} removed`);
+      for (const row of deletes) await api("/api/settings/execution", { setting: "delete_row", provider: row.provider, model: row.model, effort: row.effort });
+      for (const write of writes) await api("/api/settings/execution", { setting: "row", ...write });
+      say("success", "execution table saved", `${writes.length} row${writes.length === 1 ? "" : "s"} written, ${deletes.length} removed`);
       edit.close();
       await onSaved();
     } catch (err) {

@@ -905,7 +905,7 @@ function registerRoutingMetaReviewVerbs(server: McpServer, deps: McpDeps, run: M
     {
       description:
         "List cells (provider, model, effort, advisor) first observed in a finished session since the watermark, and the " +
-        "execution-setting table rows humans wrote since then. " +
+        "execution-setting table rows humans wrote since then (an edit also carries the key of the row it replaced). " +
         nextDescription("list_routing_cells", "cells", "The rows come in full"),
       inputSchema: { since_watermark, next },
     },
@@ -919,7 +919,7 @@ function registerRoutingMetaReviewVerbs(server: McpServer, deps: McpDeps, run: M
         "Read the current execution-setting table, whether a model ranked above main may serve as advisor, the provider rank, the default priority and " +
         "whether the learner is promoted, and every past routing proposal (agent tier proposals included) with its answer, the " +
         "human's amendment and comment, or why the board settled it as observed (the pinned row, learner flag or agent tier " +
-        "changed, or the row was deleted). An applied agent tier proposal carries the registry commit it landed as applied. " +
+        "changed, or the row is gone: deleted, or its effort changed). An applied agent tier proposal carries the registry commit it landed as applied. " +
         "Proposals come oldest first. " +
         nextDescription("read_routing_settings", "proposals", "The table and settings come"),
       inputSchema: { next },
@@ -932,8 +932,8 @@ function registerRoutingMetaReviewVerbs(server: McpServer, deps: McpDeps, run: M
     {
       description:
         "Propose a routing change to the human as one approve / reject question attached to this task. op row replaces the " +
-        "tier (one of the board's tiers) and/or effort of one existing execution-setting row, named by provider and model; " +
-        "change takes only those two fields, and the human may amend them when approving. op promote makes work tasks run on the " +
+        "tier (one of the board's tiers) and/or effort of one existing execution-setting row, named by provider, model and effort; " +
+        "change takes only those two fields, and the human may amend them when approving. A change that would give the model a second row in one tier, or the same effort twice, is refused. op promote makes work tasks run on the " +
         "learner's recommendation and is only accepted while the learner is not promoted; op demote returns them to the table and " +
         "is only accepted while it is promoted; neither takes row, change, or an amendment. op agent_tier lowers a non-built-in " +
         "agent's default tier by exactly one step (an agent with no tier runs at the board default tier): agent names it, " +
@@ -945,7 +945,7 @@ function registerRoutingMetaReviewVerbs(server: McpServer, deps: McpDeps, run: M
         BOARD_WRITE_LANGUAGE_RULE,
       inputSchema: {
         op: z.enum(["row", "promote", "demote", "agent_tier"]),
-        row: z.object({ provider: z.string(), model: z.string() }).optional().describe("op row only."),
+        row: z.object({ provider: z.string(), model: z.string(), effort: z.string() }).optional().describe("op row only."),
         change: z.record(z.string(), z.unknown()).optional().describe("op row only: tier and/or effort, nothing else."),
         agent: z.string().optional().describe("op agent_tier only: the agent whose default tier to lower."),
         to: z.string().optional().describe("op agent_tier only: the tier one step below the agent's current tier."),
