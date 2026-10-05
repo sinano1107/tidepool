@@ -148,6 +148,18 @@ it("承認で実体化した子(Registrant は human)の task_ambiguity と miss
   ]);
 });
 
+it("人間の分解の子の task_ambiguity は、文面の書き手が人間なので宛先の agent が無く拒否される", () => {
+  const db = openDb(":memory:");
+  const child = decomposedChild(db, task(db, "work", "parent"), "child", HUMAN_WORKER_ID, at);
+  const entry = objected(db, child, "task_ambiguity");
+  const auditor = rca(db, "rca (auditor): child", child).id;
+
+  expect(() => proposeFromObjection(db, auditor, { ...draft, entry_id: entry }, {}, "auditor", at)).toThrow(
+    new DomainError("the task's text was not written by an agent: there is no agent to address a behavior to"),
+  );
+  expect(listMemoryEntries(db, {})).toEqual([]);
+});
+
 it("RCA reviewer は自分の RCA が覆う異議群の判定から起草する —— 後の session が同じ entry を異議して未帰責でも前の判定から起草し、後の異議群にしか無い entry は材料にないとして拒む(ADR 0171 決定3)", () => {
   const db = openDb(":memory:");
   const parent = task(db, "work", "reobjected");

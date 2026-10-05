@@ -214,7 +214,7 @@ export function listObjectedEntries(db: Db, sessionId: number): ObjectionPair[] 
   return [...pairs.values()];
 }
 
-/** RCA を要する cause(ADR 0115 決定3): worker か登録者に落ち度がありうる側と、まだ
+/** RCA を要する cause(ADR 0115 決定3): worker か文面の書き手に落ち度がありうる側と、まだ
  *  判定できていない側。`preference` / `requirement_change` / `environment` / `memory`(ADR 0166 決定4)では
  *  self RCA の問い「なぜ自分はそう判断したか」が空である。判断の無い entry も
  *  `uncertain` と同じくこちら側(ADR 0168 決定3)。 */
