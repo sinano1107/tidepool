@@ -213,7 +213,8 @@ type ToolResponse = { isError?: boolean; content: { type: string; text?: string 
 /** 出口の床(ADR 0195 決定5): 成功の応答の CallToolResult が予算を超えていたら、目印込みの CallToolResult が予算に収まるまで
  *  本文を切って英語の目印を付け、盤面スコープの event を1件書く。読み口の欠陥の床であって続きの読み方ではない。
  *  error にはしない —— 書き込み verb なら書き込みは済んでいる。error の応答(`toolError`)と予算以下の応答はそのまま返す。
- *  ponytail: 測るのは先頭の text content を `toolResult` の形に包んだ大きさだけ —— 盤面の応答は `toolResult` の1切れしか持たない */
+ *  ponytail: 測るのは先頭の text content を `toolResult` の形に包んだ大きさだけ —— 盤面の応答は `toolResult` の1切れしか持たない。
+ *  他の欄(`structuredContent` 等)を返す応答が出たら CallToolResult そのものを測る */
 export function floorResponse<R extends ToolResponse>(
   result: R,
   context: { db: Db; surface: ResponseSurface; verb: string; taskId?: string | null; at: Date },

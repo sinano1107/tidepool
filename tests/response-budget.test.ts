@@ -67,6 +67,15 @@ it("出口の床は予算を超える応答を予算まで切り、盤面の欠�
   ]);
 });
 
+it("出口の床は本文を UTF-8 の文字の途中で切らない", () => {
+  // 切る位置が多バイト文字のどの位置にも当たるよう、先頭の ASCII で揃え方をずらす。
+  // 4バイトの文字の切れ端は U+FFFD(3バイト)に化けて小さく見えるので、文字境界へ戻さないと予算の際で切れ端が残る
+  for (const lead of ["", "a", "aa", "aaa"]) {
+    const result = floorResponse(toolResult({ line: lead + "🐙".repeat(15_000) }), { db: openDb(":memory:"), surface: "worker", verb: "complete_task", at });
+    expect(textOf(result)).not.toContain("\uFFFD");
+  }
+});
+
 it("出口の床は、本文は予算以下でも CallToolResult に包むと予算を超える応答を切り、切ったあとの CallToolResult も目印込みで予算以下にする", () => {
   const db = openDb(":memory:");
   // 本文で `\"` の2バイトが、包むと4バイトになる

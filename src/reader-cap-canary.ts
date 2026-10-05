@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { RESPONSE_BUDGET_BYTES, responseBytes } from "./response-budget.js";
 import { parseStreamLine } from "./stream-json.js";
 
+/** canary の本文の中央と末尾に置く、呼び出しごとの乱数の目印。 */
 export type Markers = { middle: string; tail: string };
 
 /** 1行の JSON の本文。CallToolResult に包んだ大きさ(盤面の予算と同じ測り方、ADR 0195 追記1)が予算ちょうどになるように、
@@ -11,14 +12,14 @@ export type Markers = { middle: string; tail: string };
 export function buildCanaryPayload(): Markers & { text: string } {
   const middle = `MIDDLE-${randomUUID()}`;
   const tail = `TAIL-${randomUUID()}`;
-  const page = (rows: number, pad: string) => {
+  const body = (rows: number, pad: string) => {
     // 埋め草は実際の応答(event の列)と同じく、引用符の多い小さい object
-    const half = Array(rows).fill({ kind: "decision_logged", line: "canary filler" });
-    return JSON.stringify({ events: [...half, { marker: middle }, ...half], pad, tail });
+    const filler = Array(rows).fill({ kind: "decision_logged", line: "canary filler" });
+    return JSON.stringify({ events: [...filler, { marker: middle }, ...filler], pad, tail });
   };
-  const empty = responseBytes(page(0, ""));
-  const rows = Math.floor((RESPONSE_BUDGET_BYTES - empty) / (responseBytes(page(1, "")) - empty));
-  return { text: page(rows, "x".repeat(RESPONSE_BUDGET_BYTES - responseBytes(page(rows, "")))), middle, tail };
+  const empty = responseBytes(body(0, ""));
+  const rows = Math.floor((RESPONSE_BUDGET_BYTES - empty) / (responseBytes(body(1, "")) - empty));
+  return { text: body(rows, "x".repeat(RESPONSE_BUDGET_BYTES - responseBytes(body(rows, "")))), middle, tail };
 }
 
 /** 一時 MCP の名前と、その1つの tool。 */
