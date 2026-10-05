@@ -262,6 +262,32 @@ function TpTierAmendment({ label, below, value, onChange }) {
   const options = below === void 0 ? tiers : tiers.slice(0, Math.max(tiers.findIndex((tier) => tier.name === below), 0));
   return /* @__PURE__ */ React.createElement(Select, { label, value, onChange: (e) => onChange(e.target.value), options: tierOptions(options, "as proposed") });
 }
+function TpAddTierAmendment({ proposed, onChange }) {
+  const { Input, Select } = window.TidepoolDesignSystem_8a0ead;
+  const [tiers, setTiers] = React.useState(null);
+  const [draft, setDraft] = React.useState(proposed);
+  React.useEffect(() => {
+    api("GET /api/settings/execution").then(({ tiers: tiers2 }) => setTiers(tiers2)).catch(() => {
+    });
+  }, []);
+  React.useEffect(() => {
+    const changed = {};
+    if (draft.name.trim() !== proposed.name) changed.name = draft.name.trim();
+    if (draft.description.trim() !== proposed.description) changed.description = draft.description.trim();
+    if (draft.position !== proposed.position) changed.position = draft.position;
+    onChange(changed);
+  }, [draft]);
+  if (!tiers) return null;
+  return /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 8, marginBottom: 14 } }, /* @__PURE__ */ React.createElement(Input, { label: "Name", mono: true, value: draft.name, onChange: (e) => setDraft({ ...draft, name: e.target.value }) }), /* @__PURE__ */ React.createElement(
+    Select,
+    {
+      label: "Position",
+      value: String(draft.position),
+      options: Array.from({ length: tiers.length + 1 }, (_, p) => ({ value: String(p), label: tierPositionLabel(tiers, p) })),
+      onChange: (e) => setDraft({ ...draft, position: Number(e.target.value) })
+    }
+  ), tierNeighbour("next tier above", tiers[draft.position]), /* @__PURE__ */ React.createElement(Input, { label: "Description", value: draft.description, onChange: (e) => setDraft({ ...draft, description: e.target.value }) }), tierNeighbour("next tier below", tiers[draft.position - 1]));
+}
 function TpMemoryAmendment({ candidateId, onTranslate, onChange, onDeadAddressee }) {
   const { Button, Input, Select } = window.TidepoolDesignSystem_8a0ead;
   const [base, setBase] = React.useState(null);
@@ -359,7 +385,7 @@ function TpQuestionCard({ q, answer, onAnswer, locked = false, onTranslate, onOp
   const [submitting, setSubmitting] = React.useState(false);
   const submit = () => {
     setSubmitting(true);
-    const filled = q.amendable === "memory" ? amendment : Object.fromEntries(Object.entries(amendment).filter(([, v]) => v));
+    const filled = q.amendable === "memory" || q.amendable === "add_tier" ? amendment : Object.fromEntries(Object.entries(amendment).filter(([, v]) => v));
     onAnswer(draft, q.amendable && draft[0] === "approve" && Object.keys(filled).length > 0 ? filled : void 0, comment.trim() ? comment : void 0).finally(() => setSubmitting(false));
   };
   const answeredCount = draft.filter(Boolean).length;
@@ -388,7 +414,7 @@ function TpQuestionCard({ q, answer, onAnswer, locked = false, onTranslate, onOp
       placeholder: "as proposed",
       onChange: (e) => setAmendment({ description: e.target.value })
     }
-  )), q.amendable === "memory" && !locked && /* @__PURE__ */ React.createElement(TpMemoryAmendment, { candidateId: q.candidateId, onTranslate, onChange: setAmendment, onDeadAddressee: setDeadAddressee }), q.amendable === "row" && !locked && /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8, marginBottom: 14 } }, /* @__PURE__ */ React.createElement(
+  )), q.amendable === "add_tier" && !locked && /* @__PURE__ */ React.createElement(TpAddTierAmendment, { proposed: q.proposedTier, onChange: setAmendment }), q.amendable === "memory" && !locked && /* @__PURE__ */ React.createElement(TpMemoryAmendment, { candidateId: q.candidateId, onTranslate, onChange: setAmendment, onDeadAddressee: setDeadAddressee }), q.amendable === "row" && !locked && /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8, marginBottom: 14 } }, /* @__PURE__ */ React.createElement(
     TpTierAmendment,
     {
       label: "Amend tier (optional)",
@@ -2516,6 +2542,12 @@ function ExecutionDefaultsCard({ settings, say, onSaved, edit }) {
     }
   ))));
 }
+function tierPositionLabel(tiers, p) {
+  return p === 0 ? tiers[0] ? `lowest \u2014 below ${tiers[0].name}` : "lowest" : p === tiers.length ? `highest \u2014 above ${tiers[p - 1].name}` : `between ${tiers[p - 1].name} and ${tiers[p].name}`;
+}
+function tierNeighbour(label, tier) {
+  return /* @__PURE__ */ React.createElement("p", { style: { margin: 0, fontSize: "var(--text-xs)", color: "var(--text-muted)" } }, label, ": ", tier ? /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)" } }, tier.name), " \u2014 ", tier.description) : "none");
+}
 function TiersCard({ settings, say, onSaved, edit }) {
   const { Button, Card, Input, Select } = window.TidepoolDesignSystem_8a0ead;
   const { tiers } = settings;
@@ -2558,8 +2590,6 @@ function TiersCard({ settings, say, onSaved, edit }) {
       ...draft.position !== index && { position: draft.position }
     }] : []
   ], isNew ? "tier added" : "tier saved");
-  const positionLabel = (p) => p === 0 ? others[0] ? `lowest \u2014 below ${others[0].name}` : "lowest" : p === others.length ? `highest \u2014 above ${others[p - 1].name}` : `between ${others[p - 1].name} and ${others[p].name}`;
-  const neighbour = (label, tier) => /* @__PURE__ */ React.createElement("p", { style: { margin: 0, fontSize: "var(--text-xs)", color: "var(--text-muted)" } }, label, ": ", tier ? /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)" } }, tier.name), " \u2014 ", tier.description) : "none");
   return /* @__PURE__ */ React.createElement("div", { "data-testid": "execution-tiers" }, /* @__PURE__ */ React.createElement(Card, { style: { display: "flex", flexDirection: "column", gap: 14 } }, /* @__PURE__ */ React.createElement("span", { style: settingsCardLabel }, open ? isNew ? "add a tier" : `tier ${target}` : "tiers"), !open && /* @__PURE__ */ React.createElement(React.Fragment, null, tiers.map((tier) => /* @__PURE__ */ React.createElement("div", { key: tier.name, style: { display: "flex", gap: 12, alignItems: "baseline", fontSize: "var(--text-xs)" } }, /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", minWidth: 90 } }, tier.name), /* @__PURE__ */ React.createElement("span", { style: { color: "var(--text-muted)", flex: 1 } }, tier.description), /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "sm", onClick: () => start(tier.name), "aria-label": `edit tier ${tier.name}` }, "Edit"))), /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "sm", onClick: () => start("") }, "Add tier"), /* @__PURE__ */ React.createElement("p", { style: { margin: 0, fontSize: "var(--text-xs)", color: "var(--text-muted)" } }, "lowest first. a description says what work the tier right below cannot do and this one can \u2014 task writers read it to request a tier.")), open && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(
     Input,
     {
@@ -2574,10 +2604,10 @@ function TiersCard({ settings, say, onSaved, edit }) {
     {
       label: "Position",
       value: String(draft.position),
-      options: Array.from({ length: others.length + 1 }, (_, p) => ({ value: String(p), label: positionLabel(p) })),
+      options: Array.from({ length: others.length + 1 }, (_, p) => ({ value: String(p), label: tierPositionLabel(others, p) })),
       onChange: (e) => setDraft({ ...draft, position: Number(e.target.value) })
     }
-  ), neighbour("next tier above", others[draft.position]), /* @__PURE__ */ React.createElement(
+  ), tierNeighbour("next tier above", others[draft.position]), /* @__PURE__ */ React.createElement(
     Input,
     {
       label: "Description",
@@ -2585,7 +2615,7 @@ function TiersCard({ settings, say, onSaved, edit }) {
       onChange: (e) => setDraft({ ...draft, description: e.target.value }),
       placeholder: "one line: the work the tier below cannot do and this one can"
     }
-  ), neighbour("next tier below", others[draft.position - 1]), /* @__PURE__ */ React.createElement(
+  ), tierNeighbour("next tier below", others[draft.position - 1]), /* @__PURE__ */ React.createElement(
     EditActions,
     {
       dirty,
@@ -3419,6 +3449,7 @@ function toQuestionCardShape(q, icons) {
     // 盤面の `approval` 注釈が答える(issue #757)— ここは描画の形に写すだけ
     ...q.question_proposal?.kind === "routing" && q.question_proposal.op === "row" && { amendable: "row" },
     ...q.question_proposal?.kind === "routing" && q.question_proposal.op === "tier_description" && { amendable: "tier_description" },
+    ...q.question_proposal?.kind === "routing" && q.question_proposal.op === "add_tier" && typeof q.question_proposal.tier === "object" && { amendable: "add_tier", proposedTier: q.question_proposal.tier },
     ...q.question_proposal?.kind === "registry" && { amendable: "agent_tier", amendBelow: q.question_proposal.pin && "tier" in q.question_proposal.pin ? q.question_proposal.pin.tier : void 0 },
     // 修正値の初期値は candidate の今の本文 —— 移されていれば末尾の複製
     ...candidateId !== void 0 && { amendable: "memory", candidateId: moved.find((m) => m.id === candidateId)?.tail_id ?? candidateId },
