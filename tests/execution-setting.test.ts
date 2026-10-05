@@ -578,10 +578,8 @@ it("表の行で走る Board call(振り返り・下書き)は走れる行の最
 
 it("そのティアの anthropic の行がすべて Quarantine 中なら、Board call の行は Quarantine を名指して投げ、行が無いときと区別する", () => {
   const db = boardWithRefusedRows([sonnet5], [["anthropic", "claude-sonnet-5-5"], ["anthropic", "claude-sonnet-5"]]);
-  expect(() => anthropicBoardCallRow(db, "economy")).toThrow(/quarantine/);
-  applyExecutionSettingsChange(db, { setting: "delete_row", provider: "anthropic", model: "claude-sonnet-5", effort: "high" }, "webui", new Date());
-  applyExecutionSettingsChange(db, { setting: "delete_row", provider: "anthropic", model: "claude-sonnet-5-5", effort: "high" }, "webui", new Date());
-  expect(() => anthropicBoardCallRow(db, "economy")).toThrow(/has no row/);
+  // 行が無いときの文面(quarantine を含まない)は tests/claude-draft-client.test.ts が釘付けている
+  expect(() => anthropicBoardCallRow(db, "economy")).toThrow(/under a row quarantine/);
 });
 
 // ── 1つの段に同じ model は1行まで(ADR 0200 決定5 / issue #1419): 行の鍵は (provider, model, effort) ──
