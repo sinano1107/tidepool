@@ -1,3 +1,4 @@
+import { parse as parseYaml } from "yaml";
 import { z } from "zod";
 import { claudeAdvisorFor, isClaudeModelAlias } from "./claude-model-alias.js";
 import type { Db } from "./db.js";
@@ -85,11 +86,18 @@ export const SEED_TIERS: readonly { name: string; description: string }[] = [
 
 /** 種の盤面設定が指す段(ADR 0200 決定4): 盤面既定(未指定の task と下書き)と、盤面自身の判断の段(振り返り Board call と
  *  周期 meta-review)。配布される既定は最小の床で、上げるのは運用者の判断である(ADR 0094 の線)。 */
-export const SEED_BOARD_TIERS = { default_tier: "economy", retrospective_tier: "frontier" } as const;
+export const SEED_BOARD_TIERS = { default_tier: "economy", judgement_tier: "frontier" } as const;
 
-/** 盤面の段の一覧を順序どおりに(ADR 0200 決定1)。 */
+/** 名前で喋る書き込みの入口が段の id に解決する式(ADR 0200 決定2)。消した段(position が NULL)は見えない ——
+ *  消した名前は使い直せるので、名前で引けるのは生きている段だけである。id で読む側は消した段の名前も読む。 */
+export const liveTierId = (param: string) => `(SELECT id FROM tiers WHERE name = ${param} AND position IS NOT NULL)`;
+
+/** 盤面の段の一覧を順序どおりに(ADR 0200 決定1)。消した段は載らない。 */
 export function readTiers(db: Db): { name: Tier; description: string }[] {
-  return db.prepare("SELECT name, description FROM tiers ORDER BY position").all() as { name: Tier; description: string }[];
+  return db.prepare("SELECT name, description FROM tiers WHERE position IS NOT NULL ORDER BY position").all() as {
+    name: Tier;
+    description: string;
+  }[];
 }
 
 /** 段の名前を順序どおりに。 */
@@ -105,7 +113,83 @@ export function assertKnownTier(db: Db, field: string, name: string): void {
 
 /** 盤面既定の段(ADR 0200 決定4): 要求が無い task と下書きが読む。 */
 export function boardDefaultTier(db: Db): Tier {
-  return (db.prepare("SELECT t.name FROM execution_defaults d JOIN tiers t ON t.id = d.default_tier_id").get() as { name: Tier }).name;
+  return loadExecutionDefaults(db).defaultTier;
+}
+
+/** 段の名前の線(ADR 0200 決定2): agent.md の `tier` に書ける文字列 —— 英小文字で始まり英小文字・数字・`-`・`_` だけで、
+ *  YAML が同じ文字列として読み戻すもの(`true` / `null` は YAML では文字列でない)。 */
+function assertTierName(db: Db, name: string): void {
+  if (!/^[a-z][a-z0-9_-]*$/.test(name) || parseYaml(name) !== name) {
+    throw new DomainError(`tier name "${name}" must start with a lowercase letter and use only a-z, 0-9, - and _ (and not be a YAML keyword such as true / null), so agent.md can write it as its tier`);
+  }
+  if (tierNames(db).includes(name)) throw new DomainError(`the board already has a tier named "${name}"`);
+}
+
+/** 段の説明の線(ADR 0200 決定3): 必須の1行。 */
+function assertTierDescription(description: string): void {
+  if (description.trim() === "" || /[\r\n]/.test(description)) throw new DomainError("a tier's description is one non-empty line");
+}
+
+/** 生きている段の id を順序どおりに。 */
+function liveTierIds(db: Db): number[] {
+  return (db.prepare("SELECT id FROM tiers WHERE position IS NOT NULL ORDER BY position").all() as { id: number }[]).map((row) => row.id);
+}
+
+/** 一覧の位置は生きている段の中の添字で、`max` までを受ける。 */
+function assertPosition(position: number, max: number): void {
+  if (position > max) throw new DomainError(`a tier position is an index into the board's list, 0 to ${max}`);
+}
+
+/** 段 `id` を、ほかの生きている段 `others`(順序どおり)の `position` 番目に置いて順序を書き直す。position は UNIQUE で、
+ *  SQLite は UPDATE の行ごとに一意を検査するので、いったん全部を負に退けてから 0.. を振る(途中で衝突しない)。 */
+function placeTier(db: Db, others: readonly number[], id: number, position: number): void {
+  db.prepare("UPDATE tiers SET position = -position - 1 WHERE position IS NOT NULL").run();
+  const set = db.prepare("UPDATE tiers SET position = ? WHERE id = ?");
+  [...others.slice(0, position), id, ...others.slice(position)].forEach((tier, index) => set.run(index, tier));
+}
+
+/** 段を消せない理由(ADR 0200 決定2): 行がある・盤面設定が指す・未決着の task が要求している。空 = 消せる。 */
+function tierDeletionBlockers(db: Db, id: number, name: Tier): string[] {
+  const reasons: string[] = [];
+  const rows = loadExecutionSettingTable(db).filter((row) => row.tier === name);
+  if (rows.length > 0) reasons.push(`it has execution-setting rows: ${rows.map(rowName).join(", ")}`);
+  const defaults = db.prepare("SELECT default_tier_id, judgement_tier_id FROM execution_defaults").get() as { default_tier_id: number; judgement_tier_id: number };
+  if (defaults.default_tier_id === id) reasons.push("it is the board's default tier");
+  if (defaults.judgement_tier_id === id) reasons.push("it is the board's judgement tier");
+  const tasks = db
+    .prepare("SELECT id FROM tasks WHERE status NOT IN ('done', 'cancelled') AND (tier_id = ? OR review_tier_id = ?) ORDER BY rowid")
+    .all(id, id) as { id: string }[];
+  if (tasks.length > 0) reasons.push(`unsettled tasks request it: ${tasks.map((task) => task.id).join(", ")}`);
+  return reasons;
+}
+
+/** 段の1つの操作を書く(挿入・説明と位置の編集・論理削除)。 */
+function applyTierChange(db: Db, change: Extract<ExecutionSettingsChange, { setting: "insert_tier" | "edit_tier" | "delete_tier" }>): void {
+  const ids = liveTierIds(db);
+  if (change.setting === "insert_tier") {
+    assertTierName(db, change.name);
+    assertTierDescription(change.description);
+    assertPosition(change.position, ids.length);
+    const id = Number(db.prepare("INSERT INTO tiers (name, description) VALUES (?, ?)").run(change.name, change.description).lastInsertRowid);
+    placeTier(db, ids, id, change.position);
+    return;
+  }
+  assertKnownTier(db, "tier", change.name);
+  const id = (db.prepare(`SELECT ${liveTierId("?")} AS id`).get(change.name) as { id: number }).id;
+  if (change.setting === "delete_tier") {
+    const reasons = tierDeletionBlockers(db, id, change.name);
+    if (reasons.length > 0) throw new DomainError(`tier "${change.name}" cannot be deleted: ${reasons.join("; ")}`);
+    db.prepare("UPDATE tiers SET position = NULL WHERE id = ?").run(id);
+    return;
+  }
+  if (change.description !== undefined) {
+    assertTierDescription(change.description);
+    db.prepare("UPDATE tiers SET description = ? WHERE id = ?").run(change.description, id);
+  }
+  if (change.position !== undefined) {
+    assertPosition(change.position, ids.length - 1);
+    placeTier(db, ids.filter((other) => other !== id), id, change.position);
+  }
 }
 
 /** 配布される種の表。`/implementation-delegation` §4 / §5 の表と**同じ内容・同じ
@@ -239,7 +323,7 @@ export function anthropicBoardCallRow(db: Db, tier: Tier): ExecutionSettingRow {
 /** 振り返り Board call(配分評価・帰責の判定・Behavior candidate の起草)の行。ティアは3用途が
  *  共有する盤面設定(ADR 0111 追記4)。 */
 export function retrospectiveBoardCallRow(db: Db): ExecutionSettingRow {
-  return anthropicBoardCallRow(db, loadExecutionDefaults(db).retrospectiveTier);
+  return anthropicBoardCallRow(db, loadExecutionDefaults(db).judgementTier);
 }
 
 /** entry 集合から要求ティアの行を全部集め、優先順位の鍵で並べる(ADR 0110 決定3 /
@@ -345,14 +429,14 @@ export function loadExecutionSettingTable(db: Db): ExecutionSettingTable {
 
 /** 盤面設定(ADR 0110 決定5): 「main より序列が上の model を advisor に使ってよい」、
  *  Provider 順位、優先順位の既定、学習器の昇格(ADR 0150 決定4)、盤面自身の判断の段(振り返り Board call と
- *  周期 meta-review が共有する、ADR 0200 決定4)。行は種で作られ、列が NULL = 未設定 = コードの既定。
- *  盤面既定の段(`boardDefaultTier`)はこの読み口に載せない —— 動かす口は #1421 が足す。 */
+ *  周期 meta-review が共有する、ADR 0200 決定4)と盤面既定の段。行は種で作られ、列が NULL = 未設定 = コードの既定。 */
 interface ExecutionDefaults {
   advisorAboveMain: boolean;
   providerRank: readonly Provider[];
   priority: Priority;
   learnerPromoted: boolean;
-  retrospectiveTier: Tier;
+  defaultTier: Tier;
+  judgementTier: Tier;
 }
 
 /** settings タブ / 管理MCP の読み口(ADR 0110 決定5): 表と盤面設定4値を1往復で。
@@ -362,12 +446,14 @@ export function readExecutionSettings(db: Db): ExecutionDefaults & { table: Exec
 }
 
 /** 人間の2つの扉(settings タブ・管理MCP)の読み口: 各行に、開いている行の Quarantine の question id(無ければ null)を
- *  添える(ADR 0184 決定6)。meta-review の材料と worker の読み口は `readExecutionSettings` のまま。 */
+ *  添え(ADR 0184 決定6)、段の一覧を説明つきで順序どおりに載せる(ADR 0200 決定3)。meta-review の材料と worker の読み口は
+ *  `readExecutionSettings` のまま。 */
 export function readExecutionSettingsWithQuarantine(db: Db) {
   const settings = readExecutionSettings(db);
   const open = openQuarantineQuestions(db, "tableRow");
   return {
     ...settings,
+    tiers: readTiers(db),
     table: settings.table.map((row) => ({
       ...row,
       quarantine_question_id: open.get(tableRowValue(row.provider, row.model)) ?? null,
@@ -408,7 +494,8 @@ export function assertRowFits(table: ExecutionSettingTable, row: ExecutionSettin
 
 /** settings タブ / 管理MCP が撃つ1つの変更(ADR 0110 決定5)。**綴りは1つ** —— /api と
  *  MCP tool が同じ schema を通り、同じ関数が書き、同じ payload が操作イベントになる。
- *  `key` の無い `row` は追加、`key` つきの `row` はその行の編集、`delete_row` は削除。 */
+ *  `key` の無い `row` は追加、`key` つきの `row` はその行の編集、`delete_row` は削除。段は `insert_tier`(一覧の添字の位置へ)・
+ *  `edit_tier`(名前で名指し、説明と位置)・`delete_tier`(論理削除)。改名はここに無い(#1422)。 */
 export const executionSettingsChangeSchema = z.discriminatedUnion("setting", [
   z.object({
     setting: z.literal("row"),
@@ -431,7 +518,16 @@ export const executionSettingsChangeSchema = z.discriminatedUnion("setting", [
     }),
   }),
   z.object({ setting: z.literal("priority"), value: z.enum(PRIORITIES) }),
-  z.object({ setting: z.literal("retrospective_tier"), value: z.string().min(1) }),
+  z.object({ setting: z.literal("insert_tier"), name: z.string(), description: z.string(), position: z.number().int().nonnegative() }),
+  z.object({
+    setting: z.literal("edit_tier"),
+    name: z.string().min(1),
+    description: z.string().optional(),
+    position: z.number().int().nonnegative().optional(),
+  }).refine((change) => change.description !== undefined || change.position !== undefined, { message: "edit_tier takes description and/or position" }),
+  z.object({ setting: z.literal("delete_tier"), name: z.string().min(1) }),
+  z.object({ setting: z.literal("default_tier"), value: z.string().min(1) }),
+  z.object({ setting: z.literal("judgement_tier"), value: z.string().min(1) }),
   // 扉は降格だけを受ける。昇格は承認の適用が schema を通さず書く
   z.object({
     setting: z.literal("learner_promoted"),
@@ -526,19 +622,25 @@ export function applyExecutionSettingsChange(db: Db, change: ExecutionSettingsCh
         assertRowFits(table, change.row, key);
         if (key) {
           db.prepare(
-            `UPDATE execution_settings SET provider = ?, tier_id = (SELECT id FROM tiers WHERE name = ?), model = ?, effort = ?, price_in = ?, price_out = ?
+            `UPDATE execution_settings SET provider = ?, tier_id = ${liveTierId("?")}, model = ?, effort = ?, price_in = ?, price_out = ?
              WHERE provider = ? AND model = ? AND effort = ?`,
           ).run(provider, tier, model, effort, price_in, price_out, key.provider, key.model, key.effort);
         } else {
-          db.prepare("INSERT INTO execution_settings (provider, tier_id, model, effort, price_in, price_out) VALUES (?, (SELECT id FROM tiers WHERE name = ?), ?, ?, ?, ?)").run(
+          db.prepare(`INSERT INTO execution_settings (provider, tier_id, model, effort, price_in, price_out) VALUES (?, ${liveTierId("?")}, ?, ?, ?, ?)`).run(
             provider, tier, model, effort, price_in, price_out,
           );
         }
         break;
       }
-      case "retrospective_tier":
-        assertKnownTier(db, "retrospective_tier", change.value);
-        db.prepare("UPDATE execution_defaults SET retrospective_tier_id = (SELECT id FROM tiers WHERE name = ?)").run(change.value);
+      case "default_tier":
+      case "judgement_tier":
+        assertKnownTier(db, change.setting, change.value);
+        db.prepare(`UPDATE execution_defaults SET ${change.setting}_id = ${liveTierId("?")}`).run(change.value);
+        break;
+      case "insert_tier":
+      case "edit_tier":
+      case "delete_tier":
+        applyTierChange(db, change);
         break;
       case "delete_row":
         // 消す行が無ければ何も変わっていないので、操作イベントも残さない
@@ -617,16 +719,24 @@ export function settleStaleProposals(db: Db, at: Date, observedEventId: number |
 function loadExecutionDefaults(db: Db): ExecutionDefaults {
   const row = db
     .prepare(
-      `SELECT advisor_above_main, provider_rank, priority, learner_promoted, t.name AS retrospective_tier
-       FROM execution_defaults JOIN tiers t ON t.id = execution_defaults.retrospective_tier_id`,
+      `SELECT advisor_above_main, provider_rank, priority, learner_promoted, d.name AS default_tier, j.name AS judgement_tier
+       FROM execution_defaults JOIN tiers d ON d.id = default_tier_id JOIN tiers j ON j.id = judgement_tier_id`,
     )
-    .get() as { advisor_above_main: number; provider_rank: string | null; priority: Priority | null; learner_promoted: number; retrospective_tier: Tier };
+    .get() as {
+    advisor_above_main: number;
+    provider_rank: string | null;
+    priority: Priority | null;
+    learner_promoted: number;
+    default_tier: Tier;
+    judgement_tier: Tier;
+  };
   return {
     advisorAboveMain: row.advisor_above_main === 1,
     providerRank: row.provider_rank ? (JSON.parse(row.provider_rank) as Provider[]) : PROVIDER_VALUES,
     priority: row.priority ?? BOARD_DEFAULT_PRIORITY,
     learnerPromoted: row.learner_promoted === 1,
-    retrospectiveTier: row.retrospective_tier,
+    defaultTier: row.default_tier,
+    judgementTier: row.judgement_tier,
   };
 }
 
@@ -660,7 +770,7 @@ function selectorInputFor(
     priority: task?.priority ?? defaults.priority,
     reviewTier: task?.type === "review" ? task.review_tier ?? undefined : undefined,
     agentTier: definition.tier,
-    boardTier: boardDefaultTier(db),
+    boardTier: defaults.defaultTier,
     advisorAboveMain: defaults.advisorAboveMain,
   };
 }

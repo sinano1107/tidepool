@@ -231,15 +231,12 @@ function TpTierAmendment({ label, below, value, onChange }: {
   onChange: (tier: string) => void;
 }) {
   const { Select } = window.TidepoolDesignSystem_8a0ead;
-  const [tiers, setTiers] = React.useState<readonly string[]>([]);
+  const [tiers, setTiers] = React.useState<SettingsExecution['tiers']>([]);
   React.useEffect(() => {
     api('GET /api/settings/execution').then(({ tiers }) => setTiers(tiers)).catch(() => {});
   }, []);
-  const options = below === undefined ? tiers : tiers.slice(0, Math.max(tiers.indexOf(below), 0));
-  return (
-    <Select label={label} value={value} onChange={(e) => onChange(e.target.value)}
-      options={[{ value: '', label: 'as proposed' }, ...options.map((tier) => ({ value: tier, label: tier }))]} />
-  );
+  const options = below === undefined ? tiers : tiers.slice(0, Math.max(tiers.findIndex((tier) => tier.name === below), 0));
+  return <Select label={label} value={value} onChange={(e) => onChange(e.target.value)} options={tierOptions(options, 'as proposed')} />;
 }
 
 // memory の提案の修正値(ADR 0152 決定2・5): candidate の文言を初期値に、settings と同じ英語 + 原文の2欄と逆翻訳。

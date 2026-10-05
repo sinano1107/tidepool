@@ -233,6 +233,23 @@ describe("ClaudeDraftClient", () => {
     expect(calls[1]!.join(" ")).toContain("--model claude-haiku-4-5 --effort low");
   });
 
+  it("盤面既定の段を選び直すと、次の下書きはその段の anthropic の最安の行で走る(ADR 0200 決定4)", async () => {
+    const calls: string[][] = [];
+    const board = openDb(":memory:");
+    const client = new ClaudeDraftClient({
+      db: board,
+      exec: async (_command, args) => {
+        calls.push(args);
+        return JSON.stringify({ result: JSON.stringify({ title: "t", purpose: "p", completion_criteria: "c" }) });
+      },
+    });
+
+    applyExecutionSettingsChange(board, { setting: "default_tier", value: "standard" }, "webui", NOW);
+    await client.draftTask("dump", "English");
+
+    expect(calls[0]!.join(" ")).toContain("--model claude-opus-5-5 --effort high");
+  });
+
   it("表に anthropic × economy の行が無い・Anthropic の窓が閉じているときは、CLI を spawn せずに理由付きで reject する(ADR 0192)", async () => {
     const calls: string[][] = [];
     const exec = async (_command: string, args: string[]) => {

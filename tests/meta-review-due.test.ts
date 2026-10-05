@@ -150,9 +150,9 @@ it("取り消された回の窓にだけ材料があり、その後に変更が�
   expect(registrations(db)).toBe(3);
 });
 
-it("周期 meta-review は盤面自身の判断の段(retrospective_tier の設定)を review_tier にして登録される(ADR 0200 決定4)", () => {
+it("周期 meta-review は盤面自身の判断の段(judgement_tier の設定)を review_tier にして登録される(ADR 0200 決定4)", () => {
   const db = openDb(":memory:");
-  applyExecutionSettingsChange(db, { setting: "retrospective_tier", value: "standard" }, "webui", at);
+  applyExecutionSettingsChange(db, { setting: "judgement_tier", value: "standard" }, "webui", at);
 
   registerMetaReview(db, "routing", at);
 

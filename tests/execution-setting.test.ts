@@ -3,9 +3,11 @@ import { isClaudeModelAlias } from "../src/claude-model-alias.js";
 import { openDb } from "../src/db.js";
 import {
   applyExecutionSettingsChange,
+  assertKnownTier,
   BOARD_DEFAULT_PRIORITY,
   composeRoutingRow,
   type ExecutionSetting,
+  type ExecutionSettingsChange,
   type ExecutionSettingTable,
   executionSettingsFor,
   PRIORITIES,
@@ -21,16 +23,19 @@ import {
   type SelectorInput,
   selectExecutionSetting,
   type Tier,
+  tierFieldDescriptions,
   tierHasRowFor,
+  tierNames,
 } from "../src/execution-setting.js";
 
 import { submitAnswer } from "../src/human-verbs.js";
 import { registerMetaReview } from "../src/meta-review.js";
 import { registerQuarantine, tableRowValue } from "../src/quarantine.js";
-import { PROVIDER_VALUES, type Provider } from "../src/registry.js";
+import { assertValidAgentDefinition, PROVIDER_VALUES, type Provider } from "../src/registry.js";
 import { proposeRoutingChange } from "../src/routing-review.js";
-import { DomainError, getTask, type RegistryProposal } from "../src/tasks.js";
+import { cancelTaskDirectly, DomainError, getTask, type RegistryProposal, registerTask } from "../src/tasks.js";
 import { unusedLanding } from "./fakes.js";
+import { HUMAN_WEBUI } from "./harness.js";
 
 const table: ExecutionSettingTable = SEED_EXECUTION_SETTINGS;
 /** 種の盤面の段の名前(順序どおり)。 */
@@ -574,4 +579,101 @@ it("行の Quarantine の鍵は (provider, model) で、effort 違いの行も�
   const db = boardWithRefusedRows([opusMax], [["anthropic", "claude-opus-5-5"]]);
   expect(executionSettingsFor(db, anthropicAgent(false), workAt("standard"))).toEqual([]);
   expect(executionSettingsFor(db, anthropicAgent(false), workAt("frontier")).map((s) => s.model)).toEqual(["claude-fable-5-1"]);
+});
+
+// ── 段の編集(ADR 0200 決定2・3 / issue #1421): 挿入・説明と位置の編集・削除・盤面既定の段 ──
+
+const at = new Date();
+const change = (db: ReturnType<typeof openDb>, c: ExecutionSettingsChange) => applyExecutionSettingsChange(db, c, "webui", at);
+const premium = { name: "premium", description: "Work only the newest frontier model gets right." };
+
+it("段は一覧の任意の位置に挿入でき、読み口と tool の説明が順序どおりに並べる", () => {
+  const db = openDb(":memory:");
+  change(db, { setting: "insert_tier", ...premium, position: 2 });
+  expect(tierNames(db)).toEqual(["economy", "standard", "premium", "frontier"]);
+  expect(tierFieldDescriptions(db).tier).toContain(
+    "standard — Work where the approach has to be worked out: a multi-file implementation or a larger refactor.\n" +
+      "premium — Work only the newest frontier model gets right.\n" +
+      "frontier — ",
+  );
+  change(db, { setting: "insert_tier", name: "trivial", description: "One-line edits.", position: 0 });
+  expect(tierNames(db)).toEqual(["trivial", "economy", "standard", "premium", "frontier"]);
+});
+
+it("段の説明と位置を名前で名指して直せる", () => {
+  const db = openDb(":memory:");
+  change(db, { setting: "edit_tier", name: "economy", description: "Mechanical edits." });
+  change(db, { setting: "edit_tier", name: "frontier", position: 0 });
+  expect(readTiers(db)).toEqual([
+    { name: "frontier", description: SEED_TIERS[2]!.description },
+    { name: "economy", description: "Mechanical edits." },
+    { name: "standard", description: SEED_TIERS[1]!.description },
+  ]);
+  change(db, { setting: "edit_tier", name: "frontier", position: 2 });
+  expect(tierNames(db)).toEqual(["economy", "standard", "frontier"]);
+});
+
+it("空・複数行の説明、重複・agent.md に書けない名前、一覧の外の位置、無い段の編集は拒まれ、一覧は変わらない", () => {
+  const db = openDb(":memory:");
+  const before = readTiers(db);
+  for (const bad of [
+    { ...premium, description: "" },
+    { ...premium, description: "line one\nline two" },
+    { ...premium, name: "standard" },
+    { ...premium, name: "has space" },
+    { ...premium, name: "true" },
+    { ...premium, name: "" },
+  ]) {
+    expect(() => change(db, { setting: "insert_tier", ...bad, position: 0 })).toThrow(DomainError);
+  }
+  expect(() => change(db, { setting: "insert_tier", ...premium, position: 4 })).toThrow(DomainError);
+  expect(() => change(db, { setting: "edit_tier", name: "economy", description: "a\nb" })).toThrow(DomainError);
+  expect(() => change(db, { setting: "edit_tier", name: "economy", position: 3 })).toThrow(DomainError);
+  expect(() => change(db, { setting: "edit_tier", name: "premium", description: "x" })).toThrow(/unknown tier "premium" — one of economy, standard, frontier/);
+  expect(readTiers(db)).toEqual(before);
+});
+
+it("行のある段・盤面設定が指す段・未決着の task が要求している段は、理由を添えて削除を拒まれる", () => {
+  const db = openDb(":memory:");
+  expect(() => change(db, { setting: "delete_tier", name: "standard" })).toThrow(/execution-setting rows: anthropic \/ claude-opus-5-5/);
+  expect(() => change(db, { setting: "delete_tier", name: "economy" })).toThrow(/the board's default tier/);
+  expect(() => change(db, { setting: "delete_tier", name: "frontier" })).toThrow(/the board's judgement tier/);
+
+  change(db, { setting: "insert_tier", ...premium, position: 3 });
+  const work = registerTask(db, { type: "work", title: "w", purpose: "p", completion_criteria: "c", tier: "premium" }, at, ...HUMAN_WEBUI);
+  const review = registerTask(db, { type: "review", title: "r", purpose: "p", completion_criteria: "c", review_tier: "premium" }, at, ...HUMAN_WEBUI);
+  expect(() => change(db, { setting: "delete_tier", name: "premium" })).toThrow(new RegExp(`unsettled tasks request it: ${work.id}, ${review.id}`));
+  expect(tierNames(db)).toContain("premium");
+});
+
+it("決着した task だけが要求した段は消せ、その task は消した段の名前を読み続け、名前は挿入し直せる", () => {
+  const db = openDb(":memory:");
+  change(db, { setting: "insert_tier", ...premium, position: 1 });
+  const task = registerTask(db, { type: "work", title: "w", purpose: "p", completion_criteria: "c", tier: "premium" }, at, ...HUMAN_WEBUI);
+  cancelTaskDirectly(db, task, null, at, {}, "webui");
+  change(db, { setting: "delete_tier", name: "premium" });
+  expect(tierNames(db)).toEqual(["economy", "standard", "frontier"]);
+  expect(getTask(db, task.id)).toMatchObject({ tier: "premium" });
+  expect(() => assertKnownTier(db, "tier", "premium")).toThrow('unknown tier "premium" — one of economy, standard, frontier');
+
+  change(db, { setting: "insert_tier", name: "premium", description: "Again.", position: 3 });
+  expect(readTiers(db).at(-1)).toEqual({ name: "premium", description: "Again." });
+  expect(getTask(db, task.id)).toMatchObject({ tier: "premium" });
+});
+
+it("盤面既定の段を選び直すと、要求も agent の tier も無い task はその段の行で解決される", () => {
+  const db = openDb(":memory:");
+  change(db, { setting: "default_tier", value: "standard" });
+  expect(readExecutionSettings(db).defaultTier).toBe("standard");
+  expect(resolveExecutionSetting(db, anthropicAgent(false), { type: "work", tier: null, priority: null, review_tier: null })).toMatchObject({
+    model: "claude-opus-5-5",
+    source: { tier: "board" },
+  });
+  expect(() => change(db, { setting: "default_tier", value: "premium" })).toThrow(/unknown default_tier "premium"/);
+});
+
+it("挿入した段の名前を書いた agent.md の tier は定義の検査を通る", () => {
+  const db = openDb(":memory:");
+  change(db, { setting: "insert_tier", ...premium, position: 3 });
+  expect(() => assertValidAgentDefinition("a", { provider: [{ name: "anthropic", advisor: false }], tier: "premium" }, tierNames(db))).not.toThrow();
 });

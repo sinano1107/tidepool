@@ -296,9 +296,12 @@ export interface WireContract {
     providerRank: readonly string[];
     priority: string;
     learnerPromoted: boolean;
-    retrospectiveTier: string;
+    defaultTier: string;
+    /** 盤面自身の判断の段(振り返り Board call と周期 meta-review、ADR 0200 決定4)。 */
+    judgementTier: string;
     providers: readonly Option[];
-    tiers: readonly string[];
+    /** 盤面の段の一覧、順序どおり(ADR 0200 決定1・3)。 */
+    tiers: ReadonlyArray<{ name: string; description: string }>;
     priorities: readonly string[];
   };
   "GET /api/settings/memory": MemorySettings;

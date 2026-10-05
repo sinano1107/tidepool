@@ -304,11 +304,11 @@ it("review の完了の後に被レビュー task が再 spawn されても、�
   expect(allocationClient.calls.map((c) => [c.input.setting.model, c.input.usage])).toEqual([["subject-model", usage]]);
 });
 
-it("盤面設定 retrospective_tier を standard にすると、次の配分評価は anthropic × standard の行で撃たれ、judge もその行を指す(issue #914)", async () => {
+it("盤面設定 judgement_tier を standard にすると、次の配分評価は anthropic × standard の行で撃たれ、judge もその行を指す(issue #914)", async () => {
   const allocationClient = new FakeAllocationClient();
   t = await bootTidepool({ allocationClient });
   const { task, review, spawnedId } = await reviewedWork(t);
-  expect((await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "retrospective_tier", value: "standard" })).status).toBe(200);
+  expect((await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "judgement_tier", value: "standard" })).status).toBe(200);
 
   await completeReview(t, review.id);
   await nextPoll(t);
@@ -328,7 +328,7 @@ it("選んだティアの anthropic 行が無ければ、frontier に退避せ�
   const allocationClient = new FakeAllocationClient();
   t = await bootTidepool({ allocationClient });
   const { task, review } = await reviewedWork(t);
-  expect((await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "retrospective_tier", value: "standard" })).status).toBe(200);
+  expect((await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "judgement_tier", value: "standard" })).status).toBe(200);
   expect((await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "delete_row", provider: "anthropic", model: "claude-opus-5-5", effort: "high" })).status).toBe(200);
 
   await completeReview(t, review.id);

@@ -20,6 +20,7 @@ type SettingsProfile = WireContract['GET /api/profiles']['profiles'][number];
 type SettingsExecution = WireContract['GET /api/settings/execution'];
 /** 書ける行の欄(読み口の `quarantine_question_id` は盤面が添えるもので、書き戻さない)。 */
 type SettingsExecutionRow = Omit<SettingsExecution['table'][number], 'quarantine_question_id'>;
+type SettingsTier = SettingsExecution['tiers'][number];
 
 function registryNameOk(name: string) {
   const v = name.trim();
@@ -400,9 +401,10 @@ const PROVIDER_PLACEHOLDER = { value: '', label: 'choose one — provider is req
 // default tier at pickup. Model and effort are not fields here at all any more —
 // the board's provider × tier table decides them, and #545 opens that table for
 // editing. The tiers themselves are the board's list (ADR 0200 決定1), server-supplied
-// on GET /api/settings/execution.
-function tierOptions(tiers: readonly string[]): SettingsOption[] {
-  return [{ value: '', label: 'board default' }, ...tiers.map((tier) => ({ value: tier, label: tier }))];
+// on GET /api/settings/execution, shown as "name — description" (ADR 0200 決定3). Register and the triage
+// amendment select use it too, each with its own blank entry.
+function tierOptions(tiers: readonly SettingsTier[], blank = 'board default'): SettingsOption[] {
+  return [{ value: '', label: blank }, ...tiers.map((tier) => ({ value: tier.name, label: `${tier.name} — ${tier.description}` }))];
 }
 
 // Those fields as controls, shared by the record card and the create form so
@@ -412,7 +414,7 @@ function AgentFields({ draft, set, authorityOptions, providerOptions, tiers, hos
   set: (key: keyof AgentDraft, value: AgentDraftValue) => void;
   authorityOptions: (string | SettingsOption)[];
   providerOptions: SettingsOption[];
-  tiers: readonly string[];
+  tiers: readonly SettingsTier[];
   hostSkills: string[];
   hostSkillsDegraded: boolean;
 }) {
@@ -444,7 +446,7 @@ function AgentRecord({ agent, authorityProfiles, providerOptions, tiers, hostSki
   agent: SettingsAgent;
   authorityProfiles: string[];
   providerOptions: SettingsOption[];
-  tiers: readonly string[];
+  tiers: readonly SettingsTier[];
   hostSkills: string[];
   hostSkillsDegraded: boolean;
   say: AppSay;
@@ -1351,7 +1353,7 @@ function MemorySettingsCard({ settings, say, onSaved, edit }: {
 
 // Halted refires (ADR 0164 決定5 / ADR 0172 決定3): retrospective Board calls (allocation review, attribution,
 // Behavior candidate drafting) the board stopped refiring after 3 failed calls. Retry fires it again (3 more
-// tries); Dismiss closes it for good. Sits next to the retrospective tier those calls run on; hidden while
+// tries); Dismiss closes it for good. Sits next to the judgement tier those calls run on; hidden while
 // nothing is halted.
 function HaltedRefiresCard({ rows, say, onChanged }: {
   rows: WireContract['GET /api/settings/execution/halted-refires']['halted'];
@@ -2023,11 +2025,16 @@ function ExecutionDefaultsCard({ settings, say, onSaved, edit }: {
   const { Button, Card, Checkbox, FieldRow, Select } = window.TidepoolDesignSystem_8a0ead;
   const id = 'board:execution-defaults';
   const open = edit.isOpen(id);
-  const current = { rank: settings.providerRank, priority: settings.priority, advisor: settings.advisorAboveMain, retrospectiveTier: settings.retrospectiveTier };
+  const current = {
+    rank: settings.providerRank, priority: settings.priority, advisor: settings.advisorAboveMain,
+    defaultTier: settings.defaultTier, judgementTier: settings.judgementTier,
+  };
   const [draft, setDraft] = React.useState(current);
   const [busy, setBusy] = React.useState(false);
   const rankChanged = draft.rank.join() !== current.rank.join();
-  const dirty = rankChanged || draft.priority !== current.priority || draft.advisor !== current.advisor || draft.retrospectiveTier !== current.retrospectiveTier;
+  const dirty = rankChanged || draft.priority !== current.priority || draft.advisor !== current.advisor
+    || draft.defaultTier !== current.defaultTier || draft.judgementTier !== current.judgementTier;
+  const tierNames = settings.tiers.map((tier) => tier.name);
   // the API only takes a permutation of every provider (a missing one would
   // sort first in the selector) — mirror that so Save only enables on a sendable rank
   const ok = new Set(draft.rank).size === settings.providers.length;
@@ -2040,7 +2047,8 @@ function ExecutionDefaultsCard({ settings, say, onSaved, edit }: {
         rankChanged && { setting: 'provider_rank', value: draft.rank },
         draft.priority !== current.priority && { setting: 'priority', value: draft.priority },
         draft.advisor !== current.advisor && { setting: 'advisor_above_main', value: draft.advisor },
-        draft.retrospectiveTier !== current.retrospectiveTier && { setting: 'retrospective_tier', value: draft.retrospectiveTier },
+        draft.defaultTier !== current.defaultTier && { setting: 'default_tier', value: draft.defaultTier },
+        draft.judgementTier !== current.judgementTier && { setting: 'judgement_tier', value: draft.judgementTier },
       ].filter(Boolean);
       for (const change of changes) await api('/api/settings/execution', change);
       say('success', 'execution defaults saved', `${changes.length} setting${changes.length === 1 ? '' : 's'} updated`);
@@ -2075,7 +2083,8 @@ function ExecutionDefaultsCard({ settings, say, onSaved, edit }: {
             <FieldRow label="provider rank" kind="mono" value={settings.providerRank.join(' › ')} />
             <FieldRow label="default priority" kind="mono" value={settings.priority} />
             <FieldRow label="advisor above main" kind="mono" value={settings.advisorAboveMain ? 'on' : 'off'} />
-            <FieldRow label="retrospective tier" kind="mono" value={settings.retrospectiveTier} />
+            <FieldRow label="default tier" kind="mono" value={settings.defaultTier} />
+            <FieldRow label="judgement tier" kind="mono" value={settings.judgementTier} />
             {/* promotion only comes from approving a routing meta-review's question (ADR 0150 決定4); this card only demotes */}
             <FieldRow label="learner" kind="mono" value={settings.learnerPromoted ? 'promoted — chooses work tasks' : 'shadow — the table chooses'} />
             {settings.learnerPromoted && (
@@ -2096,15 +2105,125 @@ function ExecutionDefaultsCard({ settings, say, onSaved, edit }: {
             <Checkbox testId="execution-advisor-above-main" checked={draft.advisor}
               label="advisor above main — the advisor may be a model ranked above the main model (the provider's top model)"
               onChange={() => setDraft({ ...draft, advisor: !draft.advisor })} />
-            <Select label="Retrospective tier" options={[...settings.tiers]} value={draft.retrospectiveTier}
-              onChange={(e) => setDraft({ ...draft, retrospectiveTier: e.target.value })} />
+            <Select label="Board default tier" options={tierNames} value={draft.defaultTier}
+              onChange={(e) => setDraft({ ...draft, defaultTier: e.target.value })} />
+            <Select label="Judgement tier" options={tierNames} value={draft.judgementTier}
+              onChange={(e) => setDraft({ ...draft, judgementTier: e.target.value })} />
             <p style={{ margin: 0, fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
               rank orders the providers a task may run on (first = preferred; every provider exactly once).
               priority is the default for tasks that request none: quality = rank then price, cost = price then rank.
-              retrospective tier is the anthropic row the board's own retrospective Board calls (allocation review, attribution, Behavior candidate drafting) resolve on.
+              default tier is the tier of tasks that request none and whose agent declares none, and of the board's drafts.
+              judgement tier is the tier the board's own judgement runs on: its retrospective Board calls (allocation review, attribution, Behavior candidate drafting) and its periodic meta-reviews.
             </p>
             <EditActions dirty={dirty} ok={ok} busy={busy} saveLabel="Save execution defaults"
               onSave={save} onCancel={() => edit.close()} />
+          </React.Fragment>
+        )}
+      </Card>
+    </div>
+  );
+}
+
+// The board's tiers (ADR 0200 決定1・3 / issue #1421) as a record card: the ordered list, lowest first, each with its
+// one-line description. Add and Edit open one tier's form in the screen's single edit slot; the form shows the
+// descriptions of the tiers that would sit right below and above it, so a description is written as the difference
+// from its neighbours. Delete sits in the form and shows the server's refusal (rows, a board setting, or unsettled
+// tasks still pointing at the tier). Renaming is not here yet (#1422).
+function TiersCard({ settings, say, onSaved, edit }: {
+  settings: SettingsExecution;
+  say: AppSay;
+  onSaved: () => Promise<void> | void;
+  edit: SettingsEditSlot;
+}) {
+  const { Button, Card, Input, Select } = window.TidepoolDesignSystem_8a0ead;
+  const { tiers } = settings;
+  // the tier the form is on: its name, '' = a new tier, null = none yet
+  const [target, setTarget] = React.useState<string | null>(null);
+  const [draft, setDraft] = React.useState({ name: '', description: '', position: 0 });
+  const [busy, setBusy] = React.useState(false);
+  const open = target !== null && edit.isOpen(`board:tier:${target}`);
+  const index = tiers.findIndex((tier) => tier.name === target);
+  const original = tiers[index];
+  const others = tiers.filter((tier) => tier.name !== target);
+  const isNew = target === '';
+  const dirty = isNew ? !!draft.name.trim() || !!draft.description.trim() : draft.description !== original?.description || draft.position !== index;
+  // the name's charset is the server's to check — its refusal names the rule
+  const ok = !!draft.description.trim() && (!isNew || !!draft.name.trim());
+  useDirtySignal(edit, open, dirty);
+
+  const start = (name: string) => edit.open(`board:tier:${name}`, () => {
+    const at = tiers.findIndex((tier) => tier.name === name);
+    setTarget(name);
+    setDraft({ name: '', description: at < 0 ? '' : tiers[at]!.description, position: at < 0 ? tiers.length : at });
+  });
+  const send = async (change: object, done: string) => {
+    setBusy(true);
+    try {
+      await api('/api/settings/execution', change);
+      say('success', done, target || draft.name.trim());
+      edit.close();
+      await onSaved();
+    } catch (err) {
+      say('danger', 'tier change refused', String((err as Error).message || err));
+    }
+    setBusy(false);
+  };
+  const save = () => send(isNew
+    ? { setting: 'insert_tier', name: draft.name.trim(), description: draft.description.trim(), position: draft.position }
+    : {
+        setting: 'edit_tier', name: target,
+        ...(draft.description !== original?.description && { description: draft.description.trim() }),
+        ...(draft.position !== index && { position: draft.position }),
+      }, isNew ? 'tier added' : 'tier saved');
+  const positionLabel = (p: number) =>
+    p === 0 ? (others[0] ? `lowest — below ${others[0].name}` : 'lowest')
+    : p === others.length ? `highest — above ${others[p - 1]!.name}`
+    : `between ${others[p - 1]!.name} and ${others[p]!.name}`;
+  const neighbour = (label: string, tier: SettingsTier | undefined) => (
+    <p style={{ margin: 0, fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
+      {label}: {tier ? <React.Fragment><span style={{ fontFamily: 'var(--font-mono)' }}>{tier.name}</span> — {tier.description}</React.Fragment> : 'none'}
+    </p>
+  );
+
+  return (
+    <div data-testid="execution-tiers">
+      <Card style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+        <span style={settingsCardLabel}>{open ? (isNew ? 'add a tier' : `tier ${target}`) : 'tiers'}</span>
+        {!open && (
+          <React.Fragment>
+            {tiers.map((tier) => (
+              <div key={tier.name} style={{ display: 'flex', gap: 12, alignItems: 'baseline', fontSize: 'var(--text-xs)' }}>
+                <span style={{ fontFamily: 'var(--font-mono)', minWidth: 90 }}>{tier.name}</span>
+                <span style={{ color: 'var(--text-muted)', flex: 1 }}>{tier.description}</span>
+                <Button variant="ghost" size="sm" onClick={() => start(tier.name)} aria-label={`edit tier ${tier.name}`}>Edit</Button>
+              </div>
+            ))}
+            <Button variant="ghost" size="sm" onClick={() => start('')}>Add tier</Button>
+            <p style={{ margin: 0, fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
+              lowest first. a description says what work the tier right below cannot do and this one can — task writers read it to request a tier.
+            </p>
+          </React.Fragment>
+        )}
+        {open && (
+          <React.Fragment>
+            {isNew && (
+              <Input label="Name" mono value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })}
+                placeholder="a lowercase letter, then a-z 0-9 - _ — agent.md writes it as its tier" />
+            )}
+            <Select label="Position" value={String(draft.position)}
+              options={Array.from({ length: others.length + 1 }, (_, p) => ({ value: String(p), label: positionLabel(p) }))}
+              onChange={(e) => setDraft({ ...draft, position: Number(e.target.value) })} />
+            {neighbour('next tier above', others[draft.position])}
+            <Input label="Description" value={draft.description} onChange={(e) => setDraft({ ...draft, description: e.target.value })}
+              placeholder="one line: the work the tier below cannot do and this one can" />
+            {neighbour('next tier below', others[draft.position - 1])}
+            <EditActions dirty={dirty} ok={ok} busy={busy} saveLabel={isNew ? 'Add tier' : 'Save tier'}
+              onSave={save} onCancel={() => edit.close()} />
+            {!isNew && (
+              <Button variant="danger" size="sm" disabled={busy} onClick={() => send({ setting: 'delete_tier', name: target }, 'tier deleted')}>
+                Delete tier
+              </Button>
+            )}
           </React.Fragment>
         )}
       </Card>
@@ -2165,7 +2284,7 @@ function ExecutionTableCard({ settings, say, onSaved, edit }: {
   };
   const update = (i: number, patch: Partial<DraftRow>) => setDraft(draft.map((d, j) => (j === i ? { ...d, ...patch } : d)));
   const addRow = () => setDraft([...draft, {
-    key: 'new', provider: settings.providers[0]!.value, tier: settings.tiers[0]!, model: '', effort: 'high', price_in: '', price_out: '',
+    key: 'new', provider: settings.providers[0]!.value, tier: settings.tiers[0]!.name, model: '', effort: 'high', price_in: '', price_out: '',
   }]);
 
   return (
@@ -2194,7 +2313,7 @@ function ExecutionTableCard({ settings, say, onSaved, edit }: {
               <div key={d.key} data-testid={`execution-row-${d.key}`}
                 style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(110px, 1fr))', gap: 8, alignItems: 'end', paddingBottom: 8, borderBottom: '1px solid var(--border-default)' }}>
                 <Select label="Provider" options={settings.providers.map((p) => p.value)} value={d.provider} onChange={(e) => update(i, { provider: e.target.value })} />
-                <Select label="Tier" options={[...settings.tiers]} value={d.tier} onChange={(e) => update(i, { tier: e.target.value })} />
+                <Select label="Tier" options={settings.tiers.map((tier) => tier.name)} value={d.tier} onChange={(e) => update(i, { tier: e.target.value })} />
                 <Input label="Model" mono value={d.model} onChange={(e) => update(i, { model: e.target.value })} placeholder="alias or model id" />
                 <Input label="Effort" mono value={d.effort} onChange={(e) => update(i, { effort: e.target.value })} placeholder="high" />
                 <Input label="Price in" mono value={d.price_in} onChange={(e) => update(i, { price_in: e.target.value })} placeholder="USD / MTok" />
@@ -2328,7 +2447,7 @@ function NewWorkspaceForm({ baseDir, say, onCreated, edit }: {
 function NewAgentForm({ authorityProfiles, providerOptions, tiers, hostSkills, hostSkillsDegraded, say, onCreated, edit }: {
   authorityProfiles: string[];
   providerOptions: SettingsOption[];
-  tiers: readonly string[];
+  tiers: readonly SettingsTier[];
   hostSkills: string[];
   hostSkillsDegraded: boolean;
   say: AppSay;
@@ -2805,6 +2924,7 @@ function SettingsScreen({ say, memoryFocus, registerLeaveGuard }: {
           <React.Fragment>
             <ExecutionDefaultsCard settings={executionSettings} say={say} onSaved={loadExecutionSettings} edit={edit} />
             {haltedRefires && <HaltedRefiresCard rows={haltedRefires} say={say} onChanged={loadHaltedRefires} />}
+            <TiersCard settings={executionSettings} say={say} onSaved={loadExecutionSettings} edit={edit} />
             <ExecutionTableCard settings={executionSettings} say={say} onSaved={loadExecutionSettings} edit={edit} />
           </React.Fragment>
         )}

@@ -1,5 +1,5 @@
 import Database from "better-sqlite3";
-import { SEED_BOARD_TIERS, SEED_EXECUTION_SETTINGS, SEED_TIERS } from "./execution-setting.js";
+import { liveTierId, SEED_BOARD_TIERS, SEED_EXECUTION_SETTINGS, SEED_TIERS } from "./execution-setting.js";
 
 export type Db = Database.Database;
 
@@ -25,12 +25,15 @@ export function openDb(path: string): Db {
     -- ADR 0200 決定1・2: ティアは盤面が持つ順序付きの段の一覧。表の行・task の要求・盤面設定は内部の id で段を指し、
     -- 名前・説明・位置は編集できる(HTTP・MCP・agent.md は名前で喋り、書き込みの入口で id に解決する)。
     -- 種(execution-setting.ts の SEED_TIERS)から一度だけ初期化し、以後は DB が正本。
+    -- 削除は論理削除(position を NULL に)—— 決着した task の要求が id で指したまま残る(task の行が要求の唯一の記録)。
+    -- 名前の一意は生きている段の中だけで、消した段の名前は使い直せる。
     CREATE TABLE IF NOT EXISTS tiers (
       id          INTEGER PRIMARY KEY,
-      name        TEXT NOT NULL UNIQUE CHECK (name <> ''),
+      name        TEXT NOT NULL CHECK (name <> ''),
       description TEXT NOT NULL CHECK (description <> ''),
-      position    INTEGER NOT NULL UNIQUE
+      position    INTEGER UNIQUE
     );
+    CREATE UNIQUE INDEX IF NOT EXISTS tiers_live_name ON tiers (name) WHERE position IS NOT NULL;
 
     CREATE TABLE IF NOT EXISTS tasks (
       id                  TEXT PRIMARY KEY,
@@ -284,7 +287,7 @@ export function openDb(path: string): Db {
       -- 盤面既定の段(要求の無い task と下書き)と、盤面自身の判断の段(振り返り Board call と周期 meta-review、
       -- ADR 0200 決定4)。どちらも「未設定」を持たない —— 行は種で作る。Provider は anthropic 固定のまま(#456 まで)。
       default_tier_id       INTEGER NOT NULL REFERENCES tiers(id),
-      retrospective_tier_id INTEGER NOT NULL REFERENCES tiers(id)
+      judgement_tier_id     INTEGER NOT NULL REFERENCES tiers(id)
     );
 
     CREATE TABLE IF NOT EXISTS provider_pace_offsets (
@@ -567,7 +570,7 @@ export function openDb(path: string): Db {
   // 行ごとの INSERT OR IGNORE にしないのは、運用者が消した行が再オープンの
   // たびに生え直すのが「正本は DB」と矛盾するためである。
   if (seedExecutionSettings) {
-    const tierId = "(SELECT id FROM tiers WHERE name = ?)";
+    const tierId = liveTierId("?");
     const insertTier = db.prepare("INSERT INTO tiers (name, description, position) VALUES (?, ?, ?)");
     SEED_TIERS.forEach((tier, position) => insertTier.run(tier.name, tier.description, position));
     const insert = db.prepare(
@@ -576,9 +579,9 @@ export function openDb(path: string): Db {
     for (const row of SEED_EXECUTION_SETTINGS) {
       insert.run(row.provider, row.tier, row.model, row.effort, row.price_in, row.price_out);
     }
-    db.prepare(`INSERT INTO execution_defaults (id, default_tier_id, retrospective_tier_id) VALUES (1, ${tierId}, ${tierId})`).run(
+    db.prepare(`INSERT INTO execution_defaults (id, default_tier_id, judgement_tier_id) VALUES (1, ${tierId}, ${tierId})`).run(
       SEED_BOARD_TIERS.default_tier,
-      SEED_BOARD_TIERS.retrospective_tier,
+      SEED_BOARD_TIERS.judgement_tier,
     );
   }
   return db;
