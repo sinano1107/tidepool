@@ -951,8 +951,7 @@ export async function objectedForDraft(
   opts: Pick<BootOptions, "allocationClient" | "agentRegistered"> & {
     initial?: { cause: Cause; evidence: string };
     registrant?: string;
-    /** task を `decomposedBy` の分解判断に乗る子にする。agent の分解は allowed_workspaces の外の子を承認 question に変え、
-     *  人間が approve して実体化させる(子の登録者は human、文面の書き手は分解した agent)。workspace が要る。 */
+    /** task を `decomposedBy` の分解判断に乗る子にする(decomposedChild)。workspace が要る。 */
     decomposedBy?: string;
     workspace?: string | null;
     human?: true;
@@ -963,7 +962,7 @@ export async function objectedForDraft(
   const t = await bootTidepool({ attributionClient, behaviorDraftClient, allocationClient: opts.allocationClient, agentRegistered: opts.agentRegistered });
   const workspace = opts.workspace === null ? undefined : (opts.workspace ?? "charts");
   const task = opts.decomposedBy
-    ? decomposedChild(t, title, workspace, opts.decomposedBy)
+    ? decomposedChild(t.db, registerTask(t.db, { type: "work", title: `parent of ${title}`, purpose: "p", completion_criteria: "c", workspace }, t.clock.now(), ...HUMAN_WEBUI), title, opts.decomposedBy, t.clock.now())
     : opts.registrant
       ? registerTask(t.db, { type: "work", title, purpose: "p", completion_criteria: "c", workspace }, t.clock.now(), opts.registrant, "worker")
       : await registerWork(t, title, workspace, undefined, opts.human && "human");
@@ -984,17 +983,19 @@ export async function objectedForDraft(
   return { t, attributionClient, behaviorDraftClient, task, entry, objection };
 }
 
-function decomposedChild(t: Tidepool, title: string, workspace: string | undefined, decomposer: string): Task {
-  const parent = registerTask(t.db, { type: "work", title: `parent of ${title}`, purpose: "p", completion_criteria: "c", workspace }, t.clock.now(), ...HUMAN_WEBUI);
+/** `decomposer` の分解判断に乗る `parent` の子(workspace は parent のもの)。agent の分解は allowed_workspaces の外の子を
+ *  承認 question に変え、人間が approve して実体化させる —— 子の登録者は human、文面の書き手は分解した agent(ADR 0197)。
+ *  人間の分解は子を直接登録する。 */
+export function decomposedChild(db: Db, parent: Task, title: string, decomposer: string, now: Date): Task {
   const viaApproval = decomposer !== HUMAN_WORKER_ID;
-  const child = { title, purpose: "p", completion_criteria: "c", workspace };
+  const child = { title, purpose: "p", completion_criteria: "c", workspace: parent.workspace ?? undefined };
   const authority = viaApproval ? { allowed_workspaces: [] } : undefined;
-  decomposeTask(t.db, parent, { reason: "split it", children: [child] }, decomposer, t.clock.now(), authority, undefined, viaApproval ? "worker" : "webui");
+  decomposeTask(db, parent, { reason: "split it", children: [child] }, decomposer, now, authority, undefined, viaApproval ? "worker" : "webui");
   if (viaApproval) {
-    const question = listChildren(t.db, parent.id).find((x) => x.type === "question")!;
-    answerQuestion(t.db, question, ["approve"], t.clock.now(), undefined, undefined, undefined, "webui");
+    const question = listChildren(db, parent.id).find((x) => x.type === "question")!;
+    answerQuestion(db, question, ["approve"], now, undefined, undefined, undefined, "webui");
   }
-  return listChildren(t.db, parent.id).find((x) => x.type === "work" && x.title === title)!;
+  return listChildren(db, parent.id).find((x) => x.type === "work" && x.title === title)!;
 }
 
 /** commit して RCA 子を返す。 */

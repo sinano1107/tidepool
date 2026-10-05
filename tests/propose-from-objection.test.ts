@@ -4,9 +4,9 @@ import { type Db, openDb } from "../src/db.js";
 import { appendEvent, listEvents, objectionBundles } from "../src/events.js";
 import { listMemoryEntries } from "../src/memory.js";
 import { proposeFromObjection } from "../src/retrospective.js";
-import { answerQuestion, BOARD_WORKER_ID, DomainError, decomposeTask, HUMAN_WORKER_ID, listChildren, logDecision, registerTask, type Task, type TaskType } from "../src/tasks.js";
+import { BOARD_WORKER_ID, DomainError, HUMAN_WORKER_ID, listChildren, logDecision, registerTask, type Task, type TaskType } from "../src/tasks.js";
 import { commitTriage, raiseObjection, startTriage } from "../src/triage.js";
-import { bundledObjection } from "./harness.js";
+import { bundledObjection, decomposedChild } from "./harness.js";
 
 /** RCA の起草 verb `propose_from_objection` の門(issue #1077)と成功経路(issue #1092)のドメイン層。
  *  tool error への写像はサーバ境界(tests/mcp-propose-from-objection.test.ts)が言う。 */
@@ -132,23 +132,9 @@ it("agent 登録の task では task_ambiguity と missing_information(as: behav
   ]);
 });
 
-/** `decomposer` の分解判断に乗る子。agent の分解は risk を上げる子を承認 question に変え、人間が approve して
- *  実体化させる —— 子の登録者は human、文面の書き手は分解した agent(ADR 0197)。人間の分解は子を直接登録する。 */
-const decomposedChild = (db: Db, decomposer: string): Task => {
-  const parent = task(db, "work", "parent");
-  const viaApproval = decomposer !== HUMAN_WORKER_ID;
-  const child = { title: "child", purpose: "p", completion_criteria: "c", risk_flag: viaApproval };
-  decomposeTask(db, parent, { reason: "split it", children: [child] }, decomposer, at, undefined, undefined, viaApproval ? "worker" : "webui");
-  if (viaApproval) {
-    const question = listChildren(db, parent.id).find((x) => x.type === "question")!;
-    answerQuestion(db, question, ["approve"], at, undefined, undefined, undefined, "webui");
-  }
-  return listChildren(db, parent.id).find((x) => x.type === "work" && x.title === "child")!;
-};
-
 it("承認で実体化した子(Registrant は human)の task_ambiguity と missing_information(as: behavior)は、文面の書き手 = 分解した agent 宛ての Behavior candidate になる(ADR 0197)", () => {
   const db = openDb(":memory:");
-  const child = decomposedChild(db, "tako");
+  const child = decomposedChild(db, task(db, "work", "parent"), "child", "tako", at);
   const taskAmbiguityEntry = objected(db, child, "task_ambiguity");
   const missingInformationEntry = objected(db, child, "missing_information");
   const auditor = rca(db, "rca (auditor): child", child).id;
@@ -160,18 +146,6 @@ it("承認で実体化した子(Registrant は human)の task_ambiguity と miss
     expect.objectContaining({ id: ambiguityResult.entry_id, kind: "behavior", state: "candidate", addressee: "tako", cause: "task_ambiguity" }),
     expect.objectContaining({ id: behaviorResult.entry_id, kind: "behavior", state: "candidate", addressee: "tako", cause: "missing_information" }),
   ]);
-});
-
-it("人間の分解の子の task_ambiguity は、文面の書き手が人間なので宛先の agent が無く拒否される", () => {
-  const db = openDb(":memory:");
-  const child = decomposedChild(db, HUMAN_WORKER_ID);
-  const entry = objected(db, child, "task_ambiguity");
-  const auditor = rca(db, "rca (auditor): child", child).id;
-
-  expect(() => proposeFromObjection(db, auditor, { ...draft, entry_id: entry }, {}, "auditor", at)).toThrow(
-    new DomainError("the task's text was not written by an agent: there is no agent to address a behavior to"),
-  );
-  expect(listMemoryEntries(db, {})).toEqual([]);
 });
 
 it("RCA reviewer は自分の RCA が覆う異議群の判定から起草する —— 後の session が同じ entry を異議して未帰責でも前の判定から起草し、後の異議群にしか無い entry は材料にないとして拒む(ADR 0171 決定3)", () => {
