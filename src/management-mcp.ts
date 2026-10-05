@@ -591,7 +591,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
       description:
         "Read the board's execution settings: the model table (rows of provider, model, tier, effort, price_in / price_out in USD per MTok, " +
         "and quarantine_question_id — the open question naming a row the provider refused to run on this board, or null), " +
-        "whether the frontier row may serve as advisor, the Provider rank, the default priority (quality / cost), whether the learner is promoted, " +
+        "whether a model ranked above main may serve as advisor, the Provider rank, the default priority (quality / cost), whether the learner is promoted, " +
         "and the retrospective tier — the board's own judgement tier, shared by its retrospective Board calls (allocation review, attribution, Behavior candidate drafting) and its periodic meta-reviews.",
     },
     async () => toolResult(readExecutionSettingsWithQuarantine(deps.db)),
@@ -602,7 +602,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
       description:
         "Apply one change to the board's execution settings as the human: upsert a table row (`row`, keyed by provider + model), " +
         "delete one (`delete_row` — deleting every row of a provider × tier just excludes that provider for tasks of that tier), " +
-        "or set `frontier_advisor`, `provider_rank` (every provider exactly once, first = preferred), the default `priority`, or `retrospective_tier` " +
+        "or set `advisor_above_main`, `provider_rank` (every provider exactly once, first = preferred), the default `priority`, or `retrospective_tier` " +
         "(a tier name from the board's list — the tier the board's own judgement runs on: retrospective Board calls resolve on its anthropic row, and periodic meta-reviews request it), " +
         "or demote the learner (`learner_promoted: false` — promotion only comes from approving a routing meta-review's proposal). " +
         "Takes effect at the next pickup or Board call.",

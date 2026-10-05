@@ -88,12 +88,12 @@ it("events.task_id は盤面スコープの操作イベントのために NULL �
   db.close();
 });
 
-it("「上位ティアの行を advisor に使える」フラグの既定は false(未設定の盤面は advisor を main と同一に倒す)", async () => {
-  const path = await boardPath("frontier-advisor-default");
+it("「main より序列が上の model を advisor に使える」フラグの既定は false(未設定の盤面は advisor を main と同一に倒す)", async () => {
+  const path = await boardPath("advisor-above-main-default");
   const db = openDb(path);
   const withAdvisor = { provider: [{ name: "anthropic", advisor: true }], tier: "economy" };
   expect(resolveExecutionSetting(db, withAdvisor, undefined)?.advisor).toBe("claude-sonnet-5-5");
-  db.prepare("UPDATE execution_defaults SET frontier_advisor = 1").run();
-  expect(resolveExecutionSetting(db, withAdvisor, undefined)?.advisor).toBe("claude-fable-5-1");
+  db.prepare("UPDATE execution_defaults SET advisor_above_main = 1").run();
+  expect(resolveExecutionSetting(db, withAdvisor, undefined)?.advisor).toBe("fable");
   db.close();
 });

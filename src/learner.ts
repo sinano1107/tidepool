@@ -8,8 +8,9 @@ import type { Provider } from "./registry.js";
 import { acceptedSql, type Task } from "./tasks.js";
 
 /** 学習器のセル(CONTEXT.md「学習器」/ ADR 0110 決定4): spawn 時の pin の綴りの
- *  (provider, model id, effort, advisor model)—— 表の行は具体 id だけなので、pin が世代を
- *  名指す(ADR 0182 決定3)。advisor も spawn 時の **pin**
+ *  (provider, model id, effort, advisor model)—— 表の行は具体 id だけなので、main の pin が世代を
+ *  名指す(ADR 0182 決定3)。advisor の綴りは `fable` か具体 id で、alias なら世代が進んでも同じセルに
+ *  数え続ける(ADR 0200 決定6)。advisor も spawn 時の **pin**
  *  であって相談回数ではない —— 「pin あり・相談0回」を advisor 無しのセルに
  *  合流させると両セルの受理率が歪む(ADR 0110 退けた案)。 */
 export interface Cell {
