@@ -1164,10 +1164,10 @@ function assertNoGatingQuestion(db: Db, taskId: string, defaults: CancelDefaults
 }
 
 /** The human's direct cancel (issue #130, CONTEXT.md's Cancel): the second
- *  cancel path beside abandon. Same scope line as edit
- *  (`assertHumanEditableScope` — human-registered, unsettled, not
- *  in_progress), the target and its unfinished descendants go cancelled
- *  together (道連れ), the reason is optional and kept on every cancelled task's
+ *  cancel path beside abandon. Its scope line is wider than edit's (ADR 0198,
+ *  `assertDirectlyCancellableScope` — human-registered or a board-registered
+ *  root other than a question, unsettled, not in_progress), the target and
+ *  its unfinished descendants go cancelled together (道連れ), the reason is optional and kept on every cancelled task's
  *  event. It is refused while a Tidepool question with the subtree as its
  *  subject is still open (`assertNoGatingQuestion`). No "delete" exists — this
  *  is always a cancel, and the record is never erased. */
@@ -1179,7 +1179,7 @@ export function cancelTaskDirectly(
   defaults: CancelDefaults,
   origin: EventOrigin,
 ): void {
-  assertHumanEditableScope(db, task, "cancelled");
+  assertDirectlyCancellableScope(db, task);
   assertNoGatingQuestion(db, task.id, defaults);
   cancelUnsettledSubtree(db, task.id, HUMAN_WORKER_ID, now, {
     kind: "task_cancelled_directly",
@@ -2058,7 +2058,7 @@ export function carriesHumanWords(db: Db, taskId: string): boolean {
 }
 
 /** The status half of the human-decompose gate (issue #129), split out so the
- *  edit / direct-cancel scope line (issue #130) and the human completion door
+ *  edit and direct-cancel scope lines (issue #130, ADR 0198) and the human completion door
  *  (issue #964) share the unsettled clause: `task` must be unsettled and not
  *  in_progress. A `human`-assignee task never enters the slot, so it stays
  *  `todo` until settled and only the settled clause bites it (issue #972). The
@@ -2090,19 +2090,36 @@ function assertHumanDecomposable(db: Db, parent: Task): void {
   }
 }
 
-/** The edit / direct-cancel scope gate (issue #130, CONTEXT.md's Edit and
- *  Cancel): both share one line — the task must be human-registered (an
- *  agent-registered decompose child is out of scope, the objection → repair
- *  route handles dissatisfaction with it; a board-registered task is out of
- *  scope until #1348 decides it), unsettled, and not in_progress. The
- *  `verb` distinguishes the two callers' error wording. */
-function assertHumanEditableScope(db: Db, task: Task, verb: string): void {
+/** The edit scope gate (issue #130, CONTEXT.md's Edit): the task must be
+ *  human-registered (an agent-registered decompose child is out of scope, the
+ *  objection → repair route handles dissatisfaction with it; a
+ *  board-registered task's text is the board's own instruction, ADR 0198
+ *  決定4), unsettled, and not in_progress. */
+function assertHumanEditableScope(db: Db, task: Task): void {
   if (!isHumanRegistered(db, task.id)) {
     throw new DomainError(
-      `only a human-registered task can be ${verb} — a task an agent or the board registered is out of scope`,
+      "only a human-registered task can be edited — a task an agent or the board registered is out of scope",
     );
   }
-  assertUnsettledNotInProgress(task, verb);
+  assertUnsettledNotInProgress(task, "edited");
+}
+
+/** The direct-cancel scope gate (ADR 0198, CONTEXT.md's Cancel): the task must
+ *  be human-registered or a root other than a question, unsettled, and not
+ *  in_progress. An agent registers only children (decompose children,
+ *  escalate questions), so a root the human did not register is the board's —
+ *  no worker id comparison is needed. A board-named question settles by its
+ *  answer, and a board-named attached child (completion review, RCA review)
+ *  is an input the rules require, so both stay out. */
+function assertDirectlyCancellableScope(db: Db, task: Task): void {
+  const inScope = isHumanRegistered(db, task.id) || (task.parent_id === null && task.type !== "question");
+  if (!inScope) {
+    throw new DomainError(
+      "only a human-registered task or a board-registered root other than a question can be directly cancelled — " +
+        "an agent's decompose child, a board-named attached child, and a board-named question are out of scope",
+    );
+  }
+  assertUnsettledNotInProgress(task, "cancelled");
 }
 
 /** Human decompose (issue #129): the same mechanics as agent decompose
@@ -2179,8 +2196,9 @@ function assertRiskDemotionKeepsInvariant(db: Db, task: Task): void {
 }
 
 /** Edit a registered task's unconsumed fields in place (issue #130,
- *  CONTEXT.md's Edit). The scope line is shared with direct cancel
- *  (`assertHumanEditableScope`): human-registered, unsettled, not in_progress.
+ *  CONTEXT.md's Edit). The scope line (`assertHumanEditableScope`):
+ *  human-registered, unsettled, not in_progress — narrower than direct
+ *  cancel's (ADR 0198).
  *  Values are consumed at spawn / pickup / completion, so a rewrite before
  *  then makes no broken in-between state (the issue's Purpose). An edit is an
  *  **append event, never a silent overwrite** — one `task_edited` per changed
@@ -2198,7 +2216,7 @@ export function editTask(
   now: Date,
   origin: EventOrigin,
 ): Task {
-  assertHumanEditableScope(db, task, "edited");
+  assertHumanEditableScope(db, task);
   if (task.type === "review" && input.review_flag) {
     throw new DomainError("a review task cannot carry review_flag");
   }
