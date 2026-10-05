@@ -1,10 +1,12 @@
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { isClaudeModelAlias } from "../src/claude-model-alias.js";
 import { openDb } from "../src/db.js";
+import { listEventsOfKinds } from "../src/events.js";
 import {
   applyExecutionSettingsChange,
   assertKnownTier,
   BOARD_DEFAULT_PRIORITY,
+  changeExecutionSettings,
   composeRoutingRow,
   type ExecutionSetting,
   type ExecutionSettingsChange,
@@ -32,6 +34,7 @@ import { submitAnswer } from "../src/human-verbs.js";
 import { registerMetaReview } from "../src/meta-review.js";
 import { registerQuarantine, tableRowValue } from "../src/quarantine.js";
 import { assertValidAgentDefinition, PROVIDER_VALUES, type Provider } from "../src/registry.js";
+import { RegistryPushFailedError } from "../src/registry-write.js";
 import { proposeRoutingChange } from "../src/routing-review.js";
 import { cancelTaskDirectly, DomainError, getTask, type RegistryProposal, registerTask } from "../src/tasks.js";
 import { unusedLanding } from "./fakes.js";
@@ -676,4 +679,63 @@ it("挿入した段の名前を書いた agent.md の tier は定義の検査を
   const db = openDb(":memory:");
   change(db, { setting: "insert_tier", ...premium, position: 3 });
   expect(() => assertValidAgentDefinition("a", { provider: [{ name: "anthropic", advisor: false }], tier: "premium" }, tierNames(db))).not.toThrow();
+});
+
+// ── 段の改名(ADR 0200 決定2 / issue #1422): 盤面は id で段を指し、agent.md の tier だけを名前で書き換える ──
+
+const renameStandard = (to: string) => ({ setting: "rename_tier", name: "standard", to }) as const;
+const tierRequest = { title: "t", purpose: "p", completion_criteria: "c" };
+
+it("段を改名しても、その段の行・task の要求・盤面設定は同じ段を指したまま新しい名前で読まれ、agent.md の書き換えは旧い名前から新しい名前へ呼ばれる", async () => {
+  const db = openDb(":memory:");
+  change(db, { setting: "default_tier", value: "standard" });
+  change(db, { setting: "judgement_tier", value: "standard" });
+  const work = registerTask(db, { type: "work", ...tierRequest, tier: "standard" }, at, ...HUMAN_WEBUI);
+  const review = registerTask(db, { type: "review", ...tierRequest, review_tier: "standard" }, at, ...HUMAN_WEBUI);
+  const rows = readExecutionSettings(db).table.filter((row) => row.tier === "standard");
+  const rewrite = vi.fn(async () => {});
+
+  await changeExecutionSettings(db, renameStandard("mid"), "webui", at, rewrite);
+
+  expect(rewrite).toHaveBeenCalledWith(expect.objectContaining({ from: "standard", to: "mid" }));
+  expect(tierNames(db)).toEqual(["economy", "mid", "frontier"]);
+  expect(readExecutionSettings(db).table.filter((row) => row.tier === "mid")).toEqual(rows.map((row) => ({ ...row, tier: "mid" })));
+  expect(readExecutionSettings(db)).toMatchObject({ defaultTier: "mid", judgementTier: "mid" });
+  expect(getTask(db, work.id)).toMatchObject({ tier: "mid" });
+  expect(getTask(db, review.id)).toMatchObject({ review_tier: "mid" });
+  expect(listEventsOfKinds(db, ["execution_settings_changed"]).at(-1)!.payload).toMatchObject(renameStandard("mid"));
+});
+
+it("改名のあとに旧い名前を書いた要求は未知の段として拒まれ、エラーがいまの一覧を返す", async () => {
+  const db = openDb(":memory:");
+  await changeExecutionSettings(db, renameStandard("mid"), "webui", at);
+  expect(() => registerTask(db, { type: "work", ...tierRequest, tier: "standard" }, at, ...HUMAN_WEBUI)).toThrow(
+    'unknown tier "standard" — one of economy, mid, frontier',
+  );
+});
+
+it("agent.md の書き換えが投げたら改名は成立せず、段の名前は変わらず操作イベントも残らない", async () => {
+  const db = openDb(":memory:");
+  const failing = async () => {
+    throw new RegistryPushFailedError("remote rejected");
+  };
+  await expect(changeExecutionSettings(db, renameStandard("mid"), "webui", at, failing)).rejects.toThrow(DomainError);
+  expect(tierNames(db)).toEqual(["economy", "standard", "frontier"]);
+  expect(listEventsOfKinds(db, ["execution_settings_changed"])).toEqual([]);
+});
+
+it("新しい名前は挿入と同じ検査を通り、無い段・重複・agent.md に書けない名前は agent.md を書き換える前に拒まれる", async () => {
+  const db = openDb(":memory:");
+  const rewrite = vi.fn(async () => {});
+  for (const bad of [
+    { name: "premium", to: "mid" },
+    { name: "standard", to: "economy" },
+    { name: "standard", to: "standard" },
+    { name: "standard", to: "Has Space" },
+    { name: "standard", to: "true" },
+  ]) {
+    await expect(changeExecutionSettings(db, { setting: "rename_tier", ...bad }, "webui", at, rewrite)).rejects.toThrow(DomainError);
+  }
+  expect(rewrite).not.toHaveBeenCalled();
+  expect(tierNames(db)).toEqual(["economy", "standard", "frontier"]);
 });

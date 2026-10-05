@@ -2128,7 +2128,8 @@ function ExecutionDefaultsCard({ settings, say, onSaved, edit }: {
 // one-line description. Add and Edit open one tier's form in the screen's single edit slot; the form shows the
 // descriptions of the tiers that would sit right below and above it, so a description is written as the difference
 // from its neighbours. Delete sits in the form and shows the server's refusal (rows, a board setting, or unsettled
-// tasks still pointing at the tier). Renaming is not here yet (#1422).
+// tasks still pointing at the tier). A changed name is sent as rename_tier first (#1422) — the board rewrites the
+// registry's agent.md files naming the tier, and a refused push leaves the tier as it was.
 function TiersCard({ settings, say, onSaved, edit }: {
   settings: SettingsExecution;
   say: AppSay;
@@ -2146,21 +2147,23 @@ function TiersCard({ settings, say, onSaved, edit }: {
   const original = tiers[index];
   const others = tiers.filter((tier) => tier.name !== target);
   const isNew = target === '';
-  const dirty = isNew ? !!draft.name.trim() || !!draft.description.trim() : draft.description !== original?.description || draft.position !== index;
+  const renamed = !isNew && draft.name.trim() !== target;
+  const edited = !isNew && (draft.description !== original?.description || draft.position !== index);
+  const dirty = isNew ? !!draft.name.trim() || !!draft.description.trim() : renamed || edited;
   // the name's charset is the server's to check — its refusal names the rule
-  const ok = !!draft.description.trim() && (!isNew || !!draft.name.trim());
+  const ok = !!draft.description.trim() && !!draft.name.trim();
   useDirtySignal(edit, open, dirty);
 
   const start = (name: string) => edit.open(`board:tier:${name}`, () => {
     const at = tiers.findIndex((tier) => tier.name === name);
     setTarget(name);
-    setDraft({ name: '', description: at < 0 ? '' : tiers[at]!.description, position: at < 0 ? tiers.length : at });
+    setDraft({ name, description: at < 0 ? '' : tiers[at]!.description, position: at < 0 ? tiers.length : at });
   });
-  const send = async (change: object, done: string) => {
+  const send = async (changes: object[], done: string) => {
     setBusy(true);
     try {
-      await api('/api/settings/execution', change);
-      say('success', done, target || draft.name.trim());
+      for (const change of changes) await api('/api/settings/execution', change);
+      say('success', done, draft.name.trim());
       edit.close();
       await onSaved();
     } catch (err) {
@@ -2169,12 +2172,15 @@ function TiersCard({ settings, say, onSaved, edit }: {
     setBusy(false);
   };
   const save = () => send(isNew
-    ? { setting: 'insert_tier', name: draft.name.trim(), description: draft.description.trim(), position: draft.position }
-    : {
-        setting: 'edit_tier', name: target,
-        ...(draft.description !== original?.description && { description: draft.description.trim() }),
-        ...(draft.position !== index && { position: draft.position }),
-      }, isNew ? 'tier added' : 'tier saved');
+    ? [{ setting: 'insert_tier', name: draft.name.trim(), description: draft.description.trim(), position: draft.position }]
+    : [
+        ...(renamed ? [{ setting: 'rename_tier', name: target, to: draft.name.trim() }] : []),
+        ...(edited ? [{
+          setting: 'edit_tier', name: draft.name.trim(),
+          ...(draft.description !== original?.description && { description: draft.description.trim() }),
+          ...(draft.position !== index && { position: draft.position }),
+        }] : []),
+      ], isNew ? 'tier added' : 'tier saved');
   const positionLabel = (p: number) =>
     p === 0 ? (others[0] ? `lowest — below ${others[0].name}` : 'lowest')
     : p === others.length ? `highest — above ${others[p - 1]!.name}`
@@ -2206,10 +2212,8 @@ function TiersCard({ settings, say, onSaved, edit }: {
         )}
         {open && (
           <React.Fragment>
-            {isNew && (
-              <Input label="Name" mono value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })}
-                placeholder="a lowercase letter, then a-z 0-9 - _ — agent.md writes it as its tier" />
-            )}
+            <Input label="Name" mono value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })}
+              placeholder="a lowercase letter, then a-z 0-9 - _ — agent.md writes it as its tier" />
             <Select label="Position" value={String(draft.position)}
               options={Array.from({ length: others.length + 1 }, (_, p) => ({ value: String(p), label: positionLabel(p) }))}
               onChange={(e) => setDraft({ ...draft, position: Number(e.target.value) })} />
@@ -2220,7 +2224,7 @@ function TiersCard({ settings, say, onSaved, edit }: {
             <EditActions dirty={dirty} ok={ok} busy={busy} saveLabel={isNew ? 'Add tier' : 'Save tier'}
               onSave={save} onCancel={() => edit.close()} />
             {!isNew && (
-              <Button variant="danger" size="sm" disabled={busy} onClick={() => send({ setting: 'delete_tier', name: target }, 'tier deleted')}>
+              <Button variant="danger" size="sm" disabled={busy} onClick={() => send([{ setting: 'delete_tier', name: target }], 'tier deleted')}>
                 Delete tier
               </Button>
             )}

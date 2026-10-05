@@ -14,7 +14,7 @@ import type { Db } from "./db.js";
 import type { DraftClient } from "./draft.js";
 import { getLogCursor, listEvents, listLog } from "./events.js";
 import {
-  applyExecutionSettingsChange,
+  changeExecutionSettings,
   executionSettingsChangeSchema,
   PRIORITY_FIELD_DESCRIPTION,
   readExecutionSettingsWithQuarantine,
@@ -606,7 +606,9 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
         "the provider + model + effort of the row to replace), delete one (`delete_row`, named by provider + model + effort — deleting " +
         "every row of a provider × tier just excludes that provider for tasks of that tier), " +
         "insert a tier (`insert_tier`: name — a lowercase letter, then a-z / 0-9 / - / _ — a one-line description, and position, an index into the tier list, 0 = lowest), " +
-        "edit one (`edit_tier`, named by name: a new description and/or position), delete one (`delete_tier`; refused with the reasons while the tier has table rows, " +
+        "edit one (`edit_tier`, named by name: a new description and/or position), rename one (`rename_tier`: name, and to — the new name, checked like insert_tier's; " +
+        "the board first rewrites every registry agent.md whose tier is the old name and commits it to the registry's remote main, and the rename is refused if that push fails), " +
+        "delete one (`delete_tier`; refused with the reasons while the tier has table rows, " +
         "is the default or judgement tier, or an unsettled task requests it), " +
         "or set `advisor_above_main`, `provider_rank` (every provider exactly once, first = preferred), the default `priority`, `default_tier` " +
         "(a tier name from the board's list — the tier of tasks that request none and whose agent declares none, and of the board's drafts), or `judgement_tier` " +
@@ -617,7 +619,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
     },
     async ({ change }) => {
       try {
-        applyExecutionSettingsChange(deps.db, change, "mcp", deps.clock.now());
+        await changeExecutionSettings(deps.db, change, "mcp", deps.clock.now(), deps.agentAdmin?.renameTier);
       } catch (err) {
         if (err instanceof DomainError) return toolError(err.message);
         throw err;

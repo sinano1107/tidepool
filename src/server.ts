@@ -455,6 +455,7 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
     update: rebaselineAfter(options.agentAdmin.update, rebaselineRegistry),
     delete: rebaselineAfter(options.agentAdmin.delete, rebaselineRegistry),
     changeTier: rebaselineAfter(options.agentAdmin.changeTier, rebaselineRegistry),
+    renameTier: rebaselineAfter(options.agentAdmin.renameTier, rebaselineRegistry),
   };
   const profileAdmin = options.profileAdmin && {
     ...options.profileAdmin,

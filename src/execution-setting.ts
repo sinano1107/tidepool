@@ -6,6 +6,7 @@ import { appendEvent, type EventOrigin } from "./events.js";
 import { PROVIDER_VALUES, type Provider } from "./provider.js";
 import { openQuarantineQuestions, openQuarantineValues, tableRowValue } from "./quarantine.js";
 import type { AgentDefinition } from "./registry.js";
+import { RegistryFetchFailedError, RegistryPushFailedError } from "./registry-write.js";
 import { DomainError, HUMAN_WORKER_ID, type RegistryProposal, type RoutingProposal, type RoutingRowProposal, settleQuestionAsObserved, type Task } from "./tasks.js";
 
 /** 必要品質のティア(CONTEXT.md「要求」/ ADR 0200 決定1)の名前。段は盤面の DB が持つ順序付きの一覧で(`readTiers`)、
@@ -163,8 +164,8 @@ function tierDeletionBlockers(db: Db, id: number, name: Tier): string[] {
   return reasons;
 }
 
-/** 段の1つの操作を書く(挿入・説明と位置の編集・論理削除)。 */
-function applyTierChange(db: Db, change: Extract<ExecutionSettingsChange, { setting: "insert_tier" | "edit_tier" | "delete_tier" }>): void {
+/** 段の1つの操作を書く(挿入・説明と位置の編集・改名・論理削除)。 */
+function applyTierChange(db: Db, change: Extract<ExecutionSettingsChange, { setting: "insert_tier" | "edit_tier" | "rename_tier" | "delete_tier" }>): void {
   const ids = liveTierIds(db);
   if (change.setting === "insert_tier") {
     assertTierName(db, change.name);
@@ -176,6 +177,11 @@ function applyTierChange(db: Db, change: Extract<ExecutionSettingsChange, { sett
   }
   assertKnownTier(db, "tier", change.name);
   const id = (db.prepare(`SELECT ${liveTierId("?")} AS id`).get(change.name) as { id: number }).id;
+  if (change.setting === "rename_tier") {
+    assertTierName(db, change.to);
+    db.prepare("UPDATE tiers SET name = ? WHERE id = ?").run(change.to, id);
+    return;
+  }
   if (change.setting === "delete_tier") {
     const reasons = tierDeletionBlockers(db, id, change.name);
     if (reasons.length > 0) throw new DomainError(`tier "${change.name}" cannot be deleted: ${reasons.join("; ")}`);
@@ -495,7 +501,7 @@ export function assertRowFits(table: ExecutionSettingTable, row: ExecutionSettin
 /** settings タブ / 管理MCP が撃つ1つの変更(ADR 0110 決定5)。**綴りは1つ** —— /api と
  *  MCP tool が同じ schema を通り、同じ関数が書き、同じ payload が操作イベントになる。
  *  `key` の無い `row` は追加、`key` つきの `row` はその行の編集、`delete_row` は削除。段は `insert_tier`(一覧の添字の位置へ)・
- *  `edit_tier`(名前で名指し、説明と位置)・`delete_tier`(論理削除)。改名はここに無い(#1422)。 */
+ *  `edit_tier`(名前で名指し、説明と位置)・`rename_tier`(`changeExecutionSettings` が agent.md を書き換えてから)・`delete_tier`(論理削除)。 */
 export const executionSettingsChangeSchema = z.discriminatedUnion("setting", [
   z.object({
     setting: z.literal("row"),
@@ -525,6 +531,7 @@ export const executionSettingsChangeSchema = z.discriminatedUnion("setting", [
     description: z.string().optional(),
     position: z.number().int().nonnegative().optional(),
   }).refine((change) => change.description !== undefined || change.position !== undefined, { message: "edit_tier takes description and/or position" }),
+  z.object({ setting: z.literal("rename_tier"), name: z.string().min(1), to: z.string() }),
   z.object({ setting: z.literal("delete_tier"), name: z.string().min(1) }),
   z.object({ setting: z.literal("default_tier"), value: z.string().min(1) }),
   z.object({ setting: z.literal("judgement_tier"), value: z.string().min(1) }),
@@ -639,6 +646,7 @@ export function applyExecutionSettingsChange(db: Db, change: ExecutionSettingsCh
         break;
       case "insert_tier":
       case "edit_tier":
+      case "rename_tier":
       case "delete_tier":
         applyTierChange(db, change);
         break;
@@ -666,6 +674,38 @@ export function applyExecutionSettingsChange(db: Db, change: ExecutionSettingsCh
     settleRemovedRowQuarantines(db, at, eventId);
     return eventId;
   })();
+}
+
+/** registry の agent.md の `tier` を旧い名前から新しい名前へ書き換えて着地させる口(registry の無い盤面では無い)。 */
+export interface RenameAgentTiersInput {
+  from: Tier;
+  to: Tier;
+  message: string;
+}
+export type RenameAgentTiers = (input: RenameAgentTiersInput) => Promise<void>;
+
+/** 扉(settings タブ / 管理MCP)が撃つ1つの変更。段の改名だけは、agent.md の `tier` が名前で書かれているので、先に registry へ
+ *  書き換えを着地させてから盤面の名前を変える(ADR 0200 決定2)。push は DB transaction の外なので、着地できなければ改名ごと
+ *  拒む(ADR 0150 決定5 と同じ扉)。書き換えの前に名前を検査する —— 拒む改名で registry を動かさない。
+ *  ponytail: 着地と transaction の間に別の変更が名前を取ると、registry だけ新しい名前になる。扉が増えて競合が見えたら直す。 */
+export async function changeExecutionSettings(
+  db: Db,
+  change: ExecutionSettingsChange,
+  origin: EventOrigin,
+  at: Date,
+  renameAgentTiers?: RenameAgentTiers,
+): Promise<void> {
+  if (change.setting === "rename_tier") {
+    assertKnownTier(db, "tier", change.name);
+    assertTierName(db, change.to);
+    try {
+      await renameAgentTiers?.({ from: change.name, to: change.to, message: `rename tier ${change.name} to ${change.to}` });
+    } catch (err) {
+      if (err instanceof RegistryPushFailedError || err instanceof RegistryFetchFailedError) throw new DomainError(err.message);
+      throw err;
+    }
+  }
+  applyExecutionSettingsChange(db, change, origin, at);
 }
 
 /** 行の Quarantine の解除の門1(ADR 0184 決定5): その (provider, model) の行が表から無くなった Quarantine の question を、
