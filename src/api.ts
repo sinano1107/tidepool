@@ -19,7 +19,7 @@ import {
 import type { ChildDraftContext, DraftClient } from "./draft.js";
 import { advanceLogCursor, getLogCursor, listEvents, listLog } from "./events.js";
 import {
-  applyExecutionSettingsChange,
+  changeExecutionSettings,
   executionSettingsChangeSchema,
   PRIORITIES,
   readExecutionSettingsWithQuarantine,
@@ -1616,27 +1616,27 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   // 人間の書き込み(schema で弾けば 400、DomainError も 400)。実行設定・memory の書き込み(書き手 human、原文の言語は表示言語)と無効化、盤面設定が使う。保存は翻訳 client に依存しない
   const validatedWrite =
     <T>(schema: z.ZodType<T>, write: (input: T) => unknown): RequestHandler =>
-    (req, res) => {
+    async (req, res) => {
       const parsed = schema.safeParse({ ...req.body, ...req.params });
       if (!parsed.success) {
         res.status(400).json({ error: z.treeifyError(parsed.error) });
         return;
       }
       try {
-        res.json(write(parsed.data));
+        res.json(await write(parsed.data));
       } catch (err) {
         if (!(err instanceof DomainError)) throw err;
         res.status(400).json({ error: err.message });
       }
     };
 
-  // 1 リクエスト = 1 変更(行の upsert / 削除、段の挿入・編集・削除、advisor above main、Provider 順位、優先
+  // 1 リクエスト = 1 変更(行の upsert / 削除、段の挿入・編集・改名・削除、advisor above main、Provider 順位、優先
   // 順位の既定、盤面既定の段、判断の段)。不正値(未知の Provider / ティア / 優先順位、負の価格、順列でない
   // 順位)はこの入口で弾く。保存後は provider-pace-offsets と同じく即時再評価(issue #296)
   router.post(
     "/settings/execution",
-    validatedWrite(executionSettingsChangeSchema, (change) => {
-      applyExecutionSettingsChange(db, change, "webui", clock.now());
+    validatedWrite(executionSettingsChangeSchema, async (change) => {
+      await changeExecutionSettings(db, change, "webui", clock.now(), agentAdmin?.renameTier);
       pollNow();
       return readExecutionSettingsWithQuarantine(db);
     }),

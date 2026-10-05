@@ -238,8 +238,7 @@ export interface ChangeAgentTierInput {
 }
 
 /** tier の提案への approve の書き込み(issue #920 / ADR 0150 決定5): 入口で fetch し、tier が pin のままなら
- *  frontmatter の `tier:` と `version:` の行だけを書き換えて着地させる。フォームの編集と違いファイルを丸ごと書き直さない
- *  —— 手書きの行やコメントは提案の対象ではない。返り値は着地した commit。 */
+ *  `tier:` と `version:` の行だけを書き換えて着地させる。返り値は着地した commit。 */
 export async function changeAgentTier(input: ChangeAgentTierInput, deps: AgentAdminDeps): Promise<string> {
   await refreshRegistryForWrite(deps.registry, deps.githubAuth);
   const existing = ownEntry(loadRegistry(deps.registry.dir, deps.registry.mode).agents, input.name);
@@ -247,20 +246,33 @@ export async function changeAgentTier(input: ChangeAgentTierInput, deps: AgentAd
     throw new AgentTierMismatchError(input.name, input.expectTier, existing?.tier);
   }
   input.assertLandable(existing.provider.map((entry) => entry.name));
-  return commitToRegistry(
+  return commitToRegistry(deps.registry, deps.githubAuth, (worktreeDir) => rewriteAgentTier(worktreeDir, input.name, existing.version, input.to), input.message);
+}
+
+/** frontmatter の `tier:` と `version:` の行だけを書き換える。フォームの編集と違いファイルを丸ごと書き直さない —— 手書きの行や
+ *  コメントは対象ではない。 */
+function rewriteAgentTier(worktreeDir: string, name: string, version: string, to: string): void {
+  const file = join(worktreeDir, "agents", `${name}.md`);
+  const text = readFileSync(file, "utf8");
+  const frontmatter = text.match(/^---\n[\s\S]*?\n---\n/)?.[0];
+  // tier を行で書いていない frontmatter(flow 形式・字下げ)は書き換えられない —— 変わらないまま着地を成功と数えない
+  if (!frontmatter || !/^tier:/m.test(frontmatter)) throw new Error(`agents/${name}.md has no top-level tier: line to rewrite`);
+  writeFileSync(
+    file,
+    text.replace(frontmatter, frontmatter.replace(/^tier:.*$/m, `tier: ${to}`).replace(/^version:.*$/m, `version: ${JSON.stringify(bumpVersion(version))}`)),
+  );
+}
+
+/** 段の改名の registry 側(ADR 0200 決定2): 入口で fetch し、`tier` に旧い名前を書いた自前の agent.md をすべて1つの commit で
+ *  書き換えて着地させる。書き換える agent が無ければ何も着地しない。 */
+export async function renameAgentTiers(input: { from: string; to: string; message: string }, deps: AgentAdminDeps): Promise<void> {
+  await refreshRegistryForWrite(deps.registry, deps.githubAuth);
+  const agents = Object.values(loadRegistry(deps.registry.dir, deps.registry.mode).agents).filter((agent) => !agent.builtin && agent.tier === input.from);
+  commitToRegistry(
     deps.registry,
     deps.githubAuth,
     (worktreeDir) => {
-      const file = join(worktreeDir, "agents", `${input.name}.md`);
-      const version = JSON.stringify(bumpVersion(existing.version));
-      const text = readFileSync(file, "utf8");
-      const frontmatter = text.match(/^---\n[\s\S]*?\n---\n/)?.[0];
-      // tier を行で書いていない frontmatter(flow 形式・字下げ)は書き換えられない —— 変わらないまま着地を成功と数えない
-      if (!frontmatter || !/^tier:/m.test(frontmatter)) throw new Error(`agents/${input.name}.md has no top-level tier: line to rewrite`);
-      writeFileSync(
-        file,
-        text.replace(frontmatter, frontmatter.replace(/^tier:.*$/m, `tier: ${input.to}`).replace(/^version:.*$/m, `version: ${version}`)),
-      );
+      for (const agent of agents) rewriteAgentTier(worktreeDir, agent.name, agent.version, input.to);
     },
     input.message,
   );
@@ -397,6 +409,8 @@ export interface AgentAdmin {
   authorityProfiles: () => string[];
   /** tier の提案への approve の書き込み(issue #920)。着地した commit を返す。 */
   changeTier: (input: ChangeAgentTierInput) => Promise<string>;
+  /** 段の改名の registry 側(issue #1422)。 */
+  renameTier: (input: { from: string; to: string; message: string }) => Promise<void>;
 }
 
 function assertKnownAuthority(registry: Registry, profileName: string): void {

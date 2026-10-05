@@ -8,6 +8,7 @@ import {
   createAgent,
   deleteAgent,
   listAgentViews,
+  renameAgentTiers,
   updateAgent,
 } from "./agent-create.js";
 import type { HumanCredential } from "./auth.js";
@@ -669,6 +670,7 @@ function agentAdmin(board: BoardComposition, db: Db): AgentAdmin | undefined {
     update: (input) => updateAgent(input, deps),
     delete: (input, refs) => deleteAgent(input, { ...deps, ...refs }),
     changeTier: (input) => changeAgentTier(input, deps),
+    renameTier: (input) => renameAgentTiers(input, deps),
     // registry-global, not per-agent (issue #71) — read directly here, same
     // posture as registryCandidates()/agentRegisteredChecker() above
     authorityProfiles: () => Object.keys(loadBoardRegistry(board).authority),
