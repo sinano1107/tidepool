@@ -2105,7 +2105,7 @@ function ExecutionDefaultsCard({ settings, say, onSaved, edit }: {
             <Checkbox testId="execution-advisor-above-main" checked={draft.advisor}
               label="advisor above main — the advisor may be a model ranked above the main model (the provider's top model)"
               onChange={() => setDraft({ ...draft, advisor: !draft.advisor })} />
-            <Select label="Default tier" options={tierNames} value={draft.defaultTier}
+            <Select label="Board default tier" options={tierNames} value={draft.defaultTier}
               onChange={(e) => setDraft({ ...draft, defaultTier: e.target.value })} />
             <Select label="Judgement tier" options={tierNames} value={draft.judgementTier}
               onChange={(e) => setDraft({ ...draft, judgementTier: e.target.value })} />

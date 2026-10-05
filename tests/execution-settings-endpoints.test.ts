@@ -1,4 +1,5 @@
 import { afterEach, expect, it } from "vitest";
+import { listEventsOfKinds } from "../src/events.js";
 import { applyExecutionSettingsChange, executionSettingsFor, SEED_EXECUTION_SETTINGS, SEED_TIERS } from "../src/execution-setting.js";
 import { openQuarantineQuestion, registerQuarantine, tableRowValue } from "../src/quarantine.js";
 import { PROVIDER_VALUES, type Provider } from "../src/registry.js";
@@ -398,8 +399,8 @@ it("段の挿入・編集・削除と盤面既定の段は両方の扉に乗り�
     defaultTier: "standard",
     tiers: [SEED_TIERS[0], SEED_TIERS[1], { name: "premium", description: "Edited." }, SEED_TIERS[2]],
   });
-  const events = t.db.prepare("SELECT origin, payload FROM events WHERE kind = 'execution_settings_changed' ORDER BY id").all() as any[];
-  expect(events.map((e) => [e.origin, JSON.parse(e.payload).setting])).toEqual([
+  const events = listEventsOfKinds(t.db, ["execution_settings_changed"]);
+  expect(events.map((e) => [e.origin, e.payload.setting])).toEqual([
     ["webui", "insert_tier"],
     ["mcp", "edit_tier"],
     ["mcp", "default_tier"],

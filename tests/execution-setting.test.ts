@@ -629,7 +629,7 @@ it("空・複数行の説明、重複・agent.md に書けない名前、一覧�
   expect(() => change(db, { setting: "insert_tier", ...premium, position: 4 })).toThrow(DomainError);
   expect(() => change(db, { setting: "edit_tier", name: "economy", description: "a\nb" })).toThrow(DomainError);
   expect(() => change(db, { setting: "edit_tier", name: "economy", position: 3 })).toThrow(DomainError);
-  expect(() => change(db, { setting: "edit_tier", name: "premium", description: "x" })).toThrow(/no tier "premium"/);
+  expect(() => change(db, { setting: "edit_tier", name: "premium", description: "x" })).toThrow(/unknown tier "premium" — one of economy, standard, frontier/);
   expect(readTiers(db)).toEqual(before);
 });
 

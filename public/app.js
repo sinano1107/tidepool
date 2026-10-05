@@ -2483,7 +2483,7 @@ function ExecutionDefaultsCard({ settings, say, onSaved, edit }) {
   ), /* @__PURE__ */ React.createElement(
     Select,
     {
-      label: "Default tier",
+      label: "Board default tier",
       options: tierNames,
       value: draft.defaultTier,
       onChange: (e) => setDraft({ ...draft, defaultTier: e.target.value })

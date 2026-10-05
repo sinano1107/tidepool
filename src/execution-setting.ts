@@ -174,8 +174,8 @@ function applyTierChange(db: Db, change: Extract<ExecutionSettingsChange, { sett
     placeTier(db, ids, id, change.position);
     return;
   }
-  const id = (db.prepare(`SELECT ${liveTierId("?")} AS id`).get(change.name) as { id: number | null }).id;
-  if (id === null) throw new DomainError(`the board has no tier "${change.name}" — one of ${tierNames(db).join(", ")}`);
+  assertKnownTier(db, "tier", change.name);
+  const id = (db.prepare(`SELECT ${liveTierId("?")} AS id`).get(change.name) as { id: number }).id;
   if (change.setting === "delete_tier") {
     const reasons = tierDeletionBlockers(db, id, change.name);
     if (reasons.length > 0) throw new DomainError(`tier "${change.name}" cannot be deleted: ${reasons.join("; ")}`);
