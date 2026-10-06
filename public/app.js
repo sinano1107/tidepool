@@ -1015,9 +1015,9 @@ function RegisterScreen({ onRegister, parentTask, onClose }) {
       type: "work",
       workspace: gate.workspace,
       github_issue_number: gate.github_issue_number,
-      risk_flag: gate.risk_flag,
-      ...gate.tier ? { tier: gate.tier } : {},
-      ...gate.assignee ? { assignee: gate.assignee } : {}
+      tier: gate.tier,
+      assignee: gate.assignee,
+      risk_flag: gate.risk_flag
     });
   };
   const draftFields = async () => {
