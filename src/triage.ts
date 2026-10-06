@@ -1,7 +1,17 @@
 import type { Cause } from "./cause.js";
 import type { Db } from "./db.js";
-// biome-ignore lint/suspicious/noImportCycles: ADR 0204 の台帳 —— 既存の循環、解いたら消す
-import { appendEvent, type DecisionLogEntry, type EventOrigin, getEvent, isDecisionLogEntry } from "./events.js";
+import {
+  appendEvent,
+  currentAttributions,
+  type DecisionLogEntry,
+  type EventOrigin,
+  getEvent,
+  HUMAN_FACING_KINDS,
+  isDecisionLogEntry,
+  listEventsOfKinds,
+  parseEventRow,
+  sessionSpawnOf,
+} from "./events.js";
 import type { GatedJudgment } from "./retrospective.js";
 import {
   BOARD_WORKER_ID,
@@ -12,7 +22,6 @@ import {
   moveTask,
   registerTask,
   type Task,
-// biome-ignore lint/suspicious/noImportCycles: ADR 0204 の台帳 —— 既存の循環、解いたら消す
 } from "./tasks.js";
 
 export class TriageError extends Error {}
@@ -599,4 +608,65 @@ export function commitTriage(
     closeTriageSession(db, open, now, "commit", judgments);
   })();
   return { outcome: "closed_now", closed_at: now.toISOString(), created_tasks: created };
+}
+
+/** A log entry annotated with its resolved workspace name (issue #44): the
+ *  event's own task's `workspace`, or the board's default when the task
+ *  carries none — resolved fresh at read time, never stamped onto the event
+ *  itself (same "resolved fresh every use, not pinned" reference semantics
+ *  as `resolveExecutionWorkspace`, ADR 0009). Also carries every objection
+ *  ever raised against the entry (ADR 0085) — the annotation is a fact of
+ *  the entry, not a session's state, so bundled and still commit-pending
+ *  objections both ride along. `session_id` is the sole fact the read model
+ *  hands the caller for telling the two apart (against the current open
+ *  session, if any); `at` and who raised it are deliberately left out
+ *  (issue #371). The entry's current attribution `cause` (and its `entries`, ADR 0166) — the last
+ *  objection bundle's judgment (ADR 0170) — is joined at read time from append-only
+ *  `objection_attributed` events (ADR 0115). */
+export interface LogEntry extends DecisionLogEntry {
+  workspace: string | null;
+  objections: { comment: string; session_id: number }[];
+  cause: Cause | null;
+  /** 今の判定(`currentAttributions`)が `memory` のとき名指された entry の id 列(ADR 0166 決定6)。他の cause・未帰責のエントリは null。 */
+  entries: number[] | null;
+  /** エントリを含む worker session の `worker_spawned` の id(case 描画と同じ窓、`sessionSpawnOf`)。窓の外なら null。 */
+  session_event_id: number | null;
+}
+
+export function listLog(db: Db, defaultWorkspaceName?: string): LogEntry[] {
+  const placeholders = HUMAN_FACING_KINDS.map(() => "?").join(", ");
+  // an inner join is safe here only because every HUMAN_FACING_KIND is
+  // task-scoped (asserted against BOARD_SCOPED_KINDS next to HUMAN_FACING_KINDS) and tasks are never deleted
+  // (append-only) — no log entry can end up orphaned, so this can never
+  // silently drop one
+  const rows = db
+    .prepare(
+      `SELECT events.*, COALESCE(tasks.workspace, ?) AS workspace
+         FROM events JOIN tasks ON tasks.id = events.task_id
+        WHERE events.kind IN (${placeholders}) ORDER BY events.id`,
+    )
+    .all(defaultWorkspaceName ?? null, ...HUMAN_FACING_KINDS)
+    .map((r) => parseEventRow<{ workspace: string | null }>(r));
+  // a second, flat query rather than N+1 per entry — grouped in JS below
+  const objectionsByEntry = new Map<number, { comment: string; session_id: number }[]>();
+  for (const o of entryObjections(db)) {
+    const list = objectionsByEntry.get(o.entry_id) ?? [];
+    list.push({ comment: o.comment, session_id: o.session_id });
+    objectionsByEntry.set(o.entry_id, list);
+  }
+  const attributions = currentAttributions(db);
+  // session の窓を切るのに要るのは spawn と exit だけ。窓の規則は task で絞るので盤面全体を1回で引いて渡す
+  // ponytail: エントリ数 × session 数の走査。盤面が育って一覧が重くなったら task ごとに束ねる
+  const sessionEvents = listEventsOfKinds(db, ["worker_spawned", "worker_exited"]);
+  return rows.flatMap((entry) => {
+    if (!isDecisionLogEntry(entry)) return []; // SQL で kind を絞り済み —— 型の絞り込みのためだけ
+    const attribution = attributions.get(entry.id);
+    return {
+      ...entry,
+      objections: objectionsByEntry.get(entry.id) ?? [],
+      cause: attribution?.cause ?? null,
+      entries: attribution?.entries ?? null,
+      session_event_id: sessionSpawnOf(sessionEvents, entry)?.id ?? null,
+    };
+  });
 }

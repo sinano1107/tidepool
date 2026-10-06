@@ -2,10 +2,8 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Cause } from "./cause.js";
 import type { Db } from "./db.js";
-// biome-ignore lint/suspicious/noImportCycles: ADR 0204 の台帳 —— 既存の循環、解いたら消す
-import { currentAttributions, type EventRow, getEvent, listEvents } from "./events.js";
+import { currentAttributions, type EventRow, getEvent, listEvents, sessionWindow } from "./events.js";
 import { isAdvisorBlock, parseStreamLine, readInitVersion } from "./stream-json.js";
-// biome-ignore lint/suspicious/noImportCycles: ADR 0204 の台帳 —— 既存の循環、解いたら消す
 import { entryObjections } from "./triage.js";
 
 /** Precedent(前例)の投影 — 盤面の記録(events + worker transcript)から
@@ -337,49 +335,6 @@ export function projectEpisode(input: ProjectEpisodeInput): Episode {
     lines,
     unrecognizedFormat: actions.length === 0 && lines.unknown > 0,
   };
-}
-
-/** 1つの worker session に属するイベントの窓。Precedent の投影と学習器の episode
- *  (learner.ts)が同じ規則で session を切る。
- *
- *  この spawn を閉じた worker_exited は issue #379 が置いたポインタで引く。
- *  1タスクに複数の worker session がありうる(retry / 統合復帰 / quarantine
- *  復帰)ので、spawn ~ exit の窓に入るイベントだけを見る — 窓で切らないと
- *  同じタスクの前の session の判断がこの Episode に湧く。
- *
- *  exit イベントが無い session(盤面が落ちたまま終わった記録)でも窓は閉じる:
- *  次の `worker_spawned` が来た時点でこの session は終わっている。開けっぱなしに
- *  すると次の session の判断と完了がこの Episode に焼かれる — exit 時の投影には
- *  常に exited があるので、これが起きるのは backfill 経路だけ。 */
-export function sessionWindow(
-  events: readonly EventRow[],
-  spawned: EventRow,
-): {
-  exited: EventRow | undefined;
-  hasNextSpawn: boolean;
-  inSession: (e: Pick<EventRow, "id" | "task_id">) => boolean;
-} {
-  const exited = events.find(
-    (e) => e.payload.kind === "worker_exited" && e.payload.worker_spawned_event_id === spawned.id,
-  );
-  const nextSpawnedId = events
-    .filter((e) => e.kind === "worker_spawned" && e.task_id === spawned.task_id && e.id > spawned.id)
-    .reduce((first, e) => Math.min(first, e.id), Number.POSITIVE_INFINITY);
-  const endExclusive = exited ? exited.id + 1 : nextSpawnedId;
-  return {
-    exited,
-    hasNextSpawn: nextSpawnedId !== Number.POSITIVE_INFINITY,
-    inSession: (e) => e.task_id === spawned.task_id && e.id > spawned.id && e.id < endExclusive,
-  };
-}
-
-/** `anchor` を含む session を開いた `worker_spawned`: anchor 自身が spawn ならそれ、そうでなければ anchor より前で最後に
- *  開いた同じ task の session で、その窓に anchor が入るもの —— 窓の外(session 無しに書かれた entry)なら undefined。
- *  `events` は同じ task の、payload を解いた event(spawn と exit があれば足りる)。case 描画と決定ログの一覧が共有する。 */
-export function sessionSpawnOf(events: readonly EventRow[], anchor: EventRow): EventRow | undefined {
-  if (anchor.kind === "worker_spawned") return anchor;
-  const spawned = events.filter((e) => e.kind === "worker_spawned" && e.task_id === anchor.task_id && e.id < anchor.id).at(-1);
-  return spawned && sessionWindow(events, spawned).inSession(anchor) ? spawned : undefined;
 }
 
 /** この session の `decision_logged`(decision)/ `memory_pulled`(memory)を、盤面が

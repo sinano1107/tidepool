@@ -17,7 +17,7 @@ import {
   setDisplayLanguage,
 } from "./display-language.js";
 import type { ChildDraftContext, DraftClient } from "./draft.js";
-import { advanceLogCursor, getLogCursor, listEvents, listLog } from "./events.js";
+import { advanceLogCursor, getLogCursor, listEvents } from "./events.js";
 import {
   changeExecutionSettings,
   executionSettingsChangeSchema,
@@ -139,6 +139,7 @@ import {
   closeTriageSessionOnly,
   commitTriage,
   consumePendingDump,
+  listLog,
   listPendingDumps,
   listScratchpad,
   raiseObjection,
