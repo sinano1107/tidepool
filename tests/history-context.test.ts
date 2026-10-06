@@ -261,9 +261,8 @@ it("a work child of a done parent receives the parent's handoff document", async
   await parentClient.close();
   await completeIntegrationReviews(t, parent.id);
 
-  const db = t.db;
   const repair = registerTask(
-    db,
+    t.db,
     {
       type: "work",
       title: "repair the pilot book",

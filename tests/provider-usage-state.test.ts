@@ -26,9 +26,8 @@ afterEach(async () => {
 it("Provider/window の観測値・offset・freshness・CLI version を pause と queue に永続表示する", async () => {
   const dir = await tempDir("tidepool-provider-usage-");
   t = await bootTidepool({ dir });
-  const db = t.db;
   const observedAt = new Date("2026-08-28T08:00:00.000Z");
-  reportProviderUsage(db, {
+  reportProviderUsage(t.db, {
     provider: "openai",
     status: "observed",
     plan: "plus",
@@ -55,7 +54,7 @@ it("Provider/window の観測値・offset・freshness・CLI version を pause �
       },
     ],
   });
-  setProviderPaceOffset(db, {
+  setProviderPaceOffset(t.db, {
     provider: "openai",
     window: "primary",
     offset: 25,

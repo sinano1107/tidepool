@@ -141,9 +141,8 @@ it("escalate は dirty でも拒否されず、WIP コミットの subject に�
 it("issue参照タスクの WIP コミット subject はプレースホルダを載せず素の形になる", async () => {
   const ws = await makeWorkspace("sandbox");
   t = await bootTidepool({ workspace: ws });
-  const db = t.db;
   const task = registerTask(
-    db,
+    t.db,
     { type: "work", workspace: ws.name, github_issue_number: 240 },
     t.clock.now(),
     ...HUMAN_WEBUI,

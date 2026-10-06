@@ -32,9 +32,8 @@ it("issue参照タスクの complete_task 成立後、PR の title は GitHub �
   const { workspace: ws } = await makeRemoteBackedWorkspace("sandbox");
   t = await bootTidepool({ workspace: ws });
 
-  const db = t.db;
   const task = registerTask(
-    db,
+    t.db,
     { type: "work", workspace: ws.name, github_issue_number: 49 },
     t.clock.now(),
     ...HUMAN_WEBUI,

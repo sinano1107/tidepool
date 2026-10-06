@@ -109,6 +109,23 @@ it("登録ゲート: LLM検査の不合格は 422 で missing と suggested_comm
   expect(llmDown.status).toBe(503);
 });
 
+it("登録ゲート: 重複は GitHub fetch / LLM inspection より前に 400 で弾かれる(issue #104)", async () => {
+  const draftClient = new FakeDraftClient();
+  t = await bootTidepool({ workspace: { name: "tidepool", path: "/fake/path" }, draftClient });
+  t.github.scriptIssue(49, { title: "t", body: "b", comments: [] });
+  draftClient.scriptInspection({ ok: true });
+
+  const body = { type: "work", github_issue_number: 49, workspace: "tidepool" };
+  const first = await api(t.baseUrl, "POST", "/api/tasks", body);
+  expect(first.status).toBe(201);
+
+  const duplicate = await api(t.baseUrl, "POST", "/api/tasks", body);
+  expect(duplicate.status).toBe(400);
+  expect(duplicate.json.error).toContain(first.json.id);
+  // 先行実行の証明: 2度目の登録は LLM inspection まで到達していない
+  expect(draftClient.inspected).toHaveLength(1);
+});
+
 it("POST /api/issue-comments は人間が承認したサジェストを issue へ追記する(issue #49 設計点4)", async () => {
   t = await bootTidepool({ workspace: { name: "tidepool", path: "/fake/path" } });
 

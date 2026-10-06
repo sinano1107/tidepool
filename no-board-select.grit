@@ -1,0 +1,6 @@
+language js
+
+`t.db.prepare($sql)` where {
+  $sql <: r"^[\"'`]\s*(?i)SELECT[\s\S]*",
+  register_diagnostic(span=$sql, message="Raw SELECT on the board handle is a row read (ADR 0107 decision 2 / ADR 0203): read through the server boundary or the domain layer instead.", severity="error")
+}

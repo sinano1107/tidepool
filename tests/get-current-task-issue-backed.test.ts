@@ -8,9 +8,8 @@ afterEach(() => t?.stop());
 it("get_current_task はissue参照タスクの場合、GitHubのissueから解決した内容を返す(issue #49, ADR 0016: spawn時のlive展開)", async () => {
   t = await bootTidepool({ workspace: { name: "tidepool", path: "/fake/path" } });
 
-  const db = t.db;
   const task = registerTask(
-    db,
+    t.db,
     { type: "work", workspace: "tidepool", github_issue_number: 49 },
     t.clock.now(),
     ...HUMAN_WEBUI,

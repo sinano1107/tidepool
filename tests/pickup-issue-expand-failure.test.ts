@@ -13,9 +13,8 @@ afterEach(async () => {
 it("issue参照タスクの展開が一時的に失敗したら、そのサイクルの pickup を skip し、復旧後の poll で拾う(issue #49 設計点5)", async () => {
   t = await bootTidepool({ workspace: await makeWorkspace("tidepool") });
 
-  const db = t.db;
   const task = registerTask(
-    db,
+    t.db,
     { type: "work", workspace: "tidepool", github_issue_number: 49 },
     t.clock.now(),
     ...HUMAN_WEBUI,
@@ -42,9 +41,8 @@ it("issue参照タスクの展開が一時的に失敗したら、そのサイ�
 it("issue参照の確定的失敗(not found / close 済み)では retry/abandon の failure question が生まれ、worker は起動しない(issue #49 設計点5)", async () => {
   t = await bootTidepool({ workspace: await makeWorkspace("tidepool") });
 
-  const db = t.db;
   const task = registerTask(
-    db,
+    t.db,
     { type: "work", workspace: "tidepool", github_issue_number: 49 },
     t.clock.now(),
     ...HUMAN_WEBUI,

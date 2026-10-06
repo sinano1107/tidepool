@@ -38,9 +38,8 @@ it("GET /api/your-tasks は human 宛てタスクを返し、実行キューに�
 it("GET /api/your-tasks も issue 参照タスクを live 展開する — 他の行と同じ読み口(issue #301)", async () => {
   t = await bootTidepool({ workspace: { name: "tidepool", path: "/fake/path" } });
 
-  const db = t.db;
   const issueBacked = registerTask(
-    db,
+    t.db,
     { type: "work", workspace: "tidepool", github_issue_number: 49, assignee: "human" },
     t.clock.now(),
     ...HUMAN_WEBUI,
