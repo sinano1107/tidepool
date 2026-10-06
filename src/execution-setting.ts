@@ -644,9 +644,9 @@ export function routingPinChanges(
   const pin = proposal.op === "row" ? proposal.pin : proposal.pin.row;
   const current = settings.table.find((row) => matchesRowKey(row, pin));
   if (!current) return null;
-  const changed: Array<"tier" | "price_in" | "price_out" | "neighbours"> = [];
-  if (current.tier !== liveName(pin.tier)) changed.push("tier");
-  changed.push(...(["price_in", "price_out"] as const).filter((field) => current[field] !== pin[field]));
+  const changed: Array<"tier" | "price_in" | "price_out" | "neighbours"> = (["tier", "price_in", "price_out"] as const).filter(
+    (field) => current[field] !== (field === "tier" ? liveName(pin.tier) : pin[field]),
+  );
   if (proposal.op === "add_tier") {
     // 隣は提案時点の添字にいまいる段 —— 説明の編集・移動・挿入・削除のどれで入れ替わっても崩れる(改名は同じ段のまま)
     const { position } = proposal.tier;
