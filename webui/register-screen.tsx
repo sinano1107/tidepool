@@ -49,16 +49,8 @@ interface RegisterScreenManualFields {
   parent_id?: string;
   decompose_reason?: string;
 }
-/** 登録の門の 422 本文(src/human-verbs.ts の issue_rejected)+ 検査した参照。 */
-interface RegisterScreenGate {
-  missing?: string;
-  suggested_comment?: string;
-  workspace?: string;
-  github_issue_number?: number;
-  tier?: string;
-  assignee?: string;
-  risk_flag?: boolean;
-}
+/** 登録の門の 422 本文(src/human-verbs.ts の issue_rejected)+ 検査した要求そのもの。 */
+type RegisterScreenGate = WireContract['POST /api/tasks 422'] & { fields: RegisterScreenIssueFields };
 interface RegisterScreenProps {
   onRegister: (fields: RegisterScreenFields) => Promise<void>;
   /** 子追加モード —— 未設定ならルート登録。 */
@@ -165,7 +157,12 @@ function RegisterScreen({ onRegister, parentTask, onClose }: RegisterScreenProps
     : title.trim() && purpose.trim() && criteria.trim() && (!childMode || reason.trim());
   const fields = (): RegisterScreenFields =>
     issueMode
-      ? { type: 'work', workspace: workspace.trim(), github_issue_number: Number(issueNumber.trim()), risk_flag: risk, ...(tier ? { tier } : {}), ...(assignee ? { assignee } : {}) }
+      ? {
+          type: 'work', workspace: workspace.trim(), github_issue_number: Number(issueNumber.trim()),
+          risk_flag: risk,
+          ...(assignee ? { assignee } : {}),
+          ...(tier ? { tier } : {}),
+        }
       : {
           // a decompose child is always type work (decomposeTask's own
           // ChildSpec has no type field) — the type picker is dropped in
@@ -207,21 +204,13 @@ function RegisterScreen({ onRegister, parentTask, onClose }: RegisterScreenProps
       if (childMode) onClose?.();
     } catch (rawErr) {
       // a gate rejection carries the fix; anything else the toast reported.
-      // The inspected reference (and the requested tier/assignee/risk flag) is burned into the
-      // gate state so a later edit of the form fields can't repoint the
-      // approved comment (or the retry) at a different issue than the one
-      // that was inspected, nor change what the retry requests.
+      // The inspected request itself is burned into the gate state so a
+      // later edit of the form fields can't repoint the approved comment (or
+      // the retry) at a different issue than the one that was inspected, nor
+      // change what the retry requests (tier, assignee, risk flag).
       const detail = apiErrorDetail(rawErr, 'POST /api/tasks 422');
-      if (detail) {
-        setGate({
-          ...detail,
-          workspace: f.workspace,
-          github_issue_number: f.github_issue_number,
-          tier: f.tier,
-          assignee: f.assignee,
-          risk_flag: f.risk_flag,
-        });
-      }
+      // gate が立つのは issue 由来の 422 だけ
+      if (detail && f.github_issue_number !== undefined) setGate({ ...detail, fields: f });
     }
     setBusy(false);
   };
@@ -231,8 +220,8 @@ function RegisterScreen({ onRegister, parentTask, onClose }: RegisterScreenProps
     setBusy(true);
     try {
       await api('/api/issue-comments', {
-        workspace: gate.workspace,
-        github_issue_number: gate.github_issue_number,
+        workspace: gate.fields.workspace,
+        github_issue_number: gate.fields.github_issue_number,
         body: gate.suggested_comment,
       });
     } catch {
@@ -241,16 +230,8 @@ function RegisterScreen({ onRegister, parentTask, onClose }: RegisterScreenProps
     }
     setBusy(false);
     // the comment is now part of the issue thread — re-register the same
-    // inspected reference so the gate re-reads it, comment included
-    // gate が立つのは issue 由来の 422 だけなので、検査した参照は必ず載っている
-    await submitFields({
-      type: 'work',
-      workspace: gate.workspace!,
-      github_issue_number: gate.github_issue_number!,
-      tier: gate.tier,
-      assignee: gate.assignee,
-      risk_flag: gate.risk_flag!,
-    });
+    // inspected request so the gate re-reads it, comment included
+    await submitFields(gate.fields);
   };
   const draftFields = async () => {
     setDraftBusy(true);
@@ -279,6 +260,9 @@ function RegisterScreen({ onRegister, parentTask, onClose }: RegisterScreenProps
     ...names.map((n) => ({ value: n, label: n })),
   ];
   const assigneeOptions = withPlaceholder('', '(default agent)', candidates.assignees);
+  // both sources show these two the same way — one element each so the labels can't drift
+  const assigneeSelect = <Select label="Assignee" options={assigneeOptions} value={assignee} onChange={(e) => setAssignee(e.target.value)} />;
+  const riskCheckbox = <Checkbox label="risk flag — this task has irreversible external effects" checked={risk} onChange={() => setRisk(!risk)} />;
   // manual content's workspace is optional (unset → the board's default at
   // execution time); an issue reference's workspace is required — it fixes
   // *which* issue the reference means (CONTEXT.md), so its placeholder reads
@@ -347,9 +331,9 @@ function RegisterScreen({ onRegister, parentTask, onClose }: RegisterScreenProps
         {issueMode && (
           <React.Fragment>
             <Select label="Workspace" options={issueWorkspaceOptions} value={workspace} onChange={(e) => setWorkspace(e.target.value)} />
-            <Select label="Assignee" options={assigneeOptions} value={assignee} onChange={(e) => setAssignee(e.target.value)} />
+            {assigneeSelect}
             <Select label="Tier" options={tierOptions(tiers, "(agent's tier, then board default)")} value={tier} onChange={(e) => setTier(e.target.value)} />
-            <Checkbox label="risk flag — this task has irreversible external effects" checked={risk} onChange={() => setRisk(!risk)} />
+            {riskCheckbox}
             <Input label="Issue number" value={issueNumber} onChange={(e) => setIssueNumber(e.target.value)} placeholder="content stays on GitHub; the board keeps only this reference" />
             <div style={{ display: 'flex', flexDirection: 'column', gap: 4, maxHeight: 220, overflowY: 'auto' }}>
               {!workspace.trim() && (
@@ -391,11 +375,11 @@ function RegisterScreen({ onRegister, parentTask, onClose }: RegisterScreenProps
               <Select label="Type" options={['work', 'review']} value={type} onChange={(e) => setType(e.target.value === 'review' ? 'review' : 'work')} />
             )}
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-              <Select label="Assignee" options={assigneeOptions} value={assignee} onChange={(e) => setAssignee(e.target.value)} />
+              {assigneeSelect}
               <Select label="Workspace" options={workspaceOptions} value={workspace} onChange={(e) => setWorkspace(e.target.value)} />
             </div>
             <Select label="Tier" options={tierOptions(tiers, "(agent's tier, then board default)")} value={tier} onChange={(e) => setTier(e.target.value)} />
-            <Checkbox label="risk flag — this task has irreversible external effects" checked={risk} onChange={() => setRisk(!risk)} />
+            {riskCheckbox}
             <Checkbox label="review flag — request an on-completion review" checked={review} onChange={() => setReview(!review)} />
           </React.Fragment>
         )}
