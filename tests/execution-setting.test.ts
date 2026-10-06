@@ -473,7 +473,7 @@ it("段の説明の提案の pin は id で引いた生きている段の説明 
   expect(routingPinChanges(proposal, settings(withNew("standard")))).toBeNull();
 });
 
-/** agent の既定 tier の提案(issue #920 / ADR 0150 決定1・5): pin は (agent, tier) と根拠の episode が走った行。 */
+/** agent の既定 tier の提案(issue #920 / ADR 0150 決定1・5): pin は (agent, tier)・下げ先がその1段下にいること(issue #1438)と根拠の episode が走った行。 */
 const fableRow = { provider: "anthropic", model: "claude-fable-5-1", tier: "frontier", effort: "high" } as const;
 const tierProposal: RegistryProposal = {
   kind: "registry",
@@ -512,8 +512,24 @@ it("registry の提案の pin: 根拠の行は (provider, model) の tier / effo
 it("registry の提案の pin の段は id で比べる —— 改名(agent.md も新しい名前)では崩れず、空いた名前の新しい段は別の段(issue #1436)", () => {
   expect(routingPinChanges(tierProposal, { table: renameRows("frontier", "top"), learnerPromoted: false, tiers: renamed("frontier", "top") })).toEqual([]);
   expect(registryPinChanges(tierProposal, { tier: "top" }, renamed("frontier", "top"))).toEqual([]);
-  expect(routingPinChanges(tierProposal, { table: SEED_EXECUTION_SETTINGS, learnerPromoted: false, tiers: reusing("frontier", "top") })).toEqual(["rows"]);
+  expect(routingPinChanges(tierProposal, { table: SEED_EXECUTION_SETTINGS, learnerPromoted: false, tiers: reusing("frontier", "top") })).toEqual(["rows", "tier_order"]);
   expect(registryPinChanges(tierProposal, { tier: "frontier" }, reusing("frontier", "top"))).toEqual(["agent_tier"]);
+});
+
+it("registry の提案は to が pin の段のいまの1段下にいる間だけ生きている —— 間への挿入・to を上へ並べ替え・どちらかの段の削除で tier_order が崩れる(issue #1438)", () => {
+  const withTiers = (tierList: readonly { id: number; name: string; description: string }[]) => ({ table: SEED_EXECUTION_SETTINGS, learnerPromoted: false, tiers: tierList });
+  const [economy, standard, frontier] = TIERS;
+  const mid = { id: 4, name: "mid", description: "x" };
+  expect(routingPinChanges(tierProposal, withTiers([economy!, standard!, mid, frontier!]))).toEqual(["tier_order"]);
+  expect(routingPinChanges(tierProposal, withTiers([economy!, frontier!, standard!]))).toEqual(["tier_order"]);
+  // 外側への挿入・隣接を保つ並べ替えでは崩れない
+  expect(routingPinChanges(tierProposal, withTiers([mid, economy!, standard!, frontier!]))).toEqual([]);
+  expect(routingPinChanges(tierProposal, withTiers([...TIERS, mid]))).toEqual([]);
+  expect(routingPinChanges(tierProposal, withTiers([standard!, frontier!, economy!]))).toEqual([]);
+  // pin の段・to の段の削除
+  expect(routingPinChanges(tierProposal, withTiers([economy!, standard!]))).toContain("tier_order");
+  expect(routingPinChanges(tierProposal, withTiers([economy!, frontier!]))).toContain("tier_order");
+  expect(routingPinChanges(tierProposal, withTiers([frontier!, economy!]))).toContain("tier_order");
 });
 
 it("tier の提案の修正値は to だけで、pin の tier より下の任意のティア —— 同位・上位・それ以外の欄は DomainError", () => {

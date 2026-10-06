@@ -622,19 +622,21 @@ export function parseRoutingRowChange(tiers: readonly Tier[], input: unknown): R
 /** pin の照合(ADR 0150 決定1): 提案が焼いた行と表の現在の行を全欄で比べ、崩れた欄の名前を返す(空 = pin は生きている)。
  *  行は鍵 (provider, model, effort) で引き、消えていれば(effort の書き換えも含む)null。昇格 / 降格の提案の pin はフラグの現在値。
  *  tier の提案は根拠の行を全欄で比べる(消えた行も `rows` —— agent の側の pin は表からは見えないので `registryPinChanges` が言う)。
+ *  `to` が pin の段のいまの1段下でなくなれば(挿入・並べ替え・削除)`tier_order`(ADR 0200 決定4 / issue #1438)。
  *  段を足す提案は移す行を行の提案と同じに比べ、隣の段が入れ替わっていれば `neighbours`(issue #1424)。
  *  段の説明の提案は id で引いた生きている段の説明を比べ、段が消えていれば null(ADR 0200 決定7)。
  *  段は id で比べる(issue #1436)—— 改名はどの pin も崩さない。消した段の id は生きている段に引けないので崩れる。 */
 export function routingPinChanges(
   proposal: RoutingProposal | RegistryProposal,
   settings: { table: ExecutionSettingTable; learnerPromoted: boolean; tiers: readonly { id: TierId; name: Tier; description: string }[] },
-): Array<"tier" | "price_in" | "price_out" | "learner_promoted" | "rows" | "description" | "neighbours"> | null {
+): Array<"tier" | "price_in" | "price_out" | "learner_promoted" | "rows" | "tier_order" | "description" | "neighbours"> | null {
   const liveName = (id: TierId) => settings.tiers.find((t) => t.id === id)?.name;
   if (proposal.kind === "registry") {
     const held = proposal.pin.rows.every((pinned) =>
       settings.table.some((row) => matchesRowKey(row, pinned) && row.tier === liveName(pinned.tier)),
     );
-    return held ? [] : ["rows"];
+    const adjacent = settings.tiers[settings.tiers.findIndex((t) => t.id === proposal.pin.tier) - 1]?.id === proposal.to;
+    return [...(held ? [] : (["rows"] as const)), ...(adjacent ? [] : (["tier_order"] as const))];
   }
   if (proposal.op === "tier_description") {
     const tier = settings.tiers.find((t) => t.id === proposal.tier);
