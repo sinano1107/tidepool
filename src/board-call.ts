@@ -69,7 +69,7 @@ export interface BoardCall {
   ): Promise<T | null>;
 }
 
-/** A ping at a *neutral* cwd: a fresh empty directory, so nothing a checkout
+/** A Board call at a *neutral* cwd: a fresh empty directory, so nothing a checkout
  *  carries takes part in what the CLI resolves. Cleaned up only AFTER the probe
  *  settles — the CLI is still running against this cwd until then, so removing
  *  it mid-probe would be a race. */
