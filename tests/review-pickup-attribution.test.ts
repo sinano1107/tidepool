@@ -3,13 +3,14 @@ import { PassThrough } from "node:stream";
 import { afterEach, expect, it, vi } from "vitest";
 import { ClaudeCodeWorker } from "../src/claude-worker.js";
 import { openDb } from "../src/db.js";
+import { DEFAULT_AUDITOR_NAME } from "../src/defaults.js";
 import { listEvents } from "../src/events.js";
 import type { ContainerSpawn } from "../src/process-container.js";
 import { HOURLY, startScheduler } from "../src/scheduler.js";
 import { startServer, type TidepoolServer } from "../src/server.js";
 import { implicitTaskExecutionCandidates } from "../src/server-options.js";
 import { Slot } from "../src/slot.js";
-import { DEFAULT_AUDITOR_NAME, registerTask } from "../src/tasks.js";
+import { registerTask } from "../src/tasks.js";
 import { TranscriptStore } from "../src/transcript-store.js";
 import type { WorkerAdapter } from "../src/worker.js";
 import {

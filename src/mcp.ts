@@ -4,6 +4,7 @@ import { z } from "zod";
 import type { AgentAdmin } from "./agent-create.js";
 import type { Clock } from "./clock.js";
 import type { Db } from "./db.js";
+import { DEFAULT_AUDITOR_NAME } from "./defaults.js";
 import { DomainError } from "./domain-error.js";
 import { PRIORITY_FIELD_DESCRIPTION, tierFieldDescriptions } from "./execution-setting.js";
 import type { GitHubClient } from "./github.js";
@@ -42,27 +43,7 @@ import { proposeFromObjection } from "./retrospective.js";
 import { listAllocations, listRoutingCells, listRoutingShadow, proposeRoutingChange, readRoutingSettings } from "./routing-review.js";
 import type { Slot } from "./slot.js";
 import { createStatelessMcpRouter, floorEveryResponse, rejectUnknownArguments } from "./stateless-mcp.js";
-import {
-  assigneeNeedsApproval,
-  completeTask,
-  contentSourceFor,
-  continueDecomposition,
-  DEFAULT_AUDITOR_NAME,
-  declarePremiseBreach,
-  decomposeTask,
-  describeHandoffFields,
-  escalateTask,
-  getTask,
-  HANDOFF_FIELDS,
-  type HistoryRow,
-  HUMAN_ROSTER_AGENT,
-  joinHistory,
-  logDecision,
-  redecompose,
-  resolveTaskAgent,
-  type Task,
-  taskHistoryRows,
-} from "./tasks.js";
+import { assigneeNeedsApproval, completeTask, contentSourceFor, continueDecomposition, declarePremiseBreach, decomposeTask, describeHandoffFields, escalateTask, getTask, HANDOFF_FIELDS, type HistoryRow, HUMAN_ROSTER_AGENT, joinHistory, logDecision, redecompose, resolveTaskAgent, type Task, taskHistoryRows } from "./tasks.js";
 import { markTeardown, runTeardown, type TeardownDeps, teardownStep } from "./teardown.js";
 import { HUMAN_WORKER_ID } from "./worker-id.js";
 import {

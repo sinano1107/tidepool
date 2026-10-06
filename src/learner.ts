@@ -3,7 +3,7 @@ import type { Cause } from "./cause.js";
 import type { Db } from "./db.js";
 import { type EventPayload, type EventRow, listEventsOfKinds, objectionBundles, sessionWindow } from "./events.js";
 import type { ExecutionSetting } from "./execution-setting.js";
-import type { Provider } from "./registry.js";
+import type { Provider } from "./provider.js";
 import { acceptedSql, type Task } from "./tasks.js";
 
 /** 学習器のセル(CONTEXT.md「学習器」/ ADR 0110 決定4): spawn 時の pin の綴りの

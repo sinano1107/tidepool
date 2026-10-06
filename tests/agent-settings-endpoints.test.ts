@@ -1,11 +1,7 @@
 import { afterEach, expect, it } from "vitest";
 import { UnknownAgentError } from "../src/agent.js";
-import {
-  InvalidAgentIconError,
-  UnknownAuthorityProfileError,
-  type UpdateAgentInput,
-} from "../src/agent-create.js";
-import { InvalidAgentDefinitionError } from "../src/registry.js";
+import { InvalidAgentIconError, type UpdateAgentInput } from "../src/agent-create.js";
+import { InvalidAgentDefinitionError, UnknownAuthorityProfileError } from "../src/registry.js";
 import { RegistryPushFailedError } from "../src/registry-write.js";
 import { api, bootTidepool, type Tidepool } from "./harness.js";
 

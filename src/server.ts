@@ -24,6 +24,7 @@ import {
   quarantineContainment,
 } from "./containment.js";
 import type { Db } from "./db.js";
+import { DEFAULT_AUDITOR_NAME } from "./defaults.js";
 import type { DraftClient } from "./draft.js";
 import type { RowRefusal } from "./events.js";
 import type { GitHubClient } from "./github.js";
@@ -39,23 +40,15 @@ import { createMcpRouter } from "./mcp.js";
 import { ensureMemoryIndex } from "./memory.js";
 import { type ContainerRuntime, ProcessContainers } from "./process-container.js";
 import type { ProfileAdmin } from "./profile-create.js";
+import { type Provider } from "./provider.js";
 import { createNotificationTick, type PushClient } from "./push.js";
 import { openQuarantineValues, type QuarantineResolvers, registerQuarantine } from "./quarantine.js";
 import type { Harness } from "./registry.js";
-import {
-  type AuthorityProfile,
-  type Provider,
-  REGISTRY_BRANCH,
-  type RegistryCandidates,
-  type RegistryReachabilityCheck,
-  type RegistrySource,
-  type RosterAgent,
-  remoteTrackingRef,
-} from "./registry.js";
+import { type AuthorityProfile, REGISTRY_BRANCH, type RegistryCandidates, type RegistryReachabilityCheck, type RegistrySource, type RosterAgent, remoteTrackingRef } from "./registry.js";
 import type { AttributionClient, BehaviorDraftClient, RetrospectiveCallDeps } from "./retrospective.js";
 import { type Scheduler, startScheduler, type TaskExecutionCandidates } from "./scheduler.js";
 import { Slot } from "./slot.js";
-import { DEFAULT_AUDITOR_NAME, getTask } from "./tasks.js";
+import { getTask } from "./tasks.js";
 import { acceptTeardownQuarantine, runTeardown, sessionInTeardown, type TeardownDeps, teardownStep } from "./teardown.js";
 import type { TranscriptStore } from "./transcript-store.js";
 import type { TranslationClient } from "./translate.js";

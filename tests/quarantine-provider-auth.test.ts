@@ -4,7 +4,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { quarantineCliAuthForProvider } from "../src/cli-auth.js";
 import type { CodexAppServerProbeResult } from "../src/codex-app-server.js";
 import { type ExecutionSetting, executionSettingsFor } from "../src/execution-setting.js";
-import type { Provider } from "../src/registry.js";
+import type { Provider } from "../src/provider.js";
 import { healthyOpenai, listedOpenaiModels } from "./fakes.js";
 import {
   api,

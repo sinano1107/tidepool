@@ -5,7 +5,7 @@ import { afterEach, expect, it } from "vitest";
 import { ClaudeCodeWorker } from "../src/claude-worker.js";
 import { CodexWorker } from "../src/codex-worker.js";
 import { executionSettingsFor } from "../src/execution-setting.js";
-import type { Provider } from "../src/registry.js";
+import type { Provider } from "../src/provider.js";
 import type { WorkerFactory } from "../src/server.js";
 import { moveTask } from "../src/tasks.js";
 import { FakeContainerRuntime, healthyOpenai, healthyUsageText, recordingSpawn } from "./fakes.js";

@@ -56,14 +56,6 @@ export interface CreateAgentInput {
   systemPrompt: string;
 }
 
-/** The input names an authority profile absent from the registry (issue #70,
- *  parent #54: the WebUI only offers picking an existing profile — a typo'd
- *  or stale name must not produce an agent no worker could ever spawn as).
- *  Defined in registry.js (issue #76): the same "no such profile" condition
- *  is also thrown by profile-create.ts's updateProfile, re-exported here so
- *  existing imports of this module keep working. */
-export { UnknownAuthorityProfileError };
-
 /** 組み込み agent に編集の扉は無い(ADR 0117 決定2): 定義は盤面の code にあり、
  *  registry のファイルではない。ここを通すと、編集フォームの保存が**静かに**
  *  同名の shadow エントリを書くことになる —— shadow は作成の扉が告げた上でだけ

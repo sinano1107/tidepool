@@ -1,26 +1,11 @@
 import type { Clock } from "./clock.js";
 import type { Db } from "./db.js";
+import { DEFAULT_AUDITOR_NAME } from "./defaults.js";
 import { DomainError } from "./domain-error.js";
 import { appendEvent, latestEventOfTask } from "./events.js";
 import type { GitHubClient } from "./github.js";
 import type { AuthorityProfile } from "./registry.js";
-import {
-  contentSourceFor,
-  countUnsettledAttachedChildren,
-  DEFAULT_AUDITOR_NAME,
-  getTask,
-  isLandingQuestion,
-  MERGE_QUESTION_OPTIONS,
-  PR_PROMOTION_FAILURE_OPTIONS,
-  recordPrOpened,
-  registerMergeQuestion,
-  registerTask,
-  resolveTaskAgent,
-  settleQuestionAsObserved,
-  subtreeSql,
-  type Task,
-  taskIdForPr,
-} from "./tasks.js";
+import { contentSourceFor, countUnsettledAttachedChildren, getTask, isLandingQuestion, MERGE_QUESTION_OPTIONS, PR_PROMOTION_FAILURE_OPTIONS, recordPrOpened, registerMergeQuestion, registerTask, resolveTaskAgent, settleQuestionAsObserved, subtreeSql, type Task, taskIdForPr } from "./tasks.js";
 import { activeTriageSession } from "./triage.js";
 import { BOARD_WORKER_ID } from "./worker-id.js";
 import {
