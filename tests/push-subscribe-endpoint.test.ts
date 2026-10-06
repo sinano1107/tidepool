@@ -4,8 +4,6 @@ import { api, bootTidepool, registerQuestion, type Tidepool } from "./harness.js
 let t: Tidepool;
 afterEach(() => t?.stop());
 
-const MIN = 60 * 1000;
-
 /** 購読の production の読み手は通知 poll(ADR 0154 決定1)。question を1件登録して poll を回し、
  *  push が届いた購読を返す。boot 時の FakeClock は JST 09:00 で quiet hours 外なので即時通知になる。 */
 async function pushedSubscriptions(t: Tidepool) {
@@ -15,7 +13,7 @@ async function pushedSubscriptions(t: Tidepool) {
     completion_criteria: "n/a",
     question: [{ title: "日中の質問", options: ["yes", "no"], recommendation: "yes" }],
   });
-  await t.clock.advance(MIN);
+  await t.clock.advance(60 * 1000);
   return t.push.sent.map((sent) => sent.subscription);
 }
 
