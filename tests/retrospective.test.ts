@@ -259,6 +259,33 @@ it("Board call の model の窓が閉じている間は client を呼ばず、�
   ]);
 });
 
+it("判定の段の最安の行の model 固有の窓だけが閉じていれば、Board call は同じ段の次に安い行で撃ち、失敗も残さない(#1445)", async () => {
+  const attributionClient = new FakeAttributionClient();
+  t = await bootTidepool({ attributionClient });
+  const { task, entries } = await objectedWork(t, "next row", ["picked the quick hack"]);
+  attributionClient.scriptJudgment(entries[0].id, { cause: "preference", evidence: "taste" });
+  await object(t, entries[0].id, "do it properly");
+  const row = { provider: "anthropic", tier: "frontier", model: "claude-opus-5-5", effort: "max", price_in: 5, price_out: 25 };
+  expect((await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "row", row })).status).toBe(200);
+  const resumesAt = new Date(t.clock.now().getTime() + HOUR);
+  reportProviderUsage(t.db, {
+    provider: "anthropic",
+    status: "observed",
+    plan: null,
+    cliVersion: null,
+    observedAt: t.clock.now(),
+    windows: [{ window: "opus", model: "opus", usedPercent: 100, durationMs: HOUR, resetsAt: resumesAt, throttled: true, resumesAt }],
+  });
+
+  await api(t.baseUrl, "POST", "/api/triage/close");
+
+  expect(attributionClient.calls).toEqual([
+    expect.objectContaining({ setting: expect.objectContaining({ model: "claude-fable-5-1", effort: "high" }) }),
+  ]);
+  expect((await attributions(t, task.id)).map((e: any) => e.payload.cause)).toEqual(["preference"]);
+  expect(await attributionsFailed(t, task.id)).toEqual([]);
+});
+
 it("requirement_change / environment だけの commit でも修理だけが立つ", async () => {
   const attributionClient = new FakeAttributionClient();
   t = await bootTidepool({ attributionClient });

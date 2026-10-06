@@ -281,6 +281,37 @@ describe("ClaudeDraftClient", () => {
     expect(calls).toEqual([]);
   });
 
+  it("最安の行の model 固有の窓だけが閉じていれば、同じ段の次に安い行の model / effort で走る(#1445)", async () => {
+    const calls: string[][] = [];
+    const board = openDb(":memory:");
+    applyExecutionSettingsChange(
+      board,
+      { setting: "row", row: { provider: "anthropic", tier: "economy", model: "claude-haiku-4-5", effort: "low", price_in: 1, price_out: 5 } },
+      "webui",
+      NOW,
+    );
+    const later = new Date(NOW.getTime() + 3_600_000);
+    reportProviderUsage(board, {
+      provider: "anthropic",
+      status: "observed",
+      plan: null,
+      cliVersion: null,
+      observedAt: NOW,
+      windows: [{ window: "haiku", model: "haiku", usedPercent: 100, durationMs: 3_600_000, resetsAt: later, throttled: true, resumesAt: later }],
+    });
+    const client = new ClaudeDraftClient({
+      db: board,
+      exec: async (_command, args) => {
+        calls.push(args);
+        return JSON.stringify({ result: JSON.stringify({ title: "t", purpose: "p", completion_criteria: "c" }) });
+      },
+    });
+
+    await client.draftTask("dump", "English");
+
+    expect(calls[0]!.join(" ")).toContain("--model claude-sonnet-5-5 --effort high");
+  });
+
   it("--max-turns 1 を指定する(MCPツールを持たない単発JSON生成のため)", async () => {
     const calls: string[][] = [];
     const client = new ClaudeDraftClient({

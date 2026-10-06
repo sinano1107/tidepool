@@ -8,11 +8,11 @@ import {
 import { rethrowCliAuthExecFailure } from "./cli-auth.js";
 import type { Db } from "./db.js";
 import type { ChildDraftContext, DraftClient, HandoffDraft, IssueInspection, TaskDraft } from "./draft.js";
-import { anthropicBoardCallRow, boardDefaultTier } from "./execution-setting.js";
+import { boardDefaultTier } from "./execution-setting.js";
 import type { Issue } from "./github.js";
 import type { RegistryCandidates } from "./registry.js";
 import { HANDOFF_FIELDS } from "./tasks.js";
-import { isAnthropicBoardCallBlocked } from "./throttle.js";
+import { boardCallRow } from "./throttle.js";
 
 // mirrors TaskDraft (src/draft.ts): the model's response is untrusted input,
 // so every field is validated before it's allowed to reach the API layer
@@ -211,18 +211,14 @@ export class ClaudeDraftClient implements DraftClient {
     return issueInspectionSchema.parse(await this.run(buildInspectionPrompt(issue)));
   }
 
-  // runs on the table's cheapest runnable anthropic row of the board default tier (ADR 0192 / ADR 0200 決定4): no row or
-  // a closed Anthropic window fails with the reason, never falls back to another model
+  // runs on the board default tier's cheapest runnable anthropic row whose window is open (ADR 0192 / ADR 0200 決定4 /
+  // #1445): no such row fails with the reason, never falls back outside the table
   private async run(prompt: string): Promise<unknown> {
     let row;
     try {
-      row = anthropicBoardCallRow(this.db, boardDefaultTier(this.db));
+      row = boardCallRow(this.db, boardDefaultTier(this.db));
     } catch (err) {
       throw new Error(`draft not made: ${(err as Error).message}`);
-    }
-    // 窓の閉鎖は throttle だけでなく Provider 認証の除外でも起きるので、原因は名乗らない
-    if (isAnthropicBoardCallBlocked(this.db, row.model)) {
-      throw new Error("draft not made: the Anthropic window is closed");
     }
     return runOneShotJsonPrompt(this.exec, prompt, row.model, row.effort, "draft");
   }
