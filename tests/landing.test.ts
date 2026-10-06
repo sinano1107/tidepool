@@ -537,7 +537,8 @@ it("open PR branch の push 失敗は既存の着地痕跡で隠さず failure q
   const remoteTaskRef = `refs/remotes/origin/task/${task.id}`;
 
   // 失敗した push の後に撮り直すと、またいだセッションの worker が偽造した ref まで
-  // 基準に飲まれる(ADR 0064 決定4)
+  // 基準に飲まれる(ADR 0064 決定4)。fake の push は転送の後に失敗するので、偽造が
+  // 無くても quarantine にはなる —— 偽造は筋書きと理由文のため
   await straddle(
     db,
     clock,

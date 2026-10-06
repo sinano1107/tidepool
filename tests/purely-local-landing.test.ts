@@ -345,8 +345,10 @@ it("記録に保護ブランチの行が無ければ、位置が動いていな�
   const question = await landingQuestionFor(t, task.id);
   // 盤面の記録から保護ブランチの行だけを抜く(残る空行は記録の読み手が読み飛ばす)
   t.db
-    .prepare("UPDATE workspace_state SET ref_snapshot = replace(ref_snapshot, ?, '') WHERE name = ?")
-    .run(`${git(workspace.path, "rev-parse", "refs/heads/main")} refs/heads/main`, "sandbox");
+    .prepare(
+      "UPDATE workspace_state SET ref_snapshot = replace(char(10) || ref_snapshot || char(10), ?, char(10)) WHERE name = ?",
+    )
+    .run(`\n${git(workspace.path, "rev-parse", "refs/heads/main")} refs/heads/main\n`, "sandbox");
 
   const answered = await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, {
     answers: ["merge"],
