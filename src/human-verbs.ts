@@ -14,13 +14,16 @@ import {
   assertTierRunnableFor,
   composeRoutingRow,
   type ExecutionSettingsChange,
+  liveTierRows,
   parseAddTierAmendment,
   parseAgentTierAmendment,
   parseRoutingRowChange,
   parseTierDescriptionAmendment,
+  proposalTierNames,
   type RoutingRowChange,
   registryPinChanges,
   type Tier,
+  tierNameOf,
   tierNames,
 } from "./execution-setting.js";
 import { type GitHubClient, IssueGoneError } from "./github.js";
@@ -802,13 +805,13 @@ async function landAgentTier(deps: SubmitAnswerDeps, questionId: string, proposa
   };
   // 根拠の行の pin は表の書き口の hook が決着させる(ADR 0150 決定1)ので、ここで照合するのは registry 側だけ
   const agent = list().find((a) => a.name === proposal.agent);
-  if (registryPinChanges(proposal, agent).length) throw stale(["agent_tier"]);
+  if (registryPinChanges(proposal, agent, liveTierRows(deps.db)).length) throw stale(["agent_tier"]);
   const assertLandable = (providers: string[]) => assertTierRunnableFor(deps.db, proposal.agent, providers, to);
   assertLandable(agentViewProviders(agent!));
   try {
     return await changeTier({
       name: proposal.agent,
-      expectTier: proposal.pin.tier,
+      expectTier: tierNameOf(deps.db, proposal.pin.tier),
       to,
       assertLandable,
       message: `lower agent ${proposal.agent}'s tier to ${to} (question ${questionId})`,
@@ -857,7 +860,8 @@ export async function submitAnswer(
   // Otherwise a malformed answer can retry promotion, inspect/merge a PR, or
   // verify quarantine before answerQuestion eventually rejects the payload.
   assertAnswerable(task, answers, comment);
-  const proposal = task.question_proposal;
+  // 提案は段を id で持つ。修正値・書き込みは名前で喋るので、いまの名前に引いた形で読む(issue #1436)
+  const proposal = task.question_proposal && proposalTierNames(deps.db, task.question_proposal);
   // 修正値は approve だけが種別ごとの schema で受ける(ADR 0150 決定2・ADR 0152 決定2)。昇格 / 降格・candidate を持たない memory の提案(invalidate・既存の後継の consolidate)・reject の修正値も黙って捨てず断る
   let amended: ProposalAmendment | undefined;
   if (amendment !== undefined) {
@@ -959,7 +963,7 @@ export async function submitAnswer(
 
   // tier の提案の approve は registry への commit が先(issue #920 / ADR 0150 決定5)—— merge と同じく、着地しなければ question は open のまま
   const tierTarget = proposal?.kind === "registry" && answers[0] === "approve" ? ((amended as { to: Tier } | undefined)?.to ?? proposal.to) : undefined;
-  const registryCommit = tierTarget && proposal?.kind === "registry" ? await landAgentTier(deps, task.id, proposal, tierTarget, now) : undefined;
+  const registryCommit = tierTarget && proposal?.kind === "registry" ? await landAgentTier(deps, task.id, task.question_proposal as RegistryProposal, tierTarget, now) : undefined;
 
   // An answer during triage is durable immediately, but its parent unblock is
   // staged until commit. The activity touch also defers the timeout close.

@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { Db } from "./db.js";
 import { DEFAULT_AUDITOR_NAME } from "./defaults.js";
 import { appendEvent, type EventOrigin, type EventPayload, getEvent, latestEventOfTask, type TaskScopedPayload, taskDecisionLog } from "./events.js";
-import { type AddTierAmendment, assertKnownTier, type ExecutionSettingRow, liveTierId, PRIORITIES, type Priority, type RoutingRowChange, type Tier } from "./execution-setting.js";
+import { type AddTierAmendment, assertKnownTier, type ExecutionSettingRow, liveTierId, PRIORITIES, type Priority, proposalTierNames, type RoutingRowChange, type Tier, type TierId } from "./execution-setting.js";
 import type { GitHubClient, Issue, IssueRef } from "./github.js";
 import type { MemoryAmendment } from "./memory.js";
 import type { MergeDial, RosterAgent } from "./registry.js";
@@ -163,7 +163,7 @@ export interface TaskContent {
 }
 
 /** 提案 question の種別つき提案(ADR 0120 決定4 / ADR 0150 決定1)。 */
-export type QuestionProposal = MemoryProposal | RoutingProposal | RegistryProposal;
+export type QuestionProposal<T extends TierRef = TierId> = MemoryProposal | RoutingProposal<T> | RegistryProposal<T>;
 
 /** memory の提案。pin = replaces / target / 既存の後継の版と candidate の状態。 */
 export type MemoryProposal = {
@@ -177,54 +177,59 @@ export type MemoryProposal = {
   | { op: "invalidate"; target: { id: number; version: number }; reason: "capability" | "environment" | "requirement_change" }
 );
 
+/** 提案が段を指す値(ADR 0200 決定2 / issue #1436): 盤面に焼くのは段の id(既定の `TierId`)で、改名は提案を崩さない。
+ *  外へ見せる口と承認の書き込みは、いまの名前へ引いた形(`Tier`)を読む(`proposalTierNames`)。 */
+export type TierRef = TierId | Tier;
+type RowAt<T extends TierRef> = Omit<ExecutionSettingRow, "tier"> & { tier: T };
+
 /** 表の1行の tier / effort を置き換える提案(issue #918)。pin = 提案時点のその行の全欄。 */
-export interface RoutingRowProposal {
+export interface RoutingRowProposal<T extends TierRef = TierId> {
   kind: "routing";
   op: "row";
   /** 行の鍵(ADR 0200 決定5)。承認はこの行を編集する。 */
   row: Pick<ExecutionSettingRow, "provider" | "model" | "effort">;
-  change: RoutingRowChange;
-  pin: ExecutionSettingRow;
+  change: Omit<RoutingRowChange, "tier"> & { tier?: T };
+  pin: RowAt<T>;
 }
 
 /** 段を足して行を移す提案(issue #1424 / ADR 0200 決定8)。pin = 移す行の全欄と、提案時点の一覧で `position` の隣にいる段
  *  (添字 `position - 1` と `position`、端なら null)。 */
-export interface RoutingAddTierProposal {
+export interface RoutingAddTierProposal<T extends TierRef = TierId> {
   kind: "routing";
   op: "add_tier";
   tier: { name: Tier; description: string; position: number };
   row: Pick<ExecutionSettingRow, "provider" | "model" | "effort">;
   evidence: number[];
-  pin: { row: ExecutionSettingRow; below: TierNeighbour | null; above: TierNeighbour | null };
+  pin: { row: RowAt<T>; below: TierNeighbour<T> | null; above: TierNeighbour<T> | null };
 }
-/** 段の名前と説明(段を足す提案の隣の段の pin)。 */
-export type TierNeighbour = { name: Tier; description: string };
+/** 段の同一性と説明(段を足す提案の隣の段の pin)。焼くのは id、外へ見せるのは名前。 */
+export type TierNeighbour<T extends TierRef = TierId> = (T extends TierId ? { id: TierId } : { name: Tier }) & { description: string };
 
 /** 段の説明の書き換えの提案(ADR 0200 決定7)。根拠は床を task の申告が決めた worker_spawned の event id、pin = 説明のいまの文面。 */
-export interface TierDescriptionProposal {
+export interface TierDescriptionProposal<T extends TierRef = TierId> {
   kind: "routing";
   op: "tier_description";
-  tier: Tier;
+  tier: T;
   description: string;
   evidence: number[];
   pin: { description: string };
 }
 
 /** routing の提案(ADR 0150 決定1): 表の1行、段の追加、段の説明、または学習器の昇格 / 降格。昇格 / 降格の pin はフラグの現在値。 */
-export type RoutingProposal =
-  | RoutingRowProposal
-  | RoutingAddTierProposal
-  | TierDescriptionProposal
+export type RoutingProposal<T extends TierRef = TierId> =
+  | RoutingRowProposal<T>
+  | RoutingAddTierProposal<T>
+  | TierDescriptionProposal<T>
   | { kind: "routing"; op: "promote" | "demote"; pin: { promoted: boolean } };
 
 /** agent の既定 tier を1段下げる提案(issue #920 / ADR 0150 決定1・5)。承認は registry へ commit する。pin = agent の tier の
  *  現在値と、根拠(`worker_spawned` の event id)の episode が走った表の行。 */
-export interface RegistryProposal {
+export interface RegistryProposal<T extends TierRef = TierId> {
   kind: "registry";
   op: "agent_tier";
   agent: string;
-  to: Tier;
-  pin: { tier: Tier; rows: Array<Pick<ExecutionSettingRow, "provider" | "model" | "tier" | "effort">> };
+  to: T;
+  pin: { tier: T; rows: Array<Pick<RowAt<T>, "provider" | "model" | "tier" | "effort">> };
   evidence: number[];
 }
 
@@ -1283,9 +1288,8 @@ export function isFixedChoiceQuestion(
     | "question_pending_local_merge_task_id"
     | "question_pending_pr_promotion_task_id"
     | "question_pending_child"
-    | "question_proposal"
     | "question_cancel_option"
-  >,
+  > & { question_proposal: QuestionProposal<TierRef> | null },
 ): boolean {
   return (
     question.question_pending_merge_pr !== null ||
@@ -1298,7 +1302,7 @@ export function isFixedChoiceQuestion(
 }
 
 /** この question で理由の comment が要る選択肢(ADR 0179 決定1〜4)。門(assertAnswerable)と読み口(questionAnnotations)が使う。 */
-export function needsComment(question: Pick<Task, "question_proposal" | "question_pending_child">): string[] {
+export function needsComment(question: Pick<Task, "question_pending_child"> & { question_proposal: QuestionProposal<TierRef> | null }): string[] {
   if (question.question_proposal?.kind === "memory") return ["reject", "defer"];
   return question.question_proposal || question.question_pending_child ? ["reject"] : [];
 }
@@ -2504,7 +2508,9 @@ export function hasUnfinishedChildren(db: Db, taskId: string): boolean {
  *  children, `held` from an ancestor's unanswered question. Presentation
  *  only — the stored status stays one of the four persisted values. `blocked`
  *  takes precedence when both apply: it names the more local reason. */
-export type BoardTask = Omit<Task, "status"> & {
+export type BoardTask = Omit<Task, "status" | "question_proposal"> & {
+  /** 提案の段はいまの名前(issue #1436)。 */
+  question_proposal: QuestionProposal<Tier> | null;
   /** Every integration review generated at completion is done (ADR 0111). */
   accepted: boolean;
   status: TaskStatus | "blocked" | "held" | "skipped";
@@ -2573,7 +2579,7 @@ export function presentTask(
     [{ defaultAgentName: defaultAgentName ?? null, auditorName, id: task.id }],
     "tasks.id = @id",
   );
-  return toBoardTask(row!);
+  return toBoardTask(db, row!);
 }
 
 /** Registration records the generated review set so independent audits and RCA
@@ -2645,7 +2651,9 @@ function boardRows(
     .all(...params) as BoardRow[];
 }
 
-function toBoardTask({ tier_id: _tierId, review_tier_id: _reviewTierId, ...row }: BoardRow) {
+/** 提案の段は id で持つので、外へ見せる前にいまの名前へ引く(issue #1436)。 */
+function toBoardTask(db: Db, { tier_id: _tierId, review_tier_id: _reviewTierId, ...row }: BoardRow) {
+  const proposal = parseJson<QuestionProposal>(row.question_proposal);
   return {
     ...fillContentPlaceholder(row),
     accepted: row.accepted === 1,
@@ -2653,7 +2661,7 @@ function toBoardTask({ tier_id: _tierId, review_tier_id: _reviewTierId, ...row }
     question_items: parseJson<QuestionItem[]>(row.question_items),
     question_answer: parseJson<string[]>(row.question_answer),
     question_pending_child: parseJson<PendingChildSpec>(row.question_pending_child),
-    question_proposal: parseJson<QuestionProposal>(row.question_proposal),
+    question_proposal: proposal && proposalTierNames(db, proposal),
   };
 }
 
@@ -2664,7 +2672,7 @@ export function listBoard(
   defaultAgentName?: string,
   auditorName: string = DEFAULT_AUDITOR_NAME,
 ): BoardTask[] {
-  return boardRows(db, "", [{ defaultAgentName: defaultAgentName ?? null, auditorName }]).map(toBoardTask);
+  return boardRows(db, "", [{ defaultAgentName: defaultAgentName ?? null, auditorName }]).map((row) => toBoardTask(db, row));
 }
 
 /** The queue view (issue #10): the board plus `skipped`, a todo-pickable task
@@ -2716,7 +2724,7 @@ export function listQueue(
   );
   return rows
     .filter((row) => row.assignee !== HUMAN_WORKER_ID)
-    .map(toBoardTask)
+    .map((row) => toBoardTask(db, row))
     .map((task) =>
       task.status === "todo" && isSkipped?.(task) ? { ...task, status: "skipped" as const } : task,
     );
@@ -2744,7 +2752,7 @@ export function listYourTasks(db: Db): YourTask[] {
     `tasks.assignee = '${HUMAN_WORKER_ID}' AND tasks.status NOT IN ('done', 'cancelled')`,
     `, ${blockingSql("tasks")} AS blocking`,
   ) as Array<BoardRow & { blocking: string | null }>;
-  return rows.map((row) => ({ ...toBoardTask(row), blocking: row.blocking }));
+  return rows.map((row) => ({ ...toBoardTask(db, row), blocking: row.blocking }));
 }
 
 export function getTask(db: Db, id: string): Task | undefined {

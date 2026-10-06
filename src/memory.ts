@@ -10,7 +10,7 @@ import { inWindow, type MetaReviewWindow, materialEvents, materialSection, metaR
 import { entriesReadBefore, entriesSeenBefore, listEpisodes, sessionSpawnOf, sessionWindow } from "./precedent.js";
 import { type Packed, packItems, readPosition } from "./response-budget.js";
 import { routingMaterial } from "./routing-review.js";
-import { approvalAnnotation, BOARD_WORKER_ID, DomainError, getTask, HUMAN_WORKER_ID, isFixedChoiceQuestion, type MemoryProposal, needsComment, type QuestionProposal, questionBlocking, registerTask, settleQuestionAsObserved, type Task } from "./tasks.js";
+import { approvalAnnotation, BOARD_WORKER_ID, DomainError, getTask, HUMAN_WORKER_ID, isFixedChoiceQuestion, type MemoryProposal, needsComment, type QuestionProposal, questionBlocking, registerTask, settleQuestionAsObserved, type Task, type TierRef } from "./tasks.js";
 import { entryObjections, objectedEntryText, objectionsById } from "./triage.js";
 
 /** 無効化の理由コード(spec #586 A)。自由記述は持たない。置換と path の付け替えは後継 id
@@ -927,7 +927,7 @@ function pinnedIds(proposal: MemoryProposal, successors: boolean): number[] {
 
 /** 提案 question の移動の注釈(ADR 0162 決定6): 移された pin ごとに旧 id と末尾の id・path・scope。pin と detail は見せた時点の
  *  まま焼いてあるので、今の置き場は読むときにここで引く(承認 question の `approval` 注釈と同じ位置、issue #757)。 */
-export function movedPins(db: Db, proposal: QuestionProposal | null): Array<{ id: number; tail_id: number; path: string; scope: string | null }> {
+export function movedPins(db: Db, proposal: QuestionProposal<TierRef> | null): Array<{ id: number; tail_id: number; path: string; scope: string | null }> {
   if (proposal?.kind !== "memory") return [];
   return pinnedIds(proposal, true).flatMap((id) => {
     const tail = movedTail(db, id);
@@ -939,7 +939,7 @@ export function movedPins(db: Db, proposal: QuestionProposal | null): Array<{ id
  *  `GET /api/tasks/:id` と管理MCP の `list_board`・`get_task` がここを広げる。 */
 export function questionAnnotations(
   db: Db,
-  task: Omit<Task, "status">,
+  task: Omit<Task, "status" | "question_proposal"> & { question_proposal: QuestionProposal<TierRef> | null },
 ) {
   return {
     landing: landingAnnotation(db, task),

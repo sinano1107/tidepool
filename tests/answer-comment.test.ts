@@ -132,7 +132,7 @@ const QUESTIONS = {
   routing: { options: ["approve", "reject"], proposal: { kind: "routing", op: "promote", pin: { promoted: false } } },
   registry: {
     options: ["approve", "reject"],
-    proposal: { kind: "registry", op: "agent_tier", agent: "reef-crab", to: "economy", pin: { tier: "standard", rows: [] }, evidence: [1] },
+    proposal: { kind: "registry", op: "agent_tier", agent: "reef-crab", to: 1, pin: { tier: 2, rows: [] }, evidence: [1] }, // 段は id(種の economy / standard)
   },
   approval: { options: ["approve", "reject"], pending_child: { title: "B", purpose: "p", completion_criteria: "c" } },
   escalation: { options: ["a", "b"] },

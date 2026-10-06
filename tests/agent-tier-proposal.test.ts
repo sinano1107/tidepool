@@ -35,7 +35,11 @@ function fakeRegistry() {
     ["fugu", agent("fugu", "anthropic", "frontier", { builtin: true })],
   ]);
   const changeTier = vi.fn(async (_input: ChangeAgentTierInput) => "c0ffee");
-  return { agents, changeTier, agentAdmin: { list: () => [...agents.values()], changeTier } };
+  // 段の改名は agent.md の tier も新しい名前へ書き換える(ADR 0200 決定2)
+  const renameTier = async ({ from, to }: { from: string; to: string }) => {
+    for (const [name, view] of agents) if (view.tier === from) agents.set(name, { ...view, tier: to });
+  };
+  return { agents, changeTier, agentAdmin: { list: () => [...agents.values()], changeTier, renameTier } };
 }
 
 /** routing の材料で poll させ、slot に入った routing meta-review の接続を返す。 */
@@ -149,6 +153,22 @@ it("approve で registry への書き込みが question id つきで撃たれ、
         applied: { registry_commit: "c0ffee", from: "frontier", to: "standard" },
       },
     ]);
+  } finally {
+    await client.close();
+  }
+});
+
+it("pin の段・下げ先の段を改名しても question は open のまま、いまの名前で見え、修正値なしの approve がいまの名前で registry に書く(issue #1436)", async () => {
+  const { client, call, changeTier } = await boardWithRoutingReview();
+  try {
+    const questionId = await proposeDeckhand(call);
+    for (const [name, to] of [["frontier", "top"], ["standard", "mid"]]) {
+      expect((await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "rename_tier", name, to })).status).toBe(200);
+    }
+
+    expect(await task(questionId)).toMatchObject({ status: "todo", question_proposal: { to: "mid", pin: { tier: "top", rows: [{ ...ASTRA_PIN, tier: "top" }] } } });
+    expect((await answer(questionId, { answers: ["approve"] })).status).toBe(200);
+    expect(changeTier.mock.calls[0]![0]).toMatchObject({ name: "deckhand", expectTier: "top", to: "mid" });
   } finally {
     await client.close();
   }

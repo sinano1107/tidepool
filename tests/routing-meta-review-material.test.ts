@@ -1,7 +1,7 @@
 import { expect, it } from "vitest";
 import { type Db, openDb } from "../src/db.js";
 import { appendEvent, type EventPayload, getEvent, listEventsOfKinds } from "../src/events.js";
-import { applyExecutionSettingsChange, type ExecutionSetting, readExecutionSettings } from "../src/execution-setting.js";
+import { applyExecutionSettingsChange, type ExecutionSetting, readExecutionSettings, tierIdOf } from "../src/execution-setting.js";
 import { recordShadow } from "../src/learner.js";
 import { buildMetaReviewMaterial, recordMetaReviewMaterial } from "../src/memory.js";
 import { registerMetaReview } from "../src/meta-review.js";
@@ -211,7 +211,7 @@ it("決着した提案は回答か陳腐化が窓の中にあるものだけを 
       completion_criteria: "a human answer is recorded",
       parent_id: parent,
       question: [{ title: "t", detail: "d", options: ["approve", "reject"], recommendation: "approve" }],
-      proposal: { kind: "registry", op: "agent_tier", agent: "reef-crab", to: "economy", pin: { tier: "standard", rows: [] }, evidence: [1] },
+      proposal: { kind: "registry", op: "agent_tier", agent: "reef-crab", to: tierIdOf(db, "economy"), pin: { tier: tierIdOf(db, "standard"), rows: [] }, evidence: [1] },
     },
     at,
     "auditor",
