@@ -3,12 +3,8 @@ import type { Cause } from "./cause.js";
 import type { Db } from "./db.js";
 import type { ExecutionSettingRow, ExecutionSettingsChange, ProviderSource, registryPinChanges, routingPinChanges, Tier, TierSource } from "./execution-setting.js";
 import type { InvalidationReason, MemoryDropReason, MemoryEntryFields } from "./memory.js";
-// biome-ignore lint/suspicious/noImportCycles: ADR 0204 の台帳 —— 既存の循環、解いたら消す
-import { sessionSpawnOf } from "./precedent.js";
 import type { Provider } from "./registry.js";
 import type { MemoryProposal, ProposalAmendment, TaskType } from "./tasks.js";
-// biome-ignore lint/suspicious/noImportCycles: ADR 0204 の台帳 —— 既存の循環、解いたら消す
-import { entryObjections } from "./triage.js";
 
 /** 行の拒否の証拠の種類: Provider が id を 404 で断った(ADR 0184 決定3)/ CLI の版が model の最低版に
  *  届かない(result 行の `api_error_code: claude_code_version_too_old`、ADR 0187 決定1)。 */
@@ -673,67 +669,6 @@ export function currentAttributions(db: Db, entryIds?: number[]): Map<number, At
   }));
 }
 
-/** A log entry annotated with its resolved workspace name (issue #44): the
- *  event's own task's `workspace`, or the board's default when the task
- *  carries none — resolved fresh at read time, never stamped onto the event
- *  itself (same "resolved fresh every use, not pinned" reference semantics
- *  as `resolveExecutionWorkspace`, ADR 0009). Also carries every objection
- *  ever raised against the entry (ADR 0085) — the annotation is a fact of
- *  the entry, not a session's state, so bundled and still commit-pending
- *  objections both ride along. `session_id` is the sole fact the read model
- *  hands the caller for telling the two apart (against the current open
- *  session, if any); `at` and who raised it are deliberately left out
- *  (issue #371). The entry's current attribution `cause` (and its `entries`, ADR 0166) — the last
- *  objection bundle's judgment (ADR 0170) — is joined at read time from append-only
- *  `objection_attributed` events (ADR 0115). */
-export interface LogEntry extends DecisionLogEntry {
-  workspace: string | null;
-  objections: { comment: string; session_id: number }[];
-  cause: Cause | null;
-  /** 今の判定(`currentAttributions`)が `memory` のとき名指された entry の id 列(ADR 0166 決定6)。他の cause・未帰責のエントリは null。 */
-  entries: number[] | null;
-  /** エントリを含む worker session の `worker_spawned` の id(case 描画と同じ窓、`sessionSpawnOf`)。窓の外なら null。 */
-  session_event_id: number | null;
-}
-
-export function listLog(db: Db, defaultWorkspaceName?: string): LogEntry[] {
-  const placeholders = HUMAN_FACING_KINDS.map(() => "?").join(", ");
-  // an inner join is safe here only because every HUMAN_FACING_KIND is
-  // task-scoped (asserted against BOARD_SCOPED_KINDS next to HUMAN_FACING_KINDS) and tasks are never deleted
-  // (append-only) — no log entry can end up orphaned, so this can never
-  // silently drop one
-  const rows = db
-    .prepare(
-      `SELECT events.*, COALESCE(tasks.workspace, ?) AS workspace
-         FROM events JOIN tasks ON tasks.id = events.task_id
-        WHERE events.kind IN (${placeholders}) ORDER BY events.id`,
-    )
-    .all(defaultWorkspaceName ?? null, ...HUMAN_FACING_KINDS)
-    .map((r) => parseEventRow<{ workspace: string | null }>(r));
-  // a second, flat query rather than N+1 per entry — grouped in JS below
-  const objectionsByEntry = new Map<number, { comment: string; session_id: number }[]>();
-  for (const o of entryObjections(db)) {
-    const list = objectionsByEntry.get(o.entry_id) ?? [];
-    list.push({ comment: o.comment, session_id: o.session_id });
-    objectionsByEntry.set(o.entry_id, list);
-  }
-  const attributions = currentAttributions(db);
-  // session の窓を切るのに要るのは spawn と exit だけ。窓の規則は task で絞るので盤面全体を1回で引いて渡す
-  // ponytail: エントリ数 × session 数の走査。盤面が育って一覧が重くなったら task ごとに束ねる
-  const sessionEvents = listEventsOfKinds(db, ["worker_spawned", "worker_exited"]);
-  return rows.flatMap((entry) => {
-    if (!isDecisionLogEntry(entry)) return []; // SQL で kind を絞り済み —— 型の絞り込みのためだけ
-    const attribution = attributions.get(entry.id);
-    return {
-      ...entry,
-      objections: objectionsByEntry.get(entry.id) ?? [],
-      cause: attribution?.cause ?? null,
-      entries: attribution?.entries ?? null,
-      session_event_id: sessionSpawnOf(sessionEvents, entry)?.id ?? null,
-    };
-  });
-}
-
 export function getLogCursor(db: Db): number {
   const { last_read } = db.prepare("SELECT last_read FROM log_cursor WHERE id = 1").get() as {
     last_read: number;
@@ -765,7 +700,7 @@ export function taskDecisionLog(db: Db, taskId: string): DecisionLogEntry[] {
 }
 
 /** events 表の生の行(payload が文字列)を EventRow に戻す。SELECT で足した列(listLog の workspace)は `Extra` としてそのまま通す。 */
-function parseEventRow<Extra = unknown>(row: unknown): EventRow & Extra {
+export function parseEventRow<Extra = unknown>(row: unknown): EventRow & Extra {
   const raw = row as Omit<EventRow, "payload"> & { payload: string };
   return { ...raw, payload: JSON.parse(raw.payload) as EventPayload } as EventRow & Extra;
 }
@@ -801,4 +736,47 @@ export function listEvents(db: Db, taskId: string): EventRow[] {
     .prepare("SELECT * FROM events WHERE task_id = ? ORDER BY id")
     .all(taskId)
     .map((r) => parseEventRow(r));
+}
+
+/** 1つの worker session に属するイベントの窓。Precedent の投影と学習器の episode
+ *  (learner.ts)が同じ規則で session を切る。
+ *
+ *  この spawn を閉じた worker_exited は issue #379 が置いたポインタで引く。
+ *  1タスクに複数の worker session がありうる(retry / 統合復帰 / quarantine
+ *  復帰)ので、spawn ~ exit の窓に入るイベントだけを見る — 窓で切らないと
+ *  同じタスクの前の session の判断がこの Episode に湧く。
+ *
+ *  exit イベントが無い session(盤面が落ちたまま終わった記録)でも窓は閉じる:
+ *  次の `worker_spawned` が来た時点でこの session は終わっている。開けっぱなしに
+ *  すると次の session の判断と完了がこの Episode に焼かれる — exit 時の投影には
+ *  常に exited があるので、これが起きるのは backfill 経路だけ。 */
+export function sessionWindow(
+  events: readonly EventRow[],
+  spawned: EventRow,
+): {
+  exited: EventRow | undefined;
+  hasNextSpawn: boolean;
+  inSession: (e: Pick<EventRow, "id" | "task_id">) => boolean;
+} {
+  const exited = events.find(
+    (e) => e.payload.kind === "worker_exited" && e.payload.worker_spawned_event_id === spawned.id,
+  );
+  const nextSpawnedId = events
+    .filter((e) => e.kind === "worker_spawned" && e.task_id === spawned.task_id && e.id > spawned.id)
+    .reduce((first, e) => Math.min(first, e.id), Number.POSITIVE_INFINITY);
+  const endExclusive = exited ? exited.id + 1 : nextSpawnedId;
+  return {
+    exited,
+    hasNextSpawn: nextSpawnedId !== Number.POSITIVE_INFINITY,
+    inSession: (e) => e.task_id === spawned.task_id && e.id > spawned.id && e.id < endExclusive,
+  };
+}
+
+/** `anchor` を含む session を開いた `worker_spawned`: anchor 自身が spawn ならそれ、そうでなければ anchor より前で最後に
+ *  開いた同じ task の session で、その窓に anchor が入るもの —— 窓の外(session 無しに書かれた entry)なら undefined。
+ *  `events` は同じ task の、payload を解いた event(spawn と exit があれば足りる)。case 描画と決定ログの一覧が共有する。 */
+export function sessionSpawnOf(events: readonly EventRow[], anchor: EventRow): EventRow | undefined {
+  if (anchor.kind === "worker_spawned") return anchor;
+  const spawned = events.filter((e) => e.kind === "worker_spawned" && e.task_id === anchor.task_id && e.id < anchor.id).at(-1);
+  return spawned && sessionWindow(events, spawned).inSession(anchor) ? spawned : undefined;
 }

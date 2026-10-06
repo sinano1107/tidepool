@@ -1,9 +1,8 @@
 import type { Allocation } from "./allocation-review.js";
 import type { Cause } from "./cause.js";
 import type { Db } from "./db.js";
-import { type EventPayload, type EventRow, listEventsOfKinds, objectionBundles } from "./events.js";
+import { type EventPayload, type EventRow, listEventsOfKinds, objectionBundles, sessionWindow } from "./events.js";
 import type { ExecutionSetting } from "./execution-setting.js";
-import { sessionWindow } from "./precedent.js";
 import type { Provider } from "./registry.js";
 import { acceptedSql, type Task } from "./tasks.js";
 
