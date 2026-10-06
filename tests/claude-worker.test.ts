@@ -1,14 +1,17 @@
 import { execFileSync } from "node:child_process";
-import { readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { agentNeedsHuman } from "../src/agent.js";
+import type { BoardCall, BoardCallSpec } from "../src/board-call.js";
 import { boardHalts } from "../src/board-halt.js";
 import {
   agentGitIdentityEnv,
   ClaudeCodeWorker,
   type EnumerateSkillsFn,
+  enumerateHostSkills,
+  enumerateToolsThrough,
   PROMPT_READY_MARKER,
   pinnedModelFlags,
 } from "../src/claude-worker.js";
@@ -4110,5 +4113,42 @@ describe("root の出力の読み切り(issue #1336 / ADR 0201)", () => {
       output_closed: false,
     });
     expect(exits).toEqual([{ exit_code: 0, signal: null, stderr_tail: "stuck", reported_error: null, last_message: null }]);
+  });
+});
+
+describe("Claude 側の probe は中立の cwd で走る(skill 列挙: issue #106、tool-surface probe: ADR 0039)", () => {
+  /** spec の cwd と、呼ばれた瞬間のその中身を写し取る偽の口。`fails` なら口が throw する。 */
+  function cwdRecordingCall(fails = false) {
+    const seen = { calls: 0, cwd: "", entries: [] as string[] };
+    const call = (async (spec: BoardCallSpec) => {
+      Object.assign(seen, { calls: seen.calls + 1, cwd: spec.cwd, entries: readdirSync(spec.cwd) });
+      if (fails) throw new Error("口が落ちた");
+      return null;
+    }) as BoardCall;
+    return { call, seen };
+  }
+
+  const probes = [
+    ["ホストの skill 列挙", (call: BoardCall) => enumerateHostSkills(call)],
+    ["tool-surface probe", (call: BoardCall) => enumerateToolsThrough(call)()],
+  ] as const;
+
+  it.each(probes)("%s の Board call は盤面の cwd ではなく、呼び出しの最中だけ存在する空のディレクトリで走る", async (_, probe) => {
+    const { call, seen } = cwdRecordingCall();
+
+    await probe(call);
+
+    expect(seen.calls).toBe(1);
+    expect(seen.cwd).not.toBe(process.cwd());
+    expect(seen.entries).toEqual([]);
+    expect(existsSync(seen.cwd)).toBe(false);
+  });
+
+  it.each(probes)("%s の空の cwd は、口が throw したあとにも残らない", async (_, probe) => {
+    const { call, seen } = cwdRecordingCall(true);
+
+    await expect(probe(call)).rejects.toThrow("口が落ちた");
+
+    expect(existsSync(seen.cwd)).toBe(false);
   });
 });
