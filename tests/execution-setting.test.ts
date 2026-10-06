@@ -406,6 +406,7 @@ const withNew = (name: string) => TIERS.map((tier) => (tier.name === name ? { ..
 /** 段 `from` を `to` に改名し、空いた `from` の名前で新しい段を足した一覧。 */
 const reusing = (from: string, to: string) => [...withNew(from), { ...TIERS.find((tier) => tier.name === from)!, name: to }];
 const renameRows = (from: string, to: string) => SEED_EXECUTION_SETTINGS.map((row) => (row.tier === from ? { ...row, tier: to } : row));
+const withTiers = (tierList: readonly { id: number; name: string; description: string }[]) => ({ table: SEED_EXECUTION_SETTINGS, learnerPromoted: false, tiers: tierList });
 
 /** routing の行の提案(issue #918 / ADR 0150 決定1): pin はその行の全欄。段は id で焼く。 */
 const opusRow = { provider: "anthropic", tier: "standard", model: "claude-opus-5-5", effort: "high", price_in: 5, price_out: 25 } as const;
@@ -434,7 +435,6 @@ it("行の pin の段は id で比べる —— 改名では崩れず、改名�
 });
 
 it("行の提案は変更の段が一覧から消えると target_tier が崩れる —— 同じ名前の新しい段でも戻らず、改名・無関係な段の挿入 / 削除では崩れない(issue #1458)", () => {
-  const withTiers = (tierList: readonly { id: number; name: string; description: string }[]) => ({ table: SEED_EXECUTION_SETTINGS, learnerPromoted: false, tiers: tierList });
   expect(routingPinChanges(rowProposal, withTiers(TIERS.filter((tier) => tier.name !== "frontier")))).toEqual(["target_tier"]);
   expect(routingPinChanges(rowProposal, withTiers(withNew("frontier")))).toEqual(["target_tier"]);
   expect(routingPinChanges(rowProposal, withTiers(renamed("frontier", "top")))).toEqual([]);
@@ -526,7 +526,6 @@ it("registry の提案の pin の段は id で比べる —— 改名(agent.md �
 });
 
 it("registry の提案は to が pin の段のいまの1段下にいる間だけ生きている —— 間への挿入・to を上へ並べ替え・どちらかの段の削除で tier_order が崩れる(issue #1438)", () => {
-  const withTiers = (tierList: readonly { id: number; name: string; description: string }[]) => ({ table: SEED_EXECUTION_SETTINGS, learnerPromoted: false, tiers: tierList });
   const [economy, standard, frontier] = TIERS;
   const mid = { id: 4, name: "mid", description: "x" };
   expect(routingPinChanges(tierProposal, withTiers([economy!, standard!, mid, frontier!]))).toEqual(["tier_order"]);
