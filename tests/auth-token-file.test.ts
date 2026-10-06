@@ -16,7 +16,7 @@ import { startServer, type TidepoolServer } from "../src/server.js";
 import { implicitTaskExecutionCandidates } from "../src/server-options.js";
 import { TranscriptStore } from "../src/transcript-store.js";
 import { FakeClock, FakeContainerRuntime, pinnedCliVersions, ScriptedWorker } from "./fakes.js";
-import { tempDir } from "./harness.js";
+import { tempDir } from "./temp-dir.js";
 
 let server: TidepoolServer | undefined;
 afterEach(async () => {

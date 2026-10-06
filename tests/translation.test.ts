@@ -5,7 +5,7 @@ import { reportProviderUsage } from "../src/throttle.js";
 import { translateSource } from "../src/translation.js";
 import { getCachedTranslation, hashSource } from "../src/translation-cache.js";
 import { FakeTranslationClient } from "./fakes.js";
-import { tempDir } from "./harness.js";
+import { tempDir } from "./temp-dir.js";
 
 let db: Db | undefined;
 afterEach(() => db?.close());

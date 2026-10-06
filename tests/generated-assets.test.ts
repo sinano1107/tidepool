@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import { cpSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { tempDir } from "./harness.js";
+import { tempDir } from "./temp-dir.js";
 
 const ROOT = join(import.meta.dirname, "..");
 

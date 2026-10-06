@@ -8,19 +8,9 @@ import type { Provider } from "../src/registry.js";
 import type { WorkerFactory } from "../src/server.js";
 import { type Transcript, TranscriptStore } from "../src/transcript-store.js";
 import { FakeContainerRuntime, healthyOpenai, healthyUsageText, recordingSpawn } from "./fakes.js";
-import {
-  api,
-  bootTidepool,
-  FULL_HANDOFF,
-  git,
-  HOUR,
-  mcpClient,
-  questions,
-  queueWork,
-  type Tidepool,
-  tempDir,
-} from "./harness.js";
+import { api, bootTidepool, FULL_HANDOFF, git, HOUR, mcpClient, questions, queueWork, type Tidepool } from "./harness.js";
 import { makeRegistry } from "./registry-fixture.js";
+import { tempDir } from "./temp-dir.js";
 
 /** ADR 0149(issue #911)。transcript を取れない session は走らせず、走ってから書けなく
  *  なった session はその場で強制回収する —— 盤面は落ちず、記録を捨てて続けることもない。 */

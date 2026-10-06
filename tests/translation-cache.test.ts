@@ -7,7 +7,7 @@ import {
   listTranslationUsage,
   saveTranslation,
 } from "../src/translation-cache.js";
-import { tempDir } from "./harness.js";
+import { tempDir } from "./temp-dir.js";
 
 let db: Db | undefined;
 afterEach(() => db?.close());

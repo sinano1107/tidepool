@@ -7,8 +7,8 @@ import { LoggingWorker } from "../src/server-options.js";
 import { TranscriptStore } from "../src/transcript-store.js";
 import type { WorkerAdapter } from "../src/worker.js";
 import { containerHarness, FakeClock, passthroughContainers, ScriptedWorker } from "./fakes.js";
-import { tempDir } from "./harness.js";
 import { makeRegistry } from "./registry-fixture.js";
+import { tempDir } from "./temp-dir.js";
 
 /** 公開 contract の共通テスト(ADR 0099 決定1)。**adapter が持つ終了の語彙は
  *  畳み込み停止だけ**であり、raw signal 名は seam に一度も現れない — 合図の選択は

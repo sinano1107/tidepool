@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadRegistry, ownEntry, SKILL_WILDCARD } from "../src/registry.js";
 import { AUTHORITY_WILDCARD } from "../src/tasks.js";
-import { tempDir } from "./harness.js";
+import { tempDir } from "./temp-dir.js";
 
 const AGENT_MD = `---
 name: deckhand

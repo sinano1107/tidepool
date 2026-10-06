@@ -1,5 +1,6 @@
 import type { Cause } from "./cause.js";
 import type { Db } from "./db.js";
+// biome-ignore lint/suspicious/noImportCycles: ADR 0204 の台帳 —— 既存の循環、解いたら消す
 import { appendEvent, type DecisionLogEntry, type EventOrigin, getEvent, isDecisionLogEntry } from "./events.js";
 import type { GatedJudgment } from "./retrospective.js";
 import {
@@ -11,6 +12,7 @@ import {
   moveTask,
   registerTask,
   type Task,
+// biome-ignore lint/suspicious/noImportCycles: ADR 0204 の台帳 —— 既存の循環、解いたら消す
 } from "./tasks.js";
 
 export class TriageError extends Error {}

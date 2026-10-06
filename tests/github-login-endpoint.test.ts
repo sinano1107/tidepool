@@ -1,7 +1,8 @@
 import { chmodSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
-import { api, bootTidepool, type Tidepool, tempDir } from "./harness.js";
+import { api, bootTidepool, type Tidepool } from "./harness.js";
+import { tempDir } from "./temp-dir.js";
 
 let t: Tidepool;
 afterEach(async () => {

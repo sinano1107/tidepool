@@ -19,6 +19,14 @@
 			"preset": "none",
 			"correctness": {
 				"preset": "recommended"
+			},
+			"suspicious": {
+				"noImportCycles": {
+					"level": "error",
+					"options": {
+						"ignoreTypes": true
+					}
+				}
 			}
 		}
 	},

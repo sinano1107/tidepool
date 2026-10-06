@@ -8,7 +8,7 @@ import {
   runGitHubDeviceFlow,
   writeGitHubTokenFile,
 } from "../src/github-login.js";
-import { tempDir } from "./harness.js";
+import { tempDir } from "./temp-dir.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 

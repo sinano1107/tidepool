@@ -12,7 +12,7 @@ import {
   ProcessContainers,
   type PtyFn,
 } from "../../src/process-container.js";
-import { tempDir } from "../harness.js";
+import { tempDir } from "../temp-dir.js";
 import { liveGroups, processGroupContainerRuntime } from "./process-group-container.js";
 
 /** 容器の contract suite(ADR 0099 決定5 / issue #464)。実カーネルの

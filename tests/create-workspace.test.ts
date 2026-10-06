@@ -14,8 +14,8 @@ import {
   OrphanCheckoutMismatchError,
 } from "../src/workspace-create.js";
 import { FakeGitHubClient } from "./fakes.js";
-import { tempDir } from "./harness.js";
 import { makeRegistry, makeRemoteBackedRegistry } from "./registry-fixture.js";
+import { tempDir } from "./temp-dir.js";
 
 function git(cwd: string, ...args: string[]): string {
   return execFileSync("git", args, { cwd, stdio: ["ignore", "pipe", "pipe"] })

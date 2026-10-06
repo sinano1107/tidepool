@@ -10,7 +10,7 @@ import {
 import { isCapInterruptionEnvelope, isCliAuthFailureEnvelope, rowRefusalCause } from "../src/cli-auth.js";
 import { ProcessContainers } from "../src/process-container.js";
 import { containerHarness, FakeClock, FakeContainerRuntime, recordingSpawn } from "./fakes.js";
-import { tempDir } from "./harness.js";
+import { tempDir } from "./temp-dir.js";
 
 it("JSON envelope の api_error_status: 401 だけを確定的な認証失敗に分類する(ADR 0070)", async () => {
   const check = createClaudeCliAuthCheck(async () => ({

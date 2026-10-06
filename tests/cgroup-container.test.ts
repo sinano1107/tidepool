@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { expect, it } from "vitest";
 import { type CgroupPaths, containerRuntimeFor } from "../src/cgroup-container.js";
 import type { ContainerRuntimeCapability } from "../src/process-container.js";
-import { tempDir } from "./harness.js";
+import { tempDir } from "./temp-dir.js";
 
 /** kernel の代わりに cgroupfs の形だけを temp dir に作る: mount の
  *  `cgroup.controllers` と、盤面自身が居る cgroup(`/proc/self/cgroup` の

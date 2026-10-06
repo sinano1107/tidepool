@@ -4,20 +4,9 @@ import { ClaudeCodeWorker } from "../src/claude-worker.js";
 import { getTask } from "../src/tasks.js";
 import { TranscriptStore } from "../src/transcript-store.js";
 import { FakeContainerRuntime, healthyUsageText } from "./fakes.js";
-import {
-  api,
-  bootTidepool,
-  GIT_FIXTURE_TEST_TIMEOUT,
-  git,
-  HOUR,
-  makeWorkspace,
-  managementMcpClient,
-  questions,
-  queueWork,
-  type Tidepool,
-  tempDir,
-} from "./harness.js";
+import { api, bootTidepool, GIT_FIXTURE_TEST_TIMEOUT, git, HOUR, makeWorkspace, managementMcpClient, questions, queueWork, type Tidepool } from "./harness.js";
 import { makeRegistry } from "./registry-fixture.js";
+import { tempDir } from "./temp-dir.js";
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 

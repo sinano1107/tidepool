@@ -9,22 +9,9 @@ import { loadRegistry } from "../src/registry.js";
 import { registerTask } from "../src/tasks.js";
 import { TranscriptStore } from "../src/transcript-store.js";
 import { FakeClock, FakeContainerRuntime, healthyUsageText } from "./fakes.js";
-import {
-  api,
-  bootTidepool,
-  FULL_HANDOFF,
-  GIT_FIXTURE_TEST_TIMEOUT,
-  HOUR,
-  HUMAN_WEBUI,
-  makeWorkspace,
-  mcpClient,
-  QUIET_EXIT,
-  registerWork,
-  type Tidepool,
-  tempDir,
-  WORKER_SPAWNED,
-} from "./harness.js";
+import { api, bootTidepool, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, HOUR, HUMAN_WEBUI, makeWorkspace, mcpClient, QUIET_EXIT, registerWork, type Tidepool, WORKER_SPAWNED } from "./harness.js";
 import { makeRegistry } from "./registry-fixture.js";
+import { tempDir } from "./temp-dir.js";
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 

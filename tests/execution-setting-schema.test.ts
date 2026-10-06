@@ -2,7 +2,7 @@ import { join } from "node:path";
 import { expect, it } from "vitest";
 import { openDb } from "../src/db.js";
 import { resolveExecutionSetting, SEED_EXECUTION_SETTINGS } from "../src/execution-setting.js";
-import { tempDir } from "./harness.js";
+import { tempDir } from "./temp-dir.js";
 
 /** 表を読む口は production の呼び手(`resolveExecutionSetting`)しかない
  *  (ADR 0107 決定5)。schema 層のテストは行を SQL で直に言い、読めていることは

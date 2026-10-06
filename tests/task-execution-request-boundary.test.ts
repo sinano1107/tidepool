@@ -9,21 +9,9 @@ import { implicitTaskExecutionCandidates } from "../src/server-options.js";
 import { TranscriptStore } from "../src/transcript-store.js";
 import type { WorkerAdapter } from "../src/worker.js";
 import { FakeClock, FakeContainerRuntime, healthyUsageText, pinnedCliVersions } from "./fakes.js";
-import {
-  api,
-  bootTidepool,
-  GIT_FIXTURE_TEST_TIMEOUT,
-  HOUR,
-  makeWorkspace,
-  managementMcpClient,
-  mcpClient,
-  queueWork,
-  registerWork,
-  TEST_CREDENTIAL,
-  type Tidepool,
-  tempDir,
-} from "./harness.js";
+import { api, bootTidepool, GIT_FIXTURE_TEST_TIMEOUT, HOUR, makeWorkspace, managementMcpClient, mcpClient, queueWork, registerWork, TEST_CREDENTIAL, type Tidepool } from "./harness.js";
 import { makeRegistry } from "./registry-fixture.js";
+import { tempDir } from "./temp-dir.js";
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 

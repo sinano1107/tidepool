@@ -7,7 +7,8 @@ import {
   reportProviderUsage,
 } from "../src/throttle.js";
 import { usagePanelText } from "./fakes.js";
-import { api, bootTidepool, HOUR, queueWork, type Tidepool, tempDir } from "./harness.js";
+import { api, bootTidepool, HOUR, queueWork, type Tidepool } from "./harness.js";
+import { tempDir } from "./temp-dir.js";
 
 let t: Tidepool | undefined;
 

@@ -21,8 +21,9 @@ import {
   pinnedCliVersions,
   ScriptedWorker,
 } from "./fakes.js";
-import { api, GIT_FIXTURE_TEST_TIMEOUT, HOUR, HUMAN_WEBUI, makeWorkspace, TEST_CREDENTIAL, tempDir } from "./harness.js";
+import { api, GIT_FIXTURE_TEST_TIMEOUT, HOUR, HUMAN_WEBUI, makeWorkspace, TEST_CREDENTIAL } from "./harness.js";
 import { makeRegistry } from "./registry-fixture.js";
+import { tempDir } from "./temp-dir.js";
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 

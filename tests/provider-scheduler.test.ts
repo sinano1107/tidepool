@@ -7,20 +7,8 @@ import { executionSettingsFor } from "../src/execution-setting.js";
 import { InvalidAgentDefinitionError, type Provider } from "../src/registry.js";
 import { registerTask } from "../src/tasks.js";
 import { healthyOpenai, listedOpenaiModels, usagePanelText } from "./fakes.js";
-import {
-  api,
-  bootTidepool,
-  completeIntegrationReviews,
-  FULL_HANDOFF,
-  HOUR,
-  HUMAN_WEBUI,
-  managementMcpClient,
-  mcpClient,
-  queueWork,
-  registerWork,
-  type Tidepool,
-  tempDir,
-} from "./harness.js";
+import { api, bootTidepool, completeIntegrationReviews, FULL_HANDOFF, HOUR, HUMAN_WEBUI, managementMcpClient, mcpClient, queueWork, registerWork, type Tidepool } from "./harness.js";
+import { tempDir } from "./temp-dir.js";
 
 let t: Tidepool;
 afterEach(() => t?.stop());

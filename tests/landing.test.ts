@@ -19,17 +19,8 @@ import {
   type WorkspaceConfig,
 } from "../src/workspace.js";
 import { FakeClock, FakeGitHubClient, unusedLanding } from "./fakes.js";
-import {
-  commitWork,
-  FULL_HANDOFF,
-  GIT_FIXTURE_TEST_TIMEOUT,
-  git,
-  HUMAN_WEBUI,
-  makeRemoteBackedWorkspace,
-  makeWorkspace,
-  squashTaskIntoOrigin,
-  tempDir,
-} from "./harness.js";
+import { commitWork, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeRemoteBackedWorkspace, makeWorkspace, squashTaskIntoOrigin } from "./harness.js";
+import { tempDir } from "./temp-dir.js";
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 

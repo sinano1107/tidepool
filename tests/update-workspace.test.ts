@@ -10,8 +10,8 @@ import {
   updateWorkspace,
   WorkspaceConfirmationRequiredError,
 } from "../src/workspace-create.js";
-import { tempDir } from "./harness.js";
 import { makeRegistry, makeRemoteBackedRegistry } from "./registry-fixture.js";
+import { tempDir } from "./temp-dir.js";
 
 /** protected な一般 workspace を1つ足した fixture。 */
 const WORKSPACES_WITH_PROTECTED = `tidepool:
