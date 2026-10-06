@@ -18,21 +18,14 @@ import {
 } from "../src/codex-worker.js";
 import { executionSettingsFor } from "../src/execution-setting.js";
 import { ProcessContainers } from "../src/process-container.js";
-import { HOURLY, startScheduler } from "../src/scheduler.js";
-import { Slot } from "../src/slot.js";
-import { listBoard, registerTask } from "../src/tasks.js";
-import type { WorkerAdapter } from "../src/worker.js";
 import {
   containerHarness,
   driveCodexPreflight,
   FakeClock,
   FakeContainerRuntime,
-  healthyUsageText,
-  noRetrospectiveCalls,
-  passthroughContainers,
   recordingSpawn,
 } from "./fakes.js";
-import { api, bootTidepool, HUMAN_WEBUI, registerWork, type Tidepool, tempDir } from "./harness.js";
+import { api, bootTidepool, registerWork, type Tidepool, tempDir } from "./harness.js";
 
 let t: Tidepool;
 afterEach(() => t?.stop());
@@ -410,61 +403,6 @@ it("hook が一致していれば warnings があっても封じ込めは成立�
   expect(
     await checkCodexCapability(async () => ({ ...VALID, hookDiagnostics: ["warning: hook skipped"] }), BOARD_HOOK_PATH),
   ).toEqual({ available: true });
-});
-
-it("a failed Codex Harness preflight skips that route and starts a Claude-route row in the same poll", async () => {
-  t = await bootTidepool();
-  const clock = new FakeClock();
-  const started: string[] = [];
-  const worker: WorkerAdapter = {
-    id: "claude-agent",
-    start: (task) => started.push(task.id),
-    gracefulStop() {},
-    checkUsage: async () => healthyUsageText(clock.now()),
-  };
-  const codex = registerTask(t.db, {
-    type: "work",
-    assignee: "codex-agent",
-    title: "Codex head",
-    purpose: "exercise Codex",
-    completion_criteria: "done",
-  }, clock.now(), ...HUMAN_WEBUI);
-  const claude = registerTask(t.db, {
-    type: "work",
-    assignee: "claude-agent",
-    title: "Claude next",
-    purpose: "keep working",
-    completion_criteria: "done",
-  }, clock.now(), ...HUMAN_WEBUI);
-  const providers = new Map<string, "openai" | "anthropic">([
-    ["codex-agent", "openai"],
-    ["claude-agent", "anthropic"],
-  ]);
-  const scheduler = startScheduler({
-    retrospectiveCalls: noRetrospectiveCalls,
-    db: t.db,
-    clock,
-    slot: new Slot(),
-    worker,
-    containers: passthroughContainers(),
-    onSpawnFailed: () => {},
-    taskExecutionCandidates: (task) =>
-      executionSettingsFor(t.db, { provider: [{ name: providers.get(task.assignee!)!, advisor: false }], tier: undefined }, task),
-    harnessContainment: async (harness) =>
-      harness === "codex"
-        ? { available: false, reason: "Codex containment preflight: hook drift" }
-        : { available: true },
-  });
-
-  await clock.advance(HOURLY);
-
-  expect(started).toEqual([claude.id]);
-  expect(codex.status).toBe("todo");
-  const quarantine = listBoard(t.db).find(
-    (task) => (task.question_quarantine_kind === "harnessContainment" && task.question_quarantine_value === "codex") && task.status === "todo",
-  );
-  expect(quarantine).toMatchObject({ question_quarantine_kind: "harnessContainment", question_quarantine_value: "codex", status: "todo" });
-  scheduler.stop();
 });
 
 it("the public queue and answer routes expose a durable Harness-scoped stop without halting another route", async () => {

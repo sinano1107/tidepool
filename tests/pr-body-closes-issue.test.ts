@@ -1,6 +1,7 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { getTask, registerTask } from "../src/tasks.js";
+import { registerTask } from "../src/tasks.js";
 import {
+  api,
   bootTidepool,
   commitWork,
   completeIntegrationReviews,
@@ -93,8 +94,9 @@ it("PR body は handoff の直後・`Closes #N` の直前に盤面の定型フ�
   expect(footer).toMatch(/board/i);
   expect(footer).not.toMatch(/#\d/);
 
-  const stored = getTask(t.db, task.id);
-  expect(stored?.handoff_doc).not.toContain("opened by the tidepool board");
+  const stored = (await api(t.baseUrl, "GET", `/api/tasks/${task.id}`)).json;
+  expect(stored.handoff_doc).toContain(marker);
+  expect(stored.handoff_doc).not.toContain("opened by the tidepool board");
 });
 
 it("通常タスク(github_issue_number なし)の complete_task 成立後、PR body に Closes 行は付与されない", async () => {
