@@ -126,8 +126,10 @@ function placeTier(db: Db, others: readonly number[], id: number, position: numb
   [...others.slice(0, position), id, ...others.slice(position)].forEach((tier, index) => set.run(index, tier));
 }
 
-/** 段を消せない理由(ADR 0200 決定2): 行がある・盤面設定が指す・未決着の task が要求している。空 = 消せる。 */
-function tierDeletionBlockers(db: Db, id: number, name: Tier): string[] {
+/** 段を消せない理由(ADR 0200 決定2 / 追記 2026-10-06): 行がある・盤面設定が指す・未決着の task が要求している・registry の
+ *  agent.md が名指している。空 = 消せる。`listAgents` は手元の clone を同期で読む(fetch しない)。無い = registry の無い盤面で、
+ *  照合しない。読めなければ「名指していない」と見なさず削除ごと拒む。 */
+function tierDeletionBlockers(db: Db, id: number, name: Tier, listAgents?: ListAgentTiers): string[] {
   const reasons: string[] = [];
   const rows = loadExecutionSettingTable(db).filter((row) => row.tier === name);
   if (rows.length > 0) reasons.push(`it has execution-setting rows: ${rows.map(rowName).join(", ")}`);
@@ -138,11 +140,25 @@ function tierDeletionBlockers(db: Db, id: number, name: Tier): string[] {
     .prepare("SELECT id FROM tasks WHERE status NOT IN ('done', 'cancelled') AND (tier_id = ? OR review_tier_id = ?) ORDER BY rowid")
     .all(id, id) as { id: string }[];
   if (tasks.length > 0) reasons.push(`unsettled tasks request it: ${tasks.map((task) => task.id).join(", ")}`);
+  if (listAgents) {
+    let agents: ReturnType<ListAgentTiers>;
+    try {
+      agents = listAgents();
+    } catch (err) {
+      throw new DomainError(`tier "${name}" cannot be deleted: the registry could not be read to check its agent.md tiers: ${String(err)}`);
+    }
+    const naming = agents.filter((agent) => agent.tier === name);
+    if (naming.length > 0) reasons.push(`agents name it in agent.md: ${naming.map((agent) => agent.name).join(", ")}`);
+  }
   return reasons;
 }
 
 /** 段の1つの操作を書く(挿入・説明と位置の編集・改名・論理削除)。 */
-function applyTierChange(db: Db, change: Extract<ExecutionSettingsChange, { setting: "insert_tier" | "edit_tier" | "rename_tier" | "delete_tier" }>): void {
+function applyTierChange(
+  db: Db,
+  change: Extract<ExecutionSettingsChange, { setting: "insert_tier" | "edit_tier" | "rename_tier" | "delete_tier" }>,
+  listAgents?: ListAgentTiers,
+): void {
   const ids = liveTierIds(db);
   if (change.setting === "insert_tier") {
     assertTierName(db, change.name);
@@ -160,7 +176,7 @@ function applyTierChange(db: Db, change: Extract<ExecutionSettingsChange, { sett
     return;
   }
   if (change.setting === "delete_tier") {
-    const reasons = tierDeletionBlockers(db, id, change.name);
+    const reasons = tierDeletionBlockers(db, id, change.name, listAgents);
     if (reasons.length > 0) throw new DomainError(`tier "${change.name}" cannot be deleted: ${reasons.join("; ")}`);
     db.prepare("UPDATE tiers SET position = NULL WHERE id = ?").run(id);
     return;
@@ -645,8 +661,15 @@ export function parseTierDescriptionAmendment(amendment: unknown): string {
 /** 変更を書き、操作イベントとして経路つきで残す(CONTEXT.md「管理MCP」)。task を
  *  持たない盤面イベントなので task_id は NULL、帰属は人間。表を書くのはこの1本なので、routing の提案の陳腐化の hook
  *  (ADR 0150 決定1)もここに置く。`questionId` は提案 question への回答で適用したときの印で、meta-review の材料と「人間が変えた行」から外れる(ADR 0151)。
- *  返り値は execution_settings_changed の event id(何も変わらなければ null)。 */
-export function applyExecutionSettingsChange(db: Db, change: ExecutionSettingsChange, origin: EventOrigin, at: Date, questionId?: string): number | null {
+ *  返り値は execution_settings_changed の event id(何も変わらなければ null)。`listAgents` は段の削除の照合が読む(`tierDeletionBlockers`)。 */
+export function applyExecutionSettingsChange(
+  db: Db,
+  change: ExecutionSettingsChange,
+  origin: EventOrigin,
+  at: Date,
+  questionId?: string,
+  listAgents?: ListAgentTiers,
+): number | null {
   return db.transaction(() => {
     switch (change.setting) {
       case "row": {
@@ -682,7 +705,7 @@ export function applyExecutionSettingsChange(db: Db, change: ExecutionSettingsCh
       case "edit_tier":
       case "rename_tier":
       case "delete_tier":
-        applyTierChange(db, change);
+        applyTierChange(db, change, listAgents);
         break;
       case "delete_row":
         // 消す行が無ければ何も変わっていないので、操作イベントも残さない
@@ -728,6 +751,7 @@ export async function changeExecutionSettings(
   origin: EventOrigin,
   at: Date,
   renameAgentTiers?: RenameAgentTiers,
+  listAgents?: ListAgentTiers,
 ): Promise<void> {
   if (change.setting === "rename_tier") {
     assertKnownTier(db, "tier", change.name);
@@ -739,7 +763,7 @@ export async function changeExecutionSettings(
       throw err;
     }
   }
-  applyExecutionSettingsChange(db, change, origin, at);
+  applyExecutionSettingsChange(db, change, origin, at, undefined, listAgents);
 }
 
 /** 行の Quarantine の解除の門1(ADR 0184 決定5): その (provider, model) の行が表から無くなった Quarantine の question を、
@@ -752,7 +776,7 @@ function settleRemovedRowQuarantines(db: Db, at: Date, observedEventId: number):
   }
 }
 
-/** registry の agent 一覧を読む口(registry の無い盤面では無い)。registry の提案の (agent, tier) の照合が読む。 */
+/** registry の agent 一覧を読む口(registry の無い盤面では無い)。registry の提案の (agent, tier) の照合と、段の削除の照合(`tierDeletionBlockers`)が読む。 */
 export type ListAgentTiers = () => readonly { name: string; tier?: string }[];
 
 /** 陳腐化の決着(ADR 0150 決定1): open な routing / registry の提案の pin を表・フラグの現在値と照合し、崩れた question を

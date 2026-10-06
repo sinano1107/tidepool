@@ -610,7 +610,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
         "edit one (`edit_tier`, named by name: a new description and/or position), rename one (`rename_tier`: name, and to — the new name, checked like insert_tier's; " +
         "the board first rewrites every registry agent.md whose tier is the old name and commits it to the registry's remote main, and the rename is refused if that push fails), " +
         "delete one (`delete_tier`; refused with the reasons while the tier has table rows, " +
-        "is the default or judgement tier, or an unsettled task requests it), " +
+        "is the default or judgement tier, an unsettled task requests it, or a registry agent.md names it as its tier — and also refused if the registry cannot be read), " +
         "or set `advisor_above_main`, `provider_rank` (every provider exactly once, first = preferred), the default `priority`, `default_tier` " +
         "(a tier name from the board's list — the tier of tasks that request none and whose agent declares none, and of the board's drafts), or `judgement_tier` " +
         "(a tier name from the board's list — the tier the board's own judgement runs on: retrospective Board calls resolve on its anthropic row, and periodic meta-reviews request it), " +
@@ -620,7 +620,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
     },
     async ({ change }) => {
       try {
-        await changeExecutionSettings(deps.db, change, "mcp", deps.clock.now(), deps.agentAdmin?.renameTier);
+        await changeExecutionSettings(deps.db, change, "mcp", deps.clock.now(), deps.agentAdmin?.renameTier, deps.agentAdmin?.list);
       } catch (err) {
         if (err instanceof DomainError) return toolError(err.message);
         throw err;
