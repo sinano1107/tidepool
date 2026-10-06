@@ -19,12 +19,7 @@ import {
 import { DomainError } from "./domain-error.js";
 import type { ChildDraftContext, DraftClient } from "./draft.js";
 import { advanceLogCursor, getLogCursor, listEvents } from "./events.js";
-import {
-  changeExecutionSettings,
-  executionSettingsChangeSchema,
-  PRIORITIES,
-  readExecutionSettingsWithQuarantine,
-} from "./execution-setting.js";
+import { changeExecutionSettings, executionSettingsChangeSchema, readExecutionSettingsWithQuarantine } from "./execution-setting.js";
 import { type GitHubClient, OPEN_ISSUES_LIMIT } from "./github.js";
 import { githubLoggedIn } from "./github-auth.js";
 import {
@@ -122,6 +117,7 @@ import {
 } from "./tasks.js";
 import { sessionInTeardown } from "./teardown.js";
 import { getProviderUsage } from "./throttle.js";
+import { PRIORITIES } from "./tier.js";
 import type { TranslationClient } from "./translate.js";
 import {
   TranslationTargetError,

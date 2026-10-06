@@ -1,5 +1,5 @@
 import { afterEach, expect, it } from "vitest";
-import { SEED_TIERS } from "../src/execution-setting.js";
+import { SEED_TIERS } from "../src/tier.js";
 import { api, bootTidepool, managementMcpClient, mcpClient, type Tidepool } from "./harness.js";
 
 /** 要求の段を受け取る入口の説明(ADR 0200 決定3)のサーバー境界: 文面の書き手が tools/list で読む説明に、盤面の段が

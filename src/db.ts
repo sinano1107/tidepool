@@ -1,5 +1,6 @@
 import Database from "better-sqlite3";
-import { liveTierId, SEED_BOARD_TIERS, SEED_EXECUTION_SETTINGS, SEED_TIERS } from "./execution-setting.js";
+import { SEED_EXECUTION_SETTINGS } from "./execution-setting.js";
+import { liveTierId, SEED_BOARD_TIERS, SEED_TIERS } from "./tier.js";
 
 export type Db = Database.Database;
 
@@ -24,7 +25,7 @@ export function openDb(path: string): Db {
   db.exec(`
     -- ADR 0200 決定1・2: ティアは盤面が持つ順序付きの段の一覧。表の行・task の要求・盤面設定は内部の id で段を指し、
     -- 名前・説明・位置は編集できる(HTTP・MCP・agent.md は名前で喋り、書き込みの入口で id に解決する)。
-    -- 種(execution-setting.ts の SEED_TIERS)から一度だけ初期化し、以後は DB が正本。
+    -- 種(tier.ts の SEED_TIERS)から一度だけ初期化し、以後は DB が正本。
     -- 削除は論理削除(position を NULL に)—— 決着した task の要求が id で指したまま残る(task の行が要求の唯一の記録)。
     -- 名前の一意は生きている段の中だけで、消した段の名前は使い直せる。
     CREATE TABLE IF NOT EXISTS tiers (

@@ -17,7 +17,7 @@ import type {
   IssueInspection,
   TaskDraft,
 } from "../src/draft.js";
-import { type ExecutionSetting, type ExecutionSettingRow, SEED_EXECUTION_SETTINGS, SEED_TIERS } from "../src/execution-setting.js";
+import { type ExecutionSetting, type ExecutionSettingRow, SEED_EXECUTION_SETTINGS } from "../src/execution-setting.js";
 import type {
   CiStatus,
   CreatePrInput,
@@ -56,6 +56,7 @@ import type {
   RetrospectiveCallDeps,
 } from "../src/retrospective.js";
 import type { Task } from "../src/tasks.js";
+import { SEED_TIERS } from "../src/tier.js";
 import type { TranslationClient, TranslationResult } from "../src/translate.js";
 import { RECLAIM_TIMEOUT } from "../src/watchdog.js";
 import type { WorkerAdapter, WorkerExit } from "../src/worker.js";

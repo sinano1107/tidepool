@@ -17,12 +17,7 @@ import type { Clock } from "./clock.js";
 import { type ContainmentCapability, quarantineContainment } from "./containment.js";
 import type { Db } from "./db.js";
 import { type AdvisorRecord, appendEvent, type EventPayload, type RowRefusal, type RowRefusalCause } from "./events.js";
-import {
-  type ExecutionSetting,
-  MOONSHOT_DEFAULT_MODEL,
-  resolveExecutionSetting,
-  tierNames,
-} from "./execution-setting.js";
+import { type ExecutionSetting, MOONSHOT_DEFAULT_MODEL, resolveExecutionSetting } from "./execution-setting.js";
 import { buildMemoryInjection, buildMetaReviewMaterial, type InjectionQuery, recordMemoryInjection, recordMetaReviewMaterial } from "./memory.js";
 import { projectAndPersist } from "./precedent.js";
 import type { ProcessContainers, PtyFn, PtyProcess } from "./process-container.js";
@@ -48,6 +43,7 @@ import {
   resolveTaskAgent,
   type Task,
 } from "./tasks.js";
+import { tierNames } from "./tier.js";
 import type { TranscriptStore } from "./transcript-store.js";
 import { composeTerminalScreen } from "./usage.js";
 import { RECLAIM_TIMEOUT } from "./watchdog.js";

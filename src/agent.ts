@@ -1,5 +1,4 @@
 import type { Db } from "./db.js";
-import type { Tier } from "./execution-setting.js";
 import { openQuarantineQuestion, registerQuarantine } from "./quarantine.js";
 import {
   type AgentDefinition,
@@ -10,6 +9,7 @@ import {
   REVIEWER_AUTHORITY_PROFILE,
   type Registry,
 } from "./registry.js";
+import type { Tier } from "./tier.js";
 
 /** An assignee (or the board's default) resolved against the registry —
  *  the agent's own definition and its authority profile together, since spawn

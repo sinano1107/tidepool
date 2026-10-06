@@ -1,8 +1,9 @@
 import type { Db } from "./db.js";
-import { anthropicBoardCallRow, type ExecutionSettingRow, type Tier, windowMatchesModel } from "./execution-setting.js";
+import { anthropicBoardCallRow, type ExecutionSettingRow, windowMatchesModel } from "./execution-setting.js";
 import { defaultProviderPaceOffset, getProviderPaceOffset } from "./pace-offsets.js";
 import type { Provider } from "./registry.js";
 import { getSpendDown, isSpendDownActive } from "./spend-down.js";
+import { type Tier } from "./tier.js";
 
 /** 評価器が受け取る窓 —— Provider を問わない共通の形(ADR 0144)。 */
 export interface ProviderUsageWindow {
