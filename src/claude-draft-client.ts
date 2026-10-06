@@ -224,16 +224,16 @@ export class ClaudeDraftClient implements DraftClient {
   }
 }
 
+type BoardCallRow = Pick<ExecutionSettingRow, "provider" | "model" | "effort">;
+
 /** 表の行の Board call の envelope が行の拒否の証拠なら、撃った行を持つ拒否を投げる(ADR 0202 決定1)。 */
 function throwIfRowRefused(envelope: unknown, { provider, model }: BoardCallRow): void {
   const cause = rowRefusalCause(envelope);
   if (cause) throw new RowRefusalError(provider, model, cause);
 }
 
-type BoardCallRow = Pick<ExecutionSettingRow, "provider" | "model" | "effort">;
-
 /** The one-shot `claude -p` Board call every drafting call, the allocation
- *  review (issue #547) and the attribution (issue #574) share — the prompt, the table row it runs on and the
+ *  review (issue #547), the attribution (issue #574) and the behavior draft (issue #617) share — the prompt, the table row it runs on and the
  *  label for errors differ; the reply is the JSON object `extractJson` finds. */
 export async function runOneShotJsonPrompt(
   exec: ExecFn,

@@ -174,7 +174,6 @@ export function capInterruptionHandler(deps: TeardownDeps): (taskId: string, rec
   };
 }
 
-/** 行の拒否の証拠の種類 → Quarantine の理由の後半。 */
 /** 行の拒否(CONTEXT.md / ADR 0184 決定4)の盤面側の一撃。上限到達による中断と同じく失敗では
  *  なく failure question を立てないが、**記録と status の決着を後始末より前に**置く: 行の
  *  Quarantine(行が表に残っているときだけ)・`row_refused`・`todo` 先頭への復帰を1 transaction で済ませてから後始末に入るので、
