@@ -26,7 +26,6 @@ it("次の pickup は spawn の手前で registry を refresh する(ADR 0052)",
     "merged registry change",
   );
   t = await bootTidepool();
-  const db = t.db;
   const clock = new FakeClock();
   const spawnedVersions: string[] = [];
   const worker: WorkerAdapter = {
@@ -41,18 +40,18 @@ it("次の pickup は spawn の手前で registry を refresh する(ADR 0052)",
   };
   const scheduler = startScheduler({
     retrospectiveCalls: noRetrospectiveCalls,
-    db,
+    db: t.db,
     clock,
     slot: new Slot(),
     worker,
     containers: fakeContainers(),
     onSpawnFailed: () => {},
-    taskExecutionCandidates: implicitTaskExecutionCandidates(db),
+    taskExecutionCandidates: implicitTaskExecutionCandidates(t.db),
     // GitHub 身元なしの盤面(ローカルの bare remote なので認証は要らない)
     registryReachability: async () => refreshRegistry(registryDir, undefined),
   });
   registerTask(
-    db,
+    t.db,
     {
       type: "work",
       title: "use the merged registry definition",
@@ -71,25 +70,24 @@ it("次の pickup は spawn の手前で registry を refresh する(ADR 0052)",
 
 it("registry に到達できない間は盤面全体の pickup を止め、確認 question を1枚だけ立てる(ADR 0052)", async () => {
   t = await bootTidepool();
-  const db = t.db;
   const clock = new FakeClock();
   const worker = new ScriptedWorker(clock);
   const scheduler = startScheduler({
     retrospectiveCalls: noRetrospectiveCalls,
-    db,
+    db: t.db,
     clock,
     slot: new Slot(),
     worker,
     containers: fakeContainers(),
     onSpawnFailed: () => {},
-    taskExecutionCandidates: implicitTaskExecutionCandidates(db),
+    taskExecutionCandidates: implicitTaskExecutionCandidates(t.db),
     registryReachability: async () => ({
       available: false,
       reason: "origin is unreachable",
     }),
   });
   registerTask(
-    db,
+    t.db,
     {
       type: "work",
       title: "first queued task",
@@ -100,7 +98,7 @@ it("registry に到達できない間は盤面全体の pickup を止め、確�
     ...HUMAN_WEBUI,
   );
   registerTask(
-    db,
+    t.db,
     {
       type: "work",
       title: "second queued task",
@@ -113,7 +111,7 @@ it("registry に到達できない間は盤面全体の pickup を止め、確�
 
   await clock.advance(HOURLY * 3);
 
-  const questions = listBoard(db).filter((task) => task.type === "question");
+  const questions = listBoard(t.db).filter((task) => task.type === "question");
   expect({ started: worker.started, questionTitles: questions.map((task) => task.title) }).toEqual({
     started: [],
     questionTitles: ["registry remote is unreachable — pickup is stopped"],

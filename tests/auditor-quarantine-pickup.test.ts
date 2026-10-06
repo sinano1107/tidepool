@@ -27,8 +27,7 @@ it("Auditor が quarantine されている間、defaultAgentName が健全でも
   const review = registerIndependentReview(t, "rca (auditor): work A");
   const work = queueWork(t, "unrelated work");
 
-  const db = t.db;
-  quarantineAgent(db, DEFAULT_AUDITOR_NAME, new Error("auditor unavailable"), t.clock.now());
+  quarantineAgent(t.db, DEFAULT_AUDITOR_NAME, new Error("auditor unavailable"), t.clock.now());
 
   await t.clock.advance(HOUR);
 

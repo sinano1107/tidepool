@@ -178,8 +178,7 @@ it("a skipped row at the raw head does not swallow the ↑ of the task below it"
   // "prod" is never picked up, so it exists as a name in workspace_state alone
   t = await bootTidepool({ workspace: await makeWorkspace("sandbox") });
   const stuck = queueWork(t, "stuck in prod", "prod");
-  const db = t.db;
-  quarantineWorkspace(db, "prod", new Error("tree rule failed"), t.clock.now());
+  quarantineWorkspace(t.db, "prod", new Error("tree rule failed"), t.clock.now());
   const runnable = queueWork(t, "keeps flowing in sandbox", "sandbox");
 
   // the raw todo head is the quarantined-workspace task; the slot skips it

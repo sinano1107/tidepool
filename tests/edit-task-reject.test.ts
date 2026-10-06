@@ -34,9 +34,8 @@ it("parent link の付け替え(parent_id)を含む編集は 400 で拒否され
 
 it("issue-backed の参照番号(github_issue_number)の編集は 400 で拒否される", async () => {
   t = await bootTidepool({ workspace: { name: "tidepool", path: "/fake/path" } });
-  const db = t.db;
   const task = registerTask(
-    db,
+    t.db,
     { type: "work", workspace: "tidepool", github_issue_number: 49 },
     t.clock.now(),
     ...HUMAN_WEBUI,
@@ -124,9 +123,8 @@ it("issue-backed タスクの内容(title)と workspace の編集は 400 で拒�
     workspace: { name: "tidepool", path: "/fake/path" },
     resolveWorkspace: (w) => ({ name: w ?? "tidepool", path: "/fake/path" }),
   });
-  const db = t.db;
   const task = registerTask(
-    db,
+    t.db,
     { type: "work", workspace: "tidepool", github_issue_number: 49 },
     t.clock.now(),
     ...HUMAN_WEBUI,

@@ -1,0 +1,5 @@
+language js
+
+JsVariableDeclarator(initializer=JsInitializerClause(expression=`t.db`)) as $decl where {
+  register_diagnostic(span=$decl, message="Do not alias the board handle (ADR 0203): write t.db directly so the setup-only lint (ADR 0154) can see where it flows.", severity="error")
+}

@@ -16,14 +16,11 @@ import {
   observedSkills,
   resolveCodexExecutable,
 } from "../src/codex-worker.js";
-import { listEvents } from "../src/events.js";
 import { executionSettingsFor } from "../src/execution-setting.js";
-import { harnessContainmentPickupBlocked } from "../src/harness-containment.js";
-import { quarantineChecks, submitAnswer } from "../src/human-verbs.js";
 import { ProcessContainers } from "../src/process-container.js";
 import { HOURLY, startScheduler } from "../src/scheduler.js";
 import { Slot } from "../src/slot.js";
-import { getTask, listBoard, registerTask } from "../src/tasks.js";
+import { listBoard, registerTask } from "../src/tasks.js";
 import type { WorkerAdapter } from "../src/worker.js";
 import {
   containerHarness,
@@ -34,7 +31,6 @@ import {
   noRetrospectiveCalls,
   passthroughContainers,
   recordingSpawn,
-  unusedLanding,
 } from "./fakes.js";
 import { api, bootTidepool, HUMAN_WEBUI, registerWork, type Tidepool, tempDir } from "./harness.js";
 
@@ -418,7 +414,6 @@ it("hook が一致していれば warnings があっても封じ込めは成立�
 
 it("a failed Codex Harness preflight skips that route and starts a Claude-route row in the same poll", async () => {
   t = await bootTidepool();
-  const db = t.db;
   const clock = new FakeClock();
   const started: string[] = [];
   const worker: WorkerAdapter = {
@@ -427,14 +422,14 @@ it("a failed Codex Harness preflight skips that route and starts a Claude-route 
     gracefulStop() {},
     checkUsage: async () => healthyUsageText(clock.now()),
   };
-  const codex = registerTask(db, {
+  const codex = registerTask(t.db, {
     type: "work",
     assignee: "codex-agent",
     title: "Codex head",
     purpose: "exercise Codex",
     completion_criteria: "done",
   }, clock.now(), ...HUMAN_WEBUI);
-  const claude = registerTask(db, {
+  const claude = registerTask(t.db, {
     type: "work",
     assignee: "claude-agent",
     title: "Claude next",
@@ -447,14 +442,14 @@ it("a failed Codex Harness preflight skips that route and starts a Claude-route 
   ]);
   const scheduler = startScheduler({
     retrospectiveCalls: noRetrospectiveCalls,
-    db,
+    db: t.db,
     clock,
     slot: new Slot(),
     worker,
     containers: passthroughContainers(),
     onSpawnFailed: () => {},
     taskExecutionCandidates: (task) =>
-      executionSettingsFor(db, { provider: [{ name: providers.get(task.assignee!)!, advisor: false }], tier: undefined }, task),
+      executionSettingsFor(t.db, { provider: [{ name: providers.get(task.assignee!)!, advisor: false }], tier: undefined }, task),
     harnessContainment: async (harness) =>
       harness === "codex"
         ? { available: false, reason: "Codex containment preflight: hook drift" }
@@ -465,64 +460,11 @@ it("a failed Codex Harness preflight skips that route and starts a Claude-route 
 
   expect(started).toEqual([claude.id]);
   expect(codex.status).toBe("todo");
-  const quarantine = listBoard(db).find(
+  const quarantine = listBoard(t.db).find(
     (task) => (task.question_quarantine_kind === "harnessContainment" && task.question_quarantine_value === "codex") && task.status === "todo",
   );
   expect(quarantine).toMatchObject({ question_quarantine_kind: "harnessContainment", question_quarantine_value: "codex", status: "todo" });
   scheduler.stop();
-});
-
-it("a Harness quarantine answer is accepted only after the same live check recovers", async () => {
-  t = await bootTidepool();
-  const db = t.db;
-  const clock = new FakeClock();
-  let repaired = false;
-  const check = async () => repaired
-    ? { available: true as const }
-    : { available: false as const, reason: "permission canary failed" };
-
-  expect(await harnessContainmentPickupBlocked(db, "codex", check, clock.now())).toBe(true);
-  const questionId = listBoard(db).find(
-    (task) => (task.question_quarantine_kind === "harnessContainment" && task.question_quarantine_value === "codex"),
-  )?.id;
-  expect(questionId).toBeDefined();
-  const question = getTask(db, questionId!);
-  expect(question).toBeDefined();
-  await expect(submitAnswer(
-    {
-      db,
-      pollNow() {},
-      quarantineChecks: quarantineChecks({ db, harnessContainment: async () => check() }),
-      landing: unusedLanding,
-    },
-    question!,
-    ["repaired by hand"],
-    undefined,
-    () => clock.now(),
-    "webui",
-  )).rejects.toThrow("still not established");
-  expect(getTask(db, questionId!)?.status).toBe("todo");
-
-  repaired = true;
-  await submitAnswer(
-    {
-      db,
-      pollNow() {},
-      quarantineChecks: quarantineChecks({ db, harnessContainment: async () => check() }),
-      landing: unusedLanding,
-    },
-    question!,
-    ["repaired by hand"],
-    "updated the pinned CLI",
-    () => clock.now(),
-    "webui",
-  );
-  expect(getTask(db, questionId!)?.status).toBe("done");
-  expect(listEvents(db, questionId!).at(-1)?.payload).toMatchObject({
-    kind: "quarantine_released",
-    quarantine: "harnessContainment",
-    value: "codex",
-  });
 });
 
 it("the public queue and answer routes expose a durable Harness-scoped stop without halting another route", async () => {

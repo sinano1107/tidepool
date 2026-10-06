@@ -12,7 +12,7 @@
 	"formatter": {
 		"enabled": false
 	},
-	"plugins": ["./no-board-db-in-expect.grit"],
+	"plugins": ["./no-board-db-in-expect.grit", "./no-board-select.grit", "./no-board-db-alias.grit"],
 	"linter": {
 		"enabled": true,
 		"rules": {

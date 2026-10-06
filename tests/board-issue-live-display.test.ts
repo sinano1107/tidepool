@@ -9,15 +9,14 @@ afterEach(() => t?.stop());
 it("GET /api/tasks はissue参照タスクの内容をGitHubからlive展開し issue_live_state: 'live' を付ける(issue #49 設計点6)", async () => {
   t = await bootTidepool({ workspace: { name: "tidepool", path: "/fake/path" } });
 
-  const db = t.db;
   const issueBacked = registerTask(
-    db,
+    t.db,
     { type: "work", workspace: "tidepool", github_issue_number: 49 },
     t.clock.now(),
     ...HUMAN_WEBUI,
   );
   const ordinary = registerTask(
-    db,
+    t.db,
     { type: "work", title: "ordinary todo", purpose: "p", completion_criteria: "c" },
     t.clock.now(),
     ...HUMAN_WEBUI,
@@ -46,9 +45,8 @@ it("GET /api/tasks はissue参照タスクの内容をGitHubからlive展開し 
 it("issue内容は短TTL(30秒)のプロセス内キャッシュから返り、TTL経過後にだけGitHubへ再取得しにいく(issue #49 設計点6)", async () => {
   t = await bootTidepool({ workspace: { name: "tidepool", path: "/fake/path" } });
 
-  const db = t.db;
   const task = registerTask(
-    db,
+    t.db,
     { type: "work", workspace: "tidepool", github_issue_number: 49 },
     t.clock.now(),
     ...HUMAN_WEBUI,
@@ -74,9 +72,8 @@ it("issue内容は短TTL(30秒)のプロセス内キャッシュから返り、T
 it("TTL切れ後の再取得に失敗したら、最後に成功した内容を issue_live_state: 'stale' で返す(issue #49 設計点6)", async () => {
   t = await bootTidepool({ workspace: { name: "tidepool", path: "/fake/path" } });
 
-  const db = t.db;
   const task = registerTask(
-    db,
+    t.db,
     { type: "work", workspace: "tidepool", github_issue_number: 49 },
     t.clock.now(),
     ...HUMAN_WEBUI,
@@ -103,9 +100,8 @@ it("TTL切れ後の再取得に失敗したら、最後に成功した内容を 
 it("一度も取得に成功していなければ '#N' プレースホルダーのまま issue_live_state: 'unavailable' を返す(issue #49 設計点6)", async () => {
   t = await bootTidepool({ workspace: { name: "tidepool", path: "/fake/path" } });
 
-  const db = t.db;
   const task = registerTask(
-    db,
+    t.db,
     { type: "work", workspace: "tidepool", github_issue_number: 49 },
     t.clock.now(),
     ...HUMAN_WEBUI,
@@ -132,9 +128,8 @@ it("workspace が解決できない(registry drift)issue参照タスクは unava
   });
 
   // 登録時には存在した workspace 名が registry から消えた状況(drift)
-  const db = t.db;
   const task = registerTask(
-    db,
+    t.db,
     { type: "work", workspace: "ghost", github_issue_number: 49 },
     t.clock.now(),
     ...HUMAN_WEBUI,
@@ -157,9 +152,8 @@ it("workspace が解決できない(registry drift)issue参照タスクは unava
 it("GET /api/queue と GET /api/tasks/:id もissue参照タスクをlive展開する(issue #49 設計点6)", async () => {
   t = await bootTidepool({ workspace: { name: "tidepool", path: "/fake/path" } });
 
-  const db = t.db;
   const task = registerTask(
-    db,
+    t.db,
     { type: "work", workspace: "tidepool", github_issue_number: 49 },
     t.clock.now(),
     ...HUMAN_WEBUI,
@@ -181,9 +175,8 @@ it("GET /api/queue と GET /api/tasks/:id もissue参照タスクをlive展開�
 it("同一issueへの並行リクエストはフェッチを共有し、GitHubへ二重に問い合わせない(issue #49 設計点6)", async () => {
   t = await bootTidepool({ workspace: { name: "tidepool", path: "/fake/path" } });
 
-  const db = t.db;
   registerTask(
-    db,
+    t.db,
     { type: "work", workspace: "tidepool", github_issue_number: 49 },
     t.clock.now(),
     ...HUMAN_WEBUI,
