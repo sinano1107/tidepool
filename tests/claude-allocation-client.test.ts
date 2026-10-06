@@ -28,7 +28,7 @@ it("judge は表の行の model / effort をピン留めし、空のツール面
     },
   });
 
-  await expect(client.judge(input, { model: "fable", effort: "high" })).resolves.toEqual(judgment);
+  await expect(client.judge(input, { provider: "anthropic", model: "fable", effort: "high" })).resolves.toEqual(judgment);
 
   const { args, env } = calls[0]!;
   const argLine = args.join(" ");
@@ -51,12 +51,12 @@ it("語彙の外の allocation / cause や JSON でない応答は reject する
         result: JSON.stringify({ allocation: "great", cause: "capability", evidence: "e" }),
       }),
   });
-  await expect(outOfVocabulary.judge(input, { model: "fable", effort: "high" })).rejects.toThrow();
+  await expect(outOfVocabulary.judge(input, { provider: "anthropic", model: "fable", effort: "high" })).rejects.toThrow();
 
   const prose = new ClaudeAllocationClient({
     exec: async () => JSON.stringify({ result: "looks appropriate to me" }),
   });
-  await expect(prose.judge(input, { model: "fable", effort: "high" })).rejects.toThrow();
+  await expect(prose.judge(input, { provider: "anthropic", model: "fable", effort: "high" })).rejects.toThrow();
 });
 
 it("CLI が is_error と共に返した result は診断として運ぶ(issue #306)", async () => {
@@ -64,7 +64,7 @@ it("CLI が is_error と共に返した result は診断として運ぶ(issue #3
     exec: async () =>
       JSON.stringify({ is_error: true, result: "Failed to authenticate: OAuth session expired" }),
   });
-  await expect(client.judge(input, { model: "fable", effort: "high" })).rejects.toThrow(
+  await expect(client.judge(input, { provider: "anthropic", model: "fable", effort: "high" })).rejects.toThrow(
     "Failed to authenticate: OAuth session expired",
   );
 });

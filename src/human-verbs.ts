@@ -2,7 +2,7 @@ import { z } from "zod";
 import { verifyAgentRepaired } from "./agent.js";
 import { type AgentAdmin, AgentTierMismatchError, agentViewProviders } from "./agent-create.js";
 import { type BoardStatePath, boardStateOverlap } from "./board-state.js";
-import { type CliAuthCheck, type ModelProbe, quarantineCliAuthFailure, quarantineCliAuthForProvider } from "./cli-auth.js";
+import { type CliAuthCheck, type ModelProbe, quarantineBoardCallRefusal, quarantineCliAuthFailure, quarantineCliAuthForProvider } from "./cli-auth.js";
 import type { Clock } from "./clock.js";
 import type { ContainmentCheck } from "./containment.js";
 import type { Db } from "./db.js";
@@ -389,6 +389,7 @@ export async function registerThroughHumanDoor(
             inspection = await deps.draftClient.inspectIssue(issue);
           } catch (err) {
             quarantineCliAuthFailure(deps.db, err, now());
+            quarantineBoardCallRefusal(deps.db, err, "issue inspection", undefined, now());
             const fullError = err instanceof Error ? err.message : String(err);
             console.warn("[issue inspection] LLM inspection failed", fullError);
             const preview = fullError.slice(0, 200);

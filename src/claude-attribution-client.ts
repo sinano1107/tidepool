@@ -56,10 +56,10 @@ export class ClaudeAttributionClient implements AttributionClient {
 
   async judge(
     input: AttributionInput,
-    setting: Pick<ExecutionSettingRow, "model" | "effort">,
+    setting: Pick<ExecutionSettingRow, "provider" | "model" | "effort">,
   ): Promise<AttributionJudgment> {
     return judgmentSchema.parse(
-      await runOneShotJsonPrompt(this.exec, buildPrompt(input), setting.model, setting.effort, "attribution"),
+      await runOneShotJsonPrompt(this.exec, buildPrompt(input), setting, "attribution"),
     );
   }
 }

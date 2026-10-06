@@ -198,7 +198,7 @@ export const QUARANTINES = [
       return {
         title: `execution-setting row ${row} cannot run on this board`,
         purpose:
-          `${reason}. ${why} This row is out of pickup while this stands; ` +
+          `${reason}. ${why} This row is out of pickup and Board calls while this stands; ` +
           "other rows keep running.\n\nRepair one of two ways:\n\n" +
           "1. Fix the table: in the settings tab, change this row's model or delete the row. " +
           "This question then closes on its own.\n" +

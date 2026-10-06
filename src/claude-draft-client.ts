@@ -5,10 +5,10 @@ import {
   emptyToolSurfaceFlags,
   pinnedModelFlags,
 } from "./claude-worker.js";
-import { rethrowCliAuthExecFailure } from "./cli-auth.js";
+import { execFailureEnvelope, RowRefusalError, rethrowCliAuthExecFailure, rowRefusalCause } from "./cli-auth.js";
 import type { Db } from "./db.js";
 import type { ChildDraftContext, DraftClient, HandoffDraft, IssueInspection, TaskDraft } from "./draft.js";
-import { boardDefaultTier } from "./execution-setting.js";
+import { boardDefaultTier, type ExecutionSettingRow } from "./execution-setting.js";
 import type { Issue } from "./github.js";
 import type { RegistryCandidates } from "./registry.js";
 import { HANDOFF_FIELDS } from "./tasks.js";
@@ -220,18 +220,25 @@ export class ClaudeDraftClient implements DraftClient {
     } catch (err) {
       throw new Error(`draft not made: ${(err as Error).message}`);
     }
-    return runOneShotJsonPrompt(this.exec, prompt, row.model, row.effort, "draft");
+    return runOneShotJsonPrompt(this.exec, prompt, row, "draft");
   }
 }
 
+/** 表の行の Board call の envelope が行の拒否の証拠なら、撃った行を持つ拒否を投げる(ADR 0202 決定1)。 */
+function throwIfRowRefused(envelope: unknown, { provider, model }: BoardCallRow): void {
+  const cause = rowRefusalCause(envelope);
+  if (cause) throw new RowRefusalError(provider, model, cause);
+}
+
+type BoardCallRow = Pick<ExecutionSettingRow, "provider" | "model" | "effort">;
+
 /** The one-shot `claude -p` Board call every drafting call, the allocation
- *  review (issue #547) and the attribution (issue #574) share — the prompt, the pinned model / effort and the
+ *  review (issue #547) and the attribution (issue #574) share — the prompt, the table row it runs on and the
  *  label for errors differ; the reply is the JSON object `extractJson` finds. */
 export async function runOneShotJsonPrompt(
   exec: ExecFn,
   prompt: string,
-  model: string,
-  effort: string,
+  row: BoardCallRow,
   label: string,
 ): Promise<unknown> {
   let stdout: string;
@@ -243,7 +250,7 @@ export async function runOneShotJsonPrompt(
         prompt,
         "--output-format",
         "json",
-        ...pinnedModelFlags(model, effort),
+        ...pinnedModelFlags(row.model, row.effort),
         ...emptyToolSurfaceFlags(),
         // with no tools at all a second turn is structurally impossible; the
         // flag stays as the explicit statement that a single answer is what
@@ -264,9 +271,11 @@ export async function runOneShotJsonPrompt(
       boardCallEnv(),
     );
   } catch (err) {
+    throwIfRowRefused(execFailureEnvelope(err), row);
     rethrowCliAuthExecFailure(err);
   }
   const envelope: unknown = JSON.parse(stdout);
+  throwIfRowRefused(envelope, row);
   const { is_error, result } = envelope as { is_error?: unknown; result?: unknown };
   if (typeof result !== "string") {
     throw new Error(`${label} CLI response missing a string result field`);

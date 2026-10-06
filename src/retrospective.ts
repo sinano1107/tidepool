@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { type AllocationClient, type AllocationJudgment, type AllocationTarget, allocationInput, allocationTargets } from "./allocation-review.js";
 import type { Cause } from "./cause.js";
+import { quarantineBoardCallRefusal } from "./cli-auth.js";
 import type { Db } from "./db.js";
 import {
   type Attribution,
@@ -55,7 +56,7 @@ export type GatedJudgment = Pick<Extract<EventPayload, { kind: "objection_attrib
 export interface AttributionClient {
   judge(
     input: AttributionInput,
-    setting: Pick<ExecutionSettingRow, "model" | "effort">,
+    setting: Pick<ExecutionSettingRow, "provider" | "model" | "effort">,
   ): Promise<AttributionJudgment>;
 }
 
@@ -75,7 +76,7 @@ export interface BehaviorDraft {
 
 /** Behavior candidate 起草の Board call の seam(issue #617)。AttributionClient と同型。 */
 export interface BehaviorDraftClient {
-  draft(input: BehaviorDraftInput, setting: Pick<ExecutionSettingRow, "model" | "effort">): Promise<BehaviorDraft>;
+  draft(input: BehaviorDraftInput, setting: Pick<ExecutionSettingRow, "provider" | "model" | "effort">): Promise<BehaviorDraft>;
 }
 
 /** 振り返り Board call(帰責・起草・配分評価)が受け取るもの。合成 root が一度だけ組み、scheduler(poll の sweep)と triage close に
@@ -210,6 +211,7 @@ export async function attributeObjections(
       try {
         judgments.set(o.entry.id, gate(await call.client.judge(input, call.setting), input.memory_read));
       } catch (err) {
+        if (quarantineBoardCallRefusal(db, err, "attribution", o.entry.task_id, now)) return;
         const payload = {
           kind: "objection_attribution_failed" as const,
           entry_id: o.entry.id,
@@ -270,6 +272,7 @@ async function attributeSecondRound(db: Db, deps: RetrospectiveCallDeps, objecte
     try {
       judgment = gate(await call.client.judge(input, call.setting), input.memory_read);
     } catch (err) {
+      if (quarantineBoardCallRefusal(db, err, "attribution", objectedId, now)) return;
       const payload = {
         kind: "objection_attribution_failed" as const,
         entry_id: source.entry_id,
@@ -314,6 +317,7 @@ async function reviewAllocation(db: Db, deps: RetrospectiveCallDeps, target: All
     try {
       judgment = await call.client.judge(input, call.setting);
     } catch (err) {
+      if (quarantineBoardCallRefusal(db, err, "allocation review", reviewed_task_id, now)) return;
       record({ kind: "allocation_review_failed", review_completed_event_id: target.completed_event_id, review_task_id, reviewed_task_id, reason: message(err) });
       return;
     }
@@ -483,6 +487,7 @@ async function draftBehaviorCandidate(db: Db, deps: RetrospectiveCallDeps, attri
     try {
       draft = await call.client.draft({ ...input, index }, call.setting);
     } catch (err) {
+      if (quarantineBoardCallRefusal(db, err, "memory draft", taskId, now)) return;
       appendEvent(db, {
         taskId,
         workerId: BOARD_WORKER_ID,

@@ -39,7 +39,7 @@ export interface AllocationReviewInput {
 export interface AllocationClient {
   judge(
     input: AllocationReviewInput,
-    setting: Pick<ExecutionSettingRow, "model" | "effort">,
+    setting: Pick<ExecutionSettingRow, "provider" | "model" | "effort">,
   ): Promise<AllocationJudgment>;
 }
 
