@@ -839,7 +839,7 @@ export async function questions(t: Tidepool): Promise<any[]> {
 
 /** その名前の workspace の、開いている quarantine question(CONTEXT.md の Quarantine)—
  *  読み口(`GET /api/tasks`)から引く。無ければ undefined。ドメイン層は `workspaceQuarantine`。 */
-export async function servedWorkspaceQuarantine(t: Tidepool, name: string): Promise<any | undefined> {
+export async function servedWorkspaceQuarantine(t: Tidepool, name: string): Promise<any> {
   return (await questions(t)).find(
     (q: any) =>
       q.question_quarantine_kind === "workspace" &&
