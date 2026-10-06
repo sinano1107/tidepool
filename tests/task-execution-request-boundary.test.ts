@@ -21,9 +21,9 @@ import {
   registerWork,
   TEST_CREDENTIAL,
   type Tidepool,
-  tempDir,
 } from "./harness.js";
 import { makeRegistry } from "./registry-fixture.js";
+import { tempDir } from "./temp-dir.js";
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 

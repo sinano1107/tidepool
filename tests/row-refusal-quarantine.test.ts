@@ -11,8 +11,9 @@ import { applyExecutionSettingsChange, executionSettingsFor } from "../src/execu
 import { registerQuarantine, tableRowValue } from "../src/quarantine.js";
 import type { Provider } from "../src/registry.js";
 import { FakeContainerRuntime, healthyOpenai, healthyUsageText, recordingSpawn } from "./fakes.js";
-import { api, bootTidepool, HOUR, questions, queueWork, registerQuestion, registerWork, type Tidepool, tempDir } from "./harness.js";
+import { api, bootTidepool, HOUR, questions, queueWork, registerQuestion, registerWork, type Tidepool } from "./harness.js";
 import { makeRegistry } from "./registry-fixture.js";
+import { tempDir } from "./temp-dir.js";
 
 /** 行の拒否(CONTEXT.md / ADR 0184、issue #1258)。Claude CLI を喋る Provider が spawn 時の行の
  *  model id を 404 で断った session は、行の Quarantine を1枚立て、失敗にならずに queue の先頭へ戻る。 */

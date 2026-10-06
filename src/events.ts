@@ -3,9 +3,11 @@ import type { Cause } from "./cause.js";
 import type { Db } from "./db.js";
 import type { ExecutionSettingRow, ExecutionSettingsChange, ProviderSource, registryPinChanges, routingPinChanges, Tier, TierSource } from "./execution-setting.js";
 import type { InvalidationReason, MemoryDropReason, MemoryEntryFields } from "./memory.js";
+// biome-ignore lint/suspicious/noImportCycles: ADR 0204 の台帳 —— 既存の循環、解いたら消す
 import { sessionSpawnOf } from "./precedent.js";
 import type { Provider } from "./registry.js";
 import type { MemoryProposal, ProposalAmendment, TaskType } from "./tasks.js";
+// biome-ignore lint/suspicious/noImportCycles: ADR 0204 の台帳 —— 既存の循環、解いたら消す
 import { entryObjections } from "./triage.js";
 
 /** 行の拒否の証拠の種類: Provider が id を 404 で断った(ADR 0184 決定3)/ CLI の版が model の最低版に

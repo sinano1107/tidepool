@@ -9,6 +9,7 @@ import {
   type GitHubAuth,
   originRepo,
 } from "./github-auth.js";
+// biome-ignore lint/suspicious/noImportCycles: ADR 0204 の台帳 —— 既存の循環、解いたら消す
 import { openQuarantineQuestion, registerQuarantine } from "./quarantine.js";
 import {
   ownEntry,
@@ -17,14 +18,17 @@ import {
   type RegistrySource,
   remoteTrackingRef,
   type WorkspaceEntry,
+// biome-ignore lint/suspicious/noImportCycles: ADR 0204 の台帳 —— 既存の循環、解いたら消す
 } from "./registry.js";
 import { SANDBOX_SHADOW_PATHS, workspaceSettingsDisposition } from "./sandbox.js";
 import {
   getTask,
   issueRefPlaceholder,
   type Task,
+// biome-ignore lint/suspicious/noImportCycles: ADR 0204 の台帳 —— 既存の循環、解いたら消す
 } from "./tasks.js";
 
+// biome-ignore lint/suspicious/noImportCycles: ADR 0204 の台帳 —— 既存の循環、解いたら消す
 export { BOARD_WORKER_ID } from "./tasks.js";
 
 /** The board's workspace: registry name + path of a real git checkout. The

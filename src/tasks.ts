@@ -1,7 +1,9 @@
 import { randomUUID } from "node:crypto";
 import type { Db } from "./db.js";
 import { DEFAULT_AUDITOR_NAME } from "./defaults.js";
+// biome-ignore lint/suspicious/noImportCycles: ADR 0204 の台帳 —— 既存の循環、解いたら消す
 import { appendEvent, type EventOrigin, type EventPayload, getEvent, latestEventOfTask, type TaskScopedPayload, taskDecisionLog } from "./events.js";
+// biome-ignore lint/suspicious/noImportCycles: ADR 0204 の台帳 —— 既存の循環、解いたら消す
 import { type AddTierAmendment, assertKnownTier, type ExecutionSettingRow, liveTierId, PRIORITIES, type Priority, proposalTierNames, type RoutingRowChange, type Tier, type TierId } from "./execution-setting.js";
 import type { GitHubClient, Issue, IssueRef } from "./github.js";
 import type { MemoryAmendment } from "./memory.js";

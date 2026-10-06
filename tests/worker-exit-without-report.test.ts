@@ -21,9 +21,9 @@ import {
   questions,
   queueWork,
   type Tidepool,
-  tempDir,
 } from "./harness.js";
 import { makeRegistry } from "./registry-fixture.js";
+import { tempDir } from "./temp-dir.js";
 
 /** ADR 0145(issue #805)。最終 verb なしに root が exit した session は、exit の瞬間に
  *  failure question を立てて後始末へ入る —— タスク種別の時間制限まで枠を握らない。 */

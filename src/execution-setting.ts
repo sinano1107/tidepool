@@ -2,10 +2,13 @@ import { parse as parseYaml } from "yaml";
 import { z } from "zod";
 import { claudeAdvisorFor, isClaudeModelAlias } from "./claude-model-alias.js";
 import type { Db } from "./db.js";
+// biome-ignore lint/suspicious/noImportCycles: ADR 0204 の台帳 —— 既存の循環、解いたら消す
 import { appendEvent, type EventOrigin } from "./events.js";
 import { PROVIDER_VALUES, type Provider } from "./provider.js";
+// biome-ignore lint/suspicious/noImportCycles: ADR 0204 の台帳 —— 既存の循環、解いたら消す
 import { openQuarantineQuestions, openQuarantineValues, tableRowValue } from "./quarantine.js";
 import type { AgentDefinition } from "./registry.js";
+// biome-ignore lint/suspicious/noImportCycles: ADR 0204 の台帳 —— 既存の循環、解いたら消す
 import { RegistryFetchFailedError, RegistryPushFailedError } from "./registry-write.js";
 import {
   DomainError,
@@ -17,6 +20,7 @@ import {
   settleQuestionAsObserved,
   type Task,
   type TierNeighbour,
+// biome-ignore lint/suspicious/noImportCycles: ADR 0204 の台帳 —— 既存の循環、解いたら消す
 } from "./tasks.js";
 
 /** 必要品質のティア(CONTEXT.md「要求」/ ADR 0200 決定1)の名前。段は盤面の DB が持つ順序付きの一覧で(`readTiers`)、

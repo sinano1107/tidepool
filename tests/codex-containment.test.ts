@@ -25,7 +25,8 @@ import {
   FakeContainerRuntime,
   recordingSpawn,
 } from "./fakes.js";
-import { api, bootTidepool, registerWork, type Tidepool, tempDir } from "./harness.js";
+import { api, bootTidepool, registerWork, type Tidepool } from "./harness.js";
+import { tempDir } from "./temp-dir.js";
 
 let t: Tidepool;
 afterEach(() => t?.stop());

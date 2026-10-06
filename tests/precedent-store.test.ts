@@ -5,7 +5,8 @@ import { appendEvent, getEvent, type TaskScopedPayload } from "../src/events.js"
 import { listPrecedents } from "../src/memory.js";
 import { registerMetaReview } from "../src/meta-review.js";
 import { backfillEpisodes, listEpisodes, projectAndPersist } from "../src/precedent.js";
-import { bundledObjection, FIXTURE_SPAWNED_EVENT_ID, FIXTURE_TASK, seedFixtureBoard, tempDir, writeFixtureTranscript } from "./harness.js";
+import { bundledObjection, FIXTURE_SPAWNED_EVENT_ID, FIXTURE_TASK, seedFixtureBoard, writeFixtureTranscript } from "./harness.js";
+import { tempDir } from "./temp-dir.js";
 
 const logDir = () => tempDir("tidepool-precedent-");
 

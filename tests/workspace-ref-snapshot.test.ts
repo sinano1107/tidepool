@@ -21,9 +21,9 @@ import {
   mcpClient,
   registerWork,
   type Tidepool,
-  tempDir,
 } from "./harness.js";
 import { makeRegistry, makeRemoteBackedRegistry } from "./registry-fixture.js";
+import { tempDir } from "./temp-dir.js";
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 

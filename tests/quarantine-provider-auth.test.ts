@@ -15,8 +15,8 @@ import {
   queueWork,
   registerWork,
   type Tidepool,
-  tempDir,
 } from "./harness.js";
+import { tempDir } from "./temp-dir.js";
 
 /** issue #446 / ADR 0097 決定2: provider 単位の資源への細分化のゲート面。
  *  moonshot の失効は moonshot を喋る agent の pickup だけを止め(確認型

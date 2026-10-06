@@ -10,7 +10,8 @@ import {
   issuedToken,
   startFakeBroker,
 } from "./fake-broker.js";
-import { git, tempDir } from "./harness.js";
+import { git } from "./harness.js";
+import { tempDir } from "./temp-dir.js";
 
 let repoPath: string | undefined;
 let remotePath: string | undefined;

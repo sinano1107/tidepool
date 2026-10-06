@@ -14,8 +14,8 @@ import {
 } from "../src/workspace-create.js";
 import { type FakeBroker, issuedToken, startFakeBroker } from "./fake-broker.js";
 import { FakeGitHubClient } from "./fakes.js";
-import { tempDir } from "./harness.js";
 import { makeRegistry } from "./registry-fixture.js";
+import { tempDir } from "./temp-dir.js";
 
 function git(cwd: string, ...args: string[]): string {
   return execFileSync(

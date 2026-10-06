@@ -6,10 +6,13 @@
  *  資源の名を持たない種類の value は NULL である。依存の向きはこの module → タスクの
  *  module であり、逆は張らない。 */
 import type { Db } from "./db.js";
+// biome-ignore lint/suspicious/noImportCycles: ADR 0204 の台帳 —— 既存の循環、解いたら消す
 import { appendEvent, type RowRefusalCause } from "./events.js";
 import type { HaltKind } from "./halt-kind.js";
 import { PROVIDER_VALUES, type Provider } from "./provider.js";
+// biome-ignore lint/suspicious/noImportCycles: ADR 0204 の台帳 —— 既存の循環、解いたら消す
 import { canonicalHarness } from "./registry.js";
+// biome-ignore lint/suspicious/noImportCycles: ADR 0204 の台帳 —— 既存の循環、解いたら消す
 import { BOARD_WORKER_ID, type QuestionItem, type ResourceStops, registerTask } from "./tasks.js";
 
 export const FAILED_TEARDOWN_QUESTION_TITLE = "the board's own teardown failed — pickup is stopped";

@@ -5,8 +5,8 @@ import { afterEach, expect, it } from "vitest";
 import { GitHubAuth } from "../src/github-auth.js";
 import { refreshRegistry } from "../src/registry.js";
 import { type BrokerAnswer, type FakeBroker, issuedToken, startFakeBroker } from "./fake-broker.js";
-import { tempDir } from "./harness.js";
 import { makeRemoteBackedRegistry } from "./registry-fixture.js";
+import { tempDir } from "./temp-dir.js";
 
 /** 本物の `git` を PATH で差し替えて、盤面が実際に渡した argv と env を捕まえる。
  *

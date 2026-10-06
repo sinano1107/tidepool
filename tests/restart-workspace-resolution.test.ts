@@ -7,7 +7,8 @@ import { pickupTask, registerTask } from "../src/tasks.js";
 import { TranscriptStore } from "../src/transcript-store.js";
 import { ensureTaskBranch, UnknownWorkspaceError, type WorkspaceConfig } from "../src/workspace.js";
 import { FakeClock, FakeContainerRuntime, pinnedCliVersions, ScriptedWorker } from "./fakes.js";
-import { GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeWorkspace, TEST_CREDENTIAL, tempDir } from "./harness.js";
+import { GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeWorkspace, TEST_CREDENTIAL } from "./harness.js";
+import { tempDir } from "./temp-dir.js";
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 

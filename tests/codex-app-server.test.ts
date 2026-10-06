@@ -11,7 +11,7 @@ import {
 } from "../src/codex-app-server.js";
 import { ProcessContainers } from "../src/process-container.js";
 import { containerHarness, FakeContainerRuntime, passthroughContainers } from "./fakes.js";
-import { tempDir } from "./harness.js";
+import { tempDir } from "./temp-dir.js";
 
 afterEach(() => vi.unstubAllEnvs());
 

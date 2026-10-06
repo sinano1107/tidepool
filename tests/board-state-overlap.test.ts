@@ -2,7 +2,7 @@ import { mkdir, symlink } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { boardStateOverlap, boardStatePaths } from "../src/board-state.js";
-import { tempDir as harnessTempDir } from "./harness.js";
+import { tempDir as harnessTempDir } from "./temp-dir.js";
 
 /** 実 realpath を通す判定なので、テストも実ディレクトリを使う(macOS の
  *  /var → /private/var のように、tmp 自体が symlink であることも含めて

@@ -2,8 +2,10 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Cause } from "./cause.js";
 import type { Db } from "./db.js";
+// biome-ignore lint/suspicious/noImportCycles: ADR 0204 の台帳 —— 既存の循環、解いたら消す
 import { currentAttributions, type EventRow, getEvent, listEvents } from "./events.js";
 import { isAdvisorBlock, parseStreamLine, readInitVersion } from "./stream-json.js";
+// biome-ignore lint/suspicious/noImportCycles: ADR 0204 の台帳 —— 既存の循環、解いたら消す
 import { entryObjections } from "./triage.js";
 
 /** Precedent(前例)の投影 — 盤面の記録(events + worker transcript)から

@@ -7,7 +7,7 @@ import { quarantineCliAuthForProvider } from "../src/cli-auth.js";
 import { openDb } from "../src/db.js";
 import { openQuarantineValues } from "../src/quarantine.js";
 import { listBoard } from "../src/tasks.js";
-import { tempDir } from "./harness.js";
+import { tempDir } from "./temp-dir.js";
 
 /** ADR 0098 / issue #454: 401 の Provider 帰属は spawn/call 時の事実で決まり、
  *  失効した Provider を喋る agent の pickup だけが止まる。 */

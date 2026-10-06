@@ -19,8 +19,8 @@ import {
   queueWork,
   registerWork,
   type Tidepool,
-  tempDir,
 } from "./harness.js";
+import { tempDir } from "./temp-dir.js";
 
 let t: Tidepool;
 afterEach(() => t?.stop());

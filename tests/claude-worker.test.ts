@@ -48,8 +48,9 @@ import {
   recordingPty,
   recordingSpawn,
 } from "./fakes.js";
-import { GIT_FIXTURE_TEST_TIMEOUT, git, makeWorkspace, tempDir, WORKER_SPAWNED } from "./harness.js";
+import { GIT_FIXTURE_TEST_TIMEOUT, git, makeWorkspace, WORKER_SPAWNED } from "./harness.js";
 import { makeRegistry, makeRemoteBackedRegistry } from "./registry-fixture.js";
+import { tempDir } from "./temp-dir.js";
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 

@@ -12,7 +12,7 @@ import {
 import { loadRegistry } from "../src/registry.js";
 import { DEFAULT_AUDITOR_NAME as TASK_DEFAULT_AUDITOR_NAME } from "../src/tasks.js";
 import { resolveWorkspacesBaseDir } from "../src/workspace.js";
-import { tempDir } from "./harness.js";
+import { tempDir } from "./temp-dir.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 

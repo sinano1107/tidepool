@@ -9,7 +9,8 @@ import {
   originRepo,
 } from "../src/github-auth.js";
 import { type FakeBroker, issuedToken, startFakeBroker } from "./fake-broker.js";
-import { git, tempDir } from "./harness.js";
+import { git } from "./harness.js";
+import { tempDir } from "./temp-dir.js";
 
 const brokers: FakeBroker[] = [];
 let savedGhToken: string | undefined;

@@ -19,7 +19,8 @@ import {
   translateQuestion,
 } from "../src/translation.js";
 import { FakeTranslationClient } from "./fakes.js";
-import { HUMAN_WEBUI, tempDir } from "./harness.js";
+import { HUMAN_WEBUI } from "./harness.js";
+import { tempDir } from "./temp-dir.js";
 
 let db: Db | undefined;
 afterEach(() => db?.close());

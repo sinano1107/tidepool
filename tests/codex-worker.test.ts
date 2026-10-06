@@ -18,8 +18,9 @@ import { TranscriptStore } from "../src/transcript-store.js";
 import { RECLAIM_TIMEOUT } from "../src/watchdog.js";
 import type { WorkerExit } from "../src/worker.js";
 import { driveCodexPreflight, FakeClock, passthroughContainers, recordingSpawn } from "./fakes.js";
-import { bootTidepool, HUMAN_WEBUI, mcpClient, type Tidepool, tempDir, WORKER_SPAWNED } from "./harness.js";
+import { bootTidepool, HUMAN_WEBUI, mcpClient, type Tidepool, WORKER_SPAWNED } from "./harness.js";
 import { makeRegistry } from "./registry-fixture.js";
+import { tempDir } from "./temp-dir.js";
 
 const CLI_VERSION = "codex-cli 0.147.0";
 

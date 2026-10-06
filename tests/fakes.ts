@@ -59,7 +59,7 @@ import type { Task } from "../src/tasks.js";
 import type { TranslationClient, TranslationResult } from "../src/translate.js";
 import { RECLAIM_TIMEOUT } from "../src/watchdog.js";
 import type { WorkerAdapter, WorkerExit } from "../src/worker.js";
-import { tempDir } from "./harness.js";
+import { tempDir } from "./temp-dir.js";
 
 /** Required landing dependency for tests whose exercised door cannot reach a
  * landing path. A mistaken land call fails loudly; ancestor re-fire is a

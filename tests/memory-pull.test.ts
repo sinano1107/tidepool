@@ -25,7 +25,8 @@ import { attributeObjections, refireRetrospectiveCalls } from "../src/retrospect
 import { DomainError, logDecision, registerTask } from "../src/tasks.js";
 import { commitTriage, raiseObjection, startTriage } from "../src/triage.js";
 import { FakeAttributionClient, FakeBehaviorDraftClient, noRetrospectiveCalls } from "./fakes.js";
-import { FIXTURE_SPAWNED_EVENT_ID, FIXTURE_TASK, HUMAN_WEBUI, QUIET_EXIT, seedFixtureBoard, tempDir, WORKER_SPAWNED, writeFixtureTranscript } from "./harness.js";
+import { FIXTURE_SPAWNED_EVENT_ID, FIXTURE_TASK, HUMAN_WEBUI, QUIET_EXIT, seedFixtureBoard, WORKER_SPAWNED, writeFixtureTranscript } from "./harness.js";
+import { tempDir } from "./temp-dir.js";
 
 const at = new Date("2026-09-14T00:00:00.000Z");
 const approve = (db: ReturnType<typeof openDb>, candidate_id: number) =>
