@@ -1226,7 +1226,7 @@ it.each([
       return work;
     },
   ],
-  ["記録が欠けた", unrecordedWork],
+  ["記録に行の無い", unrecordedWork],
 ])("%s保護ブランチへ merge と答えると、回答を拒み workspace を quarantine し、着地 question は開いたまま残る", async (_shape, setup) => {
   const workspace = await makeWorkspace("landing-out-of-band-answer");
   const { db, clock } = await openBoard();
