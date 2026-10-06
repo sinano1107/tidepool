@@ -5,7 +5,6 @@ import { parse as parseTwemoji } from "@twemoji/parser";
 import { parse as parseYaml } from "yaml";
 import { z } from "zod";
 import { DEFAULT_AUDITOR_NAME } from "./defaults.js";
-import type { Tier } from "./execution-setting.js";
 import {
   authedGitBounded,
   GIT_NETWORK_TIMEOUT_MS,
@@ -13,6 +12,7 @@ import {
   originRepo,
 } from "./github-auth.js";
 import { PROVIDER_VALUES, type Provider } from "./provider.js";
+import type { Tier } from "./tier.js";
 import { isNonAgentWorkerId } from "./worker-id.js";
 
 /** An agent definition file: `agents/<name>.md` in the registry clone.

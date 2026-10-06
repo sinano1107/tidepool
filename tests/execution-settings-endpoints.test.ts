@@ -1,9 +1,10 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { listEventsOfKinds } from "../src/events.js";
-import { applyExecutionSettingsChange, executionSettingsFor, SEED_EXECUTION_SETTINGS, SEED_TIERS } from "../src/execution-setting.js";
+import { applyExecutionSettingsChange, executionSettingsFor, SEED_EXECUTION_SETTINGS } from "../src/execution-setting.js";
 import { openQuarantineQuestion, registerQuarantine, tableRowValue } from "../src/quarantine.js";
 import { PROVIDER_VALUES, type Provider } from "../src/registry.js";
 import { RegistryPushFailedError } from "../src/registry-write.js";
+import { SEED_TIERS } from "../src/tier.js";
 import { healthyOpenai } from "./fakes.js";
 import {
   api,

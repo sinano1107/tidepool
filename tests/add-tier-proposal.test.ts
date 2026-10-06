@@ -1,7 +1,7 @@
 import { afterEach, expect, it } from "vitest";
 import { appendEvent } from "../src/events.js";
-import { SEED_TIERS } from "../src/execution-setting.js";
 import { registerTask } from "../src/tasks.js";
+import { SEED_TIERS } from "../src/tier.js";
 import { api, bootTidepool, HOUR, HUMAN_WEBUI, mcpClient, type Tidepool, WORKER_SPAWNED } from "./harness.js";
 
 /** 段を足して行を移す提案(issue #1424 / ADR 0200 決定8)のサーバ境界: 提案 verb と pin、approve での段の挿入と行の移動、

@@ -1,9 +1,10 @@
 import type { Cause } from "./cause.js";
 import type { Db } from "./db.js";
 import { type EventPayload, getEvent, listEvents } from "./events.js";
-import type { ExecutionSettingRow, Tier } from "./execution-setting.js";
+import type { ExecutionSettingRow } from "./execution-setting.js";
 import { episodeMarkerKinds, type MarkerKind } from "./precedent.js";
 import { getTask } from "./tasks.js";
+import type { Tier } from "./tier.js";
 
 /** 「この結果に対する実行設定は適切だったか」の4値(CONTEXT.md「配分評価」)。
  *  `overpowered` は成功 episode からの唯一の下方向信号(ADR 0111 決定4)。 */

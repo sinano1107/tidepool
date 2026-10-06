@@ -5,7 +5,6 @@ import { DomainError } from "../src/domain-error.js";
 import { listEventsOfKinds } from "../src/events.js";
 import {
   applyExecutionSettingsChange,
-  assertKnownTier,
   assertTierRunnableFor,
   BOARD_DEFAULT_PRIORITY,
   changeExecutionSettings,
@@ -14,22 +13,17 @@ import {
   type ExecutionSettingsChange,
   type ExecutionSettingTable,
   executionSettingsFor,
-  PRIORITIES,
   parseAddTierAmendment,
   parseAgentTierAmendment,
   parseRoutingRowChange,
   readExecutionSettings,
-  readTiers,
   registryPinChanges,
   resolveExecutionSetting,
   routingPinChanges,
   SEED_EXECUTION_SETTINGS,
-  SEED_TIERS,
   type SelectorInput,
   selectExecutionSetting,
-  type Tier,
   tierFieldDescriptions,
-  tierNames,
 } from "../src/execution-setting.js";
 import { submitAnswer } from "../src/human-verbs.js";
 import { registerMetaReview } from "../src/meta-review.js";
@@ -39,6 +33,7 @@ import { RegistryPushFailedError } from "../src/registry-write.js";
 import { proposeRoutingChange } from "../src/routing-review.js";
 import { cancelTaskDirectly, getTask, type RegistryProposal, type RoutingProposal, type RoutingRowProposal, registerTask, type TierDescriptionProposal } from "../src/tasks.js";
 import { boardCallRow, reportProviderUsage } from "../src/throttle.js";
+import { assertKnownTier, PRIORITIES, readTiers, SEED_TIERS, type Tier, tierNames } from "../src/tier.js";
 import { unusedLanding } from "./fakes.js";
 import { HUMAN_WEBUI } from "./harness.js";
 

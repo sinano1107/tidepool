@@ -15,17 +15,12 @@ import {
   assertTierRunnableFor,
   composeRoutingRow,
   type ExecutionSettingsChange,
-  liveTierRows,
   parseAddTierAmendment,
   parseAgentTierAmendment,
   parseRoutingRowChange,
   parseTierDescriptionAmendment,
-  proposalTierNames,
   type RoutingRowChange,
   registryPinChanges,
-  type Tier,
-  tierNameOf,
-  tierNames,
 } from "./execution-setting.js";
 import { type GitHubClient, IssueGoneError } from "./github.js";
 import type { HarnessContainmentCheck } from "./harness-containment.js";
@@ -64,6 +59,7 @@ import {
   taskIdForPr,
 } from "./tasks.js";
 import type { FailedTeardownCheck } from "./teardown.js";
+import { liveTierRows, proposalTierNames, type Tier, tierNameOf, tierNames } from "./tier.js";
 import { stageFrontInsert, triageActivity } from "./triage.js";
 import type { PendingReclaim } from "./watchdog.js";
 import { HUMAN_WORKER_ID } from "./worker-id.js";

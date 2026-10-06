@@ -10,7 +10,6 @@ import { appendEvent, type RowRefusalCause } from "./events.js";
 import type { HaltKind } from "./halt-kind.js";
 import { PROVIDER_VALUES, type Provider } from "./provider.js";
 import { canonicalHarness } from "./registry.js";
-// biome-ignore lint/suspicious/noImportCycles: ADR 0204 の台帳 —— 既存の循環、解いたら消す
 import { type QuestionItem, type ResourceStops, registerTask } from "./tasks.js";
 import { BOARD_WORKER_ID } from "./worker-id.js";
 
