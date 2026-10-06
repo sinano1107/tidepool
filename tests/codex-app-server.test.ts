@@ -736,7 +736,7 @@ function cwdRecordingCall(fails = false) {
 const runAppServer = (call: BoardCall) =>
   codexCommandThrough(call, "Codex App Server probe", CODEX_APP_SERVER_LIMIT_MS)("codex", ["app-server"], { env: {} });
 
-it("App Server の Board call は盤面の cwd ではなく、呼び出しの最中は存在する空のディレクトリで走る(ADR 0206)", async () => {
+it("App Server の Board call は盤面の cwd ではなく、呼び出しの最中だけ存在する空のディレクトリで走る(ADR 0206)", async () => {
   const { call, seen } = cwdRecordingCall();
 
   await runAppServer(call);
@@ -744,13 +744,6 @@ it("App Server の Board call は盤面の cwd ではなく、呼び出しの最
   expect(seen.calls).toBe(1);
   expect(seen.cwd).not.toBe(process.cwd());
   expect(seen.entries).toEqual([]);
-});
-
-it("App Server の Board call の空の cwd は、呼び出しが resolve したあとには残らない(ADR 0206)", async () => {
-  const { call, seen } = cwdRecordingCall();
-
-  await runAppServer(call);
-
   expect(existsSync(seen.cwd)).toBe(false);
 });
 
