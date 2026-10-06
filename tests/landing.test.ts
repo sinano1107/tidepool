@@ -18,7 +18,6 @@ import {
   releaseWorkspace,
   UnknownWorkspaceError,
   type WorkspaceConfig,
-  workspaceNeedsHuman,
 } from "../src/workspace.js";
 import { FakeClock, FakeGitHubClient, unusedLanding } from "./fakes.js";
 import {
@@ -462,7 +461,7 @@ it("open PR 更新は盤面が動かした remote ref だけを再基準化す�
 
   // push をまたいで走る別タスクのセッションは、盤面の push を違反に数えない
   await straddle(db, clock, workspace, () => landing.land(getTask(db, task.id)!));
-  expect(workspaceNeedsHuman(db, workspace.name)).toBe(false);
+  expect(workspaceQuarantine(db, workspace)).toBeUndefined();
 
   await prepareWorkspaceAtPickup(db, workspace, task, {});
   commitWork(workspace.path, "repair.txt", "fixed\n");
@@ -984,7 +983,7 @@ it("追いつき merge をまたいで走るセッションは、盤面が動か
   await straddle(db, clock, workspace, () => landing.land(repair));
 
   expect(git(workspace.path, "rev-parse", `task/${repair.id}^1`)).toBe(before);
-  expect(workspaceNeedsHuman(db, workspace.name)).toBe(false);
+  expect(workspaceQuarantine(db, workspace)).toBeUndefined();
 });
 
 // landingAnnotation は DB の状態だけで決まる — blocked_by の規則はここ(domain 層)で1度だけ述べる(ADR 0107)。
