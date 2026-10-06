@@ -3,7 +3,18 @@ import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { GitHubAuth } from "../src/github-auth.js";
 import { type FakeBroker, startFakeBroker } from "./fake-broker.js";
-import { api, bootTidepool, commitWork, completeViaMcp, GIT_FIXTURE_TEST_TIMEOUT, git, HOUR, makeRemoteBackedWorkspace, registerWork, type Tidepool } from "./harness.js";
+import {
+  api,
+  bootTidepool,
+  commitWork,
+  completeViaMcp,
+  GIT_FIXTURE_TEST_TIMEOUT,
+  git,
+  HOUR,
+  makeRemoteBackedWorkspace,
+  registerWork,
+  type Tidepool,
+} from "./harness.js";
 import { makeRegistry, makeRemoteBackedRegistry } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
 

@@ -551,7 +551,7 @@ export async function initWorkspaceCheckout(path: string, name: string): Promise
 }
 
 /** A fresh temp git checkout named `name`, one commit deep. The dir is a
- *  harness `tempDir`, so it is removed when the calling test finishes. */
+ *  `tempDir`, so it is removed when the calling test finishes. */
 export async function makeWorkspace(name: string): Promise<WorkspaceConfig> {
   const path = await tempDir(`tidepool-${name}-`);
   return initWorkspaceCheckout(path, name);

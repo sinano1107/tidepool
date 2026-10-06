@@ -8,7 +8,17 @@ import type { Provider } from "../src/registry.js";
 import type { WorkerFactory } from "../src/server.js";
 import { type Transcript, TranscriptStore } from "../src/transcript-store.js";
 import { FakeContainerRuntime, healthyOpenai, healthyUsageText, recordingSpawn } from "./fakes.js";
-import { api, bootTidepool, FULL_HANDOFF, git, HOUR, mcpClient, questions, queueWork, type Tidepool } from "./harness.js";
+import {
+  api,
+  bootTidepool,
+  FULL_HANDOFF,
+  git,
+  HOUR,
+  mcpClient,
+  questions,
+  queueWork,
+  type Tidepool,
+} from "./harness.js";
 import { makeRegistry } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
 

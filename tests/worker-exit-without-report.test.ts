@@ -9,7 +9,19 @@ import type { Provider } from "../src/registry.js";
 import type { WorkerFactory } from "../src/server.js";
 import { moveTask } from "../src/tasks.js";
 import { FakeContainerRuntime, healthyOpenai, healthyUsageText, recordingSpawn } from "./fakes.js";
-import { api, bootTidepool, FULL_HANDOFF, git, HOUR, HUMAN_WEBUI, mcpClient, QUIET_EXIT, questions, queueWork, type Tidepool } from "./harness.js";
+import {
+  api,
+  bootTidepool,
+  FULL_HANDOFF,
+  git,
+  HOUR,
+  HUMAN_WEBUI,
+  mcpClient,
+  QUIET_EXIT,
+  questions,
+  queueWork,
+  type Tidepool,
+} from "./harness.js";
 import { makeRegistry } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
 

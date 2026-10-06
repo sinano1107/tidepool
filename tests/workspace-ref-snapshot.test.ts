@@ -7,7 +7,21 @@ import { GitHubAuth } from "../src/github-auth.js";
 import type { WorkspaceConfig } from "../src/workspace.js";
 import { publishWorkspace } from "../src/workspace-create.js";
 import { seedTierNames } from "./fakes.js";
-import { api, bootTidepool, commitWork, completeIntegrationReviews, FULL_HANDOFF as fullHandoff, GIT_FIXTURE_TEST_TIMEOUT, git, HOUR, makeRemoteBackedWorkspace, makeWorkspace, mcpClient, registerWork, type Tidepool } from "./harness.js";
+import {
+  api,
+  bootTidepool,
+  commitWork,
+  completeIntegrationReviews,
+  FULL_HANDOFF as fullHandoff,
+  GIT_FIXTURE_TEST_TIMEOUT,
+  git,
+  HOUR,
+  makeRemoteBackedWorkspace,
+  makeWorkspace,
+  mcpClient,
+  registerWork,
+  type Tidepool,
+} from "./harness.js";
 import { makeRegistry, makeRemoteBackedRegistry } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
 

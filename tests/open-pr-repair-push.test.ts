@@ -3,7 +3,23 @@ import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { openDb } from "../src/db.js";
 import type { WorkspaceConfig } from "../src/workspace.js";
-import { api, attachChild, bootTidepool, commitWork, completeIntegrationReviews, completeViaMcp, GIT_FIXTURE_TEST_TIMEOUT, git, HOUR, makeRemoteBackedWorkspace, makeWorkspace, questions, registerWork, squashTaskIntoOrigin, type Tidepool } from "./harness.js";
+import {
+  api,
+  attachChild,
+  bootTidepool,
+  commitWork,
+  completeIntegrationReviews,
+  completeViaMcp,
+  GIT_FIXTURE_TEST_TIMEOUT,
+  git,
+  HOUR,
+  makeRemoteBackedWorkspace,
+  makeWorkspace,
+  questions,
+  registerWork,
+  squashTaskIntoOrigin,
+  type Tidepool,
+} from "./harness.js";
 import { tempDir } from "./temp-dir.js";
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
