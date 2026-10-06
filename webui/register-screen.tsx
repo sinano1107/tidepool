@@ -25,6 +25,8 @@ interface RegisterScreenIssueFields {
   type: 'work';
   workspace: string;
   github_issue_number: number;
+  /** 要求ティア(盤面の段の名前)。issue 由来は常に work なので常に `tier` として送る。 */
+  tier?: string;
 }
 interface RegisterScreenManualFields {
   /** 画面が出すのはこの2つだけ(子追加は常に work)。 */
@@ -50,6 +52,7 @@ interface RegisterScreenGate {
   suggested_comment?: string;
   workspace?: string;
   github_issue_number?: number;
+  tier?: string;
 }
 interface RegisterScreenProps {
   onRegister: (fields: RegisterScreenFields) => Promise<void>;
@@ -157,7 +160,7 @@ function RegisterScreen({ onRegister, parentTask, onClose }: RegisterScreenProps
     : title.trim() && purpose.trim() && criteria.trim() && (!childMode || reason.trim());
   const fields = (): RegisterScreenFields =>
     issueMode
-      ? { type: 'work', workspace: workspace.trim(), github_issue_number: Number(issueNumber.trim()) }
+      ? { type: 'work', workspace: workspace.trim(), github_issue_number: Number(issueNumber.trim()), ...(tier ? { tier } : {}) }
       : {
           // a decompose child is always type work (decomposeTask's own
           // ChildSpec has no type field) — the type picker is dropped in
@@ -199,15 +202,17 @@ function RegisterScreen({ onRegister, parentTask, onClose }: RegisterScreenProps
       if (childMode) onClose?.();
     } catch (rawErr) {
       // a gate rejection carries the fix; anything else the toast reported.
-      // The inspected reference is burned into the gate state so a later
-      // edit of the form fields can't repoint the approved comment (or the
-      // retry) at a different issue than the one that was inspected.
+      // The inspected reference (and the requested tier) is burned into the
+      // gate state so a later edit of the form fields can't repoint the
+      // approved comment (or the retry) at a different issue than the one
+      // that was inspected, nor change what the retry requests.
       const detail = apiErrorDetail(rawErr, 'POST /api/tasks 422');
       if (detail) {
         setGate({
           ...detail,
           workspace: f.workspace,
           github_issue_number: f.github_issue_number,
+          tier: f.tier,
         });
       }
     }
@@ -235,6 +240,7 @@ function RegisterScreen({ onRegister, parentTask, onClose }: RegisterScreenProps
       type: 'work',
       workspace: gate.workspace!,
       github_issue_number: gate.github_issue_number!,
+      tier: gate.tier,
     });
   };
   const draftFields = async () => {
@@ -320,6 +326,9 @@ function RegisterScreen({ onRegister, parentTask, onClose }: RegisterScreenProps
         {!childMode && (
           <Select label="Source" options={['manual', 'github issue']} value={source} onChange={(e) => {
             setSource(e.target.value === 'github issue' ? 'github issue' : 'manual'); setGate(null);
+            // tier state is shared by both paths — reset it so an issue-path
+            // tier never leaks into a manual review task as its review_tier
+            setTier('');
             // switching away from the pending-dump's own manual content: a
             // later registration (e.g. an unrelated issue reference) must not
             // consume a dump it was never built from
@@ -329,6 +338,7 @@ function RegisterScreen({ onRegister, parentTask, onClose }: RegisterScreenProps
         {issueMode && (
           <React.Fragment>
             <Select label="Workspace" options={issueWorkspaceOptions} value={workspace} onChange={(e) => setWorkspace(e.target.value)} />
+            <Select label="Tier" options={tierOptions(tiers, "(agent's tier, then board default)")} value={tier} onChange={(e) => setTier(e.target.value)} />
             <Input label="Issue number" value={issueNumber} onChange={(e) => setIssueNumber(e.target.value)} placeholder="content stays on GitHub; the board keeps only this reference" />
             <div style={{ display: 'flex', flexDirection: 'column', gap: 4, maxHeight: 220, overflowY: 'auto' }}>
               {!workspace.trim() && (

@@ -1,5 +1,5 @@
 import type { Db } from "./db.js";
-import { windowMatchesModel } from "./execution-setting.js";
+import { anthropicBoardCallRow, type ExecutionSettingRow, type Tier, windowMatchesModel } from "./execution-setting.js";
 import { defaultProviderPaceOffset, getProviderPaceOffset } from "./pace-offsets.js";
 import type { Provider } from "./registry.js";
 import { getSpendDown, isSpendDownActive } from "./spend-down.js";
@@ -146,6 +146,11 @@ export function isAnthropicBoardCallBlocked(db: Db, model?: string): boolean {
       (resource.model === null ||
         (model !== undefined && windowMatchesModel(resource.model, model))),
   );
+}
+
+/** 表の行で走る Board call(振り返り・下書き)の行 —— 走れる行のうち、Anthropic の窓が閉じていない最安(#1445)。 */
+export function boardCallRow(db: Db, tier: Tier): ExecutionSettingRow {
+  return anthropicBoardCallRow(db, tier, (model) => isAnthropicBoardCallBlocked(db, model));
 }
 
 export function getProviderUsage(db: Db): DisplayProviderUsage[] {

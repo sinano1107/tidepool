@@ -16,12 +16,12 @@ import {
   objectionBundles,
   taskDecisionLog,
 } from "./events.js";
-import { type ExecutionSettingRow, retrospectiveBoardCallRow } from "./execution-setting.js";
+import { type ExecutionSettingRow, readExecutionSettings } from "./execution-setting.js";
 import { buildMemoryInjection, createBehaviorCandidate, listMemoryEntries, memoryScope, recordKnowledge, requireDecision } from "./memory.js";
 import { sessionSpawnOf, sessionWindow } from "./precedent.js";
 import type { ProcessContainers } from "./process-container.js";
 import { BOARD_WORKER_ID, DomainError, getTask, getTextAuthor, HUMAN_WORKER_ID, isNonAgentWorkerId, listChildren, type Task } from "./tasks.js";
-import { isAnthropicBoardCallBlocked } from "./throttle.js";
+import { boardCallRow } from "./throttle.js";
 import { entryObjections, listObjectedEntries, objectedEntryText, objectionsById, requireLogEntry } from "./triage.js";
 
 /** Board call に渡す入力(ADR 0115 決定2): 異議されたエントリ本文・その steering 列・
@@ -120,13 +120,9 @@ function boardCallSetting<C>(
   if (!client) return { unavailable: "Board call not made: no client is configured" };
   let setting: ExecutionSettingRow;
   try {
-    setting = retrospectiveBoardCallRow(db);
+    setting = boardCallRow(db, readExecutionSettings(db).judgementTier);
   } catch (err) {
     return { unavailable: `Board call not made: ${message(err)}` };
-  }
-  if (isAnthropicBoardCallBlocked(db, setting.model)) {
-    // 窓の閉鎖は throttle だけでなく Provider 認証の除外でも起きるので、原因は名乗らない
-    return { unavailable: "Board call not made: the Anthropic window is closed" };
   }
   const preflight = containers?.preflight();
   if (preflight && !preflight.available) return { unavailable: `Board call not made: ${preflight.reason}` };
