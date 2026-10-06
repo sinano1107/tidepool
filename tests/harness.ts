@@ -795,19 +795,13 @@ export function holdChildren(t: Tidepool, parentId: string): Task {
   });
 }
 
-/** Fabricates a question task directly against the board's own DB file,
+/** Fabricates a question task directly on the board's own handle,
  *  mirroring how tidepool's internal callers (watchdog/quarantine/merge/
  *  decompose) register one. The human-facing `/api/tasks` door refuses
  *  `type: "question"` outright (issue #38), so tests that need a question
- *  fixture go through this seam instead — a second connection to the same
- *  SQLite file is safe under WAL (`openDb`'s own mode). */
+ *  fixture go through this seam instead. */
 export function registerQuestion(t: Tidepool, input: Omit<RegisterTaskInput, "type">): Task {
-  const db = openDb(join(t.dir, "board.sqlite"));
-  try {
-    return registerTask(db, { ...input, type: "question" }, t.clock.now(), BOARD_WORKER_ID, "board");
-  } finally {
-    db.close();
-  }
+  return registerTask(t.db, { ...input, type: "question" }, t.clock.now(), BOARD_WORKER_ID, "board");
 }
 
 /** 盤面の DB へ直に付帯子(親を持ち、based_on_decision を持たず、question でない子)を
@@ -821,24 +815,19 @@ export function attachChild(
   assignee?: string,
   type: "work" | "review" = "work",
 ): Task {
-  const db = openDb(join(t.dir, "board.sqlite"));
-  try {
-    return registerTask(
-      db,
-      {
-        type,
-        title,
-        purpose: `purpose of ${title}`,
-        completion_criteria: `criteria of ${title}`,
-        parent_id: parentId,
-        ...(assignee !== undefined && { assignee }),
-      },
-      t.clock.now(),
-      ...HUMAN_WEBUI,
-    );
-  } finally {
-    db.close();
-  }
+  return registerTask(
+    t.db,
+    {
+      type,
+      title,
+      purpose: `purpose of ${title}`,
+      completion_criteria: `criteria of ${title}`,
+      parent_id: parentId,
+      ...(assignee !== undefined && { assignee }),
+    },
+    t.clock.now(),
+    ...HUMAN_WEBUI,
+  );
 }
 
 /** 盤面が今立てている question の行すべて — 読み口(`GET /api/tasks`)から引く。 */

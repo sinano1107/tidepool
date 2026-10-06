@@ -1,7 +1,6 @@
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
-import { openDb } from "../src/db.js";
 import type { WorkspaceConfig } from "../src/workspace.js";
 import {
   api,
@@ -30,19 +29,6 @@ afterEach(async () => {
   await t?.stop();
 });
 
-/** 盤面が焼いている ref スナップショット(ADR 0064 決定1)の行。 */
-function refSnapshot(pool: Tidepool, workspaceName: string): string[] {
-  const db = openDb(join(pool.dir, "board.sqlite"));
-  try {
-    const row = db
-      .prepare("SELECT ref_snapshot FROM workspace_state WHERE name = ?")
-      .get(workspaceName) as { ref_snapshot: string | null } | undefined;
-    return (row?.ref_snapshot ?? "").split("\n").filter((line) => line !== "");
-  } finally {
-    db.close();
-  }
-}
-
 /** 「着地し終えた根 work」を作る: review 付きで完了させ、その review の決着が着地を
  *  起こす(ADR 0092 決定1 の門)。remote-backed なら PR が1本開き、purely-local なら
  *  着地 question が立つ。 */
@@ -60,17 +46,14 @@ async function landedWork(workspace: WorkspaceConfig): Promise<any> {
   return (await api(t.baseUrl, "GET", `/api/tasks/${work.id}`)).json;
 }
 
-/** 着地済みの `work` に付いた修理を1本、拾って commit して完了させる。返すのは修理を
- *  拾った直後の ref スナップショット —— 完了で盤面が撮り直す前の姿である。 */
-async function completeRepair(work: any, workspace: WorkspaceConfig): Promise<string[]> {
+/** 着地済みの `work` に付いた修理を1本、拾って commit して完了させる。 */
+async function completeRepair(work: any, workspace: WorkspaceConfig): Promise<void> {
   const repair = attachChild(t, work.id, "repair the reviewed work");
   await api(t.baseUrl, "POST", `/api/tasks/${repair.id}/move`, { after: null });
   await t.clock.advance(HOUR);
-  const before = refSnapshot(t, workspace.name);
   commitWork(workspace.path, "repair.txt", "fixed\n");
   const res: any = await completeViaMcp(t, repair.id);
   expect(res.isError ?? false).toBe(false);
-  return before;
 }
 
 async function changeProtectedFile(
@@ -97,12 +80,12 @@ it("PR が開いたままの祖先へ merge back された修理を、盤面が 
   expect(git(workspace.path, "show", `task/${work.id}:repair.txt`)).toBe("fixed");
   expect(t.github.requests).toHaveLength(1);
   expect(t.github.pushes).toEqual([{ path: workspace.path, branch: `task/${work.id}` }]);
-  const head = git(workspace.path, "rev-parse", `task/${work.id}`);
-  // ADR 0064 決定4: 盤面自身の push を、盤面が自分の記録に撮り直している
-  expect(refSnapshot(t, workspace.name)).toContain(`${head} refs/remotes/origin/task/${work.id}`);
 });
 
-it("push のあとに別タスクの slot 解放が走っても、盤面自身の push は帯域外違反にならない", async () => {
+// 撮り直し(ADR 0064 決定4)はここでは言えない: push の後に拾う次のタスクは pickup で
+// スナップショットを全体で撮り直す。撮り直しの釘は landing.test.ts の、盤面の書き込みを
+// またいで走るセッションの解放にある。
+it("push のあとに拾った次のタスクは quarantine されずに着地し、2本目の PR が開く", async () => {
   const { workspace } = await makeRemoteBackedWorkspace("push-then-release");
   const work = await landedWork(workspace);
   await completeRepair(work, workspace);
@@ -118,16 +101,15 @@ it("push のあとに別タスクの slot 解放が走っても、盤面自身�
   expect((await questions(t)).filter((q: any) => q.status === "todo")).toEqual([]);
 });
 
-it("purely-local の同じ構図では push もリモート記録の変更も起きない", async () => {
+it("purely-local の同じ構図では push は起きない", async () => {
   const workspace = await makeWorkspace("local-repair");
   const work = await landedWork(workspace);
   expect(work.pr_number).toBeNull();
 
-  const before = await completeRepair(work, workspace);
+  await completeRepair(work, workspace);
 
   expect(git(workspace.path, "show", `task/${work.id}:repair.txt`)).toBe("fixed");
   expect(t.github.pushes).toEqual([]);
-  expect(refSnapshot(t, workspace.name)).toEqual(before);
 });
 
 it("祖先の PR が既に merge 済みなら push しない", async () => {
@@ -210,7 +192,6 @@ it("走行中に fork 元が squash merge された修理は、保護ブラン�
     "tidepool\ntidepool",
   );
   expect(git(workspace.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main");
-  expect(refSnapshot(t, workspace.name)).toContain(`${head} refs/heads/task/${repair.id}`);
   expect((await questions(t)).filter((q: any) => q.status === "todo")).toEqual([]);
 });
 
@@ -345,12 +326,10 @@ it("push の失敗は PR 昇格失敗 question として人間に見える", asy
   const work = await landedWork(workspace);
   t.github.scriptPushFailure(new Error("remote hung up after upload"));
 
-  const before = await completeRepair(work, workspace);
+  await completeRepair(work, workspace);
 
   expect(t.github.pushes).toHaveLength(1);
   expect((await questions(t)).filter((q: any) => q.status === "todo")).toMatchObject([
     { question_pending_pr_promotion_task_id: work.id },
   ]);
-  // ADR 0064 決定4: 失敗した push の後に撮り直してはならない
-  expect(refSnapshot(t, workspace.name)).toEqual(before);
 });

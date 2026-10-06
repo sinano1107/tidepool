@@ -18,6 +18,7 @@ import {
   releaseWorkspace,
   UnknownWorkspaceError,
   type WorkspaceConfig,
+  workspaceNeedsHuman,
 } from "../src/workspace.js";
 import { FakeClock, FakeGitHubClient, unusedLanding } from "./fakes.js";
 import {
@@ -52,6 +53,33 @@ function promotionFailures(board: Db, taskId: string) {
   return listBoard(board).filter(
     (candidate) => candidate.question_pending_pr_promotion_task_id === taskId,
   );
+}
+
+function workspaceQuarantine(board: Db, workspace: WorkspaceConfig) {
+  return listBoard(board).find(
+    (candidate) =>
+      candidate.question_quarantine_kind === "workspace" &&
+      candidate.question_quarantine_value === workspace.name,
+  );
+}
+
+/** 別タスクのセッションを盤面の書き込み `boardWrite` をまたいで走らせ、解放する。
+ *  ADR 0064 決定4 の撮り直しが効くのはこの形だけである —— 書き込みの後に拾う
+ *  セッションは pickup で全体を撮り直す。`workerForges` は、そのセッションの worker が
+ *  書き込みの前に偽造する ref。 */
+async function straddle(
+  board: Db,
+  clock: FakeClock,
+  workspace: WorkspaceConfig,
+  boardWrite: () => Promise<unknown>,
+  workerForges?: string,
+): Promise<void> {
+  const straddler = landingWork(board, clock);
+  await prepareWorkspaceAtPickup(board, workspace, straddler, {});
+  if (workerForges) git(workspace.path, "update-ref", workerForges, "HEAD");
+  await boardWrite();
+  commitWork(workspace.path, "straddler.txt", "work\n");
+  releaseWorkspace(board, workspace, straddler, clock.now());
 }
 
 it("work でないタスクは着地対象ではない", async () => {
@@ -259,6 +287,26 @@ it("GitHub の無い purely-local work は merge question 面へ着地する", a
   );
 });
 
+it("purely-local の着地は ref を書かないので、またいだセッションが偽造した remote ref は quarantine される", async () => {
+  const workspace = await makeWorkspace("landing-local-straddle");
+  const { db, clock } = await openBoard();
+  const landing = createLanding({ defaultAgentName: "tako", db, clock, workspace, github: null });
+  const task = landingWork(db, clock);
+  git(workspace.path, "checkout", "-b", `task/${task.id}`);
+  commitWork(workspace.path, "feature.txt", "ready\n");
+  const remoteTaskRef = `refs/remotes/origin/task/${task.id}`;
+
+  await straddle(
+    db,
+    clock,
+    workspace,
+    () => expect(landing.land(task)).resolves.toMatchObject({ surface: "local_merge_question" }),
+    remoteTaskRef,
+  );
+
+  expect(workspaceQuarantine(db, workspace)?.purpose).toContain(remoteTaskRef);
+});
+
 it("remote-backed から purely-local へ変わった再発火は local question を立てて failure question を引退する", async () => {
   const { workspace } = await makeRemoteBackedWorkspace("landing-became-local");
   const { db, clock } = await openBoard();
@@ -407,8 +455,16 @@ it("open PR 更新は盤面が動かした remote ref だけを再基準化す�
     clock.now(),
     ...HUMAN_WEBUI,
   );
-  await prepareWorkspaceAtPickup(db, workspace, task, {});
+  git(workspace.path, "checkout", "-b", `task/${task.id}`);
+  commitWork(workspace.path, "feature.txt", "ready\n");
+  git(workspace.path, "checkout", "main");
   recordPrOpened(db, task, 1, "worker", clock.now(), undefined, undefined, "worker");
+
+  // push をまたいで走る別タスクのセッションは、盤面の push を違反に数えない
+  await straddle(db, clock, workspace, () => landing.land(getTask(db, task.id)!));
+  expect(workspaceNeedsHuman(db, workspace.name)).toBe(false);
+
+  await prepareWorkspaceAtPickup(db, workspace, task, {});
   commitWork(workspace.path, "repair.txt", "fixed\n");
   git(workspace.path, "tag", "worker-created-tag");
 
@@ -418,9 +474,7 @@ it("open PR 更新は盤面が動かした remote ref だけを再基準化す�
   });
   releaseWorkspace(db, workspace, task, clock.now());
 
-  const quarantine = listBoard(db).find(
-    (candidate) => (candidate.question_quarantine_kind === "workspace" && candidate.question_quarantine_value === workspace.name),
-  );
+  const quarantine = workspaceQuarantine(db, workspace);
   expect(quarantine?.purpose).toContain("refs/tags/worker-created-tag");
   expect(quarantine?.purpose).not.toContain(`refs/remotes/origin/task/${task.id}`);
 });
@@ -481,15 +535,26 @@ it("open PR branch の push 失敗は既存の着地痕跡で隠さず failure q
   git(workspace.path, "checkout", "-b", `task/${task.id}`);
   commitWork(workspace.path, "feature.txt", "ready\n");
   recordPrOpened(db, task, 1, "worker", clock.now(), undefined, undefined, "worker");
+  const remoteTaskRef = `refs/remotes/origin/task/${task.id}`;
 
-  await expect(landing.land(getTask(db, task.id)!)).resolves.toEqual({
-    kind: "failed",
-    reason: "promotion_failed",
-    error: "push rejected",
-  });
+  // 失敗した push の後に撮り直すと、またいだセッションの worker が偽造した ref まで
+  // 基準に飲まれる(ADR 0064 決定4)
+  await straddle(
+    db,
+    clock,
+    workspace,
+    () =>
+      expect(landing.land(getTask(db, task.id)!)).resolves.toEqual({
+        kind: "failed",
+        reason: "promotion_failed",
+        error: "push rejected",
+      }),
+    remoteTaskRef,
+  );
   expect(listBoard(db)).toContainEqual(
     expect.objectContaining({ question_pending_pr_promotion_task_id: task.id }),
   );
+  expect(workspaceQuarantine(db, workspace)?.purpose).toContain(remoteTaskRef);
 });
 
 it("PR 作成の失敗は閉じた理由で返して failure question を立てる", async () => {
@@ -898,6 +963,28 @@ it("fork 元が squash 着地した根は保護ブランチへ merge で追い�
   ).split(" ");
   expect(firstParent).toBe(before);
   expect(secondParent).toBe(git(workspace.path, "rev-parse", "refs/remotes/origin/main"));
+});
+
+it("追いつき merge をまたいで走るセッションは、盤面が動かした task branch で quarantine されない", async () => {
+  const { workspace } = await makeRemoteBackedWorkspace("landing-catch-up-straddle");
+  const { db, clock } = await openBoard();
+  const github = new FakeGitHubClient();
+  const landing = createLanding({ defaultAgentName: "tako", db, clock, workspace, github });
+  const parent = landingWork(db, clock);
+  git(workspace.path, "checkout", "-b", `task/${parent.id}`);
+  commitWork(workspace.path, "feature.txt", "parent result\n");
+  completeTask(db, parent, FULL_HANDOFF, "worker", clock.now(), "worker");
+  recordPrOpened(db, parent, 1, "worker", clock.now(), undefined, undefined, "worker");
+  const repair = attachUnsettledChild(db, clock, parent.id);
+  git(workspace.path, "checkout", "-b", `task/${repair.id}`, `task/${parent.id}`);
+  await squashTaskIntoOrigin(workspace, parent.id);
+  commitWork(workspace.path, "repair.txt", "fixed\n");
+  const before = git(workspace.path, "rev-parse", `task/${repair.id}`);
+
+  await straddle(db, clock, workspace, () => landing.land(repair));
+
+  expect(git(workspace.path, "rev-parse", `task/${repair.id}^1`)).toBe(before);
+  expect(workspaceNeedsHuman(db, workspace.name)).toBe(false);
 });
 
 // landingAnnotation は DB の状態だけで決まる — blocked_by の規則はここ(domain 層)で1度だけ述べる(ADR 0107)。

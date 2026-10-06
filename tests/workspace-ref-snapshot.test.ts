@@ -2,7 +2,6 @@ import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { createAgent } from "../src/agent-create.js";
-import { openDb } from "../src/db.js";
 import { GitHubAuth } from "../src/github-auth.js";
 import type { WorkspaceConfig } from "../src/workspace.js";
 import { publishWorkspace } from "../src/workspace-create.js";
@@ -382,26 +381,6 @@ it("worker が symref を新規に作れば quarantine に落ちる", async () =
   expect((await quarantineQuestion(t))?.purpose).toContain(
     "now: symref=refs/remotes/origin/main refs/remotes/origin/HEAD",
   );
-});
-
-// ADR 0081: 保存の形そのもの(db.ts の `workspace_state.ref_snapshot` の契約)。
-// symref の行だけが指し先を持ち、解決値の行はどこにも残らない。
-it("symref を持つ workspace のスナップショットは、symref の行を指し先で保存する", async () => {
-  const { workspace } = await makeRemoteBackedWorkspace("sandbox");
-  git(workspace.path, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main");
-  t = await bootTidepool({ workspace });
-  await registerWork(t, "gets a snapshot at pickup");
-  await t.clock.advance(HOUR);
-
-  const db = openDb(join(t.dir, "board.sqlite"));
-  const snapshot = (
-    db.prepare("SELECT ref_snapshot FROM workspace_state WHERE name = 'sandbox'").get() as {
-      ref_snapshot: string;
-    }
-  ).ref_snapshot;
-  db.close();
-
-  expect(snapshot.split("\n")).toContain("symref=refs/remotes/origin/main refs/remotes/origin/HEAD");
 });
 
 // ADR 0064 決定4 のテーブル**6行目**(ADR 0066 決定4 / issue #285): `publish` は

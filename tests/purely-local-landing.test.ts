@@ -1,7 +1,6 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
-import { openDb } from "../src/db.js";
 import {
   api,
   bootTidepool,
@@ -344,23 +343,10 @@ it("記録に保護ブランチの行が無ければ、位置が動いていな�
   await completeViaMcp(t, task.id);
   await completeIntegrationReviews(t, task.id);
   const question = await landingQuestionFor(t, task.id);
-  // 第2接続で盤面の記録から保護ブランチの行だけを抜く(WAL 下で安全 — harness の
-  // registerQuestion と同じ seam)
-  const db = openDb(join(t.dir, "board.sqlite"));
-  try {
-    const row = db
-      .prepare("SELECT ref_snapshot FROM workspace_state WHERE name = ?")
-      .get("sandbox") as { ref_snapshot: string };
-    db.prepare("UPDATE workspace_state SET ref_snapshot = ? WHERE name = ?").run(
-      row.ref_snapshot
-        .split("\n")
-        .filter((line) => !line.endsWith(" refs/heads/main"))
-        .join("\n"),
-      "sandbox",
-    );
-  } finally {
-    db.close();
-  }
+  // 盤面の記録から保護ブランチの行だけを抜く(残る空行は記録の読み手が読み飛ばす)
+  t.db
+    .prepare("UPDATE workspace_state SET ref_snapshot = replace(ref_snapshot, ?, '') WHERE name = ?")
+    .run(`${git(workspace.path, "rev-parse", "refs/heads/main")} refs/heads/main`, "sandbox");
 
   const answered = await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, {
     answers: ["merge"],
