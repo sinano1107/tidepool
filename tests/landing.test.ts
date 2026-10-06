@@ -10,7 +10,6 @@ import {
   registerLocalMergeQuestion,
   registerPrPromotionFailureQuestion,
 } from "../src/landing.js";
-import { openQuarantineQuestion } from "../src/quarantine.js";
 import { completeTask, getTask, listBoard, recordPrOpened, registerTask } from "../src/tasks.js";
 import { raiseObjection } from "../src/triage.js";
 import { BOARD_WORKER_ID } from "../src/worker-id.js";
@@ -1232,7 +1231,7 @@ it.each([
   const { db, clock } = await openBoard();
   const work = await setup(db, clock, workspace);
   const question = mergeQuestion(db, clock, { pending_local_merge_task_id: work.id });
-  expect(openQuarantineQuestion(db, "workspace", workspace.name)).toBeUndefined();
+  expect(workspaceQuarantine(db, workspace)).toBeUndefined();
 
   await expect(
     submitAnswer(
@@ -1245,6 +1244,6 @@ it.each([
     ),
   ).rejects.toThrow(DomainError);
 
-  expect(openQuarantineQuestion(db, "workspace", workspace.name)).toBeDefined();
+  expect(workspaceQuarantine(db, workspace)).toBeDefined();
   expect(getTask(db, question.id)?.status).toBe("todo");
 });
