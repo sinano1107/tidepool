@@ -1,5 +1,7 @@
 # 上の seam が写像を言うのは production に読み口のある記録だけで、assert の中の盤面 db は lint で落とす
 
+**Status: 決定3 の lint は、盤面 handle の生 SELECT と handle の別名の宣言まで広げる(ADR 0203)。**
+
 2026-09-25 の grilling(issue #946)で決定。ADR 0107 決定4 は harness の `t.db` を setup に限ったが、#518 の一括置換の後に
 3 PR(#545 / #918 / #936)で5箇所、`t.db` で events を読んで assert する形が入った。うち2箇所は決定3 と決定4 の衝突から
 来ている — 決定3 は経路タグを上の seam が言う写像に挙げるが、task を持たない盤面スコープの event にはサーバ境界の読み口が無い。
