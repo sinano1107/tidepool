@@ -4,7 +4,7 @@ import { expect, it, vi } from "vitest";
 import { openDb } from "../src/db.js";
 import { listEvents } from "../src/events.js";
 import { Slot } from "../src/slot.js";
-import { completeTask, listBoard, pickupTask, registerTask, type Task } from "../src/tasks.js";
+import { completeTask, pickupTask, registerTask, type Task } from "../src/tasks.js";
 import { runTeardown, type TeardownDeps } from "../src/teardown.js";
 import {
   prepareWorkspaceAtPickup,
@@ -13,7 +13,14 @@ import {
   type WorkspaceConfig,
 } from "../src/workspace.js";
 import { FakeClock, unusedLanding } from "./fakes.js";
-import { FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeWorkspace } from "./harness.js";
+import {
+  FULL_HANDOFF,
+  GIT_FIXTURE_TEST_TIMEOUT,
+  git,
+  HUMAN_WEBUI,
+  makeWorkspace,
+  workspaceQuarantine,
+} from "./harness.js";
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 
@@ -113,7 +120,7 @@ it("門が既に解決した workspace は後始末で解決し直さない —�
   });
 
   expect(resolveCalls).toBe(1);
-  const quarantine = listBoard(db).find((t) => (t.question_quarantine_kind === "workspace" && t.question_quarantine_value === "ghost"));
+  const quarantine = workspaceQuarantine(db, "ghost");
   expect(quarantine).toBeDefined();
   // 2度目は同じ観測を cause として重ねて記録するだけ = 人間には理由が二重に見える
   expect(listEvents(db, quarantine?.id ?? "").map((e) => e.payload.kind)).not.toContain(

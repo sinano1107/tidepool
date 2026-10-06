@@ -2,7 +2,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, it, vi } from "vitest";
 import { type Db, openDb } from "../src/db.js";
-import { listBoard, pickupTask, registerTask, type Task, type TaskType } from "../src/tasks.js";
+import { pickupTask, registerTask, type Task, type TaskType } from "../src/tasks.js";
 import {
   completionTreeGateApplies,
   prepareWorkspaceAtPickup,
@@ -11,7 +11,14 @@ import {
   type WorkspaceConfig,
   workspaceNeedsHuman,
 } from "../src/workspace.js";
-import { commitWork, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeWorkspace } from "./harness.js";
+import {
+  commitWork,
+  GIT_FIXTURE_TEST_TIMEOUT,
+  git,
+  HUMAN_WEBUI,
+  makeWorkspace,
+  workspaceQuarantine,
+} from "./harness.js";
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 
@@ -44,10 +51,6 @@ function releaseAfterCompletion(db: Db, ws: WorkspaceConfig, task: Task): void {
   releaseWorkspace(db, ws, task, NOW, task.type === "work", undefined, undefined, true);
 }
 
-/** 隔離の確認 question の本文(CONTEXT.md の Quarantine)、無ければ undefined。 */
-const quarantineReason = (db: Db): string | undefined =>
-  listBoard(db).find((t) => t.question_quarantine_kind === "workspace")?.purpose;
-
 it("完了の報告の後に書かれたものは成果ではない —— WIP も merge-back も無く workspace が quarantine に落ちる", async () => {
   const { db, task, ws } = await pickedUpSession();
   commitWork(ws.path, "deliverable.txt", "the real work\n");
@@ -59,7 +62,7 @@ it("完了の報告の後に書かれたものは成果ではない —— WIP �
   releaseAfterCompletion(db, ws, task);
 
   expect(workspaceNeedsHuman(db, ws.name)).toBe(true);
-  expect(quarantineReason(db)).toContain(`written to after task ${task.id} reported done`);
+  expect(workspaceQuarantine(db, ws.name)?.purpose).toContain(`written to after task ${task.id} reported done`);
   // 退避されていない: WIP コミットは無く、汚れはそのまま人間の修理材料として残る
   expect(git(ws.path, "log", "--oneline", `task/${task.id}`)).not.toContain("WIP");
   expect(git(ws.path, "status", "--porcelain")).not.toBe("");

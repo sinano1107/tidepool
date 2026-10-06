@@ -15,6 +15,7 @@ import {
   mcpClient,
   questions,
   registerWork,
+  servedWorkspaceQuarantine,
   type Tidepool,
 } from "./harness.js";
 
@@ -33,13 +34,6 @@ async function landingQuestionFor(board: Tidepool, taskId: string): Promise<any>
   );
   expect(found).toBeDefined();
   return found;
-}
-
-/** 隔離の確認 question(CONTEXT.md の Quarantine)の行、無ければ undefined。 */
-async function quarantineQuestion(board: Tidepool): Promise<any> {
-  return (await questions(board)).find(
-    (candidate) => candidate.question_quarantine_kind === "workspace",
-  );
 }
 
 /** ADR 0103 決定2 の直列ペア(#468 のライブ実測の形): 独立に登録された2件を続けて
@@ -181,7 +175,7 @@ it("直列に登録された2件目の着地は、1件目が進めた保護ブ�
   expect(git(workspace.path, "log", "-1", "--format=%an %cn", "main")).toBe("tidepool tidepool");
   // ADR 0053 根拠1: タスクブランチは差分の恒久記録であって、着地で書き換えられない
   expect(git(workspace.path, "rev-parse", `refs/heads/task/${second.id}`)).toBe(taskSha);
-  expect(await quarantineQuestion(t)).toBeUndefined();
+  expect(await servedWorkspaceQuarantine(t, "sandbox")).toBeUndefined();
 });
 
 // ADR 0103 決定3 / ADR 0064: 盤面は走っているセッションの checkout を動かさない。
@@ -210,13 +204,13 @@ it("走行中の slot を占めたまま来た非 ff の着地は、ref だけ�
   expect(readFileSync(join(workspace.path, "wip.txt"), "utf8")).toBe(
     "the running session's work in progress\n",
   );
-  expect(await quarantineQuestion(t)).toBeUndefined();
+  expect(await servedWorkspaceQuarantine(t, "sandbox")).toBeUndefined();
   // ADR 0064 決定4: 盤面が進めた行は撮り直されているので、走っていたセッションの解放は
   // 盤面自身のこの2度の書き込みを違反として読まない
   commitWork(workspace.path, "wip.txt", "the running session's work in progress\n");
   await completeViaMcp(t, third.id);
   await completeIntegrationReviews(t, third.id);
-  expect(await quarantineQuestion(t)).toBeUndefined();
+  expect(await servedWorkspaceQuarantine(t, "sandbox")).toBeUndefined();
 });
 
 // 走行中の綴りでも、コンフリクトは回答の拒否であって隔離ではない(ADR 0103 決定4)——
@@ -236,7 +230,7 @@ it("走行中の slot を占めたまま来た着地がコンフリクトして�
   });
 
   expect(answered.status).toBe(409);
-  expect(await quarantineQuestion(t)).toBeUndefined();
+  expect(await servedWorkspaceQuarantine(t, "sandbox")).toBeUndefined();
   expect(git(workspace.path, "rev-parse", "refs/heads/main")).toBe(protectedSha);
   expect(git(workspace.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe(`task/${third.id}`);
   expect(git(workspace.path, "rev-parse", "HEAD")).toBe(head);
@@ -258,7 +252,7 @@ it("snapshot が一致していれば着地のコンフリクトは回答を拒�
   });
 
   expect(answered.status).toBe(409);
-  expect(await quarantineQuestion(t)).toBeUndefined();
+  expect(await servedWorkspaceQuarantine(t, "sandbox")).toBeUndefined();
   expect(git(workspace.path, "rev-parse", "refs/heads/main")).toBe(protectedSha);
   expect(git(workspace.path, "rev-parse", `refs/heads/task/${second.id}`)).toBe(taskSha);
   expect(git(workspace.path, "status", "--porcelain")).toBe("");
@@ -295,12 +289,7 @@ it("保護ブランチが帯域外で進んで fast-forward できないと work
   expect(answered.status).toBe(409);
   const board = (await api(t.baseUrl, "GET", "/api/tasks")).json;
   expect(board.find((candidate: any) => candidate.id === landingQuestion.id).status).toBe("todo");
-  expect(
-    board.find(
-      (candidate: any) =>
-        candidate.type === "question" && (candidate.question_quarantine_kind === "workspace" && candidate.question_quarantine_value === "sandbox"),
-    ),
-  ).toBeDefined();
+  expect(await servedWorkspaceQuarantine(t, "sandbox")).toBeDefined();
 });
 
 // ADR 0103 決定1: 帯域外の判定は ff の成否ではなく盤面自身の記録(ref snapshot)との
@@ -328,7 +317,7 @@ it("保護ブランチが帯域外で巻き戻されると、ff できる位置�
   expect(answered.status).toBe(409);
   expect(git(workspace.path, "rev-parse", "refs/heads/main")).toBe(rolledBackTo);
   expect((await api(t.baseUrl, "GET", `/api/tasks/${question.id}`)).json.status).toBe("todo");
-  expect(await quarantineQuestion(t)).toMatchObject({ question_quarantine_kind: "workspace", question_quarantine_value: "sandbox" });
+  expect(await servedWorkspaceQuarantine(t, "sandbox")).toBeDefined();
 });
 
 // ADR 0103 決定1 の fail-closed(ADR 0064 決定6 と同じ姿勢): 記録の欠落に「検査を飛ばす」
@@ -357,7 +346,7 @@ it("記録に保護ブランチの行が無ければ、位置が動いていな�
   expect(answered.status).toBe(409);
   expect(answered.json.error).toContain("no recorded position");
   expect((await api(t.baseUrl, "GET", `/api/tasks/${question.id}`)).json.status).toBe("todo");
-  expect(await quarantineQuestion(t)).toMatchObject({ question_quarantine_kind: "workspace", question_quarantine_value: "sandbox" });
+  expect(await servedWorkspaceQuarantine(t, "sandbox")).toBeDefined();
 });
 
 it("着地 question に hold と答えると保護ブランチを動かさず決着し、再提示しない", async () => {
