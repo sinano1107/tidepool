@@ -2,6 +2,8 @@
 
 **Status 追記: 決定2 の「advisor の導出からも外れ」は ADR 0200 決定6 で置き換え** —— advisor は表の行ではなく Provider の最上位の系列の alias になり、行の Quarantine を見ない。
 
+**Status 追記: 決定3 の証拠の取り先は ADR 0202 で広がった** —— 表の行で撃つ Board call の result envelope も行の拒否の証拠で、断られた Board call は撃ち直しの失敗に数えない。
+
 2026-10-01 の triage / grilling(issue #1249)で決定。表の行は具体 id だけになったので(ADR 0182)、Provider がその id を
 断ると行は走れなくなる。断られた session は「報告なき exit」(ADR 0145)に落ち、retry は同じ行でまた落ち、question は行を
 名指さず、その行を使う task の数だけ立っていた。学習器はその行を未観測のまま離れない(ADR 0181)。実測と現状の読みは #1249 の
