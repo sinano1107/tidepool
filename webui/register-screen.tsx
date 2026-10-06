@@ -27,6 +27,9 @@ interface RegisterScreenIssueFields {
   github_issue_number: number;
   /** 要求ティア(盤面の段の名前)。issue 由来は常に work なので常に `tier` として送る。 */
   tier?: string;
+  /** 未指定は盤面の既定 agent(手入力の経路と同じ)。 */
+  assignee?: string;
+  risk_flag: boolean;
 }
 interface RegisterScreenManualFields {
   /** 画面が出すのはこの2つだけ(子追加は常に work)。 */
@@ -53,6 +56,8 @@ interface RegisterScreenGate {
   workspace?: string;
   github_issue_number?: number;
   tier?: string;
+  assignee?: string;
+  risk_flag?: boolean;
 }
 interface RegisterScreenProps {
   onRegister: (fields: RegisterScreenFields) => Promise<void>;
@@ -160,7 +165,7 @@ function RegisterScreen({ onRegister, parentTask, onClose }: RegisterScreenProps
     : title.trim() && purpose.trim() && criteria.trim() && (!childMode || reason.trim());
   const fields = (): RegisterScreenFields =>
     issueMode
-      ? { type: 'work', workspace: workspace.trim(), github_issue_number: Number(issueNumber.trim()), ...(tier ? { tier } : {}) }
+      ? { type: 'work', workspace: workspace.trim(), github_issue_number: Number(issueNumber.trim()), risk_flag: risk, ...(tier ? { tier } : {}), ...(assignee ? { assignee } : {}) }
       : {
           // a decompose child is always type work (decomposeTask's own
           // ChildSpec has no type field) — the type picker is dropped in
@@ -202,7 +207,7 @@ function RegisterScreen({ onRegister, parentTask, onClose }: RegisterScreenProps
       if (childMode) onClose?.();
     } catch (rawErr) {
       // a gate rejection carries the fix; anything else the toast reported.
-      // The inspected reference (and the requested tier) is burned into the
+      // The inspected reference (and the requested tier/assignee/risk flag) is burned into the
       // gate state so a later edit of the form fields can't repoint the
       // approved comment (or the retry) at a different issue than the one
       // that was inspected, nor change what the retry requests.
@@ -213,6 +218,8 @@ function RegisterScreen({ onRegister, parentTask, onClose }: RegisterScreenProps
           workspace: f.workspace,
           github_issue_number: f.github_issue_number,
           tier: f.tier,
+          assignee: f.assignee,
+          risk_flag: f.risk_flag,
         });
       }
     }
@@ -240,7 +247,9 @@ function RegisterScreen({ onRegister, parentTask, onClose }: RegisterScreenProps
       type: 'work',
       workspace: gate.workspace!,
       github_issue_number: gate.github_issue_number!,
-      tier: gate.tier,
+      risk_flag: gate.risk_flag!,
+      ...(gate.tier ? { tier: gate.tier } : {}),
+      ...(gate.assignee ? { assignee: gate.assignee } : {}),
     });
   };
   const draftFields = async () => {
@@ -338,7 +347,9 @@ function RegisterScreen({ onRegister, parentTask, onClose }: RegisterScreenProps
         {issueMode && (
           <React.Fragment>
             <Select label="Workspace" options={issueWorkspaceOptions} value={workspace} onChange={(e) => setWorkspace(e.target.value)} />
+            <Select label="Assignee" options={assigneeOptions} value={assignee} onChange={(e) => setAssignee(e.target.value)} />
             <Select label="Tier" options={tierOptions(tiers, "(agent's tier, then board default)")} value={tier} onChange={(e) => setTier(e.target.value)} />
+            <Checkbox label="risk flag — this task has irreversible external effects" checked={risk} onChange={() => setRisk(!risk)} />
             <Input label="Issue number" value={issueNumber} onChange={(e) => setIssueNumber(e.target.value)} placeholder="content stays on GitHub; the board keeps only this reference" />
             <div style={{ display: 'flex', flexDirection: 'column', gap: 4, maxHeight: 220, overflowY: 'auto' }}>
               {!workspace.trim() && (
