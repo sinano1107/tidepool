@@ -176,7 +176,7 @@ export const GIT_CREDENTIAL_ARGS = [
   'credential.helper=!f() { echo "username=x-access-token"; echo "password=$GH_TOKEN"; }; f',
 ] as const;
 
-/** The authenticated twin of workspace.ts's `git()`, for the board's git
+/** The authenticated twin of git.ts's `git()`, for the board's git
  *  network calls (push, clone). Local plumbing keeps using the plain helper;
  *  anything that must reach GitHub as `tidepool-board[bot]` comes through here.
  *

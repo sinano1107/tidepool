@@ -22,7 +22,7 @@ const TIDEPOOL_GIT_IDENTITY_ENV = {
   GIT_COMMITTER_EMAIL: TIDEPOOL_BOT_NOREPLY_EMAIL,
 } as const;
 
-/** Shared by every board-driven git call (here and workspace-create.ts).
+/** Shared by every board-driven git call (workspace.ts and workspace-create.ts).
  *  stderr captured, not inherited: git narrates checkouts on stderr and the
  *  board's console is not the place for it. */
 export function git(cwd: string, ...args: string[]): string {

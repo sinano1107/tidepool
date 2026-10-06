@@ -465,7 +465,7 @@ export function quarantineTestAgent(db: Db, name: string): void {
 }
 
 /** A real git checkout for tree-rule/branch-discipline/quarantine tests —
- *  stderr captured, not inherited, same as workspace.ts's own `git`. */
+ *  stderr captured, not inherited, same as src/git.ts's `git`. */
 export function git(dir: string, ...args: string[]): string {
   return execFileSync(
     "git",

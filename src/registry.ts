@@ -722,7 +722,7 @@ export interface RegistryReachability {
 }
 export type RegistryReachabilityCheck = () => Promise<RegistryReachability>;
 
-// stderr piped (not inherited), same as workspace.ts's `git()`: git narrates a
+// stderr piped (not inherited), same as git.ts's `git()`: git narrates a
 // missing ref on stderr, and the board's console is not the place for it — the
 // message still rides the thrown error for callers that want it (agentBodyAtCommit
 // swallows it by design).
