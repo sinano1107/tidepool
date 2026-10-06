@@ -933,7 +933,14 @@ function RegisterScreen({ onRegister, parentTask, onClose }) {
   const issueListHintStyle = { fontSize: "var(--text-sm)", color: "var(--text-secondary)" };
   const filteredIssues = issueNumber.trim() ? issues.filter((i) => String(i.number).includes(issueNumber.trim()) || i.title.toLowerCase().includes(issueNumber.trim().toLowerCase())) : issues;
   const ok = issueMode ? workspace.trim() && /^[0-9]+$/.test(issueNumber.trim()) : title.trim() && purpose.trim() && criteria.trim() && (!childMode || reason.trim());
-  const fields = () => issueMode ? { type: "work", workspace: workspace.trim(), github_issue_number: Number(issueNumber.trim()), ...tier ? { tier } : {} } : {
+  const fields = () => issueMode ? {
+    type: "work",
+    workspace: workspace.trim(),
+    github_issue_number: Number(issueNumber.trim()),
+    risk_flag: risk,
+    ...assignee ? { assignee } : {},
+    ...tier ? { tier } : {}
+  } : {
     // a decompose child is always type work (decomposeTask's own
     // ChildSpec has no type field) — the type picker is dropped in
     // childMode below, so `type` state never leaves its 'work' default
@@ -983,14 +990,7 @@ function RegisterScreen({ onRegister, parentTask, onClose }) {
       if (childMode) onClose?.();
     } catch (rawErr) {
       const detail = apiErrorDetail(rawErr, "POST /api/tasks 422");
-      if (detail) {
-        setGate({
-          ...detail,
-          workspace: f.workspace,
-          github_issue_number: f.github_issue_number,
-          tier: f.tier
-        });
-      }
+      if (detail && f.github_issue_number !== void 0) setGate({ ...detail, fields: f });
     }
     setBusy(false);
   };
@@ -1000,8 +1000,8 @@ function RegisterScreen({ onRegister, parentTask, onClose }) {
     setBusy(true);
     try {
       await api("/api/issue-comments", {
-        workspace: gate.workspace,
-        github_issue_number: gate.github_issue_number,
+        workspace: gate.fields.workspace,
+        github_issue_number: gate.fields.github_issue_number,
         body: gate.suggested_comment
       });
     } catch {
@@ -1009,12 +1009,7 @@ function RegisterScreen({ onRegister, parentTask, onClose }) {
       return;
     }
     setBusy(false);
-    await submitFields({
-      type: "work",
-      workspace: gate.workspace,
-      github_issue_number: gate.github_issue_number,
-      tier: gate.tier
-    });
+    await submitFields(gate.fields);
   };
   const draftFields = async () => {
     setDraftBusy(true);
@@ -1043,6 +1038,8 @@ function RegisterScreen({ onRegister, parentTask, onClose }) {
     ...names.map((n) => ({ value: n, label: n }))
   ];
   const assigneeOptions = withPlaceholder("", "(default agent)", candidates.assignees);
+  const assigneeSelect = /* @__PURE__ */ React.createElement(Select, { label: "Assignee", options: assigneeOptions, value: assignee, onChange: (e) => setAssignee(e.target.value) });
+  const riskCheckbox = /* @__PURE__ */ React.createElement(Checkbox, { label: "risk flag \u2014 this task has irreversible external effects", checked: risk, onChange: () => setRisk(!risk) });
   const workspaceOptions = withPlaceholder("", "(default workspace)", candidates.workspaces);
   const issueWorkspaceOptions = withPlaceholder("", "select workspace\u2026", candidates.workspaces);
   const primaryAction = issueMode || plainFormActive || drafted ? {
@@ -1068,7 +1065,7 @@ function RegisterScreen({ onRegister, parentTask, onClose }) {
     setGate(null);
     setTier("");
     setSelectedDumpId(null);
-  } }), issueMode && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(Select, { label: "Workspace", options: issueWorkspaceOptions, value: workspace, onChange: (e) => setWorkspace(e.target.value) }), /* @__PURE__ */ React.createElement(Select, { label: "Tier", options: tierOptions(tiers, "(agent's tier, then board default)"), value: tier, onChange: (e) => setTier(e.target.value) }), /* @__PURE__ */ React.createElement(Input, { label: "Issue number", value: issueNumber, onChange: (e) => setIssueNumber(e.target.value), placeholder: "content stays on GitHub; the board keeps only this reference" }), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 4, maxHeight: 220, overflowY: "auto" } }, !workspace.trim() && /* @__PURE__ */ React.createElement("span", { style: issueListHintStyle }, "select a workspace to browse its open issues"), workspace.trim() && issuesFailed && /* @__PURE__ */ React.createElement("span", { style: issueListHintStyle }, "couldn't fetch open issues \u2014 type the number directly"), workspace.trim() && !issuesFailed && filteredIssues.map((i) => /* @__PURE__ */ React.createElement(
+  } }), issueMode && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(Select, { label: "Workspace", options: issueWorkspaceOptions, value: workspace, onChange: (e) => setWorkspace(e.target.value) }), assigneeSelect, /* @__PURE__ */ React.createElement(Select, { label: "Tier", options: tierOptions(tiers, "(agent's tier, then board default)"), value: tier, onChange: (e) => setTier(e.target.value) }), riskCheckbox, /* @__PURE__ */ React.createElement(Input, { label: "Issue number", value: issueNumber, onChange: (e) => setIssueNumber(e.target.value), placeholder: "content stays on GitHub; the board keeps only this reference" }), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 4, maxHeight: 220, overflowY: "auto" } }, !workspace.trim() && /* @__PURE__ */ React.createElement("span", { style: issueListHintStyle }, "select a workspace to browse its open issues"), workspace.trim() && issuesFailed && /* @__PURE__ */ React.createElement("span", { style: issueListHintStyle }, "couldn't fetch open issues \u2014 type the number directly"), workspace.trim() && !issuesFailed && filteredIssues.map((i) => /* @__PURE__ */ React.createElement(
     "div",
     {
       key: i.number,
@@ -1086,7 +1083,7 @@ function RegisterScreen({ onRegister, parentTask, onClose }) {
     },
     /* @__PURE__ */ React.createElement("span", { style: { color: "var(--text-muted)" } }, "#", i.number),
     /* @__PURE__ */ React.createElement("span", null, i.title)
-  )), workspace.trim() && !issuesFailed && truncated && /* @__PURE__ */ React.createElement("span", { style: issueListHintStyle }, "older issues exist \u2014 type the number directly"))), !issueMode && !plainFormActive && !drafted && /* @__PURE__ */ React.createElement(Input, { multiline: true, rows: 4, placeholder: "what needs doing, in your own words \u2014 sloppy is fine here, sloppy completion criteria are not", value: dump, onChange: (e) => setDump(e.target.value) }), !issueMode && (plainFormActive || drafted) && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: drafted ? "var(--tide-4)" : "var(--sun-4)", textTransform: "uppercase", letterSpacing: "0.08em" } }, drafted ? "drafted \u2014 edit freely" : "plain form \u2014 same fields, no draft"), /* @__PURE__ */ React.createElement(Input, { label: "Title", value: title, onChange: (e) => setTitle(e.target.value) }), /* @__PURE__ */ React.createElement(Input, { label: "Purpose", multiline: true, rows: 2, value: purpose, onChange: (e) => setPurpose(e.target.value), placeholder: "state prerequisites here \u2014 the agent verifies and escalates cheaply" }), /* @__PURE__ */ React.createElement(Input, { label: "Completion criteria", multiline: true, rows: 2, value: criteria, onChange: (e) => setCriteria(e.target.value), placeholder: "sloppy completion criteria are the expensive kind" }), !childMode && /* @__PURE__ */ React.createElement(Select, { label: "Type", options: ["work", "review"], value: type, onChange: (e) => setType(e.target.value === "review" ? "review" : "work") }), /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 } }, /* @__PURE__ */ React.createElement(Select, { label: "Assignee", options: assigneeOptions, value: assignee, onChange: (e) => setAssignee(e.target.value) }), /* @__PURE__ */ React.createElement(Select, { label: "Workspace", options: workspaceOptions, value: workspace, onChange: (e) => setWorkspace(e.target.value) })), /* @__PURE__ */ React.createElement(Select, { label: "Tier", options: tierOptions(tiers, "(agent's tier, then board default)"), value: tier, onChange: (e) => setTier(e.target.value) }), /* @__PURE__ */ React.createElement(Checkbox, { label: "risk flag \u2014 this task has irreversible external effects", checked: risk, onChange: () => setRisk(!risk) }), /* @__PURE__ */ React.createElement(Checkbox, { label: "review flag \u2014 request an on-completion review", checked: review, onChange: () => setReview(!review) })), /* @__PURE__ */ React.createElement(Button, { variant: "primary", size: "lg", full: true, disabled: primaryAction.disabled, onClick: primaryAction.onClick }, primaryAction.label), childMode && /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "lg", full: true, disabled: busy, onClick: onClose }, "Cancel")), !issueMode && /* @__PURE__ */ React.createElement(
+  )), workspace.trim() && !issuesFailed && truncated && /* @__PURE__ */ React.createElement("span", { style: issueListHintStyle }, "older issues exist \u2014 type the number directly"))), !issueMode && !plainFormActive && !drafted && /* @__PURE__ */ React.createElement(Input, { multiline: true, rows: 4, placeholder: "what needs doing, in your own words \u2014 sloppy is fine here, sloppy completion criteria are not", value: dump, onChange: (e) => setDump(e.target.value) }), !issueMode && (plainFormActive || drafted) && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: drafted ? "var(--tide-4)" : "var(--sun-4)", textTransform: "uppercase", letterSpacing: "0.08em" } }, drafted ? "drafted \u2014 edit freely" : "plain form \u2014 same fields, no draft"), /* @__PURE__ */ React.createElement(Input, { label: "Title", value: title, onChange: (e) => setTitle(e.target.value) }), /* @__PURE__ */ React.createElement(Input, { label: "Purpose", multiline: true, rows: 2, value: purpose, onChange: (e) => setPurpose(e.target.value), placeholder: "state prerequisites here \u2014 the agent verifies and escalates cheaply" }), /* @__PURE__ */ React.createElement(Input, { label: "Completion criteria", multiline: true, rows: 2, value: criteria, onChange: (e) => setCriteria(e.target.value), placeholder: "sloppy completion criteria are the expensive kind" }), !childMode && /* @__PURE__ */ React.createElement(Select, { label: "Type", options: ["work", "review"], value: type, onChange: (e) => setType(e.target.value === "review" ? "review" : "work") }), /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 } }, assigneeSelect, /* @__PURE__ */ React.createElement(Select, { label: "Workspace", options: workspaceOptions, value: workspace, onChange: (e) => setWorkspace(e.target.value) })), /* @__PURE__ */ React.createElement(Select, { label: "Tier", options: tierOptions(tiers, "(agent's tier, then board default)"), value: tier, onChange: (e) => setTier(e.target.value) }), riskCheckbox, /* @__PURE__ */ React.createElement(Checkbox, { label: "review flag \u2014 request an on-completion review", checked: review, onChange: () => setReview(!review) })), /* @__PURE__ */ React.createElement(Button, { variant: "primary", size: "lg", full: true, disabled: primaryAction.disabled, onClick: primaryAction.onClick }, primaryAction.label), childMode && /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "lg", full: true, disabled: busy, onClick: onClose }, "Cancel")), !issueMode && /* @__PURE__ */ React.createElement(
     "button",
     {
       onClick: togglePlainForm,
