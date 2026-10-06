@@ -12,7 +12,7 @@ import { boardHalts } from "./board-halt.js";
 import type { Clock } from "./clock.js";
 import type { Db } from "./db.js";
 import type { DraftClient } from "./draft.js";
-import { getLogCursor, listEvents, listLog } from "./events.js";
+import { getLogCursor, listEvents } from "./events.js";
 import {
   changeExecutionSettings,
   executionSettingsChangeSchema,
@@ -100,6 +100,7 @@ import {
   presentTask,
 } from "./tasks.js";
 import { sessionInTeardown } from "./teardown.js";
+import { listLog } from "./triage.js";
 import type { PendingReclaim } from "./watchdog.js";
 import { GitDirNotADirectoryError, UnknownWorkspaceError, type WorkspaceConfig } from "./workspace.js";
 import {

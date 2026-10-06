@@ -15,11 +15,12 @@ import {
   latestEventOfTask,
   listEvents,
   objectionBundles,
+  sessionSpawnOf,
+  sessionWindow,
   taskDecisionLog,
 } from "./events.js";
 import { type ExecutionSettingRow, readExecutionSettings } from "./execution-setting.js";
 import { buildMemoryInjection, createBehaviorCandidate, listMemoryEntries, memoryScope, recordKnowledge, requireDecision } from "./memory.js";
-import { sessionSpawnOf, sessionWindow } from "./precedent.js";
 import type { ProcessContainers } from "./process-container.js";
 import { BOARD_WORKER_ID, DomainError, getTask, getTextAuthor, HUMAN_WORKER_ID, isNonAgentWorkerId, listChildren, type Task } from "./tasks.js";
 import { boardCallRow } from "./throttle.js";
