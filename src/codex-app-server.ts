@@ -2,7 +2,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { z } from "zod";
-import { type BoardCall, readOutput } from "./board-call.js";
+import { atNeutralCwd, type BoardCall, readOutput } from "./board-call.js";
 import type { ContainmentCapability } from "./containment.js";
 
 export const CODEX_APP_SERVER_VERSION = "codex-cli 0.147.0";
@@ -131,9 +131,9 @@ export const CODEX_APP_SERVER_LIMIT_MS = 15_000;
 export const codexCommandThrough =
   (call: BoardCall, kind: string, limitMs: number): CodexCliCommand =>
   async (executable, args, options) =>
-    (await call(
-      { kind, harness: "codex", command: executable, args, cwd: process.cwd(), env: options.env, limitMs, stdin: "pipe" },
-      (proc) => {
+    // 呼び出しごとの空の cwd(ADR 0206): 盤面を起動した checkout の `.codex` を project 層として読ませない
+    (await atNeutralCwd("tidepool-codex-app-server-", (cwd) =>
+      call({ kind, harness: "codex", command: executable, args, cwd, env: options.env, limitMs, stdin: "pipe" }, (proc) => {
         const read = readOutput(proc);
         const stdin = proc.stdin!;
         // 読まずに exit した process への書き込み(EPIPE)で盤面を落とさない —— 失敗は exit code が言う
@@ -152,7 +152,7 @@ export const codexCommandThrough =
           stdin.write(options.input ?? "");
         } else stdin.end(options.input ?? "");
         return read;
-      },
+      }),
     )) ?? { exitCode: null, stdout: "", stderr: `the ${kind} Board call did not complete (limit, spawn failure, or no container)` };
 
 /** openai の資格情報の不在(ADR 0116 決定4): Codex の login 未実施 = codexHome 配下に

@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { Clock } from "./clock.js";
 import type { ContainmentCapability } from "./containment.js";
 import type { ContainedProcess, ProcessContainers, PtyFn, PtyProcess } from "./process-container.js";
@@ -64,6 +67,21 @@ export interface BoardCall {
     spec: BoardCallSpec,
     read: (proc: ContainedProcess, done: () => void) => (exitCode: number | null) => T | null,
   ): Promise<T | null>;
+}
+
+/** A Board call at a *neutral* cwd: a fresh empty directory, so nothing a checkout
+ *  carries takes part in what the CLI resolves. Cleaned up only AFTER the probe
+ *  settles — the CLI is still running against this cwd until then, so removing
+ *  it mid-probe would be a race. */
+export function atNeutralCwd<T>(prefix: string, probe: (cwd: string) => Promise<T>): Promise<T> {
+  const dir = mkdtempSync(join(tmpdir(), prefix));
+  return probe(dir).finally(() => {
+    try {
+      rmSync(dir, { recursive: true, force: true });
+    } catch {
+      // best-effort: a leftover empty temp dir is harmless
+    }
+  });
 }
 
 /** 1回の呼び出しの出力。stdout / stderr を1つの文字列として読み切る呼び出し

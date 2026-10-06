@@ -1,9 +1,9 @@
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
-import { homedir, tmpdir } from "node:os";
+import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { type ResolvedAgent, resolveAgentOrQuarantine, resolveExecutionAgent } from "./agent.js";
-import { type BoardCall, type BoardCallSpec, readOutput } from "./board-call.js";
+import { atNeutralCwd, type BoardCall, type BoardCallSpec, readOutput } from "./board-call.js";
 import { boardDoctrine, boardProse } from "./board-prose.js";
 import { type BoardStatePath, boardStateOverlap } from "./board-state.js";
 import { readLines, readStderrTail, settleOnOutputClose } from "./child-stream.js";
@@ -1199,24 +1199,6 @@ function enumerateSkillsThrough(
     },
     (proc) => readInitReport(proc.stdout, (parsed) => readInitField(parsed, "skills")),
   );
-}
-
-/** A ping at a *neutral* cwd: a fresh empty directory, so nothing a checkout
- *  carries takes part in what the CLI resolves. Cleaned up only AFTER the probe
- *  resolves — the CLI is still running against this cwd until then, so removing
- *  it mid-probe would be a race. */
-function atNeutralCwd<T>(
-  prefix: string,
-  probe: (cwd: string) => Promise<T | null>,
-): Promise<T | null> {
-  const dir = mkdtempSync(join(tmpdir(), prefix));
-  return probe(dir).finally(() => {
-    try {
-      rmSync(dir, { recursive: true, force: true });
-    } catch {
-      // best-effort: a leftover empty temp dir is harmless
-    }
-  });
 }
 
 /** The tool-surface probe's boundary (ADR 0039 決定3 / ADR 0108 決定1): what a
