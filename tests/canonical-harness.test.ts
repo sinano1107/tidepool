@@ -1,10 +1,10 @@
 import { expect, it } from "vitest";
+import { PROVIDER_VALUES } from "../src/provider.js";
 import {
   assertValidAgentDefinition,
   canonicalHarness,
   InvalidAgentDefinitionError,
   normalizeProviderEntries,
-  PROVIDER_VALUES,
 } from "../src/registry.js";
 import { seedTierNames } from "./fakes.js";
 

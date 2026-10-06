@@ -27,8 +27,9 @@ import {
 } from "../src/execution-setting.js";
 import { submitAnswer } from "../src/human-verbs.js";
 import { registerMetaReview } from "../src/meta-review.js";
+import { PROVIDER_VALUES, type Provider } from "../src/provider.js";
 import { registerQuarantine, tableRowValue } from "../src/quarantine.js";
-import { assertValidAgentDefinition, PROVIDER_VALUES, type Provider } from "../src/registry.js";
+import { assertValidAgentDefinition } from "../src/registry.js";
 import { RegistryPushFailedError } from "../src/registry-write.js";
 import { proposeRoutingChange } from "../src/routing-review.js";
 import { cancelTaskDirectly, getTask, type RegistryProposal, type RoutingProposal, type RoutingRowProposal, registerTask, type TierDescriptionProposal } from "../src/tasks.js";

@@ -16,6 +16,7 @@ import {
 import type { Clock } from "./clock.js";
 import { type ContainmentCapability, quarantineContainment } from "./containment.js";
 import type { Db } from "./db.js";
+import { DEFAULT_AUDITOR_NAME } from "./defaults.js";
 import { type AdvisorRecord, appendEvent, type EventPayload, type RowRefusal, type RowRefusalCause } from "./events.js";
 import { type ExecutionSetting, MOONSHOT_DEFAULT_MODEL, resolveExecutionSetting } from "./execution-setting.js";
 import { buildMemoryInjection, buildMetaReviewMaterial, type InjectionQuery, recordMemoryInjection, recordMetaReviewMaterial } from "./memory.js";
@@ -39,7 +40,6 @@ import {
   readInitModel,
 } from "./stream-json.js";
 import {
-  DEFAULT_AUDITOR_NAME,
   resolveTaskAgent,
   type Task,
 } from "./tasks.js";

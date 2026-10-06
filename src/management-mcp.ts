@@ -6,7 +6,6 @@ import {
   type AgentAdmin,
   BuiltInAgentNotEditableError,
   InvalidAgentIconError,
-  UnknownAuthorityProfileError,
 } from "./agent-create.js";
 import { boardHalts } from "./board-halt.js";
 import type { Clock } from "./clock.js";
@@ -79,6 +78,7 @@ import {
   InvalidWorkspaceNameError,
   isBuiltInAgentName,
   MERGE_DIAL_VALUES,
+  UnknownAuthorityProfileError,
 } from "./registry.js";
 import { RepoAccessMissingError } from "./repo-access.js";
 import { nextDescription, packItems, type ReadPosition, readNext } from "./response-budget.js";

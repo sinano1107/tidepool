@@ -5,12 +5,12 @@ import {
   type AgentAdmin,
   BuiltInAgentNotEditableError,
   InvalidAgentIconError,
-  UnknownAuthorityProfileError,
 } from "./agent-create.js";
 import { boardHalts } from "./board-halt.js";
 import { quarantineBoardCallRefusal, quarantineCliAuthFailure } from "./cli-auth.js";
 import type { Clock } from "./clock.js";
 import type { Db } from "./db.js";
+import { DEFAULT_AUDITOR_NAME } from "./defaults.js";
 import {
   getDisplayLanguage,
   SUPPORTED_DISPLAY_LANGUAGES,
@@ -72,6 +72,7 @@ import {
 } from "./pace-offsets.js";
 import { isPaused, setPaused } from "./pause.js";
 import { type ProfileAdmin, ProfileConfirmationRequiredError } from "./profile-create.js";
+import { PROVIDER_VALUES } from "./provider.js";
 import { removePushSubscription, savePushSubscription } from "./push.js";
 import { type QuarantineChecks, type QuarantineResolvers, quarantineStops } from "./quarantine.js";
 import { getQuietHours, HH_MM_PATTERN, setBoardTimezone, setQuietHours } from "./quiet-hours.js";
@@ -86,8 +87,8 @@ import {
   InvalidWorkspaceNameError,
   isBuiltInAgentName,
   PROVIDER_OPTIONS,
-  PROVIDER_VALUES,
   type RegistryCandidates,
+  UnknownAuthorityProfileError,
 } from "./registry.js";
 import {
   DeletionBlockedError,
@@ -103,7 +104,6 @@ import { clearSpendDown, getSpendDown, isKnownSpendDownTarget, setSpendDown } fr
 import {
   type BoardTask,
   countUnsettledTasksReferencing,
-  DEFAULT_AUDITOR_NAME,
   getTask,
   HANDOFF_FIELDS,
   listBoard,

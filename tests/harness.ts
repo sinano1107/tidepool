@@ -28,10 +28,10 @@ import type { GitHubAuth } from "../src/github-auth.js";
 import type { HarnessContainmentCheck } from "../src/harness-containment.js";
 import { recordKnowledge } from "../src/memory.js";
 import type { ProfileAdmin } from "../src/profile-create.js";
+import type { Provider } from "../src/provider.js";
 import type { QuarantineResolvers } from "../src/quarantine.js";
 import type {
   AuthorityProfile,
-  Provider,
   RegistryCandidates,
   RegistryReachabilityCheck,
   RegistrySource,

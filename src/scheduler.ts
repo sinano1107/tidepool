@@ -8,6 +8,7 @@ import {
   containmentPickupBlocked,
 } from "./containment.js";
 import type { Db } from "./db.js";
+import { DEFAULT_AUDITOR_NAME } from "./defaults.js";
 import { getDisplayLanguage } from "./display-language.js";
 import { appendEvent } from "./events.js";
 import {
@@ -27,11 +28,11 @@ import { aggregateCells, type CellStats, loadEpisodes, type RoutingEpisode, reco
 import { type InjectionQuery, injectionQueryText } from "./memory.js";
 import { registerDueMetaReviews } from "./meta-review.js";
 import type { ProcessContainers } from "./process-container.js";
+import type { Provider } from "./provider.js";
 import { quarantineExcludedProviders, quarantineStops, registerQuarantine, tableRowValue } from "./quarantine.js";
 import {
   canonicalHarness,
   InvalidAgentDefinitionError,
-  type Provider,
   type RegistryReachabilityCheck,
   type RegistrySource,
 } from "./registry.js";
@@ -44,7 +45,6 @@ import {
   abandonConsequence,
   carriesHumanWords,
   contentSourceFor,
-  DEFAULT_AUDITOR_NAME,
   escalateTask,
   nextSlotTask,
   pickupTask,

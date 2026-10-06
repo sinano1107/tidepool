@@ -6,9 +6,8 @@ import {
   createAgent,
   InvalidAgentIconError,
   listAgentViews,
-  UnknownAuthorityProfileError,
 } from "../src/agent-create.js";
-import { InvalidAgentDefinitionError, InvalidAgentNameError, InvalidSkillAllowlistError, loadRegistry } from "../src/registry.js";
+import { InvalidAgentDefinitionError, InvalidAgentNameError, InvalidSkillAllowlistError, loadRegistry, UnknownAuthorityProfileError } from "../src/registry.js";
 import { RegistryFetchFailedError, RegistryPushFailedError } from "../src/registry-write.js";
 import { seedTierNames } from "./fakes.js";
 import { makeRegistry, makeRemoteBackedRegistry } from "./registry-fixture.js";

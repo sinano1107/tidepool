@@ -1,6 +1,7 @@
 import { afterEach, expect, it } from "vitest";
 import { quarantineAgent } from "../src/agent.js";
-import { DEFAULT_AUDITOR_NAME, registerTask } from "../src/tasks.js";
+import { DEFAULT_AUDITOR_NAME } from "../src/defaults.js";
+import { registerTask } from "../src/tasks.js";
 import { api, bootTidepool, HOUR, HUMAN_WEBUI, queueWork, type Tidepool } from "./harness.js";
 
 let t: Tidepool;

@@ -3,7 +3,7 @@ import type { Cause } from "./cause.js";
 import type { Db } from "./db.js";
 import type { ExecutionSettingRow, ExecutionSettingsChange, ProviderSource, registryPinChanges, routingPinChanges, TierSource } from "./execution-setting.js";
 import type { InvalidationReason, MemoryDropReason, MemoryEntryFields } from "./memory.js";
-import type { Provider } from "./registry.js";
+import type { Provider } from "./provider.js";
 import type { MemoryProposal, ProposalAmendment, TaskType } from "./tasks.js";
 import type { Tier } from "./tier.js";
 

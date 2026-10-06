@@ -4,7 +4,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { ClaudeCodeWorker, type ClaudeWorkerOptions } from "../src/claude-worker.js";
 import { CodexWorker } from "../src/codex-worker.js";
 import { executionSettingsFor } from "../src/execution-setting.js";
-import type { Provider } from "../src/registry.js";
+import type { Provider } from "../src/provider.js";
 import type { WorkerFactory } from "../src/server.js";
 import { type Transcript, TranscriptStore } from "../src/transcript-store.js";
 import { FakeContainerRuntime, healthyOpenai, healthyUsageText, recordingSpawn } from "./fakes.js";

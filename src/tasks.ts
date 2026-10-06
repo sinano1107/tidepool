@@ -12,8 +12,6 @@ import type { MergeDial, RosterAgent } from "./registry.js";
 import { assertKnownTier, liveTierId, PRIORITIES, type Priority, proposalTierNames, type Tier, type TierId } from "./tier.js";
 import { BOARD_WORKER_ID, HUMAN_WORKER_ID, NON_AGENT_WORKER_IDS } from "./worker-id.js";
 
-export { DEFAULT_AUDITOR_NAME };
-
 /** The one roster entry `human` gets (issue #43 / ADR 0014): human carries
  *  no registry definition, but CONTEXT.md's Roster still surfaces it as a
  *  delegable worker. A single `RosterAgent` value, not a string and a
