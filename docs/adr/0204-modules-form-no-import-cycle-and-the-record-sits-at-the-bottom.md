@@ -16,9 +16,10 @@
 3. **`events` は成分の最下層に置き、上の層を読まない。** 記録そのものだからである。決定ログ一覧の read model(`listLog`)は
    ログ流し読みの読みとして `triage` へ移し、session の窓(`sessionWindow` / `sessionSpawnOf`)は `EventRow` だけを読む純関数として
    `events` へ下ろす。
-4. **`execution-setting` は種別表と読みの module として `tasks` の下に残し、設定の変更とその波及を上位の module へ出す。**
-   `tasks` が読むのは種別表であり、`execution-setting` を読む module の大半と `db` の種も読む側である。波及(question の決着、
-   quarantine、registry への書き込み)は `tasks` の上にあるのが向きに合う。
+4. **ティア(段)の一覧を `tasks` の下の module へ出し、`execution-setting` は全体として `tasks` と `quarantine` の上に置く。**
+   `tasks` と `db` が読むのは実行設定の表ではなく段の一覧(名前と id の引き、名前の検査、提案の段の名前への引き、優先度、
+   段の種)であり、この塊は quarantine を読まない。実行設定の側は変更と波及だけでなく「この行で走れるか」の読みも行の
+   Quarantine を読む(ADR 0184 追記)ので、`quarantine` が宣言する向き(`quarantine` → タスクの module)の上にしか置けない。
 5. **成分の葉になる値は、依存ゼロの module へ概念ごとに出す。** `DomainError`、worker の id、`git`。寄せ集めの module は
    何でも置ける場所になって次の循環の温床になるので作らない。互換の re-export も残さない。
 
@@ -31,5 +32,5 @@
 - **成分を解くだけで lint を入れない** — 循環は #1436 のように辺1本ずつ足されてできたので、解いても戻る。
 - **壊れたら葉を切り出す運用を続ける** — 「壊れれば test が落ちて気づく」が前提だが、落ちるかは読み込みの入口で決まるので
   その前提が成り立たない。
-- **`execution-setting` の種別表の読みを下位の module へ出し、本体を `tasks` の上に置く** — 動く関数が多く、読む側の大半が
-  import 元を変えることになる。
+- **`execution-setting` を `tasks` の下に残し、変更・波及と走れる行の読みを上位の module へ出す** — 走れる行の読みを読む
+  module の大半が import 元を変えることになり、動く量も段の一覧を下ろすより多い。
