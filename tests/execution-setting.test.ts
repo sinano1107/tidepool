@@ -37,7 +37,7 @@ import { registerQuarantine, tableRowValue } from "../src/quarantine.js";
 import { assertValidAgentDefinition, PROVIDER_VALUES, type Provider } from "../src/registry.js";
 import { RegistryPushFailedError } from "../src/registry-write.js";
 import { proposeRoutingChange } from "../src/routing-review.js";
-import { cancelTaskDirectly, DomainError, getTask, type RegistryProposal, type RoutingProposal, registerTask, type TierDescriptionProposal } from "../src/tasks.js";
+import { cancelTaskDirectly, DomainError, getTask, type RegistryProposal, type RoutingProposal, type RoutingRowProposal, registerTask, type TierDescriptionProposal } from "../src/tasks.js";
 import { boardCallRow, reportProviderUsage } from "../src/throttle.js";
 import { unusedLanding } from "./fakes.js";
 import { HUMAN_WEBUI } from "./harness.js";
@@ -397,23 +397,44 @@ it("review の要求は priority を持たず quality の並べ方で解決さ�
   expect(select(input({ entries: both, reviewTier: "standard", priority: "cost" })).model).toBe("claude-opus-5-5");
 });
 
-/** routing の行の提案(issue #918 / ADR 0150 決定1): pin はその行の全欄。 */
+/** 段の id は盤面の内部(ADR 0200 決定2)。照合のテストは種の段に id を振って使う。 */
+const TIERS = SEED_TIERS.map((tier, index) => ({ id: index + 1, ...tier }));
+const tierId = (name: string) => TIERS.find((tier) => tier.name === name)!.id;
+const renamed = (from: string, to: string) => TIERS.map((tier) => (tier.name === from ? { ...tier, name: to } : tier));
+/** 段 `name` を消し、同じ名前・説明・位置の新しい段(別の id)を置いた一覧。 */
+const withNew = (name: string) => TIERS.map((tier) => (tier.name === name ? { ...tier, id: 99 } : tier));
+/** 段 `from` を `to` に改名し、空いた `from` の名前で新しい段を足した一覧。 */
+const reusing = (from: string, to: string) => [...withNew(from), { ...TIERS.find((tier) => tier.name === from)!, name: to }];
+const renameRows = (from: string, to: string) => SEED_EXECUTION_SETTINGS.map((row) => (row.tier === from ? { ...row, tier: to } : row));
+
+/** routing の行の提案(issue #918 / ADR 0150 決定1): pin はその行の全欄。段は id で焼く。 */
 const opusRow = { provider: "anthropic", tier: "standard", model: "claude-opus-5-5", effort: "high", price_in: 5, price_out: 25 } as const;
-const rowProposal = { kind: "routing", op: "row", row: { provider: "anthropic", model: "claude-opus-5-5", effort: "high" }, change: { tier: "frontier" }, pin: opusRow } as const;
+const rowProposal: RoutingRowProposal = {
+  kind: "routing",
+  op: "row",
+  row: { provider: "anthropic", model: "claude-opus-5-5", effort: "high" },
+  change: { tier: tierId("frontier") },
+  pin: { ...opusRow, tier: tierId("standard") },
+};
 
 it("pin の照合は鍵 (provider, model, effort) で引いた行の全欄の一致で、崩れた欄の名前を返す —— 行が消えていれば(effort の書き換えも)null", () => {
-  expect(routingPinChanges(rowProposal, { table: SEED_EXECUTION_SETTINGS, learnerPromoted: false, tiers: SEED_TIERS })).toEqual([]);
+  expect(routingPinChanges(rowProposal, { table: SEED_EXECUTION_SETTINGS, learnerPromoted: false, tiers: TIERS })).toEqual([]);
   const edit = (change: object) => SEED_EXECUTION_SETTINGS.map((row) => (row.model === "claude-opus-5-5" ? { ...row, ...change } : row));
-  expect(routingPinChanges(rowProposal, { table: edit({ tier: "frontier", price_out: 30 }), learnerPromoted: false, tiers: SEED_TIERS })).toEqual(["tier", "price_out"]);
-  expect(routingPinChanges(rowProposal, { table: edit({ effort: "max" }), learnerPromoted: false, tiers: SEED_TIERS })).toBeNull();
+  expect(routingPinChanges(rowProposal, { table: edit({ tier: "frontier", price_out: 30 }), learnerPromoted: false, tiers: TIERS })).toEqual(["tier", "price_out"]);
+  expect(routingPinChanges(rowProposal, { table: edit({ effort: "max" }), learnerPromoted: false, tiers: TIERS })).toBeNull();
   // 別の行の編集は pin に触れない
   const other = SEED_EXECUTION_SETTINGS.map((row) => (row.model === "claude-sonnet-5-5" ? { ...row, tier: "standard" as const } : row));
-  expect(routingPinChanges(rowProposal, { table: other, learnerPromoted: false, tiers: SEED_TIERS })).toEqual([]);
-  expect(routingPinChanges(rowProposal, { table: SEED_EXECUTION_SETTINGS.filter((row) => row.model !== "claude-opus-5-5"), learnerPromoted: false, tiers: SEED_TIERS })).toBeNull();
+  expect(routingPinChanges(rowProposal, { table: other, learnerPromoted: false, tiers: TIERS })).toEqual([]);
+  expect(routingPinChanges(rowProposal, { table: SEED_EXECUTION_SETTINGS.filter((row) => row.model !== "claude-opus-5-5"), learnerPromoted: false, tiers: TIERS })).toBeNull();
+});
+
+it("行の pin の段は id で比べる —— 改名では崩れず、改名で空いた名前の新しい段に行が移れば tier が崩れる(issue #1436)", () => {
+  expect(routingPinChanges(rowProposal, { table: renameRows("standard", "mid"), learnerPromoted: false, tiers: renamed("standard", "mid") })).toEqual([]);
+  expect(routingPinChanges(rowProposal, { table: SEED_EXECUTION_SETTINGS, learnerPromoted: false, tiers: reusing("standard", "mid") })).toEqual(["tier"]);
 });
 
 it("昇格 / 降格の提案の pin はフラグの現在値 —— フラグが変われば learner_promoted が崩れ、表の編集では崩れない", () => {
-  const settings = (learnerPromoted: boolean, t: ExecutionSettingTable = SEED_EXECUTION_SETTINGS) => ({ table: t, learnerPromoted, tiers: SEED_TIERS });
+  const settings = (learnerPromoted: boolean, t: ExecutionSettingTable = SEED_EXECUTION_SETTINGS) => ({ table: t, learnerPromoted, tiers: TIERS });
   const promote = { kind: "routing", op: "promote", pin: { promoted: false } } as const;
   const demote = { kind: "routing", op: "demote", pin: { promoted: true } } as const;
   expect(routingPinChanges(promote, settings(false, []))).toEqual([]);
@@ -422,10 +443,11 @@ it("昇格 / 降格の提案の pin はフラグの現在値 —— フラグが
   expect(routingPinChanges(demote, settings(false))).toEqual(["learner_promoted"]);
 });
 
-it("適用する行は pin の行に提案の変更、その上に修正値を重ねたもの", () => {
-  expect(composeRoutingRow(rowProposal)).toEqual({ ...opusRow, tier: "frontier" });
-  expect(composeRoutingRow(rowProposal, { effort: "max" })).toEqual({ ...opusRow, tier: "frontier", effort: "max" });
-  expect(composeRoutingRow(rowProposal, { tier: "economy" })).toEqual({ ...opusRow, tier: "economy" });
+it("適用する行は pin の行に提案の変更、その上に修正値を重ねたもの(段は名前へ引いた提案で合成する)", () => {
+  const named: RoutingRowProposal<string> = { ...rowProposal, change: { tier: "frontier" }, pin: opusRow };
+  expect(composeRoutingRow(named)).toEqual({ ...opusRow, tier: "frontier" });
+  expect(composeRoutingRow(named, { effort: "max" })).toEqual({ ...opusRow, tier: "frontier", effort: "max" });
+  expect(composeRoutingRow(named, { tier: "economy" })).toEqual({ ...opusRow, tier: "economy" });
 });
 
 it("行の変更・修正値の形は tier / effort の少なくとも1つだけで、それ以外は DomainError", () => {
@@ -436,25 +458,29 @@ it("行の変更・修正値の形は tier / effort の少なくとも1つだけ
 });
 
 /** 段の説明の書き換えの提案(ADR 0200 決定7): pin は説明のいまの文面。 */
-it("段の説明の提案の pin は名前で引いた生きている段の説明 —— 文面が変われば description、段が無ければ null、別の段・位置・表の編集では崩れない", () => {
-  const proposal: TierDescriptionProposal = { kind: "routing", op: "tier_description", tier: "standard", description: "new", evidence: [7], pin: { description: SEED_TIERS[1]!.description } };
-  const settings = (tiers: readonly { name: string; description: string }[], t: ExecutionSettingTable = SEED_EXECUTION_SETTINGS) => ({ table: t, learnerPromoted: false, tiers });
-  const edit = (name: string, change: object) => SEED_TIERS.map((tier) => (tier.name === name ? { ...tier, ...change } : tier));
-  expect(routingPinChanges(proposal, settings(SEED_TIERS))).toEqual([]);
+it("段の説明の提案の pin は id で引いた生きている段の説明 —— 文面が変われば description、段が無ければ null、改名・別の段・位置・表の編集では崩れない", () => {
+  const proposal: TierDescriptionProposal = { kind: "routing", op: "tier_description", tier: tierId("standard"), description: "new", evidence: [7], pin: { description: SEED_TIERS[1]!.description } };
+  const settings = (tierList: readonly { id: number; name: string; description: string }[], t: ExecutionSettingTable = SEED_EXECUTION_SETTINGS) => ({ table: t, learnerPromoted: false, tiers: tierList });
+  const edit = (name: string, change: object) => TIERS.map((tier) => (tier.name === name ? { ...tier, ...change } : tier));
+  expect(routingPinChanges(proposal, settings(TIERS))).toEqual([]);
   expect(routingPinChanges(proposal, settings(edit("standard", { description: "edited" })))).toEqual(["description"]);
-  expect(routingPinChanges(proposal, settings(SEED_TIERS.filter((tier) => tier.name !== "standard")))).toBeNull();
+  expect(routingPinChanges(proposal, settings(TIERS.filter((tier) => tier.name !== "standard")))).toBeNull();
   expect(routingPinChanges(proposal, settings(edit("economy", { description: "edited" })))).toEqual([]);
-  expect(routingPinChanges(proposal, settings([...SEED_TIERS].reverse()))).toEqual([]);
-  expect(routingPinChanges(proposal, settings(SEED_TIERS, SEED_EXECUTION_SETTINGS.filter((row) => row.tier !== "standard")))).toEqual([]);
+  expect(routingPinChanges(proposal, settings([...TIERS].reverse()))).toEqual([]);
+  expect(routingPinChanges(proposal, settings(TIERS, SEED_EXECUTION_SETTINGS.filter((row) => row.tier !== "standard")))).toEqual([]);
+  // 改名は同じ段。消した段の名前を使い直した新しい段(同じ説明)は別の段(issue #1436)
+  expect(routingPinChanges(proposal, settings(renamed("standard", "mid")))).toEqual([]);
+  expect(routingPinChanges(proposal, settings(withNew("standard")))).toBeNull();
 });
 
 /** agent の既定 tier の提案(issue #920 / ADR 0150 決定1・5): pin は (agent, tier) と根拠の episode が走った行。 */
+const fableRow = { provider: "anthropic", model: "claude-fable-5-1", tier: "frontier", effort: "high" } as const;
 const tierProposal: RegistryProposal = {
   kind: "registry",
   op: "agent_tier",
   agent: "deckhand",
-  to: "standard",
-  pin: { tier: "frontier", rows: [{ provider: "anthropic", model: "claude-fable-5-1", tier: "frontier", effort: "high" }] },
+  to: tierId("standard"),
+  pin: { tier: tierId("frontier"), rows: [{ ...fableRow, tier: tierId("frontier") }] },
   evidence: [7],
 };
 
@@ -468,7 +494,7 @@ it("下げ先の検査は、対象ティアに agent の entry のいずれか�
 });
 
 it("registry の提案の pin: 根拠の行は (provider, model) の tier / effort で照合し、agent は tier の値で照合する", () => {
-  const settings = (t: ExecutionSettingTable) => ({ table: t, learnerPromoted: false, tiers: SEED_TIERS });
+  const settings = (t: ExecutionSettingTable) => ({ table: t, learnerPromoted: false, tiers: TIERS });
   expect(routingPinChanges(tierProposal, settings(SEED_EXECUTION_SETTINGS))).toEqual([]);
   // 根拠の行の effort が変わる・行が消える → rows が崩れる。価格や別の行の編集では崩れない
   const edit = (model: string, change: object) => SEED_EXECUTION_SETTINGS.map((row) => (row.model === model ? { ...row, ...change } : row));
@@ -477,58 +503,69 @@ it("registry の提案の pin: 根拠の行は (provider, model) の tier / effo
   expect(routingPinChanges(tierProposal, settings(edit("claude-fable-5-1", { price_out: 60 })))).toEqual([]);
   expect(routingPinChanges(tierProposal, settings(edit("claude-opus-5-5", { effort: "max" })))).toEqual([]);
 
-  expect(registryPinChanges(tierProposal, { tier: "frontier" })).toEqual([]);
-  expect(registryPinChanges(tierProposal, { tier: "standard" })).toEqual(["agent_tier"]);
-  expect(registryPinChanges(tierProposal, {})).toEqual(["agent_tier"]);
-  expect(registryPinChanges(tierProposal, undefined)).toEqual(["agent_tier"]);
+  expect(registryPinChanges(tierProposal, { tier: "frontier" }, TIERS)).toEqual([]);
+  expect(registryPinChanges(tierProposal, { tier: "standard" }, TIERS)).toEqual(["agent_tier"]);
+  expect(registryPinChanges(tierProposal, {}, TIERS)).toEqual(["agent_tier"]);
+  expect(registryPinChanges(tierProposal, undefined, TIERS)).toEqual(["agent_tier"]);
+});
+
+it("registry の提案の pin の段は id で比べる —— 改名(agent.md も新しい名前)では崩れず、空いた名前の新しい段は別の段(issue #1436)", () => {
+  expect(routingPinChanges(tierProposal, { table: renameRows("frontier", "top"), learnerPromoted: false, tiers: renamed("frontier", "top") })).toEqual([]);
+  expect(registryPinChanges(tierProposal, { tier: "top" }, renamed("frontier", "top"))).toEqual([]);
+  expect(routingPinChanges(tierProposal, { table: SEED_EXECUTION_SETTINGS, learnerPromoted: false, tiers: reusing("frontier", "top") })).toEqual(["rows"]);
+  expect(registryPinChanges(tierProposal, { tier: "frontier" }, reusing("frontier", "top"))).toEqual(["agent_tier"]);
 });
 
 it("tier の提案の修正値は to だけで、pin の tier より下の任意のティア —— 同位・上位・それ以外の欄は DomainError", () => {
-  expect(parseAgentTierAmendment(tiers, tierProposal, { to: "economy" })).toBe("economy");
-  expect(parseAgentTierAmendment(tiers, tierProposal, { to: "standard" })).toBe("standard");
+  const named: RegistryProposal<string> = { ...tierProposal, to: "standard", pin: { tier: "frontier", rows: [fableRow] } };
+  expect(parseAgentTierAmendment(tiers, named, { to: "economy" })).toBe("economy");
+  expect(parseAgentTierAmendment(tiers, named, { to: "standard" })).toBe("standard");
   for (const bad of [{ to: "frontier" }, { to: "ultra" }, { to: "economy", effort: "low" }, {}, "economy"]) {
-    expect(() => parseAgentTierAmendment(tiers, tierProposal, bad)).toThrow(DomainError);
+    expect(() => parseAgentTierAmendment(tiers, named, bad)).toThrow(DomainError);
   }
 });
 
-/** 段を足して行を移す提案(issue #1424 / ADR 0200 決定8): pin は移す行の全欄と、提案時点の位置の隣の段(名前と説明)。 */
-const [economy, standard, frontier] = SEED_TIERS;
+/** 段を足して行を移す提案(issue #1424 / ADR 0200 決定8): pin は移す行の全欄と、提案時点の位置の隣の段(id と説明)。 */
+const [economy, standard, frontier] = TIERS;
 const sonnetRow = SEED_EXECUTION_SETTINGS.find((row) => row.model === "claude-sonnet-5-5")!;
+const neighbour = (tier: { id: number; description: string } | undefined) => (tier ? { id: tier.id, description: tier.description } : null);
 const addTier = (position: number): RoutingProposal => ({
   kind: "routing",
   op: "add_tier",
   tier: { name: "routine", description: "Work one step above routine wiring.", position },
   row: { provider: sonnetRow.provider, model: sonnetRow.model, effort: sonnetRow.effort },
   evidence: [7],
-  pin: { row: sonnetRow, below: SEED_TIERS[position - 1] ?? null, above: SEED_TIERS[position] ?? null },
+  pin: { row: { ...sonnetRow, tier: tierId(sonnetRow.tier) }, below: neighbour(TIERS[position - 1]), above: neighbour(TIERS[position]) },
 });
-const tierSettings = (tierList: readonly { name: string; description: string }[], t: ExecutionSettingTable = SEED_EXECUTION_SETTINGS) => ({
+const tierSettings = (tierList: readonly { id: number; name: string; description: string }[], t: ExecutionSettingTable = SEED_EXECUTION_SETTINGS) => ({
   table: t,
   learnerPromoted: false,
   tiers: tierList,
 });
 
-it("段を足す提案の pin: 移す行は全欄、隣の段は提案時点の添字にいまいる段の名前と説明で照合する", () => {
-  expect(routingPinChanges(addTier(1), tierSettings(SEED_TIERS))).toEqual([]);
+it("段を足す提案の pin: 移す行は全欄、隣の段は提案時点の添字にいまいる段の id と説明で照合する", () => {
+  expect(routingPinChanges(addTier(1), tierSettings(TIERS))).toEqual([]);
   // 移す行の編集・削除
   const edit = (change: object) => SEED_EXECUTION_SETTINGS.map((row) => (row.model === sonnetRow.model ? { ...row, ...change } : row));
-  expect(routingPinChanges(addTier(1), tierSettings(SEED_TIERS, edit({ price_in: 9 })))).toEqual(["price_in"]);
-  expect(routingPinChanges(addTier(1), tierSettings(SEED_TIERS, edit({ effort: "max" })))).toBeNull();
-  // 隣の段の説明の編集・改名
+  expect(routingPinChanges(addTier(1), tierSettings(TIERS, edit({ price_in: 9 })))).toEqual(["price_in"]);
+  expect(routingPinChanges(addTier(1), tierSettings(TIERS, edit({ effort: "max" })))).toBeNull();
+  // 隣の段の説明の編集は崩す。改名は同じ段なので崩さない(issue #1436)
   expect(routingPinChanges(addTier(1), tierSettings([{ ...economy!, description: "changed" }, standard!, frontier!]))).toEqual(["neighbours"]);
-  expect(routingPinChanges(addTier(1), tierSettings([economy!, { ...standard!, name: "middle" }, frontier!]))).toEqual(["neighbours"]);
+  expect(routingPinChanges(addTier(1), tierSettings([economy!, { ...standard!, name: "middle" }, frontier!]))).toEqual([]);
+  // 隣の段を消して同じ名前・同じ説明の新しい段を置いても、別の段なので崩れる
+  expect(routingPinChanges(addTier(1), tierSettings(withNew("standard")))).toEqual(["neighbours"]);
   // 下に段が挿入されて添字がずれる
-  expect(routingPinChanges(addTier(1), tierSettings([{ name: "lowest", description: "x" }, ...SEED_TIERS]))).toEqual(["neighbours"]);
+  expect(routingPinChanges(addTier(1), tierSettings([{ id: 4, name: "lowest", description: "x" }, ...TIERS]))).toEqual(["neighbours"]);
   // 隣でない段の説明の編集は崩さない
   expect(routingPinChanges(addTier(1), tierSettings([economy!, standard!, { ...frontier!, description: "changed" }]))).toEqual([]);
 });
 
 it("段を足す提案の pin の端: 先頭なら下、末尾なら上の隣は null で、端の外に段が来ても崩れる", () => {
-  expect(routingPinChanges(addTier(0), tierSettings(SEED_TIERS))).toEqual([]);
-  expect(routingPinChanges(addTier(3), tierSettings(SEED_TIERS))).toEqual([]);
-  expect(routingPinChanges(addTier(3), tierSettings([...SEED_TIERS, { name: "top", description: "x" }]))).toEqual(["neighbours"]);
-  expect(routingPinChanges(addTier(3), tierSettings(SEED_TIERS.slice(1)))).toEqual(["neighbours"]);
-  expect(routingPinChanges(addTier(0), tierSettings([{ name: "lowest", description: "x" }, ...SEED_TIERS]))).toEqual(["neighbours"]);
+  expect(routingPinChanges(addTier(0), tierSettings(TIERS))).toEqual([]);
+  expect(routingPinChanges(addTier(3), tierSettings(TIERS))).toEqual([]);
+  expect(routingPinChanges(addTier(3), tierSettings([...TIERS, { id: 4, name: "top", description: "x" }]))).toEqual(["neighbours"]);
+  expect(routingPinChanges(addTier(3), tierSettings(TIERS.slice(0, 2)))).toEqual(["neighbours"]);
+  expect(routingPinChanges(addTier(0), tierSettings([{ id: 4, name: "lowest", description: "x" }, ...TIERS]))).toEqual(["neighbours"]);
 });
 
 it("段を足す提案の修正値は名前・説明・位置の少なくとも1つだけで、それ以外は DomainError", () => {

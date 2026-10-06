@@ -7,11 +7,24 @@ import { PROVIDER_VALUES, type Provider } from "./provider.js";
 import { openQuarantineQuestions, openQuarantineValues, tableRowValue } from "./quarantine.js";
 import type { AgentDefinition } from "./registry.js";
 import { RegistryFetchFailedError, RegistryPushFailedError } from "./registry-write.js";
-import { DomainError, HUMAN_WORKER_ID, type RegistryProposal, type RoutingProposal, type RoutingRowProposal, settleQuestionAsObserved, type Task, type TierNeighbour } from "./tasks.js";
+import {
+  DomainError,
+  HUMAN_WORKER_ID,
+  type QuestionProposal,
+  type RegistryProposal,
+  type RoutingProposal,
+  type RoutingRowProposal,
+  settleQuestionAsObserved,
+  type Task,
+  type TierNeighbour,
+} from "./tasks.js";
 
 /** 必要品質のティア(CONTEXT.md「要求」/ ADR 0200 決定1)の名前。段は盤面の DB が持つ順序付きの一覧で(`readTiers`)、
  *  コードは名前を列挙しない —— 型が言えるのは「段の名前」であることだけ。 */
 export type Tier = string;
+
+/** 段の盤面内部の id(ADR 0200 決定2)。盤面の中の参照(行・task の要求・盤面設定・提案)は id で段を指し、外へは出さない。 */
+export type TierId = number;
 
 /** 要求のもう1列: 要求ティアの候補を並べる鍵(CONTEXT.md「要求」/ ADR 0114 決定1)。
  *  `quality` = Provider 順位 → 価格、`cost` = 価格 → Provider 順位。ティアは床
@@ -93,12 +106,50 @@ export const SEED_BOARD_TIERS = { default_tier: "economy", judgement_tier: "fron
  *  消した名前は使い直せるので、名前で引けるのは生きている段だけである。id で読む側は消した段の名前も読む。 */
 export const liveTierId = (param: string) => `(SELECT id FROM tiers WHERE name = ${param} AND position IS NOT NULL)`;
 
-/** 盤面の段の一覧を順序どおりに(ADR 0200 決定1)。消した段は載らない。 */
-export function readTiers(db: Db): { name: Tier; description: string }[] {
-  return db.prepare("SELECT name, description FROM tiers WHERE position IS NOT NULL ORDER BY position").all() as {
+/** 盤面の段の一覧を id つきで順序どおりに。消した段は載らない。id は盤面の中の照合だけが読む。 */
+export function liveTierRows(db: Db): { id: TierId; name: Tier; description: string }[] {
+  return db.prepare("SELECT id, name, description FROM tiers WHERE position IS NOT NULL ORDER BY position").all() as {
+    id: TierId;
     name: Tier;
     description: string;
   }[];
+}
+
+/** 盤面の段の一覧を順序どおりに(ADR 0200 決定1)。消した段は載らない。 */
+export function readTiers(db: Db): { name: Tier; description: string }[] {
+  return liveTierRows(db).map(({ id: _, ...tier }) => tier);
+}
+
+/** 生きている段の名前を id に引く。呼び手は名前を検査済み(`assertKnownTier`)であること。 */
+export function tierIdOf(db: Db, name: Tier): TierId {
+  return (db.prepare(`SELECT ${liveTierId("?")} AS id`).get(name) as { id: TierId }).id;
+}
+
+/** 段の id を名前に引く。消した段は消したときの名前(決着した提案の履歴が読む)。 */
+export function tierNameOf(db: Db, id: TierId): Tier {
+  return (db.prepare("SELECT name FROM tiers WHERE id = ?").get(id) as { name: Tier }).name;
+}
+
+/** 提案が id で持つ段を、いまの名前に引いた形(issue #1436): 外へ見せる口(提案 question の応答・提案の履歴)と、
+ *  承認の書き込み(名前で喋る扉)が読む。 */
+export function proposalTierNames(db: Db, proposal: QuestionProposal): QuestionProposal<Tier> {
+  const name = (id: TierId) => tierNameOf(db, id);
+  const row = <R extends { tier: TierId }>(r: R) => ({ ...r, tier: name(r.tier) });
+  const neighbour = (n: TierNeighbour | null) => n && { name: name(n.id), description: n.description };
+  if (proposal.kind === "registry") return { ...proposal, to: name(proposal.to), pin: { tier: name(proposal.pin.tier), rows: proposal.pin.rows.map(row) } };
+  if (proposal.kind === "memory") return proposal;
+  switch (proposal.op) {
+    case "row": {
+      const { tier, ...change } = proposal.change;
+      return { ...proposal, change: { ...change, ...(tier !== undefined && { tier: name(tier) }) }, pin: row(proposal.pin) };
+    }
+    case "add_tier":
+      return { ...proposal, pin: { row: row(proposal.pin.row), below: neighbour(proposal.pin.below), above: neighbour(proposal.pin.above) } };
+    case "tier_description":
+      return { ...proposal, tier: name(proposal.tier) };
+    default:
+      return proposal;
+  }
 }
 
 /** 段の名前を順序どおりに。 */
@@ -176,7 +227,7 @@ function applyTierChange(db: Db, change: Extract<ExecutionSettingsChange, { sett
     return;
   }
   assertKnownTier(db, "tier", change.name);
-  const id = (db.prepare(`SELECT ${liveTierId("?")} AS id`).get(change.name) as { id: number }).id;
+  const id = tierIdOf(db, change.name);
   if (change.setting === "rename_tier") {
     assertTierName(db, change.to);
     db.prepare("UPDATE tiers SET name = ? WHERE id = ?").run(change.to, id);
@@ -572,44 +623,49 @@ export function parseRoutingRowChange(tiers: readonly Tier[], input: unknown): R
  *  行は鍵 (provider, model, effort) で引き、消えていれば(effort の書き換えも含む)null。昇格 / 降格の提案の pin はフラグの現在値。
  *  tier の提案は根拠の行を全欄で比べる(消えた行も `rows` —— agent の側の pin は表からは見えないので `registryPinChanges` が言う)。
  *  段を足す提案は移す行を行の提案と同じに比べ、隣の段が入れ替わっていれば `neighbours`(issue #1424)。
- *  段の説明の提案は名前で引いた生きている段の説明を比べ、段が消えていれば null(ADR 0200 決定7)。 */
+ *  段の説明の提案は id で引いた生きている段の説明を比べ、段が消えていれば null(ADR 0200 決定7)。
+ *  段は id で比べる(issue #1436)—— 改名はどの pin も崩さない。消した段の id は生きている段に引けないので崩れる。 */
 export function routingPinChanges(
   proposal: RoutingProposal | RegistryProposal,
-  settings: { table: ExecutionSettingTable; learnerPromoted: boolean; tiers: readonly TierNeighbour[] },
+  settings: { table: ExecutionSettingTable; learnerPromoted: boolean; tiers: readonly { id: TierId; name: Tier; description: string }[] },
 ): Array<"tier" | "price_in" | "price_out" | "learner_promoted" | "rows" | "description" | "neighbours"> | null {
+  const liveName = (id: TierId) => settings.tiers.find((t) => t.id === id)?.name;
   if (proposal.kind === "registry") {
     const held = proposal.pin.rows.every((pinned) =>
-      settings.table.some((row) => matchesRowKey(row, pinned) && row.tier === pinned.tier),
+      settings.table.some((row) => matchesRowKey(row, pinned) && row.tier === liveName(pinned.tier)),
     );
     return held ? [] : ["rows"];
   }
   if (proposal.op === "tier_description") {
-    const tier = settings.tiers.find((t) => t.name === proposal.tier);
+    const tier = settings.tiers.find((t) => t.id === proposal.tier);
     return tier ? (tier.description === proposal.pin.description ? [] : ["description"]) : null;
   }
   if (proposal.op !== "row" && proposal.op !== "add_tier") return proposal.pin.promoted === settings.learnerPromoted ? [] : ["learner_promoted"];
   const pin = proposal.op === "row" ? proposal.pin : proposal.pin.row;
   const current = settings.table.find((row) => matchesRowKey(row, pin));
   if (!current) return null;
-  const changed: Array<"tier" | "price_in" | "price_out" | "neighbours"> = (["tier", "price_in", "price_out"] as const).filter((field) => current[field] !== pin[field]);
+  const changed: Array<"tier" | "price_in" | "price_out" | "neighbours"> = (["tier", "price_in", "price_out"] as const).filter(
+    (field) => current[field] !== (field === "tier" ? liveName(pin.tier) : pin[field]),
+  );
   if (proposal.op === "add_tier") {
-    // 隣は提案時点の添字にいまいる段 —— 改名・説明の編集・移動・挿入・削除のどれで入れ替わっても崩れる
+    // 隣は提案時点の添字にいまいる段 —— 説明の編集・移動・挿入・削除のどれで入れ替わっても崩れる(改名は同じ段のまま)
     const { position } = proposal.tier;
-    const same = (pinned: TierNeighbour | null, now: TierNeighbour | undefined) =>
-      pinned?.name === now?.name && pinned?.description === now?.description;
+    const same = (pinned: TierNeighbour | null, now: { id: TierId; description: string } | undefined) =>
+      pinned?.id === now?.id && pinned?.description === now?.description;
     if (!same(proposal.pin.below, settings.tiers[position - 1]) || !same(proposal.pin.above, settings.tiers[position])) changed.push("neighbours");
   }
   return changed;
 }
 
-/** 修正値の合成(ADR 0150 決定2): 適用する行 = pin の行に提案の変更、その上に人間の修正値を重ねたもの。 */
-export function composeRoutingRow(proposal: RoutingRowProposal, amendment?: RoutingRowChange): ExecutionSettingRow {
+/** 修正値の合成(ADR 0150 決定2): 適用する行 = pin の行に提案の変更、その上に人間の修正値を重ねたもの。段は名前へ引いた提案で合成する。 */
+export function composeRoutingRow(proposal: RoutingRowProposal<Tier>, amendment?: RoutingRowChange): ExecutionSettingRow {
   return { ...proposal.pin, ...proposal.change, ...amendment };
 }
 
-/** tier の提案の agent 側の pin(issue #920): registry の agent の tier が焼いた値のままか。agent が消えていても崩れている。 */
-export function registryPinChanges(proposal: RegistryProposal, agent: { tier?: string } | undefined): Array<"agent_tier"> {
-  return agent?.tier === proposal.pin.tier ? [] : ["agent_tier"];
+/** tier の提案の agent 側の pin(issue #920): registry の agent の tier が焼いた段のままか。agent.md は段を名前で書くので、
+ *  生きている段の名前から id に引いて比べる(issue #1436)。agent が消えていても崩れている。 */
+export function registryPinChanges(proposal: RegistryProposal, agent: { tier?: string } | undefined, tiers: readonly { id: TierId; name: Tier }[]): Array<"agent_tier"> {
+  return tiers.some((t) => t.id === proposal.pin.tier && t.name === agent?.tier) ? [] : ["agent_tier"];
 }
 
 /** 段を足す提案の修正値(ADR 0200 決定8 / ADR 0150 決定2): 名前・説明・位置の少なくとも1つ。値の検査(名前の一意など)は
@@ -641,7 +697,7 @@ export function assertTierRunnableFor(db: Db, agent: string, providers: readonly
 }
 
 /** tier の提案の修正値の検査(ADR 0150 決定2): `to` だけで、pin の tier より下の任意のティア(段の順序は盤面の一覧)。 */
-export function parseAgentTierAmendment(tiers: readonly Tier[], proposal: RegistryProposal, amendment: unknown): Tier {
+export function parseAgentTierAmendment(tiers: readonly Tier[], proposal: RegistryProposal<Tier>, amendment: unknown): Tier {
   const parsed = z.object({ to: z.string() }).strict().safeParse(amendment);
   if (!parsed.success || !tiers.includes(parsed.data.to) || tiers.indexOf(parsed.data.to) >= tiers.indexOf(proposal.pin.tier)) {
     throw new DomainError(`an agent tier amendment takes only to, a tier below ${proposal.pin.tier}`);
@@ -775,7 +831,7 @@ export type ListAgentTiers = () => readonly { name: string; tier?: string }[];
  *  (agent, tier) も照合する —— routing の due 判定の直前(issue #920)で、registry の変更は盤面の event ではないので
  *  observed_event_id は null。 */
 export function settleStaleProposals(db: Db, at: Date, observedEventId: number | null, listAgents?: ListAgentTiers): void {
-  const settings = readExecutionSettings(db);
+  const settings = { ...readExecutionSettings(db), tiers: liveTierRows(db) };
   // registry を読むのは registry の提案が open なときだけ(poll ごとに registry を読まない)。読めなければこの回は照合しない
   // —— due 判定は scheduler の poll の中なので、registry が読めないことで pickup を止めない
   let agents: readonly { name: string; tier?: string }[] | null | undefined;
@@ -796,7 +852,7 @@ export function settleStaleProposals(db: Db, at: Date, observedEventId: number |
     if (proposal.kind === "registry" && listAgents) {
       agents = agents === undefined ? readAgents(listAgents) : agents;
       if (agents === null) continue;
-      changed = registryPinChanges(proposal, agents.find((agent) => agent.name === proposal.agent));
+      changed = registryPinChanges(proposal, agents.find((agent) => agent.name === proposal.agent), settings.tiers);
     } else {
       changed = routingPinChanges(proposal, settings);
     }

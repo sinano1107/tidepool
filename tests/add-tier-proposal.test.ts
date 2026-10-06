@@ -137,6 +137,21 @@ it("修正後の名前が既存の段と重なる approve は回答ごと拒ま�
   }
 });
 
+it("移す行の段・隣の段を改名しても question は open のまま、いまの名前で見え、修正値なしの approve で段が足され行が移る(issue #1436)", async () => {
+  const { client, call } = await boardWithAddTierProposal();
+  try {
+    const { question_id } = await call({ tier: CAREFUL, row: OPUS_KEY, evidence: [spawned()] });
+    expect((await change({ setting: "rename_tier", name: "standard", to: "mid" })).status).toBe(200);
+
+    const mid = { ...standard!, name: "mid" };
+    expect(await task(question_id)).toMatchObject({ status: "todo", question_proposal: { pin: { row: { ...OPUS, tier: "mid" }, below: mid, above: frontier } } });
+    expect((await answer(question_id, { answers: ["approve"] })).status).toBe(200);
+    expect(await settings()).toEqual({ tiers: [economy, mid, { name: CAREFUL.name, description: CAREFUL.description }, frontier], opus: { ...OPUS, tier: "careful" } });
+  } finally {
+    await client.close();
+  }
+});
+
 const staleChanged = async (id: string) => (await events(id)).find((e) => e.kind === "routing_proposal_stale")?.payload.changed;
 
 it("移す行か隣の段が変わると、提案は回答なしで observed になる —— 隣でない段の編集では open のまま", async () => {

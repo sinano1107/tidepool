@@ -327,6 +327,57 @@ it("昇格 / 降格の approve に添えた修正値は回答ごと断られ、�
     await client.close();
   }
 });
+const settingsChange = (body: Record<string, unknown>) => api(t.baseUrl, "POST", "/api/settings/execution", body);
+
+it("行の提案が触れる段(pin の段・変更の段)を改名しても question は open のまま、いまの名前で見え、修正値なしの approve がいまの名前で適用される(issue #1436)", async () => {
+  const { client, call, propose } = await boardWithRoutingReview();
+  try {
+    const questionId = await propose({ tier: "frontier" });
+    expect((await settingsChange({ setting: "rename_tier", name: "standard", to: "mid" })).status).toBe(200);
+    expect((await settingsChange({ setting: "rename_tier", name: "frontier", to: "top" })).status).toBe(200);
+
+    const question = await task(questionId);
+    expect(question).toMatchObject({ status: "todo", question_proposal: { change: { tier: "top" }, pin: { ...OPUS, tier: "mid" } } });
+    expect((await call("read_routing_settings")).proposals).toMatchObject([{ question_id: questionId, proposal: question.question_proposal }]);
+
+    expect((await answer(questionId, { answers: ["approve"] })).status).toBe(200);
+    expect(await row("claude-opus-5-5")).toEqual({ ...OPUS, tier: "top" });
+  } finally {
+    await client.close();
+  }
+});
+
+it("改名で空いた旧い名前で新しい段を足しても、旧い名前を焼いた行の提案はその新しい段に付け替わらず、改名した段へ適用される(issue #1436)", async () => {
+  const { client, propose } = await boardWithRoutingReview();
+  try {
+    const questionId = await propose({ tier: "standard" }, { provider: "anthropic", model: "claude-sonnet-5-5", effort: "high" });
+    expect((await settingsChange({ setting: "rename_tier", name: "standard", to: "mid" })).status).toBe(200);
+    expect((await settingsChange({ setting: "insert_tier", name: "standard", description: "A new tier reusing the old name.", position: 1 })).status).toBe(200);
+
+    expect((await task(questionId)).question_proposal).toMatchObject({ change: { tier: "mid" } });
+    expect((await answer(questionId, { answers: ["approve"] })).status).toBe(200);
+    expect(await row("claude-sonnet-5-5")).toMatchObject({ tier: "mid" });
+  } finally {
+    await client.close();
+  }
+});
+
+it("行の提案の変更の段が消され、同じ名前の新しい段が足されても、修正値なしの approve はその新しい段に付け替わらず回答ごと断られる(issue #1436)", async () => {
+  const { client, propose } = await boardWithRoutingReview();
+  try {
+    const careful = { setting: "insert_tier", name: "careful", description: "A tier the proposal moves the row into.", position: 1 };
+    expect((await settingsChange(careful)).status).toBe(200);
+    const questionId = await propose({ tier: "careful" }, { provider: "anthropic", model: "claude-sonnet-5-5", effort: "high" });
+    expect((await settingsChange({ setting: "delete_tier", name: "careful" })).status).toBe(200);
+    expect((await settingsChange({ ...careful, description: "A new tier reusing the deleted name." })).status).toBe(200);
+
+    expect((await answer(questionId, { answers: ["approve"] })).status).toBe(409);
+    expect(await task(questionId)).toMatchObject({ status: "todo" });
+    expect(await row("claude-sonnet-5-5")).toMatchObject({ tier: "economy" });
+  } finally {
+    await client.close();
+  }
+});
 
 // 段の説明の書き換えの提案(ADR 0200 決定7): 根拠は床を task の申告が決めた episode。
 
@@ -412,6 +463,20 @@ it("人間が先に段の説明を直すと提案は回答なしで観測で決�
     expect(await staleEvents(question_id)).toEqual([
       ["routing_proposal_stale", "tidepool", { kind: "routing_proposal_stale", question_id, proposal_kind: "routing", changed: ["description"], observed_event_id: expect.any(Number) }],
     ]);
+  } finally {
+    await client.close();
+  }
+});
+
+it("段の説明の提案の段を改名しても question は open のまま、いまの名前で見え、修正値なしの approve がその段の説明を書く(issue #1436)", async () => {
+  const { client, call } = await boardWithRoutingReview();
+  try {
+    const { question_id } = await proposeTierDescription(call);
+    expect((await settingsChange({ setting: "rename_tier", name: "standard", to: "mid" })).status).toBe(200);
+
+    expect(await task(question_id)).toMatchObject({ status: "todo", question_proposal: { tier: "mid" } });
+    expect((await answer(question_id, { answers: ["approve"] })).status).toBe(200);
+    expect(await tierDescription("mid")).toBe(NEW_STANDARD);
   } finally {
     await client.close();
   }

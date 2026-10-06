@@ -67,7 +67,7 @@ it("理由必須の選択肢 needs_comment は memory 提案で reject と defer
   const memory = question({ proposal: { kind: "memory", op: "approve", candidate_id: 1, replaces: [] } });
   const routing = question({ proposal: { kind: "routing", op: "promote", pin: { promoted: false } } });
   const registry = question({
-    proposal: { kind: "registry", op: "agent_tier", agent: "reef-crab", to: "economy", pin: { tier: "standard", rows: [] }, evidence: [1] },
+    proposal: { kind: "registry", op: "agent_tier", agent: "reef-crab", to: 1, pin: { tier: 2, rows: [] }, evidence: [1] }, // 段は id(種の economy / standard)
   });
 
   expect(needsComment(memory)).toEqual(["reject", "defer"]);

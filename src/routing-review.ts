@@ -10,13 +10,16 @@ import {
   assertTierRunnableFor,
   boardDefaultTier,
   composeRoutingRow,
+  liveTierRows,
   loadExecutionSettingTable,
   matchesRowKey,
   parseRoutingRowChange,
+  proposalTierNames,
   readExecutionSettings,
-  readTiers,
   rowName,
   type Tier,
+  type TierId,
+  tierIdOf,
   tierNames,
 } from "./execution-setting.js";
 
@@ -198,7 +201,7 @@ function listRoutingProposals(db: Db, window?: MetaReviewWindow) {
     const applied = row.applied === null ? null : (JSON.parse(row.applied) as Extract<EventPayload, { kind: "agent_tier_changed" }>);
     return {
       question_id: row.id,
-      proposal: JSON.parse(row.question_proposal) as RoutingProposal | RegistryProposal,
+      proposal: proposalTierNames(db, JSON.parse(row.question_proposal) as RoutingProposal | RegistryProposal),
       answer: answered?.answers[0]?.answer ?? null,
       amendment: answered?.amendment ?? null,
       comment: answered?.comment ?? null,
@@ -277,11 +280,14 @@ function agentTierProposal(db: Db, agents: readonly AgentView[], input: { agent?
     if (spawned.source.tier !== "agent") throw new DomainError(`evidence ${id} took its tier from ${spawned.source.tier}, not from ${name}'s default tier`);
     const row = table.find((r) => matchesRowKey(r, spawned));
     if (!row) throw new DomainError(`evidence ${id} ran on ${rowName(spawned)}, which is no longer in the execution-setting table`);
-    rows.set(`${row.provider}/${row.model}/${row.effort}`, { provider: row.provider, model: row.model, tier: row.tier, effort: row.effort });
+    rows.set(`${row.provider}/${row.model}/${row.effort}`, { provider: row.provider, model: row.model, tier: tierIdOf(db, row.tier), effort: row.effort });
   }
   // agent が tier を書いていれば from はその値(書いていなければ盤面既定の段)
-  return { kind: "registry", op: "agent_tier", agent: name, to, pin: { tier: from, rows: [...rows.values()] }, evidence };
+  return { kind: "registry", op: "agent_tier", agent: name, to: tierIdOf(db, to), pin: { tier: tierIdOf(db, from), rows: [...rows.values()] }, evidence };
 }
+
+/** 段を足す提案の隣の段の pin: id と説明(issue #1436)。 */
+const neighbour = (tier: { id: TierId; description: string } | undefined) => (tier ? { id: tier.id, description: tier.description } : null);
 
 /** 段を足して行を移す提案の門と pin(issue #1424 / ADR 0200 決定8): 段の名前・説明・位置は段の挿入と同じ線、行は表にあり、
  *  根拠は worker_spawned。pin は行の全欄と、いまの一覧で位置の隣にいる段。 */
@@ -296,7 +302,7 @@ function addTierProposal(
   const tier = { name, description, position };
   assertTierName(db, tier.name);
   assertTierDescription(tier.description);
-  const tiers = readTiers(db);
+  const tiers = liveTierRows(db);
   assertPosition(tier.position, tiers.length);
   const row = loadExecutionSettingTable(db).find((r) => matchesRowKey(r, key));
   if (!row) throw new DomainError(`the execution-setting table has no row for ${rowName(key)}`);
@@ -309,7 +315,7 @@ function addTierProposal(
     tier,
     row: { provider: row.provider, model: row.model, effort: row.effort },
     evidence,
-    pin: { row, below: tiers[tier.position - 1] ?? null, above: tiers[tier.position] ?? null },
+    pin: { row: { ...row, tier: tierIdOf(db, row.tier) }, below: neighbour(tiers[tier.position - 1]), above: neighbour(tiers[tier.position]) },
   };
 }
 
@@ -322,8 +328,8 @@ function tierDescriptionProposal(db: Db, input: { tier?: string; description?: s
   }
   assertKnownTier(db, "tier", tier);
   assertTierDescription(description);
-  const current = readTiers(db).find((t) => t.name === tier)!.description;
-  if (description === current) throw new DomainError(`tier ${tier}'s description already reads: ${current}`);
+  const current = liveTierRows(db).find((t) => t.name === tier)!;
+  if (description === current.description) throw new DomainError(`tier ${tier}'s description already reads: ${current.description}`);
   const requested = db.prepare("SELECT 1 FROM tasks JOIN tiers ON tiers.id = tasks.tier_id WHERE tasks.id = ? AND tiers.name = ? AND tiers.position IS NOT NULL");
   for (const id of evidence) {
     const event = getEvent(db, id);
@@ -331,7 +337,7 @@ function tierDescriptionProposal(db: Db, input: { tier?: string; description?: s
     if (event.payload.source.tier !== "task") throw new DomainError(`evidence ${id} took its tier from ${event.payload.source.tier}, not from its task's request`);
     if (!requested.get(event.task_id, tier)) throw new DomainError(`evidence ${id} is a session of a task that did not request ${tier}`);
   }
-  return { kind: "routing", op: "tier_description", tier, description, evidence, pin: { description: current } };
+  return { kind: "routing", op: "tier_description", tier: current.id, description, evidence, pin: { description: current.description } };
 }
 
 /** 提案 verb(issue #918 / #919 / #920 / #1424 / ADR 0150 決定1・2・4・5 / ADR 0200 決定7・8): 表の既存の1行の tier / effort の置換(op row)、
@@ -373,9 +379,10 @@ export function proposeRoutingChange(
   if (input.op === "tier_description") {
     if (input.row !== undefined || input.change !== undefined) throw new DomainError("op tier_description takes no row and no change");
     proposal = tierDescriptionProposal(db, input);
-    title = `Rewrite tier ${proposal.tier}'s description`;
+    const tier = input.tier!;
+    title = `Rewrite tier ${tier}'s description`;
     diff = [
-      `Tier ${proposal.tier}, description:`,
+      `Tier ${tier}, description:`,
       `current: ${proposal.pin.description}`,
       `proposed: ${proposal.description}`,
       `Evidence: ${proposal.evidence.length} worker session(s) whose floor the task's requested tier set`,
@@ -387,7 +394,7 @@ export function proposeRoutingChange(
     if (input.row !== undefined || input.change !== undefined) throw new DomainError("op agent_tier takes no row and no change");
     if (!agents) throw new DomainError("this board has no registry, so there is no agent definition to change");
     proposal = agentTierProposal(db, agents(), input);
-    const { agent, to, pin } = proposal;
+    const { agent, to, pin } = proposalTierNames(db, proposal) as RegistryProposal<Tier>;
     title = `Lower agent ${agent}'s tier: ${pin.tier} -> ${to}`;
     diff = [
       `Agent ${agent} (registry definition), default tier: ${pin.tier} -> ${to}`,
@@ -399,7 +406,7 @@ export function proposeRoutingChange(
   } else if (input.op === "add_tier") {
     if (input.change !== undefined) throw new DomainError("op add_tier takes no change");
     proposal = addTierProposal(db, input);
-    const { tier, pin } = proposal;
+    const { tier, pin } = proposalTierNames(db, proposal) as RoutingAddTierProposal<Tier>;
     const place = [pin.below && `above ${pin.below.name}`, pin.above && `below ${pin.above.name}`].filter(Boolean).join(" and ") || "as the only tier";
     title = `Add tier ${tier.name} and move ${pin.row.provider} / ${pin.row.model} into it`;
     diff = [
@@ -417,9 +424,11 @@ export function proposeRoutingChange(
     const table = loadExecutionSettingTable(db);
     const pin = table.find((row) => matchesRowKey(row, key));
     if (!pin) throw new DomainError(`the execution-setting table has no row for ${rowName(key)}`);
-    proposal = { kind: "routing", op: "row", row: { provider: pin.provider, model: pin.model, effort: pin.effort }, change, pin };
+    const row = { provider: pin.provider, model: pin.model, effort: pin.effort };
     // 承認の修正値は回答時に行を書く扉が同じ検査で拒む
-    assertRowFits(table, composeRoutingRow(proposal), proposal.row);
+    assertRowFits(table, composeRoutingRow({ kind: "routing", op: "row", row, change, pin }), row);
+    const { tier, ...rest } = change;
+    proposal = { kind: "routing", op: "row", row, change: { ...rest, ...(tier !== undefined && { tier: tierIdOf(db, tier) }) }, pin: { ...pin, tier: tierIdOf(db, pin.tier) } };
     title = `Change routing row: ${pin.provider} / ${pin.model} / ${pin.effort}`;
     diff = [
       `Execution-setting row ${rowName(pin)} (price ${pin.price_in} / ${pin.price_out} USD per MTok):`,
