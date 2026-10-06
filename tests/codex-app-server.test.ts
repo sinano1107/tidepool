@@ -1,6 +1,7 @@
-import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
+import type { BoardCall, BoardCallSpec } from "../src/board-call.js";
 import {
   CODEX_APP_SERVER_LIMIT_MS,
   CODEX_APP_SERVER_VERSION,
@@ -719,4 +720,44 @@ it("互換性検査が一度通れば、以後の呼び出しは版も schema �
   expect(await codex.probe()).toMatchObject({ status: "observed" });
   expect(await codex.probe()).toMatchObject({ status: "observed" });
   expect(codex.state).toMatchObject({ versionCalls: 1, schemaCalls: 1 });
+});
+
+/** spec の cwd と、呼ばれた瞬間のその中身を写し取る偽の口。`fails` なら口が throw する。 */
+function cwdRecordingCall(fails = false) {
+  const seen = { calls: 0, cwd: "", entries: [] as string[] };
+  const call = (async (spec: BoardCallSpec) => {
+    Object.assign(seen, { calls: seen.calls + 1, cwd: spec.cwd, entries: readdirSync(spec.cwd) });
+    if (fails) throw new Error("口が落ちた");
+    return { exitCode: 0, stdout: "", stderr: "" };
+  }) as BoardCall;
+  return { call, seen };
+}
+
+const runAppServer = (call: BoardCall) =>
+  codexCommandThrough(call, "Codex App Server probe", CODEX_APP_SERVER_LIMIT_MS)("codex", ["app-server"], { env: {} });
+
+it("App Server の Board call は盤面の cwd ではなく、呼び出しの最中は存在する空のディレクトリで走る(ADR 0206)", async () => {
+  const { call, seen } = cwdRecordingCall();
+
+  await runAppServer(call);
+
+  expect(seen.calls).toBe(1);
+  expect(seen.cwd).not.toBe(process.cwd());
+  expect(seen.entries).toEqual([]);
+});
+
+it("App Server の Board call の空の cwd は、呼び出しが resolve したあとには残らない(ADR 0206)", async () => {
+  const { call, seen } = cwdRecordingCall();
+
+  await runAppServer(call);
+
+  expect(existsSync(seen.cwd)).toBe(false);
+});
+
+it("App Server の Board call の空の cwd は、口が throw したあとにも残らない(ADR 0206)", async () => {
+  const { call, seen } = cwdRecordingCall(true);
+
+  await expect(runAppServer(call)).rejects.toThrow("口が落ちた");
+
+  expect(existsSync(seen.cwd)).toBe(false);
 });
