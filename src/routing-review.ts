@@ -18,6 +18,7 @@ import {
   readExecutionSettings,
   rowName,
   type Tier,
+  type TierId,
   tierIdOf,
   tierNames,
 } from "./execution-setting.js";
@@ -286,7 +287,7 @@ function agentTierProposal(db: Db, agents: readonly AgentView[], input: { agent?
 }
 
 /** 段を足す提案の隣の段の pin: id と説明(issue #1436)。 */
-const neighbour = (tier: { id: number; description: string } | undefined) => (tier ? { id: tier.id, description: tier.description } : null);
+const neighbour = (tier: { id: TierId; description: string } | undefined) => (tier ? { id: tier.id, description: tier.description } : null);
 
 /** 段を足して行を移す提案の門と pin(issue #1424 / ADR 0200 決定8): 段の名前・説明・位置は段の挿入と同じ線、行は表にあり、
  *  根拠は worker_spawned。pin は行の全欄と、いまの一覧で位置の隣にいる段。 */

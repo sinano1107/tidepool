@@ -878,6 +878,16 @@ export async function submitAnswer(
     const named = movedTail(deps.db, proposal.candidate_id);
     assertMemoryReferencesKnown(deps, { addressee: amended && "addressee" in amended ? amended.addressee : named.addressee, workspace: named.scope });
   }
+  // 行き先の段(行の提案の変更・tier の提案の下げ先)は id で持つ。消えていれば、消した名前を使い直した新しい段に付け替えず断る(issue #1436 / ADR 0200 決定2)
+  const raw = task.question_proposal;
+  const target =
+    answers[0] !== "approve" ? undefined
+    : raw?.kind === "registry" && amended === undefined ? raw.to
+    : raw?.kind === "routing" && raw.op === "row" && !(amended && "tier" in amended) ? raw.change.tier
+    : undefined;
+  if (target !== undefined && !liveTierRows(deps.db).some((tier) => tier.id === target)) {
+    throw new DomainError(`the tier this proposal moves to (${tierNameOf(deps.db, target)}) has been deleted; approve with an amended tier, or reject`);
+  }
 
   const promotionTaskId = task.question_pending_pr_promotion_task_id;
   const wantsPromotionRetry =

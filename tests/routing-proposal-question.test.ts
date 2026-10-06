@@ -362,6 +362,23 @@ it("改名で空いた旧い名前で新しい段を足しても、旧い名前�
   }
 });
 
+it("行の提案の変更の段が消され、同じ名前の新しい段が足されても、修正値なしの approve はその新しい段に付け替わらず回答ごと断られる(issue #1436)", async () => {
+  const { client, propose } = await boardWithRoutingReview();
+  try {
+    const careful = { setting: "insert_tier", name: "careful", description: "A tier the proposal moves the row into.", position: 1 };
+    expect((await settingsChange(careful)).status).toBe(200);
+    const questionId = await propose({ tier: "careful" }, { provider: "anthropic", model: "claude-sonnet-5-5", effort: "high" });
+    expect((await settingsChange({ setting: "delete_tier", name: "careful" })).status).toBe(200);
+    expect((await settingsChange({ ...careful, description: "A new tier reusing the deleted name." })).status).toBe(200);
+
+    expect((await answer(questionId, { answers: ["approve"] })).status).toBe(409);
+    expect(await task(questionId)).toMatchObject({ status: "todo" });
+    expect(await row("claude-sonnet-5-5")).toMatchObject({ tier: "economy" });
+  } finally {
+    await client.close();
+  }
+});
+
 // 段の説明の書き換えの提案(ADR 0200 決定7): 根拠は床を task の申告が決めた episode。
 
 /** 根拠の episode(setup): 書き手が人間の task が `tier` を要求し、床の出所が `tierSource` の worker_spawned。 */
