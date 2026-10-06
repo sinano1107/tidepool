@@ -35,7 +35,7 @@ afterEach(async () => {
  *  着地 question が立つ。 */
 async function landedWork(workspace: WorkspaceConfig): Promise<any> {
   t = await bootTidepool({ workspace });
-  const work = await registerWork(t, "ship reviewable work", undefined, true);
+  const work = await registerWork(t, "ship reviewable work");
   await t.clock.advance(HOUR);
   commitWork(workspace.path, "feature.txt", "v1\n");
   await completeViaMcp(t, work.id);

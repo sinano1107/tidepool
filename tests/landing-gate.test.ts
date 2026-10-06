@@ -36,7 +36,7 @@ async function pickUp(pool: Tidepool, taskId: string): Promise<void> {
 it("purely-local: 未決着の付帯子がある間は着地 question を立てず、付帯子の完了で立つ", async () => {
   const workspace = await makeWorkspace("sandbox");
   t = await bootTidepool({ workspace });
-  const task = await registerWork(t, "ship the feature", undefined, true);
+  const task = await registerWork(t, "ship the feature");
   await t.clock.advance(HOUR);
   commitWork(workspace.path, "feature.txt", "finished\n");
 
@@ -73,7 +73,7 @@ it("remote-backed(escalate): 付帯子が未決着なら PR を開かず、決�
     workspace,
     authority: { name: "standard", guidance: "", merge: "escalate" },
   });
-  const task = await registerWork(t, "ship remotely", undefined, true);
+  const task = await registerWork(t, "ship remotely");
   await t.clock.advance(HOUR);
   commitWork(workspace.path, "feature.txt", "finished\n");
 
@@ -99,7 +99,7 @@ it("remote-backed(auto_if_ci_green、risk なし): 付帯子が未決着なら a
     workspace,
     authority: { name: "standard", guidance: "", merge: "auto_if_ci_green" },
   });
-  const task = await registerWork(t, "ship unattended", undefined, true);
+  const task = await registerWork(t, "ship unattended");
   await t.clock.advance(HOUR);
   commitWork(workspace.path, "feature.txt", "finished\n");
 
@@ -127,7 +127,7 @@ it("remote-backed(external): 付帯子の決着後に PR が開く", async () =>
     workspace,
     authority: { name: "standard", guidance: "", merge: "external" },
   });
-  const task = await registerWork(t, "ship to an outside merge surface", undefined, true);
+  const task = await registerWork(t, "ship to an outside merge surface");
   await t.clock.advance(HOUR);
   commitWork(workspace.path, "feature.txt", "finished\n");
 
@@ -189,7 +189,7 @@ it("purely-local: 人間が付帯子を complete しても着地する", async (
 it("待機中に付いた2つ目の付帯子が着地をもう一度待たせ、landing_deferred は重複しない", async () => {
   const workspace = await makeWorkspace("sandbox");
   t = await bootTidepool({ workspace });
-  const task = await registerWork(t, "ship after two attached children", undefined, true);
+  const task = await registerWork(t, "ship after two attached children");
   await t.clock.advance(HOUR);
   commitWork(workspace.path, "feature.txt", "finished\n");
   await completeViaMcp(t, task.id);
@@ -259,7 +259,7 @@ it("決着済み分解子に付いた異議修理が未決着なら、親の着�
 it("差分ゼロの完了は付帯子に関係なく着地対象なしを即座に記録する", async () => {
   const workspace = await makeWorkspace("sandbox");
   t = await bootTidepool({ workspace });
-  const task = await registerWork(t, "inspect without changing files", undefined, true);
+  const task = await registerWork(t, "inspect without changing files");
   await t.clock.advance(HOUR);
 
   await completeViaMcp(t, task.id);

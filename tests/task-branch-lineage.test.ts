@@ -111,7 +111,7 @@ it("decompose の子は親ブランチから切られ、完了すると親ブラ
 it("完了時 review は元 PR が merge 済みでも被レビュータスクの恒久ブランチから切られる", async () => {
   const workspace = await makeWorkspace("review-lineage");
   t = await bootTidepool({ workspace });
-  const reviewed = await registerWork(t, "ship reviewed work", undefined, true);
+  const reviewed = await registerWork(t, "ship reviewed work");
   await t.clock.advance(HOUR);
   commitWork(workspace.path, "reviewed.txt", "review this\n");
   await complete(reviewed.id);
@@ -133,7 +133,7 @@ it("完了時 review は元 PR が merge 済みでも被レビュータスクの
 it("review の完了は生成物を被レビュー work ブランチへ merge back しない", async () => {
   const workspace = await makeWorkspace("review-transparent-release");
   t = await bootTidepool({ workspace });
-  const reviewed = await registerWork(t, "review without branch pollution", undefined, true);
+  const reviewed = await registerWork(t, "review without branch pollution");
   await t.clock.advance(HOUR);
   commitWork(workspace.path, "reviewed.txt", "reviewed work\n");
   await complete(reviewed.id);
@@ -158,7 +158,7 @@ it("review の完了は生成物を被レビュー work ブランチへ merge ba
 it("review の修理は元 PR が未 merge なら被レビュー work へ戻り、PR を増やさない", async () => {
   const { workspace } = await makeRemoteBackedWorkspace("open-pr-repair");
   t = await bootTidepool({ workspace });
-  const reviewed = await registerWork(t, "ship repairable work", undefined, true);
+  const reviewed = await registerWork(t, "ship repairable work");
   await t.clock.advance(HOUR);
   commitWork(workspace.path, "reviewed.txt", "needs review\n");
   await complete(reviewed.id);
@@ -194,7 +194,7 @@ it("review の修理は元 PR が未 merge なら被レビュー work へ戻り�
 it("review の修理は元 PR が merge 済みなら保護ブランチから切られ、自分の PR を開く", async () => {
   const { workspace } = await makeRemoteBackedWorkspace("merged-pr-repair");
   t = await bootTidepool({ workspace });
-  const reviewed = await registerWork(t, "ship merged work", undefined, true);
+  const reviewed = await registerWork(t, "ship merged work");
   await t.clock.advance(HOUR);
   commitWork(workspace.path, "reviewed.txt", "merged work\n");
   // 外での merge は review の session の外で起こす —— 後始末の完走は pickup の契機なので
@@ -231,7 +231,7 @@ it.each(["squash", "rebase"] as const)(
   async (method) => {
     const { workspace } = await makeRemoteBackedWorkspace(`${method}-merged-pr-repair`);
     t = await bootTidepool({ workspace });
-    const reviewed = await registerWork(t, `ship ${method}-merged work`, undefined, true);
+    const reviewed = await registerWork(t, `ship ${method}-merged work`);
     await t.clock.advance(HOUR);
     commitWork(workspace.path, "reviewed.txt", "merged work\n");
     await complete(reviewed.id);
@@ -412,7 +412,7 @@ it("decompose 子の review 修理は、着地済みの子ブランチを飛ば�
 it("付帯子の実行中に祖先が着地したら、完了時の再解決で保護ブランチへ帰り先を切り替える", async () => {
   const { workspace } = await makeRemoteBackedWorkspace("landing-reresolution");
   t = await bootTidepool({ workspace });
-  const reviewed = await registerWork(t, "work that lands during repair", undefined, true);
+  const reviewed = await registerWork(t, "work that lands during repair");
   await t.clock.advance(HOUR);
   commitWork(workspace.path, "reviewed.txt", "reviewed work\n");
   await complete(reviewed.id);

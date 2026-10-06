@@ -1,5 +1,6 @@
 import { afterEach, expect, it } from "vitest";
-import { api, bootTidepool, type Tidepool } from "./harness.js";
+import { registerTask } from "../src/tasks.js";
+import { api, bootTidepool, HUMAN_WEBUI, type Tidepool } from "./harness.js";
 
 let t: Tidepool;
 afterEach(() => t?.stop());
@@ -37,9 +38,19 @@ it("a registered task joins the queue tail and can be listed", async () => {
 
 it("registration accepts assignee, workspace, risk_flag, and review_flag — the same fields a brain-dump draft fills in", async () => {
   t = await bootTidepool();
+  // review_flag を持てるのは子だけ —— ルートは flag によらずレビューされる(issue #1467)。
+  // risk の子が承認 question に変わらないよう、親にも risk を付ける
+  const parent = registerTask(
+    t.db,
+    { type: "work", title: "parent", purpose: "p", completion_criteria: "c", risk_flag: true },
+    t.clock.now(),
+    ...HUMAN_WEBUI,
+  );
 
   const registered = await api(t.baseUrl, "POST", "/api/tasks", {
     type: "work",
+    parent_id: parent.id,
+    decompose_reason: "split the gate out",
     title: "add usage-limit gate to hourly poll",
     purpose: "stop starting tasks when any rate-limit window is rejected",
     completion_criteria: "rejected window blocks new starts; resumes at resets_at",

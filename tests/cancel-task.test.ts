@@ -63,8 +63,8 @@ it("cancelled のツリーは即時にボードから退く", async () => {
 it("理由は任意 — 付ければ cancelled イベントに残る", async () => {
   t = await bootTidepool();
   // 人間担当にして、1本目の cancel が撃つ poll(ADR 0119 決定1)に2本目を pickup させない
-  const withReason = queueWork(t, "with reason", undefined, undefined, HUMAN_WORKER_ID);
-  const without = queueWork(t, "without reason", undefined, undefined, HUMAN_WORKER_ID);
+  const withReason = queueWork(t, "with reason", undefined, HUMAN_WORKER_ID);
+  const without = queueWork(t, "without reason", undefined, HUMAN_WORKER_ID);
 
   await api(t.baseUrl, "POST", `/api/tasks/${withReason.id}/cancel`, { reason: "changed my mind" });
   await api(t.baseUrl, "POST", `/api/tasks/${without.id}/cancel`, {});
@@ -151,7 +151,7 @@ it("そのタスクの資源に対する未回答の quarantine 確認が開い�
 
 it("assignee 未設定の question だけを含む subtree は、default agent の quarantine 中でも直接 cancel できる(issue #242)", async () => {
   t = await bootTidepool({ workerId: "quarantined-agent" });
-  const parent = await registerWork(t, "human plan", undefined, undefined, "human");
+  const parent = await registerWork(t, "human plan", undefined, "human");
   registerQuestion(t, {
     title: "a human decision",
     purpose: "does not run as an agent",
@@ -174,7 +174,7 @@ it("assignee 未設定の question だけを含む subtree は、default agent �
 
 it("default agent に解決される task を含む subtree は、quarantine 中は直接 cancel できない(issue #242)", async () => {
   t = await bootTidepool({ workerId: "quarantined-agent" });
-  const parent = await registerWork(t, "human plan", undefined, undefined, "human");
+  const parent = await registerWork(t, "human plan", undefined, "human");
   await addChild(t, parent.id, "runs as the default agent");
   registerQuestion(t, {
     title: "quarantined-agent needs human",
@@ -193,7 +193,7 @@ it("provider 認証の quarantine 確認が開いている間は、その provid
   t = await bootTidepool({
     quarantineResolvers: { providerAuth: (providers) => (providers.includes("moonshot") ? ["kipper"] : []) },
   });
-  const task = queueWork(t, "runs on moonshot", undefined, undefined, "kipper");
+  const task = queueWork(t, "runs on moonshot", undefined, "kipper");
   // an open provider-auth Confirmation for the provider the task's agent speaks
   registerQuestion(t, {
     title: "moonshot authentication is unavailable — pickup of moonshot-speaking agents is stopped",
@@ -213,7 +213,7 @@ it("provider 認証の quarantine 確認が開いていても、別の provider 
   t = await bootTidepool({
     quarantineResolvers: { providerAuth: (providers) => (providers.includes("moonshot") ? ["kipper"] : []) },
   });
-  const task = queueWork(t, "runs on anthropic", undefined, undefined, "deckhand");
+  const task = queueWork(t, "runs on anthropic", undefined, "deckhand");
   registerQuestion(t, {
     title: "moonshot authentication is unavailable — pickup of moonshot-speaking agents is stopped",
     purpose: "the moonshot credential died",

@@ -425,13 +425,11 @@ it("the public queue and answer routes expose a durable Harness-scoped stop with
       tidepool,
       "Codex waits for its Harness",
       undefined,
-      undefined,
       "codex-agent",
     );
     const claude = await registerWork(
       tidepool,
       "Claude keeps flowing",
-      undefined,
       undefined,
       "claude-agent",
     );

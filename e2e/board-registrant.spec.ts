@@ -26,7 +26,7 @@ test("human 名義の decision log エントリが🧍と\"you\"で描かれる�
   page,
 }) => {
   const t = await boot();
-  const work = await registerWork(t, "issue-261 の human ログを作る", undefined, false, "human");
+  const work = await registerWork(t, "issue-261 の human ログを作る", undefined, "human");
   await api(t.baseUrl, "POST", `/api/tasks/${work.id}/complete`, {
     handoff: { outcome: "issue-261-human-log-outcome" },
   });

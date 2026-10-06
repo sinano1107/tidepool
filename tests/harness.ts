@@ -651,7 +651,6 @@ export async function registerWork(
   t: Tidepool,
   title: string,
   workspace?: string,
-  reviewFlag?: boolean,
   assignee?: string,
 ): Promise<any> {
   const res = await api(t.baseUrl, "POST", "/api/tasks", {
@@ -660,7 +659,6 @@ export async function registerWork(
     purpose: `purpose of ${title}`,
     completion_criteria: `criteria of ${title}`,
     ...(workspace !== undefined && { workspace }),
-    ...(reviewFlag !== undefined && { review_flag: reviewFlag }),
     ...(assignee !== undefined && { assignee }),
   });
   return res.json;
@@ -668,7 +666,7 @@ export async function registerWork(
 
 /** 次の poll を起こす: 第2回と起草を撃つのは poll の sweep だけで(ADR 0169)、RCA 子の決着の扉は親が拾えるときしか poll を
  *  促さない。人間の登録は常に促す(ADR 0119 決定2)—— 人間担当の行なので slot は取らない。 */
-export const nextPoll = (t: Tidepool) => registerWork(t, "a pickup trigger", undefined, undefined, "human");
+export const nextPoll = (t: Tidepool) => registerWork(t, "a pickup trigger", undefined, "human");
 
 /** `registerWork` と同じ行を、人間の扉を通さずに置く。扉の登録は自身が pickup の契機なので
  *  (ADR 0119 決定2)、「todo のまま待っている行」を前提にするテストはこちらを使う。 */
@@ -676,7 +674,6 @@ export function queueWork(
   t: Tidepool,
   title: string,
   workspace?: string,
-  reviewFlag?: boolean,
   assignee?: string,
 ): Task {
   return registerTask(
@@ -687,7 +684,6 @@ export function queueWork(
       purpose: `purpose of ${title}`,
       completion_criteria: `criteria of ${title}`,
       ...(workspace !== undefined && { workspace }),
-      ...(reviewFlag !== undefined && { review_flag: reviewFlag }),
       ...(assignee !== undefined && { assignee }),
     },
     t.clock.now(),
@@ -981,7 +977,7 @@ export async function objectedForDraft(
     ? decomposedChild(t.db, registerTask(t.db, { type: "work", title: `parent of ${title}`, purpose: "p", completion_criteria: "c", workspace }, t.clock.now(), ...HUMAN_WEBUI), title, opts.decomposedBy, t.clock.now())
     : opts.registrant
       ? registerTask(t.db, { type: "work", title, purpose: "p", completion_criteria: "c", workspace }, t.clock.now(), opts.registrant, "worker")
-      : await registerWork(t, title, workspace, undefined, opts.human && "human");
+      : await registerWork(t, title, workspace, opts.human && "human");
   let entry: any;
   if (opts.human) {
     await api(t.baseUrl, "POST", `/api/tasks/${task.id}/complete`, { handoff: FULL_HANDOFF });

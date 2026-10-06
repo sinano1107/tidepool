@@ -662,7 +662,10 @@ function EditTaskDialog({ taskCard, onSaved, onClose, say }: {
           )}
         </div>
         <Checkbox label="risk flag — this task has irreversible external effects" checked={fields.risk_flag} onChange={() => set('risk_flag', !fields.risk_flag)} />
-        <Checkbox label="review flag — request an on-completion review" checked={fields.review_flag} onChange={() => set('review_flag', !fields.review_flag)} />
+        {/* ルートは flag によらずレビューされ、review は終端 —— どちらも review_flag を拒否する(issue #1467 / ADR 0111) */}
+        {full.parent_id != null && full.type === 'work' && (
+          <Checkbox label="review flag — request an on-completion review" checked={fields.review_flag} onChange={() => set('review_flag', !fields.review_flag)} />
+        )}
         <Button variant="primary" size="lg" full disabled={busy} onClick={submit}>Save changes</Button>
         <Button variant="ghost" size="lg" full disabled={busy} onClick={onClose}>Cancel</Button>
       </Card>

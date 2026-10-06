@@ -54,8 +54,8 @@ it("moonshot 失効中は moonshot agent の pickup のみが止まり、anthrop
       executionSettingsFor(t.db, task.assignee === "kipper" ? entries("moonshot") : entries("anthropic"), task),
   });
   quarantineMoonshot(t);
-  const kimi = await registerWork(t, "kimi task waits for its provider", undefined, undefined, "kipper");
-  const claude = await registerWork(t, "claude task still flows", undefined, undefined, "deckhand");
+  const kimi = await registerWork(t, "kimi task waits for its provider", undefined, "kipper");
+  const claude = await registerWork(t, "claude task still flows", undefined, "deckhand");
 
   // 即時 poll を撃つ(FakeClock の hourly tick は進まない)。move の発火条件は
   // 「既に候補の先頭に居る行をもう一度先頭へ」(issue #299) — 候補の先頭は
@@ -101,7 +101,7 @@ it("moonshot の確認回答は provider の再検証が通るまで受理され
     },
   });
   quarantineMoonshot(t);
-  const kimi = await registerWork(t, "kimi task resumes after repair", undefined, undefined, "kipper");
+  const kimi = await registerWork(t, "kimi task resumes after repair", undefined, "kipper");
   const tasks = (await api(t.baseUrl, "GET", "/api/tasks")).json as any[];
   const question = tasks.find((candidate) => candidate.title === MOONSHOT_QUESTION_TITLE);
 
@@ -163,8 +163,8 @@ it("OpenAI の unauthorized は OpenAI だけの確認を立て、HTTP 回答時
         : candidate("anthropic", "claude-opus-4-1"),
     ],
   });
-  const codex = await registerWork(t, "waits for Codex login", undefined, undefined, "codex-agent");
-  const claude = await registerWork(t, "keeps flowing", undefined, undefined, "claude-agent");
+  const codex = await registerWork(t, "waits for Codex login", undefined, "codex-agent");
+  const claude = await registerWork(t, "keeps flowing", undefined, "claude-agent");
 
   await t.clock.advance(HOUR);
   expect(t.worker.started.map((task) => task.id)).toEqual([claude.id]);
@@ -212,7 +212,7 @@ it("codexHome に auth.json が無い openai は probe を撃たずに absent �
     },
     taskExecutionCandidates: () => [candidate("openai", "gpt-5.6-sol")],
   });
-  await registerWork(t, "Codex login を待つ", undefined, undefined, "codex-agent");
+  await registerWork(t, "Codex login を待つ", undefined, "codex-agent");
 
   await t.clock.advance(HOUR);
   const authQuestions = async () =>
@@ -257,8 +257,8 @@ it("openai を quarantine 中でも openai と anthropic の entry を持つ age
 
   // 扉を通す(quarantine は登録より前に開いているので、pickup の契機である
   // 登録の poll がそのまま今の除外集合を読む)
-  const solo = await registerWork(t, "openai entry しか持たない agent の task", undefined, undefined, "solo-agent");
-  const multi = await registerWork(t, "openai と anthropic の entry を持つ agent の task", undefined, undefined, "multi-agent");
+  const solo = await registerWork(t, "openai entry しか持たない agent の task", undefined, "solo-agent");
+  const multi = await registerWork(t, "openai と anthropic の entry を持つ agent の task", undefined, "multi-agent");
 
   // openai は候補にすら残らず anthropic entry で走る。選ばれた設定は adapter へ
   // そのまま運ばれ、実 adapter はこれを worker_spawned に刻む
@@ -285,7 +285,7 @@ it("openai entry しか持たない行は quarantine 中は Pickable head では
   quarantineCliAuthForProvider(t.db, "openai", t.clock.now());
   // 扉を通さずに置く(扉の登録は pickup の契機 —— ADR 0119 決定2 —— なので、
   // todo のまま待つことを前提にするテストはこちらを使う)
-  const blocked = queueWork(t, "openai entry しか持たない行", undefined, undefined, "solo-agent");
+  const blocked = queueWork(t, "openai entry しか持たない行", undefined, "solo-agent");
 
   await t.clock.advance(HOUR);
   // この poll では候補が blocked しか無く、全 entry 除外なので何も走らない
@@ -295,7 +295,7 @@ it("openai entry しか持たない行は quarantine 中は Pickable head では
 
   // 素の先頭は blocked のままだが、候補の先頭は下の runnable(anthropic entry)。
   // 1回の ↑ が空振りしないことが、Pickable head が entry 集合で判定されている証拠である
-  const runnable = queueWork(t, "anthropic entry を持つので別の行で走る", undefined, undefined, "runnable-agent");
+  const runnable = queueWork(t, "anthropic entry を持つので別の行で走る", undefined, "runnable-agent");
   await api(t.baseUrl, "POST", `/api/tasks/${runnable.id}/move`, { after: null });
   expect(t.worker.started.map((task) => task.id)).toEqual([runnable.id]);
 });

@@ -909,7 +909,7 @@ it("管理MCP の complete_task の description は HANDOFF_FIELDS の全フィ�
 
 it("complete_task は human assignee の task だけを mcp origin で完了する(issue #192)", async () => {
   t = await bootTidepool();
-  const humanTask = await registerWork(t, "confirm the tide gauge licence", undefined, undefined, "human");
+  const humanTask = await registerWork(t, "confirm the tide gauge licence", undefined, "human");
   const agentTask = registerTask(
     t.db,
     {

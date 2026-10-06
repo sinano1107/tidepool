@@ -20,7 +20,6 @@ it("review タスクの get_current_task に、親(レビュー対象)の histor
       title: "ship the tide widget",
       purpose: "purpose",
       completion_criteria: "criteria",
-      review_flag: true,
     })
   ).json;
   await t.clock.advance(HOUR); // reviewed task picked up

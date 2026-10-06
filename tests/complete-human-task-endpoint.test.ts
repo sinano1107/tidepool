@@ -36,7 +36,7 @@ it("人間タスクが親のエージェントタスクを block し、完了で
 
 it("assignee が human 以外のタスクは /complete で完了できない — MCP の complete_task をバイパスする経路にしない(issue #13 code review)", async () => {
   t = await bootTidepool();
-  const agentTask = queueWork(t, "agent-executable todo", undefined, undefined, "reef-crab");
+  const agentTask = queueWork(t, "agent-executable todo", undefined, "reef-crab");
 
   const res = await api(t.baseUrl, "POST", `/api/tasks/${agentTask.id}/complete`, {
     handoff: {

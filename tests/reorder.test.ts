@@ -248,11 +248,11 @@ it("moving the head task down does not fire an immediate poll for the new head",
 
 it("a non-todo task can be moved — board order is global — without firing a run-now", async () => {
   t = await bootTidepool();
-  // review_flag keeps a's tree unsettled after completion (its auto-generated
-  // review child starts todo) — issue #35's board otherwise retreats a
+  // a root's integration review keeps a's tree unsettled after completion (its
+  // auto-generated review child starts todo) — issue #35's board otherwise retreats a
   // standalone done task the instant its whole tree settles, which would
   // make it disappear from the list this test inspects
-  const a = queueWork(t, "a", undefined, true);
+  const a = queueWork(t, "a");
   quarantineTestAgent(t.db, DEFAULT_AUDITOR_NAME);
   await t.clock.advance(HOUR); // a picked up
   const client = await mcpClient(t.mcpBaseUrl, a.id);

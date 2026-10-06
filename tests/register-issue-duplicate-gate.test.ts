@@ -33,7 +33,7 @@ describe("登録ゲートの重複検査(issue #104): 未決着の同一参照�
 
   it("判定はタスク自身の status — done の親に未決着のレビュー子が残っていても再登録を妨げない", () => {
     const db = openDb(":memory:");
-    const first = registerTask(db, { ...ref, review_flag: true }, new Date(0), ...HUMAN_WEBUI);
+    const first = registerTask(db, ref, new Date(0), ...HUMAN_WEBUI);
     completeTask(db, first, FULL_HANDOFF, "reef-crab", new Date(1), "worker");
     // 完了時レビュー子が未決着に残り、ツリーとしては未決着のまま
     const review = listBoard(db).find((c) => c.type === "review" && c.parent_id === first.id);

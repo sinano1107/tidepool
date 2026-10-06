@@ -590,7 +590,7 @@ it("同一ログエントリへの2件目の異議は1件目を上書きせず�
 
 it("result が null の完了エントリへの異議には no outcome recorded を差し込む", async () => {
   t = await bootTidepool();
-  const task = await registerWork(t, "完了報告なし", undefined, false, "human");
+  const task = await registerWork(t, "完了報告なし", undefined, "human");
   await api(t.baseUrl, "POST", `/api/tasks/${task.id}/complete`, {});
   const completed = (await api(t.baseUrl, "GET", "/api/log")).json.entries.find(
     (entry: any) => entry.kind === "task_completed" && entry.task_id === task.id,

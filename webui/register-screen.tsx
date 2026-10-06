@@ -38,7 +38,8 @@ interface RegisterScreenManualFields {
   purpose: string;
   completion_criteria: string;
   risk_flag: boolean;
-  review_flag: boolean;
+  /** 子追加でだけ送る —— ルートは flag によらずレビューされ、ルートへの review_flag は拒否される(issue #1467)。 */
+  review_flag?: boolean;
   assignee?: string;
   workspace?: string;
   /** 要求ティア(盤面の段の名前)。review task はレビューの要求(`review_tier`)として送る。 */
@@ -168,7 +169,7 @@ function RegisterScreen({ onRegister, parentTask, onClose }: RegisterScreenProps
           // ChildSpec has no type field) — the type picker is dropped in
           // childMode below, so `type` state never leaves its 'work' default
           type, title: title.trim(), purpose: purpose.trim(), completion_criteria: criteria.trim(),
-          risk_flag: risk, review_flag: review,
+          risk_flag: risk, ...(childMode ? { review_flag: review } : {}),
           // unset assignee/workspace resolve to the board's defaults at
           // execution time (CONTEXT.md) — omit rather than send '' so an
           // unknown-workspace 400 never fires on a field the human left blank
@@ -380,7 +381,9 @@ function RegisterScreen({ onRegister, parentTask, onClose }: RegisterScreenProps
             </div>
             <Select label="Tier" options={tierOptions(tiers, "(agent's tier, then board default)")} value={tier} onChange={(e) => setTier(e.target.value)} />
             {riskCheckbox}
-            <Checkbox label="review flag — request an on-completion review" checked={review} onChange={() => setReview(!review)} />
+            {childMode && (
+              <Checkbox label="review flag — request an on-completion review" checked={review} onChange={() => setReview(!review)} />
+            )}
           </React.Fragment>
         )}
         <Button variant="primary" size="lg" full disabled={primaryAction.disabled} onClick={primaryAction.onClick}>{primaryAction.label}</Button>

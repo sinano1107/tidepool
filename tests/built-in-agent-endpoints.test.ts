@@ -85,7 +85,7 @@ it("fugu の作成は成功し、応答が組み込みを shadow することを
 
 it("shadow している fugu は、Auditor ポインタが指していても未決着タスクが参照していても削除でき、一覧は built-in に戻る(ADR 0087 決定3 の唯一の例外)", async () => {
   t = await bootWithRegistry({ "agents/fugu.md": MY_FUGU_MD });
-  await registerWork(t, "assigned to fugu", undefined, undefined, "fugu");
+  await registerWork(t, "assigned to fugu", undefined, "fugu");
   await api(t.baseUrl, "POST", "/api/tasks", {
     type: "work",
     title: "reviewed by fugu",

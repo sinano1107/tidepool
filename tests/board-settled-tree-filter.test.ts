@@ -83,7 +83,6 @@ describe("Board は settled ツリーを退かせる(issue #35)", () => {
         title: "wire the moisture sensor",
         purpose: "p",
         completion_criteria: "c",
-        review_flag: true,
       },
       new Date(0),
       ...HUMAN_WEBUI,
