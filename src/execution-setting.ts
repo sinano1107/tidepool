@@ -776,7 +776,7 @@ function settleRemovedRowQuarantines(db: Db, at: Date, observedEventId: number):
   }
 }
 
-/** registry の agent 一覧を読む口(registry の無い盤面では無い)。registry の提案の (agent, tier) の照合が読む。 */
+/** registry の agent 一覧を読む口(registry の無い盤面では無い)。registry の提案の (agent, tier) の照合と、段の削除の照合(`tierDeletionBlockers`)が読む。 */
 export type ListAgentTiers = () => readonly { name: string; tier?: string }[];
 
 /** 陳腐化の決着(ADR 0150 決定1): open な routing / registry の提案の pin を表・フラグの現在値と照合し、崩れた question を
