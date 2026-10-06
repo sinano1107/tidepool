@@ -22,7 +22,7 @@ import { CODEX_APP_SERVER_VERSION, callAppServer, codexCommandThrough } from "./
 import type { ContainmentCapability } from "./containment.js";
 import type { Db } from "./db.js";
 import { appendEvent, type EventPayload } from "./events.js";
-import { type ExecutionSetting } from "./execution-setting.js";
+import type { ExecutionSetting } from "./execution-setting.js";
 import { buildMemoryInjection, buildMetaReviewMaterial, type InjectionQuery, recordMemoryInjection, recordMetaReviewMaterial, WORKER_MEMORY_VERBS } from "./memory.js";
 import { META_REVIEW_SUBJECTS, metaReviewSubjectOf } from "./meta-review.js";
 import type { ContainedProcess, ContainerSpawn, ProcessContainers } from "./process-container.js";

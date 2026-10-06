@@ -3,7 +3,7 @@ import { anthropicBoardCallRow, type ExecutionSettingRow, windowMatchesModel } f
 import { defaultProviderPaceOffset, getProviderPaceOffset } from "./pace-offsets.js";
 import type { Provider } from "./registry.js";
 import { getSpendDown, isSpendDownActive } from "./spend-down.js";
-import { type Tier } from "./tier.js";
+import type { Tier } from "./tier.js";
 
 /** 評価器が受け取る窓 —— Provider を問わない共通の形(ADR 0144)。 */
 export interface ProviderUsageWindow {
