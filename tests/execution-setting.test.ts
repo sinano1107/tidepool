@@ -823,6 +823,35 @@ it("行のある段・盤面設定が指す段・未決着の task が要求し�
   expect(tierNames(db)).toContain("premium");
 });
 
+// ── agent.md が名指す段(ADR 0200 追記 2026-10-06 / issue #1431): 手元の clone の一覧を読んで断る ──
+
+const deletePremium = { setting: "delete_tier", name: "premium" } as const;
+
+it("registry の agent.md が名指す段は、その agent 名を添えて削除を拒まれ、一覧に残る", async () => {
+  const db = openDb(":memory:");
+  change(db, { setting: "insert_tier", ...premium, position: 3 });
+  const agents = () => [{ name: "kimi", tier: "premium" }, { name: "opus", tier: "premium" }, { name: "plain" }];
+  await expect(changeExecutionSettings(db, deletePremium, "webui", at, undefined, agents)).rejects.toThrow(/agents name it in agent\.md: kimi, opus/);
+  expect(tierNames(db)).toContain("premium");
+});
+
+it("agent.md が別の段を名指すか段を名指さなければ、その段は消せる", async () => {
+  const db = openDb(":memory:");
+  change(db, { setting: "insert_tier", ...premium, position: 3 });
+  await changeExecutionSettings(db, deletePremium, "webui", at, undefined, () => [{ name: "kimi", tier: "economy" }, { name: "plain" }]);
+  expect(tierNames(db)).not.toContain("premium");
+});
+
+it("registry の一覧が読めなければ、段の削除は拒まれる", async () => {
+  const db = openDb(":memory:");
+  change(db, { setting: "insert_tier", ...premium, position: 3 });
+  const unreadable = () => {
+    throw new Error("registry clone is broken");
+  };
+  await expect(changeExecutionSettings(db, deletePremium, "webui", at, undefined, unreadable)).rejects.toThrow(DomainError);
+  expect(tierNames(db)).toContain("premium");
+});
+
 it("決着した task だけが要求した段は消せ、その task は消した段の名前を読み続け、名前は挿入し直せる", () => {
   const db = openDb(":memory:");
   change(db, { setting: "insert_tier", ...premium, position: 1 });

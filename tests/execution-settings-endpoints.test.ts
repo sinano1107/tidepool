@@ -1,4 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
+import type { AgentView } from "../src/agent-create.js";
 import { listEventsOfKinds } from "../src/events.js";
 import { applyExecutionSettingsChange, executionSettingsFor, SEED_EXECUTION_SETTINGS } from "../src/execution-setting.js";
 import { openQuarantineQuestion, registerQuarantine, tableRowValue } from "../src/quarantine.js";
@@ -470,6 +471,24 @@ it("段の改名は両方の扉に乗り、registry の書き換えを通って�
 
   expect(renameTier).toHaveBeenLastCalledWith(expect.objectContaining({ from: "frontier", to: "top" }));
   expect((await state()).tiers.map((tier: { name: string }) => tier.name)).toEqual(["economy", "mid", "top"]);
+});
+
+it("agent.md が名指す段の削除は両方の扉で agent 名を添えて断られる(ADR 0200 追記 2026-10-06)", async () => {
+  t = await bootTidepool({ agentAdmin: { list: () => [{ name: "kimi", tier: "premium" }] as AgentView[] } });
+  await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "insert_tier", ...premium, position: 3 });
+  const refused = await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "delete_tier", name: "premium" });
+  expect(refused.status).toBe(400);
+  expect(refused.json.error).toContain("agents name it in agent.md: kimi");
+
+  const client = await managementMcpClient(t.baseUrl);
+  try {
+    const viaMcp = (await client.callTool({ name: "change_execution_settings", arguments: { change: { setting: "delete_tier", name: "premium" } } })) as any;
+    expect(viaMcp.isError).toBe(true);
+    expect(viaMcp.content[0].text).toContain("agents name it in agent.md: kimi");
+  } finally {
+    await client.close();
+  }
+  expect((await state()).tiers.map((tier: { name: string }) => tier.name)).toContain("premium");
 });
 
 it("registry の無い盤面では段の改名は盤面の名前だけを変える", async () => {
