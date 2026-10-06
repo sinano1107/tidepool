@@ -15,7 +15,7 @@ afterEach(async () => {
 
 it("quarantine 済み agent 宛ての todo はキュービューで skipped、ボードでは todo のまま表示される(ADR 0012 / issue #36)", async () => {
   t = await bootTidepool();
-  const delegated = queueWork(t, "delegated to navigator", undefined, undefined, "navigator");
+  const delegated = queueWork(t, "delegated to navigator", undefined, "navigator");
   const other = queueWork(t, "runs under the default agent");
 
   quarantineAgent(t.db, "navigator", new Error("unknown agent: navigator"), t.clock.now());
@@ -35,7 +35,7 @@ it("quarantine 済み agent 宛ての todo はキュービューで skipped、�
 
 it("quarantine question への回答は、その agent 名宛ての todo がまだ残っていれば拒否される(quarantine は開いたまま)", async () => {
   t = await bootTidepool();
-  const delegated = queueWork(t, "delegated to navigator", undefined, undefined, "navigator");
+  const delegated = queueWork(t, "delegated to navigator", undefined, "navigator");
 
   quarantineAgent(t.db, "navigator", new Error("unknown agent: navigator"), t.clock.now());
 
@@ -56,7 +56,7 @@ it("quarantine question への回答は、その agent 名宛ての todo がま�
 
 it("その agent 名宛ての todo がもう存在しなければ、回答が受理され pickup が即時再開する", async () => {
   t = await bootTidepool();
-  const delegated = queueWork(t, "delegated to navigator", undefined, undefined, "navigator");
+  const delegated = queueWork(t, "delegated to navigator", undefined, "navigator");
   const other = queueWork(t, "waiting behind the quarantine");
 
   quarantineAgent(t.db, "navigator", new Error("unknown agent: navigator"), t.clock.now());

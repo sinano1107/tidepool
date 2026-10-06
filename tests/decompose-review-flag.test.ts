@@ -17,6 +17,7 @@ import {
   HOUR,
   HUMAN_WEBUI,
   makeWorkspace,
+  managementMcpClient,
   mcpClient,
   QUIET_EXIT,
   registerWork,
@@ -86,9 +87,9 @@ it.each([false, true])(
   },
 );
 
-it("human task の完了は flag があっても統合点レビューを生成しない", async () => {
+it("human task の完了は統合点レビューを生成しない", async () => {
   t = await bootTidepool();
-  const task = await registerWork(t, "human work", undefined, true, "human");
+  const task = await registerWork(t, "human work", undefined, "human");
   expect((await api(t.baseUrl, "POST", `/api/tasks/${task.id}/complete`, {})).status).toBe(200);
   expect((await api(t.baseUrl, "GET", "/api/tasks")).json).toEqual([]);
 });
@@ -239,6 +240,20 @@ it("review type への review_flag は登録時に拒否する", async () => {
   expect(response.json.error).toMatch(/review/);
 });
 
+it("ルートへの review_flag: true は、JSON API では 400、管理MCP の register_task では同じ文の toolError になる", async () => {
+  t = await bootTidepool();
+  const root = { type: "work", title: "root", purpose: "p", completion_criteria: "c", review_flag: true };
+  const response = await api(t.baseUrl, "POST", "/api/tasks", root);
+  expect(response.status).toBe(400);
+  expect(response.json.error).toMatch(/root/);
+
+  const client = await managementMcpClient(t.baseUrl);
+  const result: any = await client.callTool({ name: "register_task", arguments: root });
+  await client.close();
+  expect(result.isError).toBe(true);
+  expect(result.content[0].text).toContain(response.json.error);
+});
+
 it("review task の編集でも review_flag を付けられない", async () => {
   t = await bootTidepool();
   const task = (
@@ -322,7 +337,7 @@ it("更新前に生成済みの完了時 review も、完了後は受理に数�
   const db = openDb(join(dir, "board.sqlite"));
   const subject = registerTask(
     db,
-    { type: "work", title: "legacy work", purpose: "p", completion_criteria: "c", review_flag: true },
+    { type: "work", title: "legacy work", purpose: "p", completion_criteria: "c" },
     new Date(0),
     ...HUMAN_WEBUI,
   );

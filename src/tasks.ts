@@ -647,6 +647,11 @@ export function contentSourceFor(
   return TaskContentSource.liveIssue(github, { path, number: task.github_issue_number });
 }
 
+/** A root is reviewed on completion whatever its flag (ADR 0111), so a root's
+ *  review_flag would never fire — refused like the review type's (issue #1467). */
+const ROOT_REVIEW_FLAG_ERROR =
+  "a root task cannot carry review_flag — every root is already reviewed on completion";
+
 /** New tasks always join the queue tail: sort_key = max + 1. */
 export function registerTask(
   db: Db,
@@ -660,6 +665,9 @@ export function registerTask(
   assertExecutionRequest(db, input);
   if (input.type === "review" && input.review_flag) {
     throw new DomainError("a review task cannot carry review_flag");
+  }
+  if (!input.parent_id && input.review_flag) {
+    throw new DomainError(ROOT_REVIEW_FLAG_ERROR);
   }
   // assertGithubRef above guarantees workspace whenever the ref is present
   if (input.github_issue_number !== undefined && input.workspace) {
@@ -2242,6 +2250,9 @@ export function editTask(
   assertHumanEditableScope(db, task);
   if (task.type === "review" && input.review_flag) {
     throw new DomainError("a review task cannot carry review_flag");
+  }
+  if (task.parent_id === null && input.review_flag) {
+    throw new DomainError(ROOT_REVIEW_FLAG_ERROR);
   }
   if (
     input.title === "" ||

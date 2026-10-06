@@ -241,7 +241,7 @@ it("register_task・cancel_task・complete_task の ack は task の識別と状
   // 登録は pickup の契機なので(ADR 0119 決定2)、slot を埋めて行を取り消せる todo のまま置く
   queueWork(t, "occupies the slot");
   await t.clock.advance(HOUR);
-  const human = queueWork(t, "confirm the licence", undefined, undefined, "human");
+  const human = queueWork(t, "confirm the licence", undefined, "human");
   const client = await managementMcpClient(t.baseUrl);
   try {
     const registered = (await call(client, { type: "work", title: "t", purpose: KB, completion_criteria: KB }, "register_task")).payload;

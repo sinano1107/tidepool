@@ -41,8 +41,8 @@ it("DELETE /api/agents/:name は未決着タスクの件数・既定 agent 名�
       },
     },
   });
-  await registerWork(t, "unsettled one", undefined, undefined, "fugu");
-  await registerWork(t, "unsettled two", undefined, undefined, "fugu");
+  await registerWork(t, "unsettled one", undefined, "fugu");
+  await registerWork(t, "unsettled two", undefined, "fugu");
   await api(t.baseUrl, "POST", "/api/tasks", {
     type: "work",
     title: "reviewed later",

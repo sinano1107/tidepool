@@ -70,15 +70,22 @@ it("a drafted response registers unmodified through /api/tasks and appends to th
   });
   expect(drafted.status).toBe(200);
 
+  // 下書きの review_flag をそのまま送れるのは子追加だけ(ルートは flag によらずレビューされる、issue #1467)。
+  // 親は human 担当にして slot を取らせず(走行中の親には子を足せない)、risk の子が承認 question に変わらないよう
+  // 親にも risk を付ける
   const existing = await api(t.baseUrl, "POST", "/api/tasks", {
     type: "work",
     title: "water the tomatoes",
     purpose: "keep plants alive",
     completion_criteria: "soil moist to 5cm",
+    assignee: "human",
+    risk_flag: true,
   });
 
   const registered = await api(t.baseUrl, "POST", "/api/tasks", {
     type: "work",
+    parent_id: existing.json.id,
+    decompose_reason: "split the sensor out",
     ...drafted.json,
   });
   expect(registered.status).toBe(201);

@@ -215,7 +215,7 @@ async function exerciseEdit(surface: HumanSurface) {
     },
   });
   pools.push(pool);
-  const task = await registerWork(pool, `${surface} editable task`, undefined, undefined, "human");
+  const task = await registerWork(pool, `${surface} editable task`, undefined, "human");
   const edited = await editFrom(surface, pool, task.id, { title: `${surface} edited task` });
   const unknownAssignee = await editFrom(surface, pool, task.id, { assignee: "unknown-agent" });
   const unknownWorkspace = await editFrom(surface, pool, task.id, {
@@ -270,7 +270,7 @@ async function exerciseDecompose(surface: HumanSurface) {
     },
   });
   pools.push(pool);
-  const parent = await registerWork(pool, `${surface} decomposable task`, undefined, undefined, "human");
+  const parent = await registerWork(pool, `${surface} decomposable task`, undefined, "human");
   const child = {
     title: `${surface} child`,
     purpose: "do one independently tracked part",

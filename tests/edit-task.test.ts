@@ -87,7 +87,8 @@ it("通常タスクの workspace を編集でき、未知の workspace 名は拒
 
 it("review flag を編集でき、旧値がイベントに残る(人間登録タスクでは flag は未消費の間 可変)", async () => {
   t = await bootTidepool();
-  const task = queueWork(t, "opt in", undefined, false);
+  // ルートは flag によらずレビューされ、その review_flag は拒否される(issue #1467)ので、対象は子
+  const task = queueChild(t, "opt in", queueWork(t, "parent").id);
 
   const res = await api(t.baseUrl, "PATCH", `/api/tasks/${task.id}`, { review_flag: true });
   expect(res.status).toBe(200);

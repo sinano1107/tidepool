@@ -332,7 +332,7 @@ it("AI 下書きの3用途は、表の行で撃った Board call が断られる
     workspace: { name: "tidepool", path: "/workspaces/tidepool" },
   });
   t.github.scriptIssue(189, { title: "issue", body: "body", comments: [] });
-  const human = await registerWork(t, "mount the sensor", undefined, undefined, "human");
+  const human = await registerWork(t, "mount the sensor", undefined, "human");
   const refusal = "the anthropic provider refused the execution-setting row anthropic / claude-sonnet-5-5: API error 404 for this model id";
 
   const task = await api(t.baseUrl, "POST", "/api/tasks/draft", { dump: "draft this" });

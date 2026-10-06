@@ -69,8 +69,8 @@ it("先頭 Provider が throttle 中でも同じ poll で次を選び、回復�
         : candidate("anthropic", "claude-opus-4-1"),
     ],
   });
-  const openai = await registerWork(t, "first, but throttled", undefined, undefined, "codex-agent");
-  const anthropic = await registerWork(t, "second and healthy", undefined, undefined, "claude-agent");
+  const openai = await registerWork(t, "first, but throttled", undefined, "codex-agent");
+  const anthropic = await registerWork(t, "second and healthy", undefined, "claude-agent");
 
   await t.clock.advance(HOUR);
   expect(t.worker.started.map((task) => task.id)).toEqual([anthropic.id]);
@@ -129,7 +129,7 @@ it("使用率 0% の窓は未開始として観測から落ち、reset が窓幅
     openaiUsage: slidingWindows(0),
     taskExecutionCandidates: () => [candidate("openai", "gpt-5.6-sol")],
   });
-  const openai = await registerWork(t, "idle codex", undefined, undefined, "codex-agent");
+  const openai = await registerWork(t, "idle codex", undefined, "codex-agent");
 
   await t.clock.advance(HOUR);
   expect(t.worker.started.map((task) => task.id)).toEqual([openai.id]);
@@ -146,7 +146,7 @@ it("窓が開いて 1% 付いた次の観測では、同じ滑る reset でも�
     openaiUsage: slidingWindows(1),
     taskExecutionCandidates: () => [candidate("openai", "gpt-5.6-sol")],
   });
-  await registerWork(t, "just opened its window", undefined, undefined, "codex-agent");
+  await registerWork(t, "just opened its window", undefined, "codex-agent");
 
   await t.clock.advance(HOUR);
   expect(t.worker.started).toEqual([]);
@@ -191,8 +191,8 @@ it("model-specific window は同じ OpenAI Provider の対象 model だけを sk
       candidate("openai", task.assignee === "limited-agent" ? "gpt-limited" : "gpt-healthy"),
     ],
   });
-  const limited = await registerWork(t, "limited model first", undefined, undefined, "limited-agent");
-  const healthy = await registerWork(t, "healthy model second", undefined, undefined, "healthy-agent");
+  const limited = await registerWork(t, "limited model first", undefined, "limited-agent");
+  const healthy = await registerWork(t, "healthy model second", undefined, "healthy-agent");
 
   await t.clock.advance(HOUR);
   expect(t.worker.started.map((task) => task.id)).toEqual([healthy.id]);
@@ -215,8 +215,8 @@ it("OpenAI usage が観測不能なら question を立てず OpenAI だけ fail-
         : candidate("anthropic", "claude-opus-4-1"),
     ],
   });
-  const codex = await registerWork(t, "unobservable OpenAI", undefined, undefined, "codex-agent");
-  const claude = await registerWork(t, "healthy Anthropic", undefined, undefined, "claude-agent");
+  const codex = await registerWork(t, "unobservable OpenAI", undefined, "codex-agent");
+  const claude = await registerWork(t, "healthy Anthropic", undefined, "claude-agent");
 
   await t.clock.advance(HOUR);
   expect(t.worker.started.map((task) => task.id)).toEqual([claude.id]);
@@ -264,7 +264,7 @@ it("Provider/window ごとの catch-up timer は別 window の遅い reset に�
     }),
     taskExecutionCandidates: () => [candidate("openai", "gpt-5.6-sol")],
   });
-  const task = await registerWork(t, "wakes at primary catch-up", undefined, undefined, "codex-agent");
+  const task = await registerWork(t, "wakes at primary catch-up", undefined, "codex-agent");
 
   await t.clock.advance(3 * HOUR);
   expect(t.worker.started).toEqual([]);
@@ -310,8 +310,8 @@ it("Anthropic throttle は legacy board halt を残さず同じ poll と次 poll
     session: { percent: 50, resetsAt: new Date(5 * HOUR) },
     week: { percent: 0, resetsAt: new Date(7 * 24 * HOUR) },
   }));
-  await registerWork(t, "Anthropic waits", undefined, undefined, "claude-agent");
-  const firstOpenai = await registerWork(t, "OpenAI flows", undefined, undefined, "codex-agent");
+  await registerWork(t, "Anthropic waits", undefined, "claude-agent");
+  const firstOpenai = await registerWork(t, "OpenAI flows", undefined, "codex-agent");
 
   await t.clock.advance(HOUR);
   expect(t.worker.started.map((task) => task.id)).toEqual([firstOpenai.id]);
@@ -321,7 +321,7 @@ it("Anthropic throttle は legacy board halt を残さず同じ poll と次 poll
   await client.callTool({ name: "complete_task", arguments: { handoff: FULL_HANDOFF } });
   await client.close();
   await completeIntegrationReviews(t, firstOpenai.id);
-  const secondOpenai = await registerWork(t, "OpenAI still flows next poll", undefined, undefined, "codex-agent");
+  const secondOpenai = await registerWork(t, "OpenAI still flows next poll", undefined, "codex-agent");
   await t.clock.advance(HOUR);
   expect(t.worker.started.filter((task) => task.type === "work").map((task) => task.id)).toEqual([firstOpenai.id, secondOpenai.id]);
 });
@@ -366,7 +366,7 @@ it("model-specific window が外すのは当たった task だけ —— 同じ 
       tier: "frontier",
     })
   ).json;
-  const plain = await registerWork(t, "要求なしなので別のモデルで走る", undefined, undefined, "sole-agent");
+  const plain = await registerWork(t, "要求なしなので別のモデルで走る", undefined, "sole-agent");
 
   await t.clock.advance(HOUR);
   // agent ごと外すと plain も止まる —— 外れるのは窓に当たった task だけ
@@ -418,7 +418,7 @@ it("anthropic を温存中でも openai entry を持つ agent の task は走り
   // 要求なし(同じ agent だが economy の行なので窓に当たらない)
   const blocked = frontier("anthropic しか持たない frontier", "solo-agent");
   const multi = frontier("openai へ流れる frontier", "multi-agent");
-  const plain = queueWork(t, "要求なしなので別のモデル", undefined, undefined, "solo-agent");
+  const plain = queueWork(t, "要求なしなので別のモデル", undefined, "solo-agent");
 
   t.worker.scriptUsage(fableOverPace(t.clock.now()));
   await t.clock.advance(HOUR);
@@ -485,7 +485,7 @@ it("候補の解決が定義違反で倒れても queue の読み口は 200 を�
   });
   // 扉を通すと登録の契機(ADR 0119 決定2)の poll が drifted-agent を quarantine し、読み口の
   // 振る舞いではなく quarantine の枝を見ることになる
-  const drifted = queueWork(t, "定義が壊れた agent の行", undefined, undefined, "drifted-agent");
+  const drifted = queueWork(t, "定義が壊れた agent の行", undefined, "drifted-agent");
 
   const queue = await api(t.baseUrl, "GET", "/api/queue");
   expect(queue.status).toBe(200);
@@ -537,7 +537,7 @@ const requested = async (title: string, assignee: string, request: Record<string
 it("要求ティアの行を持たない Provider しか entry に無い agent の task は queue で skipped、pickup で spawn されない —— 表の穴は spawn 失敗ではなく除外(ADR 0114 決定3)", async () => {
   t = await bootTidepool(boardWithEntries({ "kimi-agent": ["moonshot"] }));
   const holed = await requested("moonshot に frontier 級は無い", "kimi-agent", { tier: "frontier" });
-  const plain = await registerWork(t, "盤面既定の economy なら kimi-k3 で走る", undefined, undefined, "kimi-agent");
+  const plain = await registerWork(t, "盤面既定の economy なら kimi-k3 で走る", undefined, "kimi-agent");
 
   await t.clock.advance(HOUR);
   expect(t.worker.started.map((task) => task.id)).toEqual([plain.id]);
@@ -592,7 +592,7 @@ it("anthropic 温存中に moonshot の鍵ファイルが無ければ task は q
     session: { percent: 50, resetsAt: new Date(5 * HOUR) },
     week: { percent: 0, resetsAt: new Date(7 * 24 * HOUR) },
   }));
-  const task = await registerWork(t, "鍵が置かれるまで待つ", undefined, undefined, "either-agent");
+  const task = await registerWork(t, "鍵が置かれるまで待つ", undefined, "either-agent");
 
   await t.clock.advance(HOUR);
   const queue = (await api(t.baseUrl, "GET", "/api/queue")).json.tasks as any[];

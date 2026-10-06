@@ -117,7 +117,6 @@ it("assignee 未設定の完了タスクを review すると、記録された e
       title: "wire the default sensor",
       purpose: "purpose",
       completion_criteria: "criteria",
-      review_flag: true,
     })
   ).json;
   await t.clock.advance(HOUR); // reviewed task picked up as fake-worker

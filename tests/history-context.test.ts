@@ -159,7 +159,7 @@ it("a child sees every sibling in registration-event order under its decision, i
 
 it("history orders decisions, completion, and children outside decomposition by event id", async () => {
   t = await bootTidepool();
-  const parent = await registerWork(t, "publish the harbor chart", undefined, true);
+  const parent = await registerWork(t, "publish the harbor chart");
   await t.clock.advance(HOUR);
 
   const parentClient = await mcpClient(t.mcpBaseUrl, parent.id);
