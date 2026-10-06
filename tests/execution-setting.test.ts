@@ -433,6 +433,15 @@ it("行の pin の段は id で比べる —— 改名では崩れず、改名�
   expect(routingPinChanges(rowProposal, { table: SEED_EXECUTION_SETTINGS, learnerPromoted: false, tiers: reusing("standard", "mid") })).toEqual(["tier"]);
 });
 
+it("行の提案は変更の段が一覧から消えると target_tier が崩れる —— 同じ名前の新しい段でも戻らず、改名・無関係な段の挿入 / 削除では崩れない(issue #1458)", () => {
+  const withTiers = (tierList: readonly { id: number; name: string; description: string }[]) => ({ table: SEED_EXECUTION_SETTINGS, learnerPromoted: false, tiers: tierList });
+  expect(routingPinChanges(rowProposal, withTiers(TIERS.filter((tier) => tier.name !== "frontier")))).toEqual(["target_tier"]);
+  expect(routingPinChanges(rowProposal, withTiers(withNew("frontier")))).toEqual(["target_tier"]);
+  expect(routingPinChanges(rowProposal, withTiers(renamed("frontier", "top")))).toEqual([]);
+  expect(routingPinChanges(rowProposal, withTiers([...TIERS, { id: 4, name: "mid", description: "x" }]))).toEqual([]);
+  expect(routingPinChanges(rowProposal, withTiers(TIERS.filter((tier) => tier.name !== "economy")))).toEqual([]);
+});
+
 it("昇格 / 降格の提案の pin はフラグの現在値 —— フラグが変われば learner_promoted が崩れ、表の編集では崩れない", () => {
   const settings = (learnerPromoted: boolean, t: ExecutionSettingTable = SEED_EXECUTION_SETTINGS) => ({ table: t, learnerPromoted, tiers: TIERS });
   const promote = { kind: "routing", op: "promote", pin: { promoted: false } } as const;
