@@ -362,17 +362,21 @@ it("改名で空いた旧い名前で新しい段を足しても、旧い名前�
   }
 });
 
-it("行の提案の変更の段が消され、同じ名前の新しい段が足されても、修正値なしの approve はその新しい段に付け替わらず回答ごと断られる(issue #1436)", async () => {
+it("行の提案の変更の段が消されると提案は削除の時点で観測で決着し、同じ名前の新しい段が足されてもその段へは適用されない(issue #1436 / #1458)", async () => {
   const { client, propose } = await boardWithRoutingReview();
   try {
     const careful = { setting: "insert_tier", name: "careful", description: "A tier the proposal moves the row into.", position: 1 };
     expect((await settingsChange(careful)).status).toBe(200);
     const questionId = await propose({ tier: "careful" }, { provider: "anthropic", model: "claude-sonnet-5-5", effort: "high" });
     expect((await settingsChange({ setting: "delete_tier", name: "careful" })).status).toBe(200);
-    expect((await settingsChange({ ...careful, description: "A new tier reusing the deleted name." })).status).toBe(200);
 
+    expect(await task(questionId)).toMatchObject({ status: "done", question_answer: null });
+    expect(await staleEvents(questionId)).toEqual([
+      ["routing_proposal_stale", "tidepool", { kind: "routing_proposal_stale", question_id: questionId, proposal_kind: "routing", changed: ["target_tier"], observed_event_id: expect.any(Number) }],
+    ]);
+
+    expect((await settingsChange({ ...careful, description: "A new tier reusing the deleted name." })).status).toBe(200);
     expect((await answer(questionId, { answers: ["approve"] })).status).toBe(409);
-    expect(await task(questionId)).toMatchObject({ status: "todo" });
     expect(await row("claude-sonnet-5-5")).toMatchObject({ tier: "economy" });
   } finally {
     await client.close();

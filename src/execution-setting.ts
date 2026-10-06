@@ -620,7 +620,7 @@ export function parseRoutingRowChange(tiers: readonly Tier[], input: unknown): R
 }
 
 /** pin の照合(ADR 0150 決定1): 提案が焼いた行と表の現在の行を全欄で比べ、崩れた欄の名前を返す(空 = pin は生きている)。
- *  行は鍵 (provider, model, effort) で引き、消えていれば(effort の書き換えも含む)null。昇格 / 降格の提案の pin はフラグの現在値。
+ *  行は鍵 (provider, model, effort) で引き、消えていれば(effort の書き換えも含む)null。変更の行き先の段が消えていれば `target_tier`(issue #1458)。昇格 / 降格の提案の pin はフラグの現在値。
  *  tier の提案は根拠の行を全欄で比べる(消えた行も `rows` —— agent の側の pin は表からは見えないので `registryPinChanges` が言う)。
  *  `to` が pin の段のいまの1段下でなくなれば(挿入・並べ替え・削除)`tier_order`(ADR 0200 決定4 / issue #1438)。
  *  段を足す提案は移す行を行の提案と同じに比べ、隣の段が入れ替わっていれば `neighbours`(issue #1424)。
@@ -629,7 +629,7 @@ export function parseRoutingRowChange(tiers: readonly Tier[], input: unknown): R
 export function routingPinChanges(
   proposal: RoutingProposal | RegistryProposal,
   settings: { table: ExecutionSettingTable; learnerPromoted: boolean; tiers: readonly { id: TierId; name: Tier; description: string }[] },
-): Array<"tier" | "price_in" | "price_out" | "learner_promoted" | "rows" | "tier_order" | "description" | "neighbours"> | null {
+): Array<"tier" | "price_in" | "price_out" | "learner_promoted" | "rows" | "tier_order" | "description" | "neighbours" | "target_tier"> | null {
   const liveName = (id: TierId) => settings.tiers.find((t) => t.id === id)?.name;
   if (proposal.kind === "registry") {
     const held = proposal.pin.rows.every((pinned) =>
@@ -646,9 +646,10 @@ export function routingPinChanges(
   const pin = proposal.op === "row" ? proposal.pin : proposal.pin.row;
   const current = settings.table.find((row) => matchesRowKey(row, pin));
   if (!current) return null;
-  const changed: Array<"tier" | "price_in" | "price_out" | "neighbours"> = (["tier", "price_in", "price_out"] as const).filter(
+  const changed: Array<"tier" | "price_in" | "price_out" | "neighbours" | "target_tier"> = (["tier", "price_in", "price_out"] as const).filter(
     (field) => current[field] !== (field === "tier" ? liveName(pin.tier) : pin[field]),
   );
+  if (proposal.op === "row" && proposal.change.tier !== undefined && liveName(proposal.change.tier) === undefined) changed.push("target_tier");
   if (proposal.op === "add_tier") {
     // 隣は提案時点の添字にいまいる段 —— 説明の編集・移動・挿入・削除のどれで入れ替わっても崩れる(改名は同じ段のまま)
     const { position } = proposal.tier;
