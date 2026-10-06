@@ -16,6 +16,7 @@ import {
   makeWorkspace,
   questions,
   registerWork,
+  servedWorkspaceQuarantine,
   squashTaskIntoOrigin,
   type Tidepool,
 } from "./harness.js";
@@ -217,9 +218,7 @@ it("追いつき merge が合わなければ PR 昇格失敗 question を立て�
     title: expect.stringContaining("PR promotion failed"),
     purpose: expect.stringContaining("does not merge cleanly"),
   });
-  expect(
-    (await questions(t)).filter((q: any) => q.question_quarantine_kind === "workspace"),
-  ).toEqual([]);
+  expect(await servedWorkspaceQuarantine(t, "squash-catch-up-conflict")).toBeUndefined();
 
   // 人間が衝突する行を保護ブランチと同じ内容に直す。履歴はまだ未収束なので、retry は
   // 走行中の別タスクの checkout を触らず plumbing の追いつき merge を再走する。
@@ -260,9 +259,7 @@ it("追いつき merge が合わなければ PR 昇格失敗 question を立て�
   expect((await api(t.baseUrl, "GET", `/api/tasks/${failure.id}`)).json.status).toBe("done");
 
   await completeViaMcp(t, occupant.id);
-  expect(
-    (await questions(t)).filter((q: any) => q.question_quarantine_kind === "workspace"),
-  ).toEqual([]);
+  expect(await servedWorkspaceQuarantine(t, "squash-catch-up-conflict")).toBeUndefined();
 });
 
 it("追いつきの git 道具が壊れた失敗を conflict と偽らず PR 昇格失敗 question に残す", async () => {
@@ -288,9 +285,7 @@ it("追いつきの git 道具が壊れた失敗を conflict と偽らず PR 昇
   expect(failure.purpose).toContain("cannot lock ref");
   expect(failure.purpose).not.toContain("does not merge cleanly");
   expect(failure.purpose).not.toContain("conflict");
-  expect(
-    (await questions(t)).filter((q: any) => q.question_quarantine_kind === "workspace"),
-  ).toEqual([]);
+  expect(await servedWorkspaceQuarantine(t, "squash-catch-up-tool-error")).toBeUndefined();
 });
 
 it("squash merge 後に同じ行が進んだ祖先へ修理が戻っても、merge 済み PR の前で無言にしない", async () => {
@@ -316,9 +311,7 @@ it("squash merge 後に同じ行が進んだ祖先へ修理が戻っても、mer
   });
   expect(failure.purpose).toContain("merge-backed repair work");
   expect(failure.purpose).toContain("still has content to land");
-  expect(
-    (await questions(t)).filter((q: any) => q.question_quarantine_kind === "workspace"),
-  ).toEqual([]);
+  expect(await servedWorkspaceQuarantine(t, "merged-pr-with-repair")).toBeUndefined();
 });
 
 it("push の失敗は PR 昇格失敗 question として人間に見える", async () => {

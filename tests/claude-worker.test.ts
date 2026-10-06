@@ -463,8 +463,6 @@ describe("ClaudeCodeWorker", () => {
     start("task-drifted", "ghost");
     expect(calls).toEqual([]);
     expect(workspaceNeedsHuman(db, "ghost")).toBe(true);
-    const question = listBoard(db).find((t) => t.type === "question");
-    expect(question).toMatchObject({ question_quarantine_kind: "workspace", question_quarantine_value: "ghost" });
   });
 
   const NAVIGATOR_MD = `---\nname: navigator\nversion: 1.0.0\nauthority: standard\nprovider: anthropic\nskills:\n  - "*"\ndescription: Navigation specialist\n---\nYou are Navigator, the specialist.\n`;

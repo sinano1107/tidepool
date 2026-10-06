@@ -14,6 +14,7 @@ import {
   makeWorkspace,
   mcpClient,
   registerWork,
+  servedWorkspaceQuarantine,
   type Tidepool,
 } from "./harness.js";
 
@@ -245,8 +246,7 @@ it("sandbox shadow の削除失敗は workspace を quarantine し、後続 pick
     await client.close();
   }
 
-  const list = (await api(t.baseUrl, "GET", "/api/tasks")).json;
-  const question = list.find((x: any) => (x.question_quarantine_kind === "workspace" && x.question_quarantine_value === "sandbox"));
+  const question = await servedWorkspaceQuarantine(t, "sandbox");
   expect(question?.purpose).toContain("unlink");
 
   await registerWork(t, "must wait for workspace repair");

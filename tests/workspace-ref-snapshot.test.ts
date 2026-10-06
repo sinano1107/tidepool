@@ -19,6 +19,7 @@ import {
   makeWorkspace,
   mcpClient,
   registerWork,
+  servedWorkspaceQuarantine,
   type Tidepool,
 } from "./harness.js";
 import { makeRegistry, makeRemoteBackedRegistry } from "./registry-fixture.js";
@@ -39,11 +40,6 @@ async function complete(board: Tidepool, taskId: string): Promise<void> {
   });
   expect(res.isError ?? false).toBe(false);
   await client.close();
-}
-
-async function quarantineQuestion(board: Tidepool): Promise<any> {
-  const list = (await api(board.baseUrl, "GET", "/api/tasks")).json;
-  return list.find((x: any) => x.question_quarantine_kind === "workspace");
 }
 
 function commitOn(path: string, file: string, body: string, message: string): void {
@@ -68,7 +64,7 @@ it("worker が別の非保護ブランチを変更して自ブランチへ戻っ
 
   await complete(t, task.id);
 
-  expect((await quarantineQuestion(t))?.title).toContain("workspace sandbox needs human attention");
+  expect((await servedWorkspaceQuarantine(t, "sandbox"))?.title).toContain("workspace sandbox needs human attention");
 });
 
 // 回帰(#234 のケース1): 終了時の HEAD 検査は `releaseTree` が今も先に持っている ——
@@ -84,7 +80,7 @@ it("worker が別ブランチのまま終了すると、今までどおり HEAD 
 
   await complete(t, task.id);
 
-  expect((await quarantineQuestion(t))?.purpose).toContain("refusing to commit");
+  expect((await servedWorkspaceQuarantine(t, "sandbox"))?.purpose).toContain("refusing to commit");
 });
 
 // ADR 0064 の「測定」表のケース2。purely-local はここが**新規に捕まる側**である ——
@@ -102,7 +98,7 @@ it("purely-local で保護ブランチを変更してタスクブランチへ戻
 
   await complete(t, task.id);
 
-  expect((await quarantineQuestion(t))?.title).toContain("workspace sandbox needs human attention");
+  expect((await servedWorkspaceQuarantine(t, "sandbox"))?.title).toContain("workspace sandbox needs human attention");
 });
 
 it("remote 正本を宣言した workspace でも同じく quarantine に落ちる", async () => {
@@ -117,7 +113,7 @@ it("remote 正本を宣言した workspace でも同じく quarantine に落ち�
 
   await complete(t, task.id);
 
-  expect((await quarantineQuestion(t))?.title).toContain("workspace sandbox needs human attention");
+  expect((await servedWorkspaceQuarantine(t, "sandbox"))?.title).toContain("workspace sandbox needs human attention");
 });
 
 // ADR 0064 決定1 が「守るのは操作の列ではなく最終的な Git 状態」であること: checkout を
@@ -134,7 +130,7 @@ it("checkout を経ずに ref を直接書き換えても quarantine に落ち�
 
   await complete(t, task.id);
 
-  expect((await quarantineQuestion(t))?.title).toContain("workspace sandbox needs human attention");
+  expect((await servedWorkspaceQuarantine(t, "sandbox"))?.title).toContain("workspace sandbox needs human attention");
 });
 
 // ADR 0064 決定2: 削除が最も静かな破壊である。タスクブランチは決着後も「そのタスクが
@@ -151,7 +147,7 @@ it("兄弟のタスクブランチを削除しても quarantine に落ちる", a
 
   await complete(t, task.id);
 
-  expect((await quarantineQuestion(t))?.title).toContain("workspace sandbox needs human attention");
+  expect((await servedWorkspaceQuarantine(t, "sandbox"))?.title).toContain("workspace sandbox needs human attention");
 });
 
 // ADR 0064 の「測定」節が名指しした既存の潜在バグ。今日この経路は park の位置検査を
@@ -182,7 +178,7 @@ it("refs/remotes の偽造は、偽造したセッション自身の解放で捕
   });
   await client.close();
 
-  expect((await quarantineQuestion(t))?.purpose).toContain("refs/remotes/origin/main");
+  expect((await servedWorkspaceQuarantine(t, "sandbox"))?.purpose).toContain("refs/remotes/origin/main");
 });
 
 // ADR 0064 決定4 の再基準化。**盤面自身がセッション実行中に同じ workspace の ref を
@@ -213,8 +209,7 @@ it("セッション中に盤面が保護ブランチを動かしても、その�
 
   await complete(t, running.id);
 
-  const qq = await quarantineQuestion(t); if (qq) console.log("QQ", qq.title, qq.purpose);
-  expect(qq).toBeUndefined();
+  expect(await servedWorkspaceQuarantine(t, "sandbox")).toBeUndefined();
   expect(git(ws.path, "show", `task/${running.id}:in-flight.txt`)).toBe("still working");
 });
 
@@ -252,8 +247,7 @@ it("セッション中の registry 書き込みで、registry clone の workspac
 
   await complete(t, task.id);
 
-  const qq = await quarantineQuestion(t); if (qq) console.log("QQ", qq.title, qq.purpose);
-  expect(qq).toBeUndefined();
+  expect(await servedWorkspaceQuarantine(t, "registry")).toBeUndefined();
 });
 
 // ADR 0064 決定2: 違反メッセージは**動いた ref を名指しする**。quarantine の確認
@@ -273,7 +267,7 @@ it("違反メッセージは動いた ref を名指しし、消えた行と増�
 
   await complete(t, task.id);
 
-  const purpose = (await quarantineQuestion(t))?.purpose;
+  const purpose = (await servedWorkspaceQuarantine(t, "sandbox"))?.purpose;
   expect(purpose).toContain(`was: ${before} refs/heads/sibling`);
   expect(purpose).toContain(`now: ${after} refs/heads/sibling`);
 });
@@ -319,8 +313,7 @@ it("盤面が origin/main を撮り直しても、連動する origin/HEAD で q
 
   await complete(t, task.id);
 
-  const qq = await quarantineQuestion(t); if (qq) console.log("QQ", qq.title, qq.purpose);
-  expect(qq).toBeUndefined();
+  expect(await servedWorkspaceQuarantine(t, "registry")).toBeUndefined();
 });
 
 // ADR 0081: symref 自身の可動部は不変条件に残る —— 状態は解決値ではなく**指し先**で
@@ -343,7 +336,7 @@ it("worker が symref を付け替えれば、指し先の差として quarantin
 
   await complete(t, task.id);
 
-  const purpose = (await quarantineQuestion(t))?.purpose;
+  const purpose = (await servedWorkspaceQuarantine(t, "sandbox"))?.purpose;
   expect(purpose).toContain("was: symref=refs/remotes/origin/main refs/remotes/origin/HEAD");
   expect(purpose).toContain("now: symref=refs/remotes/origin/develop refs/remotes/origin/HEAD");
 });
@@ -361,7 +354,7 @@ it("worker が symref を削除すれば quarantine に落ちる", async () => {
 
   await complete(t, task.id);
 
-  expect((await quarantineQuestion(t))?.purpose).toContain(
+  expect((await servedWorkspaceQuarantine(t, "sandbox"))?.purpose).toContain(
     "was: symref=refs/remotes/origin/main refs/remotes/origin/HEAD",
   );
 });
@@ -378,7 +371,7 @@ it("worker が symref を新規に作れば quarantine に落ちる", async () =
 
   await complete(t, task.id);
 
-  expect((await quarantineQuestion(t))?.purpose).toContain(
+  expect((await servedWorkspaceQuarantine(t, "sandbox"))?.purpose).toContain(
     "now: symref=refs/remotes/origin/main refs/remotes/origin/HEAD",
   );
 });
@@ -433,7 +426,7 @@ it("セッション中に publish しても、そのセッションは quarantin
 
   await complete(t, task.id);
 
-  expect(await quarantineQuestion(t)).toBeUndefined();
+  expect(await servedWorkspaceQuarantine(t, "sandbox")).toBeUndefined();
 });
 
 // 外科的であることの裏側(ADR 0064 決定4): 全 ref を撮り直せば、その瞬間までに worker が
@@ -454,7 +447,7 @@ it("publish が触っていない ref を worker が動かせば、今までど�
 
   await complete(t, task.id);
 
-  expect((await quarantineQuestion(t))?.purpose).toContain("refs/heads/sibling");
+  expect((await servedWorkspaceQuarantine(t, "sandbox"))?.purpose).toContain("refs/heads/sibling");
 });
 
 // ADR 0064 決定4 の「盤面が**実際に書いた** ref の行だけ」。publish 後に checkout を
@@ -476,5 +469,5 @@ it("publish が push していない origin ref を worker が偽造すれば qu
 
   await complete(t, task.id);
 
-  expect((await quarantineQuestion(t))?.purpose).toContain("refs/remotes/origin/forged");
+  expect((await servedWorkspaceQuarantine(t, "sandbox"))?.purpose).toContain("refs/remotes/origin/forged");
 });

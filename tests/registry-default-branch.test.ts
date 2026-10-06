@@ -4,9 +4,9 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { type Db, openDb } from "../src/db.js";
 import { loadRegistry } from "../src/registry.js";
-import { listBoard } from "../src/tasks.js";
 import { guardRegistryDefaultBranch, workspaceNeedsHuman } from "../src/workspace.js";
 import { FakeClock } from "./fakes.js";
+import { workspaceQuarantine } from "./harness.js";
 import { makeRegistry } from "./registry-fixture.js";
 
 /** A registry clone whose own workspaces.yaml carries a protected entry
@@ -42,9 +42,7 @@ describe("guardRegistryDefaultBranch (ADR 0020 part 2)", () => {
     guard(dir, db);
     expect(workspaceNeedsHuman(db, "registry")).toBe(true);
     // the existing quarantine surface: a 1-choice Confirmation question stands
-    const question = listBoard(db).find(
-      (task) => (task.question_quarantine_kind === "workspace" && task.question_quarantine_value === "registry"),
-    );
+    const question = workspaceQuarantine(db, "registry");
     expect(question?.title).toContain("registry");
   });
 
