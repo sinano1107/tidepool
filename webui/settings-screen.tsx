@@ -2124,6 +2124,20 @@ function ExecutionDefaultsCard({ settings, say, onSaved, edit }: {
   );
 }
 
+// 段の一覧 `tiers` に新しい段を位置 p で差すときの読み方と、その隣の段の1行 —— 段の form と段を足す提案のカード(#1439)が共有する
+function tierPositionLabel(tiers: readonly SettingsTier[], p: number): string {
+  return p === 0 ? (tiers[0] ? `lowest — below ${tiers[0].name}` : 'lowest')
+    : p === tiers.length ? `highest — above ${tiers[p - 1]!.name}`
+    : `between ${tiers[p - 1]!.name} and ${tiers[p]!.name}`;
+}
+function tierNeighbour(label: string, tier: SettingsTier | undefined) {
+  return (
+    <p style={{ margin: 0, fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
+      {label}: {tier ? <React.Fragment><span style={{ fontFamily: 'var(--font-mono)' }}>{tier.name}</span> — {tier.description}</React.Fragment> : 'none'}
+    </p>
+  );
+}
+
 // The board's tiers (ADR 0200 決定1・3 / issue #1421) as a record card: the ordered list, lowest first, each with its
 // one-line description. Add and Edit open one tier's form in the screen's single edit slot; the form shows the
 // descriptions of the tiers that would sit right below and above it, so a description is written as the difference
@@ -2181,15 +2195,6 @@ function TiersCard({ settings, say, onSaved, edit }: {
           ...(draft.position !== index && { position: draft.position }),
         }] : []),
       ], isNew ? 'tier added' : 'tier saved');
-  const positionLabel = (p: number) =>
-    p === 0 ? (others[0] ? `lowest — below ${others[0].name}` : 'lowest')
-    : p === others.length ? `highest — above ${others[p - 1]!.name}`
-    : `between ${others[p - 1]!.name} and ${others[p]!.name}`;
-  const neighbour = (label: string, tier: SettingsTier | undefined) => (
-    <p style={{ margin: 0, fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
-      {label}: {tier ? <React.Fragment><span style={{ fontFamily: 'var(--font-mono)' }}>{tier.name}</span> — {tier.description}</React.Fragment> : 'none'}
-    </p>
-  );
 
   return (
     <div data-testid="execution-tiers">
@@ -2215,12 +2220,12 @@ function TiersCard({ settings, say, onSaved, edit }: {
             <Input label="Name" mono value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })}
               placeholder="a lowercase letter, then a-z 0-9 - _ — agent.md writes it as its tier" />
             <Select label="Position" value={String(draft.position)}
-              options={Array.from({ length: others.length + 1 }, (_, p) => ({ value: String(p), label: positionLabel(p) }))}
+              options={Array.from({ length: others.length + 1 }, (_, p) => ({ value: String(p), label: tierPositionLabel(others, p) }))}
               onChange={(e) => setDraft({ ...draft, position: Number(e.target.value) })} />
-            {neighbour('next tier above', others[draft.position])}
+            {tierNeighbour('next tier above', others[draft.position])}
             <Input label="Description" value={draft.description} onChange={(e) => setDraft({ ...draft, description: e.target.value })}
               placeholder="one line: the work the tier below cannot do and this one can" />
-            {neighbour('next tier below', others[draft.position - 1])}
+            {tierNeighbour('next tier below', others[draft.position - 1])}
             <EditActions dirty={dirty} ok={ok} busy={busy} saveLabel={isNew ? 'Add tier' : 'Save tier'}
               onSave={save} onCancel={() => edit.close()} />
             {!isNew && (

@@ -26,8 +26,10 @@ interface TpQuestion {
   kind?: 'approval';
   note?: string;
   /** 修正値を添えられる提案 question(ADR 0150 決定2・ADR 0152 決定2): 表の行の提案は tier / effort、agent の tier の提案は下げ先 `to`、
-   *  段の説明の提案は文面、memory の approve / consolidate は `candidateId` の文言と宛先(Exemplar なら title・宛先と注釈 list)。 */
-  amendable?: 'row' | 'agent_tier' | 'tier_description' | 'memory';
+   *  段の説明の提案は文面、段を足す提案は名前・説明・位置、memory の approve / consolidate は `candidateId` の文言と宛先(Exemplar なら title・宛先と注釈 list)。 */
+  amendable?: 'row' | 'agent_tier' | 'tier_description' | 'add_tier' | 'memory';
+  /** 段を足す提案の段 —— 修正値の欄の初期値(issue #1439)。 */
+  proposedTier?: { name: string; description: string; position: number };
   /** agent の tier の提案の pin の tier —— 下げ先の選択肢はこれより下の段(ADR 0150 決定2)。 */
   amendBelow?: string;
   candidateId?: number;
@@ -40,7 +42,7 @@ interface TpQuestion {
 }
 /** approve に添える修正値。空欄は送らない(memory の宛先の null = 全員は送る)。 */
 type TpAmendment = {
-  tier?: string; effort?: string; to?: string; description?: string;
+  tier?: string; effort?: string; to?: string; description?: string; name?: string; position?: number;
   title?: string; text?: string; addressee?: string | null; original_title?: string; original_text?: string;
   annotations?: ReturnType<typeof annotationsToSend>;
 };
@@ -239,6 +241,41 @@ function TpTierAmendment({ label, below, value, onChange }: {
   return <Select label={label} value={value} onChange={(e) => onChange(e.target.value)} options={tierOptions(options, 'as proposed')} />;
 }
 
+// 段を足す提案の修正値(ADR 0200 決定3・8 / issue #1439): 提案の段を初期値に名前・位置・説明を出し、位置の上下に盤面のいまの段を並べる
+// —— 隣は pin の提案時点の値でなく、いまの一覧と修正後の位置から引く。提案から変えた欄だけを上に渡す。一覧が引けなければ欄は出さない。
+function TpAddTierAmendment({ proposed, onChange }: {
+  proposed: { name: string; description: string; position: number };
+  onChange: (amendment: TpAmendment) => void;
+}) {
+  const { Input, Select } = window.TidepoolDesignSystem_8a0ead;
+  const [tiers, setTiers] = React.useState<SettingsExecution['tiers'] | null>(null);
+  const [draft, setDraft] = React.useState(proposed);
+  React.useEffect(() => {
+    api('GET /api/settings/execution').then(({ tiers }) => setTiers(tiers)).catch(() => {});
+  }, []);
+  React.useEffect(() => {
+    const changed: TpAmendment = {};
+    if (draft.name.trim() !== proposed.name) changed.name = draft.name.trim();
+    if (draft.description.trim() !== proposed.description) changed.description = draft.description.trim();
+    if (draft.position !== proposed.position) changed.position = draft.position;
+    onChange(changed);
+  }, [draft]);
+  if (!tiers) return null;
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 14 }}>
+      <Input label="Name" mono value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })}
+        placeholder="a lowercase letter, then a-z 0-9 - _ — agent.md writes it as its tier" />
+      <Select label="Position" value={String(draft.position)}
+        options={Array.from({ length: tiers.length + 1 }, (_, p) => ({ value: String(p), label: tierPositionLabel(tiers, p) }))}
+        onChange={(e) => setDraft({ ...draft, position: Number(e.target.value) })} />
+      {tierNeighbour('next tier above', tiers[draft.position])}
+      <Input label="Description" value={draft.description} onChange={(e) => setDraft({ ...draft, description: e.target.value })}
+        placeholder="one line: the work the tier below cannot do and this one can" />
+      {tierNeighbour('next tier below', tiers[draft.position - 1])}
+    </div>
+  );
+}
+
 // memory の提案の修正値(ADR 0152 決定2・5): candidate の文言を初期値に、settings と同じ英語 + 原文の2欄と逆翻訳。
 // Exemplar の candidate(#950)は settings の Exemplar の扉と同じ注釈の form で、case は candidate の出所に固定。
 // candidate から変えた欄(と原文)だけを修正値として上に渡す —— 何も変えなければ素の approve になる。
@@ -395,7 +432,8 @@ function TpQuestionCard({ q, answer, onAnswer, locked = false, onTranslate, onOp
   const [submitting, setSubmitting] = React.useState(false);
   const submit = () => {
     setSubmitting(true);
-    const filled = q.amendable === 'memory' ? amendment : Object.fromEntries(Object.entries(amendment).filter(([, v]) => v)) as TpAmendment;
+    // memory と段の追加は提案から変えた欄だけを上げてくる(位置 0 が偽値で落ちないよう、ここで間引かない)
+    const filled = q.amendable === 'memory' || q.amendable === 'add_tier' ? amendment : Object.fromEntries(Object.entries(amendment).filter(([, v]) => v)) as TpAmendment;
     onAnswer(draft as string[], q.amendable && draft[0] === 'approve' && Object.keys(filled).length > 0 ? filled : undefined, comment.trim() ? comment : undefined)
       .finally(() => setSubmitting(false));
   };
@@ -452,6 +490,9 @@ function TpQuestionCard({ q, answer, onAnswer, locked = false, onTranslate, onOp
           <Input label="Amend description (optional)" value={amendment.description ?? ''} placeholder="as proposed"
             onChange={(e) => setAmendment({ description: e.target.value })} />
         </div>
+      )}
+      {q.amendable === 'add_tier' && !locked && (
+        <TpAddTierAmendment proposed={q.proposedTier!} onChange={setAmendment} />
       )}
       {q.amendable === 'memory' && !locked && (
         <TpMemoryAmendment candidateId={q.candidateId!} onTranslate={onTranslate} onChange={setAmendment} onDeadAddressee={setDeadAddressee} />
