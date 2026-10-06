@@ -270,94 +270,29 @@ it("snapshot が一致していれば着地のコンフリクトは回答を拒�
   expect(held.status).toBe(200);
 });
 
-it("保護ブランチが帯域外で進んで fast-forward できないと workspace を quarantine し、着地 question を開いたままにする", async () => {
+// 帯域外判定そのもの(不一致・巻き戻し・記録の欠落・quarantine の型分け)は
+// tests/landing.test.ts が述べる(ADR 0107)。ここは境界の写像だけ: 409、理由、盤面への出現。
+it("帯域外で進んだ保護ブランチへの merge は 409 で、理由を返し workspace の quarantine question を開く", async () => {
   const workspace = await makeWorkspace("sandbox");
   t = await bootTidepool({ workspace });
   const task = await registerWork(t, "land without overwriting main");
   await t.clock.advance(HOUR);
   commitWork(workspace.path, "feature.txt", "finished\n");
-
-  const client = await mcpClient(t.mcpBaseUrl, task.id);
-  await client.callTool({ name: "complete_task", arguments: { handoff: FULL_HANDOFF } });
-  await client.close();
+  await completeViaMcp(t, task.id);
   await completeIntegrationReviews(t, task.id);
-  const landingQuestion = (await api(t.baseUrl, "GET", "/api/tasks")).json.find(
-    (candidate: any) => candidate.question_pending_local_merge_task_id === task.id,
-  );
-  writeFileSync(join(workspace.path, "out-of-band.txt"), "moved by hand\n");
-  git(workspace.path, "add", "out-of-band.txt");
-  git(workspace.path, "commit", "-m", "out-of-band protected branch move");
+  const landingQuestion = await landingQuestionFor(t, task.id);
+  commitWork(workspace.path, "out-of-band.txt", "moved by hand\n");
 
   const answered = await api(t.baseUrl, "POST", `/api/tasks/${landingQuestion.id}/answer`, {
     answers: ["merge"],
   });
 
   expect(answered.status).toBe(409);
-  const board = (await api(t.baseUrl, "GET", "/api/tasks")).json;
-  expect(board.find((candidate: any) => candidate.id === landingQuestion.id).status).toBe("todo");
-  expect(
-    board.find(
-      (candidate: any) =>
-        candidate.type === "question" && (candidate.question_quarantine_kind === "workspace" && candidate.question_quarantine_value === "sandbox"),
-    ),
-  ).toBeDefined();
-});
-
-// ADR 0103 決定1: 帯域外の判定は ff の成否ではなく盤面自身の記録(ref snapshot)との
-// 突き合わせで下すので、ff が黙って飲み込んでいた**巻き戻し**まで捕まる —— 検知は
-// 弱まるのではなく強くなる。
-it("保護ブランチが帯域外で巻き戻されると、ff できる位置であっても着地を拒み workspace を quarantine する", async () => {
-  const workspace = await makeWorkspace("sandbox");
-  // タスクブランチの fork 元を2つ目のコミットにして、巻き戻し先を祖先として残す
-  commitWork(workspace.path, "base.txt", "the base the task forks from\n");
-  const rolledBackTo = git(workspace.path, "rev-parse", "HEAD~1");
-  t = await bootTidepool({ workspace });
-  const task = await registerWork(t, "land onto a rolled-back protected branch");
-  await t.clock.advance(HOUR);
-  commitWork(workspace.path, "feature.txt", "finished\n");
-  await completeViaMcp(t, task.id);
-  await completeIntegrationReviews(t, task.id);
-  const question = await landingQuestionFor(t, task.id);
-  // 巻き戻し先はタスクブランチの祖先なので、ff-only の検査だけなら素通りしてしまう位置
-  git(workspace.path, "reset", "--hard", rolledBackTo);
-
-  const answered = await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, {
-    answers: ["merge"],
+  expect(answered.json.error).toContain("moved out of band");
+  expect(await quarantineQuestion(t)).toMatchObject({
+    question_quarantine_kind: "workspace",
+    question_quarantine_value: "sandbox",
   });
-
-  expect(answered.status).toBe(409);
-  expect(git(workspace.path, "rev-parse", "refs/heads/main")).toBe(rolledBackTo);
-  expect((await api(t.baseUrl, "GET", `/api/tasks/${question.id}`)).json.status).toBe("todo");
-  expect(await quarantineQuestion(t)).toMatchObject({ question_quarantine_kind: "workspace", question_quarantine_value: "sandbox" });
-});
-
-// ADR 0103 決定1 の fail-closed(ADR 0064 決定6 と同じ姿勢): 記録の欠落に「検査を飛ばす」
-// 分岐を書かない —— 行が無いことは一致の証明にならないので、位置が動いていなくても
-// 帯域外側に落とす。
-it("記録に保護ブランチの行が無ければ、位置が動いていなくても着地を拒み workspace を quarantine する", async () => {
-  const workspace = await makeWorkspace("sandbox");
-  t = await bootTidepool({ workspace });
-  const task = await registerWork(t, "land with the protected branch unrecorded");
-  await t.clock.advance(HOUR);
-  commitWork(workspace.path, "feature.txt", "finished\n");
-  await completeViaMcp(t, task.id);
-  await completeIntegrationReviews(t, task.id);
-  const question = await landingQuestionFor(t, task.id);
-  // 盤面の記録から保護ブランチの行だけを抜く(残る空行は記録の読み手が読み飛ばす)
-  t.db
-    .prepare(
-      "UPDATE workspace_state SET ref_snapshot = replace(char(10) || ref_snapshot || char(10), ?, char(10)) WHERE name = ?",
-    )
-    .run(`\n${git(workspace.path, "rev-parse", "refs/heads/main")} refs/heads/main\n`, "sandbox");
-
-  const answered = await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, {
-    answers: ["merge"],
-  });
-
-  expect(answered.status).toBe(409);
-  expect(answered.json.error).toContain("no recorded position");
-  expect((await api(t.baseUrl, "GET", `/api/tasks/${question.id}`)).json.status).toBe("todo");
-  expect(await quarantineQuestion(t)).toMatchObject({ question_quarantine_kind: "workspace", question_quarantine_value: "sandbox" });
 });
 
 it("着地 question に hold と答えると保護ブランチを動かさず決着し、再提示しない", async () => {
