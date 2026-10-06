@@ -1,8 +1,8 @@
 import type { Db } from "./db.js";
 import type { RowRefusal, RowRefusalCause } from "./events.js";
 import { loadExecutionSettingTable } from "./execution-setting.js";
+import type { Provider } from "./provider.js";
 import { registerQuarantine, tableRowValue } from "./quarantine.js";
-import type { Provider } from "./registry.js";
 import { registerTask } from "./tasks.js";
 import { BOARD_WORKER_ID } from "./worker-id.js";
 

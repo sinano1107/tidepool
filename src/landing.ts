@@ -1,5 +1,6 @@
 import type { Clock } from "./clock.js";
 import type { Db } from "./db.js";
+import { DEFAULT_AUDITOR_NAME } from "./defaults.js";
 import { DomainError } from "./domain-error.js";
 import { appendEvent, latestEventOfTask } from "./events.js";
 import type { GitHubClient } from "./github.js";
@@ -7,7 +8,6 @@ import type { AuthorityProfile } from "./registry.js";
 import {
   contentSourceFor,
   countUnsettledAttachedChildren,
-  DEFAULT_AUDITOR_NAME,
   getTask,
   isLandingQuestion,
   MERGE_QUESTION_OPTIONS,

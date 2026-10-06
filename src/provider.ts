@@ -3,10 +3,7 @@
  *  (endpoint URL, env names, model spellings) is the adapter's vendor knowledge
  *  (ADR 0005) and never appears here.
  *
- *  A leaf module of its own (issue #545): registry.ts imports execution-setting.ts
- *  for the tiers and execution-setting.ts needs this list at module-evaluation
- *  time (the change schema's `z.enum`), which the registry ↔ execution-setting
- *  cycle cannot provide. registry.ts re-exports it, so every other importer is
- *  unchanged. */
+ *  A zero-dependency leaf module of its own, one per concept (ADR 0204 決定5):
+ *  registry.ts and execution-setting.ts both read the list from here. */
 export const PROVIDER_VALUES = ["anthropic", "moonshot", "openai"] as const;
 export type Provider = (typeof PROVIDER_VALUES)[number];

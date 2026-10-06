@@ -64,6 +64,7 @@ import {
   type ProfileAdmin,
   updateProfile,
 } from "./profile-create.js";
+import type { Provider } from "./provider.js";
 import { type VapidConfig, WebPushClient } from "./push.js";
 import {
   type AuthorityProfile,
@@ -73,7 +74,6 @@ import {
   InvalidAgentDefinitionError,
   loadRegistry,
   ownEntry,
-  type Provider,
   type RegistryCandidates,
   type RegistryMode,
   type RegistryReachability,

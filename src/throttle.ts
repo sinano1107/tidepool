@@ -1,7 +1,7 @@
 import type { Db } from "./db.js";
 import { anthropicBoardCallRow, type ExecutionSettingRow, windowMatchesModel } from "./execution-setting.js";
 import { defaultProviderPaceOffset, getProviderPaceOffset } from "./pace-offsets.js";
-import type { Provider } from "./registry.js";
+import type { Provider } from "./provider.js";
 import { getSpendDown, isSpendDownActive } from "./spend-down.js";
 import type { Tier } from "./tier.js";
 

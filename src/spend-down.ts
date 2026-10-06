@@ -1,5 +1,5 @@
 import type { Db } from "./db.js";
-import type { Provider } from "./registry.js";
+import type { Provider } from "./provider.js";
 
 /** Spend-down の対象になる「Provider × ウィンドウ」の既知の組(ADR 0143 決定1・2)。
  *  窓の名前は Provider 自身の語彙のまま。fable は anthropic の week に従うので入らない

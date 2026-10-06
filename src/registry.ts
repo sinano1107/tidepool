@@ -157,10 +157,6 @@ export const REVIEWER_AUTHORITY_PROFILE: AuthorityProfile = {
 export const MERGE_DIAL_VALUES = ["escalate", "auto_if_ci_green", "external"] as const;
 export type MergeDial = (typeof MERGE_DIAL_VALUES)[number];
 
-/** The provider enumeration lives in provider.ts (a leaf, see there); this is
- *  the import surface every other module keeps using. */
-export { PROVIDER_VALUES, type Provider } from "./provider.js";
-
 /** 正規化された Provider entry(ADR 0110 決定1): 「この Provider で、advisor は
  *  あり / なし」の1件。advisor が entry 単位なのは、経路依存の能力だからである
  *  (ADR 0097 決定3)—— agent が複数の Provider を持つと、advisor は agent の

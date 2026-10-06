@@ -1,5 +1,5 @@
 import type { Db } from "./db.js";
-import type { Provider } from "./registry.js";
+import type { Provider } from "./provider.js";
 
 /** オフセットとして意味を持つ値: 0(予約なし)〜100(全部人間の取り分)の
  *  整数 pt。API の入口検証と reader の防御の両方がこれを使う。 */

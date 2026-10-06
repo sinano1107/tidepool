@@ -4,6 +4,7 @@ import { z } from "zod";
 import type { AgentAdmin } from "./agent-create.js";
 import type { Clock } from "./clock.js";
 import type { Db } from "./db.js";
+import { DEFAULT_AUDITOR_NAME } from "./defaults.js";
 import { DomainError } from "./domain-error.js";
 import { PRIORITY_FIELD_DESCRIPTION, tierFieldDescriptions } from "./execution-setting.js";
 import type { GitHubClient } from "./github.js";
@@ -47,7 +48,6 @@ import {
   completeTask,
   contentSourceFor,
   continueDecomposition,
-  DEFAULT_AUDITOR_NAME,
   declarePremiseBreach,
   decomposeTask,
   describeHandoffFields,
