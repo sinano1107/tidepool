@@ -2,7 +2,8 @@ import webpush from "web-push";
 import type { Db } from "./db.js";
 import { HUMAN_FACING_KINDS } from "./events.js";
 import { isQuietHours } from "./quiet-hours.js";
-import { HUMAN_WORKER_ID, isLandingQuestion, rowToTask, type Task, type TaskRow, taskTierNamesSql } from "./tasks.js";
+import { isLandingQuestion, rowToTask, type Task, type TaskRow, taskTierNamesSql } from "./tasks.js";
+import { HUMAN_WORKER_ID } from "./worker-id.js";
 
 /** A browser's Web Push registration (the standard PushSubscription shape,
  *  flattened) — endpoint is the push service URL, p256dh/auth the keys

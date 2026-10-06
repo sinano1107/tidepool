@@ -1,7 +1,8 @@
 import { expect, it } from "vitest";
 import { openDb } from "../src/db.js";
 import { questionAnnotations } from "../src/memory.js";
-import { BOARD_WORKER_ID, type RegisterTaskInput, registerTask } from "../src/tasks.js";
+import { type RegisterTaskInput, registerTask } from "../src/tasks.js";
+import { BOARD_WORKER_ID } from "../src/worker-id.js";
 import { HUMAN_WEBUI } from "./harness.js";
 
 // 自由記述を受けるかは盤面が決めて読み口に載せる(issue #1309・ADR 0179 決定4)。門(assertAnswerable)が

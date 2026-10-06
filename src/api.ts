@@ -16,6 +16,7 @@ import {
   SUPPORTED_DISPLAY_LANGUAGES,
   setDisplayLanguage,
 } from "./display-language.js";
+import { DomainError } from "./domain-error.js";
 import type { ChildDraftContext, DraftClient } from "./draft.js";
 import { advanceLogCursor, getLogCursor, listEvents, listLog } from "./events.js";
 import {
@@ -108,10 +109,8 @@ import {
   type BoardTask,
   countUnsettledTasksReferencing,
   DEFAULT_AUDITOR_NAME,
-  DomainError,
   getTask,
   HANDOFF_FIELDS,
-  HUMAN_WORKER_ID,
   listBoard,
   listChildren,
   listQueue,
@@ -150,6 +149,7 @@ import {
 } from "./triage.js";
 import type { PendingReclaim } from "./watchdog.js";
 import type { WireContract } from "./wire-contract.js";
+import { HUMAN_WORKER_ID } from "./worker-id.js";
 import {
   buildWorkspaceResolver,
   GitDirNotADirectoryError,

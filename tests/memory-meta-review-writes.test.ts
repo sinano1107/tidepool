@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import { openDb } from "../src/db.js";
+import { DomainError } from "../src/domain-error.js";
 import { appendEvent, listEvents } from "../src/events.js";
 import {
   approveMemoryProposal,
@@ -19,7 +20,7 @@ import {
   recordKnowledge,
   rejectMemoryProposal,
 } from "../src/memory.js";
-import { DomainError, getTask, logDecision, type MemoryProposal, registerTask } from "../src/tasks.js";
+import { getTask, logDecision, type MemoryProposal, registerTask } from "../src/tasks.js";
 import { bundledObjection, HUMAN_WEBUI } from "./harness.js";
 
 /** meta-review の直接適用(issue #619 / ADR 0122 決定1)のドメイン層。verb への写像はサーバ境界

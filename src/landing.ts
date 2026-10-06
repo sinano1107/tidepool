@@ -1,14 +1,13 @@
 import type { Clock } from "./clock.js";
 import type { Db } from "./db.js";
+import { DomainError } from "./domain-error.js";
 import { appendEvent, latestEventOfTask } from "./events.js";
 import type { GitHubClient } from "./github.js";
 import type { AuthorityProfile } from "./registry.js";
 import {
-  BOARD_WORKER_ID,
   contentSourceFor,
   countUnsettledAttachedChildren,
   DEFAULT_AUDITOR_NAME,
-  DomainError,
   getTask,
   isLandingQuestion,
   MERGE_QUESTION_OPTIONS,
@@ -23,6 +22,7 @@ import {
   taskIdForPr,
 } from "./tasks.js";
 import { activeTriageSession } from "./triage.js";
+import { BOARD_WORKER_ID } from "./worker-id.js";
 import {
   branchMergeEffect,
   buildWorkspaceResolver,

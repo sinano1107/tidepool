@@ -3,6 +3,7 @@ import { type AllocationClient, type AllocationJudgment, type AllocationTarget, 
 import type { Cause } from "./cause.js";
 import { quarantineBoardCallRefusal } from "./cli-auth.js";
 import type { Db } from "./db.js";
+import { DomainError } from "./domain-error.js";
 import {
   type Attribution,
   appendEvent,
@@ -21,9 +22,10 @@ import { type ExecutionSettingRow, readExecutionSettings } from "./execution-set
 import { buildMemoryInjection, createBehaviorCandidate, listMemoryEntries, memoryScope, recordKnowledge, requireDecision } from "./memory.js";
 import { sessionSpawnOf, sessionWindow } from "./precedent.js";
 import type { ProcessContainers } from "./process-container.js";
-import { BOARD_WORKER_ID, DomainError, getTask, getTextAuthor, HUMAN_WORKER_ID, isNonAgentWorkerId, listChildren, type Task } from "./tasks.js";
+import { getTask, getTextAuthor, listChildren, type Task } from "./tasks.js";
 import { boardCallRow } from "./throttle.js";
 import { entryObjections, listObjectedEntries, objectedEntryText, objectionsById, requireLogEntry } from "./triage.js";
+import { BOARD_WORKER_ID, HUMAN_WORKER_ID, isNonAgentWorkerId } from "./worker-id.js";
 
 /** Board call に渡す入力(ADR 0115 決定2): 異議されたエントリ本文・その steering 列・
  *  当時の decision log(異議されたタスクの decision_logged と完了エントリ)。agent

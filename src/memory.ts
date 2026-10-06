@@ -4,14 +4,16 @@ import { z } from "zod";
 import type { Cause } from "./cause.js";
 import { type Db, MEMORY_FTS_DDL, MEMORY_FTS_TOKENIZER, MEMORY_PREPROCESS_VERSION } from "./db.js";
 import { getDisplayLanguage } from "./display-language.js";
+import { DomainError } from "./domain-error.js";
 import { appendEvent, type EventOrigin, type EventPayload, type EventRow, getEvent, isDecisionLogEntry, listEvents, listEventsOfKinds } from "./events.js";
 import { landingAnnotation } from "./landing.js";
 import { inWindow, type MetaReviewWindow, materialEvents, materialSection, metaReviewSubjectOf, metaReviewWindow, previousMetaReviewWatermark } from "./meta-review.js";
 import { entriesReadBefore, entriesSeenBefore, listEpisodes, sessionSpawnOf, sessionWindow } from "./precedent.js";
 import { type Packed, packItems, readPosition } from "./response-budget.js";
 import { routingMaterial } from "./routing-review.js";
-import { approvalAnnotation, BOARD_WORKER_ID, DomainError, getTask, HUMAN_WORKER_ID, isFixedChoiceQuestion, type MemoryProposal, needsComment, type QuestionProposal, questionBlocking, registerTask, settleQuestionAsObserved, type Task, type TierRef } from "./tasks.js";
+import { approvalAnnotation, getTask, isFixedChoiceQuestion, type MemoryProposal, needsComment, type QuestionProposal, questionBlocking, registerTask, settleQuestionAsObserved, type Task, type TierRef } from "./tasks.js";
 import { entryObjections, objectedEntryText, objectionsById } from "./triage.js";
+import { BOARD_WORKER_ID, HUMAN_WORKER_ID } from "./worker-id.js";
 
 /** 無効化の理由コード(spec #586 A)。自由記述は持たない。置換と path の付け替えは後継 id
  *  必須、cause.ts の語彙の3つ(間違っていた / 陳腐化)と、人間が提案 question を reject した `rejected`(issue #620)。 */

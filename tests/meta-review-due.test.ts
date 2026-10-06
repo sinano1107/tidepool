@@ -15,7 +15,8 @@ import {
   rejectMemoryProposal,
 } from "../src/memory.js";
 import { type MetaReviewSubject, registerDueMetaReviews, registerMetaReview } from "../src/meta-review.js";
-import { answerQuestion, getTask, HUMAN_WORKER_ID, listBoard, logDecision, registerTask } from "../src/tasks.js";
+import { answerQuestion, getTask, listBoard, logDecision, registerTask } from "../src/tasks.js";
+import { HUMAN_WORKER_ID } from "../src/worker-id.js";
 import { failureQuestion, HUMAN_WEBUI } from "./harness.js";
 
 /** 周期の due 判定(ADR 0120 決定2・ADR 0151)のドメイン層: 同じ主題の meta-review 自身の産物は材料に数えない。 */

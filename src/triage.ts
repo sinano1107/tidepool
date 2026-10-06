@@ -4,16 +4,18 @@ import type { Db } from "./db.js";
 import { appendEvent, type DecisionLogEntry, type EventOrigin, getEvent, isDecisionLogEntry } from "./events.js";
 import type { GatedJudgment } from "./retrospective.js";
 import {
-  BOARD_WORKER_ID,
   type BoardTask,
   getTask,
-  HUMAN_WORKER_ID,
   listBoard,
   moveTask,
   registerTask,
   type Task,
 // biome-ignore lint/suspicious/noImportCycles: ADR 0204 の台帳 —— 既存の循環、解いたら消す
 } from "./tasks.js";
+import {
+  BOARD_WORKER_ID,
+  HUMAN_WORKER_ID,
+} from "./worker-id.js";
 
 export class TriageError extends Error {}
 

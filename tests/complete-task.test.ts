@@ -1,7 +1,8 @@
 import { afterEach, expect, it } from "vitest";
 import { openDb } from "../src/db.js";
 import { listEvents } from "../src/events.js";
-import { BOARD_WORKER_ID, completeTask, HANDOFF_FIELDS, listChildren, registerTask } from "../src/tasks.js";
+import { completeTask, HANDOFF_FIELDS, listChildren, registerTask } from "../src/tasks.js";
+import { BOARD_WORKER_ID } from "../src/worker-id.js";
 import { api, bootTidepool, FULL_HANDOFF, HOUR, HUMAN_WEBUI, mcpClient, type Tidepool } from "./harness.js";
 
 let t: Tidepool;

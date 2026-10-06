@@ -16,7 +16,6 @@ import {
   cancelTaskDirectly,
   decomposeTask,
   getTask,
-  HUMAN_WORKER_ID,
   humanDecomposeTask,
   listBoard,
   presentTask,
@@ -25,6 +24,7 @@ import {
   type Task,
 } from "../src/tasks.js";
 import { commitTriage, startTriage } from "../src/triage.js";
+import { HUMAN_WORKER_ID } from "../src/worker-id.js";
 import { quarantineWorkspace, UnknownWorkspaceError } from "../src/workspace.js";
 import { FakeDraftClient, FakeGitHubClient, unusedLanding } from "./fakes.js";
 import { HUMAN_WEBUI } from "./harness.js";

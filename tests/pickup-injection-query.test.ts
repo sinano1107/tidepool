@@ -3,8 +3,9 @@ import { setDisplayLanguage } from "../src/display-language.js";
 import { appendEvent } from "../src/events.js";
 import type { ExecutionSetting } from "../src/execution-setting.js";
 import { injectionQueryText } from "../src/memory.js";
-import { BOARD_WORKER_ID, HUMAN_WORKER_ID, logDecision, registerTask } from "../src/tasks.js";
+import { logDecision, registerTask } from "../src/tasks.js";
 import { reportProviderUsage } from "../src/throttle.js";
+import { BOARD_WORKER_ID, HUMAN_WORKER_ID } from "../src/worker-id.js";
 import { FakeTranslationClient, healthyOpenai } from "./fakes.js";
 import { api, bootTidepool, GIT_FIXTURE_TEST_TIMEOUT, HOUR, HUMAN_WEBUI, makeWorkspace, questions, queueWork, type Tidepool } from "./harness.js";
 

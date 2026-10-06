@@ -43,10 +43,8 @@ import { startServer } from "../src/server.js";
 import { implicitTaskExecutionCandidates } from "../src/server-options.js";
 import {
   answerQuestion,
-  BOARD_WORKER_ID,
   decomposeTask,
   getTask,
-  HUMAN_WORKER_ID,
   humanDecomposeTask,
   listChildren,
   type RegisterTaskInput,
@@ -57,6 +55,10 @@ import { TranscriptStore } from "../src/transcript-store.js";
 import type { TranslationClient } from "../src/translate.js";
 import type { WatchdogConfig } from "../src/watchdog.js";
 import type { WorkerExit } from "../src/worker.js";
+import {
+  BOARD_WORKER_ID,
+  HUMAN_WORKER_ID,
+} from "../src/worker-id.js";
 import { UnknownWorkspaceError, type WorkspaceConfig } from "../src/workspace.js";
 import type { WorkspaceAdmin } from "../src/workspace-create.js";
 import {

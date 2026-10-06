@@ -1,10 +1,11 @@
 import type { Clock } from "./clock.js";
 import type { Db } from "./db.js";
+import { DomainError } from "./domain-error.js";
 import { quarantineFailedTeardown } from "./failed-teardown.js";
 import type { GitHubAuth } from "./github-auth.js";
 import type { Landing } from "./landing.js";
 import type { Slot } from "./slot.js";
-import { DomainError, getTask, returnToQueueHead, type Task } from "./tasks.js";
+import { getTask, returnToQueueHead, type Task } from "./tasks.js";
 import {
   ensureWorkspaceToken,
   releaseWorkspace,

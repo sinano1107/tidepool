@@ -6,7 +6,6 @@ import type { Landing } from "../src/landing.js";
 import { FAILED_TEARDOWN_QUESTION_TITLE, openQuarantineQuestion } from "../src/quarantine.js";
 import { Slot } from "../src/slot.js";
 import {
-  BOARD_WORKER_ID,
   completeTask,
   escalateTask,
   getTask,
@@ -22,6 +21,7 @@ import {
   type TeardownDeps,
   teardownStep,
 } from "../src/teardown.js";
+import { BOARD_WORKER_ID } from "../src/worker-id.js";
 import { prepareWorkspaceAtPickup, type WorkspaceConfig } from "../src/workspace.js";
 import { FakeClock, unusedLanding } from "./fakes.js";
 import { commitWork, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeWorkspace } from "./harness.js";

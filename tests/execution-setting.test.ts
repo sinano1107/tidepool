@@ -1,6 +1,7 @@
 import { expect, it, vi } from "vitest";
 import { isClaudeModelAlias } from "../src/claude-model-alias.js";
 import { type Db, openDb } from "../src/db.js";
+import { DomainError } from "../src/domain-error.js";
 import { listEventsOfKinds } from "../src/events.js";
 import {
   applyExecutionSettingsChange,
@@ -30,14 +31,13 @@ import {
   tierFieldDescriptions,
   tierNames,
 } from "../src/execution-setting.js";
-
 import { submitAnswer } from "../src/human-verbs.js";
 import { registerMetaReview } from "../src/meta-review.js";
 import { registerQuarantine, tableRowValue } from "../src/quarantine.js";
 import { assertValidAgentDefinition, PROVIDER_VALUES, type Provider } from "../src/registry.js";
 import { RegistryPushFailedError } from "../src/registry-write.js";
 import { proposeRoutingChange } from "../src/routing-review.js";
-import { cancelTaskDirectly, DomainError, getTask, type RegistryProposal, type RoutingProposal, type RoutingRowProposal, registerTask, type TierDescriptionProposal } from "../src/tasks.js";
+import { cancelTaskDirectly, getTask, type RegistryProposal, type RoutingProposal, type RoutingRowProposal, registerTask, type TierDescriptionProposal } from "../src/tasks.js";
 import { boardCallRow, reportProviderUsage } from "../src/throttle.js";
 import { unusedLanding } from "./fakes.js";
 import { HUMAN_WEBUI } from "./harness.js";

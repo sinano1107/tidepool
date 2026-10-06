@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import { openDb } from "../src/db.js";
+import { DomainError } from "../src/domain-error.js";
 import { appendEvent, getEvent, listEvents, listLog } from "../src/events.js";
 import {
   approvedMemoryEntries,
@@ -28,7 +29,7 @@ import {
   rejectMemoryProposal,
   restoreMemoryEntry,
 } from "../src/memory.js";
-import { countUnsettledAttachedChildren, DomainError, getTask, logDecision, type MemoryProposal, registerTask } from "../src/tasks.js";
+import { countUnsettledAttachedChildren, getTask, logDecision, type MemoryProposal, registerTask } from "../src/tasks.js";
 import { bundledObjection, HUMAN_WEBUI, QUIET_EXIT, WORKER_SPAWNED } from "./harness.js";
 
 const at = new Date("2026-09-14T00:00:00.000Z");

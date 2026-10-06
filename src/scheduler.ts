@@ -62,8 +62,8 @@ import type { TranslationClient } from "./translate.js";
 import { translateSource } from "./translation.js";
 import { claudeUsageObservation, parseUsage, type UsageSnapshot } from "./usage.js";
 import type { WorkerAdapter } from "./worker.js";
+import { BOARD_WORKER_ID } from "./worker-id.js";
 import {
-  BOARD_WORKER_ID,
   buildWorkspaceResolver,
   prepareWorkspaceAtPickup,
   quarantineWorkspace,

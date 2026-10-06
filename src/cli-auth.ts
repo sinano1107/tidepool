@@ -3,7 +3,8 @@ import type { RowRefusal, RowRefusalCause } from "./events.js";
 import { loadExecutionSettingTable } from "./execution-setting.js";
 import { registerQuarantine, tableRowValue } from "./quarantine.js";
 import type { Provider } from "./registry.js";
-import { BOARD_WORKER_ID, registerTask } from "./tasks.js";
+import { registerTask } from "./tasks.js";
+import { BOARD_WORKER_ID } from "./worker-id.js";
 
 export const CLI_AUTH_EXPIRY_WARNING_TITLE = "Claude authentication token expires soon";
 

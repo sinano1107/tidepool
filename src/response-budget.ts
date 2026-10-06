@@ -1,6 +1,7 @@
 import type { Db } from "./db.js";
+import { DomainError } from "./domain-error.js";
 import { appendEvent, type EventPayload } from "./events.js";
-import { BOARD_WORKER_ID, DomainError } from "./tasks.js";
+import { BOARD_WORKER_ID } from "./worker-id.js";
 
 /** 盤面が返す MCP 応答1回の大きさの上限(ADR 0195 決定2)。text content の本文ではなく、盤面が返す CallToolResult を丸ごと
  *  シリアライズした UTF-8 バイト数(`responseBytes`)で測る(ADR 0195 追記1)。 */

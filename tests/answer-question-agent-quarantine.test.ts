@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { agentNeedsHuman } from "../src/agent.js";
 import { openDb } from "../src/db.js";
-import { answerQuestion, BOARD_WORKER_ID, DomainError, registerTask } from "../src/tasks.js";
+import { DomainError } from "../src/domain-error.js";
+import { answerQuestion, registerTask } from "../src/tasks.js";
+import { BOARD_WORKER_ID } from "../src/worker-id.js";
 import { HUMAN_WEBUI } from "./harness.js";
 
 describe("agent の quarantine(ADR 0012 / issue #36: workspace 版の agent 名一般化)", () => {

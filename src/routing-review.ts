@@ -1,5 +1,6 @@
 import { type AgentView, agentViewProviders } from "./agent-create.js";
 import type { Db } from "./db.js";
+import { DomainError } from "./domain-error.js";
 import { type EventPayload, getEvent, listEventsOfKinds } from "./events.js";
 import {
   assertKnownTier,
@@ -22,11 +23,10 @@ import {
   tierIdOf,
   tierNames,
 } from "./execution-setting.js";
-
 import { type Cell, cellJson, loadEpisodes, type RoutingEpisode, type TrackRecord } from "./learner.js";
 import { inWindow, type MetaReviewWindow, materialSection, previousMetaReviewWatermark } from "./meta-review.js";
 import { type Packed, packItems, readPosition } from "./response-budget.js";
-import { DomainError, type RegistryProposal, type RoutingAddTierProposal, type RoutingProposal, registerTask, type TierDescriptionProposal } from "./tasks.js";
+import { type RegistryProposal, type RoutingAddTierProposal, type RoutingProposal, registerTask, type TierDescriptionProposal } from "./tasks.js";
 
 /** 主題 routing の meta-review の読み口(issue #917 / spec #916 C)。どれも既定の `since_watermark` は読み手と同主題の
  *  前回の登録の watermark(event id)で、応答予算と続き(next)で返す(ADR 0195)。 */

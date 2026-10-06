@@ -1,6 +1,7 @@
 import { expect, it } from "vitest";
 import { openDb } from "../src/db.js";
-import { DomainError, decomposeTask, getTask, listChildren, registerTask } from "../src/tasks.js";
+import { DomainError } from "../src/domain-error.js";
+import { decomposeTask, getTask, listChildren, registerTask } from "../src/tasks.js";
 import { HUMAN_WEBUI } from "./harness.js";
 
 /** ADR 0107 決定1 のドメイン層 —— 要求2列の受理と拒否を **registerTask /

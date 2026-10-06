@@ -2,6 +2,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { parseDocument } from "yaml";
 import { type BoardStatePath, boardStateOverlap } from "./board-state.js";
+import { git } from "./git.js";
 import type { GitHubClient } from "./github.js";
 import { authedGit, type GitHubAuth, repoKey } from "./github-auth.js";
 import {
@@ -26,7 +27,6 @@ import {
   assertGitDirIsDirectory,
   conventionCheckoutPath,
   entryCheckoutPath,
-  git,
   originUrl,
   resolvesToRegistryClone,
   UnknownWorkspaceError,

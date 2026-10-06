@@ -11,6 +11,7 @@ import {
 import { boardHalts } from "./board-halt.js";
 import type { Clock } from "./clock.js";
 import type { Db } from "./db.js";
+import { DomainError } from "./domain-error.js";
 import type { DraftClient } from "./draft.js";
 import { getLogCursor, listEvents, listLog } from "./events.js";
 import {
@@ -89,11 +90,9 @@ import {
 import { createStatelessMcpRouter, floorEveryResponse, rejectUnknownArguments } from "./stateless-mcp.js";
 import {
   type BoardTask,
-  DomainError,
   describeHandoffFields,
   getTask,
   HANDOFF_FIELDS,
-  HUMAN_WORKER_ID,
   listBoard,
   listQueue,
   listYourTasks,
@@ -101,6 +100,7 @@ import {
 } from "./tasks.js";
 import { sessionInTeardown } from "./teardown.js";
 import type { PendingReclaim } from "./watchdog.js";
+import { HUMAN_WORKER_ID } from "./worker-id.js";
 import { GitDirNotADirectoryError, UnknownWorkspaceError, type WorkspaceConfig } from "./workspace.js";
 import {
   BoardStateOverlapError,

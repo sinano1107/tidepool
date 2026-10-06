@@ -13,8 +13,7 @@ import {
   originRepo,
 } from "./github-auth.js";
 import { PROVIDER_VALUES, type Provider } from "./provider.js";
-// biome-ignore lint/suspicious/noImportCycles: ADR 0204 の台帳 —— 既存の循環、解いたら消す
-import { isNonAgentWorkerId } from "./tasks.js";
+import { isNonAgentWorkerId } from "./worker-id.js";
 
 /** An agent definition file: `agents/<name>.md` in the registry clone.
  *  Frontmatter carries the machine-stamped version and the authority profile
