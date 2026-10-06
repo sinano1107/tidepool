@@ -647,10 +647,20 @@ export function contentSourceFor(
   return TaskContentSource.liveIssue(github, { path, number: task.github_issue_number });
 }
 
-/** A root is reviewed on completion whatever its flag (ADR 0111), so a root's
- *  review_flag would never fire — refused like the review type's (issue #1467). */
-const ROOT_REVIEW_FLAG_ERROR =
-  "a root task cannot carry review_flag — every root is already reviewed on completion";
+/** review_flag that would never fire is refused (ADR 0111): a review task is
+ *  terminal, and a root is reviewed on completion whatever its flag (issue #1467). */
+function assertReviewFlagFires(
+  task: { type: TaskType; parent_id?: string | null },
+  reviewFlag: boolean | undefined,
+): void {
+  if (!reviewFlag) return;
+  if (task.type === "review") throw new DomainError("a review task cannot carry review_flag");
+  if (!task.parent_id) {
+    throw new DomainError(
+      "a root task cannot carry review_flag — every root is already reviewed on completion",
+    );
+  }
+}
 
 /** New tasks always join the queue tail: sort_key = max + 1. */
 export function registerTask(
@@ -663,12 +673,7 @@ export function registerTask(
   assertQuestionSpec(input);
   assertGithubRef(input);
   assertExecutionRequest(db, input);
-  if (input.type === "review" && input.review_flag) {
-    throw new DomainError("a review task cannot carry review_flag");
-  }
-  if (!input.parent_id && input.review_flag) {
-    throw new DomainError(ROOT_REVIEW_FLAG_ERROR);
-  }
+  assertReviewFlagFires(input, input.review_flag);
   // assertGithubRef above guarantees workspace whenever the ref is present
   if (input.github_issue_number !== undefined && input.workspace) {
     assertNoUnsettledIssueRef(db, input.workspace, input.github_issue_number);
@@ -2248,12 +2253,7 @@ export function editTask(
   origin: EventOrigin,
 ): Task {
   assertHumanEditableScope(db, task);
-  if (task.type === "review" && input.review_flag) {
-    throw new DomainError("a review task cannot carry review_flag");
-  }
-  if (task.parent_id === null && input.review_flag) {
-    throw new DomainError(ROOT_REVIEW_FLAG_ERROR);
-  }
+  assertReviewFlagFires(task, input.review_flag);
   if (
     input.title === "" ||
     input.purpose === "" ||

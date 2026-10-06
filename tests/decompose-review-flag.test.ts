@@ -237,7 +237,7 @@ it("review type への review_flag は登録時に拒否する", async () => {
     review_flag: true,
   });
   expect(response.status).toBe(400);
-  expect(response.json.error).toMatch(/review/);
+  expect(response.json.error).toMatch(/a review task cannot carry review_flag/);
 });
 
 it("ルートへの review_flag: true は、JSON API では 400、管理MCP の register_task では同じ文の toolError になる", async () => {
