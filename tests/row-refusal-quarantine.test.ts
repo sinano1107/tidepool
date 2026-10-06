@@ -325,6 +325,8 @@ const SONNET_ROW = "execution-setting row anthropic / claude-sonnet-5-5 cannot r
 
 it("AI 下書きの3用途は、表の行で撃った Board call が断られると行の Quarantine を立て、行が断られたと読める理由で今と同じ失敗応答を返す(ADR 0202)", async () => {
   t = await bootTidepool({
+    // client の db は盤面と別にしてある —— 立った Quarantine で行が外れず、3用途がそれぞれ同じ行で断られる配線を通る
+    // (盤面と同じ db なら2つ目以降は撃つ前に「すべて Quarantine 中」で撃てなかったになる、ADR 0202 決定4)
     draftClient: new ClaudeDraftClient({ db: openDb(":memory:"), exec: refusingExec(REFUSED_404) }),
     workspace: { name: "tidepool", path: "/workspaces/tidepool" },
   });
