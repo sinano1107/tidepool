@@ -81,7 +81,7 @@ type RefusedRow = Pick<RowRefusal, "provider" | "model" | "cause">;
 
 /** 表の行で撃つ Board call の result envelope が行の拒否の証拠だったこと(ADR 0202 決定1)。`CliAuthError` と同じく
  *  構造化された証拠で、呼び手は文言から推測しない。 */
-export class RowRefusalError extends Error implements RefusedRow {
+export class RowRefusalError extends Error {
   constructor(
     readonly provider: Provider,
     readonly model: string,
