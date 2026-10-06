@@ -2,6 +2,8 @@
 
 **Status 追記: 決定7 の `review_tier = frontier` は ADR 0200 決定4 で置き換え** —— 周期 meta-review は振り返り Board call と同じ盤面設定が指す段で登録する。routing の提案には「段の説明の書き換え」と「段を足して行を移す」が加わる(ADR 0200 決定7・8)。
 
+**Status 追記: 決定1 の agent の tier の提案の pin には、下げ先が pin の段のいまの1段下にいること(ADR 0200 決定4)が加わる** —— 段の挿入・並べ替え・削除で崩れれば observed で決着する(issue #1438)。
+
 2026-09-23 の grilling(issue #549)で決定。`/implement-tidepool 549` が seam の合意で止め、4つの問い(根拠 cell と
 レバー tier の型違い / 昇格後に降格の根拠が消える / 表 diff と人間の編集の競合 / 下げ先に行が無い表)を grilling へ
 戻した。ADR 0110 決定4・ADR 0111 決定5・追記2・ADR 0120 決定3・4 を前提に、routing の提案の適用先ごとの形を決める。

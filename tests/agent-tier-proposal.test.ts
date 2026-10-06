@@ -193,7 +193,7 @@ it("下げ先の段を pin の段より上へ並べ替えると、approve は断
     const questionId = await proposeDeckhand(call);
     expect((await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "edit_tier", name: "standard", position: 2 })).status).toBe(200);
 
-    expect((await answer(questionId, { answers: ["approve"] })).status).not.toBe(200);
+    expect((await answer(questionId, { answers: ["approve"] })).status).toBe(409);
     expect(await task(questionId)).toMatchObject({ status: "done", question_answer: null });
     expect(changeTier).not.toHaveBeenCalled();
   } finally {
