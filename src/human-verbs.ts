@@ -9,7 +9,19 @@ import type { Db } from "./db.js";
 import { DomainError } from "./domain-error.js";
 import type { DraftClient } from "./draft.js";
 import { appendEvent, type EventOrigin } from "./events.js";
-import { type AddTierAmendment, applyExecutionSettingsChange, assertTierRunnableFor, composeRoutingRow, type ExecutionSettingsChange, parseAddTierAmendment, parseAgentTierAmendment, parseRoutingRowChange, parseTierDescriptionAmendment, type RoutingRowChange, registryPinChanges } from "./execution-setting.js";
+import {
+  type AddTierAmendment,
+  applyExecutionSettingsChange,
+  assertTierRunnableFor,
+  composeRoutingRow,
+  type ExecutionSettingsChange,
+  parseAddTierAmendment,
+  parseAgentTierAmendment,
+  parseRoutingRowChange,
+  parseTierDescriptionAmendment,
+  type RoutingRowChange,
+  registryPinChanges,
+} from "./execution-setting.js";
 import { type GitHubClient, IssueGoneError } from "./github.js";
 import type { HarnessContainmentCheck } from "./harness-containment.js";
 import { type Landing, type LandingVerdict, landingBlock } from "./landing.js";

@@ -3,7 +3,28 @@ import { isClaudeModelAlias } from "../src/claude-model-alias.js";
 import { type Db, openDb } from "../src/db.js";
 import { DomainError } from "../src/domain-error.js";
 import { listEventsOfKinds } from "../src/events.js";
-import { applyExecutionSettingsChange, assertTierRunnableFor, BOARD_DEFAULT_PRIORITY, changeExecutionSettings, composeRoutingRow, type ExecutionSetting, type ExecutionSettingsChange, type ExecutionSettingTable, executionSettingsFor, parseAddTierAmendment, parseAgentTierAmendment, parseRoutingRowChange, readExecutionSettings, registryPinChanges, resolveExecutionSetting, routingPinChanges, SEED_EXECUTION_SETTINGS, type SelectorInput, selectExecutionSetting, tierFieldDescriptions } from "../src/execution-setting.js";
+import {
+  applyExecutionSettingsChange,
+  assertTierRunnableFor,
+  BOARD_DEFAULT_PRIORITY,
+  changeExecutionSettings,
+  composeRoutingRow,
+  type ExecutionSetting,
+  type ExecutionSettingsChange,
+  type ExecutionSettingTable,
+  executionSettingsFor,
+  parseAddTierAmendment,
+  parseAgentTierAmendment,
+  parseRoutingRowChange,
+  readExecutionSettings,
+  registryPinChanges,
+  resolveExecutionSetting,
+  routingPinChanges,
+  SEED_EXECUTION_SETTINGS,
+  type SelectorInput,
+  selectExecutionSetting,
+  tierFieldDescriptions,
+} from "../src/execution-setting.js";
 import { submitAnswer } from "../src/human-verbs.js";
 import { registerMetaReview } from "../src/meta-review.js";
 import { registerQuarantine, tableRowValue } from "../src/quarantine.js";
