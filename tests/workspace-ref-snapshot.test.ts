@@ -209,8 +209,7 @@ it("セッション中に盤面が保護ブランチを動かしても、その�
 
   await complete(t, running.id);
 
-  const qq = await servedWorkspaceQuarantine(t, "sandbox"); if (qq) console.log("QQ", qq.title, qq.purpose);
-  expect(qq).toBeUndefined();
+  expect(await servedWorkspaceQuarantine(t, "sandbox")).toBeUndefined();
   expect(git(ws.path, "show", `task/${running.id}:in-flight.txt`)).toBe("still working");
 });
 
@@ -248,8 +247,7 @@ it("セッション中の registry 書き込みで、registry clone の workspac
 
   await complete(t, task.id);
 
-  const qq = await servedWorkspaceQuarantine(t, "registry"); if (qq) console.log("QQ", qq.title, qq.purpose);
-  expect(qq).toBeUndefined();
+  expect(await servedWorkspaceQuarantine(t, "registry")).toBeUndefined();
 });
 
 // ADR 0064 決定2: 違反メッセージは**動いた ref を名指しする**。quarantine の確認
@@ -315,8 +313,7 @@ it("盤面が origin/main を撮り直しても、連動する origin/HEAD で q
 
   await complete(t, task.id);
 
-  const qq = await servedWorkspaceQuarantine(t, "registry"); if (qq) console.log("QQ", qq.title, qq.purpose);
-  expect(qq).toBeUndefined();
+  expect(await servedWorkspaceQuarantine(t, "registry")).toBeUndefined();
 });
 
 // ADR 0081: symref 自身の可動部は不変条件に残る —— 状態は解決値ではなく**指し先**で
