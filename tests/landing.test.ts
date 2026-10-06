@@ -1,6 +1,7 @@
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { type Db, openDb } from "../src/db.js";
+import { DomainError } from "../src/domain-error.js";
 import { appendEvent, listEvents } from "../src/events.js";
 import { submitAnswer } from "../src/human-verbs.js";
 import {
@@ -13,6 +14,8 @@ import { completeTask, getTask, listBoard, recordPrOpened, registerTask } from "
 import { raiseObjection } from "../src/triage.js";
 import { BOARD_WORKER_ID } from "../src/worker-id.js";
 import {
+  mergeTaskToProtected,
+  OutOfBandProtectedBranchError,
   prepareWorkspaceAtPickup,
   quarantineWorkspace,
   releaseWorkspace,
@@ -1155,4 +1158,92 @@ it("PR から着地タスクを引けない merge question は fail-closed で a
   const question = mergeQuestion(db, clock, { pending_merge_pr: 99 });
 
   expect(landingAnnotation(db, question)).toEqual({ blocked_by: "attached_children" });
+});
+
+// ADR 0103 決定1・4: 帯域外の判定は盤面自身の記録(ref snapshot)との突き合わせで、
+// 着地の回答だけがこの型を隔離に結ぶ。以下の4本がこの判定を述べる唯一の場所(ADR 0107)。
+/** 記録がある形: work を拾い、タスクブランチに commit し、解放する。保護ブランチの行が
+ *  記録に入り、HEAD は保護ブランチへ戻っている。 */
+async function recordedWork(board: Db, clock: FakeClock, workspace: WorkspaceConfig) {
+  const work = landingWork(board, clock);
+  await prepareWorkspaceAtPickup(board, workspace, work, {});
+  commitWork(workspace.path, "feature.txt", "finished\n");
+  releaseWorkspace(board, workspace, work, clock.now());
+  return work;
+}
+
+/** 記録の欠落の形: 一度も拾われていないので ref snapshot に保護ブランチの行が無い。 */
+async function unrecordedWork(board: Db, clock: FakeClock, workspace: WorkspaceConfig) {
+  const work = landingWork(board, clock);
+  git(workspace.path, "checkout", "-b", `task/${work.id}`);
+  commitWork(workspace.path, "feature.txt", "finished\n");
+  git(workspace.path, "checkout", "main");
+  return work;
+}
+
+it("保護ブランチが記録から進んでいれば着地を拒み、保護ブランチを動かさない", async () => {
+  const workspace = await makeWorkspace("landing-out-of-band-advanced");
+  const { db, clock } = await openBoard();
+  const work = await recordedWork(db, clock, workspace);
+  commitWork(workspace.path, "out-of-band.txt", "moved by hand\n");
+  const moved = git(workspace.path, "rev-parse", "refs/heads/main");
+
+  expect(() => mergeTaskToProtected(db, workspace, work.id)).toThrow(OutOfBandProtectedBranchError);
+  expect(() => mergeTaskToProtected(db, workspace, work.id)).toThrow("the board recorded it at");
+  expect(git(workspace.path, "rev-parse", "refs/heads/main")).toBe(moved);
+});
+
+it("保護ブランチがタスクブランチの祖先へ巻き戻されていても、ff できる位置で着地を拒む", async () => {
+  const workspace = await makeWorkspace("landing-out-of-band-rolled-back");
+  // 巻き戻し先を祖先として残すため、拾う前に1 commit 足しておく
+  commitWork(workspace.path, "base.txt", "the base the task forks from\n");
+  const rolledBackTo = git(workspace.path, "rev-parse", "HEAD~1");
+  const { db, clock } = await openBoard();
+  const work = await recordedWork(db, clock, workspace);
+  git(workspace.path, "reset", "--hard", rolledBackTo);
+
+  expect(() => mergeTaskToProtected(db, workspace, work.id)).toThrow(OutOfBandProtectedBranchError);
+  expect(git(workspace.path, "rev-parse", "refs/heads/main")).toBe(rolledBackTo);
+});
+
+it("記録に保護ブランチの行が無ければ、位置が動いていなくても着地を拒む", async () => {
+  const workspace = await makeWorkspace("landing-out-of-band-unrecorded");
+  const { db, clock } = await openBoard();
+  const work = await unrecordedWork(db, clock, workspace);
+  const before = git(workspace.path, "rev-parse", "refs/heads/main");
+
+  expect(() => mergeTaskToProtected(db, workspace, work.id)).toThrow("no recorded position");
+  expect(git(workspace.path, "rev-parse", "refs/heads/main")).toBe(before);
+});
+
+it.each([
+  [
+    "記録から進んだ",
+    async (board: Db, clock: FakeClock, workspace: WorkspaceConfig) => {
+      const work = await recordedWork(board, clock, workspace);
+      commitWork(workspace.path, "out-of-band.txt", "moved by hand\n");
+      return work;
+    },
+  ],
+  ["記録に行の無い", unrecordedWork],
+])("%s保護ブランチへ merge と答えると、回答を拒み workspace を quarantine し、着地 question は開いたまま残る", async (_shape, setup) => {
+  const workspace = await makeWorkspace("landing-out-of-band-answer");
+  const { db, clock } = await openBoard();
+  const work = await setup(db, clock, workspace);
+  const question = mergeQuestion(db, clock, { pending_local_merge_task_id: work.id });
+  expect(workspaceQuarantine(db, workspace)).toBeUndefined();
+
+  await expect(
+    submitAnswer(
+      { db, pollNow: () => {}, landing: unusedLanding, workspace },
+      question,
+      ["merge"],
+      undefined,
+      () => clock.now(),
+      "webui",
+    ),
+  ).rejects.toThrow(DomainError);
+
+  expect(workspaceQuarantine(db, workspace)).toBeDefined();
+  expect(getTask(db, question.id)?.status).toBe("todo");
 });
