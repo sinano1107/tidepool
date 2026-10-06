@@ -48,3 +48,8 @@ walk-through は #1049 のコメントに置く。この ADR は ADR 0115 の「
 
 配分評価も決定1 の対象に加わる —— 「統合点レビューが完了したのに、それを指す `allocation_reviewed` が無い」を sweep が拾う。
 決定5 の一覧は3用途で1つのまま、置き場所を settings の Memory 面から振り返り Board call のティア設定の隣へ移した。
+
+## 追記3(2026-10-06 の grilling、issue #1457 / ADR 0205)
+
+決定3 の「CLI の認証」は、401 が Provider 認証の Quarantine に回っていなかった時点の記述である。401 で終わった呼び出しは失敗
+event を残さず数えない(行の拒否と同じく、ADR 0202 決定3)。その provider が認証の Quarantine 中なのは撃てなかったに加わる。
