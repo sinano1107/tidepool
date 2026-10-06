@@ -4,7 +4,7 @@ import { afterEach, expect, it } from "vitest";
 import type { CodexAppServerProbeResult } from "../src/codex-app-server.js";
 import type { ExecutionSetting } from "../src/execution-setting.js";
 import { executionSettingsFor } from "../src/execution-setting.js";
-import { type Provider } from "../src/provider.js";
+import type { Provider } from "../src/provider.js";
 import { InvalidAgentDefinitionError } from "../src/registry.js";
 import { registerTask } from "../src/tasks.js";
 import { healthyOpenai, listedOpenaiModels, usagePanelText } from "./fakes.js";

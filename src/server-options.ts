@@ -64,9 +64,23 @@ import {
   type ProfileAdmin,
   updateProfile,
 } from "./profile-create.js";
-import { type Provider } from "./provider.js";
+import type { Provider } from "./provider.js";
 import { type VapidConfig, WebPushClient } from "./push.js";
-import { type AuthorityProfile, assertValidAgentDefinition, canonicalHarness, type Harness, InvalidAgentDefinitionError, loadRegistry, ownEntry, type RegistryCandidates, type RegistryMode, type RegistryReachability, type RegistrySource, type RosterAgent, refreshRegistry } from "./registry.js";
+import {
+  type AuthorityProfile,
+  assertValidAgentDefinition,
+  canonicalHarness,
+  type Harness,
+  InvalidAgentDefinitionError,
+  loadRegistry,
+  ownEntry,
+  type RegistryCandidates,
+  type RegistryMode,
+  type RegistryReachability,
+  type RegistrySource,
+  type RosterAgent,
+  refreshRegistry,
+} from "./registry.js";
 import { checkSandboxCapability } from "./sandbox.js";
 import type { TaskExecutionCandidates } from "./scheduler.js";
 import type { BoardCallers, ServerOptions, WorkerFactory } from "./server.js";

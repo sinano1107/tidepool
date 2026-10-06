@@ -2,7 +2,11 @@ import { execFileSync } from "node:child_process";
 import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createAgent, InvalidAgentIconError, listAgentViews } from "../src/agent-create.js";
+import {
+  createAgent,
+  InvalidAgentIconError,
+  listAgentViews,
+} from "../src/agent-create.js";
 import { InvalidAgentDefinitionError, InvalidAgentNameError, InvalidSkillAllowlistError, loadRegistry, UnknownAuthorityProfileError } from "../src/registry.js";
 import { RegistryFetchFailedError, RegistryPushFailedError } from "../src/registry-write.js";
 import { seedTierNames } from "./fakes.js";

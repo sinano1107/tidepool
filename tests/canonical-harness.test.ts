@@ -1,6 +1,11 @@
 import { expect, it } from "vitest";
 import { PROVIDER_VALUES } from "../src/provider.js";
-import { assertValidAgentDefinition, canonicalHarness, InvalidAgentDefinitionError, normalizeProviderEntries } from "../src/registry.js";
+import {
+  assertValidAgentDefinition,
+  canonicalHarness,
+  InvalidAgentDefinitionError,
+  normalizeProviderEntries,
+} from "../src/registry.js";
 import { seedTierNames } from "./fakes.js";
 
 it("Provider は1つの正準 Harness に解決され、agent 定義に harness を持たない(ADR 0098)", () => {

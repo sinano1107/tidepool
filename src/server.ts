@@ -40,11 +40,19 @@ import { createMcpRouter } from "./mcp.js";
 import { ensureMemoryIndex } from "./memory.js";
 import { type ContainerRuntime, ProcessContainers } from "./process-container.js";
 import type { ProfileAdmin } from "./profile-create.js";
-import { type Provider } from "./provider.js";
+import type { Provider } from "./provider.js";
 import { createNotificationTick, type PushClient } from "./push.js";
 import { openQuarantineValues, type QuarantineResolvers, registerQuarantine } from "./quarantine.js";
 import type { Harness } from "./registry.js";
-import { type AuthorityProfile, REGISTRY_BRANCH, type RegistryCandidates, type RegistryReachabilityCheck, type RegistrySource, type RosterAgent, remoteTrackingRef } from "./registry.js";
+import {
+  type AuthorityProfile,
+  REGISTRY_BRANCH,
+  type RegistryCandidates,
+  type RegistryReachabilityCheck,
+  type RegistrySource,
+  type RosterAgent,
+  remoteTrackingRef,
+} from "./registry.js";
 import type { AttributionClient, BehaviorDraftClient, RetrospectiveCallDeps } from "./retrospective.js";
 import { type Scheduler, startScheduler, type TaskExecutionCandidates } from "./scheduler.js";
 import { Slot } from "./slot.js";

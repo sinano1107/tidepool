@@ -39,7 +39,10 @@ import {
   readInitMcpServers,
   readInitModel,
 } from "./stream-json.js";
-import { resolveTaskAgent, type Task } from "./tasks.js";
+import {
+  resolveTaskAgent,
+  type Task,
+} from "./tasks.js";
 import { tierNames } from "./tier.js";
 import type { TranscriptStore } from "./transcript-store.js";
 import { composeTerminalScreen } from "./usage.js";

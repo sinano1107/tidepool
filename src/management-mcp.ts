@@ -2,7 +2,11 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Router } from "express";
 import { z } from "zod";
 import { UnknownAgentError } from "./agent.js";
-import { type AgentAdmin, BuiltInAgentNotEditableError, InvalidAgentIconError } from "./agent-create.js";
+import {
+  type AgentAdmin,
+  BuiltInAgentNotEditableError,
+  InvalidAgentIconError,
+} from "./agent-create.js";
 import { boardHalts } from "./board-halt.js";
 import type { Clock } from "./clock.js";
 import type { Db } from "./db.js";
@@ -64,7 +68,7 @@ import {
 import { changeMetaReviewSettings, metaReviewSettingsChangeSchema, readMetaReviewSettings } from "./meta-review.js";
 import { type ProfileAdmin, ProfileConfirmationRequiredError } from "./profile-create.js";
 import { type QuarantineChecks, type QuarantineResolvers, quarantineStops } from "./quarantine.js";
-import { 
+import {
   InvalidAgentDefinitionError,
   InvalidAgentNameError,
   InvalidAllowedDomainError,
@@ -73,7 +77,9 @@ import {
   InvalidSkillAllowlistError,
   InvalidWorkspaceNameError,
   isBuiltInAgentName,
-  MERGE_DIAL_VALUES,UnknownAuthorityProfileError, } from "./registry.js";
+  MERGE_DIAL_VALUES,
+  UnknownAuthorityProfileError,
+} from "./registry.js";
 import { RepoAccessMissingError } from "./repo-access.js";
 import { nextDescription, packItems, type ReadPosition, readNext } from "./response-budget.js";
 import { listHaltedRefires, markHaltedRefire, refireKeySchema } from "./retrospective.js";

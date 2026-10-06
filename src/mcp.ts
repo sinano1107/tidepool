@@ -43,7 +43,26 @@ import { proposeFromObjection } from "./retrospective.js";
 import { listAllocations, listRoutingCells, listRoutingShadow, proposeRoutingChange, readRoutingSettings } from "./routing-review.js";
 import type { Slot } from "./slot.js";
 import { createStatelessMcpRouter, floorEveryResponse, rejectUnknownArguments } from "./stateless-mcp.js";
-import { assigneeNeedsApproval, completeTask, contentSourceFor, continueDecomposition, declarePremiseBreach, decomposeTask, describeHandoffFields, escalateTask, getTask, HANDOFF_FIELDS, type HistoryRow, HUMAN_ROSTER_AGENT, joinHistory, logDecision, redecompose, resolveTaskAgent, type Task, taskHistoryRows } from "./tasks.js";
+import {
+  assigneeNeedsApproval,
+  completeTask,
+  contentSourceFor,
+  continueDecomposition,
+  declarePremiseBreach,
+  decomposeTask,
+  describeHandoffFields,
+  escalateTask,
+  getTask,
+  HANDOFF_FIELDS,
+  type HistoryRow,
+  HUMAN_ROSTER_AGENT,
+  joinHistory,
+  logDecision,
+  redecompose,
+  resolveTaskAgent,
+  type Task,
+  taskHistoryRows,
+} from "./tasks.js";
 import { markTeardown, runTeardown, type TeardownDeps, teardownStep } from "./teardown.js";
 import { HUMAN_WORKER_ID } from "./worker-id.js";
 import {

@@ -7,7 +7,8 @@ import { describe, expect, it } from "vitest";
 import {
   DEFAULT_AGENT_NAME,
   DEFAULT_AUDITOR_NAME,
-  DEFAULT_WORKSPACE_NAME,DEFAULT_AUDITOR_NAME as TASK_DEFAULT_AUDITOR_NAME 
+  DEFAULT_WORKSPACE_NAME,
+  DEFAULT_AUDITOR_NAME as TASK_DEFAULT_AUDITOR_NAME,
 } from "../src/defaults.js";
 import { loadRegistry } from "../src/registry.js";
 import { resolveWorkspacesBaseDir } from "../src/workspace.js";
