@@ -608,8 +608,6 @@ function EditTaskDialog({ taskCard, onSaved, onClose, say }: {
     return <div style={{ padding: '24px 16px', color: 'var(--text-muted)' }}>loading…</div>;
   }
   const issueBacked = full.github_issue_number != null;
-  // ルートは flag によらずレビューされ、review は終端 —— どちらも review_flag を拒否する(issue #1467 / ADR 0111)
-  const reviewFlagEditable = full.parent_id != null && full.type === 'work';
   const set = (k: keyof EditTaskFields, v: string | boolean) => setFields((f) => ({ ...f!, [k]: v }) as EditTaskFields);
   const withPlaceholder = (label: string, names: string[]) => [{ value: '', label }, ...names.map((n) => ({ value: n, label: n }))];
   // only the fields that actually changed — an unchanged submission is a no-op
@@ -664,7 +662,8 @@ function EditTaskDialog({ taskCard, onSaved, onClose, say }: {
           )}
         </div>
         <Checkbox label="risk flag — this task has irreversible external effects" checked={fields.risk_flag} onChange={() => set('risk_flag', !fields.risk_flag)} />
-        {reviewFlagEditable && (
+        {/* ルートは flag によらずレビューされ、review は終端 —— どちらも review_flag を拒否する(issue #1467 / ADR 0111) */}
+        {full.parent_id != null && full.type === 'work' && (
           <Checkbox label="review flag — request an on-completion review" checked={fields.review_flag} onChange={() => set('review_flag', !fields.review_flag)} />
         )}
         <Button variant="primary" size="lg" full disabled={busy} onClick={submit}>Save changes</Button>

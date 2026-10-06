@@ -169,7 +169,6 @@ function RegisterScreen({ onRegister, parentTask, onClose }: RegisterScreenProps
           // ChildSpec has no type field) — the type picker is dropped in
           // childMode below, so `type` state never leaves its 'work' default
           type, title: title.trim(), purpose: purpose.trim(), completion_criteria: criteria.trim(),
-          // a root never sends review_flag, so a draft's value can't 400 a root registration
           risk_flag: risk, ...(childMode ? { review_flag: review } : {}),
           // unset assignee/workspace resolve to the board's defaults at
           // execution time (CONTEXT.md) — omit rather than send '' so an

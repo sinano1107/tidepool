@@ -684,7 +684,7 @@ export function queueWork(
       purpose: `purpose of ${title}`,
       completion_criteria: `criteria of ${title}`,
       ...(workspace !== undefined && { workspace }),
-        ...(assignee !== undefined && { assignee }),
+      ...(assignee !== undefined && { assignee }),
     },
     t.clock.now(),
     ...HUMAN_WEBUI,
