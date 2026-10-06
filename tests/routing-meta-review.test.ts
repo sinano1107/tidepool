@@ -4,7 +4,8 @@ import { loadExecutionSettingTable } from "../src/execution-setting.js";
 import { recordShadow } from "../src/learner.js";
 import { createBehaviorCandidate, proposeMemoryChange, WORKER_MEMORY_VERBS } from "../src/memory.js";
 import { proposeRoutingChange } from "../src/routing-review.js";
-import { BOARD_WORKER_ID, registerTask } from "../src/tasks.js";
+import { registerTask } from "../src/tasks.js";
+import { BOARD_WORKER_ID } from "../src/worker-id.js";
 import {
   api,
   bootTidepool,

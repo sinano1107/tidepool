@@ -1,18 +1,18 @@
 import { expect, it } from "vitest";
 import { openDb } from "../src/db.js";
+
+import { DomainError } from "../src/domain-error.js";
 import { taskDecisionLog } from "../src/events.js";
+
 import {
   answerQuestion,
-  BOARD_WORKER_ID,
   cancelTaskDirectly,
   completeTask,
   continueDecomposition,
-  DomainError,
   declarePremiseBreach,
   decomposeTask,
   getRegistrant,
   getTask,
-  HUMAN_WORKER_ID,
   humanDecomposeTask,
   joinHistory,
   logDecision,
@@ -23,7 +23,13 @@ import {
   type Task,
   taskHistoryRows,
 } from "../src/tasks.js";
+
 import { listLog } from "../src/triage.js";
+import {
+  BOARD_WORKER_ID,
+  HUMAN_WORKER_ID,
+} from "../src/worker-id.js";
+
 import { HUMAN_WEBUI } from "./harness.js";
 
 const at = new Date("2026-09-15T00:00:00.000Z");

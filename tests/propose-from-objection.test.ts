@@ -1,11 +1,13 @@
 import { expect, it } from "vitest";
 import type { Cause } from "../src/cause.js";
 import { type Db, openDb } from "../src/db.js";
+import { DomainError } from "../src/domain-error.js";
 import { appendEvent, listEvents, objectionBundles } from "../src/events.js";
 import { listMemoryEntries } from "../src/memory.js";
 import { proposeFromObjection } from "../src/retrospective.js";
-import { BOARD_WORKER_ID, DomainError, HUMAN_WORKER_ID, listChildren, logDecision, registerTask, type Task, type TaskType } from "../src/tasks.js";
+import { listChildren, logDecision, registerTask, type Task, type TaskType } from "../src/tasks.js";
 import { commitTriage, raiseObjection, startTriage } from "../src/triage.js";
+import { BOARD_WORKER_ID, HUMAN_WORKER_ID } from "../src/worker-id.js";
 import { bundledObjection, decomposedChild } from "./harness.js";
 
 /** RCA の起草 verb `propose_from_objection` の門(issue #1077)と成功経路(issue #1092)のドメイン層。

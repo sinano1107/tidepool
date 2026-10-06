@@ -2,8 +2,9 @@ import { afterEach, expect, it } from "vitest";
 import { buildAllocationReviewInput } from "../src/allocation-review.js";
 import { RowRefusalError } from "../src/cli-auth.js";
 import { appendEvent } from "../src/events.js";
-import { completeTask, getTask, HUMAN_WORKER_ID } from "../src/tasks.js";
+import { completeTask, getTask } from "../src/tasks.js";
 import { reportProviderUsage } from "../src/throttle.js";
+import { HUMAN_WORKER_ID } from "../src/worker-id.js";
 import { FakeAllocationClient } from "./fakes.js";
 import { api, bootTidepool, FULL_HANDOFF, HOUR, mcpClient, nextPoll, QUIET_EXIT, questions, WORKER_SPAWNED as spawned, type Tidepool } from "./harness.js";
 

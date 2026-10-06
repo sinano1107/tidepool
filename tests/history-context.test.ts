@@ -1,5 +1,6 @@
 import { afterEach, expect, it } from "vitest";
-import { BOARD_WORKER_ID, registerTask } from "../src/tasks.js";
+import { registerTask } from "../src/tasks.js";
+import { BOARD_WORKER_ID } from "../src/worker-id.js";
 import {
   api,
   bootTidepool,

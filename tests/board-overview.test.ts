@@ -1,16 +1,18 @@
 import { describe, expect, it } from "vitest";
 import { openDb } from "../src/db.js";
 import {
-  BOARD_WORKER_ID,
   cancelTaskDirectly,
   completeTask,
   getTask,
-  HUMAN_WORKER_ID,
   listBoard,
   pickupTask,
   presentTask,
   registerTask,
 } from "../src/tasks.js";
+import {
+  BOARD_WORKER_ID,
+  HUMAN_WORKER_ID,
+} from "../src/worker-id.js";
 import { HUMAN_WEBUI } from "./harness.js";
 
 describe("listBoard は進捗俯瞰に必要な形を一望できる(issue #16)", () => {

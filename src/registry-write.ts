@@ -1,11 +1,9 @@
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { git } from "./git.js";
 import { authedGit, type GitHubAuth, originRepo } from "./github-auth.js";
-// biome-ignore lint/suspicious/noImportCycles: ADR 0204 の台帳 —— 既存の循環、解いたら消す
 import { REGISTRY_BRANCH, type RegistrySource, refreshRegistry, registryRef } from "./registry.js";
-// biome-ignore lint/suspicious/noImportCycles: ADR 0204 の台帳 —— 既存の循環、解いたら消す
-import { git } from "./workspace.js";
 
 /** ADR 0052 決定4: registry 書き込みの入口の fetch は致命 — fetch できなければ
  *  push もできず、push 成功が「効いた」の定義である以上、その編集は最初から

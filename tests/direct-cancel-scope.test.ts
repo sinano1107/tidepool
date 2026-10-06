@@ -1,13 +1,13 @@
 import { afterEach, expect, it } from "vitest";
 import { warnCliAuthExpiry } from "../src/cli-auth.js";
 import { type Db, openDb } from "../src/db.js";
+import { DomainError } from "../src/domain-error.js";
 import { listEvents } from "../src/events.js";
 import { createBehaviorCandidate, proposeMemoryChange } from "../src/memory.js";
 import { registerMetaReview } from "../src/meta-review.js";
 import {
   cancelTaskDirectly,
   completeTask,
-  DomainError,
   decomposeTask,
   editTask,
   getTask,

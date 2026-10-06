@@ -2,7 +2,7 @@ import { writeFileSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
-import { BOARD_WORKER_ID } from "../src/tasks.js";
+import { BOARD_WORKER_ID } from "../src/worker-id.js";
 import { quarantineWorkspace, type WorkspaceConfig } from "../src/workspace.js";
 import {
   api,

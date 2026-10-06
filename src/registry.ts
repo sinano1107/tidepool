@@ -13,8 +13,7 @@ import {
   originRepo,
 } from "./github-auth.js";
 import { PROVIDER_VALUES, type Provider } from "./provider.js";
-// biome-ignore lint/suspicious/noImportCycles: ADR 0204 の台帳 —— 既存の循環、解いたら消す
-import { isNonAgentWorkerId } from "./tasks.js";
+import { isNonAgentWorkerId } from "./worker-id.js";
 
 /** An agent definition file: `agents/<name>.md` in the registry clone.
  *  Frontmatter carries the machine-stamped version and the authority profile
@@ -723,7 +722,7 @@ export interface RegistryReachability {
 }
 export type RegistryReachabilityCheck = () => Promise<RegistryReachability>;
 
-// stderr piped (not inherited), same as workspace.ts's `git()`: git narrates a
+// stderr piped (not inherited), same as git.ts's `git()`: git narrates a
 // missing ref on stderr, and the board's console is not the place for it — the
 // message still rides the thrown error for callers that want it (agentBodyAtCommit
 // swallows it by design).

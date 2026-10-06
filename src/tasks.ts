@@ -1,17 +1,18 @@
 import { randomUUID } from "node:crypto";
 import type { Db } from "./db.js";
 import { DEFAULT_AUDITOR_NAME } from "./defaults.js";
+
+import { DomainError } from "./domain-error.js";
+
 import { appendEvent, type EventOrigin, type EventPayload, getEvent, latestEventOfTask, type TaskScopedPayload, taskDecisionLog } from "./events.js";
 // biome-ignore lint/suspicious/noImportCycles: ADR 0204 の台帳 —— 既存の循環、解いたら消す
 import { type AddTierAmendment, assertKnownTier, type ExecutionSettingRow, liveTierId, PRIORITIES, type Priority, proposalTierNames, type RoutingRowChange, type Tier, type TierId } from "./execution-setting.js";
 import type { GitHubClient, Issue, IssueRef } from "./github.js";
 import type { MemoryAmendment } from "./memory.js";
 import type { MergeDial, RosterAgent } from "./registry.js";
+import { BOARD_WORKER_ID, HUMAN_WORKER_ID, NON_AGENT_WORKER_IDS } from "./worker-id.js";
 
 export { DEFAULT_AUDITOR_NAME };
-
-/** Worker id attributed to bare (non ?task=) sessions, e.g. the JSON API. */
-export const HUMAN_WORKER_ID = "human";
 
 /** The one roster entry `human` gets (issue #43 / ADR 0014): human carries
  *  no registry definition, but CONTEXT.md's Roster still surfaces it as a
@@ -36,18 +37,6 @@ export const HUMAN_ROSTER_AGENT: RosterAgent = {
     "delegate to a human — runs outside the slot in their own task list; " +
     "human attention is scarce, delegate only what genuinely needs a human",
 };
-
-/** Worker id the board acts under when it enforces its own rules (issue #8):
- *  the tree rule's failures are the board's to report, never pinned on the
- *  agent. Also the sole registrant allowed a 1-choice confirmation question
- *  (issue #21) — a plain agent question always carries 2-4 choices. */
-export const BOARD_WORKER_ID = "tidepool";
-
-/** Worker ids that are not agents (the human and the board). Add a new
- *  non-agent id here and every "is this an agent?" check follows. */
-const NON_AGENT_WORKER_IDS: ReadonlySet<string> = new Set([HUMAN_WORKER_ID, BOARD_WORKER_ID]);
-
-export const isNonAgentWorkerId = (id: string): boolean => NON_AGENT_WORKER_IDS.has(id);
 
 /** Fallback for the board's Auditor pointer (CONTEXT.md) when no
  *  configuration overrides it — the pointer "常に値を持ち「未設定」という状態
@@ -835,8 +824,6 @@ export function splitHandoffMarkdown(doc: string): Array<{ heading: string; body
   }
   return sections.map((s) => ({ heading: s.heading, body: s.body.join("\n").trim() }));
 }
-
-export class DomainError extends Error {}
 
 /** Hand the queue head to a worker: in_progress + event, atomically. `assignee`
  *  is never touched here (ADR 0012 / issue #36): slot is capacity, not

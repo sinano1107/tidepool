@@ -1,5 +1,5 @@
 import { afterEach, expect, it } from "vitest";
-import { HUMAN_WORKER_ID } from "../src/tasks.js";
+import { HUMAN_WORKER_ID } from "../src/worker-id.js";
 import {
   api,
   bootTidepool,

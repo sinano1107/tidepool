@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import { openDb } from "../src/db.js";
+import { DomainError } from "../src/domain-error.js";
 import { appendEvent, getEvent, listEvents, type TaskScopedPayload } from "../src/events.js";
 import {
   approvedMemoryEntries,
@@ -22,7 +23,7 @@ import {
 } from "../src/memory.js";
 import { projectAndPersist } from "../src/precedent.js";
 import { attributeObjections, refireRetrospectiveCalls } from "../src/retrospective.js";
-import { DomainError, logDecision, registerTask } from "../src/tasks.js";
+import { logDecision, registerTask } from "../src/tasks.js";
 import { commitTriage, raiseObjection, startTriage } from "../src/triage.js";
 import { FakeAttributionClient, FakeBehaviorDraftClient, noRetrospectiveCalls } from "./fakes.js";
 import { FIXTURE_SPAWNED_EVENT_ID, FIXTURE_TASK, HUMAN_WEBUI, QUIET_EXIT, seedFixtureBoard, WORKER_SPAWNED, writeFixtureTranscript } from "./harness.js";

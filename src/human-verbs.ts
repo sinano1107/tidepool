@@ -6,6 +6,7 @@ import { type CliAuthCheck, type ModelProbe, quarantineBoardCallRefusal, quarant
 import type { Clock } from "./clock.js";
 import type { ContainmentCheck } from "./containment.js";
 import type { Db } from "./db.js";
+import { DomainError } from "./domain-error.js";
 import type { DraftClient } from "./draft.js";
 import { appendEvent, type EventOrigin } from "./events.js";
 import {
@@ -44,12 +45,10 @@ import {
   type ChildSpec,
   cancelTaskDirectly,
   completeTask,
-  DomainError,
   type EditTaskInput,
   editTask,
   getTask,
   type HandoffDoc,
-  HUMAN_WORKER_ID,
   humanDecomposeTask,
   latestChild,
   logDecision,
@@ -67,6 +66,7 @@ import {
 import type { FailedTeardownCheck } from "./teardown.js";
 import { stageFrontInsert, triageActivity } from "./triage.js";
 import type { PendingReclaim } from "./watchdog.js";
+import { HUMAN_WORKER_ID } from "./worker-id.js";
 import {
   buildWorkspaceResolver,
   mergeTaskToProtected,

@@ -19,7 +19,8 @@ import {
 } from "./teardown.js";
 import type { TranscriptFailure } from "./transcript-store.js";
 import type { WorkerAdapter, WorkerExit } from "./worker.js";
-import { BOARD_WORKER_ID, buildWorkspaceResolver, type WorkspaceConfig } from "./workspace.js";
+import { BOARD_WORKER_ID } from "./worker-id.js";
+import { buildWorkspaceResolver, type WorkspaceConfig } from "./workspace.js";
 
 export const WATCHDOG_TICK = 60 * 1000;
 

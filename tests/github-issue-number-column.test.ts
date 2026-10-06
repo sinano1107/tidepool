@@ -1,6 +1,7 @@
 import { expect, it } from "vitest";
 import { openDb } from "../src/db.js";
-import { DomainError, getTask, registerTask } from "../src/tasks.js";
+import { DomainError } from "../src/domain-error.js";
+import { getTask, registerTask } from "../src/tasks.js";
 import { HUMAN_WEBUI } from "./harness.js";
 
 it("github_issue_number は登録時に指定した値のまま永続化される(issue #49: issue参照タスクの参照フィールド)", () => {

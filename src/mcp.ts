@@ -4,6 +4,7 @@ import { z } from "zod";
 import type { AgentAdmin } from "./agent-create.js";
 import type { Clock } from "./clock.js";
 import type { Db } from "./db.js";
+import { DomainError } from "./domain-error.js";
 import { PRIORITY_FIELD_DESCRIPTION, tierFieldDescriptions } from "./execution-setting.js";
 import type { GitHubClient } from "./github.js";
 import type { GitHubAuth } from "./github-auth.js";
@@ -47,7 +48,6 @@ import {
   contentSourceFor,
   continueDecomposition,
   DEFAULT_AUDITOR_NAME,
-  DomainError,
   declarePremiseBreach,
   decomposeTask,
   describeHandoffFields,
@@ -56,7 +56,6 @@ import {
   HANDOFF_FIELDS,
   type HistoryRow,
   HUMAN_ROSTER_AGENT,
-  HUMAN_WORKER_ID,
   joinHistory,
   logDecision,
   redecompose,
@@ -65,6 +64,7 @@ import {
   taskHistoryRows,
 } from "./tasks.js";
 import { markTeardown, runTeardown, type TeardownDeps, teardownStep } from "./teardown.js";
+import { HUMAN_WORKER_ID } from "./worker-id.js";
 import {
   buildWorkspaceResolver,
   completionTreeGateApplies,

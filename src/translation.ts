@@ -9,7 +9,7 @@ import { getCachedTranslation, hashSource, saveTranslation } from "./translation
 /** Raised when a translation request names a target that doesn't resolve to
  *  translatable source text — an unknown event id, an event that isn't a
  *  decision-log entry, a completion report with no result text (issue #47).
- *  Deliberately its own type rather than tasks.ts's `DomainError`: this is a
+ *  Deliberately its own type rather than domain-error.ts's `DomainError`: this is a
  *  "no such resource" failure (mapped to 404 by the API layer), not the
  *  in-authority-but-rejected shape `DomainError` covers (400/409 there). */
 export class TranslationTargetError extends Error {}

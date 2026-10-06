@@ -1,10 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import { agentNeedsHuman, quarantineAgent } from "../src/agent.js";
 import { openDb } from "../src/db.js";
+import { DomainError } from "../src/domain-error.js";
 import { listEvents } from "../src/events.js";
 import { submitAnswer } from "../src/human-verbs.js";
 import { openQuarantineQuestion, QUARANTINES, type QuarantineChecks, quarantineStops, registerQuarantine } from "../src/quarantine.js";
-import { DomainError, getTask, nextSlotTask, registerTask } from "../src/tasks.js";
+import { getTask, nextSlotTask, registerTask } from "../src/tasks.js";
 import { quarantineWorkspace, workspaceNeedsHuman } from "../src/workspace.js";
 import { unusedLanding } from "./fakes.js";
 import { HUMAN_WEBUI } from "./harness.js";

@@ -1,7 +1,8 @@
 import { afterEach, expect, it } from "vitest";
 import { type Db, openDb } from "../src/db.js";
-import { answerQuestion, BOARD_WORKER_ID, escalateTask, getTask, humanDecomposeTask, logDecision, registerTask, type Task } from "../src/tasks.js";
+import { answerQuestion, escalateTask, getTask, humanDecomposeTask, logDecision, registerTask, type Task } from "../src/tasks.js";
 import { commitTriage, raiseObjection, startTriage } from "../src/triage.js";
+import { BOARD_WORKER_ID } from "../src/worker-id.js";
 import { api, bootTidepool, HOUR, HUMAN_WEBUI, mcpClient, queueWork, registerWork, type Tidepool } from "./harness.js";
 
 let t: Tidepool;

@@ -43,10 +43,8 @@ import { startServer } from "../src/server.js";
 import { implicitTaskExecutionCandidates } from "../src/server-options.js";
 import {
   answerQuestion,
-  BOARD_WORKER_ID,
   decomposeTask,
   getTask,
-  HUMAN_WORKER_ID,
   humanDecomposeTask,
   listChildren,
   type RegisterTaskInput,
@@ -57,6 +55,10 @@ import { TranscriptStore } from "../src/transcript-store.js";
 import type { TranslationClient } from "../src/translate.js";
 import type { WatchdogConfig } from "../src/watchdog.js";
 import type { WorkerExit } from "../src/worker.js";
+import {
+  BOARD_WORKER_ID,
+  HUMAN_WORKER_ID,
+} from "../src/worker-id.js";
 import { UnknownWorkspaceError, type WorkspaceConfig } from "../src/workspace.js";
 import type { WorkspaceAdmin } from "../src/workspace-create.js";
 import {
@@ -463,7 +465,7 @@ export function quarantineTestAgent(db: Db, name: string): void {
 }
 
 /** A real git checkout for tree-rule/branch-discipline/quarantine tests —
- *  stderr captured, not inherited, same as workspace.ts's own `git`. */
+ *  stderr captured, not inherited, same as src/git.ts's `git`. */
 export function git(dir: string, ...args: string[]): string {
   return execFileSync(
     "git",

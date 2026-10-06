@@ -1,8 +1,9 @@
 import { afterEach, expect, it } from "vitest";
 import { openDb } from "../src/db.js";
+import { DomainError } from "../src/domain-error.js";
 import { listEvents } from "../src/events.js";
 import { submitAnswer } from "../src/human-verbs.js";
-import { answerQuestion, DomainError, getTask, type RegisterTaskInput, registerTask } from "../src/tasks.js";
+import { answerQuestion, getTask, type RegisterTaskInput, registerTask } from "../src/tasks.js";
 import { unusedLanding } from "./fakes.js";
 import { api, bootTidepool, HOUR, HUMAN_WEBUI, mcpClient, registerWork, type Tidepool } from "./harness.js";
 

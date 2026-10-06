@@ -2,7 +2,8 @@ import { z } from "zod";
 import type { Db } from "./db.js";
 import { appendEvent, type EventKind, type EventOrigin, listEventsOfKinds } from "./events.js";
 import { type ListAgentTiers, readExecutionSettings, settleStaleProposals } from "./execution-setting.js";
-import { BOARD_WORKER_ID, HUMAN_WORKER_ID, registerTask } from "./tasks.js";
+import { registerTask } from "./tasks.js";
+import { BOARD_WORKER_ID, HUMAN_WORKER_ID } from "./worker-id.js";
 
 /** 主題 memory の meta-review の接続で worker の memory verb を置き換える専用 verb(ADR 0122 決定2)。 */
 export const MEMORY_META_REVIEW_VERBS = [

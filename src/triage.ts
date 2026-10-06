@@ -14,15 +14,17 @@ import {
 } from "./events.js";
 import type { GatedJudgment } from "./retrospective.js";
 import {
-  BOARD_WORKER_ID,
   type BoardTask,
   getTask,
-  HUMAN_WORKER_ID,
   listBoard,
   moveTask,
   registerTask,
   type Task,
 } from "./tasks.js";
+import {
+  BOARD_WORKER_ID,
+  HUMAN_WORKER_ID,
+} from "./worker-id.js";
 
 export class TriageError extends Error {}
 

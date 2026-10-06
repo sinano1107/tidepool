@@ -24,7 +24,8 @@ import {
 } from "../src/memory.js";
 import { type MetaReviewSubject, registerMetaReview } from "../src/meta-review.js";
 import { EXTRACTOR_VERSION } from "../src/precedent.js";
-import { answerQuestion, getTask, HUMAN_WORKER_ID, logDecision, type MemoryProposal, registerTask } from "../src/tasks.js";
+import { answerQuestion, getTask, logDecision, type MemoryProposal, registerTask } from "../src/tasks.js";
+import { HUMAN_WORKER_ID } from "../src/worker-id.js";
 import { bundledObjection, failureQuestion, HUMAN_WEBUI } from "./harness.js";
 
 /** memory meta-review の材料の節(ADR 0180 決定1・2)のドメイン層。spawn の prompt に入ることは両 adapter のテストが言う。 */

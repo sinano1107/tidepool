@@ -9,8 +9,9 @@ import {
   registerLocalMergeQuestion,
   registerPrPromotionFailureQuestion,
 } from "../src/landing.js";
-import { BOARD_WORKER_ID, completeTask, getTask, listBoard, recordPrOpened, registerTask } from "../src/tasks.js";
+import { completeTask, getTask, listBoard, recordPrOpened, registerTask } from "../src/tasks.js";
 import { raiseObjection } from "../src/triage.js";
+import { BOARD_WORKER_ID } from "../src/worker-id.js";
 import {
   prepareWorkspaceAtPickup,
   quarantineWorkspace,
