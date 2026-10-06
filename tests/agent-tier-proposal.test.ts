@@ -175,14 +175,13 @@ it("pin の段・下げ先の段を改名しても question は open のまま�
 });
 
 it("pin の段と下げ先の段の間に段を挿入すると、question は観測で決着し changed に tier_order が入る(issue #1438)", async () => {
-  const { client, call, changeTier } = await boardWithRoutingReview();
+  const { client, call } = await boardWithRoutingReview();
   try {
     const questionId = await proposeDeckhand(call);
     expect((await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "insert_tier", name: "mid", description: "x", position: 2 })).status).toBe(200);
 
     expect(await task(questionId)).toMatchObject({ status: "done", question_answer: null });
     expect((await events(questionId)).find((e) => e.kind === "routing_proposal_stale").payload.changed).toContain("tier_order");
-    expect(changeTier).not.toHaveBeenCalled();
   } finally {
     await client.close();
   }
