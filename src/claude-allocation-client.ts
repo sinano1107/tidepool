@@ -61,14 +61,13 @@ export class ClaudeAllocationClient implements AllocationClient {
 
   async judge(
     input: AllocationReviewInput,
-    setting: Pick<ExecutionSettingRow, "model" | "effort">,
+    setting: Pick<ExecutionSettingRow, "provider" | "model" | "effort">,
   ): Promise<AllocationJudgment> {
     return judgmentSchema.parse(
       await runOneShotJsonPrompt(
         this.exec,
         buildPrompt(input),
-        setting.model,
-        setting.effort,
+        setting,
         "allocation review",
       ),
     );

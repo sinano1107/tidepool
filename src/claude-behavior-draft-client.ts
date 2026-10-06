@@ -44,9 +44,9 @@ export class ClaudeBehaviorDraftClient implements BehaviorDraftClient {
     this.exec = options.exec;
   }
 
-  async draft(input: BehaviorDraftInput, setting: Pick<ExecutionSettingRow, "model" | "effort">): Promise<BehaviorDraft> {
+  async draft(input: BehaviorDraftInput, setting: Pick<ExecutionSettingRow, "provider" | "model" | "effort">): Promise<BehaviorDraft> {
     return draftSchema.parse(
-      await runOneShotJsonPrompt(this.exec, buildPrompt(input), setting.model, setting.effort, "behavior draft"),
+      await runOneShotJsonPrompt(this.exec, buildPrompt(input), setting, "behavior draft"),
     );
   }
 }

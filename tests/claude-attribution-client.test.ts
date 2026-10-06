@@ -21,7 +21,7 @@ it("judge は表の行の model / effort をピン留めし、空のツール面
     },
   });
 
-  await expect(client.judge(input, { model: "fable", effort: "high" })).resolves.toEqual(judgment);
+  await expect(client.judge(input, { provider: "anthropic", model: "fable", effort: "high" })).resolves.toEqual(judgment);
 
   const { args, env } = calls[0]!;
   const argLine = args.join(" ");
@@ -39,12 +39,12 @@ it("語彙の外の cause や JSON でない応答は reject する(未検証の
   const outOfVocabulary = new ClaudeAttributionClient({
     exec: async () => JSON.stringify({ result: JSON.stringify({ cause: "laziness", evidence: "e" }) }),
   });
-  await expect(outOfVocabulary.judge(input, { model: "fable", effort: "high" })).rejects.toThrow();
+  await expect(outOfVocabulary.judge(input, { provider: "anthropic", model: "fable", effort: "high" })).rejects.toThrow();
 
   const prose = new ClaudeAttributionClient({
     exec: async () => JSON.stringify({ result: "looks like a preference to me" }),
   });
-  await expect(prose.judge(input, { model: "fable", effort: "high" })).rejects.toThrow();
+  await expect(prose.judge(input, { provider: "anthropic", model: "fable", effort: "high" })).rejects.toThrow();
 });
 
 it("prompt は cause の memory と、entries を読んだ記憶から名指すことを言い、判定は entries を運ぶ(ADR 0166 決定3)", async () => {
@@ -58,7 +58,7 @@ it("prompt は cause の memory と、entries を読んだ記憶から名指す�
   });
 
   await expect(
-    client.judge({ ...input, memory_read: [{ id: 3, kind: "behavior", title: "Squash", text: "Squash before merge." }] }, { model: "fable", effort: "high" }),
+    client.judge({ ...input, memory_read: [{ id: 3, kind: "behavior", title: "Squash", text: "Squash before merge." }] }, { provider: "anthropic", model: "fable", effort: "high" }),
   ).resolves.toEqual(memory);
 
   expect(prompts[0]).toContain("memory is when a memory entry the worker read before the decision, and followed, was itself wrong");
@@ -71,5 +71,5 @@ it("memory 以外の判定が entries を null で返しても判定は失われ
     exec: async () => JSON.stringify({ result: JSON.stringify({ ...judgment, entries: null }) }),
   });
 
-  await expect(client.judge(input, { model: "fable", effort: "high" })).resolves.toEqual(judgment);
+  await expect(client.judge(input, { provider: "anthropic", model: "fable", effort: "high" })).resolves.toEqual(judgment);
 });

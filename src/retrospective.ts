@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { type AllocationClient, type AllocationJudgment, type AllocationTarget, allocationInput, allocationTargets } from "./allocation-review.js";
 import type { Cause } from "./cause.js";
+import { quarantineBoardCallRefusal } from "./cli-auth.js";
 import type { Db } from "./db.js";
 import {
   type Attribution,
@@ -55,7 +56,7 @@ export type GatedJudgment = Pick<Extract<EventPayload, { kind: "objection_attrib
 export interface AttributionClient {
   judge(
     input: AttributionInput,
-    setting: Pick<ExecutionSettingRow, "model" | "effort">,
+    setting: Pick<ExecutionSettingRow, "provider" | "model" | "effort">,
   ): Promise<AttributionJudgment>;
 }
 
@@ -75,7 +76,7 @@ export interface BehaviorDraft {
 
 /** Behavior candidate 起草の Board call の seam(issue #617)。AttributionClient と同型。 */
 export interface BehaviorDraftClient {
-  draft(input: BehaviorDraftInput, setting: Pick<ExecutionSettingRow, "model" | "effort">): Promise<BehaviorDraft>;
+  draft(input: BehaviorDraftInput, setting: Pick<ExecutionSettingRow, "provider" | "model" | "effort">): Promise<BehaviorDraft>;
 }
 
 /** 振り返り Board call(帰責・起草・配分評価)が受け取るもの。合成 root が一度だけ組み、scheduler(poll の sweep)と triage close に
@@ -184,7 +185,7 @@ function refireDue(db: Db, key: RefireKey, now: Date): boolean {
 /** commit の前半(spec #563「commit の流れ」): open session の異議されたエントリを
  *  1度だけ集め、Board call を並列に問う。transaction の外で待ち、結果の map を持って
  *  従来の transaction に入る。撃てなかった・撃って失敗した entry は map に載らず(判断ではない)、
- *  失敗だけが `objection_attribution_failed`(round = initial)に残る。初回は撃ち直さない ——
+ *  失敗だけが `objection_attribution_failed`(round = initial)に残る(行の拒否は行の Quarantine に回し失敗に数えない、ADR 0202)。初回は撃ち直さない ——
  *  その entry は未帰責のまま RCA に倒れ、第2回が拾う(ADR 0168 決定1・2)。ここからは投げない ——
  *  帰責の障害は commit を止めない。 */
 export async function attributeObjections(
@@ -210,6 +211,7 @@ export async function attributeObjections(
       try {
         judgments.set(o.entry.id, gate(await call.client.judge(input, call.setting), input.memory_read));
       } catch (err) {
+        if (quarantineBoardCallRefusal(db, err, "attribution", o.entry.task_id, now)) return;
         const payload = {
           kind: "objection_attribution_failed" as const,
           entry_id: o.entry.id,
@@ -259,7 +261,7 @@ function attributionStates(db: Db): Array<{ task_id: string } & ({ awaiting: Sec
 
 /** 帰責の第2回を1異議群ぶん撃つ: RCA の findings を証拠にした判断(`uncertain` も判断として)を
  *  その異議群を名指す新しい event(round = after_rca)として追記し、起草へ進む(ADR 0120 決定1(b)(c))。
- *  撃てなかったら何も書かず、撃って失敗したら `objection_attribution_failed` だけを残す(ADR 0164 決定3・6)。 */
+ *  撃てなかったら何も書かず、撃って失敗したら `objection_attribution_failed` だけを残す(ADR 0164 決定3・6。行の拒否は除く、ADR 0202)。 */
 async function attributeSecondRound(db: Db, deps: RetrospectiveCallDeps, objectedId: string, source: SecondRoundSource, now: Date): Promise<void> {
   await singleFlight(db, `after_rca:${bundleName(source)}`, async () => {
     if (!refireDue(db, { refire: "second_round", target: bundleName(source) }, now)) return;
@@ -270,6 +272,7 @@ async function attributeSecondRound(db: Db, deps: RetrospectiveCallDeps, objecte
     try {
       judgment = gate(await call.client.judge(input, call.setting), input.memory_read);
     } catch (err) {
+      if (quarantineBoardCallRefusal(db, err, "attribution", objectedId, now)) return;
       const payload = {
         kind: "objection_attribution_failed" as const,
         entry_id: source.entry_id,
@@ -301,7 +304,7 @@ const secondRoundInput = (db: Db, objectedId: string, attribution: SecondRoundSo
 const fireAndForget = (fired: Promise<void>, target: string) => void fired.catch((err) => console.error(`[retrospective] ${target}: ${String(err)}`));
 
 /** 配分評価を1 review ぶん撃つ(ADR 0172): 判断が返れば注釈を被レビュー task に載せ、撃てなかったら何も書かず、
- *  撃って失敗したら `allocation_review_failed` だけを残す。入力が組めないのは撃って失敗したのではないので投げる。 */
+ *  撃って失敗したら `allocation_review_failed` だけを残す(行の拒否は除く、ADR 0202)。入力が組めないのは撃って失敗したのではないので投げる。 */
 async function reviewAllocation(db: Db, deps: RetrospectiveCallDeps, target: AllocationTarget, now: Date): Promise<void> {
   await singleFlight(db, `allocation:${target.completed_event_id}`, async () => {
     if (!refireDue(db, { refire: "allocation", target: target.completed_event_id }, now)) return;
@@ -314,6 +317,7 @@ async function reviewAllocation(db: Db, deps: RetrospectiveCallDeps, target: All
     try {
       judgment = await call.client.judge(input, call.setting);
     } catch (err) {
+      if (quarantineBoardCallRefusal(db, err, "allocation review", reviewed_task_id, now)) return;
       record({ kind: "allocation_review_failed", review_completed_event_id: target.completed_event_id, review_task_id, reviewed_task_id, reason: message(err) });
       return;
     }
@@ -442,7 +446,7 @@ function memoryRead(db: Db, entry: DecisionLogEntry): AttributionInput["memory_r
  *  人間エントリ・起草 client の無い盤面・宛先の agent がいない起草(文面の書き手が人間か盤面の
  *  `task_ambiguity` / `missing_information`、ADR 0164 決定2)・workspace の無い task は何もしない。宛先は cause から導出し
  *  (ADR 0115 決定4)、Board call の `addressee` は `preference` だけが読む。撃てなかったら何も書かず、
- *  撃って失敗したら `memory_draft_failed` を残す(ADR 0164 決定3)。poll の sweep が fire-and-forget で撃つ
+ *  撃って失敗したら `memory_draft_failed` を残す(ADR 0164 決定3。行の拒否は除く、ADR 0202)。poll の sweep が fire-and-forget で撃つ
  *  (第2回は帰責の追記の直後、ADR 0169)ので poll を止めない。 */
 async function draftBehaviorCandidate(db: Db, deps: RetrospectiveCallDeps, attribution: Attribution, now: Date): Promise<void> {
   const { cause, round, entry_id } = attribution;
@@ -483,6 +487,7 @@ async function draftBehaviorCandidate(db: Db, deps: RetrospectiveCallDeps, attri
     try {
       draft = await call.client.draft({ ...input, index }, call.setting);
     } catch (err) {
+      if (quarantineBoardCallRefusal(db, err, "memory draft", taskId, now)) return;
       appendEvent(db, {
         taskId,
         workerId: BOARD_WORKER_ID,

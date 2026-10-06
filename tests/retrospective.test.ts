@@ -1,5 +1,6 @@
 import { afterEach, expect, it } from "vitest";
 import type { Cause } from "../src/cause.js";
+import { RowRefusalError } from "../src/cli-auth.js";
 import { openDb } from "../src/db.js";
 import { appendEvent, listEvents } from "../src/events.js";
 import { buildMemoryInjection, readMemory, recordKnowledge, recordMemoryInjection, searchMemory } from "../src/memory.js";
@@ -28,6 +29,7 @@ import {
   object,
   objectedForDraft,
   propose,
+  questions,
   registerWork,
   rememberedNote,
   runNow,
@@ -160,6 +162,45 @@ it("初回の Board call の失敗は帰責を書かず round initial の失敗 
     "repair: flaky",
   ]);
   expect(kids.find((x: any) => x.title === "rca (self): flaky").purpose).not.toContain("--dry");
+});
+
+/** 行の拒否(ADR 0202): 判定の段の最安の行(fable)が Board call で断られた証拠。 */
+const refused = (model = "claude-fable-5-1") => new RowRefusalError("anthropic", model, "api_404");
+
+/** 盤面の行の Quarantine の question —— 題と、理由(purpose の最初の文)。 */
+const rowQuarantines = async (t: Tidepool) =>
+  (await questions(t)).filter((q: any) => q.title.startsWith("execution-setting row")).map((q: any) => [q.title, q.purpose.split(". ")[0]]);
+
+it("初回の帰責が行の拒否で断られると、並列の entry がそろって断られても行の Quarantine が1枚だけ立ち、失敗 event は残らず、commit は RCA を立てる(ADR 0202)", async () => {
+  const attributionClient = new FakeAttributionClient();
+  t = await bootTidepool({ attributionClient });
+  const { task, entries } = await objectedWork(t, "refused", ["named the flag --dry", "skipped the fixtures"]);
+  for (const e of entries) attributionClient.scriptJudgment(e.id, refused());
+  await object(t, entries[0].id, "call it --dry-run");
+  await object(t, entries[1].id, "bring the fixtures back");
+
+  const res = await api(t.baseUrl, "POST", "/api/triage/close");
+
+  expect(res.json.outcome).toBe("closed_now");
+  expect(await rowQuarantines(t)).toEqual([
+    ["execution-setting row anthropic / claude-fable-5-1 cannot run on this board", `The attribution Board call for task ${task.id} ended with API error 404 for this model id`],
+  ]);
+  expect(await attributions(t, task.id)).toEqual([]);
+  expect(await attributionsFailed(t, task.id)).toEqual([]);
+  expect((await children(t, task.id)).map((x: any) => x.title).sort()).toEqual(["rca (auditor): refused", "rca (self): refused", "repair: refused"]);
+});
+
+it("断られた行が表から消えていれば、行の Quarantine は立たず失敗 event も残らない(ADR 0202 決定2)", async () => {
+  const attributionClient = new FakeAttributionClient();
+  t = await bootTidepool({ attributionClient });
+  const { task, entries } = await objectedWork(t, "gone", ["picked the quick hack"]);
+  attributionClient.scriptJudgment(entries[0].id, refused("claude-retired-1"));
+  await object(t, entries[0].id, "do it properly");
+
+  await api(t.baseUrl, "POST", "/api/triage/close");
+
+  expect(await rowQuarantines(t)).toEqual([]);
+  expect(await attributionsFailed(t, task.id)).toEqual([]);
 });
 
 it("容器の前提が成り立たない間の commit は初回の Board call を撃たず、帰責も失敗 event も書かず、RCA が立つ", async () => {
@@ -751,6 +792,45 @@ it("第2回の帰責の失敗は after_rca を書かず失敗 event を残し、
   expect(await behaviors(t)).toEqual([
     expect.objectContaining({ addressee: t.worker.id, source: { kind: "event", ref: second.id }, author: { activity: "board", name: "tidepool" } }),
   ]);
+});
+
+it("第2回の帰責が行の拒否で断られると行の Quarantine が立ち失敗 event は残らず、次の poll は待たずに同じ段の次の行で撃って確定する(ADR 0202 決定3)", async () => {
+  const s = await objectedForDraft("refused-rca");
+  t = s.t;
+  const row = { provider: "anthropic", tier: "frontier", model: "claude-opus-5-5", effort: "max", price_in: 50, price_out: 250 };
+  expect((await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "row", row })).status).toBe(200);
+  const { self, auditor } = await commit(t, s.task.id, "refused-rca");
+  s.attributionClient.scriptJudgment(s.entry.id, refused());
+
+  await settleRcaByWorker(t, self.id);
+  await settleRcaByWorker(t, auditor.id);
+
+  expect(await rowQuarantines(t)).toEqual([
+    ["execution-setting row anthropic / claude-fable-5-1 cannot run on this board", `The attribution Board call for task ${s.task.id} ended with API error 404 for this model id`],
+  ]);
+  expect(await attributionsFailed(t, s.task.id)).toEqual([]);
+  s.attributionClient.scriptJudgment(s.entry.id, { cause: "requirement_change", evidence: "the RCA decided it" });
+
+  await nextPoll(t);
+
+  expect((await attributions(t, s.task.id)).map((e: any) => [e.payload.round, e.payload.cause])).toEqual([
+    ["initial", "uncertain"],
+    ["after_rca", "requirement_change"],
+  ]);
+  expect(s.attributionClient.calls.map((c) => c.setting.model)).toEqual(["claude-fable-5-1", "claude-fable-5-1", "claude-opus-5-5"]);
+});
+
+it("起草が行の拒否で断られると行の Quarantine が立ち、memory_draft_failed は残らない(ADR 0202)", async () => {
+  const s = await objectedForDraft("refused draft", { initial: { cause: "preference", evidence: "taste" } });
+  t = s.t;
+  s.behaviorDraftClient.scriptDraft(s.entry.id, refused());
+
+  await commit(t, s.task.id, "refused draft");
+
+  expect(await rowQuarantines(t)).toEqual([
+    ["execution-setting row anthropic / claude-fable-5-1 cannot run on this board", `The memory draft Board call for task ${s.task.id} ended with API error 404 for this model id`],
+  ]);
+  expect(await draftsFailed(t, s.task.id)).toEqual([]);
 });
 
 it("起草の失敗から1時間未満の pickup 契機では撃たない", async () => {

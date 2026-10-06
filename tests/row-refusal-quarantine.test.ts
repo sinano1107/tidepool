@@ -1,14 +1,17 @@
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
+import { ClaudeDraftClient } from "../src/claude-draft-client.js";
+import { ClaudeTranslationClient } from "../src/claude-translation-client.js";
 import { ClaudeCodeWorker } from "../src/claude-worker.js";
 import type { ModelProbe, ModelProbeResult } from "../src/cli-auth.js";
 import type { CodexAppServerProbeResult } from "../src/codex-app-server.js";
+import { openDb } from "../src/db.js";
 import { applyExecutionSettingsChange, executionSettingsFor } from "../src/execution-setting.js";
 import { registerQuarantine, tableRowValue } from "../src/quarantine.js";
 import type { Provider } from "../src/registry.js";
 import { FakeContainerRuntime, healthyOpenai, healthyUsageText, recordingSpawn } from "./fakes.js";
-import { api, bootTidepool, HOUR, questions, queueWork, type Tidepool, tempDir } from "./harness.js";
+import { api, bootTidepool, HOUR, questions, queueWork, registerQuestion, registerWork, type Tidepool, tempDir } from "./harness.js";
 import { makeRegistry } from "./registry-fixture.js";
 
 /** 行の拒否(CONTEXT.md / ADR 0184、issue #1258)。Claude CLI を喋る Provider が spawn 時の行の
@@ -308,4 +311,57 @@ it("openai の行の question への回答は一覧を読み直し、id が載�
 
   models = [...MEASURED_OPENAI_MODELS, "gpt-6-astra"];
   expect((await answer()).status).toBe(200);
+});
+
+/** 非ゼロ終了の stdout に envelope を載せて reject する exec(Claude CLI の one-shot が断られたときの形)。 */
+const refusingExec = (envelope: string) => async (): Promise<string> => {
+  throw Object.assign(new Error("claude exited with status 1"), { stdout: envelope });
+};
+
+const rowQuarantines = async () =>
+  (await questions(t)).filter((q) => q.title.startsWith("execution-setting row")).map((q) => [q.title, q.purpose.split(". ")[0]]);
+
+const SONNET_ROW = "execution-setting row anthropic / claude-sonnet-5-5 cannot run on this board";
+
+it("AI 下書きの3用途は、表の行で撃った Board call が断られると行の Quarantine を立て、行が断られたと読める理由で今と同じ失敗応答を返す(ADR 0202)", async () => {
+  t = await bootTidepool({
+    // client の db は盤面と別にしてある —— 立った Quarantine で行が外れず、3用途がそれぞれ同じ行で断られる配線を通る
+    // (盤面と同じ db なら2つ目以降は撃つ前に「すべて Quarantine 中」で撃てなかったになる、ADR 0202 決定4)
+    draftClient: new ClaudeDraftClient({ db: openDb(":memory:"), exec: refusingExec(REFUSED_404) }),
+    workspace: { name: "tidepool", path: "/workspaces/tidepool" },
+  });
+  t.github.scriptIssue(189, { title: "issue", body: "body", comments: [] });
+  const human = await registerWork(t, "mount the sensor", undefined, undefined, "human");
+  const refusal = "the anthropic provider refused the execution-setting row anthropic / claude-sonnet-5-5: API error 404 for this model id";
+
+  const task = await api(t.baseUrl, "POST", "/api/tasks/draft", { dump: "draft this" });
+  const handoff = await api(t.baseUrl, "POST", `/api/tasks/${human.id}/complete/draft`, { dump: "mounted it" });
+  const issue = await api(t.baseUrl, "POST", "/api/tasks", { type: "work", github_issue_number: 189, workspace: "tidepool" });
+
+  expect([task, handoff, issue].map((r) => [r.status, r.json.error])).toEqual([
+    [503, refusal],
+    [503, refusal],
+    [503, `${refusal} See server logs for full details.`],
+  ]);
+  expect(await rowQuarantines()).toEqual([[SONNET_ROW, "The task draft Board call ended with API error 404 for this model id"]]);
+  const [question] = await questions(t);
+  expect((await events(question.id)).filter((e) => e.kind === "quarantine_refired").map((e) => e.payload.cause)).toEqual([
+    `The handoff draft Board call for task ${human.id} ended with API error 404 for this model id`,
+    "The issue inspection Board call ended with API error 404 for this model id",
+  ]);
+});
+
+it("表示時翻訳が 404 を受けても、行の Quarantine は立たない(ADR 0202 帰結)", async () => {
+  t = await bootTidepool({ translationClient: new ClaudeTranslationClient({ exec: refusingExec(REFUSED_404) }) });
+  const source = registerQuestion(t, {
+    title: "repair decision",
+    purpose: "Can the repair proceed?",
+    completion_criteria: "answered",
+    question: [{ title: "Proceed?", options: ["yes", "no"], recommendation: "yes" }],
+  });
+
+  const response = await api(t.baseUrl, "POST", "/api/translate", { type: "question", task_id: source.id });
+
+  expect(response.status).toBe(503);
+  expect(await rowQuarantines()).toEqual([]);
 });

@@ -22,7 +22,7 @@ it("draft は表の行の model / effort をピン留めし、空のツール面
     },
   });
 
-  await expect(client.draft(input, { model: "fable", effort: "high" })).resolves.toEqual(draft);
+  await expect(client.draft(input, { provider: "anthropic", model: "fable", effort: "high" })).resolves.toEqual(draft);
 
   const { args, env } = calls[0]!;
   const argLine = args.join(" ");
@@ -42,6 +42,6 @@ it("語彙の外の宛先・欠けた欄・JSON でない応答は reject する
     "spell it out, I guess",
   ]) {
     const client = new ClaudeBehaviorDraftClient({ exec: async () => JSON.stringify({ result }) });
-    await expect(client.draft(input, { model: "fable", effort: "high" })).rejects.toThrow();
+    await expect(client.draft(input, { provider: "anthropic", model: "fable", effort: "high" })).rejects.toThrow();
   }
 });

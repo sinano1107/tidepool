@@ -1,6 +1,7 @@
 import type { Db } from "./db.js";
-import type { RowRefusalCause } from "./events.js";
-import { registerQuarantine } from "./quarantine.js";
+import type { RowRefusal, RowRefusalCause } from "./events.js";
+import { loadExecutionSettingTable } from "./execution-setting.js";
+import { registerQuarantine, tableRowValue } from "./quarantine.js";
 import type { Provider } from "./registry.js";
 import { BOARD_WORKER_ID, registerTask } from "./tasks.js";
 
@@ -70,6 +71,50 @@ export function rowRefusalCause(value: unknown): RowRefusalCause | null {
   return null;
 }
 
+/** 行の拒否の証拠が Board call の理由に名指すもの(ADR 0184 決定3)。 */
+const ROW_REFUSAL_EVIDENCE: Record<RowRefusalCause, string> = {
+  api_404: "API error 404 for this model id",
+  cli_version_too_old: "API error code claude_code_version_too_old",
+};
+
+type RefusedRow = Pick<RowRefusal, "provider" | "model" | "cause">;
+
+/** 表の行で撃つ Board call の result envelope が行の拒否の証拠だったこと(ADR 0202 決定1)。`CliAuthError` と同じく
+ *  構造化された証拠で、呼び手は文言から推測しない。 */
+export class RowRefusalError extends Error {
+  constructor(
+    readonly provider: Provider,
+    readonly model: string,
+    override readonly cause: RowRefusalCause,
+  ) {
+    super(`the ${provider} provider refused the execution-setting row ${provider} / ${model}: ${ROW_REFUSAL_EVIDENCE[cause]}`);
+  }
+}
+
+/** 行の拒否の Quarantine を立てる共有の一歩(worker の spawn と Board call)。撃った行が表に残っているときだけ立てる ——
+ *  表に無い行の Quarantine は直す行が無いまま開き、次の無関係な表の編集が解除の門1(ADR 0184 決定5)で決着させてしまう(#1265)。 */
+export function quarantineRefusedRow(db: Db, refusal: RefusedRow, subject: string, now: Date): void {
+  if (!loadExecutionSettingTable(db).some((row) => row.provider === refusal.provider && row.model === refusal.model)) return;
+  registerQuarantine(
+    db,
+    "tableRow",
+    tableRowValue(refusal.provider, refusal.model),
+    `${subject} ended with ${ROW_REFUSAL_EVIDENCE[refusal.cause]}`,
+    now,
+    refusal.cause,
+  );
+}
+
+export type BoardCallUse = "attribution" | "allocation review" | "memory draft" | "task draft" | "handoff draft" | "issue inspection";
+
+/** 表の行で撃つ Board call が断られたら行の Quarantine を立て、true を返す(ADR 0202 決定2・5)。true のとき呼び手は
+ *  失敗に数えず(決定3)、対象の側には何も書かない。 */
+export function quarantineBoardCallRefusal(db: Db, err: unknown, use: BoardCallUse, taskId: string | undefined, now: Date): boolean {
+  if (!(err instanceof RowRefusalError)) return false;
+  quarantineRefusedRow(db, err, `The ${use} Board call${taskId === undefined ? "" : ` for task ${taskId}`}`, now);
+  return true;
+}
+
 /** The probe died on its own spend cap, not on an authentication verdict
  * (issue #466) — the envelope's structured marker, so callers never match an
  * error-message substring. */
@@ -81,24 +126,27 @@ export function isCliAuthBudgetCapEnvelope(value: unknown): boolean {
  * error envelope. Preserve that structured stdout instead of falling back to
  * an error-message substring. */
 export function rethrowCliAuthExecFailure(err: unknown): never {
+  const envelope = execFailureEnvelope(err);
+  if (isCliAuthFailureEnvelope(envelope)) {
+    const { result } = envelope as { result?: unknown };
+    throw new CliAuthError(typeof result === "string" ? result : "Claude API returned 401");
+  }
+  throw err;
+}
+
+/** 非ゼロ終了の `execFile` の reject が運ぶ stdout の JSON envelope。読めなければ undefined。 */
+export function execFailureEnvelope(err: unknown): unknown {
   const stdout =
     typeof err === "object" && err !== null && "stdout" in err
       ? (err as { stdout?: unknown }).stdout
       : undefined;
   const text = typeof stdout === "string" ? stdout : Buffer.isBuffer(stdout) ? stdout.toString() : null;
-  if (text !== null) {
-    try {
-      const envelope = JSON.parse(text) as Record<string, unknown>;
-      if (isCliAuthFailureEnvelope(envelope)) {
-        throw new CliAuthError(
-          typeof envelope.result === "string" ? envelope.result : "Claude API returned 401",
-        );
-      }
-    } catch (parsed) {
-      if (parsed instanceof CliAuthError) throw parsed;
-    }
+  if (text === null) return undefined;
+  try {
+    return JSON.parse(text);
+  } catch {
+    return undefined;
   }
-  throw err;
 }
 
 export function quarantineCliAuthFailure(

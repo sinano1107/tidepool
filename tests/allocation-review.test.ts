@@ -1,10 +1,11 @@
 import { afterEach, expect, it } from "vitest";
 import { buildAllocationReviewInput } from "../src/allocation-review.js";
+import { RowRefusalError } from "../src/cli-auth.js";
 import { appendEvent } from "../src/events.js";
 import { completeTask, getTask, HUMAN_WORKER_ID } from "../src/tasks.js";
 import { reportProviderUsage } from "../src/throttle.js";
 import { FakeAllocationClient } from "./fakes.js";
-import { api, bootTidepool, FULL_HANDOFF, HOUR, mcpClient, nextPoll, QUIET_EXIT, WORKER_SPAWNED as spawned, type Tidepool } from "./harness.js";
+import { api, bootTidepool, FULL_HANDOFF, HOUR, mcpClient, nextPoll, QUIET_EXIT, questions, WORKER_SPAWNED as spawned, type Tidepool } from "./harness.js";
 
 let t: Tidepool;
 afterEach(() => t?.stop());
@@ -225,6 +226,24 @@ it("撃って失敗すると review の完了 event を鍵にした失敗 event 
       { kind: "allocation_review_failed", review_completed_event_id: completed.id, review_task_id: review.id, reviewed_task_id: task.id, reason: "claude CLI timed out" },
     ],
   ]);
+});
+
+it("行の拒否で断られると行の Quarantine が立ち、失敗 event も注釈も残らない(ADR 0202)", async () => {
+  const allocationClient = new FakeAllocationClient();
+  allocationClient.scriptFailure(new RowRefusalError("anthropic", "claude-fable-5-1", "cli_version_too_old"));
+  t = await bootTidepool({ allocationClient });
+  const { task, review } = await reviewedWork(t);
+
+  await completeReview(t, review.id);
+  await nextPoll(t);
+
+  expect((await questions(t)).filter((q: any) => q.title.startsWith("execution-setting row")).map((q: any) => [q.title, q.purpose.split(". ")[0]])).toEqual([
+    [
+      "execution-setting row anthropic / claude-fable-5-1 cannot run on this board",
+      `The allocation review Board call for task ${task.id} ended with API error code claude_code_version_too_old`,
+    ],
+  ]);
+  expect([...(await annotations(t, task.id)), ...(await failures(t, task.id))]).toEqual([]);
 });
 
 it("撃って失敗してから1時間未満の poll では撃たず、1時間以上空けた poll で撃ち直して注釈が載る", async () => {

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { ClaudeDraftClient } from "../src/claude-draft-client.js";
+import { CliAuthError, RowRefusalError } from "../src/cli-auth.js";
 import { openDb } from "../src/db.js";
 import { applyExecutionSettingsChange } from "../src/execution-setting.js";
 import { reportProviderUsage } from "../src/throttle.js";
@@ -88,6 +89,41 @@ describe("ClaudeDraftClient", () => {
     await expect(client.draftTask("dump", "English")).rejects.toThrow(expected);
     await expect(client.draftHandoff("dump", "English")).rejects.toThrow(expected);
     await expect(client.inspectIssue({ title: "t", body: "b", comments: [] })).rejects.toThrow(expected);
+  });
+
+  // 行の拒否の証拠(ADR 0202 決定1): 共有の一発呼び出しの口が envelope に述語を当て、cause と撃った行を持つ拒否を投げる
+  const refusals = {
+    api_404: { is_error: true, api_error_status: 404 },
+    cli_version_too_old: { is_error: true, api_error_status: 400, api_error_code: "claude_code_version_too_old", result: "update the CLI" },
+  } as const;
+  const delivered = {
+    "非ゼロ終了の stdout": (envelope: object) => async () => {
+      throw Object.assign(new Error("Command failed"), { stdout: `${JSON.stringify(envelope)}\n` });
+    },
+    "ゼロ終了の is_error": (envelope: object) => async () => JSON.stringify(envelope),
+  } as const;
+  for (const [cause, envelope] of Object.entries(refusals)) {
+    for (const [how, exec] of Object.entries(delivered)) {
+      it(`${cause} が${how}で届くと、cause と撃った行を持つ行の拒否を投げる(ADR 0202 決定1)`, async () => {
+        const client = new ClaudeDraftClient({ db, exec: exec(envelope) });
+        const err = await client.draftTask("dump", "English").catch((e: unknown) => e);
+        expect(err).toBeInstanceOf(RowRefusalError);
+        expect(err).toMatchObject({ cause, provider: "anthropic", model: "claude-sonnet-5-5" });
+      });
+    }
+  }
+
+  it("401 は今までどおり CliAuthError、それ以外の失敗は今の error のまま(ADR 0202)", async () => {
+    const unauthorized = new ClaudeDraftClient({
+      db,
+      exec: async () => {
+        throw Object.assign(new Error("Command failed"), { stdout: JSON.stringify({ is_error: true, api_error_status: 401, result: "expired" }) });
+      },
+    });
+    await expect(unauthorized.draftTask("dump", "English")).rejects.toBeInstanceOf(CliAuthError);
+    const failed = Object.assign(new Error("Command failed"), { stdout: JSON.stringify({ is_error: true, api_error_status: 500 }) });
+    const broken = new ClaudeDraftClient({ db, exec: async () => { throw failed; } });
+    await expect(broken.draftTask("dump", "English")).rejects.toBe(failed);
   });
 
   it("必須フィールド(title/purpose/completion_criteria)が欠けている場合、draftTask は reject する", async () => {
