@@ -376,7 +376,7 @@ function assertChildrenKnown(deps: McpDeps, children: z.infer<ReturnType<typeof 
 }
 
 /** review の欄は、完了時レビューが立つ子にしか受け付けない(ADR 0111 追記8)。 */
-const ONLY_WHERE_REVIEW_FIRES =
+export const ONLY_WHERE_REVIEW_FIRES =
   "Accepted only on a child whose completion raises a review: not assigned to human, and carrying review_flag or risk_flag.";
 
 /** decompose と redecompose が共有する子の入力。段の説明は盤面の一覧から組む(ADR 0200 決定3)。 */

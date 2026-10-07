@@ -35,7 +35,7 @@ import {
   submitAnswer,
 } from "./human-verbs.js";
 import type { Landing } from "./landing.js";
-import { MEMORY_BRANCHES_DESCRIPTION, toolError, toolResult } from "./mcp.js";
+import { MEMORY_BRANCHES_DESCRIPTION, ONLY_WHERE_REVIEW_FIRES, toolError, toolResult } from "./mcp.js";
 import {
   changeMemorySettings,
   defineMemoryBranch,
@@ -968,10 +968,10 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
             risk_flag: z.boolean().optional(),
             assignee: z.string().optional(),
             workspace: z.string().optional(),
-            review_flag: z.boolean().optional(),
+            review_flag: z.boolean().optional().describe("Refused on a child assigned to human, whose completion raises no review."),
             tier: z.string().optional().describe(tierDescriptions.tier),
-            review_by: z.array(z.string().min(1)).optional(),
-            review_tier: z.string().optional().describe(tierDescriptions.review_tier),
+            review_by: z.array(z.string().min(1)).optional().describe(ONLY_WHERE_REVIEW_FIRES),
+            review_tier: z.string().optional().describe(`${tierDescriptions.review_tier}\n${ONLY_WHERE_REVIEW_FIRES}`),
             priority: z.string().optional().describe(PRIORITY_FIELD_DESCRIPTION),
           }),
         ),

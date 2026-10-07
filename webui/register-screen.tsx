@@ -191,7 +191,7 @@ function RegisterScreen({ onRegister, parentTask, onClose }: RegisterScreenProps
     : title.trim() && purpose.trim() && criteria.trim() && (!childMode || reason.trim());
   // 欄はサーバーと同じ規則で出す(ADR 0209)。issue 経路は常に work(type state は手入力側で review に切り替えたまま残りうる)
   const ruleSubject = { type: issueMode ? 'work' : type, parent_id: parentTask?.id, assignee, review_flag: review, risk_flag: risk };
-  const showReviewFlag = childMode && TidepoolRules.reviewFlagCarriesMeaning(ruleSubject);
+  const showReviewFlag = TidepoolRules.reviewFlagCarriesMeaning(ruleSubject);
   const showReviewBy = TidepoolRules.completionReviewFires(ruleSubject);
   // 隠れた欄の値は送らない、誰も選んでいなければキーごと送らない
   const reviewByField = showReviewBy && reviewBy.length ? { review_by: reviewBy } : {};
