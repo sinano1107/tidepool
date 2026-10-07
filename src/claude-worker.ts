@@ -1953,11 +1953,6 @@ export class ClaudeCodeWorker implements WorkerAdapter {
       task.type,
       workspace.review_allowed_commands ?? [],
     ).join(",");
-    // issue #33: the advisor the board actually pins for this session. The
-    // selector already folded the board's ceiling into it (ADR 0208 決定3), so
-    // "no advisor this session" has a single spelling in the flags, in the env,
-    // and in worker_spawned.
-    const advisor = routing.advisor;
     const cliVersion = typeof this.options.cliVersion === "function"
       ? this.options.cliVersion()
       : (this.options.cliVersion ?? CLAUDE_CLI_VERSION);
@@ -1991,7 +1986,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
         // issue #33 判断6: what the board pinned, not what the frontmatter said
         // — the two differ under the board's advisor ceiling, and only the
         // frontmatter is recoverable from registry_commit above.
-        advisor: advisor ?? null,
+        advisor: routing.advisor ?? null,
         // ADR 0110 決定3: 選んだ実行設定とその出所(advisor の出所も —— ADR 0208 決定6)。
         provider: routing.provider,
         model: routing.model,
@@ -2093,7 +2088,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
         // is shared with the board's own draft/translation CLI calls, which must
         // never acquire an advisor. Absence is not spelled by omission; see
         // advisorSpawnFlags.
-        ...advisorSpawnFlags(advisor),
+        ...advisorSpawnFlags(routing.advisor),
         "--mcp-config",
         mcpConfigPath,
         "--strict-mcp-config",
@@ -2135,7 +2130,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
         // overlay — a spread on top of it could not have removed a key. The git
         // identity carries no key it touches, so layering it after is safe.
         env: {
-          ...workerSpawnEnv(advisor, routing),
+          ...workerSpawnEnv(routing.advisor, routing),
           ...agentGitIdentityEnv(agent.name),
         },
       },
