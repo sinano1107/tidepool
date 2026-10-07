@@ -470,7 +470,7 @@ worker session の発話が向かう**推論の提供元** — 課金元と資�
 
 ## 実行設定(Execution setting)
 
-worker session が実際に走る (provider, model, effort, advisor model) の組。agent の属性ではなく **pickup の瞬間に selector が選び**、`worker_spawned` に値と解決した段(id —— ADR 0210)と出所(ティアは task の要求 / agent の既定ティア / 盤面既定、Provider は唯一の entry / Provider 順位 / 価格 —— ADR 0114 / 昇格後の学習器 —— ADR 0150、advisor は `off` / 上限どおり / 窓で下げた / 知らない世代 / main が上限より上 —— ADR 0208)を刻む(ADR 0110 — 旧・agent.md の `model` / `effort` による固定は廃止。ADR 0005 の「常に明示ピン留め」は維持され、fallback の出所が adapter 定数から盤面の表へ移った)。学習器のセルはこの組を pin の綴りで持つ —— 表の行は具体 id だけなので、pin がそのまま世代を名指す(ADR 0182)。
+worker session が実際に走る (provider, model, effort, advisor model) の組。agent の属性ではなく **pickup の瞬間に selector が選び**、`worker_spawned` に値と解決した段(ADR 0210)と出所(ティアは task の要求 / agent の既定ティア / 盤面既定、Provider は唯一の entry / Provider 順位 / 価格 —— ADR 0114 / 昇格後の学習器 —— ADR 0150、advisor は `off` / 上限どおり / 窓で下げた / 知らない世代 / main が上限より上 —— ADR 0208)を刻む(ADR 0110 — 旧・agent.md の `model` / `effort` による固定は廃止。ADR 0005 の「常に明示ピン留め」は維持され、fallback の出所が adapter 定数から盤面の表へ移った)。学習器のセルはこの組を pin の綴りで持つ —— 表の行は具体 id だけなので、pin がそのまま世代を名指す(ADR 0182)。
 _Avoid_: 計算資源、execution profile
 
 ## 要求(Execution request)
