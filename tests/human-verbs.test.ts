@@ -25,7 +25,7 @@ import { commitTriage, startTriage } from "../src/triage.js";
 import { HUMAN_WORKER_ID } from "../src/worker-id.js";
 import { quarantineWorkspace, UnknownWorkspaceError } from "../src/workspace.js";
 import { FakeDraftClient, FakeGitHubClient, unusedLanding } from "./fakes.js";
-import { decomposeTaskAsWorker, HUMAN_WEBUI, humanDecomposeTaskViaWebui } from "./harness.js";
+import { decomposeTaskViaWorker, HUMAN_WEBUI, humanDecomposeTaskViaWebui } from "./harness.js";
 
 const NOW = new Date("2026-08-06T00:00:00.000Z");
 
@@ -816,7 +816,7 @@ it.each([
 ])("承認 question への回答($answer)で held が外れた兄弟は todo に戻り、親が blocked のままでも即時 poll が撃たれる", async ({ answer, comment }) => {
   db = openDb(":memory:");
   const parent = registerTask(db, { type: "work", title: "parent", purpose: "p", completion_criteria: "c" }, NOW, ...HUMAN_WEBUI);
-  const [sibling] = decomposeTaskAsWorker(
+  const [sibling] = decomposeTaskViaWorker(
     db,
     parent,
     {

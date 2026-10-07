@@ -96,9 +96,9 @@ export const TEST_CREDENTIAL = { tokenHash: () => hashToken(TEST_TOKEN) };
 /** 既定値を外した登録者・経路(#1361)を、今までの既定どおり human / webui で渡す。 */
 export const HUMAN_WEBUI = [HUMAN_WORKER_ID, "webui"] as const;
 
-/** 位置引数の `undefined` の列を呼び手から隠す(#1505 / #1519)。domain の signature は渡し忘れを型で止めるために
- *  `T | undefined` の位置引数のまま残し(ADR 0194 決定2)、テストの呼び出しだけがここを通る。origin を確かめるテストは
- *  domain を直接呼ぶ。 */
+// 位置引数の `undefined` の列を呼び手から隠す(#1505 / #1519)。domain の signature は渡し忘れを型で止めるために
+// `T | undefined` の位置引数のまま残し(ADR 0194 決定2)、テストの呼び出しだけがここを通る。origin を確かめるテストは
+// domain を直接呼ぶ。
 
 /** 人間が webui から答える。`stageUnblock` は渡さない(triage session の前挿しを持たない)。 */
 export function answerQuestionViaWebui(
@@ -112,7 +112,7 @@ export function answerQuestionViaWebui(
 }
 
 /** worker として分解する。保護 workspace は無い。 */
-export function decomposeTaskAsWorker(
+export function decomposeTaskViaWorker(
   db: Db,
   parent: Task,
   input: Parameters<typeof decomposeTask>[2],
@@ -1045,7 +1045,7 @@ export function decomposedChild(db: Db, parent: Task, title: string, decomposer:
   decomposeTask(db, parent, { reason: "split it", children: [child] }, decomposer, now, authority, undefined, viaApproval ? "worker" : "webui");
   if (viaApproval) {
     const question = listChildren(db, parent.id).find((x) => x.type === "question")!;
-    answerQuestion(db, question, ["approve"], now, undefined, undefined, undefined, "webui");
+    answerQuestionViaWebui(db, question, ["approve"], now);
   }
   return listChildren(db, parent.id).find((x) => x.type === "work" && x.title === title)!;
 }

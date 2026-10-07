@@ -1,7 +1,7 @@
 import { afterEach, expect, it } from "vitest";
 import { type Db, openDb } from "../src/db.js";
 import { escalateTask, getTask, listChildren, registerTask, type Task } from "../src/tasks.js";
-import { api, bootTidepool, decomposeTaskAsWorker, HOUR, HUMAN_WEBUI, humanDecomposeTaskViaWebui, mcpClient, registerWork, type Tidepool } from "./harness.js";
+import { api, bootTidepool, decomposeTaskViaWorker, HOUR, HUMAN_WEBUI, humanDecomposeTaskViaWebui, mcpClient, registerWork, type Tidepool } from "./harness.js";
 
 let t: Tidepool;
 afterEach(() => t?.stop());
@@ -100,9 +100,9 @@ const at = new Date("2026-10-02T00:00:00.000Z");
 const agentChild = { title: "agent's child", purpose: "p", completion_criteria: "c" };
 
 it.each([
-  ["agent が分解した子", (db: Db, parent: Task): unknown => decomposeTaskAsWorker(db, parent, { reason: "split", children: [agentChild] }, "deckhand", at)],
+  ["agent が分解した子", (db: Db, parent: Task): unknown => decomposeTaskViaWorker(db, parent, { reason: "split", children: [agentChild] }, "deckhand", at)],
   // 親を超える risk の子は承認 question に変わる —— 登録者は分解した agent
-  ["承認 question", (db: Db, parent: Task): unknown => decomposeTaskAsWorker(db, parent, { reason: "split", children: [{ ...agentChild, risk_flag: true }] }, "deckhand", at)],
+  ["承認 question", (db: Db, parent: Task): unknown => decomposeTaskViaWorker(db, parent, { reason: "split", children: [{ ...agentChild, risk_flag: true }] }, "deckhand", at)],
   [
     "agent のエスカレーション question",
     (db: Db, parent: Task): unknown =>

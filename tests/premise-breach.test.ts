@@ -26,8 +26,7 @@ import {
   BOARD_WORKER_ID,
   HUMAN_WORKER_ID,
 } from "../src/worker-id.js";
-import { answerQuestionViaWebui, decomposeTaskAsWorker, HUMAN_WEBUI, humanDecomposeTaskViaWebui } from "./harness.js";
-
+import { answerQuestionViaWebui, decomposeTaskViaWorker, HUMAN_WEBUI, humanDecomposeTaskViaWebui } from "./harness.js";
 
 const at = new Date("2026-09-15T00:00:00.000Z");
 const HANDOFF = { outcome: "done", deliverables: "n/a", decision_refs: "n/a", dead_ends: "n/a", resume_context: "n/a", known_issues: "n/a" };
@@ -42,11 +41,11 @@ function spec(title: string) {
 }
 
 function agentDecompose(db: Db, parent: Task, ...titles: string[]): Task[] {
-  return decomposeTaskAsWorker(db, getTask(db, parent.id)!, { reason: `split ${parent.title}`, children: titles.map(spec) }, "tako", at);
+  return decomposeTaskViaWorker(db, getTask(db, parent.id)!, { reason: `split ${parent.title}`, children: titles.map(spec) }, "tako", at);
 }
 
 /** 分解の author(worker)が撮り直す。authority も保護 workspace も無い。 */
-function redecomposeAsWorker(db: Db, parent: Task, input: Parameters<typeof redecompose>[2], workerId: string, now: Date): Task[] {
+function redecomposeViaWorker(db: Db, parent: Task, input: Parameters<typeof redecompose>[2], workerId: string, now: Date): Task[] {
   return redecompose(db, parent, input, workerId, now, undefined, undefined, "worker");
 }
 
@@ -174,7 +173,7 @@ it("続行・再分解は子の前提の破綻が開いていない親を拒み�
   const [a] = agentDecompose(db, parent, "A");
 
   expect(() => continueDecomposition(db, getTask(db, parent.id)!, "line", "tako", at, "worker")).toThrow(DomainError);
-  expect(() => redecomposeAsWorker(db, getTask(db, parent.id)!, { reason: "r", children: [spec("X")] }, "tako", at)).toThrow(DomainError);
+  expect(() => redecomposeViaWorker(db, getTask(db, parent.id)!, { reason: "r", children: [spec("X")] }, "tako", at)).toThrow(DomainError);
   declarePremiseBreach(db, getTask(db, a!.id)!, "module M is broken", "tako", at, "worker");
   expect(() => agentDecompose(db, parent, "X")).toThrow(/redecompose/);
   db.close();
@@ -188,7 +187,7 @@ it("再分解は破綻した判断の未決着の子を宣言の出自つきで 
   declarePremiseBreach(db, getTask(db, a!.id)!, "module M is broken", "tako", at, "worker");
 
   expect(() =>
-    redecomposeAsWorker(db, getTask(db, parent.id)!, { reason: "replan", children: [{ ...spec("X"), tier: "bogus" }] }, "tako", at),
+    redecomposeViaWorker(db, getTask(db, parent.id)!, { reason: "replan", children: [{ ...spec("X"), tier: "bogus" }] }, "tako", at),
   ).toThrow(DomainError);
   expect(joinHistory(taskHistoryRows(db, parent.id))).toEqual([
     {
@@ -201,7 +200,7 @@ it("再分解は破綻した判断の未決着の子を宣言の出自つきで 
     },
   ]);
 
-  redecomposeAsWorker(db, getTask(db, parent.id)!, { reason: "replan around M", children: [spec("X")] }, "tako", at);
+  redecomposeViaWorker(db, getTask(db, parent.id)!, { reason: "replan around M", children: [spec("X")] }, "tako", at);
 
   const breach = { title: "A", reason: "module M is broken" };
   expect(joinHistory(taskHistoryRows(db, parent.id))).toEqual([

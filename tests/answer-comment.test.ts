@@ -171,7 +171,7 @@ it.each([
   ["approval", "reject"],
 ] as const)("%s の question への %s は comment が空・空白だけなら domain error で断り、comment があれば通る(ADR 0179 決定1・2・4)", (kind, answer) => {
   const { db, question } = domainQuestion(kind);
-  for (const comment of [undefined, "", " \n "]) expect(() => answerQuestionViaWebui(db, question, [answer], at, { comment: comment })).toThrow(DomainError);
+  for (const comment of [undefined, "", " \n "]) expect(() => answerQuestionViaWebui(db, question, [answer], at, { comment })).toThrow(DomainError);
   expect(getTask(db, question.id)).toMatchObject({ status: "todo", question_answer: null });
   expect(answerQuestionViaWebui(db, question, [answer], at, { comment: "why" }).status).toBe("done");
 });

@@ -17,7 +17,7 @@ import {
   type Task,
 } from "../src/tasks.js";
 import { commitTriage, raiseObjection, startTriage } from "../src/triage.js";
-import { decomposeTaskAsWorker, FULL_HANDOFF, HOUR, HUMAN_WEBUI } from "./harness.js";
+import { decomposeTaskViaWorker, FULL_HANDOFF, HOUR, HUMAN_WEBUI } from "./harness.js";
 
 /** 直接 cancel と Edit の範囲(ADR 0198)のドメイン層。直接 cancel は「人間が登録した task、または盤面が登録した
  *  root(question を除く)」、Edit は「人間が登録した task」のまま。 */
@@ -104,7 +104,7 @@ it("盤面が登録した meta-review は Edit を拒否される(Edit の範囲
 /** agent が decompose で登録した、まだ todo の子(拒否が「実行中」でなく登録者の線から来ることを見るため)。 */
 function todoAgentChild(db: Db): Task {
   const parent = registerTask(db, { type: "work", title: "parent", purpose: "p", completion_criteria: "c" }, NOW, ...HUMAN_WEBUI);
-  const [child] = decomposeTaskAsWorker(
+  const [child] = decomposeTaskViaWorker(
     db,
     parent,
     { reason: "split", children: [{ title: "agent child", purpose: "p", completion_criteria: "c" }] },
