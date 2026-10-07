@@ -2,6 +2,7 @@ import type { Db } from "./db.js";
 import { anthropicBoardCallRow, type ExecutionSettingRow, windowMatchesModel } from "./execution-setting.js";
 import { defaultProviderPaceOffset, getProviderPaceOffset } from "./pace-offsets.js";
 import type { Provider } from "./provider.js";
+import { openQuarantineValues } from "./quarantine.js";
 import { getSpendDown, isSpendDownActive } from "./spend-down.js";
 import type { Tier } from "./tier.js";
 
@@ -134,13 +135,18 @@ export function blockedProviderUsageResources(db: Db): ProviderUsageResource[] {
   );
 }
 
-/** Whether an Anthropic Board call should be skipped right now, from the stored
- *  observation (no live re-observation — Board calls have no usage poll). The
+/** Whether an Anthropic Board call should be skipped right now: an open
+ *  Provider 認証の Quarantine on anthropic blocks every call (#1466 / ADR 0164
+ *  追記3) — only that kind, since Harness containment stops agents, not Board
+ *  calls (CONTEXT.md「Quarantine」); otherwise the stored observation decides (no live
+ *  re-observation — Board calls have no usage poll). The
  *  Provider-wide account window always counts; a model window counts only
  *  against the model the call would pin (translation pins haiku and passes
  *  none; the allocation review pins the frontier row, whose fable window is
- *  exactly the one that matters). No Anthropic observation yet → not blocked. */
+ *  exactly the one that matters). No Quarantine and no Anthropic observation yet →
+ *  not blocked. */
 export function isAnthropicBoardCallBlocked(db: Db, model?: string): boolean {
+  if (openQuarantineValues(db, "providerAuth").includes("anthropic")) return true;
   return blockedProviderUsageResources(db).some(
     (resource) =>
       resource.provider === "anthropic" &&
