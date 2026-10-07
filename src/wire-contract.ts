@@ -6,6 +6,7 @@
  *  import してよいのは leaf の語彙だけ(ADR 0133 決定3)。動的セグメントはテンプレート形(`:id`)を
  *  キーにする。 */
 import type { Cause } from "./cause.js";
+import type { AdvisorCeiling } from "./claude-model-alias.js";
 import type { HaltKind } from "./halt-kind.js";
 
 /** 盤面全体の停止の entry。 */
@@ -300,7 +301,8 @@ export interface WireContract {
   "GET /api/settings/execution": {
     /** quarantine_question_id: 行の Quarantine(ADR 0184 決定6)の開いている question。null = 走れる行。 */
     table: ReadonlyArray<{ provider: string; tier: string; model: string; effort: string; price_in: number; price_out: number; quarantine_question_id: string | null }>;
-    advisorAboveMain: boolean;
+    /** advisor の上限(ADR 0208 決定1)。agent の画面は `off` で「この盤面では使われない」を出す。 */
+    advisorCeiling: AdvisorCeiling;
     providerRank: readonly string[];
     priority: string;
     learnerPromoted: boolean;
@@ -311,6 +313,7 @@ export interface WireContract {
     /** 盤面の段の一覧、順序どおり(ADR 0200 決定1・3)。 */
     tiers: ReadonlyArray<{ name: string; description: string }>;
     priorities: readonly string[];
+    advisorCeilings: readonly AdvisorCeiling[];
   };
   "GET /api/settings/memory": MemorySettings;
   "POST /api/settings/memory": MemorySettings;

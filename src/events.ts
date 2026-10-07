@@ -1,7 +1,7 @@
 import type { Allocation } from "./allocation-review.js";
 import type { Cause } from "./cause.js";
 import type { Db } from "./db.js";
-import type { ExecutionSettingRow, ExecutionSettingsChange, ProviderSource, registryPinChanges, routingPinChanges, TierSource } from "./execution-setting.js";
+import type { ExecutionSetting, ExecutionSettingRow, ExecutionSettingsChange, registryPinChanges, routingPinChanges } from "./execution-setting.js";
 import type { InvalidationReason, MemoryDropReason, MemoryEntryFields } from "./memory.js";
 import type { Provider } from "./provider.js";
 import type { MemoryProposal, ProposalAmendment, TaskType } from "./tasks.js";
@@ -208,14 +208,14 @@ export type EventPayload =
   // vocabulary is registry-shaped, not vendor-shaped — no CLI names leak in.
   //
   // `advisor` (issue #33 判断6) is the advisor model the board actually pinned
-  // for this session, verbatim as the board spelled the pin (the top family's alias
-  // such as `fable`, or main's concrete id — ADR 0200 決定6) — board-owned text, so it does not
+  // for this session, verbatim as the board spelled the pin (the ceiling's alias
+  // such as `opus`, or main's concrete id — ADR 0208 決定2) — board-owned text, so it does not
   // breach the line above. null means the session was launched with the advisor tool
-  // explicitly disabled, which collapses two causes: the agent has no advisor
-  // capability, or the host-side kill switch (判断8) was on. Recording the
+  // explicitly disabled; `source.advisor` below tells the causes apart (absent: the agent has
+  // no advisor capability; `off` / `main_above_ceiling`: the board's ceiling). Recording the
   // *pinned* value rather than the frontmatter's is deliberate — the
-  // frontmatter is already recoverable from registry_commit, whereas the host
-  // mask is not recoverable from anything, and CONTEXT.md's Advisor requires
+  // frontmatter is already recoverable from registry_commit, whereas the ceiling
+  // at that pickup is not recoverable from anything else, and CONTEXT.md's Advisor requires
   // each session's effective configuration to be settleable from the event
   // history alone.
   //
@@ -249,8 +249,11 @@ export type EventPayload =
        *  `"only"` は agent が entry を1つしか宣言していなかった、`"rank"` は残った
        *  候補から Provider 順位で選んだ、`"cost"` は task の優先順位が cost で価格が
        *  選んだ、`"learner"` は昇格した学習器が選んだ(ADR 0150 決定3)。「温存中の anthropic を避けて openai で走った」が事後に読めるのは
-       *  この1値による。 */
-      source: { tier: TierSource; provider: ProviderSource };
+       *  この1値による。
+       *
+       *  `advisor` は `advisor` の値の出所(ADR 0208 決定6、綴りは claude-model-alias.ts の `AdvisorSource`)で、
+       *  advisor を有効にした entry の session だけが持つ。 */
+      source: ExecutionSetting["source"];
       /** ADR 0098: the Harness/version actually selected for this session. */
       harness: "claude-code" | "codex";
       cli_version: string;
@@ -424,7 +427,7 @@ export type EventPayload =
       round: "initial" | "after_rca";
     }
   // ADR 0110 決定5 / issue #545: 人間が settings タブ / 管理MCP から実行設定(表の
-  // 行・advisor above main・Provider 順位・優先順位の既定)を変えた操作イベント。
+  // 行・advisor の上限・Provider 順位・優先順位の既定)を変えた操作イベント。
   // `origin` がどの手から入ったか(webui / mcp)を機械記録する(CONTEXT.md「管理MCP」)。
   // question_id = 提案 question への approve の適用(ADR 0151: meta-review の材料にも「人間が変えた行」にも数えない)。
   | ({ kind: "execution_settings_changed"; question_id?: string } & ExecutionSettingsChange)

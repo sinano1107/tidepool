@@ -1382,7 +1382,7 @@ const PROVIDER_PLACEHOLDER = { value: "", label: "choose one \u2014 provider is 
 function tierOptions(tiers, blank = "board default") {
   return [{ value: "", label: blank }, ...tiers.map((tier) => ({ value: tier.name, label: `${tier.name} \u2014 ${tier.description}` }))];
 }
-function AgentFields({ draft, set, authorityOptions, providerOptions, tiers, hostSkills, hostSkillsDegraded }) {
+function AgentFields({ draft, set, authorityOptions, providerOptions, tiers, advisorCeiling, hostSkills, hostSkillsDegraded }) {
   const { Checkbox, Input, Select } = window.TidepoolDesignSystem_8a0ead;
   return /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(AgentIconPicker, { value: draft.icon, onChange: (v) => set("icon", v) }), /* @__PURE__ */ React.createElement(
     Input,
@@ -1401,16 +1401,16 @@ function AgentFields({ draft, set, authorityOptions, providerOptions, tiers, hos
       value: draft.systemPrompt,
       onChange: (e) => set("systemPrompt", e.target.value)
     }
-  ), /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 } }, /* @__PURE__ */ React.createElement(Select, { label: "Authority", options: authorityOptions, value: draft.authority, onChange: (e) => set("authority", e.target.value) }), /* @__PURE__ */ React.createElement(Select, { label: "Provider", options: [PROVIDER_PLACEHOLDER, ...providerOptions], value: draft.provider, onChange: (e) => set("provider", e.target.value) })), /* @__PURE__ */ React.createElement(Select, { label: "Default tier", options: tierOptions(tiers), value: draft.tier, onChange: (e) => set("tier", e.target.value) }), /* @__PURE__ */ React.createElement(
+  ), /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 } }, /* @__PURE__ */ React.createElement(Select, { label: "Authority", options: authorityOptions, value: draft.authority, onChange: (e) => set("authority", e.target.value) }), /* @__PURE__ */ React.createElement(Select, { label: "Provider", options: [PROVIDER_PLACEHOLDER, ...providerOptions], value: draft.provider, onChange: (e) => set("provider", e.target.value) })), /* @__PURE__ */ React.createElement(Select, { label: "Default tier", options: tierOptions(tiers), value: draft.tier, onChange: (e) => set("tier", e.target.value) }), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 4 } }, /* @__PURE__ */ React.createElement(
     Checkbox,
     {
       label: "advisor \u2014 this agent may consult a stronger model at decision points",
       checked: draft.advisor,
       onChange: () => set("advisor", !draft.advisor)
     }
-  ), /* @__PURE__ */ React.createElement(SkillListInput, { candidates: hostSkills, degraded: hostSkillsDegraded, values: draft.skills, onChange: (v) => set("skills", v) }));
+  ), advisorCeiling && /* @__PURE__ */ React.createElement("p", { "data-testid": "agent-advisor-ceiling", style: { margin: 0, fontSize: "var(--text-xs)", color: "var(--text-muted)" } }, advisorCeiling === "off" ? "board advisor ceiling: off \u2014 the advisor is not used on this board" : `board advisor ceiling: ${advisorCeiling} \u2014 the advisor is at most ${advisorCeiling}; a main model above it runs without one`)), /* @__PURE__ */ React.createElement(SkillListInput, { candidates: hostSkills, degraded: hostSkillsDegraded, values: draft.skills, onChange: (v) => set("skills", v) }));
 }
-function AgentRecord({ agent, authorityProfiles, providerOptions, tiers, hostSkills, hostSkillsDegraded, say, onChanged, edit }) {
+function AgentRecord({ agent, authorityProfiles, providerOptions, tiers, advisorCeiling, hostSkills, hostSkillsDegraded, say, onChanged, edit }) {
   const { Card, FieldRow } = window.TidepoolDesignSystem_8a0ead;
   const { AgentChip } = window.TidepoolDesignSystem_8a0ead;
   const id = `agent:${agent.name}`;
@@ -1467,6 +1467,7 @@ function AgentRecord({ agent, authorityProfiles, providerOptions, tiers, hostSki
       authorityOptions: authorityProfiles,
       providerOptions,
       tiers,
+      advisorCeiling,
       hostSkills,
       hostSkillsDegraded
     }
@@ -2488,20 +2489,20 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit, fo
   }));
 }
 function ExecutionDefaultsCard({ settings, say, onSaved, edit }) {
-  const { Button, Card, Checkbox, FieldRow, Select } = window.TidepoolDesignSystem_8a0ead;
+  const { Button, Card, FieldRow, Select } = window.TidepoolDesignSystem_8a0ead;
   const id = "board:execution-defaults";
   const open = edit.isOpen(id);
   const current = {
     rank: settings.providerRank,
     priority: settings.priority,
-    advisor: settings.advisorAboveMain,
+    ceiling: settings.advisorCeiling,
     defaultTier: settings.defaultTier,
     judgementTier: settings.judgementTier
   };
   const [draft, setDraft] = React.useState(current);
   const [busy, setBusy] = React.useState(false);
   const rankChanged = draft.rank.join() !== current.rank.join();
-  const dirty = rankChanged || draft.priority !== current.priority || draft.advisor !== current.advisor || draft.defaultTier !== current.defaultTier || draft.judgementTier !== current.judgementTier;
+  const dirty = rankChanged || draft.priority !== current.priority || draft.ceiling !== current.ceiling || draft.defaultTier !== current.defaultTier || draft.judgementTier !== current.judgementTier;
   const tierNames = settings.tiers.map((tier) => tier.name);
   const ok = new Set(draft.rank).size === settings.providers.length;
   useDirtySignal(edit, open, dirty);
@@ -2511,7 +2512,7 @@ function ExecutionDefaultsCard({ settings, say, onSaved, edit }) {
       const changes = [
         rankChanged && { setting: "provider_rank", value: draft.rank },
         draft.priority !== current.priority && { setting: "priority", value: draft.priority },
-        draft.advisor !== current.advisor && { setting: "advisor_above_main", value: draft.advisor },
+        draft.ceiling !== current.ceiling && { setting: "advisor_ceiling", value: draft.ceiling },
         draft.defaultTier !== current.defaultTier && { setting: "default_tier", value: draft.defaultTier },
         draft.judgementTier !== current.judgementTier && { setting: "judgement_tier", value: draft.judgementTier }
       ].filter(Boolean);
@@ -2535,7 +2536,7 @@ function ExecutionDefaultsCard({ settings, say, onSaved, edit }) {
     }
     setBusy(false);
   };
-  return /* @__PURE__ */ React.createElement("div", { "data-testid": "execution-defaults" }, /* @__PURE__ */ React.createElement(Card, { style: { display: "flex", flexDirection: "column", gap: 14 } }, /* @__PURE__ */ React.createElement(RecordCardHead, { editing: open, onEdit: () => edit.open(id, () => setDraft(current)) }, /* @__PURE__ */ React.createElement("span", { style: settingsCardLabel }, "execution defaults")), !open && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(FieldRow, { label: "provider rank", kind: "mono", value: settings.providerRank.join(" \u203A ") }), /* @__PURE__ */ React.createElement(FieldRow, { label: "default priority", kind: "mono", value: settings.priority }), /* @__PURE__ */ React.createElement(FieldRow, { label: "advisor above main", kind: "mono", value: settings.advisorAboveMain ? "on" : "off" }), /* @__PURE__ */ React.createElement(FieldRow, { label: "default tier", kind: "mono", value: settings.defaultTier }), /* @__PURE__ */ React.createElement(FieldRow, { label: "judgement tier", kind: "mono", value: settings.judgementTier }), /* @__PURE__ */ React.createElement(FieldRow, { label: "learner", kind: "mono", value: settings.learnerPromoted ? "promoted \u2014 chooses work tasks" : "shadow \u2014 the table chooses" }), settings.learnerPromoted && /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", disabled: busy, onClick: demote }, "Demote learner")), open && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 12 } }, draft.rank.map((provider, i) => /* @__PURE__ */ React.createElement(
+  return /* @__PURE__ */ React.createElement("div", { "data-testid": "execution-defaults" }, /* @__PURE__ */ React.createElement(Card, { style: { display: "flex", flexDirection: "column", gap: 14 } }, /* @__PURE__ */ React.createElement(RecordCardHead, { editing: open, onEdit: () => edit.open(id, () => setDraft(current)) }, /* @__PURE__ */ React.createElement("span", { style: settingsCardLabel }, "execution defaults")), !open && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(FieldRow, { label: "provider rank", kind: "mono", value: settings.providerRank.join(" \u203A ") }), /* @__PURE__ */ React.createElement(FieldRow, { label: "default priority", kind: "mono", value: settings.priority }), /* @__PURE__ */ React.createElement(FieldRow, { label: "advisor ceiling", kind: "mono", value: settings.advisorCeiling }), /* @__PURE__ */ React.createElement(FieldRow, { label: "default tier", kind: "mono", value: settings.defaultTier }), /* @__PURE__ */ React.createElement(FieldRow, { label: "judgement tier", kind: "mono", value: settings.judgementTier }), /* @__PURE__ */ React.createElement(FieldRow, { label: "learner", kind: "mono", value: settings.learnerPromoted ? "promoted \u2014 chooses work tasks" : "shadow \u2014 the table chooses" }), settings.learnerPromoted && /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", disabled: busy, onClick: demote }, "Demote learner")), open && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 12 } }, draft.rank.map((provider, i) => /* @__PURE__ */ React.createElement(
     Select,
     {
       key: i,
@@ -2553,12 +2554,12 @@ function ExecutionDefaultsCard({ settings, say, onSaved, edit }) {
       onChange: (e) => setDraft({ ...draft, priority: e.target.value })
     }
   ), /* @__PURE__ */ React.createElement(
-    Checkbox,
+    Select,
     {
-      testId: "execution-advisor-above-main",
-      checked: draft.advisor,
-      label: "advisor above main \u2014 the advisor may be a model ranked above the main model (the provider's top model)",
-      onChange: () => setDraft({ ...draft, advisor: !draft.advisor })
+      label: "Advisor ceiling",
+      options: [...settings.advisorCeilings],
+      value: draft.ceiling,
+      onChange: (e) => setDraft({ ...draft, ceiling: e.target.value })
     }
   ), /* @__PURE__ */ React.createElement(
     Select,
@@ -2576,7 +2577,7 @@ function ExecutionDefaultsCard({ settings, say, onSaved, edit }) {
       value: draft.judgementTier,
       onChange: (e) => setDraft({ ...draft, judgementTier: e.target.value })
     }
-  ), /* @__PURE__ */ React.createElement("p", { style: { margin: 0, fontSize: "var(--text-xs)", color: "var(--text-muted)" } }, "rank orders the providers a task may run on (first = preferred; every provider exactly once). priority is the default for tasks that request none: quality = rank then price, cost = price then rank. default tier is the tier of tasks that request none and whose agent declares none, and of the board's drafts. judgement tier is the tier the board's own judgement runs on: its retrospective Board calls (allocation review, attribution, Behavior candidate drafting) and its periodic meta-reviews."), /* @__PURE__ */ React.createElement(
+  ), /* @__PURE__ */ React.createElement("p", { style: { margin: 0, fontSize: "var(--text-xs)", color: "var(--text-muted)" } }, "rank orders the providers a task may run on (first = preferred; every provider exactly once). priority is the default for tasks that request none: quality = rank then price, cost = price then rank. advisor ceiling is the highest model an agent's advisor may be: a main model below it gets the ceiling's model, one of the same model family gets itself, one above it runs without an advisor; off runs every agent without one. default tier is the tier of tasks that request none and whose agent declares none, and of the board's drafts. judgement tier is the tier the board's own judgement runs on: its retrospective Board calls (allocation review, attribution, Behavior candidate drafting) and its periodic meta-reviews."), /* @__PURE__ */ React.createElement(
     EditActions,
     {
       dirty,
@@ -2839,7 +2840,7 @@ function NewWorkspaceForm({ baseDir, say, onCreated, edit }) {
     }
   ), dialog);
 }
-function NewAgentForm({ authorityProfiles, providerOptions, tiers, hostSkills, hostSkillsDegraded, say, onCreated, edit }) {
+function NewAgentForm({ authorityProfiles, providerOptions, tiers, advisorCeiling, hostSkills, hostSkillsDegraded, say, onCreated, edit }) {
   const { Card, Input } = window.TidepoolDesignSystem_8a0ead;
   const [name, setName] = React.useState("");
   const [draft, setDraft] = React.useState(() => ({ ...NEW_AGENT_DRAFT }));
@@ -2884,6 +2885,7 @@ function NewAgentForm({ authorityProfiles, providerOptions, tiers, hostSkills, h
       authorityOptions: authorityCreateOptions,
       providerOptions,
       tiers,
+      advisorCeiling,
       hostSkills,
       hostSkillsDegraded
     }
@@ -3183,6 +3185,7 @@ function SettingsScreen({ say, memoryFocus, registerLeaveGuard }) {
           authorityProfiles,
           providerOptions,
           tiers: executionSettings?.tiers ?? [],
+          advisorCeiling: executionSettings?.advisorCeiling,
           hostSkills,
           hostSkillsDegraded,
           say,
@@ -3196,6 +3199,7 @@ function SettingsScreen({ say, memoryFocus, registerLeaveGuard }) {
           authorityProfiles,
           providerOptions,
           tiers: executionSettings?.tiers ?? [],
+          advisorCeiling: executionSettings?.advisorCeiling,
           hostSkills,
           hostSkillsDegraded,
           say,

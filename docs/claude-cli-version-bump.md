@@ -105,6 +105,16 @@ to the existing fail-closed handling (ADR 0186 決定7, ADR 0187 決定5):
 Write the new version into `claude-cli-version` at the repo root and paste both tables from step 5
 into the PR description.
 
-If the new version brings a new model family, add its prefix to `FAMILY_PREFIXES` in
-`src/claude-model-alias.ts`; if the family ranks above the current top, also move `TOP_FAMILY` to
-it. Until then, its rows cannot serve agents that have an advisor (ADR 0200 決定6).
+Then check the advisor facts in `FAMILIES` in `src/claude-model-alias.ts` against the new version
+(ADR 0208 決定4). The model-aliases table in
+[model-config](https://code.claude.com/docs/en/model-config.md) says which model each of `sonnet`,
+`opus` and `fable` resolves to at `<version>`. The combination table in
+[advisor](https://code.claude.com/docs/en/advisor.md) says which main models that model accepts as
+an advisor. For each of the three, the `accepts` entry must hold the highest generation of each
+lower family that it accepts as main. If an alias moved or a new generation is now accepted,
+update `accepts` in the same PR. Until then, a main generation above `accepts` gets main itself as
+its advisor, and a Haiku row above it cannot serve agents that have an advisor.
+
+If the new version brings a new model family, add it to `FAMILIES` at its rank. Until then, its
+rows cannot serve agents that have an advisor. If the family is one a ceiling can name, also add its
+alias to `ADVISOR_CEILINGS` (same file) and to the `advisor_ceiling` CHECK in `src/db.ts`.

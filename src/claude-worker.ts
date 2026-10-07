@@ -635,10 +635,9 @@ export interface ProviderRouting extends ExecutionSetting {
  *  advisor as a whole — only the first is advisor-scoped:
  *
  *  1. `CLAUDE_CODE_DISABLE_ADVISOR_TOOL` — the explicit no described on
- *     `advisorSpawnFlags`, hence the parameter. It is the same var the board's
- *     global kill switch (issue #33 判断8) uses, on purpose: "this session has
- *     no advisor" has one spelling, whether the cause is a definition without
- *     the capability or a host-side emergency mask. **A present advisor
+ *     `advisorSpawnFlags`, hence the parameter. "This session has no advisor"
+ *     has this one spelling, whether the cause is a definition without the
+ *     capability or the board's advisor ceiling (ADR 0208). **A present advisor
  *     actively deletes it** rather than merely not setting it (issue #174 /
  *     ADR 0044 決定4): this env is built over the board's own process env, so a
  *     host that exports the var — `/etc/default/tidepool` is a live,
@@ -1060,26 +1059,12 @@ export interface ClaudeWorkerOptions {
   /** issue #56 / ADR 0025: the skill-enumeration boundary the complement-deny
    *  ping runs at. Injected so the deny plumbing is tested without a real CLI. */
   enumerateSkills?: EnumerateSkillsFn;
-  /** issue #33 判断8 / ADR 0043: the board-wide advisor kill switch. True →
-   *  every session spawns with the advisor tool disabled no matter what the
-   *  registry says. It lives on the host (env), not in the registry, because
-   *  it is an operational emergency mask rather than a property of any agent's
-   *  definition — the point is to stop every advisor without touching a single
-   *  agent.md, for a vendor-side outage or spec change in an experimental
-   *  feature the whole fleet is on.
-   *
-   *  **Absent means "not masked", so forgetting to pass it fails open** — the
-   *  mask silently does nothing while everything else looks healthy. That is
-   *  the #172 shape, which is why this field is not in the same class as
-   *  `spawn`/`pty`/`enumerateSkills` above (test seams, where absence means
-   *  "use the real thing"), and why `buildWorkerOptions` in server-options.ts
-   *  owns this literal with a test watching its keys (ADR 0043). */
-  advisorDisabled?: boolean;
   /** 上限到達による中断(ADR 0104)の盤面側の一撃 —— `capInterruptionHandler` 製。
    *  adapter が持つのは「429 で断られた」と「容器が空になった」の観測だけで、
-   *  slot も tree rule も先頭復帰も向こう側にある(ADR 0099 決定1)。`advisorDisabled`
-   *  と同じ機能フィールドなので、`buildWorkerOptions` が literal を所有し
-   *  網羅テストが見張る。不在 → 中断を観測しても盤面は動かない(workspaceless な
+   *  slot も tree rule も先頭復帰も向こう側にある(ADR 0099 決定1)。不在のときの壊れ方が
+   *  静かな fail で、`spawn`/`pty`/`enumerateSkills`(不在 = 実物を使う注入 seam)の類ではない
+   *  機能フィールドなので、`buildWorkerOptions` が literal を所有し
+   *  網羅テストが見張る(ADR 0043)。不在 → 中断を観測しても盤面は動かない(workspaceless な
    *  unit 盤面のための姿)。 */
   onCapInterrupted?: (taskId: string, reclaimed: Promise<void>) => void;
   /** 行の拒否(ADR 0184 決定4)の盤面側の一撃 —— `rowRefusalHandler` 製。
@@ -1096,7 +1081,7 @@ export interface ClaudeWorkerOptions {
   /** ADR 0097 決定4 / issue #445: where the Moonshot Platform key lives —
    *  a mode-600 state file, never the board's env (plaintext on process.env
    *  rides every worker spawn). Read fresh at each spawn, only for
-   *  `provider: moonshot` agents. Same class as `advisorDisabled` above: a
+   *  `provider: moonshot` agents. Same class as `onCapInterrupted` above: a
    *  functional field, not a test seam, so `buildWorkerOptions` owns the
    *  literal. Absent → `resolveMoonshotApiKeyFile`'s default
    *  (`~/.tidepool/moonshot-api-key`). */
@@ -1968,11 +1953,6 @@ export class ClaudeCodeWorker implements WorkerAdapter {
       task.type,
       workspace.review_allowed_commands ?? [],
     ).join(",");
-    // issue #33: the advisor the board actually pins for this session. The
-    // host-side kill switch (判断8) collapses the capability to absent rather
-    // than sitting beside it — "no advisor this session" then has a single
-    // spelling in the flags, in the env, and in worker_spawned.
-    const advisor = this.options.advisorDisabled === true ? undefined : routing.advisor;
     const cliVersion = typeof this.options.cliVersion === "function"
       ? this.options.cliVersion()
       : (this.options.cliVersion ?? CLAUDE_CLI_VERSION);
@@ -2004,11 +1984,10 @@ export class ClaudeCodeWorker implements WorkerAdapter {
         registry_commit: registry.commit,
         definition_version: definition.version,
         // issue #33 判断6: what the board pinned, not what the frontmatter said
-        // — the two differ under the kill switch, and only the frontmatter is
-        // recoverable from registry_commit above.
-        advisor: advisor ?? null,
-        // ADR 0110 決定3: 選んだ実行設定とその出所。kill switch は advisor だけを
-        // マスクするので(判断8)、model / effort / provider は選ばれたまま。
+        // — the two differ under the board's advisor ceiling, and only the
+        // frontmatter is recoverable from registry_commit above.
+        advisor: routing.advisor ?? null,
+        // ADR 0110 決定3: 選んだ実行設定とその出所(advisor の出所も —— ADR 0208 決定6)。
         provider: routing.provider,
         model: routing.model,
         effort: routing.effort,
@@ -2109,7 +2088,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
         // is shared with the board's own draft/translation CLI calls, which must
         // never acquire an advisor. Absence is not spelled by omission; see
         // advisorSpawnFlags.
-        ...advisorSpawnFlags(advisor),
+        ...advisorSpawnFlags(routing.advisor),
         "--mcp-config",
         mcpConfigPath,
         "--strict-mcp-config",
@@ -2151,7 +2130,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
         // overlay — a spread on top of it could not have removed a key. The git
         // identity carries no key it touches, so layering it after is safe.
         env: {
-          ...workerSpawnEnv(advisor, routing),
+          ...workerSpawnEnv(routing.advisor, routing),
           ...agentGitIdentityEnv(agent.name),
         },
       },

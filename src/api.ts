@@ -7,6 +7,7 @@ import {
   InvalidAgentIconError,
 } from "./agent-create.js";
 import { boardHalts } from "./board-halt.js";
+import { ADVISOR_CEILINGS } from "./claude-model-alias.js";
 import { quarantineBoardCallRefusal, quarantineCliAuthFailure } from "./cli-auth.js";
 import type { Clock } from "./clock.js";
 import type { Db } from "./db.js";
@@ -1600,14 +1601,15 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     res.json(parsed.data);
   });
 
-  // ADR 0110 決定5 / issue #545: 表・advisor above main・Provider 順位・優先順位の既定。
-  // 選択肢(providers / 盤面の段 / priorities)もサーバ供給 —— WebUI が列挙を直書きして
+  // ADR 0110 決定5 / issue #545: 表・advisor の上限・Provider 順位・優先順位の既定。
+  // 選択肢(providers / 盤面の段 / priorities / advisor の上限)もサーバ供給 —— WebUI が列挙を直書きして
   // drift しないため(/api/agents の providers と同じ配線)
   router.get("/settings/execution", (_req, res) => {
     res.json({
       ...readExecutionSettingsWithQuarantine(db),
       providers: PROVIDER_OPTIONS,
       priorities: PRIORITIES,
+      advisorCeilings: ADVISOR_CEILINGS,
     } satisfies WireContract["GET /api/settings/execution"]);
   });
 
@@ -1628,7 +1630,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       }
     };
 
-  // 1 リクエスト = 1 変更(行の upsert / 削除、段の挿入・編集・改名・削除、advisor above main、Provider 順位、優先
+  // 1 リクエスト = 1 変更(行の upsert / 削除、段の挿入・編集・改名・削除、advisor の上限、Provider 順位、優先
   // 順位の既定、盤面既定の段、判断の段)。不正値(未知の Provider / ティア / 優先順位、負の価格、順列でない
   // 順位)はこの入口で弾く。保存後は provider-pace-offsets と同じく即時再評価(issue #296)
   router.post(

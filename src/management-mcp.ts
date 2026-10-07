@@ -592,7 +592,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
       description:
         "Read the board's execution settings: the model table (rows of provider, model, tier, effort, price_in / price_out in USD per MTok, " +
         "and quarantine_question_id — the open question naming a row the provider refused to run on this board, or null), " +
-        "whether a model ranked above main may serve as advisor, the Provider rank, the default priority (quality / cost), whether the learner is promoted, " +
+        "the advisor ceiling (off / sonnet / opus / fable), the Provider rank, the default priority (quality / cost), whether the learner is promoted, " +
         "the default tier (tasks requesting no tier whose agent declares none, and the board's drafts run on it), " +
         "the judgement tier — the board's own judgement tier, shared by its retrospective Board calls (allocation review, attribution, Behavior candidate drafting) and its periodic meta-reviews — " +
         "and the board's tiers in order (lowest first), each with its one-line description.",
@@ -611,7 +611,9 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
         "the board first rewrites every registry agent.md whose tier is the old name and commits it to the registry's remote main, and the rename is refused if that push fails), " +
         "delete one (`delete_tier`; refused with the reasons while the tier has table rows, " +
         "is the default or judgement tier, an unsettled task requests it, or a registry agent.md names it as its tier — and also refused if the registry cannot be read), " +
-        "or set `advisor_above_main`, `provider_rank` (every provider exactly once, first = preferred), the default `priority`, `default_tier` " +
+        "or set `advisor_ceiling` (`off` / `sonnet` / `opus` / `fable` — the highest model family an agent's advisor may climb to: " +
+        "a main below it gets the ceiling's alias, a main in its family gets main's own id, a main above it runs without an advisor; " +
+        "`off` runs every agent without one), `provider_rank` (every provider exactly once, first = preferred), the default `priority`, `default_tier` " +
         "(a tier name from the board's list — the tier of tasks that request none and whose agent declares none, and of the board's drafts), or `judgement_tier` " +
         "(a tier name from the board's list — the tier the board's own judgement runs on: retrospective Board calls resolve on its anthropic row, and periodic meta-reviews request it), " +
         "or demote the learner (`learner_promoted: false` — promotion only comes from approving a routing meta-review's proposal). " +

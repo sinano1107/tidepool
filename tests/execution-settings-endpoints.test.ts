@@ -23,7 +23,7 @@ import {
 let t: Tidepool;
 afterEach(() => t?.stop());
 
-it("GET /api/settings/execution は種の表と盤面既定(advisor above main 無し・Provider 順位は宣言順・優先順位 quality)と選択肢を返す(ADR 0110 決定5)", async () => {
+it("GET /api/settings/execution は種の表と盤面既定(advisor の上限 off・Provider 順位は宣言順・優先順位 quality)と選択肢を返す(ADR 0110 決定5 / ADR 0208 決定1)", async () => {
   t = await bootTidepool();
   const res = await api(t.baseUrl, "GET", "/api/settings/execution");
   expect(res.status).toBe(200);
@@ -31,7 +31,7 @@ it("GET /api/settings/execution は種の表と盤面既定(advisor above main �
     table: [...SEED_EXECUTION_SETTINGS]
       .sort((a, b) => a.provider.localeCompare(b.provider) || a.model.localeCompare(b.model))
       .map((row) => ({ ...row, quarantine_question_id: null })),
-    advisorAboveMain: false,
+    advisorCeiling: "off",
     providerRank: [...PROVIDER_VALUES],
     priority: "quality",
     learnerPromoted: false,
@@ -44,21 +44,22 @@ it("GET /api/settings/execution は種の表と盤面既定(advisor above main �
     ],
     tiers: SEED_TIERS,
     priorities: ["quality", "cost"],
+    advisorCeilings: ["off", "sonnet", "opus", "fable"],
   });
 });
 
 /** 盤面境界の読み口(GET)から見た状態。選択肢は落とす(段の一覧は状態なので残す)。 */
 const state = async () => {
-  const { providers: _p, priorities: _q, ...rest } = (await api(t.baseUrl, "GET", "/api/settings/execution")).json;
+  const { providers: _p, priorities: _q, advisorCeilings: _a, ...rest } = (await api(t.baseUrl, "GET", "/api/settings/execution")).json;
   return rest;
 };
 
-it("POST /api/settings/execution は1つの変更を受け、Provider 順位・優先順位・advisor above main は GET に反映される", async () => {
+it("POST /api/settings/execution は1つの変更を受け、Provider 順位・優先順位・advisor の上限は GET に反映される", async () => {
   t = await bootTidepool();
   for (const change of [
     { setting: "provider_rank", value: ["openai", "anthropic", "moonshot"] },
     { setting: "priority", value: "cost" },
-    { setting: "advisor_above_main", value: true },
+    { setting: "advisor_ceiling", value: "opus" },
     { setting: "judgement_tier", value: "standard" },
   ]) {
     expect((await api(t.baseUrl, "POST", "/api/settings/execution", change)).status).toBe(200);
@@ -66,7 +67,7 @@ it("POST /api/settings/execution は1つの変更を受け、Provider 順位・�
   expect(await state()).toMatchObject({
     providerRank: ["openai", "anthropic", "moonshot"],
     priority: "cost",
-    advisorAboveMain: true,
+    advisorCeiling: "opus",
     judgementTier: "standard",
   });
 });
@@ -109,13 +110,29 @@ it("不正値(未知の Provider / ティア / 優先順位、負の価格、順
     { setting: "provider_rank", value: ["anthropic", "openai"] }, // moonshot が欠ける → indexOf -1 で先頭に来てしまう
     { setting: "provider_rank", value: ["anthropic", "anthropic", "openai"] },
     { setting: "provider_rank", value: ["anthropic", "openai", "moonshot", "openai"] },
-    { setting: "advisor_above_main", value: "yes" },
     { setting: "tier", value: "frontier" }, // ティアの既定は設定ではない(BOARD_DEFAULT_TIER)
     { setting: "judgement_tier", value: "premium" }, // ティア語彙の外(issue #914)
   ]) {
     expect((await api(t.baseUrl, "POST", "/api/settings/execution", bad)).status, JSON.stringify(bad)).toBe(400);
   }
   expect(await state()).toEqual(before);
+});
+
+it("advisor の上限は settings タブと管理MCP の両方の扉で検証を通った値だけが書かれ、拒まれた値は設定を変えない(ADR 0208 決定1)", async () => {
+  t = await bootTidepool();
+  const client = await managementMcpClient(t.baseUrl);
+  try {
+    const viaMcp = async (change: object) => (await client.callTool({ name: "change_execution_settings", arguments: { change } })) as any;
+    expect((await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "advisor_ceiling", value: "opus" })).status).toBe(200);
+    expect((await viaMcp({ setting: "advisor_ceiling", value: "fable" })).isError).not.toBe(true);
+    expect((await state()).advisorCeiling).toBe("fable");
+    const bad = { setting: "advisor_ceiling", value: true };
+    expect((await api(t.baseUrl, "POST", "/api/settings/execution", bad)).status).toBe(400);
+    expect((await viaMcp(bad)).isError).toBe(true);
+  } finally {
+    await client.close();
+  }
+  expect((await state()).advisorCeiling).toBe("fable");
 });
 
 it("anthropic の alias の行は settings タブと管理MCP の両方の扉で拒まれ表は変わらない —— 具体 id の行と openai の行は通る(ADR 0182 決定1)", async () => {

@@ -216,7 +216,7 @@ it("別の行・別の設定の編集では提案は open のまま", async () =
     const questionId = await propose({ tier: "frontier" });
 
     const fable = { provider: "anthropic", tier: "frontier", model: "claude-fable-5-1", effort: "max", price_in: 10, price_out: 50 };
-    for (const change of [{ setting: "row", key: { provider: "anthropic", model: "claude-fable-5-1", effort: "high" }, row: fable }, { setting: "priority", value: "quality" }, { setting: "advisor_above_main", value: true }]) {
+    for (const change of [{ setting: "row", key: { provider: "anthropic", model: "claude-fable-5-1", effort: "high" }, row: fable }, { setting: "priority", value: "quality" }, { setting: "advisor_ceiling", value: "opus" }]) {
       expect((await api(t.baseUrl, "POST", "/api/settings/execution", change)).status).toBe(200);
     }
 

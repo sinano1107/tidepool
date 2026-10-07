@@ -172,10 +172,6 @@ export interface BoardComposition {
   /** worker の stream-json トランスクリプトと spawn 時 MCP config の置き場。
    *  ディレクトリの作成そのものはホストの副作用なので合成 root 側に残る。 */
   logDir: string;
-  /** issue #33 判断8 / ADR 0043: advisor の緊急マスク。**盤面ホストの運用設定**で
-   *  あって registry には置かない —— エージェントの定義ではなく、experimental な
-   *  機能を全員に配る代償として「agent.md を1枚も触らずに止める」ための口。 */
-  advisorDisabled: boolean;
   /** この盤面が実行に使う workspace 名。 */
   workspaceName: string;
   /** ADR 0018: path を省いた workspace エントリが解決される基底ディレクトリ。 */
@@ -243,9 +239,9 @@ export class LoggingWorker implements WorkerAdapter {
  *
  *  ADR 0041 はこの層を「#172 の類ではない」と除外していた。その根拠は当時の任意
  *  フィールドが `spawn` / `pty` / `enumerateSkills` —— **不在 = 実物を使う**という
- *  テスト用の注入 seam —— だけだったことにある。`advisorDisabled` はその類では
- *  ない: 機能そのものであり、渡し忘れたときの壊れ方は fail-open(緊急マスクが
- *  効かないまま、盤面のどこも赤くならない)。したがって網羅の観測をこの層まで
+ *  テスト用の注入 seam —— だけだったことにある。`onCapInterrupted` などはその類では
+ *  ない: 機能そのものであり、渡し忘れたときの壊れ方は静かな fail(盤面のどこも
+ *  赤くならない)。したがって網羅の観測をこの層まで
  *  伸ばす —— 一覧をここへ出さなければ、テストが見るのはテスト自身が書いた複製に
  *  しかならない(ADR 0041 §1 / §4)。
  *
@@ -291,14 +287,10 @@ export function buildWorkerOptions(
     cliVersion: claudeCliVersion,
     // ADR 0040: 床そのもの — 重なっている workspace では spawn せず quarantine
     boardState: board.boardState,
-    // issue #33 判断8: 不在が「マスクされていない」を意味する口なので、渡し忘れは
-    // 静かに fail-open する。上の網羅テストが見張っているのはまさにこれ。
-    advisorDisabled: board.advisorDisabled,
     // ADR 0097 決定4: Moonshot キーの置き場。アダプタが spawn 時にだけ読む
     moonshotApiKeyFile: board.moonshotApiKeyFile,
     // ADR 0104: 429 で断られた session の後始末。渡し忘れは「上限で落ちたタスクが
-    // in_progress のまま watchdog 待ちになる」形で静かに fail する — advisorDisabled と
-    // 同じ類なので、上の網羅テストが見張る面に載せる
+    // in_progress のまま watchdog 待ちになる」形で静かに fail するので、上の網羅テストが見張る面に載せる
     onCapInterrupted: session.onCapInterrupted,
     // ADR 0184 決定4: 渡し忘れは「404 で断られた session が報告なき exit の failure question になる」形で静かに fail する
     onRowRefused: session.onRowRefused,

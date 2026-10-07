@@ -15,10 +15,10 @@ import {
   PROMPT_READY_MARKER,
   pinnedModelFlags,
 } from "../src/claude-worker.js";
-import { openDb } from "../src/db.js";
+import { type Db, openDb } from "../src/db.js";
 import { DEFAULT_AUDITOR_NAME } from "../src/defaults.js";
 import { appendEvent, type EventPayload, listEvents } from "../src/events.js";
-import { resolveExecutionSetting } from "../src/execution-setting.js";
+import { applyExecutionSettingsChange, resolveExecutionSetting } from "../src/execution-setting.js";
 import { BOARD_WRITE_LANGUAGE_RULE } from "../src/mcp.js";
 import { buildMemoryInjection, buildMetaReviewMaterial, type InjectionQuery, recordKnowledge } from "../src/memory.js";
 import { registerMetaReview } from "../src/meta-review.js";
@@ -3100,12 +3100,20 @@ describe("ClaudeCodeWorker", () => {
 });
 
 /** issue #33: advisor capability。frontmatter の `advisor` が spawn の面まで
- *  届くか、不在・緊急マスク時に**確実に閉じる**か、そして「実際に走ったか」が
+ *  届くか、不在・盤面の上限 off で**確実に閉じる**か、そして「実際に走ったか」が
  *  worker_exited に残るか。実 CLI は使わず、既存の ContainerSpawn seam に fake stream を
  *  流す(ADR 0027 / ADR 0041 §4)。 */
 describe("advisor capability (issue #33)", () => {
   const ADVISOR_MD = `---\nname: deckhand\ndescription: General work agent for the tidepool board\nversion: 0.3.1\nauthority: standard\nprovider:\n  - name: anthropic\n    advisor: true\nskills:\n  - "*"\n---\nYou are Deckhand.\n`;
   const withAdvisor = { "agents/deckhand.md": ADVISOR_MD };
+
+  /** advisor の付く盤面の worker: 種の既定の上限は off なので、上限 sonnet にする —— economy の Sonnet 5.5 の
+   *  main には main と同一の advisor が付く(ADR 0208 決定2)。 */
+  const makeAdvisorWorker = async () => {
+    const w = await makeWorker(withAdvisor);
+    applyExecutionSettingsChange(w.db, { setting: "advisor_ceiling", value: "sonnet" }, "webui", new Date());
+    return w;
+  };
 
   /** `--advisor` に渡された値(フラグごと無ければ undefined)。 */
   const advisorFlag = (args: string[]): string | undefined => {
@@ -3132,7 +3140,7 @@ describe("advisor capability (issue #33)", () => {
   // ── frontmatter → spawn ──────────────────────────────────────
 
   it("frontmatter に advisor があれば --advisor でピン留めし、無効化 env は立てない(ADR 0005)", async () => {
-    const { start, calls } = await makeWorker(withAdvisor);
+    const { start, calls } = await makeAdvisorWorker();
     start();
     const call = calls[0]!;
     expect(advisorFlag(call.args)).toBe("claude-sonnet-5-5");
@@ -3149,7 +3157,7 @@ describe("advisor capability (issue #33)", () => {
     const previous = process.env.CLAUDE_CODE_DISABLE_ADVISOR_TOOL;
     process.env.CLAUDE_CODE_DISABLE_ADVISOR_TOOL = "1";
     try {
-      const { start, calls } = await makeWorker(withAdvisor);
+      const { start, calls } = await makeAdvisorWorker();
       start();
       const call = calls[0]!;
       expect(advisorFlag(call.args)).toBe("claude-sonnet-5-5");
@@ -3176,26 +3184,14 @@ describe("advisor capability (issue #33)", () => {
     expect(call.env.CLAUDE_CODE_DISABLE_ADVISOR_TOOL).toBe("1");
   });
 
-  // ── 判断8: グローバル kill switch ──────────────────────────────
+  // ── 上限 off(ADR 0208 決定3): advisor の不在は CLI の無効化 env だけで綴る ──────
 
-  it("kill switch が立っていれば、frontmatter が advisor を持っていてもフラグを渡さず env で閉じる(判断8)", async () => {
-    const { start, calls } = await makeWorker(withAdvisor, { advisorDisabled: true });
+  it("上限が off なら、frontmatter が advisor を持っていてもフラグを渡さず env で閉じる(ADR 0208 決定3)", async () => {
+    const { start, calls } = await makeWorker(withAdvisor);
     start();
     const call = calls[0]!;
     expect(advisorFlag(call.args)).toBeUndefined();
     expect(call.env.CLAUDE_CODE_DISABLE_ADVISOR_TOOL).toBe("1");
-  });
-
-  // マスクは agent.md を1枚も触らずに効く必要がある(判断8 の存在理由そのもの) —
-  // registry 側は無傷のまま、盤面ホストの設定だけで全 worker が止まる。
-  it("kill switch は registry を書き換えない — 同じ registry で off に戻せば advisor は復活する(判断8)", async () => {
-    const masked = await makeWorker(withAdvisor, { advisorDisabled: true });
-    masked.start("task-masked");
-    expect(advisorFlag(masked.calls[0]!.args)).toBeUndefined();
-
-    const unmasked = await makeWorker(withAdvisor);
-    unmasked.start("task-unmasked");
-    expect(advisorFlag(unmasked.calls[0]!.args)).toBe("claude-sonnet-5-5");
   });
 
   // ── anthropics/claude-code#69238 の回避 env ────────────────────
@@ -3208,11 +3204,11 @@ describe("advisor capability (issue #33)", () => {
   it("#69238 の回避 env(stream idle / API timeout)は advisor の有無に依らず全 spawn に立つ", async () => {
     const off = await makeWorker();
     off.start("task-no-advisor");
-    const on = await makeWorker(withAdvisor);
+    const on = await makeAdvisorWorker();
     on.start("task-advisor");
-    const masked = await makeWorker(withAdvisor, { advisorDisabled: true });
-    masked.start("task-advisor-masked-env");
-    for (const call of [off.calls[0]!, on.calls[0]!, masked.calls[0]!]) {
+    const ceilingOff = await makeWorker(withAdvisor);
+    ceilingOff.start("task-advisor-ceiling-off");
+    for (const call of [off.calls[0]!, on.calls[0]!, ceilingOff.calls[0]!]) {
       expect(call.env.CLAUDE_STREAM_IDLE_TIMEOUT_MS).toBe("600000");
       expect(call.env.API_TIMEOUT_MS).toBe("600000");
     }
@@ -3222,34 +3218,31 @@ describe("advisor capability (issue #33)", () => {
     expect([
       off.calls[0]!.env.CLAUDE_CODE_DISABLE_ADVISOR_TOOL,
       on.calls[0]!.env.CLAUDE_CODE_DISABLE_ADVISOR_TOOL,
-      masked.calls[0]!.env.CLAUDE_CODE_DISABLE_ADVISOR_TOOL,
+      ceilingOff.calls[0]!.env.CLAUDE_CODE_DISABLE_ADVISOR_TOOL,
     ]).toEqual(["1", undefined, "1"]);
   });
 
   // ── 判断6 前半: worker_spawned は「盤面が何をピン留めしたか」 ──────
 
-  it("worker_spawned は盤面がピン留めした advisor を記録する(判断6)。フラグが立つまでは main と同一のモデル —— agent.md には真偽しか書かれていない", async () => {
-    const { start, db } = await makeWorker(withAdvisor);
+  it("worker_spawned は盤面がピン留めした advisor とその出所を記録する(判断6 / ADR 0208 決定6)—— agent.md には真偽しか書かれていない", async () => {
+    const { start, db } = await makeAdvisorWorker();
     start("task-spawn-advisor");
     const spawned = listEvents(db, "task-spawn-advisor").find((e) => e.kind === "worker_spawned");
-    expect(spawned!.payload).toMatchObject({ kind: "worker_spawned", advisor: "claude-sonnet-5-5" });
+    expect(spawned!.payload).toMatchObject({ kind: "worker_spawned", advisor: "claude-sonnet-5-5", source: { advisor: "ceiling" } });
   });
 
-  // registry_commit があるので frontmatter の文字列は後から引ける。**イベント履歴
-  // だけで**確定できないのはホスト側のマスクのほうなので、記録するのは「盤面が
-  // 実際にピン留めした値」— マスク下は null に畳まれる。
-  it("advisor 不在の agent と kill switch 下は、どちらも worker_spawned.advisor が null(判断6)", async () => {
+  // registry_commit があるので frontmatter の真偽は後から引ける。**イベント履歴だけで**確定できないのは
+  // 盤面の上限のほうなので、記録するのは「盤面が実際にピン留めした値」とその出所 —— 上限 off では advisor は
+  // null に畳まれ、出所が advisor の無い agent と区別する。
+  it("advisor 不在の agent と上限 off は、どちらも worker_spawned.advisor が null で、出所 off があるのは上限 off の側だけ(判断6 / ADR 0208 決定6)", async () => {
     const plain = await makeWorker();
     plain.start("task-plain");
-    const masked = await makeWorker(withAdvisor, { advisorDisabled: true });
-    masked.start("task-masked-event");
-    for (const [w, id] of [
-      [plain, "task-plain"],
-      [masked, "task-masked-event"],
-    ] as const) {
-      const spawned = listEvents(w.db, id).find((e) => e.kind === "worker_spawned");
-      expect(spawned!.payload).toMatchObject({ kind: "worker_spawned", advisor: null });
-    }
+    const ceilingOff = await makeWorker(withAdvisor);
+    ceilingOff.start("task-ceiling-off-event");
+    const spawned = (w: { db: Db }, id: string) => listEvents(w.db, id).find((e) => e.kind === "worker_spawned")!.payload;
+    expect(spawned(plain, "task-plain")).toMatchObject({ kind: "worker_spawned", advisor: null, source: { tier: "board", provider: "only" } });
+    expect(spawned(plain, "task-plain")).not.toHaveProperty("source.advisor");
+    expect(spawned(ceilingOff, "task-ceiling-off-event")).toMatchObject({ kind: "worker_spawned", advisor: null, source: { advisor: "off" } });
   });
 
   // ── 判断6 後半: worker_exited は「実際に走ったか」 ────────────────
@@ -3315,7 +3308,7 @@ describe("advisor capability (issue #33)", () => {
   };
 
   it("相談が観測されたセッションは、解決済み advisor id・相談回数・分離した消費を記録する(判断6)", async () => {
-    const { start, processes, emitExit, db } = await makeWorker(withAdvisor);
+    const { start, processes, emitExit, db } = await makeAdvisorWorker();
     start("task-advisor-usage");
     processes[0]!.stdout.write(initLine("claude-sonnet-5"));
     processes[0]!.stdout.write(consultation("srvtoolu_01"));
@@ -3359,7 +3352,7 @@ describe("advisor capability (issue #33)", () => {
   // コストだけでは「長い会話で1回」と「短い会話で3回」が区別できないので、回数は
   // usage とは独立に数える。数え上げは既に1行ずつ読んでいる stdout から取れる。
   it("相談回数は stream 中の server_tool_use(advisor) の本数を数える(判断6)", async () => {
-    const { start, processes, emitExit, db } = await makeWorker(withAdvisor);
+    const { start, processes, emitExit, db } = await makeAdvisorWorker();
     start("task-advisor-count");
     processes[0]!.stdout.write(initLine("claude-sonnet-5"));
     processes[0]!.stdout.write(consultation("srvtoolu_01"));
@@ -3371,7 +3364,7 @@ describe("advisor capability (issue #33)", () => {
   });
 
   it("改行なしの最終チャンクにある相談も数える(issue #1301)", async () => {
-    const { start, processes, emitExit, db } = await makeWorker(withAdvisor);
+    const { start, processes, emitExit, db } = await makeAdvisorWorker();
     start("task-advisor-final-chunk");
     processes[0]!.stdout.write(initLine("claude-sonnet-5"));
     processes[0]!.stdout.write(resultLine());
@@ -3383,7 +3376,7 @@ describe("advisor capability (issue #33)", () => {
   // 通常の tool_use(MCP verb 等)を advisor と数え間違えない — 数えるのは
   // `server_tool_use` かつ name が advisor のものだけ。
   it("通常の tool_use は相談として数えない", async () => {
-    const { start, processes, emitExit, db } = await makeWorker(withAdvisor);
+    const { start, processes, emitExit, db } = await makeAdvisorWorker();
     start("task-advisor-noise");
     processes[0]!.stdout.write(initLine("claude-sonnet-5"));
     processes[0]!.stdout.write(
@@ -3402,7 +3395,7 @@ describe("advisor capability (issue #33)", () => {
   // 未 attach のまま終わる —— 盤面から見て成功セッションと区別が付かない。
   // `advisor: null` が、そのセッションで advisor が**走らなかった**ことを言う。
   it("advisor をピン留めしても相談が1本も観測されなければ usage.advisor は null(判断6)", async () => {
-    const { start, processes, emitExit, db } = await makeWorker(withAdvisor);
+    const { start, processes, emitExit, db } = await makeAdvisorWorker();
     start("task-advisor-silent");
     processes[0]!.stdout.write(initLine("claude-sonnet-5"));
     processes[0]!.stdout.write(resultLine({ modelUsage: { "claude-sonnet-5": { costUSD: 0.09 } }, usage: {
@@ -3420,7 +3413,7 @@ describe("advisor capability (issue #33)", () => {
   // 盤面はそれを**正規表現で判定しない**(黙って劣化する検出器は #172 が拒んだ形
   // そのもの)。証拠は stderr_tail に verbatim で残る、という形で保つ。
   it("未 attach の警告は判定に使わず、stderr_tail に verbatim で残す(判断3)", async () => {
-    const { start, processes, emitExit, db } = await makeWorker(withAdvisor);
+    const { start, processes, emitExit, db } = await makeAdvisorWorker();
     start("task-advisor-warning");
     // 実測の文言(main opus × advisor sonnet のセル)
     const warning =
@@ -3445,7 +3438,7 @@ describe("advisor capability (issue #33)", () => {
   // (`usage: null` が「セッションは走ったが report が無い」を表すのと同じ形)。
   // 回数だけは数えられるので `consultations` は usage の外に出してある。
   it("main と advisor が同じモデルに解決されたら usage は null(0 ではない)", async () => {
-    const { start, processes, emitExit, db } = await makeWorker(withAdvisor);
+    const { start, processes, emitExit, db } = await makeAdvisorWorker();
     start("task-advisor-same-model");
     processes[0]!.stdout.write(initLine("claude-sonnet-5"));
     processes[0]!.stdout.write(consultation("srvtoolu_01"));
@@ -3477,7 +3470,7 @@ describe("advisor capability (issue #33)", () => {
   // {内部 haiku, main, advisor} になりうる(実測)ので、main を引いても1つに
   // 定まらない。名前表もキャッシュ量のヒューリスティックも、黙って外れる形なので採らない。
   it("最終ターンに相談が無ければ解決済み id は残らない — model は null、相談回数は残る", async () => {
-    const { start, processes, emitExit, db } = await makeWorker(withAdvisor);
+    const { start, processes, emitExit, db } = await makeAdvisorWorker();
     start("task-advisor-earlier-turn");
     processes[0]!.stdout.write(initLine("claude-sonnet-5"));
     processes[0]!.stdout.write(consultation("srvtoolu_01"));
@@ -3511,7 +3504,7 @@ describe("advisor capability (issue #33)", () => {
   // 観測できなかったセッション(壊れた行・`model` を持たない init)はこの状態に
   // なる。「測れなかった」を誤った値に化けさせない。
   it("main モデルの解決先が観測できていなければ usage は null(分離可否そのものが不明)", async () => {
-    const { start, processes, emitExit, db } = await makeWorker(withAdvisor);
+    const { start, processes, emitExit, db } = await makeAdvisorWorker();
     start("task-advisor-no-init");
     // init 行を一切流さない
     processes[0]!.stdout.write(consultation("srvtoolu_01"));
@@ -3527,7 +3520,7 @@ describe("advisor capability (issue #33)", () => {
   // `modelUsage` を持たない result 行(古い CLI・壊れた行)でも、相談の事実と回数は
   // stream 側から取れている。ここで throw して usage 全体を失わない。
   it("modelUsage を持たない result 行でも相談の事実は失わない", async () => {
-    const { start, processes, emitExit, db } = await makeWorker(withAdvisor);
+    const { start, processes, emitExit, db } = await makeAdvisorWorker();
     start("task-advisor-no-modelusage");
     processes[0]!.stdout.write(initLine("claude-sonnet-5"));
     processes[0]!.stdout.write(consultation("srvtoolu_01"));
@@ -3559,7 +3552,7 @@ describe("advisor capability (issue #33)", () => {
   // 見分けが付かないので、丸ごと落とす)。既存の advisor 判定(advisorUsage は
   // 別の三項目narrowingのまま)には影響しない。
   it("modelUsage の1エントリが五項目のうち1つでも欠けば usage.models は丸ごと省略される(ADR 0094)", async () => {
-    const { start, processes, emitExit, db } = await makeWorker(withAdvisor);
+    const { start, processes, emitExit, db } = await makeAdvisorWorker();
     start("task-models-malformed-entry");
     processes[0]!.stdout.write(initLine("claude-sonnet-5"));
     processes[0]!.stdout.write(consultation("srvtoolu_01"));
@@ -3591,7 +3584,7 @@ describe("advisor capability (issue #33)", () => {
   // null のまま —— `advisor` 欄が生えるのは usage がある行だけであり、欠測が
   // 「advisor なしで走った」に化けない。
   it("stdout が空のまま exit 1 したセッションは usage null のまま(advisor 欄も生えない)", async () => {
-    const { start, processes, emitExit, db } = await makeWorker(withAdvisor);
+    const { start, processes, emitExit, db } = await makeAdvisorWorker();
     start("task-advisor-exit1");
     processes[0]!.stderr.write('Error: The model "haiku" cannot be used as an advisor.\n');
     emitExit(1, null);

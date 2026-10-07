@@ -48,7 +48,6 @@ function composition(): BoardComposition {
     registryDir: undefined,
     registryMode: "purely-local",
     logDir: "/nonexistent/worker-logs",
-    advisorDisabled: false,
     workspaceName: "sandbox",
     workspacesDir: "/nonexistent/workspaces",
     workspacesDirSource: "configured",
@@ -300,14 +299,14 @@ it("main.ts は buildServerOptions が組み立てたオプションで盤面を
  *  ADR 0041 は `ClaudeWorkerOptions` を「#172 の類ではない」と除外していたが、
  *  その根拠は当時の任意フィールドが `spawn` / `pty` / `enumerateSkills` ——
  *  **不在 = 実物を使う**というテスト用の注入 seam —— だけだったことにある。
- *  advisor の kill switch は機能そのもので、渡し忘れれば「緊急マスクが効かない」
- *  形で fail-open に壊れる: 全部が健康に見えたまま advisor が止まらない。
+ *  `onCapInterrupted` などは機能そのもので、渡し忘れれば静かに壊れる:
+ *  全部が健康に見えたまま、上限で落ちた task が watchdog 待ちになる。
  *  除外一覧をテスト側に置くのは ADR 0041 §3 と同じ理由 —— 除外を1つ増やすことは
  *  「その口は本番で永久に立たない」という宣言だからである。 */
 it("ClaudeWorkerOptions の任意フィールドは、テスト用の注入 seam を除いて全て組み立てられる(ADR 0043)", async () => {
   const optional = optionalFields("claude-worker.ts", "ClaudeWorkerOptions");
   // 走査が壊れていないことの control(server 側の網羅テストと同じ形)
-  expect(optional).toEqual(expect.arrayContaining(["advisorDisabled", "pty", "boardState"]));
+  expect(optional).toEqual(expect.arrayContaining(["onCapInterrupted", "pty", "boardState"]));
 
   const registryDir = await makeRegistry();
   const emitted = new Set(
@@ -334,21 +333,6 @@ it("worker options の口の一覧は main.ts に戻っていない(ADR 0043)", 
   expect(source("main.ts")).not.toMatch(/new ClaudeCodeWorker\(/);
   // 本番の合成が実際にその一覧を使っていること(呼び出しの**形**は主張しない)
   expect(source("server-options.ts")).toMatch(/new ClaudeCodeWorker\(\s*buildWorkerOptions\(/);
-});
-
-/** キーが揃っていることと、**どのキーに何が刺さっているか**は別の主張である
- *  (ADR 0041 §5 と同じ線)。kill switch は真偽値1つなので、取り違えても型検査は
- *  黙る —— しかも壊れ方が fail-open なので、黙ったまま advisor が止まらなくなる。 */
-it("kill switch は盤面の合成からそのまま worker options へ届く(判断8)", async () => {
-  const registryDir = await makeRegistry();
-  const options = (advisorDisabled: boolean) =>
-    buildWorkerOptions(
-      { ...composition(), registryDir, advisorDisabled },
-      { db: openDb(":memory:"), clock: new FakeClock(), reclaimTimeout: 1, ...containerHarness(fakeContainers()), onCapInterrupted: () => {}, onRowRefused: () => {}, onSpawnFailed: () => {}, onWorkerExited: () => {}, transcripts: new TranscriptStore("/nonexistent/worker-logs") },
-    );
-
-  expect(options(true).advisorDisabled).toBe(true);
-  expect(options(false).advisorDisabled).toBe(false);
 });
 
 /** ADR 0040 の線: worker ログの置き場と、盤面が「重なるな」と守っている

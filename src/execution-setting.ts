@@ -1,6 +1,6 @@
 import { parse as parseYaml } from "yaml";
 import { z } from "zod";
-import { claudeAdvisorFor, isClaudeModelAlias } from "./claude-model-alias.js";
+import { ADVISOR_CEILINGS, type AdvisorCeiling, type AdvisorSource, claudeAdvisorFor, isClaudeModelAlias } from "./claude-model-alias.js";
 import type { Db } from "./db.js";
 
 import { DomainError } from "./domain-error.js";
@@ -225,8 +225,9 @@ export interface ExecutionSetting {
   /** ADR 0110 決定3: 選んだ値だけでなく**なぜその値になったか**を刻む。今は
    *  ティアの出所1つ —— `"task"` は task の要求列、`"agent"` は agent.md の
    *  `tier`、`"review_tier"` はレビュー専用の要求、`"board"` は盤面既定。未指定(列が null)と「既定を選んだ」が
-   *  記録上区別されるのはこの1値による。 */
-  source: { tier: TierSource; provider: ProviderSource };
+   *  記録上区別されるのはこの1値による。`advisor` は advisor を有効にした entry の候補だけが持つ advisor の出所
+   *  (ADR 0208 決定6)—— pin の綴りだけでは、上限から下がった理由を記録から区別できない。 */
+  source: { tier: TierSource; provider: ProviderSource; advisor?: AdvisorSource };
 }
 
 /** entry を候補から外す資源(CONTEXT.md「Selector」/ ADR 0110 決定3)。Throttle の
@@ -291,11 +292,9 @@ export interface SelectorInput {
   agentTier: Tier | undefined;
   /** 盤面既定の段(盤面設定、ADR 0200 決定4)。 */
   boardTier: Tier;
-  /** 盤面設定:「main より序列が上の model を advisor に使ってよい」。立つまで advisor は
-   *  main と同一に倒れる —— Fable の usage-credits 同意も org の `availableModels`
-   *  も盤面からは読めず、不成立なら headless の CLI は exit せず advisor 無しで
-   *  黙って起動する(2026-09-10 実測: stream-json は未 attach を通知しない)。 */
-  advisorAboveMain: boolean;
+  /** 盤面設定: advisor の上限(ADR 0208 決定1)。`off` なら advisor を有効にした entry を advisor の無い entry
+   *  として選ぶ(決定3)。 */
+  advisorCeiling: AdvisorCeiling;
 }
 
 /** 価格の鍵(ADR 0114 決定4): out 単価、同額なら in 単価。 */
@@ -334,15 +333,12 @@ export function anthropicBoardCallRow(db: Db, tier: Tier, windowClosed: (model: 
  *  候補を1度作り、除外が増えるたびに `selectable` を引き直す形にしてある。
  *  要求ティアの行を持たない entry は候補に入らない(Throttle と同じ「除外」)。
  *
- *  advisor の model は agent.md には書かれない: 真のときだけ main の行から導出する
- *  (`claudeAdvisorFor`、ADR 0200 決定6 —— 表もティアも読まない)。advisor を宣言
- *  できるのは anthropic の entry だけで(ADR 0097)、adapter が系列を知らない行と
- *  adapter が advisor を受けられないとする行(ADR 0200 追記 2026-10-07)は advisor つきの entry の候補にしない —— advisor 無しで黙って走らせず、
- *  CLI が起動時に断る組も pin しない。
- *
- *  kill switch(ADR 0043)はここでは見ない —— 「この session に advisor は無い」
- *  という盤面ホストの運用マスクは registry の宣言とは別の層で、選んだ**後**に
- *  被せる(claude-worker.ts の launch)。 */
+ *  advisor の model は agent.md には書かれない: 真のときだけ main の行と盤面の上限から導出する
+ *  (`claudeAdvisorFor`、ADR 0208 —— 表もティアも読まない)。advisor を宣言
+ *  できるのは anthropic の entry だけで(ADR 0097)、adapter が候補にしない行(知らない系列、
+ *  advisor を受けられない世代 —— ADR 0200 追記 2026-10-07)は advisor つきの entry の候補にしない —— advisor 無しで黙って走らせず、
+ *  CLI が起動時に断る組も pin しない。上限が `off` のときと main が上限より上のときの advisor 無しは除外ではなく、
+ *  候補に残る(ADR 0208 決定2・3)。 */
 function executionSettingCandidates(
   request: SelectorInput,
   table: ExecutionSettingTable,
@@ -362,19 +358,21 @@ function executionSettingCandidates(
   return request.entries
     .flatMap((entry) =>
       rowsFor(table, entry.provider, tier).flatMap((main) => {
-        const advisor = entry.advisor ? claudeAdvisorFor(main.model, request.advisorAboveMain) : undefined;
-        return entry.advisor && advisor === undefined ? [] : [{ main, advisor }];
+        const derived: { advisor: string | undefined; source?: AdvisorSource } | undefined = entry.advisor
+          ? claudeAdvisorFor(main.model, request.advisorCeiling)
+          : { advisor: undefined };
+        return derived ? [{ main, ...derived }] : [];
       }),
     )
     .sort((a, b) =>
       priority === "cost" ? byPrice(a.main, b.main) || byRank(a.main, b.main) : byRank(a.main, b.main) || byPrice(a.main, b.main),
     )
-    .map(({ main, advisor }) => ({
+    .map(({ main, advisor, source }) => ({
       provider: main.provider,
       model: main.model,
       effort: main.effort,
       advisor,
-      source: { tier: tierSource, provider: providerSource },
+      source: { tier: tierSource, provider: providerSource, ...(source && { advisor: source }) },
     }));
 }
 
@@ -431,11 +429,11 @@ export function loadExecutionSettingTable(db: Db): ExecutionSettingTable {
     .all() as ExecutionSettingRow[];
 }
 
-/** 盤面設定(ADR 0110 決定5): 「main より序列が上の model を advisor に使ってよい」、
+/** 盤面設定(ADR 0110 決定5): advisor の上限(ADR 0208)、
  *  Provider 順位、優先順位の既定、学習器の昇格(ADR 0150 決定4)、盤面自身の判断の段(振り返り Board call と
  *  周期 meta-review が共有する、ADR 0200 決定4)と盤面既定の段。行は種で作られ、列が NULL = 未設定 = コードの既定。 */
 interface ExecutionDefaults {
-  advisorAboveMain: boolean;
+  advisorCeiling: AdvisorCeiling;
   providerRank: readonly Provider[];
   priority: Priority;
   learnerPromoted: boolean;
@@ -515,7 +513,7 @@ export const executionSettingsChangeSchema = z.discriminatedUnion("setting", [
     }),
   }),
   z.object({ setting: z.literal("delete_row"), ...rowKeySchema.shape }),
-  z.object({ setting: z.literal("advisor_above_main"), value: z.boolean() }),
+  z.object({ setting: z.literal("advisor_ceiling"), value: z.enum(ADVISOR_CEILINGS) }),
   z.object({
     setting: z.literal("provider_rank"),
     value: z.array(z.enum(PROVIDER_VALUES)).refine(isProviderRank, {
@@ -819,11 +817,11 @@ export function settleStaleProposals(db: Db, at: Date, observedEventId: number |
 function loadExecutionDefaults(db: Db): ExecutionDefaults {
   const row = db
     .prepare(
-      `SELECT advisor_above_main, provider_rank, priority, learner_promoted, d.name AS default_tier, j.name AS judgement_tier
+      `SELECT advisor_ceiling, provider_rank, priority, learner_promoted, d.name AS default_tier, j.name AS judgement_tier
        FROM execution_defaults JOIN tiers d ON d.id = default_tier_id JOIN tiers j ON j.id = judgement_tier_id`,
     )
     .get() as {
-    advisor_above_main: number;
+    advisor_ceiling: AdvisorCeiling;
     provider_rank: string | null;
     priority: Priority | null;
     learner_promoted: number;
@@ -831,7 +829,7 @@ function loadExecutionDefaults(db: Db): ExecutionDefaults {
     judgement_tier: Tier;
   };
   return {
-    advisorAboveMain: row.advisor_above_main === 1,
+    advisorCeiling: row.advisor_ceiling,
     providerRank: row.provider_rank ? (JSON.parse(row.provider_rank) as Provider[]) : PROVIDER_VALUES,
     priority: row.priority ?? BOARD_DEFAULT_PRIORITY,
     learnerPromoted: row.learner_promoted === 1,
@@ -848,7 +846,7 @@ type SelectorTask = Pick<Task, "type" | "tier" | "priority" | "review_tier">;
  *  「その agent は何のモデルで走るのか」の答えが2つあってはならない(モデル窓の
  *  除外は、答えがずれた瞬間に全テスト緑のまま黙って効かなくなる面である)。
  *
- *  Provider 順位・優先順位の既定・advisor above main は盤面設定(`execution_defaults`、
+ *  Provider 順位・優先順位の既定・advisor の上限は盤面設定(`execution_defaults`、
  *  settings タブと管理MCP が書く —— ADR 0110 決定5)。pickup ごとに読み直すので、
  *  書いた値は次の pickup / skipped 表示から効く。
  *
@@ -871,7 +869,7 @@ function selectorInputFor(
     reviewTier: task?.type === "review" ? task.review_tier ?? undefined : undefined,
     agentTier: definition.tier,
     boardTier: defaults.defaultTier,
-    advisorAboveMain: defaults.advisorAboveMain,
+    advisorCeiling: defaults.advisorCeiling,
   };
 }
 
