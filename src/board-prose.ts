@@ -210,13 +210,14 @@ function historicalDefinitionSection(db: Db, registryDir: string, task: Task): s
     else resolved.push({ commit, entryIds, body });
   }
   if (resolved.length === 0) return "";
+  // 「current definition」の括弧は ADR 0019(修理は再演ではない)
   if (resolved.length === 1 && unresolved.length === 0) {
     return (
       "\n\n## Definition under review (as it stood when you ran the objected task)\n\n" +
       "This is your agent definition recorded at the commit you were spawned from — " +
       "the version that shaped the decision now under review. Read it as evidence for " +
       '"why did I make that call". You nonetheless carry out this review under your ' +
-      "current definition (ADR 0019: repair is not a re-enactment).\n\n---\n\n" +
+      "current definition (repair is not a re-enactment).\n\n---\n\n" +
       resolved[0]!.body
     );
   }
@@ -235,7 +236,7 @@ function historicalDefinitionSection(db: Db, registryDir: string, task: Task): s
     "from, resolved per objected decision-log entry — each version below is the one " +
     "that was live when you wrote the entries it is labeled with. Read them as evidence " +
     'for "why did I make that call". You nonetheless carry out this review under your ' +
-    "current definition (ADR 0019: repair is not a re-enactment)." +
+    "current definition (repair is not a re-enactment)." +
     resolved
       .map(
         ({ commit, entryIds, body }) =>

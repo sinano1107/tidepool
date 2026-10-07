@@ -1,0 +1,8 @@
+language js
+
+or { JsStringLiteralExpression(), JsTemplateChunkElement(), JsxString(), JsxText() } as $s where {
+  // SQL の `--` 行コメント(DDL のテンプレート)の中の ADR はコメントなので拾わない —— コメントとみなすのは
+  // 行頭の `--` だけ(行の途中の `--mcp-config` などの CLI フラグは地の文)
+  $s <: r"[\s\S]*?(?m:^)[ \t]*(?:(?:[^\s-]|-[^-])[^\n]*)?ADR \d{4}[\s\S]*",
+  register_diagnostic(span=$s, message="Text the board's code emits carries no maintainer references (ADR 0207): move the ADR citation into a comment where this string is built, and keep the explanation in the prose.", severity="error")
+}

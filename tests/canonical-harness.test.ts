@@ -21,7 +21,7 @@ it("OpenAI / Codex の正準経路に無い advisor は登録時と pickup 時�
   expect(() => assertValidAgentDefinition("deckhand", { provider: [{ name: "openai", advisor: true }] }, seedTierNames)).toThrow(
     new InvalidAgentDefinitionError(
       "deckhand",
-      'canonical route "openai -> codex" does not offer an advisor — a definition declaring one does not stand (ADR 0098)',
+      'canonical route "openai -> codex" does not offer an advisor — a definition declaring one does not stand',
     ),
   );
   expect(() => assertValidAgentDefinition("deckhand", { provider: [{ name: "openai", advisor: false }] }, seedTierNames)).not.toThrow();
@@ -31,7 +31,7 @@ it("OpenAI / Codex v1 に無い skill capability も共有検査で拒否され�
   expect(() => assertValidAgentDefinition("deckhand", { provider: [{ name: "openai", advisor: false }], skills: ["tdd"] }, seedTierNames)).toThrow(
     new InvalidAgentDefinitionError(
       "deckhand",
-      'canonical route "openai -> codex" does not offer skills in v1 — a definition declaring a non-empty allowlist does not stand (ADR 0098)',
+      'canonical route "openai -> codex" does not offer skills in v1 — a definition declaring a non-empty allowlist does not stand',
     ),
   );
   expect(() => assertValidAgentDefinition("deckhand", { provider: [{ name: "openai", advisor: false }], skills: [] }, seedTierNames)).not.toThrow();

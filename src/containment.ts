@@ -86,12 +86,13 @@ export async function checkHumanSurfaceRefusesAnonymous(
     };
   }
   if (status === 401) return { available: true };
+  // 人間面に worker から届くこと・token が無いときの fail-open は ADR 0036
   return {
     available: false,
     reason:
       `the board's own human surface answered an unauthenticated GET ${url} with ${status}, ` +
       "not 401 — the WebUI, /api and the management MCP mounted there are reachable by anything " +
-      "that can reach this port, worker sessions included (ADR 0036). The usual cause is a " +
+      "that can reach this port, worker sessions included. The usual cause is a " +
       "missing or unusable token hash: the board then fail-opens the human surface on purpose, " +
       "and this gate is the half that keeps it safe",
   };

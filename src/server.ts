@@ -482,12 +482,13 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
     .get() as { id: string } | undefined;
   if (interrupted) {
     const task = getTask(db, interrupted.id)!;
+    // 「restart never drains gracefully」は ADR 0001
     failTask(
       db,
       task,
       `restart interrupted task: ${task.title}`,
       "the server restarted while this task was in progress; no self-report is " +
-        "possible (ADR 0001: a restart never drains gracefully).",
+        "possible (a restart never drains gracefully).",
       buildWorkspaceResolver(options.resolveWorkspace, options.workspace),
       options.clock.now(),
     );

@@ -58,9 +58,9 @@ export function rotateToken(tokenFile: string): string {
 }
 
 /** 認証が立たない盤面がどうなるかの一文。3箇所の運用者向けメッセージで同じ姿を
- *  言う — インシデント中に「どっちだったか」を読み解かせないため。 */
+ *  言う — インシデント中に「どっちだったか」を読み解かせないため。人間面の fail-open は ADR 0036。 */
 const UNAUTHENTICATED_POSTURE =
-  "the human surface is open to anyone who can reach it (ADR 0036 fail-open), and worker " +
+  "the human surface is open to anyone who can reach it (fail-open), and worker " +
   "pickup is halted board-wide until it is repaired. Run `npm run token` to issue a new one, " +
   "open the printed bootstrap URL, then answer the board's standing question.";
 
@@ -95,11 +95,12 @@ export function bootstrapNotice(input: {
   /** 既存の token を置き換えたか。初回起動 → false。 */
   rotated: boolean;
 }): string {
+  // 盤面 token の発行は issue #153 / ADR 0036
   const lines = [
     "",
     input.rotated
       ? "tidepool: a new board token was issued — the previous one is now invalid."
-      : "tidepool: a board token was issued for this board (issue #153 / ADR 0036).",
+      : "tidepool: a board token was issued for this board.",
     "",
     `  token: ${input.token}`,
     `  hash stored in: ${input.tokenFile}`,

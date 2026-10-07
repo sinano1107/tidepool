@@ -168,9 +168,10 @@ export function createBoardCalls(deps: {
    *  盤面へ上がる。ここで握り潰すと Containment quarantine の失敗が黙って消える。 */
   function report(id: string, kind: string): void {
     unreclaimed.set(id, kind);
+    // 回収を観測できない呼び出しが残りうることは ADR 0136
     deps.onReclaimTimeout(
       `${subject(kind)} was force-reclaimed but never observed empty, so processes from ` +
-        "that call may still be running against this host and its workspaces (ADR 0136)",
+        "that call may still be running against this host and its workspaces",
     );
   }
 
@@ -182,11 +183,11 @@ export function createBoardCalls(deps: {
     // 容器なしで起こすのは ADR 0099 決定5 が禁じた「黙って弱い回収へ落ちる」形である。
     if (!deps.containers.preflight().available) return null;
     if (!spec.bypassVersionGate) {
-      // 読めない版は一致とは読まない(fail-closed)
+      // 読めない版は一致とは読まない(fail-closed、ADR 0186)
       const version = await deps.checkCliVersion(spec.harness).catch(
         (error: unknown): ContainmentCapability => ({
           available: false,
-          reason: `the board could not read this host's ${spec.harness} CLI version: ${String(error)} (ADR 0186)`,
+          reason: `the board could not read this host's ${spec.harness} CLI version: ${String(error)}`,
         }),
       );
       if (!version.available) {

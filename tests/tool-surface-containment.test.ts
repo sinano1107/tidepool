@@ -230,11 +230,11 @@ it("ping は auto-memory を閉じる設定だけを inline の --settings で�
   });
 });
 
-it("init 報告に memory_paths.auto が有れば不成立 — 観測した値と ADR 0156 を言う", async () => {
+it("init 報告に memory_paths.auto が有れば不成立 — 観測した値と確かめる設定キーを言う", async () => {
   const { result } = await probeWithInit({ memory_paths: { auto: "/home/pi/.claude/projects/x/memory" } });
   expect(result.available).toBe(false);
   expect(result.available === false && result.reason).toContain("/home/pi/.claude/projects/x/memory");
-  expect(result.available === false && result.reason).toContain("ADR 0156");
+  expect(result.available === false && result.reason).toContain("autoMemoryEnabled");
 });
 
 it("init 報告に memory_paths.auto が無ければ成立", async () => {
