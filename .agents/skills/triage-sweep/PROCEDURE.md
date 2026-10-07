@@ -9,11 +9,11 @@ This is `/triage`'s per-issue evaluation with its maintainer checkpoints replace
 - **Worktree.** `git worktree add --detach "$(mktemp -d)/sweep" origin/main` (the parent has fetched), and investigate there — the main checkout belongs to other sessions and its branch moves under you. `git rev-parse --short HEAD` in the worktree is the **investigated SHA** every comment cites.
 - **Throwaway tests.** Reproduce a claim with a test written in the worktree; it dies with the worktree unless the outcome is Pin. To run tests there, symlink the main checkout's `node_modules` into the worktree — or `npm ci` when `package-lock.json` differs between the two — and remove the link before removing the worktree.
 - **Lima VM**, when the issue's subject only shows on Linux or in a real worker run (containers, reclaim, Containment, a real CLI — a real `claude` / `codex` run happens only inside your clone, never on the Mac — [machine-setup.md](../../../docs/agents/machine-setup.md#linux-devtest-in-the-lima-vm)):
-  1. `limactl clone tidepool-sweep-base sweep-<issue> --start` — your own disposable VM. When the parent reported no base VM, the issue's outcome is **skipped**, reason "no tidepool-sweep-base".
-  2. Get the code in: `git archive --format=tar.gz -o <tmp>/src.tar.gz HEAD` in the worktree, `limactl copy <tmp>/src.tar.gz sweep-<issue>:/tmp/`, extract under `/tmp/<issue>`, `npm ci` there.
+  1. `<this file's directory>/scripts/take-vm-slot.sh` — takes one of the sweep's VM slots, a disposable clone of `tidepool-sweep-base`, starts it and prints its name (`sweep-slot-<n>`); that name is `<vm>` below. It waits while every slot is busy; exit 75 means it gave up after about 9 minutes — run it again. When the parent reported no base VM, the issue's outcome is **skipped**, reason "no tidepool-sweep-base".
+  2. Get the code in: `git archive --format=tar.gz -o <tmp>/src.tar.gz HEAD` in the worktree, `limactl copy <tmp>/src.tar.gz <vm>:/tmp/`, extract under `/tmp/<issue>`, `npm ci` there.
   3. Put every guest-side command inside a quoted `bash -lc '…'` — an unquoted `~` expands on the Mac.
   4. Reach a board you start in the clone from inside the guest (`curl` within `limactl shell`). Lima forwards guest ports to the same port on the Mac, where clones running side by side collide.
-  5. `limactl delete -f sweep-<issue>` when the issue is done.
+  5. `limactl delete -f <vm>` when the issue is done — that frees the slot for the next sub-agent.
 - **Cleanup.** Remove the worktree (`git worktree remove --force <path>`) when the cluster is done.
 
 ## Per issue
@@ -33,7 +33,7 @@ Read the open issues this one links to and any you meet touching the same area. 
 
 Check the claim before judging it. A bug: reproduce it from the code path or a throwaway test. A `needs-info` issue: make the observation it asks for, wherever the worktree or a VM clone can show it. An observation only a running board can give — production behaviour, whether something hurts over time — is not yours to make; it decides the outcome below.
 
-When the claim does not hold, find what in the code makes it not hold, break that one spot in the worktree, run the suite, and restore it. Nothing turning red means the verdict rests on **unpinned** behaviour: your throwaway test is the only thing holding it.
+When the claim does not hold, find what in the code makes it not hold, break that one spot in the worktree, run the suite, and restore it. Nothing turning red means the verdict rests on **unpinned** behaviour: your throwaway test is the only thing holding it. A red that is a timeout does not count yet: other sub-agents, VM clones and sessions load this Mac, and git-heavy tests time out under load ([ADR 0155](../../../docs/adr/0155-the-full-suite-is-checked-on-ci-for-ubuntu-and-macos-not-in-the-local-implementation-flow.md)). Rerun that test file alone with the break still in place — a single-file run takes no test lock — and count it only if it fails again. The same goes for a suite run inside a VM clone.
 
 ### 3. Decide the outcome
 
@@ -85,4 +85,4 @@ On each evaluated issue, add `auto-triaged`, and the category label (`bug` or `e
 
 ## Return
 
-To the parent, one line per issue — number, outcome, recommended next step, comment URL — then the issues you filed and the Pin PRs you opened, and any worktree or VM clone you failed to remove.
+To the parent, one line per issue — number, outcome, recommended next step, comment URL — then the issues you filed and the Pin PRs you opened, and any worktree or VM slot you failed to remove.

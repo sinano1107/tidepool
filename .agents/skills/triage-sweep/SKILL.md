@@ -17,7 +17,7 @@ argument-hint: "<N>"
 - **Session link.** Read `CLAUDE_CODE_BRIDGE_SESSION_ID` from the environment. When it is set, the link is `https://claude.ai/code/<that id>` — the page shows the sub-agents' transcripts too, so this one link covers the whole run. When it is unset (Remote Control off, or another provider), the comments go out without a link.
 - **Effort.** Sub-agents inherit the session's effort. If `$CLAUDE_EFFORT` is below `medium`, ask the user to run `/effort medium` before going on.
 - **Fetch.** `git fetch origin main` once here; every sub-agent branches its worktree from `origin/main`.
-- **Base VM.** Note whether `limactl list` shows `tidepool-sweep-base` ([machine-setup.md](../../../docs/agents/machine-setup.md#triage-sweep-base-vm)); pass that to every sub-agent.
+- **Base VM.** Note whether `limactl list` shows `tidepool-sweep-base` ([machine-setup.md](../../../docs/agents/machine-setup.md#triage-sweep-base-vm)); pass that to every sub-agent. When it also shows any `sweep-slot-*`, they are left over from an earlier run or belong to a sweep running elsewhere, and they keep this run's sub-agents from a VM: list them, tell the user it is one of the two, and ask whether to remove them. On yes, `limactl delete -f` each; on no, stop.
 
 ## 2. Pick the issues
 
@@ -33,15 +33,15 @@ Print the clusters to the user — issue numbers and a one-line reason each — 
 
 ## 4. Dispatch
 
-One general-purpose sub-agent per cluster on Opus 5.5 (`model: opus`), at most four running at once; start the next as one returns. The main tier is enough: every outcome is read by the maintainer before anything moves. Each prompt carries:
+One general-purpose sub-agent per cluster on Opus 5.5 (`model: opus`), all dispatched at once. The count is not what needs bounding: VM clones, the one resource the Mac can run out of, are bounded by the slots [take-vm-slot.sh](scripts/take-vm-slot.sh) hands out, and the CPU contention left over only slows runs down, since PROCEDURE.md has a timeout confirmed by rerunning the file alone. The main tier is enough: every outcome is read by the maintainer before anything moves. Each prompt carries:
 
 - the absolute path of [PROCEDURE.md](PROCEDURE.md) (this skill's base directory + `PROCEDURE.md`), with the instruction to read it first and follow it;
 - the cluster's issue numbers, newest first, and the reason they were grouped;
 - the session link, or the fact that there is none;
 - whether `tidepool-sweep-base` exists.
 
-After dispatching, end your turn. Each sub-agent's report arrives as its own message; act on "start the next" and on step 5 only from those.
+After dispatching, end your turn. Each sub-agent's report arrives as its own message; act on step 5 only from those.
 
 ## 5. Report
 
-When every sub-agent has returned, print one table — issue, outcome, recommended next step, comment URL — then the issues the sub-agents filed and the Pin PRs they opened, then anything a sub-agent reports it could not clean up (a worktree, a VM clone), with the command that removes it.
+When every sub-agent has returned, print one table — issue, outcome, recommended next step, comment URL — then the issues the sub-agents filed and the Pin PRs they opened, then anything a sub-agent reports it could not clean up (a worktree, a VM slot): list it and ask the user whether to remove it; on yes, remove it (`git worktree remove --force <path>`, `limactl delete -f <slot>`).
