@@ -116,3 +116,20 @@ advisor は名指さず本番と同じ規則で導出する。root review が対
 - `review_by`: work でない type への空でない list を、登録時と Edit で拒否する(#1490 / #1498)。
 
 assignee が human の work task も今は完了時レビューを立てない。ただ、assignee は Edit で変えられるので、拒否の条件には入れない。
+
+## 追記8(2026-10-07 の grilling、issue #1514)
+
+追記7 の最後の段落(assignee は Edit で変えられるので拒否の条件に入れない)を置き換える。決定1 の「不発の値を受け取らない」の鍵は、
+**変更後の状態で完了時レビューが立つか**である。登録後に変わる性質(assignee、flag)も鍵に入れ、変わるたびに検査し直す。
+サーバーの拒否・完了時の起票・WebUI の欄の出し分けは、同じ述語を使う(ADR 0209)。
+
+- `review_flag`: 変更後の状態で意味を持たないなら、登録時と Edit で拒否する。work でない type・ルートに加えて、assignee が human の task への flag も拒否する。
+- `review_by`: 変更後の状態で完了時レビューが立たないのに空でない list が残るなら、登録時と Edit で拒否する。保存済みの list を残したまま flag を外す・risk flag を下ろす・assignee を human に変える Edit も拒否の対象になる。分解の子の指定は、承認待ちの question にする前に同じ検査にかける。
+- `review_tier`: 登録時に、完了時レビューが立たないなら拒否する。Edit で後から立たなくなったときに残る値の扱いは、review_tier を Edit で変えられるようにするかと合わせて派生 issue で決める。
+
+WebUI の Edit で人間の操作により欄が隠れたとき(flag を外す、human に渡す)は、保存済みの `review_by` / `review_flag` を WebUI が消して送る。
+flag を外す・human に渡す操作が「レビューしない」意思そのものだからである。消えたことは Edit のイベントに残る。WebUI が消したのか人間が外したのかは区別しない。
+同じ Edit の行に、原因の変更が並ぶからである。
+
+退けたのは、追記7 のまま変わらない鍵だけで拒否する案である。この案の利点は「human が担当している間に reviewer を先に決めておく」使い方が残ることだけで、
+その指名は agent に渡すときにすれば足りる。
