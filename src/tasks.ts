@@ -662,6 +662,13 @@ function assertReviewFlagFires(
   }
 }
 
+/** review_by names completion reviewers, and only a work task's completion raises them (ADR 0111 decision 1: refuse a value that would never fire). */
+function assertReviewByFires(task: { type: TaskType }, reviewBy: string[] | undefined): void {
+  if (reviewBy?.length && task.type !== "work") {
+    throw new DomainError("only a work task can carry review_by — completion review fires for work tasks only");
+  }
+}
+
 /** New tasks always join the queue tail: sort_key = max + 1. */
 export function registerTask(
   db: Db,
@@ -674,6 +681,7 @@ export function registerTask(
   assertGithubRef(input);
   assertExecutionRequest(db, input);
   assertReviewFlagFires(input, input.review_flag);
+  assertReviewByFires(input, input.review_by);
   // assertGithubRef above guarantees workspace whenever the ref is present
   if (input.github_issue_number !== undefined && input.workspace) {
     assertNoUnsettledIssueRef(db, input.workspace, input.github_issue_number);
