@@ -590,14 +590,7 @@ thread's history always fails.`));
 
   it("work / review task の worker_spawned は、盤面が選んだ候補の段の id を持つ(ADR 0210 決定1)", async () => {
     const f = await fixture();
-    const work = task(f.db, "codex-tier-work");
-    const review = registerTask(
-      f.db,
-      { type: "review", assignee: "codex-agent", workspace: "work", title: "codex-tier-review", purpose: "keep the board correct", completion_criteria: "reviewed" },
-      new Date("2026-08-24T00:00:00.000Z"),
-      ...HUMAN_WEBUI,
-    );
-    for (const value of [work, review]) {
+    for (const value of [task(f.db, "codex-tier-work"), metaReviewTask(f.db)]) {
       f.worker.start(value, { provider: "openai", model: "gpt-6-astra", effort: "high", advisor: undefined, tier_id: 3, source: { tier: "task", provider: "rank" } });
       expect(listEvents(f.db, value.id).find((event) => event.kind === "worker_spawned")?.payload).toMatchObject({ tier_id: 3 });
     }

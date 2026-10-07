@@ -98,11 +98,7 @@ export function aggregateCells(episodes: readonly LearnerEpisode[]): CellStats[]
 
 /** 推薦が数える観測(純関数、ADR 0210 決定2): 候補の段で走った episode だけを、盤面の段と workspace の段に集計する。
  *  行を段の間で移すと移った先では未観測になり、戻せば元の観測がまた数えられる。 */
-export function observedInTier(
-  episodes: readonly LearnerEpisode[],
-  tier: TierId,
-  workspace: string | null,
-): { board: CellStats[]; workspace: CellStats[] } {
+export function observedInTier(episodes: readonly LearnerEpisode[], tier: TierId, workspace: string | null): { board: CellStats[]; workspace: CellStats[] } {
   const inTier = episodes.filter((e) => e.tier_id === tier);
   return { board: aggregateCells(inTier), workspace: aggregateCells(inTier.filter((e) => e.workspace === workspace)) };
 }
