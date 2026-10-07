@@ -28,8 +28,8 @@ async function forceReclaimed(task: { id: string }): Promise<void> {
 /** `harnessContainment` を渡す盤面の pickup は人間面の自己検査(実 HTTP の往復、
  *  `src/server.ts` の Harness 封じ込めの合成)を挟むので、fake clock の tick の中では
  *  終わらない。watchdog の起点は `task_picked_up` の時刻なので、次に進める前に待つ。 */
-async function pickedUp(task: { id: string }): Promise<void> {
-  await vi.waitFor(() => expect(t.worker.started.map((x) => x.id)).toEqual([task.id]));
+async function pickedUp(...tasks: Array<{ id: string }>): Promise<void> {
+  await vi.waitFor(() => expect(t.worker.started.map((x) => x.id)).toEqual(tasks.map((x) => x.id)));
 }
 
 const questions = async (): Promise<any[]> =>
@@ -174,7 +174,7 @@ it("空を観測してから回答すると受理され、slot-release tree rule
 
   const second = queueWork(t, "long haul");
   await t.clock.advance(HOUR);
-  expect(t.worker.started.map((x) => x.id)).toEqual([task.id, second.id]);
+  await pickedUp(task, second);
 });
 
 it("容器機構の前提が boot 時に不成立なら、黙って弱い回収へ落ちずに pickup が止まる", async () => {
