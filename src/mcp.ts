@@ -9,7 +9,7 @@ import { DomainError } from "./domain-error.js";
 import { PRIORITY_FIELD_DESCRIPTION, tierFieldDescriptions } from "./execution-setting.js";
 import type { GitHubClient } from "./github.js";
 import type { GitHubAuth } from "./github-auth.js";
-import { assertMemoryReferencesKnown, assertReviewerKnown, assertWorkspaceKnown } from "./human-verbs.js";
+import { assertMemoryReferencesKnown, assertReviewersKnown, assertWorkspaceKnown } from "./human-verbs.js";
 import type { Landing } from "./landing.js";
 import {
   browseMemory,
@@ -371,9 +371,7 @@ function assertChildrenKnown(deps: McpDeps, children: z.infer<ReturnType<typeof 
         throw new DomainError(`unknown agent: ${child.assignee}`);
       }
     }
-    for (const reviewer of child.review_by ?? []) {
-      assertReviewerKnown(deps.agentRegistered, reviewer);
-    }
+    assertReviewersKnown(deps.agentRegistered, child.review_by);
   }
 }
 
