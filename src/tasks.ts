@@ -672,6 +672,14 @@ function assertReviewByFires(task: { type: TaskType }, reviewBy: string[] | unde
   }
 }
 
+/** review_by is a set of names: naming the same reviewer twice is refused, not silently folded (CONTEXT.md "Review", #1512). */
+function assertReviewByDistinct(reviewBy: string[] | undefined): void {
+  const dup = reviewBy?.find((name, i) => reviewBy.indexOf(name) !== i);
+  if (dup !== undefined) {
+    throw new DomainError(`review_by names the same reviewer twice: "${dup}" — each reviewer is named once`);
+  }
+}
+
 /** New tasks always join the queue tail: sort_key = max + 1. */
 export function registerTask(
   db: Db,
@@ -685,6 +693,7 @@ export function registerTask(
   assertExecutionRequest(db, input);
   assertReviewFlagFires(input, input.review_flag);
   assertReviewByFires(input, input.review_by);
+  assertReviewByDistinct(input.review_by);
   // assertGithubRef above guarantees workspace whenever the ref is present
   if (input.github_issue_number !== undefined && input.workspace) {
     assertNoUnsettledIssueRef(db, input.workspace, input.github_issue_number);
@@ -1969,7 +1978,10 @@ export function decomposeTask(
   // survive as a pending_child on an approval question, where it would only
   // throw at the moment a human clicks approve (registerTask validates the
   // *question*, not the spec it carries).
-  for (const child of input.children) assertExecutionRequest(db, child);
+  for (const child of input.children) {
+    assertExecutionRequest(db, child);
+    assertReviewByDistinct(child.review_by);
+  }
   if (input.reason.length === 0) {
     throw new DomainError("a decomposition requires a reason");
   }
@@ -2268,6 +2280,7 @@ export function editTask(
   assertHumanEditableScope(db, task);
   assertReviewFlagFires(task, input.review_flag);
   assertReviewByFires(task, input.review_by);
+  assertReviewByDistinct(input.review_by);
   if (
     input.title === "" ||
     input.purpose === "" ||
