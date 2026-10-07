@@ -46,7 +46,7 @@ it("Claude Harness の能力検査が不成立ならその pickup が止まり�
   // 1択の確認型 — quarantine と同じ形(選択ではなく完了確認)
   expect(question.question_items[0].options).toEqual(["repaired by hand"]);
   // なぜ止まっているかが question 本文に残る
-  expect(open[0].purpose).toContain("bubblewrap");
+  expect(question.purpose).toContain("bubblewrap");
 });
 
 it("止まっている間に何度 poll しても question は増えない(1つだけ立つ)", async () => {

@@ -268,12 +268,13 @@ it("ツール面がずれた Claude Harness は pickup が止まり、確認 que
   });
   await registerWork(t, "work that must not run on a host whose tool surface drifted");
 
-  const question = await openQuestion(t);
+  await openQuestion(t);
   await t.clock.advance(HOUR);
   expect(t.worker.started).toEqual([]);
   // 既存の器のまま: 1択の確認型、盤面(Tidepool)名義、停止は Harness 資源だけ
+  const question = await servedQuarantineQuestion(t, "harnessContainment", "claude-code");
+  expect(question).toBeDefined();
   expect(question.question_items[0].options).toEqual(["repaired by hand"]);
-  expect(await servedQuarantineQuestion(t, "harnessContainment", "claude-code")).toBeDefined();
   expect(question.purpose).toContain("CronCreate");
 });
 
