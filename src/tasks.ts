@@ -710,7 +710,7 @@ export function registerTask(
     completion_criteria: content.completion_criteria,
     risk_flag: input.risk_flag ? 1 : 0,
     review_flag: input.review_flag ? 1 : 0,
-    review_by: input.review_by ?? null,
+    review_by: input.review_by?.length ? input.review_by : null,
     review_tier: input.review_tier ?? null,
     // assertExecutionRequest above has already closed these to the board's tiers and the priorities
     tier: input.tier ?? null,
