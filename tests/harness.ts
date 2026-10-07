@@ -29,7 +29,7 @@ import type { HarnessContainmentCheck } from "../src/harness-containment.js";
 import { recordKnowledge } from "../src/memory.js";
 import type { ProfileAdmin } from "../src/profile-create.js";
 import type { Provider } from "../src/provider.js";
-import { openQuarantineQuestion, type QuarantineResolvers } from "../src/quarantine.js";
+import { openQuarantineQuestion, type QuarantineKind, type QuarantineResolvers } from "../src/quarantine.js";
 import type {
   AuthorityProfile,
   RegistryCandidates,
@@ -833,22 +833,27 @@ export async function questions(t: Tidepool): Promise<any[]> {
   );
 }
 
-/** その名前の workspace の、開いている quarantine question(CONTEXT.md の Quarantine)—
- *  読み口(`GET /api/tasks`)から引く。無ければ undefined。ドメイン層は `workspaceQuarantine`。 */
-export async function servedWorkspaceQuarantine(t: Tidepool, name: string): Promise<any> {
+/** その kind・value の、開いている quarantine question(CONTEXT.md の Quarantine)—
+ *  読み口(`GET /api/tasks`)から引く。board scope の kind の value は null。無ければ undefined。
+ *  ドメイン層は `quarantineQuestion`。 */
+export async function servedQuarantineQuestion(
+  t: Tidepool,
+  kind: QuarantineKind,
+  value: string | null,
+): Promise<any> {
   return (await questions(t)).find(
     (q: any) =>
-      q.question_quarantine_kind === "workspace" &&
-      q.question_quarantine_value === name &&
+      q.question_quarantine_kind === kind &&
+      q.question_quarantine_value === value &&
       q.status === "todo",
   );
 }
 
-/** その名前の workspace の、開いている quarantine question(CONTEXT.md の Quarantine)。
+/** その kind・value の、開いている quarantine question(CONTEXT.md の Quarantine)。
  *  無ければ undefined。行は直に読まず、production の読み口 `openQuarantineQuestion` で引く
- *  (ADR 0107 決定2)。サーバ境界は `servedWorkspaceQuarantine`。 */
-export function workspaceQuarantine(db: Db, name: string): Task | undefined {
-  const open = openQuarantineQuestion(db, "workspace", name);
+ *  (ADR 0107 決定2)。サーバ境界は `servedQuarantineQuestion`。 */
+export function quarantineQuestion(db: Db, kind: QuarantineKind, value: string | null): Task | undefined {
+  const open = openQuarantineQuestion(db, kind, value);
   return open && getTask(db, open.id);
 }
 

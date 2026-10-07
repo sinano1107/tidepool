@@ -7,6 +7,7 @@ import { quarantineCliAuthForProvider } from "../src/cli-auth.js";
 import { openDb } from "../src/db.js";
 import { openQuarantineValues } from "../src/quarantine.js";
 import { listBoard } from "../src/tasks.js";
+import { quarantineQuestion } from "./harness.js";
 import { tempDir } from "./temp-dir.js";
 
 /** ADR 0098 / issue #454: 401 の Provider 帰属は spawn/call 時の事実で決まり、
@@ -16,11 +17,11 @@ describe("quarantineCliAuthForProvider(issue #454 / ADR 0098)", () => {
     const db = openDb(":memory:");
     quarantineCliAuthForProvider(db, "moonshot", new Date(0));
 
-    const question = listBoard(db).find((t) => t.type === "question");
+    const question = quarantineQuestion(db, "providerAuth", "moonshot");
     expect(question?.title).toBe(
       "moonshot authentication is unavailable — pickup of moonshot-speaking agents is stopped",
     );
-    expect(question).toMatchObject({ question_quarantine_kind: "providerAuth", question_quarantine_value: "moonshot" });
+    expect(question).toBeDefined();
     expect(question?.question_items?.[0]?.options).toEqual(["authentication restored"]);
     expect(question?.question_items?.[0]?.recommendation).toBe("authentication restored");
     // 修理案内は provider ごとの網羅マップから来る — moonshot にはキーファイルの案内
@@ -42,11 +43,11 @@ describe("quarantineCliAuthForProvider(issue #454 / ADR 0098)", () => {
     const db = openDb(":memory:");
     quarantineCliAuthForProvider(db, "anthropic", new Date(0));
 
-    const question = listBoard(db).find((t) => t.type === "question");
+    const question = quarantineQuestion(db, "providerAuth", "anthropic");
     expect(question?.title).toBe(
       "anthropic authentication is unavailable — pickup of anthropic-speaking agents is stopped",
     );
-    expect(question).toMatchObject({ question_quarantine_kind: "providerAuth", question_quarantine_value: "anthropic" });
+    expect(question).toBeDefined();
     expect(question?.purpose).toContain("claude setup-token");
     expect(boardHalts(db)).toEqual([]);
   });

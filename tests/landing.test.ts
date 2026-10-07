@@ -38,8 +38,8 @@ import {
   HUMAN_WEBUI,
   makeRemoteBackedWorkspace,
   makeWorkspace,
+  quarantineQuestion,
   squashTaskIntoOrigin,
-  workspaceQuarantine,
 } from "./harness.js";
 import { tempDir } from "./temp-dir.js";
 
@@ -306,7 +306,7 @@ it("purely-local の着地は ref を書かないので、またいだセッシ�
     remoteTaskRef,
   );
 
-  expect(workspaceQuarantine(db, workspace.name)?.purpose).toContain(remoteTaskRef);
+  expect(quarantineQuestion(db, "workspace", workspace.name)?.purpose).toContain(remoteTaskRef);
 });
 
 it("remote-backed から purely-local へ変わった再発火は local question を立てて failure question を引退する", async () => {
@@ -464,7 +464,7 @@ it("open PR 更新は盤面が動かした remote ref だけを再基準化す�
 
   // push をまたいで走る別タスクのセッションは、盤面の push を違反に数えない
   await straddle(db, clock, workspace, () => landing.land(getTask(db, task.id)!));
-  expect(workspaceQuarantine(db, workspace.name)).toBeUndefined();
+  expect(quarantineQuestion(db, "workspace", workspace.name)).toBeUndefined();
 
   await prepareWorkspaceAtPickup(db, workspace, task, {});
   commitWork(workspace.path, "repair.txt", "fixed\n");
@@ -476,7 +476,7 @@ it("open PR 更新は盤面が動かした remote ref だけを再基準化す�
   });
   releaseWorkspace(db, workspace, task, clock.now());
 
-  const quarantine = workspaceQuarantine(db, workspace.name);
+  const quarantine = quarantineQuestion(db, "workspace", workspace.name);
   expect(quarantine?.purpose).toContain("refs/tags/worker-created-tag");
   expect(quarantine?.purpose).not.toContain(`refs/remotes/origin/task/${task.id}`);
 });
@@ -557,7 +557,7 @@ it("open PR branch の push 失敗は既存の着地痕跡で隠さず failure q
   expect(listBoard(db)).toContainEqual(
     expect.objectContaining({ question_pending_pr_promotion_task_id: task.id }),
   );
-  expect(workspaceQuarantine(db, workspace.name)?.purpose).toContain(remoteTaskRef);
+  expect(quarantineQuestion(db, "workspace", workspace.name)?.purpose).toContain(remoteTaskRef);
 });
 
 it("PR 作成の失敗は閉じた理由で返して failure question を立てる", async () => {
@@ -657,7 +657,7 @@ it("再発火時の registry drift は閉じた失敗を返し、既存の failu
   expect(listEvents(db, failure!.id)).not.toContainEqual(
     expect.objectContaining({ payload: { kind: "pr_promotion_observed" } }),
   );
-  expect(workspaceQuarantine(db, workspace.name)).toBeDefined();
+  expect(quarantineQuestion(db, "workspace", workspace.name)).toBeDefined();
   expect(github.requests).toHaveLength(1);
 });
 
@@ -981,7 +981,7 @@ it("追いつき merge をまたいで走るセッションは、盤面が動か
   await straddle(db, clock, workspace, () => landing.land(repair));
 
   expect(git(workspace.path, "rev-parse", `task/${repair.id}^1`)).toBe(before);
-  expect(workspaceQuarantine(db, workspace.name)).toBeUndefined();
+  expect(quarantineQuestion(db, "workspace", workspace.name)).toBeUndefined();
 });
 
 // landingAnnotation は DB の状態だけで決まる — blocked_by の規則はここ(domain 層)で1度だけ述べる(ADR 0107)。
@@ -1242,11 +1242,11 @@ it.each([
   const { db, clock } = await openBoard();
   const work = await setup(db, clock, workspace);
   const question = mergeQuestion(db, clock, { pending_local_merge_task_id: work.id });
-  expect(workspaceQuarantine(db, workspace.name)).toBeUndefined();
+  expect(quarantineQuestion(db, "workspace", workspace.name)).toBeUndefined();
 
   await expect(answerMerge(db, clock, workspace, question)).rejects.toThrow(DomainError);
 
-  expect(workspaceQuarantine(db, workspace.name)).toBeDefined();
+  expect(quarantineQuestion(db, "workspace", workspace.name)).toBeDefined();
   expect(getTask(db, question.id)?.status).toBe("todo");
 });
 
@@ -1275,7 +1275,7 @@ it.each([
 
   await expect(rejected).rejects.toThrow(DomainError);
   await expect(rejected).rejects.toThrow("does not merge cleanly");
-  expect(workspaceQuarantine(db, workspace.name)).toBeUndefined();
+  expect(quarantineQuestion(db, "workspace", workspace.name)).toBeUndefined();
   expect(getTask(db, secondQuestion.id)?.status).toBe("todo");
   expect(git(workspace.path, "rev-parse", "refs/heads/main")).toBe(protectedSha);
   expect(git(workspace.path, "rev-parse", `refs/heads/task/${second.id}`)).toBe(taskSha);

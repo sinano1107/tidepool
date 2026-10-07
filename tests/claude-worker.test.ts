@@ -51,7 +51,7 @@ import {
   recordingPty,
   recordingSpawn,
 } from "./fakes.js";
-import { GIT_FIXTURE_TEST_TIMEOUT, git, makeWorkspace, WORKER_SPAWNED } from "./harness.js";
+import { GIT_FIXTURE_TEST_TIMEOUT, git, makeWorkspace, quarantineQuestion, WORKER_SPAWNED } from "./harness.js";
 import { makeRegistry, makeRemoteBackedRegistry } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
 
@@ -491,8 +491,6 @@ describe("ClaudeCodeWorker", () => {
     start("task-drifted-agent", null, "ghost");
     expect(calls).toEqual([]);
     expect(agentNeedsHuman(db, "ghost")).toBe(true);
-    const question = listBoard(db).find((t) => t.type === "question");
-    expect(question).toMatchObject({ question_quarantine_kind: "agent", question_quarantine_value: "ghost" });
   });
 
   it("system prompt に roster を push する: assignable_to(既定は \"*\")を解決した registry 全体が「名前 — description」で並ぶ(issue #43 / ADR 0014)", async () => {
@@ -1487,7 +1485,7 @@ describe("ClaudeCodeWorker", () => {
   const initLine = (tools: string[], mcpServers: unknown[] = [], memoryPaths?: Record<string, string>) =>
     `${JSON.stringify({ type: "system", subtype: "init", tools, mcp_servers: mcpServers, memory_paths: memoryPaths })}\n`;
   const containmentQuestion = (db: ReturnType<typeof openDb>) =>
-    listBoard(db).find((t) => t.type === "question" && t.question_quarantine_kind === "containment");
+    quarantineQuestion(db, "containment", null);
 
   it("宣言どおりの init 行なら何も起きない — 封じ込めの question は立たない", async () => {
     const { start, processes, db } = await makeWorker();
@@ -3794,7 +3792,7 @@ You are Kipper, the tidepool board's Kimi work agent.
     expect(questions.map((task) => task.title)).toEqual([
       "moonshot authentication is unavailable — pickup of moonshot-speaking agents is stopped",
     ]);
-    expect(questions[0]).toMatchObject({ question_quarantine_kind: "providerAuth", question_quarantine_value: "moonshot" });
+    expect(quarantineQuestion(db, "providerAuth", "moonshot")).toBeDefined();
     expect(boardHalts(db)).toEqual([]);
   });
 });

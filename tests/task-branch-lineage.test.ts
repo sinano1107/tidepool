@@ -14,7 +14,7 @@ import {
   mcpClient,
   queueWork,
   registerWork,
-  servedWorkspaceQuarantine,
+  servedQuarantineQuestion,
   squashTaskIntoOrigin,
   type Tidepool,
 } from "./harness.js";
@@ -501,7 +501,7 @@ it("merge back が conflict すると完了は維持したまま workspace を q
 
   const done = (await api(t.baseUrl, "GET", `/api/tasks/${child.id}`)).json;
   expect(done.status).toBe("done");
-  expect((await servedWorkspaceQuarantine(t, "lineage-conflict"))?.title).toContain("lineage-conflict");
+  expect((await servedQuarantineQuestion(t, "workspace", "lineage-conflict"))?.title).toContain("lineage-conflict");
   expect(git(workspace.path, "status", "--porcelain")).toContain("UU shared.txt");
   expect(t.github.requests).toEqual([]);
 });

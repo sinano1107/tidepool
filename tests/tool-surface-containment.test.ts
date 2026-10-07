@@ -10,7 +10,7 @@ import {
 import type { ContainmentCapability } from "../src/containment.js";
 import { ProcessContainers } from "../src/process-container.js";
 import { containerHarness, FakeClock, FakeContainerRuntime, recordingSpawn } from "./fakes.js";
-import { api, bootTidepool, HOUR, registerWork, type Tidepool } from "./harness.js";
+import { api, bootTidepool, HOUR, registerWork, servedQuarantineQuestion, type Tidepool } from "./harness.js";
 
 let t: Tidepool;
 afterEach(() => t?.stop());
@@ -268,12 +268,13 @@ it("ツール面がずれた Claude Harness は pickup が止まり、確認 que
   });
   await registerWork(t, "work that must not run on a host whose tool surface drifted");
 
-  const question = await openQuestion(t);
+  await openQuestion(t);
   await t.clock.advance(HOUR);
   expect(t.worker.started).toEqual([]);
   // 既存の器のまま: 1択の確認型、盤面(Tidepool)名義、停止は Harness 資源だけ
+  const question = await servedQuarantineQuestion(t, "harnessContainment", "claude-code");
+  expect(question).toBeDefined();
   expect(question.question_items[0].options).toEqual(["repaired by hand"]);
-  expect(question).toMatchObject({ question_quarantine_kind: "harnessContainment", question_quarantine_value: "claude-code" });
   expect(question.purpose).toContain("CronCreate");
 });
 

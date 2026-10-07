@@ -4,12 +4,12 @@ import { openDb } from "../src/db.js";
 import { DomainError } from "../src/domain-error.js";
 import { answerQuestion, registerTask } from "../src/tasks.js";
 import { BOARD_WORKER_ID } from "../src/worker-id.js";
-import { HUMAN_WEBUI } from "./harness.js";
+import { HUMAN_WEBUI, quarantineQuestion } from "./harness.js";
 
 describe("agent の quarantine(ADR 0012 / issue #36: workspace 版の agent 名一般化)", () => {
   it("agent の quarantine 付きの question は1択(workspace 版と同じ緩和)で登録できる", () => {
     const db = openDb(":memory:");
-    const question = registerTask(
+    registerTask(
       db,
       {
         type: "question",
@@ -29,7 +29,7 @@ describe("agent の quarantine(ADR 0012 / issue #36: workspace 版の agent 名�
       BOARD_WORKER_ID,
       "webui",
     );
-    expect(question).toMatchObject({ question_quarantine_kind: "agent", question_quarantine_value: "navigator" });
+    expect(quarantineQuestion(db, "agent", "navigator")).toBeDefined();
   });
 
   it("quarantine の付かない question は通常どおり2択以上を要求する", () => {

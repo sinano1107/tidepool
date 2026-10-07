@@ -25,7 +25,7 @@ import {
   FakeContainerRuntime,
   recordingSpawn,
 } from "./fakes.js";
-import { api, bootTidepool, registerWork, type Tidepool } from "./harness.js";
+import { api, bootTidepool, registerWork, servedQuarantineQuestion, type Tidepool } from "./harness.js";
 import { tempDir } from "./temp-dir.js";
 
 let t: Tidepool;
@@ -438,8 +438,7 @@ it("the public queue and answer routes expose a durable Harness-scoped stop with
 
     const queue = (await api(tidepool.baseUrl, "GET", "/api/queue")).json as { tasks: any[] };
     expect(queue.tasks.find((task) => task.id === codex.id)?.status).toBe("skipped");
-    const tasks = (await api(tidepool.baseUrl, "GET", "/api/tasks")).json as any[];
-    const question = tasks.find((task) => (task.question_quarantine_kind === "harnessContainment" && task.question_quarantine_value === "codex"));
+    const question = await servedQuarantineQuestion(tidepool, "harnessContainment", "codex");
     expect(question?.question_items[0].options).toEqual(["repaired by hand"]);
 
     const refused = await api(tidepool.baseUrl, "POST", `/api/tasks/${question.id}/answer`, {
