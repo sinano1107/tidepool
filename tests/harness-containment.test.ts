@@ -6,10 +6,10 @@ import { harnessContainmentPickupBlocked } from "../src/harness-containment.js";
 import { quarantineChecks, submitAnswer } from "../src/human-verbs.js";
 import { HOURLY, startScheduler } from "../src/scheduler.js";
 import { Slot } from "../src/slot.js";
-import { getTask, listBoard, registerTask } from "../src/tasks.js";
+import { getTask, registerTask } from "../src/tasks.js";
 import type { WorkerAdapter } from "../src/worker.js";
 import { FakeClock, healthyUsageText, noRetrospectiveCalls, passthroughContainers, unusedLanding } from "./fakes.js";
-import { HUMAN_WEBUI } from "./harness.js";
+import { HUMAN_WEBUI, quarantineQuestion } from "./harness.js";
 
 it("a Harness quarantine answer is accepted only after the same live check recovers", async () => {
   const db = openDb(":memory:");
@@ -20,9 +20,7 @@ it("a Harness quarantine answer is accepted only after the same live check recov
     : { available: false as const, reason: "permission canary failed" };
 
   expect(await harnessContainmentPickupBlocked(db, "codex", check, clock.now())).toBe(true);
-  const questionId = listBoard(db).find(
-    (task) => (task.question_quarantine_kind === "harnessContainment" && task.question_quarantine_value === "codex"),
-  )?.id;
+  const questionId = quarantineQuestion(db, "harnessContainment", "codex")?.id;
   expect(questionId).toBeDefined();
   const question = getTask(db, questionId!);
   expect(question).toBeDefined();
@@ -111,9 +109,6 @@ it("a failed Codex Harness preflight skips that route and starts a Claude-route 
 
   expect(started).toEqual([claude.id]);
   expect(getTask(db, codex.id)?.status).toBe("todo");
-  const quarantine = listBoard(db).find(
-    (task) => (task.question_quarantine_kind === "harnessContainment" && task.question_quarantine_value === "codex") && task.status === "todo",
-  );
-  expect(quarantine).toMatchObject({ question_quarantine_kind: "harnessContainment", question_quarantine_value: "codex", status: "todo" });
+  expect(quarantineQuestion(db, "harnessContainment", "codex")).toBeDefined();
   scheduler.stop();
 });

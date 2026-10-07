@@ -19,7 +19,7 @@ import {
   git,
   HUMAN_WEBUI,
   makeWorkspace,
-  workspaceQuarantine,
+  quarantineQuestion,
 } from "./harness.js";
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
@@ -120,7 +120,7 @@ it("門が既に解決した workspace は後始末で解決し直さない —�
   });
 
   expect(resolveCalls).toBe(1);
-  const quarantine = workspaceQuarantine(db, "ghost");
+  const quarantine = quarantineQuestion(db, "workspace", "ghost");
   expect(quarantine).toBeDefined();
   // 2度目は同じ観測を cause として重ねて記録するだけ = 人間には理由が二重に見える
   expect(listEvents(db, quarantine?.id ?? "").map((e) => e.payload.kind)).not.toContain(

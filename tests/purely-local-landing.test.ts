@@ -15,7 +15,7 @@ import {
   mcpClient,
   questions,
   registerWork,
-  servedWorkspaceQuarantine,
+  servedQuarantineQuestion,
   type Tidepool,
 } from "./harness.js";
 
@@ -174,7 +174,7 @@ it("直列に登録された2件目の着地は、1件目が進めた保護ブ�
   expect(git(workspace.path, "log", "-1", "--format=%an %cn", "main")).toBe("tidepool tidepool");
   // ADR 0053 根拠1: タスクブランチは差分の恒久記録であって、着地で書き換えられない
   expect(git(workspace.path, "rev-parse", `refs/heads/task/${second.id}`)).toBe(taskSha);
-  expect(await servedWorkspaceQuarantine(t, "sandbox")).toBeUndefined();
+  expect(await servedQuarantineQuestion(t, "workspace", "sandbox")).toBeUndefined();
 });
 
 // ADR 0103 決定3 / ADR 0064: 盤面は走っているセッションの checkout を動かさない。
@@ -203,13 +203,13 @@ it("走行中の slot を占めたまま来た非 ff の着地は、ref だけ�
   expect(readFileSync(join(workspace.path, "wip.txt"), "utf8")).toBe(
     "the running session's work in progress\n",
   );
-  expect(await servedWorkspaceQuarantine(t, "sandbox")).toBeUndefined();
+  expect(await servedQuarantineQuestion(t, "workspace", "sandbox")).toBeUndefined();
   // ADR 0064 決定4: 盤面が進めた行は撮り直されているので、走っていたセッションの解放は
   // 盤面自身のこの2度の書き込みを違反として読まない
   commitWork(workspace.path, "wip.txt", "the running session's work in progress\n");
   await completeViaMcp(t, third.id);
   await completeIntegrationReviews(t, third.id);
-  expect(await servedWorkspaceQuarantine(t, "sandbox")).toBeUndefined();
+  expect(await servedQuarantineQuestion(t, "workspace", "sandbox")).toBeUndefined();
 });
 
 // 帯域外判定そのもの(不一致・巻き戻し・記録の欠落・quarantine の型分け・コンフリクトは隔離しない否定側)は
@@ -231,7 +231,7 @@ it("帯域外で進んだ保護ブランチへの merge は 409 で、理由を�
 
   expect(answered.status).toBe(409);
   expect(answered.json.error).toContain("moved out of band");
-  expect(await servedWorkspaceQuarantine(t, "sandbox")).toBeDefined();
+  expect(await servedQuarantineQuestion(t, "workspace", "sandbox")).toBeDefined();
 });
 
 it("着地 question に hold と答えると保護ブランチを動かさず決着し、再提示しない", async () => {

@@ -17,7 +17,7 @@ import {
   git,
   HUMAN_WEBUI,
   makeWorkspace,
-  workspaceQuarantine,
+  quarantineQuestion,
 } from "./harness.js";
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
@@ -62,7 +62,7 @@ it("完了の報告の後に書かれたものは成果ではない —— WIP �
   releaseAfterCompletion(db, ws, task);
 
   expect(workspaceNeedsHuman(db, ws.name)).toBe(true);
-  expect(workspaceQuarantine(db, ws.name)?.purpose).toContain(`written to after task ${task.id} reported done`);
+  expect(quarantineQuestion(db, "workspace", ws.name)?.purpose).toContain(`written to after task ${task.id} reported done`);
   // 退避されていない: WIP コミットは無く、汚れはそのまま人間の修理材料として残る
   expect(git(ws.path, "log", "--oneline", `task/${task.id}`)).not.toContain("WIP");
   expect(git(ws.path, "status", "--porcelain")).not.toBe("");

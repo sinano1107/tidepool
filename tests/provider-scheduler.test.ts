@@ -19,6 +19,7 @@ import {
   mcpClient,
   queueWork,
   registerWork,
+  servedQuarantineQuestion,
   type Tidepool,
 } from "./harness.js";
 import { tempDir } from "./temp-dir.js";
@@ -222,8 +223,7 @@ it("OpenAI usage が観測不能なら question を立てず OpenAI だけ fail-
   expect(t.worker.started.map((task) => task.id)).toEqual([claude.id]);
   const queue = (await api(t.baseUrl, "GET", "/api/queue")).json.tasks as any[];
   expect(queue.find((task) => task.id === codex.id)?.status).toBe("skipped");
-  const tasks = (await api(t.baseUrl, "GET", "/api/tasks")).json as any[];
-  expect(tasks.filter((task) => (task.question_quarantine_kind === "providerAuth" && task.question_quarantine_value === "openai"))).toEqual([]);
+  expect(await servedQuarantineQuestion(t, "providerAuth", "openai")).toBeUndefined();
   const openai = (await api(t.baseUrl, "GET", "/api/pause")).json.providerUsage.find(
     (usage: any) => usage.provider === "openai",
   );

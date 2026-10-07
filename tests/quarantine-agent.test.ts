@@ -10,6 +10,7 @@ import {
 import { openDb } from "../src/db.js";
 import { InvalidAgentDefinitionError } from "../src/registry.js";
 import { listBoard } from "../src/tasks.js";
+import { quarantineQuestion } from "./harness.js";
 
 describe("quarantineAgent(ADR 0012 / issue #36: workspace 版の agent 名一般化)", () => {
   it("agent 名を needs-human にマークし、1択の Confirmation question を登録する", () => {
@@ -17,8 +18,7 @@ describe("quarantineAgent(ADR 0012 / issue #36: workspace 版の agent 名一般
     quarantineAgent(db, "navigator", new Error("unknown agent: navigator"), new Date(0));
 
     expect(agentNeedsHuman(db, "navigator")).toBe(true);
-    const question = listBoard(db).find((t) => t.type === "question");
-    expect(question).toMatchObject({ question_quarantine_kind: "agent", question_quarantine_value: "navigator" });
+    const question = quarantineQuestion(db, "agent", "navigator");
     expect(question?.question_items?.[0]?.options).toEqual(["repaired by hand"]);
     expect(question?.question_items?.[0]?.recommendation).toBe("repaired by hand");
   });
@@ -64,8 +64,6 @@ describe("resolveAgentOrQuarantine", () => {
     const result = resolveAgentOrQuarantine(db, resolve, "ghost", new Date(0));
     expect(result).toBeUndefined();
     expect(agentNeedsHuman(db, "ghost")).toBe(true);
-    const question = listBoard(db).find((t) => t.type === "question");
-    expect(question).toMatchObject({ question_quarantine_kind: "agent", question_quarantine_value: "ghost" });
   });
 
   it("resolve が InvalidAgentDefinitionError を投げるときも同じ agent 名 quarantine に乗る(ADR 0097 決定3 — 新しい quarantine 種別は作らない)", () => {
@@ -79,8 +77,7 @@ describe("resolveAgentOrQuarantine", () => {
     const result = resolveAgentOrQuarantine(db, resolve, "deckhand", new Date(0));
     expect(result).toBeUndefined();
     expect(agentNeedsHuman(db, "deckhand")).toBe(true);
-    const question = listBoard(db).find((t) => t.type === "question");
-    expect(question).toMatchObject({ question_quarantine_kind: "agent", question_quarantine_value: "deckhand" });
+    const question = quarantineQuestion(db, "agent", "deckhand");
     expect(question?.purpose).toContain("moonshot");
   });
 });

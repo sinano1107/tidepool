@@ -6,6 +6,7 @@ import {
   bootTidepool,
   HOUR,
   registerWork,
+  servedQuarantineQuestion,
   TEST_TOKEN,
   type Tidepool,
 } from "./harness.js";
@@ -31,7 +32,7 @@ const openQuestion = async (t: Tidepool) =>
   await vi.waitFor(async () => {
     const open = await questions(t);
     expect(open).toHaveLength(2);
-    const claude = open.find((item) => (item.question_quarantine_kind === "harnessContainment" && item.question_quarantine_value === "claude-code"));
+    const claude = await servedQuarantineQuestion(t, "harnessContainment", "claude-code");
     expect(claude).toBeDefined();
     return claude;
   });

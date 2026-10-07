@@ -14,6 +14,7 @@ import {
   mcpClient,
   queueWork,
   registerWork,
+  servedQuarantineQuestion,
   type Tidepool,
 } from "./harness.js";
 import { tempDir } from "./temp-dir.js";
@@ -169,7 +170,7 @@ it("OpenAI の unauthorized は OpenAI だけの確認を立て、HTTP 回答時
   await t.clock.advance(HOUR);
   expect(t.worker.started.map((task) => task.id)).toEqual([claude.id]);
   const tasks = (await api(t.baseUrl, "GET", "/api/tasks")).json as any[];
-  const question = tasks.find((task) => (task.question_quarantine_kind === "providerAuth" && task.question_quarantine_value === "openai"));
+  const question = await servedQuarantineQuestion(t, "providerAuth", "openai");
   expect(question?.title).toBe(
     "openai authentication is unavailable — pickup of openai-speaking agents is stopped",
   );

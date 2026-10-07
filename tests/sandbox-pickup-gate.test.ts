@@ -1,6 +1,6 @@
 import { afterEach, expect, it, vi } from "vitest";
 import type { SandboxCapability } from "../src/sandbox.js";
-import { api, bootTidepool, HOUR, registerWork, type Tidepool } from "./harness.js";
+import { api, bootTidepool, HOUR, registerWork, servedQuarantineQuestion, type Tidepool } from "./harness.js";
 
 let t: Tidepool;
 afterEach(() => t?.stop());
@@ -41,9 +41,10 @@ it("Claude Harness の能力検査が不成立ならその pickup が止まり�
 
   const open = await questions(t);
   expect(open).toHaveLength(1);
-  expect(open[0]).toMatchObject({ question_quarantine_kind: "harnessContainment", question_quarantine_value: "claude-code" });
+  const question = await servedQuarantineQuestion(t, "harnessContainment", "claude-code");
+  expect(question).toBeDefined();
   // 1択の確認型 — quarantine と同じ形(選択ではなく完了確認)
-  expect(open[0].question_items[0].options).toEqual(["repaired by hand"]);
+  expect(question.question_items[0].options).toEqual(["repaired by hand"]);
   // なぜ止まっているかが question 本文に残る
   expect(open[0].purpose).toContain("bubblewrap");
 });
