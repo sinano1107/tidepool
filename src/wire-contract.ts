@@ -53,6 +53,8 @@ export interface QueueTask {
 export interface BoardTask extends QueueTask {
   type: "work" | "question" | "review";
   parent_id: string | null;
+  review_flag: number;
+  review_by: string[] | null;
   raw_assignee?: string | null;
   github_issue_number: number | null;
   registrant?: string;
