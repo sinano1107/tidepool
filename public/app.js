@@ -1408,7 +1408,7 @@ function AgentFields({ draft, set, authorityOptions, providerOptions, tiers, adv
       checked: draft.advisor,
       onChange: () => set("advisor", !draft.advisor)
     }
-  ), advisorCeiling && /* @__PURE__ */ React.createElement("p", { "data-testid": "agent-advisor-ceiling", style: { margin: 0, fontSize: "var(--text-xs)", color: "var(--text-muted)" } }, advisorCeiling === "off" ? "board advisor ceiling: off \u2014 the advisor is not used on this board" : `board advisor ceiling: ${advisorCeiling} \u2014 the advisor is at most ${advisorCeiling}; a main model above it runs without one`)), /* @__PURE__ */ React.createElement(SkillListInput, { candidates: hostSkills, degraded: hostSkillsDegraded, values: draft.skills, onChange: (v) => set("skills", v) }));
+  ), advisorCeiling && /* @__PURE__ */ React.createElement("p", { "data-testid": "agent-advisor-ceiling", style: { margin: 0, fontSize: "var(--text-xs)", color: "var(--text-muted)" } }, advisorCeiling === "off" ? "board advisor ceiling: off \u2014 the advisor is not used on this board" : `board advisor ceiling: ${advisorCeiling} \u2014 the advisor is at most ${advisorCeiling === "fable_then_opus" ? "fable, opus while the Fable window is throttled" : advisorCeiling}; a main model above it runs without one`)), /* @__PURE__ */ React.createElement(SkillListInput, { candidates: hostSkills, degraded: hostSkillsDegraded, values: draft.skills, onChange: (v) => set("skills", v) }));
 }
 function AgentRecord({ agent, authorityProfiles, providerOptions, tiers, advisorCeiling, hostSkills, hostSkillsDegraded, say, onChanged, edit }) {
   const { Card, FieldRow } = window.TidepoolDesignSystem_8a0ead;

@@ -279,7 +279,7 @@ export function openDb(path: string): Db {
     -- settings タブと管理MCP が書く(#545)。
     CREATE TABLE IF NOT EXISTS execution_defaults (
       id               INTEGER PRIMARY KEY CHECK (id = 1),
-      advisor_ceiling  TEXT NOT NULL DEFAULT 'off' CHECK (advisor_ceiling IN ('off', 'sonnet', 'opus', 'fable')),
+      advisor_ceiling  TEXT NOT NULL DEFAULT 'off' CHECK (advisor_ceiling IN ('off', 'sonnet', 'opus', 'fable', 'fable_then_opus')),
       provider_rank    TEXT,
       priority         TEXT CHECK (priority IN ('quality', 'cost')),
       -- 学習器の昇格(ADR 0150 決定4)

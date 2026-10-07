@@ -441,7 +441,7 @@ function AgentFields({ draft, set, authorityOptions, providerOptions, tiers, adv
           <p data-testid="agent-advisor-ceiling" style={{ margin: 0, fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
             {advisorCeiling === 'off'
               ? "board advisor ceiling: off — the advisor is not used on this board"
-              : `board advisor ceiling: ${advisorCeiling} — the advisor is at most ${advisorCeiling}; a main model above it runs without one`}
+              : `board advisor ceiling: ${advisorCeiling} — the advisor is at most ${advisorCeiling === 'fable_then_opus' ? 'fable, opus while the Fable window is throttled' : advisorCeiling}; a main model above it runs without one`}
           </p>
         )}
       </div>

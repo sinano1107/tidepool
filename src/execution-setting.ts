@@ -257,6 +257,13 @@ export function windowMatchesModel(windowModel: string, model: string): boolean 
   return windowModel === model || model.toLowerCase().includes(windowModel.toLowerCase());
 }
 
+/** 観測された1つの窓が、この実行設定に当たるか —— main の model か advisor の model のどちらか(ADR 0208 決定5:
+ *  advisor は自分の model の枠を消費する)。除外の式(`selectable`)と、scheduler が観測から関係する窓を絞る filter の
+ *  両方がこれを通る。 */
+export function windowMatchesSetting(windowModel: string, setting: Pick<ExecutionSetting, "model" | "advisor">): boolean {
+  return windowMatchesModel(windowModel, setting.model) || (setting.advisor !== undefined && windowMatchesModel(windowModel, setting.advisor));
+}
+
 /** 1回の pickup が決める実行設定の入力(CONTEXT.md「Selector」)。
  *
  *  **`ExecutionRequest` とは呼ばない**: CONTEXT.md の「要求(Execution request)」は
@@ -361,7 +368,12 @@ function executionSettingCandidates(
         const derived: { advisor: string | undefined; source?: AdvisorSource } | undefined = entry.advisor
           ? claudeAdvisorFor(main.model, request.advisorCeiling)
           : { advisor: undefined };
-        return derived ? [{ main, ...derived }] : [];
+        if (!derived) return [];
+        // fable_then_opus: `fable` の advisor の隣に、Fable の窓で外れたときの下げ先を並べる(ADR 0208 決定5)。
+        // どちらが残るかは除外の式(`selectable`)が決める —— 候補は除外を知らずに1度だけ作られる
+        const downgraded =
+          request.advisorCeiling === "fable_then_opus" && derived.advisor === "fable" && claudeAdvisorFor(main.model, "opus");
+        return [{ main, ...derived }, ...(downgraded ? [{ main, advisor: downgraded.advisor, source: "window_downgraded" as const }] : [])];
       }),
     )
     .sort((a, b) =>
@@ -396,10 +408,10 @@ export function selectable(
   return candidates.filter(
     (candidate) =>
       !excluded.providers.includes(candidate.provider) &&
-      !excluded.models.some(
-        (window) =>
-          window.provider === candidate.provider && windowMatchesModel(window.model, candidate.model),
-      ),
+      !excluded.models.some((window) => window.provider === candidate.provider && windowMatchesSetting(window.model, candidate)) &&
+      // 窓で下げた候補は、Fable の窓が `fable` の advisor を外しているあいだだけ選べる(ADR 0208 決定5)
+      (candidate.source.advisor !== "window_downgraded" ||
+        excluded.models.some((window) => window.provider === candidate.provider && windowMatchesModel(window.model, "fable"))),
   );
 }
 

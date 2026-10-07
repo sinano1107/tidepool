@@ -442,6 +442,34 @@ it("anthropic を温存中でも openai entry を持つ agent の task は走り
   }).toEqual({ blocked: "skipped", multi: "in_progress", plain: "todo" });
 });
 
+/** advisor を有効にした anthropic の agent の盤面で、上限を決め、Fable の窓が throttled な観測の下で要求なし
+ *  (economy = Sonnet 5.5 の行)の task を1つ積んで1 poll 回す。 */
+async function advisorTaskUnderFableWindow(ceiling: string) {
+  t = await bootTidepool({
+    taskExecutionCandidates: (task) =>
+      executionSettingsFor(t.db, { provider: [{ name: "anthropic", advisor: true }], tier: undefined }, task),
+  });
+  t.db.prepare("UPDATE execution_defaults SET advisor_ceiling = ?").run(ceiling);
+  // 扉を通さない(扉の登録は pickup の契機 —— ADR 0119 決定2 —— で、usage を仕込む前に走る)
+  const task = queueWork(t, "advisor つきの Sonnet の行");
+  t.worker.scriptUsage(fableOverPace(t.clock.now()));
+  await t.clock.advance(HOUR);
+  const queue = (await api(t.baseUrl, "GET", "/api/queue")).json.tasks as any[];
+  return queue.find((row) => row.id === task.id)?.status;
+}
+
+it("上限 fable で Fable の窓が throttled なら、fable の advisor つきの task は queue で skipped と表示され、pickup でも spawn されない(ADR 0208 決定5)", async () => {
+  expect(await advisorTaskUnderFableWindow("fable")).toBe("skipped");
+  expect(t.worker.started).toEqual([]);
+});
+
+it("上限 fable_then_opus で Fable の窓が throttled なら、advisor を opus に下げて spawn し、出所は窓で下げた(ADR 0208 決定5・6)", async () => {
+  expect(await advisorTaskUnderFableWindow("fable_then_opus")).toBe("in_progress");
+  expect(t.worker.startedSettings).toMatchObject([
+    { model: "claude-sonnet-5-5", advisor: "opus", source: { advisor: "window_downgraded" } },
+  ]);
+});
+
 it("全 entry が除外された行は Pickable head ではない —— 下の行の ↑ を飲まない(ADR 0110 決定3 / CONTEXT.md「Pickable head」)", async () => {
   t = await bootTidepool();
   // 上の行は frontier を要求するので fable 行に解決され、唯一の entry が
