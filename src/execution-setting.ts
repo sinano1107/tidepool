@@ -336,8 +336,9 @@ export function anthropicBoardCallRow(db: Db, tier: Tier, windowClosed: (model: 
  *
  *  advisor の model は agent.md には書かれない: 真のときだけ main の行から導出する
  *  (`claudeAdvisorFor`、ADR 0200 決定6 —— 表もティアも読まない)。advisor を宣言
- *  できるのは anthropic の entry だけで(ADR 0097)、adapter が系列を知らない行は
- *  advisor つきの entry の候補にしない —— advisor 無しで黙って走らせない。
+ *  できるのは anthropic の entry だけで(ADR 0097)、adapter が系列を知らない行と
+ *  adapter が advisor を受けられないとする行(ADR 0200 追記 2026-10-07)は advisor つきの entry の候補にしない —— advisor 無しで黙って走らせず、
+ *  CLI が起動時に断る組も pin しない。
  *
  *  kill switch(ADR 0043)はここでは見ない —— 「この session に advisor は無い」
  *  という盤面ホストの運用マスクは registry の宣言とは別の層で、選んだ**後**に
