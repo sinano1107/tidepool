@@ -153,13 +153,8 @@ export function execFailureEnvelope(err: unknown): unknown {
   }
 }
 
-export function quarantineCliAuthFailure(
-  db: Db,
-  err: unknown,
-  now: Date,
-  provider: Provider = "anthropic",
-): void {
-  if (err instanceof CliAuthError) quarantineCliAuthForProvider(db, provider, now);
+export function quarantineCliAuthFailure(db: Db, err: unknown, now: Date): void {
+  if (err instanceof CliAuthError) quarantineCliAuthForProvider(db, "anthropic", now);
 }
 
 /** ADR 0098: the machine classification of a 401 routes by the spawn/call-time
