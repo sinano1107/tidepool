@@ -160,6 +160,7 @@ export interface WireContract {
     completion_criteria: string;
     workspace: string | null;
     review_flag: number;
+    review_by: string[] | null;
     handoff_doc: string | null;
   };
   "GET /api/your-tasks": Array<Pick<QueueTask, "id" | "title" | "issue_live_state"> & { blocking: string | null }>;
