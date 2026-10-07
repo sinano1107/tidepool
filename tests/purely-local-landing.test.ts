@@ -38,22 +38,21 @@ async function landingQuestionFor(board: Tidepool, taskId: string): Promise<any>
 
 /** ADR 0103 決定2 の直列ペア(#468 のライブ実測の形): 独立に登録された2件を続けて
  *  完了させ、1件目を着地させて保護ブランチを進めたうえで、非 ff になった2件目の
- *  着地 question を返す。`sharedFile` は両タスクに同じファイルを書かせてコンフリクトを
- *  仕込み、`occupySlot` は3件目に slot を占めさせる(HEAD がそのタスクブランチへ移る)。 */
+ *  着地 question を返す。`occupySlot` は3件目に slot を占めさせる(HEAD がそのタスクブランチへ移る)。 */
 async function serialPairLanding(
   board: Tidepool,
   workspacePath: string,
-  { sharedFile = false, occupySlot = false } = {},
+  { occupySlot = false } = {},
 ): Promise<{ first: any; second: any; third: any; question: any }> {
   // 登録と解放はどちらも pickup の契機(ADR 0119 決定2・3)なので、後続は前のタスクの統合点
   // レビューが済んでから登録する —— 先に積むと、解放が撃つ poll がレビューより先に後続を
   // slot へ入れる。どちらも1件目の着地(下の回答)より前の保護ブランチから fork するのは同じ
   const first = await registerWork(board, "first of the serial pair");
-  commitWork(workspacePath, sharedFile ? "shared.txt" : "one.txt", "from the first task\n");
+  commitWork(workspacePath, "one.txt", "from the first task\n");
   await completeViaMcp(board, first.id);
   await completeIntegrationReviews(board, first.id);
   const second = await registerWork(board, "second of the serial pair");
-  commitWork(workspacePath, sharedFile ? "shared.txt" : "two.txt", "from the second task\n");
+  commitWork(workspacePath, "two.txt", "from the second task\n");
   await completeViaMcp(board, second.id);
   await completeIntegrationReviews(board, second.id);
   // 3件目が登録と同時に slot を取り、HEAD は自分のタスクブランチへ移る
@@ -213,58 +212,7 @@ it("走行中の slot を占めたまま来た非 ff の着地は、ref だけ�
   expect(await servedWorkspaceQuarantine(t, "sandbox")).toBeUndefined();
 });
 
-// 走行中の綴りでも、コンフリクトは回答の拒否であって隔離ではない(ADR 0103 決定4)——
-// `merge-tree` は盤面の作業ツリーを使わないので、拒んだ跡も残らない。
-it("走行中の slot を占めたまま来た着地がコンフリクトしても、隔離せず作業ツリーも汚さない", async () => {
-  const workspace = await makeWorkspace("sandbox");
-  t = await bootTidepool({ workspace });
-  const { third, question } = await serialPairLanding(t, workspace.path, {
-    sharedFile: true,
-    occupySlot: true,
-  });
-  const protectedSha = git(workspace.path, "rev-parse", "refs/heads/main");
-  const head = git(workspace.path, "rev-parse", "HEAD");
-
-  const answered = await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, {
-    answers: ["merge"],
-  });
-
-  expect(answered.status).toBe(409);
-  expect(await servedWorkspaceQuarantine(t, "sandbox")).toBeUndefined();
-  expect(git(workspace.path, "rev-parse", "refs/heads/main")).toBe(protectedSha);
-  expect(git(workspace.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe(`task/${third.id}`);
-  expect(git(workspace.path, "rev-parse", "HEAD")).toBe(head);
-  expect(git(workspace.path, "status", "--porcelain")).toBe("");
-  expect((await api(t.baseUrl, "GET", `/api/tasks/${question.id}`)).json.status).toBe("todo");
-});
-
-// ADR 0103 決定4: 記録と一致していれば、merge の失敗は回答の拒否であって隔離ではない ——
-// 失敗の時点で何も壊れていない(「自動では合わない」と分かっただけ)。
-it("snapshot が一致していれば着地のコンフリクトは回答を拒むだけで、workspace を quarantine しない", async () => {
-  const workspace = await makeWorkspace("sandbox");
-  t = await bootTidepool({ workspace });
-  const { second, question } = await serialPairLanding(t, workspace.path, { sharedFile: true });
-  const protectedSha = git(workspace.path, "rev-parse", "refs/heads/main");
-  const taskSha = git(workspace.path, "rev-parse", `refs/heads/task/${second.id}`);
-
-  const answered = await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, {
-    answers: ["merge"],
-  });
-
-  expect(answered.status).toBe(409);
-  expect(await servedWorkspaceQuarantine(t, "sandbox")).toBeUndefined();
-  expect(git(workspace.path, "rev-parse", "refs/heads/main")).toBe(protectedSha);
-  expect(git(workspace.path, "rev-parse", `refs/heads/task/${second.id}`)).toBe(taskSha);
-  expect(git(workspace.path, "status", "--porcelain")).toBe("");
-  // question は開いたまま = 人間は手で直してもう一度答えられる
-  expect((await api(t.baseUrl, "GET", `/api/tasks/${question.id}`)).json.status).toBe("todo");
-  const held = await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, {
-    answers: ["hold"],
-  });
-  expect(held.status).toBe(200);
-});
-
-// 帯域外判定そのもの(不一致・巻き戻し・記録の欠落・quarantine の型分け)は
+// 帯域外判定そのもの(不一致・巻き戻し・記録の欠落・quarantine の型分け・コンフリクトは隔離しない否定側)は
 // tests/landing.test.ts が述べる(ADR 0107)。ここは境界の写像だけ: 409、理由、盤面への出現。
 it("帯域外で進んだ保護ブランチへの merge は 409 で、理由を返し workspace の quarantine question を開く", async () => {
   const workspace = await makeWorkspace("sandbox");
