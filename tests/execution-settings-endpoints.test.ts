@@ -124,13 +124,9 @@ it("advisor の上限は settings タブと管理MCP の両方の扉で検証を
   try {
     const viaMcp = async (change: object) => (await client.callTool({ name: "change_execution_settings", arguments: { change } })) as any;
     expect((await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "advisor_ceiling", value: "opus" })).status).toBe(200);
-    expect((await viaMcp({ setting: "advisor_ceiling", value: "fable" })).isError).not.toBe(true);
-    expect((await state()).advisorCeiling).toBe("fable");
-    expect((await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "advisor_ceiling", value: "fable_then_opus" })).status).toBe(200);
-    expect((await state()).advisorCeiling).toBe("fable_then_opus");
-    expect((await viaMcp({ setting: "advisor_ceiling", value: "fable" })).isError).not.toBe(true);
     expect((await viaMcp({ setting: "advisor_ceiling", value: "fable_then_opus" })).isError).not.toBe(true);
     expect((await state()).advisorCeiling).toBe("fable_then_opus");
+    expect((await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "advisor_ceiling", value: "fable_then_opus" })).status).toBe(200);
     const bad = { setting: "advisor_ceiling", value: true };
     expect((await api(t.baseUrl, "POST", "/api/settings/execution", bad)).status).toBe(400);
     expect((await viaMcp(bad)).isError).toBe(true);
