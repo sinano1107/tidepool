@@ -10,7 +10,14 @@ import {
   registerLocalMergeQuestion,
   registerPrPromotionFailureQuestion,
 } from "../src/landing.js";
-import { completeTask, getTask, listBoard, recordPrOpened, registerTask } from "../src/tasks.js";
+import {
+  completeTask,
+  getTask,
+  listBoard,
+  recordPrOpened,
+  registerTask,
+  type Task,
+} from "../src/tasks.js";
 import { raiseObjection } from "../src/triage.js";
 import { BOARD_WORKER_ID } from "../src/worker-id.js";
 import {
@@ -1151,12 +1158,29 @@ it("PR から着地タスクを引けない merge question は fail-closed で a
 // 着地の回答だけがこの型を隔離に結ぶ。以下の5本がこの判定を述べる唯一の場所(ADR 0107)。
 /** 記録がある形: work を拾い、タスクブランチに commit し、解放する。保護ブランチの行が
  *  記録に入り、HEAD は保護ブランチへ戻っている。 */
-async function recordedWork(board: Db, clock: FakeClock, workspace: WorkspaceConfig) {
+async function recordedWork(
+  board: Db,
+  clock: FakeClock,
+  workspace: WorkspaceConfig,
+  content = "finished\n",
+) {
   const work = landingWork(board, clock);
   await prepareWorkspaceAtPickup(board, workspace, work, {});
-  commitWork(workspace.path, "feature.txt", "finished\n");
+  commitWork(workspace.path, "feature.txt", content);
   releaseWorkspace(board, workspace, work, clock.now());
   return work;
+}
+
+/** 着地 question に人間が WebUI から merge と答える。 */
+function answerMerge(board: Db, clock: FakeClock, workspace: WorkspaceConfig, question: Task) {
+  return submitAnswer(
+    { db: board, pollNow: () => {}, landing: unusedLanding, workspace },
+    question,
+    ["merge"],
+    undefined,
+    () => clock.now(),
+    "webui",
+  );
 }
 
 /** 記録の欠落の形: 一度も拾われていないので ref snapshot に保護ブランチの行が無い。 */
@@ -1220,16 +1244,7 @@ it.each([
   const question = mergeQuestion(db, clock, { pending_local_merge_task_id: work.id });
   expect(workspaceQuarantine(db, workspace.name)).toBeUndefined();
 
-  await expect(
-    submitAnswer(
-      { db, pollNow: () => {}, landing: unusedLanding, workspace },
-      question,
-      ["merge"],
-      undefined,
-      () => clock.now(),
-      "webui",
-    ),
-  ).rejects.toThrow(DomainError);
+  await expect(answerMerge(db, clock, workspace, question)).rejects.toThrow(DomainError);
 
   expect(workspaceQuarantine(db, workspace.name)).toBeDefined();
   expect(getTask(db, question.id)?.status).toBe("todo");
@@ -1243,27 +1258,11 @@ it.each([
 ])("%s形で着地がコンフリクトしても、回答を拒むだけで quarantine せず、ブランチも HEAD も作業ツリーも動かさない", async (_shape, occupied) => {
   const workspace = await makeWorkspace("landing-conflict-answer");
   const { db, clock } = await openBoard();
-  const answer = (question: Parameters<typeof submitAnswer>[1]) =>
-    submitAnswer(
-      { db, pollNow: () => {}, landing: unusedLanding, workspace },
-      question,
-      ["merge"],
-      undefined,
-      () => clock.now(),
-      "webui",
-    );
-  const conflictingWork = async (content: string) => {
-    const work = landingWork(db, clock);
-    await prepareWorkspaceAtPickup(db, workspace, work, {});
-    commitWork(workspace.path, "shared.txt", content);
-    releaseWorkspace(db, workspace, work, clock.now());
-    return work;
-  };
-  const first = await conflictingWork("from the first task\n");
-  const second = await conflictingWork("from the second task\n");
+  const first = await recordedWork(db, clock, workspace, "from the first task\n");
+  const second = await recordedWork(db, clock, workspace, "from the second task\n");
   const firstQuestion = mergeQuestion(db, clock, { pending_local_merge_task_id: first.id });
   const secondQuestion = mergeQuestion(db, clock, { pending_local_merge_task_id: second.id });
-  await answer(firstQuestion);
+  await answerMerge(db, clock, workspace, firstQuestion);
   const third = occupied ? landingWork(db, clock) : undefined;
   if (third) await prepareWorkspaceAtPickup(db, workspace, third, {});
   const protectedSha = git(workspace.path, "rev-parse", "refs/heads/main");
@@ -1272,7 +1271,7 @@ it.each([
   const branch = git(workspace.path, "rev-parse", "--abbrev-ref", "HEAD");
   expect(branch).toBe(third ? `task/${third.id}` : "main");
 
-  const rejected = answer(secondQuestion);
+  const rejected = answerMerge(db, clock, workspace, secondQuestion);
 
   await expect(rejected).rejects.toThrow(DomainError);
   await expect(rejected).rejects.toThrow("does not merge cleanly");
