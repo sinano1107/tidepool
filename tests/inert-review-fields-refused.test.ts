@@ -29,22 +29,11 @@ it.each<[string, Partial<RegisterTaskInput>]>([
   ["human が担当する task への reviewer の指名", { assignee: "human", risk_flag: true, review_by: ["fugu"] }],
   ["human が担当する子への review_tier", { assignee: "human", risk_flag: true, review_tier: "standard" }],
   ["flag の無い子への review_tier", { review_tier: "standard" }],
+  ["human が担当するルートへの reviewer の指名", { parent_id: undefined, assignee: "human", review_by: ["fugu"] }],
 ])("完了時レビューが立たない登録は拒否され、task は作られない: %s", (_, extra) => {
   setup();
   expect(() => registerTask(db, child(extra), NOW, ...HUMAN_WEBUI)).toThrow(DomainError);
   expect(boardIds()).toEqual([root.id]);
-});
-
-it("human が担当するルートへの reviewer の指名も拒否される", () => {
-  setup();
-  expect(() => registerTask(db, { ...WORK, assignee: "human", review_by: ["fugu"] }, NOW, ...HUMAN_WEBUI)).toThrow(DomainError);
-  expect(boardIds()).toEqual([root.id]);
-});
-
-it("risk flag の立つ子には、reviewer の指名と review_tier を付けて登録できる", () => {
-  setup();
-  const task = registerTask(db, child({ risk_flag: true, review_by: ["fugu"], review_tier: "standard" }), NOW, ...HUMAN_WEBUI);
-  expect(task.review_by).toEqual(["fugu"]);
 });
 
 it.each<[string, Partial<RegisterTaskInput>, Parameters<typeof editTask>[2]]>([

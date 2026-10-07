@@ -999,7 +999,7 @@ function RegisterScreen({ onRegister, parentTask, onClose }) {
   const ok = issueMode ? workspace.trim() && /^[0-9]+$/.test(issueNumber.trim()) : title.trim() && purpose.trim() && criteria.trim() && (!childMode || reason.trim());
   const ruleSubject = { type: issueMode ? "work" : type, parent_id: parentTask?.id, assignee, review_flag: review, risk_flag: risk };
   const showReviewFlag = childMode && TidepoolRules.reviewFlagCarriesMeaning(ruleSubject);
-  const showReviewBy = TidepoolRules.completionReviewFires({ ...ruleSubject, review_flag: showReviewFlag && review });
+  const showReviewBy = TidepoolRules.completionReviewFires(ruleSubject);
   const reviewByField = showReviewBy && reviewBy.length ? { review_by: reviewBy } : {};
   const fields = () => issueMode ? {
     type: "work",
@@ -3803,7 +3803,7 @@ function EditTaskDialog({ taskCard, onSaved, onClose, say }) {
   const withPlaceholder = (label, names) => [{ value: "", label }, ...names.map((n) => ({ value: n, label: n }))];
   const ruleSubject = { ...fields, type: full.type, parent_id: full.parent_id };
   const showReviewFlag = TidepoolRules.reviewFlagCarriesMeaning(ruleSubject);
-  const showReviewBy = TidepoolRules.completionReviewFires({ ...ruleSubject, review_flag: showReviewFlag && fields.review_flag });
+  const showReviewBy = TidepoolRules.completionReviewFires(ruleSubject);
   const changed = () => {
     const out = {};
     if (!issueBacked) {

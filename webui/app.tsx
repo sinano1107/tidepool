@@ -611,7 +611,7 @@ function EditTaskDialog({ taskCard, onSaved, onClose, say }: {
   // 欄はサーバーと同じ規則でフォーム上の値から出す(ADR 0209)
   const ruleSubject = { ...fields, type: full.type, parent_id: full.parent_id };
   const showReviewFlag = TidepoolRules.reviewFlagCarriesMeaning(ruleSubject);
-  const showReviewBy = TidepoolRules.completionReviewFires({ ...ruleSubject, review_flag: showReviewFlag && fields.review_flag });
+  const showReviewBy = TidepoolRules.completionReviewFires(ruleSubject);
   // only the fields that actually changed — an unchanged submission is a no-op
   // server-side, but sending a minimal patch keeps the intent clear
   const changed = () => {
