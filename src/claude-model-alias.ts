@@ -27,10 +27,9 @@ const GENERATION = /^(\d+)(?:-(\d{1,2})(?!\d))?/;
 
 /** The advisor pinned beside an anthropic main row; undefined when the CLI would refuse the pair at
  *  launch: the row's family is unknown, its generation is below the family's floor, or its family cannot
- *  advise and `aboveMain` is off. With `aboveMain` it
- *  is the top family's alias (an alias, since the advisor is not a row), except that a main already in the
- *  top family gets its own concrete id — an alias lagging the row's generation would not attach. Without
- *  it the advisor is main itself. */
+ *  advise and `aboveMain` is off. With `aboveMain` it is the top family's alias (an alias, since the advisor
+ *  is not a row), except that a main already in the top family gets its own concrete id — an alias lagging
+ *  the row's generation would not attach. Without it the advisor is main itself. */
 export function claudeAdvisorFor(model: string, aboveMain: boolean): string | undefined {
   const family = FAMILIES.find((f) => model.startsWith(f.prefix));
   const generation = family && GENERATION.exec(model.slice(family.prefix.length));
