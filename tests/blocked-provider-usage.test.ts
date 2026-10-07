@@ -239,17 +239,7 @@ it("isAnthropicBoardCallBlocked: observed で窓がすべて開いていても a
     plan: null,
     cliVersion: null,
     observedAt: NOW,
-    windows: [
-      {
-        window: "session",
-        model: null,
-        usedPercent: 10,
-        durationMs: HOUR,
-        resetsAt: new Date(NOW.getTime() + HOUR),
-        throttled: false,
-        resumesAt: null,
-      },
-    ],
+    windows: [],
   });
   quarantineCliAuthForProvider(db, "anthropic", NOW);
 
