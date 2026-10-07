@@ -2727,7 +2727,7 @@ function ExecutionTableCard({ settings, say, onSaved, edit }) {
     },
     /* @__PURE__ */ React.createElement(Select, { label: "Provider", options: settings.providers.map((p) => p.value), value: d.provider, onChange: (e) => update(i, { provider: e.target.value }) }),
     /* @__PURE__ */ React.createElement(Select, { label: "Tier", options: settings.tiers.map((tier) => tier.name), value: d.tier, onChange: (e) => update(i, { tier: e.target.value }) }),
-    /* @__PURE__ */ React.createElement(Input, { label: "Model", mono: true, value: d.model, onChange: (e) => update(i, { model: e.target.value }), placeholder: "alias or model id" }),
+    /* @__PURE__ */ React.createElement(Input, { label: "Model", mono: true, value: d.model, onChange: (e) => update(i, { model: e.target.value }), placeholder: "concrete model id \u2014 e.g. claude-opus-5-5" }),
     /* @__PURE__ */ React.createElement(Input, { label: "Effort", mono: true, value: d.effort, onChange: (e) => update(i, { effort: e.target.value }), placeholder: "high" }),
     /* @__PURE__ */ React.createElement(Input, { label: "Price in", mono: true, value: d.price_in, onChange: (e) => update(i, { price_in: e.target.value }), placeholder: "USD / MTok" }),
     /* @__PURE__ */ React.createElement(Input, { label: "Price out", mono: true, value: d.price_out, onChange: (e) => update(i, { price_out: e.target.value }), placeholder: "USD / MTok" }),
