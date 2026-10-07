@@ -21,6 +21,7 @@ type SettingsExecution = WireContract['GET /api/settings/execution'];
 /** 書ける行の欄(読み口の `quarantine_question_id` は盤面が添えるもので、書き戻さない)。 */
 type SettingsExecutionRow = Omit<SettingsExecution['table'][number], 'quarantine_question_id'>;
 type SettingsTier = SettingsExecution['tiers'][number];
+type AdvisorCeiling = SettingsExecution['advisorCeiling'];
 
 function registryNameOk(name: string) {
   const v = name.trim();
@@ -409,12 +410,13 @@ function tierOptions(tiers: readonly SettingsTier[], blank = 'board default'): S
 
 // Those fields as controls, shared by the record card and the create form so
 // the two never drift — the agent analogue of ProfileFields.
-function AgentFields({ draft, set, authorityOptions, providerOptions, tiers, hostSkills, hostSkillsDegraded }: {
+function AgentFields({ draft, set, authorityOptions, providerOptions, tiers, advisorCeiling, hostSkills, hostSkillsDegraded }: {
   draft: AgentDraft;
   set: (key: keyof AgentDraft, value: AgentDraftValue) => void;
   authorityOptions: (string | SettingsOption)[];
   providerOptions: SettingsOption[];
   tiers: readonly SettingsTier[];
+  advisorCeiling: AdvisorCeiling | undefined;
   hostSkills: string[];
   hostSkillsDegraded: boolean;
 }) {
@@ -431,8 +433,18 @@ function AgentFields({ draft, set, authorityOptions, providerOptions, tiers, hos
         <Select label="Provider" options={[PROVIDER_PLACEHOLDER, ...providerOptions]} value={draft.provider} onChange={(e) => set('provider', e.target.value)} />
       </div>
       <Select label="Default tier" options={tierOptions(tiers)} value={draft.tier} onChange={(e) => set('tier', e.target.value)} />
-      <Checkbox label="advisor — this agent may consult a stronger model at decision points"
-        checked={draft.advisor} onChange={() => set('advisor', !draft.advisor)} />
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+        <Checkbox label="advisor — this agent may consult a stronger model at decision points"
+          checked={draft.advisor} onChange={() => set('advisor', !draft.advisor)} />
+        {/* the board's ceiling decides what the checkbox buys (ADR 0208 決定7): at off it buys nothing */}
+        {advisorCeiling && (
+          <p data-testid="agent-advisor-ceiling" style={{ margin: 0, fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
+            {advisorCeiling === 'off'
+              ? "board advisor ceiling: off — the advisor is not used on this board"
+              : `board advisor ceiling: ${advisorCeiling} — the advisor is at most ${advisorCeiling}; a main model above it runs without one`}
+          </p>
+        )}
+      </div>
       <SkillListInput candidates={hostSkills} degraded={hostSkillsDegraded} values={draft.skills} onChange={(v) => set('skills', v)} />
     </React.Fragment>
   );
@@ -442,11 +454,12 @@ function AgentFields({ draft, set, authorityOptions, providerOptions, tiers, hos
 // WorkspaceRecord's twin: read-only until Edit, and then the draft above,
 // prefilled from the GET /api/agents list. `name` is shown via AgentChip only —
 // renaming isn't offered here at all (it's the file name, parent issue #54).
-function AgentRecord({ agent, authorityProfiles, providerOptions, tiers, hostSkills, hostSkillsDegraded, say, onChanged, edit }: {
+function AgentRecord({ agent, authorityProfiles, providerOptions, tiers, advisorCeiling, hostSkills, hostSkillsDegraded, say, onChanged, edit }: {
   agent: SettingsAgent;
   authorityProfiles: string[];
   providerOptions: SettingsOption[];
   tiers: readonly SettingsTier[];
+  advisorCeiling: AdvisorCeiling | undefined;
   hostSkills: string[];
   hostSkillsDegraded: boolean;
   say: AppSay;
@@ -516,7 +529,7 @@ function AgentRecord({ agent, authorityProfiles, providerOptions, tiers, hostSki
       {open && (
         <React.Fragment>
           <AgentFields draft={draft} set={set} authorityOptions={authorityProfiles}
-            providerOptions={providerOptions} tiers={tiers}
+            providerOptions={providerOptions} tiers={tiers} advisorCeiling={advisorCeiling}
             hostSkills={hostSkills} hostSkillsDegraded={hostSkillsDegraded} />
           <EditActions dirty={dirty} ok={ok} busy={busy} saveLabel="Save changes — commits to the registry"
             onSave={save} onCancel={() => edit.close()} />
@@ -2014,7 +2027,7 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit, fo
 }
 
 // Execution defaults (issue #545 / ADR 0110 決定5) as a record card: Provider
-// rank, the default priority and the advisor-above-main flag. Each differing
+// rank, the default priority and the advisor ceiling (ADR 0208). Each differing
 // value is one POST — the API takes one change per request.
 function ExecutionDefaultsCard({ settings, say, onSaved, edit }: {
   settings: SettingsExecution;
@@ -2022,11 +2035,11 @@ function ExecutionDefaultsCard({ settings, say, onSaved, edit }: {
   onSaved: () => Promise<void> | void;
   edit: SettingsEditSlot;
 }) {
-  const { Button, Card, Checkbox, FieldRow, Select } = window.TidepoolDesignSystem_8a0ead;
+  const { Button, Card, FieldRow, Select } = window.TidepoolDesignSystem_8a0ead;
   const id = 'board:execution-defaults';
   const open = edit.isOpen(id);
   const current = {
-    rank: settings.providerRank, priority: settings.priority, advisor: settings.advisorAboveMain,
+    rank: settings.providerRank, priority: settings.priority, advisor: settings.advisorCeiling,
     defaultTier: settings.defaultTier, judgementTier: settings.judgementTier,
   };
   const [draft, setDraft] = React.useState(current);
@@ -2046,7 +2059,7 @@ function ExecutionDefaultsCard({ settings, say, onSaved, edit }: {
       const changes = [
         rankChanged && { setting: 'provider_rank', value: draft.rank },
         draft.priority !== current.priority && { setting: 'priority', value: draft.priority },
-        draft.advisor !== current.advisor && { setting: 'advisor_above_main', value: draft.advisor },
+        draft.advisor !== current.advisor && { setting: 'advisor_ceiling', value: draft.advisor },
         draft.defaultTier !== current.defaultTier && { setting: 'default_tier', value: draft.defaultTier },
         draft.judgementTier !== current.judgementTier && { setting: 'judgement_tier', value: draft.judgementTier },
       ].filter(Boolean);
@@ -2082,7 +2095,7 @@ function ExecutionDefaultsCard({ settings, say, onSaved, edit }: {
           <React.Fragment>
             <FieldRow label="provider rank" kind="mono" value={settings.providerRank.join(' › ')} />
             <FieldRow label="default priority" kind="mono" value={settings.priority} />
-            <FieldRow label="advisor above main" kind="mono" value={settings.advisorAboveMain ? 'on' : 'off'} />
+            <FieldRow label="advisor ceiling" kind="mono" value={settings.advisorCeiling} />
             <FieldRow label="default tier" kind="mono" value={settings.defaultTier} />
             <FieldRow label="judgement tier" kind="mono" value={settings.judgementTier} />
             {/* promotion only comes from approving a routing meta-review's question (ADR 0150 決定4); this card only demotes */}
@@ -2102,9 +2115,8 @@ function ExecutionDefaultsCard({ settings, say, onSaved, edit }: {
             </div>
             <Select label="Default priority" options={[...settings.priorities]} value={draft.priority}
               onChange={(e) => setDraft({ ...draft, priority: e.target.value })} />
-            <Checkbox testId="execution-advisor-above-main" checked={draft.advisor}
-              label="advisor above main — the advisor may be a model ranked above the main model (the provider's top model)"
-              onChange={() => setDraft({ ...draft, advisor: !draft.advisor })} />
+            <Select label="Advisor ceiling" options={[...settings.advisorCeilings]} value={draft.advisor}
+              onChange={(e) => setDraft({ ...draft, advisor: e.target.value as AdvisorCeiling })} />
             <Select label="Board default tier" options={tierNames} value={draft.defaultTier}
               onChange={(e) => setDraft({ ...draft, defaultTier: e.target.value })} />
             <Select label="Judgement tier" options={tierNames} value={draft.judgementTier}
@@ -2112,6 +2124,7 @@ function ExecutionDefaultsCard({ settings, say, onSaved, edit }: {
             <p style={{ margin: 0, fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
               rank orders the providers a task may run on (first = preferred; every provider exactly once).
               priority is the default for tasks that request none: quality = rank then price, cost = price then rank.
+              advisor ceiling is the highest model an agent's advisor may be: a main model below it gets the ceiling's model, one of the same model family gets itself, one above it runs without an advisor; off runs every agent without one.
               default tier is the tier of tasks that request none and whose agent declares none, and of the board's drafts.
               judgement tier is the tier the board's own judgement runs on: its retrospective Board calls (allocation review, attribution, Behavior candidate drafting) and its periodic meta-reviews.
             </p>
@@ -2453,10 +2466,11 @@ function NewWorkspaceForm({ baseDir, say, onCreated, edit }: {
 // The agent create form (issue #72), NewWorkspaceForm's twin. `name` is its own
 // field — it becomes agents/<name>.md and is never editable afterwards; the
 // rest is the same draft the record card edits.
-function NewAgentForm({ authorityProfiles, providerOptions, tiers, hostSkills, hostSkillsDegraded, say, onCreated, edit }: {
+function NewAgentForm({ authorityProfiles, providerOptions, tiers, advisorCeiling, hostSkills, hostSkillsDegraded, say, onCreated, edit }: {
   authorityProfiles: string[];
   providerOptions: SettingsOption[];
   tiers: readonly SettingsTier[];
+  advisorCeiling: AdvisorCeiling | undefined;
   hostSkills: string[];
   hostSkillsDegraded: boolean;
   say: AppSay;
@@ -2502,7 +2516,7 @@ function NewAgentForm({ authorityProfiles, providerOptions, tiers, hostSkills, h
       <Input label="Name" value={name} onChange={(e) => setName(e.target.value)}
         placeholder="letters, digits, - _ . — becomes agents/<name>.md, not renameable later" />
       <AgentFields draft={draft} set={set} authorityOptions={authorityCreateOptions}
-        providerOptions={providerOptions} tiers={tiers}
+        providerOptions={providerOptions} tiers={tiers} advisorCeiling={advisorCeiling}
         hostSkills={hostSkills} hostSkillsDegraded={hostSkillsDegraded} />
       <EditActions ok={ok} busy={busy} saveLabel="Add agent — commits to the registry"
         onSave={submit} onCancel={() => edit.close()} />
@@ -2825,12 +2839,12 @@ function SettingsScreen({ say, memoryFocus, registerLeaveGuard }: {
         a.builtin ? 'built-in' : a.shadowsBuiltIn ? `${a.authority} · shadows built-in` : a.authority,
       record: (rec) => (
         <AgentRecord agent={rec} authorityProfiles={authorityProfiles} providerOptions={providerOptions} tiers={executionSettings?.tiers ?? []}
-          hostSkills={hostSkills}
+          advisorCeiling={executionSettings?.advisorCeiling} hostSkills={hostSkills}
           hostSkillsDegraded={hostSkillsDegraded} say={say} onChanged={loadAgents} edit={edit} />
       ),
       createForm: () => (
         <NewAgentForm authorityProfiles={authorityProfiles} providerOptions={providerOptions} tiers={executionSettings?.tiers ?? []}
-          hostSkills={hostSkills}
+          advisorCeiling={executionSettings?.advisorCeiling} hostSkills={hostSkills}
           hostSkillsDegraded={hostSkillsDegraded} say={say} onCreated={loadAgents} edit={edit} />
       ),
       reload: loadAgents,

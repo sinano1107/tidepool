@@ -85,12 +85,6 @@ const boardState = boardStatePaths({
 // なら実 worker は立たないので(合成側が LoggingWorker に落ちる)作る必要もない。
 if (registryDir) mkdirSync(logDir, { recursive: true });
 
-// issue #33 判断8: advisor のグローバル kill switch。registry ではなく**ホストの
-// 運用設定**に置く —— エージェントの定義ではなく、experimental な機能を全員に配る
-// 代償としての緊急マスクであり、advisor 側の障害・仕様変更時に agent.md を1枚も
-// 触らずに全 worker を止めるための口。既定は off。
-const advisorDisabled = process.env.TIDEPOOL_DISABLE_ADVISOR === "1";
-
 /** CONTEXT.md's own `## Term(日本語)` pairs (issue #47), parsed once at boot
  *  for the translation client's prompt. Absent/unreadable CONTEXT.md → no
  *  glossary guidance rather than a boot failure — the glossary sharpens
@@ -154,7 +148,6 @@ const server = await startServer(
     registryDir,
     registryMode: declaredRegistryMode(registryDir),
     logDir,
-    advisorDisabled,
     workspaceName,
     workspacesDir,
     workspacesDirSource,

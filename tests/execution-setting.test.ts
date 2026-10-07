@@ -1,5 +1,5 @@
 import { expect, it, vi } from "vitest";
-import { isClaudeModelAlias } from "../src/claude-model-alias.js";
+import { type AdvisorCeiling, isClaudeModelAlias } from "../src/claude-model-alias.js";
 import { type Db, openDb } from "../src/db.js";
 import { DomainError } from "../src/domain-error.js";
 import { listEventsOfKinds } from "../src/events.js";
@@ -12,6 +12,7 @@ import {
   type ExecutionSetting,
   type ExecutionSettingsChange,
   type ExecutionSettingTable,
+  executionSettingsChangeSchema,
   executionSettingsFor,
   parseAddTierAmendment,
   parseAgentTierAmendment,
@@ -51,7 +52,7 @@ function input(overrides: Partial<SelectorInput> = {}): SelectorInput {
     priority: undefined,
     agentTier: undefined,
     boardTier: "economy",
-    advisorAboveMain: false,
+    advisorCeiling: "off",
     ...overrides,
   };
 }
@@ -87,7 +88,7 @@ it("種の表は `/implementation-delegation` の表と同じ7行 — anthropic 
 
 it("tier を書かない agent は盤面既定のティアで解決され、出所は board", () => {
   expect(
-    select(input({ entries: [{ provider: "anthropic", advisor: false }], taskTier: undefined, agentTier: undefined, advisorAboveMain: false }), table),
+    select(input({ entries: [{ provider: "anthropic", advisor: false }], taskTier: undefined, agentTier: undefined }), table),
   ).toEqual({
     provider: "anthropic",
     model: "claude-sonnet-5-5",
@@ -99,7 +100,7 @@ it("tier を書かない agent は盤面既定のティアで解決され、出�
 
 it("agent の tier は盤面既定より優先され、出所は agent", () => {
   expect(
-    select(input({ entries: [{ provider: "anthropic", advisor: false }], taskTier: undefined, agentTier: "economy", advisorAboveMain: false }), table),
+    select(input({ entries: [{ provider: "anthropic", advisor: false }], taskTier: undefined, agentTier: "economy" }), table),
   ).toEqual({
     provider: "anthropic",
     model: "claude-sonnet-5-5",
@@ -111,32 +112,13 @@ it("agent の tier は盤面既定より優先され、出所は agent", () => {
 
 it("provider が違えば同じティアでもその provider の表記で解決される", () => {
   expect(
-    select(input({ entries: [{ provider: "openai", advisor: false }], taskTier: undefined, agentTier: "frontier", advisorAboveMain: false }), table)
+    select(input({ entries: [{ provider: "openai", advisor: false }], taskTier: undefined, agentTier: "frontier" }), table)
       .model,
   ).toBe("gpt-6-astra");
   expect(
-    select(input({ entries: [{ provider: "moonshot", advisor: false }], taskTier: undefined, agentTier: "economy", advisorAboveMain: false }), table)
+    select(input({ entries: [{ provider: "moonshot", advisor: false }], taskTier: undefined, agentTier: "economy" }), table)
       .model,
   ).toBe("kimi-k3[1m]");
-});
-
-it("advisor が真でも「main より上の model を advisor に使える」フラグが立つまでは main と同一のモデルに倒れる(Fable の同意も org の availableModels も盤面から読めない)", () => {
-  expect(
-    select(input({ entries: [{ provider: "anthropic", advisor: true }], taskTier: undefined, agentTier: "economy", advisorAboveMain: false }), table)
-      .advisor,
-  ).toBe("claude-sonnet-5-5");
-  expect(
-    select(input({ entries: [{ provider: "anthropic", advisor: true }], taskTier: undefined, agentTier: "standard", advisorAboveMain: false }), table)
-      .advisor,
-  ).toBe("claude-opus-5-5");
-});
-
-it("フラグが立てば Sonnet / Opus の行の advisor は最上位の系列の alias `fable`、Fable の行の advisor はその行の具体 id(ADR 0200 決定6)", () => {
-  const advisorAt = (agentTier: Tier) =>
-    select(input({ entries: [{ provider: "anthropic", advisor: true }], agentTier, advisorAboveMain: true })).advisor;
-  expect(advisorAt("economy")).toBe("fable");
-  expect(advisorAt("standard")).toBe("fable");
-  expect(advisorAt("frontier")).toBe("claude-fable-5-1");
 });
 
 it("要求ティアの行を持たない Provider の entry は候補から落ち、それしか無ければ null —— 表の穴は設定漏れではなく事実で、全 entry 除外と同じ枝(ADR 0114 決定3)", () => {
@@ -159,74 +141,145 @@ it("entry が複数で片方の Provider に行が無ければ、もう片方で
   ).toMatchObject({ provider: "openai", model: "gpt-6-astra" });
 });
 
-it("表に Fable の行が無くても、フラグありなら advisor は `fable` —— advisor は行でなく、表を読まない", () => {
+const cheapStandardRow = (model: string): ExecutionSettingTable[number] =>
+  ({ provider: "anthropic", tier: "standard", model, effort: "high", price_in: 1, price_out: 1 });
+
+/** advisor つきの entry が、その1行だけの表で選んだ advisor と出所。候補にならなければ null。 */
+function advisorOn(model: string, advisorCeiling: AdvisorCeiling) {
+  const setting = selectExecutionSetting(
+    input({ entries: [{ provider: "anthropic", advisor: true }], agentTier: "standard", advisorCeiling }),
+    [cheapStandardRow(model)],
+  );
+  return setting && { advisor: setting.advisor, source: setting.source.advisor };
+}
+
+it("advisor の上限4値 × 行の advisor と出所は #1538 の表どおり —— 上限より下の系列は上限の alias、同じ系列は main と同一、上限より上は付けない、off はすべての行で無し(ADR 0208 決定2)", () => {
+  const rows = ["claude-haiku-4-5", "claude-sonnet-5-5", "claude-opus-5-5", "claude-fable-5-1"];
+  const ceilings = ["off", "sonnet", "opus", "fable"] as const;
+  const none = (source: string) => ({ advisor: undefined, source });
+  expect(Object.fromEntries(ceilings.map((ceiling) => [ceiling, rows.map((model) => advisorOn(model, ceiling))]))).toEqual({
+    off: [none("off"), none("off"), none("off"), none("off")],
+    sonnet: [
+      { advisor: "sonnet", source: "ceiling" },
+      { advisor: "claude-sonnet-5-5", source: "ceiling" },
+      none("main_above_ceiling"),
+      none("main_above_ceiling"),
+    ],
+    opus: [
+      { advisor: "opus", source: "ceiling" },
+      { advisor: "opus", source: "ceiling" },
+      { advisor: "claude-opus-5-5", source: "ceiling" },
+      none("main_above_ceiling"),
+    ],
+    fable: [
+      { advisor: "fable", source: "ceiling" },
+      { advisor: "fable", source: "ceiling" },
+      { advisor: "fable", source: "ceiling" },
+      { advisor: "claude-fable-5-1", source: "ceiling" },
+    ],
+  });
+});
+
+it("advisor の無い entry の実行設定は advisor の出所を持たない —— off で advisor 無しになった候補と記録で区別できる", () => {
+  expect(select(input({ entries: [{ provider: "anthropic", advisor: false }], advisorCeiling: "fable" })).source).toEqual({ tier: "board", provider: "only" });
+  expect(select(input({ entries: [{ provider: "anthropic", advisor: true }], advisorCeiling: "off" })).source).toEqual({ tier: "board", provider: "only", advisor: "off" });
+});
+
+it("上限が off なら advisor を有効にした entry は advisor の無い entry として選ばれ、Haiku・知らない系列・下限未満の行も候補に残る(ADR 0208 決定3)", () => {
+  for (const model of ["claude-haiku-4-5", "claude-mythos-1", "claude-sonnet-4-5", "claude-haiku-5"]) {
+    expect(advisorOn(model, "off")).toEqual({ advisor: undefined, source: "off" });
+  }
+});
+
+it("adapter が知らない新しい世代の main は、上限の alias でなく main と同一(出所は知らない世代)に落ち、advisor になれない系列(Haiku)の新しい世代は候補から外れる(ADR 0208 決定4)", () => {
+  expect(advisorOn("claude-sonnet-6", "opus")).toEqual({ advisor: "claude-sonnet-6", source: "unknown_generation" });
+  expect(advisorOn("claude-sonnet-6", "fable")).toEqual({ advisor: "claude-sonnet-6", source: "unknown_generation" });
+  expect(advisorOn("claude-opus-6", "fable")).toEqual({ advisor: "claude-opus-6", source: "unknown_generation" });
+  for (const ceiling of ["sonnet", "opus", "fable"] as const) expect(advisorOn("claude-haiku-5", ceiling)).toBeNull();
+});
+
+it("main が上限より上で advisor 無しになった行は除外ではない —— 候補に残って選ばれる", () => {
+  expect(select(input({ entries: [{ provider: "anthropic", advisor: true }], agentTier: "frontier", advisorCeiling: "opus" }))).toMatchObject({
+    model: "claude-fable-5-1",
+    advisor: undefined,
+    source: { advisor: "main_above_ceiling" },
+  });
+});
+
+it("表に Fable の行が無くても、上限 fable なら advisor は `fable` —— advisor は行でなく、表を読まない", () => {
   const noFable: ExecutionSettingTable = table.filter((row) => row.model !== "claude-fable-5-1");
   expect(
-    select(input({ entries: [{ provider: "anthropic", advisor: true }], agentTier: "standard", advisorAboveMain: true }), noFable),
+    select(input({ entries: [{ provider: "anthropic", advisor: true }], agentTier: "standard", advisorCeiling: "fable" }), noFable),
   ).toMatchObject({ model: "claude-opus-5-5", advisor: "fable" });
 });
 
-it("adapter が知らない系列の行は、advisor つきの entry ではフラグに依らず候補に入らず、advisor なしの entry では入る —— 付かない advisor を記録に残さない", () => {
+it("adapter が知らない系列の行は、advisor つきの entry では off 以外の上限で候補に入らず、advisor なしの entry では入る —— 付かない advisor を記録に残さない", () => {
   // 知らない系列の行のほうが安いので、候補に入っていれば先に選ばれる
   const withMythos: ExecutionSettingTable = [
     ...table,
     { provider: "anthropic", tier: "standard", model: "claude-mythos-1", effort: "high", price_in: 1, price_out: 1 },
   ];
-  const standard = (advisor: boolean, advisorAboveMain: boolean) =>
-    select(input({ entries: [{ provider: "anthropic", advisor }], agentTier: "standard", advisorAboveMain }), withMythos).model;
-  expect(standard(true, false)).toBe("claude-opus-5-5");
-  expect(standard(true, true)).toBe("claude-opus-5-5");
-  expect(standard(false, true)).toBe("claude-mythos-1");
+  const standard = (advisor: boolean, advisorCeiling: AdvisorCeiling) =>
+    select(input({ entries: [{ provider: "anthropic", advisor }], agentTier: "standard", advisorCeiling }), withMythos).model;
+  expect(standard(true, "opus")).toBe("claude-opus-5-5");
+  expect(standard(true, "fable")).toBe("claude-opus-5-5");
+  expect(standard(false, "fable")).toBe("claude-mythos-1");
 });
-
-const cheapStandardRow = (model: string): ExecutionSettingTable[number] =>
-  ({ provider: "anthropic", tier: "standard", model, effort: "high", price_in: 1, price_out: 1 });
 
 /** 種の表の standard に、種の行より安い anthropic の行を1つ足し、選ばれた model を返す。足した行が候補に
  *  入っていれば先に選ばれる。 */
-function standardWithCheapRow(model: string, advisor: boolean, advisorAboveMain: boolean): string {
+function standardWithCheapRow(model: string, advisor: boolean, advisorCeiling: AdvisorCeiling): string {
   const withRow: ExecutionSettingTable = [...table, cheapStandardRow(model)];
-  return select(input({ entries: [{ provider: "anthropic", advisor }], agentTier: "standard", advisorAboveMain }), withRow).model;
+  return select(input({ entries: [{ provider: "anthropic", advisor }], agentTier: "standard", advisorCeiling }), withRow).model;
 }
 
-it("main として advisor を受けない世代(Sonnet / Opus の 4.6 未満)の行は、advisor つきの entry ではフラグに依らず候補に入らず、advisor なしの entry では入る(ADR 0200 追記 2026-10-07)", () => {
+it("main として advisor を受けない世代(Sonnet / Opus の 4.6 未満)の行は、advisor つきの entry では off 以外の上限に依らず候補に入らず、advisor なしの entry では入る(ADR 0200 追記 2026-10-07)", () => {
   for (const model of ["claude-sonnet-4-5", "claude-opus-4-5", "claude-sonnet-4-20250514", "claude-opus-4-1-20250805"]) {
-    expect(standardWithCheapRow(model, true, false)).toBe("claude-opus-5-5");
-    expect(standardWithCheapRow(model, true, true)).toBe("claude-opus-5-5");
-    expect(standardWithCheapRow(model, false, false)).toBe(model);
+    expect(standardWithCheapRow(model, true, "opus")).toBe("claude-opus-5-5");
+    expect(standardWithCheapRow(model, true, "fable")).toBe("claude-opus-5-5");
+    expect(standardWithCheapRow(model, false, "off")).toBe(model);
   }
 });
 
-it("advisor になれない系列(Haiku)の行は、フラグが無ければ advisor つきの entry の候補に入らず、フラグが立てば advisor `fable` で入る —— advisor が main と同一だと CLI が断る", () => {
-  expect(standardWithCheapRow("claude-haiku-4-5", true, false)).toBe("claude-opus-5-5");
-  expect(standardWithCheapRow("claude-haiku-4-5", false, false)).toBe("claude-haiku-4-5");
+it("Haiku 4.5 の行は advisor つきの entry では上限の alias で入る —— advisor が main と同一にはならない", () => {
+  expect(standardWithCheapRow("claude-haiku-4-5", false, "off")).toBe("claude-haiku-4-5");
   const haikuTable: ExecutionSettingTable = [cheapStandardRow("claude-haiku-4-5")];
   expect(
-    select(input({ entries: [{ provider: "anthropic", advisor: true }], agentTier: "standard", advisorAboveMain: true }), haikuTable),
+    select(input({ entries: [{ provider: "anthropic", advisor: true }], agentTier: "standard", advisorCeiling: "fable" }), haikuTable),
   ).toMatchObject({ model: "claude-haiku-4-5", advisor: "fable" });
 });
 
-it("Sonnet 4.6 は下限ちょうどで advisor を受ける —— フラグ無しなら advisor は同一 id、有りなら `fable`", () => {
+it("Sonnet 4.6 は下限ちょうどで advisor を受ける —— 上限 sonnet なら advisor は同一 id、fable なら `fable`", () => {
   const sonnet46: ExecutionSettingTable = [cheapStandardRow("claude-sonnet-4-6")];
-  const advisorWith = (advisorAboveMain: boolean) =>
-    select(input({ entries: [{ provider: "anthropic", advisor: true }], agentTier: "standard", advisorAboveMain }), sonnet46).advisor;
-  expect(advisorWith(false)).toBe("claude-sonnet-4-6");
-  expect(advisorWith(true)).toBe("fable");
+  const advisorWith = (advisorCeiling: AdvisorCeiling) =>
+    select(input({ entries: [{ provider: "anthropic", advisor: true }], agentTier: "standard", advisorCeiling }), sonnet46).advisor;
+  expect(advisorWith("sonnet")).toBe("claude-sonnet-4-6");
+  expect(advisorWith("fable")).toBe("fable");
 });
 
 it("旧形式の id(`claude-3-5-haiku-…`)は系列の prefix に合わず、知らない系列として advisor つきの entry の候補に入らない", () => {
-  expect(standardWithCheapRow("claude-3-5-haiku-20241022", true, true)).toBe("claude-opus-5-5");
-  expect(standardWithCheapRow("claude-3-5-haiku-20241022", false, false)).toBe("claude-3-5-haiku-20241022");
+  expect(standardWithCheapRow("claude-3-5-haiku-20241022", true, "fable")).toBe("claude-opus-5-5");
+  expect(standardWithCheapRow("claude-3-5-haiku-20241022", false, "off")).toBe("claude-3-5-haiku-20241022");
 });
 
 it("advisor を受けられない行しか無ければ、advisor つきの entry は候補が空で null(skipped の枝)", () => {
   const ineligible: ExecutionSettingTable = [
     cheapStandardRow("claude-sonnet-4-5"),
-    cheapStandardRow("claude-haiku-4-5"),
+    cheapStandardRow("claude-haiku-5"),
   ];
   expect(
-    selectExecutionSetting(input({ entries: [{ provider: "anthropic", advisor: true }], agentTier: "standard", advisorAboveMain: false }), ineligible),
+    selectExecutionSetting(input({ entries: [{ provider: "anthropic", advisor: true }], agentTier: "standard", advisorCeiling: "opus" }), ineligible),
   ).toBeNull();
+});
+
+it("盤面設定の変更の検証は advisor の上限4値だけを受け、旧い真偽値を含むそれ以外を拒む", () => {
+  for (const value of ["off", "sonnet", "opus", "fable"]) {
+    expect(executionSettingsChangeSchema.safeParse({ setting: "advisor_ceiling", value }).success).toBe(true);
+  }
+  for (const value of [true, false, "haiku", "fable_then_opus", "claude-opus-5-5", ""]) {
+    expect(executionSettingsChangeSchema.safeParse({ setting: "advisor_ceiling", value }).success).toBe(false);
+  }
+  expect(executionSettingsChangeSchema.safeParse({ setting: "advisor_above_main", value: true }).success).toBe(false);
 });
 
 it("優先順位は quality / cost の2値で、既定は quality(CONTEXT.md「要求」/ ADR 0114 決定1: speed は落とした)", () => {
@@ -237,7 +290,7 @@ it("優先順位は quality / cost の2値で、既定は quality(CONTEXT.md「�
 it("task の要求ティアは agent の tier より優先され、出所は task(ADR 0110 決定2)", () => {
   expect(
     select(
-      input({ entries: [{ provider: "anthropic", advisor: false }], taskTier: "frontier", agentTier: "economy", advisorAboveMain: false }),
+      input({ entries: [{ provider: "anthropic", advisor: false }], taskTier: "frontier", agentTier: "economy" }),
       table,
     ),
   ).toEqual({
@@ -252,7 +305,7 @@ it("task の要求ティアは agent の tier より優先され、出所は tas
 it("task の要求ティアは agent が tier を持たなくても盤面既定より優先される", () => {
   expect(
     select(
-      input({ entries: [{ provider: "anthropic", advisor: false }], taskTier: "standard", agentTier: undefined, advisorAboveMain: false }),
+      input({ entries: [{ provider: "anthropic", advisor: false }], taskTier: "standard", agentTier: undefined }),
       table,
     ),
   ).toEqual({
@@ -267,7 +320,7 @@ it("task の要求ティアは agent が tier を持たなくても盤面既定�
 it("task の要求が agent の tier と同じ値でも出所は task —— 「誰が要求したか」は値の一致で消えない", () => {
   expect(
     select(
-      input({ entries: [{ provider: "anthropic", advisor: false }], taskTier: "economy", agentTier: "economy", advisorAboveMain: false }),
+      input({ entries: [{ provider: "anthropic", advisor: false }], taskTier: "economy", agentTier: "economy" }),
       table,
     ).source,
   ).toEqual({ tier: "task", provider: "only" });
@@ -276,7 +329,7 @@ it("task の要求が agent の tier と同じ値でも出所は task —— 「
 it("task の要求ティアは advisor の導出にも効く —— main が Fable の行に動けば advisor はその具体 id", () => {
   expect(
     select(
-      input({ entries: [{ provider: "anthropic", advisor: true }], taskTier: "frontier", agentTier: "economy", advisorAboveMain: true }),
+      input({ entries: [{ provider: "anthropic", advisor: true }], taskTier: "frontier", agentTier: "economy", advisorCeiling: "fable" }),
       table,
     ).advisor,
   ).toBe("claude-fable-5-1");
@@ -371,6 +424,7 @@ it("advisor は entry ごとの宣言 —— 同じ agent でも経路が違え�
           { provider: "anthropic", advisor: true },
           { provider: "openai", advisor: false },
         ],
+        advisorCeiling: "sonnet",
       }),
     ).advisor,
   ).toBe("claude-sonnet-5-5");
@@ -657,7 +711,7 @@ function boardWithRefusedRows(extraRows: ExecutionSettingTable, refused: Array<[
   const db = openDb(":memory:");
   const now = new Date();
   for (const row of extraRows) applyExecutionSettingsChange(db, { setting: "row", row }, "webui", now);
-  applyExecutionSettingsChange(db, { setting: "advisor_above_main", value: true }, "webui", now);
+  applyExecutionSettingsChange(db, { setting: "advisor_ceiling", value: "fable" }, "webui", now);
   for (const [provider, model] of refused) registerQuarantine(db, "tableRow", tableRowValue(provider, model), "refused", now);
   return db;
 }

@@ -272,15 +272,14 @@ export function openDb(path: string): Db {
       UNIQUE (provider, model, tier_id)
     );
 
-    -- ADR 0110 決定3 / 決定5 の盤面設定側(1行): 「main より序列が上の model を
-    -- advisor に使ってよい」(ADR 0200 決定6。Fable の usage-credits 同意も org の availableModels も盤面
-    -- からは読めないので、立つまでは advisor を main と同一に倒す)、Provider
+    -- ADR 0110 決定3 / 決定5 の盤面設定側(1行): advisor の上限(ADR 0208 決定1。種の既定は off —— advisor は
+    -- CLI の上で experimental なので盤面でも明示して有効にする)、Provider
     -- 順位(JSON 配列、PROVIDER_VALUES の順列)、優先順位の既定(ADR 0114 決定1)。
     -- 行は種で作り、列が NULL = 未設定 = コードの既定(宣言順 / quality)。
     -- settings タブと管理MCP が書く(#545)。
     CREATE TABLE IF NOT EXISTS execution_defaults (
       id               INTEGER PRIMARY KEY CHECK (id = 1),
-      advisor_above_main INTEGER NOT NULL DEFAULT 0,
+      advisor_ceiling  TEXT NOT NULL DEFAULT 'off' CHECK (advisor_ceiling IN ('off', 'sonnet', 'opus', 'fable')),
       provider_rank    TEXT,
       priority         TEXT CHECK (priority IN ('quality', 'cost')),
       -- 学習器の昇格(ADR 0150 決定4)

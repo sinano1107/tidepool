@@ -8,33 +8,47 @@ const MODEL_ALIASES = new Set(["sonnet", "opus", "haiku", "fable", "best", "defa
 
 export const isClaudeModelAlias = (model: string): boolean => MODEL_ALIASES.has(model.toLowerCase());
 
-/** The model families this adapter knows, by concrete-id prefix, and the top one the advisor may climb to
- *  (ADR 0200 決定6). Each family carries the lowest generation (major * 100 + minor) whose main takes an
- *  advisor, and whether it can act as one (ADR 0200 追記 2026-10-07). Only the top is needed, so there is no
- *  per-family rank. A family missing here makes its rows non-candidates for advisor entries until a release
- *  adds it: an advisor the CLI would not attach must not reach the record or the learner's cells. */
-const FAMILIES = [
-  { prefix: "claude-haiku-", minGeneration: 0, canAdvise: false },
-  { prefix: "claude-sonnet-", minGeneration: 406, canAdvise: true },
-  { prefix: "claude-opus-", minGeneration: 406, canAdvise: true },
-  { prefix: "claude-fable-", minGeneration: 0, canAdvise: true },
+/** The board's advisor ceiling (ADR 0208 決定1): `off`, or the alias of the highest family the advisor may climb to. */
+export const ADVISOR_CEILINGS = ["off", "sonnet", "opus", "fable"] as const;
+export type AdvisorCeiling = (typeof ADVISOR_CEILINGS)[number];
+
+/** Why the advisor is what it is (ADR 0208 決定6): `off` — the ceiling is off; `ceiling` — the ceiling's alias, or main's own
+ *  id when main is in the ceiling's family; `unknown_generation` — main's own id, since this release does not know whether
+ *  the ceiling's alias takes main's generation; `main_above_ceiling` — main ranks above the ceiling, so no advisor. */
+export type AdvisorSource = "off" | "ceiling" | "unknown_generation" | "main_above_ceiling";
+
+/** The model families this adapter knows, lowest rank first, by concrete-id prefix. Each carries the lowest generation
+ *  (major * 100 + minor) whose main takes an advisor and whether it can act as one (ADR 0200 追記 2026-10-07). A family a
+ *  ceiling names also carries, per lower family, the highest main generation its alias accepts at the pinned CLI (ADR 0208
+ *  決定4 —— 2.1.286: `sonnet` → Sonnet 5.5, `opus` → Opus 5.5, `fable` → Fable 5.1), checked against the docs' combination
+ *  table at each version bump. A family missing here makes its rows non-candidates for advisor entries until a release adds
+ *  it: an advisor the CLI would not attach must not reach the record or the learner's cells. */
+const FAMILIES: readonly { name: string; prefix: string; minGeneration: number; canAdvise: boolean; accepts?: Record<string, number> }[] = [
+  { name: "haiku", prefix: "claude-haiku-", minGeneration: 0, canAdvise: false },
+  { name: "sonnet", prefix: "claude-sonnet-", minGeneration: 406, canAdvise: true, accepts: { haiku: 405 } },
+  { name: "opus", prefix: "claude-opus-", minGeneration: 406, canAdvise: true, accepts: { haiku: 405, sonnet: 505 } },
+  { name: "fable", prefix: "claude-fable-", minGeneration: 0, canAdvise: true, accepts: { haiku: 405, sonnet: 505, opus: 505 } },
 ];
-const TOP_FAMILY = { alias: "fable", prefix: "claude-fable-" };
 
 /** `<major>[-<minor>][-<date>]` after the family prefix: minor is 1-2 digits, the date 8, so
  *  `claude-sonnet-4-20250514` is 4.0 and `claude-opus-4-1-20250805` is 4.1. */
 const GENERATION = /^(\d+)(?:-(\d{1,2})(?!\d))?/;
 
-/** The advisor pinned beside an anthropic main row; undefined when the CLI would refuse the pair at
- *  launch: the row's family is unknown, its generation is unreadable or below the family's floor, or its
- *  family cannot advise and `aboveMain` is off. With `aboveMain` it is the top family's alias (an alias,
- *  since the advisor is not a row), except that a main already in the top family gets its own concrete
- *  id — an alias lagging the row's generation would not attach. Without it the advisor is main itself. */
-export function claudeAdvisorFor(model: string, aboveMain: boolean): string | undefined {
+/** The advisor pinned beside an anthropic main row under the board's ceiling, and why; undefined when the row is no
+ *  candidate for an advisor entry. `off` decides before the row is read (ADR 0208 決定3): the entry runs as one without an
+ *  advisor. Otherwise the row is no candidate when its family is unknown, its generation is unreadable or below the family's
+ *  floor, or the advisor would be main itself and the family cannot advise (a Haiku generation this release does not know). */
+export function claudeAdvisorFor(model: string, ceiling: AdvisorCeiling): { advisor: string | undefined; source: AdvisorSource } | undefined {
+  if (ceiling === "off") return { advisor: undefined, source: "off" };
   const family = FAMILIES.find((f) => model.startsWith(f.prefix));
   const digits = family && GENERATION.exec(model.slice(family.prefix.length));
   if (!family || !digits) return undefined;
-  if (Number(digits[1]) * 100 + Number(digits[2] ?? 0) < family.minGeneration) return undefined;
-  if (aboveMain) return model.startsWith(TOP_FAMILY.prefix) ? model : TOP_FAMILY.alias;
-  return family.canAdvise ? model : undefined;
+  const generation = Number(digits[1]) * 100 + Number(digits[2] ?? 0);
+  if (generation < family.minGeneration) return undefined;
+  const top = FAMILIES.findIndex((f) => f.name === ceiling);
+  const rank = FAMILIES.indexOf(family);
+  if (rank > top) return { advisor: undefined, source: "main_above_ceiling" };
+  if (rank === top) return { advisor: model, source: "ceiling" };
+  if (generation <= FAMILIES[top]!.accepts![family.name]!) return { advisor: ceiling, source: "ceiling" };
+  return family.canAdvise ? { advisor: model, source: "unknown_generation" } : undefined;
 }
