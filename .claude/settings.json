@@ -8,6 +8,14 @@
     "ponytail@ponytail": true
   },
   "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          { "type": "command", "if": "Bash(gh *)", "command": "node \"$CLAUDE_PROJECT_DIR\"/scripts/inject-triage-labels.mjs" }
+        ]
+      }
+    ],
     "WorktreeRemove": [
       {
         "hooks": [
