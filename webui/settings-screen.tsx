@@ -2323,7 +2323,7 @@ function ExecutionTableCard({ settings, say, onSaved, edit }: {
                 style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(110px, 1fr))', gap: 8, alignItems: 'end', paddingBottom: 8, borderBottom: '1px solid var(--border-default)' }}>
                 <Select label="Provider" options={settings.providers.map((p) => p.value)} value={d.provider} onChange={(e) => update(i, { provider: e.target.value })} />
                 <Select label="Tier" options={settings.tiers.map((tier) => tier.name)} value={d.tier} onChange={(e) => update(i, { tier: e.target.value })} />
-                <Input label="Model" mono value={d.model} onChange={(e) => update(i, { model: e.target.value })} placeholder="alias or model id" />
+                <Input label="Model" mono value={d.model} onChange={(e) => update(i, { model: e.target.value })} placeholder="concrete model id — e.g. claude-opus-5-5" />
                 <Input label="Effort" mono value={d.effort} onChange={(e) => update(i, { effort: e.target.value })} placeholder="high" />
                 <Input label="Price in" mono value={d.price_in} onChange={(e) => update(i, { price_in: e.target.value })} placeholder="USD / MTok" />
                 <Input label="Price out" mono value={d.price_out} onChange={(e) => update(i, { price_out: e.target.value })} placeholder="USD / MTok" />
