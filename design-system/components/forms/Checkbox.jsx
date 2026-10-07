@@ -16,6 +16,7 @@ export function Checkbox({ label, checked = false, onChange, disabled = false, s
         )}
       </span>
       {/* 1px, not 0: a zero-size box reads as invisible to Playwright, so getByLabel(...).check() would time out (issue #1202) */}
+      {/* The label's position: relative makes it this input's containing block; without it the input anchors to an outer positioned ancestor (a Dialog overlay) and stays put while the label scrolls out of reach (issue #1516) */}
       <input type="checkbox" checked={checked} onChange={onChange} disabled={disabled} style={{ position: 'absolute', opacity: 0, width: 1, height: 1 }} />
       {label && <span style={{ fontSize: 'var(--text-sm)', color: 'var(--text-body)' }}>{label}</span>}
     </label>
