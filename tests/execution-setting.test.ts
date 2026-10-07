@@ -179,6 +179,57 @@ it("adapter が知らない系列の行は、advisor つきの entry ではフ�
   expect(standard(false, true)).toBe("claude-mythos-1");
 });
 
+/** 種の表の standard に、種の行より安い anthropic の行を1つ足し、選ばれた model を返す。足した行が候補に
+ *  入っていれば先に選ばれる。 */
+function standardWithCheapRow(model: string, advisor: boolean, advisorAboveMain: boolean): string {
+  const withRow: ExecutionSettingTable = [...table, { provider: "anthropic", tier: "standard", model, effort: "high", price_in: 1, price_out: 1 }];
+  return select(input({ entries: [{ provider: "anthropic", advisor }], agentTier: "standard", advisorAboveMain }), withRow).model;
+}
+
+it("main として advisor を受けない世代(Sonnet / Opus の 4.6 未満)の行は、advisor つきの entry ではフラグに依らず候補に入らず、advisor なしの entry では入る(ADR 0200 追記 2026-10-07)", () => {
+  for (const model of ["claude-sonnet-4-5", "claude-opus-4-5", "claude-sonnet-4-20250514", "claude-opus-4-1-20250805"]) {
+    expect(standardWithCheapRow(model, true, false)).toBe("claude-opus-5-5");
+    expect(standardWithCheapRow(model, true, true)).toBe("claude-opus-5-5");
+    expect(standardWithCheapRow(model, false, false)).toBe(model);
+  }
+});
+
+it("advisor になれない系列(Haiku)の行は、フラグが無ければ advisor つきの entry の候補に入らず、フラグが立てば advisor `fable` で入る —— advisor が main と同一だと CLI が断る", () => {
+  expect(standardWithCheapRow("claude-haiku-4-5", true, false)).toBe("claude-opus-5-5");
+  expect(standardWithCheapRow("claude-haiku-4-5", false, false)).toBe("claude-haiku-4-5");
+  const haikuTable: ExecutionSettingTable = [
+    { provider: "anthropic", tier: "standard", model: "claude-haiku-4-5", effort: "high", price_in: 1, price_out: 1 },
+  ];
+  expect(
+    select(input({ entries: [{ provider: "anthropic", advisor: true }], agentTier: "standard", advisorAboveMain: true }), haikuTable),
+  ).toMatchObject({ model: "claude-haiku-4-5", advisor: "fable" });
+});
+
+it("Sonnet 4.6 は下限ちょうどで advisor を受ける —— フラグ無しなら advisor は同一 id、有りなら `fable`", () => {
+  const sonnet46: ExecutionSettingTable = [
+    { provider: "anthropic", tier: "standard", model: "claude-sonnet-4-6", effort: "high", price_in: 1, price_out: 1 },
+  ];
+  const advisorWith = (advisorAboveMain: boolean) =>
+    select(input({ entries: [{ provider: "anthropic", advisor: true }], agentTier: "standard", advisorAboveMain }), sonnet46).advisor;
+  expect(advisorWith(false)).toBe("claude-sonnet-4-6");
+  expect(advisorWith(true)).toBe("fable");
+});
+
+it("旧形式の id(`claude-3-5-haiku-…`)は系列の prefix に合わず、知らない系列として advisor つきの entry の候補に入らない", () => {
+  expect(standardWithCheapRow("claude-3-5-haiku-20241022", true, true)).toBe("claude-opus-5-5");
+  expect(standardWithCheapRow("claude-3-5-haiku-20241022", false, false)).toBe("claude-3-5-haiku-20241022");
+});
+
+it("advisor を受けられない行しか無ければ、advisor つきの entry は候補が空で null(skipped の枝)", () => {
+  const ineligible: ExecutionSettingTable = [
+    { provider: "anthropic", tier: "standard", model: "claude-sonnet-4-5", effort: "high", price_in: 1, price_out: 1 },
+    { provider: "anthropic", tier: "standard", model: "claude-haiku-4-5", effort: "high", price_in: 1, price_out: 1 },
+  ];
+  expect(
+    selectExecutionSetting(input({ entries: [{ provider: "anthropic", advisor: true }], agentTier: "standard", advisorAboveMain: false }), ineligible),
+  ).toBeNull();
+});
+
 it("優先順位は quality / cost の2値で、既定は quality(CONTEXT.md「要求」/ ADR 0114 決定1: speed は落とした)", () => {
   expect(PRIORITIES).toEqual(["quality", "cost"]);
   expect(BOARD_DEFAULT_PRIORITY).toBe("quality");
