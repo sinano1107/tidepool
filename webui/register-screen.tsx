@@ -232,7 +232,7 @@ function RegisterScreen({ onRegister, parentTask, onClose }: RegisterScreenProps
   const resetContent = () => {
     setDump(''); setDrafted(false); setPlainFormActive(false);
     setType('work'); setTitle(''); setPurpose(''); setCriteria('');
-    setAssignee(''); setWorkspace(''); setTier(''); setIssueNumber(''); setReason('');
+    setAssignee(''); setWorkspace(''); setTier(''); setIssueNumber('');
     setRisk(false); setReview(false); setReviewBy([]);
     // backing out of a pending dump's content leaves the row itself alone —
     // it is unconsumed and stays listed, pickable again later

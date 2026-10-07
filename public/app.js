@@ -998,7 +998,6 @@ function RegisterScreen({ onRegister, parentTask, onClose }) {
     setWorkspace("");
     setTier("");
     setIssueNumber("");
-    setReason("");
     setRisk(false);
     setReview(false);
     setReviewBy([]);
