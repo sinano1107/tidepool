@@ -31,6 +31,18 @@ it("review type は review_by 無し・空配列なら今までどおり登録�
   db.close();
 });
 
+it("work type を review_by: [] で登録すると、返り値も盤面の読みも null になる(#1511)", () => {
+  const db = openDb(":memory:");
+  const empty = registerTask(db, { type: "work", title: "empty", ...BASE, review_by: [] }, new Date(0), ...HUMAN_WEBUI);
+  const omitted = registerTask(db, { type: "work", title: "omitted", ...BASE }, new Date(1), ...HUMAN_WEBUI);
+  expect(empty.review_by).toBe(null);
+  expect(omitted.review_by).toBe(null);
+  const board = listBoard(db);
+  expect(board.find((t) => t.id === empty.id)?.review_by).toBe(null);
+  expect(board.find((t) => t.id === omitted.id)?.review_by).toBe(null);
+  db.close();
+});
+
 it("work type の review_by はルートでも子でも受け取られ、保存される", () => {
   const db = openDb(":memory:");
   const root = registerTask(db, { type: "work", title: "root", ...BASE, review_by: ["fugu"] }, new Date(0), ...HUMAN_WEBUI);
