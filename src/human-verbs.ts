@@ -143,7 +143,7 @@ export function decomposeThroughHumanDoor(
         assertWorkspaceKnown(child.workspace, deps.resolveWorkspace, deps.workspace);
       }
       assertAssigneeKnown(deps.agentRegistered, child.assignee);
-      for (const reviewer of child.review_by ?? []) assertReviewerKnown(deps.agentRegistered, reviewer);
+      assertReviewersKnown(deps.agentRegistered, child.review_by);
     }
     if (input.reason.length === 0) throw new DomainError("a decomposition requires a reason");
     const task = getTask(deps.db, taskId);
@@ -228,12 +228,14 @@ function assertAssigneeKnown(
 
 /** A reviewer is always an agent (ADR 0111); unlike an assignee, `human` is
  * not a built-in escape from registry resolution. */
-export function assertReviewerKnown(
+export function assertReviewersKnown(
   agentRegistered: ((name: string) => boolean) | undefined,
-  reviewer: string,
+  reviewers: string[] | undefined,
 ): void {
-  if (reviewer === HUMAN_WORKER_ID || (agentRegistered && !agentRegistered(reviewer))) {
-    throw new DomainError(`unknown agent: ${reviewer}`);
+  for (const reviewer of reviewers ?? []) {
+    if (reviewer === HUMAN_WORKER_ID || (agentRegistered && !agentRegistered(reviewer))) {
+      throw new DomainError(`unknown agent: ${reviewer}`);
+    }
   }
 }
 
@@ -362,7 +364,7 @@ export async function registerThroughHumanDoor(
       assertWorkspaceKnown(input.workspace, deps.resolveWorkspace, deps.workspace);
     }
     assertAssigneeKnown(deps.agentRegistered, input.assignee);
-    for (const reviewer of input.review_by ?? []) assertReviewerKnown(deps.agentRegistered, reviewer);
+    assertReviewersKnown(deps.agentRegistered, input.review_by);
     if (input.github_issue_number !== undefined && input.workspace) {
       assertNoUnsettledIssueRef(deps.db, input.workspace, input.github_issue_number);
       const resolve = buildWorkspaceResolver(deps.resolveWorkspace, deps.workspace);
@@ -736,6 +738,7 @@ export function editThroughHumanDoor(
   if (!task) return { ok: false, failure: { kind: "not_found", error: "task not found" } };
   try {
     if (input.assignee) assertAssigneeKnown(deps.agentRegistered, input.assignee);
+    assertReviewersKnown(deps.agentRegistered, input.review_by);
     if (input.workspace) {
       assertWorkspaceKnown(input.workspace, deps.resolveWorkspace, deps.workspace);
     }

@@ -141,6 +141,25 @@ it("issue-backed タスクの内容(title)と workspace の編集は 400 で拒�
   expect(ws.status).toBe(400);
 });
 
+it.each(["ghost", "human"])(
+  "review_by の編集で %s を指名すると registry の検査で 400 になり、値は変わらない(#1498)",
+  async (reviewer) => {
+    t = await bootTidepool({ agentRegistered: (name) => name === "security" });
+    const task = registerTask(
+      t.db,
+      { type: "work", title: "named", purpose: "p", completion_criteria: "c", review_by: ["security"] },
+      t.clock.now(),
+      ...HUMAN_WEBUI,
+    );
+
+    const res = await api(t.baseUrl, "PATCH", `/api/tasks/${task.id}`, { review_by: ["security", reviewer] });
+
+    expect(res.status).toBe(400);
+    const after = (await api(t.baseUrl, "GET", `/api/tasks/${task.id}`)).json;
+    expect(after.review_by).toEqual(["security"]);
+  },
+);
+
 it("存在しないタスクへの編集は 404", async () => {
   t = await bootTidepool();
   const res = await api(t.baseUrl, "PATCH", "/api/tasks/no-such-task", { title: "x" });

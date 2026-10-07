@@ -784,12 +784,12 @@ it("edit_task は人間名義かつ mcp origin で未消費フィールドを更
   try {
     const result: any = await client.callTool({
       name: "edit_task",
-      arguments: { task_id: task.id, title: "index historic tide charts" },
+      arguments: { task_id: task.id, title: "index historic tide charts", review_by: ["security"] },
     });
 
     expect(result.isError ?? false).toBe(false);
     expect(readToolPayload(result)).toEqual(
-      expect.objectContaining({ id: task.id, title: "index historic tide charts" }),
+      expect.objectContaining({ id: task.id, title: "index historic tide charts", review_by: ["security"] }),
     );
     const events = (await client.callTool({ name: "get_task", arguments: { task_id: task.id } })) as any;
     expect(readToolPayload(events)).toEqual(

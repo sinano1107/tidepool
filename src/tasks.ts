@@ -2211,6 +2211,8 @@ export interface EditTaskInput {
   workspace?: string;
   risk_flag?: boolean;
   review_flag?: boolean;
+  /** Replaces the list; `[]` clears it back to the board Auditor (issue #1498). */
+  review_by?: string[];
 }
 
 /** issue #130: the one risk edit the spec names as machine-refused — a
@@ -2251,7 +2253,7 @@ function assertRiskDemotionKeepsInvariant(db: Db, task: Task): void {
  *
  *  Issue-backed content and workspace are immutable here (their source of
  *  truth is the GitHub issue / the burned-in reference identity — CONTEXT.md);
- *  the assignee/workspace registry-resolution recheck is the caller's, mirror
+ *  the assignee/workspace/reviewer registry-resolution recheck is the caller's, mirror
  *  of registration (see api.ts), since it needs the injected registry seams. */
 export function editTask(
   db: Db,
@@ -2262,6 +2264,7 @@ export function editTask(
 ): Task {
   assertHumanEditableScope(db, task);
   assertReviewFlagFires(task, input.review_flag);
+  assertReviewByFires(task, input.review_by);
   if (
     input.title === "" ||
     input.purpose === "" ||
@@ -2315,6 +2318,13 @@ export function editTask(
     if (next !== undefined && (next ? 1 : 0) !== task[field]) {
       changes.push({ field, from: flag(task[field]), to: flag(next ? 1 : 0), value: next ? 1 : 0 });
     }
+  }
+  // review_by: the stored JSON text is both the column value and the event's
+  // from/to; an empty list means "no reviewer named" and is stored as null
+  const stored = (v: string[] | null): string | null => (v?.length ? JSON.stringify(v) : null);
+  if (input.review_by !== undefined) {
+    const [from, to] = [stored(task.review_by), stored(input.review_by)];
+    if (from !== to) changes.push({ field: "review_by", from, to, value: to });
   }
   db.transaction(() => {
     for (const c of changes) {

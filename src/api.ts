@@ -243,6 +243,7 @@ const editTaskSchema = z.strictObject({
   workspace: z.string().optional(),
   risk_flag: z.boolean().optional(),
   review_flag: z.boolean().optional(),
+  review_by: z.array(z.string().min(1)).optional(),
 });
 
 // the direct-cancel payload (issue #130): reason is optional (理由の記入は任意)
