@@ -2322,9 +2322,9 @@ export function editTask(
   // review_by: the stored JSON text is both the column value and the event's
   // from/to; an empty list is stored as null, same as omitting it at registration
   const list = (v: string[] | null): string | null => (v?.length ? JSON.stringify(v) : null);
-  if (input.review_by !== undefined && list(input.review_by) !== list(task.review_by)) {
-    const next = list(input.review_by);
-    changes.push({ field: "review_by", from: list(task.review_by), to: next, value: next });
+  if (input.review_by !== undefined) {
+    const [from, to] = [list(task.review_by), list(input.review_by)];
+    if (from !== to) changes.push({ field: "review_by", from, to, value: to });
   }
   db.transaction(() => {
     for (const c of changes) {
