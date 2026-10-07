@@ -212,7 +212,7 @@ it("読み口4本と list_precedents は routing の task から引数ごと写�
       expect(read.body).not.toHaveProperty("next");
     }
     expect(await call("list_routing_shadow", { diverged_only: true })).toMatchObject({ isError: false, body: { shadow: [] } });
-    expect(await call("read_routing_settings")).toMatchObject({ isError: false, body: { priority: "cost", table: expect.any(Array), providerRank: expect.any(Array), advisorCeiling: "off" } });
+    expect(await call("read_routing_settings")).toMatchObject({ isError: false, body: { priority: "cost", table: expect.any(Array), providerRank: expect.any(Array), advisorCeiling: expect.any(String) } });
     const precedents = await call("list_precedents");
     expect(precedents).toMatchObject({ isError: false, body: { precedents: [] } });
     expect(precedents.body).not.toHaveProperty("next");

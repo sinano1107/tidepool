@@ -204,6 +204,8 @@ it("main が上限より上で advisor 無しになった行は除外ではな�
     advisor: undefined,
     source: { advisor: "main_above_ceiling" },
   });
+  // advisor が付かないので CLI が断る組も無い —— main の下限(4.6 未満)は効かない
+  expect(advisorOn("claude-opus-4-5", "sonnet")).toEqual({ advisor: undefined, source: "main_above_ceiling" });
 });
 
 it("表に Fable の行が無くても、上限 fable なら advisor は `fable` —— advisor は行でなく、表を読まない", () => {
@@ -233,7 +235,7 @@ function standardWithCheapRow(model: string, advisor: boolean, advisorCeiling: A
   return select(input({ entries: [{ provider: "anthropic", advisor }], agentTier: "standard", advisorCeiling }), withRow).model;
 }
 
-it("main として advisor を受けない世代(Sonnet / Opus の 4.6 未満)の行は、advisor つきの entry では off 以外の上限に依らず候補に入らず、advisor なしの entry では入る(ADR 0200 追記 2026-10-07)", () => {
+it("main として advisor を受けない世代(Sonnet / Opus の 4.6 未満)の行は、advisor つきの entry では上限が main の系列以上なら候補に入らず、advisor なしの entry では入る(ADR 0200 追記 2026-10-07)", () => {
   for (const model of ["claude-sonnet-4-5", "claude-opus-4-5", "claude-sonnet-4-20250514", "claude-opus-4-1-20250805"]) {
     expect(standardWithCheapRow(model, true, "opus")).toBe("claude-opus-5-5");
     expect(standardWithCheapRow(model, true, "fable")).toBe("claude-opus-5-5");

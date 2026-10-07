@@ -2039,13 +2039,13 @@ function ExecutionDefaultsCard({ settings, say, onSaved, edit }: {
   const id = 'board:execution-defaults';
   const open = edit.isOpen(id);
   const current = {
-    rank: settings.providerRank, priority: settings.priority, advisor: settings.advisorCeiling,
+    rank: settings.providerRank, priority: settings.priority, ceiling: settings.advisorCeiling,
     defaultTier: settings.defaultTier, judgementTier: settings.judgementTier,
   };
   const [draft, setDraft] = React.useState(current);
   const [busy, setBusy] = React.useState(false);
   const rankChanged = draft.rank.join() !== current.rank.join();
-  const dirty = rankChanged || draft.priority !== current.priority || draft.advisor !== current.advisor
+  const dirty = rankChanged || draft.priority !== current.priority || draft.ceiling !== current.ceiling
     || draft.defaultTier !== current.defaultTier || draft.judgementTier !== current.judgementTier;
   const tierNames = settings.tiers.map((tier) => tier.name);
   // the API only takes a permutation of every provider (a missing one would
@@ -2059,7 +2059,7 @@ function ExecutionDefaultsCard({ settings, say, onSaved, edit }: {
       const changes = [
         rankChanged && { setting: 'provider_rank', value: draft.rank },
         draft.priority !== current.priority && { setting: 'priority', value: draft.priority },
-        draft.advisor !== current.advisor && { setting: 'advisor_ceiling', value: draft.advisor },
+        draft.ceiling !== current.ceiling && { setting: 'advisor_ceiling', value: draft.ceiling },
         draft.defaultTier !== current.defaultTier && { setting: 'default_tier', value: draft.defaultTier },
         draft.judgementTier !== current.judgementTier && { setting: 'judgement_tier', value: draft.judgementTier },
       ].filter(Boolean);
@@ -2115,8 +2115,8 @@ function ExecutionDefaultsCard({ settings, say, onSaved, edit }: {
             </div>
             <Select label="Default priority" options={[...settings.priorities]} value={draft.priority}
               onChange={(e) => setDraft({ ...draft, priority: e.target.value })} />
-            <Select label="Advisor ceiling" options={[...settings.advisorCeilings]} value={draft.advisor}
-              onChange={(e) => setDraft({ ...draft, advisor: e.target.value as AdvisorCeiling })} />
+            <Select label="Advisor ceiling" options={[...settings.advisorCeilings]} value={draft.ceiling}
+              onChange={(e) => setDraft({ ...draft, ceiling: e.target.value as AdvisorCeiling })} />
             <Select label="Board default tier" options={tierNames} value={draft.defaultTier}
               onChange={(e) => setDraft({ ...draft, defaultTier: e.target.value })} />
             <Select label="Judgement tier" options={tierNames} value={draft.judgementTier}

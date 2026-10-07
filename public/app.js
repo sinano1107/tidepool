@@ -2495,14 +2495,14 @@ function ExecutionDefaultsCard({ settings, say, onSaved, edit }) {
   const current = {
     rank: settings.providerRank,
     priority: settings.priority,
-    advisor: settings.advisorCeiling,
+    ceiling: settings.advisorCeiling,
     defaultTier: settings.defaultTier,
     judgementTier: settings.judgementTier
   };
   const [draft, setDraft] = React.useState(current);
   const [busy, setBusy] = React.useState(false);
   const rankChanged = draft.rank.join() !== current.rank.join();
-  const dirty = rankChanged || draft.priority !== current.priority || draft.advisor !== current.advisor || draft.defaultTier !== current.defaultTier || draft.judgementTier !== current.judgementTier;
+  const dirty = rankChanged || draft.priority !== current.priority || draft.ceiling !== current.ceiling || draft.defaultTier !== current.defaultTier || draft.judgementTier !== current.judgementTier;
   const tierNames = settings.tiers.map((tier) => tier.name);
   const ok = new Set(draft.rank).size === settings.providers.length;
   useDirtySignal(edit, open, dirty);
@@ -2512,7 +2512,7 @@ function ExecutionDefaultsCard({ settings, say, onSaved, edit }) {
       const changes = [
         rankChanged && { setting: "provider_rank", value: draft.rank },
         draft.priority !== current.priority && { setting: "priority", value: draft.priority },
-        draft.advisor !== current.advisor && { setting: "advisor_ceiling", value: draft.advisor },
+        draft.ceiling !== current.ceiling && { setting: "advisor_ceiling", value: draft.ceiling },
         draft.defaultTier !== current.defaultTier && { setting: "default_tier", value: draft.defaultTier },
         draft.judgementTier !== current.judgementTier && { setting: "judgement_tier", value: draft.judgementTier }
       ].filter(Boolean);
@@ -2558,8 +2558,8 @@ function ExecutionDefaultsCard({ settings, say, onSaved, edit }) {
     {
       label: "Advisor ceiling",
       options: [...settings.advisorCeilings],
-      value: draft.advisor,
-      onChange: (e) => setDraft({ ...draft, advisor: e.target.value })
+      value: draft.ceiling,
+      onChange: (e) => setDraft({ ...draft, ceiling: e.target.value })
     }
   ), /* @__PURE__ */ React.createElement(
     Select,

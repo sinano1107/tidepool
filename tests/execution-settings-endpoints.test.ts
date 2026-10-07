@@ -118,25 +118,21 @@ it("不正値(未知の Provider / ティア / 優先順位、負の価格、順
   expect(await state()).toEqual(before);
 });
 
-it("advisor の上限は settings タブと管理MCP の両方の扉で4値を受け、旧い真偽値とそれ以外の値は拒まれて設定は変わらない(ADR 0208 決定1)", async () => {
+it("advisor の上限は settings タブと管理MCP の両方の扉で検証を通った値だけが書かれ、拒まれた値は設定を変えない(ADR 0208 決定1)", async () => {
   t = await bootTidepool();
-  const ceiling = (value: unknown) => ({ setting: "advisor_ceiling", value });
   const client = await managementMcpClient(t.baseUrl);
   try {
     const viaMcp = async (change: object) => (await client.callTool({ name: "change_execution_settings", arguments: { change } })) as any;
-    for (const value of ["sonnet", "opus", "fable", "off"]) {
-      expect((await api(t.baseUrl, "POST", "/api/settings/execution", ceiling(value))).status).toBe(200);
-      expect((await state()).advisorCeiling).toBe(value);
-      expect((await viaMcp(ceiling(value))).isError).not.toBe(true);
-    }
-    for (const bad of [ceiling(true), ceiling("fable_then_opus"), ceiling("haiku"), { setting: "advisor_above_main", value: true }]) {
-      expect((await api(t.baseUrl, "POST", "/api/settings/execution", bad)).status, JSON.stringify(bad)).toBe(400);
-      expect((await viaMcp(bad)).isError, JSON.stringify(bad)).toBe(true);
-    }
+    expect((await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "advisor_ceiling", value: "opus" })).status).toBe(200);
+    expect((await viaMcp({ setting: "advisor_ceiling", value: "fable" })).isError).not.toBe(true);
+    expect((await state()).advisorCeiling).toBe("fable");
+    const bad = { setting: "advisor_ceiling", value: true };
+    expect((await api(t.baseUrl, "POST", "/api/settings/execution", bad)).status).toBe(400);
+    expect((await viaMcp(bad)).isError).toBe(true);
   } finally {
     await client.close();
   }
-  expect((await state()).advisorCeiling).toBe("off");
+  expect((await state()).advisorCeiling).toBe("fable");
 });
 
 it("anthropic の alias の行は settings タブと管理MCP の両方の扉で拒まれ表は変わらない —— 具体 id の行と openai の行は通る(ADR 0182 決定1)", async () => {

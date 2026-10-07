@@ -116,4 +116,5 @@ update `accepts` in the same PR. Until then, a main generation above `accepts` g
 its advisor, and a Haiku row above it cannot serve agents that have an advisor.
 
 If the new version brings a new model family, add it to `FAMILIES` at its rank. Until then, its
-rows cannot serve agents that have an advisor.
+rows cannot serve agents that have an advisor. If the family is one a ceiling can name, also add its
+alias to `ADVISOR_CEILINGS` (same file) and to the `advisor_ceiling` CHECK in `src/db.ts`.

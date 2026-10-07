@@ -36,18 +36,18 @@ const GENERATION = /^(\d+)(?:-(\d{1,2})(?!\d))?/;
 
 /** The advisor pinned beside an anthropic main row under the board's ceiling, and why; undefined when the row is no
  *  candidate for an advisor entry. `off` decides before the row is read (ADR 0208 決定3): the entry runs as one without an
- *  advisor. Otherwise the row is no candidate when its family is unknown, its generation is unreadable or below the family's
- *  floor, or the advisor would be main itself and the family cannot advise (a Haiku generation this release does not know). */
+ *  advisor. A main above the ceiling runs without one, so no floor applies. Otherwise the row is no candidate when its family is
+ *  unknown, its generation is unreadable or below the family's floor, or the advisor would be main itself and the family cannot advise (a Haiku generation this release does not know). */
 export function claudeAdvisorFor(model: string, ceiling: AdvisorCeiling): { advisor: string | undefined; source: AdvisorSource } | undefined {
   if (ceiling === "off") return { advisor: undefined, source: "off" };
   const family = FAMILIES.find((f) => model.startsWith(f.prefix));
   const digits = family && GENERATION.exec(model.slice(family.prefix.length));
   if (!family || !digits) return undefined;
-  const generation = Number(digits[1]) * 100 + Number(digits[2] ?? 0);
-  if (generation < family.minGeneration) return undefined;
   const top = FAMILIES.findIndex((f) => f.name === ceiling);
   const rank = FAMILIES.indexOf(family);
   if (rank > top) return { advisor: undefined, source: "main_above_ceiling" };
+  const generation = Number(digits[1]) * 100 + Number(digits[2] ?? 0);
+  if (generation < family.minGeneration) return undefined;
   if (rank === top) return { advisor: model, source: "ceiling" };
   if (generation <= FAMILIES[top]!.accepts![family.name]!) return { advisor: ceiling, source: "ceiling" };
   return family.canAdvise ? { advisor: model, source: "unknown_generation" } : undefined;
