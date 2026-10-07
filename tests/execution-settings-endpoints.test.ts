@@ -260,7 +260,7 @@ it("学習器の降格は settings タブと管理MCP の扉から直接でき�
 
   const refused = await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "learner_promoted", value: true });
   expect(refused.status).toBe(400);
-  expect(JSON.stringify(refused.json)).toContain("ADR 0150 決定4");
+  expect(JSON.stringify(refused.json)).toContain("ADR 0150 decision 4");
   expect((await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "learner_promoted", value: false })).status).toBe(200);
   expect((await state()).learnerPromoted).toBe(false);
 
@@ -270,7 +270,7 @@ it("学習器の降格は settings タブと管理MCP の扉から直接でき�
     const change = (value: boolean) => client.callTool({ name: "change_execution_settings", arguments: { change: { setting: "learner_promoted", value } } }) as Promise<any>;
     const viaMcp = await change(true);
     expect(viaMcp.isError).toBe(true);
-    expect(viaMcp.content[0].text).toContain("ADR 0150 決定4");
+    expect(viaMcp.content[0].text).toContain("ADR 0150 decision 4");
     expect((await change(false)).isError).not.toBe(true);
   } finally {
     await client.close();

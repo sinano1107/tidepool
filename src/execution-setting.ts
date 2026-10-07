@@ -537,7 +537,7 @@ export const executionSettingsChangeSchema = z.discriminatedUnion("setting", [
   z.object({
     setting: z.literal("learner_promoted"),
     value: z.boolean().refine((value) => !value, {
-      message: "the learner is promoted only by approving a routing meta-review's proposal question (ADR 0150 決定4); this door only demotes",
+      message: "the learner is promoted only by approving a routing meta-review's proposal question (ADR 0150 decision 4); this door only demotes",
     }),
   }),
 ]);

@@ -310,9 +310,9 @@ export function assertValidAgentDefinition(
   if (retiredFields.length > 0) {
     throw new InvalidAgentDefinitionError(
       agentName,
-      `agent.md no longer carries the execution setting: ${retiredFields.join(" / ")} (ADR 0110 決定1). ` +
+      `agent.md no longer carries the execution setting: ${retiredFields.join(" / ")} (ADR 0110 decision 1). ` +
         "model and effort are chosen at pickup from the board's provider × tier table, and advisor is a " +
-        "property of a provider entry whose model is derived from that same table (ADR 0116 決定2) — " +
+        "property of a provider entry whose model is derived from that same table (ADR 0116 decision 2) — " +
         `declare a tier (${tiers.join(" / ")}) and/or write the advisor on its entry, e.g. ` +
         "`provider: [{ name: anthropic, advisor: true }]`, instead",
     );
@@ -321,13 +321,13 @@ export function assertValidAgentDefinition(
     throw new InvalidAgentDefinitionError(
       agentName,
       "no provider entry is left — a written empty list, or an omitted provider whose declaration no canonical " +
-        "route satisfies, leaves no route this agent could ever run on (ADR 0116 決定1)",
+        "route satisfies, leaves no route this agent could ever run on (ADR 0116 decision 1)",
     );
   }
   if (tier !== undefined && !tiers.includes(tier)) {
     throw new InvalidAgentDefinitionError(
       agentName,
-      `unknown tier "${tier}" (expected one of the board's tiers: ${tiers.join(" / ")}) — ADR 0110 決定1 / ADR 0200 決定2`,
+      `unknown tier "${tier}" (expected one of the board's tiers: ${tiers.join(" / ")}) — ADR 0110 decision 1 / ADR 0200 decision 2`,
     );
   }
   // entry 単位(ADR 0110 決定1): advisor も skill も**その経路**の性質なので、
@@ -523,7 +523,7 @@ export function assertValidSkillAllowlist(skills: string[]): void {
       continue;
     }
     if (entry.includes("*") && !isPluginGlob(entry)) {
-      throw new InvalidSkillAllowlistError(entry, 'a "*" may appear only as "*" alone or a "名前:*" glob');
+      throw new InvalidSkillAllowlistError(entry, 'a "*" may appear only as "*" alone or a "<name>:*" glob');
     }
     if (entry === "") {
       throw new InvalidSkillAllowlistError(entry, "empty skill name");
