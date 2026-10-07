@@ -20,11 +20,12 @@ what the observation showed: it **closes** when the observation is the answer, a
 property of `verify:production` below — a confirmation issue whose venue is CI or the Lima VM closes
 the same way.
 
-An issue that has been evaluated and only waits for another issue to land carries no state label —
-typically a follow-up a grilling found, whose work is decided but cannot start until that issue's
-change is in. A state label would put it back in the sweep's queue for an evaluation that is already
-done, and `needs-info` is for an observation, not another issue. Record the wait as GitHub's native
-blocked-by relation on the issue it waits for (#1416 is blocked by #1419).
+An issue that has been evaluated and only waits for another issue to land records the wait as
+GitHub's native blocked-by relation, and takes the state its content warrants: `ready-for-agent` when
+it is decided enough to build — the maintainer approves that, as with the blocked tickets
+`/to-tickets` publishes — and `needs-triage` only when something is left to decide. Not `needs-info`:
+that waits on an observation, not another issue. No label is no answer — an unlabeled issue reads as
+untriaged, and #1416 sat outside every queue after its blocker #1419 closed.
 
 ## Priority labels
 
