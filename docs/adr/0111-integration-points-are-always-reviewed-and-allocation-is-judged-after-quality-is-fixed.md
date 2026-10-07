@@ -106,3 +106,13 @@ advisor は名指さず本番と同じ規則で導出する。root review が対
 **段の説明の書き換え**の提案の根拠になる —— 段の定義は説明が持ち、書き手が人間でも数える(ADR 0200 決定7)。特定の workspace や
 書き手に偏った分は Behavior の領分のままで、入力の問いは #584 に残る。振り返り Board call の段は盤面設定が指し、未設定という
 状態は無い(種は `frontier`)。周期 meta-review も同じ設定を読む(ADR 0200 決定4)。
+
+## 追記7(2026-10-07 の triage、issue #1502 / #1467 / #1490)
+
+決定1 の「不発の値を受け取らない」は、review type への `review_flag` に限らず、**完了時レビューを決して立てない値**すべてに及ぶ。
+判定の鍵には、登録後に変わらない性質(type と、ルートかどうか)だけを使う。
+
+- `review_flag`: review type への flag と、ルートへの flag を、登録時と Edit で拒否する。ルートは flag によらずレビューされる(#1467)。
+- `review_by`: work でない type への空でない list を、登録時と Edit で拒否する(#1490 / #1498)。
+
+assignee が human の work task も今は完了時レビューを立てない。ただ、assignee は Edit で変えられるので、拒否の条件には入れない。
