@@ -39,7 +39,7 @@ When the claim does not hold, find what in the code makes it not hold, break tha
 
 Exactly one:
 
-- **Agent Brief** — the record (ADRs, `CONTEXT.md`, the issue thread, your verification) settles everything an implementer needs. Write it in the format of `AGENT-BRIEF.md` in the sibling `triage` skill directory, under the comment's outcome heading in place of the brief's own `## Agent Brief` line. Next step: move to `ready-for-agent`.
+- **Agent Brief** — the record (ADRs, `CONTEXT.md`, the issue thread, your verification) settles everything an implementer needs. Write it in the format of `AGENT-BRIEF.md` in the sibling `triage` skill directory, under the comment's outcome heading in place of the brief's own `## Agent Brief` line. Next step: move to `ready-for-agent`. When the change is text only — docs, an ADR, `CONTEXT.md`, comments, UI copy, or a test whose asserts only tighten — add `text-only` to the issue's return line, with any issue that must land first.
 - **Questions for grilling** — the brief would take a decision the record does not ground, or there is a fork with two or more viable options. This is where `/triage` would grill. Post what you established, then each question as
 
   ```
@@ -85,4 +85,4 @@ On each evaluated issue, add `auto-triaged`, and the category label (`bug` or `e
 
 ## Return
 
-To the parent, one line per issue — number, outcome, recommended next step, comment URL — then the issues you filed and the Pin PRs you opened, and any worktree or VM slot you failed to remove.
+To the parent, one line per issue — number, outcome, recommended next step, comment URL, and each choice you made that the record does not settle — then the issues you filed and the Pin PRs you opened, and any worktree or VM slot you failed to remove.
