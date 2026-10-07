@@ -20,8 +20,9 @@ credits に請求するプランがあること(Claude Code の文書。どの�
    に全 worker を止める」(ADR 0043)は `off` が満たす。
 4. **adapter は系列ごとに「上限の alias が main として受ける世代の上限」を持つ。** CLI の版は固定されている(ADR 0186)
    ので、alias の解決先は tidepool の release ごとに決まる閉じた事実である。系列の順は世代をまたいで交差する(Opus 4.7
-   の main は Sonnet 5.5 を受け、Sonnet 5.5 の main は Opus 5 以上を要る)ので、「最上位だけ」では足りない。adapter が
-   知らない新しい世代の main は、上限の alias でなく main と同一に落とす(付く advisor)。その系列が advisor になれない
+   の main は Sonnet 5.5 を受け、Sonnet 5.5 の main は Opus 5 以上を要る)ので、「最上位だけ」では足りない。上限が
+   `fable` でも同じで、adapter が知らない新しい世代の main(Opus を含む)は、上限の alias でなく main と同一に落とす
+   (付く advisor)—— ADR 0200 決定6 が置いた「最上位の alias はどの main より上」も、release ごとの事実として扱う。その系列が advisor になれない
    なら行は候補から外れる(ADR 0200 追記と同じ)。版上げの門で文書の組み合わせ表と照らす(ADR 0187 と同じ場所)。
 5. **上限が `fable` のとき、Throttle のゲートは advisor の窓も見る。** Fable の advisor は Fable の週次の枠を消費し、枠が
    切れると相談は使えなくなる(運用者の観測。API の文書も、advisor の rate limit は advisor model の per-model の枠を
@@ -38,7 +39,7 @@ credits に請求するプランがあること(Claude Code の文書。どの�
   解決先はホストの版で動く」は ADR 0186 の固定で当たらなくなっていた。ADR 0044 決定4 の「有効・無効の正本は registry と
   kill switch」は「registry と盤面設定の `off`」になる。
 - 種の盤面では、advisor を有効にした agent も、運用者が上限を選ぶまで advisor 無しで走る。
-- 新しい Sonnet / Haiku の世代を表に足すと、release が adapter を直すまで main と同一(Haiku なら候補外)になる。
+- 新しい Haiku / Sonnet / Opus の世代を表に足すと、release が adapter を直すまで main と同一(Haiku なら候補外)になる。
 
 ## 退けた案
 
