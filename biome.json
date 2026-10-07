@@ -32,6 +32,10 @@
 	},
 	"overrides": [
 		{
+			"includes": ["src/**", "public/**"],
+			"plugins": ["./no-adr-in-board-text.grit"]
+		},
+		{
 			"includes": ["webui/**"],
 			"linter": {
 				"rules": {

@@ -33,9 +33,10 @@ const PROVIDER_AUTH_REPAIR_GUIDANCE: Record<Provider, string> = {
     "Place a valid Moonshot Platform API key in the board's key file " +
     "(`~/.tidepool/moonshot-api-key`, or the path `TIDEPOOL_MOONSHOT_API_KEY_FILE` " +
     "points at), mode 600.",
+  // API キーを受けない正準経路は ADR 0098
   openai:
     "Sign in to ChatGPT with `codex login` using the board worker's isolated " +
-    "`CODEX_HOME`; API keys are not accepted for the canonical Codex route (ADR 0098).",
+    "`CODEX_HOME`; API keys are not accepted for the canonical Codex route.",
 };
 
 /** 表の行の Quarantine の値(ADR 0184 決定2): `provider/model`。Provider は閉じた列挙で `/` を
@@ -55,13 +56,14 @@ export const QUARANTINES = [
   {
     kind: "containment" satisfies HaltKind,
     scope: "board",
+    // 裸で走らせないのは ADR 0033 / ADR 0036
     prose: (_value: string | null, reason: string): QuarantineProse => ({
       title: "worker containment is not established — pickup is stopped",
       purpose:
         `${reason}. ` +
         "No agent task is picked up while this stands: a worker that believes it is contained " +
-        "but is not is worse than no containment at all, so the board refuses to run one bare " +
-        "(ADR 0033 / ADR 0036). Repair the host, then answer — the board re-runs the capability " +
+        "but is not is worse than no containment at all, so the board refuses to run one bare. " +
+        "Repair the host, then answer — the board re-runs the capability " +
         "check before it accepts the answer, and any answer text is kept as a repair note. " +
         "If the human surface is the broken half, run `npm run token` on the board and open the " +
         "bootstrap URL it prints on this device *before* answering: rotating the token kills the " +
@@ -87,20 +89,22 @@ export const QUARANTINES = [
   {
     kind: "registryReachability" satisfies HaltKind,
     scope: "board",
+    // 答えの本文を修理メモに残すのは ADR 0052、github-login は ADR 0093
     prose: (_value: string | null, reason: string): QuarantineProse => ({
       title: "registry remote is unreachable — pickup is stopped",
       purpose:
         `${reason}. No agent task is picked up while this stands because every spawn depends ` +
         "on the registry source of truth. Repair access to the registry remote, then answer — " +
         "the board refreshes it again before accepting the answer, and keeps any answer text as " +
-        "a repair note (ADR 0052). If the board's GitHub login was revoked or is missing, run " +
-        "`npm run github-login` on the board host first (ADR 0093).",
+        "a repair note. If the board's GitHub login was revoked or is missing, run " +
+        "`npm run github-login` on the board host first.",
       completion_criteria: "the registry remote main is reachable again",
     }),
   },
   {
     kind: "workspace",
     scope: "workspace",
+    // 再検査の各項: 2 は ADR 0146、4 は ADR 0040、5 は ADR 0067
     prose: (name: string | null, reason: string): QuarantineProse => ({
       title: `workspace ${name} needs human attention`,
       purpose:
@@ -109,10 +113,10 @@ export const QUARANTINES = [
         "Answering confirms the repair — the board re-checks all of the following before " +
         "it accepts the answer, and refuses it if any fails:\n\n" +
         `1. a workspace named "${name}" is still configured (the board can resolve it).\n` +
-        "2. its `.git` is a directory — not a linked worktree or submodule (ADR 0146).\n" +
+        "2. its `.git` is a directory — not a linked worktree or submodule.\n" +
         "3. it is a usable git repository whose working tree is clean (`git status --porcelain` runs and is empty).\n" +
-        "4. the workspace path does not overlap the board's own state paths (ADR 0040).\n" +
-        "5. if the workspace declares a GitHub repo, the board can still access it (ADR 0067).\n\n" +
+        "4. the workspace path does not overlap the board's own state paths.\n" +
+        "5. if the workspace declares a GitHub repo, the board can still access it.\n\n" +
         "Any answer text is kept as a repair note.",
       completion_criteria: "the workspace is repaired by hand",
     }),

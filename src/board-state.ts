@@ -158,12 +158,13 @@ export function boardStateOverlap(
   paths: BoardStatePath[],
   platform: NodeJS.Platform = process.platform,
 ): BoardStateOverlap | undefined {
+  // reason はどれも ADR 0040(重なりと、解決できない = 安全でない)、書き込み半径は ADR 0033
   const workspace = resolveForComparison(workspacePath);
   if ("cause" in workspace) {
     return {
       reason:
         `workspace path ${workspacePath} could not be resolved (${workspace.cause}) — ` +
-        "whether it overlaps the board's own state paths is unknown, and unknown is not safe (ADR 0040)",
+        "whether it overlaps the board's own state paths is unknown, and unknown is not safe",
     };
   }
   for (const target of paths) {
@@ -173,7 +174,7 @@ export function boardStateOverlap(
         reason:
           `the board's ${target.label} at ${target.path} could not be resolved ` +
           `(${candidate.cause}) — whether a workspace overlaps it is unknown, and unknown ` +
-          "is not safe (ADR 0040)",
+          "is not safe",
       };
     }
     const a = forComparison(workspace.resolved, platform);
@@ -182,8 +183,8 @@ export function boardStateOverlap(
       return {
         reason:
           `workspace path ${workspacePath} overlaps the board's ${target.label} ` +
-          `at ${target.path} — a worker's write radius is its workspace (ADR 0033), so the ` +
-          "board's own state would be inside it (ADR 0040). Move the workspace or the board's " +
+          `at ${target.path} — a worker's write radius is its workspace, so the ` +
+          "board's own state would be inside it. Move the workspace or the board's " +
           "state so the two do not intersect",
       };
     }
@@ -210,8 +211,9 @@ export function sweepBoardStateOverlap(
   try {
     workspaces = listWorkspaces();
   } catch (err) {
+    // overlap sweep は ADR 0040 の一斉検査
     console.error(
-      "[board-state] could not enumerate registered workspaces for the ADR 0040 overlap sweep; " +
+      "[board-state] could not enumerate registered workspaces for the board-state overlap sweep; " +
         `pickup still checks each workspace as it is picked up (${String(err)})`,
     );
     return;

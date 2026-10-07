@@ -330,15 +330,16 @@ function checkToolSurface(
       ? `it attached the MCP server ${unexpectedServers.join(", ")}, which the board never declared`
       : undefined,
   ].filter((part) => part !== undefined);
+  // 宣言したツール面は ADR 0039 / ADR 0108、見るもの(Tool allowlist)は CONTEXT.md
   return {
     available: false,
     reason:
       `this host's claude CLI no longer gives a ${taskType} session the tool surface the board ` +
-      `declared (ADR 0039 / 0108): ${observations.join("; ")}. A tool the board never named is a ` +
+      `declared: ${observations.join("; ")}. A tool the board never named is a ` +
       "side channel the WORKER_PROTOCOL closes in prose only, an MCP server it never named got " +
       "onto the surface past the board's own `--mcp-config`, and a name that no longer exists " +
       "goes inert with no warning — so any of these means the board's declaration and the CLI " +
-      "have parted ways. Check the CLI version against what the board declares (CONTEXT.md): " +
+      "have parted ways. Check the CLI version against what the board declares: " +
       "the Tool allowlist for a built-in, `--mcp-config` + `--strict-mcp-config` for a server. " +
       "Then fix the declaration or pin the CLI",
   };
@@ -354,11 +355,12 @@ function checkToolSurface(
  *  共有する。 */
 function checkAutoMemoryClosed(autoMemory: string | null): ContainmentCapability {
   if (autoMemory === null) return { available: true };
+  // auto-memory の層を閉じるのは ADR 0156
   return {
     available: false,
     reason:
       "this host's claude CLI loaded the host's auto-memory into a session the board closed it " +
-      `for (ADR 0156): the init report's \`memory_paths\` carries \`auto\`: ${autoMemory}. The board sets ` +
+      `for: the init report's \`memory_paths\` carries \`auto\`: ${autoMemory}. The board sets ` +
       "`autoMemoryEnabled: false` and pins `autoMemoryDirectory`, so an `auto` entry means the " +
       "CLI no longer honors those settings — a MEMORY.md the board never wrote reaches the " +
       "worker, and the worker can carry things to the next session past the board's Memory. " +
@@ -534,9 +536,10 @@ export function resolveMoonshotApiKeyFile(configured: string | undefined): strin
  *  key as "unauthorized" without firing a probe that can only 401. */
 export class MoonshotApiKeyMissingError extends Error {
   constructor(public readonly keyFile: string) {
+    // 鍵を盤面の env に載せないのは ADR 0097
     super(
       `provider "moonshot" has no API key at ${keyFile} — the key never rides ` +
-        "the board's env (ADR 0097), so place it there (mode 600) or point " +
+        "the board's env, so place it there (mode 600) or point " +
         "TIDEPOOL_MOONSHOT_API_KEY_FILE at it",
     );
     this.name = "MoonshotApiKeyMissingError";
@@ -1324,22 +1327,23 @@ export async function probeToolSurfaceCapability(
 ): Promise<ContainmentCapability> {
   const observed = await enumerate();
   if (observed === null) {
+    // 観測できない = 安全でない、は ADR 0039
     return {
       available: false,
       reason:
         "the board could not observe the tool surface its own `claude` CLI hands a worker " +
         "session (the /usage ping produced no readable init report — a missing binary, a " +
         "stalled auth prompt, a timeout, or an init line carrying no `tools`/`mcp_servers`) — " +
-        "whether the declared Tool allowlist is honored is unknown, and unknown is not safe " +
-        "(ADR 0039)",
+        "whether the declared Tool allowlist is honored is unknown, and unknown is not safe",
     };
   }
   if ("retired" in observed) {
+    // 固定の版は ADR 0186
     return {
       available: false,
       reason:
         "the vendor retired this host's `claude` CLI version — the tool-surface probe's CLI refused to start " +
-        "(startup_failure_reason `cli_version_too_old`); raise the pinned version in `claude-cli-version` (ADR 0186)",
+        "(startup_failure_reason `cli_version_too_old`); raise the pinned version in `claude-cli-version`",
     };
   }
   // work プロファイルで撃っている(TOOL_SURFACE_PROBE_ARGS のコメント参照)
@@ -1369,12 +1373,13 @@ export async function checkClaudeCliVersion(readVersion: () => Promise<string>):
     observed = `unreadable (${String(error)})`;
   }
   if (observed === CLAUDE_CLI_VERSION) return { available: true };
+  // 固定の版を入れる手順は ADR 0186
   return {
     available: false,
     reason:
       `the board pins Claude CLI ${CLAUDE_CLI_VERSION}, but this host's \`claude --version\` is ${observed || "empty"} — ` +
       `install the pinned version (native install / Lima VM: \`claude install ${CLAUDE_CLI_VERSION}\`; ` +
-      `npm: \`npm install -g @anthropic-ai/claude-code@${CLAUDE_CLI_VERSION}\`) (ADR 0186)`,
+      `npm: \`npm install -g @anthropic-ai/claude-code@${CLAUDE_CLI_VERSION}\`)`,
   };
 }
 
@@ -1710,13 +1715,14 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     const settings = workspaceSettingsDisposition(workspace.path);
     const overriding = settings.overriding;
     if (overriding.length > 0) {
+      // 隠せない設定ファイルの拒否は ADR 0033 / ADR 0035 / ADR 0158
       quarantineWorkspace(
         this.options.db,
         workspace.name,
         new Error(
           `workspace carries unsafe .claude/${overriding.join(", .claude/")}: it is unreadable, ` +
             "or it is a local or untracked settings file that is invalid JSON or declares " +
-            "sandbox/permissions/hooks (ADR 0033 / ADR 0035 / ADR 0158) — the board can hide " +
+            "sandbox/permissions/hooks — the board can hide " +
             "only a Git-tracked .claude/settings.json, so make the file readable or remove it " +
             "(or those blocks) from this checkout",
         ),
@@ -1772,7 +1778,8 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     // —— 温存中の Provider —— を選びうる。provider の綴りもここから1つだけ取る
     // (上の「derived once」の線)。
     if (setting.provider === "openai") {
-      throw new Error('canonical route "openai -> codex" cannot run through Claude Code (ADR 0098)');
+      // ADR 0098
+      throw new Error('canonical route "openai -> codex" cannot run through Claude Code');
     }
     assertKnownEffort(setting.effort);
     const routing: ProviderRouting = {
@@ -1825,7 +1832,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
           error_code: null,
           message:
             "skill enumeration failed, so the skill deny list could not be resolved " +
-            "and the worker was not spawned (no fail-open, ADR 0025)",
+            "and the worker was not spawned (no fail-open)",
         });
         return;
       }
@@ -2336,18 +2343,19 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     const tools = readInitField(parsed, "tools");
     if (!tools) return false;
     const mcpServers = readInitMcpServers(parsed);
+    // 読めない mcp_servers は ADR 0108、unknown is not safe は ADR 0039
     const toolSurface: ContainmentCapability = mcpServers
       ? checkToolSurface(tools, task.type, slashCommandsDisabled, mcpServers)
       : {
           available: false,
           reason:
             "this host's claude CLI reported a session's built-in tools but an `mcp_servers` " +
-            "the board could not read (ADR 0108): the init line carried the field in a shape " +
+            "the board could not read: the init line carried the field in a shape " +
             "with no server names. The /usage probe cannot cover this — it runs " +
             "`--strict-mcp-config` with no `--mcp-config`, so its own MCP surface is empty by " +
             "construction and an element shape it never sees cannot fail it. Whether an " +
             "undeclared MCP server is on the surface is therefore unknown here, and unknown is " +
-            "not safe (ADR 0039). Check the CLI version, then teach `readInitMcpServers` the " +
+            "not safe. Check the CLI version, then teach `readInitMcpServers` the " +
             "new shape or pin the CLI",
         };
     const surface = toolSurface.available

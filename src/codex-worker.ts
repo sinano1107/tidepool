@@ -1004,11 +1004,12 @@ export class CodexWorker implements WorkerAdapter {
 
     // resolveExecutionAgent already enforces this at pickup; keep the adapter's
     // vendor boundary explicit so a future direct caller cannot silently mask it.
+    // 2つの拒否はどちらも ADR 0098(Codex v1 の正準経路、Harness の fallback なし)
     if (agent.definition.skills.length > 0) {
-      throw new Error("CodexWorker v1 refuses a non-empty skill allowlist (ADR 0098)");
+      throw new Error("CodexWorker v1 refuses a non-empty skill allowlist");
     }
     if (setting.provider !== "openai") {
-      throw new Error(`CodexWorker refuses provider ${setting.provider}; no Harness fallback (ADR 0098)`);
+      throw new Error(`CodexWorker refuses provider ${setting.provider}; no Harness fallback`);
     }
     const memory = buildMemoryInjection(this.options.db, task, workspace.name, agent.name, query);
     // ADR 0180 決定2・追記 #1239: meta-review は worker の記憶の節の代わりに主題の材料の節を同じ枠で受ける

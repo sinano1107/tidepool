@@ -307,7 +307,7 @@ export function assertValidAgentDefinition(
   tiers: readonly Tier[],
 ): void {
   const { provider: entries, tier, skills = [], retiredFields = [] } = definition;
-  // 拒否文は agent に返るので、ADR の引用は文でなくここに置く(ADR 0207)
+  // 拒否文は盤面のコードが発する文なので、ADR の引用は文でなくここに置く(ADR 0207)
   if (retiredFields.length > 0) {
     // ADR 0110 決定1(実行設定は表へ)/ ADR 0116 決定2(advisor は entry の性質)
     throw new InvalidAgentDefinitionError(
@@ -345,17 +345,18 @@ export function assertValidAgentDefinition(
       );
     }
     const route = CANONICAL_ROUTES[name as Provider];
+    // advisor・skill を持たない正準経路は ADR 0098
     if (advisor && !route.advisor) {
       throw new InvalidAgentDefinitionError(
         agentName,
-        `canonical route "${name} -> ${route.harness}" does not offer an advisor — a definition declaring one does not stand (ADR 0098)`,
+        `canonical route "${name} -> ${route.harness}" does not offer an advisor — a definition declaring one does not stand`,
       );
     }
     if (!routeSatisfiesSkills(name as Provider, skills)) {
       throw new InvalidAgentDefinitionError(
         agentName,
         `canonical route "${name} -> ${route.harness}" does not offer skills in v1 — ` +
-          "a definition declaring a non-empty allowlist does not stand (ADR 0098)",
+          "a definition declaring a non-empty allowlist does not stand",
       );
     }
   }

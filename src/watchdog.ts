@@ -370,11 +370,12 @@ export function startWatchdog(deps: {
       undefined,
       clock.now(),
     );
+    // 回収を観測できないときに slot を塞いだままにするのは ADR 0099
     quarantineContainment(
       db,
       `the container for task ${task.id} was force-reclaimed but never observed empty, ` +
         "so processes from that session may still be running against this host and its " +
-        "workspaces (ADR 0099). The execution slot stays occupied until this is answered",
+        "workspaces. The execution slot stays occupied until this is answered",
       clock.now(),
     );
   }
