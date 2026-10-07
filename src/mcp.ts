@@ -375,6 +375,10 @@ function assertChildrenKnown(deps: McpDeps, children: z.infer<ReturnType<typeof 
   }
 }
 
+/** review の欄は、完了時レビューが立つ子にしか受け付けない(ADR 0111 追記8)。 */
+export const ONLY_WHERE_REVIEW_FIRES =
+  "Accepted only on a child whose completion raises a review: not assigned to human, and carrying review_flag or risk_flag.";
+
 /** decompose と redecompose が共有する子の入力。段の説明は盤面の一覧から組む(ADR 0200 決定3)。 */
 function decomposeChildrenSchema(db: Db) {
   const tierDescriptions = tierFieldDescriptions(db);
@@ -397,12 +401,13 @@ function decomposeChildrenSchema(db: Db) {
         .optional()
         .describe(
           "Opt this child into an independent review of its deliverable on completion. " +
-            "No authority check applies — declaring it is never out of scope.",
+            "No authority check applies — declaring it is never out of scope. " +
+            "Refused on a child assigned to human, whose completion raises no review.",
         ),
       tier: z.string().optional().describe(tierDescriptions.tier),
       review_by: z.array(z.string().min(1)).optional()
-        .describe("Reviewer agent names; one completion review per name. Omit to use the board Auditor."),
-      review_tier: z.string().optional().describe(tierDescriptions.review_tier),
+        .describe(`Reviewer agent names; one completion review per name. Omit to use the board Auditor. ${ONLY_WHERE_REVIEW_FIRES}`),
+      review_tier: z.string().optional().describe(`${tierDescriptions.review_tier}\n${ONLY_WHERE_REVIEW_FIRES}`),
       priority: z.string().optional().describe(PRIORITY_FIELD_DESCRIPTION),
     }),
   );

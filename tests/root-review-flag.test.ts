@@ -44,7 +44,7 @@ it("ルートへの Edit で review_flag: false(今の値と同じ)は今のま�
 });
 
 /** 完了時レビューは work の完了だけが立てる。work でない type(review / question)への review_flag: true は
- *  ルートと同じく不発の値として拒否する(issue #1501 / ADR 0111 決定1、review_by の assertReviewByFires と同じ線)。
+ *  ルートと同じく不発の値として拒否する(issue #1501 / ADR 0111 決定1、review_by と同じ線)。
  *  question は人間の Edit 対象外(assertHumanEditableScope)なので Edit の経路は無く、登録だけを釘打ちする。 */
 const QUESTION: RegisterTaskInput = {
   type: "question",
@@ -60,7 +60,7 @@ it("親を持つ question に review_flag: true を付けた登録は拒否さ�
 
   expect(() =>
     registerTask(db, { ...QUESTION, parent_id: root.id, review_flag: true }, NOW, ...HUMAN_WEBUI),
-  ).toThrow(/only a work task can carry review_flag/);
+  ).toThrow(/review_flag would have no effect — completion review fires for work tasks only/);
   expect(listBoard(db).map((task) => task.id)).toEqual([root.id]);
 });
 
@@ -70,15 +70,15 @@ it("親を持つ review type に review_flag: true を付けた登録は拒否�
 
   expect(() =>
     registerTask(db, { ...ROOT, type: "review", parent_id: root.id, review_flag: true }, NOW, ...HUMAN_WEBUI),
-  ).toThrow(/only a work task can carry review_flag/);
+  ).toThrow(/review_flag would have no effect — completion review fires for work tasks only/);
   expect(listBoard(db).map((task) => task.id)).toEqual([root.id]);
 });
 
-it.each(["human", undefined])("非ルートの work の子への review_flag: true は assignee が %s でも受け取られる", (assignee) => {
+it("非ルートの work の子への review_flag: true は、assignee が既定の agent なら受け取られる", () => {
   db = openDb(":memory:");
   const root = registerTask(db, ROOT, NOW, ...HUMAN_WEBUI);
 
-  const child = registerTask(db, { ...ROOT, parent_id: root.id, assignee, review_flag: true }, NOW, ...HUMAN_WEBUI);
+  const child = registerTask(db, { ...ROOT, parent_id: root.id, review_flag: true }, NOW, ...HUMAN_WEBUI);
   expect(child.review_flag).toBe(1);
 });
 

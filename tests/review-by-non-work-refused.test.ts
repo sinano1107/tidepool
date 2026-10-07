@@ -43,12 +43,12 @@ it("work type を review_by: [] で登録すると、返り値も盤面の読み
   db.close();
 });
 
-it("work type の review_by はルートでも子でも受け取られ、保存される", () => {
+it("work type の review_by はルートでも review flag の立つ子でも受け取られ、保存される", () => {
   const db = openDb(":memory:");
   const root = registerTask(db, { type: "work", title: "root", ...BASE, review_by: ["fugu"] }, new Date(0), ...HUMAN_WEBUI);
   const child = registerTask(
     db,
-    { type: "work", title: "child", ...BASE, parent_id: root.id, review_by: ["fugu"] },
+    { type: "work", title: "child", ...BASE, parent_id: root.id, review_flag: true, review_by: ["fugu"] },
     new Date(1),
     ...HUMAN_WEBUI,
   );

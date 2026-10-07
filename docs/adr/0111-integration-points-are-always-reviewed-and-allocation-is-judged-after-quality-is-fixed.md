@@ -125,7 +125,7 @@ assignee が human の work task も今は完了時レビューを立てない�
 
 - `review_flag`: 変更後の状態で意味を持たないなら、登録時と Edit で拒否する。work でない type・ルートに加えて、assignee が human の task への flag も拒否する。
 - `review_by`: 変更後の状態で完了時レビューが立たないのに空でない list が残るなら、登録時と Edit で拒否する。保存済みの list を残したまま flag を外す・risk flag を下ろす・assignee を human に変える Edit も拒否の対象になる。分解の子の指定は、承認待ちの question にする前に同じ検査にかける。
-- `review_tier`: 登録時に、完了時レビューが立たないなら拒否する。Edit で後から立たなくなったときに残る値の扱いは、review_tier を Edit で変えられるようにするかと合わせて派生 issue で決める。
+- `review_tier`: 登録時に、完了時レビューが立たないなら拒否する。review task 自身の `review_tier` は、その review が走るティアであって完了時レビューの要求ではないので、この検査にかけない(完了時の起票と meta-review が review task に付けて登録する、issue #1553)。Edit で後から立たなくなったときに残る値の扱いは、review_tier を Edit で変えられるようにするかと合わせて派生 issue で決める。
 
 WebUI の Edit で人間の操作により欄が隠れたとき(flag を外す、human に渡す)は、保存済みの `review_by` / `review_flag` を WebUI が消して送る。
 flag を外す・human に渡す操作が「レビューしない」意思そのものだからである。消えたことは Edit のイベントに残る。WebUI が消したのか人間が外したのかは区別しない。
