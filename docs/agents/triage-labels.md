@@ -20,6 +20,12 @@ what the observation showed: it **closes** when the observation is the answer, a
 property of `verify:production` below — a confirmation issue whose venue is CI or the Lima VM closes
 the same way.
 
+An issue that has been evaluated and only waits for another issue to land carries no state label —
+typically a follow-up a grilling found, whose work is decided but cannot start until that issue's
+change is in. A state label would put it back in the sweep's queue for an evaluation that is already
+done, and `needs-info` is for an observation, not another issue. Record the wait as GitHub's native
+blocked-by relation on the issue it waits for (#1416 is blocked by #1419).
+
 ## Priority labels
 
 Orthogonal to the five roles above: a `ready-for-agent` issue additionally carries at most one `priority:*` label, ranking it for pickup. The 2026-07-17 triage ranked by what unblocks Tidepool developing Tidepool itself (deliverable integrity and trust foundations first, guardrails and tooling next, ops/UX last).
