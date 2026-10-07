@@ -30,6 +30,7 @@ interface RegisterScreenIssueFields {
   /** 未指定は盤面の既定 agent(手入力の経路と同じ)。 */
   assignee?: string;
   risk_flag: boolean;
+  review_by?: string[];
 }
 interface RegisterScreenManualFields {
   /** 画面が出すのはこの2つだけ(子追加は常に work)。 */
@@ -40,6 +41,8 @@ interface RegisterScreenManualFields {
   risk_flag: boolean;
   /** 子追加でだけ送る —— ルートは flag によらずレビューされ、ルートへの review_flag は拒否される(issue #1467)。 */
   review_flag?: boolean;
+  /** 欄が見えていて誰かを選んだときだけ送る —— 無ければ盤面の Auditor(issue #1468)。 */
+  review_by?: string[];
   assignee?: string;
   workspace?: string;
   /** 要求ティア(盤面の段の名前)。review task はレビューの要求(`review_tier`)として送る。 */
@@ -50,6 +53,45 @@ interface RegisterScreenManualFields {
   parent_id?: string;
   decompose_reason?: string;
 }
+/** review_by が何かを起こす task か —— 欄はこれが真のときだけ出す(issue #1468)。
+ *  正本は src/tasks.ts の完了時レビューの起票条件の写し。サーバと共有しないのは
+ *  webui が import を持たない連結方式だから(ADR 0133)で、共有するかは issue #1514。
+ *  assignee '' は既定の agent なので出す側に入る。 */
+function reviewByTakesEffect({ type, isRoot, assignee, reviewFlag, riskFlag }: {
+  type: string; isRoot: boolean; assignee: string; reviewFlag: boolean; riskFlag: boolean;
+}) {
+  return type === 'work' && assignee !== 'human' && (isRoot || reviewFlag || riskFlag);
+}
+
+/** reviewer を Select で1人ずつ足し、AgentChip + IconButton で外す(issue #1468)。
+ *  候補は registry の agent —— assignees 候補の 'human' は reviewer になれないので除く。 */
+function ReviewerPicker({ candidates, value, onChange }: {
+  candidates: AppCandidates; value: string[]; onChange: (v: string[]) => void;
+}) {
+  const { Select, AgentChip, IconButton } = window.TidepoolDesignSystem_8a0ead;
+  React.useEffect(() => { lucide.createIcons(); });
+  const addable = candidates.assignees.filter((n) => n !== 'human' && !value.includes(n));
+  const options = [
+    { value: '', label: addable.length ? 'add reviewer…' : 'no more to add' },
+    ...addable.map((n) => ({ value: n, label: n })),
+  ];
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+      {/* value は常に '' —— 1人足すたびに placeholder へ戻る */}
+      <Select label="Reviewers" options={options} value="" onChange={(e) => { if (e.target.value) onChange([...value, e.target.value]); }} />
+      {value.map((n) => (
+        <div key={n} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <AgentChip name={n} icon={candidates.icons[n]} />
+          <IconButton label={`remove ${n}`} size="sm" onClick={() => onChange(value.filter((x) => x !== n))}>
+            <i data-lucide="x" style={{ width: 16, height: 16 }}></i>
+          </IconButton>
+        </div>
+      ))}
+      <span style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)' }}>none → board auditor</span>
+    </div>
+  );
+}
+
 /** 登録の門の 422 本文(src/human-verbs.ts の issue_rejected)+ 検査した要求そのもの。 */
 type RegisterScreenGate = WireContract['POST /api/tasks 422'] & { fields: RegisterScreenIssueFields };
 interface RegisterScreenProps {
@@ -74,6 +116,7 @@ function RegisterScreen({ onRegister, parentTask, onClose }: RegisterScreenProps
   const [tier, setTier] = React.useState('');
   const [risk, setRisk] = React.useState(false);
   const [review, setReview] = React.useState(false);
+  const [reviewBy, setReviewBy] = React.useState<string[]>([]);
   const [reason, setReason] = React.useState('');
   const [issueNumber, setIssueNumber] = React.useState('');
   const [gate, setGate] = React.useState<RegisterScreenGate | null>(null);
@@ -87,7 +130,7 @@ function RegisterScreen({ onRegister, parentTask, onClose }: RegisterScreenProps
   // registry-sourced assignee/workspace candidates (issue #12/#65) — fetched
   // once per screen visit; RegisterScreen remounts fresh each tab entry (the
   // shell's key={tab}), so this never goes stale within a sitting
-  const [candidates, setCandidates] = React.useState<AppCandidates>({ assignees: [], workspaces: [] });
+  const [candidates, setCandidates] = React.useState<AppCandidates>({ assignees: [], workspaces: [], icons: {} });
   React.useEffect(() => {
     api('GET /api/registry/candidates').then(setCandidates).catch(() => {});
   }, []);
@@ -156,6 +199,12 @@ function RegisterScreen({ onRegister, parentTask, onClose }: RegisterScreenProps
   const ok = issueMode
     ? workspace.trim() && /^[0-9]+$/.test(issueNumber.trim())
     : title.trim() && purpose.trim() && criteria.trim() && (!childMode || reason.trim());
+  // issue 経路は常に work(type state は手入力側で review に切り替えたまま残りうる)
+  const showReviewBy = reviewByTakesEffect({
+    type: issueMode ? 'work' : type, isRoot: !childMode, assignee, reviewFlag: review, riskFlag: risk,
+  });
+  // 隠れた欄の値は送らない、誰も選んでいなければキーごと送らない
+  const reviewByField = showReviewBy && reviewBy.length ? { review_by: reviewBy } : {};
   const fields = (): RegisterScreenFields =>
     issueMode
       ? {
@@ -163,6 +212,7 @@ function RegisterScreen({ onRegister, parentTask, onClose }: RegisterScreenProps
           risk_flag: risk,
           ...(assignee ? { assignee } : {}),
           ...(tier ? { tier } : {}),
+          ...reviewByField,
         }
       : {
           // a decompose child is always type work (decomposeTask's own
@@ -176,13 +226,14 @@ function RegisterScreen({ onRegister, parentTask, onClose }: RegisterScreenProps
           ...(assignee ? { assignee } : {}),
           ...(workspace.trim() ? { workspace: workspace.trim() } : {}),
           ...(tier ? (type === 'review' ? { review_tier: tier } : { tier }) : {}),
+          ...reviewByField,
           ...childExtras(),
         };
   const resetContent = () => {
     setDump(''); setDrafted(false); setPlainFormActive(false);
     setType('work'); setTitle(''); setPurpose(''); setCriteria('');
     setAssignee(''); setWorkspace(''); setTier(''); setIssueNumber(''); setReason('');
-    setRisk(false); setReview(false);
+    setRisk(false); setReview(false); setReviewBy([]);
     // backing out of a pending dump's content leaves the row itself alone —
     // it is unconsumed and stays listed, pickable again later
     setSelectedDumpId(null);
@@ -263,6 +314,7 @@ function RegisterScreen({ onRegister, parentTask, onClose }: RegisterScreenProps
   const assigneeOptions = withPlaceholder('', '(default agent)', candidates.assignees);
   // both sources show these two the same way — one element each so the labels can't drift
   const assigneeSelect = <Select label="Assignee" options={assigneeOptions} value={assignee} onChange={(e) => setAssignee(e.target.value)} />;
+  const reviewerPicker = showReviewBy && <ReviewerPicker candidates={candidates} value={reviewBy} onChange={setReviewBy} />;
   const riskCheckbox = <Checkbox label="risk flag — this task has irreversible external effects" checked={risk} onChange={() => setRisk(!risk)} />;
   // manual content's workspace is optional (unset → the board's default at
   // execution time); an issue reference's workspace is required — it fixes
@@ -335,6 +387,7 @@ function RegisterScreen({ onRegister, parentTask, onClose }: RegisterScreenProps
             {assigneeSelect}
             <Select label="Tier" options={tierOptions(tiers, "(agent's tier, then board default)")} value={tier} onChange={(e) => setTier(e.target.value)} />
             {riskCheckbox}
+            {reviewerPicker}
             <Input label="Issue number" value={issueNumber} onChange={(e) => setIssueNumber(e.target.value)} placeholder="content stays on GitHub; the board keeps only this reference" />
             <div style={{ display: 'flex', flexDirection: 'column', gap: 4, maxHeight: 220, overflowY: 'auto' }}>
               {!workspace.trim() && (
@@ -384,6 +437,7 @@ function RegisterScreen({ onRegister, parentTask, onClose }: RegisterScreenProps
             {childMode && (
               <Checkbox label="review flag — request an on-completion review" checked={review} onChange={() => setReview(!review)} />
             )}
+            {reviewerPicker}
           </React.Fragment>
         )}
         <Button variant="primary" size="lg" full disabled={primaryAction.disabled} onClick={primaryAction.onClick}>{primaryAction.label}</Button>
