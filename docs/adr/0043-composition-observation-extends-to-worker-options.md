@@ -1,5 +1,7 @@
 # 合成の観測は worker options 層まで伸ばす — 「不在 = 実物を使う」と「不在 = 機能が切れる」は別の層である
 
+**Status 追記: `advisorDisabled`(判断8 の kill switch)は ADR 0208 で盤面設定の上限の値 `off` に吸収され退役** —— 選択の後に剥がしていたので advisor を理由にした候補の除外が残り、切り替えに再起動が要った。合成側が worker options の一覧を持つ決定1・2 は変わらない。
+
 issue #33 で決定。**ADR 0041 の「同種の穴の捜索」が `ClaudeWorkerOptions` を
 『#172 の類ではない』と分類した箇所を、部分的に取り消す。**
 

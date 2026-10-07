@@ -1,5 +1,7 @@
 # 盤面呼び出しは advisor を持たない —— 不在はホスト設定に委ねず、呼び出しごとに明示する
 
+**Status 追記: 決定4 の「有効・無効の正本は registry と kill switch」は ADR 0208 で「registry と盤面設定の `off`」に** —— `TIDEPOOL_DISABLE_ADVISOR` は退役した。Board call が `CLAUDE_CODE_DISABLE_ADVISOR_TOOL=1` で不在を明示する決定は変わらない。
+
 issue #174 で決定。ADR 0042 / 0043 が worker session の advisor を扱ったのに続いて、
 **盤面自身の CLI 呼び出し(Board call)側の線**を引く。
 
