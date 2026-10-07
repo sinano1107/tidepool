@@ -1,6 +1,6 @@
 import { afterEach, expect, it } from "vitest";
 import { buildAllocationReviewInput } from "../src/allocation-review.js";
-import { RowRefusalError } from "../src/cli-auth.js";
+import { CliAuthError, RowRefusalError } from "../src/cli-auth.js";
 import { appendEvent } from "../src/events.js";
 import { completeTask, getTask } from "../src/tasks.js";
 import { reportProviderUsage } from "../src/throttle.js";
@@ -242,6 +242,24 @@ it("行の拒否で断られると行の Quarantine が立ち、失敗 event も
     [
       "execution-setting row anthropic / claude-fable-5-1 cannot run on this board",
       `The allocation review Board call for task ${task.id} ended with API error code claude_code_version_too_old`,
+    ],
+  ]);
+  expect([...(await annotations(t, task.id)), ...(await failures(t, task.id))]).toEqual([]);
+});
+
+it("401 で終わると Provider 認証の Quarantine が立ち、失敗 event も注釈も残らない(ADR 0205)", async () => {
+  const allocationClient = new FakeAllocationClient();
+  allocationClient.scriptFailure(new CliAuthError("Invalid API key"));
+  t = await bootTidepool({ allocationClient });
+  const { task, review } = await reviewedWork(t);
+
+  await completeReview(t, review.id);
+  await nextPoll(t);
+
+  expect((await questions(t)).filter((q: any) => q.title.startsWith("anthropic authentication")).map((q: any) => [q.title, q.purpose.split(". ")[0]])).toEqual([
+    [
+      "anthropic authentication is unavailable — pickup of anthropic-speaking agents is stopped",
+      `The allocation review Board call for task ${task.id} ended with an authentication failure`,
     ],
   ]);
   expect([...(await annotations(t, task.id)), ...(await failures(t, task.id))]).toEqual([]);

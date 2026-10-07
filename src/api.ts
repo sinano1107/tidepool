@@ -1231,7 +1231,6 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       // "unreachable" signal as no client configured. AC3 (issue #12) is that
       // draft failures never block registration, only push the user to the
       // plain form, so every draftTask() failure gets 503 here, not 500.
-      quarantineCliAuthFailure(db, err, clock.now());
       quarantineBoardCallRefusal(db, err, "task draft", undefined, clock.now());
       res.status(503).json({ error: err instanceof Error ? err.message : "draft failed" });
     }
@@ -1457,7 +1456,6 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     } catch (err) {
       // same "any failure = unreachable" 503 fallback /tasks/draft uses
       // (AC3: a draft failure never blocks completion, only the assist)
-      quarantineCliAuthFailure(db, err, clock.now());
       quarantineBoardCallRefusal(db, err, "handoff draft", task.id, clock.now());
       res.status(503).json({ error: err instanceof Error ? err.message : "draft failed" });
     }
