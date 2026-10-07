@@ -5,7 +5,7 @@ import type { ExecutionSetting, ExecutionSettingRow, ExecutionSettingsChange, re
 import type { InvalidationReason, MemoryDropReason, MemoryEntryFields } from "./memory.js";
 import type { Provider } from "./provider.js";
 import type { MemoryProposal, ProposalAmendment, TaskType } from "./tasks.js";
-import type { Tier } from "./tier.js";
+import type { Tier, TierId } from "./tier.js";
 
 /** 行の拒否の証拠の種類: Provider が id を 404 で断った(ADR 0184 決定3)/ CLI の版が model の最低版に
  *  届かない(result 行の `api_error_code: claude_code_version_too_old`、ADR 0187 決定1)。 */
@@ -236,6 +236,9 @@ export type EventPayload =
       provider: Provider;
       model: string;
       effort: string;
+      /** ADR 0210 決定1: the id of the tier the pickup resolved — candidates are that tier's rows only, so this is
+       *  the tier the session ran in. An id, not a name, so a later rename or retirement does not rewrite it. */
+      tier_id: TierId;
       /** ADR 0110 決定3: **why** it was that setting — `"task"` when the
        *  task's own request column decided, `"review_tier"` for its review
        *  request, `"agent"` when the agent's `tier`

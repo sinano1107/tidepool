@@ -1076,6 +1076,7 @@ export class CodexWorker implements WorkerAdapter {
           provider: setting.provider,
           model: setting.model,
           effort: setting.effort,
+          tier_id: setting.tier_id,
           source: setting.source,
           harness: "codex",
           cli_version: this.options.cliVersion,

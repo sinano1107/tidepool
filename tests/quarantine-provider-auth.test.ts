@@ -29,7 +29,7 @@ const candidate = (provider: Provider, model: string): ExecutionSetting => ({
   model,
   effort: "high",
   advisor: undefined,
-  source: { tier: "board", provider: "only" },
+  tier_id: 1, source: { tier: "board", provider: "only" },
 });
 
 /** agent の entry 宣言を名前の列から組む(provider-scheduler.test.ts と同じ形)。 */

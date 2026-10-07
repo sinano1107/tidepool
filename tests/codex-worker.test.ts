@@ -588,6 +588,14 @@ thread's history always fails.`));
     expect(developer.endsWith(`\n\n${section}\n\n`)).toBe(true);
   });
 
+  it("work / review task の worker_spawned は、盤面が選んだ候補の段の id を持つ(ADR 0210 決定1)", async () => {
+    const f = await fixture();
+    for (const value of [task(f.db, "codex-tier-work"), metaReviewTask(f.db)]) {
+      f.worker.start(value, { provider: "openai", model: "gpt-6-astra", effort: "high", advisor: undefined, tier_id: 3, source: { tier: "task", provider: "rank" } });
+      expect(listEvents(f.db, value.id).find((event) => event.kind === "worker_spawned")?.payload).toMatchObject({ tier_id: 3 });
+    }
+  });
+
   it("盤面が順位で選んだ openai の設定を渡されれば、anthropic を先頭に持つ agent でも codex で走る(#544 の demo —— spawn 側の再解決は順位1位の anthropic を返して拒否になる)", async () => {
     const f = await fixture();
     const value = task(f.db, "codex-carried-setting");
@@ -596,7 +604,7 @@ thread's history always fails.`));
       model: "gpt-6-astra",
       effort: "high",
       advisor: undefined,
-      source: { tier: "task", provider: "rank" },
+      tier_id: 1, source: { tier: "task", provider: "rank" },
     });
     expect(f.process.calls[0]!.args).toEqual(
       expect.arrayContaining(["-m", "gpt-6-astra"]),

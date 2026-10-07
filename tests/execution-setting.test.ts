@@ -53,6 +53,7 @@ function input(overrides: Partial<SelectorInput> = {}): SelectorInput {
     priority: undefined,
     agentTier: undefined,
     boardTier: "economy",
+    tiers: SEED_TIERS.map((tier, i) => ({ id: i + 1, name: tier.name })),
     advisorCeiling: "off",
     ...overrides,
   };
@@ -95,6 +96,7 @@ it("tier を書かない agent は盤面既定のティアで解決され、出�
     model: "claude-sonnet-5-5",
     effort: "high",
     advisor: undefined,
+    tier_id: 1,
     source: { tier: "board", provider: "only" },
   });
 });
@@ -107,6 +109,7 @@ it("agent の tier は盤面既定より優先され、出所は agent", () => {
     model: "claude-sonnet-5-5",
     effort: "high",
     advisor: undefined,
+    tier_id: 1,
     source: { tier: "agent", provider: "only" },
   });
 });
@@ -303,6 +306,7 @@ it("task の要求ティアは agent の tier より優先され、出所は tas
     model: "claude-fable-5-1",
     effort: "high",
     advisor: undefined,
+    tier_id: 3,
     source: { tier: "task", provider: "only" },
   });
 });
@@ -318,6 +322,7 @@ it("task の要求ティアは agent が tier を持たなくても盤面既定�
     model: "claude-opus-5-5",
     effort: "high",
     advisor: undefined,
+    tier_id: 2,
     source: { tier: "task", provider: "only" },
   });
 });
@@ -350,6 +355,7 @@ it("単一 entry の agent は今の挙動と一致し、出所は only —— �
     model: "gpt-5.6-terra",
     effort: "high",
     advisor: undefined,
+    tier_id: 1,
     source: { tier: "board", provider: "only" },
   });
 });

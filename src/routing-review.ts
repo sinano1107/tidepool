@@ -95,8 +95,8 @@ function shadowRows(db: Db, { after, upTo = Number.MAX_SAFE_INTEGER }: MetaRevie
 }
 
 /** 配分評価の分布: 注釈を worker session の (`source.tier`, 段, agent, allocation, cause) で数え、judge の model が
- *  worker のセルの model と同じだった件数を添える(ADR 0150 決定8)。段は出所が `task` の session だけに付き、その task が
- *  要求した段(worker_spawned は解決した段を持たない —— ADR 0200 決定7)。段は id で割り、消した段には `tier_retired` が付く。 */
+ *  worker のセルの model と同じだった件数を添える(ADR 0150 決定8)。段はどの出所の session にも付き、その session が走った段
+ *  (ADR 0210 決定5)。段は id で割り、消した段には `tier_retired` が付く。 */
 export function listAllocations(db: Db, readerTaskId: string, input: ReadWindow & { next?: string }) {
   const read = readPosition<ReadWindow>("list_allocations", input);
   const { groups, keys } = allocationRows(db, { after: since(db, readerTaskId, read.args) });
@@ -107,22 +107,22 @@ export function listAllocations(db: Db, readerTaskId: string, input: ReadWindow 
 /** list_allocations の行(ページ割り前)とその鍵と、数えた allocation_reviewed の event id。 */
 function allocationRows(db: Db, window: MetaReviewWindow) {
   const episodes = new Map(loadEpisodes(db).map((e) => [e.worker_spawned_event_id, e]));
-  const requested = db.prepare("SELECT tiers.id, tiers.name, tiers.position IS NULL AS retired FROM tasks JOIN tiers ON tiers.id = tasks.tier_id WHERE tasks.id = ?");
+  const tierOf = db.prepare("SELECT name, position IS NULL AS retired FROM tiers WHERE id = ?");
   const counted: number[] = [];
   const groups = new Map<
     string,
-    { source_tier: string; tier: Tier | null; tier_retired?: true; agent: string; allocation: string; cause: string; count: number; judged_by_same_model: number }
+    { source_tier: string; tier: Tier; tier_retired?: true; agent: string; allocation: string; cause: string; count: number; judged_by_same_model: number }
   >();
   for (const { id, payload: p } of listEventsOfKinds(db, ["allocation_reviewed"], window)) {
     const episode = episodes.get(p.worker_spawned_event_id);
     if (!episode) continue;
     counted.push(id);
-    const tier = episode.source.tier === "task" ? (requested.get(episode.task_id) as { id: number; name: Tier; retired: number } | undefined) : undefined;
-    const key = JSON.stringify([episode.source.tier, tier?.id ?? null, episode.agent, p.allocation, p.cause]);
+    const key = JSON.stringify([episode.source.tier, episode.tier_id, episode.agent, p.allocation, p.cause]);
+    const tier = tierOf.get(episode.tier_id) as { name: Tier; retired: number };
     const group = groups.get(key) ?? {
       source_tier: episode.source.tier,
-      tier: tier?.name ?? null,
-      ...(tier?.retired ? { tier_retired: true as const } : {}),
+      tier: tier.name,
+      ...(tier.retired ? { tier_retired: true as const } : {}),
       agent: episode.agent,
       allocation: p.allocation,
       cause: p.cause,

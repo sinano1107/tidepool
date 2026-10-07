@@ -86,7 +86,7 @@ it("翻訳 client の無い盤面は撃たなかったのと同じ理由 throttl
 it("Provider anthropic が使えない間は翻訳を撃たず、理由 throttled を start に渡し、spawn は成立する", async () => {
   const translationClient = new FakeTranslationClient();
   // anthropic が止まっていても、openai で走る task は pickup される
-  const openai: ExecutionSetting = { provider: "openai", model: "gpt-5.6-sol", effort: "high", advisor: undefined, source: { tier: "board", provider: "only" } };
+  const openai: ExecutionSetting = { provider: "openai", model: "gpt-5.6-sol", effort: "high", advisor: undefined, tier_id: 1, source: { tier: "board", provider: "only" } };
   t = await bootTidepool({ translationClient, openaiUsage: healthyOpenai, taskExecutionCandidates: () => [openai] });
   const now = t.clock.now();
   reportProviderUsage(t.db, {

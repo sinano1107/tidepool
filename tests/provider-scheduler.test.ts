@@ -34,7 +34,7 @@ const candidate = (provider: Provider, model: string): ExecutionSetting => ({
   model,
   effort: "high",
   advisor: undefined,
-  source: { tier: "board", provider: "only" },
+  tier_id: 1, source: { tier: "board", provider: "only" },
 });
 
 it("先頭 Provider が throttle 中でも同じ poll で次を選び、回復後は元の順序へ戻り、実行中 worker を止めない", async () => {

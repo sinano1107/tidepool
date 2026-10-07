@@ -5,6 +5,7 @@ import { type EventPayload, type EventRow, listEventsOfKinds, objectionBundles, 
 import type { ExecutionSetting } from "./execution-setting.js";
 import type { Provider } from "./provider.js";
 import { acceptedSql, type Task } from "./tasks.js";
+import type { TierId } from "./tier.js";
 
 /** 学習器のセル(CONTEXT.md「学習器」/ ADR 0110 決定4): spawn 時の pin の綴りの
  *  (provider, model id, effort, advisor model)—— 表の行は具体 id だけなので、main の pin が世代を
@@ -21,14 +22,15 @@ export interface Cell {
 
 /** 1つの worker session を学習器が読む形(Precedent の `Episode` と同じ session
  *  単位だが、transcript を持たず outcome だけを持つ)。文脈のうち持つのは workspace
- *  (プーリングの段)だけ —— 要求ティアと優先順位は selector の候補集合と並びに
- *  入っている。agent / interview 種別はセルを割らず、読み手が生えたら tasks と
+ *  (プーリングの段)と走った段(`tier_id`、ADR 0210 決定3 —— 行は段を移るので、候補集合だけでは段が決まらない)。
+ *  優先順位は selector の並びに入っている。agent / interview 種別はセルを割らず、読み手が生えたら tasks と
  *  events から引ける。費用と時間は session ごとの観測で、推薦の鍵にはならない
  *  (routing meta-review の shadow 行の読み口が読む、ADR 0183)。
  *  `outcome` の `excluded` は「まだ判定が無い」「帰責が worker の落ち度でない」で、
  *  受理率の分母に入らない(ADR 0115 決定5)。 */
 export interface LearnerEpisode {
   cell: Cell;
+  tier_id: TierId;
   workspace: string | null;
   outcome: "accepted" | "rejected" | "excluded";
   cost_usd: number | null;
@@ -92,6 +94,13 @@ export function aggregateCells(episodes: readonly LearnerEpisode[]): CellStats[]
     byKey.set(key, stats);
   }
   return [...byKey.values()];
+}
+
+/** 推薦が数える観測(純関数、ADR 0210 決定2): 候補の段で走った episode だけを、盤面の段と workspace の段に集計する。
+ *  行を段の間で移すと移った先では未観測になり、戻せば元の観測がまた数えられる。 */
+export function observedInTier(episodes: readonly LearnerEpisode[], tier: TierId, workspace: string | null): { board: CellStats[]; workspace: CellStats[] } {
+  const inTier = episodes.filter((e) => e.tier_id === tier);
+  return { board: aggregateCells(inTier), workspace: aggregateCells(inTier.filter((e) => e.workspace === workspace)) };
 }
 
 /** セルが表の候補行に当たるか: model も advisor も完全一致(ADR 0182 決定3)—— 部分一致だと `claude-opus-5` の行が
@@ -214,6 +223,7 @@ export function loadEpisodes(db: Db): RoutingEpisode[] {
         effort: spawned.payload.effort,
         advisor: spawned.payload.advisor,
       },
+      tier_id: spawned.payload.tier_id,
       workspace: task.workspace,
       outcome: episodeOutcome({
         accepted: task.accepted === 1 && !hasNextSpawn,

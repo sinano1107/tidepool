@@ -172,7 +172,7 @@ it("読み口4本は続き(next)だけを受けて続きの応答を返し、nex
     const { question_id } = proposeRoutingChange(t.db, review.id, { op: "row", row: row!, change: { effort: "low" }, rationale: "r" }, "auditor", now);
     expect((await api(t.baseUrl, "POST", `/api/tasks/${question_id}/answer`, { answers: ["reject"], comment: `${i} ${"潮".repeat(1_000)}` })).status).toBe(200);
     const { id } = registerTask(t.db, { type: "work", title: `w${i}`, purpose: "p", completion_criteria: "c" }, now, ...HUMAN_WEBUI);
-    const run = { provider: "anthropic" as const, model: `model-${i}-${"m".repeat(2_500)}`, effort: "high", advisor: undefined, source: { tier: "agent" as const, provider: "rank" as const } };
+    const run = { provider: "anthropic" as const, model: `model-${i}-${"m".repeat(2_500)}`, effort: "high", advisor: undefined, tier_id: 1, source: { tier: "agent" as const, provider: "rank" as const } };
     recordShadow(t.db, id, { recommended: run, actual: run, basis: "prior", recommended_record: TRACK, actual_record: TRACK, candidates: 2 }, now);
     const spawned = appendEvent(t.db, { taskId: id, workerId: `agent-${i}-${"a".repeat(2_500)}`, origin: "board", at: now, payload: { ...WORKER_SPAWNED, model: run.model, source: run.source } });
     const tokens = { input_tokens: 1, output_tokens: 1, cache_read_tokens: 0, cache_creation_tokens: 0, estimated_cost_usd: 0 };
