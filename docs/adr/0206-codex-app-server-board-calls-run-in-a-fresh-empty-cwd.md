@@ -28,3 +28,10 @@
   する呼び出しは回収済み観測を待つ門(ADR 0136 決定5)にも入る。
 - **盤面が固定の空ディレクトリを1つ持つ** —— 置き場の上に `.git` があると Codex が親を遡って project 層を読む。呼び出しごとの
   一時ディレクトリでも `config.toml` は太らない。
+
+## 追記(2026-10-07 の triage、issue #1520)
+
+決定3 の括弧書き「auto-memory は #1482」の答え: Claude 側の Board call では、`--safe-mode` が auto-memory も落とす。
+#1482 と #1520 で別々に実測した(CLI 2.1.286)。#1520 では、`--safe-mode` を付けると init 行に `memory_paths` が無くなり、
+cwd の `MEMORY.md` に置いた目印をモデルが読めなかった。外すと `memory_paths.auto` が出て、目印を返した。
+これは vendor の挙動で `--help` にも載っていないので、版上げで変わったときの観測面は #1522 で扱う。
