@@ -307,7 +307,7 @@ export function assertValidAgentDefinition(
   tiers: readonly Tier[],
 ): void {
   const { provider: entries, tier, skills = [], retiredFields = [] } = definition;
-  // 拒否文は agent に返るが、agent は ADR を辿れないので引用はここに置く(#1429)
+  // 拒否文は agent に返るので、ADR の引用は文でなくここに置く(ADR 0207)
   if (retiredFields.length > 0) {
     // ADR 0110 決定1(実行設定は表へ)/ ADR 0116 決定2(advisor は entry の性質)
     throw new InvalidAgentDefinitionError(
