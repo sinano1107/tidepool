@@ -647,14 +647,17 @@ export function contentSourceFor(
   return TaskContentSource.liveIssue(github, { path, number: task.github_issue_number });
 }
 
-/** review_flag that would never fire is refused (ADR 0111): a review task is
- *  terminal, and a root is reviewed on completion whatever its flag (issue #1467). */
+/** review_flag that would never fire is refused (ADR 0111): completion review is raised
+ *  by a work task's completion only, so review / question carry none (issue #1501), and a
+ *  root is reviewed on completion whatever its flag (issue #1467). */
 function assertReviewFlagFires(
   task: { type: TaskType; parent_id?: string | null },
   reviewFlag: boolean | undefined,
 ): void {
   if (!reviewFlag) return;
-  if (task.type === "review") throw new DomainError("a review task cannot carry review_flag");
+  if (task.type !== "work") {
+    throw new DomainError("only a work task can carry review_flag — completion review fires for work tasks only");
+  }
   if (!task.parent_id) {
     throw new DomainError(
       "a root task cannot carry review_flag — every root is already reviewed on completion",

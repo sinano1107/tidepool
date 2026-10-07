@@ -112,7 +112,7 @@ advisor は名指さず本番と同じ規則で導出する。root review が対
 決定1 の「不発の値を受け取らない」は、review type への `review_flag` に限らず、**完了時レビューを決して立てない値**すべてに及ぶ。
 判定の鍵には、登録後に変わらない性質(type と、ルートかどうか)だけを使う。
 
-- `review_flag`: review type への flag と、ルートへの flag を、登録時と Edit で拒否する。ルートは flag によらずレビューされる(#1467)。
+- `review_flag`: work でない type(review / question)への flag と、ルートへの flag を、登録時と Edit で拒否する。ルートは flag によらずレビューされる(#1467)。work でない type への拒否は `review_by` と同じ線(#1501)。
 - `review_by`: work でない type への空でない list を、登録時と Edit で拒否する(#1490 / #1498)。
 
 assignee が human の work task も今は完了時レビューを立てない。ただ、assignee は Edit で変えられるので、拒否の条件には入れない。
