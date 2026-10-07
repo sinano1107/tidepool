@@ -684,6 +684,7 @@ export function startScheduler(deps: {
               continue;
             }
           }
+          // 下の callback に non-null の型で渡すための束縛(`setting` は loop の末尾で選び直す)
           const current = setting;
           const relevant = observation.windows.filter(
             // provider 全体の窓(model === null)は常に関係する。model 固有の窓の
