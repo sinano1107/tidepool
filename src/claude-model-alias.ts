@@ -26,14 +26,15 @@ const TOP_FAMILY = { alias: "fable", prefix: "claude-fable-" };
 const GENERATION = /^(\d+)(?:-(\d{1,2})(?!\d))?/;
 
 /** The advisor pinned beside an anthropic main row; undefined when the CLI would refuse the pair at
- *  launch: the row's family is unknown, its generation is below the family's floor, or its family cannot
- *  advise and `aboveMain` is off. With `aboveMain` it is the top family's alias (an alias, since the advisor
- *  is not a row), except that a main already in the top family gets its own concrete id — an alias lagging
- *  the row's generation would not attach. Without it the advisor is main itself. */
+ *  launch: the row's family is unknown, its generation is unreadable or below the family's floor, or its
+ *  family cannot advise and `aboveMain` is off. With `aboveMain` it is the top family's alias (an alias,
+ *  since the advisor is not a row), except that a main already in the top family gets its own concrete
+ *  id — an alias lagging the row's generation would not attach. Without it the advisor is main itself. */
 export function claudeAdvisorFor(model: string, aboveMain: boolean): string | undefined {
   const family = FAMILIES.find((f) => model.startsWith(f.prefix));
-  const generation = family && GENERATION.exec(model.slice(family.prefix.length));
-  if (!family || !generation || Number(generation[1]) * 100 + Number(generation[2] ?? 0) < family.minGeneration) return undefined;
+  const digits = family && GENERATION.exec(model.slice(family.prefix.length));
+  if (!family || !digits) return undefined;
+  if (Number(digits[1]) * 100 + Number(digits[2] ?? 0) < family.minGeneration) return undefined;
   if (aboveMain) return model.startsWith(TOP_FAMILY.prefix) ? model : TOP_FAMILY.alias;
   return family.canAdvise ? model : undefined;
 }

@@ -179,10 +179,13 @@ it("adapter が知らない系列の行は、advisor つきの entry ではフ�
   expect(standard(false, true)).toBe("claude-mythos-1");
 });
 
+const cheapStandardRow = (model: string): ExecutionSettingTable[number] =>
+  ({ provider: "anthropic", tier: "standard", model, effort: "high", price_in: 1, price_out: 1 });
+
 /** 種の表の standard に、種の行より安い anthropic の行を1つ足し、選ばれた model を返す。足した行が候補に
  *  入っていれば先に選ばれる。 */
 function standardWithCheapRow(model: string, advisor: boolean, advisorAboveMain: boolean): string {
-  const withRow: ExecutionSettingTable = [...table, { provider: "anthropic", tier: "standard", model, effort: "high", price_in: 1, price_out: 1 }];
+  const withRow: ExecutionSettingTable = [...table, cheapStandardRow(model)];
   return select(input({ entries: [{ provider: "anthropic", advisor }], agentTier: "standard", advisorAboveMain }), withRow).model;
 }
 
@@ -197,18 +200,14 @@ it("main として advisor を受けない世代(Sonnet / Opus の 4.6 未満)�
 it("advisor になれない系列(Haiku)の行は、フラグが無ければ advisor つきの entry の候補に入らず、フラグが立てば advisor `fable` で入る —— advisor が main と同一だと CLI が断る", () => {
   expect(standardWithCheapRow("claude-haiku-4-5", true, false)).toBe("claude-opus-5-5");
   expect(standardWithCheapRow("claude-haiku-4-5", false, false)).toBe("claude-haiku-4-5");
-  const haikuTable: ExecutionSettingTable = [
-    { provider: "anthropic", tier: "standard", model: "claude-haiku-4-5", effort: "high", price_in: 1, price_out: 1 },
-  ];
+  const haikuTable: ExecutionSettingTable = [cheapStandardRow("claude-haiku-4-5")];
   expect(
     select(input({ entries: [{ provider: "anthropic", advisor: true }], agentTier: "standard", advisorAboveMain: true }), haikuTable),
   ).toMatchObject({ model: "claude-haiku-4-5", advisor: "fable" });
 });
 
 it("Sonnet 4.6 は下限ちょうどで advisor を受ける —— フラグ無しなら advisor は同一 id、有りなら `fable`", () => {
-  const sonnet46: ExecutionSettingTable = [
-    { provider: "anthropic", tier: "standard", model: "claude-sonnet-4-6", effort: "high", price_in: 1, price_out: 1 },
-  ];
+  const sonnet46: ExecutionSettingTable = [cheapStandardRow("claude-sonnet-4-6")];
   const advisorWith = (advisorAboveMain: boolean) =>
     select(input({ entries: [{ provider: "anthropic", advisor: true }], agentTier: "standard", advisorAboveMain }), sonnet46).advisor;
   expect(advisorWith(false)).toBe("claude-sonnet-4-6");
@@ -222,8 +221,8 @@ it("旧形式の id(`claude-3-5-haiku-…`)は系列の prefix に合わず、�
 
 it("advisor を受けられない行しか無ければ、advisor つきの entry は候補が空で null(skipped の枝)", () => {
   const ineligible: ExecutionSettingTable = [
-    { provider: "anthropic", tier: "standard", model: "claude-sonnet-4-5", effort: "high", price_in: 1, price_out: 1 },
-    { provider: "anthropic", tier: "standard", model: "claude-haiku-4-5", effort: "high", price_in: 1, price_out: 1 },
+    cheapStandardRow("claude-sonnet-4-5"),
+    cheapStandardRow("claude-haiku-4-5"),
   ];
   expect(
     selectExecutionSetting(input({ entries: [{ provider: "anthropic", advisor: true }], agentTier: "standard", advisorAboveMain: false }), ineligible),
