@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -7,11 +8,12 @@ import { describe, expect, it } from "vitest";
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const LABELS = readFileSync(join(ROOT, "docs/agents/triage-labels.md"), "utf8");
 
-const run = (command: string) =>
-  spawnSync("node", [join(ROOT, "scripts/inject-triage-labels.mjs")], {
-    input: JSON.stringify({ tool_name: "Bash", tool_input: { command } }),
-    encoding: "utf8",
-  });
+const hook = (event: object) =>
+  spawnSync("node", [join(ROOT, "scripts/inject-triage-labels.mjs")], { input: JSON.stringify(event), encoding: "utf8" });
+const run = (command: string, session_id?: string) =>
+  hook({ hook_event_name: "PreToolUse", session_id, tool_name: "Bash", tool_input: { command } });
+const LABEL_COMMAND = "gh issue edit 1 --add-label x";
+const injected = (result: { stdout: string }): string => JSON.parse(result.stdout).hookSpecificOutput.additionalContext;
 
 describe("inject-triage-labels hook", () => {
   it.each([
@@ -38,4 +40,18 @@ describe("inject-triage-labels hook", () => {
       expect(result.stdout).toBe("");
     },
   );
+
+  it("同じ session の2回目以降は何も出さず、別の session には出す", () => {
+    const session = randomUUID();
+    expect(injected(run(LABEL_COMMAND, session))).toContain(LABELS);
+    expect(run(LABEL_COMMAND, session).stdout).toBe("");
+    expect(injected(run(LABEL_COMMAND, randomUUID()))).toContain(LABELS);
+  });
+
+  it("SessionStart(compact / clear)の後は同じ session にもう一度出す", () => {
+    const session = randomUUID();
+    run(LABEL_COMMAND, session);
+    expect(hook({ hook_event_name: "SessionStart", session_id: session, source: "compact" }).stdout).toBe("");
+    expect(injected(run(LABEL_COMMAND, session))).toContain(LABELS);
+  });
 });
