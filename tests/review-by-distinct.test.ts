@@ -35,7 +35,7 @@ it.each([
       decomposeTask(
         db,
         parent,
-        { reason: "split", children: [{ title: "c", ...BASE, review_by: ["fugu", "fugu"] }] },
+        { reason: "split", children: [{ title: "c", ...BASE, review_flag: true, review_by: ["fugu", "fugu"] }] },
         "agent-a",
         new Date(1),
         authority,

@@ -608,11 +608,10 @@ function EditTaskDialog({ taskCard, onSaved, onClose, say }: {
   const issueBacked = full.github_issue_number != null;
   const set = (k: keyof EditTaskFields, v: string | boolean | string[]) => setFields((f) => ({ ...f!, [k]: v }) as EditTaskFields);
   const withPlaceholder = (label: string, names: string[]) => [{ value: '', label }, ...names.map((n) => ({ value: n, label: n }))];
-  // 登録画面と同じ規則 —— 隠れていれば review_by を patch に入れず、サーバの値に触らない(issue #1468)
-  const showReviewBy = reviewByTakesEffect({
-    type: full.type, isRoot: full.parent_id == null, assignee: fields.assignee,
-    reviewFlag: fields.review_flag, riskFlag: fields.risk_flag,
-  });
+  // 欄はサーバーと同じ規則でフォーム上の値から出す(ADR 0209)
+  const ruleSubject = { ...fields, type: full.type, parent_id: full.parent_id };
+  const showReviewFlag = TidepoolRules.reviewFlagCarriesMeaning(ruleSubject);
+  const showReviewBy = TidepoolRules.completionReviewFires({ ...ruleSubject, review_flag: showReviewFlag && fields.review_flag });
   // only the fields that actually changed — an unchanged submission is a no-op
   // server-side, but sending a minimal patch keeps the intent clear
   const changed = () => {
@@ -625,10 +624,15 @@ function EditTaskDialog({ taskCard, onSaved, onClose, say }: {
     }
     if (fields.assignee !== (full.raw_assignee ?? '')) out.assignee = fields.assignee;
     if (fields.risk_flag !== !!full.risk_flag) out.risk_flag = fields.risk_flag;
-    if (fields.review_flag !== !!full.review_flag) out.review_flag = fields.review_flag;
+    // 人間の操作で欄が隠れたら、保存済みの値を消して送る —— 残すと変更後の状態で効かない値としてサーバーが拒否する(ADR 0111 追記8)
+    if (!showReviewFlag) {
+      if (full.review_flag) out.review_flag = false;
+    } else if (fields.review_flag !== !!full.review_flag) out.review_flag = fields.review_flag;
     // review_by は順序を持たない —— 集合として比べる。全員外すと [] で盤面 Auditor へ戻る
     const savedReviewBy = full.review_by ?? [];
-    if (showReviewBy && (fields.review_by.length !== savedReviewBy.length || fields.review_by.some((n) => !savedReviewBy.includes(n)))) {
+    if (!showReviewBy) {
+      if (savedReviewBy.length) out.review_by = [];
+    } else if (fields.review_by.length !== savedReviewBy.length || fields.review_by.some((n) => !savedReviewBy.includes(n))) {
       out.review_by = fields.review_by;
     }
     return out;
@@ -670,8 +674,7 @@ function EditTaskDialog({ taskCard, onSaved, onClose, say }: {
           )}
         </div>
         <Checkbox label="risk flag — this task has irreversible external effects" checked={fields.risk_flag} onChange={() => set('risk_flag', !fields.risk_flag)} />
-        {/* ルートは flag によらずレビューされ、review は終端 —— どちらも review_flag を拒否する(issue #1467 / ADR 0111) */}
-        {full.parent_id != null && full.type === 'work' && (
+        {showReviewFlag && (
           <Checkbox label="review flag — request an on-completion review" checked={fields.review_flag} onChange={() => set('review_flag', !fields.review_flag)} />
         )}
         {showReviewBy && <ReviewerPicker candidates={candidates} value={fields.review_by} onChange={(v) => set('review_by', v)} />}

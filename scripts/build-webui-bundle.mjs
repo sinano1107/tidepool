@@ -39,7 +39,20 @@ function readVendorFile(pkg, relPath) {
   return readFileSync(join(pkgDir, relPath));
 }
 
-const out = SOURCES.map(compile).join("\n");
+// サーバーの規則の leaf の入口だけは bundle して1つのグローバルにする(ADR 0209)。WebUI 自身のファイルは上の連結のまま。
+// absWorkingDir を固定するのは、esbuild が出力に書く `// src/...` の相対パスを実行場所によらず揃え、--check を安定させるため。
+// tsconfigRaw を空にするのは、ルートの strict から esbuild が先頭に "use strict" を出し、連結した app.js 全体を strict にするのを防ぐため。
+const [rules] = esbuild.buildSync({
+  entryPoints: ["src/webui-rules.ts"],
+  absWorkingDir: ROOT,
+  tsconfigRaw: {},
+  bundle: true,
+  format: "iife",
+  globalName: "TidepoolRules",
+  platform: "browser",
+  write: false,
+}).outputFiles;
+const out = [rules.text, ...SOURCES.map(compile)].join("\n");
 const outputs = new Map([
   ["public/app.js", Buffer.from(out)],
   ["public/vendor/react.js", readVendorFile("react", "umd/react.production.min.js")],

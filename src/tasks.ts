@@ -10,6 +10,7 @@ import type { GitHubClient, Issue, IssueRef } from "./github.js";
 import type { MemoryAmendment } from "./memory.js";
 import type { MergeDial, RosterAgent } from "./registry.js";
 import { assertKnownTier, liveTierId, PRIORITIES, type Priority, proposalTierNames, type Tier, type TierId } from "./tier.js";
+import { completionReviewFires, type ReviewSubject, whyNoCompletionReview, whyReviewFlagIsInert } from "./webui-rules.js";
 import { BOARD_WORKER_ID, HUMAN_WORKER_ID, NON_AGENT_WORKER_IDS } from "./worker-id.js";
 
 /** The one roster entry `human` gets (issue #43 / ADR 0014): human carries
@@ -647,29 +648,21 @@ export function contentSourceFor(
   return TaskContentSource.liveIssue(github, { path, number: task.github_issue_number });
 }
 
-/** review_flag that would never fire is refused (ADR 0111): completion review is raised
- *  by a work task's completion only, so review / question carry none (issue #1501), and a
- *  root is reviewed on completion whatever its flag (issue #1467). */
-function assertReviewFlagFires(
-  task: { type: TaskType; parent_id?: string | null },
-  reviewFlag: boolean | undefined,
+/** A review field that would do nothing in the task's post-change state is refused (ADR 0111 追記8): the
+ *  verdict is webui-rules', the same rule completion and the WebUI's fields read. `reviewTier` is checked at
+ *  registration only (Edit cannot change it, #1552); a review task's own review_tier is the tier it runs at
+ *  (execution-setting.ts reads it only for type review), not a completion-review request. */
+function assertReviewFieldsTakeEffect(
+  state: ReviewSubject,
+  reviewBy: string[] | null | undefined,
+  reviewTier?: string,
 ): void {
-  if (!reviewFlag) return;
-  if (task.type !== "work") {
-    throw new DomainError("only a work task can carry review_flag — completion review fires for work tasks only");
-  }
-  if (!task.parent_id) {
-    throw new DomainError(
-      "a root task cannot carry review_flag — every root is already reviewed on completion",
-    );
-  }
-}
-
-/** review_by names completion reviewers, and only a work task's completion raises them (ADR 0111 decision 1: refuse a value that would never fire). */
-function assertReviewByFires(task: { type: TaskType }, reviewBy: string[] | undefined): void {
-  if (reviewBy?.length && task.type !== "work") {
-    throw new DomainError("only a work task can carry review_by — completion review fires for work tasks only");
-  }
+  const refuse = (field: string, reason: string | undefined): void => {
+    if (reason) throw new DomainError(`${field} would have no effect — ${reason}`);
+  };
+  if (state.review_flag) refuse("review_flag", whyReviewFlagIsInert(state));
+  if (reviewBy?.length) refuse("review_by", whyNoCompletionReview(state));
+  if (reviewTier !== undefined && state.type !== "review") refuse("review_tier", whyNoCompletionReview(state));
 }
 
 /** review_by is a set of names: naming the same reviewer twice is refused, not silently folded (CONTEXT.md "Review", #1512). */
@@ -691,8 +684,7 @@ export function registerTask(
   assertQuestionSpec(input);
   assertGithubRef(input);
   assertExecutionRequest(db, input);
-  assertReviewFlagFires(input, input.review_flag);
-  assertReviewByFires(input, input.review_by);
+  assertReviewFieldsTakeEffect(input, input.review_by, input.review_tier);
   assertReviewByDistinct(input.review_by);
   // assertGithubRef above guarantees workspace whenever the ref is present
   if (input.github_issue_number !== undefined && input.workspace) {
@@ -937,11 +929,7 @@ export function completeTask(
       },
       at: now,
     });
-    if (
-      task.type === "work" &&
-      task.assignee !== HUMAN_WORKER_ID &&
-      (task.parent_id === null || task.review_flag || task.risk_flag)
-    ) {
+    if (completionReviewFires(task)) {
       for (const assignee of task.review_by?.length ? task.review_by : [undefined]) {
         registerTask(
           db,
@@ -1980,6 +1968,7 @@ export function decomposeTask(
   // *question*, not the spec it carries).
   for (const child of input.children) {
     assertExecutionRequest(db, child);
+    assertReviewFieldsTakeEffect({ type: "work", parent_id: parent.id, ...child }, child.review_by, child.review_tier);
     assertReviewByDistinct(child.review_by);
   }
   if (input.reason.length === 0) {
@@ -2278,8 +2267,16 @@ export function editTask(
   origin: EventOrigin,
 ): Task {
   assertHumanEditableScope(db, task);
-  assertReviewFlagFires(task, input.review_flag);
-  assertReviewByFires(task, input.review_by);
+  assertReviewFieldsTakeEffect(
+    {
+      type: task.type,
+      parent_id: task.parent_id,
+      assignee: input.assignee === undefined ? task.assignee : input.assignee,
+      review_flag: input.review_flag ?? task.review_flag,
+      risk_flag: input.risk_flag ?? task.risk_flag,
+    },
+    input.review_by ?? task.review_by,
+  );
   assertReviewByDistinct(input.review_by);
   if (
     input.title === "" ||
