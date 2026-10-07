@@ -2,9 +2,9 @@ import { describe, expect, it } from "vitest";
 import { agentNeedsHuman } from "../src/agent.js";
 import { openDb } from "../src/db.js";
 import { DomainError } from "../src/domain-error.js";
-import { answerQuestion, registerTask } from "../src/tasks.js";
+import { registerTask } from "../src/tasks.js";
 import { BOARD_WORKER_ID } from "../src/worker-id.js";
-import { HUMAN_WEBUI, quarantineQuestion } from "./harness.js";
+import { answerQuestionViaWebui, HUMAN_WEBUI, quarantineQuestion } from "./harness.js";
 
 describe("agent の quarantine(ADR 0012 / issue #36: workspace 版の agent 名一般化)", () => {
   it("agent の quarantine 付きの question は1択(workspace 版と同じ緩和)で登録できる", () => {
@@ -73,7 +73,7 @@ describe("agent の quarantine(ADR 0012 / issue #36: workspace 版の agent 名�
       "webui",
     );
 
-    const answered = answerQuestion(db, question, ["repaired by hand"], new Date(1), undefined, undefined, undefined, "webui");
+    const answered = answerQuestionViaWebui(db, question, ["repaired by hand"], new Date(1));
 
     expect(answered.status).toBe("done");
     expect(agentNeedsHuman(db, "navigator")).toBe(false);

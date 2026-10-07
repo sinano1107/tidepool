@@ -96,6 +96,43 @@ export const TEST_CREDENTIAL = { tokenHash: () => hashToken(TEST_TOKEN) };
 /** 既定値を外した登録者・経路(#1361)を、今までの既定どおり human / webui で渡す。 */
 export const HUMAN_WEBUI = [HUMAN_WORKER_ID, "webui"] as const;
 
+/** 位置引数の `undefined` の列を呼び手から隠す(#1505 / #1519)。domain の signature は渡し忘れを型で止めるために
+ *  `T | undefined` の位置引数のまま残し(ADR 0194 決定2)、テストの呼び出しだけがここを通る。origin を確かめるテストは
+ *  domain を直接呼ぶ。 */
+
+/** 人間が webui から答える。`stageUnblock` は渡さない(triage session の前挿しを持たない)。 */
+export function answerQuestionViaWebui(
+  db: Db,
+  question: Task,
+  answers: string[],
+  now: Date,
+  { comment, amendment }: { comment?: string; amendment?: Parameters<typeof answerQuestion>[6] } = {},
+): Task {
+  return answerQuestion(db, question, answers, now, undefined, comment, amendment, "webui");
+}
+
+/** worker として分解する。保護 workspace は無い。 */
+export function decomposeTaskAsWorker(
+  db: Db,
+  parent: Task,
+  input: Parameters<typeof decomposeTask>[2],
+  workerId: string,
+  now: Date,
+  { authority }: { authority?: Parameters<typeof decomposeTask>[5] } = {},
+): Task[] {
+  return decomposeTask(db, parent, input, workerId, now, authority, undefined, "worker");
+}
+
+/** 人間が webui から分解する。保護 workspace は無い。 */
+export function humanDecomposeTaskViaWebui(
+  db: Db,
+  parent: Task,
+  input: Parameters<typeof humanDecomposeTask>[2],
+  now: Date,
+): Task[] {
+  return humanDecomposeTask(db, parent, input, now, undefined, "webui");
+}
+
 export interface Tidepool {
   baseUrl: string;
   /** `/mcp`'s own base URL (issue #37) — separate from `baseUrl` now that
@@ -764,7 +801,7 @@ export function failureQuestion(db: Db, parentId: string, at: Date): Task {
 /** 人間 decompose の子を1本、扉を通さずに置く(扉の登録は pickup の契機 —— ADR 0119 決定2 ——
  *  なので、子が todo のまま待つことを前提にするテストのための形。`queueWork` と同じ)。 */
 export function queueChild(t: Tidepool, title: string, parentId: string): Task {
-  const [child] = humanDecomposeTask(
+  const [child] = humanDecomposeTaskViaWebui(
     t.db,
     getTask(t.db, parentId)!,
     {
@@ -772,8 +809,6 @@ export function queueChild(t: Tidepool, title: string, parentId: string): Task {
       children: [{ title, purpose: `purpose of ${title}`, completion_criteria: `criteria of ${title}` }],
     },
     t.clock.now(),
-    undefined,
-    "webui",
   );
   return child!;
 }

@@ -1,8 +1,8 @@
 import { expect, it } from "vitest";
 import { openDb } from "../src/db.js";
 import { DomainError } from "../src/domain-error.js";
-import { decomposeTask, getTask, listChildren, registerTask } from "../src/tasks.js";
-import { HUMAN_WEBUI } from "./harness.js";
+import { getTask, listChildren, registerTask } from "../src/tasks.js";
+import { decomposeTaskAsWorker, HUMAN_WEBUI } from "./harness.js";
 
 /** ADR 0107 決定1 のドメイン層 —— 要求2列の受理と拒否を **registerTask /
  *  decomposeTask の戻り値と例外**で言う。入口(JSON API / 管理MCP / worker MCP)は
@@ -78,7 +78,7 @@ it("優先順位の不正値も登録を拒否する — 保存するだけの�
 it("decompose の子も要求2列を受け、不正値は decompose 全体を拒否する(承認 question へ化ける前に倒す)", () => {
   const db = openDb(":memory:");
   const parent = registerTask(db, { type: "work", title: "p", purpose: "p", completion_criteria: "c" }, new Date(0), ...HUMAN_WEBUI);
-  const [child] = decomposeTask(
+  const [child] = decomposeTaskAsWorker(
     db,
     parent,
     {
@@ -89,16 +89,13 @@ it("decompose の子も要求2列を受け、不正値は decompose 全体を拒
     },
     "agent-a",
     new Date(1),
-    undefined,
-    undefined,
-    "worker",
   );
   expect(child).toMatchObject({ tier: "frontier", priority: "quality" });
 
   // 承認 question へ化ける子(assignee が authority の外)でも、不正値は
   // registerTask まで届かせない —— 届けば人間が承認した瞬間に初めて倒れる
   expect(() =>
-    decomposeTask(
+    decomposeTaskAsWorker(
       db,
       parent,
       {
@@ -109,9 +106,7 @@ it("decompose の子も要求2列を受け、不正値は decompose 全体を拒
       },
       "agent-a",
       new Date(2),
-      { assignable_to: [] },
-      undefined,
-      "worker",
+      { authority: { assignable_to: [] } },
     ),
   ).toThrow(DomainError);
 });
@@ -119,7 +114,7 @@ it("decompose の子も要求2列を受け、不正値は decompose 全体を拒
 it("承認 question に化けた子は要求2列を失わない —— 承認で materialize された子がその値で走る", () => {
   const db = openDb(":memory:");
   const parent = registerTask(db, { type: "work", title: "p", purpose: "p", completion_criteria: "c" }, new Date(0), ...HUMAN_WEBUI);
-  decomposeTask(
+  decomposeTaskAsWorker(
     db,
     parent,
     {
@@ -130,9 +125,7 @@ it("承認 question に化けた子は要求2列を失わない —— 承認で
     },
     "agent-a",
     new Date(1),
-    { assignable_to: [] },
-    undefined,
-    "worker",
+    { authority: { assignable_to: [] } },
   );
   const question = listChildren(db, parent.id).find((child) => child.type === "question");
   expect(question?.question_pending_child).toMatchObject({

@@ -1,7 +1,6 @@
 import { expect, it } from "vitest";
 import { openDb } from "../src/db.js";
 import {
-  answerQuestion,
   completeTask,
   listBoard,
   listQueue,
@@ -9,7 +8,7 @@ import {
   presentTask,
   registerTask,
 } from "../src/tasks.js";
-import { HUMAN_WEBUI } from "./harness.js";
+import { answerQuestionViaWebui, HUMAN_WEBUI } from "./harness.js";
 
 const HANDOFF = {
   outcome: "done",
@@ -123,7 +122,7 @@ it("answering a question returns the parent to the queue head when only attached
   );
   expect(presentTask(db, parent).status).toBe("blocked");
 
-  answerQuestion(db, question, ["left"], new Date(4), undefined, undefined, undefined, "webui");
+  answerQuestionViaWebui(db, question, ["left"], new Date(4));
 
   expect(listQueue(db).find((task) => task.status === "todo")?.id).toBe(parent.id);
   expect(listQueue(db).findIndex((task) => task.id === parent.id)).toBeLessThan(
@@ -164,7 +163,7 @@ it("answering a proposal question does not return its parent to the queue head(i
   // 提案 question は付帯子(ADR 0049 / ADR 0120 決定3)なので親を塞がない — answerQuestion がそれでも動かさないことを見るには、親が他の条件では unblock 対象になる状態が要る
   expect(presentTask(db, parent).status).toBe("todo");
 
-  answerQuestion(db, question, ["approve"], new Date(3), undefined, undefined, undefined, "webui");
+  answerQuestionViaWebui(db, question, ["approve"], new Date(3));
 
   expect(listQueue(db).findIndex((task) => task.id === parent.id)).toBeGreaterThan(
     listQueue(db).findIndex((task) => task.id === other.id),

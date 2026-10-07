@@ -2,8 +2,8 @@ import { describe, expect, it } from "vitest";
 import { openDb } from "../src/db.js";
 import { appendEvent } from "../src/events.js";
 import { buildMorningDigest, recordDigestSent } from "../src/push.js";
-import { answerQuestion, registerTask } from "../src/tasks.js";
-import { HUMAN_WEBUI } from "./harness.js";
+import { registerTask } from "../src/tasks.js";
+import { answerQuestionViaWebui, HUMAN_WEBUI } from "./harness.js";
 
 function registerQuestion(db: ReturnType<typeof openDb>, title: string) {
   return registerTask(
@@ -92,7 +92,7 @@ describe("buildMorningDigest(issue #14 / #116): quiet hours 中に溜まった�
     const db = openDb(":memory:");
     const answered = registerQuestion(db, "回答済み");
     registerQuestion(db, "未回答");
-    answerQuestion(db, answered, ["yes"], new Date(0), undefined, undefined, undefined, "webui");
+    answerQuestionViaWebui(db, answered, ["yes"], new Date(0));
 
     expect(buildMorningDigest(db).questionCount).toBe(1);
   });

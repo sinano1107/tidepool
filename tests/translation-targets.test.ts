@@ -6,7 +6,6 @@ import { recordKnowledge } from "../src/memory.js";
 import {
   completeTask,
   declarePremiseBreach,
-  decomposeTask,
   logDecision,
   registerTask,
   splitHandoffMarkdown,
@@ -19,7 +18,7 @@ import {
   translateQuestion,
 } from "../src/translation.js";
 import { FakeTranslationClient } from "./fakes.js";
-import { HUMAN_WEBUI } from "./harness.js";
+import { decomposeTaskAsWorker, HUMAN_WEBUI } from "./harness.js";
 import { tempDir } from "./temp-dir.js";
 
 let db: Db | undefined;
@@ -98,7 +97,7 @@ it("task_completed イベントの result を解決して翻訳する", async ()
 it("premise_breached イベントの宣言の理由を解決して翻訳する", async () => {
   const db = await freshDb();
   const parent = registerTask(db, { type: "work", title: "t", purpose: "p", completion_criteria: "c" }, NOW, ...HUMAN_WEBUI);
-  const [child] = decomposeTask(db, parent, { reason: "split", children: [{ title: "a", purpose: "p", completion_criteria: "c" }] }, "tako", NOW, undefined, undefined, "worker");
+  const [child] = decomposeTaskAsWorker(db, parent, { reason: "split", children: [{ title: "a", purpose: "p", completion_criteria: "c" }] }, "tako", NOW);
   declarePremiseBreach(db, child!, "module M is broken", "tako", NOW, "worker");
   const event = listEvents(db, child!.id).find((entry) => entry.kind === "premise_breached");
 

@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { openDb } from "../src/db.js";
 import { pollNotifications, savePushSubscription } from "../src/push.js";
-import { answerQuestion, registerTask } from "../src/tasks.js";
+import { registerTask } from "../src/tasks.js";
 import { FakePushClient } from "./fakes.js";
+import { answerQuestionViaWebui } from "./harness.js";
 
 // issue #116: a human-assignee task registered without a human operation (an
 // agent's decompose registering it directly) is a notification target of equal
@@ -108,7 +109,7 @@ describe("pollNotifications(issue #116): agent 登録の human タスクを ques
       "planner",
       "webui",
     );
-    answerQuestion(db, question, ["approve"], at, undefined, undefined, undefined, "webui");
+    answerQuestionViaWebui(db, question, ["approve"], at);
 
     const push = new FakePushClient();
     await pollNotifications({ db, push }, at);

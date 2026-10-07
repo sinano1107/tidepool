@@ -3,9 +3,9 @@ import { openDb } from "../src/db.js";
 import { DomainError } from "../src/domain-error.js";
 import { listEvents } from "../src/events.js";
 import { submitAnswer } from "../src/human-verbs.js";
-import { answerQuestion, getTask, type RegisterTaskInput, registerTask } from "../src/tasks.js";
+import { getTask, type RegisterTaskInput, registerTask } from "../src/tasks.js";
 import { unusedLanding } from "./fakes.js";
-import { api, bootTidepool, HOUR, HUMAN_WEBUI, mcpClient, registerWork, type Tidepool } from "./harness.js";
+import { answerQuestionViaWebui, api, bootTidepool, HOUR, HUMAN_WEBUI, mcpClient, registerWork, type Tidepool } from "./harness.js";
 
 let t: Tidepool;
 afterEach(() => t?.stop());
@@ -171,9 +171,9 @@ it.each([
   ["approval", "reject"],
 ] as const)("%s の question への %s は comment が空・空白だけなら domain error で断り、comment があれば通る(ADR 0179 決定1・2・4)", (kind, answer) => {
   const { db, question } = domainQuestion(kind);
-  for (const comment of [undefined, "", " \n "]) expect(() => answerQuestion(db, question, [answer], at, undefined, comment, undefined, "webui")).toThrow(DomainError);
+  for (const comment of [undefined, "", " \n "]) expect(() => answerQuestionViaWebui(db, question, [answer], at, { comment: comment })).toThrow(DomainError);
   expect(getTask(db, question.id)).toMatchObject({ status: "todo", question_answer: null });
-  expect(answerQuestion(db, question, [answer], at, undefined, "why", undefined, "webui").status).toBe("done");
+  expect(answerQuestionViaWebui(db, question, [answer], at, { comment: "why" }).status).toBe("done");
 });
 
 it.each([
@@ -187,7 +187,7 @@ it.each([
   ["promotion", "abandon promotion"],
 ] as const)("%s の question への %s は comment なしで通る(ADR 0179 決定3)", (kind, answer) => {
   const { db, question } = domainQuestion(kind);
-  expect(answerQuestion(db, question, [answer], at, undefined, undefined, undefined, "webui").status).toBe("done");
+  expect(answerQuestionViaWebui(db, question, [answer], at).status).toBe("done");
 });
 
 // 空・空白の comment を畳むのは submitAnswer —— HTTP と管理 MCP の両方の扉が通る application seam(門が answerQuestion にあるのとは別の層)。

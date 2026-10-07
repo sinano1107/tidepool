@@ -3,12 +3,13 @@ import { afterEach, expect, it } from "vitest";
 import { quarantineCliAuthForProvider } from "../src/cli-auth.js";
 import { type Db, openDb } from "../src/db.js";
 import { registerQuarantine } from "../src/quarantine.js";
-import { answerQuestion, getTask, listBoard } from "../src/tasks.js";
+import { getTask, listBoard } from "../src/tasks.js";
 import {
   blockedProviderUsageResources,
   isAnthropicBoardCallBlocked,
   reportProviderUsage,
 } from "../src/throttle.js";
+import { answerQuestionViaWebui } from "./harness.js";
 import { tempDir } from "./temp-dir.js";
 
 let db: Db | undefined;
@@ -268,7 +269,7 @@ it("isAnthropicBoardCallBlocked: question が決着して Quarantine が閉じ�
   quarantineCliAuthForProvider(db, "anthropic", NOW);
   const question = getTask(db, listBoard(db).find((task) => task.type === "question")!.id)!;
 
-  answerQuestion(db, question, ["authentication restored"], NOW, undefined, undefined, undefined, "webui");
+  answerQuestionViaWebui(db, question, ["authentication restored"], NOW);
 
   expect(isAnthropicBoardCallBlocked(db)).toBe(false);
 });

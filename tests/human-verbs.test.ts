@@ -14,9 +14,7 @@ import {
 import { registerPrPromotionFailureQuestion } from "../src/landing.js";
 import {
   cancelTaskDirectly,
-  decomposeTask,
   getTask,
-  humanDecomposeTask,
   listBoard,
   presentTask,
   registerMergeQuestion,
@@ -27,7 +25,7 @@ import { commitTriage, startTriage } from "../src/triage.js";
 import { HUMAN_WORKER_ID } from "../src/worker-id.js";
 import { quarantineWorkspace, UnknownWorkspaceError } from "../src/workspace.js";
 import { FakeDraftClient, FakeGitHubClient, unusedLanding } from "./fakes.js";
-import { HUMAN_WEBUI } from "./harness.js";
+import { decomposeTaskAsWorker, HUMAN_WEBUI, humanDecomposeTaskViaWebui } from "./harness.js";
 
 const NOW = new Date("2026-08-06T00:00:00.000Z");
 
@@ -818,7 +816,7 @@ it.each([
 ])("承認 question への回答($answer)で held が外れた兄弟は todo に戻り、親が blocked のままでも即時 poll が撃たれる", async ({ answer, comment }) => {
   db = openDb(":memory:");
   const parent = registerTask(db, { type: "work", title: "parent", purpose: "p", completion_criteria: "c" }, NOW, ...HUMAN_WEBUI);
-  const [sibling] = decomposeTask(
+  const [sibling] = decomposeTaskAsWorker(
     db,
     parent,
     {
@@ -830,9 +828,6 @@ it.each([
     },
     "tako",
     NOW,
-    undefined,
-    undefined,
-    "worker",
   );
   const before = presentTask(db, sibling!).status;
   let polls = 0;
@@ -929,13 +924,13 @@ it.each<[string, (db: Db) => Task]>([
     "未完の兄弟が残る子",
     (db) => {
       const parent = registerTask(db, { type: "work", title: "parent", purpose: "p", completion_criteria: "c" }, NOW, ...HUMAN_WEBUI);
-      const [child] = humanDecomposeTask(db, parent, {
+      const [child] = humanDecomposeTaskViaWebui(db, parent, {
         reason: "split",
         children: [
           { title: "a", purpose: "p", completion_criteria: "c" },
           { title: "b", purpose: "p", completion_criteria: "c" },
         ],
-      }, NOW, undefined, "webui");
+      }, NOW);
       return child!;
     },
   ],

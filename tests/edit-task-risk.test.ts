@@ -1,6 +1,6 @@
 import { afterEach, expect, it } from "vitest";
-import { getTask, humanDecomposeTask, registerTask, type Task } from "../src/tasks.js";
-import { api, bootTidepool, HUMAN_WEBUI, type Tidepool } from "./harness.js";
+import { getTask, registerTask, type Task } from "../src/tasks.js";
+import { api, bootTidepool, HUMAN_WEBUI, humanDecomposeTaskViaWebui, type Tidepool } from "./harness.js";
 
 let t: Tidepool;
 afterEach(() => t?.stop());
@@ -16,13 +16,11 @@ function registerRoot(t: Tidepool, title: string, riskFlag: boolean): Task {
 }
 
 function addChild(t: Tidepool, parentId: string, title: string, riskFlag: boolean): Task {
-  const [child] = humanDecomposeTask(
+  const [child] = humanDecomposeTaskViaWebui(
     t.db,
     getTask(t.db, parentId)!,
     { reason: `split ${title}`, children: [{ title, purpose: "p", completion_criteria: "c", risk_flag: riskFlag }] },
     t.clock.now(),
-    undefined,
-    "webui",
   );
   return child!;
 }

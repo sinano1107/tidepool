@@ -15,9 +15,9 @@ import {
   rejectMemoryProposal,
 } from "../src/memory.js";
 import { type MetaReviewSubject, registerDueMetaReviews, registerMetaReview } from "../src/meta-review.js";
-import { answerQuestion, getTask, listBoard, logDecision, registerTask } from "../src/tasks.js";
+import { getTask, listBoard, logDecision, registerTask } from "../src/tasks.js";
 import { HUMAN_WORKER_ID } from "../src/worker-id.js";
-import { failureQuestion, HUMAN_WEBUI } from "./harness.js";
+import { answerQuestionViaWebui, failureQuestion, HUMAN_WEBUI } from "./harness.js";
 
 /** 周期の due 判定(ADR 0120 決定2・ADR 0151)のドメイン層: 同じ主題の meta-review 自身の産物は材料に数えない。 */
 const at = new Date("2026-09-24T00:00:00.000Z");
@@ -118,7 +118,7 @@ it("人間の memory の直接の無効化は材料で、周期が過ぎれば�
 function abandonLatest(db: Db, now: Date) {
   const review = listEventsOfKinds(db, ["meta_review_registered"]).at(-1)!.task_id!;
   const question = failureQuestion(db, review, now);
-  answerQuestion(db, question, ["abandon"], now, undefined, undefined, undefined, "webui");
+  answerQuestionViaWebui(db, question, ["abandon"], now);
   expect(getTask(db, review)?.status).toBe("cancelled");
 }
 

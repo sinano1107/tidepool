@@ -1,7 +1,7 @@
 import { expect, it } from "vitest";
 import { openDb } from "../src/db.js";
-import { answerQuestion, approvalAnnotation, getTask, needsComment, type RegisterTaskInput, registerTask } from "../src/tasks.js";
-import { HUMAN_WEBUI } from "./harness.js";
+import { approvalAnnotation, getTask, needsComment, type RegisterTaskInput, registerTask } from "../src/tasks.js";
+import { answerQuestionViaWebui, HUMAN_WEBUI } from "./harness.js";
 
 // question の注釈 approval / needs_comment の規則(issue #757・ADR 0179 決定4)を domain 層で1度だけ述べる。
 // サーバ境界(tests/approval-annotation.test.ts)は口が同じ注釈を写すことだけを見る(ADR 0107)。
@@ -50,7 +50,7 @@ it("親が既に risk ありなら親の risk は上がらないと注釈する 
   expect(approvalAnnotation(db, first)).toEqual({ raises_parent_risk: true });
 
   // 1つ目の approve が親の risk を実際に上げる
-  answerQuestion(db, first, ["approve"], at, undefined, undefined, undefined, "webui");
+  answerQuestionViaWebui(db, first, ["approve"], at);
   expect(getTask(db, parent.id)!.risk_flag).toBeTruthy();
 
   expect(approvalAnnotation(db, second)).toEqual({ raises_parent_risk: false });
