@@ -168,7 +168,7 @@ it("初回の Board call の失敗は帰責を書かず round initial の失敗 
 /** 行の拒否(ADR 0202): 判定の段の最安の行(fable)が Board call で断られた証拠。 */
 const refused = (model = "claude-fable-5-1") => new RowRefusalError("anthropic", model, "api_404");
 
-/** 盤面の行の Quarantine の question —— 題と、理由(purpose の最初の文)。 */
+/** 盤面の行の Quarantine の question —— 題と、理由(purpose の ", so" より前)。 */
 const rowQuarantines = async (t: Tidepool) =>
   (await questions(t)).filter((q: any) => q.title.startsWith("execution-setting row")).map((q: any) => [q.title, q.purpose.split(". ")[0]]);
 
@@ -191,9 +191,9 @@ it("初回の帰責が行の拒否で断られると、並列の entry がそろ
   expect((await children(t, task.id)).map((x: any) => x.title).sort()).toEqual(["rca (auditor): refused", "rca (self): refused", "repair: refused"]);
 });
 
-/** Provider 認証の Quarantine の question —— 題と、理由(purpose の最初の文)。 */
+/** Provider 認証の Quarantine の question —— 題と、理由(purpose の ", so" より前)。 */
 const providerAuthQuarantines = async (t: Tidepool) =>
-  (await questions(t)).filter((q: any) => q.title.startsWith("anthropic authentication")).map((q: any) => [q.title, q.purpose.split(". ")[0]]);
+  (await questions(t)).filter((q: any) => q.title.startsWith("anthropic authentication")).map((q: any) => [q.title, q.purpose.split(", so ")[0]]);
 
 const PROVIDER_AUTH_TITLE = "anthropic authentication is unavailable — pickup of anthropic-speaking agents is stopped";
 

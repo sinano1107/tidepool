@@ -256,7 +256,7 @@ it("401 で終わると Provider 認証の Quarantine が立ち、失敗 event �
   await completeReview(t, review.id);
   await nextPoll(t);
 
-  expect((await questions(t)).filter((q: any) => q.title.startsWith("anthropic authentication")).map((q: any) => [q.title, q.purpose.split(". ")[0]])).toEqual([
+  expect((await questions(t)).filter((q: any) => q.title.startsWith("anthropic authentication")).map((q: any) => [q.title, q.purpose.split(", so ")[0]])).toEqual([
     [
       "anthropic authentication is unavailable — pickup of anthropic-speaking agents is stopped",
       `The allocation review Board call for task ${task.id} ended with an authentication failure`,

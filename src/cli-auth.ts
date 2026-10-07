@@ -165,7 +165,12 @@ export function quarantineCliAuthFailure(
 /** ADR 0098: the machine classification of a 401 routes by the spawn/call-time
  * Provider fact, never by parsing prose from an error. Every Provider is a
  * resource-scoped quarantine; unrelated Provider workers continue. */
-export function quarantineCliAuthForProvider(db: Db, provider: Provider, now: Date, reason = "authentication failure"): void {
+export function quarantineCliAuthForProvider(
+  db: Db,
+  provider: Provider,
+  now: Date,
+  reason = `A worker session or Board call returned an authentication failure while speaking the ${provider} provider`,
+): void {
   registerQuarantine(db, "providerAuth", provider, reason, now);
 }
 

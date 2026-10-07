@@ -143,7 +143,7 @@ export const QUARANTINES = [
     prose: (provider: string | null, reason: string): QuarantineProse => ({
       title: `${provider} authentication is unavailable — pickup of ${provider}-speaking agents is stopped`,
       purpose:
-        `${reason}. The ${provider} provider rejected the credential, so the board has stopped pickup of the agents declared with ` +
+        `${reason}, so the board has stopped pickup of the agents declared with ` +
         `\`provider: ${provider}\`. Workers and board calls on other providers are unaffected. ` +
         "Restore the credential:\n\n" +
         `1. ${PROVIDER_AUTH_REPAIR_GUIDANCE[provider as Provider]}\n` +
