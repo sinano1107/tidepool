@@ -253,14 +253,14 @@ it("task を持たない盤面イベント(execution_settings_changed)が混ざ�
 /** 学習器を昇格させる —— approve の適用と同じ書き口(扉は true を断るので、盤面の内側から書く)。 */
 const promote = () => applyExecutionSettingsChange(t.db, { setting: "learner_promoted", value: true }, "webui", t.clock.now());
 
-it("学習器の降格は settings タブと管理MCP の扉から直接できるが、昇格は両方の扉で ADR 0150 決定4 を理由に断られる", async () => {
+it("学習器の降格は settings タブと管理MCP の扉から直接できるが、昇格は両方の扉で断られる(ADR 0150 決定4)", async () => {
   t = await bootTidepool();
   promote();
   expect((await state()).learnerPromoted).toBe(true);
 
   const refused = await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "learner_promoted", value: true });
   expect(refused.status).toBe(400);
-  expect(JSON.stringify(refused.json)).toContain("ADR 0150 decision 4");
+  expect(JSON.stringify(refused.json)).toContain("the learner is promoted only by approving");
   expect((await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "learner_promoted", value: false })).status).toBe(200);
   expect((await state()).learnerPromoted).toBe(false);
 
@@ -270,7 +270,7 @@ it("学習器の降格は settings タブと管理MCP の扉から直接でき�
     const change = (value: boolean) => client.callTool({ name: "change_execution_settings", arguments: { change: { setting: "learner_promoted", value } } }) as Promise<any>;
     const viaMcp = await change(true);
     expect(viaMcp.isError).toBe(true);
-    expect(viaMcp.content[0].text).toContain("ADR 0150 decision 4");
+    expect(viaMcp.content[0].text).toContain("the learner is promoted only by approving");
     expect((await change(false)).isError).not.toBe(true);
   } finally {
     await client.close();

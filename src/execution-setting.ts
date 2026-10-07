@@ -533,11 +533,12 @@ export const executionSettingsChangeSchema = z.discriminatedUnion("setting", [
   z.object({ setting: z.literal("delete_tier"), name: z.string().min(1) }),
   z.object({ setting: z.literal("default_tier"), value: z.string().min(1) }),
   z.object({ setting: z.literal("judgement_tier"), value: z.string().min(1) }),
-  // 扉は降格だけを受ける。昇格は承認の適用が schema を通さず書く
+  // 扉は降格だけを受ける。昇格は承認の適用が schema を通さず書く(ADR 0150 決定4)。
+  // 拒否文は agent に返るが、agent は ADR を辿れないので引用はここに置く(#1429)
   z.object({
     setting: z.literal("learner_promoted"),
     value: z.boolean().refine((value) => !value, {
-      message: "the learner is promoted only by approving a routing meta-review's proposal question (ADR 0150 decision 4); this door only demotes",
+      message: "the learner is promoted only by approving a routing meta-review's proposal question; this door only demotes",
     }),
   }),
 ]);

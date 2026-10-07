@@ -307,27 +307,31 @@ export function assertValidAgentDefinition(
   tiers: readonly Tier[],
 ): void {
   const { provider: entries, tier, skills = [], retiredFields = [] } = definition;
+  // 拒否文は agent に返るが、agent は ADR を辿れないので引用はここに置く(#1429)
   if (retiredFields.length > 0) {
+    // ADR 0110 決定1(実行設定は表へ)/ ADR 0116 決定2(advisor は entry の性質)
     throw new InvalidAgentDefinitionError(
       agentName,
-      `agent.md no longer carries the execution setting: ${retiredFields.join(" / ")} (ADR 0110 decision 1). ` +
+      `agent.md no longer carries the execution setting: ${retiredFields.join(" / ")}. ` +
         "model and effort are chosen at pickup from the board's provider × tier table, and advisor is a " +
-        "property of a provider entry whose model is derived from that same table (ADR 0116 decision 2) — " +
+        "property of a provider entry whose model is derived from that same table — " +
         `declare a tier (${tiers.join(" / ")}) and/or write the advisor on its entry, e.g. ` +
         "`provider: [{ name: anthropic, advisor: true }]`, instead",
     );
   }
+  // ADR 0116 決定1
   if (entries.length === 0) {
     throw new InvalidAgentDefinitionError(
       agentName,
       "no provider entry is left — a written empty list, or an omitted provider whose declaration no canonical " +
-        "route satisfies, leaves no route this agent could ever run on (ADR 0116 decision 1)",
+        "route satisfies, leaves no route this agent could ever run on",
     );
   }
+  // ADR 0110 決定1 / ADR 0200 決定2
   if (tier !== undefined && !tiers.includes(tier)) {
     throw new InvalidAgentDefinitionError(
       agentName,
-      `unknown tier "${tier}" (expected one of the board's tiers: ${tiers.join(" / ")}) — ADR 0110 decision 1 / ADR 0200 decision 2`,
+      `unknown tier "${tier}" (expected one of the board's tiers: ${tiers.join(" / ")})`,
     );
   }
   // entry 単位(ADR 0110 決定1): advisor も skill も**その経路**の性質なので、
