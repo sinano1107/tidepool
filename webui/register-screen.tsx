@@ -27,6 +27,7 @@ interface RegisterScreenIssueFields {
   github_issue_number: number;
   /** 要求ティア(盤面の段の名前)。issue 由来は常に work なので常に `tier` として送る。 */
   tier?: string;
+  review_tier?: string;
   /** 未指定は盤面の既定 agent(手入力の経路と同じ)。 */
   assignee?: string;
   risk_flag: boolean;
@@ -104,6 +105,7 @@ function RegisterScreen({ onRegister, parentTask, onClose }: RegisterScreenProps
   const [assignee, setAssignee] = React.useState('');
   const [workspace, setWorkspace] = React.useState('');
   const [tier, setTier] = React.useState('');
+  const [reviewTier, setReviewTier] = React.useState('');
   const [risk, setRisk] = React.useState(false);
   const [review, setReview] = React.useState(false);
   const [reviewBy, setReviewBy] = React.useState<string[]>([]);
@@ -195,6 +197,7 @@ function RegisterScreen({ onRegister, parentTask, onClose }: RegisterScreenProps
   const showReviewBy = TidepoolRules.completionReviewFires(ruleSubject);
   // 隠れた欄の値は送らない、誰も選んでいなければキーごと送らない
   const reviewByField = showReviewBy && reviewBy.length ? { review_by: reviewBy } : {};
+  const reviewTierField = showReviewBy && reviewTier ? { review_tier: reviewTier } : {};
   const fields = (): RegisterScreenFields =>
     issueMode
       ? {
@@ -202,6 +205,7 @@ function RegisterScreen({ onRegister, parentTask, onClose }: RegisterScreenProps
           risk_flag: risk,
           ...(assignee ? { assignee } : {}),
           ...(tier ? { tier } : {}),
+          ...reviewTierField,
           ...reviewByField,
         }
       : {
@@ -216,6 +220,7 @@ function RegisterScreen({ onRegister, parentTask, onClose }: RegisterScreenProps
           ...(assignee ? { assignee } : {}),
           ...(workspace.trim() ? { workspace: workspace.trim() } : {}),
           ...(tier ? (type === 'review' ? { review_tier: tier } : { tier }) : {}),
+          ...reviewTierField,
           ...reviewByField,
           ...childExtras(),
         };
@@ -225,7 +230,7 @@ function RegisterScreen({ onRegister, parentTask, onClose }: RegisterScreenProps
   const resetContent = () => {
     setDump(''); setDrafted(false); setPlainFormActive(false);
     setType('work'); setTitle(''); setPurpose(''); setCriteria('');
-    setAssignee(''); setWorkspace(''); setTier(''); setIssueNumber('');
+    setAssignee(''); setWorkspace(''); setTier(''); setReviewTier(''); setIssueNumber('');
     setRisk(false); setReview(false); setReviewBy([]);
     // backing out of a pending dump's content leaves the row itself alone —
     // it is unconsumed and stays listed, pickable again later
@@ -308,6 +313,7 @@ function RegisterScreen({ onRegister, parentTask, onClose }: RegisterScreenProps
   // both sources show these two the same way — one element each so the labels can't drift
   const assigneeSelect = <Select label="Assignee" options={assigneeOptions} value={assignee} onChange={(e) => setAssignee(e.target.value)} />;
   const reviewerPicker = showReviewBy && <ReviewerPicker candidates={candidates} value={reviewBy} onChange={setReviewBy} />;
+  const reviewTierSelect = showReviewBy && <Select label="Review tier" options={tierOptions(tiers, "(reviewer's tier, then board default)")} value={reviewTier} onChange={(e) => setReviewTier(e.target.value)} />;
   const riskCheckbox = <Checkbox label="risk flag — this task has irreversible external effects" checked={risk} onChange={() => setRisk(!risk)} />;
   // manual content's workspace is optional (unset → the board's default at
   // execution time); an issue reference's workspace is required — it fixes
@@ -368,6 +374,7 @@ function RegisterScreen({ onRegister, parentTask, onClose }: RegisterScreenProps
             // tier state is shared by both paths — reset it so an issue-path
             // tier never leaks into a manual review task as its review_tier
             setTier('');
+            setReviewTier('');
             // switching away from the pending-dump's own manual content: a
             // later registration (e.g. an unrelated issue reference) must not
             // consume a dump it was never built from
@@ -380,6 +387,7 @@ function RegisterScreen({ onRegister, parentTask, onClose }: RegisterScreenProps
             {assigneeSelect}
             <Select label="Tier" options={tierOptions(tiers, "(agent's tier, then board default)")} value={tier} onChange={(e) => setTier(e.target.value)} />
             {riskCheckbox}
+            {reviewTierSelect}
             {reviewerPicker}
             <Input label="Issue number" value={issueNumber} onChange={(e) => setIssueNumber(e.target.value)} placeholder="content stays on GitHub; the board keeps only this reference" />
             <div style={{ display: 'flex', flexDirection: 'column', gap: 4, maxHeight: 220, overflowY: 'auto' }}>
@@ -430,6 +438,7 @@ function RegisterScreen({ onRegister, parentTask, onClose }: RegisterScreenProps
             {showReviewFlag && (
               <Checkbox label="review flag — request an on-completion review" checked={review} onChange={() => setReview(!review)} />
             )}
+            {reviewTierSelect}
             {reviewerPicker}
           </React.Fragment>
         )}
