@@ -672,7 +672,7 @@ function assertReviewByFires(task: { type: TaskType }, reviewBy: string[] | unde
   }
 }
 
-/** review_by is a set of names: naming the same reviewer twice is refused, not silently folded (ADR 0111 decision 1, #1512). */
+/** review_by is a set of names: naming the same reviewer twice is refused, not silently folded (CONTEXT.md "Review", #1512). */
 function assertReviewByDistinct(reviewBy: string[] | undefined): void {
   const dup = reviewBy?.find((name, i) => reviewBy.indexOf(name) !== i);
   if (dup !== undefined) {
