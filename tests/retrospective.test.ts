@@ -1,6 +1,6 @@
 import { afterEach, expect, it } from "vitest";
 import type { Cause } from "../src/cause.js";
-import { RowRefusalError } from "../src/cli-auth.js";
+import { CliAuthError, RowRefusalError } from "../src/cli-auth.js";
 import { openDb } from "../src/db.js";
 import { appendEvent, listEvents } from "../src/events.js";
 import { buildMemoryInjection, readMemory, recordKnowledge, recordMemoryInjection, searchMemory } from "../src/memory.js";
@@ -168,7 +168,7 @@ it("初回の Board call の失敗は帰責を書かず round initial の失敗 
 /** 行の拒否(ADR 0202): 判定の段の最安の行(fable)が Board call で断られた証拠。 */
 const refused = (model = "claude-fable-5-1") => new RowRefusalError("anthropic", model, "api_404");
 
-/** 盤面の行の Quarantine の question —— 題と、理由(purpose の最初の文)。 */
+/** 盤面の行の Quarantine の question —— 題と、理由(purpose の ", so" より前)。 */
 const rowQuarantines = async (t: Tidepool) =>
   (await questions(t)).filter((q: any) => q.title.startsWith("execution-setting row")).map((q: any) => [q.title, q.purpose.split(". ")[0]]);
 
@@ -189,6 +189,34 @@ it("初回の帰責が行の拒否で断られると、並列の entry がそろ
   expect(await attributions(t, task.id)).toEqual([]);
   expect(await attributionsFailed(t, task.id)).toEqual([]);
   expect((await children(t, task.id)).map((x: any) => x.title).sort()).toEqual(["rca (auditor): refused", "rca (self): refused", "repair: refused"]);
+});
+
+/** Provider 認証の Quarantine の question —— 題と、理由(purpose の ", so" より前)。 */
+const providerAuthQuarantines = async (t: Tidepool) =>
+  (await questions(t)).filter((q: any) => q.title.startsWith("anthropic authentication")).map((q: any) => [q.title, q.purpose.split(", so ")[0]]);
+
+const PROVIDER_AUTH_TITLE = "anthropic authentication is unavailable — pickup of anthropic-speaking agents is stopped";
+
+it("初回の帰責が 401 で終わると、anthropic の Provider 認証の Quarantine が立ち、失敗 event は残らず、commit は RCA を立てる(ADR 0205)", async () => {
+  const attributionClient = new FakeAttributionClient();
+  t = await bootTidepool({ attributionClient });
+  const { task, entries } = await objectedWork(t, "unauthorized", ["named the flag --dry"]);
+  attributionClient.scriptJudgment(entries[0].id, new CliAuthError("Invalid API key"));
+  await object(t, entries[0].id, "call it --dry-run");
+
+  const res = await api(t.baseUrl, "POST", "/api/triage/close");
+
+  expect(res.json.outcome).toBe("closed_now");
+  expect(await providerAuthQuarantines(t)).toEqual([
+    [PROVIDER_AUTH_TITLE, `The attribution Board call for task ${task.id} ended with an authentication failure`],
+  ]);
+  expect(await attributions(t, task.id)).toEqual([]);
+  expect(await attributionsFailed(t, task.id)).toEqual([]);
+  expect((await children(t, task.id)).map((x: any) => x.title).sort()).toEqual([
+    "rca (auditor): unauthorized",
+    "rca (self): unauthorized",
+    "repair: unauthorized",
+  ]);
 });
 
 it("断られた行が表から消えていれば、行の Quarantine は立たず失敗 event も残らない(ADR 0202 決定2)", async () => {
@@ -821,6 +849,22 @@ it("第2回の帰責が行の拒否で断られると行の Quarantine が立ち
   expect(s.attributionClient.calls.map((c) => c.setting.model)).toEqual(["claude-fable-5-1", "claude-fable-5-1", "claude-opus-5-5"]);
 });
 
+it("第2回の帰責が 401 で終わると Provider 認証の Quarantine が立ち、失敗 event は残らない(ADR 0205)", async () => {
+  const s = await objectedForDraft("unauthorized-rca");
+  t = s.t;
+  const { self, auditor } = await commit(t, s.task.id, "unauthorized-rca");
+  s.attributionClient.scriptJudgment(s.entry.id, new CliAuthError("Invalid API key"));
+
+  await settleRcaByWorker(t, self.id);
+  await settleRcaByWorker(t, auditor.id);
+
+  expect(await providerAuthQuarantines(t)).toEqual([
+    [PROVIDER_AUTH_TITLE, `The attribution Board call for task ${s.task.id} ended with an authentication failure`],
+  ]);
+  expect((await attributions(t, s.task.id)).map((e: any) => e.payload.round)).toEqual(["initial"]);
+  expect(await attributionsFailed(t, s.task.id)).toEqual([]);
+});
+
 it("起草が行の拒否で断られると行の Quarantine が立ち、memory_draft_failed は残らない(ADR 0202)", async () => {
   const s = await objectedForDraft("refused draft", { initial: { cause: "preference", evidence: "taste" } });
   t = s.t;
@@ -830,6 +874,19 @@ it("起草が行の拒否で断られると行の Quarantine が立ち、memory_
 
   expect(await rowQuarantines(t)).toEqual([
     ["execution-setting row anthropic / claude-fable-5-1 cannot run on this board", `The memory draft Board call for task ${s.task.id} ended with API error 404 for this model id`],
+  ]);
+  expect(await draftsFailed(t, s.task.id)).toEqual([]);
+});
+
+it("起草が 401 で終わると Provider 認証の Quarantine が立ち、memory_draft_failed は残らない(ADR 0205)", async () => {
+  const s = await objectedForDraft("unauthorized draft", { initial: { cause: "preference", evidence: "taste" } });
+  t = s.t;
+  s.behaviorDraftClient.scriptDraft(s.entry.id, new CliAuthError("Invalid API key"));
+
+  await commit(t, s.task.id, "unauthorized draft");
+
+  expect(await providerAuthQuarantines(t)).toEqual([
+    [PROVIDER_AUTH_TITLE, `The memory draft Board call for task ${s.task.id} ended with an authentication failure`],
   ]);
   expect(await draftsFailed(t, s.task.id)).toEqual([]);
 });

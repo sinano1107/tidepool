@@ -108,11 +108,14 @@ export function quarantineRefusedRow(db: Db, refusal: RefusedRow, subject: strin
 
 export type BoardCallUse = "attribution" | "allocation review" | "memory draft" | "task draft" | "handoff draft" | "issue inspection";
 
-/** 表の行で撃つ Board call が断られたら行の Quarantine を立て、true を返す(ADR 0202 決定2・5)。true のとき呼び手は
- *  失敗に数えず(決定3)、対象の側には何も書かない。 */
+/** Board call が断られたら Quarantine を立て、true を返す(ADR 0202 決定2・5 / ADR 0205): 行の拒否は行の Quarantine、
+ *  401 は anthropic の Provider 認証の Quarantine(Board call は anthropic 固定)。true のとき呼び手は失敗に数えず
+ *  (ADR 0202 決定3)、対象の側には何も書かない。 */
 export function quarantineBoardCallRefusal(db: Db, err: unknown, use: BoardCallUse, taskId: string | undefined, now: Date): boolean {
-  if (!(err instanceof RowRefusalError)) return false;
-  quarantineRefusedRow(db, err, `The ${use} Board call${taskId === undefined ? "" : ` for task ${taskId}`}`, now);
+  const subject = `The ${use} Board call${taskId === undefined ? "" : ` for task ${taskId}`}`;
+  if (err instanceof CliAuthError) quarantineCliAuthForProvider(db, "anthropic", now, `${subject} ended with an authentication failure`);
+  else if (err instanceof RowRefusalError) quarantineRefusedRow(db, err, subject, now);
+  else return false;
   return true;
 }
 
@@ -150,20 +153,20 @@ export function execFailureEnvelope(err: unknown): unknown {
   }
 }
 
-export function quarantineCliAuthFailure(
-  db: Db,
-  err: unknown,
-  now: Date,
-  provider: Provider = "anthropic",
-): void {
-  if (err instanceof CliAuthError) quarantineCliAuthForProvider(db, provider, now);
+export function quarantineCliAuthFailure(db: Db, err: unknown, now: Date): void {
+  if (err instanceof CliAuthError) quarantineCliAuthForProvider(db, "anthropic", now);
 }
 
 /** ADR 0098: the machine classification of a 401 routes by the spawn/call-time
  * Provider fact, never by parsing prose from an error. Every Provider is a
  * resource-scoped quarantine; unrelated Provider workers continue. */
-export function quarantineCliAuthForProvider(db: Db, provider: Provider, now: Date): void {
-  registerQuarantine(db, "providerAuth", provider, "authentication failure", now);
+export function quarantineCliAuthForProvider(
+  db: Db,
+  provider: Provider,
+  now: Date,
+  reason = `A worker session or Board call returned an authentication failure while speaking the ${provider} provider`,
+): void {
+  registerQuarantine(db, "providerAuth", provider, reason, now);
 }
 
 export function warnCliAuthExpiry(db: Db, expiresAt: Date | undefined, now: Date): void {
