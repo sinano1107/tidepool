@@ -970,7 +970,7 @@ export const WORKER_SPAWNED: Extract<EventPayload, { kind: "worker_spawned" }> =
   provider: "anthropic",
   model: "opus",
   effort: "high",
-  source: { tier: "task", provider: "only" },
+  tier_id: 1, source: { tier: "task", provider: "only" },
   harness: "claude-code",
   cli_version: "1",
 };

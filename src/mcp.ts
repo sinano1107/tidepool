@@ -891,7 +891,7 @@ function registerRoutingMetaReviewVerbs(server: McpServer, deps: McpDeps, run: M
       description:
         "List the allocation-review distribution: evaluated annotations counted by the session's tier source, tier, agent, " +
         "allocation and cause, with judged_by_same_model counting those whose judge ran on the worker's own model. tier is the tier " +
-        "the task requested when the tier source is task, null otherwise; tier_retired marks a deleted tier, counted apart from a live tier of the same name. " +
+        "the session ran in, whatever its tier source; tier_retired marks a deleted tier, counted apart from a live tier of the same name. " +
         "Unevaluated annotations are not counted. " +
         nextDescription("list_allocations", "allocations"),
       inputSchema: { since_watermark, next },

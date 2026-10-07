@@ -1854,13 +1854,21 @@ describe("ClaudeCodeWorker", () => {
       model: "opus",
       effort: "max",
       advisor: undefined,
-      source: { tier: "task", provider: "rank" },
+      tier_id: 1, source: { tier: "task", provider: "rank" },
     });
     expect(calls[0]!.args.join(" ")).toContain("--model opus");
     expect(calls[0]!.args.join(" ")).toContain("--effort max");
     expect(
       listEvents(db, "task-carried-setting").find((e) => e.kind === "worker_spawned")!.payload,
     ).toMatchObject({ model: "opus", effort: "max", source: { tier: "task", provider: "rank" } });
+  });
+
+  it.each(["work", "review"] as const)("%s task の worker_spawned は、盤面が選んだ候補の段の id を持つ(ADR 0210 決定1)", async (type) => {
+    const { worker, db } = await makeWorker();
+    const task = makeTask(`task-tier-${type}`, null, "deckhand", type);
+    insertTask(db, task);
+    worker.start(task, { provider: "anthropic", model: "opus", effort: "high", advisor: undefined, tier_id: 3, source: { tier: "task", provider: "rank" } });
+    expect(listEvents(db, task.id).find((e) => e.kind === "worker_spawned")!.payload).toMatchObject({ tier_id: 3 });
   });
 
   it("表の行を書き換えれば次の spawn の model / effort が変わる — 正本は DB であって adapter の定数ではない", async () => {

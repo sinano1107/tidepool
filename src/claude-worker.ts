@@ -1991,6 +1991,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
         provider: routing.provider,
         model: routing.model,
         effort: routing.effort,
+        tier_id: routing.tier_id,
         source: routing.source,
         harness: "claude-code",
         cli_version: cliVersion,

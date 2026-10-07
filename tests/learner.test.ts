@@ -3,10 +3,12 @@ import type { Cause } from "../src/cause.js";
 import type { CodexAppServerProbeResult } from "../src/codex-app-server.js";
 import { appendEvent, type EventPayload } from "../src/events.js";
 import { applyExecutionSettingsChange, type ExecutionSetting } from "../src/execution-setting.js";
-import { aggregateCells, episodeOutcome, type LearnerEpisode, loadEpisodes, recommend, selectorBranch } from "../src/learner.js";
+import { episodeOutcome, type LearnerEpisode, loadEpisodes, observedInTier, recommend, selectorBranch } from "../src/learner.js";
 import { listRoutingShadow } from "../src/routing-review.js";
+import { type Tier, tierIdOf } from "../src/tier.js";
 import { healthyOpenai, listedOpenaiModels } from "./fakes.js";
 import {
+  api,
   bootTidepool,
   bundledObjection,
   completeIntegrationReviews,
@@ -30,7 +32,7 @@ const candidate = (
   model,
   effort: "high",
   advisor,
-  source: { tier: "task", provider: "rank" },
+  tier_id: 1, source: { tier: "task", provider: "rank" },
 });
 const opus = candidate("anthropic", "claude-opus-5-5");
 const sol = candidate("openai", "gpt-5.6-sol");
@@ -39,6 +41,7 @@ const sol = candidate("openai", "gpt-5.6-sol");
 function episode(overrides: Partial<LearnerEpisode> = {}): LearnerEpisode {
   return {
     cell: { provider: "anthropic", model: "claude-opus-5-5", effort: "high", advisor: null },
+    tier_id: 1,
     workspace: "tidepool",
     outcome: "accepted",
     cost_usd: null,
@@ -52,21 +55,12 @@ const solAccepted = episode({ cell: { provider: "openai", model: "gpt-5.6-sol", 
 
 /** 盤面全体の episode 列から、この workspace 向けの selector の分岐を1回引く。 */
 function branchFor(episodes: LearnerEpisode[], candidates: ExecutionSetting[], promoted: boolean, workspace = "tidepool") {
-  return selectorBranch({
-    promoted,
-    candidates,
-    board: aggregateCells(episodes),
-    workspace: aggregateCells(episodes.filter((e) => e.workspace === workspace)),
-  });
+  return selectorBranch({ promoted, candidates, ...observedInTier(episodes, candidates[0]!.tier_id, workspace) });
 }
 
 /** 盤面全体の episode 列から、この workspace 向けの推薦を1回引く。 */
 function recommendFor(episodes: LearnerEpisode[], candidates: ExecutionSetting[], workspace = "tidepool") {
-  return recommend({
-    candidates,
-    board: aggregateCells(episodes),
-    workspace: aggregateCells(episodes.filter((e) => e.workspace === workspace)),
-  });
+  return recommend({ candidates, ...observedInTier(episodes, candidates[0]!.tier_id, workspace) });
 }
 
 it("データの無いセルでは推薦が表(selector の先頭)と一致し、basis は prior(AC1)", () => {
@@ -281,7 +275,7 @@ async function settledSession(t: Tidepool, run: ExecutionSetting, causes: Cause[
     workerId: "fake-worker",
     origin: "board",
     at: t.clock.now(),
-    payload: { ...WORKER_SPAWNED, advisor: null, provider: run.provider, model: run.model, effort: run.effort },
+    payload: { ...WORKER_SPAWNED, advisor: null, provider: run.provider, model: run.model, effort: run.effort, tier_id: run.tier_id },
   });
   if (causes.length > 0) {
     const entry = await loggedEntry(t, earlier.id, "took the shortcut");
@@ -337,6 +331,34 @@ it("同じ entry の前の異議群が capability、後の異議群が preferenc
     recommended: { provider: "openai", model: "gpt-5.6-sol", effort: "high", advisor: null },
     basis: "data",
   });
+});
+
+it("行を段 T から T' へ settings で移すと T' の pickup の shadow 行は未観測(prior)、T へ戻すと T の観測がまた数えられて data に戻る(ADR 0210 決定2)", async () => {
+  t = await bootTidepool();
+  // 動かすのは standard の opus の行 —— 盤面既定の economy には sonnet の行が残り、統合点レビューはそこで走る
+  const key = { provider: "anthropic", model: "claude-opus-5-5", effort: "high" } as const;
+  // standard の opus の行で走り、受理された session
+  await settledSession(t, { ...key, advisor: undefined, tier_id: tierIdOf(t.db, "standard"), source: { tier: "task", provider: "only" } });
+  const moveTo = async (tier: Tier) => {
+    applyExecutionSettingsChange(t.db, { setting: "row", key, row: { ...key, tier, price_in: 5, price_out: 25 } }, "webui", t.clock.now());
+    await t.clock.advance(HOUR);
+    await completeMetaReviews(t);
+  };
+  const pickupIn = async (tier: Tier) => {
+    const task = (await api(t.baseUrl, "POST", "/api/tasks", { type: "work", title: `in ${tier}`, purpose: "p", completion_criteria: "c", tier })).json;
+    await t.clock.advance(HOUR);
+    const row = shadowRows(t).find((r) => r.task_id === task.id);
+    // slot を空ける(ScriptedWorker は spawn しないので episode は増えない)
+    await completeViaMcp(t, task.id);
+    await completeIntegrationReviews(t, task.id);
+    return row;
+  };
+
+  // economy の候補は sonnet(先頭)と移ってきた opus —— opus の standard の受理は数えない
+  await moveTo("economy");
+  expect(await pickupIn("economy")).toMatchObject({ basis: "prior", candidates: 2 });
+  await moveTo("standard");
+  expect(await pickupIn("standard")).toMatchObject({ actual: { ...key, advisor: null }, basis: "data" });
 });
 
 it("advisor pin ありで相談0回の session は、盤面の記録から読んでも advisor 無しのセルに合流しない(AC4)", async () => {
@@ -397,6 +419,18 @@ it("advisor pin ありで相談0回の session は、盤面の記録から読ん
 it("行との照合は完全一致 —— 行 claude-opus-5 は claude-opus-5-5 のセルの却下を数えず、未観測の先頭のまま(ADR 0182 決定3)", () => {
   const opus5 = candidate("anthropic", "claude-opus-5");
   expect(recommendFor([episode({ outcome: "rejected" }), solAccepted], [opus5, sol])).toEqual({ recommended: opus5, basis: "data" });
+});
+
+it("同じセルの episode が段 T と T' に分かれていれば、T の候補の推薦は T の観測だけで決まる —— T' の却下は盤面の段でも workspace の段でも T の推薦を動かさない(ADR 0210 決定2)", () => {
+  const rejectedInOther = (workspace: string) => episode({ tier_id: 2, workspace, outcome: "rejected" });
+  // T(id 1)では opus が未観測の先頭なので推薦は opus —— T' の却下が数えられれば sol へ移る
+  expect(recommendFor([solAccepted, rejectedInOther("elsewhere")], [opus, sol])).toEqual({ recommended: opus, basis: "data" });
+  expect(recommendFor([solAccepted, rejectedInOther("tidepool")], [opus, sol])).toEqual({ recommended: opus, basis: "data" });
+  // 同じ却下が T で起きていれば sol へ移る
+  expect(recommendFor([solAccepted, episode({ outcome: "rejected" })], [opus, sol])).toEqual({ recommended: sol, basis: "data" });
+  // T' の候補から見れば T' の却下だけが観測で、T の sol の受理は数えない —— 未観測の sol へは移らない
+  const inOther = (s: ExecutionSetting) => ({ ...s, tier_id: 2 });
+  expect(recommendFor([solAccepted, rejectedInOther("tidepool")], [inOther(opus), inOther(sol)])).toEqual({ recommended: inOther(opus), basis: "data" });
 });
 
 /** 学習器を昇格させる —— approve の適用と同じ書き口。設定の変更は routing meta-review の材料なので、登録されたそれを先に済ませる。 */

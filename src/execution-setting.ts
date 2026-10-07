@@ -222,6 +222,8 @@ export interface ExecutionSetting {
   model: string;
   effort: string;
   advisor: string | undefined;
+  /** 解決した段(ADR 0210 決定1)。候補は要求ティアの行だけなので、走った段 = pickup が解決した段。 */
+  tier_id: TierId;
   /** ADR 0110 決定3: 選んだ値だけでなく**なぜその値になったか**を刻む。今は
    *  ティアの出所1つ —— `"task"` は task の要求列、`"agent"` は agent.md の
    *  `tier`、`"review_tier"` はレビュー専用の要求、`"board"` は盤面既定。未指定(列が null)と「既定を選んだ」が
@@ -299,6 +301,8 @@ export interface SelectorInput {
   agentTier: Tier | undefined;
   /** 盤面既定の段(盤面設定、ADR 0200 決定4)。 */
   boardTier: Tier;
+  /** 盤面の生きている段(`liveTierRows`): 解決した段の名前を候補が運ぶ id に引く(ADR 0210 決定1)。 */
+  tiers: readonly { id: TierId; name: Tier }[];
   /** 盤面設定: advisor の上限(ADR 0208 決定1)。`off` なら advisor を有効にした entry を advisor の無い entry
    *  として選ぶ(決定3)。 */
   advisorCeiling: AdvisorCeiling;
@@ -358,6 +362,7 @@ function executionSettingCandidates(
     request.taskTier !== undefined ? "task" : request.agentTier !== undefined ? "agent" : "board";
   const priority: Priority =
     request.reviewTier !== undefined ? "quality" : request.priority ?? BOARD_DEFAULT_PRIORITY;
+  const tierId = request.tiers.find((t) => t.name === tier)!.id;
   const providerSource: ProviderSource =
     request.entries.length === 1 ? "only" : priority === "cost" ? "cost" : "rank";
   const byRank = (a: ExecutionSettingRow, b: ExecutionSettingRow) =>
@@ -384,6 +389,7 @@ function executionSettingCandidates(
       model: main.model,
       effort: main.effort,
       advisor,
+      tier_id: tierId,
       source: { tier: tierSource, provider: providerSource, ...(source && { advisor: source }) },
     }));
 }
@@ -881,6 +887,7 @@ function selectorInputFor(
     reviewTier: task?.type === "review" ? task.review_tier ?? undefined : undefined,
     agentTier: definition.tier,
     boardTier: defaults.defaultTier,
+    tiers: liveTierRows(db),
     advisorCeiling: defaults.advisorCeiling,
   };
 }

@@ -40,7 +40,7 @@ const openai: ExecutionSetting = {
   model: "gpt-6-astra",
   effort: "high",
   advisor: undefined,
-  source: { tier: "task", provider: "rank" },
+  tier_id: 1, source: { tier: "task", provider: "rank" },
 };
 
 function router() {

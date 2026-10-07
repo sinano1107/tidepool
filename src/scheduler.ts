@@ -24,7 +24,7 @@ import {
 import { type GitHubClient, IssueGoneError } from "./github.js";
 import type { GitHubAuth } from "./github-auth.js";
 import { type HarnessContainmentCheck, harnessContainmentPickupBlocked } from "./harness-containment.js";
-import { aggregateCells, type CellStats, loadEpisodes, type RoutingEpisode, recordShadow, selectorBranch } from "./learner.js";
+import { loadEpisodes, observedInTier, type RoutingEpisode, recordShadow, selectorBranch } from "./learner.js";
 import { type InjectionQuery, injectionQueryText } from "./memory.js";
 import { registerDueMetaReviews } from "./meta-review.js";
 import type { ProcessContainers } from "./process-container.js";
@@ -612,20 +612,13 @@ export function startScheduler(deps: {
       let chosen: ExecutionSetting | undefined;
       let candidates: ExecutionSetting[] = [];
       // 学習器の分岐(ADR 0110 決定4 / ADR 0150 決定3): 除外を当てた候補から、走る設定と shadow 行の組を決める。
-      // フラグは poll ごとに1度読み(review task は分岐しない)、episode は分岐が要るときに1度だけ読む
+      // フラグは poll ごとに1度読み(review task は分岐しない)、episode は分岐が要るときに1度だけ読む。集計は候補の段ごとに
+      // 違うので pickup ごとに作る(ADR 0210 決定2)
       const promoted = readExecutionSettings(db).learnerPromoted;
       let episodes: RoutingEpisode[] | undefined;
-      let board: CellStats[] | undefined;
       const branch = (task: Task, pool: ExecutionSetting[]) => {
         episodes ??= loadEpisodes(db);
-        board ??= aggregateCells(episodes);
-        const inWorkspace = episodes.filter((e) => e.workspace === task.workspace);
-        return selectorBranch({
-          promoted,
-          candidates: pool,
-          board,
-          workspace: aggregateCells(inWorkspace),
-        });
+        return selectorBranch({ promoted, candidates: pool, ...observedInTier(episodes, pool[0]!.tier_id, task.workspace) });
       };
       let branched: ReturnType<typeof branch> | undefined;
       /** 1手の選択: 昇格中の work task は学習器の選択、それ以外は表の先頭。どちらも下の観測 → 除外 → 引き直しを通るので、

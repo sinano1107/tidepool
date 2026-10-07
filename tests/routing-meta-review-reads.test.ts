@@ -7,6 +7,7 @@ import { toolResult } from "../src/mcp.js";
 import { registerMetaReview } from "../src/meta-review.js";
 import { listAllocations, listRoutingCells, listRoutingShadow, proposeRoutingChange, readRoutingSettings } from "../src/routing-review.js";
 import { getTask, registerTask } from "../src/tasks.js";
+import { tierIdOf } from "../src/tier.js";
 import { answerQuestionViaWebui, HUMAN_WEBUI, QUIET_EXIT, RESPONSE_BUDGET_BYTES, WORKER_SPAWNED } from "./harness.js";
 
 /** 主題 routing の meta-review の読み口(issue #917 / spec #916 C)のドメイン層。verb への写像はサーバ境界
@@ -18,6 +19,7 @@ const setting = (provider: ExecutionSetting["provider"], model: string): Executi
   model,
   effort: "high",
   advisor: undefined,
+  tier_id: 1,
   source: { tier: "agent", provider: "rank" },
 });
 const opus = setting("anthropic", "claude-opus-5-5");
@@ -38,6 +40,7 @@ function board() {
         provider: run.provider,
         model: run.model,
         effort: run.effort,
+        tier_id: run.tier_id,
         source: { tier, provider: "rank" },
         harness: run.provider === "openai" ? "codex" : "claude-code",
       },
@@ -177,7 +180,7 @@ it("読み口の既定の窓は読み手より前に完了した routing の登�
   expect(listRoutingShadow(db, reader, { since_watermark: 0 }).shadow.map((r) => r.task_id)).toEqual([before.id, after.id]);
 });
 
-it("list_allocations は評価された注釈を source.tier × 段 × agent × allocation × cause で数え、judge の model が worker のセルと同じ件数を添える —— 段は出所が task の注釈だけに付く", () => {
+it("list_allocations は評価された注釈を source.tier × 段 × agent × allocation × cause で数え、judge の model が worker のセルと同じ件数を添える —— 段はどの出所の注釈にも走った段が付く(ADR 0210 決定5)", () => {
   const { db, work, spawn, allocate, routingReview } = board();
   const task = work("t", "standard");
   // judge と同じ綴りの pin だけが同じ model —— 照合は学習器のセルと同じ完全一致で、前方一致する綴りは数えない(ADR 0182 決定3)
@@ -187,16 +190,16 @@ it("list_allocations は評価された注釈を source.tier × 段 × agent × 
   allocate(task.id, longContext, { judge, allocation: "overpowered", cause: "uncertain", evidence: "e" });
   const other = spawn(task.id, "reef-crab", opus);
   allocate(task.id, other, { judge, allocation: "overpowered", cause: "uncertain", evidence: "e" });
-  const declared = spawn(task.id, "reef-crab", opus, "task");
+  const declared = spawn(task.id, "reef-crab", { ...opus, tier_id: tierIdOf(db, "standard") }, "task");
   allocate(task.id, declared, { judge, allocation: "overpowered", cause: "uncertain", evidence: "e" });
   const deckhand = spawn(task.id, "deckhand", opus);
   allocate(task.id, deckhand, { judge, allocation: "appropriate", cause: "uncertain", evidence: "e" });
 
   expect(listAllocations(db, routingReview(), {})).toEqual({
     allocations: [
-      { source_tier: "agent", tier: null, agent: "reef-crab", allocation: "overpowered", cause: "uncertain", count: 3, judged_by_same_model: 1 },
+      { source_tier: "agent", tier: "economy", agent: "reef-crab", allocation: "overpowered", cause: "uncertain", count: 3, judged_by_same_model: 1 },
       { source_tier: "task", tier: "standard", agent: "reef-crab", allocation: "overpowered", cause: "uncertain", count: 1, judged_by_same_model: 0 },
-      { source_tier: "agent", tier: null, agent: "deckhand", allocation: "appropriate", cause: "uncertain", count: 1, judged_by_same_model: 0 },
+      { source_tier: "agent", tier: "economy", agent: "deckhand", allocation: "appropriate", cause: "uncertain", count: 1, judged_by_same_model: 0 },
     ],
   });
 });
@@ -206,7 +209,7 @@ it("list_allocations は書き手が人間の task の申告も段ごとに数�
   const insertScratch = () => applyExecutionSettingsChange(db, { setting: "insert_tier", name: "scratch", description: "d", position: 0 }, "webui", at);
   const declared = (title: string, tier: string) => {
     const task = work(title, tier);
-    allocate(task.id, spawn(task.id, "deckhand", opus, "task"), { judge, allocation: "overpowered", cause: "uncertain", evidence: "e" });
+    allocate(task.id, spawn(task.id, "deckhand", { ...opus, tier_id: tierIdOf(db, tier) }, "task"), { judge, allocation: "overpowered", cause: "uncertain", evidence: "e" });
     return task;
   };
   insertScratch();
