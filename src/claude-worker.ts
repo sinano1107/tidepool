@@ -1778,7 +1778,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     // —— 温存中の Provider —— を選びうる。provider の綴りもここから1つだけ取る
     // (上の「derived once」の線)。
     if (setting.provider === "openai") {
-      // ADR 0098
+      // provider は正準の harness を1つ選ぶ —— openai は codex 経路だけ(ADR 0098)
       throw new Error('canonical route "openai -> codex" cannot run through Claude Code');
     }
     assertKnownEffort(setting.effort);

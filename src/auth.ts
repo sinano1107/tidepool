@@ -58,8 +58,7 @@ export function rotateToken(tokenFile: string): string {
 }
 
 /** 認証が立たない盤面がどうなるかの一文。3箇所の運用者向けメッセージで同じ姿を
- *  言う — インシデント中に「どっちだったか」を読み解かせないため。 */
-// 人間面の fail-open は ADR 0036
+ *  言う — インシデント中に「どっちだったか」を読み解かせないため。人間面の fail-open は ADR 0036。 */
 const UNAUTHENTICATED_POSTURE =
   "the human surface is open to anyone who can reach it (fail-open), and worker " +
   "pickup is halted board-wide until it is repaired. Run `npm run token` to issue a new one, " +

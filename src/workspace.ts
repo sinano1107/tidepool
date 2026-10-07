@@ -760,7 +760,7 @@ function assertNothingWrittenAfterCompletion(workspace: WorkspaceConfig, task: T
   assertOnTaskBranch(workspace, task.id);
   removeShadowRemnants(workspace);
   if (uncommittedChanges(workspace).length > 0) {
-    // ADR 0109
+    // 完了報告の後の書き込みは session の成果物ではない —— 後始末は session の持ち物(ADR 0109)
     throw new Error(
       `workspace ${workspace.name} was written to after task ${task.id} reported done — ` +
         "the completion gate required a clean tree before the verb, so these changes are not " +

@@ -32,7 +32,7 @@
 	},
 	"overrides": [
 		{
-			"includes": ["src/**", "public/**"],
+			"includes": ["src/**", "public/**", "webui/**"],
 			"plugins": ["./no-adr-in-board-text.grit"]
 		},
 		{
