@@ -44,7 +44,7 @@ it("GET /api/settings/execution は種の表と盤面既定(advisor の上限 of
     ],
     tiers: SEED_TIERS,
     priorities: ["quality", "cost"],
-    advisorCeilings: ["off", "sonnet", "opus", "fable"],
+    advisorCeilings: ["off", "sonnet", "opus", "fable", "fable_then_opus"],
   });
 });
 
@@ -126,13 +126,18 @@ it("advisor の上限は settings タブと管理MCP の両方の扉で検証を
     expect((await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "advisor_ceiling", value: "opus" })).status).toBe(200);
     expect((await viaMcp({ setting: "advisor_ceiling", value: "fable" })).isError).not.toBe(true);
     expect((await state()).advisorCeiling).toBe("fable");
+    expect((await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "advisor_ceiling", value: "fable_then_opus" })).status).toBe(200);
+    expect((await state()).advisorCeiling).toBe("fable_then_opus");
+    expect((await viaMcp({ setting: "advisor_ceiling", value: "fable" })).isError).not.toBe(true);
+    expect((await viaMcp({ setting: "advisor_ceiling", value: "fable_then_opus" })).isError).not.toBe(true);
+    expect((await state()).advisorCeiling).toBe("fable_then_opus");
     const bad = { setting: "advisor_ceiling", value: true };
     expect((await api(t.baseUrl, "POST", "/api/settings/execution", bad)).status).toBe(400);
     expect((await viaMcp(bad)).isError).toBe(true);
   } finally {
     await client.close();
   }
-  expect((await state()).advisorCeiling).toBe("fable");
+  expect((await state()).advisorCeiling).toBe("fable_then_opus");
 });
 
 it("anthropic の alias の行は settings タブと管理MCP の両方の扉で拒まれ表は変わらない —— 具体 id の行と openai の行は通る(ADR 0182 決定1)", async () => {

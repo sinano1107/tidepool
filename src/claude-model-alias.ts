@@ -8,14 +8,16 @@ const MODEL_ALIASES = new Set(["sonnet", "opus", "haiku", "fable", "best", "defa
 
 export const isClaudeModelAlias = (model: string): boolean => MODEL_ALIASES.has(model.toLowerCase());
 
-/** The board's advisor ceiling (ADR 0208 決定1): `off`, or the alias of the highest family the advisor may climb to. */
-export const ADVISOR_CEILINGS = ["off", "sonnet", "opus", "fable"] as const;
+/** The board's advisor ceiling (ADR 0208 決定1): `off`, or the alias of the highest family the advisor may climb to;
+ *  `fable_then_opus` is `fable` that drops to `opus` while the Fable window is throttled (決定5). */
+export const ADVISOR_CEILINGS = ["off", "sonnet", "opus", "fable", "fable_then_opus"] as const;
 export type AdvisorCeiling = (typeof ADVISOR_CEILINGS)[number];
 
 /** Why the advisor is what it is (ADR 0208 決定6): `off` — the ceiling is off; `ceiling` — the ceiling's alias, or main's own
  *  id when main is in the ceiling's family; `unknown_generation` — main's own id, since this release does not know whether
- *  the ceiling's alias takes main's generation; `main_above_ceiling` — main ranks above the ceiling, so no advisor. */
-export type AdvisorSource = "off" | "ceiling" | "unknown_generation" | "main_above_ceiling";
+ *  the ceiling's alias takes main's generation; `main_above_ceiling` — main ranks above the ceiling, so no advisor; `window_downgraded` — under `fable_then_opus`, the `opus`
+ *  ceiling's derivation, chosen while the Fable window keeps the `fable` advisor out (決定5). */
+export type AdvisorSource = "off" | "ceiling" | "unknown_generation" | "main_above_ceiling" | "window_downgraded";
 
 /** The model families this adapter knows, lowest rank first, by concrete-id prefix. Each carries the lowest generation
  *  (major * 100 + minor) whose main takes an advisor and whether it can act as one (ADR 0200 追記 2026-10-07). A family a
@@ -40,15 +42,16 @@ const GENERATION = /^(\d+)(?:-(\d{1,2})(?!\d))?/;
  *  unknown, its generation is unreadable or below the family's floor, or the advisor would be main itself and the family cannot advise (a Haiku generation this release does not know). */
 export function claudeAdvisorFor(model: string, ceiling: AdvisorCeiling): { advisor: string | undefined; source: AdvisorSource } | undefined {
   if (ceiling === "off") return { advisor: undefined, source: "off" };
+  const alias = ceiling === "fable_then_opus" ? "fable" : ceiling;
   const family = FAMILIES.find((f) => model.startsWith(f.prefix));
   const digits = family && GENERATION.exec(model.slice(family.prefix.length));
   if (!family || !digits) return undefined;
-  const top = FAMILIES.findIndex((f) => f.name === ceiling);
+  const top = FAMILIES.findIndex((f) => f.name === alias);
   const rank = FAMILIES.indexOf(family);
   if (rank > top) return { advisor: undefined, source: "main_above_ceiling" };
   const generation = Number(digits[1]) * 100 + Number(digits[2] ?? 0);
   if (generation < family.minGeneration) return undefined;
   if (rank === top) return { advisor: model, source: "ceiling" };
-  if (generation <= FAMILIES[top]!.accepts![family.name]!) return { advisor: ceiling, source: "ceiling" };
+  if (generation <= FAMILIES[top]!.accepts![family.name]!) return { advisor: alias, source: "ceiling" };
   return family.canAdvise ? { advisor: model, source: "unknown_generation" } : undefined;
 }

@@ -19,7 +19,7 @@ import {
   loadExecutionSettingTable,
   readExecutionSettings,
   selectable,
-  windowMatchesModel,
+  windowMatchesSetting,
 } from "./execution-setting.js";
 import { type GitHubClient, IssueGoneError } from "./github.js";
 import type { GitHubAuth } from "./github-auth.js";
@@ -684,13 +684,13 @@ export function startScheduler(deps: {
               continue;
             }
           }
-          const model = setting.model;
+          const current = setting;
           const relevant = observation.windows.filter(
             // provider 全体の窓(model === null)は常に関係する。model 固有の窓の
-            // 照合は除外を当てる側と同じ1つの式を通す(`windowMatchesModel`)——
+            // 照合は除外を当てる側と同じ1つの式を通す(`windowMatchesSetting`、advisor の model も含む)——
             // ここに別の式を書くと、保存された観測を読む skipped 表示と同じ poll
             // で観測し直すゲートが、非 fable の model 名で黙ってズレる。
-            (window) => window.model === null || windowMatchesModel(window.model, model),
+            (window) => window.model === null || windowMatchesSetting(window.model, current),
           );
           if (observation.status === "observed" && !relevant.some((window) => window.throttled)) break;
           for (const window of relevant) {
@@ -701,11 +701,16 @@ export function startScheduler(deps: {
               );
             }
           }
-          // 観測不能は provider 全体の fail-closed、model 窓はその model だけ
+          // 観測不能は provider 全体の fail-closed、model 窓はその窓の綴りで —— 保存された観測を読む
+          // `pickupExclusions` と同じ綴りなので、advisor の窓(ADR 0208 決定5)も同じ式で外れる
           const providerWide =
             observation.status !== "observed" ||
             relevant.some((window) => window.model === null && window.throttled);
-          entryExcluded = withExclusion(entryExcluded, setting.provider, providerWide ? null : model);
+          entryExcluded = providerWide
+            ? withExclusion(entryExcluded, setting.provider, null)
+            : relevant
+                .filter((window) => window.throttled)
+                .reduce((excluded, window) => withExclusion(excluded, current.provider, window.model), entryExcluded);
           setting = pick(head);
         }
         if (setting === null) {

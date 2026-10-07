@@ -7,8 +7,8 @@ credits に請求するプランがあること(Claude Code の文書。どの�
 
 ## 決定
 
-1. **advisor の上限は盤面設定の選択で、値は `off` / `sonnet` / `opus` / `fable` / `fable`(Fable の窓が throttled なら
-   `opus`)。種の既定は `off`。** advisor は CLI の上で experimental な機能で、agent.md の opt-in(ADR 0094)に加えて盤面
+1. **advisor の上限は盤面設定の選択で、値は `off` / `sonnet` / `opus` / `fable` / `fable_then_opus`(Fable の窓が
+   throttled なら `opus`)。種の既定は `off`。** advisor は CLI の上で experimental な機能で、agent.md の opt-in(ADR 0094)に加えて盤面
    でも明示して有効にする。値の綴りは anthropic の系列名である —— 相談機構を持つ Provider は anthropic だけ(ADR 0097
    決定3)。上限は agent に持たせない(agent は計算資源を持たない —— ADR 0110)。
 2. **上限は文字どおりの上限である。** 上限より下の系列の main には上限の alias、上限と同じ系列の main には main と同一の

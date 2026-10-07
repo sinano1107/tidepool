@@ -23,6 +23,7 @@ import {
   routingPinChanges,
   SEED_EXECUTION_SETTINGS,
   type SelectorInput,
+  selectable,
   selectExecutionSetting,
   tierFieldDescriptions,
 } from "../src/execution-setting.js";
@@ -153,9 +154,15 @@ function advisorOn(model: string, advisorCeiling: AdvisorCeiling) {
   return setting && { advisor: setting.advisor, source: setting.source.advisor };
 }
 
-it("advisor の上限4値 × 行の advisor と出所は #1538 の表どおり —— 上限より下の系列は上限の alias、同じ系列は main と同一、上限より上は付けない、off はすべての行で無し(ADR 0208 決定2)", () => {
+it("advisor の上限5値 × 行の advisor と出所は #1538 の表どおり —— 上限より下の系列は上限の alias、同じ系列は main と同一、上限より上は付けない、off はすべての行で無し、Fable の窓が開いていれば fable_then_opus は fable と同じ(ADR 0208 決定2)", () => {
   const rows = ["claude-haiku-4-5", "claude-sonnet-5-5", "claude-opus-5-5", "claude-fable-5-1"];
-  const ceilings = ["off", "sonnet", "opus", "fable"] as const;
+  const ceilings = ["off", "sonnet", "opus", "fable", "fable_then_opus"] as const;
+  const fable = [
+    { advisor: "fable", source: "ceiling" },
+    { advisor: "fable", source: "ceiling" },
+    { advisor: "fable", source: "ceiling" },
+    { advisor: "claude-fable-5-1", source: "ceiling" },
+  ];
   const none = (source: string) => ({ advisor: undefined, source });
   expect(Object.fromEntries(ceilings.map((ceiling) => [ceiling, rows.map((model) => advisorOn(model, ceiling))]))).toEqual({
     off: [none("off"), none("off"), none("off"), none("off")],
@@ -171,12 +178,8 @@ it("advisor の上限4値 × 行の advisor と出所は #1538 の表どおり �
       { advisor: "claude-opus-5-5", source: "ceiling" },
       none("main_above_ceiling"),
     ],
-    fable: [
-      { advisor: "fable", source: "ceiling" },
-      { advisor: "fable", source: "ceiling" },
-      { advisor: "fable", source: "ceiling" },
-      { advisor: "claude-fable-5-1", source: "ceiling" },
-    ],
+    fable,
+    fable_then_opus: fable,
   });
 });
 
@@ -274,11 +277,11 @@ it("advisor を受けられない行しか無ければ、advisor つきの entry
   ).toBeNull();
 });
 
-it("盤面設定の変更の検証は advisor の上限4値だけを受け、旧い真偽値を含むそれ以外を拒む", () => {
-  for (const value of ["off", "sonnet", "opus", "fable"]) {
+it("盤面設定の変更の検証は advisor の上限5値だけを受け、旧い真偽値を含むそれ以外を拒む", () => {
+  for (const value of ["off", "sonnet", "opus", "fable", "fable_then_opus"]) {
     expect(executionSettingsChangeSchema.safeParse({ setting: "advisor_ceiling", value }).success).toBe(true);
   }
-  for (const value of [true, false, "haiku", "fable_then_opus", "claude-opus-5-5", ""]) {
+  for (const value of [true, false, "haiku", "fable_then_sonnet", "claude-opus-5-5", ""]) {
     expect(executionSettingsChangeSchema.safeParse({ setting: "advisor_ceiling", value }).success).toBe(false);
   }
   expect(executionSettingsChangeSchema.safeParse({ setting: "advisor_above_main", value: true }).success).toBe(false);
@@ -401,6 +404,41 @@ it("モデル窓の除外は entry の解決した model に当たる —— 窓
   expect(
     selectExecutionSetting(input({ agentTier: "standard" }), table, excluded)?.model,
   ).toBe("claude-opus-5-5");
+});
+
+/** Fable の窓が throttled の除外集合(Throttle の model 固有の窓の綴り)。 */
+const fableWindow = { providers: [], models: [{ provider: "anthropic" as const, model: "fable" }] };
+
+/** advisor つきの entry が、行1つの表で Fable の窓を除外されて選んだ advisor と出所。候補が残らなければ null。 */
+function advisorUnderFableWindow(model: string, advisorCeiling: AdvisorCeiling) {
+  const setting = selectExecutionSetting(
+    input({ entries: [{ provider: "anthropic", advisor: true }], agentTier: "standard", advisorCeiling }),
+    [cheapStandardRow(model)],
+    fableWindow,
+  );
+  return setting && { advisor: setting.advisor, source: setting.source.advisor };
+}
+
+it("Fable の窓が除外のとき、上限 fable では advisor が fable の候補が外れ、fable_then_opus では advisor を opus(上限 opus と同じ導出)に下げた候補が出所「窓で下げた」で選ばれる(ADR 0208 決定5)", () => {
+  for (const model of ["claude-haiku-4-5", "claude-sonnet-5-5", "claude-opus-5-5"]) {
+    expect(advisorUnderFableWindow(model, "fable")).toBeNull();
+  }
+  expect(advisorUnderFableWindow("claude-haiku-4-5", "fable_then_opus")).toEqual({ advisor: "opus", source: "window_downgraded" });
+  expect(advisorUnderFableWindow("claude-sonnet-5-5", "fable_then_opus")).toEqual({ advisor: "opus", source: "window_downgraded" });
+  expect(advisorUnderFableWindow("claude-opus-5-5", "fable_then_opus")).toEqual({ advisor: "claude-opus-5-5", source: "window_downgraded" });
+  // Fable の行は main の窓で外れたまま —— 下げた候補を持たない
+  for (const ceiling of ["fable", "fable_then_opus"] as const) expect(advisorUnderFableWindow("claude-fable-5-1", ceiling)).toBeNull();
+  // advisor の無い entry は advisor の窓を見ない
+  expect(selectExecutionSetting(input({ agentTier: "standard", advisorCeiling: "fable" }), table, fableWindow)?.model).toBe("claude-opus-5-5");
+});
+
+it("Fable の窓が開いているあいだ、fable_then_opus の下げた候補は先頭にも selectable な母集団にも現れない(ADR 0208 決定5)", () => {
+  const db = openDb(":memory:");
+  applyExecutionSettingsChange(db, { setting: "advisor_ceiling", value: "fable_then_opus" }, "webui", new Date());
+  const candidates = executionSettingsFor(db, { provider: [{ name: "anthropic", advisor: true }], tier: "economy" }, undefined);
+  const open = selectable(candidates, { providers: [], models: [] });
+  expect(open.map((setting) => [setting.advisor, setting.source.advisor])).toEqual([["fable", "ceiling"]]);
+  expect(selectable(candidates, fableWindow).map((setting) => [setting.advisor, setting.source.advisor])).toEqual([["opus", "window_downgraded"]]);
 });
 
 it("全 entry が除外されたら null —— 例外ではない(全除外は正常な skipped の枝であって設定の穴ではない)", () => {
