@@ -59,6 +59,18 @@ async function openBoard(): Promise<{ db: Db; clock: FakeClock }> {
   return { db: database, clock: new FakeClock() };
 }
 
+/** PR を worker として記録する。保護 workspace は無い。 */
+function recordPrOpenedViaWorker(
+  db: Db,
+  task: Task,
+  prNumber: number,
+  workerId: string,
+  now: Date,
+  { authority }: { authority?: Parameters<typeof recordPrOpened>[5] } = {},
+): void {
+  recordPrOpened(db, task, prNumber, workerId, now, authority, undefined, "worker");
+}
+
 function promotionFailures(board: Db, taskId: string) {
   return listBoard(board).filter(
     (candidate) => candidate.question_pending_pr_promotion_task_id === taskId,
@@ -460,7 +472,7 @@ it("open PR 更新は盤面が動かした remote ref だけを再基準化す�
   git(workspace.path, "checkout", "-b", `task/${task.id}`);
   commitWork(workspace.path, "feature.txt", "ready\n");
   git(workspace.path, "checkout", "main");
-  recordPrOpened(db, task, 1, "worker", clock.now(), undefined, undefined, "worker");
+  recordPrOpenedViaWorker(db, task, 1, "worker", clock.now());
 
   // push をまたいで走る別タスクのセッションは、盤面の push を違反に数えない
   await straddle(db, clock, workspace, () => landing.land(getTask(db, task.id)!));
@@ -536,7 +548,7 @@ it("open PR branch の push 失敗は既存の着地痕跡で隠さず failure q
   );
   git(workspace.path, "checkout", "-b", `task/${task.id}`);
   commitWork(workspace.path, "feature.txt", "ready\n");
-  recordPrOpened(db, task, 1, "worker", clock.now(), undefined, undefined, "worker");
+  recordPrOpenedViaWorker(db, task, 1, "worker", clock.now());
   const remoteTaskRef = `refs/remotes/origin/task/${task.id}`;
 
   // 失敗した push の後に撮り直すと、またいだセッションの worker が偽造した ref まで
@@ -823,7 +835,7 @@ it("祖先の再発火は open PR を持つ work だけを更新する", async (
   git(workspace.path, "checkout", "-b", `task/${parent.id}`, "main");
   commitWork(workspace.path, "feature.txt", "ready\n");
   completeTask(db, parent, FULL_HANDOFF, "worker", clock.now(), "worker");
-  recordPrOpened(db, parent, 1, "worker", clock.now(), undefined, undefined, "worker");
+  recordPrOpenedViaWorker(db, parent, 1, "worker", clock.now());
   commitWork(workspace.path, "repair.txt", "fixed\n");
   const settled = registerTask(
     db,
@@ -919,7 +931,7 @@ it("fork 元が squash 着地した根は保護ブランチへ merge で追い�
   git(workspace.path, "checkout", "-b", `task/${parent.id}`);
   commitWork(workspace.path, "feature.txt", "parent result\n");
   completeTask(db, parent, FULL_HANDOFF, "worker", clock.now(), "worker");
-  recordPrOpened(db, parent, 1, "worker", clock.now(), undefined, undefined, "worker");
+  recordPrOpenedViaWorker(db, parent, 1, "worker", clock.now());
   const repair = registerTask(
     db,
     {
@@ -971,7 +983,7 @@ it("追いつき merge をまたいで走るセッションは、盤面が動か
   git(workspace.path, "checkout", "-b", `task/${parent.id}`);
   commitWork(workspace.path, "feature.txt", "parent result\n");
   completeTask(db, parent, FULL_HANDOFF, "worker", clock.now(), "worker");
-  recordPrOpened(db, parent, 1, "worker", clock.now(), undefined, undefined, "worker");
+  recordPrOpenedViaWorker(db, parent, 1, "worker", clock.now());
   const repair = attachUnsettledChild(db, clock, parent.id);
   git(workspace.path, "checkout", "-b", `task/${repair.id}`, `task/${parent.id}`);
   await squashTaskIntoOrigin(workspace, parent.id);
@@ -1116,7 +1128,7 @@ it("付帯子と異議が両方あれば attached_children を名乗り、回答
 it("PR の merge question は PR から引いた着地タスクの付帯子で塞がる", async () => {
   const { db, clock } = await openBoard();
   const work = landingWork(db, clock);
-  recordPrOpened(db, work, 7, "worker", clock.now(), undefined, undefined, "worker");
+  recordPrOpenedViaWorker(db, work, 7, "worker", clock.now());
   const question = mergeQuestion(db, clock, { pending_merge_pr: 7 });
   expect(landingAnnotation(db, question)).toEqual({ blocked_by: null });
 
@@ -1130,8 +1142,8 @@ it("PR を開いた後の merge question も、CI red で止まった auto-merge
   const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
   github.scriptCiStatus("failure");
-  recordPrOpened(db, landingWork(db, clock), 1, "worker", clock.now(), { merge: "escalate" }, false, "worker");
-  recordPrOpened(db, landingWork(db, clock), 2, "worker", clock.now(), { merge: "auto_if_ci_green" }, false, "worker");
+  recordPrOpenedViaWorker(db, landingWork(db, clock), 1, "worker", clock.now(), { authority: { merge: "escalate" } });
+  recordPrOpenedViaWorker(db, landingWork(db, clock), 2, "worker", clock.now(), { authority: { merge: "auto_if_ci_green" } });
 
   await createLanding({ defaultAgentName: "tako", db, clock, workspace, github }).tick("auto_merge", clock.now());
 

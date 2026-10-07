@@ -24,9 +24,9 @@ import {
 } from "../src/memory.js";
 import { type MetaReviewSubject, registerMetaReview } from "../src/meta-review.js";
 import { EXTRACTOR_VERSION } from "../src/precedent.js";
-import { answerQuestion, getTask, logDecision, type MemoryProposal, registerTask } from "../src/tasks.js";
+import { getTask, logDecision, type MemoryProposal, registerTask } from "../src/tasks.js";
 import { HUMAN_WORKER_ID } from "../src/worker-id.js";
-import { bundledObjection, failureQuestion, HUMAN_WEBUI } from "./harness.js";
+import { answerQuestionViaWebui, bundledObjection, failureQuestion, HUMAN_WEBUI } from "./harness.js";
 
 /** memory meta-review の材料の節(ADR 0180 決定1・2)のドメイン層。spawn の prompt に入ることは両 adapter のテストが言う。 */
 const at = new Date("2026-10-01T00:00:00.000Z");
@@ -169,7 +169,7 @@ it("abandon で取り消された登録は窓の起点にならない: 次の回
   bundledObjection(db, work, beforeCancelled!, at);
   const cancelled = register(db, "memory");
   const failure = failureQuestion(db, cancelled, at);
-  answerQuestion(db, failure, ["abandon"], at, undefined, undefined, undefined, "webui");
+  answerQuestionViaWebui(db, failure, ["abandon"], at);
   bundledObjection(db, work, afterCancelled!, at);
   const review = register(db, "memory");
   const [doneWatermark] = listEventsOfKinds(db, ["meta_review_registered"]).map((e) => e.payload.material_watermark);
@@ -191,7 +191,7 @@ it("異議つき判断は窓の中に異議のある decision だけを list_pre
   const propose = (candidate_id: number) => proposeMemoryChange(db, previous, { op: "approve", candidate_id, rationale: "r" }, "auditor", at).question_id;
   const answer = (questionId: string) => {
     const question = getTask(db, questionId)!;
-    answerQuestion(db, question, ["reject"], at, undefined, "Not ours.", undefined, "webui");
+    answerQuestionViaWebui(db, question, ["reject"], at, { comment: "Not ours." });
     rejectMemoryProposal(db, question.question_proposal as MemoryProposal, questionId, "webui", at);
   };
   const [answered, stale, open, late2] = ["Answered", "Stale", "Open", "Late"].map((title) => candidate(db, title));
@@ -230,7 +230,7 @@ it("節を組んだ記録は task 帰属・agent 名義の meta_review_material_
   const definition = defineMemoryBranch(db, { scope: "tidepool", path: "tools", text: "Tools.", author: deckhand }, "worker", at).entry_id;
   const [drafted, rejected] = ["Drafted", "Rejected"].map((title) => candidate(db, title));
   const question = proposeMemoryChange(db, previous, { op: "approve", candidate_id: rejected!, rationale: "r" }, "auditor", at).question_id;
-  answerQuestion(db, getTask(db, question)!, ["reject"], at, undefined, "No.", undefined, "webui");
+  answerQuestionViaWebui(db, getTask(db, question)!, ["reject"], at, { comment: "No." });
   rejectMemoryProposal(db, getTask(db, question)!.question_proposal as MemoryProposal, question, "webui", at);
   const review = register(db, "memory");
   const [first, second] = listEventsOfKinds(db, ["meta_review_registered"]).map((e) => e.payload.material_watermark);

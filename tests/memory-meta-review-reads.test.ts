@@ -29,8 +29,8 @@ import {
   searchMemoryEntries,
 } from "../src/memory.js";
 import { EXTRACTOR_VERSION, entriesReadBefore, entriesSeenBefore, projectEpisode } from "../src/precedent.js";
-import { answerQuestion, getTask, logDecision, type MemoryProposal, registerTask } from "../src/tasks.js";
-import { bundledObjection, HUMAN_WEBUI, WORKER_SPAWNED } from "./harness.js";
+import { getTask, logDecision, type MemoryProposal, registerTask } from "../src/tasks.js";
+import { answerQuestionViaWebui, bundledObjection, HUMAN_WEBUI, WORKER_SPAWNED } from "./harness.js";
 
 /** meta-review の読み口(issue #619 / ADR 0120 決定2)のドメイン層。verb への写像はサーバ境界
  *  (tests/mcp-memory-meta-review.test.ts)が言う。 */
@@ -153,7 +153,7 @@ function proposals() {
   const propose = (input: Parameters<typeof proposeMemoryChange>[2]) => proposeMemoryChange(db, task.id, input, "auditor", at).question_id;
   const answer = (questionId: string, option: "approve" | "reject", rest: { comment?: string; amendment?: MemoryAmendment } = {}) => {
     const question = getTask(db, questionId)!;
-    answerQuestion(db, question, [option], at, undefined, rest.comment, rest.amendment, "webui");
+    answerQuestionViaWebui(db, question, [option], at, { comment: rest.comment, amendment: rest.amendment });
     const proposal = question.question_proposal as MemoryProposal;
     if (option === "approve") approveMemoryProposal(db, proposal, questionId, "webui", at, rest.amendment);
     else rejectMemoryProposal(db, proposal, questionId, "webui", at);
@@ -276,7 +276,7 @@ it("read_memory_entries と list_memory_proposals も応答予算で切り、nex
   const ids = Array.from({ length: 20 }, (_, i) => behavior({ title: `tide ${i} ${"y".repeat(2_000)}` }));
   const proposed = ids.map((candidate_id) => {
     const { question_id } = proposeMemoryChange(db, task.id, { op: "approve", candidate_id, rationale: "r" }, "auditor", at);
-    answerQuestion(db, getTask(db, question_id)!, ["reject"], at, undefined, "c".repeat(2_000), undefined, "webui");
+    answerQuestionViaWebui(db, getTask(db, question_id)!, ["reject"], at, { comment: "c".repeat(2_000) });
     return question_id;
   });
   const input = { ids: [9999, ...[...ids].reverse()] };

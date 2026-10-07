@@ -6,9 +6,9 @@ import { recordShadow } from "../src/learner.js";
 import { buildMetaReviewMaterial, recordMetaReviewMaterial } from "../src/memory.js";
 import { registerMetaReview } from "../src/meta-review.js";
 import { listRoutingCells, listRoutingShadow, proposeRoutingChange, readRoutingSettings } from "../src/routing-review.js";
-import { answerQuestion, getTask, registerTask } from "../src/tasks.js";
+import { getTask, registerTask } from "../src/tasks.js";
 import { tierIdOf } from "../src/tier.js";
-import { HUMAN_WEBUI, QUIET_EXIT, WORKER_SPAWNED } from "./harness.js";
+import { answerQuestionViaWebui, HUMAN_WEBUI, QUIET_EXIT, WORKER_SPAWNED } from "./harness.js";
 
 /** routing meta-review の材料の節(ADR 0180 追記 #1239)のドメイン層。spawn の prompt に入ることは両 adapter のテストが言う。 */
 const at = new Date("2026-10-01T00:00:00.000Z");
@@ -199,7 +199,7 @@ it("決着した提案は回答か陳腐化が窓の中にあるものだけを 
   const parent = register(db, true);
   const propose = (model: string) =>
     proposeRoutingChange(db, parent, { op: "row", row: { provider: "anthropic", model, effort: "high" }, change: { tier: "frontier" }, rationale: "r" }, "auditor", at).question_id;
-  const answer = (id: string, answers: string[], comment?: string, amendment?: { tier: "economy" }) => answerQuestion(db, getTask(db, id)!, answers, at, undefined, comment, amendment, "webui");
+  const answer = (id: string, answers: string[], comment?: string, amendment?: { tier: "economy" }) => answerQuestionViaWebui(db, getTask(db, id)!, answers, at, { comment, amendment });
   const early = propose("claude-sonnet-5-5");
   answer(early, ["reject"], "Too early.");
   const [rejected, stale, open, late] = ["claude-opus-5-5", "claude-opus-5-5", "claude-fable-5-1", "claude-sonnet-5-5"].map(propose) as [string, string, string, string];
@@ -254,7 +254,7 @@ it("節を組んだ記録は主題 routing と、乖離した shadow 行の id�
   applyExecutionSettingsChange(db, { setting: "priority", value: "cost" }, "webui", at);
   const rowEdit = applyExecutionSettingsChange(db, { setting: "row", row: { provider: "anthropic", tier: "economy", model: "claude-haiku-4-5", effort: "low", price_in: 1, price_out: 5 } }, "webui", at)!;
   const question = proposeRoutingChange(db, previous, { op: "promote", rationale: "r" }, "auditor", at).question_id;
-  answerQuestion(db, getTask(db, question)!, ["reject"], at, undefined, "Not yet.", undefined, "webui");
+  answerQuestionViaWebui(db, getTask(db, question)!, ["reject"], at, { comment: "Not yet." });
   const review = register(db);
   const [first, second] = listEventsOfKinds(db, ["meta_review_registered"]).map((e) => e.payload.material_watermark);
   const material = routingMaterialOf(db, review);

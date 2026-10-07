@@ -1,9 +1,9 @@
 import { afterEach, expect, it } from "vitest";
 import { type Db, openDb } from "../src/db.js";
-import { answerQuestion, escalateTask, getTask, humanDecomposeTask, logDecision, registerTask, type Task } from "../src/tasks.js";
+import { escalateTask, getTask, logDecision, registerTask, type Task } from "../src/tasks.js";
 import { commitTriage, raiseObjection, startTriage } from "../src/triage.js";
 import { BOARD_WORKER_ID } from "../src/worker-id.js";
-import { api, bootTidepool, HOUR, HUMAN_WEBUI, mcpClient, queueWork, registerWork, type Tidepool } from "./harness.js";
+import { answerQuestionViaWebui, api, bootTidepool, HOUR, HUMAN_WEBUI, humanDecomposeTaskViaWebui, mcpClient, queueWork, registerWork, type Tidepool } from "./harness.js";
 
 let t: Tidepool;
 afterEach(() => t?.stop());
@@ -147,7 +147,7 @@ const failureQuestion = (db: Db, parent: Task) =>
 
 it.each([
   ["未回答の failure question", failureQuestion],
-  ["回答済みの failure question", (db: Db, parent: Task): unknown => answerQuestion(db, failureQuestion(db, parent), ["retry"], at, undefined, undefined, undefined, "webui")],
+  ["回答済みの failure question", (db: Db, parent: Task): unknown => answerQuestionViaWebui(db, failureQuestion(db, parent), ["retry"], at)],
   [
     "異議が立てた RCA review",
     (db: Db, parent: Task): unknown => {
@@ -163,7 +163,7 @@ it.each([
   addBoardChild(db, registered);
   const parent = getTask(db, registered.id)!;
 
-  const [child] = humanDecomposeTask(db, parent, { reason: "split", children: [{ title: "human's child", purpose: "p", completion_criteria: "c" }] }, at, undefined, "webui");
+  const [child] = humanDecomposeTaskViaWebui(db, parent, { reason: "split", children: [{ title: "human's child", purpose: "p", completion_criteria: "c" }] }, at);
 
   expect(child).toMatchObject({ parent_id: parent.id, title: "human's child" });
 });

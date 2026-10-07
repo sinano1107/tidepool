@@ -5,8 +5,9 @@ import { openDb } from "../src/db.js";
 import { quarantineFailedTeardown } from "../src/failed-teardown.js";
 import { setPaused } from "../src/pause.js";
 import { registerQuarantine } from "../src/quarantine.js";
-import { answerQuestion, getTask, listBoard } from "../src/tasks.js";
+import { getTask, listBoard } from "../src/tasks.js";
 import { startTriage } from "../src/triage.js";
+import { answerQuestionViaWebui } from "./harness.js";
 
 const NOW = new Date("2026-08-12T00:00:00.000Z");
 
@@ -40,10 +41,10 @@ describe("boardHalts は盤面全体の停止を1つの順序つき列挙で答�
     const [first, second, ...rest] = listBoard(db).filter((t) => t.type === "question");
     expect(rest).toEqual([]);
 
-    answerQuestion(db, getTask(db, first!.id)!, ["repaired by hand"], NOW, undefined, undefined, undefined, "webui");
+    answerQuestionViaWebui(db, getTask(db, first!.id)!, ["repaired by hand"], NOW);
     expect(boardHalts(db)).toEqual([{ kind: "failedTeardown" }]);
 
-    answerQuestion(db, getTask(db, second!.id)!, ["repaired by hand"], NOW, undefined, undefined, undefined, "webui");
+    answerQuestionViaWebui(db, getTask(db, second!.id)!, ["repaired by hand"], NOW);
     expect(boardHalts(db)).toEqual([]);
   });
 });
