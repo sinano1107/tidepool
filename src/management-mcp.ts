@@ -937,6 +937,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
         workspace: z.string().optional(),
         risk_flag: z.boolean().optional(),
         review_flag: z.boolean().optional(),
+        review_by: z.array(z.string().min(1)).optional(),
       },
     },
     async ({ task_id, ...input }) => {

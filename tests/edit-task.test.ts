@@ -1,12 +1,23 @@
 import { afterEach, expect, it } from "vitest";
 import { UnknownWorkspaceError } from "../src/workspace.js";
-import { api, bootTidepool, queueChild, queueWork, type Tidepool } from "./harness.js";
+import { api, bootTidepool, FULL_HANDOFF, HOUR, mcpClient, queueChild, queueWork, type Tidepool } from "./harness.js";
 
 let t: Tidepool;
 afterEach(() => t?.stop());
 
 async function events(t: Tidepool, id: string): Promise<any[]> {
   return (await api(t.baseUrl, "GET", `/api/tasks/${id}/events`)).json;
+}
+
+/** MCP の complete_task で完了させ、立った完了時レビューの assignee を返す。 */
+async function completeAndListReviewers(t: Tidepool, id: string): Promise<string[]> {
+  await t.clock.advance(HOUR);
+  const client = await mcpClient(t.mcpBaseUrl, id);
+  await client.callTool({ name: "complete_task", arguments: { handoff: FULL_HANDOFF } });
+  await client.close();
+  return (await api(t.baseUrl, "GET", "/api/tasks")).json
+    .filter((x: any) => x.type === "review" && x.parent_id === id)
+    .map((x: any) => x.assignee);
 }
 
 it("人間登録タスクの title / purpose / completion criteria を編集でき、旧値がイベント履歴に残る", async () => {
@@ -110,4 +121,55 @@ it("人間 decompose で足した子タスク(人間登録)も編集できる", 
   const res = await api(t.baseUrl, "PATCH", `/api/tasks/${child.id}`, { title: "renamed child" });
   expect(res.status).toBe(200);
   expect(res.json.title).toBe("renamed child");
+});
+
+it("人間登録 task の review_by を Edit で置き換えると、完了時レビューが新しい reviewer ごとに立ち、旧値が履歴に残る(#1498)", async () => {
+  t = await bootTidepool();
+  const task = queueWork(t, "review me");
+
+  const res = await api(t.baseUrl, "PATCH", `/api/tasks/${task.id}`, { review_by: ["security", "standards"] });
+  expect(res.status).toBe(200);
+  expect(res.json.review_by).toEqual(["security", "standards"]);
+
+  const edited = (await events(t, task.id)).filter(
+    (e) => e.kind === "task_edited" && e.payload.field === "review_by",
+  );
+  expect(edited).toHaveLength(1);
+  expect(edited[0].payload.from).toBe(null);
+  expect(edited[0].payload.to).toBe('["security","standards"]');
+
+  expect(await completeAndListReviewers(t, task.id)).toEqual(["security", "standards"]);
+});
+
+it("review_by: [] で指名を外すと null に戻り、完了時レビューは盤面の Auditor に解決される", async () => {
+  t = await bootTidepool();
+  const task = queueWork(t, "unname me");
+  await api(t.baseUrl, "PATCH", `/api/tasks/${task.id}`, { review_by: ["security"] });
+
+  const res = await api(t.baseUrl, "PATCH", `/api/tasks/${task.id}`, { review_by: [] });
+  expect(res.status).toBe(200);
+  expect(res.json.review_by).toBe(null);
+
+  const edited = (await events(t, task.id)).filter(
+    (e) => e.kind === "task_edited" && e.payload.field === "review_by",
+  );
+  expect(edited.map((e) => [e.payload.from, e.payload.to])).toEqual([
+    [null, '["security"]'],
+    ['["security"]', null],
+  ]);
+
+  expect(await completeAndListReviewers(t, task.id)).toEqual(["fugu"]);
+});
+
+it("同じ review_by を送り直しても、未指名に [] を送っても task_edited は残らない", async () => {
+  t = await bootTidepool();
+  const task = queueWork(t, "same reviewers");
+  await api(t.baseUrl, "PATCH", `/api/tasks/${task.id}`, { review_by: [] });
+  await api(t.baseUrl, "PATCH", `/api/tasks/${task.id}`, { review_by: ["security"] });
+  await api(t.baseUrl, "PATCH", `/api/tasks/${task.id}`, { review_by: ["security"] });
+
+  const edited = (await events(t, task.id)).filter(
+    (e) => e.kind === "task_edited" && e.payload.field === "review_by",
+  );
+  expect(edited).toHaveLength(1);
 });

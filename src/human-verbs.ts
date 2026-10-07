@@ -736,6 +736,7 @@ export function editThroughHumanDoor(
   if (!task) return { ok: false, failure: { kind: "not_found", error: "task not found" } };
   try {
     if (input.assignee) assertAssigneeKnown(deps.agentRegistered, input.assignee);
+    for (const reviewer of input.review_by ?? []) assertReviewerKnown(deps.agentRegistered, reviewer);
     if (input.workspace) {
       assertWorkspaceKnown(input.workspace, deps.resolveWorkspace, deps.workspace);
     }

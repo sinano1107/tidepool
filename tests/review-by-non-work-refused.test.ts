@@ -1,7 +1,7 @@
 import { expect, it } from "vitest";
 import { openDb } from "../src/db.js";
 import { DomainError } from "../src/domain-error.js";
-import { listBoard, registerTask } from "../src/tasks.js";
+import { editTask, listBoard, registerTask } from "../src/tasks.js";
 import { HUMAN_WEBUI } from "./harness.js";
 
 const BASE = { purpose: "p", completion_criteria: "c" } as const;
@@ -12,6 +12,14 @@ it("work でない task への review_by は登録時に DomainError で拒否�
     registerTask(db, { type: "review", title: "r", ...BASE, review_by: ["fugu"] }, new Date(0), ...HUMAN_WEBUI),
   ).toThrow(DomainError);
   expect(listBoard(db)).toHaveLength(0);
+  db.close();
+});
+
+it("work でない task の review_by を空でない list へ Edit すると DomainError で拒否される(#1498)", () => {
+  const db = openDb(":memory:");
+  const review = registerTask(db, { type: "review", title: "r", ...BASE }, new Date(0), ...HUMAN_WEBUI);
+  expect(() => editTask(db, review, { review_by: ["fugu"] }, new Date(1), HUMAN_WEBUI[1])).toThrow(DomainError);
+  expect(listBoard(db)[0]?.review_by).toBe(null);
   db.close();
 });
 
