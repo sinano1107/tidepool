@@ -229,6 +229,9 @@ function RegisterScreen({ onRegister, parentTask, onClose }: RegisterScreenProps
           ...reviewByField,
           ...childExtras(),
         };
+  // the decompose reason is left alone: it sits outside the dump / plain form
+  // pair and is required in childMode, so a toggle must not wipe it (#1515).
+  // A child add unmounts the whole screen on close, which clears it there
   const resetContent = () => {
     setDump(''); setDrafted(false); setPlainFormActive(false);
     setType('work'); setTitle(''); setPurpose(''); setCriteria('');
