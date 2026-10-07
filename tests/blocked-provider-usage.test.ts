@@ -2,6 +2,7 @@ import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { quarantineCliAuthForProvider } from "../src/cli-auth.js";
 import { type Db, openDb } from "../src/db.js";
+import { registerQuarantine } from "../src/quarantine.js";
 import { answerQuestion, getTask, listBoard } from "../src/tasks.js";
 import {
   blockedProviderUsageResources,
@@ -231,7 +232,7 @@ it("isAnthropicBoardCallBlocked: 使用量観測が無くても anthropic の Pr
   expect(isAnthropicBoardCallBlocked(db)).toBe(true);
 });
 
-it("isAnthropicBoardCallBlocked: observed で窓がすべて開いていても anthropic の Provider 認証の Quarantine 中は model 引数の有無に関わらず true(#1466)", async () => {
+it("isAnthropicBoardCallBlocked: observed の観測があっても anthropic の Provider 認証の Quarantine 中は model 引数の有無に関わらず true(#1466)", async () => {
   const db = await freshDb();
   reportProviderUsage(db, {
     provider: "anthropic",
@@ -251,6 +252,13 @@ it("isAnthropicBoardCallBlocked: 別 Provider(openai / moonshot)の Provider 認
   const db = await freshDb();
   quarantineCliAuthForProvider(db, "openai", NOW);
   quarantineCliAuthForProvider(db, "moonshot", NOW);
+
+  expect(isAnthropicBoardCallBlocked(db)).toBe(false);
+});
+
+it("isAnthropicBoardCallBlocked: claude-code の Harness 封じ込めの Quarantine は anthropic を pickup から外しても Board call は止めない(#1466)", async () => {
+  const db = await freshDb();
+  registerQuarantine(db, "harnessContainment", "claude-code", "cause", NOW);
 
   expect(isAnthropicBoardCallBlocked(db)).toBe(false);
 });
