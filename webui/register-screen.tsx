@@ -229,10 +229,13 @@ function RegisterScreen({ onRegister, parentTask, onClose }: RegisterScreenProps
           ...reviewByField,
           ...childExtras(),
         };
+  // the decompose reason is left alone: it sits outside the dump / plain form
+  // pair and is required in childMode, so a toggle must not wipe it (#1515).
+  // A child add unmounts the whole screen on close, which clears it there
   const resetContent = () => {
     setDump(''); setDrafted(false); setPlainFormActive(false);
     setType('work'); setTitle(''); setPurpose(''); setCriteria('');
-    setAssignee(''); setWorkspace(''); setTier(''); setIssueNumber(''); setReason('');
+    setAssignee(''); setWorkspace(''); setTier(''); setIssueNumber('');
     setRisk(false); setReview(false); setReviewBy([]);
     // backing out of a pending dump's content leaves the row itself alone —
     // it is unconsumed and stays listed, pickable again later
