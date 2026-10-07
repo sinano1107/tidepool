@@ -78,3 +78,24 @@ advisor の行と決定5 を置き換える。
 - **読むのは手元の clone で、fetch しない。** 削除は registry に書かないので、書き込みの入口の refresh(ADR 0052 決定2)に当たらない。盤面自身の agent.md の書き込みは書く前に段を検査し、着地すれば clone に入るので全部見える。見落とすのは未取得の外部 commit だけで、削除の直後に外から書かれるものと同じく pickup の Quarantine が受ける。registry の無い盤面は照合しない。clone を読めなければ削除ごと断る —— 照合を飛ばす `settleStaleProposals` の線は poll で pickup を止めないためのもので、人間の撃つ削除には当たらない。
 - **退けた案**: 移し先の段を持たせて agent.md を書き換えてから消す —— ほかの3条件は移し先を持たず、削除が registry への書き込みになる。改名と同じく fetch してから読む —— refresh 点が増え、拾える分は削除の直後の外部 commit と区別できない。
 - 盤面の agent の書き込みの push が着地する前に削除が通る狭い競合は残す(改名の着地と transaction の間の競合と同じ種類)。
+
+## 追記(2026-10-07、issue #1521 の grilling)
+
+- **決定6 の「知っている系列」に、advisor を受けられない行を足す。** advisor を有効にした entry の候補から、次の行も外す
+  (行は表に残り、advisor の無い entry の候補のままで、Quarantine もしない)。
+  - **main として advisor を受けない世代の行**(Sonnet / Opus の 4.6 未満)。フラグに関係なく外す —— advisor が何であっても
+    CLI が起動時に断る。
+  - **advisor になれない系列の行**(Haiku)。フラグが無いときだけ外す —— advisor が main と同一になり、CLI が起動時に断る。
+    フラグが立てば `fable` が付くので外さない。
+  adapter は系列ごとに「main として advisor を受ける最小の世代」と「advisor になれるか」を持つ。序列ではないので、退けた案
+  「model ごとの序列の表」は退けたままである。実測と導出の表は #1521 のコメントに置く。
+- **ADR 0042 が退けた「ペアリング表を adapter に持つ」には当たらない。** 0042 が退けたのは、ホストの CLI 版で解決先が動く alias
+  を表で judge することだった。ここで読むのは行の具体 id(ADR 0182)で、知るのは過去の世代について閉じた事実である。
+- **帰結**: Haiku の新しい世代が advisor になれても、release が adapter を直すまで外れたままになる(安全な側に外れる)。
+  Sonnet / Opus の新しい世代は下限より上なので、そのまま候補になる。フラグの無い盤面では、advisor を有効にした agent は Haiku の
+  行を選べず、#1415 の Interview でも同じく対象から外れる。
+- **退けた案**: Haiku の行にはフラグに関係なく `fable` を付ける —— フラグを立てていない運用者に main より上の消費を黙って足し、
+  「いつも alias を渡す」を一部戻す。予測せず失敗 question に任せる —— pin は pickup ごとに決定論で選び直されるので、`retry`
+  のたびに同じ pin で落ちる(Haiku は最安なので `cost` の優先では常に先頭)。起動時の拒否を観測して受ける —— stdout は空で、
+  盤面は stderr で判定しない(ADR 0188)。同意の未了や `availableModels` の除外も同じ理由で失敗 question のまま残す(ADR 0184 の
+  「報告なき exit」の線)。advisor の上限を運用者が選ぶ問いは #1538 に分けた。
