@@ -326,6 +326,7 @@ function mapData(
       // from `assignee` above, which is resolved for display and would
       // misrepresent an unset assignee here
       status: col, rawAssignee: t.raw_assignee,
+      parent_id: t.parent_id, review_flag: t.review_flag, review_by: t.review_by,
       // issue #130: the edit form hides content/workspace for an issue-backed
       // task (immutable — the source of truth is GitHub); a display cue only,
       // editTask on the server is the real gate
@@ -536,6 +537,14 @@ function QuestionDeepLinkView({ questionId, onDone, onTranslate, onOpenSettings 
   );
 }
 
+function completionReviewLine(task: BoardScreenTask): string | null {
+  if (!TidepoolRules.completionReviewFires({
+    type: task.type, parent_id: task.parent_id, assignee: task.rawAssignee,
+    review_flag: task.review_flag, risk_flag: task.risk,
+  })) return null;
+  return `review → ${task.review_by?.length ? task.review_by.join(', ') : 'board auditor'}`;
+}
+
 // issue #130: the chooser a board task-card tap opens for a plausibly-editable
 // task — the three things a human can do to a registered task (add a child,
 // edit its unconsumed fields, cancel it). The eligibility lines (unsettled,
@@ -551,10 +560,12 @@ function TaskActionsDialog({ task, onAddChild, onEdit, onCancel, onClose }: {
   onClose: () => void;
 }) {
   const { Button } = window.TidepoolDesignSystem_8a0ead;
+  const review = completionReviewLine(task);
   return (
     <div style={{ padding: '20px 16px', display: 'flex', flexDirection: 'column', gap: 10 }}>
       <h1 style={{ fontSize: 'var(--text-lg)', margin: '0 0 2px' }}>{task.title}</h1>
       <p style={{ fontSize: 'var(--text-2xs)', fontFamily: 'var(--font-mono)', color: 'var(--text-muted)', margin: '0 0 8px' }}>{task.id} · {task.type}</p>
+      {review && <p style={{ fontSize: 'var(--text-2xs)', fontFamily: 'var(--font-mono)', color: 'var(--text-muted)', margin: '0 0 8px' }}>{review}</p>}
       <Button variant="primary" size="lg" full onClick={onAddChild}>Add child</Button>
       <Button variant="secondary" size="lg" full onClick={onEdit}>Edit</Button>
       <Button variant="secondary" size="lg" full onClick={onCancel}>Cancel task</Button>
@@ -1261,7 +1272,8 @@ function App() {
   const openTask = (t: BoardScreenTask) => {
     const settled = t.status === 'done';
     if (settled || t.status === 'in_progress') {
-      say('info', t.title, `${t.id} · ${t.type}`);
+      const review = completionReviewLine(t);
+      say('info', t.title, <>{t.id} · {t.type}{review && <><br />{review}</>}</>);
       return;
     }
     setActionsTask(t);

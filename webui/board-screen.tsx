@@ -6,8 +6,12 @@
 type BoardScreenTask = NonNullable<import('../design-system/components/board/TaskCard').TaskCardProps['task']> & {
   id: string;
   title: string;
+  type: 'work' | 'question' | 'review';
   /** 解決前の assignee —— 表示用の `assignee` と別枠(app.tsx の mapData)。 */
   rawAssignee?: string | null;
+  parent_id: string | null;
+  review_flag: number;
+  review_by: string[] | null;
   githubIssueNumber?: number | null;
 };
 type BoardScreenColumn = 'todo' | 'in_progress' | 'blocked' | 'done';

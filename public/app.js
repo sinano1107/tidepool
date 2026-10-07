@@ -3629,6 +3629,9 @@ function mapData(board, log, pause, icons, triage, queueEnvelope, yourTasks) {
       // misrepresent an unset assignee here
       status: col,
       rawAssignee: t.raw_assignee,
+      parent_id: t.parent_id,
+      review_flag: t.review_flag,
+      review_by: t.review_by,
       // issue #130: the edit form hides content/workspace for an issue-backed
       // task (immutable — the source of truth is GitHub); a display cue only,
       // editTask on the server is the real gate
@@ -3775,9 +3778,20 @@ function QuestionDeepLinkView({ questionId, onDone, onTranslate, onOpenSettings 
     /* @__PURE__ */ React.createElement("div", { style: { height: "100vh", position: "relative", overflow: "hidden", background: "var(--surface-page)" } }, /* @__PURE__ */ React.createElement(TpSingleQuestion, { q, onAnswer: answer, onClose: () => onDone(null), onTranslate, onOpenSettings }), err && /* @__PURE__ */ React.createElement("div", { style: { position: "fixed", bottom: 24, left: "50%", transform: "translateX(-50%)", zIndex: 60, fontSize: "var(--text-sm)", color: "#fff", background: "var(--danger-fg, #c0392b)", borderRadius: "var(--radius-md)", padding: "10px 16px" } }, err))
   );
 }
+function completionReviewLine(task) {
+  if (!TidepoolRules.completionReviewFires({
+    type: task.type,
+    parent_id: task.parent_id,
+    assignee: task.rawAssignee,
+    review_flag: task.review_flag,
+    risk_flag: task.risk
+  })) return null;
+  return `review \u2192 ${task.review_by?.length ? task.review_by.join(", ") : "board auditor"}`;
+}
 function TaskActionsDialog({ task, onAddChild, onEdit, onCancel, onClose }) {
   const { Button } = window.TidepoolDesignSystem_8a0ead;
-  return /* @__PURE__ */ React.createElement("div", { style: { padding: "20px 16px", display: "flex", flexDirection: "column", gap: 10 } }, /* @__PURE__ */ React.createElement("h1", { style: { fontSize: "var(--text-lg)", margin: "0 0 2px" } }, task.title), /* @__PURE__ */ React.createElement("p", { style: { fontSize: "var(--text-2xs)", fontFamily: "var(--font-mono)", color: "var(--text-muted)", margin: "0 0 8px" } }, task.id, " \xB7 ", task.type), /* @__PURE__ */ React.createElement(Button, { variant: "primary", size: "lg", full: true, onClick: onAddChild }, "Add child"), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "lg", full: true, onClick: onEdit }, "Edit"), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "lg", full: true, onClick: onCancel }, "Cancel task"), /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "lg", full: true, onClick: onClose }, "Close"));
+  const review = completionReviewLine(task);
+  return /* @__PURE__ */ React.createElement("div", { style: { padding: "20px 16px", display: "flex", flexDirection: "column", gap: 10 } }, /* @__PURE__ */ React.createElement("h1", { style: { fontSize: "var(--text-lg)", margin: "0 0 2px" } }, task.title), /* @__PURE__ */ React.createElement("p", { style: { fontSize: "var(--text-2xs)", fontFamily: "var(--font-mono)", color: "var(--text-muted)", margin: "0 0 8px" } }, task.id, " \xB7 ", task.type), review && /* @__PURE__ */ React.createElement("p", { style: { fontSize: "var(--text-2xs)", fontFamily: "var(--font-mono)", color: "var(--text-muted)", margin: "0 0 8px" } }, review), /* @__PURE__ */ React.createElement(Button, { variant: "primary", size: "lg", full: true, onClick: onAddChild }, "Add child"), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "lg", full: true, onClick: onEdit }, "Edit"), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "lg", full: true, onClick: onCancel }, "Cancel task"), /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "lg", full: true, onClick: onClose }, "Close"));
 }
 function EditTaskDialog({ taskCard, onSaved, onClose, say }) {
   const { Button, Card, Input, Select, Checkbox } = window.TidepoolDesignSystem_8a0ead;
@@ -4270,7 +4284,8 @@ function App() {
   const openTask = (t) => {
     const settled = t.status === "done";
     if (settled || t.status === "in_progress") {
-      say("info", t.title, `${t.id} \xB7 ${t.type}`);
+      const review = completionReviewLine(t);
+      say("info", t.title, /* @__PURE__ */ React.createElement(React.Fragment, null, t.id, " \xB7 ", t.type, review && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("br", null), review)));
       return;
     }
     setActionsTask(t);
