@@ -35,11 +35,7 @@ type AppData = ReturnType<typeof mapData>;
 /** 画面が一言を出す口 —— App が配り、各ダイアログが呼ぶ。 */
 type AppSay = (kind: AppToastKind, msg: string, detail?: React.ReactNode) => void;
 /** レジストリ由来の候補(issue #52 の GET /api/registry/candidates)。 */
-interface AppCandidates {
-  assignees: string[];
-  workspaces: string[];
-  icons?: Record<string, string>;
-}
+type AppCandidates = WireContract['GET /api/registry/candidates'];
 
 /** api() が 4xx/5xx で投げるエラー。catch (e) は unknown なので、素の Error に
  *  プロパティを生やす形では呼び手が `status` を撃たれない(#749 User Story 6)——
@@ -593,7 +589,7 @@ function EditTaskDialog({ taskCard, onSaved, onClose, say }: {
   const { Button, Card, Input, Select, Checkbox } = window.TidepoolDesignSystem_8a0ead;
   const [full, setFull] = React.useState<WireContract['GET /api/tasks/:id'] | null>(null);
   const [busy, setBusy] = React.useState(false);
-  const [candidates, setCandidates] = React.useState<AppCandidates>({ assignees: [], workspaces: [] });
+  const [candidates, setCandidates] = React.useState<AppCandidates>({ assignees: [], workspaces: [], icons: {} });
   const [fields, setFields] = React.useState<EditTaskFields | null>(null);
   React.useEffect(() => {
     api('GET /api/registry/candidates').then(setCandidates).catch(() => {});

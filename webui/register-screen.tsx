@@ -70,9 +70,10 @@ function ReviewerPicker({ candidates, value, onChange }: {
 }) {
   const { Select, AgentChip, IconButton } = window.TidepoolDesignSystem_8a0ead;
   React.useEffect(() => { lucide.createIcons(); });
+  const addable = candidates.assignees.filter((n) => n !== 'human' && !value.includes(n));
   const options = [
-    { value: '', label: 'add reviewer…' },
-    ...candidates.assignees.filter((n) => n !== 'human' && !value.includes(n)).map((n) => ({ value: n, label: n })),
+    { value: '', label: addable.length ? 'add reviewer…' : 'no more to add' },
+    ...addable.map((n) => ({ value: n, label: n })),
   ];
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
@@ -80,7 +81,7 @@ function ReviewerPicker({ candidates, value, onChange }: {
       <Select label="Reviewers" options={options} value="" onChange={(e) => { if (e.target.value) onChange([...value, e.target.value]); }} />
       {value.map((n) => (
         <div key={n} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          <AgentChip name={n} icon={candidates.icons?.[n]} />
+          <AgentChip name={n} icon={candidates.icons[n]} />
           <IconButton label={`remove ${n}`} size="sm" onClick={() => onChange(value.filter((x) => x !== n))}>
             <i data-lucide="x" style={{ width: 16, height: 16 }}></i>
           </IconButton>
@@ -129,7 +130,7 @@ function RegisterScreen({ onRegister, parentTask, onClose }: RegisterScreenProps
   // registry-sourced assignee/workspace candidates (issue #12/#65) — fetched
   // once per screen visit; RegisterScreen remounts fresh each tab entry (the
   // shell's key={tab}), so this never goes stale within a sitting
-  const [candidates, setCandidates] = React.useState<AppCandidates>({ assignees: [], workspaces: [] });
+  const [candidates, setCandidates] = React.useState<AppCandidates>({ assignees: [], workspaces: [], icons: {} });
   React.useEffect(() => {
     api('GET /api/registry/candidates').then(setCandidates).catch(() => {});
   }, []);

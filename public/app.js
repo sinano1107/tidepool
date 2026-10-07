@@ -871,13 +871,14 @@ function ReviewerPicker({ candidates, value, onChange }) {
   React.useEffect(() => {
     lucide.createIcons();
   });
+  const addable = candidates.assignees.filter((n) => n !== "human" && !value.includes(n));
   const options = [
-    { value: "", label: "add reviewer\u2026" },
-    ...candidates.assignees.filter((n) => n !== "human" && !value.includes(n)).map((n) => ({ value: n, label: n }))
+    { value: "", label: addable.length ? "add reviewer\u2026" : "no more to add" },
+    ...addable.map((n) => ({ value: n, label: n }))
   ];
   return /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 6 } }, /* @__PURE__ */ React.createElement(Select, { label: "Reviewers", options, value: "", onChange: (e) => {
     if (e.target.value) onChange([...value, e.target.value]);
-  } }), value.map((n) => /* @__PURE__ */ React.createElement("div", { key: n, style: { display: "flex", alignItems: "center", gap: 6 } }, /* @__PURE__ */ React.createElement(AgentChip, { name: n, icon: candidates.icons?.[n] }), /* @__PURE__ */ React.createElement(IconButton, { label: `remove ${n}`, size: "sm", onClick: () => onChange(value.filter((x) => x !== n)) }, /* @__PURE__ */ React.createElement("i", { "data-lucide": "x", style: { width: 16, height: 16 } })))), /* @__PURE__ */ React.createElement("span", { style: { fontSize: "var(--text-sm)", color: "var(--text-secondary)" } }, "none \u2192 board auditor"));
+  } }), value.map((n) => /* @__PURE__ */ React.createElement("div", { key: n, style: { display: "flex", alignItems: "center", gap: 6 } }, /* @__PURE__ */ React.createElement(AgentChip, { name: n, icon: candidates.icons[n] }), /* @__PURE__ */ React.createElement(IconButton, { label: `remove ${n}`, size: "sm", onClick: () => onChange(value.filter((x) => x !== n)) }, /* @__PURE__ */ React.createElement("i", { "data-lucide": "x", style: { width: 16, height: 16 } })))), /* @__PURE__ */ React.createElement("span", { style: { fontSize: "var(--text-sm)", color: "var(--text-secondary)" } }, "none \u2192 board auditor"));
 }
 function RegisterScreen({ onRegister, parentTask, onClose }) {
   const { Button, Card, Input, Select, Checkbox } = window.TidepoolDesignSystem_8a0ead;
@@ -901,7 +902,7 @@ function RegisterScreen({ onRegister, parentTask, onClose }) {
   const [drafted, setDrafted] = React.useState(false);
   const [plainFormActive, setPlainFormActive] = React.useState(false);
   const [draftBusy, setDraftBusy] = React.useState(false);
-  const [candidates, setCandidates] = React.useState({ assignees: [], workspaces: [] });
+  const [candidates, setCandidates] = React.useState({ assignees: [], workspaces: [], icons: {} });
   React.useEffect(() => {
     api("GET /api/registry/candidates").then(setCandidates).catch(() => {
     });
@@ -3730,7 +3731,7 @@ function EditTaskDialog({ taskCard, onSaved, onClose, say }) {
   const { Button, Card, Input, Select, Checkbox } = window.TidepoolDesignSystem_8a0ead;
   const [full, setFull] = React.useState(null);
   const [busy, setBusy] = React.useState(false);
-  const [candidates, setCandidates] = React.useState({ assignees: [], workspaces: [] });
+  const [candidates, setCandidates] = React.useState({ assignees: [], workspaces: [], icons: {} });
   const [fields, setFields] = React.useState(null);
   React.useEffect(() => {
     api("GET /api/registry/candidates").then(setCandidates).catch(() => {
