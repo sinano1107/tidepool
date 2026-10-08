@@ -178,11 +178,17 @@ it.each([
   ["தமிழ் note", "தமிழ்", ["தம"]],
   ["कि.foo note", "कि.foo", ["foo", "किfoo"]],
   ["ᦰx note", "ᦰx", ["x"]],
-])("結合文字 M は Mc / Me も直前の字と同じ語に入るので、text %j の leaf は query %j で当たり、断片や . を落とした query %j では当たらない(#1205)", (text, whole, fragments) => {
+])("結合文字 M は Mc も直前の字と同じ語に入るので、text %j の leaf は query %j で当たり、断片や . を落とした query %j では当たらない(#1205)", (text, whole, fragments) => {
   const { db, reader, record } = board();
   record({ title: "leaf", text });
   expect(searchMemory(db, reader, { query: whole }, at).results.map((r) => r.title)).toEqual(["leaf"]);
   for (const query of fragments) expect(searchMemory(db, reader, { query }, at).results).toEqual([]);
+});
+
+it.each(["한〮abc note", "一\u{16FF0}abc note"])("CJK の連なりに続く Mc も索引と query で同じ語に入るので、text %j の leaf は自身の text で当たる(#1205)", (text) => {
+  const { db, reader, record } = board();
+  record({ title: "leaf", text });
+  expect(searchMemory(db, reader, { query: text }, at).results.map((r) => r.title)).toEqual(["leaf"]);
 });
 
 it.each([

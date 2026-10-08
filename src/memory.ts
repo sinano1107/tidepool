@@ -1358,12 +1358,14 @@ export function listMemoryEntries(
     }));
 }
 
-/** CJK の連なり = Script_Extensions が Han / Hiragana / Katakana / Hangul で、一般カテゴリが文字・数字・Mn の字(#1180)。
- *  scx だけだと 、。「」・〜 や ㈱ など句読点・記号(P / S / Mc)も入って bigram に混ざるので、それらは連なりを切り、
+/** CJK の連なり = Script_Extensions が Han / Hiragana / Katakana / Hangul で、一般カテゴリが文字・数字・結合文字 M の字
+ *  (#1180)。M は tokenizer が直前の字と同じ語に入れるので、連なりも切らない(切ると `한〮abc` の U+302E が索引では `〮abc`
+ *  の語頭に付き、query では語を割って自身の text に当たらない、#1205)。
+ *  scx だけだと 、。「」・〜 や ㈱ など句読点・記号(P / S)も入って bigram に混ざるので、それらは連なりを切り、
  *  前処理後もそのまま残って unicode61 の区切りになる。捕獲グループは ftsQuery の split が連なりを結果に残すためにある
  *  (外すと CJK の語が query から消える)。 */
 const CJK_SCRIPT = String.raw`[\p{scx=Han}\p{scx=Hiragana}\p{scx=Katakana}\p{scx=Hangul}]`;
-const RUN_CATEGORY = String.raw`[\p{L}\p{N}\p{Mn}]`;
+const RUN_CATEGORY = String.raw`[\p{L}\p{N}\p{M}]`;
 const CJK_RUN = new RegExp(String.raw`((?:(?=${RUN_CATEGORY})${CJK_SCRIPT})+)`, "gu");
 /** query の語の切れ目 = 空白と、CJK_RUN から外した CJK の句読点・記号(`注入（src/memory.ts）、drift。` の `drift` も
  *  識別子と別の語になる)。CJK_RUN と文字集合を共有するので、片方だけ字種が変わることはない。 */
