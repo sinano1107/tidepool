@@ -29,6 +29,8 @@ var TidepoolRules = (() => {
     whyInvalidOffset: () => whyInvalidOffset,
     whyInvalidPrice: () => whyInvalidPrice,
     whyInvalidProviderRank: () => whyInvalidProviderRank,
+    whyInvalidRegistryName: () => whyInvalidRegistryName,
+    whyInvalidSkillAllowlist: () => whyInvalidSkillAllowlist,
     whyNoCompletionReview: () => whyNoCompletionReview,
     whyNotPositiveInteger: () => whyNotPositiveInteger,
     whyReviewFlagIsInert: () => whyReviewFlagIsInert
@@ -60,9 +62,45 @@ var TidepoolRules = (() => {
     return rank.length === PROVIDER_VALUES.length && PROVIDER_VALUES.every((provider) => rank.includes(provider)) ? void 0 : `provider rank must list every provider exactly once (${PROVIDER_VALUES.join(" / ")})`;
   }
 
+  // src/registry-name.ts
+  function whyInvalidRegistryName(name) {
+    if (name === "." || name === ".." || !/^[A-Za-z0-9_.-]+$/.test(name)) {
+      return "must contain only letters, digits, '-', '_', '.' and not be '.' or '..'";
+    }
+    return void 0;
+  }
+
   // src/required-text.ts
   var normalizeText = (value) => value.trim();
   var whyBlank = (value) => normalizeText(value) === "" ? "must not be blank" : void 0;
+
+  // src/skill-allowlist.ts
+  var SKILL_WILDCARD = "*";
+  var SKILL_SCOPES = /* @__PURE__ */ new Set(["@workspace", "@host"]);
+  var PLUGIN_GLOB_PATTERN = /^[^*@:]+:\*$/;
+  function isPluginGlob(entry) {
+    return PLUGIN_GLOB_PATTERN.test(entry);
+  }
+  function findSkillAllowlistError(skills) {
+    for (const entry of skills) {
+      if (entry === SKILL_WILDCARD) {
+        if (skills.length !== 1) return { entry, reason: 'the "*" wildcard must be the only entry' };
+        continue;
+      }
+      if (entry.startsWith("@")) {
+        if (!SKILL_SCOPES.has(entry)) return { entry, reason: "unknown scope (only @workspace / @host)" };
+        continue;
+      }
+      if (entry.includes("*") && !isPluginGlob(entry)) {
+        return { entry, reason: 'a "*" may appear only as "*" alone or a "<name>:*" glob' };
+      }
+      if (entry === "") return { entry, reason: "empty skill name" };
+    }
+    return void 0;
+  }
+  function whyInvalidSkillAllowlist(skills) {
+    return findSkillAllowlistError(skills)?.reason;
+  }
 
   // src/task-status.ts
   var isSettled = (status) => status === "done" || status === "cancelled";
@@ -1217,10 +1255,6 @@ function RegisterScreen({ onRegister, parentTask, onClose }) {
 function readNumericDraft(value) {
   return typeof value === "number" ? value : value?.trim() ? Number(value) : NaN;
 }
-function registryNameOk(name) {
-  const v = TidepoolRules.normalizeText(name);
-  return /^[A-Za-z0-9._-]+$/.test(v) && ![".", ".."].includes(v);
-}
 function landingPath(baseDir, name) {
   return `${baseDir.path.replace(/\/+$/, "")}/${TidepoolRules.normalizeText(name)}`;
 }
@@ -1272,7 +1306,7 @@ function FreeEntryAllowlistInput({
       },
       placeholder
     }
-  )), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", disabled: !!TidepoolRules.whyBlank(free), onClick: addFree }, "Add")));
+  )), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", onClick: addFree }, "Add")));
 }
 function PublishWorkspace({ ws, say, onPublished }) {
   const { Button, Input } = window.TidepoolDesignSystem_8a0ead;
@@ -1627,17 +1661,8 @@ function ProfileListInput({ label, hint, candidates, wildcardHint, values, onCha
 }
 function skillAddError(entry, existing) {
   const v = entry.trim();
-  const blank = TidepoolRules.whyBlank(v);
-  if (blank) return blank;
   if (existing.includes(v)) return "already added";
-  if (v === "*") {
-    return existing.length > 0 ? '"*" must be the only entry \u2014 remove the others first' : null;
-  }
-  if (existing.includes("*")) return 'remove "*" first \u2014 it must be the only entry';
-  if (v.startsWith("@") && v !== "@workspace" && v !== "@host") {
-    return "an @ entry may only be @workspace or @host";
-  }
-  return null;
+  return TidepoolRules.whyInvalidSkillAllowlist([...existing, v]) ?? null;
 }
 function SkillListInput({ candidates, degraded, values, onChange }) {
   const { Input, Button, Select, Tag } = window.TidepoolDesignSystem_8a0ead;
@@ -1685,7 +1710,7 @@ function SkillListInput({ candidates, degraded, values, onChange }) {
       },
       placeholder: 'free entry \u2014 e.g. a workspace skill name or "plugin-name:*"'
     }
-  )), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", disabled: !!TidepoolRules.whyBlank(free), onClick: addFree }, "Add")));
+  )), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", onClick: addFree }, "Add")));
 }
 function ProfileFields({ agentNames, workspaceNames, guidance, setGuidance, assignableTo, setAssignableTo, allowedWorkspaces, setAllowedWorkspaces, merge, setMerge }) {
   const { Input, Select } = window.TidepoolDesignSystem_8a0ead;
@@ -2853,7 +2878,8 @@ function NewWorkspaceForm({ baseDir, say, onCreated, edit }) {
   const [path, setPath] = React.useState("");
   const [notes, setNotes] = React.useState("");
   const [prot, setProt] = React.useState(false);
-  const ok = registryNameOk(name) && (mode === "clone" ? !TidepoolRules.whyBlank(repo) : mode === "register" ? !TidepoolRules.whyBlank(path) : true);
+  const nameReason = TidepoolRules.whyInvalidRegistryName(TidepoolRules.normalizeText(name));
+  const ok = !nameReason && (mode === "clone" ? !TidepoolRules.whyBlank(repo) : mode === "register" ? !TidepoolRules.whyBlank(path) : true);
   const dirty = mode !== "clone" || !TidepoolRules.whyBlank(name) || !TidepoolRules.whyBlank(repo) || !TidepoolRules.whyBlank(path) || !!notes.trim() || prot;
   useDirtySignal(edit, true, dirty);
   const { busy, save, dialog } = useDangerousSave(say, async () => {
@@ -2902,11 +2928,12 @@ function NewWorkspaceForm({ baseDir, say, onCreated, edit }) {
     Input,
     {
       label: "Name",
+      error: nameReason,
       value: name,
       onChange: (e) => setName(e.target.value),
       placeholder: "letters, digits, - _ . \u2014 safe as a directory and a repo name"
     }
-  ), mode !== "register" && registryNameOk(name) && baseDir && /* @__PURE__ */ React.createElement("p", { "data-testid": "workspace-landing-preview", style: { margin: 0, fontSize: "var(--text-xs)", color: "var(--text-muted)" } }, /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)" } }, mode === "clone" ? "will clone to" : "will create at", " ", landingPath(baseDir, name)), baseDir.source === "default" && " \u2014 default; TIDEPOOL_WORKSPACES_DIR is not set on this host"), mode === "clone" && /* @__PURE__ */ React.createElement(
+  ), mode !== "register" && !nameReason && baseDir && /* @__PURE__ */ React.createElement("p", { "data-testid": "workspace-landing-preview", style: { margin: 0, fontSize: "var(--text-xs)", color: "var(--text-muted)" } }, /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)" } }, mode === "clone" ? "will clone to" : "will create at", " ", landingPath(baseDir, name)), baseDir.source === "default" && " \u2014 default; TIDEPOOL_WORKSPACES_DIR is not set on this host"), mode === "clone" && /* @__PURE__ */ React.createElement(
     Input,
     {
       label: "Repository",
@@ -2947,7 +2974,8 @@ function NewAgentForm({ authorityProfiles, providerOptions, tiers, advisorCeilin
   const [draft, setDraft] = React.useState(() => ({ ...NEW_AGENT_DRAFT }));
   const set = (key, value) => setDraft((d) => ({ ...d, [key]: value }));
   const [busy, setBusy] = React.useState(false);
-  const ok = registryNameOk(name) && !TidepoolRules.whyBlank(draft.description) && !!draft.authority && !!draft.provider;
+  const nameReason = TidepoolRules.whyInvalidRegistryName(TidepoolRules.normalizeText(name));
+  const ok = !nameReason && !TidepoolRules.whyBlank(draft.description) && !!draft.authority && !!draft.provider;
   const dirty = !TidepoolRules.whyBlank(name) || agentDraftDirty(draft, NEW_AGENT_DRAFT);
   useDirtySignal(edit, true, dirty);
   const authorityCreateOptions = [
@@ -2974,6 +3002,7 @@ function NewAgentForm({ authorityProfiles, providerOptions, tiers, advisorCeilin
     Input,
     {
       label: "Name",
+      error: nameReason,
       value: name,
       onChange: (e) => setName(e.target.value),
       placeholder: "letters, digits, - _ . \u2014 becomes agents/<name>.md, not renameable later"
@@ -3004,6 +3033,7 @@ function NewAgentForm({ authorityProfiles, providerOptions, tiers, advisorCeilin
 function NewProfileForm({ agentNames, workspaceNames, say, onCreated, edit }) {
   const { Card, Input } = window.TidepoolDesignSystem_8a0ead;
   const [name, setName] = React.useState("");
+  const nameReason = TidepoolRules.whyInvalidRegistryName(TidepoolRules.normalizeText(name));
   const [guidance, setGuidance] = React.useState("");
   const [assignableTo, setAssignableTo] = React.useState([]);
   const [allowedWorkspaces, setAllowedWorkspaces] = React.useState([]);
@@ -3025,6 +3055,7 @@ function NewProfileForm({ agentNames, workspaceNames, say, onCreated, edit }) {
     Input,
     {
       label: "Name",
+      error: nameReason,
       value: name,
       onChange: (e) => setName(e.target.value),
       placeholder: "letters, digits, - _ . \u2014 becomes authority/<name>.yaml, not renameable later"
@@ -3046,7 +3077,7 @@ function NewProfileForm({ agentNames, workspaceNames, say, onCreated, edit }) {
   ), /* @__PURE__ */ React.createElement(
     EditActions,
     {
-      ok: registryNameOk(name) && !!merge,
+      ok: !nameReason && !!merge,
       busy,
       saveLabel: "Add authority profile \u2014 commits to the registry",
       onSave: submit,

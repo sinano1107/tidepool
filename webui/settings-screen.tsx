@@ -3,10 +3,6 @@ function readNumericDraft(value: string | number | undefined): number {
   return typeof value === 'number' ? value : value?.trim() ? Number(value) : NaN;
 }
 
-// The client-side mirror of the server's REGISTRY_NAME_PATTERN gate, shared by
-// the workspace / agent / profile create forms — the name becomes a directory
-// or a file name in the registry, so the three share one rule. It drives the
-// disabled state only; the server's assertValid*Name stays the authority.
 /** 面全体で編集中のカードは高々1枚(issue #204 決定4)。その1枠を配る口。 */
 interface SettingsEditSlot {
   isOpen: (id: string) => boolean;
@@ -27,11 +23,6 @@ type SettingsExecution = WireContract['GET /api/settings/execution'];
 type SettingsExecutionRow = Omit<SettingsExecution['table'][number], 'quarantine_question_id'>;
 type SettingsTier = SettingsExecution['tiers'][number];
 type AdvisorCeiling = SettingsExecution['advisorCeiling'];
-
-function registryNameOk(name: string) {
-  const v = TidepoolRules.normalizeText(name);
-  return /^[A-Za-z0-9._-]+$/.test(v) && !['.', '..'].includes(v);
-}
 
 // ADR 0018 の規約(基点 + 名前)を表示のために合成する。ADR 0082 決定1: 解決その
 // ものは server 側の1点に残り、ここは「その1本の規約を読み上げる」だけである。
@@ -136,7 +127,7 @@ function FreeEntryAllowlistInput({
           <Input value={free} mono onChange={(e) => { setFree(e.target.value); }}
             placeholder={placeholder} />
         </div>
-        <Button variant="secondary" disabled={!!TidepoolRules.whyBlank(free)} onClick={addFree}>Add</Button>
+        <Button variant="secondary" onClick={addFree}>Add</Button>
       </div>
     </div>
   );
@@ -652,29 +643,11 @@ function ProfileListInput({ label, hint, candidates, wildcardHint, values, onCha
   );
 }
 
-// The skills allowlist picker's client-side grammar gate (issue #106 / ADR
-// 0025): mirrors just two of assertValidSkillAllowlist's rules — "* only when
-// alone" and "@ entries are only @workspace/@host" — plus empty/duplicate UX
-// guards. Everything else (a bare individual name, a "plugin名:*" glob, a
-// workspace-specific name) is deliberately let through: free entry's whole
-// point is adding references the picker can't enumerate (an allowlist is a
-// reference, not a claim of stock — ADR 0023). The server's
-// assertValidSkillAllowlist stays the authority; this only spares the round
-// trip on the two mistakes that are obvious at input time. Returns an error
-// string, or null when the entry may be added.
+// Duplicate entries are a picker concern; grammar belongs to the shared leaf.
 function skillAddError(entry: string, existing: string[]) {
   const v = entry.trim();
-  const blank = TidepoolRules.whyBlank(v);
-  if (blank) return blank;
   if (existing.includes(v)) return 'already added';
-  if (v === '*') {
-    return existing.length > 0 ? '"*" must be the only entry — remove the others first' : null;
-  }
-  if (existing.includes('*')) return 'remove "*" first — it must be the only entry';
-  if (v.startsWith('@') && v !== '@workspace' && v !== '@host') {
-    return 'an @ entry may only be @workspace or @host';
-  }
-  return null;
+  return TidepoolRules.whyInvalidSkillAllowlist([...existing, v]) ?? null;
 }
 
 // The agent skills allowlist picker (issue #106 / ADR 0025), ProfileListInput's
@@ -743,7 +716,7 @@ function SkillListInput({ candidates, degraded, values, onChange }: {
             onChange={(e) => { setFree(e.target.value); setFreeError(null); }}
             placeholder='free entry — e.g. a workspace skill name or "plugin-name:*"' />
         </div>
-        <Button variant="secondary" disabled={!!TidepoolRules.whyBlank(free)} onClick={addFree}>Add</Button>
+        <Button variant="secondary" onClick={addFree}>Add</Button>
       </div>
     </div>
   );
@@ -2380,7 +2353,8 @@ function NewWorkspaceForm({ baseDir, say, onCreated, edit }: {
   const [path, setPath] = React.useState('');
   const [notes, setNotes] = React.useState('');
   const [prot, setProt] = React.useState(false);
-  const ok = registryNameOk(name) && (mode === 'clone' ? !TidepoolRules.whyBlank(repo) : mode === 'register' ? !TidepoolRules.whyBlank(path) : true);
+  const nameReason = TidepoolRules.whyInvalidRegistryName(TidepoolRules.normalizeText(name));
+  const ok = !nameReason && (mode === 'clone' ? !TidepoolRules.whyBlank(repo) : mode === 'register' ? !TidepoolRules.whyBlank(path) : true);
   const dirty = mode !== 'clone' || !TidepoolRules.whyBlank(name) || !TidepoolRules.whyBlank(repo) || !TidepoolRules.whyBlank(path) || !!notes.trim() || prot;
   useDirtySignal(edit, true, dirty);
 
@@ -2438,12 +2412,12 @@ function NewWorkspaceForm({ baseDir, say, onCreated, edit }: {
       <span style={settingsCardLabel}>add a workspace</span>
       <Select label="Mode" options={modeOptions} value={mode} onChange={(e) => setMode(e.target.value)} />
       <p style={{ margin: 0, fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>{modeHint}</p>
-      <Input label="Name" value={name} onChange={(e) => setName(e.target.value)}
+      <Input label="Name" error={nameReason} value={name} onChange={(e) => setName(e.target.value)}
         placeholder="letters, digits, - _ . — safe as a directory and a repo name" />
       {/* ADR 0082 決定1: 規約導出の2モードは着地先を人間に一度も見せずに決めていた。
           基点は一覧が返し、名前は区切り文字を含まない検証を既に通っているので、
           結合はここで済む(解決の複製ではなく表示) */}
-      {mode !== 'register' && registryNameOk(name) && baseDir && (
+      {mode !== 'register' && !nameReason && baseDir && (
         <p data-testid="workspace-landing-preview" style={{ margin: 0, fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
           <span style={{ fontFamily: 'var(--font-mono)' }}>
             {mode === 'clone' ? 'will clone to' : 'will create at'} {landingPath(baseDir, name)}
@@ -2488,7 +2462,8 @@ function NewAgentForm({ authorityProfiles, providerOptions, tiers, advisorCeilin
   const [draft, setDraft] = React.useState(() => ({ ...NEW_AGENT_DRAFT }));
   const set = (key: keyof AgentDraft, value: AgentDraftValue) => setDraft((d) => ({ ...d, [key]: value }) as AgentDraft);
   const [busy, setBusy] = React.useState(false);
-  const ok = registryNameOk(name) && !TidepoolRules.whyBlank(draft.description) && !!draft.authority && !!draft.provider;
+  const nameReason = TidepoolRules.whyInvalidRegistryName(TidepoolRules.normalizeText(name));
+  const ok = !nameReason && !TidepoolRules.whyBlank(draft.description) && !!draft.authority && !!draft.provider;
   const dirty = !TidepoolRules.whyBlank(name) || agentDraftDirty(draft, NEW_AGENT_DRAFT);
   useDirtySignal(edit, true, dirty);
   // creation offers the empty placeholder the edit form doesn't: a new agent
@@ -2519,7 +2494,7 @@ function NewAgentForm({ authorityProfiles, providerOptions, tiers, advisorCeilin
   return (
     <Card style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
       <span style={settingsCardLabel}>add an agent</span>
-      <Input label="Name" value={name} onChange={(e) => setName(e.target.value)}
+      <Input label="Name" error={nameReason} value={name} onChange={(e) => setName(e.target.value)}
         placeholder="letters, digits, - _ . — becomes agents/<name>.md, not renameable later" />
       <AgentFields draft={draft} set={set} authorityOptions={authorityCreateOptions}
         providerOptions={providerOptions} tiers={tiers} advisorCeiling={advisorCeiling}
@@ -2541,6 +2516,7 @@ function NewProfileForm({ agentNames, workspaceNames, say, onCreated, edit }: {
 }) {
   const { Card, Input } = window.TidepoolDesignSystem_8a0ead;
   const [name, setName] = React.useState('');
+  const nameReason = TidepoolRules.whyInvalidRegistryName(TidepoolRules.normalizeText(name));
   const [guidance, setGuidance] = React.useState('');
   const [assignableTo, setAssignableTo] = React.useState<string[]>([]);
   const [allowedWorkspaces, setAllowedWorkspaces] = React.useState<string[]>([]);
@@ -2561,7 +2537,7 @@ function NewProfileForm({ agentNames, workspaceNames, say, onCreated, edit }: {
   return (
     <Card style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
       <span style={settingsCardLabel}>add an authority profile</span>
-      <Input label="Name" value={name} onChange={(e) => setName(e.target.value)}
+      <Input label="Name" error={nameReason} value={name} onChange={(e) => setName(e.target.value)}
         placeholder="letters, digits, - _ . — becomes authority/<name>.yaml, not renameable later" />
       <ProfileFields
         agentNames={agentNames} workspaceNames={workspaceNames}
@@ -2569,7 +2545,7 @@ function NewProfileForm({ agentNames, workspaceNames, say, onCreated, edit }: {
         assignableTo={assignableTo} setAssignableTo={setAssignableTo}
         allowedWorkspaces={allowedWorkspaces} setAllowedWorkspaces={setAllowedWorkspaces}
         merge={merge} setMerge={setMerge} />
-      <EditActions ok={registryNameOk(name) && !!merge} busy={busy} saveLabel="Add authority profile — commits to the registry"
+      <EditActions ok={!nameReason && !!merge} busy={busy} saveLabel="Add authority profile — commits to the registry"
         onSave={submit} onCancel={() => edit.close()} />
       {dialog}
     </Card>

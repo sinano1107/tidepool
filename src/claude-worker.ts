@@ -23,14 +23,13 @@ import { buildMemoryInjection, buildMetaReviewMaterial, type InjectionQuery, rec
 import { projectAndPersist } from "./precedent.js";
 import type { ProcessContainers, PtyFn, PtyProcess } from "./process-container.js";
 import {
-  isPluginGlob,
   loadRegistry,
   ownEntry,
   type Registry,
   type RegistrySource,
-  SKILL_WILDCARD,
 } from "./registry.js";
 import { AUTO_MEMORY_CLOSED, buildSandboxSettings, workspaceSettingsDisposition } from "./sandbox.js";
+import { isPluginGlob, SKILL_WILDCARD } from "./skill-allowlist.js";
 import {
   countAdvisorConsultations,
   parseStreamLine,

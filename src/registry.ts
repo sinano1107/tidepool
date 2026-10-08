@@ -12,6 +12,8 @@ import {
   originRepo,
 } from "./github-auth.js";
 import { PROVIDER_VALUES, type Provider } from "./provider.js";
+import { whyInvalidRegistryName } from "./registry-name.js";
+import { findSkillAllowlistError, whyInvalidSkillAllowlist } from "./skill-allowlist.js";
 import type { Tier } from "./tier.js";
 import { isNonAgentWorkerId } from "./worker-id.js";
 
@@ -466,34 +468,6 @@ export function isSingleTwemojiGrapheme(value: string): boolean {
   return entity!.indices[0] === 0 && entity!.indices[1] === value.length;
 }
 
-/** The skill allowlist's unrestricted spelling (issue #56 / ADR 0025): the
- *  sole `["*"]` means every resolved skill is allowed (no deny, no ping).
- *  A domain sibling of `AUTHORITY_WILDCARD` (tasks.ts) — the same glyph, a
- *  different axis (専門性 vs 権限), kept apart so the skill grammar owns its
- *  own vocabulary. */
-export const SKILL_WILDCARD = "*";
-
-/** The origin-scope words of the skill allowlist (issue #56 / ADR 0025): a
- *  closed `{@workspace, @host}` set, not a `名前:*` glob — `@workspace:*`
- *  would be grammatically indistinguishable from "a plugin literally named
- *  workspace", so scope typos would become undetectable. Any other `@`-prefixed
- *  entry is a typo and rejected. */
-export const SKILL_SCOPES = new Set(["@workspace", "@host"]);
-
-/** A `名前:*` plugin glob (ADR 0025): a non-empty plugin name with no `*`/`@`
- *  of its own, then a literal `:*`. Together with the bare `SKILL_WILDCARD`
- *  these are the only two shapes a `*` may appear in. */
-const PLUGIN_GLOB_PATTERN = /^[^*@:]+:\*$/;
-
-/** Is this allowlist entry a `名前:*` plugin glob? (issue #56 / ADR 0025) One
- *  definition of the glob shape, shared by the loader's grammar check here and
- *  the adapter's match (claude-worker.ts) so the two can't drift — the adapter
- *  only ever sees validated entries, so it strips the trailing `*` for prefix
- *  matching once this says yes. */
-export function isPluginGlob(entry: string): boolean {
-  return PLUGIN_GLOB_PATTERN.test(entry);
-}
-
 /** An agent's `skills` frontmatter breaks ADR 0025's allowlist grammar. The
  *  entrance-guard twin of InvalidAgentIconError (agent-create.ts): thrown by
  *  the loader and re-checked before a WebUI write so a malformed allowlist
@@ -514,25 +488,10 @@ export class InvalidSkillAllowlistError extends Error {
  *  appear only as the bare wildcard or a glob suffix; a bare `[]` (all-denied)
  *  is valid. */
 export function assertValidSkillAllowlist(skills: string[]): void {
-  for (const entry of skills) {
-    if (entry === SKILL_WILDCARD) {
-      if (skills.length !== 1) {
-        throw new InvalidSkillAllowlistError(entry, 'the "*" wildcard must be the only entry');
-      }
-      continue;
-    }
-    if (entry.startsWith("@")) {
-      if (!SKILL_SCOPES.has(entry)) {
-        throw new InvalidSkillAllowlistError(entry, "unknown scope (only @workspace / @host)");
-      }
-      continue;
-    }
-    if (entry.includes("*") && !isPluginGlob(entry)) {
-      throw new InvalidSkillAllowlistError(entry, 'a "*" may appear only as "*" alone or a "<name>:*" glob');
-    }
-    if (entry === "") {
-      throw new InvalidSkillAllowlistError(entry, "empty skill name");
-    }
+  const reason = whyInvalidSkillAllowlist(skills);
+  if (reason) {
+    const { entry } = findSkillAllowlistError(skills)!;
+    throw new InvalidSkillAllowlistError(entry, reason);
   }
 }
 
@@ -949,20 +908,6 @@ function parseAuthorityFile(name: string, raw: string): AuthorityProfile {
   };
 }
 
-/** Issue #68 / ADR 0018: the charset a registry-entry name (workspace or
- *  agent, issue #70) must stay inside to be safe as a directory name
- *  (regulation-derived `path`), a GitHub repository name (clone / new-repo
- *  creation modes), and the file name `agents/<name>.md`. */
-const REGISTRY_NAME_PATTERN = /^[A-Za-z0-9_.-]+$/;
-
-/** `.` and `..` pass the charset above but are reserved by every filesystem
- *  (self / parent directory) — an entry named either would derive a path
- *  that escapes its intended base directory. */
-const RESERVED_REGISTRY_NAMES = new Set([".", ".."]);
-
-const NAME_CHARSET_REASON =
-  "must contain only letters, digits, '-', '_', '.' and not be '.' or '..'";
-
 /** The name rule shared by the creation gates and `loadRegistry` (issue
  *  #1367): the registry also changes without passing a gate (a hand commit,
  *  a merged registry-edit PR — ADR 0061), so the load applies the very same
@@ -971,8 +916,9 @@ function assertNameRule(
   name: string,
   NameError: new (name: string, reason: string) => Error,
 ): void {
-  if (RESERVED_REGISTRY_NAMES.has(name) || !REGISTRY_NAME_PATTERN.test(name)) {
-    throw new NameError(name, NAME_CHARSET_REASON);
+  const reason = whyInvalidRegistryName(name);
+  if (reason) {
+    throw new NameError(name, reason);
   }
 }
 

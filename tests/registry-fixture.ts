@@ -3,7 +3,8 @@ import { writeFileSync } from "node:fs";
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { loadRegistry, ownEntry, SKILL_WILDCARD } from "../src/registry.js";
+import { loadRegistry, ownEntry } from "../src/registry.js";
+import { SKILL_WILDCARD } from "../src/skill-allowlist.js";
 import { AUTHORITY_WILDCARD } from "../src/tasks.js";
 import { tempDir } from "./temp-dir.js";
 
