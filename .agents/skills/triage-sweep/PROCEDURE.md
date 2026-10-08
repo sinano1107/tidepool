@@ -81,8 +81,12 @@ Drop the session link when the parent said there is none, and the Related sectio
 
 ### 5. Label
 
-On each evaluated issue, add `auto-triaged`, and the category label (`bug` or `enhancement`) when the issue has none. Those two labels, the comment, the issues you file for findings outside the issue, and a Pin's test-only PR are the whole of your write access to the tracker: the state label, `verify:*`, blocked-by edges, merging, and closing all stay with the maintainer, who acts on your recommended next step.
+On each evaluated issue, add `auto-triaged`, and the category label (`bug` or `enhancement`) when the issue has none.
+
+Draw a blocked-by edge yourself wherever your comment says another open issue must land or be decided first — an Agent Brief that builds on it, a question whose answer waits on it, an issue you filed that only one of them can unblock. The edge is GitHub's native dependency ([issue-tracker.md](../../../docs/agents/issue-tracker.md)), drawn the moment you know it, and the comment's Related line names the same issue with `must land first`. A relation that only shares an area, or orders grilling without one outcome feeding the other, gets no edge.
+
+Those labels, the edges, the comment, the issues you file for findings outside the issue, and a Pin's test-only PR are the whole of your write access to the tracker: the state label, `verify:*`, merging, and closing all stay with the maintainer, who acts on your recommended next step.
 
 ## Return
 
-To the parent, one line per issue — number, outcome, recommended next step, comment URL, and each choice you made that the record does not settle — then the issues you filed and the Pin PRs you opened, and any worktree or VM slot you failed to remove.
+To the parent, one line per issue — number, outcome, recommended next step, comment URL, the blocked-by edges you drew, and each choice you made that the record does not settle — then the issues you filed and the Pin PRs you opened, and any worktree or VM slot you failed to remove.
