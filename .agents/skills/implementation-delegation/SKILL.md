@@ -74,18 +74,22 @@ compute で埋めず、`/grilling`・issue の補完・分割のいずれかで�
 
 Max 席では Fable 5.1 も他モデルと同じ週次 usage limit を共有(上限50%)。
 
-## 5. Codex(GPT-6、鮮度 2026-09-26。世代が変わっていたら Web 検索で更新)
+## 5. Codex(鮮度 2026-10-08。モデルが変わっていたら公式資料と実行環境の選択肢で更新)
 
-対応は**役割で揃える**(in / out USD per MTok): Astra 10 / 50 = Fable 5.1 10 / 50 は価格も一致。GPT-6 に Terra は無く、Sol(2 / 10)が主力と廉価の両方を effort で受け持つ —— 価格は Sonnet 5.5(2 / 10)と同じで Opus 5.5(4 / 20)の半分だが、OpenAI の位置づけは「complex coding and agentic workflows」向けで、主力枠にあたる。Luna 0.10 / 0.50 と Haiku 4.5 1 / 5 も価格は揃わない。旧世代の GPT-5.6 Sol / Terra / Luna は表から外した。
+このスキルで **Sol は GPT-6.1 Sol (`gpt-6.1-sol`)** を指す。Codex の選定結果と spawn には表のモデル ID を使う。人間が旧モデルを明示指定した場合はその指定を守る。
 
-| モデル | Claude 側の相方 | 向くタスク |
+対応は**役割で揃える**(in / out USD per MTok): Astra 10 / 50 = Fable 5.1 10 / 50 は価格も一致。現行の選定表に Terra は無く、GPT-6.1 Sol(2 / 10)が主力と廉価の両方を effort で受け持つ —— 価格は Sonnet 5.5(2 / 10)と同じで Opus 5.5(4 / 20)の半分だが、OpenAI は複雑な coding・computer use・professional work 向けに位置づけており、主力枠にあたる。Luna 0.10 / 0.50 と Haiku 4.5 1 / 5 も価格は揃わない。旧世代の GPT-5.6 Sol / Terra / Luna は表から外した。
+
+| モデル(ID) | Claude 側の相方 | 向くタスク |
 |---|---|---|
-| **Astra** | Fable 5.1 | 一発で解けていない難問、床。既定 `high`。`ultra` は effort の延長ではない別枠 orchestration mode —— 選ぶ前に効果を検証 |
-| **Sol** | Opus 5.5 | 主力。複数ファイル実装・大きめリファクタ。既定 `medium`(OpenAI 既定、Opus 5.5 と同じ)、仕様が曖昧・床は `high`、要求の厳しい作業だけ `xhigh` |
-| **Sol** | Sonnet 5.5 | 既存パターン踏襲、テスト追加、定型配線。`low`〜`medium` |
-| **Luna** | Haiku 4.5 | rename、機械的置換、大量処理 |
+| **GPT-6 Astra** (`gpt-6-astra`) | Fable 5.1 | 一発で解けていない難問、床。既定 `high`。`ultra` は effort の延長ではない別枠 orchestration mode —— 選ぶ前に効果を検証 |
+| **GPT-6.1 Sol** (`gpt-6.1-sol`) | Opus 5.5 | 主力。複数ファイル実装・大きめリファクタ。既定 `medium`(OpenAI 既定、Opus 5.5 と同じ)、仕様が曖昧・床は `high`、要求の厳しい作業だけ `xhigh` |
+| **GPT-6.1 Sol** (`gpt-6.1-sol`) | Sonnet 5.5 | 既存パターン踏襲、テスト追加、定型配線。`low`〜`medium` |
+| **GPT-6 Luna** (`gpt-6-luna`) | Haiku 4.5 | rename、機械的置換、大量処理 |
 
-effort は提供モデルで幅が違う: Sol / Luna は `none`〜`max`(OpenAI 既定 medium)、Astra は `low`〜`max`(`none` なし)。low=軽作業、medium=標準・既定、high=曖昧さ・床、xhigh=難所、max=§1 の再試行。強度を上げる梯子は `Sol / medium → Sol / high → Sol / xhigh → Astra`。
+effort は提供モデルで幅が違う: GPT-6.1 Sol / GPT-6 Astra は `low` / `medium` / `high` / `xhigh` / `max`、GPT-6 Luna はそれらに `none` を加えた範囲。GPT-6.1 Sol の既定は `medium`。low=軽作業、medium=標準・既定、high=曖昧さ・床、xhigh=難所、max=§1 の再試行。強度を上げる梯子は `gpt-6.1-sol / medium → gpt-6.1-sol / high → gpt-6.1-sol / xhigh → gpt-6-astra`。
+
+モデル・effort の根拠: [OpenAI のモデル一覧](https://developers.openai.com/api/docs/models)、[GPT-6.1 Sol](https://developers.openai.com/api/docs/models/gpt-6.1-sol)。spawn で指定できる effort は実行環境の対応範囲にも従う。
 
 ## 6. 委任先の前提
 
