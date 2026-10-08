@@ -31,8 +31,8 @@ import {
 import { AUTO_MEMORY_CLOSED, buildSandboxSettings, workspaceSettingsDisposition } from "./sandbox.js";
 import { isPluginGlob, SKILL_WILDCARD } from "./skill-allowlist.js";
 import {
-  countAdvisorConsultations,
   parseStreamLine,
+  readAdvisorOutcomes,
   readInitAutoMemoryPath,
   readInitField,
   readInitMcpServers,
@@ -903,28 +903,35 @@ function rowRefusalOf(parsed: Record<string, unknown> | null): RowRefusalCause |
 }
 
 /** What the stdout scan collected about this session's advisor while the
- *  stream ran (issue #33). Both are needed at exit and neither survives on the
- *  result line: the consultations happen in assistant lines, and the main
- *  model's resolved id is on the init line. */
+ *  stream ran (issue #33). All are needed at exit and none survives on the
+ *  result line: the consultations and failed calls happen in assistant lines,
+ *  and the main model's resolved id is on the init line. */
 interface AdvisorObservation {
-  /** `server_tool_use(name: "advisor")` blocks seen on the parent thread. */
+  /** Advisor calls whose result carried advice, seen on the parent thread (ADR 0214). */
   consultations: number;
+  /** Failed advisor calls' `error_code`, verbatim and in order (ADR 0214). */
+  failedCalls: (string | null)[];
   /** The init line's resolved main model, used only to decide whether the
    *  advisor's own usage is separable from it. */
   mainModel: string | null;
 }
 
 /** The advisor half of worker_exited's usage (issue #33 判断6). Non-null only
- *  on positive evidence — at least one consultation actually observed on the
- *  stream — so "the board pinned an advisor" alone never produces a row that
- *  claims one ran. */
+ *  on positive evidence — at least one consultation or failed call actually
+ *  observed on the stream (ADR 0214) — so "the board pinned an advisor" alone
+ *  never produces a row that claims one was attached. */
 function toAdvisorRecord(
   result: StreamResultEvent,
   observed: AdvisorObservation,
 ): AdvisorRecord | null {
-  if (observed.consultations === 0) return null;
+  if (observed.consultations === 0 && observed.failedCalls.length === 0) return null;
   const model = advisorModelFrom(result);
-  return { model, consultations: observed.consultations, usage: advisorUsage(result, model, observed) };
+  return {
+    model,
+    consultations: observed.consultations,
+    usage: advisorUsage(result, model, observed),
+    failed_calls: observed.failedCalls,
+  };
 }
 
 /** The advisor's own token/cost slice, or null when it cannot be measured
@@ -2166,7 +2173,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     // consultations are assistant-line blocks and the resolved main model is on
     // the init line — so they are accumulated while the stream runs. The stdout
     // scan already reads every line, so the added cost is a filter per line.
-    const advisorObserved: AdvisorObservation = { consultations: 0, mainModel: null };
+    const advisorObserved: AdvisorObservation = { consultations: 0, failedCalls: [], mainModel: null };
     // 1行の観測はここ1か所 —— stream のループと exit の flush が同じ集合を通す(issue #1301)。
     // 行は1度だけ decode し、全観測が同じ `parsed` を読む(see parseStreamLine)
     const observe = (parsed: Record<string, unknown> | null) => {
@@ -2176,7 +2183,10 @@ export class ClaudeCodeWorker implements WorkerAdapter {
       refusalCause ??= rowRefusalOf(parsed);
       lastErrorResult = readErrorResult(parsed) ?? lastErrorResult;
       lastMessage = readRootText(parsed) ?? lastMessage;
-      advisorObserved.consultations += countAdvisorConsultations(parsed);
+      for (const outcome of readAdvisorOutcomes(parsed)) {
+        if (outcome === "consulted") advisorObserved.consultations++;
+        else advisorObserved.failedCalls.push(outcome.failed);
+      }
       advisorObserved.mainModel = readInitModel(parsed) ?? advisorObserved.mainModel;
       if (!toolSurfaceObserved) {
         toolSurfaceObserved = this.checkSessionToolSurface(task, enforcement.disableSlashCommands, parsed);
