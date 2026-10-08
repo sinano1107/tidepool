@@ -96,6 +96,8 @@ import {
   DeletionConfirmationRequiredError,
 } from "./registry-write.js";
 import { RepoAccessMissingError } from "./repo-access.js";
+import { whyBlank } from "./required-text.js";
+import { requiredTextSchema } from "./required-text-schema.js";
 import { attributeObjections, listHaltedRefires, markHaltedRefire, type RetrospectiveCallDeps, refireKeySchema } from "./retrospective.js";
 import {
   entryExclusionPredicate,
@@ -185,16 +187,16 @@ const registerTaskSchema = z.object({
   // content/reference exclusivity, the workspace requirement, and the
   // work-only rule all live in the domain (assertGithubRef), so callers get
   // a domain error either way
-  title: z.string().min(1).optional(),
-  purpose: z.string().min(1).optional(),
-  completion_criteria: z.string().min(1).optional(),
+  title: requiredTextSchema.optional(),
+  purpose: requiredTextSchema.optional(),
+  completion_criteria: requiredTextSchema.optional(),
   github_issue_number: z.number().int().positive().optional(),
   parent_id: z.string().optional(),
   assignee: z.string().optional(),
   workspace: z.string().optional(),
   risk_flag: z.boolean().optional(),
   review_flag: z.boolean().optional(),
-  review_by: z.array(z.string().min(1)).optional(),
+  review_by: z.array(requiredTextSchema).optional(),
   review_tier: z.string().optional(),
   // the execution request (ADR 0110 決定2): open strings here, same
   // permissive-shape posture as the content fields above — which tiers and
@@ -210,10 +212,10 @@ const registerTaskSchema = z.object({
   question: z
     .array(
       z.object({
-        title: z.string().min(1),
-        detail: z.string().min(1).optional(),
-        options: z.array(z.string()),
-        recommendation: z.string(),
+        title: requiredTextSchema,
+        detail: requiredTextSchema.optional(),
+        options: z.array(requiredTextSchema),
+        recommendation: requiredTextSchema,
       }),
     )
     .optional(),
@@ -241,23 +243,23 @@ function gateFailureStatus(kind: GateFailure["kind"]): 400 | 404 | 422 | 502 | 5
 // immutability and the risk invariant live in the domain (editTask), so a
 // caller gets a domain error there — this file's usual split.
 const editTaskSchema = z.strictObject({
-  title: z.string().min(1).optional(),
-  purpose: z.string().min(1).optional(),
-  completion_criteria: z.string().min(1).optional(),
+  title: requiredTextSchema.optional(),
+  purpose: requiredTextSchema.optional(),
+  completion_criteria: requiredTextSchema.optional(),
   assignee: z.string().optional(),
   workspace: z.string().optional(),
   risk_flag: z.boolean().optional(),
   review_flag: z.boolean().optional(),
-  review_by: z.array(z.string().min(1)).optional(),
+  review_by: z.array(requiredTextSchema).optional(),
 });
 
 // the direct-cancel payload (issue #130): reason is optional (理由の記入は任意)
 const cancelTaskSchema = z.object({
-  reason: z.string().min(1).optional(),
+  reason: requiredTextSchema.optional(),
 });
 
 const draftTaskSchema = z.object({
-  dump: z.string().min(1),
+  dump: requiredTextSchema,
   // human decompose (issue #129): drafting a child from an "add child"
   // screen — present, the draft is given parent/sibling context; absent,
   // this is a plain root draft, unchanged
@@ -269,16 +271,16 @@ const draftTaskSchema = z.object({
 // the AI-suggested comment is the human's own click in the UI — the board
 // never posts a suggestion on its own
 const issueCommentSchema = z.object({
-  workspace: z.string().min(1),
+  workspace: requiredTextSchema,
   github_issue_number: z.number().int().positive(),
-  body: z.string().min(1),
+  body: requiredTextSchema,
 });
 
 // the issue-number picker's query (issue #67): workspace is the only input —
 // no search term/paging, same "one call per selection" posture as the fetch
 // itself
 const githubIssuesQuerySchema = z.object({
-  workspace: z.string().min(1),
+  workspace: requiredTextSchema,
 });
 
 // the shape stays close to CreateWorkspaceInput itself; the name rules
@@ -286,7 +288,7 @@ const githubIssuesQuerySchema = z.object({
 // callers get a domain error, not a schema error, on a bad name — this file's
 // usual split
 const createWorkspaceCommon = z.object({
-  name: z.string().min(1),
+  name: requiredTextSchema,
   notes: z.string().min(1).optional(),
   protected: z.boolean().optional(),
 });
@@ -295,10 +297,10 @@ const createWorkspaceSchema = z.discriminatedUnion("mode", [
   // (ADR 0061 / CONTEXT.md「危険な値」)の族ではない
   createWorkspaceCommon.extend({
     mode: z.literal("register"),
-    path: z.string().min(1),
+    path: requiredTextSchema,
     confirm: z.boolean().optional(),
   }),
-  createWorkspaceCommon.extend({ mode: z.literal("clone"), repo: z.string().min(1) }),
+  createWorkspaceCommon.extend({ mode: z.literal("clone"), repo: requiredTextSchema }),
   createWorkspaceCommon.extend({ mode: z.literal("create") }),
 ]);
 
@@ -318,20 +320,20 @@ const updateWorkspaceSchema = z.object({
 // ADR 0066 決定8: publish は confirm を要求しない(ADR 0061 の「危険な値」族では
 // なく、エージェントの権限を広げない)。宛先の綴りの検証も置かない — 打ち間違いは
 // 人間の入力の範疇で、権限が無ければ push が落ちる(ADR 0066 決定2)
-const publishWorkspaceSchema = z.object({ repo: z.string().min(1) });
+const publishWorkspaceSchema = z.object({ repo: requiredTextSchema });
 
 // the shape mirrors CreateAgentInput directly; name/authority validity and
 // icon shape live in the domain (assertValidAgentName / assertKnownAuthority
 // / assertValidIcon) so callers get a domain error, not a schema error
 const createAgentSchema = z.object({
-  name: z.string().min(1),
-  authority: z.string().min(1),
-  description: z.string().min(1),
+  name: requiredTextSchema,
+  authority: requiredTextSchema,
+  description: requiredTextSchema,
   // provider (ADR 0097 決定1): required — the string shape only; the enum,
   // the tier and the advisor combination (assertValidAgentDefinition) live in
   // the domain, so callers get a domain error, same as name/authority/icon/
   // skills here.
-  provider: z.string().min(1),
+  provider: requiredTextSchema,
   icon: z.string().optional(),
   // 既定の要求ティア(ADR 0110 決定1)。列挙の検査は domain 側 —— model /
   // effort はもうこの境界を通らない(実行設定は盤面の表が決める)。
@@ -361,7 +363,7 @@ const updateAgentSchema = createAgentSchema.omit({ name: true });
 // the gate (ADR 0061 決定1).
 // The strictObject stays strict through .extend(), so an unknown key is a 400.
 const createProfileSchema = authorityProfileSchema.extend({
-  name: z.string().min(1),
+  name: requiredTextSchema,
   confirmDangerous: z.boolean().optional(),
 });
 
@@ -392,12 +394,12 @@ const cursorSchema = z.object({
 // the standard browser PushSubscription.toJSON() shape (issue #14) —
 // expirationTime is never used, so it's accepted but dropped
 const pushSubscribeSchema = z.object({
-  endpoint: z.string().min(1),
-  keys: z.object({ p256dh: z.string().min(1), auth: z.string().min(1) }),
+  endpoint: requiredTextSchema,
+  keys: z.object({ p256dh: requiredTextSchema, auth: requiredTextSchema }),
 });
 
 const pushUnsubscribeSchema = z.object({
-  endpoint: z.string().min(1),
+  endpoint: requiredTextSchema,
 });
 
 const quietHoursSchema = z.object({
@@ -424,7 +426,7 @@ const providerPaceOffsetSchema = z
 // launch, not human-configured, so it gets its own endpoint rather than
 // riding along with POST /settings/quiet-hours.
 const timezoneSchema = z.object({
-  tz: z.string().min(1),
+  tz: requiredTextSchema,
 });
 
 // the board display language (issue #46, tightened by #115): one setting
@@ -449,11 +451,11 @@ const displayLanguageSchema = z.object({
 // not merely unimplemented).
 const translateRequestSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("log_entry"), event_id: z.number().int() }),
-  z.object({ type: z.literal("question"), task_id: z.string().min(1) }),
-  z.object({ type: z.literal("handoff"), task_id: z.string().min(1) }),
+  z.object({ type: z.literal("question"), task_id: requiredTextSchema }),
+  z.object({ type: z.literal("handoff"), task_id: requiredTextSchema }),
   z.object({ type: z.literal("memory_entry"), entry_id: z.number().int() }),
-  z.object({ type: z.literal("to_english"), text: z.string().min(1) }),
-  z.object({ type: z.literal("back_translation"), text: z.string().min(1) }),
+  z.object({ type: z.literal("to_english"), text: requiredTextSchema }),
+  z.object({ type: z.literal("back_translation"), text: requiredTextSchema }),
 ]);
 
 /** IANA name existence check: an unknown zone throws inside the
@@ -486,11 +488,11 @@ const spendDownSchema = z
 
 const objectionSchema = z.object({
   entry_id: z.number().int().positive(),
-  comment: z.string().min(1),
+  comment: requiredTextSchema,
 });
 
 const scratchpadSchema = z.object({
-  line: z.string().min(1),
+  line: requiredTextSchema,
 });
 
 // z.coerce: route params always arrive as strings — coercing here keeps the
@@ -1457,7 +1459,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     }
     try {
       const draft = await draftClient.draftHandoff(parsed.data.dump, getDisplayLanguage(db));
-      const missing = HANDOFF_FIELDS.filter((f) => !draft[f]?.trim());
+      const missing = HANDOFF_FIELDS.filter((f) => draft[f] === undefined || whyBlank(draft[f]));
       res.json({ ...draft, missing } satisfies WireContract["POST /api/tasks/:id/complete/draft"]);
     } catch (err) {
       // same "any failure = unreachable" 503 fallback /tasks/draft uses

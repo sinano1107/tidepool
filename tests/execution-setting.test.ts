@@ -1093,3 +1093,9 @@ it("新しい名前は挿入と同じ検査を通り、無い段・重複・agen
   expect(rewrite).not.toHaveBeenCalled();
   expect(tierNames(db)).toEqual(["economy", "standard", "frontier"]);
 });
+
+it("tier descriptions trim surrounding whitespace before the one-line rule and persistence", () => {
+  const db = openDb(":memory:");
+  applyExecutionSettingsChange(db, { setting: "insert_tier", name: "custom", description: " description\n", position: 1 }, "webui", new Date(0));
+  expect(readTiers(db).find((tier) => tier.name === "custom")?.description).toBe("description");
+});

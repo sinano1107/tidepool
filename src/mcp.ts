@@ -38,6 +38,7 @@ import {
 import { type MetaReviewSubject, metaReviewSubjectOf, PROMOTION_RULE, TIER_DEFINITION_RULE } from "./meta-review.js";
 import type { ProcessContainers } from "./process-container.js";
 import { type AuthorityProfile, REVIEWER_AUTHORITY_PROFILE, type RosterAgent } from "./registry.js";
+import { requiredTextSchema } from "./required-text-schema.js";
 import { nextDescription, packItems, readPosition } from "./response-budget.js";
 import { proposeFromObjection } from "./retrospective.js";
 import { listAllocations, listRoutingCells, listRoutingShadow, proposeRoutingChange, readRoutingSettings } from "./routing-review.js";
@@ -407,9 +408,9 @@ function decomposeChildrenSchema(db: Db) {
   const tierDescriptions = tierFieldDescriptions(db);
   return z.array(
     z.object({
-      title: z.string().min(1),
-      purpose: z.string().min(1),
-      completion_criteria: z.string().min(1),
+      title: requiredTextSchema,
+      purpose: requiredTextSchema,
+      completion_criteria: requiredTextSchema,
       risk_flag: z.boolean().optional(),
       assignee: z
         .string()
@@ -428,7 +429,7 @@ function decomposeChildrenSchema(db: Db) {
             "Refused on a child assigned to human, whose completion raises no review.",
         ),
       tier: z.string().optional().describe(tierDescriptions.tier),
-      review_by: z.array(z.string().min(1)).optional()
+      review_by: z.array(requiredTextSchema).optional()
         .describe(`${REVIEWER_NAMES} Omit to use the board Auditor. ${ONLY_WHERE_REVIEW_FIRES}`),
       review_tier: z.string().optional().describe(`${tierDescriptions.review_tier}\n${ONLY_WHERE_REVIEW_FIRES}`),
       priority: z.string().optional().describe(PRIORITY_FIELD_DESCRIPTION),
@@ -559,7 +560,7 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
         "Record an in-authority decision as one log line and keep working. " +
         "The line lands in the human-skimmed decision log. " +
         BOARD_WRITE_LANGUAGE_RULE,
-      inputSchema: { line: z.string().min(1) },
+      inputSchema: { line: requiredTextSchema },
     },
     async ({ line }) =>
       runVerb(deps, attributedTaskId, (task) => {
@@ -587,7 +588,7 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
         "integrate and complete for real. " +
         BOARD_WRITE_LANGUAGE_RULE,
       inputSchema: {
-        reason: z.string().min(1),
+        reason: requiredTextSchema,
         children: decomposeChildrenSchema(deps.db),
       },
     },
@@ -621,13 +622,13 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
       // recommendation invariants are enforced inside the verb so callers get
       // a domain error
       inputSchema: {
-        context: z.string().min(1),
+        context: requiredTextSchema,
         questions: z.array(
           z.object({
-            title: z.string().min(1),
-            detail: z.string().min(1).optional(),
-            options: z.array(z.string()),
-            recommendation: z.string(),
+            title: requiredTextSchema,
+            detail: requiredTextSchema.optional(),
+            options: z.array(requiredTextSchema),
+            recommendation: requiredTextSchema,
           }),
         ),
       },
@@ -652,7 +653,7 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
         "freed — commit your work first. A root task or a child outside a decomposition " +
         "decision escalates instead. " +
         BOARD_WRITE_LANGUAGE_RULE,
-      inputSchema: { reason: z.string().min(1) },
+      inputSchema: { reason: requiredTextSchema },
     },
     async ({ reason }) =>
       runReleasingVerb(deps, attributedTaskId, (task, workerId, now) => {
@@ -671,7 +672,7 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
         "for this premise — a repeat breach goes to the human. Only while a child of this task " +
         "has an open premise breach; then plain decompose and complete_task are refused. " +
         BOARD_WRITE_LANGUAGE_RULE,
-      inputSchema: { line: z.string().min(1) },
+      inputSchema: { line: requiredTextSchema },
     },
     async ({ line }) =>
       runReleasingVerb(deps, attributedTaskId, (task, workerId, now) => {
@@ -689,7 +690,7 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
         "decomposes the remaining work exactly as decompose does, and frees the slot. Only " +
         "while a child of this task has an open premise breach. " +
         BOARD_WRITE_LANGUAGE_RULE,
-      inputSchema: { reason: z.string().min(1), children: decomposeChildrenSchema(deps.db) },
+      inputSchema: { reason: requiredTextSchema, children: decomposeChildrenSchema(deps.db) },
     },
     async (input) =>
       runReleasingVerb(deps, attributedTaskId, (task, workerId, now) => {
@@ -723,9 +724,9 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
         // the schema stays permissive: the exactly-one-source invariant is
         // enforced inside the verb so callers get a domain error
         inputSchema: {
-          path: z.string(),
-          title: z.string().min(1),
-          text: z.string().min(1),
+          path: requiredTextSchema,
+          title: requiredTextSchema,
+          text: requiredTextSchema,
           source: z.object({ event_id: z.number().int().optional(), commit: z.string().optional() }).optional(),
         },
       },
@@ -756,9 +757,9 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
         BOARD_WRITE_LANGUAGE_RULE,
       inputSchema: {
         entry_id: z.number().int(),
-        path: z.string(),
-        title: z.string().min(1),
-        text: z.string().min(1),
+        path: requiredTextSchema,
+        title: requiredTextSchema,
+        text: requiredTextSchema,
         as: z.enum(["behavior", "knowledge"]).optional(),
         based_on_decision: z.number().int().optional(),
       },
@@ -781,7 +782,7 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
         "entries come and go. It is kept as-is (no approval step). " +
         "A path that holds whole-board entries at or under it cannot be defined for this workspace: file under the branch as it is, or define a sub-branch. " +
         BOARD_WRITE_LANGUAGE_RULE,
-      inputSchema: { prefix: z.string(), definition: z.string() },
+      inputSchema: { prefix: requiredTextSchema, definition: requiredTextSchema },
     },
     async (input) =>
       runVerb(deps, attributedTaskId, (task) =>
@@ -827,7 +828,7 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
         "searched by their English text; query in English. Read an entry's text with read_memory. " +
         "Definitions are not searched; the index in your Memory section and browse_memory carry them. " +
         nextDescription("search_memory", "results"),
-      inputSchema: { query: z.string().min(1).optional(), next },
+      inputSchema: { query: requiredTextSchema.optional(), next },
     },
     async (input) => runVerb(deps, attributedTaskId, (task) => searchMemory(deps.db, reader(task), input, deps.clock.now())),
   );
@@ -992,7 +993,7 @@ function registerRoutingMetaReviewVerbs(server: McpServer, deps: McpDeps, run: M
         tier: z.string().optional().describe("op tier_description: the tier whose description to rewrite. op add_tier: the new tier's name."),
         description: z.string().optional().describe("op tier_description and add_tier only: the tier's description, one line."),
         position: z.number().int().nonnegative().optional().describe("op add_tier only: where the new tier goes, an index into the board's list (lowest first)."),
-        rationale: z.string().min(1),
+        rationale: requiredTextSchema,
       },
     },
     async (input) => run((reader, now) => proposeRoutingChange(deps.db, reader.taskId, input, reader.agent, now, deps.agentAdmin?.list)),
@@ -1002,7 +1003,7 @@ function registerRoutingMetaReviewVerbs(server: McpServer, deps: McpDeps, run: M
 /** 主題 memory の専用 verb(issue #619)。 */
 function registerMemoryMetaReviewVerbs(server: McpServer, deps: McpDeps, run: MetaReviewRun): void {
   const author = (reader: { agent: string }) => ({ activity: "meta_review" as const, name: reader.agent });
-  const scope = z.string().min(1).nullable().describe("A registry workspace name, or null for the whole board.");
+  const scope = requiredTextSchema.nullable().describe("A registry workspace name, or null for the whole board.");
 
   server.registerTool(
     "list_memory_candidates",
@@ -1083,7 +1084,7 @@ function registerMemoryMetaReviewVerbs(server: McpServer, deps: McpDeps, run: Me
         "with that entry's own title and text, excluding the entry itself). Returns pointers only — read the text with read_memory_entries. " +
         "Definitions are not searched: the branch list carries them. Results come in rank order. " +
         nextDescription("search_memory_entries", "results"),
-      inputSchema: { query: z.string().min(1).optional(), like: z.number().int().optional(), next },
+      inputSchema: { query: requiredTextSchema.optional(), like: z.number().int().optional(), next },
     },
     async (input) => run((reader, now) => searchMemoryEntries(deps.db, reader, input, now)),
   );
@@ -1100,7 +1101,7 @@ function registerMemoryMetaReviewVerbs(server: McpServer, deps: McpDeps, run: Me
         "A workspace definition is refused at a path that holds whole-board entries at or under it, and a whole-board entry is refused at or under a path a workspace defines. " +
         "To clear the way, write a whole-board definition at the workspace definition's path with supersedes, or rename the workspace branch with move_memory_branch. " +
         BOARD_WRITE_LANGUAGE_RULE,
-      inputSchema: { scope, path: z.string(), definition: z.string(), supersedes: z.array(z.number().int()).min(1).optional() },
+      inputSchema: { scope, path: requiredTextSchema, definition: requiredTextSchema, supersedes: z.array(z.number().int()).min(1).optional() },
     },
     async (input) =>
       run((reader, now) =>
@@ -1133,9 +1134,9 @@ function registerMemoryMetaReviewVerbs(server: McpServer, deps: McpDeps, run: Me
         replaces: z.array(z.number().int()),
         successor_id: z.number().int().optional(),
         scope: scope.optional(),
-        path: z.string().optional(),
-        title: z.string().min(1).optional(),
-        text: z.string().min(1).optional(),
+        path: requiredTextSchema.optional(),
+        title: requiredTextSchema.optional(),
+        text: requiredTextSchema.optional(),
         based_on_decision: z.number().int().optional(),
       },
     },
@@ -1152,7 +1153,7 @@ function registerMemoryMetaReviewVerbs(server: McpServer, deps: McpDeps, run: Me
         "approved or candidate. scope is the entry's own scope or null (whole-board). Refused: narrowing to a workspace or " +
         "moving between workspaces; changing the scope of an approved Behavior or Exemplar, or of an entry an open proposal " +
         "question names; changing a Definition's path (use move_memory_branch).",
-      inputSchema: { entry_id: z.number().int(), scope, path: z.string() },
+      inputSchema: { entry_id: z.number().int(), scope, path: requiredTextSchema },
     },
     async (input) =>
       run((reader, now) => moveMemoryByMetaReview(deps.db, { ...input, scope: registeredScope(deps, input.scope), mover: author(reader) }, "worker", now)),
@@ -1171,7 +1172,7 @@ function registerMemoryMetaReviewVerbs(server: McpServer, deps: McpDeps, run: Me
         "already there (superseded — the destination's wording stays; revise it in place with define_memory before or " +
         "after) and everything else moves. merge: true is refused when no such pair exists. Returns moved and folded (how " +
         "many entries were moved and how many Definitions were folded) with to_scope and to_path.",
-      inputSchema: { scope, path: z.string(), to_scope: scope, to_path: z.string(), merge: z.boolean().optional() },
+      inputSchema: { scope, path: requiredTextSchema, to_scope: scope, to_path: requiredTextSchema, merge: z.boolean().optional() },
     },
     // 照合は行き先の scope だけ —— 移動元は行を引くだけ(人間の面の枝ごとの移動と同じ、ADR 0173 決定2)
     async (input) =>
@@ -1219,10 +1220,10 @@ function registerMemoryMetaReviewVerbs(server: McpServer, deps: McpDeps, run: Me
         text: z
           .object({
             scope,
-            path: z.string(),
-            title: z.string().min(1),
-            text: z.string().min(1).optional(),
-            addressee: z.string().min(1).nullable(),
+            path: requiredTextSchema,
+            title: requiredTextSchema,
+            text: requiredTextSchema.optional(),
+            addressee: requiredTextSchema.nullable(),
             kind: z.enum(["behavior", "exemplar"]).optional(),
             annotations: z
               .array(metaReviewAnnotationSchema)
@@ -1239,7 +1240,7 @@ function registerMemoryMetaReviewVerbs(server: McpServer, deps: McpDeps, run: Me
         based_on_decision: z.number().int().optional(),
         target_id: z.number().int().optional(),
         reason: invalidationSchema.shape.reason.optional(),
-        rationale: z.string().min(1),
+        rationale: requiredTextSchema,
       },
     },
     async (input) =>

@@ -137,7 +137,7 @@ function RegisterScreen({ onRegister, parentTask, onClose }: RegisterScreenProps
   // drift apart
   const childExtras = () =>
     parentTask
-      ? { parent_id: parentTask.id, decompose_reason: reason.trim() }
+      ? { parent_id: parentTask.id, decompose_reason: TidepoolRules.normalizeText(reason) }
       : {};
   // the issue-number picker's open-issue list (issue #67): one fetch per
   // workspace selection, no cache/paging — the board-side rationale is the
@@ -150,7 +150,7 @@ function RegisterScreen({ onRegister, parentTask, onClose }: RegisterScreenProps
   const [truncated, setTruncated] = React.useState(false);
   React.useEffect(() => {
     setIssues([]); setIssuesFailed(false); setTruncated(false);
-    if (!issueMode || !workspace.trim()) return;
+    if (!issueMode || TidepoolRules.whyBlank(workspace)) return;
     api('GET /api/github-issues', { query: { workspace: workspace.trim() } })
       .then((d) => { setIssues(d.issues); setTruncated(d.truncated); })
       .catch(() => setIssuesFailed(true));
@@ -189,8 +189,8 @@ function RegisterScreen({ onRegister, parentTask, onClose }: RegisterScreenProps
         i.title.toLowerCase().includes(issueNumber.trim().toLowerCase()))
     : issues;
   const ok = issueMode
-    ? workspace.trim() && /^[0-9]+$/.test(issueNumber.trim())
-    : title.trim() && purpose.trim() && criteria.trim() && (!childMode || reason.trim());
+    ? !TidepoolRules.whyBlank(workspace) && /^[0-9]+$/.test(issueNumber.trim())
+    : ![title, purpose, criteria].some((value) => TidepoolRules.whyBlank(value)) && (!childMode || !TidepoolRules.whyBlank(reason));
   // 欄はサーバーと同じ規則で出す(ADR 0209)。issue 経路は常に work(type state は手入力側で review に切り替えたまま残りうる)
   const ruleSubject = { type: issueMode ? 'work' : type, parent_id: parentTask?.id, assignee, review_flag: review, risk_flag: risk };
   const showReviewFlag = TidepoolRules.reviewFlagCarriesMeaning(ruleSubject);
@@ -212,7 +212,7 @@ function RegisterScreen({ onRegister, parentTask, onClose }: RegisterScreenProps
           // a decompose child is always type work (decomposeTask's own
           // ChildSpec has no type field) — the type picker is dropped in
           // childMode below, so `type` state never leaves its 'work' default
-          type, title: title.trim(), purpose: purpose.trim(), completion_criteria: criteria.trim(),
+          type, title: TidepoolRules.normalizeText(title), purpose: TidepoolRules.normalizeText(purpose), completion_criteria: TidepoolRules.normalizeText(criteria),
           risk_flag: risk, ...(showReviewFlag ? { review_flag: review } : {}),
           // unset assignee/workspace resolve to the board's defaults at
           // execution time (CONTEXT.md) — omit rather than send '' so an
@@ -286,7 +286,7 @@ function RegisterScreen({ onRegister, parentTask, onClose }: RegisterScreenProps
   const draftFields = async () => {
     setDraftBusy(true);
     try {
-      const d = await api('POST /api/tasks/draft', { body: { dump: dump.trim(), ...childExtras() } });
+      const d = await api('POST /api/tasks/draft', { body: { dump: TidepoolRules.normalizeText(dump), ...childExtras() } });
       setTitle(d.title); setPurpose(d.purpose); setCriteria(d.completion_criteria);
       setAssignee(d.assignee ?? ''); setWorkspace(d.workspace ?? '');
       setRisk(!!d.risk_flag); setReview(!!d.review_flag);
@@ -327,7 +327,7 @@ function RegisterScreen({ onRegister, parentTask, onClose }: RegisterScreenProps
         disabled: !ok || busy,
         onClick: submit,
       }
-    : { label: draftBusy ? 'Drafting…' : 'Draft fields', disabled: !dump.trim() || draftBusy, onClick: draftFields };
+    : { label: draftBusy ? 'Drafting…' : 'Draft fields', disabled: !!TidepoolRules.whyBlank(dump) || draftBusy, onClick: draftFields };
   return (
     <div style={{ padding: '20px 16px' }}>
       <h1 style={{ fontSize: 'var(--text-xl)', margin: '0 0 2px' }}>{childMode ? 'Add child' : 'Register'}</h1>
@@ -391,13 +391,13 @@ function RegisterScreen({ onRegister, parentTask, onClose }: RegisterScreenProps
             {reviewerPicker}
             <Input label="Issue number" value={issueNumber} onChange={(e) => setIssueNumber(e.target.value)} placeholder="content stays on GitHub; the board keeps only this reference" />
             <div style={{ display: 'flex', flexDirection: 'column', gap: 4, maxHeight: 220, overflowY: 'auto' }}>
-              {!workspace.trim() && (
+              {TidepoolRules.whyBlank(workspace) && (
                 <span style={issueListHintStyle}>select a workspace to browse its open issues</span>
               )}
-              {workspace.trim() && issuesFailed && (
+              {!TidepoolRules.whyBlank(workspace) && issuesFailed && (
                 <span style={issueListHintStyle}>couldn't fetch open issues — type the number directly</span>
               )}
-              {workspace.trim() && !issuesFailed && filteredIssues.map((i) => (
+              {!TidepoolRules.whyBlank(workspace) && !issuesFailed && filteredIssues.map((i) => (
                 <div key={i.number} onClick={() => setIssueNumber(String(i.number))}
                   style={{
                     display: 'flex', gap: 8, padding: '6px 8px', borderRadius: 6, cursor: 'pointer',
@@ -408,7 +408,7 @@ function RegisterScreen({ onRegister, parentTask, onClose }: RegisterScreenProps
                   <span>{i.title}</span>
                 </div>
               ))}
-              {workspace.trim() && !issuesFailed && truncated && (
+              {!TidepoolRules.whyBlank(workspace) && !issuesFailed && truncated && (
                 <span style={issueListHintStyle}>older issues exist — type the number directly</span>
               )}
             </div>
@@ -422,9 +422,9 @@ function RegisterScreen({ onRegister, parentTask, onClose }: RegisterScreenProps
             <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: drafted ? 'var(--tide-4)' : 'var(--sun-4)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
               {drafted ? 'drafted — edit freely' : 'plain form — same fields, no draft'}
             </span>
-            <Input label="Title" value={title} onChange={(e) => setTitle(e.target.value)} />
-            <Input label="Purpose" multiline rows={2} value={purpose} onChange={(e) => setPurpose(e.target.value)} placeholder="state prerequisites here — the agent verifies and escalates cheaply" />
-            <Input label="Completion criteria" multiline rows={2} value={criteria} onChange={(e) => setCriteria(e.target.value)} placeholder="sloppy completion criteria are the expensive kind" />
+            <Input label="Title" error={TidepoolRules.whyBlank(title)} value={title} onChange={(e) => setTitle(e.target.value)} />
+            <Input label="Purpose" error={TidepoolRules.whyBlank(purpose)} multiline rows={2} value={purpose} onChange={(e) => setPurpose(e.target.value)} placeholder="state prerequisites here — the agent verifies and escalates cheaply" />
+            <Input label="Completion criteria" error={TidepoolRules.whyBlank(criteria)} multiline rows={2} value={criteria} onChange={(e) => setCriteria(e.target.value)} placeholder="sloppy completion criteria are the expensive kind" />
             {/* a decompose child is always type work (decomposeTask's own ChildSpec has no type field) */}
             {!childMode && (
               <Select label="Type" options={['work', 'review']} value={type} onChange={(e) => setType(e.target.value === 'review' ? 'review' : 'work')} />

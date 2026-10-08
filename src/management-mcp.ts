@@ -91,6 +91,7 @@ import {
   UnknownAuthorityProfileError,
 } from "./registry.js";
 import { RepoAccessMissingError } from "./repo-access.js";
+import { requiredTextSchema } from "./required-text-schema.js";
 import { nextDescription, packItems, type ReadPosition, readNext } from "./response-budget.js";
 import { listHaltedRefires, markHaltedRefire, refireKeySchema } from "./retrospective.js";
 import {
@@ -159,12 +160,12 @@ export interface ManagementMcpDeps {
 // しない。平らな object にして、mode と path / repo の組み合わせは refine で強制する
 const createWorkspaceSchema = z
   .object({
-    name: z.string().min(1),
+    name: requiredTextSchema,
     notes: z.string().min(1).optional(),
     protected: z.boolean().optional(),
     mode: z.enum(["register", "clone", "create"]),
-    path: z.string().min(1).optional().describe("Required for register (the existing checkout); ignored otherwise."),
-    repo: z.string().min(1).optional().describe("Required for clone (anything git clone accepts); ignored otherwise."),
+    path: requiredTextSchema.optional().describe("Required for register (the existing checkout); ignored otherwise."),
+    repo: requiredTextSchema.optional().describe("Required for clone (anything git clone accepts); ignored otherwise."),
   })
   .superRefine((input, ctx) => {
     if (input.mode === "register" && input.path === undefined)
@@ -182,9 +183,9 @@ function toCreateWorkspaceInput({ path, repo, ...rest }: z.infer<typeof createWo
 }
 
 const agentFieldsSchema = z.object({
-  authority: z.string().min(1),
-  description: z.string().min(1),
-  provider: z.string().min(1),
+  authority: requiredTextSchema,
+  description: requiredTextSchema,
+  provider: requiredTextSchema,
   icon: z.string().optional(),
   tier: z.string().optional(),
   advisor: z.boolean().optional(),
@@ -456,7 +457,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
     {
       description: "Update a workspace in the human-managed registry.",
       inputSchema: z.object({
-        name: z.string().min(1),
+        name: requiredTextSchema,
         notes: z.string().optional(),
         protected: z.boolean().optional(),
         // ADR 0061 / 0072: both workspace allowlists are editable here too —
@@ -484,8 +485,8 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
       description:
         "Give a purely-local workspace a remote source of truth: push every branch to an empty repository the human prepared, then record it on the registry entry.",
       inputSchema: z.object({
-        name: z.string().min(1),
-        repo: z.string().min(1),
+        name: requiredTextSchema,
+        repo: requiredTextSchema,
       }),
     },
     async (input) => {
@@ -502,7 +503,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
     "create_agent",
     {
       description: "Create an agent in the human-managed registry.",
-      inputSchema: agentFieldsSchema.extend({ name: z.string().min(1) }),
+      inputSchema: agentFieldsSchema.extend({ name: requiredTextSchema }),
     },
     async ({ system_prompt, ...input }) => {
       if (!deps.agentAdmin?.create) return toolError("agent administration is not configured");
@@ -535,7 +536,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
     "update_agent",
     {
       description: "Update an agent in the human-managed registry.",
-      inputSchema: agentFieldsSchema.extend({ name: z.string().min(1) }),
+      inputSchema: agentFieldsSchema.extend({ name: requiredTextSchema }),
     },
     async ({ system_prompt, ...input }) => {
       if (!deps.agentAdmin?.update) return toolError("agent administration is not configured");
@@ -551,7 +552,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
     "create_profile",
     {
       description: "Create an authority profile in the human-managed registry.",
-      inputSchema: profileFieldsSchema.extend({ name: z.string().min(1) }),
+      inputSchema: profileFieldsSchema.extend({ name: requiredTextSchema }),
     },
     async (input) => {
       if (!deps.profileAdmin?.create) return toolError("profile administration is not configured");
@@ -581,7 +582,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
       description:
         "Update an authority profile in the human-managed registry. Fields omitted from the request are left unchanged.",
       // 部分パッチ(issue #266 / ADR 0086)— create 扉は全フィールド必須のまま
-      inputSchema: profileFieldsSchema.partial().extend({ name: z.string().min(1) }),
+      inputSchema: profileFieldsSchema.partial().extend({ name: requiredTextSchema }),
     },
     async (input) => {
       if (!deps.profileAdmin?.update) return toolError("profile administration is not configured");
@@ -949,7 +950,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
         workspace: z.string().optional(),
         risk_flag: z.boolean().optional(),
         review_flag: z.boolean().optional().describe(`${REVIEW_FLAG_ONLY_ON_WORK_CHILDREN}\n${JUDGED_AFTER_THE_EDIT}`),
-        review_by: z.array(z.string().min(1)).optional()
+        review_by: z.array(requiredTextSchema).optional()
           .describe(`${REVIEWER_NAMES} ${ONLY_WHERE_COMPLETION_REVIEW_FIRES}\n${JUDGED_AFTER_THE_EDIT}`),
       },
     },
@@ -981,7 +982,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
             workspace: z.string().optional(),
             review_flag: z.boolean().optional().describe("Refused on a child assigned to human, whose completion raises no review."),
             tier: z.string().optional().describe(tierDescriptions.tier),
-            review_by: z.array(z.string().min(1)).optional().describe(ONLY_WHERE_REVIEW_FIRES),
+            review_by: z.array(requiredTextSchema).optional().describe(ONLY_WHERE_REVIEW_FIRES),
             review_tier: z.string().optional().describe(`${tierDescriptions.review_tier}\n${ONLY_WHERE_REVIEW_FIRES}`),
             priority: z.string().optional().describe(PRIORITY_FIELD_DESCRIPTION),
           }),
@@ -1062,7 +1063,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
         risk_flag: z.boolean().optional(),
         review_flag: z.boolean().optional().describe(REVIEW_FLAG_ONLY_ON_WORK_CHILDREN),
         tier: z.string().optional().describe(tierDescriptions.tier),
-        review_by: z.array(z.string().min(1)).optional()
+        review_by: z.array(requiredTextSchema).optional()
           .describe(`${REVIEWER_NAMES} Omit to use the board Auditor. ${ONLY_WHERE_COMPLETION_REVIEW_FIRES}`),
         review_tier: z.string().optional().describe(`${REVIEW_TIER_BY_TYPE}\n${tierDescriptions.review_tier_choices}`),
         priority: z.string().optional().describe(PRIORITY_FIELD_DESCRIPTION),

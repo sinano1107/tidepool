@@ -24,14 +24,14 @@ type SettingsTier = SettingsExecution['tiers'][number];
 type AdvisorCeiling = SettingsExecution['advisorCeiling'];
 
 function registryNameOk(name: string) {
-  const v = name.trim();
+  const v = TidepoolRules.normalizeText(name);
   return /^[A-Za-z0-9._-]+$/.test(v) && !['.', '..'].includes(v);
 }
 
 // ADR 0018 の規約(基点 + 名前)を表示のために合成する。ADR 0082 決定1: 解決その
 // ものは server 側の1点に残り、ここは「その1本の規約を読み上げる」だけである。
 function landingPath(baseDir: { path: string }, name: string) {
-  return `${baseDir.path.replace(/\/+$/, '')}/${name.trim()}`;
+  return `${baseDir.path.replace(/\/+$/, '')}/${TidepoolRules.normalizeText(name)}`;
 }
 
 // The head of a record card (issue #204): identity on the left, Edit on the
@@ -104,7 +104,7 @@ function FreeEntryAllowlistInput({
   const [free, setFree] = React.useState('');
   const addFree = () => {
     const v = free.trim();
-    if (!v || values.includes(v)) return;
+    if (TidepoolRules.whyBlank(v) || values.includes(v)) return;
     onChange([...values, v]);
     setFree('');
   };
@@ -131,7 +131,7 @@ function FreeEntryAllowlistInput({
           <Input value={free} mono onChange={(e) => { setFree(e.target.value); }}
             placeholder={placeholder} />
         </div>
-        <Button variant="secondary" disabled={!free.trim()} onClick={addFree}>Add</Button>
+        <Button variant="secondary" disabled={!!TidepoolRules.whyBlank(free)} onClick={addFree}>Add</Button>
       </div>
     </div>
   );
@@ -154,7 +154,7 @@ function PublishWorkspace({ ws, say, onPublished }: {
   const submit = async () => {
     setBusy(true);
     try {
-      await api(`/api/workspaces/${encodeURIComponent(ws.name)}/publish`, { repo: repo.trim() });
+      await api(`/api/workspaces/${encodeURIComponent(ws.name)}/publish`, { repo: TidepoolRules.normalizeText(repo) });
       setRepo('');
       say('success', 'workspace published — every branch is on the remote', ws.name);
       await onPublished();
@@ -176,7 +176,7 @@ function PublishWorkspace({ ws, say, onPublished }: {
       </p>
       <Input value={repo} onChange={(e) => setRepo(e.target.value)}
         placeholder="the destination repository URL — must be empty" />
-      <Button variant="secondary" size="sm" disabled={busy || !repo.trim()} onClick={submit}>
+      <Button variant="secondary" size="sm" disabled={busy || !!TidepoolRules.whyBlank(repo)} onClick={submit}>
         Publish — pushes every branch, then commits to the registry
       </Button>
     </div>
@@ -366,7 +366,7 @@ const NEW_AGENT_DRAFT: AgentDraft = {
 function agentBody(d: AgentDraft) {
   return {
     authority: d.authority,
-    description: d.description.trim(),
+    description: TidepoolRules.normalizeText(d.description),
     provider: d.provider,
     icon: d.icon.trim() || undefined,
     tier: d.tier || undefined,
@@ -381,7 +381,7 @@ function agentBody(d: AgentDraft) {
 // detection) — a reorder is a real edit.
 function agentDraftDirty(d: AgentDraft, base: AgentDraft) {
   return d.icon !== base.icon
-    || d.description.trim() !== base.description
+    || TidepoolRules.normalizeText(d.description) !== base.description
     || d.systemPrompt !== base.systemPrompt
     || d.authority !== base.authority
     || d.provider !== base.provider
@@ -475,7 +475,7 @@ function AgentRecord({ agent, authorityProfiles, providerOptions, tiers, advisor
   const [busy, setBusy] = React.useState(false);
 
   const dirty = agentDraftDirty(draft, agentDraftOf(agent));
-  const ok = !!draft.description.trim() && !!draft.authority && !!draft.provider;
+  const ok = !TidepoolRules.whyBlank(draft.description) && !!draft.authority && !!draft.provider;
   useDirtySignal(edit, open, dirty);
 
   const startEdit = () => edit.open(id, () => setDraft(agentDraftOf(agent)));
@@ -659,7 +659,8 @@ function ProfileListInput({ label, hint, candidates, wildcardHint, values, onCha
 // string, or null when the entry may be added.
 function skillAddError(entry: string, existing: string[]) {
   const v = entry.trim();
-  if (!v) return 'empty skill name';
+  const blank = TidepoolRules.whyBlank(v);
+  if (blank) return blank;
   if (existing.includes(v)) return 'already added';
   if (v === '*') {
     return existing.length > 0 ? '"*" must be the only entry — remove the others first' : null;
@@ -737,7 +738,7 @@ function SkillListInput({ candidates, degraded, values, onChange }: {
             onChange={(e) => { setFree(e.target.value); setFreeError(null); }}
             placeholder='free entry — e.g. a workspace skill name or "plugin-name:*"' />
         </div>
-        <Button variant="secondary" disabled={!free.trim()} onClick={addFree}>Add</Button>
+        <Button variant="secondary" disabled={!!TidepoolRules.whyBlank(free)} onClick={addFree}>Add</Button>
       </div>
     </div>
   );
@@ -1183,7 +1184,7 @@ function QuietHoursCard({ start, end, tz, say, onSaved, edit }: {
   const [draftEnd, setDraftEnd] = React.useState(end);
   const [busy, setBusy] = React.useState(false);
   const dirty = draftStart !== start || draftEnd !== end;
-  const ok = !!draftStart.trim() && !!draftEnd.trim();
+  const ok = !TidepoolRules.whyBlank(draftStart) && !TidepoolRules.whyBlank(draftEnd);
   useDirtySignal(edit, open, dirty);
 
   const save = async () => {
@@ -1515,7 +1516,7 @@ function MemoryCasePicker({ workspace, value, onChange, onQuote }: {
       const quote = selection?.toString() ?? '';
       const fieldOf = (node: Node | null | undefined) => (node instanceof Element ? node : node?.parentElement)?.closest<HTMLElement>('[data-field]');
       const field = fieldOf(selection?.anchorNode);
-      if (!quote.trim() || !field || field !== fieldOf(selection?.focusNode) || !caseBox.current?.contains(field)) return;
+      if (TidepoolRules.whyBlank(quote) || !field || field !== fieldOf(selection?.focusNode) || !caseBox.current?.contains(field)) return;
       quoteTo.current?.({ field: field.dataset.field as Exclude<TpMemoryAnchor, 'whole'>['field'], quote });
     };
     document.addEventListener('selectionchange', onSelection);
@@ -1625,12 +1626,12 @@ function MemoryExemplarAnnotations({ workspace, source, onSource, annotations, o
           {translate && (
             <React.Fragment>
               <Input label={language ? `Original (${language})` : 'Original'} multiline rows={2} value={a.original} onChange={(e) => set(i, { original: e.target.value })} />
-              <Button variant="secondary" size="sm" disabled={busy || !a.original.trim()} onClick={() => translateOne(i, true)}>Translate</Button>
+              <Button variant="secondary" size="sm" disabled={busy || !!TidepoolRules.whyBlank(a.original)} onClick={() => translateOne(i, true)}>Translate</Button>
             </React.Fragment>
           )}
           <Input label="Annotation (English)" multiline rows={2} value={a.text} onChange={(e) => set(i, { text: e.target.value, back: null })} />
           {translate && (
-            <Button variant="secondary" size="sm" disabled={busy || !a.text.trim()} onClick={() => translateOne(i, false)}>Back-translate</Button>
+            <Button variant="secondary" size="sm" disabled={busy || !!TidepoolRules.whyBlank(a.text)} onClick={() => translateOne(i, false)}>Back-translate</Button>
           )}
           {a.back && <p style={muted}>back{language ? ` in ${language}` : ''}: {a.back}</p>}
           <Button variant="ghost" size="sm" onClick={() => onChange((list) => list.filter((_, j) => j !== i))}>Remove annotation</Button>
@@ -1733,7 +1734,7 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit, fo
   const [draft, setDraft] = React.useState(blank);
   const [busy, setBusy] = React.useState(false);
   const setDraftField = (key: string) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => setDraft({ ...draft, [key]: e.target.value, ...(key === 'title' || key === 'text' ? { backTranslation: null } : {}), ...(key === 'workspace' ? { source: null } : {}) });
-  useDirtySignal(edit, writing, [draft.originalTitle, draft.originalText, draft.title, draft.text, ...draft.annotations.map((a) => a.text)].some((v) => v.trim() !== ''));
+  useDirtySignal(edit, writing, [draft.originalTitle, draft.originalText, draft.title, draft.text, ...draft.annotations.map((a) => a.text)].some((v) => !TidepoolRules.whyBlank(v)));
   const translatable = language !== 'English';
   // a definition is one line with no title: its original and English are the text alone (ADR 0015)
   const fields: ('title' | 'text')[] = draft.kind === 'definition' ? ['text'] : ['title', 'text'];
@@ -1741,8 +1742,8 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit, fo
   // an orphaned reference the replaced entry held is never saved again (ADR 0173 決定3)
   const holdsOrphan = draft.workspace === draft.dead.workspace || ((draft.kind === 'behavior' || draft.kind === 'exemplar') && draft.addressee === draft.dead.addressee);
   const filled = draft.kind === 'exemplar'
-    ? !!draft.title.trim() && (draft.source ?? draft.inheritedSource) !== null && draft.annotations.length > 0 && draft.annotations.every((a) => a.polarity && a.text.trim())
-    : fields.every((key) => draft[key].trim() !== '');
+    ? !TidepoolRules.whyBlank(draft.title) && (draft.source ?? draft.inheritedSource) !== null && draft.annotations.length > 0 && draft.annotations.every((a) => a.polarity && !TidepoolRules.whyBlank(a.text))
+    : fields.every((key) => !TidepoolRules.whyBlank(draft[key]));
   const originalOf: Record<'title' | 'text', string> = { title: draft.originalTitle, text: draft.originalText };
 
   // Translate fills both English fields from the original title + text; Back-translate re-checks English the
@@ -1763,17 +1764,17 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit, fo
     try {
       // a partial original is sent as is so the server's 400 says why
       const originals = fields.map((key) => [`original_${key}`, originalOf[key].trim()]).filter(([, v]) => v);
-      const body = { workspace: draft.workspace || null, path: draft.path.trim(), text: draft.text.trim(), ...Object.fromEntries(originals) };
+      const body = { workspace: draft.workspace || null, path: TidepoolRules.normalizeText(draft.path), text: TidepoolRules.normalizeText(draft.text), ...Object.fromEntries(originals) };
       const supersedes = draft.supersedes.length > 0 ? { supersedes: draft.supersedes } : {};
       // no pick leaves the source out: the server keeps the one the replaced entries share (which may be an attribution
       // event the picker can't cite)
       const source = draft.source !== null ? { source_event_id: draft.source } : {};
-      if (draft.kind === 'knowledge') await api('/api/settings/memory/knowledge', { ...body, title: draft.title.trim(), ...supersedes });
+      if (draft.kind === 'knowledge') await api('/api/settings/memory/knowledge', { ...body, title: TidepoolRules.normalizeText(draft.title), ...supersedes });
       else if (draft.kind === 'behavior') {
-        await api('/api/settings/memory/behaviors', { ...body, title: draft.title.trim(), addressee: draft.addressee || null, ...supersedes, ...source });
+        await api('/api/settings/memory/behaviors', { ...body, title: TidepoolRules.normalizeText(draft.title), addressee: draft.addressee || null, ...supersedes, ...source });
       } else if (draft.kind === 'exemplar') {
         await api('/api/settings/memory/exemplars', {
-          workspace: body.workspace, path: body.path, title: draft.title.trim(), addressee: draft.addressee || null, ...supersedes, ...source,
+          workspace: body.workspace, path: body.path, title: TidepoolRules.normalizeText(draft.title), addressee: draft.addressee || null, ...supersedes, ...source,
           annotations: annotationsToSend(draft.annotations),
         });
       }
@@ -1868,11 +1869,11 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit, fo
           <Input label="To branch path" mono value={branchMove.to_path} onChange={(e) => setBranchMove({ ...branchMove, to_path: e.target.value })} placeholder="toolchain" />
           <Checkbox label="Merge into the branch already defined there" checked={branchMove.merge} onChange={() => setBranchMove({ ...branchMove, merge: !branchMove.merge })} />
           <div style={{ display: 'flex', gap: 8 }}>
-            <Button variant="secondary" size="sm" disabled={busy || !branchMove.path.trim() || !branchMove.to_path.trim()}
+            <Button variant="secondary" size="sm" disabled={busy || !!TidepoolRules.whyBlank(branchMove.path) || !!TidepoolRules.whyBlank(branchMove.to_path)}
               onClick={() => move('/api/settings/memory/branches/move', {
-                workspace: branchMove.workspace || null, path: branchMove.path.trim(),
-                to_workspace: branchMove.to_workspace || null, to_path: branchMove.to_path.trim(), merge: branchMove.merge,
-              }, `${branchMove.path.trim()} → ${branchMove.to_path.trim()}`, () => setBranchMove(null))}>
+                workspace: branchMove.workspace || null, path: TidepoolRules.normalizeText(branchMove.path),
+                to_workspace: branchMove.to_workspace || null, to_path: TidepoolRules.normalizeText(branchMove.to_path), merge: branchMove.merge,
+              }, `${TidepoolRules.normalizeText(branchMove.path)} → ${TidepoolRules.normalizeText(branchMove.to_path)}`, () => setBranchMove(null))}>
               Move branch
             </Button>
             <Button variant="ghost" size="sm" disabled={busy} onClick={() => setBranchMove(null)}>Cancel</Button>
@@ -1928,7 +1929,7 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit, fo
                 <Input label={`Original title (${language})`} value={draft.originalTitle} onChange={setDraftField('originalTitle')} />
               )}
               <Input label={`Original (${language})`} multiline rows={3} value={draft.originalText} onChange={setDraftField('originalText')} />
-              <Button variant="secondary" size="sm" disabled={busy || fields.some((key) => !originalOf[key].trim())} onClick={() => runTranslation(true)}>Translate</Button>
+              <Button variant="secondary" size="sm" disabled={busy || fields.some((key) => !!TidepoolRules.whyBlank(originalOf[key]))} onClick={() => runTranslation(true)}>Translate</Button>
             </React.Fragment>
           )}
           {draft.kind !== 'definition' && <Input label="Title (English)" value={draft.title} onChange={setDraftField('title')} />}
@@ -1936,7 +1937,7 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit, fo
             <React.Fragment>
               <Input label="English (saved as the canonical text)" multiline rows={3} value={draft.text} onChange={setDraftField('text')} />
               {translatable && (
-                <Button variant="secondary" size="sm" disabled={busy || fields.some((key) => !draft[key].trim())} onClick={() => runTranslation(false)}>Back-translate</Button>
+                <Button variant="secondary" size="sm" disabled={busy || fields.some((key) => !!TidepoolRules.whyBlank(draft[key]))} onClick={() => runTranslation(false)}>Back-translate</Button>
               )}
             </React.Fragment>
           )}
@@ -1999,8 +2000,8 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit, fo
                 onChange={(e) => setMoving({ ...moving!, workspace: e.target.value })} />
               <Input label="Path" mono value={moving!.path} onChange={(e) => setMoving({ ...moving!, path: e.target.value })} />
               <div style={{ display: 'flex', gap: 8 }}>
-                <Button variant="secondary" size="sm" disabled={busy || !moving!.path.trim() || moving!.workspace === deadRefs(entry).workspace}
-                  onClick={() => move(`/api/settings/memory/entries/${entry.id}/move`, { workspace: moving!.workspace || null, path: moving!.path.trim() }, `#${entry.id} → ${moving!.path.trim()}`, () => setMoving(null))}>
+                <Button variant="secondary" size="sm" disabled={busy || !!TidepoolRules.whyBlank(moving!.path) || moving!.workspace === deadRefs(entry).workspace}
+                  onClick={() => move(`/api/settings/memory/entries/${entry.id}/move`, { workspace: moving!.workspace || null, path: TidepoolRules.normalizeText(moving!.path) }, `#${entry.id} → ${TidepoolRules.normalizeText(moving!.path)}`, () => setMoving(null))}>
                   Move #{entry.id}
                 </Button>
                 <Button variant="ghost" size="sm" disabled={busy} onClick={() => setMoving(null)}>Cancel</Button>
@@ -2174,11 +2175,11 @@ function TiersCard({ settings, say, onSaved, edit }: {
   const original = tiers[index];
   const others = tiers.filter((tier) => tier.name !== target);
   const isNew = target === '';
-  const renamed = !isNew && draft.name.trim() !== target;
+  const renamed = !isNew && TidepoolRules.normalizeText(draft.name) !== target;
   const edited = !isNew && (draft.description !== original?.description || draft.position !== index);
-  const dirty = isNew ? !!draft.name.trim() || !!draft.description.trim() : renamed || edited;
+  const dirty = isNew ? !TidepoolRules.whyBlank(draft.name) || !TidepoolRules.whyBlank(draft.description) : renamed || edited;
   // the name's charset is the server's to check — its refusal names the rule
-  const ok = !!draft.description.trim() && !!draft.name.trim();
+  const ok = !TidepoolRules.whyBlank(draft.description) && !TidepoolRules.whyBlank(draft.name);
   useDirtySignal(edit, open, dirty);
 
   const start = (name: string) => edit.open(`board:tier:${name}`, () => {
@@ -2190,7 +2191,7 @@ function TiersCard({ settings, say, onSaved, edit }: {
     setBusy(true);
     try {
       for (const change of changes) await api('/api/settings/execution', change);
-      say('success', done, draft.name.trim());
+      say('success', done, TidepoolRules.normalizeText(draft.name));
       edit.close();
       await onSaved();
     } catch (err) {
@@ -2199,12 +2200,12 @@ function TiersCard({ settings, say, onSaved, edit }: {
     setBusy(false);
   };
   const save = () => send(isNew
-    ? [{ setting: 'insert_tier', name: draft.name.trim(), description: draft.description.trim(), position: draft.position }]
+    ? [{ setting: 'insert_tier', name: TidepoolRules.normalizeText(draft.name), description: TidepoolRules.normalizeText(draft.description), position: draft.position }]
     : [
-        ...(renamed ? [{ setting: 'rename_tier', name: target, to: draft.name.trim() }] : []),
+        ...(renamed ? [{ setting: 'rename_tier', name: target, to: TidepoolRules.normalizeText(draft.name) }] : []),
         ...(edited ? [{
-          setting: 'edit_tier', name: draft.name.trim(),
-          ...(draft.description !== original?.description && { description: draft.description.trim() }),
+          setting: 'edit_tier', name: TidepoolRules.normalizeText(draft.name),
+          ...(draft.description !== original?.description && { description: TidepoolRules.normalizeText(draft.description) }),
           ...(draft.position !== index && { position: draft.position }),
         }] : []),
       ], isNew ? 'tier added' : 'tier saved');
@@ -2272,7 +2273,7 @@ function ExecutionTableCard({ settings, say, onSaved, edit }: {
   const [draft, setDraft] = React.useState(() => asDraft(settings.table));
   const [busy, setBusy] = React.useState(false);
   const current = new Map(settings.table.map((row) => [rowKey(row), row]));
-  const toRow = (d: DraftRow): SettingsExecutionRow => ({ provider: d.provider, tier: d.tier, model: d.model.trim(), effort: d.effort.trim(), price_in: Number(d.price_in), price_out: Number(d.price_out) });
+  const toRow = (d: DraftRow): SettingsExecutionRow => ({ provider: d.provider, tier: d.tier, model: TidepoolRules.normalizeText(d.model), effort: TidepoolRules.normalizeText(d.effort), price_in: Number(d.price_in), price_out: Number(d.price_out) });
   const same = (a: SettingsExecutionRow | undefined, b: SettingsExecutionRow) => a && rowKey(a) === rowKey(b) && a.tier === b.tier && a.price_in === b.price_in && a.price_out === b.price_out;
   // 既存の行は下書きの key(元の3欄)で名指して編集し、新しい行は key なしで足す
   const writes = draft.filter((d) => !same(current.get(d.key), toRow(d)))
@@ -2285,7 +2286,7 @@ function ExecutionTableCard({ settings, say, onSaved, edit }: {
   const validPrice = (v: string) => /^\d+(\.\d+)?$/.test(v.trim());
   // 1つの (model, effort) は1行、1つの段に同じ model は1行まで(ADR 0200 決定5)
   const unique = (of: (row: SettingsExecutionRow) => string) => new Set(draft.map((d) => of(toRow(d)))).size === draft.length;
-  const ok = draft.every((d) => d.model.trim() && d.effort.trim() && validPrice(d.price_in) && validPrice(d.price_out))
+  const ok = draft.every((d) => !TidepoolRules.whyBlank(d.model) && !TidepoolRules.whyBlank(d.effort) && validPrice(d.price_in) && validPrice(d.price_out))
     && unique(rowKey) && unique((row) => `${row.provider}:${row.model}:${row.tier}`);
   useDirtySignal(edit, open, dirty);
 
@@ -2374,8 +2375,8 @@ function NewWorkspaceForm({ baseDir, say, onCreated, edit }: {
   const [path, setPath] = React.useState('');
   const [notes, setNotes] = React.useState('');
   const [prot, setProt] = React.useState(false);
-  const ok = registryNameOk(name) && (mode === 'clone' ? !!repo.trim() : mode === 'register' ? !!path.trim() : true);
-  const dirty = mode !== 'clone' || !!name.trim() || !!repo.trim() || !!path.trim() || !!notes.trim() || prot;
+  const ok = registryNameOk(name) && (mode === 'clone' ? !TidepoolRules.whyBlank(repo) : mode === 'register' ? !TidepoolRules.whyBlank(path) : true);
+  const dirty = mode !== 'clone' || !TidepoolRules.whyBlank(name) || !TidepoolRules.whyBlank(repo) || !TidepoolRules.whyBlank(path) || !!notes.trim() || prot;
   useDirtySignal(edit, true, dirty);
 
   // issue #383: register の門が「人間の生きた dev checkout に見える」と言ったら
@@ -2408,14 +2409,14 @@ function NewWorkspaceForm({ baseDir, say, onCreated, edit }: {
   const submit = () =>
     save(async (confirm) => {
       await api('/api/workspaces', {
-        mode, name: name.trim(),
-        ...(mode === 'clone' ? { repo: repo.trim() } : {}),
-        ...(mode === 'register' ? { path: path.trim() } : {}),
+        mode, name: TidepoolRules.normalizeText(name),
+        ...(mode === 'clone' ? { repo: TidepoolRules.normalizeText(repo) } : {}),
+        ...(mode === 'register' ? { path: TidepoolRules.normalizeText(path) } : {}),
         ...(notes.trim() ? { notes: notes.trim() } : {}),
         ...(prot ? { protected: true } : {}),
         ...confirm,
       });
-    }, 'added', name.trim());
+    }, 'added', TidepoolRules.normalizeText(name));
   const modeOptions = [
     { value: 'clone', label: 'clone a repository' },
     { value: 'create', label: 'create a new local checkout' },
@@ -2482,8 +2483,8 @@ function NewAgentForm({ authorityProfiles, providerOptions, tiers, advisorCeilin
   const [draft, setDraft] = React.useState(() => ({ ...NEW_AGENT_DRAFT }));
   const set = (key: keyof AgentDraft, value: AgentDraftValue) => setDraft((d) => ({ ...d, [key]: value }) as AgentDraft);
   const [busy, setBusy] = React.useState(false);
-  const ok = registryNameOk(name) && !!draft.description.trim() && !!draft.authority && !!draft.provider;
-  const dirty = !!name.trim() || agentDraftDirty(draft, NEW_AGENT_DRAFT);
+  const ok = registryNameOk(name) && !TidepoolRules.whyBlank(draft.description) && !!draft.authority && !!draft.provider;
+  const dirty = !TidepoolRules.whyBlank(name) || agentDraftDirty(draft, NEW_AGENT_DRAFT);
   useDirtySignal(edit, true, dirty);
   // creation offers the empty placeholder the edit form doesn't: a new agent
   // starts without an authority, an existing one always has one
@@ -2495,12 +2496,12 @@ function NewAgentForm({ authorityProfiles, providerOptions, tiers, advisorCeilin
   const submit = async () => {
     setBusy(true);
     try {
-      const created = await api('POST /api/agents', { body: { name: name.trim(), ...agentBody(draft) } });
+      const created = await api('POST /api/agents', { body: { name: TidepoolRules.normalizeText(name), ...agentBody(draft) } });
       // 静かな shadow は作らない(ADR 0117 決定2): 告げるのは応答で、判定ではない
       say('success', 'agent added — committed to the registry',
         created.shadows_built_in
-          ? `${name.trim()} — shadows the board's built-in agent of the same name`
-          : name.trim());
+          ? `${TidepoolRules.normalizeText(name)} — shadows the board's built-in agent of the same name`
+          : TidepoolRules.normalizeText(name));
       edit.close();
       await onCreated();
     } catch (err) {
@@ -2540,16 +2541,16 @@ function NewProfileForm({ agentNames, workspaceNames, say, onCreated, edit }: {
   const [allowedWorkspaces, setAllowedWorkspaces] = React.useState<string[]>([]);
   const [merge, setMerge] = React.useState('');
   const { busy, save, dialog } = useProfileSave(say, async () => { edit.close(); await onCreated(); }, 'POST /api/profiles 409');
-  const dirty = !!name.trim() || !!guidance.trim() || assignableTo.length > 0
+  const dirty = !TidepoolRules.whyBlank(name) || !!guidance.trim() || assignableTo.length > 0
     || allowedWorkspaces.length > 0 || !!merge;
   useDirtySignal(edit, true, dirty);
 
   // 作成扉は4フィールドすべてを常に載せる(ADR 0079 決定1 / ADR 0086 決定3)
   const submit = () => save(
     async (confirm) => {
-      await api('/api/profiles', { name: name.trim(), guidance, assignable_to: assignableTo, allowed_workspaces: allowedWorkspaces, merge, ...confirm });
+      await api('/api/profiles', { name: TidepoolRules.normalizeText(name), guidance, assignable_to: assignableTo, allowed_workspaces: allowedWorkspaces, merge, ...confirm });
     },
-    'created', name.trim(),
+    'created', TidepoolRules.normalizeText(name),
   );
 
   return (

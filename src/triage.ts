@@ -12,6 +12,7 @@ import {
   parseEventRow,
   sessionSpawnOf,
 } from "./events.js";
+import { normalizeText, whyBlank } from "./required-text.js";
 import type { GatedJudgment } from "./retrospective.js";
 import {
   type BoardTask,
@@ -123,14 +124,14 @@ export function raiseObjection(
   comment: string,
   now: Date,
 ): number {
-  if (!comment.trim()) throw new TriageError("an objection carries a direction comment");
+  if (whyBlank(comment)) throw new TriageError("an objection carries a direction comment");
   const entry = requireLogEntry(db, entryId);
   const open = triageActivity(db, now, true)!;
   return appendEvent(db, {
     taskId: entry.task_id,
     workerId: HUMAN_WORKER_ID,
     origin: "webui",
-    payload: { kind: "objection_raised", entry_id: entryId, comment, session_id: open.id },
+    payload: { kind: "objection_raised", entry_id: entryId, comment: normalizeText(comment), session_id: open.id },
     at: now,
   });
 }

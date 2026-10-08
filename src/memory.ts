@@ -4,13 +4,13 @@ import { z } from "zod";
 import type { Cause } from "./cause.js";
 import { type Db, MEMORY_FTS_DDL, MEMORY_FTS_TOKENIZER, MEMORY_PREPROCESS_VERSION } from "./db.js";
 import { getDisplayLanguage } from "./display-language.js";
-
 import { DomainError } from "./domain-error.js";
 import { appendEvent, type EventOrigin, type EventPayload, type EventRow, getEvent, isDecisionLogEntry, listEvents, listEventsOfKinds, sessionSpawnOf, sessionWindow } from "./events.js";
-
 import { landingAnnotation } from "./landing.js";
 import { inWindow, type MetaReviewWindow, materialEvents, materialSection, metaReviewSubjectOf, metaReviewWindow, previousMetaReviewWatermark } from "./meta-review.js";
 import { entriesReadBefore, entriesSeenBefore, listEpisodes } from "./precedent.js";
+import { normalizeText, whyBlank } from "./required-text.js";
+import { requiredTextSchema } from "./required-text-schema.js";
 import { type Packed, packItems, readPosition } from "./response-budget.js";
 import { routingMaterial } from "./routing-review.js";
 import { approvalAnnotation, getTask, isFixedChoiceQuestion, type MemoryProposal, needsComment, type QuestionProposal, questionBlocking, registerTask, settleQuestionAsObserved, type Task, type TierRef } from "./tasks.js";
@@ -150,7 +150,8 @@ function insertEntry(db: Db, id: number, entry: MemoryEntryFields, carried?: num
 /** 入口の path / prefix の検査と正規化(#1191): 正準等価な path は同じ枝なので NFC にして返し、以後の比較・保存はそれを使う。
  *  全角・半角は見た目が違うので畳まない(NFKC にしない)。 */
 function checkedPath(path: string): string {
-  if (path.split("/").some((segment) => segment === "" || segment.trim() !== segment)) {
+  path = normalizeText(path);
+  if (path.split("/").some((segment) => whyBlank(segment) || normalizeText(segment) !== segment)) {
     throw new DomainError(`path must be "/"-separated non-empty segments without surrounding spaces: ${JSON.stringify(path)}`);
   }
   return path.normalize("NFC");
@@ -167,7 +168,7 @@ function createEntry(
   mark?: { question_id: string },
 ): number {
   const path = checkedPath(fields.path);
-  if (fields.title.trim() === "" || fields.text.trim() === "") throw new DomainError("title and text must be non-empty");
+  if (whyBlank(fields.title) || whyBlank(fields.text)) throw new DomainError("title and text must be non-empty");
   // board = Board call の起草(ADR 0120 決定1(b)(c))は Behavior candidate だけ
   if (fields.author.activity === "board" && fields.kind !== "behavior") throw new DomainError("a board-drafted entry can only be a behavior candidate");
   // 承認の線は「人間が文言を保証したか」(ADR 0152 決定1): AI の起草は candidate → question
@@ -182,7 +183,7 @@ function createEntry(
   return db.transaction(() => {
     // 解決済みの出所(事例の引用・編集が継ぐ旧の出所)はそのまま
     const resolved = source !== undefined && "kind" in source ? source : ownSource && source === undefined ? null : resolveSource(db, source);
-    const entry: MemoryEntryFields = { ...fields, path, source: resolved };
+    const entry: MemoryEntryFields = { ...fields, path, title: normalizeText(fields.title), text: normalizeText(fields.text), source: resolved };
     const id = appendEvent(db, {
       taskId: null,
       workerId: entry.author.name,
@@ -624,26 +625,26 @@ export function requireDecision(db: Db, eventId: number, taskId: string): number
 /** 人間の面(settings の HTTP / 管理MCP)の書き込み欄(spec #586 F)。workspace は null = 盤面全体、
  *  original_title / original_text は人間の原文で言語は盤面の表示言語。出所欄は Behavior(任意)と Exemplar(必須)だけが持つ(ADR 0083 追記5 / ADR 0153 決定3)。 */
 const humanEntryFields = {
-  workspace: z.string().min(1).nullable(),
-  path: z.string(),
-  text: z.string(),
+  workspace: requiredTextSchema.nullable(),
+  path: requiredTextSchema,
+  text: requiredTextSchema,
   original_text: z.string().optional(),
   /** 新エントリが置き換える approved のエントリ(ADR 0162 決定1)。 */
   supersedes: z.array(z.number().int().positive()).optional(),
 };
-export const humanKnowledgeSchema = z.object({ ...humanEntryFields, title: z.string(), original_title: z.string().optional() });
+export const humanKnowledgeSchema = z.object({ ...humanEntryFields, title: requiredTextSchema, original_title: z.string().optional() });
 export const humanDefinitionSchema = z.object(humanEntryFields);
 /** Behavior は Knowledge の欄 + 宛先(null = 全員)と任意の出所の Episode(ADR 0152 / ADR 0153 決定3)。 */
 export const humanBehaviorSchema = humanKnowledgeSchema.extend({
-  addressee: z.string().min(1).nullable(),
+  addressee: requiredTextSchema.nullable(),
   source_event_id: z.number().int().positive().optional(),
 });
 /** Exemplar の注釈(ADR 0153 決定1・3)。anchor は case 描画の欄に結ぶ —— `whole` か、欄(decision / steering / handoff /
  *  result)とその逐語部分文字列。text は英語の正文、original は人間の原文(言語は盤面の表示言語)。 */
 export const exemplarAnnotationSchema = z.object({
-  anchor: z.union([z.literal("whole"), z.object({ field: z.enum(["decision", "steering", "handoff", "result"]), quote: z.string().min(1) })]),
+  anchor: z.union([z.literal("whole"), z.object({ field: z.enum(["decision", "steering", "handoff", "result"]), quote: requiredTextSchema })]),
   polarity: z.enum(["imitate", "avoid"]),
-  text: z.string().regex(/\S/),
+  text: requiredTextSchema,
   original: z.string().optional(),
 });
 type ExemplarAnnotation = Omit<z.infer<typeof exemplarAnnotationSchema>, "original"> & { original?: { text: string; language: string } };
@@ -680,12 +681,12 @@ export const metaReviewInvalidationSchema = z.object({ reason: z.enum(INVALIDATI
 export const invalidationSchema = metaReviewInvalidationSchema.extend({ reason: metaReviewInvalidationSchema.shape.reason.exclude(["rejected"]) });
 /** 人間の面の移動(ADR 0162 決定4)。workspace null = 盤面全体。エントリ1件は移動先(扉が entry_id を足す)、枝ごとは移動元と移動先と
  *  統合の申告 merge(ADR 0177 決定2)。 */
-export const memoryMoveSchema = z.object({ workspace: humanEntryFields.workspace, path: z.string() });
+export const memoryMoveSchema = z.object({ workspace: humanEntryFields.workspace, path: requiredTextSchema });
 export const memoryBranchMoveSchema = z.object({
   workspace: humanEntryFields.workspace,
-  path: z.string(),
+  path: requiredTextSchema,
   to_workspace: humanEntryFields.workspace,
-  to_path: z.string(),
+  to_path: requiredTextSchema,
   merge: z.boolean().optional(),
 });
 /** 人間の面の既にある後継への畳み(ADR 0162 決定1)。 */
@@ -693,7 +694,7 @@ export const memoryFoldSchema = z.object({ replaces: z.array(z.number().int().po
 
 /** 一覧の絞り込み(HTTP の query と管理MCP が共有)。workspace は完全一致、board_wide は盤面全体だけ。 */
 export const memoryListFilterSchema = z.object({
-  workspace: z.string().min(1).optional(),
+  workspace: requiredTextSchema.optional(),
   kind: z.enum(["knowledge", "behavior", "definition", "exemplar"]).optional(),
   state: z.enum(["candidate", "approved", "invalidated"]).optional(),
   path: z.string().optional(),

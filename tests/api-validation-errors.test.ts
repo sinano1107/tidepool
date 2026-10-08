@@ -24,6 +24,6 @@ it("HTTP validation errors join all reasons with dot-separated field paths (#158
   t = await bootTidepool();
   expect(await api(t.baseUrl, "POST", "/api/tasks", { type: "work", title: 123, review_by: [""] })).toMatchObject({
     status: 400,
-    json: { error: "title: Invalid input: expected string, received number; review_by.0: Too small: expected string to have >=1 characters" },
+    json: { error: "title: Invalid input: expected string, received number; review_by.0: must not be blank" },
   });
 });

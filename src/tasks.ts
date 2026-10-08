@@ -1,14 +1,13 @@
 import { randomUUID } from "node:crypto";
 import type { Db } from "./db.js";
 import { DEFAULT_AUDITOR_NAME } from "./defaults.js";
-
 import { DomainError } from "./domain-error.js";
-
 import { appendEvent, type EventOrigin, type EventPayload, getEvent, latestEventOfTask, type TaskScopedPayload, taskDecisionLog } from "./events.js";
 import type { AddTierAmendment, ExecutionSettingRow, RoutingRowChange } from "./execution-setting.js";
 import type { GitHubClient, Issue, IssueRef } from "./github.js";
 import type { MemoryAmendment } from "./memory.js";
 import type { MergeDial, RosterAgent } from "./registry.js";
+import { normalizeText, whyBlank } from "./required-text.js";
 import { assertKnownTier, liveTierId, PRIORITIES, type Priority, proposalTierNames, type Tier, type TierId } from "./tier.js";
 import { completionReviewFires, type ReviewSubject, whyNoCompletionReview, whyReviewFlagIsInert } from "./webui-rules.js";
 import { BOARD_WORKER_ID, HUMAN_WORKER_ID, NON_AGENT_WORKER_IDS } from "./worker-id.js";
@@ -445,11 +444,13 @@ function assertQuestionSpec(input: RegisterTaskInput): void {
   }
   const minOptions = input.quarantine ? 1 : 2;
   for (const item of items) {
-    if (!item.title.trim()) throw new DomainError("a question item carries a title");
+    if (whyBlank(item.title)) throw new DomainError("a question item carries a title");
+    if (item.detail !== undefined && whyBlank(item.detail)) throw new DomainError("a supplied question detail cannot be blank");
     if (item.options.length < minOptions || item.options.length > 4) {
       throw new DomainError(`a question item carries ${minOptions} to 4 options`);
     }
-    if (!item.recommendation.trim() || !item.options.includes(item.recommendation)) {
+    if (item.options.some(whyBlank)) throw new DomainError("question options cannot be blank");
+    if (whyBlank(item.recommendation) || !item.options.includes(item.recommendation)) {
       throw new DomainError(
         "a question item carries the registrant's recommendation, one of its options",
       );
@@ -510,7 +511,7 @@ function assertGithubRef(input: RegisterTaskInput): void {
     ) {
       throw new DomainError("an issue-backed task carries no stored content");
     }
-  } else if (!input.title || !input.purpose || !input.completion_criteria) {
+  } else if ([input.title, input.purpose, input.completion_criteria].some((value) => value === undefined || whyBlank(value))) {
     throw new DomainError(
       "a task requires title, purpose, and completion_criteria unless it is issue-backed",
     );
@@ -667,6 +668,7 @@ function assertReviewFieldsTakeEffect(
 
 /** review_by is a set of names: naming the same reviewer twice is refused, not silently folded (CONTEXT.md "Review", #1512). */
 function assertReviewByDistinct(reviewBy: string[] | undefined): void {
+  if (reviewBy?.some(whyBlank)) throw new DomainError("review_by names cannot be blank");
   const dup = reviewBy?.find((name, i) => reviewBy.indexOf(name) !== i);
   if (dup !== undefined) {
     throw new DomainError(`review_by names the same reviewer twice: "${dup}" — each reviewer is named once`);
@@ -681,6 +683,21 @@ export function registerTask(
   workerId: string,
   origin: EventOrigin,
 ): Task {
+  input = { ...input };
+  for (const field of ["title", "purpose", "completion_criteria", "tier", "review_tier", "priority"] as const) {
+    if (input[field] !== undefined) input[field] = normalizeText(input[field]);
+  }
+  if (input.review_by) input.review_by = input.review_by.map(normalizeText);
+  if (input.question) {
+    input.question = input.question.map((item) => ({
+      ...item,
+      title: normalizeText(item.title),
+      ...(item.detail !== undefined && { detail: normalizeText(item.detail) }),
+      options: item.options.map(normalizeText),
+      recommendation: normalizeText(item.recommendation),
+    }));
+  }
+  if (input.cancel_option !== undefined) input.cancel_option = normalizeText(input.cancel_option);
   assertQuestionSpec(input);
   assertGithubRef(input);
   assertExecutionRequest(db, input);
@@ -810,7 +827,7 @@ const HANDOFF_HEADINGS: Record<HandoffField, string> = {
 };
 
 function renderHandoffMarkdown(handoff: Partial<HandoffDoc>): string {
-  return HANDOFF_FIELDS.filter((f) => handoff[f]?.trim())
+  return HANDOFF_FIELDS.filter((f) => handoff[f] !== undefined && !whyBlank(handoff[f]))
     .map((f) => `## ${HANDOFF_HEADINGS[f]}\n\n${handoff[f]}`)
     .join("\n\n");
 }
@@ -898,12 +915,13 @@ export function completeTask(
   origin: EventOrigin,
 ): Task {
   if (task.type === "work" && task.assignee !== HUMAN_WORKER_ID) {
-    const missing = HANDOFF_FIELDS.filter((f) => !handoff?.[f]?.trim());
+    const missing = HANDOFF_FIELDS.filter((f) => handoff?.[f] === undefined || whyBlank(handoff[f]));
     if (missing.length > 0) {
       throw new DomainError(
         `a work task cannot complete without a full handoff doc; missing: ${missing.join(", ")}`,
       );
     }
+    handoff = Object.fromEntries(HANDOFF_FIELDS.map((field) => [field, normalizeText(handoff![field]!)]));
   }
   // completion criteria cover the decomposition tree: a parent completes only
   // after every child it waits for settles (復帰型 — the resumed session
@@ -1232,16 +1250,17 @@ export function cancelTaskDirectly(
   }, origin);
 }
 
-/** The five pure preconditions an answer submission must clear before any
+/** The six pure preconditions an answer submission must clear before any
  *  caller may run a side effect on its behalf (issue #111): type is
  *  "question", status is still "todo", the answer count matches the
- *  question's item count, for a fixed-choice question every answer is one
+ *  question's item count, every answer is non-blank, for a fixed-choice question every answer is one
  *  of its item's declared options, and an answer `needsComment` lists
  *  carries a non-blank comment (ADR 0179). `answerQuestion` below calls this
  *  first as its own self-defense (a direct caller, e.g. a test, gets the
  *  same rejection it always has); see its call site in human-verbs.ts
- *  for why this must also run there, before any side effect. */
-export function assertAnswerable(question: Task, answers: string[], comment: string | undefined): void {
+ *  for why this must also run there, before any side effect. Returns the
+ *  normalized answers those callers use for side effects and persistence. */
+export function assertAnswerable(question: Task, answers: string[], comment: string | undefined): string[] {
   if (question.type !== "question") {
     throw new DomainError("only a question task can be answered");
   }
@@ -1254,6 +1273,8 @@ export function assertAnswerable(question: Task, answers: string[], comment: str
       `this question carries ${items.length} item(s), but ${answers.length} answer(s) were submitted`,
     );
   }
+  if (answers.some(whyBlank)) throw new DomainError("answers cannot be blank");
+  answers = answers.map(normalizeText);
   if (isFixedChoiceQuestion(question)) {
     for (let i = 0; i < items.length; i++) {
       if (!items[i]!.options.includes(answers[i]!)) {
@@ -1264,9 +1285,10 @@ export function assertAnswerable(question: Task, answers: string[], comment: str
     }
   }
   const needs = needsComment(question).filter((option) => answers.includes(option));
-  if (needs.length > 0 && !comment?.trim()) {
+  if (needs.length > 0 && (comment === undefined || whyBlank(comment))) {
     throw new DomainError(`answering ${needs.join(" / ")} to this question requires a non-blank comment: why, or for a defer what is still undecided`);
   }
+  return answers;
 }
 
 /** 着地 question(PR マージ・ローカル着地)か。push の遷移先(buildQuestionPushPayload)と読み口の着地注記(landingAnnotation)が共有する(ADR 0190)。 */
@@ -1363,7 +1385,7 @@ export function answerQuestion(
   amendment: ProposalAmendment | undefined,
   origin: EventOrigin,
 ): Task {
-  assertAnswerable(question, answers, comment);
+  answers = assertAnswerable(question, answers, comment);
   const items = question.question_items!;
   const answer = answers[0]!;
   db.transaction(() => {
@@ -1656,6 +1678,8 @@ export function logDecision(
   now: Date,
   origin: EventOrigin,
 ): number {
+  if (whyBlank(line)) throw new DomainError("a decision requires a line");
+  line = normalizeText(line);
   return appendEvent(db, {
     taskId: task.id,
     workerId,
@@ -1956,6 +1980,17 @@ export function decomposeTask(
   isProtectedWorkspace: ((name: string) => boolean) | undefined,
   origin: EventOrigin,
 ): Task[] {
+  input = {
+    ...input,
+    children: input.children.map((child) => {
+      child = { ...child };
+      for (const field of ["title", "purpose", "completion_criteria", "tier", "review_tier", "priority"] as const) {
+        if (child[field] !== undefined) child[field] = normalizeText(child[field]);
+      }
+      if (child.review_by) child.review_by = child.review_by.map(normalizeText);
+      return child;
+    }),
+  };
   if (input.children.length === 0) {
     throw new DomainError("a decomposition carries at least one child task");
   }
@@ -1967,18 +2002,16 @@ export function decomposeTask(
   // throw at the moment a human clicks approve (registerTask validates the
   // *question*, not the spec it carries).
   for (const child of input.children) {
+    assertGithubRef({ type: "work", ...child });
     assertExecutionRequest(db, child);
     assertReviewFieldsTakeEffect({ type: "work", parent_id: parent.id, ...child }, child.review_by, child.review_tier);
     assertReviewByDistinct(child.review_by);
   }
-  if (input.reason.length === 0) {
+  if (whyBlank(input.reason)) {
     throw new DomainError("a decomposition requires a reason");
   }
   const children: Task[] = [];
   db.transaction(() => {
-    // Both human and agent decompose carry a decision. Keep this a length
-    // check rather than `.trim()` so whitespace follows the existing MCP
-    // `z.string().min(1)` contract.
     const decisionId = logDecision(db, parent, input.reason, workerId, now, origin);
     for (const child of input.children) {
       const reasons: string[] = [];
@@ -2256,6 +2289,8 @@ export function editTask(
   origin: EventOrigin,
 ): Task {
   assertHumanEditableScope(db, task);
+  input = { ...input };
+  if (input.review_by) input.review_by = input.review_by.map(normalizeText);
   assertReviewFieldsTakeEffect(
     {
       type: task.type,
@@ -2267,12 +2302,11 @@ export function editTask(
     input.review_by ?? task.review_by,
   );
   assertReviewByDistinct(input.review_by);
-  if (
-    input.title === "" ||
-    input.purpose === "" ||
-    input.completion_criteria === ""
-  ) {
-    throw new DomainError("task content fields cannot be empty");
+  for (const field of ["title", "purpose", "completion_criteria"] as const) {
+    const value = input[field];
+    if (value === undefined) continue;
+    if (whyBlank(value)) throw new DomainError("task content fields cannot be empty");
+    input[field] = normalizeText(value);
   }
   const issueBacked = task.github_issue_number !== null;
   if (issueBacked) {

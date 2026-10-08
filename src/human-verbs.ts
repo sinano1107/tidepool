@@ -31,6 +31,8 @@ import { parseTableRowValue, type QuarantineChecks, type QuarantineKind, type Qu
 import type { Harness, RegistryReachabilityCheck } from "./registry.js";
 import { RegistryFetchFailedError, RegistryPushFailedError } from "./registry-write.js";
 import { parseGitHubRepo, repairRepoAccess } from "./repo-access.js";
+import { normalizeText, whyBlank } from "./required-text.js";
+import { requiredTextSchema } from "./required-text-schema.js";
 import {
   answerQuestion,
   assertAnswerable,
@@ -145,7 +147,7 @@ export function decomposeThroughHumanDoor(
       assertAssigneeKnown(deps.agentRegistered, child.assignee);
       assertReviewersKnown(deps.agentRegistered, child.review_by);
     }
-    if (input.reason.length === 0) throw new DomainError("a decomposition requires a reason");
+    if (whyBlank(input.reason)) throw new DomainError("a decomposition requires a reason");
     const task = getTask(deps.db, taskId);
     if (!task) return { ok: false, failure: { kind: "not_found", error: "parent task not found" } };
     const children = humanDecomposeTask(deps.db, task, input, now(), deps.isProtectedWorkspace, origin);
@@ -171,16 +173,17 @@ export async function addIssueCommentThroughHumanDoor(
   input: { workspace: string; github_issue_number: number; body: string },
 ): Promise<{ ok: true } | { ok: false; failure: IssueCommentFailure }> {
   if (
-    input.workspace.length === 0 ||
+    whyBlank(input.workspace) ||
     !Number.isInteger(input.github_issue_number) ||
     input.github_issue_number <= 0 ||
-    input.body.length === 0
+    whyBlank(input.body)
   ) {
     return {
       ok: false,
       failure: { kind: "invalid", error: "an issue comment requires a workspace, positive issue number, and body" },
     };
   }
+  input = { ...input, workspace: normalizeText(input.workspace), body: normalizeText(input.body) };
   const resolve = buildWorkspaceResolver(deps.resolveWorkspace, deps.workspace);
   if (!deps.github || !resolve) {
     return {
@@ -828,7 +831,7 @@ export const answerInputSchema = z.object({
   // one answer per question item, in item order (issue #30) — the domain
   // enforces the length match against the question's own item count so callers
   // get a domain error, not a schema error, on a partial submission
-  answers: z.array(z.string().min(1)).min(1),
+  answers: z.array(requiredTextSchema).min(1),
   // the steering channel for a reject's reason (issue #40) — optional here;
   // which answers require it is the domain gate's call (ADR 0179). A blank one
   // is folded to "no comment" by submitAnswer (issue #1310); any other is
@@ -855,11 +858,11 @@ export async function submitAnswer(
   amendment?: unknown,
 ): Promise<BoardTask> {
   // 空・空白だけの comment は「comment なし」に畳む(issue #1310)。空白でない comment は手を加えない。以降はこの値だけを見る
-  if (!comment?.trim()) comment = undefined;
+  if (comment === undefined || whyBlank(comment)) comment = undefined;
   // Every special-case side effect below must come after this validation.
   // Otherwise a malformed answer can retry promotion, inspect/merge a PR, or
   // verify quarantine before answerQuestion eventually rejects the payload.
-  assertAnswerable(task, answers, comment);
+  answers = assertAnswerable(task, answers, comment);
   // 提案は段を id で持つ。修正値・書き込みは名前で喋るので、いまの名前に引いた形で読む(issue #1436)
   const proposal = task.question_proposal && proposalTierNames(deps.db, task.question_proposal);
   // 修正値は approve だけが種別ごとの schema で受ける(ADR 0150 決定2・ADR 0152 決定2)。昇格 / 降格・candidate を持たない memory の提案(invalidate・既存の後継の consolidate)・reject の修正値も黙って捨てず断る
