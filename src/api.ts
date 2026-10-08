@@ -169,6 +169,10 @@ import {
   WorkspaceConfirmationRequiredError,
 } from "./workspace-create.js";
 
+function formatValidationError(error: z.ZodError): string {
+  return error.issues.map((issue) => issue.path.length ? `${issue.path.join(".")}: ${issue.message}` : issue.message).join("; ");
+}
+
 // question は人間向け HTTP API の範囲外(issue #38) — question タスクは
 // MCP の escalate ツールか tidepool 内部経路(watchdog・quarantine・merge・
 // decompose)からしか生まれない。それらは registerTask を直接呼ぶため、
@@ -490,7 +494,7 @@ const scratchpadSchema = z.object({
 });
 
 // z.coerce: route params always arrive as strings — coercing here keeps the
-// numeric-id validation on the same zod/treeifyError footing as every body
+// numeric-id validation on the same zod/validation-error footing as every body
 // schema in this file, rather than a hand-rolled Number() check.
 const pendingDumpIdParamSchema = z.object({
   id: z.coerce.number().int().positive(),
@@ -681,7 +685,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   router.post("/tasks", async (req, res) => {
     const parsed = registerTaskSchema.safeParse(req.body);
     if (!parsed.success) {
-      res.status(400).json({ error: z.treeifyError(parsed.error) });
+      res.status(400).json({ error: formatValidationError(parsed.error) });
       return;
     }
     // human-verbs is the canonical registration door shared by the WebUI and
@@ -721,7 +725,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   router.post("/issue-comments", async (req, res) => {
     const parsed = issueCommentSchema.safeParse(req.body);
     if (!parsed.success) {
-      res.status(400).json({ error: z.treeifyError(parsed.error) });
+      res.status(400).json({ error: formatValidationError(parsed.error) });
       return;
     }
     const result = await addIssueCommentThroughHumanDoor(
@@ -756,7 +760,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   router.get("/github-issues", async (req, res) => {
     const parsed = githubIssuesQuerySchema.safeParse(req.query);
     if (!parsed.success) {
-      res.status(400).json({ error: z.treeifyError(parsed.error) });
+      res.status(400).json({ error: formatValidationError(parsed.error) });
       return;
     }
     const resolve = buildWorkspaceResolver(resolveWorkspace, workspace);
@@ -783,7 +787,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   router.post("/workspaces", async (req, res) => {
     const parsed = createWorkspaceSchema.safeParse(req.body);
     if (!parsed.success) {
-      res.status(400).json({ error: z.treeifyError(parsed.error) });
+      res.status(400).json({ error: formatValidationError(parsed.error) });
       return;
     }
     if (!workspaceAdmin?.create) {
@@ -847,7 +851,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   router.patch("/workspaces/:name", async (req, res) => {
     const parsed = updateWorkspaceSchema.safeParse(req.body);
     if (!parsed.success) {
-      res.status(400).json({ error: z.treeifyError(parsed.error) });
+      res.status(400).json({ error: formatValidationError(parsed.error) });
       return;
     }
     if (!workspaceAdmin?.update) {
@@ -892,7 +896,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   router.post("/workspaces/:name/publish", async (req, res) => {
     const parsed = publishWorkspaceSchema.safeParse(req.body);
     if (!parsed.success) {
-      res.status(400).json({ error: z.treeifyError(parsed.error) });
+      res.status(400).json({ error: formatValidationError(parsed.error) });
       return;
     }
     if (!workspaceAdmin?.publish) {
@@ -929,7 +933,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   router.post("/agents", async (req, res) => {
     const parsed = createAgentSchema.safeParse(req.body);
     if (!parsed.success) {
-      res.status(400).json({ error: z.treeifyError(parsed.error) });
+      res.status(400).json({ error: formatValidationError(parsed.error) });
       return;
     }
     if (!agentAdmin?.create) {
@@ -996,7 +1000,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   router.patch("/agents/:name", async (req, res) => {
     const parsed = updateAgentSchema.safeParse(req.body);
     if (!parsed.success) {
-      res.status(400).json({ error: z.treeifyError(parsed.error) });
+      res.status(400).json({ error: formatValidationError(parsed.error) });
       return;
     }
     if (!agentAdmin?.update) {
@@ -1035,7 +1039,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     // express の json() は本文が無ければ req.body を undefined のまま残す
     const parsed = deleteResourceSchema.safeParse(req.body ?? {});
     if (!parsed.success) {
-      res.status(400).json({ error: z.treeifyError(parsed.error) });
+      res.status(400).json({ error: formatValidationError(parsed.error) });
       return;
     }
     if (!agentAdmin?.delete) {
@@ -1069,7 +1073,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     // express の json() は本文が無ければ req.body を undefined のまま残す
     const parsed = deleteResourceSchema.safeParse(req.body ?? {});
     if (!parsed.success) {
-      res.status(400).json({ error: z.treeifyError(parsed.error) });
+      res.status(400).json({ error: formatValidationError(parsed.error) });
       return;
     }
     if (!workspaceAdmin?.delete) {
@@ -1104,7 +1108,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     // express の json() は本文が無ければ req.body を undefined のまま残す
     const parsed = deleteResourceSchema.safeParse(req.body ?? {});
     if (!parsed.success) {
-      res.status(400).json({ error: z.treeifyError(parsed.error) });
+      res.status(400).json({ error: formatValidationError(parsed.error) });
       return;
     }
     if (!profileAdmin?.delete) {
@@ -1126,7 +1130,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   router.post("/profiles", async (req, res) => {
     const parsed = createProfileSchema.safeParse(req.body);
     if (!parsed.success) {
-      res.status(400).json({ error: z.treeifyError(parsed.error) });
+      res.status(400).json({ error: formatValidationError(parsed.error) });
       return;
     }
     if (!profileAdmin?.create) {
@@ -1166,7 +1170,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   router.patch("/profiles/:name", async (req, res) => {
     const parsed = updateProfileSchema.safeParse(req.body);
     if (!parsed.success) {
-      res.status(400).json({ error: z.treeifyError(parsed.error) });
+      res.status(400).json({ error: formatValidationError(parsed.error) });
       return;
     }
     if (!profileAdmin?.update) {
@@ -1192,7 +1196,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   router.post("/tasks/draft", async (req, res) => {
     const parsed = draftTaskSchema.safeParse(req.body);
     if (!parsed.success) {
-      res.status(400).json({ error: z.treeifyError(parsed.error) });
+      res.status(400).json({ error: formatValidationError(parsed.error) });
       return;
     }
     if (!draftClient) {
@@ -1260,7 +1264,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   router.post("/tasks/:id/move", (req, res) => {
     const parsed = moveTaskSchema.safeParse(req.body);
     if (!parsed.success) {
-      res.status(400).json({ error: z.treeifyError(parsed.error) });
+      res.status(400).json({ error: formatValidationError(parsed.error) });
       return;
     }
     const task = getTask(db, req.params.id);
@@ -1303,7 +1307,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   router.patch("/tasks/:id", async (req, res) => {
     const parsed = editTaskSchema.safeParse(req.body);
     if (!parsed.success) {
-      res.status(400).json({ error: z.treeifyError(parsed.error) });
+      res.status(400).json({ error: formatValidationError(parsed.error) });
       return;
     }
     const result = editThroughHumanDoor(
@@ -1326,7 +1330,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   router.post("/tasks/:id/cancel", async (req, res) => {
     const parsed = cancelTaskSchema.safeParse(req.body ?? {});
     if (!parsed.success) {
-      res.status(400).json({ error: z.treeifyError(parsed.error) });
+      res.status(400).json({ error: formatValidationError(parsed.error) });
       return;
     }
     const result = await cancelThroughHumanDoor(
@@ -1359,7 +1363,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   router.post("/tasks/:id/answer", async (req, res) => {
     const parsed = answerSchema.safeParse(req.body);
     if (!parsed.success) {
-      res.status(400).json({ error: z.treeifyError(parsed.error) });
+      res.status(400).json({ error: formatValidationError(parsed.error) });
       return;
     }
     const task = getTask(db, req.params.id);
@@ -1405,7 +1409,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   router.post("/tasks/:id/complete", async (req, res) => {
     const parsed = completeTaskSchema.safeParse(req.body ?? {});
     if (!parsed.success) {
-      res.status(400).json({ error: z.treeifyError(parsed.error) });
+      res.status(400).json({ error: formatValidationError(parsed.error) });
       return;
     }
     const result = await completeThroughHumanDoor(
@@ -1435,7 +1439,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   router.post("/tasks/:id/complete/draft", async (req, res) => {
     const parsed = draftTaskSchema.safeParse(req.body);
     if (!parsed.success) {
-      res.status(400).json({ error: z.treeifyError(parsed.error) });
+      res.status(400).json({ error: formatValidationError(parsed.error) });
       return;
     }
     const task = getTask(db, req.params.id);
@@ -1474,7 +1478,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   router.post("/translate", async (req, res) => {
     const parsed = translateRequestSchema.safeParse(req.body);
     if (!parsed.success) {
-      res.status(400).json({ error: z.treeifyError(parsed.error) });
+      res.status(400).json({ error: formatValidationError(parsed.error) });
       return;
     }
     if (!translationClient) {
@@ -1533,7 +1537,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   router.post("/log/cursor", (req, res) => {
     const parsed = cursorSchema.safeParse(req.body);
     if (!parsed.success) {
-      res.status(400).json({ error: z.treeifyError(parsed.error) });
+      res.status(400).json({ error: formatValidationError(parsed.error) });
       return;
     }
     res.json({ cursor: advanceLogCursor(db, parsed.data.last_read) });
@@ -1546,7 +1550,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   router.post("/push/subscribe", (req, res) => {
     const parsed = pushSubscribeSchema.safeParse(req.body);
     if (!parsed.success) {
-      res.status(400).json({ error: z.treeifyError(parsed.error) });
+      res.status(400).json({ error: formatValidationError(parsed.error) });
       return;
     }
     savePushSubscription(db, {
@@ -1560,7 +1564,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   router.delete("/push/subscribe", (req, res) => {
     const parsed = pushUnsubscribeSchema.safeParse(req.body);
     if (!parsed.success) {
-      res.status(400).json({ error: z.treeifyError(parsed.error) });
+      res.status(400).json({ error: formatValidationError(parsed.error) });
       return;
     }
     removePushSubscription(db, parsed.data.endpoint);
@@ -1574,7 +1578,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   router.post("/settings/quiet-hours", (req, res) => {
     const parsed = quietHoursSchema.safeParse(req.body);
     if (!parsed.success) {
-      res.status(400).json({ error: z.treeifyError(parsed.error) });
+      res.status(400).json({ error: formatValidationError(parsed.error) });
       return;
     }
     setQuietHours(db, parsed.data);
@@ -1590,7 +1594,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   router.post("/settings/provider-pace-offsets", (req, res) => {
     const parsed = providerPaceOffsetSchema.safeParse(req.body);
     if (!parsed.success) {
-      res.status(400).json({ error: z.treeifyError(parsed.error) });
+      res.status(400).json({ error: formatValidationError(parsed.error) });
       return;
     }
     setProviderPaceOffset(db, parsed.data);
@@ -1619,7 +1623,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     async (req, res) => {
       const parsed = schema.safeParse({ ...req.body, ...req.params });
       if (!parsed.success) {
-        res.status(400).json({ error: z.treeifyError(parsed.error) });
+        res.status(400).json({ error: formatValidationError(parsed.error) });
         return;
       }
       try {
@@ -1653,7 +1657,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   router.get("/settings/memory/entries", (req, res) => {
     const parsed = memoryListQuery.safeParse(req.query);
     if (!parsed.success) {
-      res.status(400).json({ error: z.treeifyError(parsed.error) });
+      res.status(400).json({ error: formatValidationError(parsed.error) });
       return;
     }
     const { workspace: scope, board_wide, ...filter } = parsed.data;
@@ -1750,7 +1754,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   router.post("/settings/timezone", (req, res) => {
     const parsed = timezoneSchema.safeParse(req.body);
     if (!parsed.success) {
-      res.status(400).json({ error: z.treeifyError(parsed.error) });
+      res.status(400).json({ error: formatValidationError(parsed.error) });
       return;
     }
     if (!isValidTimezone(parsed.data.tz)) {
@@ -1775,7 +1779,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   router.post("/settings/display-language", (req, res) => {
     const parsed = displayLanguageSchema.safeParse(req.body);
     if (!parsed.success) {
-      res.status(400).json({ error: z.treeifyError(parsed.error) });
+      res.status(400).json({ error: formatValidationError(parsed.error) });
       return;
     }
     setDisplayLanguage(db, parsed.data.language);
@@ -1834,7 +1838,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   router.post("/spend-down", (req, res) => {
     const parsed = spendDownSchema.safeParse(req.body);
     if (!parsed.success) {
-      res.status(400).json({ error: z.treeifyError(parsed.error) });
+      res.status(400).json({ error: formatValidationError(parsed.error) });
       return;
     }
     const { provider, window, active } = parsed.data;
@@ -1850,7 +1854,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   router.post("/pause", (req, res) => {
     const parsed = pauseSchema.safeParse(req.body);
     if (!parsed.success) {
-      res.status(400).json({ error: z.treeifyError(parsed.error) });
+      res.status(400).json({ error: formatValidationError(parsed.error) });
       return;
     }
     // resuming is the one explicit "run now" trigger pause carries
@@ -1877,7 +1881,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   router.post("/triage/scratchpad", (req, res) => {
     const parsed = scratchpadSchema.safeParse(req.body);
     if (!parsed.success) {
-      res.status(400).json({ error: z.treeifyError(parsed.error) });
+      res.status(400).json({ error: formatValidationError(parsed.error) });
       return;
     }
     try {
@@ -1894,7 +1898,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   router.post("/triage/objection", (req, res) => {
     const parsed = objectionSchema.safeParse(req.body);
     if (!parsed.success) {
-      res.status(400).json({ error: z.treeifyError(parsed.error) });
+      res.status(400).json({ error: formatValidationError(parsed.error) });
       return;
     }
     try {
@@ -1912,7 +1916,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   router.post("/triage/displayed", (req, res) => {
     const parsed = displayedSchema.safeParse(req.body);
     if (!parsed.success) {
-      res.status(400).json({ error: z.treeifyError(parsed.error) });
+      res.status(400).json({ error: formatValidationError(parsed.error) });
       return;
     }
     try {
@@ -1933,7 +1937,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   router.post("/triage/close", async (req, res) => {
     const parsed = closeSchema.safeParse(req.body ?? {});
     if (!parsed.success) {
-      res.status(400).json({ error: z.treeifyError(parsed.error) });
+      res.status(400).json({ error: formatValidationError(parsed.error) });
       return;
     }
     try {
@@ -1974,7 +1978,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   router.delete("/pending-dumps/:id", (req, res) => {
     const parsed = pendingDumpIdParamSchema.safeParse(req.params);
     if (!parsed.success) {
-      res.status(400).json({ error: z.treeifyError(parsed.error) });
+      res.status(400).json({ error: formatValidationError(parsed.error) });
       return;
     }
     consumePendingDump(db, parsed.data.id);
