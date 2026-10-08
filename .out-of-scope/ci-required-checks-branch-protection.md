@@ -1,7 +1,7 @@
 # main の branch protection / ruleset で CI の test ジョブを required にする
 
 ADR 0155 が必須とする CI の test ジョブを、GitHub の branch protection / ruleset の required check にはしない。
-必須は `/implement-tidepool` の「Waiting for CI」の手順が支える。
+必須は `/implement` の「Waiting for CI」の手順が支える。
 
 ## なぜ範囲外か
 

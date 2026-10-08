@@ -29,10 +29,10 @@ Ask `/ask-matt` when the question is "which skill fits". This file answers "how 
 
 ## Writing the work up
 
-The branch is about what the record already says, not about size in the abstract and not about who implements. Implementation starts in a fresh session with `/implement-tidepool`, working from the issue.
+The branch is about what the record already says, not about size in the abstract and not about who implements. Implementation starts in a fresh session with `/implement`, working from the issue.
 
-- **One slice, and the comment step 5 left on the originating issue already says what a spec would** — completion criteria, the files to touch, the invariants and the tests that pin them → skip the write-up and hand `/implement-tidepool <originating issue>` to a fresh implementation session.
-- **One slice, but the comment does not carry that** → `/to-spec`, then hand the spec issue to `/implement-tidepool`.
+- **One slice, and the comment step 5 left on the originating issue already says what a spec would** — completion criteria, the files to touch, the invariants and the tests that pin them → skip the write-up and hand `/implement <originating issue>` to a fresh implementation session.
+- **One slice, but the comment does not carry that** → `/to-spec`, then hand the spec issue to `/implement`.
 - **Several slices** → `/to-spec`, then `/to-tickets`. Both, in that order — they are a chain, not a choice.
 
 Do not `/compact` or `/clear` between `/to-spec` and `/to-tickets`: re-fetching a large spec out of an issue truncates.
@@ -47,7 +47,7 @@ Use the repo-local ponytail skills directly. See [machine-setup.md](./machine-se
 
 - **Deciding** — `/grill-with-docs`, `/to-spec`, and `/triage-sweep` run without ponytail. The skill is not model-invocable (`disable-model-invocation` in its frontmatter; Codex has no such flag, and there the narrowed description does the same work), so it enters a session only when the user types `/ponytail`, through `/to-tickets`, or inside the implementer agent — never on its own.
 - **Ticketing** — invoke `/to-tickets`; [its setup](../../.agents/skills/to-tickets/SKILL.md#before-ticketing) owns activation.
-- **Implementation** — invoke `/implement-tidepool`; [its delegation step](../../.agents/skills/implement-tidepool/SKILL.md#the-implementation-sub-agent) supplies the task to the implementation agent, whose definition owns its standing behavior and completion steps.
+- **Implementation** — invoke `/implement`; [its delegation step](../../.agents/skills/implement/SKILL.md#the-implementation-sub-agent) supplies the task to the implementation agent, whose definition owns its standing behavior and completion steps.
 
 Required ADR behavior and tests take precedence over ponytail simplifications.
 
@@ -55,11 +55,11 @@ If returning to design in a conversation where ponytail is active, explicitly tu
 
 ## Choosing the model
 
-`/implementation-delegation` decides the implementation model, effort, and review strength. [The implementation skill](../../.agents/skills/implement-tidepool/SKILL.md#model-and-effort) explains how to pass an existing decision and apply provider settings.
+`/implementation-delegation` decides the implementation model, effort, and review strength. [The implementation skill](../../.agents/skills/implement/SKILL.md#model-and-effort) explains how to pass an existing decision and apply provider settings.
 
 ## Building
 
-`/implement-tidepool <issue> [decision already taken]` — pass the delegation decision when it exists, omit it to have the skill run `/implementation-delegation` itself. See [the skill](../../.agents/skills/implement-tidepool/SKILL.md) for what one run does.
+`/implement <issue> [decision already taken]` — pass the delegation decision when it exists, omit it to have the skill run `/implementation-delegation` itself. See [the skill](../../.agents/skills/implement/SKILL.md) for what one run does.
 
 Tests need the Node version and sandbox permission described in `AGENTS.md`.
 
@@ -76,7 +76,7 @@ Closing the originating issue is **not** one of them: the PR carries `Closes #<i
 closes it (ADR 0126).
 
 When the issue's subject is a symptom observed in the real environment, the confirmation that the
-symptom is gone rides a derived issue, filed by `/implement-tidepool`'s filing step before it opens
+symptom is gone rides a derived issue, filed by `/implement`'s filing step before it opens
 the PR. That issue carries `needs-info` until the observation lands, and `verify:production` when
 production is the only venue that can show it — never the implementation issue
 ([triage-labels.md](./triage-labels.md)). The venue is otherwise CI, or the Lima VM for worker-facing
