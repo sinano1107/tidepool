@@ -123,8 +123,7 @@ var TidepoolRules = (() => {
     return whyNoCompletionReview({ ...t, review_flag: true });
   }
   function whyExecutionRequestIsInert(t) {
-    if (t.type === "review") return "a review task runs at its review_tier; tier and priority are for work tasks only";
-    return void 0;
+    return t.type === "review" ? "a review task runs at its review_tier; tier and priority are for work tasks only" : void 0;
   }
   var completionReviewFires = (t) => whyNoCompletionReview(t) === void 0;
   var reviewFlagCarriesMeaning = (t) => whyReviewFlagIsInert(t) === void 0;
