@@ -598,7 +598,7 @@ export function createLanding(deps: LandingDeps): Landing {
         // 着地の面は門と同じ2点 — CI を読む前と merge の直前 — で読む。面が変わった PR は
         // キューを外れ、門に当たった PR はキューに残る(ADR 0217 決定1)
         const stop = () =>
-          leftQueue(task, pr_number, workspace.name, now) || landingBlock(deps.db, task_id) !== null;
+          leftQueue(task, pr_number, workspace.name, now) || landingBlock(deps.db, task_id);
         if (stop()) continue;
         const status = await github.getCiStatus({ path: workspace.path, number: pr_number });
         if (status === "pending") continue;

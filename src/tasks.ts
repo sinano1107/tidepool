@@ -1905,18 +1905,11 @@ export function recordPrOpened(
  *  poll(landing.ts)の両方がこれを呼ぶ。保護はダイヤルに依らない資源側の不変条件なので
  *  最初に読む。`external` と ダイヤル無し(undefined — 手組みの reviewer profile)は
  *  宣言された不作為(ADR 0079 決定2)。 */
-type LandingSurface =
-  | "protected_question"
-  | "dial_question"
-  | "risk_question"
-  | "auto_merge_queue"
-  | "none";
-
 export function landingSurface(
   isProtected: boolean | undefined,
   merge: MergeDial | undefined,
   riskFlag: number,
-): LandingSurface {
+) {
   if (isProtected) return "protected_question";
   switch (merge) {
     case "escalate":
