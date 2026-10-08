@@ -18,7 +18,7 @@ import {
   workspaceNeedsHuman,
 } from "../src/workspace.js";
 import { FakeClock, FakeContainerRuntime, ScriptedWorker } from "./fakes.js";
-import { commitWork, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeWorkspace } from "./harness.js";
+import { commitWork, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeWorkspace, QUIET_EXIT } from "./harness.js";
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 
@@ -46,9 +46,10 @@ interface Fixture {
 }
 
 /** 最終 verb が着地し、後始末に入ったところで止まっている完了済み session。容器は
- *  `hold` されている = root が exit しても空にならないホスト。 */
+ *  `hold` されている = root が exit しても空にならないホスト。`exit` は最終 verb なしに
+ *  root が exit した session(ADR 0145)。 */
 async function sessionInTeardown(
-  route: "complete" | "cap" | "escalate" = "complete",
+  route: "complete" | "cap" | "escalate" | "exit" = "complete",
 ): Promise<Fixture> {
   const db = openDb(":memory:");
   const clock = new FakeClock();
@@ -80,7 +81,7 @@ async function sessionInTeardown(
       questions: [{ title: "which?", options: ["a", "b"], recommendation: "a" }],
     }, "deckhand", clock.now(), "worker");
   }
-  if (route !== "cap") {
+  if (route === "complete" || route === "escalate") {
     markTeardown(db, task.id, clock.now());
     slot.enterTeardown();
   }
@@ -115,6 +116,7 @@ async function sessionInTeardown(
     capInterruptionHandler({ db, clock, slot, resolve: () => ws, heldForContainment: watchdog.heldForContainment, pollNow: () => {} })(task.id, containers.reclaimed(task.id));
     containers.forceReclaim(task.id);
   }
+  if (route === "exit") watchdog.onWorkerExited(task.id, { ...QUIET_EXIT, exit_code: 1 });
   return { db, clock, slot, task, ws, runtime, worker, watchdog, landing, landed };
 }
 
@@ -311,4 +313,25 @@ it("梯子の底に落ちた後で届いた回収済み観測は解放しない 
   expect(git(f.ws.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main");
   expect(f.slot.currentTaskId).toBeNull();
   expect(f.landed).toEqual([f.task.id]);
+});
+
+it("報告なき exit が梯子の底に落ちた後で届いた空の観測は解放しない —— 確認回答で1度だけ tree rule が走る(issue #1380)", async () => {
+  const f = await sessionInTeardown("exit");
+  await writeFile(`${f.ws.path}/wip.txt`, "unfinished work\n");
+  await fallToTheBottom(f);
+
+  // 遅れて容器の空が観測される。報告なき exit の `void reclaimed.then(...)` が後始末を撃つ
+  f.runtime.fireEmpty(f.task.id);
+  await settle();
+  expect(f.slot.currentTaskId).toBe(f.task.id);
+  expect(git(f.ws.path, "status", "--porcelain")).toContain("wip.txt");
+  expect(boardHalts(f.db)).toEqual([{ kind: "containment" }]);
+
+  f.watchdog.acceptReclaimed();
+  await settle();
+  expect(git(f.ws.path, "show", `task/${f.task.id}:wip.txt`)).toBe("unfinished work");
+  const wipCommits = git(f.ws.path, "log", "--format=%s", `task/${f.task.id}`).split("\n").filter((s) => s.startsWith("WIP"));
+  expect(wipCommits).toHaveLength(1);
+  expect(git(f.ws.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main");
+  expect(f.slot.currentTaskId).toBeNull();
 });
