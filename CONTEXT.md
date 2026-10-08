@@ -495,7 +495,7 @@ _Avoid_: bandit、optimizer
 
 ## 配分評価(Allocation review)
 
-品質判定(review の verdict + findings)を固定した**後**に、盤面が Board call で問う「この結果に対する実行設定は適切だったか」— `allocation`(appropriate / underpowered / overpowered / uncertain)と `cause`(capability / task_ambiguity / environment / missing_information — 帰責と共有する語彙で、異議でしか現れない `preference` / `requirement_change` を含めて1本、ADR 0115)。episode への**判断種別**の注釈で、観測と混ぜない。注釈は Board call 自身の実行設定(judge)を持ち、routing meta-review が「同じモデルが評価した」偏りの手がかりに読む(ADR 0150)。注釈は判断だけを持つ —— 撃つのは pickup の poll の **sweep** だけで(review 完了の扉は撃たない)、「統合点レビューが完了したのに注釈が無い」を見て、review 完了より前の最新の worker session を問う。撃てなかった呼び出しは何も残さず、撃って失敗したものだけ失敗 event になり、3回で打ち切って人間の面に出る —— 帰責の第2回・起草と同じ機構(ADR 0164 / 0169 / 0172)。session の無い被レビュー task は評価しない。帰責(エントリ単位、異議が契機)とは同じ episode に別々に並ぶ。review session はモデル名・価格・routing を入力に持たない(ADR 0111)。
+入力は品質判定(review の verdict + findings)、実行設定と出所、session が走った段(全出所で持ち、床を決めた者は `source.tier`)、使用量と行動列である(ADR 0210)。品質判定を固定した**後**に、盤面が Board call で問う「この結果に対する実行設定は適切だったか」— `allocation`(appropriate / underpowered / overpowered / uncertain)と `cause`(capability / task_ambiguity / environment / missing_information — 帰責と共有する語彙で、異議でしか現れない `preference` / `requirement_change` を含めて1本、ADR 0115)。episode への**判断種別**の注釈で、観測と混ぜない。注釈は Board call 自身の実行設定(judge)を持ち、routing meta-review が「同じモデルが評価した」偏りの手がかりに読む(ADR 0150)。注釈は判断だけを持つ —— 撃つのは pickup の poll の **sweep** だけで(review 完了の扉は撃たない)、「統合点レビューが完了したのに注釈が無い」を見て、review 完了より前の最新の worker session を問う。撃てなかった呼び出しは何も残さず、撃って失敗したものだけ失敗 event になり、3回で打ち切って人間の面に出る —— 帰責の第2回・起草と同じ機構(ADR 0164 / 0169 / 0172)。session の無い被レビュー task は評価しない。帰責(エントリ単位、異議が契機)とは同じ episode に別々に並ぶ。review session はモデル名・価格・routing を入力に持たない(ADR 0111)。
 _Avoid_: Supervisor、Phase 2
 
 ## Interview(面接)

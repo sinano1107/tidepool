@@ -4,7 +4,7 @@ import { type EventPayload, getEvent, listEvents } from "./events.js";
 import type { ExecutionSettingRow } from "./execution-setting.js";
 import { episodeMarkerKinds, type MarkerKind } from "./precedent.js";
 import { getTask } from "./tasks.js";
-import type { Tier } from "./tier.js";
+import { type Tier, tierNameOf } from "./tier.js";
 
 /** 「この結果に対する実行設定は適切だったか」の4値(CONTEXT.md「配分評価」)。
  *  `overpowered` は成功 episode からの唯一の下方向信号(ADR 0111 決定4)。 */
@@ -29,7 +29,7 @@ export interface AllocationReviewInput {
     Extract<EventPayload, { kind: "worker_spawned" }>,
     "provider" | "model" | "effort" | "advisor" | "source"
   >;
-  requested_tier: Tier | null;
+  tier: Tier;
   usage: Extract<EventPayload, { kind: "worker_exited" }>["usage"];
   actions: { advisor_consultations: number; compactions: number; commits: number } | null;
 }
@@ -46,12 +46,12 @@ export interface AllocationClient {
 
 /** 入力の組み立て(ドメイン層の純関数、spec #541)。verdict は review の
  *  `task_completed.result`、findings は review の handoff doc、実行設定と出所は
- *  被レビュー task の最新 `worker_spawned`、usage はその session の `worker_exited`、
+ *  被レビュー task の対象 `worker_spawned`、走った段はその `tier_id` の名前、usage はその session の `worker_exited`、
  *  行動列は Precedent のマーカー(相談 / compaction / commit)の計数。 */
 export function buildAllocationReviewInput(data: {
   verdict: string | null;
   findings: string | null;
-  requestedTier: Tier | null;
+  tier: Tier;
   spawned: Extract<EventPayload, { kind: "worker_spawned" }>;
   exited: Extract<EventPayload, { kind: "worker_exited" }> | undefined;
   markers: readonly MarkerKind[] | null;
@@ -67,7 +67,7 @@ export function buildAllocationReviewInput(data: {
       advisor: data.spawned.advisor,
       source: data.spawned.source,
     },
-    requested_tier: data.requestedTier,
+    tier: data.tier,
     usage: data.exited?.usage ?? null,
     actions:
       data.markers === null
@@ -102,8 +102,9 @@ export function allocationTargets(db: Db): AllocationTarget[] {
 }
 
 /** 対象1件の入力: verdict は review の完了 event の result、findings は review の handoff doc、実行設定は固定した session の
- *  spawn、usage はその session の `worker_exited`、行動列はその session の Precedent のマーカー。 */
+ *  spawn、走った段はその id の名前(消した段も含む)、usage はその session の `worker_exited`、行動列はその session の Precedent のマーカー。 */
 export function allocationInput(db: Db, target: AllocationTarget): AllocationReviewInput {
+  const spawned = getEvent(db, target.spawned_event_id)!.payload as Extract<EventPayload, { kind: "worker_spawned" }>;
   const exited = listEvents(db, target.reviewed_task_id)
     .map((e) => e.payload)
     .find(
@@ -113,8 +114,8 @@ export function allocationInput(db: Db, target: AllocationTarget): AllocationRev
   return buildAllocationReviewInput({
     verdict: (getEvent(db, target.completed_event_id)!.payload as Extract<EventPayload, { kind: "task_completed" }>).result,
     findings: getTask(db, target.review_task_id)!.handoff_doc,
-    requestedTier: getTask(db, target.reviewed_task_id)!.tier,
-    spawned: getEvent(db, target.spawned_event_id)!.payload as Extract<EventPayload, { kind: "worker_spawned" }>,
+    tier: tierNameOf(db, spawned.tier_id),
+    spawned,
     exited,
     markers: episodeMarkerKinds(db, target.spawned_event_id),
   });

@@ -12,7 +12,7 @@ const input: AllocationReviewInput = {
     advisor: null,
     source: { tier: "board", provider: "only" },
   },
-  requested_tier: null,
+  tier: "economy",
   usage: null,
   actions: null,
 };
@@ -40,6 +40,8 @@ it("judge は表の行の model / effort をピン留めし、空のツール面
   // the input rides in the prompt — the verdict and the setting under judgment
   expect(args[1]).toContain("accepted");
   expect(args[1]).toContain('"model": "sonnet"');
+  expect(args[1]).toContain('"tier": "economy"');
+  expect(args[1]).toContain("The tier is the quality floor this session ran at, and setting.source.tier identifies who set that floor.");
   // cause の memory は配分評価の入力に読んだ記憶が無いので載せない(ADR 0166 決定1)
   expect(args[1]).toContain('"cause" (one of capability / task_ambiguity / missing_information / environment / preference / requirement_change / uncertain —');
 });
