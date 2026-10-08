@@ -156,3 +156,26 @@ flag を外す・human に渡す操作が「レビューしない」意思その
 
 review task の tier / priority が、効かない値でも登録時に黙って通ること、および空を許す欄に空白だけの値が来たときの扱いは、この追記では決めない。
 それぞれ派生 issue で決め、Edit は登録時と同じ検査、assignee / workspace と同じ扱いに従う。
+
+## 追記10(2026-10-08 の grilling、issue #1594)
+
+追記9 が派生 issue に回した、review task の tier / priority を閉じる。review task の要求は `review_tier` だけである(ADR 0114 退けた案の前提、
+CONTEXT.md「要求」)。selector は review task の `tier` を読まず、`priority` は `review_tier` が無いときだけ読んでいた。この非対称はどこにも
+記録されていなかった。
+
+- **review task の `tier` / `priority` は、登録時と Edit で拒否する。** 決定1 の「不発の値を受け取らない」と同じ線である。効かない `tier` は
+  無害ではない。未決着の task が要求している段は削除できないので、残った値が段の削除を誤って塞ぐ(追記9 の `review_tier` と同じ害)。
+  WebUI は review task に tier / priority の欄を出さず、Tier の選択を `review_tier` として扱う。登録フォームは既にこの形で、Edit も揃える。
+- **review task は、盤面設定の review 用の優先順位の既定(`review_priority`、種 `quality`)で並べる。** `review_tier` の有無で並べ方は
+  変わらない。work 用の既定(`priority`)とは別の値である。優先順位が変えるのは Provider の選び方だけで、品質の床は段が持つ。
+  ただし既定の reviewer である組み込みの Auditor は provider 省略で全 Provider に展開されるので(ADR 0116 / ADR 0117)、優先順位は
+  いまも判定者の Provider を動かす。1つの既定を共有すると、運用者が work の費用のために `cost` にしたとき、review について何も選んで
+  いないのに判定者が最安の Provider へ移る。分ければ、判定者が変わるのは運用者が review の既定を変えたときだけになり、決定3 の
+  「判定者が一定」と合う。名前は task の列の規約(接頭辞なし = 自身、`review_` = review 用)に揃える。振り返り Board call は
+  anthropic 固定(追記4)なので、この値を読まない。
+
+退けた案:
+- **review task は常に `quality`。** 「review も安い Provider で」を望む運用者が、組み込みの Auditor を shadow するしかなくなる。
+- **review task も work と同じ盤面既定に従う。** 上記のとおり、work の費用のつまみが判定者を動かす。
+- **review task の `tier` を `review_tier` の別名として受ける。** 同じ値に綴りが2つできる。読み替えは WebUI の中に留める。
+- **Meta-review だけ別の既定にする。** 観測された要求が無い(#1596 で観測を待つ)。
