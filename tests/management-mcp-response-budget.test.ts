@@ -145,6 +145,13 @@ const reads: Array<{
     expected: async () => (await http("/api/queue")).tasks.map((task: any) => task.id),
   },
   {
+    verb: "list_your_tasks",
+    key: "tasks",
+    pile: async (_, count) => (Array.from({ length: count }, (_, i) => queueWork(t, `${i} ${KB}`, undefined, "human")), {}),
+    keyOf: (task) => task.id,
+    expected: async () => (await http("/api/your-tasks")).map((task: any) => task.id),
+  },
+  {
     verb: "list_memory_entries",
     key: "entries",
     // 絞り込みの外にも1件置き、続きが最初の引数(path)を自分の中から戻すことも言う
@@ -286,6 +293,9 @@ it("続きで読む口の説明は、一覧が読む間に変わると最初か�
 
     expect(description.list_queue).toContain(
       'If the list changes under the read, the call fails with "the list changed since the first list_queue call: call list_queue again without next to read it from the start"; read again from the start.',
+    );
+    expect(description.list_your_tasks).toContain(
+      'If the list changes under the read, the call fails with "the list changed since the first list_your_tasks call: call list_your_tasks again without next to read it from the start"; read again from the start.',
     );
     expect(description.read_decision_log).toContain("Entries added after the first call are not returned: call again without `next` to see them.");
     expect(description.get_task).toContain("Events added after the first call are not returned: call again without `next` to see them.");

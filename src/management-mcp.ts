@@ -357,8 +357,13 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
         return packItems(read, "tasks", tasks, { halts: boardHalts(deps.db), ...(teardown ? { teardown } : {}) });
       }),
   );
-  server.registerTool("list_your_tasks", { description: "List unsettled tasks assigned to the human." }, async () =>
-    toolResult(listYourTasks(deps.db)),
+  server.registerTool(
+    "list_your_tasks",
+    {
+      description: `List unsettled tasks assigned to the human as \`tasks\`, in board order. ${nextDescription("list_your_tasks", "tasks")}`,
+      inputSchema: { next: z.string().optional() },
+    },
+    async (input) => readBudgeted("list_your_tasks", input, (read) => packItems(read, "tasks", listYourTasks(deps.db))),
   );
   server.registerTool(
     "get_task",
