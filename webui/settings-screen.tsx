@@ -2025,9 +2025,15 @@ function ExecutionDefaultsCard({ settings, say, onSaved, edit }: {
   const [draft, setDraft] = React.useState(current);
   const [busy, setBusy] = React.useState(false);
   const rankChanged = draft.rank.join() !== current.rank.join();
-  const dirty = rankChanged || draft.priority !== current.priority || draft.reviewPriority !== current.reviewPriority
-    || draft.ceiling !== current.ceiling
-    || draft.defaultTier !== current.defaultTier || draft.judgementTier !== current.judgementTier;
+  const changes = [
+    rankChanged && { setting: 'provider_rank', value: draft.rank },
+    draft.priority !== current.priority && { setting: 'priority', value: draft.priority },
+    draft.reviewPriority !== current.reviewPriority && { setting: 'review_priority', value: draft.reviewPriority },
+    draft.ceiling !== current.ceiling && { setting: 'advisor_ceiling', value: draft.ceiling },
+    draft.defaultTier !== current.defaultTier && { setting: 'default_tier', value: draft.defaultTier },
+    draft.judgementTier !== current.judgementTier && { setting: 'judgement_tier', value: draft.judgementTier },
+  ].filter(Boolean);
+  const dirty = changes.length > 0;
   const tierNames = settings.tiers.map((tier) => tier.name);
   const rankReason = TidepoolRules.whyInvalidProviderRank(draft.rank);
   const ok = !rankReason;
@@ -2036,14 +2042,6 @@ function ExecutionDefaultsCard({ settings, say, onSaved, edit }: {
   const save = async () => {
     setBusy(true);
     try {
-      const changes = [
-        rankChanged && { setting: 'provider_rank', value: draft.rank },
-        draft.priority !== current.priority && { setting: 'priority', value: draft.priority },
-        draft.reviewPriority !== current.reviewPriority && { setting: 'review_priority', value: draft.reviewPriority },
-        draft.ceiling !== current.ceiling && { setting: 'advisor_ceiling', value: draft.ceiling },
-        draft.defaultTier !== current.defaultTier && { setting: 'default_tier', value: draft.defaultTier },
-        draft.judgementTier !== current.judgementTier && { setting: 'judgement_tier', value: draft.judgementTier },
-      ].filter(Boolean);
       for (const change of changes) await api('/api/settings/execution', change);
       say('success', 'execution defaults saved', `${changes.length} setting${changes.length === 1 ? '' : 's'} updated`);
       edit.close();
