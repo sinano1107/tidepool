@@ -25,6 +25,7 @@ var TidepoolRules = (() => {
     normalizeText: () => normalizeText,
     reviewFlagCarriesMeaning: () => reviewFlagCarriesMeaning,
     whyBlank: () => whyBlank,
+    whyExecutionRequestIsInert: () => whyExecutionRequestIsInert,
     whyInvalidClockTime: () => whyInvalidClockTime,
     whyInvalidOffset: () => whyInvalidOffset,
     whyInvalidPrice: () => whyInvalidPrice,
@@ -120,6 +121,10 @@ var TidepoolRules = (() => {
   function whyReviewFlagIsInert(t) {
     if (t.type === "work" && !t.parent_id) return "every root is already reviewed on completion";
     return whyNoCompletionReview({ ...t, review_flag: true });
+  }
+  function whyExecutionRequestIsInert(t) {
+    if (t.type === "review") return "a review task runs at its review_tier; tier and priority are for work tasks only";
+    return void 0;
   }
   var completionReviewFires = (t) => whyNoCompletionReview(t) === void 0;
   var reviewFlagCarriesMeaning = (t) => whyReviewFlagIsInert(t) === void 0;

@@ -206,7 +206,9 @@ const registerTaskSchema = z.object({
   // the execution request (ADR 0110 決定2): open strings here, same
   // permissive-shape posture as the content fields above — which tiers and
   // priorities exist is the domain's to say (registerTask), so a bad value
-  // is a 400 carrying the domain's own error rather than a schema tree
+  // is a 400 carrying the domain's own error rather than a schema tree.
+  // Work tasks only: a review task's request is review_tier, so registerTask
+  // refuses tier / priority on one (ADR 0111 追記10)
   tier: z.string().optional(),
   priority: z.string().optional(),
   // human decompose (ADR 0047 decision 7): the reason is required for a

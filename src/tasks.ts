@@ -11,7 +11,13 @@ import type { MergeDial, RosterAgent } from "./registry.js";
 import { normalizeText, whyBlank } from "./required-text.js";
 import { isSettled, type TaskStatus } from "./task-status.js";
 import { assertKnownTier, liveTierId, PRIORITIES, type Priority, proposalTierNames, type Tier, type TierId } from "./tier.js";
-import { completionReviewFires, type ReviewSubject, whyNoCompletionReview, whyReviewFlagIsInert } from "./webui-rules.js";
+import {
+  completionReviewFires,
+  type ReviewSubject,
+  whyExecutionRequestIsInert,
+  whyNoCompletionReview,
+  whyReviewFlagIsInert,
+} from "./webui-rules.js";
 import { BOARD_WORKER_ID, HUMAN_WORKER_ID, NON_AGENT_WORKER_IDS } from "./worker-id.js";
 
 /** The one roster entry `human` gets (issue #43 / ADR 0014): human carries
@@ -698,6 +704,10 @@ export function registerTask(
   if (input.cancel_option !== undefined) input.cancel_option = normalizeText(input.cancel_option);
   assertQuestionSpec(input);
   assertGithubRef(input);
+  for (const field of ["tier", "priority"] as const) {
+    const reason = input[field] !== undefined && whyExecutionRequestIsInert(input);
+    if (reason) throw new DomainError(`${field} would have no effect — ${reason}`);
+  }
   assertExecutionRequest(db, input);
   assertReviewFieldsTakeEffect(input, input.review_by, input.review_tier);
   assertReviewByDistinct(input.review_by);
