@@ -714,6 +714,18 @@ it("決定ログの各エントリは最新の帰責の entries を持つ ——
   ]);
 });
 
+it("決定ログの各エントリは今の判定の evidence を持ち、帰責の無いエントリは null(ADR 0213 決定4)", () => {
+  const { db, task } = board();
+  const [judged, plain] = ["retried the fetch", "no objection"].map((line) => logDecision(db, task, line, "deckhand", at, "worker"));
+  // setup のみ: 束ね済みの異議群を1つ足して帰責する
+  appendEvent(db, { taskId: task.id, workerId: "tidepool", origin: "board", at, payload: { kind: "objection_attributed", entry_id: judged!, objection_event_ids: [bundledObjection(db, task.id, judged!, at)], cause: "environment", evidence: "the registry was down", entries: null, round: "initial" } });
+
+  expect(listLog(db).map((e) => [e.id, e.evidence])).toEqual([
+    [judged, "the registry was down"],
+    [plain, null],
+  ]);
+});
+
 it("人間が書く定義の原文は title = text で持つ", () => {
   const { db } = board();
   defineMemoryBranch(db, humanEntryInput(db, { workspace: "tidepool", path: "build", text: definition.text, original_text: "ビルドとテストの手順" }), "webui", at);

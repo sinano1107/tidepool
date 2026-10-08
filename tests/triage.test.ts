@@ -870,6 +870,42 @@ it("commit が立てる子の登録は材料の異議 id 列を持つ —— 修
   ]);
 });
 
+it("修理の purpose は判定のある対の steering の後に board judged 行を運び、未帰責と uncertain の対には出さず、RCA の purpose には乗せない(ADR 0213 決定3)", () => {
+  const db = openDb(":memory:");
+  const at = new Date("2026-10-08T00:00:00.000Z");
+  const task = registerTask(db, { type: "work", title: "t", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI);
+  const outage = logDecision(db, task, "retried the fetch", "deckhand", at, "worker");
+  const guessed = logDecision(db, task, "guessed the schema", "deckhand", at, "worker");
+  const unsure = logDecision(db, task, "picked a name", "deckhand", at, "worker");
+  const unjudged = logDecision(db, task, "skipped the lint", "deckhand", at, "worker");
+  startTriage(db, at);
+  for (const entry of [outage, guessed, unsure, unjudged]) raiseObjection(db, entry, "redo it", at);
+
+  commitTriage(
+    db,
+    at,
+    [],
+    new Map<number, GatedJudgment>([
+      [outage, { cause: "environment", evidence: "the registry was down", entries: null }],
+      [guessed, { cause: "capability", evidence: "guessed past the missing schema", entries: null }],
+      [unsure, { cause: "uncertain", evidence: "the log does not say", entries: null }],
+    ]),
+  );
+
+  const purposes = Object.fromEntries(listChildren(db, task.id).map((c) => [`${c.title} ${c.assignee}`, c.purpose]));
+  expect(purposes["repair: t null"]).toBe(
+    'objections raised against decisions of "t":\n\n' +
+      "> retried the fetch\n- redo it\nboard judged: environment — the registry was down\n\n" +
+      "> guessed the schema\n- redo it\nboard judged: capability — guessed past the missing schema\n\n" +
+      "> picked a name\n- redo it\n\n" +
+      "> skipped the lint\n- redo it",
+  );
+  // RCA の findings は第2回の帰責の証拠 —— 初回の判定を見せない(循環)
+  const rcaPairs = "> guessed the schema\n- redo it\n\n> picked a name\n- redo it\n\n> skipped the lint\n- redo it";
+  expect(purposes["rca (self): t deckhand"]).toBe(`objections raised against decisions deckhand made on "t":\n\n${rcaPairs}`);
+  expect(purposes["rca (auditor): t null"]).toBe(`objections raised against decisions of "t":\n\n${rcaPairs}`);
+});
+
 it.each([
   ["コミット", (db: Db, at: Date): unknown => commitTriage(db, at), "webui"],
   ["close-only", (db: Db, at: Date): unknown => closeTriageSessionOnly(db, at, "commit"), "webui"],

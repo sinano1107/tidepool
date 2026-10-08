@@ -28,8 +28,10 @@ function buildPrompt(input: AttributionInput): string {
     'prose) with these fields: "cause" (one of ' +
     `${CAUSES.join(" / ")} — capability is the worker's own judgment falling short of what the ` +
     "task asked; task_ambiguity and missing_information are the task's framing leaving room " +
-    "for the objected reading or omitting a fact the worker needed; environment is tooling, " +
-    "network or sandbox trouble outside the worker; preference is the human's taste where the " +
+    "for the objected reading or omitting a fact the worker needed; environment is the worker's " +
+    "surroundings — board tooling, network or sandbox trouble, or an upstream change — when the " +
+    "worker's judgment was sound given what it had (working around or guessing past such trouble " +
+    "instead of escalating is capability); preference is the human's taste where the " +
     "worker's choice was equally valid; requirement_change is a requirement the human changed " +
     "or introduced after the fact; memory is when a memory entry the worker read before the decision, and followed, " +
     "was itself wrong — the shortfall is the entry's, not the worker's; use uncertain when the evidence does " +

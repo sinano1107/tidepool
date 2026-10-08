@@ -195,17 +195,26 @@ export function objectionsById(db: Db, entryId: number, ids: number[]): Objectio
 }
 
 /** Render the entry/comment pairs shared by repair and RCA tasks. Entries are
- * ordered by their own event id; comments retain objection event order. */
-function renderObjectionPairs(purposeIntro: string, pairs: ObjectionPair[]): string {
+ * ordered by their own event id; comments retain objection event order.
+ * `judgments` is the repair's alone (ADR 0213 決定3): each judged pair gets a
+ * `board judged:` line, except `uncertain` which tells the worker nothing. RCA
+ * purposes never pass it — their findings are the second round's evidence. */
+function renderObjectionPairs(
+  purposeIntro: string,
+  pairs: ObjectionPair[],
+  judgments?: Map<number, GatedJudgment>,
+): string {
   return (
     `${purposeIntro}:\n\n` +
     pairs
       .slice()
       .sort((a: ObjectionPair, b: ObjectionPair) => a.entry.id - b.entry.id)
-      .map(
-        (pair) =>
-          `> ${objectedEntryText(pair.entry)}\n${pair.comments.map((comment) => `- ${comment}`).join("\n")}`,
-      )
+      .map((pair) => {
+        const judgment = judgments?.get(pair.entry.id);
+        const judged =
+          judgment && judgment.cause !== "uncertain" ? `\nboard judged: ${judgment.cause} — ${judgment.evidence}` : "";
+        return `> ${objectedEntryText(pair.entry)}\n${pair.comments.map((comment) => `- ${comment}`).join("\n")}${judged}`;
+      })
       .join("\n\n")
   );
 }
@@ -345,6 +354,7 @@ function bundleObjections(
         purpose: renderObjectionPairs(
           `objections raised against decisions of "${objected.title}"`,
           pairs,
+          judgments,
         ),
         completion_criteria: "every objection direction above is addressed",
         parent_id: taskId,
@@ -632,6 +642,8 @@ export interface LogEntry extends DecisionLogEntry {
   cause: Cause | null;
   /** 今の判定(`currentAttributions`)が `memory` のとき名指された entry の id 列(ADR 0166 決定6)。他の cause・未帰責のエントリは null。 */
   entries: number[] | null;
+  /** 今の判定の evidence —— 人間の面の異議注釈に出す(ADR 0213 決定4)。未帰責のエントリは null。 */
+  evidence: string | null;
   /** エントリを含む worker session の `worker_spawned` の id(case 描画と同じ窓、`sessionSpawnOf`)。窓の外なら null。 */
   session_event_id: number | null;
 }
@@ -669,6 +681,7 @@ export function listLog(db: Db, defaultWorkspaceName?: string): LogEntry[] {
       objections: objectionsByEntry.get(entry.id) ?? [],
       cause: attribution?.cause ?? null,
       entries: attribution?.entries ?? null,
+      evidence: attribution?.evidence ?? null,
       session_event_id: sessionSpawnOf(sessionEvents, entry)?.id ?? null,
     };
   });

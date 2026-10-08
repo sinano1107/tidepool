@@ -8,7 +8,7 @@ const kindColors = {
 };
 
 export function LogEntry({ entry = {}, onObject, onExpand, onOpenMemoryEntry, active = false, style }) {
-  const { time, taskId, agent, agentIcon, human = false, kind = 'decision', text, objection, bundledObjection, cause, causeEntries = [], unread = false } = entry;
+  const { time, taskId, agent, agentIcon, human = false, kind = 'decision', text, objection, bundledObjection, cause, causeEntries = [], causeEvidence, unread = false } = entry;
   const completion = kind === 'completion';
   const clickable = !!onObject;
   const causeText = cause === 'uncertain' ? 'cause: not yet determined (uncertain)' : cause ? `cause: ${cause}` : null;
@@ -17,6 +17,10 @@ export function LogEntry({ entry = {}, onObject, onExpand, onOpenMemoryEntry, ac
     <a key={id} href={`#memory-entry-${id}`} onClick={(e) => { e.preventDefault(); onOpenMemoryEntry?.(id); }}
       style={{ marginLeft: 6, color: 'var(--tide-4)' }}>#{id}</a>
   ));
+  // 判定の根拠を cause の横に(ADR 0213 決定4)。長い本文で異議の欄を潰さないよう幅を抑える
+  const causeNote = causeText && (
+    <span style={{ color: 'var(--text-muted)', flexShrink: 0, maxWidth: '45%' }}>{causeText}{causeLinks}{causeEvidence && ` — ${causeEvidence}`}</span>
+  );
   const band = { display: 'flex', alignItems: 'flex-start', gap: 8, marginTop: 6, padding: '6px 10px', borderRadius: 'var(--radius-xs)', fontSize: 'var(--text-xs)', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' };
   // 注記の帯は Object 押下面の外に置く(issue #1090)—— role="button" の子孫に
   // interactive な要素を入れない。subgrid で帯を本文の列に揃える。
@@ -70,7 +74,7 @@ export function LogEntry({ entry = {}, onObject, onExpand, onOpenMemoryEntry, ac
           {objection && (
             <div style={{ ...band, background: 'var(--coral-1)', color: 'var(--coral-4)' }}>
               <span style={{ flex: 1 }}>objection: {objection}</span>
-              {causeText && <span style={{ color: 'var(--text-muted)', flexShrink: 0 }}>{causeText}{causeLinks}</span>}
+              {causeNote}
             </div>
           )}
           {bundledObjection && (
@@ -79,7 +83,7 @@ export function LogEntry({ entry = {}, onObject, onExpand, onOpenMemoryEntry, ac
                 <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', textTransform: 'uppercase', letterSpacing: '0.06em', marginRight: 6 }}>bundled</span>
                 {bundledObjection}
               </span>
-              {!objection && causeText && <span style={{ flexShrink: 0 }}>{causeText}{causeLinks}</span>}
+              {!objection && causeNote}
             </div>
           )}
         </div>

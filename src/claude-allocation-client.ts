@@ -37,8 +37,9 @@ function buildPrompt(input: AllocationReviewInput): string {
     `"allocation" (one of ${ALLOCATIONS.join(" / ")} — overpowered means a cheaper setting would ` +
     "very likely have produced the same accepted result), " +
     `"cause" (one of ${ALLOCATION_CAUSES.join(" / ")} — capability is the model itself falling short; ` +
-    "task_ambiguity and missing_information are the task's own framing; environment is tooling, " +
-    "network or sandbox trouble outside the worker; preference and requirement_change are the human's " +
+    "task_ambiguity and missing_information are the task's own framing; environment is the worker's " +
+    "surroundings — board tooling, network or sandbox trouble, or an upstream change — when the " +
+    "worker's judgment was sound given what it had; preference and requirement_change are the human's " +
     "taste or a requirement changed after the fact; use uncertain when the evidence does not " +
     'decide it), and "evidence" (string — the concrete observations your judgment rests on).\n\n' +
     `Input:\n${JSON.stringify(input, null, 2)}`

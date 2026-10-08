@@ -25,6 +25,8 @@ export interface LogEntryProps {
     /** With cause `memory`: the ids of the memory entries the attribution
      *  named, each rendered as a link beside the cause. */
     causeEntries?: number[];
+    /** The latest attribution's evidence, rendered beside the cause. */
+    causeEvidence?: string;
     /** Teal unread bar (entries since last skim). */
     unread?: boolean;
   };

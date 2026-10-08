@@ -73,3 +73,20 @@ it("memory 以外の判定が entries を null で返しても判定は失われ
 
   await expect(client.judge(input, { provider: "anthropic", model: "fable", effort: "high" })).resolves.toEqual(judgment);
 });
+
+it("prompt は environment を worker の外側の事情として判断の妥当性で線を引き、escalate せず迂回・推測したなら capability と言う(ADR 0213 決定1・2)", async () => {
+  const prompts: string[] = [];
+  const client = new ClaudeAttributionClient({
+    exec: async (_command, args) => {
+      prompts.push(args[1]!);
+      return JSON.stringify({ result: JSON.stringify(judgment) });
+    },
+  });
+
+  await client.judge(input, { provider: "anthropic", model: "fable", effort: "high" });
+
+  expect(prompts[0]).toContain(
+    "environment is the worker's surroundings — board tooling, network or sandbox trouble, or an upstream change — when the worker's judgment was sound given what it had",
+  );
+  expect(prompts[0]).toContain("working around or guessing past such trouble instead of escalating is capability");
+});
