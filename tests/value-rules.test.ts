@@ -9,8 +9,8 @@ it("pacing offset accepts only integer points from 0 through 100", () => {
 import { whyNotPositiveInteger } from "../src/positive-integer.js";
 
 it("a positive integer is at least one and has no fraction", () => {
-  expect(whyNotPositiveInteger(1)).toBeUndefined();
-  for (const value of [0, 0.5, NaN]) expect(whyNotPositiveInteger(value)).toBe("must be a positive integer");
+  for (const value of [1, Number.MAX_SAFE_INTEGER]) expect(whyNotPositiveInteger(value)).toBeUndefined();
+  for (const value of [0, 0.5, NaN, Number.MAX_SAFE_INTEGER + 1]) expect(whyNotPositiveInteger(value)).toBe("must be a positive integer");
 });
 
 import { whyInvalidPrice } from "../src/price.js";

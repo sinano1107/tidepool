@@ -36,7 +36,7 @@ var TidepoolRules = (() => {
 
   // src/clock-time.ts
   function whyInvalidClockTime(value) {
-    return value.length === 5 && /^([01]\d|2[0-3]):([0-5]\d)$/.test(value) ? void 0 : "time must be HH:MM between 00:00 and 23:59";
+    return /^(?:[01]\d|2[0-3]):[0-5]\d$/.test(value) ? void 0 : "time must be HH:MM between 00:00 and 23:59";
   }
 
   // src/pace-offset-rule.ts
@@ -46,7 +46,7 @@ var TidepoolRules = (() => {
 
   // src/positive-integer.ts
   function whyNotPositiveInteger(value) {
-    return Number.isInteger(value) && value > 0 ? void 0 : "must be a positive integer";
+    return Number.isSafeInteger(value) && value > 0 ? void 0 : "must be a positive integer";
   }
 
   // src/price.ts
