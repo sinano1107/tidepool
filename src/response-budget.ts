@@ -89,7 +89,8 @@ export type Packed<L, E = unknown> = L & Partial<E> & { next?: string; remaining
 
 /** 読み口ごとの詰め方の違い。 */
 interface PackOptions<T> {
-  /** 続きの境目の鍵 —— 既定は `id`、id を持たない item(枝の行・文字列など)は item と列の位置から作る。 */
+  /** 続きの境目の鍵 —— 既定は `id`、id を持たない item(枝の行・文字列など)は item ごとに変わらない識別子を渡す。
+   *  列の位置で作ると、先頭の範囲の digest が変化を表さない(ADR 0195 追記 #1399)。 */
   keyOf?: (item: T, index: number) => ItemId;
   /** item を置く列(`key` に並べた点区切りの path のどれか)。既定は `key` の先頭。 */
   listOf?: (item: T, index: number) => string;
@@ -182,7 +183,8 @@ export function packItems<T>(
   const piece = (field: string[], offset: number) => {
     const item = rest[0]!;
     const value = field.reduce<any>((node, name) => node?.[name], item);
-    if (typeof value !== "string") throw new DomainError(MALFORMED_NEXT);
+    // 切り始めは最も長い文字列の欄を選ぶので、文字列でないのは続きの間に item の形が変わったときだけ
+    if (typeof value !== "string") throw new DomainError(listChanged(read.verb));
     const text = Buffer.from(value);
     // 欄が切れの間に書き換わっていたら、つなぐと新旧の継ぎはぎになる(ADR 0195 追記 #1399 の4)
     const fieldDigest = digestOf(value);
