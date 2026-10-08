@@ -6,6 +6,12 @@ disable-model-invocation: true
 
 # To Tickets
 
+## Before ticketing
+
+Read [workflow.md](../../../docs/agents/workflow.md) and [issue-tracker.md](../../../docs/agents/issue-tracker.md). Before reasoning about the breakdown, read [ponytail/SKILL.md](../ponytail/SKILL.md) and apply it at `full` in this thread, through drafting, the user quiz, and publication. That skill is not model-invocable, so read the file rather than calling it.
+
+Keep the current conversation and the user's arguments available.
+
 Break a plan, spec, or conversation into a set of **tickets** — tracer-bullet vertical slices, each declaring the tickets that **block** it.
 
 The issue tracker and triage label vocabulary should have been provided to you — run `/setup-matt-pocock-skills` if not.
@@ -41,7 +47,7 @@ Give each ticket its **blocking edges** — the other tickets that must complete
 
 ### 4. Quiz the user
 
-Present the proposed breakdown as a numbered list. For each ticket, show:
+The ticket quiz and required issue detail take precedence over ponytail's default brevity. Present the proposed breakdown as a numbered list. For each ticket, show:
 
 - **Title**: short descriptive name
 - **Blocked by**: which other tickets (if any) must complete first
@@ -53,7 +59,7 @@ Ask the user:
 - Are the blocking edges correct — does each ticket only depend on tickets that genuinely gate it?
 - Should any tickets be merged or split further?
 
-Iterate until the user approves the breakdown.
+Iterate until the user approves the breakdown. If the approved breakdown is one ticket, return the existing spec issue as the implementation target and finish without publishing a duplicate ticket. Otherwise, proceed to publication.
 
 ### 5. Publish the tickets to the configured tracker
 
