@@ -42,7 +42,7 @@ export interface ProviderUsage {
 export interface QueueTask {
   id: string;
   title: string;
-  /** 値集合の正本は src/tasks.ts の TaskStatus と表示上の派生状態(移送は issue #352)。 */
+  /** 値集合の正本は src/task-status.ts の TaskStatus と表示上の派生状態(移送は issue #352)。 */
   status: "todo" | "in_progress" | "done" | "cancelled" | "blocked" | "held" | "skipped";
   assignee: string | null;
   risk_flag: number;

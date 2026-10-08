@@ -19,6 +19,7 @@ import {
   type WorkspaceEntry,
 } from "./registry.js";
 import { SANDBOX_SHADOW_PATHS, workspaceSettingsDisposition } from "./sandbox.js";
+import { isSettled } from "./task-status.js";
 import {
   getTask,
   issueRefPlaceholder,
@@ -272,7 +273,7 @@ export function resolveTaskBranchLineage(
     if (ancestor.type !== "work") continue;
     const branch = taskBranch(ancestor.id);
     const base = candidate ?? protectedBranchRef(workspace);
-    if (ancestor.status !== "done" && ancestor.status !== "cancelled") {
+    if (!isSettled(ancestor.status)) {
       candidate = branch;
       continue;
     }
