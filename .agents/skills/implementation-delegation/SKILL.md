@@ -63,14 +63,14 @@ compute で埋めず、`/grilling`・issue の補完・分割のいずれかで�
 - **読む鎖の確認**: スキル → `CONTEXT.md`/ADR、`AGENTS.md` → issue の引き方、issue 冒頭 → ADR 番号。切れていたらその場所を直す(プロンプトで埋め合わせない)。
 - 大型リファクタは「挙動不変+既存テスト green」を完了条件に単独スライス。モジュール新設2つ以上なら分割不足。相互依存スライスは分けない(分けてよいのは順序依存だけで、前提として issue に書く)。
 
-## 4. Claude(鮮度 2026-09-29。世代が変わっていたら `claude-api` で更新し、このファイルも書き換える)
+## 4. Claude(鮮度 2026-10-08。世代が変わっていたら `claude-api` で更新し、このファイルも書き換える)
 
 | モデル | 向くタスク |
 |---|---|
 | **Fable 5.1** | 一発で解けていない難問、長時間の自律実装。既定 `high`。1リクエストが数分〜十数分走るので待ち方を先に決める |
 | **Opus 5.5** | 主力。複数ファイル実装・大きめリファクタ・床。既定 `medium`(Claude Code の既定)、仕様が曖昧・床は `high`、要求の厳しい作業だけ `xhigh` |
 | **Sonnet 5.5** | 既存パターン踏襲、テスト追加、定型配線。既定 `medium` —— モデル既定は `high` のままだが段が Sonnet 5 から再較正され、agentic coding は `medium` が起点。`low` は変更を検証せず完了報告しやすい |
-| **Haiku 4.5** | rename、機械的置換、大量読み取り |
+| **Haiku 5.5** | rename、機械的置換、大量読み取り。既定 `medium`(モデル既定)、effort は `low`〜`max`。価格はプロンプト 100K トークン以下で 0.10 / 0.50、超えると 0.50 / 2.50 |
 
 Max 席では Fable 5.1 も他モデルと同じ週次 usage limit を共有(上限50%)。
 
@@ -78,14 +78,14 @@ Max 席では Fable 5.1 も他モデルと同じ週次 usage limit を共有(上
 
 このスキルで **Sol は GPT-6.1 Sol (`gpt-6.1-sol`)** を指す。Codex の選定結果と spawn には表のモデル ID を使う。人間が旧モデルを明示指定した場合はその指定を守る。
 
-対応は**役割で揃える**(in / out USD per MTok): Astra 10 / 50 = Fable 5.1 10 / 50 は価格も一致。現行の選定表に Terra は無く、GPT-6.1 Sol(2 / 10)が主力と廉価の両方を effort で受け持つ —— 価格は Sonnet 5.5(2 / 10)と同じで Opus 5.5(4 / 20)の半分だが、OpenAI は複雑な coding・computer use・professional work 向けに位置づけており、主力枠にあたる。Luna 0.10 / 0.50 と Haiku 4.5 1 / 5 も価格は揃わない。旧世代の GPT-5.6 Sol / Terra / Luna は表から外した。
+対応は**役割で揃える**(in / out USD per MTok): Astra 10 / 50 = Fable 5.1 10 / 50 は価格も一致。現行の選定表に Terra は無く、GPT-6.1 Sol(2 / 10)が主力と廉価の両方を effort で受け持つ —— 価格は Sonnet 5.5(2 / 10)と同じで Opus 5.5(4 / 20)の半分だが、OpenAI は複雑な coding・computer use・professional work 向けに位置づけており、主力枠にあたる。Luna 0.10 / 0.50 = Haiku 5.5 0.10 / 0.50(プロンプト 100K トークン以下)も価格が一致する。旧世代の GPT-5.6 Sol / Terra / Luna は表から外した。
 
 | モデル(ID) | Claude 側の相方 | 向くタスク |
 |---|---|---|
 | **GPT-6 Astra** (`gpt-6-astra`) | Fable 5.1 | 一発で解けていない難問、床。既定 `high`。`ultra` は effort の延長ではない別枠 orchestration mode —— 選ぶ前に効果を検証 |
 | **GPT-6.1 Sol** (`gpt-6.1-sol`) | Opus 5.5 | 主力。複数ファイル実装・大きめリファクタ。既定 `medium`(OpenAI 既定、Opus 5.5 と同じ)、仕様が曖昧・床は `high`、要求の厳しい作業だけ `xhigh` |
 | **GPT-6.1 Sol** (`gpt-6.1-sol`) | Sonnet 5.5 | 既存パターン踏襲、テスト追加、定型配線。`low`〜`medium` |
-| **GPT-6 Luna** (`gpt-6-luna`) | Haiku 4.5 | rename、機械的置換、大量処理 |
+| **GPT-6 Luna** (`gpt-6-luna`) | Haiku 5.5 | rename、機械的置換、大量処理 |
 
 effort は提供モデルで幅が違う: GPT-6.1 Sol / GPT-6 Astra は `low` / `medium` / `high` / `xhigh` / `max`、GPT-6 Luna はそれらに `none` を加えた範囲。GPT-6.1 Sol の既定は `medium`。low=軽作業、medium=標準・既定、high=曖昧さ・床、xhigh=難所、max=§1 の再試行。強度を上げる梯子は `gpt-6.1-sol / medium → gpt-6.1-sol / high → gpt-6.1-sol / xhigh → gpt-6-astra`。
 
