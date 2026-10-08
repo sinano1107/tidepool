@@ -18,7 +18,7 @@ import {
 import { type Db, openDb } from "../src/db.js";
 import { DEFAULT_AUDITOR_NAME } from "../src/defaults.js";
 import { appendEvent, type EventPayload, listEvents } from "../src/events.js";
-import { applyExecutionSettingsChange, resolveExecutionSetting } from "../src/execution-setting.js";
+import { applyExecutionSettingsChange, executionSettingsFor } from "../src/execution-setting.js";
 import { BOARD_WRITE_LANGUAGE_RULE } from "../src/mcp.js";
 import { buildMemoryInjection, buildMetaReviewMaterial, type InjectionQuery, recordKnowledge } from "../src/memory.js";
 import { registerMetaReview } from "../src/meta-review.js";
@@ -144,7 +144,7 @@ function pickedSetting(
   const loaded = loadedRegistries.get(key) ?? loadRegistry(registry.dir, registry.mode);
   loadedRegistries.set(key, loaded);
   const { agents } = loaded;
-  return resolveExecutionSetting(db, (agents[resolveTaskAgent(task, agent, auditorName)] ?? agents[agent])!, task)!;
+  return executionSettingsFor(db, (agents[resolveTaskAgent(task, agent, auditorName)] ?? agents[agent])!, task)[0]!;
 }
 
 /** A git runner pinned to the registry fixture clone, identity flags inlined

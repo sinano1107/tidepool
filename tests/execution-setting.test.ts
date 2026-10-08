@@ -20,7 +20,6 @@ import {
   parseRoutingRowChange,
   readExecutionSettings,
   registryPinChanges,
-  resolveExecutionSetting,
   routingPinChanges,
   SEED_EXECUTION_SETTINGS,
   type SelectorInput,
@@ -855,8 +854,8 @@ const opusRows = (db: ReturnType<typeof openDb>) => readExecutionSettings(db).ta
 
 it("同じ model を effort 違いで別の段に2行置け、それぞれの段の要求でその行が選ばれる", () => {
   const db = boardWithOpusMax();
-  expect(resolveExecutionSetting(db, anthropicAgent(false), workAt("standard"))).toMatchObject({ model: "claude-opus-5-5", effort: "high" });
-  expect(resolveExecutionSetting(db, anthropicAgent(false), workAt("frontier"))).toMatchObject({ model: "claude-opus-5-5", effort: "max" });
+  expect(executionSettingsFor(db, anthropicAgent(false), workAt("standard"))[0]).toMatchObject({ model: "claude-opus-5-5", effort: "high" });
+  expect(executionSettingsFor(db, anthropicAgent(false), workAt("frontier"))[0]).toMatchObject({ model: "claude-opus-5-5", effort: "max" });
 });
 
 it("行を書く扉は、同じ段に同じ model の2行目と、同じ (model, effort) の2行目の追加を拒み、表は変わらない", () => {
@@ -1066,7 +1065,7 @@ it("盤面既定の段を選び直すと、要求も agent の tier も無い ta
   const db = openDb(":memory:");
   change(db, { setting: "default_tier", value: "standard" });
   expect(readExecutionSettings(db).defaultTier).toBe("standard");
-  expect(resolveExecutionSetting(db, anthropicAgent(false), { type: "work", tier: null, priority: null, review_tier: null })).toMatchObject({
+  expect(executionSettingsFor(db, anthropicAgent(false), { type: "work", tier: null, priority: null, review_tier: null })[0]).toMatchObject({
     model: "claude-opus-5-5",
     source: { tier: "board" },
   });
@@ -1093,11 +1092,11 @@ it("review task は review_tier の有無によらず review 用の既定で並�
   const db = openDb(":memory:");
   change(db, { setting: "priority", value: "cost" });
   for (const task of reviewTasks) {
-    expect(resolveExecutionSetting(db, twoProviderAgent, task)).toMatchObject({ model: "claude-opus-5-5", source: { provider: "rank" } });
+    expect(executionSettingsFor(db, twoProviderAgent, task)[0]).toMatchObject({ model: "claude-opus-5-5", source: { provider: "rank" } });
   }
   change(db, { setting: "review_priority", value: "cost" });
   for (const task of reviewTasks) {
-    expect(resolveExecutionSetting(db, twoProviderAgent, task)).toMatchObject({ model: "gpt-5.6-sol", source: { provider: "cost" } });
+    expect(executionSettingsFor(db, twoProviderAgent, task)[0]).toMatchObject({ model: "gpt-5.6-sol", source: { provider: "cost" } });
   }
 });
 
@@ -1105,11 +1104,11 @@ it("work task は task の priority → work 用の既定で並び、review 用�
   const db = openDb(":memory:");
   change(db, { setting: "review_priority", value: "cost" });
   const work = (priority: "quality" | "cost" | null) => ({ type: "work" as const, tier: null, priority, review_tier: null });
-  expect(resolveExecutionSetting(db, twoProviderAgent, work(null))).toMatchObject({ model: "claude-opus-5-5" });
-  expect(resolveExecutionSetting(db, twoProviderAgent, work("cost"))).toMatchObject({ model: "gpt-5.6-sol" });
+  expect(executionSettingsFor(db, twoProviderAgent, work(null))[0]).toMatchObject({ model: "claude-opus-5-5" });
+  expect(executionSettingsFor(db, twoProviderAgent, work("cost"))[0]).toMatchObject({ model: "gpt-5.6-sol" });
   change(db, { setting: "priority", value: "cost" });
-  expect(resolveExecutionSetting(db, twoProviderAgent, work(null))).toMatchObject({ model: "gpt-5.6-sol" });
-  expect(resolveExecutionSetting(db, twoProviderAgent, work("quality"))).toMatchObject({ model: "claude-opus-5-5" });
+  expect(executionSettingsFor(db, twoProviderAgent, work(null))[0]).toMatchObject({ model: "gpt-5.6-sol" });
+  expect(executionSettingsFor(db, twoProviderAgent, work("quality"))[0]).toMatchObject({ model: "claude-opus-5-5" });
 });
 
 it("挿入した段の名前を書いた agent.md の tier は定義の検査を通る", () => {

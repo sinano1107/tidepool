@@ -713,6 +713,7 @@ export function applyExecutionSettingsChange(
         if (provider === "anthropic" && isClaudeModelAlias(model)) {
           throw new DomainError(`"${model}" is a Claude CLI alias whose target moves with CLI updates; a table row takes a concrete model id (e.g. claude-opus-5-5)`);
         }
+        // schema でなくここで拒む: approve / add_tier の適用は schema を通らずこの関数を直に呼ぶ。
         const effortProblem = whyInvalidEffort(effort);
         if (effortProblem) throw new DomainError(effortProblem);
         assertKnownTier(db, "tier", tier);
@@ -932,14 +933,4 @@ export function executionSettingsFor(
 function runnableTable(db: Db): ExecutionSettingTable {
   const refused = new Set(openQuarantineValues(db, "tableRow"));
   return loadExecutionSettingTable(db).filter((row) => !refused.has(tableRowValue(row.provider, row.model)));
-}
-
-/** 除外を当てずに1つ選ぶ —— Provider 順位の先頭 entry の設定である。除外を当てた
- *  選択は pickup の側にあり、そちらは育った除外集合を `selectable` へ渡す。 */
-export function resolveExecutionSetting(
-  db: Db,
-  definition: Pick<AgentDefinition, "provider" | "tier">,
-  task: SelectorTask | undefined,
-): ExecutionSetting | null {
-  return selectExecutionSetting(selectorInputFor(db, definition, task), runnableTable(db));
 }
