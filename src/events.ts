@@ -343,7 +343,8 @@ export type EventPayload =
          *  means neither a consultation nor a failed call was observed at all
          *  — which deliberately collapses "configured, attached, never
          *  called" with "configured, silently never attached". Only an advisor
-         *  result on the stream — advice or an error (ADR 0214) — is positive
+         *  result of either observed type on the stream — advice or an error
+         *  (ADR 0214) — is positive
          *  evidence of attachment, and the sole discriminator the
          *  CLI offers is one English warning line on stderr; matching it
          *  would be a detector that degrades silently when the vendor

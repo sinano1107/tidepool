@@ -117,6 +117,10 @@ export function readInitVersion(parsed: Record<string, unknown> | null): string 
   return typeof version === "string" ? version : null;
 }
 
+/** One advisor call's outcome: advice came back, or an error with its
+ *  `error_code` verbatim (ADR 0214). */
+export type AdvisorOutcome = "consulted" | { failed: string | null };
+
 /** What one content block says about an advisor call (issue #33 / ADR 0214):
  *  `"consulted"` when it is an `advisor_tool_result` carrying advice
  *  (`advisor_redacted_result` — encrypted, so the fact is all that is
@@ -136,7 +140,7 @@ export function readInitVersion(parsed: Record<string, unknown> | null): string 
  *  Two readers ask this — the live tee counts them, the projector places them
  *  as markers (ADR 0083 追記 2) — and the vendor's spelling is what would move,
  *  so it is spelled once. */
-export function readAdvisorOutcome(block: unknown): "consulted" | { failed: string | null } | null {
+export function readAdvisorOutcome(block: unknown): AdvisorOutcome | null {
   if (typeof block !== "object" || block === null) return null;
   const { type, content } = block as Record<string, unknown>;
   if (type !== "advisor_tool_result" || typeof content !== "object" || content === null) return null;
@@ -147,7 +151,7 @@ export function readAdvisorOutcome(block: unknown): "consulted" | { failed: stri
 }
 
 /** The advisor outcomes one assistant line carries, in stream order (issue #33 / ADR 0214). */
-export function readAdvisorOutcomes(parsed: Record<string, unknown> | null): ("consulted" | { failed: string | null })[] {
+export function readAdvisorOutcomes(parsed: Record<string, unknown> | null): AdvisorOutcome[] {
   if (parsed === null || parsed.type !== "assistant") return [];
   const content = (parsed.message as { content?: unknown } | undefined)?.content;
   if (!Array.isArray(content)) return [];

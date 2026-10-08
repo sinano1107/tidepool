@@ -257,10 +257,10 @@ export function projectEpisode(input: ProjectEpisodeInput): Episode {
         tool_use_id,
         is_error,
       } = block as Record<string, unknown>;
-      // advisor 相談はマーカーだけ(ADR 0083 追記 2 決定5)。server tool なので
-      // 普通の tool_use ブロックと同じ行に並ぶが、行動行にすると3マーカーと
-      // 二重になり、結果は暗号化されていて抽出するものも無い。マーカーは
-      // 助言が返った結果のブロックに置き、失敗した呼び出しには置かない(ADR 0214)。
+      // advisor 相談はマーカーだけ(ADR 0083 追記 2 決定5)。server tool で、
+      // 行動行にすると3マーカーと二重になり、結果は暗号化されていて抽出する
+      // ものも無い。マーカーは助言が返った結果のブロックに置き、失敗した
+      // 呼び出しには置かない(ADR 0214)。
       if (readAdvisorOutcome(block) === "consulted") {
         markers.push({
           kind: "advisor",

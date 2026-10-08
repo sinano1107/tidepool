@@ -3295,11 +3295,11 @@ describe("advisor capability (issue #33)", () => {
       ...over,
     })}\n`;
 
-  // 結果の content。既定は成功(`advisor_redacted_result`)、失敗は `advisor_tool_result_error`(ADR 0214)。
   const assistantLine = (content: unknown[]) => `${JSON.stringify({ type: "assistant", message: { content } })}\n`;
-  // 既定は1行に並べる形。`twoLines` は実物の形(呼び出しと結果が別々の assistant 行 ——
+  // advisor の呼び出し1本。`result` は結果の content で、既定は成功(`advisor_redacted_result`)、
+  // 失敗は `failure()`(`advisor_tool_result_error`、ADR 0214)。既定は1行に並べる形。`twoLines` は実物の形(呼び出しと結果が別々の assistant 行 ——
   // fixture worker-session-2.1.237.stream.jsonl の22〜23行目)。
-  const consultation = (
+  const advisorCall = (
     id: string,
     { result = { type: "advisor_redacted_result" }, twoLines = false }: { result?: { type: string; error_code?: string }; twoLines?: boolean } = {},
   ) => {
@@ -3322,7 +3322,7 @@ describe("advisor capability (issue #33)", () => {
     const { start, processes, emitExit, db } = await makeAdvisorWorker();
     start("task-advisor-usage");
     processes[0]!.stdout.write(initLine("claude-sonnet-5"));
-    processes[0]!.stdout.write(consultation("srvtoolu_01"));
+    processes[0]!.stdout.write(advisorCall("srvtoolu_01"));
     processes[0]!.stdout.write(resultLine());
     emitExit(0, null);
     expect(usageOf(db, "task-advisor-usage")).toEqual({
@@ -3367,9 +3367,9 @@ describe("advisor capability (issue #33)", () => {
     const { start, processes, emitExit, db } = await makeAdvisorWorker();
     start("task-advisor-count");
     processes[0]!.stdout.write(initLine("claude-sonnet-5"));
-    processes[0]!.stdout.write(consultation("srvtoolu_01"));
-    processes[0]!.stdout.write(consultation("srvtoolu_02"));
-    processes[0]!.stdout.write(consultation("srvtoolu_03"));
+    processes[0]!.stdout.write(advisorCall("srvtoolu_01"));
+    processes[0]!.stdout.write(advisorCall("srvtoolu_02"));
+    processes[0]!.stdout.write(advisorCall("srvtoolu_03"));
     processes[0]!.stdout.write(resultLine());
     emitExit(0, null);
     expect(usageOf(db, "task-advisor-count")?.advisor).toMatchObject({ consultations: 3 });
@@ -3380,10 +3380,10 @@ describe("advisor capability (issue #33)", () => {
     const { start, processes, emitExit, db } = await makeAdvisorWorker();
     start("task-advisor-two-lines");
     processes[0]!.stdout.write(initLine("claude-sonnet-5"));
-    processes[0]!.stdout.write(consultation("srvtoolu_01", { twoLines: true }));
-    processes[0]!.stdout.write(consultation("srvtoolu_02"));
-    processes[0]!.stdout.write(consultation("srvtoolu_03", { twoLines: true, result: failure("unavailable") }));
-    processes[0]!.stdout.write(consultation("srvtoolu_04", { result: failure("too_many_requests") }));
+    processes[0]!.stdout.write(advisorCall("srvtoolu_01", { twoLines: true }));
+    processes[0]!.stdout.write(advisorCall("srvtoolu_02"));
+    processes[0]!.stdout.write(advisorCall("srvtoolu_03", { twoLines: true, result: failure("unavailable") }));
+    processes[0]!.stdout.write(advisorCall("srvtoolu_04", { result: failure("too_many_requests") }));
     processes[0]!.stdout.write(resultLine());
     emitExit(0, null);
     expect(usageOf(db, "task-advisor-two-lines")?.advisor).toMatchObject({
@@ -3397,7 +3397,7 @@ describe("advisor capability (issue #33)", () => {
     const { start, processes, emitExit, db } = await makeAdvisorWorker();
     start("task-advisor-failed-only");
     processes[0]!.stdout.write(initLine("claude-sonnet-5"));
-    processes[0]!.stdout.write(consultation("srvtoolu_01", { twoLines: true, result: failure("too_many_requests") }));
+    processes[0]!.stdout.write(advisorCall("srvtoolu_01", { twoLines: true, result: failure("too_many_requests") }));
     // 失敗した呼び出しには advisor_message が来ない(#1524 の triage で観測した形)
     processes[0]!.stdout.write(
       resultLine({
@@ -3423,10 +3423,10 @@ describe("advisor capability (issue #33)", () => {
     const { start, processes, emitExit, db } = await makeAdvisorWorker();
     start("task-advisor-mixed");
     processes[0]!.stdout.write(initLine("claude-sonnet-5"));
-    processes[0]!.stdout.write(consultation("srvtoolu_01", { result: failure("unavailable") }));
-    processes[0]!.stdout.write(consultation("srvtoolu_02"));
-    processes[0]!.stdout.write(consultation("srvtoolu_03", { result: failure() }));
-    processes[0]!.stdout.write(consultation("srvtoolu_04", { result: failure("too_many_requests") }));
+    processes[0]!.stdout.write(advisorCall("srvtoolu_01", { result: failure("unavailable") }));
+    processes[0]!.stdout.write(advisorCall("srvtoolu_02"));
+    processes[0]!.stdout.write(advisorCall("srvtoolu_03", { result: failure() }));
+    processes[0]!.stdout.write(advisorCall("srvtoolu_04", { result: failure("too_many_requests") }));
     processes[0]!.stdout.write(resultLine());
     emitExit(0, null);
     expect(usageOf(db, "task-advisor-mixed")?.advisor).toMatchObject({
@@ -3440,7 +3440,7 @@ describe("advisor capability (issue #33)", () => {
     const { start, processes, emitExit, db } = await makeAdvisorWorker();
     start("task-advisor-neither");
     processes[0]!.stdout.write(initLine("claude-sonnet-5"));
-    processes[0]!.stdout.write(consultation("srvtoolu_01", { result: { type: "advisor_something_new" } }));
+    processes[0]!.stdout.write(advisorCall("srvtoolu_01", { result: { type: "advisor_something_new" } }));
     processes[0]!.stdout.write(assistantLine([{ type: "server_tool_use", id: "srvtoolu_02", name: "advisor", input: {} }]));
     processes[0]!.stdout.write(resultLine());
     emitExit(0, null);
@@ -3452,24 +3452,21 @@ describe("advisor capability (issue #33)", () => {
     start("task-advisor-final-chunk");
     processes[0]!.stdout.write(initLine("claude-sonnet-5"));
     processes[0]!.stdout.write(resultLine());
-    processes[0]!.stdout.write(consultation("srvtoolu_01").trimEnd());
+    processes[0]!.stdout.write(advisorCall("srvtoolu_01").trimEnd());
     emitExit(0, null);
     expect(usageOf(db, "task-advisor-final-chunk")?.advisor).toMatchObject({ consultations: 1 });
   });
 
   // 通常の tool_use(MCP verb 等)を advisor と数え間違えない — 数えるのは
   // `advisor_tool_result` の結果ブロックだけ(ADR 0214)。
-  it("通常の tool_use は相談として数えない", async () => {
+  it("advisor の結果でないブロックは、中身が助言の型でも相談として数えない", async () => {
     const { start, processes, emitExit, db } = await makeAdvisorWorker();
     start("task-advisor-noise");
     processes[0]!.stdout.write(initLine("claude-sonnet-5"));
     processes[0]!.stdout.write(
-      `${JSON.stringify({
-        type: "assistant",
-        message: { content: [{ type: "tool_use", name: "advisor", input: {} }] },
-      })}\n`,
+      assistantLine([{ type: "tool_result", tool_use_id: "toolu_01", content: { type: "advisor_redacted_result" } }]),
     );
-    processes[0]!.stdout.write(consultation("srvtoolu_01"));
+    processes[0]!.stdout.write(advisorCall("srvtoolu_01"));
     processes[0]!.stdout.write(resultLine());
     emitExit(0, null);
     expect(usageOf(db, "task-advisor-noise")?.advisor).toMatchObject({ consultations: 1 });
@@ -3525,7 +3522,7 @@ describe("advisor capability (issue #33)", () => {
     const { start, processes, emitExit, db } = await makeAdvisorWorker();
     start("task-advisor-same-model");
     processes[0]!.stdout.write(initLine("claude-sonnet-5"));
-    processes[0]!.stdout.write(consultation("srvtoolu_01"));
+    processes[0]!.stdout.write(advisorCall("srvtoolu_01"));
     processes[0]!.stdout.write(
       resultLine({
         usage: {
@@ -3558,7 +3555,7 @@ describe("advisor capability (issue #33)", () => {
     const { start, processes, emitExit, db } = await makeAdvisorWorker();
     start("task-advisor-earlier-turn");
     processes[0]!.stdout.write(initLine("claude-sonnet-5"));
-    processes[0]!.stdout.write(consultation("srvtoolu_01"));
+    processes[0]!.stdout.write(advisorCall("srvtoolu_01"));
     processes[0]!.stdout.write(
       resultLine({
         usage: {
@@ -3593,7 +3590,7 @@ describe("advisor capability (issue #33)", () => {
     const { start, processes, emitExit, db } = await makeAdvisorWorker();
     start("task-advisor-no-init");
     // init 行を一切流さない
-    processes[0]!.stdout.write(consultation("srvtoolu_01"));
+    processes[0]!.stdout.write(advisorCall("srvtoolu_01"));
     processes[0]!.stdout.write(resultLine());
     emitExit(0, null);
     expect(usageOf(db, "task-advisor-no-init")?.advisor).toEqual({
@@ -3610,7 +3607,7 @@ describe("advisor capability (issue #33)", () => {
     const { start, processes, emitExit, db } = await makeAdvisorWorker();
     start("task-advisor-no-modelusage");
     processes[0]!.stdout.write(initLine("claude-sonnet-5"));
-    processes[0]!.stdout.write(consultation("srvtoolu_01"));
+    processes[0]!.stdout.write(advisorCall("srvtoolu_01"));
     processes[0]!.stdout.write(
       `${JSON.stringify({
         type: "result",
@@ -3642,7 +3639,7 @@ describe("advisor capability (issue #33)", () => {
     const { start, processes, emitExit, db } = await makeAdvisorWorker();
     start("task-models-malformed-entry");
     processes[0]!.stdout.write(initLine("claude-sonnet-5"));
-    processes[0]!.stdout.write(consultation("srvtoolu_01"));
+    processes[0]!.stdout.write(advisorCall("srvtoolu_01"));
     processes[0]!.stdout.write(
       resultLine({
         modelUsage: {

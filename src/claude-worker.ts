@@ -903,9 +903,9 @@ function rowRefusalOf(parsed: Record<string, unknown> | null): RowRefusalCause |
 }
 
 /** What the stdout scan collected about this session's advisor while the
- *  stream ran (issue #33). Both are needed at exit and neither survives on the
- *  result line: the consultations happen in assistant lines, and the main
- *  model's resolved id is on the init line. */
+ *  stream ran (issue #33). All are needed at exit and none survives on the
+ *  result line: the consultations and failed calls happen in assistant lines,
+ *  and the main model's resolved id is on the init line. */
 interface AdvisorObservation {
   /** Advisor calls whose result carried advice, seen on the parent thread (ADR 0214). */
   consultations: number;
