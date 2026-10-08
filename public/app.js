@@ -21,6 +21,7 @@ var TidepoolRules = (() => {
   var webui_rules_exports = {};
   __export(webui_rules_exports, {
     completionReviewFires: () => completionReviewFires,
+    isSettled: () => isSettled,
     normalizeText: () => normalizeText,
     reviewFlagCarriesMeaning: () => reviewFlagCarriesMeaning,
     whyBlank: () => whyBlank,
@@ -31,6 +32,9 @@ var TidepoolRules = (() => {
   // src/required-text.ts
   var normalizeText = (value) => value.trim();
   var whyBlank = (value) => normalizeText(value) === "" ? "must not be blank" : void 0;
+
+  // src/task-status.ts
+  var isSettled = (status) => status === "done" || status === "cancelled";
 
   // src/worker-id.ts
   var HUMAN_WORKER_ID = "human";
@@ -4290,7 +4294,7 @@ function App() {
     }
   };
   const openTask = (t) => {
-    const settled = t.status === "done";
+    const settled = TidepoolRules.isSettled(t.status);
     if (settled || t.status === "in_progress") {
       const review = completionReviewLine(t);
       say("info", t.title, /* @__PURE__ */ React.createElement(React.Fragment, null, t.id, " \xB7 ", t.type, review && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("br", null), review)));

@@ -23,6 +23,7 @@ import {
 import { type ExecutionSettingRow, readExecutionSettings } from "./execution-setting.js";
 import { buildMemoryInjection, createBehaviorCandidate, listMemoryEntries, memoryScope, recordKnowledge, requireDecision } from "./memory.js";
 import type { ProcessContainers } from "./process-container.js";
+import { isSettled } from "./task-status.js";
 import { getTask, getTextAuthor, listChildren, type Task } from "./tasks.js";
 import { boardCallRow } from "./throttle.js";
 import { entryObjections, listObjectedEntries, objectedEntryText, objectionsById, requireLogEntry } from "./triage.js";
@@ -241,7 +242,7 @@ const rcaChildren = (db: Db, objectedId: string, bundle: number) => {
   return listChildren(db, objectedId).filter((c) => covering.has(c.id));
 };
 
-const settledAll = (tasks: Task[]) => tasks.every((r) => r.status === "done" || r.status === "cancelled");
+const settledAll = (tasks: Task[]) => tasks.every((r) => isSettled(r.status));
 
 /** 第2回の出所: 入力を組む異議群と、「当時の decision log」の切れ目になる event の `id`。 */
 type SecondRoundSource = Pick<Attribution, "id" | "entry_id" | "objection_event_ids">;

@@ -8,6 +8,7 @@ import type { GitHubClient, Issue, IssueRef } from "./github.js";
 import type { MemoryAmendment } from "./memory.js";
 import type { MergeDial, RosterAgent } from "./registry.js";
 import { normalizeText, whyBlank } from "./required-text.js";
+import { isSettled, type TaskStatus } from "./task-status.js";
 import { assertKnownTier, liveTierId, PRIORITIES, type Priority, proposalTierNames, type Tier, type TierId } from "./tier.js";
 import { completionReviewFires, type ReviewSubject, whyNoCompletionReview, whyReviewFlagIsInert } from "./webui-rules.js";
 import { BOARD_WORKER_ID, HUMAN_WORKER_ID, NON_AGENT_WORKER_IDS } from "./worker-id.js";
@@ -41,9 +42,6 @@ export const HUMAN_ROSTER_AGENT: RosterAgent = {
  *  はない" (ADR 0013's issue #15 grilling notes). The shared literal lives in
  *  defaults.ts so boot and pre-boot registry seeding cannot drift. */
 export type TaskType = "work" | "question" | "review";
-/** `blocked` is deliberately absent: it is derived from unfinished children
- *  the parent waits for (CONTEXT.md), never stored. */
-type TaskStatus = "todo" | "in_progress" | "done" | "cancelled";
 
 export interface Task {
   id: string;
@@ -2133,7 +2131,7 @@ export function carriesHumanWords(db: Db, taskId: string): boolean {
  *  `todo` until settled and only the settled clause bites it (issue #972). The
  *  `verb` names the action in the error for its caller. */
 export function assertUnsettledNotInProgress(task: Task, verb: string): void {
-  if (task.status === "done" || task.status === "cancelled") {
+  if (isSettled(task.status)) {
     throw new DomainError(`a settled task cannot be ${verb}`);
   }
   if (task.status === "in_progress") {

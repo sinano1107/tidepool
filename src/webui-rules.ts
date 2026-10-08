@@ -1,4 +1,5 @@
 export { normalizeText, whyBlank } from "./required-text.js";
+export { isSettled } from "./task-status.js";
 
 // 完了時レビューが立つかの規則の正本(ADR 0111 追記8)。サーバーの拒否・完了時の起票・WebUI の欄の出し分けが
 // 同じ関数を呼ぶ。WebUI へは scripts/build-webui-bundle.mjs が bundle して `TidepoolRules` として届ける(ADR 0209)ので、

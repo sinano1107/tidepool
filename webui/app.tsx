@@ -1271,7 +1271,7 @@ function App() {
   // doesn't carry, so they're left to the API's own gates to reject on submit.
   // An ineligible tap keeps the plain info toast this used to always show.
   const openTask = (t: BoardScreenTask) => {
-    const settled = t.status === 'done';
+    const settled = TidepoolRules.isSettled(t.status);
     if (settled || t.status === 'in_progress') {
       const review = completionReviewLine(t);
       say('info', t.title, <>{t.id} · {t.type}{review && <><br />{review}</>}</>);
