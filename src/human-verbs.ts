@@ -862,7 +862,7 @@ export async function submitAnswer(
   // Every special-case side effect below must come after this validation.
   // Otherwise a malformed answer can retry promotion, inspect/merge a PR, or
   // verify quarantine before answerQuestion eventually rejects the payload.
-  assertAnswerable(task, answers, comment);
+  answers = assertAnswerable(task, answers, comment);
   // 提案は段を id で持つ。修正値・書き込みは名前で喋るので、いまの名前に引いた形で読む(issue #1436)
   const proposal = task.question_proposal && proposalTierNames(deps.db, task.question_proposal);
   // 修正値は approve だけが種別ごとの schema で受ける(ADR 0150 決定2・ADR 0152 決定2)。昇格 / 降格・candidate を持たない memory の提案(invalidate・既存の後継の consolidate)・reject の修正値も黙って捨てず断る

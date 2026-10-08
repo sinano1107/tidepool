@@ -445,9 +445,11 @@ function assertQuestionSpec(input: RegisterTaskInput): void {
   const minOptions = input.quarantine ? 1 : 2;
   for (const item of items) {
     if (whyBlank(item.title)) throw new DomainError("a question item carries a title");
+    if (item.detail !== undefined && whyBlank(item.detail)) throw new DomainError("a supplied question detail cannot be blank");
     if (item.options.length < minOptions || item.options.length > 4) {
       throw new DomainError(`a question item carries ${minOptions} to 4 options`);
     }
+    if (item.options.some(whyBlank)) throw new DomainError("question options cannot be blank");
     if (whyBlank(item.recommendation) || !item.options.includes(item.recommendation)) {
       throw new DomainError(
         "a question item carries the registrant's recommendation, one of its options",
@@ -666,6 +668,7 @@ function assertReviewFieldsTakeEffect(
 
 /** review_by is a set of names: naming the same reviewer twice is refused, not silently folded (CONTEXT.md "Review", #1512). */
 function assertReviewByDistinct(reviewBy: string[] | undefined): void {
+  if (reviewBy?.some(whyBlank)) throw new DomainError("review_by names cannot be blank");
   const dup = reviewBy?.find((name, i) => reviewBy.indexOf(name) !== i);
   if (dup !== undefined) {
     throw new DomainError(`review_by names the same reviewer twice: "${dup}" — each reviewer is named once`);
@@ -681,9 +684,10 @@ export function registerTask(
   origin: EventOrigin,
 ): Task {
   input = { ...input };
-  for (const field of ["title", "purpose", "completion_criteria"] as const) {
+  for (const field of ["title", "purpose", "completion_criteria", "tier", "review_tier", "priority"] as const) {
     if (input[field] !== undefined) input[field] = normalizeText(input[field]);
   }
+  if (input.review_by) input.review_by = input.review_by.map(normalizeText);
   if (input.question) {
     input.question = input.question.map((item) => ({
       ...item,
@@ -1246,16 +1250,17 @@ export function cancelTaskDirectly(
   }, origin);
 }
 
-/** The five pure preconditions an answer submission must clear before any
+/** The six pure preconditions an answer submission must clear before any
  *  caller may run a side effect on its behalf (issue #111): type is
  *  "question", status is still "todo", the answer count matches the
- *  question's item count, for a fixed-choice question every answer is one
+ *  question's item count, every answer is non-blank, for a fixed-choice question every answer is one
  *  of its item's declared options, and an answer `needsComment` lists
  *  carries a non-blank comment (ADR 0179). `answerQuestion` below calls this
  *  first as its own self-defense (a direct caller, e.g. a test, gets the
  *  same rejection it always has); see its call site in human-verbs.ts
- *  for why this must also run there, before any side effect. */
-export function assertAnswerable(question: Task, answers: string[], comment: string | undefined): void {
+ *  for why this must also run there, before any side effect. Returns the
+ *  normalized answers those callers use for side effects and persistence. */
+export function assertAnswerable(question: Task, answers: string[], comment: string | undefined): string[] {
   if (question.type !== "question") {
     throw new DomainError("only a question task can be answered");
   }
@@ -1268,6 +1273,8 @@ export function assertAnswerable(question: Task, answers: string[], comment: str
       `this question carries ${items.length} item(s), but ${answers.length} answer(s) were submitted`,
     );
   }
+  if (answers.some(whyBlank)) throw new DomainError("answers cannot be blank");
+  answers = answers.map(normalizeText);
   if (isFixedChoiceQuestion(question)) {
     for (let i = 0; i < items.length; i++) {
       if (!items[i]!.options.includes(answers[i]!)) {
@@ -1281,6 +1288,7 @@ export function assertAnswerable(question: Task, answers: string[], comment: str
   if (needs.length > 0 && (comment === undefined || whyBlank(comment))) {
     throw new DomainError(`answering ${needs.join(" / ")} to this question requires a non-blank comment: why, or for a defer what is still undecided`);
   }
+  return answers;
 }
 
 /** 着地 question(PR マージ・ローカル着地)か。push の遷移先(buildQuestionPushPayload)と読み口の着地注記(landingAnnotation)が共有する(ADR 0190)。 */
@@ -1377,7 +1385,7 @@ export function answerQuestion(
   amendment: ProposalAmendment | undefined,
   origin: EventOrigin,
 ): Task {
-  assertAnswerable(question, answers, comment);
+  answers = assertAnswerable(question, answers, comment);
   const items = question.question_items!;
   const answer = answers[0]!;
   db.transaction(() => {
@@ -1974,12 +1982,14 @@ export function decomposeTask(
 ): Task[] {
   input = {
     ...input,
-    children: input.children.map((child) => ({
-      ...child,
-      title: normalizeText(child.title),
-      purpose: normalizeText(child.purpose),
-      completion_criteria: normalizeText(child.completion_criteria),
-    })),
+    children: input.children.map((child) => {
+      child = { ...child };
+      for (const field of ["title", "purpose", "completion_criteria", "tier", "review_tier", "priority"] as const) {
+        if (child[field] !== undefined) child[field] = normalizeText(child[field]);
+      }
+      if (child.review_by) child.review_by = child.review_by.map(normalizeText);
+      return child;
+    }),
   };
   if (input.children.length === 0) {
     throw new DomainError("a decomposition carries at least one child task");
@@ -2279,6 +2289,8 @@ export function editTask(
   origin: EventOrigin,
 ): Task {
   assertHumanEditableScope(db, task);
+  input = { ...input };
+  if (input.review_by) input.review_by = input.review_by.map(normalizeText);
   assertReviewFieldsTakeEffect(
     {
       type: task.type,
@@ -2290,7 +2302,6 @@ export function editTask(
     input.review_by ?? task.review_by,
   );
   assertReviewByDistinct(input.review_by);
-  input = { ...input };
   for (const field of ["title", "purpose", "completion_criteria"] as const) {
     const value = input[field];
     if (value === undefined) continue;

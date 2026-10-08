@@ -991,7 +991,7 @@ function registerRoutingMetaReviewVerbs(server: McpServer, deps: McpDeps, run: M
           .optional()
           .describe("op agent_tier, tier_description and add_tier only: worker_spawned event ids of the sessions your case rests on."),
         tier: z.string().optional().describe("op tier_description: the tier whose description to rewrite. op add_tier: the new tier's name."),
-        description: requiredTextSchema.optional().describe("op tier_description and add_tier only: the tier's description, one line."),
+        description: z.string().optional().describe("op tier_description and add_tier only: the tier's description, one line."),
         position: z.number().int().nonnegative().optional().describe("op add_tier only: where the new tier goes, an index into the board's list (lowest first)."),
         rationale: requiredTextSchema,
       },

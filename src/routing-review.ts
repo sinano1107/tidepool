@@ -18,6 +18,7 @@ import {
 } from "./execution-setting.js";
 import { type Cell, cellJson, loadEpisodes, type RoutingEpisode, type TrackRecord } from "./learner.js";
 import { inWindow, type MetaReviewWindow, materialSection, previousMetaReviewWatermark } from "./meta-review.js";
+import { normalizeText, whyBlank } from "./required-text.js";
 import { type Packed, packItems, readPosition } from "./response-budget.js";
 import { type RegistryProposal, type RoutingAddTierProposal, type RoutingProposal, registerTask, type TierDescriptionProposal } from "./tasks.js";
 import { assertKnownTier, liveTierRows, proposalTierNames, type Tier, type TierId, tierIdOf, tierNames } from "./tier.js";
@@ -253,7 +254,7 @@ export function routingMaterial(db: Db, window: Required<MetaReviewWindow>) {
  *  pin の行はそれらが走った表の行の現在値。 */
 function agentTierProposal(db: Db, agents: readonly AgentView[], input: { agent?: string; to?: Tier; evidence?: number[] }): RegistryProposal {
   const { agent: name, to, evidence } = input;
-  if (!name || !to || !evidence?.length) throw new DomainError("op agent_tier names the agent, the target tier (to) and at least one evidence worker_spawned event id");
+  if (name === undefined || whyBlank(name) || to === undefined || whyBlank(to) || !evidence?.length) throw new DomainError("op agent_tier names the agent, the target tier (to) and at least one evidence worker_spawned event id");
   const agent = agents.find((a) => a.name === name);
   if (!agent) throw new DomainError(`unknown agent: ${name}`);
   if (agent.builtin) throw new DomainError(`agent ${name} is built-in; its definition is the board's code, not a registry file`);
@@ -317,7 +318,7 @@ function addTierProposal(
  *  (`source.tier` が task)その task がこの段を要求した worker_spawned だけで、書き手が人間の task も数える。pin は説明のいまの文面。 */
 function tierDescriptionProposal(db: Db, input: { tier?: string; description?: string; evidence?: number[] }): TierDescriptionProposal {
   const { tier, description, evidence } = input;
-  if (!tier || description === undefined || !evidence?.length) {
+  if (tier === undefined || whyBlank(tier) || description === undefined || !evidence?.length) {
     throw new DomainError("op tier_description names the tier, its new description and at least one evidence worker_spawned event id");
   }
   assertKnownTier(db, "tier", tier);
@@ -359,6 +360,14 @@ export function proposeRoutingChange(
   now: Date,
   agents?: () => readonly AgentView[],
 ): { question_id: string } {
+  input = { ...input, rationale: normalizeText(input.rationale) };
+  if (whyBlank(input.rationale)) throw new DomainError("a routing proposal requires a rationale");
+  for (const field of ["agent", "to", "tier", "description"] as const) {
+    if (input[field] !== undefined) input[field] = normalizeText(input[field]);
+  }
+  if (input.row) {
+    input.row = { provider: normalizeText(input.row.provider), model: normalizeText(input.row.model), effort: normalizeText(input.row.effort) };
+  }
   let proposal: RoutingProposal | RegistryProposal;
   let title: string;
   let diff: string[];
