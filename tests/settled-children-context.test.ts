@@ -1,12 +1,16 @@
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
+import { openDb } from "../src/db.js";
+import { cancelTaskDirectly, joinHistory, registerTask, taskHistoryRows } from "../src/tasks.js";
 import {
   api,
   bootTidepool,
   FULL_HANDOFF,
   GIT_FIXTURE_TEST_TIMEOUT,
   HOUR,
+  HUMAN_WEBUI,
+  humanDecomposeTaskViaWebui,
   makeWorkspace,
   mcpClient,
   registerWork,
@@ -207,4 +211,21 @@ it("get_current_task の history に、未決着(todo)の兄弟も含まれる",
   } finally {
     await client.close();
   }
+});
+
+// ドメイン層(ADR 0107): 人間 decompose で足した子を直接 cancel する。reason は任意なので null も運ぶ。
+it.each(["もう要らない", null])("reason %s で直接 cancel された子は、親の history で origin_direct_cancel にその reason を運び、origin_question を持たない", (reason) => {
+  const db = openDb(":memory:");
+  const at = new Date("2026-10-08T00:00:00.000Z");
+  const parent = registerTask(db, { type: "work", title: "parent", purpose: "purpose", completion_criteria: "criteria" }, at, ...HUMAN_WEBUI);
+  const [child] = humanDecomposeTaskViaWebui(db, parent, { reason: "human split", children: [{ title: "A", purpose: "purpose", completion_criteria: "criteria" }] }, at);
+  cancelTaskDirectly(db, child!, reason, at, {}, "webui");
+
+  expect(joinHistory(taskHistoryRows(db, parent.id))).toEqual([
+    {
+      decision: "human split",
+      children: [{ title: "A", purpose: "purpose", completion_criteria: "criteria", status: "cancelled", origin_direct_cancel: { reason } }],
+    },
+  ]);
+  db.close();
 });
