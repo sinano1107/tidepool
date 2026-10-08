@@ -2626,6 +2626,7 @@ function ExecutionDefaultsCard({ settings, say, onSaved, edit }) {
   const current = {
     rank: settings.providerRank,
     priority: settings.priority,
+    reviewPriority: settings.reviewPriority,
     ceiling: settings.advisorCeiling,
     defaultTier: settings.defaultTier,
     judgementTier: settings.judgementTier
@@ -2633,7 +2634,7 @@ function ExecutionDefaultsCard({ settings, say, onSaved, edit }) {
   const [draft, setDraft] = React.useState(current);
   const [busy, setBusy] = React.useState(false);
   const rankChanged = draft.rank.join() !== current.rank.join();
-  const dirty = rankChanged || draft.priority !== current.priority || draft.ceiling !== current.ceiling || draft.defaultTier !== current.defaultTier || draft.judgementTier !== current.judgementTier;
+  const dirty = rankChanged || draft.priority !== current.priority || draft.reviewPriority !== current.reviewPriority || draft.ceiling !== current.ceiling || draft.defaultTier !== current.defaultTier || draft.judgementTier !== current.judgementTier;
   const tierNames = settings.tiers.map((tier) => tier.name);
   const rankReason = TidepoolRules.whyInvalidProviderRank(draft.rank);
   const ok = !rankReason;
@@ -2644,6 +2645,7 @@ function ExecutionDefaultsCard({ settings, say, onSaved, edit }) {
       const changes = [
         rankChanged && { setting: "provider_rank", value: draft.rank },
         draft.priority !== current.priority && { setting: "priority", value: draft.priority },
+        draft.reviewPriority !== current.reviewPriority && { setting: "review_priority", value: draft.reviewPriority },
         draft.ceiling !== current.ceiling && { setting: "advisor_ceiling", value: draft.ceiling },
         draft.defaultTier !== current.defaultTier && { setting: "default_tier", value: draft.defaultTier },
         draft.judgementTier !== current.judgementTier && { setting: "judgement_tier", value: draft.judgementTier }
@@ -2668,7 +2670,7 @@ function ExecutionDefaultsCard({ settings, say, onSaved, edit }) {
     }
     setBusy(false);
   };
-  return /* @__PURE__ */ React.createElement("div", { "data-testid": "execution-defaults" }, /* @__PURE__ */ React.createElement(Card, { style: { display: "flex", flexDirection: "column", gap: 14 } }, /* @__PURE__ */ React.createElement(RecordCardHead, { editing: open, onEdit: () => edit.open(id, () => setDraft(current)) }, /* @__PURE__ */ React.createElement("span", { style: settingsCardLabel }, "execution defaults")), !open && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(FieldRow, { label: "provider rank", kind: "mono", value: settings.providerRank.join(" \u203A ") }), /* @__PURE__ */ React.createElement(FieldRow, { label: "default priority", kind: "mono", value: settings.priority }), /* @__PURE__ */ React.createElement(FieldRow, { label: "advisor ceiling", kind: "mono", value: settings.advisorCeiling }), /* @__PURE__ */ React.createElement(FieldRow, { label: "default tier", kind: "mono", value: settings.defaultTier }), /* @__PURE__ */ React.createElement(FieldRow, { label: "judgement tier", kind: "mono", value: settings.judgementTier }), /* @__PURE__ */ React.createElement(FieldRow, { label: "learner", kind: "mono", value: settings.learnerPromoted ? "promoted \u2014 chooses work tasks" : "shadow \u2014 the table chooses" }), settings.learnerPromoted && /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", disabled: busy, onClick: demote }, "Demote learner")), open && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 12 } }, draft.rank.map((provider, i) => /* @__PURE__ */ React.createElement(
+  return /* @__PURE__ */ React.createElement("div", { "data-testid": "execution-defaults" }, /* @__PURE__ */ React.createElement(Card, { style: { display: "flex", flexDirection: "column", gap: 14 } }, /* @__PURE__ */ React.createElement(RecordCardHead, { editing: open, onEdit: () => edit.open(id, () => setDraft(current)) }, /* @__PURE__ */ React.createElement("span", { style: settingsCardLabel }, "execution defaults")), !open && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(FieldRow, { label: "provider rank", kind: "mono", value: settings.providerRank.join(" \u203A ") }), /* @__PURE__ */ React.createElement(FieldRow, { label: "default priority", kind: "mono", value: settings.priority }), /* @__PURE__ */ React.createElement(FieldRow, { label: "review priority", kind: "mono", value: settings.reviewPriority }), /* @__PURE__ */ React.createElement(FieldRow, { label: "advisor ceiling", kind: "mono", value: settings.advisorCeiling }), /* @__PURE__ */ React.createElement(FieldRow, { label: "default tier", kind: "mono", value: settings.defaultTier }), /* @__PURE__ */ React.createElement(FieldRow, { label: "judgement tier", kind: "mono", value: settings.judgementTier }), /* @__PURE__ */ React.createElement(FieldRow, { label: "learner", kind: "mono", value: settings.learnerPromoted ? "promoted \u2014 chooses work tasks" : "shadow \u2014 the table chooses" }), settings.learnerPromoted && /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", disabled: busy, onClick: demote }, "Demote learner")), open && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 12 } }, draft.rank.map((provider, i) => /* @__PURE__ */ React.createElement(
     Select,
     {
       key: i,
@@ -2684,6 +2686,14 @@ function ExecutionDefaultsCard({ settings, say, onSaved, edit }) {
       options: [...settings.priorities],
       value: draft.priority,
       onChange: (e) => setDraft({ ...draft, priority: e.target.value })
+    }
+  ), /* @__PURE__ */ React.createElement(
+    Select,
+    {
+      label: "Review priority",
+      options: [...settings.priorities],
+      value: draft.reviewPriority,
+      onChange: (e) => setDraft({ ...draft, reviewPriority: e.target.value })
     }
   ), /* @__PURE__ */ React.createElement(
     Select,
@@ -2709,7 +2719,7 @@ function ExecutionDefaultsCard({ settings, say, onSaved, edit }) {
       value: draft.judgementTier,
       onChange: (e) => setDraft({ ...draft, judgementTier: e.target.value })
     }
-  ), /* @__PURE__ */ React.createElement("p", { style: { margin: 0, fontSize: "var(--text-xs)", color: "var(--text-muted)" } }, "rank orders the providers a task may run on (first = preferred; every provider exactly once). priority is the default for tasks that request none: quality = rank then price, cost = price then rank. advisor ceiling is the highest model an agent's advisor may be: a main model below it gets the ceiling's model, one of the same model family gets itself, one above it runs without an advisor; off runs every agent without one. default tier is the tier of tasks that request none and whose agent declares none, and of the board's drafts. judgement tier is the tier the board's own judgement runs on: its retrospective Board calls (allocation review, attribution, Behavior candidate drafting) and its periodic meta-reviews."), /* @__PURE__ */ React.createElement(
+  ), /* @__PURE__ */ React.createElement("p", { style: { margin: 0, fontSize: "var(--text-xs)", color: "var(--text-muted)" } }, "rank orders the providers a task may run on (first = preferred; every provider exactly once). priority is the default for work tasks that request none, and review priority orders every review task: quality = rank then price, cost = price then rank. advisor ceiling is the highest model an agent's advisor may be: a main model below it gets the ceiling's model, one of the same model family gets itself, one above it runs without an advisor; off runs every agent without one. default tier is the tier of tasks that request none and whose agent declares none, and of the board's drafts. judgement tier is the tier the board's own judgement runs on: its retrospective Board calls (allocation review, attribution, Behavior candidate drafting) and its periodic meta-reviews."), /* @__PURE__ */ React.createElement(
     EditActions,
     {
       dirty,

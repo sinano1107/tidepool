@@ -944,7 +944,7 @@ function registerRoutingMetaReviewVerbs(server: McpServer, deps: McpDeps, run: M
     "read_routing_settings",
     {
       description:
-        "Read the current execution-setting table, the board's tiers with their descriptions in order, the advisor ceiling (off / sonnet / opus / fable / fable_then_opus), the provider rank, the default priority, " +
+        "Read the current execution-setting table, the board's tiers with their descriptions in order, the advisor ceiling (off / sonnet / opus / fable / fable_then_opus), the provider rank, the default priorities (`priority` for work tasks that request none, `reviewPriority` for review tasks), " +
         "whether the learner is promoted, the board's default tier (`defaultTier` — the tier of tasks that request none and whose agent declares none, " +
         "and of the board's drafts) and judgement tier (`judgementTier` — the tier the board's own judgement runs on: retrospective Board calls resolve " +
         "on its anthropic row, and periodic meta-reviews request it), and every past routing proposal (agent tier proposals included) with its answer, the " +

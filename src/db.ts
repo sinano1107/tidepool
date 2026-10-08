@@ -282,6 +282,8 @@ export function openDb(path: string): Db {
       advisor_ceiling  TEXT NOT NULL DEFAULT 'off' CHECK (advisor_ceiling IN ('off', 'sonnet', 'opus', 'fable', 'fable_then_opus')),
       provider_rank    TEXT,
       priority         TEXT CHECK (priority IN ('quality', 'cost')),
+      -- review task の並べ方(ADR 0111 追記10)。work 用の priority とは別で、未設定を持たない
+      review_priority  TEXT NOT NULL DEFAULT 'quality' CHECK (review_priority IN ('quality', 'cost')),
       -- 学習器の昇格(ADR 0150 決定4)
       learner_promoted INTEGER NOT NULL DEFAULT 0 CHECK (learner_promoted IN (0, 1)),
       -- 盤面既定の段(要求の無い task と下書き)と、盤面自身の判断の段(振り返り Board call と周期 meta-review、

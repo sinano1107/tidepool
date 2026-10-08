@@ -2007,7 +2007,7 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit, fo
 }
 
 // Execution defaults (issue #545 / ADR 0110 決定5) as a record card: Provider
-// rank, the default priority and the advisor ceiling (ADR 0208). Each differing
+// rank, the work and review default priorities (ADR 0111 追記10) and the advisor ceiling (ADR 0208). Each differing
 // value is one POST — the API takes one change per request.
 function ExecutionDefaultsCard({ settings, say, onSaved, edit }: {
   settings: SettingsExecution;
@@ -2019,13 +2019,14 @@ function ExecutionDefaultsCard({ settings, say, onSaved, edit }: {
   const id = 'board:execution-defaults';
   const open = edit.isOpen(id);
   const current = {
-    rank: settings.providerRank, priority: settings.priority, ceiling: settings.advisorCeiling,
+    rank: settings.providerRank, priority: settings.priority, reviewPriority: settings.reviewPriority, ceiling: settings.advisorCeiling,
     defaultTier: settings.defaultTier, judgementTier: settings.judgementTier,
   };
   const [draft, setDraft] = React.useState(current);
   const [busy, setBusy] = React.useState(false);
   const rankChanged = draft.rank.join() !== current.rank.join();
-  const dirty = rankChanged || draft.priority !== current.priority || draft.ceiling !== current.ceiling
+  const dirty = rankChanged || draft.priority !== current.priority || draft.reviewPriority !== current.reviewPriority
+    || draft.ceiling !== current.ceiling
     || draft.defaultTier !== current.defaultTier || draft.judgementTier !== current.judgementTier;
   const tierNames = settings.tiers.map((tier) => tier.name);
   const rankReason = TidepoolRules.whyInvalidProviderRank(draft.rank);
@@ -2038,6 +2039,7 @@ function ExecutionDefaultsCard({ settings, say, onSaved, edit }: {
       const changes = [
         rankChanged && { setting: 'provider_rank', value: draft.rank },
         draft.priority !== current.priority && { setting: 'priority', value: draft.priority },
+        draft.reviewPriority !== current.reviewPriority && { setting: 'review_priority', value: draft.reviewPriority },
         draft.ceiling !== current.ceiling && { setting: 'advisor_ceiling', value: draft.ceiling },
         draft.defaultTier !== current.defaultTier && { setting: 'default_tier', value: draft.defaultTier },
         draft.judgementTier !== current.judgementTier && { setting: 'judgement_tier', value: draft.judgementTier },
@@ -2074,6 +2076,7 @@ function ExecutionDefaultsCard({ settings, say, onSaved, edit }: {
           <React.Fragment>
             <FieldRow label="provider rank" kind="mono" value={settings.providerRank.join(' › ')} />
             <FieldRow label="default priority" kind="mono" value={settings.priority} />
+            <FieldRow label="review priority" kind="mono" value={settings.reviewPriority} />
             <FieldRow label="advisor ceiling" kind="mono" value={settings.advisorCeiling} />
             <FieldRow label="default tier" kind="mono" value={settings.defaultTier} />
             <FieldRow label="judgement tier" kind="mono" value={settings.judgementTier} />
@@ -2095,6 +2098,8 @@ function ExecutionDefaultsCard({ settings, say, onSaved, edit }: {
             {rankReason && <p style={{ margin: 0, fontSize: 'var(--text-xs)', color: 'var(--coral-4)' }}>{rankReason}</p>}
             <Select label="Default priority" options={[...settings.priorities]} value={draft.priority}
               onChange={(e) => setDraft({ ...draft, priority: e.target.value })} />
+            <Select label="Review priority" options={[...settings.priorities]} value={draft.reviewPriority}
+              onChange={(e) => setDraft({ ...draft, reviewPriority: e.target.value })} />
             <Select label="Advisor ceiling" options={[...settings.advisorCeilings]} value={draft.ceiling}
               onChange={(e) => setDraft({ ...draft, ceiling: e.target.value as AdvisorCeiling })} />
             <Select label="Board default tier" options={tierNames} value={draft.defaultTier}
@@ -2103,7 +2108,7 @@ function ExecutionDefaultsCard({ settings, say, onSaved, edit }: {
               onChange={(e) => setDraft({ ...draft, judgementTier: e.target.value })} />
             <p style={{ margin: 0, fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
               rank orders the providers a task may run on (first = preferred; every provider exactly once).
-              priority is the default for tasks that request none: quality = rank then price, cost = price then rank.
+              priority is the default for work tasks that request none, and review priority orders every review task: quality = rank then price, cost = price then rank.
               advisor ceiling is the highest model an agent's advisor may be: a main model below it gets the ceiling's model, one of the same model family gets itself, one above it runs without an advisor; off runs every agent without one.
               default tier is the tier of tasks that request none and whose agent declares none, and of the board's drafts.
               judgement tier is the tier the board's own judgement runs on: its retrospective Board calls (allocation review, attribution, Behavior candidate drafting) and its periodic meta-reviews.
