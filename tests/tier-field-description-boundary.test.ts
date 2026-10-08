@@ -50,7 +50,8 @@ it("register_task と edit_task の review の欄は、受け付ける条件を�
 
     expect(register.review_flag!.description).toContain(REVIEW_FLAG_ONLY_ON_WORK_CHILDREN);
     expect(register.review_by!.description).toContain(ONLY_WHERE_COMPLETION_REVIEW_FIRES);
-    expect(register.review_tier!.description).toContain(REVIEW_TIER_BY_TYPE);
+    // review task を登録する読み手にも当てはまる書き出しで始める(完了時レビュー専用の書き出しにしない)
+    expect(register.review_tier!.description!.startsWith(REVIEW_TIER_BY_TYPE)).toBe(true);
     expect(register.review_tier!.description).toContain(boardTiers);
     for (const field of [edit.review_flag!, edit.review_by!]) expect(field.description).toContain(JUDGED_AFTER_THE_EDIT);
     expect(edit.review_flag!.description).toContain(REVIEW_FLAG_ONLY_ON_WORK_CHILDREN);

@@ -1064,7 +1064,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
         tier: z.string().optional().describe(tierDescriptions.tier),
         review_by: z.array(z.string().min(1)).optional()
           .describe(`${REVIEWER_NAMES} Omit to use the board Auditor. ${ONLY_WHERE_COMPLETION_REVIEW_FIRES}`),
-        review_tier: z.string().optional().describe(`${tierDescriptions.review_tier}\n${REVIEW_TIER_BY_TYPE}`),
+        review_tier: z.string().optional().describe(`${REVIEW_TIER_BY_TYPE}\n${tierDescriptions.review_tier_choices}`),
         priority: z.string().optional().describe(PRIORITY_FIELD_DESCRIPTION),
         decompose_reason: z.string().optional(),
       },
