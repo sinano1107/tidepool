@@ -10,6 +10,7 @@ import {
   registerLocalMergeQuestion,
   registerPrPromotionFailureQuestion,
 } from "../src/landing.js";
+import type { MergeDial } from "../src/registry.js";
 import {
   completeTask,
   getTask,
@@ -1145,7 +1146,14 @@ it("PR を開いた後の merge question も、CI red で止まった auto-merge
   recordPrOpenedViaWorker(db, landingWork(db, clock), 1, "worker", clock.now(), { authority: { merge: "escalate" } });
   recordPrOpenedViaWorker(db, landingWork(db, clock), 2, "worker", clock.now(), { authority: { merge: "auto_if_ci_green" } });
 
-  await createLanding({ defaultAgentName: "tako", db, clock, workspace, github }).tick("auto_merge", clock.now());
+  await createLanding({
+    defaultAgentName: "tako",
+    db,
+    clock,
+    workspace,
+    github,
+    authority: { name: "standard", guidance: "", merge: "auto_if_ci_green" },
+  }).tick("auto_merge", clock.now());
 
   const registered = listBoard(db)
     .filter((q) => q.question_pending_merge_pr !== null)
@@ -1164,6 +1172,244 @@ it("PR から着地タスクを引けない merge question は fail-closed で a
   const question = mergeQuestion(db, clock, { pending_merge_pr: 99 });
 
   expect(landingAnnotation(db, question)).toEqual({ blocked_by: "attached_children" });
+});
+
+// ADR 0217 決定1・2: 無人 merge キューの PR は merge の瞬間に着地の面を読み直す。
+// 以下はこの読み直しを述べる唯一の場所(ADR 0107)。
+const profile = (merge: MergeDial) => ({
+  name: "standard",
+  guidance: "",
+  merge,
+});
+
+/** auto_if_ci_green で PR を開き、無人 merge キューへ入れる。 */
+function queueAutoMerge(db: Db, clock: FakeClock, prNumber: number): Task {
+  const work = landingWork(db, clock);
+  recordPrOpenedViaWorker(db, work, prNumber, "worker", clock.now(), {
+    authority: { merge: "auto_if_ci_green" },
+  });
+  return work;
+}
+
+function mergeQuestions(db: Db) {
+  return listBoard(db)
+    .filter((q) => q.question_pending_merge_pr !== null)
+    .map((q) => {
+      const { worker_id, origin } = listEvents(db, q.id).find((e) => e.kind === "task_registered")!;
+      return {
+        pr: q.question_pending_merge_pr,
+        registrant: [worker_id, origin],
+        recommendation: q.question_items?.[0]?.recommendation,
+        purpose: q.purpose,
+      };
+    });
+}
+
+it("キュー投入の後にダイヤルが escalate へ取り下げられた PR は、CI 緑でも merge されずキューを外れ、盤面の名義の merge question になる", async () => {
+  const workspace = await makeWorkspace("landing-withdrawn-to-escalate");
+  const { db, clock } = await openBoard();
+  const github = new FakeGitHubClient();
+  queueAutoMerge(db, clock, 1);
+  const landing = createLanding({
+    defaultAgentName: "tako",
+    db,
+    clock,
+    workspace,
+    github,
+    resolveAuthority: () => profile("escalate"),
+  });
+
+  await landing.tick("auto_merge", clock.now());
+  await landing.tick("auto_merge", clock.now());
+
+  expect(github.merged).toEqual([]);
+  expect(mergeQuestions(db)).toEqual([
+    {
+      pr: 1,
+      registrant: [BOARD_WORKER_ID, "board"],
+      recommendation: "merge",
+      purpose: expect.stringMatching(/queued.*landing surface changed.*escalate/),
+    },
+  ]);
+});
+
+it("キュー投入の後に workspace が保護された PR も、CI 緑でも merge されず盤面の名義の merge question になる", async () => {
+  const workspace = await makeWorkspace("landing-protected-after-queue");
+  const { db, clock } = await openBoard();
+  const github = new FakeGitHubClient();
+  queueAutoMerge(db, clock, 1);
+  const landing = createLanding({
+    defaultAgentName: "tako",
+    db,
+    clock,
+    workspace,
+    github,
+    resolveAuthority: () => profile("auto_if_ci_green"),
+    isProtectedWorkspace: (name) => name === workspace.name,
+  });
+
+  await landing.tick("auto_merge", clock.now());
+  await landing.tick("auto_merge", clock.now());
+
+  expect(github.merged).toEqual([]);
+  expect(mergeQuestions(db)).toEqual([
+    {
+      pr: 1,
+      registrant: [BOARD_WORKER_ID, "board"],
+      recommendation: "merge",
+      purpose: expect.stringMatching(/queued.*landing surface changed.*protected/),
+    },
+  ]);
+});
+
+it("キュー投入の後にダイヤルが external へ取り下げられた PR は、question なしでキューを外れ、外した事実が盤面の名義の event に残る", async () => {
+  const workspace = await makeWorkspace("landing-withdrawn-to-external");
+  const { db, clock } = await openBoard();
+  const github = new FakeGitHubClient();
+  const work = queueAutoMerge(db, clock, 1);
+  const landing = createLanding({
+    defaultAgentName: "tako",
+    db,
+    clock,
+    workspace,
+    github,
+    resolveAuthority: () => profile("external"),
+  });
+
+  await landing.tick("auto_merge", clock.now());
+  await landing.tick("auto_merge", clock.now());
+
+  expect(github.merged).toEqual([]);
+  expect(mergeQuestions(db)).toEqual([]);
+  expect(
+    listEvents(db, work.id)
+      .filter((e) => e.kind === "auto_merge_withdrawn")
+      .map(({ worker_id, origin, payload }) => ({ worker_id, origin, payload })),
+  ).toEqual([
+    {
+      worker_id: BOARD_WORKER_ID,
+      origin: "board",
+      payload: { kind: "auto_merge_withdrawn", pr_number: 1, merge: "external" },
+    },
+  ]);
+});
+
+it("キュー投入の後に profile がダイヤルを持たなくなった PR も、question なしでキューを外れ、event の merge は null になる", async () => {
+  const workspace = await makeWorkspace("landing-withdrawn-to-no-dial");
+  const { db, clock } = await openBoard();
+  const github = new FakeGitHubClient();
+  const work = queueAutoMerge(db, clock, 1);
+
+  await createLanding({
+    defaultAgentName: "tako",
+    db,
+    clock,
+    workspace,
+    github,
+    resolveAuthority: () => undefined,
+  }).tick("auto_merge", clock.now());
+
+  expect(github.merged).toEqual([]);
+  expect(mergeQuestions(db)).toEqual([]);
+  expect(
+    listEvents(db, work.id)
+      .filter((e) => e.kind === "auto_merge_withdrawn")
+      .map((e) => e.payload),
+  ).toEqual([{ kind: "auto_merge_withdrawn", pr_number: 1, merge: null }]);
+});
+
+it("着地の面は CI を読む前に読まれる — 面が変わった PR は CI が pending でも、CI を読まれずにキューを外れる", async () => {
+  const workspace = await makeWorkspace("landing-surface-before-ci");
+  const { db, clock } = await openBoard();
+  const github = new FakeGitHubClient();
+  github.scriptCiStatus("pending");
+  queueAutoMerge(db, clock, 1);
+
+  await createLanding({
+    defaultAgentName: "tako",
+    db,
+    clock,
+    workspace,
+    github,
+    resolveAuthority: () => profile("escalate"),
+  }).tick("auto_merge", clock.now());
+
+  expect(github.ciChecks).toEqual([]);
+  expect(mergeQuestions(db).map((q) => q.pr)).toEqual([1]);
+});
+
+it("着地の面は merge の直前にも読まれる — CI を読んでいる間にダイヤルが取り下げられたら merge しない", async () => {
+  const workspace = await makeWorkspace("landing-surface-before-merge");
+  const { db, clock } = await openBoard();
+  const github = new FakeGitHubClient();
+  queueAutoMerge(db, clock, 1);
+  let dial: MergeDial = "auto_if_ci_green";
+  const getCiStatus = github.getCiStatus.bind(github);
+  github.getCiStatus = async (ref) => {
+    const status = await getCiStatus(ref);
+    dial = "escalate";
+    return status;
+  };
+
+  await createLanding({
+    defaultAgentName: "tako",
+    db,
+    clock,
+    workspace,
+    github,
+    resolveAuthority: () => profile(dial),
+  }).tick("auto_merge", clock.now());
+
+  expect(github.ciChecks).toHaveLength(1);
+  expect(github.merged).toEqual([]);
+  expect(mergeQuestions(db).map((q) => q.pr)).toEqual([1]);
+});
+
+it("門に当たった PR は面が変わっていなければキューに残り、門が開いた後の tick で merge される", async () => {
+  const workspace = await makeWorkspace("landing-gate-keeps-queued");
+  const { db, clock } = await openBoard();
+  const github = new FakeGitHubClient();
+  const work = queueAutoMerge(db, clock, 1);
+  const child = attachUnsettledChild(db, clock, work.id);
+  const landing = createLanding({
+    defaultAgentName: "tako",
+    db,
+    clock,
+    workspace,
+    github,
+    resolveAuthority: () => profile("auto_if_ci_green"),
+  });
+
+  await landing.tick("auto_merge", clock.now());
+  expect(github.merged).toEqual([]);
+  expect(mergeQuestions(db)).toEqual([]);
+  expect(listEvents(db, work.id).map((e) => e.kind)).not.toContain("auto_merge_withdrawn");
+
+  completeTask(db, child, FULL_HANDOFF, "worker", clock.now(), "worker");
+  await landing.tick("auto_merge", clock.now());
+  expect(github.merged).toEqual([{ path: workspace.path, number: 1 }]);
+});
+
+it("escalate で開いた PR の後にダイヤルを auto_if_ci_green へ緩めても、何も無人 merge キューに入らない", async () => {
+  const workspace = await makeWorkspace("landing-loosened-dial");
+  const { db, clock } = await openBoard();
+  const github = new FakeGitHubClient();
+  recordPrOpenedViaWorker(db, landingWork(db, clock), 1, "worker", clock.now(), {
+    authority: { merge: "escalate" },
+  });
+
+  await createLanding({
+    defaultAgentName: "tako",
+    db,
+    clock,
+    workspace,
+    github,
+    resolveAuthority: () => profile("auto_if_ci_green"),
+  }).tick("auto_merge", clock.now());
+
+  expect(github.ciChecks).toEqual([]);
+  expect(github.merged).toEqual([]);
+  expect(mergeQuestions(db).map((q) => q.pr)).toEqual([1]);
 });
 
 // ADR 0103 決定1・4: 帯域外の判定は盤面自身の記録(ref snapshot)との突き合わせで、

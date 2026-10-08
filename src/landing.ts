@@ -10,6 +10,7 @@ import {
   countUnsettledAttachedChildren,
   getTask,
   isLandingQuestion,
+  landingSurface,
   MERGE_QUESTION_OPTIONS,
   PR_PROMOTION_FAILURE_OPTIONS,
   recordPrOpened,
@@ -316,6 +317,52 @@ function recordLandingDeferred(
 }
 
 export function createLanding(deps: LandingDeps): Landing {
+  const authorityOf = (task: Task) => deps.resolveAuthority?.(task.assignee) ?? deps.authority;
+  /** ADR 0217 決定1・2: いま着地しても無人 merge キューに入るかを読み直し、入らなければ
+   *  キューから外して変わった先の面へ渡す。読み直しは PR をキューへ入れない。 */
+  const withdrawIfSurfaceChanged = (task: Task, prNumber: number, workspaceName: string, now: Date) => {
+    const authority = authorityOf(task);
+    const surface = landingSurface(
+      deps.isProtectedWorkspace?.(workspaceName),
+      authority?.merge,
+      task.risk_flag,
+    );
+    if (surface === "auto_merge_queue") return false;
+    deps.db.transaction(() => {
+      clearPendingAutoMerge(deps.db, task.id);
+      if (surface === "none") {
+        // 解決できない profile もここでダイヤル無しと読まれる(#1631 で agent の quarantine に置き換わる)
+        appendEvent(deps.db, {
+          taskId: task.id,
+          workerId: BOARD_WORKER_ID,
+          origin: "board",
+          payload: {
+            kind: "auto_merge_withdrawn",
+            pr_number: prNumber,
+            merge: authority?.merge === "external" ? "external" : null,
+          },
+          at: now,
+        });
+        return;
+      }
+      const changed =
+        surface === "protected_question"
+          ? `workspace "${workspaceName}" is now protected, which always needs a human merge`
+          : surface === "dial_question"
+            ? "the merge dial is now escalate"
+            : "the task now carries risk, and auto_if_ci_green never auto-merges a risky task";
+      registerMergeQuestion(
+        deps.db,
+        task,
+        prNumber,
+        `"${task.title}"'s PR #${prNumber} was queued for auto_if_ci_green auto-merge, but its ` +
+          `landing surface changed after it was queued: ${changed}. Merge it now?`,
+        "merge",
+        now,
+      );
+    })();
+    return true;
+  };
   const retireFailures = (taskId: string, excludeQuestionId?: string) =>
     settlePrPromotionQuestionsAsObserved(
       deps.db,
@@ -397,8 +444,7 @@ export function createLanding(deps: LandingDeps): Landing {
         }
         if (!isRemoteBacked(workspace)) {
           const purpose =
-            (deps.resolveAuthority?.(task.assignee) ?? deps.authority)?.merge ===
-            "auto_if_ci_green"
+            authorityOf(task)?.merge === "auto_if_ci_green"
               ? `Workspace "${workspace.name}" is purely-local, so CI cannot be observed and ` +
                 `auto_if_ci_green cannot auto-merge "${task.title}". Land its task branch on the ` +
                 `protected branch now?`
@@ -464,7 +510,6 @@ export function createLanding(deps: LandingDeps): Landing {
             `refs/remotes/origin/${taskBranch(task.id)}`,
           );
         }
-        const authority = deps.resolveAuthority?.(task.assignee) ?? deps.authority;
         recordPrOpened(
           deps.db,
           task,
@@ -475,7 +520,7 @@ export function createLanding(deps: LandingDeps): Landing {
             deps.auditorName ?? DEFAULT_AUDITOR_NAME,
           ),
           deps.clock.now(),
-          authority,
+          authorityOf(task),
           deps.isProtectedWorkspace?.(workspace.name),
           "worker",
         );
@@ -548,11 +593,16 @@ export function createLanding(deps: LandingDeps): Landing {
         const task = getTask(deps.db, task_id);
         if (!task) continue;
         const workspace = resolveOrQuarantine(deps.db, resolve, task.workspace, now);
-        if (!workspace || landingBlock(deps.db, task_id)) continue;
+        if (!workspace) continue;
+        // 着地の面は門と同じ2点 — CI を読む前と merge の直前 — で読む。面が変わった PR は
+        // キューを外れ、門に当たった PR はキューに残る(ADR 0217 決定1)
+        const stop = () =>
+          withdrawIfSurfaceChanged(task, pr_number, workspace.name, now) || landingBlock(deps.db, task_id);
+        if (stop()) continue;
         const status = await github.getCiStatus({ path: workspace.path, number: pr_number });
         if (status === "pending") continue;
         if (status === "success") {
-          if (landingBlock(deps.db, task_id)) continue;
+          if (stop()) continue;
           let observed = false;
           try {
             await github.mergePullRequest({ path: workspace.path, number: pr_number });

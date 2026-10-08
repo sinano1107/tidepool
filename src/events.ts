@@ -184,6 +184,10 @@ export type EventPayload =
   // record only for merges the board decides) is unverifiable without the
   // distinction
   | { kind: "pr_merge_observed"; pr_number: number }
+  // ADR 0217 決定2: 無人 merge の瞬間に読み直した着地の面が question を立てない面
+  // (`external`・ダイヤル無し)に変わっていたので、盤面が PR をキューから外した事実。
+  // merge は変わった入力 — ダイヤルの新しい値(null はダイヤル無し)
+  | { kind: "auto_merge_withdrawn"; pr_number: number; merge: "external" | null }
   // ADR 0092 決定3 の再発火が、PR 昇格失敗の question を人間の回答なしに引退させた
   // (issue #406)。`pr_merge_observed` と同じ「執行ではなく観測」の記録で、決着した
   // 着地そのもの(`pr_opened` / `nothing_to_land`)は question が指すタスクの側に

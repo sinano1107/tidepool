@@ -115,8 +115,9 @@ export interface Task {
    *  この欄を持つ question は親を塞がない付帯子(awaitedChildSql)。 */
   question_proposal: QuestionProposal | null;
   /** System-internal only (issue #11): the PR number a merge-decision
-   *  question is standing in for — set only by recordPrOpened under the
-   *  `escalate` merge dial, read only by submitAnswer to gate the actual
+   *  question is standing in for — set only by registerMergeQuestion, from
+   *  the landing surface (recordPrOpened, and the auto-merge poll's CI-red
+   *  and surface-changed paths), read only by submitAnswer to gate the actual
    *  merge on a live CI check. Never set via MCP or the JSON API. */
   question_pending_merge_pr: number | null;
   /** System-internal only (ADR 0053): the completed work task whose
@@ -1876,34 +1877,50 @@ export function recordPrOpened(
     });
     const ask = (purpose: string) =>
       registerMergeQuestion(db, task, prNumber, purpose, "merge", now);
-    if (isProtected) {
-      ask(
-        `"${task.title}" completed and opened PR #${prNumber} against a protected ` +
-          `workspace — always needs a human merge, regardless of the merge dial. Merge it now?`,
-      );
-      return;
-    }
-    switch (authority?.merge) {
-      case "escalate":
+    switch (landingSurface(isProtected, authority?.merge, task.risk_flag)) {
+      case "protected_question":
+        ask(
+          `"${task.title}" completed and opened PR #${prNumber} against a protected ` +
+            `workspace — always needs a human merge, regardless of the merge dial. Merge it now?`,
+        );
+        break;
+      case "dial_question":
         ask(`"${task.title}" completed and opened PR #${prNumber}. Merge it now?`);
         break;
-      case "auto_if_ci_green":
-        if (task.risk_flag) {
-          ask(
-            `"${task.title}" completed and opened PR #${prNumber}, but carries risk — ` +
-              `auto_if_ci_green never auto-merges a risky task. Merge it now?`,
-          );
-        } else {
-          queuePendingAutoMerge(db, task.id, prNumber);
-        }
+      case "risk_question":
+        ask(
+          `"${task.title}" completed and opened PR #${prNumber}, but carries risk — ` +
+            `auto_if_ci_green never auto-merges a risky task. Merge it now?`,
+        );
         break;
-      case "external":
-      case undefined:
-        // 宣言された不作為(ADR 0079 決定2)。undefined は手組み profile
-        // (reviewer floor)だけが到達する。
+      case "auto_merge_queue":
+        queuePendingAutoMerge(db, task.id, prNumber);
+        break;
+      case "none":
         break;
     }
   })();
+}
+
+/** 着地の面の判定(ADR 0217 決定1): PR を開く時点の recordPrOpened と、無人 merge の
+ *  poll(landing.ts)の両方がこれを呼ぶ。保護はダイヤルに依らない資源側の不変条件なので
+ *  最初に読む。`external` と ダイヤル無し(undefined — 手組みの reviewer profile)は
+ *  宣言された不作為(ADR 0079 決定2)。 */
+export function landingSurface(
+  isProtected: boolean | undefined,
+  merge: MergeDial | undefined,
+  riskFlag: number,
+): "protected_question" | "dial_question" | "risk_question" | "auto_merge_queue" | "none" {
+  if (isProtected) return "protected_question";
+  switch (merge) {
+    case "escalate":
+      return "dial_question";
+    case "auto_if_ci_green":
+      return riskFlag ? "risk_question" : "auto_merge_queue";
+    case "external":
+    case undefined:
+      return "none";
+  }
 }
 
 /** The explicit "unrestricted" marker an assignable_to/allowed_workspaces
