@@ -98,7 +98,10 @@ function exitSections(exit: WorkerExit | undefined): string {
   return (
     (exit?.last_message ? `\n\nlast message from the worker:\n${exit.last_message}` : "") +
     (exit?.reported_error ? `\n\nerror reported by the CLI:\n${exit.reported_error}` : "") +
-    (exit?.stderr_tail ? `\n\nstderr tail:\n${exit.stderr_tail}` : "")
+    (exit?.stderr_tail ? `\n\nstderr tail:\n${exit.stderr_tail}` : "") +
+    (exit?.model_swaps?.length
+      ? `\n\nmodels swapped in by the CLI:\n${exit.model_swaps.map((s) => `${s.from} → ${s.to}`).join("\n")}`
+      : "")
   );
 }
 

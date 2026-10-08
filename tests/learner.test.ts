@@ -186,7 +186,7 @@ it("昇格後もどの候補にも観測が無ければ学習器の選択は表�
 });
 
 it("outcome は受理 = 統合点レビューがすべて完了、負 = capability の帰責か underpowered × capability の配分評価、それ以外は数えない(ADR 0115 決定5)", () => {
-  const facts = { accepted: false, causes: [] as const, allocations: [] as const };
+  const facts = { accepted: false, causes: [] as const, allocations: [] as const, swapped: false };
   expect(episodeOutcome({ ...facts, accepted: true })).toBe("accepted");
   expect(episodeOutcome(facts)).toBe("excluded");
   expect(episodeOutcome({ ...facts, accepted: true, causes: ["capability"] })).toBe("rejected");
@@ -386,7 +386,7 @@ it("advisor pin ありで相談0回の session は、盤面の記録から読ん
       ...QUIET_EXIT,
       worker_spawned_event_id: spawnedId,
       output_closed: true,
-      usage: { ...tokens, advisor: null, models: { "claude-opus-5-5": tokens } },
+      usage: { ...tokens, advisor: null, model_swaps: [], refusals: [], models: { "claude-opus-5-5": tokens } },
     },
   });
   await completeViaMcp(t, earlier.id);
@@ -540,4 +540,38 @@ it("行の拒否で落ちた session は、そのタスクが別の行で受理�
   const episodes = loadEpisodes(t.db);
   const outcomeOf = (spawnedId: number) => episodes.find((e) => e.worker_spawned_event_id === spawnedId)?.outcome;
   expect({ refused: outcomeOf(refusedId), rerun: outcomeOf(rerunId) }).toEqual({ refused: "excluded", rerun: "accepted" });
+});
+
+// ── 差し替え(issue #1523 / ADR 0215 決定4)────────────────────────────
+
+it("main が替わった session は受理でも却下でも excluded —— 仕事をしたのは表に無い model(episodeOutcome)", () => {
+  const facts = { accepted: true, causes: [] as const, allocations: [] as const, swapped: true };
+  expect(episodeOutcome(facts)).toBe("excluded");
+  expect(episodeOutcome({ ...facts, causes: ["capability"] })).toBe("excluded");
+  expect(episodeOutcome({ ...facts, accepted: false, allocations: [{ allocation: "underpowered", cause: "capability" }] })).toBe("excluded");
+});
+
+it.each([
+  ["session", "excluded"],
+  [null, "excluded"],
+  ["local", "accepted"],
+] as const)("scope %s の差し替えのある session が受理されたら %s —— local は subagent だけが替わり main は pin のまま(loadEpisodes)", async (scope, outcome) => {
+  t = await bootTidepool();
+  const task = await registerWork(t, "swapped");
+  await t.clock.advance(HOUR);
+  const spawnedId = recordSpawn(task.id);
+  const tokens = { input_tokens: 1, output_tokens: 1, cache_read_tokens: 0, cache_creation_tokens: 0, estimated_cost_usd: 0.5 };
+  const swap = { from: "claude-fable-5-1", to: "claude-opus-4-8", scope, category: "cyber" };
+  appendEvent(t.db, {
+    taskId: task.id,
+    workerId: "fake-worker",
+    origin: "board",
+    at: t.clock.now(),
+    payload: { kind: "worker_exited", ...QUIET_EXIT, worker_spawned_event_id: spawnedId, output_closed: true, usage: { ...tokens, advisor: null, model_swaps: [swap], refusals: ["cyber"] } },
+  });
+  await completeViaMcp(t, task.id);
+  await completeIntegrationReviews(t, task.id);
+
+  const episodes = loadEpisodes(t.db);
+  expect(episodes.find((e) => e.worker_spawned_event_id === spawnedId)?.outcome).toBe(outcome);
 });

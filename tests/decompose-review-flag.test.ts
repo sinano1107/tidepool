@@ -203,6 +203,8 @@ it("review の公開注入 context は対象 worker のモデル・価格・実�
         cache_creation_tokens: 0,
         estimated_cost_usd: 12.345,
         advisor: null,
+        model_swaps: [],
+        refusals: [],
       },
     },
   });

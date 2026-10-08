@@ -6,6 +6,8 @@
  *  vendor shape twice — one place to fix when the CLI moves, and no import
  *  cycle between the adapter and the projector. */
 
+import type { ModelSwap } from "./events.js";
+
 /** One stream-json line, decoded once. The board reads several independent
  *  things off the worker's stdout — the result event, ADR 0039's tool surface,
  *  and issue #33's advisor observations — and each used to re-decode the line
@@ -156,4 +158,34 @@ export function readAdvisorOutcomes(parsed: Record<string, unknown> | null): Adv
   const content = (parsed.message as { content?: unknown } | undefined)?.content;
   if (!Array.isArray(content)) return [];
   return content.map(readAdvisorOutcome).filter((outcome) => outcome !== null);
+}
+
+/** `system/model_refusal_fallback` 行の差し替え(ADR 0215 決定2)。判定は `subtype` 1点で、欄は逐語 ——
+ *  文字列でない欄は null(`scope` は schema の2値以外を null)。`direction` は読まない。 */
+export function readModelSwap(parsed: Record<string, unknown> | null): ModelSwap | null {
+  if (parsed?.type !== "system" || parsed.subtype !== "model_refusal_fallback") return null;
+  const text = (value: unknown) => (typeof value === "string" ? value : null);
+  const { original_model, fallback_model, scope, api_refusal_category } = parsed;
+  return {
+    from: text(original_model),
+    to: text(fallback_model),
+    scope: scope === "session" || scope === "local" ? scope : null,
+    category: text(api_refusal_category),
+  };
+}
+
+/** root のモデルの assistant 行か —— subagent の行は `parent_tool_use_id` を持つ。 */
+export function isRootAssistant(parsed: Record<string, unknown> | null): parsed is Record<string, unknown> {
+  return parsed?.type === "assistant" && parsed.parent_tool_use_id == null;
+}
+
+/** root(`isRootAssistant`)の assistant 行の拒否(ADR 0215 決定3)。
+ *  `id` は `message.id` —— 1 message は block ごとに複数行に割れるので、数える側が重複を除く。
+ *  `category` は `stop_details.category` の逐語で、無ければ null。 */
+export function readRootRefusal(parsed: Record<string, unknown> | null): { id: unknown; category: string | null } | null {
+  if (!isRootAssistant(parsed)) return null;
+  const message = parsed.message as { id?: unknown; stop_reason?: unknown; stop_details?: { category?: unknown } } | undefined;
+  if (message?.stop_reason !== "refusal") return null;
+  const category = message.stop_details?.category;
+  return { id: message.id, category: typeof category === "string" ? category : null };
 }
