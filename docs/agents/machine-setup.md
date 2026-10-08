@@ -1,30 +1,21 @@
 # Machine setup
 
-Everything the workflow calls is vendored under `.agents/skills/`, so a clone has it — except ponytail, which is a plugin, and the shell that decides which mode a session starts in. Both live outside this repo. Set them up once per machine.
+The workflow's skills, including ponytail, are checked in under `.agents/skills/`. Claude Code uses `.claude/skills/` symlinks to the same files. A clone includes both providers' `ponytail-implementer` definitions under `.claude/agents/` and `.codex/agents/`.
 
 ## ponytail
 
-**Claude Code** — `.claude/settings.json` declares the marketplace and enables the plugin, so a fresh clone picks it up. Nothing to do.
+ponytail used to be a plugin. A machine that still has it gets the ruleset injected by the plugin's hooks into every session and sub-agent — design steps included — on top of the repo-local skill. [workflow.md](./workflow.md#ponytail) defines when the skill applies.
 
-**Codex** — enable it on the Codex side. Codex discovers skills from `.agents/skills` and can disable them in `~/.codex/config.toml`, but has no per-repository way to require one, so the repo cannot declare this for you.
+**Claude Code** — nothing to do: `.claude/settings.json` sets `ponytail@ponytail` to `false`, and the project value overrides a user-level `true`. To drop a user-scope install anyway: `claude plugin uninstall ponytail@ponytail`.
 
-## Design and build sessions
+**Codex** — there is no project-level override, so remove it on each machine:
 
-The workflow runs ponytail off while deciding and `full` while building (see [workflow.md](./workflow.md)). Which one a session gets is decided at launch, by `PONYTAIL_DEFAULT_MODE`: the plugin's `SessionStart` hook re-reads it on every `startup`, `resume`, `clear`, and `compact`.
-
-**Ponytail's own default is `full`** (`DEFAULT_MODE` in the plugin's `hooks/ponytail-config.js`, as of 4.9.0), so without the line below, grilling sessions run with ponytail on and argue you out of options before you have weighed them. A `defaultMode` in `~/.config/ponytail/config.json` takes precedence over that built-in, and the environment variable takes precedence over both — which is why setting it in the shell is enough, whatever the config file says.
-
-```zsh
-# Ponytail off unless a build session asks for it
-export PONYTAIL_DEFAULT_MODE=off
-
-claude-design() { PONYTAIL_DEFAULT_MODE=off  command claude "$@"; }
-claude-build()  { PONYTAIL_DEFAULT_MODE=full command claude "$@"; }
-codex-design()  { PONYTAIL_DEFAULT_MODE=off  command codex  "$@"; }
-codex-build()   { PONYTAIL_DEFAULT_MODE=full command codex  "$@"; }
+```sh
+codex plugin remove ponytail@ponytail
+codex plugin marketplace remove ponytail
 ```
 
-Grill and spec in a design session; ticket and build in a build one.
+Then delete the `[hooks.state."ponytail@ponytail:…"]` tables from `~/.codex/config.toml` by hand — the CLI leaves them behind.
 
 ## Linux dev/test in the Lima VM
 
@@ -66,7 +57,3 @@ limactl delete -f tidepool-sweep-base   # recreating only
 limactl clone tidepool tidepool-sweep-base
 limactl start tidepool
 ```
-
-## If you skip this
-
-Nothing breaks loudly. A design session with ponytail on still works — it just keeps steering you toward the smallest thing that could work, during the step where the point is to consider the alternatives first. That is why the grilling and spec steps are told to flag it (workflow.md), rather than the repo trying to enforce it.

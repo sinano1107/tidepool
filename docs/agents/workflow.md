@@ -29,40 +29,33 @@ Ask `/ask-matt` when the question is "which skill fits". This file answers "how 
 
 ## Writing the work up
 
-The branch is about what the record already says, not about size in the abstract and not about who implements. Implementation always starts in a build session — a grilling session never goes straight into `/implement-tidepool`, however much room it has left: the only thing it would save is a relaunch, and the price is switching the ponytail mode by hand (see below).
+The branch is about what the record already says, not about size in the abstract and not about who implements. Implementation starts in a fresh session with `/implement-tidepool`, working from the issue.
 
-- **One slice, and the comment step 5 left on the originating issue already says what a spec would** — completion criteria, the files to touch, the invariants and the tests that pin them → skip the write-up and hand `/implement-tidepool <originating issue>` to a build session.
+- **One slice, and the comment step 5 left on the originating issue already says what a spec would** — completion criteria, the files to touch, the invariants and the tests that pin them → skip the write-up and hand `/implement-tidepool <originating issue>` to a fresh implementation session.
 - **One slice, but the comment does not carry that** → `/to-spec`, then hand the spec issue to `/implement-tidepool`.
 - **Several slices** → `/to-spec`, then `/to-tickets`. Both, in that order — they are a chain, not a choice.
 
-Do not `/compact` or `/clear` between `/to-spec` and `/to-tickets`: re-fetching a large spec out of an issue truncates. This is the one place a session crosses from deciding into building, and the mode has to be switched by hand at the crossing — see the ponytail section.
+Do not `/compact` or `/clear` between `/to-spec` and `/to-tickets`: re-fetching a large spec out of an issue truncates.
 
 Specs and tickets are GitHub issues here, not files — the `.scratch/` layout in those skills belongs to the local-markdown tracker, which this repo does not use (see [issue-tracker.md](./issue-tracker.md)). Nothing lands in the working tree, so a machine that only has the issue number has everything it needs.
 
-**The slice count does not have to be settled first.** `/to-tickets` quizzes you on the breakdown *before* it publishes anything, so when it is unclear, run it — if one ticket comes back, don't publish, and carry on with the spec issue.
+**The slice count does not have to be settled first.** When it is unclear, run `/to-tickets`; [its quiz](../../.agents/skills/to-tickets/SKILL.md#4-quiz-the-user) resolves the breakdown and handles the single-slice outcome before publication.
 
 ## ponytail
 
-`/ponytail` is a standing mode that biases how work gets done; `/ponytail-review` is a one-shot pass over a diff. The two are separate, and neither substitutes for the other.
+Use the repo-local ponytail skills directly. See [machine-setup.md](./machine-setup.md#ponytail) for provider discovery and plugin migration.
 
-**The launcher sets the mode a session starts in.** `claude-design` / `codex-design` start off; `claude-build` / `codex-build` start at `full`. Those functions are per-machine setup — [machine-setup.md](./machine-setup.md). The plugin's `SessionStart` hook rewrites its flag from that default on every startup, resume, clear and compact.
+- **Deciding** — `/grill-with-docs`, `/to-spec`, and `/triage-sweep` run without ponytail. The skill is not model-invocable (`disable-model-invocation` in its frontmatter; Codex has no such flag, and there the narrowed description does the same work), so it enters a session only when the user types `/ponytail`, through `/to-tickets`, or inside the implementer agent — never on its own.
+- **Ticketing** — invoke `/to-tickets`; [its setup](../../.agents/skills/to-tickets/SKILL.md#before-ticketing) owns activation.
+- **Implementation** — invoke `/implement-tidepool`; [its delegation step](../../.agents/skills/implement-tidepool/SKILL.md#the-implementation-sub-agent) supplies the task to the implementation agent, whose definition owns its standing behavior and completion steps.
 
-**Switching mid-session is the human's action, and it happens in one place.** `/to-spec` → `/to-tickets` continues in the same session (the truncation above), so the human types `/ponytail full` before `/to-tickets`. The agent cannot switch the mode: the plugin reads the command from the user's own prompt (`UserPromptSubmit`), and an agent-side skill invocation neither writes the flag nor reaches the sub-agents.
+Required ADR behavior and tests take precedence over ponytail simplifications.
 
-**The flag is one file per machine, not per session** (`~/.claude/.ponytail-active`), and the `SubagentStart` hook reads it — so a session launched alongside changes what this session's sub-agents get: a build session puts `full` on a design session's sub-agents, and a design session's start strips it from a build session's. Nothing here prevents it, and it costs little: the main thread keeps the ruleset its own launch gave it, and the review beat runs whatever the mode.
-
-So the boundary is which command you launched:
-
-- **Design session** — `/grill-with-docs`, `/to-spec`. Off, so YAGNI pressure does not kill options before they have been weighed.
-- **Build session** — `/to-tickets`, `/implement-tidepool`. Full. Over-decomposition is the most reported friction on `/to-tickets`, and the mode is cheaper than asking it to merge tickets at every quiz.
-
-**The review** runs inside implementation as its own beat, with its own commit. `/implement-tidepool` dispatches it; the `SubagentStart` hook carries the live mode into the sub-agent, so the loop is ponytail-aware without anything extra — provided the session was launched as a build one.
-
-**Say so when the session is in the wrong mode.** No repo-level setting can enforce the launcher on either provider — so detection replaces prevention. A session with ponytail active carries the plugin's ruleset in its context: if that is there while you are grilling or writing a spec, stop and tell the user before going on. The reverse costs less and is partly self-healing, since `/ponytail-review` runs as a beat regardless of the mode.
+If returning to design in a conversation where ponytail is active, explicitly turn it off with `stop ponytail` or start a fresh conversation. After compaction, reload the active phase's instructions and ponytail level when they are missing.
 
 ## Choosing the model
 
-`/implementation-delegation` decides the implementation model, the effort, and the review strength. `/implement-tidepool` runs it when nothing follows the issue number, and places the models either way — with one caveat on effort: Codex takes it at spawn, while Claude Code's sub-agents inherit the session's — so on Claude the effort has to be right at launch and the skill can only check it, whoever decided it.
+`/implementation-delegation` decides the implementation model, effort, and review strength. [The implementation skill](../../.agents/skills/implement-tidepool/SKILL.md#model-and-effort) explains how to pass an existing decision and apply provider settings.
 
 ## Building
 
@@ -71,8 +64,6 @@ So the boundary is which command you launched:
 Tests need the Node version and sandbox permission described in `AGENTS.md`.
 
 The full suite runs in CI, not in the run's stages — see the skill's "Waiting for CI" (ADR 0155).
-
-Everything the flow calls — `/implementation-delegation`, `/tdd`, `/code-review` — is vendored under `.agents/skills/`, so a clone has it. ponytail is the exception: it is a plugin, and getting it onto a machine is [machine-setup.md](./machine-setup.md).
 
 One issue per session, cleared between them. Two implementation sessions in one checkout share an index, a `HEAD`, and `refs/stash`, and corrupt each other.
 

@@ -13,7 +13,7 @@ argument-hint: "<N>"
 
 ## 1. Check the session
 
-- **ponytail.** A brief is spec writing — deciding, not building ([workflow.md](../../../docs/agents/workflow.md)). If the ponytail ruleset is in your context, stop and ask the user to relaunch with `claude-design`: the `SubagentStart` hook would carry the mode into every sub-agent this run spawns.
+- **ponytail.** A brief is spec writing — deciding, not building ([workflow.md](../../../docs/agents/workflow.md)). Keep ponytail off for this run. If it is active, turn it off before evaluating issues and dispatch ordinary investigation agents; the `ponytail-implementer` belongs to the build phase.
 - **Session link.** Read `CLAUDE_CODE_BRIDGE_SESSION_ID` from the environment. When it is set, the link is `https://claude.ai/code/<that id>` — the page shows the sub-agents' transcripts too, so this one link covers the whole run. When it is unset (Remote Control off, or another provider), the comments go out without a link.
 - **Effort.** Sub-agents inherit the session's effort. If `$CLAUDE_EFFORT` is below `medium`, ask the user to run `/effort medium` before going on.
 - **Fetch.** `git fetch origin main` once here; every sub-agent branches its worktree from `origin/main`.

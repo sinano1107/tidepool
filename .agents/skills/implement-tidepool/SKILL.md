@@ -1,13 +1,11 @@
 ---
 name: implement-tidepool
-description: Build a ready-for-agent tidepool issue end to end — branch, TDD and ponytail-review in a sub-agent at the decided model, two-axis code review, one commit per stage, a PR that records how every review finding was handled, and the filing of what the run found along the way. Use this instead of /implement in this repo.
+description: Build a ready-for-agent tidepool issue end to end — branch, delegated TDD at the decided model, two-axis code review, one commit per stage, a PR that records how every review finding was handled, and the filing of what the run found along the way. Use this instead of /implement in this repo.
 disable-model-invocation: true
 argument-hint: "<issue> [decision already taken]"
 ---
 
 # Implement (tidepool)
-
-A tidepool-local derivative of `/implement`. Upstream `/implement` is deliberately left untouched, so skills that route to it — `ask-matt`, `to-tickets` — keep pointing at the canonical one. In this repo, reach for this skill instead: it adds the branch, the ponytail beats, the code-review follow-through, the filing of what the run found, and the pull request — all of which upstream leaves to the human — and takes the delegation decision when one has not been made yet.
 
 `$ARGUMENTS` is the issue number, optionally followed by a delegation decision already taken — written however `/implementation-delegation` phrased it, e.g. `378 Opus 5 / high, review at Fable 5.1`.
 
@@ -21,9 +19,8 @@ Either way, before touching the branch, say which models the run will use. They 
 
 - **Implementation** — the TDD loop goes to a sub-agent at the implementation model.
 - **`/code-review`** — its sub-agents take the review strength.
-- **`/ponytail`** and **`/ponytail-review`** — never moved. Both run inline in the implementation thread at the implementation's own setting. They are different things: `/ponytail` is the standing mode that biases how the code gets written, `/ponytail-review` is a one-shot pass over a diff.
 
-**Effort behaves differently per provider.** Where the sub-agent spawn takes an effort — Codex — pass the decided one alongside the model; a model on its own does not fix the compute budget. Where it does not — Claude Code — a sub-agent runs at the session's effort when one was set explicitly (`/effort`, `--effort`, `CLAUDE_CODE_EFFORT_LEVEL`), and otherwise at its own model's default (Opus 5.5 `medium`; Fable 5.1 and Sonnet 5.5 `high`). `echo $CLAUDE_EFFORT` shows the level this thread is running at. The decided effort is therefore a check rather than a setting: if the implementation sub-agent would run below it, stop before dispatching and ask the user to type `/effort <level>` — no restart; it applies to every sub-agent spawned after.
+**Effort is passed at spawn on both providers.** Codex takes it alongside the model; a model on its own does not fix the compute budget. Claude Code takes it as the Agent tool's `effort` parameter, which overrides the session's level. The one thing that parameter cannot override is `CLAUDE_CODE_EFFORT_LEVEL` in the environment: when that is set below the decided effort, stop before dispatching and ask the user to relaunch without it.
 
 ## Before writing code
 
@@ -35,20 +32,18 @@ Stay in this thread for all three:
 
 ## The implementation sub-agent
 
-Dispatch one sub-agent at the implementation model, carrying the issue number, the agreed seams, and the ADRs that govern the area. This belongs in a build session (`claude-build` / `codex-build`), where ponytail is already `full` and the plugin's `SubagentStart` hook copies the live mode into every sub-agent. That hook copies rather than sets, and the agent cannot switch the mode (the plugin reads `/ponytail` from the user's own prompt): if the mode is off — no ponytail ruleset in this context — stop **before** dispatching and ask the user to type `/ponytail full`, or the loop runs ponytail-unaware. It owns two commits and returns what it did:
+Dispatch one `ponytail-implementer` sub-agent at the decided implementation model and effort. Give it the issue number and resolving comments, agreed test seams, governing ADRs, and the current branch. Instruct it to read `CONTEXT.md`, implement with `/tdd` one red-green slice at a time, run the touched test files and typecheck. Follow `AGENTS.md` for the Node version and test permissions; the full suite runs in CI after the PR opens (ADR 0155).
 
-1. **Implementation** — `/tdd` at the agreed seams, one red-green slice at a time, typechecking and running single test files as it goes. The touched test files and typecheck green, then commit.
-2. **ponytail-review** — `/ponytail-review` over its own diff, inline in the same thread, applying what it finds. This is a separate beat from the mode above, not a substitute for it. The touched test files and typecheck green, then commit.
+- **Claude Code:** select `.claude/agents/ponytail-implementer.md`, passing the decided model and effort.
+- **Codex:** select `.codex/agents/ponytail-implementer.toml`, passing the decided model and effort. If this client cannot select custom agent types, pass that file's `developer_instructions` to an ordinary sub-agent with the same task and settings.
 
-The full suite is CI's, after the PR opens (ADR 0155).
+The agent definition owns its standing behavior and completion steps. Pass the implementation task rather than restating those instructions.
 
-A stage with no diff produces no commit. Never amend: keeping the stages apart is what makes each applied change reviewable and revertible on its own.
-
-Alongside the commits, it returns the problems it found and left alone: anything outside the issue's scope it would otherwise have fixed or worked around. For each, what and where (a file and line, or the test that shows it), whether it was observed or only suspected, and the existing issue it seems to belong to, if any. Filing happens in this thread, below.
+Ask for the commits, changed behavior, checks and outcomes, all findings and their dispositions, and problems outside the issue's scope: where, observed or suspected, and any matching existing issue. Wait for the completed report before proceeding. A stage with no diff produces no commit; never amend. Filing happens in this thread, below.
 
 ## Code review
 
-Back in this thread, run `/code-review` on both axes (Standards + Spec) against this branch's merge-base with `main`, then apply the findings that should be applied and commit them as the third stage.
+Back in this thread, run `/code-review` on both axes (Standards + Spec) against this branch's merge-base with `main`, then apply the findings that should be applied and commit them as the next stage.
 
 Add one line to each sub-agent's brief: "Separately, list anything wrong you noticed that the diff did not cause — where, and whether you observed it or only suspect it." Those notes feed the filing step below.
 
@@ -77,7 +72,7 @@ Then add the section this flow depends on:
 ## レビュー指摘の対応
 ```
 
-List **every** finding `/ponytail-review` and `/code-review` raised — the applied ones included, none omitted. For each, say what was raised and either which commit addresses it or why it was not applied. A reason has to point at something checkable: an ADR number, a term defined in `CONTEXT.md`, an existing test. "Out of scope" on its own is not a reason.
+List **every** finding returned by the implementation agent and `/code-review` — the applied ones included, none omitted. For each, say what was raised and either which commit addresses it or why it was not applied. A reason has to point at something checkable: an ADR number, a term defined in `CONTEXT.md`, an existing test. "Out of scope" on its own is not a reason.
 
 Completeness is the whole point of the section. A list that quietly drops the findings you chose not to act on is worse than no list, because it reads as though review found nothing there.
 
