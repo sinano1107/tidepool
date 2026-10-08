@@ -2347,6 +2347,9 @@ describe("ClaudeCodeWorker", () => {
         // 相談は起こりえない。既存欄の意味は変わっていない(トークンは main
         // モデル・親スレッドのみ、コストはセッション総額)。
         advisor: null,
+        // ADR 0215: 欄は常に置かれる
+        model_swaps: [],
+        refusals: [],
       },
     });
   });
@@ -3358,6 +3361,8 @@ describe("advisor capability (issue #33)", () => {
           estimated_cost_usd: 0.200245,
         },
       },
+      model_swaps: [],
+      refusals: [],
     });
   });
 
@@ -3677,6 +3682,138 @@ describe("advisor capability (issue #33)", () => {
       exit_code: 1,
       usage: null,
       stderr_tail: 'Error: The model "haiku" cannot be used as an advisor.',
+    });
+  });
+
+  // ── 差し替え(issue #1523 / ADR 0215)────────────────────────────
+
+  describe("差し替え(issue #1523 / ADR 0215)", () => {
+    const REFUSAL_ENVS = ["CLAUDE_CODE_DISABLE_REFUSAL_FALLBACK", "CLAUDE_CODE_NO_MODEL_FALLBACK", "CLAUDE_CODE_DISABLE_REFUSAL_RETRY"];
+
+    // 決定1: 止める側の env を host が立てていても spawn には渡らない(ADR 0005)
+    it("ホストが立てた差し替えを止める env 3つを spawn env から消す", async () => {
+      const previous = REFUSAL_ENVS.map((name) => process.env[name]);
+      for (const name of REFUSAL_ENVS) process.env[name] = "1";
+      try {
+        const { start, calls } = await makeWorker();
+        start();
+        for (const name of REFUSAL_ENVS) expect(calls[0]!.env[name]).toBeUndefined();
+      } finally {
+        REFUSAL_ENVS.forEach((name, i) => {
+          if (previous[i] === undefined) delete process.env[name];
+          else process.env[name] = previous[i];
+        });
+      }
+    });
+
+    // #1425 の VM 実測で見た2段目の行(`...` で省かれていた欄は足さない)
+    const swapLine = (over: Record<string, unknown> = {}) =>
+      `${JSON.stringify({
+        type: "system",
+        subtype: "model_refusal_fallback",
+        trigger: "refusal",
+        direction: "retry",
+        scope: "session",
+        original_model: "claude-fable-5-1",
+        fallback_model: "claude-opus-4-8",
+        api_refusal_category: "cyber",
+        ...over,
+      })}\n`;
+
+    it("model_refusal_fallback の行は出た順に usage.model_swaps へ逐語で載り、scope が local の行も載る(決定2・3)", async () => {
+      const exits: WorkerExit[] = [];
+      const { start, processes, emitExit, db } = await makeWorker({}, { onWorkerExited: (_taskId, exit) => exits.push(exit) });
+      start("task-swaps");
+      processes[0]!.stdout.write(initLine("claude-fable-5-1"));
+      processes[0]!.stdout.write(swapLine());
+      processes[0]!.stdout.write(
+        swapLine({ scope: "local", original_model: "claude-opus-4-8", fallback_model: "claude-opus-5", api_refusal_category: "bio" }),
+      );
+      // scope と分類の省略
+      processes[0]!.stdout.write(swapLine({ scope: undefined, api_refusal_category: undefined }));
+      processes[0]!.stdout.write(resultLine());
+      emitExit(0, null);
+      expect(usageOf(db, "task-swaps")?.model_swaps).toEqual([
+        { from: "claude-fable-5-1", to: "claude-opus-4-8", scope: "session", category: "cyber" },
+        { from: "claude-opus-4-8", to: "claude-opus-5", scope: "local", category: "bio" },
+        { from: "claude-fable-5-1", to: "claude-opus-4-8", scope: null, category: null },
+      ]);
+      // 報告なき exit の文面(watchdog)へは usage の写しで渡る(決定5)
+      expect(exits[0]?.model_swaps).toEqual(usageOf(db, "task-swaps")?.model_swaps);
+    });
+
+    // #1523 の grilling の session で観測した1段目の形: 1 message が block ごとに3行に割れ、3本とも refusal
+    const refusalLine = (id: string, block: unknown, over: Record<string, unknown> = {}) =>
+      `${JSON.stringify({
+        type: "assistant",
+        message: {
+          model: "claude-fable-5-1",
+          id,
+          stop_reason: "refusal",
+          stop_details: { type: "refusal", category: "cyber", explanation: "This request triggered restrictions on violative cyber content." },
+          content: [block],
+          ...over,
+        },
+        parent_tool_use_id: null,
+      })}\n`;
+
+    it("root の拒否は message.id ごとに1つ、分類を出た順に usage.refusals へ載せ、subagent の拒否は数えない(決定3)", async () => {
+      const { start, processes, emitExit, db } = await makeWorker();
+      start("task-refusals");
+      processes[0]!.stdout.write(initLine("claude-fable-5-1"));
+      processes[0]!.stdout.write(refusalLine("msg_011CfpqdBwiLDBbB6Zw8pMEK", { type: "thinking", thinking: "" }));
+      processes[0]!.stdout.write(refusalLine("msg_011CfpqdBwiLDBbB6Zw8pMEK", { type: "text", text: "Let me check" }));
+      processes[0]!.stdout.write(refusalLine("msg_011CfpqdBwiLDBbB6Zw8pMEK", { type: "tool_use", id: "toolu_01", name: "Bash", input: {} }));
+      processes[0]!.stdout.write(
+        `${JSON.stringify({
+          type: "assistant",
+          message: { model: "claude-fable-5-1", id: "msg_sub", stop_reason: "refusal", stop_details: { category: "bio" }, content: [] },
+          parent_tool_use_id: "toolu_task",
+        })}\n`,
+      );
+      processes[0]!.stdout.write(refusalLine("msg_02", { type: "text", text: "again" }, { stop_details: { type: "refusal" } }));
+      processes[0]!.stdout.write(swapLine());
+      processes[0]!.stdout.write(resultLine());
+      emitExit(0, null);
+      expect(usageOf(db, "task-refusals")?.refusals).toEqual(["cyber", null]);
+    });
+
+    it("差し替えも拒否も無い session でも model_swaps と refusals は空の列で置かれる", async () => {
+      const { start, processes, emitExit, db } = await makeWorker();
+      start("task-no-swap");
+      processes[0]!.stdout.write(initLine("claude-sonnet-5"));
+      processes[0]!.stdout.write(resultLine());
+      emitExit(0, null);
+      expect(usageOf(db, "task-no-swap")).toMatchObject({ model_swaps: [], refusals: [] });
+    });
+
+    // 決定3: result 行の無い session は usage ごと null(failed_calls と同じ性質)
+    it("result 行の無い session は、stream で見た差し替えと拒否があっても usage null のまま", async () => {
+      const { start, processes, emitExit, db } = await makeWorker();
+      start("task-swap-killed");
+      processes[0]!.stdout.write(initLine("claude-fable-5-1"));
+      processes[0]!.stdout.write(refusalLine("msg_01", { type: "text", text: "no" }));
+      processes[0]!.stdout.write(swapLine());
+      emitExit(null, "SIGKILL");
+      expect(usageOf(db, "task-swap-killed")).toBeNull();
+    });
+
+    // 決定4: 分離の判定が比べる init の model が、差し替え後は走っていない model になる
+    it("main が替わった session の advisor.usage は null、scope が local だけなら従来どおり分離する", async () => {
+      const run = async (id: string, scope: string | undefined) => {
+        const { start, processes, emitExit, db } = await makeAdvisorWorker();
+        start(id);
+        processes[0]!.stdout.write(initLine("claude-sonnet-5"));
+        processes[0]!.stdout.write(advisorCall("srvtoolu_01"));
+        processes[0]!.stdout.write(swapLine({ scope }));
+        processes[0]!.stdout.write(resultLine());
+        emitExit(0, null);
+        return usageOf(db, id)?.advisor;
+      };
+      const separated = { input_tokens: 38484, output_tokens: 313, estimated_cost_usd: 0.200245 };
+      expect(await run("task-swap-session", "session")).toEqual({ model: "claude-opus-5", consultations: 1, usage: null, failed_calls: [] });
+      expect(await run("task-swap-omitted", undefined)).toMatchObject({ usage: null });
+      expect(await run("task-swap-local", "local")).toMatchObject({ usage: separated });
     });
   });
 });

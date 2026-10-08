@@ -244,6 +244,21 @@ it("欠測統計は3値 — 解釈した / 既知だが解釈しない / 未知(
   expect(episode.unrecognizedFormat).toBe(false);
 });
 
+it("差し替えの行(system/model_refusal_fallback)は「知っていて捨てる行」で、未知に数えない(ADR 0215 決定5)", () => {
+  // #1425 の VM 実測で見た2段目の行(`...` で省かれていた欄は足さない)
+  const swap = JSON.stringify({
+    type: "system",
+    subtype: "model_refusal_fallback",
+    trigger: "refusal",
+    direction: "retry",
+    scope: "session",
+    original_model: "claude-fable-5-1",
+    fallback_model: "claude-opus-4-8",
+    api_refusal_category: "cyber",
+  });
+  expect(project({ transcriptLines: [...transcriptLines(), swap] }).lines).toMatchObject({ ignored: 7, unknown: 0 });
+});
+
 it("未知の行だけの transcript は tool 呼び出し 0 件 + unrecognized_format になる(黙って空にならない)", () => {
   const episode = project({
     events: fixtureEvents().filter((e) => e.id === 5),

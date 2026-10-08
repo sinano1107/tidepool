@@ -41,6 +41,8 @@ const IGNORED_SYSTEM_SUBTYPES = new Set([
   "task_started",
   "task_progress",
   "task_updated",
+  // ADR 0215 決定5: 差し替えは worker_exited.usage.model_swaps が受ける。位置を読む読み手が無いのでマーカーにしない
+  "model_refusal_fallback",
 ]);
 /** 解釈する行種。`result` の subtype は結末の種別であって行の形ではないので
  *  type だけで見る。 */

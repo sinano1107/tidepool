@@ -75,7 +75,8 @@ export interface AdvisorRecord {
    *  `model` is null, when the advisor resolved to the same model as the main
    *  one (which merges both into a single per-model entry — measured), or when
    *  the main model's own resolved id was never observed, since then
-   *  separability itself is unknown. */
+   *  separability itself is unknown, or when the main model was swapped
+   *  (`swapsMain`, ADR 0215 決定4). */
   usage: {
     input_tokens: number;
     output_tokens: number;
@@ -91,6 +92,20 @@ export interface AdvisorRecord {
    *  `consultations`. */
   failed_calls: (string | null)[];
 }
+
+/** 差し替え1回(ADR 0215 決定3): CLI の `system/model_refusal_fallback` 行の元の model / 替わった model / 範囲 /
+ *  分類。欄名は盤面の語、値は逐語で、欠けた欄は null。盤面は分類でも理由でも分岐しない。`scope` の省略は
+ *  `session` と読む(schema)が、読み替えずに null のまま残す。 */
+export interface ModelSwap {
+  from: string | null;
+  to: string | null;
+  scope: "session" | "local" | null;
+  category: string | null;
+}
+
+/** main が替わった差し替えか(ADR 0215 決定2): `local` は subagent / side-question だけが替わり、session の
+ *  model は変わらない。省略(null)は `session`。 */
+export const swapsMain = (swap: ModelSwap): boolean => swap.scope !== "local";
 
 /** One model's (or the whole session's) consumption in the board's own
  *  vocabulary (ADR 0005 / issue #32) — the shape `worker_exited.usage` reports
@@ -369,6 +384,13 @@ export type EventPayload =
          *  whether one ran, only that this field could not be filled in;
          *  same fail-closed, all-or-nothing posture as `isStreamResultEvent`. */
         models?: Record<string, TokenUsage>;
+        /** ADR 0215 決定3: stream で観測した差し替え、出た順。`scope: "local"` も載る。常に置き、無ければ `[]`。
+         *  advisor の相談と同じく stream の事実だが、result 行の無い session は usage ごと null で残らない。 */
+        model_swaps: ModelSwap[];
+        /** ADR 0215 決定3: root の assistant 行の拒否(`stop_reason: "refusal"`)の `stop_details.category`、
+         *  出た順、`message.id` ごとに1つ(1 message は block ごとに複数行に割れる)。null は分類の無い拒否。
+         *  同じ model で続いた拒否も数える。subagent の行は数えない。常に置き、無ければ `[]`。 */
+        refusals: (string | null)[];
       } | null;
     }
   // issue #127: Node's spawn() itself failing (ENOENT/EACCES/PATH misconfig —

@@ -17,7 +17,7 @@ import type { Clock } from "./clock.js";
 import { type ContainmentCapability, quarantineContainment } from "./containment.js";
 import type { Db } from "./db.js";
 import { DEFAULT_AUDITOR_NAME } from "./defaults.js";
-import { type AdvisorRecord, appendEvent, type EventPayload, type RowRefusal, type RowRefusalCause } from "./events.js";
+import { type AdvisorRecord, appendEvent, type EventPayload, type ModelSwap, type RowRefusal, type RowRefusalCause, swapsMain } from "./events.js";
 import { type ExecutionSetting, MOONSHOT_DEFAULT_MODEL, resolveExecutionSetting } from "./execution-setting.js";
 import { buildMemoryInjection, buildMetaReviewMaterial, type InjectionQuery, recordMemoryInjection, recordMetaReviewMaterial } from "./memory.js";
 import { projectAndPersist } from "./precedent.js";
@@ -37,6 +37,8 @@ import {
   readInitField,
   readInitMcpServers,
   readInitModel,
+  readModelSwap,
+  readRootRefusal,
 } from "./stream-json.js";
 import {
   resolveTaskAgent,
@@ -484,6 +486,14 @@ const MAX_THINKING_TOKENS_ENV = "MAX_THINKING_TOKENS";
  *  同じ理由で1か所に名付ける —— 3つの env 関数のどこかで綴りを誤れば、黙って開く。 */
 const AUTOUPDATER_DISABLE_ENV = "DISABLE_AUTOUPDATER";
 
+/** refusal での同じ model の再試行と差し替えを止める env(ADR 0215 決定1)。盤面は「許す」を固定するので、
+ *  host が立てていても worker の spawn env から消す(ADR 0005)。 */
+const REFUSAL_FALLBACK_ENV = [
+  "CLAUDE_CODE_DISABLE_REFUSAL_FALLBACK",
+  "CLAUDE_CODE_NO_MODEL_FALLBACK",
+  "CLAUDE_CODE_DISABLE_REFUSAL_RETRY",
+] as const;
+
 /** The Moonshot routing pair (ADR 0096 / issue #445): the endpoint and the
  *  Bearer token envs a `provider: moonshot` spawn carries — and that an
  *  anthropic spawn must never inherit (ADR 0097 決定4 の双方向 scrub)。env 名は
@@ -633,7 +643,7 @@ export interface ProviderRouting extends ExecutionSetting {
 }
 
 /** The env-tier CLI knobs a worker spawn pins (ADR 0005), beside the git
- *  identity vars. Two **independent** concerns, deliberately not named for the
+ *  identity vars. Three **independent** concerns, deliberately not named for the
  *  advisor as a whole — only the first is advisor-scoped:
  *
  *  1. `CLAUDE_CODE_DISABLE_ADVISOR_TOOL` — the explicit no described on
@@ -661,6 +671,8 @@ export interface ProviderRouting extends ExecutionSetting {
  *     minutes. They live here rather than in the host's
  *     `/etc/default/tidepool` because that was a second source of truth
  *     invisible to both the registry and the board's code.
+ *  3. `REFUSAL_FALLBACK_ENV` — always deleted, so a refusal's same-model retry
+ *     and model swap stay allowed whatever the host exports (ADR 0215 決定1).
  *
  *  The env is built **per provider** (ADR 0097 決定4 / issue #445), scrubbed in
  *  both directions: an anthropic spawn never inherits the Moonshot injection
@@ -689,6 +701,7 @@ export function workerSpawnEnv(
   };
   if (advisor === undefined) env[ADVISOR_DISABLE_ENV] = "1";
   else delete env[ADVISOR_DISABLE_ENV];
+  for (const name of REFUSAL_FALLBACK_ENV) delete env[name];
   if (routing.provider === "moonshot") {
     if (routing.moonshotApiKey === undefined) {
       // start() resolves the key before launch and refuses the pickup without
@@ -902,11 +915,12 @@ function rowRefusalOf(parsed: Record<string, unknown> | null): RowRefusalCause |
   return parsed?.type === "result" ? rowRefusalCause(parsed) : null;
 }
 
-/** What the stdout scan collected about this session's advisor while the
- *  stream ran (issue #33). All are needed at exit and none survives on the
- *  result line: the consultations and failed calls happen in assistant lines,
- *  and the main model's resolved id is on the init line. */
-interface AdvisorObservation {
+/** What the stdout scan collected while the stream ran — the session's advisor
+ *  (issue #33) and its model swaps and refusals (ADR 0215). All are needed at
+ *  exit and none survives on the result line: the consultations, failed calls
+ *  and refusals happen in assistant lines, the swaps and the main model's
+ *  resolved id on system lines. */
+interface StreamObservation {
   /** Advisor calls whose result carried advice, seen on the parent thread (ADR 0214). */
   consultations: number;
   /** Failed advisor calls' `error_code`, verbatim and in order (ADR 0214). */
@@ -914,6 +928,9 @@ interface AdvisorObservation {
   /** The init line's resolved main model, used only to decide whether the
    *  advisor's own usage is separable from it. */
   mainModel: string | null;
+  /** ADR 0215: `usage.model_swaps` / `usage.refusals` as they will be written. */
+  modelSwaps: ModelSwap[];
+  refusals: (string | null)[];
 }
 
 /** The advisor half of worker_exited's usage (issue #33 判断6). Non-null only
@@ -922,7 +939,7 @@ interface AdvisorObservation {
  *  never produces a row that claims one was attached. */
 function toAdvisorRecord(
   result: StreamResultEvent,
-  observed: AdvisorObservation,
+  observed: StreamObservation,
 ): AdvisorRecord | null {
   if (observed.consultations === 0 && observed.failedCalls.length === 0) return null;
   const model = advisorModelFrom(result);
@@ -935,7 +952,7 @@ function toAdvisorRecord(
 }
 
 /** The advisor's own token/cost slice, or null when it cannot be measured
- *  (see the field's own doc in events.ts). Three ways it is unmeasurable:
+ *  (see the field's own doc in events.ts). Four ways it is unmeasurable:
  *
  *  - the advisor's resolved id was never reported;
  *  - it resolved to the same model as the main one, which merges both into a
@@ -946,13 +963,17 @@ function toAdvisorRecord(
  *    unknown: the two may well have resolved to the same id, in which case the
  *    per-model entry read below is the merged one and publishing it would
  *    report the session's combined usage as the advisor's. "Could not be
- *    measured" must not turn into a confident wrong number. */
+ *    measured" must not turn into a confident wrong number;
+ *  - **the main model was swapped** mid-session (ADR 0215 決定4) — the init
+ *    line's model is then not the one that ran, so the comparison above says
+ *    nothing. A `local` swap leaves the session's model as it was. */
 function advisorUsage(
   result: StreamResultEvent,
   model: string | null,
-  observed: AdvisorObservation,
+  observed: StreamObservation,
 ): AdvisorRecord["usage"] {
   if (model === null || observed.mainModel === null || model === observed.mainModel) return null;
+  if (observed.modelSwaps.some(swapsMain)) return null;
   const breakdown = result.modelUsage;
   if (typeof breakdown !== "object" || breakdown === null) return null;
   const entry = ownEntry(breakdown as Record<string, unknown>, model);
@@ -997,8 +1018,8 @@ function modelBreakdownFrom(result: StreamResultEvent): ModelBreakdown {
  *  becomes estimated_cost_usd, no CLI field names leak past this point.
  *
  *  The advisor field is the one part that cannot be built from the result line
- *  alone — see AdvisorObservation. */
-function toUsage(result: StreamResultEvent, observed: AdvisorObservation): WorkerExitedUsage {
+ *  alone — see StreamObservation. */
+function toUsage(result: StreamResultEvent, observed: StreamObservation): WorkerExitedUsage {
   const models = modelBreakdownFrom(result);
   return {
     input_tokens: result.usage.input_tokens,
@@ -1008,6 +1029,8 @@ function toUsage(result: StreamResultEvent, observed: AdvisorObservation): Worke
     estimated_cost_usd: result.total_cost_usd,
     advisor: toAdvisorRecord(result, observed),
     ...(models !== undefined ? { models } : {}),
+    model_swaps: observed.modelSwaps,
+    refusals: observed.refusals,
   };
 }
 
@@ -2173,7 +2196,9 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     // consultations are assistant-line blocks and the resolved main model is on
     // the init line — so they are accumulated while the stream runs. The stdout
     // scan already reads every line, so the added cost is a filter per line.
-    const advisorObserved: AdvisorObservation = { consultations: 0, failedCalls: [], mainModel: null };
+    // ADR 0215: 1 message が block ごとに複数の assistant 行に割れるので、拒否は message.id で1つに数える
+    const refusedMessages = new Set<unknown>();
+    const streamObserved: StreamObservation = { consultations: 0, failedCalls: [], mainModel: null, modelSwaps: [], refusals: [] };
     // 1行の観測はここ1か所 —— stream のループと exit の flush が同じ集合を通す(issue #1301)。
     // 行は1度だけ decode し、全観測が同じ `parsed` を読む(see parseStreamLine)
     const observe = (parsed: Record<string, unknown> | null) => {
@@ -2184,10 +2209,17 @@ export class ClaudeCodeWorker implements WorkerAdapter {
       lastErrorResult = readErrorResult(parsed) ?? lastErrorResult;
       lastMessage = readRootText(parsed) ?? lastMessage;
       for (const outcome of readAdvisorOutcomes(parsed)) {
-        if (outcome === "consulted") advisorObserved.consultations++;
-        else advisorObserved.failedCalls.push(outcome.failed);
+        if (outcome === "consulted") streamObserved.consultations++;
+        else streamObserved.failedCalls.push(outcome.failed);
       }
-      advisorObserved.mainModel = readInitModel(parsed) ?? advisorObserved.mainModel;
+      streamObserved.mainModel = readInitModel(parsed) ?? streamObserved.mainModel;
+      const swap = readModelSwap(parsed);
+      if (swap) streamObserved.modelSwaps.push(swap);
+      const refusal = readRootRefusal(parsed);
+      if (refusal && !refusedMessages.has(refusal.id)) {
+        refusedMessages.add(refusal.id);
+        streamObserved.refusals.push(refusal.category);
+      }
       if (!toolSurfaceObserved) {
         toolSurfaceObserved = this.checkSessionToolSurface(task, enforcement.disableSlashCommands, parsed);
       }
@@ -2241,6 +2273,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
       if (cliAuthFailed) {
         quarantineCliAuthForProvider(this.options.db, routing.provider, this.options.clock.now());
       }
+      const usage = lastResult ? toUsage(lastResult, streamObserved) : null;
       appendEvent(this.options.db, {
         taskId: task.id,
         workerId: agent.name,
@@ -2250,7 +2283,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
           ...exit,
           worker_spawned_event_id: spawnedEventId,
           output_closed: outputClosed,
-          usage: lastResult ? toUsage(lastResult, advisorObserved) : null,
+          usage,
         },
         at: this.options.clock.now(),
       });
@@ -2275,7 +2308,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
       }
       // ADR 0145: 盤面に exit を渡す。上限到達の一撃が**先**に後始末へ入れているので、
       // 盤面側の判定はその session を報告なき exit として拾わない。
-      this.options.onWorkerExited?.(task.id, exit);
+      this.options.onWorkerExited?.(task.id, usage?.model_swaps.length ? { ...exit, model_swaps: usage.model_swaps } : exit);
       // issue #356: この session の Precedent を投影する。**worker_exited を
       // 書いたあと**でなければ exit / usage 参照が投影に入らず、**書き込み
       // ストリームが閉じたあと**でなければ transcript の末尾が届いていない —
