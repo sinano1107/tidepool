@@ -928,9 +928,11 @@ interface StreamObservation {
   /** The init line's resolved main model, used only to decide whether the
    *  advisor's own usage is separable from it. */
   mainModel: string | null;
-  /** ADR 0215: `usage.model_swaps` / `usage.refusals` as they will be written. */
+  /** ADR 0215: `usage.model_swaps` as it will be written. */
   modelSwaps: ModelSwap[];
-  refusals: (string | null)[];
+  /** ADR 0215: `usage.refusals` keyed by `message.id` — one message splits into
+   *  several assistant lines, one per block, so a refusal counts once per id. */
+  refusals: Map<unknown, string | null>;
 }
 
 /** The advisor half of worker_exited's usage (issue #33 判断6). Non-null only
@@ -1030,7 +1032,7 @@ function toUsage(result: StreamResultEvent, observed: StreamObservation): Worker
     advisor: toAdvisorRecord(result, observed),
     ...(models !== undefined ? { models } : {}),
     model_swaps: observed.modelSwaps,
-    refusals: observed.refusals,
+    refusals: [...observed.refusals.values()],
   };
 }
 
@@ -2196,9 +2198,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     // consultations are assistant-line blocks and the resolved main model is on
     // the init line — so they are accumulated while the stream runs. The stdout
     // scan already reads every line, so the added cost is a filter per line.
-    // ADR 0215: 1 message が block ごとに複数の assistant 行に割れるので、拒否は message.id で1つに数える
-    const refusedMessages = new Set<unknown>();
-    const streamObserved: StreamObservation = { consultations: 0, failedCalls: [], mainModel: null, modelSwaps: [], refusals: [] };
+    const streamObserved: StreamObservation = { consultations: 0, failedCalls: [], mainModel: null, modelSwaps: [], refusals: new Map() };
     // 1行の観測はここ1か所 —— stream のループと exit の flush が同じ集合を通す(issue #1301)。
     // 行は1度だけ decode し、全観測が同じ `parsed` を読む(see parseStreamLine)
     const observe = (parsed: Record<string, unknown> | null) => {
@@ -2216,10 +2216,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
       const swap = readModelSwap(parsed);
       if (swap) streamObserved.modelSwaps.push(swap);
       const refusal = readRootRefusal(parsed);
-      if (refusal && !refusedMessages.has(refusal.id)) {
-        refusedMessages.add(refusal.id);
-        streamObserved.refusals.push(refusal.category);
-      }
+      if (refusal && !streamObserved.refusals.has(refusal.id)) streamObserved.refusals.set(refusal.id, refusal.category);
       if (!toolSurfaceObserved) {
         toolSurfaceObserved = this.checkSessionToolSurface(task, enforcement.disableSlashCommands, parsed);
       }
