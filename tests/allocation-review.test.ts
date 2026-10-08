@@ -1,12 +1,14 @@
 import { afterEach, expect, it } from "vitest";
-import { buildAllocationReviewInput } from "../src/allocation-review.js";
+import { type AllocationTarget, allocationInput, buildAllocationReviewInput } from "../src/allocation-review.js";
 import { CliAuthError, RowRefusalError } from "../src/cli-auth.js";
 import { appendEvent } from "../src/events.js";
-import { completeTask, getTask } from "../src/tasks.js";
+import { changeExecutionSettings } from "../src/execution-setting.js";
+import { completeTask, getTask, registerTask } from "../src/tasks.js";
 import { reportProviderUsage } from "../src/throttle.js";
+import { tierIdOf } from "../src/tier.js";
 import { HUMAN_WORKER_ID } from "../src/worker-id.js";
 import { FakeAllocationClient } from "./fakes.js";
-import { api, bootTidepool, FULL_HANDOFF, HOUR, mcpClient, nextPoll, QUIET_EXIT, questions, WORKER_SPAWNED as spawned, type Tidepool } from "./harness.js";
+import { api, bootTidepool, FULL_HANDOFF, HOUR, HUMAN_WEBUI, mcpClient, nextPoll, QUIET_EXIT, questions, WORKER_SPAWNED as spawned, type Tidepool } from "./harness.js";
 
 let t: Tidepool;
 afterEach(() => t?.stop());
@@ -20,12 +22,12 @@ const usage = {
   advisor: null,
 };
 
-it("配分評価の入力は verdict・findings・実行設定と出所・要求ティア・usage・行動列マーカーの計数から組まれる", () => {
+it("配分評価の入力は verdict・findings・実行設定と出所・走った段・usage・行動列マーカーの計数から組まれる", () => {
   expect(
     buildAllocationReviewInput({
       verdict: "accepted with one nit",
       findings: "## Outcome\n\nfine",
-      requestedTier: "standard",
+      tier: "standard",
       spawned,
       exited: {
         kind: "worker_exited",
@@ -46,7 +48,7 @@ it("配分評価の入力は verdict・findings・実行設定と出所・要求
       advisor: "fable",
       source: { tier: "task", provider: "only" },
     },
-    requested_tier: "standard",
+    tier: "standard",
     usage,
     actions: { advisor_consultations: 2, compactions: 1, commits: 1 },
   });
@@ -57,12 +59,49 @@ it("usage と Precedent の episode が無い session(codex 等)は null で区�
     buildAllocationReviewInput({
       verdict: null,
       findings: null,
-      requestedTier: null,
+      tier: "economy",
       spawned,
       exited: undefined,
       markers: null,
     }),
-  ).toMatchObject({ verdict: null, findings: null, requested_tier: null, usage: null, actions: null });
+  ).toMatchObject({ verdict: null, findings: null, tier: "economy", usage: null, actions: null });
+});
+
+/** Recorded subject session and review completion for the allocation-input domain seam. */
+function recordedAllocation(t: Tidepool, session: typeof spawned, requestedTier?: string): AllocationTarget {
+  const at = t.clock.now();
+  const work = registerTask(t.db, { type: "work", title: "subject", purpose: "p", completion_criteria: "c", tier: requestedTier }, at, ...HUMAN_WEBUI);
+  const review = registerTask(t.db, { type: "review", title: "review", purpose: "p", completion_criteria: "c", parent_id: work.id }, at, ...HUMAN_WEBUI);
+  const spawnedId = appendEvent(t.db, { taskId: work.id, workerId: "reef-crab", origin: "board", at, payload: session });
+  const completedId = appendEvent(t.db, { taskId: review.id, workerId: HUMAN_WORKER_ID, origin: "webui", at, payload: { kind: "task_completed", handoff_present: false, result: "accepted" } });
+  return { reviewed_task_id: work.id, review_task_id: review.id, spawned_event_id: spawnedId, completed_event_id: completedId };
+}
+
+it.each([
+  { source: "agent", tier: "frontier", requestedTier: undefined },
+  { source: "board", tier: "economy", requestedTier: undefined },
+  { source: "task", tier: "standard", requestedTier: "standard" },
+] as const)("$source 出所の入力は対象 session が走った段 $tier と出所を持ち、requested_tier は持たない", async ({ source, tier, requestedTier }) => {
+  t = await bootTidepool();
+  const target = recordedAllocation(t, { ...spawned, tier_id: tierIdOf(t.db, tier), source: { ...spawned.source, tier: source } }, requestedTier);
+  // A later spawn must not change the session this target evaluates.
+  appendEvent(t.db, { taskId: target.reviewed_task_id, workerId: "reef-crab", origin: "board", at: t.clock.now(), payload: { ...spawned, tier_id: tierIdOf(t.db, "economy") } });
+
+  const input = allocationInput(t.db, target);
+
+  expect(input).toMatchObject({ tier, setting: { source: { tier: source } } });
+  expect(input).not.toHaveProperty("requested_tier");
+});
+
+it("対象 session の段を論理削除しても、入力は消したときの名前を持つ", async () => {
+  t = await bootTidepool();
+  await changeExecutionSettings(t.db, { setting: "insert_tier", name: "retired", description: "A former quality floor.", position: 1 }, "webui", t.clock.now());
+  const target = recordedAllocation(t, { ...spawned, tier_id: tierIdOf(t.db, "retired"), source: { ...spawned.source, tier: "agent" } });
+  await changeExecutionSettings(t.db, { setting: "delete_tier", name: "retired" }, "webui", t.clock.now());
+
+  const input = allocationInput(t.db, target);
+
+  expect(input.tier).toBe("retired");
 });
 
 /** A root work task with one recorded worker session (spawn + exit), completed
@@ -84,7 +123,7 @@ async function reviewedWork(t: Tidepool, options: { session: boolean } = { sessi
         workerId: "reef-crab",
         origin: "board",
         at: t.clock.now(),
-        payload: { ...spawned, model: "subject-model" },
+        payload: { ...spawned, model: "subject-model", tier_id: tierIdOf(t.db, "standard") },
       })
     : null;
   const client = await mcpClient(t.mcpBaseUrl, task.id);
@@ -148,7 +187,7 @@ function reportFableWindow(t: Tidepool, throttled: boolean) {
   });
 }
 
-it("統合点レビューを worker が MCP で完了した後の poll で、sweep が被レビュー task の episode に配分評価の注釈を1件だけ載せ、Board call は verdict・findings・実行設定を受け取る", async () => {
+it("統合点レビューを worker が MCP で完了した後の poll で、sweep が被レビュー task の episode に配分評価の注釈を1件だけ載せ、Board call は盤面自身の行で撃つ", async () => {
   const allocationClient = new FakeAllocationClient();
   allocationClient.scriptJudgment({
     allocation: "overpowered",
@@ -173,24 +212,10 @@ it("統合点レビューを worker が MCP で完了した後の poll で、swe
     },
   ]);
   expect(allocationClient.calls).toEqual([
-    {
-      input: {
-        verdict: "accepted with one nit",
-        findings: expect.stringContaining("accepted with one nit"),
-        setting: {
-          provider: "anthropic",
-          model: "subject-model",
-          effort: "high",
-          advisor: "fable",
-          source: { tier: "task", provider: "only" },
-        },
-        requested_tier: "standard",
-        usage,
-        actions: null,
-      },
+    expect.objectContaining({
       // the board's own frontier row (seed), never the reviewed session's model
       setting: expect.objectContaining({ model: "claude-fable-5-1", effort: "high" }),
-    },
+    }),
   ]);
 });
 
