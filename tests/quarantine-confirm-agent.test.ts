@@ -5,6 +5,7 @@ import {
   bootTidepool,
   HOUR,
   queueWork,
+  servedQuarantineQuestion,
   type Tidepool,
 } from "./harness.js";
 
@@ -39,8 +40,7 @@ it("quarantine question への回答は、その agent 名宛ての todo がま�
 
   quarantineAgent(t.db, "navigator", new Error("unknown agent: navigator"), t.clock.now());
 
-  const before = (await api(t.baseUrl, "GET", "/api/tasks")).json;
-  const question = before.find((x: any) => x.type === "question");
+  const question = await servedQuarantineQuestion(t, "agent", "navigator");
   expect(question.question_items[0].options).toEqual(["repaired by hand"]);
 
   const res = await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, {
@@ -64,8 +64,7 @@ it("その agent 名宛ての todo がもう存在しなければ、回答が受
   // quarantined agent name (a plain human move, not the answer itself)
   t.db.prepare("UPDATE tasks SET assignee = NULL WHERE id = ?").run(delegated.id);
 
-  const before = (await api(t.baseUrl, "GET", "/api/tasks")).json;
-  const question = before.find((x: any) => x.type === "question");
+  const question = await servedQuarantineQuestion(t, "agent", "navigator");
 
   const answerText = "repaired: reassigned the pending task away from navigator";
   const res = await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, {

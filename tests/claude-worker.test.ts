@@ -1300,7 +1300,7 @@ describe("ClaudeCodeWorker", () => {
     start("task-overlap");
     expect(calls).toEqual([]);
     expect(workspaceNeedsHuman(db, "tidepool")).toBe(true);
-    const question = listBoard(db).find((t) => t.type === "question");
+    const question = quarantineQuestion(db, "workspace", "tidepool");
     expect(question?.purpose).toContain("board database (TIDEPOOL_DB)");
   });
 
@@ -1329,7 +1329,7 @@ describe("ClaudeCodeWorker", () => {
     );
     start("task-overlap-and-settings");
     expect(calls).toEqual([]);
-    const question = listBoard(db).find((t) => t.type === "question");
+    const question = quarantineQuestion(db, "workspace", "tidepool");
     expect(question?.purpose).toContain("the board's own checkout (process cwd)");
     expect(question?.purpose).not.toContain("settings.local.json");
   });

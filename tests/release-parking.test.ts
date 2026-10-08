@@ -13,6 +13,7 @@ import {
   makeWorkspace,
   mcpClient,
   registerWork,
+  servedQuarantineQuestion,
   type Tidepool,
 } from "./harness.js";
 
@@ -93,8 +94,7 @@ it("ローカルの保護ブランチが分岐していて ff できなければ
   await t.clock.advance(HOUR);
   await complete(t, task.id);
 
-  const list = (await api(t.baseUrl, "GET", "/api/tasks")).json;
-  const question = list.find((x: any) => x.type === "question");
+  const question = await servedQuarantineQuestion(t, "workspace", workspace.name);
   expect(question?.title).toContain("workspace sandbox needs human attention");
   // 人間の帯域外コミットは消えていない
   expect(git(workspace.path, "show", "main:by-hand.txt")).toBe("committed on the host");
@@ -118,8 +118,7 @@ it("ローカルの保護ブランチがリモートより先行しているだ�
   await t.clock.advance(HOUR);
   await complete(t, task.id);
 
-  const list = (await api(t.baseUrl, "GET", "/api/tasks")).json;
-  const question = list.find((x: any) => x.type === "question");
+  const question = await servedQuarantineQuestion(t, "workspace", workspace.name);
   expect(question?.title).toContain("workspace sandbox needs human attention");
   expect(git(workspace.path, "show", "main:by-hand.txt")).toBe("committed on the host");
 });

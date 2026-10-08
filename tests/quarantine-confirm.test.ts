@@ -15,6 +15,7 @@ import {
   makeWorkspace,
   mcpClient,
   registerWork,
+  servedQuarantineQuestion,
   type Tidepool,
 } from "./harness.js";
 
@@ -43,8 +44,7 @@ it("tree rule 失敗時の question は1択の確認型(repaired by hand)であ�
   t = await bootTidepool({ workspace: ws });
   await triggerQuarantine(t, ws, "doomed work");
 
-  const list = (await api(t.baseUrl, "GET", "/api/tasks")).json;
-  const question = list.find((x: any) => x.type === "question");
+  const question = await servedQuarantineQuestion(t, "workspace", ws.name);
   expect(question.question_items[0].options).toEqual(["repaired by hand"]);
   expect(question.question_items[0].recommendation).toBe("repaired by hand");
 });
@@ -54,9 +54,7 @@ it("task の応答は quarantine を kind と value の2欄で運び、種類ご
   t = await bootTidepool({ workspace: ws });
   await triggerQuarantine(t, ws, "doomed work");
 
-  const question = (await api(t.baseUrl, "GET", "/api/tasks")).json.find(
-    (x: any) => x.type === "question",
-  );
+  const question = await servedQuarantineQuestion(t, "workspace", ws.name);
   expect(question).toMatchObject({ question_quarantine_kind: "workspace", question_quarantine_value: ws.name });
   expect(Object.keys(question).filter((k) => k.startsWith("question_quarantine_")).sort()).toEqual([
     "question_quarantine_kind",
@@ -77,8 +75,7 @@ it("同一 workspace への2度目の quarantine は quarantine question を増�
   t = await bootTidepool({ workspace: ws });
   await triggerQuarantine(t, ws, "doomed work");
 
-  const before = (await api(t.baseUrl, "GET", "/api/tasks")).json;
-  const question = before.find((x: any) => x.type === "question");
+  const question = await servedQuarantineQuestion(t, "workspace", ws.name);
 
   quarantineWorkspace(t.db, ws.name, new Error("second, unrelated tree-rule failure"), t.clock.now());
 
@@ -97,8 +94,7 @@ it("quarantine question への回答はツリーが汚れたままだと拒否�
   t = await bootTidepool({ workspace: ws });
   await triggerQuarantine(t, ws, "doomed work");
 
-  const before = (await api(t.baseUrl, "GET", "/api/tasks")).json;
-  const question = before.find((x: any) => x.type === "question");
+  const question = await servedQuarantineQuestion(t, "workspace", ws.name);
 
   // 何も直さず「直した」と答える — .git はまだ壊れたまま
   const res = await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, {
@@ -125,8 +121,7 @@ it("ツリーがクリーンだと確認されれば question が done になり
   await t.clock.advance(HOUR);
   expect(t.worker.started.map((x: any) => x.title)).toEqual(["doomed work"]);
 
-  const before = (await api(t.baseUrl, "GET", "/api/tasks")).json;
-  const question = before.find((x: any) => x.type === "question");
+  const question = await servedQuarantineQuestion(t, "workspace", ws.name);
 
   // 実際に手で直す: git を作り直し、ツリーをクリーンにする
   git(ws.path, "init", "-b", "main");
@@ -185,9 +180,7 @@ it("remote 正本を宣言した workspace の解除は、仲介が token を出
   t = await bootTidepool({ workspace: { ...workspace, repo: DECLARED } });
   t.github.scriptUnreachable("sinano1107/tidepool");
   quarantineWorkspace(t.db, "sandbox", new Error("fetch failed"), t.clock.now());
-  const question = (await api(t.baseUrl, "GET", "/api/tasks")).json.find(
-    (x: any) => x.type === "question",
-  );
+  const question = await servedQuarantineQuestion(t, "workspace", "sandbox");
 
   // ツリーはクリーンなので、拒む理由は repo アクセスだけである
   const res = await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, {
@@ -204,9 +197,7 @@ it("token が出せていれば解除はそのまま受理される —— 新�
   const { workspace } = await makeRemoteBackedWorkspace("sandbox");
   t = await bootTidepool({ workspace: { ...workspace, repo: DECLARED } });
   quarantineWorkspace(t.db, "sandbox", new Error("fetch failed"), t.clock.now());
-  const question = (await api(t.baseUrl, "GET", "/api/tasks")).json.find(
-    (x: any) => x.type === "question",
-  );
+  const question = await servedQuarantineQuestion(t, "workspace", "sandbox");
 
   const res = await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, {
     answers: ["repaired by hand"],
