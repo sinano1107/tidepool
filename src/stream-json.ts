@@ -117,12 +117,18 @@ export function readInitVersion(parsed: Record<string, unknown> | null): string 
   return typeof version === "string" ? version : null;
 }
 
-/** Is this content block one advisor consultation (issue #33)? The advisor is a
- *  **server tool**: it shows up as a `server_tool_use` block named `advisor`
- *  beside ordinary `tool_use` blocks in the same stream, so the block type has
- *  to be checked too — an ordinary tool that happened to be named `advisor` is
- *  not a consultation. The advice itself is encrypted
- *  (`advisor_redacted_result`), so the fact is all that is observable.
+/** What one content block says about an advisor call (issue #33 / ADR 0214):
+ *  `"consulted"` when it is an `advisor_tool_result` carrying advice
+ *  (`advisor_redacted_result` — encrypted, so the fact is all that is
+ *  observable), `{ failed }` when it carries `advisor_tool_result_error`
+ *  (`error_code` verbatim, null when absent), and null for anything else.
+ *
+ *  The **result** decides, not the `server_tool_use` call: a call that comes
+ *  back as an error never advised anything (ADR 0214 決定1). The result block
+ *  alone settles it, so the call and the result may sit on one assistant line
+ *  or on two (the real shape) without any pairing state. A result of neither
+ *  observed type counts as neither — if the vendor renames the success type,
+ *  consultations drop to 0 and ADR 0042's ratio shows it.
  *
  *  ADR 0039's init-line observation cannot substitute: a server tool appears
  *  neither in init's `tools` array nor as an `advisorModel` field (measured).
@@ -130,16 +136,20 @@ export function readInitVersion(parsed: Record<string, unknown> | null): string 
  *  Two readers ask this — the live tee counts them, the projector places them
  *  as markers (ADR 0083 追記 2) — and the vendor's spelling is what would move,
  *  so it is spelled once. */
-export function isAdvisorBlock(block: unknown): boolean {
-  if (typeof block !== "object" || block === null) return false;
-  const { type, name } = block as Record<string, unknown>;
-  return type === "server_tool_use" && name === "advisor";
+export function readAdvisorOutcome(block: unknown): "consulted" | { failed: string | null } | null {
+  if (typeof block !== "object" || block === null) return null;
+  const { type, content } = block as Record<string, unknown>;
+  if (type !== "advisor_tool_result" || typeof content !== "object" || content === null) return null;
+  const { type: resultType, error_code } = content as Record<string, unknown>;
+  if (resultType === "advisor_redacted_result") return "consulted";
+  if (resultType === "advisor_tool_result_error") return { failed: typeof error_code === "string" ? error_code : null };
+  return null;
 }
 
-/** How many advisor consultations one assistant line carries (issue #33). */
-export function countAdvisorConsultations(parsed: Record<string, unknown> | null): number {
-  if (parsed === null || parsed.type !== "assistant") return 0;
+/** The advisor outcomes one assistant line carries, in stream order (issue #33 / ADR 0214). */
+export function readAdvisorOutcomes(parsed: Record<string, unknown> | null): ("consulted" | { failed: string | null })[] {
+  if (parsed === null || parsed.type !== "assistant") return [];
   const content = (parsed.message as { content?: unknown } | undefined)?.content;
-  if (!Array.isArray(content)) return 0;
-  return content.filter(isAdvisorBlock).length;
+  if (!Array.isArray(content)) return [];
+  return content.map(readAdvisorOutcome).filter((outcome) => outcome !== null);
 }

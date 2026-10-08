@@ -21,8 +21,9 @@ export interface RowRefusal {
 
 /** What the advisor **actually did** in one worker session (issue #33 判断6),
  *  as against `worker_spawned.advisor`'s "what the board asked for". Carried by
- *  `worker_exited.usage.advisor`, where null means no consultation was observed
- *  at all — see that field for what the null deliberately collapses.
+ *  `worker_exited.usage.advisor`, where null means neither a consultation nor a
+ *  failed call was observed at all — see that field for what the null
+ *  deliberately collapses.
  *
  *  Named rather than inlined because the adapter builds it in two pieces and
  *  would otherwise spell `NonNullable<NonNullable<…>["advisor"]>` at each. */
@@ -34,9 +35,14 @@ export interface AdvisorRecord {
    *  **final turn**, so a session whose last consultation came earlier leaves
    *  it unrecorded. Deriving it from the per-model cost breakdown is not
    *  available either — that breakdown can hold the CLI's internal helper
-   *  model too, so subtracting the main model does not leave one answer. */
+   *  model too, so subtracting the main model does not leave one answer. A
+   *  failed call leaves no resolved id either (#1524 triage), so a
+   *  failure-only session reports null here too. */
   model: string | null;
-  /** How many times the parent thread consulted, counted off the stream. Kept
+  /** How many times the parent thread consulted, counted off the stream. A
+   *  consultation is a call whose result came back as advice — a call that
+   *  came back as an error is a `failed_calls` entry, not a consultation
+   *  (ADR 0214), so a failure-only session reports 0 here. Kept
    *  outside `usage` because it survives the cases `usage` does not, and
    *  because cost alone cannot tell "one consultation in a long conversation"
    *  from "three in a short one".
@@ -75,6 +81,15 @@ export interface AdvisorRecord {
     output_tokens: number;
     estimated_cost_usd: number;
   } | null;
+  /** The calls whose result came back as an error, one entry per failure in
+   *  stream order: the vendor's `error_code` verbatim, null when the error
+   *  carried none (ADR 0214 決定2). Always present, `[]` when nothing failed.
+   *  Verbatim rather than mapped to board words because the board never
+   *  branches on it (ADR 0214 決定3, like `spawn_failed.error_code`). A failure
+   *  is evidence the advisor was attached, so a failure-only session still
+   *  has a non-null record. Parent thread only, for the same reason as
+   *  `consultations`. */
+  failed_calls: (string | null)[];
 }
 
 /** One model's (or the whole session's) consumption in the board's own
@@ -325,10 +340,11 @@ export type EventPayload =
       usage: TokenUsage & {
         /** issue #33 判断6: what the advisor **actually did** this session, as
          *  against worker_spawned.advisor's "what the board asked for". null
-         *  means no consultation was observed at all — which deliberately
-         *  collapses "configured, attached, never consulted" with
-         *  "configured, silently never attached". Only a consultation is
-         *  positive evidence of attachment, and the sole discriminator the
+         *  means neither a consultation nor a failed call was observed at all
+         *  — which deliberately collapses "configured, attached, never
+         *  called" with "configured, silently never attached". Only an advisor
+         *  result on the stream — advice or an error (ADR 0214) — is positive
+         *  evidence of attachment, and the sole discriminator the
          *  CLI offers is one English warning line on stderr; matching it
          *  would be a detector that degrades silently when the vendor
          *  rewords it — the exact shape ADR 0041 exists to refuse. The two

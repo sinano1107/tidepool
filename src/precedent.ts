@@ -3,7 +3,7 @@ import { join } from "node:path";
 import type { Cause } from "./cause.js";
 import type { Db } from "./db.js";
 import { currentAttributions, type EventRow, getEvent, listEvents, sessionWindow } from "./events.js";
-import { isAdvisorBlock, parseStreamLine, readInitVersion } from "./stream-json.js";
+import { parseStreamLine, readAdvisorOutcome, readInitVersion } from "./stream-json.js";
 import { entryObjections } from "./triage.js";
 
 /** Precedent(前例)の投影 — 盤面の記録(events + worker transcript)から
@@ -259,8 +259,9 @@ export function projectEpisode(input: ProjectEpisodeInput): Episode {
       } = block as Record<string, unknown>;
       // advisor 相談はマーカーだけ(ADR 0083 追記 2 決定5)。server tool なので
       // 普通の tool_use ブロックと同じ行に並ぶが、行動行にすると3マーカーと
-      // 二重になり、結果は暗号化されていて抽出するものも無い。
-      if (isAdvisorBlock(block)) {
+      // 二重になり、結果は暗号化されていて抽出するものも無い。マーカーは
+      // 助言が返った結果のブロックに置き、失敗した呼び出しには置かない(ADR 0214)。
+      if (readAdvisorOutcome(block) === "consulted") {
         markers.push({
           kind: "advisor",
           position: actions.length,

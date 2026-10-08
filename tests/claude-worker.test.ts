@@ -3295,16 +3295,31 @@ describe("advisor capability (issue #33)", () => {
       ...over,
     })}\n`;
 
-  const consultation = (id: string) =>
-    `${JSON.stringify({
-      type: "assistant",
-      message: {
-        content: [
-          { type: "server_tool_use", id, name: "advisor", input: {} },
-          { type: "advisor_tool_result", tool_use_id: id, content: { type: "advisor_redacted_result" } },
-        ],
+  // 結果の content。既定は成功(`advisor_redacted_result`)、失敗は `advisor_tool_result_error`(ADR 0214)。
+  type AdvisorResultContent = { type: string; error_code?: string };
+  const assistantLine = (content: unknown[]) => `${JSON.stringify({ type: "assistant", message: { content } })}\n`;
+  // 既定は1行に並べる形。`twoLines` は実物の形(呼び出しと結果が別々の assistant 行 ——
+  // fixture worker-session-2.1.237.stream.jsonl の22〜23行目)。
+  const consultation = (
+    id: string,
+    { result = { type: "advisor_redacted_result" }, twoLines = false }: { result?: AdvisorResultContent; twoLines?: boolean } = {},
+  ) => {
+    const call = { type: "server_tool_use", id, name: "advisor", input: {} };
+    const outcome = { type: "advisor_tool_result", tool_use_id: id, content: result };
+    return twoLines ? assistantLine([call]) + assistantLine([outcome]) : assistantLine([call, outcome]);
+  };
+  const failure = (error_code?: string) => ({ type: "advisor_tool_result_error", ...(error_code === undefined ? {} : { error_code }) });
+  // 失敗した呼び出しには advisor_message が来ない(#1524 の triage で観測した形)
+  const resultWithoutAdvisorMessage = () =>
+    resultLine({
+      usage: {
+        input_tokens: 4,
+        output_tokens: 31,
+        cache_read_input_tokens: 61644,
+        cache_creation_input_tokens: 13114,
+        iterations: [{ type: "message" }],
       },
-    })}\n`;
+    });
 
   const initLine = (model: string) =>
     `${JSON.stringify({ type: "system", subtype: "init", model })}\n`;
@@ -3334,6 +3349,7 @@ describe("advisor capability (issue #33)", () => {
         model: "claude-opus-5",
         consultations: 1,
         usage: { input_tokens: 38484, output_tokens: 313, estimated_cost_usd: 0.200245 },
+        failed_calls: [],
       },
       // ADR 0094 決定2: 観測された per-model 内訳。帰属は推論しない —— この
       // モデルが advisor だと分かるのは、この event と同じセッションの
@@ -3359,7 +3375,7 @@ describe("advisor capability (issue #33)", () => {
 
   // コストだけでは「長い会話で1回」と「短い会話で3回」が区別できないので、回数は
   // usage とは独立に数える。数え上げは既に1行ずつ読んでいる stdout から取れる。
-  it("相談回数は stream 中の server_tool_use(advisor) の本数を数える(判断6)", async () => {
+  it("相談回数は stream 中の、助言が返った advisor_tool_result の本数を数える(判断6 / ADR 0214)", async () => {
     const { start, processes, emitExit, db } = await makeAdvisorWorker();
     start("task-advisor-count");
     processes[0]!.stdout.write(initLine("claude-sonnet-5"));
@@ -3369,6 +3385,67 @@ describe("advisor capability (issue #33)", () => {
     processes[0]!.stdout.write(resultLine());
     emitExit(0, null);
     expect(usageOf(db, "task-advisor-count")?.advisor).toMatchObject({ consultations: 3 });
+  });
+
+  // ADR 0214 決定1: 数えるのは結果の型。呼び出しと結果が別の行でも1行でも同じ数になる。
+  it("呼び出しと結果が別々の assistant 行に出る実物の形でも、1行の形と同じ数になる(ADR 0214)", async () => {
+    const { start, processes, emitExit, db } = await makeAdvisorWorker();
+    start("task-advisor-two-lines");
+    processes[0]!.stdout.write(initLine("claude-sonnet-5"));
+    processes[0]!.stdout.write(consultation("srvtoolu_01", { twoLines: true }));
+    processes[0]!.stdout.write(consultation("srvtoolu_02"));
+    processes[0]!.stdout.write(consultation("srvtoolu_03", { twoLines: true, result: failure("unavailable") }));
+    processes[0]!.stdout.write(consultation("srvtoolu_04", { result: failure("too_many_requests") }));
+    processes[0]!.stdout.write(resultLine());
+    emitExit(0, null);
+    expect(usageOf(db, "task-advisor-two-lines")?.advisor).toMatchObject({
+      consultations: 2,
+      failed_calls: ["unavailable", "too_many_requests"],
+    });
+  });
+
+  // ADR 0214 決定2: 失敗は advisor が付いていた証拠なので record は非 null、相談は0。
+  it("失敗だけの session は consultations 0 で、失敗の error_code を逐語で残す(ADR 0214)", async () => {
+    const { start, processes, emitExit, db } = await makeAdvisorWorker();
+    start("task-advisor-failed-only");
+    processes[0]!.stdout.write(initLine("claude-sonnet-5"));
+    processes[0]!.stdout.write(consultation("srvtoolu_01", { twoLines: true, result: failure("too_many_requests") }));
+    processes[0]!.stdout.write(resultWithoutAdvisorMessage());
+    emitExit(0, null);
+    expect(usageOf(db, "task-advisor-failed-only")?.advisor).toEqual({
+      model: null,
+      consultations: 0,
+      usage: null,
+      failed_calls: ["too_many_requests"],
+    });
+  });
+
+  it("成功と失敗が混ざれば、相談は成功の数、failed_calls は出た順で error_code の無い失敗は null(ADR 0214)", async () => {
+    const { start, processes, emitExit, db } = await makeAdvisorWorker();
+    start("task-advisor-mixed");
+    processes[0]!.stdout.write(initLine("claude-sonnet-5"));
+    processes[0]!.stdout.write(consultation("srvtoolu_01", { result: failure("unavailable") }));
+    processes[0]!.stdout.write(consultation("srvtoolu_02"));
+    processes[0]!.stdout.write(consultation("srvtoolu_03", { result: failure() }));
+    processes[0]!.stdout.write(consultation("srvtoolu_04", { result: failure("too_many_requests") }));
+    processes[0]!.stdout.write(resultLine());
+    emitExit(0, null);
+    expect(usageOf(db, "task-advisor-mixed")?.advisor).toMatchObject({
+      consultations: 1,
+      failed_calls: ["unavailable", null, "too_many_requests"],
+    });
+  });
+
+  // ADR 0214 決定1: 観測した2つの型のどちらでもない結果、結果の無い呼び出しは、相談にも失敗にも数えない。
+  it("成功でも失敗でもない結果と、結果の無い呼び出しは数えない(ADR 0214)", async () => {
+    const { start, processes, emitExit, db } = await makeAdvisorWorker();
+    start("task-advisor-neither");
+    processes[0]!.stdout.write(initLine("claude-sonnet-5"));
+    processes[0]!.stdout.write(consultation("srvtoolu_01", { result: { type: "advisor_something_new" } }));
+    processes[0]!.stdout.write(assistantLine([{ type: "server_tool_use", id: "srvtoolu_02", name: "advisor", input: {} }]));
+    processes[0]!.stdout.write(resultLine());
+    emitExit(0, null);
+    expect(usageOf(db, "task-advisor-neither")?.advisor).toBeNull();
   });
 
   it("改行なしの最終チャンクにある相談も数える(issue #1301)", async () => {
@@ -3382,7 +3459,7 @@ describe("advisor capability (issue #33)", () => {
   });
 
   // 通常の tool_use(MCP verb 等)を advisor と数え間違えない — 数えるのは
-  // `server_tool_use` かつ name が advisor のものだけ。
+  // `advisor_tool_result` の結果ブロックだけ(ADR 0214)。
   it("通常の tool_use は相談として数えない", async () => {
     const { start, processes, emitExit, db } = await makeAdvisorWorker();
     start("task-advisor-noise");
@@ -3469,6 +3546,7 @@ describe("advisor capability (issue #33)", () => {
       model: "claude-sonnet-5",
       consultations: 1,
       usage: null,
+      failed_calls: [],
     });
   });
 
@@ -3503,6 +3581,7 @@ describe("advisor capability (issue #33)", () => {
       model: null,
       consultations: 1,
       usage: null,
+      failed_calls: [],
     });
   });
 
@@ -3522,6 +3601,7 @@ describe("advisor capability (issue #33)", () => {
       model: "claude-opus-5",
       consultations: 1,
       usage: null,
+      failed_calls: [],
     });
   });
 

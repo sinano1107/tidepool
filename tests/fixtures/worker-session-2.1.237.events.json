@@ -144,7 +144,8 @@
         "advisor": {
           "model": null,
           "consultations": 1,
-          "usage": null
+          "usage": null,
+          "failed_calls": []
         }
       }
     },

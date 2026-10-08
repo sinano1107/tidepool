@@ -104,6 +104,28 @@ it("構造マーカー(advisor 相談・commit)は行動列内の位置に並び
   expect(episode.actions.map((a) => a.tool)).not.toContain("advisor");
 });
 
+it("advisor マーカーは助言が返った結果の行に置き、失敗した呼び出しには置かない(ADR 0214)", () => {
+  const call = (id: string, uuid: string) =>
+    `{"type":"assistant","uuid":"${uuid}","message":{"content":[{"type":"server_tool_use","id":"${id}","name":"advisor","input":{}}]}}`;
+  const result = (id: string, uuid: string, content: string) =>
+    `{"type":"assistant","uuid":"${uuid}","message":{"content":[{"type":"advisor_tool_result","tool_use_id":"${id}","content":${content}}]}}`;
+  const episode = project({
+    events: fixtureEvents().filter((e) => e.id === 5),
+    transcriptLines: [
+      '{"type":"system","subtype":"init","claude_code_version":"2.1.237"}',
+      call("s1", "u1"),
+      result("s1", "u2", '{"type":"advisor_tool_result_error","error_code":"too_many_requests"}'),
+      '{"type":"assistant","uuid":"u3","message":{"content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"ls"}}]}}',
+      call("s2", "u4"),
+      result("s2", "u5", '{"type":"advisor_redacted_result","encrypted_content":"x"}'),
+    ],
+  });
+
+  expect(episode.markers).toEqual([
+    { kind: "advisor", position: 1, eventId: null, missingReason: null, transcriptUuid: "u5" },
+  ]);
+});
+
 it("compaction 境界はマーカーになる(綴りは想定 — 実物が未観測でも黙って壊れない)", () => {
   const episode = project({
     events: fixtureEvents().filter((e) => e.id === 5),
