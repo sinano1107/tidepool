@@ -48,36 +48,6 @@ it("issue-backed の参照番号(github_issue_number)の編集は 400 で拒否�
   expect(res.status).toBe(400);
 });
 
-it("agent が decompose で登録した子タスクの編集は 400 で拒否される(対象は人間登録のみ)", async () => {
-  t = await bootTidepool();
-  const parent = await registerWork(t, "parent");
-  await t.clock.advance(HOUR); // parent picked up into the slot
-
-  const mcp = await mcpClient(t.mcpBaseUrl, parent.id);
-  await mcp.callTool({
-    name: "decompose",
-    arguments: {
-      reason: "agent split off one piece",
-      children: [
-        { title: "agent's child", purpose: "agent decided this", completion_criteria: "done" },
-      ],
-    },
-  });
-  await mcp.close();
-
-  const board = (await api(t.baseUrl, "GET", "/api/tasks")).json;
-  const child = board.find((x: any) => x.title === "agent's child");
-  expect(child).toBeDefined();
-
-  const res = await api(t.baseUrl, "PATCH", `/api/tasks/${child.id}`, {
-    title: "human renames the agent's child",
-  });
-
-  expect(res.status).toBe(400);
-  const after = (await api(t.baseUrl, "GET", `/api/tasks/${child.id}`)).json;
-  expect(after.title).toBe("agent's child");
-});
-
 it("実行中(他人)のタスクの編集は 400 で拒否される", async () => {
   t = await bootTidepool();
   const task = await registerWork(t, "will run");

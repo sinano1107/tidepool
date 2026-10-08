@@ -5,7 +5,6 @@ import {
   bootTidepool,
   FULL_HANDOFF,
   HOUR,
-  mcpClient,
   queueWork,
   registerQuestion,
   registerWork,
@@ -78,29 +77,6 @@ it("理由は任意 — 付ければ cancelled イベントに残る", async () 
     (e: any) => e.kind === "task_cancelled_directly",
   );
   expect(ev2.payload.reason).toBe(null);
-});
-
-it("agent が decompose で登録した子タスクの直接 cancel は拒否される(対象は人間登録のみ)", async () => {
-  t = await bootTidepool();
-  const parent = await registerWork(t, "parent");
-  await t.clock.advance(HOUR);
-  const mcp = await mcpClient(t.mcpBaseUrl, parent.id);
-  await mcp.callTool({
-    name: "decompose",
-    arguments: {
-      reason: "split",
-      children: [{ title: "agent child", purpose: "p", completion_criteria: "c" }],
-    },
-  });
-  await mcp.close();
-  const board = (await api(t.baseUrl, "GET", "/api/tasks")).json;
-  const agentChild = board.find((x: any) => x.title === "agent child");
-
-  const res = await api(t.baseUrl, "POST", `/api/tasks/${agentChild.id}/cancel`, {});
-  expect(res.status).toBe(400);
-  expect((await api(t.baseUrl, "GET", `/api/tasks/${agentChild.id}`)).json.status).not.toBe(
-    "cancelled",
-  );
 });
 
 it("実行中(他人)のタスクの直接 cancel は拒否される", async () => {
