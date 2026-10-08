@@ -2803,8 +2803,8 @@ export function latestChild(db: Db, parentId: string): Task | undefined {
 }
 
 /** The type-specific fields a settled child contributes to history: a done
- *  question's answer, a done work's handoff doc verbatim, or the abandon
- *  question that cancelled any child. HistoryChildContext inherits this
+ *  question's answer, a done work's handoff doc verbatim, or why a cancelled
+ *  child was cancelled (exactly one `origin_*` key). HistoryChildContext inherits this
  *  shape so replacing the old settled-only bundle cannot drop a field. */
 interface SettledChildContext {
   title: string;
