@@ -1881,52 +1881,6 @@ describe("ClaudeCodeWorker", () => {
     expect(calls[0]!.args.join(" ")).toContain("--effort max");
   });
 
-  it("未知の effort 値は boot 時のコンストラクタで即座に失敗する(ADR 0005: CLI 側で閉じた集合はここで検証する — 値の出所が表になっても検査の場所は adapter のまま)", async () => {
-    const registryDir = await makeRegistry();
-    const db = openDb(":memory:");
-    db.prepare(
-      "UPDATE execution_settings SET effort = 'super-fast' WHERE provider = 'anthropic' AND tier_id = (SELECT id FROM tiers WHERE name = 'economy')",
-    ).run();
-    const logDir = await tempDir("tidepool-worker-logs-");
-    expect(
-      () =>
-        new ClaudeCodeWorker({
-          db,
-          clock: new FakeClock(),
-          registry: { dir: registryDir, mode: "purely-local" },
-          agent: "deckhand",
-          workspace: "tidepool",
-          mcpUrl: "http://127.0.0.1:4589/mcp",
-          logDir,
-          transcripts: new TranscriptStore(logDir),
-          ...containerHarness(passthroughContainers(recordingSpawn().spawn)),
-        }),
-    ).toThrow(/unknown effort level/);
-  });
-
-  it("effort: ultracode は未知の effort 値として reject される(CLI --effort の閉じた5値に無く、xhigh+workflow orchestration への迂回路にならない・issue #31)", async () => {
-    const registryDir = await makeRegistry();
-    const db = openDb(":memory:");
-    db.prepare(
-      "UPDATE execution_settings SET effort = 'ultracode' WHERE provider = 'anthropic' AND tier_id = (SELECT id FROM tiers WHERE name = 'economy')",
-    ).run();
-    const logDir = await tempDir("tidepool-worker-logs-");
-    expect(
-      () =>
-        new ClaudeCodeWorker({
-          db,
-          clock: new FakeClock(),
-          registry: { dir: registryDir, mode: "purely-local" },
-          agent: "deckhand",
-          workspace: "tidepool",
-          mcpUrl: "http://127.0.0.1:4589/mcp",
-          logDir,
-          transcripts: new TranscriptStore(logDir),
-          ...containerHarness(passthroughContainers(recordingSpawn().spawn)),
-        }),
-    ).toThrow(/unknown effort level/);
-  });
-
   it("設定ミス(未知の workspace 名)は boot 時のコンストラクタで即座に失敗する", async () => {
     // a misconfigured registry must refuse to start the board, not wedge the
     // first task at pickup time

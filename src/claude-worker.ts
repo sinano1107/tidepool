@@ -18,7 +18,7 @@ import { type ContainmentCapability, quarantineContainment } from "./containment
 import type { Db } from "./db.js";
 import { DEFAULT_AUDITOR_NAME } from "./defaults.js";
 import { type AdvisorRecord, appendEvent, type EventPayload, type RowRefusal, type RowRefusalCause } from "./events.js";
-import { type ExecutionSetting, MOONSHOT_DEFAULT_MODEL, resolveExecutionSetting } from "./execution-setting.js";
+import { type ExecutionSetting, MOONSHOT_DEFAULT_MODEL } from "./execution-setting.js";
 import { buildMemoryInjection, buildMetaReviewMaterial, type InjectionQuery, recordMemoryInjection, recordMetaReviewMaterial } from "./memory.js";
 import { projectAndPersist } from "./precedent.js";
 import type { ProcessContainers, PtyFn, PtyProcess } from "./process-container.js";
@@ -58,22 +58,8 @@ import {
   type WorkspaceConfig,
 } from "./workspace.js";
 
-// the CLI defines this as a closed 5-value set; unlike --model (an open,
-// ever-growing set of aliases/full names) it's safe and worth validating
-// here — the adapter is where vendor-specific knowledge belongs (ADR 0005)
-const EFFORT_LEVELS: readonly string[] = ["low", "medium", "high", "xhigh", "max"];
 /** 盤面が検証した Claude CLI の版(ADR 0186 決定5)。正本は repo 直下の1か所で、導入スクリプトも同じファイルを読む。 */
 const CLAUDE_CLI_VERSION = readFileSync(new URL("../claude-cli-version", import.meta.url), "utf8").trim();
-
-/** Shared by boot-time default validation and every per-task spawn — one
- *  check, not a copy at each call site. 検査する値の出所は盤面の表になったが
- *  (ADR 0110 決定3)、閉じた5値を知っているのは今も adapter だけである
- *  (ADR 0005)。 */
-function assertKnownEffort(effort: string): void {
-  if (!EFFORT_LEVELS.includes(effort)) {
-    throw new Error(`unknown effort level: ${effort}`);
-  }
-}
 
 /** Does one allowlist entry permit one enumerated skill? (issue #56 / ADR
  *  0025) The five-form vocabulary, resolved against the CLI's enumerated set:
@@ -1642,21 +1628,14 @@ export class ClaudeCodeWorker implements WorkerAdapter {
   }
 
   /** Boot-time validation only: the configured default workspace/agent/
-   *  authority/effort must all resolve against the registry, or the
+   *  authority must all resolve against the registry, or the
    *  misconfiguration is thrown by name — a board must refuse to start
    *  rather than wedge the first task. Per-task resolution (task.workspace,
    *  task.assignee) happens fresh in `start()` below (issue #26 / ADR 0009,
    *  ADR 0012 / issue #36) — drift there quarantines instead of throwing. */
   private validateDefaults(registry: Registry): void {
     resolveExecutionWorkspace(registry, this.options.workspace, null, this.workspacesDir);
-    const agent = resolveExecutionAgent(registry, this.options.agent, null, tierNames(this.options.db));
-    // 表から解決した値を検査する(ADR 0110 決定3): 既定 agent が走るティアの行の
-    // effort が閉じた5値の外なら、盤面は最初のタスクで詰まる前に起動を拒む。
-    // 起動時検査なので task は無い —— 既定 agent の既定ティアの行を見る。行が無い
-    // Provider しか持たない agent は候補が空(ADR 0114 決定3: その task は skipped)
-    // で、検査する effort も無い
-    const setting = resolveExecutionSetting(this.options.db, agent.definition, undefined);
-    if (setting) assertKnownEffort(setting.effort);
+    resolveExecutionAgent(registry, this.options.agent, null, tierNames(this.options.db));
   }
 
   start(task: Task, setting: ExecutionSetting, query?: InjectionQuery): void {
@@ -1787,7 +1766,6 @@ export class ClaudeCodeWorker implements WorkerAdapter {
       // provider は正準の harness を1つ選ぶ —— openai は codex 経路だけ(ADR 0098)
       throw new Error('canonical route "openai -> codex" cannot run through Claude Code');
     }
-    assertKnownEffort(setting.effort);
     const routing: ProviderRouting = {
       ...setting,
       moonshotApiKey:

@@ -3,6 +3,7 @@ import { z } from "zod";
 import { ADVISOR_CEILINGS, type AdvisorCeiling, type AdvisorSource, claudeAdvisorFor, isClaudeModelAlias } from "./claude-model-alias.js";
 import type { Db } from "./db.js";
 import { DomainError } from "./domain-error.js";
+import { whyInvalidEffort } from "./effort.js";
 import { appendEvent, type EventOrigin } from "./events.js";
 import { whyInvalidPrice } from "./price.js";
 import { PROVIDER_VALUES, type Provider, whyInvalidProviderRank } from "./provider.js";
@@ -571,7 +572,13 @@ export type ExecutionSettingsChange = z.infer<typeof executionSettingsChangeSche
 
 /** 行の提案の変更と、承認に添える修正値の形(ADR 0150 決定2): 動かせるのは分類と effort だけ。 */
 const routingRowChangeSchema = z
-  .object({ tier: requiredTextSchema, effort: requiredTextSchema })
+  .object({
+    tier: requiredTextSchema,
+    effort: requiredTextSchema.superRefine((value, ctx) => {
+      const reason = whyInvalidEffort(value);
+      if (reason) ctx.addIssue({ code: "custom", message: reason });
+    }),
+  })
   .partial()
   .strict()
   .refine((change) => Object.keys(change).length > 0, { message: "name at least one of tier / effort" });
@@ -706,6 +713,8 @@ export function applyExecutionSettingsChange(
         if (provider === "anthropic" && isClaudeModelAlias(model)) {
           throw new DomainError(`"${model}" is a Claude CLI alias whose target moves with CLI updates; a table row takes a concrete model id (e.g. claude-opus-5-5)`);
         }
+        const effortProblem = whyInvalidEffort(effort);
+        if (effortProblem) throw new DomainError(effortProblem);
         assertKnownTier(db, "tier", tier);
         const { key } = change;
         const table = loadExecutionSettingTable(db);

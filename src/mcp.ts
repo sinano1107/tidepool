@@ -6,6 +6,7 @@ import type { Clock } from "./clock.js";
 import type { Db } from "./db.js";
 import { DEFAULT_AUDITOR_NAME } from "./defaults.js";
 import { DomainError } from "./domain-error.js";
+import { EFFORT_LEVELS } from "./effort.js";
 import { PRIORITY_FIELD_DESCRIPTION, tierFieldDescriptions } from "./execution-setting.js";
 import type { GitHubClient } from "./github.js";
 import type { GitHubAuth } from "./github-auth.js";
@@ -962,7 +963,7 @@ function registerRoutingMetaReviewVerbs(server: McpServer, deps: McpDeps, run: M
     {
       description:
         "Propose a routing change to the human as one approve / reject question attached to this task. op row replaces the " +
-        "tier (one of the board's tiers) and/or effort of one existing execution-setting row, named by provider, model and effort; " +
+        `tier (one of the board's tiers) and/or effort (${EFFORT_LEVELS.join(" / ")}) of one existing execution-setting row, named by provider, model and effort; ` +
         "change takes only those two fields, and the human may amend them when approving. A change that would give the model a second row in one tier, or the same effort twice, is refused. op promote makes work tasks run on the " +
         "learner's recommendation and is only accepted while the learner is not promoted; op demote returns them to the table and " +
         "is only accepted while it is promoted; neither takes row, change, or an amendment. op agent_tier lowers a non-built-in " +
@@ -983,7 +984,7 @@ function registerRoutingMetaReviewVerbs(server: McpServer, deps: McpDeps, run: M
       inputSchema: {
         op: z.enum(["row", "promote", "demote", "agent_tier", "tier_description", "add_tier"]),
         row: z.object({ provider: z.string(), model: z.string(), effort: z.string() }).optional().describe("op row and add_tier only."),
-        change: z.record(z.string(), z.unknown()).optional().describe("op row only: tier and/or effort, nothing else."),
+        change: z.record(z.string(), z.unknown()).optional().describe(`op row only: tier and/or effort (${EFFORT_LEVELS.join(" / ")}), nothing else.`),
         agent: z.string().optional().describe("op agent_tier only: the agent whose default tier to lower."),
         to: z.string().optional().describe("op agent_tier only: the tier one step below the agent's current tier."),
         evidence: z
