@@ -568,20 +568,22 @@ it("read_memory_entries の行は、人間が原文つきで書いたエント�
   expect(entries[1]!.annotations).toEqual([{ anchor: { field: "decision", quote: "short" }, polarity: "imitate", text: "Keep the note short." }]);
 });
 
+/** tool_use と、event_id を返した tool_result の transcript 2行(setup のみ)。 */
+const toolCall = (n: number, name: string, eventId: number) => [
+  `{"type":"assistant","uuid":"a${n}","message":{"content":[{"type":"tool_use","id":"t${n}","name":"mcp__tidepool__${name}","input":{}}]}}`,
+  `{"type":"user","uuid":"r${n}","message":{"content":[{"type":"tool_result","tool_use_id":"t${n}","content":[{"type":"text","text":"{\\"event_id\\":${eventId}}"}]}]}}`,
+];
+
 it("session の中で read_memory_entries が返した id は、その session の Precedent の entries_seen に入り entries_read に入らない(ADR 0122 追記 #1225)", () => {
   const { db, task, reader, knowledge } = board();
   const spawned = appendEvent(db, { taskId: task.id, workerId: "auditor", origin: "board", payload: WORKER_SPAWNED, at });
   const id = knowledge("tidepool", "notes");
   const read = readMemoryEntries(db, reader, { ids: [id] }, at);
   const decision = logDecision(db, task, "retired the stale note", "auditor", at, "worker");
-  const toolCall = (n: number, name: string, eventId: number) => [
-    `{"type":"assistant","uuid":"a${n}","message":{"content":[{"type":"tool_use","id":"t${n}","name":"${name}","input":{}}]}}`,
-    `{"type":"user","uuid":"r${n}","message":{"content":[{"type":"tool_result","tool_use_id":"t${n}","content":[{"type":"text","text":"{\\"event_id\\":${eventId}}"}]}]}}`,
-  ];
   const events = listEvents(db, task.id);
 
   const episode = projectEpisode({
-    transcriptLines: [...toolCall(1, "mcp__tidepool__read_memory_entries", read.event_id), ...toolCall(2, "mcp__tidepool__log_decision", decision)],
+    transcriptLines: [...toolCall(1, "read_memory_entries", read.event_id), ...toolCall(2, "log_decision", decision)],
     events,
     workerSpawnedEventId: spawned,
     extractorVersion: "test",
@@ -590,12 +592,6 @@ it("session の中で read_memory_entries が返した id は、その session �
   expect(entriesSeenBefore(episode, events, decision)).toEqual([id]);
   expect(entriesReadBefore(episode, events, decision)).toEqual([]);
 });
-
-/** tool_use と、event_id を返した tool_result の transcript 2行(setup のみ)。 */
-const toolCall = (n: number, name: string, eventId: number) => [
-  `{"type":"assistant","uuid":"a${n}","message":{"content":[{"type":"tool_use","id":"t${n}","name":"mcp__tidepool__${name}","input":{}}]}}`,
-  `{"type":"user","uuid":"r${n}","message":{"content":[{"type":"tool_result","tool_use_id":"t${n}","content":[{"type":"text","text":"{\\"event_id\\":${eventId}}"}]}]}}`,
-];
 
 it("session の中で list_memory_entries と search_memory_entries が返した id は、その後の decision の entries_seen に入り entries_read に入らない(ADR 0083 追記6)", () => {
   const { db, task, reader, knowledge } = board();
