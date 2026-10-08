@@ -44,6 +44,7 @@ import { startServer } from "../src/server.js";
 import { implicitTaskExecutionCandidates } from "../src/server-options.js";
 import {
   answerQuestion,
+  completeTask,
   decomposeTask,
   getTask,
   humanDecomposeTask,
@@ -961,6 +962,28 @@ export const FULL_HANDOFF = {
   resume_context: "n/a",
   known_issues: "n/a",
 };
+
+/** agent `assignee` が完了させた work(domain 層)。着地の記録はまだ何も無い。 */
+export function completedWork(db: Db, now: Date, assignee: string, parentId?: string): Task {
+  const task = registerTask(
+    db,
+    { type: "work", title: "ship", purpose: "p", completion_criteria: "c", assignee, parent_id: parentId },
+    now,
+    ...HUMAN_WEBUI,
+  );
+  return completeTask(db, task, FULL_HANDOFF, assignee, now, "worker");
+}
+
+/** 付帯子の門で着地が止まった記録 —— `land()` が残す形。 */
+export function deferLanding(db: Db, taskId: string, now: Date): void {
+  appendEvent(db, {
+    taskId,
+    workerId: BOARD_WORKER_ID,
+    origin: "board",
+    payload: { kind: "landing_deferred", reason: "attached_children", count: 1 },
+    at: now,
+  });
+}
 
 // 帰責・起草の撃ち直しの setup(tests/retrospective.test.ts と tests/memory-settings-endpoints.test.ts が共有する)
 

@@ -5,12 +5,14 @@ import { DomainError } from "../src/domain-error.js";
 import { appendEvent, listEvents } from "../src/events.js";
 import { submitAnswer } from "../src/human-verbs.js";
 import {
+  countTasksAwaitingLanding,
   createLanding,
   landingAnnotation,
   registerLocalMergeQuestion,
   registerPrPromotionFailureQuestion,
 } from "../src/landing.js";
 import {
+  answerQuestion,
   completeTask,
   getTask,
   listBoard,
@@ -32,6 +34,8 @@ import {
 import { FakeClock, FakeGitHubClient, unusedLanding } from "./fakes.js";
 import {
   commitWork,
+  completedWork,
+  deferLanding,
   FULL_HANDOFF,
   GIT_FIXTURE_TEST_TIMEOUT,
   git,
@@ -1294,4 +1298,40 @@ it.each([
   expect(git(workspace.path, "rev-parse", "HEAD")).toBe(head);
   expect(git(workspace.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe(branch);
   expect(git(workspace.path, "status", "--porcelain")).toBe("");
+});
+
+it("着地を待つ完了タスクは、付帯子待ちで PR 未作成・無人 merge キューにいる・PR 昇格失敗の question が開いている、の3つを数える", () => {
+  db = openDb(":memory:");
+  const now = new Date("2026-10-09T00:00:00.000Z");
+  deferLanding(db, completedWork(db, now, "tako").id, now);
+  recordPrOpenedViaWorker(db, completedWork(db, now, "tako"), 7, "tako", now, {
+    authority: { merge: "auto_if_ci_green" },
+  });
+  registerPrPromotionFailureQuestion(db, completedWork(db, now, "tako"), "boom", now);
+
+  expect(countTasksAwaitingLanding(db, "tako")).toBe(3);
+});
+
+it("着地済み・未完了・別 agent・PR 昇格を abandon した・祖先の枝に乗る子は、着地を待つ完了タスクに数えない", () => {
+  db = openDb(":memory:");
+  const now = new Date("2026-10-09T00:00:00.000Z");
+  const landed = completedWork(db, now, "tako");
+  deferLanding(db, landed.id, now);
+  recordPrOpenedViaWorker(db, landed, 7, "tako", now, { authority: { merge: "escalate" } });
+  deferLanding(db, completedWork(db, now, "squid").id, now);
+  const abandoned = completedWork(db, now, "tako");
+  deferLanding(db, abandoned.id, now);
+  registerPrPromotionFailureQuestion(db, abandoned, "boom", now);
+  const [failure] = promotionFailures(db, abandoned.id);
+  answerQuestion(db, getTask(db, failure!.id)!, ["abandon promotion"], now, undefined, undefined, undefined, "webui");
+  // 未完了の親と、その枝へ帰る完了した子(`land()` は何も記録しない)
+  const parent = registerTask(
+    db,
+    { type: "work", title: "integrate", purpose: "p", completion_criteria: "c", assignee: "tako" },
+    now,
+    ...HUMAN_WEBUI,
+  );
+  completedWork(db, now, "tako", parent.id);
+
+  expect(countTasksAwaitingLanding(db, "tako")).toBe(0);
 });

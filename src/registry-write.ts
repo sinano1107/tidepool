@@ -59,6 +59,7 @@ export class DeletionConfirmationRequiredError extends Error {
  *  ないので 403、`RegistrySelfUnprotectError` と同じ扱い)。 */
 export type DeletionBlockedReason =
   | { code: "unsettled_tasks"; count: number }
+  | { code: "tasks_awaiting_landing"; count: number }
   | { code: "board_default" }
   | { code: "board_auditor" }
   | { code: "built_in" }
@@ -78,6 +79,9 @@ export class DeletionBlockedError extends Error {
 function describeReason(reason: DeletionBlockedReason): string {
   if (reason.code === "unsettled_tasks") {
     return `${reason.count} unsettled task(s) still reference it`;
+  }
+  if (reason.code === "tasks_awaiting_landing") {
+    return `${reason.count} completed task(s) still await landing on its profile`;
   }
   if (reason.code === "board_default") return "it is the board's default";
   if (reason.code === "board_auditor") return "it is the board's Auditor";

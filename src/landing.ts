@@ -87,6 +87,31 @@ function taskHasLanded(db: Db, taskId: string): boolean {
   );
 }
 
+/** 着地を待つ完了タスク(ADR 0217 決定4): agent 名の quarantine の解除と agent 削除の扉が
+ *  同じ集合を数える。「未着地の done」だけでは、祖先の枝に乗る子(`land()` は何も記録しない)と
+ *  PR 昇格を abandon したタスクを永久に数えてしまうので、待っている積極的な証拠で数える ——
+ *  無人 merge キューにいる、または未着地で、PR 昇格失敗の question が開いているか、門で止まった
+ *  後に失敗の question が立っていない。後先は時刻ではなく event id で読む(同じ ms がありうる)。 */
+export function countTasksAwaitingLanding(db: Db, agentName: string): number {
+  const rows = db
+    .prepare(
+      `SELECT t.id, EXISTS (SELECT 1 FROM pending_auto_merges WHERE task_id = t.id) AS queued
+         FROM tasks t
+        WHERE t.status = 'done' AND t.assignee = ?
+          AND (EXISTS (SELECT 1 FROM pending_auto_merges WHERE task_id = t.id)
+               OR EXISTS (SELECT 1 FROM tasks q
+                           WHERE q.question_pending_pr_promotion_task_id = t.id AND q.status = 'todo')
+               OR EXISTS (SELECT 1 FROM events d
+                           WHERE d.task_id = t.id AND d.kind = 'landing_deferred'
+                             AND NOT EXISTS (SELECT 1 FROM tasks q
+                                               JOIN events r ON r.task_id = q.id AND r.kind = 'task_registered'
+                                              WHERE q.question_pending_pr_promotion_task_id = t.id
+                                                AND r.id > d.id)))`,
+    )
+    .all(agentName) as Array<{ id: string; queued: number }>;
+  return rows.filter((row) => row.queued === 1 || !taskHasLanded(db, row.id)).length;
+}
+
 export function landingBlock(db: Db, taskId: string): LandingBlock | null {
   const attached = countUnsettledAttachedChildren(db, taskId);
   if (attached > 0) return { kind: "attached_children", count: attached };
@@ -294,6 +319,40 @@ function listOpenMergeQuestions(db: Db): OpenMergeQuestion[] {
 
 function clearPendingAutoMerge(db: Db, taskId: string): void {
   db.prepare("DELETE FROM pending_auto_merges WHERE task_id = ?").run(taskId);
+}
+
+/** キューの PR が merge された(盤面が merge した、または盤面の外での merge を観測した)ので
+ *  キューから外し、その事実を盤面の名義で残す。 */
+function retireMergedAutoMerge(
+  db: Db,
+  taskId: string,
+  payload: { kind: "pr_merged" | "pr_merge_observed"; pr_number: number },
+  now: Date,
+): void {
+  clearPendingAutoMerge(db, taskId);
+  appendEvent(db, { taskId, workerId: BOARD_WORKER_ID, origin: "board", payload, at: now });
+}
+
+/** ADR 0217 決定5: agent 名の quarantine の間、その agent のキューの PR は CI を読まれず、
+ *  merge 失敗時の観測(ADR 0079 決定3)にも届かない。盤面の外で merge されたものは回答の
+ *  受理直前にここで観測する。読めない PR は飛ばす —— キューに残り、着地待ちに数えられる。 */
+export async function observeMergedAutoMerges(
+  deps: Pick<LandingDeps, "db" | "workspace" | "resolveWorkspace"> & { github?: GitHubClient },
+  agentName: string,
+  now: Date,
+): Promise<void> {
+  const resolve = buildWorkspaceResolver(deps.resolveWorkspace, deps.workspace);
+  if (!resolve || !deps.github) return;
+  for (const { task_id, pr_number } of listPendingAutoMerges(deps.db)) {
+    const task = getTask(deps.db, task_id);
+    if (task?.assignee !== agentName) continue;
+    try {
+      const { path } = resolve(task.workspace);
+      if (await deps.github.isPullRequestMerged({ path, number: pr_number })) {
+        retireMergedAutoMerge(deps.db, task_id, { kind: "pr_merge_observed", pr_number }, now);
+      }
+    } catch {}
+  }
 }
 
 /** 門で止まったことを board 名義で1回だけ刻む(ADR 0092 決定1)。着地は1つのタスクに
@@ -564,16 +623,12 @@ export function createLanding(deps: LandingDeps): Landing {
             }
             observed = true;
           }
-          clearPendingAutoMerge(deps.db, task_id);
-          appendEvent(deps.db, {
-            taskId: task_id,
-            workerId: BOARD_WORKER_ID,
-            origin: "board",
-            payload: observed
-              ? { kind: "pr_merge_observed", pr_number }
-              : { kind: "pr_merged", pr_number },
-            at: now,
-          });
+          retireMergedAutoMerge(
+            deps.db,
+            task_id,
+            { kind: observed ? "pr_merge_observed" : "pr_merged", pr_number },
+            now,
+          );
           continue;
         }
         clearPendingAutoMerge(deps.db, task_id);

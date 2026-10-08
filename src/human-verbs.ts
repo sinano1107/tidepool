@@ -24,7 +24,7 @@ import {
 } from "./execution-setting.js";
 import { type GitHubClient, IssueGoneError } from "./github.js";
 import type { HarnessContainmentCheck } from "./harness-containment.js";
-import { type Landing, type LandingVerdict, landingBlock } from "./landing.js";
+import { type Landing, type LandingVerdict, landingBlock, observeMergedAutoMerges } from "./landing.js";
 import { approveMemoryProposal, humanEntryInput, listMemoryEntries, type MemoryAmendment, movedTail, parseMemoryAmendment, rejectMemoryProposal } from "./memory.js";
 import { whyNotPositiveInteger } from "./positive-integer.js";
 import type { Provider } from "./provider.js";
@@ -519,6 +519,7 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
     },
     agent: async (value) => {
       const quarantineAgentName = value!;
+      await observeMergedAutoMerges(deps, quarantineAgentName, clock?.now() ?? new Date());
       try {
         verifyAgentRepaired(
           deps.db,

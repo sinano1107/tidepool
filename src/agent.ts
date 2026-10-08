@@ -1,4 +1,5 @@
 import type { Db } from "./db.js";
+import { countTasksAwaitingLanding } from "./landing.js";
 import { openQuarantineQuestion, registerQuarantine } from "./quarantine.js";
 import {
   type AgentDefinition,
@@ -106,7 +107,8 @@ export function resolveAgentOrQuarantine(
 /** Quarantine resolution's verification gate for an agent name (CONTEXT.md's
  *  Quarantine, ADR 0012 / issue #36) — never taken on faith. Clearance holds
  *  either the registry has the name back (`agentExists`), or there is no more
- *  todo work left depending on it — both are legitimate repairs (registry
+ *  todo work left depending on it and no completed task awaiting landing on
+ *  its profile — both are legitimate repairs (registry
  *  repair, or reassigning the pending tasks away), and either makes the
  *  quarantine moot. `agentExists` is resolved by the caller (fresh against
  *  the registry, or `false` when no registry is configured at all — in which
@@ -119,6 +121,15 @@ export function verifyAgentRepaired(db: Db, agentName: string, agentExists: bool
   if (stillPending) {
     throw new Error(
       `agent ${agentName} is not back in the registry and still has pending tasks assigned`,
+    );
+  }
+  // done のタスクは Edit で付け替えられないので、その profile を読んで着地を待つものが
+  // 残る限り、registry を直さずに解除しても次の着地でまた落ちる(ADR 0217 決定4)
+  const awaitingLanding = countTasksAwaitingLanding(db, agentName);
+  if (awaitingLanding > 0) {
+    throw new Error(
+      `agent ${agentName} is not back in the registry and still has ${awaitingLanding} ` +
+        "completed task(s) awaiting landing on its profile",
     );
   }
 }

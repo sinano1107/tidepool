@@ -321,6 +321,9 @@ export interface DeleteAgentInput {
 export interface AgentDeletionReferences {
   /** この agent を assignee に持つ未決着タスクの件数。 */
   unsettledTaskCount: number;
+  /** この agent の profile を読んで着地を待つ完了タスクの件数 —— agent 名の quarantine の
+   *  解除が数えるのと同じ集合(ADR 0217 決定4)。 */
+  awaitingLandingTaskCount: number;
   /** 盤面の既定 agent 名(ADR 0012)。一致すれば消せない —— 既定はポインタなので、
    *  指し先を消せば assignee 未指定のタスクが全部止まる。 */
   defaultAgentName?: string;
@@ -360,6 +363,9 @@ export async function deleteAgent(
   const shadowsBuiltIn = isBuiltInAgentName(input.name);
   if (deps.unsettledTaskCount > 0 && !shadowsBuiltIn) {
     reasons.push({ code: "unsettled_tasks", count: deps.unsettledTaskCount });
+  }
+  if (deps.awaitingLandingTaskCount > 0 && !shadowsBuiltIn) {
+    reasons.push({ code: "tasks_awaiting_landing", count: deps.awaitingLandingTaskCount });
   }
   if (deps.defaultAgentName === input.name) reasons.push({ code: "board_default" });
   if (deps.auditorName === input.name && !shadowsBuiltIn) reasons.push({ code: "board_auditor" });

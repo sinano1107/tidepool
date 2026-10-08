@@ -11,21 +11,22 @@ import {
   registerThroughHumanDoor,
   submitAnswer,
 } from "../src/human-verbs.js";
-import { registerPrPromotionFailureQuestion } from "../src/landing.js";
+import { countTasksAwaitingLanding, registerPrPromotionFailureQuestion } from "../src/landing.js";
 import {
   cancelTaskDirectly,
   getTask,
   listBoard,
   presentTask,
+  recordPrOpened,
   registerMergeQuestion,
   registerTask,
   type Task,
 } from "../src/tasks.js";
 import { commitTriage, startTriage } from "../src/triage.js";
-import { HUMAN_WORKER_ID } from "../src/worker-id.js";
+import { BOARD_WORKER_ID, HUMAN_WORKER_ID } from "../src/worker-id.js";
 import { quarantineWorkspace, UnknownWorkspaceError } from "../src/workspace.js";
-import { FakeDraftClient, FakeGitHubClient, unusedLanding } from "./fakes.js";
-import { decomposeTaskViaWorker, HUMAN_WEBUI, humanDecomposeTaskViaWebui } from "./harness.js";
+import { FakeClock, FakeDraftClient, FakeGitHubClient, unusedLanding } from "./fakes.js";
+import { completedWork, decomposeTaskViaWorker, HUMAN_WEBUI, humanDecomposeTaskViaWebui } from "./harness.js";
 
 const NOW = new Date("2026-08-06T00:00:00.000Z");
 
@@ -672,6 +673,58 @@ it("agent quarantine の回答は registry 復帰か依存 task の解消まで�
   expect({ error: String(error), status: onlyQuestion(db).status }).toEqual({
     error: "Error: agent specialist is not back in the registry and still has pending tasks assigned",
     status: "todo",
+  });
+});
+
+/** その agent の auto_if_ci_green で無人 merge キューに入った PR #7 を持つ完了タスク。 */
+function queuedForAutoMerge(db: Db, agentName: string): Task {
+  const task = completedWork(db, NOW, agentName);
+  recordPrOpened(db, task, 7, agentName, NOW, { merge: "auto_if_ci_green" }, undefined, "worker");
+  return task;
+}
+
+const PRODUCT = { name: "product", path: "/workspaces/product" };
+
+it("GitHub の無い盤面の agent quarantine の解除検査は、観測せずに無人 merge キューの PR を着地待ちに数えて拒む", async () => {
+  db = openDb(":memory:");
+  const queued = queuedForAutoMerge(db, "specialist");
+
+  await expect(
+    quarantineChecks({ db, agentRegistered: () => false, workspace: PRODUCT, clock: new FakeClock() }).agent!(
+      "specialist",
+    ),
+  ).rejects.toThrow(
+    "agent specialist is not back in the registry and still has 1 completed task(s) awaiting landing on its profile",
+  );
+  expect(listEvents(db, queued.id).filter((event) => event.kind === "pr_merge_observed")).toEqual([]);
+});
+
+it("agent quarantine の解除検査は、盤面の外で merge 済みのキューの PR を盤面の名義で観測してキューから外し、そのうえで通す", async () => {
+  db = openDb(":memory:");
+  const queued = queuedForAutoMerge(db, "specialist");
+  const github = new FakeGitHubClient();
+  github.scriptMergedOutside(7);
+
+  await quarantineChecks({
+    db,
+    agentRegistered: () => false,
+    workspace: PRODUCT,
+    github,
+    clock: new FakeClock(),
+  }).agent!("specialist");
+
+  expect({
+    awaiting: countTasksAwaitingLanding(db, "specialist"),
+    observed: listEvents(db, queued.id).filter((event) => event.kind === "pr_merge_observed"),
+  }).toEqual({
+    awaiting: 0,
+    observed: [
+      expect.objectContaining({
+        worker_id: BOARD_WORKER_ID,
+        origin: "board",
+        payload: { kind: "pr_merge_observed", pr_number: 7 },
+      }),
+    ],
   });
 });
 
