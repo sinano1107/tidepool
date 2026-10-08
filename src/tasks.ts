@@ -1830,8 +1830,8 @@ export function settleQuestionAsObserved(
 }
 
 /** Queues a completed low-risk task's PR for the auto_if_ci_green poll (issue
- *  #11) — recordPrOpened's low-risk branch is the only writer; the poll
- *  itself (landing.ts) is the only reader/deleter. */
+ *  #11) — recordPrOpened's low-risk branch is the only writer; the landing
+ *  module (landing.ts) is the only reader/deleter. */
 function queuePendingAutoMerge(db: Db, taskId: string, prNumber: number): void {
   db.prepare("INSERT INTO pending_auto_merges (task_id, pr_number) VALUES (?, ?)").run(
     taskId,

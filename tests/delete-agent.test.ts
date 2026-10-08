@@ -18,7 +18,7 @@ async function makeMainRegistry(): Promise<string> {
 }
 
 /** 参照ゼロ・既定でもない盤面の事実 —— 拒否の門を跨がない既定の refs。 */
-const NO_REFERENCES = { unsettledTaskCount: 0, auditorName: "fugu" };
+const NO_REFERENCES = { unsettledTaskCount: 0, awaitingLandingTaskCount: 0, auditorName: "fugu" };
 
 describe("deleteAgent: 正常系(issue #205 / ADR 0087 決定1)", () => {
   it("agents/<name>.md を committed main から除去するコミットが着地し、loadRegistry から消える", async () => {
@@ -66,6 +66,37 @@ describe("deleteAgent: 確認で買えない拒否(ADR 0087 決定2/3)", () => {
     });
 
     expect(loadRegistry(registryDir, "purely-local").agents.deckhand).toBeDefined();
+  });
+
+  it("その profile を読んで着地を待つ完了タスクがあると confirm があっても消せず、件数が理由に載る(ADR 0217 決定4)", async () => {
+    const registryDir = await makeMainRegistry();
+
+    await expect(
+      deleteAgent(
+        { name: "deckhand", confirm: true },
+        { registry: { dir: registryDir, mode: "purely-local" }, ...NO_REFERENCES, awaitingLandingTaskCount: 2 },
+      ),
+    ).rejects.toMatchObject({
+      name: "DeletionBlockedError",
+      reasons: [{ code: "tasks_awaiting_landing", count: 2 }],
+    });
+
+    expect(loadRegistry(registryDir, "purely-local").agents.deckhand).toBeDefined();
+  });
+
+  it("組み込みを shadow するエントリは、着地を待つ完了タスクがあっても消せる(ADR 0117 決定2)", async () => {
+    const registryDir = await makeRegistry({
+      "agents/fugu.md":
+        '---\nversion: "2"\nauthority: standard\ndescription: My own auditor.\nprovider: anthropic\nskills: []\n---\nYou are my fugu.\n',
+    });
+    git(registryDir, "branch", "-M", "main");
+
+    await deleteAgent(
+      { name: "fugu", confirm: true },
+      { registry: { dir: registryDir, mode: "purely-local" }, ...NO_REFERENCES, awaitingLandingTaskCount: 1 },
+    );
+
+    expect(loadRegistry(registryDir, "purely-local").agents.fugu).toMatchObject({ builtin: true });
   });
 
   it("盤面の既定 agent は confirm があっても消せない", async () => {

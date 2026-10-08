@@ -455,6 +455,9 @@ export interface QuarantineCheckDeps {
   workspace?: WorkspaceConfig;
   resolveWorkspace?: (taskWorkspace: string | null) => WorkspaceConfig;
   github?: GitHubClient;
+  /** ADR 0217 決定5: agent 名の quarantine の解除検査の前に、その agent のキューの PR の
+   *  盤面の外での merge を観測する。Absent → 観測せず、キューの PR は着地待ちに数えられる。 */
+  landing?: Pick<Landing, "observeMergedAutoMerges">;
   boardState?: BoardStatePath[];
   /** Whether an agent name is currently registered — one half of the agent
    *  check; absent → only "no pending tasks remain" can clear it. */
@@ -519,6 +522,7 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
     },
     agent: async (value) => {
       const quarantineAgentName = value!;
+      await deps.landing?.observeMergedAutoMerges(quarantineAgentName);
       try {
         verifyAgentRepaired(
           deps.db,

@@ -75,6 +75,7 @@ export const unusedLanding: Landing = {
   async observeMergedPullRequest() {
     return false;
   },
+  async observeMergedAutoMerges() {},
   async tick() {},
 };
 

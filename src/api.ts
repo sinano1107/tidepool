@@ -38,7 +38,7 @@ import {
   submitAnswer,
 } from "./human-verbs.js";
 import { IssueContentCache, type Live } from "./issue-view.js";
-import type { Landing } from "./landing.js";
+import { countTasksAwaitingLanding, type Landing } from "./landing.js";
 import {
   changeMemorySettings,
   defineMemoryBranch,
@@ -1071,6 +1071,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
         { name: req.params.name, ...parsed.data },
         {
           unsettledTaskCount: countUnsettledTasksReferencing(db, "assignee", req.params.name),
+          awaitingLandingTaskCount: countTasksAwaitingLanding(db, req.params.name),
           defaultAgentName,
           // 解決側(mcp / scheduler)と同じ既定へ落とす —— ポインタは常に値を持つ
           auditorName: auditorName ?? DEFAULT_AUDITOR_NAME,
