@@ -3296,30 +3296,18 @@ describe("advisor capability (issue #33)", () => {
     })}\n`;
 
   // 結果の content。既定は成功(`advisor_redacted_result`)、失敗は `advisor_tool_result_error`(ADR 0214)。
-  type AdvisorResultContent = { type: string; error_code?: string };
   const assistantLine = (content: unknown[]) => `${JSON.stringify({ type: "assistant", message: { content } })}\n`;
   // 既定は1行に並べる形。`twoLines` は実物の形(呼び出しと結果が別々の assistant 行 ——
   // fixture worker-session-2.1.237.stream.jsonl の22〜23行目)。
   const consultation = (
     id: string,
-    { result = { type: "advisor_redacted_result" }, twoLines = false }: { result?: AdvisorResultContent; twoLines?: boolean } = {},
+    { result = { type: "advisor_redacted_result" }, twoLines = false }: { result?: { type: string; error_code?: string }; twoLines?: boolean } = {},
   ) => {
     const call = { type: "server_tool_use", id, name: "advisor", input: {} };
     const outcome = { type: "advisor_tool_result", tool_use_id: id, content: result };
     return twoLines ? assistantLine([call]) + assistantLine([outcome]) : assistantLine([call, outcome]);
   };
   const failure = (error_code?: string) => ({ type: "advisor_tool_result_error", ...(error_code === undefined ? {} : { error_code }) });
-  // 失敗した呼び出しには advisor_message が来ない(#1524 の triage で観測した形)
-  const resultWithoutAdvisorMessage = () =>
-    resultLine({
-      usage: {
-        input_tokens: 4,
-        output_tokens: 31,
-        cache_read_input_tokens: 61644,
-        cache_creation_input_tokens: 13114,
-        iterations: [{ type: "message" }],
-      },
-    });
 
   const initLine = (model: string) =>
     `${JSON.stringify({ type: "system", subtype: "init", model })}\n`;
@@ -3410,7 +3398,18 @@ describe("advisor capability (issue #33)", () => {
     start("task-advisor-failed-only");
     processes[0]!.stdout.write(initLine("claude-sonnet-5"));
     processes[0]!.stdout.write(consultation("srvtoolu_01", { twoLines: true, result: failure("too_many_requests") }));
-    processes[0]!.stdout.write(resultWithoutAdvisorMessage());
+    // 失敗した呼び出しには advisor_message が来ない(#1524 の triage で観測した形)
+    processes[0]!.stdout.write(
+      resultLine({
+        usage: {
+          input_tokens: 4,
+          output_tokens: 31,
+          cache_read_input_tokens: 61644,
+          cache_creation_input_tokens: 13114,
+          iterations: [{ type: "message" }],
+        },
+      }),
+    );
     emitExit(0, null);
     expect(usageOf(db, "task-advisor-failed-only")?.advisor).toEqual({
       model: null,
