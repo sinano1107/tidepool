@@ -39,5 +39,11 @@ export function whyReviewFlagIsInert(t: ReviewSubject): string | undefined {
   return whyNoCompletionReview({ ...t, review_flag: true });
 }
 
+/** tier / priority が意味を持たない理由。持つなら undefined。review task の要求は review_tier だけである
+ *  (ADR 0111 追記10)。登録の拒否と #1552 の Edit が同じ関数を呼ぶ。 */
+export function whyExecutionRequestIsInert(t: Pick<ReviewSubject, "type">): string | undefined {
+  return t.type === "review" ? "a review task runs at its review_tier; tier and priority are for work tasks only" : undefined;
+}
+
 export const completionReviewFires = (t: ReviewSubject): boolean => whyNoCompletionReview(t) === undefined;
 export const reviewFlagCarriesMeaning = (t: ReviewSubject): boolean => whyReviewFlagIsInert(t) === undefined;

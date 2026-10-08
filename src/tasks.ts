@@ -11,7 +11,13 @@ import type { MergeDial, RosterAgent } from "./registry.js";
 import { normalizeText, whyBlank } from "./required-text.js";
 import { isSettled, type TaskStatus } from "./task-status.js";
 import { assertKnownTier, liveTierId, PRIORITIES, type Priority, proposalTierNames, type Tier, type TierId } from "./tier.js";
-import { completionReviewFires, type ReviewSubject, whyNoCompletionReview, whyReviewFlagIsInert } from "./webui-rules.js";
+import {
+  completionReviewFires,
+  type ReviewSubject,
+  whyExecutionRequestIsInert,
+  whyNoCompletionReview,
+  whyReviewFlagIsInert,
+} from "./webui-rules.js";
 import { BOARD_WORKER_ID, HUMAN_WORKER_ID, NON_AGENT_WORKER_IDS } from "./worker-id.js";
 
 /** The one roster entry `human` gets (issue #43 / ADR 0014): human carries
@@ -473,7 +479,15 @@ function assertQuestionSpec(input: RegisterTaskInput): void {
  *  a DomainError from this layer — spelling the enum per door would mean
  *  three places to update when the vocabulary moves. An unstated column is
  *  not a bad value: null is the request's absence. */
-function assertExecutionRequest(db: Db, input: Pick<RegisterTaskInput, "tier" | "priority" | "review_tier">): void {
+function assertExecutionRequest(
+  db: Db,
+  input: Pick<RegisterTaskInput, "type" | "tier" | "priority" | "review_tier">,
+): void {
+  // review task の要求は review_tier だけ(ADR 0111 追記10)
+  for (const field of ["tier", "priority"] as const) {
+    const reason = input[field] !== undefined && whyExecutionRequestIsInert(input);
+    if (reason) throw new DomainError(`${field} would have no effect — ${reason}`);
+  }
   // 段は盤面の一覧(ADR 0200 決定2): 一覧に無い名前は、いまの一覧を添えて拒む
   if (input.review_tier !== undefined) assertKnownTier(db, "review_tier", input.review_tier);
   if (input.tier !== undefined) assertKnownTier(db, "tier", input.tier);
@@ -2001,7 +2015,7 @@ export function decomposeTask(
   // *question*, not the spec it carries).
   for (const child of input.children) {
     assertGithubRef({ type: "work", ...child });
-    assertExecutionRequest(db, child);
+    assertExecutionRequest(db, { type: "work", ...child });
     assertReviewFieldsTakeEffect({ type: "work", parent_id: parent.id, ...child }, child.review_by, child.review_tier);
     assertReviewByDistinct(child.review_by);
   }

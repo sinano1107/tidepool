@@ -1051,6 +1051,8 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
       return result.ok ? toolResult({}) : toolError(JSON.stringify(result.failure));
     },
   );
+  // ADR 0111 追記10: review task の要求は review_tier だけ
+  const WORK_TASKS_ONLY = "For work tasks only: refused on a review task, which takes review_tier instead.";
   server.registerTool(
     "register_task",
     {
@@ -1069,11 +1071,11 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
         workspace: z.string().optional(),
         risk_flag: z.boolean().optional(),
         review_flag: z.boolean().optional().describe(REVIEW_FLAG_ONLY_ON_WORK_CHILDREN),
-        tier: z.string().optional().describe(tierDescriptions.tier),
+        tier: z.string().optional().describe(`${tierDescriptions.tier}\n${WORK_TASKS_ONLY}`),
         review_by: z.array(requiredTextSchema).optional()
           .describe(`${REVIEWER_NAMES} Omit to use the board Auditor. ${ONLY_WHERE_COMPLETION_REVIEW_FIRES}`),
         review_tier: z.string().optional().describe(`${REVIEW_TIER_BY_TYPE}\n${tierDescriptions.review_tier_choices}`),
-        priority: z.string().optional().describe(PRIORITY_FIELD_DESCRIPTION),
+        priority: z.string().optional().describe(`${PRIORITY_FIELD_DESCRIPTION}\n${WORK_TASKS_ONLY}`),
         decompose_reason: z.string().optional(),
       },
     },

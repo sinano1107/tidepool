@@ -437,7 +437,6 @@ it.each([
         completion_criteria: "c",
         assignee: "tako",
         review_tier: reviewTier,
-        tier: "frontier",
       })
     ).json;
     await t.clock.advance(HOUR);
