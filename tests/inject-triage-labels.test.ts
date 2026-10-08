@@ -54,4 +54,29 @@ describe("inject-triage-labels hook", () => {
     expect(hook({ hook_event_name: "SessionStart", session_id: session, source: "compact" }).stdout).toBe("");
     expect(injected(run(LABEL_COMMAND, session))).toContain(LABELS);
   });
+
+  const denied = (result: { stdout: string }) => JSON.parse(result.stdout).hookSpecificOutput;
+
+  it.each([
+    "gh issue create --title t --body-file b.md --label needs-info",
+    "gh issue create --title t --body-file b.md --label bug,needs-info",
+    "gh issue create --title t --body-file b.md --label=needs-info",
+    "gh issue edit 1596 --add-label 'needs-info'",
+  ])("verify:* の無い needs-info は、実行前に1度だけ拒否し、同じコマンドの再実行は通す: %s", (command) => {
+    const session = randomUUID();
+    const first = denied(run(command, session));
+    expect(first.permissionDecision).toBe("deny");
+    expect(first.permissionDecisionReason).toContain("verify:production");
+    expect(injected(run(command, session))).toContain(LABELS);
+  });
+
+  it.each([
+    "gh issue create --title t --body-file b.md --label needs-info,verify:production",
+    "gh issue create --title t --body-file b.md --label needs-info --label verify:production",
+    "gh issue edit 1 --add-label needs-info --add-label verify:production",
+    "gh issue edit 1 --remove-label needs-info",
+    "gh pr create --title t --label needs-info",
+  ])("verify:* を伴うか、needs-info を足さないなら拒否しない: %s", (command) => {
+    expect(denied(run(command, randomUUID())).permissionDecision).toBeUndefined();
+  });
 });
