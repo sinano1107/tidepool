@@ -3,12 +3,12 @@ import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { quarantineCliAuthForProvider } from "../src/cli-auth.js";
 import type { CodexAppServerProbeResult } from "../src/codex-app-server.js";
-import { type ExecutionSetting, executionSettingsFor } from "../src/execution-setting.js";
-import type { Provider } from "../src/provider.js";
+import { executionSettingsFor } from "../src/execution-setting.js";
 import { healthyOpenai, listedOpenaiModels } from "./fakes.js";
 import {
   api,
   bootTidepool,
+  executionSetting,
   FULL_HANDOFF,
   HOUR,
   mcpClient,
@@ -22,15 +22,6 @@ import { tempDir } from "./temp-dir.js";
 /** issue #446 / ADR 0097 決定2: provider 単位の資源への細分化のゲート面。
  *  moonshot の失効は moonshot を喋る agent の pickup だけを止め(確認型
  *  question が立つ)、anthropic の worker と board call は止まらない。 */
-
-/** 除外を当てる前の候補1件(provider-scheduler.test.ts と同じ形)。 */
-const candidate = (provider: Provider, model: string): ExecutionSetting => ({
-  provider,
-  model,
-  effort: "high",
-  advisor: undefined,
-  tier_id: 1, source: { tier: "board", provider: "only" },
-});
 
 /** agent の entry 宣言を名前の列から組む(provider-scheduler.test.ts と同じ形)。 */
 const entries = (...names: string[]) => ({
@@ -160,8 +151,8 @@ it("OpenAI の unauthorized は OpenAI だけの確認を立て、HTTP 回答時
     openaiUsage,
     taskExecutionCandidates: (task) => [
       task.assignee === "codex-agent"
-        ? candidate("openai", "gpt-5.6-sol")
-        : candidate("anthropic", "claude-opus-4-1"),
+        ? executionSetting("openai", "gpt-5.6-sol")
+        : executionSetting("anthropic", "claude-opus-4-1"),
     ],
   });
   const codex = await registerWork(t, "waits for Codex login", undefined, "codex-agent");
@@ -211,7 +202,7 @@ it("codexHome に auth.json が無い openai は probe を撃たずに absent �
         reason: "Codex credential is no longer usable: account/read reports no account",
       };
     },
-    taskExecutionCandidates: () => [candidate("openai", "gpt-5.6-sol")],
+    taskExecutionCandidates: () => [executionSetting("openai", "gpt-5.6-sol")],
   });
   await registerWork(t, "Codex login を待つ", undefined, "codex-agent");
 

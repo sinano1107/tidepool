@@ -1,13 +1,12 @@
 import { afterEach, expect, it } from "vitest";
 import { setDisplayLanguage } from "../src/display-language.js";
 import { appendEvent } from "../src/events.js";
-import type { ExecutionSetting } from "../src/execution-setting.js";
 import { injectionQueryText } from "../src/memory.js";
 import { logDecision, registerTask } from "../src/tasks.js";
 import { reportProviderUsage } from "../src/throttle.js";
 import { BOARD_WORKER_ID, HUMAN_WORKER_ID } from "../src/worker-id.js";
 import { FakeTranslationClient, healthyOpenai } from "./fakes.js";
-import { api, bootTidepool, GIT_FIXTURE_TEST_TIMEOUT, HOUR, HUMAN_WEBUI, makeWorkspace, questions, queueWork, type Tidepool } from "./harness.js";
+import { api, bootTidepool, executionSetting, GIT_FIXTURE_TEST_TIMEOUT, HOUR, HUMAN_WEBUI, makeWorkspace, questions, queueWork, type Tidepool } from "./harness.js";
 
 /** ADR 0175: 人間が登録した task の関連 leaf は、pickup 時に訳した英語の view で引く。盤面境界で見えるのは
  *  「誰の task を訳し、何を start に渡したか」まで —— 記録に刻むことは adapter の seam が言う。 */
@@ -86,7 +85,7 @@ it("翻訳 client の無い盤面は撃たなかったのと同じ理由 throttl
 it("Provider anthropic が使えない間は翻訳を撃たず、理由 throttled を start に渡し、spawn は成立する", async () => {
   const translationClient = new FakeTranslationClient();
   // anthropic が止まっていても、openai で走る task は pickup される
-  const openai: ExecutionSetting = { provider: "openai", model: "gpt-5.6-sol", effort: "high", advisor: undefined, tier_id: 1, source: { tier: "board", provider: "only" } };
+  const openai = executionSetting("openai", "gpt-5.6-sol");
   t = await bootTidepool({ translationClient, openaiUsage: healthyOpenai, taskExecutionCandidates: () => [openai] });
   const now = t.clock.now();
   reportProviderUsage(t.db, {

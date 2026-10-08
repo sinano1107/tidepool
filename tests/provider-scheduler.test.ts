@@ -2,9 +2,7 @@ import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import type { CodexAppServerProbeResult } from "../src/codex-app-server.js";
-import type { ExecutionSetting } from "../src/execution-setting.js";
 import { executionSettingsFor } from "../src/execution-setting.js";
-import type { Provider } from "../src/provider.js";
 import { InvalidAgentDefinitionError } from "../src/registry.js";
 import { registerTask } from "../src/tasks.js";
 import { healthyOpenai, listedOpenaiModels, usagePanelText } from "./fakes.js";
@@ -12,6 +10,7 @@ import {
   api,
   bootTidepool,
   completeIntegrationReviews,
+  executionSetting,
   FULL_HANDOFF,
   HOUR,
   HUMAN_WEBUI,
@@ -26,16 +25,6 @@ import { tempDir } from "./temp-dir.js";
 
 let t: Tidepool;
 afterEach(() => t?.stop());
-
-/** 除外を当てる前の候補1件。この suite が言いたいのは「どの資源に当たるか」なので、
- *  entry の並びは各テストが自分で書く(#544 以降、盤面は候補の**列**を渡す)。 */
-const candidate = (provider: Provider, model: string): ExecutionSetting => ({
-  provider,
-  model,
-  effort: "high",
-  advisor: undefined,
-  tier_id: 1, source: { tier: "board", provider: "only" },
-});
 
 it("先頭 Provider が throttle 中でも同じ poll で次を選び、回復後は元の順序へ戻り、実行中 worker を止めない", async () => {
   let openaiThrottled = true;
@@ -66,8 +55,8 @@ it("先頭 Provider が throttle 中でも同じ poll で次を選び、回復�
     openaiUsage,
     taskExecutionCandidates: (task) => [
       task.assignee === "codex-agent"
-        ? candidate("openai", "gpt-5.6-sol")
-        : candidate("anthropic", "claude-opus-4-1"),
+        ? executionSetting("openai", "gpt-5.6-sol")
+        : executionSetting("anthropic", "claude-opus-4-1"),
     ],
   });
   const openai = await registerWork(t, "first, but throttled", undefined, "codex-agent");
@@ -128,7 +117,7 @@ const slidingWindows = (usedPercent: number) => async (now: Date): Promise<Codex
 it("使用率 0% の窓は未開始として観測から落ち、reset が窓幅まるごと先でも openai は pickup される", async () => {
   t = await bootTidepool({
     openaiUsage: slidingWindows(0),
-    taskExecutionCandidates: () => [candidate("openai", "gpt-5.6-sol")],
+    taskExecutionCandidates: () => [executionSetting("openai", "gpt-5.6-sol")],
   });
   const openai = await registerWork(t, "idle codex", undefined, "codex-agent");
 
@@ -145,7 +134,7 @@ it("使用率 0% の窓は未開始として観測から落ち、reset が窓幅
 it("窓が開いて 1% 付いた次の観測では、同じ滑る reset でも予約ぶん throttled になる", async () => {
   t = await bootTidepool({
     openaiUsage: slidingWindows(1),
-    taskExecutionCandidates: () => [candidate("openai", "gpt-5.6-sol")],
+    taskExecutionCandidates: () => [executionSetting("openai", "gpt-5.6-sol")],
   });
   await registerWork(t, "just opened its window", undefined, "codex-agent");
 
@@ -189,7 +178,7 @@ it("model-specific window は同じ OpenAI Provider の対象 model だけを sk
       ],
     }),
     taskExecutionCandidates: (task) => [
-      candidate("openai", task.assignee === "limited-agent" ? "gpt-limited" : "gpt-healthy"),
+      executionSetting("openai", task.assignee === "limited-agent" ? "gpt-limited" : "gpt-healthy"),
     ],
   });
   const limited = await registerWork(t, "limited model first", undefined, "limited-agent");
@@ -212,8 +201,8 @@ it("OpenAI usage が観測不能なら question を立てず OpenAI だけ fail-
     }),
     taskExecutionCandidates: (task) => [
       task.assignee === "codex-agent"
-        ? candidate("openai", "gpt-5.6-sol")
-        : candidate("anthropic", "claude-opus-4-1"),
+        ? executionSetting("openai", "gpt-5.6-sol")
+        : executionSetting("anthropic", "claude-opus-4-1"),
     ],
   });
   const codex = await registerWork(t, "unobservable OpenAI", undefined, "codex-agent");
@@ -262,7 +251,7 @@ it("Provider/window ごとの catch-up timer は別 window の遅い reset に�
         },
       ],
     }),
-    taskExecutionCandidates: () => [candidate("openai", "gpt-5.6-sol")],
+    taskExecutionCandidates: () => [executionSetting("openai", "gpt-5.6-sol")],
   });
   const task = await registerWork(t, "wakes at primary catch-up", undefined, "codex-agent");
 
@@ -302,8 +291,8 @@ it("Anthropic throttle は legacy board halt を残さず同じ poll と次 poll
     }),
     taskExecutionCandidates: (task) => [
       task.assignee === "claude-agent"
-        ? candidate("anthropic", "claude-opus-4-1")
-        : candidate("openai", "gpt-5.6-sol"),
+        ? executionSetting("anthropic", "claude-opus-4-1")
+        : executionSetting("openai", "gpt-5.6-sol"),
     ],
   });
   t.worker.scriptUsage(usagePanelText({
@@ -353,7 +342,7 @@ it("model-specific window が外すのは当たった task だけ —— 同じ 
     }),
     // #543 以降、model は agent ではなく **task の要求**で決まる
     taskExecutionCandidates: (task) => [
-      candidate("openai", task.tier === "frontier" ? "gpt-frontier" : "gpt-economy"),
+      executionSetting("openai", task.tier === "frontier" ? "gpt-frontier" : "gpt-economy"),
     ],
   });
   const requested = (
