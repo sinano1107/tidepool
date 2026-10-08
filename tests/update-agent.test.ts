@@ -1,8 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
-import { UnknownAgentError } from "../src/agent.js";
 import { AgentTierMismatchError, changeAgentTier, renameAgentTiers, updateAgent } from "../src/agent-create.js";
-import { InvalidAgentDefinitionError, loadRegistry, UnknownAuthorityProfileError } from "../src/registry.js";
+import { InvalidAgentDefinitionError, loadRegistry, UnknownAgentError, UnknownAuthorityProfileError } from "../src/registry.js";
 import { RegistryPushFailedError } from "../src/registry-write.js";
 import { seedTierNames } from "./fakes.js";
 import { makeRegistry, makeRemoteBackedRegistry } from "./registry-fixture.js";

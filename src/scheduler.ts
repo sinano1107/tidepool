@@ -1,4 +1,4 @@
-import { quarantineAgent, UnknownAgentError } from "./agent.js";
+import { quarantineAgent } from "./agent.js";
 import { boardHalts } from "./board-halt.js";
 import { type CliAuthCheck, quarantineCliAuthForProvider } from "./cli-auth.js";
 import type { Clock } from "./clock.js";
@@ -35,6 +35,7 @@ import {
   InvalidAgentDefinitionError,
   type RegistryReachabilityCheck,
   type RegistrySource,
+  UnknownAgentError,
 } from "./registry.js";
 import { registryReachabilityPickupBlocked } from "./registry-reachability.js";
 import { parseGitHubRepo, repairRepoAccess } from "./repo-access.js";

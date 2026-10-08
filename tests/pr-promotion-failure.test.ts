@@ -25,7 +25,7 @@ it("a failed PR promotion leaves the work done and asks Tidepool whether to retr
   const { workspace: ws } = await makeRemoteBackedWorkspace("sandbox");
   t = await bootTidepool({
     workspace: ws,
-    authority: { name: "standard", guidance: "", merge: "escalate" },
+    resolveAuthority: () => ({ name: "standard", guidance: "", merge: "escalate" }),
   });
   t.github.scriptFailure(new Error("token expired"));
   const task = await registerWork(t, "ship the feature");
@@ -61,7 +61,7 @@ it("human retry maps failure to a visible error, then lands while excluding the 
   const { workspace: ws } = await makeRemoteBackedWorkspace("sandbox");
   t = await bootTidepool({
     workspace: ws,
-    authority: { name: "standard", guidance: "", merge: "escalate" },
+    resolveAuthority: () => ({ name: "standard", guidance: "", merge: "escalate" }),
   });
   t.github.scriptFailure(new Error("token expired"));
   const task = await registerWork(t, "ship the feature");

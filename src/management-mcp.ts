@@ -1,7 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Router } from "express";
 import { z } from "zod";
-import { UnknownAgentError } from "./agent.js";
 import {
   type AgentAdmin,
   BuiltInAgentNotEditableError,
@@ -89,6 +88,7 @@ import {
   InvalidWorkspaceNameError,
   isBuiltInAgentName,
   MERGE_DIAL_VALUES,
+  UnknownAgentError,
   UnknownAuthorityProfileError,
 } from "./registry.js";
 import { RepoAccessMissingError } from "./repo-access.js";

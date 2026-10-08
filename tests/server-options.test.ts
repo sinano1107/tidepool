@@ -6,6 +6,7 @@ import { expect, it, vi } from "vitest";
 import { openDb } from "../src/db.js";
 import { GitHubAuth } from "../src/github-auth.js";
 import { QUARANTINES } from "../src/quarantine.js";
+import { UnknownAgentError } from "../src/registry.js";
 import {
   type BoardComposition,
   buildServerOptions,
@@ -468,9 +469,10 @@ it("registry があるとき、各口には対応する解決子が刺さって�
   // 残りの registry 由来の口も、registry の中身をそのまま映していること
   expect(options.listAgents?.().map((agent) => agent.name)).toEqual(["deckhand", "fugu"]);
   expect(options.registryCandidates?.()?.assignees).toEqual(["deckhand", "fugu", "human"]);
-  // assignee 未設定は defaultAgentName へ、registry の知らない名前は undefined へ
+  // assignee 未設定は defaultAgentName へ。registry の知らない名前は「profile 無し」に
+  // 潰さず、agent 名の quarantine の入口が受ける解決失敗として投げる(ADR 0217 決定3)
   expect(options.resolveAuthority?.(null)).toBeDefined();
-  expect(options.resolveAuthority?.("nobody")).toBeUndefined();
+  expect(() => options.resolveAuthority?.("nobody")).toThrow(UnknownAgentError);
   // ADR 0110 決定3: model は agent の宣言ではなく盤面の表から来る —— fixture の
   // agent は tier を書いていないので盤面既定の行になる。
   expect(options.taskExecutionCandidates({ assignee: "deckhand" } as any)).toMatchObject([

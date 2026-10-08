@@ -1,6 +1,6 @@
 import { afterEach, expect, it } from "vitest";
-import { UnknownAgentError } from "../src/agent.js";
 import type { AgentDeletionReferences, DeleteAgentInput } from "../src/agent-create.js";
+import { UnknownAgentError } from "../src/registry.js";
 import {
   DeletionBlockedError,
   DeletionConfirmationRequiredError,

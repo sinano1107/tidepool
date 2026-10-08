@@ -1,7 +1,6 @@
 import { readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { stringify as stringifyYaml } from "yaml";
-import { UnknownAgentError } from "./agent.js";
 import { DomainError } from "./domain-error.js";
 import type { RenameAgentTiers, RenameAgentTiersInput } from "./execution-setting.js";
 import type { GitHubAuth } from "./github-auth.js";
@@ -18,6 +17,7 @@ import {
   ownEntry,
   type Registry,
   type RegistrySource,
+  UnknownAgentError,
   UnknownAuthorityProfileError,
 } from "./registry.js";
 import {
