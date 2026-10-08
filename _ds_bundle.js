@@ -187,7 +187,7 @@ function LogEntry({ entry = {}, onObject, onExpand, onOpenMemoryEntry, active = 
     "#",
     id
   ));
-  const causeNote = causeText && /* @__PURE__ */ React.createElement("span", { style: { color: "var(--text-muted)", flexShrink: 0, maxWidth: "45%" } }, causeText, causeLinks, causeEvidence && ` \u2014 ${causeEvidence}`);
+  const causeNote = causeText && /* @__PURE__ */ React.createElement("span", { style: { color: "var(--text-muted)", flexShrink: 0, maxWidth: "45%" } }, /* @__PURE__ */ React.createElement("span", null, causeText), causeLinks, causeEvidence && ` \u2014 ${causeEvidence}`);
   const band = { display: "flex", alignItems: "flex-start", gap: 8, marginTop: 6, padding: "6px 10px", borderRadius: "var(--radius-xs)", fontSize: "var(--text-xs)", whiteSpace: "pre-wrap", overflowWrap: "anywhere" };
   return /* @__PURE__ */ React.createElement(
     "div",

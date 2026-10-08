@@ -19,7 +19,7 @@ export function LogEntry({ entry = {}, onObject, onExpand, onOpenMemoryEntry, ac
   ));
   // 判定の根拠を cause の横に(ADR 0213 決定4)。長い本文で異議の欄を潰さないよう幅を抑える
   const causeNote = causeText && (
-    <span style={{ color: 'var(--text-muted)', flexShrink: 0, maxWidth: '45%' }}>{causeText}{causeLinks}{causeEvidence && ` — ${causeEvidence}`}</span>
+    <span style={{ color: 'var(--text-muted)', flexShrink: 0, maxWidth: '45%' }}><span>{causeText}</span>{causeLinks}{causeEvidence && ` — ${causeEvidence}`}</span>
   );
   const band = { display: 'flex', alignItems: 'flex-start', gap: 8, marginTop: 6, padding: '6px 10px', borderRadius: 'var(--radius-xs)', fontSize: 'var(--text-xs)', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' };
   // 注記の帯は Object 押下面の外に置く(issue #1090)—— role="button" の子孫に
