@@ -26,6 +26,7 @@ import { type GitHubClient, IssueGoneError } from "./github.js";
 import type { HarnessContainmentCheck } from "./harness-containment.js";
 import { type Landing, type LandingVerdict, landingBlock } from "./landing.js";
 import { approveMemoryProposal, humanEntryInput, listMemoryEntries, type MemoryAmendment, movedTail, parseMemoryAmendment, rejectMemoryProposal } from "./memory.js";
+import { whyNotPositiveInteger } from "./positive-integer.js";
 import type { Provider } from "./provider.js";
 import { parseTableRowValue, type QuarantineChecks, type QuarantineKind, type QuarantineResolvers, quarantineStops } from "./quarantine.js";
 import type { Harness, RegistryReachabilityCheck } from "./registry.js";
@@ -172,12 +173,9 @@ export async function addIssueCommentThroughHumanDoor(
   deps: Pick<RegisterThroughHumanDoorDeps, "github" | "workspace" | "resolveWorkspace">,
   input: { workspace: string; github_issue_number: number; body: string },
 ): Promise<{ ok: true } | { ok: false; failure: IssueCommentFailure }> {
-  if (
-    whyBlank(input.workspace) ||
-    !Number.isInteger(input.github_issue_number) ||
-    input.github_issue_number <= 0 ||
-    whyBlank(input.body)
-  ) {
+  const issueNumberReason = whyNotPositiveInteger(input.github_issue_number);
+  if (issueNumberReason) return { ok: false, failure: { kind: "invalid", error: issueNumberReason } };
+  if (whyBlank(input.workspace) || whyBlank(input.body)) {
     return {
       ok: false,
       failure: { kind: "invalid", error: "an issue comment requires a workspace, positive issue number, and body" },

@@ -4,7 +4,8 @@ import { ADVISOR_CEILINGS, type AdvisorCeiling, type AdvisorSource, claudeAdviso
 import type { Db } from "./db.js";
 import { DomainError } from "./domain-error.js";
 import { appendEvent, type EventOrigin } from "./events.js";
-import { PROVIDER_VALUES, type Provider } from "./provider.js";
+import { whyInvalidPrice } from "./price.js";
+import { PROVIDER_VALUES, type Provider, whyInvalidProviderRank } from "./provider.js";
 import { openQuarantineQuestions, openQuarantineValues, tableRowValue } from "./quarantine.js";
 import type { AgentDefinition } from "./registry.js";
 import { RegistryFetchFailedError, RegistryPushFailedError } from "./registry-write.js";
@@ -287,7 +288,7 @@ export interface SelectorInput {
   /** Provider 順位(盤面設定 `execution_defaults.provider_rank`、未設定 = 盤面が知る Provider の
    *  宣言順 `PROVIDER_VALUES`)。**入力であって定数ではない** —— 盤面境界の薄い
    *  ラッパ(`selectorInputFor`)が DB から読んで渡す。`PROVIDER_VALUES` の順列で
-   *  あること(`isProviderRank`)は書く口が保証する —— 欠けた Provider は
+   *  あること(`whyInvalidProviderRank`)は書く口が保証する —— 欠けた Provider は
    *  `indexOf` が -1 になって**先頭**に並んでしまう。 */
   providerRank: readonly Provider[];
   /** task の要求ティア(CONTEXT.md「要求」)。省略 → agent の `tier`。 */
@@ -482,12 +483,6 @@ export function readExecutionSettingsWithQuarantine(db: Db) {
   };
 }
 
-/** Provider 順位として書けるのは `PROVIDER_VALUES` の**順列**だけ —— 欠けた Provider は
- *  selector の `indexOf` が -1 になって先頭に並び、重複は順位を二重に言う。 */
-function isProviderRank(rank: readonly string[]): rank is Provider[] {
-  return rank.length === PROVIDER_VALUES.length && PROVIDER_VALUES.every((provider) => rank.includes(provider));
-}
-
 /** 表の行の鍵 = 主キー (provider, model, effort)(ADR 0200 決定5)。行を名指す面はこの3欄で名指す。 */
 const rowKeySchema = z.object({ provider: z.enum(PROVIDER_VALUES), model: requiredTextSchema, effort: requiredTextSchema });
 type RowKey = z.infer<typeof rowKeySchema>;
@@ -529,16 +524,23 @@ export const executionSettingsChangeSchema = z.discriminatedUnion("setting", [
       tier: requiredTextSchema,
       model: requiredTextSchema,
       effort: requiredTextSchema,
-      price_in: z.number().nonnegative(),
-      price_out: z.number().nonnegative(),
+      price_in: z.number().superRefine((value, ctx) => {
+        const reason = whyInvalidPrice(value);
+        if (reason) ctx.addIssue({ code: "custom", message: reason });
+      }),
+      price_out: z.number().superRefine((value, ctx) => {
+        const reason = whyInvalidPrice(value);
+        if (reason) ctx.addIssue({ code: "custom", message: reason });
+      }),
     }),
   }),
   z.object({ setting: z.literal("delete_row"), ...rowKeySchema.shape }),
   z.object({ setting: z.literal("advisor_ceiling"), value: z.enum(ADVISOR_CEILINGS) }),
   z.object({
     setting: z.literal("provider_rank"),
-    value: z.array(z.enum(PROVIDER_VALUES)).refine(isProviderRank, {
-      message: `provider rank must list every provider exactly once (${PROVIDER_VALUES.join(" / ")})`,
+    value: z.array(z.enum(PROVIDER_VALUES)).superRefine((value, ctx) => {
+      const reason = whyInvalidProviderRank(value);
+      if (reason) ctx.addIssue({ code: "custom", message: reason });
     }),
   }),
   z.object({ setting: z.literal("priority"), value: z.enum(PRIORITIES) }),

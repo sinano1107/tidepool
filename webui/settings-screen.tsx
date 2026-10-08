@@ -1,3 +1,8 @@
+/** Numeric drafts use the same parsed value for validation and submission. */
+function readNumericDraft(value: string | number | undefined): number {
+  return typeof value === 'number' ? value : value?.trim() ? Number(value) : NaN;
+}
+
 // The client-side mirror of the server's REGISTRY_NAME_PATTERN gate, shared by
 // the workspace / agent / profile create forms — the name becomes a directory
 // or a file name in the registry, so the three share one rule. It drives the
@@ -1184,7 +1189,9 @@ function QuietHoursCard({ start, end, tz, say, onSaved, edit }: {
   const [draftEnd, setDraftEnd] = React.useState(end);
   const [busy, setBusy] = React.useState(false);
   const dirty = draftStart !== start || draftEnd !== end;
-  const ok = !TidepoolRules.whyBlank(draftStart) && !TidepoolRules.whyBlank(draftEnd);
+  const startReason = TidepoolRules.whyInvalidClockTime(draftStart);
+  const endReason = TidepoolRules.whyInvalidClockTime(draftEnd);
+  const ok = !startReason && !endReason;
   useDirtySignal(edit, open, dirty);
 
   const save = async () => {
@@ -1217,8 +1224,8 @@ function QuietHoursCard({ start, end, tz, say, onSaved, edit }: {
       {open && (
         <React.Fragment>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-            <Input label="Start" mono value={draftStart} onChange={(e) => setDraftStart(e.target.value)} placeholder="HH:MM" />
-            <Input label="End" mono value={draftEnd} onChange={(e) => setDraftEnd(e.target.value)} placeholder="HH:MM" />
+            <Input label="Start" error={startReason} mono value={draftStart} onChange={(e) => setDraftStart(e.target.value)} placeholder="HH:MM" />
+            <Input label="End" error={endReason} mono value={draftEnd} onChange={(e) => setDraftEnd(e.target.value)} placeholder="HH:MM" />
           </div>
           <p style={{ margin: 0, fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
             start after end wraps past midnight (e.g. 23:00–07:00) — that's valid, not an error.
@@ -1253,10 +1260,8 @@ function PaceOffsetsCard({ offsets, say, onSaved, edit }: {
   const keys = offsets.map((value) => `${value.provider}:${value.window}`);
   const current = asDraft(offsets);
   const dirty = keys.some((key) => String(draft[key]) !== String(current[key]));
-  // the API rejects non-integers / out-of-range at the entry (ADR 0030) — the
-  // form mirrors that check so the button only enables on a sendable value
-  const validOffset = (v: string | number | undefined) => /^\d{1,3}$/.test(String(v).trim()) && Number(v) <= 100;
-  const ok = keys.every((key) => validOffset(draft[key]));
+  const offsetReason = (key: string) => TidepoolRules.whyInvalidOffset(readNumericDraft(draft[key]));
+  const ok = keys.every((key) => !offsetReason(key));
   useDirtySignal(edit, open, dirty);
 
   const save = async () => {
@@ -1269,7 +1274,7 @@ function PaceOffsetsCard({ offsets, say, onSaved, edit }: {
       await Promise.all(changed.map((value) => api('/api/settings/provider-pace-offsets', {
         provider: value.provider,
         window: value.window,
-        offset: Number(draft[`${value.provider}:${value.window}`]),
+        offset: readNumericDraft(draft[`${value.provider}:${value.window}`]),
       })));
       say('success', 'provider pace offsets saved', `${changed.length} window${changed.length === 1 ? '' : 's'} updated`);
       edit.close();
@@ -1297,7 +1302,7 @@ function PaceOffsetsCard({ offsets, say, onSaved, edit }: {
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 12 }}>
             {offsets.map((value) => {
               const key = `${value.provider}:${value.window}`;
-              return <Input key={key} label={`${value.provider} · ${value.window}`} mono value={String(draft[key])}
+              return <Input key={key} error={offsetReason(key)} label={`${value.provider} · ${value.window}`} mono value={String(draft[key])}
                 onChange={(e) => setDraft({ ...draft, [key]: e.target.value })} placeholder={String(value.offset)} />;
             })}
           </div>
@@ -1328,14 +1333,14 @@ function MemorySettingsCard({ settings, say, onSaved, edit }: {
   const [draft, setDraft] = React.useState(cap);
   const [busy, setBusy] = React.useState(false);
   const dirty = draft.trim() !== cap;
-  // the API takes positive integers only — mirror it so Save enables on a sendable value
-  const ok = /^[1-9]\d*$/.test(draft.trim());
+  const reason = TidepoolRules.whyNotPositiveInteger(readNumericDraft(draft));
+  const ok = !reason;
   useDirtySignal(edit, open, dirty);
 
   const save = async () => {
     setBusy(true);
     try {
-      const saved = await api('POST /api/settings/memory', { body: { injection_token_cap: Number(draft.trim()) } });
+      const saved = await api('POST /api/settings/memory', { body: { injection_token_cap: readNumericDraft(draft) } });
       say('success', 'memory settings saved', `${saved.injection_token_cap} tokens`);
       edit.close();
       await onSaved();
@@ -1353,7 +1358,7 @@ function MemorySettingsCard({ settings, say, onSaved, edit }: {
       {!open && <FieldRow label="injection cap" kind="mono" value={`${cap} tokens`} />}
       {open && (
         <React.Fragment>
-          <Input label="Injection cap (tokens)" mono value={draft} onChange={(e) => setDraft(e.target.value)} placeholder={cap} />
+          <Input label="Injection cap (tokens)" error={reason} mono value={draft} onChange={(e) => setDraft(e.target.value)} placeholder={cap} />
           <p style={{ margin: 0, fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
             the most memory a worker is handed at spawn. past the cap, entry text is dropped first, then the index gets shallower, then relevant entries go one at a time from the bottom.
           </p>
@@ -1431,14 +1436,14 @@ function MetaReviewSettingsCard({ settings, say, onSaved, edit }: {
   const [draft, setDraft] = React.useState(period);
   const [busy, setBusy] = React.useState(false);
   const dirty = draft.trim() !== period;
-  // the API takes positive integers only — mirror it so Save enables on a sendable value
-  const ok = /^[1-9]\d*$/.test(draft.trim());
+  const reason = TidepoolRules.whyNotPositiveInteger(readNumericDraft(draft));
+  const ok = !reason;
   useDirtySignal(edit, open, dirty);
 
   const save = async () => {
     setBusy(true);
     try {
-      const saved = await api('POST /api/settings/meta-review', { body: { period_days: Number(draft.trim()) } });
+      const saved = await api('POST /api/settings/meta-review', { body: { period_days: readNumericDraft(draft) } });
       say('success', 'meta-review settings saved', `every ${saved.period_days} days`);
       edit.close();
       await onSaved();
@@ -1456,7 +1461,7 @@ function MetaReviewSettingsCard({ settings, say, onSaved, edit }: {
       {!open && <FieldRow label="period" kind="mono" value={`${period} days`} />}
       {open && (
         <React.Fragment>
-          <Input label="Period (days)" mono value={draft} onChange={(e) => setDraft(e.target.value)} placeholder={period} />
+          <Input label="Period (days)" error={reason} mono value={draft} onChange={(e) => setDraft(e.target.value)} placeholder={period} />
           <p style={{ margin: 0, fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
             the fewest days between two meta-reviews of the same subject (memory or routing). once past it, the board registers one as soon as there is something new to review.
           </p>
@@ -1812,6 +1817,7 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit, fo
   // selection) or by an existing approved one. Entries, not ids, so a filter change keeps what was picked
   const [selected, setSelected] = React.useState<TpMemoryEntry[]>([]);
   const [foldTarget, setFoldTarget] = React.useState('');
+  const foldReason = TidepoolRules.whyNotPositiveInteger(readNumericDraft(foldTarget));
   const selectedIds = selected.map((e) => `#${e.id}`).join(', ');
   // a new entry replaces only approved ones: a candidate is corrected in its question (ADR 0162 決定2)
   const candidateSelected = selected.some((e) => e.state === 'candidate');
@@ -1822,7 +1828,7 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit, fo
     ...blank, kind: foldKinds[0]!, kinds: foldKinds, workspace: selected[0]!.scope ?? '', path: selected[0]!.path,
     supersedes: selected.map((e) => e.id), inheritedSource: sharedCase(selected), dead: deadRefs(selected[0]!),
   }));
-  const foldIntoExisting = () => submit('/api/settings/memory/fold', { replaces: selected.map((e) => e.id), successor_id: Number(foldTarget) },
+  const foldIntoExisting = () => submit('/api/settings/memory/fold', { replaces: selected.map((e) => e.id), successor_id: readNumericDraft(foldTarget) },
     ['folded', `${selectedIds} → #${foldTarget}`], 'fold failed', () => { setSelected([]); setFoldTarget(''); });
   // Edit (ADR 0162 決定1): the body copied into the write form, superseding just this entry; an exemplar keeps its case
   const startEntryEdit = (entry: TpMemoryEntry) => edit.open(writeId, () => setDraft({
@@ -1885,8 +1891,8 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit, fo
           <p style={muted}>selected {selectedIds}</p>
           <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', flexWrap: 'wrap' }}>
             <Button variant="secondary" size="sm" disabled={busy || foldKinds.length === 0} onClick={foldIntoNew}>Fold into a new entry</Button>
-            <Input label="Fold into existing (entry id)" mono value={foldTarget} onChange={(e) => setFoldTarget(e.target.value)} />
-            <Button variant="secondary" size="sm" disabled={busy || !/^[1-9]\d*$/.test(foldTarget)} onClick={foldIntoExisting}>Fold into #{foldTarget || '…'}</Button>
+            <Input label="Fold into existing (entry id)" error={foldReason} mono value={foldTarget} onChange={(e) => setFoldTarget(e.target.value)} />
+            <Button variant="secondary" size="sm" disabled={busy || !!foldReason} onClick={foldIntoExisting}>Fold into #{foldTarget || '…'}</Button>
             <Button variant="ghost" size="sm" disabled={busy} onClick={() => setSelected([])}>Clear</Button>
           </div>
           {foldKinds.length === 0 && <p style={muted}>{candidateSelected
@@ -2049,9 +2055,8 @@ function ExecutionDefaultsCard({ settings, say, onSaved, edit }: {
   const dirty = rankChanged || draft.priority !== current.priority || draft.ceiling !== current.ceiling
     || draft.defaultTier !== current.defaultTier || draft.judgementTier !== current.judgementTier;
   const tierNames = settings.tiers.map((tier) => tier.name);
-  // the API only takes a permutation of every provider (a missing one would
-  // sort first in the selector) — mirror that so Save only enables on a sendable rank
-  const ok = new Set(draft.rank).size === settings.providers.length;
+  const rankReason = TidepoolRules.whyInvalidProviderRank(draft.rank);
+  const ok = !rankReason;
   useDirtySignal(edit, open, dirty);
 
   const save = async () => {
@@ -2114,6 +2119,7 @@ function ExecutionDefaultsCard({ settings, say, onSaved, edit }: {
                   onChange={(e) => setDraft({ ...draft, rank: draft.rank.map((p, j) => (j === i ? e.target.value : p)) })} />
               ))}
             </div>
+            {rankReason && <p style={{ margin: 0, fontSize: 'var(--text-xs)', color: 'var(--coral-4)' }}>{rankReason}</p>}
             <Select label="Default priority" options={[...settings.priorities]} value={draft.priority}
               onChange={(e) => setDraft({ ...draft, priority: e.target.value })} />
             <Select label="Advisor ceiling" options={[...settings.advisorCeilings]} value={draft.ceiling}
@@ -2273,7 +2279,7 @@ function ExecutionTableCard({ settings, say, onSaved, edit }: {
   const [draft, setDraft] = React.useState(() => asDraft(settings.table));
   const [busy, setBusy] = React.useState(false);
   const current = new Map(settings.table.map((row) => [rowKey(row), row]));
-  const toRow = (d: DraftRow): SettingsExecutionRow => ({ provider: d.provider, tier: d.tier, model: TidepoolRules.normalizeText(d.model), effort: TidepoolRules.normalizeText(d.effort), price_in: Number(d.price_in), price_out: Number(d.price_out) });
+  const toRow = (d: DraftRow): SettingsExecutionRow => ({ provider: d.provider, tier: d.tier, model: TidepoolRules.normalizeText(d.model), effort: TidepoolRules.normalizeText(d.effort), price_in: readNumericDraft(d.price_in), price_out: readNumericDraft(d.price_out) });
   const same = (a: SettingsExecutionRow | undefined, b: SettingsExecutionRow) => a && rowKey(a) === rowKey(b) && a.tier === b.tier && a.price_in === b.price_in && a.price_out === b.price_out;
   // 既存の行は下書きの key(元の3欄)で名指して編集し、新しい行は key なしで足す
   const writes = draft.filter((d) => !same(current.get(d.key), toRow(d)))
@@ -2283,10 +2289,9 @@ function ExecutionTableCard({ settings, say, onSaved, edit }: {
     });
   const deletes = [...current.values()].filter((row) => !draft.some((d) => d.key === rowKey(row)));
   const dirty = writes.length > 0 || deletes.length > 0;
-  const validPrice = (v: string) => /^\d+(\.\d+)?$/.test(v.trim());
   // 1つの (model, effort) は1行、1つの段に同じ model は1行まで(ADR 0200 決定5)
   const unique = (of: (row: SettingsExecutionRow) => string) => new Set(draft.map((d) => of(toRow(d)))).size === draft.length;
-  const ok = draft.every((d) => !TidepoolRules.whyBlank(d.model) && !TidepoolRules.whyBlank(d.effort) && validPrice(d.price_in) && validPrice(d.price_out))
+  const ok = draft.every((d) => !TidepoolRules.whyBlank(d.model) && !TidepoolRules.whyBlank(d.effort) && !TidepoolRules.whyInvalidPrice(readNumericDraft(d.price_in)) && !TidepoolRules.whyInvalidPrice(readNumericDraft(d.price_out)))
     && unique(rowKey) && unique((row) => `${row.provider}:${row.model}:${row.tier}`);
   useDirtySignal(edit, open, dirty);
 
@@ -2339,8 +2344,8 @@ function ExecutionTableCard({ settings, say, onSaved, edit }: {
                 <Select label="Tier" options={settings.tiers.map((tier) => tier.name)} value={d.tier} onChange={(e) => update(i, { tier: e.target.value })} />
                 <Input label="Model" mono value={d.model} onChange={(e) => update(i, { model: e.target.value })} placeholder="concrete model id — e.g. claude-opus-5-5" />
                 <Input label="Effort" mono value={d.effort} onChange={(e) => update(i, { effort: e.target.value })} placeholder="high" />
-                <Input label="Price in" mono value={d.price_in} onChange={(e) => update(i, { price_in: e.target.value })} placeholder="USD / MTok" />
-                <Input label="Price out" mono value={d.price_out} onChange={(e) => update(i, { price_out: e.target.value })} placeholder="USD / MTok" />
+                <Input label="Price in" error={TidepoolRules.whyInvalidPrice(readNumericDraft(d.price_in))} mono value={d.price_in} onChange={(e) => update(i, { price_in: e.target.value })} placeholder="USD / MTok" />
+                <Input label="Price out" error={TidepoolRules.whyInvalidPrice(readNumericDraft(d.price_out))} mono value={d.price_out} onChange={(e) => update(i, { price_out: e.target.value })} placeholder="USD / MTok" />
                 <Button variant="ghost" size="sm" onClick={() => setDraft(draft.filter((_, j) => j !== i))} aria-label={`remove ${d.provider} ${d.tier} ${d.model}`.trim()}>Remove</Button>
               </div>
             ))}

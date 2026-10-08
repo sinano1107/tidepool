@@ -8,6 +8,7 @@ import { DomainError } from "./domain-error.js";
 import { appendEvent, type EventOrigin, type EventPayload, type EventRow, getEvent, isDecisionLogEntry, listEvents, listEventsOfKinds, sessionSpawnOf, sessionWindow } from "./events.js";
 import { landingAnnotation } from "./landing.js";
 import { inWindow, type MetaReviewWindow, materialEvents, materialSection, metaReviewSubjectOf, metaReviewWindow, previousMetaReviewWatermark } from "./meta-review.js";
+import { whyNotPositiveInteger } from "./positive-integer.js";
 import { entriesReadBefore, entriesSeenBefore, listEpisodes } from "./precedent.js";
 import { normalizeText, whyBlank } from "./required-text.js";
 import { requiredTextSchema } from "./required-text-schema.js";
@@ -690,7 +691,10 @@ export const memoryBranchMoveSchema = z.object({
   merge: z.boolean().optional(),
 });
 /** 人間の面の既にある後継への畳み(ADR 0162 決定1)。 */
-export const memoryFoldSchema = z.object({ replaces: z.array(z.number().int().positive()), successor_id: z.number().int().positive() });
+export const memoryFoldSchema = z.object({ replaces: z.array(z.number().int().positive()), successor_id: z.number().superRefine((value, ctx) => {
+  const reason = whyNotPositiveInteger(value);
+  if (reason) ctx.addIssue({ code: "custom", message: reason });
+}) });
 
 /** 一覧の絞り込み(HTTP の query と管理MCP が共有)。workspace は完全一致、board_wide は盤面全体だけ。 */
 export const memoryListFilterSchema = z.object({
@@ -2187,7 +2191,10 @@ export function recordMetaReviewMaterial(
 /** 注入上限の既定(spec #586 C)。上限は ADR 0083 決定10 が置いた唯一のノブ。 */
 const DEFAULT_INJECTION_TOKEN_CAP = 2000;
 
-export const memorySettingsChangeSchema = z.object({ injection_token_cap: z.number().int().positive() });
+export const memorySettingsChangeSchema = z.object({ injection_token_cap: z.number().superRefine((value, ctx) => {
+  const reason = whyNotPositiveInteger(value);
+  if (reason) ctx.addIssue({ code: "custom", message: reason });
+}) });
 type MemorySettings = { injection_token_cap: number };
 
 export function readMemorySettings(db: Db): MemorySettings {

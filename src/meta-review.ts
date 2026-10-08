@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { Db } from "./db.js";
 import { appendEvent, type EventKind, type EventOrigin, listEventsOfKinds } from "./events.js";
 import { type ListAgentTiers, readExecutionSettings, settleStaleProposals } from "./execution-setting.js";
+import { whyNotPositiveInteger } from "./positive-integer.js";
 import { registerTask } from "./tasks.js";
 import { BOARD_WORKER_ID, HUMAN_WORKER_ID } from "./worker-id.js";
 
@@ -213,7 +214,10 @@ export function registerMetaReview(db: Db, subject: MetaReviewSubject, now: Date
 /** 周期の既定(日、ADR 0120 決定2)。間隔の下限で、全主題に共通。 */
 const DEFAULT_PERIOD_DAYS = 7;
 
-export const metaReviewSettingsChangeSchema = z.object({ period_days: z.number().int().positive() });
+export const metaReviewSettingsChangeSchema = z.object({ period_days: z.number().superRefine((value, ctx) => {
+  const reason = whyNotPositiveInteger(value);
+  if (reason) ctx.addIssue({ code: "custom", message: reason });
+}) });
 type MetaReviewSettings = { period_days: number };
 
 export function readMetaReviewSettings(db: Db): MetaReviewSettings {

@@ -25,9 +25,40 @@ var TidepoolRules = (() => {
     normalizeText: () => normalizeText,
     reviewFlagCarriesMeaning: () => reviewFlagCarriesMeaning,
     whyBlank: () => whyBlank,
+    whyInvalidClockTime: () => whyInvalidClockTime,
+    whyInvalidOffset: () => whyInvalidOffset,
+    whyInvalidPrice: () => whyInvalidPrice,
+    whyInvalidProviderRank: () => whyInvalidProviderRank,
     whyNoCompletionReview: () => whyNoCompletionReview,
+    whyNotPositiveInteger: () => whyNotPositiveInteger,
     whyReviewFlagIsInert: () => whyReviewFlagIsInert
   });
+
+  // src/clock-time.ts
+  function whyInvalidClockTime(value) {
+    return value.length === 5 && /^([01]\d|2[0-3]):([0-5]\d)$/.test(value) ? void 0 : "time must be HH:MM between 00:00 and 23:59";
+  }
+
+  // src/pace-offset-rule.ts
+  function whyInvalidOffset(value) {
+    return typeof value === "number" && Number.isInteger(value) && value >= 0 && value <= 100 ? void 0 : "offset must be an integer between 0 and 100";
+  }
+
+  // src/positive-integer.ts
+  function whyNotPositiveInteger(value) {
+    return Number.isInteger(value) && value > 0 ? void 0 : "must be a positive integer";
+  }
+
+  // src/price.ts
+  function whyInvalidPrice(value) {
+    return Number.isFinite(value) && value >= 0 ? void 0 : "price must be a finite non-negative number";
+  }
+
+  // src/provider.ts
+  var PROVIDER_VALUES = ["anthropic", "moonshot", "openai"];
+  function whyInvalidProviderRank(rank) {
+    return rank.length === PROVIDER_VALUES.length && PROVIDER_VALUES.every((provider) => rank.includes(provider)) ? void 0 : `provider rank must list every provider exactly once (${PROVIDER_VALUES.join(" / ")})`;
+  }
 
   // src/required-text.ts
   var normalizeText = (value) => value.trim();
@@ -1007,7 +1038,8 @@ function RegisterScreen({ onRegister, parentTask, onClose }) {
   };
   const issueListHintStyle = { fontSize: "var(--text-sm)", color: "var(--text-secondary)" };
   const filteredIssues = issueNumber.trim() ? issues.filter((i) => String(i.number).includes(issueNumber.trim()) || i.title.toLowerCase().includes(issueNumber.trim().toLowerCase())) : issues;
-  const ok = issueMode ? !TidepoolRules.whyBlank(workspace) && /^[0-9]+$/.test(issueNumber.trim()) : ![title, purpose, criteria].some((value) => TidepoolRules.whyBlank(value)) && (!childMode || !TidepoolRules.whyBlank(reason));
+  const issueNumberReason = TidepoolRules.whyNotPositiveInteger(readNumericDraft(issueNumber));
+  const ok = issueMode ? !TidepoolRules.whyBlank(workspace) && !issueNumberReason : ![title, purpose, criteria].some((value) => TidepoolRules.whyBlank(value)) && (!childMode || !TidepoolRules.whyBlank(reason));
   const ruleSubject = { type: issueMode ? "work" : type, parent_id: parentTask?.id, assignee, review_flag: review, risk_flag: risk };
   const showReviewFlag = TidepoolRules.reviewFlagCarriesMeaning(ruleSubject);
   const showReviewBy = TidepoolRules.completionReviewFires(ruleSubject);
@@ -1016,7 +1048,7 @@ function RegisterScreen({ onRegister, parentTask, onClose }) {
   const fields = () => issueMode ? {
     type: "work",
     workspace: workspace.trim(),
-    github_issue_number: Number(issueNumber.trim()),
+    github_issue_number: readNumericDraft(issueNumber),
     risk_flag: risk,
     ...assignee ? { assignee } : {},
     ...tier ? { tier } : {},
@@ -1153,7 +1185,7 @@ function RegisterScreen({ onRegister, parentTask, onClose }) {
     setTier("");
     setReviewTier("");
     setSelectedDumpId(null);
-  } }), issueMode && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(Select, { label: "Workspace", options: issueWorkspaceOptions, value: workspace, onChange: (e) => setWorkspace(e.target.value) }), assigneeSelect, /* @__PURE__ */ React.createElement(Select, { label: "Tier", options: tierOptions(tiers, "(agent's tier, then board default)"), value: tier, onChange: (e) => setTier(e.target.value) }), riskCheckbox, reviewTierSelect, reviewerPicker, /* @__PURE__ */ React.createElement(Input, { label: "Issue number", value: issueNumber, onChange: (e) => setIssueNumber(e.target.value), placeholder: "content stays on GitHub; the board keeps only this reference" }), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 4, maxHeight: 220, overflowY: "auto" } }, TidepoolRules.whyBlank(workspace) && /* @__PURE__ */ React.createElement("span", { style: issueListHintStyle }, "select a workspace to browse its open issues"), !TidepoolRules.whyBlank(workspace) && issuesFailed && /* @__PURE__ */ React.createElement("span", { style: issueListHintStyle }, "couldn't fetch open issues \u2014 type the number directly"), !TidepoolRules.whyBlank(workspace) && !issuesFailed && filteredIssues.map((i) => /* @__PURE__ */ React.createElement(
+  } }), issueMode && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(Select, { label: "Workspace", options: issueWorkspaceOptions, value: workspace, onChange: (e) => setWorkspace(e.target.value) }), assigneeSelect, /* @__PURE__ */ React.createElement(Select, { label: "Tier", options: tierOptions(tiers, "(agent's tier, then board default)"), value: tier, onChange: (e) => setTier(e.target.value) }), riskCheckbox, reviewTierSelect, reviewerPicker, /* @__PURE__ */ React.createElement(Input, { label: "Issue number", error: issueNumberReason, value: issueNumber, onChange: (e) => setIssueNumber(e.target.value), placeholder: "content stays on GitHub; the board keeps only this reference" }), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 4, maxHeight: 220, overflowY: "auto" } }, TidepoolRules.whyBlank(workspace) && /* @__PURE__ */ React.createElement("span", { style: issueListHintStyle }, "select a workspace to browse its open issues"), !TidepoolRules.whyBlank(workspace) && issuesFailed && /* @__PURE__ */ React.createElement("span", { style: issueListHintStyle }, "couldn't fetch open issues \u2014 type the number directly"), !TidepoolRules.whyBlank(workspace) && !issuesFailed && filteredIssues.map((i) => /* @__PURE__ */ React.createElement(
     "div",
     {
       key: i.number,
@@ -1182,6 +1214,9 @@ function RegisterScreen({ onRegister, parentTask, onClose }) {
 }
 
 // webui/settings-screen.tsx
+function readNumericDraft(value) {
+  return typeof value === "number" ? value : value?.trim() ? Number(value) : NaN;
+}
 function registryNameOk(name) {
   const v = TidepoolRules.normalizeText(name);
   return /^[A-Za-z0-9._-]+$/.test(v) && ![".", ".."].includes(v);
@@ -1945,7 +1980,9 @@ function QuietHoursCard({ start, end, tz, say, onSaved, edit }) {
   const [draftEnd, setDraftEnd] = React.useState(end);
   const [busy, setBusy] = React.useState(false);
   const dirty = draftStart !== start || draftEnd !== end;
-  const ok = !TidepoolRules.whyBlank(draftStart) && !TidepoolRules.whyBlank(draftEnd);
+  const startReason = TidepoolRules.whyInvalidClockTime(draftStart);
+  const endReason = TidepoolRules.whyInvalidClockTime(draftEnd);
+  const ok = !startReason && !endReason;
   useDirtySignal(edit, open, dirty);
   const save = async () => {
     setBusy(true);
@@ -1962,7 +1999,7 @@ function QuietHoursCard({ start, end, tz, say, onSaved, edit }) {
   return /* @__PURE__ */ React.createElement(Card, { style: { display: "flex", flexDirection: "column", gap: 14 } }, /* @__PURE__ */ React.createElement(RecordCardHead, { editing: open, onEdit: () => edit.open(id, () => {
     setDraftStart(start);
     setDraftEnd(end);
-  }) }, /* @__PURE__ */ React.createElement("span", { style: settingsCardLabel }, "quiet hours")), !open && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 } }, /* @__PURE__ */ React.createElement(FieldRow, { label: "start", kind: "mono", value: start }), /* @__PURE__ */ React.createElement(FieldRow, { label: "end", kind: "mono", value: end })), /* @__PURE__ */ React.createElement(FieldRow, { label: "timezone", kind: tz ? "mono" : "unset", value: tz, unsetLabel: "unset" })), open && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 } }, /* @__PURE__ */ React.createElement(Input, { label: "Start", mono: true, value: draftStart, onChange: (e) => setDraftStart(e.target.value), placeholder: "HH:MM" }), /* @__PURE__ */ React.createElement(Input, { label: "End", mono: true, value: draftEnd, onChange: (e) => setDraftEnd(e.target.value), placeholder: "HH:MM" })), /* @__PURE__ */ React.createElement("p", { style: { margin: 0, fontSize: "var(--text-xs)", color: "var(--text-muted)" } }, "start after end wraps past midnight (e.g. 23:00\u201307:00) \u2014 that's valid, not an error. timezone: ", tz || "unset", " \u2014 change it from the timezone setting, not here."), /* @__PURE__ */ React.createElement(
+  }) }, /* @__PURE__ */ React.createElement("span", { style: settingsCardLabel }, "quiet hours")), !open && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 } }, /* @__PURE__ */ React.createElement(FieldRow, { label: "start", kind: "mono", value: start }), /* @__PURE__ */ React.createElement(FieldRow, { label: "end", kind: "mono", value: end })), /* @__PURE__ */ React.createElement(FieldRow, { label: "timezone", kind: tz ? "mono" : "unset", value: tz, unsetLabel: "unset" })), open && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 } }, /* @__PURE__ */ React.createElement(Input, { label: "Start", error: startReason, mono: true, value: draftStart, onChange: (e) => setDraftStart(e.target.value), placeholder: "HH:MM" }), /* @__PURE__ */ React.createElement(Input, { label: "End", error: endReason, mono: true, value: draftEnd, onChange: (e) => setDraftEnd(e.target.value), placeholder: "HH:MM" })), /* @__PURE__ */ React.createElement("p", { style: { margin: 0, fontSize: "var(--text-xs)", color: "var(--text-muted)" } }, "start after end wraps past midnight (e.g. 23:00\u201307:00) \u2014 that's valid, not an error. timezone: ", tz || "unset", " \u2014 change it from the timezone setting, not here."), /* @__PURE__ */ React.createElement(
     EditActions,
     {
       dirty,
@@ -1986,8 +2023,8 @@ function PaceOffsetsCard({ offsets, say, onSaved, edit }) {
   const keys = offsets.map((value) => `${value.provider}:${value.window}`);
   const current = asDraft(offsets);
   const dirty = keys.some((key) => String(draft[key]) !== String(current[key]));
-  const validOffset = (v) => /^\d{1,3}$/.test(String(v).trim()) && Number(v) <= 100;
-  const ok = keys.every((key) => validOffset(draft[key]));
+  const offsetReason = (key) => TidepoolRules.whyInvalidOffset(readNumericDraft(draft[key]));
+  const ok = keys.every((key) => !offsetReason(key));
   useDirtySignal(edit, open, dirty);
   const save = async () => {
     setBusy(true);
@@ -1999,7 +2036,7 @@ function PaceOffsetsCard({ offsets, say, onSaved, edit }) {
       await Promise.all(changed.map((value) => api("/api/settings/provider-pace-offsets", {
         provider: value.provider,
         window: value.window,
-        offset: Number(draft[`${value.provider}:${value.window}`])
+        offset: readNumericDraft(draft[`${value.provider}:${value.window}`])
       })));
       say("success", "provider pace offsets saved", `${changed.length} window${changed.length === 1 ? "" : "s"} updated`);
       edit.close();
@@ -2015,6 +2052,7 @@ function PaceOffsetsCard({ offsets, say, onSaved, edit }) {
       Input,
       {
         key,
+        error: offsetReason(key),
         label: `${value.provider} \xB7 ${value.window}`,
         mono: true,
         value: String(draft[key]),
@@ -2042,12 +2080,13 @@ function MemorySettingsCard({ settings, say, onSaved, edit }) {
   const [draft, setDraft] = React.useState(cap);
   const [busy, setBusy] = React.useState(false);
   const dirty = draft.trim() !== cap;
-  const ok = /^[1-9]\d*$/.test(draft.trim());
+  const reason = TidepoolRules.whyNotPositiveInteger(readNumericDraft(draft));
+  const ok = !reason;
   useDirtySignal(edit, open, dirty);
   const save = async () => {
     setBusy(true);
     try {
-      const saved = await api("POST /api/settings/memory", { body: { injection_token_cap: Number(draft.trim()) } });
+      const saved = await api("POST /api/settings/memory", { body: { injection_token_cap: readNumericDraft(draft) } });
       say("success", "memory settings saved", `${saved.injection_token_cap} tokens`);
       edit.close();
       await onSaved();
@@ -2056,7 +2095,7 @@ function MemorySettingsCard({ settings, say, onSaved, edit }) {
     }
     setBusy(false);
   };
-  return /* @__PURE__ */ React.createElement(Card, { style: { display: "flex", flexDirection: "column", gap: 14 } }, /* @__PURE__ */ React.createElement(RecordCardHead, { editing: open, onEdit: () => edit.open(id, () => setDraft(cap)) }, /* @__PURE__ */ React.createElement("span", { style: settingsCardLabel }, "memory")), !open && /* @__PURE__ */ React.createElement(FieldRow, { label: "injection cap", kind: "mono", value: `${cap} tokens` }), open && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(Input, { label: "Injection cap (tokens)", mono: true, value: draft, onChange: (e) => setDraft(e.target.value), placeholder: cap }), /* @__PURE__ */ React.createElement("p", { style: { margin: 0, fontSize: "var(--text-xs)", color: "var(--text-muted)" } }, "the most memory a worker is handed at spawn. past the cap, entry text is dropped first, then the index gets shallower, then relevant entries go one at a time from the bottom."), /* @__PURE__ */ React.createElement(
+  return /* @__PURE__ */ React.createElement(Card, { style: { display: "flex", flexDirection: "column", gap: 14 } }, /* @__PURE__ */ React.createElement(RecordCardHead, { editing: open, onEdit: () => edit.open(id, () => setDraft(cap)) }, /* @__PURE__ */ React.createElement("span", { style: settingsCardLabel }, "memory")), !open && /* @__PURE__ */ React.createElement(FieldRow, { label: "injection cap", kind: "mono", value: `${cap} tokens` }), open && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(Input, { label: "Injection cap (tokens)", error: reason, mono: true, value: draft, onChange: (e) => setDraft(e.target.value), placeholder: cap }), /* @__PURE__ */ React.createElement("p", { style: { margin: 0, fontSize: "var(--text-xs)", color: "var(--text-muted)" } }, "the most memory a worker is handed at spawn. past the cap, entry text is dropped first, then the index gets shallower, then relevant entries go one at a time from the bottom."), /* @__PURE__ */ React.createElement(
     EditActions,
     {
       dirty,
@@ -2094,12 +2133,13 @@ function MetaReviewSettingsCard({ settings, say, onSaved, edit }) {
   const [draft, setDraft] = React.useState(period);
   const [busy, setBusy] = React.useState(false);
   const dirty = draft.trim() !== period;
-  const ok = /^[1-9]\d*$/.test(draft.trim());
+  const reason = TidepoolRules.whyNotPositiveInteger(readNumericDraft(draft));
+  const ok = !reason;
   useDirtySignal(edit, open, dirty);
   const save = async () => {
     setBusy(true);
     try {
-      const saved = await api("POST /api/settings/meta-review", { body: { period_days: Number(draft.trim()) } });
+      const saved = await api("POST /api/settings/meta-review", { body: { period_days: readNumericDraft(draft) } });
       say("success", "meta-review settings saved", `every ${saved.period_days} days`);
       edit.close();
       await onSaved();
@@ -2108,7 +2148,7 @@ function MetaReviewSettingsCard({ settings, say, onSaved, edit }) {
     }
     setBusy(false);
   };
-  return /* @__PURE__ */ React.createElement(Card, { style: { display: "flex", flexDirection: "column", gap: 14 } }, /* @__PURE__ */ React.createElement(RecordCardHead, { editing: open, onEdit: () => edit.open(id, () => setDraft(period)) }, /* @__PURE__ */ React.createElement("span", { style: settingsCardLabel }, "meta-review")), !open && /* @__PURE__ */ React.createElement(FieldRow, { label: "period", kind: "mono", value: `${period} days` }), open && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(Input, { label: "Period (days)", mono: true, value: draft, onChange: (e) => setDraft(e.target.value), placeholder: period }), /* @__PURE__ */ React.createElement("p", { style: { margin: 0, fontSize: "var(--text-xs)", color: "var(--text-muted)" } }, "the fewest days between two meta-reviews of the same subject (memory or routing). once past it, the board registers one as soon as there is something new to review."), /* @__PURE__ */ React.createElement(
+  return /* @__PURE__ */ React.createElement(Card, { style: { display: "flex", flexDirection: "column", gap: 14 } }, /* @__PURE__ */ React.createElement(RecordCardHead, { editing: open, onEdit: () => edit.open(id, () => setDraft(period)) }, /* @__PURE__ */ React.createElement("span", { style: settingsCardLabel }, "meta-review")), !open && /* @__PURE__ */ React.createElement(FieldRow, { label: "period", kind: "mono", value: `${period} days` }), open && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(Input, { label: "Period (days)", error: reason, mono: true, value: draft, onChange: (e) => setDraft(e.target.value), placeholder: period }), /* @__PURE__ */ React.createElement("p", { style: { margin: 0, fontSize: "var(--text-xs)", color: "var(--text-muted)" } }, "the fewest days between two meta-reviews of the same subject (memory or routing). once past it, the board registers one as soon as there is something new to review."), /* @__PURE__ */ React.createElement(
     EditActions,
     {
       dirty,
@@ -2347,6 +2387,7 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit, fo
   );
   const [selected, setSelected] = React.useState([]);
   const [foldTarget, setFoldTarget] = React.useState("");
+  const foldReason = TidepoolRules.whyNotPositiveInteger(readNumericDraft(foldTarget));
   const selectedIds = selected.map((e) => `#${e.id}`).join(", ");
   const candidateSelected = selected.some((e) => e.state === "candidate");
   const foldKinds = candidateSelected ? [] : successorKinds(selected.map((e) => e.kind));
@@ -2363,7 +2404,7 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit, fo
   }));
   const foldIntoExisting = () => submit(
     "/api/settings/memory/fold",
-    { replaces: selected.map((e) => e.id), successor_id: Number(foldTarget) },
+    { replaces: selected.map((e) => e.id), successor_id: readNumericDraft(foldTarget) },
     ["folded", `${selectedIds} \u2192 #${foldTarget}`],
     "fold failed",
     () => {
@@ -2424,7 +2465,7 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit, fo
       }, `${TidepoolRules.normalizeText(branchMove.path)} \u2192 ${TidepoolRules.normalizeText(branchMove.to_path)}`, () => setBranchMove(null))
     },
     "Move branch"
-  ), /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "sm", disabled: busy, onClick: () => setBranchMove(null) }, "Cancel"))), selected.length > 0 && !writing && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("p", { style: muted }, "selected ", selectedIds), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8, alignItems: "flex-end", flexWrap: "wrap" } }, /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", disabled: busy || foldKinds.length === 0, onClick: foldIntoNew }, "Fold into a new entry"), /* @__PURE__ */ React.createElement(Input, { label: "Fold into existing (entry id)", mono: true, value: foldTarget, onChange: (e) => setFoldTarget(e.target.value) }), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", disabled: busy || !/^[1-9]\d*$/.test(foldTarget), onClick: foldIntoExisting }, "Fold into #", foldTarget || "\u2026"), /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "sm", disabled: busy, onClick: () => setSelected([]) }, "Clear")), foldKinds.length === 0 && /* @__PURE__ */ React.createElement("p", { style: muted }, candidateSelected ? "a candidate cannot be replaced by a new entry; fold it into an existing approved one" : "no one kind may replace all of these; fold them into an existing entry of their kind")), writing && /* @__PURE__ */ React.createElement(React.Fragment, null, replacing && /* @__PURE__ */ React.createElement("p", { style: muted }, "replacing ", replacing, " \u2014 saving writes a new approved entry and supersedes ", draft.supersedes.length === 1 ? "it" : "them"), draft.kinds.length > 1 && /* @__PURE__ */ React.createElement(Select, { label: "Kind", value: draft.kind, onChange: setDraftField("kind"), options: draft.kinds }), /* @__PURE__ */ React.createElement(
+  ), /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "sm", disabled: busy, onClick: () => setBranchMove(null) }, "Cancel"))), selected.length > 0 && !writing && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("p", { style: muted }, "selected ", selectedIds), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8, alignItems: "flex-end", flexWrap: "wrap" } }, /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", disabled: busy || foldKinds.length === 0, onClick: foldIntoNew }, "Fold into a new entry"), /* @__PURE__ */ React.createElement(Input, { label: "Fold into existing (entry id)", error: foldReason, mono: true, value: foldTarget, onChange: (e) => setFoldTarget(e.target.value) }), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", disabled: busy || !!foldReason, onClick: foldIntoExisting }, "Fold into #", foldTarget || "\u2026"), /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "sm", disabled: busy, onClick: () => setSelected([]) }, "Clear")), foldKinds.length === 0 && /* @__PURE__ */ React.createElement("p", { style: muted }, candidateSelected ? "a candidate cannot be replaced by a new entry; fold it into an existing approved one" : "no one kind may replace all of these; fold them into an existing entry of their kind")), writing && /* @__PURE__ */ React.createElement(React.Fragment, null, replacing && /* @__PURE__ */ React.createElement("p", { style: muted }, "replacing ", replacing, " \u2014 saving writes a new approved entry and supersedes ", draft.supersedes.length === 1 ? "it" : "them"), draft.kinds.length > 1 && /* @__PURE__ */ React.createElement(Select, { label: "Kind", value: draft.kind, onChange: setDraftField("kind"), options: draft.kinds }), /* @__PURE__ */ React.createElement(
     Select,
     {
       label: "Workspace",
@@ -2564,7 +2605,8 @@ function ExecutionDefaultsCard({ settings, say, onSaved, edit }) {
   const rankChanged = draft.rank.join() !== current.rank.join();
   const dirty = rankChanged || draft.priority !== current.priority || draft.ceiling !== current.ceiling || draft.defaultTier !== current.defaultTier || draft.judgementTier !== current.judgementTier;
   const tierNames = settings.tiers.map((tier) => tier.name);
-  const ok = new Set(draft.rank).size === settings.providers.length;
+  const rankReason = TidepoolRules.whyInvalidProviderRank(draft.rank);
+  const ok = !rankReason;
   useDirtySignal(edit, open, dirty);
   const save = async () => {
     setBusy(true);
@@ -2605,7 +2647,7 @@ function ExecutionDefaultsCard({ settings, say, onSaved, edit }) {
       value: provider,
       onChange: (e) => setDraft({ ...draft, rank: draft.rank.map((p, j) => j === i ? e.target.value : p) })
     }
-  ))), /* @__PURE__ */ React.createElement(
+  ))), rankReason && /* @__PURE__ */ React.createElement("p", { style: { margin: 0, fontSize: "var(--text-xs)", color: "var(--coral-4)" } }, rankReason), /* @__PURE__ */ React.createElement(
     Select,
     {
       label: "Default priority",
@@ -2743,7 +2785,7 @@ function ExecutionTableCard({ settings, say, onSaved, edit }) {
   const [draft, setDraft] = React.useState(() => asDraft(settings.table));
   const [busy, setBusy] = React.useState(false);
   const current = new Map(settings.table.map((row) => [rowKey(row), row]));
-  const toRow = (d) => ({ provider: d.provider, tier: d.tier, model: TidepoolRules.normalizeText(d.model), effort: TidepoolRules.normalizeText(d.effort), price_in: Number(d.price_in), price_out: Number(d.price_out) });
+  const toRow = (d) => ({ provider: d.provider, tier: d.tier, model: TidepoolRules.normalizeText(d.model), effort: TidepoolRules.normalizeText(d.effort), price_in: readNumericDraft(d.price_in), price_out: readNumericDraft(d.price_out) });
   const same = (a, b) => a && rowKey(a) === rowKey(b) && a.tier === b.tier && a.price_in === b.price_in && a.price_out === b.price_out;
   const writes = draft.filter((d) => !same(current.get(d.key), toRow(d))).map((d) => {
     const original = current.get(d.key);
@@ -2751,9 +2793,8 @@ function ExecutionTableCard({ settings, say, onSaved, edit }) {
   });
   const deletes = [...current.values()].filter((row) => !draft.some((d) => d.key === rowKey(row)));
   const dirty = writes.length > 0 || deletes.length > 0;
-  const validPrice = (v) => /^\d+(\.\d+)?$/.test(v.trim());
   const unique = (of) => new Set(draft.map((d) => of(toRow(d)))).size === draft.length;
-  const ok = draft.every((d) => !TidepoolRules.whyBlank(d.model) && !TidepoolRules.whyBlank(d.effort) && validPrice(d.price_in) && validPrice(d.price_out)) && unique(rowKey) && unique((row) => `${row.provider}:${row.model}:${row.tier}`);
+  const ok = draft.every((d) => !TidepoolRules.whyBlank(d.model) && !TidepoolRules.whyBlank(d.effort) && !TidepoolRules.whyInvalidPrice(readNumericDraft(d.price_in)) && !TidepoolRules.whyInvalidPrice(readNumericDraft(d.price_out))) && unique(rowKey) && unique((row) => `${row.provider}:${row.model}:${row.tier}`);
   useDirtySignal(edit, open, dirty);
   const save = async () => {
     setBusy(true);
@@ -2789,8 +2830,8 @@ function ExecutionTableCard({ settings, say, onSaved, edit }) {
     /* @__PURE__ */ React.createElement(Select, { label: "Tier", options: settings.tiers.map((tier) => tier.name), value: d.tier, onChange: (e) => update(i, { tier: e.target.value }) }),
     /* @__PURE__ */ React.createElement(Input, { label: "Model", mono: true, value: d.model, onChange: (e) => update(i, { model: e.target.value }), placeholder: "concrete model id \u2014 e.g. claude-opus-5-5" }),
     /* @__PURE__ */ React.createElement(Input, { label: "Effort", mono: true, value: d.effort, onChange: (e) => update(i, { effort: e.target.value }), placeholder: "high" }),
-    /* @__PURE__ */ React.createElement(Input, { label: "Price in", mono: true, value: d.price_in, onChange: (e) => update(i, { price_in: e.target.value }), placeholder: "USD / MTok" }),
-    /* @__PURE__ */ React.createElement(Input, { label: "Price out", mono: true, value: d.price_out, onChange: (e) => update(i, { price_out: e.target.value }), placeholder: "USD / MTok" }),
+    /* @__PURE__ */ React.createElement(Input, { label: "Price in", error: TidepoolRules.whyInvalidPrice(readNumericDraft(d.price_in)), mono: true, value: d.price_in, onChange: (e) => update(i, { price_in: e.target.value }), placeholder: "USD / MTok" }),
+    /* @__PURE__ */ React.createElement(Input, { label: "Price out", error: TidepoolRules.whyInvalidPrice(readNumericDraft(d.price_out)), mono: true, value: d.price_out, onChange: (e) => update(i, { price_out: e.target.value }), placeholder: "USD / MTok" }),
     /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "sm", onClick: () => setDraft(draft.filter((_, j) => j !== i)), "aria-label": `remove ${d.provider} ${d.tier} ${d.model}`.trim() }, "Remove")
   )), /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "sm", onClick: addRow, disabled: draft.some((d) => d.key === "new") }, "Add row"), /* @__PURE__ */ React.createElement("p", { style: { margin: 0, fontSize: "var(--text-xs)", color: "var(--text-muted)" } }, `a row says "this model meets this tier's quality on this provider" \u2014 classify by measured capability, not price. prices are USD per MTok. removing every row of a provider \xD7 tier just excludes that provider for tasks of that tier.`), /* @__PURE__ */ React.createElement(
     EditActions,
