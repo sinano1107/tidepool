@@ -206,7 +206,7 @@ const registerTaskSchema = z.object({
   priority: z.string().optional(),
   // human decompose (ADR 0047 decision 7): the reason is required for a
   // `parent_id` child and checked at the shared human door; roots do not need one.
-  decompose_reason: requiredTextSchema.optional(),
+  decompose_reason: z.string().optional(),
   // shape stays permissive: the 1-4-item / 2-4-options + recommendation
   // invariants are enforced in the domain so callers get a domain error
   question: z
@@ -264,7 +264,7 @@ const draftTaskSchema = z.object({
   // screen — present, the draft is given parent/sibling context; absent,
   // this is a plain root draft, unchanged
   parent_id: z.string().optional(),
-  decompose_reason: requiredTextSchema.optional(),
+  decompose_reason: z.string().optional(),
 });
 
 // the approval half of the registration gate (issue #49 設計点4): posting
