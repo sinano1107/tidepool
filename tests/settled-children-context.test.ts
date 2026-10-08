@@ -213,53 +213,19 @@ it("get_current_task の history に、未決着(todo)の兄弟も含まれる",
   }
 });
 
-/** 人間 decompose で子を1つ足し、その子を直接 cancel した親の history の子(ドメイン層、ADR 0107)。 */
-function directlyCancelledChild(reason: string | null) {
+// ドメイン層(ADR 0107): 人間 decompose で足した子を直接 cancel する。reason は任意なので null も運ぶ。
+it.each(["もう要らない", null])("reason %s で直接 cancel された子は、親の history で origin_direct_cancel にその reason を運び、origin_question を持たない", (reason) => {
   const db = openDb(":memory:");
   const at = new Date("2026-10-08T00:00:00.000Z");
   const parent = registerTask(db, { type: "work", title: "parent", purpose: "purpose", completion_criteria: "criteria" }, at, ...HUMAN_WEBUI);
-  const [child] = humanDecomposeTaskViaWebui(
-    db,
-    parent,
-    { reason: "human split", children: [{ title: "A", purpose: "purpose", completion_criteria: "criteria" }] },
-    at,
-  );
+  const [child] = humanDecomposeTaskViaWebui(db, parent, { reason: "human split", children: [{ title: "A", purpose: "purpose", completion_criteria: "criteria" }] }, at);
   cancelTaskDirectly(db, getTask(db, child!.id)!, reason, at, {}, "webui");
-  const history = joinHistory(taskHistoryRows(db, parent.id));
+
+  expect(joinHistory(taskHistoryRows(db, parent.id))).toEqual([
+    {
+      decision: "human split",
+      children: [{ title: "A", purpose: "purpose", completion_criteria: "criteria", status: "cancelled", origin_direct_cancel: { reason } }],
+    },
+  ]);
   db.close();
-  return history;
-}
-
-it("直接 cancel された子は、親の history で cancel の reason を origin_direct_cancel に運び、origin_question を持たない", () => {
-  expect(directlyCancelledChild("もう要らない")).toEqual([
-    {
-      decision: "human split",
-      children: [
-        {
-          title: "A",
-          purpose: "purpose",
-          completion_criteria: "criteria",
-          status: "cancelled",
-          origin_direct_cancel: { reason: "もう要らない" },
-        },
-      ],
-    },
-  ]);
-});
-
-it("reason なしで直接 cancel された子は、親の history で origin_direct_cancel の reason が null になる", () => {
-  expect(directlyCancelledChild(null)).toEqual([
-    {
-      decision: "human split",
-      children: [
-        {
-          title: "A",
-          purpose: "purpose",
-          completion_criteria: "criteria",
-          status: "cancelled",
-          origin_direct_cancel: { reason: null },
-        },
-      ],
-    },
-  ]);
 });
