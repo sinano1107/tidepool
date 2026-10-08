@@ -10,6 +10,7 @@ import {
   registerLocalMergeQuestion,
   registerPrPromotionFailureQuestion,
 } from "../src/landing.js";
+import type { MergeDial } from "../src/registry.js";
 import {
   completeTask,
   getTask,
@@ -1175,7 +1176,7 @@ it("PR から着地タスクを引けない merge question は fail-closed で a
 
 // ADR 0217 決定1・2: 無人 merge キューの PR は merge の瞬間に着地の面を読み直す。
 // 以下はこの読み直しを述べる唯一の場所(ADR 0107)。
-const profile = (merge: "escalate" | "auto_if_ci_green" | "external") => ({
+const profile = (merge: MergeDial) => ({
   name: "standard",
   guidance: "",
   merge,
@@ -1293,6 +1294,30 @@ it("キュー投入の後にダイヤルが external へ取り下げられた PR
   ]);
 });
 
+it("キュー投入の後に profile がダイヤルを持たなくなった PR も、question なしでキューを外れ、event の merge は null になる", async () => {
+  const workspace = await makeWorkspace("landing-withdrawn-to-no-dial");
+  const { db, clock } = await openBoard();
+  const github = new FakeGitHubClient();
+  const work = queueAutoMerge(db, clock, 1);
+
+  await createLanding({
+    defaultAgentName: "tako",
+    db,
+    clock,
+    workspace,
+    github,
+    resolveAuthority: () => undefined,
+  }).tick("auto_merge", clock.now());
+
+  expect(github.merged).toEqual([]);
+  expect(mergeQuestions(db)).toEqual([]);
+  expect(
+    listEvents(db, work.id)
+      .filter((e) => e.kind === "auto_merge_withdrawn")
+      .map((e) => e.payload),
+  ).toEqual([{ kind: "auto_merge_withdrawn", pr_number: 1, merge: null }]);
+});
+
 it("着地の面は CI を読む前に読まれる — 面が変わった PR は CI が pending でも、CI を読まれずにキューを外れる", async () => {
   const workspace = await makeWorkspace("landing-surface-before-ci");
   const { db, clock } = await openBoard();
@@ -1318,7 +1343,7 @@ it("着地の面は merge の直前にも読まれる — CI を読んでいる�
   const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
   queueAutoMerge(db, clock, 1);
-  let dial: "escalate" | "auto_if_ci_green" = "auto_if_ci_green";
+  let dial: MergeDial = "auto_if_ci_green";
   const getCiStatus = github.getCiStatus.bind(github);
   github.getCiStatus = async (ref) => {
     const status = await getCiStatus(ref);

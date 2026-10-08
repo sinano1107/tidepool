@@ -4,7 +4,6 @@ import type { Db } from "./db.js";
 import type { ExecutionSetting, ExecutionSettingRow, ExecutionSettingsChange, registryPinChanges, routingPinChanges } from "./execution-setting.js";
 import type { InvalidationReason, MemoryDropReason, MemoryEntryFields } from "./memory.js";
 import type { Provider } from "./provider.js";
-import type { MergeDial } from "./registry.js";
 import type { MemoryProposal, ProposalAmendment, TaskType } from "./tasks.js";
 import type { Tier, TierId } from "./tier.js";
 
@@ -188,7 +187,7 @@ export type EventPayload =
   // ADR 0217 決定2: 無人 merge の瞬間に読み直した着地の面が question を立てない面
   // (`external`・ダイヤル無し)に変わっていたので、盤面が PR をキューから外した事実。
   // merge は変わった入力 — ダイヤルの新しい値(null はダイヤル無し)
-  | { kind: "auto_merge_withdrawn"; pr_number: number; merge: MergeDial | null }
+  | { kind: "auto_merge_withdrawn"; pr_number: number; merge: "external" | null }
   // ADR 0092 決定3 の再発火が、PR 昇格失敗の question を人間の回答なしに引退させた
   // (issue #406)。`pr_merge_observed` と同じ「執行ではなく観測」の記録で、決着した
   // 着地そのもの(`pr_opened` / `nothing_to_land`)は question が指すタスクの側に

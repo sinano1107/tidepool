@@ -115,8 +115,9 @@ export interface Task {
    *  この欄を持つ question は親を塞がない付帯子(awaitedChildSql)。 */
   question_proposal: QuestionProposal | null;
   /** System-internal only (issue #11): the PR number a merge-decision
-   *  question is standing in for — set only by recordPrOpened under the
-   *  `escalate` merge dial, read only by submitAnswer to gate the actual
+   *  question is standing in for — set only by registerMergeQuestion, from
+   *  the landing surface (recordPrOpened, and the auto-merge poll's CI-red
+   *  and surface-changed paths), read only by submitAnswer to gate the actual
    *  merge on a live CI check. Never set via MCP or the JSON API. */
   question_pending_merge_pr: number | null;
   /** System-internal only (ADR 0053): the completed work task whose
@@ -1909,7 +1910,7 @@ export function landingSurface(
   isProtected: boolean | undefined,
   merge: MergeDial | undefined,
   riskFlag: number,
-) {
+): "protected_question" | "dial_question" | "risk_question" | "auto_merge_queue" | "none" {
   if (isProtected) return "protected_question";
   switch (merge) {
     case "escalate":

@@ -320,7 +320,7 @@ export function createLanding(deps: LandingDeps): Landing {
   const authorityOf = (task: Task) => deps.resolveAuthority?.(task.assignee) ?? deps.authority;
   /** ADR 0217 決定1・2: いま着地しても無人 merge キューに入るかを読み直し、入らなければ
    *  キューから外して変わった先の面へ渡す。読み直しは PR をキューへ入れない。 */
-  const leftQueue = (task: Task, prNumber: number, workspaceName: string, now: Date) => {
+  const withdrawIfSurfaceChanged = (task: Task, prNumber: number, workspaceName: string, now: Date) => {
     const authority = authorityOf(task);
     const surface = landingSurface(
       deps.isProtectedWorkspace?.(workspaceName),
@@ -339,7 +339,7 @@ export function createLanding(deps: LandingDeps): Landing {
           payload: {
             kind: "auto_merge_withdrawn",
             pr_number: prNumber,
-            merge: authority?.merge ?? null,
+            merge: authority?.merge === "external" ? "external" : null,
           },
           at: now,
         });
@@ -444,8 +444,7 @@ export function createLanding(deps: LandingDeps): Landing {
         }
         if (!isRemoteBacked(workspace)) {
           const purpose =
-            authorityOf(task)?.merge ===
-            "auto_if_ci_green"
+            authorityOf(task)?.merge === "auto_if_ci_green"
               ? `Workspace "${workspace.name}" is purely-local, so CI cannot be observed and ` +
                 `auto_if_ci_green cannot auto-merge "${task.title}". Land its task branch on the ` +
                 `protected branch now?`
@@ -598,7 +597,7 @@ export function createLanding(deps: LandingDeps): Landing {
         // 着地の面は門と同じ2点 — CI を読む前と merge の直前 — で読む。面が変わった PR は
         // キューを外れ、門に当たった PR はキューに残る(ADR 0217 決定1)
         const stop = () =>
-          leftQueue(task, pr_number, workspace.name, now) || landingBlock(deps.db, task_id);
+          withdrawIfSurfaceChanged(task, pr_number, workspace.name, now) || landingBlock(deps.db, task_id);
         if (stop()) continue;
         const status = await github.getCiStatus({ path: workspace.path, number: pr_number });
         if (status === "pending") continue;
