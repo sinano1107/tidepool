@@ -51,7 +51,7 @@ ponytail is a repo-local skill under `.agents/skills/`; [machine-setup.md](./mac
 
 Required ADR behavior and tests take precedence over ponytail simplifications.
 
-If returning to design in a conversation where ponytail is active, explicitly turn it off with `stop ponytail` or start a fresh conversation. After compaction, reload the active phase's instructions and ponytail level when they are missing.
+After compaction, reload the active phase's instructions and ponytail level when they are missing.
 
 ## Choosing the model
 

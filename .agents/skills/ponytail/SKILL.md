@@ -19,8 +19,12 @@ code is the code never written.
 
 ## Persistence
 
-ACTIVE EVERY RESPONSE. No drift back to over-building. Still active if
-unsure. Off only: "stop ponytail" / "normal mode". Default: **full**.
+ACTIVE EVERY RESPONSE while building. No drift back to over-building. Still
+active if unsure. Off when the user says "stop ponytail" / "normal mode", and
+on its own the moment a design step starts (grilling, spec, triage — e.g.
+`/grill-with-docs`, `/to-spec`, `/triage`, `/triage-sweep`). It stays off
+until re-entered (`/ponytail`, `/to-tickets`, the implementer agent).
+Default: **full**.
 Switch: `/ponytail lite|full|ultra`.
 
 ## The ladder
@@ -108,7 +112,6 @@ test, YAGNI applies to tests too.
 ## Boundaries
 
 Ponytail governs what you build, not how you talk (pair with Caveman for
-terse prose). "stop ponytail" / "normal mode": revert. Level persists until
-changed or session end.
+terse prose). The intensity level persists until changed or session end.
 
 The shortest path to done is the right path.
