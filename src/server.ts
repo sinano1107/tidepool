@@ -227,13 +227,17 @@ export interface ServerOptions {
    *  n=1 board runs a single worker at a time (ADR-adjacent design principle
    *  #8), so this is one fixed profile rather than a per-task registry
    *  lookup. Absent → assignable_to is unrestricted. Superseded by
-   *  `resolveAuthority` below when both are given. */
+   *  `resolveAuthority` below when both are given. MCP only — landing reads
+   *  `resolveAuthority` alone (ADR 0217 決定3). */
   authority?: AuthorityProfile;
   /** Resolves the executing task's own agent's authority profile (ADR 0012 /
    *  issue #36), read fresh every call from `task.assignee` (null → the
    *  board's default agent) — the delegation-aware successor to the single
    *  fixed `authority` above, which every task shared regardless of who it
-   *  was actually assigned to. Absent → falls back to `authority`. */
+   *  was actually assigned to. Absent → MCP falls back to `authority` and
+   *  landing reads no dial. Throws UnknownAgentError /
+   *  InvalidAgentDefinitionError for an assignee the registry no longer
+   *  resolves. */
   resolveAuthority?: (assignee: string | null) => AuthorityProfile | undefined;
   /** Assignee/workspace candidates for the registration screen (issue #12) —
    *  a provider called per request so settings-surface creations surface
@@ -607,7 +611,6 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
     workspace: options.workspace,
     resolveWorkspace: options.resolveWorkspace,
     github: options.github ?? null,
-    authority: options.authority,
     resolveAuthority: options.resolveAuthority,
     defaultAgentName: worker.id,
     auditorName,

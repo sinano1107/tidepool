@@ -38,7 +38,13 @@ import {
 } from "./memory.js";
 import { type MetaReviewSubject, metaReviewSubjectOf, PROMOTION_RULE, TIER_DEFINITION_RULE } from "./meta-review.js";
 import type { ProcessContainers } from "./process-container.js";
-import { type AuthorityProfile, REVIEWER_AUTHORITY_PROFILE, type RosterAgent } from "./registry.js";
+import {
+  type AuthorityProfile,
+  InvalidAgentDefinitionError,
+  REVIEWER_AUTHORITY_PROFILE,
+  type RosterAgent,
+  UnknownAgentError,
+} from "./registry.js";
 import { requiredTextSchema } from "./required-text-schema.js";
 import { nextDescription, packItems, readPosition } from "./response-budget.js";
 import { proposeFromObjection } from "./retrospective.js";
@@ -198,10 +204,19 @@ function attributedWorkerId(deps: McpDeps, task: Task): string {
  *  to. Otherwise `resolveAuthority` read fresh against the task's own
  *  `assignee` when configured (ADR 0012 / issue #36), else the board's single
  *  fixed `authority` (pre-#36 shape, and still today's shape for a board with
- *  no registry-backed resolver at all). */
+ *  no registry-backed resolver at all). An assignee the registry no longer
+ *  resolves falls back to `deps.authority` too — unset in production, so
+ *  unrestricted (issue #1649). */
 function attributedAuthority(deps: McpDeps, task: Task): AuthorityProfile | undefined {
   if (task.type === "review") return REVIEWER_AUTHORITY_PROFILE;
-  return deps.resolveAuthority?.(task.assignee) ?? deps.authority;
+  try {
+    return deps.resolveAuthority?.(task.assignee) ?? deps.authority;
+  } catch (err) {
+    if (!(err instanceof UnknownAgentError) && !(err instanceof InvalidAgentDefinitionError)) {
+      throw err;
+    }
+    return deps.authority;
+  }
 }
 
 export function toolResult(payload: unknown) {

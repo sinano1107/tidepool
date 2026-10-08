@@ -1,7 +1,7 @@
 import { execFile, execFileSync } from "node:child_process";
 import { platform } from "node:process";
 import { promisify } from "node:util";
-import { resolveExecutionAgent, UnknownAgentError } from "./agent.js";
+import { resolveExecutionAgent } from "./agent.js";
 import {
   type AgentAdmin,
   changeAgentTier,
@@ -532,10 +532,10 @@ function agentsSpeakingProvidersResolver(
  *  `assignee` (null → the board's default agent, `TIDEPOOL_AGENT`) — the
  *  delegation-aware successor to a single board-wide fixed profile, which
  *  every task shared regardless of who it was actually assigned to. An
- *  assignee the registry no longer knows (drift since the owning task's own
- *  session spawned) or whose definition no longer stands (InvalidAgentDefinitionError,
- *  ADR 0097) falls back to unrestricted here rather than throwing —
- *  the spawn-time gate (ClaudeCodeWorker.start) is what quarantines that.
+ *  assignee the registry no longer knows (UnknownAgentError) or whose
+ *  definition no longer stands (InvalidAgentDefinitionError, ADR 0097) throws,
+ *  so each consumer decides: landing quarantines the agent name (ADR 0217
+ *  決定3), MCP falls back to unrestricted.
  *  Without a registry, no agent's authority is knowable at all — unrestricted. */
 function authorityResolver(
   board: BoardComposition,
@@ -543,16 +543,8 @@ function authorityResolver(
 ): ((assignee: string | null) => AuthorityProfile | undefined) | undefined {
   const { registryDir, defaultAgentName } = board;
   if (!registryDir) return undefined;
-  return (assignee) => {
-    try {
-      return resolveExecutionAgent(loadBoardRegistry(board), defaultAgentName, assignee, tierNames(db)).profile;
-    } catch (err) {
-      if (!(err instanceof UnknownAgentError) && !(err instanceof InvalidAgentDefinitionError)) {
-        throw err;
-      }
-      return undefined;
-    }
-  };
+  return (assignee) =>
+    resolveExecutionAgent(loadBoardRegistry(board), defaultAgentName, assignee, tierNames(db)).profile;
 }
 
 /** Whether an agent name is currently registered (ADR 0012 / issue #36), read

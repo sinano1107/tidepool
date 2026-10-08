@@ -4,7 +4,8 @@ import { DEFAULT_AUDITOR_NAME } from "./defaults.js";
 import { DomainError } from "./domain-error.js";
 import { appendEvent, latestEventOfTask } from "./events.js";
 import type { GitHubClient } from "./github.js";
-import type { AuthorityProfile } from "./registry.js";
+import { registerQuarantine } from "./quarantine.js";
+import { type AuthorityProfile, InvalidAgentDefinitionError, UnknownAgentError } from "./registry.js";
 import {
   contentSourceFor,
   countUnsettledAttachedChildren,
@@ -53,6 +54,7 @@ export type LandingVerdict =
       reason:
         | "workspace_unavailable"
         | "workspace_needs_human"
+        | "agent_unavailable"
         | "github_not_configured"
         | "pull_request_already_merged"
         | "promotion_failed";
@@ -158,7 +160,6 @@ export interface LandingDeps {
   workspace?: WorkspaceConfig;
   resolveWorkspace?: (taskWorkspace: string | null) => WorkspaceConfig;
   github: GitHubClient | null;
-  authority?: AuthorityProfile;
   resolveAuthority?: (assignee: string | null) => AuthorityProfile | undefined;
   defaultAgentName: string;
   auditorName?: string;
@@ -361,11 +362,26 @@ function recordLandingDeferred(
 }
 
 export function createLanding(deps: LandingDeps): Landing {
-  const authorityOf = (task: Task) => deps.resolveAuthority?.(task.assignee) ?? deps.authority;
+  /** ADR 0217 決定3: 解決できない profile はダイヤルを推測せず、agent 名の quarantine に落として
+   *  undefined を返す。registry の無い盤面(resolver 無し)は profile 無しで解決する。 */
+  const readAuthority = (task: Task, now: Date): { profile: AuthorityProfile | undefined } | undefined => {
+    try {
+      return { profile: deps.resolveAuthority?.(task.assignee) };
+    } catch (err) {
+      if (!(err instanceof UnknownAgentError) && !(err instanceof InvalidAgentDefinitionError)) throw err;
+      registerQuarantine(deps.db, "agent", err.agentName, err.message, now);
+      return undefined;
+    }
+  };
   /** ADR 0217 決定1・2: いま着地しても無人 merge キューに入るかを読み直し、入らなければ
    *  キューから外して変わった先の面へ渡す。読み直しは PR をキューへ入れない。 */
-  const withdrawIfSurfaceChanged = (task: Task, prNumber: number, workspaceName: string, now: Date) => {
-    const authority = authorityOf(task);
+  const withdrawIfSurfaceChanged = (
+    task: Task,
+    authority: AuthorityProfile | undefined,
+    prNumber: number,
+    workspaceName: string,
+    now: Date,
+  ) => {
     const surface = landingSurface(
       deps.isProtectedWorkspace?.(workspaceName),
       authority?.merge,
@@ -375,7 +391,6 @@ export function createLanding(deps: LandingDeps): Landing {
     deps.db.transaction(() => {
       clearPendingAutoMerge(deps.db, task.id);
       if (surface === "none") {
-        // 解決できない profile もここでダイヤル無しと読まれる(#1631 で agent の quarantine に置き換わる)
         appendEvent(deps.db, {
           taskId: task.id,
           workerId: BOARD_WORKER_ID,
@@ -426,6 +441,13 @@ export function createLanding(deps: LandingDeps): Landing {
     }
     return { kind: "failed", reason, error: message };
   };
+  const agentUnavailable = (task: Task, excludePrPromotionQuestionId?: string) =>
+    failed(
+      task,
+      "agent_unavailable",
+      "the assigned agent's authority profile cannot be resolved for landing",
+      excludePrPromotionQuestionId,
+    );
   const landing: Landing = {
     async land(task, excludePrPromotionQuestionId) {
       if (task.type !== "work") return { kind: "not_applicable", reason: "not_work" };
@@ -487,8 +509,10 @@ export function createLanding(deps: LandingDeps): Landing {
           return { kind: "deferred", reason: block.kind, count: block.count };
         }
         if (!isRemoteBacked(workspace)) {
+          const resolved = readAuthority(task, deps.clock.now());
+          if (!resolved) return agentUnavailable(task, excludePrPromotionQuestionId);
           const purpose =
-            authorityOf(task)?.merge === "auto_if_ci_green"
+            resolved.profile?.merge === "auto_if_ci_green"
               ? `Workspace "${workspace.name}" is purely-local, so CI cannot be observed and ` +
                 `auto_if_ci_green cannot auto-merge "${task.title}". Land its task branch on the ` +
                 `protected branch now?`
@@ -537,6 +561,9 @@ export function createLanding(deps: LandingDeps): Landing {
             prNumber: task.pr_number,
           };
         }
+        // profile を読むのは面を開く時点だけ —— 開いている PR への push は読まない(ADR 0217 決定3)
+        const resolved = readAuthority(task, deps.clock.now());
+        if (!resolved) return agentUnavailable(task, excludePrPromotionQuestionId);
         const { title } = await contentSourceFor(task, deps.github, () => workspace?.path).expand();
         let pr: Awaited<ReturnType<GitHubClient["createPullRequest"]>>;
         try {
@@ -564,7 +591,7 @@ export function createLanding(deps: LandingDeps): Landing {
             deps.auditorName ?? DEFAULT_AUDITOR_NAME,
           ),
           deps.clock.now(),
-          authorityOf(task),
+          resolved.profile,
           deps.isProtectedWorkspace?.(workspace.name),
           "worker",
         );
@@ -666,9 +693,16 @@ export function createLanding(deps: LandingDeps): Landing {
         const workspace = resolveOrQuarantine(deps.db, resolve, task.workspace, now);
         if (!workspace) continue;
         // 着地の面は門と同じ2点 — CI を読む前と merge の直前 — で読む。面が変わった PR は
-        // キューを外れ、門に当たった PR はキューに残る(ADR 0217 決定1)
-        const stop = () =>
-          withdrawIfSurfaceChanged(task, pr_number, workspace.name, now) || landingBlock(deps.db, task_id);
+        // キューを外れ、門に当たった PR はキューに残る(ADR 0217 決定1)。profile が読めなければ
+        // agent を quarantine に落とし、キューに残してこの回は飛ばす(決定3)
+        const stop = () => {
+          const resolved = readAuthority(task, now);
+          return (
+            !resolved ||
+            withdrawIfSurfaceChanged(task, resolved.profile, pr_number, workspace.name, now) ||
+            landingBlock(deps.db, task_id)
+          );
+        };
         if (stop()) continue;
         const status = await github.getCiStatus({ path: workspace.path, number: pr_number });
         if (status === "pending") continue;

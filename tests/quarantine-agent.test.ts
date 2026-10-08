@@ -4,11 +4,10 @@ import {
   quarantineAgent,
   type ResolvedAgent,
   resolveAgentOrQuarantine,
-  UnknownAgentError,
   verifyAgentRepaired,
 } from "../src/agent.js";
 import { openDb } from "../src/db.js";
-import { InvalidAgentDefinitionError } from "../src/registry.js";
+import { InvalidAgentDefinitionError, UnknownAgentError } from "../src/registry.js";
 import { listBoard } from "../src/tasks.js";
 import { quarantineQuestion } from "./harness.js";
 

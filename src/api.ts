@@ -1,6 +1,5 @@
 import { json, type RequestHandler, type Response, Router } from "express";
 import { z } from "zod";
-import { UnknownAgentError } from "./agent.js";
 import {
   type AgentAdmin,
   BuiltInAgentNotEditableError,
@@ -91,6 +90,7 @@ import {
   isBuiltInAgentName,
   PROVIDER_OPTIONS,
   type RegistryCandidates,
+  UnknownAgentError,
   UnknownAuthorityProfileError,
 } from "./registry.js";
 import {

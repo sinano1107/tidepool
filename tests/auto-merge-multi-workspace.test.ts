@@ -41,7 +41,7 @@ it("prod workspace の低リスクタスクの auto_if_ci_green poll は、CI �
       if (!ws) throw new UnknownWorkspaceError(name ?? "sandbox");
       return ws;
     },
-    authority: { name: "standard", guidance: "", merge: "auto_if_ci_green" },
+    resolveAuthority: () => ({ name: "standard", guidance: "", merge: "auto_if_ci_green" }),
   });
 
   const task = await registerWork(t, "ship in prod", "prod");
@@ -67,7 +67,7 @@ it("PR open 後に付いた未決着の付帯子があれば CI を読まず行�
   const { workspace } = await makeRemoteBackedWorkspace("attached-gate");
   t = await bootTidepool({
     workspace,
-    authority: { name: "standard", guidance: "", merge: "auto_if_ci_green" },
+    resolveAuthority: () => ({ name: "standard", guidance: "", merge: "auto_if_ci_green" }),
   });
   const task = await registerWork(t, "wait for the attached repair");
   await t.clock.advance(HOUR);
@@ -92,7 +92,7 @@ it("CI を読んでいる間に付帯子が付いたら merge 直前の門で止
   const { workspace } = await makeRemoteBackedWorkspace("attached-during-ci");
   t = await bootTidepool({
     workspace,
-    authority: { name: "standard", guidance: "", merge: "auto_if_ci_green" },
+    resolveAuthority: () => ({ name: "standard", guidance: "", merge: "auto_if_ci_green" }),
   });
   const task = await registerWork(t, "recheck the gate after reading CI");
   await t.clock.advance(HOUR);
@@ -124,7 +124,7 @@ it("PR open 後の未束ね異議は CI を読まず行を残し、commit され
   const { workspace } = await makeRemoteBackedWorkspace("objection-gate");
   t = await bootTidepool({
     workspace,
-    authority: { name: "standard", guidance: "", merge: "auto_if_ci_green" },
+    resolveAuthority: () => ({ name: "standard", guidance: "", merge: "auto_if_ci_green" }),
   });
   const task = await registerWork(t, "wait for the objected repair");
   await t.clock.advance(HOUR);

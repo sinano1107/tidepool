@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { resolveExecutionAgent, UnknownAgentError } from "../src/agent.js";
+import { resolveExecutionAgent } from "../src/agent.js";
 import {
   InvalidAgentDefinitionError,
   normalizeProviderEntries,
   type Registry,
+  UnknownAgentError,
 } from "../src/registry.js";
 import { seedTierNames } from "./fakes.js";
 

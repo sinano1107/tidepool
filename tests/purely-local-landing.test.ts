@@ -102,7 +102,7 @@ it("purely-local では auto_if_ci_green を無人 merge に使わず、観測�
   const workspace = await makeWorkspace("sandbox");
   t = await bootTidepool({
     workspace,
-    authority: { name: "standard", guidance: "", merge: "auto_if_ci_green" },
+    resolveAuthority: () => ({ name: "standard", guidance: "", merge: "auto_if_ci_green" }),
   });
   const task = await registerWork(t, "ship automatically");
   await t.clock.advance(HOUR);

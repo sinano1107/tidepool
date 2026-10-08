@@ -11,7 +11,7 @@ import {
   registerLocalMergeQuestion,
   registerPrPromotionFailureQuestion,
 } from "../src/landing.js";
-import type { MergeDial } from "../src/registry.js";
+import { type AuthorityProfile, type MergeDial, REVIEWER_AUTHORITY_PROFILE, UnknownAgentError } from "../src/registry.js";
 import {
   answerQuestion,
   completeTask,
@@ -1155,7 +1155,7 @@ it("PR を開いた後の merge question も、CI red で止まった auto-merge
     clock,
     workspace,
     github,
-    authority: { name: "standard", guidance: "", merge: "auto_if_ci_green" },
+    resolveAuthority: () => ({ name: "standard", guidance: "", merge: "auto_if_ci_green" }),
   }).tick("auto_merge", clock.now());
 
   const registered = listBoard(db)
@@ -1413,6 +1413,177 @@ it("escalate で開いた PR の後にダイヤルを auto_if_ci_green へ緩め
   expect(github.ciChecks).toEqual([]);
   expect(github.merged).toEqual([]);
   expect(mergeQuestions(db).map((q) => q.pr)).toEqual([1]);
+});
+
+// ADR 0217 決定3: 着地の2点 — PR を開く時点と無人 merge の瞬間 — で profile が解決できなければ、
+// ダイヤルを推測せず agent を quarantine に落とす。以下はこの判定を述べる唯一の場所(ADR 0107)。
+const unresolvable = (): AuthorityProfile => {
+  throw new UnknownAgentError("tako");
+};
+
+it("PR を開く時点で profile が解決できなければ、PR を開かず agent を quarantine に落とし、着地は retry できる失敗として返る", async () => {
+  const { workspace } = await makeRemoteBackedWorkspace("landing-unresolvable-at-open");
+  const { db, clock } = await openBoard();
+  const github = new FakeGitHubClient();
+  let resolveAuthority = unresolvable;
+  const landing = createLanding({
+    defaultAgentName: "tako",
+    db,
+    clock,
+    workspace,
+    github,
+    resolveAuthority: () => resolveAuthority(),
+  });
+  const task = landingWork(db, clock);
+  git(workspace.path, "checkout", "-b", `task/${task.id}`);
+  commitWork(workspace.path, "feature.txt", "ready\n");
+
+  await expect(landing.land(task)).resolves.toMatchObject({ kind: "failed", reason: "agent_unavailable" });
+  expect(github.requests).toEqual([]);
+  expect(quarantineQuestion(db, "agent", "tako")).toBeDefined();
+  const [failure] = promotionFailures(db, task.id);
+  expect(failure?.question_items?.[0]?.recommendation).toBe("retry");
+
+  // registry を直して retry すると PR が開き、本当のダイヤル(auto_if_ci_green)の面 —— 無人 merge キュー —— に着地する
+  resolveAuthority = () => profile("auto_if_ci_green");
+  await expect(landing.land(task, failure!.id)).resolves.toMatchObject({
+    kind: "landed",
+    surface: "pull_request_opened",
+  });
+  expect(github.requests).toHaveLength(1);
+  await landing.tick("auto_merge", clock.now());
+  expect(github.merged).toHaveLength(1);
+});
+
+it("開いている PR へ修理を push する着地は profile を読まないので、解決できなくても push して agent を quarantine に落とさない", async () => {
+  const { workspace } = await makeRemoteBackedWorkspace("landing-unresolvable-open-pr-update");
+  const { db, clock } = await openBoard();
+  const github = new FakeGitHubClient();
+  const landing = createLanding({
+    defaultAgentName: "tako",
+    db,
+    clock,
+    workspace,
+    github,
+    resolveAuthority: unresolvable,
+  });
+  const task = landingWork(db, clock);
+  git(workspace.path, "checkout", "-b", `task/${task.id}`);
+  commitWork(workspace.path, "feature.txt", "ready\n");
+  recordPrOpenedViaWorker(db, task, 1, "worker", clock.now());
+
+  await expect(landing.land(getTask(db, task.id)!)).resolves.toEqual({
+    kind: "landed",
+    surface: "open_pull_request_updated",
+    prNumber: 1,
+  });
+  expect(quarantineQuestion(db, "agent", "tako")).toBeUndefined();
+});
+
+function agentQuarantines(db: Db) {
+  return listBoard(db).filter((q) => q.question_quarantine_kind === "agent" && q.status === "todo");
+}
+
+it("無人 merge の瞬間に profile が解決できなければ、merge せずキューに残し、agent の quarantine は重ねず、直った後の tick が本当のダイヤルで merge する", async () => {
+  const workspace = await makeWorkspace("landing-unresolvable-at-merge");
+  const { db, clock } = await openBoard();
+  const github = new FakeGitHubClient();
+  const work = queueAutoMerge(db, clock, 1);
+  let resolveAuthority = unresolvable;
+  const landing = createLanding({
+    defaultAgentName: "tako",
+    db,
+    clock,
+    workspace,
+    github,
+    resolveAuthority: () => resolveAuthority(),
+  });
+
+  await landing.tick("auto_merge", clock.now());
+  await landing.tick("auto_merge", clock.now());
+
+  expect(github.merged).toEqual([]);
+  expect(mergeQuestions(db)).toEqual([]);
+  expect(listEvents(db, work.id).map((e) => e.kind)).not.toContain("auto_merge_withdrawn");
+  expect(agentQuarantines(db).map((q) => q.question_quarantine_value)).toEqual(["tako"]);
+
+  resolveAuthority = () => profile("auto_if_ci_green");
+  await landing.tick("auto_merge", clock.now());
+  expect(github.merged).toEqual([{ path: workspace.path, number: 1 }]);
+});
+
+it("直した registry でダイヤルが escalate に変わっていれば、直った後の tick は merge せず盤面の名義の merge question に渡す", async () => {
+  const workspace = await makeWorkspace("landing-unresolvable-repaired-escalate");
+  const { db, clock } = await openBoard();
+  const github = new FakeGitHubClient();
+  queueAutoMerge(db, clock, 1);
+  let resolveAuthority = unresolvable;
+  const landing = createLanding({
+    defaultAgentName: "tako",
+    db,
+    clock,
+    workspace,
+    github,
+    resolveAuthority: () => resolveAuthority(),
+  });
+  await landing.tick("auto_merge", clock.now());
+
+  resolveAuthority = () => profile("escalate");
+  await landing.tick("auto_merge", clock.now());
+
+  expect(github.merged).toEqual([]);
+  expect(mergeQuestions(db)).toEqual([expect.objectContaining({ pr: 1, registrant: [BOARD_WORKER_ID, "board"] })]);
+});
+
+it("CI を読んでいる間に profile が解決できなくなっても merge しない — merge の直前の読みも quarantine に落とす", async () => {
+  const workspace = await makeWorkspace("landing-unresolvable-before-merge");
+  const { db, clock } = await openBoard();
+  const github = new FakeGitHubClient();
+  queueAutoMerge(db, clock, 1);
+  let resolveAuthority = (): AuthorityProfile => profile("auto_if_ci_green");
+  const getCiStatus = github.getCiStatus.bind(github);
+  github.getCiStatus = async (ref) => {
+    const status = await getCiStatus(ref);
+    resolveAuthority = unresolvable;
+    return status;
+  };
+
+  await createLanding({
+    defaultAgentName: "tako",
+    db,
+    clock,
+    workspace,
+    github,
+    resolveAuthority: () => resolveAuthority(),
+  }).tick("auto_merge", clock.now());
+
+  expect(github.ciChecks).toHaveLength(1);
+  expect(github.merged).toEqual([]);
+  expect(mergeQuestions(db)).toEqual([]);
+  expect(quarantineQuestion(db, "agent", "tako")).toBeDefined();
+});
+
+it("解決できてダイヤルを持たない組み込みの reviewer profile は、quarantine に落ちない", async () => {
+  const workspace = await makeWorkspace("landing-reviewer-profile");
+  const { db, clock } = await openBoard();
+  const github = new FakeGitHubClient();
+  const work = queueAutoMerge(db, clock, 1);
+
+  await createLanding({
+    defaultAgentName: "tako",
+    db,
+    clock,
+    workspace,
+    github,
+    resolveAuthority: () => REVIEWER_AUTHORITY_PROFILE,
+  }).tick("auto_merge", clock.now());
+
+  expect(agentQuarantines(db)).toEqual([]);
+  expect(
+    listEvents(db, work.id)
+      .filter((e) => e.kind === "auto_merge_withdrawn")
+      .map((e) => e.payload),
+  ).toEqual([{ kind: "auto_merge_withdrawn", pr_number: 1, merge: null }]);
 });
 
 // ADR 0103 決定1・4: 帯域外の判定は盤面自身の記録(ref snapshot)との突き合わせで、

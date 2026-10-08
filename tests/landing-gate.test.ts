@@ -71,7 +71,7 @@ it("remote-backed(escalate): 付帯子が未決着なら PR を開かず、決�
   const { workspace } = await makeRemoteBackedWorkspace("sandbox");
   t = await bootTidepool({
     workspace,
-    authority: { name: "standard", guidance: "", merge: "escalate" },
+    resolveAuthority: () => ({ name: "standard", guidance: "", merge: "escalate" }),
   });
   const task = await registerWork(t, "ship remotely");
   await t.clock.advance(HOUR);
@@ -97,7 +97,7 @@ it("remote-backed(auto_if_ci_green、risk なし): 付帯子が未決着なら a
   const { workspace } = await makeRemoteBackedWorkspace("sandbox");
   t = await bootTidepool({
     workspace,
-    authority: { name: "standard", guidance: "", merge: "auto_if_ci_green" },
+    resolveAuthority: () => ({ name: "standard", guidance: "", merge: "auto_if_ci_green" }),
   });
   const task = await registerWork(t, "ship unattended");
   await t.clock.advance(HOUR);
@@ -125,7 +125,7 @@ it("remote-backed(external): 付帯子の決着後に PR が開く", async () =>
   const { workspace } = await makeRemoteBackedWorkspace("sandbox");
   t = await bootTidepool({
     workspace,
-    authority: { name: "standard", guidance: "", merge: "external" },
+    resolveAuthority: () => ({ name: "standard", guidance: "", merge: "external" }),
   });
   const task = await registerWork(t, "ship to an outside merge surface");
   await t.clock.advance(HOUR);
@@ -387,7 +387,7 @@ async function completeObjectedExternalWorkAndExpectNoPr(): Promise<any> {
   const { workspace } = await makeRemoteBackedWorkspace("sandbox");
   t = await bootTidepool({
     workspace,
-    authority: { name: "standard", guidance: "", merge: "external" },
+    resolveAuthority: () => ({ name: "standard", guidance: "", merge: "external" }),
   });
   const task = await registerWork(t, "ship the objected feature");
   await t.clock.advance(HOUR);
@@ -581,7 +581,7 @@ it("PR の merge question も同じ検証を通る — 未決着の付帯子が�
   const { workspace } = await makeRemoteBackedWorkspace("sandbox");
   t = await bootTidepool({
     workspace,
-    authority: { name: "standard", guidance: "", merge: "escalate" },
+    resolveAuthority: () => ({ name: "standard", guidance: "", merge: "escalate" }),
   });
   const task = await registerWork(t, "ship remotely");
   await t.clock.advance(HOUR);

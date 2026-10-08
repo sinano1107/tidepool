@@ -9,6 +9,7 @@ import {
   ownEntry,
   REVIEWER_AUTHORITY_PROFILE,
   type Registry,
+  UnknownAgentError,
 } from "./registry.js";
 import type { Tier } from "./tier.js";
 
@@ -20,15 +21,6 @@ export interface ResolvedAgent {
   name: string;
   definition: AgentDefinition;
   profile: AuthorityProfile;
-}
-
-/** A task's `assignee` (or the board's default agent name) names an agent
- *  absent from the registry — the agent-name generalization of
- *  UnknownWorkspaceError (ADR 0012 / issue #36). */
-export class UnknownAgentError extends Error {
-  constructor(public readonly agentName: string) {
-    super(`unknown agent: ${agentName}`);
-  }
 }
 
 /** CONTEXT.md's Assignee: `task.assignee` is a reference to a registry agent

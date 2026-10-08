@@ -33,7 +33,7 @@ it("prod workspace のタスクの merge 回答は、CI チェックと merge �
       if (!ws) throw new UnknownWorkspaceError(name ?? "sandbox");
       return ws;
     },
-    authority: { name: "standard", guidance: "", merge: "escalate" },
+    resolveAuthority: () => ({ name: "standard", guidance: "", merge: "escalate" }),
   });
 
   const task = await registerWork(t, "ship in prod", "prod");

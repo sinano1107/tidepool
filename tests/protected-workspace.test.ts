@@ -103,7 +103,7 @@ it("completing a task in a protected workspace under the external merge dial sti
       if (!ws) throw new UnknownWorkspaceError(name ?? "sandbox");
       return ws;
     },
-    authority: { name: "standard", guidance: "", merge: "external" },
+    resolveAuthority: () => ({ name: "standard", guidance: "", merge: "external" }),
     isProtectedWorkspace: (name) => name === "registry",
   });
 
@@ -135,7 +135,7 @@ it("completing a low-risk task in a protected workspace under auto_if_ci_green a
       if (!ws) throw new UnknownWorkspaceError(name ?? "sandbox");
       return ws;
     },
-    authority: { name: "standard", guidance: "", merge: "auto_if_ci_green" },
+    resolveAuthority: () => ({ name: "standard", guidance: "", merge: "auto_if_ci_green" }),
     isProtectedWorkspace: (name) => name === "registry",
   });
 

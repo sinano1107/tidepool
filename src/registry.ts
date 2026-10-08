@@ -271,6 +271,15 @@ export function isBuiltInAgentName(name: string): boolean {
   return name === BUILT_IN_AUDITOR.name;
 }
 
+/** A task's `assignee` (or the board's default agent name) names an agent
+ *  absent from the registry — the agent-name generalization of
+ *  UnknownWorkspaceError (ADR 0012 / issue #36). */
+export class UnknownAgentError extends Error {
+  constructor(public readonly agentName: string) {
+    super(`unknown agent: ${agentName}`);
+  }
+}
+
 /** 定義が成立していない(ADR 0097 決定3 / ADR 0110 決定1): provider が列挙の外、
  *  advisor を提供しない正準経路に advisor が宣言されている、ティアが列挙の外、
  *  あるいは退役したピン留めが残っている。定義を受け入れる門 —— 登録
