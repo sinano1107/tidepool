@@ -389,7 +389,7 @@ export const ONLY_WHERE_COMPLETION_REVIEW_FIRES =
   "(every root is reviewed on completion) or a child carrying review_flag or risk_flag.";
 export const REVIEW_FLAG_ONLY_ON_WORK_CHILDREN =
   "Opt a child work task into an independent review of its deliverable on completion. " +
-  "Accepted only on a work task's child not assigned to human; refused on a root, which is already reviewed on " +
+  "Accepted only on a child work task not assigned to human; refused on a root, which is already reviewed on " +
   "completion, and on a review task.";
 /** review_tier の書き出し。段の一覧(tierFieldDescriptions の review_tier_choices)はこの後に続ける。 */
 export const REVIEW_TIER_BY_TYPE =
