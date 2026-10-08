@@ -375,8 +375,8 @@ if ! grep -q '"acceptEdits"' "$REPO/src/claude-worker.ts" 2>/dev/null ||
   fail "  Deploy first; the flags below would measure a shape that board never spawns."
   exit 1
 fi
-if ! grep -q 'excludeWorkspaceProjectHooks' "$REPO/src/claude-worker.ts" 2>/dev/null; then
-  fail "$REPO/src/claude-worker.ts does not apply the project-hook sparse exclusion."
+if ! grep -q 'excludeWorkspaceProjectSettings' "$REPO/src/claude-worker.ts" 2>/dev/null; then
+  fail "$REPO/src/claude-worker.ts does not apply the project settings sparse exclusion."
   fail "  Deploy first; the live row below would measure a shape that board never spawns."
   exit 1
 fi
