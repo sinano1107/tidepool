@@ -3,7 +3,9 @@ export { whyInvalidOffset } from "./pace-offset-rule.js";
 export { whyNotPositiveInteger } from "./positive-integer.js";
 export { whyInvalidPrice } from "./price.js";
 export { whyInvalidProviderRank } from "./provider.js";
+export { whyInvalidRegistryName } from "./registry-name.js";
 export { normalizeText, whyBlank } from "./required-text.js";
+export { whyInvalidSkillAllowlist } from "./skill-allowlist.js";
 export { isSettled } from "./task-status.js";
 
 // 完了時レビューが立つかの規則の正本(ADR 0111 追記8)。サーバーの拒否・完了時の起票・WebUI の欄の出し分けが

@@ -6,9 +6,11 @@ import {
   assertValidAgentDefinition,
   assertValidAgentName,
   assertValidAuthorityProfileName,
+  assertValidSkillAllowlist,
   assertValidWorkspaceName,
   InvalidAgentNameError,
   InvalidAuthorityProfileNameError,
+  InvalidSkillAllowlistError,
   InvalidWorkspaceNameError,
   isBuiltInAgentName,
   loadRegistry,
@@ -28,11 +30,6 @@ function makeMinimalRegistry(workspaceNames: string[]): Registry {
 }
 
 describe("assertValidWorkspaceName", () => {
-  it("英数字・-・_・. のみからなる未使用の名前は通す(例外を投げない)", () => {
-    const registry = makeMinimalRegistry(["sandbox"]);
-    expect(() => assertValidWorkspaceName(registry, "my-new_workspace.v2")).not.toThrow();
-  });
-
   it("registry に既存の名前と衝突する名前は拒否する", () => {
     const registry = makeMinimalRegistry(["sandbox"]);
     expect(() => assertValidWorkspaceName(registry, "sandbox")).toThrow(InvalidWorkspaceNameError);
@@ -43,24 +40,29 @@ describe("assertValidWorkspaceName", () => {
     expect(() => assertValidWorkspaceName(registry, "toString")).not.toThrow();
     expect(() => assertValidWorkspaceName(registry, "constructor")).not.toThrow();
   });
+});
 
-  it("英数字・-・_・. 以外の文字を含む名前は拒否する", () => {
-    const registry = makeMinimalRegistry([]);
-    expect(() => assertValidWorkspaceName(registry, "my workspace")).toThrow(
-      InvalidWorkspaceNameError,
-    );
-    expect(() => assertValidWorkspaceName(registry, "my/workspace")).toThrow(
-      InvalidWorkspaceNameError,
-    );
-    expect(() => assertValidWorkspaceName(registry, "my workspace")).toThrow(
-      "must contain only letters, digits, '-', '_', '.' and not be '.' or '..'",
-    );
+it.each([
+  ["workspace", assertValidWorkspaceName, InvalidWorkspaceNameError, "workspaceName"],
+  ["agent", assertValidAgentName, InvalidAgentNameError, "agentName"],
+  ["authority profile", assertValidAuthorityProfileName, InvalidAuthorityProfileNameError, "profileName"],
+] as const)("%s guard maps the leaf refusal to its typed name error", (kind, assertName, ErrorClass, nameProperty) => {
+  let error: unknown;
+  try { assertName(makeMinimalRegistry([]), "."); } catch (caught) { error = caught; }
+  expect(error).toBeInstanceOf(ErrorClass);
+  expect(error).toMatchObject({
+    [nameProperty]: ".",
+    message: `invalid ${kind} name ".": must contain only letters, digits, '-', '_', '.' and not be '.' or '..'`,
   });
+});
 
-  it(". と .. はディレクトリ名として特別な意味を持つため予約名として拒否する", () => {
-    const registry = makeMinimalRegistry([]);
-    expect(() => assertValidWorkspaceName(registry, ".")).toThrow(InvalidWorkspaceNameError);
-    expect(() => assertValidWorkspaceName(registry, "..")).toThrow(InvalidWorkspaceNameError);
+it("skill guard retains the offending entry in its typed refusal", () => {
+  let error: unknown;
+  try { assertValidSkillAllowlist(["@workspace", "foo*"]); } catch (caught) { error = caught; }
+  expect(error).toBeInstanceOf(InvalidSkillAllowlistError);
+  expect(error).toMatchObject({
+    entry: "foo*",
+    message: 'invalid skill allowlist entry "foo*": a "*" may appear only as "*" alone or a "<name>:*" glob',
   });
 });
 
@@ -126,6 +128,7 @@ describe("loadRegistry", () => {
 
   it("名前が . になる agents/..md を含む commit は読み込みを倒す", async () => {
     const dir = await makeRegistry({ "agents/..md": VALID_AGENT_MD });
+    expect(() => loadRegistry(dir, "purely-local")).toThrow(InvalidAgentNameError);
     expect(() => loadRegistry(dir, "purely-local")).toThrow('invalid agent name "."');
   });
 
@@ -142,20 +145,16 @@ describe("loadRegistry", () => {
     expect(Object.keys(registry.authority)).not.toContain(".yaml");
   });
 
-  it("charset 外・. ・.. の名前の authority profile を含む commit は読み込みを倒す", async () => {
-    for (const name of ["my profile", ".", ".."]) {
-      const dir = await makeRegistry({ [`authority/${name}.yaml`]: VALID_AUTHORITY_YAML });
-      expect(() => loadRegistry(dir, "purely-local")).toThrow(InvalidAuthorityProfileNameError);
-      expect(() => loadRegistry(dir, "purely-local")).toThrow(`invalid authority profile name "${name}"`);
-    }
+  it("invalid authority filename maps to an authority-profile name error on load", async () => {
+    const dir = await makeRegistry({ "authority/..yaml": VALID_AUTHORITY_YAML });
+    expect(() => loadRegistry(dir, "purely-local")).toThrow(InvalidAuthorityProfileNameError);
+    expect(() => loadRegistry(dir, "purely-local")).toThrow('invalid authority profile name "."');
   });
 
-  it("charset 外・. ・.. のキーを持つ workspaces.yaml は読み込みを倒す", async () => {
-    for (const name of ["my workspace", ".", ".."]) {
-      const dir = await makeRegistry({ "workspaces.yaml": `"${name}":\n  path: /tmp/ws\n` });
-      expect(() => loadRegistry(dir, "purely-local")).toThrow(InvalidWorkspaceNameError);
-      expect(() => loadRegistry(dir, "purely-local")).toThrow(`invalid workspace name "${name}"`);
-    }
+  it("invalid workspace key maps to a workspace name error on load", async () => {
+    const dir = await makeRegistry({ "workspaces.yaml": '".":\n  path: /tmp/ws\n' });
+    expect(() => loadRegistry(dir, "purely-local")).toThrow(InvalidWorkspaceNameError);
+    expect(() => loadRegistry(dir, "purely-local")).toThrow('invalid workspace name "."');
   });
 
   it("予約 worker id の拒否は agent だけ: human という名の authority profile と workspace は読み込める", async () => {
@@ -319,9 +318,11 @@ describe("loadRegistry", () => {
 
   it("frontmatter の skills 許可リストを読み込む(CONTEXT.md: エージェント = ベース AI + skills + ...・issue #56 / ADR 0025)", async () => {
     const dir = await makeRegistry({
-      "agents/deckhand.md": `---\nname: deckhand\nversion: 0.3.1\nauthority: standard\nprovider: anthropic\ndescription: General work agent for the tidepool board\nskills:\n  - "@workspace"\n---\nYou are Deckhand.\n`,
+      "agents/deckhand.md": `---\nname: deckhand\nversion: 0.3.1\nauthority: standard\nprovider: anthropic\ndescription: General work agent for the tidepool board\nskills:\n  - "@workspace"\n  - "@host"\n  - "myplugin:*"\n  - code-review\n  - "myplugin:deploy"\n  - does-not-exist-anywhere\n---\nYou are Deckhand.\n`,
     });
-    expect(loadRegistry(dir, "purely-local").agents.deckhand!.skills).toEqual(["@workspace"]);
+    expect(loadRegistry(dir, "purely-local").agents.deckhand!.skills).toEqual([
+      "@workspace", "@host", "myplugin:*", "code-review", "myplugin:deploy", "does-not-exist-anywhere",
+    ]);
   });
 
   it("frontmatter の skills は必須: 欠落は登録時にエラーになる(省略=無制限のフットガンを作らない・issue #41 の線 / ADR 0025)", async () => {
@@ -332,40 +333,16 @@ describe("loadRegistry", () => {
   });
 
   /** A deckhand definition whose `skills` frontmatter is the given YAML block —
-   *  keeps the grammar tests to their one varying part. */
+   *  keeps the frontmatter mapping tests to their one varying part. */
   const withSkills = (skillsYaml: string) =>
     makeRegistry({
       "agents/deckhand.md": `---\nname: deckhand\nversion: 0.3.1\nauthority: standard\nprovider: anthropic\ndescription: General work agent for the tidepool board\nskills:\n${skillsYaml}---\nYou are Deckhand.\n`,
     });
 
-  it("skills の '*' は単独時のみ有効: 他の語と併記されるとエラー(glob は '*' 単独と '名前:*' の2形だけ・ADR 0025)", async () => {
-    const dir = await withSkills(`  - "*"\n  - code-review\n`);
-    expect(() => loadRegistry(dir, "purely-local")).toThrow(/skill/i);
-  });
-
-  it("skills の @ スコープ語は {@workspace, @host} の閉集合: 実在しないスコープ語はエラー(語の typo を検出する・ADR 0025)", async () => {
-    const good = await withSkills(`  - "@workspace"\n  - "@host"\n`);
-    expect(loadRegistry(good, "purely-local").agents.deckhand!.skills).toEqual(["@workspace", "@host"]);
-    const typo = await withSkills(`  - "@wrokspace"\n`);
-    expect(() => loadRegistry(typo, "purely-local")).toThrow(/skill/i);
-  });
-
-  it("skills の glob は '名前:*' の形のみ: 'foo*' や '*bar' のような部分 glob はエラー(ADR 0025)", async () => {
-    const pluginGlob = await withSkills(`  - "myplugin:*"\n`);
-    expect(loadRegistry(pluginGlob, "purely-local").agents.deckhand!.skills).toEqual(["myplugin:*"]);
-    for (const bad of ["foo*", "*bar", "pre*fix"]) {
-      const dir = await withSkills(`  - "${bad}"\n`);
-      expect(() => loadRegistry(dir, "purely-local")).toThrow(/skill/i);
-    }
-  });
-
-  it("skills の個別名・plugin:skill・実在しない参照は在庫非依存で通る(許可リストは参照であって在庫の主張ではない・ADR 0023 の線)", async () => {
-    const dir = await withSkills(`  - code-review\n  - "myplugin:deploy"\n  - does-not-exist-anywhere\n`);
-    expect(loadRegistry(dir, "purely-local").agents.deckhand!.skills).toEqual([
-      "code-review",
-      "myplugin:deploy",
-      "does-not-exist-anywhere",
-    ]);
+  it("malformed skills frontmatter maps to the typed allowlist refusal", async () => {
+    const dir = await withSkills(`  - "foo*"\n`);
+    expect(() => loadRegistry(dir, "purely-local")).toThrow(InvalidSkillAllowlistError);
+    expect(() => loadRegistry(dir, "purely-local")).toThrow('invalid skill allowlist entry "foo*"');
   });
 
   it("skills の空リストは全禁止として有効(ADR 0025: 全禁止は空リストで綴る)", async () => {
