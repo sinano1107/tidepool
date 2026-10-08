@@ -43,7 +43,7 @@ Specs and tickets are GitHub issues here, not files — the `.scratch/` layout i
 
 ## ponytail
 
-Use the repo-local ponytail skills directly. See [machine-setup.md](./machine-setup.md#ponytail) for provider discovery and plugin migration.
+ponytail is a repo-local skill under `.agents/skills/`; [machine-setup.md](./machine-setup.md#ponytail) covers removing the old plugin from a machine that still has it.
 
 - **Deciding** — `/grill-with-docs`, `/to-spec`, and `/triage-sweep` run without ponytail. The skill is not model-invocable (`disable-model-invocation` in its frontmatter; Codex has no such flag, and there the narrowed description does the same work), so it enters a session only when the user types `/ponytail`, through `/to-tickets`, or inside the implementer agent — never on its own.
 - **Ticketing** — invoke `/to-tickets`; [its setup](../../.agents/skills/to-tickets/SKILL.md#before-ticketing) owns activation.
