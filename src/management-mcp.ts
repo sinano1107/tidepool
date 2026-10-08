@@ -922,7 +922,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
   server.registerTool(
     "cancel_task",
     {
-      description: `Cancel a task and its unsettled descendants. The task must be human-registered, or a board-registered root other than a question. ${TASK_ACK_DESCRIPTION}`,
+      description: `Cancel a task and its unsettled descendants. The task must be human-authored, or a board-registered root other than a question. ${TASK_ACK_DESCRIPTION}`,
       inputSchema: { task_id: z.string(), reason: z.string().optional() },
     },
     async ({ task_id, reason }) => {
@@ -939,7 +939,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
   server.registerTool(
     "edit_task",
     {
-      description: "Edit the unconsumed fields of a human-registered task.",
+      description: "Edit the unconsumed fields of a human-authored task.",
       inputSchema: {
         task_id: z.string(),
         title: z.string().optional(),

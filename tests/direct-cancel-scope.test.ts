@@ -7,6 +7,7 @@ import { createBehaviorCandidate, proposeMemoryChange } from "../src/memory.js";
 import { registerMetaReview } from "../src/meta-review.js";
 import {
   cancelTaskDirectly,
+  carriesHumanWords,
   completeTask,
   editTask,
   getTask,
@@ -17,10 +18,10 @@ import {
   type Task,
 } from "../src/tasks.js";
 import { commitTriage, raiseObjection, startTriage } from "../src/triage.js";
-import { decomposeTaskViaWorker, FULL_HANDOFF, HOUR, HUMAN_WEBUI } from "./harness.js";
+import { decomposedChild, decomposeTaskViaWorker, FULL_HANDOFF, HOUR, HUMAN_WEBUI } from "./harness.js";
 
-/** 直接 cancel と Edit の範囲(ADR 0198)のドメイン層。直接 cancel は「人間が登録した task、または盤面が登録した
- *  root(question を除く)」、Edit は「人間が登録した task」のまま。 */
+/** 直接 cancel と Edit の範囲(ADR 0198 / 0211)のドメイン層。直接 cancel は「文面の書き手が人間の task、または盤面が登録した
+ *  root(question を除く)」、Edit は「文面の書き手が人間の task」。 */
 const NOW = new Date("2026-10-05T00:00:00.000Z");
 
 let db: Db;
@@ -93,7 +94,7 @@ it("盤面名義の RCA review(異議の付帯子)は直接 cancel を拒否さ�
   }
 });
 
-it("盤面が登録した meta-review は Edit を拒否される(Edit の範囲は人間が登録した task のまま)", () => {
+it("盤面が登録した meta-review は Edit を拒否される(Edit の範囲は文面の書き手が人間の task)", () => {
   db = openDb(":memory:");
   const review = metaReview(db);
 
@@ -101,7 +102,7 @@ it("盤面が登録した meta-review は Edit を拒否される(Edit の範囲
   expect(getTask(db, review.id)!.title).toBe(review.title);
 });
 
-/** agent が decompose で登録した、まだ todo の子(拒否が「実行中」でなく登録者の線から来ることを見るため)。 */
+/** agent が decompose で登録した、まだ todo の子(拒否が「実行中」でなく文面の書き手の線から来ることを見るため)。 */
 function todoAgentChild(db: Db): Task {
   const parent = registerTask(db, { type: "work", title: "parent", purpose: "p", completion_criteria: "c" }, NOW, ...HUMAN_WEBUI);
   const [child] = decomposeTaskViaWorker(
@@ -129,4 +130,33 @@ it("agent が decompose で登録した todo の子は Edit を拒否される",
 
   expect(() => editTask(db, child, { title: "rewritten" }, NOW, "webui")).toThrow(DomainError);
   expect(getTask(db, child.id)!.title).toBe("agent child");
+});
+
+it("承認で実体化した todo の子は直接 cancel を拒否される", () => {
+  db = openDb(":memory:");
+  const parent = registerTask(db, { type: "work", title: "parent", purpose: "p", completion_criteria: "c", workspace: "repo" }, NOW, ...HUMAN_WEBUI);
+  const child = decomposedChild(db, parent, "approved child", "deckhand", NOW);
+
+  expect(() => cancelTaskDirectly(db, child, null, NOW, {}, "webui")).toThrow(DomainError);
+  expect(getTask(db, child.id)!.status).toBe("todo");
+});
+
+it("承認で実体化した todo の子は Edit を拒否される", () => {
+  db = openDb(":memory:");
+  const parent = registerTask(db, { type: "work", title: "parent", purpose: "p", completion_criteria: "c", workspace: "repo" }, NOW, ...HUMAN_WEBUI);
+  const child = decomposedChild(db, parent, "approved child", "deckhand", NOW);
+
+  expect(() => editTask(db, child, { title: "rewritten" }, NOW, "webui")).toThrow(DomainError);
+  expect(getTask(db, child.id)!.title).toBe("approved child");
+});
+
+it("carriesHumanWords は承認で実体化した子では false、人間の root と人間 decompose の子では true", () => {
+  db = openDb(":memory:");
+  const root = registerTask(db, { type: "work", title: "root", purpose: "p", completion_criteria: "c", workspace: "repo" }, NOW, ...HUMAN_WEBUI);
+  const humanChild = decomposedChild(db, root, "human child", "human", NOW);
+  const approvedChild = decomposedChild(db, root, "approved child", "deckhand", NOW);
+
+  expect(carriesHumanWords(db, root.id)).toBe(true);
+  expect(carriesHumanWords(db, humanChild.id)).toBe(true);
+  expect(carriesHumanWords(db, approvedChild.id)).toBe(false);
 });

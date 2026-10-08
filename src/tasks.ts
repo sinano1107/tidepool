@@ -1210,7 +1210,7 @@ function assertNoGatingQuestion(db: Db, taskId: string, defaults: CancelDefaults
 
 /** The human's direct cancel (issue #130, CONTEXT.md's Cancel): the second
  *  cancel path beside abandon. Its scope line is wider than edit's (ADR 0198,
- *  `assertDirectlyCancellableScope` — human-registered or a board-registered
+ *  `assertDirectlyCancellableScope` — human-authored or a board-registered
  *  root other than a question, unsettled, not in_progress), the target and
  *  its unfinished descendants go cancelled together (道連れ), the reason is optional and kept on every cancelled task's
  *  event. It is refused while a Tidepool question with the subtree as its
@@ -2084,25 +2084,13 @@ function hasAgentRegisteredChild(db: Db, parentId: string): boolean {
   return row !== undefined;
 }
 
-/** Whether `taskId`'s own `task_registered` event was attributed to a human
- *  (issue #130): the mirror of `hasAgentRegisteredChild`'s technique — a task
- *  is registered by the human, the board (`BOARD_WORKER_ID`, its own rules), or
- *  an agent (only via the `decompose` MCP tool), so a `task_registered` event
- *  by `HUMAN_WORKER_ID` is exactly "a human registered this task" (a root the
- *  human registered, or a child they added via human decompose). No separate
- *  provenance marker is needed. registerTask writes exactly one
- *  `task_registered`, so the latest is the task's only one. */
-function isHumanRegistered(db: Db, taskId: string): boolean {
-  return latestEventOfTask(db, taskId, "task_registered")?.worker_id === HUMAN_WORKER_ID;
-}
-
-/** Whether `taskId`'s text carries the human's words (ADR 0194 決定6): the
- *  human registered it, or its registration record carries objection material
+/** Whether `taskId`'s text carries the human's words (ADR 0211): the
+ *  human authored it, or its registration record carries objection material
  *  (ADR 0171) — an RCA review is board-named yet carries the human's direction
  *  comments in its purpose. */
 export function carriesHumanWords(db: Db, taskId: string): boolean {
   const registered = latestEventOfTask(db, taskId, "task_registered")!;
-  return registered.worker_id === HUMAN_WORKER_ID || !!registered.payload.objection_event_ids?.length;
+  return getTextAuthor(db, taskId) === HUMAN_WORKER_ID || !!registered.payload.objection_event_ids?.length;
 }
 
 /** The status half of the human-decompose gate (issue #129), split out so the
@@ -2139,32 +2127,33 @@ function assertHumanDecomposable(db: Db, parent: Task): void {
 }
 
 /** The edit scope gate (issue #130, CONTEXT.md's Edit): the task must be
- *  human-registered (an agent-registered decompose child is out of scope, the
+ *  human-authored (agent-authored children, including approved ones, are out of scope; the
  *  objection → repair route handles dissatisfaction with it; a
  *  board-registered task's text is the board's own instruction, ADR 0198
  *  決定4), unsettled, and not in_progress. */
 function assertHumanEditableScope(db: Db, task: Task): void {
-  if (!isHumanRegistered(db, task.id)) {
+  if (getTextAuthor(db, task.id) !== HUMAN_WORKER_ID) {
     throw new DomainError(
-      "only a human-registered task can be edited — a task an agent or the board registered is out of scope",
+      "only a human-authored task can be edited — agent-authored and board-authored tasks are out of scope",
     );
   }
   assertUnsettledNotInProgress(task, "edited");
 }
 
-/** The direct-cancel scope gate (ADR 0198, CONTEXT.md's Cancel): the task must
- *  be human-registered or a root other than a question, unsettled, and not
+/** The direct-cancel scope gate (ADR 0198 / 0211, CONTEXT.md's Cancel): the task must
+ *  be human-authored or a root other than a question, unsettled, and not
  *  in_progress. An agent registers only children (decompose children,
  *  escalate questions), so a root the human did not register is the board's —
  *  no worker id comparison is needed. A board-named question settles by its
  *  answer, and a board-named attached child (completion review, RCA review)
- *  is an input the rules require, so both stay out. */
+ *  is an input the rules require, so both stay out. Approved children retain
+ *  their agent's decomposition judgment and also stay out (ADR 0211). */
 function assertDirectlyCancellableScope(db: Db, task: Task): void {
-  const inScope = isHumanRegistered(db, task.id) || (task.parent_id === null && task.type !== "question");
+  const inScope = getTextAuthor(db, task.id) === HUMAN_WORKER_ID || (task.parent_id === null && task.type !== "question");
   if (!inScope) {
     throw new DomainError(
-      "only a human-registered task or a board-registered root other than a question can be directly cancelled — " +
-        "an agent's decompose child, a board-named attached child, and a board-named question are out of scope",
+      "only a human-authored task or a board-registered root other than a question can be directly cancelled — " +
+        "an agent-authored child (including an approved child), a board-named attached child, and a board-named question are out of scope",
     );
   }
   assertUnsettledNotInProgress(task, "cancelled");
@@ -2247,7 +2236,7 @@ function assertRiskDemotionKeepsInvariant(db: Db, task: Task): void {
 
 /** Edit a registered task's unconsumed fields in place (issue #130,
  *  CONTEXT.md's Edit). The scope line (`assertHumanEditableScope`):
- *  human-registered, unsettled, not in_progress — narrower than direct
+ *  human-authored, unsettled, not in_progress — narrower than direct
  *  cancel's (ADR 0198).
  *  Values are consumed at spawn / pickup / completion, so a rewrite before
  *  then makes no broken in-between state (the issue's Purpose). An edit is an

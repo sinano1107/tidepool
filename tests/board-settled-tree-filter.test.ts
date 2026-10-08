@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { openDb } from "../src/db.js";
 import { cancelTaskDirectly, completeTask, getTask, listBoard, listQueue, registerTask } from "../src/tasks.js";
-import { HUMAN_WEBUI } from "./harness.js";
+import { HUMAN_WEBUI, humanDecomposeTaskViaWebui } from "./harness.js";
 
 const HANDOFF = {
   outcome: "done",
@@ -21,39 +21,25 @@ describe("Board は settled ツリーを退かせる(issue #35)", () => {
       new Date(0),
       ...HUMAN_WEBUI,
     );
-    const stillOpen = registerTask(
+    const [stillOpen, abandoned] = humanDecomposeTaskViaWebui(
       db,
+      parent,
       {
-        type: "work",
-        title: "survey the north reef",
-        purpose: "p",
-        completion_criteria: "c",
-        parent_id: parent.id,
-        based_on_decision: 48,
+        reason: "split the survey from the lead",
+        children: [
+          { title: "survey the north reef", purpose: "p", completion_criteria: "c" },
+          { title: "chase a dead lead", purpose: "p", completion_criteria: "c" },
+        ],
       },
       new Date(1),
-      ...HUMAN_WEBUI,
     );
-    const abandoned = registerTask(
-      db,
-      {
-        type: "work",
-        title: "chase a dead lead",
-        purpose: "p",
-        completion_criteria: "c",
-        parent_id: parent.id,
-        based_on_decision: 48,
-      },
-      new Date(2),
-      ...HUMAN_WEBUI,
-    );
-    cancelTaskDirectly(db, abandoned, null, new Date(3), {}, "webui");
+    cancelTaskDirectly(db, abandoned!, null, new Date(3), {}, "webui");
 
     const board = listBoard(db);
 
-    expect(board.some((t) => t.id === abandoned.id)).toBe(false);
+    expect(board.some((t) => t.id === abandoned!.id)).toBe(false);
     // 計画自体はまだ生きている(stillOpen が todo)ので、親と生きた子は見え続ける
-    expect(board.find((t) => t.id === stillOpen.id)?.status).toBe("todo");
+    expect(board.find((t) => t.id === stillOpen!.id)?.status).toBe("todo");
     expect(board.find((t) => t.id === parent.id)?.status).toBe("blocked");
   });
 
