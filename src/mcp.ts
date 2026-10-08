@@ -205,8 +205,8 @@ function attributedWorkerId(deps: McpDeps, task: Task): string {
  *  `assignee` when configured (ADR 0012 / issue #36), else the board's single
  *  fixed `authority` (pre-#36 shape, and still today's shape for a board with
  *  no registry-backed resolver at all). An assignee the registry no longer
- *  resolves falls back the same way — the spawn-time gate is what
- *  quarantines that. */
+ *  resolves falls back to `deps.authority` too — unset in production, so
+ *  unrestricted (issue #1649). */
 function attributedAuthority(deps: McpDeps, task: Task): AuthorityProfile | undefined {
   if (task.type === "review") return REVIEWER_AUTHORITY_PROFILE;
   try {
