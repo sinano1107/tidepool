@@ -1306,7 +1306,7 @@ function FreeEntryAllowlistInput({
       },
       placeholder
     }
-  )), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", onClick: addFree }, "Add")));
+  )), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", disabled: !!TidepoolRules.whyBlank(free), onClick: addFree }, "Add")));
 }
 function PublishWorkspace({ ws, say, onPublished }) {
   const { Button, Input } = window.TidepoolDesignSystem_8a0ead;

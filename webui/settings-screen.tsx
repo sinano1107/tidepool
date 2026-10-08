@@ -127,7 +127,7 @@ function FreeEntryAllowlistInput({
           <Input value={free} mono onChange={(e) => { setFree(e.target.value); }}
             placeholder={placeholder} />
         </div>
-        <Button variant="secondary" onClick={addFree}>Add</Button>
+        <Button variant="secondary" disabled={!!TidepoolRules.whyBlank(free)} onClick={addFree}>Add</Button>
       </div>
     </div>
   );
