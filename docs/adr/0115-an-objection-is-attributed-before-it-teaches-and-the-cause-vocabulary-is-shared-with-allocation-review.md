@@ -67,3 +67,9 @@ decision = 推論)に event 種別の例外が入り、同じ帰責 event を出
 
 決定2 の「判定できなければ `uncertain` で従来どおり RCA を立て」は判断としての `uncertain` の話で、Board call を撃てなかった・
 失敗した entry は `uncertain` を書かず**未帰責のまま**同じく RCA に倒す。未帰責は RCA の門と第2回の門で `uncertain` と同じに読む。
+
+## 追記(2026-10-08 の grilling、issue #1602 / ADR 0213)
+
+決定1 の `environment` は worker の外側の事情(盤面の道具・網・sandbox の故障も上流の変化も)を指す1値で、判断がその時の入力に
+対して妥当だったときだけ付く —— 壁への応じ方自体が異議の対象なら `capability`。決定3 の「`environment` は修理だけ」はそのままだが、
+修理タスクの purpose が帰責の判定(cause と evidence)を運び、持続する盤面側の故障は修理子の escalate で人間に届く(ADR 0213)。

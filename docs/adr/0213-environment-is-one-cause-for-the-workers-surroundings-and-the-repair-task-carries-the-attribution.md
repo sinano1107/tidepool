@@ -24,7 +24,7 @@ candidate の起草・routing の負の信号)はどれも2つの読みで振る
    足さない。#1601 の「盤面の prompt を人間の面に出す」はこの面を継ぐ。
 5. **`environment` から専用の扉(question / human task)は立てない。** 持続する盤面側の故障は、修理子が壁に当たって escalate
    した question として、異議された親の下に出る —— 親 entry の `environment` 注釈と結べるので、観測は今の機構で記録できる。
-   2度目の session を払う形で観測を待つ。
+   2度目の session を払う形で観測を待つ(観測は #1605)。
 
 ## 退けた案
 
