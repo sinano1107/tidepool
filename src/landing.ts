@@ -91,7 +91,9 @@ function taskHasLanded(db: Db, taskId: string): boolean {
  *  同じ集合を数える。「未着地の done」だけでは、祖先の枝に乗る子(`land()` は何も記録しない)と
  *  PR 昇格を abandon したタスクを永久に数えてしまうので、待っている積極的な証拠で数える ——
  *  無人 merge キューにいる、または未着地で、PR 昇格失敗の question が開いているか、門で止まった
- *  後に失敗の question が立っていない。後先は時刻ではなく event id で読む(同じ ms がありうる)。 */
+ *  記録があって昇格を abandon していない。`landing_deferred` は1タスクに1回しか刻まれないので、
+ *  retry が再び門で止まった場合も記録は最初の1つのままである —— 失敗 question が立ったこと
+ *  ではなく、abandon と答えたことだけを待ちの終わりに数える。 */
 export function countTasksAwaitingLanding(db: Db, agentName: string): number {
   const rows = db
     .prepare(
@@ -101,14 +103,14 @@ export function countTasksAwaitingLanding(db: Db, agentName: string): number {
           AND (queued
                OR EXISTS (SELECT 1 FROM tasks q
                            WHERE q.question_pending_pr_promotion_task_id = t.id AND q.status = 'todo')
-               OR EXISTS (SELECT 1 FROM events d
-                           WHERE d.task_id = t.id AND d.kind = 'landing_deferred'
-                             AND NOT EXISTS (SELECT 1 FROM tasks q
-                                               JOIN events r ON r.task_id = q.id AND r.kind = 'task_registered'
-                                              WHERE q.question_pending_pr_promotion_task_id = t.id
-                                                AND r.id > d.id)))`,
+               OR (EXISTS (SELECT 1 FROM events d
+                            WHERE d.task_id = t.id AND d.kind = 'landing_deferred')
+                   AND NOT EXISTS (SELECT 1 FROM tasks q
+                                     JOIN events a ON a.task_id = q.id AND a.kind = 'question_answered'
+                                    WHERE q.question_pending_pr_promotion_task_id = t.id
+                                      AND json_extract(a.payload, '$.answers[0].answer') = ?)))`,
     )
-    .all(agentName) as Array<{ id: string; queued: number }>;
+    .all(agentName, PR_PROMOTION_FAILURE_OPTIONS[1]) as Array<{ id: string; queued: number }>;
   return rows.filter((row) => row.queued === 1 || !taskHasLanded(db, row.id)).length;
 }
 
@@ -145,6 +147,7 @@ export interface Landing {
     settled: Task,
   ): Promise<Array<{ taskId: string; verdict: LandingVerdict }>>;
   observeMergedPullRequest(question: Task): Promise<boolean>;
+  observeMergedAutoMerges(agentName: string): Promise<void>;
   tick(kind: "auto_merge" | "outside_merge", now: Date): Promise<void>;
 }
 
@@ -333,26 +336,8 @@ function retireMergedAutoMerge(
   appendEvent(db, { taskId, workerId: BOARD_WORKER_ID, origin: "board", payload, at: now });
 }
 
-/** ADR 0217 決定5: agent 名の quarantine の間、その agent のキューの PR は CI を読まれず、
- *  merge 失敗時の観測(ADR 0079 決定3)にも届かない。盤面の外で merge されたものは回答の
- *  受理直前にここで観測する。読めない PR は飛ばす —— キューに残り、着地待ちに数えられる。 */
-export async function observeMergedAutoMerges(
-  deps: Pick<LandingDeps, "db" | "workspace" | "resolveWorkspace"> & { github?: GitHubClient },
-  agentName: string,
-  now: Date,
-): Promise<void> {
-  const resolve = buildWorkspaceResolver(deps.resolveWorkspace, deps.workspace);
-  if (!resolve || !deps.github) return;
-  for (const { task_id, pr_number } of listPendingAutoMerges(deps.db)) {
-    const task = getTask(deps.db, task_id);
-    if (task?.assignee !== agentName) continue;
-    try {
-      const { path } = resolve(task.workspace);
-      if (await deps.github.isPullRequestMerged({ path, number: pr_number })) {
-        retireMergedAutoMerge(deps.db, task_id, { kind: "pr_merge_observed", pr_number }, now);
-      }
-    } catch {}
-  }
+function isQueuedForAutoMerge(db: Db, taskId: string): boolean {
+  return db.prepare("SELECT 1 FROM pending_auto_merges WHERE task_id = ?").get(taskId) !== undefined;
 }
 
 /** 門で止まったことを board 名義で1回だけ刻む(ADR 0092 決定1)。着地は1つのタスクに
@@ -581,6 +566,33 @@ export function createLanding(deps: LandingDeps): Landing {
         return true;
       } catch {
         return false;
+      }
+    },
+    // ADR 0217 決定5: agent 名の quarantine に落ちた agent のキューの PR は、merge 失敗時の
+    // 観測(ADR 0079 決定3)に届かない。盤面の外で merge されたものは回答の受理直前にここで
+    // 観測する。読めない PR は飛ばす —— キューに残り、着地待ちに数えられる。
+    async observeMergedAutoMerges(agentName) {
+      const resolve = buildWorkspaceResolver(deps.resolveWorkspace, deps.workspace);
+      const github = deps.github;
+      if (!resolve || !github) return;
+      for (const { task_id, pr_number } of listPendingAutoMerges(deps.db)) {
+        const task = getTask(deps.db, task_id);
+        if (task?.assignee !== agentName) continue;
+        try {
+          const { path } = resolve(task.workspace);
+          if (!(await github.isPullRequestMerged({ path, number: pr_number }))) continue;
+        } catch {
+          continue;
+        }
+        // await の間に無人 merge の tick が同じ行を merge して外していれば、それは盤面の
+        // merge であって観測ではない
+        if (!isQueuedForAutoMerge(deps.db, task_id)) continue;
+        retireMergedAutoMerge(
+          deps.db,
+          task_id,
+          { kind: "pr_merge_observed", pr_number },
+          deps.clock.now(),
+        );
       }
     },
     async tick(kind, now) {

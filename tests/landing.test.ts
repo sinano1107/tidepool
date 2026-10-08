@@ -1310,7 +1310,7 @@ function deferLanding(board: Db, taskId: string, now: Date): void {
   });
 }
 
-it("着地を待つ完了タスクは、付帯子待ちで PR 未作成・無人 merge キューにいる・PR 昇格失敗の question が開いている、の3つを数える", () => {
+it("着地を待つ完了タスクは、付帯子待ちで PR 未作成(retry が再び門で止まったものも)・無人 merge キューにいる・PR 昇格失敗の question が開いている、を数える", () => {
   db = openDb(":memory:");
   const now = new Date("2026-10-09T00:00:00.000Z");
   deferLanding(db, completedWork(db, now, "tako").id, now);
@@ -1318,8 +1318,14 @@ it("着地を待つ完了タスクは、付帯子待ちで PR 未作成・無人
     authority: { merge: "auto_if_ci_green" },
   });
   registerPrPromotionFailureQuestion(db, completedWork(db, now, "tako"), "boom", now);
+  // retry が再び門で止まった —— `landing_deferred` は最初の1つしか刻まれない
+  const retried = completedWork(db, now, "tako");
+  deferLanding(db, retried.id, now);
+  registerPrPromotionFailureQuestion(db, retried, "boom", now);
+  const [failure] = promotionFailures(db, retried.id);
+  answerQuestion(db, getTask(db, failure!.id)!, ["retry"], now, undefined, undefined, undefined, "webui");
 
-  expect(countTasksAwaitingLanding(db, "tako")).toBe(3);
+  expect(countTasksAwaitingLanding(db, "tako")).toBe(4);
 });
 
 it("着地済み・未完了・別 agent・PR 昇格を abandon した・祖先の枝に乗る子は、着地を待つ完了タスクに数えない", () => {
@@ -1334,13 +1340,14 @@ it("着地済み・未完了・別 agent・PR 昇格を abandon した・祖先�
   registerPrPromotionFailureQuestion(db, abandoned, "boom", now);
   const [failure] = promotionFailures(db, abandoned.id);
   answerQuestion(db, getTask(db, failure!.id)!, ["abandon promotion"], now, undefined, undefined, undefined, "webui");
-  // 未完了の親と、その枝へ帰る完了した子(`land()` は何も記録しない)
+  // 未完了の親(門で止まった記録があっても done でない)と、その枝へ帰る完了した子(`land()` は何も記録しない)
   const parent = registerTask(
     db,
     { type: "work", title: "integrate", purpose: "p", completion_criteria: "c", assignee: "tako" },
     now,
     ...HUMAN_WEBUI,
   );
+  deferLanding(db, parent.id, now);
   completedWork(db, now, "tako", parent.id);
 
   expect(countTasksAwaitingLanding(db, "tako")).toBe(0);

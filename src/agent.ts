@@ -108,8 +108,9 @@ export function resolveAgentOrQuarantine(
  *  Quarantine, ADR 0012 / issue #36) — never taken on faith. Clearance holds
  *  either the registry has the name back (`agentExists`), or there is no more
  *  todo work left depending on it and no completed task awaiting landing on
- *  its profile — both are legitimate repairs (registry
- *  repair, or reassigning the pending tasks away), and either makes the
+ *  its profile — both are legitimate repairs (registry repair, or reassigning
+ *  the pending tasks away once nothing completed still waits to land), and
+ *  either makes the
  *  quarantine moot. `agentExists` is resolved by the caller (fresh against
  *  the registry, or `false` when no registry is configured at all — in which
  *  case only the "no more pending tasks" path can ever clear it). */

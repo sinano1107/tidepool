@@ -97,6 +97,7 @@ async function sessionInTeardown(
     async observeMergedPullRequest() {
       return false;
     },
+    async observeMergedAutoMerges() {},
     async tick() {},
   };
   const worker = new ScriptedWorker(clock);

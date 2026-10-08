@@ -24,7 +24,7 @@ import {
 } from "./execution-setting.js";
 import { type GitHubClient, IssueGoneError } from "./github.js";
 import type { HarnessContainmentCheck } from "./harness-containment.js";
-import { type Landing, type LandingVerdict, landingBlock, observeMergedAutoMerges } from "./landing.js";
+import { type Landing, type LandingVerdict, landingBlock } from "./landing.js";
 import { approveMemoryProposal, humanEntryInput, listMemoryEntries, type MemoryAmendment, movedTail, parseMemoryAmendment, rejectMemoryProposal } from "./memory.js";
 import { whyNotPositiveInteger } from "./positive-integer.js";
 import type { Provider } from "./provider.js";
@@ -455,6 +455,9 @@ export interface QuarantineCheckDeps {
   workspace?: WorkspaceConfig;
   resolveWorkspace?: (taskWorkspace: string | null) => WorkspaceConfig;
   github?: GitHubClient;
+  /** ADR 0217 決定5: agent 名の quarantine の解除検査の前に、その agent のキューの PR の
+   *  盤面の外での merge を観測する。Absent → 観測せず、キューの PR は着地待ちに数えられる。 */
+  landing?: Pick<Landing, "observeMergedAutoMerges">;
   boardState?: BoardStatePath[];
   /** Whether an agent name is currently registered — one half of the agent
    *  check; absent → only "no pending tasks remain" can clear it. */
@@ -519,7 +522,7 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
     },
     agent: async (value) => {
       const quarantineAgentName = value!;
-      await observeMergedAutoMerges(deps, quarantineAgentName, clock?.now() ?? new Date());
+      await deps.landing?.observeMergedAutoMerges(quarantineAgentName);
       try {
         verifyAgentRepaired(
           deps.db,

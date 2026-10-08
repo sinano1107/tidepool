@@ -11,7 +11,7 @@ import {
   registerThroughHumanDoor,
   submitAnswer,
 } from "../src/human-verbs.js";
-import { countTasksAwaitingLanding, registerPrPromotionFailureQuestion } from "../src/landing.js";
+import { countTasksAwaitingLanding, createLanding, registerPrPromotionFailureQuestion } from "../src/landing.js";
 import {
   cancelTaskDirectly,
   getTask,
@@ -690,9 +690,11 @@ it("GitHub の無い盤面の agent quarantine の解除検査は、観測せず
   const queued = queuedForAutoMerge(db, "specialist");
 
   await expect(
-    quarantineChecks({ db, agentRegistered: () => false, workspace: PRODUCT, clock: new FakeClock() }).agent!(
-      "specialist",
-    ),
+    quarantineChecks({
+      db,
+      agentRegistered: () => false,
+      landing: createLanding({ defaultAgentName: "tako", db, clock: new FakeClock(), workspace: PRODUCT, github: null }),
+    }).agent!("specialist"),
   ).rejects.toThrow(
     "agent specialist is not back in the registry and still has 1 completed task(s) awaiting landing on its profile",
   );
@@ -708,9 +710,7 @@ it("agent quarantine の解除検査は、盤面の外で merge 済みのキュ�
   await quarantineChecks({
     db,
     agentRegistered: () => false,
-    workspace: PRODUCT,
-    github,
-    clock: new FakeClock(),
+    landing: createLanding({ defaultAgentName: "tako", db, clock: new FakeClock(), workspace: PRODUCT, github }),
   }).agent!("specialist");
 
   expect({
