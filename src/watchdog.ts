@@ -313,7 +313,7 @@ export function startWatchdog(deps: {
     resolve,
     githubAuth: deps.githubAuth,
     landing: deps.landing,
-    // watchdog が撃つ後始末も、梯子の底で保留中の session を遅れた空の観測で解放しない(ADR 0099 決定3)
+    // watchdog が撃つ後始末も、梯子の底で保留中の session を遅れた回収済み観測で解放しない(ADR 0099 決定3)
     heldForContainment,
     pollNow: deps.pollNow,
   };
