@@ -18,6 +18,7 @@ import {
   invalidateMemoryEntry,
   listMemoryEntries,
   type MemoryAmendment,
+  memoryScope,
   movedPins,
   moveMemory,
   moveMemoryBranch,
@@ -2021,4 +2022,9 @@ it("watermark 再生と rebuild は記録済みの event を写すだけで門�
     [leaf, null],
     [defined, null],
   ]);
+});
+
+it("記憶 verb のスコープは task の workspace、task に無ければ盤面の workspace を継ぐ(issue #1101)", () => {
+  expect(memoryScope({ workspace: { name: "tidepool" } }, { workspace: null })).toBe("tidepool");
+  expect(memoryScope({ workspace: { name: "tidepool" } }, { workspace: "charts" })).toBe("charts");
 });
