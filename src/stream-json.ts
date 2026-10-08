@@ -174,11 +174,16 @@ export function readModelSwap(parsed: Record<string, unknown> | null): ModelSwap
   };
 }
 
-/** root(`parent_tool_use_id` 無し、`readRootText` と同じ判定)の assistant 行の拒否(ADR 0215 決定3)。
+/** root のモデルの assistant 行か —— subagent の行は `parent_tool_use_id` を持つ。 */
+export function isRootAssistant(parsed: Record<string, unknown> | null): parsed is Record<string, unknown> {
+  return parsed?.type === "assistant" && parsed.parent_tool_use_id == null;
+}
+
+/** root(`isRootAssistant`)の assistant 行の拒否(ADR 0215 決定3)。
  *  `id` は `message.id` —— 1 message は block ごとに複数行に割れるので、数える側が重複を除く。
  *  `category` は `stop_details.category` の逐語で、無ければ null。 */
 export function readRootRefusal(parsed: Record<string, unknown> | null): { id: unknown; category: string | null } | null {
-  if (parsed?.type !== "assistant" || parsed.parent_tool_use_id != null) return null;
+  if (!isRootAssistant(parsed)) return null;
   const message = parsed.message as { id?: unknown; stop_reason?: unknown; stop_details?: { category?: unknown } } | undefined;
   if (message?.stop_reason !== "refusal") return null;
   const category = message.stop_details?.category;

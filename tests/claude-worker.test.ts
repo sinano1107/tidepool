@@ -3692,17 +3692,13 @@ describe("advisor capability (issue #33)", () => {
 
     // 決定1: 止める側の env を host が立てていても spawn には渡らない(ADR 0005)
     it("ホストが立てた差し替えを止める env 3つを spawn env から消す", async () => {
-      const previous = REFUSAL_ENVS.map((name) => process.env[name]);
-      for (const name of REFUSAL_ENVS) process.env[name] = "1";
+      for (const name of REFUSAL_ENVS) vi.stubEnv(name, "1");
       try {
         const { start, calls } = await makeWorker();
         start();
         for (const name of REFUSAL_ENVS) expect(calls[0]!.env[name]).toBeUndefined();
       } finally {
-        REFUSAL_ENVS.forEach((name, i) => {
-          if (previous[i] === undefined) delete process.env[name];
-          else process.env[name] = previous[i];
-        });
+        vi.unstubAllEnvs();
       }
     });
 

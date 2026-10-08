@@ -31,6 +31,7 @@ import {
 import { AUTO_MEMORY_CLOSED, buildSandboxSettings, workspaceSettingsDisposition } from "./sandbox.js";
 import { isPluginGlob, SKILL_WILDCARD } from "./skill-allowlist.js";
 import {
+  isRootAssistant,
   parseStreamLine,
   readAdvisorOutcomes,
   readInitAutoMemoryPath,
@@ -488,7 +489,7 @@ const AUTOUPDATER_DISABLE_ENV = "DISABLE_AUTOUPDATER";
 
 /** refusal での同じ model の再試行と差し替えを止める env(ADR 0215 決定1)。盤面は「許す」を固定するので、
  *  host が立てていても worker の spawn env から消す(ADR 0005)。 */
-const REFUSAL_FALLBACK_ENV = [
+const SWAP_DISABLE_ENVS = [
   "CLAUDE_CODE_DISABLE_REFUSAL_FALLBACK",
   "CLAUDE_CODE_NO_MODEL_FALLBACK",
   "CLAUDE_CODE_DISABLE_REFUSAL_RETRY",
@@ -671,7 +672,7 @@ export interface ProviderRouting extends ExecutionSetting {
  *     minutes. They live here rather than in the host's
  *     `/etc/default/tidepool` because that was a second source of truth
  *     invisible to both the registry and the board's code.
- *  3. `REFUSAL_FALLBACK_ENV` — always deleted, so a refusal's same-model retry
+ *  3. `SWAP_DISABLE_ENVS` — always deleted, so a refusal's same-model retry
  *     and model swap stay allowed whatever the host exports (ADR 0215 決定1).
  *
  *  The env is built **per provider** (ADR 0097 決定4 / issue #445), scrubbed in
@@ -701,7 +702,7 @@ export function workerSpawnEnv(
   };
   if (advisor === undefined) env[ADVISOR_DISABLE_ENV] = "1";
   else delete env[ADVISOR_DISABLE_ENV];
-  for (const name of REFUSAL_FALLBACK_ENV) delete env[name];
+  for (const name of SWAP_DISABLE_ENVS) delete env[name];
   if (routing.provider === "moonshot") {
     if (routing.moonshotApiKey === undefined) {
       // start() resolves the key before launch and refuses the pickup without
@@ -881,7 +882,7 @@ function readErrorResult(parsed: Record<string, unknown> | null): Record<string,
 /** ADR 0189: root のモデルが書いた最後の空でない text。CLI が合成した `<synthetic>` の行(ADR 0188 の主語)と
  *  subagent の行は読まない。text の無い行は null —— 前の行の文を残す。 */
 function readRootText(parsed: Record<string, unknown> | null): string | null {
-  if (parsed?.type !== "assistant" || parsed.parent_tool_use_id != null) return null;
+  if (!isRootAssistant(parsed)) return null;
   const message = parsed.message as { model?: unknown; content?: unknown } | undefined;
   if (message?.model === "<synthetic>" || !Array.isArray(message?.content)) return null;
   const texts = message.content.filter(
