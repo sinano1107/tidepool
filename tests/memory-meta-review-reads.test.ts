@@ -591,6 +591,59 @@ it("session の中で read_memory_entries が返した id は、その session �
   expect(entriesReadBefore(episode, events, decision)).toEqual([]);
 });
 
+/** tool_use と、event_id を返した tool_result の transcript 2行(setup のみ)。 */
+const toolCall = (n: number, name: string, eventId: number) => [
+  `{"type":"assistant","uuid":"a${n}","message":{"content":[{"type":"tool_use","id":"t${n}","name":"mcp__tidepool__${name}","input":{}}]}}`,
+  `{"type":"user","uuid":"r${n}","message":{"content":[{"type":"tool_result","tool_use_id":"t${n}","content":[{"type":"text","text":"{\\"event_id\\":${eventId}}"}]}]}}`,
+];
+
+it("session の中で list_memory_entries と search_memory_entries が返した id は、その後の decision の entries_seen に入り entries_read に入らない(ADR 0083 追記6)", () => {
+  const { db, task, reader, knowledge } = board();
+  const spawned = appendEvent(db, { taskId: task.id, workerId: "auditor", origin: "board", payload: WORKER_SPAWNED, at });
+  const listed = knowledge("tidepool", "notes");
+  const searched = knowledge("charts", "tide");
+  const list = pullMemoryList(db, reader, "list_memory_entries", { scope: "tidepool" }, at);
+  const search = searchMemoryEntries(db, reader, { query: "tide" }, at);
+  const decision = logDecision(db, task, "kept the tide note", "auditor", at, "worker");
+  const events = listEvents(db, task.id);
+
+  const episode = projectEpisode({
+    transcriptLines: [...toolCall(1, "list_memory_entries", list.event_id), ...toolCall(2, "search_memory_entries", search.event_id), ...toolCall(3, "log_decision", decision)],
+    events,
+    workerSpawnedEventId: spawned,
+    extractorVersion: "test",
+  });
+
+  expect(entriesSeenBefore(episode, events, decision)).toEqual([listed, searched]);
+  expect(entriesReadBefore(episode, events, decision)).toEqual([]);
+});
+
+it("read_memory_entries と一覧の pull が同じ session にあっても、memory マーカーはすべて位置を持ち欠測にならない", () => {
+  const { db, task, reader, knowledge, behavior } = board();
+  const spawned = appendEvent(db, { taskId: task.id, workerId: "auditor", origin: "board", payload: WORKER_SPAWNED, at });
+  const id = knowledge("tidepool", "notes");
+  behavior({ title: "Keep notes short" });
+  const pulls = [
+    ["list_memory_candidates", pullMemoryList(db, reader, "list_memory_candidates", {}, at).event_id],
+    ["read_memory_entries", readMemoryEntries(db, reader, { ids: [id] }, at).event_id],
+    ["list_memory_branches", pullMemoryBranches(db, reader, {}, at).event_id],
+    ["list_memory_proposals", pullMemoryProposals(db, reader, {}, at).event_id],
+    ["list_precedents", listPrecedents(db, reader, {}, at).event_id],
+  ] as const;
+  const events = listEvents(db, task.id);
+
+  const episode = projectEpisode({
+    transcriptLines: pulls.flatMap(([name, eventId], n) => toolCall(n, name, eventId)),
+    events,
+    workerSpawnedEventId: spawned,
+    extractorVersion: "test",
+  });
+
+  expect(episode.markers.filter((m) => m.kind === "memory")).toEqual(
+    pulls.map(([, eventId], n) => expect.objectContaining({ eventId, position: n, missingReason: null })),
+  );
+});
+
 it("search_memory_entries の query は全 scope・全宛先の approved と candidate の Knowledge・Behavior・Exemplar を返し、Definition は返さない —— 行はポインタで本文・原文を持たない(ADR 0180 決定3)", () => {
   const { db, reader, behavior, knowledge, define } = board();
   const other = knowledge("charts", "tide");

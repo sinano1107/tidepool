@@ -2,7 +2,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Cause } from "./cause.js";
 import type { Db } from "./db.js";
-import { currentAttributions, type EventRow, getEvent, listEvents, sessionWindow } from "./events.js";
+import { currentAttributions, type EventPayload, type EventRow, getEvent, listEvents, sessionWindow } from "./events.js";
 import { parseStreamLine, readAdvisorOutcome, readInitVersion } from "./stream-json.js";
 import { entryObjections } from "./triage.js";
 
@@ -296,7 +296,7 @@ export function projectEpisode(input: ProjectEpisodeInput): Episode {
         // decision / memory として結ばれないようにするため
         const boundAt = /__log_decision$/.test(action.tool)
           ? loggedAt
-          : /__((browse|search|read)_memory|read_memory_entries)$/.test(action.tool)
+          : PULL_TOOL.test(action.tool)
             ? pulledAt
             : null;
         const eventId = boundAt && readEventId((block as Record<string, unknown>).content);
@@ -384,9 +384,25 @@ function readEventId(content: unknown): number | null {
   return null;
 }
 
+/** memory マーカーに結ぶ tool = `memory_pulled` を書く verb すべて(MCP の tool 名は verb 名)。verb を足すと
+ *  `satisfies` がここへの追加を型で強いる。 */
+const PULL_VERBS = {
+  browse_memory: true,
+  search_memory: true,
+  search_memory_entries: true,
+  read_memory: true,
+  read_memory_entries: true,
+  list_memory_candidates: true,
+  list_memory_entries: true,
+  list_memory_proposals: true,
+  list_precedents: true,
+  list_memory_branches: true,
+} satisfies Record<Extract<EventPayload, { kind: "memory_pulled" }>["verb"], true>;
+const PULL_TOOL = new RegExp(`__(${Object.keys(PULL_VERBS).join("|")})$`);
+
 /** 投影器の版(ADR 0083 追記 2 決定7)。読み方を変えたらここを上げる — 派生表は
  *  記録から何度でも作り直せるので、古い版の Episode を消す必要はない。 */
-export const EXTRACTOR_VERSION = "4";
+export const EXTRACTOR_VERSION = "5";
 
 /** 1つの worker session を投影して派生表に書く。同じ session を同じ投影器の版で
  *  二度書くことはない(`UNIQUE (worker_spawned_event_id, extractor_version)`)—
@@ -502,8 +518,9 @@ export function entriesReadBefore(
 }
 
 /** 「decision D より前に見た記憶」= seen(ADR 0083 追記6、seen ⊇ read): この session の spawn 注入
- *  (`memory_injected`、worker_spawned の event id で結ぶ)の id と、D より前の全 verb の pull が返した
- *  id の和集合(昇順)。D がこの Episode で位置を持たなければ null。 */
+ *  (`memory_injected` と主題 memory の `meta_review_material_injected` の5部分のエントリ、worker_spawned の event id で結ぶ)の
+ *  id と、D より前の全 verb の pull が返した id の和集合(昇順)。routing の材料の節はエントリを載せないので数えない。
+ *  D がこの Episode で位置を持たなければ null。 */
 export function entriesSeenBefore(
   episode: Pick<Episode, "markers" | "workerSpawnedEventId">,
   events: readonly EventRow[],
@@ -511,10 +528,13 @@ export function entriesSeenBefore(
 ): number[] | null {
   const pulls = pullsBefore(episode, events, decisionEventId);
   if (pulls === null) return null;
-  const injected = events.flatMap((e) =>
-    e.payload.kind === "memory_injected" && e.payload.worker_spawned_event_id === episode.workerSpawnedEventId
-      ? e.payload.entries.map((entry) => entry.id)
-      : [],
+  const spawned = episode.workerSpawnedEventId;
+  const injected = events.flatMap(({ payload: p }) =>
+    p.kind === "memory_injected" && p.worker_spawned_event_id === spawned
+      ? p.entries.map((entry) => entry.id)
+      : p.kind === "meta_review_material_injected" && p.subject === "memory" && p.worker_spawned_event_id === spawned
+        ? [...p.store_changes, ...p.candidates, ...p.precedent_entries, ...p.proposal_entries, ...p.branches]
+        : [],
   );
   return sortedIds([...injected, ...pulls.flatMap((p) => p.returned_ids)]);
 }
