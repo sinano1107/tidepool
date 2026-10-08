@@ -2002,7 +2002,7 @@ export function decomposeTask(
   }
   const children: Task[] = [];
   db.transaction(() => {
-    const decisionId = logDecision(db, parent, normalizeText(input.reason), workerId, now, origin);
+    const decisionId = logDecision(db, parent, input.reason, workerId, now, origin);
     for (const child of input.children) {
       const reasons: string[] = [];
       if (raisesParentRisk(child, parent)) {
