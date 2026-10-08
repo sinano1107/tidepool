@@ -42,7 +42,7 @@ One general-purpose sub-agent per cluster on Opus 5.5 (`model: opus`), all dispa
 
 After dispatching, end your turn. Each sub-agent's report arrives as its own message; act on step 5 only from those.
 
-Read each report as it arrives. When a judgement in it looks wrong — above all a choice the sub-agent names as its own rather than the record's — or the user overturns one later, send the concern or the decision to that sub-agent with `SendMessage`. It owns the issue's context: it posts a new comment that supersedes its earlier one, leaves that comment and the labels as they are, and returns the new URL, which replaces the old one in the step 5 table.
+Read each report as it arrives. When a judgement in it looks wrong — above all a choice the sub-agent names as its own rather than the record's — or the user overturns one later, send the concern or the decision to that sub-agent with `SendMessage`. It owns the issue's context: it posts a new comment that supersedes its earlier one, leaves that comment and the labels as they are, removes each blocked-by edge it drew that the new comment no longer names as `must land first`, draws any the new comment newly names, and returns the new URL and its edges, which replace the old ones in the step 5 report.
 
 ## 5. Report
 
