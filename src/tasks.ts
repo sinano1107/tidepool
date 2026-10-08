@@ -1,14 +1,13 @@
 import { randomUUID } from "node:crypto";
 import type { Db } from "./db.js";
 import { DEFAULT_AUDITOR_NAME } from "./defaults.js";
-
 import { DomainError } from "./domain-error.js";
-
 import { appendEvent, type EventOrigin, type EventPayload, getEvent, latestEventOfTask, type TaskScopedPayload, taskDecisionLog } from "./events.js";
 import type { AddTierAmendment, ExecutionSettingRow, RoutingRowChange } from "./execution-setting.js";
 import type { GitHubClient, Issue, IssueRef } from "./github.js";
 import type { MemoryAmendment } from "./memory.js";
 import type { MergeDial, RosterAgent } from "./registry.js";
+import { normalizeText, whyBlank } from "./required-text.js";
 import { assertKnownTier, liveTierId, PRIORITIES, type Priority, proposalTierNames, type Tier, type TierId } from "./tier.js";
 import { completionReviewFires, type ReviewSubject, whyNoCompletionReview, whyReviewFlagIsInert } from "./webui-rules.js";
 import { BOARD_WORKER_ID, HUMAN_WORKER_ID, NON_AGENT_WORKER_IDS } from "./worker-id.js";
@@ -445,11 +444,11 @@ function assertQuestionSpec(input: RegisterTaskInput): void {
   }
   const minOptions = input.quarantine ? 1 : 2;
   for (const item of items) {
-    if (!item.title.trim()) throw new DomainError("a question item carries a title");
+    if (whyBlank(item.title)) throw new DomainError("a question item carries a title");
     if (item.options.length < minOptions || item.options.length > 4) {
       throw new DomainError(`a question item carries ${minOptions} to 4 options`);
     }
-    if (!item.recommendation.trim() || !item.options.includes(item.recommendation)) {
+    if (whyBlank(item.recommendation) || !item.options.includes(item.recommendation)) {
       throw new DomainError(
         "a question item carries the registrant's recommendation, one of its options",
       );
@@ -510,7 +509,7 @@ function assertGithubRef(input: RegisterTaskInput): void {
     ) {
       throw new DomainError("an issue-backed task carries no stored content");
     }
-  } else if (!input.title || !input.purpose || !input.completion_criteria) {
+  } else if ([input.title, input.purpose, input.completion_criteria].some((value) => value === undefined || whyBlank(value))) {
     throw new DomainError(
       "a task requires title, purpose, and completion_criteria unless it is issue-backed",
     );
@@ -681,6 +680,20 @@ export function registerTask(
   workerId: string,
   origin: EventOrigin,
 ): Task {
+  input = { ...input };
+  for (const field of ["title", "purpose", "completion_criteria"] as const) {
+    if (input[field] !== undefined) input[field] = normalizeText(input[field]);
+  }
+  if (input.question) {
+    input.question = input.question.map((item) => ({
+      ...item,
+      title: normalizeText(item.title),
+      ...(item.detail !== undefined && { detail: normalizeText(item.detail) }),
+      options: item.options.map(normalizeText),
+      recommendation: normalizeText(item.recommendation),
+    }));
+  }
+  if (input.cancel_option !== undefined) input.cancel_option = normalizeText(input.cancel_option);
   assertQuestionSpec(input);
   assertGithubRef(input);
   assertExecutionRequest(db, input);
@@ -810,7 +823,7 @@ const HANDOFF_HEADINGS: Record<HandoffField, string> = {
 };
 
 function renderHandoffMarkdown(handoff: Partial<HandoffDoc>): string {
-  return HANDOFF_FIELDS.filter((f) => handoff[f]?.trim())
+  return HANDOFF_FIELDS.filter((f) => handoff[f] !== undefined && !whyBlank(handoff[f]))
     .map((f) => `## ${HANDOFF_HEADINGS[f]}\n\n${handoff[f]}`)
     .join("\n\n");
 }
@@ -898,12 +911,13 @@ export function completeTask(
   origin: EventOrigin,
 ): Task {
   if (task.type === "work" && task.assignee !== HUMAN_WORKER_ID) {
-    const missing = HANDOFF_FIELDS.filter((f) => !handoff?.[f]?.trim());
+    const missing = HANDOFF_FIELDS.filter((f) => handoff?.[f] === undefined || whyBlank(handoff[f]));
     if (missing.length > 0) {
       throw new DomainError(
         `a work task cannot complete without a full handoff doc; missing: ${missing.join(", ")}`,
       );
     }
+    handoff = Object.fromEntries(HANDOFF_FIELDS.map((field) => [field, normalizeText(handoff![field]!)]));
   }
   // completion criteria cover the decomposition tree: a parent completes only
   // after every child it waits for settles (復帰型 — the resumed session
@@ -1264,7 +1278,7 @@ export function assertAnswerable(question: Task, answers: string[], comment: str
     }
   }
   const needs = needsComment(question).filter((option) => answers.includes(option));
-  if (needs.length > 0 && !comment?.trim()) {
+  if (needs.length > 0 && (comment === undefined || whyBlank(comment))) {
     throw new DomainError(`answering ${needs.join(" / ")} to this question requires a non-blank comment: why, or for a defer what is still undecided`);
   }
 }
@@ -1656,6 +1670,8 @@ export function logDecision(
   now: Date,
   origin: EventOrigin,
 ): number {
+  if (whyBlank(line)) throw new DomainError("a decision requires a line");
+  line = normalizeText(line);
   return appendEvent(db, {
     taskId: task.id,
     workerId,
@@ -1956,6 +1972,15 @@ export function decomposeTask(
   isProtectedWorkspace: ((name: string) => boolean) | undefined,
   origin: EventOrigin,
 ): Task[] {
+  input = {
+    ...input,
+    children: input.children.map((child) => ({
+      ...child,
+      title: normalizeText(child.title),
+      purpose: normalizeText(child.purpose),
+      completion_criteria: normalizeText(child.completion_criteria),
+    })),
+  };
   if (input.children.length === 0) {
     throw new DomainError("a decomposition carries at least one child task");
   }
@@ -1967,19 +1992,17 @@ export function decomposeTask(
   // throw at the moment a human clicks approve (registerTask validates the
   // *question*, not the spec it carries).
   for (const child of input.children) {
+    assertGithubRef({ type: "work", ...child });
     assertExecutionRequest(db, child);
     assertReviewFieldsTakeEffect({ type: "work", parent_id: parent.id, ...child }, child.review_by, child.review_tier);
     assertReviewByDistinct(child.review_by);
   }
-  if (input.reason.length === 0) {
+  if (whyBlank(input.reason)) {
     throw new DomainError("a decomposition requires a reason");
   }
   const children: Task[] = [];
   db.transaction(() => {
-    // Both human and agent decompose carry a decision. Keep this a length
-    // check rather than `.trim()` so whitespace follows the existing MCP
-    // `z.string().min(1)` contract.
-    const decisionId = logDecision(db, parent, input.reason, workerId, now, origin);
+    const decisionId = logDecision(db, parent, normalizeText(input.reason), workerId, now, origin);
     for (const child of input.children) {
       const reasons: string[] = [];
       if (raisesParentRisk(child, parent)) {
@@ -2267,12 +2290,12 @@ export function editTask(
     input.review_by ?? task.review_by,
   );
   assertReviewByDistinct(input.review_by);
-  if (
-    input.title === "" ||
-    input.purpose === "" ||
-    input.completion_criteria === ""
-  ) {
-    throw new DomainError("task content fields cannot be empty");
+  input = { ...input };
+  for (const field of ["title", "purpose", "completion_criteria"] as const) {
+    const value = input[field];
+    if (value === undefined) continue;
+    if (whyBlank(value)) throw new DomainError("task content fields cannot be empty");
+    input[field] = normalizeText(value);
   }
   const issueBacked = task.github_issue_number !== null;
   if (issueBacked) {

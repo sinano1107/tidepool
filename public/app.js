@@ -21,10 +21,16 @@ var TidepoolRules = (() => {
   var webui_rules_exports = {};
   __export(webui_rules_exports, {
     completionReviewFires: () => completionReviewFires,
+    normalizeText: () => normalizeText,
     reviewFlagCarriesMeaning: () => reviewFlagCarriesMeaning,
+    whyBlank: () => whyBlank,
     whyNoCompletionReview: () => whyNoCompletionReview,
     whyReviewFlagIsInert: () => whyReviewFlagIsInert
   });
+
+  // src/required-text.ts
+  var normalizeText = (value) => value.trim();
+  var whyBlank = (value) => normalizeText(value) === "" ? "must not be blank" : void 0;
 
   // src/worker-id.ts
   var HUMAN_WORKER_ID = "human";
@@ -263,8 +269,8 @@ function TpQuestionItemPicker({ item, value, locked, freeText, onChange, transla
       /* @__PURE__ */ React.createElement("span", { style: { flex: 1 } }, o.label),
       o.recommended && /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: picked ? "var(--tide-2)" : "var(--tide-4)" } }, "recommended")
     );
-  }), locked && value && !item.options.some((o) => o.label === value) && /* @__PURE__ */ React.createElement("div", { style: { fontSize: "var(--text-sm)", color: "#fff", background: "var(--tide-4)", borderRadius: "var(--radius-full)", padding: "11px 18px", boxShadow: "var(--shadow-primary)" } }, value), locked || !freeText ? null : override ? /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 6, alignItems: "flex-end" } }, /* @__PURE__ */ React.createElement(Input, { multiline: true, rows: 2, placeholder: "override answer \u2014 free text", value: overrideText, onChange: (e) => setOverrideText(e.target.value), style: { flex: 1 } }), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", disabled: !overrideText.trim(), onClick: () => {
-    onChange(overrideText.trim());
+  }), locked && value && !item.options.some((o) => o.label === value) && /* @__PURE__ */ React.createElement("div", { style: { fontSize: "var(--text-sm)", color: "#fff", background: "var(--tide-4)", borderRadius: "var(--radius-full)", padding: "11px 18px", boxShadow: "var(--shadow-primary)" } }, value), locked || !freeText ? null : override ? /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 6, alignItems: "flex-end" } }, /* @__PURE__ */ React.createElement(Input, { multiline: true, rows: 2, placeholder: "override answer \u2014 free text", value: overrideText, onChange: (e) => setOverrideText(e.target.value), style: { flex: 1 } }), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", disabled: !!TidepoolRules.whyBlank(overrideText), onClick: () => {
+    onChange(TidepoolRules.normalizeText(overrideText));
     setOverride(false);
     setOverrideText("");
   } }, "Set")) : /* @__PURE__ */ React.createElement("button", { onClick: () => setOverride(true), style: { background: "none", border: "none", color: "var(--text-muted)", fontSize: "var(--text-xs)", cursor: "pointer", textAlign: "left", padding: "2px 0" } }, "override with free text\u2026")));
@@ -321,8 +327,8 @@ function TpAddTierAmendment({ proposed, onChange }) {
   }, []);
   React.useEffect(() => {
     const changed = {};
-    if (draft.name.trim() !== proposed.name) changed.name = draft.name.trim();
-    if (draft.description.trim() !== proposed.description) changed.description = draft.description.trim();
+    if (TidepoolRules.normalizeText(draft.name) !== proposed.name) changed.name = TidepoolRules.normalizeText(draft.name);
+    if (TidepoolRules.normalizeText(draft.description) !== proposed.description) changed.description = TidepoolRules.normalizeText(draft.description);
     if (draft.position !== proposed.position) changed.position = draft.position;
     onChange(changed);
   }, [draft]);
@@ -383,8 +389,8 @@ function TpMemoryAmendment({ candidateId, onTranslate, onChange, onDeadAddressee
   React.useEffect(() => {
     if (!base) return;
     const changed = {};
-    if (draft.title.trim() !== base.title) changed.title = draft.title.trim();
-    if (draft.text.trim() !== base.text) changed.text = draft.text.trim();
+    if (TidepoolRules.normalizeText(draft.title) !== base.title) changed.title = TidepoolRules.normalizeText(draft.title);
+    if (TidepoolRules.normalizeText(draft.text) !== base.text) changed.text = TidepoolRules.normalizeText(draft.text);
     if (draft.addressee.trim() !== base.addressee) changed.addressee = draft.addressee.trim() || null;
     const annotations = annotationsToSend(draft.annotations);
     if (JSON.stringify(annotations) !== JSON.stringify(annotationsToSend(base.annotations))) changed.annotations = annotations;
@@ -432,7 +438,7 @@ function TpMemoryAmendment({ candidateId, onTranslate, onChange, onDeadAddressee
       }
     ), error && /* @__PURE__ */ React.createElement("div", { style: { fontSize: "var(--text-xs)", color: "var(--coral-4)" } }, error));
   }
-  return /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 8, marginBottom: 14 } }, onTranslate && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(Input, { label: "Amend original title (optional)", value: draft.originalTitle, onChange: set("originalTitle") }), /* @__PURE__ */ React.createElement(Input, { label: "Amend original (optional)", multiline: true, rows: 3, value: draft.originalText, onChange: set("originalText") }), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", disabled: !draft.originalTitle.trim() || !draft.originalText.trim(), onClick: () => translate(true) }, "Translate")), /* @__PURE__ */ React.createElement(Input, { label: "Title (English)", value: draft.title, onChange: set("title") }), /* @__PURE__ */ React.createElement(Input, { label: "English (approved as the canonical text)", multiline: true, rows: 3, value: draft.text, onChange: set("text") }), addressee, onTranslate && /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", disabled: !draft.title.trim() || !draft.text.trim(), onClick: () => translate(false) }, "Back-translate"), back && /* @__PURE__ */ React.createElement("p", { style: { margin: 0, fontSize: "var(--text-xs)", color: "var(--text-muted)" }, "data-testid": "amendment-back-translation" }, "back: ", back), error && /* @__PURE__ */ React.createElement("div", { style: { fontSize: "var(--text-xs)", color: "var(--coral-4)" } }, error));
+  return /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 8, marginBottom: 14 } }, onTranslate && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(Input, { label: "Amend original title (optional)", value: draft.originalTitle, onChange: set("originalTitle") }), /* @__PURE__ */ React.createElement(Input, { label: "Amend original (optional)", multiline: true, rows: 3, value: draft.originalText, onChange: set("originalText") }), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", disabled: !!TidepoolRules.whyBlank(draft.originalTitle) || !!TidepoolRules.whyBlank(draft.originalText), onClick: () => translate(true) }, "Translate")), /* @__PURE__ */ React.createElement(Input, { label: "Title (English)", value: draft.title, onChange: set("title") }), /* @__PURE__ */ React.createElement(Input, { label: "English (approved as the canonical text)", multiline: true, rows: 3, value: draft.text, onChange: set("text") }), addressee, onTranslate && /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", disabled: !!TidepoolRules.whyBlank(draft.title) || !!TidepoolRules.whyBlank(draft.text), onClick: () => translate(false) }, "Back-translate"), back && /* @__PURE__ */ React.createElement("p", { style: { margin: 0, fontSize: "var(--text-xs)", color: "var(--text-muted)" }, "data-testid": "amendment-back-translation" }, "back: ", back), error && /* @__PURE__ */ React.createElement("div", { style: { fontSize: "var(--text-xs)", color: "var(--coral-4)" } }, error));
 }
 function TpQuestionCard({ q, answer, onAnswer, locked = false, onTranslate, onOpenSettings }) {
   const { Card, AgentChip, Switch, Input, Button } = window.TidepoolDesignSystem_8a0ead;
@@ -447,7 +453,7 @@ function TpQuestionCard({ q, answer, onAnswer, locked = false, onTranslate, onOp
   const setItemAnswer = (i, value) => setDraft(draft.map((v, j) => j === i ? value : v));
   const disabledOptions = deadAddressee ? ["approve"] : [];
   const pickedNeedingComment = draft.filter((v) => v && q.needsComment?.includes(v));
-  const canSubmit = draft.every(Boolean) && !draft.some((v) => disabledOptions.includes(v)) && (pickedNeedingComment.length === 0 || !!comment.trim());
+  const canSubmit = draft.every(Boolean) && !draft.some((v) => disabledOptions.includes(v)) && (pickedNeedingComment.length === 0 || !TidepoolRules.whyBlank(comment));
   const [submitting, setSubmitting] = React.useState(false);
   const submit = () => {
     setSubmitting(true);
@@ -525,8 +531,8 @@ function TpScratchpad({ lines, onAdd, onRemove }) {
   const [open, setOpen] = React.useState(false);
   const [draft, setDraft] = React.useState("");
   const add = () => {
-    if (draft.trim()) {
-      onAdd(draft.trim());
+    if (!TidepoolRules.whyBlank(draft)) {
+      onAdd(TidepoolRules.normalizeText(draft));
       setDraft("");
     }
   };
@@ -559,7 +565,7 @@ function TpScratchpad({ lines, onAdd, onRemove }) {
       },
       /* @__PURE__ */ React.createElement("i", { "data-lucide": "notebook-pen", style: { width: 18, height: 18 } }),
       lines.length > 0 && !open && /* @__PURE__ */ React.createElement("span", { style: { position: "absolute", top: -4, right: -4, minWidth: 16, height: 16, borderRadius: 999, background: "var(--sun-4)", color: "#fff", fontFamily: "var(--font-mono)", fontSize: 10, lineHeight: "16px", padding: "0 4px" } }, lines.length)
-    ), open && /* @__PURE__ */ React.createElement("div", { style: { position: "fixed", bottom: 170, right: "max(16px, calc(50vw - 204px))", zIndex: 30, width: 300, background: "var(--surface-card)", border: "1px solid var(--border-hairline)", borderRadius: "var(--radius-md)", boxShadow: "var(--shadow-card)", padding: 12 } }, /* @__PURE__ */ React.createElement("div", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--tide-4)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 8 } }, 'scratchpad \u2014 "this again?"'), lines.map((l, i) => /* @__PURE__ */ React.createElement("div", { key: l.id, style: { display: "flex", alignItems: "baseline", gap: 6, fontSize: "var(--text-xs)", color: "var(--text-body)", marginBottom: 6 } }, /* @__PURE__ */ React.createElement("span", { style: { flex: 1 } }, l.text), /* @__PURE__ */ React.createElement("button", { onClick: () => onRemove(i), "aria-label": `remove ${l.text}`, style: { background: "none", border: "none", color: "var(--text-muted)", cursor: "pointer", padding: 0 } }, "\xD7"))), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 6, alignItems: "flex-end" } }, /* @__PURE__ */ React.createElement(Input, { multiline: true, rows: 1, placeholder: "jot the irritation \u2014 triaged at commit", value: draft, onChange: (e) => setDraft(e.target.value), style: { flex: 1 } }), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", disabled: !draft.trim(), onClick: add }, "Add")))),
+    ), open && /* @__PURE__ */ React.createElement("div", { style: { position: "fixed", bottom: 170, right: "max(16px, calc(50vw - 204px))", zIndex: 30, width: 300, background: "var(--surface-card)", border: "1px solid var(--border-hairline)", borderRadius: "var(--radius-md)", boxShadow: "var(--shadow-card)", padding: 12 } }, /* @__PURE__ */ React.createElement("div", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--tide-4)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 8 } }, 'scratchpad \u2014 "this again?"'), lines.map((l, i) => /* @__PURE__ */ React.createElement("div", { key: l.id, style: { display: "flex", alignItems: "baseline", gap: 6, fontSize: "var(--text-xs)", color: "var(--text-body)", marginBottom: 6 } }, /* @__PURE__ */ React.createElement("span", { style: { flex: 1 } }, l.text), /* @__PURE__ */ React.createElement("button", { onClick: () => onRemove(i), "aria-label": `remove ${l.text}`, style: { background: "none", border: "none", color: "var(--text-muted)", cursor: "pointer", padding: 0 } }, "\xD7"))), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 6, alignItems: "flex-end" } }, /* @__PURE__ */ React.createElement(Input, { multiline: true, rows: 1, placeholder: "jot the irritation \u2014 triaged at commit", value: draft, onChange: (e) => setDraft(e.target.value), style: { flex: 1 } }), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", disabled: !!TidepoolRules.whyBlank(draft), onClick: add }, "Add")))),
     document.body
   );
 }
@@ -835,7 +841,7 @@ function TriageScreen({ data, onCommit, loadHandoff, onAnswer, onObject, onScrat
           onExpand: hasHandoff ? () => toggleHandoff(k, l) : void 0,
           onOpenMemoryEntry
         }
-      ), logTranslateOn && logTranslations[k] && logTranslations[k].status !== "throttled" && /* @__PURE__ */ React.createElement("div", { style: { padding: "2px 14px 10px", background: "var(--surface-recessed)" } }, logTranslations[k].status === "translated" ? /* @__PURE__ */ React.createElement("div", { style: { fontSize: "var(--text-sm)", color: "var(--tide-5)" } }, logTranslations[k].text) : /* @__PURE__ */ React.createElement(TpTranslationNote, { result: logTranslations[k] })), handoffOpen[k] && /* @__PURE__ */ React.createElement("div", { style: { padding: "10px 14px 12px", background: "var(--surface-recessed)" } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8, marginBottom: 6 } }, /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.08em" } }, "handoff \u2014 ", l.taskId), onTranslate && /* @__PURE__ */ React.createElement(Switch, { label: "\u8A33\u3092\u6DFB\u3048\u308B", checked: !!handoffTranslateOn[k], onChange: (next) => setHandoffTranslate(k, l, next), style: { marginLeft: "auto" } })), /* @__PURE__ */ React.createElement("pre", { style: { margin: 0, whiteSpace: "pre-wrap", fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", lineHeight: 1.6, color: "var(--text-body)", overflowX: "auto" } }, handoffCache.current[k]), handoffTranslateOn[k] && handoffTranslations[k] && (handoffTranslations[k].status === "translated" ? /* @__PURE__ */ React.createElement("pre", { style: { margin: "8px 0 0", paddingTop: 8, borderTop: "1px dashed var(--border-hairline)", whiteSpace: "pre-wrap", fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", lineHeight: 1.6, color: "var(--tide-5)", overflowX: "auto" } }, handoffTranslations[k].doc) : /* @__PURE__ */ React.createElement("div", { style: { marginTop: 8 } }, /* @__PURE__ */ React.createElement(TpTranslationNote, { result: handoffTranslations[k] }))), objecting !== k && /* @__PURE__ */ React.createElement("button", { onClick: () => toggleObjecting(k), style: { background: "none", border: "none", color: "var(--coral-4)", fontSize: "var(--text-xs)", cursor: "pointer", padding: "8px 0 0", display: "block" } }, "object to this entry\u2026")), objecting === k && /* @__PURE__ */ React.createElement("div", { style: { padding: "10px 12px", background: "var(--coral-1)", display: "flex", gap: 8, alignItems: "flex-end" } }, /* @__PURE__ */ React.createElement(Input, { multiline: true, rows: 2, placeholder: "direction \u2014 steering, not rollback", value: draft, onChange: (e) => setDraft(e.target.value), style: { flex: 1 } }), /* @__PURE__ */ React.createElement(Button, { variant: "danger", size: "sm", disabled: !draft.trim(), onClick: async () => {
+      ), logTranslateOn && logTranslations[k] && logTranslations[k].status !== "throttled" && /* @__PURE__ */ React.createElement("div", { style: { padding: "2px 14px 10px", background: "var(--surface-recessed)" } }, logTranslations[k].status === "translated" ? /* @__PURE__ */ React.createElement("div", { style: { fontSize: "var(--text-sm)", color: "var(--tide-5)" } }, logTranslations[k].text) : /* @__PURE__ */ React.createElement(TpTranslationNote, { result: logTranslations[k] })), handoffOpen[k] && /* @__PURE__ */ React.createElement("div", { style: { padding: "10px 14px 12px", background: "var(--surface-recessed)" } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8, marginBottom: 6 } }, /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.08em" } }, "handoff \u2014 ", l.taskId), onTranslate && /* @__PURE__ */ React.createElement(Switch, { label: "\u8A33\u3092\u6DFB\u3048\u308B", checked: !!handoffTranslateOn[k], onChange: (next) => setHandoffTranslate(k, l, next), style: { marginLeft: "auto" } })), /* @__PURE__ */ React.createElement("pre", { style: { margin: 0, whiteSpace: "pre-wrap", fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", lineHeight: 1.6, color: "var(--text-body)", overflowX: "auto" } }, handoffCache.current[k]), handoffTranslateOn[k] && handoffTranslations[k] && (handoffTranslations[k].status === "translated" ? /* @__PURE__ */ React.createElement("pre", { style: { margin: "8px 0 0", paddingTop: 8, borderTop: "1px dashed var(--border-hairline)", whiteSpace: "pre-wrap", fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", lineHeight: 1.6, color: "var(--tide-5)", overflowX: "auto" } }, handoffTranslations[k].doc) : /* @__PURE__ */ React.createElement("div", { style: { marginTop: 8 } }, /* @__PURE__ */ React.createElement(TpTranslationNote, { result: handoffTranslations[k] }))), objecting !== k && /* @__PURE__ */ React.createElement("button", { onClick: () => toggleObjecting(k), style: { background: "none", border: "none", color: "var(--coral-4)", fontSize: "var(--text-xs)", cursor: "pointer", padding: "8px 0 0", display: "block" } }, "object to this entry\u2026")), objecting === k && /* @__PURE__ */ React.createElement("div", { style: { padding: "10px 12px", background: "var(--coral-1)", display: "flex", gap: 8, alignItems: "flex-end" } }, /* @__PURE__ */ React.createElement(Input, { multiline: true, rows: 2, placeholder: "direction \u2014 steering, not rollback", value: draft, onChange: (e) => setDraft(e.target.value), style: { flex: 1 } }), /* @__PURE__ */ React.createElement(Button, { variant: "danger", size: "sm", disabled: !!TidepoolRules.whyBlank(draft), onClick: async () => {
         try {
           await onObject(l, draft);
         } catch {
@@ -960,7 +966,7 @@ function RegisterScreen({ onRegister, parentTask, onClose }) {
     });
   }, []);
   const issueMode = !childMode && source === "github issue";
-  const childExtras = () => parentTask ? { parent_id: parentTask.id, decompose_reason: reason.trim() } : {};
+  const childExtras = () => parentTask ? { parent_id: parentTask.id, decompose_reason: TidepoolRules.normalizeText(reason) } : {};
   const [issues, setIssues] = React.useState([]);
   const [issuesFailed, setIssuesFailed] = React.useState(false);
   const [truncated, setTruncated] = React.useState(false);
@@ -968,7 +974,7 @@ function RegisterScreen({ onRegister, parentTask, onClose }) {
     setIssues([]);
     setIssuesFailed(false);
     setTruncated(false);
-    if (!issueMode || !workspace.trim()) return;
+    if (!issueMode || TidepoolRules.whyBlank(workspace)) return;
     api("GET /api/github-issues", { query: { workspace: workspace.trim() } }).then((d) => {
       setIssues(d.issues);
       setTruncated(d.truncated);
@@ -997,7 +1003,7 @@ function RegisterScreen({ onRegister, parentTask, onClose }) {
   };
   const issueListHintStyle = { fontSize: "var(--text-sm)", color: "var(--text-secondary)" };
   const filteredIssues = issueNumber.trim() ? issues.filter((i) => String(i.number).includes(issueNumber.trim()) || i.title.toLowerCase().includes(issueNumber.trim().toLowerCase())) : issues;
-  const ok = issueMode ? workspace.trim() && /^[0-9]+$/.test(issueNumber.trim()) : title.trim() && purpose.trim() && criteria.trim() && (!childMode || reason.trim());
+  const ok = issueMode ? !TidepoolRules.whyBlank(workspace) && /^[0-9]+$/.test(issueNumber.trim()) : ![title, purpose, criteria].some((value) => TidepoolRules.whyBlank(value)) && (!childMode || !TidepoolRules.whyBlank(reason));
   const ruleSubject = { type: issueMode ? "work" : type, parent_id: parentTask?.id, assignee, review_flag: review, risk_flag: risk };
   const showReviewFlag = TidepoolRules.reviewFlagCarriesMeaning(ruleSubject);
   const showReviewBy = TidepoolRules.completionReviewFires(ruleSubject);
@@ -1017,9 +1023,9 @@ function RegisterScreen({ onRegister, parentTask, onClose }) {
     // ChildSpec has no type field) — the type picker is dropped in
     // childMode below, so `type` state never leaves its 'work' default
     type,
-    title: title.trim(),
-    purpose: purpose.trim(),
-    completion_criteria: criteria.trim(),
+    title: TidepoolRules.normalizeText(title),
+    purpose: TidepoolRules.normalizeText(purpose),
+    completion_criteria: TidepoolRules.normalizeText(criteria),
     risk_flag: risk,
     ...showReviewFlag ? { review_flag: review } : {},
     // unset assignee/workspace resolve to the board's defaults at
@@ -1089,7 +1095,7 @@ function RegisterScreen({ onRegister, parentTask, onClose }) {
   const draftFields = async () => {
     setDraftBusy(true);
     try {
-      const d = await api("POST /api/tasks/draft", { body: { dump: dump.trim(), ...childExtras() } });
+      const d = await api("POST /api/tasks/draft", { body: { dump: TidepoolRules.normalizeText(dump), ...childExtras() } });
       setTitle(d.title);
       setPurpose(d.purpose);
       setCriteria(d.completion_criteria);
@@ -1123,7 +1129,7 @@ function RegisterScreen({ onRegister, parentTask, onClose }) {
     label: childMode ? "Add child \u2014 appends to queue tail" : "Register \u2014 appends to queue tail",
     disabled: !ok || busy,
     onClick: submit
-  } : { label: draftBusy ? "Drafting\u2026" : "Draft fields", disabled: !dump.trim() || draftBusy, onClick: draftFields };
+  } : { label: draftBusy ? "Drafting\u2026" : "Draft fields", disabled: !!TidepoolRules.whyBlank(dump) || draftBusy, onClick: draftFields };
   return /* @__PURE__ */ React.createElement("div", { style: { padding: "20px 16px" } }, /* @__PURE__ */ React.createElement("h1", { style: { fontSize: "var(--text-xl)", margin: "0 0 2px" } }, childMode ? "Add child" : "Register"), /* @__PURE__ */ React.createElement("p", { style: { fontSize: "var(--text-sm)", color: "var(--text-secondary)", margin: "0 0 16px" } }, parentTask ? `splitting "${parentTask.title}" \u2014 appears as a child, same dump \u2192 draft \u2192 edit flow` : issueMode ? "reference a GitHub issue \u2014 its title/purpose/completion criteria stay live on GitHub" : plainFormActive ? "the LLM is unreachable \u2014 fill the fields yourself" : "dump it \u2014 the LLM drafts the fields, you confirm"), childMode && /* @__PURE__ */ React.createElement(Card, { style: { marginBottom: 14 } }, /* @__PURE__ */ React.createElement(
     Input,
     {
@@ -1143,7 +1149,7 @@ function RegisterScreen({ onRegister, parentTask, onClose }) {
     setTier("");
     setReviewTier("");
     setSelectedDumpId(null);
-  } }), issueMode && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(Select, { label: "Workspace", options: issueWorkspaceOptions, value: workspace, onChange: (e) => setWorkspace(e.target.value) }), assigneeSelect, /* @__PURE__ */ React.createElement(Select, { label: "Tier", options: tierOptions(tiers, "(agent's tier, then board default)"), value: tier, onChange: (e) => setTier(e.target.value) }), riskCheckbox, reviewTierSelect, reviewerPicker, /* @__PURE__ */ React.createElement(Input, { label: "Issue number", value: issueNumber, onChange: (e) => setIssueNumber(e.target.value), placeholder: "content stays on GitHub; the board keeps only this reference" }), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 4, maxHeight: 220, overflowY: "auto" } }, !workspace.trim() && /* @__PURE__ */ React.createElement("span", { style: issueListHintStyle }, "select a workspace to browse its open issues"), workspace.trim() && issuesFailed && /* @__PURE__ */ React.createElement("span", { style: issueListHintStyle }, "couldn't fetch open issues \u2014 type the number directly"), workspace.trim() && !issuesFailed && filteredIssues.map((i) => /* @__PURE__ */ React.createElement(
+  } }), issueMode && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(Select, { label: "Workspace", options: issueWorkspaceOptions, value: workspace, onChange: (e) => setWorkspace(e.target.value) }), assigneeSelect, /* @__PURE__ */ React.createElement(Select, { label: "Tier", options: tierOptions(tiers, "(agent's tier, then board default)"), value: tier, onChange: (e) => setTier(e.target.value) }), riskCheckbox, reviewTierSelect, reviewerPicker, /* @__PURE__ */ React.createElement(Input, { label: "Issue number", value: issueNumber, onChange: (e) => setIssueNumber(e.target.value), placeholder: "content stays on GitHub; the board keeps only this reference" }), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 4, maxHeight: 220, overflowY: "auto" } }, TidepoolRules.whyBlank(workspace) && /* @__PURE__ */ React.createElement("span", { style: issueListHintStyle }, "select a workspace to browse its open issues"), workspace.trim() && issuesFailed && /* @__PURE__ */ React.createElement("span", { style: issueListHintStyle }, "couldn't fetch open issues \u2014 type the number directly"), workspace.trim() && !issuesFailed && filteredIssues.map((i) => /* @__PURE__ */ React.createElement(
     "div",
     {
       key: i.number,
@@ -1161,7 +1167,7 @@ function RegisterScreen({ onRegister, parentTask, onClose }) {
     },
     /* @__PURE__ */ React.createElement("span", { style: { color: "var(--text-muted)" } }, "#", i.number),
     /* @__PURE__ */ React.createElement("span", null, i.title)
-  )), workspace.trim() && !issuesFailed && truncated && /* @__PURE__ */ React.createElement("span", { style: issueListHintStyle }, "older issues exist \u2014 type the number directly"))), !issueMode && !plainFormActive && !drafted && /* @__PURE__ */ React.createElement(Input, { multiline: true, rows: 4, placeholder: "what needs doing, in your own words \u2014 sloppy is fine here, sloppy completion criteria are not", value: dump, onChange: (e) => setDump(e.target.value) }), !issueMode && (plainFormActive || drafted) && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: drafted ? "var(--tide-4)" : "var(--sun-4)", textTransform: "uppercase", letterSpacing: "0.08em" } }, drafted ? "drafted \u2014 edit freely" : "plain form \u2014 same fields, no draft"), /* @__PURE__ */ React.createElement(Input, { label: "Title", value: title, onChange: (e) => setTitle(e.target.value) }), /* @__PURE__ */ React.createElement(Input, { label: "Purpose", multiline: true, rows: 2, value: purpose, onChange: (e) => setPurpose(e.target.value), placeholder: "state prerequisites here \u2014 the agent verifies and escalates cheaply" }), /* @__PURE__ */ React.createElement(Input, { label: "Completion criteria", multiline: true, rows: 2, value: criteria, onChange: (e) => setCriteria(e.target.value), placeholder: "sloppy completion criteria are the expensive kind" }), !childMode && /* @__PURE__ */ React.createElement(Select, { label: "Type", options: ["work", "review"], value: type, onChange: (e) => setType(e.target.value === "review" ? "review" : "work") }), /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 } }, assigneeSelect, /* @__PURE__ */ React.createElement(Select, { label: "Workspace", options: workspaceOptions, value: workspace, onChange: (e) => setWorkspace(e.target.value) })), /* @__PURE__ */ React.createElement(Select, { label: "Tier", options: tierOptions(tiers, "(agent's tier, then board default)"), value: tier, onChange: (e) => setTier(e.target.value) }), riskCheckbox, showReviewFlag && /* @__PURE__ */ React.createElement(Checkbox, { label: "review flag \u2014 request an on-completion review", checked: review, onChange: () => setReview(!review) }), reviewTierSelect, reviewerPicker), /* @__PURE__ */ React.createElement(Button, { variant: "primary", size: "lg", full: true, disabled: primaryAction.disabled, onClick: primaryAction.onClick }, primaryAction.label), childMode && /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "lg", full: true, disabled: busy, onClick: onClose }, "Cancel")), !issueMode && /* @__PURE__ */ React.createElement(
+  )), workspace.trim() && !issuesFailed && truncated && /* @__PURE__ */ React.createElement("span", { style: issueListHintStyle }, "older issues exist \u2014 type the number directly"))), !issueMode && !plainFormActive && !drafted && /* @__PURE__ */ React.createElement(Input, { multiline: true, rows: 4, placeholder: "what needs doing, in your own words \u2014 sloppy is fine here, sloppy completion criteria are not", value: dump, onChange: (e) => setDump(e.target.value) }), !issueMode && (plainFormActive || drafted) && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: drafted ? "var(--tide-4)" : "var(--sun-4)", textTransform: "uppercase", letterSpacing: "0.08em" } }, drafted ? "drafted \u2014 edit freely" : "plain form \u2014 same fields, no draft"), /* @__PURE__ */ React.createElement(Input, { label: "Title", error: TidepoolRules.whyBlank(title), value: title, onChange: (e) => setTitle(e.target.value) }), /* @__PURE__ */ React.createElement(Input, { label: "Purpose", error: TidepoolRules.whyBlank(purpose), multiline: true, rows: 2, value: purpose, onChange: (e) => setPurpose(e.target.value), placeholder: "state prerequisites here \u2014 the agent verifies and escalates cheaply" }), /* @__PURE__ */ React.createElement(Input, { label: "Completion criteria", error: TidepoolRules.whyBlank(criteria), multiline: true, rows: 2, value: criteria, onChange: (e) => setCriteria(e.target.value), placeholder: "sloppy completion criteria are the expensive kind" }), !childMode && /* @__PURE__ */ React.createElement(Select, { label: "Type", options: ["work", "review"], value: type, onChange: (e) => setType(e.target.value === "review" ? "review" : "work") }), /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 } }, assigneeSelect, /* @__PURE__ */ React.createElement(Select, { label: "Workspace", options: workspaceOptions, value: workspace, onChange: (e) => setWorkspace(e.target.value) })), /* @__PURE__ */ React.createElement(Select, { label: "Tier", options: tierOptions(tiers, "(agent's tier, then board default)"), value: tier, onChange: (e) => setTier(e.target.value) }), riskCheckbox, showReviewFlag && /* @__PURE__ */ React.createElement(Checkbox, { label: "review flag \u2014 request an on-completion review", checked: review, onChange: () => setReview(!review) }), reviewTierSelect, reviewerPicker), /* @__PURE__ */ React.createElement(Button, { variant: "primary", size: "lg", full: true, disabled: primaryAction.disabled, onClick: primaryAction.onClick }, primaryAction.label), childMode && /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "lg", full: true, disabled: busy, onClick: onClose }, "Cancel")), !issueMode && /* @__PURE__ */ React.createElement(
     "button",
     {
       onClick: togglePlainForm,
@@ -1173,11 +1179,11 @@ function RegisterScreen({ onRegister, parentTask, onClose }) {
 
 // webui/settings-screen.tsx
 function registryNameOk(name) {
-  const v = name.trim();
+  const v = TidepoolRules.normalizeText(name);
   return /^[A-Za-z0-9._-]+$/.test(v) && ![".", ".."].includes(v);
 }
 function landingPath(baseDir, name) {
-  return `${baseDir.path.replace(/\/+$/, "")}/${name.trim()}`;
+  return `${baseDir.path.replace(/\/+$/, "")}/${TidepoolRules.normalizeText(name)}`;
 }
 function RecordCardHead({ children, editing, onEdit }) {
   const { Button } = window.TidepoolDesignSystem_8a0ead;
@@ -1203,7 +1209,7 @@ function FreeEntryAllowlistInput({
   const [free, setFree] = React.useState("");
   const addFree = () => {
     const v = free.trim();
-    if (!v || values.includes(v)) return;
+    if (TidepoolRules.whyBlank(v) || values.includes(v)) return;
     onChange([...values, v]);
     setFree("");
   };
@@ -1227,7 +1233,7 @@ function FreeEntryAllowlistInput({
       },
       placeholder
     }
-  )), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", disabled: !free.trim(), onClick: addFree }, "Add")));
+  )), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", disabled: !!TidepoolRules.whyBlank(free), onClick: addFree }, "Add")));
 }
 function PublishWorkspace({ ws, say, onPublished }) {
   const { Button, Input } = window.TidepoolDesignSystem_8a0ead;
@@ -1236,7 +1242,7 @@ function PublishWorkspace({ ws, say, onPublished }) {
   const submit = async () => {
     setBusy(true);
     try {
-      await api(`/api/workspaces/${encodeURIComponent(ws.name)}/publish`, { repo: repo.trim() });
+      await api(`/api/workspaces/${encodeURIComponent(ws.name)}/publish`, { repo: TidepoolRules.normalizeText(repo) });
       setRepo("");
       say("success", "workspace published \u2014 every branch is on the remote", ws.name);
       await onPublished();
@@ -1252,7 +1258,7 @@ function PublishWorkspace({ ws, say, onPublished }) {
       onChange: (e) => setRepo(e.target.value),
       placeholder: "the destination repository URL \u2014 must be empty"
     }
-  ), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", disabled: busy || !repo.trim(), onClick: submit }, "Publish \u2014 pushes every branch, then commits to the registry"));
+  ), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", disabled: busy || !!TidepoolRules.whyBlank(repo), onClick: submit }, "Publish \u2014 pushes every branch, then commits to the registry"));
 }
 function WorkspaceRecord({ ws, baseDir, say, onChanged, edit }) {
   const { Card, FieldRow, Input, Switch, Tag } = window.TidepoolDesignSystem_8a0ead;
@@ -1415,7 +1421,7 @@ const NEW_AGENT_DRAFT = {
 function agentBody(d) {
   return {
     authority: d.authority,
-    description: d.description.trim(),
+    description: TidepoolRules.normalizeText(d.description),
     provider: d.provider,
     icon: d.icon.trim() || void 0,
     tier: d.tier || void 0,
@@ -1425,7 +1431,7 @@ function agentBody(d) {
   };
 }
 function agentDraftDirty(d, base) {
-  return d.icon !== base.icon || d.description.trim() !== base.description || d.systemPrompt !== base.systemPrompt || d.authority !== base.authority || d.provider !== base.provider || d.tier !== base.tier || d.advisor !== base.advisor || !sameStrings(d.skills, base.skills);
+  return d.icon !== base.icon || TidepoolRules.normalizeText(d.description) !== base.description || d.systemPrompt !== base.systemPrompt || d.authority !== base.authority || d.provider !== base.provider || d.tier !== base.tier || d.advisor !== base.advisor || !sameStrings(d.skills, base.skills);
 }
 const PROVIDER_PLACEHOLDER = { value: "", label: "choose one \u2014 provider is required" };
 function tierOptions(tiers, blank = "board default") {
@@ -1468,7 +1474,7 @@ function AgentRecord({ agent, authorityProfiles, providerOptions, tiers, advisor
   const set = (key, value) => setDraft((d) => ({ ...d, [key]: value }));
   const [busy, setBusy] = React.useState(false);
   const dirty = agentDraftDirty(draft, agentDraftOf(agent));
-  const ok = !!draft.description.trim() && !!draft.authority && !!draft.provider;
+  const ok = !TidepoolRules.whyBlank(draft.description) && !!draft.authority && !!draft.provider;
   useDirtySignal(edit, open, dirty);
   const startEdit = () => edit.open(id, () => setDraft(agentDraftOf(agent)));
   const save = async () => {
@@ -1582,7 +1588,8 @@ function ProfileListInput({ label, hint, candidates, wildcardHint, values, onCha
 }
 function skillAddError(entry, existing) {
   const v = entry.trim();
-  if (!v) return "empty skill name";
+  const blank = TidepoolRules.whyBlank(v);
+  if (blank) return blank;
   if (existing.includes(v)) return "already added";
   if (v === "*") {
     return existing.length > 0 ? '"*" must be the only entry \u2014 remove the others first' : null;
@@ -1639,7 +1646,7 @@ function SkillListInput({ candidates, degraded, values, onChange }) {
       },
       placeholder: 'free entry \u2014 e.g. a workspace skill name or "plugin-name:*"'
     }
-  )), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", disabled: !free.trim(), onClick: addFree }, "Add")));
+  )), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", disabled: !!TidepoolRules.whyBlank(free), onClick: addFree }, "Add")));
 }
 function ProfileFields({ agentNames, workspaceNames, guidance, setGuidance, assignableTo, setAssignableTo, allowedWorkspaces, setAllowedWorkspaces, merge, setMerge }) {
   const { Input, Select } = window.TidepoolDesignSystem_8a0ead;
@@ -1934,7 +1941,7 @@ function QuietHoursCard({ start, end, tz, say, onSaved, edit }) {
   const [draftEnd, setDraftEnd] = React.useState(end);
   const [busy, setBusy] = React.useState(false);
   const dirty = draftStart !== start || draftEnd !== end;
-  const ok = !!draftStart.trim() && !!draftEnd.trim();
+  const ok = !TidepoolRules.whyBlank(draftStart) && !TidepoolRules.whyBlank(draftEnd);
   useDirtySignal(edit, open, dirty);
   const save = async () => {
     setBusy(true);
@@ -2137,7 +2144,7 @@ function MemoryCasePicker({ workspace, value, onChange, onQuote }) {
       const quote = selection?.toString() ?? "";
       const fieldOf = (node) => (node instanceof Element ? node : node?.parentElement)?.closest("[data-field]");
       const field = fieldOf(selection?.anchorNode);
-      if (!quote.trim() || !field || field !== fieldOf(selection?.focusNode) || !caseBox.current?.contains(field)) return;
+      if (TidepoolRules.whyBlank(quote) || !field || field !== fieldOf(selection?.focusNode) || !caseBox.current?.contains(field)) return;
       quoteTo.current?.({ field: field.dataset.field, quote });
     };
     document.addEventListener("selectionchange", onSelection);
@@ -2207,9 +2214,9 @@ function MemoryExemplarAnnotations({ workspace, source, onSource, annotations, o
         options: [{ value: "", label: "choose\u2026" }, "imitate", "avoid"]
       }
     ),
-    translate && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(Input, { label: language ? `Original (${language})` : "Original", multiline: true, rows: 2, value: a.original, onChange: (e) => set(i, { original: e.target.value }) }), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", disabled: busy || !a.original.trim(), onClick: () => translateOne(i, true) }, "Translate")),
+    translate && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(Input, { label: language ? `Original (${language})` : "Original", multiline: true, rows: 2, value: a.original, onChange: (e) => set(i, { original: e.target.value }) }), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", disabled: busy || !!TidepoolRules.whyBlank(a.original), onClick: () => translateOne(i, true) }, "Translate")),
     /* @__PURE__ */ React.createElement(Input, { label: "Annotation (English)", multiline: true, rows: 2, value: a.text, onChange: (e) => set(i, { text: e.target.value, back: null }) }),
-    translate && /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", disabled: busy || !a.text.trim(), onClick: () => translateOne(i, false) }, "Back-translate"),
+    translate && /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", disabled: busy || !!TidepoolRules.whyBlank(a.text), onClick: () => translateOne(i, false) }, "Back-translate"),
     a.back && /* @__PURE__ */ React.createElement("p", { style: muted }, "back", language ? ` in ${language}` : "", ": ", a.back),
     /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "sm", onClick: () => onChange((list) => list.filter((_, j) => j !== i)) }, "Remove annotation")
   )), /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "sm", onClick: () => {
@@ -2267,12 +2274,12 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit, fo
   const [draft, setDraft] = React.useState(blank);
   const [busy, setBusy] = React.useState(false);
   const setDraftField = (key) => (e) => setDraft({ ...draft, [key]: e.target.value, ...key === "title" || key === "text" ? { backTranslation: null } : {}, ...key === "workspace" ? { source: null } : {} });
-  useDirtySignal(edit, writing, [draft.originalTitle, draft.originalText, draft.title, draft.text, ...draft.annotations.map((a) => a.text)].some((v) => v.trim() !== ""));
+  useDirtySignal(edit, writing, [draft.originalTitle, draft.originalText, draft.title, draft.text, ...draft.annotations.map((a) => a.text)].some((v) => !TidepoolRules.whyBlank(v)));
   const translatable = language !== "English";
   const fields = draft.kind === "definition" ? ["text"] : ["title", "text"];
   const replacing = draft.supersedes.map((id) => `#${id}`).join(", ");
   const holdsOrphan = draft.workspace === draft.dead.workspace || (draft.kind === "behavior" || draft.kind === "exemplar") && draft.addressee === draft.dead.addressee;
-  const filled = draft.kind === "exemplar" ? !!draft.title.trim() && (draft.source ?? draft.inheritedSource) !== null && draft.annotations.length > 0 && draft.annotations.every((a) => a.polarity && a.text.trim()) : fields.every((key) => draft[key].trim() !== "");
+  const filled = draft.kind === "exemplar" ? !TidepoolRules.whyBlank(draft.title) && (draft.source ?? draft.inheritedSource) !== null && draft.annotations.length > 0 && draft.annotations.every((a) => a.polarity && !TidepoolRules.whyBlank(a.text)) : fields.every((key) => !TidepoolRules.whyBlank(draft[key]));
   const originalOf = { title: draft.originalTitle, text: draft.originalText };
   const runTranslation = async (toEnglish) => {
     setBusy(true);
@@ -2288,17 +2295,17 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit, fo
     setBusy(true);
     try {
       const originals = fields.map((key) => [`original_${key}`, originalOf[key].trim()]).filter(([, v]) => v);
-      const body = { workspace: draft.workspace || null, path: draft.path.trim(), text: draft.text.trim(), ...Object.fromEntries(originals) };
+      const body = { workspace: draft.workspace || null, path: TidepoolRules.normalizeText(draft.path), text: TidepoolRules.normalizeText(draft.text), ...Object.fromEntries(originals) };
       const supersedes = draft.supersedes.length > 0 ? { supersedes: draft.supersedes } : {};
       const source = draft.source !== null ? { source_event_id: draft.source } : {};
-      if (draft.kind === "knowledge") await api("/api/settings/memory/knowledge", { ...body, title: draft.title.trim(), ...supersedes });
+      if (draft.kind === "knowledge") await api("/api/settings/memory/knowledge", { ...body, title: TidepoolRules.normalizeText(draft.title), ...supersedes });
       else if (draft.kind === "behavior") {
-        await api("/api/settings/memory/behaviors", { ...body, title: draft.title.trim(), addressee: draft.addressee || null, ...supersedes, ...source });
+        await api("/api/settings/memory/behaviors", { ...body, title: TidepoolRules.normalizeText(draft.title), addressee: draft.addressee || null, ...supersedes, ...source });
       } else if (draft.kind === "exemplar") {
         await api("/api/settings/memory/exemplars", {
           workspace: body.workspace,
           path: body.path,
-          title: draft.title.trim(),
+          title: TidepoolRules.normalizeText(draft.title),
           addressee: draft.addressee || null,
           ...supersedes,
           ...source,
@@ -2403,14 +2410,14 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit, fo
     {
       variant: "secondary",
       size: "sm",
-      disabled: busy || !branchMove.path.trim() || !branchMove.to_path.trim(),
+      disabled: busy || !!TidepoolRules.whyBlank(branchMove.path) || !!TidepoolRules.whyBlank(branchMove.to_path),
       onClick: () => move("/api/settings/memory/branches/move", {
         workspace: branchMove.workspace || null,
-        path: branchMove.path.trim(),
+        path: TidepoolRules.normalizeText(branchMove.path),
         to_workspace: branchMove.to_workspace || null,
-        to_path: branchMove.to_path.trim(),
+        to_path: TidepoolRules.normalizeText(branchMove.to_path),
         merge: branchMove.merge
-      }, `${branchMove.path.trim()} \u2192 ${branchMove.to_path.trim()}`, () => setBranchMove(null))
+      }, `${TidepoolRules.normalizeText(branchMove.path)} \u2192 ${TidepoolRules.normalizeText(branchMove.to_path)}`, () => setBranchMove(null))
     },
     "Move branch"
   ), /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "sm", disabled: busy, onClick: () => setBranchMove(null) }, "Cancel"))), selected.length > 0 && !writing && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("p", { style: muted }, "selected ", selectedIds), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8, alignItems: "flex-end", flexWrap: "wrap" } }, /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", disabled: busy || foldKinds.length === 0, onClick: foldIntoNew }, "Fold into a new entry"), /* @__PURE__ */ React.createElement(Input, { label: "Fold into existing (entry id)", mono: true, value: foldTarget, onChange: (e) => setFoldTarget(e.target.value) }), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", disabled: busy || !/^[1-9]\d*$/.test(foldTarget), onClick: foldIntoExisting }, "Fold into #", foldTarget || "\u2026"), /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "sm", disabled: busy, onClick: () => setSelected([]) }, "Clear")), foldKinds.length === 0 && /* @__PURE__ */ React.createElement("p", { style: muted }, candidateSelected ? "a candidate cannot be replaced by a new entry; fold it into an existing approved one" : "no one kind may replace all of these; fold them into an existing entry of their kind")), writing && /* @__PURE__ */ React.createElement(React.Fragment, null, replacing && /* @__PURE__ */ React.createElement("p", { style: muted }, "replacing ", replacing, " \u2014 saving writes a new approved entry and supersedes ", draft.supersedes.length === 1 ? "it" : "them"), draft.kinds.length > 1 && /* @__PURE__ */ React.createElement(Select, { label: "Kind", value: draft.kind, onChange: setDraftField("kind"), options: draft.kinds }), /* @__PURE__ */ React.createElement(
@@ -2445,7 +2452,7 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit, fo
       busy,
       setBusy
     }
-  ), translatable && draft.kind !== "exemplar" && /* @__PURE__ */ React.createElement(React.Fragment, null, draft.kind !== "definition" && /* @__PURE__ */ React.createElement(Input, { label: `Original title (${language})`, value: draft.originalTitle, onChange: setDraftField("originalTitle") }), /* @__PURE__ */ React.createElement(Input, { label: `Original (${language})`, multiline: true, rows: 3, value: draft.originalText, onChange: setDraftField("originalText") }), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", disabled: busy || fields.some((key) => !originalOf[key].trim()), onClick: () => runTranslation(true) }, "Translate")), draft.kind !== "definition" && /* @__PURE__ */ React.createElement(Input, { label: "Title (English)", value: draft.title, onChange: setDraftField("title") }), draft.kind !== "exemplar" && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(Input, { label: "English (saved as the canonical text)", multiline: true, rows: 3, value: draft.text, onChange: setDraftField("text") }), translatable && /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", disabled: busy || fields.some((key) => !draft[key].trim()), onClick: () => runTranslation(false) }, "Back-translate")), draft.backTranslation && /* @__PURE__ */ React.createElement("p", { style: muted, "data-testid": "memory-back-translation" }, "back in ", language, ": ", fields.map((key) => draft.backTranslation[key]).join(" \u2014 ")), /* @__PURE__ */ React.createElement(
+  ), translatable && draft.kind !== "exemplar" && /* @__PURE__ */ React.createElement(React.Fragment, null, draft.kind !== "definition" && /* @__PURE__ */ React.createElement(Input, { label: `Original title (${language})`, value: draft.originalTitle, onChange: setDraftField("originalTitle") }), /* @__PURE__ */ React.createElement(Input, { label: `Original (${language})`, multiline: true, rows: 3, value: draft.originalText, onChange: setDraftField("originalText") }), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", disabled: busy || fields.some((key) => !!TidepoolRules.whyBlank(originalOf[key])), onClick: () => runTranslation(true) }, "Translate")), draft.kind !== "definition" && /* @__PURE__ */ React.createElement(Input, { label: "Title (English)", value: draft.title, onChange: setDraftField("title") }), draft.kind !== "exemplar" && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(Input, { label: "English (saved as the canonical text)", multiline: true, rows: 3, value: draft.text, onChange: setDraftField("text") }), translatable && /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", disabled: busy || fields.some((key) => !!TidepoolRules.whyBlank(draft[key])), onClick: () => runTranslation(false) }, "Back-translate")), draft.backTranslation && /* @__PURE__ */ React.createElement("p", { style: muted, "data-testid": "memory-back-translation" }, "back in ", language, ": ", fields.map((key) => draft.backTranslation[key]).join(" \u2014 ")), /* @__PURE__ */ React.createElement(
     EditActions,
     {
       busy,
@@ -2519,8 +2526,8 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit, fo
         {
           variant: "secondary",
           size: "sm",
-          disabled: busy || !moving.path.trim() || moving.workspace === deadRefs(entry).workspace,
-          onClick: () => move(`/api/settings/memory/entries/${entry.id}/move`, { workspace: moving.workspace || null, path: moving.path.trim() }, `#${entry.id} \u2192 ${moving.path.trim()}`, () => setMoving(null))
+          disabled: busy || !!TidepoolRules.whyBlank(moving.path) || moving.workspace === deadRefs(entry).workspace,
+          onClick: () => move(`/api/settings/memory/entries/${entry.id}/move`, { workspace: moving.workspace || null, path: TidepoolRules.normalizeText(moving.path) }, `#${entry.id} \u2192 ${TidepoolRules.normalizeText(moving.path)}`, () => setMoving(null))
         },
         "Move #",
         entry.id
@@ -2655,10 +2662,10 @@ function TiersCard({ settings, say, onSaved, edit }) {
   const original = tiers[index];
   const others = tiers.filter((tier) => tier.name !== target);
   const isNew = target === "";
-  const renamed = !isNew && draft.name.trim() !== target;
+  const renamed = !isNew && TidepoolRules.normalizeText(draft.name) !== target;
   const edited = !isNew && (draft.description !== original?.description || draft.position !== index);
-  const dirty = isNew ? !!draft.name.trim() || !!draft.description.trim() : renamed || edited;
-  const ok = !!draft.description.trim() && !!draft.name.trim();
+  const dirty = isNew ? !TidepoolRules.whyBlank(draft.name) || !TidepoolRules.whyBlank(draft.description) : renamed || edited;
+  const ok = !TidepoolRules.whyBlank(draft.description) && !TidepoolRules.whyBlank(draft.name);
   useDirtySignal(edit, open, dirty);
   const start = (name) => edit.open(`board:tier:${name}`, () => {
     const at = tiers.findIndex((tier) => tier.name === name);
@@ -2669,7 +2676,7 @@ function TiersCard({ settings, say, onSaved, edit }) {
     setBusy(true);
     try {
       for (const change of changes) await api("/api/settings/execution", change);
-      say("success", done, draft.name.trim());
+      say("success", done, TidepoolRules.normalizeText(draft.name));
       edit.close();
       await onSaved();
     } catch (err) {
@@ -2677,12 +2684,12 @@ function TiersCard({ settings, say, onSaved, edit }) {
     }
     setBusy(false);
   };
-  const save = () => send(isNew ? [{ setting: "insert_tier", name: draft.name.trim(), description: draft.description.trim(), position: draft.position }] : [
-    ...renamed ? [{ setting: "rename_tier", name: target, to: draft.name.trim() }] : [],
+  const save = () => send(isNew ? [{ setting: "insert_tier", name: TidepoolRules.normalizeText(draft.name), description: TidepoolRules.normalizeText(draft.description), position: draft.position }] : [
+    ...renamed ? [{ setting: "rename_tier", name: target, to: TidepoolRules.normalizeText(draft.name) }] : [],
     ...edited ? [{
       setting: "edit_tier",
-      name: draft.name.trim(),
-      ...draft.description !== original?.description && { description: draft.description.trim() },
+      name: TidepoolRules.normalizeText(draft.name),
+      ...draft.description !== original?.description && { description: TidepoolRules.normalizeText(draft.description) },
       ...draft.position !== index && { position: draft.position }
     }] : []
   ], isNew ? "tier added" : "tier saved");
@@ -2732,7 +2739,7 @@ function ExecutionTableCard({ settings, say, onSaved, edit }) {
   const [draft, setDraft] = React.useState(() => asDraft(settings.table));
   const [busy, setBusy] = React.useState(false);
   const current = new Map(settings.table.map((row) => [rowKey(row), row]));
-  const toRow = (d) => ({ provider: d.provider, tier: d.tier, model: d.model.trim(), effort: d.effort.trim(), price_in: Number(d.price_in), price_out: Number(d.price_out) });
+  const toRow = (d) => ({ provider: d.provider, tier: d.tier, model: TidepoolRules.normalizeText(d.model), effort: TidepoolRules.normalizeText(d.effort), price_in: Number(d.price_in), price_out: Number(d.price_out) });
   const same = (a, b) => a && rowKey(a) === rowKey(b) && a.tier === b.tier && a.price_in === b.price_in && a.price_out === b.price_out;
   const writes = draft.filter((d) => !same(current.get(d.key), toRow(d))).map((d) => {
     const original = current.get(d.key);
@@ -2742,7 +2749,7 @@ function ExecutionTableCard({ settings, say, onSaved, edit }) {
   const dirty = writes.length > 0 || deletes.length > 0;
   const validPrice = (v) => /^\d+(\.\d+)?$/.test(v.trim());
   const unique = (of) => new Set(draft.map((d) => of(toRow(d)))).size === draft.length;
-  const ok = draft.every((d) => d.model.trim() && d.effort.trim() && validPrice(d.price_in) && validPrice(d.price_out)) && unique(rowKey) && unique((row) => `${row.provider}:${row.model}:${row.tier}`);
+  const ok = draft.every((d) => !TidepoolRules.whyBlank(d.model) && !TidepoolRules.whyBlank(d.effort) && validPrice(d.price_in) && validPrice(d.price_out)) && unique(rowKey) && unique((row) => `${row.provider}:${row.model}:${row.tier}`);
   useDirtySignal(edit, open, dirty);
   const save = async () => {
     setBusy(true);
@@ -2801,8 +2808,8 @@ function NewWorkspaceForm({ baseDir, say, onCreated, edit }) {
   const [path, setPath] = React.useState("");
   const [notes, setNotes] = React.useState("");
   const [prot, setProt] = React.useState(false);
-  const ok = registryNameOk(name) && (mode === "clone" ? !!repo.trim() : mode === "register" ? !!path.trim() : true);
-  const dirty = mode !== "clone" || !!name.trim() || !!repo.trim() || !!path.trim() || !!notes.trim() || prot;
+  const ok = registryNameOk(name) && (mode === "clone" ? !TidepoolRules.whyBlank(repo) : mode === "register" ? !TidepoolRules.whyBlank(path) : true);
+  const dirty = mode !== "clone" || !TidepoolRules.whyBlank(name) || !TidepoolRules.whyBlank(repo) || !TidepoolRules.whyBlank(path) || !!notes.trim() || prot;
   useDirtySignal(edit, true, dirty);
   const { busy, save, dialog } = useDangerousSave(say, async () => {
     edit.close();
@@ -2828,14 +2835,14 @@ function NewWorkspaceForm({ baseDir, say, onCreated, edit }) {
   const submit = () => save(async (confirm) => {
     await api("/api/workspaces", {
       mode,
-      name: name.trim(),
-      ...mode === "clone" ? { repo: repo.trim() } : {},
-      ...mode === "register" ? { path: path.trim() } : {},
+      name: TidepoolRules.normalizeText(name),
+      ...mode === "clone" ? { repo: TidepoolRules.normalizeText(repo) } : {},
+      ...mode === "register" ? { path: TidepoolRules.normalizeText(path) } : {},
       ...notes.trim() ? { notes: notes.trim() } : {},
       ...prot ? { protected: true } : {},
       ...confirm
     });
-  }, "added", name.trim());
+  }, "added", TidepoolRules.normalizeText(name));
   const modeOptions = [
     { value: "clone", label: "clone a repository" },
     { value: "create", label: "create a new local checkout" },
@@ -2895,8 +2902,8 @@ function NewAgentForm({ authorityProfiles, providerOptions, tiers, advisorCeilin
   const [draft, setDraft] = React.useState(() => ({ ...NEW_AGENT_DRAFT }));
   const set = (key, value) => setDraft((d) => ({ ...d, [key]: value }));
   const [busy, setBusy] = React.useState(false);
-  const ok = registryNameOk(name) && !!draft.description.trim() && !!draft.authority && !!draft.provider;
-  const dirty = !!name.trim() || agentDraftDirty(draft, NEW_AGENT_DRAFT);
+  const ok = registryNameOk(name) && !TidepoolRules.whyBlank(draft.description) && !!draft.authority && !!draft.provider;
+  const dirty = !TidepoolRules.whyBlank(name) || agentDraftDirty(draft, NEW_AGENT_DRAFT);
   useDirtySignal(edit, true, dirty);
   const authorityCreateOptions = [
     { value: "", label: "select authority\u2026" },
@@ -2905,11 +2912,11 @@ function NewAgentForm({ authorityProfiles, providerOptions, tiers, advisorCeilin
   const submit = async () => {
     setBusy(true);
     try {
-      const created = await api("POST /api/agents", { body: { name: name.trim(), ...agentBody(draft) } });
+      const created = await api("POST /api/agents", { body: { name: TidepoolRules.normalizeText(name), ...agentBody(draft) } });
       say(
         "success",
         "agent added \u2014 committed to the registry",
-        created.shadows_built_in ? `${name.trim()} \u2014 shadows the board's built-in agent of the same name` : name.trim()
+        created.shadows_built_in ? `${TidepoolRules.normalizeText(name)} \u2014 shadows the board's built-in agent of the same name` : TidepoolRules.normalizeText(name)
       );
       edit.close();
       await onCreated();
@@ -2960,14 +2967,14 @@ function NewProfileForm({ agentNames, workspaceNames, say, onCreated, edit }) {
     edit.close();
     await onCreated();
   }, "POST /api/profiles 409");
-  const dirty = !!name.trim() || !!guidance.trim() || assignableTo.length > 0 || allowedWorkspaces.length > 0 || !!merge;
+  const dirty = !TidepoolRules.whyBlank(name) || !!guidance.trim() || assignableTo.length > 0 || allowedWorkspaces.length > 0 || !!merge;
   useDirtySignal(edit, true, dirty);
   const submit = () => save(
     async (confirm) => {
-      await api("/api/profiles", { name: name.trim(), guidance, assignable_to: assignableTo, allowed_workspaces: allowedWorkspaces, merge, ...confirm });
+      await api("/api/profiles", { name: TidepoolRules.normalizeText(name), guidance, assignable_to: assignableTo, allowed_workspaces: allowedWorkspaces, merge, ...confirm });
     },
     "created",
-    name.trim()
+    TidepoolRules.normalizeText(name)
   );
   return /* @__PURE__ */ React.createElement(Card, { style: { display: "flex", flexDirection: "column", gap: 14 } }, /* @__PURE__ */ React.createElement("span", { style: settingsCardLabel }, "add an authority profile"), /* @__PURE__ */ React.createElement(
     Input,
@@ -3825,12 +3832,13 @@ function EditTaskDialog({ taskCard, onSaved, onClose, say }) {
   const ruleSubject = { ...fields, type: full.type, parent_id: full.parent_id };
   const showReviewFlag = TidepoolRules.reviewFlagCarriesMeaning(ruleSubject);
   const showReviewBy = TidepoolRules.completionReviewFires(ruleSubject);
+  const blankContent = !issueBacked && [fields.title, fields.purpose, fields.completion_criteria].some((value) => TidepoolRules.whyBlank(value));
   const changed = () => {
     const out = {};
     if (!issueBacked) {
-      if (fields.title !== (full.title ?? "")) out.title = fields.title;
-      if (fields.purpose !== (full.purpose ?? "")) out.purpose = fields.purpose;
-      if (fields.completion_criteria !== (full.completion_criteria ?? "")) out.completion_criteria = fields.completion_criteria;
+      if (fields.title !== (full.title ?? "")) out.title = TidepoolRules.normalizeText(fields.title);
+      if (fields.purpose !== (full.purpose ?? "")) out.purpose = TidepoolRules.normalizeText(fields.purpose);
+      if (fields.completion_criteria !== (full.completion_criteria ?? "")) out.completion_criteria = TidepoolRules.normalizeText(fields.completion_criteria);
       if (fields.workspace !== (full.workspace ?? "")) out.workspace = fields.workspace;
     }
     if (fields.assignee !== (full.raw_assignee ?? "")) out.assignee = fields.assignee;
@@ -3863,7 +3871,7 @@ function EditTaskDialog({ taskCard, onSaved, onClose, say }) {
     }
     setBusy(false);
   };
-  return /* @__PURE__ */ React.createElement("div", { style: { padding: "20px 16px" } }, /* @__PURE__ */ React.createElement("h1", { style: { fontSize: "var(--text-xl)", margin: "0 0 2px" } }, "Edit"), /* @__PURE__ */ React.createElement("p", { style: { fontSize: "var(--text-sm)", color: "var(--text-secondary)", margin: "0 0 16px" } }, issueBacked ? "issue-backed \u2014 content and workspace stay on GitHub, only board-side fields are editable" : "unconsumed fields only \u2014 type and parent link are not editable"), /* @__PURE__ */ React.createElement(Card, { style: { display: "flex", flexDirection: "column", gap: 14 } }, !issueBacked && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(Input, { label: "Title", value: fields.title, onChange: (e) => set("title", e.target.value) }), /* @__PURE__ */ React.createElement(Input, { label: "Purpose", multiline: true, rows: 2, value: fields.purpose, onChange: (e) => set("purpose", e.target.value) }), /* @__PURE__ */ React.createElement(Input, { label: "Completion criteria", multiline: true, rows: 2, value: fields.completion_criteria, onChange: (e) => set("completion_criteria", e.target.value) })), /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: issueBacked ? "1fr" : "1fr 1fr", gap: 12 } }, /* @__PURE__ */ React.createElement(Select, { label: "Assignee", options: withPlaceholder("(default agent)", candidates.assignees), value: fields.assignee, onChange: (e) => set("assignee", e.target.value) }), !issueBacked && /* @__PURE__ */ React.createElement(Select, { label: "Workspace", options: withPlaceholder("(default workspace)", candidates.workspaces), value: fields.workspace, onChange: (e) => set("workspace", e.target.value) })), /* @__PURE__ */ React.createElement(Checkbox, { label: "risk flag \u2014 this task has irreversible external effects", checked: fields.risk_flag, onChange: () => set("risk_flag", !fields.risk_flag) }), showReviewFlag && /* @__PURE__ */ React.createElement(Checkbox, { label: "review flag \u2014 request an on-completion review", checked: fields.review_flag, onChange: () => set("review_flag", !fields.review_flag) }), showReviewBy && /* @__PURE__ */ React.createElement(ReviewerPicker, { candidates, value: fields.review_by, onChange: (v) => set("review_by", v) }), /* @__PURE__ */ React.createElement(Button, { variant: "primary", size: "lg", full: true, disabled: busy, onClick: submit }, "Save changes"), /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "lg", full: true, disabled: busy, onClick: onClose }, "Cancel")));
+  return /* @__PURE__ */ React.createElement("div", { style: { padding: "20px 16px" } }, /* @__PURE__ */ React.createElement("h1", { style: { fontSize: "var(--text-xl)", margin: "0 0 2px" } }, "Edit"), /* @__PURE__ */ React.createElement("p", { style: { fontSize: "var(--text-sm)", color: "var(--text-secondary)", margin: "0 0 16px" } }, issueBacked ? "issue-backed \u2014 content and workspace stay on GitHub, only board-side fields are editable" : "unconsumed fields only \u2014 type and parent link are not editable"), /* @__PURE__ */ React.createElement(Card, { style: { display: "flex", flexDirection: "column", gap: 14 } }, !issueBacked && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(Input, { label: "Title", error: TidepoolRules.whyBlank(fields.title), value: fields.title, onChange: (e) => set("title", e.target.value) }), /* @__PURE__ */ React.createElement(Input, { label: "Purpose", error: TidepoolRules.whyBlank(fields.purpose), multiline: true, rows: 2, value: fields.purpose, onChange: (e) => set("purpose", e.target.value) }), /* @__PURE__ */ React.createElement(Input, { label: "Completion criteria", error: TidepoolRules.whyBlank(fields.completion_criteria), multiline: true, rows: 2, value: fields.completion_criteria, onChange: (e) => set("completion_criteria", e.target.value) })), /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: issueBacked ? "1fr" : "1fr 1fr", gap: 12 } }, /* @__PURE__ */ React.createElement(Select, { label: "Assignee", options: withPlaceholder("(default agent)", candidates.assignees), value: fields.assignee, onChange: (e) => set("assignee", e.target.value) }), !issueBacked && /* @__PURE__ */ React.createElement(Select, { label: "Workspace", options: withPlaceholder("(default workspace)", candidates.workspaces), value: fields.workspace, onChange: (e) => set("workspace", e.target.value) })), /* @__PURE__ */ React.createElement(Checkbox, { label: "risk flag \u2014 this task has irreversible external effects", checked: fields.risk_flag, onChange: () => set("risk_flag", !fields.risk_flag) }), showReviewFlag && /* @__PURE__ */ React.createElement(Checkbox, { label: "review flag \u2014 request an on-completion review", checked: fields.review_flag, onChange: () => set("review_flag", !fields.review_flag) }), showReviewBy && /* @__PURE__ */ React.createElement(ReviewerPicker, { candidates, value: fields.review_by, onChange: (v) => set("review_by", v) }), /* @__PURE__ */ React.createElement(Button, { variant: "primary", size: "lg", full: true, disabled: busy || blankContent, onClick: submit }, "Save changes"), /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "lg", full: true, disabled: busy, onClick: onClose }, "Cancel")));
 }
 function CancelTaskDialog({ task, onCancelled, onClose, say }) {
   const { Button, Card, Input } = window.TidepoolDesignSystem_8a0ead;
@@ -3901,7 +3909,7 @@ function CompleteHumanTaskDialog({ task, onCompleted, onClose, say }) {
   const draft = async () => {
     setDrafting(true);
     try {
-      const d = await api("POST /api/tasks/:id/complete/draft", { params: { id: task.id }, body: { dump: dump.trim() } });
+      const d = await api("POST /api/tasks/:id/complete/draft", { params: { id: task.id }, body: { dump: TidepoolRules.normalizeText(dump) } });
       setFields(Object.fromEntries(HANDOFF_FIELDS.map(([f]) => [f, d[f] ?? ""])));
       setMissing(d.missing);
     } catch (err) {
@@ -3937,7 +3945,7 @@ function CompleteHumanTaskDialog({ task, onCompleted, onClose, say }) {
         onChange: (e) => setDump(e.target.value),
         placeholder: "dump it \u2014 the LLM structures it into the six fields below"
       }
-    ), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "lg", full: true, disabled: !dump.trim() || drafting, onClick: draft }, drafting ? "Drafting\u2026" : "Draft handoff")), /* @__PURE__ */ React.createElement(Card, { style: { display: "flex", flexDirection: "column", gap: 14 } }, HANDOFF_FIELDS.map(([field, label]) => /* @__PURE__ */ React.createElement("div", { key: field }, /* @__PURE__ */ React.createElement(
+    ), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "lg", full: true, disabled: !!TidepoolRules.whyBlank(dump) || drafting, onClick: draft }, drafting ? "Drafting\u2026" : "Draft handoff")), /* @__PURE__ */ React.createElement(Card, { style: { display: "flex", flexDirection: "column", gap: 14 } }, HANDOFF_FIELDS.map(([field, label]) => /* @__PURE__ */ React.createElement("div", { key: field }, /* @__PURE__ */ React.createElement(
       Input,
       {
         label,

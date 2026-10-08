@@ -161,7 +161,7 @@ function TpQuestionItemPicker({ item, value, locked, freeText, onChange, transla
         {locked || !freeText ? null : override
           ? <div style={{ display: 'flex', gap: 6, alignItems: 'flex-end' }}>
               <Input multiline rows={2} placeholder="override answer — free text" value={overrideText} onChange={(e) => setOverrideText(e.target.value)} style={{ flex: 1 }} />
-              <Button variant="secondary" size="sm" disabled={!overrideText.trim()} onClick={() => { onChange(overrideText.trim()); setOverride(false); setOverrideText(''); }}>Set</Button>
+              <Button variant="secondary" size="sm" disabled={!!TidepoolRules.whyBlank(overrideText)} onClick={() => { onChange(TidepoolRules.normalizeText(overrideText)); setOverride(false); setOverrideText(''); }}>Set</Button>
             </div>
           : <button onClick={() => setOverride(true)} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', fontSize: 'var(--text-xs)', cursor: 'pointer', textAlign: 'left', padding: '2px 0' }}>override with free text…</button>}
       </div>
@@ -255,8 +255,8 @@ function TpAddTierAmendment({ proposed, onChange }: {
   }, []);
   React.useEffect(() => {
     const changed: TpAmendment = {};
-    if (draft.name.trim() !== proposed.name) changed.name = draft.name.trim();
-    if (draft.description.trim() !== proposed.description) changed.description = draft.description.trim();
+    if (TidepoolRules.normalizeText(draft.name) !== proposed.name) changed.name = TidepoolRules.normalizeText(draft.name);
+    if (TidepoolRules.normalizeText(draft.description) !== proposed.description) changed.description = TidepoolRules.normalizeText(draft.description);
     if (draft.position !== proposed.position) changed.position = draft.position;
     onChange(changed);
   }, [draft]);
@@ -321,8 +321,8 @@ function TpMemoryAmendment({ candidateId, onTranslate, onChange, onDeadAddressee
   React.useEffect(() => {
     if (!base) return;
     const changed: TpAmendment = {};
-    if (draft.title.trim() !== base.title) changed.title = draft.title.trim();
-    if (draft.text.trim() !== base.text) changed.text = draft.text.trim();
+    if (TidepoolRules.normalizeText(draft.title) !== base.title) changed.title = TidepoolRules.normalizeText(draft.title);
+    if (TidepoolRules.normalizeText(draft.text) !== base.text) changed.text = TidepoolRules.normalizeText(draft.text);
     if (draft.addressee.trim() !== base.addressee) changed.addressee = draft.addressee.trim() || null;
     // 注釈は list ごと送る(ADR 0153 決定2)
     const annotations = annotationsToSend(draft.annotations);
@@ -374,13 +374,13 @@ function TpMemoryAmendment({ candidateId, onTranslate, onChange, onDeadAddressee
         <React.Fragment>
           <Input label="Amend original title (optional)" value={draft.originalTitle} onChange={set('originalTitle')} />
           <Input label="Amend original (optional)" multiline rows={3} value={draft.originalText} onChange={set('originalText')} />
-          <Button variant="secondary" size="sm" disabled={!draft.originalTitle.trim() || !draft.originalText.trim()} onClick={() => translate(true)}>Translate</Button>
+          <Button variant="secondary" size="sm" disabled={!!TidepoolRules.whyBlank(draft.originalTitle) || !!TidepoolRules.whyBlank(draft.originalText)} onClick={() => translate(true)}>Translate</Button>
         </React.Fragment>
       )}
       <Input label="Title (English)" value={draft.title} onChange={set('title')} />
       <Input label="English (approved as the canonical text)" multiline rows={3} value={draft.text} onChange={set('text')} />
       {addressee}
-      {onTranslate && <Button variant="secondary" size="sm" disabled={!draft.title.trim() || !draft.text.trim()} onClick={() => translate(false)}>Back-translate</Button>}
+      {onTranslate && <Button variant="secondary" size="sm" disabled={!!TidepoolRules.whyBlank(draft.title) || !!TidepoolRules.whyBlank(draft.text)} onClick={() => translate(false)}>Back-translate</Button>}
       {back && <p style={{ margin: 0, fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }} data-testid="amendment-back-translation">back: {back}</p>}
       {error && <div style={{ fontSize: 'var(--text-xs)', color: 'var(--coral-4)' }}>{error}</div>}
     </div>
@@ -427,7 +427,7 @@ function TpQuestionCard({ q, answer, onAnswer, locked = false, onTranslate, onOp
   // picked options the board says need a reason (ADR 0179 決定5): pickable, but not submittable while the comment is blank
   const pickedNeedingComment = draft.filter((v) => v && q.needsComment?.includes(v));
   // a pick made before the addressee turned out dead is not submittable either
-  const canSubmit = draft.every(Boolean) && !draft.some((v) => disabledOptions.includes(v!)) && (pickedNeedingComment.length === 0 || !!comment.trim());
+  const canSubmit = draft.every(Boolean) && !draft.some((v) => disabledOptions.includes(v!)) && (pickedNeedingComment.length === 0 || !TidepoolRules.whyBlank(comment));
   // triage marks the card answered only after the POST resolves, so Submit stays pressable until then
   const [submitting, setSubmitting] = React.useState(false);
   const submit = () => {
@@ -542,7 +542,7 @@ function TpScratchpad({ lines, onAdd, onRemove }: {
   const { Button, Input } = window.TidepoolDesignSystem_8a0ead;
   const [open, setOpen] = React.useState(false);
   const [draft, setDraft] = React.useState('');
-  const add = () => { if (draft.trim()) { onAdd(draft.trim()); setDraft(''); } };
+  const add = () => { if (!TidepoolRules.whyBlank(draft)) { onAdd(TidepoolRules.normalizeText(draft)); setDraft(''); } };
   React.useEffect(() => { lucide.createIcons(); });
   // portal: the tab-switch animation's transform hijacks position:fixed inside the app tree
   return ReactDOM.createPortal(
@@ -570,7 +570,7 @@ function TpScratchpad({ lines, onAdd, onRemove }: {
           ))}
           <div style={{ display: 'flex', gap: 6, alignItems: 'flex-end' }}>
             <Input multiline rows={1} placeholder="jot the irritation — triaged at commit" value={draft} onChange={(e) => setDraft(e.target.value)} style={{ flex: 1 }} />
-            <Button variant="secondary" size="sm" disabled={!draft.trim()} onClick={add}>Add</Button>
+            <Button variant="secondary" size="sm" disabled={!!TidepoolRules.whyBlank(draft)} onClick={add}>Add</Button>
           </div>
         </div>
       )}
@@ -1028,7 +1028,7 @@ function TriageScreen({ data, onCommit, loadHandoff, onAnswer, onObject, onScrat
               {objecting === k && (
                 <div style={{ padding: '10px 12px', background: 'var(--coral-1)', display: 'flex', gap: 8, alignItems: 'flex-end' }}>
                   <Input multiline rows={2} placeholder="direction — steering, not rollback" value={draft} onChange={(e) => setDraft(e.target.value)} style={{ flex: 1 }} />
-                  <Button variant="danger" size="sm" disabled={!draft.trim()} onClick={async () => {
+                  <Button variant="danger" size="sm" disabled={!!TidepoolRules.whyBlank(draft)} onClick={async () => {
                     // the annotation is persisted the moment it is raised
                     try { await onObject(l, draft); } catch { return; }
                     setObjections({ ...objections, [k]: [...(objections[k] ?? []), draft] });

@@ -2,14 +2,14 @@ import { parse as parseYaml } from "yaml";
 import { z } from "zod";
 import { ADVISOR_CEILINGS, type AdvisorCeiling, type AdvisorSource, claudeAdvisorFor, isClaudeModelAlias } from "./claude-model-alias.js";
 import type { Db } from "./db.js";
-
 import { DomainError } from "./domain-error.js";
-
 import { appendEvent, type EventOrigin } from "./events.js";
 import { PROVIDER_VALUES, type Provider } from "./provider.js";
 import { openQuarantineQuestions, openQuarantineValues, tableRowValue } from "./quarantine.js";
 import type { AgentDefinition } from "./registry.js";
 import { RegistryFetchFailedError, RegistryPushFailedError } from "./registry-write.js";
+import { normalizeText, whyBlank } from "./required-text.js";
+import { requiredTextSchema } from "./required-text-schema.js";
 import {
   type RegistryProposal,
   type RoutingProposal,
@@ -108,7 +108,7 @@ export function assertTierName(db: Db, name: string): void {
 
 /** 段の説明の線(ADR 0200 決定3): 必須の1行。 */
 export function assertTierDescription(description: string): void {
-  if (description.trim() === "" || /[\r\n]/.test(description)) throw new DomainError("a tier's description is one non-empty line");
+  if (whyBlank(description) || /[\r\n]/.test(normalizeText(description))) throw new DomainError("a tier's description is one non-empty line");
 }
 
 /** 生きている段の id を順序どおりに。 */
@@ -489,7 +489,7 @@ function isProviderRank(rank: readonly string[]): rank is Provider[] {
 }
 
 /** 表の行の鍵 = 主キー (provider, model, effort)(ADR 0200 決定5)。行を名指す面はこの3欄で名指す。 */
-const rowKeySchema = z.object({ provider: z.enum(PROVIDER_VALUES), model: z.string().min(1), effort: z.string().min(1) });
+const rowKeySchema = z.object({ provider: z.enum(PROVIDER_VALUES), model: requiredTextSchema, effort: requiredTextSchema });
 type RowKey = z.infer<typeof rowKeySchema>;
 
 /** 鍵として読める3欄(提案の行・spawn の記録も同じ3欄を持つ)。 */
@@ -514,7 +514,7 @@ export function assertRowFits(table: ExecutionSettingTable, row: ExecutionSettin
 }
 
 /** 足す段の名前・説明・位置。段の挿入と、段を足す提案の修正値が同じ形を通る。 */
-const newTierSchema = z.object({ name: z.string(), description: z.string(), position: z.number().int().nonnegative() });
+const newTierSchema = z.object({ name: requiredTextSchema, description: requiredTextSchema, position: z.number().int().nonnegative() });
 
 /** settings タブ / 管理MCP が撃つ1つの変更(ADR 0110 決定5)。**綴りは1つ** —— /api と
  *  MCP tool が同じ schema を通り、同じ関数が書き、同じ payload が操作イベントになる。
@@ -526,9 +526,9 @@ export const executionSettingsChangeSchema = z.discriminatedUnion("setting", [
     key: rowKeySchema.optional(),
     row: z.object({
       provider: z.enum(PROVIDER_VALUES),
-      tier: z.string().min(1),
-      model: z.string().min(1),
-      effort: z.string().min(1),
+      tier: requiredTextSchema,
+      model: requiredTextSchema,
+      effort: requiredTextSchema,
       price_in: z.number().nonnegative(),
       price_out: z.number().nonnegative(),
     }),
@@ -545,14 +545,14 @@ export const executionSettingsChangeSchema = z.discriminatedUnion("setting", [
   newTierSchema.extend({ setting: z.literal("insert_tier") }),
   z.object({
     setting: z.literal("edit_tier"),
-    name: z.string().min(1),
-    description: z.string().optional(),
+    name: requiredTextSchema,
+    description: requiredTextSchema.optional(),
     position: z.number().int().nonnegative().optional(),
   }).refine((change) => change.description !== undefined || change.position !== undefined, { message: "edit_tier takes description and/or position" }),
-  z.object({ setting: z.literal("rename_tier"), name: z.string().min(1), to: z.string() }),
-  z.object({ setting: z.literal("delete_tier"), name: z.string().min(1) }),
-  z.object({ setting: z.literal("default_tier"), value: z.string().min(1) }),
-  z.object({ setting: z.literal("judgement_tier"), value: z.string().min(1) }),
+  z.object({ setting: z.literal("rename_tier"), name: requiredTextSchema, to: requiredTextSchema }),
+  z.object({ setting: z.literal("delete_tier"), name: requiredTextSchema }),
+  z.object({ setting: z.literal("default_tier"), value: requiredTextSchema }),
+  z.object({ setting: z.literal("judgement_tier"), value: requiredTextSchema }),
   // 扉は降格だけを受ける。昇格は承認の適用が schema を通さず書く(ADR 0150 決定4)。
   // 拒否文は盤面のコードが発する文なので、ADR の引用は文でなくここに置く(ADR 0207)
   z.object({
@@ -566,7 +566,7 @@ export type ExecutionSettingsChange = z.infer<typeof executionSettingsChangeSche
 
 /** 行の提案の変更と、承認に添える修正値の形(ADR 0150 決定2): 動かせるのは分類と effort だけ。 */
 const routingRowChangeSchema = z
-  .object({ tier: z.string().min(1), effort: z.string().min(1) })
+  .object({ tier: requiredTextSchema, effort: requiredTextSchema })
   .partial()
   .strict()
   .refine((change) => Object.keys(change).length > 0, { message: "name at least one of tier / effort" });
@@ -664,7 +664,7 @@ export function assertTierRunnableFor(db: Db, agent: string, providers: readonly
 
 /** tier の提案の修正値の検査(ADR 0150 決定2): `to` だけで、pin の tier より下の任意のティア(段の順序は盤面の一覧)。 */
 export function parseAgentTierAmendment(tiers: readonly Tier[], proposal: RegistryProposal<Tier>, amendment: unknown): Tier {
-  const parsed = z.object({ to: z.string() }).strict().safeParse(amendment);
+  const parsed = z.object({ to: requiredTextSchema }).strict().safeParse(amendment);
   if (!parsed.success || !tiers.includes(parsed.data.to) || tiers.indexOf(parsed.data.to) >= tiers.indexOf(proposal.pin.tier)) {
     throw new DomainError(`an agent tier amendment takes only to, a tier below ${proposal.pin.tier}`);
   }
@@ -673,7 +673,7 @@ export function parseAgentTierAmendment(tiers: readonly Tier[], proposal: Regist
 
 /** 段の説明の提案の修正値の検査(ADR 0200 決定7): `description` だけで、段の説明の線に収まる文面。 */
 export function parseTierDescriptionAmendment(amendment: unknown): string {
-  const parsed = z.object({ description: z.string() }).strict().safeParse(amendment);
+  const parsed = z.object({ description: requiredTextSchema }).strict().safeParse(amendment);
   if (!parsed.success) throw new DomainError("a tier description amendment takes only description");
   assertTierDescription(parsed.data.description);
   return parsed.data.description;
@@ -691,6 +691,9 @@ export function applyExecutionSettingsChange(
   questionId?: string,
   listAgents?: ListAgentTiers,
 ): number | null {
+  if ((change.setting === "insert_tier" || change.setting === "edit_tier") && change.description !== undefined) {
+    change = { ...change, description: normalizeText(change.description) };
+  }
   return db.transaction(() => {
     switch (change.setting) {
       case "row": {

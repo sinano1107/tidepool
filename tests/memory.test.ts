@@ -104,7 +104,7 @@ it.each([
   ["path が空", { path: "", source: { commit: "0a46a46" } }, /path/],
   ["path に空の段", { path: "build//tests", source: { commit: "0a46a46" } }, /path/],
   ["path が / で始まる", { path: "/build", source: { commit: "0a46a46" } }, /path/],
-  ["path の段の前後に空白", { path: " build/tests", source: { commit: "0a46a46" } }, /path/],
+  ["path の段の前後に空白", { path: "build/ tests", source: { commit: "0a46a46" } }, /path/],
   ["title が空白だけ", { title: " ", source: { commit: "0a46a46" } }, /title and text/],
   ["text が空", { text: "", source: { commit: "0a46a46" } }, /title and text/],
 ])("%s Knowledge は domain error で拒まれ、何も載らない", (_, overrides, message) => {
@@ -2027,4 +2027,11 @@ it("watermark 再生と rebuild は記録済みの event を写すだけで門�
 it("記憶 verb のスコープは task の workspace、task に無ければ盤面の workspace を継ぐ(issue #1101)", () => {
   expect(memoryScope({ workspace: { name: "tidepool" } }, { workspace: null })).toBe("tidepool");
   expect(memoryScope({ workspace: { name: "tidepool" } }, { workspace: "charts" })).toBe("charts");
+});
+
+
+it("memory trims outer path and required content while preserving internal segment rules", () => {
+  const { db } = board();
+  recordKnowledge(db, { ...knowledge, path: " build/tests ", title: " title ", text: " text\n", source: { commit: "0a46a46" } }, "worker", at);
+  expect(approvedMemoryEntries(db)[0]).toMatchObject({ path: "build/tests", title: "title", text: "text" });
 });

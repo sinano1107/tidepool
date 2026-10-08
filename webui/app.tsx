@@ -625,12 +625,13 @@ function EditTaskDialog({ taskCard, onSaved, onClose, say }: {
   const showReviewBy = TidepoolRules.completionReviewFires(ruleSubject);
   // only the fields that actually changed — an unchanged submission is a no-op
   // server-side, but sending a minimal patch keeps the intent clear
+  const blankContent = !issueBacked && [fields.title, fields.purpose, fields.completion_criteria].some((value) => TidepoolRules.whyBlank(value));
   const changed = () => {
     const out: Partial<EditTaskFields> = {};
     if (!issueBacked) {
-      if (fields.title !== (full.title ?? '')) out.title = fields.title;
-      if (fields.purpose !== (full.purpose ?? '')) out.purpose = fields.purpose;
-      if (fields.completion_criteria !== (full.completion_criteria ?? '')) out.completion_criteria = fields.completion_criteria;
+      if (fields.title !== (full.title ?? '')) out.title = TidepoolRules.normalizeText(fields.title);
+      if (fields.purpose !== (full.purpose ?? '')) out.purpose = TidepoolRules.normalizeText(fields.purpose);
+      if (fields.completion_criteria !== (full.completion_criteria ?? '')) out.completion_criteria = TidepoolRules.normalizeText(fields.completion_criteria);
       if (fields.workspace !== (full.workspace ?? '')) out.workspace = fields.workspace;
     }
     if (fields.assignee !== (full.raw_assignee ?? '')) out.assignee = fields.assignee;
@@ -673,9 +674,9 @@ function EditTaskDialog({ taskCard, onSaved, onClose, say }: {
       <Card style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
         {!issueBacked && (
           <React.Fragment>
-            <Input label="Title" value={fields.title} onChange={(e) => set('title', e.target.value)} />
-            <Input label="Purpose" multiline rows={2} value={fields.purpose} onChange={(e) => set('purpose', e.target.value)} />
-            <Input label="Completion criteria" multiline rows={2} value={fields.completion_criteria} onChange={(e) => set('completion_criteria', e.target.value)} />
+            <Input label="Title" error={TidepoolRules.whyBlank(fields.title)} value={fields.title} onChange={(e) => set('title', e.target.value)} />
+            <Input label="Purpose" error={TidepoolRules.whyBlank(fields.purpose)} multiline rows={2} value={fields.purpose} onChange={(e) => set('purpose', e.target.value)} />
+            <Input label="Completion criteria" error={TidepoolRules.whyBlank(fields.completion_criteria)} multiline rows={2} value={fields.completion_criteria} onChange={(e) => set('completion_criteria', e.target.value)} />
           </React.Fragment>
         )}
         <div style={{ display: 'grid', gridTemplateColumns: issueBacked ? '1fr' : '1fr 1fr', gap: 12 }}>
@@ -689,7 +690,7 @@ function EditTaskDialog({ taskCard, onSaved, onClose, say }: {
           <Checkbox label="review flag — request an on-completion review" checked={fields.review_flag} onChange={() => set('review_flag', !fields.review_flag)} />
         )}
         {showReviewBy && <ReviewerPicker candidates={candidates} value={fields.review_by} onChange={(v) => set('review_by', v)} />}
-        <Button variant="primary" size="lg" full disabled={busy} onClick={submit}>Save changes</Button>
+        <Button variant="primary" size="lg" full disabled={busy || blankContent} onClick={submit}>Save changes</Button>
         <Button variant="ghost" size="lg" full disabled={busy} onClick={onClose}>Cancel</Button>
       </Card>
     </div>
@@ -769,7 +770,7 @@ function CompleteHumanTaskDialog({ task, onCompleted, onClose, say }: {
   const draft = async () => {
     setDrafting(true);
     try {
-      const d = await api('POST /api/tasks/:id/complete/draft', { params: { id: task.id }, body: { dump: dump.trim() } });
+      const d = await api('POST /api/tasks/:id/complete/draft', { params: { id: task.id }, body: { dump: TidepoolRules.normalizeText(dump) } });
       setFields(Object.fromEntries(HANDOFF_FIELDS.map(([f]) => [f, d[f] ?? ''])));
       setMissing(d.missing);
     } catch (err) {
@@ -803,7 +804,7 @@ function CompleteHumanTaskDialog({ task, onCompleted, onClose, say }: {
       <Card style={{ display: 'flex', flexDirection: 'column', gap: 14, marginBottom: 14 }}>
         <Input label="How did it go?" multiline rows={3} value={dump} onChange={(e) => setDump(e.target.value)}
           placeholder="dump it — the LLM structures it into the six fields below" />
-        <Button variant="secondary" size="lg" full disabled={!dump.trim() || drafting} onClick={draft}>
+        <Button variant="secondary" size="lg" full disabled={!!TidepoolRules.whyBlank(dump) || drafting} onClick={draft}>
           {drafting ? 'Drafting…' : 'Draft handoff'}
         </Button>
       </Card>
