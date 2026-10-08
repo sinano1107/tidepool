@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { CODEX_FEATURE_SNAPSHOT, CodexWorker, resolveCodexExecutable } from "../src/codex-worker.js";
 import { openDb } from "../src/db.js";
 import { appendEvent, listEvents } from "../src/events.js";
-import { resolveExecutionSetting } from "../src/execution-setting.js";
+import { executionSettingsFor } from "../src/execution-setting.js";
 import { buildMemoryInjection, buildMetaReviewMaterial, type InjectionQuery, recordKnowledge } from "../src/memory.js";
 import { registerMetaReview } from "../src/meta-review.js";
 import type { ContainerSpawn } from "../src/process-container.js";
@@ -116,7 +116,7 @@ You are the Codex worker.`,
   });
   // scheduler が pickup の瞬間に選ぶ実行設定(除外なし)を渡す
   const agent = loadRegistry(registry, "purely-local").agents["codex-agent"]!;
-  const start = (value: Task, query?: InjectionQuery) => worker.start(value, resolveExecutionSetting(db, agent, value)!, query);
+  const start = (value: Task, query?: InjectionQuery) => worker.start(value, executionSettingsFor(db, agent, value)[0]!, query);
   return { db, worker, start, process, clock, codexHome, codexSystemDir, workspace, logDir, registry };
 }
 

@@ -1,4 +1,5 @@
 export { whyInvalidClockTime } from "./clock-time.js";
+export { EFFORT_LEVELS, whyInvalidEffort } from "./effort.js";
 export { whyInvalidOffset } from "./pace-offset-rule.js";
 export { whyNotPositiveInteger } from "./positive-integer.js";
 export { whyInvalidPrice } from "./price.js";

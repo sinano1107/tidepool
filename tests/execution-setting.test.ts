@@ -2,6 +2,7 @@ import { expect, it, vi } from "vitest";
 import { type AdvisorCeiling, isClaudeModelAlias } from "../src/claude-model-alias.js";
 import { type Db, openDb } from "../src/db.js";
 import { DomainError } from "../src/domain-error.js";
+import { whyInvalidEffort } from "../src/effort.js";
 import { listEventsOfKinds } from "../src/events.js";
 import {
   applyExecutionSettingsChange,
@@ -19,7 +20,6 @@ import {
   parseRoutingRowChange,
   readExecutionSettings,
   registryPinChanges,
-  resolveExecutionSetting,
   routingPinChanges,
   SEED_EXECUTION_SETTINGS,
   type SelectorInput,
@@ -34,7 +34,7 @@ import { registerQuarantine, tableRowValue } from "../src/quarantine.js";
 import { assertValidAgentDefinition } from "../src/registry.js";
 import { RegistryPushFailedError } from "../src/registry-write.js";
 import { proposeRoutingChange } from "../src/routing-review.js";
-import { cancelTaskDirectly, getTask, type RegistryProposal, type RoutingProposal, type RoutingRowProposal, registerTask, type TierDescriptionProposal } from "../src/tasks.js";
+import { cancelTaskDirectly, getTask, listChildren, type RegistryProposal, type RoutingProposal, type RoutingRowProposal, registerTask, type TierDescriptionProposal } from "../src/tasks.js";
 import { boardCallRow, reportProviderUsage } from "../src/throttle.js";
 import { assertKnownTier, PRIORITIES, readTiers, SEED_TIERS, type Tier, tierNames } from "../src/tier.js";
 import { unusedLanding } from "./fakes.js";
@@ -77,6 +77,8 @@ it("新しい盤面は種の3段を説明つきで持ち、読み口が順序ど
 
 it("種の表は `/implementation-delegation` の表と同じ7行 — anthropic も openai も具体 id 行で、anthropic の行は alias の拒否一覧に当たらない、moonshot は kimi-k3 を economy に1行(ADR 0114: 価格は USD per MTok / ADR 0182 決定1)", () => {
   expect(SEED_EXECUTION_SETTINGS.filter((row) => row.provider === "anthropic" && isClaudeModelAlias(row.model))).toEqual([]);
+  // 種は扉を通らずに入るので、effort が語彙の中にあることはここで刺す(ADR 0216 決定4)
+  expect(SEED_EXECUTION_SETTINGS.filter((row) => whyInvalidEffort(row.effort))).toEqual([]);
   expect(SEED_EXECUTION_SETTINGS).toEqual([
     { provider: "anthropic", tier: "economy", model: "claude-sonnet-5-5", effort: "high", price_in: 2, price_out: 10 },
     { provider: "anthropic", tier: "standard", model: "claude-opus-5-5", effort: "high", price_in: 5, price_out: 25 },
@@ -86,6 +88,11 @@ it("種の表は `/implementation-delegation` の表と同じ7行 — anthropic 
     { provider: "openai", tier: "standard", model: "gpt-5.6-sol", effort: "high", price_in: 4, price_out: 20 },
     { provider: "openai", tier: "frontier", model: "gpt-6-astra", effort: "high", price_in: 10, price_out: 50 },
   ]);
+});
+
+it("effort の語彙は low / medium / high / xhigh / max の閉じた5値で、それ以外は5値を挙げて拒む(ADR 0216 決定1・2)", () => {
+  for (const effort of ["low", "medium", "high", "xhigh", "max"]) expect(whyInvalidEffort(effort)).toBeUndefined();
+  for (const effort of ["ultra", "minimal", "none", "bogus", "High", ""]) expect(whyInvalidEffort(effort)).toBe("effort must be one of low / medium / high / xhigh / max");
 });
 
 it("tier を書かない agent は盤面既定のティアで解決され、出所は board", () => {
@@ -847,8 +854,8 @@ const opusRows = (db: ReturnType<typeof openDb>) => readExecutionSettings(db).ta
 
 it("同じ model を effort 違いで別の段に2行置け、それぞれの段の要求でその行が選ばれる", () => {
   const db = boardWithOpusMax();
-  expect(resolveExecutionSetting(db, anthropicAgent(false), workAt("standard"))).toMatchObject({ model: "claude-opus-5-5", effort: "high" });
-  expect(resolveExecutionSetting(db, anthropicAgent(false), workAt("frontier"))).toMatchObject({ model: "claude-opus-5-5", effort: "max" });
+  expect(executionSettingsFor(db, anthropicAgent(false), workAt("standard"))[0]).toMatchObject({ model: "claude-opus-5-5", effort: "high" });
+  expect(executionSettingsFor(db, anthropicAgent(false), workAt("frontier"))[0]).toMatchObject({ model: "claude-opus-5-5", effort: "max" });
 });
 
 it("行を書く扉は、同じ段に同じ model の2行目と、同じ (model, effort) の2行目の追加を拒み、表は変わらない", () => {
@@ -857,6 +864,26 @@ it("行を書く扉は、同じ段に同じ model の2行目と、同じ (model,
   expect(() => add({ ...opusRow, effort: "max" })).toThrow(/one row per model/);
   expect(() => add({ ...opusRow, tier: "frontier" })).toThrow(/belongs to one tier/);
   expect(opusRows(db)).toEqual([opusRow]);
+});
+
+it("行を書く扉は、どの provider の行でも語彙の外の effort を拒んで表を変えず、5値は通す(ADR 0216 決定3)", () => {
+  const seedOf = (provider: Provider) => SEED_EXECUTION_SETTINGS.find((row) => row.provider === provider)!;
+  const writeEffort = (db: Db, provider: Provider, effort: string) => {
+    const row = seedOf(provider);
+    applyExecutionSettingsChange(db, { setting: "row", key: { provider, model: row.model, effort: row.effort }, row: { ...row, effort } }, "webui", new Date());
+  };
+  for (const provider of ["anthropic", "moonshot", "openai"] as const) {
+    const db = openDb(":memory:");
+    for (const effort of ["ultra", "minimal", "bogus"]) {
+      expect(() => writeEffort(db, provider, effort)).toThrow(DomainError);
+    }
+    expect(readExecutionSettings(db).table).toEqual(readExecutionSettings(openDb(":memory:")).table);
+    for (const effort of ["low", "medium", "high", "xhigh", "max"]) {
+      const fresh = openDb(":memory:");
+      writeEffort(fresh, provider, effort);
+      expect(readExecutionSettings(fresh).table).toContainEqual({ ...seedOf(provider), effort });
+    }
+  }
 });
 
 it("鍵つきの編集は名指した行が無ければ、また effort / tier の書き換えが別の行と衝突すれば拒まれ、表は変わらない", () => {
@@ -900,6 +927,21 @@ it("提案は合成した行が別の行と衝突すれば立たず、承認は�
   expect(() => proposeOnOpus(db, "max", { tier: "standard" })).toThrow(DomainError);
   const { question_id, answer } = proposeOnOpus(db, "max", { effort: "low" });
   await expect(answer({ effort: "high" })).rejects.toThrow(DomainError);
+  expect(getTask(db, question_id)).toMatchObject({ status: "todo" });
+  expect(opusRows(db)).toEqual([opusRow, opusMax]);
+});
+
+it("語彙の外の effort への行の提案は作る時点で拒まれ、question は立たない(ADR 0216 決定3)", () => {
+  const db = boardWithOpusMax();
+  expect(() => proposeOnOpus(db, "max", { effort: "ultra" })).toThrow(DomainError);
+  const review = (db.prepare("SELECT id FROM tasks WHERE meta_review_subject = 'routing'").get() as { id: string }).id;
+  expect(listChildren(db, review)).toEqual([]);
+});
+
+it("承認に添える語彙の外の effort の修正値は拒まれ、行は変わらず question は open のまま(ADR 0216 決定3)", async () => {
+  const db = boardWithOpusMax();
+  const { question_id, answer } = proposeOnOpus(db, "max", { effort: "xhigh" });
+  await expect(answer({ effort: "ultra" })).rejects.toThrow(DomainError);
   expect(getTask(db, question_id)).toMatchObject({ status: "todo" });
   expect(opusRows(db)).toEqual([opusRow, opusMax]);
 });
@@ -1023,7 +1065,7 @@ it("盤面既定の段を選び直すと、要求も agent の tier も無い ta
   const db = openDb(":memory:");
   change(db, { setting: "default_tier", value: "standard" });
   expect(readExecutionSettings(db).defaultTier).toBe("standard");
-  expect(resolveExecutionSetting(db, anthropicAgent(false), { type: "work", tier: null, priority: null, review_tier: null })).toMatchObject({
+  expect(executionSettingsFor(db, anthropicAgent(false), { type: "work", tier: null, priority: null, review_tier: null })[0]).toMatchObject({
     model: "claude-opus-5-5",
     source: { tier: "board" },
   });
@@ -1050,11 +1092,11 @@ it("review task は review_tier の有無によらず review 用の既定で並�
   const db = openDb(":memory:");
   change(db, { setting: "priority", value: "cost" });
   for (const task of reviewTasks) {
-    expect(resolveExecutionSetting(db, twoProviderAgent, task)).toMatchObject({ model: "claude-opus-5-5", source: { provider: "rank" } });
+    expect(executionSettingsFor(db, twoProviderAgent, task)[0]).toMatchObject({ model: "claude-opus-5-5", source: { provider: "rank" } });
   }
   change(db, { setting: "review_priority", value: "cost" });
   for (const task of reviewTasks) {
-    expect(resolveExecutionSetting(db, twoProviderAgent, task)).toMatchObject({ model: "gpt-5.6-sol", source: { provider: "cost" } });
+    expect(executionSettingsFor(db, twoProviderAgent, task)[0]).toMatchObject({ model: "gpt-5.6-sol", source: { provider: "cost" } });
   }
 });
 
@@ -1062,11 +1104,11 @@ it("work task は task の priority → work 用の既定で並び、review 用�
   const db = openDb(":memory:");
   change(db, { setting: "review_priority", value: "cost" });
   const work = (priority: "quality" | "cost" | null) => ({ type: "work" as const, tier: null, priority, review_tier: null });
-  expect(resolveExecutionSetting(db, twoProviderAgent, work(null))).toMatchObject({ model: "claude-opus-5-5" });
-  expect(resolveExecutionSetting(db, twoProviderAgent, work("cost"))).toMatchObject({ model: "gpt-5.6-sol" });
+  expect(executionSettingsFor(db, twoProviderAgent, work(null))[0]).toMatchObject({ model: "claude-opus-5-5" });
+  expect(executionSettingsFor(db, twoProviderAgent, work("cost"))[0]).toMatchObject({ model: "gpt-5.6-sol" });
   change(db, { setting: "priority", value: "cost" });
-  expect(resolveExecutionSetting(db, twoProviderAgent, work(null))).toMatchObject({ model: "gpt-5.6-sol" });
-  expect(resolveExecutionSetting(db, twoProviderAgent, work("quality"))).toMatchObject({ model: "claude-opus-5-5" });
+  expect(executionSettingsFor(db, twoProviderAgent, work(null))[0]).toMatchObject({ model: "gpt-5.6-sol" });
+  expect(executionSettingsFor(db, twoProviderAgent, work("quality"))[0]).toMatchObject({ model: "claude-opus-5-5" });
 });
 
 it("挿入した段の名前を書いた agent.md の tier は定義の検査を通る", () => {

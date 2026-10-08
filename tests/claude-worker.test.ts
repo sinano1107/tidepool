@@ -18,7 +18,7 @@ import {
 import { type Db, openDb } from "../src/db.js";
 import { DEFAULT_AUDITOR_NAME } from "../src/defaults.js";
 import { appendEvent, type EventPayload, listEvents } from "../src/events.js";
-import { applyExecutionSettingsChange, resolveExecutionSetting } from "../src/execution-setting.js";
+import { applyExecutionSettingsChange, executionSettingsFor } from "../src/execution-setting.js";
 import { BOARD_WRITE_LANGUAGE_RULE } from "../src/mcp.js";
 import { buildMemoryInjection, buildMetaReviewMaterial, type InjectionQuery, recordKnowledge } from "../src/memory.js";
 import { registerMetaReview } from "../src/meta-review.js";
@@ -144,7 +144,7 @@ function pickedSetting(
   const loaded = loadedRegistries.get(key) ?? loadRegistry(registry.dir, registry.mode);
   loadedRegistries.set(key, loaded);
   const { agents } = loaded;
-  return resolveExecutionSetting(db, (agents[resolveTaskAgent(task, agent, auditorName)] ?? agents[agent])!, task)!;
+  return executionSettingsFor(db, (agents[resolveTaskAgent(task, agent, auditorName)] ?? agents[agent])!, task)[0]!;
 }
 
 /** A git runner pinned to the registry fixture clone, identity flags inlined
@@ -1879,52 +1879,6 @@ describe("ClaudeCodeWorker", () => {
     start();
     expect(calls[0]!.args.join(" ")).toContain("--model claude-opus-5");
     expect(calls[0]!.args.join(" ")).toContain("--effort max");
-  });
-
-  it("未知の effort 値は boot 時のコンストラクタで即座に失敗する(ADR 0005: CLI 側で閉じた集合はここで検証する — 値の出所が表になっても検査の場所は adapter のまま)", async () => {
-    const registryDir = await makeRegistry();
-    const db = openDb(":memory:");
-    db.prepare(
-      "UPDATE execution_settings SET effort = 'super-fast' WHERE provider = 'anthropic' AND tier_id = (SELECT id FROM tiers WHERE name = 'economy')",
-    ).run();
-    const logDir = await tempDir("tidepool-worker-logs-");
-    expect(
-      () =>
-        new ClaudeCodeWorker({
-          db,
-          clock: new FakeClock(),
-          registry: { dir: registryDir, mode: "purely-local" },
-          agent: "deckhand",
-          workspace: "tidepool",
-          mcpUrl: "http://127.0.0.1:4589/mcp",
-          logDir,
-          transcripts: new TranscriptStore(logDir),
-          ...containerHarness(passthroughContainers(recordingSpawn().spawn)),
-        }),
-    ).toThrow(/unknown effort level/);
-  });
-
-  it("effort: ultracode は未知の effort 値として reject される(CLI --effort の閉じた5値に無く、xhigh+workflow orchestration への迂回路にならない・issue #31)", async () => {
-    const registryDir = await makeRegistry();
-    const db = openDb(":memory:");
-    db.prepare(
-      "UPDATE execution_settings SET effort = 'ultracode' WHERE provider = 'anthropic' AND tier_id = (SELECT id FROM tiers WHERE name = 'economy')",
-    ).run();
-    const logDir = await tempDir("tidepool-worker-logs-");
-    expect(
-      () =>
-        new ClaudeCodeWorker({
-          db,
-          clock: new FakeClock(),
-          registry: { dir: registryDir, mode: "purely-local" },
-          agent: "deckhand",
-          workspace: "tidepool",
-          mcpUrl: "http://127.0.0.1:4589/mcp",
-          logDir,
-          transcripts: new TranscriptStore(logDir),
-          ...containerHarness(passthroughContainers(recordingSpawn().spawn)),
-        }),
-    ).toThrow(/unknown effort level/);
   });
 
   it("設定ミス(未知の workspace 名)は boot 時のコンストラクタで即座に失敗する", async () => {

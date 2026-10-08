@@ -20,6 +20,7 @@ var TidepoolRules = (() => {
   // src/webui-rules.ts
   var webui_rules_exports = {};
   __export(webui_rules_exports, {
+    EFFORT_LEVELS: () => EFFORT_LEVELS,
     completionReviewFires: () => completionReviewFires,
     isSettled: () => isSettled,
     normalizeText: () => normalizeText,
@@ -27,6 +28,7 @@ var TidepoolRules = (() => {
     whyBlank: () => whyBlank,
     whyExecutionRequestIsInert: () => whyExecutionRequestIsInert,
     whyInvalidClockTime: () => whyInvalidClockTime,
+    whyInvalidEffort: () => whyInvalidEffort,
     whyInvalidOffset: () => whyInvalidOffset,
     whyInvalidPrice: () => whyInvalidPrice,
     whyInvalidProviderRank: () => whyInvalidProviderRank,
@@ -40,6 +42,12 @@ var TidepoolRules = (() => {
   // src/clock-time.ts
   function whyInvalidClockTime(value) {
     return /^(?:[01]\d|2[0-3]):[0-5]\d$/.test(value) ? void 0 : "time must be HH:MM between 00:00 and 23:59";
+  }
+
+  // src/effort.ts
+  var EFFORT_LEVELS = ["low", "medium", "high", "xhigh", "max"];
+  function whyInvalidEffort(effort) {
+    return EFFORT_LEVELS.includes(effort) ? void 0 : `effort must be one of ${EFFORT_LEVELS.join(" / ")}`;
   }
 
   // src/pace-offset-rule.ts
@@ -2825,7 +2833,7 @@ function ExecutionTableCard({ settings, say, onSaved, edit }) {
   const [draft, setDraft] = React.useState(() => asDraft(settings.table));
   const [busy, setBusy] = React.useState(false);
   const current = new Map(settings.table.map((row) => [rowKey(row), row]));
-  const toRow = (d) => ({ provider: d.provider, tier: d.tier, model: TidepoolRules.normalizeText(d.model), effort: TidepoolRules.normalizeText(d.effort), price_in: readNumericDraft(d.price_in), price_out: readNumericDraft(d.price_out) });
+  const toRow = (d) => ({ provider: d.provider, tier: d.tier, model: TidepoolRules.normalizeText(d.model), effort: d.effort, price_in: readNumericDraft(d.price_in), price_out: readNumericDraft(d.price_out) });
   const same = (a, b) => a && rowKey(a) === rowKey(b) && a.tier === b.tier && a.price_in === b.price_in && a.price_out === b.price_out;
   const writes = draft.filter((d) => !same(current.get(d.key), toRow(d))).map((d) => {
     const original = current.get(d.key);
@@ -2834,7 +2842,7 @@ function ExecutionTableCard({ settings, say, onSaved, edit }) {
   const deletes = [...current.values()].filter((row) => !draft.some((d) => d.key === rowKey(row)));
   const dirty = writes.length > 0 || deletes.length > 0;
   const unique = (of) => new Set(draft.map((d) => of(toRow(d)))).size === draft.length;
-  const ok = draft.every((d) => !TidepoolRules.whyBlank(d.model) && !TidepoolRules.whyBlank(d.effort) && !TidepoolRules.whyInvalidPrice(readNumericDraft(d.price_in)) && !TidepoolRules.whyInvalidPrice(readNumericDraft(d.price_out))) && unique(rowKey) && unique((row) => `${row.provider}:${row.model}:${row.tier}`);
+  const ok = draft.every((d) => !TidepoolRules.whyBlank(d.model) && !TidepoolRules.whyInvalidPrice(readNumericDraft(d.price_in)) && !TidepoolRules.whyInvalidPrice(readNumericDraft(d.price_out))) && unique(rowKey) && unique((row) => `${row.provider}:${row.model}:${row.tier}`);
   useDirtySignal(edit, open, dirty);
   const save = async () => {
     setBusy(true);
@@ -2869,7 +2877,7 @@ function ExecutionTableCard({ settings, say, onSaved, edit }) {
     /* @__PURE__ */ React.createElement(Select, { label: "Provider", options: settings.providers.map((p) => p.value), value: d.provider, onChange: (e) => update(i, { provider: e.target.value }) }),
     /* @__PURE__ */ React.createElement(Select, { label: "Tier", options: settings.tiers.map((tier) => tier.name), value: d.tier, onChange: (e) => update(i, { tier: e.target.value }) }),
     /* @__PURE__ */ React.createElement(Input, { label: "Model", mono: true, value: d.model, onChange: (e) => update(i, { model: e.target.value }), placeholder: "concrete model id \u2014 e.g. claude-opus-5-5" }),
-    /* @__PURE__ */ React.createElement(Input, { label: "Effort", mono: true, value: d.effort, onChange: (e) => update(i, { effort: e.target.value }), placeholder: "high" }),
+    /* @__PURE__ */ React.createElement(Select, { label: "Effort", options: [...TidepoolRules.EFFORT_LEVELS], value: d.effort, onChange: (e) => update(i, { effort: e.target.value }) }),
     /* @__PURE__ */ React.createElement(Input, { label: "Price in", error: TidepoolRules.whyInvalidPrice(readNumericDraft(d.price_in)), mono: true, value: d.price_in, onChange: (e) => update(i, { price_in: e.target.value }), placeholder: "USD / MTok" }),
     /* @__PURE__ */ React.createElement(Input, { label: "Price out", error: TidepoolRules.whyInvalidPrice(readNumericDraft(d.price_out)), mono: true, value: d.price_out, onChange: (e) => update(i, { price_out: e.target.value }), placeholder: "USD / MTok" }),
     /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "sm", onClick: () => setDraft(draft.filter((_, j) => j !== i)), "aria-label": `remove ${d.provider} ${d.tier} ${d.model}`.trim() }, "Remove")

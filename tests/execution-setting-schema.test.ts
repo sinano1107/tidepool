@@ -1,10 +1,10 @@
 import { join } from "node:path";
 import { expect, it } from "vitest";
 import { openDb } from "../src/db.js";
-import { resolveExecutionSetting, SEED_EXECUTION_SETTINGS } from "../src/execution-setting.js";
+import { executionSettingsFor, SEED_EXECUTION_SETTINGS } from "../src/execution-setting.js";
 import { tempDir } from "./temp-dir.js";
 
-/** 表を読む口は production の呼び手(`resolveExecutionSetting`)しかない
+/** 表を読む口は production の呼び手(`executionSettingsFor`)しかない
  *  (ADR 0107 決定5)。schema 層のテストは行を SQL で直に言い、読めていることは
  *  その呼び手を通して確かめる。行は段を id で指すので(ADR 0200 決定2)、SQL は段の名前を tiers から引く。 */
 const tierId = (name: string) => `(SELECT id FROM tiers WHERE name = '${name}')`;
@@ -30,7 +30,7 @@ it("実行設定の表は種の7行から DB へ初期化される —— 価格
   expect(db.prepare("SELECT t.name AS tier FROM execution_settings JOIN tiers t ON t.id = tier_id WHERE provider = 'moonshot'").all()).toEqual([
     { tier: "economy" },
   ]);
-  expect(resolveExecutionSetting(db, deckhand, undefined)).toMatchObject({ model: "claude-sonnet-5-5", effort: "high" });
+  expect(executionSettingsFor(db, deckhand, undefined)[0]).toMatchObject({ model: "claude-sonnet-5-5", effort: "high" });
   db.close();
 });
 
@@ -92,8 +92,8 @@ it("advisor の上限の既定は off(未設定の盤面では advisor を有効
   const path = await boardPath("advisor-ceiling-default");
   const db = openDb(path);
   const withAdvisor = { provider: [{ name: "anthropic", advisor: true }], tier: "economy" };
-  expect(resolveExecutionSetting(db, withAdvisor, undefined)?.advisor).toBeUndefined();
+  expect(executionSettingsFor(db, withAdvisor, undefined)[0]?.advisor).toBeUndefined();
   db.prepare("UPDATE execution_defaults SET advisor_ceiling = 'fable'").run();
-  expect(resolveExecutionSetting(db, withAdvisor, undefined)?.advisor).toBe("fable");
+  expect(executionSettingsFor(db, withAdvisor, undefined)[0]?.advisor).toBe("fable");
   db.close();
 });

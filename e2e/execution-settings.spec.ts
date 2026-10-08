@@ -53,7 +53,7 @@ test("表の行を消す・価格を直す・行を足すのが1回の保存で�
   await added.getByLabel("Provider").selectOption("openai");
   await added.getByLabel("Tier").selectOption("economy");
   await added.getByLabel("Model").fill("gpt-5.6-luna");
-  await added.getByLabel("Effort").fill("low");
+  await added.getByLabel("Effort").selectOption("low");
   await added.getByLabel("Price in").fill("0.5");
   await added.getByLabel("Price out").fill("2");
   await card.getByRole("button", { name: "Save execution table" }).click();
