@@ -2816,9 +2816,11 @@ interface SettledChildContext {
   /** The reject-reason steering channel (issue #40) — carried alongside
    *  `answer` so a resumed parent reads why, not just what. */
   comment?: string | null;
-  origin_question?: { title: string; answer: string[] | null; comment: string | null } | null;
+  origin_question?: { title: string; answer: string[] | null; comment: string | null };
   /** 再分解が破棄した子(ADR 0121): 前提の破綻を宣言した子と、その理由。 */
   origin_breach?: { title: string; reason: string };
+  /** 人間が直接 cancel した子: その reason(任意なので無ければ null)。 */
+  origin_direct_cancel?: { reason: string | null };
 }
 
 type HistoryChildContext = TaskContent &
@@ -2935,21 +2937,21 @@ export function taskHistoryRows(db: Db, taskId: string, currentTaskId?: string):
 
 /** A cancelled task's `task_cancelled` event names the abandon question that
  *  discarded its decomposition decision (ADR 0006 / 0048), or the premise breach a
- *  redecompose acted on (ADR 0121) — the single hop back is the entire "why" a
- *  resumed parent needs. */
-function cancelOrigin(db: Db, taskId: string): Pick<SettledChildContext, "origin_question" | "origin_breach"> {
+ *  redecompose acted on (ADR 0121); without one it was a human's direct cancel,
+ *  whose reason `task_cancelled_directly` keeps — the single hop back is the
+ *  entire "why" a resumed parent needs. */
+function cancelOrigin(
+  db: Db,
+  taskId: string,
+): Pick<SettledChildContext, "origin_question" | "origin_breach" | "origin_direct_cancel"> {
   const payload = latestEventOfTask(db, taskId, "task_cancelled")?.payload;
-  if (!payload) return { origin_question: null };
+  if (!payload) return { origin_direct_cancel: { reason: latestEventOfTask(db, taskId, "task_cancelled_directly")!.payload.reason } };
   if ("origin_breach_task_id" in payload) {
     const declarer = getTask(db, payload.origin_breach_task_id)!;
     return { origin_breach: { title: declarer.title, reason: premiseBreachReason(db, declarer.id) } };
   }
-  const question = getTask(db, payload.origin_question_id);
-  return {
-    origin_question: question
-      ? { title: question.title, answer: question.question_answer, comment: question.question_answer_comment }
-      : null,
-  };
+  const question = getTask(db, payload.origin_question_id)!;
+  return { origin_question: { title: question.title, answer: question.question_answer, comment: question.question_answer_comment } };
 }
 
 /** そのタスクの最新の前提の破綻の理由。 */

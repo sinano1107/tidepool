@@ -1,12 +1,16 @@
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
+import { openDb } from "../src/db.js";
+import { cancelTaskDirectly, getTask, joinHistory, registerTask, taskHistoryRows } from "../src/tasks.js";
 import {
   api,
   bootTidepool,
   FULL_HANDOFF,
   GIT_FIXTURE_TEST_TIMEOUT,
   HOUR,
+  HUMAN_WEBUI,
+  humanDecomposeTaskViaWebui,
   makeWorkspace,
   mcpClient,
   registerWork,
@@ -207,4 +211,55 @@ it("get_current_task の history に、未決着(todo)の兄弟も含まれる",
   } finally {
     await client.close();
   }
+});
+
+/** 人間 decompose で子を1つ足し、その子を直接 cancel した親の history の子(ドメイン層、ADR 0107)。 */
+function directlyCancelledChild(reason: string | null) {
+  const db = openDb(":memory:");
+  const at = new Date("2026-10-08T00:00:00.000Z");
+  const parent = registerTask(db, { type: "work", title: "parent", purpose: "purpose", completion_criteria: "criteria" }, at, ...HUMAN_WEBUI);
+  const [child] = humanDecomposeTaskViaWebui(
+    db,
+    parent,
+    { reason: "human split", children: [{ title: "A", purpose: "purpose", completion_criteria: "criteria" }] },
+    at,
+  );
+  cancelTaskDirectly(db, getTask(db, child!.id)!, reason, at, {}, "webui");
+  const history = joinHistory(taskHistoryRows(db, parent.id));
+  db.close();
+  return history;
+}
+
+it("直接 cancel された子は、親の history で cancel の reason を origin_direct_cancel に運び、origin_question を持たない", () => {
+  expect(directlyCancelledChild("もう要らない")).toEqual([
+    {
+      decision: "human split",
+      children: [
+        {
+          title: "A",
+          purpose: "purpose",
+          completion_criteria: "criteria",
+          status: "cancelled",
+          origin_direct_cancel: { reason: "もう要らない" },
+        },
+      ],
+    },
+  ]);
+});
+
+it("reason なしで直接 cancel された子は、親の history で origin_direct_cancel の reason が null になる", () => {
+  expect(directlyCancelledChild(null)).toEqual([
+    {
+      decision: "human split",
+      children: [
+        {
+          title: "A",
+          purpose: "purpose",
+          completion_criteria: "criteria",
+          status: "cancelled",
+          origin_direct_cancel: { reason: null },
+        },
+      ],
+    },
+  ]);
 });
