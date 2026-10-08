@@ -1057,8 +1057,8 @@ function registerMemoryMetaReviewVerbs(server: McpServer, deps: McpDeps, run: Me
 
   server.registerTool(
     "list_memory_branches",
-    { description: MEMORY_BRANCHES_DESCRIPTION },
-    async () => run((reader, now) => pullMemoryBranches(deps.db, reader, now)),
+    { description: `${MEMORY_BRANCHES_DESCRIPTION} ${nextDescription("list_memory_branches", "branches")}`, inputSchema: { next } },
+    async (input) => run((reader, now) => pullMemoryBranches(deps.db, reader, input, now)),
   );
 
   server.registerTool(

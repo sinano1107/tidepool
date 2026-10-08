@@ -216,7 +216,7 @@ it("異議つき判断は窓の中に異議のある decision だけを list_pre
   expect(parts.precedents).toEqual(listPrecedents(db, reader, {}, at).precedents.filter((p) => p.decision_event_id === inWindow));
   expect(parts.proposals.map((p) => p.question_id)).toEqual([rejected, settled]);
   expect(parts.proposals).toEqual(pullMemoryProposals(db, reader, {}, at).proposals.filter((p) => [rejected, settled].includes(p.question_id)));
-  expect(parts.branches).toEqual(pullMemoryBranches(db, reader, at).branches);
+  expect(parts.branches).toEqual(pullMemoryBranches(db, reader, {}, at).branches);
   expect(parts.branches.flatMap((b) => b.definitions)).toEqual([expect.not.objectContaining({ original: expect.anything() })]);
 });
 

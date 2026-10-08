@@ -1630,12 +1630,15 @@ export function listMemoryBranches(db: Db) {
 
 const withoutOriginal = <T extends { original?: unknown }>({ original: _, ...rest }: T) => rest;
 
-/** meta-review の枝の一覧: 返した id は行の Definition の id。Definition の原文は人間の面にだけ残す(一覧と同じ線、#1052)。 */
-export function pullMemoryBranches(db: Db, reader: Pick<MemoryReader, "taskId" | "agent">, at: Date) {
+/** meta-review の枝の一覧: 木の順に応答予算と続き(next)で返す(ADR 0195、境目の鍵は path)。返した id はその応答の行の Definition の id。
+ *  Definition の原文は人間の面にだけ残す(一覧と同じ線、#1052)。 */
+export function pullMemoryBranches(db: Db, reader: Pick<MemoryReader, "taskId" | "agent">, input: { next?: string }, at: Date) {
+  const read = readPosition("list_memory_branches", input);
   return db.transaction(() => {
-    const branches = metaReviewBranches(db);
-    const returned_ids = branches.flatMap((row) => row.definitions.map((d) => d.id));
-    return recordPull(db, reader, { verb: "list_memory_branches", input: {}, returned_ids }, { branches }, at);
+    const rows = metaReviewBranches(db);
+    const packed = packItems(read, "branches", rows, {}, { keyOf: (row) => row.path, every: PENDING_EVENT_ID }) as Packed<{ branches: typeof rows; event_id: number }>;
+    const returned_ids = packed.branches.flatMap((row) => row.definitions.map((d) => d.id));
+    return recordPull(db, reader, { verb: "list_memory_branches", input: read.args, returned_ids }, packed, at);
   })();
 }
 
