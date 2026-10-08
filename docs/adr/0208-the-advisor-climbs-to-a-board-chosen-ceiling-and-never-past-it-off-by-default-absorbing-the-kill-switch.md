@@ -53,3 +53,6 @@ credits に請求するプランがあること(Claude Code の文書。どの�
 - **Fable 以外の窓(session / week)で Sonnet や advisor 無しへ落とす** —— Opus と Sonnet に固有の窓は無く、session /
   week が throttled なら main も止まるので、いまの線では発火しない。新しい線が要り、#1540 に分けた。
 - **kill switch の env を残し、盤面設定より優先する** —— 決定3。
+- **routing meta-review が上限を提案する op** —— 上限の根拠は運用者のプランの課金と Fable の枠の使い方で、盤面の記録に
+  無い(ADR 0150 の「価格は人間」と同じ)。枠の増減は `fable_then_opus` が追い、advisor の差が費用に見合うかは #1541 で
+  人間が読む(issue #1548)。
