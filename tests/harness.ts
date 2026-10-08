@@ -974,17 +974,6 @@ export function completedWork(db: Db, now: Date, assignee: string, parentId?: st
   return completeTask(db, task, FULL_HANDOFF, assignee, now, "worker");
 }
 
-/** 付帯子の門で着地が止まった記録 —— `land()` が残す形。 */
-export function deferLanding(db: Db, taskId: string, now: Date): void {
-  appendEvent(db, {
-    taskId,
-    workerId: BOARD_WORKER_ID,
-    origin: "board",
-    payload: { kind: "landing_deferred", reason: "attached_children", count: 1 },
-    at: now,
-  });
-}
-
 // 帰責・起草の撃ち直しの setup(tests/retrospective.test.ts と tests/memory-settings-endpoints.test.ts が共有する)
 
 /** triage session の中で entry に異議を打ち、異議 event の id を返す。 */

@@ -35,7 +35,6 @@ import { FakeClock, FakeGitHubClient, unusedLanding } from "./fakes.js";
 import {
   commitWork,
   completedWork,
-  deferLanding,
   FULL_HANDOFF,
   GIT_FIXTURE_TEST_TIMEOUT,
   git,
@@ -1299,6 +1298,17 @@ it.each([
   expect(git(workspace.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe(branch);
   expect(git(workspace.path, "status", "--porcelain")).toBe("");
 });
+
+/** 付帯子の門で着地が止まった記録 —— `land()` が残す形。 */
+function deferLanding(board: Db, taskId: string, now: Date): void {
+  appendEvent(board, {
+    taskId,
+    workerId: BOARD_WORKER_ID,
+    origin: "board",
+    payload: { kind: "landing_deferred", reason: "attached_children", count: 1 },
+    at: now,
+  });
+}
 
 it("着地を待つ完了タスクは、付帯子待ちで PR 未作成・無人 merge キューにいる・PR 昇格失敗の question が開いている、の3つを数える", () => {
   db = openDb(":memory:");

@@ -98,7 +98,7 @@ export function countTasksAwaitingLanding(db: Db, agentName: string): number {
       `SELECT t.id, EXISTS (SELECT 1 FROM pending_auto_merges WHERE task_id = t.id) AS queued
          FROM tasks t
         WHERE t.status = 'done' AND t.assignee = ?
-          AND (EXISTS (SELECT 1 FROM pending_auto_merges WHERE task_id = t.id)
+          AND (queued
                OR EXISTS (SELECT 1 FROM tasks q
                            WHERE q.question_pending_pr_promotion_task_id = t.id AND q.status = 'todo')
                OR EXISTS (SELECT 1 FROM events d
