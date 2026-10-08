@@ -2,6 +2,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { DEFAULT_AUDITOR_NAME } from "../src/defaults.js";
 import { createBehaviorCandidate, defineMemoryBranch, proposeMemoryChange, recordKnowledge, WORKER_MEMORY_VERBS } from "../src/memory.js";
 import { MEMORY_META_REVIEW_VERBS } from "../src/meta-review.js";
+import { nextDescription } from "../src/response-budget.js";
 import { registerTask } from "../src/tasks.js";
 import { UnknownWorkspaceError } from "../src/workspace.js";
 import {
@@ -14,6 +15,7 @@ import {
   managementMcpClient,
   mcpClient,
   memoryEntries,
+  RESPONSE_BUDGET_BYTES,
   readFollowingNext,
   registerWork,
   type Tidepool,
@@ -96,7 +98,8 @@ it("define_memory は重ねた木の門と畳み方・改名を言い、list_mem
       "List every branch of the board's memory in tree order: its path, the Definitions at that path (id, scope, text), and the scopes " +
         "that hold approved entries at or under it (null = the whole board). A whole-board Definition defines the branch for every scope; " +
         "a branch is undefined for a scope that holds entries under it and has neither its own Definition there nor a whole-board one. " +
-        "Candidates and invalidated entries make no branch.",
+        "Candidates and invalidated entries make no branch. " +
+        nextDescription("list_memory_branches", "branches"),
     );
     expect(review.purpose).toContain(
       "Where a store change rewrote a Definition, read the entries under its branch with list_memory_entries (path). " +
@@ -372,6 +375,21 @@ it("read_memory_entries と件数で切っていた読み口は続き(next)だ�
       expect(responses.length, verb).toBeGreaterThan(1);
       expect(new Set(responses.flatMap((response) => response.payload[key].map((row: any) => row[id]))), verb).toEqual(new Set(expected));
     }
+  } finally {
+    await client.close();
+  }
+});
+
+it("list_memory_branches は予算を超える木を続き(next)で返し、各応答は予算内で床に落ちず(床の目印が付けば本文が JSON でなくなり readFollowingNext が落ちる)、next を追うと全枝が届く(写像。詰め方・memory_pulled はドメイン層、ADR 0195)", async () => {
+  const { client } = await boardWithMetaReview();
+  const paths = Array.from({ length: 60 }, (_, i) => `tide/b${String(i).padStart(2, "0")}`);
+  for (const path of paths) defineMemoryBranch(t.db, { scope: null, path, text: "y".repeat(1_000), author: { activity: "human", name: "human" } }, "webui", t.clock.now());
+  try {
+    const responses = await readFollowingNext(client, "list_memory_branches");
+
+    expect(responses.length).toBeGreaterThan(1);
+    for (const response of responses) expect(response.bytes).toBeLessThanOrEqual(RESPONSE_BUDGET_BYTES);
+    expect(responses.flatMap((r) => r.payload.branches.map((row: any) => row.path))).toEqual(["build", "tide", ...paths]);
   } finally {
     await client.close();
   }

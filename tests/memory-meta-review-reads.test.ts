@@ -360,11 +360,33 @@ it("meta-review の枝の一覧は memory_pulled を残して返した id = 行�
   const human = defineMemoryBranch(db, humanEntryInput(db, { workspace: "tidepool", path: "tools", text: "Tools.", original_text: "道具" }), "webui", at).entry_id;
   const whole = define(null, "docs");
 
-  const pulled = pullMemoryBranches(db, reader, at);
+  const pulled = pullMemoryBranches(db, reader, {}, at);
 
   expect(pulled.branches.map((row) => row.definitions)).toEqual([[], [], [{ id: whole, scope: null, text: "What docs holds." }], [{ id: human, scope: "tidepool", text: "Tools." }]]);
   expect(listMemoryBranches(db).find((row) => row.path === "tools")!.definitions[0]!.original).toMatchObject({ text: "道具" });
   expect(getEvent(db, pulled.event_id)!.payload).toMatchObject({ kind: "memory_pulled", verb: "list_memory_branches", input: {}, returned_ids: [whole, human] });
+});
+
+it("meta-review の枝の一覧も応答予算で切り、next を追うと木の順に欠けも重複もなく揃う。各応答の memory_pulled は最初の input とその応答の Definition の id だけを持ち、event_id は続きにも載る。小さい木は next も remaining も付かない(ADR 0195)", () => {
+  const { db, reader, define } = board();
+  const small = define(null, "alpha");
+  const one = pullMemoryBranches(db, reader, {}, at);
+  expect(one.branches.map((row) => row.path)).toEqual(["alpha"]);
+  expect(one).not.toHaveProperty("next");
+  expect(one).not.toHaveProperty("remaining");
+  expect(getEvent(db, one.event_id)!.payload).toMatchObject({ returned_ids: [small] });
+
+  const ids = Array.from({ length: 60 }, (_, i) => defineMemoryBranch(db, { scope: null, path: `tide/b${String(i).padStart(2, "0")}`, text: "y".repeat(1_000), author: { activity: "worker_verb", name: "deckhand" } }, "worker", at).entry_id);
+  const responses = [pullMemoryBranches(db, reader, {}, at)];
+  while (responses.at(-1)!.next) responses.push(pullMemoryBranches(db, reader, { next: responses.at(-1)!.next }, at));
+
+  expect(responses.length).toBeGreaterThan(1);
+  expect(responses.flatMap((r) => r.branches.map((row) => row.path))).toEqual(listMemoryBranches(db).map((row) => row.path));
+  for (const response of responses) {
+    const own = response.branches.flatMap((row) => row.definitions.map((d) => d.id));
+    expect(getEvent(db, response.event_id)!.payload).toMatchObject({ kind: "memory_pulled", verb: "list_memory_branches", input: {}, returned_ids: own });
+  }
+  expect(responses.flatMap((r) => r.branches.flatMap((row) => row.definitions.map((d) => d.id)))).toEqual([small, ...ids]);
 });
 
 /** setup のみ: 1 marker = 1 episode の直挿しで異議つき decision を安く並べる(#356 の投影は使わない)。異議の event id と decision を返す。 */
