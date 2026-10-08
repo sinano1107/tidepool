@@ -203,6 +203,16 @@ it("NFD のラテン文字も NFC に揃えてから割るので、語の途中�
   expect(searchMemory(db, reader, { query: "Vie" }, at).results).toEqual([]);
 });
 
+it.each([
+  ["Việt Nam note", "Viet"],
+  ["Đà Nẵng note", "Nang"],
+  ["café menu", "cafe"],
+])("tokenizer は remove_diacritics 2 で重なる付加記号も畳むので、text「%s」の leaf は query %s で当たる(#1193)", (text, query) => {
+  const { db, reader, record } = board();
+  record({ title: "leaf", text });
+  expect(searchMemory(db, reader, { query }, at).results.map((r) => r.title)).toEqual(["leaf"]);
+});
+
 it("NFC で合成形の無い並びは索引と query で同じに割れるので、text あ + U+3099 + いう の leaf は query あ + U+3099 + い で当たる(#1189)", () => {
   const { db, reader, record } = board();
   record({ title: "leaf", text: "\u3042\u3099\u3044\u3046" });
@@ -956,7 +966,7 @@ it("rebuild はエントリ表と FTS を events から作り直し、無効化�
   expect(() => invalidateMemoryEntry(db, { entry_id: old, reason: "environment" }, "human", "webui", at)).toThrow(/already invalidated/);
   expect(getEvent(db, eventId!)).toMatchObject({
     task_id: null,
-    payload: { kind: "memory_index_rebuilt", tokenizer: "unicode61 categories 'L* N* Co Mn' tokenchars '_-.'", preprocess_version: "cjk-bigram-9" },
+    payload: { kind: "memory_index_rebuilt", tokenizer: "unicode61 remove_diacritics 2 categories 'L* N* Co Mn' tokenchars '_-.'", preprocess_version: "cjk-bigram-9" },
   });
 });
 

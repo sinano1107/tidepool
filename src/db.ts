@@ -8,8 +8,9 @@ export type Db = Database.Database;
  *  (spec #586 B、実測は #357 / #606、順序は #610 / #1192)。
  *  どちらかを変えたら、boot の ensureMemoryIndex が索引を作り直す。索引の列を変えたときも前処理の版を上げる。
  *  categories の Mn は前処理の正規表現と結合文字の扱いを揃えるため(#1200)。M* にしないのは、正規表現が扱わない Mc / Me
- *  まで語に入れて逆向きの食い違いを広げるから。 */
-export const MEMORY_FTS_TOKENIZER = "unicode61 categories 'L* N* Co Mn' tokenchars '_-.'";
+ *  まで語に入れて逆向きの食い違いを広げるから。
+ *  remove_diacritics 2 は、既定の 1 だと ệ(U+1EC7)のように付加記号が重なる合成済み文字が畳まれず Viet で Việt に当たらないため(#1193)。 */
+export const MEMORY_FTS_TOKENIZER = "unicode61 remove_diacritics 2 categories 'L* N* Co Mn' tokenchars '_-.'";
 export const MEMORY_PREPROCESS_VERSION = "cjk-bigram-9";
 // Shared between the fresh-board CREATE and the memory index rebuild (memory.ts).
 export const MEMORY_FTS_DDL = `CREATE VIRTUAL TABLE memory_fts USING fts5(text, title, path, tokenize = "${MEMORY_FTS_TOKENIZER}")`;

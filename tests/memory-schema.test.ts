@@ -57,10 +57,10 @@ it.each([
 it("fresh 盤面に Memory の FTS 仮想表と、tokenizer id + 前処理の版の1行がある(spec #586 B / issue #591)", () => {
   const db = openDb(":memory:");
   expect(db.prepare("SELECT sql FROM sqlite_master WHERE name = 'memory_fts'").get()).toEqual({
-    sql: expect.stringMatching(/fts5\(text, title, path, tokenize = "unicode61 categories 'L\* N\* Co Mn' tokenchars '_-\.'"\)/),
+    sql: expect.stringMatching(/fts5\(text, title, path, tokenize = "unicode61 remove_diacritics 2 categories 'L\* N\* Co Mn' tokenchars '_-\.'"\)/),
   });
   expect(db.prepare("SELECT tokenizer, preprocess_version FROM memory_index_version").all()).toEqual([
-    { tokenizer: "unicode61 categories 'L* N* Co Mn' tokenchars '_-.'", preprocess_version: "cjk-bigram-9" },
+    { tokenizer: "unicode61 remove_diacritics 2 categories 'L* N* Co Mn' tokenchars '_-.'", preprocess_version: "cjk-bigram-9" },
   ]);
   db.close();
 });
