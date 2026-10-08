@@ -50,7 +50,8 @@ export function tierFieldDescriptions(db: Db): { tier: string; review_tier: stri
 }
 export const PRIORITY_FIELD_DESCRIPTION =
   `How the models of the required tier are ordered: ${PRIORITIES.join(" / ")}. ` +
-  "quality (default) picks by the board's Provider rank, then price; cost picks the cheapest model, then Provider rank.";
+  "quality picks by the board's Provider rank, then price; cost picks the cheapest model, then Provider rank. " +
+  "Omit to fall back to the board's default priority for work tasks.";
 
 /** 解決されたティアが**誰の要求だったか**(ADR 0110 決定3)。events 側の
  *  `worker_spawned.source` と同じ union を2箇所に書くと必ず片方だけ動くので、
@@ -59,12 +60,13 @@ export type TierSource = "task" | "review_tier" | "agent" | "board";
 
 /** 選ばれた Provider が**なぜその Provider だったか**(ADR 0110 決定3 / 決定5、
  *  ADR 0114 決定4)。`"only"` は agent が entry を1つしか宣言していなかった、
- *  `"rank"` は残った候補から Provider 順位で選んだ、`"cost"` は task の優先順位が
- *  cost で価格が Provider を決めた、`"learner"` は昇格した学習器が選んだ(ADR 0150 決定3)。 */
+ *  `"rank"` は残った候補から Provider 順位で選んだ、`"cost"` は優先順位(task の、または盤面の
+ *  既定)が cost で価格が Provider を決めた、`"learner"` は昇格した学習器が選んだ(ADR 0150 決定3)。 */
 export type ProviderSource = "only" | "rank" | "cost" | "learner";
 
-/** 優先順位の既定の、さらに既定(ADR 0114 決定1): 盤面設定 `execution_defaults.priority`
- *  が未設定のときの値。task の優先順位 → 盤面設定 → この定数の順に倒れる
+/** 優先順位の既定の、さらに既定(ADR 0114 決定1 / ADR 0111 追記10): 盤面設定 `execution_defaults.priority`・
+ *  `review_priority` が未設定のときの値。work task は task の優先順位 → 盤面設定の work 用の既定 → この定数、
+ *  review task は盤面設定の review 用の既定 → この定数の順に倒れる
  *  (`selectorInputFor` / `loadExecutionDefaults`)。 */
 export const BOARD_DEFAULT_PRIORITY: Priority = "quality";
 
@@ -293,11 +295,10 @@ export interface SelectorInput {
   providerRank: readonly Provider[];
   /** task の要求ティア(CONTEXT.md「要求」)。省略 → agent の `tier`。 */
   taskTier: Tier | undefined;
-  /** task の優先順位(CONTEXT.md「要求」/ ADR 0114 決定1)。省略 → 盤面既定
-   *  (`selectorInputFor` が盤面設定の値を埋める。selector 自身の倒れ先
-   *  `BOARD_DEFAULT_PRIORITY` は、それを通らない呼び手のためだけにある)。
-   *  review の要求(`reviewTier`)があれば読まない —— review task に優先順位の列は
-   *  無く、`quality` の並べ方で解決する(ADR 0111 決定3)。 */
+  /** 候補を並べる鍵(CONTEXT.md「要求」/ ADR 0114 決定1)。selector はこの欄だけを読み、task の type を見ない ——
+   *  埋めるのは `selectorInputFor` で、work は task の優先順位 → 盤面設定の work 用の既定、review は盤面設定の
+   *  review 用の既定(review task の要求は `review_tier` だけ —— ADR 0114 退けた案、ADR 0111 追記10)。
+   *  selector 自身の倒れ先 `BOARD_DEFAULT_PRIORITY` は、それを通らない呼び手のためだけにある。 */
   priority: Priority | undefined;
   /** ADR 0111: review tasks use this request instead of the work tier. */
   reviewTier?: Tier;
@@ -364,8 +365,7 @@ function executionSettingCandidates(
   const tierSource: TierSource =
     request.reviewTier !== undefined ? "review_tier" :
     request.taskTier !== undefined ? "task" : request.agentTier !== undefined ? "agent" : "board";
-  const priority: Priority =
-    request.reviewTier !== undefined ? "quality" : request.priority ?? BOARD_DEFAULT_PRIORITY;
+  const priority = request.priority ?? BOARD_DEFAULT_PRIORITY;
   const tierId = request.tiers.find((t) => t.name === tier)!.id;
   const providerSource: ProviderSource =
     request.entries.length === 1 ? "only" : priority === "cost" ? "cost" : "rank";
@@ -458,6 +458,8 @@ interface ExecutionDefaults {
   advisorCeiling: AdvisorCeiling;
   providerRank: readonly Provider[];
   priority: Priority;
+  /** review task の並べ方(ADR 0111 追記10)。`priority` は work 用。 */
+  reviewPriority: Priority;
   learnerPromoted: boolean;
   defaultTier: Tier;
   judgementTier: Tier;
@@ -544,6 +546,7 @@ export const executionSettingsChangeSchema = z.discriminatedUnion("setting", [
     }),
   }),
   z.object({ setting: z.literal("priority"), value: z.enum(PRIORITIES) }),
+  z.object({ setting: z.literal("review_priority"), value: z.enum(PRIORITIES) }),
   newTierSchema.extend({ setting: z.literal("insert_tier") }),
   z.object({
     setting: z.literal("edit_tier"),
@@ -843,13 +846,14 @@ export function settleStaleProposals(db: Db, at: Date, observedEventId: number |
 function loadExecutionDefaults(db: Db): ExecutionDefaults {
   const row = db
     .prepare(
-      `SELECT advisor_ceiling, provider_rank, priority, learner_promoted, d.name AS default_tier, j.name AS judgement_tier
+      `SELECT advisor_ceiling, provider_rank, priority, review_priority, learner_promoted, d.name AS default_tier, j.name AS judgement_tier
        FROM execution_defaults JOIN tiers d ON d.id = default_tier_id JOIN tiers j ON j.id = judgement_tier_id`,
     )
     .get() as {
     advisor_ceiling: AdvisorCeiling;
     provider_rank: string | null;
     priority: Priority | null;
+    review_priority: Priority | null;
     learner_promoted: number;
     default_tier: Tier;
     judgement_tier: Tier;
@@ -858,6 +862,7 @@ function loadExecutionDefaults(db: Db): ExecutionDefaults {
     advisorCeiling: row.advisor_ceiling,
     providerRank: row.provider_rank ? (JSON.parse(row.provider_rank) as Provider[]) : PROVIDER_VALUES,
     priority: row.priority ?? BOARD_DEFAULT_PRIORITY,
+    reviewPriority: row.review_priority ?? BOARD_DEFAULT_PRIORITY,
     learnerPromoted: row.learner_promoted === 1,
     defaultTier: row.default_tier,
     judgementTier: row.judgement_tier,
@@ -884,15 +889,16 @@ function selectorInputFor(
   task: SelectorTask | undefined,
 ): SelectorInput {
   const defaults = loadExecutionDefaults(db);
+  const review = task?.type === "review";
   return {
     entries: definition.provider.map((entry) => ({
       provider: entry.name as Provider,
       advisor: entry.advisor,
     })),
     providerRank: defaults.providerRank,
-    taskTier: task?.type === "review" ? undefined : task?.tier ?? undefined,
-    priority: task?.priority ?? defaults.priority,
-    reviewTier: task?.type === "review" ? task.review_tier ?? undefined : undefined,
+    taskTier: review ? undefined : task?.tier ?? undefined,
+    priority: review ? defaults.reviewPriority : task?.priority ?? defaults.priority,
+    reviewTier: review ? task.review_tier ?? undefined : undefined,
     agentTier: definition.tier,
     boardTier: defaults.defaultTier,
     tiers: liveTierRows(db),

@@ -539,8 +539,9 @@ it("cost で out 単価が同額なら in 単価、それも同額なら Provide
   ).toBe("gpt-5.6-sol");
 });
 
-it("review の要求は priority を持たず quality の並べ方で解決される(ADR 0111 決定3)", () => {
-  expect(select(input({ entries: both, reviewTier: "standard", priority: "cost" })).model).toBe("claude-opus-5-5");
+it("並べ方は入力の priority だけで決まり、review の要求(reviewTier)があっても変わらない(ADR 0111 追記10)", () => {
+  expect(select(input({ entries: both, reviewTier: "standard", priority: "cost" }))).toMatchObject({ model: "gpt-5.6-sol", source: { provider: "cost" } });
+  expect(select(input({ entries: both, reviewTier: "standard", priority: "quality" }))).toMatchObject({ model: "claude-opus-5-5", source: { provider: "rank" } });
 });
 
 /** 段の id は盤面の内部(ADR 0200 決定2)。照合のテストは種の段に id を振って使う。 */
@@ -1027,6 +1028,45 @@ it("盤面既定の段を選び直すと、要求も agent の tier も無い ta
     source: { tier: "board" },
   });
   expect(() => change(db, { setting: "default_tier", value: "premium" })).toThrow(/unknown default_tier "premium"/);
+});
+
+it("review 用の優先順位の既定は種 quality で、設定変更が読み口と execution_settings_changed に残り、quality / cost 以外は断られる(ADR 0111 追記10)", () => {
+  const db = openDb(":memory:");
+  expect(readExecutionSettings(db).reviewPriority).toBe("quality");
+  change(db, { setting: "review_priority", value: "cost" });
+  expect(readExecutionSettings(db)).toMatchObject({ reviewPriority: "cost", priority: "quality" });
+  expect(listEventsOfKinds(db, ["execution_settings_changed"]).at(-1)!.payload).toMatchObject({ setting: "review_priority", value: "cost" });
+  expect(executionSettingsChangeSchema.safeParse({ setting: "review_priority", value: "speed" }).success).toBe(false);
+});
+
+/** anthropic と openai の2つの entry を持ち、standard を既定の段にする agent(review_tier の無い review も standard で走る)。 */
+const twoProviderAgent = { provider: [{ name: "anthropic", advisor: false }, { name: "openai", advisor: false }], tier: "standard" };
+const reviewTasks = [
+  { type: "review" as const, tier: null, priority: null, review_tier: "standard" },
+  { type: "review" as const, tier: null, priority: null, review_tier: null },
+];
+
+it("review task は review_tier の有無によらず review 用の既定で並び、work 用の既定を cost にしても判定者は動かない(ADR 0111 追記10)", () => {
+  const db = openDb(":memory:");
+  change(db, { setting: "priority", value: "cost" });
+  for (const task of reviewTasks) {
+    expect(resolveExecutionSetting(db, twoProviderAgent, task)).toMatchObject({ model: "claude-opus-5-5", source: { provider: "rank" } });
+  }
+  change(db, { setting: "review_priority", value: "cost" });
+  for (const task of reviewTasks) {
+    expect(resolveExecutionSetting(db, twoProviderAgent, task)).toMatchObject({ model: "gpt-5.6-sol", source: { provider: "cost" } });
+  }
+});
+
+it("work task は task の priority → work 用の既定で並び、review 用の既定を読まない", () => {
+  const db = openDb(":memory:");
+  change(db, { setting: "review_priority", value: "cost" });
+  const work = (priority: "quality" | "cost" | null) => ({ type: "work" as const, tier: null, priority, review_tier: null });
+  expect(resolveExecutionSetting(db, twoProviderAgent, work(null))).toMatchObject({ model: "claude-opus-5-5" });
+  expect(resolveExecutionSetting(db, twoProviderAgent, work("cost"))).toMatchObject({ model: "gpt-5.6-sol" });
+  change(db, { setting: "priority", value: "cost" });
+  expect(resolveExecutionSetting(db, twoProviderAgent, work(null))).toMatchObject({ model: "gpt-5.6-sol" });
+  expect(resolveExecutionSetting(db, twoProviderAgent, work("quality"))).toMatchObject({ model: "claude-opus-5-5" });
 });
 
 it("挿入した段の名前を書いた agent.md の tier は定義の検査を通る", () => {

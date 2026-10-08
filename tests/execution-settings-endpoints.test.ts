@@ -34,6 +34,7 @@ it("GET /api/settings/execution は種の表と盤面既定(advisor の上限 of
     advisorCeiling: "off",
     providerRank: [...PROVIDER_VALUES],
     priority: "quality",
+    reviewPriority: "quality",
     learnerPromoted: false,
     defaultTier: "economy",
     judgementTier: "frontier",

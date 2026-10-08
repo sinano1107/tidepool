@@ -309,6 +309,8 @@ export interface WireContract {
     advisorCeiling: AdvisorCeiling;
     providerRank: readonly string[];
     priority: string;
+    /** review task の並べ方(ADR 0111 追記10)。`priority` は work 用。 */
+    reviewPriority: string;
     learnerPromoted: boolean;
     defaultTier: string;
     /** 盤面自身の判断の段(振り返り Board call と周期 meta-review、ADR 0200 決定4)。 */
