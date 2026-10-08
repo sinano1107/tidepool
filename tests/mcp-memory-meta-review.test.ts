@@ -131,7 +131,8 @@ it("read_memory_entries は主題 memory の接続に出て管理MCP には出�
         "call read_memory_entries again with only `next` to read the rest, and repeat until a response carries no `next` — then the list is complete. " +
         "`missing` comes on the first response only. " +
         "An item too large for one response comes alone in pieces marked `partial` (`id`, the item's id or the key `next` resumes from; `field`, " +
-        "empty when the item is itself a string; and `field_bytes`, the field's full size in UTF-8 bytes): join that field across the pieces to get it verbatim.",
+        "empty when the item is itself a string; and `field_bytes`, the field's full size in UTF-8 bytes): join that field across the pieces to get it verbatim. " +
+        'If the list changes under the read, the call fails with "the list changed since the first read_memory_entries call: call read_memory_entries again without next to read it from the start"; read again from the start.',
     );
     expect((await management.listTools()).tools.map((tool) => tool.name)).not.toContain("read_memory_entries");
     expect(await call("read_memory_entries", { ids: [material, 9999] })).toMatchObject({
@@ -168,7 +169,8 @@ it("search_memory_entries は主題 memory の接続に出て、主題 routing �
         "When the results do not fit in one response, the response carries `next` and `remaining` (how many results are not returned yet): " +
         "call search_memory_entries again with only `next` to read the rest, and repeat until a response carries no `next` — then the list is complete. " +
         "An item too large for one response comes alone in pieces marked `partial` (`id`, the item's id or the key `next` resumes from; `field`, " +
-        "empty when the item is itself a string; and `field_bytes`, the field's full size in UTF-8 bytes): join that field across the pieces to get it verbatim.",
+        "empty when the item is itself a string; and `field_bytes`, the field's full size in UTF-8 bytes): join that field across the pieces to get it verbatim. " +
+        'If the list changes under the read, the call fails with "the list changed since the first search_memory_entries call: call search_memory_entries again without next to read it from the start"; read again from the start.',
     );
     for (const other of [management, routingClient]) {
       expect((await other.listTools()).tools.map((tool) => tool.name)).not.toContain("search_memory_entries");

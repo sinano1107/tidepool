@@ -823,10 +823,15 @@ export function recordExemplar(
  *  選べないが RCA 起草から継いだ Exemplar の candidate の出所で、その注釈の修正値(issue #950)の anchor を選ぶために描く
  *  —— 決定に解かず帰責そのものを描く(steering はその帰責の分だけ、checkedAnnotations が照らすのと同じ描画)。 */
 export function previewCase(db: Db, eventId: number): MemoryCase {
+  return previewCaseWithLineIds(db, eventId).rendered;
+}
+
+/** previewCase に、steering か decisions の各行の event id を同じ順で添える —— 管理MCP の preview_case の続きの鍵(issue #1399)。 */
+export function previewCaseWithLineIds(db: Db, eventId: number): { rendered: MemoryCase; lineIds: number[] } {
   if (getEvent(db, eventId)?.kind !== "objection_attributed") citedEpisode(db, eventId);
-  const rendered = renderCase(db, { kind: "event", ref: eventId });
-  if (!rendered) throw new DomainError(`event ${eventId} is not a case the board can render`);
-  return rendered;
+  const keyed = renderCaseWithLineIds(db, { kind: "event", ref: eventId });
+  if (!keyed) throw new DomainError(`event ${eventId} is not a case the board can render`);
+  return keyed;
 }
 
 function requireEntry(db: Db, id: number): EntryRow {
@@ -1797,14 +1802,19 @@ type MemoryCase =
  *  起草の出所は帰責 event(issue #954)。handoff / result / decision 列は Episode の投影表でなく、anchor を含む session の窓
  *  (`sessionWindow`)の events から読む —— Harness にも投影の有無にも依らない(issue #960)。 */
 function renderCase(db: Db, source: MemorySource): MemoryCase | null {
+  return renderCaseWithLineIds(db, source)?.rendered ?? null;
+}
+
+/** renderCase に、steering か decisions の各行の event id(`decision_logged` か `objection_raised`)を同じ順で添える。 */
+function renderCaseWithLineIds(db: Db, source: MemorySource): { rendered: MemoryCase; lineIds: number[] } | null {
   if (source.kind !== "event") return null;
   const event = getEvent(db, source.ref);
   if (event?.payload.kind === "worker_spawned") {
     const session = caseSession(db, event);
+    const decisions = session.events.filter(isDecisionLogEntry).filter((e) => e.kind === "decision_logged");
     return {
-      decisions: session.events.filter(isDecisionLogEntry).filter((e) => e.kind === "decision_logged").map(objectedEntryText),
-      handoff: session.handoff,
-      result: session.result,
+      rendered: { decisions: decisions.map(objectedEntryText), handoff: session.handoff, result: session.result },
+      lineIds: decisions.map((e) => e.id),
     };
   }
   const entryId = event?.payload.kind === "objection_attributed" ? event.payload.entry_id : source.ref;
@@ -1816,7 +1826,7 @@ function renderCase(db: Db, source: MemorySource): MemoryCase | null {
       ? objectionsById(db, entryId, event.payload.objection_event_ids)
       : entryObjections(db, [entryId]);
   const { handoff, result } = caseSession(db, entry);
-  return { decision: objectedEntryText(entry), steering: steering.map((s) => s.comment), handoff, result };
+  return { rendered: { decision: objectedEntryText(entry), steering: steering.map((s) => s.comment), handoff, result }, lineIds: steering.map((s) => s.id) };
 }
 
 /** anchor を含む worker session の events(id 順)と、その窓の完了の handoff / result。anchor が

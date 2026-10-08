@@ -45,7 +45,89 @@ it("壊れた続き・別の verb の続き・指す item が無い続きは、�
 
   expect(() => readNext("get_task", "not-a-next")).toThrow(/next is malformed/);
   expect(() => readNext("read_decision_log", next)).toThrow(/next belongs to get_task, not read_decision_log/);
-  expect(() => packItems(readNext("get_task", next), "events", items.slice(0, 3))).toThrow(/next points at item \d+, which this read no longer has/);
+  expect(() => packItems(readNext("get_task", next), "events", items.slice(0, 3), {}, { resumeByKey: true })).toThrow(
+    "the list changed since the first get_task call: call get_task again without next to read it from the start",
+  );
+});
+
+// 読む間に既読の範囲が変わったとき(ADR 0195 追記 #1399): 続きは返した件数と鍵の列の digest で先頭の範囲を照らす
+const board = { verb: "list_queue", args: {} };
+const LIST_CHANGED = "the list changed since the first list_queue call: call list_queue again without next to read it from the start";
+/** 1KB の item を `count` 件(id は 1 から)。 */
+const pile = (count: number) => Array.from({ length: count }, (_, i) => ({ id: i + 1, line: "x".repeat(1000) }));
+/** 最初の応答と、`changed` の列に対して続きを読む関数。 */
+function firstThen(items: readonly { id: number; line: string }[], options?: { resumeByKey: true }) {
+  const response: any = packItems(board, "tasks", items, {}, options);
+  return { returned: response.tasks.length as number, resume: (changed: readonly { id: number; line: string }[]) => packItems(readNext("list_queue", response.next), "tasks", changed, {}, options) as any };
+}
+
+it("未読の item が先頭へ移ると、続きは黙って欠けずに読み直せの error になる", () => {
+  const items = pile(60);
+  const { resume } = firstThen(items);
+
+  expect(() => resume([items.at(-1)!, ...items.slice(0, -1)])).toThrow(LIST_CHANGED);
+});
+
+it("既読の item が末尾へ移ると、続きは重複を返さずに読み直せの error になる", () => {
+  const items = pile(60);
+  const { resume } = firstThen(items);
+
+  expect(() => resume([...items.slice(1), items[0]!])).toThrow(LIST_CHANGED);
+});
+
+it("既読の範囲で item が抜けても、途中に入っても、続きは読み直せの error になる", () => {
+  const items = pile(60);
+  const { resume } = firstThen(items);
+
+  expect(() => resume(items.filter((item) => item.id !== 2))).toThrow(LIST_CHANGED);
+  expect(() => resume([items[0]!, { id: 61, line: "new" }, ...items.slice(1)])).toThrow(LIST_CHANGED);
+});
+
+it("境目の item だけが抜けたときは、続きは error にならず残りを欠けなく返す", () => {
+  const items = pile(60);
+  const { returned, resume } = firstThen(items);
+  const changed = items.filter((_, i) => i !== returned);
+
+  const responses = [resume(changed)];
+  while (responses.at(-1).next) responses.push(packItems(readNext("list_queue", responses.at(-1).next), "tasks", changed));
+
+  expect(responses.flatMap((response) => response.tasks)).toEqual(changed.slice(returned));
+});
+
+it("末尾に足された item は、続きで返る", () => {
+  const items = pile(60);
+  const { returned, resume } = firstThen(items);
+  const grown = [...items, { id: 61, line: "new" }];
+
+  const responses = [resume(grown)];
+  while (responses.at(-1).next) responses.push(packItems(readNext("list_queue", responses.at(-1).next), "tasks", grown));
+
+  expect(responses.flatMap((response) => response.tasks)).toEqual(grown.slice(returned));
+});
+
+it("未読の範囲の中の並べ替えでは、続きは error にならず今の順で残りを返す", () => {
+  const items = pile(60);
+  const { returned, resume } = firstThen(items);
+  const reordered = [...items.slice(0, returned), ...items.slice(returned).reverse()];
+
+  expect(resume(reordered).tasks[0]).toEqual(items.at(-1));
+});
+
+it("検査を外した読み口では、先頭に足された item を続きで返さず、error にもならない", () => {
+  const items = pile(60).reverse();
+  const { returned, resume } = firstThen(items, { resumeByKey: true });
+
+  expect(resume([{ id: 61, line: "new" }, ...items]).tasks[0]).toEqual(items[returned]);
+});
+
+it("1件を切って返している途中にその欄が変わると、続きは継ぎはぎを返さずに読み直せの error になる", () => {
+  const items = [{ id: 1, line: "潮".repeat(30_000) }];
+  for (const options of [undefined, { resumeByKey: true as const }]) {
+    const { resume } = firstThen(items, options);
+
+    expect(() => resume([{ id: 1, line: "汐".repeat(30_000) }])).toThrow(LIST_CHANGED);
+    expect(() => resume([{ id: 1, line: "潮".repeat(29_999) }])).toThrow(LIST_CHANGED);
+  }
 });
 
 const at = new Date(0);
@@ -142,7 +224,8 @@ it("封筒と先頭の item が一緒に入らないとき、最初の応答は�
 });
 
 it("欄の位置が壊れた続きも名指しの error になる", () => {
-  const position = (p: object) => Buffer.from(JSON.stringify({ ...first, at: 2, ...p })).toString("base64url");
+  const position = (p: object) =>
+    Buffer.from(JSON.stringify({ ...first, at: 2, count: 0, digest: "d", field_bytes: 1, field_digest: "d", ...p })).toString("base64url");
 
   expect(() => readNext("get_task", position({ field: "line" }))).toThrow(/next is malformed/);
   expect(() => readNext("get_task", position({ field: ["line"], offset: "x" }))).toThrow(/next is malformed/);
