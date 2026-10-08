@@ -1,12 +1,12 @@
 import { afterEach, expect, it, vi } from "vitest";
 import {
-  api,
   bootTidepool,
   GIT_FIXTURE_TEST_TIMEOUT,
   git,
   HOUR,
   makeRemoteBackedWorkspace,
   registerWork,
+  servedQuarantineQuestion,
   type Tidepool,
 } from "./harness.js";
 
@@ -18,8 +18,7 @@ afterEach(async () => {
 });
 
 async function quarantineReason(board: Tidepool): Promise<string | undefined> {
-  const list = (await api(board.baseUrl, "GET", "/api/tasks")).json;
-  return list.find((x: any) => x.type === "question")?.purpose;
+  return (await servedQuarantineQuestion(board, "workspace", "sandbox"))?.purpose;
 }
 
 /** 修復経路が撃つのは `repo` の**宣言**に対してであって clone の origin ではない

@@ -210,10 +210,8 @@ it("tree rule の失敗で workspace が needs-human になり、pickup が止�
   // 退くが、個別取得(GET /tasks/:id)では引き続き参照できる(issue #35)
   expect((await api(t.baseUrl, "GET", `/api/tasks/${task.id}`)).json.status).toBe("done");
 
-  const list = (await api(t.baseUrl, "GET", "/api/tasks")).json;
-
   // 人間への question が生成されている(workspace 名で特定できる)
-  const question = list.find((x: any) => x.type === "question");
+  const question = await servedQuarantineQuestion(t, "workspace", "sandbox");
   expect(question).toBeDefined();
   expect(question.status).toBe("todo");
   expect(question.title).toContain("sandbox");

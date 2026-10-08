@@ -13,6 +13,7 @@ import {
   HOUR,
   makeRemoteBackedWorkspace,
   registerWork,
+  servedQuarantineQuestion,
   type Tidepool,
 } from "./harness.js";
 import { makeRegistry, makeRemoteBackedRegistry } from "./registry-fixture.js";
@@ -32,9 +33,8 @@ async function questionTitles(board: Tidepool): Promise<string[]> {
   return list.filter((x: any) => x.type === "question").map((x: any) => x.title);
 }
 
-async function quarantineReason(board: Tidepool): Promise<string | undefined> {
-  const list = (await api(board.baseUrl, "GET", "/api/tasks")).json;
-  return list.find((x: any) => x.type === "question")?.purpose;
+async function quarantineReason(board: Tidepool, workspace: string): Promise<string | undefined> {
+  return (await servedQuarantineQuestion(board, "workspace", workspace))?.purpose;
 }
 
 // ADR 0052 決定5: 一般 workspace の fetch 失敗は**既存の workspace quarantine に乗る**
@@ -71,7 +71,7 @@ it("repo を宣言しているのに clone に remote が無い workspace は qu
 
   expect(t.worker.started).toEqual([]);
   // git の生のエラーではなく、読める理由が人間に届く
-  expect(await quarantineReason(t)).toContain("declares a remote source of truth");
+  expect(await quarantineReason(t, "sandbox")).toContain("declares a remote source of truth");
 });
 
 // 逆向きのずれ。こちらは黙って通ってしまうほうが危ない —— fork 元がローカルの
@@ -86,7 +86,7 @@ it("repo を宣言していないのに clone に remote がある workspace は
   await t.clock.advance(HOUR);
 
   expect(t.worker.started).toEqual([]);
-  expect(await quarantineReason(t)).toContain("declares no remote source of truth");
+  expect(await quarantineReason(t, "sandbox")).toContain("declares no remote source of truth");
 });
 
 // issue #211 やること6: registry clone は「registry の正本」(合成 root の宣言)と
@@ -109,7 +109,7 @@ it("registry clone の2つの宣言が食い違えば quarantine に落ちる �
   await t.clock.advance(HOUR);
 
   expect(t.worker.started).toEqual([]);
-  expect(await quarantineReason(t)).toContain("two declarations disagree");
+  expect(await quarantineReason(t, "tidepool")).toContain("two declarations disagree");
 });
 
 it("registry clone の2つの宣言が食い違えば quarantine に落ちる — registry は purely-local、workspace は remote-backed", async () => {
@@ -123,7 +123,7 @@ it("registry clone の2つの宣言が食い違えば quarantine に落ちる �
   await t.clock.advance(HOUR);
 
   expect(t.worker.started).toEqual([]);
-  expect(await quarantineReason(t)).toContain("two declarations disagree");
+  expect(await quarantineReason(t, "tidepool")).toContain("two declarations disagree");
 });
 
 // 突き合わせるのは registry clone だけ。別の checkout の workspace は registry の役を
@@ -169,7 +169,7 @@ it("仲介が installation token を出せない workspace は、fetch 失敗と
   ]);
   // 人間が読む理由に仲介の断り方が残る —— #423 が案内文(再ログインのコマンド)を
   // 足すまでの間、診断できる材料はこれである
-  expect(await quarantineReason(t)).toContain("invalid_user_token");
+  expect(await quarantineReason(t, "sandbox")).toContain("invalid_user_token");
 });
 
 // ADR 0093 決定7 の完了側: token の取得は `releaseWorkspace` の手前で await されるが、
@@ -220,5 +220,5 @@ it("完了時の merge back で仲介が token を出せなくても、WIP は�
     expect.stringContaining("workspace sandbox needs human attention"),
     expect.stringContaining("PR promotion failed: completes while the broker is down"),
   ]);
-  expect(await quarantineReason(t)).toContain("invalid_user_token");
+  expect(await quarantineReason(t, "sandbox")).toContain("invalid_user_token");
 });

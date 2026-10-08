@@ -1,7 +1,14 @@
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import type { WorkspaceConfig } from "../src/workspace.js";
-import { api, bootTidepool, GIT_FIXTURE_TEST_TIMEOUT, makeWorkspace, type Tidepool } from "./harness.js";
+import {
+  api,
+  bootTidepool,
+  GIT_FIXTURE_TEST_TIMEOUT,
+  makeWorkspace,
+  servedQuarantineQuestion,
+  type Tidepool,
+} from "./harness.js";
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 
@@ -27,9 +34,7 @@ async function bootWithOverlap(): Promise<{ live: { path: string }; questionId: 
       listWorkspaces: () => [{ name: "self", path: live.path }],
     },
   });
-  const question = (await api(t.baseUrl, "GET", "/api/tasks")).json.find(
-    (x: any) => x.type === "question",
-  );
+  const question = await servedQuarantineQuestion(t, "workspace", "self");
   expect(question).toBeDefined();
   return { live, questionId: question.id };
 }
