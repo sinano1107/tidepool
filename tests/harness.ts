@@ -986,6 +986,12 @@ export const WORKER_SPAWNED: Extract<EventPayload, { kind: "worker_spawned" }> =
   cli_version: "1",
 };
 
+/** transcript の tool 呼び出し1回 = tool_use と、event_id を返した tool_result の2行(投影器のテストの setup)。 */
+export const toolCall = (n: number, name: string, eventId: number | null) => [
+  `{"type":"assistant","uuid":"a${n}","message":{"content":[{"type":"tool_use","id":"t${n}","name":"${name}","input":{}}]}}`,
+  `{"type":"user","uuid":"r${n}","message":{"content":[{"type":"tool_result","tool_use_id":"t${n}","content":[{"type":"text","text":"{\\"event_id\\":${eventId}}"}]}]}}`,
+];
+
 /** 何も観測しなかった exit(exit 0・signal なし・表示用の欄はすべて null)。各テストは上書きする欄だけを書く(issue #1333)。 */
 export const QUIET_EXIT: WorkerExit = {
   exit_code: 0,

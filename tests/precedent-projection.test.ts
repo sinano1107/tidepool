@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { expect, it } from "vitest";
 import type { EventRow } from "../src/events.js";
 import { entriesReadBefore, entriesSeenBefore, projectEpisode } from "../src/precedent.js";
-import { WORKER_SPAWNED } from "./harness.js";
+import { toolCall, WORKER_SPAWNED } from "./harness.js";
 
 /** #386 が取った実物の worker session — 2.1.237 の CLI が書いた transcript と、
  *  その session を挟む盤面のイベント。Precedent の投影は決定論的なので、期待値は
@@ -319,10 +319,6 @@ it("memory verb の tool 結果に写った memory_pulled の event id は、dec
     // tool 結果に写っていない pull —— 位置を持たず、D の前の読み口は拾わない
     pulled(9, "read_memory", [4]),
   ];
-  const toolCall = (n: number, name: string, eventId: number | null) => [
-    `{"type":"assistant","uuid":"a${n}","message":{"content":[{"type":"tool_use","id":"t${n}","name":"${name}","input":{}}]}}`,
-    `{"type":"user","uuid":"r${n}","message":{"content":[{"type":"tool_result","tool_use_id":"t${n}","content":[{"type":"text","text":"{\\"event_id\\":${eventId}}"}]}]}}`,
-  ];
   const episode = project({
     events,
     transcriptLines: [
@@ -361,10 +357,6 @@ it("「D の前に読んだ記憶」(read)は read_memory が返した id だけ
     injected(7, 99, [8]),
     { id: 8, task_id: task, worker_id: "tako", origin: "worker", kind: "memory_pulled", payload: { kind: "memory_pulled", verb: "read_memory", input: {}, returned_ids: [2, 3], watermark: 3 }, created_at: at },
     { id: 9, task_id: task, worker_id: "tako", origin: "worker", kind: "decision_logged", payload: { kind: "decision_logged", line: "x" }, created_at: at },
-  ];
-  const toolCall = (n: number, name: string, eventId: number) => [
-    `{"type":"assistant","uuid":"a${n}","message":{"content":[{"type":"tool_use","id":"t${n}","name":"${name}","input":{}}]}}`,
-    `{"type":"user","uuid":"r${n}","message":{"content":[{"type":"tool_result","tool_use_id":"t${n}","content":[{"type":"text","text":"{\\"event_id\\":${eventId}}"}]}]}}`,
   ];
   const episode = project({
     events,

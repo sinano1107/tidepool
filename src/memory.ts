@@ -1705,10 +1705,14 @@ export function pullMemoryProposals(db: Db, reader: Pick<MemoryReader, "taskId" 
   return db.transaction(() => {
     const rows = memoryProposalRows(db);
     const packed = packItems(read, "proposals", rows, {}, { keyOf: (row) => row.question_id, every: PENDING_EVENT_ID }) as Packed<{ proposals: typeof rows; event_id: number }>;
-    const returned_ids = [...new Set(packed.proposals.map(({ proposal }) => (proposal.op === "invalidate" ? proposal.target.id : "successor" in proposal ? proposal.successor.id : proposal.candidate_id)))];
-    return recordPull(db, reader, { verb: "list_memory_proposals", input: read.args, returned_ids }, packed, at);
+    return recordPull(db, reader, { verb: "list_memory_proposals", input: read.args, returned_ids: proposalEntryIds(packed.proposals) }, packed, at);
   })();
 }
+
+/** list_memory_proposals の行が名指すエントリ(candidate か invalidate の target か既存の後継)。pull と材料の節の記録が同じ id を数える。 */
+const proposalEntryIds = (rows: ReturnType<typeof memoryProposalRows>) => [
+  ...new Set(rows.map(({ proposal }) => (proposal.op === "invalidate" ? proposal.target.id : "successor" in proposal ? proposal.successor.id : proposal.candidate_id))),
+];
 
 /** list_memory_proposals の行。window を渡すと、回答か陳腐化の event がその窓 `(after, upTo]` にある提案だけ
  *  (材料の節の決着した提案、ADR 0180 決定2)。 */
@@ -1756,10 +1760,12 @@ export function listPrecedents(
     const rows = precedentRows(db, { after: since });
     // 境目の鍵は decision の event id(異議つき decision マーカー1つに1行)
     const packed = packItems(read, "precedents", rows, {}, { keyOf: (p) => p.decision_event_id, every: PENDING_EVENT_ID }) as Packed<{ precedents: typeof rows; event_id: number }>;
-    const returned_ids = [...new Set(packed.precedents.flatMap((p) => [...(p.entries_read ?? []), ...(p.entries_seen ?? [])]))];
-    return recordPull(db, reader, { verb: "list_precedents", input: read.args, returned_ids }, packed, at);
+    return recordPull(db, reader, { verb: "list_precedents", input: read.args, returned_ids: precedentEntryIds(packed.precedents) }, packed, at);
   })();
 }
+
+/** list_precedents の行の decision より前に読んだ / 見た記憶。pull と材料の節の記録が同じ id を数える。 */
+const precedentEntryIds = (rows: ReturnType<typeof precedentRows>) => [...new Set(rows.flatMap((p) => [...(p.entries_read ?? []), ...(p.entries_seen ?? [])]))];
 
 /** list_precedents の行: 異議の event が窓 `(after, upTo]` にある decision。verb は上限を持たず、材料の節は
  *  読み手の登録の watermark を上限にする(ADR 0180 決定2)。 */
@@ -2196,7 +2202,9 @@ export function recordMetaReviewMaterial(
             store_changes: material.parts.store_changes.map((e) => e.id),
             candidates: material.parts.candidates.map((e) => e.id),
             precedents: material.parts.precedents.map((p) => p.decision_event_id),
+            precedent_entries: precedentEntryIds(material.parts.precedents),
             proposals: material.parts.proposals.map((p) => p.question_id),
+            proposal_entries: proposalEntryIds(material.parts.proposals),
             branches: material.parts.branches.flatMap((b) => b.definitions.map((d) => d.id)),
           },
     at,

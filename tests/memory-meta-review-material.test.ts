@@ -1,6 +1,6 @@
 import { expect, it } from "vitest";
 import { type Db, openDb } from "../src/db.js";
-import { getEvent, listEventsOfKinds } from "../src/events.js";
+import { appendEvent, getEvent, listEvents, listEventsOfKinds } from "../src/events.js";
 import {
   approveMemoryProposal,
   buildMetaReviewMaterial,
@@ -23,10 +23,10 @@ import {
   rejectMemoryProposal,
 } from "../src/memory.js";
 import { type MetaReviewSubject, registerMetaReview } from "../src/meta-review.js";
-import { EXTRACTOR_VERSION } from "../src/precedent.js";
+import { EXTRACTOR_VERSION, entriesReadBefore, entriesSeenBefore, projectEpisode } from "../src/precedent.js";
 import { getTask, logDecision, type MemoryProposal, registerTask } from "../src/tasks.js";
 import { HUMAN_WORKER_ID } from "../src/worker-id.js";
-import { answerQuestionViaWebui, bundledObjection, failureQuestion, HUMAN_WEBUI } from "./harness.js";
+import { answerQuestionViaWebui, bundledObjection, failureQuestion, HUMAN_WEBUI, toolCall, WORKER_SPAWNED } from "./harness.js";
 
 /** memory meta-review の材料の節(ADR 0180 決定1・2)のドメイン層。spawn の prompt に入ることは両 adapter のテストが言う。 */
 const at = new Date("2026-10-01T00:00:00.000Z");
@@ -251,7 +251,9 @@ it("節を組んだ記録は task 帰属・agent 名義の meta_review_material_
       store_changes: [written, definition],
       candidates: [drafted],
       precedents: [objected],
+      precedent_entries: [],
       proposals: [question],
+      proposal_entries: [rejected],
       branches: [definition],
       tokens: material.tokens,
       tokenizer: "gpt-tokenizer/o200k_base",
@@ -259,4 +261,66 @@ it("節を組んだ記録は task 帰属・agent 名義の meta_review_material_
     },
   });
   expect(material.tokens).toBeGreaterThan(0);
+});
+
+it("主題 memory の材料の節に載ったエントリは、その session の decision の entries_seen に入り entries_read に入らない —— 異議つき判断と決着した提案の部分は list_precedents と list_memory_proposals が返すのと同じエントリで数え、主題 routing の材料の節は数えない", () => {
+  const db = openDb(":memory:");
+  const work = registerTask(db, { type: "work", title: "w", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI).id;
+  // objectedDecision の直挿しは Episode の id を worker_spawned の event id に兼ねるので、その session の注入はこの id で結ぶ
+  const workSession = 1;
+  const objected = objectedDecision(db, work, workSession);
+  const followed = knowledge(db, "followed");
+  appendEvent(db, {
+    taskId: work,
+    workerId: "deckhand",
+    origin: "board",
+    payload: { kind: "memory_injected", worker_spawned_event_id: workSession, watermark: 0, entries: [{ id: followed, version: 1 }], tokens: 0, index_depth: 0, index_max_depth: 0, omitted: 0, tokenizer: "t", tokenizer_version: "0" },
+    at,
+  });
+  const previous = register(db, "memory", true);
+  bundledObjection(db, work, objected, at);
+  const written = knowledge(db, "tools/node");
+  const definition = defineMemoryBranch(db, { scope: "tidepool", path: "tools", text: "Tools.", author: deckhand }, "worker", at).entry_id;
+  const [drafted, rejected] = ["Drafted", "Rejected"].map((title) => candidate(db, title));
+  const question = proposeMemoryChange(db, previous, { op: "approve", candidate_id: rejected!, rationale: "r" }, "auditor", at).question_id;
+  answerQuestionViaWebui(db, getTask(db, question)!, ["reject"], at, { comment: "No." });
+  rejectMemoryProposal(db, getTask(db, question)!.question_proposal as MemoryProposal, question, "webui", at);
+  const review = register(db, "memory");
+  const spawned = appendEvent(db, { taskId: review, workerId: "auditor", origin: "board", payload: WORKER_SPAWNED, at });
+  recordMetaReviewMaterial(db, review, "auditor", spawned, memoryMaterialOf(db, review), at);
+  appendEvent(db, {
+    taskId: review,
+    workerId: "auditor",
+    origin: "board",
+    payload: {
+      kind: "meta_review_material_injected",
+      subject: "routing",
+      worker_spawned_event_id: spawned,
+      previous_watermark: 0,
+      material_watermark: 0,
+      tokens: 0,
+      tokenizer: "t",
+      tokenizer_version: "0",
+      shadow: [9001],
+      shadow_rows: 1,
+      shadow_rows_multi_candidate: 0,
+      allocations: [9002],
+      cells: [9003],
+      rows: [9004],
+      proposals: [],
+    },
+    at,
+  });
+  const decision = logDecision(db, getTask(db, review)!, "kept the tools note", "auditor", at, "worker");
+  const events = listEvents(db, review);
+
+  const episode = projectEpisode({
+    transcriptLines: toolCall(1, "mcp__tidepool__log_decision", decision),
+    events,
+    workerSpawnedEventId: spawned,
+    extractorVersion: "test",
+  });
+
+  expect(entriesSeenBefore(episode, events, decision)).toEqual([followed, written, definition, drafted!, rejected!].sort((a, b) => a - b));
+  expect(entriesReadBefore(episode, events, decision)).toEqual([]);
 });
