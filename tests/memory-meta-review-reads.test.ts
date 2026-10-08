@@ -30,7 +30,7 @@ import {
 } from "../src/memory.js";
 import { EXTRACTOR_VERSION, entriesReadBefore, entriesSeenBefore, projectEpisode } from "../src/precedent.js";
 import { getTask, logDecision, type MemoryProposal, registerTask } from "../src/tasks.js";
-import { answerQuestionViaWebui, bundledObjection, HUMAN_WEBUI, WORKER_SPAWNED } from "./harness.js";
+import { answerQuestionViaWebui, bundledObjection, HUMAN_WEBUI, toolCall, WORKER_SPAWNED } from "./harness.js";
 
 /** meta-review の読み口(issue #619 / ADR 0120 決定2)のドメイン層。verb への写像はサーバ境界
  *  (tests/mcp-memory-meta-review.test.ts)が言う。 */
@@ -568,12 +568,6 @@ it("read_memory_entries の行は、人間が原文つきで書いたエント�
   expect(entries[1]!.annotations).toEqual([{ anchor: { field: "decision", quote: "short" }, polarity: "imitate", text: "Keep the note short." }]);
 });
 
-/** tool_use と、event_id を返した tool_result の transcript 2行(setup のみ)。 */
-const toolCall = (n: number, name: string, eventId: number) => [
-  `{"type":"assistant","uuid":"a${n}","message":{"content":[{"type":"tool_use","id":"t${n}","name":"mcp__tidepool__${name}","input":{}}]}}`,
-  `{"type":"user","uuid":"r${n}","message":{"content":[{"type":"tool_result","tool_use_id":"t${n}","content":[{"type":"text","text":"{\\"event_id\\":${eventId}}"}]}]}}`,
-];
-
 it("session の中で read_memory_entries が返した id は、その session の Precedent の entries_seen に入り entries_read に入らない(ADR 0122 追記 #1225)", () => {
   const { db, task, reader, knowledge } = board();
   const spawned = appendEvent(db, { taskId: task.id, workerId: "auditor", origin: "board", payload: WORKER_SPAWNED, at });
@@ -583,7 +577,7 @@ it("session の中で read_memory_entries が返した id は、その session �
   const events = listEvents(db, task.id);
 
   const episode = projectEpisode({
-    transcriptLines: [...toolCall(1, "read_memory_entries", read.event_id), ...toolCall(2, "log_decision", decision)],
+    transcriptLines: [...toolCall(1, "mcp__tidepool__read_memory_entries", read.event_id), ...toolCall(2, "mcp__tidepool__log_decision", decision)],
     events,
     workerSpawnedEventId: spawned,
     extractorVersion: "test",
@@ -604,7 +598,7 @@ it("session の中で list_memory_entries と search_memory_entries が返した
   const events = listEvents(db, task.id);
 
   const episode = projectEpisode({
-    transcriptLines: [...toolCall(1, "list_memory_entries", list.event_id), ...toolCall(2, "search_memory_entries", search.event_id), ...toolCall(3, "log_decision", decision)],
+    transcriptLines: [...toolCall(1, "mcp__tidepool__list_memory_entries", list.event_id), ...toolCall(2, "mcp__tidepool__search_memory_entries", search.event_id), ...toolCall(3, "mcp__tidepool__log_decision", decision)],
     events,
     workerSpawnedEventId: spawned,
     extractorVersion: "test",
@@ -629,7 +623,7 @@ it("read_memory_entries と一覧の pull が同じ session にあっても、me
   const events = listEvents(db, task.id);
 
   const episode = projectEpisode({
-    transcriptLines: pulls.flatMap(([name, eventId], n) => toolCall(n, name, eventId)),
+    transcriptLines: pulls.flatMap(([name, eventId], n) => toolCall(n, `mcp__tidepool__${name}`, eventId)),
     events,
     workerSpawnedEventId: spawned,
     extractorVersion: "test",

@@ -26,7 +26,7 @@ import { type MetaReviewSubject, registerMetaReview } from "../src/meta-review.j
 import { EXTRACTOR_VERSION, entriesReadBefore, entriesSeenBefore, projectEpisode } from "../src/precedent.js";
 import { getTask, logDecision, type MemoryProposal, registerTask } from "../src/tasks.js";
 import { HUMAN_WORKER_ID } from "../src/worker-id.js";
-import { answerQuestionViaWebui, bundledObjection, failureQuestion, HUMAN_WEBUI, WORKER_SPAWNED } from "./harness.js";
+import { answerQuestionViaWebui, bundledObjection, failureQuestion, HUMAN_WEBUI, toolCall, WORKER_SPAWNED } from "./harness.js";
 
 /** memory meta-review の材料の節(ADR 0180 決定1・2)のドメイン層。spawn の prompt に入ることは両 adapter のテストが言う。 */
 const at = new Date("2026-10-01T00:00:00.000Z");
@@ -266,13 +266,15 @@ it("節を組んだ記録は task 帰属・agent 名義の meta_review_material_
 it("主題 memory の材料の節に載ったエントリは、その session の decision の entries_seen に入り entries_read に入らない —— 異議つき判断と決着した提案の部分は list_precedents と list_memory_proposals が返すのと同じエントリで数え、主題 routing の材料の節は数えない", () => {
   const db = openDb(":memory:");
   const work = registerTask(db, { type: "work", title: "w", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI).id;
-  const objected = objectedDecision(db, work, 1);
+  // objectedDecision の直挿しは Episode の id を worker_spawned の event id に兼ねるので、その session の注入はこの id で結ぶ
+  const workSession = 1;
+  const objected = objectedDecision(db, work, workSession);
   const followed = knowledge(db, "followed");
   appendEvent(db, {
     taskId: work,
     workerId: "deckhand",
     origin: "board",
-    payload: { kind: "memory_injected", worker_spawned_event_id: 1, watermark: 0, entries: [{ id: followed, version: 1 }], tokens: 0, index_depth: 0, index_max_depth: 0, omitted: 0, tokenizer: "t", tokenizer_version: "0" },
+    payload: { kind: "memory_injected", worker_spawned_event_id: workSession, watermark: 0, entries: [{ id: followed, version: 1 }], tokens: 0, index_depth: 0, index_max_depth: 0, omitted: 0, tokenizer: "t", tokenizer_version: "0" },
     at,
   });
   const previous = register(db, "memory", true);
@@ -313,10 +315,7 @@ it("主題 memory の材料の節に載ったエントリは、その session �
   const events = listEvents(db, review);
 
   const episode = projectEpisode({
-    transcriptLines: [
-      '{"type":"assistant","uuid":"a1","message":{"content":[{"type":"tool_use","id":"t1","name":"mcp__tidepool__log_decision","input":{}}]}}',
-      `{"type":"user","uuid":"r1","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":[{"type":"text","text":"{\\"event_id\\":${decision}}"}]}]}}`,
-    ],
+    transcriptLines: toolCall(1, "mcp__tidepool__log_decision", decision),
     events,
     workerSpawnedEventId: spawned,
     extractorVersion: "test",

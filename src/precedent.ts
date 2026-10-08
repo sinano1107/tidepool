@@ -517,6 +517,21 @@ export function entriesReadBefore(
   return sortedIds(pulls.filter((p) => p.verb === "read_memory").flatMap((p) => p.returned_ids));
 }
 
+type MemoryMaterial = Extract<EventPayload, { kind: "meta_review_material_injected"; subject: "memory" }>;
+type MaterialPart = { [K in keyof MemoryMaterial]: MemoryMaterial[K] extends unknown[] ? K : never }[keyof MemoryMaterial];
+/** 材料の節(主題 memory)の部分ごとに、エントリの id を持つか。部分を足すと `satisfies` がここでの判断を型で強いる。 */
+const MATERIAL_PARTS = {
+  store_changes: true,
+  candidates: true,
+  precedents: false,
+  precedent_entries: true,
+  proposals: false,
+  proposal_entries: true,
+  branches: true,
+} as const satisfies Record<MaterialPart, boolean>;
+type EntryPart = { [K in MaterialPart]: (typeof MATERIAL_PARTS)[K] extends true ? K : never }[MaterialPart];
+const MATERIAL_ENTRY_PARTS = (Object.keys(MATERIAL_PARTS) as MaterialPart[]).filter((part): part is EntryPart => MATERIAL_PARTS[part]);
+
 /** 「decision D より前に見た記憶」= seen(ADR 0083 追記6、seen ⊇ read): この session の spawn 注入
  *  (`memory_injected` と主題 memory の `meta_review_material_injected` の5部分のエントリ、worker_spawned の event id で結ぶ)の
  *  id と、D より前の全 verb の pull が返した id の和集合(昇順)。routing の材料の節はエントリを載せないので数えない。
@@ -533,7 +548,7 @@ export function entriesSeenBefore(
     p.kind === "memory_injected" && p.worker_spawned_event_id === spawned
       ? p.entries.map((entry) => entry.id)
       : p.kind === "meta_review_material_injected" && p.subject === "memory" && p.worker_spawned_event_id === spawned
-        ? [...p.store_changes, ...p.candidates, ...p.precedent_entries, ...p.proposal_entries, ...p.branches]
+        ? MATERIAL_ENTRY_PARTS.flatMap((part) => p[part])
         : [],
   );
   return sortedIds([...injected, ...pulls.flatMap((p) => p.returned_ids)]);
