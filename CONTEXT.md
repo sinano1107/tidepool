@@ -381,7 +381,7 @@ _Avoid_: 退役した行(原因の断言になる)
 ## 差し替え(Model swap)
 
 CLI が、走り出した worker session の main を pin と違う model に替えたという観測(2026-10-08 の grilling、issue #1523 / ADR 0215)。Provider が内容を拒んだ(refusal)とき、CLI はまず同じ model で1回だけ注意文を注入して続け、再び拒まれると内蔵の表で同 Provider の別世代に替える。盤面はこれを止めず、CLI の報告(元の model / 替わった model / 範囲 / 分類)を逐語で終了時の記録に残し、分類でも理由でも分岐しない。拒否そのもの(同じ model で続いた場合も)も分類の逐語で同じ記録に残る。subagent だけが替わった(範囲が local)なら session の差し替えとは数えない。差し替えのあった session は、仕事をしたのが表に無い model なので学習器は受理率の分母に入れず、advisor の使用量の分離も諦める。人間が決めることは無いので question は立てず、報告なき exit の failure question 文に差し替えの1行が載るだけ。行の拒否とは別物 —— 行の拒否は Provider が行を走らせないこと、差し替えは Provider が内容を拒み CLI が model を替えたこと。
-_Avoid_: 行の拒否、fallback(表の既定の意味で使っている)、降格
+_Avoid_: 行の拒否、fallback(表の既定の意味で使っている)
 
 ## Branch discipline(ブランチ規律)
 
