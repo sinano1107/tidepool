@@ -65,7 +65,8 @@ export type TierSource = "task" | "review_tier" | "agent" | "board";
 export type ProviderSource = "only" | "rank" | "cost" | "learner";
 
 /** 優先順位の既定の、さらに既定(ADR 0114 決定1 / ADR 0111 追記10): 盤面設定 `execution_defaults.priority`・
- *  `review_priority` が未設定のときの値。work task の優先順位 → 盤面設定の work 用の既定 → この定数の順に倒れる
+ *  `review_priority` が未設定のときの値。work task は task の優先順位 → 盤面設定の work 用の既定 → この定数、
+ *  review task は盤面設定の review 用の既定 → この定数の順に倒れる
  *  (`selectorInputFor` / `loadExecutionDefaults`)。 */
 export const BOARD_DEFAULT_PRIORITY: Priority = "quality";
 
