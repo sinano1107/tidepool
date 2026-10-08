@@ -65,7 +65,7 @@ import {
   memorySettingsChangeSchema,
   moveMemory,
   moveMemoryBranch,
-  previewCase,
+  previewCaseWithLineIds,
   questionAnnotations,
   readMemorySettings,
   rebuildMemoryIndex,
@@ -369,6 +369,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
         "call get_task again with only `next` to read the older events, and repeat until a response carries no `next` — then the history is complete. " +
         "The task itself comes on the first response only. An event too large for one response comes alone in pieces marked `partial` " +
         "(`id`, `field`, and `field_bytes`, the field's full size in UTF-8 bytes): join that field across the pieces to get it verbatim. " +
+        "Events added after the first call are not returned: call again without `next` to see them. " +
         QUESTION_ANNOTATIONS_DESCRIPTION,
       inputSchema: { task_id: z.string().optional(), next: z.string().optional() },
     },
@@ -378,7 +379,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
         const task = getTask(deps.db, read.args.task_id);
         if (!task) throw new DomainError("task not found");
         const envelope = { ...presentTask(deps.db, task, deps.defaultAgentName, deps.auditorName), ...(task.type === "question" && questionAnnotations(deps.db, task)) };
-        return packItems(read, "events", listEvents(deps.db, task.id).reverse(), envelope);
+        return packItems(read, "events", listEvents(deps.db, task.id).reverse(), envelope, { resumeByKey: true });
       }),
   );
   server.registerTool(
@@ -387,12 +388,12 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
       description:
         "Read the decision log without marking it seen, newest first (entry id descending). Each entry carries every objection ever " +
         "raised against it (bundled and still commit-pending alike). `cursor` is the human's unread cursor, unrelated to `next`. " +
-        nextDescription("read_decision_log", "entries", "`cursor` comes"),
+        nextDescription("read_decision_log", "entries", "`cursor` comes", true),
       inputSchema: { next: z.string().optional() },
     },
     async (input) =>
       readBudgeted("read_decision_log", input, (read) =>
-        packItems(read, "entries", listLog(deps.db, deps.workspace?.name).reverse(), { cursor: getLogCursor(deps.db) }),
+        packItems(read, "entries", listLog(deps.db, deps.workspace?.name).reverse(), { cursor: getLogCursor(deps.db) }, { resumeByKey: true }),
       ),
   );
   server.registerTool(
@@ -770,14 +771,16 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
     async (input) =>
       readBudgeted("preview_case", input, (read) => {
         if (read.args.event_id === undefined) throw new DomainError("pass event_id, or next from a previous preview_case");
-        // item は steering か decisions の文(文字列で id を持たない)。続きの境目は列の位置 —— どちらも event 順で積み足されるだけ
-        const rendered = previewCase(deps.db, read.args.event_id);
+        // item は steering か decisions の文(文字列で id を持たない)。続きの鍵はその行の event id —— 列の位置だと先頭の範囲の
+        // digest が変化を表さない(ADR 0195 追記 #1399)
+        const { rendered, lineIds } = previewCaseWithLineIds(deps.db, read.args.event_id);
+        const keyOf = (_: string, i: number) => lineIds[i]!;
         if ("decisions" in rendered) {
           const { decisions, ...envelope } = rendered;
-          return packItems(read, "decisions", decisions, envelope, { keyOf: (_, i) => i });
+          return packItems(read, "decisions", decisions, envelope, { keyOf });
         }
         const { steering, ...envelope } = rendered;
-        return packItems(read, "steering", steering, envelope, { keyOf: (_, i) => i });
+        return packItems(read, "steering", steering, envelope, { keyOf });
       }),
   );
   server.registerTool(
@@ -885,7 +888,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
         "triage session raised against the entry). An allocation row shows the review and the reviewed task; a draft or second-round row shows " +
         "the objected entry, its task, cause (the latest bundle's judgment; null = unattributed) and round. Every row shows the last failure's " +
         "reason and time. Rows come as `halted`: draft and second-round rows first, in the order of the objections they answer, " +
-        `then allocation reviews. ${nextDescription("list_halted_refires", "rows")}`,
+        `then allocation reviews in the order the reviews completed. ${nextDescription("list_halted_refires", "rows")}`,
       inputSchema: { next: z.string().optional() },
     },
     // 行は id を持たない —— 続きの境目は refire と target の鍵(Retry / Dismiss が行を指すのと同じ)

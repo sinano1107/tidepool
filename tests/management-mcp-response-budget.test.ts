@@ -236,6 +236,65 @@ it("read_decision_log を読んでいる途中に entry が積まれても、nex
   }
 });
 
+// 読む間に既読の範囲が変わったとき(ADR 0195 追記 #1399): #1399 の観測と同じ 1KB の task 60件の queue
+
+/** 1KB の task を60件積んだ queue の、最初の list_queue の応答と queue の id の列。 */
+async function queueRead(client: Client) {
+  Array.from({ length: 60 }, (_, i) => queueWork(t, `${i} ${KB}`));
+  const ids: string[] = (await http("/api/queue")).tasks.map((task: any) => task.id);
+  const { payload } = await call(client, {}, "list_queue");
+  return { ids, returned: payload.tasks.length as number, next: payload.next as string };
+}
+
+it("list_queue の続きの途中で未読の task を先頭へ move すると、続きは黙って欠けずに読み直せの error になる", async () => {
+  t = await bootTidepool();
+  const client = await managementMcpClient(t.baseUrl);
+  try {
+    const { ids, next } = await queueRead(client);
+    await api(t.baseUrl, "POST", `/api/tasks/${ids.at(-1)}/move`, { after: null });
+
+    const result: any = await client.callTool({ name: "list_queue", arguments: { next } });
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain("the list changed since the first list_queue call: call list_queue again without next to read it from the start");
+  } finally {
+    await client.close();
+  }
+});
+
+it("list_queue の続きの途中で境目の task を cancel しても、続きは残りを欠けなく返す", async () => {
+  t = await bootTidepool();
+  const client = await managementMcpClient(t.baseUrl);
+  try {
+    const { ids, returned, next } = await queueRead(client);
+    await api(t.baseUrl, "POST", `/api/tasks/${ids[returned]}/cancel`, {});
+
+    const responses = [await call(client, { next }, "list_queue")];
+    while (responses.at(-1)!.payload.next) responses.push(await call(client, { next: responses.at(-1)!.payload.next }, "list_queue"));
+
+    expect(responses.flatMap((response) => response.payload.tasks.map((task: any) => task.id))).toEqual(ids.slice(returned + 1));
+  } finally {
+    await client.close();
+  }
+});
+
+it("続きで読む口の説明は、一覧が読む間に変わると最初から読み直せの error になると言う。新しい順の履歴の口は代わりに、読み始めた後の分は返らないと言う", async () => {
+  t = await bootTidepool();
+  const client = await managementMcpClient(t.baseUrl);
+  try {
+    const description = Object.fromEntries((await client.listTools()).tools.map((tool) => [tool.name, tool.description]));
+
+    expect(description.list_queue).toContain(
+      'If the list changes under the read, the call fails with "the list changed since the first list_queue call: call list_queue again without next to read it from the start"; read again from the start.',
+    );
+    expect(description.read_decision_log).toContain("Entries added after the first call are not returned: call again without `next` to see them.");
+    expect(description.get_task).toContain("Events added after the first call are not returned: call again without `next` to see them.");
+    for (const verb of ["read_decision_log", "get_task"]) expect(description[verb]).not.toContain("the list changed");
+  } finally {
+    await client.close();
+  }
+});
+
 it("register_task・cancel_task・complete_task の ack は task の識別と状態だけを返し、呼び手が渡した本文をエコーしない", async () => {
   t = await bootTidepool();
   // 登録は pickup の契機なので(ADR 0119 決定2)、slot を埋めて行を取り消せる todo のまま置く

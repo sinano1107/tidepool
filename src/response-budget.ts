@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { Db } from "./db.js";
 import { DomainError } from "./domain-error.js";
 import { appendEvent, type EventPayload } from "./events.js";
@@ -10,13 +11,19 @@ export const RESPONSE_BUDGET_BYTES = 40_000;
 type ItemId = string | number;
 
 /** 読みの位置。最初の読みは verb と引数だけ、続き(next)はそれに読み口の位置を足す ——
- *  `at` は次に返す item の id、`field` / `offset` は1件で予算を超える item の欄の続き(UTF-8 のバイト位置)。 */
+ *  `at` は次に返す item の id、`count` と `digest` はそれまでに返した件数とその鍵の列の digest(ADR 0195 追記 #1399 の1)、
+ *  `field` / `offset` は1件で予算を超える item の欄の続き(UTF-8 のバイト位置)で、`field_bytes` / `field_digest` はその欄の
+ *  全体のバイト数と digest(同4)。 */
 export interface ReadPosition<A = Record<string, unknown>> {
   verb: string;
   args: A;
   at?: ItemId;
+  count?: number;
+  digest?: string;
   field?: string[];
   offset?: number;
+  field_bytes?: number;
+  field_digest?: string;
 }
 
 const bytes = (text: string) => Buffer.byteLength(text);
@@ -45,6 +52,9 @@ function fitEnd(buf: Buffer, from: number, fits: (end: number) => boolean): numb
 }
 
 const MALFORMED_NEXT = "next is malformed: pass the next string exactly as a previous response returned it";
+/** 読む間に既読の範囲が変わった続きの error(ADR 0195 追記 #1399)。 */
+const listChanged = (verb: string) => `the list changed since the first ${verb} call: call ${verb} again without next to read it from the start`;
+const digestOf = (text: string) => createHash("sha256").update(text).digest("base64url");
 
 const encodeNext = (position: ReadPosition<unknown>) => Buffer.from(JSON.stringify(position)).toString("base64url");
 
@@ -54,9 +64,12 @@ export function readNext<A = Record<string, unknown>>(verb: string, next: string
   try {
     p = JSON.parse(Buffer.from(next, "base64url").toString());
   } catch {}
+  const isCount = (n: unknown) => Number.isInteger(n) && (n as number) >= 0;
   const fieldIsWellFormed =
-    p?.field === undefined || (Array.isArray(p.field) && p.field.every((name) => typeof name === "string") && Number.isInteger(p.offset) && p.offset! >= 0);
-  if (typeof p?.verb !== "string" || typeof p.args !== "object" || p.args === null || !["string", "number"].includes(typeof p.at) || !fieldIsWellFormed)
+    p?.field === undefined ||
+    (Array.isArray(p.field) && p.field.every((name) => typeof name === "string") && isCount(p.offset) && isCount(p.field_bytes) && typeof p.field_digest === "string");
+  const rangeIsWellFormed = isCount(p?.count) && typeof p?.digest === "string";
+  if (typeof p?.verb !== "string" || typeof p.args !== "object" || p.args === null || !["string", "number"].includes(typeof p.at) || !rangeIsWellFormed || !fieldIsWellFormed)
     throw new DomainError(MALFORMED_NEXT);
   if (p.verb !== verb) throw new DomainError(`next belongs to ${p.verb}, not ${verb}: pass it to ${p.verb}`);
   return p as ReadPosition<A>;
@@ -76,21 +89,29 @@ export type Packed<L, E = unknown> = L & Partial<E> & { next?: string; remaining
 
 /** 読み口ごとの詰め方の違い。 */
 interface PackOptions<T> {
-  /** 続きの境目の鍵 —— 既定は `id`、id を持たない item(枝の行・文字列など)は item と列の位置から作る。 */
+  /** 続きの境目の鍵 —— 既定は `id`、id を持たない item(枝の行・文字列など)は item ごとに変わらない識別子を渡す。
+   *  列の位置で作ると、先頭の範囲の digest が変化を表さない(ADR 0195 追記 #1399)。 */
   keyOf?: (item: T, index: number) => ItemId;
   /** item を置く列(`key` に並べた点区切りの path のどれか)。既定は `key` の先頭。 */
   listOf?: (item: T, index: number) => string;
   /** 続きの応答にも毎回載る欄(封筒と違い最初の応答だけではない)。 */
   every?: Record<string, unknown>;
+  /** 続きを先頭の範囲の digest で照らさず、`at` の鍵で引き直す。先頭に伸びる新しい順の履歴(`get_task` と `read_decision_log`)
+   *  だけが使う —— 照らすと動いている task を読み終えられず、event は消えないので鍵は外れない(ADR 0195 追記 #1399 の3)。 */
+  resumeByKey?: boolean;
 }
 
-/** 予算と続きで読む口(管理MCP と Worker MCP)の description の続きの読み方(ADR 0195)。順序は各口が前に書く。 */
-export const nextDescription = (verb: string, items: string, firstOnly?: string) =>
+/** 予算と続きで読む口(管理MCP と Worker MCP)の description の続きの読み方(ADR 0195)。順序は各口が前に書く。
+ *  `resumeByKey` は packItems の同名のオプションを使う口 —— 読み直せの error が出ない代わりに、読み始めた後の分が返らない。 */
+export const nextDescription = (verb: string, items: string, firstOnly?: string, resumeByKey?: boolean) =>
   `When the ${items} do not fit in one response, the response carries \`next\` and \`remaining\` (how many ${items} are not returned yet): ` +
   `call ${verb} again with only \`next\` to read the rest, and repeat until a response carries no \`next\` — then the list is complete.` +
   (firstOnly ? ` ${firstOnly} on the first response only.` : "") +
   " An item too large for one response comes alone in pieces marked `partial` (`id`, the item's id or the key `next` resumes from; `field`, " +
-  "empty when the item is itself a string; and `field_bytes`, the field's full size in UTF-8 bytes): join that field across the pieces to get it verbatim.";
+  "empty when the item is itself a string; and `field_bytes`, the field's full size in UTF-8 bytes): join that field across the pieces to get it verbatim." +
+  (resumeByKey
+    ? ` ${items[0]!.toUpperCase()}${items.slice(1)} added after the first call are not returned: call again without \`next\` to see them.`
+    : ` If the list changes under the read, the call fails with "${listChanged(verb)}"; read again from the start.`);
 
 /** item の列を、予算に収まるだけ丸ごと `key` に詰めた応答にする(ADR 0195 決定3)。
  *  `envelope`(item の列以外の欄)は最初の読みにだけ載る。残りがあるときだけ `next` と `remaining`(残りの件数)が付く ——
@@ -118,18 +139,32 @@ export function packItems<T>(
   options: PackOptions<T> = {},
 ): Record<string, unknown> {
   const lists = [key].flat();
-  const { keyOf = (item: T) => (item as { id: ItemId }).id, listOf = () => lists[0]!, every = {} } = options;
+  const { keyOf = (item: T) => (item as { id: ItemId }).id, listOf = () => lists[0]!, every = {}, resumeByKey = false } = options;
+  /** 列の先頭 `count` 件の鍵の digest。詰める間は件数を伸ばしながら何度も引くので、増分で求めて覚える。 */
+  const prefixDigests: string[] = [];
+  const keyHash = createHash("sha256");
+  const prefixDigest = (count: number) => {
+    for (let i = prefixDigests.length; i <= count; i++) {
+      if (i > 0) keyHash.update(`${JSON.stringify(keyOf(items[i - 1]!, i - 1))}\n`);
+      prefixDigests.push(keyHash.copy().digest("base64url"));
+    }
+    return prefixDigests[count]!;
+  };
   let start = 0;
   if (read.at !== undefined) {
-    start = items.findIndex((item, i) => keyOf(item, i) === read.at);
-    if (start === -1) throw new DomainError(`next points at item ${read.at}, which this read no longer has`);
+    // 先頭の範囲が返したものと同じなら、残りは今の列の位置 count から先と一致する —— 境目の item の離脱もそのまま続く
+    const { count = 0, digest, field, at } = read;
+    const sameRange = () =>
+      count <= items.length && prefixDigest(count) === digest && (field === undefined || (count < items.length && keyOf(items[count]!, count) === at));
+    start = resumeByKey ? items.findIndex((item, i) => keyOf(item, i) === at) : sameRange() ? count : -1;
+    if (start === -1) throw new DomainError(listChanged(read.verb));
   }
   const firstOnly = read.at === undefined ? envelope : {};
   const head = { ...firstOnly, ...every };
   const rest = items.slice(start);
   const keyAt = (k: number) => keyOf(rest[k]!, start + k);
-  const continueFrom = (k: number) =>
-    k < rest.length ? { next: encodeNext({ verb: read.verb, args: read.args, at: keyAt(k) }), remaining: rest.length - k } : {};
+  const positionOf = (k: number) => ({ verb: read.verb, args: read.args, at: keyAt(k), count: start + k, digest: prefixDigest(start + k) });
+  const continueFrom = (k: number) => (k < rest.length ? { next: encodeNext(positionOf(k)), remaining: rest.length - k } : {});
   /** `base`(既定は `head`)に、`rest` の先頭から選んだ item(切れは `rest[0]` の代わり)をそれぞれの列に置いた応答(列は item が
    *  無くても空で載る)。列は位置で引く —— 切れは複製なので item そのものからは引けない。 */
   const render = (chosen: readonly T[], base: object = head) => {
@@ -148,8 +183,12 @@ export function packItems<T>(
   const piece = (field: string[], offset: number) => {
     const item = rest[0]!;
     const value = field.reduce<any>((node, name) => node?.[name], item);
-    if (typeof value !== "string") throw new DomainError(MALFORMED_NEXT);
+    // 切り始めは最も長い文字列の欄を選ぶので、文字列でないのは続きの間に item の形が変わったときだけ
+    if (typeof value !== "string") throw new DomainError(listChanged(read.verb));
     const text = Buffer.from(value);
+    // 欄が切れの間に書き換わっていたら、つなぐと新旧の継ぎはぎになる(ADR 0195 追記 #1399 の4)
+    const fieldDigest = digestOf(value);
+    if (read.field !== undefined && (read.field_bytes !== text.length || read.field_digest !== fieldDigest)) throw new DomainError(listChanged(read.verb));
     const pageUpTo = (end: number) => {
       // 欄の path が空なら item そのもの(文字列の item)を切る
       let cut: any = text.subarray(offset, end).toString();
@@ -161,7 +200,7 @@ export function packItems<T>(
       return {
         ...render([cut]),
         partial: { id: keyAt(0), field: field.join("."), field_bytes: text.length },
-        ...(end < text.length ? { next: encodeNext({ ...read, at: keyAt(0), field, offset: end }), remaining: rest.length } : continueFrom(1)),
+        ...(end < text.length ? { next: encodeNext({ ...positionOf(0), field, offset: end, field_bytes: text.length, field_digest: fieldDigest }), remaining: rest.length } : continueFrom(1)),
       };
     };
     // 他の欄だけで予算を超えると1文字も入らない —— 欄の残りを丸ごと返して床に任せ、続きが同じ位置を指し続けないようにする

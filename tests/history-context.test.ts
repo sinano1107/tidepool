@@ -308,7 +308,8 @@ it("get_current_task describes how to read history in English: its entries, its 
         "call get_current_task again with only `next` to read the rest, and repeat until a response carries no `next` — then the list is complete. " +
         "The task and the parent's other fields come on the first response only. " +
         "An item too large for one response comes alone in pieces marked `partial` (`id`, the item's id or the key `next` resumes from; `field`, " +
-        "empty when the item is itself a string; and `field_bytes`, the field's full size in UTF-8 bytes): join that field across the pieces to get it verbatim.",
+        "empty when the item is itself a string; and `field_bytes`, the field's full size in UTF-8 bytes): join that field across the pieces to get it verbatim. " +
+        'If the list changes under the read, the call fails with "the list changed since the first get_current_task call: call get_current_task again without next to read it from the start"; read again from the start.',
     );
   } finally {
     await client.close();

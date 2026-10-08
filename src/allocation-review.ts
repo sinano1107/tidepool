@@ -95,7 +95,8 @@ export function allocationTargets(db: Db): AllocationTarget[] {
            FROM events c JOIN tasks t ON t.id = c.task_id
           WHERE c.kind = 'task_completed'
             AND EXISTS (SELECT 1 FROM events r WHERE r.task_id = c.task_id AND r.kind = 'task_registered' AND json_extract(r.payload, '$.integration_review') = 1)
-            AND NOT EXISTS (SELECT 1 FROM events a WHERE a.kind = 'allocation_reviewed' AND json_extract(a.payload, '$.review_task_id') = c.task_id)`,
+            AND NOT EXISTS (SELECT 1 FROM events a WHERE a.kind = 'allocation_reviewed' AND json_extract(a.payload, '$.review_task_id') = c.task_id)
+          ORDER BY c.id`,
       )
       .all() as Array<Omit<AllocationTarget, "spawned_event_id"> & { spawned_event_id: number | null }>
   ).filter((r): r is AllocationTarget => r.spawned_event_id !== null);
