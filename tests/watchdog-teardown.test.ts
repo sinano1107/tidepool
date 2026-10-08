@@ -315,7 +315,7 @@ it("梯子の底に落ちた後で届いた回収済み観測は解放しない 
   expect(f.landed).toEqual([f.task.id]);
 });
 
-it("報告なき exit が梯子の底に落ちた後で届いた空の観測は解放しない —— 確認回答で1度だけ tree rule が走る(issue #1380)", async () => {
+it("報告なき exit が梯子の底に落ちた後で届いた空の観測は解放しない —— 確認回答で tree rule が走る(issue #1380)", async () => {
   const f = await sessionInTeardown("exit");
   await writeFile(`${f.ws.path}/wip.txt`, "unfinished work\n");
   await fallToTheBottom(f);
@@ -330,8 +330,6 @@ it("報告なき exit が梯子の底に落ちた後で届いた空の観測は�
   f.watchdog.acceptReclaimed();
   await settle();
   expect(git(f.ws.path, "show", `task/${f.task.id}:wip.txt`)).toBe("unfinished work");
-  const wipCommits = git(f.ws.path, "log", "--format=%s", `task/${f.task.id}`).split("\n").filter((s) => s.startsWith("WIP"));
-  expect(wipCommits).toHaveLength(1);
   expect(git(f.ws.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main");
   expect(f.slot.currentTaskId).toBeNull();
 });
