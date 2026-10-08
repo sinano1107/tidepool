@@ -304,6 +304,8 @@ export function startWatchdog(deps: {
   const { db, clock, slot, worker, containers, workspace, resolveWorkspace, config } = deps;
   const resolve = buildWorkspaceResolver(resolveWorkspace, workspace);
   const reclaimTimeout = config.reclaimTimeout ?? RECLAIM_TIMEOUT;
+  let pending: string | null = null;
+  const heldForContainment = (taskId: string) => pending === taskId;
   const teardown: TeardownDeps = {
     db,
     clock,
@@ -311,11 +313,12 @@ export function startWatchdog(deps: {
     resolve,
     githubAuth: deps.githubAuth,
     landing: deps.landing,
+    // watchdog が撃つ後始末も、梯子の底で保留中の session を遅れた回収済み観測で解放しない(ADR 0099 決定3)
+    heldForContainment,
     pollNow: deps.pollNow,
   };
   // 今 slot にいるタスクの記録1件(`syncPickup` が作り直す)
   let record: WatchRecord | null = null;
-  let pending: string | null = null;
 
   /** 容器が空になった観測。ここで初めて failure question と slot 解放へ進む ——
    *  通る型は通常完了・上限到達による中断と同じ後始末である(ADR 0109 決定1)。
@@ -507,7 +510,7 @@ export function startWatchdog(deps: {
   const cancel = clock.setInterval(tick, WATCHDOG_TICK);
   return {
     stop: cancel,
-    heldForContainment: (taskId) => pending === taskId,
+    heldForContainment,
     onWorkerExited,
     pendingReclaim: () =>
       pending !== null && containers.pendingReclaim(pending)
