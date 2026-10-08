@@ -479,7 +479,15 @@ function assertQuestionSpec(input: RegisterTaskInput): void {
  *  a DomainError from this layer — spelling the enum per door would mean
  *  three places to update when the vocabulary moves. An unstated column is
  *  not a bad value: null is the request's absence. */
-function assertExecutionRequest(db: Db, input: Pick<RegisterTaskInput, "tier" | "priority" | "review_tier">): void {
+function assertExecutionRequest(
+  db: Db,
+  input: Pick<RegisterTaskInput, "type" | "tier" | "priority" | "review_tier">,
+): void {
+  // review task の要求は review_tier だけ(ADR 0111 追記10)
+  for (const field of ["tier", "priority"] as const) {
+    const reason = input[field] !== undefined && whyExecutionRequestIsInert(input);
+    if (reason) throw new DomainError(`${field} would have no effect — ${reason}`);
+  }
   // 段は盤面の一覧(ADR 0200 決定2): 一覧に無い名前は、いまの一覧を添えて拒む
   if (input.review_tier !== undefined) assertKnownTier(db, "review_tier", input.review_tier);
   if (input.tier !== undefined) assertKnownTier(db, "tier", input.tier);
@@ -704,10 +712,6 @@ export function registerTask(
   if (input.cancel_option !== undefined) input.cancel_option = normalizeText(input.cancel_option);
   assertQuestionSpec(input);
   assertGithubRef(input);
-  for (const field of ["tier", "priority"] as const) {
-    const reason = input[field] !== undefined && whyExecutionRequestIsInert(input);
-    if (reason) throw new DomainError(`${field} would have no effect — ${reason}`);
-  }
   assertExecutionRequest(db, input);
   assertReviewFieldsTakeEffect(input, input.review_by, input.review_tier);
   assertReviewByDistinct(input.review_by);
@@ -2011,7 +2015,7 @@ export function decomposeTask(
   // *question*, not the spec it carries).
   for (const child of input.children) {
     assertGithubRef({ type: "work", ...child });
-    assertExecutionRequest(db, child);
+    assertExecutionRequest(db, { type: "work", ...child });
     assertReviewFieldsTakeEffect({ type: "work", parent_id: parent.id, ...child }, child.review_by, child.review_tier);
     assertReviewByDistinct(child.review_by);
   }
