@@ -40,7 +40,7 @@ it("親が slot を取っていても completeIntegrationReviews は子の統合
   await completeIntegrationReviews(t, child.id);
 
   const review = (await children(t, child.id)).find((x: any) => x.type === "review");
-  expect(review.status).toBe("done");
+  expect(review?.status).toBe("done");
   const tasks = (await api(t.baseUrl, "GET", "/api/tasks")).json;
   expect(tasks.find((x: any) => x.id === parent.id).status).toBe("done");
 });

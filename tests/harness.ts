@@ -1077,9 +1077,11 @@ export async function runNow(t: Tidepool, taskId: string) {
   for (;;) {
     const running = (await api(t.baseUrl, "GET", "/api/tasks")).json.find((x: any) => x.status === "in_progress");
     if (!running || running.id === taskId) break;
-    await completeViaMcp(t, running.id, running.type === "work");
+    const res = await completeViaMcp(t, running.id, running.type === "work");
+    if (res.isError) throw new Error(`slot holder completion failed: ${JSON.stringify(res)}`);
   }
-  await api(t.baseUrl, "POST", `/api/tasks/${taskId}/move`, { after: null });
+  const moved = await api(t.baseUrl, "POST", `/api/tasks/${taskId}/move`, { after: null });
+  if (moved.status !== 200) throw new Error(`run now failed: ${JSON.stringify(moved.json)}`);
   await api(t.baseUrl, "POST", `/api/tasks/${taskId}/move`, { after: null });
 }
 
