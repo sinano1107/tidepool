@@ -394,10 +394,10 @@ function RegisterScreen({ onRegister, parentTask, onClose }: RegisterScreenProps
               {TidepoolRules.whyBlank(workspace) && (
                 <span style={issueListHintStyle}>select a workspace to browse its open issues</span>
               )}
-              {workspace.trim() && issuesFailed && (
+              {!TidepoolRules.whyBlank(workspace) && issuesFailed && (
                 <span style={issueListHintStyle}>couldn't fetch open issues — type the number directly</span>
               )}
-              {workspace.trim() && !issuesFailed && filteredIssues.map((i) => (
+              {!TidepoolRules.whyBlank(workspace) && !issuesFailed && filteredIssues.map((i) => (
                 <div key={i.number} onClick={() => setIssueNumber(String(i.number))}
                   style={{
                     display: 'flex', gap: 8, padding: '6px 8px', borderRadius: 6, cursor: 'pointer',
@@ -408,7 +408,7 @@ function RegisterScreen({ onRegister, parentTask, onClose }: RegisterScreenProps
                   <span>{i.title}</span>
                 </div>
               ))}
-              {workspace.trim() && !issuesFailed && truncated && (
+              {!TidepoolRules.whyBlank(workspace) && !issuesFailed && truncated && (
                 <span style={issueListHintStyle}>older issues exist — type the number directly</span>
               )}
             </div>
