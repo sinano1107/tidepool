@@ -1455,6 +1455,31 @@ it("PR を開く時点で profile が解決できなければ、PR を開かず 
   expect(github.merged).toHaveLength(1);
 });
 
+it("開いている PR へ修理を push する着地は profile を読まないので、解決できなくても push して agent を quarantine に落とさない", async () => {
+  const { workspace } = await makeRemoteBackedWorkspace("landing-unresolvable-open-pr-update");
+  const { db, clock } = await openBoard();
+  const github = new FakeGitHubClient();
+  const landing = createLanding({
+    defaultAgentName: "tako",
+    db,
+    clock,
+    workspace,
+    github,
+    resolveAuthority: unresolvable,
+  });
+  const task = landingWork(db, clock);
+  git(workspace.path, "checkout", "-b", `task/${task.id}`);
+  commitWork(workspace.path, "feature.txt", "ready\n");
+  recordPrOpenedViaWorker(db, task, 1, "worker", clock.now());
+
+  await expect(landing.land(getTask(db, task.id)!)).resolves.toEqual({
+    kind: "landed",
+    surface: "open_pull_request_updated",
+    prNumber: 1,
+  });
+  expect(quarantineQuestion(db, "agent", "tako")).toBeUndefined();
+});
+
 function agentQuarantines(db: Db) {
   return listBoard(db).filter((q) => q.question_quarantine_kind === "agent" && q.status === "todo");
 }
@@ -1485,6 +1510,29 @@ it("無人 merge の瞬間に profile が解決できなければ、merge せず
   resolveAuthority = () => profile("auto_if_ci_green");
   await landing.tick("auto_merge", clock.now());
   expect(github.merged).toEqual([{ path: workspace.path, number: 1 }]);
+});
+
+it("直した registry でダイヤルが escalate に変わっていれば、直った後の tick は merge せず盤面の名義の merge question に渡す", async () => {
+  const workspace = await makeWorkspace("landing-unresolvable-repaired-escalate");
+  const { db, clock } = await openBoard();
+  const github = new FakeGitHubClient();
+  queueAutoMerge(db, clock, 1);
+  let resolveAuthority = unresolvable;
+  const landing = createLanding({
+    defaultAgentName: "tako",
+    db,
+    clock,
+    workspace,
+    github,
+    resolveAuthority: () => resolveAuthority(),
+  });
+  await landing.tick("auto_merge", clock.now());
+
+  resolveAuthority = () => profile("escalate");
+  await landing.tick("auto_merge", clock.now());
+
+  expect(github.merged).toEqual([]);
+  expect(mergeQuestions(db)).toEqual([expect.objectContaining({ pr: 1, registrant: [BOARD_WORKER_ID, "board"] })]);
 });
 
 it("CI を読んでいる間に profile が解決できなくなっても merge しない — merge の直前の読みも quarantine に落とす", async () => {

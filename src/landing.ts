@@ -441,6 +441,13 @@ export function createLanding(deps: LandingDeps): Landing {
     }
     return { kind: "failed", reason, error: message };
   };
+  const agentUnavailable = (task: Task, excludePrPromotionQuestionId?: string) =>
+    failed(
+      task,
+      "agent_unavailable",
+      "the assigned agent's authority profile cannot be resolved for landing",
+      excludePrPromotionQuestionId,
+    );
   const landing: Landing = {
     async land(task, excludePrPromotionQuestionId) {
       if (task.type !== "work") return { kind: "not_applicable", reason: "not_work" };
@@ -501,18 +508,11 @@ export function createLanding(deps: LandingDeps): Landing {
           recordLandingDeferred(deps.db, task.id, block, deps.clock.now());
           return { kind: "deferred", reason: block.kind, count: block.count };
         }
-        const authority = readAuthority(task, deps.clock.now());
-        if (!authority) {
-          return failed(
-            task,
-            "agent_unavailable",
-            "the assigned agent's authority profile cannot be resolved for landing",
-            excludePrPromotionQuestionId,
-          );
-        }
         if (!isRemoteBacked(workspace)) {
+          const resolved = readAuthority(task, deps.clock.now());
+          if (!resolved) return agentUnavailable(task, excludePrPromotionQuestionId);
           const purpose =
-            authority.profile?.merge === "auto_if_ci_green"
+            resolved.profile?.merge === "auto_if_ci_green"
               ? `Workspace "${workspace.name}" is purely-local, so CI cannot be observed and ` +
                 `auto_if_ci_green cannot auto-merge "${task.title}". Land its task branch on the ` +
                 `protected branch now?`
@@ -561,6 +561,9 @@ export function createLanding(deps: LandingDeps): Landing {
             prNumber: task.pr_number,
           };
         }
+        // profile を読むのは面を開く時点だけ —— 開いている PR への push は読まない(ADR 0217 決定3)
+        const resolved = readAuthority(task, deps.clock.now());
+        if (!resolved) return agentUnavailable(task, excludePrPromotionQuestionId);
         const { title } = await contentSourceFor(task, deps.github, () => workspace?.path).expand();
         let pr: Awaited<ReturnType<GitHubClient["createPullRequest"]>>;
         try {
@@ -588,7 +591,7 @@ export function createLanding(deps: LandingDeps): Landing {
             deps.auditorName ?? DEFAULT_AUDITOR_NAME,
           ),
           deps.clock.now(),
-          authority.profile,
+          resolved.profile,
           deps.isProtectedWorkspace?.(workspace.name),
           "worker",
         );
@@ -693,10 +696,10 @@ export function createLanding(deps: LandingDeps): Landing {
         // キューを外れ、門に当たった PR はキューに残る(ADR 0217 決定1)。profile が読めなければ
         // agent を quarantine に落とし、キューに残してこの回は飛ばす(決定3)
         const stop = () => {
-          const authority = readAuthority(task, now);
+          const resolved = readAuthority(task, now);
           return (
-            !authority ||
-            withdrawIfSurfaceChanged(task, authority.profile, pr_number, workspace.name, now) ||
+            !resolved ||
+            withdrawIfSurfaceChanged(task, resolved.profile, pr_number, workspace.name, now) ||
             landingBlock(deps.db, task_id)
           );
         };
