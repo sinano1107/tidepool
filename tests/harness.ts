@@ -918,7 +918,9 @@ export async function completeViaMcp(t: Tidepool, taskId: string, handoff = true
 }
 
 /** Finish only the reviews generated for this integration point, through the
- *  public worker verbs, so landing fixtures include the mandatory review gate. */
+ *  public worker verbs, so landing fixtures include the mandatory review gate.
+ *  A todo review is started with `runNow`, which first completes whichever task holds the slot
+ *  (e.g. the parent that took it once its only work child finished). */
 export async function completeIntegrationReviews(t: Tidepool, taskId: string): Promise<void> {
   const children = (await api(t.baseUrl, "GET", "/api/tasks")).json.filter(
     (task: any) => task.parent_id === taskId && task.type === "review" && ["todo", "in_progress"].includes(task.status),
@@ -926,12 +928,7 @@ export async function completeIntegrationReviews(t: Tidepool, taskId: string): P
   for (const review of children) {
     const events = (await api(t.baseUrl, "GET", `/api/tasks/${review.id}/events`)).json;
     if (!events.some((e: any) => e.kind === "task_registered" && e.payload.integration_review)) continue;
-    if (review.status === "todo") {
-      const moved = await api(t.baseUrl, "POST", `/api/tasks/${review.id}/move`, { after: null });
-      if (moved.status !== 200) throw new Error(`review pickup failed: ${JSON.stringify(moved.json)}`);
-      // Reordering is separate from Run now: a second move at the head requests pickup.
-      await api(t.baseUrl, "POST", `/api/tasks/${review.id}/move`, { after: null });
-    }
+    if (review.status === "todo") await runNow(t, review.id);
     const result = await completeViaMcp(t, review.id, false);
     if (result.isError) throw new Error(`review completion failed: ${JSON.stringify(result)}`);
   }
@@ -1080,9 +1077,11 @@ export async function runNow(t: Tidepool, taskId: string) {
   for (;;) {
     const running = (await api(t.baseUrl, "GET", "/api/tasks")).json.find((x: any) => x.status === "in_progress");
     if (!running || running.id === taskId) break;
-    await completeViaMcp(t, running.id, running.type === "work");
+    const res = await completeViaMcp(t, running.id, running.type === "work");
+    if (res.isError) throw new Error(`slot holder completion failed: ${JSON.stringify(res)}`);
   }
-  await api(t.baseUrl, "POST", `/api/tasks/${taskId}/move`, { after: null });
+  const moved = await api(t.baseUrl, "POST", `/api/tasks/${taskId}/move`, { after: null });
+  if (moved.status !== 200) throw new Error(`run now failed: ${JSON.stringify(moved.json)}`);
   await api(t.baseUrl, "POST", `/api/tasks/${taskId}/move`, { after: null });
 }
 
