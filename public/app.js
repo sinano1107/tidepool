@@ -695,6 +695,7 @@ const toLogEntryShape = (e, openSessionId) => ({
   text: e.payload.kind === "task_completed" ? e.payload.result ?? "(no outcome recorded)" : e.payload.line,
   cause: e.cause ?? void 0,
   causeEntries: e.entries ?? void 0,
+  causeEvidence: e.evidence ?? void 0,
   pendingObjections: e.objections.filter((o) => o.session_id === openSessionId).map((o) => o.comment),
   bundledObjections: e.objections.filter((o) => o.session_id !== openSessionId).map((o) => o.comment)
 });

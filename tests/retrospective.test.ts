@@ -120,8 +120,8 @@ it.each(["capability", "task_ambiguity", "missing_information"] as const)(
   const repair = kids.find((x: any) => x.title === "repair: mixed");
   expect(repair.purpose).toBe(
     'objections raised against decisions of "mixed":\n\n' +
-      "> named the flag --dry\n- call it --dry-run\n\n" +
-      "> skipped the fixtures\n- bring the fixtures back",
+      "> named the flag --dry\n- call it --dry-run\nboard judged: preference — spelling\n\n" +
+      `> skipped the fixtures\n- bring the fixtures back\nboard judged: ${rcaCause} — the fixtures were required`,
   );
   expect(kids.find((x: any) => x.title === "rca (self): mixed").purpose).toBe(
     'objections raised against decisions fake-worker made on "mixed":\n\n' +

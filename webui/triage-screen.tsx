@@ -666,6 +666,7 @@ const toLogEntryShape = (e: WireContract['GET /api/log']['entries'][number], ope
   text: e.payload.kind === 'task_completed' ? (e.payload.result ?? '(no outcome recorded)') : e.payload.line,
   cause: e.cause ?? undefined,
   causeEntries: e.entries ?? undefined,
+  causeEvidence: e.evidence ?? undefined,
   pendingObjections: e.objections.filter((o) => o.session_id === openSessionId).map((o) => o.comment),
   bundledObjections: e.objections.filter((o) => o.session_id !== openSessionId).map((o) => o.comment),
 });

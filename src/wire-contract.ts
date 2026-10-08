@@ -189,6 +189,8 @@ export interface WireContract {
       cause: Cause | null;
       /** 今の判定(最後の異議群の帰責)が memory のとき名指された entry の id 列(src/triage.ts の LogEntry)。他は null。 */
       entries: number[] | null;
+      /** 今の判定の evidence(src/triage.ts の LogEntry)。未帰責は null。 */
+      evidence: string | null;
       objections: Array<{ comment: string; session_id: number }>;
       /** エントリを含む worker session の worker_spawned の id(src/triage.ts の LogEntry)。窓の外なら null。 */
       session_event_id: number | null;
