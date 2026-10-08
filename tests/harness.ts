@@ -24,6 +24,7 @@ import { type CodexAppServerProbe, codexLoginAbsence } from "../src/codex-app-se
 import { type Db, openDb } from "../src/db.js";
 import type { DraftClient } from "../src/draft.js";
 import { appendEvent, type EventPayload, type EventRow } from "../src/events.js";
+import type { ExecutionSetting } from "../src/execution-setting.js";
 import type { GitHubAuth } from "../src/github-auth.js";
 import type { HarnessContainmentCheck } from "../src/harness-containment.js";
 import { recordKnowledge } from "../src/memory.js";
@@ -74,6 +75,19 @@ import {
 import { tempDir } from "./temp-dir.js";
 
 export { HOURLY as HOUR } from "../src/scheduler.js";
+
+/** 実行設定の候補。テストが言いたい欄だけを上書きする。 */
+export function executionSetting(provider: Provider, model: string, overrides: Partial<ExecutionSetting> = {}): ExecutionSetting {
+  return {
+    provider,
+    model,
+    effort: "high",
+    advisor: undefined,
+    tier_id: 1,
+    source: { tier: "board", provider: "only" },
+    ...overrides,
+  };
+}
 
 /** テスト盤面の credential(issue #153 / ADR 0036)。`bootTidepool` は必ず
  *  これを持つ盤面を起こし、`api()` が bearer で提示する — 既存テストの本文は

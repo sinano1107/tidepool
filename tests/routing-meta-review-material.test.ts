@@ -8,7 +8,7 @@ import { registerMetaReview } from "../src/meta-review.js";
 import { listRoutingCells, listRoutingShadow, proposeRoutingChange, readRoutingSettings } from "../src/routing-review.js";
 import { getTask, registerTask } from "../src/tasks.js";
 import { tierIdOf } from "../src/tier.js";
-import { answerQuestionViaWebui, HUMAN_WEBUI, QUIET_EXIT, WORKER_SPAWNED } from "./harness.js";
+import { answerQuestionViaWebui, executionSetting, HUMAN_WEBUI, QUIET_EXIT, WORKER_SPAWNED } from "./harness.js";
 
 /** routing meta-review の材料の節(ADR 0180 追記 #1239)のドメイン層。spawn の prompt に入ることは両 adapter のテストが言う。 */
 const at = new Date("2026-10-01T00:00:00.000Z");
@@ -54,15 +54,8 @@ it("材料の節は両端の watermark と5つの部分の見出しを持ち、�
   }
 });
 
-const setting = (provider: ExecutionSetting["provider"], model: string): ExecutionSetting => ({
-  provider,
-  model,
-  effort: "high",
-  advisor: undefined,
-  tier_id: 1, source: { tier: "agent", provider: "rank" },
-});
-const opus = setting("anthropic", "opus");
-const sol = setting("openai", "gpt-5.6-sol");
+const opus = executionSetting("anthropic", "opus", { source: { tier: "agent", provider: "rank" } });
+const sol = executionSetting("openai", "gpt-5.6-sol", { source: { tier: "agent", provider: "rank" } });
 const none = { board: { accepted: 0, rejected: 0 }, workspace: { accepted: 0, rejected: 0 } };
 /** recordShadow へ渡す組(setup のみ): 実績は空。 */
 const shadow = (recommended: ExecutionSetting, actual: ExecutionSetting, candidates = 2) => ({
@@ -183,7 +176,7 @@ it("新しいセルは初観測が窓の中のものだけ、人間が変えた�
   const edited = applyExecutionSettingsChange(db, { setting: "row", key: key("high"), row: { ...row, effort: "max" } }, "mcp", at)!;
   applyExecutionSettingsChange(db, { setting: "row", key: key("max"), row: { ...row, tier: "frontier" } }, "webui", at, "question-1");
   const review = register(db);
-  exit(task, spawn(task, "deckhand", setting("moonshot", "kimi-k3")));
+  exit(task, spawn(task, "deckhand", executionSetting("moonshot", "kimi-k3")));
   applyExecutionSettingsChange(db, { setting: "row", key: key("high"), row: { ...row, effort: "low" } }, "mcp", at);
 
   const { parts, section } = routingMaterialOf(db, review);

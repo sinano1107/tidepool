@@ -3,6 +3,7 @@ import type { ExecutionSetting } from "../src/execution-setting.js";
 import type { Task } from "../src/tasks.js";
 import type { WorkerAdapter } from "../src/worker.js";
 import { CanonicalWorkerRouter } from "../src/worker.js";
+import { executionSetting } from "./harness.js";
 
 function fakeWorker(id: string, usage: string): WorkerAdapter & {
   started: string[];
@@ -35,13 +36,7 @@ function fakeWorker(id: string, usage: string): WorkerAdapter & {
 const task = (id: string): Task => ({ id }) as Task;
 
 // 温存中の anthropic を避けて openai が選ばれた、の形
-const openai: ExecutionSetting = {
-  provider: "openai",
-  model: "gpt-6-astra",
-  effort: "high",
-  advisor: undefined,
-  tier_id: 1, source: { tier: "task", provider: "rank" },
-};
+const openai = executionSetting("openai", "gpt-6-astra");
 
 function router() {
   const claude = fakeWorker("claude", "claude usage");

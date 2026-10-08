@@ -14,6 +14,7 @@ import {
   completeIntegrationReviews,
   completeMetaReviews,
   completeViaMcp,
+  executionSetting,
   HOUR,
   loggedEntry,
   QUIET_EXIT,
@@ -22,20 +23,8 @@ import {
   WORKER_SPAWNED,
 } from "./harness.js";
 
-/** selector が並べた候補(除外を当てた後)。表の綴り —— 行は具体 id だけ(ADR 0182 決定1)。 */
-const candidate = (
-  provider: ExecutionSetting["provider"],
-  model: string,
-  advisor: string | undefined = undefined,
-): ExecutionSetting => ({
-  provider,
-  model,
-  effort: "high",
-  advisor,
-  tier_id: 1, source: { tier: "task", provider: "rank" },
-});
-const opus = candidate("anthropic", "claude-opus-5-5");
-const sol = candidate("openai", "gpt-5.6-sol");
+const opus = executionSetting("anthropic", "claude-opus-5-5");
+const sol = executionSetting("openai", "gpt-5.6-sol");
 
 /** 観測された episode の既定形。テストが言いたい1点だけを上書きする。 */
 function episode(overrides: Partial<LearnerEpisode> = {}): LearnerEpisode {
@@ -87,7 +76,7 @@ it("先頭が未観測なら、ほかの候補に観測があっても推薦は�
 });
 
 it("候補が3行で先頭に却下、2番目が未観測、3番目に却下の無い観測があれば推薦は3番目 —— 未観測の候補は飛ばす", () => {
-  const sonnet = candidate("anthropic", "claude-sonnet-4-5");
+  const sonnet = executionSetting("anthropic", "claude-sonnet-4-5");
   const episodes = [
     episode({ outcome: "rejected" }),
     episode({ cell: { provider: "anthropic", model: "claude-sonnet-4-5", effort: "high", advisor: null } }),
@@ -152,7 +141,7 @@ it("盤面全体の事後分布が workspace の事前分布 —— 自分の wo
 });
 
 /** 費用を報告する claude-code harness の2行(codex は報告しない)—— 両方に費用の観測が付く、本番で同点の起きうる組(#1250)。kimi が安い。 */
-const kimi = candidate("moonshot", "kimi-k3");
+const kimi = executionSetting("moonshot", "kimi-k3");
 const cheapKimi = episode({ cell: { provider: "moonshot", model: "kimi-k3", effort: "high", advisor: null }, cost_usd: 0.5 });
 const pricyOpus = episode({ cost_usd: 2 });
 
@@ -219,7 +208,7 @@ it("outcome は受理 = 統合点レビューがすべて完了、負 = capabili
 });
 
 it("advisor pin ありの episode は advisor 無しのセルに合流しない —— 相談回数ではなく pin がセルを割る(AC4)", () => {
-  const opusWithAdvisor = candidate("anthropic", "claude-opus-5-5", "claude-fable-5-1");
+  const opusWithAdvisor = executionSetting("anthropic", "claude-opus-5-5", { advisor: "claude-fable-5-1" });
   // pin あり・相談0回で受理されなかった session。pin が同じセルだけが下がる
   const pinnedRejected = episode({
     cell: { provider: "anthropic", model: "claude-opus-5-5", effort: "high", advisor: "claude-fable-5-1" },
@@ -338,7 +327,7 @@ it("行を段 T から T' へ settings で移すと T' の pickup の shadow 行
   // 動かすのは standard の opus の行 —— 盤面既定の economy には sonnet の行が残り、統合点レビューはそこで走る
   const key = { provider: "anthropic", model: "claude-opus-5-5", effort: "high" } as const;
   // standard の opus の行で走り、受理された session
-  await settledSession(t, { ...key, advisor: undefined, tier_id: tierIdOf(t.db, "standard"), source: { tier: "task", provider: "only" } });
+  await settledSession(t, executionSetting(key.provider, key.model, { tier_id: tierIdOf(t.db, "standard") }));
   const moveTo = async (tier: Tier) => {
     applyExecutionSettingsChange(t.db, { setting: "row", key, row: { ...key, tier, price_in: 5, price_out: 25 } }, "webui", t.clock.now());
     await t.clock.advance(HOUR);
@@ -362,7 +351,7 @@ it("行を段 T から T' へ settings で移すと T' の pickup の shadow 行
 });
 
 it("advisor pin ありで相談0回の session は、盤面の記録から読んでも advisor 無しのセルに合流しない(AC4)", async () => {
-  const opusWithAdvisor = candidate("anthropic", "claude-opus-5-5", "claude-fable-5-1");
+  const opusWithAdvisor = executionSetting("anthropic", "claude-opus-5-5", { advisor: "claude-fable-5-1" });
   t = await bootTidepool({ taskExecutionCandidates: () => [opusWithAdvisor, opus] });
   await settledSession(t, opus);
   const earlier = await registerWork(t, "earlier");
@@ -417,7 +406,7 @@ it("advisor pin ありで相談0回の session は、盤面の記録から読ん
 });
 
 it("行との照合は完全一致 —— 行 claude-opus-5 は claude-opus-5-5 のセルの却下を数えず、未観測の先頭のまま(ADR 0182 決定3)", () => {
-  const opus5 = candidate("anthropic", "claude-opus-5");
+  const opus5 = executionSetting("anthropic", "claude-opus-5");
   expect(recommendFor([episode({ outcome: "rejected" }), solAccepted], [opus5, sol])).toEqual({ recommended: opus5, basis: "data" });
 });
 

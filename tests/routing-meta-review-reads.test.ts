@@ -8,22 +8,14 @@ import { registerMetaReview } from "../src/meta-review.js";
 import { listAllocations, listRoutingCells, listRoutingShadow, proposeRoutingChange, readRoutingSettings } from "../src/routing-review.js";
 import { getTask, registerTask } from "../src/tasks.js";
 import { tierIdOf } from "../src/tier.js";
-import { answerQuestionViaWebui, HUMAN_WEBUI, QUIET_EXIT, RESPONSE_BUDGET_BYTES, WORKER_SPAWNED } from "./harness.js";
+import { answerQuestionViaWebui, executionSetting, HUMAN_WEBUI, QUIET_EXIT, RESPONSE_BUDGET_BYTES, WORKER_SPAWNED } from "./harness.js";
 
 /** 主題 routing の meta-review の読み口(issue #917 / spec #916 C)のドメイン層。verb への写像はサーバ境界
  *  (tests/routing-meta-review.test.ts)が言う。 */
 const at = new Date("2026-09-23T00:00:00.000Z");
 
-const setting = (provider: ExecutionSetting["provider"], model: string): ExecutionSetting => ({
-  provider,
-  model,
-  effort: "high",
-  advisor: undefined,
-  tier_id: 1,
-  source: { tier: "agent", provider: "rank" },
-});
-const opus = setting("anthropic", "claude-opus-5-5");
-const sol = setting("openai", "gpt-5.6-sol");
+const opus = executionSetting("anthropic", "claude-opus-5-5");
+const sol = executionSetting("openai", "gpt-5.6-sol");
 
 function board() {
   const db = openDb(":memory:");
@@ -184,9 +176,9 @@ it("list_allocations は評価された注釈を source.tier × 段 × agent × 
   const { db, work, spawn, allocate, routingReview } = board();
   const task = work("t", "standard");
   // judge と同じ綴りの pin だけが同じ model —— 照合は学習器のセルと同じ完全一致で、前方一致する綴りは数えない(ADR 0182 決定3)
-  const selfJudged = spawn(task.id, "reef-crab", setting("anthropic", "claude-fable-5-1"));
+  const selfJudged = spawn(task.id, "reef-crab", executionSetting("anthropic", "claude-fable-5-1"));
   allocate(task.id, selfJudged, { judge, allocation: "overpowered", cause: "uncertain", evidence: "e" });
-  const longContext = spawn(task.id, "reef-crab", setting("anthropic", "claude-fable-5-1[1m]"));
+  const longContext = spawn(task.id, "reef-crab", executionSetting("anthropic", "claude-fable-5-1[1m]"));
   allocate(task.id, longContext, { judge, allocation: "overpowered", cause: "uncertain", evidence: "e" });
   const other = spawn(task.id, "reef-crab", opus);
   allocate(task.id, other, { judge, allocation: "overpowered", cause: "uncertain", evidence: "e" });
@@ -236,7 +228,7 @@ it("list_routing_cells の新セルは終わった session で初めて観測さ
   routingReview(true);
   exit(task.id, spawn(task.id, "deckhand", opus), ["claude-opus-5-5"]); // 既知
   spawn(task.id, "deckhand", sol); // 終わっていない session は観測ではない
-  const seen = exit(task.id, spawn(task.id, "deckhand", setting("moonshot", "kimi-k3")), []);
+  const seen = exit(task.id, spawn(task.id, "deckhand", executionSetting("moonshot", "kimi-k3")), []);
 
   expect(listRoutingCells(db, routingReview(), {})).toEqual({
     cells: [{ cell: { provider: "moonshot", model: "kimi-k3", effort: "high", advisor: null }, first_observed_event_id: seen }],
@@ -287,7 +279,7 @@ it("list_routing_shadow / list_allocations / list_routing_cells は予算を超�
   // 長い agent 名と model 名で、20 の session がそれぞれ別の配分評価の組・別のセル・大きな shadow 行になる
   const tasks = Array.from({ length: 20 }, (_, i) => {
     const task = work(`w${i}`);
-    const run = setting("anthropic", `model-${i}-${"m".repeat(2_500)}`);
+    const run = executionSetting("anthropic", `model-${i}-${"m".repeat(2_500)}`);
     recordShadow(db, task.id, shadow(run, run, "prior"), at);
     const spawned = spawn(task.id, `agent-${i}-${"a".repeat(2_500)}`, run);
     exit(task.id, spawned);
