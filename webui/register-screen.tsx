@@ -188,8 +188,9 @@ function RegisterScreen({ onRegister, parentTask, onClose }: RegisterScreenProps
         String(i.number).includes(issueNumber.trim()) ||
         i.title.toLowerCase().includes(issueNumber.trim().toLowerCase()))
     : issues;
+  const issueNumberReason = TidepoolRules.whyNotPositiveInteger(readNumericDraft(issueNumber));
   const ok = issueMode
-    ? !TidepoolRules.whyBlank(workspace) && /^[0-9]+$/.test(issueNumber.trim())
+    ? !TidepoolRules.whyBlank(workspace) && !issueNumberReason
     : ![title, purpose, criteria].some((value) => TidepoolRules.whyBlank(value)) && (!childMode || !TidepoolRules.whyBlank(reason));
   // 欄はサーバーと同じ規則で出す(ADR 0209)。issue 経路は常に work(type state は手入力側で review に切り替えたまま残りうる)
   const ruleSubject = { type: issueMode ? 'work' : type, parent_id: parentTask?.id, assignee, review_flag: review, risk_flag: risk };
@@ -201,7 +202,7 @@ function RegisterScreen({ onRegister, parentTask, onClose }: RegisterScreenProps
   const fields = (): RegisterScreenFields =>
     issueMode
       ? {
-          type: 'work', workspace: workspace.trim(), github_issue_number: Number(issueNumber.trim()),
+          type: 'work', workspace: workspace.trim(), github_issue_number: readNumericDraft(issueNumber),
           risk_flag: risk,
           ...(assignee ? { assignee } : {}),
           ...(tier ? { tier } : {}),
@@ -389,7 +390,7 @@ function RegisterScreen({ onRegister, parentTask, onClose }: RegisterScreenProps
             {riskCheckbox}
             {reviewTierSelect}
             {reviewerPicker}
-            <Input label="Issue number" value={issueNumber} onChange={(e) => setIssueNumber(e.target.value)} placeholder="content stays on GitHub; the board keeps only this reference" />
+            <Input label="Issue number" error={issueNumberReason} value={issueNumber} onChange={(e) => setIssueNumber(e.target.value)} placeholder="content stays on GitHub; the board keeps only this reference" />
             <div style={{ display: 'flex', flexDirection: 'column', gap: 4, maxHeight: 220, overflowY: 'auto' }}>
               {TidepoolRules.whyBlank(workspace) && (
                 <span style={issueListHintStyle}>select a workspace to browse its open issues</span>

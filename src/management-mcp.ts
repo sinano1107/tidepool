@@ -76,6 +76,7 @@ import {
   TOKENIZER,
 } from "./memory.js";
 import { changeMetaReviewSettings, metaReviewSettingsChangeSchema, readMetaReviewSettings } from "./meta-review.js";
+import { whyNotPositiveInteger } from "./positive-integer.js";
 import { type ProfileAdmin, ProfileConfirmationRequiredError } from "./profile-create.js";
 import { type QuarantineChecks, type QuarantineResolvers, quarantineStops } from "./quarantine.js";
 import {
@@ -1031,7 +1032,10 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
       description: "Add a human-approved comment to a GitHub issue.",
       inputSchema: {
         workspace: z.string(),
-        github_issue_number: z.number(),
+        github_issue_number: z.number().superRefine((value, ctx) => {
+          const reason = whyNotPositiveInteger(value);
+          if (reason) ctx.addIssue({ code: "custom", message: reason });
+        }),
         body: z.string(),
       },
     },
@@ -1056,7 +1060,10 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
         title: z.string().optional(),
         purpose: z.string().optional(),
         completion_criteria: z.string().optional(),
-        github_issue_number: z.number().optional(),
+        github_issue_number: z.number().superRefine((value, ctx) => {
+          const reason = whyNotPositiveInteger(value);
+          if (reason) ctx.addIssue({ code: "custom", message: reason });
+        }).optional(),
         parent_id: z.string().optional(),
         assignee: z.string().optional(),
         workspace: z.string().optional(),

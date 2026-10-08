@@ -8,7 +8,7 @@ it("HTTP validation errors identify the invalid field and its reason (#1585)", a
   t = await bootTidepool();
   expect(await api(t.baseUrl, "POST", "/api/settings/memory", { injection_token_cap: 0 })).toMatchObject({
     status: 400,
-    json: { error: "injection_token_cap: Too small: expected number to be >0" },
+    json: { error: "injection_token_cap: must be a positive integer" },
   });
 });
 

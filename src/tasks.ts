@@ -6,6 +6,7 @@ import { appendEvent, type EventOrigin, type EventPayload, getEvent, latestEvent
 import type { AddTierAmendment, ExecutionSettingRow, RoutingRowChange } from "./execution-setting.js";
 import type { GitHubClient, Issue, IssueRef } from "./github.js";
 import type { MemoryAmendment } from "./memory.js";
+import { whyNotPositiveInteger } from "./positive-integer.js";
 import type { MergeDial, RosterAgent } from "./registry.js";
 import { normalizeText, whyBlank } from "./required-text.js";
 import { isSettled, type TaskStatus } from "./task-status.js";
@@ -488,9 +489,8 @@ function assertExecutionRequest(db: Db, input: Pick<RegisterTaskInput, "tier" | 
  *  silently repoint it at another repo's same-numbered issue). */
 function assertGithubRef(input: RegisterTaskInput): void {
   if (input.github_issue_number !== undefined) {
-    if (!Number.isInteger(input.github_issue_number) || input.github_issue_number <= 0) {
-      throw new DomainError("an issue-backed task requires a positive issue number");
-    }
+    const reason = whyNotPositiveInteger(input.github_issue_number);
+    if (reason) throw new DomainError(reason);
     // CONTEXT.md defines the issue-backed task as a *work* task (issue #49
     // 設計点8) — the restriction is the definition's, not any one door's
     if (input.type !== "work") {

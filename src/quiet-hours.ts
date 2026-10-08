@@ -1,3 +1,4 @@
+import { whyInvalidClockTime } from "./clock-time.js";
 import type { Db } from "./db.js";
 import { offsetMinutesEastOfUtc } from "./tz.js";
 
@@ -16,12 +17,6 @@ export interface QuietHoursConfig {
 
 const DEFAULT_QUIET_HOURS: QuietHoursConfig = { start: "23:00", end: "07:00", tz: "Asia/Tokyo" };
 
-/** The one HH:MM shape both api.ts's request validation and this module's own
- *  parsing agree on — 00–23 hours, 00–59 minutes. Kept in one place so the
- *  two never drift (api.ts previously re-derived a slightly stricter regex
- *  of its own). */
-export const HH_MM_PATTERN = /^([01]\d|2[0-3]):([0-5]\d)$/;
-
 export function getQuietHours(db: Db): QuietHoursConfig {
   const row = db.prepare("SELECT start, end, tz FROM quiet_hours WHERE id = 1").get() as
     | QuietHoursConfig
@@ -30,9 +25,9 @@ export function getQuietHours(db: Db): QuietHoursConfig {
 }
 
 function minutesSinceMidnight(hhmm: string): number {
-  const match = HH_MM_PATTERN.exec(hhmm);
-  if (!match) throw new Error(`invalid HH:MM time: ${hhmm}`);
-  const [, hours, minutes] = match;
+  const reason = whyInvalidClockTime(hhmm);
+  if (reason) throw new Error(reason);
+  const [hours, minutes] = hhmm.split(":");
   return Number(hours) * 60 + Number(minutes);
 }
 

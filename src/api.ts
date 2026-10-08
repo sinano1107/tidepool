@@ -10,6 +10,7 @@ import { boardHalts } from "./board-halt.js";
 import { ADVISOR_CEILINGS } from "./claude-model-alias.js";
 import { quarantineBoardCallRefusal, quarantineCliAuthFailure } from "./cli-auth.js";
 import type { Clock } from "./clock.js";
+import { whyInvalidClockTime } from "./clock-time.js";
 import type { Db } from "./db.js";
 import { DEFAULT_AUDITOR_NAME } from "./defaults.js";
 import {
@@ -65,18 +66,19 @@ import {
   restoreMemoryEntry,
 } from "./memory.js";
 import { changeMetaReviewSettings, metaReviewSettingsChangeSchema, readMetaReviewSettings } from "./meta-review.js";
+import { whyInvalidOffset } from "./pace-offset-rule.js";
 import {
   isKnownPaceOffsetTarget,
-  isValidOffset,
   listProviderPaceOffsets,
   setProviderPaceOffset,
 } from "./pace-offsets.js";
 import { isPaused, setPaused } from "./pause.js";
+import { whyNotPositiveInteger } from "./positive-integer.js";
 import { type ProfileAdmin, ProfileConfirmationRequiredError } from "./profile-create.js";
 import { PROVIDER_VALUES } from "./provider.js";
 import { removePushSubscription, savePushSubscription } from "./push.js";
 import { type QuarantineChecks, type QuarantineResolvers, quarantineStops } from "./quarantine.js";
-import { getQuietHours, HH_MM_PATTERN, setBoardTimezone, setQuietHours } from "./quiet-hours.js";
+import { getQuietHours, setBoardTimezone, setQuietHours } from "./quiet-hours.js";
 import {
   authorityProfileSchema,
   InvalidAgentDefinitionError,
@@ -190,7 +192,10 @@ const registerTaskSchema = z.object({
   title: requiredTextSchema.optional(),
   purpose: requiredTextSchema.optional(),
   completion_criteria: requiredTextSchema.optional(),
-  github_issue_number: z.number().int().positive().optional(),
+  github_issue_number: z.number().superRefine((value, ctx) => {
+    const reason = whyNotPositiveInteger(value);
+    if (reason) ctx.addIssue({ code: "custom", message: reason });
+  }).optional(),
   parent_id: z.string().optional(),
   assignee: z.string().optional(),
   workspace: z.string().optional(),
@@ -272,7 +277,10 @@ const draftTaskSchema = z.object({
 // never posts a suggestion on its own
 const issueCommentSchema = z.object({
   workspace: requiredTextSchema,
-  github_issue_number: z.number().int().positive(),
+  github_issue_number: z.number().superRefine((value, ctx) => {
+    const reason = whyNotPositiveInteger(value);
+    if (reason) ctx.addIssue({ code: "custom", message: reason });
+  }),
   body: requiredTextSchema,
 });
 
@@ -403,18 +411,24 @@ const pushUnsubscribeSchema = z.object({
 });
 
 const quietHoursSchema = z.object({
-  start: z.string().regex(HH_MM_PATTERN),
-  end: z.string().regex(HH_MM_PATTERN),
+  start: z.string().superRefine((value, ctx) => {
+    const reason = whyInvalidClockTime(value);
+    if (reason) ctx.addIssue({ code: "custom", message: reason });
+  }),
+  end: z.string().superRefine((value, ctx) => {
+    const reason = whyInvalidClockTime(value);
+    if (reason) ctx.addIssue({ code: "custom", message: reason });
+  }),
 });
 
-// ペースオフセット (ADR 0030): 値域の意味論(0–100 の整数 pt)は pace-offsets.ts の
-// isValidOffset そのものを使う — 二重定義しない
+// ペースオフセットの入口も reader と同じ leaf の規則を使う(ADR 0212)。
 const providerPaceOffsetSchema = z
   .object({
     provider: z.enum(PROVIDER_VALUES),
     window: z.string(),
-    offset: z.number().refine(isValidOffset, {
-      message: "offset must be an integer between 0 and 100",
+    offset: z.number().superRefine((value, ctx) => {
+      const reason = whyInvalidOffset(value);
+      if (reason) ctx.addIssue({ code: "custom", message: reason });
     }),
   })
   .refine((v) => isKnownPaceOffsetTarget(v.provider, v.window), {
