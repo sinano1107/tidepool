@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { openDb } from "../src/db.js";
-import { cancelTaskDirectly, completeTask, getTask, humanDecomposeTask, listBoard, listQueue, registerTask } from "../src/tasks.js";
-import { HUMAN_WEBUI } from "./harness.js";
+import { cancelTaskDirectly, completeTask, getTask, listBoard, listQueue, registerTask } from "../src/tasks.js";
+import { HUMAN_WEBUI, humanDecomposeTaskViaWebui } from "./harness.js";
 
 const HANDOFF = {
   outcome: "done",
@@ -21,7 +21,7 @@ describe("Board は settled ツリーを退かせる(issue #35)", () => {
       new Date(0),
       ...HUMAN_WEBUI,
     );
-    const [stillOpen, abandoned] = humanDecomposeTask(
+    const [stillOpen, abandoned] = humanDecomposeTaskViaWebui(
       db,
       parent,
       {
@@ -32,8 +32,6 @@ describe("Board は settled ツリーを退かせる(issue #35)", () => {
         ],
       },
       new Date(1),
-      undefined,
-      "webui",
     );
     cancelTaskDirectly(db, abandoned!, null, new Date(3), {}, "webui");
 
