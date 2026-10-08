@@ -129,6 +129,36 @@ it("worker の最後の発話は、見出し付きで CLI が報告した失敗�
   );
 });
 
+it("CLI が差し替えた model は、見出し付きで1回ずつ `from → to` の行で載り、差し替えが無ければ節ごと出ない(ADR 0215 決定5)", async () => {
+  t = await bootTidepool({ watchdog: WATCHDOG });
+  const swapped = queueWork(t, "swapped");
+  const plain = queueWork(t, "plain");
+  await t.clock.advance(HOUR);
+
+  t.worker.exitWith(swapped.id, {
+    ...QUIET_EXIT,
+    stderr_tail: "warn: retrying request",
+    model_swaps: [
+      { from: "claude-fable-5-1", to: "claude-opus-4-8", scope: "session", category: "cyber" },
+      { from: "claude-opus-4-8", to: "claude-opus-5", scope: "local", category: null },
+    ],
+  });
+  await settle();
+  t.worker.exitWith(plain.id, { ...QUIET_EXIT, model_swaps: [] });
+  await settle();
+
+  const purposeOf = async (title: string) =>
+    (await exitedWithoutReport()).find((q: any) => q.title === `worker exited without reporting: ${title}`).purpose;
+  expect(await purposeOf("swapped")).toBe(
+    `the worker for task "swapped" (${swapped.id}) exited (exit code 0) without a final report — ` +
+      "it did not complete, decompose, or escalate. No self-report is possible." +
+      "\n\nstderr tail:\nwarn: retrying request" +
+      "\n\nmodels swapped in by the CLI:\nclaude-fable-5-1 → claude-opus-4-8\nclaude-opus-4-8 → claude-opus-5" +
+      '\n\n"retry" restarts this task from scratch at the queue head. "abandon" cancels this task and its remaining work.',
+  );
+  expect(await purposeOf("plain")).not.toContain("swapped in");
+});
+
 it("CLI が失敗を報告しなかった exit の文面は、その節を持たない(ADR 0188)", async () => {
   t = await bootTidepool({ watchdog: WATCHDOG });
   const task = queueWork(t, "quiet");

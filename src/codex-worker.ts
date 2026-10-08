@@ -1160,6 +1160,8 @@ export class CodexWorker implements WorkerAdapter {
             cache_creation_tokens: 0,
             estimated_cost_usd: null,
             advisor: null,
+            model_swaps: [],
+            refusals: [],
           }
         : null;
       appendEvent(this.options.db, {

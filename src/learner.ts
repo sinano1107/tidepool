@@ -1,7 +1,7 @@
 import type { Allocation } from "./allocation-review.js";
 import type { Cause } from "./cause.js";
 import type { Db } from "./db.js";
-import { type EventPayload, type EventRow, listEventsOfKinds, objectionBundles, sessionWindow } from "./events.js";
+import { type EventPayload, type EventRow, listEventsOfKinds, objectionBundles, sessionWindow, swapsMain } from "./events.js";
 import type { ExecutionSetting } from "./execution-setting.js";
 import type { Provider } from "./provider.js";
 import { acceptedSql, type Task } from "./tasks.js";
@@ -26,8 +26,8 @@ export interface Cell {
  *  優先順位は selector の並びに入っている。agent / interview 種別はセルを割らず、読み手が生えたら tasks と
  *  events から引ける。費用と時間は session ごとの観測で、推薦の鍵にはならない
  *  (routing meta-review の shadow 行の読み口が読む、ADR 0183)。
- *  `outcome` の `excluded` は「まだ判定が無い」「帰責が worker の落ち度でない」で、
- *  受理率の分母に入らない(ADR 0115 決定5)。 */
+ *  `outcome` の `excluded` は「まだ判定が無い」「帰責が worker の落ち度でない」(ADR 0115 決定5)
+ *  「pin の行が仕事をしていない」(main の差し替え、ADR 0215 決定4)の3つで、受理率の分母に入らない。 */
 export interface LearnerEpisode {
   cell: Cell;
   tier_id: TierId;
@@ -44,12 +44,15 @@ export interface LearnerEpisode {
  *  数えず、環境要因を除く配分評価と同じ機構に乗る(ADR 0115 決定5)。負の信号は
  *  受理より強い: 受理された task に capability の異議が残っていれば負である。
  *  配分評価は reviewer ごとに1件(ADR 0111 決定2)なので session に複数並びうる ——
- *  1つでも負なら負。 */
+ *  1つでも負なら負。main が差し替えられた session(`swapped`)は受理・却下の事実より先に `excluded` ——
+ *  仕事をしたのは表に無い model で、どちらでも pin の行の実績にすると比較が歪む(ADR 0215 決定4)。 */
 export function episodeOutcome(facts: {
   accepted: boolean;
   causes: readonly Cause[];
   allocations: readonly { allocation: Allocation; cause: Cause }[];
+  swapped: boolean;
 }): LearnerEpisode["outcome"] {
+  if (facts.swapped) return "excluded";
   if (
     facts.causes.includes("capability") ||
     facts.allocations.some((a) => a.allocation === "underpowered" && a.cause === "capability")
@@ -229,6 +232,7 @@ export function loadEpisodes(db: Db): RoutingEpisode[] {
         accepted: task.accepted === 1 && !hasNextSpawn,
         causes,
         allocations,
+        swapped: usage?.model_swaps.some(swapsMain) ?? false,
       }),
       cost_usd: usage?.estimated_cost_usd ?? null,
       duration_ms: exited ? Date.parse(exited.created_at) - Date.parse(spawned.created_at) : null,

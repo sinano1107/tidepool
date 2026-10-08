@@ -177,7 +177,7 @@ it("読み口4本は続き(next)だけを受けて続きの応答を返し、nex
     recordShadow(t.db, id, { recommended: run, actual: run, basis: "prior", recommended_record: TRACK, actual_record: TRACK, candidates: 2 }, now);
     const spawned = appendEvent(t.db, { taskId: id, workerId: `agent-${i}-${"a".repeat(2_500)}`, origin: "board", at: now, payload: { ...WORKER_SPAWNED, model: run.model, source: run.source } });
     const tokens = { input_tokens: 1, output_tokens: 1, cache_read_tokens: 0, cache_creation_tokens: 0, estimated_cost_usd: 0 };
-    appendEvent(t.db, { taskId: id, workerId: "board", origin: "board", at: now, payload: { kind: "worker_exited", ...QUIET_EXIT, worker_spawned_event_id: spawned, output_closed: true, usage: { ...tokens, advisor: null, models: {} } } });
+    appendEvent(t.db, { taskId: id, workerId: "board", origin: "board", at: now, payload: { kind: "worker_exited", ...QUIET_EXIT, worker_spawned_event_id: spawned, output_closed: true, usage: { ...tokens, advisor: null, model_swaps: [], refusals: [], models: {} } } });
     appendEvent(t.db, {
       taskId: id,
       workerId: "tidepool",

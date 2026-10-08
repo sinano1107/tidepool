@@ -87,7 +87,7 @@ function board() {
       workerId: "board",
       origin: "board",
       at,
-      payload: { kind: "worker_exited", ...QUIET_EXIT, worker_spawned_event_id: spawned, output_closed: true, usage: { ...tokens, advisor: null, models: {} } },
+      payload: { kind: "worker_exited", ...QUIET_EXIT, worker_spawned_event_id: spawned, output_closed: true, usage: { ...tokens, advisor: null, model_swaps: [], refusals: [], models: {} } },
     });
   };
   const allocate = (taskId: string, spawned: number, allocation: "overpowered" | "appropriate") =>

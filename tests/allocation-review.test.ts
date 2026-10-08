@@ -20,6 +20,8 @@ const usage = {
   cache_creation_tokens: 0,
   estimated_cost_usd: 1.5,
   advisor: null,
+  model_swaps: [],
+  refusals: [],
 };
 
 it("配分評価の入力は verdict・findings・実行設定と出所・走った段・usage・行動列マーカーの計数から組まれる", () => {

@@ -1,11 +1,15 @@
-import type { EventPayload } from "./events.js";
+import type { EventPayload, ModelSwap } from "./events.js";
 import type { ExecutionSetting } from "./execution-setting.js";
 import type { InjectionQuery } from "./memory.js";
 import { canonicalHarness, type Harness } from "./registry.js";
 import type { Task } from "./tasks.js";
 
-/** root process の exit の観測(ADR 0145)。証拠は `worker_exited` そのものなので、その部分集合。 */
-export type WorkerExit = Pick<Extract<EventPayload, { kind: "worker_exited" }>, "exit_code" | "signal" | "stderr_tail" | "reported_error" | "last_message">;
+/** root process の exit の観測(ADR 0145)。証拠は `worker_exited` そのものなので、その部分集合。
+ *  `model_swaps` は `usage.model_swaps` の写し(ADR 0215 決定5)で、差し替えが無ければ欠ける —— usage 側と違い
+ *  常には置かない(読み手は文面の節だけ)。 */
+export type WorkerExit = Pick<Extract<EventPayload, { kind: "worker_exited" }>, "exit_code" | "signal" | "stderr_tail" | "reported_error" | "last_message"> & {
+  model_swaps?: ModelSwap[];
+};
 
 /** Boundary between the board and whatever executes tasks (design principle 7:
  *  the board speaks tasks; adapters speak vendors). The real adapter spawns a
