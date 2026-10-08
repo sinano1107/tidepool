@@ -1358,12 +1358,14 @@ export function listMemoryEntries(
     }));
 }
 
-/** CJK の連なり = Script_Extensions が Han / Hiragana / Katakana / Hangul で、一般カテゴリが文字・数字・Mn の字(#1180)。
- *  scx だけだと 、。「」・〜 や ㈱ など句読点・記号(P / S / Mc)も入って bigram に混ざるので、それらは連なりを切り、
+/** CJK の連なり = Script_Extensions が Han / Hiragana / Katakana / Hangul で、一般カテゴリが文字・数字・結合文字 M の字
+ *  (#1180)。M は tokenizer が直前の字と同じ語に入れるので、連なりも切らない(切ると `한〮abc` の U+302E が索引では `〮abc`
+ *  の語頭に付き、query では語を割って自身の text に当たらない、#1205)。
+ *  scx だけだと 、。「」・〜 や ㈱ など句読点・記号(P / S)も入って bigram に混ざるので、それらは連なりを切り、
  *  前処理後もそのまま残って unicode61 の区切りになる。捕獲グループは ftsQuery の split が連なりを結果に残すためにある
  *  (外すと CJK の語が query から消える)。 */
 const CJK_SCRIPT = String.raw`[\p{scx=Han}\p{scx=Hiragana}\p{scx=Katakana}\p{scx=Hangul}]`;
-const RUN_CATEGORY = String.raw`[\p{L}\p{N}\p{Mn}]`;
+const RUN_CATEGORY = String.raw`[\p{L}\p{N}\p{M}]`;
 const CJK_RUN = new RegExp(String.raw`((?:(?=${RUN_CATEGORY})${CJK_SCRIPT})+)`, "gu");
 /** query の語の切れ目 = 空白と、CJK_RUN から外した CJK の句読点・記号(`注入（src/memory.ts）、drift。` の `drift` も
  *  識別子と別の語になる)。CJK_RUN と文字集合を共有するので、片方だけ字種が変わることはない。 */
@@ -1386,9 +1388,9 @@ function ftsNormalize(value: string): string {
  *  長音符 ー は Script=Common なので Script_Extensions で拾う(拾わないと「サーバ」が割れて当たらない)。その後で . - _ の
  *  連なりを、連なりの外側の隣が unicode61 の token にならない文字(空白・文字列の端・`)` `"` などの記号)のとき連なりごと
  *  落とす(tokenchars なので文末の `narrow.)` が `narrow` に当たらない。語中は `foo__bar` のような連なりも残す)。
- *  下の正規表現は結合文字 Mn を token になる隣として扱い、tokenizer も categories で Mn を直前の字と同じ語に入れる(NFC の
- *  後も残る `a` + U+030D + `-b` は1語、#1200)ので、Mn について両者は同じ集合を見る。Mn で残る差は、V8 の Unicode 版では
- *  Mn だが同梱 SQLite の版では語を切る4字(U+1A1B, U+1BAC, U+1BAD, U+A9BD、Node 22 / SQLite 3.53.2 で実測)だけ。
+ *  下の正規表現は結合文字 M(Mc / Mn / Me)を token になる隣として扱い、tokenizer も categories で M を直前の字と同じ語に
+ *  入れる(`a` + U+030D + `-b` も `कि.foo` も1語、#1200 / #1205)ので、M について両者は同じ集合を見る。正規表現が token と
+ *  みなすのに tokenizer が語を切る字は無い(Node 22 / SQLite 3.53.2 で全コードポイントを実測)。
  *  bigram が先なので、CJK に接した `東京.csv` の `.` も隣が空白になって落ちる。 */
 function ftsText(value: string): string {
   return ftsNormalize(value)
@@ -1397,7 +1399,7 @@ function ftsText(value: string): string {
       const grams = chars.length === 1 ? chars : chars.slice(1).map((char, i) => chars[i] + char);
       return ` ${grams.join(" ")} `;
     })
-    .replace(/(?<![\p{L}\p{N}\p{Mn}\p{Co}._-])[._-]+|[._-]+(?![\p{L}\p{N}\p{Mn}\p{Co}._-])/gu, "");
+    .replace(/(?<![\p{L}\p{N}\p{M}\p{Co}._-])[._-]+|[._-]+(?![\p{L}\p{N}\p{M}\p{Co}._-])/gu, "");
 }
 
 /** pull の読み手: 帰属 task、そのスコープ(workspace 名 / null = 盤面全体)、agent 名(宛先)。 */

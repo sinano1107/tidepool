@@ -174,6 +174,24 @@ it.each(["a\u030Db", "a-b", "a\u030D-b"])("結合文字 Mn も語中の - も語
 });
 
 it.each([
+  ["हिन्दी note", "हिन्दी", ["ह", "न्द"]],
+  ["தமிழ் note", "தமிழ்", ["தம"]],
+  ["कि.foo note", "कि.foo", ["foo", "किfoo"]],
+  ["ᦰx note", "ᦰx", ["x"]],
+])("結合文字 M は Mc も直前の字と同じ語に入るので、text %j の leaf は query %j で当たり、断片や . を落とした query %j では当たらない(#1205)", (text, whole, fragments) => {
+  const { db, reader, record } = board();
+  record({ title: "leaf", text });
+  expect(searchMemory(db, reader, { query: whole }, at).results.map((r) => r.title)).toEqual(["leaf"]);
+  for (const query of fragments) expect(searchMemory(db, reader, { query }, at).results).toEqual([]);
+});
+
+it.each(["한〮abc note", "一\u{16FF0}abc note"])("CJK の連なりに続く Mc も索引と query で同じ語に入るので、text %j の leaf は自身の text で当たる(#1205)", (text) => {
+  const { db, reader, record } = board();
+  record({ title: "leaf", text });
+  expect(searchMemory(db, reader, { query: text }, at).results.map((r) => r.title)).toEqual(["leaf"]);
+});
+
+it.each([
   ["NFC", "NFC"],
   ["NFC", "NFD"],
   ["NFD", "NFC"],
@@ -966,7 +984,7 @@ it("rebuild はエントリ表と FTS を events から作り直し、無効化�
   expect(() => invalidateMemoryEntry(db, { entry_id: old, reason: "environment" }, "human", "webui", at)).toThrow(/already invalidated/);
   expect(getEvent(db, eventId!)).toMatchObject({
     task_id: null,
-    payload: { kind: "memory_index_rebuilt", tokenizer: "unicode61 remove_diacritics 2 categories 'L* N* Co Mn' tokenchars '_-.'", preprocess_version: "cjk-bigram-9" },
+    payload: { kind: "memory_index_rebuilt", tokenizer: "unicode61 remove_diacritics 2 categories 'L* N* Co M*' tokenchars '_-.'", preprocess_version: "cjk-bigram-10" },
   });
 });
 
@@ -980,7 +998,7 @@ it("原文 original の列を持つ旧い FTS の店は、open 後の照合が�
   db.prepare("UPDATE memory_index_version SET preprocess_version = 'cjk-bigram-5'").run();
   const eventId = ensureMemoryIndex(db, at);
 
-  expect(getEvent(db, eventId!)).toMatchObject({ payload: { kind: "memory_index_rebuilt", preprocess_version: "cjk-bigram-9" } });
+  expect(getEvent(db, eventId!)).toMatchObject({ payload: { kind: "memory_index_rebuilt", preprocess_version: "cjk-bigram-10" } });
   expect(searchMemory(db, reader, { query: "道具" }, at).results).toEqual([]);
   expect(searchMemory(db, reader, { query: "Toolchain" }, at).results.map((r) => r.title)).toEqual(["Toolchain"]);
 });
