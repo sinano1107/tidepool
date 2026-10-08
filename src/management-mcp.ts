@@ -35,7 +35,17 @@ import {
   submitAnswer,
 } from "./human-verbs.js";
 import type { Landing } from "./landing.js";
-import { MEMORY_BRANCHES_DESCRIPTION, ONLY_WHERE_REVIEW_FIRES, toolError, toolResult } from "./mcp.js";
+import {
+  JUDGED_AFTER_THE_EDIT,
+  MEMORY_BRANCHES_DESCRIPTION,
+  ONLY_WHERE_COMPLETION_REVIEW_FIRES,
+  ONLY_WHERE_REVIEW_FIRES,
+  REVIEW_FLAG_ONLY_ON_WORK_CHILDREN,
+  REVIEW_TIER_BY_TYPE,
+  REVIEWER_NAMES,
+  toolError,
+  toolResult,
+} from "./mcp.js";
 import {
   changeMemorySettings,
   defineMemoryBranch,
@@ -938,8 +948,9 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
         assignee: z.string().optional(),
         workspace: z.string().optional(),
         risk_flag: z.boolean().optional(),
-        review_flag: z.boolean().optional(),
-        review_by: z.array(z.string().min(1)).optional(),
+        review_flag: z.boolean().optional().describe(`${REVIEW_FLAG_ONLY_ON_WORK_CHILDREN}\n${JUDGED_AFTER_THE_EDIT}`),
+        review_by: z.array(z.string().min(1)).optional()
+          .describe(`${REVIEWER_NAMES} ${ONLY_WHERE_COMPLETION_REVIEW_FIRES}\n${JUDGED_AFTER_THE_EDIT}`),
       },
     },
     async ({ task_id, ...input }) => {
@@ -1049,10 +1060,11 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
         assignee: z.string().optional(),
         workspace: z.string().optional(),
         risk_flag: z.boolean().optional(),
-        review_flag: z.boolean().optional(),
+        review_flag: z.boolean().optional().describe(REVIEW_FLAG_ONLY_ON_WORK_CHILDREN),
         tier: z.string().optional().describe(tierDescriptions.tier),
-        review_by: z.array(z.string().min(1)).optional(),
-        review_tier: z.string().optional().describe(tierDescriptions.review_tier),
+        review_by: z.array(z.string().min(1)).optional()
+          .describe(`${REVIEWER_NAMES} Omit to use the board Auditor. ${ONLY_WHERE_COMPLETION_REVIEW_FIRES}`),
+        review_tier: z.string().optional().describe(`${REVIEW_TIER_BY_TYPE}\n${tierDescriptions.review_tier_choices}`),
         priority: z.string().optional().describe(PRIORITY_FIELD_DESCRIPTION),
         decompose_reason: z.string().optional(),
       },

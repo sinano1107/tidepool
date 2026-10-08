@@ -35,13 +35,16 @@ import { HUMAN_WORKER_ID } from "./worker-id.js";
 /** 要求2列を受け取る入口(管理MCP の `register_task` / `decompose_task`、worker MCP の `decompose`)が
  *  エージェントへ見せる説明。**綴りは1つ** —— 入口ごとに書くと、片方だけが古い段や古い意味を喋り続ける。
  *  段は盤面の一覧から「名前 — 説明」を順序どおりに並べる(ADR 0200 決定3)。 */
-export function tierFieldDescriptions(db: Db): { tier: string; review_tier: string } {
+export function tierFieldDescriptions(db: Db): { tier: string; review_tier: string; review_tier_choices: string } {
   const tiers = readTiers(db).map((t) => `${t.name} — ${t.description}`).join("\n");
+  // review task も登録する入口(register_task)は書き出しを type ごとの説明に差し替えるので、段の一覧以降を分けて渡す
+  const reviewTierChoices = `One of the board's tiers (lowest first):\n${tiers}\n` +
+    "Overrides each reviewer's tier, then the board default.";
   return {
     tier: `Required quality tier for this task, one of the board's tiers (lowest first):\n${tiers}\n` +
       "Omit to fall back to the agent's own tier, then the board default.",
-    review_tier: `Quality tier for completion reviews, one of the board's tiers (lowest first):\n${tiers}\n` +
-      "Overrides each reviewer's tier, then the board default.",
+    review_tier: `Quality tier for completion reviews. ${reviewTierChoices}`,
+    review_tier_choices: reviewTierChoices,
   };
 }
 export const PRIORITY_FIELD_DESCRIPTION =

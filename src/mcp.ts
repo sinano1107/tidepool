@@ -379,6 +379,29 @@ function assertChildrenKnown(deps: McpDeps, children: z.infer<ReturnType<typeof 
 export const ONLY_WHERE_REVIEW_FIRES =
   "Accepted only on a child whose completion raises a review: not assigned to human, and carrying review_flag or risk_flag.";
 
+/** 名前ごとに完了時レビューを1本立てる、という review_by の意味。decompose と管理MCP の入口が共有する。 */
+export const REVIEWER_NAMES = "Reviewer agent names; one completion review per name.";
+/** 同じ規則を、root も review type も登録する入口(管理MCP の register_task / edit_task)向けに言い直したもの。
+ *  子が前提の ONLY_WHERE_REVIEW_FIRES はそのまま使えない。条件は webui-rules の whyNoCompletionReview /
+ *  whyReviewFlagIsInert と同じ。 */
+export const ONLY_WHERE_COMPLETION_REVIEW_FIRES =
+  "Accepted only on a work task whose completion raises a review: not assigned to human, and either a root " +
+  "(every root is reviewed on completion) or a child carrying review_flag or risk_flag.";
+export const REVIEW_FLAG_ONLY_ON_WORK_CHILDREN =
+  "Opt a child work task into an independent review of its deliverable on completion. " +
+  "Accepted only on a child work task not assigned to human; refused on a root, which is already reviewed on " +
+  "completion, and on a review task.";
+/** review_tier の書き出し。段の一覧(tierFieldDescriptions の review_tier_choices)はこの後に続ける。 */
+export const REVIEW_TIER_BY_TYPE =
+  "Quality tier whose meaning depends on the task type. " +
+  "On a review task, it is the tier that review itself runs at, and no completion-review condition applies. " +
+  `On a work task, it is the tier of its completion reviews: ${ONLY_WHERE_COMPLETION_REVIEW_FIRES}`;
+/** edit_task は変更後の状態で判定する(保存済みの値と同じ呼び出しの値を合わせた状態)。 */
+export const JUDGED_AFTER_THE_EDIT =
+  "Judged on the task as it stands after this edit — assignee, review_flag and risk_flag from this same call " +
+  "applied, stored values otherwise — so an edit that would leave a stored review_flag or review_by with no " +
+  "effect (dropping a child's flags, or assigning human) is refused.";
+
 /** decompose と redecompose が共有する子の入力。段の説明は盤面の一覧から組む(ADR 0200 決定3)。 */
 function decomposeChildrenSchema(db: Db) {
   const tierDescriptions = tierFieldDescriptions(db);
@@ -406,7 +429,7 @@ function decomposeChildrenSchema(db: Db) {
         ),
       tier: z.string().optional().describe(tierDescriptions.tier),
       review_by: z.array(z.string().min(1)).optional()
-        .describe(`Reviewer agent names; one completion review per name. Omit to use the board Auditor. ${ONLY_WHERE_REVIEW_FIRES}`),
+        .describe(`${REVIEWER_NAMES} Omit to use the board Auditor. ${ONLY_WHERE_REVIEW_FIRES}`),
       review_tier: z.string().optional().describe(`${tierDescriptions.review_tier}\n${ONLY_WHERE_REVIEW_FIRES}`),
       priority: z.string().optional().describe(PRIORITY_FIELD_DESCRIPTION),
     }),
