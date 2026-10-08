@@ -64,8 +64,8 @@ export type TierSource = "task" | "review_tier" | "agent" | "board";
  *  既定)が cost で価格が Provider を決めた、`"learner"` は昇格した学習器が選んだ(ADR 0150 決定3)。 */
 export type ProviderSource = "only" | "rank" | "cost" | "learner";
 
-/** 優先順位の既定の、さらに既定(ADR 0114 決定1): 盤面設定 `execution_defaults.priority`
- *  が未設定のときの値。work task の優先順位 → 盤面設定の work 用の既定 → この定数の順に倒れる
+/** 優先順位の既定の、さらに既定(ADR 0114 決定1 / ADR 0111 追記10): 盤面設定 `execution_defaults.priority`・
+ *  `review_priority` が未設定のときの値。work task の優先順位 → 盤面設定の work 用の既定 → この定数の順に倒れる
  *  (`selectorInputFor` / `loadExecutionDefaults`)。 */
 export const BOARD_DEFAULT_PRIORITY: Priority = "quality";
 
@@ -852,7 +852,7 @@ function loadExecutionDefaults(db: Db): ExecutionDefaults {
     advisor_ceiling: AdvisorCeiling;
     provider_rank: string | null;
     priority: Priority | null;
-    review_priority: Priority;
+    review_priority: Priority | null;
     learner_promoted: number;
     default_tier: Tier;
     judgement_tier: Tier;
@@ -861,7 +861,7 @@ function loadExecutionDefaults(db: Db): ExecutionDefaults {
     advisorCeiling: row.advisor_ceiling,
     providerRank: row.provider_rank ? (JSON.parse(row.provider_rank) as Provider[]) : PROVIDER_VALUES,
     priority: row.priority ?? BOARD_DEFAULT_PRIORITY,
-    reviewPriority: row.review_priority,
+    reviewPriority: row.review_priority ?? BOARD_DEFAULT_PRIORITY,
     learnerPromoted: row.learner_promoted === 1,
     defaultTier: row.default_tier,
     judgementTier: row.judgement_tier,
@@ -888,15 +888,16 @@ function selectorInputFor(
   task: SelectorTask | undefined,
 ): SelectorInput {
   const defaults = loadExecutionDefaults(db);
+  const review = task?.type === "review";
   return {
     entries: definition.provider.map((entry) => ({
       provider: entry.name as Provider,
       advisor: entry.advisor,
     })),
     providerRank: defaults.providerRank,
-    taskTier: task?.type === "review" ? undefined : task?.tier ?? undefined,
-    priority: task?.type === "review" ? defaults.reviewPriority : task?.priority ?? defaults.priority,
-    reviewTier: task?.type === "review" ? task.review_tier ?? undefined : undefined,
+    taskTier: review ? undefined : task?.tier ?? undefined,
+    priority: review ? defaults.reviewPriority : task?.priority ?? defaults.priority,
+    reviewTier: review ? task.review_tier ?? undefined : undefined,
     agentTier: definition.tier,
     boardTier: defaults.defaultTier,
     tiers: liveTierRows(db),
