@@ -2804,8 +2804,9 @@ export function latestChild(db: Db, parentId: string): Task | undefined {
 
 /** The type-specific fields a settled child contributes to history: a done
  *  question's answer, a done work's handoff doc verbatim, or why a cancelled
- *  child was cancelled (exactly one `origin_*` key). HistoryChildContext inherits this
- *  shape so replacing the old settled-only bundle cannot drop a field. */
+ *  child was cancelled (exactly one `origin_*` key). HistoryChildContext
+ *  inherits this shape so replacing the old settled-only bundle cannot drop
+ *  a field. */
 interface SettledChildContext {
   title: string;
   status: "done" | "cancelled";
@@ -2945,7 +2946,10 @@ function cancelOrigin(
   taskId: string,
 ): Pick<SettledChildContext, "origin_question" | "origin_breach" | "origin_direct_cancel"> {
   const payload = latestEventOfTask(db, taskId, "task_cancelled")?.payload;
-  if (!payload) return { origin_direct_cancel: { reason: latestEventOfTask(db, taskId, "task_cancelled_directly")!.payload.reason } };
+  if (!payload) {
+    const { reason } = latestEventOfTask(db, taskId, "task_cancelled_directly")!.payload;
+    return { origin_direct_cancel: { reason } };
+  }
   if ("origin_breach_task_id" in payload) {
     const declarer = getTask(db, payload.origin_breach_task_id)!;
     return { origin_breach: { title: declarer.title, reason: premiseBreachReason(db, declarer.id) } };

@@ -2,7 +2,7 @@ import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { openDb } from "../src/db.js";
-import { cancelTaskDirectly, getTask, joinHistory, registerTask, taskHistoryRows } from "../src/tasks.js";
+import { cancelTaskDirectly, joinHistory, registerTask, taskHistoryRows } from "../src/tasks.js";
 import {
   api,
   bootTidepool,
@@ -219,7 +219,7 @@ it.each(["もう要らない", null])("reason %s で直接 cancel された子�
   const at = new Date("2026-10-08T00:00:00.000Z");
   const parent = registerTask(db, { type: "work", title: "parent", purpose: "purpose", completion_criteria: "criteria" }, at, ...HUMAN_WEBUI);
   const [child] = humanDecomposeTaskViaWebui(db, parent, { reason: "human split", children: [{ title: "A", purpose: "purpose", completion_criteria: "criteria" }] }, at);
-  cancelTaskDirectly(db, getTask(db, child!.id)!, reason, at, {}, "webui");
+  cancelTaskDirectly(db, child!, reason, at, {}, "webui");
 
   expect(joinHistory(taskHistoryRows(db, parent.id))).toEqual([
     {
