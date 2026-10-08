@@ -84,6 +84,6 @@ sweep stops here because a brief is the specification ([workflow.md](./workflow.
 `ready-for-agent` is the build queue, so moving the label approves a spec; that stays the
 maintainer's step.
 
-The sweep's queue is `needs-triage` / `needs-info` without `auto-triaged` or `verify:production`.
+The sweep's queue is `needs-triage` / `needs-info` without `auto-triaged` or `verify:production`, and without an open blocker — the wait is the blocked-by relation, so the issue rejoins the queue when its last blocker closes.
 Take the label off to put an issue back in it — after answering the sweep's questions in a comment,
 say.
