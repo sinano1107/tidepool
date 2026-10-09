@@ -488,12 +488,12 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
   const recheckRow = async (
     presentProbes: Partial<Record<Provider, ModelProbe>>,
     presentClock: Clock,
-    { provider, model, effort }: { provider: Provider; model: string; effort?: string },
+    { provider, model, effort }: { provider: Provider; model: string; effort?: string | null },
   ) => {
     const row = [provider, model, effort].filter(Boolean).join(" / ");
     const probe = presentProbes[provider];
     if (!probe) throw new DomainError(`this board cannot verify that ${row} runs`);
-    const result = await probe(model, effort);
+    const result = await probe(model, effort ?? undefined);
     if (result.status === "runs") return;
     if (result.status === "unauthorized") quarantineCliAuthForProvider(deps.db, provider, presentClock.now());
     throw new DomainError(`${row} still cannot run: ${result.reason}`);

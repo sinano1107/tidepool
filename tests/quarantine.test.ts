@@ -202,4 +202,7 @@ it("行の effort の Quarantine の値は、model id に `/` があっても (p
   const row = { provider: "openai", model: "org/team/gpt-5.5", effort: "max" } as const;
   expect(tableRowEffortValue(row.provider, row.model, row.effort)).toBe("openai/org/team/gpt-5.5/max");
   expect(parseTableRowEffortValue(tableRowEffortValue(row.provider, row.model, row.effort))).toEqual(row);
+  // effort「無い」の行(ADR 0218 決定5)も組が一意に戻る
+  const noEffort = { provider: "anthropic", model: "claude-haiku-4-5-20251001", effort: null } as const;
+  expect(parseTableRowEffortValue(tableRowEffortValue(noEffort.provider, noEffort.model, noEffort.effort))).toEqual(noEffort);
 });

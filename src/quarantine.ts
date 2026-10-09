@@ -51,14 +51,15 @@ export function parseTableRowValue(value: string): { provider: Provider; model: 
 }
 
 /** 行の effort の Quarantine の値(ADR 0218 決定2): `provider/model/effort`。Provider と effort(閉じた5値、ADR 0216)は
- *  `/` を含まないので、最初と最後の `/` で割れば model id に `/` があっても組は一意に戻る。 */
-export function tableRowEffortValue(provider: Provider, model: string, effort: string): string {
-  return `${tableRowValue(provider, model)}/${effort}`;
+ *  `/` を含まないので、最初と最後の `/` で割れば model id に `/` があっても組は一意に戻る。effort「無い」の行(ADR 0218 決定5)は
+ *  最後の欄を空で綴る —— 5値はどれも空でないので取り違えない。 */
+export function tableRowEffortValue(provider: Provider, model: string, effort: string | null): string {
+  return `${tableRowValue(provider, model)}/${effort ?? ""}`;
 }
 
-export function parseTableRowEffortValue(value: string): { provider: Provider; model: string; effort: string } {
+export function parseTableRowEffortValue(value: string): { provider: Provider; model: string; effort: string | null } {
   const at = value.lastIndexOf("/");
-  return { ...parseTableRowValue(value.slice(0, at)), effort: value.slice(at + 1) };
+  return { ...parseTableRowValue(value.slice(0, at)), effort: value.slice(at + 1) || null };
 }
 
 /** 行の effort の Quarantine の文面は契機ごとに組む(#1655: 起動時の照合が2つ目の契機として足される)。
@@ -263,7 +264,7 @@ export const QUARANTINES = [
     prose: (value: string | null, reason: string, cause?: RowRefusalCause | TableRowEffortTrigger): QuarantineProse => {
       const { provider, model, effort } = parseTableRowEffortValue(value!);
       const trigger = (cause ?? "codexModelList") as TableRowEffortTrigger;
-      return TABLE_ROW_EFFORT_PROSE[trigger](`${provider} / ${model} / ${effort}`, reason);
+      return TABLE_ROW_EFFORT_PROSE[trigger](`${provider} / ${model} / ${effort ?? "no effort"}`, reason);
     },
   },
 ] as const satisfies ReadonlyArray<{

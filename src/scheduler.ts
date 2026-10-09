@@ -558,7 +558,7 @@ export function startScheduler(deps: {
       // 一覧にある model の行は effort も照合し、広告されない行だけを外す(ADR 0218 決定2)
       for (const row of loadExecutionSettingTable(db)) {
         if (row.provider !== "openai") continue;
-        const unlisted = whyRowUnlisted(result, row.model, row.effort);
+        const unlisted = whyRowUnlisted(result, row.model, row.effort ?? undefined);
         if (unlisted?.unit === "model") {
           registerQuarantine(db, "tableRow", tableRowValue("openai", row.model), unlisted.reason, now);
         } else if (unlisted?.unit === "effort") {

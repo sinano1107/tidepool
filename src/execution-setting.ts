@@ -482,7 +482,7 @@ export function readExecutionSettingsWithQuarantine(db: Db) {
 
 /** 行に当たる、開いている行の Quarantine の question id —— model ごとの Quarantine が先で、無ければ effort ごとの
  *  Quarantine(ADR 0218 決定2)。照合は完全一致(ADR 0200 決定5)。 */
-function rowQuarantineQuestions(db: Db): (row: { provider: Provider; model: string; effort: string }) => string | undefined {
+function rowQuarantineQuestions(db: Db): (row: { provider: Provider; model: string; effort: string | null }) => string | undefined {
   const byModel = openQuarantineQuestions(db, "tableRow");
   const byEffort = openQuarantineQuestions(db, "tableRowEffort");
   return (row) => byModel.get(tableRowValue(row.provider, row.model)) ?? byEffort.get(tableRowEffortValue(row.provider, row.model, row.effort));
