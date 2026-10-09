@@ -1346,15 +1346,15 @@ function MemorySettingsCard({ settings, say, onSaved, edit }: {
 // Halted refires (ADR 0164 決定5 / ADR 0172 決定3): retrospective Board calls (allocation review, attribution,
 // Behavior candidate drafting) the board stopped refiring after 3 failed calls. Retry fires it again (3 more
 // tries); Dismiss closes it for good. Sits next to the judgement tier those calls run on; hidden while
-// nothing is halted.
+// nothing is halted. `rows` null means the read failed: the card stays and says so (issue #1663).
 function HaltedRefiresCard({ rows, say, onChanged }: {
-  rows: WireContract['GET /api/settings/execution/halted-refires']['halted'];
+  rows: WireContract['GET /api/settings/execution/halted-refires']['halted'] | null;
   say: AppSay;
   onChanged: () => Promise<void>;
 }) {
-  const { Button, Card } = window.TidepoolDesignSystem_8a0ead;
+  const { Button, Card, FieldRow } = window.TidepoolDesignSystem_8a0ead;
   const [busy, setBusy] = React.useState(false);
-  const act = async (row: (typeof rows)[number], verb: 'retry' | 'dismiss') => {
+  const act = async (row: NonNullable<typeof rows>[number], verb: 'retry' | 'dismiss') => {
     setBusy(true);
     try {
       await api(`/api/settings/execution/halted-refires/${row.refire}/${row.target}/${verb}`, {});
@@ -1365,8 +1365,16 @@ function HaltedRefiresCard({ rows, say, onChanged }: {
     }
     setBusy(false);
   };
-  if (rows.length === 0) return null;
+  if (rows?.length === 0) return null;
   const muted = { margin: 0, fontSize: 'var(--text-xs)', color: 'var(--text-muted)' };
+  if (!rows) {
+    return (
+      <Card style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+        <span style={settingsCardLabel}>halted refires</span>
+        <FieldRow label="refires" kind="unset" unsetLabel="halted refires unavailable" />
+      </Card>
+    );
+  }
   return (
     <Card style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
       <span style={settingsCardLabel}>halted refires</span>
@@ -1396,11 +1404,19 @@ function HaltedRefiresCard({ rows, say, onChanged }: {
 
 // Response-budget floor records (ADR 0219): one row per (surface, verb) a read was cut on. No remove action:
 // removing a row changes nothing on the board, and whether a fix landed reads from "last" no longer moving.
-// Hidden while there are no records.
-function ResponseFloorsCard({ rows }: { rows: WireContract['GET /api/settings/response-floors']['floors'] }) {
-  const { Card } = window.TidepoolDesignSystem_8a0ead;
-  if (rows.length === 0) return null;
+// Hidden while there are no records; `rows` null means the read failed, and the card stays to say so (issue #1663).
+function ResponseFloorsCard({ rows }: { rows: WireContract['GET /api/settings/response-floors']['floors'] | null }) {
+  const { Card, FieldRow } = window.TidepoolDesignSystem_8a0ead;
+  if (rows?.length === 0) return null;
   const muted = { margin: 0, fontSize: 'var(--text-xs)', color: 'var(--text-muted)' };
+  if (!rows) {
+    return (
+      <Card style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+        <span style={settingsCardLabel}>reads cut at the response budget</span>
+        <FieldRow label="reads" kind="unset" unsetLabel="cut reads unavailable" />
+      </Card>
+    );
+  }
   return (
     <Card style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
       <span style={settingsCardLabel}>reads cut at the response budget</span>
@@ -2801,14 +2817,27 @@ function SettingsScreen({ say, memoryFocus, registerLeaveGuard }: {
   };
   React.useEffect(() => { loadMetaReviewSettings(); }, []);
 
-  const [haltedRefires, setHaltedRefires] = React.useState<WireContract['GET /api/settings/execution/halted-refires']['halted'] | null>(null); // null → still loading
+  // issue #1663: a failed read is not "0 rows" — the flag keeps the card up and flags the index row, like translateUsageFailed
+  const [haltedRefires, setHaltedRefires] = React.useState<WireContract['GET /api/settings/execution/halted-refires']['halted'] | null>(null); // null → still loading, or failed
+  const [haltedRefiresFailed, setHaltedRefiresFailed] = React.useState(false);
   const loadHaltedRefires = async () => {
-    setHaltedRefires((await api('GET /api/settings/execution/halted-refires')).halted);
+    try {
+      setHaltedRefires((await api('GET /api/settings/execution/halted-refires')).halted);
+      setHaltedRefiresFailed(false);
+    } catch {
+      setHaltedRefires(null);
+      setHaltedRefiresFailed(true);
+    }
   };
   React.useEffect(() => { loadHaltedRefires(); }, []);
 
-  const [responseFloors, setResponseFloors] = React.useState<WireContract['GET /api/settings/response-floors']['floors'] | null>(null); // null → still loading
-  React.useEffect(() => { api('GET /api/settings/response-floors').then((r) => setResponseFloors(r.floors)); }, []);
+  const [responseFloors, setResponseFloors] = React.useState<WireContract['GET /api/settings/response-floors']['floors'] | null>(null); // null → still loading, or failed
+  const [responseFloorsFailed, setResponseFloorsFailed] = React.useState(false);
+  React.useEffect(() => {
+    api('GET /api/settings/response-floors')
+      .then((r) => setResponseFloors(r.floors))
+      .catch(() => setResponseFloorsFailed(true));
+  }, []);
 
   // ADR 0093 決定5: read-only. null → still loading; the card only appears once
   // the board has answered, so "not logged in" is never shown speculatively.
@@ -2953,7 +2982,7 @@ function SettingsScreen({ say, memoryFocus, registerLeaveGuard }: {
     setDirty,
   };
   const go = (next: string[]) => guard(() => { setStack(next); closeEdit(); });
-  const boardLoaded = displayLanguageLoaded && quietHoursLoaded && !!providerPaceOffsets && !!executionSettings && !!memorySettings && !!metaReviewSettings && !!haltedRefires && !!responseFloors;
+  const boardLoaded = displayLanguageLoaded && quietHoursLoaded && !!providerPaceOffsets && !!executionSettings && !!memorySettings && !!metaReviewSettings && (!!haltedRefires || haltedRefiresFailed) && (!!responseFloors || responseFloorsFailed);
 
   // a tab switch unmounts this screen, so it has to ask too (決定4)
   React.useEffect(() => {
@@ -3054,12 +3083,13 @@ function SettingsScreen({ say, memoryFocus, registerLeaveGuard }: {
   if (stack.length === 0) {
     // --- level 1: the index. Each row states its section's current state, so
     // the whole surface reads without opening anything.
-    // ADR 0219 決定4・5: floor records and halted refires flag the Board row, each count shown only when non-zero
+    // ADR 0219 決定4・5: floor records and halted refires flag the Board row, each count shown only when non-zero;
+    // a failed read flags it too, since a read nobody sees fail is the silence 決定4 is there to prevent (issue #1663)
     const floors = responseFloors?.length ?? 0;
     const halted = haltedRefires?.length ?? 0;
     const boardFlags = [
-      floors > 0 ? `${floors} read${floors === 1 ? '' : 's'} cut` : null,
-      halted > 0 ? `${halted} halted refire${halted === 1 ? '' : 's'}` : null,
+      responseFloorsFailed ? 'cut reads unavailable' : floors > 0 ? `${floors} read${floors === 1 ? '' : 's'} cut` : null,
+      haltedRefiresFailed ? 'halted refires unavailable' : halted > 0 ? `${halted} halted refire${halted === 1 ? '' : 's'}` : null,
     ].filter((part) => part !== null);
     const rows: { key: string; label: string; summary: string; alert?: boolean }[] = [
       {
@@ -3116,10 +3146,13 @@ function SettingsScreen({ say, memoryFocus, registerLeaveGuard }: {
           <PaceOffsetsCard offsets={providerPaceOffsets} say={say} onSaved={loadPaceOffsets} edit={edit} />
         )}
         {executionSettings && (
+          <ExecutionDefaultsCard settings={executionSettings} say={say} onSaved={loadExecutionSettings} edit={edit} />
+        )}
+        {/* outside executionSettings: each card stands on its own read alone (issue #1663) */}
+        {(haltedRefires || haltedRefiresFailed) && <HaltedRefiresCard rows={haltedRefires} say={say} onChanged={loadHaltedRefires} />}
+        {(responseFloors || responseFloorsFailed) && <ResponseFloorsCard rows={responseFloors} />}
+        {executionSettings && (
           <React.Fragment>
-            <ExecutionDefaultsCard settings={executionSettings} say={say} onSaved={loadExecutionSettings} edit={edit} />
-            {haltedRefires && <HaltedRefiresCard rows={haltedRefires} say={say} onChanged={loadHaltedRefires} />}
-            {responseFloors && <ResponseFloorsCard rows={responseFloors} />}
             <TiersCard settings={executionSettings} say={say} onSaved={loadExecutionSettings} edit={edit} />
             <ExecutionTableCard settings={executionSettings} say={say} onSaved={loadExecutionSettings} edit={edit} />
           </React.Fragment>
