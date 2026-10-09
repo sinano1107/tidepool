@@ -100,6 +100,7 @@ import {
 import { RepoAccessMissingError } from "./repo-access.js";
 import { whyBlank } from "./required-text.js";
 import { requiredTextSchema } from "./required-text-schema.js";
+import { listFloorRows } from "./response-budget.js";
 import { attributeObjections, listHaltedRefires, markHaltedRefire, type RetrospectiveCallDeps, refireKeySchema } from "./retrospective.js";
 import {
   entryExclusionPredicate,
@@ -1747,6 +1748,10 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   // Retry / Dismiss は打ち切りの行にだけ効き、他は DomainError で 400
   router.get("/settings/execution/halted-refires", (_req, res) => {
     res.json({ halted: listHaltedRefires(db) } satisfies WireContract["GET /api/settings/execution/halted-refires"]);
+  });
+  // ADR 0219: 応答予算の床の記録。消す操作は置かない(決定3)
+  router.get("/settings/response-floors", (_req, res) => {
+    res.json({ floors: listFloorRows(db) } satisfies WireContract["GET /api/settings/response-floors"]);
   });
   const haltedRefireKey = refireKeySchema.extend({ target: z.coerce.number().int().positive() });
   router.post(

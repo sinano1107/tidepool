@@ -2189,6 +2189,12 @@ function HaltedRefiresCard({ rows, say, onChanged }) {
   const muted = { margin: 0, fontSize: "var(--text-xs)", color: "var(--text-muted)" };
   return /* @__PURE__ */ React.createElement(Card, { style: { display: "flex", flexDirection: "column", gap: 10 } }, /* @__PURE__ */ React.createElement("span", { style: settingsCardLabel }, "halted refires"), /* @__PURE__ */ React.createElement("p", { style: muted }, "retrospective Board calls (allocation review, attribution, drafting) the board stopped retrying after 3 failed calls. retry to fire again, dismiss to never fire it."), rows.map((row) => /* @__PURE__ */ React.createElement("div", { key: `${row.refire}:${row.target}`, style: { display: "flex", flexDirection: "column", gap: 4, borderTop: "1px solid var(--border-default)", paddingTop: 10 } }, row.refire === "allocation" ? /* @__PURE__ */ React.createElement("p", { style: { ...muted, fontFamily: "var(--font-mono)" } }, "allocation review \xB7 ", row.review.title, " \xB7 ", row.task.title) : /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("p", { style: { ...muted, fontFamily: "var(--font-mono)" } }, row.refire === "draft" ? "behavior draft" : `second-round attribution \xB7 objection #${row.target}`, " \xB7 entry #", row.entry.id, " \xB7 ", row.task.title, " \xB7 ", row.cause ?? "unattributed", " \xB7 ", row.round), /* @__PURE__ */ React.createElement("p", { style: { margin: 0, fontSize: "var(--text-sm)" } }, row.entry.text)), /* @__PURE__ */ React.createElement("p", { style: muted }, "last failure ", new Date(row.last_failure.at).toLocaleString(), ": ", row.last_failure.reason), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8 } }, /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", disabled: busy, onClick: () => act(row, "retry") }, "Retry"), /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "sm", disabled: busy, onClick: () => act(row, "dismiss") }, "Dismiss")))));
 }
+function ResponseFloorsCard({ rows }) {
+  const { Card } = window.TidepoolDesignSystem_8a0ead;
+  if (rows.length === 0) return null;
+  const muted = { margin: 0, fontSize: "var(--text-xs)", color: "var(--text-muted)" };
+  return /* @__PURE__ */ React.createElement(Card, { style: { display: "flex", flexDirection: "column", gap: 10 } }, /* @__PURE__ */ React.createElement("span", { style: settingsCardLabel }, "reads cut at the response budget"), /* @__PURE__ */ React.createElement("p", { style: muted }, "these reads returned more than the response budget, so the board cut the response and the reader got an incomplete body. this is a tidepool defect: report it so the read can be fixed."), rows.map((row) => /* @__PURE__ */ React.createElement("p", { key: `${row.surface}:${row.verb}`, style: { ...muted, fontFamily: "var(--font-mono)", borderTop: "1px solid var(--border-default)", paddingTop: 10 } }, row.surface, " \xB7 ", row.verb, " \xB7 ", row.count, "\xD7 \xB7 up to ", row.max_bytes, " bytes \xB7 last ", new Date(row.last_at).toLocaleString(), row.last_task_id && ` \xB7 task ${row.last_task_id}`)));
+}
 function MetaReviewSettingsCard({ settings, say, onSaved, edit }) {
   const { Card, FieldRow, Input } = window.TidepoolDesignSystem_8a0ead;
   const id = "board:meta-review";
@@ -3198,6 +3204,10 @@ function SettingsScreen({ say, memoryFocus, registerLeaveGuard }) {
   React.useEffect(() => {
     loadHaltedRefires();
   }, []);
+  const [responseFloors, setResponseFloors] = React.useState(null);
+  React.useEffect(() => {
+    api("GET /api/settings/response-floors").then((r) => setResponseFloors(r.floors));
+  }, []);
   const [githubLoggedIn, setGithubLoggedIn] = React.useState(null);
   React.useEffect(() => {
     api("GET /api/settings/github").then(({ loggedIn }) => setGithubLoggedIn(loggedIn)).catch(() => setGithubLoggedIn(null));
@@ -3319,7 +3329,7 @@ function SettingsScreen({ say, memoryFocus, registerLeaveGuard }) {
     setStack(next);
     closeEdit();
   });
-  const boardLoaded = displayLanguageLoaded && quietHoursLoaded && !!providerPaceOffsets && !!executionSettings && !!memorySettings && !!metaReviewSettings && !!haltedRefires;
+  const boardLoaded = displayLanguageLoaded && quietHoursLoaded && !!providerPaceOffsets && !!executionSettings && !!memorySettings && !!metaReviewSettings && !!haltedRefires && !!responseFloors;
   React.useEffect(() => {
     registerLeaveGuard((move) => guard(move));
     return () => registerLeaveGuard(null);
@@ -3437,11 +3447,18 @@ function SettingsScreen({ say, memoryFocus, registerLeaveGuard }) {
   const adding = editing === addId;
   let body;
   if (stack.length === 0) {
+    const floors = responseFloors?.length ?? 0;
+    const halted = haltedRefires?.length ?? 0;
+    const boardFlags = [
+      floors > 0 ? `${floors} read${floors === 1 ? "" : "s"} cut` : null,
+      halted > 0 ? `${halted} halted refire${halted === 1 ? "" : "s"}` : null
+    ].filter((part) => part !== null);
     const rows = [
       {
         key: "board",
         label: "Board",
-        summary: displayLanguageLoaded && quietHoursLoaded ? `${displayLanguage} \xB7 ${quietHoursStart}\u2013${quietHoursEnd}` : "loading\u2026"
+        summary: boardFlags.length > 0 ? boardFlags.join(" \xB7 ") : displayLanguageLoaded && quietHoursLoaded ? `${displayLanguage} \xB7 ${quietHoursStart}\u2013${quietHoursEnd}` : "loading\u2026",
+        alert: boardFlags.length > 0
       },
       ...Object.keys(SECTIONS).map((key) => {
         const s = SECTIONS[key];
@@ -3482,7 +3499,7 @@ function SettingsScreen({ say, memoryFocus, registerLeaveGuard }) {
         onSaved: loadQuietHours,
         edit
       }
-    ), providerPaceOffsets && /* @__PURE__ */ React.createElement(PaceOffsetsCard, { offsets: providerPaceOffsets, say, onSaved: loadPaceOffsets, edit }), executionSettings && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(ExecutionDefaultsCard, { settings: executionSettings, say, onSaved: loadExecutionSettings, edit }), haltedRefires && /* @__PURE__ */ React.createElement(HaltedRefiresCard, { rows: haltedRefires, say, onChanged: loadHaltedRefires }), /* @__PURE__ */ React.createElement(TiersCard, { settings: executionSettings, say, onSaved: loadExecutionSettings, edit }), /* @__PURE__ */ React.createElement(ExecutionTableCard, { settings: executionSettings, say, onSaved: loadExecutionSettings, edit })), memorySettings && /* @__PURE__ */ React.createElement(MemorySettingsCard, { settings: memorySettings, say, onSaved: loadMemorySettings, edit }), displayLanguageLoaded && // the focus waits for every card above: one that loads later would push the entry back out of view
+    ), providerPaceOffsets && /* @__PURE__ */ React.createElement(PaceOffsetsCard, { offsets: providerPaceOffsets, say, onSaved: loadPaceOffsets, edit }), executionSettings && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(ExecutionDefaultsCard, { settings: executionSettings, say, onSaved: loadExecutionSettings, edit }), haltedRefires && /* @__PURE__ */ React.createElement(HaltedRefiresCard, { rows: haltedRefires, say, onChanged: loadHaltedRefires }), responseFloors && /* @__PURE__ */ React.createElement(ResponseFloorsCard, { rows: responseFloors }), /* @__PURE__ */ React.createElement(TiersCard, { settings: executionSettings, say, onSaved: loadExecutionSettings, edit }), /* @__PURE__ */ React.createElement(ExecutionTableCard, { settings: executionSettings, say, onSaved: loadExecutionSettings, edit })), memorySettings && /* @__PURE__ */ React.createElement(MemorySettingsCard, { settings: memorySettings, say, onSaved: loadMemorySettings, edit }), displayLanguageLoaded && // the focus waits for every card above: one that loads later would push the entry back out of view
     /* @__PURE__ */ React.createElement(
       MemoryEntriesCard,
       {

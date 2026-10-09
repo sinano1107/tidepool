@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import type { Db } from "./db.js";
 import { DomainError } from "./domain-error.js";
-import { appendEvent, type EventPayload } from "./events.js";
+import { appendEvent, type EventPayload, listEventsOfKinds } from "./events.js";
 import { BOARD_WORKER_ID } from "./worker-id.js";
 
 /** 盤面が返す MCP 応答1回の大きさの上限(ADR 0195 決定2)。text content の本文ではなく、盤面が返す CallToolResult を丸ごと
@@ -278,4 +278,23 @@ export function floorResponse<R extends ToolResponse>(
   const keptUpTo = (end: number) => original.subarray(0, end).toString();
   const kept = keptUpTo(fitEnd(original, 0, (end) => responseBytes(keptUpTo(end) + marker) <= RESPONSE_BUDGET_BYTES));
   return { ...result, content: [{ ...result.content[0], text: kept + marker }] };
+}
+
+/** 床の記録の行(ADR 0219 決定2): `response_truncated` の event を (surface, verb) ごとに1行にまとめる。新しい状態は持たず、
+ *  events だけから導出する。`max_bytes` は切る前の最大の大きさ、`last_task_id` は最後の event の task(無ければ null)。 */
+export function listFloorRows(db: Db) {
+  const rows = new Map<string, { surface: ResponseSurface; verb: string; count: number; last_at: string; max_bytes: number; last_task_id: string | null }>();
+  for (const { payload, created_at } of listEventsOfKinds(db, ["response_truncated"])) {
+    const key = JSON.stringify([payload.surface, payload.verb]);
+    const row = rows.get(key);
+    rows.set(key, {
+      surface: payload.surface,
+      verb: payload.verb,
+      count: (row?.count ?? 0) + 1,
+      last_at: created_at,
+      max_bytes: Math.max(row?.max_bytes ?? 0, payload.bytes),
+      last_task_id: payload.task_id ?? null,
+    });
+  }
+  return [...rows.values()];
 }

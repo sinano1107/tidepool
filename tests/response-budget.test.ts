@@ -2,7 +2,7 @@ import { expect, it } from "vitest";
 import { openDb } from "../src/db.js";
 import { listEventsOfKinds } from "../src/events.js";
 import { toolError, toolResult } from "../src/mcp.js";
-import { floorResponse, packItems, readNext } from "../src/response-budget.js";
+import { floorResponse, listFloorRows, packItems, type ResponseSurface, readNext } from "../src/response-budget.js";
 import { RESPONSE_BUDGET_BYTES } from "./harness.js";
 
 // 応答予算(ADR 0195): 詰める関数の境目・欄の分割・続きの error と、出口の床はここで言う(issue #1388)。
@@ -199,6 +199,31 @@ it("出口の床は予算以下の応答と error の応答をそのまま通し
   expect(floorResponse(small, { db, surface: "management", verb: "get_task", at })).toBe(small);
   expect(floorResponse(error, { db, surface: "management", verb: "get_task", at })).toBe(error);
   expect(listEventsOfKinds(db, ["response_truncated"])).toEqual([]);
+});
+
+// 床の記録の行(ADR 0219 決定2): (surface, verb) ごとに1行、events だけから導出する(issue #1386)
+it("床の記録が無ければ床の行は空", () => {
+  expect(listFloorRows(openDb(":memory:"))).toEqual([]);
+});
+
+it("床の行は (surface, verb) ごとに1つで、回数・最後の時刻・最大の bytes・最後の event の task を持つ。surface が違えば同じ verb でも別の行", () => {
+  const db = openDb(":memory:");
+  const big = toolResult({ line: "x".repeat(60_000) });
+  const small = toolResult({ line: "x".repeat(45_000) });
+  const floor = (result: typeof big, surface: ResponseSurface, verb: string, minute: number, taskId?: string) =>
+    floorResponse(result, { db, surface, verb, taskId, at: new Date(minute * 60_000) });
+  floor(small, "worker", "get_task", 1, "t1");
+  floor(big, "worker", "get_task", 2, "t2");
+  floor(small, "management", "get_task", 3);
+  floor(small, "worker", "get_task", 4, "t3");
+  floor(small, "worker", "list_events", 5, "t4");
+  floor(small, "worker", "list_events", 6);
+
+  expect(listFloorRows(db)).toEqual([
+    { surface: "worker", verb: "get_task", count: 3, last_at: new Date(4 * 60_000).toISOString(), max_bytes: resultBytes(big), last_task_id: "t3" },
+    { surface: "management", verb: "get_task", count: 1, last_at: new Date(3 * 60_000).toISOString(), max_bytes: resultBytes(small), last_task_id: null },
+    { surface: "worker", verb: "list_events", count: 2, last_at: new Date(6 * 60_000).toISOString(), max_bytes: resultBytes(small), last_task_id: null },
+  ]);
 });
 
 /** 最初の読みから next が尽きるまで追った応答の列。 */
