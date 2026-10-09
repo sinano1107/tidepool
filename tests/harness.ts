@@ -963,10 +963,10 @@ export const FULL_HANDOFF = {
 };
 
 /** agent `assignee` が完了させた work(domain 層)。着地の記録はまだ何も無い。 */
-export function completedWork(db: Db, now: Date, assignee: string, parentId?: string): Task {
+export function completedWork(db: Db, now: Date, assignee: string, parentId?: string, workspace?: string): Task {
   const task = registerTask(
     db,
-    { type: "work", title: "ship", purpose: "p", completion_criteria: "c", assignee, parent_id: parentId },
+    { type: "work", title: "ship", purpose: "p", completion_criteria: "c", assignee, parent_id: parentId, workspace },
     now,
     ...HUMAN_WEBUI,
   );

@@ -2055,15 +2055,8 @@ it("着地済み・未完了・別 agent・PR 昇格を abandon した・祖先�
 });
 
 // ADR 0226: workspace の削除の扉は同じ集合を、タスクの `workspace` の参照で数える
-function completedWorkIn(board: Db, now: Date, workspace?: string): Task {
-  const task = registerTask(
-    board,
-    { type: "work", title: "ship", purpose: "p", completion_criteria: "c", assignee: "tako", workspace },
-    now,
-    ...HUMAN_WEBUI,
-  );
-  return completeTask(board, task, FULL_HANDOFF, "tako", now, "worker");
-}
+const completedWorkIn = (board: Db, now: Date, workspace?: string) =>
+  completedWork(board, now, "tako", undefined, workspace);
 
 it("workspace 名でも、無人 merge キューにいる・PR 昇格失敗の question が開いている・門で止まって abandon していない完了タスクを数える", () => {
   db = openDb(":memory:");

@@ -6,7 +6,6 @@ import {
   DeletionBlockedError,
   DeletionConfirmationRequiredError,
 } from "../src/registry-write.js";
-import { completeTask, registerTask } from "../src/tasks.js";
 import type {
   DeleteWorkspaceInput,
   WorkspaceDeletionReferences,
@@ -16,8 +15,7 @@ import {
   AUTH_HEADERS,
   api,
   bootTidepool,
-  FULL_HANDOFF,
-  HUMAN_WEBUI,
+  completedWork,
   registerWork,
   type Tidepool,
 } from "./harness.js";
@@ -165,13 +163,7 @@ it("DELETE /api/workspaces/:name はその workspace で着地を待つ完了タ
     },
   });
   const now = new Date();
-  const task = registerTask(
-    t.db,
-    { type: "work", title: "ship", purpose: "p", completion_criteria: "c", assignee: "tako", workspace: "lagoon" },
-    now,
-    ...HUMAN_WEBUI,
-  );
-  registerPrPromotionFailureQuestion(t.db, completeTask(t.db, task, FULL_HANDOFF, "tako", now, "worker"), "boom", now);
+  registerPrPromotionFailureQuestion(t.db, completedWork(t.db, now, "tako", undefined, "lagoon"), "boom", now);
 
   await api(t.baseUrl, "DELETE", "/api/workspaces/lagoon", { confirm: true });
 
