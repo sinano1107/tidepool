@@ -100,13 +100,14 @@ export function resolveAgentOrQuarantine(
 /** Quarantine resolution's verification gate for an agent name (CONTEXT.md's
  *  Quarantine, ADR 0012 / issue #36) — never taken on faith. Clearance holds
  *  either the registry has the name back (`agentExists`), or there is no more
- *  todo work left depending on it and no completed task awaiting landing on
- *  its profile — both are legitimate repairs (registry repair, or reassigning
- *  the pending tasks away once nothing completed still waits to land), and
- *  either makes the
- *  quarantine moot. `agentExists` is resolved by the caller (fresh against
+ *  unsettled work left depending on it and no completed task awaiting landing
+ *  on its profile — both are legitimate repairs (registry repair, or settling /
+ *  reassigning those tasks once nothing completed still waits to land), and
+ *  either makes the quarantine moot. Unsettled is the delete door's status line
+ *  (`countUnsettledTasksReferencing`), so a task still running under the name
+ *  counts too (ADR 0224 決定4). `agentExists` is resolved by the caller (fresh against
  *  the registry, or `false` when no registry is configured at all — in which
- *  case only the "no more pending tasks" path can ever clear it). */
+ *  case only the "no more unsettled tasks" path can ever clear it). */
 export function verifyAgentRepaired(
   db: Db,
   agentName: string,
@@ -116,13 +117,13 @@ export function verifyAgentRepaired(
 ): void {
   if (agentExists) return;
   const fallback = typeAwareDefaultAgentSql("type", "@defaultAgentName", "@auditorName");
-  const stillPending = db
-    .prepare(`SELECT 1 FROM tasks WHERE type != 'question' AND status = 'todo'
+  const stillUnsettled = db
+    .prepare(`SELECT 1 FROM tasks WHERE type != 'question' AND status NOT IN ('done', 'cancelled')
               AND COALESCE(assignee, ${fallback}) = @agentName LIMIT 1`)
     .get({ agentName, defaultAgentName: defaultAgentName ?? null, auditorName: auditorName ?? null });
-  if (stillPending) {
+  if (stillUnsettled) {
     throw new Error(
-      `agent ${agentName} is not back in the registry and still has pending tasks assigned`,
+      `agent ${agentName} is not back in the registry and still has unsettled tasks assigned`,
     );
   }
   // done のタスクは Edit で付け替えられないので、その profile を読んで着地を待つものが

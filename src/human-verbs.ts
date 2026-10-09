@@ -462,7 +462,7 @@ export interface QuarantineCheckDeps {
   landing?: Pick<Landing, "observeMergedAutoMerges">;
   boardState?: BoardStatePath[];
   /** Whether an agent name is currently registered — one half of the agent
-   *  check; absent → only "no pending tasks remain" can clear it. */
+   *  check; absent → only "no unsettled tasks remain" can clear it. */
   agentRegistered?: (name: string) => boolean;
   /** 封じ込め能力の合成後の検査(ADR 0033 / ADR 0036)。Absent → containment の
    *  検査が組めず、その確認への回答は拒まれる。 */

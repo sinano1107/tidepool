@@ -1,6 +1,6 @@
-import { afterEach, expect, it } from "vitest";
-import type { AuthorityProfile } from "../src/registry.js";
-import { api, bootTidepool, HOUR, mcpClient, type Tidepool } from "./harness.js";
+import { afterEach, describe, expect, it } from "vitest";
+import { type AuthorityProfile, InvalidAgentDefinitionError, UnknownAgentError } from "../src/registry.js";
+import { api, bootTidepool, HOUR, mcpClient, quarantineQuestion, type Tidepool } from "./harness.js";
 
 let t: Tidepool;
 afterEach(() => t?.stop());
@@ -93,4 +93,93 @@ it("navigator 宛てタスクは navigator 自身の authority(deckhand とは�
   expect(child).toBeDefined();
   expect(child.type).toBe("work");
   expect(board.filter((x: any) => x.type === "question")).toEqual([]);
+});
+
+// ADR 0224: spawn 後に assignee が registry から消えた/定義が壊れたとき、authority を読む verb は
+// 無制限に落ちず拒まれ、agent 名の quarantine が立つ。slot は保たれ escalate は通る。
+const UNRESOLVABLE: Array<[string, (name: string) => Error]> = [
+  ["UnknownAgentError", (name) => new UnknownAgentError(name)],
+  ["InvalidAgentDefinitionError", (name) => new InvalidAgentDefinitionError(name, 'tier "bogus" is outside the enumeration')],
+];
+
+const spec = (title: string) => ({ title, purpose: `purpose of ${title}`, completion_criteria: `criteria of ${title}`, assignee: "deckhand" });
+
+async function call(t: Tidepool, taskId: string, name: string, args: Record<string, unknown>): Promise<any> {
+  const client = await mcpClient(t.mcpBaseUrl, taskId);
+  try {
+    return await client.callTool({ name, arguments: args });
+  } finally {
+    await client.close();
+  }
+}
+
+/** `drift()` までは resolveAuthority と同じに解決し、その後は assignee の解決が `fail` で投げる。 */
+function driftingResolver(fail: (name: string) => Error) {
+  let drifted = false;
+  return {
+    resolveAuthority: (assignee: string | null) => {
+      if (drifted) throw fail(assignee ?? "tako");
+      return resolveAuthority(assignee);
+    },
+    drift: () => {
+      drifted = true;
+    },
+  };
+}
+
+async function expectRefusedAndQuarantined(t: Tidepool, taskId: string, verb: string, args: Record<string, unknown>) {
+  const refused = await call(t, taskId, verb, args);
+  expect(refused.isError).toBe(true);
+  expect(refused.content[0].text).toContain("do not need to escalate");
+
+  const questions = (await api(t.baseUrl, "GET", "/api/tasks")).json.filter((x: any) => x.type === "question");
+  expect(questions.map((q: any) => q.id)).toEqual([quarantineQuestion(t.db, "agent", "deckhand")?.id]);
+
+  const escalated = await call(t, taskId, "escalate", {
+    context: "the plan needs a human call",
+    questions: [{ title: "which way?", options: ["a", "b"], recommendation: "a" }],
+  });
+  expect(escalated.isError ?? false).toBe(false);
+}
+
+describe.each(UNRESOLVABLE)("assignee の authority が %s で解決できないとき", (_, fail) => {
+  it("list_agents は拒まれ、agent 名の quarantine が立ち、続く escalate は通る", async () => {
+    const resolver = driftingResolver(fail);
+    t = await bootTidepool({ resolveAuthority: resolver.resolveAuthority });
+    const parent = await registerAssigned(t, "deckhand's task", "deckhand");
+    await t.clock.advance(HOUR);
+    resolver.drift();
+
+    await expectRefusedAndQuarantined(t, parent.id, "list_agents", {});
+  });
+
+  it("decompose は拒まれて子を作らず、agent 名の quarantine が立ち、続く escalate は通る", async () => {
+    const resolver = driftingResolver(fail);
+    t = await bootTidepool({ resolveAuthority: resolver.resolveAuthority });
+    const parent = await registerAssigned(t, "deckhand's task", "deckhand");
+    await t.clock.advance(HOUR);
+    resolver.drift();
+
+    await expectRefusedAndQuarantined(t, parent.id, "decompose", { reason: "split", children: [spec("X")] });
+    const board = (await api(t.baseUrl, "GET", "/api/tasks")).json;
+    expect(board.find((x: any) => x.title === "X")).toBeUndefined();
+  });
+
+  it("redecompose は拒まれて旧い子を破棄せず新しい子も作らず、agent 名の quarantine が立ち、続く escalate は通る", async () => {
+    const resolver = driftingResolver(fail);
+    t = await bootTidepool({ resolveAuthority: resolver.resolveAuthority });
+    const parent = await registerAssigned(t, "deckhand's task", "deckhand");
+    await t.clock.advance(HOUR);
+    const decomposed = await call(t, parent.id, "decompose", { reason: "split", children: [spec("A")] });
+    const [a] = JSON.parse(decomposed.content[0].text).child_ids;
+    await t.clock.advance(HOUR);
+    expect((await call(t, a, "declare_premise_breach", { reason: "module M is broken" })).isError ?? false).toBe(false);
+    expect(t.worker.started.map((x) => x.title)).toEqual(["deckhand's task", "A", "deckhand's task"]);
+    resolver.drift();
+
+    await expectRefusedAndQuarantined(t, parent.id, "redecompose", { reason: "replan", children: [spec("X")] });
+    const board = (await api(t.baseUrl, "GET", "/api/tasks")).json;
+    expect(board.find((x: any) => x.title === "X")).toBeUndefined();
+    expect(board.find((x: any) => x.id === a).status).not.toBe("cancelled");
+  });
 });

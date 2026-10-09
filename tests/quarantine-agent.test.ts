@@ -102,7 +102,7 @@ describe("verifyAgentRepaired", () => {
          VALUES ('pending', ?, 'todo', ?, 'pending', 'p', 'c', 1, '2026-10-09T00:00:00.000Z')`,
       ).run(type, assignee);
       const verify = () => verifyAgentRepaired(db, name, false, defaultAgentName, auditorName);
-      if (dependent) expect(verify).toThrow(/still has pending tasks/);
+      if (dependent) expect(verify).toThrow(/still has unsettled tasks/);
       else expect(verify).not.toThrow();
       expect(() => verifyAgentRepaired(db, name, true, defaultAgentName, auditorName)).not.toThrow();
     } finally {
@@ -128,5 +128,31 @@ describe("verifyAgentRepaired", () => {
     ).run();
 
     expect(() => verifyAgentRepaired(db, "navigator", false)).toThrow(/navigator/);
+  });
+
+  // ADR 0224 決定4: 実行中の worker が立てた quarantine は、その worker のタスクが決着するまで解除できない
+  it("registry に復活しておらず、その名前宛ての実行中タスクが残っていれば拒否し、決着すれば認める", () => {
+    const db = openDb(":memory:");
+    db.prepare(
+      `INSERT INTO tasks (id, type, status, assignee, title, purpose, completion_criteria, sort_key, created_at)
+       VALUES ('t1', 'work', 'in_progress', 'navigator', 'running', 'p', 'c', 1, '2026-10-09T00:00:00.000Z')`,
+    ).run();
+    expect(() => verifyAgentRepaired(db, "navigator", false)).toThrow(/still has unsettled tasks/);
+
+    db.prepare("UPDATE tasks SET status = 'done' WHERE id = 't1'").run();
+    expect(() => verifyAgentRepaired(db, "navigator", false)).not.toThrow();
+  });
+
+  it("registry に復活しておらず、その名前宛ての blocked タスク(未決着の子を待つ)が残っていれば拒否し、決着すれば認める", () => {
+    const db = openDb(":memory:");
+    db.prepare(
+      `INSERT INTO tasks (id, parent_id, type, status, assignee, title, purpose, completion_criteria, sort_key, created_at)
+       VALUES ('parent', NULL, 'work', 'todo', 'navigator', 'waiting on its child', 'p', 'c', 1, '2026-10-09T00:00:00.000Z'),
+              ('child', 'parent', 'work', 'todo', 'deckhand', 'child', 'p', 'c', 2, '2026-10-09T00:00:00.000Z')`,
+    ).run();
+    expect(() => verifyAgentRepaired(db, "navigator", false)).toThrow(/still has unsettled tasks/);
+
+    db.prepare("UPDATE tasks SET status = 'cancelled' WHERE id IN ('parent', 'child')").run();
+    expect(() => verifyAgentRepaired(db, "navigator", false)).not.toThrow();
   });
 });

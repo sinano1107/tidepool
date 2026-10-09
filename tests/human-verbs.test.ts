@@ -671,7 +671,7 @@ it("agent quarantine の回答は registry 復帰か依存 task の解消まで�
   }
 
   expect({ error: String(error), status: onlyQuestion(db).status }).toEqual({
-    error: "Error: agent specialist is not back in the registry and still has pending tasks assigned",
+    error: "Error: agent specialist is not back in the registry and still has unsettled tasks assigned",
     status: "todo",
   });
 });
