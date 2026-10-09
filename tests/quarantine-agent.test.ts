@@ -6,10 +6,10 @@ import {
   resolveAgentOrQuarantine,
   verifyAgentRepaired,
 } from "../src/agent.js";
-import { openDb } from "../src/db.js";
+import { type Db, openDb } from "../src/db.js";
 import { InvalidAgentDefinitionError, UnknownAgentError } from "../src/registry.js";
-import { listBoard } from "../src/tasks.js";
-import { quarantineQuestion } from "./harness.js";
+import { cancelTaskDirectly, completeTask, listBoard, pickupTask, recordPrOpened, registerTask } from "../src/tasks.js";
+import { completedWork, FULL_HANDOFF, HUMAN_WEBUI, quarantineQuestion } from "./harness.js";
 
 describe("quarantineAgent(ADR 0012 / issue #36: workspace 版の agent 名一般化)", () => {
   it("agent 名を needs-human にマークし、1択の Confirmation question を登録する", () => {
@@ -81,28 +81,53 @@ describe("resolveAgentOrQuarantine", () => {
   });
 });
 
+const NOW = new Date("2026-10-09T00:00:00.000Z");
+
+function register(db: Db, type: "work" | "review" | "question", assignee: string | undefined, parentId?: string) {
+  return registerTask(
+    db,
+    {
+      type,
+      title: "pending",
+      purpose: "p",
+      completion_criteria: "c",
+      assignee,
+      parent_id: parentId,
+      ...(type === "question" && {
+        question: [{ title: "q", options: ["a", "b"], recommendation: "a" }],
+      }),
+    },
+    NOW,
+    ...HUMAN_WEBUI,
+  );
+}
+
+/** agent `name` が完了させ、auto_if_ci_green で無人 merge キューに入った PR を持つタスク(着地待ち)。 */
+function queueForAutoMerge(db: Db, name: string): void {
+  const task = completedWork(db, NOW, name);
+  recordPrOpened(db, task, 7, name, NOW, { merge: "auto_if_ci_green" }, undefined, "worker");
+}
+
+// 解除の規則(ADR 0012 / 0217 決定4 / 0224 決定4)はここで1度だけ、message 込みで述べる(ADR 0107)。
 describe("verifyAgentRepaired", () => {
   it.each([
-    ["work", null, "tako", "tako", "shako", true],
-    ["review", null, "shako", "tako", "shako", true],
-    ["work", null, "shako", "tako", "shako", false],
-    ["review", null, "tako", "tako", "shako", false],
-    ["question", null, "tako", "tako", "shako", false],
+    ["work", undefined, "tako", "tako", "shako", true],
+    ["review", undefined, "shako", "tako", "shako", true],
+    ["work", undefined, "shako", "tako", "shako", false],
+    ["review", undefined, "tako", "tako", "shako", false],
+    ["question", undefined, "tako", "tako", "shako", false],
     ["question", "tako", "tako", "tako", "shako", false],
-    ["work", null, "tako", undefined, undefined, false],
-    ["review", null, "shako", undefined, undefined, false],
+    ["work", undefined, "tako", undefined, undefined, false],
+    ["review", undefined, "shako", undefined, undefined, false],
     ["work", "tako", "tako", undefined, undefined, true],
     ["review", "shako", "shako", undefined, undefined, true],
     ["work", "specialist", "tako", "tako", "shako", false],
   ] as const)("todo %s (assignee=%s) の %s への依存を型ごとのポインタ(%s / %s)で検査する", (type, assignee, name, defaultAgentName, auditorName, dependent) => {
     const db = openDb(":memory:");
     try {
-      db.prepare(
-        `INSERT INTO tasks (id, type, status, assignee, title, purpose, completion_criteria, sort_key, created_at)
-         VALUES ('pending', ?, 'todo', ?, 'pending', 'p', 'c', 1, '2026-10-09T00:00:00.000Z')`,
-      ).run(type, assignee);
+      register(db, type, assignee);
       const verify = () => verifyAgentRepaired(db, name, false, defaultAgentName, auditorName);
-      if (dependent) expect(verify).toThrow(/still has unsettled tasks/);
+      if (dependent) expect(verify).toThrow(`agent ${name} is not back in the registry and still has unsettled tasks assigned`);
       else expect(verify).not.toThrow();
       expect(() => verifyAgentRepaired(db, name, true, defaultAgentName, auditorName)).not.toThrow();
     } finally {
@@ -110,49 +135,54 @@ describe("verifyAgentRepaired", () => {
     }
   });
 
-  it("registry に agent 名が復活していれば、todo タスクの有無に関わらず解除を認める", () => {
+  it("registry に agent 名が復活していれば、未決着タスクや着地待ちが残っていても解除を認める", () => {
     const db = openDb(":memory:");
+    register(db, "work", "navigator");
+    queueForAutoMerge(db, "navigator");
     expect(() => verifyAgentRepaired(db, "navigator", true)).not.toThrow();
   });
 
-  it("registry に復活していなくても、その名前宛ての未決着タスクがもう存在しなければ解除を認める", () => {
+  it("registry に復活しておらず、その名前宛ての未決着タスクが残っていれば拒否する", () => {
     const db = openDb(":memory:");
-    expect(() => verifyAgentRepaired(db, "navigator", false)).not.toThrow();
+    register(db, "work", "navigator");
+
+    expect(() => verifyAgentRepaired(db, "navigator", false)).toThrow(
+      "agent navigator is not back in the registry and still has unsettled tasks assigned",
+    );
   });
 
-  it("registry に復活しておらず、その名前宛ての todo タスクがまだ残っていれば拒否する", () => {
+  // 数えの規則は tests/landing.test.ts の countTasksAwaitingLanding が持つ。ここは「数えが正なら拒む」だけ。
+  it("registry に復活しておらず、着地を待つ完了タスクが残っていれば拒否する", () => {
     const db = openDb(":memory:");
-    db.prepare(
-      `INSERT INTO tasks (id, type, status, assignee, title, purpose, completion_criteria, sort_key, created_at)
-       VALUES ('t1', 'work', 'todo', 'navigator', 'still delegated', 'p', 'c', 1, '2026-07-08T00:00:00.000Z')`,
-    ).run();
+    queueForAutoMerge(db, "navigator");
 
-    expect(() => verifyAgentRepaired(db, "navigator", false)).toThrow(/navigator/);
+    expect(() => verifyAgentRepaired(db, "navigator", false)).toThrow(
+      "agent navigator is not back in the registry and still has 1 completed task(s) awaiting landing on its profile",
+    );
+  });
+
+  it("registry に復活しておらず、未決着タスクも着地待ちも無ければ解除を認める", () => {
+    const db = openDb(":memory:");
+    expect(() => verifyAgentRepaired(db, "navigator", false)).not.toThrow();
   });
 
   // ADR 0224 決定4: 実行中の worker が立てた quarantine は、その worker のタスクが決着するまで解除できない
   it("registry に復活しておらず、その名前宛ての実行中タスクが残っていれば拒否し、決着すれば認める", () => {
     const db = openDb(":memory:");
-    db.prepare(
-      `INSERT INTO tasks (id, type, status, assignee, title, purpose, completion_criteria, sort_key, created_at)
-       VALUES ('t1', 'work', 'in_progress', 'navigator', 'running', 'p', 'c', 1, '2026-10-09T00:00:00.000Z')`,
-    ).run();
+    const task = pickupTask(db, register(db, "work", "navigator"), "navigator", NOW)!;
     expect(() => verifyAgentRepaired(db, "navigator", false)).toThrow(/still has unsettled tasks/);
 
-    db.prepare("UPDATE tasks SET status = 'done' WHERE id = 't1'").run();
+    completeTask(db, task, FULL_HANDOFF, "navigator", NOW, "worker");
     expect(() => verifyAgentRepaired(db, "navigator", false)).not.toThrow();
   });
 
   it("registry に復活しておらず、その名前宛ての blocked タスク(未決着の子を待つ)が残っていれば拒否し、決着すれば認める", () => {
     const db = openDb(":memory:");
-    db.prepare(
-      `INSERT INTO tasks (id, parent_id, type, status, assignee, title, purpose, completion_criteria, sort_key, created_at)
-       VALUES ('parent', NULL, 'work', 'todo', 'navigator', 'waiting on its child', 'p', 'c', 1, '2026-10-09T00:00:00.000Z'),
-              ('child', 'parent', 'work', 'todo', 'deckhand', 'child', 'p', 'c', 2, '2026-10-09T00:00:00.000Z')`,
-    ).run();
+    const parent = register(db, "work", "navigator");
+    register(db, "work", "deckhand", parent.id);
     expect(() => verifyAgentRepaired(db, "navigator", false)).toThrow(/still has unsettled tasks/);
 
-    db.prepare("UPDATE tasks SET status = 'cancelled' WHERE id IN ('parent', 'child')").run();
+    cancelTaskDirectly(db, parent, null, NOW, {}, "webui");
     expect(() => verifyAgentRepaired(db, "navigator", false)).not.toThrow();
   });
 });

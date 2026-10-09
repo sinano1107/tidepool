@@ -3,6 +3,7 @@ import { quarantineAgent } from "../src/agent.js";
 import { ClaudeDraftClient } from "../src/claude-draft-client.js";
 import { quarantineContainment } from "../src/containment.js";
 import { type Db, openDb } from "../src/db.js";
+import { DomainError } from "../src/domain-error.js";
 import { listEvents } from "../src/events.js";
 import {
   cancelThroughHumanDoor,
@@ -634,7 +635,7 @@ it("workspace quarantine の回答は tree が clean と確認できるまで拒
   });
 });
 
-it("agent quarantine の回答は registry 復帰か依存 task の解消まで拒否する", async () => {
+it("agent quarantine の回答は解除検査が拒むと DomainError になり、question は todo のまま残る", async () => {
   db = openDb(":memory:");
   registerTask(
     db,
@@ -670,8 +671,8 @@ it("agent quarantine の回答は registry 復帰か依存 task の解消まで�
     error = caught;
   }
 
-  expect({ error: String(error), status: onlyQuestion(db).status }).toEqual({
-    error: "Error: agent specialist is not back in the registry and still has unsettled tasks assigned",
+  expect({ error, status: onlyQuestion(db).status }).toEqual({
+    error: expect.any(DomainError),
     status: "todo",
   });
 });
@@ -695,9 +696,7 @@ it("GitHub の無い盤面の agent quarantine の解除検査は、観測せず
       agentRegistered: () => false,
       landing: createLanding({ defaultAgentName: "tako", db, clock: new FakeClock(), workspace: PRODUCT, github: null }),
     }).agent!("specialist"),
-  ).rejects.toThrow(
-    "agent specialist is not back in the registry and still has 1 completed task(s) awaiting landing on its profile",
-  );
+  ).rejects.toThrow(DomainError);
   expect(listEvents(db, queued.id).filter((event) => event.kind === "pr_merge_observed")).toEqual([]);
 });
 
