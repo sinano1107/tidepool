@@ -1,4 +1,4 @@
-import { api, HOUR, loggedEntry, mcpClient, registerQuestion, registerWork } from "../tests/harness.js";
+import { api, HOUR, loggedEntry, mcpClient, memoryAttributedObjection, object, registerQuestion, registerWork } from "../tests/harness.js";
 import { expect, test } from "./fixtures.js";
 
 // issue #230: エージェント著述の複数行散文が white-space の指定漏れで1行に
@@ -96,3 +96,37 @@ test("スマホ幅で異議コメントに空白の無い長いトークンが�
   const [scrollWidth, clientWidth] = await row.evaluate((el) => [el.scrollWidth, el.clientWidth]);
   expect(scrollWidth, `scrollWidth ${scrollWidth} > clientWidth ${clientWidth}`).toBeLessThanOrEqual(clientWidth);
 });
+
+// issue #1113: memory の帰責(cause・#id リンク群・evidence)は異議コメントの下の独立した行に置かれ、
+// `#id` は番号の途中で割れない。実運用に近い4桁の id を10件名指し、約200字の evidence を付ける。
+const CAUSE_ENTRY_IDS = Array.from({ length: 10 }, (_, i) => 1004 + i);
+const LONG_EVIDENCE = "followed the stale note about squashing ".repeat(5).trim();
+
+for (const band of ["bundled", "plain"] as const) {
+  test(`スマホ幅で memory の帰責が異議コメントの下の行に置かれ、#id が途中で割れず行がはみ出さない(${band} の帯、issue #1113)`, async ({
+    boot,
+    page,
+  }) => {
+    const t = await boot();
+    await page.setViewportSize({ width: 390, height: 844 });
+    const work = await registerWork(t, `帰責の配置 ${band}`);
+    await t.clock.advance(HOUR);
+    const decided = await loggedEntry(t, work.id, `帰責の配置の対象 ${band}`);
+    await memoryAttributedObjection(t, work.id, decided.id, CAUSE_ENTRY_IDS, LONG_EVIDENCE);
+    // plain の帯: 束ね済みの異議の後にもう1つ異議を打つと、帰責は plain の帯に付く
+    if (band === "plain") await object(t, decided.id, "plain の異議コメント");
+
+    await page.goto(t.baseUrl);
+    const row = page.locator(".tp-log-entry").filter({ hasText: `帰責の配置の対象 ${band}` });
+    const comment = band === "plain" ? row.getByText("objection: plain の異議コメント") : row.getByText("そのメモが間違っています");
+    await expect(row.getByRole("link", { name: `#${CAUSE_ENTRY_IDS[9]}` })).toBeVisible();
+
+    const [scrollWidth, clientWidth] = await row.evaluate((el) => [el.scrollWidth, el.clientWidth]);
+    expect(scrollWidth, `scrollWidth ${scrollWidth} > clientWidth ${clientWidth}`).toBeLessThanOrEqual(clientWidth);
+    const rects = await row.getByRole("link").evaluateAll((els) => els.map((el) => el.getClientRects().length));
+    expect(rects).toEqual(CAUSE_ENTRY_IDS.map(() => 1));
+    const commentBottom = await comment.evaluate((el) => el.getBoundingClientRect().bottom);
+    const causeTop = await row.getByText("cause: memory").evaluate((el) => el.getBoundingClientRect().top);
+    expect(causeTop, `cause top ${causeTop} < comment bottom ${commentBottom}`).toBeGreaterThanOrEqual(commentBottom);
+  });
+}

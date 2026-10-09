@@ -173,22 +173,20 @@ function LogEntry({ entry = {}, onObject, onExpand, onOpenMemoryEntry, active = 
   const completion = kind === "completion";
   const clickable = !!onObject;
   const causeText = cause === "uncertain" ? "cause: not yet determined (uncertain)" : cause ? `cause: ${cause}` : null;
-  const causeLinks = causeEntries.map((id) => /* @__PURE__ */ React.createElement(
+  const causeLinks = causeEntries.map((id) => /* @__PURE__ */ React.createElement(React.Fragment, { key: id }, " ", /* @__PURE__ */ React.createElement(
     "a",
     {
-      key: id,
       href: `#memory-entry-${id}`,
       onClick: (e) => {
         e.preventDefault();
         onOpenMemoryEntry?.(id);
       },
-      style: { marginLeft: 6, color: "var(--tide-4)" }
+      style: { color: "var(--tide-4)" }
     },
-    "#",
-    id
-  ));
-  const causeNote = causeText && /* @__PURE__ */ React.createElement("span", { style: { color: "var(--text-muted)", flexShrink: 0, maxWidth: "45%" } }, /* @__PURE__ */ React.createElement("span", null, causeText), causeLinks, causeEvidence && ` \u2014 ${causeEvidence}`);
-  const band = { display: "flex", alignItems: "flex-start", gap: 8, marginTop: 6, padding: "6px 10px", borderRadius: "var(--radius-xs)", fontSize: "var(--text-xs)", whiteSpace: "pre-wrap", overflowWrap: "anywhere" };
+    `#${id}`
+  )));
+  const causeNote = causeText && /* @__PURE__ */ React.createElement("span", { style: { flexBasis: "100%", color: "var(--text-muted)" } }, /* @__PURE__ */ React.createElement("span", null, causeText), causeLinks, causeEvidence && ` \u2014 ${causeEvidence}`);
+  const band = { display: "flex", flexWrap: "wrap", alignItems: "flex-start", gap: 8, marginTop: 6, padding: "6px 10px", borderRadius: "var(--radius-xs)", fontSize: "var(--text-xs)", whiteSpace: "pre-wrap", overflowWrap: "anywhere" };
   return /* @__PURE__ */ React.createElement(
     "div",
     {
@@ -236,7 +234,7 @@ function LogEntry({ entry = {}, onObject, onExpand, onOpenMemoryEntry, active = 
       },
       "\u2304"
     ),
-    (objection || bundledObjection) && /* @__PURE__ */ React.createElement("div", { style: { gridColumn: 3 } }, objection && /* @__PURE__ */ React.createElement("div", { style: { ...band, background: "var(--coral-1)", color: "var(--coral-4)" } }, /* @__PURE__ */ React.createElement("span", { style: { flex: 1 } }, "objection: ", objection), causeNote), bundledObjection && /* @__PURE__ */ React.createElement("div", { style: { ...band, background: "var(--surface-recessed)", color: "var(--text-muted)" } }, /* @__PURE__ */ React.createElement("span", { style: { flex: 1 } }, /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", textTransform: "uppercase", letterSpacing: "0.06em", marginRight: 6 } }, "bundled"), bundledObjection), !objection && causeNote))
+    (objection || bundledObjection) && /* @__PURE__ */ React.createElement("div", { style: { gridColumn: 3 } }, objection && /* @__PURE__ */ React.createElement("div", { style: { ...band, background: "var(--coral-1)", color: "var(--coral-4)" } }, /* @__PURE__ */ React.createElement("span", { style: { flex: "1 1 100%" } }, "objection: ", objection), causeNote), bundledObjection && /* @__PURE__ */ React.createElement("div", { style: { ...band, background: "var(--surface-recessed)", color: "var(--text-muted)" } }, /* @__PURE__ */ React.createElement("span", { style: { flex: "1 1 100%" } }, /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", textTransform: "uppercase", letterSpacing: "0.06em", marginRight: 6 } }, "bundled"), bundledObjection), !objection && causeNote))
   );
 }
 Object.assign(__ds_scope, { LogEntry });
