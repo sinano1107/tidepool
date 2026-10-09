@@ -81,7 +81,7 @@ Drop the session link when the parent said there is none, and the Related sectio
 
 ### 5. Label
 
-On each evaluated issue, add `auto-triaged`, and the category label (`bug` or `enhancement`) when the issue has none.
+On each evaluated issue, add `auto-triaged`. Add the category label (`bug` or `enhancement`) only when the issue has none and your outcome moves it forward — an Agent Brief, Questions for grilling, or Findings that confirm a defect. When you recommend close, add none: a suspicion that did not hold is neither.
 
 Draw a blocked-by edge yourself wherever your comment says another open issue must land or be decided first. The issue that waits is the blocked one: the evaluated issue when its Agent Brief builds on the other or a question's answer waits on it, an issue you filed when it cannot be resolved until the other lands. The edge is GitHub's native dependency ([issue-tracker.md](../../../docs/agents/issue-tracker.md)), drawn the moment you know it, and the comment's Related line names the same issue with `must land first`. A relation that only shares an area, or orders grilling without one outcome feeding the other, gets no edge.
 
