@@ -241,14 +241,14 @@ it("封筒と先頭の item が一緒に入らないとき、最初の応答は�
 
 it("欄の位置が壊れた続きも名指しの error になる", () => {
   const position = (p: object) =>
-    Buffer.from(JSON.stringify({ ...first, at: 2, count: 0, digest: "d", cut: [{ path: ["line"], bytes: 1, digest: "d" }], field: 0, offset: 0, ...p })).toString("base64url");
+    Buffer.from(JSON.stringify({ ...first, at: 2, count: 0, digest: "d", cut: [{ path: ["line"], bytes: 1, digest: "d" }], reading: 0, offset: 0, ...p })).toString("base64url");
 
   expect(() => readNext("get_task", position({}))).not.toThrow();
   expect(() => readNext("get_task", position({ cut: "line" }))).toThrow(/next is malformed/);
   expect(() => readNext("get_task", position({ cut: [{ path: "line", bytes: 1, digest: "d" }] }))).toThrow(/next is malformed/);
   expect(() => readNext("get_task", position({ offset: "x" }))).toThrow(/next is malformed/);
   expect(() => readNext("get_task", position({ offset: -10 }))).toThrow(/next is malformed/);
-  expect(() => readNext("get_task", position({ field: 1 }))).toThrow(/next is malformed/);
+  expect(() => readNext("get_task", position({ reading: 1 }))).toThrow(/next is malformed/);
   // 封筒の切れの続きだけが `at` を持たない —— 切る欄も持たなければ最初の読みと区別できない
   expect(() => readNext("get_task", position({ at: undefined }))).not.toThrow();
   expect(() => readNext("get_task", position({ at: undefined, cut: undefined }))).toThrow(/next is malformed/);
@@ -418,4 +418,10 @@ it("鍵で引き直す新しい順の履歴(get_task の形)でも、予算を�
   for (const response of responses) expect(bytesOf(response)).toBeLessThanOrEqual(RESPONSE_BUDGET_BYTES);
   expect(joinPieces(responses.filter((response) => response.partial), (piece) => piece)).toEqual({ purpose: envelope.purpose });
   expect(responses.flatMap((response) => response.events)).toEqual(events);
+});
+
+it("短い文字列の欄ばかりで予算を超える封筒は、欄を全部切っても続きの印の分で収まらないので、切らずに丸ごと返して床に任せる(ADR 0195 追記 #1393 の5)", () => {
+  const envelope = { dropped: Array.from({ length: 1_000 }, (_, i) => ({ id: `entry-${i}`, reason: "r".repeat(40) })) };
+
+  expect(packItems(first, "events", [], envelope)).toEqual({ ...envelope, events: [] });
 });

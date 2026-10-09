@@ -377,7 +377,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
         CUT_FIELDS_DESCRIPTION +
         " When the task itself is too large, it comes first in pieces the same way, before any event: those pieces' `partial` has no `id`, " +
         "its `field` is the path from the response root, `events` is empty, and `remaining` counts all the events. " +
-        "Events added after the first call are not returned: call again without `next` to see them. " +
+        "Events added after the first call, or after the last piece of a task too large for one response, are not returned: call again without `next` to see them. " +
         QUESTION_ANNOTATIONS_DESCRIPTION,
       inputSchema: { task_id: z.string().optional(), next: z.string().optional() },
     },
