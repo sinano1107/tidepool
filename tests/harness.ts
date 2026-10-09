@@ -764,7 +764,7 @@ export function rememberedNote(t: Tidepool, title: string): number {
 
 /** `entryId` に異議を打ってセッションを閉じ(束ね済みにし)、その異議群に `entries` を名指す memory の帰責を足す。
  *  setup のみ —— 門を通った帰責を直に置き、Board call は撃たない。 */
-export async function memoryAttributedObjection(t: Tidepool, taskId: string, entryId: number, entries: number[]): Promise<void> {
+export async function memoryAttributedObjection(t: Tidepool, taskId: string, entryId: number, entries: number[], evidence = "followed the note"): Promise<void> {
   const objection = await object(t, entryId, "そのメモが間違っています");
   await api(t.baseUrl, "POST", "/api/triage/close");
   appendEvent(t.db, {
@@ -772,7 +772,7 @@ export async function memoryAttributedObjection(t: Tidepool, taskId: string, ent
     workerId: "tidepool",
     origin: "board",
     at: t.clock.now(),
-    payload: { kind: "objection_attributed", entry_id: entryId, objection_event_ids: [objection], cause: "memory", evidence: "followed the note", entries, round: "after_rca" },
+    payload: { kind: "objection_attributed", entry_id: entryId, objection_event_ids: [objection], cause: "memory", evidence, entries, round: "after_rca" },
   });
 }
 
