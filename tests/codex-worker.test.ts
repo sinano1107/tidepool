@@ -10,6 +10,7 @@ import { appendEvent, listEvents } from "../src/events.js";
 import { executionSettingsFor } from "../src/execution-setting.js";
 import { buildMemoryInjection, buildMetaReviewMaterial, type InjectionQuery, recordKnowledge } from "../src/memory.js";
 import { registerMetaReview } from "../src/meta-review.js";
+import { listEpisodes } from "../src/precedent.js";
 import type { ContainerSpawn } from "../src/process-container.js";
 import { openQuarantineValues } from "../src/quarantine.js";
 import { loadRegistry, REVIEWER_AUTHORITY_PROFILE } from "../src/registry.js";
@@ -687,6 +688,30 @@ thread's history always fails.`));
     await vi.waitFor(() =>
       expect(readFileSync(join(f.logDir, `${value.id}.${spawned.id}.stream.jsonl`), "utf8")).toBe(jsonl),
     );
+  });
+
+  it("Codex 経路の session の終わりに transcript を Precedent に投影する —— worker_exited が記録され書き込みが閉じたあと(ADR 0083 追記10)", async () => {
+    const f = await fixture();
+    const value = task(f.db, "codex-precedent");
+    f.start(value);
+    f.process.processes[0]!.stdout.write(
+      readFileSync(new URL("fixtures/worker-session-codex-0.147.0.stream.jsonl", import.meta.url), "utf8"),
+    );
+    f.process.processes[0]!.stdout.end();
+    f.process.emitExit(0, null);
+
+    const episode = await vi.waitFor(() => {
+      const [found] = listEpisodes(f.db, { workspace: "work", agent: "codex-agent" });
+      expect(found).toBeDefined();
+      return found!;
+    });
+    const events = listEvents(f.db, value.id);
+    expect(episode.workerSpawnedEventId).toBe(events.find((e) => e.kind === "worker_spawned")!.id);
+    expect(episode.extractorVersion).toBe("6");
+    expect(episode.cliVersion).toBe(CLI_VERSION);
+    expect(episode.actions).toHaveLength(8);
+    // exit の事実は投影の入力 —— worker_exited を書いたあとに投影している証拠
+    expect(episode.workerExitedEventId).toBe(events.find((e) => e.kind === "worker_exited")!.id);
   });
 
   it("stderr を <taskId>.<worker_spawned の event id>.stderr.log として stream.jsonl の隣に全量保存する(ADR 0149)", async () => {

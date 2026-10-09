@@ -26,6 +26,7 @@ import { appendEvent, type EventPayload } from "./events.js";
 import type { ExecutionSetting } from "./execution-setting.js";
 import { buildMemoryInjection, buildMetaReviewMaterial, type InjectionQuery, recordMemoryInjection, recordMetaReviewMaterial, WORKER_MEMORY_VERBS } from "./memory.js";
 import { META_REVIEW_SUBJECTS, metaReviewSubjectOf } from "./meta-review.js";
+import { projectAndPersist } from "./precedent.js";
 import type { ContainedProcess, ContainerSpawn, ProcessContainers } from "./process-container.js";
 import { loadRegistry, type RegistrySource } from "./registry.js";
 import { resolveTaskAgent, type Task } from "./tasks.js";
@@ -1180,6 +1181,17 @@ export class CodexWorker implements WorkerAdapter {
       });
       removeTaskTemp();
       this.options.onWorkerExited?.(task.id, exit);
+      // ADR 0083 追記10: Claude adapter と同じ順で Precedent を投影する —— worker_exited を書いたあと、transcript の
+      // 書き込みストリームが閉じたあと。派生表なので失敗は記録して流す。
+      const project = () => {
+        try {
+          projectAndPersist(this.options.db, { workerSpawnedEventId: spawned, transcriptPath: transcript.streamPath });
+        } catch (err) {
+          console.error(`[codex-worker] precedent projection failed for task ${task.id}:`, err);
+        }
+      };
+      if (transcript.stream.closed) project();
+      else transcript.stream.once("close", project);
     };
     // ADR 0109 決定4: root の exit は容器に残るものが孤児である証拠 —— 読み切りを待たずに
     // 強制回収を撃つ(ADR 0201 決定1)。Harness 非依存に、盤面 supervisor 経由。
