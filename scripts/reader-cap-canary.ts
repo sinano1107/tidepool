@@ -49,9 +49,10 @@ if (process.argv[2] === "serve") {
     try {
       return { stdout: execFileSync(bin, args, { cwd: scratch, env, encoding: "utf8", maxBuffer: 64 * 1024 * 1024, stdio: ["ignore", "pipe", "pipe"] }) };
     } catch (err) {
-      console.error(`${bin} failed: ${err instanceof Error ? err.message : String(err)}`);
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(`${bin} failed: ${message}`);
       const { stdout, stderr, status } = err as { stdout?: string; stderr?: string; status?: number | null };
-      const summary = typeof status === "number" ? `${bin} exited with status ${status}` : err instanceof Error ? err.message : String(err);
+      const summary = typeof status === "number" ? `${bin} exited with status ${status}` : message;
       return { stdout: stdout ?? "", failure: { stderr: stderr ?? "", summary } };
     }
   };
