@@ -335,8 +335,7 @@ function readClaudeLines(transcriptLines: string[]): LineReading {
  *  出ず、commit の専用 item は無く、advisor は Codex に無い。subagent の中の行動は親 stdout に出ないので
  *  `subagent` は常に false。CLI の版は stdout に無く、`worker_spawned` の固定版の値を刻む。 */
 function readCodexLines(transcriptLines: string[], cliVersion: string): LineReading {
-  const reading = emptyReading();
-  reading.cliVersion = cliVersion;
+  const reading = { ...emptyReading(), cliVersion };
   const { actions, lines } = reading;
   for (const line of transcriptLines) {
     if (!line.trim()) continue;
