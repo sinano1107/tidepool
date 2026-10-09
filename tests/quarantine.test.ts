@@ -3,11 +3,13 @@ import { openDb } from "../src/db.js";
 import { listEvents } from "../src/events.js";
 import {
   openQuarantineQuestion,
+  parseTableRowEffortValue,
   QUARANTINES,
   type QuarantineKind,
   quarantineStops,
   quarantineUnlessClear,
   registerQuarantine,
+  tableRowEffortValue,
 } from "../src/quarantine.js";
 import { pickupExclusions } from "../src/scheduler.js";
 import { cancelTaskDirectly, listBoard, listQueue, nextSlotTask, registerTask } from "../src/tasks.js";
@@ -28,6 +30,7 @@ const SAMPLE: Record<QuarantineKind, readonly [string, string] | readonly [null]
   failedTeardown: ["task-1", "task-2"],
   registryReachability: [null],
   tableRow: ["anthropic/claude-opus-5", "moonshot/kimi-k3[1m]"],
+  tableRowEffort: ["openai/gpt-5.5/max", "openai/gpt-5.5/xhigh"],
 };
 
 const questions = (db: ReturnType<typeof openDb>) =>
@@ -193,4 +196,10 @@ it("CLI の版の古さの行の Quarantine は原因を名指し、行の差し
   // 運用者は固定の版を変えられない(ADR 0186 決定5)—— CLI の手動更新にも版の番号にも触れない
   expect(purpose).not.toMatch(/update the CLI|claude update/i);
   expect(purpose).not.toMatch(/\d+\.\d+\.\d+/);
+});
+
+it("行の effort の Quarantine の値は、model id に `/` があっても (provider, model, effort) に一意に戻る(ADR 0218 決定2)", () => {
+  const row = { provider: "openai", model: "org/team/gpt-5.5", effort: "max" } as const;
+  expect(tableRowEffortValue(row.provider, row.model, row.effort)).toBe("openai/org/team/gpt-5.5/max");
+  expect(parseTableRowEffortValue(tableRowEffortValue(row.provider, row.model, row.effort))).toEqual(row);
 });

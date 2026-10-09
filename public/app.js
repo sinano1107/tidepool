@@ -3689,7 +3689,7 @@ function toQuestionCardShape(q, icons) {
     // 自由記述を受けるかも盤面の `free_text` 注釈が答える(issue #1309)
     freeText: q.free_text ?? true,
     // 行の Quarantine の修復は表の修正が先頭(ADR 0184 決定6)
-    ...q.question_quarantine_kind === "tableRow" && { opensSettings: true },
+    ...(q.question_quarantine_kind === "tableRow" || q.question_quarantine_kind === "tableRowEffort") && { opensSettings: true },
     ...q.approval && {
       kind: "approval",
       ...q.approval.raises_parent_risk && { note: `approving raises ${q.parent_id} risk (upward propagation)` }
