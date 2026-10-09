@@ -309,6 +309,10 @@ it("get_current_task describes how to read history in English: its entries, its 
         "The task and the parent's other fields come on the first response only. " +
         "An item too large for one response comes alone in pieces marked `partial` (`id`, the item's id or the key `next` resumes from; `field`, " +
         "empty when the item is itself a string; and `field_bytes`, the field's full size in UTF-8 bytes): join that field across the pieces to get it verbatim. " +
+        "When cutting one field is not enough, the longest string fields are cut in turn: each piece carries one field's text, " +
+        "and the other fields being cut come as empty strings named in `partial.emptied`. " +
+        "When what comes on the first response only is itself too large, it comes first in pieces the same way, before any history rows: " +
+        "those pieces' `partial` has no `id`, its `field` is the path from the response root, the lists are empty, and `remaining` counts all the history rows. " +
         'If the list changes under the read, the call fails with "the list changed since the first get_current_task call: call get_current_task again without next to read it from the start"; read again from the start.',
     );
   } finally {

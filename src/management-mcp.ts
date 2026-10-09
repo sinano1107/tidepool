@@ -93,7 +93,7 @@ import {
 } from "./registry.js";
 import { RepoAccessMissingError } from "./repo-access.js";
 import { requiredTextSchema } from "./required-text-schema.js";
-import { nextDescription, packItems, type ReadPosition, readNext } from "./response-budget.js";
+import { CUT_FIELDS_DESCRIPTION, nextDescription, packItems, type ReadPosition, readNext } from "./response-budget.js";
 import { listHaltedRefires, markHaltedRefire, refireKeySchema } from "./retrospective.js";
 import {
   entryExclusionPredicate,
@@ -373,7 +373,10 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
         "When the history does not fit in one response, the response carries `next` and `remaining` (how many events are not returned yet): " +
         "call get_task again with only `next` to read the older events, and repeat until a response carries no `next` — then the history is complete. " +
         "The task itself comes on the first response only. An event too large for one response comes alone in pieces marked `partial` " +
-        "(`id`, `field`, and `field_bytes`, the field's full size in UTF-8 bytes): join that field across the pieces to get it verbatim. " +
+        "(`id`, `field`, and `field_bytes`, the field's full size in UTF-8 bytes): join that field across the pieces to get it verbatim." +
+        CUT_FIELDS_DESCRIPTION +
+        " When the task itself is too large, it comes first in pieces the same way, before any event: those pieces' `partial` has no `id`, " +
+        "its `field` is the path from the response root, `events` is empty, and `remaining` counts all the events. " +
         "Events added after the first call are not returned: call again without `next` to see them. " +
         QUESTION_ANNOTATIONS_DESCRIPTION,
       inputSchema: { task_id: z.string().optional(), next: z.string().optional() },

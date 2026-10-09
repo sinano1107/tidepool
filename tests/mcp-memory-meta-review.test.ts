@@ -132,6 +132,10 @@ it("read_memory_entries は主題 memory の接続に出て管理MCP には出�
         "`missing` comes on the first response only. " +
         "An item too large for one response comes alone in pieces marked `partial` (`id`, the item's id or the key `next` resumes from; `field`, " +
         "empty when the item is itself a string; and `field_bytes`, the field's full size in UTF-8 bytes): join that field across the pieces to get it verbatim. " +
+        "When cutting one field is not enough, the longest string fields are cut in turn: each piece carries one field's text, " +
+        "and the other fields being cut come as empty strings named in `partial.emptied`. " +
+        "When what comes on the first response only is itself too large, it comes first in pieces the same way, before any entries: " +
+        "those pieces' `partial` has no `id`, its `field` is the path from the response root, the lists are empty, and `remaining` counts all the entries. " +
         'If the list changes under the read, the call fails with "the list changed since the first read_memory_entries call: call read_memory_entries again without next to read it from the start"; read again from the start.',
     );
     expect((await management.listTools()).tools.map((tool) => tool.name)).not.toContain("read_memory_entries");
@@ -170,6 +174,8 @@ it("search_memory_entries は主題 memory の接続に出て、主題 routing �
         "call search_memory_entries again with only `next` to read the rest, and repeat until a response carries no `next` — then the list is complete. " +
         "An item too large for one response comes alone in pieces marked `partial` (`id`, the item's id or the key `next` resumes from; `field`, " +
         "empty when the item is itself a string; and `field_bytes`, the field's full size in UTF-8 bytes): join that field across the pieces to get it verbatim. " +
+        "When cutting one field is not enough, the longest string fields are cut in turn: each piece carries one field's text, " +
+        "and the other fields being cut come as empty strings named in `partial.emptied`. " +
         'If the list changes under the read, the call fails with "the list changed since the first search_memory_entries call: call search_memory_entries again without next to read it from the start"; read again from the start.',
     );
     for (const other of [management, routingClient]) {
