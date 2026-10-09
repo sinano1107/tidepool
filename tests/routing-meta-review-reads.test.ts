@@ -2,7 +2,7 @@ import { expect, it } from "vitest";
 import { openDb } from "../src/db.js";
 import { appendEvent, type EventPayload } from "../src/events.js";
 import { applyExecutionSettingsChange, type ExecutionSetting, loadExecutionSettingTable } from "../src/execution-setting.js";
-import { aggregateCells, loadEpisodes, recordShadow, selectorBranch } from "../src/learner.js";
+import { loadEpisodes, observedInTier, recordShadow, selectorBranch } from "../src/learner.js";
 import { toolResult } from "../src/mcp.js";
 import { registerMetaReview } from "../src/meta-review.js";
 import { listAllocations, listRoutingCells, listRoutingShadow, proposeRoutingChange, readRoutingSettings } from "../src/routing-review.js";
@@ -122,8 +122,7 @@ it("shadow 行は書いた時点の両セルの受理数・却下数と除外後
   rejectedSession(sol);
   const later = work("later");
   const branch = (promoted: boolean) => {
-    const episodes = loadEpisodes(db);
-    return selectorBranch({ promoted, candidates: [opus, sol], board: aggregateCells(episodes), workspace: aggregateCells(episodes.filter((e) => e.workspace === null)) }).shadow;
+    return selectorBranch({ promoted, candidates: [opus, sol], ...observedInTier(loadEpisodes(db), opus.tier_id, null) }).shadow;
   };
   recordShadow(db, later.id, branch(false), at);
   recordShadow(db, later.id, branch(true), at);

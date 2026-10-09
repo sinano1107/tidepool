@@ -87,7 +87,7 @@ const cellOf = (s: ExecutionSetting): Cell => ({
 });
 
 /** episode 列 → セルの集計(純関数)。`excluded` は数えない。 */
-export function aggregateCells(episodes: readonly LearnerEpisode[]): CellStats[] {
+function aggregateCells(episodes: readonly LearnerEpisode[]): CellStats[] {
   const byKey = new Map<string, CellStats>();
   for (const e of episodes) {
     if (e.outcome === "excluded") continue;

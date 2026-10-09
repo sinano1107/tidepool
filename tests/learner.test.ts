@@ -3,7 +3,7 @@ import type { Cause } from "../src/cause.js";
 import type { CodexAppServerProbeResult } from "../src/codex-app-server.js";
 import { appendEvent, type EventPayload } from "../src/events.js";
 import { applyExecutionSettingsChange, type ExecutionSetting } from "../src/execution-setting.js";
-import { aggregateCells, episodeOutcome, type LearnerEpisode, loadEpisodes, observedInTier, recommend, selectorBranch } from "../src/learner.js";
+import { episodeOutcome, type LearnerEpisode, loadEpisodes, observedInTier, recommend, selectorBranch } from "../src/learner.js";
 import { listRoutingShadow } from "../src/routing-review.js";
 import { type Tier, tierIdOf } from "../src/tier.js";
 import { healthyOpenai, listedOpenaiModels } from "./fakes.js";
@@ -414,7 +414,7 @@ it("effort「無い」の episode は1つのセルに集まり、表の行との
   const model = "claude-haiku-4-5-20251001";
   const noEffort = { provider: "anthropic", model, effort: null, advisor: null } as const;
   const episodes = [episode({ cell: noEffort, outcome: "rejected" }), episode({ cell: noEffort, outcome: "rejected" }), solAccepted];
-  expect(aggregateCells(episodes)).toContainEqual({ cell: noEffort, accepted: 0, rejected: 2 });
+  expect(observedInTier(episodes, 1, "tidepool").board).toContainEqual({ cell: noEffort, accepted: 0, rejected: 2 });
   expect(recommendFor(episodes, [executionSetting("anthropic", model, { effort: null }), sol])).toEqual({ recommended: sol, basis: "data" });
   const high = executionSetting("anthropic", model);
   expect(recommendFor(episodes, [high, sol])).toEqual({ recommended: high, basis: "data" });
