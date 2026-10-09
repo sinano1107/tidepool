@@ -1,4 +1,5 @@
 import { AgentChip } from './AgentChip.jsx';
+import { IdChip } from './IdChip.jsx';
 
 const kindColors = {
   decision: 'var(--text-body)',
@@ -24,15 +25,15 @@ export function LogEntry({ entry = {}, onObject, onExpand, onOpenMemoryEntry, ac
   );
   const band = { display: 'flex', flexDirection: 'column', gap: 8, marginTop: 6, padding: '6px 10px', borderRadius: 'var(--radius-xs)', fontSize: 'var(--text-xs)', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' };
   // 注記の帯は Object 押下面の外に置く(issue #1090)—— role="button" の子孫に
-  // interactive な要素を入れない。subgrid で帯を本文の列に揃える。
-  // 列は 時刻 / chip / 本文 / Expand(onExpand があるときだけ)。押下面は 1〜3 列、帯は 3 列目。
+  // interactive な要素を入れない。列は 押下面(見出し行 + 本文)/ Expand(onExpand があるときだけ)、
+  // 帯は全列にわたり本文と同じ左端に揃う(issue #1683)。
   return (
     <div
       className="tp-log-entry"
       data-clickable={clickable ? '' : undefined}
       data-active={active ? '' : undefined}
       style={{
-        display: 'grid', gridTemplateColumns: onExpand ? 'auto auto minmax(0, 1fr) auto' : 'auto auto minmax(0, 1fr)',
+        display: 'grid', gridTemplateColumns: onExpand ? 'minmax(0, 1fr) auto' : 'minmax(0, 1fr)',
         alignItems: 'start', gap: '0 10px',
         padding: '10px 12px',
         background: completion ? 'var(--grass-1)' : undefined,
@@ -46,19 +47,17 @@ export function LogEntry({ entry = {}, onObject, onExpand, onOpenMemoryEntry, ac
         role={clickable ? 'button' : undefined}
         tabIndex={clickable ? 0 : undefined}
         onKeyDown={clickable ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onObject(); } } : undefined}
-        style={{ gridColumn: '1 / 4', display: 'grid', gridTemplateColumns: 'subgrid', alignItems: 'start', minWidth: 0 }}
+        style={{ minWidth: 0 }}
       >
-        <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', paddingTop: 2 }}>{time}</span>
-        <AgentChip name={agent} icon={agentIcon} human={human} size="sm" style={{ paddingTop: 1 }} />
-        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
-          <div style={{ flex: 1, minWidth: 0, fontSize: 'var(--text-sm)', color: kindColors[kind], lineHeight: 'var(--leading-normal)', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>
-            <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', marginRight: 6 }}>{taskId}</span>
-            {completion && <strong style={{ fontWeight: 'var(--weight-semibold)', marginRight: 4 }}>done —</strong>}
-            {text}
-          </div>
-          {active && (
-            <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--coral-4)', paddingTop: 3, flexShrink: 0 }}>objecting…</span>
-          )}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>
+          <span>{time}</span>
+          <AgentChip name={agent} icon={agentIcon} human={human} size="sm" />
+          <IdChip id={taskId} />
+          {active && <span style={{ marginLeft: 'auto', color: 'var(--coral-4)' }}>objecting…</span>}
+        </div>
+        <div style={{ fontSize: 'var(--text-sm)', color: kindColors[kind], lineHeight: 'var(--leading-normal)', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>
+          {completion && <strong style={{ fontWeight: 'var(--weight-semibold)', marginRight: 4 }}>done —</strong>}
+          {text}
         </div>
       </div>
       {onExpand && (
@@ -71,7 +70,7 @@ export function LogEntry({ entry = {}, onObject, onExpand, onOpenMemoryEntry, ac
         >⌄</button>
       )}
       {(objection || bundledObjection) && (
-        <div style={{ gridColumn: 3 }}>
+        <div style={{ gridColumn: '1 / -1' }}>
           {objection && (
             <div style={{ ...band, background: 'var(--coral-1)', color: 'var(--coral-4)' }}>
               <span>objection: {objection}</span>
