@@ -452,6 +452,8 @@ export interface SubmitAnswerDeps {
  *  (WebUI・管理 MCP)へは map だけが渡る。 */
 export interface QuarantineCheckDeps {
   db: Db;
+  defaultAgentName?: string;
+  auditorName?: string;
   workspace?: WorkspaceConfig;
   resolveWorkspace?: (taskWorkspace: string | null) => WorkspaceConfig;
   github?: GitHubClient;
@@ -542,6 +544,8 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
           deps.db,
           quarantineAgentName,
           deps.agentRegistered?.(quarantineAgentName) ?? false,
+          deps.defaultAgentName,
+          deps.auditorName,
         );
       } catch (err) {
         throw new DomainError(err instanceof Error ? err.message : String(err));

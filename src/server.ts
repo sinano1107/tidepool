@@ -733,6 +733,8 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
   // ADR 0137 決定5: 解除の門の map は WebUI と管理 MCP が共有する1つだけ
   const checks = quarantineChecks({
     db,
+    defaultAgentName: worker.id,
+    auditorName,
     workspace: options.workspace,
     resolveWorkspace: options.resolveWorkspace,
     github: options.github,

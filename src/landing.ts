@@ -22,6 +22,7 @@ import {
   subtreeSql,
   type Task,
   taskIdForPr,
+  typeAwareDefaultAgentSql,
 } from "./tasks.js";
 import { activeTriageSession } from "./triage.js";
 import { BOARD_WORKER_ID } from "./worker-id.js";
@@ -97,12 +98,19 @@ function taskHasLanded(db: Db, taskId: string): boolean {
  *  記録があって昇格を abandon していない。`landing_deferred` は1タスクに1回しか刻まれないので、
  *  retry が再び門で止まった場合も記録は最初の1つのままである —— 失敗 question が立ったこと
  *  ではなく、abandon と答えたことだけを待ちの終わりに数える。 */
-export function countTasksAwaitingLanding(db: Db, agentName: string): number {
+export function countTasksAwaitingLanding(
+  db: Db,
+  agentName: string,
+  defaultAgentName?: string,
+  auditorName?: string,
+): number {
+  const fallback = typeAwareDefaultAgentSql("t.type", "@defaultAgentName", "@auditorName");
   const rows = db
     .prepare(
       `SELECT t.id, EXISTS (SELECT 1 FROM pending_auto_merges WHERE task_id = t.id) AS queued
          FROM tasks t
-        WHERE t.status = 'done' AND t.assignee = ?
+        WHERE t.type = 'work' AND t.status = 'done'
+          AND COALESCE(t.assignee, ${fallback}) = @agentName
           AND (queued
                OR EXISTS (SELECT 1 FROM tasks q
                            WHERE q.question_pending_pr_promotion_task_id = t.id AND q.status = 'todo')
@@ -111,9 +119,14 @@ export function countTasksAwaitingLanding(db: Db, agentName: string): number {
                    AND NOT EXISTS (SELECT 1 FROM tasks q
                                      JOIN events a ON a.task_id = q.id AND a.kind = 'question_answered'
                                     WHERE q.question_pending_pr_promotion_task_id = t.id
-                                      AND json_extract(a.payload, '$.answers[0].answer') = ?)))`,
+                                      AND json_extract(a.payload, '$.answers[0].answer') = @abandon)))`,
     )
-    .all(agentName, PR_PROMOTION_FAILURE_OPTIONS[1]) as Array<{ id: string; queued: number }>;
+    .all({
+      agentName,
+      defaultAgentName: defaultAgentName ?? null,
+      auditorName: auditorName ?? null,
+      abandon: PR_PROMOTION_FAILURE_OPTIONS[1],
+    }) as Array<{ id: string; queued: number }>;
   return rows.filter((row) => row.queued === 1 || !taskHasLanded(db, row.id)).length;
 }
 
@@ -649,7 +662,7 @@ export function createLanding(deps: LandingDeps): Landing {
       if (!resolve || !github) return;
       for (const { task_id, pr_number } of listPendingAutoMerges(deps.db)) {
         const task = getTask(deps.db, task_id);
-        if (task?.assignee !== agentName) continue;
+        if (task?.type !== "work" || (task.assignee ?? deps.defaultAgentName) !== agentName) continue;
         try {
           const { path } = resolve(task.workspace);
           if (!(await github.isPullRequestMerged({ path, number: pr_number }))) continue;

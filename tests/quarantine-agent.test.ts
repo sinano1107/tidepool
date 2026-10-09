@@ -82,6 +82,34 @@ describe("resolveAgentOrQuarantine", () => {
 });
 
 describe("verifyAgentRepaired", () => {
+  it.each([
+    ["work", null, "tako", "tako", "shako", true],
+    ["review", null, "shako", "tako", "shako", true],
+    ["work", null, "shako", "tako", "shako", false],
+    ["review", null, "tako", "tako", "shako", false],
+    ["question", null, "tako", "tako", "shako", false],
+    ["question", "tako", "tako", "tako", "shako", false],
+    ["work", null, "tako", undefined, undefined, false],
+    ["review", null, "shako", undefined, undefined, false],
+    ["work", "tako", "tako", undefined, undefined, true],
+    ["review", "shako", "shako", undefined, undefined, true],
+    ["work", "specialist", "tako", "tako", "shako", false],
+  ] as const)("todo %s (assignee=%s) の %s への依存を型ごとのポインタ(%s / %s)で検査する", (type, assignee, name, defaultAgentName, auditorName, dependent) => {
+    const db = openDb(":memory:");
+    try {
+      db.prepare(
+        `INSERT INTO tasks (id, type, status, assignee, title, purpose, completion_criteria, sort_key, created_at)
+         VALUES ('pending', ?, 'todo', ?, 'pending', 'p', 'c', 1, '2026-10-09T00:00:00.000Z')`,
+      ).run(type, assignee);
+      const verify = () => verifyAgentRepaired(db, name, false, defaultAgentName, auditorName);
+      if (dependent) expect(verify).toThrow(/still has pending tasks/);
+      else expect(verify).not.toThrow();
+      expect(() => verifyAgentRepaired(db, name, true, defaultAgentName, auditorName)).not.toThrow();
+    } finally {
+      db.close();
+    }
+  });
+
   it("registry に agent 名が復活していれば、todo タスクの有無に関わらず解除を認める", () => {
     const db = openDb(":memory:");
     expect(() => verifyAgentRepaired(db, "navigator", true)).not.toThrow();
