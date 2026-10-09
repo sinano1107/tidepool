@@ -936,15 +936,14 @@ export async function completeIntegrationReviews(t: Tidepool, taskId: string): P
 }
 
 /** 帰責の event は memory の、worker_exited と実行設定の変更は routing の meta-review の材料なので、盤面が登録して queue に
- *  置く(issue #618・#917)。後続の work が次の pickup を取れるよう、open な meta-review を head から走らせて完了させる(setup)。 */
+ *  置く(issue #618・#917)。後続の work が次の pickup を取れるよう、open な meta-review を `runNow` で走らせて完了させる(setup)。
+ *  `runNow` は slot の持ち主を先に完了させるので、別の task が slot を握っていても meta-review は完了する。 */
 export async function completeMetaReviews(tp: Tidepool) {
   const reviews = tp.db
     .prepare("SELECT id FROM tasks WHERE meta_review_subject IS NOT NULL AND status IN ('todo', 'in_progress')")
     .all() as Array<{ id: string }>;
   for (const { id } of reviews) {
-    await api(tp.baseUrl, "POST", `/api/tasks/${id}/move`, { after: null });
-    // 並べ替えと Run now は別 —— head での2回目の move が pickup を求める
-    await api(tp.baseUrl, "POST", `/api/tasks/${id}/move`, { after: null });
+    await runNow(tp, id);
     expect((await completeViaMcp(tp, id, false)).isError).not.toBe(true);
   }
 }
