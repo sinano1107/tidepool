@@ -100,6 +100,7 @@ describe("deleteWorkspace: 確認で買えない拒否(ADR 0087 決定2/3)", () 
       ),
     ).rejects.toMatchObject({
       name: "DeletionBlockedError",
+      message: 'workspace "tidepool" cannot be deleted: 2 completed task(s) still await landing through it',
       reasons: [{ code: "tasks_awaiting_landing", count: 2 }],
     });
 

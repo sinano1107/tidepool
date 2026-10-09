@@ -92,13 +92,8 @@ function taskHasLanded(db: Db, taskId: string): boolean {
   );
 }
 
-/** 着地を待つ完了タスク(ADR 0217 決定4): agent 名の quarantine の解除と agent 削除の扉が
- *  同じ集合を数える。「未着地の done」だけでは、祖先の枝に乗る子(`land()` は何も記録しない)と
- *  PR 昇格を abandon したタスクを永久に数えてしまうので、待っている積極的な証拠で数える ——
- *  無人 merge キューにいる、または未着地で、PR 昇格失敗の question が開いているか、門で止まった
- *  記録があって昇格を abandon していない。`landing_deferred` は1タスクに1回しか刻まれないので、
- *  retry が再び門で止まった場合も記録は最初の1つのままである —— 失敗 question が立ったこと
- *  ではなく、abandon と答えたことだけを待ちの終わりに数える。 */
+/** 着地を待つ完了タスクを agent 名の参照で数える(ADR 0217 決定4)—— agent 名の quarantine の解除と
+ *  agent 削除の扉。集合の定義は `countAwaitingLanding` にある。 */
 export function countTasksAwaitingLanding(
   db: Db,
   agentName: string,
@@ -118,6 +113,14 @@ export function countTasksAwaitingLandingInWorkspace(db: Db, workspaceName: stri
   return countAwaitingLanding(db, "t.workspace = @workspaceName", { workspaceName });
 }
 
+/** 着地を待つ完了タスク(ADR 0217 決定4 / ADR 0226): agent 名の quarantine の解除と
+ *  agent 削除の扉は agent 名で、workspace の削除の扉はタスクの `workspace` で、同じ集合を数える。
+ *  「未着地の done」だけでは、祖先の枝に乗る子(`land()` は何も記録しない)と PR 昇格を
+ *  abandon したタスクを永久に数えてしまうので、待っている積極的な証拠で数える ——
+ *  無人 merge キューにいる、または未着地で、PR 昇格失敗の question が開いているか、門で止まった
+ *  記録があって昇格を abandon していない。`landing_deferred` は1タスクに1回しか刻まれないので、
+ *  retry が再び門で止まった場合も記録は最初の1つのままである —— 失敗 question が立ったこと
+ *  ではなく、abandon と答えたことだけを待ちの終わりに数える。 */
 function countAwaitingLanding(db: Db, referenceSql: string, params: Record<string, string | null>): number {
   const rows = db
     .prepare(
