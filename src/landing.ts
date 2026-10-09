@@ -47,7 +47,7 @@ export type LandingVerdict =
   | { kind: "deferred"; reason: LandingBlock["kind"]; count: number }
   | {
       kind: "landed";
-      surface: "local_merge_question" | "pull_request_opened" | "open_pull_request_updated";
+      form: "local_merge_question" | "pull_request_opened" | "open_pull_request_updated";
       prNumber?: number;
     }
   | {
@@ -275,7 +275,7 @@ function settlePrPromotionQuestionsAsObserved(
   }
 }
 
-/** ADR 0053 decision 3: a purely-local root completion has no PR surface, so
+/** ADR 0053 decision 3: a purely-local root completion cannot be promoted to a PR, so
  *  the board asks whether to fast-forward its task branch onto the protected
  *  branch or leave it there permanently. The task id is deliberately stored
  *  separately from question_pending_merge_pr: one names a local branch while
@@ -395,15 +395,15 @@ export function createLanding(deps: LandingDeps): Landing {
     workspaceName: string,
     now: Date,
   ) => {
-    const surface = landingSurface(
+    const landing = landingSurface(
       deps.isProtectedWorkspace?.(workspaceName),
       authority?.merge,
       task.risk_flag,
     );
-    if (surface === "auto_merge_queue") return false;
+    if (landing.surface === "auto_merge_queue") return false;
     deps.db.transaction(() => {
       clearPendingAutoMerge(deps.db, task.id);
-      if (surface === "none") {
+      if (landing.surface === "outside_board") {
         appendEvent(deps.db, {
           taskId: task.id,
           workerId: BOARD_WORKER_ID,
@@ -418,9 +418,9 @@ export function createLanding(deps: LandingDeps): Landing {
         return;
       }
       const changed =
-        surface === "protected_question"
+        landing.reason === "protected"
           ? `workspace "${workspaceName}" is now protected, which always needs a human merge`
-          : surface === "dial_question"
+          : landing.reason === "dial"
             ? "the merge dial is now escalate"
             : "the task now carries risk, and auto_if_ci_green never auto-merges a risky task";
       registerMergeQuestion(
@@ -533,7 +533,7 @@ export function createLanding(deps: LandingDeps): Landing {
                 `for "${task.title}". Land its task branch on the protected branch now?`;
           registerLocalMergeQuestion(deps.db, task, purpose, deps.clock.now());
           retireFailures(task.id, excludePrPromotionQuestionId);
-          return { kind: "landed", surface: "local_merge_question" };
+          return { kind: "landed", form: "local_merge_question" };
         }
         if (!deps.github) {
           return failed(
@@ -570,7 +570,7 @@ export function createLanding(deps: LandingDeps): Landing {
           retireFailures(task.id, excludePrPromotionQuestionId);
           return {
             kind: "landed",
-            surface: "open_pull_request_updated",
+            form: "open_pull_request_updated",
             prNumber: task.pr_number,
           };
         }
@@ -609,16 +609,16 @@ export function createLanding(deps: LandingDeps): Landing {
           "worker",
         );
         retireFailures(task.id, excludePrPromotionQuestionId);
-        return { kind: "landed", surface: "pull_request_opened", prNumber: pr.number };
+        return { kind: "landed", form: "pull_request_opened", prNumber: pr.number };
       } catch (error) {
         const landed = getTask(deps.db, task.id);
         if (!landedBefore && landed && taskHasLanded(deps.db, task.id)) {
           retireFailures(task.id, excludePrPromotionQuestionId);
           return landed.pr_number === null
-            ? { kind: "landed", surface: "local_merge_question" }
+            ? { kind: "landed", form: "local_merge_question" }
             : {
                 kind: "landed",
-                surface: "pull_request_opened",
+                form: "pull_request_opened",
                 prNumber: landed.pr_number,
               };
         }

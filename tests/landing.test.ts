@@ -296,7 +296,7 @@ it("GitHub の無い purely-local work は merge question 面へ着地する", a
 
   await expect(landing.land(task)).resolves.toEqual({
     kind: "landed",
-    surface: "local_merge_question",
+    form: "local_merge_question",
   });
   expect(listBoard(db)).toContainEqual(
     expect.objectContaining({
@@ -319,7 +319,7 @@ it("purely-local の着地は ref を書かないので、またいだセッシ�
     db,
     clock,
     workspace,
-    () => expect(landing.land(task)).resolves.toMatchObject({ surface: "local_merge_question" }),
+    () => expect(landing.land(task)).resolves.toMatchObject({ form: "local_merge_question" }),
     remoteTaskRef,
   );
 
@@ -358,7 +358,7 @@ it("remote-backed から purely-local へ変わった再発火は local question
 
   await expect(landing.land(task)).resolves.toEqual({
     kind: "landed",
-    surface: "local_merge_question",
+    form: "local_merge_question",
   });
   expect(getTask(db, failure!.id)).toMatchObject({ status: "done", question_answer: null });
   expect(listBoard(db)).toContainEqual(
@@ -419,7 +419,7 @@ it("remote-backed work は PR を開いた面を返す", async () => {
 
   await expect(landing.land(task)).resolves.toEqual({
     kind: "landed",
-    surface: "pull_request_opened",
+    form: "pull_request_opened",
     prNumber: 1,
   });
   expect(github.requests).toMatchObject([{ branch: `task/${task.id}`, base: "main" }]);
@@ -451,7 +451,7 @@ it("open PR を持つ work の修理は同じ PR の branch を更新する", as
 
   await expect(landing.land(getTask(db, task.id)!)).resolves.toEqual({
     kind: "landed",
-    surface: "open_pull_request_updated",
+    form: "open_pull_request_updated",
     prNumber: 1,
   });
   expect(github.requests).toHaveLength(1);
@@ -489,7 +489,7 @@ it("open PR 更新は盤面が動かした remote ref だけを再基準化す�
 
   await expect(landing.land(getTask(db, task.id)!)).resolves.toMatchObject({
     kind: "landed",
-    surface: "open_pull_request_updated",
+    form: "open_pull_request_updated",
   });
   releaseWorkspace(db, workspace, task, clock.now());
 
@@ -766,7 +766,7 @@ it("着地成立は積み上がった failure question を引退させ、回答�
 
   await expect(landing.land(task, failures[0]!.id)).resolves.toMatchObject({
     kind: "landed",
-    surface: "pull_request_opened",
+    form: "pull_request_opened",
   });
   expect(getTask(db, failures[0]!.id)).toMatchObject({ status: "todo", question_answer: null });
   expect(getTask(db, failures[1]!.id)).toMatchObject({ status: "done", question_answer: null });
@@ -859,7 +859,7 @@ it("祖先の再発火は open PR を持つ work だけを更新する", async (
   await expect(landing.relandAncestors(done)).resolves.toEqual([
     {
       taskId: parent.id,
-      verdict: { kind: "landed", surface: "open_pull_request_updated", prNumber: 1 },
+      verdict: { kind: "landed", form: "open_pull_request_updated", prNumber: 1 },
     },
   ]);
   expect(github.pushes).toEqual([{ path: workspace.path, branch: `task/${parent.id}` }]);
@@ -908,8 +908,8 @@ it("並行 retry が先に着地したら遅い再発火の失敗は failure que
   release();
   const relanded = await relanding;
 
-  expect(retry).toMatchObject({ kind: "landed", surface: "pull_request_opened" });
-  expect(relanded).toMatchObject({ kind: "landed", surface: "pull_request_opened" });
+  expect(retry).toMatchObject({ kind: "landed", form: "pull_request_opened" });
+  expect(relanded).toMatchObject({ kind: "landed", form: "pull_request_opened" });
   expect(
     listBoard(db).filter(
       (candidate) => candidate.question_pending_pr_promotion_task_id === task.id,
@@ -957,7 +957,7 @@ it("fork 元が squash 着地した根は保護ブランチへ merge で追い�
 
   await expect(landing.land(repair)).resolves.toMatchObject({
     kind: "landed",
-    surface: "pull_request_opened",
+    form: "pull_request_opened",
   });
   expect(
     git(
@@ -1530,7 +1530,7 @@ it.each(UNRESOLVABLE)("PR を開く時点で profile が %s で解決できな�
   resolveAuthority = () => profile("auto_if_ci_green");
   await expect(landing.land(task, failure!.id)).resolves.toMatchObject({
     kind: "landed",
-    surface: "pull_request_opened",
+    form: "pull_request_opened",
   });
   expect(github.requests).toHaveLength(1);
   await landing.tick("auto_merge", clock.now());
@@ -1556,7 +1556,7 @@ it("開いている PR へ修理を push する着地は profile を読まない
 
   await expect(landing.land(getTask(db, task.id)!)).resolves.toEqual({
     kind: "landed",
-    surface: "open_pull_request_updated",
+    form: "open_pull_request_updated",
     prNumber: 1,
   });
   expect(quarantineQuestion(db, "agent", "tako")).toBeUndefined();

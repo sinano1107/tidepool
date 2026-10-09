@@ -1899,49 +1899,54 @@ export function recordPrOpened(
     });
     const ask = (purpose: string) =>
       registerMergeQuestion(db, task, prNumber, purpose, "merge", now);
-    switch (landingSurface(isProtected, authority?.merge, task.risk_flag)) {
-      case "protected_question":
+    const landing = landingSurface(isProtected, authority?.merge, task.risk_flag);
+    switch (landing.surface) {
+      case "merge_question":
         ask(
-          `"${task.title}" completed and opened PR #${prNumber} against a protected ` +
-            `workspace — always needs a human merge, regardless of the merge dial. Merge it now?`,
-        );
-        break;
-      case "dial_question":
-        ask(`"${task.title}" completed and opened PR #${prNumber}. Merge it now?`);
-        break;
-      case "risk_question":
-        ask(
-          `"${task.title}" completed and opened PR #${prNumber}, but carries risk — ` +
-            `auto_if_ci_green never auto-merges a risky task. Merge it now?`,
+          landing.reason === "protected"
+            ? `"${task.title}" completed and opened PR #${prNumber} against a protected ` +
+                `workspace — always needs a human merge, regardless of the merge dial. Merge it now?`
+            : landing.reason === "dial"
+              ? `"${task.title}" completed and opened PR #${prNumber}. Merge it now?`
+              : `"${task.title}" completed and opened PR #${prNumber}, but carries risk — ` +
+                `auto_if_ci_green never auto-merges a risky task. Merge it now?`,
         );
         break;
       case "auto_merge_queue":
         queuePendingAutoMerge(db, task.id, prNumber);
         break;
-      case "none":
+      case "outside_board":
         break;
     }
   })();
 }
 
 /** 着地の面の判定(ADR 0217 決定1): PR を開く時点の recordPrOpened と、無人 merge の
- *  poll(landing.ts)の両方がこれを呼ぶ。保護はダイヤルに依らない資源側の不変条件なので
- *  最初に読む。`external` と ダイヤル無し(undefined — 手組みの reviewer profile)は
- *  宣言された不作為(ADR 0079 決定2)。 */
+ *  poll(landing.ts)の両方がこれを呼ぶ。着地の面は人間の merge 判断が住む場所で、3つある
+ *  (ADR 0079 決定1): 盤面の merge question / 無人 merge キュー / 盤面の外(`external` の
+ *  PR 面)。question 面へ倒れる理由(保護・ダイヤル・risk)は3つあるが面は1つで、違うのは
+ *  question 本文に書く理由だけなので `reason` で返す。保護はダイヤルに依らない資源側の
+ *  不変条件なので最初に読む。`external` と ダイヤル無し(undefined — 手組みの reviewer
+ *  profile)は宣言された不作為(ADR 0079 決定2)で、盤面の外。 */
 export function landingSurface(
   isProtected: boolean | undefined,
   merge: MergeDial | undefined,
   riskFlag: number,
-): "protected_question" | "dial_question" | "risk_question" | "auto_merge_queue" | "none" {
-  if (isProtected) return "protected_question";
+):
+  | { surface: "merge_question"; reason: "protected" | "dial" | "risk" }
+  | { surface: "auto_merge_queue" }
+  | { surface: "outside_board" } {
+  if (isProtected) return { surface: "merge_question", reason: "protected" };
   switch (merge) {
     case "escalate":
-      return "dial_question";
+      return { surface: "merge_question", reason: "dial" };
     case "auto_if_ci_green":
-      return riskFlag ? "risk_question" : "auto_merge_queue";
+      return riskFlag
+        ? { surface: "merge_question", reason: "risk" }
+        : { surface: "auto_merge_queue" };
     case "external":
     case undefined:
-      return "none";
+      return { surface: "outside_board" };
   }
 }
 
