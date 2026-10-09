@@ -15,7 +15,7 @@ import {
   warnCliAuthExpiry,
 } from "./cli-auth.js";
 import type { Clock } from "./clock.js";
-import { type CodexAppServerProbe, unadvertisedEffortReason, unlistedModelReason } from "./codex-app-server.js";
+import { type CodexAppServerProbe, whyRowUnlisted } from "./codex-app-server.js";
 import {
   type ContainmentCapability,
   checkHumanSurfaceRefusesAnonymous,
@@ -591,12 +591,8 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
           if (result.status !== "observed") {
             return { status: result.status === "unauthorized" ? "unauthorized" : "unknown", reason: result.reason };
           }
-          const efforts = result.models.get(model);
-          if (!efforts) return { status: "refused", reason: unlistedModelReason(result.cliVersion) };
-          if (effort !== undefined && !efforts.includes(effort)) {
-            return { status: "refused", reason: unadvertisedEffortReason(result.cliVersion, effort) };
-          }
-          return { status: "runs" };
+          const unlisted = whyRowUnlisted(result, model, effort);
+          return unlisted ? { status: "refused", reason: unlisted.reason } : { status: "runs" };
         },
         ...options.modelProbes,
       }

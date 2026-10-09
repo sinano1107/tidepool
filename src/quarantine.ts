@@ -64,9 +64,9 @@ export function parseTableRowEffortValue(value: string): { provider: Provider; m
 /** 行の effort の Quarantine の文面は契機ごとに組む(#1655: 起動時の照合が2つ目の契機として足される)。
  *  原因は断言しない(ADR 0184 決定1)。 */
 const TABLE_ROW_EFFORT_PROSE = {
-  codexModelList: (row: string, reason: string): QuarantineProse => ({
-    title: `execution-setting row ${row} cannot run on this board`,
-    purpose:
+  codexModelList: (row: string, reason: string): QuarantineProse =>
+    rowQuarantineProse(
+      row,
       `${reason}. This board's model list does not advertise this effort for this model — with this Codex CLI ` +
       "version and this account. The board does not know why. This row is out of pickup and Board calls while " +
       "this stands; other rows keep running, including this model's rows at other efforts.\n\n" +
@@ -75,6 +75,14 @@ const TABLE_ROW_EFFORT_PROSE = {
       "This question then closes on its own.\n" +
       "2. If the effort is right, update tidepool or restore the account, then answer — the board reads the model " +
       "list again and accepts the answer only if it advertises this effort for this model.",
+    ),
+};
+
+/** 行の Quarantine(model ごと・effort ごと)の question の形。違うのは本文だけ。 */
+function rowQuarantineProse(row: string, purpose: string): QuarantineProse {
+  return {
+    title: `execution-setting row ${row} cannot run on this board`,
+    purpose,
     completion_criteria: `${row} can run on this board again`,
     question: [
       {
@@ -83,8 +91,8 @@ const TABLE_ROW_EFFORT_PROSE = {
         recommendation: "the row can run again",
       },
     ],
-  }),
-};
+  };
+}
 
 export type TableRowEffortTrigger = keyof typeof TABLE_ROW_EFFORT_PROSE;
 
@@ -238,23 +246,14 @@ export const QUARANTINES = [
                 "with this CLI version and this account. The board does not know why.",
               "If the model id is right, update the CLI or restore the account, then answer",
             ];
-      return {
-        title: `execution-setting row ${row} cannot run on this board`,
-        purpose:
-          `${reason}. ${why} This row is out of pickup and Board calls while this stands; ` +
+      return rowQuarantineProse(
+        row,
+        `${reason}. ${why} This row is out of pickup and Board calls while this stands; ` +
           "other rows keep running.\n\nRepair one of two ways:\n\n" +
           "1. Fix the table: in the settings tab, change this row's model or delete the row. " +
           "This question then closes on its own.\n" +
           `2. ${keepRow} — the board checks this model id again before it accepts the answer.`,
-        completion_criteria: `${row} can run on this board again`,
-        question: [
-          {
-            title: `Can ${row} run again?`,
-            options: ["the row can run again"],
-            recommendation: "the row can run again",
-          },
-        ],
-      };
+      );
     },
   },
   {

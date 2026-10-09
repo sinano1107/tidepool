@@ -53,12 +53,27 @@ export type CodexAppServerProbeResult =
 export type CodexAppServerProbe = (now: Date) => Promise<CodexAppServerProbeResult>;
 
 /** 一覧に無い行の理由(ADR 0184 決定3・5)。登録と回答の拒否が同じ観測を同じ文で言う。原因は断言しない(決定1)。 */
-export const unlistedModelReason = (cliVersion: string) =>
+const unlistedModelReason = (cliVersion: string) =>
   `the Codex App Server model list (${cliVersion}, hidden models included) does not include this model id`;
 
 /** 一覧にある model が行の effort を広告しない理由(ADR 0218 決定2)。登録と回答の拒否が同じ文で言う。 */
-export const unadvertisedEffortReason = (cliVersion: string, effort: string) =>
+const unadvertisedEffortReason = (cliVersion: string, effort: string) =>
   `the Codex App Server model list (${cliVersion}, hidden models included) does not advertise effort ${effort} for this model id`;
+
+/** 行を一覧と照合する(ADR 0184 決定3 / ADR 0218 決定2): model が一覧に無ければ `model`、あって effort が広告されて
+ *  いなければ `effort`、走れるなら null。effort を渡さなければ model だけを照合する。観測と回答の読み直しが同じ1本を通る。 */
+export function whyRowUnlisted(
+  observed: { cliVersion: string; models: Map<string, string[]> },
+  model: string,
+  effort?: string,
+): { unit: "model" | "effort"; reason: string } | null {
+  const efforts = observed.models.get(model);
+  if (!efforts) return { unit: "model", reason: unlistedModelReason(observed.cliVersion) };
+  if (effort !== undefined && !efforts.includes(effort)) {
+    return { unit: "effort", reason: unadvertisedEffortReason(observed.cliVersion, effort) };
+  }
+  return null;
+}
 
 const PLAN_VALUES = [
   "free",

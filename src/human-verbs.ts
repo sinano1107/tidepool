@@ -484,17 +484,18 @@ export interface QuarantineCheckDeps {
  *  回答は拒まれる —— 検証できないまま受理する経路は無い。 */
 export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
   const { containment, registryReachability, teardownQuarantine, providerCliAuth, modelProbes, clock, harnessContainment } = deps;
+  // modelProbes / clock は下の `modelProbes && clock` の内側でだけ呼ぶので、絞った型で受け取る
   const recheckRow = async (
-    probes: Partial<Record<Provider, ModelProbe>>,
-    rowClock: Clock,
+    presentProbes: Partial<Record<Provider, ModelProbe>>,
+    presentClock: Clock,
     { provider, model, effort }: { provider: Provider; model: string; effort?: string },
   ) => {
     const row = [provider, model, effort].filter(Boolean).join(" / ");
-    const probe = probes[provider];
+    const probe = presentProbes[provider];
     if (!probe) throw new DomainError(`this board cannot verify that ${row} runs`);
     const result = await probe(model, effort);
     if (result.status === "runs") return;
-    if (result.status === "unauthorized") quarantineCliAuthForProvider(deps.db, provider, rowClock.now());
+    if (result.status === "unauthorized") quarantineCliAuthForProvider(deps.db, provider, presentClock.now());
     throw new DomainError(`${row} still cannot run: ${result.reason}`);
   };
   return {

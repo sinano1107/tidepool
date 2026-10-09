@@ -2,7 +2,7 @@ import { quarantineAgent } from "./agent.js";
 import { boardHalts } from "./board-halt.js";
 import { type CliAuthCheck, quarantineCliAuthForProvider } from "./cli-auth.js";
 import type { Clock } from "./clock.js";
-import { type CodexAppServerProbe, type CodexAppServerProbeResult, unadvertisedEffortReason, unlistedModelReason } from "./codex-app-server.js";
+import { type CodexAppServerProbe, type CodexAppServerProbeResult, whyRowUnlisted } from "./codex-app-server.js";
 import {
   type ContainmentCheck,
   containmentPickupBlocked,
@@ -558,12 +558,12 @@ export function startScheduler(deps: {
       // 一覧にある model の行は effort も照合し、広告されない行だけを外す(ADR 0218 決定2)
       for (const row of loadExecutionSettingTable(db)) {
         if (row.provider !== "openai") continue;
-        const efforts = result.models.get(row.model);
-        if (!efforts) {
-          registerQuarantine(db, "tableRow", tableRowValue("openai", row.model), unlistedModelReason(result.cliVersion), now);
-        } else if (!efforts.includes(row.effort)) {
+        const unlisted = whyRowUnlisted(result, row.model, row.effort);
+        if (unlisted?.unit === "model") {
+          registerQuarantine(db, "tableRow", tableRowValue("openai", row.model), unlisted.reason, now);
+        } else if (unlisted?.unit === "effort") {
           const value = tableRowEffortValue("openai", row.model, row.effort);
-          registerQuarantine(db, "tableRowEffort", value, unadvertisedEffortReason(result.cliVersion, row.effort), now, "codexModelList");
+          registerQuarantine(db, "tableRowEffort", value, unlisted.reason, now, "codexModelList");
         }
       }
       return evaluateAndReportProviderUsage(

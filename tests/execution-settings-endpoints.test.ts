@@ -414,6 +414,23 @@ it("GET /api/settings/execution は effort の Quarantine 中の行にだけ印�
   expect((await api(t.baseUrl, "GET", `/api/tasks/${questionId}`)).json.question_quarantine_kind).toBe("tableRowEffort");
 });
 
+it("effort の Quarantine 中の行の価格 / ティアだけを書き換えても、同じ model の別の effort の行を消しても question は開いたまま(ADR 0218 決定2)", async () => {
+  t = await bootTidepool();
+  const LOW = { provider: "openai", tier: "economy", model: "gpt-5.6-sol", effort: "low", price_in: 4, price_out: 20 } as const;
+  applyExecutionSettingsChange(t.db, { setting: "row", row: LOW }, "webui", t.clock.now());
+  const value = tableRowEffortValue("openai", "gpt-5.6-sol", "low");
+  registerQuarantine(t.db, "tableRowEffort", value, "unadvertised in a test", t.clock.now(), "codexModelList");
+  const questionId = openQuarantineQuestion(t.db, "tableRowEffort", value)!.id;
+
+  // 種の gpt-5.6-sol / high(standard)を消しても low の行は表に残る —— 消すのが先なのは、1つの model はティアに1行だから
+  expect((await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "delete_row", provider: "openai", model: "gpt-5.6-sol", effort: "high" })).status).toBe(200);
+  for (const row of [{ ...LOW, price_in: 5, price_out: 25 }, { ...LOW, tier: "standard" }] as const) {
+    expect((await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "row", key: LOW, row })).status).toBe(200);
+  }
+
+  expect((await api(t.baseUrl, "GET", `/api/tasks/${questionId}`)).json.status).toBe("todo");
+});
+
 // ── 段の編集(ADR 0200 決定2 / issue #1421): settings タブと管理MCP の両方の扉 ──
 
 const premium = { name: "premium", description: "Work only the newest frontier model gets right." };
