@@ -120,6 +120,7 @@ import {
   nextSlotTask,
   presentTask,
   type Task,
+  type Unstored,
 } from "./tasks.js";
 import { sessionInTeardown } from "./teardown.js";
 import { getProviderUsage } from "./throttle.js";
@@ -173,6 +174,13 @@ import {
   WorkspaceAlreadyPublishedError,
   WorkspaceConfirmationRequiredError,
 } from "./workspace-create.js";
+
+/** HTTP の JSON 応答の唯一の出口(ADR 0220): 解決を通っていない行は型で拒む。`res.json` の直書きは lint が禁じる。
+ *  状態コードは `sendJson(res.status(n), body)` で渡す。 */
+export function sendJson<T>(res: Response, body: Unstored<T>) {
+  // biome-ignore lint/plugin: the typed exit itself (ADR 0220)
+  return res.json(body);
+}
 
 function formatValidationError(error: z.ZodError): string {
   return error.issues.map((issue) => issue.path.length ? `${issue.path.join(".")}: ${issue.message}` : issue.message).join("; ");
@@ -652,14 +660,14 @@ function respondToDeletionFailure(res: Response, err: unknown): void {
     const body = { error: err.message, confirm_required: true } satisfies WireContract["DELETE /api/workspaces/:name 409"];
     body satisfies WireContract["DELETE /api/agents/:name 409"];
     body satisfies WireContract["DELETE /api/profiles/:name 409"];
-    res.status(409).json(body);
+    sendJson(res.status(409), body);
   } else if (err instanceof DeletionBlockedError) {
     // 409 だが `confirm_required` は立てない: 確認では買えず、参照が決着するまで
     // 状況が変わらない限り出し直しても通らない
-    res.status(409).json({ error: err.message, blocked: true, reasons: err.reasons });
+    sendJson(res.status(409), { error: err.message, blocked: true, reasons: err.reasons });
   } else {
     // ADR 0052 決定1: 着地しなかった削除は起きなかった削除である
-    res.status(502).json({ error: err instanceof Error ? err.message : String(err) });
+    sendJson(res.status(502), { error: err instanceof Error ? err.message : String(err) });
   }
 }
 
@@ -704,7 +712,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   router.post("/tasks", async (req, res) => {
     const parsed = registerTaskSchema.safeParse(req.body);
     if (!parsed.success) {
-      res.status(400).json({ error: formatValidationError(parsed.error) });
+      sendJson(res.status(400), { error: formatValidationError(parsed.error) });
       return;
     }
     // human-verbs is the canonical registration door shared by the WebUI and
@@ -730,10 +738,10 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       const { kind, ...body } = result.failure;
       // 登録の門の 422 だけは WebUI が本文を読む —— body は failure から kind を除いただけ
       if (result.failure.kind === "issue_rejected") result.failure satisfies WireContract["POST /api/tasks 422"];
-      res.status(gateFailureStatus(kind)).json(body);
+      sendJson(res.status(gateFailureStatus(kind)), body);
       return;
     }
-    res.status(201).json(result.task satisfies WireContract["POST /api/tasks"]);
+    sendJson(res.status(201), result.task satisfies WireContract["POST /api/tasks"]);
   });
 
   // Appends a human-approved comment to a GitHub issue (issue #49 設計点4:
@@ -744,7 +752,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   router.post("/issue-comments", async (req, res) => {
     const parsed = issueCommentSchema.safeParse(req.body);
     if (!parsed.success) {
-      res.status(400).json({ error: formatValidationError(parsed.error) });
+      sendJson(res.status(400), { error: formatValidationError(parsed.error) });
       return;
     }
     const result = await addIssueCommentThroughHumanDoor(
@@ -754,20 +762,20 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     if (!result.ok) {
       switch (result.failure.kind) {
         case "invalid":
-          res.status(400).json({ error: result.failure.error });
+          sendJson(res.status(400), { error: result.failure.error });
           return;
         case "not_configured":
-          res.status(503).json({ error: result.failure.error });
+          sendJson(res.status(503), { error: result.failure.error });
           return;
         case "unknown_workspace":
-          res.status(400).json({ error: result.failure.error });
+          sendJson(res.status(400), { error: result.failure.error });
           return;
         case "github_failed":
-          res.status(502).json({ error: result.failure.error });
+          sendJson(res.status(502), { error: result.failure.error });
           return;
       }
     }
-    res.status(201).json({});
+    sendJson(res.status(201), {});
   });
 
   // The issue-number picker's data source (issue #67): the workspace's own
@@ -779,12 +787,12 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   router.get("/github-issues", async (req, res) => {
     const parsed = githubIssuesQuerySchema.safeParse(req.query);
     if (!parsed.success) {
-      res.status(400).json({ error: formatValidationError(parsed.error) });
+      sendJson(res.status(400), { error: formatValidationError(parsed.error) });
       return;
     }
     const resolve = buildWorkspaceResolver(resolveWorkspace, workspace);
     if (!github || !resolve) {
-      res.status(503).json({ error: "GitHub or workspace tracking not configured" });
+      sendJson(res.status(503), { error: "GitHub or workspace tracking not configured" });
       return;
     }
     let path: string;
@@ -792,30 +800,30 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       path = resolve(parsed.data.workspace).path;
     } catch (err) {
       if (!(err instanceof UnknownWorkspaceError)) throw err;
-      res.status(400).json({ error: `unknown workspace: ${parsed.data.workspace}` });
+      sendJson(res.status(400), { error: `unknown workspace: ${parsed.data.workspace}` });
       return;
     }
     try {
       const issues = await github.listIssues({ path });
-      res.json({ issues, truncated: issues.length === OPEN_ISSUES_LIMIT } satisfies WireContract["GET /api/github-issues"]);
+      sendJson(res, { issues, truncated: issues.length === OPEN_ISSUES_LIMIT } satisfies WireContract["GET /api/github-issues"]);
     } catch {
-      res.status(502).json({ error: "could not fetch open issues" });
+      sendJson(res.status(502), { error: "could not fetch open issues" });
     }
   });
 
   router.post("/workspaces", async (req, res) => {
     const parsed = createWorkspaceSchema.safeParse(req.body);
     if (!parsed.success) {
-      res.status(400).json({ error: formatValidationError(parsed.error) });
+      sendJson(res.status(400), { error: formatValidationError(parsed.error) });
       return;
     }
     if (!workspaceAdmin?.create) {
-      res.status(503).json({ error: "workspace creation not configured" });
+      sendJson(res.status(503), { error: "workspace creation not configured" });
       return;
     }
     try {
       await workspaceAdmin.create(parsed.data);
-      res.status(201).json({});
+      sendJson(res.status(201), {});
     } catch (err) {
       // the human's own synchronous request fails fast (ADR 0009): a bad name
       // is the caller's 400; anything else — including a fetch/push that
@@ -839,7 +847,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
         // register モードで拾えば通る、呼び出し側の状態の問題である
         err instanceof OrphanCheckoutMismatchError
       ) {
-        res.status(400).json({ error: err.message });
+        sendJson(res.status(400), { error: err.message });
       } else if (err instanceof LiveCheckoutSignalsError) {
         // issue #383: 危険な値の 409 と同じラウンドトリップ(WebUI の
         // useDangerousSave がそのまま乗る)。ただし理由コードの欄は分ける ——
@@ -847,49 +855,49 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
         // ADR 0088 の「確認は WebUI 専用」がここまで及ぶと読める。
         // `clone_landing` はサーバが合成した着地先で、origin を持たない
         // checkout では null —— 出せる代替の入口が無いことを、空文字ではなく null で言う
-        res.status(409).json({
+        sendJson(res.status(409), {
           error: err.message,
           confirm_required: true,
           live_checkout_signals: err.reasons,
           clone_landing: err.cloneLanding,
         } satisfies WireContract["POST /api/workspaces 409"]);
       } else {
-        res.status(502).json({ error: err instanceof Error ? err.message : String(err) });
+        sendJson(res.status(502), { error: err instanceof Error ? err.message : String(err) });
       }
     }
   });
 
   router.get("/workspaces", (_req, res) => {
     if (!workspaceAdmin?.list) {
-      res.status(503).json({ error: "workspace settings not configured" });
+      sendJson(res.status(503), { error: "workspace settings not configured" });
       return;
     }
-    res.json(workspaceAdmin.list() satisfies WireContract["GET /api/workspaces"]);
+    sendJson(res, workspaceAdmin.list() satisfies WireContract["GET /api/workspaces"]);
   });
 
   router.patch("/workspaces/:name", async (req, res) => {
     const parsed = updateWorkspaceSchema.safeParse(req.body);
     if (!parsed.success) {
-      res.status(400).json({ error: formatValidationError(parsed.error) });
+      sendJson(res.status(400), { error: formatValidationError(parsed.error) });
       return;
     }
     if (!workspaceAdmin?.update) {
-      res.status(503).json({ error: "workspace settings not configured" });
+      sendJson(res.status(503), { error: "workspace settings not configured" });
       return;
     }
     try {
       await workspaceAdmin.update({ name: req.params.name, ...parsed.data });
-      res.json({});
+      sendJson(res, {});
     } catch (err) {
       if (err instanceof UnknownWorkspaceError) {
-        res.status(404).json({ error: err.message });
+        sendJson(res.status(404), { error: err.message });
       } else if (
         err instanceof InvalidReviewAllowedCommandError ||
         err instanceof InvalidAllowedDomainError
       ) {
         // 400, not 409: no confirmation can buy malformed allowlist grammar
         // (ADR 0061 根拠5 / ADR 0072 決定2).
-        res.status(400).json({ error: err.message });
+        sendJson(res.status(400), { error: err.message });
       } else if (err instanceof WorkspaceConfirmationRequiredError) {
         // machine-readable flag plus the reason codes the dialog enumerates
         // (ADR 0061 決定1 — the same body shape as the profile 409). The WebUI
@@ -897,14 +905,12 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
         // shows this 409's reasons in a dialog, and resends with confirm:
         // true once the human accepts — same round trip a direct API caller
         // gets, no client-side pre-judgment of danger (ADR 0027)
-        res
-          .status(409)
-          .json({ error: err.message, confirm_required: true, dangerous_values: err.reasons } satisfies WireContract["PATCH /api/workspaces/:name 409"]);
+        sendJson(res.status(409), { error: err.message, confirm_required: true, dangerous_values: err.reasons } satisfies WireContract["PATCH /api/workspaces/:name 409"]);
       } else if (err instanceof RegistrySelfUnprotectError) {
         // 403, not 409: no resubmission can ever make this pass (ADR 0013)
-        res.status(403).json({ error: err.message });
+        sendJson(res.status(403), { error: err.message });
       } else {
-        res.status(502).json({ error: err instanceof Error ? err.message : String(err) });
+        sendJson(res.status(502), { error: err instanceof Error ? err.message : String(err) });
       }
     }
   });
@@ -915,19 +921,19 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   router.post("/workspaces/:name/publish", async (req, res) => {
     const parsed = publishWorkspaceSchema.safeParse(req.body);
     if (!parsed.success) {
-      res.status(400).json({ error: formatValidationError(parsed.error) });
+      sendJson(res.status(400), { error: formatValidationError(parsed.error) });
       return;
     }
     if (!workspaceAdmin?.publish) {
-      res.status(503).json({ error: "workspace settings not configured" });
+      sendJson(res.status(503), { error: "workspace settings not configured" });
       return;
     }
     try {
       await workspaceAdmin.publish({ name: req.params.name, repo: parsed.data.repo });
-      res.json({});
+      sendJson(res, {});
     } catch (err) {
       if (err instanceof UnknownWorkspaceError) {
-        res.status(404).json({ error: err.message });
+        sendJson(res.status(404), { error: err.message });
       } else if (
         // 出し直せば通り得る呼び出し側の入力・状態の問題(create の扉と同じ読み):
         // 別の宛先を選び直す / 帯域外の origin を手で直す / 案内の一行を実行する
@@ -935,16 +941,16 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
         err instanceof CheckoutHasOriginError ||
         err instanceof RepoAccessMissingError
       ) {
-        res.status(400).json({ error: err.message });
+        sendJson(res.status(400), { error: err.message });
       } else if (err instanceof RegistrySelfPublishError) {
         // 403: unprotect の自己拒否と同じく、出し直しでは決して通らない(ADR 0013)
-        res.status(403).json({ error: err.message });
+        sendJson(res.status(403), { error: err.message });
       } else if (err instanceof GitHubIdentityMissingError) {
         // 上の未設定ゲートと同じ族 — 盤面が GitHub 身元を持たない(ADR 0024)
-        res.status(503).json({ error: err.message });
+        sendJson(res.status(503), { error: err.message });
       } else {
         // push が落ちた、registry がランドしなかった(ADR 0052 決定1)—— 外部の一手
-        res.status(502).json({ error: err instanceof Error ? err.message : String(err) });
+        sendJson(res.status(502), { error: err instanceof Error ? err.message : String(err) });
       }
     }
   });
@@ -952,18 +958,18 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   router.post("/agents", async (req, res) => {
     const parsed = createAgentSchema.safeParse(req.body);
     if (!parsed.success) {
-      res.status(400).json({ error: formatValidationError(parsed.error) });
+      sendJson(res.status(400), { error: formatValidationError(parsed.error) });
       return;
     }
     if (!agentAdmin?.create) {
-      res.status(503).json({ error: "agent creation not configured" });
+      sendJson(res.status(503), { error: "agent creation not configured" });
       return;
     }
     try {
       await agentAdmin.create(parsed.data);
       // 静かな shadow は作らない(ADR 0117 決定2): 同名を拒まない代わりに、
       // 作成の扉が「組み込みを shadow した」ことを告げる。真のときだけ載せる
-      res.status(201).json((isBuiltInAgentName(parsed.data.name) ? { shadows_built_in: true } : {}) satisfies WireContract["POST /api/agents"]);
+      sendJson(res.status(201), (isBuiltInAgentName(parsed.data.name) ? { shadows_built_in: true } : {}) satisfies WireContract["POST /api/agents"]);
     } catch (err) {
       // same posture as /workspaces' create: the human's own synchronous
       // request fails fast on a bad input (400), anything else — including a
@@ -975,9 +981,9 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
         err instanceof InvalidSkillAllowlistError ||
         err instanceof InvalidAgentDefinitionError
       ) {
-        res.status(400).json({ error: err.message });
+        sendJson(res.status(400), { error: err.message });
       } else {
-        res.status(502).json({ error: err instanceof Error ? err.message : String(err) });
+        sendJson(res.status(502), { error: err instanceof Error ? err.message : String(err) });
       }
     }
   });
@@ -991,10 +997,10 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   // PROVIDER_VALUES.
   router.get("/agents", (_req, res) => {
     if (!agentAdmin?.list) {
-      res.status(503).json({ error: "agent settings not configured" });
+      sendJson(res.status(503), { error: "agent settings not configured" });
       return;
     }
-    res.json({
+    sendJson(res, {
       agents: agentAdmin.list(),
       authorityProfiles: agentAdmin.authorityProfiles?.() ?? [],
       providers: PROVIDER_OPTIONS,
@@ -1011,40 +1017,39 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   // strictness there is access control, which does not apply to input assist.)
   router.get("/skills", async (_req, res) => {
     const enumerated = hostSkills ? await hostSkills() : null;
-    res.json(
-      (enumerated === null ? { skills: [], degraded: true } : { skills: enumerated, degraded: false }) satisfies WireContract["GET /api/skills"],
+    sendJson(res, (enumerated === null ? { skills: [], degraded: true } : { skills: enumerated, degraded: false }) satisfies WireContract["GET /api/skills"],
     );
   });
 
   router.patch("/agents/:name", async (req, res) => {
     const parsed = updateAgentSchema.safeParse(req.body);
     if (!parsed.success) {
-      res.status(400).json({ error: formatValidationError(parsed.error) });
+      sendJson(res.status(400), { error: formatValidationError(parsed.error) });
       return;
     }
     if (!agentAdmin?.update) {
-      res.status(503).json({ error: "agent settings not configured" });
+      sendJson(res.status(503), { error: "agent settings not configured" });
       return;
     }
     try {
       await agentAdmin.update({ name: req.params.name, ...parsed.data });
-      res.json({});
+      sendJson(res, {});
     } catch (err) {
       if (err instanceof UnknownAgentError) {
-        res.status(404).json({ error: err.message });
+        sendJson(res.status(404), { error: err.message });
       } else if (err instanceof BuiltInAgentNotEditableError) {
         // 削除の `blocked` と同じ器(ADR 0117 決定2): 確認では買えず、出し直しても
         // 通らない —— が、盤面の自己拒否ではないので 403 ではない
-        res.status(409).json({ error: err.message, blocked: true });
+        sendJson(res.status(409), { error: err.message, blocked: true });
       } else if (
         err instanceof UnknownAuthorityProfileError ||
         err instanceof InvalidAgentIconError ||
         err instanceof InvalidSkillAllowlistError ||
         err instanceof InvalidAgentDefinitionError
       ) {
-        res.status(400).json({ error: err.message });
+        sendJson(res.status(400), { error: err.message });
       } else {
-        res.status(502).json({ error: err instanceof Error ? err.message : String(err) });
+        sendJson(res.status(502), { error: err instanceof Error ? err.message : String(err) });
       }
     }
   });
@@ -1058,11 +1063,11 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     // express の json() は本文が無ければ req.body を undefined のまま残す
     const parsed = deleteResourceSchema.safeParse(req.body ?? {});
     if (!parsed.success) {
-      res.status(400).json({ error: formatValidationError(parsed.error) });
+      sendJson(res.status(400), { error: formatValidationError(parsed.error) });
       return;
     }
     if (!agentAdmin?.delete) {
-      res.status(503).json({ error: "agent settings not configured" });
+      sendJson(res.status(503), { error: "agent settings not configured" });
       return;
     }
     try {
@@ -1078,10 +1083,10 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
           auditorName: auditorName ?? DEFAULT_AUDITOR_NAME,
         },
       );
-      res.json({});
+      sendJson(res, {});
     } catch (err) {
       if (err instanceof UnknownAgentError) {
-        res.status(404).json({ error: err.message });
+        sendJson(res.status(404), { error: err.message });
       } else {
         respondToDeletionFailure(res, err);
       }
@@ -1093,11 +1098,11 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     // express の json() は本文が無ければ req.body を undefined のまま残す
     const parsed = deleteResourceSchema.safeParse(req.body ?? {});
     if (!parsed.success) {
-      res.status(400).json({ error: formatValidationError(parsed.error) });
+      sendJson(res.status(400), { error: formatValidationError(parsed.error) });
       return;
     }
     if (!workspaceAdmin?.delete) {
-      res.status(503).json({ error: "workspace settings not configured" });
+      sendJson(res.status(503), { error: "workspace settings not configured" });
       return;
     }
     try {
@@ -1110,13 +1115,13 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       );
       // ADR 0087 決定4: 消えるのは registry エントリだけ —— 残る checkout の
       // 場所を応答が名指しする
-      res.json({ checkout } satisfies WireContract["DELETE /api/workspaces/:name"]);
+      sendJson(res, { checkout } satisfies WireContract["DELETE /api/workspaces/:name"]);
     } catch (err) {
       if (err instanceof UnknownWorkspaceError) {
-        res.status(404).json({ error: err.message });
+        sendJson(res.status(404), { error: err.message });
       } else if (err instanceof RegistrySelfDeleteError) {
         // 403: 出し直しでも状況の変化でも決して通らない(RegistrySelfUnprotectError と同じ)
-        res.status(403).json({ error: err.message });
+        sendJson(res.status(403), { error: err.message });
       } else {
         respondToDeletionFailure(res, err);
       }
@@ -1128,19 +1133,19 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     // express の json() は本文が無ければ req.body を undefined のまま残す
     const parsed = deleteResourceSchema.safeParse(req.body ?? {});
     if (!parsed.success) {
-      res.status(400).json({ error: formatValidationError(parsed.error) });
+      sendJson(res.status(400), { error: formatValidationError(parsed.error) });
       return;
     }
     if (!profileAdmin?.delete) {
-      res.status(503).json({ error: "profile settings not configured" });
+      sendJson(res.status(503), { error: "profile settings not configured" });
       return;
     }
     try {
       await profileAdmin.delete({ name: req.params.name, ...parsed.data });
-      res.json({});
+      sendJson(res, {});
     } catch (err) {
       if (err instanceof UnknownAuthorityProfileError) {
-        res.status(404).json({ error: err.message });
+        sendJson(res.status(404), { error: err.message });
       } else {
         respondToDeletionFailure(res, err);
       }
@@ -1150,11 +1155,11 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   router.post("/profiles", async (req, res) => {
     const parsed = createProfileSchema.safeParse(req.body);
     if (!parsed.success) {
-      res.status(400).json({ error: formatValidationError(parsed.error) });
+      sendJson(res.status(400), { error: formatValidationError(parsed.error) });
       return;
     }
     if (!profileAdmin?.create) {
-      res.status(503).json({ error: "profile settings not configured" });
+      sendJson(res.status(503), { error: "profile settings not configured" });
       return;
     }
     try {
@@ -1162,16 +1167,14 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       // (ADR 0061 決定1) — the flag is not a profile field, so it never reaches
       // the file (serializeProfileFile writes the four keys only)
       await profileAdmin.create(parsed.data);
-      res.status(201).json({});
+      sendJson(res.status(201), {});
     } catch (err) {
       if (err instanceof InvalidAuthorityProfileNameError) {
-        res.status(400).json({ error: err.message });
+        sendJson(res.status(400), { error: err.message });
       } else if (err instanceof ProfileConfirmationRequiredError) {
-        res
-          .status(409)
-          .json({ error: err.message, confirm_required: true, dangerous_values: err.reasons } satisfies WireContract["POST /api/profiles 409"]);
+        sendJson(res.status(409), { error: err.message, confirm_required: true, dangerous_values: err.reasons } satisfies WireContract["POST /api/profiles 409"]);
       } else {
-        res.status(502).json({ error: err instanceof Error ? err.message : String(err) });
+        sendJson(res.status(502), { error: err instanceof Error ? err.message : String(err) });
       }
     }
   });
@@ -1181,34 +1184,32 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   // have no candidates of their own; the select over them lives on /agents)
   router.get("/profiles", (_req, res) => {
     if (!profileAdmin?.list) {
-      res.status(503).json({ error: "profile settings not configured" });
+      sendJson(res.status(503), { error: "profile settings not configured" });
       return;
     }
-    res.json({ profiles: profileAdmin.list() } satisfies WireContract["GET /api/profiles"]);
+    sendJson(res, { profiles: profileAdmin.list() } satisfies WireContract["GET /api/profiles"]);
   });
 
   router.patch("/profiles/:name", async (req, res) => {
     const parsed = updateProfileSchema.safeParse(req.body);
     if (!parsed.success) {
-      res.status(400).json({ error: formatValidationError(parsed.error) });
+      sendJson(res.status(400), { error: formatValidationError(parsed.error) });
       return;
     }
     if (!profileAdmin?.update) {
-      res.status(503).json({ error: "profile settings not configured" });
+      sendJson(res.status(503), { error: "profile settings not configured" });
       return;
     }
     try {
       await profileAdmin.update({ name: req.params.name, ...parsed.data });
-      res.json({});
+      sendJson(res, {});
     } catch (err) {
       if (err instanceof UnknownAuthorityProfileError) {
-        res.status(404).json({ error: err.message });
+        sendJson(res.status(404), { error: err.message });
       } else if (err instanceof ProfileConfirmationRequiredError) {
-        res
-          .status(409)
-          .json({ error: err.message, confirm_required: true, dangerous_values: err.reasons } satisfies WireContract["PATCH /api/profiles/:name 409"]);
+        sendJson(res.status(409), { error: err.message, confirm_required: true, dangerous_values: err.reasons } satisfies WireContract["PATCH /api/profiles/:name 409"]);
       } else {
-        res.status(502).json({ error: err instanceof Error ? err.message : String(err) });
+        sendJson(res.status(502), { error: err instanceof Error ? err.message : String(err) });
       }
     }
   });
@@ -1216,11 +1217,11 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   router.post("/tasks/draft", async (req, res) => {
     const parsed = draftTaskSchema.safeParse(req.body);
     if (!parsed.success) {
-      res.status(400).json({ error: formatValidationError(parsed.error) });
+      sendJson(res.status(400), { error: formatValidationError(parsed.error) });
       return;
     }
     if (!draftClient) {
-      res.status(503).json({ error: "LLM draft client not configured" });
+      sendJson(res.status(503), { error: "LLM draft client not configured" });
       return;
     }
     try {
@@ -1228,7 +1229,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       if (parsed.data.parent_id !== undefined) {
         const parent = getTask(db, parsed.data.parent_id);
         if (!parent) {
-          res.status(404).json({ error: "parent task not found" });
+          sendJson(res.status(404), { error: "parent task not found" });
           return;
         }
         // resolves an issue-backed parent's *live* content (ADR 0016: the
@@ -1249,7 +1250,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
         };
       }
       const draft = await draftClient.draftTask(parsed.data.dump, getDisplayLanguage(db), context);
-      res.json(draft satisfies WireContract["POST /api/tasks/draft"]);
+      sendJson(res, draft satisfies WireContract["POST /api/tasks/draft"]);
     } catch (err) {
       // deliberate departure from this file's usual DomainError-only-maps-to-4xx
       // rule: any failure surfacing through the DraftClient seam — timeout,
@@ -1258,7 +1259,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       // draft failures never block registration, only push the user to the
       // plain form, so every draftTask() failure gets 503 here, not 500.
       quarantineBoardCallRefusal(db, err, "task draft", undefined, clock.now());
-      res.status(503).json({ error: err instanceof Error ? err.message : "draft failed" });
+      sendJson(res.status(503), { error: err instanceof Error ? err.message : "draft failed" });
     }
   });
 
@@ -1284,19 +1285,19 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   router.post("/tasks/:id/move", (req, res) => {
     const parsed = moveTaskSchema.safeParse(req.body);
     if (!parsed.success) {
-      res.status(400).json({ error: formatValidationError(parsed.error) });
+      sendJson(res.status(400), { error: formatValidationError(parsed.error) });
       return;
     }
     const task = getTask(db, req.params.id);
     if (!task) {
-      res.status(404).json({ error: "task not found" });
+      sendJson(res.status(404), { error: "task not found" });
       return;
     }
     let after: Task | null = null;
     if (parsed.data.after !== null) {
       const found = getTask(db, parsed.data.after);
       if (!found) {
-        res.status(404).json({ error: "after task not found" });
+        sendJson(res.status(404), { error: "after task not found" });
         return;
       }
       after = found;
@@ -1319,7 +1320,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     if (after === null && moved.status === "todo" && headBefore === task.id) {
       pollNow();
     }
-    res.json(presentTask(db, moved, defaultAgentName, auditorName));
+    sendJson(res, presentTask(db, moved, defaultAgentName, auditorName));
   });
 
   // The shared human door owns lookup, registry checks, and domain rules;
@@ -1327,7 +1328,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   router.patch("/tasks/:id", async (req, res) => {
     const parsed = editTaskSchema.safeParse(req.body);
     if (!parsed.success) {
-      res.status(400).json({ error: formatValidationError(parsed.error) });
+      sendJson(res.status(400), { error: formatValidationError(parsed.error) });
       return;
     }
     const result = editThroughHumanDoor(
@@ -1338,19 +1339,17 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       "webui",
     );
     if (!result.ok) {
-      res
-        .status(result.failure.kind === "not_found" ? 404 : 400)
-        .json({ error: result.failure.error });
+      sendJson(res.status(result.failure.kind === "not_found" ? 404 : 400), { error: result.failure.error });
       return;
     }
-    res.json(result.value);
+    sendJson(res, result.value);
   });
 
   // Human direct cancel: schema and HTTP response mapping around the shared door.
   router.post("/tasks/:id/cancel", async (req, res) => {
     const parsed = cancelTaskSchema.safeParse(req.body ?? {});
     if (!parsed.success) {
-      res.status(400).json({ error: formatValidationError(parsed.error) });
+      sendJson(res.status(400), { error: formatValidationError(parsed.error) });
       return;
     }
     const result = await cancelThroughHumanDoor(
@@ -1369,12 +1368,10 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       "webui",
     );
     if (!result.ok) {
-      res
-        .status(result.failure.kind === "not_found" ? 404 : 400)
-        .json({ error: result.failure.error });
+      sendJson(res.status(result.failure.kind === "not_found" ? 404 : 400), { error: result.failure.error });
       return;
     }
-    res.json(result.value);
+    sendJson(res, result.value);
   });
 
   // human-verbs is the canonical implementation shared by the WebUI and the
@@ -1383,12 +1380,12 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   router.post("/tasks/:id/answer", async (req, res) => {
     const parsed = answerSchema.safeParse(req.body);
     if (!parsed.success) {
-      res.status(400).json({ error: formatValidationError(parsed.error) });
+      sendJson(res.status(400), { error: formatValidationError(parsed.error) });
       return;
     }
     const task = getTask(db, req.params.id);
     if (!task) {
-      res.status(404).json({ error: "task not found" });
+      sendJson(res.status(404), { error: "task not found" });
       return;
     }
     try {
@@ -1415,10 +1412,10 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
         parsed.data.triage,
         parsed.data.amendment,
       );
-      res.json(question);
+      sendJson(res, question);
     } catch (err) {
       if (err instanceof DomainError) {
-        res.status(409).json({ error: err.message });
+        sendJson(res.status(409), { error: err.message });
         return;
       }
       throw err;
@@ -1429,7 +1426,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   router.post("/tasks/:id/complete", async (req, res) => {
     const parsed = completeTaskSchema.safeParse(req.body ?? {});
     if (!parsed.success) {
-      res.status(400).json({ error: formatValidationError(parsed.error) });
+      sendJson(res.status(400), { error: formatValidationError(parsed.error) });
       return;
     }
     const result = await completeThroughHumanDoor(
@@ -1440,12 +1437,10 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       "webui",
     );
     if (!result.ok) {
-      res
-        .status(result.failure.kind === "not_found" ? 404 : 409)
-        .json({ error: result.failure.error });
+      sendJson(res.status(result.failure.kind === "not_found" ? 404 : 409), { error: result.failure.error });
       return;
     }
-    res.json(result.value);
+    sendJson(res, result.value);
   });
 
   // the handoff-draft route (issue #13): same propose-don't-commit shape as
@@ -1459,31 +1454,31 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   router.post("/tasks/:id/complete/draft", async (req, res) => {
     const parsed = draftTaskSchema.safeParse(req.body);
     if (!parsed.success) {
-      res.status(400).json({ error: formatValidationError(parsed.error) });
+      sendJson(res.status(400), { error: formatValidationError(parsed.error) });
       return;
     }
     const task = getTask(db, req.params.id);
     if (!task) {
-      res.status(404).json({ error: "task not found" });
+      sendJson(res.status(404), { error: "task not found" });
       return;
     }
     if (task.assignee !== HUMAN_WORKER_ID) {
-      res.status(409).json({ error: "only a human-assignee task can draft a handoff here" });
+      sendJson(res.status(409), { error: "only a human-assignee task can draft a handoff here" });
       return;
     }
     if (!draftClient) {
-      res.status(503).json({ error: "LLM draft client not configured" });
+      sendJson(res.status(503), { error: "LLM draft client not configured" });
       return;
     }
     try {
       const draft = await draftClient.draftHandoff(parsed.data.dump, getDisplayLanguage(db));
       const missing = HANDOFF_FIELDS.filter((f) => draft[f] === undefined || whyBlank(draft[f]));
-      res.json({ ...draft, missing } satisfies WireContract["POST /api/tasks/:id/complete/draft"]);
+      sendJson(res, { ...draft, missing } satisfies WireContract["POST /api/tasks/:id/complete/draft"]);
     } catch (err) {
       // same "any failure = unreachable" 503 fallback /tasks/draft uses
       // (AC3: a draft failure never blocks completion, only the assist)
       quarantineBoardCallRefusal(db, err, "handoff draft", task.id, clock.now());
-      res.status(503).json({ error: err instanceof Error ? err.message : "draft failed" });
+      sendJson(res.status(503), { error: err instanceof Error ? err.message : "draft failed" });
     }
   });
 
@@ -1498,11 +1493,11 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   router.post("/translate", async (req, res) => {
     const parsed = translateRequestSchema.safeParse(req.body);
     if (!parsed.success) {
-      res.status(400).json({ error: formatValidationError(parsed.error) });
+      sendJson(res.status(400), { error: formatValidationError(parsed.error) });
       return;
     }
     if (!translationClient) {
-      res.status(503).json({ error: "translation client not configured" });
+      sendJson(res.status(503), { error: "translation client not configured" });
       return;
     }
     const language = getDisplayLanguage(db);
@@ -1522,14 +1517,14 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       } else {
         outcome = await translateHandoff(db, translationClient, target.task_id, language, clock.now());
       }
-      res.json(outcome satisfies WireContract["POST /api/translate"]);
+      sendJson(res, outcome satisfies WireContract["POST /api/translate"]);
     } catch (err) {
       if (err instanceof TranslationTargetError) {
-        res.status(404).json({ error: err.message });
+        sendJson(res.status(404), { error: err.message });
         return;
       }
       quarantineCliAuthFailure(db, err, clock.now());
-      res.status(503).json({ error: err instanceof Error ? err.message : "translation failed" });
+      sendJson(res.status(503), { error: err instanceof Error ? err.message : "translation failed" });
     }
   });
 
@@ -1538,7 +1533,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   // read path parallel to GET /api/tasks/:id/events surfacing worker_exited
   // usage, since translation calls aren't tied to any one task/worker session.
   router.get("/translate/usage", (_req, res) => {
-    res.json({ records: listTranslationUsage(db) } satisfies WireContract["GET /api/translate/usage"]);
+    sendJson(res, { records: listTranslationUsage(db) } satisfies WireContract["GET /api/translate/usage"]);
   });
 
   // the decision log: events narrowed to human-facing kinds, oldest first,
@@ -1551,26 +1546,26 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       // to, but it is never new information to that same single human.
       unread: entry.worker_id !== HUMAN_WORKER_ID && entry.id > cursor,
     }));
-    res.json({ entries, cursor } satisfies WireContract["GET /api/log"]);
+    sendJson(res, { entries, cursor } satisfies WireContract["GET /api/log"]);
   });
 
   router.post("/log/cursor", (req, res) => {
     const parsed = cursorSchema.safeParse(req.body);
     if (!parsed.success) {
-      res.status(400).json({ error: formatValidationError(parsed.error) });
+      sendJson(res.status(400), { error: formatValidationError(parsed.error) });
       return;
     }
-    res.json({ cursor: advanceLogCursor(db, parsed.data.last_read) });
+    sendJson(res, { cursor: advanceLogCursor(db, parsed.data.last_read) });
   });
 
   router.get("/push/vapid-public-key", (_req, res) => {
-    res.json({ publicKey: vapidPublicKey ?? null } satisfies WireContract["GET /api/push/vapid-public-key"]);
+    sendJson(res, { publicKey: vapidPublicKey ?? null } satisfies WireContract["GET /api/push/vapid-public-key"]);
   });
 
   router.post("/push/subscribe", (req, res) => {
     const parsed = pushSubscribeSchema.safeParse(req.body);
     if (!parsed.success) {
-      res.status(400).json({ error: formatValidationError(parsed.error) });
+      sendJson(res.status(400), { error: formatValidationError(parsed.error) });
       return;
     }
     savePushSubscription(db, {
@@ -1578,35 +1573,35 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       p256dh: parsed.data.keys.p256dh,
       auth: parsed.data.keys.auth,
     });
-    res.status(201).json({ ok: true });
+    sendJson(res.status(201), { ok: true });
   });
 
   router.delete("/push/subscribe", (req, res) => {
     const parsed = pushUnsubscribeSchema.safeParse(req.body);
     if (!parsed.success) {
-      res.status(400).json({ error: formatValidationError(parsed.error) });
+      sendJson(res.status(400), { error: formatValidationError(parsed.error) });
       return;
     }
     removePushSubscription(db, parsed.data.endpoint);
-    res.json({ ok: true });
+    sendJson(res, { ok: true });
   });
 
   router.get("/settings/quiet-hours", (_req, res) => {
-    res.json(getQuietHours(db) satisfies WireContract["GET /api/settings/quiet-hours"]);
+    sendJson(res, getQuietHours(db) satisfies WireContract["GET /api/settings/quiet-hours"]);
   });
 
   router.post("/settings/quiet-hours", (req, res) => {
     const parsed = quietHoursSchema.safeParse(req.body);
     if (!parsed.success) {
-      res.status(400).json({ error: formatValidationError(parsed.error) });
+      sendJson(res.status(400), { error: formatValidationError(parsed.error) });
       return;
     }
     setQuietHours(db, parsed.data);
-    res.json(getQuietHours(db) satisfies WireContract["POST /api/settings/quiet-hours"]);
+    sendJson(res, getQuietHours(db) satisfies WireContract["POST /api/settings/quiet-hours"]);
   });
 
   router.get("/settings/provider-pace-offsets", (_req, res) => {
-    res.json({ offsets: listProviderPaceOffsets(db) } satisfies WireContract["GET /api/settings/provider-pace-offsets"]);
+    sendJson(res, { offsets: listProviderPaceOffsets(db) } satisfies WireContract["GET /api/settings/provider-pace-offsets"]);
   });
 
   // ADR 0030: 不正値はこの入口で弾く — 範囲外の値が判定式に入ると strict
@@ -1614,7 +1609,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   router.post("/settings/provider-pace-offsets", (req, res) => {
     const parsed = providerPaceOffsetSchema.safeParse(req.body);
     if (!parsed.success) {
-      res.status(400).json({ error: formatValidationError(parsed.error) });
+      sendJson(res.status(400), { error: formatValidationError(parsed.error) });
       return;
     }
     setProviderPaceOffset(db, parsed.data);
@@ -1622,14 +1617,14 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     // 古い offset で立った Provider 使用量の判定を tick 待ちにすると、緩和後も最大
     // 1時間 pickup と表示が止まり続ける(issue #296)。
     pollNow();
-    res.json(parsed.data);
+    sendJson(res, parsed.data);
   });
 
   // ADR 0110 決定5 / issue #545: 表・advisor の上限・Provider 順位・優先順位の既定。
   // 選択肢(providers / 盤面の段 / priorities / advisor の上限)もサーバ供給 —— WebUI が列挙を直書きして
   // drift しないため(/api/agents の providers と同じ配線)
   router.get("/settings/execution", (_req, res) => {
-    res.json({
+    sendJson(res, {
       ...readExecutionSettingsWithQuarantine(db),
       providers: PROVIDER_OPTIONS,
       priorities: PRIORITIES,
@@ -1643,14 +1638,14 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     async (req, res) => {
       const parsed = schema.safeParse({ ...req.body, ...req.params });
       if (!parsed.success) {
-        res.status(400).json({ error: formatValidationError(parsed.error) });
+        sendJson(res.status(400), { error: formatValidationError(parsed.error) });
         return;
       }
       try {
-        res.json(await write(parsed.data));
+        sendJson(res, await write(parsed.data));
       } catch (err) {
         if (!(err instanceof DomainError)) throw err;
-        res.status(400).json({ error: err.message });
+        sendJson(res.status(400), { error: err.message });
       }
     };
 
@@ -1668,7 +1663,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
 
   // spec #586 C / issue #592: spawn 注入のトークン上限。次の spawn から効くので再評価は無い
   router.get("/settings/memory", (_req, res) => {
-    res.json(readMemorySettings(db) satisfies WireContract["GET /api/settings/memory"]);
+    sendJson(res, readMemorySettings(db) satisfies WireContract["GET /api/settings/memory"]);
   });
 
   // spec #586 F / issue #593: 記憶の一覧(candidate・無効化済みも)。GET は盤面を変異させない
@@ -1677,18 +1672,18 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   router.get("/settings/memory/entries", (req, res) => {
     const parsed = memoryListQuery.safeParse(req.query);
     if (!parsed.success) {
-      res.status(400).json({ error: formatValidationError(parsed.error) });
+      sendJson(res.status(400), { error: formatValidationError(parsed.error) });
       return;
     }
     const { workspace: scope, board_wide, ...filter } = parsed.data;
     try {
-      res.json({
+      sendJson(res, {
         entries: listMemoryEntriesForHuman(memoryRefDeps, { ...filter, scope: board_wide ? null : scope }),
       } satisfies WireContract["GET /api/settings/memory/entries"]);
     } catch (err) {
       // 不正な path(#1209)
       if (!(err instanceof DomainError)) throw err;
-      res.status(400).json({ error: err.message });
+      sendJson(res.status(400), { error: err.message });
     }
   });
 
@@ -1701,7 +1696,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   );
   // issue #924: 周期 meta-review の間隔の下限。次の poll の due 判定から効く
   router.get("/settings/meta-review", (_req, res) => {
-    res.json(readMetaReviewSettings(db) satisfies WireContract["GET /api/settings/meta-review"]);
+    sendJson(res, readMetaReviewSettings(db) satisfies WireContract["GET /api/settings/meta-review"]);
   });
   router.post(
     "/settings/meta-review",
@@ -1747,11 +1742,11 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   // ADR 0164 決定5 / ADR 0172 決定3: 撃ち直しを打ち切った振り返り Board call(起草・第2回の帰責・配分評価)。
   // Retry / Dismiss は打ち切りの行にだけ効き、他は DomainError で 400
   router.get("/settings/execution/halted-refires", (_req, res) => {
-    res.json({ halted: listHaltedRefires(db) } satisfies WireContract["GET /api/settings/execution/halted-refires"]);
+    sendJson(res, { halted: listHaltedRefires(db) } satisfies WireContract["GET /api/settings/execution/halted-refires"]);
   });
   // ADR 0219: 応答予算の床の記録。消す操作は置かない(決定3)
   router.get("/settings/response-floors", (_req, res) => {
-    res.json({ floors: listFloorRows(db) } satisfies WireContract["GET /api/settings/response-floors"]);
+    sendJson(res, { floors: listFloorRows(db) } satisfies WireContract["GET /api/settings/response-floors"]);
   });
   const haltedRefireKey = refireKeySchema.extend({ target: z.coerce.number().int().positive() });
   router.post(
@@ -1772,42 +1767,42 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   );
 
   router.get("/settings/timezone", (_req, res) => {
-    res.json({ tz: getQuietHours(db).tz } satisfies WireContract["GET /api/settings/timezone"]);
+    sendJson(res, { tz: getQuietHours(db).tz } satisfies WireContract["GET /api/settings/timezone"]);
   });
 
   router.post("/settings/timezone", (req, res) => {
     const parsed = timezoneSchema.safeParse(req.body);
     if (!parsed.success) {
-      res.status(400).json({ error: formatValidationError(parsed.error) });
+      sendJson(res.status(400), { error: formatValidationError(parsed.error) });
       return;
     }
     if (!isValidTimezone(parsed.data.tz)) {
-      res.status(400).json({ error: `unknown timezone: ${parsed.data.tz}` });
+      sendJson(res.status(400), { error: `unknown timezone: ${parsed.data.tz}` });
       return;
     }
     setBoardTimezone(db, parsed.data.tz);
-    res.json({ tz: getQuietHours(db).tz });
+    sendJson(res, { tz: getQuietHours(db).tz });
   });
 
   // ADR 0093 決定5: 読み取り表示だけの面 —— WebUI からログインはできない
   // (credential を書く扉を人間面に増やさない)。人間が打つコマンドは
   // 画面側が文言として持つ。
   router.get("/settings/github", (_req, res) => {
-    res.json({ loggedIn: githubLoggedIn(githubTokenFile) } satisfies WireContract["GET /api/settings/github"]);
+    sendJson(res, { loggedIn: githubLoggedIn(githubTokenFile) } satisfies WireContract["GET /api/settings/github"]);
   });
 
   router.get("/settings/display-language", (_req, res) => {
-    res.json({ language: getDisplayLanguage(db), options: SUPPORTED_DISPLAY_LANGUAGES } satisfies WireContract["GET /api/settings/display-language"]);
+    sendJson(res, { language: getDisplayLanguage(db), options: SUPPORTED_DISPLAY_LANGUAGES } satisfies WireContract["GET /api/settings/display-language"]);
   });
 
   router.post("/settings/display-language", (req, res) => {
     const parsed = displayLanguageSchema.safeParse(req.body);
     if (!parsed.success) {
-      res.status(400).json({ error: formatValidationError(parsed.error) });
+      sendJson(res.status(400), { error: formatValidationError(parsed.error) });
       return;
     }
     setDisplayLanguage(db, parsed.data.language);
-    res.json({ language: getDisplayLanguage(db) } satisfies WireContract["POST /api/settings/display-language"]);
+    sendJson(res, { language: getDisplayLanguage(db) } satisfies WireContract["POST /api/settings/display-language"]);
   });
 
   // Spend-down は pause と同じ「盤面状態」応答に同乗する — UI の露出面が同格
@@ -1851,7 +1846,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   // 盤面全体の停止は列挙が1回で答える(ADR 0068 決定3)。throttle は資源単位なので
   // 列挙に居ず、Provider ごとの使用量(providerUsage)が言う(ADR 0140 決定4)
   router.get("/pause", (_req, res) => {
-    res.json({
+    sendJson(res, {
       halts: boardHalts(db),
       ...teardownJson(),
       spendDown: spendDownJson(),
@@ -1862,7 +1857,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   router.post("/spend-down", (req, res) => {
     const parsed = spendDownSchema.safeParse(req.body);
     if (!parsed.success) {
-      res.status(400).json({ error: formatValidationError(parsed.error) });
+      sendJson(res.status(400), { error: formatValidationError(parsed.error) });
       return;
     }
     const { provider, window, active } = parsed.data;
@@ -1872,13 +1867,13 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     // にすると、spend-down 時代の Provider 使用量の判定が最大1時間 UI に残る
     // (ADR 0028「fail-closed は可視化とセット」の可視化の延長)
     pollNow();
-    res.json({ spendDown: spendDownJson() });
+    sendJson(res, { spendDown: spendDownJson() });
   });
 
   router.post("/pause", (req, res) => {
     const parsed = pauseSchema.safeParse(req.body);
     if (!parsed.success) {
-      res.status(400).json({ error: formatValidationError(parsed.error) });
+      sendJson(res.status(400), { error: formatValidationError(parsed.error) });
       return;
     }
     // resuming is the one explicit "run now" trigger pause carries
@@ -1886,16 +1881,16 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     const resuming = isPaused(db) && !parsed.data.paused;
     setPaused(db, parsed.data.paused);
     if (resuming) pollNow();
-    res.json({ paused: parsed.data.paused });
+    sendJson(res, { paused: parsed.data.paused });
   });
 
   router.post("/triage/start", (_req, res) => {
-    res.status(201).json(startTriage(db, clock.now()));
+    sendJson(res.status(201), startTriage(db, clock.now()));
   });
 
   router.get("/triage", (_req, res) => {
     const session = activeTriageSession(db);
-    res.json({
+    sendJson(res, {
       session: session ?? null,
       queue: triagePreview(db, session?.id, defaultAgentName, auditorName),
       scratchpad: listScratchpad(db),
@@ -1905,14 +1900,14 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   router.post("/triage/scratchpad", (req, res) => {
     const parsed = scratchpadSchema.safeParse(req.body);
     if (!parsed.success) {
-      res.status(400).json({ error: formatValidationError(parsed.error) });
+      sendJson(res.status(400), { error: formatValidationError(parsed.error) });
       return;
     }
     try {
-      res.status(201).json(addScratchpadLine(db, parsed.data.line, clock.now()) satisfies WireContract["POST /api/triage/scratchpad"]);
+      sendJson(res.status(201), addScratchpadLine(db, parsed.data.line, clock.now()) satisfies WireContract["POST /api/triage/scratchpad"]);
     } catch (err) {
       if (err instanceof TriageError) {
-        res.status(409).json({ error: err.message });
+        sendJson(res.status(409), { error: err.message });
         return;
       }
       throw err;
@@ -1922,15 +1917,15 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   router.post("/triage/objection", (req, res) => {
     const parsed = objectionSchema.safeParse(req.body);
     if (!parsed.success) {
-      res.status(400).json({ error: formatValidationError(parsed.error) });
+      sendJson(res.status(400), { error: formatValidationError(parsed.error) });
       return;
     }
     try {
       const id = raiseObjection(db, parsed.data.entry_id, parsed.data.comment, clock.now());
-      res.status(201).json({ id });
+      sendJson(res.status(201), { id });
     } catch (err) {
       if (err instanceof TriageError) {
-        res.status(409).json({ error: err.message });
+        sendJson(res.status(409), { error: err.message });
         return;
       }
       throw err;
@@ -1940,15 +1935,15 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   router.post("/triage/displayed", (req, res) => {
     const parsed = displayedSchema.safeParse(req.body);
     if (!parsed.success) {
-      res.status(400).json({ error: formatValidationError(parsed.error) });
+      sendJson(res.status(400), { error: formatValidationError(parsed.error) });
       return;
     }
     try {
       recordDisplayedEntries(db, parsed.data.entry_ids, clock.now());
-      res.status(201).json({});
+      sendJson(res.status(201), {});
     } catch (err) {
       if (err instanceof TriageError) {
-        res.status(409).json({ error: err.message });
+        sendJson(res.status(409), { error: err.message });
         return;
       }
       throw err;
@@ -1961,7 +1956,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   router.post("/triage/close", async (req, res) => {
     const parsed = closeSchema.safeParse(req.body ?? {});
     if (!parsed.success) {
-      res.status(400).json({ error: formatValidationError(parsed.error) });
+      sendJson(res.status(400), { error: formatValidationError(parsed.error) });
       return;
     }
     try {
@@ -1981,10 +1976,10 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       // stopped it, so its terminal commit is not a "run now" trigger — but a
       // disposition that created a task is a registration (ADR 0119 決定2).
       if (result.outcome === "closed_now" || result.created_tasks > 0) pollNow();
-      res.json(result satisfies WireContract["POST /api/triage/close"]);
+      sendJson(res, result satisfies WireContract["POST /api/triage/close"]);
     } catch (err) {
       if (err instanceof TriageError) {
-        res.status(409).json({ error: err.message });
+        sendJson(res.status(409), { error: err.message });
         return;
       }
       throw err;
@@ -1996,21 +1991,21 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   // a task is registered from the line (client-driven) or an explicit
   // discard. No PATCH/update: a pending dump is either still waiting or gone.
   router.get("/pending-dumps", (_req, res) => {
-    res.json(listPendingDumps(db) satisfies WireContract["GET /api/pending-dumps"]);
+    sendJson(res, listPendingDumps(db) satisfies WireContract["GET /api/pending-dumps"]);
   });
 
   router.delete("/pending-dumps/:id", (req, res) => {
     const parsed = pendingDumpIdParamSchema.safeParse(req.params);
     if (!parsed.success) {
-      res.status(400).json({ error: formatValidationError(parsed.error) });
+      sendJson(res.status(400), { error: formatValidationError(parsed.error) });
       return;
     }
     consumePendingDump(db, parsed.data.id);
-    res.json({ ok: true });
+    sendJson(res, { ok: true });
   });
 
   router.get("/registry/candidates", (_req, res) => {
-    res.json((registryCandidates?.() ?? { assignees: [], workspaces: [], icons: {} }) satisfies WireContract["GET /api/registry/candidates"]);
+    sendJson(res, (registryCandidates?.() ?? { assignees: [], workspaces: [], icons: {} }) satisfies WireContract["GET /api/registry/candidates"]);
   });
 
   // UI display is one of ADR 0016's use-moments: issue-backed rows expand
@@ -2039,8 +2034,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   // ここ(盤面)で行い、WebUI は描画だけを担う。
   router.get("/tasks", async (_req, res) => {
     const board = await presentLive(listBoard(db, defaultAgentName, auditorName));
-    res.json(
-      board.map((task) =>
+    sendJson(res, board.map((task) =>
         task.type === "question" ? { ...task, ...questionAnnotations(db, task) } : task,
       ) satisfies WireContract["GET /api/tasks"],
     );
@@ -2051,7 +2045,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   // every other board read口 (issue #301) — an issue-backed human task must
   // show the issue's own title, not the "#N" placeholder.
   router.get("/your-tasks", async (_req, res) => {
-    res.json((await presentLive(listYourTasks(db))) satisfies WireContract["GET /api/your-tasks"]);
+    sendJson(res, (await presentLive(listYourTasks(db))) satisfies WireContract["GET /api/your-tasks"]);
   });
 
   // the queue view (#10): an envelope (ADR 0068 決定3) — `halts` says why the
@@ -2059,7 +2053,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   // resource-scoped reason alone. Both come from the same read at the same
   // instant, so no gap between two fetches can make them disagree.
   router.get("/queue", async (_req, res) => {
-    res.json({
+    sendJson(res, {
       halts: boardHalts(db),
       ...teardownJson(),
       ...providerUsageJson(),
@@ -2080,18 +2074,18 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   });
 
   router.get("/tasks/:id/events", (req, res) => {
-    res.json(listEvents(db, req.params.id));
+    sendJson(res, listEvents(db, req.params.id));
   });
 
   router.get("/tasks/:id", async (req, res) => {
     const task = getTask(db, req.params.id);
     if (!task) {
-      res.status(404).json({ error: "task not found" });
+      sendJson(res.status(404), { error: "task not found" });
       return;
     }
     const [presented] = await presentLive([presentTask(db, task, defaultAgentName, auditorName)]);
     // push の単体ビューは親の行を持たない — 承認 question・着地 question の判定は一覧と同じくここで載せる
-    res.json({
+    sendJson(res, {
       ...presented!,
       ...(task.type === "question" && questionAnnotations(db, task)),
     } satisfies WireContract["GET /api/tasks/:id"]);

@@ -36,6 +36,14 @@
 			"plugins": ["./no-adr-in-board-text.grit"]
 		},
 		{
+			"includes": ["src/**"],
+			"plugins": ["./no-raw-res-json.grit"]
+		},
+		{
+			"includes": ["src/mcp.ts", "src/management-mcp.ts"],
+			"plugins": ["./no-raw-tool-content.grit"]
+		},
+		{
 			"includes": ["webui/**"],
 			"linter": {
 				"rules": {

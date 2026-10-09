@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import type { Db } from "./db.js";
 import { DomainError } from "./domain-error.js";
 import { appendEvent, type EventPayload, listEventsOfKinds } from "./events.js";
+import type { Unstored } from "./tasks.js";
 import { BOARD_WORKER_ID } from "./worker-id.js";
 
 /** 盤面が返す MCP 応答1回の大きさの上限(ADR 0195 決定2)。text content の本文ではなく、盤面が返す CallToolResult を丸ごと
@@ -139,18 +140,18 @@ export const nextDescription = (verb: string, items: string, firstOnly?: string,
  *  切れの続き)にも同じ封筒を渡す。残りがあるときだけ `next` と `remaining`(残りの件数)が付く ——
  *  付かなければ読みは完結している。封筒・`next`・`remaining` の分も予算に数える。
  *  `key` を複数渡すと、item は `options.listOf` の列に分かれて載る(点区切りの path は封筒の中の欄にも置ける)。 */
-export function packItems<T extends { id: ItemId }>(
+export function packItems<T extends { id: ItemId }, E extends object>(
   read: ReadPosition<unknown>,
   key: string | readonly string[],
-  items: readonly T[],
-  envelope?: object,
+  items: readonly Unstored<T>[],
+  envelope?: Unstored<E>,
   options?: PackOptions<T>,
 ): Record<string, unknown>;
-export function packItems<T>(
+export function packItems<T, E extends object>(
   read: ReadPosition<unknown>,
   key: string | readonly string[],
-  items: readonly T[],
-  envelope: object,
+  items: readonly Unstored<T>[],
+  envelope: Unstored<E>,
   options: PackOptions<T> & Required<Pick<PackOptions<T>, "keyOf">>,
 ): Record<string, unknown>;
 export function packItems<T>(

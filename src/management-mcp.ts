@@ -109,6 +109,7 @@ import {
   listQueue,
   listYourTasks,
   presentTask,
+  type Unstored,
 } from "./tasks.js";
 import { sessionInTeardown } from "./teardown.js";
 import { listLog } from "./triage.js";
@@ -273,9 +274,9 @@ const QUESTION_ANNOTATIONS_DESCRIPTION =
   "A question also carries `landing` (null for a general question; for a landing question, `blocked_by` says why a `merge` answer would be rejected right now — `attached_children` or `objections` — or null when it would be accepted), `approval` (for a child-approval question, whether approving raises the parent's risk; otherwise null), `blocking` (the id of the parent task it holds up, or null), `moved` (for a memory proposal, one element per pinned entry moved since the proposal was shown: `id` is the entry as pinned, `tail_id` is where it lives now with its current `path` / `scope`, and an answer applies to `tail_id`), `needs_comment` (the answers that `answer_question` refuses without a non-blank comment; empty when every answer takes an optional one), and `free_text` (false when an answer must match one of the item's options verbatim; true when free text is accepted). A non-question task carries none of these.";
 
 /** 結果を返し、DomainError は tool error にする。 */
-const domainResult = (write: () => unknown) => {
+export const domainResult = <R>(write: () => Unstored<R>) => {
   try {
-    return toolResult(write());
+    return toolResult(write() as never);
   } catch (err) {
     if (err instanceof DomainError) return toolError(err.message);
     throw err;

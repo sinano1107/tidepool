@@ -1,0 +1,6 @@
+language js
+
+JsPropertyObjectMember(name=$name) as $member where {
+  $name <: r"content",
+  register_diagnostic(span=$member, message="Build MCP tool responses with toolResult or toolError (ADR 0220): toolResult rejects a stored task row that has not been through the board's resolution (presentTask / listBoard).", severity="error")
+}
