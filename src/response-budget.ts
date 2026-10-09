@@ -280,13 +280,14 @@ export function packItems<T>(
     // 切れない(追記 #1393 の5)—— 丸ごと返して床に任せる
     if (!fits(envelopeOnly)) return cutToFit(true) ?? envelopeOnly;
     // 先頭の item が封筒と一緒に入らないだけなら、封筒だけを返してその item は次の応答で丸ごと返す ——
-    // 切るのは、その item と続きの印を合わせて1応答を超える item だけ(ADR 0195 追記 #1393 の4)。その item は封筒と一緒に今切る
-    // (封筒だけの応答を挟まない)
+    // 切るのは、その item と続きの印を合わせて1応答を超える item だけ(ADR 0195 追記 #1393 の4)。その item は、封筒の横で
+    // 切って収まるなら封筒と一緒に今切る(封筒だけの応答を挟まない)
     const hasEnvelope = Object.keys(firstOnly).length > 0;
     const fitsAlone = fits({ ...render(rest.slice(0, 1), every), ...continueFrom(1) });
     if (fitsAlone && hasEnvelope) return envelopeOnly;
     // 封筒の横では切っても収まらないなら、封筒だけを先に返し、item は続きで封筒なしに切る —— 丸ごと返すと床に落ち、
-    // 続きの印も切れる(決定5 の不変条件、issue #1668)。封筒なしでも切れない item(追記 #1393 の5)は丸ごと返して床に任せる
+    // 続きの印も切れる(ADR 0195 決定5 の不変条件、issue #1668)。封筒なしでも切れない item(追記 #1393 の5)も、封筒を
+    // 先に返したうえで、続きで丸ごと返して床に任せる
     return cutToFit(false) ?? (hasEnvelope ? envelopeOnly : { ...render(rest.slice(0, 1)), ...continueFrom(1) });
   }
   return { ...render(rest.slice(0, k)), ...continueFrom(k) };
