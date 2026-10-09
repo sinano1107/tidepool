@@ -3447,10 +3447,11 @@ function SettingsScreen({ say, memoryFocus, registerLeaveGuard }) {
   const adding = editing === addId;
   let body;
   if (stack.length === 0) {
-    const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+    const floors = responseFloors?.length ?? 0;
+    const halted = haltedRefires?.length ?? 0;
     const boardFlags = [
-      responseFloors?.length ? plural(responseFloors.length, "read cut", "reads cut") : null,
-      haltedRefires?.length ? plural(haltedRefires.length, "halted refire", "halted refires") : null
+      floors > 0 ? `${floors} read${floors === 1 ? "" : "s"} cut` : null,
+      halted > 0 ? `${halted} halted refire${halted === 1 ? "" : "s"}` : null
     ].filter((part) => part !== null);
     const rows = [
       {

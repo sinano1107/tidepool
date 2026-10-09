@@ -2902,10 +2902,11 @@ function SettingsScreen({ say, memoryFocus, registerLeaveGuard }: {
     // --- level 1: the index. Each row states its section's current state, so
     // the whole surface reads without opening anything.
     // ADR 0219 決定4・5: floor records and halted refires flag the Board row, each count shown only when non-zero
-    const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+    const floors = responseFloors?.length ?? 0;
+    const halted = haltedRefires?.length ?? 0;
     const boardFlags = [
-      responseFloors?.length ? plural(responseFloors.length, 'read cut', 'reads cut') : null,
-      haltedRefires?.length ? plural(haltedRefires.length, 'halted refire', 'halted refires') : null,
+      floors > 0 ? `${floors} read${floors === 1 ? '' : 's'} cut` : null,
+      halted > 0 ? `${halted} halted refire${halted === 1 ? '' : 's'}` : null,
     ].filter((part) => part !== null);
     const rows: { key: string; label: string; summary: string; alert?: boolean }[] = [
       {
