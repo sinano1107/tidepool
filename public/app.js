@@ -69,10 +69,7 @@ var TidepoolRules = (() => {
     if (!EFFORT_LEVELS.includes(effort)) return `effort must be one of ${EFFORT_LEVELS.join(" / ")}`;
     if (provider === "openai") return void 0;
     const undated = undatedClaudeId(model);
-    if (undated && CLAUDE_EFFORT_RULES.runsAsHigh[undated]?.includes(effort)) {
-      return `${model} at effort ${effort} runs as high under the claude CLI's built-in model rules; write high`;
-    }
-    return void 0;
+    return undated && CLAUDE_EFFORT_RULES.runsAsHigh[undated]?.includes(effort) ? `${model} at effort ${effort} runs as high under the claude CLI's built-in model rules; write high` : void 0;
   }
 
   // src/pace-offset-rule.ts

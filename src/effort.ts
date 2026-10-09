@@ -8,7 +8,7 @@ export const EFFORT_LEVELS = ["low", "medium", "high", "xhigh", "max"] as const;
 /** How Claude CLI 2.1.286's built-in model rules treat effort, per undated id (ADR 0218 決定3): a copy of the binary's fixed
  *  refusal list, not the served catalog. `runsAsHigh` lists the values the CLI lowers to `high`; `dropsEffort` the ids it sends
  *  without effort (`claude-3-*` by prefix). Every other id, unknown ones included, takes all five. Checked at each CLI bump. */
-export const CLAUDE_EFFORT_RULES = {
+const CLAUDE_EFFORT_RULES = {
   runsAsHigh: { "claude-opus-4-5": ["xhigh", "max"], "claude-opus-4-6": ["xhigh"], "claude-sonnet-4-6": ["xhigh"] } as Record<string, readonly string[]>,
   // ponytail: recorded, not read yet; the "no effort" spelling that acts on it is the next slice of #1655
   dropsEffort: ["claude-3-*", "claude-opus-4-0", "claude-opus-4-1", "claude-sonnet-4-0", "claude-sonnet-4-5", "claude-haiku-4-5"],
@@ -20,8 +20,7 @@ export function whyInvalidEffort(provider: string, model: string, effort: string
   if (!(EFFORT_LEVELS as readonly string[]).includes(effort)) return `effort must be one of ${EFFORT_LEVELS.join(" / ")}`;
   if (provider === "openai") return undefined;
   const undated = undatedClaudeId(model);
-  if (undated && CLAUDE_EFFORT_RULES.runsAsHigh[undated]?.includes(effort)) {
-    return `${model} at effort ${effort} runs as high under the claude CLI's built-in model rules; write high`;
-  }
-  return undefined;
+  return undated && CLAUDE_EFFORT_RULES.runsAsHigh[undated]?.includes(effort)
+    ? `${model} at effort ${effort} runs as high under the claude CLI's built-in model rules; write high`
+    : undefined;
 }
