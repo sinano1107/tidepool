@@ -37,7 +37,10 @@ export interface ResolvedAgent {
  *  (resolveAgentOrQuarantine) fails closed into the same agent-name
  *  quarantine as registry drift. The loader deliberately does not reject
  *  these (a violating file still parses) so the violation stops the one
- *  agent instead of the whole registry read. */
+ *  agent instead of the whole registry read. A definition naming an authority
+ *  profile the registry does not have is the same broken resource (issue
+ *  #1648): only resolution looks the profile up, so it is not one of the
+ *  shared gates, but it fails into the same error and quarantine. */
 export function resolveExecutionAgent(
   registry: Registry,
   defaultAgentName: string,
@@ -56,7 +59,7 @@ export function resolveExecutionAgent(
   const profile = definition.builtin
     ? REVIEWER_AUTHORITY_PROFILE
     : ownEntry(registry.authority, definition.authority);
-  if (!profile) throw new Error(`unknown authority profile: ${definition.authority}`);
+  if (!profile) throw new InvalidAgentDefinitionError(name, `unknown authority profile "${definition.authority}"`);
   return { name, definition, profile };
 }
 

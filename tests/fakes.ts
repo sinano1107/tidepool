@@ -47,6 +47,7 @@ import {
   type PtyFn,
 } from "../src/process-container.js";
 import type { PushClient, PushPayload, PushSubscription } from "../src/push.js";
+import { InvalidAgentDefinitionError, UnknownAgentError } from "../src/registry.js";
 import type {
   AttributionClient,
   AttributionInput,
@@ -872,6 +873,13 @@ export function passthroughContainers(spawn: ContainerSpawn = defaultSpawn): Pro
 
 /** 種の盤面の段の名前(順序どおり)—— 盤面を持たずに定義の門を通すテストが渡す一覧。 */
 export const seedTierNames = SEED_TIERS.map((tier) => tier.name);
+
+/** registry が assignee を解決できない2つの形(agent 名の quarantine の入口が受ける型)。
+ *  入口ごとのテストがこの表で両方を回す。 */
+export const UNRESOLVABLE_AGENT: Array<[string, (name: string) => Error]> = [
+  ["UnknownAgentError", (name) => new UnknownAgentError(name)],
+  ["InvalidAgentDefinitionError", (name) => new InvalidAgentDefinitionError(name, 'unknown authority profile "ghost"')],
+];
 
 /** 種の表の openai の行すべてを、5値すべての effort つきで載せた `model/list`。表の照合(ADR 0184 決定3 /
  *  ADR 0218 決定2)で行を外したくない fake の openai 観測が持つ —— 実物の pin の版は `gpt-6-astra` を載せない(#1260 の実測)。 */

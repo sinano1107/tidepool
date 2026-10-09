@@ -32,7 +32,7 @@ import {
   UnknownWorkspaceError,
   type WorkspaceConfig,
 } from "../src/workspace.js";
-import { FakeClock, FakeGitHubClient, unusedLanding } from "./fakes.js";
+import { FakeClock, FakeGitHubClient, UNRESOLVABLE_AGENT, unusedLanding } from "./fakes.js";
 import {
   commitWork,
   completedWork,
@@ -1420,12 +1420,18 @@ it("escalate で開いた PR の後にダイヤルを auto_if_ci_green へ緩め
 const unresolvable = (): AuthorityProfile => {
   throw new UnknownAgentError("tako");
 };
+const UNRESOLVABLE: Array<[string, () => AuthorityProfile]> = UNRESOLVABLE_AGENT.map(([kind, error]) => [
+  kind,
+  () => {
+    throw error("tako");
+  },
+]);
 
-it("PR を開く時点で profile が解決できなければ、PR を開かず agent を quarantine に落とし、着地は retry できる失敗として返る", async () => {
+it.each(UNRESOLVABLE)("PR を開く時点で profile が %s で解決できなければ、PR を開かず agent を quarantine に落とし、着地は retry できる失敗として返る", async (_, fail) => {
   const { workspace } = await makeRemoteBackedWorkspace("landing-unresolvable-at-open");
   const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
-  let resolveAuthority = unresolvable;
+  let resolveAuthority = fail;
   const landing = createLanding({
     defaultAgentName: "tako",
     db,
@@ -1484,12 +1490,12 @@ function agentQuarantines(db: Db) {
   return listBoard(db).filter((q) => q.question_quarantine_kind === "agent" && q.status === "todo");
 }
 
-it("無人 merge の瞬間に profile が解決できなければ、merge せずキューに残し、agent の quarantine は重ねず、直った後の tick が本当のダイヤルで merge する", async () => {
+it.each(UNRESOLVABLE)("無人 merge の瞬間に profile が %s で解決できなければ、merge せずキューに残し、agent の quarantine は重ねず、直った後の tick が本当のダイヤルで merge する", async (_, fail) => {
   const workspace = await makeWorkspace("landing-unresolvable-at-merge");
   const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
   const work = queueAutoMerge(db, clock, 1);
-  let resolveAuthority = unresolvable;
+  let resolveAuthority = fail;
   const landing = createLanding({
     defaultAgentName: "tako",
     db,

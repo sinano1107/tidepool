@@ -285,7 +285,9 @@ export class UnknownAgentError extends Error {
  *  あるいは退役したピン留めが残っている。定義を受け入れる門 —— 登録
  *  (agent-create.ts)と pickup 解決(agent.ts の resolveExecutionAgent)—— で
  *  投げ、**読み込みでは投げない**: 手で commit された違反は registry 全体を
- *  煉瓦にせず、その agent 1体を隔離する。 */
+ *  煉瓦にせず、その agent 1体を隔離する。registry に無い authority profile を
+ *  名指す定義もこの型だが、投げるのは pickup 解決だけである(issue #1648。
+ *  登録の門は UnknownAuthorityProfileError で拒む)。 */
 export class InvalidAgentDefinitionError extends Error {
   constructor(
     public readonly agentName: string,
