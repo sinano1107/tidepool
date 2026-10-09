@@ -96,8 +96,7 @@ interface DeletionConflict {
   confirm_required?: true;
 }
 
-/** 重ねた1本の木の門の拒否(ADR 0221)。組の形の正本は src/memory.ts の OneTreePair: 片側の `id` は今ある行
- *  (`existing`)か移動元、null はこの操作が置く行。 */
+/** 重ねた1本の木の門の拒否(ADR 0221)。片側の `id` は今ある行(`existing`)か移動元、null はこの操作が置く行。 */
 interface OneTreeConflict {
   error: string;
   pairs: Array<{

@@ -1934,7 +1934,7 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit, fo
   const openForms = [writing && 'write', branchMove && 'branch', moving && `move:${moving.id}`];
   React.useEffect(() => {
     if (blocked && !blocked.at.startsWith('restore:') && !openForms.includes(blocked.at)) setBlocked(null);
-  });
+  }, [writing, branchMove, moving, blocked]);
 
   // the blocking panel's exits (ADR 0221). Widen: one definition moves board-wide as it is (only its scope changes); a
   // path several workspaces define takes the picked wording into one board-wide definition that replaces them all
@@ -1959,8 +1959,23 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit, fo
     if (blocked?.at === 'write') setBlocked(null);
     fill();
   };
-  // Rename: the branch move form with its source (and the same workspace as destination) filled
-  const renameBranch = (scope: string, path: string) => setBranchMove({ workspace: scope, path, to_workspace: scope, to_path: '', merge: false });
+  // Rename: the branch move form with its source (and the same workspace as destination) filled; a refused branch move
+  // already in the form is parked and comes back once the rename lands or is cancelled
+  const [parkedMove, setParkedMove] = React.useState<{ draft: NonNullable<typeof branchMove>; blocked: typeof blocked } | null>(null);
+  React.useEffect(() => { if (!branchMove) setParkedMove(null); }, [branchMove]);
+  const closeBranchMove = () => {
+    if (!parkedMove) return setBranchMove(null);
+    setBranchMove(parkedMove.draft);
+    setBlocked(parkedMove.blocked);
+    setParkedMove(null);
+  };
+  const renameBranch = (scope: string, path: string) => {
+    if (branchMove && blocked?.at === 'branch') {
+      setParkedMove({ draft: branchMove, blocked });
+      setBlocked(null);
+    }
+    setBranchMove({ workspace: scope, path, to_workspace: scope, to_path: '', merge: false });
+  };
   const blockingPanel = (at: string) => blocked?.at === at && entries && (
     <OneTreePanel pairs={blocked.pairs} entries={entries} translations={translations} busy={busy}
       onWiden={widen} onWrite={writeBoardWide} onRename={renameBranch} onClose={() => setBlocked(null)} />
@@ -1994,11 +2009,11 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit, fo
               onClick={() => move('/api/settings/memory/branches/move', {
                 workspace: branchMove.workspace || null, path: TidepoolRules.normalizeText(branchMove.path),
                 to_workspace: branchMove.to_workspace || null, to_path: TidepoolRules.normalizeText(branchMove.to_path), merge: branchMove.merge,
-              }, `${TidepoolRules.normalizeText(branchMove.path)} → ${TidepoolRules.normalizeText(branchMove.to_path)}`, () => setBranchMove(null),
+              }, `${TidepoolRules.normalizeText(branchMove.path)} → ${TidepoolRules.normalizeText(branchMove.to_path)}`, closeBranchMove,
               { key: 'POST /api/settings/memory/branches/move 409', at: 'branch' })}>
               Move branch
             </Button>
-            <Button variant="ghost" size="sm" disabled={busy} onClick={() => setBranchMove(null)}>Cancel</Button>
+            <Button variant="ghost" size="sm" disabled={busy} onClick={closeBranchMove}>Cancel</Button>
           </div>
           {blockingPanel('branch')}
         </React.Fragment>

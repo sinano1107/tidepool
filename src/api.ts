@@ -1625,7 +1625,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     } satisfies WireContract["GET /api/settings/execution"]);
   });
 
-  // 人間の書き込み(schema で弾けば 400、DomainError も 400)。実行設定・memory の書き込み(書き手 human、原文の言語は表示言語)と無効化、盤面設定が使う。保存は翻訳 client に依存しない
+  // 人間の書き込み(schema で弾けば 400、DomainError も 400 —— 重ねた1本の木の門の拒否だけは 409 で名指した組を返す)。実行設定・memory の書き込み(書き手 human、原文の言語は表示言語)と無効化、盤面設定が使う。保存は翻訳 client に依存しない
   const validatedWrite =
     <T>(schema: z.ZodType<T>, write: (input: T) => unknown): RequestHandler =>
     async (req, res) => {

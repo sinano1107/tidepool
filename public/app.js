@@ -2545,7 +2545,7 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit, fo
   const openForms = [writing && "write", branchMove && "branch", moving && `move:${moving.id}`];
   React.useEffect(() => {
     if (blocked && !blocked.at.startsWith("restore:") && !openForms.includes(blocked.at)) setBlocked(null);
-  });
+  }, [writing, branchMove, moving, blocked]);
   const widen = (row, entry) => row.defs.length === 1 ? submit(`/api/settings/memory/entries/${entry.id}/move`, { workspace: null, path: row.path }, ["widened", `#${entry.id} \u2192 board-wide`], "widen failed") : submit("/api/settings/memory/definitions", {
     workspace: null,
     path: row.path,
@@ -2578,7 +2578,23 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit, fo
     if (blocked?.at === "write") setBlocked(null);
     fill();
   };
-  const renameBranch = (scope, path) => setBranchMove({ workspace: scope, path, to_workspace: scope, to_path: "", merge: false });
+  const [parkedMove, setParkedMove] = React.useState(null);
+  React.useEffect(() => {
+    if (!branchMove) setParkedMove(null);
+  }, [branchMove]);
+  const closeBranchMove = () => {
+    if (!parkedMove) return setBranchMove(null);
+    setBranchMove(parkedMove.draft);
+    setBlocked(parkedMove.blocked);
+    setParkedMove(null);
+  };
+  const renameBranch = (scope, path) => {
+    if (branchMove && blocked?.at === "branch") {
+      setParkedMove({ draft: branchMove, blocked });
+      setBlocked(null);
+    }
+    setBranchMove({ workspace: scope, path, to_workspace: scope, to_path: "", merge: false });
+  };
   const blockingPanel = (at) => blocked?.at === at && entries && /* @__PURE__ */ React.createElement(
     OneTreePanel,
     {
@@ -2624,12 +2640,12 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit, fo
           merge: branchMove.merge
         },
         `${TidepoolRules.normalizeText(branchMove.path)} \u2192 ${TidepoolRules.normalizeText(branchMove.to_path)}`,
-        () => setBranchMove(null),
+        closeBranchMove,
         { key: "POST /api/settings/memory/branches/move 409", at: "branch" }
       )
     },
     "Move branch"
-  ), /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "sm", disabled: busy, onClick: () => setBranchMove(null) }, "Cancel")), blockingPanel("branch")), selected.length > 0 && !writing && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("p", { style: muted }, "selected ", selectedIds), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8, alignItems: "flex-end", flexWrap: "wrap" } }, /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", disabled: busy || foldKinds.length === 0, onClick: foldIntoNew }, "Fold into a new entry"), /* @__PURE__ */ React.createElement(Input, { label: "Fold into existing (entry id)", error: foldReason, mono: true, value: foldTarget, onChange: (e) => setFoldTarget(e.target.value) }), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", disabled: busy || !!foldReason, onClick: foldIntoExisting }, "Fold into #", foldTarget || "\u2026"), /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "sm", disabled: busy, onClick: () => setSelected([]) }, "Clear")), foldKinds.length === 0 && /* @__PURE__ */ React.createElement("p", { style: muted }, candidateSelected ? "a candidate cannot be replaced by a new entry; fold it into an existing approved one" : "no one kind may replace all of these; fold them into an existing entry of their kind")), writing && /* @__PURE__ */ React.createElement(React.Fragment, null, replacing && /* @__PURE__ */ React.createElement("p", { style: muted }, "replacing ", replacing, " \u2014 saving writes a new approved entry and supersedes ", draft.supersedes.length === 1 ? "it" : "them"), draft.kinds.length > 1 && /* @__PURE__ */ React.createElement(Select, { label: "Kind", value: draft.kind, onChange: setDraftField("kind"), options: draft.kinds }), /* @__PURE__ */ React.createElement(
+  ), /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "sm", disabled: busy, onClick: closeBranchMove }, "Cancel")), blockingPanel("branch")), selected.length > 0 && !writing && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("p", { style: muted }, "selected ", selectedIds), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8, alignItems: "flex-end", flexWrap: "wrap" } }, /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", disabled: busy || foldKinds.length === 0, onClick: foldIntoNew }, "Fold into a new entry"), /* @__PURE__ */ React.createElement(Input, { label: "Fold into existing (entry id)", error: foldReason, mono: true, value: foldTarget, onChange: (e) => setFoldTarget(e.target.value) }), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", disabled: busy || !!foldReason, onClick: foldIntoExisting }, "Fold into #", foldTarget || "\u2026"), /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "sm", disabled: busy, onClick: () => setSelected([]) }, "Clear")), foldKinds.length === 0 && /* @__PURE__ */ React.createElement("p", { style: muted }, candidateSelected ? "a candidate cannot be replaced by a new entry; fold it into an existing approved one" : "no one kind may replace all of these; fold them into an existing entry of their kind")), writing && /* @__PURE__ */ React.createElement(React.Fragment, null, replacing && /* @__PURE__ */ React.createElement("p", { style: muted }, "replacing ", replacing, " \u2014 saving writes a new approved entry and supersedes ", draft.supersedes.length === 1 ? "it" : "them"), draft.kinds.length > 1 && /* @__PURE__ */ React.createElement(Select, { label: "Kind", value: draft.kind, onChange: setDraftField("kind"), options: draft.kinds }), /* @__PURE__ */ React.createElement(
     Select,
     {
       label: "Workspace",

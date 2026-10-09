@@ -240,7 +240,7 @@ function requireOneTree(db: Db, since: number): void {
     )
     .all(since, since) as Array<{
     e_id: number;
-    e_kind: string;
+    e_kind: MemoryEntryFields["kind"];
     e_path: string;
     e_from: number | null;
     d_id: number;
@@ -250,32 +250,31 @@ function requireOneTree(db: Db, since: number): void {
   }>;
   if (pairs.length === 0) return;
   // 置かれる側は巻き戻る id でなく、移動なら移動元の id で名指す
-  const hits = pairs.map((p) => {
-    const entry =
-      p.e_id <= since
-        ? `whole-board ${p.e_kind} entry ${p.e_id} at ${p.e_path}`
-        : p.e_from === null
-          ? `the whole-board ${p.e_kind} being placed at ${p.e_path}`
-          : `whole-board ${p.e_kind} entry ${p.e_from} moving to ${p.e_path}`;
-    const def =
-      p.d_id <= since
-        ? `workspace definition ${p.d_id} at ${p.d_path} in scope ${p.d_scope}`
-        : p.d_from === null
-          ? `the workspace definition being placed at ${p.d_path} in scope ${p.d_scope}`
-          : `workspace definition ${p.d_from} moving to ${p.d_path} in scope ${p.d_scope}`;
+  const side = (id: number, from: number | null) => ({ id: id <= since ? id : from, existing: id <= since });
+  const named: OneTreePair[] = pairs.map((p) => ({
+    entry: { ...side(p.e_id, p.e_from), kind: p.e_kind, path: p.e_path },
+    definition: { ...side(p.d_id, p.d_from), path: p.d_path, scope: p.d_scope },
+  }));
+  const hits = named.map(({ entry: e, definition: d }) => {
+    const entry = e.existing
+      ? `whole-board ${e.kind} entry ${e.id} at ${e.path}`
+      : e.id === null
+        ? `the whole-board ${e.kind} being placed at ${e.path}`
+        : `whole-board ${e.kind} entry ${e.id} moving to ${e.path}`;
+    const def = d.existing
+      ? `workspace definition ${d.id} at ${d.path} in scope ${d.scope}`
+      : d.id === null
+        ? `the workspace definition being placed at ${d.path} in scope ${d.scope}`
+        : `workspace definition ${d.id} moving to ${d.path} in scope ${d.scope}`;
     return `${entry} lies at or under ${def}`;
   });
   const placesWholeBoard = db.prepare("SELECT 1 FROM memory_entries WHERE scope IS NULL AND id > ?").get(since) !== undefined;
-  const side = (id: number, from: number | null) => ({ id: id <= since ? id : from, existing: id <= since });
   throw new OneTreeError(
     `${hits.join("; ")}: a workspace cannot define a path that holds whole-board entries at or under it — ` +
       (placesWholeBoard
         ? "write a whole-board definition at the workspace definition's path with supersedes, rename the workspace branch with move_memory_branch, or choose another path"
         : "file under the branch as it is, or define a sub-branch"),
-    pairs.map((p) => ({
-      entry: { ...side(p.e_id, p.e_from), kind: p.e_kind as MemoryEntryFields["kind"], path: p.e_path },
-      definition: { ...side(p.d_id, p.d_from), path: p.d_path, scope: p.d_scope },
-    })),
+    named,
   );
 }
 
