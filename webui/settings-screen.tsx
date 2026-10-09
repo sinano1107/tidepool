@@ -2287,6 +2287,13 @@ function ExecutionTableCard({ settings, say, onSaved, edit }: {
     setBusy(false);
   };
   const update = (i: number, patch: Partial<DraftRow>) => setDraft(draft.map((d, j) => (j === i ? { ...d, ...patch } : d)));
+  // provider / model を変えていまの effort が拒まれる値になったら、受ける値へ移す: 捨てる id なら「無い」、それ以外は high
+  // (下がる値の行き先で、どの model も受ける)。読み込んだ行の値は触らない —— 拒まれる値でも select に残す(下の Effort 欄)
+  const updateModel = (i: number, patch: Pick<Partial<DraftRow>, 'provider' | 'model'>) => {
+    const next = { ...draft[i]!, ...patch };
+    const effort = TidepoolRules.whyInvalidEffort(next.provider, next.model, next.effort) ? (TidepoolRules.whyInvalidEffort(next.provider, next.model, 'high') ? null : 'high') : next.effort;
+    update(i, { ...patch, effort });
+  };
   const addRow = () => setDraft([...draft, {
     key: 'new', provider: settings.providers[0]!.value, tier: settings.tiers[0]!.name, model: '', effort: 'high', price_in: '', price_out: '',
   }]);
@@ -2316,12 +2323,12 @@ function ExecutionTableCard({ settings, say, onSaved, edit }: {
             {draft.map((d, i) => (
               <div key={d.key} data-testid={`execution-row-${d.key}`}
                 style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(110px, 1fr))', gap: 8, alignItems: 'end', paddingBottom: 8, borderBottom: '1px solid var(--border-default)' }}>
-                <Select label="Provider" options={settings.providers.map((p) => p.value)} value={d.provider} onChange={(e) => update(i, { provider: e.target.value })} />
+                <Select label="Provider" options={settings.providers.map((p) => p.value)} value={d.provider} onChange={(e) => updateModel(i, { provider: e.target.value })} />
                 <Select label="Tier" options={settings.tiers.map((tier) => tier.name)} value={d.tier} onChange={(e) => update(i, { tier: e.target.value })} />
-                <Input label="Model" mono value={d.model} onChange={(e) => update(i, { model: e.target.value })} placeholder="concrete model id — e.g. claude-opus-5-5" />
-                {/* 選択肢は述語が model ごとに絞る: 「無し」(null)は effort を捨てる id にだけ出て、そのとき5値は出ない(ADR 0218 決定5)。
+                <Input label="Model" mono value={d.model} onChange={(e) => updateModel(i, { model: e.target.value })} placeholder="concrete model id — e.g. claude-opus-5-5" />
+                {/* 選択肢は述語が model ごとに絞る: 「無い」(null)は effort を捨てる id にだけ出て、そのとき5値は出ない(ADR 0218 決定5)。
                     拒まれる値でも、いま持っている値は残す: 外すと select が別の値を表示する。保存は扉が書くべき値を名指して拒む */}
-                <Select label="Effort" options={[null, ...TidepoolRules.EFFORT_LEVELS].filter((effort) => effort === d.effort || !TidepoolRules.whyInvalidEffort(d.provider, d.model, effort)).map((effort) => effort ?? { value: '', label: 'none' })}
+                <Select label="Effort" options={[null, ...TidepoolRules.EFFORT_LEVELS].filter((effort) => effort === d.effort || !TidepoolRules.whyInvalidEffort(d.provider, d.model, effort)).map((effort) => effort ?? { value: '', label: 'no effort' })}
                   value={d.effort ?? ''} onChange={(e) => update(i, { effort: e.target.value || null })} />
                 <Input label="Price in" error={TidepoolRules.whyInvalidPrice(readNumericDraft(d.price_in))} mono value={d.price_in} onChange={(e) => update(i, { price_in: e.target.value })} placeholder="USD / MTok" />
                 <Input label="Price out" error={TidepoolRules.whyInvalidPrice(readNumericDraft(d.price_out))} mono value={d.price_out} onChange={(e) => update(i, { price_out: e.target.value })} placeholder="USD / MTok" />

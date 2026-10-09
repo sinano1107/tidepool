@@ -66,17 +66,18 @@ var TidepoolRules = (() => {
   var EFFORT_LEVELS = ["low", "medium", "high", "xhigh", "max"];
   var CLAUDE_EFFORT_RULES = {
     runsAsHigh: { "claude-opus-4-5": ["xhigh", "max"], "claude-opus-4-6": ["xhigh"], "claude-sonnet-4-6": ["xhigh"] },
-    dropsEffort: ["claude-opus-4-0", "claude-opus-4-1", "claude-sonnet-4-0", "claude-sonnet-4-5", "claude-haiku-4-5"]
+    dropsEffort: ["claude-opus-4-0", "claude-opus-4-1", "claude-sonnet-4-0", "claude-sonnet-4-5", "claude-haiku-4-5"],
+    dropsEffortPrefix: "claude-3-"
   };
   function whyInvalidEffort(provider, model, effort) {
-    const levels = `effort must be one of ${EFFORT_LEVELS.join(" / ")}`;
-    if (effort !== null && !EFFORT_LEVELS.includes(effort)) return levels;
-    if (provider === "openai") return effort === null ? levels : void 0;
+    const outsideVocabulary = `effort must be one of ${EFFORT_LEVELS.join(" / ")}`;
+    if (effort !== null && !EFFORT_LEVELS.includes(effort)) return outsideVocabulary;
+    if (provider === "openai") return effort === null ? outsideVocabulary : void 0;
     const undated = undatedClaudeId(model);
-    if (model.startsWith("claude-3-") || CLAUDE_EFFORT_RULES.dropsEffort.includes(undated)) {
+    if (model.startsWith(CLAUDE_EFFORT_RULES.dropsEffortPrefix) || undated !== void 0 && CLAUDE_EFFORT_RULES.dropsEffort.includes(undated)) {
       return effort === null ? void 0 : `${model} takes no effort under the claude CLI's built-in model rules; write no effort (null)`;
     }
-    if (effort === null) return levels;
+    if (effort === null) return outsideVocabulary;
     return undated && CLAUDE_EFFORT_RULES.runsAsHigh[undated]?.includes(effort) ? `${model} at effort ${effort} runs as high under the claude CLI's built-in model rules; write high` : void 0;
   }
 
@@ -2888,6 +2889,11 @@ function ExecutionTableCard({ settings, say, onSaved, edit }) {
     setBusy(false);
   };
   const update = (i, patch) => setDraft(draft.map((d, j) => j === i ? { ...d, ...patch } : d));
+  const updateModel = (i, patch) => {
+    const next = { ...draft[i], ...patch };
+    const effort = TidepoolRules.whyInvalidEffort(next.provider, next.model, next.effort) ? TidepoolRules.whyInvalidEffort(next.provider, next.model, "high") ? null : "high" : next.effort;
+    update(i, { ...patch, effort });
+  };
   const addRow = () => setDraft([...draft, {
     key: "new",
     provider: settings.providers[0].value,
@@ -2904,14 +2910,14 @@ function ExecutionTableCard({ settings, say, onSaved, edit }) {
       "data-testid": `execution-row-${d.key}`,
       style: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(110px, 1fr))", gap: 8, alignItems: "end", paddingBottom: 8, borderBottom: "1px solid var(--border-default)" }
     },
-    /* @__PURE__ */ React.createElement(Select, { label: "Provider", options: settings.providers.map((p) => p.value), value: d.provider, onChange: (e) => update(i, { provider: e.target.value }) }),
+    /* @__PURE__ */ React.createElement(Select, { label: "Provider", options: settings.providers.map((p) => p.value), value: d.provider, onChange: (e) => updateModel(i, { provider: e.target.value }) }),
     /* @__PURE__ */ React.createElement(Select, { label: "Tier", options: settings.tiers.map((tier) => tier.name), value: d.tier, onChange: (e) => update(i, { tier: e.target.value }) }),
-    /* @__PURE__ */ React.createElement(Input, { label: "Model", mono: true, value: d.model, onChange: (e) => update(i, { model: e.target.value }), placeholder: "concrete model id \u2014 e.g. claude-opus-5-5" }),
+    /* @__PURE__ */ React.createElement(Input, { label: "Model", mono: true, value: d.model, onChange: (e) => updateModel(i, { model: e.target.value }), placeholder: "concrete model id \u2014 e.g. claude-opus-5-5" }),
     /* @__PURE__ */ React.createElement(
       Select,
       {
         label: "Effort",
-        options: [null, ...TidepoolRules.EFFORT_LEVELS].filter((effort) => effort === d.effort || !TidepoolRules.whyInvalidEffort(d.provider, d.model, effort)).map((effort) => effort ?? { value: "", label: "none" }),
+        options: [null, ...TidepoolRules.EFFORT_LEVELS].filter((effort) => effort === d.effort || !TidepoolRules.whyInvalidEffort(d.provider, d.model, effort)).map((effort) => effort ?? { value: "", label: "no effort" }),
         value: d.effort ?? "",
         onChange: (e) => update(i, { effort: e.target.value || null })
       }

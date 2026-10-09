@@ -28,13 +28,13 @@ import {
   tierFieldDescriptions,
 } from "../src/execution-setting.js";
 import { submitAnswer } from "../src/human-verbs.js";
-import { registerMetaReview } from "../src/meta-review.js";
+import { metaReviewSubjectOf, registerMetaReview } from "../src/meta-review.js";
 import { PROVIDER_VALUES, type Provider } from "../src/provider.js";
 import { registerQuarantine, tableRowValue } from "../src/quarantine.js";
 import { assertValidAgentDefinition } from "../src/registry.js";
 import { RegistryPushFailedError } from "../src/registry-write.js";
 import { proposeRoutingChange } from "../src/routing-review.js";
-import { cancelTaskDirectly, getTask, listChildren, type RegistryProposal, type RoutingProposal, type RoutingRowProposal, registerTask, type TierDescriptionProposal } from "../src/tasks.js";
+import { cancelTaskDirectly, getTask, listBoard, listChildren, type RegistryProposal, type RoutingProposal, type RoutingRowProposal, registerTask, type TierDescriptionProposal } from "../src/tasks.js";
 import { boardCallRow, reportProviderUsage } from "../src/throttle.js";
 import { assertKnownTier, PRIORITIES, readTiers, SEED_TIERS, type Tier, tierNames } from "../src/tier.js";
 import { unusedLanding } from "./fakes.js";
@@ -943,11 +943,18 @@ it("鍵つきの編集は、同じ model の2行のうち名指した行だけ�
   expect(opusRows(db)).toEqual([{ ...opusRow, effort: "low", price_out: 30 }]);
 });
 
+/** routing meta-review の task の id —— export の読み口で引く(ADR 0107 決定2)。 */
+const routingReviewId = (db: Db) => listBoard(db).find((task) => metaReviewSubjectOf(db, task.id) === "routing")!.id;
+const routingReviewOf = (db: Db, now: Date) => {
+  registerMetaReview(db, "routing", now);
+  return routingReviewId(db);
+};
+
 /** routing meta-review を1つ登録し、その子に opus の `effort` の行の提案を立てる。 */
 function proposeOnOpus(db: ReturnType<typeof openDb>, effort: string, change: object) {
   const now = new Date();
   registerMetaReview(db, "routing", now);
-  const review = (db.prepare("SELECT id FROM tasks WHERE meta_review_subject = 'routing'").get() as { id: string }).id;
+  const review = routingReviewId(db);
   const { question_id } = proposeRoutingChange(db, review, { op: "row", row: opusKey(effort), change, rationale: "r" }, "auditor", now);
   const answer = (amendment?: object) =>
     submitAnswer({ db, pollNow() {}, landing: unusedLanding }, getTask(db, question_id)!, ["approve"], undefined, () => now, "webui", false, amendment);
@@ -973,7 +980,7 @@ it("提案は合成した行が別の行と衝突すれば立たず、承認は�
 it("語彙の外の effort への行の提案は作る時点で拒まれ、question は立たない(ADR 0216 決定3)", () => {
   const db = boardWithOpusMax();
   expect(() => proposeOnOpus(db, "max", { effort: "ultra" })).toThrow(DomainError);
-  const review = (db.prepare("SELECT id FROM tasks WHERE meta_review_subject = 'routing'").get() as { id: string }).id;
+  const review = routingReviewId(db);
   expect(listChildren(db, review)).toEqual([]);
 });
 
@@ -1005,7 +1012,7 @@ it("行を書く扉は、model が high に下げる effort を走る値を名�
 it("model が high に下げる effort への行の提案は作る時点で拒まれ、question は立たない(ADR 0218 決定4)", () => {
   const db = boardWithOpus45();
   registerMetaReview(db, "routing", new Date());
-  const review = (db.prepare("SELECT id FROM tasks WHERE meta_review_subject = 'routing'").get() as { id: string }).id;
+  const review = routingReviewId(db);
   expect(() => proposeRoutingChange(db, review, { op: "row", row: opus45Key, change: { effort: "max" }, rationale: "r" }, "auditor", new Date())).toThrow(
     /runs as high.*write high/,
   );
@@ -1016,7 +1023,7 @@ it("承認に添える、model が high に下げる effort の修正値は拒�
   const db = boardWithOpus45();
   const now = new Date();
   registerMetaReview(db, "routing", now);
-  const review = (db.prepare("SELECT id FROM tasks WHERE meta_review_subject = 'routing'").get() as { id: string }).id;
+  const review = routingReviewId(db);
   const { question_id } = proposeRoutingChange(db, review, { op: "row", row: opus45Key, change: { effort: "medium" }, rationale: "r" }, "auditor", now);
   await expect(
     submitAnswer({ db, pollNow() {}, landing: unusedLanding }, getTask(db, question_id)!, ["approve"], undefined, () => now, "webui", false, { effort: "max" }),
@@ -1034,10 +1041,6 @@ function boardWithHaiku45() {
   return db;
 }
 const haiku45Rows = (db: Db) => readExecutionSettings(db).table.filter((row) => row.model === haiku45.model);
-const routingReviewOf = (db: Db, now: Date) => {
-  registerMetaReview(db, "routing", now);
-  return (db.prepare("SELECT id FROM tasks WHERE meta_review_subject = 'routing'").get() as { id: string }).id;
-};
 
 it("行を書く扉は、effort を捨てる id の行を effort「無い」でだけ書き、ほかの id の「無い」を拒む。(provider, model, 無い) の行は1つまでで、「無い」の鍵で編集・削除できる(ADR 0218 決定5 / ADR 0200 決定5)", () => {
   const db = openDb(":memory:");

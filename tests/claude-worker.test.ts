@@ -1808,10 +1808,20 @@ describe("ClaudeCodeWorker", () => {
     expect(calls[0]!.args.join(" ")).toContain("--model claude-sonnet-5-5");
   });
 
-  it("effort は常に明示的に渡す: 値は表の行から来る(ホストの effort 設定を漏らさない)", async () => {
+  it("effort は明示的に渡す: 値は表の行から来る(ホストの effort 設定を漏らさない)", async () => {
     const { start, calls } = await makeWorker();
     start();
     expect(calls[0]!.args.join(" ")).toContain("--effort high");
+  });
+
+  it("effort「無い」の行で走る worker は --effort 無しで spawn され、worker_spawned の effort は null(ADR 0218 決定5)", async () => {
+    const { worker, db, calls } = await makeWorker();
+    const task = makeTask("task-no-effort", null, "deckhand", "work");
+    insertTask(db, task);
+    worker.start(task, { provider: "anthropic", model: "claude-haiku-4-5-20251001", effort: null, advisor: undefined, tier_id: 1, source: { tier: "board", provider: "only" } });
+    expect(calls[0]!.args.join(" ")).toContain("--model claude-haiku-4-5-20251001");
+    expect(calls[0]!.args).not.toContain("--effort");
+    expect(listEvents(db, "task-no-effort").find((e) => e.kind === "worker_spawned")!.payload).toMatchObject({ effort: null });
   });
 
   it("worker_spawned は選ばれた実行設定と、そのティアの出所を刻む(ADR 0110 決定3 — agent.md からはもう復元できない事実)", async () => {
