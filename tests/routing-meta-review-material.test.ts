@@ -190,8 +190,9 @@ it("新しいセルは初観測が窓の中のものだけ、人間が変えた�
 it("決着した提案は回答か陳腐化が窓の中にあるものだけを read_routing_settings の提案の行で、回答・修正値・comment・observed の理由とともに載せる —— registry 種別も含み、前回より前・この task の登録より後に決着した提案と open な提案は出ない", () => {
   const { db } = board();
   const parent = register(db, true);
+  // fable は種で frontier —— 同じ段への提案は拒まれる(issue #1666)ので、別の段を名指す
   const propose = (model: string) =>
-    proposeRoutingChange(db, parent, { op: "row", row: { provider: "anthropic", model, effort: "high" }, change: { tier: "frontier" }, rationale: "r" }, "auditor", at).question_id;
+    proposeRoutingChange(db, parent, { op: "row", row: { provider: "anthropic", model, effort: "high" }, change: { tier: model === "claude-fable-5-1" ? "economy" : "frontier" }, rationale: "r" }, "auditor", at).question_id;
   const answer = (id: string, answers: string[], comment?: string, amendment?: { tier: "economy" }) => answerQuestionViaWebui(db, getTask(db, id)!, answers, at, { comment, amendment });
   const early = propose("claude-sonnet-5-5");
   answer(early, ["reject"], "Too early.");
