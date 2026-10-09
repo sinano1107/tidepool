@@ -7,10 +7,14 @@ export type Db = Database.Database;
 /** Memory の FTS5 tokenizer と、TS 側の前処理(全角・半角形の畳み + NFC + CJK bigram + 語の先頭・末尾の . - _ 落とし)の版
  *  (spec #586 B、実測は #357 / #606、順序は #610 / #1192)。
  *  どちらかを変えたら、boot の ensureMemoryIndex が索引を作り直す。索引の列を変えたときも前処理の版を上げる。
- *  categories の M* は結合文字 M(Mc / Mn / Me)を直前の字と同じ語に入れ、前処理の正規表現(ftsText)の `\p{M}` と同じ
- *  集合を見るため(#1200 / #1205)。
+ *  categories の M* は結合文字 M(Mc / Mn / Me)を直前の字と同じ語に入れ、前処理の字クラス MEMORY_FTS_TOKEN_CLASS の
+ *  `\p{M}` と揃えるため(#1200 / #1205)。
  *  remove_diacritics 2 は、既定の 1 だと ệ(U+1EC7)のように付加記号が重なる合成済み文字が畳まれず Viet で Việt に当たらないため(#1193)。 */
 export const MEMORY_FTS_TOKENIZER = "unicode61 remove_diacritics 2 categories 'L* N* Co M*' tokenchars '_-.'";
+/** 前処理(memory.ts の ftsText と CJK の連なり)が token の字とみなす字クラス。この字は MEMORY_FTS_TOKENIZER でも語を切らない
+ *  ことを tests/memory-schema.test.ts が全コードポイントで確かめる(#1638)。tokenizer の文字列をこの定数から組み立てないのは、
+ *  V8 の `\p{…}` と同梱 SQLite の Unicode 表が同じ集合ではなく(#1573)、文字列を共有しても両側の一致は保証されないから。 */
+export const MEMORY_FTS_TOKEN_CLASS = String.raw`[\p{L}\p{N}\p{M}\p{Co}._-]`;
 export const MEMORY_PREPROCESS_VERSION = "cjk-bigram-10";
 // Shared between the fresh-board CREATE and the memory index rebuild (memory.ts).
 export const MEMORY_FTS_DDL = `CREATE VIRTUAL TABLE memory_fts USING fts5(text, title, path, tokenize = "${MEMORY_FTS_TOKENIZER}")`;
