@@ -2473,10 +2473,10 @@ function ExecutionTableCard({ settings, say, onSaved, edit }: {
             <span style={{ color: 'var(--text-muted)', minWidth: 140 }}>{row.provider} · {row.tier}</span>
             <span>
               {row.model} · {row.effort ?? 'no effort'} · ${row.price_in} / ${row.price_out}
-              {/* 行の Quarantine(ADR 0184 決定6): question は `?question=` の deep link で開く */}
+              {/* 行の Quarantine(ADR 0184 決定6): 印は契機によらず pickup と Board call から外れていることだけを言う(#1674)。question は `?question=` の deep link で開く */}
               {row.quarantine_question_id && (
                 <span style={{ color: 'var(--sun-4)' }}>
-                  {' · cannot run · '}<a href={`?question=${row.quarantine_question_id}`} style={{ color: 'var(--tide-4)' }}>see question</a>
+                  {' · out of pickup · '}<a href={`?question=${row.quarantine_question_id}`} style={{ color: 'var(--tide-4)' }}>see question</a>
                 </span>
               )}
             </span>
