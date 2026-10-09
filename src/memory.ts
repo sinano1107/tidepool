@@ -2,7 +2,7 @@ import { createRequire } from "node:module";
 import { countTokens } from "gpt-tokenizer/encoding/o200k_base";
 import { z } from "zod";
 import type { Cause } from "./cause.js";
-import { type Db, MEMORY_FTS_DDL, MEMORY_FTS_TOKENIZER, MEMORY_PREPROCESS_VERSION } from "./db.js";
+import { type Db, MEMORY_FTS_DDL, MEMORY_FTS_TOKEN_CLASS, MEMORY_FTS_TOKENIZER, MEMORY_PREPROCESS_VERSION } from "./db.js";
 import { getDisplayLanguage } from "./display-language.js";
 import { DomainError } from "./domain-error.js";
 import { appendEvent, type EventOrigin, type EventPayload, type EventRow, getEvent, isDecisionLogEntry, listEvents, listEventsOfKinds, sessionSpawnOf, sessionWindow } from "./events.js";
@@ -1406,14 +1406,14 @@ export function listMemoryEntries(
  *  (#1180)。M は tokenizer が直前の字と同じ語に入れるので、連なりも切らない(切ると `한〮abc` の U+302E が索引では `〮abc`
  *  の語頭に付き、query では語を割って自身の text に当たらない、#1205)。
  *  scx だけだと 、。「」・〜 や ㈱ など句読点・記号(P / S)も入って bigram に混ざるので、それらは連なりを切り、
- *  前処理後もそのまま残って unicode61 の区切りになる。捕獲グループは ftsQuery の split が連なりを結果に残すためにある
- *  (外すと CJK の語が query から消える)。 */
+ *  前処理後もそのまま残って unicode61 の区切りになる。字クラスは MEMORY_FTS_TOKEN_CLASS を共有する(その Co と . - _ には
+ *  CJK_SCRIPT に入る字が無いので、文字・数字・M に絞ったのと同じ一致になる、#1638)。捕獲グループは ftsQuery の split が
+ *  連なりを結果に残すためにある(外すと CJK の語が query から消える)。 */
 const CJK_SCRIPT = String.raw`[\p{scx=Han}\p{scx=Hiragana}\p{scx=Katakana}\p{scx=Hangul}]`;
-const RUN_CATEGORY = String.raw`[\p{L}\p{N}\p{M}]`;
-const CJK_RUN = new RegExp(String.raw`((?:(?=${RUN_CATEGORY})${CJK_SCRIPT})+)`, "gu");
+const CJK_RUN = new RegExp(String.raw`((?:(?=${MEMORY_FTS_TOKEN_CLASS})${CJK_SCRIPT})+)`, "gu");
 /** query の語の切れ目 = 空白と、CJK_RUN から外した CJK の句読点・記号(`注入（src/memory.ts）、drift。` の `drift` も
  *  識別子と別の語になる)。CJK_RUN と文字集合を共有するので、片方だけ字種が変わることはない。 */
-const QUERY_BREAK = new RegExp(String.raw`(?:\s|(?!${RUN_CATEGORY})${CJK_SCRIPT})+`, "u");
+const QUERY_BREAK = new RegExp(String.raw`(?:\s|(?!${MEMORY_FTS_TOKEN_CLASS})${CJK_SCRIPT})+`, "u");
 
 /** 索引と query の共通の正規化(#1189 / #1192)。query は語に割る前に通すので、語の割り方は正規化の後の字で決まる。
  *  まず全角・半角形 U+FF01–FFEE の連なりだけを NFKC で畳む(`ｶﾞｲﾄﾞ` と `ガイド`、`ｔｉｄｅｐｏｏｌ` と `tidepool`、`０１２０`
@@ -1427,14 +1427,18 @@ function ftsNormalize(value: string): string {
   return value.replace(/[\uFF01-\uFFEE]+/g, (run) => run.normalize("NFKC")).normalize("NFC");
 }
 
+/** ftsText が落とす . - _ の連なり(説明は ftsText)。 */
+const EDGE_PUNCT = new RegExp(String.raw`(?<!${MEMORY_FTS_TOKEN_CLASS})[._-]+|[._-]+(?!${MEMORY_FTS_TOKEN_CLASS})`, "gu");
+
 /** 索引と query の共通の前処理(spec #586 B / #606 / #608 / #610 / #1180)。まず ftsNormalize で正規化する。次に CJK の
  *  連なりを重なりつきの2文字語に割り(LWC 式)空白で囲む。unicode61 は CJK を語に切らない。1文字の連なりはそのまま。
  *  長音符 ー は Script=Common なので Script_Extensions で拾う(拾わないと「サーバ」が割れて当たらない)。その後で . - _ の
  *  連なりを、連なりの外側の隣が unicode61 の token にならない文字(空白・文字列の端・`)` `"` などの記号)のとき連なりごと
  *  落とす(tokenchars なので文末の `narrow.)` が `narrow` に当たらない。語中は `foo__bar` のような連なりも残す)。
- *  下の正規表現は結合文字 M(Mc / Mn / Me)を token になる隣として扱い、tokenizer も categories で M を直前の字と同じ語に
+ *  EDGE_PUNCT は結合文字 M(Mc / Mn / Me)を token になる隣として扱い、tokenizer も categories で M を直前の字と同じ語に
  *  入れる(`a` + U+030D + `-b` も `कि.foo` も1語、#1200 / #1205)ので、M について両者は同じ集合を見る。正規表現が token と
- *  みなすのに tokenizer が語を切る字は無い(Node 22 / SQLite 3.53.2 で全コードポイントを実測)。
+ *  みなすのに tokenizer が語を切る字は無い(字クラスは MEMORY_FTS_TOKEN_CLASS、tests/memory-schema.test.ts が全コードポイントで
+ *  確かめる)。
  *  bigram が先なので、CJK に接した `東京.csv` の `.` も隣が空白になって落ちる。 */
 function ftsText(value: string): string {
   return ftsNormalize(value)
@@ -1443,7 +1447,7 @@ function ftsText(value: string): string {
       const grams = chars.length === 1 ? chars : chars.slice(1).map((char, i) => chars[i] + char);
       return ` ${grams.join(" ")} `;
     })
-    .replace(/(?<![\p{L}\p{N}\p{M}\p{Co}._-])[._-]+|[._-]+(?![\p{L}\p{N}\p{M}\p{Co}._-])/gu, "");
+    .replace(EDGE_PUNCT, "");
 }
 
 /** pull の読み手: 帰属 task、そのスコープ(workspace 名 / null = 盤面全体)、agent 名(宛先)。 */

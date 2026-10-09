@@ -1,5 +1,6 @@
+import Database from "better-sqlite3";
 import { expect, it } from "vitest";
-import { openDb } from "../src/db.js";
+import { MEMORY_FTS_TOKEN_CLASS, MEMORY_FTS_TOKENIZER, openDb } from "../src/db.js";
 
 /** Memory のエントリ表(spec #586 A / issue #590)。表は events の投影なので、ここで
  *  言うのは CHECK が値域の外を拒むことだけ —— 読み書きの挙動はドメイン層が言う。 */
@@ -63,6 +64,24 @@ it("fresh 盤面に Memory の FTS 仮想表と、tokenizer id + 前処理の版
     { tokenizer: "unicode61 remove_diacritics 2 categories 'L* N* Co M*' tokenchars '_-.'", preprocess_version: "cjk-bigram-10" },
   ]);
   db.close();
+});
+
+/** 前処理の正規表現が token とみなす字は、unicode61 でも語を切らない(#1638)。逆向きは #1573。
+ *  全コードポイントを走査するので、better-sqlite3 / Node の更新で Unicode 表がずれても捕まる。 */
+it("MEMORY_FTS_TOKEN_CLASS に入る字は、MEMORY_FTS_TOKENIZER で x + 字 + y が1語になる(issue #1638)", () => {
+  const tokenChar = new RegExp(`^${MEMORY_FTS_TOKEN_CLASS}$`, "u");
+  const codePoints: number[] = [];
+  for (let cp = 0; cp <= 0x10ffff; cp++) if (tokenChar.test(String.fromCodePoint(cp))) codePoints.push(cp);
+  const db = new Database(":memory:");
+  db.exec(`CREATE VIRTUAL TABLE t USING fts5(text, tokenize = "${MEMORY_FTS_TOKENIZER}"); CREATE VIRTUAL TABLE v USING fts5vocab(t, instance)`);
+  const insert = db.prepare("INSERT INTO t (rowid, text) VALUES (?, ?)");
+  db.transaction(() => codePoints.forEach((cp) => insert.run(cp, `x${String.fromCodePoint(cp)}y`)))();
+  const splitLabels = (db.prepare("SELECT doc FROM v GROUP BY doc HAVING count(*) != 1").pluck().all() as number[]).map(
+    (cp) => `U+${cp.toString(16).toUpperCase().padStart(4, "0")}`,
+  );
+  db.close();
+  expect(codePoints.length).toBeGreaterThan(0);
+  expect(splitLabels.length, `語が切れた字: ${splitLabels.slice(0, 10).join(" ")}`).toBe(0);
 });
 
 it("episode_markers.kind の CHECK は memory マーカーを受ける(issue #591)", () => {
