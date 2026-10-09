@@ -75,9 +75,10 @@ it("MEMORY_FTS_TOKEN_CLASS に入る字は、MEMORY_FTS_TOKENIZER で x + 字 + 
   const db = new Database(":memory:");
   db.exec(`CREATE VIRTUAL TABLE t USING fts5(text, tokenize = "${MEMORY_FTS_TOKENIZER}"); CREATE VIRTUAL TABLE v USING fts5vocab(t, instance)`);
   const insert = db.prepare("INSERT INTO t (rowid, text) VALUES (?, ?)");
-  db.transaction(() => codePoints.forEach((cp, i) => insert.run(i, `x${String.fromCodePoint(cp)}y`)))();
-  const docs = db.prepare("SELECT doc FROM v GROUP BY doc HAVING count(*) != 1").pluck().all() as number[];
-  const split = docs.map((doc) => `U+${(codePoints[doc] ?? -1).toString(16).toUpperCase().padStart(4, "0")}`);
+  db.transaction(() => codePoints.forEach((cp) => insert.run(cp, `x${String.fromCodePoint(cp)}y`)))();
+  const split = (db.prepare("SELECT doc FROM v GROUP BY doc HAVING count(*) != 1").pluck().all() as number[]).map(
+    (cp) => `U+${cp.toString(16).toUpperCase().padStart(4, "0")}`,
+  );
   db.close();
   expect(codePoints.length).toBeGreaterThan(0);
   expect(split.length, `語が切れた字: ${split.slice(0, 10).join(" ")}`).toBe(0);
