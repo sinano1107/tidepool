@@ -1427,12 +1427,15 @@ function ftsNormalize(value: string): string {
   return value.replace(/[\uFF01-\uFFEE]+/g, (run) => run.normalize("NFKC")).normalize("NFC");
 }
 
+/** ftsText が落とす . - _ の連なり(説明は ftsText)。 */
+const EDGE_PUNCT = new RegExp(String.raw`(?<!${MEMORY_FTS_TOKEN_CLASS})[._-]+|[._-]+(?!${MEMORY_FTS_TOKEN_CLASS})`, "gu");
+
 /** 索引と query の共通の前処理(spec #586 B / #606 / #608 / #610 / #1180)。まず ftsNormalize で正規化する。次に CJK の
  *  連なりを重なりつきの2文字語に割り(LWC 式)空白で囲む。unicode61 は CJK を語に切らない。1文字の連なりはそのまま。
  *  長音符 ー は Script=Common なので Script_Extensions で拾う(拾わないと「サーバ」が割れて当たらない)。その後で . - _ の
  *  連なりを、連なりの外側の隣が unicode61 の token にならない文字(空白・文字列の端・`)` `"` などの記号)のとき連なりごと
  *  落とす(tokenchars なので文末の `narrow.)` が `narrow` に当たらない。語中は `foo__bar` のような連なりも残す)。
- *  下の正規表現は結合文字 M(Mc / Mn / Me)を token になる隣として扱い、tokenizer も categories で M を直前の字と同じ語に
+ *  EDGE_PUNCT は結合文字 M(Mc / Mn / Me)を token になる隣として扱い、tokenizer も categories で M を直前の字と同じ語に
  *  入れる(`a` + U+030D + `-b` も `कि.foo` も1語、#1200 / #1205)ので、M について両者は同じ集合を見る。正規表現が token と
  *  みなすのに tokenizer が語を切る字は無い(字クラスは MEMORY_FTS_TOKEN_CLASS、tests/memory-schema.test.ts が全コードポイントで
  *  確かめる)。
@@ -1444,7 +1447,7 @@ function ftsText(value: string): string {
       const grams = chars.length === 1 ? chars : chars.slice(1).map((char, i) => chars[i] + char);
       return ` ${grams.join(" ")} `;
     })
-    .replace(new RegExp(String.raw`(?<!${MEMORY_FTS_TOKEN_CLASS})[._-]+|[._-]+(?!${MEMORY_FTS_TOKEN_CLASS})`, "gu"), "");
+    .replace(EDGE_PUNCT, "");
 }
 
 /** pull の読み手: 帰属 task、そのスコープ(workspace 名 / null = 盤面全体)、agent 名(宛先)。 */
