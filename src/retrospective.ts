@@ -299,11 +299,18 @@ async function attributeSecondRound(db: Db, deps: RetrospectiveCallDeps, objecte
   });
 }
 
-/** 第2回の入力: 帰責の入力(当時の decision log = その注釈より前の entry)に、その異議群を覆う RCA 子の decision log と完了 result を足す。 */
-const secondRoundInput = (db: Db, objectedId: string, attribution: SecondRoundSource): AttributionInput => ({
-  ...objectionInput(db, attribution),
-  rca_findings: rcaChildren(db, objectedId, bundleName(attribution)).flatMap((r) => decisionLogText(db, r.id)),
-});
+/** 第2回の入力: 当時の decision log は異議群の初回の帰責(未帰責なら覆う修理子の登録)より前で切り、
+ *  覆う RCA 子の decision log と完了 result を足す。起草の撃ち直しも同じ出所から組む。 */
+function secondRoundInput(db: Db, objectedId: string, attribution: SecondRoundSource): AttributionInput {
+  const initial = listEvents(db, objectedId).find((e) =>
+    e.payload.kind === "objection_attributed" && e.payload.round === "initial" &&
+    e.payload.entry_id === attribution.entry_id && bundleName(e.payload) === bundleName(attribution),
+  );
+  return {
+    ...objectionInput(db, { ...attribution, id: initial?.id ?? repairRegistered(db, objectedId, bundleName(attribution)) }),
+    rca_findings: rcaChildren(db, objectedId, bundleName(attribution)).flatMap((r) => decisionLogText(db, r.id)),
+  };
+}
 
 const fireAndForget = (fired: Promise<void>, target: string) => void fired.catch((err) => console.error(`[retrospective] ${target}: ${String(err)}`));
 
