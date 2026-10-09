@@ -608,7 +608,7 @@ it("merge 回答は question の workspace で live CI を確認してから実 
 });
 
 // ADR 0227 決定2・3: check 未報告の PR への「merge」回答は、盤面の最後の push から5分の猶予の間だけ拒まれる
-async function answerMergeOnUnreportedCi(minutesSincePrOpened: number) {
+function answerMergeOnUnreportedCi(minutesSincePrOpened: number) {
   db = openDb(":memory:");
   const work = registerTask(
     db,
@@ -643,7 +643,7 @@ async function answerMergeOnUnreportedCi(minutesSincePrOpened: number) {
 }
 
 it("check 未報告の PR への merge 回答は、PR を開いてから5分の猶予の内なら拒否され question は開いたまま", async () => {
-  const { github, answer } = await answerMergeOnUnreportedCi(4);
+  const { github, answer } = answerMergeOnUnreportedCi(4);
 
   await expect(answer).rejects.toThrow(
     new DomainError(
@@ -655,7 +655,7 @@ it("check 未報告の PR への merge 回答は、PR を開いてから5分の�
 });
 
 it("猶予の5分を過ぎても check 未報告の PR への merge 回答は、merge まで進む", async () => {
-  const { github, answer } = await answerMergeOnUnreportedCi(5);
+  const { github, answer } = answerMergeOnUnreportedCi(5);
 
   await expect(answer).resolves.toMatchObject({ status: "done" });
   expect(github.merged).toEqual([{ path: "/workspaces/product", number: 42 }]);
