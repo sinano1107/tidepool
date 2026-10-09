@@ -26,6 +26,7 @@ import { appendEvent, type EventPayload } from "./events.js";
 import type { ExecutionSetting } from "./execution-setting.js";
 import { buildMemoryInjection, buildMetaReviewMaterial, type InjectionQuery, recordMemoryInjection, recordMetaReviewMaterial, WORKER_MEMORY_VERBS } from "./memory.js";
 import { META_REVIEW_SUBJECTS, metaReviewSubjectOf } from "./meta-review.js";
+import { projectWhenTranscriptCloses } from "./precedent.js";
 import type { ContainedProcess, ContainerSpawn, ProcessContainers } from "./process-container.js";
 import { loadRegistry, type RegistrySource } from "./registry.js";
 import { resolveTaskAgent, type Task } from "./tasks.js";
@@ -1180,6 +1181,12 @@ export class CodexWorker implements WorkerAdapter {
       });
       removeTaskTemp();
       this.options.onWorkerExited?.(task.id, exit);
+      // ADR 0083 追記10: Claude adapter と同じく worker_exited を書いたあとに Precedent を投影する。
+      projectWhenTranscriptCloses(this.options.db, transcript.stream, {
+        workerSpawnedEventId: spawned,
+        transcriptPath: transcript.streamPath,
+        taskId: task.id,
+      });
     };
     // ADR 0109 決定4: root の exit は容器に残るものが孤児である証拠 —— 読み切りを待たずに
     // 強制回収を撃つ(ADR 0201 決定1)。Harness 非依存に、盤面 supervisor 経由。

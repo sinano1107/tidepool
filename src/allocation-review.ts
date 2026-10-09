@@ -19,9 +19,9 @@ export interface AllocationJudgment {
 }
 
 /** Board call に渡す入力。**model 名を持つのは Board call だけ** —— review session
- *  はこれを見ない(ADR 0111 決定4)。`usage` / `actions` の null は「観測が無い」で
- *  あって「何もしなかった」ではない —— worker_exited の usage 欠測、Precedent の
- *  episode 行が無い session(codex は transcript を投影しない)がそれぞれに当たる。 */
+ *  はこれを見ない(ADR 0111 決定4)。`usage` の null は worker_exited の usage 欠測、`actions` の null は Precedent の
+ *  episode 行が無い session と Codex の session —— どちらも「観測が無い」であって「何もしなかった」ではない。Codex の Episode は構造マーカーを持たない
+ *  (compaction は stdout に出ず、commit の item も advisor も無い)ので、空の列を 0 回にしない(ADR 0083 追記10)。 */
 export interface AllocationReviewInput {
   verdict: string | null;
   findings: string | null;
@@ -69,8 +69,9 @@ export function buildAllocationReviewInput(data: {
     },
     tier: data.tier,
     usage: data.exited?.usage ?? null,
+    // 観測できないかどうかはマーカーの有無ではなく Harness で決める(ADR 0083 追記10)
     actions:
-      data.markers === null
+      data.markers === null || data.spawned.harness === "codex"
         ? null
         : { advisor_consultations: count("advisor"), compactions: count("compaction"), commits: count("commit") },
   };

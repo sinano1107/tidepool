@@ -10,19 +10,29 @@ import { entryObjections } from "./triage.js";
  *  Episode を決定論的に組む(ADR 0083 決定8 / 追記 / 追記 2、issue #356)。
  *  LLM は使わない。意味付けは meta-review の仕事であって、ここの仕事ではない。 */
 
-/** どの tool のどの引数を行動行に写すか、1箇所の表(issue #356 Key interfaces)。
+/** どの tool のどの引数を行動行に写すか、1箇所の表(issue #356 Key interfaces / ADR 0083 追記10)。
  *  ここに無い tool は**名前だけ**の行になる — それは欠測ではなく「引数を抽出
  *  しない」という決定である。`Task` と `Agent` は同じ subagent 起動の綴り違い
- *  (実 CLI は `Agent`、init の `tools` には `Task` が残る — ADR 0083 追記 2)。 */
-const TOOL_ARG_FIELD: Record<string, string> = {
-  Read: "file_path",
-  Write: "file_path",
-  Edit: "file_path",
-  NotebookEdit: "notebook_path",
-  Bash: "command",
-  Task: "description",
-  Agent: "description",
+ *  (実 CLI は `Agent`、init の `tools` には `Task` が残る — ADR 0083 追記 2)。
+ *  `command_execution` / `file_change` は Codex の item 種別で、引数は item そのものから読む。 */
+const inputField = (name: string) => (input: Record<string, unknown>) => input[name];
+const TOOL_ARGS: Record<string, (input: Record<string, unknown>) => unknown> = {
+  Read: inputField("file_path"),
+  Write: inputField("file_path"),
+  Edit: inputField("file_path"),
+  NotebookEdit: inputField("notebook_path"),
+  Bash: inputField("command"),
+  Task: inputField("description"),
+  Agent: inputField("description"),
+  command_execution: inputField("command"),
+  file_change: (item) =>
+    Array.isArray(item.changes) ? item.changes.map((c) => (c as { path?: unknown }).path).filter((p) => typeof p === "string").join("\n") : null,
 };
+
+function readArgs(tool: string, input: unknown): string | null {
+  const value = typeof input === "object" && input !== null ? TOOL_ARGS[tool]?.(input as Record<string, unknown>) : null;
+  return typeof value === "string" ? value : null;
+}
 
 /** `system` 行の subtype → 構造マーカー。`compact_boundary` は**想定の綴り**で、
  *  実物は #386 のフィクスチャにも Pi の worker-logs にも無い。外れていても
@@ -53,13 +63,20 @@ const INTERPRETED_SYSTEM_SUBTYPES = new Set([
   ...Object.keys(STRUCTURAL_MARKER_SUBTYPE),
 ]);
 
+/** Codex の stdout の3値(ADR 0083 追記10)。解釈するのは tool 呼び出しに当たる item の `item.completed` だけ。
+ *  `item.started` は種別を問わず既知として捨てる(同じ id の `item.completed` が来る)。それ以外の観測していない
+ *  行種(`item.updated`)と item 種別の `item.completed`(`reasoning` など)は未知に置く —— 出たときに形式変更の信号になる。 */
+const CODEX_ACTION_ITEMS = new Set(["mcp_tool_call", "command_execution", "file_change", "collab_tool_call"]);
+const CODEX_IGNORED_TYPES = new Set(["thread.started", "turn.started", "turn.completed", "item.started", "error", "turn.failed"]);
+const CODEX_IGNORED_ITEMS = new Set(["agent_message", "error"]);
+
 export interface EpisodeAction {
   /** 行動列の中の位置(0 始まり)。マーカーはこの位置を指す。 */
   index: number;
   tool: string;
-  /** `TOOL_ARG_FIELD` で抽出した引数。null は「この tool は引数を抽出しない」。 */
+  /** `TOOL_ARGS` で抽出した引数。null は「この tool は引数を抽出しない」。 */
   args: string | null;
-  /** tool_result の `is_error === true` だけが失敗。欠落は成功(実測)。 */
+  /** tool_result の `is_error === true` だけが失敗。欠落は成功(実測)。Codex は item の `status === "failed"`(ADR 0083 追記10)。 */
   failed: boolean;
   /** transcript 行への参照。派生は薄く、原文は transcript が正本(ADR 0083 追記)。 */
   transcriptUuid: string;
@@ -123,7 +140,7 @@ export interface EpisodeLineStats {
   unknown: number;
   /** 未知の内訳。`type`、subtype があれば `type/subtype`。壊れた行は
    *  `unparseable`。増減が投影器の変更か CLI の変更かは、これと
-   *  `claudeCodeVersion` の対で見分ける。 */
+   *  `cliVersion` の対で見分ける。 */
   unknownKinds: Record<string, number>;
 }
 
@@ -138,8 +155,8 @@ export interface Episode {
   definitionVersion: string | null;
   /** 版2: この投影器の版。派生は作り直せるので、読み方が変われば版を上げる。 */
   extractorVersion: string;
-  /** 版3: transcript を書いた CLI の版(init 行)。 */
-  claudeCodeVersion: string | null;
+  /** 版3: transcript を書いた CLI の版。Claude は init 行の観測値、Codex は `worker_spawned.cli_version`(ADR 0083 追記10)。 */
+  cliVersion: string | null;
   /** session 単位の outcome のうち、exit の時点で確定しているもの。あとから
    *  届く事実(PR merge、異議、表示済み)は投影に焼かず読み出し時に結ぶ。 */
   completed: { result: string | null; handoffPresent: boolean } | null;
@@ -178,29 +195,46 @@ function countUnknown(lines: EpisodeLineStats, key: string): void {
   lines.unknownKinds[key] = (lines.unknownKinds[key] ?? 0) + 1;
 }
 
-/** 純関数。DB もファイルシステムも触らない。フィクスチャ2本から Episode を
- *  組めることが受け入れの中心(issue #356)。 */
-export function projectEpisode(input: ProjectEpisodeInput): Episode {
-  const spawned = input.events.find((e) => e.id === input.workerSpawnedEventId);
-  if (!spawned || spawned.payload.kind !== "worker_spawned" || spawned.task_id === null) {
-    throw new Error(`no worker_spawned event ${input.workerSpawnedEventId}`);
-  }
-  const actions: EpisodeAction[] = [];
-  const markers: EpisodeMarker[] = [];
-  const byToolUseId = new Map<string, EpisodeAction>();
-  /** tool_result に写った event id → その `log_decision` / memory verb 行動の位置。 */
-  const loggedAt = new Map<number, { position: number; transcriptUuid: string }>();
-  const pulledAt = new Map<number, { position: number; transcriptUuid: string }>();
-  const lines: EpisodeLineStats = {
-    total: 0,
-    interpreted: 0,
-    ignored: 0,
-    unknown: 0,
-    unknownKinds: {},
-  };
-  let claudeCodeVersion: string | null = null;
+/** 行の読み手が返すもの(ADR 0083 追記10)。session の窓・outcome・event id の結合は投影器が共有する。 */
+interface LineReading {
+  actions: EpisodeAction[];
+  /** 構造マーカー(compaction / commit / advisor)。 */
+  markers: EpisodeMarker[];
+  /** tool 結果に写った event id → その `log_decision` / memory verb 行動の位置。 */
+  loggedAt: Map<number, { position: number; transcriptUuid: string }>;
+  pulledAt: Map<number, { position: number; transcriptUuid: string }>;
+  lines: EpisodeLineStats;
+  cliVersion: string | null;
+}
 
-  for (const line of input.transcriptLines) {
+const emptyReading = (): LineReading => ({
+  actions: [],
+  markers: [],
+  loggedAt: new Map(),
+  pulledAt: new Map(),
+  lines: { total: 0, interpreted: 0, ignored: 0, unknown: 0, unknownKinds: {} },
+  cliVersion: null,
+});
+
+/** 行動の応答に写った盤面発行の event id を、その行動の位置に結ぶ。tool 名で絞るのは、他の verb の応答に
+ *  `event_id` が生えたときに黙って decision / memory として結ばれないようにするため。 */
+function bindEventId(reading: LineReading, action: EpisodeAction, content: unknown, transcriptUuid: string): void {
+  const boundAt = /__log_decision$/.test(action.tool)
+    ? reading.loggedAt
+    : PULL_TOOL.test(action.tool)
+      ? reading.pulledAt
+      : null;
+  const eventId = boundAt && readEventId(content);
+  if (boundAt && eventId !== null) boundAt.set(eventId, { position: action.index, transcriptUuid });
+}
+
+/** Claude Code の stream-json の行の読み手。 */
+function readClaudeLines(transcriptLines: string[]): LineReading {
+  const reading = emptyReading();
+  const { actions, markers, lines } = reading;
+  const byToolUseId = new Map<string, EpisodeAction>();
+
+  for (const line of transcriptLines) {
     // 行の切れ目そのもの(末尾改行が生む空文字を含む)は行ではない
     if (!line.trim()) continue;
     lines.total += 1;
@@ -230,7 +264,7 @@ export function projectEpisode(input: ProjectEpisodeInput): Episode {
     lines.interpreted += 1;
 
     const uuid = typeof parsed.uuid === "string" ? parsed.uuid : "";
-    claudeCodeVersion = readInitVersion(parsed) ?? claudeCodeVersion;
+    reading.cliVersion = readInitVersion(parsed) ?? reading.cliVersion;
     const structural = subtype === null ? undefined : STRUCTURAL_MARKER_SUBTYPE[subtype];
     if (type === "system" && structural) {
       markers.push({
@@ -273,12 +307,10 @@ export function projectEpisode(input: ProjectEpisodeInput): Episode {
         });
       }
       if (blockType === "tool_use" && typeof name === "string" && typeof id === "string") {
-        const field = TOOL_ARG_FIELD[name];
-        const value = field ? (toolInput as Record<string, unknown> | undefined)?.[field] : null;
         const action: EpisodeAction = {
           index: actions.length,
           tool: name,
-          args: typeof value === "string" ? value : null,
+          args: readArgs(name, toolInput),
           failed: false,
           transcriptUuid: uuid,
           toolUseId: id,
@@ -292,20 +324,74 @@ export function projectEpisode(input: ProjectEpisodeInput): Episode {
         const action = byToolUseId.get(tool_use_id);
         if (!action) continue;
         action.failed = is_error === true;
-        // tool 名で絞るのは、他の verb の応答に `event_id` が生えたときに黙って
-        // decision / memory として結ばれないようにするため
-        const boundAt = /__log_decision$/.test(action.tool)
-          ? loggedAt
-          : PULL_TOOL.test(action.tool)
-            ? pulledAt
-            : null;
-        const eventId = boundAt && readEventId((block as Record<string, unknown>).content);
-        if (boundAt && eventId !== null) {
-          boundAt.set(eventId, { position: action.index, transcriptUuid: uuid });
-        }
+        bindEventId(reading, action, (block as Record<string, unknown>).content, uuid);
       }
     }
   }
+  return reading;
+}
+
+/** `codex exec --json` の stdout の行の読み手(ADR 0083 追記10)。構造マーカーは持たない —— compaction は stdout に
+ *  出ず、commit の専用 item は無く、advisor は Codex に無い。subagent の中の行動は親 stdout に出ないので
+ *  `subagent` は常に false。CLI の版は stdout に無く、`worker_spawned` の固定版の値を刻む。 */
+function readCodexLines(transcriptLines: string[], cliVersion: string): LineReading {
+  const reading = { ...emptyReading(), cliVersion };
+  const { actions, lines } = reading;
+  for (const line of transcriptLines) {
+    if (!line.trim()) continue;
+    lines.total += 1;
+    const parsed = parseStreamLine(line);
+    if (parsed === null) {
+      countUnknown(lines, "unparseable");
+      continue;
+    }
+    const type = String(parsed.type);
+    const item = typeof parsed.item === "object" && parsed.item !== null ? (parsed.item as Record<string, unknown>) : null;
+    const itemType = item ? String(item.type) : null;
+    if (CODEX_IGNORED_TYPES.has(type) || (type === "item.completed" && CODEX_IGNORED_ITEMS.has(itemType ?? ""))) {
+      lines.ignored += 1;
+      continue;
+    }
+    if (type !== "item.completed" || !item || !CODEX_ACTION_ITEMS.has(itemType ?? "")) {
+      countUnknown(lines, itemType === null ? type : `${type}/${itemType}`);
+      continue;
+    }
+    lines.interpreted += 1;
+    const tool =
+      itemType === "mcp_tool_call"
+        ? `mcp__${String(item.server)}__${String(item.tool)}`
+        : itemType === "collab_tool_call"
+          ? String(item.tool)
+          : itemType!;
+    const id = String(item.id);
+    const action: EpisodeAction = {
+      index: actions.length,
+      tool,
+      args: readArgs(tool, item),
+      failed: item.status === "failed",
+      transcriptUuid: id,
+      toolUseId: id,
+      subagent: false,
+      subagentUsage: null,
+    };
+    actions.push(action);
+    bindEventId(reading, action, (item.result as { content?: unknown } | null)?.content, id);
+  }
+  return reading;
+}
+
+/** 純関数。DB もファイルシステムも触らない。フィクスチャ2本から Episode を
+ *  組めることが受け入れの中心(issue #356)。行の読み手は `worker_spawned.harness` で選ぶ(ADR 0083 追記10)
+ *  —— transcript の形からも Provider からも推測しない。 */
+export function projectEpisode(input: ProjectEpisodeInput): Episode {
+  const spawned = input.events.find((e) => e.id === input.workerSpawnedEventId);
+  if (!spawned || spawned.payload.kind !== "worker_spawned" || spawned.task_id === null) {
+    throw new Error(`no worker_spawned event ${input.workerSpawnedEventId}`);
+  }
+  const { actions, markers, loggedAt, pulledAt, lines, cliVersion } =
+    spawned.payload.harness === "codex"
+      ? readCodexLines(input.transcriptLines, spawned.payload.cli_version)
+      : readClaudeLines(input.transcriptLines);
 
   const { exited, inSession } = sessionWindow(input.events, spawned);
   const exitPayload = exited?.payload.kind === "worker_exited" ? exited.payload : null;
@@ -327,7 +413,7 @@ export function projectEpisode(input: ProjectEpisodeInput): Episode {
     registryCommit: spawned.payload.registry_commit,
     definitionVersion: spawned.payload.definition_version,
     extractorVersion: input.extractorVersion,
-    claudeCodeVersion,
+    cliVersion,
     completed:
       completed?.payload.kind === "task_completed"
         ? { result: completed.payload.result, handoffPresent: completed.payload.handoff_present }
@@ -402,11 +488,31 @@ const PULL_TOOL = new RegExp(`__(${Object.keys(PULL_VERBS).join("|")})$`);
 
 /** 投影器の版(ADR 0083 追記 2 決定7)。読み方を変えたらここを上げる — 派生表は
  *  記録から何度でも作り直せるので、古い版の Episode を消す必要はない。 */
-export const EXTRACTOR_VERSION = "5";
+export const EXTRACTOR_VERSION = "6";
 
 /** 1つの worker session を投影して派生表に書く。同じ session を同じ投影器の版で
  *  二度書くことはない(`UNIQUE (worker_spawned_event_id, extractor_version)`)—
  *  戻り値は書いた episode の id、既にあるか投影できなかったときは null。 */
+/** worker adapter の終了処理から呼ぶ(issue #356 / ADR 0083 追記10)。呼ぶのは **worker_exited を書いたあと**
+ *  —— でなければ exit / usage 参照が投影に入らない。投影は transcript の**書き込みストリームが閉じたあと** ——
+ *  stdout は pipe なので読み切り(child の "close")の時点でもファイルが flush 済みとは限らない。派生表なので
+ *  失敗しても走らせて危険な状態にはならず(ADR 0083 追記 2)、盤面を落とすほうが害が大きいので失敗は記録して流す。 */
+export function projectWhenTranscriptCloses(
+  db: Db,
+  stream: { readonly closed: boolean; once(event: "close", listener: () => void): unknown },
+  opts: { workerSpawnedEventId: number; transcriptPath: string; taskId: string },
+): void {
+  const project = () => {
+    try {
+      projectAndPersist(db, opts);
+    } catch (err) {
+      console.error(`[worker] precedent projection failed for task ${opts.taskId}:`, err);
+    }
+  };
+  if (stream.closed) project();
+  else stream.once("close", project);
+}
+
 export function projectAndPersist(
   db: Db,
   opts: { workerSpawnedEventId: number; transcriptPath: string },
@@ -432,7 +538,7 @@ export function projectAndPersist(
     const { changes, lastInsertRowid } = db
       .prepare(
         `INSERT INTO episodes (worker_spawned_event_id, extractor_version, task_id, workspace, agent,
-           registry_commit, definition_version, claude_code_version, completed_handoff, completed_result,
+           registry_commit, definition_version, cli_version, completed_handoff, completed_result,
            exit_code, signal, worker_exited_event_id, lines, unrecognized_format)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT (worker_spawned_event_id, extractor_version) DO NOTHING`,
@@ -445,7 +551,7 @@ export function projectAndPersist(
         spawned.worker_id,
         episode.registryCommit,
         episode.definitionVersion,
-        episode.claudeCodeVersion,
+        episode.cliVersion,
         episode.completed ? Number(episode.completed.handoffPresent) : null,
         episode.completed?.result ?? null,
         episode.exitCode,
@@ -626,7 +732,7 @@ export function listEpisodes(
     registryCommit: row.registry_commit,
     definitionVersion: row.definition_version,
     extractorVersion: row.extractor_version,
-    claudeCodeVersion: row.claude_code_version,
+    cliVersion: row.cli_version,
     completed:
       row.completed_handoff === null
         ? null
@@ -663,8 +769,7 @@ export function listEpisodes(
 }
 
 /** 1 session の行動列マーカーの種別だけを順に返す(配分評価の入力、ADR 0111
- *  決定4)。episode 行が無ければ null —— transcript を投影しない Harness(codex)
- *  や投影前の session を「マーカーが1つも無かった」と混ぜない。 */
+ *  決定4)。episode 行が無ければ null —— 投影前の session を「マーカーが1つも無かった」と混ぜない。 */
 export function episodeMarkerKinds(db: Db, workerSpawnedEventId: number): MarkerKind[] | null {
   const episode = db
     .prepare("SELECT id FROM episodes WHERE worker_spawned_event_id = ? AND extractor_version = ?")
@@ -733,7 +838,7 @@ interface EpisodeRow {
   agent: string;
   registry_commit: string | null;
   definition_version: string | null;
-  claude_code_version: string | null;
+  cli_version: string | null;
   completed_handoff: number | null;
   completed_result: string | null;
   exit_code: number | null;

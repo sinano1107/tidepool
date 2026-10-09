@@ -22,7 +22,7 @@ it("投影した Episode は (workspace, agent) で時系列に引け、行動�
   expect(episodes).toHaveLength(1);
   const [episode] = episodes;
   expect(episode!.registryCommit).toBe("85c5bbb987ce03e6bce0b46f64ac6c511e3e69e2");
-  expect(episode!.claudeCodeVersion).toBe("2.1.237");
+  expect(episode!.cliVersion).toBe("2.1.237");
   expect(episode!.actions.map((a) => a.tool)).toEqual([
     "mcp__tidepool__get_current_task",
     "Write",
@@ -151,7 +151,7 @@ it("decision マーカーの outcome は読み出し時に entry_id で結ばれ
 
   const [episode] = listEpisodes(db, { workspace: "sandbox", agent: "tako" });
   const decisions = episode!.markers.filter((m) => m.kind === "decision");
-  expect(episode!.extractorVersion).toBe("5");
+  expect(episode!.extractorVersion).toBe("6");
   expect(decisions.map((m) => [m.eventId, m.line, m.displayed, m.objections, m.cause])).toEqual([
     [6, "kept the note to three bullets", true, [], null],
     [7, "kept the note to three bullets", true, ["2回目は要らない"], "preference"],

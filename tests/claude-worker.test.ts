@@ -1736,7 +1736,7 @@ describe("ClaudeCodeWorker", () => {
     });
     expect(episode.taskId).toBe(task.id);
     expect(episode.actions.map((a) => [a.tool, a.args])).toEqual([["Bash", "ls"]]);
-    expect(episode.claudeCodeVersion).toBe("9.9.9");
+    expect(episode.cliVersion).toBe("9.9.9");
     // exit の事実は投影の入力 — worker_exited を書いたあとに投影している証拠
     expect(episode.exitCode).toBe(0);
     expect(episode.workerExitedEventId).toBe(

@@ -430,9 +430,9 @@ export function openDb(path: string): Db {
       agent                   TEXT NOT NULL,
       registry_commit         TEXT,
       definition_version      TEXT,
-      -- transcript を書いた CLI の版(init 行)。未知行の増減が投影器の変更か
+      -- transcript を書いた CLI の版(Claude は init 行、Codex は worker_spawned.cli_version)。未知行の増減が投影器の変更か
       -- CLI の変更かを分ける唯一の手がかり(ADR 0083 追記 2 決定7)。
-      claude_code_version     TEXT,
+      cli_version             TEXT,
       -- 完了の outcome。null = この session では完了していない(handoff の
       -- 有無と result の有無は別なので、完了したかどうかは handoff 列で見る)。
       completed_handoff       INTEGER,

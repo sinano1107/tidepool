@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { expect, it } from "vitest";
 import type { EventRow } from "../src/events.js";
 import { entriesReadBefore, entriesSeenBefore, projectEpisode } from "../src/precedent.js";
-import { toolCall, WORKER_SPAWNED } from "./harness.js";
+import { QUIET_EXIT, toolCall, WORKER_SPAWNED } from "./harness.js";
 
 /** #386 が取った実物の worker session — 2.1.237 の CLI が書いた transcript と、
  *  その session を挟む盤面のイベント。Precedent の投影は決定論的なので、期待値は
@@ -208,9 +208,9 @@ it("Episode は3つの版(registry_commit / 投影器 / transcript を書いた 
   expect(episode.registryCommit).toBe("85c5bbb987ce03e6bce0b46f64ac6c511e3e69e2");
   expect(episode.definitionVersion).toBe("0.1.1");
   expect(episode.extractorVersion).toBe("test");
-  expect(episode.claudeCodeVersion).toBe("2.1.237");
+  expect(episode.cliVersion).toBe("2.1.237");
   // init 行の無い transcript は「観測できなかった」— 推測しない
-  expect(project({ transcriptLines: [] }).claudeCodeVersion).toBeNull();
+  expect(project({ transcriptLines: [] }).cliVersion).toBeNull();
 });
 
 it("session 単位の outcome は完了・exit・消費の正本への参照で、トークンは写さない(ADR 0083 追記 2)", () => {
@@ -365,4 +365,73 @@ it("「D の前に読んだ記憶」(read)は read_memory が返した id だけ
 
   expect(entriesReadBefore(episode, events, 9)).toEqual([2, 3]);
   expect(entriesSeenBefore(episode, events, 9)).toEqual([1, 2, 3]);
+});
+
+/** run A(#1231 の測定): 盤面と同じ argv の `codex exec --json` が書いた stdout と、それを挟む合成の events。 */
+const codexTranscriptLines = () =>
+  readFileSync(join(import.meta.dirname, "fixtures", "worker-session-codex-0.147.0.stream.jsonl"), "utf8").split("\n");
+const codexEvents = (): EventRow[] => {
+  const task = "t1231";
+  const at = "2026-10-09T00:00:00.000Z";
+  return [
+    { id: 400, task_id: task, worker_id: "codex-agent", origin: "board", kind: "worker_spawned", payload: { ...WORKER_SPAWNED, harness: "codex", cli_version: "codex-cli 0.147.0" }, created_at: at },
+    { id: 500, task_id: task, worker_id: "codex-agent", origin: "worker", kind: "memory_pulled", payload: { kind: "memory_pulled", verb: "read_memory", input: {}, returned_ids: [7], watermark: 3 }, created_at: at },
+    { id: 501, task_id: task, worker_id: "codex-agent", origin: "worker", kind: "decision_logged", payload: { kind: "decision_logged", line: "chose path A" }, created_at: at },
+    { id: 502, task_id: task, worker_id: "codex-agent", origin: "board", kind: "worker_exited", payload: { kind: "worker_exited", ...QUIET_EXIT, worker_spawned_event_id: 400, output_closed: true, usage: null }, created_at: at },
+  ];
+};
+const projectCodex = (transcriptLines = codexTranscriptLines()) =>
+  projectEpisode({ transcriptLines, events: codexEvents(), workerSpawnedEventId: 400, extractorVersion: "test" });
+
+it("Codex 経路の session は stdout の item.completed から行動列を組み、mcp_tool_call の tool 名は mcp__<server>__<tool> になり、失敗は status failed だけ(ADR 0083 追記10)", () => {
+  const episode = projectCodex();
+
+  expect(episode.actions.map((a) => [a.tool, a.args, a.failed])).toEqual([
+    ["mcp__tidepool__get_current_task", null, false],
+    ["mcp__tidepool__read_memory", null, false],
+    ["mcp__tidepool__log_decision", null, false],
+    ["mcp__tidepool__read_memory", null, true],
+    ["mcp__tidepool__search_memory", null, true],
+    ["command_execution", "/bin/bash -lc 'ls -a'", false],
+    ["file_change", "/home/choumasaki.guest/ws1231/note.txt", false],
+    ["mcp__tidepool__complete_task", null, false],
+  ]);
+  // 行の参照は item の id
+  expect(episode.actions[1]).toMatchObject({ transcriptUuid: "item_7", toolUseId: "item_7" });
+});
+
+it("Codex 経路でも memory_pulled / decision_logged は tool 結果の event id の完全一致で位置を持ち、D の前の read_memory が返した id が read になる(ADR 0083 追記10)", () => {
+  const episode = projectCodex();
+
+  expect(episode.markers).toEqual([
+    { kind: "memory", position: 1, eventId: 500, missingReason: null, transcriptUuid: "item_7" },
+    { kind: "decision", position: 2, eventId: 501, missingReason: null, transcriptUuid: "item_8" },
+  ]);
+  expect(entriesReadBefore(episode, codexEvents(), 501)).toEqual([7]);
+});
+
+it("Codex の Episode は構造マーカーを持たず、run A の行はすべて解釈か既知で、CLI の版は worker_spawned の固定版、subagent は全行 false(ADR 0083 追記10)", () => {
+  const episode = projectCodex();
+
+  expect(episode.markers.filter((m) => m.kind !== "memory" && m.kind !== "decision")).toEqual([]);
+  // 26 行: mcp_tool_call 6 + command_execution 1 + file_change 1 = 8 を解釈。thread.started 1・turn.started 1・
+  // turn.completed 1・item.started 8・item.completed の error 5 と agent_message 2 = 18 を既知として捨てる
+  expect(episode.lines).toEqual({ total: 26, interpreted: 8, ignored: 18, unknown: 0, unknownKinds: {} });
+  expect(episode.unrecognizedFormat).toBe(false);
+  expect(episode.cliVersion).toBe("codex-cli 0.147.0");
+  expect(episode.actions.every((a) => !a.subagent)).toBe(true);
+});
+
+it("stdout で未観測の Codex の行(item.updated、reasoning の item)は未知に数える(ADR 0083 追記10)", () => {
+  const episode = projectCodex([
+    ...codexTranscriptLines(),
+    '{"type":"item.updated","item":{"id":"item_15","type":"todo_list","items":[]}}',
+    '{"type":"item.completed","item":{"id":"item_16","type":"reasoning","text":"…"}}',
+  ]);
+
+  expect(episode.lines).toMatchObject({
+    total: 28,
+    unknown: 2,
+    unknownKinds: { "item.updated/todo_list": 1, "item.completed/reasoning": 1 },
+  });
 });

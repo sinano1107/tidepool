@@ -56,7 +56,7 @@ it("配分評価の入力は verdict・findings・実行設定と出所・走っ
   });
 });
 
-it("usage と Precedent の episode が無い session(codex 等)は null で区別され、空の観測とは混ざらない", () => {
+it("usage と Precedent の episode が無い(投影前の)session は null で区別され、空の観測とは混ざらない", () => {
   expect(
     buildAllocationReviewInput({
       verdict: null,
@@ -67,6 +67,19 @@ it("usage と Precedent の episode が無い session(codex 等)は null で区�
       markers: null,
     }),
   ).toMatchObject({ verdict: null, findings: null, tier: "economy", usage: null, actions: null });
+});
+
+it("Codex の session は Episode があっても行動列が観測なし(null)—— compaction が stdout に出ないので、空のマーカー列を 0 回として渡さない(ADR 0083 追記10)", () => {
+  expect(
+    buildAllocationReviewInput({
+      verdict: null,
+      findings: null,
+      tier: "economy",
+      spawned: { ...spawned, harness: "codex" },
+      exited: undefined,
+      markers: ["decision", "memory"],
+    }).actions,
+  ).toBeNull();
 });
 
 /** Recorded subject session and review completion for the allocation-input domain seam. */

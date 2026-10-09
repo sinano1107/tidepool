@@ -20,7 +20,7 @@ import { DEFAULT_AUDITOR_NAME } from "./defaults.js";
 import { type AdvisorRecord, appendEvent, type EventPayload, type ModelSwap, type RowRefusal, type RowRefusalCause, swapsMain } from "./events.js";
 import { type ExecutionSetting, MOONSHOT_DEFAULT_MODEL } from "./execution-setting.js";
 import { buildMemoryInjection, buildMetaReviewMaterial, type InjectionQuery, recordMemoryInjection, recordMetaReviewMaterial } from "./memory.js";
-import { projectAndPersist } from "./precedent.js";
+import { projectWhenTranscriptCloses } from "./precedent.js";
 import type { ProcessContainers, PtyFn, PtyProcess } from "./process-container.js";
 import {
   loadRegistry,
@@ -2286,21 +2286,12 @@ export class ClaudeCodeWorker implements WorkerAdapter {
       // ADR 0145: 盤面に exit を渡す。上限到達の一撃が**先**に後始末へ入れているので、
       // 盤面側の判定はその session を報告なき exit として拾わない。
       this.options.onWorkerExited?.(task.id, usage?.model_swaps.length ? { ...exit, model_swaps: usage.model_swaps } : exit);
-      // issue #356: この session の Precedent を投影する。**worker_exited を
-      // 書いたあと**でなければ exit / usage 参照が投影に入らず、**書き込み
-      // ストリームが閉じたあと**でなければ transcript の末尾が届いていない —
-      // stdout は pipe なので読み切り(child の "close")の時点でもファイルが flush 済みとは
-      // 限らない。派生表なので失敗しても走らせて危険な状態にはならず(ADR 0083
-      // 追記 2)、盤面を落とすほうが害が大きいので投影の失敗は記録して流す。
-      const project = () => {
-        try {
-          projectAndPersist(this.options.db, { workerSpawnedEventId: spawnedEventId, transcriptPath });
-        } catch (err) {
-          console.error(`[worker] precedent projection failed for task ${task.id}:`, err);
-        }
-      };
-      if (transcript.stream.closed) project();
-      else transcript.stream.once("close", project);
+      // issue #356: この session の Precedent を投影する —— worker_exited を書いたあと。
+      projectWhenTranscriptCloses(this.options.db, transcript.stream, {
+        workerSpawnedEventId: spawnedEventId,
+        transcriptPath,
+        taskId: task.id,
+      });
     };
     // ADR 0109 決定4: root process の exit は、容器に残るものが**孤児である証拠**で
     // ある —— 行儀よく exit するのを待たずに強制回収を撃つ。読み切りより先に撃っても
