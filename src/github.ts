@@ -98,7 +98,8 @@ export class IssueGoneError extends Error {
  *  faked in tests, shelled out to `gh` for real. `getCiStatus`/
  *  `mergePullRequest` (issue #11) back the merge dial: the actual merge is
  *  never performed until a live CI check reports "success" immediately
- *  beforehand. */
+ *  beforehand — or, on a human's merge answer only, still reports
+ *  "unreported" past ADR 0227's grace. */
 export interface GitHubClient {
   createPullRequest(input: CreatePrInput): Promise<PrResult>;
   /** タスクブランチを `origin` へ push する —— 盤面がタスクブランチをリモートへ書く唯一の操作。

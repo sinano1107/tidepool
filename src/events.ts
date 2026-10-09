@@ -175,7 +175,8 @@ export type EventPayload =
   | { kind: "pr_branch_pushed"; pr_number: number }
   // issue #11: the merge dial actually merged this PR — via the escalate
   // answer (right after a live CI check confirmed success immediately
-  // beforehand) or the auto_if_ci_green poll (CI green). The actor is whose
+  // beforehand, or still found no check reported past ADR 0227's grace) or
+  // the auto_if_ci_green poll (CI green). The actor is whose
   // judgment decided the merge: human for escalate, board for
   // auto_if_ci_green (ADR 0196)
   | { kind: "pr_merged"; pr_number: number }
