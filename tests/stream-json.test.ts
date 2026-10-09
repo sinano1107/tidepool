@@ -67,5 +67,6 @@ describe("readInitAutoMemoryPath", () => {
   it("読めない形は閉じているとみなさない — 観測値を JSON で返して不成立に倒させる", () => {
     expect(readInitAutoMemoryPath(init({ memory_paths: { auto: { dir: "/x" } } }))).toBe('{"dir":"/x"}');
     expect(readInitAutoMemoryPath(init({ memory_paths: "/x" }))).toBe('"/x"');
+    expect(readInitAutoMemoryPath(init({ memory_paths: null }))).toBe("null");
   });
 });

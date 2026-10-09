@@ -332,10 +332,12 @@ function checkToolSurface(
 }
 
 /** ADR 0156 決定3: **ホストの auto-memory の層が閉じているか**。`autoMemory` は
- *  init 報告の `memory_paths.auto`(`readInitAutoMemoryPath`)の観測値で、null
- *  なら成立、それ以外(文字列のパス、または読めない形の JSON)は不成立。盤面は worker 設定と probe の両方で `AUTO_MEMORY_CLOSED`
- *  を渡しているので、`auto` が出るのは CLI がその設定を honor しなくなったとき
- *  (キーの改名、per-task `--settings` が丸ごと黙って無視された)である。
+ *  init 報告の `memory_paths`(`readInitAutoMemoryPath`)の観測値で、null
+ *  なら成立、それ以外(`auto` の文字列のパス、または `auto` か `memory_paths` 自体の
+ *  読めない形の JSON)は不成立。文字列だけを受け取るので、どちらの形かは区別できない。
+ *  盤面は worker 設定と probe の両方で `AUTO_MEMORY_CLOSED` を渡しているので、そのどれかが
+ *  出るのは CLI がその設定を honor しなくなったとき(キーの改名、per-task `--settings` が
+ *  丸ごと黙って無視された)である。
  *
  *  `checkToolSurface` と同じく、probe と実セッションの init 行の照合が**この1つ**を
  *  共有する。 */
@@ -345,10 +347,11 @@ export function checkAutoMemoryClosed(autoMemory: string | null): ContainmentCap
   return {
     available: false,
     reason:
-      "this host's claude CLI loaded the host's auto-memory into a session the board closed it " +
-      `for: the init report's \`memory_paths\` carries \`auto\`: ${autoMemory}. The board closes ` +
-      "auto-memory with session settings or `--safe-mode`, so an `auto` entry means the " +
-      "CLI no longer honors that closure — a MEMORY.md the board never wrote reaches the " +
+      "this host's claude CLI did not report the host's auto-memory closed in a session the board " +
+      `closed it for: the init report's auto-memory entry (\`memory_paths\` or its \`auto\`) reads as \`${autoMemory}\` where the board ` +
+      "expects no `auto` entry. The board closes auto-memory with session settings or " +
+      "`--safe-mode`, so a directory there, or a shape the board cannot read, means the CLI no " +
+      "longer honors that closure — a MEMORY.md the board never wrote can reach the " +
       "session. Check the CLI version and this call's flags or settings " +
       "(`autoMemoryEnabled` / `autoMemoryDirectory`), then fix the invocation or pin the CLI",
   };

@@ -79,10 +79,11 @@ export function readInitMcpServers(parsed: Record<string, unknown> | null): stri
 /** The init line's `memory_paths.auto` — the host auto-memory directory the CLI
  *  loaded into this session (ADR 0156; measured 2.1.283: `memory_paths: {auto:
  *  <dir>}` while auto-memory is on, the whole field gone with
- *  `autoMemoryEnabled: false`). **Null here means closed** — `memory_paths`
- *  absent, or carrying only other kinds of memory — unlike the readers above,
- *  where null means "not the init report". Only `auto` is read, so a vendor
- *  adding another kind of memory does not quarantine the board.
+ *  `autoMemoryEnabled: false`). **Null here means closed** — the `memory_paths`
+ *  key absent (a `null` value is not absence), or an object carrying only other
+ *  kinds of memory — unlike the readers above, where null means "not the init
+ *  report". Only `auto` is read, so a vendor adding another kind of memory does
+ *  not quarantine the board.
  *
  *  A shape it cannot read is **not** closed: an `auto` that is not a string, or a
  *  `memory_paths` that is not an object, comes back as its JSON text so the caller
@@ -90,8 +91,8 @@ export function readInitMcpServers(parsed: Record<string, unknown> | null): stri
 export function readInitAutoMemoryPath(parsed: Record<string, unknown> | null): string | null {
   if (!isInitLine(parsed)) return null;
   const paths = (parsed as Record<string, unknown>).memory_paths;
-  if (paths === undefined || paths === null) return null;
-  if (typeof paths !== "object" || Array.isArray(paths)) return JSON.stringify(paths);
+  if (paths === undefined) return null;
+  if (paths === null || typeof paths !== "object" || Array.isArray(paths)) return JSON.stringify(paths);
   const auto = (paths as { auto?: unknown }).auto;
   if (auto === undefined) return null;
   return typeof auto === "string" ? auto : JSON.stringify(auto);
