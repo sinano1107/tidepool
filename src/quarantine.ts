@@ -198,8 +198,9 @@ export const QUARANTINES = [
         "the answer, and refuses it only if neither holds (either one is enough):\n\n" +
         `1. an agent named "${name}" is back in the registry (never true when no registry is ` +
         "configured).\n" +
-        "2. no `todo` task is still assigned to it (e.g. its pending tasks were reassigned to " +
-        "another agent), and none of its completed tasks still waits to land on its profile " +
+        "2. no unsettled task (neither done nor cancelled, including one still running) is " +
+        "still assigned to it (e.g. its tasks were reassigned to another agent), and none of " +
+        "its completed tasks still waits to land on its profile " +
         "(a queued PR already merged on GitHub is observed and no longer waits).\n\n" +
         "Any answer text is kept as a repair note.",
       completion_criteria: "the agent is repaired by hand",

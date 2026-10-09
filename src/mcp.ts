@@ -1,6 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Router } from "express";
 import { z } from "zod";
+import { quarantineAgent } from "./agent.js";
 import type { AgentAdmin } from "./agent-create.js";
 import type { Clock } from "./clock.js";
 import type { Db } from "./db.js";
@@ -206,9 +207,10 @@ function attributedWorkerId(deps: McpDeps, task: Task): string {
  *  `assignee` when configured (ADR 0012 / issue #36), else the board's single
  *  fixed `authority` (pre-#36 shape, and still today's shape for a board with
  *  no registry-backed resolver at all). An assignee the registry no longer
- *  resolves falls back to `deps.authority` too — unset in production, so
- *  unrestricted (issue #1649). */
-function attributedAuthority(deps: McpDeps, task: Task): AuthorityProfile | undefined {
+ *  resolves quarantines the agent name and refuses the verb with a domain
+ *  error — neither unrestricted nor narrowest is guessed, and the slot stays
+ *  (ADR 0224). */
+function attributedAuthorityOrQuarantine(deps: McpDeps, task: Task): AuthorityProfile | undefined {
   if (task.type === "review") return REVIEWER_AUTHORITY_PROFILE;
   try {
     return deps.resolveAuthority?.(task.assignee) ?? deps.authority;
@@ -216,7 +218,12 @@ function attributedAuthority(deps: McpDeps, task: Task): AuthorityProfile | unde
     if (!(err instanceof UnknownAgentError) && !(err instanceof InvalidAgentDefinitionError)) {
       throw err;
     }
-    return deps.authority;
+    quarantineAgent(deps.db, err.agentName, err, deps.clock.now());
+    throw new DomainError(
+      `the registry cannot resolve agent ${err.agentName}'s definition; ` +
+        "the board has asked a human to repair the registry, and this call was not applied. " +
+        "You do not need to escalate about this.",
+    );
   }
 }
 
@@ -525,7 +532,7 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
     },
     async () =>
       runVerb(deps, attributedTaskId, (task) => {
-        const authority = attributedAuthority(deps, task);
+        const authority = attributedAuthorityOrQuarantine(deps, task);
         const entries: RosterAgent[] = [...(deps.listAgents?.() ?? []), HUMAN_ROSTER_AGENT];
         return {
           agents: entries.map((entry) => ({
@@ -621,7 +628,7 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
           input,
           workerId,
           now,
-          attributedAuthority(deps, task),
+          attributedAuthorityOrQuarantine(deps, task),
           deps.isProtectedWorkspace,
           "worker",
         );
@@ -721,7 +728,7 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
           input,
           workerId,
           now,
-          attributedAuthority(deps, task),
+          attributedAuthorityOrQuarantine(deps, task),
           deps.isProtectedWorkspace,
           "worker",
         );

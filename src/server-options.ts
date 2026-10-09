@@ -534,8 +534,8 @@ function agentsSpeakingProvidersResolver(
  *  every task shared regardless of who it was actually assigned to. An
  *  assignee the registry no longer knows (UnknownAgentError) or whose
  *  definition no longer stands (InvalidAgentDefinitionError, ADR 0097) throws,
- *  so each consumer decides: landing quarantines the agent name (ADR 0217
- *  決定3), MCP falls back to unrestricted.
+ *  and each consumer quarantines the agent name: landing (ADR 0217 決定3) and
+ *  the worker verbs that read authority, which are refused (ADR 0224).
  *  Without a registry, no agent's authority is knowable at all — unrestricted. */
 function authorityResolver(
   board: BoardComposition,
@@ -550,7 +550,7 @@ function authorityResolver(
 /** Whether an agent name is currently registered (ADR 0012 / issue #36), read
  *  fresh against the registry — one half of an agent quarantine Confirmation
  *  question's clearance check (api.ts). Without a registry, no name is ever
- *  "back" — only "no more todo tasks depend on it" can clear it. */
+ *  "back" — only "no more unsettled tasks depend on it" can clear it. */
 function agentRegisteredChecker(board: BoardComposition): ((name: string) => boolean) | undefined {
   const { registryDir } = board;
   if (!registryDir) return undefined;
