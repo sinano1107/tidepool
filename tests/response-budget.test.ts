@@ -450,3 +450,37 @@ it("短い文字列の欄ばかりで予算を超える封筒は、欄を全部�
 
   expect(packItems(first, "events", [], envelope)).toEqual({ ...envelope, events: [] });
 });
+
+it.each([
+  { shape: "1欄 45,000 バイト", item: { id: 2, line: "潮".repeat(15_000) }, envelope: { purpose: "p".repeat(39_700) } },
+  { shape: "2欄 30,000 バイト ×2", item: { id: 2, case: { handoff: "h".repeat(30_000), result: "r".repeat(30_000) } }, envelope: { purpose: "p".repeat(39_500) } },
+])("封筒の横で先頭の item($shape)を切っても収まらないときは、最初の応答で封筒だけを返し、item はその後に封筒なしの切れで届く。next を追うとどの応答も予算以下で、各欄が逐語に戻り、後ろの item も届く(issue #1668)", ({ item, envelope }) => {
+  const items = [item, { id: 1, line: "after" }];
+
+  const responses = followNext(items, envelope);
+
+  for (const response of responses) expect(bytesOf(response)).toBeLessThanOrEqual(RESPONSE_BUDGET_BYTES);
+  expect(responses[0]).toEqual({ ...envelope, events: [], next: expect.any(String), remaining: items.length });
+  // 切れの1つに、つないだ欄を戻すと item が逐語に戻る(切らない欄は切れごとに丸ごと載る)
+  const pieces = responses.filter((response) => response.partial);
+  const restored = structuredClone(pieces[0].events[0]);
+  for (const [field, text] of Object.entries(joinPieces(pieces, (piece) => piece.events[0]))) {
+    const path = field.split(".");
+    path.slice(0, -1).reduce((node, name) => node[name], restored)[path.at(-1)!] = text;
+  }
+  expect(restored).toEqual(item);
+  expect(responses.flatMap((response) => (response.partial ? [] : response.events))).toEqual([items[1]]);
+});
+
+it("短い文字列の欄ばかりで予算を超える item は切らずに丸ごと返して床に任せる。封筒があれば、封筒だけを先に返してから続きで丸ごと返す(ADR 0195 追記 #1393 の5)", () => {
+  const items = [{ id: 2, tags: Array.from({ length: 10_000 }, () => "ab") }, { id: 1, line: "after" }];
+
+  const alone = packItems(first, "events", items);
+  expect(alone).toEqual({ events: [items[0]], next: expect.any(String), remaining: 1 });
+  expect(bytesOf(alone)).toBeGreaterThan(RESPONSE_BUDGET_BYTES);
+
+  const envelope = { purpose: "small" };
+  const withEnvelope = packItems(first, "events", items, envelope);
+  expect(withEnvelope).toEqual({ ...envelope, events: [], next: expect.any(String), remaining: 2 });
+  expect(packItems(readNext("get_task", withEnvelope.next as string), "events", items, envelope)).toEqual(alone);
+});

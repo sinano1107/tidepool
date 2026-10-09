@@ -235,14 +235,13 @@ export function packItems<T>(
     return pageUpTo(end > offset ? end : text.length);
   };
   /** 予算を超える object の最初の切れ: 収まるまで長い順に文字列の欄を切る(ADR 0195 追記 #1393 の1)。収まるかは、切る欄を
-   *  全部空にし、続きの位置を最も長く書いた切れで測る —— 後ろの切れほど続きの offset の桁が伸びる。 */
+   *  全部空にし、続きの位置を最も長く書いた切れで測る —— 後ろの切れほど続きの offset の桁が伸びる。文字列の欄が無いか、全部
+   *  切っても収まらなければ切れず、undefined を返す。短い欄ばかりの object は、欄を切るたびに続きの印が欄より大きく伸びるので、
+   *  全部切っても収まらない。 */
   const cutToFit = (ofEnvelope: boolean) => {
     const fields = stringFields(objectOf(ofEnvelope));
     const fitsCutting = (count: number) => fits(page(ofEnvelope, fields.slice(0, count), 0, "", { reading: count - 1, offset: fields[0]!.bytes }));
-    // 文字列の欄が無いか、全部切っても収まらなければ切れない(追記 #1393 の5)—— 丸ごと返して床に任せる。短い欄ばかりの object は、
-    // 欄を切るたびに続きの印が欄より大きく伸びるので、全部切っても収まらない
-    if (fields.length === 0 || !fitsCutting(fields.length))
-      return ofEnvelope ? { ...render([]), ...continueFrom(0) } : { ...render(rest.slice(0, 1)), ...continueFrom(1) };
+    if (fields.length === 0 || !fitsCutting(fields.length)) return undefined;
     let count = 1;
     while (count < fields.length && !fitsCutting(count)) count++;
     return piece(ofEnvelope, fields.slice(0, count), 0, 0);
@@ -276,14 +275,20 @@ export function packItems<T>(
     k++;
   }
   if (k === 0) {
-    // 封筒だけで予算を超えるなら、item より先に封筒を切る(ADR 0195 追記 #1393 の2)
-    if (!fits({ ...render([]), ...continueFrom(0) })) return cutToFit(true);
+    const envelopeOnly = { ...render([]), ...continueFrom(0) };
+    // 封筒だけで予算を超えるなら、item より先に封筒を切る(ADR 0195 追記 #1393 の2)。文字列以外の中身だけで超える封筒は
+    // 切れない(追記 #1393 の5)—— 丸ごと返して床に任せる
+    if (!fits(envelopeOnly)) return cutToFit(true) ?? envelopeOnly;
     // 先頭の item が封筒と一緒に入らないだけなら、封筒だけを返してその item は次の応答で丸ごと返す ——
-    // 切るのは、その item と続きの印を合わせて1応答を超える item だけ(ADR 0195 追記 #1393 の4)。その item は封筒と一緒に今切る
-    // (封筒だけの応答を挟まない)
+    // 切るのは、その item と続きの印を合わせて1応答を超える item だけ(ADR 0195 追記 #1393 の4)。その item は、封筒の横で
+    // 切って収まるなら封筒と一緒に今切る(封筒だけの応答を挟まない)
+    const hasEnvelope = Object.keys(firstOnly).length > 0;
     const fitsAlone = fits({ ...render(rest.slice(0, 1), every), ...continueFrom(1) });
-    if (fitsAlone && Object.keys(firstOnly).length > 0) return { ...render([]), ...continueFrom(0) };
-    return cutToFit(false);
+    if (fitsAlone && hasEnvelope) return envelopeOnly;
+    // 封筒の横では切っても収まらないなら、封筒だけを先に返し、item は続きで封筒なしに切る —— 丸ごと返すと床に落ち、
+    // 続きの印も切れる(ADR 0195 決定5 の不変条件、issue #1668)。封筒なしでも切れない item(追記 #1393 の5)も、封筒を
+    // 先に返したうえで、続きで丸ごと返して床に任せる
+    return cutToFit(false) ?? (hasEnvelope ? envelopeOnly : { ...render(rest.slice(0, 1)), ...continueFrom(1) });
   }
   return { ...render(rest.slice(0, k)), ...continueFrom(k) };
 }
