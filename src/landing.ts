@@ -706,7 +706,6 @@ export function createLanding(deps: LandingDeps): Landing {
             ) {
               continue;
             }
-            const error = `the content of ${taskBranch(ancestor.id)} changed after PR promotion was abandoned`;
             registerPrPromotionQuestion(
               deps.db,
               ancestor,
@@ -715,7 +714,14 @@ export function createLanding(deps: LandingDeps): Landing {
                 `child settled afterwards and changed ${taskBranch(ancestor.id)}. Promote the changed content?`,
               deps.clock.now(),
             );
-            results.push({ taskId: ancestor.id, verdict: { kind: "failed", reason: "promotion_failed", error } });
+            results.push({
+              taskId: ancestor.id,
+              verdict: {
+                kind: "failed",
+                reason: "promotion_failed",
+                error: `the content of ${taskBranch(ancestor.id)} changed after PR promotion was abandoned`,
+              },
+            });
             continue;
           }
         }

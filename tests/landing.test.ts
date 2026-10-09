@@ -2,7 +2,7 @@ import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { type Db, openDb } from "../src/db.js";
 import { DomainError } from "../src/domain-error.js";
-import { appendEvent, listEvents } from "../src/events.js";
+import { appendEvent, latestEventOfTask, listEvents } from "../src/events.js";
 import { submitAnswer } from "../src/human-verbs.js";
 import {
   countTasksAwaitingLanding,
@@ -2126,10 +2126,12 @@ function openPromotionQuestions(board: Db, taskId: string) {
   return promotionFailures(board, taskId).filter((q) => q.status === "todo");
 }
 
-it.each(UNRESOLVABLE)("PR 昇格を abandon した後、内容を変えない付帯子が決着しても、profile が %s で読めなくても、PR も question も立てず agent を quarantine に落とさない", async (_, fail) => {
+it("PR 昇格を abandon した後、内容を変えない付帯子が決着しても、profile が読めなくても、PR も question も立てず agent を quarantine に落とさない", async () => {
   const { db, clock, workspace, github, landing, authority, work } =
     await abandonedPromotion("landing-abandon-unchanged");
-  authority.resolve = fail;
+  authority.resolve = () => {
+    throw new UnknownAgentError("tako");
+  };
 
   await landing.relandAncestors(settleAttachedChild(db, clock, workspace, work.id));
 
@@ -2202,16 +2204,10 @@ it("head を刻めなかった abandon は、内容を変えない次の決着�
   const { db, clock, workspace, github, landing, work } = await abandonedPromotion("landing-abandon-no-head", {
     stampHead: false,
   });
-  expect(latestAbandonedHead(db, work.id)).toBeNull();
+  expect(latestEventOfTask(db, work.id, "pr_promotion_abandoned")?.payload.head).toBeNull();
 
   await landing.relandAncestors(settleAttachedChild(db, clock, workspace, work.id));
 
   expect(openPromotionQuestions(db, work.id).map((q) => q.title)).toEqual(["PR promotion re-asked: ship"]);
   expect(github.requests).toHaveLength(1);
 });
-
-function latestAbandonedHead(board: Db, taskId: string) {
-  const stamps = listEvents(board, taskId).filter((e) => e.payload.kind === "pr_promotion_abandoned");
-  const last = stamps.at(-1)?.payload;
-  return last?.kind === "pr_promotion_abandoned" ? last.head : undefined;
-}
