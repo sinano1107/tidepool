@@ -285,10 +285,10 @@ export const domainResult = <R>(write: () => Unstored<R>) => {
 
 /** 予算と続きで読む口(ADR 0195): 最初の引数か続き(next)のどちらか一方から読みの位置を作り、`read` が詰めた応答を返す。
  *  続きは最初の引数を自分の中から戻すので渡し直しは要らない。 */
-function readBudgeted<A extends Record<string, unknown>>(
+export function readBudgeted<A extends Record<string, unknown>, R>(
   verb: string,
   { next, ...args }: A & { next?: string },
-  read: (position: ReadPosition<A>) => Record<string, unknown>,
+  read: (position: ReadPosition<A>) => Unstored<R>,
 ) {
   const given = Object.keys(args).filter((name) => args[name] !== undefined);
   if (next !== undefined && given.length > 0) return toolError(`pass ${given.join(", ")} or next, not both`);

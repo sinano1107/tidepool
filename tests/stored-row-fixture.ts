@@ -2,7 +2,7 @@
 // `.test.ts` ではないので vitest は拾わない。宣言だけで値を持たず、DB にも HTTP にも触れない。
 import type { Response } from "express";
 import type { Db } from "../src/db.js";
-import { domainResult } from "../src/management-mcp.js";
+import { domainResult, readBudgeted } from "../src/management-mcp.js";
 import { type McpDeps, runVerb, toolResult } from "../src/mcp.js";
 import { packItems, type ReadPosition } from "../src/response-budget.js";
 import { sendJson } from "../src/send-json.js";
@@ -46,6 +46,16 @@ declare const x: unknown;
   // @ts-expect-error
   domainResult(() => getTask(db, "t"));
   // @ts-expect-error
+  readBudgeted("get_task", {}, () => task);
+  // @ts-expect-error
+  readBudgeted("get_task", {}, () => row);
+  // @ts-expect-error
+  readBudgeted("get_task", {}, () => ({ ...task, envelope: {} }));
+  // @ts-expect-error
+  readBudgeted("list_board", {}, () => [task]);
+  // @ts-expect-error
+  readBudgeted("get_task", {}, () => ({ task }));
+  // @ts-expect-error
   packItems(read, "events", events, { ...task });
   // @ts-expect-error
   packItems(read, "items", [task]);
@@ -59,5 +69,7 @@ declare const x: unknown;
   toolResult({ id: task.id, type: task.type });
   runVerb(deps, null, (task) => presentTask(db, task));
   domainResult(() => presentTask(db, task));
+  readBudgeted("get_task", {}, () => presentTask(db, task));
+  readBudgeted("list_board", {}, (read) => packItems(read, "tasks", listBoard(db)));
   packItems(read, "tasks", listBoard(db), { task: presentTask(db, task) });
 }

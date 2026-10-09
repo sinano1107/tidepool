@@ -10,7 +10,7 @@
    SQLite の行(`TaskRow`)が持ち、外すのは解決の出力(`BoardRow` / `BoardTask`)だけである。`keyof` で判定するので、
    spread・キャスト・入れ子・配列の中でも目印は残る。
 2. **読み手へ出す口は、目印を持つ値を型エラーで拒む。** 管理 MCP と worker MCP が共有する `toolResult`、型を消していた
-   包み(`runVerb` / `domainResult`、予算つきの読み口の `packItems` の封筒と item)、HTTP のすべての JSON 応答。worker 側を
+   包み(`runVerb` / `domainResult`、予算つきの読み口の `readBudgeted` の `read` と `packItems` の封筒と item)、HTTP のすべての JSON 応答。worker 側を
    外さないのは、「あらゆる読み口」が worker の読み口を除いていないためである。
 3. **HTTP は型付きの出口を1つ設け、すべての応答をそこへ通す。** Express の `res.json` はプロパティなので型を上書きできない。
    タスクを返す route だけに通すと、新しい route が `res.json` で書かれたとき #1215 と同じ所で漏れる。
