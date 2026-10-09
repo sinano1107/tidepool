@@ -50,7 +50,22 @@ export const HUMAN_ROSTER_AGENT: RosterAgent = {
  *  defaults.ts so boot and pre-boot registry seeding cannot drift. */
 export type TaskType = "work" | "question" | "review";
 
+/** 盤面の解決(`presentTask` / `boardRows`)を通っていない値の、型だけの目印(ADR 0220)。実行時には存在しない。
+ *  `Task` と `TaskRow` が持ち、解決の出力(`BoardRow` / `BoardTask`)だけが `Omit` で外す。 */
+declare const storedRow: unique symbol;
+/** 値のどこか(配列の中・入れ子の欄)に目印があれば true。`keyof` で見るので spread・キャストでも残る。 */
+type StoredIn<T> = T extends readonly (infer U)[]
+  ? StoredIn<U>
+  : T extends object
+    ? typeof storedRow extends keyof T
+      ? true
+      : { [K in keyof T]-?: StoredIn<T[K]> }[keyof T]
+    : false;
+/** 読み手へ出す口の引数の型: 目印を持つ値は `never` になって拒まれる。 */
+export type Unstored<T> = T & (true extends StoredIn<T> ? never : unknown);
+
 export interface Task {
+  readonly [storedRow]?: true;
   id: string;
   type: TaskType;
   status: TaskStatus;
@@ -2595,7 +2610,7 @@ export function hasUnfinishedChildren(db: Db, taskId: string): boolean {
  *  children, `held` from an ancestor's unanswered question. Presentation
  *  only — the stored status stays one of the four persisted values. `blocked`
  *  takes precedence when both apply: it names the more local reason. */
-export type BoardTask = Omit<Task, "status" | "question_proposal"> & {
+export type BoardTask = Omit<Task, "status" | "question_proposal" | typeof storedRow> & {
   /** 提案の段はいまの名前(issue #1436)。 */
   question_proposal: QuestionProposal<Tier> | null;
   /** Every integration review generated at completion is done (ADR 0111). */
@@ -2698,7 +2713,7 @@ export function acceptedSql(taskId: string): string {
     )), 0)`;
 }
 
-type BoardRow = Omit<TaskRow, "status"> & {
+type BoardRow = Omit<TaskRow, "status" | typeof storedRow> & {
   accepted: number;
   status: TaskStatus | "blocked" | "held" | "skipped";
   raw_assignee: string | null;

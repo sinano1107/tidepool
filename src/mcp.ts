@@ -70,6 +70,7 @@ import {
   resolveTaskAgent,
   type Task,
   taskHistoryRows,
+  type Unstored,
 } from "./tasks.js";
 import { markTeardown, runTeardown, type TeardownDeps, teardownStep } from "./teardown.js";
 import { HUMAN_WORKER_ID } from "./worker-id.js";
@@ -219,11 +220,14 @@ function attributedAuthority(deps: McpDeps, task: Task): AuthorityProfile | unde
   }
 }
 
-export function toolResult(payload: unknown) {
+/** 読み手へ出す口(ADR 0220): 解決を通っていない行は型で拒む。 */
+export function toolResult<T>(payload: Unstored<T>) {
+  // biome-ignore lint/plugin: the typed exit itself (ADR 0220)
   return { content: [{ type: "text" as const, text: JSON.stringify(payload) }] };
 }
 
 export function toolError(message: string) {
+  // biome-ignore lint/plugin: the error exit, which carries only a string (ADR 0220)
   return { isError: true, content: [{ type: "text" as const, text: message }] };
 }
 
@@ -247,15 +251,15 @@ function resolveAttributedTask(
 
 /** The shape every agent verb shares: resolve attribution, run the domain
  *  verb, hand DomainError back as a tool error rather than a protocol one. */
-async function runVerb(
+export async function runVerb<R>(
   deps: McpDeps,
   attributedTaskId: string | null,
-  verb: (task: Task) => unknown,
+  verb: (task: Task) => Unstored<R> | Promise<Unstored<R>>,
 ) {
   const resolved = resolveAttributedTask(deps, attributedTaskId);
   if ("error" in resolved) return toolError(resolved.error);
   try {
-    return toolResult(await verb(resolved.task));
+    return toolResult<unknown>(await verb(resolved.task));
   } catch (err) {
     if (err instanceof DomainError) return toolError(err.message);
     throw err;

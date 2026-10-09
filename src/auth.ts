@@ -4,6 +4,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import type { Request, Response } from "express";
 import { type RequestHandler, Router, urlencoded } from "express";
+import { sendJson } from "./send-json.js";
 
 /** ADR 0036 / issue #153: 人間面(静的資産・`/api`・そこに mount される管理MCP)
  *  は単一の盤面秘密で守られる。worker からの到達をネットワーク層で塞ぐ設計が
@@ -336,7 +337,7 @@ function denyUnauthenticated(req: Request, res: Response, message?: string): voi
     return;
   }
   // `{ error }` の形は WebUI の api() が読む形に揃える
-  res.status(401).json({ error: message ?? "this board requires a credential" });
+  sendJson(res.status(401), { error: message ?? "this board requires a credential" });
 }
 
 function setAuthCookie(res: Response, token: string): void {
@@ -423,7 +424,7 @@ export function createHumanSurfaceAuth(credential: HumanCredential): HumanSurfac
       .trim()
       .toLowerCase();
     if (contentType !== "application/json") {
-      res.status(415).json({ error: "this endpoint requires content-type: application/json" });
+      sendJson(res.status(415), { error: "this endpoint requires content-type: application/json" });
       return;
     }
     next();
