@@ -57,3 +57,23 @@ limactl delete -f tidepool-sweep-base   # recreating only
 limactl clone tidepool tidepool-sweep-base
 limactl start tidepool
 ```
+
+Give `tidepool` a long-lived `claude` token before cloning, not the browser login. Clones carry one
+OAuth refresh token between them, and the first clone that refreshes it leaves the base holding a
+dead one, so a browser login goes stale after the first sweep that runs `claude`. Once, in
+`tidepool`:
+
+```zsh
+limactl shell tidepool bash -lc 'claude setup-token'                           # prints the token
+limactl shell tidepool bash -lc 'umask 077; cat > ~/.claude-oauth-token'       # paste it, Enter, Ctrl-D
+limactl shell tidepool bash -lc 'echo '\''export CLAUDE_CODE_OAUTH_TOKEN="$(cat ~/.claude-oauth-token)"'\'' >> ~/.profile'
+```
+
+The export lives in `~/.profile`, which only a login shell reads, so run `claude` in the VM and its
+clones through `bash -lc '…'`. Runs that route to Moonshot also need the key at the board's default
+path inside the VM:
+
+```zsh
+limactl shell tidepool bash -lc 'mkdir -p -m 700 ~/.tidepool'
+limactl copy ~/.tidepool/moonshot-api-key tidepool:/home/$USER.guest/.tidepool/
+```
