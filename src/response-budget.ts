@@ -10,20 +10,26 @@ export const RESPONSE_BUDGET_BYTES = 40_000;
 
 type ItemId = string | number;
 
+/** 切る欄の path と、その欄の全体のバイト数と digest(ADR 0195 追記 #1399 の4)。 */
+interface CutField {
+  path: string[];
+  bytes: number;
+  digest: string;
+}
+
 /** 読みの位置。最初の読みは verb と引数だけ、続き(next)はそれに読み口の位置を足す ——
  *  `at` は次に返す item の id、`count` と `digest` はそれまでに返した件数とその鍵の列の digest(ADR 0195 追記 #1399 の1)、
- *  `field` / `offset` は1件で予算を超える item の欄の続き(UTF-8 のバイト位置)で、`field_bytes` / `field_digest` はその欄の
- *  全体のバイト数と digest(同4)。 */
+ *  `cut` は予算を超える object の切る欄すべて(長い順)で、`reading` はそのうち今読んでいる欄の位置、`offset` はその欄の続きの
+ *  UTF-8 のバイト位置(追記 #1393 の1・3)。封筒の切れの続きは item をまだ返していないので `at` を持たない(同2)。 */
 export interface ReadPosition<A = Record<string, unknown>> {
   verb: string;
   args: A;
   at?: ItemId;
   count?: number;
   digest?: string;
-  field?: string[];
+  cut?: CutField[];
+  reading?: number;
   offset?: number;
-  field_bytes?: number;
-  field_digest?: string;
 }
 
 const bytes = (text: string) => Buffer.byteLength(text);
@@ -65,11 +71,16 @@ export function readNext<A = Record<string, unknown>>(verb: string, next: string
     p = JSON.parse(Buffer.from(next, "base64url").toString());
   } catch {}
   const isCount = (n: unknown) => Number.isInteger(n) && (n as number) >= 0;
-  const fieldIsWellFormed =
-    p?.field === undefined ||
-    (Array.isArray(p.field) && p.field.every((name) => typeof name === "string") && isCount(p.offset) && isCount(p.field_bytes) && typeof p.field_digest === "string");
-  const rangeIsWellFormed = isCount(p?.count) && typeof p?.digest === "string";
-  if (typeof p?.verb !== "string" || typeof p.args !== "object" || p.args === null || !["string", "number"].includes(typeof p.at) || !rangeIsWellFormed || !fieldIsWellFormed)
+  const cutIsWellFormed =
+    p?.cut === undefined ||
+    (Array.isArray(p.cut) &&
+      p.cut.every((field) => Array.isArray(field?.path) && field.path.every((name) => typeof name === "string") && isCount(field.bytes) && typeof field.digest === "string") &&
+      isCount(p.reading) &&
+      p.reading! < p.cut.length &&
+      isCount(p.offset));
+  const rangeIsWellFormed = ["string", "number"].includes(typeof p?.at) && isCount(p?.count) && typeof p?.digest === "string";
+  const isEnvelopePiece = p?.at === undefined && p?.cut !== undefined;
+  if (typeof p?.verb !== "string" || typeof p.args !== "object" || p.args === null || !(rangeIsWellFormed || isEnvelopePiece) || !cutIsWellFormed)
     throw new DomainError(MALFORMED_NEXT);
   if (p.verb !== verb) throw new DomainError(`next belongs to ${p.verb}, not ${verb}: pass it to ${p.verb}`);
   return p as ReadPosition<A>;
@@ -84,7 +95,7 @@ export function readPosition<A extends object>(verb: string, input: A & { next?:
   return readNext<A>(verb, next);
 }
 
-/** 詰めた応答の形: 列の欄 `L` は毎回、封筒 `E` は最初の応答だけ、続きは残りがあるときだけ載る。 */
+/** 詰めた応答の形: 列の欄 `L` は毎回、封筒 `E` は最初の応答(封筒の切れなら切れごとに一部)だけ、続きは残りがあるときだけ載る。 */
 export type Packed<L, E = unknown> = L & Partial<E> & { next?: string; remaining?: number };
 
 /** 読み口ごとの詰め方の違い。 */
@@ -101,6 +112,11 @@ interface PackOptions<T> {
   resumeByKey?: boolean;
 }
 
+/** 1欄を切っても収まらない object の切れの読み方(ADR 0195 追記 #1393 の1)。`get_task` の手書きの description も使う。 */
+export const CUT_FIELDS_DESCRIPTION =
+  " When cutting one field is not enough, the longest string fields are cut in turn: each piece carries one field's text, " +
+  "and the other fields being cut come as empty strings named in `partial.emptied`.";
+
 /** 予算と続きで読む口(管理MCP と Worker MCP)の description の続きの読み方(ADR 0195)。順序は各口が前に書く。
  *  `resumeByKey` は packItems の同名のオプションを使う口 —— 読み直せの error が出ない代わりに、読み始めた後の分が返らない。 */
 export const nextDescription = (verb: string, items: string, firstOnly?: string, resumeByKey?: boolean) =>
@@ -109,12 +125,18 @@ export const nextDescription = (verb: string, items: string, firstOnly?: string,
   (firstOnly ? ` ${firstOnly} on the first response only.` : "") +
   " An item too large for one response comes alone in pieces marked `partial` (`id`, the item's id or the key `next` resumes from; `field`, " +
   "empty when the item is itself a string; and `field_bytes`, the field's full size in UTF-8 bytes): join that field across the pieces to get it verbatim." +
+  CUT_FIELDS_DESCRIPTION +
+  (firstOnly
+    ? ` When what comes on the first response only is itself too large, it comes first in pieces the same way, before any ${items}: ` +
+      `those pieces' \`partial\` has no \`id\`, its \`field\` is the path from the response root, the lists are empty, and \`remaining\` counts all the ${items}.`
+    : "") +
   (resumeByKey
     ? ` ${items[0]!.toUpperCase()}${items.slice(1)} added after the first call are not returned: call again without \`next\` to see them.`
     : ` If the list changes under the read, the call fails with "${listChanged(verb)}"; read again from the start.`);
 
 /** item の列を、予算に収まるだけ丸ごと `key` に詰めた応答にする(ADR 0195 決定3)。
- *  `envelope`(item の列以外の欄)は最初の読みにだけ載る。残りがあるときだけ `next` と `remaining`(残りの件数)が付く ——
+ *  `envelope`(item の列以外の欄)は最初の読みにだけ載る —— 予算を超える封筒は切れで返すので、呼び出し側は `at` の無い続き(封筒の
+ *  切れの続き)にも同じ封筒を渡す。残りがあるときだけ `next` と `remaining`(残りの件数)が付く ——
  *  付かなければ読みは完結している。封筒・`next`・`remaining` の分も予算に数える。
  *  `key` を複数渡すと、item は `options.listOf` の列に分かれて載る(点区切りの path は封筒の中の欄にも置ける)。 */
 export function packItems<T extends { id: ItemId }>(
@@ -153,9 +175,9 @@ export function packItems<T>(
   let start = 0;
   if (read.at !== undefined) {
     // 先頭の範囲が返したものと同じなら、残りは今の列の位置 count から先と一致する —— 境目の item の離脱もそのまま続く
-    const { count = 0, digest, field, at } = read;
+    const { count = 0, digest, cut, at } = read;
     const sameRange = () =>
-      count <= items.length && prefixDigest(count) === digest && (field === undefined || (count < items.length && keyOf(items[count]!, count) === at));
+      count <= items.length && prefixDigest(count) === digest && (cut === undefined || (count < items.length && keyOf(items[count]!, count) === at));
     start = resumeByKey ? items.findIndex((item, i) => keyOf(item, i) === at) : sameRange() ? count : -1;
     if (start === -1) throw new DomainError(listChanged(read.verb));
   }
@@ -177,39 +199,67 @@ export function packItems<T>(
     return out;
   };
 
-  /** 1件で予算を超える先頭の item の、`field` の `offset` バイト目からの1切れを単独で返す(ADR 0195 決定4)。
-   *  切れの item は他の欄を全部持ち、`partial` が部分であることと欄の名前・全体のバイト数を示す。欄を切り終えたら次の item へ進む。
-   *  ponytail: 切るのは1欄だけ —— その欄を空にしても予算を超える item(長い欄が2つある等)は出口の床に落ちる。観測されたら欄を順に切る */
-  const piece = (field: string[], offset: number) => {
-    const item = rest[0]!;
-    const value = field.reduce<any>((node, name) => node?.[name], item);
-    // 切り始めは最も長い文字列の欄を選ぶので、文字列でないのは続きの間に item の形が変わったときだけ
-    if (typeof value !== "string") throw new DomainError(listChanged(read.verb));
-    const text = Buffer.from(value);
-    // 欄が切れの間に書き換わっていたら、つなぐと新旧の継ぎはぎになる(ADR 0195 追記 #1399 の4)
-    const fieldDigest = digestOf(value);
-    if (read.field !== undefined && (read.field_bytes !== text.length || read.field_digest !== fieldDigest)) throw new DomainError(listChanged(read.verb));
-    const pageUpTo = (end: number) => {
-      // 欄の path が空なら item そのもの(文字列の item)を切る
-      let cut: any = text.subarray(offset, end).toString();
-      if (field.length > 0) {
-        const slice = cut;
-        cut = structuredClone(item);
-        field.slice(0, -1).reduce((node, name) => node[name], cut)[field.at(-1)!] = slice;
-      }
-      return {
-        ...render([cut]),
-        partial: { id: keyAt(0), field: field.join("."), field_bytes: text.length },
-        ...(end < text.length ? { next: encodeNext({ ...positionOf(0), field, offset: end, field_bytes: text.length, field_digest: fieldDigest }), remaining: rest.length } : continueFrom(1)),
-      };
+  /** 切る object: 封筒か先頭の item。 */
+  const objectOf = (ofEnvelope: boolean): unknown => (ofEnvelope ? firstOnly : rest[0]);
+  const fits = (response: object) => responseBytes(JSON.stringify(response)) <= RESPONSE_BUDGET_BYTES;
+
+  /** 予算を超える object(先頭の item か封筒)の1切れ(ADR 0195 決定4・追記 #1393 の1・2): 切る欄 `cut` の `reading` 番目に断片
+   *  `fragment` を載せ、ほかの切る欄を空にする。切れは切らない欄を全部持ち、`partial` が部分であることと欄の名前・全体の
+   *  バイト数を示し、空にした切る欄を `emptied` で名指す。封筒の切れは item の列を空で載せ、`partial` に `id` を持たない(欄の
+   *  path は応答の根から数える)。`after` は続きの位置で、無ければ切り終えて item(封筒なら先頭の、item なら次の)へ進む。 */
+  const page = (ofEnvelope: boolean, cut: CutField[], reading: number, fragment: string, after?: { reading: number; offset: number }) => {
+    // 欄の path が空なら item そのもの(文字列の item)を切る
+    let cutObject: any = fragment;
+    if (cut[reading]!.path.length > 0) {
+      cutObject = structuredClone(objectOf(ofEnvelope));
+      for (const [i, { path }] of cut.entries()) path.slice(0, -1).reduce((node, name) => node[name], cutObject)[path.at(-1)!] = i === reading ? fragment : "";
+    }
+    const emptied = cut.filter((_, i) => i !== reading).map(({ path }) => path.join("."));
+    return {
+      ...(ofEnvelope ? render([], { ...cutObject, ...every }) : render([cutObject])),
+      partial: { ...(!ofEnvelope && { id: keyAt(0) }), field: cut[reading]!.path.join("."), field_bytes: cut[reading]!.bytes, ...(emptied.length > 0 && { emptied }) },
+      ...(after
+        ? { next: encodeNext({ ...(ofEnvelope ? { verb: read.verb, args: read.args } : positionOf(0)), cut, ...after }), remaining: rest.length }
+        : continueFrom(ofEnvelope ? 0 : 1)),
     };
-    // 他の欄だけで予算を超えると1文字も入らない —— 欄の残りを丸ごと返して床に任せ、続きが同じ位置を指し続けないようにする
-    const end = fitEnd(text, offset, (to) => responseBytes(JSON.stringify(pageUpTo(to))) <= RESPONSE_BUDGET_BYTES);
+  };
+  /** `cut` の `reading` 番目の欄の `offset` バイト目から、予算に収まるだけの1切れ。欄を読み終えたら次の切る欄へ進む。 */
+  const piece = (ofEnvelope: boolean, cut: CutField[], reading: number, offset: number) => {
+    const text = Buffer.from(valueAt(objectOf(ofEnvelope), cut[reading]!.path));
+    const pageUpTo = (end: number) =>
+      page(ofEnvelope, cut, reading, text.subarray(offset, end).toString(), end < text.length ? { reading, offset: end } : reading + 1 < cut.length ? { reading: reading + 1, offset: 0 } : undefined);
+    // 切る欄を全部空にしても1文字も入らないのは、文字列以外の中身だけで予算を超えるとき(追記 #1393 の5)—— 欄の残りを丸ごと
+    // 返して床に任せ、続きが同じ位置を指し続けないようにする
+    const end = fitEnd(text, offset, (to) => fits(pageUpTo(to)));
     return pageUpTo(end > offset ? end : text.length);
   };
-  if (read.field !== undefined) return piece(read.field, read.offset ?? 0);
+  /** 予算を超える object の最初の切れ: 収まるまで長い順に文字列の欄を切る(ADR 0195 追記 #1393 の1)。収まるかは、切る欄を
+   *  全部空にし、続きの位置を最も長く書いた切れで測る —— 後ろの切れほど続きの offset の桁が伸びる。 */
+  const cutToFit = (ofEnvelope: boolean) => {
+    const fields = stringFields(objectOf(ofEnvelope));
+    const fitsCutting = (count: number) => fits(page(ofEnvelope, fields.slice(0, count), 0, "", { reading: count - 1, offset: fields[0]!.bytes }));
+    // 文字列の欄が無いか、全部切っても収まらなければ切れない(追記 #1393 の5)—— 丸ごと返して床に任せる。短い欄ばかりの object は、
+    // 欄を切るたびに続きの印が欄より大きく伸びるので、全部切っても収まらない
+    if (fields.length === 0 || !fitsCutting(fields.length))
+      return ofEnvelope ? { ...render([]), ...continueFrom(0) } : { ...render(rest.slice(0, 1)), ...continueFrom(1) };
+    let count = 1;
+    while (count < fields.length && !fitsCutting(count)) count++;
+    return piece(ofEnvelope, fields.slice(0, count), 0, 0);
+  };
+  if (read.cut !== undefined) {
+    // 封筒の切れの続きは `at` を持たない(追記 #1393 の2)
+    const ofEnvelope = read.at === undefined;
+    // 切る欄が切れの間に書き換わっていたら、つなぐと新旧の継ぎはぎになる(ADR 0195 追記 #1399 の4・追記 #1393 の3)。
+    // 文字列でなくなったときも同じ —— 切り始めは文字列の欄だけを選ぶ
+    const changed = read.cut.some(({ path, bytes: size, digest }) => {
+      const value = valueAt(objectOf(ofEnvelope), path);
+      return typeof value !== "string" || bytes(value) !== size || digestOf(value) !== digest;
+    });
+    if (changed) throw new DomainError(listChanged(read.verb));
+    return piece(ofEnvelope, read.cut, read.reading!, read.offset!);
+  }
   const whole = render(rest);
-  if (responseBytes(JSON.stringify(whole)) <= RESPONSE_BUDGET_BYTES) return whole;
+  if (fits(whole)) return whole;
 
   // 全部は入らない(最後の1件は残る): 先頭から item を足していき、続きの分まで含めて予算に収まる最後の位置で切る
   const tailBytes = (k: number) => grownBy(JSON.stringify(continueFrom(k))) - 1; // 先頭の `{` を `,` に読み替える
@@ -225,24 +275,29 @@ export function packItems<T>(
     k++;
   }
   if (k === 0) {
+    // 封筒だけで予算を超えるなら、item より先に封筒を切る(ADR 0195 追記 #1393 の2)
+    if (!fits({ ...render([]), ...continueFrom(0) })) return cutToFit(true);
     // 先頭の item が封筒と一緒に入らないだけなら、封筒だけを返してその item は次の応答で丸ごと返す ——
-    // 切るのは1件で予算を超える item だけ(ADR 0195 決定4)。その item は封筒と一緒に今切る(封筒だけの応答を挟まない)
-    const fitsAlone = responseBytes(JSON.stringify({ ...render(rest.slice(0, 1), every), ...continueFrom(1) })) <= RESPONSE_BUDGET_BYTES;
+    // 切るのは、その item と続きの印を合わせて1応答を超える item だけ(ADR 0195 追記 #1393 の4)。その item は封筒と一緒に今切る
+    // (封筒だけの応答を挟まない)
+    const fitsAlone = fits({ ...render(rest.slice(0, 1), every), ...continueFrom(1) });
     if (fitsAlone && Object.keys(firstOnly).length > 0) return { ...render([]), ...continueFrom(0) };
-    return piece(longestStringField(rest[0]), 0);
+    return cutToFit(false);
   }
   return { ...render(rest.slice(0, k)), ...continueFrom(k) };
 }
 
-/** item の中で UTF-8 バイト数が最も大きい文字列の欄の path。 */
-function longestStringField(item: unknown): string[] {
-  let best: { path: string[]; size: number } = { path: [], size: -1 };
+const valueAt = (node: unknown, path: string[]) => path.reduce<any>((child, name) => child?.[name], node);
+
+/** object の中の文字列の欄を UTF-8 バイト数の大きい順に。object そのものが文字列なら path は空。 */
+function stringFields(object: unknown): CutField[] {
+  const fields: CutField[] = [];
   const walk = (node: unknown, path: string[]) => {
-    if (typeof node === "string" && bytes(node) > best.size) best = { path, size: bytes(node) };
+    if (typeof node === "string") fields.push({ path, bytes: bytes(node), digest: digestOf(node) });
     else if (typeof node === "object" && node !== null) for (const [name, child] of Object.entries(node)) walk(child, [...path, name]);
   };
-  walk(item, []);
-  return best.path;
+  walk(object, []);
+  return fields.sort((a, b) => b.bytes - a.bytes);
 }
 
 /** 応答を返す面(床の event の `surface`)。 */

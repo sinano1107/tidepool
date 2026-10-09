@@ -226,10 +226,10 @@ it("床の行は (surface, verb) ごとに1つで、回数・最後の時刻・�
   ]);
 });
 
-/** 最初の読みから next が尽きるまで追った応答の列。 */
+/** 最初の読みから next が尽きるまで追った応答の列。読み口と同じく、封筒は続きでも渡す。 */
 function followNext(items: readonly { id: number }[], envelope?: Record<string, unknown>) {
   const responses: any[] = [packItems(first, "events", items, envelope)];
-  while (responses.at(-1).next) responses.push(packItems(readNext("get_task", responses.at(-1).next), "events", items));
+  while (responses.at(-1).next) responses.push(packItems(readNext("get_task", responses.at(-1).next), "events", items, envelope));
   return responses;
 }
 
@@ -266,11 +266,17 @@ it("封筒と先頭の item が一緒に入らないとき、最初の応答は�
 
 it("欄の位置が壊れた続きも名指しの error になる", () => {
   const position = (p: object) =>
-    Buffer.from(JSON.stringify({ ...first, at: 2, count: 0, digest: "d", field_bytes: 1, field_digest: "d", ...p })).toString("base64url");
+    Buffer.from(JSON.stringify({ ...first, at: 2, count: 0, digest: "d", cut: [{ path: ["line"], bytes: 1, digest: "d" }], reading: 0, offset: 0, ...p })).toString("base64url");
 
-  expect(() => readNext("get_task", position({ field: "line" }))).toThrow(/next is malformed/);
-  expect(() => readNext("get_task", position({ field: ["line"], offset: "x" }))).toThrow(/next is malformed/);
-  expect(() => readNext("get_task", position({ field: ["line"], offset: -10 }))).toThrow(/next is malformed/);
+  expect(() => readNext("get_task", position({}))).not.toThrow();
+  expect(() => readNext("get_task", position({ cut: "line" }))).toThrow(/next is malformed/);
+  expect(() => readNext("get_task", position({ cut: [{ path: "line", bytes: 1, digest: "d" }] }))).toThrow(/next is malformed/);
+  expect(() => readNext("get_task", position({ offset: "x" }))).toThrow(/next is malformed/);
+  expect(() => readNext("get_task", position({ offset: -10 }))).toThrow(/next is malformed/);
+  expect(() => readNext("get_task", position({ reading: 1 }))).toThrow(/next is malformed/);
+  // 封筒の切れの続きだけが `at` を持たない —— 切る欄も持たなければ最初の読みと区別できない
+  expect(() => readNext("get_task", position({ at: undefined }))).not.toThrow();
+  expect(() => readNext("get_task", position({ at: undefined, cut: undefined }))).toThrow(/next is malformed/);
 });
 
 it("id を持たない item は渡した鍵(item に添えた id の列から)で続きの境目を表し、next を追うと欠けも重複もなく揃う", () => {
@@ -367,4 +373,80 @@ it("1件で予算を超える item の欄が包むと膨らむ文字(引用符�
   for (const piece of pieces) expect(piece.partial).toEqual({ id: 2, field: "payload.line", field_bytes: Buffer.byteLength(long) });
   expect(pieces.map((piece) => piece.events[0].payload.line).join("")).toBe(long);
   expect(responses.flatMap((response) => response.events.filter((e: any) => e.id !== 2))).toEqual([items[0], items[2]]);
+});
+
+// 1欄を切っても予算に収まらない object(ADR 0195 追記 #1393): 収まるまで長い順に欄を切り、封筒は item より先に切る
+const fieldAt = (node: any, path: string) => path.split(".").reduce((n, name) => n[name], node);
+/** 切れの列を `partial.field` ごとにつなぐ。`cutOf` は切れの応答から切った object を取る。 */
+function joinPieces(pieces: any[], cutOf: (piece: any) => unknown) {
+  const joined: Record<string, string> = {};
+  for (const piece of pieces) joined[piece.partial.field] = (joined[piece.partial.field] ?? "") + fieldAt(cutOf(piece), piece.partial.field);
+  return joined;
+}
+
+it("長い欄を2つ持つ item は、収まるまで長い順に欄を切り、切れごとに1つの欄の断片だけを載せてほかの切る欄を空にし emptied で名指す。next を追うとどの応答も予算以下で、各欄が逐語に戻り、後ろの item も届く", () => {
+  const handoff = "h".repeat(50_000);
+  const result = '潮"'.repeat(11_250); // 45,000 バイト
+  const items = [{ id: 2, case: { handoff, result }, kind: "exemplar" }, { id: 1, line: "after" }];
+
+  const responses = followNext(items);
+
+  for (const response of responses) expect(bytesOf(response)).toBeLessThanOrEqual(RESPONSE_BUDGET_BYTES);
+  const pieces = responses.filter((response) => response.partial);
+  for (const piece of pieces) {
+    const other = piece.partial.field === "case.handoff" ? "case.result" : "case.handoff";
+    expect(piece.partial).toEqual({ id: 2, field: piece.partial.field, field_bytes: Buffer.byteLength(fieldAt(items[0], piece.partial.field)), emptied: [other] });
+    expect(fieldAt(piece.events[0], other)).toBe("");
+    expect(piece.events[0].kind).toBe("exemplar");
+  }
+  expect(joinPieces(pieces, (piece) => piece.events[0])).toEqual({ "case.handoff": handoff, "case.result": result });
+  expect(responses.flatMap((response) => (response.partial ? [] : response.events))).toEqual([items[1]]);
+});
+
+it("封筒だけで予算を超えるときは、item より先に封筒を切れで返す。封筒の切れの partial は id を持たず field は応答の根からの path で、item の列は空、remaining は item の全件数。封筒を読み終えると item が続く", () => {
+  const handoff = "潮".repeat(15_000); // 45,000 バイト
+  const envelope = { title: "t", parent: { handoff_doc: handoff } };
+  for (const items of [[{ id: 1, line: "small" }], []]) {
+    const responses = followNext(items, envelope);
+
+    for (const response of responses) expect(bytesOf(response)).toBeLessThanOrEqual(RESPONSE_BUDGET_BYTES);
+    const pieces = responses.filter((response) => response.partial);
+    expect(pieces.length).toBeGreaterThan(1);
+    expect(responses.slice(0, pieces.length)).toEqual(pieces);
+    for (const piece of pieces) {
+      expect(piece.partial).toEqual({ field: "parent.handoff_doc", field_bytes: Buffer.byteLength(handoff) });
+      expect(piece).toMatchObject({ title: "t", events: [] });
+    }
+    for (const piece of pieces.slice(0, -1)) expect(piece.remaining).toBe(items.length);
+    expect(joinPieces(pieces, (piece) => piece)).toEqual({ "parent.handoff_doc": handoff });
+    for (const response of responses.slice(pieces.length)) expect(response).not.toHaveProperty("title");
+    expect(responses.flatMap((response) => response.events)).toEqual(items);
+  }
+});
+
+it("切れの途中で、今読んでいない切る欄が書き換わると、続きは継ぎはぎを返さずに読み直せの error になる", () => {
+  const item = { id: 1, case: { handoff: "h".repeat(50_000), result: "r".repeat(45_000) } };
+  const response: any = packItems(queueRead, "tasks", [item]);
+  expect(response.partial.field).toBe("case.handoff");
+
+  expect(() => packItems(readNext("list_queue", response.next), "tasks", [{ id: 1, case: { ...item.case, result: "R".repeat(45_000) } }])).toThrow(LIST_CHANGED);
+});
+
+it("鍵で引き直す新しい順の履歴(get_task の形)でも、予算を超える封筒を切れで読み終えると、その後に event が届く", () => {
+  const envelope = { purpose: "潮".repeat(15_000) };
+  const events = [3, 2, 1].map((id) => ({ id, line: "e" }));
+  const options = { resumeByKey: true } as const;
+
+  const responses: any[] = [packItems(first, "events", events, envelope, options)];
+  while (responses.at(-1).next) responses.push(packItems(readNext("get_task", responses.at(-1).next), "events", events, envelope, options));
+
+  for (const response of responses) expect(bytesOf(response)).toBeLessThanOrEqual(RESPONSE_BUDGET_BYTES);
+  expect(joinPieces(responses.filter((response) => response.partial), (piece) => piece)).toEqual({ purpose: envelope.purpose });
+  expect(responses.flatMap((response) => response.events)).toEqual(events);
+});
+
+it("短い文字列の欄ばかりで予算を超える封筒は、欄を全部切っても続きの印の分で収まらないので、切らずに丸ごと返して床に任せる(ADR 0195 追記 #1393 の5)", () => {
+  const envelope = { dropped: Array.from({ length: 1_000 }, (_, i) => ({ id: `entry-${i}`, reason: "r".repeat(40) })) };
+
+  expect(packItems(first, "events", [], envelope)).toEqual({ ...envelope, events: [] });
 });
