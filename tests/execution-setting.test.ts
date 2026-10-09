@@ -78,7 +78,7 @@ it("新しい盤面は種の3段を説明つきで持ち、読み口が順序ど
 it("種の表は `/implementation-delegation` の表と同じ7行 — anthropic も openai も具体 id 行で、anthropic の行は alias の拒否一覧に当たらない、moonshot は kimi-k3 を economy に1行(ADR 0114: 価格は USD per MTok / ADR 0182 決定1)", () => {
   expect(SEED_EXECUTION_SETTINGS.filter((row) => row.provider === "anthropic" && isClaudeModelAlias(row.model))).toEqual([]);
   // 種は扉を通らずに入るので、effort が語彙の中にあることはここで刺す(ADR 0216 決定4)
-  expect(SEED_EXECUTION_SETTINGS.filter((row) => whyInvalidEffort(row.effort))).toEqual([]);
+  expect(SEED_EXECUTION_SETTINGS.filter((row) => whyInvalidEffort(row.provider, row.model, row.effort))).toEqual([]);
   expect(SEED_EXECUTION_SETTINGS).toEqual([
     { provider: "anthropic", tier: "economy", model: "claude-sonnet-5-5", effort: "high", price_in: 2, price_out: 10 },
     { provider: "anthropic", tier: "standard", model: "claude-opus-5-5", effort: "high", price_in: 5, price_out: 25 },
@@ -91,8 +91,30 @@ it("種の表は `/implementation-delegation` の表と同じ7行 — anthropic 
 });
 
 it("effort の語彙は low / medium / high / xhigh / max の閉じた5値で、それ以外は5値を挙げて拒む(ADR 0216 決定1・2)", () => {
-  for (const effort of ["low", "medium", "high", "xhigh", "max"]) expect(whyInvalidEffort(effort)).toBeUndefined();
-  for (const effort of ["ultra", "minimal", "none", "bogus", "High", ""]) expect(whyInvalidEffort(effort)).toBe("effort must be one of low / medium / high / xhigh / max");
+  for (const provider of ["anthropic", "moonshot", "openai"]) {
+    for (const effort of ["low", "medium", "high", "xhigh", "max"]) expect(whyInvalidEffort(provider, "claude-sonnet-5-5", effort)).toBeUndefined();
+    for (const effort of ["ultra", "minimal", "none", "bogus", "High", ""]) {
+      expect(whyInvalidEffort(provider, "claude-opus-4-5", effort)).toBe("effort must be one of low / medium / high / xhigh / max");
+    }
+  }
+});
+
+it("Claude CLI 2.1.286 の規則で model が high に下げる effort は、走る値 high を名指して拒む —— 日付つきの id も日付なしの規則に当たり、openai の行は5値だけを見る(ADR 0218 決定3・4)", () => {
+  const lowered = [
+    ["claude-opus-4-5", "xhigh"], ["claude-opus-4-5", "max"], ["claude-opus-4-6", "xhigh"], ["claude-sonnet-4-6", "xhigh"],
+    ["claude-opus-4-5-20251101", "max"], ["claude-opus-4-5-20251101", "xhigh"],
+  ];
+  for (const provider of ["anthropic", "moonshot"]) {
+    for (const [model, effort] of lowered) expect(whyInvalidEffort(provider, model!, effort!)).toMatch(new RegExp(`${effort} runs as high.*write high`));
+  }
+  for (const [model, effort] of lowered) expect(whyInvalidEffort("openai", model!, effort!)).toBeUndefined();
+  const passes = [
+    ...["claude-opus-4-5", "claude-opus-4-6", "claude-sonnet-4-6", "claude-opus-4-5-20251101"].flatMap((model) => [[model, "medium"], [model, "high"]]),
+    ["claude-opus-4-6", "max"], ["claude-sonnet-4-6", "max"],
+    ...["claude-sonnet-5-5", "claude-opus-5-5", "claude-fable-5-1", "claude-haiku-5-5", "kimi-k3", "claude-opus-4-20250514"].flatMap((model) =>
+      ["low", "medium", "high", "xhigh", "max"].map((effort) => [model, effort])),
+  ];
+  for (const [model, effort] of passes) expect(whyInvalidEffort("anthropic", model!, effort!), `${model} ${effort}`).toBeUndefined();
 });
 
 it("tier を書かない agent は盤面既定のティアで解決され、出所は board", () => {
@@ -944,6 +966,46 @@ it("承認に添える語彙の外の effort の修正値は拒まれ、行は�
   await expect(answer({ effort: "ultra" })).rejects.toThrow(DomainError);
   expect(getTask(db, question_id)).toMatchObject({ status: "todo" });
   expect(opusRows(db)).toEqual([opusRow, opusMax]);
+});
+
+const opus45 = { provider: "anthropic", tier: "standard", model: "claude-opus-4-5-20251101", effort: "high", price_in: 5, price_out: 25 } as const;
+const opus45Key = { provider: "anthropic", model: opus45.model, effort: "high" } as const;
+function boardWithOpus45() {
+  const db = openDb(":memory:");
+  applyExecutionSettingsChange(db, { setting: "row", row: opus45 }, "webui", new Date());
+  return db;
+}
+const opus45Rows = (db: Db) => readExecutionSettings(db).table.filter((row) => row.model === opus45.model);
+
+it("行を書く扉は、model が high に下げる effort を走る値を名指して拒み、表は変わらない(ADR 0218 決定4)", () => {
+  const db = boardWithOpus45();
+  expect(() => applyExecutionSettingsChange(db, { setting: "row", key: opus45Key, row: { ...opus45, effort: "max" } }, "webui", new Date())).toThrow(
+    /runs as high.*write high/,
+  );
+  expect(opus45Rows(db)).toEqual([opus45]);
+});
+
+it("model が high に下げる effort への行の提案は作る時点で拒まれ、question は立たない(ADR 0218 決定4)", () => {
+  const db = boardWithOpus45();
+  registerMetaReview(db, "routing", new Date());
+  const review = (db.prepare("SELECT id FROM tasks WHERE meta_review_subject = 'routing'").get() as { id: string }).id;
+  expect(() => proposeRoutingChange(db, review, { op: "row", row: opus45Key, change: { effort: "max" }, rationale: "r" }, "auditor", new Date())).toThrow(
+    /runs as high.*write high/,
+  );
+  expect(listChildren(db, review)).toEqual([]);
+});
+
+it("承認に添える、model が high に下げる effort の修正値は拒まれ、行は変わらず question は open のまま(ADR 0218 決定4)", async () => {
+  const db = boardWithOpus45();
+  const now = new Date();
+  registerMetaReview(db, "routing", now);
+  const review = (db.prepare("SELECT id FROM tasks WHERE meta_review_subject = 'routing'").get() as { id: string }).id;
+  const { question_id } = proposeRoutingChange(db, review, { op: "row", row: opus45Key, change: { effort: "medium" }, rationale: "r" }, "auditor", now);
+  await expect(
+    submitAnswer({ db, pollNow() {}, landing: unusedLanding }, getTask(db, question_id)!, ["approve"], undefined, () => now, "webui", false, { effort: "max" }),
+  ).rejects.toThrow(/runs as high.*write high/);
+  expect(getTask(db, question_id)).toMatchObject({ status: "todo" });
+  expect(opus45Rows(db)).toEqual([opus45]);
 });
 
 it("行の Quarantine の鍵は (provider, model) で、effort 違いの行も候補から外れる", () => {

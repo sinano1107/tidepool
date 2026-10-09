@@ -121,3 +121,8 @@ its advisor, and a Haiku row above it cannot serve agents that have an advisor.
 If the new version brings a new model family, add it to `FAMILIES` at its rank. Until then, its
 rows cannot serve agents that have an advisor. If the family is one a ceiling can name, also add its
 alias to `ADVISOR_CEILINGS` (same file) and to the `advisor_ceiling` CHECK in `src/db.ts`.
+
+Then compare the new binary's built-in effort rules with `CLAUDE_EFFORT_RULES` in `src/effort.ts`
+(ADR 0218 決定3): the fixed list of ids it sends without effort, and the values it lowers to `high`
+per id. If either changed, update `CLAUDE_EFFORT_RULES` in the same PR. Until then, the table's door
+accepts a value the model no longer runs as written, or refuses one it now does.

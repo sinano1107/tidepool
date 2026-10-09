@@ -36,6 +36,14 @@ const FAMILIES: readonly { name: string; prefix: string; minGeneration: number; 
  *  `claude-sonnet-4-20250514` is 4.0 and `claude-opus-4-1-20250805` is 4.1. */
 const GENERATION = /^(\d+)(?:-(\d{1,2})(?!\d))?/;
 
+/** The undated id `claude-<family>-<major>-<minor>` a concrete id reads as (`claude-opus-4-20250514` → `claude-opus-4-0`), by the
+ *  same family and generation reading as the advisor; undefined when the family or generation is unreadable. */
+export function undatedClaudeId(model: string): string | undefined {
+  const family = FAMILIES.find((f) => model.startsWith(f.prefix));
+  const digits = family && GENERATION.exec(model.slice(family.prefix.length));
+  return digits ? `${family.prefix}${digits[1]}-${digits[2] ?? 0}` : undefined;
+}
+
 /** The advisor pinned beside an anthropic main row under the board's ceiling, and why; undefined when the row is no
  *  candidate for an advisor entry. `off` decides before the row is read (ADR 0208 決定3): the entry runs as one without an
  *  advisor. A main above the ceiling runs without one, so no floor applies. Otherwise the row is no candidate when its family is

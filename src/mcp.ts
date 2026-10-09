@@ -979,7 +979,7 @@ function registerRoutingMetaReviewVerbs(server: McpServer, deps: McpDeps, run: M
       description:
         "Propose a routing change to the human as one approve / reject question attached to this task. op row replaces the " +
         `tier (one of the board's tiers) and/or effort (${EFFORT_LEVELS.join(" / ")}) of one existing execution-setting row, named by provider, model and effort; ` +
-        "change takes only those two fields, and the human may amend them when approving. A change that would give the model a second row in one tier, or the same effort twice, is refused. op promote makes work tasks run on the " +
+        "change takes only those two fields, and the human may amend them when approving. A change that would give the model a second row in one tier, or the same effort twice, is refused. Some Claude models take no effort or run `xhigh` / `max` as `high`; the refusal names the value to write. op promote makes work tasks run on the " +
         "learner's recommendation and is only accepted while the learner is not promoted; op demote returns them to the table and " +
         "is only accepted while it is promoted; neither takes row, change, or an amendment. op agent_tier lowers a non-built-in " +
         "agent's default tier by exactly one step (an agent with no tier runs at the board default tier): agent names it, " +

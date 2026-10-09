@@ -44,10 +44,35 @@ var TidepoolRules = (() => {
     return /^(?:[01]\d|2[0-3]):[0-5]\d$/.test(value) ? void 0 : "time must be HH:MM between 00:00 and 23:59";
   }
 
+  // src/claude-model-alias.ts
+  var FAMILIES = [
+    { name: "haiku", prefix: "claude-haiku-", minGeneration: 0, canAdvise: false },
+    { name: "sonnet", prefix: "claude-sonnet-", minGeneration: 406, canAdvise: true, accepts: { haiku: 405 } },
+    { name: "opus", prefix: "claude-opus-", minGeneration: 406, canAdvise: true, accepts: { haiku: 405, sonnet: 505 } },
+    { name: "fable", prefix: "claude-fable-", minGeneration: 0, canAdvise: true, accepts: { haiku: 405, sonnet: 505, opus: 505 } }
+  ];
+  var GENERATION = /^(\d+)(?:-(\d{1,2})(?!\d))?/;
+  function undatedClaudeId(model) {
+    const family = FAMILIES.find((f) => model.startsWith(f.prefix));
+    const digits = family && GENERATION.exec(model.slice(family.prefix.length));
+    return digits ? `${family.prefix}${digits[1]}-${digits[2] ?? 0}` : void 0;
+  }
+
   // src/effort.ts
   var EFFORT_LEVELS = ["low", "medium", "high", "xhigh", "max"];
-  function whyInvalidEffort(effort) {
-    return EFFORT_LEVELS.includes(effort) ? void 0 : `effort must be one of ${EFFORT_LEVELS.join(" / ")}`;
+  var CLAUDE_EFFORT_RULES = {
+    runsAsHigh: { "claude-opus-4-5": ["xhigh", "max"], "claude-opus-4-6": ["xhigh"], "claude-sonnet-4-6": ["xhigh"] },
+    // ponytail: recorded, not read yet; the "no effort" spelling that acts on it is the next slice of #1655
+    dropsEffort: ["claude-3-*", "claude-opus-4-0", "claude-opus-4-1", "claude-sonnet-4-0", "claude-sonnet-4-5", "claude-haiku-4-5"]
+  };
+  function whyInvalidEffort(provider, model, effort) {
+    if (!EFFORT_LEVELS.includes(effort)) return `effort must be one of ${EFFORT_LEVELS.join(" / ")}`;
+    if (provider === "openai") return void 0;
+    const undated = undatedClaudeId(model);
+    if (undated && CLAUDE_EFFORT_RULES.runsAsHigh[undated]?.includes(effort)) {
+      return `${model} at effort ${effort} runs as high under the claude CLI's built-in model rules; write high`;
+    }
+    return void 0;
   }
 
   // src/pace-offset-rule.ts
@@ -2877,7 +2902,7 @@ function ExecutionTableCard({ settings, say, onSaved, edit }) {
     /* @__PURE__ */ React.createElement(Select, { label: "Provider", options: settings.providers.map((p) => p.value), value: d.provider, onChange: (e) => update(i, { provider: e.target.value }) }),
     /* @__PURE__ */ React.createElement(Select, { label: "Tier", options: settings.tiers.map((tier) => tier.name), value: d.tier, onChange: (e) => update(i, { tier: e.target.value }) }),
     /* @__PURE__ */ React.createElement(Input, { label: "Model", mono: true, value: d.model, onChange: (e) => update(i, { model: e.target.value }), placeholder: "concrete model id \u2014 e.g. claude-opus-5-5" }),
-    /* @__PURE__ */ React.createElement(Select, { label: "Effort", options: [...TidepoolRules.EFFORT_LEVELS], value: d.effort, onChange: (e) => update(i, { effort: e.target.value }) }),
+    /* @__PURE__ */ React.createElement(Select, { label: "Effort", options: TidepoolRules.EFFORT_LEVELS.filter((effort) => !TidepoolRules.whyInvalidEffort(d.provider, d.model, effort)), value: d.effort, onChange: (e) => update(i, { effort: e.target.value }) }),
     /* @__PURE__ */ React.createElement(Input, { label: "Price in", error: TidepoolRules.whyInvalidPrice(readNumericDraft(d.price_in)), mono: true, value: d.price_in, onChange: (e) => update(i, { price_in: e.target.value }), placeholder: "USD / MTok" }),
     /* @__PURE__ */ React.createElement(Input, { label: "Price out", error: TidepoolRules.whyInvalidPrice(readNumericDraft(d.price_out)), mono: true, value: d.price_out, onChange: (e) => update(i, { price_out: e.target.value }), placeholder: "USD / MTok" }),
     /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "sm", onClick: () => setDraft(draft.filter((_, j) => j !== i)), "aria-label": `remove ${d.provider} ${d.tier} ${d.model}`.trim() }, "Remove")
