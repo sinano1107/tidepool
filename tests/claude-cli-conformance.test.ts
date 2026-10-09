@@ -97,6 +97,8 @@ it.each([
   [{ auto: null }, "null"],
   [{ auto: { directory: "/unexpected" } }, '{"directory":"/unexpected"}'],
   [["/unexpected"], '["/unexpected"]'],
+  ["/unexpected", '"/unexpected"'],
+  [null, "null"],
 ])("Board call の memory_paths %j は不合格になり、観測値を detail に残す", async (memoryPaths, detail) => {
   const [init, ...rest] = WORKER_STREAM.split("\n");
   const stdout = [JSON.stringify({ ...JSON.parse(init!), memory_paths: memoryPaths }), ...rest].join("\n");
@@ -108,6 +110,8 @@ it.each([
   const failed = rows.filter((row) => !row.pass);
   expect(failed.map((row) => row.surface)).toEqual(["result line usage"]);
   expect(failed[0]!.detail).toContain(detail);
+  // 理由は観測値の文字列しか受け取らず、入れ物ごと読めない形と `auto` の値を区別できない
+  expect(failed[0]!.detail).not.toContain("carries `auto`");
   expect(ok).toBe(false);
 });
 
