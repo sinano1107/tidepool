@@ -1069,11 +1069,14 @@ export function rejectMemoryProposal(db: Db, proposal: MemoryProposal, questionI
   if ("candidate_id" in proposal) invalidateMemoryEntry(db, { entry_id: named.id, reason: "rejected" }, HUMAN_WORKER_ID, origin, at, { question_id: questionId });
 }
 
-/** 無効化されていない kinds(省略 = 種別を問わない)のどれかで、state を渡せばその state の entry(提案が名指す entry と、書き込みの supersedes)。 */
+/** 無効化されていない kinds(省略 = 種別を問わない)のどれかで、state を渡せばその state の entry(提案が名指す entry と、書き込みの supersedes)。
+ *  無効化済みの id は、本文が同じ鎖の末尾(過去の提案の一覧の relocated と同じ)を名指して拒む(ADR 0222 決定5)。 */
 function requireLive(db: Db, id: number, kinds: Array<MemoryEntryFields["kind"]> | undefined, state?: MemoryEntryFields["state"]): EntryRow {
   const row = requireEntry(db, id);
   if ((kinds && !kinds.includes(row.kind)) || row.invalidation_reason !== null || (state !== undefined && row.state !== state)) {
-    throw new DomainError(`memory entry ${id} is not a non-invalidated ${kinds?.join(" or ") ?? "entry"}${state ? ` in state ${state}` : ""}`);
+    const tail = sameBodyChain(db, row, restoredAs(db)).at(-1)!;
+    const lives = tail.id === id ? "" : `: it now lives as entry ${tail.id}${tail.invalidation_reason === null ? "" : `, which is invalidated too (${tail.invalidation_reason})`}`;
+    throw new DomainError(`memory entry ${id} is not a non-invalidated ${kinds?.join(" or ") ?? "entry"}${state ? ` in state ${state}` : ""}${lives}`);
   }
   return row;
 }
@@ -1734,9 +1737,15 @@ export function pullMemoryProposals(db: Db, reader: Pick<MemoryReader, "taskId" 
   })();
 }
 
-/** list_memory_proposals の行が名指すエントリ(candidate か invalidate の target か既存の後継)。pull と材料の節の記録が同じ id を数える。 */
+/** list_memory_proposals の行が名指すエントリ(candidate か invalidate の target か既存の後継)の、本文が同じ鎖の末尾(ADR 0222 決定4)。
+ *  pull と材料の節の記録が同じ id を数える。 */
 const proposalEntryIds = (rows: ReturnType<typeof memoryProposalRows>) => [
-  ...new Set(rows.map(({ proposal }) => (proposal.op === "invalidate" ? proposal.target.id : "successor" in proposal ? proposal.successor.id : proposal.candidate_id))),
+  ...new Set(
+    rows.map(({ proposal, relocated }) => {
+      const named = pinnedIds(proposal, true)[0]!;
+      return relocated.find(({ id }) => id === named)?.tail_id ?? named;
+    }),
+  ),
 ];
 
 /** list_memory_proposals の行。window を渡すと、回答か陳腐化の event がその窓 `(after, upTo]` にある提案だけ
@@ -1751,14 +1760,21 @@ function memoryProposalRows(db: Db, window?: MetaReviewWindow) {
        FROM tasks t WHERE json_extract(t.question_proposal, '$.kind') = 'memory' ORDER BY t.rowid`,
     )
     .all() as Array<{ id: string; question_proposal: string; answered: string | null; stale: string | null; settled_id: number | null }>;
+  const restored = restoredAs(db);
   return rows
     .filter(({ settled_id }) => !window || inWindow(settled_id, window))
     .map((row) => {
+      const proposal = JSON.parse(row.question_proposal) as MemoryProposal;
       const answered = row.answered === null ? null : (JSON.parse(row.answered) as Extract<EventPayload, { kind: "question_answered" }>);
       const stale = row.stale === null ? null : (JSON.parse(row.stale) as Extract<EventPayload, { kind: "memory_proposal_stale" }>);
       return {
         question_id: row.id,
-        proposal: JSON.parse(row.question_proposal) as MemoryProposal,
+        proposal,
+        // pin した本文の今の居場所(ADR 0222 決定2・3): 人間の面の moved と違い、復元の複製もたどり末尾の生死を見せる
+        relocated: pinnedIds(proposal, true).flatMap((id) => {
+          const tail = sameBodyChain(db, requireEntry(db, id), restored).at(-1)!;
+          return tail.id === id ? [] : [{ id, tail_id: tail.id, path: tail.path, scope: tail.scope, invalidation_reason: tail.invalidation_reason }];
+        }),
         answer: answered?.answers[0]?.answer ?? null,
         // 人間の原文(original_* と注釈の original)は人間の面と正本の event にだけ残す —— 一覧2 verb と同じ側(#1173 / ADR 0122 追記 #1225)
         amendment: answered?.amendment

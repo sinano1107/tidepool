@@ -1088,6 +1088,8 @@ function registerMemoryMetaReviewVerbs(server: McpServer, deps: McpDeps, run: Me
         "List every past memory proposal (approve, consolidate, invalidate) with the human's answer, amendment and comment, or " +
         "why the board settled it as observed (an entry it pinned was invalidated first). A rejected or deferred proposal always carries the " +
         "human's reason or what is still undecided in comment — read it so you re-propose a rejected one only when that reason no longer holds, and can redraft closer to what they want. " +
+        "Each pinned entry that was since moved or restored is listed in relocated with the entry its body now lives as (tail_id, path, scope) " +
+        "and that entry's invalidation_reason (null while it is live): re-propose with tail_id, not the pinned id. " +
         "Proposals come oldest first. " +
         nextDescription("list_memory_proposals", "proposals"),
       inputSchema: { next },
@@ -1225,7 +1227,8 @@ function registerMemoryMetaReviewVerbs(server: McpServer, deps: McpDeps, run: Me
         "drafted as a new candidate; successor_id, an approved Behavior or Exemplar you keep instead; or candidate_id, an existing " +
         "Behavior or Exemplar candidate. With successor_id, replaces takes approved entries only; fold a candidate into an existing approved " +
         "entry with fold_memory's successor_id. Re-propose a consolidation that went stale or was deferred with its candidate_id and the " +
-        "replaces you now judge right. With text, based_on_decision is the event id log_decision returned for your reasoning; the new " +
+        "replaces you now judge right. When re-proposing a past proposal, take each id from list_memory_proposals' relocated tail_id " +
+        "where that entry was moved or restored. With text, based_on_decision is the event id log_decision returned for your reasoning; the new " +
         "candidate keeps the source the replaced entries share, and takes based_on_decision as its source when they share none. With " +
         "text.kind exemplar it is an Exemplar: give annotations instead of text.text; the replaced entries must share a source that " +
         "renders a case; an Exemplar candidate_id likewise needs replaces that share its source. op invalidate asks to drop the " +
