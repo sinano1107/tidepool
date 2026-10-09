@@ -1553,35 +1553,6 @@ it("CI 赤を読んでいる間に門が閉じた PR は、question なしでキ
   ]);
 });
 
-it("CI 赤を読んでいる間に profile が解決できなくなった PR は、question なしで agent を quarantine に落としてキューに残り、直った後の tick で CI 赤の question を立てる", async () => {
-  const workspace = await makeWorkspace("landing-red-ci-unresolvable");
-  const { db, clock } = await openBoard();
-  const github = new FakeGitHubClient();
-  queueAutoMerge(db, clock, 1);
-  let resolveAuthority = (): AuthorityProfile => profile("auto_if_ci_green");
-  redCiThen(github, () => {
-    if (github.ciChecks.length === 1) resolveAuthority = unresolvable;
-  });
-  const landing = createLanding({
-    defaultAgentName: "tako",
-    db,
-    clock,
-    workspace,
-    github,
-    resolveAuthority: () => resolveAuthority(),
-  });
-
-  await landing.tick("auto_merge", clock.now());
-  expect(mergeQuestions(db)).toEqual([]);
-  expect(quarantineQuestion(db, "agent", "tako")).toBeDefined();
-
-  resolveAuthority = () => profile("auto_if_ci_green");
-  await landing.tick("auto_merge", clock.now());
-  expect(mergeQuestions(db)).toEqual([
-    { pr: 1, registrant: [BOARD_WORKER_ID, "board"], recommendation: "hold", purpose: CI_RED_PURPOSE },
-  ]);
-});
-
 it("CI 赤の question の登録が throw したら、PR は無言でキューから消えず、次の tick で question が立つ(ADR 0105 決定3)", async () => {
   const workspace = await makeWorkspace("landing-red-ci-question-throws");
   const { db, clock } = await openBoard();
@@ -1657,7 +1628,8 @@ it("escalate で開いた PR の後にダイヤルを auto_if_ci_green へ緩め
   expect(mergeQuestions(db).map((q) => q.pr)).toEqual([1]);
 });
 
-// ADR 0217 決定3: 着地の2点 — PR を開く時点と無人 merge の瞬間 — で profile が解決できなければ、
+// ADR 0217 決定3: 着地の2点 — PR を開く時点と、無人 merge キューの PR に CI を読んだ後で行為する瞬間 — で
+// profile が解決できなければ、
 // ダイヤルを推測せず agent を quarantine に落とす。以下はこの判定を述べる唯一の場所(ADR 0107)。
 const unresolvable = (): AuthorityProfile => {
   throw new UnknownAgentError("tako");
@@ -1809,6 +1781,35 @@ it("CI を読んでいる間に profile が解決できなくなっても merge 
   expect(github.merged).toEqual([]);
   expect(mergeQuestions(db)).toEqual([]);
   expect(quarantineQuestion(db, "agent", "tako")).toBeDefined();
+});
+
+it("CI 赤を読んでいる間に profile が解決できなくなった PR は、question なしで agent を quarantine に落としてキューに残り、直った後の tick で CI 赤の question を立てる", async () => {
+  const workspace = await makeWorkspace("landing-red-ci-unresolvable");
+  const { db, clock } = await openBoard();
+  const github = new FakeGitHubClient();
+  queueAutoMerge(db, clock, 1);
+  let resolveAuthority = (): AuthorityProfile => profile("auto_if_ci_green");
+  redCiThen(github, () => {
+    if (github.ciChecks.length === 1) resolveAuthority = unresolvable;
+  });
+  const landing = createLanding({
+    defaultAgentName: "tako",
+    db,
+    clock,
+    workspace,
+    github,
+    resolveAuthority: () => resolveAuthority(),
+  });
+
+  await landing.tick("auto_merge", clock.now());
+  expect(mergeQuestions(db)).toEqual([]);
+  expect(quarantineQuestion(db, "agent", "tako")).toBeDefined();
+
+  resolveAuthority = () => profile("auto_if_ci_green");
+  await landing.tick("auto_merge", clock.now());
+  expect(mergeQuestions(db)).toEqual([
+    { pr: 1, registrant: [BOARD_WORKER_ID, "board"], recommendation: "hold", purpose: CI_RED_PURPOSE },
+  ]);
 });
 
 it("解決できてダイヤルを持たない組み込みの reviewer profile は、quarantine に落ちない", async () => {
