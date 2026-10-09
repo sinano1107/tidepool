@@ -1665,6 +1665,71 @@ const sharedCase = ([head, ...rest]: TpMemoryEntry[]) =>
   head && head.source.kind === 'event' && head.source.ref !== head.id && rest.every((e) => e.source.kind === 'event' && e.source.ref === head.source.ref)
     ? head.source.ref : null;
 
+type TpOneTreeKey = Extract<keyof WireContract, `POST /api/settings/memory/${string} 409`>;
+type TpOneTreePair = WireContract[TpOneTreeKey]['pairs'][number];
+/** one path's row of the blocking panel: the existing workspace definitions named there */
+type TpBlockingRow = { path: string; defs: { id: number; scope: string; entry: TpMemoryEntry | undefined }[] };
+
+// the definitions blocking a whole-board entry (ADR 0221): one row per path, the shallowest first; a row waits until every
+// row above it is resolved (its definitions invalidated, as the reloaded list shows) and offers three exits, none the default
+function OneTreePanel({ pairs, entries, translations, busy, onWiden, onWrite, onRename, onClose }: {
+  pairs: TpOneTreePair[];
+  entries: TpMemoryEntry[];
+  translations: Record<number, { title?: string; text?: string }>;
+  busy: boolean;
+  onWiden: (row: TpBlockingRow, entry: TpMemoryEntry) => void;
+  onWrite: (row: TpBlockingRow) => void;
+  onRename: (scope: string, path: string) => void;
+  onClose: () => void;
+}) {
+  const { Button } = window.TidepoolDesignSystem_8a0ead;
+  const muted = { margin: 0, fontSize: 'var(--text-xs)', color: 'var(--text-muted)' };
+  const rows: TpBlockingRow[] = [];
+  for (const { definition: { id, existing, path, scope } } of pairs) {
+    if (!existing || id === null) continue;
+    const row = rows.find((r) => r.path === path) ?? rows[rows.push({ path, defs: [] }) - 1]!;
+    if (!row.defs.some((d) => d.id === id)) row.defs.push({ id, scope, entry: entries.find((e) => e.id === id) });
+  }
+  rows.sort((a, b) => a.path.split('/').length - b.path.split('/').length);
+  const resolved = (row: TpBlockingRow) => row.defs.every((d) => d.entry?.invalidation_reason);
+  return (
+    <div data-testid="memory-blocking" style={{ display: 'flex', flexDirection: 'column', gap: 8, border: '1px solid var(--border-default)', borderRadius: 6, padding: 10 }}>
+      <p style={muted}>
+        a whole-board entry cannot sit at or under a path a workspace defines. For each path, top first: widen a definition
+        board-wide as it is, write a board-wide wording that replaces it, or rename the workspace's branch — then try again. Or close this and change your path.
+      </p>
+      {rows.map((row) => {
+        const waiting = rows.some((above) => row.path.startsWith(`${above.path}/`) && !resolved(above));
+        const done = resolved(row);
+        return (
+          <div key={row.path} data-testid={`memory-blocking-${row.path}`} style={{ display: 'flex', flexDirection: 'column', gap: 4, borderTop: '1px solid var(--border-default)', paddingTop: 8 }}>
+            <p style={{ ...muted, fontFamily: 'var(--font-mono)' }}>{row.path}{done ? ' · resolved' : waiting ? ' · resolve the path above first' : ''}</p>
+            {row.defs.length > 1 && !done && <p style={muted}>defined by {row.defs.length} workspaces: widening one wording replaces them all</p>}
+            {row.defs.map(({ id, scope, entry }) => {
+              const shown = entry?.original ?? translations[id];
+              return (
+                <div key={id} style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                  <p style={{ ...muted, fontFamily: 'var(--font-mono)' }}>#{id} · {scope}</p>
+                  {entry && <p style={{ margin: 0, fontSize: 'var(--text-sm)' }}>{entry.text}</p>}
+                  {shown?.text && <p style={muted}>{entry?.original ? 'original' : 'translation'}: {shown.text}</p>}
+                  {!done && entry && (
+                    <div style={{ display: 'flex', gap: 8 }}>
+                      <Button variant="secondary" size="sm" disabled={busy || waiting} onClick={() => onWiden(row, entry)}>Widen board-wide</Button>
+                      <Button variant="secondary" size="sm" disabled={busy || waiting} onClick={() => onRename(scope, row.path)}>Rename {scope}'s branch</Button>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+            {!done && <div><Button variant="secondary" size="sm" disabled={busy || waiting} onClick={() => onWrite(row)}>Write a board-wide wording</Button></div>}
+          </div>
+        );
+      })}
+      <div><Button variant="ghost" size="sm" disabled={busy} onClick={onClose}>Close</Button></div>
+    </div>
+  );
+}
+
 function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit, focus }: {
   workspaceNames: string[];
   agentNames: string[];
@@ -1690,11 +1755,16 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit, fo
     }
   };
   React.useEffect(() => { load(); }, []);
-  // only displayed entries need a translation; keep completed and in-flight work across filters and reloads
+  // the one-tree gate's refusal (ADR 0221): the operation it blocked ('write', 'branch', 'move:<id>', 'restore:<id>'),
+  // whose form shows the blocking panel, and the pairs it named
+  const [blocked, setBlocked] = React.useState<{ at: string; pairs: TpOneTreePair[] } | null>(null);
+  const blockingIds = new Set(blocked?.pairs.map((p) => p.definition.id));
+  // only displayed entries and the blocking panel's definitions (whatever the filter) need a translation; keep
+  // completed and in-flight work across filters and reloads
   const translating = React.useRef(new Set<number>());
   React.useEffect(() => {
     if (language === 'English') return;
-    for (const entry of displayed ?? []) {
+    for (const entry of [...(displayed ?? []), ...(entries ?? []).filter((e) => blockingIds.has(e.id))]) {
       if (entry.original !== null || translations[entry.id] || translating.current.has(entry.id)) continue;
       translating.current.add(entry.id);
       translateTarget({ type: 'memory_entry', entry_id: entry.id })
@@ -1702,7 +1772,7 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit, fo
         .catch(() => {})
         .finally(() => translating.current.delete(entry.id));
     }
-  }, [entries, filter.workspace, filter.kind, filter.state, language]);
+  }, [entries, filter.workspace, filter.kind, filter.state, language, blocked]);
   // once per visit: a later reload (a save, a move) must not pull the list back to the entry
   const focused = React.useRef(false);
   React.useEffect(() => {
@@ -1778,25 +1848,40 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit, fo
       }
       else await api('/api/settings/memory/definitions', { ...body, ...supersedes });
       say('success', `${draft.kind} saved`, body.path);
-      edit.close();
+      // a board-wide wording written from the blocking panel hands the form back to the draft it parked
+      if (parked) unpark();
+      else edit.close();
       if (draft.supersedes.length > 0) setSelected([]);
       await load();
     } catch (err) {
-      say('danger', `${draft.kind} save failed`, String((err as Error).message || err));
+      const route = ({ knowledge: 'knowledge', behavior: 'behaviors', exemplar: 'exemplars', definition: 'definitions' } as const)[draft.kind as 'knowledge'];
+      if (!blockedBy(err, `POST /api/settings/memory/${route} 409`, 'write')) say('danger', `${draft.kind} save failed`, String((err as Error).message || err));
     }
     setBusy(false);
   };
 
-  // a one-shot change to an entry (invalidate, move): only the form that submitted closes
-  const submit = async (path: `/${string}`, body: Record<string, unknown>, [title, detail]: [string, string], failed: string, close?: () => void) => {
+  // a refusal naming an existing workspace definition opens the blocking panel instead of a toast; one naming only
+  // definitions the operation itself carries stays a toast (ADR 0221)
+  const blockedBy = (err: unknown, key: TpOneTreeKey, at: string) => {
+    const pairs = apiErrorDetail(err, key)?.pairs;
+    if (!pairs?.some((p) => p.definition.existing)) return false;
+    setBlocked({ at, pairs });
+    load();
+    return true;
+  };
+  // a one-shot change to an entry (invalidate, move, restore): only the form that submitted closes. `gate` names the
+  // operation for the blocking panel when the change places a whole-board entry
+  const submit = async (path: `/${string}`, body: Record<string, unknown>, [title, detail]: [string, string], failed: string, close?: () => void,
+    gate?: { key: TpOneTreeKey; at: string }) => {
     setBusy(true);
     try {
       await api(path, body);
       say('success', title, detail);
+      if (gate && blocked?.at === gate.at) setBlocked(null);
       close?.();
       await load();
     } catch (err) {
-      say('danger', failed, String((err as Error).message || err));
+      if (!(gate && blockedBy(err, gate.key, gate.at))) say('danger', failed, String((err as Error).message || err));
     }
     setBusy(false);
   };
@@ -1842,7 +1927,44 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit, fo
     .filter((name): name is string => name !== null && !workspaceNames.includes(name))
     .map((name) => ({ value: name, label: `${name} (not registered)` }));
   const orphanedFrom = orphanedOptions((entries ?? []).filter((e) => e.invalidation_reason === null));
-  const move = (path: `/${string}`, body: Record<string, unknown>, detail: string, close: () => void) => submit(path, body, ['moved', detail], 'move failed', close);
+  const move = (path: `/${string}`, body: Record<string, unknown>, detail: string, close: () => void, gate?: { key: TpOneTreeKey; at: string }) =>
+    submit(path, body, ['moved', detail], 'move failed', close, gate);
+
+  // the panel goes with the form it opened in: closing that form (or a restore's own success) closes it
+  const openForms = [writing && 'write', branchMove && 'branch', moving && `move:${moving.id}`];
+  React.useEffect(() => {
+    if (blocked && !blocked.at.startsWith('restore:') && !openForms.includes(blocked.at)) setBlocked(null);
+  });
+
+  // the blocking panel's exits (ADR 0221). Widen: one definition moves board-wide as it is (only its scope changes); a
+  // path several workspaces define takes the picked wording into one board-wide definition that replaces them all
+  const widen = (row: TpBlockingRow, entry: TpMemoryEntry) => row.defs.length === 1
+    ? submit(`/api/settings/memory/entries/${entry.id}/move`, { workspace: null, path: row.path }, ['widened', `#${entry.id} → board-wide`], 'widen failed')
+    : submit('/api/settings/memory/definitions', {
+      workspace: null, path: row.path, text: entry.text, ...(entry.original ? { original_text: entry.original.text } : {}), supersedes: row.defs.map((d) => d.id),
+    }, ['widened', `#${entry.id}'s wording → board-wide`], 'widen failed');
+  // Write: the write form as a board-wide definition superseding the row, filled the way Edit fills it; a draft already
+  // in the form is parked and comes back once that definition saves or is cancelled
+  const [parked, setParked] = React.useState<{ draft: typeof blank; blocked: typeof blocked } | null>(null);
+  React.useEffect(() => { if (!writing) setParked(null); }, [writing]);
+  const unpark = () => { setDraft(parked!.draft); setBlocked(parked!.blocked); setParked(null); };
+  const writeBoardWide = (row: TpBlockingRow) => {
+    const one = row.defs.length === 1 ? row.defs[0]!.entry : undefined;
+    const fill = () => setDraft({
+      ...blank, kind: 'definition', kinds: ['definition'], path: row.path, supersedes: row.defs.map((d) => d.id),
+      text: one?.text ?? '', originalText: one?.original?.text ?? '',
+    });
+    if (!writing) return edit.open(writeId, fill);
+    setParked({ draft, blocked: blocked?.at === 'write' ? blocked : null });
+    if (blocked?.at === 'write') setBlocked(null);
+    fill();
+  };
+  // Rename: the branch move form with its source (and the same workspace as destination) filled
+  const renameBranch = (scope: string, path: string) => setBranchMove({ workspace: scope, path, to_workspace: scope, to_path: '', merge: false });
+  const blockingPanel = (at: string) => blocked?.at === at && entries && (
+    <OneTreePanel pairs={blocked.pairs} entries={entries} translations={translations} busy={busy}
+      onWiden={widen} onWrite={writeBoardWide} onRename={renameBranch} onClose={() => setBlocked(null)} />
+  );
 
   return (
     <Card style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
@@ -1872,11 +1994,13 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit, fo
               onClick={() => move('/api/settings/memory/branches/move', {
                 workspace: branchMove.workspace || null, path: TidepoolRules.normalizeText(branchMove.path),
                 to_workspace: branchMove.to_workspace || null, to_path: TidepoolRules.normalizeText(branchMove.to_path), merge: branchMove.merge,
-              }, `${TidepoolRules.normalizeText(branchMove.path)} → ${TidepoolRules.normalizeText(branchMove.to_path)}`, () => setBranchMove(null))}>
+              }, `${TidepoolRules.normalizeText(branchMove.path)} → ${TidepoolRules.normalizeText(branchMove.to_path)}`, () => setBranchMove(null),
+              { key: 'POST /api/settings/memory/branches/move 409', at: 'branch' })}>
               Move branch
             </Button>
             <Button variant="ghost" size="sm" disabled={busy} onClick={() => setBranchMove(null)}>Cancel</Button>
           </div>
+          {blockingPanel('branch')}
         </React.Fragment>
       )}
       {selected.length > 0 && !writing && (
@@ -1943,9 +2067,10 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit, fo
           {draft.backTranslation && (
             <p style={muted} data-testid="memory-back-translation">back in {language}: {fields.map((key) => draft.backTranslation![key]).join(' — ')}</p>
           )}
+          {blockingPanel('write')}
           <EditActions busy={busy} saveLabel={`Save ${draft.kind}`}
             ok={!holdsOrphan && filled}
-            onSave={save} onCancel={() => edit.close()} />
+            onSave={save} onCancel={() => (parked ? unpark() : edit.close())} />
         </React.Fragment>
       )}
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
@@ -1987,11 +2112,13 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit, fo
           {entry.invalidation_reason && entry.invalidation_reason !== 'path_moved' && !entry.restored_as && (
             <div style={{ display: 'flex', gap: 8 }}>
               <Button variant="ghost" size="sm" disabled={busy}
-                onClick={() => submit(`/api/settings/memory/entries/${entry.id}/restore`, {}, ['entry restored', `#${entry.id}`], 'restore failed')}>
+                onClick={() => submit(`/api/settings/memory/entries/${entry.id}/restore`, {}, ['entry restored', `#${entry.id}`], 'restore failed', undefined,
+                  { key: 'POST /api/settings/memory/entries/:entry_id/restore 409', at: `restore:${entry.id}` })}>
                 Restore
               </Button>
             </div>
           )}
+          {blockingPanel(`restore:${entry.id}`)}
           {moving?.id === entry.id && (
             <React.Fragment>
               {/* the entry's current workspace, if it has left the registry, is shown but cannot be the destination */}
@@ -2000,11 +2127,13 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit, fo
               <Input label="Path" mono value={moving!.path} onChange={(e) => setMoving({ ...moving!, path: e.target.value })} />
               <div style={{ display: 'flex', gap: 8 }}>
                 <Button variant="secondary" size="sm" disabled={busy || !!TidepoolRules.whyBlank(moving!.path) || moving!.workspace === deadRefs(entry).workspace}
-                  onClick={() => move(`/api/settings/memory/entries/${entry.id}/move`, { workspace: moving!.workspace || null, path: TidepoolRules.normalizeText(moving!.path) }, `#${entry.id} → ${TidepoolRules.normalizeText(moving!.path)}`, () => setMoving(null))}>
+                  onClick={() => move(`/api/settings/memory/entries/${entry.id}/move`, { workspace: moving!.workspace || null, path: TidepoolRules.normalizeText(moving!.path) }, `#${entry.id} → ${TidepoolRules.normalizeText(moving!.path)}`, () => setMoving(null),
+                  { key: 'POST /api/settings/memory/entries/:entry_id/move 409', at: `move:${entry.id}` })}>
                   Move #{entry.id}
                 </Button>
                 <Button variant="ghost" size="sm" disabled={busy} onClick={() => setMoving(null)}>Cancel</Button>
               </div>
+              {blockingPanel(`move:${entry.id}`)}
             </React.Fragment>
           )}
           {invalidating?.id === entry.id && (

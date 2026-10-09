@@ -266,12 +266,38 @@ function requireOneTree(db: Db, since: number): void {
     return `${entry} lies at or under ${def}`;
   });
   const placesWholeBoard = db.prepare("SELECT 1 FROM memory_entries WHERE scope IS NULL AND id > ?").get(since) !== undefined;
-  throw new DomainError(
+  const side = (id: number, from: number | null) => ({ id: id <= since ? id : from, existing: id <= since });
+  throw new OneTreeError(
     `${hits.join("; ")}: a workspace cannot define a path that holds whole-board entries at or under it — ` +
       (placesWholeBoard
         ? "write a whole-board definition at the workspace definition's path with supersedes, rename the workspace branch with move_memory_branch, or choose another path"
         : "file under the branch as it is, or define a sub-branch"),
+    pairs.map((p) => ({
+      entry: { ...side(p.e_id, p.e_from), kind: p.e_kind as MemoryEntryFields["kind"], path: p.e_path },
+      definition: { ...side(p.d_id, p.d_from), path: p.d_path, scope: p.d_scope },
+    })),
   );
+}
+
+/** 門が名指す組の片側: 今ある行(`existing`)か、この操作が置く行(`id` は null)・動かす行(`id` は移動元)。 */
+interface OneTreeSide {
+  id: number | null;
+  existing: boolean;
+  path: string;
+}
+export interface OneTreePair {
+  entry: OneTreeSide & { kind: MemoryEntryFields["kind"] };
+  definition: OneTreeSide & { scope: string };
+}
+
+/** 重ねた1本の木の門の拒否(ADR 0221): message は worker・管理MCP が読む英語の文のまま、当たった組をすべて構造で持つ。 */
+export class OneTreeError extends DomainError {
+  constructor(
+    message: string,
+    readonly pairs: OneTreePair[],
+  ) {
+    super(message);
+  }
 }
 
 /** Knowledge の書き込み(spec #586 E)。承認不要なので書いた瞬間に approved。 */

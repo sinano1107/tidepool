@@ -56,6 +56,7 @@ import {
   memorySettingsChangeSchema,
   moveMemory,
   moveMemoryBranch,
+  OneTreeError,
   previewCase,
   questionAnnotations,
   readMemorySettings,
@@ -1636,6 +1637,18 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       try {
         sendJson(res, await write(parsed.data));
       } catch (err) {
+        if (err instanceof OneTreeError) {
+          // 重ねた1本の木の門(ADR 0221): 盤面全体のエントリを置く人間の口が、名指された組を WebUI の欄に渡す。本文は1つ、照らす行は7つ
+          const body = { error: err.message, pairs: err.pairs } satisfies WireContract["POST /api/settings/memory/knowledge 409"];
+          body satisfies WireContract["POST /api/settings/memory/definitions 409"];
+          body satisfies WireContract["POST /api/settings/memory/behaviors 409"];
+          body satisfies WireContract["POST /api/settings/memory/exemplars 409"];
+          body satisfies WireContract["POST /api/settings/memory/entries/:entry_id/move 409"];
+          body satisfies WireContract["POST /api/settings/memory/branches/move 409"];
+          body satisfies WireContract["POST /api/settings/memory/entries/:entry_id/restore 409"];
+          sendJson(res.status(409), body);
+          return;
+        }
         if (!(err instanceof DomainError)) throw err;
         sendJson(res.status(400), { error: err.message });
       }
