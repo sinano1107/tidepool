@@ -1903,13 +1903,15 @@ export function recordPrOpened(
     switch (landing.surface) {
       case "merge_question":
         ask(
-          landing.reason === "protected"
-            ? `"${task.title}" completed and opened PR #${prNumber} against a protected ` +
-                `workspace — always needs a human merge, regardless of the merge dial. Merge it now?`
-            : landing.reason === "dial"
-              ? `"${task.title}" completed and opened PR #${prNumber}. Merge it now?`
-              : `"${task.title}" completed and opened PR #${prNumber}, but carries risk — ` +
-                `auto_if_ci_green never auto-merges a risky task. Merge it now?`,
+          {
+            protected:
+              `"${task.title}" completed and opened PR #${prNumber} against a protected ` +
+              `workspace — always needs a human merge, regardless of the merge dial. Merge it now?`,
+            dial: `"${task.title}" completed and opened PR #${prNumber}. Merge it now?`,
+            risk:
+              `"${task.title}" completed and opened PR #${prNumber}, but carries risk — ` +
+              `auto_if_ci_green never auto-merges a risky task. Merge it now?`,
+          }[landing.reason],
         );
         break;
       case "auto_merge_queue":

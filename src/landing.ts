@@ -417,12 +417,11 @@ export function createLanding(deps: LandingDeps): Landing {
         });
         return;
       }
-      const changed =
-        landing.reason === "protected"
-          ? `workspace "${workspaceName}" is now protected, which always needs a human merge`
-          : landing.reason === "dial"
-            ? "the merge dial is now escalate"
-            : "the task now carries risk, and auto_if_ci_green never auto-merges a risky task";
+      const changed = {
+        protected: `workspace "${workspaceName}" is now protected, which always needs a human merge`,
+        dial: "the merge dial is now escalate",
+        risk: "the task now carries risk, and auto_if_ci_green never auto-merges a risky task",
+      }[landing.reason];
       registerMergeQuestion(
         deps.db,
         task,
