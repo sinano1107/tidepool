@@ -259,14 +259,16 @@ describe("ClaudeDraftClient", () => {
     await client.draftTask("dump", "English");
     applyExecutionSettingsChange(
       board,
-      { setting: "row", row: { provider: "anthropic", tier: "economy", model: "claude-haiku-4-5", effort: "low", price_in: 1, price_out: 5 } },
+      { setting: "row", row: { provider: "anthropic", tier: "economy", model: "claude-haiku-4-5", effort: null, price_in: 1, price_out: 5 } },
       "webui",
       NOW,
     );
     await client.draftTask("dump", "English");
 
     expect(calls[0]!.join(" ")).toContain("--model claude-sonnet-5-5 --effort high");
-    expect(calls[1]!.join(" ")).toContain("--model claude-haiku-4-5 --effort low");
+    // effort「無い」の行の Board call は --effort を省く(ADR 0218 決定5)
+    expect(calls[1]!.join(" ")).toContain("--model claude-haiku-4-5");
+    expect(calls[1]).not.toContain("--effort");
   });
 
   it("盤面既定の段を選び直すと、次の下書きはその段の anthropic の最安の行で走る(ADR 0200 決定4)", async () => {
@@ -322,7 +324,7 @@ describe("ClaudeDraftClient", () => {
     const board = openDb(":memory:");
     applyExecutionSettingsChange(
       board,
-      { setting: "row", row: { provider: "anthropic", tier: "economy", model: "claude-haiku-4-5", effort: "low", price_in: 1, price_out: 5 } },
+      { setting: "row", row: { provider: "anthropic", tier: "economy", model: "claude-haiku-4-5", effort: null, price_in: 1, price_out: 5 } },
       "webui",
       NOW,
     );

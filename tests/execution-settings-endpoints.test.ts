@@ -75,7 +75,7 @@ it("POST /api/settings/execution は1つの変更を受け、Provider 順位・�
 
 it("表の行は (provider, model, effort) を鍵に追加・編集(key つき)・削除でき、同じ provider × tier に複数行を置ける(ADR 0114 決定2 / ADR 0200 決定5)", async () => {
   t = await bootTidepool();
-  const haiku = { provider: "anthropic", tier: "economy", model: "claude-haiku-4-5", effort: "low", price_in: 1, price_out: 5 };
+  const haiku = { provider: "anthropic", tier: "economy", model: "claude-haiku-5-5", effort: "low", price_in: 1, price_out: 5 };
   expect((await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "row", row: haiku })).status).toBe(200);
   expect((await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "row", key: { ...haiku, effort: "low" }, row: { ...haiku, effort: "high" } })).status).toBe(200);
   expect(
@@ -197,12 +197,12 @@ it("registry なしの盤面の暗黙の entry は Selector の表に追随す�
   t = await bootTidepool();
   await api(t.baseUrl, "POST", "/api/settings/execution", {
     setting: "row",
-    row: { provider: "anthropic", tier: "economy", model: "claude-haiku-4-5", effort: "low", price_in: 1, price_out: 5 },
+    row: { provider: "anthropic", tier: "economy", model: "claude-haiku-4-5", effort: null, price_in: 1, price_out: 5 },
   });
   await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "delete_row", provider: "anthropic", model: "claude-sonnet-5-5", effort: "high" });
   const work = await registerWork(t, "runs on the replaced row");
   await completeMetaReviews(t);
-  expect(settingsOf(work.id)).toMatchObject({ provider: "anthropic", model: "claude-haiku-4-5", effort: "low" });
+  expect(settingsOf(work.id)).toMatchObject({ provider: "anthropic", model: "claude-haiku-4-5", effort: null });
 });
 
 it("優先順位の既定を cost にすると、要求の無い task は最安の行で走り、行を消すとその行は候補から消える(ADR 0114 決定1・3)", async () => {

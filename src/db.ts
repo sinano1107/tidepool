@@ -261,17 +261,19 @@ export function openDb(path: string): Db {
     -- SEED_EXECUTION_SETTINGS)から**一度だけ**初期化し、以後は DB が正本で、
     -- 消した行も再オープンで戻らない(settings タブと管理MCP が編集する、#545)。
     -- model は具体 id だけ —— alias は行を書く扉が anthropic の adapter の拒否一覧で
-    -- 拒む(ADR 0182 決定1)。
+    -- 拒む(ADR 0182 決定1)。effort の NULL は「無い」—— CLI が effort を捨てる model の行(ADR 0218 決定5)。
+    -- 主キーの列の NULL は互いに別の値なので、(provider, model, 無い) が1行までは部分 index が保つ。
     CREATE TABLE IF NOT EXISTS execution_settings (
       provider  TEXT NOT NULL CHECK (provider IN ('anthropic', 'moonshot', 'openai')),
       model     TEXT NOT NULL,
       tier_id   INTEGER NOT NULL REFERENCES tiers(id),
-      effort    TEXT NOT NULL,
+      effort    TEXT,
       price_in  REAL NOT NULL CHECK (price_in >= 0),
       price_out REAL NOT NULL CHECK (price_out >= 0),
       PRIMARY KEY (provider, model, effort),
       UNIQUE (provider, model, tier_id)
     );
+    CREATE UNIQUE INDEX IF NOT EXISTS execution_settings_no_effort ON execution_settings (provider, model) WHERE effort IS NULL;
 
     -- ADR 0110 決定3 / 決定5 の盤面設定側(1行): advisor の上限(ADR 0208 決定1。種の既定は off —— advisor は
     -- CLI の上で experimental なので盤面でも明示して有効にする)、Provider

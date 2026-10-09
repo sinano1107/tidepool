@@ -76,12 +76,12 @@ export const BOARD_DEFAULT_PRIORITY: Priority = "quality";
  *  同じ (provider, tier) に複数行あってよい。行の鍵は (provider, model, effort) で、1つの段に
  *  同じ model は1行まで(ADR 0200 決定5)。model は具体 id だけ —— 行を書く扉
  *  (`applyExecutionSettingsChange`)が anthropic の adapter の拒否一覧で alias を
- *  拒む(ADR 0182 決定1)。 */
+ *  拒む(ADR 0182 決定1)。effort の null は「無い」—— CLI が effort を捨てる model の行(ADR 0218 決定5)。 */
 export interface ExecutionSettingRow {
   provider: Provider;
   tier: Tier;
   model: string;
-  effort: string;
+  effort: string | null;
   price_in: number;
   price_out: number;
 }
@@ -227,7 +227,7 @@ export const SEED_EXECUTION_SETTINGS: ExecutionSettingTable = [
 export interface ExecutionSetting {
   provider: Provider;
   model: string;
-  effort: string;
+  effort: string | null;
   advisor: string | undefined;
   /** 解決した段(ADR 0210 決定1)。候補は要求ティアの行だけなので、走った段 = pickup が解決した段。 */
   tier_id: TierId;
@@ -487,18 +487,18 @@ export function readExecutionSettingsWithQuarantine(db: Db) {
 }
 
 /** 表の行の鍵 = 主キー (provider, model, effort)(ADR 0200 決定5)。行を名指す面はこの3欄で名指す。 */
-const rowKeySchema = z.object({ provider: z.enum(PROVIDER_VALUES), model: requiredTextSchema, effort: requiredTextSchema });
+const rowKeySchema = z.object({ provider: z.enum(PROVIDER_VALUES), model: requiredTextSchema, effort: requiredTextSchema.nullable() });
 type RowKey = z.infer<typeof rowKeySchema>;
 
 /** 鍵として読める3欄(提案の行・spawn の記録も同じ3欄を持つ)。 */
-type RowKeyFields = { provider: string; model: string; effort: string };
+type RowKeyFields = { provider: string; model: string; effort: string | null };
 
 /** この行が鍵の行か。 */
 export const matchesRowKey = (row: ExecutionSettingRow, key: RowKeyFields) =>
   row.provider === key.provider && row.model === key.model && row.effort === key.effort;
 
 /** 行を文面で名指す綴り(エラー・question の diff)。 */
-export const rowName = (key: RowKeyFields) => `${key.provider} / ${key.model} at effort ${key.effort}`;
+export const rowName = (key: RowKeyFields) => `${key.provider} / ${key.model} ${key.effort === null ? "with no effort" : `at effort ${key.effort}`}`;
 
 /** `row` を表に書けるか: effort が語彙の中で、model がそれを下げない(ADR 0216 決定3・ADR 0218 決定4)。1つの (model, effort) の組が
  *  属する段は1つ、1つの段に同じ model は1行まで(ADR 0200 決定5)。`key` は編集で置き換わる行で、照合から外す。行を書く扉
@@ -529,7 +529,7 @@ export const executionSettingsChangeSchema = z.discriminatedUnion("setting", [
       provider: z.enum(PROVIDER_VALUES),
       tier: requiredTextSchema,
       model: requiredTextSchema,
-      effort: requiredTextSchema,
+      effort: requiredTextSchema.nullable(),
       price_in: z.number().superRefine((value, ctx) => {
         const reason = whyInvalidPrice(value);
         if (reason) ctx.addIssue({ code: "custom", message: reason });
@@ -576,7 +576,7 @@ export type ExecutionSettingsChange = z.infer<typeof executionSettingsChangeSche
 /** 行の提案の変更と、承認に添える修正値の形(ADR 0150 決定2): 動かせるのは分類と effort だけ。effort の値は model と合わせて
  *  見るので、提案の作成と承認の適用が合成した行を `assertRowFits` で検査する(ADR 0218 決定4)。 */
 const routingRowChangeSchema = z
-  .object({ tier: requiredTextSchema, effort: requiredTextSchema })
+  .object({ tier: requiredTextSchema, effort: requiredTextSchema.nullable() })
   .partial()
   .strict()
   .refine((change) => Object.keys(change).length > 0, { message: "name at least one of tier / effort" });
@@ -721,7 +721,7 @@ export function applyExecutionSettingsChange(
         if (key) {
           db.prepare(
             `UPDATE execution_settings SET provider = ?, tier_id = ${liveTierId("?")}, model = ?, effort = ?, price_in = ?, price_out = ?
-             WHERE provider = ? AND model = ? AND effort = ?`,
+             WHERE provider = ? AND model = ? AND effort IS ?`,
           ).run(provider, tier, model, effort, price_in, price_out, key.provider, key.model, key.effort);
         } else {
           db.prepare(`INSERT INTO execution_settings (provider, tier_id, model, effort, price_in, price_out) VALUES (?, ${liveTierId("?")}, ?, ?, ?, ?)`).run(
@@ -743,7 +743,7 @@ export function applyExecutionSettingsChange(
         break;
       case "delete_row":
         // 消す行が無ければ何も変わっていないので、操作イベントも残さない
-        if (db.prepare("DELETE FROM execution_settings WHERE provider = ? AND model = ? AND effort = ?").run(change.provider, change.model, change.effort).changes === 0) return null;
+        if (db.prepare("DELETE FROM execution_settings WHERE provider = ? AND model = ? AND effort IS ?").run(change.provider, change.model, change.effort).changes === 0) return null;
         break;
       default: {
         const column = change.setting;

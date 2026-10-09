@@ -157,7 +157,7 @@ it("読み口の既定の窓は読み手より前に完了した routing の登�
   const fresh = spawn(after.id, "deckhand", opus);
   exit(after.id, fresh, ["claude-opus-5-5-20261001"]); // セルは使用量の内訳の鍵でなく pin の綴り(ADR 0182 決定3)
   allocate(after.id, fresh, { judge, allocation: "overpowered", cause: "uncertain", evidence: "e" });
-  applyExecutionSettingsChange(db, { setting: "row", row: { provider: "anthropic", tier: "frontier", model: "claude-opus-4-1", effort: "max", price_in: 5, price_out: 25 } }, "mcp", at);
+  applyExecutionSettingsChange(db, { setting: "row", row: { provider: "anthropic", tier: "frontier", model: "claude-opus-5", effort: "max", price_in: 5, price_out: 25 } }, "mcp", at);
   applyExecutionSettingsChange(db, { setting: "priority", value: "cost" }, "webui", at);
   registerMetaReview(db, "memory", at);
   const reader = routingReview();
@@ -166,7 +166,7 @@ it("読み口の既定の窓は読み手より前に完了した routing の登�
   expect(listAllocations(db, reader, {}).allocations.map((a) => a.allocation)).toEqual(["overpowered"]);
   expect(listRoutingCells(db, reader, {})).toMatchObject({
     cells: [{ cell: { provider: "anthropic", model: "claude-opus-5-5" } }],
-    rows: [{ origin: "mcp", row: { model: "claude-opus-4-1", effort: "max" } }],
+    rows: [{ origin: "mcp", row: { model: "claude-opus-5", effort: "max" } }],
   });
   // since_watermark を渡せば前回より前も読める
   expect(listRoutingShadow(db, reader, { since_watermark: 0 }).shadow.map((r) => r.task_id)).toEqual([before.id, after.id]);
@@ -236,9 +236,22 @@ it("list_routing_cells の新セルは終わった session で初めて観測さ
   });
 });
 
+it("effort「無い」のセルは shadow 行と list_routing_cells で effort null として読める(ADR 0218 決定5)", () => {
+  const { db, work, spawn, exit, routingReview } = board();
+  const haiku = executionSetting("anthropic", "claude-haiku-4-5-20251001", { effort: null });
+  const task = work("t");
+  recordShadow(db, task.id, shadow(haiku, haiku, "prior"), at);
+  const seen = exit(task.id, spawn(task.id, "deckhand", haiku), [haiku.model]);
+  const reader = routingReview();
+
+  const cell = { provider: "anthropic", model: haiku.model, effort: null, advisor: null };
+  expect(listRoutingShadow(db, reader, {}).shadow).toEqual([expect.objectContaining({ recommended: cell, actual: cell })]);
+  expect(listRoutingCells(db, reader, {}).cells).toEqual([{ cell, first_observed_event_id: seen }]);
+});
+
 it("list_routing_cells の人間が変えた行は settings タブ / 管理MCP の直接編集だけで、提案 question への approve の適用は含まない(ADR 0151)", () => {
   const { db, routingReview } = board();
-  const row = { provider: "anthropic" as const, tier: "standard" as const, model: "claude-opus-4-1", effort: "high", price_in: 5, price_out: 25 };
+  const row = { provider: "anthropic" as const, tier: "standard" as const, model: "claude-opus-5", effort: "high", price_in: 5, price_out: 25 };
   applyExecutionSettingsChange(db, { setting: "row", row: { ...row, tier: "frontier" } }, "webui", at, "question-1");
   applyExecutionSettingsChange(db, { setting: "row", key: { provider: row.provider, model: row.model, effort: "high" }, row: { ...row, effort: "max" } }, "mcp", at);
   const reader = routingReview();

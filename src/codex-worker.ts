@@ -1033,7 +1033,8 @@ export class CodexWorker implements WorkerAdapter {
       taskMcpUrl.searchParams.set("task", task.id);
       const config = spawnConfig({
         taskType: task.type,
-        effort: setting.effort,
+        // openai の行は「無い」を取らない —— 書く入口が拒む(ADR 0218 決定5)
+        effort: setting.effort!,
         // ADR 0124 決定1・2 / ADR 0157 決定1: 盤面が書いた文面は Claude と同じ正本から組む。Codex は次の
         // part(`<skills_instructions>`)との間に区切りを入れないので、終端の空行は文面の一部である
         developerInstructions: `${boardProse({

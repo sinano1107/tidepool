@@ -22,7 +22,7 @@ async function boardWithRoutingReview() {
     const result: any = await client.callTool({ name, arguments: args });
     return result.isError ? { error: result.content[0].text } : JSON.parse(result.content[0].text);
   };
-  const propose = async (change: Record<string, unknown> = { tier: "frontier" }, row = { provider: "anthropic", model: "claude-opus-5-5", effort: "high" }) =>
+  const propose = async (change: Record<string, unknown> = { tier: "frontier" }, row: { provider: string; model: string; effort: string | null } = { provider: "anthropic", model: "claude-opus-5-5", effort: "high" }) =>
     (await call("propose_routing_change", { op: "row", row, change, rationale: "12 of 14 opus episodes were underpowered." })).question_id as string;
   return { review, client, call, propose };
 }
@@ -155,6 +155,24 @@ it("schema 違反の修正値・reject に添えた修正値・memory の提案�
   const memoryQuestion = registerMemoryProposal(t);
   expect((await answer(memoryQuestion, { answers: ["approve"], amendment: { effort: "max" } })).status).toBe(409);
   expect(await task(memoryQuestion)).toMatchObject({ status: "todo", question_answer: null });
+});
+
+it("effort「無い」は管理MCP の行の書き込みと修正値、worker MCP の提案の行の鍵で null として運ばれる(ADR 0218 決定5)", async () => {
+  const { client, propose } = await boardWithRoutingReview();
+  const management = await managementMcpClient(t.baseUrl);
+  try {
+    const haiku = { provider: "anthropic", tier: "economy", model: "claude-haiku-4-5-20251001", effort: null, price_in: 1, price_out: 5 };
+    const written: any = await management.callTool({ name: "change_execution_settings", arguments: { change: { setting: "row", row: haiku } } });
+    expect(written.isError).not.toBe(true);
+    const questionId = await propose({ tier: "standard" }, { provider: "anthropic", model: haiku.model, effort: null });
+
+    const answered: any = await management.callTool({ name: "answer_question", arguments: { task_id: questionId, answers: ["approve"], amendment: { tier: "frontier", effort: null } } });
+    expect(answered.isError).not.toBe(true);
+    expect(await row(haiku.model)).toEqual({ ...haiku, tier: "frontier" });
+  } finally {
+    await management.close();
+    await client.close();
+  }
 });
 
 /** memory の提案 question(種別違いの修正値の拒否だけを見るので、親は普通の task でよい)。 */

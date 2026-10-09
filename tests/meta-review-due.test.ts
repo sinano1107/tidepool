@@ -22,7 +22,7 @@ import { answerQuestionViaWebui, failureQuestion, HUMAN_WEBUI } from "./harness.
 /** 周期の due 判定(ADR 0120 決定2・ADR 0151)のドメイン層: 同じ主題の meta-review 自身の産物は材料に数えない。 */
 const at = new Date("2026-09-24T00:00:00.000Z");
 const afterPeriod = new Date(at.getTime() + 8 * 24 * 60 * 60 * 1000);
-const row = { provider: "anthropic" as const, tier: "standard" as const, model: "claude-opus-4-1", effort: "high", price_in: 5, price_out: 25 };
+const row = { provider: "anthropic" as const, tier: "standard" as const, model: "claude-opus-5", effort: "high", price_in: 5, price_out: 25 };
 
 /** 前回の meta-review を登録して完了させる(周期の起点と watermark)。 */
 function previousReview(db: Db, subject: MetaReviewSubject) {

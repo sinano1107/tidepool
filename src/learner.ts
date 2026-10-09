@@ -16,7 +16,7 @@ import type { TierId } from "./tier.js";
 export interface Cell {
   provider: Provider;
   model: string;
-  effort: string;
+  effort: string | null;
   advisor: string | null;
 }
 

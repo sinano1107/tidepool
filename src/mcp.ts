@@ -998,7 +998,7 @@ function registerRoutingMetaReviewVerbs(server: McpServer, deps: McpDeps, run: M
         BOARD_WRITE_LANGUAGE_RULE,
       inputSchema: {
         op: z.enum(["row", "promote", "demote", "agent_tier", "tier_description", "add_tier"]),
-        row: z.object({ provider: z.string(), model: z.string(), effort: z.string() }).optional().describe("op row and add_tier only."),
+        row: z.object({ provider: z.string(), model: z.string(), effort: z.string().nullable() }).optional().describe("op row and add_tier only."),
         change: z.record(z.string(), z.unknown()).optional().describe(`op row only: tier and/or effort (${EFFORT_LEVELS.join(" / ")}), nothing else.`),
         agent: z.string().optional().describe("op agent_tier only: the agent whose default tier to lower."),
         to: z.string().optional().describe("op agent_tier only: the tier one step below the agent's current tier."),

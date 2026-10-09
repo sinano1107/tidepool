@@ -402,9 +402,11 @@ export function spawnAllowedTools(
 // always explicit: the CLI remembers the host's last model/effort choice,
 // and a flip in some unrelated directory must not leak into runs (ADR
 // 0005) — shared by every `claude` CLI spawn site so the pinning rule has
-// one shape, not one copy per call site
-export function pinnedModelFlags(model: string, effort: string): string[] {
-  return ["--model", model, "--effort", effort];
+// one shape, not one copy per call site. A row with no effort (null) is a
+// model the CLI sends without one, so the flag is omitted (ADR 0218 決定5 /
+// ADR 0042) and no remembered effort can reach it either.
+export function pinnedModelFlags(model: string, effort: string | null): string[] {
+  return ["--model", model, ...(effort === null ? [] : ["--effort", effort])];
 }
 
 /** The empty tool surface a Board call declares when it goes to **fetch an

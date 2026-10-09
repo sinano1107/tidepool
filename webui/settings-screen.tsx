@@ -2301,7 +2301,7 @@ function ExecutionTableCard({ settings, say, onSaved, edit }: {
           <div key={rowKey(row)} style={{ display: 'flex', gap: 12, fontFamily: 'var(--font-mono)', fontSize: 'var(--text-xs)' }}>
             <span style={{ color: 'var(--text-muted)', minWidth: 140 }}>{row.provider} · {row.tier}</span>
             <span>
-              {row.model} · {row.effort} · ${row.price_in} / ${row.price_out}
+              {row.model} · {row.effort ?? 'no effort'} · ${row.price_in} / ${row.price_out}
               {/* 行の Quarantine(ADR 0184 決定6): question は `?question=` の deep link で開く */}
               {row.quarantine_question_id && (
                 <span style={{ color: 'var(--sun-4)' }}>
@@ -2319,8 +2319,10 @@ function ExecutionTableCard({ settings, say, onSaved, edit }: {
                 <Select label="Provider" options={settings.providers.map((p) => p.value)} value={d.provider} onChange={(e) => update(i, { provider: e.target.value })} />
                 <Select label="Tier" options={settings.tiers.map((tier) => tier.name)} value={d.tier} onChange={(e) => update(i, { tier: e.target.value })} />
                 <Input label="Model" mono value={d.model} onChange={(e) => update(i, { model: e.target.value })} placeholder="concrete model id — e.g. claude-opus-5-5" />
-                {/* 下がる値は選択肢から外すが、いま持っている値は残す: 外すと select が別の値を表示する。保存は扉が走る値を名指して拒む */}
-                <Select label="Effort" options={TidepoolRules.EFFORT_LEVELS.filter((effort) => effort === d.effort || !TidepoolRules.whyInvalidEffort(d.provider, d.model, effort))} value={d.effort} onChange={(e) => update(i, { effort: e.target.value })} />
+                {/* 選択肢は述語が model ごとに絞る: 「無し」(null)は effort を捨てる id にだけ出て、そのとき5値は出ない(ADR 0218 決定5)。
+                    拒まれる値でも、いま持っている値は残す: 外すと select が別の値を表示する。保存は扉が書くべき値を名指して拒む */}
+                <Select label="Effort" options={[null, ...TidepoolRules.EFFORT_LEVELS].filter((effort) => effort === d.effort || !TidepoolRules.whyInvalidEffort(d.provider, d.model, effort)).map((effort) => effort ?? { value: '', label: 'none' })}
+                  value={d.effort ?? ''} onChange={(e) => update(i, { effort: e.target.value || null })} />
                 <Input label="Price in" error={TidepoolRules.whyInvalidPrice(readNumericDraft(d.price_in))} mono value={d.price_in} onChange={(e) => update(i, { price_in: e.target.value })} placeholder="USD / MTok" />
                 <Input label="Price out" error={TidepoolRules.whyInvalidPrice(readNumericDraft(d.price_out))} mono value={d.price_out} onChange={(e) => update(i, { price_out: e.target.value })} placeholder="USD / MTok" />
                 <Button variant="ghost" size="sm" onClick={() => setDraft(draft.filter((_, j) => j !== i))} aria-label={`remove ${d.provider} ${d.tier} ${d.model}`.trim()}>Remove</Button>
