@@ -272,3 +272,35 @@ id を渡せばその本文を返していた(spec #600 B が「read / search �
 **追記4 の「同じ枝で重なれば workspace が勝ち、盤面全体は影に入る」と、追記7 の「`read_memory` は影の Definition を省く」は
 ADR 0178 で改めた。** 盤面全体のエントリがある path とその上位に workspace は Definition を持てず、影は作れない。検査項目の
 「workspace と盤面全体の定義の矛盾」も同じ ADR で「複数の workspace が同じ path を定義している」に入れ替えた。
+
+## 追記 10(2026-10-09 の grilling、issue #1231)
+
+**Codex 経路の session も Episode に投影する。** read は帰責の入力で(ADR 0166)、提供元によって approved の entry へ戻る
+負の信号が消えるのは「機械記録・自己申告に依らない」の線から外れる。投影器は1本で、session の窓・outcome・盤面発行の
+event id の完全一致による結合(追記 2)を共有し、提供元ごとに違うのは行の読み手だけである。どちらで読むかは
+`worker_spawned.harness` で決め、transcript の形からも Provider からも推測しない —— 形を決めるのは Harness で、Provider と
+Harness は独立している(moonshot は Claude Code で走る)。
+
+**Codex の行動列は `codex exec --json` の stdout(盤面の transcript)の `item.completed` から作る。** code mode でも内側の
+MCP 呼び出しは1件ずつ `mcp_tool_call` として出て、応答の text に盤面発行の event id が逐語で写る —— 結合キーは Claude と
+同じ形で読める。rollout は読まない(code mode では tool 名がモデルの書いたコードの中に入り、`--ephemeral` では残らない)。
+`mcp_tool_call` の tool 名は `mcp__<server>__<tool>` に正規化する(2欄を規則で繋ぐだけで値は作らない)ので、マーカーに
+結ぶ verb の照合は1つの規則のまま。行動行にするのは tool 呼び出しに当たる item(`mcp_tool_call` / `command_execution` /
+`file_change` / `collab_tool_call`)で、失敗は `status: "failed"`、行の参照は item の `id`(transcript ファイルの中で一意で、
+transcript は session ごとに1本)。欠測統計の3値は Claude と同じ線で引く —— 観測していない item 種別は「知っていて捨てる」に
+入れず未知に置き、出たときに形式変更の信号になるようにする。
+
+**Codex の Episode は構造マーカーを持たず、配分評価の行動列は Codex の session では観測なし(null)のままにする。**
+compaction は起きても stdout に出ず(実測)、commit の専用 item は無く、advisor は Codex に無い。空のマーカー列を
+「0回」として渡すと、compaction が起きた session でも 0 が事実として Board call に届く —— 欠測を空と区別する線(追記)と
+同じ理由で、観測できないかどうかはマーカーの有無ではなく Episode の Harness で決める。
+
+**Codex の subagent の中の行動は行動列に入らない。** 親の stdout に出ないためで(拒否された呼び出しで観測、成功した
+呼び出しは未測定)、盤面 verb は親スレッド専用(ADR 0010 追記)なので decision / memory マーカーの結合には響かない。
+`subagent` は Codex の行では常に偽で、それは「行動列にある行は親が出した」の意味であって「subagent が何もしなかった」
+ではない。
+
+**CLI の版は Codex では `worker_spawned` が持つ固定版の値を刻む。** Codex の stdout には版が無い。固定版の値は観測ではないが、
+preflight が実物の `--version` と照合しているので、未知行の増減が CLI の変更かを分ける手がかり(追記 2)の役には足りる。
+Claude は init 行の観測値のまま —— 揃えると、実際に transcript を書いた版の唯一の観測を固定版の値に置き換えることになる。
+測定は #1231 のコメントに置く。
