@@ -24,7 +24,7 @@ import {
 } from "./execution-setting.js";
 import { type GitHubClient, IssueGoneError } from "./github.js";
 import type { HarnessContainmentCheck } from "./harness-containment.js";
-import { type Landing, type LandingVerdict, landingBlock, recordPrPromotionAbandoned, unreportedCiGraceElapsed } from "./landing.js";
+import { type Landing, type LandingVerdict, landingBlock, recordPrPromotionAbandoned, UNREPORTED_CI_GRACE_TEXT, unreportedCiGraceElapsed } from "./landing.js";
 import { approveMemoryProposal, humanEntryInput, listMemoryEntries, type MemoryAmendment, movedTail, parseMemoryAmendment, rejectMemoryProposal } from "./memory.js";
 import { whyNotPositiveInteger } from "./positive-integer.js";
 import type { Provider } from "./provider.js";
@@ -972,10 +972,10 @@ export async function submitAnswer(
     if (status === "unreported" && !unreportedCiGraceElapsed(deps.db, landingTaskId, now())) {
       throw new DomainError(
         `CI checks on PR #${mergePr} have not reported yet — answer again once they report, or ` +
-          "5 minutes after the board's last push to it",
+          `${UNREPORTED_CI_GRACE_TEXT} after the board's last push to it`,
       );
     }
-    if (status === "pending" || status === "failure") {
+    if (status !== "success" && status !== "unreported") {
       throw new DomainError(`CI is not green yet (status: ${status}) — cannot merge`);
     }
     // External merge precedes the persisted answer. If it fails, the question

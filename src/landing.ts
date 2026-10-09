@@ -414,6 +414,11 @@ function isQueuedForAutoMerge(db: Db, taskId: string): boolean {
   return db.prepare("SELECT 1 FROM pending_auto_merges WHERE task_id = ?").get(taskId) !== undefined;
 }
 
+const UNREPORTED_CI_GRACE_MS = 5 * 60_000;
+
+/** 猶予を問い・拒否の本文に書くときの綴り —— 猶予の長さと本文がずれないように同じ定数から作る。 */
+export const UNREPORTED_CI_GRACE_TEXT = `${UNREPORTED_CI_GRACE_MS / 60_000} minutes`;
+
 /** ADR 0227 決定2: check 未報告を pending と同じに待つ猶予。起点は盤面自身がその PR へ最後に push した時点
  *  (PR を開いた `pr_opened` か、開いている PR への修理の `pr_branch_pushed`)で、無人 merge と人間の merge 回答が
  *  同じ起点を読む。起点が無ければ猶予は過ぎたとみなす。 */
@@ -423,7 +428,7 @@ export function unreportedCiGraceElapsed(db: Db, taskId: string, now: Date): boo
       "SELECT MAX(created_at) AS at FROM events WHERE task_id = ? AND kind IN ('pr_opened', 'pr_branch_pushed')",
     )
     .get(taskId) as { at: string | null };
-  return at === null || now.getTime() - Date.parse(at) >= 5 * 60_000;
+  return at === null || now.getTime() - Date.parse(at) >= UNREPORTED_CI_GRACE_MS;
 }
 
 /** 門で止まったことを board 名義で1回だけ刻む(ADR 0092 決定1)。着地は1つのタスクに
@@ -645,11 +650,7 @@ export function createLanding(deps: LandingDeps): Landing {
             );
           }
           await deps.github.pushBranch({ path: workspace.path, branch: taskBranch(task.id) });
-          rebaselineRef(
-            deps.db,
-            workspace,
-            `refs/remotes/origin/${taskBranch(task.id)}`,
-          );
+          // push の直後に刻む —— 後段が throw しても、GitHub に載った head の猶予の起点は失わない(ADR 0227 決定2)
           appendEvent(deps.db, {
             taskId: task.id,
             workerId: BOARD_WORKER_ID,
@@ -657,6 +658,11 @@ export function createLanding(deps: LandingDeps): Landing {
             payload: { kind: "pr_branch_pushed", pr_number: task.pr_number },
             at: deps.clock.now(),
           });
+          rebaselineRef(
+            deps.db,
+            workspace,
+            `refs/remotes/origin/${taskBranch(task.id)}`,
+          );
           retireFailures(task.id, excludePrPromotionQuestionId);
           return {
             kind: "landed",
@@ -868,7 +874,7 @@ export function createLanding(deps: LandingDeps): Landing {
         const found =
           status === "failure"
             ? `found CI red on PR #${pr_number}`
-            : `found no CI check reported on PR #${pr_number} in the 5 minutes since the board last ` +
+            : `found no CI check reported on PR #${pr_number} in the ${UNREPORTED_CI_GRACE_TEXT} since the board last ` +
               "pushed to it, so its CI-green condition cannot be observed";
         const askHuman = () =>
           registerMergeQuestion(
