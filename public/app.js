@@ -2354,6 +2354,26 @@ const deadRefs = ({ orphaned, addressee, scope }) => ({
 const offerNames = (names, current, dead) => [.../* @__PURE__ */ new Set([...names, ...current ? [current] : []])].map((name) => name === dead ? { value: name, label: `${name} (not registered)`, disabled: true } : name);
 const successorKinds = (kinds) => kinds.every((k) => k === "behavior" || k === "exemplar") ? ["behavior", "exemplar"] : new Set(kinds).size === 1 ? [kinds[0]] : [];
 const sharedCase = ([head, ...rest]) => head && head.source.kind === "event" && head.source.ref !== head.id && rest.every((e) => e.source.kind === "event" && e.source.ref === head.source.ref) ? head.source.ref : null;
+function OneTreePanel({ pairs, entries, translations, busy, onWiden, onWrite, onRename, onClose }) {
+  const { Button } = window.TidepoolDesignSystem_8a0ead;
+  const muted = { margin: 0, fontSize: "var(--text-xs)", color: "var(--text-muted)" };
+  const rows = [];
+  for (const { definition: { id, existing, path, scope } } of pairs) {
+    if (!existing || id === null) continue;
+    const row = rows.find((r) => r.path === path) ?? rows[rows.push({ path, defs: [] }) - 1];
+    if (!row.defs.some((d) => d.id === id)) row.defs.push({ id, scope, entry: entries.find((e) => e.id === id) });
+  }
+  rows.sort((a, b) => a.path.split("/").length - b.path.split("/").length);
+  const resolved = (row) => row.defs.every((d) => d.entry?.invalidation_reason);
+  return /* @__PURE__ */ React.createElement("div", { "data-testid": "memory-blocking", style: { display: "flex", flexDirection: "column", gap: 8, border: "1px solid var(--border-default)", borderRadius: 6, padding: 10 } }, /* @__PURE__ */ React.createElement("p", { style: muted }, "a whole-board entry cannot sit at or under a path a workspace defines. For each path, top first: widen a definition board-wide as it is, write a board-wide wording that replaces it, or rename the workspace's branch \u2014 then try again. Or close this and change your path."), rows.map((row) => {
+    const waiting = rows.some((above) => row.path.startsWith(`${above.path}/`) && !resolved(above));
+    const done = resolved(row);
+    return /* @__PURE__ */ React.createElement("div", { key: row.path, "data-testid": `memory-blocking-${row.path}`, style: { display: "flex", flexDirection: "column", gap: 4, borderTop: "1px solid var(--border-default)", paddingTop: 8 } }, /* @__PURE__ */ React.createElement("p", { style: { ...muted, fontFamily: "var(--font-mono)" } }, row.path, done ? " \xB7 resolved" : waiting ? " \xB7 resolve the path above first" : ""), row.defs.length > 1 && !done && /* @__PURE__ */ React.createElement("p", { style: muted }, "defined by ", row.defs.length, " workspaces: widening one wording replaces them all"), row.defs.map(({ id, scope, entry }) => {
+      const shown = entry?.original ?? translations[id];
+      return /* @__PURE__ */ React.createElement("div", { key: id, style: { display: "flex", flexDirection: "column", gap: 2 } }, /* @__PURE__ */ React.createElement("p", { style: { ...muted, fontFamily: "var(--font-mono)" } }, "#", id, " \xB7 ", scope), entry && /* @__PURE__ */ React.createElement("p", { style: { margin: 0, fontSize: "var(--text-sm)" } }, entry.text), shown?.text && /* @__PURE__ */ React.createElement("p", { style: muted }, entry?.original ? "original" : "translation", ": ", shown.text), !done && entry && /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8 } }, /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", disabled: busy || waiting, onClick: () => onWiden(row, entry) }, "Widen board-wide"), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", disabled: busy || waiting, onClick: () => onRename(scope, row.path) }, "Rename ", scope, "'s branch")));
+    }), !done && /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", disabled: busy || waiting, onClick: () => onWrite(row) }, "Write a board-wide wording")));
+  }), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "sm", disabled: busy, onClick: onClose }, "Close")));
+}
 function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit, focus }) {
   const { Button, Card, Checkbox, Input, Select } = window.TidepoolDesignSystem_8a0ead;
   const [filter, setFilter] = React.useState({ workspace: "", kind: "", state: "" });
@@ -2370,16 +2390,18 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit, fo
   React.useEffect(() => {
     load();
   }, []);
+  const [blocked, setBlocked] = React.useState(null);
+  const blockingIds = new Set(blocked?.pairs.map((p) => p.definition.id));
   const translating = React.useRef(/* @__PURE__ */ new Set());
   React.useEffect(() => {
     if (language === "English") return;
-    for (const entry of displayed ?? []) {
+    for (const entry of [...displayed ?? [], ...(entries ?? []).filter((e) => blockingIds.has(e.id))]) {
       if (entry.original !== null || translations[entry.id] || translating.current.has(entry.id)) continue;
       translating.current.add(entry.id);
       translateTarget({ type: "memory_entry", entry_id: entry.id }).then((out) => out.status === "translated" && setTranslations((t) => ({ ...t, [entry.id]: out }))).catch(() => {
       }).finally(() => translating.current.delete(entry.id));
     }
-  }, [entries, filter.workspace, filter.kind, filter.state, language]);
+  }, [entries, filter.workspace, filter.kind, filter.state, language, blocked]);
   const focused = React.useRef(false);
   React.useEffect(() => {
     if (focused.current || focus === null || !entries) return;
@@ -2433,23 +2455,33 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit, fo
         });
       } else await api("/api/settings/memory/definitions", { ...body, ...supersedes });
       say("success", `${draft.kind} saved`, body.path);
-      edit.close();
+      if (parked) unpark();
+      else edit.close();
       if (draft.supersedes.length > 0) setSelected([]);
       await load();
     } catch (err) {
-      say("danger", `${draft.kind} save failed`, String(err.message || err));
+      const route = { knowledge: "knowledge", behavior: "behaviors", exemplar: "exemplars", definition: "definitions" }[draft.kind];
+      if (!blockedBy(err, `POST /api/settings/memory/${route} 409`, "write")) say("danger", `${draft.kind} save failed`, String(err.message || err));
     }
     setBusy(false);
   };
-  const submit = async (path, body, [title, detail], failed, close) => {
+  const blockedBy = (err, key, at) => {
+    const pairs = apiErrorDetail(err, key)?.pairs;
+    if (!pairs?.some((p) => p.definition.existing)) return false;
+    setBlocked({ at, pairs });
+    load();
+    return true;
+  };
+  const submit = async (path, body, [title, detail], failed, close, gate) => {
     setBusy(true);
     try {
       await api(path, body);
       say("success", title, detail);
+      if (gate && blocked?.at === gate.at) setBlocked(null);
       close?.();
       await load();
     } catch (err) {
-      say("danger", failed, String(err.message || err));
+      if (!(gate && blockedBy(err, gate.key, gate.at))) say("danger", failed, String(err.message || err));
     }
     setBusy(false);
   };
@@ -2509,7 +2541,73 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit, fo
   const workspaceOptions = [{ value: "", label: "board-wide" }, ...workspaceNames];
   const orphanedOptions = (rows) => [...new Set(rows.map((e) => deadRefs(e).workspace))].filter((name) => name !== null && !workspaceNames.includes(name)).map((name) => ({ value: name, label: `${name} (not registered)` }));
   const orphanedFrom = orphanedOptions((entries ?? []).filter((e) => e.invalidation_reason === null));
-  const move = (path, body, detail, close) => submit(path, body, ["moved", detail], "move failed", close);
+  const move = (path, body, detail, close, gate) => submit(path, body, ["moved", detail], "move failed", close, gate);
+  const openForms = [writing && "write", branchMove && "branch", moving && `move:${moving.id}`];
+  React.useEffect(() => {
+    if (blocked && !blocked.at.startsWith("restore:") && !openForms.includes(blocked.at)) setBlocked(null);
+  }, [writing, branchMove, moving, blocked]);
+  const widen = (row, entry) => row.defs.length === 1 ? submit(`/api/settings/memory/entries/${entry.id}/move`, { workspace: null, path: row.path }, ["widened", `#${entry.id} \u2192 board-wide`], "widen failed") : submit("/api/settings/memory/definitions", {
+    workspace: null,
+    path: row.path,
+    text: entry.text,
+    ...entry.original ? { original_text: entry.original.text } : {},
+    supersedes: row.defs.map((d) => d.id)
+  }, ["widened", `#${entry.id}'s wording \u2192 board-wide`], "widen failed");
+  const [parked, setParked] = React.useState(null);
+  React.useEffect(() => {
+    if (!writing) setParked(null);
+  }, [writing]);
+  const unpark = () => {
+    setDraft(parked.draft);
+    setBlocked(parked.blocked);
+    setParked(null);
+  };
+  const writeBoardWide = (row) => {
+    const one = row.defs.length === 1 ? row.defs[0].entry : void 0;
+    const fill = () => setDraft({
+      ...blank,
+      kind: "definition",
+      kinds: ["definition"],
+      path: row.path,
+      supersedes: row.defs.map((d) => d.id),
+      text: one?.text ?? "",
+      originalText: one?.original?.text ?? ""
+    });
+    if (!writing) return edit.open(writeId, fill);
+    setParked({ draft, blocked: blocked?.at === "write" ? blocked : null });
+    if (blocked?.at === "write") setBlocked(null);
+    fill();
+  };
+  const [parkedMove, setParkedMove] = React.useState(null);
+  React.useEffect(() => {
+    if (!branchMove) setParkedMove(null);
+  }, [branchMove]);
+  const closeBranchMove = () => {
+    if (!parkedMove) return setBranchMove(null);
+    setBranchMove(parkedMove.draft);
+    setBlocked(parkedMove.blocked);
+    setParkedMove(null);
+  };
+  const renameBranch = (scope, path) => {
+    if (branchMove && blocked?.at === "branch") {
+      setParkedMove({ draft: branchMove, blocked });
+      setBlocked(null);
+    }
+    setBranchMove({ workspace: scope, path, to_workspace: scope, to_path: "", merge: false });
+  };
+  const blockingPanel = (at) => blocked?.at === at && entries && /* @__PURE__ */ React.createElement(
+    OneTreePanel,
+    {
+      pairs: blocked.pairs,
+      entries,
+      translations,
+      busy,
+      onWiden: widen,
+      onWrite: writeBoardWide,
+      onRename: renameBranch,
+      onClose: () => setBlocked(null)
+    }
+  );
   return /* @__PURE__ */ React.createElement(Card, { style: { display: "flex", flexDirection: "column", gap: 14 } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8, minHeight: 26 } }, /* @__PURE__ */ React.createElement("span", { style: settingsCardLabel }, "memory entries"), !writing && /* @__PURE__ */ React.createElement("div", { style: { marginLeft: "auto", display: "flex", gap: 8 } }, !branchMove && /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "sm", onClick: () => setBranchMove({ workspace: "", path: "", to_workspace: "", to_path: "", merge: false }) }, "Move branch"), /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "sm", onClick: () => edit.open(writeId, () => setDraft(blank)) }, "Write"))), branchMove && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("p", { style: muted }, "moves the branch and every live entry under it in the workspace (moving a whole-board branch to another whole-board path also carries every workspace's entries under it); invalidated entries stay where they are"), /* @__PURE__ */ React.createElement(
     Select,
     {
@@ -2532,16 +2630,22 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit, fo
       variant: "secondary",
       size: "sm",
       disabled: busy || !!TidepoolRules.whyBlank(branchMove.path) || !!TidepoolRules.whyBlank(branchMove.to_path),
-      onClick: () => move("/api/settings/memory/branches/move", {
-        workspace: branchMove.workspace || null,
-        path: TidepoolRules.normalizeText(branchMove.path),
-        to_workspace: branchMove.to_workspace || null,
-        to_path: TidepoolRules.normalizeText(branchMove.to_path),
-        merge: branchMove.merge
-      }, `${TidepoolRules.normalizeText(branchMove.path)} \u2192 ${TidepoolRules.normalizeText(branchMove.to_path)}`, () => setBranchMove(null))
+      onClick: () => move(
+        "/api/settings/memory/branches/move",
+        {
+          workspace: branchMove.workspace || null,
+          path: TidepoolRules.normalizeText(branchMove.path),
+          to_workspace: branchMove.to_workspace || null,
+          to_path: TidepoolRules.normalizeText(branchMove.to_path),
+          merge: branchMove.merge
+        },
+        `${TidepoolRules.normalizeText(branchMove.path)} \u2192 ${TidepoolRules.normalizeText(branchMove.to_path)}`,
+        closeBranchMove,
+        { key: "POST /api/settings/memory/branches/move 409", at: "branch" }
+      )
     },
     "Move branch"
-  ), /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "sm", disabled: busy, onClick: () => setBranchMove(null) }, "Cancel"))), selected.length > 0 && !writing && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("p", { style: muted }, "selected ", selectedIds), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8, alignItems: "flex-end", flexWrap: "wrap" } }, /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", disabled: busy || foldKinds.length === 0, onClick: foldIntoNew }, "Fold into a new entry"), /* @__PURE__ */ React.createElement(Input, { label: "Fold into existing (entry id)", error: foldReason, mono: true, value: foldTarget, onChange: (e) => setFoldTarget(e.target.value) }), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", disabled: busy || !!foldReason, onClick: foldIntoExisting }, "Fold into #", foldTarget || "\u2026"), /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "sm", disabled: busy, onClick: () => setSelected([]) }, "Clear")), foldKinds.length === 0 && /* @__PURE__ */ React.createElement("p", { style: muted }, candidateSelected ? "a candidate cannot be replaced by a new entry; fold it into an existing approved one" : "no one kind may replace all of these; fold them into an existing entry of their kind")), writing && /* @__PURE__ */ React.createElement(React.Fragment, null, replacing && /* @__PURE__ */ React.createElement("p", { style: muted }, "replacing ", replacing, " \u2014 saving writes a new approved entry and supersedes ", draft.supersedes.length === 1 ? "it" : "them"), draft.kinds.length > 1 && /* @__PURE__ */ React.createElement(Select, { label: "Kind", value: draft.kind, onChange: setDraftField("kind"), options: draft.kinds }), /* @__PURE__ */ React.createElement(
+  ), /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "sm", disabled: busy, onClick: closeBranchMove }, "Cancel")), blockingPanel("branch")), selected.length > 0 && !writing && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("p", { style: muted }, "selected ", selectedIds), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8, alignItems: "flex-end", flexWrap: "wrap" } }, /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", disabled: busy || foldKinds.length === 0, onClick: foldIntoNew }, "Fold into a new entry"), /* @__PURE__ */ React.createElement(Input, { label: "Fold into existing (entry id)", error: foldReason, mono: true, value: foldTarget, onChange: (e) => setFoldTarget(e.target.value) }), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", disabled: busy || !!foldReason, onClick: foldIntoExisting }, "Fold into #", foldTarget || "\u2026"), /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "sm", disabled: busy, onClick: () => setSelected([]) }, "Clear")), foldKinds.length === 0 && /* @__PURE__ */ React.createElement("p", { style: muted }, candidateSelected ? "a candidate cannot be replaced by a new entry; fold it into an existing approved one" : "no one kind may replace all of these; fold them into an existing entry of their kind")), writing && /* @__PURE__ */ React.createElement(React.Fragment, null, replacing && /* @__PURE__ */ React.createElement("p", { style: muted }, "replacing ", replacing, " \u2014 saving writes a new approved entry and supersedes ", draft.supersedes.length === 1 ? "it" : "them"), draft.kinds.length > 1 && /* @__PURE__ */ React.createElement(Select, { label: "Kind", value: draft.kind, onChange: setDraftField("kind"), options: draft.kinds }), /* @__PURE__ */ React.createElement(
     Select,
     {
       label: "Workspace",
@@ -2573,14 +2677,14 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit, fo
       busy,
       setBusy
     }
-  ), translatable && draft.kind !== "exemplar" && /* @__PURE__ */ React.createElement(React.Fragment, null, draft.kind !== "definition" && /* @__PURE__ */ React.createElement(Input, { label: `Original title (${language})`, value: draft.originalTitle, onChange: setDraftField("originalTitle") }), /* @__PURE__ */ React.createElement(Input, { label: `Original (${language})`, multiline: true, rows: 3, value: draft.originalText, onChange: setDraftField("originalText") }), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", disabled: busy || fields.some((key) => !!TidepoolRules.whyBlank(originalOf[key])), onClick: () => runTranslation(true) }, "Translate")), draft.kind !== "definition" && /* @__PURE__ */ React.createElement(Input, { label: "Title (English)", value: draft.title, onChange: setDraftField("title") }), draft.kind !== "exemplar" && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(Input, { label: "English (saved as the canonical text)", multiline: true, rows: 3, value: draft.text, onChange: setDraftField("text") }), translatable && /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", disabled: busy || fields.some((key) => !!TidepoolRules.whyBlank(draft[key])), onClick: () => runTranslation(false) }, "Back-translate")), draft.backTranslation && /* @__PURE__ */ React.createElement("p", { style: muted, "data-testid": "memory-back-translation" }, "back in ", language, ": ", fields.map((key) => draft.backTranslation[key]).join(" \u2014 ")), /* @__PURE__ */ React.createElement(
+  ), translatable && draft.kind !== "exemplar" && /* @__PURE__ */ React.createElement(React.Fragment, null, draft.kind !== "definition" && /* @__PURE__ */ React.createElement(Input, { label: `Original title (${language})`, value: draft.originalTitle, onChange: setDraftField("originalTitle") }), /* @__PURE__ */ React.createElement(Input, { label: `Original (${language})`, multiline: true, rows: 3, value: draft.originalText, onChange: setDraftField("originalText") }), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", disabled: busy || fields.some((key) => !!TidepoolRules.whyBlank(originalOf[key])), onClick: () => runTranslation(true) }, "Translate")), draft.kind !== "definition" && /* @__PURE__ */ React.createElement(Input, { label: "Title (English)", value: draft.title, onChange: setDraftField("title") }), draft.kind !== "exemplar" && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(Input, { label: "English (saved as the canonical text)", multiline: true, rows: 3, value: draft.text, onChange: setDraftField("text") }), translatable && /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", disabled: busy || fields.some((key) => !!TidepoolRules.whyBlank(draft[key])), onClick: () => runTranslation(false) }, "Back-translate")), draft.backTranslation && /* @__PURE__ */ React.createElement("p", { style: muted, "data-testid": "memory-back-translation" }, "back in ", language, ": ", fields.map((key) => draft.backTranslation[key]).join(" \u2014 ")), blockingPanel("write"), /* @__PURE__ */ React.createElement(
     EditActions,
     {
       busy,
       saveLabel: `Save ${draft.kind}`,
       ok: !holdsOrphan && filled,
       onSave: save,
-      onCancel: () => edit.close()
+      onCancel: () => parked ? unpark() : edit.close()
     }
   )), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8, flexWrap: "wrap" } }, /* @__PURE__ */ React.createElement(
     Select,
@@ -2630,10 +2734,18 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit, fo
           variant: "ghost",
           size: "sm",
           disabled: busy,
-          onClick: () => submit(`/api/settings/memory/entries/${entry.id}/restore`, {}, ["entry restored", `#${entry.id}`], "restore failed")
+          onClick: () => submit(
+            `/api/settings/memory/entries/${entry.id}/restore`,
+            {},
+            ["entry restored", `#${entry.id}`],
+            "restore failed",
+            void 0,
+            { key: "POST /api/settings/memory/entries/:entry_id/restore 409", at: `restore:${entry.id}` }
+          )
         },
         "Restore"
       )),
+      blockingPanel(`restore:${entry.id}`),
       moving?.id === entry.id && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(
         Select,
         {
@@ -2648,11 +2760,17 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit, fo
           variant: "secondary",
           size: "sm",
           disabled: busy || !!TidepoolRules.whyBlank(moving.path) || moving.workspace === deadRefs(entry).workspace,
-          onClick: () => move(`/api/settings/memory/entries/${entry.id}/move`, { workspace: moving.workspace || null, path: TidepoolRules.normalizeText(moving.path) }, `#${entry.id} \u2192 ${TidepoolRules.normalizeText(moving.path)}`, () => setMoving(null))
+          onClick: () => move(
+            `/api/settings/memory/entries/${entry.id}/move`,
+            { workspace: moving.workspace || null, path: TidepoolRules.normalizeText(moving.path) },
+            `#${entry.id} \u2192 ${TidepoolRules.normalizeText(moving.path)}`,
+            () => setMoving(null),
+            { key: "POST /api/settings/memory/entries/:entry_id/move 409", at: `move:${entry.id}` }
+          )
         },
         "Move #",
         entry.id
-      ), /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "sm", disabled: busy, onClick: () => setMoving(null) }, "Cancel"))),
+      ), /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "sm", disabled: busy, onClick: () => setMoving(null) }, "Cancel")), blockingPanel(`move:${entry.id}`)),
       invalidating?.id === entry.id && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(
         Select,
         {

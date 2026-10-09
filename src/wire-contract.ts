@@ -96,6 +96,15 @@ interface DeletionConflict {
   confirm_required?: true;
 }
 
+/** 重ねた1本の木の門の拒否(ADR 0221)。片側の `id` は今ある行(`existing`)か移動元、null はこの操作が置く行。 */
+interface OneTreeConflict {
+  error: string;
+  pairs: Array<{
+    entry: { id: number | null; existing: boolean; kind: "knowledge" | "behavior" | "definition" | "exemplar"; path: string };
+    definition: { id: number | null; existing: boolean; path: string; scope: string };
+  }>;
+}
+
 /** 設定面の1選択肢(src/registry.ts の PROVIDER_OPTIONS)。 */
 interface Option {
   value: string;
@@ -360,6 +369,13 @@ export interface WireContract {
       }>;
     }>;
   };
+  "POST /api/settings/memory/knowledge 409": OneTreeConflict;
+  "POST /api/settings/memory/definitions 409": OneTreeConflict;
+  "POST /api/settings/memory/behaviors 409": OneTreeConflict;
+  "POST /api/settings/memory/exemplars 409": OneTreeConflict;
+  "POST /api/settings/memory/entries/:entry_id/move 409": OneTreeConflict;
+  "POST /api/settings/memory/branches/move 409": OneTreeConflict;
+  "POST /api/settings/memory/entries/:entry_id/restore 409": OneTreeConflict;
   /** 撃ち直しを打ち切った振り返り Board call(src/retrospective.ts の listHaltedRefires、ADR 0164 決定5 / ADR 0172 決定3)。
    *  配分評価の行は review と被レビュー task(target は review の task_completed event の id)、起草と第2回の行は entry と
    *  その帰責(target は起草なら帰責 event の id、第2回なら異議群の最初の異議 event の id(ADR 0170 決定4)、cause は entry の

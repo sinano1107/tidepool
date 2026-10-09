@@ -565,3 +565,44 @@ it("組み込みの auditor は registry の合成エントリとして宛先に
     expect(await write(kind, { workspace: null, addressee: "ghost" })).toEqual(["unknown agent: ghost", "unknown agent: ghost"]);
   }
 });
+
+it("盤面全体のエントリを置く人間の口(書き込み4種別・1件の移動・枝ごとの移動・復元)は、門の拒否を 409 と今の英語の error と名指した組で返し、ほかの DomainError は 400 のまま(ADR 0221)", async () => {
+  t = await bootTidepool();
+  const task = registerTask(t.db, { type: "work", title: "t", purpose: "p", completion_criteria: "c" }, t.clock.now(), ...HUMAN_WEBUI);
+  const decision = logDecision(t.db, task, "split the migration", "deckhand", t.clock.now(), "worker");
+  const worker = { activity: "worker_verb" as const, name: "deckhand" };
+  const leaf = (scope: string | null, path: string) =>
+    recordKnowledge(t.db, { scope, path, title: "t", text: "x", source: { event_id: decision }, author: worker }, "worker", t.clock.now()).entry_id;
+  const invalidated = leaf(null, "build/g");
+  await api(t.baseUrl, "POST", `/api/settings/memory/entries/${invalidated}/invalidate`, { reason: "capability" });
+  const moving = leaf("tidepool", "notes/one");
+  const carried = leaf("tidepool", "drafts/x");
+  const build = defineMemoryBranch(t.db, { scope: "tidepool", path: "build", text: "How tidepool builds.", author: worker }, "worker", t.clock.now()).entry_id;
+
+  const placing: Array<[string, unknown, { id: number | null; kind: string; path: string }]> = [
+    ["/api/settings/memory/knowledge", { workspace: null, path: "build/a", title: "t", text: "x" }, { id: null, kind: "knowledge", path: "build/a" }],
+    ["/api/settings/memory/definitions", { workspace: null, path: "build/b", text: "x" }, { id: null, kind: "definition", path: "build/b" }],
+    ["/api/settings/memory/behaviors", { workspace: null, path: "build/c", title: "t", text: "x", addressee: null }, { id: null, kind: "behavior", path: "build/c" }],
+    [
+      "/api/settings/memory/exemplars",
+      { workspace: null, path: "build/d", title: "t", addressee: null, source_event_id: decision, annotations: [{ anchor: "whole", polarity: "imitate", text: "Split it." }] },
+      { id: null, kind: "exemplar", path: "build/d" },
+    ],
+    [`/api/settings/memory/entries/${moving}/move`, { workspace: null, path: "build/e" }, { id: moving, kind: "knowledge", path: "build/e" }],
+    ["/api/settings/memory/branches/move", { workspace: "tidepool", path: "drafts", to_workspace: null, to_path: "build/f" }, { id: carried, kind: "knowledge", path: "build/f/x" }],
+    [`/api/settings/memory/entries/${invalidated}/restore`, {}, { id: null, kind: "knowledge", path: "build/g" }],
+  ];
+  for (const [route, body, entry] of placing) {
+    expect(await api(t.baseUrl, "POST", route, body), route).toEqual({
+      status: 409,
+      json: {
+        error: expect.stringContaining(`lies at or under workspace definition ${build} at build in scope tidepool`),
+        pairs: [{ entry: { ...entry, existing: false }, definition: { id: build, existing: true, path: "build", scope: "tidepool" } }],
+      },
+    });
+  }
+  expect(await api(t.baseUrl, "POST", `/api/settings/memory/entries/${moving}/move`, { workspace: null, path: "notes//x" })).toEqual({
+    status: 400,
+    json: { error: expect.stringContaining("path must be") },
+  });
+});

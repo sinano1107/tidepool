@@ -22,6 +22,7 @@ import {
   movedPins,
   moveMemory,
   moveMemoryBranch,
+  OneTreeError,
   previewCase,
   proposeMemoryChange,
   readMemory,
@@ -2014,6 +2015,84 @@ it("盤面全体 → 盤面全体の枝ごとの移動が運ぶ workspace の子
       `whole-board knowledge entry ${lint} at ci/lint lies at or under workspace definition ${chartsLint} moving to ci/lint in scope charts: `,
   );
   expect(move).toThrow(/rename the workspace branch with move_memory_branch, or choose another path/);
+  expect(listMemoryEntries(db, {})).toEqual(before);
+});
+
+/** 操作が投げた拒否を返す(投げなければ失敗)。 */
+function rejectionOf(place: () => unknown): unknown {
+  try {
+    place();
+  } catch (err) {
+    return err;
+  }
+  throw new Error("the operation was not rejected");
+}
+
+it("門の拒否は DomainError の派生で、当たった組をすべて構造で持つ —— 両側とも id・path と「今ある行 / この操作が置く行 / 動かす行」を分け、英語の message は今と同じ(ADR 0221)", () => {
+  const { db } = board();
+  const [build, buildX] = ["build", "build/x"].map((path) => defineMemoryBranch(db, { ...definition, path }, "worker", at).entry_id) as [number, number];
+  const nested = rejectionOf(() => recordKnowledge(db, { ...knowledge, scope: null, path: "build/x/y", source: { commit: "0a46a46" } }, "worker", at));
+
+  expect(nested).toBeInstanceOf(OneTreeError);
+  expect(nested).toBeInstanceOf(DomainError);
+  const placed = { id: null, existing: false, kind: "knowledge", path: "build/x/y" };
+  expect((nested as OneTreeError).pairs).toEqual([
+    { entry: placed, definition: { id: build, existing: true, path: "build", scope: "tidepool" } },
+    { entry: placed, definition: { id: buildX, existing: true, path: "build/x", scope: "tidepool" } },
+  ]);
+  expect((nested as OneTreeError).message).toBe(
+    `the whole-board knowledge being placed at build/x/y lies at or under workspace definition ${build} at build in scope tidepool; ` +
+      `the whole-board knowledge being placed at build/x/y lies at or under workspace definition ${buildX} at build/x in scope tidepool: ` +
+      "a workspace cannot define a path that holds whole-board entries at or under it — " +
+      "write a whole-board definition at the workspace definition's path with supersedes, rename the workspace branch with move_memory_branch, or choose another path",
+  );
+
+  const leaf = recordKnowledge(db, { ...knowledge, scope: null, path: "tools/x", source: { commit: "0a46a46" } }, "worker", at).entry_id;
+  const define = rejectionOf(() => defineMemoryBranch(db, { ...definition, path: "tools" }, "worker", at));
+  expect((define as OneTreeError).pairs).toEqual([
+    { entry: { id: leaf, existing: true, kind: "knowledge", path: "tools/x" }, definition: { id: null, existing: false, path: "tools", scope: "tidepool" } },
+  ]);
+
+  const widen = rejectionOf(() => moveMemory(db, { entry_id: buildX, scope: null, path: "build/x", mover: human }, "webui", at));
+  expect((widen as OneTreeError).pairs).toEqual([
+    { entry: { id: buildX, existing: false, kind: "definition", path: "build/x" }, definition: { id: build, existing: true, path: "build", scope: "tidepool" } },
+  ]);
+
+  defineMemoryBranch(db, { ...definition, scope: null, path: "ci" }, "worker", at);
+  const lint = defineMemoryBranch(db, { ...definition, path: "ci/lint" }, "worker", at).entry_id;
+  const tests = recordKnowledge(db, { ...knowledge, scope: null, path: "qa/lint", source: { commit: "0a46a46" } }, "worker", at).entry_id;
+  const carried = rejectionOf(() => moveMemoryBranch(db, { scope: null, path: "ci", to_scope: null, to_path: "qa", mover: human }, "webui", at));
+  expect((carried as OneTreeError).pairs).toEqual([
+    { entry: { id: tests, existing: true, kind: "knowledge", path: "qa/lint" }, definition: { id: lint, existing: false, path: "qa/lint", scope: "tidepool" } },
+  ]);
+});
+
+it("workspace が build と build/x を定義していれば、盤面全体の Knowledge を build/x/y に置くには上の build から盤面全体へ広げる —— 下の build/x を先に広げると上の build に当たって何も変えず、上から順なら build/x も Knowledge も通る(ADR 0221 決定3)", () => {
+  const { db } = board();
+  const [build, buildX] = ["build", "build/x"].map((path) => defineMemoryBranch(db, { ...definition, path }, "worker", at).entry_id) as [number, number];
+  const widen = (entry_id: number, path: string) => () => moveMemory(db, { entry_id, scope: null, path, mover: human }, "webui", at);
+  const before = listMemoryEntries(db, {});
+
+  expect(widen(buildX, "build/x")).toThrow(`whole-board definition entry ${buildX} moving to build/x lies at or under workspace definition ${build} at build in scope tidepool`);
+  expect(listMemoryEntries(db, {})).toEqual(before);
+
+  widen(build, "build")();
+  widen(buildX, "build/x")();
+  recordKnowledge(db, { ...knowledge, scope: null, path: "build/x/y", source: { commit: "0a46a46" } }, "worker", at);
+  expect(approvedMemoryEntries(db).map((e) => [e.kind, e.scope, e.path])).toEqual([
+    ["definition", null, "build"],
+    ["definition", null, "build/x"],
+    ["knowledge", null, "build/x/y"],
+  ]);
+});
+
+it("同じ path を2つの workspace が定義していれば、片方だけを盤面全体へ広げる1件の移動は残った方の定義に当たって拒まれ、何も変えない(ADR 0221 決定2)", () => {
+  const { db } = board();
+  const [tidepool, charts] = ["tidepool", "charts"].map((scope) => defineMemoryBranch(db, { ...definition, scope }, "worker", at).entry_id) as [number, number];
+  const before = listMemoryEntries(db, {});
+
+  const widen = () => moveMemory(db, { entry_id: tidepool, scope: null, path: "build", mover: human }, "webui", at);
+  expect(widen).toThrow(`whole-board definition entry ${tidepool} moving to build lies at or under workspace definition ${charts} at build in scope charts`);
   expect(listMemoryEntries(db, {})).toEqual(before);
 });
 
