@@ -1577,6 +1577,136 @@ it("CI 赤の question の登録が throw したら、PR は無言でキュー�
   expect(mergeQuestions(db).map((q) => q.pr)).toEqual([1]);
 });
 
+// ADR 0227 決定2・3: check が1つも報告されていない PR は、盤面自身がその PR へ最後に push してから5分の猶予の間だけ待つ
+const FIVE_MINUTES = 5 * 60_000;
+
+it("check 未報告の PR は、盤面の最後の push から5分の猶予の内なら merge も question もせずキューに残る", async () => {
+  const workspace = await makeWorkspace("landing-unreported-within-grace");
+  const { db, clock } = await openBoard();
+  const github = new FakeGitHubClient();
+  github.scriptCiStatus("unreported");
+  queueAutoMerge(db, clock, 1);
+  const landing = createLanding({
+    defaultAgentName: "tako",
+    db,
+    clock,
+    workspace,
+    github,
+    resolveAuthority: () => profile("auto_if_ci_green"),
+  });
+
+  await clock.advance(FIVE_MINUTES - 1);
+  await landing.tick("auto_merge", clock.now());
+
+  expect(github.merged).toEqual([]);
+  expect(mergeQuestions(db)).toEqual([]);
+
+  // キューに残っている —— check が緑で報告されれば次の tick で merge される
+  github.scriptCiStatus("success");
+  await landing.tick("auto_merge", clock.now());
+  expect(github.merged.map((pr) => pr.number)).toEqual([1]);
+});
+
+const UNREPORTED_PURPOSE =
+  "\"ship\"'s auto_if_ci_green auto-merge found no CI check reported on PR #1 in the 5 minutes since " +
+  "the board last pushed to it, so its CI-green condition cannot be observed. Merge anyway, or hold?";
+
+it("猶予の5分を過ぎても check 未報告の PR は、キューを外れて推奨 hold の merge question を盤面の名義で1件だけ立てる", async () => {
+  const workspace = await makeWorkspace("landing-unreported-past-grace");
+  const { db, clock } = await openBoard();
+  const github = new FakeGitHubClient();
+  github.scriptCiStatus("unreported");
+  queueAutoMerge(db, clock, 1);
+  const landing = createLanding({
+    defaultAgentName: "tako",
+    db,
+    clock,
+    workspace,
+    github,
+    resolveAuthority: () => profile("auto_if_ci_green"),
+  });
+
+  await clock.advance(FIVE_MINUTES);
+  await landing.tick("auto_merge", clock.now());
+  await landing.tick("auto_merge", clock.now());
+
+  expect(github.merged).toEqual([]);
+  expect(github.ciChecks).toHaveLength(1);
+  expect(mergeQuestions(db)).toEqual([
+    { pr: 1, registrant: [BOARD_WORKER_ID, "board"], recommendation: "hold", purpose: UNREPORTED_PURPOSE },
+  ]);
+});
+
+it("開いている PR への修理の push は盤面の名義の event に残り、check 未報告の猶予をその push から数え直す", async () => {
+  const { workspace } = await makeRemoteBackedWorkspace("landing-unreported-repair-push");
+  const { db, clock } = await openBoard();
+  const github = new FakeGitHubClient();
+  const landing = createLanding({
+    defaultAgentName: "tako",
+    db,
+    clock,
+    workspace,
+    github,
+    resolveAuthority: () => profile("auto_if_ci_green"),
+  });
+  const work = landingWork(db, clock);
+  git(workspace.path, "checkout", "-b", `task/${work.id}`);
+  commitWork(workspace.path, "feature.txt", "ready\n");
+  await landing.land(work);
+  await clock.advance(4 * 60_000);
+  commitWork(workspace.path, "repair.txt", "fixed\n");
+  await landing.land(getTask(db, work.id)!);
+  github.scriptCiStatus("unreported");
+
+  // PR を開いてから6分、修理の push からは2分
+  await clock.advance(2 * 60_000);
+  await landing.tick("auto_merge", clock.now());
+  expect(mergeQuestions(db)).toEqual([]);
+  expect(
+    listEvents(db, work.id)
+      .filter((e) => e.kind === "pr_branch_pushed")
+      .map(({ worker_id, origin, payload }) => ({ worker_id, origin, payload })),
+  ).toEqual([{ worker_id: BOARD_WORKER_ID, origin: "board", payload: { kind: "pr_branch_pushed", pr_number: 1 } }]);
+
+  await clock.advance(3 * 60_000);
+  await landing.tick("auto_merge", clock.now());
+  expect(mergeQuestions(db).map(({ pr, purpose }) => ({ pr, purpose }))).toEqual([
+    { pr: 1, purpose: UNREPORTED_PURPOSE },
+  ]);
+});
+
+it("猶予を過ぎた check 未報告を読んでいる間にダイヤルが external へ取り下げられた PR は、question なしでキューを外れ、外した事実が残る", async () => {
+  const workspace = await makeWorkspace("landing-unreported-to-external");
+  const { db, clock } = await openBoard();
+  const github = new FakeGitHubClient();
+  const work = queueAutoMerge(db, clock, 1);
+  let dial: MergeDial = "auto_if_ci_green";
+  github.scriptCiStatus("unreported");
+  afterCiRead(github, () => {
+    dial = "external";
+  });
+  const landing = createLanding({
+    defaultAgentName: "tako",
+    db,
+    clock,
+    workspace,
+    github,
+    resolveAuthority: () => profile(dial),
+  });
+
+  await clock.advance(FIVE_MINUTES);
+  await landing.tick("auto_merge", clock.now());
+  await landing.tick("auto_merge", clock.now());
+
+  expect(github.ciChecks).toHaveLength(1);
+  expect(mergeQuestions(db)).toEqual([]);
+  expect(
+    listEvents(db, work.id)
+      .filter((e) => e.kind === "auto_merge_withdrawn")
+      .map((e) => e.payload),
+  ).toEqual([{ kind: "auto_merge_withdrawn", pr_number: 1, merge: "external" }]);
+});
+
 it("門に当たった PR は面が変わっていなければキューに残り、門が開いた後の tick で merge される", async () => {
   const workspace = await makeWorkspace("landing-gate-keeps-queued");
   const { db, clock } = await openBoard();

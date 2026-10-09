@@ -24,7 +24,7 @@ import {
 } from "./execution-setting.js";
 import { type GitHubClient, IssueGoneError } from "./github.js";
 import type { HarnessContainmentCheck } from "./harness-containment.js";
-import { type Landing, type LandingVerdict, landingBlock, recordPrPromotionAbandoned } from "./landing.js";
+import { type Landing, type LandingVerdict, landingBlock, recordPrPromotionAbandoned, unreportedCiGraceElapsed } from "./landing.js";
 import { approveMemoryProposal, humanEntryInput, listMemoryEntries, type MemoryAmendment, movedTail, parseMemoryAmendment, rejectMemoryProposal } from "./memory.js";
 import { whyNotPositiveInteger } from "./positive-integer.js";
 import type { Provider } from "./provider.js";
@@ -956,7 +956,8 @@ export async function submitAnswer(
   }
   const wantsMerge = mergePr !== null && answers[0] === MERGE_QUESTION_OPTIONS[0];
   if (wantsMerge) {
-    assertLandingAllowed(deps.db, taskIdForPr(deps.db, mergePr, task.workspace));
+    const landingTaskId = taskIdForPr(deps.db, mergePr, task.workspace);
+    assertLandingAllowed(deps.db, landingTaskId);
     if (!deps.github) {
       throw new DomainError("no GitHub/workspace configured — cannot check CI or merge");
     }
@@ -967,7 +968,14 @@ export async function submitAnswer(
       "GitHub/workspace",
     );
     const status = await deps.github.getCiStatus({ path: mergeWorkspace.path, number: mergePr });
-    if (status !== "success") {
+    // ADR 0227 決定2・3: check 未報告は猶予の間だけ pending と同じに拒み、過ぎれば回答の中の人間の判断で通す
+    if (status === "unreported" && !unreportedCiGraceElapsed(deps.db, landingTaskId, now())) {
+      throw new DomainError(
+        `CI checks on PR #${mergePr} have not reported yet — answer again once they report, or ` +
+          "5 minutes after the board's last push to it",
+      );
+    }
+    if (status === "pending" || status === "failure") {
       throw new DomainError(`CI is not green yet (status: ${status}) — cannot merge`);
     }
     // External merge precedes the persisted answer. If it fails, the question

@@ -18,6 +18,7 @@ import {
   getTask,
   listBoard,
   presentTask,
+  recordPrOpened,
   registerMergeQuestion,
   registerTask,
   type Task,
@@ -604,6 +605,60 @@ it("merge 回答は question の workspace で live CI を確認してから実 
     mergedEvent: { kind: "pr_merged", pr_number: 42 },
     mergedBy: "human",
   });
+});
+
+// ADR 0227 決定2・3: check 未報告の PR への「merge」回答は、盤面の最後の push から5分の猶予の間だけ拒まれる
+async function answerMergeOnUnreportedCi(minutesSincePrOpened: number) {
+  db = openDb(":memory:");
+  const work = registerTask(
+    db,
+    {
+      type: "work",
+      title: "ship the feature",
+      purpose: "deliver the requested change",
+      completion_criteria: "the change is merged",
+      workspace: "product",
+    },
+    NOW,
+    ...HUMAN_WEBUI,
+  );
+  recordPrOpened(db, work, 42, "worker", NOW, { merge: "escalate" }, undefined, "worker");
+  const github = new FakeGitHubClient();
+  github.scriptCiStatus("unreported");
+  const answer = submitAnswer(
+    {
+      db,
+      pollNow: () => {},
+      github,
+      resolveWorkspace: (name) => ({ name: name!, path: `/workspaces/${name}` }),
+      landing: unusedLanding,
+    },
+    onlyQuestion(db),
+    ["merge"],
+    undefined,
+    () => new Date(NOW.getTime() + minutesSincePrOpened * 60_000),
+    "webui",
+  );
+  return { github, answer };
+}
+
+it("check 未報告の PR への merge 回答は、PR を開いてから5分の猶予の内なら拒否され question は開いたまま", async () => {
+  const { github, answer } = await answerMergeOnUnreportedCi(4);
+
+  await expect(answer).rejects.toThrow(
+    new DomainError(
+      "CI checks on PR #42 have not reported yet — answer again once they report, or 5 minutes after the board's last push to it",
+    ),
+  );
+  expect(github.merged).toEqual([]);
+  expect(onlyQuestion(db).status).toBe("todo");
+});
+
+it("猶予の5分を過ぎても check 未報告の PR への merge 回答は、merge まで進む", async () => {
+  const { github, answer } = await answerMergeOnUnreportedCi(5);
+
+  await expect(answer).resolves.toMatchObject({ status: "done" });
+  expect(github.merged).toEqual([{ path: "/workspaces/product", number: 42 }]);
 });
 
 it("workspace quarantine の回答は tree が clean と確認できるまで拒否する", async () => {
