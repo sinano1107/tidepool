@@ -2052,3 +2052,166 @@ it("着地済み・未完了・別 agent・PR 昇格を abandon した・祖先�
 
   expect(countTasksAwaitingLanding(db, "tako")).toBe(0);
 });
+
+// ADR 0225: abandon promotion が断念するのはその時点の内容の昇格。付帯子の決着による再発火は、
+// 刻んだ head から内容が変わっていなければ何もせず、変わっていれば PR を開かずに昇格の question を立て直す
+/** 完了した work の PR 昇格を失敗させ、人間が abandon promotion と答えた形。`stampHead: false` は
+ *  workspace を持たない回答 —— head を刻めない。 */
+async function abandonedPromotion(name: string, { stampHead = true } = {}) {
+  const { workspace } = await makeRemoteBackedWorkspace(name);
+  const { db, clock } = await openBoard();
+  const github = new FakeGitHubClient();
+  const authority = { resolve: (): AuthorityProfile => profile("escalate") };
+  const landing = createLanding({
+    defaultAgentName: "tako",
+    db,
+    clock,
+    workspace,
+    github,
+    resolveAuthority: () => authority.resolve(),
+  });
+  const work = landingWork(db, clock);
+  git(workspace.path, "checkout", "-b", `task/${work.id}`);
+  commitWork(workspace.path, "feature.txt", "ready\n");
+  git(workspace.path, "checkout", "main");
+  const done = completeTask(db, work, FULL_HANDOFF, "tako", clock.now(), "worker");
+  // 完了時レビューを決着させてから着地する
+  for (const review of listBoard(db).filter((t) => t.parent_id === work.id)) {
+    completeTask(db, getTask(db, review.id)!, FULL_HANDOFF, "shako", clock.now(), "worker");
+  }
+  github.scriptFailure(new Error("token expired"));
+  await landing.land(done);
+  github.scriptFailure(null);
+  const [failure] = promotionFailures(db, work.id);
+  await answerPromotion(db, clock, landing, stampHead ? workspace : undefined, failure!, "abandon promotion");
+  return { db, clock, workspace, github, landing, authority, work: getTask(db, work.id)! };
+}
+
+function answerPromotion(
+  board: Db,
+  clock: FakeClock,
+  landing: ReturnType<typeof createLanding>,
+  workspace: WorkspaceConfig | undefined,
+  question: { id: string },
+  answer: "retry" | "abandon promotion",
+) {
+  return submitAnswer(
+    { db: board, pollNow: () => {}, landing, workspace },
+    getTask(board, question.id)!,
+    [answer],
+    undefined,
+    () => clock.now(),
+    "webui",
+  );
+}
+
+/** 付帯子を登録し、`repair` があれば親のブランチの内容を変えてから決着させる。 */
+function settleAttachedChild(
+  board: Db,
+  clock: FakeClock,
+  workspace: WorkspaceConfig,
+  parentId: string,
+  repair?: string,
+) {
+  const child = attachUnsettledChild(board, clock, parentId);
+  if (repair) {
+    git(workspace.path, "checkout", `task/${parentId}`);
+    commitWork(workspace.path, `${repair}.txt`, "fixed\n");
+    git(workspace.path, "checkout", "main");
+  }
+  return completeTask(board, child, FULL_HANDOFF, "tako", clock.now(), "worker");
+}
+
+function openPromotionQuestions(board: Db, taskId: string) {
+  return promotionFailures(board, taskId).filter((q) => q.status === "todo");
+}
+
+it.each(UNRESOLVABLE)("PR 昇格を abandon した後、内容を変えない付帯子が決着しても、profile が %s で読めなくても、PR も question も立てず agent を quarantine に落とさない", async (_, fail) => {
+  const { db, clock, workspace, github, landing, authority, work } =
+    await abandonedPromotion("landing-abandon-unchanged");
+  authority.resolve = fail;
+
+  await landing.relandAncestors(settleAttachedChild(db, clock, workspace, work.id));
+
+  expect(github.requests).toHaveLength(1);
+  expect(openPromotionQuestions(db, work.id)).toEqual([]);
+  expect(quarantineQuestion(db, "agent", "tako")).toBeUndefined();
+  expect(countTasksAwaitingLanding(db, "tako", "tako")).toBe(0);
+});
+
+it("PR 昇格を abandon した後、修理が内容を変えて決着すると、profile を読まず PR も開かずに昇格の question を1つ立て直し、retry と答えると PR が開く", async () => {
+  const { db, clock, workspace, github, landing, authority, work } =
+    await abandonedPromotion("landing-abandon-changed");
+  authority.resolve = () => {
+    throw new UnknownAgentError("tako");
+  };
+
+  await landing.relandAncestors(settleAttachedChild(db, clock, workspace, work.id, "repair"));
+
+  expect(github.requests).toHaveLength(1);
+  expect(quarantineQuestion(db, "agent", "tako")).toBeUndefined();
+  const reasked = openPromotionQuestions(db, work.id);
+  expect(reasked).toMatchObject([
+    {
+      title: "PR promotion re-asked: ship",
+      question_items: [{ options: ["retry", "abandon promotion"], recommendation: "retry" }],
+    },
+  ]);
+  expect(countTasksAwaitingLanding(db, "tako", "tako")).toBe(1);
+
+  authority.resolve = () => profile("escalate");
+  await answerPromotion(db, clock, landing, workspace, reasked[0]!, "retry");
+
+  expect(github.requests).toHaveLength(2);
+  expect(getTask(db, work.id)?.pr_number).toBe(1);
+  expect(openPromotionQuestions(db, work.id)).toEqual([]);
+});
+
+it("PR 昇格を abandon した後に内容が変わっても、別の付帯子が未決着の間は question を立てず、その付帯子の決着で立てる", async () => {
+  const { db, clock, workspace, landing, work } = await abandonedPromotion("landing-abandon-gate");
+  const pending = attachUnsettledChild(db, clock, work.id);
+
+  await landing.relandAncestors(settleAttachedChild(db, clock, workspace, work.id, "repair"));
+  expect(openPromotionQuestions(db, work.id)).toEqual([]);
+
+  await landing.relandAncestors(completeTask(db, pending, FULL_HANDOFF, "tako", clock.now(), "worker"));
+  expect(openPromotionQuestions(db, work.id).map((q) => q.title)).toEqual(["PR promotion re-asked: ship"]);
+});
+
+it("立て直した question にもう一度 abandon と答えるとその時点の head が刻まれ、内容を変えない次の決着では何も起きない", async () => {
+  const { db, clock, workspace, github, landing, work } = await abandonedPromotion("landing-abandon-again");
+  await landing.relandAncestors(settleAttachedChild(db, clock, workspace, work.id, "repair"));
+  const [reasked] = openPromotionQuestions(db, work.id);
+
+  await answerPromotion(db, clock, landing, workspace, reasked!, "abandon promotion");
+  expect(
+    listEvents(db, work.id)
+      .filter((e) => e.kind === "pr_promotion_abandoned")
+      .map((e) => e.payload),
+  ).toEqual([
+    { kind: "pr_promotion_abandoned", head: expect.any(String) },
+    { kind: "pr_promotion_abandoned", head: git(workspace.path, "rev-parse", `task/${work.id}`) },
+  ]);
+
+  await landing.relandAncestors(settleAttachedChild(db, clock, workspace, work.id));
+  expect(openPromotionQuestions(db, work.id)).toEqual([]);
+  expect(github.requests).toHaveLength(1);
+});
+
+it("head を刻めなかった abandon は、内容を変えない次の決着でも昇格の question を立てる", async () => {
+  const { db, clock, workspace, github, landing, work } = await abandonedPromotion("landing-abandon-no-head", {
+    stampHead: false,
+  });
+  expect(latestAbandonedHead(db, work.id)).toBeNull();
+
+  await landing.relandAncestors(settleAttachedChild(db, clock, workspace, work.id));
+
+  expect(openPromotionQuestions(db, work.id).map((q) => q.title)).toEqual(["PR promotion re-asked: ship"]);
+  expect(github.requests).toHaveLength(1);
+});
+
+function latestAbandonedHead(board: Db, taskId: string) {
+  const stamps = listEvents(board, taskId).filter((e) => e.payload.kind === "pr_promotion_abandoned");
+  const last = stamps.at(-1)?.payload;
+  return last?.kind === "pr_promotion_abandoned" ? last.head : undefined;
+}

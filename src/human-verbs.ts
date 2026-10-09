@@ -24,7 +24,7 @@ import {
 } from "./execution-setting.js";
 import { type GitHubClient, IssueGoneError } from "./github.js";
 import type { HarnessContainmentCheck } from "./harness-containment.js";
-import { type Landing, type LandingVerdict, landingBlock } from "./landing.js";
+import { type Landing, type LandingVerdict, landingBlock, recordPrPromotionAbandoned } from "./landing.js";
 import { approveMemoryProposal, humanEntryInput, listMemoryEntries, type MemoryAmendment, movedTail, parseMemoryAmendment, rejectMemoryProposal } from "./memory.js";
 import { whyNotPositiveInteger } from "./positive-integer.js";
 import type { Provider } from "./provider.js";
@@ -1046,14 +1046,22 @@ export async function submitAnswer(
   }
   // Giving up promotion otherwise leaves no trace beyond a settled question;
   // preserve the reason on the immutable decision log of that question.
+  // 断念した内容(その時点の head)は盤面名義の事実としてタスクに刻む(ADR 0225 決定1)
   if (promotionTaskId !== null && answers[0] === PR_PROMOTION_FAILURE_OPTIONS[1]) {
     logDecision(
       deps.db,
       question,
-      `PR promotion abandoned for task ${promotionTaskId} — the work stays on its task branch, no PR`,
+      `PR promotion abandoned for task ${promotionTaskId} — this content stays on its task branch; a later change to the branch asks again`,
       HUMAN_WORKER_ID,
       now(),
       origin,
+    );
+    recordPrPromotionAbandoned(
+      deps.db,
+      buildWorkspaceResolver(deps.resolveWorkspace, deps.workspace),
+      task.workspace,
+      promotionTaskId,
+      now(),
     );
   }
   // abandon は失敗タスクの木を丸ごと cancel する — そこに付帯子が居たなら、待って
