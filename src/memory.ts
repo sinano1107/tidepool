@@ -1049,7 +1049,7 @@ export function rejectMemoryProposal(db: Db, proposal: MemoryProposal, questionI
 function requireLive(db: Db, id: number, kinds: Array<MemoryEntryFields["kind"]> | undefined, state?: MemoryEntryFields["state"]): EntryRow {
   const row = requireEntry(db, id);
   if ((kinds && !kinds.includes(row.kind)) || row.invalidation_reason !== null || (state !== undefined && row.state !== state)) {
-    const tail = row.invalidation_reason === null ? row : sameBodyChain(db, row, restoredAs(db)).at(-1)!;
+    const tail = sameBodyChain(db, row, restoredAs(db)).at(-1)!;
     const lives = tail.id === id ? "" : `: it now lives as entry ${tail.id}${tail.invalidation_reason === null ? "" : `, which is invalidated too (${tail.invalidation_reason})`}`;
     throw new DomainError(`memory entry ${id} is not a non-invalidated ${kinds?.join(" or ") ?? "entry"}${state ? ` in state ${state}` : ""}${lives}`);
   }
@@ -1717,7 +1717,7 @@ export function pullMemoryProposals(db: Db, reader: Pick<MemoryReader, "taskId" 
 const proposalEntryIds = (rows: ReturnType<typeof memoryProposalRows>) => [
   ...new Set(
     rows.map(({ proposal, followed }) => {
-      const named = proposal.op === "invalidate" ? proposal.target.id : "successor" in proposal ? proposal.successor.id : proposal.candidate_id;
+      const named = pinnedIds(proposal, true)[0]!;
       return followed.find(({ id }) => id === named)?.tail_id ?? named;
     }),
   ),
