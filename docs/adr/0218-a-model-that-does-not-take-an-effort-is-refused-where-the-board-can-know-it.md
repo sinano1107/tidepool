@@ -33,7 +33,8 @@
 - CLI は組み込みの規則より先に served catalog(api.anthropic.com から実行時に取る)を読む。catalog が変われば盤面に
   見えないずれが起きうる。今は実測と組み込みの規則が一致している。
 - API が effort を断ると、CLI は effort 無しで黙って送り直す。CLI の知らない id(Moonshot の `kimi-k3`、
-  `claude-haiku-5-5`)がこの道に乗るかは測っていない。
+  `claude-haiku-5-5`)は、2.1.286 で5値とも断られずこの道に乗らなかった(issue #1654 の実測)。Moonshot が受けた
+  effort を推論に効かせているかは盤面から見えない。
 - `execution_settings.effort` は NULL を許す。migration は書かず盤面を作り直す。
 
 ## 退けた案
