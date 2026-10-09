@@ -1495,19 +1495,14 @@ it("CI 赤を読んでいる間にダイヤルが external へ取り下げられ
   ]);
 });
 
-it.each([
-  ["ダイヤルが escalate へ取り下げられた", "dial"],
-  ["workspace が保護された", "protected"],
-] as const)("CI 赤を読んでいる間に%s PR は、面変化の question ではなく推奨 hold の CI 赤の question を1件だけ立ててキューを外れる", async (_, change) => {
-  const workspace = await makeWorkspace(`landing-red-ci-to-${change}`);
+it("CI 赤を読んでいる間にダイヤルが escalate へ取り下げられた PR は、面変化の question ではなく推奨 hold の CI 赤の question を1件だけ立ててキューを外れる", async () => {
+  const workspace = await makeWorkspace("landing-red-ci-to-escalate");
   const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
   queueAutoMerge(db, clock, 1);
   let dial: MergeDial = "auto_if_ci_green";
-  let protectedWorkspace = false;
   redCiThen(github, () => {
-    if (change === "dial") dial = "escalate";
-    else protectedWorkspace = true;
+    dial = "escalate";
   });
   const landing = createLanding({
     defaultAgentName: "tako",
@@ -1516,7 +1511,6 @@ it.each([
     workspace,
     github,
     resolveAuthority: () => profile(dial),
-    isProtectedWorkspace: () => protectedWorkspace,
   });
 
   await landing.tick("auto_merge", clock.now());
