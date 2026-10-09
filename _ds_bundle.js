@@ -195,7 +195,7 @@ function LogEntry({ entry = {}, onObject, onExpand, onOpenMemoryEntry, active = 
       "data-active": active ? "" : void 0,
       style: {
         display: "grid",
-        gridTemplateColumns: onExpand ? "auto auto minmax(0, 1fr) auto" : "auto auto minmax(0, 1fr)",
+        gridTemplateColumns: onExpand ? "minmax(0, 1fr) auto" : "minmax(0, 1fr)",
         alignItems: "start",
         gap: "0 10px",
         padding: "10px 12px",
@@ -217,11 +217,10 @@ function LogEntry({ entry = {}, onObject, onExpand, onOpenMemoryEntry, active = 
             onObject();
           }
         } : void 0,
-        style: { gridColumn: "1 / 4", display: "grid", gridTemplateColumns: "subgrid", alignItems: "start", minWidth: 0 }
+        style: { minWidth: 0 }
       },
-      /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--text-muted)", paddingTop: 2 } }, time),
-      /* @__PURE__ */ React.createElement(__ds_scope.AgentChip, { name: agent, icon: agentIcon, human, size: "sm", style: { paddingTop: 1 } }),
-      /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "flex-start", gap: 10 } }, /* @__PURE__ */ React.createElement("div", { style: { flex: 1, minWidth: 0, fontSize: "var(--text-sm)", color: kindColors[kind], lineHeight: "var(--leading-normal)", whiteSpace: "pre-wrap", overflowWrap: "anywhere" } }, /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--text-muted)", marginRight: 6 } }, taskId), completion && /* @__PURE__ */ React.createElement("strong", { style: { fontWeight: "var(--weight-semibold)", marginRight: 4 } }, "done \u2014"), text), active && /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--coral-4)", paddingTop: 3, flexShrink: 0 } }, "objecting\u2026"))
+      /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 6, fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--text-muted)" } }, /* @__PURE__ */ React.createElement("span", null, time), /* @__PURE__ */ React.createElement(__ds_scope.AgentChip, { name: agent, icon: agentIcon, human, size: "sm" }), /* @__PURE__ */ React.createElement(__ds_scope.IdChip, { id: taskId, style: { flexShrink: 0 } }), active && /* @__PURE__ */ React.createElement("span", { style: { marginLeft: "auto", color: "var(--coral-4)" } }, "objecting\u2026")),
+      /* @__PURE__ */ React.createElement("div", { style: { fontSize: "var(--text-sm)", color: kindColors[kind], lineHeight: "var(--leading-normal)", whiteSpace: "pre-wrap", overflowWrap: "anywhere" } }, completion && /* @__PURE__ */ React.createElement("strong", { style: { fontWeight: "var(--weight-semibold)", marginRight: 4 } }, "done \u2014"), text)
     ),
     onExpand && /* @__PURE__ */ React.createElement(
       "button",
@@ -234,7 +233,7 @@ function LogEntry({ entry = {}, onObject, onExpand, onOpenMemoryEntry, active = 
       },
       "\u2304"
     ),
-    (objection || bundledObjection) && /* @__PURE__ */ React.createElement("div", { style: { gridColumn: 3 } }, objection && /* @__PURE__ */ React.createElement("div", { style: { ...band, background: "var(--coral-1)", color: "var(--coral-4)" } }, /* @__PURE__ */ React.createElement("span", null, "objection: ", objection), causeNote), bundledObjection && /* @__PURE__ */ React.createElement("div", { style: { ...band, background: "var(--surface-recessed)", color: "var(--text-muted)" } }, /* @__PURE__ */ React.createElement("span", null, /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", textTransform: "uppercase", letterSpacing: "0.06em", marginRight: 6 } }, "bundled"), bundledObjection), !objection && causeNote))
+    (objection || bundledObjection) && /* @__PURE__ */ React.createElement("div", { style: { gridColumn: "1 / -1" } }, objection && /* @__PURE__ */ React.createElement("div", { style: { ...band, background: "var(--coral-1)", color: "var(--coral-4)" } }, /* @__PURE__ */ React.createElement("span", null, "objection: ", objection), causeNote), bundledObjection && /* @__PURE__ */ React.createElement("div", { style: { ...band, background: "var(--surface-recessed)", color: "var(--text-muted)" } }, /* @__PURE__ */ React.createElement("span", null, /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", textTransform: "uppercase", letterSpacing: "0.06em", marginRight: 6 } }, "bundled"), bundledObjection), !objection && causeNote))
   );
 }
 Object.assign(__ds_scope, { LogEntry });
