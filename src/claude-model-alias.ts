@@ -36,6 +36,20 @@ const FAMILIES: readonly { name: string; prefix: string; minGeneration: number; 
  *  `claude-sonnet-4-20250514` is 4.0 and `claude-opus-4-1-20250805` is 4.1. */
 const GENERATION = /^(\d+)(?:-(\d{1,2})(?!\d))?/;
 
+/** The undated id `claude-<family>-<major>-<minor>` a concrete id reads as (`claude-opus-4-20250514` → `claude-opus-4-0`), by the
+ *  same family and generation reading as the advisor; undefined when the family or generation is unreadable. */
+export function undatedClaudeId(model: string): string | undefined {
+  const read = readFamily(model);
+  return read && `${read.family.prefix}${read.major}-${read.minor}`;
+}
+
+/** The family and `<major>-<minor>` a concrete id reads as; undefined when either is unreadable. */
+function readFamily(model: string): { family: (typeof FAMILIES)[number]; major: number; minor: number } | undefined {
+  const family = FAMILIES.find((f) => model.startsWith(f.prefix));
+  const digits = family && GENERATION.exec(model.slice(family.prefix.length));
+  return digits ? { family, major: Number(digits[1]), minor: Number(digits[2] ?? 0) } : undefined;
+}
+
 /** The advisor pinned beside an anthropic main row under the board's ceiling, and why; undefined when the row is no
  *  candidate for an advisor entry. `off` decides before the row is read (ADR 0208 決定3): the entry runs as one without an
  *  advisor. A main above the ceiling runs without one, so no floor applies. Otherwise the row is no candidate when its family is
@@ -43,13 +57,13 @@ const GENERATION = /^(\d+)(?:-(\d{1,2})(?!\d))?/;
 export function claudeAdvisorFor(model: string, ceiling: AdvisorCeiling): { advisor: string | undefined; source: AdvisorSource } | undefined {
   if (ceiling === "off") return { advisor: undefined, source: "off" };
   const alias = ceiling === "fable_then_opus" ? "fable" : ceiling;
-  const family = FAMILIES.find((f) => model.startsWith(f.prefix));
-  const digits = family && GENERATION.exec(model.slice(family.prefix.length));
-  if (!family || !digits) return undefined;
+  const read = readFamily(model);
+  if (!read) return undefined;
+  const { family } = read;
   const top = FAMILIES.findIndex((f) => f.name === alias);
   const rank = FAMILIES.indexOf(family);
   if (rank > top) return { advisor: undefined, source: "main_above_ceiling" };
-  const generation = Number(digits[1]) * 100 + Number(digits[2] ?? 0);
+  const generation = read.major * 100 + read.minor;
   if (generation < family.minGeneration) return undefined;
   if (rank === top) return { advisor: model, source: "ceiling" };
   if (generation <= FAMILIES[top]!.accepts![family.name]!) return { advisor: alias, source: "ceiling" };

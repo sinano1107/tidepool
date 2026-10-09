@@ -500,9 +500,12 @@ export const matchesRowKey = (row: ExecutionSettingRow, key: RowKeyFields) =>
 /** 行を文面で名指す綴り(エラー・question の diff)。 */
 export const rowName = (key: RowKeyFields) => `${key.provider} / ${key.model} at effort ${key.effort}`;
 
-/** `row` を表に書けるか(ADR 0200 決定5): 1つの (model, effort) の組が属する段は1つ、1つの段に同じ model は1行まで。
- *  `key` は編集で置き換わる行で、照合から外す。行を書く扉と routing の行の提案が同じこの1本を通る。 */
+/** `row` を表に書けるか: effort が語彙の中で、model がそれを下げない(ADR 0216 決定3・ADR 0218 決定4)。1つの (model, effort) の組が
+ *  属する段は1つ、1つの段に同じ model は1行まで(ADR 0200 決定5)。`key` は編集で置き換わる行で、照合から外す。行を書く扉
+ *  (approve / add_tier の適用は schema を通らず扉を直に呼ぶ)と routing の行の提案が同じこの1本を通る。 */
 export function assertRowFits(table: ExecutionSettingTable, row: ExecutionSettingRow, key?: RowKey): void {
+  const effortProblem = whyInvalidEffort(row.provider, row.model, row.effort);
+  if (effortProblem) throw new DomainError(effortProblem);
   for (const other of table) {
     if ((key && matchesRowKey(other, key)) || other.provider !== row.provider || other.model !== row.model) continue;
     const name = `${rowName(other)} in tier ${other.tier}`;
@@ -570,15 +573,10 @@ export const executionSettingsChangeSchema = z.discriminatedUnion("setting", [
 ]);
 export type ExecutionSettingsChange = z.infer<typeof executionSettingsChangeSchema>;
 
-/** 行の提案の変更と、承認に添える修正値の形(ADR 0150 決定2): 動かせるのは分類と effort だけ。 */
+/** 行の提案の変更と、承認に添える修正値の形(ADR 0150 決定2): 動かせるのは分類と effort だけ。effort の値は model と合わせて
+ *  見るので、提案の作成と承認の適用が合成した行を `assertRowFits` で検査する(ADR 0218 決定4)。 */
 const routingRowChangeSchema = z
-  .object({
-    tier: requiredTextSchema,
-    effort: requiredTextSchema.superRefine((value, ctx) => {
-      const reason = whyInvalidEffort(value);
-      if (reason) ctx.addIssue({ code: "custom", message: reason });
-    }),
-  })
+  .object({ tier: requiredTextSchema, effort: requiredTextSchema })
   .partial()
   .strict()
   .refine((change) => Object.keys(change).length > 0, { message: "name at least one of tier / effort" });
@@ -713,9 +711,6 @@ export function applyExecutionSettingsChange(
         if (provider === "anthropic" && isClaudeModelAlias(model)) {
           throw new DomainError(`"${model}" is a Claude CLI alias whose target moves with CLI updates; a table row takes a concrete model id (e.g. claude-opus-5-5)`);
         }
-        // schema でなくここで拒む: approve / add_tier の適用は schema を通らずこの関数を直に呼ぶ。
-        const effortProblem = whyInvalidEffort(effort);
-        if (effortProblem) throw new DomainError(effortProblem);
         assertKnownTier(db, "tier", tier);
         const { key } = change;
         const table = loadExecutionSettingTable(db);
