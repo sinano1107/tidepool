@@ -193,6 +193,10 @@ export type EventPayload =
   // 着地そのもの(`pr_opened` / `nothing_to_land`)は question が指すタスクの側に
   // 残っているので、この行は payload を持たない
   | { kind: "pr_promotion_observed" }
+  // ADR 0225 決定1: PR 昇格失敗の question への abandon promotion が断念した内容 —— 回答の時点の
+  // タスクブランチの head。断念という人間の判断は question の decision log に、断念した内容はこの事実として
+  // タスクの側に残る(ADR 0073 決定2)。head を読めなかったときは null(「変わった」と扱う)
+  | { kind: "pr_promotion_abandoned"; head: string | null }
   // issue #11: a risk-approval question's "approve" answer raised the
   // parent's risk_flag (upward propagation) — origin_question_id is that
   // question, so the audit trail for the flag flip never needs a join

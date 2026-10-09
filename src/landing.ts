@@ -3,6 +3,7 @@ import type { Db } from "./db.js";
 import { DEFAULT_AUDITOR_NAME } from "./defaults.js";
 import { DomainError } from "./domain-error.js";
 import { appendEvent, latestEventOfTask } from "./events.js";
+import { git } from "./git.js";
 import type { GitHubClient } from "./github.js";
 import { registerQuarantine } from "./quarantine.js";
 import { type AuthorityProfile, InvalidAgentDefinitionError, UnknownAgentError } from "./registry.js";
@@ -211,13 +212,28 @@ export function registerPrPromotionFailureQuestion(
   error: string,
   now: Date,
 ): void {
-  const title = `PR promotion failed: ${task.title}`;
+  registerPrPromotionQuestion(
+    db,
+    task,
+    `PR promotion failed: ${task.title}`,
+    `Creating a PR for completed task "${task.title}" failed: ${error}`,
+    now,
+  );
+}
+
+function registerPrPromotionQuestion(
+  db: Db,
+  task: Task,
+  title: string,
+  purpose: string,
+  now: Date,
+): void {
   registerTask(
     db,
     {
       type: "question",
       title,
-      purpose: `Creating a PR for completed task "${task.title}" failed: ${error}`,
+      purpose,
       completion_criteria: "a human decides whether to retry PR promotion",
       question: [
         {
@@ -233,6 +249,38 @@ export function registerPrPromotionFailureQuestion(
     BOARD_WORKER_ID,
     "board",
   );
+}
+
+function hasOpenPrPromotionQuestion(db: Db, taskId: string): boolean {
+  return (
+    db
+      .prepare("SELECT 1 FROM tasks WHERE question_pending_pr_promotion_task_id = ? AND status = 'todo'")
+      .get(taskId) !== undefined
+  );
+}
+
+/** ADR 0225 決定1: abandon promotion が断念した内容として、回答の時点のタスクブランチの head を
+ *  盤面名義で刻む。workspace もブランチも読めなければ null で刻み、回答は拒まない。 */
+export function recordPrPromotionAbandoned(
+  db: Db,
+  resolve: ((taskWorkspace: string | null) => WorkspaceConfig) | undefined,
+  taskWorkspace: string | null,
+  taskId: string,
+  now: Date,
+): void {
+  let head: string | null = null;
+  try {
+    if (resolve) {
+      head = git(resolve(taskWorkspace).path, "rev-parse", "--verify", "--quiet", `refs/heads/${taskBranch(taskId)}`);
+    }
+  } catch {}
+  appendEvent(db, {
+    taskId,
+    workerId: BOARD_WORKER_ID,
+    origin: "board",
+    payload: { kind: "pr_promotion_abandoned", head },
+    at: now,
+  });
 }
 
 /** ADR 0079 決定3/4: retires a merge question whose PR turned out to be
@@ -463,6 +511,16 @@ export function createLanding(deps: LandingDeps): Landing {
       "the assigned agent's authority profile cannot be resolved for landing",
       excludePrPromotionQuestionId,
     );
+  /** ADR 0225 決定1: 刻んだ head から内容が変わったか(ADR 0105 と同じ比較)。読めなければ「変わった」—— 修理を捨てない側 */
+  const changedSince = (task: Task, head: string | null): boolean => {
+    const resolve = buildWorkspaceResolver(deps.resolveWorkspace, deps.workspace);
+    if (head === null || !resolve) return true;
+    try {
+      return branchMergeEffect(resolve(task.workspace), head, taskBranch(task.id)).changesCandidate;
+    } catch {
+      return true;
+    }
+  };
   const landing: Landing = {
     async land(task, excludePrPromotionQuestionId) {
       if (task.type !== "work") return { kind: "not_applicable", reason: "not_work" };
@@ -635,7 +693,39 @@ export function createLanding(deps: LandingDeps): Landing {
         ancestor = ancestor.parent_id ? getTask(deps.db, ancestor.parent_id) : undefined
       ) {
         if (ancestor.type !== "work" || ancestor.status !== "done") continue;
-        if (taskHasLanded(deps.db, ancestor.id) && ancestor.pr_number === null) continue;
+        if (ancestor.pr_number === null) {
+          if (taskHasLanded(deps.db, ancestor.id)) continue;
+          // ADR 0225: abandon promotion した祖先は着地し直さない。門が開き、刻んだ head から内容が
+          // 変わっていれば、PR を開かず(profile も読まず)昇格の question を立て直す
+          const abandoned = latestEventOfTask(deps.db, ancestor.id, "pr_promotion_abandoned");
+          if (abandoned) {
+            if (
+              landingBlock(deps.db, ancestor.id) ||
+              hasOpenPrPromotionQuestion(deps.db, ancestor.id) ||
+              !changedSince(ancestor, abandoned.payload.head)
+            ) {
+              continue;
+            }
+            registerPrPromotionQuestion(
+              deps.db,
+              ancestor,
+              `PR promotion re-asked: ${ancestor.title}`,
+              `PR promotion for completed task "${ancestor.title}" was abandoned. An attached child ` +
+                `settled afterwards, and ${taskBranch(ancestor.id)} no longer matches (or could not be ` +
+                `compared with) the content abandoned then. Promote the current content?`,
+              deps.clock.now(),
+            );
+            results.push({
+              taskId: ancestor.id,
+              verdict: {
+                kind: "failed",
+                reason: "promotion_failed",
+                error: `the content of ${taskBranch(ancestor.id)} changed after PR promotion was abandoned`,
+              },
+            });
+            continue;
+          }
+        }
         results.push({ taskId: ancestor.id, verdict: await landing.land(ancestor) });
       }
       return results;
