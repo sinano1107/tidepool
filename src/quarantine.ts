@@ -5,6 +5,8 @@
  *  鍵は全種類 `(kind, value)` で、1鍵につき開いた確認型 question は最大1枚。盤面全体で
  *  資源の名を持たない種類の value は NULL である。依存の向きはこの module → タスクの
  *  module であり、逆は張らない。 */
+
+import { CLAUDE_CLI_VERSION } from "./claude-cli-version.js";
 import type { Db } from "./db.js";
 import { appendEvent, type RowRefusalCause } from "./events.js";
 import type { HaltKind } from "./halt-kind.js";
@@ -19,7 +21,7 @@ interface QuarantineProse {
   title: string;
   purpose: string;
   completion_criteria: string;
-  /** 省略時は「repaired by hand」の1択。 */
+  /** 省略時は「repaired by hand」の1択。空の配列は項目なし —— 回答では決着しない種類(ADR 0218 決定6)。 */
   question?: QuestionItem[];
 }
 
@@ -62,10 +64,10 @@ export function parseTableRowEffortValue(value: string): { provider: Provider; m
   return { ...parseTableRowValue(value.slice(0, at)), effort: value.slice(at + 1) || null };
 }
 
-/** 行の effort の Quarantine の文面は契機ごとに組む(#1655: 起動時の照合が2つ目の契機として足される)。
- *  原因は断言しない(ADR 0184 決定1)。 */
+/** 行の effort の Quarantine の文面は契機ごとに組む(Codex の一覧の照合と起動時の照合、#1655)。 */
 const TABLE_ROW_EFFORT_PROSE = {
-  codexModelList: (row: string, reason: string): QuarantineProse =>
+  // 原因は断言しない(ADR 0184 決定1)
+  codexModelList:(row: string, reason: string): QuarantineProse =>
     rowQuarantineProse(
       row,
       `${reason}. This board's model list does not advertise this effort for this model — with this Codex CLI ` +
@@ -77,6 +79,18 @@ const TABLE_ROW_EFFORT_PROSE = {
       "2. If the effort is right, update tidepool or restore the account, then answer — the board reads the model " +
       "list again and accepts the answer only if it advertises this effort for this model.",
     ),
+  // 起動時の照合(ADR 0218 決定6): 事実は tidepool の更新でしか変わらないので、回答では決着せず表の編集だけで決着する。
+  // 「走れない」とも観測とも言わず、版の組み込みの規則と書くべき値(reason)を名指す
+  startupReconciliation: (row: string, reason: string): QuarantineProse => ({
+    title: `execution-setting row ${row} does not run with the effort it names`,
+    purpose:
+      `Claude CLI ${CLAUDE_CLI_VERSION}'s built-in model rules do not run this row with the effort it names: ${reason}. ` +
+      "This row is out of pickup and Board calls while this stands; other rows keep running, including this model's " +
+      "rows at other efforts.\n\nRepair: in the settings tab, change this row's effort or delete the row. This " +
+      "question then closes on its own — no answer settles it.",
+    completion_criteria: `the execution-setting table no longer has the row ${row}`,
+    question: [],
+  }),
 };
 
 /** 行の Quarantine(model ごと・effort ごと)の question の形。違うのは本文だけ。 */
@@ -263,7 +277,8 @@ export const QUARANTINES = [
     scope: "row",
     prose: (value: string | null, reason: string, cause?: RowRefusalCause | TableRowEffortTrigger): QuarantineProse => {
       const { provider, model, effort } = parseTableRowEffortValue(value!);
-      const trigger = (cause ?? "codexModelList") as TableRowEffortTrigger;
+      // 契機は DB に残らない: Codex の一覧の照合は openai の行だけ、起動時の照合は anthropic / moonshot の行だけを入れる
+      const trigger = (cause ?? (provider === "openai" ? "codexModelList" : "startupReconciliation")) as TableRowEffortTrigger;
       return TABLE_ROW_EFFORT_PROSE[trigger](`${provider} / ${model} / ${effort ?? "no effort"}`, reason);
     },
   },

@@ -599,8 +599,15 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
     // ときだけ受理し、401 は Provider 認証の経路に落としてから拒む
     ...(modelProbes && clock && {
       tableRow: (value) => recheckRow(modelProbes, clock, parseTableRowValue(value!)),
-      // ADR 0218 決定2: effort ごとの行は、その effort でも検査し直す(Codex は一覧の読み直し)
-      tableRowEffort: (value) => recheckRow(modelProbes, clock, parseTableRowEffortValue(value!)),
+      // ADR 0218 決定2: effort ごとの行は、その effort でも検査し直す(Codex は一覧の読み直し)。anthropic / moonshot の行は
+      // 起動時の照合だけが入れ、その probe は effort を読まないので、回答では決着させない(決定6)
+      tableRowEffort: async (value) => {
+        const row = parseTableRowEffortValue(value!);
+        if (row.provider !== "openai") {
+          throw new DomainError("only a table edit settles this question: change this row's effort or delete the row in the settings tab");
+        }
+        await recheckRow(modelProbes, clock, row);
+      },
     }),
     ...(harnessContainment && {
       harnessContainment: async (value) => {

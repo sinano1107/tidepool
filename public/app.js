@@ -569,7 +569,7 @@ function TpQuestionCard({ q, answer, onAnswer, locked = false, onTranslate, onOp
   const setItemAnswer = (i, value) => setDraft(draft.map((v, j) => j === i ? value : v));
   const disabledOptions = deadAddressee ? ["approve"] : [];
   const pickedNeedingComment = draft.filter((v) => v && q.needsComment?.includes(v));
-  const canSubmit = draft.every(Boolean) && !draft.some((v) => disabledOptions.includes(v)) && (pickedNeedingComment.length === 0 || !TidepoolRules.whyBlank(comment));
+  const canSubmit = items.length > 0 && draft.every(Boolean) && !draft.some((v) => disabledOptions.includes(v)) && (pickedNeedingComment.length === 0 || !TidepoolRules.whyBlank(comment));
   const [submitting, setSubmitting] = React.useState(false);
   const submit = () => {
     setSubmitting(true);

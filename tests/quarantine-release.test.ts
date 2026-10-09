@@ -32,8 +32,8 @@ function quarantined(kind: (typeof QUARANTINES)[number]["kind"], value: string |
   return { db, question, pollNow, answer };
 }
 
-// 盤面全体の種類は値を持たない(NULL の鍵)
-describe.each(QUARANTINES.map((row) => [row.kind, row.scope === "board" ? null : "x"] as const))(
+// 盤面全体の種類は値を持たない(NULL の鍵)。effort の行は回答を受ける契機(openai の行)の値
+describe.each(QUARANTINES.map((row) => [row.kind, row.scope === "board" ? null : row.kind === "tableRowEffort" ? "openai/gpt-5.5/max" : "x"] as const))(
   "%s の確認型 question への回答",
   (kind, value) => {
   it("検査が不成立なら回答は拒否され、question は開いたまま残る", async () => {

@@ -7,7 +7,7 @@ import { whyInvalidEffort } from "./effort.js";
 import { appendEvent, type EventOrigin } from "./events.js";
 import { whyInvalidPrice } from "./price.js";
 import { PROVIDER_VALUES, type Provider, whyInvalidProviderRank } from "./provider.js";
-import { openQuarantineQuestions, tableRowEffortValue, tableRowValue } from "./quarantine.js";
+import { openQuarantineQuestions, registerQuarantine, tableRowEffortValue, tableRowValue } from "./quarantine.js";
 import type { AgentDefinition } from "./registry.js";
 import { RegistryFetchFailedError, RegistryPushFailedError } from "./registry-write.js";
 import { normalizeText, whyBlank } from "./required-text.js";
@@ -816,6 +816,17 @@ function settleRemovedRowQuarantines(db: Db, at: Date, observedEventId: number):
       if (rows[quarantine].has(value!)) continue;
       settleQuestionAsObserved(db, id, { kind: "quarantine_released", quarantine, value, observed_event_id: observedEventId }, at);
     }
+  }
+}
+
+/** 起動時の照合(ADR 0218 決定6): anthropic / moonshot の行を固定版の CLI の組み込みの規則に照らし、書いた effort のとおりに
+ *  走らない行を effort の Quarantine に入れる。事実は tidepool の更新でしか変わらないので起動時で足りる。openai の行の effort は
+ *  probe の一覧の照合が持つ。 */
+export function quarantineRowsOffClaudeEffortRules(db: Db, now: Date): void {
+  for (const row of loadExecutionSettingTable(db)) {
+    if (row.provider === "openai") continue;
+    const reason = whyInvalidEffort(row.provider, row.model, row.effort);
+    if (reason) registerQuarantine(db, "tableRowEffort", tableRowEffortValue(row.provider, row.model, row.effort), reason, now, "startupReconciliation");
   }
 }
 

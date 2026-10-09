@@ -427,7 +427,8 @@ function TpQuestionCard({ q, answer, onAnswer, locked = false, onTranslate, onOp
   // picked options the board says need a reason (ADR 0179 決定5): pickable, but not submittable while the comment is blank
   const pickedNeedingComment = draft.filter((v) => v && q.needsComment?.includes(v));
   // a pick made before the addressee turned out dead is not submittable either
-  const canSubmit = draft.every(Boolean) && !draft.some((v) => disabledOptions.includes(v!)) && (pickedNeedingComment.length === 0 || !TidepoolRules.whyBlank(comment));
+  // a question with no items settles only by a table edit (ADR 0218 決定6), never by an answer
+  const canSubmit = items.length > 0 && draft.every(Boolean) && !draft.some((v) => disabledOptions.includes(v!)) && (pickedNeedingComment.length === 0 || !TidepoolRules.whyBlank(comment));
   // triage marks the card answered only after the POST resolves, so Submit stays pressable until then
   const [submitting, setSubmitting] = React.useState(false);
   const submit = () => {

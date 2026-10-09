@@ -445,7 +445,8 @@ function assertQuestionSpec(input: RegisterTaskInput): void {
     return;
   }
   const items = input.question;
-  if (!items || items.length < 1 || items.length > 4) {
+  // 表の編集でだけ決着する Quarantine の question は項目を持たない(ADR 0218 決定6)
+  if (!items || items.length < (input.quarantine ? 0 : 1) || items.length > 4) {
     throw new DomainError("a question carries 1 to 4 items");
   }
   const minOptions = input.quarantine ? 1 : 2;
