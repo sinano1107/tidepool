@@ -26,6 +26,10 @@ export function buildCanaryPayload(): Markers & { text: string } {
 export const CANARY_SERVER = "canary";
 export const CANARY_TOOL = "read_canary";
 
+/** Codex の prompt で exec に逐語で走らせるコード。CallToolResult を1段包んだ形 —— 予算が覆う最悪の形 —— を出力させ、
+ *  モデルの自然な包み方は観測しない(ADR 0195 の #1413 の追記)。 */
+export const GIVEN_CODE = `const r = await tools.mcp__${CANARY_SERVER}__${CANARY_TOOL}({}); text(JSON.stringify(r));`;
+
 type Block = { type?: string; text?: string };
 /** 文字列か `{type:"text", text}` の列で来る本文を1つの文字列にする。 */
 const textOf = (content: unknown) =>
@@ -47,9 +51,10 @@ export function readClaudeReceived(stdout: string): string | null {
 /** Codex の rollout から、canary を呼んだ call の出力 —— モデルが受け取ったもの —— を読む。直接の MCP 呼び出しなら
  *  `function_call_output`、code mode なら `exec` の `custom_tool_call_output` に載る(0.147.0 の gpt-5.6 系は後者)。
  *  `mcp_tool_call_end` の event と `codex exec --json` の `item.completed` は切り詰め前の本文なので読まない。
- *  ponytail: call は名前か入力に tool 名を含む最後の1回で選ぶ —— code mode の入力はモデルが書くコードなので、
- *  呼んだあとに tool 名を含む別の call を足されると取り違える。観測されたら呼び出しの対応を event から取る */
-export function readCodexReceived(rollout: string): string | null {
+ *  `code` はその call が exec ならモデルが書いたコードで、直接の MCP 呼び出しなら無い。
+ *  ponytail: call は名前か入力に tool 名を含む最後の1回で選ぶ —— 呼んだあとに tool 名を含む別の exec を足されると
+ *  そのコードは指定と一致せず観測なしに落ちる(取り違えて合否を出すことはない)。観測なしが続いたら対応を event から取る */
+export function readCodexReceived(rollout: string): { received: string | null; code?: string } {
   const items = rollout.split("\n").flatMap((line) => {
     const parsed = parseStreamLine(line);
     return parsed?.type === "response_item" ? [parsed.payload as { type?: string; call_id?: string; name?: string; arguments?: string; input?: string; output?: unknown }] : [];
@@ -58,24 +63,31 @@ export function readCodexReceived(rollout: string): string | null {
     .filter((item) => (item.type === "function_call" || item.type === "custom_tool_call") && [item.name, item.arguments, item.input].some((text) => text?.includes(CANARY_TOOL)))
     .at(-1);
   const output = items.find((item) => (item.type === "function_call_output" || item.type === "custom_tool_call_output") && item.call_id === call?.call_id);
-  return output === undefined ? null : textOf(output.output);
+  return { received: output === undefined ? null : textOf(output.output), code: call?.input };
 }
 
 /** 読み手のモデルが実際に受け取った本文に、記録した目印が逐語で揃っているか。中央か末尾のどちらかが欠けたら不合格。
- *  `calls` は一時 MCP が呼び出しごとに記録した目印で、2回呼ばれたら最後の受け取りを最後の目印と突き合わせる。 */
+ *  上限の観測にならなかった回は観測なし(ADR 0195 の #1413 の追記)。
+ *  `calls` は一時 MCP が呼び出しごとに記録した目印で、2回呼ばれたら最後の受け取りを最後の目印と突き合わせる。
+ *  `failure` は読み手の CLI が失敗したときの stderr と要旨、`code` は Codex が canary を呼んだ exec のコード
+ *  (直接の MCP 呼び出しなら無く、一致を見ない)。 */
 export function judgeReceived(
   received: string | null,
   calls: Markers[],
-): { pass: boolean; middle: boolean; tail: boolean; detail: string } {
+  { failure, code }: { failure?: { stderr: string; summary: string }; code?: string } = {},
+): { result: "合格" | "不合格" | "観測なし"; middle: boolean; tail: boolean; detail: string } {
+  const unobserved = (detail: string) => ({ result: "観測なし" as const, middle: false, tail: false, detail });
+  if (failure) return unobserved(failure.stderr.match(/^ERROR:.*$/m)?.[0] ?? failure.summary);
   const markers = calls.at(-1);
-  if (markers === undefined) return { pass: false, middle: false, tail: false, detail: "the reader never called the canary tool" };
-  if (received === null) return { pass: false, middle: false, tail: false, detail: "no tool result found in the reader's record" };
+  if (markers === undefined) return unobserved("the reader never called the canary tool");
+  if (code !== undefined && code.trim() !== GIVEN_CODE) return unobserved("the reader did not run the given code");
+  if (received === null) return unobserved("no tool result found in the reader's record");
   const middle = received.includes(markers.middle);
   const tail = received.includes(markers.tail);
   const missing = [middle ? null : "middle", tail ? null : "tail"].filter(Boolean);
   const repeated = calls.length > 1 ? ` (called ${calls.length} times; last call judged)` : "";
   return {
-    pass: missing.length === 0,
+    result: missing.length === 0 ? "合格" : "不合格",
     middle,
     tail,
     detail: `${Buffer.byteLength(received)} bytes received${missing.length ? `, ${missing.join(" and ")} marker missing` : ""}${repeated}`,

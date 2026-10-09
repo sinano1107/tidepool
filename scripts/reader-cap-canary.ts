@@ -1,6 +1,6 @@
 /** 読み手の MCP 応答上限の canary(ADR 0195 決定7 / issue #1391)。盤面の予算いっぱいの応答を返す一時的な stdio MCP を
  *  立て、このホストの `claude -p` と `codex exec` に1回ずつ呼ばせ、モデルが受け取った本文に中央と末尾の目印が逐語で
- *  残るかを Markdown の表で出す。1つでも不合格なら exit 1。
+ *  残るかを Markdown の表で出す。全行が合格のときだけ exit 0(観測なしも門を満たさない)。
  *
  *  サブスクリプションの認証が要るので CI では回さない(手順は docs/claude-cli-version-bump.md)。Codex は一時的な
  *  CODEX_HOME に `auth.json` だけを写して回し、実際の設定は読みも書きもしない。
@@ -19,6 +19,7 @@ import {
   buildCanaryPayload,
   CANARY_SERVER,
   CANARY_TOOL,
+  GIVEN_CODE,
   judgeReceived,
   readClaudeReceived,
   readCodexReceived,
@@ -41,13 +42,17 @@ if (process.argv[2] === "serve") {
     writeFileSync(markersFile, "");
     return { command: process.execPath, args: [...process.execArgv, import.meta.filename, "serve", markersFile] };
   };
-  const PROMPT = `Call the ${CANARY_TOOL} tool exactly once, then reply with the single word DONE.`;
+  // Claude Code は tool の結果がそのまま文脈に入る。Codex の code mode は exec のコードを逐語で指定して形を固定する
+  const CLAUDE_PROMPT = `Call the ${CANARY_TOOL} tool exactly once, then reply with the single word DONE.`;
+  const CODEX_PROMPT = `Run exactly this code with the exec tool, once, without changing it: \`${GIVEN_CODE}\` Then reply with the single word DONE.`;
   const run = (bin: string, args: string[], env: NodeJS.ProcessEnv) => {
     try {
-      return execFileSync(bin, args, { cwd: scratch, env, encoding: "utf8", maxBuffer: 64 * 1024 * 1024, stdio: ["ignore", "pipe", "pipe"] });
+      return { stdout: execFileSync(bin, args, { cwd: scratch, env, encoding: "utf8", maxBuffer: 64 * 1024 * 1024, stdio: ["ignore", "pipe", "pipe"] }) };
     } catch (err) {
       console.error(`${bin} failed: ${err instanceof Error ? err.message : String(err)}`);
-      return (err as { stdout?: string }).stdout ?? "";
+      const { stdout, stderr, status } = err as { stdout?: string; stderr?: string; status?: number | null };
+      const summary = typeof status === "number" ? `${bin} exited with status ${status}` : err instanceof Error ? err.message : String(err);
+      return { stdout: stdout ?? "", failure: { stderr: stderr ?? "", summary } };
     }
   };
 
@@ -55,11 +60,11 @@ if (process.argv[2] === "serve") {
   const claudeMarkers = join(scratch, "claude-markers.jsonl");
   const mcpConfig = join(scratch, "claude-mcp.json");
   writeFileSync(mcpConfig, JSON.stringify({ mcpServers: { [CANARY_SERVER]: canaryServerSpec(claudeMarkers) } }));
-  const claudeStdout = run(
+  const claude = run(
     "claude",
     [
       "-p",
-      PROMPT,
+      CLAUDE_PROMPT,
       ...pinnedModelFlags("haiku", "low"),
       "--mcp-config",
       mcpConfig,
@@ -75,17 +80,17 @@ if (process.argv[2] === "serve") {
     ],
     boardCallEnv(),
   );
-  writeFileSync(join(scratch, "claude.stream.jsonl"), claudeStdout);
+  writeFileSync(join(scratch, "claude.stream.jsonl"), claude.stdout);
 
-  // Codex: 上限はモデルの metadata で決まり(ADR 0195 決定7)、code mode ではモデルが書くコードでも受け取りが変わるので、
-  // 盤面の種の openai 行のモデルを1行ずつ測る。一時的な CODEX_HOME で回し、rollout はそこに残る
+  // Codex: 上限はモデルの metadata で決まる(ADR 0195 決定7)ので、盤面の種の openai 行のモデルを1行ずつ測る。
+  // 一時的な CODEX_HOME で回し、rollout はそこに残る
   const codexHome = mkdtempSync(join(tmpdir(), "tidepool-reader-cap-codex-"));
   copyFileSync(join(process.env.CODEX_HOME ?? join(homedir(), ".codex"), "auth.json"), join(codexHome, "auth.json"));
   const codexRows = SEED_EXECUTION_SETTINGS.filter((row) => row.provider === "openai").map(({ model }) => {
     const markersFile = join(scratch, `codex-${model}-markers.jsonl`);
     const server = canaryServerSpec(markersFile);
     const before = new Set(globSync(join(codexHome, "sessions/**/rollout-*.jsonl")));
-    run(
+    const { failure } = run(
       "codex",
       [
         "exec",
@@ -100,7 +105,7 @@ if (process.argv[2] === "serve") {
         `mcp_servers.${CANARY_SERVER}.args=${JSON.stringify(server.args)}`,
         "-c",
         `mcp_servers.${CANARY_SERVER}.tools.${CANARY_TOOL}.approval_mode="approve"`,
-        PROMPT,
+        CODEX_PROMPT,
       ],
       { ...process.env, CODEX_HOME: codexHome },
     );
@@ -109,12 +114,13 @@ if (process.argv[2] === "serve") {
       reader: `codex exec (${model})`,
       bin: "codex",
       markersFile,
-      received: rollout === undefined ? null : readCodexReceived(readFileSync(rollout, "utf8")),
+      failure,
+      ...(rollout === undefined ? { received: null } : readCodexReceived(readFileSync(rollout, "utf8"))),
     };
   });
 
   const rows = [
-    { reader: "claude -p (haiku)", bin: "claude", markersFile: claudeMarkers, received: readClaudeReceived(claudeStdout) },
+    { reader: "claude -p (haiku)", bin: "claude", markersFile: claudeMarkers, failure: claude.failure, received: readClaudeReceived(claude.stdout) },
     ...codexRows,
   ];
   console.error(`records kept in ${scratch} and ${codexHome}`);
@@ -122,13 +128,11 @@ if (process.argv[2] === "serve") {
   let ok = true;
   for (const row of rows) {
     const calls = readFileSync(row.markersFile, "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line));
-    const verdict = judgeReceived(row.received, calls);
+    const verdict = judgeReceived(row.received, calls, row);
     const version = execFileSync(row.bin, ["--version"], { encoding: "utf8" }).trim();
     const mark = (present: boolean) => (present ? "present" : "missing");
-    console.log(
-      `| ${row.reader} | ${version} | ${mark(verdict.middle)} | ${mark(verdict.tail)} | ${verdict.pass ? "合格" : "不合格"} | ${verdict.detail} |`,
-    );
-    ok &&= verdict.pass;
+    console.log(`| ${row.reader} | ${version} | ${mark(verdict.middle)} | ${mark(verdict.tail)} | ${verdict.result} | ${verdict.detail} |`);
+    ok &&= verdict.result === "合格";
   }
   process.exit(ok ? 0 : 1);
 }
