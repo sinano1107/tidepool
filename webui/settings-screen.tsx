@@ -2800,7 +2800,7 @@ function SettingsScreen({ say, memoryFocus, registerLeaveGuard }: {
     setDirty,
   };
   const go = (next: string[]) => guard(() => { setStack(next); closeEdit(); });
-  const boardLoaded = displayLanguageLoaded && quietHoursLoaded && !!providerPaceOffsets && !!executionSettings && !!memorySettings && !!metaReviewSettings && !!haltedRefires;
+  const boardLoaded = displayLanguageLoaded && quietHoursLoaded && !!providerPaceOffsets && !!executionSettings && !!memorySettings && !!metaReviewSettings && !!haltedRefires && !!responseFloors;
 
   // a tab switch unmounts this screen, so it has to ask too (決定4)
   React.useEffect(() => {

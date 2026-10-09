@@ -3329,7 +3329,7 @@ function SettingsScreen({ say, memoryFocus, registerLeaveGuard }) {
     setStack(next);
     closeEdit();
   });
-  const boardLoaded = displayLanguageLoaded && quietHoursLoaded && !!providerPaceOffsets && !!executionSettings && !!memorySettings && !!metaReviewSettings && !!haltedRefires;
+  const boardLoaded = displayLanguageLoaded && quietHoursLoaded && !!providerPaceOffsets && !!executionSettings && !!memorySettings && !!metaReviewSettings && !!haltedRefires && !!responseFloors;
   React.useEffect(() => {
     registerLeaveGuard((move) => guard(move));
     return () => registerLeaveGuard(null);

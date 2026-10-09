@@ -281,7 +281,7 @@ export function floorResponse<R extends ToolResponse>(
 }
 
 /** 床の記録の行(ADR 0219 決定2): `response_truncated` の event を (surface, verb) ごとに1行にまとめる。新しい状態は持たず、
- *  events だけから導出する。`max_bytes` は切る前の最大の大きさ、`last_task_id` は task を持つ最後の event の task。 */
+ *  events だけから導出する。`max_bytes` は切る前の最大の大きさ、`last_task_id` は最後の event の task(無ければ null)。 */
 export function listFloorRows(db: Db) {
   const rows = new Map<string, { surface: ResponseSurface; verb: string; count: number; last_at: string; max_bytes: number; last_task_id: string | null }>();
   for (const { payload, created_at } of listEventsOfKinds(db, ["response_truncated"])) {
@@ -293,7 +293,7 @@ export function listFloorRows(db: Db) {
       count: (row?.count ?? 0) + 1,
       last_at: created_at,
       max_bytes: Math.max(row?.max_bytes ?? 0, payload.bytes),
-      last_task_id: payload.task_id ?? row?.last_task_id ?? null,
+      last_task_id: payload.task_id ?? null,
     });
   }
   return [...rows.values()];
