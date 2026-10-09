@@ -2423,8 +2423,9 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit, fo
   const holdsOrphan = draft.workspace === draft.dead.workspace || (draft.kind === "behavior" || draft.kind === "exemplar") && draft.addressee === draft.dead.addressee;
   const filled = draft.kind === "exemplar" ? !TidepoolRules.whyBlank(draft.title) && (draft.source ?? draft.inheritedSource) !== null && draft.annotations.length > 0 && draft.annotations.every((a) => a.polarity && !TidepoolRules.whyBlank(a.text)) : fields.every((key) => !TidepoolRules.whyBlank(draft[key]));
   const originalOf = { title: draft.originalTitle, text: draft.originalText };
-  const unseen = (english, copied) => !translatable && copied !== void 0 && TidepoolRules.normalizeText(english) !== copied;
-  const dropsOriginal = !!draft.originalText && fields.some((key) => unseen(draft[key], draft.copied?.[key]));
+  const changedOutOfSight = (english, copied) => !translatable && copied !== void 0 && TidepoolRules.normalizeText(english) !== copied;
+  const dropsOriginal = !!draft.originalText && fields.some((key) => changedOutOfSight(draft[key], draft.copied?.[key]));
+  const dropsAnnotationOriginal = draft.annotations.map((a) => !!a.original && changedOutOfSight(a.text, a.copiedEnglish));
   const notKept = (what) => `The original wording of ${what} is not kept: the English changed and the original isn't shown on this board.`;
   const runTranslation = async (toEnglish) => {
     setBusy(true);
@@ -2454,7 +2455,7 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit, fo
           addressee: draft.addressee || null,
           ...supersedes,
           ...source,
-          annotations: annotationsToSend(draft.annotations.map((a) => unseen(a.text, a.copied) ? { ...a, original: "" } : a))
+          annotations: annotationsToSend(draft.annotations.map((a, i) => dropsAnnotationOriginal[i] ? { ...a, original: "" } : a))
         });
       } else await api("/api/settings/memory/definitions", { ...body, ...supersedes });
       say("success", `${draft.kind} saved`, body.path);
@@ -2538,7 +2539,7 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit, fo
     inheritedSource: sharedCase([entry]),
     dead: deadRefs(entry),
     copied: entry,
-    annotations: (entry.annotations ?? []).map(({ anchor, polarity, text, original }) => ({ anchor, polarity, text, original: original?.text ?? "", back: null, copied: text }))
+    annotations: (entry.annotations ?? []).map(({ anchor, polarity, text, original }) => ({ anchor, polarity, text, original: original?.text ?? "", back: null, copiedEnglish: text }))
   }));
   const [moving, setMoving] = React.useState(null);
   const [branchMove, setBranchMove] = React.useState(null);
@@ -2682,7 +2683,7 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit, fo
       busy,
       setBusy
     }
-  ), translatable && draft.kind !== "exemplar" && /* @__PURE__ */ React.createElement(React.Fragment, null, draft.kind !== "definition" && /* @__PURE__ */ React.createElement(Input, { label: `Original title (${language})`, value: draft.originalTitle, onChange: setDraftField("originalTitle") }), /* @__PURE__ */ React.createElement(Input, { label: `Original (${language})`, multiline: true, rows: 3, value: draft.originalText, onChange: setDraftField("originalText") }), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", disabled: busy || fields.some((key) => !!TidepoolRules.whyBlank(originalOf[key])), onClick: () => runTranslation(true) }, "Translate")), draft.kind !== "definition" && /* @__PURE__ */ React.createElement(Input, { label: "Title (English)", value: draft.title, onChange: setDraftField("title") }), draft.kind !== "exemplar" && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(Input, { label: "English (saved as the canonical text)", multiline: true, rows: 3, value: draft.text, onChange: setDraftField("text") }), translatable && /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", disabled: busy || fields.some((key) => !!TidepoolRules.whyBlank(draft[key])), onClick: () => runTranslation(false) }, "Back-translate")), draft.backTranslation && /* @__PURE__ */ React.createElement("p", { style: muted, "data-testid": "memory-back-translation" }, "back in ", language, ": ", fields.map((key) => draft.backTranslation[key]).join(" \u2014 ")), dropsOriginal && /* @__PURE__ */ React.createElement("p", { style: muted }, notKept(`#${draft.copied.id}`)), draft.annotations.map((a, i) => a.original && unseen(a.text, a.copied) && /* @__PURE__ */ React.createElement("p", { key: i, style: muted }, notKept(`annotation ${i + 1} of #${draft.copied.id}`))), blockingPanel("write"), /* @__PURE__ */ React.createElement(
+  ), translatable && draft.kind !== "exemplar" && /* @__PURE__ */ React.createElement(React.Fragment, null, draft.kind !== "definition" && /* @__PURE__ */ React.createElement(Input, { label: `Original title (${language})`, value: draft.originalTitle, onChange: setDraftField("originalTitle") }), /* @__PURE__ */ React.createElement(Input, { label: `Original (${language})`, multiline: true, rows: 3, value: draft.originalText, onChange: setDraftField("originalText") }), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", disabled: busy || fields.some((key) => !!TidepoolRules.whyBlank(originalOf[key])), onClick: () => runTranslation(true) }, "Translate")), draft.kind !== "definition" && /* @__PURE__ */ React.createElement(Input, { label: "Title (English)", value: draft.title, onChange: setDraftField("title") }), draft.kind !== "exemplar" && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(Input, { label: "English (saved as the canonical text)", multiline: true, rows: 3, value: draft.text, onChange: setDraftField("text") }), translatable && /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", disabled: busy || fields.some((key) => !!TidepoolRules.whyBlank(draft[key])), onClick: () => runTranslation(false) }, "Back-translate")), draft.backTranslation && /* @__PURE__ */ React.createElement("p", { style: muted, "data-testid": "memory-back-translation" }, "back in ", language, ": ", fields.map((key) => draft.backTranslation[key]).join(" \u2014 ")), dropsOriginal && /* @__PURE__ */ React.createElement("p", { style: muted }, notKept(`#${draft.copied.id}`)), dropsAnnotationOriginal.map((drops, i) => drops && /* @__PURE__ */ React.createElement("p", { key: i, style: muted }, notKept(`annotation ${i + 1}`))), blockingPanel("write"), /* @__PURE__ */ React.createElement(
     EditActions,
     {
       busy,

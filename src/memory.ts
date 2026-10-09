@@ -853,8 +853,9 @@ export function recordExemplar(
     if (!source) throw new DomainError("an exemplar needs source_event_id, or supersedes whose entries share one source: it keeps that as its case");
     const { annotations: checked, text } = checkedAnnotations(db, source, raw, exemplarAnnotationSchema);
     const language = getDisplayLanguage(db);
-    const copied = (text: string) => copiedLanguage(language, replaced.flatMap((r) => r.annotations ?? []).map((a) => (a.original?.text === text ? a.original.language : undefined)));
-    const annotations = checked.map(({ original, ...annotation }) => (original?.trim() ? { ...annotation, original: { text: original, language: copied(original) } } : annotation));
+    const annotationLanguage = (originalText: string) =>
+      copiedLanguage(language, replaced.flatMap((r) => r.annotations ?? []).map((a) => (a.original?.text === originalText ? a.original.language : undefined)));
+    const annotations = checked.map(({ original, ...annotation }) => (original?.trim() ? { ...annotation, original: { text: original, language: annotationLanguage(original) } } : annotation));
     return createEntry(db, { ...fields, kind: "exemplar", state: "approved", text, original: null, annotations, source }, origin, at, mark);
   });
 }

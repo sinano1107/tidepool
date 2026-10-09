@@ -1478,8 +1478,8 @@ function MetaReviewSettingsCard({ settings, say, onSaved, edit }: {
 // the case is fixed: an amended exemplar candidate keeps its source (#950).
 type TpMemoryAnchor = NonNullable<WireContract['GET /api/settings/memory/entries']['entries'][number]['annotations']>[number]['anchor'];
 /** an exemplar annotation being written: `back` is its back-translation, held only for rereading (ADR 0015) */
-/** `copied` is the English text an Edit copied the annotation with (ADR 0223 決定3) */
-type TpDraftAnnotation = { anchor: TpMemoryAnchor; polarity: '' | 'imitate' | 'avoid'; text: string; original: string; back: string | null; copied?: string };
+/** `copiedEnglish` is the English text an Edit copied the annotation with (ADR 0223 決定3) */
+type TpDraftAnnotation = { anchor: TpMemoryAnchor; polarity: '' | 'imitate' | 'avoid'; text: string; original: string; back: string | null; copiedEnglish?: string };
 function MemoryCasePicker({ workspace, value, onChange, onQuote }: {
   workspace: string;
   value: number | null;
@@ -1818,8 +1818,9 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit, fo
   const originalOf: Record<'title' | 'text', string> = { title: draft.originalTitle, text: draft.originalText };
   // the English board shows no original: one copied with English since changed (as saved, trimmed) is not saved, and the form says so
   // before saving (ADR 0223 決定3)
-  const unseen = (english: string, copied: string | undefined) => !translatable && copied !== undefined && TidepoolRules.normalizeText(english) !== copied;
-  const dropsOriginal = !!draft.originalText && fields.some((key) => unseen(draft[key], draft.copied?.[key]));
+  const changedOutOfSight = (english: string, copied: string | undefined) => !translatable && copied !== undefined && TidepoolRules.normalizeText(english) !== copied;
+  const dropsOriginal = !!draft.originalText && fields.some((key) => changedOutOfSight(draft[key], draft.copied?.[key]));
+  const dropsAnnotationOriginal = draft.annotations.map((a) => !!a.original && changedOutOfSight(a.text, a.copiedEnglish));
   const notKept = (what: string) => `The original wording of ${what} is not kept: the English changed and the original isn't shown on this board.`;
 
   // Translate fills both English fields from the original title + text; Back-translate re-checks English the
@@ -1851,7 +1852,7 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit, fo
       } else if (draft.kind === 'exemplar') {
         await api('/api/settings/memory/exemplars', {
           workspace: body.workspace, path: body.path, title: TidepoolRules.normalizeText(draft.title), addressee: draft.addressee || null, ...supersedes, ...source,
-          annotations: annotationsToSend(draft.annotations.map((a) => (unseen(a.text, a.copied) ? { ...a, original: '' } : a))),
+          annotations: annotationsToSend(draft.annotations.map((a, i) => (dropsAnnotationOriginal[i] ? { ...a, original: '' } : a))),
         });
       }
       else await api('/api/settings/memory/definitions', { ...body, ...supersedes });
@@ -1921,7 +1922,7 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit, fo
     ...blank, kind: entry.kind, kinds: [entry.kind], workspace: entry.scope ?? '', path: entry.path, title: entry.title, text: entry.text,
     originalTitle: entry.original?.title ?? '', originalText: entry.original?.text ?? '',
     addressee: entry.addressee ?? '', supersedes: [entry.id], inheritedSource: sharedCase([entry]), dead: deadRefs(entry), copied: entry,
-    annotations: (entry.annotations ?? []).map(({ anchor, polarity, text, original }) => ({ anchor, polarity, text, original: original?.text ?? '', back: null, copied: text })),
+    annotations: (entry.annotations ?? []).map(({ anchor, polarity, text, original }) => ({ anchor, polarity, text, original: original?.text ?? '', back: null, copiedEnglish: text })),
   }));
 
   // moves (ADR 0162 決定4): the board copies the body to the new place — one entry, or a whole branch of one scope.
@@ -2091,7 +2092,7 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit, fo
             <p style={muted} data-testid="memory-back-translation">back in {language}: {fields.map((key) => draft.backTranslation![key]).join(' — ')}</p>
           )}
           {dropsOriginal && <p style={muted}>{notKept(`#${draft.copied!.id}`)}</p>}
-          {draft.annotations.map((a, i) => a.original && unseen(a.text, a.copied) && <p key={i} style={muted}>{notKept(`annotation ${i + 1} of #${draft.copied!.id}`)}</p>)}
+          {dropsAnnotationOriginal.map((drops, i) => drops && <p key={i} style={muted}>{notKept(`annotation ${i + 1}`)}</p>)}
           {blockingPanel('write')}
           <EditActions busy={busy} saveLabel={`Save ${draft.kind}`}
             ok={!holdsOrphan && filled}
