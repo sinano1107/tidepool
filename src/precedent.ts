@@ -15,16 +15,16 @@ import { entryObjections } from "./triage.js";
  *  しない」という決定である。`Task` と `Agent` は同じ subagent 起動の綴り違い
  *  (実 CLI は `Agent`、init の `tools` には `Task` が残る — ADR 0083 追記 2)。
  *  `command_execution` / `file_change` は Codex の item 種別で、引数は item そのものから読む。 */
-const field = (name: string) => (input: Record<string, unknown>) => input[name];
+const inputField = (name: string) => (input: Record<string, unknown>) => input[name];
 const TOOL_ARGS: Record<string, (input: Record<string, unknown>) => unknown> = {
-  Read: field("file_path"),
-  Write: field("file_path"),
-  Edit: field("file_path"),
-  NotebookEdit: field("notebook_path"),
-  Bash: field("command"),
-  Task: field("description"),
-  Agent: field("description"),
-  command_execution: field("command"),
+  Read: inputField("file_path"),
+  Write: inputField("file_path"),
+  Edit: inputField("file_path"),
+  NotebookEdit: inputField("notebook_path"),
+  Bash: inputField("command"),
+  Task: inputField("description"),
+  Agent: inputField("description"),
+  command_execution: inputField("command"),
   file_change: (item) =>
     Array.isArray(item.changes) ? item.changes.map((c) => (c as { path?: unknown }).path).filter((p) => typeof p === "string").join("\n") : null,
 };
@@ -64,8 +64,8 @@ const INTERPRETED_SYSTEM_SUBTYPES = new Set([
 ]);
 
 /** Codex の stdout の3値(ADR 0083 追記10)。解釈するのは tool 呼び出しに当たる item の `item.completed` だけ。
- *  `item.started` は同じ id の `item.completed` が来るので既知として捨てる。観測していない種別(`item.updated`、
- *  `reasoning` など)は捨てる側に入れず未知に置く —— 出たときに形式変更の信号になる。 */
+ *  `item.started` は種別を問わず既知として捨てる(同じ id の `item.completed` が来る)。それ以外の観測していない
+ *  行種(`item.updated`)と item 種別の `item.completed`(`reasoning` など)は未知に置く —— 出たときに形式変更の信号になる。 */
 const CODEX_ACTION_ITEMS = new Set(["mcp_tool_call", "command_execution", "file_change", "collab_tool_call"]);
 const CODEX_IGNORED_TYPES = new Set(["thread.started", "turn.started", "turn.completed", "item.started", "error", "turn.failed"]);
 const CODEX_IGNORED_ITEMS = new Set(["agent_message", "error"]);
@@ -382,7 +382,7 @@ function readCodexLines(transcriptLines: string[], cliVersion: string): LineRead
 
 /** 純関数。DB もファイルシステムも触らない。フィクスチャ2本から Episode を
  *  組めることが受け入れの中心(issue #356)。行の読み手は `worker_spawned.harness` で選ぶ(ADR 0083 追記10)
- *  —— transcript の形からも Provider からも推測しない。harness を持たない記録は Claude Code の行として読む。 */
+ *  —— transcript の形からも Provider からも推測しない。 */
 export function projectEpisode(input: ProjectEpisodeInput): Episode {
   const spawned = input.events.find((e) => e.id === input.workerSpawnedEventId);
   if (!spawned || spawned.payload.kind !== "worker_spawned" || spawned.task_id === null) {
@@ -493,6 +493,26 @@ export const EXTRACTOR_VERSION = "6";
 /** 1つの worker session を投影して派生表に書く。同じ session を同じ投影器の版で
  *  二度書くことはない(`UNIQUE (worker_spawned_event_id, extractor_version)`)—
  *  戻り値は書いた episode の id、既にあるか投影できなかったときは null。 */
+/** worker adapter の終了処理から呼ぶ(issue #356 / ADR 0083 追記10)。呼ぶのは **worker_exited を書いたあと**
+ *  —— でなければ exit / usage 参照が投影に入らない。投影は transcript の**書き込みストリームが閉じたあと** ——
+ *  stdout は pipe なので読み切り(child の "close")の時点でもファイルが flush 済みとは限らない。派生表なので
+ *  失敗しても走らせて危険な状態にはならず(ADR 0083 追記 2)、盤面を落とすほうが害が大きいので失敗は記録して流す。 */
+export function projectWhenTranscriptCloses(
+  db: Db,
+  stream: { readonly closed: boolean; once(event: "close", listener: () => void): unknown },
+  opts: { workerSpawnedEventId: number; transcriptPath: string; taskId: string },
+): void {
+  const project = () => {
+    try {
+      projectAndPersist(db, opts);
+    } catch (err) {
+      console.error(`[worker] precedent projection failed for task ${opts.taskId}:`, err);
+    }
+  };
+  if (stream.closed) project();
+  else stream.once("close", project);
+}
+
 export function projectAndPersist(
   db: Db,
   opts: { workerSpawnedEventId: number; transcriptPath: string },
@@ -749,8 +769,7 @@ export function listEpisodes(
 }
 
 /** 1 session の行動列マーカーの種別だけを順に返す(配分評価の入力、ADR 0111
- *  決定4)。episode 行が無ければ null —— 投影前の session を「マーカーが1つも無かった」と混ぜない。
- *  Codex の Episode は構造マーカーを持たないので、配分評価の入力は Harness で null にする(ADR 0083 追記10)。 */
+ *  決定4)。episode 行が無ければ null —— 投影前の session を「マーカーが1つも無かった」と混ぜない。 */
 export function episodeMarkerKinds(db: Db, workerSpawnedEventId: number): MarkerKind[] | null {
   const episode = db
     .prepare("SELECT id FROM episodes WHERE worker_spawned_event_id = ? AND extractor_version = ?")
