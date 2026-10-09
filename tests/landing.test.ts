@@ -1417,18 +1417,25 @@ it("着地の面は CI を読む前に読まれる — 面が変わった PR は
   expect(mergeQuestions(db).map((q) => q.pr)).toEqual([1]);
 });
 
+/** CI を読み終えた瞬間に change を走らせる — 「CI を読んでいる間に変わる」を作る。 */
+function afterCiRead(github: FakeGitHubClient, change: () => void) {
+  const getCiStatus = github.getCiStatus.bind(github);
+  github.getCiStatus = async (ref) => {
+    const status = await getCiStatus(ref);
+    change();
+    return status;
+  };
+}
+
 it("着地の面は merge の直前にも読まれる — CI を読んでいる間にダイヤルが取り下げられたら merge しない", async () => {
   const workspace = await makeWorkspace("landing-surface-before-merge");
   const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
   queueAutoMerge(db, clock, 1);
   let dial: MergeDial = "auto_if_ci_green";
-  const getCiStatus = github.getCiStatus.bind(github);
-  github.getCiStatus = async (ref) => {
-    const status = await getCiStatus(ref);
+  afterCiRead(github, () => {
     dial = "escalate";
-    return status;
-  };
+  });
 
   await createLanding({
     defaultAgentName: "tako",
@@ -1441,6 +1448,131 @@ it("着地の面は merge の直前にも読まれる — CI を読んでいる�
 
   expect(github.ciChecks).toHaveLength(1);
   expect(github.merged).toEqual([]);
+  expect(mergeQuestions(db).map((q) => q.pr)).toEqual([1]);
+});
+
+// ADR 0217 決定1・2(#1644): CI 赤の question も盤面の名義の行為なので、立てる直前に merge の枝と
+// 同じ順(profile → 着地の面 → 門)で読み直す。CI を読んでいる間に変えるのは、既存の「merge の直前」と同じ形
+const CI_RED_PURPOSE = '"ship"\'s auto_if_ci_green auto-merge found CI red on PR #1. Merge anyway, or hold?';
+
+it("CI 赤を読んでいる間にダイヤルが external へ取り下げられた PR は、question なしでキューを外れ、外した事実が盤面の名義の event に残る", async () => {
+  const workspace = await makeWorkspace("landing-red-ci-to-external");
+  const { db, clock } = await openBoard();
+  const github = new FakeGitHubClient();
+  const work = queueAutoMerge(db, clock, 1);
+  let dial: MergeDial = "auto_if_ci_green";
+  github.scriptCiStatus("failure");
+  afterCiRead(github, () => {
+    dial = "external";
+  });
+  const landing = createLanding({
+    defaultAgentName: "tako",
+    db,
+    clock,
+    workspace,
+    github,
+    resolveAuthority: () => profile(dial),
+  });
+
+  await landing.tick("auto_merge", clock.now());
+  await landing.tick("auto_merge", clock.now());
+
+  expect(github.ciChecks).toHaveLength(1);
+  expect(mergeQuestions(db)).toEqual([]);
+  expect(
+    listEvents(db, work.id)
+      .filter((e) => e.kind === "auto_merge_withdrawn")
+      .map(({ worker_id, origin, payload }) => ({ worker_id, origin, payload })),
+  ).toEqual([
+    {
+      worker_id: BOARD_WORKER_ID,
+      origin: "board",
+      payload: { kind: "auto_merge_withdrawn", pr_number: 1, merge: "external" },
+    },
+  ]);
+});
+
+it("CI 赤を読んでいる間にダイヤルが escalate へ取り下げられた PR は、面変化の question ではなく推奨 hold の CI 赤の question を1件だけ立ててキューを外れる", async () => {
+  const workspace = await makeWorkspace("landing-red-ci-to-escalate");
+  const { db, clock } = await openBoard();
+  const github = new FakeGitHubClient();
+  queueAutoMerge(db, clock, 1);
+  let dial: MergeDial = "auto_if_ci_green";
+  github.scriptCiStatus("failure");
+  afterCiRead(github, () => {
+    dial = "escalate";
+  });
+  const landing = createLanding({
+    defaultAgentName: "tako",
+    db,
+    clock,
+    workspace,
+    github,
+    resolveAuthority: () => profile(dial),
+  });
+
+  await landing.tick("auto_merge", clock.now());
+  await landing.tick("auto_merge", clock.now());
+
+  expect(github.ciChecks).toHaveLength(1);
+  expect(mergeQuestions(db)).toEqual([
+    { pr: 1, registrant: [BOARD_WORKER_ID, "board"], recommendation: "hold", purpose: CI_RED_PURPOSE },
+  ]);
+});
+
+it("CI 赤を読んでいる間に門が閉じた PR は、question なしでキューに残り、門が開いた後の tick で CI を読み直してから CI 赤の question を立てる", async () => {
+  const workspace = await makeWorkspace("landing-red-ci-gate-closes");
+  const { db, clock } = await openBoard();
+  const github = new FakeGitHubClient();
+  const work = queueAutoMerge(db, clock, 1);
+  let child: Task | undefined;
+  github.scriptCiStatus("failure");
+  afterCiRead(github, () => {
+    child ??= attachUnsettledChild(db, clock, work.id);
+  });
+  const landing = createLanding({
+    defaultAgentName: "tako",
+    db,
+    clock,
+    workspace,
+    github,
+    resolveAuthority: () => profile("auto_if_ci_green"),
+  });
+
+  await landing.tick("auto_merge", clock.now());
+  expect(github.ciChecks).toHaveLength(1);
+  expect(mergeQuestions(db)).toEqual([]);
+  expect(listEvents(db, work.id).map((e) => e.kind)).not.toContain("auto_merge_withdrawn");
+
+  completeTask(db, child!, FULL_HANDOFF, "worker", clock.now(), "worker");
+  await landing.tick("auto_merge", clock.now());
+  expect(github.ciChecks).toHaveLength(2);
+  expect(mergeQuestions(db).map((q) => q.pr)).toEqual([1]);
+});
+
+it("CI 赤の question の登録が throw したら、PR は無言でキューから消えず、次の tick で question が立つ(ADR 0105 決定3)", async () => {
+  const workspace = await makeWorkspace("landing-red-ci-question-throws");
+  const { db, clock } = await openBoard();
+  const github = new FakeGitHubClient();
+  github.scriptCiStatus("failure");
+  queueAutoMerge(db, clock, 1);
+  const landing = createLanding({
+    defaultAgentName: "tako",
+    db,
+    clock,
+    workspace,
+    github,
+    resolveAuthority: () => profile("auto_if_ci_green"),
+  });
+  db.exec(
+    `CREATE TEMP TRIGGER fail_question BEFORE INSERT ON tasks WHEN NEW.type = 'question'
+     BEGIN SELECT RAISE(ABORT, 'question insert failed'); END`,
+  );
+
+  await expect(landing.tick("auto_merge", clock.now())).rejects.toThrow("question insert failed");
+
+  db.exec("DROP TRIGGER fail_question");
+  await landing.tick("auto_merge", clock.now());
   expect(mergeQuestions(db).map((q) => q.pr)).toEqual([1]);
 });
 
@@ -1491,8 +1623,8 @@ it("escalate で開いた PR の後にダイヤルを auto_if_ci_green へ緩め
   expect(mergeQuestions(db).map((q) => q.pr)).toEqual([1]);
 });
 
-// ADR 0217 決定3: 着地の2点 — PR を開く時点と無人 merge の瞬間 — で profile が解決できなければ、
-// ダイヤルを推測せず agent を quarantine に落とす。以下はこの判定を述べる唯一の場所(ADR 0107)。
+// ADR 0217 決定3: 着地の2点 — PR を開く時点と、無人 merge キューの PR に CI を読んだ後で行為する瞬間 — で
+// profile が解決できなければ、ダイヤルを推測せず agent を quarantine に落とす。以下はこの判定を述べる唯一の場所(ADR 0107)。
 const unresolvable = (): AuthorityProfile => {
   throw new UnknownAgentError("tako");
 };
@@ -1623,12 +1755,9 @@ it("CI を読んでいる間に profile が解決できなくなっても merge 
   const github = new FakeGitHubClient();
   queueAutoMerge(db, clock, 1);
   let resolveAuthority = (): AuthorityProfile => profile("auto_if_ci_green");
-  const getCiStatus = github.getCiStatus.bind(github);
-  github.getCiStatus = async (ref) => {
-    const status = await getCiStatus(ref);
+  afterCiRead(github, () => {
     resolveAuthority = unresolvable;
-    return status;
-  };
+  });
 
   await createLanding({
     defaultAgentName: "tako",
@@ -1643,6 +1772,34 @@ it("CI を読んでいる間に profile が解決できなくなっても merge 
   expect(github.merged).toEqual([]);
   expect(mergeQuestions(db)).toEqual([]);
   expect(quarantineQuestion(db, "agent", "tako")).toBeDefined();
+});
+
+it("CI 赤を読んでいる間に profile が解決できなくなった PR は、question なしで agent を quarantine に落としてキューに残り、直った後の tick で CI 赤の question を立てる", async () => {
+  const workspace = await makeWorkspace("landing-red-ci-unresolvable");
+  const { db, clock } = await openBoard();
+  const github = new FakeGitHubClient();
+  queueAutoMerge(db, clock, 1);
+  let resolveAuthority = (): AuthorityProfile => profile("auto_if_ci_green");
+  github.scriptCiStatus("failure");
+  afterCiRead(github, () => {
+    if (github.ciChecks.length === 1) resolveAuthority = unresolvable;
+  });
+  const landing = createLanding({
+    defaultAgentName: "tako",
+    db,
+    clock,
+    workspace,
+    github,
+    resolveAuthority: () => resolveAuthority(),
+  });
+
+  await landing.tick("auto_merge", clock.now());
+  expect(mergeQuestions(db)).toEqual([]);
+  expect(quarantineQuestion(db, "agent", "tako")).toBeDefined();
+
+  resolveAuthority = () => profile("auto_if_ci_green");
+  await landing.tick("auto_merge", clock.now());
+  expect(mergeQuestions(db).map((q) => q.pr)).toEqual([1]);
 });
 
 it("解決できてダイヤルを持たない組み込みの reviewer profile は、quarantine に落ちない", async () => {

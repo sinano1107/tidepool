@@ -387,13 +387,24 @@ export function createLanding(deps: LandingDeps): Landing {
     }
   };
   /** ADR 0217 決定1・2: いま着地しても無人 merge キューに入るかを読み直し、入らなければ
-   *  キューから外して変わった先の面へ渡す。読み直しは PR をキューへ入れない。 */
+   *  キューから外して変わった先の面へ渡す。読み直しは PR をキューへ入れない。question 面へ
+   *  渡すときに立てる question は呼び出し側が決める(CI 赤なら CI 赤の question — #1644)。 */
   const withdrawIfSurfaceChanged = (
     task: Task,
     authority: AuthorityProfile | undefined,
     prNumber: number,
     workspaceName: string,
     now: Date,
+    askQuestion = (changed: string) =>
+      registerMergeQuestion(
+        deps.db,
+        task,
+        prNumber,
+        `"${task.title}"'s PR #${prNumber} was queued for auto_if_ci_green auto-merge, but its ` +
+          `landing surface changed after it was queued: ${changed}. Merge it now?`,
+        "merge",
+        now,
+      ),
   ) => {
     const landing = landingSurface(
       deps.isProtectedWorkspace?.(workspaceName),
@@ -422,15 +433,7 @@ export function createLanding(deps: LandingDeps): Landing {
         dial: "the merge dial is now escalate",
         risk: "the task now carries risk, and auto_if_ci_green never auto-merges a risky task",
       }[landing.reason];
-      registerMergeQuestion(
-        deps.db,
-        task,
-        prNumber,
-        `"${task.title}"'s PR #${prNumber} was queued for auto_if_ci_green auto-merge, but its ` +
-          `landing surface changed after it was queued: ${changed}. Merge it now?`,
-        "merge",
-        now,
-      );
+      askQuestion(changed);
     })();
     return true;
   };
@@ -704,14 +707,15 @@ export function createLanding(deps: LandingDeps): Landing {
         if (!task) continue;
         const workspace = resolveOrQuarantine(deps.db, resolve, task.workspace, now);
         if (!workspace) continue;
-        // 着地の面は門と同じ2点 — CI を読む前と merge の直前 — で読む。面が変わった PR は
-        // キューを外れ、門に当たった PR はキューに残る(ADR 0217 決定1)。profile が読めなければ
-        // agent を quarantine に落とし、キューに残してこの回は飛ばす(決定3)
-        const stop = () => {
+        // 着地の面は門と同じ2点 — CI を読む前と、CI を読んだ後に盤面の名義で行為する直前(緑なら
+        // merge、赤なら merge question)— で読む。面が変わった PR はキューを外れ、門に当たった PR は
+        // キューに残る(ADR 0217 決定1)。profile が読めなければ agent を quarantine に落とし、
+        // キューに残してこの回は飛ばす(決定3)
+        const stop = (askQuestion?: (changed: string) => void) => {
           const resolved = readAuthority(task, now);
           return (
             !resolved ||
-            withdrawIfSurfaceChanged(task, resolved.profile, pr_number, workspace.name, now) ||
+            withdrawIfSurfaceChanged(task, resolved.profile, pr_number, workspace.name, now, askQuestion) ||
             landingBlock(deps.db, task_id)
           );
         };
@@ -739,16 +743,23 @@ export function createLanding(deps: LandingDeps): Landing {
           );
           continue;
         }
-        clearPendingAutoMerge(deps.db, task_id);
-        registerMergeQuestion(
-          deps.db,
-          task,
-          pr_number,
-          `"${task.title}"'s auto_if_ci_green auto-merge found CI red on PR #${pr_number}. ` +
-            "Merge anyway, or hold?",
-          "hold",
-          now,
-        );
+        // 面が question 側へ変わっていても、立てるのは CI 赤の question(ADR 0217 決定2)
+        const askCiRed = () =>
+          registerMergeQuestion(
+            deps.db,
+            task,
+            pr_number,
+            `"${task.title}"'s auto_if_ci_green auto-merge found CI red on PR #${pr_number}. ` +
+              "Merge anyway, or hold?",
+            "hold",
+            now,
+          );
+        if (stop(askCiRed)) continue;
+        // 外すことと問うことを1つにする — 片方だけで無言で消える経路を残さない(ADR 0105 決定3)
+        deps.db.transaction(() => {
+          clearPendingAutoMerge(deps.db, task_id);
+          askCiRed();
+        })();
       }
     },
   };
