@@ -27,6 +27,7 @@ import type { Db } from "./db.js";
 import { DEFAULT_AUDITOR_NAME } from "./defaults.js";
 import type { DraftClient } from "./draft.js";
 import type { RowRefusal } from "./events.js";
+import { quarantineRowsOffClaudeEffortRules } from "./execution-setting.js";
 import type { GitHubClient } from "./github.js";
 import type { GitHubAuth } from "./github-auth.js";
 import {
@@ -518,6 +519,8 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
       options.clock.now(),
     );
   }
+  // ADR 0218 決定6: 書いた effort で走らない行は、最初の poll より前に pickup と Board call から外す
+  quarantineRowsOffClaudeEffortRules(db, options.clock.now());
   const app = express();
   // ADR 0036 / issue #153: 人間面の credential。**app への登録より前**に置くのが
   // 射程の担保 — 以降 `app` に何が生えても(将来の管理MCP mount を含む)、この

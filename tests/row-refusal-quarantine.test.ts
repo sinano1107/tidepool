@@ -1,6 +1,7 @@
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
+import { CLAUDE_CLI_VERSION } from "../src/claude-cli-version.js";
 import { ClaudeDraftClient } from "../src/claude-draft-client.js";
 import { ClaudeTranslationClient } from "../src/claude-translation-client.js";
 import { ClaudeCodeWorker } from "../src/claude-worker.js";
@@ -489,4 +490,75 @@ it("表示時翻訳が 404 を受けても、行の Quarantine は立たない(A
 
   expect(response.status).toBe(503);
   expect(await rowQuarantines()).toEqual([]);
+});
+
+// ── 起動時の照合(ADR 0218 決定6 / #1659): anthropic / moonshot の行を CLI の組み込みの規則に照らす ──
+
+/** 扉を通らずに入った行(古い release が残した形)を DB に直接書き、同じ DB で起動し直す。 */
+async function rebootWithRowsPastTheDoor(rows: Array<{ model: string; effort: string | null; tier: string }>) {
+  t = await bootTidepool();
+  for (const row of rows) {
+    t.db
+      .prepare(
+        "INSERT INTO execution_settings (provider, tier_id, model, effort, price_in, price_out) VALUES ('anthropic', (SELECT id FROM tiers WHERE name = ?), ?, ?, 1, 5)",
+      )
+      .run(row.tier, row.model, row.effort);
+  }
+  await t.stopServer();
+  t = await bootTidepool({ dir: t.dir });
+}
+
+const PAST_THE_DOOR = [
+  { model: "claude-haiku-4-5-20251001", effort: "high", tier: "economy" },
+  { model: "claude-opus-4-5-20251101", effort: "max", tier: "standard" },
+  { model: "claude-sonnet-5-5", effort: null, tier: "standard" },
+];
+
+const openEffortQuestions = async () =>
+  (await questions(t)).filter((q) => q.status === "todo" && q.question_quarantine_kind === "tableRowEffort");
+
+it("起動時、扉を通らずに入った行で書いた effort のとおりに走らないものは effort の Quarantine になり、題は行を名指し、本文は版の組み込みの規則と書くべき値を名指す", async () => {
+  await rebootWithRowsPastTheDoor(PAST_THE_DOOR);
+
+  const opened = await openEffortQuestions();
+  expect(opened.map((q) => [q.title, q.question_items])).toEqual([
+    ["execution-setting row anthropic / claude-haiku-4-5-20251001 / high does not run with the effort it names", []],
+    ["execution-setting row anthropic / claude-opus-4-5-20251101 / max does not run with the effort it names", []],
+    ["execution-setting row anthropic / claude-sonnet-5-5 / no effort does not run with the effort it names", []],
+  ]);
+  expect(opened[0].purpose).toBe(
+    `Claude CLI ${CLAUDE_CLI_VERSION}'s built-in model rules do not run this row with the effort it names: ` +
+      "claude-haiku-4-5-20251001 takes no effort under the claude CLI's built-in model rules; write no effort (null). " +
+      "This row is out of pickup and Board calls while this stands; other rows keep running, including this model's " +
+      "rows at other efforts.\n\nRepair: in the settings tab, change this row's effort or delete the row. This " +
+      "question then closes on its own — no answer settles it.",
+  );
+  expect(opened[1].purpose).toContain("runs as high under the claude CLI's built-in model rules; write high.");
+  expect(opened[2].purpose).toContain("effort must be one of low / medium / high / xhigh / max.");
+  for (const q of opened) expect(q.purpose).not.toMatch(/cannot run|observ/i);
+});
+
+it("種の表で起動した盤面には、起動時の照合の question は1枚も立たない", async () => {
+  t = await bootTidepool();
+  expect(await openEffortQuestions()).toEqual([]);
+});
+
+it("起動時の照合の question は、行の effort を表で直すと回答なしで決着し、回答は受けない", async () => {
+  await rebootWithRowsPastTheDoor([{ model: "claude-opus-4-5-20251101", effort: "max", tier: "standard" }]);
+  const [question] = await openEffortQuestions();
+
+  const answered = await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, { answers: ["it runs now"] });
+  expect({ status: answered.status, error: answered.json.error }).toEqual({
+    status: 409,
+    error: "this question takes no answer: it closes on its own once the repair it names is made",
+  });
+  expect((await api(t.baseUrl, "GET", `/api/tasks/${question.id}`)).json.status).toBe("todo");
+
+  const edited = await api(t.baseUrl, "POST", "/api/settings/execution", {
+    setting: "row",
+    key: { provider: "anthropic", model: "claude-opus-4-5-20251101", effort: "max" },
+    row: { provider: "anthropic", tier: "standard", model: "claude-opus-4-5-20251101", effort: "high", price_in: 1, price_out: 5 },
+  });
+  expect(edited.status).toBe(200);
+  expect((await api(t.baseUrl, "GET", `/api/tasks/${question.id}`)).json).toMatchObject({ status: "done", question_answer: null });
 });

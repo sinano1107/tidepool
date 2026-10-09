@@ -563,7 +563,7 @@ export function startScheduler(deps: {
           registerQuarantine(db, "tableRow", tableRowValue("openai", row.model), unlisted.reason, now);
         } else if (unlisted?.unit === "effort") {
           const value = tableRowEffortValue("openai", row.model, row.effort);
-          registerQuarantine(db, "tableRowEffort", value, unlisted.reason, now, "codexModelList");
+          registerQuarantine(db, "tableRowEffort", value, unlisted.reason, now);
         }
       }
       return evaluateAndReportProviderUsage(

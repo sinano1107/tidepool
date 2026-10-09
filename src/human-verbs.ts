@@ -28,7 +28,7 @@ import { type Landing, type LandingVerdict, landingBlock } from "./landing.js";
 import { approveMemoryProposal, humanEntryInput, listMemoryEntries, type MemoryAmendment, movedTail, parseMemoryAmendment, rejectMemoryProposal } from "./memory.js";
 import { whyNotPositiveInteger } from "./positive-integer.js";
 import type { Provider } from "./provider.js";
-import { parseTableRowEffortValue, parseTableRowValue, type QuarantineChecks, type QuarantineKind, type QuarantineResolvers, quarantineStops } from "./quarantine.js";
+import { parseTableRowEffortValue, parseTableRowValue, type QuarantineChecks, type QuarantineKind, type QuarantineResolvers, quarantineStops, tableRowEffortTrigger } from "./quarantine.js";
 import type { Harness, RegistryReachabilityCheck } from "./registry.js";
 import { RegistryFetchFailedError, RegistryPushFailedError } from "./registry-write.js";
 import { parseGitHubRepo, repairRepoAccess } from "./repo-access.js";
@@ -599,8 +599,15 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
     // ときだけ受理し、401 は Provider 認証の経路に落としてから拒む
     ...(modelProbes && clock && {
       tableRow: (value) => recheckRow(modelProbes, clock, parseTableRowValue(value!)),
-      // ADR 0218 決定2: effort ごとの行は、その effort でも検査し直す(Codex は一覧の読み直し)
-      tableRowEffort: (value) => recheckRow(modelProbes, clock, parseTableRowEffortValue(value!)),
+      // ADR 0218 決定2: effort ごとの行は、その effort でも検査し直す(Codex は一覧の読み直し)。起動時の照合の行は、その probe が
+      // effort を読まないので回答では決着させない(決定6)。項目の無い question は `assertAnswerable` が先に拒むので、ここは二重の門
+      tableRowEffort: async (value) => {
+        const row = parseTableRowEffortValue(value!);
+        if (tableRowEffortTrigger(row.provider) === "startupReconciliation") {
+          throw new DomainError("only a table edit settles this question: change this row's effort or delete the row in the settings tab");
+        }
+        await recheckRow(modelProbes, clock, row);
+      },
     }),
     ...(harnessContainment && {
       harnessContainment: async (value) => {

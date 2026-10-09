@@ -7,6 +7,7 @@ import { atNeutralCwd, type BoardCall, type BoardCallSpec, readOutput } from "./
 import { boardDoctrine, boardProse } from "./board-prose.js";
 import { type BoardStatePath, boardStateOverlap } from "./board-state.js";
 import { readLines, readStderrTail, settleOnOutputClose } from "./child-stream.js";
+import { CLAUDE_CLI_VERSION } from "./claude-cli-version.js";
 import {
   isCapInterruptionEnvelope,
   isCliAuthFailureEnvelope,
@@ -60,9 +61,6 @@ import {
   resolveWorkspacesBaseDir,
   type WorkspaceConfig,
 } from "./workspace.js";
-
-/** 盤面が検証した Claude CLI の版(ADR 0186 決定5)。正本は repo 直下の1か所で、導入スクリプトも同じファイルを読む。 */
-const CLAUDE_CLI_VERSION = readFileSync(new URL("../claude-cli-version", import.meta.url), "utf8").trim();
 
 /** Does one allowlist entry permit one enumerated skill? (issue #56 / ADR
  *  0025) The five-form vocabulary, resolved against the CLI's enumerated set:

@@ -569,6 +569,7 @@ function TpQuestionCard({ q, answer, onAnswer, locked = false, onTranslate, onOp
   const setItemAnswer = (i, value) => setDraft(draft.map((v, j) => j === i ? value : v));
   const disabledOptions = deadAddressee ? ["approve"] : [];
   const pickedNeedingComment = draft.filter((v) => v && q.needsComment?.includes(v));
+  const answerable = !locked && items.length > 0;
   const canSubmit = draft.every(Boolean) && !draft.some((v) => disabledOptions.includes(v)) && (pickedNeedingComment.length === 0 || !TidepoolRules.whyBlank(comment));
   const [submitting, setSubmitting] = React.useState(false);
   const submit = () => {
@@ -618,7 +619,7 @@ function TpQuestionCard({ q, answer, onAnswer, locked = false, onTranslate, onOp
       mono: true,
       onChange: (e) => setAmendment({ ...amendment, effort: e.target.value.trim() })
     }
-  )), !locked && /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 14 } }, /* @__PURE__ */ React.createElement(
+  )), answerable && /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 14 } }, /* @__PURE__ */ React.createElement(
     Input,
     {
       label: pickedNeedingComment.length ? `Comment (required to ${pickedNeedingComment.join(" / ")})` : "Comment (optional)",
@@ -640,7 +641,7 @@ function TpQuestionCard({ q, answer, onAnswer, locked = false, onTranslate, onOp
       translated: translatedItems ? translatedItems[i] : null,
       disabled: disabledOptions
     }
-  ))), !locked && /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "flex-end", marginTop: 16 } }, /* @__PURE__ */ React.createElement(Button, { variant: "primary", disabled: !canSubmit || submitting, onClick: submit }, "Submit")));
+  ))), answerable && /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "flex-end", marginTop: 16 } }, /* @__PURE__ */ React.createElement(Button, { variant: "primary", disabled: !canSubmit || submitting, onClick: submit }, "Submit")));
 }
 function TpScratchpad({ lines, onAdd, onRemove }) {
   const { Button, Input } = window.TidepoolDesignSystem_8a0ead;
@@ -1023,8 +1024,8 @@ function TriageScreen({ data, onCommit, loadHandoff, onAnswer, onObject, onScrat
 
 // webui/single-question-view.tsx
 function TpSingleQuestion({ q, onAnswer, onClose, onTranslate, onOpenSettings }) {
-  const heading = q.items.length > 1 ? `${q.items.length} answers, then back to your day.` : "One answer, then back to your day.";
-  return /* @__PURE__ */ React.createElement("div", { className: "tp-rise", style: { position: "absolute", inset: 0, zIndex: 56, background: "var(--surface-page)", display: "flex", flexDirection: "column", padding: "20px 16px", overflowY: "auto" } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "baseline", gap: 8, marginBottom: 14 } }, /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--tide-4)", letterSpacing: "0.08em", textTransform: "uppercase" } }, "push \u2192 ", q.items.length > 1 ? `${q.items.length} questions` : "one question"), /* @__PURE__ */ React.createElement("button", { onClick: onClose, style: { marginLeft: "auto", background: "none", border: "none", color: "var(--text-muted)", fontSize: "var(--text-lg)", cursor: "pointer", padding: 0 } }, "\xD7")), /* @__PURE__ */ React.createElement("h1", { style: { fontFamily: "var(--font-display)", fontStyle: "italic", fontSize: "var(--text-2xl)", fontWeight: 400, color: "var(--tide-5)", margin: "0 0 16px", lineHeight: 1.15 } }, heading), /* @__PURE__ */ React.createElement(TpQuestionCard, { q, answer: null, onAnswer, onTranslate, onOpenSettings }), /* @__PURE__ */ React.createElement("p", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--text-muted)", textAlign: "center", marginTop: 12 } }, q.blocking ? `answering sends ${q.blocking} to the front \xB7 ` : "", "applies immediately \xB7 immediate poll if slot free \xB7 no transaction needed"));
+  const heading = q.items.length === 0 ? "Nothing to answer \u2014 this closes on its own." : q.items.length > 1 ? `${q.items.length} answers, then back to your day.` : "One answer, then back to your day.";
+  return /* @__PURE__ */ React.createElement("div", { className: "tp-rise", style: { position: "absolute", inset: 0, zIndex: 56, background: "var(--surface-page)", display: "flex", flexDirection: "column", padding: "20px 16px", overflowY: "auto" } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "baseline", gap: 8, marginBottom: 14 } }, /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--tide-4)", letterSpacing: "0.08em", textTransform: "uppercase" } }, "push \u2192 ", q.items.length === 0 ? "no answer" : q.items.length > 1 ? `${q.items.length} questions` : "one question"), /* @__PURE__ */ React.createElement("button", { onClick: onClose, style: { marginLeft: "auto", background: "none", border: "none", color: "var(--text-muted)", fontSize: "var(--text-lg)", cursor: "pointer", padding: 0 } }, "\xD7")), /* @__PURE__ */ React.createElement("h1", { style: { fontFamily: "var(--font-display)", fontStyle: "italic", fontSize: "var(--text-2xl)", fontWeight: 400, color: "var(--tide-5)", margin: "0 0 16px", lineHeight: 1.15 } }, heading), /* @__PURE__ */ React.createElement(TpQuestionCard, { q, answer: null, onAnswer, onTranslate, onOpenSettings }), q.items.length > 0 && /* @__PURE__ */ React.createElement("p", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--text-muted)", textAlign: "center", marginTop: 12 } }, q.blocking ? `answering sends ${q.blocking} to the front \xB7 ` : "", "applies immediately \xB7 immediate poll if slot free \xB7 no transaction needed"));
 }
 
 // webui/board-screen.tsx
