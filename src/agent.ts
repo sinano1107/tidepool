@@ -11,6 +11,7 @@ import {
   type Registry,
   UnknownAgentError,
 } from "./registry.js";
+import { typeAwareDefaultAgentSql } from "./tasks.js";
 import type { Tier } from "./tier.js";
 
 /** An assignee (or the board's default) resolved against the registry —
@@ -106,11 +107,19 @@ export function resolveAgentOrQuarantine(
  *  quarantine moot. `agentExists` is resolved by the caller (fresh against
  *  the registry, or `false` when no registry is configured at all — in which
  *  case only the "no more pending tasks" path can ever clear it). */
-export function verifyAgentRepaired(db: Db, agentName: string, agentExists: boolean): void {
+export function verifyAgentRepaired(
+  db: Db,
+  agentName: string,
+  agentExists: boolean,
+  defaultAgentName?: string,
+  auditorName?: string,
+): void {
   if (agentExists) return;
+  const fallback = typeAwareDefaultAgentSql("type", "@defaultAgentName", "@auditorName");
   const stillPending = db
-    .prepare("SELECT 1 FROM tasks WHERE assignee = ? AND status = 'todo' LIMIT 1")
-    .get(agentName);
+    .prepare(`SELECT 1 FROM tasks WHERE type != 'question' AND status = 'todo'
+              AND COALESCE(assignee, ${fallback}) = @agentName LIMIT 1`)
+    .get({ agentName, defaultAgentName: defaultAgentName ?? null, auditorName: auditorName ?? null });
   if (stillPending) {
     throw new Error(
       `agent ${agentName} is not back in the registry and still has pending tasks assigned`,
@@ -118,7 +127,7 @@ export function verifyAgentRepaired(db: Db, agentName: string, agentExists: bool
   }
   // done のタスクは Edit で付け替えられないので、その profile を読んで着地を待つものが
   // 残る限り、registry を直さずに解除しても次の着地でまた落ちる(ADR 0217 決定4)
-  const awaitingLanding = countTasksAwaitingLanding(db, agentName);
+  const awaitingLanding = countTasksAwaitingLanding(db, agentName, defaultAgentName, auditorName);
   if (awaitingLanding > 0) {
     throw new Error(
       `agent ${agentName} is not back in the registry and still has ${awaitingLanding} ` +

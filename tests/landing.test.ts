@@ -1727,6 +1727,50 @@ function deferLanding(board: Db, taskId: string, now: Date): void {
   });
 }
 
+it("既定 agent の quarantine 回答前の観測は、assignee 未指定の work の外部 merge を記録してキューを退ける", async () => {
+  const { db, clock } = await openBoard();
+  const work = completeTask(db, landingWork(db, clock), FULL_HANDOFF, "tako", clock.now(), "worker");
+  recordPrOpenedViaWorker(db, work, 7, "tako", clock.now(), {
+    authority: { merge: "auto_if_ci_green" },
+  });
+  const github = new FakeGitHubClient();
+  github.scriptMergedOutside(7);
+  const landing = createLanding({
+    db,
+    clock,
+    workspace: { name: "reef", path: "/reef", repo: "https://github.com/test/reef" },
+    github,
+    defaultAgentName: "tako",
+    auditorName: "shako",
+  });
+
+  await landing.observeMergedAutoMerges("shako");
+  expect(countTasksAwaitingLanding(db, "tako", "tako", "shako")).toBe(1);
+  await landing.observeMergedAutoMerges("tako");
+
+  expect(countTasksAwaitingLanding(db, "tako", "tako", "shako")).toBe(0);
+  expect(listEvents(db, work.id).filter((event) => event.payload.kind === "pr_merge_observed")).toMatchObject([
+    { origin: "board", worker_id: BOARD_WORKER_ID, payload: { kind: "pr_merge_observed", pr_number: 7 } },
+  ]);
+});
+
+it.each(["auto_merge", "promotion_failure"] as const)("assignee 未指定の完了 work が %s を待つとき、既定 agent の着地待ちに数える", (waiting) => {
+  db = openDb(":memory:");
+  const clock = new FakeClock();
+  const work = completeTask(db, landingWork(db, clock), FULL_HANDOFF, "tako", clock.now(), "worker");
+  if (waiting === "auto_merge") {
+    recordPrOpenedViaWorker(db, work, 7, "tako", clock.now(), {
+      authority: { merge: "auto_if_ci_green" },
+    });
+  } else {
+    registerPrPromotionFailureQuestion(db, work, "boom", clock.now());
+  }
+
+  expect(countTasksAwaitingLanding(db, "tako", "tako", "shako")).toBe(1);
+  expect(countTasksAwaitingLanding(db, "shako", "tako", "shako")).toBe(0);
+  expect(countTasksAwaitingLanding(db, "tako")).toBe(0);
+});
+
 it("着地を待つ完了タスクは、付帯子待ちで PR 未作成(retry が再び門で止まったものも)・無人 merge キューにいる・PR 昇格失敗の question が開いている、を数える", () => {
   db = openDb(":memory:");
   const now = new Date("2026-10-09T00:00:00.000Z");

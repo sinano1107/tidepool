@@ -2510,7 +2510,7 @@ export function resolveTaskAgent(
  *  work task resolves to the board's default agent. Absent pointers evaluate
  *  to NULL, which the gates' COALESCE/`=` already treats as "no fallback,
  *  gate only an explicit assignee" — no separate null-guard needed here. */
-function typeAwareDefaultAgentSql(
+export function typeAwareDefaultAgentSql(
   taskTypeRef: string,
   defaultAgentRef: string,
   auditorRef: string,
