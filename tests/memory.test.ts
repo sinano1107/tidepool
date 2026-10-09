@@ -1,6 +1,7 @@
 import { expect, it } from "vitest";
 import { openDb } from "../src/db.js";
 
+import { setDisplayLanguage } from "../src/display-language.js";
 import { DomainError } from "../src/domain-error.js";
 import { appendEvent, getEvent, listEvents } from "../src/events.js";
 
@@ -440,6 +441,37 @@ it("人間が書く Knowledge の原文は title と text の揃い —— 片�
   expect(approvedMemoryEntries(db)).toMatchObject([{ original: null, author: human }]);
 });
 
+it("supersedes の相手の原文を写したまま書いた Knowledge は相手の原文の言語を継ぎ、原文を書き換えれば今の表示言語(ADR 0223 決定2)", () => {
+  const { db } = board();
+  const written = ({ supersedes, ...input }: Partial<typeof humanKnowledge> & { original_text: string; supersedes?: number[] }) =>
+    recordKnowledge(db, { ...humanEntryInput(db, { ...humanKnowledge, original_title: original.title, ...input }), supersedes }, "webui", at).entry_id;
+  const first = written({ original_text: original.text });
+  setDisplayLanguage(db, "English");
+
+  const copied = written({ text: "Use Node 22.", original_text: original.text, supersedes: [first] });
+  const retyped = written({ original_text: "Node 22 で走らせる", supersedes: [copied] });
+  const fresh = written({ path: "deploy", original_text: original.text });
+
+  expect(listMemoryEntries(db, {}).map((e) => [e.id, e.original?.language])).toEqual([
+    [first, "Japanese"],
+    [copied, "Japanese"],
+    [retyped, "English"],
+    [fresh, "English"],
+  ]);
+});
+
+it("supersedes の相手の原文を写したまま書いた Behavior は相手の原文の言語を継ぐ(ADR 0223 決定2)", () => {
+  const { db } = board();
+  const written = (supersedes?: number[]) =>
+    recordBehavior(db, { ...humanEntryInput(db, { ...humanKnowledge, original_title: original.title, original_text: original.text }), addressee: null, supersedes }, "webui", at).entry_id;
+  const first = written();
+  setDisplayLanguage(db, "English");
+
+  const copied = written([first]);
+
+  expect(entryById(db, copied)?.original?.language).toBe("Japanese");
+});
+
 it("人間が書く Knowledge に出所を渡すと domain error —— 出所は自身の作成 event", () => {
   const { db } = board();
   expect(() => recordKnowledge(db, { ...knowledge, author: human, source: { commit: "0a46a46" } }, "webui", at)).toThrow(/no source/);
@@ -589,6 +621,26 @@ it("人間が書く Exemplar は書いた時点で approved・書き手 human・
   expect(approvedMemoryEntries(db)).toEqual(current);
 });
 
+it("supersedes の相手の注釈の原文を写したままの注釈はその言語を継ぎ、書き換えた注釈は今の表示言語(ADR 0223 決定2)", () => {
+  const { db, task } = board();
+  const decision = logDecision(db, task, "split the migration into two commits", "deckhand", at, "worker");
+  const annotations = (second: string) => [
+    { anchor: { field: "decision", quote: "two commits" }, polarity: "imitate", text: "Split schema changes from data changes.", original: "スキーマとデータの変更を分ける" },
+    { anchor: "whole", polarity: "avoid", text: "Do not mix in unrelated refactors.", original: second },
+  ];
+  const first = exemplar(db, decision, annotations("関係ないリファクタを混ぜない"));
+  setDisplayLanguage(db, "English");
+
+  const copied = recordExemplar(
+    db,
+    humanEntryInput(db, { workspace: "tidepool", path: "habits/migrations", title: "Split the migration", addressee: null, supersedes: [first], annotations: annotations("無関係な整理を混ぜない") }),
+    "webui",
+    at,
+  ).entry_id;
+
+  expect(entryById(db, copied)?.annotations?.map((a) => a.original?.language)).toEqual(["Japanese", "English"]);
+});
+
 it.each([
   ["出所が decision_logged / worker_spawned 以外の event", "registered", [whole]],
   ["出所の event が無い", 999, [whole]],
@@ -733,6 +785,16 @@ it("人間が書く定義の原文は title = text で持つ", () => {
   expect(approvedMemoryEntries(db)).toMatchObject([
     { kind: "definition", original: { title: "ビルドとテストの手順", text: "ビルドとテストの手順", language: "Japanese" } },
   ]);
+});
+
+it("複数の定義を置き換える定義は、原文を写したままなら一致した相手の言語を継ぎ、一致した相手の言語が割れたら渡された言語(ADR 0223 決定2)", () => {
+  const { db } = board();
+  const define = (scope: string | null, path: string, language: string, supersedes?: number[]) =>
+    defineMemoryBranch(db, { ...definition, scope, path, original: { title: "ビルドの手順", text: "ビルドの手順", language }, supersedes }, "webui", at).entry_id;
+  const widened = define(null, "build", "English", [define("tidepool", "build", "Japanese"), define("other", "build", "Japanese")]);
+  const split = define(null, "deploy", "English", [define("tidepool", "deploy", "Japanese"), define("other", "deploy", "French")]);
+
+  expect([widened, split].map((id) => entryById(db, id)?.original?.language)).toEqual(["Japanese", "English"]);
 });
 
 it("一覧は candidate と無効化済み(理由コード・後継 id つき)も出し、スコープ・種別・状態で絞れる", () => {

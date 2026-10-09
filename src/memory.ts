@@ -299,11 +299,25 @@ export class OneTreeError extends DomainError {
   }
 }
 
+/** 写した原文の言語(ADR 0223 決定2): 置き換えられる相手のうち同じ原文を持つものの言語が1つに揃えばそれを継ぎ、
+ *  一致が無いか割れたら渡された言語(人間の面では今の表示言語)のまま。 */
+function copiedLanguage(language: string, matched: Array<string | undefined>): string {
+  const languages = new Set(matched.filter((l) => l !== undefined));
+  return languages.size === 1 ? [...languages][0]! : language;
+}
+
+/** 原文の title と text が置き換えられる相手のどれかと完全に一致すれば、その言語を継ぐ(ADR 0223 決定2)。 */
+function inheritedOriginal(original: MemoryEntry["original"] | undefined, replaced: MemoryEntry[]): MemoryEntry["original"] {
+  if (!original) return null;
+  const matched = replaced.map((r) => (r.original?.title === original.title && r.original.text === original.text ? r.original.language : undefined));
+  return { ...original, language: copiedLanguage(original.language, matched) };
+}
+
 /** Knowledge の書き込み(spec #586 E)。承認不要なので書いた瞬間に approved。 */
 export function recordKnowledge(db: Db, input: EntryInput & { supersedes?: number[] }, origin: EventOrigin, at: Date): { entry_id: number; event_id: number } {
   const { supersedes, ...fields } = input;
-  return writeSuperseding(db, supersedes, fields.author, origin, at, () =>
-    createEntry(db, { ...fields, kind: "knowledge", state: "approved", original: fields.original ?? null, addressee: null }, origin, at),
+  return writeSuperseding(db, supersedes, fields.author, origin, at, (replaced) =>
+    createEntry(db, { ...fields, kind: "knowledge", state: "approved", original: inheritedOriginal(fields.original, replaced), addressee: null }, origin, at),
   );
 }
 
@@ -320,10 +334,10 @@ export function defineMemoryBranch(
   if (/[\r\n]/.test(input.text)) throw new DomainError("a definition must be one line");
   const { supersedes, ...rest } = input;
   const fields = { ...rest, path: checkedPath(rest.path) };
-  return writeSuperseding(db, supersedes, fields.author, origin, at, () => {
+  return writeSuperseding(db, supersedes, fields.author, origin, at, (replaced) => {
     const defined = liveDefinitions(db, fields.scope, fields.path).find((id) => !supersedes?.includes(id));
     if (defined) throw new DomainError(`branch ${fields.path} is already defined in this scope by entry ${defined}; revise it with supersedes`);
-    return createEntry(db, { ...fields, title: fields.text, kind: "definition", state: "approved", original: fields.original ?? null, addressee: null }, origin, at);
+    return createEntry(db, { ...fields, title: fields.text, kind: "definition", state: "approved", original: inheritedOriginal(fields.original, replaced), addressee: null }, origin, at);
   });
 }
 
@@ -790,7 +804,7 @@ export function recordBehavior(
   const cited = source_event_id === undefined ? undefined : citedEpisode(db, source_event_id);
   return writeSuperseding(db, supersedes, fields.author, origin, at, (replaced) => {
     const source = cited ?? sharedSource(amends ? [rowToEntry(amends)] : replaced);
-    return createEntry(db, { ...fields, source, kind: "behavior", state: "approved", original: fields.original ?? null }, origin, at, mark);
+    return createEntry(db, { ...fields, source, kind: "behavior", state: "approved", original: inheritedOriginal(fields.original, replaced) }, origin, at, mark);
   });
 }
 
@@ -839,7 +853,9 @@ export function recordExemplar(
     if (!source) throw new DomainError("an exemplar needs source_event_id, or supersedes whose entries share one source: it keeps that as its case");
     const { annotations: checked, text } = checkedAnnotations(db, source, raw, exemplarAnnotationSchema);
     const language = getDisplayLanguage(db);
-    const annotations = checked.map(({ original, ...annotation }) => (original?.trim() ? { ...annotation, original: { text: original, language } } : annotation));
+    const annotationLanguage = (originalText: string) =>
+      copiedLanguage(language, replaced.flatMap((r) => r.annotations ?? []).map((a) => (a.original?.text === originalText ? a.original.language : undefined)));
+    const annotations = checked.map(({ original, ...annotation }) => (original?.trim() ? { ...annotation, original: { text: original, language: annotationLanguage(original) } } : annotation));
     return createEntry(db, { ...fields, kind: "exemplar", state: "approved", text, original: null, annotations, source }, origin, at, mark);
   });
 }

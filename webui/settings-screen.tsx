@@ -1494,7 +1494,8 @@ function MetaReviewSettingsCard({ settings, say, onSaved, edit }: {
 // the case is fixed: an amended exemplar candidate keeps its source (#950).
 type TpMemoryAnchor = NonNullable<WireContract['GET /api/settings/memory/entries']['entries'][number]['annotations']>[number]['anchor'];
 /** an exemplar annotation being written: `back` is its back-translation, held only for rereading (ADR 0015) */
-type TpDraftAnnotation = { anchor: TpMemoryAnchor; polarity: '' | 'imitate' | 'avoid'; text: string; original: string; back: string | null };
+/** `copiedEnglish` is the English text an Edit copied the annotation with (ADR 0223 決定3) */
+type TpDraftAnnotation = { anchor: TpMemoryAnchor; polarity: '' | 'imitate' | 'avoid'; text: string; original: string; back: string | null; copiedEnglish?: string };
 function MemoryCasePicker({ workspace, value, onChange, onQuote }: {
   workspace: string;
   value: number | null;
@@ -1814,7 +1815,9 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit, fo
     source: number | null; inheritedSource: number | null; annotations: TpDraftAnnotation[];
     /** the replaced entry's orphaned references, which the form will not submit again */
     dead: ReturnType<typeof deadRefs>;
-  } = { kind: 'knowledge', kinds: MEMORY_KINDS, workspace: '', path: '', originalTitle: '', originalText: '', title: '', text: '', backTranslation: null, supersedes: [], addressee: '', source: null, inheritedSource: null, annotations: [], dead: { addressee: null, workspace: null } };
+    /** the entry an Edit or the panel's Write copied the original from, with its English as copied (ADR 0223 決定3) */
+    copied: { id: number; title: string; text: string } | null;
+  } = { kind: 'knowledge', kinds: MEMORY_KINDS, workspace: '', path: '', originalTitle: '', originalText: '', title: '', text: '', backTranslation: null, supersedes: [], addressee: '', source: null, inheritedSource: null, annotations: [], dead: { addressee: null, workspace: null }, copied: null };
   const [draft, setDraft] = React.useState(blank);
   const [busy, setBusy] = React.useState(false);
   const setDraftField = (key: string) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => setDraft({ ...draft, [key]: e.target.value, ...(key === 'title' || key === 'text' ? { backTranslation: null } : {}), ...(key === 'workspace' ? { source: null } : {}) });
@@ -1829,6 +1832,12 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit, fo
     ? !TidepoolRules.whyBlank(draft.title) && (draft.source ?? draft.inheritedSource) !== null && draft.annotations.length > 0 && draft.annotations.every((a) => a.polarity && !TidepoolRules.whyBlank(a.text))
     : fields.every((key) => !TidepoolRules.whyBlank(draft[key]));
   const originalOf: Record<'title' | 'text', string> = { title: draft.originalTitle, text: draft.originalText };
+  // the English board shows no original: one copied with English since changed (as saved, trimmed) is not saved, and the form says so
+  // before saving (ADR 0223 決定3)
+  const changedOutOfSight = (english: string, copied: string | undefined) => !translatable && copied !== undefined && TidepoolRules.normalizeText(english) !== copied;
+  const dropsOriginal = !!draft.originalText && fields.some((key) => changedOutOfSight(draft[key], draft.copied?.[key]));
+  const dropsAnnotationOriginal = draft.annotations.map((a) => !!a.original && changedOutOfSight(a.text, a.copiedEnglish));
+  const notKept = (what: string) => `The original wording of ${what} is not kept: the English changed and the original isn't shown on this board.`;
 
   // Translate fills both English fields from the original title + text; Back-translate re-checks English the
   // human edited by hand (ADR 0015: the English is saved after the human reads its back-translation, never stored)
@@ -1847,7 +1856,7 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit, fo
     setBusy(true);
     try {
       // a partial original is sent as is so the server's 400 says why
-      const originals = fields.map((key) => [`original_${key}`, originalOf[key].trim()]).filter(([, v]) => v);
+      const originals = dropsOriginal ? [] : fields.map((key) => [`original_${key}`, originalOf[key].trim()]).filter(([, v]) => v);
       const body = { workspace: draft.workspace || null, path: TidepoolRules.normalizeText(draft.path), text: TidepoolRules.normalizeText(draft.text), ...Object.fromEntries(originals) };
       const supersedes = draft.supersedes.length > 0 ? { supersedes: draft.supersedes } : {};
       // no pick leaves the source out: the server keeps the one the replaced entries share (which may be an attribution
@@ -1859,7 +1868,7 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit, fo
       } else if (draft.kind === 'exemplar') {
         await api('/api/settings/memory/exemplars', {
           workspace: body.workspace, path: body.path, title: TidepoolRules.normalizeText(draft.title), addressee: draft.addressee || null, ...supersedes, ...source,
-          annotations: annotationsToSend(draft.annotations),
+          annotations: annotationsToSend(draft.annotations.map((a, i) => (dropsAnnotationOriginal[i] ? { ...a, original: '' } : a))),
         });
       }
       else await api('/api/settings/memory/definitions', { ...body, ...supersedes });
@@ -1928,8 +1937,8 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit, fo
   const startEntryEdit = (entry: TpMemoryEntry) => edit.open(writeId, () => setDraft({
     ...blank, kind: entry.kind, kinds: [entry.kind], workspace: entry.scope ?? '', path: entry.path, title: entry.title, text: entry.text,
     originalTitle: entry.original?.title ?? '', originalText: entry.original?.text ?? '',
-    addressee: entry.addressee ?? '', supersedes: [entry.id], inheritedSource: sharedCase([entry]), dead: deadRefs(entry),
-    annotations: (entry.annotations ?? []).map(({ anchor, polarity, text, original }) => ({ anchor, polarity, text, original: original?.text ?? '', back: null })),
+    addressee: entry.addressee ?? '', supersedes: [entry.id], inheritedSource: sharedCase([entry]), dead: deadRefs(entry), copied: entry,
+    annotations: (entry.annotations ?? []).map(({ anchor, polarity, text, original }) => ({ anchor, polarity, text, original: original?.text ?? '', back: null, copiedEnglish: text })),
   }));
 
   // moves (ADR 0162 決定4): the board copies the body to the new place — one entry, or a whole branch of one scope.
@@ -1968,7 +1977,7 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit, fo
     const one = row.defs.length === 1 ? row.defs[0]!.entry : undefined;
     const fill = () => setDraft({
       ...blank, kind: 'definition', kinds: ['definition'], path: row.path, supersedes: row.defs.map((d) => d.id),
-      text: one?.text ?? '', originalText: one?.original?.text ?? '',
+      text: one?.text ?? '', originalText: one?.original?.text ?? '', copied: one ?? null,
     });
     if (!writing) return edit.open(writeId, fill);
     setParked({ draft, blocked: blocked?.at === 'write' ? blocked : null });
@@ -2098,6 +2107,8 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit, fo
           {draft.backTranslation && (
             <p style={muted} data-testid="memory-back-translation">back in {language}: {fields.map((key) => draft.backTranslation![key]).join(' — ')}</p>
           )}
+          {dropsOriginal && <p style={muted}>{notKept(`#${draft.copied!.id}`)}</p>}
+          {dropsAnnotationOriginal.map((drops, i) => drops && <p key={i} style={muted}>{notKept(`annotation ${i + 1}`)}</p>)}
           {blockingPanel('write')}
           <EditActions busy={busy} saveLabel={`Save ${draft.kind}`}
             ok={!holdsOrphan && filled}
