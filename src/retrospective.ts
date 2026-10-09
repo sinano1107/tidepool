@@ -88,7 +88,7 @@ export interface BehaviorDraftClient {
 export interface RetrospectiveCallDeps {
   /** 配分評価の Board call(ADR 0111 決定4 / ADR 0172)。sweep だけが撃つ。undefined → 撃てなかった扱いで何も書かない。 */
   allocationClient: AllocationClient | undefined;
-  /** 帰責の Board call(ADR 0115 / issue #574・#575)。undefined → commit は異議を `uncertain` で束ね(RCA は帰責以前のまま立つ)、第2回も撃たない。 */
+  /** 帰責の Board call(ADR 0115 / issue #574・#575)。undefined → commit は異議を未帰責のまま RCA に倒し(ADR 0168)、第2回も撃たない。 */
   attributionClient: AttributionClient | undefined;
   /** Behavior candidate 起草の Board call(ADR 0120 / issue #617)。sweep が帰責の後に撃つ。undefined → 何も起草しない。 */
   behaviorDraftClient: BehaviorDraftClient | undefined;
@@ -299,11 +299,18 @@ async function attributeSecondRound(db: Db, deps: RetrospectiveCallDeps, objecte
   });
 }
 
-/** 第2回の入力: 帰責の入力(当時の decision log = その注釈より前の entry)に、その異議群を覆う RCA 子の decision log と完了 result を足す。 */
-const secondRoundInput = (db: Db, objectedId: string, attribution: SecondRoundSource): AttributionInput => ({
-  ...objectionInput(db, attribution),
-  rca_findings: rcaChildren(db, objectedId, bundleName(attribution)).flatMap((r) => decisionLogText(db, r.id)),
-});
+/** 第2回の入力: 当時の decision log は異議群の初回の帰責(未帰責なら覆う修理子の登録)より前で切り、
+ *  覆う RCA 子の decision log と完了 result を足す。起草の撃ち直しも同じ出所から組む。 */
+function secondRoundInput(db: Db, objectedId: string, attribution: SecondRoundSource): AttributionInput {
+  const initial = listEvents(db, objectedId).find((e) =>
+    e.payload.kind === "objection_attributed" && e.payload.round === "initial" &&
+    e.payload.entry_id === attribution.entry_id && bundleName(e.payload) === bundleName(attribution),
+  );
+  return {
+    ...objectionInput(db, { ...attribution, id: initial?.id ?? repairRegistered(db, objectedId, bundleName(attribution)) }),
+    rca_findings: rcaChildren(db, objectedId, bundleName(attribution)).flatMap((r) => decisionLogText(db, r.id)),
+  };
+}
 
 const fireAndForget = (fired: Promise<void>, target: string) => void fired.catch((err) => console.error(`[retrospective] ${target}: ${String(err)}`));
 

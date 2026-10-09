@@ -3,9 +3,9 @@ import type { Cause } from "../src/cause.js";
 import { CliAuthError, RowRefusalError } from "../src/cli-auth.js";
 import { openDb } from "../src/db.js";
 import { appendEvent, listEvents } from "../src/events.js";
-import { buildMemoryInjection, readMemory, recordKnowledge, recordMemoryInjection, searchMemory } from "../src/memory.js";
+import { buildMemoryInjection, listMemoryEntries, readMemory, recordKnowledge, recordMemoryInjection, searchMemory } from "../src/memory.js";
 import { attributeObjections, type GatedJudgment, listHaltedRefires, refireRetrospectiveCalls } from "../src/retrospective.js";
-import { completeTask, listChildren, logDecision, registerTask } from "../src/tasks.js";
+import { completeTask, listChildren, logDecision, pickupTask, registerTask } from "../src/tasks.js";
 import { reportProviderUsage } from "../src/throttle.js";
 import { commitTriage, raiseObjection, startTriage, TRIAGE_TIMEOUT } from "../src/triage.js";
 import { HUMAN_WORKER_ID } from "../src/worker-id.js";
@@ -1475,6 +1475,59 @@ it.each<[string, (ids: { read: number; unread: number }) => number[], Partial<Ga
 });
 
 // 異議群を覆う RCA 子(ADR 0171 / issue #1124)—— ドメイン層
+
+it.each([
+  ["初回 uncertain", true, false],
+  ["未帰責", false, false],
+  ["初回 uncertain の起草の撃ち直し", true, true],
+  ["未帰責の起草の撃ち直し", false, true],
+] as const)("%s の異議群は、第2回の判定と起草の両方が commit 後の判断と完了報告を当時の decision log に含めない", async (_, initial, retry) => {
+  const db = openDb(":memory:");
+  try {
+    const registered = registerTask(db, { type: "work", title: "t", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI);
+    const task = pickupTask(db, registered, "deckhand", at)!;
+    const entry = logDecision(db, task, "skipped the fixtures", "deckhand", at, "worker");
+    const session = startTriage(db, at);
+    const objection = raiseObjection(db, entry, "keep the fixtures", at);
+    const client = new FakeAttributionClient();
+    const drafter = new FakeBehaviorDraftClient();
+    const deps = { ...noRetrospectiveCalls, attributionClient: client, behaviorDraftClient: drafter, workspace: { name: "charts" } };
+    commitTriage(db, at, [], initial ? await attributeObjections(db, deps, session.id, at) : new Map());
+    logDecision(db, task, "decided after the commit", "deckhand", at, "worker");
+    completeTask(db, task, { ...FULL_HANDOFF, outcome: "done as specified" }, "deckhand", at, "worker");
+    for (const rca of listChildren(db, task.id).filter((c) => c.type === "review" && listEvents(db, c.id).some((e) => e.payload.kind === "task_registered" && e.payload.objection_event_ids?.includes(objection)))) {
+      logDecision(db, rca, `finding from ${rca.title}`, "auditor", at, "worker");
+      completeTask(db, rca, undefined, "auditor", at, "worker");
+    }
+    client.scriptJudgment(entry, { cause: "capability", evidence: "the RCA explained it" });
+    const draft = { path: "build", title: "Keep fixtures", text: "Keep the fixtures.", addressee: "worker" as const };
+    drafter.scriptDraft(entry, retry ? new Error("temporary draft failure") : draft);
+
+    refireRetrospectiveCalls(db, deps, at);
+    await new Promise((resolve) => setImmediate(resolve));
+
+    const material = {
+      decision_log: ["skipped the fixtures"],
+      steering: ["keep the fixtures"],
+      rca_findings: ["finding from rca (self): t", NO_OUTCOME, "finding from rca (auditor): t", NO_OUTCOME],
+    };
+    expect(client.calls.at(-1)!.input).toMatchObject(material);
+    expect(drafter.calls.map((c) => c.input)).toEqual([expect.objectContaining(material)]);
+    if (retry) {
+      expect(listMemoryEntries(db, {})).toEqual([]);
+      expect(listEvents(db, task.id).filter((e) => e.kind === "memory_draft_failed")).toHaveLength(1);
+      logDecision(db, task, "decided before the retry", "deckhand", at, "worker");
+      drafter.scriptDraft(entry, draft);
+      // 起草だけを撃ち直す sweep は after_rca の帰責 event を手がかりに出所を復元する。
+      refireRetrospectiveCalls(db, { ...deps, attributionClient: undefined }, new Date(at.getTime() + HOUR));
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(drafter.calls.map((c) => c.input)).toEqual([expect.objectContaining(material), expect.objectContaining(material)]);
+    }
+    expect(listMemoryEntries(db, {}).map((m) => [m.kind, m.title])).toEqual([["behavior", "Keep fixtures"]]);
+  } finally {
+    db.close();
+  }
+});
 
 /** 同じ task に2つの異議群を並べる: session A が entry X を異議して commit し、A の RCA が未決着のうちに session B が
  *  `same` なら同じ X を、でなければ entry Y を異議して commit する。どちらも初回は未帰責(第2回を待つ)。
