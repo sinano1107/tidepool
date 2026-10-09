@@ -1426,7 +1426,6 @@ it("escalate で開いた PR の後にダイヤルを auto_if_ci_green へ緩め
 const unresolvable = (): AuthorityProfile => {
   throw new UnknownAgentError("tako");
 };
-// 解決できない理由は registry からの消失と定義の不成立(registry に無い profile を名指す等、issue #1648)の2つ
 const UNRESOLVABLE: Array<[string, () => AuthorityProfile]> = [
   ["UnknownAgentError", unresolvable],
   [
