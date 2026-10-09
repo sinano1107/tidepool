@@ -39,8 +39,9 @@ export type CodexAppServerProbeResult =
       cliVersion: string;
       plan: string;
       windows: ProviderUsageWindow[];
-      /** `model/list`(includeHidden: true)の id。表の openai の行の照合に使う(ADR 0184 決定3)。 */
-      models: string[];
+      /** `model/list`(includeHidden: true)の id → その model が広告する effort(`supportedReasoningEfforts`)。
+       *  表の openai の行の照合に使う(ADR 0184 決定3 / ADR 0218 決定2)。 */
+      models: Map<string, string[]>;
     }
   | {
       status: "unauthorized" | "unobservable";
@@ -54,6 +55,10 @@ export type CodexAppServerProbe = (now: Date) => Promise<CodexAppServerProbeResu
 /** 一覧に無い行の理由(ADR 0184 決定3・5)。登録と回答の拒否が同じ観測を同じ文で言う。原因は断言しない(決定1)。 */
 export const unlistedModelReason = (cliVersion: string) =>
   `the Codex App Server model list (${cliVersion}, hidden models included) does not include this model id`;
+
+/** 一覧にある model が行の effort を広告しない理由(ADR 0218 決定2)。登録と回答の拒否が同じ文で言う。 */
+export const unadvertisedEffortReason = (cliVersion: string, effort: string) =>
+  `the Codex App Server model list (${cliVersion}, hidden models included) does not advertise effort ${effort} for this model id`;
 
 const PLAN_VALUES = [
   "free",
@@ -108,7 +113,7 @@ const rateLimitsResponse = z.object({
 
 // ページの続きは読まない —— 続きがあれば一覧は不完全で、照合すると走る行を外しうる
 const modelListResponse = z.object({
-  data: z.array(z.object({ id: z.string() })),
+  data: z.array(z.object({ id: z.string(), supportedReasoningEfforts: z.array(z.object({ reasoningEffort: z.string() })) })),
   nextCursor: z.null().optional(),
 });
 
@@ -220,7 +225,10 @@ function schemasConform(requests: any, account: any, rateLimits: any, modelList:
     references(modelList.properties?.data?.items, "Model") &&
     modelList.properties?.nextCursor?.type?.includes("string") &&
     model?.required?.includes("id") &&
-    model?.properties?.id?.type === "string"
+    model?.properties?.id?.type === "string" &&
+    model?.required?.includes("supportedReasoningEfforts") &&
+    references(model?.properties?.supportedReasoningEfforts?.items, "ReasoningEffortOption") &&
+    modelList.definitions?.ReasoningEffortOption?.required?.includes("reasoningEffort")
   );
 }
 
@@ -493,7 +501,12 @@ export function createCodexAppServerProbe(options: {
           normalizeWindow("secondary", null, limits.rateLimits.secondary, now),
         ],
         // 一覧は最後に読む —— 失敗・ずれ・続きのページは observed を観測不能に倒すだけで、手前の分類を奪わない
-        models: modelListResponse.parse(resultOf(responses, 4, "model/list")).data.map((entry) => entry.id),
+        models: new Map(
+          modelListResponse.parse(resultOf(responses, 4, "model/list")).data.map((entry) => [
+            entry.id,
+            entry.supportedReasoningEfforts.map((option) => option.reasoningEffort),
+          ]),
+        ),
       };
     } catch (error) {
       return {

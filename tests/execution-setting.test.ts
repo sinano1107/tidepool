@@ -30,7 +30,7 @@ import {
 import { submitAnswer } from "../src/human-verbs.js";
 import { registerMetaReview } from "../src/meta-review.js";
 import { PROVIDER_VALUES, type Provider } from "../src/provider.js";
-import { registerQuarantine, tableRowValue } from "../src/quarantine.js";
+import { registerQuarantine, tableRowEffortValue, tableRowValue } from "../src/quarantine.js";
 import { assertValidAgentDefinition } from "../src/registry.js";
 import { RegistryPushFailedError } from "../src/registry-write.js";
 import { proposeRoutingChange } from "../src/routing-review.js";
@@ -949,6 +949,13 @@ it("承認に添える語彙の外の effort の修正値は拒まれ、行は�
 it("行の Quarantine の鍵は (provider, model) で、effort 違いの行も候補から外れる", () => {
   const db = boardWithRefusedRows([opusMax], [["anthropic", "claude-opus-5-5"]]);
   expect(executionSettingsFor(db, anthropicAgent(false), workAt("standard"))).toEqual([]);
+  expect(executionSettingsFor(db, anthropicAgent(false), workAt("frontier")).map((s) => s.model)).toEqual(["claude-fable-5-1"]);
+});
+
+it("effort の Quarantine の鍵は (provider, model, effort) で、同じ model の別の effort の行は候補に残る(ADR 0218 決定2)", () => {
+  const db = boardWithRefusedRows([opusMax], []);
+  registerQuarantine(db, "tableRowEffort", tableRowEffortValue("anthropic", "claude-opus-5-5", "max"), "unadvertised", new Date());
+  expect(executionSettingsFor(db, anthropicAgent(false), workAt("standard")).map((s) => [s.model, s.effort])).toEqual([["claude-opus-5-5", "high"]]);
   expect(executionSettingsFor(db, anthropicAgent(false), workAt("frontier")).map((s) => s.model)).toEqual(["claude-fable-5-1"]);
 });
 

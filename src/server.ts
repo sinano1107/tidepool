@@ -15,7 +15,7 @@ import {
   warnCliAuthExpiry,
 } from "./cli-auth.js";
 import type { Clock } from "./clock.js";
-import { type CodexAppServerProbe, unlistedModelReason } from "./codex-app-server.js";
+import { type CodexAppServerProbe, unadvertisedEffortReason, unlistedModelReason } from "./codex-app-server.js";
 import {
   type ContainmentCapability,
   checkHumanSurfaceRefusesAnonymous,
@@ -586,14 +586,17 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
   const openaiUsage = options.openaiUsage;
   const modelProbes: Partial<Record<Provider, ModelProbe>> | undefined = openaiUsage
     ? {
-        openai: async (model) => {
+        openai: async (model, effort) => {
           const result = await openaiUsage(options.clock.now());
           if (result.status !== "observed") {
             return { status: result.status === "unauthorized" ? "unauthorized" : "unknown", reason: result.reason };
           }
-          return result.models.includes(model)
-            ? { status: "runs" }
-            : { status: "refused", reason: unlistedModelReason(result.cliVersion) };
+          const efforts = result.models.get(model);
+          if (!efforts) return { status: "refused", reason: unlistedModelReason(result.cliVersion) };
+          if (effort !== undefined && !efforts.includes(effort)) {
+            return { status: "refused", reason: unadvertisedEffortReason(result.cliVersion, effort) };
+          }
+          return { status: "runs" };
         },
         ...options.modelProbes,
       }

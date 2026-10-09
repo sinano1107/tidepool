@@ -7,7 +7,7 @@ import { whyInvalidEffort } from "./effort.js";
 import { appendEvent, type EventOrigin } from "./events.js";
 import { whyInvalidPrice } from "./price.js";
 import { PROVIDER_VALUES, type Provider, whyInvalidProviderRank } from "./provider.js";
-import { openQuarantineQuestions, openQuarantineValues, tableRowValue } from "./quarantine.js";
+import { openQuarantineQuestions, openQuarantineValues, tableRowEffortValue, tableRowValue } from "./quarantine.js";
 import type { AgentDefinition } from "./registry.js";
 import { RegistryFetchFailedError, RegistryPushFailedError } from "./registry-write.js";
 import { normalizeText, whyBlank } from "./required-text.js";
@@ -473,15 +473,19 @@ export function readExecutionSettings(db: Db) {
 }
 
 /** 人間の2つの扉(settings タブ・管理MCP)の読み口: 各行に、開いている行の Quarantine の question id(無ければ null)を
- *  添える(ADR 0184 決定6)。meta-review の材料と worker の読み口は Quarantine を添えない `readExecutionSettings`。 */
+ *  添える(ADR 0184 決定6)。model ごとの Quarantine が先で、無ければ effort ごとの Quarantine(ADR 0218 決定2)。meta-review の材料と worker の読み口は Quarantine を添えない `readExecutionSettings`。 */
 export function readExecutionSettingsWithQuarantine(db: Db) {
   const settings = readExecutionSettings(db);
   const open = openQuarantineQuestions(db, "tableRow");
+  const openEffort = openQuarantineQuestions(db, "tableRowEffort");
   return {
     ...settings,
     table: settings.table.map((row) => ({
       ...row,
-      quarantine_question_id: open.get(tableRowValue(row.provider, row.model)) ?? null,
+      quarantine_question_id:
+        open.get(tableRowValue(row.provider, row.model)) ??
+        openEffort.get(tableRowEffortValue(row.provider, row.model, row.effort)) ??
+        null,
     })),
   };
 }
@@ -805,13 +809,20 @@ export async function changeExecutionSettings(
   applyExecutionSettingsChange(db, change, origin, at, undefined, listAgents);
 }
 
-/** 行の Quarantine の解除の門1(ADR 0184 決定5): その (provider, model) の行が表から無くなった Quarantine の question を、
- *  回答なしで盤面名義に決着させる。誰も判断していないので decision log には載せない(CONTEXT.md「Decision log」)。 */
+/** 行の Quarantine の解除の門1(ADR 0184 決定5 / ADR 0218 決定2): その (provider, model)、effort の Quarantine なら
+ *  (provider, model, effort) の行が表から無くなった Quarantine の question を、回答なしで盤面名義に決着させる。誰も判断して
+ *  いないので decision log には載せない(CONTEXT.md「Decision log」)。 */
 function settleRemovedRowQuarantines(db: Db, at: Date, observedEventId: number): void {
-  const rows = new Set(loadExecutionSettingTable(db).map((row) => tableRowValue(row.provider, row.model)));
-  for (const [value, id] of openQuarantineQuestions(db, "tableRow")) {
-    if (rows.has(value!)) continue;
-    settleQuestionAsObserved(db, id, { kind: "quarantine_released", quarantine: "tableRow", value, observed_event_id: observedEventId }, at);
+  const table = loadExecutionSettingTable(db);
+  const rows = {
+    tableRow: new Set(table.map((row) => tableRowValue(row.provider, row.model))),
+    tableRowEffort: new Set(table.map((row) => tableRowEffortValue(row.provider, row.model, row.effort))),
+  };
+  for (const quarantine of ["tableRow", "tableRowEffort"] as const) {
+    for (const [value, id] of openQuarantineQuestions(db, quarantine)) {
+      if (rows[quarantine].has(value!)) continue;
+      settleQuestionAsObserved(db, id, { kind: "quarantine_released", quarantine, value, observed_event_id: observedEventId }, at);
+    }
   }
 }
 
@@ -932,5 +943,10 @@ export function executionSettingsFor(
  *  完全一致で、effort 違いの行もまとめて外れる(ADR 0200 決定5)—— Throttle の窓の部分一致(`windowMatchesModel`)は使わない(ADR 0182 決定3 と同じ理由)。 */
 function runnableTable(db: Db): ExecutionSettingTable {
   const refused = new Set(openQuarantineValues(db, "tableRow"));
-  return loadExecutionSettingTable(db).filter((row) => !refused.has(tableRowValue(row.provider, row.model)));
+  const refusedEfforts = new Set(openQuarantineValues(db, "tableRowEffort"));
+  return loadExecutionSettingTable(db).filter(
+    (row) =>
+      !refused.has(tableRowValue(row.provider, row.model)) &&
+      !refusedEfforts.has(tableRowEffortValue(row.provider, row.model, row.effort)),
+  );
 }

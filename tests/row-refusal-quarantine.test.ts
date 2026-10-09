@@ -233,8 +233,17 @@ it("回答時の probe が 401 なら、行の回答は拒まれて Provider 認
 /** openai の行の照合(ADR 0184 決定3、issue #1260)。Codex は spawn 後の証拠が文言しか無いので、盤面は
  *  App Server の `model/list` を使用量と同じ往復で読み、表の openai の行すべてを一覧と照合する。 */
 
-/** pin の版(codex-cli 0.147.0)が includeHidden: true で返した id(#1260 の実測)。種の `gpt-6-astra` は無い。 */
-const MEASURED_OPENAI_MODELS = ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-reserve", "codex-auto-review"];
+/** pin の版(codex-cli 0.147.0)が includeHidden: true で返した id と `supportedReasoningEfforts`(#1260 / #1409 の実測)。
+ *  種の `gpt-6-astra` は無く、`gpt-5.5` は `max` を広告しない。 */
+const UP_TO_MAX = ["low", "medium", "high", "xhigh", "max"];
+const MEASURED_OPENAI_MODELS = new Map([
+  ["gpt-5.6-sol", [...UP_TO_MAX, "ultra"]],
+  ["gpt-5.6-terra", [...UP_TO_MAX, "ultra"]],
+  ["gpt-5.6-luna", UP_TO_MAX],
+  ["gpt-5.5", ["low", "medium", "high", "xhigh"]],
+  ["gpt-reserve", UP_TO_MAX],
+  ["codex-auto-review", UP_TO_MAX],
+]);
 
 /** openai だけを喋る agent の盤面。`probe` は観測のたびに呼ばれ、回答時の読み直しも同じ口を通る。 */
 async function bootOpenai(probe: (now: Date) => Promise<CodexAppServerProbeResult>) {
@@ -245,7 +254,7 @@ async function bootOpenai(probe: (now: Date) => Promise<CodexAppServerProbeResul
   });
 }
 
-const listingProbe = (models: string[]) => async (now: Date) => ({ ...(await healthyOpenai(now)), models });
+const listingProbe = (models: Map<string, string[]>) => async (now: Date) => ({ ...(await healthyOpenai(now)), models });
 
 it("一覧に無い openai の行は選ばれていてもいなくても Quarantine され、1行に1枚の question が立ち、同じ poll の task は一覧にある行で走る", async () => {
   await bootOpenai(listingProbe(MEASURED_OPENAI_MODELS));
@@ -310,7 +319,122 @@ it("openai の行の question への回答は一覧を読み直し、id が載�
   });
   expect((await questions(t)).map((q) => q.status)).toEqual(["todo"]);
 
-  models = [...MEASURED_OPENAI_MODELS, "gpt-6-astra"];
+  models = new Map([...MEASURED_OPENAI_MODELS, ["gpt-6-astra", UP_TO_MAX]]);
+  expect((await answer()).status).toBe(200);
+});
+
+/** 行の effort の照合(ADR 0218 決定2、issue #1656)。一覧にある model が行の effort を広告しなければ、
+ *  その行だけが (provider, model, effort) の Quarantine になる。 */
+
+/** gpt-5.5 の2行を足す —— 1つのティアに同じ model は1行なので、high は economy の先頭(最安)、max は standard。 */
+function addGpt55Rows() {
+  for (const [effort, tier] of [["high", "economy"], ["max", "standard"]] as const) {
+    applyExecutionSettingsChange(
+      t.db,
+      { setting: "row", row: { provider: "openai", tier, model: "gpt-5.5", effort, price_in: 0.5, price_out: 4 } },
+      "webui",
+      t.clock.now(),
+    );
+  }
+}
+
+it("一覧が gpt-5.5 に max を広告しないとき、gpt-5.5 / max の行だけが Quarantine になり、同じ poll の task は gpt-5.5 / high で走る", async () => {
+  await bootOpenai(listingProbe(MEASURED_OPENAI_MODELS));
+  addGpt55Rows();
+  const task = queueWork(t, "economy codex task");
+
+  await t.clock.advance(HOUR);
+
+  expect((await questions(t)).map((q) => [q.title, q.question_quarantine_kind]).sort()).toEqual([
+    ["execution-setting row openai / gpt-5.5 / max cannot run on this board", "tableRowEffort"],
+    // 一覧に無い model は今までどおり (provider, model) の Quarantine で、effort は照合しない
+    ["execution-setting row openai / gpt-6-astra cannot run on this board", "tableRow"],
+  ]);
+  expect(t.worker.started.map((started) => started.id)).toEqual([task.id]);
+  expect(t.worker.startedSettings.map((setting) => [setting.model, setting.effort])).toEqual([["gpt-5.5", "high"]]);
+});
+
+// 1鍵につき1枚(再発火は既存の question に刻む)は種類の表の総なめ(quarantine.test.ts)が言う
+it("effort の Quarantine の question は行を (provider, model, effort) で名指し、CLI の版と一覧の観測を書いて表の修正を先に促す", async () => {
+  await bootOpenai(listingProbe(MEASURED_OPENAI_MODELS));
+  addGpt55Rows();
+  queueWork(t, "observes the list");
+  await t.clock.advance(HOUR);
+
+  const effortQuestions = (await questions(t)).filter((q) => q.question_quarantine_kind === "tableRowEffort");
+  expect(effortQuestions).toHaveLength(1);
+  const [question] = effortQuestions;
+  expect(question.question_quarantine_value).toBe("openai/gpt-5.5/max");
+  expect(question.purpose).toBe(
+    "the Codex App Server model list (codex-cli 0.147.0, hidden models included) does not advertise effort max for " +
+      "this model id. This board's model list does not advertise this effort for this model — with this Codex CLI " +
+      "version and this account. The board does not know why. This row is out of pickup and Board calls while this " +
+      "stands; other rows keep running, including this model's rows at other efforts.\n\nRepair one of two ways:\n\n" +
+      "1. Fix the table: in the settings tab, change this row's effort or delete the row. This question then closes " +
+      "on its own.\n2. If the effort is right, update tidepool or restore the account, then answer — the board reads " +
+      "the model list again and accepts the answer only if it advertises this effort for this model.",
+  );
+  expect(question.question_items[0]).toMatchObject({ title: "Can openai / gpt-5.5 / max run again?", options: ["the row can run again"] });
+});
+
+it("一覧が読めない観測は、一覧が広告しない effort の行があっても effort の Quarantine を立てない", async () => {
+  let observed = false;
+  await bootOpenai(async (now) => {
+    if (!observed) return { status: "unobservable", provider: "openai", cliVersion: "codex-cli 0.147.0", reason: "model/list failed" };
+    return listingProbe(MEASURED_OPENAI_MODELS)(now);
+  });
+  addGpt55Rows();
+  queueWork(t, "unreadable list");
+
+  await t.clock.advance(HOUR);
+  expect(await questions(t)).toEqual([]);
+
+  // 同じ盤面で一覧が読めれば照合する —— 上の空は行が無いせいではない
+  observed = true;
+  await t.clock.advance(HOUR);
+  expect((await questions(t)).map((q) => q.question_quarantine_value)).toContain("openai/gpt-5.5/max");
+});
+
+it("effort の Quarantine 中の行の effort を直すと、question は回答なしで盤面名義に決着する", async () => {
+  await bootOpenai(listingProbe(MEASURED_OPENAI_MODELS));
+  addGpt55Rows();
+  queueWork(t, "observes the list");
+  await t.clock.advance(HOUR);
+  const question = (await questions(t)).find((q) => q.question_quarantine_kind === "tableRowEffort")!;
+
+  const edited = await api(t.baseUrl, "POST", "/api/settings/execution", {
+    setting: "row",
+    key: { provider: "openai", model: "gpt-5.5", effort: "max" },
+    row: { provider: "openai", tier: "standard", model: "gpt-5.5", effort: "xhigh", price_in: 0.5, price_out: 4 },
+  });
+  expect(edited.status).toBe(200);
+
+  expect((await api(t.baseUrl, "GET", `/api/tasks/${question.id}`)).json).toMatchObject({ status: "done", question_answer: null });
+  expect((await events(question.id)).find((e) => e.kind === "quarantine_released")?.payload).toMatchObject({
+    quarantine: "tableRowEffort",
+    value: "openai/gpt-5.5/max",
+  });
+});
+
+it("effort の Quarantine の question への回答は一覧を読み直し、effort が広告されていなければ拒まれて question は開いたまま、広告されれば受理される", async () => {
+  let models = MEASURED_OPENAI_MODELS;
+  await bootOpenai(async (now) => listingProbe(models)(now));
+  addGpt55Rows();
+  queueWork(t, "observes the list");
+  await t.clock.advance(HOUR);
+  const question = (await questions(t)).find((q) => q.question_quarantine_kind === "tableRowEffort")!;
+  const answer = () => api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, { answers: ["the row can run again"] });
+
+  const unadvertised = await answer();
+  expect({ status: unadvertised.status, error: unadvertised.json.error }).toEqual({
+    status: 409,
+    error:
+      "openai / gpt-5.5 / max still cannot run: the Codex App Server model list (codex-cli 0.147.0, hidden models " +
+      "included) does not advertise effort max for this model id",
+  });
+  expect((await api(t.baseUrl, "GET", `/api/tasks/${question.id}`)).json.status).toBe("todo");
+
+  models = new Map([...MEASURED_OPENAI_MODELS, ["gpt-5.5", UP_TO_MAX]]);
   expect((await answer()).status).toBe(200);
 });
 

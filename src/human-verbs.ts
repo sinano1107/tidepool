@@ -28,7 +28,7 @@ import { type Landing, type LandingVerdict, landingBlock } from "./landing.js";
 import { approveMemoryProposal, humanEntryInput, listMemoryEntries, type MemoryAmendment, movedTail, parseMemoryAmendment, rejectMemoryProposal } from "./memory.js";
 import { whyNotPositiveInteger } from "./positive-integer.js";
 import type { Provider } from "./provider.js";
-import { parseTableRowValue, type QuarantineChecks, type QuarantineKind, type QuarantineResolvers, quarantineStops } from "./quarantine.js";
+import { parseTableRowEffortValue, parseTableRowValue, type QuarantineChecks, type QuarantineKind, type QuarantineResolvers, quarantineStops } from "./quarantine.js";
 import type { Harness, RegistryReachabilityCheck } from "./registry.js";
 import { RegistryFetchFailedError, RegistryPushFailedError } from "./registry-write.js";
 import { parseGitHubRepo, repairRepoAccess } from "./repo-access.js";
@@ -592,6 +592,16 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
         if (result.status === "runs") return;
         if (result.status === "unauthorized") quarantineCliAuthForProvider(deps.db, provider, clock.now());
         throw new DomainError(`${provider} / ${model} still cannot run: ${result.reason}`);
+      },
+      // ADR 0218 決定2: effort ごとの行は、その effort でも検査し直す(Codex は一覧の読み直し)
+      tableRowEffort: async (value) => {
+        const { provider, model, effort } = parseTableRowEffortValue(value!);
+        const probe = modelProbes[provider];
+        if (!probe) throw new DomainError(`this board cannot verify that ${provider} / ${model} / ${effort} runs`);
+        const result = await probe(model, effort);
+        if (result.status === "runs") return;
+        if (result.status === "unauthorized") quarantineCliAuthForProvider(deps.db, provider, clock.now());
+        throw new DomainError(`${provider} / ${model} / ${effort} still cannot run: ${result.reason}`);
       },
     }),
     ...(harnessContainment && {
