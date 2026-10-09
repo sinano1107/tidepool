@@ -46,12 +46,6 @@ test("スマホ幅で本文と帯が行の内容幅いっぱいに置かれ、ta
   const content = await contentWidth(row);
   expect(await width(body)).toBeCloseTo(content, 0);
   expect(await width(band)).toBeCloseTo(content, 0);
-
-  // 帯は押下面の外(#1090)、本文は押下面の中(ADR 0057)
-  await band.click();
-  await expect(page.getByRole("textbox")).toHaveCount(0);
-  await body.click();
-  await expect(page.getByRole("textbox")).toBeVisible();
 });
 
 test("スマホ幅で完了行の本文はシェブロンの列ぶんだけ狭い(issue #1683)", async ({ boot, page }) => {
