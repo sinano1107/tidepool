@@ -15,6 +15,7 @@ import { type AuthorityProfile, type MergeDial, REVIEWER_AUTHORITY_PROFILE, Unkn
 import {
   answerQuestion,
   completeTask,
+  editTask,
   getTask,
   listBoard,
   recordPrOpened,
@@ -70,9 +71,9 @@ function recordPrOpenedViaWorker(
   prNumber: number,
   workerId: string,
   now: Date,
-  { authority }: { authority?: Parameters<typeof recordPrOpened>[5] } = {},
+  { authority, isProtected }: { authority?: Parameters<typeof recordPrOpened>[5]; isProtected?: boolean } = {},
 ): void {
-  recordPrOpened(db, task, prNumber, workerId, now, authority, undefined, "worker");
+  recordPrOpened(db, task, prNumber, workerId, now, authority, isProtected, "worker");
 }
 
 function promotionFailures(board: Db, taskId: string) {
@@ -295,7 +296,7 @@ it("GitHub の無い purely-local work は merge question 面へ着地する", a
 
   await expect(landing.land(task)).resolves.toEqual({
     kind: "landed",
-    surface: "local_merge_question",
+    form: "local_merge_question",
   });
   expect(listBoard(db)).toContainEqual(
     expect.objectContaining({
@@ -318,7 +319,7 @@ it("purely-local の着地は ref を書かないので、またいだセッシ�
     db,
     clock,
     workspace,
-    () => expect(landing.land(task)).resolves.toMatchObject({ surface: "local_merge_question" }),
+    () => expect(landing.land(task)).resolves.toMatchObject({ form: "local_merge_question" }),
     remoteTaskRef,
   );
 
@@ -357,7 +358,7 @@ it("remote-backed から purely-local へ変わった再発火は local question
 
   await expect(landing.land(task)).resolves.toEqual({
     kind: "landed",
-    surface: "local_merge_question",
+    form: "local_merge_question",
   });
   expect(getTask(db, failure!.id)).toMatchObject({ status: "done", question_answer: null });
   expect(listBoard(db)).toContainEqual(
@@ -418,7 +419,7 @@ it("remote-backed work は PR を開いた面を返す", async () => {
 
   await expect(landing.land(task)).resolves.toEqual({
     kind: "landed",
-    surface: "pull_request_opened",
+    form: "pull_request_opened",
     prNumber: 1,
   });
   expect(github.requests).toMatchObject([{ branch: `task/${task.id}`, base: "main" }]);
@@ -450,7 +451,7 @@ it("open PR を持つ work の修理は同じ PR の branch を更新する", as
 
   await expect(landing.land(getTask(db, task.id)!)).resolves.toEqual({
     kind: "landed",
-    surface: "open_pull_request_updated",
+    form: "open_pull_request_updated",
     prNumber: 1,
   });
   expect(github.requests).toHaveLength(1);
@@ -488,7 +489,7 @@ it("open PR 更新は盤面が動かした remote ref だけを再基準化す�
 
   await expect(landing.land(getTask(db, task.id)!)).resolves.toMatchObject({
     kind: "landed",
-    surface: "open_pull_request_updated",
+    form: "open_pull_request_updated",
   });
   releaseWorkspace(db, workspace, task, clock.now());
 
@@ -765,7 +766,7 @@ it("着地成立は積み上がった failure question を引退させ、回答�
 
   await expect(landing.land(task, failures[0]!.id)).resolves.toMatchObject({
     kind: "landed",
-    surface: "pull_request_opened",
+    form: "pull_request_opened",
   });
   expect(getTask(db, failures[0]!.id)).toMatchObject({ status: "todo", question_answer: null });
   expect(getTask(db, failures[1]!.id)).toMatchObject({ status: "done", question_answer: null });
@@ -858,7 +859,7 @@ it("祖先の再発火は open PR を持つ work だけを更新する", async (
   await expect(landing.relandAncestors(done)).resolves.toEqual([
     {
       taskId: parent.id,
-      verdict: { kind: "landed", surface: "open_pull_request_updated", prNumber: 1 },
+      verdict: { kind: "landed", form: "open_pull_request_updated", prNumber: 1 },
     },
   ]);
   expect(github.pushes).toEqual([{ path: workspace.path, branch: `task/${parent.id}` }]);
@@ -907,8 +908,8 @@ it("並行 retry が先に着地したら遅い再発火の失敗は failure que
   release();
   const relanded = await relanding;
 
-  expect(retry).toMatchObject({ kind: "landed", surface: "pull_request_opened" });
-  expect(relanded).toMatchObject({ kind: "landed", surface: "pull_request_opened" });
+  expect(retry).toMatchObject({ kind: "landed", form: "pull_request_opened" });
+  expect(relanded).toMatchObject({ kind: "landed", form: "pull_request_opened" });
   expect(
     listBoard(db).filter(
       (candidate) => candidate.question_pending_pr_promotion_task_id === task.id,
@@ -956,7 +957,7 @@ it("fork 元が squash 着地した根は保護ブランチへ merge で追い�
 
   await expect(landing.land(repair)).resolves.toMatchObject({
     kind: "landed",
-    surface: "pull_request_opened",
+    form: "pull_request_opened",
   });
   expect(
     git(
@@ -1208,6 +1209,81 @@ function mergeQuestions(db: Db) {
     });
 }
 
+// 着地の面(question)の理由 3 つは、question 本文の違いだけで区別される。本文を逐語で釘付けする。
+it("PR を開いた時点で question 面に倒れた理由は、保護・ダイヤル・risk のそれぞれの本文で merge question に残る", async () => {
+  const { db, clock } = await openBoard();
+  recordPrOpenedViaWorker(db, landingWork(db, clock), 1, "worker", clock.now(), {
+    authority: { merge: "auto_if_ci_green" },
+    isProtected: true,
+  });
+  recordPrOpenedViaWorker(db, landingWork(db, clock), 2, "worker", clock.now(), {
+    authority: { merge: "escalate" },
+  });
+  const risky = registerTask(
+    db,
+    {
+      type: "work",
+      title: "ship",
+      purpose: "ship an agreed change",
+      completion_criteria: "the change is ready",
+      risk_flag: true,
+    },
+    clock.now(),
+    ...HUMAN_WEBUI,
+  );
+  recordPrOpenedViaWorker(db, risky, 3, "worker", clock.now(), {
+    authority: { merge: "auto_if_ci_green" },
+  });
+
+  expect(mergeQuestions(db).map(({ pr, purpose }) => ({ pr, purpose }))).toEqual([
+    {
+      pr: 1,
+      purpose:
+        '"ship" completed and opened PR #1 against a protected workspace — always needs a human ' +
+        "merge, regardless of the merge dial. Merge it now?",
+    },
+    { pr: 2, purpose: '"ship" completed and opened PR #2. Merge it now?' },
+    {
+      pr: 3,
+      purpose:
+        '"ship" completed and opened PR #3, but carries risk — auto_if_ci_green never auto-merges ' +
+        "a risky task. Merge it now?",
+    },
+  ]);
+});
+
+it("キュー投入の後に risk が付いた PR は、CI 緑でも merge されずキューを外れ、盤面の名義の merge question になる", async () => {
+  const workspace = await makeWorkspace("landing-risk-after-queue");
+  const { db, clock } = await openBoard();
+  const github = new FakeGitHubClient();
+  const work = queueAutoMerge(db, clock, 1);
+  editTask(db, getTask(db, work.id)!, { risk_flag: true }, clock.now(), "webui");
+  const landing = createLanding({
+    defaultAgentName: "tako",
+    db,
+    clock,
+    workspace,
+    github,
+    resolveAuthority: () => profile("auto_if_ci_green"),
+  });
+
+  await landing.tick("auto_merge", clock.now());
+  await landing.tick("auto_merge", clock.now());
+
+  expect(github.merged).toEqual([]);
+  expect(mergeQuestions(db)).toEqual([
+    {
+      pr: 1,
+      registrant: [BOARD_WORKER_ID, "board"],
+      recommendation: "merge",
+      purpose:
+        '"ship"\'s PR #1 was queued for auto_if_ci_green auto-merge, but its landing surface ' +
+        "changed after it was queued: the task now carries risk, and auto_if_ci_green never " +
+        "auto-merges a risky task. Merge it now?",
+    },
+  ]);
+});
+
 it("キュー投入の後にダイヤルが escalate へ取り下げられた PR は、CI 緑でも merge されずキューを外れ、盤面の名義の merge question になる", async () => {
   const workspace = await makeWorkspace("landing-withdrawn-to-escalate");
   const { db, clock } = await openBoard();
@@ -1454,7 +1530,7 @@ it.each(UNRESOLVABLE)("PR を開く時点で profile が %s で解決できな�
   resolveAuthority = () => profile("auto_if_ci_green");
   await expect(landing.land(task, failure!.id)).resolves.toMatchObject({
     kind: "landed",
-    surface: "pull_request_opened",
+    form: "pull_request_opened",
   });
   expect(github.requests).toHaveLength(1);
   await landing.tick("auto_merge", clock.now());
@@ -1480,7 +1556,7 @@ it("開いている PR へ修理を push する着地は profile を読まない
 
   await expect(landing.land(getTask(db, task.id)!)).resolves.toEqual({
     kind: "landed",
-    surface: "open_pull_request_updated",
+    form: "open_pull_request_updated",
     prNumber: 1,
   });
   expect(quarantineQuestion(db, "agent", "tako")).toBeUndefined();

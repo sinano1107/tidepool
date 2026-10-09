@@ -90,7 +90,7 @@ async function sessionInTeardown(
   const landing: Landing = {
     async land(t) {
       landed.push(t.id);
-      return { kind: "landed", surface: "local_merge_question" };
+      return { kind: "landed", form: "local_merge_question" };
     },
     async relandAncestors() {
       return [];

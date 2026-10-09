@@ -104,7 +104,7 @@ async function session(route: "complete" | "cap" | "watchdog" = "complete"): Pro
     ...unusedLanding,
     async land(t) {
       landed.push(t.id);
-      return { kind: "landed", surface: "local_merge_question" };
+      return { kind: "landed", form: "local_merge_question" };
     },
   };
   const deps: TeardownDeps = {
