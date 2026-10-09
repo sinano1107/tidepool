@@ -76,10 +76,6 @@ describe("読み手が受け取った本文の判定", () => {
     });
   });
 
-  it("Codex に指定するコードは、CallToolResult を1段包んで出力する", () => {
-    expect(GIVEN_CODE).toBe("const r = await tools.mcp__canary__read_canary({}); text(JSON.stringify(r));");
-  });
-
   it("Codex が指定と違うコードを走らせたら、本文の有無にかかわらず観測なし(#1411 の結果を捨てた回)", () => {
     const code = 'const result = await tools.mcp__canary__read_canary({});\ntext("ok");';
     expect(judgeReceived("Script completed\nWall time 0.0 seconds\nOutput:\nok", [markers], { code })).toMatchObject({

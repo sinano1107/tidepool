@@ -1,5 +1,5 @@
 /** 読み手の MCP 応答上限の canary(ADR 0195 決定7 / issue #1391)。盤面の予算いっぱいの応答を返す一時的な stdio MCP を
- *  立て、このホストの `claude -p` と `codex exec` に1回ずつ呼ばせ、モデルが受け取った本文に中央と末尾の目印が逐語で
+ *  立て、このホストの `claude -p` に1回、`codex exec` に盤面の種の openai 行のモデルごとに1回ずつ呼ばせ、モデルが受け取った本文に中央と末尾の目印が逐語で
  *  残るかを Markdown の表で出す。全行が合格のときだけ exit 0(観測なしも門を満たさない)。
  *
  *  サブスクリプションの認証が要るので CI では回さない(手順は docs/claude-cli-version-bump.md)。Codex は一時的な
@@ -129,9 +129,15 @@ if (process.argv[2] === "serve") {
   let ok = true;
   for (const row of rows) {
     const calls = readFileSync(row.markersFile, "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line));
-    const verdict = judgeReceived(row.received, calls, row);
-    const version = execFileSync(row.bin, ["--version"], { encoding: "utf8" }).trim();
-    const mark = (present: boolean) => (present ? "present" : "missing");
+    const verdict = judgeReceived(row.received, calls, { failure: row.failure, code: "code" in row ? row.code : undefined });
+    let version = "unknown";
+    try {
+      version = execFileSync(row.bin, ["--version"], { encoding: "utf8" }).trim();
+    } catch {
+      // CLI が無くても表は出す —— その行は run の失敗として観測なしに落ちている
+    }
+    // 観測なしの行は目印を見ていないので、欠けと読まれないよう空にする
+    const mark = (present: boolean) => (verdict.result === "観測なし" ? "—" : present ? "present" : "missing");
     console.log(`| ${row.reader} | ${version} | ${mark(verdict.middle)} | ${mark(verdict.tail)} | ${verdict.result} | ${verdict.detail} |`);
     ok &&= verdict.result === "合格";
   }
