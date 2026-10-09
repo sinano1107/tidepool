@@ -701,8 +701,8 @@ export function createLanding(deps: LandingDeps): Landing {
           if (abandoned) {
             if (
               landingBlock(deps.db, ancestor.id) ||
-              !changedSince(ancestor, abandoned.payload.head) ||
-              hasOpenPrPromotionQuestion(deps.db, ancestor.id)
+              hasOpenPrPromotionQuestion(deps.db, ancestor.id) ||
+              !changedSince(ancestor, abandoned.payload.head)
             ) {
               continue;
             }
@@ -710,8 +710,9 @@ export function createLanding(deps: LandingDeps): Landing {
               deps.db,
               ancestor,
               `PR promotion re-asked: ${ancestor.title}`,
-              `PR promotion for completed task "${ancestor.title}" was abandoned, but an attached ` +
-                `child settled afterwards and changed ${taskBranch(ancestor.id)}. Promote the changed content?`,
+              `PR promotion for completed task "${ancestor.title}" was abandoned. An attached child ` +
+                `settled afterwards, and ${taskBranch(ancestor.id)} no longer matches (or could not be ` +
+                `compared with) the content abandoned then. Promote the current content?`,
               deps.clock.now(),
             );
             results.push({
