@@ -86,9 +86,8 @@ export function readInitMcpServers(parsed: Record<string, unknown> | null): stri
  *  not quarantine the board.
  *
  *  A shape it cannot read is **not** closed: an `auto` that is not a string, or a
- *  `memory_paths` that is not an object (`null` included), comes back as its JSON
- *  text so the caller fails it — the same fail-closed reading as
- *  `readInitMcpServers`. */
+ *  `memory_paths` that is not an object, comes back as its JSON text so the caller
+ *  fails it — the same fail-closed reading as `readInitMcpServers`. */
 export function readInitAutoMemoryPath(parsed: Record<string, unknown> | null): string | null {
   if (!isInitLine(parsed)) return null;
   const paths = (parsed as Record<string, unknown>).memory_paths;
