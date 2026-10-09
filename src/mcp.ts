@@ -220,7 +220,7 @@ function attributedAuthority(deps: McpDeps, task: Task): AuthorityProfile | unde
     }
     quarantineAgent(deps.db, err.agentName, err, deps.clock.now());
     throw new DomainError(
-      `the registry cannot resolve agent ${err.agentName}'s definition (${err.message}); ` +
+      `the registry cannot resolve agent ${err.agentName}'s definition; ` +
         "the board has asked a human to repair the registry, and this call was not applied. " +
         "You do not need to escalate about this.",
     );
