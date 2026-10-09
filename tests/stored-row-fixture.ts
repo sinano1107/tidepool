@@ -1,11 +1,11 @@
 // 型の負テスト(append-event-scope-fixture.ts と同じ形、ADR 0220 / issue #1224)。`npm run typecheck` にだけ効き、
 // `.test.ts` ではないので vitest は拾わない。宣言だけで値を持たず、DB にも HTTP にも触れない。
 import type { Response } from "express";
-import { sendJson } from "../src/api.js";
 import type { Db } from "../src/db.js";
 import { domainResult } from "../src/management-mcp.js";
 import { type McpDeps, runVerb, toolResult } from "../src/mcp.js";
 import { packItems, type ReadPosition } from "../src/response-budget.js";
+import { sendJson } from "../src/send-json.js";
 import { getTask, listBoard, presentTask, type Task, type TaskRow } from "../src/tasks.js";
 import type { WireContract } from "../src/wire-contract.js";
 

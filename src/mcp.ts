@@ -227,7 +227,7 @@ export function toolResult<T>(payload: Unstored<T>) {
 }
 
 export function toolError(message: string) {
-  // biome-ignore lint/plugin: the typed exit itself (ADR 0220)
+  // biome-ignore lint/plugin: the error exit, which carries only a string (ADR 0220)
   return { isError: true, content: [{ type: "text" as const, text: message }] };
 }
 
@@ -259,7 +259,7 @@ export async function runVerb<R>(
   const resolved = resolveAttributedTask(deps, attributedTaskId);
   if ("error" in resolved) return toolError(resolved.error);
   try {
-    return toolResult((await verb(resolved.task)) as never);
+    return toolResult<unknown>(await verb(resolved.task));
   } catch (err) {
     if (err instanceof DomainError) return toolError(err.message);
     throw err;

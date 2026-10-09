@@ -1,5 +1,5 @@
 /** wire の契約(ADR 0138)。WebUI が読むサーバ応答の欄だけを、`'METHOD /path'` をキーとする
- *  表1つに宣言する。WebUI は `api()` を通して表の行を受け、サーバは `res.json(x satisfies
+ *  表1つに宣言する。WebUI は `api()` を通して表の行を受け、サーバは `sendJson(res, x satisfies
  *  WireContract[...])` で同じ行に照らす。分岐に使う欄はリテラル union、表示だけの欄は `string`。
  *
  *  leaf module である —— WebUI の型検査プログラムがインライン `import()` 型で引くので、

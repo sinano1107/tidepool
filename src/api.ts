@@ -106,6 +106,7 @@ import {
   entryExclusionPredicate,
   type TaskExecutionCandidates,
 } from "./scheduler.js";
+import { sendJson } from "./send-json.js";
 import { clearSpendDown, getSpendDown, isKnownSpendDownTarget, setSpendDown } from "./spend-down.js";
 import {
   type BoardTask,
@@ -120,7 +121,6 @@ import {
   nextSlotTask,
   presentTask,
   type Task,
-  type Unstored,
 } from "./tasks.js";
 import { sessionInTeardown } from "./teardown.js";
 import { getProviderUsage } from "./throttle.js";
@@ -174,13 +174,6 @@ import {
   WorkspaceAlreadyPublishedError,
   WorkspaceConfirmationRequiredError,
 } from "./workspace-create.js";
-
-/** HTTP の JSON 応答の唯一の出口(ADR 0220): 解決を通っていない行は型で拒む。`res.json` の直書きは lint が禁じる。
- *  状態コードは `sendJson(res.status(n), body)` で渡す。 */
-export function sendJson<T>(res: Response, body: Unstored<T>) {
-  // biome-ignore lint/plugin: the typed exit itself (ADR 0220)
-  return res.json(body);
-}
 
 function formatValidationError(error: z.ZodError): string {
   return error.issues.map((issue) => issue.path.length ? `${issue.path.join(".")}: ${issue.message}` : issue.message).join("; ");
@@ -1017,8 +1010,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   // strictness there is access control, which does not apply to input assist.)
   router.get("/skills", async (_req, res) => {
     const enumerated = hostSkills ? await hostSkills() : null;
-    sendJson(res, (enumerated === null ? { skills: [], degraded: true } : { skills: enumerated, degraded: false }) satisfies WireContract["GET /api/skills"],
-    );
+    sendJson(res, (enumerated === null ? { skills: [], degraded: true } : { skills: enumerated, degraded: false }) satisfies WireContract["GET /api/skills"]);
   });
 
   router.patch("/agents/:name", async (req, res) => {
@@ -2034,7 +2026,9 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   // ここ(盤面)で行い、WebUI は描画だけを担う。
   router.get("/tasks", async (_req, res) => {
     const board = await presentLive(listBoard(db, defaultAgentName, auditorName));
-    sendJson(res, board.map((task) =>
+    sendJson(
+      res,
+      board.map((task) =>
         task.type === "question" ? { ...task, ...questionAnnotations(db, task) } : task,
       ) satisfies WireContract["GET /api/tasks"],
     );

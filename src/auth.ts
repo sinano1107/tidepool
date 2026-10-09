@@ -4,7 +4,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import type { Request, Response } from "express";
 import { type RequestHandler, Router, urlencoded } from "express";
-import { sendJson } from "./api.js";
+import { sendJson } from "./send-json.js";
 
 /** ADR 0036 / issue #153: 人間面(静的資産・`/api`・そこに mount される管理MCP)
  *  は単一の盤面秘密で守られる。worker からの到達をネットワーク層で塞ぐ設計が

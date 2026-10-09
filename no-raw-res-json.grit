@@ -2,5 +2,5 @@ language js
 
 `$res.json($body)` where {
   $body <: not .,
-  register_diagnostic(span=$body, message="Send JSON responses through sendJson (ADR 0220): it rejects a stored task row that has not been through the board's resolution (presentTask / listBoard). Pass the status as sendJson(res.status(n), body).", severity="error")
+  register_diagnostic(span=$body, message="Send JSON responses through sendJson (ADR 0220): it rejects a stored task row that has not been through the board's resolution (presentTask / boardRows). Pass the status as sendJson(res.status(n), body).", severity="error")
 }

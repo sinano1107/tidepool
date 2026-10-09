@@ -276,7 +276,7 @@ const QUESTION_ANNOTATIONS_DESCRIPTION =
 /** 結果を返し、DomainError は tool error にする。 */
 export const domainResult = <R>(write: () => Unstored<R>) => {
   try {
-    return toolResult(write() as never);
+    return toolResult<unknown>(write());
   } catch (err) {
     if (err instanceof DomainError) return toolError(err.message);
     throw err;
