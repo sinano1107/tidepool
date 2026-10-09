@@ -1343,6 +1343,10 @@ function MemorySettingsCard({ settings, say, onSaved, edit }: {
   );
 }
 
+// the unreadable face, said the same way on the card and on the Settings index Board row (issue #1663)
+const haltedRefiresUnavailable = 'halted refires unavailable';
+const cutReadsUnavailable = 'cut reads unavailable';
+
 // Halted refires (ADR 0164 決定5 / ADR 0172 決定3): retrospective Board calls (allocation review, attribution,
 // Behavior candidate drafting) the board stopped refiring after 3 failed calls. Retry fires it again (3 more
 // tries); Dismiss closes it for good. Sits next to the judgement tier those calls run on; hidden while
@@ -1394,7 +1398,7 @@ function HaltedRefiresCard({ rows, say, onChanged }: {
           ))}
         </React.Fragment>
       ) : (
-        <FieldRow label="refires" kind="unset" unsetLabel="halted refires unavailable" />
+        <FieldRow label="refires" kind="unset" unsetLabel={haltedRefiresUnavailable} />
       )}
     </Card>
   );
@@ -1420,7 +1424,7 @@ function ResponseFloorsCard({ rows }: { rows: WireContract['GET /api/settings/re
           ))}
         </React.Fragment>
       ) : (
-        <FieldRow label="reads" kind="unset" unsetLabel="cut reads unavailable" />
+        <FieldRow label="reads" kind="unset" unsetLabel={cutReadsUnavailable} />
       )}
     </Card>
   );
@@ -3083,8 +3087,8 @@ function SettingsScreen({ say, memoryFocus, registerLeaveGuard }: {
     const floors = responseFloors?.length ?? 0;
     const halted = haltedRefires?.length ?? 0;
     const boardFlags = [
-      responseFloorsFailed ? 'cut reads unavailable' : floors > 0 ? `${floors} read${floors === 1 ? '' : 's'} cut` : null,
-      haltedRefiresFailed ? 'halted refires unavailable' : halted > 0 ? `${halted} halted refire${halted === 1 ? '' : 's'}` : null,
+      responseFloorsFailed ? cutReadsUnavailable : floors > 0 ? `${floors} read${floors === 1 ? '' : 's'} cut` : null,
+      haltedRefiresFailed ? haltedRefiresUnavailable : halted > 0 ? `${halted} halted refire${halted === 1 ? '' : 's'}` : null,
     ].filter((part) => part !== null);
     const rows: { key: string; label: string; summary: string; alert?: boolean }[] = [
       {
