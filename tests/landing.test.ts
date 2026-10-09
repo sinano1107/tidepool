@@ -15,6 +15,7 @@ import { type AuthorityProfile, type MergeDial, REVIEWER_AUTHORITY_PROFILE, Unkn
 import {
   answerQuestion,
   completeTask,
+  editTask,
   getTask,
   listBoard,
   recordPrOpened,
@@ -70,9 +71,9 @@ function recordPrOpenedViaWorker(
   prNumber: number,
   workerId: string,
   now: Date,
-  { authority }: { authority?: Parameters<typeof recordPrOpened>[5] } = {},
+  { authority, isProtected }: { authority?: Parameters<typeof recordPrOpened>[5]; isProtected?: boolean } = {},
 ): void {
-  recordPrOpened(db, task, prNumber, workerId, now, authority, undefined, "worker");
+  recordPrOpened(db, task, prNumber, workerId, now, authority, isProtected, "worker");
 }
 
 function promotionFailures(board: Db, taskId: string) {
@@ -1207,6 +1208,81 @@ function mergeQuestions(db: Db) {
       };
     });
 }
+
+// 着地の面(question)の理由 3 つは、question 本文の違いだけで区別される。本文を逐語で釘付けする。
+it("PR を開いた時点で question 面に倒れた理由は、保護・ダイヤル・risk のそれぞれの本文で merge question に残る", async () => {
+  const { db, clock } = await openBoard();
+  recordPrOpenedViaWorker(db, landingWork(db, clock), 1, "worker", clock.now(), {
+    authority: { merge: "auto_if_ci_green" },
+    isProtected: true,
+  });
+  recordPrOpenedViaWorker(db, landingWork(db, clock), 2, "worker", clock.now(), {
+    authority: { merge: "escalate" },
+  });
+  const risky = registerTask(
+    db,
+    {
+      type: "work",
+      title: "ship",
+      purpose: "ship an agreed change",
+      completion_criteria: "the change is ready",
+      risk_flag: true,
+    },
+    clock.now(),
+    ...HUMAN_WEBUI,
+  );
+  recordPrOpenedViaWorker(db, risky, 3, "worker", clock.now(), {
+    authority: { merge: "auto_if_ci_green" },
+  });
+
+  expect(mergeQuestions(db).map(({ pr, purpose }) => ({ pr, purpose }))).toEqual([
+    {
+      pr: 1,
+      purpose:
+        '"ship" completed and opened PR #1 against a protected workspace — always needs a human ' +
+        "merge, regardless of the merge dial. Merge it now?",
+    },
+    { pr: 2, purpose: '"ship" completed and opened PR #2. Merge it now?' },
+    {
+      pr: 3,
+      purpose:
+        '"ship" completed and opened PR #3, but carries risk — auto_if_ci_green never auto-merges ' +
+        "a risky task. Merge it now?",
+    },
+  ]);
+});
+
+it("キュー投入の後に risk が付いた PR は、CI 緑でも merge されずキューを外れ、盤面の名義の merge question になる", async () => {
+  const workspace = await makeWorkspace("landing-risk-after-queue");
+  const { db, clock } = await openBoard();
+  const github = new FakeGitHubClient();
+  const work = queueAutoMerge(db, clock, 1);
+  editTask(db, getTask(db, work.id)!, { risk_flag: true }, clock.now(), "webui");
+  const landing = createLanding({
+    defaultAgentName: "tako",
+    db,
+    clock,
+    workspace,
+    github,
+    resolveAuthority: () => profile("auto_if_ci_green"),
+  });
+
+  await landing.tick("auto_merge", clock.now());
+  await landing.tick("auto_merge", clock.now());
+
+  expect(github.merged).toEqual([]);
+  expect(mergeQuestions(db)).toEqual([
+    {
+      pr: 1,
+      registrant: [BOARD_WORKER_ID, "board"],
+      recommendation: "merge",
+      purpose:
+        '"ship"\'s PR #1 was queued for auto_if_ci_green auto-merge, but its landing surface ' +
+        "changed after it was queued: the task now carries risk, and auto_if_ci_green never " +
+        "auto-merges a risky task. Merge it now?",
+    },
+  ]);
+});
 
 it("キュー投入の後にダイヤルが escalate へ取り下げられた PR は、CI 緑でも merge されずキューを外れ、盤面の名義の merge question になる", async () => {
   const workspace = await makeWorkspace("landing-withdrawn-to-escalate");
