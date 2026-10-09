@@ -50,6 +50,52 @@ export function parseTableRowValue(value: string): { provider: Provider; model: 
   return { provider: value.slice(0, at) as Provider, model: value.slice(at + 1) };
 }
 
+/** 行の effort の Quarantine の値(ADR 0218 決定2): `provider/model/effort`。Provider と effort(閉じた5値、ADR 0216)は
+ *  `/` を含まないので、最初と最後の `/` で割れば model id に `/` があっても組は一意に戻る。 */
+export function tableRowEffortValue(provider: Provider, model: string, effort: string): string {
+  return `${tableRowValue(provider, model)}/${effort}`;
+}
+
+export function parseTableRowEffortValue(value: string): { provider: Provider; model: string; effort: string } {
+  const at = value.lastIndexOf("/");
+  return { ...parseTableRowValue(value.slice(0, at)), effort: value.slice(at + 1) };
+}
+
+/** 行の effort の Quarantine の文面は契機ごとに組む(#1655: 起動時の照合が2つ目の契機として足される)。
+ *  原因は断言しない(ADR 0184 決定1)。 */
+const TABLE_ROW_EFFORT_PROSE = {
+  codexModelList: (row: string, reason: string): QuarantineProse =>
+    rowQuarantineProse(
+      row,
+      `${reason}. This board's model list does not advertise this effort for this model — with this Codex CLI ` +
+      "version and this account. The board does not know why. This row is out of pickup and Board calls while " +
+      "this stands; other rows keep running, including this model's rows at other efforts.\n\n" +
+      "Repair one of two ways:\n\n" +
+      "1. Fix the table: in the settings tab, change this row's effort or delete the row. " +
+      "This question then closes on its own.\n" +
+      "2. If the effort is right, update tidepool or restore the account, then answer — the board reads the model " +
+      "list again and accepts the answer only if it advertises this effort for this model.",
+    ),
+};
+
+/** 行の Quarantine(model ごと・effort ごと)の question の形。違うのは本文だけ。 */
+function rowQuarantineProse(row: string, purpose: string): QuarantineProse {
+  return {
+    title: `execution-setting row ${row} cannot run on this board`,
+    purpose,
+    completion_criteria: `${row} can run on this board again`,
+    question: [
+      {
+        title: `Can ${row} run again?`,
+        options: ["the row can run again"],
+        recommendation: "the row can run again",
+      },
+    ],
+  };
+}
+
+export type TableRowEffortTrigger = keyof typeof TABLE_ROW_EFFORT_PROSE;
+
 /** 表の並びは盤面全体の停止の列挙と同じ(containment → failedTeardown →
  *  registryReachability)で、資源単位の種類がその後に続く。 */
 export const QUARANTINES = [
@@ -185,7 +231,7 @@ export const QUARANTINES = [
     // 入れない: 鍵は (provider, model) で、別の原因の2度目の観測は再発火だけで文面は最初の原因のまま
     kind: "tableRow",
     scope: "row",
-    prose: (value: string | null, reason: string, refusalCause?: RowRefusalCause): QuarantineProse => {
+    prose: (value: string | null, reason: string, refusalCause?: RowRefusalCause | TableRowEffortTrigger): QuarantineProse => {
       const { provider, model } = parseTableRowValue(value!);
       const row = `${provider} / ${model}`;
       const [why, keepRow] =
@@ -200,23 +246,24 @@ export const QUARANTINES = [
                 "with this CLI version and this account. The board does not know why.",
               "If the model id is right, update the CLI or restore the account, then answer",
             ];
-      return {
-        title: `execution-setting row ${row} cannot run on this board`,
-        purpose:
-          `${reason}. ${why} This row is out of pickup and Board calls while this stands; ` +
+      return rowQuarantineProse(
+        row,
+        `${reason}. ${why} This row is out of pickup and Board calls while this stands; ` +
           "other rows keep running.\n\nRepair one of two ways:\n\n" +
           "1. Fix the table: in the settings tab, change this row's model or delete the row. " +
           "This question then closes on its own.\n" +
           `2. ${keepRow} — the board checks this model id again before it accepts the answer.`,
-        completion_criteria: `${row} can run on this board again`,
-        question: [
-          {
-            title: `Can ${row} run again?`,
-            options: ["the row can run again"],
-            recommendation: "the row can run again",
-          },
-        ],
-      };
+      );
+    },
+  },
+  {
+    // 行の effort の Quarantine(ADR 0218 決定2)。値は `tableRowEffortValue` の綴りで、資源の単位は行
+    kind: "tableRowEffort",
+    scope: "row",
+    prose: (value: string | null, reason: string, cause?: RowRefusalCause | TableRowEffortTrigger): QuarantineProse => {
+      const { provider, model, effort } = parseTableRowEffortValue(value!);
+      const trigger = (cause ?? "codexModelList") as TableRowEffortTrigger;
+      return TABLE_ROW_EFFORT_PROSE[trigger](`${provider} / ${model} / ${effort}`, reason);
     },
   },
 ] as const satisfies ReadonlyArray<{
@@ -230,8 +277,8 @@ export const QUARANTINES = [
   /** entry 経路(ADR 0110 決定3)で値が外す Provider —— 「その Provider では走れない」
    *  種類だけが持つ。agent 名ではなく entry を外すので `QuarantineResolvers` とは別の写像。 */
   excludesProviders?: (values: string[]) => Provider[];
-  /** `refusalCause` は行の拒否の証拠の種類で、`tableRow` だけが読む。 */
-  prose: (value: string | null, reason: string, refusalCause?: RowRefusalCause) => QuarantineProse;
+  /** `cause` は `tableRow` には行の拒否の証拠の種類、`tableRowEffort` には契機。ほかの種類は読まない。 */
+  prose: (value: string | null, reason: string, cause?: RowRefusalCause | TableRowEffortTrigger) => QuarantineProse;
 }>;
 
 export type QuarantineKind = (typeof QUARANTINES)[number]["kind"];
@@ -307,14 +354,14 @@ export function openQuarantineQuestions(db: Db, kind: QuarantineKind): Map<strin
 }
 
 /** 唯一の登録口。鍵が開いていれば既存の question に `quarantine_refired` を追記する
- *  だけで、それ以外は何もしない(1鍵につき確認は最大1枚)。`refusalCause` は文面へ渡す行の拒否の証拠の種類。 */
+ *  だけで、それ以外は何もしない(1鍵につき確認は最大1枚)。`cause` は文面へ渡す行の拒否の証拠の種類か契機。 */
 export function registerQuarantine(
   db: Db,
   kind: QuarantineKind,
   value: string | null,
   reason: string,
   now: Date,
-  refusalCause?: RowRefusalCause,
+  cause?: RowRefusalCause | TableRowEffortTrigger,
 ): void {
   const existing = openQuarantineQuestion(db, kind, value);
   if (existing) {
@@ -328,7 +375,7 @@ export function registerQuarantine(
     return;
   }
   const row = QUARANTINES.find((r) => r.kind === kind)!;
-  const { question, ...prose } = row.prose(value, reason, refusalCause);
+  const { question, ...prose } = row.prose(value, reason, cause);
   registerTask(
     db,
     {

@@ -71,8 +71,8 @@ export interface BoardTask extends QueueTask {
     tier?: string | { name: string; description: string; position: number };
     pin?: { tier: string } | { promoted: boolean } | { description: string } | { row: { tier: string } };
   } | null;
-  /** 確認 question の Quarantine の種別(src/quarantine.ts の QuarantineKind)。行の Quarantine(`tableRow`)の question だけが
-   *  settings タブを開くボタンを持つ(ADR 0184 決定6)。 */
+  /** 確認 question の Quarantine の種別(src/quarantine.ts の QuarantineKind)。行の Quarantine(`tableRow` と effort ごとの
+   *  `tableRowEffort`)の question だけが settings タブを開くボタンを持つ(ADR 0184 決定6 / ADR 0218 決定2)。 */
   question_quarantine_kind: string | null;
 }
 

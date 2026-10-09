@@ -28,7 +28,7 @@ import { type Landing, type LandingVerdict, landingBlock } from "./landing.js";
 import { approveMemoryProposal, humanEntryInput, listMemoryEntries, type MemoryAmendment, movedTail, parseMemoryAmendment, rejectMemoryProposal } from "./memory.js";
 import { whyNotPositiveInteger } from "./positive-integer.js";
 import type { Provider } from "./provider.js";
-import { parseTableRowValue, type QuarantineChecks, type QuarantineKind, type QuarantineResolvers, quarantineStops } from "./quarantine.js";
+import { parseTableRowEffortValue, parseTableRowValue, type QuarantineChecks, type QuarantineKind, type QuarantineResolvers, quarantineStops } from "./quarantine.js";
 import type { Harness, RegistryReachabilityCheck } from "./registry.js";
 import { RegistryFetchFailedError, RegistryPushFailedError } from "./registry-write.js";
 import { parseGitHubRepo, repairRepoAccess } from "./repo-access.js";
@@ -484,6 +484,20 @@ export interface QuarantineCheckDeps {
  *  回答は拒まれる —— 検証できないまま受理する経路は無い。 */
 export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
   const { containment, registryReachability, teardownQuarantine, providerCliAuth, modelProbes, clock, harnessContainment } = deps;
+  // modelProbes / clock は下の `modelProbes && clock` の内側でだけ呼ぶので、絞った型で受け取る
+  const recheckRow = async (
+    presentProbes: Partial<Record<Provider, ModelProbe>>,
+    presentClock: Clock,
+    { provider, model, effort }: { provider: Provider; model: string; effort?: string },
+  ) => {
+    const row = [provider, model, effort].filter(Boolean).join(" / ");
+    const probe = presentProbes[provider];
+    if (!probe) throw new DomainError(`this board cannot verify that ${row} runs`);
+    const result = await probe(model, effort);
+    if (result.status === "runs") return;
+    if (result.status === "unauthorized") quarantineCliAuthForProvider(deps.db, provider, presentClock.now());
+    throw new DomainError(`${row} still cannot run: ${result.reason}`);
+  };
   return {
     // resolve the named workspace fresh, then verify both its Git tree and its
     // separation from the board's own state
@@ -584,15 +598,9 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
     // ADR 0184 決定5: その id で最小の1ターン。通った(予算上限で止まった = ターンは走った、を含む)
     // ときだけ受理し、401 は Provider 認証の経路に落としてから拒む
     ...(modelProbes && clock && {
-      tableRow: async (value) => {
-        const { provider, model } = parseTableRowValue(value!);
-        const probe = modelProbes[provider];
-        if (!probe) throw new DomainError(`this board cannot verify that ${provider} / ${model} runs`);
-        const result = await probe(model);
-        if (result.status === "runs") return;
-        if (result.status === "unauthorized") quarantineCliAuthForProvider(deps.db, provider, clock.now());
-        throw new DomainError(`${provider} / ${model} still cannot run: ${result.reason}`);
-      },
+      tableRow: (value) => recheckRow(modelProbes, clock, parseTableRowValue(value!)),
+      // ADR 0218 決定2: effort ごとの行は、その effort でも検査し直す(Codex は一覧の読み直し)
+      tableRowEffort: (value) => recheckRow(modelProbes, clock, parseTableRowEffortValue(value!)),
     }),
     ...(harnessContainment && {
       harnessContainment: async (value) => {

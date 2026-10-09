@@ -15,7 +15,7 @@ import {
   warnCliAuthExpiry,
 } from "./cli-auth.js";
 import type { Clock } from "./clock.js";
-import { type CodexAppServerProbe, unlistedModelReason } from "./codex-app-server.js";
+import { type CodexAppServerProbe, whyRowUnlisted } from "./codex-app-server.js";
 import {
   type ContainmentCapability,
   checkHumanSurfaceRefusesAnonymous,
@@ -586,14 +586,13 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
   const openaiUsage = options.openaiUsage;
   const modelProbes: Partial<Record<Provider, ModelProbe>> | undefined = openaiUsage
     ? {
-        openai: async (model) => {
+        openai: async (model, effort) => {
           const result = await openaiUsage(options.clock.now());
           if (result.status !== "observed") {
             return { status: result.status === "unauthorized" ? "unauthorized" : "unknown", reason: result.reason };
           }
-          return result.models.includes(model)
-            ? { status: "runs" }
-            : { status: "refused", reason: unlistedModelReason(result.cliVersion) };
+          const unlisted = whyRowUnlisted(result, model, effort);
+          return unlisted ? { status: "refused", reason: unlisted.reason } : { status: "runs" };
         },
         ...options.modelProbes,
       }
