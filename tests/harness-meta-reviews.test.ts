@@ -22,12 +22,12 @@ it("work が slot を握っていても completeMetaReviews は open な meta-re
   expect((await list()).find((x) => x.id === work.id).status).toBe("in_progress");
 
   expect((await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "priority", value: "cost" })).status).toBe(200);
-  const open = (await list()).filter((x) => x.meta_review_subject && x.status === "todo").map((x) => x.id as string);
-  expect(open.length).toBeGreaterThan(0);
+  const metaReviews = (await list()).filter((x) => x.meta_review_subject && x.status === "todo").map((x) => x.id as string);
+  expect(metaReviews.length).toBeGreaterThan(0);
 
   await completeMetaReviews(t);
 
   const status = async (id: string) => (await api(t.baseUrl, "GET", `/api/tasks/${id}`)).json.status;
-  for (const id of open) expect(await status(id)).toBe("done");
+  for (const id of metaReviews) expect(await status(id)).toBe("done");
   expect(await status(work.id)).toBe("done");
 });
