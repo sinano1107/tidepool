@@ -428,6 +428,10 @@ export function proposeRoutingChange(
     const pin = table.find((row) => matchesRowKey(row, key));
     if (!pin) throw new DomainError(`the execution-setting table has no row for ${rowName(key)}`);
     const row = { provider: pin.provider, model: pin.model, effort: pin.effort };
+    // 現在値と同じ欄を名指す change は欄を落とさず丸ごと拒む(issue #1666 / ADR 0218 決定7 と同じく拒否の文を meta-review に返す)。
+    // 承認の修正値と共有する parseRoutingRowChange ではなくここで比べる。段は名前でなく id で、effort は null(「無い」)も1つの値として比べる。
+    if (change.tier !== undefined && tierIdOf(db, change.tier) === tierIdOf(db, pin.tier)) throw new DomainError(`the row ${rowName(pin)} is already in tier ${pin.tier}; name a different tier or drop tier from the change`);
+    if (change.effort !== undefined && change.effort === pin.effort) throw new DomainError(`the row ${rowName(pin)} already has effort ${pin.effort ?? "none"}; name a different effort or drop effort from the change`);
     // 承認の修正値は回答時に行を書く扉が同じ検査で拒む
     assertRowFits(table, composeRoutingRow({ kind: "routing", op: "row", row, change, pin }), row);
     const { tier, ...rest } = change;

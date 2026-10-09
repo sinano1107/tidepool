@@ -984,6 +984,20 @@ it("語彙の外の effort への行の提案は作る時点で拒まれ、quest
   expect(listChildren(db, review)).toEqual([]);
 });
 
+it("行の提案は、名指した欄のどれかが行の現在値と同じなら作る時点で拒まれ、question は立たない —— effort(5値・「無い」)、段、欄の一部だけが同じ場合", () => {
+  const db = boardWithOpusMax();
+  const review = routingReviewOf(db, new Date());
+  const propose = (row: { provider: string; model: string; effort: string | null }, change: object) =>
+    proposeRoutingChange(db, review, { op: "row", row, change, rationale: "r" }, "auditor", new Date());
+  expect(() => propose(opusKey("max"), { effort: "max" })).toThrow(/already has effort max/);
+  expect(() => propose(opusKey("high"), { tier: "standard" })).toThrow(/already in tier standard/);
+  expect(() => propose(opusKey("high"), { tier: "standard", effort: "xhigh" })).toThrow(/already in tier standard/);
+  expect(() => propose(opusKey("high"), { tier: "frontier", effort: "high" })).toThrow(/already has effort high/);
+  applyExecutionSettingsChange(db, { setting: "row", row: haiku45 }, "webui", new Date());
+  expect(() => propose(haiku45Key, { effort: null })).toThrow(/already has effort none/);
+  expect(listChildren(db, review)).toEqual([]);
+});
+
 it("承認に添える語彙の外の effort の修正値は拒まれ、行は変わらず question は open のまま(ADR 0216 決定3)", async () => {
   const db = boardWithOpusMax();
   const { question_id, answer } = proposeOnOpus(db, "max", { effort: "xhigh" });
