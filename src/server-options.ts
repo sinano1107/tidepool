@@ -550,7 +550,7 @@ function authorityResolver(
 /** Whether an agent name is currently registered (ADR 0012 / issue #36), read
  *  fresh against the registry — one half of an agent quarantine Confirmation
  *  question's clearance check (api.ts). Without a registry, no name is ever
- *  "back" — only "no more todo tasks depend on it" can clear it. */
+ *  "back" — only "no more unsettled tasks depend on it" can clear it. */
 function agentRegisteredChecker(board: BoardComposition): ((name: string) => boolean) | undefined {
   const { registryDir } = board;
   if (!registryDir) return undefined;

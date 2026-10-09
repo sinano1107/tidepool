@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { type AuthorityProfile, InvalidAgentDefinitionError, UnknownAgentError } from "../src/registry.js";
-import { api, bootTidepool, HOUR, mcpClient, quarantineQuestion, questions, type Tidepool } from "./harness.js";
+import { api, bootTidepool, HOUR, mcpClient, questions, type Tidepool } from "./harness.js";
 
 let t: Tidepool;
 afterEach(() => t?.stop());
@@ -132,7 +132,9 @@ async function expectRefusedAndQuarantined(t: Tidepool, taskId: string, verb: st
   expect(refused.isError).toBe(true);
   expect(refused.content[0].text).toContain("do not need to escalate");
 
-  expect((await questions(t)).map((q) => q.id)).toEqual([quarantineQuestion(t.db, "agent", "deckhand")?.id]);
+  expect((await questions(t)).map((q) => [q.question_quarantine_kind, q.question_quarantine_value])).toEqual([
+    ["agent", "deckhand"],
+  ]);
 
   const escalated = await call(t, taskId, "escalate", {
     context: "the plan needs a human call",

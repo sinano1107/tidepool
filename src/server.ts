@@ -250,7 +250,7 @@ export interface ServerOptions {
   /** Whether an agent name is currently registered (ADR 0012 / issue #36),
    *  read fresh against the registry by the caller — one half of an agent
    *  quarantine Confirmation question's clearance check (api.ts). Absent →
-   *  only "no more todo tasks depend on it" can ever clear it. */
+   *  only "no more unsettled tasks depend on it" can ever clear it. */
   agentRegistered?: (name: string) => boolean;
   /** The Web Push-facing seam (issue #14): a question task's registration is
    *  promoted to an immediate push through here, outside quiet hours. Absent

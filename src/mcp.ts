@@ -210,7 +210,7 @@ function attributedWorkerId(deps: McpDeps, task: Task): string {
  *  resolves quarantines the agent name and refuses the verb with a domain
  *  error — neither unrestricted nor narrowest is guessed, and the slot stays
  *  (ADR 0224). */
-function attributedAuthority(deps: McpDeps, task: Task): AuthorityProfile | undefined {
+function attributedAuthorityOrQuarantine(deps: McpDeps, task: Task): AuthorityProfile | undefined {
   if (task.type === "review") return REVIEWER_AUTHORITY_PROFILE;
   try {
     return deps.resolveAuthority?.(task.assignee) ?? deps.authority;
@@ -532,7 +532,7 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
     },
     async () =>
       runVerb(deps, attributedTaskId, (task) => {
-        const authority = attributedAuthority(deps, task);
+        const authority = attributedAuthorityOrQuarantine(deps, task);
         const entries: RosterAgent[] = [...(deps.listAgents?.() ?? []), HUMAN_ROSTER_AGENT];
         return {
           agents: entries.map((entry) => ({
@@ -628,7 +628,7 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
           input,
           workerId,
           now,
-          attributedAuthority(deps, task),
+          attributedAuthorityOrQuarantine(deps, task),
           deps.isProtectedWorkspace,
           "worker",
         );
@@ -728,7 +728,7 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
           input,
           workerId,
           now,
-          attributedAuthority(deps, task),
+          attributedAuthorityOrQuarantine(deps, task),
           deps.isProtectedWorkspace,
           "worker",
         );

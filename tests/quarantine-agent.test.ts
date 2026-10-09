@@ -115,7 +115,7 @@ describe("verifyAgentRepaired", () => {
     expect(() => verifyAgentRepaired(db, "navigator", true)).not.toThrow();
   });
 
-  it("registry に復活していなくても、その名前宛ての todo タスクがもう存在しなければ解除を認める", () => {
+  it("registry に復活していなくても、その名前宛ての未決着タスクがもう存在しなければ解除を認める", () => {
     const db = openDb(":memory:");
     expect(() => verifyAgentRepaired(db, "navigator", false)).not.toThrow();
   });
