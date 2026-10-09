@@ -16,7 +16,9 @@ quarantine に落とし、解除の検査は registry で解決できること�
 2. **workspace の quarantine の解除は変えない。** agent 名の解除には「その名前に依存するものが無ければ通る」道があるが、
    workspace の quarantine は registry からの消失だけでなく、汚れたツリー・`.git` がディレクトリでない・盤面の状態パスと
    の重なり(ADR 0040 / ADR 0146)でも落ちる。それらはエントリが registry に残ったまま壊れている状態なので、依存の
-   消失で解除を通すと、壊れたままの workspace が解除される。決定1 の後は、扉を通した削除が quarantine を作らない。
+   消失で解除を通すと、壊れたままの workspace が解除される。決定1 の後は、キューにいる PR と門で止まった昇格について
+   は、扉を通した削除が quarantine を作らない(abandon 済みのタスクが別 workspace の付帯子の決着で問い直される経路は
+   数えの外で、#1729 に置く)。
 
 ## Considered options
 
