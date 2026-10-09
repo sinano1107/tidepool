@@ -262,7 +262,7 @@ export const QUARANTINES = [
           : [
               `The ${provider} provider refused the model id \`${model}\` on this board — ` +
                 "with this CLI version and this account. The board does not know why.",
-              "If the model id is right, update the CLI or restore the account, then answer",
+              "If the model id is right, update tidepool or restore the account, then answer",
             ];
       return rowQuarantineProse(
         row,
