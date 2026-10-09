@@ -450,3 +450,29 @@ it("短い文字列の欄ばかりで予算を超える封筒は、欄を全部�
 
   expect(packItems(first, "events", [], envelope)).toEqual({ ...envelope, events: [] });
 });
+
+it("封筒の横で先頭の item を切っても収まらないときは、最初の応答で封筒だけを返し、item はその後に封筒なしの切れで届く。next を追うとどの応答も予算以下で、各欄が逐語に戻り、後ろの item も届く(issue #1668)", () => {
+  const line = "潮".repeat(15_000); // 45,000 バイト
+  const [handoff, result] = ["h".repeat(30_000), "r".repeat(30_000)];
+  const cases = [
+    { item: { id: 2, line }, envelope: { purpose: "p".repeat(39_700) } },
+    { item: { id: 2, case: { handoff, result } }, envelope: { purpose: "p".repeat(39_500) } },
+  ];
+  for (const { item, envelope } of cases) {
+    const items = [item, { id: 1, line: "after" }];
+
+    const responses = followNext(items, envelope);
+
+    for (const response of responses) expect(bytesOf(response)).toBeLessThanOrEqual(RESPONSE_BUDGET_BYTES);
+    expect(responses[0]).toEqual({ ...envelope, events: [], next: expect.any(String), remaining: items.length });
+    // 切れの1つに、つないだ欄を戻すと item が逐語に戻る(切らない欄は切れごとに丸ごと載る)
+    const pieces = responses.filter((response) => response.partial);
+    const restored = structuredClone(pieces[0].events[0]);
+    for (const [field, text] of Object.entries(joinPieces(pieces, (piece) => piece.events[0]))) {
+      const path = field.split(".");
+      path.slice(0, -1).reduce((node, name) => node[name], restored)[path.at(-1)!] = text;
+    }
+    expect(restored).toEqual(item);
+    expect(responses.flatMap((response) => (response.partial ? [] : response.events))).toEqual([items[1]]);
+  }
+});
