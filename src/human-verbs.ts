@@ -484,6 +484,19 @@ export interface QuarantineCheckDeps {
  *  回答は拒まれる —— 検証できないまま受理する経路は無い。 */
 export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
   const { containment, registryReachability, teardownQuarantine, providerCliAuth, modelProbes, clock, harnessContainment } = deps;
+  const recheckRow = async (
+    probes: Partial<Record<Provider, ModelProbe>>,
+    rowClock: Clock,
+    { provider, model, effort }: { provider: Provider; model: string; effort?: string },
+  ) => {
+    const row = [provider, model, effort].filter(Boolean).join(" / ");
+    const probe = probes[provider];
+    if (!probe) throw new DomainError(`this board cannot verify that ${row} runs`);
+    const result = await probe(model, effort);
+    if (result.status === "runs") return;
+    if (result.status === "unauthorized") quarantineCliAuthForProvider(deps.db, provider, rowClock.now());
+    throw new DomainError(`${row} still cannot run: ${result.reason}`);
+  };
   return {
     // resolve the named workspace fresh, then verify both its Git tree and its
     // separation from the board's own state
@@ -584,25 +597,9 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
     // ADR 0184 決定5: その id で最小の1ターン。通った(予算上限で止まった = ターンは走った、を含む)
     // ときだけ受理し、401 は Provider 認証の経路に落としてから拒む
     ...(modelProbes && clock && {
-      tableRow: async (value) => {
-        const { provider, model } = parseTableRowValue(value!);
-        const probe = modelProbes[provider];
-        if (!probe) throw new DomainError(`this board cannot verify that ${provider} / ${model} runs`);
-        const result = await probe(model);
-        if (result.status === "runs") return;
-        if (result.status === "unauthorized") quarantineCliAuthForProvider(deps.db, provider, clock.now());
-        throw new DomainError(`${provider} / ${model} still cannot run: ${result.reason}`);
-      },
+      tableRow: (value) => recheckRow(modelProbes, clock, parseTableRowValue(value!)),
       // ADR 0218 決定2: effort ごとの行は、その effort でも検査し直す(Codex は一覧の読み直し)
-      tableRowEffort: async (value) => {
-        const { provider, model, effort } = parseTableRowEffortValue(value!);
-        const probe = modelProbes[provider];
-        if (!probe) throw new DomainError(`this board cannot verify that ${provider} / ${model} / ${effort} runs`);
-        const result = await probe(model, effort);
-        if (result.status === "runs") return;
-        if (result.status === "unauthorized") quarantineCliAuthForProvider(deps.db, provider, clock.now());
-        throw new DomainError(`${provider} / ${model} / ${effort} still cannot run: ${result.reason}`);
-      },
+      tableRowEffort: (value) => recheckRow(modelProbes, clock, parseTableRowEffortValue(value!)),
     }),
     ...(harnessContainment && {
       harnessContainment: async (value) => {
