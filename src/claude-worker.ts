@@ -348,12 +348,11 @@ export function checkAutoMemoryClosed(autoMemory: string | null): ContainmentCap
     available: false,
     reason:
       "this host's claude CLI loaded the host's auto-memory into a session the board closed it " +
-      `for: the init report's \`memory_paths\` carries \`auto\`: ${autoMemory}. The board sets ` +
-      "`autoMemoryEnabled: false` and pins `autoMemoryDirectory`, so an `auto` entry means the " +
-      "CLI no longer honors those settings — a MEMORY.md the board never wrote reaches the " +
-      "worker, and the worker can carry things to the next session past the board's Memory. " +
-      "Check the CLI version and the settings key names (`autoMemoryEnabled` / " +
-      "`autoMemoryDirectory`), then fix the settings or pin the CLI",
+      `for: the init report's \`memory_paths\` carries \`auto\`: ${autoMemory}. The board closes ` +
+      "auto-memory with session settings or `--safe-mode`, so an `auto` entry means the " +
+      "CLI no longer honors that closure — a MEMORY.md the board never wrote reaches the " +
+      "session. Check the CLI version and this call's flags or settings " +
+      "(`autoMemoryEnabled` / `autoMemoryDirectory`), then fix the invocation or pin the CLI",
   };
 }
 
