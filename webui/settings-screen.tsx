@@ -1367,37 +1367,35 @@ function HaltedRefiresCard({ rows, say, onChanged }: {
   };
   if (rows?.length === 0) return null;
   const muted = { margin: 0, fontSize: 'var(--text-xs)', color: 'var(--text-muted)' };
-  if (!rows) {
-    return (
-      <Card style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-        <span style={settingsCardLabel}>halted refires</span>
-        <FieldRow label="refires" kind="unset" unsetLabel="halted refires unavailable" />
-      </Card>
-    );
-  }
   return (
     <Card style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
       <span style={settingsCardLabel}>halted refires</span>
-      <p style={muted}>retrospective Board calls (allocation review, attribution, drafting) the board stopped retrying after 3 failed calls. retry to fire again, dismiss to never fire it.</p>
-      {rows.map((row) => (
-        <div key={`${row.refire}:${row.target}`} style={{ display: 'flex', flexDirection: 'column', gap: 4, borderTop: '1px solid var(--border-default)', paddingTop: 10 }}>
-          {row.refire === 'allocation' ? (
-            <p style={{ ...muted, fontFamily: 'var(--font-mono)' }}>allocation review · {row.review.title} · {row.task.title}</p>
-          ) : (
-            <React.Fragment>
-              <p style={{ ...muted, fontFamily: 'var(--font-mono)' }}>
-                {row.refire === 'draft' ? 'behavior draft' : `second-round attribution · objection #${row.target}`} · entry #{row.entry.id} · {row.task.title} · {row.cause ?? 'unattributed'} · {row.round}
-              </p>
-              <p style={{ margin: 0, fontSize: 'var(--text-sm)' }}>{row.entry.text}</p>
-            </React.Fragment>
-          )}
-          <p style={muted}>last failure {new Date(row.last_failure.at).toLocaleString()}: {row.last_failure.reason}</p>
-          <div style={{ display: 'flex', gap: 8 }}>
-            <Button variant="secondary" size="sm" disabled={busy} onClick={() => act(row, 'retry')}>Retry</Button>
-            <Button variant="ghost" size="sm" disabled={busy} onClick={() => act(row, 'dismiss')}>Dismiss</Button>
-          </div>
-        </div>
-      ))}
+      {rows ? (
+        <React.Fragment>
+          <p style={muted}>retrospective Board calls (allocation review, attribution, drafting) the board stopped retrying after 3 failed calls. retry to fire again, dismiss to never fire it.</p>
+          {rows.map((row) => (
+            <div key={`${row.refire}:${row.target}`} style={{ display: 'flex', flexDirection: 'column', gap: 4, borderTop: '1px solid var(--border-default)', paddingTop: 10 }}>
+              {row.refire === 'allocation' ? (
+                <p style={{ ...muted, fontFamily: 'var(--font-mono)' }}>allocation review · {row.review.title} · {row.task.title}</p>
+              ) : (
+                <React.Fragment>
+                  <p style={{ ...muted, fontFamily: 'var(--font-mono)' }}>
+                    {row.refire === 'draft' ? 'behavior draft' : `second-round attribution · objection #${row.target}`} · entry #{row.entry.id} · {row.task.title} · {row.cause ?? 'unattributed'} · {row.round}
+                  </p>
+                  <p style={{ margin: 0, fontSize: 'var(--text-sm)' }}>{row.entry.text}</p>
+                </React.Fragment>
+              )}
+              <p style={muted}>last failure {new Date(row.last_failure.at).toLocaleString()}: {row.last_failure.reason}</p>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <Button variant="secondary" size="sm" disabled={busy} onClick={() => act(row, 'retry')}>Retry</Button>
+                <Button variant="ghost" size="sm" disabled={busy} onClick={() => act(row, 'dismiss')}>Dismiss</Button>
+              </div>
+            </div>
+          ))}
+        </React.Fragment>
+      ) : (
+        <FieldRow label="refires" kind="unset" unsetLabel="halted refires unavailable" />
+      )}
     </Card>
   );
 }
@@ -1409,23 +1407,21 @@ function ResponseFloorsCard({ rows }: { rows: WireContract['GET /api/settings/re
   const { Card, FieldRow } = window.TidepoolDesignSystem_8a0ead;
   if (rows?.length === 0) return null;
   const muted = { margin: 0, fontSize: 'var(--text-xs)', color: 'var(--text-muted)' };
-  if (!rows) {
-    return (
-      <Card style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-        <span style={settingsCardLabel}>reads cut at the response budget</span>
-        <FieldRow label="reads" kind="unset" unsetLabel="cut reads unavailable" />
-      </Card>
-    );
-  }
   return (
     <Card style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
       <span style={settingsCardLabel}>reads cut at the response budget</span>
-      <p style={muted}>these reads returned more than the response budget, so the board cut the response and the reader got an incomplete body. this is a tidepool defect: report it so the read can be fixed.</p>
-      {rows.map((row) => (
-        <p key={`${row.surface}:${row.verb}`} style={{ ...muted, fontFamily: 'var(--font-mono)', borderTop: '1px solid var(--border-default)', paddingTop: 10 }}>
-          {row.surface} · {row.verb} · {row.count}× · up to {row.max_bytes} bytes · last {new Date(row.last_at).toLocaleString()}{row.last_task_id && ` · task ${row.last_task_id}`}
-        </p>
-      ))}
+      {rows ? (
+        <React.Fragment>
+          <p style={muted}>these reads returned more than the response budget, so the board cut the response and the reader got an incomplete body. this is a tidepool defect: report it so the read can be fixed.</p>
+          {rows.map((row) => (
+            <p key={`${row.surface}:${row.verb}`} style={{ ...muted, fontFamily: 'var(--font-mono)', borderTop: '1px solid var(--border-default)', paddingTop: 10 }}>
+              {row.surface} · {row.verb} · {row.count}× · up to {row.max_bytes} bytes · last {new Date(row.last_at).toLocaleString()}{row.last_task_id && ` · task ${row.last_task_id}`}
+            </p>
+          ))}
+        </React.Fragment>
+      ) : (
+        <FieldRow label="reads" kind="unset" unsetLabel="cut reads unavailable" />
+      )}
     </Card>
   );
 }
@@ -2823,7 +2819,6 @@ function SettingsScreen({ say, memoryFocus, registerLeaveGuard }: {
   const loadHaltedRefires = async () => {
     try {
       setHaltedRefires((await api('GET /api/settings/execution/halted-refires')).halted);
-      setHaltedRefiresFailed(false);
     } catch {
       setHaltedRefires(null);
       setHaltedRefiresFailed(true);
