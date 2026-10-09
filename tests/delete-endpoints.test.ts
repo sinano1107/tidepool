@@ -1,16 +1,26 @@
 import { afterEach, expect, it } from "vitest";
 import type { AgentDeletionReferences, DeleteAgentInput } from "../src/agent-create.js";
+import { registerPrPromotionFailureQuestion } from "../src/landing.js";
 import { UnknownAgentError } from "../src/registry.js";
 import {
   DeletionBlockedError,
   DeletionConfirmationRequiredError,
 } from "../src/registry-write.js";
+import { completeTask, registerTask } from "../src/tasks.js";
 import type {
   DeleteWorkspaceInput,
   WorkspaceDeletionReferences,
 } from "../src/workspace-create.js";
 import { RegistrySelfDeleteError } from "../src/workspace-create.js";
-import { AUTH_HEADERS, api, bootTidepool, registerWork, type Tidepool } from "./harness.js";
+import {
+  AUTH_HEADERS,
+  api,
+  bootTidepool,
+  FULL_HANDOFF,
+  HUMAN_WEBUI,
+  registerWork,
+  type Tidepool,
+} from "./harness.js";
 
 let t: Tidepool;
 afterEach(() => t?.stop());
@@ -142,6 +152,30 @@ it("DELETE /api/workspaces/:name は未決着タスクの件数と既定 workspa
   expect(res.json).toEqual({ checkout: "/home/pi/work/lagoon" });
   expect(calls[0]?.[0]).toEqual({ name: "lagoon", confirm: true });
   expect(calls[0]?.[1].unsettledTaskCount).toBe(1);
+});
+
+it("DELETE /api/workspaces/:name はその workspace で着地を待つ完了タスクの件数を渡す(ADR 0226)", async () => {
+  const refs: WorkspaceDeletionReferences[] = [];
+  t = await bootTidepool({
+    workspaceAdmin: {
+      delete: async (_input, references) => {
+        refs.push(references);
+        return "/home/pi/work/lagoon";
+      },
+    },
+  });
+  const now = new Date();
+  const task = registerTask(
+    t.db,
+    { type: "work", title: "ship", purpose: "p", completion_criteria: "c", assignee: "tako", workspace: "lagoon" },
+    now,
+    ...HUMAN_WEBUI,
+  );
+  registerPrPromotionFailureQuestion(t.db, completeTask(t.db, task, FULL_HANDOFF, "tako", now, "worker"), "boom", now);
+
+  await api(t.baseUrl, "DELETE", "/api/workspaces/lagoon", { confirm: true });
+
+  expect(refs[0]?.awaitingLandingTaskCount).toBe(1);
 });
 
 it("DELETE /api/workspaces/:name は盤面自身の registry clone を 403 で拒む", async () => {

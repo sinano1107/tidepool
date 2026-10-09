@@ -106,12 +106,25 @@ export function countTasksAwaitingLanding(
   auditorName?: string,
 ): number {
   const fallback = typeAwareDefaultAgentSql("t.type", "@defaultAgentName", "@auditorName");
+  return countAwaitingLanding(db, `COALESCE(t.assignee, ${fallback}) = @agentName`, {
+    agentName,
+    defaultAgentName: defaultAgentName ?? null,
+    auditorName: auditorName ?? null,
+  });
+}
+
+/** 同じ集合を、タスクの `workspace` の参照で数える —— workspace の削除の扉(ADR 0226)。 */
+export function countTasksAwaitingLandingInWorkspace(db: Db, workspaceName: string): number {
+  return countAwaitingLanding(db, "t.workspace = @workspaceName", { workspaceName });
+}
+
+function countAwaitingLanding(db: Db, referenceSql: string, params: Record<string, string | null>): number {
   const rows = db
     .prepare(
       `SELECT t.id, EXISTS (SELECT 1 FROM pending_auto_merges WHERE task_id = t.id) AS queued
          FROM tasks t
         WHERE t.type = 'work' AND t.status = 'done'
-          AND COALESCE(t.assignee, ${fallback}) = @agentName
+          AND ${referenceSql}
           AND (queued
                OR EXISTS (SELECT 1 FROM tasks q
                            WHERE q.question_pending_pr_promotion_task_id = t.id AND q.status = 'todo')
@@ -122,12 +135,7 @@ export function countTasksAwaitingLanding(
                                     WHERE q.question_pending_pr_promotion_task_id = t.id
                                       AND json_extract(a.payload, '$.answers[0].answer') = @abandon)))`,
     )
-    .all({
-      agentName,
-      defaultAgentName: defaultAgentName ?? null,
-      auditorName: auditorName ?? null,
-      abandon: PR_PROMOTION_FAILURE_OPTIONS[1],
-    }) as Array<{ id: string; queued: number }>;
+    .all({ ...params, abandon: PR_PROMOTION_FAILURE_OPTIONS[1] }) as Array<{ id: string; queued: number }>;
   return rows.filter((row) => row.queued === 1 || !taskHasLanded(db, row.id)).length;
 }
 
