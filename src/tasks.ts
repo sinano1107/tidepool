@@ -52,9 +52,9 @@ export type TaskType = "work" | "question" | "review";
 
 /** 盤面の解決(`presentTask` / `boardRows`)を通っていない値の、型だけの目印(ADR 0220)。実行時には存在しない。
  *  `Task` と `TaskRow` が持ち、解決の出力(`BoardRow` / `BoardTask`)だけが `Omit` で外す。 */
-export declare const storedRow: unique symbol;
+declare const storedRow: unique symbol;
 /** 値のどこか(配列の中・入れ子の欄)に目印があれば true。`keyof` で見るので spread・キャストでも残る。 */
-export type StoredIn<T> = T extends readonly (infer U)[]
+type StoredIn<T> = T extends readonly (infer U)[]
   ? StoredIn<U>
   : T extends object
     ? typeof storedRow extends keyof T
