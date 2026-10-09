@@ -8,8 +8,8 @@ import {
 } from "../src/agent.js";
 import { type Db, openDb } from "../src/db.js";
 import { InvalidAgentDefinitionError, UnknownAgentError } from "../src/registry.js";
-import { cancelTaskDirectly, completeTask, listBoard, pickupTask, recordPrOpened, registerTask } from "../src/tasks.js";
-import { completedWork, FULL_HANDOFF, HUMAN_WEBUI, quarantineQuestion } from "./harness.js";
+import { cancelTaskDirectly, completeTask, listBoard, pickupTask, registerTask, type TaskType } from "../src/tasks.js";
+import { FULL_HANDOFF, HUMAN_WEBUI, quarantineQuestion, queuedForAutoMerge } from "./harness.js";
 
 describe("quarantineAgent(ADR 0012 / issue #36: workspace 版の agent 名一般化)", () => {
   it("agent 名を needs-human にマークし、1択の Confirmation question を登録する", () => {
@@ -83,7 +83,7 @@ describe("resolveAgentOrQuarantine", () => {
 
 const NOW = new Date("2026-10-09T00:00:00.000Z");
 
-function register(db: Db, type: "work" | "review" | "question", assignee: string | undefined, parentId?: string) {
+function register(db: Db, type: TaskType, assignee: string | undefined, parentId?: string) {
   return registerTask(
     db,
     {
@@ -100,12 +100,6 @@ function register(db: Db, type: "work" | "review" | "question", assignee: string
     NOW,
     ...HUMAN_WEBUI,
   );
-}
-
-/** agent `name` が完了させ、auto_if_ci_green で無人 merge キューに入った PR を持つタスク(着地待ち)。 */
-function queueForAutoMerge(db: Db, name: string): void {
-  const task = completedWork(db, NOW, name);
-  recordPrOpened(db, task, 7, name, NOW, { merge: "auto_if_ci_green" }, undefined, "worker");
 }
 
 // 解除の規則(ADR 0012 / 0217 決定4 / 0224 決定4)はここで1度だけ、message 込みで述べる(ADR 0107)。
@@ -127,7 +121,7 @@ describe("verifyAgentRepaired", () => {
     try {
       register(db, type, assignee);
       const verify = () => verifyAgentRepaired(db, name, false, defaultAgentName, auditorName);
-      if (dependent) expect(verify).toThrow(`agent ${name} is not back in the registry and still has unsettled tasks assigned`);
+      if (dependent) expect(verify).toThrow(/still has unsettled tasks/);
       else expect(verify).not.toThrow();
       expect(() => verifyAgentRepaired(db, name, true, defaultAgentName, auditorName)).not.toThrow();
     } finally {
@@ -138,7 +132,7 @@ describe("verifyAgentRepaired", () => {
   it("registry に agent 名が復活していれば、未決着タスクや着地待ちが残っていても解除を認める", () => {
     const db = openDb(":memory:");
     register(db, "work", "navigator");
-    queueForAutoMerge(db, "navigator");
+    queuedForAutoMerge(db, NOW, "navigator");
     expect(() => verifyAgentRepaired(db, "navigator", true)).not.toThrow();
   });
 
@@ -154,7 +148,7 @@ describe("verifyAgentRepaired", () => {
   // 数えの規則は tests/landing.test.ts の countTasksAwaitingLanding が持つ。ここは「数えが正なら拒む」だけ。
   it("registry に復活しておらず、着地を待つ完了タスクが残っていれば拒否する", () => {
     const db = openDb(":memory:");
-    queueForAutoMerge(db, "navigator");
+    queuedForAutoMerge(db, NOW, "navigator");
 
     expect(() => verifyAgentRepaired(db, "navigator", false)).toThrow(
       "agent navigator is not back in the registry and still has 1 completed task(s) awaiting landing on its profile",

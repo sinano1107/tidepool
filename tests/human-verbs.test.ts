@@ -18,7 +18,6 @@ import {
   getTask,
   listBoard,
   presentTask,
-  recordPrOpened,
   registerMergeQuestion,
   registerTask,
   type Task,
@@ -27,7 +26,12 @@ import { commitTriage, startTriage } from "../src/triage.js";
 import { BOARD_WORKER_ID, HUMAN_WORKER_ID } from "../src/worker-id.js";
 import { quarantineWorkspace, UnknownWorkspaceError } from "../src/workspace.js";
 import { FakeClock, FakeDraftClient, FakeGitHubClient, unusedLanding } from "./fakes.js";
-import { completedWork, decomposeTaskViaWorker, HUMAN_WEBUI, humanDecomposeTaskViaWebui } from "./harness.js";
+import {
+  decomposeTaskViaWorker,
+  HUMAN_WEBUI,
+  humanDecomposeTaskViaWebui,
+  queuedForAutoMerge,
+} from "./harness.js";
 
 const NOW = new Date("2026-08-06T00:00:00.000Z");
 
@@ -677,18 +681,11 @@ it("agent quarantine の回答は解除検査が拒むと DomainError になり�
   });
 });
 
-/** その agent の auto_if_ci_green で無人 merge キューに入った PR #7 を持つ完了タスク。 */
-function queuedForAutoMerge(db: Db, agentName: string): Task {
-  const task = completedWork(db, NOW, agentName);
-  recordPrOpened(db, task, 7, agentName, NOW, { merge: "auto_if_ci_green" }, undefined, "worker");
-  return task;
-}
-
 const PRODUCT = { name: "product", path: "/workspaces/product" };
 
-it("GitHub の無い盤面の agent quarantine の解除検査は、観測せずに無人 merge キューの PR を着地待ちに数えて拒む", async () => {
+it("GitHub の無い盤面の agent quarantine の解除検査は、無人 merge キューの PR を観測せずに拒む", async () => {
   db = openDb(":memory:");
-  const queued = queuedForAutoMerge(db, "specialist");
+  const queued = queuedForAutoMerge(db, NOW, "specialist");
 
   await expect(
     quarantineChecks({
@@ -702,7 +699,7 @@ it("GitHub の無い盤面の agent quarantine の解除検査は、観測せず
 
 it("agent quarantine の解除検査は、盤面の外で merge 済みのキューの PR を盤面の名義で観測してキューから外し、そのうえで通す", async () => {
   db = openDb(":memory:");
-  const queued = queuedForAutoMerge(db, "specialist");
+  const queued = queuedForAutoMerge(db, NOW, "specialist");
   const github = new FakeGitHubClient();
   github.scriptMergedOutside(7);
 

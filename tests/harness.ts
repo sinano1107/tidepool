@@ -50,6 +50,7 @@ import {
   humanDecomposeTask,
   listChildren,
   type RegisterTaskInput,
+  recordPrOpened,
   registerTask,
   type Task,
 } from "../src/tasks.js";
@@ -970,6 +971,13 @@ export function completedWork(db: Db, now: Date, assignee: string, parentId?: st
     ...HUMAN_WEBUI,
   );
   return completeTask(db, task, FULL_HANDOFF, assignee, now, "worker");
+}
+
+/** agent `assignee` の auto_if_ci_green で無人 merge キューに入った PR #7 を持つ完了タスク(着地待ち)。 */
+export function queuedForAutoMerge(db: Db, now: Date, assignee: string): Task {
+  const task = completedWork(db, now, assignee);
+  recordPrOpened(db, task, 7, assignee, now, { merge: "auto_if_ci_green" }, undefined, "worker");
+  return task;
 }
 
 // 帰責・起草の撃ち直しの setup(tests/retrospective.test.ts と tests/memory-settings-endpoints.test.ts が共有する)
