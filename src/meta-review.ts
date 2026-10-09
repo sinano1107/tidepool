@@ -85,8 +85,8 @@ export const META_REVIEW_SUBJECTS = {
         "with include_invalidated), so you do not repeat a retirement of your own. A rejected proposal always carries the human's reason: " +
         "propose it again only when that reason no longer holds. " +
         "A deferred proposal is one the human did not decide: read their comment, then propose it again when you still judge it right, or fold or retire it. " +
-        "A consolidation that went stale or was deferred keeps its candidate: propose it again with candidate_id and the replaces you now judge right " +
-        "(where a proposal's followed lists an entry, use its tail_id: the entry was moved or restored), " +
+        "When you propose a past proposal again, use the tail_id for each entry its relocated lists: that entry was moved or restored. " +
+        "A consolidation that went stale or was deferred keeps its candidate: propose it again with candidate_id and the replaces you now judge right, " +
         "or approve the Behavior or Exemplar candidate alone to leave the entries it would have replaced in place. " +
         "Where a human amended a candidate when approving it (a superseded candidate whose invalidated_by is a question and whose successor a human wrote — not one you folded into an existing entry), draft closer to the human's wording.",
       completion_criteria:

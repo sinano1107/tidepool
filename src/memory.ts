@@ -1045,7 +1045,7 @@ export function rejectMemoryProposal(db: Db, proposal: MemoryProposal, questionI
 }
 
 /** 無効化されていない kinds(省略 = 種別を問わない)のどれかで、state を渡せばその state の entry(提案が名指す entry と、書き込みの supersedes)。
- *  無効化済みの id は、本文が同じ鎖の末尾(過去の提案の一覧の followed と同じ)を名指して拒む(ADR 0222 決定5)。 */
+ *  無効化済みの id は、本文が同じ鎖の末尾(過去の提案の一覧の relocated と同じ)を名指して拒む(ADR 0222 決定5)。 */
 function requireLive(db: Db, id: number, kinds: Array<MemoryEntryFields["kind"]> | undefined, state?: MemoryEntryFields["state"]): EntryRow {
   const row = requireEntry(db, id);
   if ((kinds && !kinds.includes(row.kind)) || row.invalidation_reason !== null || (state !== undefined && row.state !== state)) {
@@ -1716,9 +1716,9 @@ export function pullMemoryProposals(db: Db, reader: Pick<MemoryReader, "taskId" 
  *  pull と材料の節の記録が同じ id を数える。 */
 const proposalEntryIds = (rows: ReturnType<typeof memoryProposalRows>) => [
   ...new Set(
-    rows.map(({ proposal, followed }) => {
+    rows.map(({ proposal, relocated }) => {
       const named = pinnedIds(proposal, true)[0]!;
-      return followed.find(({ id }) => id === named)?.tail_id ?? named;
+      return relocated.find(({ id }) => id === named)?.tail_id ?? named;
     }),
   ),
 ];
@@ -1746,7 +1746,7 @@ function memoryProposalRows(db: Db, window?: MetaReviewWindow) {
         question_id: row.id,
         proposal,
         // pin した本文の今の居場所(ADR 0222 決定2・3): 人間の面の moved と違い、復元の複製もたどり末尾の生死を見せる
-        followed: pinnedIds(proposal, true).flatMap((id) => {
+        relocated: pinnedIds(proposal, true).flatMap((id) => {
           const tail = sameBodyChain(db, requireEntry(db, id), restored).at(-1)!;
           return tail.id === id ? [] : [{ id, tail_id: tail.id, path: tail.path, scope: tail.scope, invalidation_reason: tail.invalidation_reason }];
         }),

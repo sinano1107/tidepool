@@ -263,7 +263,7 @@ it("節を組んだ記録は task 帰属・agent 名義の meta_review_material_
   expect(material.tokens).toBeGreaterThan(0);
 });
 
-it("決着した提案の部分の行も pin した本文の今の居場所 followed を持ち、記録の proposal_entries は名指す entry の鎖の末尾を数える(ADR 0222 決定2・4)", () => {
+it("決着した提案の部分の行も pin した本文の今の居場所 relocated を持ち、記録の proposal_entries は名指す entry の鎖の末尾を数える(ADR 0222 決定2・4)", () => {
   const db = openDb(":memory:");
   const previous = register(db, "memory", true);
   const moved = candidate(db, "Moved");
@@ -275,7 +275,7 @@ it("決着した提案の部分の行も pin した本文の今の居場所 foll
 
   const eventId = recordMetaReviewMaterial(db, review, "auditor", 42, material, at);
 
-  expect(material.parts.proposals).toMatchObject([{ question_id: question, followed: [{ id: moved, tail_id: copy, path: "elsewhere", scope: null, invalidation_reason: null }] }]);
+  expect(material.parts.proposals).toMatchObject([{ question_id: question, relocated: [{ id: moved, tail_id: copy, path: "elsewhere", scope: null, invalidation_reason: null }] }]);
   expect(getEvent(db, eventId)).toMatchObject({ payload: { proposals: [question], proposal_entries: [copy] } });
 });
 

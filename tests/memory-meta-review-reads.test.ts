@@ -181,17 +181,17 @@ it("list_memory_proposals は過去の memory 提案を approve・修正つき a
 
   const pulled = pullMemoryProposals(db, reader, {}, at);
   expect(pulled.proposals).toEqual([
-    { question_id: plain, proposal: expect.objectContaining({ op: "approve", candidate_id: approved }), answer: "approve", amendment: null, comment: null, followed: [], observed: null },
-    { question_id: withAmendment, proposal: expect.objectContaining({ candidate_id: amended }), answer: "approve", amendment: { text: "Keep notes to one line." }, comment: null, followed: [], observed: null },
-    { question_id: refused, proposal: expect.objectContaining({ candidate_id: rejected }), answer: "reject", amendment: null, comment: "Notes are not about volume.", followed: [], observed: null },
-    { question_id: kept, proposal: expect.objectContaining({ op: "invalidate", target: expect.objectContaining({ id: approved }) }), answer: "reject", amendment: null, comment: "The CI still squashes.", followed: [], observed: null },
-    { question_id: merged, proposal: expect.objectContaining({ op: "consolidate", successor: expect.objectContaining({ id: approved }) }), answer: "approve", amendment: null, comment: null, followed: [], observed: null },
-    { question_id: settled, proposal: expect.objectContaining({ candidate_id: stale }), answer: null, amendment: null, comment: null, followed: [], observed: { entry_id: stale, observed_event_id: retired } },
+    { question_id: plain, proposal: expect.objectContaining({ op: "approve", candidate_id: approved }), answer: "approve", amendment: null, comment: null, relocated: [], observed: null },
+    { question_id: withAmendment, proposal: expect.objectContaining({ candidate_id: amended }), answer: "approve", amendment: { text: "Keep notes to one line." }, comment: null, relocated: [], observed: null },
+    { question_id: refused, proposal: expect.objectContaining({ candidate_id: rejected }), answer: "reject", amendment: null, comment: "Notes are not about volume.", relocated: [], observed: null },
+    { question_id: kept, proposal: expect.objectContaining({ op: "invalidate", target: expect.objectContaining({ id: approved }) }), answer: "reject", amendment: null, comment: "The CI still squashes.", relocated: [], observed: null },
+    { question_id: merged, proposal: expect.objectContaining({ op: "consolidate", successor: expect.objectContaining({ id: approved }) }), answer: "approve", amendment: null, comment: null, relocated: [], observed: null },
+    { question_id: settled, proposal: expect.objectContaining({ candidate_id: stale }), answer: null, amendment: null, comment: null, relocated: [], observed: { entry_id: stale, observed_event_id: retired } },
   ]);
   expect(getEvent(db, pulled.event_id)).toMatchObject({ payload: { returned_ids: [approved, amended, rejected, stale] } });
 });
 
-it("list_memory_proposals は pin した entry が移された提案の行に本文の今の居場所 followed を添え、returned_ids は鎖の末尾を数え、その id で再提案が立つ(ADR 0222 決定2・4)", () => {
+it("list_memory_proposals は pin した entry が移された提案の行に本文の今の居場所 relocated を添え、returned_ids は鎖の末尾を数え、その id で再提案が立つ(ADR 0222 決定2・4)", () => {
   const { db, reader, behavior, propose } = proposals();
   const moved = behavior({ title: "Short notes" });
   const deferred = propose({ op: "approve", candidate_id: moved, rationale: "r" });
@@ -201,13 +201,26 @@ it("list_memory_proposals は pin した entry が移された提案の行に本
   const pulled = pullMemoryProposals(db, reader, {}, at);
 
   expect(pulled.proposals).toMatchObject([
-    { question_id: deferred, proposal: { candidate_id: moved }, followed: [{ id: moved, tail_id: copy, path: "elsewhere", scope: "tidepool", invalidation_reason: null }] },
+    { question_id: deferred, proposal: { candidate_id: moved }, relocated: [{ id: moved, tail_id: copy, path: "elsewhere", scope: "tidepool", invalidation_reason: null }] },
   ]);
   expect(getEvent(db, pulled.event_id)).toMatchObject({ payload: { returned_ids: [copy] } });
   expect(() => propose({ op: "approve", candidate_id: copy, rationale: "r" })).not.toThrow();
 });
 
-it("却下で落ちた candidate を人間が復元すると、list_memory_proposals の followed と returned_ids は復元の複製を指してその id で再提案が立ち、移した先が落ちていれば followed がその理由を見せる(ADR 0222 決定2)", () => {
+it("list_memory_proposals は移された replaces も relocated に載せるが、returned_ids に数えるのは名指す entry だけ(ADR 0222 決定2・4)", () => {
+  const { db, reader, behavior, propose } = proposals();
+  const [kept, replaced] = ["Short notes", "Brief notes"].map((title) => behavior({ title }));
+  const deferred = propose({ op: "consolidate", candidate_id: kept!, replaces: [replaced!], rationale: "r" });
+  const copy = moveMemory(db, { entry_id: replaced!, scope: null, path: "elsewhere", mover: human }, "webui", at).entry_id;
+  answerQuestionViaWebui(db, getTask(db, deferred)!, ["defer"], at, { comment: "Not yet." });
+
+  const pulled = pullMemoryProposals(db, reader, {}, at);
+
+  expect(pulled.proposals).toMatchObject([{ question_id: deferred, relocated: [{ id: replaced, tail_id: copy, invalidation_reason: null }] }]);
+  expect(getEvent(db, pulled.event_id)).toMatchObject({ payload: { returned_ids: [kept] } });
+});
+
+it("却下で落ちた candidate を人間が復元すると、list_memory_proposals の relocated と returned_ids は復元の複製を指してその id で再提案が立ち、移した先が落ちていれば relocated がその理由を見せる(ADR 0222 決定2)", () => {
   const { db, reader, behavior, propose, answer } = proposals();
   const [rejected, dropped] = ["Loud notes", "Old notes"].map((title) => behavior({ title }));
   const refused = propose({ op: "approve", candidate_id: rejected!, rationale: "r" });
@@ -220,27 +233,27 @@ it("却下で落ちた candidate を人間が復元すると、list_memory_propo
 
   const pulled = pullMemoryProposals(db, reader, {}, at);
 
-  expect(pulled.proposals.map(({ question_id, followed }) => ({ question_id, followed }))).toEqual([
-    { question_id: refused, followed: [{ id: rejected, tail_id: copy, path: "habits", scope: null, invalidation_reason: null }] },
-    { question_id: deferred, followed: [{ id: dropped, tail_id: tail, path: "elsewhere", scope: null, invalidation_reason: "environment" }] },
+  expect(pulled.proposals.map(({ question_id, relocated }) => ({ question_id, relocated }))).toEqual([
+    { question_id: refused, relocated: [{ id: rejected, tail_id: copy, path: "habits", scope: null, invalidation_reason: null }] },
+    { question_id: deferred, relocated: [{ id: dropped, tail_id: tail, path: "elsewhere", scope: null, invalidation_reason: "environment" }] },
   ]);
   expect(getEvent(db, pulled.event_id)).toMatchObject({ payload: { returned_ids: [copy, tail] } });
   expect(() => propose({ op: "approve", candidate_id: copy, rationale: "r" })).not.toThrow();
 });
 
 it("propose_memory_change に移された id・落ちた後に復元された id を渡すと、拒否は本文の今の居場所の id を名指し、そこも落ちていればその理由を添える(ADR 0222 決定5)", () => {
-  const { db, behavior, propose: proposeChange } = proposals();
+  const { db, behavior, propose } = proposals();
   const [moved, restored, dropped] = ["Short notes", "Loud notes", "Old notes"].map((title) => behavior({ title }));
   const copy = moveMemory(db, { entry_id: moved!, scope: null, path: "elsewhere", mover: human }, "webui", at).entry_id;
   invalidateMemoryEntry(db, { entry_id: restored!, reason: "rejected" }, "human", "webui", at);
   const restoredCopy = restoreMemoryEntry(db, { entry_id: restored!, restorer: human }, "webui", at).entry_id;
   const tail = moveMemory(db, { entry_id: dropped!, scope: null, path: "elsewhere", mover: human }, "webui", at).entry_id;
   invalidateMemoryEntry(db, { entry_id: tail, reason: "environment" }, "human", "webui", at);
-  const propose = (candidate_id: number) => () => proposeChange({ op: "approve", candidate_id, rationale: "r" });
+  const approving = (candidate_id: number) => () => propose({ op: "approve", candidate_id, rationale: "r" });
 
-  expect(propose(moved!)).toThrow(`memory entry ${moved} is not a non-invalidated behavior or exemplar in state candidate: it now lives as entry ${copy}`);
-  expect(propose(restored!)).toThrow(`: it now lives as entry ${restoredCopy}`);
-  expect(propose(dropped!)).toThrow(`: it now lives as entry ${tail}, which is invalidated too (environment)`);
+  expect(approving(moved!)).toThrow(`memory entry ${moved} is not a non-invalidated behavior or exemplar in state candidate: it now lives as entry ${copy}`);
+  expect(approving(restored!)).toThrow(`: it now lives as entry ${restoredCopy}`);
+  expect(approving(dropped!)).toThrow(`: it now lives as entry ${tail}, which is invalidated too (environment)`);
 });
 
 it("無効化済みのエントリは書き手の印 invalidated_by を持つ —— 人間の reject は question、meta-review の引退は activity、印の無い無効化は worker(ADR 0159 決定2)", () => {
