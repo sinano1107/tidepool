@@ -372,6 +372,10 @@ export interface WireContract {
       )
     >;
   };
+  /** 応答予算の床の記録の行(src/response-budget.ts の listFloorRows、ADR 0219 決定2): (surface, verb) ごとに1行。 */
+  "GET /api/settings/response-floors": {
+    floors: Array<{ surface: "management" | "worker"; verb: string; count: number; last_at: string; max_bytes: number; last_task_id: string | null }>;
+  };
   /** 事例の case 描画(src/memory.ts の MemoryCase、ADR 0153 決定3): decision entry なら本文と steering、session なら decision 列。 */
   "GET /api/settings/memory/cases/:event_id":
     | { decision: string; steering: string[]; handoff: string | null; result: string | null }
