@@ -2423,7 +2423,7 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit, fo
   const holdsOrphan = draft.workspace === draft.dead.workspace || (draft.kind === "behavior" || draft.kind === "exemplar") && draft.addressee === draft.dead.addressee;
   const filled = draft.kind === "exemplar" ? !TidepoolRules.whyBlank(draft.title) && (draft.source ?? draft.inheritedSource) !== null && draft.annotations.length > 0 && draft.annotations.every((a) => a.polarity && !TidepoolRules.whyBlank(a.text)) : fields.every((key) => !TidepoolRules.whyBlank(draft[key]));
   const originalOf = { title: draft.originalTitle, text: draft.originalText };
-  const unseen = (english, copied) => !translatable && copied !== void 0 && english !== copied;
+  const unseen = (english, copied) => !translatable && copied !== void 0 && TidepoolRules.normalizeText(english) !== copied;
   const dropsOriginal = !!draft.originalText && fields.some((key) => unseen(draft[key], draft.copied?.[key]));
   const notKept = (what) => `The original wording of ${what} is not kept: the English changed and the original isn't shown on this board.`;
   const runTranslation = async (toEnglish) => {

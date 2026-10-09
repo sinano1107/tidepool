@@ -1816,9 +1816,9 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit, fo
     ? !TidepoolRules.whyBlank(draft.title) && (draft.source ?? draft.inheritedSource) !== null && draft.annotations.length > 0 && draft.annotations.every((a) => a.polarity && !TidepoolRules.whyBlank(a.text))
     : fields.every((key) => !TidepoolRules.whyBlank(draft[key]));
   const originalOf: Record<'title' | 'text', string> = { title: draft.originalTitle, text: draft.originalText };
-  // the English board shows no original: one copied with English since changed is not saved, and the form says so
+  // the English board shows no original: one copied with English since changed (as saved, trimmed) is not saved, and the form says so
   // before saving (ADR 0223 決定3)
-  const unseen = (english: string, copied: string | undefined) => !translatable && copied !== undefined && english !== copied;
+  const unseen = (english: string, copied: string | undefined) => !translatable && copied !== undefined && TidepoolRules.normalizeText(english) !== copied;
   const dropsOriginal = !!draft.originalText && fields.some((key) => unseen(draft[key], draft.copied?.[key]));
   const notKept = (what: string) => `The original wording of ${what} is not kept: the English changed and the original isn't shown on this board.`;
 
