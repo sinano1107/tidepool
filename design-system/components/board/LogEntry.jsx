@@ -20,9 +20,9 @@ export function LogEntry({ entry = {}, onObject, onExpand, onOpenMemoryEntry, ac
   ));
   // 判定の根拠(ADR 0213 決定4)は異議コメントの下の、帯の幅いっぱいの独立した行に置く(issue #1113)
   const causeNote = causeText && (
-    <span style={{ flexBasis: '100%', color: 'var(--text-muted)' }}><span>{causeText}</span>{causeLinks}{causeEvidence && ` — ${causeEvidence}`}</span>
+    <span style={{ color: 'var(--text-muted)' }}><span>{causeText}</span>{causeLinks}{causeEvidence && ` — ${causeEvidence}`}</span>
   );
-  const band = { display: 'flex', flexWrap: 'wrap', alignItems: 'flex-start', gap: 8, marginTop: 6, padding: '6px 10px', borderRadius: 'var(--radius-xs)', fontSize: 'var(--text-xs)', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' };
+  const band = { display: 'flex', flexDirection: 'column', gap: 8, marginTop: 6, padding: '6px 10px', borderRadius: 'var(--radius-xs)', fontSize: 'var(--text-xs)', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' };
   // 注記の帯は Object 押下面の外に置く(issue #1090)—— role="button" の子孫に
   // interactive な要素を入れない。subgrid で帯を本文の列に揃える。
   // 列は 時刻 / chip / 本文 / Expand(onExpand があるときだけ)。押下面は 1〜3 列、帯は 3 列目。
@@ -74,13 +74,13 @@ export function LogEntry({ entry = {}, onObject, onExpand, onOpenMemoryEntry, ac
         <div style={{ gridColumn: 3 }}>
           {objection && (
             <div style={{ ...band, background: 'var(--coral-1)', color: 'var(--coral-4)' }}>
-              <span style={{ flex: '1 1 100%' }}>objection: {objection}</span>
+              <span>objection: {objection}</span>
               {causeNote}
             </div>
           )}
           {bundledObjection && (
             <div style={{ ...band, background: 'var(--surface-recessed)', color: 'var(--text-muted)' }}>
-              <span style={{ flex: '1 1 100%' }}>
+              <span>
                 <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', textTransform: 'uppercase', letterSpacing: '0.06em', marginRight: 6 }}>bundled</span>
                 {bundledObjection}
               </span>

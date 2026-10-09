@@ -185,8 +185,8 @@ function LogEntry({ entry = {}, onObject, onExpand, onOpenMemoryEntry, active = 
     },
     `#${id}`
   )));
-  const causeNote = causeText && /* @__PURE__ */ React.createElement("span", { style: { flexBasis: "100%", color: "var(--text-muted)" } }, /* @__PURE__ */ React.createElement("span", null, causeText), causeLinks, causeEvidence && ` \u2014 ${causeEvidence}`);
-  const band = { display: "flex", flexWrap: "wrap", alignItems: "flex-start", gap: 8, marginTop: 6, padding: "6px 10px", borderRadius: "var(--radius-xs)", fontSize: "var(--text-xs)", whiteSpace: "pre-wrap", overflowWrap: "anywhere" };
+  const causeNote = causeText && /* @__PURE__ */ React.createElement("span", { style: { color: "var(--text-muted)" } }, /* @__PURE__ */ React.createElement("span", null, causeText), causeLinks, causeEvidence && ` \u2014 ${causeEvidence}`);
+  const band = { display: "flex", flexDirection: "column", gap: 8, marginTop: 6, padding: "6px 10px", borderRadius: "var(--radius-xs)", fontSize: "var(--text-xs)", whiteSpace: "pre-wrap", overflowWrap: "anywhere" };
   return /* @__PURE__ */ React.createElement(
     "div",
     {
@@ -234,7 +234,7 @@ function LogEntry({ entry = {}, onObject, onExpand, onOpenMemoryEntry, active = 
       },
       "\u2304"
     ),
-    (objection || bundledObjection) && /* @__PURE__ */ React.createElement("div", { style: { gridColumn: 3 } }, objection && /* @__PURE__ */ React.createElement("div", { style: { ...band, background: "var(--coral-1)", color: "var(--coral-4)" } }, /* @__PURE__ */ React.createElement("span", { style: { flex: "1 1 100%" } }, "objection: ", objection), causeNote), bundledObjection && /* @__PURE__ */ React.createElement("div", { style: { ...band, background: "var(--surface-recessed)", color: "var(--text-muted)" } }, /* @__PURE__ */ React.createElement("span", { style: { flex: "1 1 100%" } }, /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", textTransform: "uppercase", letterSpacing: "0.06em", marginRight: 6 } }, "bundled"), bundledObjection), !objection && causeNote))
+    (objection || bundledObjection) && /* @__PURE__ */ React.createElement("div", { style: { gridColumn: 3 } }, objection && /* @__PURE__ */ React.createElement("div", { style: { ...band, background: "var(--coral-1)", color: "var(--coral-4)" } }, /* @__PURE__ */ React.createElement("span", null, "objection: ", objection), causeNote), bundledObjection && /* @__PURE__ */ React.createElement("div", { style: { ...band, background: "var(--surface-recessed)", color: "var(--text-muted)" } }, /* @__PURE__ */ React.createElement("span", null, /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", textTransform: "uppercase", letterSpacing: "0.06em", marginRight: 6 } }, "bundled"), bundledObjection), !objection && causeNote))
   );
 }
 Object.assign(__ds_scope, { LogEntry });
