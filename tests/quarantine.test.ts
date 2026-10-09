@@ -179,11 +179,20 @@ it("404 の行の Quarantine の文面は、証拠の種類を渡しても渡さ
     "account. The board does not know why. This row is out of pickup and Board calls while this stands; " +
     "other rows keep running.\n\nRepair one of two ways:\n\n" +
     "1. Fix the table: in the settings tab, change this row's model or delete the row. This question then closes on its own.\n" +
-    "2. If the model id is right, update the CLI or restore the account, then answer — the board checks this model id " +
+    "2. If the model id is right, update tidepool or restore the account, then answer — the board checks this model id " +
     "again before it accepts the answer.";
   expect(TABLE_ROW.prose("anthropic/claude-opus-5", "R").purpose).toBe(purpose);
   expect(TABLE_ROW.prose("anthropic/claude-opus-5", "R", "api_404").purpose).toBe(purpose);
 });
+
+it.each(["anthropic/claude-opus-5", "openai/gpt-5.5", "moonshot/kimi-k2"])(
+  "行の Quarantine の文面は Provider によらず CLI の手動更新を促さない —— 固定の版は盤面が持つ(ADR 0186 決定5): %s",
+  (row) => {
+    for (const evidence of [undefined, "api_404", "cli_version_too_old"] as const) {
+      expect(TABLE_ROW.prose(row, "R", evidence).purpose).not.toMatch(/update the CLI|claude update/i);
+    }
+  },
+);
 
 it("CLI の版の古さの行の Quarantine は原因を名指し、行の差し替えを先に、tidepool の更新を2番目に促す(ADR 0187 決定3)", () => {
   const { purpose, ...rest } = TABLE_ROW.prose("anthropic/claude-opus-5", "R", "cli_version_too_old");
