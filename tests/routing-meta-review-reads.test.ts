@@ -121,9 +121,7 @@ it("shadow 行は書いた時点の両セルの受理数・却下数と除外後
   rejectedSession(opus);
   rejectedSession(sol);
   const later = work("later");
-  const branch = (promoted: boolean) => {
-    return selectorBranch({ promoted, candidates: [opus, sol], ...observedInTier(loadEpisodes(db), opus.tier_id, null) }).shadow;
-  };
+  const branch = (promoted: boolean) => selectorBranch({ promoted, candidates: [opus, sol], ...observedInTier(loadEpisodes(db), opus.tier_id, null) }).shadow;
   recordShadow(db, later.id, branch(false), at);
   recordShadow(db, later.id, branch(true), at);
   const reader = routingReview();
