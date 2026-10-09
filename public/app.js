@@ -53,9 +53,13 @@ var TidepoolRules = (() => {
   ];
   var GENERATION = /^(\d+)(?:-(\d{1,2})(?!\d))?/;
   function undatedClaudeId(model) {
+    const read = readFamily(model);
+    return read && `${read.family.prefix}${read.major}-${read.minor}`;
+  }
+  function readFamily(model) {
     const family = FAMILIES.find((f) => model.startsWith(f.prefix));
     const digits = family && GENERATION.exec(model.slice(family.prefix.length));
-    return digits ? `${family.prefix}${digits[1]}-${digits[2] ?? 0}` : void 0;
+    return digits ? { family, major: Number(digits[1]), minor: Number(digits[2] ?? 0) } : void 0;
   }
 
   // src/effort.ts
@@ -2899,7 +2903,7 @@ function ExecutionTableCard({ settings, say, onSaved, edit }) {
     /* @__PURE__ */ React.createElement(Select, { label: "Provider", options: settings.providers.map((p) => p.value), value: d.provider, onChange: (e) => update(i, { provider: e.target.value }) }),
     /* @__PURE__ */ React.createElement(Select, { label: "Tier", options: settings.tiers.map((tier) => tier.name), value: d.tier, onChange: (e) => update(i, { tier: e.target.value }) }),
     /* @__PURE__ */ React.createElement(Input, { label: "Model", mono: true, value: d.model, onChange: (e) => update(i, { model: e.target.value }), placeholder: "concrete model id \u2014 e.g. claude-opus-5-5" }),
-    /* @__PURE__ */ React.createElement(Select, { label: "Effort", options: TidepoolRules.EFFORT_LEVELS.filter((effort) => !TidepoolRules.whyInvalidEffort(d.provider, d.model, effort)), value: d.effort, onChange: (e) => update(i, { effort: e.target.value }) }),
+    /* @__PURE__ */ React.createElement(Select, { label: "Effort", options: TidepoolRules.EFFORT_LEVELS.filter((effort) => effort === d.effort || !TidepoolRules.whyInvalidEffort(d.provider, d.model, effort)), value: d.effort, onChange: (e) => update(i, { effort: e.target.value }) }),
     /* @__PURE__ */ React.createElement(Input, { label: "Price in", error: TidepoolRules.whyInvalidPrice(readNumericDraft(d.price_in)), mono: true, value: d.price_in, onChange: (e) => update(i, { price_in: e.target.value }), placeholder: "USD / MTok" }),
     /* @__PURE__ */ React.createElement(Input, { label: "Price out", error: TidepoolRules.whyInvalidPrice(readNumericDraft(d.price_out)), mono: true, value: d.price_out, onChange: (e) => update(i, { price_out: e.target.value }), placeholder: "USD / MTok" }),
     /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "sm", onClick: () => setDraft(draft.filter((_, j) => j !== i)), "aria-label": `remove ${d.provider} ${d.tier} ${d.model}`.trim() }, "Remove")
