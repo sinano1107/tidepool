@@ -401,7 +401,7 @@ export function proposeRoutingChange(
     title = `Lower agent ${agent}'s tier: ${pin.tier} -> ${to}`;
     diff = [
       `Agent ${agent} (registry definition), default tier: ${pin.tier} -> ${to}`,
-      `Evidence: ${proposal.evidence.length} worker session(s) on ${pin.rows.map((r) => `${r.provider} / ${r.model} (${r.tier}, ${r.effort ?? "no effort"})`).join(", ")}`,
+      `Evidence: ${proposal.evidence.length} worker session(s) on ${pin.rows.map((r) => `${rowName(r)} (${r.tier})`).join(", ")}`,
     ];
     purpose =
       "The routing meta-review proposes lowering an agent's default tier by one step. Approve commits the new tier to the registry, " +
@@ -432,7 +432,7 @@ export function proposeRoutingChange(
     assertRowFits(table, composeRoutingRow({ kind: "routing", op: "row", row, change, pin }), row);
     const { tier, ...rest } = change;
     proposal = { kind: "routing", op: "row", row, change: { ...rest, ...(tier !== undefined && { tier: tierIdOf(db, tier) }) }, pin: { ...pin, tier: tierIdOf(db, pin.tier) } };
-    title = `Change routing row: ${pin.provider} / ${pin.model} / ${pin.effort ?? "no effort"}`;
+    title = `Change routing row: ${rowName(pin)}`;
     diff = [
       `Execution-setting row ${rowName(pin)} (price ${pin.price_in} / ${pin.price_out} USD per MTok):`,
       ...Object.entries(change).map(([field, to]) => `${field}: ${pin[field as keyof typeof change]} -> ${to}`),

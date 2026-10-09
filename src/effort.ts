@@ -20,8 +20,9 @@ const CLAUDE_EFFORT_RULES = {
 export function whyInvalidEffort(provider: string, model: string, effort: string | null): string | undefined {
   const levels = `effort must be one of ${EFFORT_LEVELS.join(" / ")}`;
   if (effort !== null && !(EFFORT_LEVELS as readonly string[]).includes(effort)) return levels;
-  const undated = provider === "openai" ? undefined : undatedClaudeId(model);
-  if (provider !== "openai" && (model.startsWith("claude-3-") || CLAUDE_EFFORT_RULES.dropsEffort.includes(undated!))) {
+  if (provider === "openai") return effort === null ? levels : undefined;
+  const undated = undatedClaudeId(model);
+  if (model.startsWith("claude-3-") || CLAUDE_EFFORT_RULES.dropsEffort.includes(undated!)) {
     return effort === null ? undefined : `${model} takes no effort under the claude CLI's built-in model rules; write no effort (null)`;
   }
   if (effort === null) return levels;

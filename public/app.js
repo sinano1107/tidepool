@@ -71,8 +71,9 @@ var TidepoolRules = (() => {
   function whyInvalidEffort(provider, model, effort) {
     const levels = `effort must be one of ${EFFORT_LEVELS.join(" / ")}`;
     if (effort !== null && !EFFORT_LEVELS.includes(effort)) return levels;
-    const undated = provider === "openai" ? void 0 : undatedClaudeId(model);
-    if (provider !== "openai" && (model.startsWith("claude-3-") || CLAUDE_EFFORT_RULES.dropsEffort.includes(undated))) {
+    if (provider === "openai") return effort === null ? levels : void 0;
+    const undated = undatedClaudeId(model);
+    if (model.startsWith("claude-3-") || CLAUDE_EFFORT_RULES.dropsEffort.includes(undated)) {
       return effort === null ? void 0 : `${model} takes no effort under the claude CLI's built-in model rules; write no effort (null)`;
     }
     if (effort === null) return levels;
