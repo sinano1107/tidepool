@@ -88,7 +88,8 @@ The exit code is non-zero if any row is 不合格. It needs the `Delegate=yes` s
 as the board: every Board call runs in its own container.
 
 Then check that the MCP readers still take a full-budget response whole (ADR 0195 決定7): Claude Code
-once, and Codex once per openai seed row. A missing middle or tail marker is 不合格:
+once, and Codex once per openai seed row. A missing middle or tail marker is 不合格. 観測なし is
+not an observation of the cap: fix the cause in its detail and run the canary again:
 
 ```bash
 limactl shell tidepool -- bash -lc 'cd ~/tidepool && export PATH="$HOME/.local/bin:$PATH" && CODEX_HOME=~/.tidepool/codex npx tsx scripts/reader-cap-canary.ts'
