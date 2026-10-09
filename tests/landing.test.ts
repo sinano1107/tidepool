@@ -6,6 +6,7 @@ import { appendEvent, latestEventOfTask, listEvents } from "../src/events.js";
 import { submitAnswer } from "../src/human-verbs.js";
 import {
   countTasksAwaitingLanding,
+  countTasksAwaitingLandingInWorkspace,
   createLanding,
   landingAnnotation,
   registerLocalMergeQuestion,
@@ -2051,6 +2052,49 @@ it("着地済み・未完了・別 agent・PR 昇格を abandon した・祖先�
   completedWork(db, now, "tako", parent.id);
 
   expect(countTasksAwaitingLanding(db, "tako")).toBe(0);
+});
+
+// ADR 0226: workspace の削除の扉は同じ集合を、タスクの `workspace` の参照で数える
+const completedWorkIn = (board: Db, now: Date, workspace?: string) =>
+  completedWork(board, now, "tako", undefined, workspace);
+
+it("workspace 名でも、無人 merge キューにいる・PR 昇格失敗の question が開いている・門で止まって abandon していない完了タスクを数える", () => {
+  db = openDb(":memory:");
+  const now = new Date("2026-10-09T00:00:00.000Z");
+  recordPrOpenedViaWorker(db, completedWorkIn(db, now, "reef"), 7, "tako", now, {
+    authority: { merge: "auto_if_ci_green" },
+  });
+  registerPrPromotionFailureQuestion(db, completedWorkIn(db, now, "reef"), "boom", now);
+  deferLanding(db, completedWorkIn(db, now, "reef").id, now);
+
+  expect(countTasksAwaitingLandingInWorkspace(db, "reef")).toBe(3);
+});
+
+it("workspace 名では、abandon 済み・着地済み・別 workspace・workspace 未指定の完了タスクを数えない", () => {
+  db = openDb(":memory:");
+  const now = new Date("2026-10-09T00:00:00.000Z");
+  const abandoned = completedWorkIn(db, now, "reef");
+  deferLanding(db, abandoned.id, now);
+  registerPrPromotionFailureQuestion(db, abandoned, "boom", now);
+  const [failure] = promotionFailures(db, abandoned.id);
+  answerQuestion(db, getTask(db, failure!.id)!, ["abandon promotion"], now, undefined, undefined, undefined, "webui");
+  const opened = completedWorkIn(db, now, "reef");
+  deferLanding(db, opened.id, now);
+  recordPrOpenedViaWorker(db, opened, 7, "tako", now, { authority: { merge: "escalate" } });
+  const nothing = completedWorkIn(db, now, "reef");
+  deferLanding(db, nothing.id, now);
+  appendEvent(db, {
+    taskId: nothing.id,
+    workerId: BOARD_WORKER_ID,
+    origin: "board",
+    payload: { kind: "nothing_to_land", base: "main" },
+    at: now,
+  });
+  deferLanding(db, completedWorkIn(db, now, "lagoon").id, now);
+  deferLanding(db, completedWorkIn(db, now).id, now);
+
+  expect(countTasksAwaitingLandingInWorkspace(db, "reef")).toBe(0);
+  expect(countTasksAwaitingLandingInWorkspace(db, "lagoon")).toBe(1);
 });
 
 // ADR 0225: abandon promotion が断念するのはその時点の内容の昇格。付帯子の決着による再発火は、

@@ -81,7 +81,7 @@ function describeReason(reason: DeletionBlockedReason): string {
     return `${reason.count} unsettled task(s) still reference it`;
   }
   if (reason.code === "tasks_awaiting_landing") {
-    return `${reason.count} completed task(s) still await landing on its profile`;
+    return `${reason.count} completed task(s) still await landing through it`;
   }
   if (reason.code === "board_default") return "it is the board's default";
   if (reason.code === "board_auditor") return "it is the board's Auditor";

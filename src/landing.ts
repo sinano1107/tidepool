@@ -92,13 +92,8 @@ function taskHasLanded(db: Db, taskId: string): boolean {
   );
 }
 
-/** 着地を待つ完了タスク(ADR 0217 決定4): agent 名の quarantine の解除と agent 削除の扉が
- *  同じ集合を数える。「未着地の done」だけでは、祖先の枝に乗る子(`land()` は何も記録しない)と
- *  PR 昇格を abandon したタスクを永久に数えてしまうので、待っている積極的な証拠で数える ——
- *  無人 merge キューにいる、または未着地で、PR 昇格失敗の question が開いているか、門で止まった
- *  記録があって昇格を abandon していない。`landing_deferred` は1タスクに1回しか刻まれないので、
- *  retry が再び門で止まった場合も記録は最初の1つのままである —— 失敗 question が立ったこと
- *  ではなく、abandon と答えたことだけを待ちの終わりに数える。 */
+/** 着地を待つ完了タスクを agent 名の参照で数える(ADR 0217 決定4)—— agent 名の quarantine の解除と
+ *  agent 削除の扉。集合の定義は `countAwaitingLanding` にある。 */
 export function countTasksAwaitingLanding(
   db: Db,
   agentName: string,
@@ -106,12 +101,33 @@ export function countTasksAwaitingLanding(
   auditorName?: string,
 ): number {
   const fallback = typeAwareDefaultAgentSql("t.type", "@defaultAgentName", "@auditorName");
+  return countAwaitingLanding(db, `COALESCE(t.assignee, ${fallback}) = @agentName`, {
+    agentName,
+    defaultAgentName: defaultAgentName ?? null,
+    auditorName: auditorName ?? null,
+  });
+}
+
+/** 同じ集合を、タスクの `workspace` の参照で数える —— workspace の削除の扉(ADR 0226)。 */
+export function countTasksAwaitingLandingInWorkspace(db: Db, workspaceName: string): number {
+  return countAwaitingLanding(db, "t.workspace = @workspaceName", { workspaceName });
+}
+
+/** 着地を待つ完了タスク(ADR 0217 決定4 / ADR 0226): agent 名の quarantine の解除と
+ *  agent 削除の扉は agent 名で、workspace の削除の扉はタスクの `workspace` で、同じ集合を数える。
+ *  「未着地の done」だけでは、祖先の枝に乗る子(`land()` は何も記録しない)と PR 昇格を
+ *  abandon したタスクを永久に数えてしまうので、待っている積極的な証拠で数える ——
+ *  無人 merge キューにいる、または未着地で、PR 昇格失敗の question が開いているか、門で止まった
+ *  記録があって昇格を abandon していない。`landing_deferred` は1タスクに1回しか刻まれないので、
+ *  retry が再び門で止まった場合も記録は最初の1つのままである —— 失敗 question が立ったこと
+ *  ではなく、abandon と答えたことだけを待ちの終わりに数える。 */
+function countAwaitingLanding(db: Db, referenceSql: string, params: Record<string, string | null>): number {
   const rows = db
     .prepare(
       `SELECT t.id, EXISTS (SELECT 1 FROM pending_auto_merges WHERE task_id = t.id) AS queued
          FROM tasks t
         WHERE t.type = 'work' AND t.status = 'done'
-          AND COALESCE(t.assignee, ${fallback}) = @agentName
+          AND ${referenceSql}
           AND (queued
                OR EXISTS (SELECT 1 FROM tasks q
                            WHERE q.question_pending_pr_promotion_task_id = t.id AND q.status = 'todo')
@@ -122,12 +138,7 @@ export function countTasksAwaitingLanding(
                                     WHERE q.question_pending_pr_promotion_task_id = t.id
                                       AND json_extract(a.payload, '$.answers[0].answer') = @abandon)))`,
     )
-    .all({
-      agentName,
-      defaultAgentName: defaultAgentName ?? null,
-      auditorName: auditorName ?? null,
-      abandon: PR_PROMOTION_FAILURE_OPTIONS[1],
-    }) as Array<{ id: string; queued: number }>;
+    .all({ ...params, abandon: PR_PROMOTION_FAILURE_OPTIONS[1] }) as Array<{ id: string; queued: number }>;
   return rows.filter((row) => row.queued === 1 || !taskHasLanded(db, row.id)).length;
 }
 

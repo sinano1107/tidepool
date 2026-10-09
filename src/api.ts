@@ -37,7 +37,7 @@ import {
   submitAnswer,
 } from "./human-verbs.js";
 import { IssueContentCache, type Live } from "./issue-view.js";
-import { countTasksAwaitingLanding, type Landing } from "./landing.js";
+import { countTasksAwaitingLanding, countTasksAwaitingLandingInWorkspace, type Landing } from "./landing.js";
 import {
   changeMemorySettings,
   defineMemoryBranch,
@@ -1108,6 +1108,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
         { name: req.params.name, ...parsed.data },
         {
           unsettledTaskCount: countUnsettledTasksReferencing(db, "workspace", req.params.name),
+          awaitingLandingTaskCount: countTasksAwaitingLandingInWorkspace(db, req.params.name),
           defaultWorkspaceName: workspace?.name,
         },
       );

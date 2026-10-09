@@ -1,5 +1,6 @@
 import { afterEach, expect, it } from "vitest";
 import type { AgentDeletionReferences, DeleteAgentInput } from "../src/agent-create.js";
+import { registerPrPromotionFailureQuestion } from "../src/landing.js";
 import { UnknownAgentError } from "../src/registry.js";
 import {
   DeletionBlockedError,
@@ -10,7 +11,14 @@ import type {
   WorkspaceDeletionReferences,
 } from "../src/workspace-create.js";
 import { RegistrySelfDeleteError } from "../src/workspace-create.js";
-import { AUTH_HEADERS, api, bootTidepool, registerWork, type Tidepool } from "./harness.js";
+import {
+  AUTH_HEADERS,
+  api,
+  bootTidepool,
+  completedWork,
+  registerWork,
+  type Tidepool,
+} from "./harness.js";
 
 let t: Tidepool;
 afterEach(() => t?.stop());
@@ -142,6 +150,24 @@ it("DELETE /api/workspaces/:name は未決着タスクの件数と既定 workspa
   expect(res.json).toEqual({ checkout: "/home/pi/work/lagoon" });
   expect(calls[0]?.[0]).toEqual({ name: "lagoon", confirm: true });
   expect(calls[0]?.[1].unsettledTaskCount).toBe(1);
+});
+
+it("DELETE /api/workspaces/:name はその workspace で着地を待つ完了タスクの件数を渡す(ADR 0226)", async () => {
+  const refs: WorkspaceDeletionReferences[] = [];
+  t = await bootTidepool({
+    workspaceAdmin: {
+      delete: async (_input, references) => {
+        refs.push(references);
+        return "/home/pi/work/lagoon";
+      },
+    },
+  });
+  const now = new Date();
+  registerPrPromotionFailureQuestion(t.db, completedWork(t.db, now, "tako", undefined, "lagoon"), "boom", now);
+
+  await api(t.baseUrl, "DELETE", "/api/workspaces/lagoon", { confirm: true });
+
+  expect(refs[0]?.awaitingLandingTaskCount).toBe(1);
 });
 
 it("DELETE /api/workspaces/:name は盤面自身の registry clone を 403 で拒む", async () => {
