@@ -65,6 +65,7 @@ it("6つの面がどれも盤面の読み取り関数で読めれば、全行が
     ["translation client", true],
   ]);
   expect(ok).toBe(true);
+  expect(rows.find((row) => row.surface === "result line usage")!.detail).toContain("auto-memory closed");
 });
 
 it("1つの面が崩れたら、その面の行だけが不合格になり試験は落ちる", async () => {
@@ -75,6 +76,38 @@ it("1つの面が崩れたら、その面の行だけが不合格になり試験
   );
 
   expect(rows.filter((row) => !row.pass).map((row) => row.surface)).toEqual(["result line usage"]);
+  expect(ok).toBe(false);
+});
+
+it("Board call の init 行が無ければ、auto-memory が閉じているとはみなさない", async () => {
+  const { rows, ok } = await judgeConformance(
+    { ...passingObservations(), resultLine: async () => WORKER_STREAM.split("\n").slice(1).join("\n") },
+    PI_CAPTURED_AT,
+  );
+
+  const failed = rows.filter((row) => !row.pass);
+  expect(failed.map((row) => row.surface)).toEqual(["result line usage"]);
+  expect(failed[0]!.detail).toContain("init");
+  expect(ok).toBe(false);
+});
+
+it.each([
+  [{ auto: "/home/board/.claude/projects/tidepool/memory/" }, "/home/board/.claude/projects/tidepool/memory/"],
+  [{ auto: 42 }, "42"],
+  [{ auto: null }, "null"],
+  [{ auto: { directory: "/unexpected" } }, '{"directory":"/unexpected"}'],
+  [["/unexpected"], '["/unexpected"]'],
+])("Board call の memory_paths %j は不合格になり、観測値を detail に残す", async (memoryPaths, detail) => {
+  const [init, ...rest] = WORKER_STREAM.split("\n");
+  const stdout = [JSON.stringify({ ...JSON.parse(init!), memory_paths: memoryPaths }), ...rest].join("\n");
+  const { rows, ok } = await judgeConformance(
+    { ...passingObservations(), resultLine: async () => stdout },
+    PI_CAPTURED_AT,
+  );
+
+  const failed = rows.filter((row) => !row.pass);
+  expect(failed.map((row) => row.surface)).toEqual(["result line usage"]);
+  expect(failed[0]!.detail).toContain(detail);
   expect(ok).toBe(false);
 });
 

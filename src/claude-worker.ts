@@ -341,7 +341,7 @@ function checkToolSurface(
  *
  *  `checkToolSurface` と同じく、probe と実セッションの init 行の照合が**この1つ**を
  *  共有する。 */
-function checkAutoMemoryClosed(autoMemory: string | null): ContainmentCapability {
+export function checkAutoMemoryClosed(autoMemory: string | null): ContainmentCapability {
   if (autoMemory === null) return { available: true };
   // auto-memory の層を閉じるのは ADR 0156
   return {
