@@ -21,7 +21,8 @@ export type ModelProbeResult =
   | { status: "runs" }
   | { status: "refused" | "unauthorized" | "unknown"; reason: string };
 
-export type ModelProbe = (model: string) => Promise<ModelProbeResult>;
+/** `effort` を渡せばその effort でも検査する(ADR 0218 決定2)—— 今それを読むのは openai の一覧の読み直しだけ。 */
+export type ModelProbe = (model: string, effort?: string) => Promise<ModelProbeResult>;
 
 export const CLI_AUTH_EXPIRY_WARNING_INTERVAL_MS = 30 * 60 * 1000;
 const CLI_AUTH_EXPIRY_WARNING_MS = 30 * 24 * 60 * 60 * 1000;

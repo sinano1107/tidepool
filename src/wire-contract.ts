@@ -71,8 +71,8 @@ export interface BoardTask extends QueueTask {
     tier?: string | { name: string; description: string; position: number };
     pin?: { tier: string } | { promoted: boolean } | { description: string } | { row: { tier: string } };
   } | null;
-  /** 確認 question の Quarantine の種別(src/quarantine.ts の QuarantineKind)。行の Quarantine(`tableRow`)の question だけが
-   *  settings タブを開くボタンを持つ(ADR 0184 決定6)。 */
+  /** 確認 question の Quarantine の種別(src/quarantine.ts の QuarantineKind)。行の Quarantine(`tableRow` と effort ごとの
+   *  `tableRowEffort`)の question だけが settings タブを開くボタンを持つ(ADR 0184 決定6 / ADR 0218 決定2)。 */
   question_quarantine_kind: string | null;
 }
 
@@ -371,6 +371,10 @@ export interface WireContract {
         | { refire: "draft" | "second_round"; entry: { id: number; text: string }; cause: Cause | null; round: "initial" | "after_rca" }
       )
     >;
+  };
+  /** 応答予算の床の記録の行(src/response-budget.ts の listFloorRows、ADR 0219 決定2): (surface, verb) ごとに1行。 */
+  "GET /api/settings/response-floors": {
+    floors: Array<{ surface: "management" | "worker"; verb: string; count: number; last_at: string; max_bytes: number; last_task_id: string | null }>;
   };
   /** 事例の case 描画(src/memory.ts の MemoryCase、ADR 0153 決定3): decision entry なら本文と steering、session なら decision 列。 */
   "GET /api/settings/memory/cases/:event_id":

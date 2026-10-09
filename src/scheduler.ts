@@ -2,7 +2,7 @@ import { quarantineAgent } from "./agent.js";
 import { boardHalts } from "./board-halt.js";
 import { type CliAuthCheck, quarantineCliAuthForProvider } from "./cli-auth.js";
 import type { Clock } from "./clock.js";
-import { type CodexAppServerProbe, type CodexAppServerProbeResult, unlistedModelReason } from "./codex-app-server.js";
+import { type CodexAppServerProbe, type CodexAppServerProbeResult, whyRowUnlisted } from "./codex-app-server.js";
 import {
   type ContainmentCheck,
   containmentPickupBlocked,
@@ -29,7 +29,13 @@ import { type InjectionQuery, injectionQueryText } from "./memory.js";
 import { registerDueMetaReviews } from "./meta-review.js";
 import type { ProcessContainers } from "./process-container.js";
 import type { Provider } from "./provider.js";
-import { quarantineExcludedProviders, quarantineStops, registerQuarantine, tableRowValue } from "./quarantine.js";
+import {
+  quarantineExcludedProviders,
+  quarantineStops,
+  registerQuarantine,
+  tableRowEffortValue,
+  tableRowValue,
+} from "./quarantine.js";
 import {
   canonicalHarness,
   InvalidAgentDefinitionError,
@@ -548,10 +554,17 @@ export function startScheduler(deps: {
         if (result.status === "unauthorized") quarantineCliAuthForProvider(db, provider, now);
         return observation;
       }
-      // ADR 0184 決定3: 観測のたびに表の openai の行すべてを一覧と照合する —— 選ばれていない行も外れる
+      // ADR 0184 決定3: 観測のたびに表の openai の行すべてを一覧と照合する —— 選ばれていない行も外れる。
+      // 一覧にある model の行は effort も照合し、広告されない行だけを外す(ADR 0218 決定2)
       for (const row of loadExecutionSettingTable(db)) {
-        if (row.provider !== "openai" || result.models.includes(row.model)) continue;
-        registerQuarantine(db, "tableRow", tableRowValue("openai", row.model), unlistedModelReason(result.cliVersion), now);
+        if (row.provider !== "openai") continue;
+        const unlisted = whyRowUnlisted(result, row.model, row.effort);
+        if (unlisted?.unit === "model") {
+          registerQuarantine(db, "tableRow", tableRowValue("openai", row.model), unlisted.reason, now);
+        } else if (unlisted?.unit === "effort") {
+          const value = tableRowEffortValue("openai", row.model, row.effort);
+          registerQuarantine(db, "tableRowEffort", value, unlisted.reason, now, "codexModelList");
+        }
       }
       return evaluateAndReportProviderUsage(
         db,

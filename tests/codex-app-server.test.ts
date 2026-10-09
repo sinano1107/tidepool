@@ -58,8 +58,18 @@ function writeCompatibleSchemas(out: string): void {
       definitions: {
         Model: {
           required: ["defaultReasoningEffort", "description", "displayName", "hidden", "id", "isDefault", "model", "supportedReasoningEfforts"],
-          properties: { id: { type: "string" }, model: { type: "string" }, hidden: { type: "boolean" } },
+          properties: {
+            id: { type: "string" },
+            model: { type: "string" },
+            hidden: { type: "boolean" },
+            supportedReasoningEfforts: { items: { $ref: "#/definitions/ReasoningEffortOption" }, type: "array" },
+          },
         },
+        ReasoningEffortOption: {
+          required: ["description", "reasoningEffort"],
+          properties: { description: { type: "string" }, reasoningEffort: { $ref: "#/definitions/ReasoningEffort" } },
+        },
+        ReasoningEffort: { minLength: 1, type: "string" },
       },
     }),
   );
@@ -145,8 +155,8 @@ it("fixed Codex app-server stdio returns authenticated, normalized primary and s
         id: 4,
         result: {
           data: [
-            { id: "gpt-5.6-sol", model: "gpt-5.6-sol", hidden: false },
-            { id: "gpt-reserve", model: "gpt-reserve", hidden: true },
+            { id: "gpt-5.6-sol", model: "gpt-5.6-sol", hidden: false, supportedReasoningEfforts: efforts("low", "max", "ultra") },
+            { id: "gpt-reserve", model: "gpt-reserve", hidden: true, supportedReasoningEfforts: efforts("low", "xhigh") },
           ],
           nextCursor: null,
         },
@@ -181,8 +191,11 @@ it("fixed Codex app-server stdio returns authenticated, normalized primary and s
         resetsAt: "1970-01-08T00:00:01.000Z",
       },
     ],
-    // hidden の id も走る(#1260 の実測)ので、一覧は includeHidden: true で読む
-    models: ["gpt-5.6-sol", "gpt-reserve"],
+    // hidden の id も走る(#1260 の実測)ので、一覧は includeHidden: true で読む。effort は一覧が広告したまま(語彙の外の ultra も)
+    models: new Map([
+      ["gpt-5.6-sol", ["low", "max", "ultra"]],
+      ["gpt-reserve", ["low", "xhigh"]],
+    ]),
   });
   expect(calls.map((call) => call.args.slice(0, 2))).toEqual([
     ["--version"],
@@ -251,6 +264,15 @@ it.each([
           properties: { models: { type: "array" }, nextCursor: { type: ["string", "null"] } },
         }),
       ),
+  ],
+  [
+    "Model が supportedReasoningEfforts を持たない",
+    (out: string) => {
+      const path = join(out, "v2", "ModelListResponse.json");
+      const list = JSON.parse(readFileSync(path, "utf8"));
+      list.definitions.Model.required = list.definitions.Model.required.filter((key: string) => key !== "supportedReasoningEfforts");
+      writeFileSync(path, JSON.stringify(list));
+    },
   ],
   [
     "model/list の params が includeHidden を持たない",
@@ -362,7 +384,14 @@ const RATE_LIMITS = {
     },
   },
 };
-const MODEL_LIST = { id: 4, result: { data: [{ id: "gpt-5.6-sol", model: "gpt-5.6-sol", hidden: false }], nextCursor: null } };
+/** `model/list` の Model の `supportedReasoningEfforts`(codex-cli 0.147.0 の生成 schema の形)。 */
+function efforts(...values: string[]) {
+  return values.map((reasoningEffort) => ({ reasoningEffort, description: `${reasoningEffort} reasoning` }));
+}
+const MODEL_LIST = {
+  id: 4,
+  result: { data: [{ id: "gpt-5.6-sol", model: "gpt-5.6-sol", hidden: false, supportedReasoningEfforts: efforts("high") }], nextCursor: null },
+};
 
 it.each([
   [

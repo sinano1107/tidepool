@@ -17,6 +17,7 @@ import type {
   IssueInspection,
   TaskDraft,
 } from "../src/draft.js";
+import { EFFORT_LEVELS } from "../src/effort.js";
 import { type ExecutionSetting, type ExecutionSettingRow, SEED_EXECUTION_SETTINGS } from "../src/execution-setting.js";
 import type {
   CiStatus,
@@ -872,9 +873,11 @@ export function passthroughContainers(spawn: ContainerSpawn = defaultSpawn): Pro
 /** 種の盤面の段の名前(順序どおり)—— 盤面を持たずに定義の門を通すテストが渡す一覧。 */
 export const seedTierNames = SEED_TIERS.map((tier) => tier.name);
 
-/** 種の表の openai の行すべてを載せた `model/list`。表の照合(ADR 0184 決定3)で行を外したくない
- *  fake の openai 観測が持つ —— 実物の pin の版は `gpt-6-astra` を載せない(#1260 の実測)。 */
-export const listedOpenaiModels = SEED_EXECUTION_SETTINGS.filter((row) => row.provider === "openai").map((row) => row.model);
+/** 種の表の openai の行すべてを、5値すべての effort つきで載せた `model/list`。表の照合(ADR 0184 決定3 /
+ *  ADR 0218 決定2)で行を外したくない fake の openai 観測が持つ —— 実物の pin の版は `gpt-6-astra` を載せない(#1260 の実測)。 */
+export const listedOpenaiModels = new Map(
+  SEED_EXECUTION_SETTINGS.filter((row) => row.provider === "openai").map((row) => [row.model, [...EFFORT_LEVELS]]),
+);
 
 /** 健全な openai の usage probe(ADR 0116 決定4): openai は観測が健全でないと pickup で
  *  除外されるので、実物の selector を通して openai entry を走らせたいテストが渡す。

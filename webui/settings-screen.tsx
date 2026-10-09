@@ -1394,6 +1394,26 @@ function HaltedRefiresCard({ rows, say, onChanged }: {
   );
 }
 
+// Response-budget floor records (ADR 0219): one row per (surface, verb) a read was cut on. No remove action:
+// removing a row changes nothing on the board, and whether a fix landed reads from "last" no longer moving.
+// Hidden while there are no records.
+function ResponseFloorsCard({ rows }: { rows: WireContract['GET /api/settings/response-floors']['floors'] }) {
+  const { Card } = window.TidepoolDesignSystem_8a0ead;
+  if (rows.length === 0) return null;
+  const muted = { margin: 0, fontSize: 'var(--text-xs)', color: 'var(--text-muted)' };
+  return (
+    <Card style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      <span style={settingsCardLabel}>reads cut at the response budget</span>
+      <p style={muted}>these reads returned more than the response budget, so the board cut the response and the reader got an incomplete body. this is a tidepool defect: report it so the read can be fixed.</p>
+      {rows.map((row) => (
+        <p key={`${row.surface}:${row.verb}`} style={{ ...muted, fontFamily: 'var(--font-mono)', borderTop: '1px solid var(--border-default)', paddingTop: 10 }}>
+          {row.surface} · {row.verb} · {row.count}× · up to {row.max_bytes} bytes · last {new Date(row.last_at).toLocaleString()}{row.last_task_id && ` · task ${row.last_task_id}`}
+        </p>
+      ))}
+    </Card>
+  );
+}
+
 // Meta-review (issue #924) as a record card: the one period shared by every
 // subject's periodic meta-review (memory and routing).
 function MetaReviewSettingsCard({ settings, say, onSaved, edit }: {
@@ -2634,6 +2654,9 @@ function SettingsScreen({ say, memoryFocus, registerLeaveGuard }: {
   };
   React.useEffect(() => { loadHaltedRefires(); }, []);
 
+  const [responseFloors, setResponseFloors] = React.useState<WireContract['GET /api/settings/response-floors']['floors'] | null>(null); // null → still loading
+  React.useEffect(() => { api('GET /api/settings/response-floors').then((r) => setResponseFloors(r.floors)); }, []);
+
   // ADR 0093 決定5: read-only. null → still loading; the card only appears once
   // the board has answered, so "not logged in" is never shown speculatively.
   const [githubLoggedIn, setGithubLoggedIn] = React.useState<boolean | null>(null);
@@ -2777,7 +2800,7 @@ function SettingsScreen({ say, memoryFocus, registerLeaveGuard }: {
     setDirty,
   };
   const go = (next: string[]) => guard(() => { setStack(next); closeEdit(); });
-  const boardLoaded = displayLanguageLoaded && quietHoursLoaded && !!providerPaceOffsets && !!executionSettings && !!memorySettings && !!metaReviewSettings && !!haltedRefires;
+  const boardLoaded = displayLanguageLoaded && quietHoursLoaded && !!providerPaceOffsets && !!executionSettings && !!memorySettings && !!metaReviewSettings && !!haltedRefires && !!responseFloors;
 
   // a tab switch unmounts this screen, so it has to ask too (決定4)
   React.useEffect(() => {
@@ -2878,12 +2901,22 @@ function SettingsScreen({ say, memoryFocus, registerLeaveGuard }: {
   if (stack.length === 0) {
     // --- level 1: the index. Each row states its section's current state, so
     // the whole surface reads without opening anything.
+    // ADR 0219 決定4・5: floor records and halted refires flag the Board row, each count shown only when non-zero
+    const floors = responseFloors?.length ?? 0;
+    const halted = haltedRefires?.length ?? 0;
+    const boardFlags = [
+      floors > 0 ? `${floors} read${floors === 1 ? '' : 's'} cut` : null,
+      halted > 0 ? `${halted} halted refire${halted === 1 ? '' : 's'}` : null,
+    ].filter((part) => part !== null);
     const rows: { key: string; label: string; summary: string; alert?: boolean }[] = [
       {
         key: 'board', label: 'Board',
-        summary: displayLanguageLoaded && quietHoursLoaded
-          ? `${displayLanguage} · ${quietHoursStart}–${quietHoursEnd}`
-          : 'loading…',
+        summary: boardFlags.length > 0
+          ? boardFlags.join(' · ')
+          : displayLanguageLoaded && quietHoursLoaded
+            ? `${displayLanguage} · ${quietHoursStart}–${quietHoursEnd}`
+            : 'loading…',
+        alert: boardFlags.length > 0,
       },
       ...(Object.keys(SECTIONS) as SettingsSectionKey[]).map((key) => {
         const s: SettingsSection<SettingsRecord> = SECTIONS[key];
@@ -2933,6 +2966,7 @@ function SettingsScreen({ say, memoryFocus, registerLeaveGuard }: {
           <React.Fragment>
             <ExecutionDefaultsCard settings={executionSettings} say={say} onSaved={loadExecutionSettings} edit={edit} />
             {haltedRefires && <HaltedRefiresCard rows={haltedRefires} say={say} onChanged={loadHaltedRefires} />}
+            {responseFloors && <ResponseFloorsCard rows={responseFloors} />}
             <TiersCard settings={executionSettings} say={say} onSaved={loadExecutionSettings} edit={edit} />
             <ExecutionTableCard settings={executionSettings} say={say} onSaved={loadExecutionSettings} edit={edit} />
           </React.Fragment>
