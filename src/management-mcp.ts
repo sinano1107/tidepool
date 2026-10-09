@@ -613,7 +613,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
     {
       description:
         "Read the board's execution settings: the model table (rows of provider, model, tier, effort, price_in / price_out in USD per MTok, " +
-        "and quarantine_question_id — the open question naming a row the provider refused to run on this board, or null), " +
+        "and quarantine_question_id — the id of the open question that keeps the row out of pickup and Board calls, or null), " +
         "the advisor ceiling (off / sonnet / opus / fable / fable_then_opus), the Provider rank, the default priorities (quality / cost) — `priority` for work tasks that request none and `reviewPriority` for every review task — whether the learner is promoted, " +
         "the default tier (tasks requesting no tier whose agent declares none, and the board's drafts run on it), " +
         "the judgement tier — the board's own judgement tier, shared by its retrospective Board calls (allocation review, attribution, Behavior candidate drafting) and its periodic meta-reviews — " +
