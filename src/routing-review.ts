@@ -288,7 +288,7 @@ const neighbour = (tier: { id: TierId; description: string } | undefined) => (ti
  *  根拠は worker_spawned。pin は行の全欄と、いまの一覧で位置の隣にいる段。 */
 function addTierProposal(
   db: Db,
-  input: { tier?: string; description?: string; position?: number; row?: { provider: string; model: string; effort: string }; evidence?: number[] },
+  input: { tier?: string; description?: string; position?: number; row?: { provider: string; model: string; effort: string | null }; evidence?: number[] },
 ): RoutingAddTierProposal {
   const { tier: name, description, position, row: key, evidence } = input;
   if (name === undefined || description === undefined || position === undefined || !key || !evidence?.length) {
@@ -346,7 +346,7 @@ export function proposeRoutingChange(
   metaReviewId: string,
   input: {
     op: (RoutingProposal | RegistryProposal)["op"];
-    row?: { provider: string; model: string; effort: string };
+    row?: { provider: string; model: string; effort: string | null };
     change?: unknown;
     agent?: string;
     to?: Tier;
@@ -366,7 +366,7 @@ export function proposeRoutingChange(
     if (input[field] !== undefined) input[field] = normalizeText(input[field]);
   }
   if (input.row) {
-    input.row = { provider: normalizeText(input.row.provider), model: normalizeText(input.row.model), effort: normalizeText(input.row.effort) };
+    input.row = { provider: normalizeText(input.row.provider), model: normalizeText(input.row.model), effort: input.row.effort && normalizeText(input.row.effort) };
   }
   let proposal: RoutingProposal | RegistryProposal;
   let title: string;
@@ -401,7 +401,7 @@ export function proposeRoutingChange(
     title = `Lower agent ${agent}'s tier: ${pin.tier} -> ${to}`;
     diff = [
       `Agent ${agent} (registry definition), default tier: ${pin.tier} -> ${to}`,
-      `Evidence: ${proposal.evidence.length} worker session(s) on ${pin.rows.map((r) => `${r.provider} / ${r.model} (${r.tier}, ${r.effort})`).join(", ")}`,
+      `Evidence: ${proposal.evidence.length} worker session(s) on ${pin.rows.map((r) => `${rowName(r)} (${r.tier})`).join(", ")}`,
     ];
     purpose =
       "The routing meta-review proposes lowering an agent's default tier by one step. Approve commits the new tier to the registry, " +
@@ -432,7 +432,7 @@ export function proposeRoutingChange(
     assertRowFits(table, composeRoutingRow({ kind: "routing", op: "row", row, change, pin }), row);
     const { tier, ...rest } = change;
     proposal = { kind: "routing", op: "row", row, change: { ...rest, ...(tier !== undefined && { tier: tierIdOf(db, tier) }) }, pin: { ...pin, tier: tierIdOf(db, pin.tier) } };
-    title = `Change routing row: ${pin.provider} / ${pin.model} / ${pin.effort}`;
+    title = `Change routing row: ${rowName(pin)}`;
     diff = [
       `Execution-setting row ${rowName(pin)} (price ${pin.price_in} / ${pin.price_out} USD per MTok):`,
       ...Object.entries(change).map(([field, to]) => `${field}: ${pin[field as keyof typeof change]} -> ${to}`),

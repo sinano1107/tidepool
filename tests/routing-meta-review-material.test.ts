@@ -103,7 +103,7 @@ function board() {
 
 it("表と設定は read_routing_settings の提案以外の全部で、窓ではなく spawn 時点の値 —— 前回より前に書かれた行も、登録より後の変更も出る", () => {
   const { db } = board();
-  const row = { provider: "anthropic" as const, tier: "economy" as const, model: "claude-haiku-4-5", effort: "low", price_in: 1, price_out: 5 };
+  const row = { provider: "anthropic" as const, tier: "economy" as const, model: "claude-haiku-5-5", effort: "low", price_in: 1, price_out: 5 };
   applyExecutionSettingsChange(db, { setting: "row", row }, "webui", at);
   register(db, true);
   const review = register(db);
@@ -166,7 +166,7 @@ it("配分評価の分布は窓の中の注釈だけを list_allocations の行�
 it("新しいセルは初観測が窓の中のものだけ、人間が変えた行は窓の中の直接編集だけで、提案への approve の適用は出ない", () => {
   const { db, work, spawn, exit } = board();
   const task = work("t");
-  const row = { provider: "anthropic" as const, tier: "standard" as const, model: "claude-opus-4-1", effort: "high", price_in: 5, price_out: 25 };
+  const row = { provider: "anthropic" as const, tier: "standard" as const, model: "claude-opus-5", effort: "high", price_in: 5, price_out: 25 };
   exit(task, spawn(task, "deckhand", opus));
   applyExecutionSettingsChange(db, { setting: "row", row }, "webui", at);
   register(db, true);
@@ -245,7 +245,7 @@ it("節を組んだ記録は主題 routing と、乖離した shadow 行の id�
   const seen = exit(task, spawned);
   const annotation = allocate(task, spawned, "appropriate");
   applyExecutionSettingsChange(db, { setting: "priority", value: "cost" }, "webui", at);
-  const rowEdit = applyExecutionSettingsChange(db, { setting: "row", row: { provider: "anthropic", tier: "economy", model: "claude-haiku-4-5", effort: "low", price_in: 1, price_out: 5 } }, "webui", at)!;
+  const rowEdit = applyExecutionSettingsChange(db, { setting: "row", row: { provider: "anthropic", tier: "economy", model: "claude-haiku-5-5", effort: "low", price_in: 1, price_out: 5 } }, "webui", at)!;
   const question = proposeRoutingChange(db, previous, { op: "promote", rationale: "r" }, "auditor", at).question_id;
   answerQuestionViaWebui(db, getTask(db, question)!, ["reject"], at, { comment: "Not yet." });
   const review = register(db);

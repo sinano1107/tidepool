@@ -3,7 +3,7 @@ import type { Cause } from "../src/cause.js";
 import type { CodexAppServerProbeResult } from "../src/codex-app-server.js";
 import { appendEvent, type EventPayload } from "../src/events.js";
 import { applyExecutionSettingsChange, type ExecutionSetting } from "../src/execution-setting.js";
-import { episodeOutcome, type LearnerEpisode, loadEpisodes, observedInTier, recommend, selectorBranch } from "../src/learner.js";
+import { aggregateCells, episodeOutcome, type LearnerEpisode, loadEpisodes, observedInTier, recommend, selectorBranch } from "../src/learner.js";
 import { listRoutingShadow } from "../src/routing-review.js";
 import { type Tier, tierIdOf } from "../src/tier.js";
 import { healthyOpenai, listedOpenaiModels } from "./fakes.js";
@@ -408,6 +408,16 @@ it("advisor pin ありで相談0回の session は、盤面の記録から読ん
 it("行との照合は完全一致 —— 行 claude-opus-5 は claude-opus-5-5 のセルの却下を数えず、未観測の先頭のまま(ADR 0182 決定3)", () => {
   const opus5 = executionSetting("anthropic", "claude-opus-5");
   expect(recommendFor([episode({ outcome: "rejected" }), solAccepted], [opus5, sol])).toEqual({ recommended: opus5, basis: "data" });
+});
+
+it("effort「無い」の episode は1つのセルに集まり、表の行との照合は完全一致 —— 「無い」の行の候補には当たり、同じ model の high の行には当たらない(ADR 0218 決定5)", () => {
+  const model = "claude-haiku-4-5-20251001";
+  const noEffort = { provider: "anthropic", model, effort: null, advisor: null } as const;
+  const episodes = [episode({ cell: noEffort, outcome: "rejected" }), episode({ cell: noEffort, outcome: "rejected" }), solAccepted];
+  expect(aggregateCells(episodes)).toContainEqual({ cell: noEffort, accepted: 0, rejected: 2 });
+  expect(recommendFor(episodes, [executionSetting("anthropic", model, { effort: null }), sol])).toEqual({ recommended: sol, basis: "data" });
+  const high = executionSetting("anthropic", model);
+  expect(recommendFor(episodes, [high, sol])).toEqual({ recommended: high, basis: "data" });
 });
 
 it("同じセルの episode が段 T と T' に分かれていれば、T の候補の推薦は T の観測だけで決まる —— T' の却下は盤面の段でも workspace の段でも T の推薦を動かさない(ADR 0210 決定2)", () => {

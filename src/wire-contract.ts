@@ -304,7 +304,7 @@ export interface WireContract {
   "GET /api/settings/provider-pace-offsets": { offsets: Array<{ provider: string; window: string; offset: number }> };
   "GET /api/settings/execution": {
     /** quarantine_question_id: 行の Quarantine(ADR 0184 決定6)の開いている question。null = 走れる行。 */
-    table: ReadonlyArray<{ provider: string; tier: string; model: string; effort: string; price_in: number; price_out: number; quarantine_question_id: string | null }>;
+    table: ReadonlyArray<{ provider: string; tier: string; model: string; effort: string | null; price_in: number; price_out: number; quarantine_question_id: string | null }>;
     /** advisor の上限(ADR 0208 決定1)。agent の画面は `off` で「この盤面では使われない」を出す。 */
     advisorCeiling: AdvisorCeiling;
     providerRank: readonly string[];

@@ -28,13 +28,13 @@ import {
   tierFieldDescriptions,
 } from "../src/execution-setting.js";
 import { submitAnswer } from "../src/human-verbs.js";
-import { registerMetaReview } from "../src/meta-review.js";
+import { metaReviewSubjectOf, registerMetaReview } from "../src/meta-review.js";
 import { PROVIDER_VALUES, type Provider } from "../src/provider.js";
 import { registerQuarantine, tableRowEffortValue, tableRowValue } from "../src/quarantine.js";
 import { assertValidAgentDefinition } from "../src/registry.js";
 import { RegistryPushFailedError } from "../src/registry-write.js";
 import { proposeRoutingChange } from "../src/routing-review.js";
-import { cancelTaskDirectly, getTask, listChildren, type RegistryProposal, type RoutingProposal, type RoutingRowProposal, registerTask, type TierDescriptionProposal } from "../src/tasks.js";
+import { cancelTaskDirectly, getTask, listBoard, listChildren, type RegistryProposal, type RoutingProposal, type RoutingRowProposal, registerTask, type TierDescriptionProposal } from "../src/tasks.js";
 import { boardCallRow, reportProviderUsage } from "../src/throttle.js";
 import { assertKnownTier, PRIORITIES, readTiers, SEED_TIERS, type Tier, tierNames } from "../src/tier.js";
 import { unusedLanding } from "./fakes.js";
@@ -111,10 +111,27 @@ it("Claude CLI 2.1.286 の規則で model が high に下げる effort は、走
   const passes = [
     ...["claude-opus-4-5", "claude-opus-4-6", "claude-sonnet-4-6", "claude-opus-4-5-20251101"].flatMap((model) => [[model, "medium"], [model, "high"]]),
     ["claude-opus-4-6", "max"], ["claude-sonnet-4-6", "max"],
-    ...["claude-sonnet-5-5", "claude-opus-5-5", "claude-fable-5-1", "claude-haiku-5-5", "kimi-k3", "claude-opus-4-20250514"].flatMap((model) =>
+    ...["claude-sonnet-5-5", "claude-opus-5-5", "claude-fable-5-1", "claude-haiku-5-5", "kimi-k3"].flatMap((model) =>
       ["low", "medium", "high", "xhigh", "max"].map((effort) => [model, effort])),
   ];
   for (const [model, effort] of passes) expect(whyInvalidEffort("anthropic", model!, effort!), `${model} ${effort}`).toBeUndefined();
+});
+
+it("Claude CLI 2.1.286 の規則で effort を捨てる id の行は effort「無い」(null)でだけ書け、5値は effort を取らないと拒む —— 日付つきの id も claude-3 系も当たり、ほかの id(知らない id を含む)と openai の行は「無い」を拒む(ADR 0218 決定5)", () => {
+  const levels = "effort must be one of low / medium / high / xhigh / max";
+  const drops = [
+    "claude-haiku-4-5-20251001", "claude-opus-4-20250514", "claude-opus-4-1-20250805", "claude-sonnet-4-20250514", "claude-sonnet-4-5-20250929",
+    "claude-3-5-haiku-20241022", "claude-3-opus-20240229",
+  ];
+  for (const provider of ["anthropic", "moonshot"]) {
+    for (const model of drops) {
+      expect(whyInvalidEffort(provider, model, null), model).toBeUndefined();
+      for (const effort of ["low", "medium", "high", "xhigh", "max"]) expect(whyInvalidEffort(provider, model, effort)).toMatch(/takes no effort.*write no effort/);
+      expect(whyInvalidEffort(provider, model, "ultra")).toBe(levels);
+    }
+  }
+  const takesEffort = [["anthropic", "claude-sonnet-5-5"], ["anthropic", "claude-opus-4-5"], ["anthropic", "claude-haiku-5-5"], ["moonshot", "kimi-k3"], ["openai", "gpt-5.6-sol"], ["openai", "claude-haiku-4-5-20251001"]];
+  for (const [provider, model] of takesEffort) expect(whyInvalidEffort(provider!, model!, null), `${provider} ${model}`).toBe(levels);
 });
 
 it("tier を書かない agent は盤面既定のティアで解決され、出所は board", () => {
@@ -926,11 +943,18 @@ it("鍵つきの編集は、同じ model の2行のうち名指した行だけ�
   expect(opusRows(db)).toEqual([{ ...opusRow, effort: "low", price_out: 30 }]);
 });
 
+/** routing meta-review の task の id —— export の読み口で引く(ADR 0107 決定2)。 */
+const routingReviewId = (db: Db) => listBoard(db).find((task) => metaReviewSubjectOf(db, task.id) === "routing")!.id;
+const routingReviewOf = (db: Db, now: Date) => {
+  registerMetaReview(db, "routing", now);
+  return routingReviewId(db);
+};
+
 /** routing meta-review を1つ登録し、その子に opus の `effort` の行の提案を立てる。 */
 function proposeOnOpus(db: ReturnType<typeof openDb>, effort: string, change: object) {
   const now = new Date();
   registerMetaReview(db, "routing", now);
-  const review = (db.prepare("SELECT id FROM tasks WHERE meta_review_subject = 'routing'").get() as { id: string }).id;
+  const review = routingReviewId(db);
   const { question_id } = proposeRoutingChange(db, review, { op: "row", row: opusKey(effort), change, rationale: "r" }, "auditor", now);
   const answer = (amendment?: object) =>
     submitAnswer({ db, pollNow() {}, landing: unusedLanding }, getTask(db, question_id)!, ["approve"], undefined, () => now, "webui", false, amendment);
@@ -956,7 +980,7 @@ it("提案は合成した行が別の行と衝突すれば立たず、承認は�
 it("語彙の外の effort への行の提案は作る時点で拒まれ、question は立たない(ADR 0216 決定3)", () => {
   const db = boardWithOpusMax();
   expect(() => proposeOnOpus(db, "max", { effort: "ultra" })).toThrow(DomainError);
-  const review = (db.prepare("SELECT id FROM tasks WHERE meta_review_subject = 'routing'").get() as { id: string }).id;
+  const review = routingReviewId(db);
   expect(listChildren(db, review)).toEqual([]);
 });
 
@@ -988,7 +1012,7 @@ it("行を書く扉は、model が high に下げる effort を走る値を名�
 it("model が high に下げる effort への行の提案は作る時点で拒まれ、question は立たない(ADR 0218 決定4)", () => {
   const db = boardWithOpus45();
   registerMetaReview(db, "routing", new Date());
-  const review = (db.prepare("SELECT id FROM tasks WHERE meta_review_subject = 'routing'").get() as { id: string }).id;
+  const review = routingReviewId(db);
   expect(() => proposeRoutingChange(db, review, { op: "row", row: opus45Key, change: { effort: "max" }, rationale: "r" }, "auditor", new Date())).toThrow(
     /runs as high.*write high/,
   );
@@ -999,13 +1023,66 @@ it("承認に添える、model が high に下げる effort の修正値は拒�
   const db = boardWithOpus45();
   const now = new Date();
   registerMetaReview(db, "routing", now);
-  const review = (db.prepare("SELECT id FROM tasks WHERE meta_review_subject = 'routing'").get() as { id: string }).id;
+  const review = routingReviewId(db);
   const { question_id } = proposeRoutingChange(db, review, { op: "row", row: opus45Key, change: { effort: "medium" }, rationale: "r" }, "auditor", now);
   await expect(
     submitAnswer({ db, pollNow() {}, landing: unusedLanding }, getTask(db, question_id)!, ["approve"], undefined, () => now, "webui", false, { effort: "max" }),
   ).rejects.toThrow(/runs as high.*write high/);
   expect(getTask(db, question_id)).toMatchObject({ status: "todo" });
   expect(opus45Rows(db)).toEqual([opus45]);
+});
+
+const haiku45 = { provider: "anthropic", tier: "economy", model: "claude-haiku-4-5-20251001", effort: null, price_in: 1, price_out: 5 } as const;
+const haiku45Key = { provider: "anthropic", model: haiku45.model, effort: null } as const;
+const sonnetKey = { provider: "anthropic", model: "claude-sonnet-5-5", effort: "high" } as const;
+function boardWithHaiku45() {
+  const db = openDb(":memory:");
+  applyExecutionSettingsChange(db, { setting: "row", row: haiku45 }, "webui", new Date());
+  return db;
+}
+const haiku45Rows = (db: Db) => readExecutionSettings(db).table.filter((row) => row.model === haiku45.model);
+
+it("行を書く扉は、effort を捨てる id の行を effort「無い」でだけ書き、ほかの id の「無い」を拒む。(provider, model, 無い) の行は1つまでで、「無い」の鍵で編集・削除できる(ADR 0218 決定5 / ADR 0200 決定5)", () => {
+  const db = openDb(":memory:");
+  const write = (change: ExecutionSettingsChange) => applyExecutionSettingsChange(db, change, "webui", new Date());
+  expect(() => write({ setting: "row", row: { ...haiku45, effort: "high" } })).toThrow(/takes no effort.*write no effort/);
+  expect(() => write({ setting: "row", row: { ...haiku45, model: "claude-haiku-5-5" } })).toThrow("effort must be one of low / medium / high / xhigh / max");
+  write({ setting: "row", row: haiku45 });
+  expect(() => write({ setting: "row", row: { ...haiku45, tier: "standard" } })).toThrow(/a \(model, effort\) pair belongs to one tier/);
+  write({ setting: "row", key: haiku45Key, row: { ...haiku45, price_in: 2 } });
+  expect(haiku45Rows(db)).toEqual([{ ...haiku45, price_in: 2 }]);
+  write({ setting: "delete_row", ...haiku45Key });
+  expect(haiku45Rows(db)).toEqual([]);
+});
+
+it("effort を捨てる id の行への5値の提案と、ほかの id の行への「無い」の提案は作る時点で拒まれ、question は立たない —— 「無い」の行も鍵で名指して提案できる(ADR 0218 決定5)", () => {
+  const db = boardWithHaiku45();
+  const review = routingReviewOf(db, new Date());
+  const propose = (row: { provider: string; model: string; effort: string | null }, change: object) =>
+    proposeRoutingChange(db, review, { op: "row", row, change, rationale: "r" }, "auditor", new Date());
+  expect(() => propose(haiku45Key, { effort: "low" })).toThrow(/takes no effort.*write no effort/);
+  expect(() => propose(sonnetKey, { effort: null })).toThrow("effort must be one of low / medium / high / xhigh / max");
+  expect(listChildren(db, review)).toEqual([]);
+  propose(haiku45Key, { tier: "standard" });
+  expect(listChildren(db, review)).toHaveLength(1);
+});
+
+it("承認に添える修正値も、effort を捨てる id の行の5値とほかの id の行の「無い」を拒み、行は変わらず question は open のまま(ADR 0218 決定5)", async () => {
+  const db = boardWithHaiku45();
+  const now = new Date();
+  const review = routingReviewOf(db, now);
+  const answer = (question_id: string, amendment: object) =>
+    submitAnswer({ db, pollNow() {}, landing: unusedLanding }, getTask(db, question_id)!, ["approve"], undefined, () => now, "webui", false, amendment);
+  const haiku = proposeRoutingChange(db, review, { op: "row", row: haiku45Key, change: { tier: "standard" }, rationale: "r" }, "auditor", now);
+  await expect(answer(haiku.question_id, { effort: "high" })).rejects.toThrow(/takes no effort.*write no effort/);
+  expect(getTask(db, haiku.question_id)).toMatchObject({ status: "todo" });
+  expect(haiku45Rows(db)).toEqual([haiku45]);
+  const sonnet = proposeRoutingChange(db, review, { op: "row", row: sonnetKey, change: { effort: "medium" }, rationale: "r" }, "auditor", now);
+  await expect(answer(sonnet.question_id, { effort: null })).rejects.toThrow("effort must be one of low / medium / high / xhigh / max");
+  expect(getTask(db, sonnet.question_id)).toMatchObject({ status: "todo" });
+  expect(readExecutionSettings(db).table.filter((row) => row.model === "claude-sonnet-5-5")).toEqual([
+    { provider: "anthropic", tier: "economy", model: "claude-sonnet-5-5", effort: "high", price_in: 2, price_out: 10 },
+  ]);
 });
 
 it("行の Quarantine の鍵は (provider, model) で、effort 違いの行も候補から外れる", () => {

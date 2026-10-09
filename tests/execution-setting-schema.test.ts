@@ -45,6 +45,17 @@ it("主キーは (provider, model) —— 同じ Provider × ティアに複数�
   db.close();
 });
 
+it("effort「無い」(NULL)の行は (provider, model) ごとに1行まで —— 主キーの列の NULL は互いに別の値なので、主キーでは塞がらない(ADR 0218 決定5 / ADR 0200 決定5)", async () => {
+  const db = openDb(await boardPath("execution-settings-no-effort"));
+  const insert = db.prepare(
+    "INSERT INTO execution_settings (provider, tier_id, model, effort, price_in, price_out) VALUES (?, (SELECT id FROM tiers WHERE name = ?), ?, ?, ?, ?)",
+  );
+  insert.run("anthropic", "economy", "claude-haiku-4-5-20251001", null, 1, 5);
+  expect(() => insert.run("anthropic", "standard", "claude-haiku-4-5-20251001", null, 1, 5)).toThrow(/UNIQUE/);
+  insert.run("moonshot", "standard", "claude-haiku-4-5-20251001", null, 1, 5);
+  db.close();
+});
+
 it("初期化の後は DB が正本 — 書き換えた行は再オープンで種へ戻らない", async () => {
   const path = await boardPath("execution-settings-authority");
   const first = openDb(path);

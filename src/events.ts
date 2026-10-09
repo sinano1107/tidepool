@@ -266,10 +266,11 @@ export type EventPayload =
        *  pickup — the provider it speaks, and the model / effort pinned in
        *  that provider's own notation. These are no longer recoverable from
        *  `registry_commit`: agent.md carries no compute, so the only record of
-       *  what this session actually burned is here. */
+       *  what this session actually burned is here. `effort` is null when the row
+       *  takes no effort and the spawn omitted it (ADR 0218 決定5). */
       provider: Provider;
       model: string;
-      effort: string;
+      effort: string | null;
       /** ADR 0210 決定1: the id of the tier the pickup resolved — candidates are that tier's rows only, so this is
        *  the tier the session ran in. An id, not a name, so a later rename or retirement does not rewrite it. */
       tier_id: TierId;
