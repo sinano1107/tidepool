@@ -11,13 +11,7 @@ import {
   registerLocalMergeQuestion,
   registerPrPromotionFailureQuestion,
 } from "../src/landing.js";
-import {
-  type AuthorityProfile,
-  InvalidAgentDefinitionError,
-  type MergeDial,
-  REVIEWER_AUTHORITY_PROFILE,
-  UnknownAgentError,
-} from "../src/registry.js";
+import { type AuthorityProfile, type MergeDial, REVIEWER_AUTHORITY_PROFILE, UnknownAgentError } from "../src/registry.js";
 import {
   answerQuestion,
   completeTask,
@@ -38,7 +32,7 @@ import {
   UnknownWorkspaceError,
   type WorkspaceConfig,
 } from "../src/workspace.js";
-import { FakeClock, FakeGitHubClient, unusedLanding } from "./fakes.js";
+import { FakeClock, FakeGitHubClient, UNRESOLVABLE_AGENT, unusedLanding } from "./fakes.js";
 import {
   commitWork,
   completedWork,
@@ -1426,15 +1420,12 @@ it("escalate で開いた PR の後にダイヤルを auto_if_ci_green へ緩め
 const unresolvable = (): AuthorityProfile => {
   throw new UnknownAgentError("tako");
 };
-const UNRESOLVABLE: Array<[string, () => AuthorityProfile]> = [
-  ["UnknownAgentError", unresolvable],
-  [
-    "InvalidAgentDefinitionError",
-    () => {
-      throw new InvalidAgentDefinitionError("tako", 'unknown authority profile "ghost"');
-    },
-  ],
-];
+const UNRESOLVABLE: Array<[string, () => AuthorityProfile]> = UNRESOLVABLE_AGENT.map(([kind, error]) => [
+  kind,
+  () => {
+    throw error("tako");
+  },
+]);
 
 it.each(UNRESOLVABLE)("PR を開く時点で profile が %s で解決できなければ、PR を開かず agent を quarantine に落とし、着地は retry できる失敗として返る", async (_, fail) => {
   const { workspace } = await makeRemoteBackedWorkspace("landing-unresolvable-at-open");

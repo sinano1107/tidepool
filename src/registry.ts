@@ -282,11 +282,12 @@ export class UnknownAgentError extends Error {
 
 /** 定義が成立していない(ADR 0097 決定3 / ADR 0110 決定1): provider が列挙の外、
  *  advisor を提供しない正準経路に advisor が宣言されている、ティアが列挙の外、
- *  退役したピン留めが残っている、あるいは registry に無い authority profile を
- *  名指している(issue #1648。登録の門は UnknownAuthorityProfileError で拒む)。定義を受け入れる門 —— 登録
+ *  あるいは退役したピン留めが残っている。定義を受け入れる門 —— 登録
  *  (agent-create.ts)と pickup 解決(agent.ts の resolveExecutionAgent)—— で
  *  投げ、**読み込みでは投げない**: 手で commit された違反は registry 全体を
- *  煉瓦にせず、その agent 1体を隔離する。 */
+ *  煉瓦にせず、その agent 1体を隔離する。registry に無い authority profile を
+ *  名指す定義もこの型だが、投げるのは pickup 解決だけである(issue #1648。
+ *  登録の門は UnknownAuthorityProfileError で拒む)。 */
 export class InvalidAgentDefinitionError extends Error {
   constructor(
     public readonly agentName: string,

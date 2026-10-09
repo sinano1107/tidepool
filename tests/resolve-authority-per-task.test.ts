@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { type AuthorityProfile, InvalidAgentDefinitionError, UnknownAgentError } from "../src/registry.js";
+import type { AuthorityProfile } from "../src/registry.js";
+import { UNRESOLVABLE_AGENT } from "./fakes.js";
 import { api, bootTidepool, HOUR, mcpClient, questions, type Tidepool } from "./harness.js";
 
 let t: Tidepool;
@@ -97,10 +98,6 @@ it("navigator 宛てタスクは navigator 自身の authority(deckhand とは�
 
 // ADR 0224: spawn 後に assignee が registry から消えた/定義が壊れたとき、authority を読む verb は
 // 無制限に落ちず拒まれ、agent 名の quarantine が立つ。slot は保たれ escalate は通る。
-const UNRESOLVABLE: Array<[string, (name: string) => Error]> = [
-  ["UnknownAgentError", (name) => new UnknownAgentError(name)],
-  ["InvalidAgentDefinitionError", (name) => new InvalidAgentDefinitionError(name, 'tier "bogus" is outside the enumeration')],
-];
 
 const spec = (title: string) => ({ title, purpose: `purpose of ${title}`, completion_criteria: `criteria of ${title}`, assignee: "deckhand" });
 
@@ -143,7 +140,7 @@ async function expectRefusedAndQuarantined(t: Tidepool, taskId: string, verb: st
   expect(escalated.isError ?? false).toBe(false);
 }
 
-describe.each(UNRESOLVABLE)("assignee の authority が %s で解決できないとき", (_, fail) => {
+describe.each(UNRESOLVABLE_AGENT)("assignee の authority が %s で解決できないとき", (_, fail) => {
   it("list_agents は拒まれ、agent 名の quarantine が立ち、続く escalate は通る", async () => {
     const resolver = driftingResolver(fail);
     t = await bootTidepool({ resolveAuthority: resolver.resolveAuthority });

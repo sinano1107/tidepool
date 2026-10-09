@@ -31,14 +31,16 @@ export interface ResolvedAgent {
  *
  *  Resolution also re-runs the definition gates (ADR 0097 決定1/3 / ADR 0110
  *  決定1): a definition whose provider or tier is outside the enumeration, that
- *  combines an advisor with a provider that doesn't offer one, that still
- *  pins a retired model / effort, or that names an authority profile the
- *  registry does not have (issue #1648), is a broken resource,
+ *  combines an advisor with a provider that doesn't offer one, or that still
+ *  pins a retired model / effort, is a broken resource,
  *  not a spawnable agent — InvalidAgentDefinitionError, which the pickup path
  *  (resolveAgentOrQuarantine) fails closed into the same agent-name
  *  quarantine as registry drift. The loader deliberately does not reject
  *  these (a violating file still parses) so the violation stops the one
- *  agent instead of the whole registry read. */
+ *  agent instead of the whole registry read. A definition naming an authority
+ *  profile the registry does not have is the same broken resource (issue
+ *  #1648): only resolution looks the profile up, so it is not one of the
+ *  shared gates, but it fails into the same error and quarantine. */
 export function resolveExecutionAgent(
   registry: Registry,
   defaultAgentName: string,

@@ -77,10 +77,10 @@ describe("resolveExecutionAgent(ADR 0012 / issue #36: spawn 時の assignee 解�
     expect(resolved.profile.name).toBe("standard");
   });
 
-  it("authority が Object.prototype 由来のキー(toString 等)を指す定義は、registry に無い profile と同じく InvalidAgentDefinitionError で拒否される(issue #69)", () => {
+  it("authority が Object.prototype 由来のキー(toString 等)を指す定義は unknown authority profile として拒否される(issue #69)", () => {
     const registry = makeRegistry({ deckhand: { authority: "toString" } });
     expect(() => resolveExecutionAgent(registry, "deckhand", null, seedTierNames)).toThrow(
-      InvalidAgentDefinitionError,
+      new InvalidAgentDefinitionError("deckhand", 'unknown authority profile "toString"'),
     );
   });
 
