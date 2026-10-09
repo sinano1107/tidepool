@@ -1,6 +1,7 @@
-import { readFileSync, writeFileSync } from "node:fs";
+import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
+import { CLAUDE_CLI_VERSION } from "../src/claude-cli-version.js";
 import { ClaudeDraftClient } from "../src/claude-draft-client.js";
 import { ClaudeTranslationClient } from "../src/claude-translation-client.js";
 import { ClaudeCodeWorker } from "../src/claude-worker.js";
@@ -493,8 +494,6 @@ it("表示時翻訳が 404 を受けても、行の Quarantine は立たない(A
 
 // ── 起動時の照合(ADR 0218 決定6 / #1659): anthropic / moonshot の行を CLI の組み込みの規則に照らす ──
 
-const PINNED_CLAUDE_CLI = readFileSync(new URL("../claude-cli-version", import.meta.url), "utf8").trim();
-
 /** 扉を通らずに入った行(古い release が残した形)を DB に直接書き、同じ DB で起動し直す。 */
 async function rebootWithRowsPastTheDoor(rows: Array<{ model: string; effort: string | null; tier: string }>) {
   t = await bootTidepool();
@@ -528,7 +527,7 @@ it("起動時、扉を通らずに入った行で書いた effort のとおり�
     ["execution-setting row anthropic / claude-sonnet-5-5 / no effort does not run with the effort it names", []],
   ]);
   expect(opened[0].purpose).toBe(
-    `Claude CLI ${PINNED_CLAUDE_CLI}'s built-in model rules do not run this row with the effort it names: ` +
+    `Claude CLI ${CLAUDE_CLI_VERSION}'s built-in model rules do not run this row with the effort it names: ` +
       "claude-haiku-4-5-20251001 takes no effort under the claude CLI's built-in model rules; write no effort (null). " +
       "This row is out of pickup and Board calls while this stands; other rows keep running, including this model's " +
       "rows at other efforts.\n\nRepair: in the settings tab, change this row's effort or delete the row. This " +

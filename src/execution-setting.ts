@@ -826,7 +826,7 @@ export function quarantineRowsOffClaudeEffortRules(db: Db, now: Date): void {
   for (const row of loadExecutionSettingTable(db)) {
     if (row.provider === "openai") continue;
     const reason = whyInvalidEffort(row.provider, row.model, row.effort);
-    if (reason) registerQuarantine(db, "tableRowEffort", tableRowEffortValue(row.provider, row.model, row.effort), reason, now, "startupReconciliation");
+    if (reason) registerQuarantine(db, "tableRowEffort", tableRowEffortValue(row.provider, row.model, row.effort), reason, now);
   }
 }
 

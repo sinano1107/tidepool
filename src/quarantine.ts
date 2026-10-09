@@ -5,7 +5,6 @@
  *  鍵は全種類 `(kind, value)` で、1鍵につき開いた確認型 question は最大1枚。盤面全体で
  *  資源の名を持たない種類の value は NULL である。依存の向きはこの module → タスクの
  *  module であり、逆は張らない。 */
-
 import { CLAUDE_CLI_VERSION } from "./claude-cli-version.js";
 import type { Db } from "./db.js";
 import { appendEvent, type RowRefusalCause } from "./events.js";
@@ -64,10 +63,11 @@ export function parseTableRowEffortValue(value: string): { provider: Provider; m
   return { ...parseTableRowValue(value.slice(0, at)), effort: value.slice(at + 1) || null };
 }
 
-/** 行の effort の Quarantine の文面は契機ごとに組む(Codex の一覧の照合と起動時の照合、#1655)。 */
-const TABLE_ROW_EFFORT_PROSE = {
-  // 原因は断言しない(ADR 0184 決定1)
-  codexModelList:(row: string, reason: string): QuarantineProse =>
+/** 行の effort の Quarantine の文面は契機ごとに組む。契機は DB に残らず、値の provider で決まる: Codex の一覧の照合は
+ *  openai の行だけ、起動時の照合は anthropic / moonshot の行だけを入れる(#1655)。 */
+const TABLE_ROW_EFFORT_PROSE: Record<"openai" | "claudeCli", (row: string, reason: string) => QuarantineProse> = {
+  // Codex の一覧の照合。原因は断言しない(ADR 0184 決定1)
+  openai: (row, reason) =>
     rowQuarantineProse(
       row,
       `${reason}. This board's model list does not advertise this effort for this model — with this Codex CLI ` +
@@ -81,7 +81,7 @@ const TABLE_ROW_EFFORT_PROSE = {
     ),
   // 起動時の照合(ADR 0218 決定6): 事実は tidepool の更新でしか変わらないので、回答では決着せず表の編集だけで決着する。
   // 「走れない」とも観測とも言わず、版の組み込みの規則と書くべき値(reason)を名指す
-  startupReconciliation: (row: string, reason: string): QuarantineProse => ({
+  claudeCli: (row, reason) => ({
     title: `execution-setting row ${row} does not run with the effort it names`,
     purpose:
       `Claude CLI ${CLAUDE_CLI_VERSION}'s built-in model rules do not run this row with the effort it names: ${reason}. ` +
@@ -93,7 +93,7 @@ const TABLE_ROW_EFFORT_PROSE = {
   }),
 };
 
-/** 行の Quarantine(model ごと・effort ごと)の question の形。違うのは本文だけ。 */
+/** 行の Quarantine(model ごと・Codex の effort ごと)の question の形。違うのは本文だけ。 */
 function rowQuarantineProse(row: string, purpose: string): QuarantineProse {
   return {
     title: `execution-setting row ${row} cannot run on this board`,
@@ -108,8 +108,6 @@ function rowQuarantineProse(row: string, purpose: string): QuarantineProse {
     ],
   };
 }
-
-export type TableRowEffortTrigger = keyof typeof TABLE_ROW_EFFORT_PROSE;
 
 /** 表の並びは盤面全体の停止の列挙と同じ(containment → failedTeardown →
  *  registryReachability)で、資源単位の種類がその後に続く。 */
@@ -246,7 +244,7 @@ export const QUARANTINES = [
     // 入れない: 鍵は (provider, model) で、別の原因の2度目の観測は再発火だけで文面は最初の原因のまま
     kind: "tableRow",
     scope: "row",
-    prose: (value: string | null, reason: string, refusalCause?: RowRefusalCause | TableRowEffortTrigger): QuarantineProse => {
+    prose: (value: string | null, reason: string, refusalCause?: RowRefusalCause): QuarantineProse => {
       const { provider, model } = parseTableRowValue(value!);
       const row = `${provider} / ${model}`;
       const [why, keepRow] =
@@ -275,11 +273,9 @@ export const QUARANTINES = [
     // 行の effort の Quarantine(ADR 0218 決定2)。値は `tableRowEffortValue` の綴りで、資源の単位は行
     kind: "tableRowEffort",
     scope: "row",
-    prose: (value: string | null, reason: string, cause?: RowRefusalCause | TableRowEffortTrigger): QuarantineProse => {
+    prose: (value: string | null, reason: string): QuarantineProse => {
       const { provider, model, effort } = parseTableRowEffortValue(value!);
-      // 契機は DB に残らない: Codex の一覧の照合は openai の行だけ、起動時の照合は anthropic / moonshot の行だけを入れる
-      const trigger = (cause ?? (provider === "openai" ? "codexModelList" : "startupReconciliation")) as TableRowEffortTrigger;
-      return TABLE_ROW_EFFORT_PROSE[trigger](`${provider} / ${model} / ${effort ?? "no effort"}`, reason);
+      return TABLE_ROW_EFFORT_PROSE[provider === "openai" ? "openai" : "claudeCli"](`${provider} / ${model} / ${effort ?? "no effort"}`, reason);
     },
   },
 ] as const satisfies ReadonlyArray<{
@@ -293,8 +289,8 @@ export const QUARANTINES = [
   /** entry 経路(ADR 0110 決定3)で値が外す Provider —— 「その Provider では走れない」
    *  種類だけが持つ。agent 名ではなく entry を外すので `QuarantineResolvers` とは別の写像。 */
   excludesProviders?: (values: string[]) => Provider[];
-  /** `cause` は `tableRow` には行の拒否の証拠の種類、`tableRowEffort` には契機。ほかの種類は読まない。 */
-  prose: (value: string | null, reason: string, cause?: RowRefusalCause | TableRowEffortTrigger) => QuarantineProse;
+  /** `cause` は `tableRow` だけが読む行の拒否の証拠の種類。 */
+  prose: (value: string | null, reason: string, cause?: RowRefusalCause) => QuarantineProse;
 }>;
 
 export type QuarantineKind = (typeof QUARANTINES)[number]["kind"];
@@ -370,14 +366,14 @@ export function openQuarantineQuestions(db: Db, kind: QuarantineKind): Map<strin
 }
 
 /** 唯一の登録口。鍵が開いていれば既存の question に `quarantine_refired` を追記する
- *  だけで、それ以外は何もしない(1鍵につき確認は最大1枚)。`cause` は文面へ渡す行の拒否の証拠の種類か契機。 */
+ *  だけで、それ以外は何もしない(1鍵につき確認は最大1枚)。`cause` は文面へ渡す行の拒否の証拠の種類。 */
 export function registerQuarantine(
   db: Db,
   kind: QuarantineKind,
   value: string | null,
   reason: string,
   now: Date,
-  cause?: RowRefusalCause | TableRowEffortTrigger,
+  cause?: RowRefusalCause,
 ): void {
   const existing = openQuarantineQuestion(db, kind, value);
   if (existing) {

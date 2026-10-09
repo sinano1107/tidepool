@@ -404,7 +404,7 @@ it("GET /api/settings/execution は effort の Quarantine 中の行にだけ印�
     t.clock.now(),
   );
   const value = tableRowEffortValue("openai", "gpt-5.6-sol", "low");
-  registerQuarantine(t.db, "tableRowEffort", value, "unadvertised in a test", t.clock.now(), "codexModelList");
+  registerQuarantine(t.db, "tableRowEffort", value, "unadvertised in a test", t.clock.now());
   const questionId = openQuarantineQuestion(t.db, "tableRowEffort", value)!.id;
 
   const { table } = await state();
@@ -419,7 +419,7 @@ it("effort の Quarantine 中の行の価格 / ティアだけを書き換えて
   const LOW = { provider: "openai", tier: "economy", model: "gpt-5.6-sol", effort: "low", price_in: 4, price_out: 20 } as const;
   applyExecutionSettingsChange(t.db, { setting: "row", row: LOW }, "webui", t.clock.now());
   const value = tableRowEffortValue("openai", "gpt-5.6-sol", "low");
-  registerQuarantine(t.db, "tableRowEffort", value, "unadvertised in a test", t.clock.now(), "codexModelList");
+  registerQuarantine(t.db, "tableRowEffort", value, "unadvertised in a test", t.clock.now());
   const questionId = openQuarantineQuestion(t.db, "tableRowEffort", value)!.id;
 
   // 種の gpt-5.6-sol / high(standard)を消しても low の行は表に残る —— 消すのが先なのは、1つの model はティアに1行だから
