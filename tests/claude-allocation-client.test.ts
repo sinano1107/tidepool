@@ -42,6 +42,10 @@ it("judge は表の行の model / effort をピン留めし、空のツール面
   expect(args[1]).toContain('"model": "sonnet"');
   expect(args[1]).toContain('"tier": "economy"');
   expect(args[1]).toContain("The tier is the quality floor this session ran at, and setting.source.tier identifies who set that floor.");
+  // usage / actions / usage.advisor.usage の null は観測なしであって 0 でも「何もしなかった」でもない(ADR 0083 追記10)
+  expect(args[1]).toContain(
+    'A null usage (the session filed no consumption report), actions (the action counts were not observed), or usage.advisor.usage (the advisor\'s share of the consumption could not be measured) means that value was not observed — never zero, never "did nothing", never zero cost; do not read it as evidence either way.',
+  );
   // cause の memory は配分評価の入力に読んだ記憶が無いので載せない(ADR 0166 決定1)
   expect(args[1]).toContain('"cause" (one of capability / task_ambiguity / missing_information / environment / preference / requirement_change / uncertain —');
   // environment は worker の外側の事情で、線は判断の妥当性(ADR 0213 決定1)
