@@ -88,7 +88,7 @@ export interface BehaviorDraftClient {
 export interface RetrospectiveCallDeps {
   /** 配分評価の Board call(ADR 0111 決定4 / ADR 0172)。sweep だけが撃つ。undefined → 撃てなかった扱いで何も書かない。 */
   allocationClient: AllocationClient | undefined;
-  /** 帰責の Board call(ADR 0115 / issue #574・#575)。undefined → commit は異議を `uncertain` で束ね(RCA は帰責以前のまま立つ)、第2回も撃たない。 */
+  /** 帰責の Board call(ADR 0115 / issue #574・#575)。undefined → commit は異議を未帰責のまま RCA に倒し(ADR 0168)、第2回も撃たない。 */
   attributionClient: AttributionClient | undefined;
   /** Behavior candidate 起草の Board call(ADR 0120 / issue #617)。sweep が帰責の後に撃つ。undefined → 何も起草しない。 */
   behaviorDraftClient: BehaviorDraftClient | undefined;
