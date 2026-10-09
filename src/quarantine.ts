@@ -63,11 +63,16 @@ export function parseTableRowEffortValue(value: string): { provider: Provider; m
   return { ...parseTableRowValue(value.slice(0, at)), effort: value.slice(at + 1) || null };
 }
 
-/** 行の effort の Quarantine の文面は契機ごとに組む。契機は DB に残らず、値の provider で決まる: Codex の一覧の照合は
- *  openai の行だけ、起動時の照合は anthropic / moonshot の行だけを入れる(#1655)。 */
-const TABLE_ROW_EFFORT_PROSE: Record<"openai" | "claudeCli", (row: string, reason: string) => QuarantineProse> = {
-  // Codex の一覧の照合。原因は断言しない(ADR 0184 決定1)
-  openai: (row, reason) =>
+/** 行の effort の Quarantine の契機。DB に残さず、値の provider で決まる: Codex の一覧の照合は openai の行だけ、起動時の照合は
+ *  anthropic / moonshot の行(どちらも claude CLI で走る)だけを入れる(#1655)。文面・回答の門・起動時の照合が読む。 */
+export function tableRowEffortTrigger(provider: Provider): "codexModelList" | "startupReconciliation" {
+  return provider === "openai" ? "codexModelList" : "startupReconciliation";
+}
+
+/** 行の effort の Quarantine の文面は契機ごとに組む。 */
+const TABLE_ROW_EFFORT_PROSE: Record<ReturnType<typeof tableRowEffortTrigger>, (row: string, reason: string) => QuarantineProse> = {
+  // 原因は断言しない(ADR 0184 決定1)
+  codexModelList: (row, reason) =>
     rowQuarantineProse(
       row,
       `${reason}. This board's model list does not advertise this effort for this model — with this Codex CLI ` +
@@ -79,9 +84,9 @@ const TABLE_ROW_EFFORT_PROSE: Record<"openai" | "claudeCli", (row: string, reaso
       "2. If the effort is right, update tidepool or restore the account, then answer — the board reads the model " +
       "list again and accepts the answer only if it advertises this effort for this model.",
     ),
-  // 起動時の照合(ADR 0218 決定6): 事実は tidepool の更新でしか変わらないので、回答では決着せず表の編集だけで決着する。
+  // ADR 0218 決定6: 事実は tidepool の更新でしか変わらないので、回答では決着せず表の編集だけで決着する。
   // 「走れない」とも観測とも言わず、版の組み込みの規則と書くべき値(reason)を名指す
-  claudeCli: (row, reason) => ({
+  startupReconciliation: (row, reason) => ({
     title: `execution-setting row ${row} does not run with the effort it names`,
     purpose:
       `Claude CLI ${CLAUDE_CLI_VERSION}'s built-in model rules do not run this row with the effort it names: ${reason}. ` +
@@ -275,7 +280,7 @@ export const QUARANTINES = [
     scope: "row",
     prose: (value: string | null, reason: string): QuarantineProse => {
       const { provider, model, effort } = parseTableRowEffortValue(value!);
-      return TABLE_ROW_EFFORT_PROSE[provider === "openai" ? "openai" : "claudeCli"](`${provider} / ${model} / ${effort ?? "no effort"}`, reason);
+      return TABLE_ROW_EFFORT_PROSE[tableRowEffortTrigger(provider)](`${provider} / ${model} / ${effort ?? "no effort"}`, reason);
     },
   },
 ] as const satisfies ReadonlyArray<{

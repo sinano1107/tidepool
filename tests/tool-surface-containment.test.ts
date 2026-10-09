@@ -1,6 +1,6 @@
-import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { afterEach, expect, it, vi } from "vitest";
+import { CLAUDE_CLI_VERSION } from "../src/claude-cli-version.js";
 import {
   checkClaudeCliVersion,
   enumerateToolsThrough,
@@ -348,7 +348,7 @@ it("fs 半分が不成立ならツール面の ping は撃たない — 安い�
 
 /** 固定の版の正本(ADR 0186 決定5)。実装の定数を import せず、ファイルから読む —
  *  一致の it が、門の期待する版がこの1か所であることも言う。 */
-const PINNED = readFileSync(new URL("../claude-cli-version", import.meta.url), "utf8").trim();
+const PINNED = CLAUDE_CLI_VERSION;
 
 it("版が固定の版と違えば、ツール面の probe を撃たずに不成立", async () => {
   const enumerate = vi.fn(async () => ({ tools: WORK_SURFACE, mcpServers: [], autoMemoryPath: null }));

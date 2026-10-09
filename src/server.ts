@@ -519,7 +519,7 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
       options.clock.now(),
     );
   }
-  // ADR 0218 決定6: 書いた effort で走らない行は、最初の poll より前に表から外す
+  // ADR 0218 決定6: 書いた effort で走らない行は、最初の poll より前に pickup と Board call から外す
   quarantineRowsOffClaudeEffortRules(db, options.clock.now());
   const app = express();
   // ADR 0036 / issue #153: 人間面の credential。**app への登録より前**に置くのが

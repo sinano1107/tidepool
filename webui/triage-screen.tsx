@@ -427,8 +427,9 @@ function TpQuestionCard({ q, answer, onAnswer, locked = false, onTranslate, onOp
   // picked options the board says need a reason (ADR 0179 決定5): pickable, but not submittable while the comment is blank
   const pickedNeedingComment = draft.filter((v) => v && q.needsComment?.includes(v));
   // a pick made before the addressee turned out dead is not submittable either
-  // a question with no items settles only by a table edit (ADR 0218 決定6), never by an answer
-  const canSubmit = items.length > 0 && draft.every(Boolean) && !draft.some((v) => disabledOptions.includes(v!)) && (pickedNeedingComment.length === 0 || !TidepoolRules.whyBlank(comment));
+  // a question with no items settles only by a table edit (ADR 0218 決定6): no comment, no Submit
+  const answerable = !locked && items.length > 0;
+  const canSubmit = draft.every(Boolean) && !draft.some((v) => disabledOptions.includes(v!)) && (pickedNeedingComment.length === 0 || !TidepoolRules.whyBlank(comment));
   // triage marks the card answered only after the POST resolves, so Submit stays pressable until then
   const [submitting, setSubmitting] = React.useState(false);
   const submit = () => {
@@ -506,7 +507,7 @@ function TpQuestionCard({ q, answer, onAnswer, locked = false, onTranslate, onOp
             onChange={(e) => setAmendment({ ...amendment, effort: e.target.value.trim() })} />
         </div>
       )}
-      {!locked && (
+      {answerable && (
         <div style={{ marginBottom: 14 }}>
           <Input label={pickedNeedingComment.length ? `Comment (required to ${pickedNeedingComment.join(' / ')})` : 'Comment (optional)'} multiline rows={2} value={comment} onChange={(e) => setComment(e.target.value)}
             placeholder="why" />
@@ -524,7 +525,7 @@ function TpQuestionCard({ q, answer, onAnswer, locked = false, onTranslate, onOp
             disabled={disabledOptions} />
         ))}
       </div>
-      {!locked && (
+      {answerable && (
         <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 16 }}>
           <Button variant="primary" disabled={!canSubmit || submitting} onClick={submit}>Submit</Button>
         </div>

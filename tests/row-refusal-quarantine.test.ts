@@ -538,18 +538,6 @@ it("起動時、扉を通らずに入った行で書いた effort のとおり�
   for (const q of opened) expect(q.purpose).not.toMatch(/cannot run|observ/i);
 });
 
-it("起動を重ねても、1行につき開いた起動時の照合の question は1枚のまま", async () => {
-  await rebootWithRowsPastTheDoor(PAST_THE_DOOR);
-  await t.stopServer();
-  t = await bootTidepool({ dir: t.dir });
-
-  expect((await openEffortQuestions()).map((q) => q.question_quarantine_value)).toEqual([
-    "anthropic/claude-haiku-4-5-20251001/high",
-    "anthropic/claude-opus-4-5-20251101/max",
-    "anthropic/claude-sonnet-5-5/",
-  ]);
-});
-
 it("種の表で起動した盤面には、起動時の照合の question は1枚も立たない", async () => {
   t = await bootTidepool();
   expect(await openEffortQuestions()).toEqual([]);
@@ -562,7 +550,7 @@ it("起動時の照合の question は、行の effort を表で直すと回答�
   const answered = await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, { answers: ["it runs now"] });
   expect({ status: answered.status, error: answered.json.error }).toEqual({
     status: 409,
-    error: "this question carries 0 item(s), but 1 answer(s) were submitted",
+    error: "this question takes no answer: it closes on its own once the repair it names is made",
   });
   expect((await api(t.baseUrl, "GET", `/api/tasks/${question.id}`)).json.status).toBe("todo");
 

@@ -419,7 +419,8 @@ export interface RegisterTaskInput extends Partial<TaskContent> {
   priority?: string;
 }
 
-/** Every question carries 1-4 items (issue #30), each with 2-4 options plus a
+/** Every question carries 1-4 items (issue #30) — a quarantine question may carry none, when only a table edit settles
+ *  it (ADR 0218 決定6) — each with 2-4 options plus a
  *  recommendation among them, whichever door it enters by (escalate, or a
  *  tidepool-internal registerTask call — watchdog/quarantine/merge/decompose;
  *  the JSON API refuses `type: "question"` outright, issue #38) — the answer
@@ -446,7 +447,8 @@ function assertQuestionSpec(input: RegisterTaskInput): void {
   }
   const items = input.question;
   // 表の編集でだけ決着する Quarantine の question は項目を持たない(ADR 0218 決定6)
-  if (!items || items.length < (input.quarantine ? 0 : 1) || items.length > 4) {
+  const takesNoAnswer = input.quarantine !== undefined && items?.length === 0;
+  if (!takesNoAnswer && (!items || items.length < 1 || items.length > 4)) {
     throw new DomainError("a question carries 1 to 4 items");
   }
   const minOptions = input.quarantine ? 1 : 2;
@@ -1282,6 +1284,10 @@ export function assertAnswerable(question: Task, answers: string[], comment: str
     throw new DomainError(`a ${question.status} question cannot be answered`);
   }
   const items = question.question_items!;
+  // 項目の無い question は表の編集でだけ決着する Quarantine(ADR 0218 決定6)。項目数の食い違いより先に、答えの道が無いと言う
+  if (items.length === 0) {
+    throw new DomainError("this question takes no answer: it closes on its own once the repair it names is made");
+  }
   if (answers.length !== items.length) {
     throw new DomainError(
       `this question carries ${items.length} item(s), but ${answers.length} answer(s) were submitted`,
