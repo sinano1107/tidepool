@@ -64,14 +64,17 @@ export interface Issue {
   comments: string[];
 }
 
-/** The three-way state a PR's checks aggregate to: any failing or cancelled
- *  check is a "failure", any still running is "pending", otherwise (including
- *  a PR with no checks configured at all) "success" — there is nothing left to
- *  block on. A check state that could not be **read** is "pending" too, never
- *  "success" and never "failure" (issue #427): an unobservable CI is not a
- *  green light (ADR 0052's fail-closed), and inventing a failure would write a
- *  false observation into the human's failure question (ADR 0079). */
-export type CiStatus = "pending" | "success" | "failure";
+/** The state a PR's checks aggregate to: any failing or cancelled check is a
+ *  "failure", any still running is "pending", all passed is "success". A PR
+ *  with no check reported at all is "unreported" — neither green nor pending,
+ *  since "this repo has no CI" and "the checks have not reported yet" look the
+ *  same from here; callers wait a grace from the board's last push before
+ *  treating it as unobservable (ADR 0227). A check state that could not be
+ *  **read** is "pending", never "success" and never "failure" (issue #427): an
+ *  unobservable CI is not a green light (ADR 0052's fail-closed), and inventing
+ *  a failure would write a false observation into the human's failure question
+ *  (ADR 0079). */
+export type CiStatus = "pending" | "success" | "failure" | "unreported";
 
 /** ADR 0016's 確定的失敗 (permanent failure) of an issue-backed task's live
  *  reference, as part of getIssue's contract: the referenced issue is gone
@@ -95,7 +98,8 @@ export class IssueGoneError extends Error {
  *  faked in tests, shelled out to `gh` for real. `getCiStatus`/
  *  `mergePullRequest` (issue #11) back the merge dial: the actual merge is
  *  never performed until a live CI check reports "success" immediately
- *  beforehand. */
+ *  beforehand — or, on a human's merge answer only, still reports
+ *  "unreported" past ADR 0227's grace. */
 export interface GitHubClient {
   createPullRequest(input: CreatePrInput): Promise<PrResult>;
   /** タスクブランチを `origin` へ push する —— 盤面がタスクブランチをリモートへ書く唯一の操作。
@@ -233,6 +237,7 @@ export class GhCliClient implements GitHubClient {
     } catch {
       return "pending";
     }
+    if (checks.length === 0) return "unreported";
     // CheckRun は完了時の `conclusion`、StatusContext は `state` に判定を持つ。
     // どちらも空 = まだ完了していない。知らない判定値は pending 側に落とす。
     const verdicts = checks.map((c) => c.conclusion || c.state || "");

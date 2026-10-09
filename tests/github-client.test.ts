@@ -169,13 +169,14 @@ it("getCiStatus は未完了のチェックが残っていれば pending を返�
   expect(status).toBe("pending");
 });
 
-it("getCiStatus はチェックが1つも無い PR を success として読む", async () => {
+// ADR 0227 決定1: 空の集計からは「CI が無い」と「まだ報告されていない」を区別できない —— 緑とも pending とも読まない
+it("getCiStatus はチェックが1つも無い PR を unreported(checks 未報告)として読む", async () => {
   const dir = await fakeGhChecks('{"statusCheckRollup":[]}', 0);
   originalPath = process.env.PATH;
   process.env.PATH = `${dir}:${originalPath}`;
 
   const status = await new GhCliClient(await makeAuth()).getCiStatus({ path: "/tmp", number: 1 });
-  expect(status).toBe("success");
+  expect(status).toBe("unreported");
 });
 
 it("getCiStatus は cancel されたチェックを failure として読む", async () => {

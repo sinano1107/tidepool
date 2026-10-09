@@ -170,9 +170,13 @@ export type EventPayload =
   // the durable link the merge dial (escalate / auto_if_ci_green; `external`
   // leaves the PR to GitHub's own surface — ADR 0079) reads back
   | { kind: "pr_opened"; pr_number: number }
+  // ADR 0227 決定2: 盤面が開いている PR へ修理を push した —— 盤面名義の外向きの行為で、`pr_opened` と並んで
+  // check 未報告の猶予の起点になる
+  | { kind: "pr_branch_pushed"; pr_number: number }
   // issue #11: the merge dial actually merged this PR — via the escalate
   // answer (right after a live CI check confirmed success immediately
-  // beforehand) or the auto_if_ci_green poll (CI green). The actor is whose
+  // beforehand, or still found no check reported past ADR 0227's grace) or
+  // the auto_if_ci_green poll (CI green). The actor is whose
   // judgment decided the merge: human for escalate, board for
   // auto_if_ci_green (ADR 0196)
   | { kind: "pr_merged"; pr_number: number }
