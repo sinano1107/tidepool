@@ -1,9 +1,9 @@
 import { once } from "node:events";
 import { Readable } from "node:stream";
-import { probeToolSurfaceCapability, readInitReport, readResultEvent, readToolSurface } from "./claude-worker.js";
+import { checkAutoMemoryClosed, probeToolSurfaceCapability, readInitReport, readResultEvent, readToolSurface } from "./claude-worker.js";
 import type { ModelProbe, ModelProbeResult } from "./cli-auth.js";
 import { SEED_EXECUTION_SETTINGS } from "./execution-setting.js";
-import { readInitField } from "./stream-json.js";
+import { readInitAutoMemoryPath, readInitField } from "./stream-json.js";
 import { claudeUsageObservation, parseUsage } from "./usage.js";
 
 /** Claude CLI の版上げの適合試験(ADR 0186 決定7)が面ごとに取る観測。どれも1回の実物の
@@ -11,7 +11,7 @@ import { claudeUsageObservation, parseUsage } from "./usage.js";
 export interface ConformanceObservations {
   /** 封じ込めの probe と同じフラグで撃った `claude` の stdout(stream-json)。 */
   initLine: () => Promise<string>;
-  /** モデルの1ターンを実際に走らせた stream-json の stdout(result 行を含む)。 */
+  /** Board call と同じ cwd / `--safe-mode` でモデルの1ターンを走らせた stdout(init / result 行を含む)。 */
   resultLine: () => Promise<string>;
   /** 存在しない model id での行の probe の判定。 */
   unknownModel: () => Promise<ModelProbeResult>;
@@ -49,12 +49,20 @@ const SURFACES: Array<[string, (obs: ConformanceObservations, now: Date) => Prom
   [
     "result line usage",
     async (obs) => {
-      const result = await replay(await obs.resultLine(), readResultEvent);
+      const stdout = await obs.resultLine();
+      const memory = await replay(stdout, (parsed) =>
+        parsed?.type === "system" && parsed.subtype === "init"
+          ? checkAutoMemoryClosed(readInitAutoMemoryPath(parsed))
+          : null,
+      );
+      if (memory === null) return { pass: false, detail: "no `init` line to observe Board call auto-memory (--safe-mode)" };
+      if (!memory.available) return { pass: false, detail: memory.reason };
+      const result = await replay(stdout, readResultEvent);
       if (result === null) return { pass: false, detail: "no accepted `result` line (missing, is_error, or a usage shape the board cannot read)" };
       const { input_tokens, output_tokens, cache_read_input_tokens, cache_creation_input_tokens } = result.usage;
       return {
         pass: true,
-        detail: `cost ${result.total_cost_usd}, tokens in ${input_tokens} / out ${output_tokens} / cache read ${cache_read_input_tokens} / cache write ${cache_creation_input_tokens}`,
+        detail: `auto-memory closed; cost ${result.total_cost_usd}, tokens in ${input_tokens} / out ${output_tokens} / cache read ${cache_read_input_tokens} / cache write ${cache_creation_input_tokens}`,
       };
     },
   ],

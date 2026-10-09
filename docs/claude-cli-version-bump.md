@@ -75,7 +75,9 @@ functions. It prints one row per surface as a Markdown table:
 
 - the init line (`tools` / `mcp_servers` / `memory_paths` / `skills`), taken with the containment
   probe's flags
-- the result line's `usage`
+- the result line's `usage` and, from the same one-turn stdout, Board call auto-memory closure:
+  the init line has no `memory_paths.auto` with `--safe-mode` from the board's checkout cwd.
+  A path, an unreadable value, or a missing init line fails the `result line usage` row
 - a nonexistent model id read as a row refusal (404)
 - the usage screen read as numbers
 - one draft-client call and one translation-client call
