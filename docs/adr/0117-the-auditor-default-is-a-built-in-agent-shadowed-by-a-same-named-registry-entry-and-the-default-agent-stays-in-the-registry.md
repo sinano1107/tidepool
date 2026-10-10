@@ -1,5 +1,7 @@
 # Auditor の既定は盤面の組み込み agent であり registry の同名エントリに shadow される — 既定 agent は registry に残る
 
+**Status 追記: 決定2 の shadow エントリの削除の例外は ADR 0228 で work の参照について狭まった** —— 組み込みは review 専用で work の assignee にならない。shadow エントリの扉は work の未決着タスクと着地を待つ完了タスクを普通の agent と同じく数え、review の参照と Auditor ポインタだけが例外に残る。決定1 の「profile は reviewer 定数のまま」は、組み込みが review しか走らないことで成り立つ。
+
 2026-09-12 の grilling(issue #540、ADR 0110 / 0111 からの切り出し)で決定。実行設定が agent 定義を離れた(ADR 0110)後、既定 agent と
 Auditor の registry エントリに何が残っているかを一つずつ当てた。本文は両方とも空(ADR 0017 / 0089)。fugu で生きている値は
 `skills: ["@workspace"]` と icon / description だけで、profile は ADR 0013 が code 定数にして読まれていない。tako で生きている値は
