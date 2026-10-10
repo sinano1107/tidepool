@@ -381,7 +381,7 @@ export function startScheduler(deps: {
     // (ADR 0233): pickupTask writes the default workspace's name and a work
     // task's resolved agent onto empty columns; a review's empty assignee is
     // left as the reference to the Auditor pointer (ADR 0233 決定3).
-    const agent = resolveTaskAgent(task, worker.id, auditorName ?? worker.id);
+    const agent = resolveTaskAgent(task, worker.id, auditorName);
     const picked = pickupTask(db, task, agent, clock.now(), {
       assignee: task.type === "work" ? agent : undefined,
       workspace: workspace?.name,
