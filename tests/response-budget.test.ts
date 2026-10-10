@@ -227,7 +227,7 @@ it("床の行は (surface, verb) ごとに1つで、回数・最後の時刻・�
 });
 
 /** 最初の読みから next が尽きるまで追った応答の列。読み口と同じく、封筒は続きでも渡す。 */
-function followNext(items: readonly { id: number }[], envelope?: Record<string, unknown>) {
+function followNext(items: readonly { id: string | number }[], envelope?: Record<string, unknown>) {
   const responses: any[] = [packItems(first, "events", items, envelope)];
   while (responses.at(-1).next) responses.push(packItems(readNext("get_task", responses.at(-1).next), "events", items, envelope));
   return responses;
@@ -497,6 +497,31 @@ it("文字列以外の骨格が予算の縁にある object を切るとき、�
     expect(pieceCounts).toContain(0);
   }
   // 縁で切れる読みは数十の切れになり、切れごとに予算の位置を探すので数秒かかる
+}, 20_000);
+
+it("続きに載る item の key が長いとき、封筒なしの item でも封筒そのものでも、partial を持つ応答は欄を読み終える最後の切れまで予算以下(issue #1755)", () => {
+  // 最後の切れの続きは item の key(item を切るなら次の item の、封筒を切るなら先頭の item の)を持つ。key を 300 字にして、
+  // その続きを切りの印より長くする。骨格と欄は #1700 のテストと同じ形
+  const key = "k".repeat(300);
+  const line = "\u0001".repeat(12) + "x".repeat(84) + "\u0001".repeat(8) + "x".repeat(200);
+  const shapes = [
+    { lastCuttable: 65, read: (nums: number[]) => followNext([{ id: "a", nums, line }, { id: key }] as { id: string }[]), cutOf: (piece: any) => piece.events[0] },
+    { lastCuttable: 88, read: (nums: number[]) => followNext([{ id: key }], { nums, line }), cutOf: (piece: any) => piece },
+  ];
+  for (const { lastCuttable, read, cutOf } of shapes) {
+    // 切れる最後の大きさ `lastCuttable` から、最後の切れに1文字と key を持つ続きを載せると超える縁の先までを動かす(1文字を
+    // 制御文字で測るので切れないと判定する縁は手前に来る。範囲は、その判定が無いと最後の切れが実際に予算を超える大きさまで含む)
+    const pieceCounts = [];
+    for (let k = lastCuttable; k <= lastCuttable + 16; k++) {
+      const pieces = read([...Array<number>(2_300).fill(Number.MAX_SAFE_INTEGER), ...Array<number>(k).fill(7)]).filter((response) => response.partial);
+      for (const piece of pieces) expect(bytesOf(piece)).toBeLessThanOrEqual(RESPONSE_BUDGET_BYTES);
+      if (pieces.length > 0) expect(joinPieces(pieces, cutOf)).toEqual({ line });
+      pieceCounts.push(pieces.length);
+    }
+    // 動かした範囲が縁をまたいでいる(切れる読みと切れない読みの両方がある)
+    expect(pieceCounts[0]).toBeGreaterThan(0);
+    expect(pieceCounts).toContain(0);
+  }
 }, 20_000);
 
 it("短い文字列の欄ばかりで予算を超える item は切らずに丸ごと返して床に任せる。封筒があれば、封筒だけを先に返してから続きで丸ごと返す(ADR 0195 追記 #1393 の5)", () => {
