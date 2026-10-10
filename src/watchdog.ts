@@ -145,7 +145,7 @@ function registerFailureQuestion(
       // to agents.
       context:
         `${reason}\n\n` +
-        `"retry" restarts this task from scratch at the queue head. ` +
+        `"retry" picks this task up again at the queue head: a new worker session continues on its existing task branch, with the work in progress kept. ` +
         abandonConsequence(db, task),
       questions: [{ title, options: ["retry", "abandon"], recommendation: "retry" }],
       cancel_option: "abandon",
