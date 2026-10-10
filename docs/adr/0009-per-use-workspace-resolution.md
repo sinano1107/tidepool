@@ -1,5 +1,7 @@
 # workspace 名は使う瞬間に registry から解決し、path を pin しない
 
+**Status 追記: `task.workspace` の null を使うたびに既定へ解決する部分は ADR-0233 で改訂済み** — 既定への参照は pickup で終わり、解決した名前をタスクに書く(issue #1728)。名前から path への解決を使うたびに registry から行い path を pin しない部分は無傷。
+
 実行側の複数 workspace 対応(issue #26)で、`task.workspace`(null は盤面既定への参照)から path への解決を「使う瞬間に毎回 registry を読む」規約に統一した — pickup、slot release(releasing 動詞・watchdog・restart 中断処理)、quarantine 解除の検証、PR 配線(auto-merge poll 含む)、登録時のバリデーションのすべてで。pickup 時に解決した path をタスクに記録して以後それを使う、という pinning はしない。理由: worker(`ClaudeCodeWorker.start`)が既に per-pickup の registry 再読込で「registry 更新は次タスクから効く」という規約を持っており、盤面側もこれに揃えることで解決ルールが1つになる。slot = 1 なので実行中タスクは高々1つであり、実行中にその workspace の path を registry 上で書き換えるのは人間の意図的操作 — mid-task drift を機械で守るために pinning の複雑さ(restart 経路のための永続化を含む)を払う価値はない。
 
 解決失敗(registry に存在しない名前)の扱いは2群に分かれる: 盤面が自律的に動く非同期経路(pickup・release・watchdog・restart・auto-merge poll)は fail-closed にその名前を quarantine 機構へ落とす(`needs_human` + Tidepool 名義の確認型 question — 解除検証は「registry に名前が存在し、かつツリーがクリーン」)。人間の同期リクエスト(question への回答、登録 API)は DomainError → 4xx で即返し、その場で直せるようにする。quarantine の契機が tree rule 失敗から「workspace が実行不能と判明したとき」一般へ広がったのはこの決定による(CONTEXT.md の Quarantine 参照)。
