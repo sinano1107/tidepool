@@ -81,6 +81,9 @@ export const unusedLanding: Landing = {
   },
   async observeAutoMergeOutcomes() {},
   async tick() {},
+  takeInFlightMark() {
+    return () => {};
+  },
 };
 
 /** Board call を持たない盤面の束(帰責も起草も配分評価も撃たない)。 */
@@ -652,13 +655,44 @@ export class FakeGitHubClient implements GitHubClient {
   }
 }
 
-/** CI を読み終えた瞬間に change を走らせる — 「CI を読んでいる間に変わる」を作る。 */
-export function afterCiRead(github: FakeGitHubClient, change: () => void): void {
+/** 盤面の await を1回だけ止める窓。最初に `hold` を呼んだ await が `entered` を解決し、`open()` まで止まる。2回目以降は素通りする。 */
+export function awaitWindow() {
+  let enter!: () => void;
+  const entered = new Promise<void>((resolve) => {
+    enter = resolve;
+  });
+  let open!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    open = resolve;
+  });
+  let held = false;
+  const hold = async () => {
+    if (held) return;
+    held = true;
+    enter();
+    await gate;
+  };
+  return { entered, open, hold };
+}
+
+/** CI を読み終えた瞬間に change を走らせる — 「CI を読んでいる間に変わる」を作る。change が止まれば、
+ *  読み取りの応答が盤面に返る前で止まる。 */
+export function afterCiRead(github: FakeGitHubClient, change: () => void | Promise<void>): void {
   const readPullRequest = github.readPullRequest.bind(github);
   github.readPullRequest = async (ref) => {
     const pr = await readPullRequest(ref);
-    change();
+    await change();
     return pr;
+  };
+}
+
+/** GitHub が merge を受け付けた後、応答が盤面に返る前で hold に止める。止まっている間、PR はもう MERGED を返す。 */
+export function holdAfterMerge(github: FakeGitHubClient, hold: () => Promise<void>): void {
+  const mergePullRequest = github.mergePullRequest.bind(github);
+  github.mergePullRequest = async (ref, head) => {
+    await mergePullRequest(ref, head);
+    github.scriptMergedOutside(ref.number);
+    await hold();
   };
 }
 

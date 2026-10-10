@@ -40,7 +40,7 @@ import {
   UnknownWorkspaceError,
   type WorkspaceConfig,
 } from "../src/workspace.js";
-import { afterCiRead, FakeClock, FakeGitHubClient, fakeHead, seedTierNames, UNRESOLVABLE_AGENT, unusedLanding } from "./fakes.js";
+import { afterCiRead, awaitWindow, FakeClock, FakeGitHubClient, fakeHead, holdAfterMerge, seedTierNames, UNRESOLVABLE_AGENT, unusedLanding } from "./fakes.js";
 import {
   commitWork,
   completedWork,
@@ -3304,3 +3304,151 @@ it("既定 agent a で pickup した assignee 未指定の完了タスクの PR 
   expect(github.merged).toEqual([{ path: workspace.path, number: 7 }]);
   expect(mergeQuestions(db)).toEqual([]);
 });
+
+// ADR 0236: 盤面が merge している PR には、観測も重なった tick も手を出さない。窓は盤面の await を1回だけ止めて作る
+
+const QUEUE_WINDOWS: Array<{
+  window: string;
+  interrupt: "観測" | "2つ目の tick";
+  outcome: "pr_merged" | "pr_merge_observed";
+  merges: number;
+  install: (github: FakeGitHubClient, hold: () => Promise<void>) => void;
+}> = [
+  {
+    window: "merge の await(merge は通る)",
+    interrupt: "観測",
+    outcome: "pr_merged",
+    merges: 1,
+    install: holdAfterMerge,
+  },
+  {
+    window: "読み取りの await(盤面の外で merge 済み)",
+    interrupt: "観測",
+    outcome: "pr_merge_observed",
+    merges: 0,
+    install: (github, hold) => {
+      github.scriptMergedOutside(1);
+      afterCiRead(github, hold);
+    },
+  },
+  {
+    window: "merge の失敗の後の読み直しの await",
+    interrupt: "観測",
+    outcome: "pr_merge_observed",
+    merges: 0,
+    install: (github, hold) => {
+      const read = github.readPullRequest.bind(github);
+      let reads = 0;
+      github.readPullRequest = async (ref) => {
+        const pr = await read(ref);
+        // CI を読んだ直後に盤面の外で merge される —— 盤面の merge は拒まれ、読み直しで止める
+        if (++reads === 1) github.scriptMergedOutside(ref.number);
+        else await hold();
+        return pr;
+      };
+    },
+  },
+  {
+    window: "読み取りの await",
+    interrupt: "2つ目の tick",
+    outcome: "pr_merged",
+    merges: 1,
+    install: afterCiRead,
+  },
+];
+
+it.each(QUEUE_WINDOWS)("無人 merge の tick の $window に$interruptが割り込んでも、キューの PR に決着の event は $outcome の1件だけ残る", async ({ interrupt, outcome, merges, install }) => {
+  const workspace = await makeWorkspace("landing-in-flight-mark");
+  const { db, clock } = await openBoard();
+  const github = new FakeGitHubClient();
+  const work = queueAutoMerge(db, clock, 1);
+  const gate = awaitWindow();
+  install(github, gate.hold);
+  const landing = autoMerging(db, clock, workspace, github);
+
+  const tick = landing.tick("auto_merge", clock.now());
+  await gate.entered;
+  await (interrupt === "観測" ? landing.observeAutoMergeOutcomes("tako") : landing.tick("auto_merge", clock.now()));
+  gate.open();
+  await tick;
+
+  expect(autoMergeOutcomeEvents(db, work.id)).toEqual([
+    { worker_id: BOARD_WORKER_ID, origin: "board", payload: { kind: outcome, pr_number: 1 } },
+  ]);
+  expect(github.merged).toHaveLength(merges);
+});
+
+it("重なった tick が先に決着させた PR に、止まっていた tick が古い一覧から辿り着いても、決着の event も merge も重ねない(#1798)", async () => {
+  const workspace = await makeWorkspace("landing-in-flight-mark-stale-list");
+  const { db, clock } = await openBoard();
+  const github = new FakeGitHubClient();
+  queueAutoMerge(db, clock, 1);
+  const second = queueAutoMerge(db, clock, 2);
+  const gate = awaitWindow();
+  afterCiRead(github, gate.hold);
+  const landing = autoMerging(db, clock, workspace, github);
+
+  const stalled = landing.tick("auto_merge", clock.now()); // #1 の読み取りで止まる
+  await gate.entered;
+  await landing.tick("auto_merge", clock.now()); // #1 を飛ばし、#2 を merge して印を放す
+  gate.open();
+  await stalled;
+
+  expect(autoMergeOutcomeEvents(db, second.id)).toEqual([
+    { worker_id: BOARD_WORKER_ID, origin: "board", payload: { kind: "pr_merged", pr_number: 2 } },
+  ]);
+  expect(github.merged.filter((ref) => ref.number === 2)).toHaveLength(1);
+});
+
+/** tick が PR の処理を抜ける形。返す関数は、次の tick がその PR を最後まで処理できるように戻す。 */
+const TICK_EXITS: Array<[string, (github: FakeGitHubClient) => () => void]> = [
+  [
+    "CI pending でキューに残して",
+    (github) => {
+      github.scriptCiStatus("pending");
+      return () => github.scriptCiStatus("success");
+    },
+  ],
+  [
+    "分類できない例外で",
+    (github) => {
+      const read = github.readPullRequest.bind(github);
+      github.readPullRequest = async () => {
+        throw new Error("unexpected");
+      };
+      return () => {
+        github.readPullRequest = read;
+      };
+    },
+  ],
+];
+
+it.each(TICK_EXITS.flatMap(([exit, script]) => (["観測", "tick"] as const).map((next) => [exit, next, script] as const)))(
+  "tick が PR の処理を%s抜けた後は印が残らず、次の%sがその PR を処理する",
+  async (_exit, next, script) => {
+    const workspace = await makeWorkspace("landing-in-flight-mark-released");
+    const { db, clock } = await openBoard();
+    const github = new FakeGitHubClient();
+    const work = queueAutoMerge(db, clock, 1);
+    const restore = script(github);
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const landing = autoMerging(db, clock, workspace, github);
+
+    await landing.tick("auto_merge", clock.now());
+    if (next === "観測") {
+      github.scriptMergedOutside(1);
+      await landing.observeAutoMergeOutcomes("tako");
+    } else {
+      restore();
+      await landing.tick("auto_merge", clock.now());
+    }
+
+    expect(autoMergeOutcomeEvents(db, work.id)).toEqual([
+      {
+        worker_id: BOARD_WORKER_ID,
+        origin: "board",
+        payload: { kind: next === "観測" ? "pr_merge_observed" : "pr_merged", pr_number: 1 },
+      },
+    ]);
+  },
+);

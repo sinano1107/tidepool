@@ -17,7 +17,7 @@ import {
   type WorkspaceConfig,
   workspaceNeedsHuman,
 } from "../src/workspace.js";
-import { FakeClock, FakeContainerRuntime, ScriptedWorker } from "./fakes.js";
+import { FakeClock, FakeContainerRuntime, ScriptedWorker, unusedLanding } from "./fakes.js";
 import { commitWork, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeWorkspace, QUIET_EXIT } from "./harness.js";
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
@@ -88,18 +88,11 @@ async function sessionInTeardown(
 
   const landed: string[] = [];
   const landing: Landing = {
+    ...unusedLanding,
     async land(t) {
       landed.push(t.id);
       return { kind: "landed", form: "local_merge_question" };
     },
-    async relandAncestors() {
-      return [];
-    },
-    async observePullRequestOutcome() {
-      return false;
-    },
-    async observeAutoMergeOutcomes() {},
-    async tick() {},
   };
   const worker = new ScriptedWorker(clock);
   const watchdog = startWatchdog({

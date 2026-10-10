@@ -26,7 +26,7 @@ import {
 import { commitTriage, startTriage } from "../src/triage.js";
 import { BOARD_WORKER_ID, HUMAN_WORKER_ID } from "../src/worker-id.js";
 import { quarantineWorkspace, UnknownWorkspaceError } from "../src/workspace.js";
-import { afterCiRead, FakeClock, FakeDraftClient, FakeGitHubClient, fakeHead, unusedLanding } from "./fakes.js";
+import { afterCiRead, awaitWindow, FakeClock, FakeDraftClient, FakeGitHubClient, fakeHead, holdAfterMerge, unusedLanding } from "./fakes.js";
 import {
   decomposeTaskViaWorker,
   defaultingTo,
@@ -952,6 +952,85 @@ it.each(["merge", "hold"])("盤面の外で閉じられた PR の merge question
     kinds: expect.not.arrayContaining(["question_answered"]),
     observed: { kind: "pr_close_observed", pr_number: 42 },
   });
+});
+
+/** escalate の PR #42 の merge question と、それに本物の Landing を通して「merge」と答える手(ADR 0236)。 */
+function escalatedMergeQuestion() {
+  db = openDb(":memory:");
+  const work = registerTask(
+    db,
+    { type: "work", title: "ship", purpose: "deliver the change", completion_criteria: "merged" },
+    NOW,
+    ...HUMAN_WEBUI,
+  );
+  recordPrOpened(db, work, 42, fakeHead(42), "worker", NOW, { merge: "escalate" }, undefined, "worker");
+  const question = onlyQuestion(db);
+  const github = new FakeGitHubClient();
+  const landing = createLanding({ defaultAgentName: "tako", db, clock: new FakeClock(), workspace: PRODUCT, github });
+  const answer = () =>
+    submitAnswer({ db, pollNow: () => {}, github, workspace: PRODUCT, landing }, getTask(db, question.id)!, ["merge"], undefined, () => NOW, "webui");
+  return { question, github, landing, answer };
+}
+
+/** 上の question に「merge」と答え、GitHub が merge を受け付けた後、応答が盤面に返る前で止める。 */
+async function mergeAnswerInFlight() {
+  const { question, github, landing, answer } = escalatedMergeQuestion();
+  let mergeCalls = 0;
+  const merge = github.mergePullRequest.bind(github);
+  github.mergePullRequest = async (ref, head) => {
+    mergeCalls++;
+    return merge(ref, head);
+  };
+  const gate = awaitWindow();
+  holdAfterMerge(github, gate.hold);
+  const first = answer();
+  await gate.entered;
+  return { question, landing, answer, first, open: gate.open, mergeCalls: () => mergeCalls };
+}
+
+const questionOutcomes = (questionId: string) =>
+  listEvents(db, questionId)
+    .filter((event) => ["pr_merged", "pr_merge_observed", "pr_close_observed"].includes(event.kind))
+    .map((event) => event.payload);
+
+it("merge 回答の merge の await 中に遅い走査が割り込んでも、question に決着の event は盤面の merge の pr_merged の1件だけ残る", async () => {
+  const { question, landing, first, open } = await mergeAnswerInFlight();
+
+  await landing.tick("outside_merge", NOW);
+  open();
+
+  await expect(first).resolves.toMatchObject({ status: "done" });
+  expect(questionOutcomes(question.id)).toEqual([{ kind: "pr_merged", pr_number: 42 }]);
+});
+
+it("merge 回答が merge 中の PR への2つ目の merge 回答は拒まれ、question は開いたまま残り、merge は1回しか呼ばれない", async () => {
+  const { question, answer, first, open, mergeCalls } = await mergeAnswerInFlight();
+
+  await expect(answer()).rejects.toThrow(
+    new DomainError("PR #42 is being merged by the board right now — answer again in a moment"),
+  );
+  expect(getTask(db, question.id)?.status).toBe("todo");
+  expect(questionOutcomes(question.id)).toEqual([]);
+  open();
+
+  await expect(first).resolves.toMatchObject({ status: "done" });
+  expect(mergeCalls()).toBe(1);
+  expect(questionOutcomes(question.id)).toEqual([{ kind: "pr_merged", pr_number: 42 }]);
+});
+
+it("merge 回答の merge が失敗したら印は放され、次の merge 回答は merge まで進む", async () => {
+  const { question, github, answer } = escalatedMergeQuestion();
+  const merge = github.mergePullRequest.bind(github);
+  // 最初の merge だけ失敗させ、次からは本物に戻す
+  github.mergePullRequest = async () => {
+    github.mergePullRequest = merge;
+    throw new Error("Pull request is not mergeable: merge conflict");
+  };
+
+  await expect(answer()).rejects.toThrow("merging PR #42 failed");
+  await expect(answer()).resolves.toMatchObject({ status: "done" });
+  expect(github.merged).toEqual([{ path: PRODUCT.path, number: 42 }]);
+  expect(questionOutcomes(question.id)).toEqual([{ kind: "pr_merged", pr_number: 42 }]);
 });
 
 it("GitHub の無い盤面の agent quarantine の解除検査は、無人 merge キューの PR を観測せずに拒む", async () => {
