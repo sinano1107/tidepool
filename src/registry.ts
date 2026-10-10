@@ -298,6 +298,11 @@ export class InvalidAgentDefinitionError extends Error {
   }
 }
 
+/** 「agent を解決できない」の唯一の判定(ADR 0097 決定1/3): registry が名前を知らないか、定義が成立していない。 */
+export function isUnresolvableAgentError(err: unknown): err is UnknownAgentError | InvalidAgentDefinitionError {
+  return err instanceof UnknownAgentError || err instanceof InvalidAgentDefinitionError;
+}
+
 /** 門が見る定義の断面。登録の verb は人間が送ったフォームの値を、pickup 解決は
  *  読み込み済みの `AgentDefinition` を、それぞれこの形で渡す。 */
 export interface AgentDefinitionCheck {

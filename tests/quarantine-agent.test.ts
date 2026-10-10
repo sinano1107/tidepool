@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
   agentNeedsHuman,
-  quarantineAgent,
   type ResolvedAgent,
   resolveAgentOrQuarantine,
   verifyAgentRepaired,
 } from "../src/agent.js";
 import { type Db, openDb } from "../src/db.js";
+import { quarantineAgent } from "../src/quarantine.js";
 import { InvalidAgentDefinitionError, UnknownAgentError } from "../src/registry.js";
 import { cancelTaskDirectly, completeTask, editTask, listBoard, pickupTask, registerTask, type TaskType } from "../src/tasks.js";
 import { FULL_HANDOFF, HUMAN_WEBUI, quarantineQuestion, queuedForAutoMerge } from "./harness.js";

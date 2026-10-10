@@ -1,7 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Router } from "express";
 import { z } from "zod";
-import { quarantineAgent } from "./agent.js";
 import type { AgentAdmin } from "./agent-create.js";
 import type { Clock } from "./clock.js";
 import type { Db } from "./db.js";
@@ -39,12 +38,12 @@ import {
 } from "./memory.js";
 import { type MetaReviewSubject, metaReviewSubjectOf, PROMOTION_RULE, TIER_DEFINITION_RULE } from "./meta-review.js";
 import type { ProcessContainers } from "./process-container.js";
+import { quarantineAgent } from "./quarantine.js";
 import {
   type AuthorityProfile,
-  InvalidAgentDefinitionError,
+  isUnresolvableAgentError,
   REVIEWER_AUTHORITY_PROFILE,
   type RosterAgent,
-  UnknownAgentError,
 } from "./registry.js";
 import { requiredTextSchema } from "./required-text-schema.js";
 import { nextDescription, packItems, readPosition } from "./response-budget.js";
@@ -219,9 +218,7 @@ function attributedAuthorityOrQuarantine(deps: McpDeps, task: Task): AuthorityPr
   try {
     return deps.resolveAuthority?.(task.assignee, task.type) ?? deps.authority;
   } catch (err) {
-    if (!(err instanceof UnknownAgentError) && !(err instanceof InvalidAgentDefinitionError)) {
-      throw err;
-    }
+    if (!isUnresolvableAgentError(err)) throw err;
     quarantineAgent(deps.db, err.agentName, err, deps.clock.now());
     throw new DomainError(
       `the registry cannot resolve agent ${err.agentName}'s definition; ` +
