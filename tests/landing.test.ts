@@ -2016,6 +2016,7 @@ it.each(["failure", "success"] as const)("CI %s を読んでいる間に門が�
   completeTask(db, child!, FULL_HANDOFF, "worker", clock.now(), "worker");
   await landing.tick("auto_merge", clock.now());
   await landing.tick("auto_merge", clock.now());
+  expect(github.ciChecks).toHaveLength(1);
   expect(github.merged).toEqual([]);
   expect(mergeQuestions(db)).toEqual([
     expect.objectContaining({ pr: 1, recommendation: "merge", purpose: expect.stringMatching(/landing surface changed.*escalate/) }),
