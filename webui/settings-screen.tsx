@@ -1611,12 +1611,14 @@ const annotationsToSend = (annotations: TpDraftAnnotation[]) =>
 // amendment (#950). A selection in the case anchors the current annotation (the last one added or focused,
 // clamped after a removal) and starts one when there is none yet. `onChange` takes an updater so a burst of
 // selectionchange events never works from a stale list. Without `translate` (an English board) there is no original.
-function MemoryExemplarAnnotations({ workspace, source, onSource, annotations, onChange, language, translate, onError, busy, setBusy }: {
+function MemoryExemplarAnnotations({ workspace, source, onSource, annotations, copied = [], onChange, language, translate, onError, busy, setBusy }: {
   workspace: string;
   source: number | null;
   /** absent: the case is fixed */
   onSource?: (eventId: number | null) => void;
   annotations: TpDraftAnnotation[];
+  /** the originals of the annotations an Edit copied: an original left as copied keeps its language (ADR 0230 決定4) */
+  copied?: Array<{ text: string; language: string } | null | undefined>;
   onChange: (update: (annotations: TpDraftAnnotation[]) => TpDraftAnnotation[]) => void;
   language?: string;
   translate?: TpTranslateFn;
@@ -1659,7 +1661,7 @@ function MemoryExemplarAnnotations({ workspace, source, onSource, annotations, o
             options={[{ value: '', label: 'choose…' }, 'imitate', 'avoid']} />
           {translate && (
             <React.Fragment>
-              <Input label={language ? `Original (${language})` : 'Original'} multiline rows={2} value={a.original} onChange={(e) => set(i, { original: e.target.value })} />
+              <Input label={language ? `Original (${TidepoolRules.copiedOriginalLanguage({ text: a.original }, copied, language)})` : 'Original'} multiline rows={2} value={a.original} onChange={(e) => set(i, { original: e.target.value })} />
               <Button variant="secondary" size="sm" disabled={busy || !!TidepoolRules.whyBlank(a.original)} onClick={() => translateOne(i, true)}>Translate</Button>
             </React.Fragment>
           )}
@@ -1838,8 +1840,9 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit, fo
     source: number | null; inheritedSource: number | null; annotations: TpDraftAnnotation[];
     /** the replaced entry's orphaned references, which the form will not submit again */
     dead: ReturnType<typeof deadRefs>;
-    /** the entry an Edit or the panel's Write copied the original from, with its English as copied (ADR 0223 決定3) */
-    copied: { id: number; title: string; text: string } | null;
+    /** the entry an Edit or the panel's Write copied the original from, with its English as copied (ADR 0223 決定3) and the
+     *  originals' languages, which the labels show while an original is left as copied (ADR 0230 決定4) */
+    copied: Pick<TpMemoryEntry, 'id' | 'title' | 'text' | 'original' | 'annotations'> | null;
   } = { kind: 'knowledge', kinds: MEMORY_KINDS, workspace: '', path: '', originalTitle: '', originalText: '', title: '', text: '', backTranslation: null, supersedes: [], addressee: '', source: null, inheritedSource: null, annotations: [], dead: { addressee: null, workspace: null }, copied: null };
   const [draft, setDraft] = React.useState(blank);
   const [busy, setBusy] = React.useState(false);
@@ -1855,6 +1858,8 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit, fo
     ? !TidepoolRules.whyBlank(draft.title) && (draft.source ?? draft.inheritedSource) !== null && draft.annotations.length > 0 && draft.annotations.every((a) => a.polarity && !TidepoolRules.whyBlank(a.text))
     : fields.every((key) => !TidepoolRules.whyBlank(draft[key]));
   const originalOf: Record<'title' | 'text', string> = { title: draft.originalTitle, text: draft.originalText };
+  // the language the server gives the original on save (ADR 0230 決定4): a definition's original title is its text
+  const originalLanguage = TidepoolRules.copiedOriginalLanguage({ title: originalOf[fields[0]!], text: draft.originalText }, [draft.copied?.original], language);
   // the English board shows no original: one copied with English since changed (as saved, trimmed) is not saved, and the form says so
   // before saving (ADR 0223 決定3)
   const changedOutOfSight = (english: string, copied: string | undefined) => !translatable && copied !== undefined && TidepoolRules.normalizeText(english) !== copied;
@@ -2105,16 +2110,16 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit, fo
             // a shared case of the replaced entries stays fixed and is not sent: the server keeps it
             <MemoryExemplarAnnotations workspace={draft.workspace} source={draft.source ?? draft.inheritedSource}
               onSource={draft.inheritedSource === null ? (source) => setDraft((d) => ({ ...d, source })) : undefined}
-              annotations={draft.annotations} onChange={(update) => setDraft((d) => ({ ...d, annotations: update(d.annotations) }))}
+              annotations={draft.annotations} copied={draft.copied?.annotations?.map((a) => a.original)} onChange={(update) => setDraft((d) => ({ ...d, annotations: update(d.annotations) }))}
               language={language} translate={translatable ? translateTarget : undefined} onError={(message) => say('danger', 'translate failed', message)}
               busy={busy} setBusy={setBusy} />
           )}
           {translatable && draft.kind !== 'exemplar' && (
             <React.Fragment>
               {draft.kind !== 'definition' && (
-                <Input label={`Original title (${language})`} value={draft.originalTitle} onChange={setDraftField('originalTitle')} />
+                <Input label={`Original title (${originalLanguage})`} value={draft.originalTitle} onChange={setDraftField('originalTitle')} />
               )}
-              <Input label={`Original (${language})`} multiline rows={3} value={draft.originalText} onChange={setDraftField('originalText')} />
+              <Input label={`Original (${originalLanguage})`} multiline rows={3} value={draft.originalText} onChange={setDraftField('originalText')} />
               <Button variant="secondary" size="sm" disabled={busy || fields.some((key) => !!TidepoolRules.whyBlank(originalOf[key]))} onClick={() => runTranslation(true)}>Translate</Button>
             </React.Fragment>
           )}

@@ -283,7 +283,7 @@ export function assertMemoryReferencesKnown(deps: MemoryReferenceDeps, { address
 
 /** 人間の面(settings の HTTP / 管理MCP)の直書きの入力: 参照名の門を通してから humanEntryInput。編集(supersedes)も
  *  同じ門を通り、削除済みの宛先・scope のままの編集は拒む(ADR 0173 決定3)。 */
-export function gatedHumanEntryInput<T extends { workspace: string | null; addressee?: string | null; original_title?: string; original_text?: string }>(
+export function gatedHumanEntryInput<T extends { workspace: string | null; addressee?: string | null; original_title?: string; original_text?: string; original_language?: string }>(
   deps: MemoryReferenceDeps & { db: Db },
   input: T,
 ) {
@@ -986,20 +986,21 @@ export async function submitAnswer(
         `cannot merge yet: PR #${mergePr} does not carry all of the task's content yet — answer again once the board has pushed it`,
       );
     }
-    const { ci: status } = await deps.github.readPullRequest({ path: mergeWorkspace.path, number: mergePr });
+    const pr = await deps.github.readPullRequest({ path: mergeWorkspace.path, number: mergePr });
     // ADR 0227 決定2・3: check 未報告は猶予の間だけ pending と同じに拒み、過ぎれば回答の中の人間の判断で通す
-    if (status === "unreported" && !unreportedCiGraceElapsed(deps.db, landingTaskId, now())) {
+    if (pr.ci === "unreported" && !unreportedCiGraceElapsed(deps.db, landingTaskId, now())) {
       throw new DomainError(
         `CI checks on PR #${mergePr} have not reported yet — answer again once they report, or ` +
           `${UNREPORTED_CI_GRACE_TEXT} after the board's last push to it`,
       );
     }
-    if (status !== "success" && status !== "unreported") {
-      throw new DomainError(`CI is not green yet (status: ${status}) — cannot merge`);
+    if (pr.ci !== "success" && pr.ci !== "unreported") {
+      throw new DomainError(`CI is not green yet (status: ${pr.ci}) — cannot merge`);
     }
     // External merge precedes the persisted answer. If it fails, the question
     // stays open and the human can retry instead of being stranded as done.
-    await deps.github.mergePullRequest({ path: mergeWorkspace.path, number: mergePr });
+    // CI を読んだ head に固定する(ADR 0231 決定1)
+    await deps.github.mergePullRequest({ path: mergeWorkspace.path, number: mergePr }, pr.head);
   }
 
   // Quarantine confirmation is never taken on faith (ADR 0137 決定5): the

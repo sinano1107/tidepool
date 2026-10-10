@@ -79,13 +79,13 @@ export type CiStatus = "pending" | "success" | "failure" | "unreported";
 /** GitHub's own PR state (ADR 0229 決定2). */
 export type PrState = "OPEN" | "CLOSED" | "MERGED";
 
-/** One read of a PR, CI and state together (ADR 0229 決定2): a read that
- *  failed is CI "pending" and state "unreadable" — never a state the caller
- *  would act on. */
-export interface PrStatus {
-  ci: CiStatus;
-  state: PrState | "unreadable";
-}
+/** One read of a PR, CI, state and head together (ADR 0229 決定2 / ADR 0231
+ *  決定1): `head` is the commit the CI was read on, the one a merge pins to. A
+ *  read that failed is CI "pending" and state "unreadable" with no head —
+ *  never a state the caller would act on. */
+export type PrStatus =
+  | { ci: CiStatus; state: PrState; head: string }
+  | { ci: "pending"; state: "unreadable" };
 
 /** ADR 0016's 確定的失敗 (permanent failure) of an issue-backed task's live
  *  reference, as part of getIssue's contract: the referenced issue is gone
@@ -110,7 +110,8 @@ export class IssueGoneError extends Error {
  *  `mergePullRequest` (issue #11) back the merge dial: the actual merge is
  *  never performed until a live CI check reports "success" immediately
  *  beforehand — or, on a human's merge answer only, still reports
- *  "unreported" past ADR 0227's grace. */
+ *  "unreported" past ADR 0227's grace — and only on the head that read was
+ *  taken on (ADR 0231 決定1). */
 export interface GitHubClient {
   createPullRequest(input: CreatePrInput): Promise<PrResult>;
   /** タスクブランチを `origin` へ push する —— 盤面がタスクブランチをリモートへ書く唯一の操作。
@@ -119,7 +120,9 @@ export interface GitHubClient {
    *  (ADR 0053 / issue #400)。 */
   pushBranch(input: PushBranchInput): Promise<void>;
   readPullRequest(ref: PrRef): Promise<PrStatus>;
-  mergePullRequest(ref: PrRef): Promise<void>;
+  /** Merges only while the PR's head is still `head` — the one whose CI was
+   *  read (ADR 0231 決定1); GitHub refuses it once the head has moved. */
+  mergePullRequest(ref: PrRef, head: string): Promise<void>;
   /** The PR's state (ADR 0079 決定3 / ADR 0229) — the read the board needs to
    *  tell "the merge is still mine to make" from "someone merged or closed it
    *  outside the board". Only asked on the two surfaces the board holds a
@@ -247,22 +250,22 @@ export class GhCliClient implements GitHubClient {
     // `gh pr view --json statusCheckRollup` は未設定なら exit 0 + 空配列を返し、
     // 非ゼロ終了は「読めなかった」だけを意味する。token 取得(仲介への往復)も
     // 同じ try に入れて、どちらの失敗も pending / unreadable に倒す。
-    let parsed: { state: PrState; statusCheckRollup?: RollupEntry[] };
+    let parsed: { state: PrState; statusCheckRollup?: RollupEntry[]; headRefOid: string };
     try {
       const output = execFileSync(
         "gh",
-        ["pr", "view", String(ref.number), "--json", "state,statusCheckRollup"],
+        ["pr", "view", String(ref.number), "--json", "state,statusCheckRollup,headRefOid"],
         { cwd: ref.path, env: await this.envFor(ref.path), stdio: ["ignore", "pipe", "pipe"] },
       ).toString();
       parsed = JSON.parse(output);
     } catch {
       return { ci: "pending", state: "unreadable" };
     }
-    return { ci: ciStatusOf(parsed.statusCheckRollup ?? []), state: parsed.state };
+    return { ci: ciStatusOf(parsed.statusCheckRollup ?? []), state: parsed.state, head: parsed.headRefOid };
   }
 
-  async mergePullRequest(ref: PrRef): Promise<void> {
-    execFileSync("gh", ["pr", "merge", String(ref.number), "--merge"], {
+  async mergePullRequest(ref: PrRef, head: string): Promise<void> {
+    execFileSync("gh", ["pr", "merge", String(ref.number), "--merge", "--match-head-commit", head], {
       cwd: ref.path,
       env: await this.envFor(ref.path),
       stdio: ["ignore", "pipe", "pipe"],

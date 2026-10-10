@@ -1,11 +1,12 @@
 import type { Db } from "./db.js";
 import { countTasksAwaitingLanding } from "./landing.js";
-import { openQuarantineQuestion, registerQuarantine } from "./quarantine.js";
+import { openQuarantineQuestion, quarantineAgent } from "./quarantine.js";
 import {
   type AgentDefinition,
   type AuthorityProfile,
   assertValidAgentDefinition,
   InvalidAgentDefinitionError,
+  isUnresolvableAgentError,
   ownEntry,
   REVIEWER_AUTHORITY_PROFILE,
   type Registry,
@@ -83,15 +84,6 @@ export function agentNeedsHuman(db: Db, name: string): boolean {
   return openQuarantineQuestion(db, "agent", name) !== undefined;
 }
 
-/** The agent-name generalization of workspace.ts's quarantineWorkspace (ADR
- *  0012 / issue #36): put the repair in front of the human as a 1-choice
- *  Confirmation question (its tasks stay out of the slot while it is open) —
- *  same shape, same "1 resource, at most 1 open question" dedup (CONTEXT.md's
- *  Quarantine). */
-export function quarantineAgent(db: Db, agentName: string, cause: unknown, now: Date): void {
-  registerQuarantine(db, "agent", agentName, cause instanceof Error ? cause.message : String(cause), now);
-}
-
 /** The agent-name generalization of workspace.ts's resolveOrQuarantine (ADR
  *  0012 / issue #36): `resolve` throwing `UnknownAgentError` (registry drift)
  *  or `InvalidAgentDefinitionError` (a definition that no longer stands, ADR
@@ -107,9 +99,7 @@ export function resolveAgentOrQuarantine(
   try {
     return resolve(taskAssignee);
   } catch (err) {
-    if (!(err instanceof UnknownAgentError) && !(err instanceof InvalidAgentDefinitionError)) {
-      throw err;
-    }
+    if (!isUnresolvableAgentError(err)) throw err;
     quarantineAgent(db, err.agentName, err, now);
     return undefined;
   }

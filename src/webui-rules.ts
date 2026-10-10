@@ -12,7 +12,23 @@ export { isSettled } from "./task-status.js";
 // 完了時レビューが立つかの規則の正本(ADR 0111 追記8)。サーバーの拒否・完了時の起票・WebUI の欄の出し分けが
 // 同じ関数を呼ぶ。WebUI へは scripts/build-webui-bundle.mjs が bundle して `TidepoolRules` として届ける(ADR 0209)ので、
 // ここから届くファイルは DB や fs に触れてはならない。
+import { normalizeText } from "./required-text.js";
 import { HUMAN_WORKER_ID } from "./worker-id.js";
+
+/** 写した原文の言語の正本(ADR 0223 決定2、申告の無い書き込み —— ADR 0230 決定2): 原文が写した相手の原文と一致すれば、
+ *  その言語が1つに揃うときだけそれを継ぎ、一致が無いか割れたら `current`(人間の面では今の表示言語)。Knowledge / Behavior /
+ *  Definition は title と text の組で、Exemplar の注釈は title を持たず text だけで比べる。サーバの書き込みと、保存したときに
+ *  付く言語を前もって出す WebUI の原文欄のラベル(ADR 0230 決定4)が同じ関数を呼ぶ。 */
+export function copiedOriginalLanguage(
+  typed: { title?: string; text: string },
+  copied: ReadonlyArray<{ title?: string; text: string; language: string } | null | undefined>,
+  current: string,
+): string {
+  const title = typed.title === undefined ? undefined : normalizeText(typed.title);
+  const text = normalizeText(typed.text);
+  const languages = new Set(copied.filter((c) => c?.text === text && c.title === title).map((c) => c!.language));
+  return languages.size === 1 ? [...languages][0]! : current;
+}
 
 export interface ReviewSubject {
   type: string;
