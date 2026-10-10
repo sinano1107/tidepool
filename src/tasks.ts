@@ -585,16 +585,40 @@ export function countUnsettledTasksReferencing(
   column: "assignee" | "workspace",
   name: string,
 ): number {
-  const reference =
-    column === "assignee"
-      ? `(assignee = ? OR EXISTS (SELECT 1 FROM json_each(tasks.review_by) WHERE value = ?))`
-      : "workspace = ?";
+  if (column === "workspace") return countUnsettledTasksReferencingWorkspace(db, name);
   const row = db
     .prepare(
       `SELECT COUNT(*) AS n FROM tasks
-       WHERE ${reference} AND ${unsettledSql("status")}`,
+       WHERE (assignee = ? OR EXISTS (SELECT 1 FROM json_each(tasks.review_by) WHERE value = ?))
+         AND ${unsettledSql("status")}`,
     )
-    .get(...(column === "assignee" ? [name, name] : [name])) as { n: number };
+    .get(name, name) as { n: number };
+  return row.n;
+}
+
+/** 完了タスクが一度着地した(PR を開いた、local merge question が立った、着地する内容が無かった)SQL 述語。
+ *  再発火(`relandAncestors`)が PR を持たない祖先を飛ばす線と、workspace の削除の扉が数える線は、これを共有する。 */
+export function taskHasLandedSql(taskRef: string): string {
+  return `(EXISTS (SELECT 1 FROM events
+                    WHERE task_id = ${taskRef} AND kind IN ('pr_opened', 'nothing_to_land'))
+           OR EXISTS (SELECT 1 FROM tasks WHERE question_pending_local_merge_task_id = ${taskRef}))`;
+}
+
+/** ADR 0234 決定1: 未決着タスクは自身の workspace に加えて、決着したときに着地し直す(ADR 0092 決定3 の
+ *  再発火)完了した work の祖先の workspace も参照する。その祖先すべてから一度に子孫をたどり、各タスクを一度だけ数える。 */
+function countUnsettledTasksReferencingWorkspace(db: Db, name: string): number {
+  const row = db
+    .prepare(
+      `WITH RECURSIVE relanded(id) AS (
+         SELECT p.id FROM tasks p
+          WHERE p.workspace = @name AND p.type = 'work' AND p.status = 'done'
+            AND (p.pr_number IS NOT NULL OR NOT ${taskHasLandedSql("p.id")})
+         UNION
+         SELECT c.id FROM tasks c JOIN relanded r ON c.parent_id = r.id)
+       SELECT COUNT(*) AS n FROM tasks
+        WHERE (workspace = @name OR id IN (SELECT id FROM relanded)) AND ${unsettledSql("status")}`,
+    )
+    .get({ name }) as { n: number };
   return row.n;
 }
 

@@ -18,6 +18,7 @@ import { type AuthorityProfile, loadRegistry, type MergeDial, UnknownAgentError 
 import {
   answerQuestion,
   completeTask,
+  countUnsettledTasksReferencing,
   editTask,
   getTask,
   listBoard,
@@ -2766,6 +2767,113 @@ it("workspace 名では、abandon 済み・着地済み・別 workspace・worksp
   expect(countTasksAwaitingLandingInWorkspace(db, "reef")).toBe(0);
   expect(countTasksAwaitingLandingInWorkspace(db, "lagoon")).toBe(1);
 });
+
+// ADR 0234: 未決着タスクは、決着したときに着地し直す完了した work の祖先の workspace も参照する
+/** 盤面の完了時レビューをすべて決着させる —— 数えるのを fixture の子だけにする。 */
+function settleReviews(board: Db, now: Date): void {
+  for (const review of listBoard(board).filter((t) => t.type === "review" && t.status === "todo")) {
+    completeTask(board, getTask(board, review.id)!, FULL_HANDOFF, "shako", now, "worker");
+  }
+}
+
+/** reef の完了 work を、abandon promotion 済みか PR を開き終えた形にする。 */
+function rerunnableWorkIn(board: Db, now: Date, shape: "abandoned" | "pr_opened", parentId?: string): Task {
+  const work = completedWork(board, now, "tako", parentId, "reef");
+  if (shape === "pr_opened") {
+    recordPrOpenedViaWorker(board, work, 7, "tako", now, { authority: { merge: "escalate" } });
+  } else {
+    deferLanding(board, work.id, now);
+    registerPrPromotionFailureQuestion(board, work, "boom", now);
+    const [failure] = promotionFailures(board, work.id);
+    answerQuestion(board, getTask(board, failure!.id)!, ["abandon promotion"], now, undefined, undefined, undefined, "webui");
+  }
+  return getTask(board, work.id)!;
+}
+
+/** 人間の門で、`parentId` の下に未決着の review を足す。 */
+function attachReview(board: Db, now: Date, parentId: string, workspace?: string): Task {
+  return registerTask(
+    board,
+    {
+      type: "review",
+      title: "second opinion",
+      purpose: "p",
+      completion_criteria: "c",
+      assignee: "squid",
+      parent_id: parentId,
+      workspace,
+    },
+    now,
+    ...HUMAN_WEBUI,
+  );
+}
+
+it.each(["abandoned", "pr_opened"] as const)(
+  "reef の完了 work(%s)の下にいる、別 workspace・workspace 未指定の未決着タスクを reef の参照に数え、reef にいる子は一度だけ数え、agent 名の参照には数えない",
+  (shape) => {
+    db = openDb(":memory:");
+    const now = new Date("2026-10-10T00:00:00.000Z");
+    const work = rerunnableWorkIn(db, now, shape);
+    settleReviews(db, now);
+    // PR を開き終えた形では merge の question が reef を参照している
+    const before = countUnsettledTasksReferencing(db, "workspace", "reef");
+
+    attachReview(db, now, work.id, "lagoon");
+    attachReview(db, now, work.id);
+    attachReview(db, now, work.id, "reef");
+
+    expect(countUnsettledTasksReferencing(db, "workspace", "reef")).toBe(before + 3);
+    expect(countUnsettledTasksReferencing(db, "workspace", "lagoon")).toBe(1);
+    expect(countUnsettledTasksReferencing(db, "assignee", "tako")).toBe(0);
+  },
+);
+
+/** PR を持たずに着地した形 —— 再発火が飛ばす。 */
+function landWithoutPr(board: Db, now: Date, work: Task, form: "nothing_to_land" | "local_merge_question"): void {
+  if (form === "local_merge_question") {
+    registerLocalMergeQuestion(board, work, "merge it", now);
+    return;
+  }
+  appendEvent(board, {
+    taskId: work.id,
+    workerId: BOARD_WORKER_ID,
+    origin: "board",
+    payload: { kind: "nothing_to_land", base: "main" },
+    at: now,
+  });
+}
+
+it.each(["nothing_to_land", "local_merge_question"] as const)(
+  "PR を持たずに着地した(%s)完了 work の下の未決着タスクは数えず、その上の着地し直す祖先の workspace の参照には数える",
+  (form) => {
+    db = openDb(":memory:");
+    const now = new Date("2026-10-10T00:00:00.000Z");
+    const landed = completedWork(db, now, "tako", undefined, "reef");
+    landWithoutPr(db, now, landed, form);
+    settleReviews(db, now);
+    const before = countUnsettledTasksReferencing(db, "workspace", "reef");
+    attachReview(db, now, landed.id, "lagoon");
+    expect(countUnsettledTasksReferencing(db, "workspace", "reef")).toBe(before);
+
+    // reef の祖先 G の下で、lagoon の P が PR を持たずに着地した —— 再発火は P を飛ばして G を着地し直す
+    const grand = registerTask(
+      db,
+      { type: "work", title: "integrate", purpose: "p", completion_criteria: "c", assignee: "tako", workspace: "reef" },
+      now,
+      ...HUMAN_WEBUI,
+    );
+    const parent = completedWork(db, now, "tako", grand.id, "lagoon");
+    landWithoutPr(db, now, parent, form);
+    recordPrOpenedViaWorker(db, completeTask(db, grand, FULL_HANDOFF, "tako", now, "worker"), 7, "tako", now, {
+      authority: { merge: "escalate" },
+    });
+    settleReviews(db, now);
+    const beforeGrand = countUnsettledTasksReferencing(db, "workspace", "reef");
+    attachReview(db, now, parent.id, "lagoon");
+
+    expect(countUnsettledTasksReferencing(db, "workspace", "reef")).toBe(beforeGrand + 1);
+  },
+);
 
 // ADR 0225: abandon promotion が断念するのはその時点の内容の昇格。付帯子の決着による再発火は、
 // 刻んだ head から内容が変わっていなければ何もせず、変わっていれば PR を開かずに昇格の question を立て直す
