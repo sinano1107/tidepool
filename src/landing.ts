@@ -859,14 +859,15 @@ export function createLanding(deps: LandingDeps): Landing {
           if (!workspace) continue;
           // 着地の面は門と同じ2点 — CI を読む前と、CI を読んだ後に盤面の名義で行為する直前(緑なら
           // merge、赤なら merge question)— で読む。面が変わった PR はキューを外れ、門に当たった PR は
-          // キューに残る(ADR 0217 決定1)。profile が読めなければ agent を quarantine に落とし、
-          // キューに残してこの回は飛ばす(決定3)
+          // キューに残る(ADR 0217 決定1)。門は面より先に読む —— 門が閉じている間は面が変わっても
+          // キューで待ち、門が開いた後の tick で面と CI を読み直す(ADR 0232)。profile が読めなければ
+          // agent を quarantine に落とし、キューに残してこの回は飛ばす(ADR 0217 決定3)
           const stop = (askQuestion?: (changed: string) => void) => {
             const resolved = readAuthority(task, now);
             return (
               !resolved ||
-              withdrawIfSurfaceChanged(task, resolved.profile, pr_number, workspace.name, now, askQuestion) ||
-              landingBlock(deps.db, task_id)
+              landingBlock(deps.db, task_id) ||
+              withdrawIfSurfaceChanged(task, resolved.profile, pr_number, workspace.name, now, askQuestion)
             );
           };
           if (stop()) continue;
