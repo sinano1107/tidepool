@@ -24,7 +24,7 @@ import {
 } from "./execution-setting.js";
 import { type GitHubClient, IssueGoneError } from "./github.js";
 import type { HarnessContainmentCheck } from "./harness-containment.js";
-import { hasContentLeftBehind, type Landing, type LandingVerdict, landingBlock, recordPrPromotionAbandoned, UNREPORTED_CI_GRACE_TEXT, unreportedCiGraceElapsed } from "./landing.js";
+import { hasContentLeftBehind, type Landing, type LandingVerdict, landingBlock, observePrHead, recordPrPromotionAbandoned, UNREPORTED_CI_GRACE_ORIGIN_TEXT, UNREPORTED_CI_GRACE_TEXT, unreportedCiGraceElapsed } from "./landing.js";
 import { approveMemoryProposal, humanEntryInput, listMemoryEntries, type MemoryAmendment, movedTail, parseMemoryAmendment, rejectMemoryProposal } from "./memory.js";
 import { whyNotPositiveInteger } from "./positive-integer.js";
 import type { Provider } from "./provider.js";
@@ -987,12 +987,13 @@ export async function submitAnswer(
       );
     }
     const pr = await deps.github.readPullRequest({ path: mergeWorkspace.path, number: mergePr });
-    // ADR 0227 決定2・3: check 未報告は猶予の間だけ pending と同じに拒み、過ぎれば回答の中の人間の判断で通す。
-    // 記録に無い head の観測は拒否より前に刻まれる —— escalate の PR はキューの行を持たないので、起点はここで残す
-    if (pr.ci === "unreported" && !unreportedCiGraceElapsed(deps.db, landingTaskId, mergePr, pr.head, now())) {
+    // 記録に無い head は拒否より前に刻む —— escalate の PR はキューの行を持たないので、起点はここで残す(ADR 0231 決定4)
+    if (pr.state !== "unreadable") observePrHead(deps.db, landingTaskId, mergePr, pr.head, now());
+    // ADR 0227 決定2・3: check 未報告は猶予の間だけ pending と同じに拒み、過ぎれば回答の中の人間の判断で通す
+    if (pr.ci === "unreported" && !unreportedCiGraceElapsed(deps.db, landingTaskId, pr.head, now())) {
       throw new DomainError(
         `CI checks on PR #${mergePr} have not reported yet — answer again once they report, or ` +
-          `${UNREPORTED_CI_GRACE_TEXT} after the board first saw its current head`,
+          `${UNREPORTED_CI_GRACE_TEXT} after ${UNREPORTED_CI_GRACE_ORIGIN_TEXT}`,
       );
     }
     if (pr.ci !== "success" && pr.ci !== "unreported") {

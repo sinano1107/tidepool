@@ -40,6 +40,7 @@ import {
   resolveTaskBranchLineage,
   taskBranch,
   taskBranchExists,
+  taskBranchTip,
   type WorkspaceConfig,
   workspaceNeedsHuman,
 } from "./workspace.js";
@@ -445,29 +446,30 @@ function isQueuedForAutoMerge(db: Db, taskId: string): boolean {
   return db.prepare("SELECT 1 FROM pending_auto_merges WHERE task_id = ?").get(taskId) !== undefined;
 }
 
-/** 盤面がこれから push するタスクブランチの commit(ADR 0231 決定4)。push の前に読む —— PR を作った後で読めずに
- *  落ちれば、開いた PR が記録に残らない。 */
-function taskBranchTip(workspace: WorkspaceConfig, taskId: string): string {
-  return git(workspace.path, "rev-parse", `refs/heads/${taskBranch(taskId)}`);
-}
-
 const UNREPORTED_CI_GRACE_MS = 5 * 60_000;
 
 /** 猶予を問い・拒否の本文に書くときの綴り —— 猶予の長さと本文がずれないように同じ定数から作る。 */
 export const UNREPORTED_CI_GRACE_TEXT = `${UNREPORTED_CI_GRACE_MS / 60_000} minutes`;
 
-/** ADR 0227 決定2・ADR 0231 決定4: check 未報告を pending と同じに待つ猶予。猶予は head ごとで、起点は盤面がその
- *  head を知った時点 —— 自分で push した `pr_opened` / `pr_branch_pushed` か、盤面の外の head を初めて読んだ
- *  `pr_head_observed` のうち、sha が一致する最初のもの。一致が無ければいま `pr_head_observed` を刻み、猶予の中とする
- *  (fail-closed)。無人 merge と人間の merge 回答が同じ起点を読み、同じ規則で刻む。 */
-export function unreportedCiGraceElapsed(db: Db, taskId: string, prNumber: number, head: string, now: Date): boolean {
+/** 猶予の起点を問い・拒否の本文に書くときの綴り。 */
+export const UNREPORTED_CI_GRACE_ORIGIN_TEXT = "the board first saw its current head";
+
+/** その head を盤面が知った最初の event の時刻 —— 自分で push した `pr_opened` / `pr_branch_pushed` か、盤面の外の
+ *  head を読んだ `pr_head_observed` のうち、sha が一致するもの。 */
+function headKnownAt(db: Db, taskId: string, head: string): string | null {
   const { at } = db
     .prepare(
       `SELECT MIN(created_at) AS at FROM events WHERE task_id = ?
          AND kind IN ('pr_opened', 'pr_branch_pushed', 'pr_head_observed') AND json_extract(payload, '$.sha') = ?`,
     )
     .get(taskId, head) as { at: string | null };
-  if (at !== null) return now.getTime() - Date.parse(at) >= UNREPORTED_CI_GRACE_MS;
+  return at;
+}
+
+/** ADR 0231 決定4: 盤面が PR の head を読んだら、記録に無い head(盤面の外の push)だけを盤面名義で1件刻む。
+ *  無人 merge の tick と人間の merge 回答の、head を返す読み取りの直後に呼ぶ。 */
+export function observePrHead(db: Db, taskId: string, prNumber: number, head: string, now: Date): void {
+  if (headKnownAt(db, taskId, head) !== null) return;
   appendEvent(db, {
     taskId,
     workerId: BOARD_WORKER_ID,
@@ -475,7 +477,14 @@ export function unreportedCiGraceElapsed(db: Db, taskId: string, prNumber: numbe
     payload: { kind: "pr_head_observed", pr_number: prNumber, sha: head },
     at: now,
   });
-  return false;
+}
+
+/** ADR 0227 決定2: check 未報告を pending と同じに待つ猶予。猶予は head ごとで、起点は盤面がその head を知った
+ *  時点。無人 merge と人間の merge 回答が同じ起点を読む。起点の無い head は猶予の中とする(fail-closed)——
+ *  読み取りの直後の `observePrHead` が起点を刻むので、通常は起こらない。 */
+export function unreportedCiGraceElapsed(db: Db, taskId: string, head: string, now: Date): boolean {
+  const at = headKnownAt(db, taskId, head);
+  return at !== null && now.getTime() - Date.parse(at) >= UNREPORTED_CI_GRACE_MS;
 }
 
 /** 門で止まったことを board 名義で1回だけ刻む(ADR 0092 決定1)。着地は1つのタスクに
@@ -897,9 +906,11 @@ export function createLanding(deps: LandingDeps): Landing {
             retireAutoMerge(deps.db, task_id, { kind: OBSERVED[pr.state], pr_number }, now);
             continue;
           }
-          if (pr.state === "unreadable" || pr.ci === "pending") continue;
+          if (pr.state === "unreadable") continue;
+          observePrHead(deps.db, task_id, pr_number, pr.head, now);
+          if (pr.ci === "pending") continue;
           const { ci, head } = pr;
-          if (ci === "unreported" && !unreportedCiGraceElapsed(deps.db, task_id, pr_number, head, now)) continue;
+          if (ci === "unreported" && !unreportedCiGraceElapsed(deps.db, task_id, head, now)) continue;
           let purpose: string;
           if (ci === "success") {
             if (stop()) continue;
@@ -923,6 +934,7 @@ export function createLanding(deps: LandingDeps): Landing {
               retireAutoMerge(deps.db, task_id, { kind: OBSERVED[after.state], pr_number }, now);
               continue;
             }
+            observePrHead(deps.db, task_id, pr_number, after.head, now);
             // head が動いただけなら、次の tick で新しい head の CI を読む(ADR 0231 決定1)。gh の文面では見分けない
             if (after.head !== head) continue;
             purpose =
@@ -933,8 +945,8 @@ export function createLanding(deps: LandingDeps): Landing {
             const found =
               ci === "failure"
                 ? `found CI red on PR #${pr_number}`
-                : `found no CI check reported on PR #${pr_number} in the ${UNREPORTED_CI_GRACE_TEXT} since the board first ` +
-                  "saw its current head, so its CI-green condition cannot be observed";
+                : `found no CI check reported on PR #${pr_number} in the ${UNREPORTED_CI_GRACE_TEXT} since ` +
+                  `${UNREPORTED_CI_GRACE_ORIGIN_TEXT}, so its CI-green condition cannot be observed`;
             purpose = `"${task.title}"'s auto_if_ci_green auto-merge ${found}. Merge anyway, or hold?`;
           }
           const askHuman = () => registerMergeQuestion(deps.db, task, pr_number, purpose, "hold", now);

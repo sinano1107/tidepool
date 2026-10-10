@@ -1848,7 +1848,7 @@ it("遅い走査は、盤面の外で閉じられた PR の open な merge quest
 // ADR 0227 決定2・3: check が1つも報告されていない PR は、盤面がその head を知ってから5分の猶予の間だけ待つ
 const FIVE_MINUTES = 5 * 60_000;
 
-it("check 未報告の PR は、盤面の最後の push から5分の猶予の内なら merge も question もせずキューに残る", async () => {
+it("check 未報告の PR は、盤面がその head を知ってから5分の猶予の内なら merge も question もせずキューに残る", async () => {
   const workspace = await makeWorkspace("landing-unreported-within-grace");
   const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
@@ -1985,6 +1985,27 @@ it("PR を開いてから6分後に読んだ盤面の外の head が check 未�
   await landing.tick("auto_merge", clock.now());
   expect(mergeQuestions(db).map(({ pr, purpose }) => ({ pr, purpose }))).toEqual([{ pr: 1, purpose: UNREPORTED_PURPOSE }]);
   expect(boardEvents(db, work.id, "pr_head_observed")).toHaveLength(1);
+});
+
+it("check が報告中(pending)の盤面の外の head も、読んだ時点で観測として1件だけ刻まれる", async () => {
+  const { workspace } = await makeRemoteBackedWorkspace("landing-pending-outside-head");
+  const { db, clock } = await openBoard();
+  const github = new FakeGitHubClient();
+  const landing = autoMerging(db, clock, workspace, github);
+  const work = landingWork(db, clock);
+  git(workspace.path, "checkout", "-b", `task/${work.id}`);
+  commitWork(workspace.path, "feature.txt", "ready\n");
+  await landing.land(work);
+  const outside = await pushOutsideBoard(workspace, github, work.id);
+  github.scriptCiStatus("pending");
+
+  await landing.tick("auto_merge", clock.now());
+  await clock.advance(60_000);
+  await landing.tick("auto_merge", clock.now());
+
+  expect(boardEvents(db, work.id, "pr_head_observed")).toEqual([
+    { worker_id: BOARD_WORKER_ID, origin: "board", payload: { kind: "pr_head_observed", pr_number: 1, sha: outside } },
+  ]);
 });
 
 it("PR を開いたときの event は、作成前に push したタスクブランチの sha を持つ", async () => {
