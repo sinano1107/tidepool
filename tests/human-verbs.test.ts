@@ -29,6 +29,7 @@ import { quarantineWorkspace, UnknownWorkspaceError } from "../src/workspace.js"
 import { afterCiRead, FakeClock, FakeDraftClient, FakeGitHubClient, fakeHead, unusedLanding } from "./fakes.js";
 import {
   decomposeTaskViaWorker,
+  defaultingTo,
   HUMAN_WEBUI,
   humanDecomposeTaskViaWebui,
   queuedForAutoMerge,
@@ -158,10 +159,7 @@ it("人間の登録 door は未知の workspace を GateFailure として返す"
     {
       db,
       pollNow: () => {},
-      resolveWorkspace: (name) => {
-        if (name !== "product") throw new UnknownWorkspaceError(name ?? "product");
-        return { name, path: "/workspaces/product" };
-      },
+      resolveWorkspace: defaultingTo({ name: "product", path: "/workspaces/product" }),
     },
     {
       type: "work",

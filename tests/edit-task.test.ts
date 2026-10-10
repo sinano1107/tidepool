@@ -1,6 +1,5 @@
 import { afterEach, expect, it } from "vitest";
-import { UnknownWorkspaceError } from "../src/workspace.js";
-import { api, bootTidepool, FULL_HANDOFF, HOUR, mcpClient, queueChild, queueWork, type Tidepool } from "./harness.js";
+import { api, bootTidepool, defaultingTo, FULL_HANDOFF, HOUR, mcpClient, queueChild, queueWork, type Tidepool } from "./harness.js";
 
 let t: Tidepool;
 afterEach(() => t?.stop());
@@ -78,13 +77,7 @@ it("assignee を編集でき、登録時と同じ registry 解決の検査が再
 it("通常タスクの workspace を編集でき、未知の workspace 名は拒否される", async () => {
   t = await bootTidepool({
     workspace: { name: "home", path: "/fake/home" },
-    resolveWorkspace: (w) => {
-      const name = w ?? "home";
-      if (name !== "home" && name !== "other") {
-        throw new UnknownWorkspaceError(name);
-      }
-      return { name, path: `/fake/${name}` };
-    },
+    resolveWorkspace: defaultingTo({ name: "home", path: "/fake/home" }, { name: "other", path: "/fake/other" }),
   });
   const task = queueWork(t, "move me", "home");
 

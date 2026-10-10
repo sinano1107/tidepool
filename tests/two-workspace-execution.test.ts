@@ -1,12 +1,12 @@
 import { rm } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { UnknownWorkspaceError, type WorkspaceConfig } from "../src/workspace.js";
 import {
   api,
   bootTidepool,
   commitWork,
   completeIntegrationReviews,
+  defaultingTo,
   FULL_HANDOFF as fullHandoff,
   GIT_FIXTURE_TEST_TIMEOUT,
   git,
@@ -28,14 +28,9 @@ describe("issue #26: 実行側の複数 workspace 対応", () => {
   it("異なる workspace の2タスクがそれぞれの checkout で実行され、片方の quarantine が他方の pickup を止めない", async () => {
     const sandbox = await makeWorkspace("sandbox");
     const prod = await makeWorkspace("prod");
-    const registry: Record<string, WorkspaceConfig> = { sandbox, prod };
     t = await bootTidepool({
       workspace: sandbox,
-      resolveWorkspace: (name) => {
-        const ws = registry[name ?? "sandbox"];
-        if (!ws) throw new UnknownWorkspaceError(name ?? "sandbox");
-        return ws;
-      },
+      resolveWorkspace: defaultingTo(sandbox, prod),
     });
 
     // AC1: workspace が異なる2つのタスクが、それぞれの registry workspace

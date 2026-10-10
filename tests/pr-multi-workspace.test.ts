@@ -1,9 +1,9 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { UnknownWorkspaceError, type WorkspaceConfig } from "../src/workspace.js";
 import {
   bootTidepool,
   commitWork,
   completeIntegrationReviews,
+  defaultingTo,
   FULL_HANDOFF,
   GIT_FIXTURE_TEST_TIMEOUT,
   HOUR,
@@ -24,14 +24,9 @@ afterEach(async () => {
 it("prod workspace のタスクを complete すると、PR は sandbox ではなく prod の checkout に向けて作られる", async () => {
   const sandbox = await makeWorkspace("sandbox");
   const { workspace: prod } = await makeRemoteBackedWorkspace("prod");
-  const registry: Record<string, WorkspaceConfig> = { sandbox, prod };
   t = await bootTidepool({
     workspace: sandbox,
-    resolveWorkspace: (name) => {
-      const ws = registry[name ?? "sandbox"];
-      if (!ws) throw new UnknownWorkspaceError(name ?? "sandbox");
-      return ws;
-    },
+    resolveWorkspace: defaultingTo(sandbox, prod),
   });
 
   const task = await registerWork(t, "ship in prod", "prod");

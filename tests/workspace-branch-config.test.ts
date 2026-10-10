@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { UnknownWorkspaceError, type WorkspaceConfig } from "../src/workspace.js";
 import {
   addTaskChange,
   bootTidepool,
   completeIntegrationReviews,
+  defaultingTo,
   FULL_HANDOFF as fullHandoff,
   GIT_FIXTURE_TEST_TIMEOUT,
   git,
@@ -26,16 +26,9 @@ describe("issue #27: workspace ごとの保護ブランチ設定", () => {
     const { workspace: prod } = await makeRemoteBackedWorkspace("prod");
     git(prod.path, "branch", "master");
     git(prod.path, "push", "origin", "master");
-    const registry: Record<string, WorkspaceConfig> = {
-      prod: { ...prod, branch: "master" },
-    };
     t = await bootTidepool({
       workspace: prod,
-      resolveWorkspace: (name) => {
-        const ws = registry[name ?? "prod"];
-        if (!ws) throw new UnknownWorkspaceError(name ?? "prod");
-        return ws;
-      },
+      resolveWorkspace: defaultingTo({ ...prod, branch: "master" }),
     });
 
     const task = await registerWork(t, "runs against master", "prod");

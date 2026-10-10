@@ -1,11 +1,11 @@
 import { rm } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
-import { UnknownWorkspaceError, type WorkspaceConfig } from "../src/workspace.js";
 import {
   api,
   bootTidepool,
   commitWork,
+  defaultingTo,
   FULL_HANDOFF,
   GIT_FIXTURE_TEST_TIMEOUT,
   HOUR,
@@ -25,14 +25,9 @@ afterEach(async () => {
 it("workspace が quarantine された間、その workspace の todo タスクはキュービューでは skipped、ボードでは todo のまま表示される", async () => {
   const sandbox = await makeWorkspace("sandbox");
   const prod = await makeWorkspace("prod");
-  const registry: Record<string, WorkspaceConfig> = { sandbox, prod };
   t = await bootTidepool({
     workspace: sandbox,
-    resolveWorkspace: (name) => {
-      const ws = registry[name ?? "sandbox"];
-      if (!ws) throw new UnknownWorkspaceError(name ?? "sandbox");
-      return ws;
-    },
+    resolveWorkspace: defaultingTo(sandbox, prod),
   });
 
   const inProd = await registerWork(t, "runs in prod", "prod");

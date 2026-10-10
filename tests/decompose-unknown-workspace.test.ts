@@ -1,6 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { UnknownWorkspaceError } from "../src/workspace.js";
-import { api, bootTidepool, GIT_FIXTURE_TEST_TIMEOUT, HOUR, makeWorkspace, mcpClient, registerWork, type Tidepool } from "./harness.js";
+import { api, bootTidepool, defaultingTo, GIT_FIXTURE_TEST_TIMEOUT, HOUR, makeWorkspace, mcpClient, registerWork, type Tidepool } from "./harness.js";
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 
@@ -13,10 +12,7 @@ it("registry に存在しない workspace 名を指定した decompose の子は
   const sandbox = await makeWorkspace("sandbox");
   t = await bootTidepool({
     workspace: sandbox,
-    resolveWorkspace: (name) => {
-      if ((name ?? "sandbox") !== "sandbox") throw new UnknownWorkspaceError(name ?? "sandbox");
-      return sandbox;
-    },
+    resolveWorkspace: defaultingTo(sandbox),
   });
   const parent = await registerWork(t, "parent");
   await t.clock.advance(HOUR); // parent picked up

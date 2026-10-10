@@ -9,9 +9,9 @@ import { createLanding } from "../src/landing.js";
 import { createMcpRouter } from "../src/mcp.js";
 import { Slot } from "../src/slot.js";
 import { pickupTask, registerTask } from "../src/tasks.js";
-import { ensureTaskBranch, UnknownWorkspaceError, type WorkspaceConfig } from "../src/workspace.js";
+import { ensureTaskBranch } from "../src/workspace.js";
 import { FakeClock } from "./fakes.js";
-import { commitWork, FULL_HANDOFF as fullHandoff, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeWorkspace } from "./harness.js";
+import { commitWork, defaultingTo, FULL_HANDOFF as fullHandoff, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeWorkspace } from "./harness.js";
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 
@@ -19,7 +19,6 @@ describe("mcp の releasing verb が task.workspace を解決する", () => {
   it("complete_task は task 自身の workspace の checkout で tree rule を実行する", async () => {
     const sandbox = await makeWorkspace("sandbox");
     const prod = await makeWorkspace("prod");
-    const registry: Record<string, WorkspaceConfig> = { sandbox, prod };
     const db = openDb(":memory:");
     const clock = new FakeClock();
     const slot = new Slot();
@@ -35,11 +34,7 @@ describe("mcp の releasing verb が task.workspace を解決する", () => {
     // as the scheduler's pickup() would have done: the task branch is
     // already checked out on prod, not sandbox, by the time the worker runs
     ensureTaskBranch(db, prod, picked);
-    const resolveWorkspace = (name: string | null) => {
-      const ws = registry[name ?? "sandbox"];
-      if (!ws) throw new UnknownWorkspaceError(name ?? "sandbox");
-      return ws;
-    };
+    const resolveWorkspace = defaultingTo(sandbox, prod);
 
     const app = express();
     app.use(
