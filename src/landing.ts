@@ -445,21 +445,37 @@ function isQueuedForAutoMerge(db: Db, taskId: string): boolean {
   return db.prepare("SELECT 1 FROM pending_auto_merges WHERE task_id = ?").get(taskId) !== undefined;
 }
 
+/** 盤面がこれから push するタスクブランチの commit(ADR 0231 決定4)。push の前に読む —— PR を作った後で読めずに
+ *  落ちれば、開いた PR が記録に残らない。 */
+function taskBranchTip(workspace: WorkspaceConfig, taskId: string): string {
+  return git(workspace.path, "rev-parse", `refs/heads/${taskBranch(taskId)}`);
+}
+
 const UNREPORTED_CI_GRACE_MS = 5 * 60_000;
 
 /** 猶予を問い・拒否の本文に書くときの綴り —— 猶予の長さと本文がずれないように同じ定数から作る。 */
 export const UNREPORTED_CI_GRACE_TEXT = `${UNREPORTED_CI_GRACE_MS / 60_000} minutes`;
 
-/** ADR 0227 決定2: check 未報告を pending と同じに待つ猶予。起点は盤面自身がその PR へ最後に push した時点
- *  (PR を開いた `pr_opened` か、開いている PR への修理の `pr_branch_pushed`)で、無人 merge と人間の merge 回答が
- *  同じ起点を読む。起点が無ければ猶予は過ぎたとみなす。 */
-export function unreportedCiGraceElapsed(db: Db, taskId: string, now: Date): boolean {
+/** ADR 0227 決定2・ADR 0231 決定4: check 未報告を pending と同じに待つ猶予。猶予は head ごとで、起点は盤面がその
+ *  head を知った時点 —— 自分で push した `pr_opened` / `pr_branch_pushed` か、盤面の外の head を初めて読んだ
+ *  `pr_head_observed` のうち、sha が一致する最初のもの。一致が無ければいま `pr_head_observed` を刻み、猶予の中とする
+ *  (fail-closed)。無人 merge と人間の merge 回答が同じ起点を読み、同じ規則で刻む。 */
+export function unreportedCiGraceElapsed(db: Db, taskId: string, prNumber: number, head: string, now: Date): boolean {
   const { at } = db
     .prepare(
-      "SELECT MAX(created_at) AS at FROM events WHERE task_id = ? AND kind IN ('pr_opened', 'pr_branch_pushed')",
+      `SELECT MIN(created_at) AS at FROM events WHERE task_id = ?
+         AND kind IN ('pr_opened', 'pr_branch_pushed', 'pr_head_observed') AND json_extract(payload, '$.sha') = ?`,
     )
-    .get(taskId) as { at: string | null };
-  return at === null || now.getTime() - Date.parse(at) >= UNREPORTED_CI_GRACE_MS;
+    .get(taskId, head) as { at: string | null };
+  if (at !== null) return now.getTime() - Date.parse(at) >= UNREPORTED_CI_GRACE_MS;
+  appendEvent(db, {
+    taskId,
+    workerId: BOARD_WORKER_ID,
+    origin: "board",
+    payload: { kind: "pr_head_observed", pr_number: prNumber, sha: head },
+    at: now,
+  });
+  return false;
 }
 
 /** 門で止まったことを board 名義で1回だけ刻む(ADR 0092 決定1)。着地は1つのタスクに
@@ -680,13 +696,14 @@ export function createLanding(deps: LandingDeps): Landing {
               excludePrPromotionQuestionId,
             );
           }
+          const sha = taskBranchTip(workspace, task.id);
           await deps.github.pushBranch({ path: workspace.path, branch: taskBranch(task.id) });
           // push の直後に刻む —— 後段が throw しても、GitHub に載った head の猶予の起点は失わない(ADR 0227 決定2)
           appendEvent(deps.db, {
             taskId: task.id,
             workerId: BOARD_WORKER_ID,
             origin: "board",
-            payload: { kind: "pr_branch_pushed", pr_number: task.pr_number },
+            payload: { kind: "pr_branch_pushed", pr_number: task.pr_number, sha },
             at: deps.clock.now(),
           });
           rebaselineRef(
@@ -705,6 +722,7 @@ export function createLanding(deps: LandingDeps): Landing {
         const resolved = readAuthority(task, deps.clock.now());
         if (!resolved) return agentUnavailable(task, excludePrPromotionQuestionId);
         const { title } = await contentSourceFor(task, deps.github, () => workspace?.path).expand();
+        const sha = taskBranchTip(workspace, task.id);
         let pr: Awaited<ReturnType<GitHubClient["createPullRequest"]>>;
         try {
           pr = await deps.github.createPullRequest({
@@ -725,6 +743,7 @@ export function createLanding(deps: LandingDeps): Landing {
           deps.db,
           task,
           pr.number,
+          sha,
           resolveTaskAgent(
             task,
             deps.defaultAgentName,
@@ -880,7 +899,7 @@ export function createLanding(deps: LandingDeps): Landing {
           }
           if (pr.state === "unreadable" || pr.ci === "pending") continue;
           const { ci, head } = pr;
-          if (ci === "unreported" && !unreportedCiGraceElapsed(deps.db, task_id, now)) continue;
+          if (ci === "unreported" && !unreportedCiGraceElapsed(deps.db, task_id, pr_number, head, now)) continue;
           let purpose: string;
           if (ci === "success") {
             if (stop()) continue;
@@ -914,8 +933,8 @@ export function createLanding(deps: LandingDeps): Landing {
             const found =
               ci === "failure"
                 ? `found CI red on PR #${pr_number}`
-                : `found no CI check reported on PR #${pr_number} in the ${UNREPORTED_CI_GRACE_TEXT} since the board last ` +
-                  "pushed to it, so its CI-green condition cannot be observed";
+                : `found no CI check reported on PR #${pr_number} in the ${UNREPORTED_CI_GRACE_TEXT} since the board first ` +
+                  "saw its current head, so its CI-green condition cannot be observed";
             purpose = `"${task.title}"'s auto_if_ci_green auto-merge ${found}. Merge anyway, or hold?`;
           }
           const askHuman = () => registerMergeQuestion(deps.db, task, pr_number, purpose, "hold", now);

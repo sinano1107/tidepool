@@ -38,7 +38,7 @@ import {
   UnknownWorkspaceError,
   type WorkspaceConfig,
 } from "../src/workspace.js";
-import { afterCiRead, FakeClock, FakeGitHubClient, seedTierNames, UNRESOLVABLE_AGENT, unusedLanding } from "./fakes.js";
+import { afterCiRead, FakeClock, FakeGitHubClient, fakeHead, seedTierNames, UNRESOLVABLE_AGENT, unusedLanding } from "./fakes.js";
 import {
   commitWork,
   completedWork,
@@ -78,9 +78,9 @@ function recordPrOpenedViaWorker(
   prNumber: number,
   workerId: string,
   now: Date,
-  { authority, isProtected }: { authority?: Parameters<typeof recordPrOpened>[5]; isProtected?: boolean } = {},
+  { authority, isProtected }: { authority?: Parameters<typeof recordPrOpened>[6]; isProtected?: boolean } = {},
 ): void {
-  recordPrOpened(db, task, prNumber, workerId, now, authority, isProtected, "worker");
+  recordPrOpened(db, task, prNumber, fakeHead(prNumber), workerId, now, authority, isProtected, "worker");
 }
 
 function promotionFailures(board: Db, taskId: string) {
@@ -1845,7 +1845,7 @@ it("遅い走査は、盤面の外で閉じられた PR の open な merge quest
   expect(boardEvents(db, question.id, "pr_close_observed")).toEqual(closeObserved(1));
 });
 
-// ADR 0227 決定2・3: check が1つも報告されていない PR は、盤面自身がその PR へ最後に push してから5分の猶予の間だけ待つ
+// ADR 0227 決定2・3: check が1つも報告されていない PR は、盤面がその head を知ってから5分の猶予の間だけ待つ
 const FIVE_MINUTES = 5 * 60_000;
 
 it("check 未報告の PR は、盤面の最後の push から5分の猶予の内なら merge も question もせずキューに残る", async () => {
@@ -1877,7 +1877,7 @@ it("check 未報告の PR は、盤面の最後の push から5分の猶予の�
 
 const UNREPORTED_PURPOSE =
   "\"ship\"'s auto_if_ci_green auto-merge found no CI check reported on PR #1 in the 5 minutes since " +
-  "the board last pushed to it, so its CI-green condition cannot be observed. Merge anyway, or hold?";
+  "the board first saw its current head, so its CI-green condition cannot be observed. Merge anyway, or hold?";
 
 it("猶予の5分を過ぎても check 未報告の PR は、キューを外れて推奨 hold の merge question を盤面の名義で1件だけ立てる", async () => {
   const workspace = await makeWorkspace("landing-unreported-past-grace");
@@ -1930,17 +1930,78 @@ it("開いている PR への修理の push は盤面の名義の event に残�
   await clock.advance(2 * 60_000);
   await landing.tick("auto_merge", clock.now());
   expect(mergeQuestions(db)).toEqual([]);
-  expect(
-    listEvents(db, work.id)
-      .filter((e) => e.kind === "pr_branch_pushed")
-      .map(({ worker_id, origin, payload }) => ({ worker_id, origin, payload })),
-  ).toEqual([{ worker_id: BOARD_WORKER_ID, origin: "board", payload: { kind: "pr_branch_pushed", pr_number: 1 } }]);
+  expect(boardEvents(db, work.id, "pr_branch_pushed")).toEqual([
+    {
+      worker_id: BOARD_WORKER_ID,
+      origin: "board",
+      payload: { kind: "pr_branch_pushed", pr_number: 1, sha: git(workspace.path, "rev-parse", `task/${work.id}`) },
+    },
+  ]);
 
   await clock.advance(3 * 60_000);
   await landing.tick("auto_merge", clock.now());
   expect(mergeQuestions(db).map(({ pr, purpose }) => ({ pr, purpose }))).toEqual([
     { pr: 1, purpose: UNREPORTED_PURPOSE },
   ]);
+  // 盤面自身の push は記録にある head なので、観測としては刻まない
+  expect(boardEvents(db, work.id, "pr_head_observed")).toEqual([]);
+});
+
+// ADR 0231 決定4: 盤面の外で push された head の猶予は、盤面がその head を初めて読んだ時点から数える
+/** 盤面を通さずにタスクブランチへ commit を push し、PR #1 の head をその sha にする。 */
+async function pushOutsideBoard(workspace: WorkspaceConfig, github: FakeGitHubClient, taskId: string): Promise<string> {
+  const clone = await tempDir("tidepool-outside-push-");
+  git(clone, "clone", "--branch", `task/${taskId}`, git(workspace.path, "remote", "get-url", "origin"), ".");
+  commitWork(clone, "outside.txt", "pushed on GitHub\n");
+  git(clone, "push", "origin", `task/${taskId}`);
+  const sha = git(clone, "rev-parse", "HEAD");
+  github.scriptHead(1, sha);
+  return sha;
+}
+
+it("PR を開いてから6分後に読んだ盤面の外の head が check 未報告なら、初めて読んでから5分間キューで待ち、過ぎれば merge question に倒れる。観測は1件だけ刻まれる", async () => {
+  const { workspace } = await makeRemoteBackedWorkspace("landing-unreported-outside-head");
+  const { db, clock } = await openBoard();
+  const github = new FakeGitHubClient();
+  const landing = autoMerging(db, clock, workspace, github);
+  const work = landingWork(db, clock);
+  git(workspace.path, "checkout", "-b", `task/${work.id}`);
+  commitWork(workspace.path, "feature.txt", "ready\n");
+  await landing.land(work);
+  const outside = await pushOutsideBoard(workspace, github, work.id);
+  github.scriptCiStatus("unreported");
+
+  await clock.advance(6 * 60_000);
+  await landing.tick("auto_merge", clock.now());
+  await clock.advance(FIVE_MINUTES - 1);
+  await landing.tick("auto_merge", clock.now());
+
+  expect(mergeQuestions(db)).toEqual([]);
+  expect(boardEvents(db, work.id, "pr_head_observed")).toEqual([
+    { worker_id: BOARD_WORKER_ID, origin: "board", payload: { kind: "pr_head_observed", pr_number: 1, sha: outside } },
+  ]);
+
+  await clock.advance(1);
+  await landing.tick("auto_merge", clock.now());
+  expect(mergeQuestions(db).map(({ pr, purpose }) => ({ pr, purpose }))).toEqual([{ pr: 1, purpose: UNREPORTED_PURPOSE }]);
+  expect(boardEvents(db, work.id, "pr_head_observed")).toHaveLength(1);
+});
+
+it("PR を開いたときの event は、作成前に push したタスクブランチの sha を持つ", async () => {
+  const { workspace } = await makeRemoteBackedWorkspace("landing-pr-opened-sha");
+  const { db, clock } = await openBoard();
+  const landing = autoMerging(db, clock, workspace, new FakeGitHubClient());
+  const work = landingWork(db, clock);
+  git(workspace.path, "checkout", "-b", `task/${work.id}`);
+  commitWork(workspace.path, "feature.txt", "ready\n");
+
+  await landing.land(work);
+
+  expect(listEvents(db, work.id).find((e) => e.kind === "pr_opened")?.payload).toEqual({
+    kind: "pr_opened",
+    pr_number: 1,
+    sha: git(workspace.path, "rev-parse", `task/${work.id}`),
+  });
 });
 
 it("猶予を過ぎた check 未報告を読んでいる間にダイヤルが external へ取り下げられた PR は、question なしでキューを外れ、外した事実が残る", async () => {

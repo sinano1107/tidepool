@@ -71,6 +71,7 @@ import {
   FakeContainerRuntime,
   FakeGitHubClient,
   FakePushClient,
+  fakeHead,
   pinnedCliVersions,
   ScriptedWorker,
 } from "./fakes.js";
@@ -982,7 +983,7 @@ export function completedWork(db: Db, now: Date, assignee: string, parentId?: st
 /** agent `assignee` の auto_if_ci_green で無人 merge キューに入った PR #7 を持つ完了タスク(着地待ち)。 */
 export function queuedForAutoMerge(db: Db, now: Date, assignee: string): Task {
   const task = completedWork(db, now, assignee);
-  recordPrOpened(db, task, 7, assignee, now, { merge: "auto_if_ci_green" }, undefined, "worker");
+  recordPrOpened(db, task, 7, fakeHead(7), assignee, now, { merge: "auto_if_ci_green" }, undefined, "worker");
   return task;
 }
 

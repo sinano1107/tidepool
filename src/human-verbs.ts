@@ -987,11 +987,12 @@ export async function submitAnswer(
       );
     }
     const pr = await deps.github.readPullRequest({ path: mergeWorkspace.path, number: mergePr });
-    // ADR 0227 決定2・3: check 未報告は猶予の間だけ pending と同じに拒み、過ぎれば回答の中の人間の判断で通す
-    if (pr.ci === "unreported" && !unreportedCiGraceElapsed(deps.db, landingTaskId, now())) {
+    // ADR 0227 決定2・3: check 未報告は猶予の間だけ pending と同じに拒み、過ぎれば回答の中の人間の判断で通す。
+    // 記録に無い head の観測は拒否より前に刻まれる —— escalate の PR はキューの行を持たないので、起点はここで残す
+    if (pr.ci === "unreported" && !unreportedCiGraceElapsed(deps.db, landingTaskId, mergePr, pr.head, now())) {
       throw new DomainError(
         `CI checks on PR #${mergePr} have not reported yet — answer again once they report, or ` +
-          `${UNREPORTED_CI_GRACE_TEXT} after the board's last push to it`,
+          `${UNREPORTED_CI_GRACE_TEXT} after the board first saw its current head`,
       );
     }
     if (pr.ci !== "success" && pr.ci !== "unreported") {
