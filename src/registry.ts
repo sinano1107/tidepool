@@ -862,11 +862,11 @@ export function registryAtCommit(dir: string, commit: string): RegistryAtCommit 
   return { agents, authority };
 }
 
-/** YAML parsed as a plain record, `{}` when absent or unparseable. */
+/** YAML parsed for field reads, `{}` when absent or unparseable — a scalar
+ *  document just has no fields, since every read checks its field's type. */
 function looseYaml(raw: string | undefined): Record<string, unknown> {
   try {
-    const parsed: unknown = raw === undefined ? undefined : parseYaml(raw);
-    return typeof parsed === "object" && parsed !== null ? (parsed as Record<string, unknown>) : {};
+    return (parseYaml(raw ?? "") ?? {}) as Record<string, unknown>;
   } catch {
     return {};
   }
