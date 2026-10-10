@@ -589,6 +589,49 @@ thread's history always fails.`));
     expect(developer.endsWith(`\n\n${section}\n\n`)).toBe(true);
   });
 
+  it("当事者レビューの当時版には当時の Authority と Roster が入る —— 文面は Claude と共有の boardProse(issue #1741 / ADR 0157)", async () => {
+    const f = await fixture();
+    const objectedCommit = execFileSync("git", ["rev-parse", "main"], { cwd: f.registry }).toString().trim();
+    const at = new Date("2026-08-24T00:00:00.000Z");
+    const objected = task(f.db, "codex-objected-1741");
+    appendEvent(f.db, {
+      taskId: objected.id,
+      workerId: "codex-agent",
+      origin: "board",
+      payload: { ...WORKER_SPAWNED, registry_commit: objectedCommit },
+      at,
+    });
+    const decision = appendEvent(f.db, {
+      taskId: objected.id,
+      workerId: "codex-agent",
+      origin: "board",
+      payload: { kind: "decision_logged", line: "chose approach X" },
+      at,
+    });
+    appendEvent(f.db, {
+      taskId: objected.id,
+      workerId: "human",
+      origin: "webui",
+      payload: { kind: "objection_raised", entry_id: decision, comment: "reconsider X", session_id: 1 },
+      at,
+    });
+    f.start(registerTask(
+      f.db,
+      { type: "review", assignee: "codex-agent", workspace: "work", parent_id: objected.id, title: "codex-rca-1741", purpose: "why X", completion_criteria: "explained" },
+      at,
+      ...HUMAN_WEBUI,
+    ));
+
+    const developer = developerInstructions(f.process.calls[0]!.args);
+    expect(developer).toContain(
+      "### Authority as it stood then (profile standard)\n\nPrefer reversible actions.",
+    );
+    expect(developer).toContain(
+      "### Roster as it stood then (profile standard)\n\ncodex-agent — Codex agent\n" +
+        "deckhand — General work agent for the tidepool board",
+    );
+  });
+
   it("work / review task の worker_spawned は、盤面が選んだ候補の段の id を持つ(ADR 0210 決定1)", async () => {
     const f = await fixture();
     for (const value of [task(f.db, "codex-tier-work"), metaReviewTask(f.db)]) {

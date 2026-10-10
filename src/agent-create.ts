@@ -307,7 +307,7 @@ export function listAgentViews(deps: AgentAdminDeps): AgentView[] {
 }
 
 /** ADR 0087 決定1 の agent 半分: `agents/<name>.md` を committed main から除去する。
- *  過去タスクが読む agent 本文は commit 指定(ADR 0020 / `agentBodyAtCommit`)なので、
+ *  過去タスクが読む agent 本文は commit 指定(ADR 0020 / `registryAtCommit`)なので、
  *  HEAD から消えても履歴参照は壊れない。 */
 export interface DeleteAgentInput {
   name: string;
