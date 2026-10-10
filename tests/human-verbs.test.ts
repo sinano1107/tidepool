@@ -710,7 +710,7 @@ it("猶予の5分を過ぎても check 未報告の PR への merge 回答は、
   expect(github.merged).toEqual([{ path: "/workspaces/product", number: 42 }]);
 });
 
-it("workspace quarantine の回答は tree が clean と確認できるまで拒否する", async () => {
+it("workspace quarantine の回答は tree が clean と確認できなければ DomainError になり、question は todo のまま残る", async () => {
   db = openDb(":memory:");
   quarantineWorkspace(db, "product", new Error("tree rule failed"), NOW);
   const question = onlyQuestion(db);
@@ -737,8 +737,8 @@ it("workspace quarantine の回答は tree が clean と確認できるまで拒
     error = caught;
   }
 
-  expect({ error: String(error), status: onlyQuestion(db).status }).toEqual({
-    error: expect.stringContaining("workspace product is not a usable git repository"),
+  expect({ error, status: onlyQuestion(db).status }).toEqual({
+    error: expect.any(DomainError),
     status: "todo",
   });
 });
