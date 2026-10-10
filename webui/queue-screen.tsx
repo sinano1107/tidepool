@@ -201,7 +201,7 @@ function QueueScreen({ data, paused, onTogglePause, spendDown, onSpendDown, onFr
       <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, marginBottom: 10, minHeight: 30 }}>
         <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: slot.color, textTransform: 'uppercase', letterSpacing: '0.08em' }}>slot</span>
         {slot.taskId && (
-          <IdChip id={slot.taskId} style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', flexShrink: 0 }} />
+          <IdChip id={slot.taskId} />
         )}
         <span style={{ flex: 1, minWidth: 0, fontSize: 'var(--text-sm)', color: !paused && !data.running ? 'var(--text-muted)' : 'var(--text-body)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{slot.line}</span>
         <button onClick={onTogglePause} aria-pressed={paused}

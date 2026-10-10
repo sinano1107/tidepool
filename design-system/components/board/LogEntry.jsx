@@ -52,7 +52,7 @@ export function LogEntry({ entry = {}, onObject, onExpand, onOpenMemoryEntry, ac
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>
           <span>{time}</span>
           <AgentChip name={agent} icon={agentIcon} human={human} size="sm" />
-          <IdChip id={taskId} style={{ flexShrink: 0 }} />
+          <IdChip id={taskId} />
           {active && <span style={{ marginLeft: 'auto', color: 'var(--coral-4)' }}>objecting…</span>}
         </div>
         <div style={{ fontSize: 'var(--text-sm)', color: kindColors[kind], lineHeight: 'var(--leading-normal)', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>
