@@ -8,7 +8,7 @@ import { executionSettingsFor } from "../src/execution-setting.js";
 import { loadRegistry } from "../src/registry.js";
 import { registerTask } from "../src/tasks.js";
 import { TranscriptStore } from "../src/transcript-store.js";
-import { FakeClock, FakeContainerRuntime, healthyUsageText } from "./fakes.js";
+import { FakeClock, FakeContainerRuntime, withHealthyUsage } from "./fakes.js";
 import {
   api,
   bootTidepool,
@@ -423,12 +423,7 @@ it.each([
           logDir,
           transcripts: new TranscriptStore(logDir),
         });
-        return {
-          id: worker.id,
-          start: (task, setting) => worker.start(task, setting),
-          gracefulStop: (id) => worker.gracefulStop(id),
-          checkUsage: async () => healthyUsageText(t.clock.now()),
-        };
+        return withHealthyUsage(worker, { now: () => t.clock.now() });
       },
     });
     const task = (

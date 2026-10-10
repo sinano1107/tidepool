@@ -3,7 +3,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { ClaudeCodeWorker } from "../src/claude-worker.js";
 import { getTask } from "../src/tasks.js";
 import { TranscriptStore } from "../src/transcript-store.js";
-import { FakeContainerRuntime, healthyUsageText } from "./fakes.js";
+import { FakeContainerRuntime, withHealthyUsage } from "./fakes.js";
 import {
   api,
   bootTidepool,
@@ -211,12 +211,7 @@ it("skill 列挙の容器が空にならず回収 timeout で null に落ちる�
         logDir,
         transcripts: new TranscriptStore(logDir),
       });
-      return {
-        id: worker.id,
-        start: (task, setting) => worker.start(task, setting),
-        gracefulStop: (id) => worker.gracefulStop(id),
-        checkUsage: async () => healthyUsageText(t.clock.now()),
-      };
+      return withHealthyUsage(worker, { now: () => t.clock.now() });
     },
   });
   const task = queueWork(t, "never runs");

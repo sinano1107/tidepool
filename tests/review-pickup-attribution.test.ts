@@ -17,10 +17,10 @@ import {
   FakeClock,
   FakeContainerRuntime,
   fakeContainers,
-  healthyUsageText,
   noRetrospectiveCalls,
   pinnedCliVersions,
   ScriptedWorker,
+  withHealthyUsage,
 } from "./fakes.js";
 import { api, GIT_FIXTURE_TEST_TIMEOUT, HOUR, HUMAN_WEBUI, makeWorkspace, TEST_CREDENTIAL } from "./harness.js";
 import { makeRegistry } from "./registry-fixture.js";
@@ -103,12 +103,7 @@ You are Fugu.
         containers,
         boardCall,
       });
-      return {
-        id: worker.id,
-        start: (task, setting) => worker.start(task, setting),
-        gracefulStop: (taskId) => worker.gracefulStop(taskId),
-        checkUsage: async () => healthyUsageText(clock.now()),
-      };
+      return withHealthyUsage(worker, clock);
     },
   });
   const baseUrl = `http://127.0.0.1:${server.port}`;
