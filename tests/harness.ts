@@ -1040,6 +1040,13 @@ export function registryOf(agents: Set<string>, workspaces: Set<string>): Pick<B
   };
 }
 
+/** `fallback` を既定にした盤面の resolver: null は `fallback`、名前は `fallback` と `others` から引く。 */
+export const defaultingTo = (fallback: WorkspaceConfig, ...others: WorkspaceConfig[]) => (name: string | null) => {
+  const found = [fallback, ...others].find((w) => w.name === (name ?? fallback.name));
+  if (!found) throw new UnknownWorkspaceError(name ?? fallback.name);
+  return found;
+};
+
 /** 起草 client つきの盤面で、work(既定 workspace charts)に1行 log → 完了 → 異議まで進める(commit は呼び手)。
  *  `registrant` を渡すと agent が登録した task(decompose と同じ登録者の形)、`human` は人間が担当して人間の扉で完了。
  *  `allocationClient` を渡すと work に worker session を置き、統合点レビューの完了で配分評価が撃たれる。 */

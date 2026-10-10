@@ -22,6 +22,7 @@ import {
   editTask,
   getTask,
   listBoard,
+  pickupTask,
   recordPrOpened,
   registerTask,
   type Task,
@@ -43,6 +44,7 @@ import { afterCiRead, FakeClock, FakeGitHubClient, fakeHead, seedTierNames, UNRE
 import {
   commitWork,
   completedWork,
+  defaultingTo,
   FULL_HANDOFF,
   GIT_FIXTURE_TEST_TIMEOUT,
   git,
@@ -3128,4 +3130,100 @@ it("head を刻めなかった abandon は、内容を変えない次の決着�
 
   expect(openPromotionQuestions(db, work.id).map((q) => q.title)).toEqual(["PR promotion re-asked: ship"]);
   expect(github.requests).toHaveLength(1);
+});
+
+// ADR 0233: 既定への参照は pickup で終わる —— 着手したタスクの着地は、既定を差し替えた盤面でも pickup で解決した先に向かう
+
+/** 既定 `workspace`(省略なら workspace 未指定のまま)と既定 agent `agent` で pickup し、完了して完了時レビューを決着させる。 */
+function pickedUpAndCompleted(board: Db, clock: FakeClock, agent: string, workspace?: WorkspaceConfig): Task {
+  const picked = pickupTask(board, landingWork(board, clock), agent, clock.now(), { assignee: agent, workspace: workspace?.name })!;
+  const done = completeTask(board, picked, FULL_HANDOFF, agent, clock.now(), "worker");
+  for (const review of listBoard(board).filter((t) => t.parent_id === done.id)) {
+    completeTask(board, getTask(board, review.id)!, FULL_HANDOFF, "shako", clock.now(), "worker");
+  }
+  return getTask(board, done.id)!;
+}
+
+it("既定 workspace a で pickup した workspace 未指定の完了タスクの PR は、既定を b に差し替えた盤面でも a で CI を読んで merge され、盤面の外の merge も a で観測し、a の着地待ちに数える", async () => {
+  const a = await makeWorkspace("landing-pinned-a");
+  const b = await makeWorkspace("landing-pinned-b");
+  const { db, clock } = await openBoard();
+  const github = new FakeGitHubClient();
+  for (const pr of [7, 8]) {
+    recordPrOpenedViaWorker(db, pickedUpAndCompleted(db, clock, "tako", a), pr, "tako", clock.now(), {
+      authority: { merge: "auto_if_ci_green" },
+    });
+  }
+  github.scriptMergedOutside(8);
+  const landing = createLanding({
+    defaultAgentName: "tako",
+    db,
+    clock,
+    workspace: b,
+    resolveWorkspace: defaultingTo(b, a),
+    github,
+    resolveAuthority: () => profile("auto_if_ci_green"),
+  });
+
+  expect(countTasksAwaitingLandingInWorkspace(db, a.name)).toBe(2);
+  expect(countTasksAwaitingLandingInWorkspace(db, b.name)).toBe(0);
+
+  await landing.observeAutoMergeOutcomes("tako");
+  await landing.tick("auto_merge", clock.now());
+
+  expect(github.stateChecks).toEqual([
+    { path: a.path, number: 7 },
+    { path: a.path, number: 8 },
+  ]);
+  expect(github.ciChecks).toEqual([{ path: a.path, number: 7 }]);
+  expect(github.merged).toEqual([{ path: a.path, number: 7 }]);
+});
+
+it("既定 workspace a で pickup した workspace 未指定のタスクの PR 昇格は、既定を b に差し替えた盤面でも a のタスクブランチから PR を開く", async () => {
+  const { workspace: a } = await makeRemoteBackedWorkspace("landing-pinned-land-a");
+  const { workspace: b } = await makeRemoteBackedWorkspace("landing-pinned-land-b");
+  const { db, clock } = await openBoard();
+  const github = new FakeGitHubClient();
+  const done = pickedUpAndCompleted(db, clock, "tako", a);
+  git(a.path, "checkout", "-b", `task/${done.id}`);
+  commitWork(a.path, "feature.txt", "ready\n");
+  git(a.path, "checkout", "main");
+  const landing = createLanding({
+    defaultAgentName: "tako",
+    db,
+    clock,
+    workspace: b,
+    resolveWorkspace: defaultingTo(b, a),
+    github,
+    resolveAuthority: () => profile("escalate"),
+  });
+
+  await landing.land(done);
+
+  expect(github.requests.map((r) => r.path)).toEqual([a.path]);
+});
+
+it("既定 agent a で pickup した assignee 未指定の完了タスクの PR は、既定 agent を b に差し替えた tick でも a の profile のダイヤルで merge され、a の着地待ちに数える", async () => {
+  const workspace = await makeWorkspace("landing-pinned-agent");
+  const { db, clock } = await openBoard();
+  const github = new FakeGitHubClient();
+  recordPrOpenedViaWorker(db, pickedUpAndCompleted(db, clock, "a"), 7, "a", clock.now(), {
+    authority: { merge: "auto_if_ci_green" },
+  });
+  const landing = createLanding({
+    defaultAgentName: "b",
+    db,
+    clock,
+    workspace,
+    github,
+    resolveAuthority: (assignee) => profile(assignee === "a" ? "auto_if_ci_green" : "escalate"),
+  });
+
+  expect(countTasksAwaitingLanding(db, "a", "b")).toBe(1);
+  expect(countTasksAwaitingLanding(db, "b", "b")).toBe(0);
+
+  await landing.tick("auto_merge", clock.now());
+
+  expect(github.merged).toEqual([{ path: workspace.path, number: 7 }]);
+  expect(mergeQuestions(db)).toEqual([]);
 });

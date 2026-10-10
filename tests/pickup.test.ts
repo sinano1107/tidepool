@@ -19,11 +19,6 @@ it("the hourly tick hands the queue head to the worker and marks it in_progress"
   const list = (await api(t.baseUrl, "GET", "/api/tasks")).json;
   const byId = Object.fromEntries(list.map((x: any) => [x.id, x]));
   expect(byId[first.id].status).toBe("in_progress");
-  // an unspecified assignee is never baked in at pickup (ADR 0012 / issue
-  // #36): it stays a live reference to the board's default agent, resolved
-  // Board shows the current resolved assignee, while raw_assignee proves it
-  // remains a live reference rather than a name baked at pickup.
-  expect(byId[first.id]).toMatchObject({ assignee: "fake-worker", raw_assignee: null });
   expect(byId[second.id].status).toBe("todo");
 
   // slot is busy (concurrency = 1): the next tick starts nothing new

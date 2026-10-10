@@ -485,7 +485,8 @@ function workspaceConfig(board: BoardComposition): WorkspaceConfig | undefined {
 }
 
 /** Resolves any task's execution workspace against the registry (issue #26 /
- *  ADR 0009): read fresh every call, never pinned to a path at pickup. Absent
+ *  ADR 0009): read fresh every call, never pinned to a path at pickup (pickup
+ *  writes only the default's name, ADR 0233). Absent
  *  → every task runs against the single `workspaceConfig()` above (no
  *  registry configured at all). */
 function workspaceResolver(
