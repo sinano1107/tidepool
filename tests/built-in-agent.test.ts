@@ -2,11 +2,11 @@ import { expect, it } from "vitest";
 import { agentNeedsHuman, resolveAgentOrQuarantine, resolveExecutionAgent } from "../src/agent.js";
 import { openDb } from "../src/db.js";
 import {
-  agentBodyAtCommit,
   assertValidAgentName,
   InvalidAgentNameError,
   loadRegistry,
   REVIEWER_AUTHORITY_PROFILE,
+  registryAtCommit,
 } from "../src/registry.js";
 import { seedTierNames } from "./fakes.js";
 import { makeRegistry } from "./registry-fixture.js";
@@ -98,10 +98,13 @@ it("shadow している間は、その名前の work は registry のエント�
   expect(resolved.profile.name).toBe("standard");
 });
 
-it("組み込みの名前でも、その commit にファイルが無ければ当時版は undefined —— 自己 RCA は証拠なしに degrade する(ADR 0020 / ADR 0117 帰結)", async () => {
+it("組み込みの名前で、その commit にファイルが無ければ当時版は組み込みに解決されていたと読む —— 本文は無い(ADR 0020 #1741 追記 / ADR 0117 帰結)", async () => {
   const dir = await makeRegistry();
 
-  expect(agentBodyAtCommit(dir, "HEAD", "fugu")).toBeUndefined();
+  expect(registryAtCommit(dir, "HEAD")?.agents.fugu).toEqual({
+    description: "Reviews work independently against its completion criteria.",
+    builtin: true,
+  });
 });
 
 it("組み込みだけが持つ名前は「既に存在する」で弾かれない —— 作成の扉は同名を拒まない(ADR 0117 決定2)", async () => {

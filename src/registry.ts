@@ -700,7 +700,7 @@ export type RegistryReachabilityCheck = () => Promise<RegistryReachability>;
 
 // stderr piped (not inherited), same as git.ts's `git()`: git narrates a
 // missing ref on stderr, and the board's console is not the place for it — the
-// message still rides the thrown error for callers that want it (agentBodyAtCommit
+// message still rides the thrown error for callers that want it (registryAtCommit
 // swallows it by design).
 const GIT_STDIO: ["ignore", "pipe", "pipe"] = ["ignore", "pipe", "pipe"];
 
@@ -757,12 +757,6 @@ export async function refreshRegistry(
   }
 }
 
-/** Read one committed file's content at `ref` — `git show ref:path`. The board
- *  reads the registry from the committed branch, never the working tree. */
-function gitShowFile(dir: string, ref: string, path: string): string {
-  return execFileSync("git", ["show", `${ref}:${path}`], { cwd: dir, stdio: GIT_STDIO }).toString();
-}
-
 /** The committed registry files at `commit`, path → content, read in a fixed
  *  number of git spawns whatever the file count (issue #983): one `ls-tree`
  *  lists the blobs, one `cat-file --batch` streams them all. Only direct
@@ -810,26 +804,72 @@ function splitFrontmatter(raw: string): { frontmatter: string; body: string } | 
   return match ? { frontmatter: match[1]!, body: match[2]! } : null;
 }
 
-/** The system-prompt body of an agent definition as it stood at a given commit
- *  (ADR 0020 part 4) — `git show <commit>:agents/<name>.md` with the frontmatter
- *  stripped. Best-effort: returns undefined when the commit or file is gone
- *  (e.g. a kill left no worker_spawned hash, or the definition post-dates it) or
- *  the file has no parseable body, so a self-RCA spawn degrades to no injected
- *  evidence rather than failing the spawn. Deliberately does not run the full
- *  frontmatter schema — an older, differently-shaped definition is still valid
- *  evidence for "why did I decide", and this read must not reject it. */
-export function agentBodyAtCommit(
-  dir: string,
-  commit: string,
-  agentName: string,
-): string | undefined {
-  let raw: string;
+/** One `agents/<name>.md` as it stood at a past commit: each field undefined
+ *  when that commit's file does not carry it in a readable form. `builtin` marks
+ *  the built-in Auditor standing in for a name with no file there. */
+export interface AgentAtCommit {
+  body?: string;
+  authority?: string;
+  description?: string;
+  builtin?: true;
+}
+
+/** `authority` holds undefined for a profile file whose `guidance` or
+ *  `assignable_to` cannot be read. */
+export interface RegistryAtCommit {
+  agents: Record<string, AgentAtCommit>;
+  authority: Record<string, { guidance: string; assignable_to: string[] } | undefined>;
+}
+
+/** The registry as it stood at a past commit, for the self RCA's 当時版 (ADR
+ *  0020 part 4 and its #1741 addendum): agent bodies, each agent's `authority`
+ *  name and `description`, and each profile's `guidance` / `assignable_to`.
+ *  Deliberately schema-free — an older, differently-shaped registry is still
+ *  valid evidence for "why did I decide", and this read must not reject it.
+ *  The built-in Auditor joins under the same shadowing rule as `loadRegistry`.
+ *  Best-effort: undefined when the commit is unreachable. */
+export function registryAtCommit(dir: string, commit: string): RegistryAtCommit | undefined {
+  let files: Map<string, string>;
   try {
-    raw = gitShowFile(dir, commit, `agents/${agentName}.md`);
+    files = readRegistryFiles(dir, commit);
   } catch {
     return undefined;
   }
-  return splitFrontmatter(raw)?.body.trim();
+  const agents: Record<string, AgentAtCommit> = {};
+  const authority: RegistryAtCommit["authority"] = {};
+  for (const [path, raw] of files) {
+    if (path.startsWith("agents/")) {
+      const split = splitFrontmatter(raw);
+      const meta = looseYaml(split?.frontmatter);
+      agents[basename(path, ".md")] = {
+        body: split?.body.trim(),
+        authority: typeof meta.authority === "string" ? meta.authority : undefined,
+        description: typeof meta.description === "string" ? meta.description : undefined,
+      };
+    } else if (path.startsWith("authority/")) {
+      const { guidance, assignable_to } = looseYaml(raw);
+      authority[basename(path, ".yaml")] =
+        typeof guidance === "string" &&
+        Array.isArray(assignable_to) &&
+        assignable_to.every((name) => typeof name === "string")
+          ? { guidance, assignable_to }
+          : undefined;
+    }
+  }
+  if (!Object.hasOwn(agents, BUILT_IN_AUDITOR.name)) {
+    agents[BUILT_IN_AUDITOR.name] = { description: BUILT_IN_AUDITOR.description, builtin: true };
+  }
+  return { agents, authority };
+}
+
+/** YAML parsed for field reads, `{}` when absent or unparseable — a scalar
+ *  document just has no fields, since every read checks its field's type. */
+function looseYaml(raw: string | undefined): Record<string, unknown> {
+  try {
+    return (parseYaml(raw ?? "") ?? {}) as Record<string, unknown>;
+  } catch {
+    return {};
+  }
 }
 
 /** 空白だけ・null・キー不在をまとめて「書かれていない」とする(登録の門が
