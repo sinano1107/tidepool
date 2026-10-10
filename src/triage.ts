@@ -305,9 +305,9 @@ function registerRcaReview(
  *    regardless of who wrote it — its distance from the original judgment is
  *    the value (CONTEXT.md's Review: 独立レビュー), so it fires even when
  *    every entry was human-written. `assignee` is left unset, a live
- *    reference to the board's Auditor pointer resolved fresh at pickup —
- *    the same "unset = live reference" shape `defaultAgentName` itself uses
- *    (ADR 0011), not a value baked here at commit time. This relies on the
+ *    reference to the board's Auditor pointer resolved fresh at pickup, not
+ *    a value baked here at commit time — and, unlike an unset work
+ *    assignee, pickup leaves it unset too (ADR 0233 決定3). This relies on the
  *    agent-quarantine gate (`typeAwareDefaultAgentSql`, `nextSlotTask`/
  *    `listQueue`), claude-worker.ts's spawn resolution, and mcp.ts's
  *    attribution all being type-aware — a `review` task's unset `assignee`
@@ -624,10 +624,9 @@ export function commitTriage(
 }
 
 /** A log entry annotated with its resolved workspace name (issue #44): the
- *  event's own task's `workspace`, or the board's default when the task
- *  carries none — resolved fresh at read time, never stamped onto the event
- *  itself (same "resolved fresh every use, not pinned" reference semantics
- *  as `resolveExecutionWorkspace`, ADR 0009). Also carries every objection
+ *  event's own task's `workspace` (written at pickup, ADR 0233), or the
+ *  board's default when the task carries none — a task never picked up,
+ *  resolved at read time and never stamped onto the event itself. Also carries every objection
  *  ever raised against the entry (ADR 0085) — the annotation is a fact of
  *  the entry, not a session's state, so bundled and still commit-pending
  *  objections both ride along. `session_id` is the sole fact the read model

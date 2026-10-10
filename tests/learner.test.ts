@@ -17,6 +17,7 @@ import {
   executionSetting,
   HOUR,
   loggedEntry,
+  makeWorkspace,
   QUIET_EXIT,
   registerWork,
   type Tidepool,
@@ -305,6 +306,18 @@ it("観測が効くと shadow 行は selector と乖離しうるが、選択は�
     basis: "data",
     candidates: 2,
   });
+});
+
+// ADR 0233: 完了タスクの workspace は pickup で既定の名前に焼き込まれる —— 未着手の空のタスクも同じ名前の束で照合する
+it("workspace 未指定の未着手タスクの実績は、既定 workspace の名前で焼き込まれた完了タスクを workspace の段に数える", async () => {
+  t = await bootTidepool({ taskExecutionCandidates: () => [opus, sol], workspace: await makeWorkspace("learner-default") });
+  await settledSession(t, opus);
+
+  const later = await registerWork(t, "later");
+  await t.clock.advance(HOUR);
+
+  const row = listRoutingShadow(t.db, "", { since_watermark: 0 }).shadow.find((r) => r.task_id === later.id);
+  expect(row?.actual_record).toEqual({ board: { accepted: 1, rejected: 0 }, workspace: { accepted: 1, rejected: 0 } });
 });
 
 it("同じ entry の前の異議群が capability、後の異議群が preference と帰責された session も負として数える —— 学習器は opus の行を下げる(ADR 0170 決定3)", async () => {

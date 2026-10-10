@@ -132,7 +132,8 @@ export function assertGitDirIsDirectory(path: string): void {
 
 /** ADR 0009: `task.workspace` is a reference to a registry name, resolved
  *  fresh against the registry every time it's used, never pinned to a path.
- *  Null inherits the board's default (CONTEXT.md's Workspace). `workspacesBaseDir`
+ *  Null — a task never picked up, since pickup writes the default's name
+ *  (ADR 0233) — inherits the board's default (CONTEXT.md's Workspace). `workspacesBaseDir`
  *  is `resolveWorkspacesBaseDir`'s output, threaded in rather than read from
  *  env here (ADR 0018) — this stays a pure function of its arguments. */
 export function resolveExecutionWorkspace(

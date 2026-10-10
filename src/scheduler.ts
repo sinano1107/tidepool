@@ -374,13 +374,13 @@ export function startScheduler(deps: {
     content: Partial<TaskContent>,
     onPicked: () => void,
   ): Promise<(() => void) | void> {
-    // assignee is never overwritten (ADR 0012 / issue #36) — the event's
-    // attribution resolves the same three-value read CONTEXT.md's Assignee
-    // describes: pre-set name as-is, unspecified review to the Auditor pointer,
-    // and unspecified work to the board's default agent. Questions never enter
-    // the execution slot.
+    // the same three-value read CONTEXT.md's Assignee describes: pre-set name
+    // as-is, unspecified review to the Auditor pointer, and unspecified work to
+    // the board's default agent. Questions never enter the execution slot.
+    // pickupTask writes this name (and the default workspace's) onto empty
+    // columns — the default reference ends here (ADR 0233).
     const agent = resolveTaskAgent(task, worker.id, auditorName ?? worker.id);
-    const picked = pickupTask(db, task, agent, clock.now());
+    const picked = pickupTask(db, task, agent, clock.now(), workspace?.name);
     // await の窓で人間の扉が head を書き換えた(issue #972): slot は空けたまま、次の poll が選び直す
     if (!picked) return;
     onPicked();
@@ -629,7 +629,8 @@ export function startScheduler(deps: {
       let episodes: RoutingEpisode[] | undefined;
       const branch = (task: Task, pool: ExecutionSetting[]) => {
         episodes ??= loadEpisodes(db);
-        return selectorBranch({ promoted, candidates: pool, ...observedInTier(episodes, pool[0]!.tier_id, task.workspace) });
+        // 完了タスクは pickup で既定の名前に焼き込まれる(ADR 0233)ので、未着手の空のタスクも同じ名前で照合する
+        return selectorBranch({ promoted, candidates: pool, ...observedInTier(episodes, pool[0]!.tier_id, task.workspace ?? workspace?.name ?? null) });
       };
       let branched: ReturnType<typeof branch> | undefined;
       /** 1手の選択: 昇格中の work task は学習器の選択、それ以外は表の先頭。どちらも下の観測 → 除外 → 引き直しを通るので、

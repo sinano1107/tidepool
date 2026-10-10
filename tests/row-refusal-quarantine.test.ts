@@ -74,7 +74,7 @@ async function bootClaude(options: { provider?: Provider; modelProbes?: Partial<
         moonshotApiKeyFile,
       });
       return {
-        id: "adapter",
+        id: worker.id,
         start: (task, setting) => worker.start(task, setting),
         gracefulStop: (id) => worker.gracefulStop(id),
         checkUsage: async () => healthyUsageText(t.clock.now()),

@@ -515,8 +515,8 @@ function assertExecutionRequest(
   }
 }
 
-/** ADR 0016: unlike an ordinary task's workspace — a reference resolved
- *  fresh at every use (ADR 0009) — an issue-backed task's workspace is a
+/** ADR 0016: unlike an ordinary task's workspace — empty until pickup
+ *  writes the default's name (ADR 0233) — an issue-backed task's workspace is a
  *  confirmed value, required at registration, because it's the repo half of
  *  the identity of the issue it points at (a swapped default must never
  *  silently repoint it at another repo's same-numbered issue). */
@@ -908,30 +908,41 @@ export function splitHandoffMarkdown(doc: string): Array<{ heading: string; body
   return sections.map((s) => ({ heading: s.heading, body: s.body.join("\n").trim() }));
 }
 
-/** Hand the queue head to a worker: in_progress + event, atomically. `assignee`
- *  is never touched here (ADR 0012 / issue #36): slot is capacity, not
- *  identity, so pickup must not overwrite a pre-set delegation, nor bake in
- *  an unspecified assignee's resolution — null stays a live reference to
- *  whichever agent is the board's default at the moment it's next read
- *  (CONTEXT.md's Assignee), same as workspace's own "resolved fresh every
- *  use, never pinned" rule (ADR 0009). `workerId` is only the event's
- *  attribution — the caller resolves it (`task.assignee ?? the default
- *  agent`) before calling.
+/** Hand the queue head to a worker: in_progress + event, atomically. The
+ *  default reference ends here (ADR 0233): an empty `workspace` gets
+ *  `defaultWorkspaceName`, and an empty work `assignee` gets `workerId` — the
+ *  caller's resolved agent (`task.assignee ?? the default agent`), which is
+ *  also the event's attribution. A set name is never overwritten (ADR 0012 /
+ *  issue #36), and a review's empty assignee stays empty: it refers to the
+ *  Auditor pointer, i.e. independent review. The event records which columns
+ *  were filled from a default and with what, since registration records
+ *  neither.
  *
  *  `task` is the head the scheduler chose before awaiting real I/O (issue
  *  #972): if a human door cancelled it or handed it to `human` meanwhile, the
- *  row no longer matches and the pickup is abandoned (null, no event). */
-export function pickupTask(db: Db, task: Task, workerId: string, now: Date): Task | null {
+ *  row no longer matches and the pickup is abandoned (null, no event). The
+ *  fills test the row, not `task`, so a name set in that window is kept. */
+export function pickupTask(db: Db, task: Task, workerId: string, now: Date, defaultWorkspaceName?: string): Task | null {
   return db.transaction(() => {
     const { changes } = db
       .prepare("UPDATE tasks SET status = 'in_progress' WHERE id = ? AND status = 'todo' AND assignee IS NOT ?")
       .run(task.id, HUMAN_WORKER_ID);
     if (changes === 0) return null;
+    const filled: { assignee?: string; workspace?: string } = {};
+    if (db.prepare("UPDATE tasks SET assignee = ? WHERE id = ? AND type = 'work' AND assignee IS NULL").run(workerId, task.id).changes) {
+      filled.assignee = workerId;
+    }
+    if (
+      defaultWorkspaceName &&
+      db.prepare("UPDATE tasks SET workspace = ? WHERE id = ? AND workspace IS NULL").run(defaultWorkspaceName, task.id).changes
+    ) {
+      filled.workspace = defaultWorkspaceName;
+    }
     appendEvent(db, {
       taskId: task.id,
       workerId,
       origin: "board",
-      payload: { kind: "task_picked_up" },
+      payload: { kind: "task_picked_up", ...(Object.keys(filled).length > 0 && { resolved_from_default: filled }) },
       at: now,
     });
     return getTask(db, task.id)!;

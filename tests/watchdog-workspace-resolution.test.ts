@@ -1,9 +1,10 @@
+import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { openDb } from "../src/db.js";
 import { getTask, pickupTask, registerTask } from "../src/tasks.js";
 import { failTask } from "../src/watchdog.js";
-import { ensureTaskBranch, UnknownWorkspaceError, type WorkspaceConfig } from "../src/workspace.js";
+import { ensureTaskBranch, UnknownWorkspaceError, type WorkspaceConfig, workspaceNeedsHuman } from "../src/workspace.js";
 import { FakeClock } from "./fakes.js";
 import { GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeWorkspace } from "./harness.js";
 
@@ -51,5 +52,42 @@ describe("watchdog の failTask が task.workspace を解決する", () => {
       git(prod.path, "ls-tree", "-r", "--name-only", `task/${task.id}`).split("\n"),
     ).not.toContain(".bashrc");
     expect(git(sandbox.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main");
+  });
+
+  // ADR 0233: 既定への参照は pickup で終わる —— 再起動の中断処理もこの経路を通る
+  it("workspace 未指定で既定 prod に pickup したタスクは、既定を sandbox に差し替えた resolver でも prod の checkout で後始末し、sandbox を quarantine に落とさない", async () => {
+    const sandbox = await makeWorkspace("sandbox");
+    const prod = await makeWorkspace("prod");
+    const registry: Record<string, WorkspaceConfig> = { sandbox, prod };
+    const db = openDb(":memory:");
+    const clock = new FakeClock();
+
+    const task = registerTask(
+      db,
+      { type: "work", title: "default work", purpose: "p", completion_criteria: "c" },
+      clock.now(),
+      ...HUMAN_WEBUI,
+    );
+    const picked = pickupTask(db, task, "deckhand", clock.now(), "prod")!;
+    ensureTaskBranch(db, prod, picked);
+    writeFileSync(join(prod.path, "stuck.txt"), "interrupted mid-write\n");
+
+    failTask(
+      db,
+      getTask(db, task.id)!,
+      "interrupted by restart",
+      "the board restarted",
+      (name) => {
+        const ws = registry[name ?? "sandbox"];
+        if (!ws) throw new UnknownWorkspaceError(name ?? "sandbox");
+        return ws;
+      },
+      clock.now(),
+    );
+
+    expect(git(prod.path, "status", "--porcelain")).toBe("");
+    expect(git(prod.path, "log", "--format=%s", `task/${task.id}`)).toContain(`WIP: task ${task.id}`);
+    expect(git(sandbox.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main");
+    expect(workspaceNeedsHuman(db, "sandbox")).toBe(false);
   });
 });

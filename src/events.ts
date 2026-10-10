@@ -138,7 +138,8 @@ export type EventPayload =
   // objection_event_ids: a repair / RCA child's material objections (ADR 0171 決定1)
   | { kind: "task_registered"; type: TaskType; title: string; based_on_decision?: number; integration_review?: boolean; objection_event_ids?: number[] }
   | { kind: "decision_logged"; line: string }
-  | { kind: "task_picked_up" }
+  // ADR 0233: the columns pickup filled from a default, and with what — a set column is absent
+  | { kind: "task_picked_up"; resolved_from_default?: { assignee?: string; workspace?: string } }
   | { kind: "task_moved"; after: string | null }
   // result carries the one-line outcome against the completion criteria so the
   // log view never joins back to the task row; the handoff doc stays reachable

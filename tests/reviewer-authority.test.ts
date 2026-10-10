@@ -199,6 +199,8 @@ it("task_completed が無ければ最後の pickup executor を修理先にで�
   );
   await t.stopServer();
   t = await bootTidepool({ dir: t.dir, workerId: "second-worker" });
+  // pickup が first-worker を書いたので(ADR 0233)、人間が空に戻して次の pickup を新しい既定へ解決させる
+  expect((await api(t.baseUrl, "PATCH", `/api/tasks/${pickedParent.id}`, { assignee: "" })).status).toBe(200);
   await api(t.baseUrl, "POST", `/api/tasks/${retryQuestion.id}/answer`, {
     answers: ["continue"],
   }); // immediate poll records the second pickup

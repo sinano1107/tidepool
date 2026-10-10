@@ -434,7 +434,7 @@ async function bootWithAdapter(
     workerAdapter: (deps) => {
       const worker = build(deps);
       return {
-        id: "adapter",
+        id: worker.id,
         start: (task, setting) => worker.start(task, setting),
         gracefulStop: (id) => worker.gracefulStop(id),
         checkUsage: async () => healthyUsageText(t.clock.now()),
