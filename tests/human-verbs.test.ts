@@ -759,9 +759,25 @@ it("CI を読んだ後に head が動いた PR への merge 回答は失敗し�
   github.scriptHead(42, "ci-read-head");
   afterCiRead(github, () => github.scriptHead(42, "pushed-after-ci-read"));
 
-  await expect(answerMerge(github, 0)).rejects.toThrow("Head branch was modified");
+  const error = await answerMerge(github, 0).catch((err: unknown) => err);
+  expect(error).toBeInstanceOf(DomainError);
+  expect((error as Error).message).toContain("Head branch was modified");
   expect(github.merged).toEqual([]);
   expect(onlyQuestion(db).status).toBe("todo");
+  expect(listEvents(db, onlyQuestion(db).id).some((event) => event.kind === "pr_merged")).toBe(false);
+});
+
+// ADR 0103 決定4 / ADR 0231 決定1: 失敗の文面で分けず、どの merge の失敗も DomainError に包んで question を開いたまま返す
+it("PR への merge 回答で merge が別の理由で失敗しても DomainError になり、question は todo のまま残る", async () => {
+  const github = new FakeGitHubClient();
+  github.scriptMergeFailure(42, new Error("Pull request is not mergeable: merge conflict"));
+
+  const error = await answerMerge(github, 0).catch((err: unknown) => err);
+  expect(error).toBeInstanceOf(DomainError);
+  expect((error as Error).message).toContain("Pull request is not mergeable: merge conflict");
+  expect(github.merged).toEqual([]);
+  expect(onlyQuestion(db).status).toBe("todo");
+  expect(listEvents(db, onlyQuestion(db).id).some((event) => event.kind === "pr_merged")).toBe(false);
 });
 
 it("workspace quarantine の回答は tree が clean と確認できなければ DomainError になり、question は todo のまま残る", async () => {
