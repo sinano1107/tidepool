@@ -375,7 +375,9 @@ export function openQuarantineQuestions(db: Db, kind: QuarantineKind): Map<strin
  *  0012 / issue #36): put the repair in front of the human as a 1-choice
  *  Confirmation question (its tasks stay out of the slot while it is open) —
  *  same shape, same "1 resource, at most 1 open question" dedup (CONTEXT.md's
- *  Quarantine). */
+ *  Quarantine). Lives here rather than in agent.ts because landing.ts calls it
+ *  and agent.ts value-imports landing.ts — a cycle ADR 0204 決定1 forbids
+ *  (issue #1709). */
 export function quarantineAgent(db: Db, agentName: string, cause: unknown, now: Date): void {
   registerQuarantine(db, "agent", agentName, cause instanceof Error ? cause.message : String(cause), now);
 }
