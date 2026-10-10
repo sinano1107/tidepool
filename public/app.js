@@ -1564,8 +1564,9 @@ function tierOptions(tiers, blank = "board default") {
 }
 function AgentFields({ draft, set, authorityOptions, providerOptions, tiers, tiersDegraded, advisorCeiling, hostSkills, hostSkillsDegraded }) {
   const { Checkbox, Input, Select } = window.TidepoolDesignSystem_8a0ead;
-  const tierChoices = tierOptions(tiers);
-  if (draft.tier && !tiers.some((tier) => tier.name === draft.tier)) tierChoices.push({ value: draft.tier, label: draft.tier });
+  const shownTiers = tiersDegraded ? [] : tiers;
+  const tierChoices = tierOptions(shownTiers);
+  if (draft.tier && !shownTiers.some((tier) => tier.name === draft.tier)) tierChoices.push({ value: draft.tier, label: draft.tier });
   return /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(AgentIconPicker, { value: draft.icon, onChange: (v) => set("icon", v) }), /* @__PURE__ */ React.createElement(
     Input,
     {
@@ -1583,7 +1584,7 @@ function AgentFields({ draft, set, authorityOptions, providerOptions, tiers, tie
       value: draft.systemPrompt,
       onChange: (e) => set("systemPrompt", e.target.value)
     }
-  ), /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 } }, /* @__PURE__ */ React.createElement(Select, { label: "Authority", options: authorityOptions, value: draft.authority, onChange: (e) => set("authority", e.target.value) }), /* @__PURE__ */ React.createElement(Select, { label: "Provider", options: [PROVIDER_PLACEHOLDER, ...providerOptions], value: draft.provider, onChange: (e) => set("provider", e.target.value) })), /* @__PURE__ */ React.createElement(Select, { label: "Default tier", options: tierChoices, value: draft.tier, onChange: (e) => set("tier", e.target.value) }), tiersDegraded && /* @__PURE__ */ React.createElement("p", { style: { margin: 0, fontSize: "var(--text-xs)", color: "var(--text-secondary)" } }, "tier options unavailable \u2014 the current tier and board default still work."), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 4 } }, /* @__PURE__ */ React.createElement(
+  ), /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 } }, /* @__PURE__ */ React.createElement(Select, { label: "Authority", options: authorityOptions, value: draft.authority, onChange: (e) => set("authority", e.target.value) }), /* @__PURE__ */ React.createElement(Select, { label: "Provider", options: [PROVIDER_PLACEHOLDER, ...providerOptions], value: draft.provider, onChange: (e) => set("provider", e.target.value) })), /* @__PURE__ */ React.createElement(Select, { label: "Default tier", options: tierChoices, value: draft.tier, onChange: (e) => set("tier", e.target.value) }), tiersDegraded && /* @__PURE__ */ React.createElement("p", { style: { margin: 0, fontSize: "var(--text-xs)", color: "var(--text-secondary)" } }, "tier options unavailable \u2014 board default still works, and a tier already set is kept."), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 4 } }, /* @__PURE__ */ React.createElement(
     Checkbox,
     {
       label: "advisor \u2014 this agent may consult a stronger model at decision points",
@@ -3541,7 +3542,6 @@ function SettingsScreen({ say, memoryFocus, registerLeaveGuard }) {
     registerLeaveGuard((move) => guard(move));
     return () => registerLeaveGuard(null);
   }, []);
-  const agentTiers = executionSettingsFailed ? [] : executionSettings?.tiers ?? [];
   const SECTIONS = {
     workspaces: {
       title: "Workspaces",
@@ -3583,7 +3583,7 @@ function SettingsScreen({ say, memoryFocus, registerLeaveGuard }) {
           agent: rec,
           authorityProfiles,
           providerOptions,
-          tiers: agentTiers,
+          tiers: executionSettings?.tiers ?? [],
           tiersDegraded: executionSettingsFailed,
           advisorCeiling: executionSettings?.advisorCeiling,
           hostSkills,
@@ -3598,7 +3598,7 @@ function SettingsScreen({ say, memoryFocus, registerLeaveGuard }) {
         {
           authorityProfiles,
           providerOptions,
-          tiers: agentTiers,
+          tiers: executionSettings?.tiers ?? [],
           tiersDegraded: executionSettingsFailed,
           advisorCeiling: executionSettings?.advisorCeiling,
           hostSkills,

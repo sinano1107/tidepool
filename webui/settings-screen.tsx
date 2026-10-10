@@ -418,9 +418,11 @@ function AgentFields({ draft, set, authorityOptions, providerOptions, tiers, tie
   hostSkillsDegraded: boolean;
 }) {
   const { Checkbox, Input, Select } = window.TidepoolDesignSystem_8a0ead;
-  // the agent's own tier stays shown even when the list could not be read or no longer holds it (issue #1752)
-  const tierChoices = tierOptions(tiers);
-  if (draft.tier && !tiers.some((tier) => tier.name === draft.tier)) tierChoices.push({ value: draft.tier, label: draft.tier });
+  // the failure flag beats a list read before it (#1686 決定3), and the agent's own tier stays shown
+  // even when the list could not be read or no longer holds it (issue #1752)
+  const shownTiers = tiersDegraded ? [] : tiers;
+  const tierChoices = tierOptions(shownTiers);
+  if (draft.tier && !shownTiers.some((tier) => tier.name === draft.tier)) tierChoices.push({ value: draft.tier, label: draft.tier });
   return (
     <React.Fragment>
       <AgentIconPicker value={draft.icon} onChange={(v) => set('icon', v)} />
@@ -435,7 +437,7 @@ function AgentFields({ draft, set, authorityOptions, providerOptions, tiers, tie
       <Select label="Default tier" options={tierChoices} value={draft.tier} onChange={(e) => set('tier', e.target.value)} />
       {tiersDegraded && (
         <p style={{ margin: 0, fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>
-          tier options unavailable — the current tier and board default still work.
+          tier options unavailable — board default still works, and a tier already set is kept.
         </p>
       )}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
@@ -3075,9 +3077,6 @@ function SettingsScreen({ say, memoryFocus, registerLeaveGuard }: {
     return () => registerLeaveGuard(null);
   }, []);
 
-  // the failure flag beats a list read before it (#1686 決定3): the agent forms get no stale tiers (issue #1752)
-  const agentTiers = executionSettingsFailed ? [] : executionSettings?.tiers ?? [];
-
   // The three registry-backed sections, in one shape so the index, the list
   // level and the record level all read a section the same way — including
   // which card it renders, so no level re-tests which section it is in.
@@ -3117,12 +3116,12 @@ function SettingsScreen({ say, memoryFocus, registerLeaveGuard }: {
       rowSummary: (a) =>
         a.builtin ? 'built-in' : a.shadowsBuiltIn ? `${a.authority} · shadows built-in` : a.authority,
       record: (rec) => (
-        <AgentRecord agent={rec} authorityProfiles={authorityProfiles} providerOptions={providerOptions} tiers={agentTiers}
+        <AgentRecord agent={rec} authorityProfiles={authorityProfiles} providerOptions={providerOptions} tiers={executionSettings?.tiers ?? []}
           tiersDegraded={executionSettingsFailed} advisorCeiling={executionSettings?.advisorCeiling} hostSkills={hostSkills}
           hostSkillsDegraded={hostSkillsDegraded} say={say} onChanged={loadAgents} edit={edit} />
       ),
       createForm: () => (
-        <NewAgentForm authorityProfiles={authorityProfiles} providerOptions={providerOptions} tiers={agentTiers}
+        <NewAgentForm authorityProfiles={authorityProfiles} providerOptions={providerOptions} tiers={executionSettings?.tiers ?? []}
           tiersDegraded={executionSettingsFailed} advisorCeiling={executionSettings?.advisorCeiling} hostSkills={hostSkills}
           hostSkillsDegraded={hostSkillsDegraded} say={say} onCreated={loadAgents} edit={edit} />
       ),
