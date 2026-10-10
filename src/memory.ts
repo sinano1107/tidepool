@@ -70,7 +70,7 @@ interface EntryInput {
   title: string;
   text: string;
   /** 人間が書くエントリのみ。`declared` は管理MCP の呼び手が申告した言語で、写しの一致に勝つ(ADR 0230 決定2)。 */
-  original?: (NonNullable<MemoryEntryFields["original"]> & { declared?: true }) | null;
+  original?: (NonNullable<MemoryEntryFields["original"]> & { declared?: boolean }) | null;
   source?: SourceInput;
   author: MemoryEntryFields["author"];
 }
@@ -764,9 +764,7 @@ export function humanEntryInput<T extends { workspace: string | null; original_t
   return {
     ...rest,
     scope: workspace,
-    original: originalTitle && originalText
-      ? { title: originalTitle, text: originalText, ...(original_language ? { language: original_language, declared: true as const } : { language: getDisplayLanguage(db) }) }
-      : null,
+    original: originalTitle && originalText ? { title: originalTitle, text: originalText, language: original_language ?? getDisplayLanguage(db), declared: original_language !== undefined } : null,
     author: HUMAN_AUTHOR,
   };
 }
