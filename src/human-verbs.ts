@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { verifyAgentRepaired } from "./agent.js";
 import { type AgentAdmin, AgentTierMismatchError, agentViewProviders } from "./agent-create.js";
+import { assertAssigneeCanTake } from "./assignee.js";
 import { type BoardStatePath, boardStateOverlap } from "./board-state.js";
 import { type CliAuthCheck, type ModelProbe, quarantineBoardCallRefusal, quarantineCliAuthForProvider } from "./cli-auth.js";
 import type { Clock } from "./clock.js";
@@ -60,14 +61,12 @@ import {
   registerTask,
   settleQuestionAsObserved,
   type Task,
-  type TaskType,
   taskIdForPr,
 } from "./tasks.js";
 import type { FailedTeardownCheck } from "./teardown.js";
 import { liveTierRows, proposalTierNames, type Tier, tierNameOf, tierNames } from "./tier.js";
 import { stageFrontInsert, triageActivity } from "./triage.js";
 import type { PendingReclaim } from "./watchdog.js";
-import { whyAssigneeCannotTake } from "./webui-rules.js";
 import { HUMAN_WORKER_ID } from "./worker-id.js";
 import {
   buildWorkspaceResolver,
@@ -216,21 +215,6 @@ export async function addIssueCommentThroughHumanDoor(
       failure: { kind: "github_failed", error: "could not post the comment to the issue" },
     };
   }
-}
-
-/** 人間の登録・Edit と worker の decompose が共有する assignee の門。組み込みは review 専用で、
- *  判定は名前ではなく解決の結果を見る —— shadow している間は通る(ADR 0228 決定1)。 */
-export function assertAssigneeCanTake(
-  deps: Pick<RegisterThroughHumanDoorDeps, "agentRegistered" | "resolvesToBuiltIn">,
-  assignee: string | undefined,
-  type: TaskType,
-): void {
-  if (assignee === undefined || assignee === HUMAN_WORKER_ID) return;
-  if (deps.agentRegistered && !deps.agentRegistered(assignee)) {
-    throw new DomainError(`unknown agent: ${assignee}`);
-  }
-  const reason = whyAssigneeCannotTake(assignee, type, deps.resolvesToBuiltIn?.(assignee) === true);
-  if (reason) throw new DomainError(reason);
 }
 
 /** A reviewer is always an agent (ADR 0111); unlike an assignee, `human` is
