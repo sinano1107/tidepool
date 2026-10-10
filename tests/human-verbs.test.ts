@@ -1,5 +1,4 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { quarantineAgent } from "../src/agent.js";
 import { ClaudeDraftClient } from "../src/claude-draft-client.js";
 import { quarantineContainment } from "../src/containment.js";
 import { type Db, openDb } from "../src/db.js";
@@ -14,6 +13,7 @@ import {
   submitAnswer,
 } from "../src/human-verbs.js";
 import { countTasksAwaitingLanding, createLanding, registerPrPromotionFailureQuestion } from "../src/landing.js";
+import { quarantineAgent } from "../src/quarantine.js";
 import {
   cancelTaskDirectly,
   getTask,

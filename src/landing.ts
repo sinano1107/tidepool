@@ -5,8 +5,8 @@ import { DomainError } from "./domain-error.js";
 import { appendEvent, latestEventOfTask } from "./events.js";
 import { git } from "./git.js";
 import type { GitHubClient, PrState } from "./github.js";
-import { registerQuarantine } from "./quarantine.js";
-import { type AuthorityProfile, InvalidAgentDefinitionError, UnknownAgentError } from "./registry.js";
+import { quarantineAgent } from "./quarantine.js";
+import { type AuthorityProfile, isUnresolvableAgentError } from "./registry.js";
 import {
   contentSourceFor,
   countUnsettledAttachedChildren,
@@ -465,8 +465,8 @@ export function createLanding(deps: LandingDeps): Landing {
     try {
       return { profile: deps.resolveAuthority?.(task.assignee, task.type) };
     } catch (err) {
-      if (!(err instanceof UnknownAgentError) && !(err instanceof InvalidAgentDefinitionError)) throw err;
-      registerQuarantine(deps.db, "agent", err.agentName, err.message, now);
+      if (!isUnresolvableAgentError(err)) throw err;
+      quarantineAgent(deps.db, err.agentName, err, now);
       return undefined;
     }
   };

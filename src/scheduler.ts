@@ -1,4 +1,3 @@
-import { quarantineAgent } from "./agent.js";
 import { boardHalts } from "./board-halt.js";
 import { type CliAuthCheck, quarantineCliAuthForProvider } from "./cli-auth.js";
 import type { Clock } from "./clock.js";
@@ -30,6 +29,7 @@ import { registerDueMetaReviews } from "./meta-review.js";
 import type { ProcessContainers } from "./process-container.js";
 import type { Provider } from "./provider.js";
 import {
+  quarantineAgent,
   quarantineExcludedProviders,
   quarantineStops,
   registerQuarantine,
@@ -38,10 +38,9 @@ import {
 } from "./quarantine.js";
 import {
   canonicalHarness,
-  InvalidAgentDefinitionError,
+  isUnresolvableAgentError,
   type RegistryReachabilityCheck,
   type RegistrySource,
-  UnknownAgentError,
 } from "./registry.js";
 import { registryReachabilityPickupBlocked } from "./registry-reachability.js";
 import { parseGitHubRepo, repairRepoAccess } from "./repo-access.js";
@@ -103,9 +102,7 @@ export function allEntriesExcluded(
     // —— 偽である(判定できないものを skipped とは言わない)。scheduler は同じ例外を自分で捕まえて agent を quarantine し、
     // その行は quarantine の枝で skipped として現れる。表示側がここで投げると、
     // 1行の定義違反でキュー全体が 500 になる。
-    if (error instanceof UnknownAgentError || error instanceof InvalidAgentDefinitionError) {
-      return false;
-    }
+    if (isUnresolvableAgentError(error)) return false;
     throw error;
   }
   return firstSelectable(settings, excluded) === null;
@@ -657,9 +654,7 @@ export function startScheduler(deps: {
           candidates = taskExecutionCandidates(task);
           return true;
         } catch (error) {
-          if (!(error instanceof UnknownAgentError) && !(error instanceof InvalidAgentDefinitionError)) {
-            throw error;
-          }
+          if (!isUnresolvableAgentError(error)) throw error;
           const assignee = resolveTaskAgent(task, worker.id, auditorName);
           quarantineAgent(db, assignee, error, clock.now());
           stopped.assignees.push(assignee);

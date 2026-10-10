@@ -6,7 +6,6 @@ import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { afterAll, expect } from "vitest";
-import { quarantineAgent } from "../src/agent.js";
 import type { AgentAdmin } from "../src/agent-create.js";
 import type { AllocationClient } from "../src/allocation-review.js";
 import {
@@ -30,7 +29,7 @@ import type { HarnessContainmentCheck } from "../src/harness-containment.js";
 import { recordKnowledge } from "../src/memory.js";
 import type { ProfileAdmin } from "../src/profile-create.js";
 import type { Provider } from "../src/provider.js";
-import { openQuarantineQuestion, type QuarantineKind, type QuarantineResolvers } from "../src/quarantine.js";
+import { openQuarantineQuestion, type QuarantineKind, type QuarantineResolvers, quarantineAgent } from "../src/quarantine.js";
 import type {
   AuthorityProfile,
   RegistryCandidates,

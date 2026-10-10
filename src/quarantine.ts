@@ -371,6 +371,15 @@ export function openQuarantineQuestions(db: Db, kind: QuarantineKind): Map<strin
   return new Map(rows.map((row) => [row.value, row.id]));
 }
 
+/** The agent-name generalization of workspace.ts's quarantineWorkspace (ADR
+ *  0012 / issue #36): put the repair in front of the human as a 1-choice
+ *  Confirmation question (its tasks stay out of the slot while it is open) —
+ *  same shape, same "1 resource, at most 1 open question" dedup (CONTEXT.md's
+ *  Quarantine). */
+export function quarantineAgent(db: Db, agentName: string, cause: unknown, now: Date): void {
+  registerQuarantine(db, "agent", agentName, cause instanceof Error ? cause.message : String(cause), now);
+}
+
 /** 唯一の登録口。鍵が開いていれば既存の question に `quarantine_refired` を追記する
  *  だけで、それ以外は何もしない(1鍵につき確認は最大1枚)。`cause` は文面へ渡す行の拒否の証拠の種類。 */
 export function registerQuarantine(

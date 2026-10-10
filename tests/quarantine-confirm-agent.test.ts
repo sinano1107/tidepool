@@ -1,5 +1,5 @@
 import { afterEach, expect, it } from "vitest";
-import { quarantineAgent } from "../src/agent.js";
+import { quarantineAgent } from "../src/quarantine.js";
 import {
   api,
   bootTidepool,
