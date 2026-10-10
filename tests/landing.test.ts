@@ -43,6 +43,7 @@ import { afterCiRead, FakeClock, FakeGitHubClient, seedTierNames, UNRESOLVABLE_A
 import {
   commitWork,
   completedWork,
+  defaultingTo,
   FULL_HANDOFF,
   GIT_FIXTURE_TEST_TIMEOUT,
   git,
@@ -2942,12 +2943,6 @@ it("head を刻めなかった abandon は、内容を変えない次の決着�
 });
 
 // ADR 0233: 既定への参照は pickup で終わる —— 着手したタスクの着地は、既定を差し替えた盤面でも pickup で解決した先に向かう
-/** `fallback` を既定にした盤面の resolver。 */
-const defaultingTo = (fallback: WorkspaceConfig, ...others: WorkspaceConfig[]) => (name: string | null) => {
-  const found = [fallback, ...others].find((w) => w.name === (name ?? fallback.name));
-  if (!found) throw new UnknownWorkspaceError(name ?? fallback.name);
-  return found;
-};
 
 /** 既定 `workspaceName`(省略なら workspace 未指定のまま)と既定 agent `agent` で pickup し、完了して完了時レビューを決着させる。 */
 function pickedUpAndCompleted(board: Db, clock: FakeClock, agent: string, workspaceName?: string, onBranch?: WorkspaceConfig): Task {

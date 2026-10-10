@@ -8,7 +8,7 @@ import { pickupTask, registerTask } from "../src/tasks.js";
 import { TranscriptStore } from "../src/transcript-store.js";
 import { ensureTaskBranch, UnknownWorkspaceError, type WorkspaceConfig } from "../src/workspace.js";
 import { FakeClock, FakeContainerRuntime, pinnedCliVersions, ScriptedWorker } from "./fakes.js";
-import { api, bootTidepool, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeWorkspace, registerWork, TEST_CREDENTIAL, type Tidepool } from "./harness.js";
+import { api, bootTidepool, defaultingTo, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeWorkspace, registerWork, TEST_CREDENTIAL, type Tidepool } from "./harness.js";
 import { tempDir } from "./temp-dir.js";
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
@@ -21,13 +21,6 @@ afterEach(async () => {
   await t?.stop();
   t = undefined;
 });
-
-/** `fallback` を既定にした盤面の resolver。 */
-const defaultingTo = (fallback: WorkspaceConfig, other: WorkspaceConfig) => (name: string | null) => {
-  const ws = [fallback, other].find((w) => w.name === (name ?? fallback.name));
-  if (!ws) throw new UnknownWorkspaceError(name ?? fallback.name);
-  return ws;
-};
 
 // ADR 0233: 既定への参照は pickup で終わる —— retry の再 pickup も最初の pickup で解決した先に従う
 it("既定 workspace a・既定 agent a-agent で pickup したタスクは、既定を b・b-agent に差し替えて再起動した盤面でも、retry で a・a-agent のまま再 pickup され、a の既存のタスクブランチを checkout する", async () => {

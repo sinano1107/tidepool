@@ -6,7 +6,7 @@ import { getTask, pickupTask, registerTask } from "../src/tasks.js";
 import { failTask } from "../src/watchdog.js";
 import { ensureTaskBranch, UnknownWorkspaceError, type WorkspaceConfig, workspaceNeedsHuman } from "../src/workspace.js";
 import { FakeClock } from "./fakes.js";
-import { GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeWorkspace } from "./harness.js";
+import { defaultingTo, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeWorkspace } from "./harness.js";
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 
@@ -58,7 +58,6 @@ describe("watchdog の failTask が task.workspace を解決する", () => {
   it("workspace 未指定で既定 prod に pickup したタスクは、既定を sandbox に差し替えた resolver でも prod の checkout で後始末し、sandbox を quarantine に落とさない", async () => {
     const sandbox = await makeWorkspace("sandbox");
     const prod = await makeWorkspace("prod");
-    const registry: Record<string, WorkspaceConfig> = { sandbox, prod };
     const db = openDb(":memory:");
     const clock = new FakeClock();
 
@@ -77,11 +76,7 @@ describe("watchdog の failTask が task.workspace を解決する", () => {
       getTask(db, task.id)!,
       "interrupted by restart",
       "the board restarted",
-      (name) => {
-        const ws = registry[name ?? "sandbox"];
-        if (!ws) throw new UnknownWorkspaceError(name ?? "sandbox");
-        return ws;
-      },
+      defaultingTo(sandbox, prod),
       clock.now(),
     );
 
