@@ -2777,7 +2777,7 @@ function settleReviews(board: Db, now: Date): void {
 }
 
 /** reef の完了 work を、abandon promotion 済みか PR を開き終えた形にする。 */
-function rerunnableWorkIn(board: Db, now: Date, shape: "abandoned" | "pr_opened"): Task {
+function rerunnableWorkInReef(board: Db, now: Date, shape: "abandoned" | "pr_opened"): Task {
   const work = completedWork(board, now, "tako", undefined, "reef");
   if (shape === "pr_opened") {
     recordPrOpenedViaWorker(board, work, 7, "tako", now, { authority: { merge: "escalate" } });
@@ -2813,7 +2813,7 @@ it.each(["abandoned", "pr_opened"] as const)(
   (shape) => {
     db = openDb(":memory:");
     const now = new Date("2026-10-10T00:00:00.000Z");
-    const work = rerunnableWorkIn(db, now, shape);
+    const work = rerunnableWorkInReef(db, now, shape);
     settleReviews(db, now);
     // PR を開き終えた形では merge の question が reef を参照している
     const before = countUnsettledTasksReferencing(db, "workspace", "reef");

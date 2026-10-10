@@ -575,11 +575,11 @@ export function assertNoUnsettledIssueRef(db: Db, workspace: string, issueNumber
   }
 }
 
-/** ADR 0087 決定2 の参照検査が数えるもの: この名前を `assignee` / `workspace` に
- *  持つ未決着(done/cancelled でない)タスクの件数。agent の場合は将来の review
- *  assignee を予約する `review_by` も同じ参照として数える。削除の扉はこの件数を人間に
- *  返す —— 先に cancel か再割当をするのが筋だからである。列名はリテラル合併なので
- *  そのまま埋め込んでよい(`settledTreeSql` と同じ流儀)。 */
+/** ADR 0087 決定2 の参照検査が数えるもの: この名前を参照する未決着(done/cancelled でない)
+ *  タスクの件数。agent は `assignee` に加えて、将来の review assignee を予約する `review_by` も
+ *  同じ参照として数える。workspace は `workspace` に加えて、決着で着地し直す完了した work の祖先の
+ *  workspace も数える(ADR 0234 決定1)。削除の扉はこの件数を人間に返す —— 先に cancel か
+ *  再割当をするのが筋だからである。 */
 export function countUnsettledTasksReferencing(
   db: Db,
   column: "assignee" | "workspace",
@@ -609,14 +609,14 @@ export function taskHasLandedSql(taskRef: string): string {
 function countUnsettledTasksReferencingWorkspace(db: Db, name: string): number {
   const row = db
     .prepare(
-      `WITH RECURSIVE relanded(id) AS (
+      `WITH RECURSIVE under_relanding(id) AS (
          SELECT p.id FROM tasks p
           WHERE p.workspace = @name AND p.type = 'work' AND p.status = 'done'
             AND (p.pr_number IS NOT NULL OR NOT ${taskHasLandedSql("p.id")})
          UNION
-         SELECT c.id FROM tasks c JOIN relanded r ON c.parent_id = r.id)
+         SELECT c.id FROM tasks c JOIN under_relanding r ON c.parent_id = r.id)
        SELECT COUNT(*) AS n FROM tasks
-        WHERE (workspace = @name OR id IN (SELECT id FROM relanded)) AND ${unsettledSql("status")}`,
+        WHERE (workspace = @name OR id IN (SELECT id FROM under_relanding)) AND ${unsettledSql("status")}`,
     )
     .get({ name }) as { n: number };
   return row.n;
