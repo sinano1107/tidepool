@@ -26,7 +26,7 @@ import {
 import { commitTriage, startTriage } from "../src/triage.js";
 import { BOARD_WORKER_ID, HUMAN_WORKER_ID } from "../src/worker-id.js";
 import { quarantineWorkspace, UnknownWorkspaceError } from "../src/workspace.js";
-import { afterCiRead, awaitWindow, FakeClock, FakeDraftClient, FakeGitHubClient, fakeHead, unusedLanding } from "./fakes.js";
+import { afterCiRead, awaitWindow, FakeClock, FakeDraftClient, FakeGitHubClient, fakeHead, holdAfterMerge, unusedLanding } from "./fakes.js";
 import {
   decomposeTaskViaWorker,
   defaultingTo,
@@ -954,8 +954,8 @@ it.each(["merge", "hold"])("盤面の外で閉じられた PR の merge question
   });
 });
 
-/** escalate の PR #42 の merge question に「merge」と答え、GitHub が merge を受け付けた後、応答が盤面に返る前で止める(ADR 0236)。 */
-async function mergeAnswerInFlight() {
+/** escalate の PR #42 の merge question と、それに本物の Landing を通して「merge」と答える手(ADR 0236)。 */
+function escalatedMergeQuestion() {
   db = openDb(":memory:");
   const work = registerTask(
     db,
@@ -967,20 +967,25 @@ async function mergeAnswerInFlight() {
   const question = onlyQuestion(db);
   const github = new FakeGitHubClient();
   const landing = createLanding({ defaultAgentName: "tako", db, clock: new FakeClock(), workspace: PRODUCT, github });
-  const window = awaitWindow();
+  const answer = () =>
+    submitAnswer({ db, pollNow: () => {}, github, workspace: PRODUCT, landing }, getTask(db, question.id)!, ["merge"], undefined, () => NOW, "webui");
+  return { question, github, landing, answer };
+}
+
+/** 上の question に「merge」と答え、GitHub が merge を受け付けた後、応答が盤面に返る前で止める。 */
+async function mergeAnswerInFlight() {
+  const { question, github, landing, answer } = escalatedMergeQuestion();
   let mergeCalls = 0;
   const merge = github.mergePullRequest.bind(github);
   github.mergePullRequest = async (ref, head) => {
     mergeCalls++;
-    await merge(ref, head);
-    github.scriptMergedOutside(42); // GitHub はもう MERGED を返すが、応答はまだ盤面に返っていない
-    await window.hold();
+    return merge(ref, head);
   };
-  const answer = () =>
-    submitAnswer({ db, pollNow: () => {}, github, workspace: PRODUCT, landing }, getTask(db, question.id)!, ["merge"], undefined, () => NOW, "webui");
+  const gate = awaitWindow();
+  holdAfterMerge(github, gate.hold);
   const first = answer();
-  await window.entered;
-  return { question, landing, answer, first, open: window.open, mergeCalls: () => mergeCalls };
+  await gate.entered;
+  return { question, landing, answer, first, open: gate.open, mergeCalls: () => mergeCalls };
 }
 
 const questionOutcomes = (questionId: string) =>
@@ -1010,6 +1015,21 @@ it("merge 回答が merge 中の PR への2つ目の merge 回答は拒まれ、
 
   await expect(first).resolves.toMatchObject({ status: "done" });
   expect(mergeCalls()).toBe(1);
+  expect(questionOutcomes(question.id)).toEqual([{ kind: "pr_merged", pr_number: 42 }]);
+});
+
+it("merge 回答の merge が失敗したら印は放され、次の merge 回答は merge まで進む", async () => {
+  const { question, github, answer } = escalatedMergeQuestion();
+  const merge = github.mergePullRequest.bind(github);
+  // 最初の merge だけ失敗させ、次からは本物に戻す
+  github.mergePullRequest = async () => {
+    github.mergePullRequest = merge;
+    throw new Error("Pull request is not mergeable: merge conflict");
+  };
+
+  await expect(answer()).rejects.toThrow("merging PR #42 failed");
+  await expect(answer()).resolves.toMatchObject({ status: "done" });
+  expect(github.merged).toEqual([{ path: PRODUCT.path, number: 42 }]);
   expect(questionOutcomes(question.id)).toEqual([{ kind: "pr_merged", pr_number: 42 }]);
 });
 

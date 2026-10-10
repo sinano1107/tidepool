@@ -973,7 +973,7 @@ export async function submitAnswer(
     return presentTask(deps.db, task, deps.defaultAgentName, deps.auditorName);
   }
   const wantsMerge = mergePr !== null && answers[0] === MERGE_QUESTION_OPTIONS[0];
-  let release: (() => void) | undefined;
+  let release: (() => void) | null = null;
   try {
     if (wantsMerge) {
       const landingTaskId = taskIdForPr(deps.db, mergePr, task.workspace);
@@ -1006,16 +1006,16 @@ export async function submitAnswer(
       if (pr.ci !== "success" && pr.ci !== "unreported") {
         throw new DomainError(`CI is not green yet (status: ${pr.ci}) — cannot merge`);
       }
+      // ADR 0236 決定2・3: 印は merge の直前に同期で取り、取れなければ拒む(question は開いたまま)。印はこの関数が
+      // 返るまで持つ —— merge の回答では、決着(回答と pr_merged)を書いた後に await は無い
+      release = deps.landing.takeInFlightMark(task.workspace, mergePr);
+      if (!release) {
+        throw new DomainError(`PR #${mergePr} is being merged by the board right now — answer again in a moment`);
+      }
       // External merge precedes the persisted answer. If it fails, the question
       // stays open and the human can retry instead of being stranded as done.
       // CI を読んだ head に固定する(ADR 0231 決定1)
       // 失敗は文面で分けずすべて DomainError に包む —— ローカル着地(ADR 0103 決定4)と同じ形で、WebUI は 409 で理由を見られる
-      // ADR 0236 決定2・3: 印は merge の直前に同期で取り、取れなければ拒む(question は開いたまま)。
-      // 決着(回答と pr_merged)を書き終えるか、失敗して抜けるまで持つ
-      if (!deps.landing.takeInFlightMark(task.workspace, mergePr)) {
-        throw new DomainError(`PR #${mergePr} is being merged by the board right now — answer again in a moment`);
-      }
-      release = () => deps.landing.releaseInFlightMark(task.workspace, mergePr);
       try {
         await deps.github.mergePullRequest({ path: mergeWorkspace.path, number: mergePr }, pr.head);
       } catch (err) {
