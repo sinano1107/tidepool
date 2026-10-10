@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { platform } from "node:process";
 import { expect, it, vi } from "vitest";
@@ -508,6 +508,33 @@ it("registry があるとき、各口には対応する解決子が刺さって�
   // ADR 0024: workspace の pickup 時 fetch がこの名義で撃つ。落とすと private remote の
   // workspace が「認証が無い」理由で黙って quarantine に落ち続ける
   expect(options.githubAuth).toBe(githubAuth);
+});
+
+/** issue #1745: agent quarantine の解除検査の「registry に戻った」は pickup の解決に通ること。
+ *  `agentRegistered` と同じ `(name) => …` の口が並ぶので、実 registry で別々の答えを要求する。 */
+it("agentDefinitionFailure は pickup と同じ解決で定義の不成立を理由つきで返し、registry の commit を読み直す(#1745)", async () => {
+  const brokenTier = (tier: string) =>
+    `---\nname: broken\ndescription: d\nversion: "1"\nauthority: standard\nprovider: anthropic\n${tier}skills: []\n---\nbody\n`;
+  const registryDir = await makeRegistry({
+    "agents/broken.md": brokenTier("tier: nonexistent\n"),
+    "agents/orphan.md": agentMd("orphan", "anthropic").replace("authority: standard", "authority: missing"),
+  });
+  const options = await buildOptions({ ...composition(), registryDir, workspaceName: "tidepool", defaultAgentName: "deckhand" });
+  const failure = options.agentDefinitionFailure!;
+
+  expect(failure("broken")).toMatch(/^unknown tier "nonexistent"/);
+  expect(failure("orphan")).toBe('unknown authority profile "missing"');
+  expect(failure("deckhand")).toBeUndefined();
+  // 登録の門の口は意味を変えない —— 壊れた定義の agent もエントリはある
+  expect(options.agentRegistered?.("broken")).toBe(true);
+  // work として解決するので組み込みは不成立になる —— 解除検査が組み込みの判定を先に置く理由
+  expect(failure("fugu")).toMatch(/runs reviews only/);
+
+  writeFileSync(join(registryDir, "agents/broken.md"), brokenTier(""));
+  execFileSync("git", ["-c", "user.name=test", "-c", "user.email=test@example.com", "commit", "-qam", "fix broken"], {
+    cwd: registryDir,
+  });
+  expect(failure("broken")).toBeUndefined();
 });
 
 // ADR 0099 決定2/5 / issue #463: このホストの worker をどの容器機構で封じるかは

@@ -863,6 +863,53 @@ it("組み込みに解決される名前は agent quarantine の解除で regist
   await expect(quarantineChecks({ db, ...SHADOWED_FUGU }).agent!("fugu")).resolves.toBeUndefined();
 });
 
+// issue #1745: 組み込みを work として解決すると定義の不成立になるので、組み込みの判定を先に置く
+it("組み込みに解決される名前は、定義の解決が通らないと答えられても、組み込み宛ての review だけが残るなら agent quarantine を解除する(ADR 0228 決定4)", async () => {
+  db = openDb(":memory:");
+  registerTask(db, { type: "review", title: "r", purpose: "p", completion_criteria: "c", assignee: "fugu" }, NOW, ...HUMAN_WEBUI);
+
+  await expect(
+    quarantineChecks({ db, ...BUILT_IN_FUGU, agentDefinitionFailure: () => "the built-in agent runs reviews only" }).agent!("fugu"),
+  ).resolves.toBeUndefined();
+});
+
+// issue #1745 / ADR 0217・0224・0228 決定4: エントリがあっても pickup の解決に通らない定義は「戻った」に数えない
+it("エントリはあるが定義が成立しない名前の agent quarantine の回答は、依存が残る限り定義の不成立と理由を名指して拒み、依存を付け替えれば受理する", async () => {
+  db = openDb(":memory:");
+  const work = registerTask(
+    db,
+    { type: "work", title: "w", purpose: "p", completion_criteria: "c", assignee: "specialist" },
+    NOW,
+    ...HUMAN_WEBUI,
+  );
+  quarantineAgent(db, "specialist", new Error('unknown tier "x"'), NOW);
+  const answer = () =>
+    submitAnswer(
+      {
+        db,
+        pollNow: () => {},
+        quarantineChecks: quarantineChecks({
+          db,
+          agentRegistered: () => true,
+          agentDefinitionFailure: () => 'unknown tier "x"',
+        }),
+        landing: unusedLanding,
+      },
+      onlyQuestion(db),
+      ["repaired by hand"],
+      undefined,
+      () => NOW,
+      "webui",
+    );
+
+  await expect(answer()).rejects.toThrow(
+    new DomainError(`agent specialist's definition still does not hold (unknown tier "x") and still has unsettled tasks assigned`),
+  );
+  expect(onlyQuestion(db).status).toBe("todo");
+  editThroughHumanDoor({ db }, work.id, { assignee: "tako" }, () => NOW, "webui");
+  await expect(answer()).resolves.toMatchObject({ status: "done" });
+});
+
 const PRODUCT = { name: "product", path: "/workspaces/product" };
 
 // ADR 0229 決定4: 回答受理直前のバックストップは閉じた PR も観測する —— 回答の値に依らず、決定としては記録しない

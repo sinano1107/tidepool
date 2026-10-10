@@ -561,6 +561,27 @@ function agentRegisteredChecker(board: BoardComposition): ((name: string) => boo
   return (name) => ownEntry(loadBoardRegistry(board).agents, name) !== undefined;
 }
 
+/** Why a name fails pickup's resolution right now (the same resolution as
+ *  `authorityResolver`, as a work task), or undefined when it resolves — the
+ *  agent quarantine clearance check counts only a resolving name as "back"
+ *  (issue #1745). Without a registry nothing resolves; the check never asks. */
+function agentDefinitionFailureChecker(
+  board: BoardComposition,
+  db: Db,
+): ((name: string) => string | undefined) | undefined {
+  const resolve = authorityResolver(board, db);
+  if (!resolve) return undefined;
+  return (name) => {
+    try {
+      resolve(name, "work");
+      return undefined;
+    } catch (err) {
+      if (err instanceof InvalidAgentDefinitionError) return err.reason;
+      throw err;
+    }
+  };
+}
+
 /** Whether a name resolves to the built-in agent right now — no registry entry
  *  shadows it (ADR 0228). Without a registry there is no built-in. */
 function builtInResolutionChecker(board: BoardComposition): ((name: string) => boolean) | undefined {
@@ -776,6 +797,7 @@ export async function buildServerOptions(board: BoardComposition, db: Db): Promi
     profileAdmin: profileAdmin(board),
     resolveAuthority: authorityResolver(board, db),
     agentRegistered: agentRegisteredChecker(board),
+    agentDefinitionFailure: agentDefinitionFailureChecker(board, db),
     resolvesToBuiltIn: builtInResolutionChecker(board),
     isProtectedWorkspace: protectedWorkspaceChecker(board),
     listAgents: listAgentsResolver(board),
