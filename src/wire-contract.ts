@@ -217,7 +217,7 @@ export interface WireContract {
     outcome: "closed_now" | "already_closed_by_timeout" | "no_open_session";
     closed_at: string | null;
   };
-  "GET /api/registry/candidates": { assignees: string[]; workspaces: string[]; icons: Record<string, string> };
+  "GET /api/registry/candidates": { assignees: string[]; builtIns: string[]; workspaces: string[]; icons: Record<string, string> };
   "POST /api/translate":
     | {
         status: "translated";

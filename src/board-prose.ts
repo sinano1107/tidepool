@@ -111,9 +111,11 @@ function rosterLine(agent: RosterAgent): string {
  *  `human` (never a registry agent) draws `HUMAN_ROSTER_AGENT` only when
  *  explicitly listed. Absent/empty `assignable_to` → undefined (nothing to
  *  push). Names drifted out of the registry are silently skipped, same
- *  fail-closed spirit as the adapters' registry-drift handling. */
+ *  fail-closed spirit as the adapters' registry-drift handling — and so are
+ *  names resolving to the built-in agent, which never runs delegated work
+ *  (ADR 0235; a shadowing entry is an ordinary agent and stays). */
 function buildRoster(
-  registryAgents: Record<string, RosterAgent>,
+  registryAgents: Record<string, RosterAgent & { builtin?: true }>,
   assignableTo: string[] | undefined,
 ): string | undefined {
   if (assignableTo === undefined || assignableTo.length === 0) return undefined;
@@ -122,7 +124,7 @@ function buildRoster(
   const agentNames = wildcard ? Object.keys(registryAgents) : explicitNames;
   const agents: RosterAgent[] = agentNames
     .map((name) => ownEntry(registryAgents, name))
-    .filter((agent): agent is RosterAgent => agent !== undefined);
+    .filter((agent): agent is RosterAgent => agent !== undefined && agent.builtin !== true);
   if (explicitNames.includes(HUMAN_ROSTER_AGENT.name)) agents.push(HUMAN_ROSTER_AGENT);
   return agents.length > 0 ? agents.map(rosterLine).join("\n") : undefined;
 }

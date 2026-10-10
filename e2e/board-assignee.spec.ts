@@ -4,7 +4,7 @@ import { expect, test } from "./fixtures.js";
 test("assignee 未指定の review は Board で Auditor の名前とアイコンを描く(issue #221)", async ({ boot, page }) => {
   const t = await boot({
     auditorName: "fugu",
-    registryCandidates: { assignees: ["fugu"], workspaces: [], icons: { fugu: "🐡" } },
+    registryCandidates: { assignees: ["fugu"], builtIns: ["fugu"], workspaces: [], icons: { fugu: "🐡" } },
   });
   const title = "independent review uses the Auditor";
   await api(t.baseUrl, "POST", "/api/tasks", {

@@ -67,6 +67,7 @@ import type { FailedTeardownCheck } from "./teardown.js";
 import { liveTierRows, proposalTierNames, type Tier, tierNameOf, tierNames } from "./tier.js";
 import { stageFrontInsert, triageActivity } from "./triage.js";
 import type { PendingReclaim } from "./watchdog.js";
+import { whyAssigneeCannotTake } from "./webui-rules.js";
 import { HUMAN_WORKER_ID } from "./worker-id.js";
 import {
   buildWorkspaceResolver,
@@ -228,9 +229,8 @@ export function assertAssigneeCanTake(
   if (deps.agentRegistered && !deps.agentRegistered(assignee)) {
     throw new DomainError(`unknown agent: ${assignee}`);
   }
-  if (type !== "review" && deps.resolvesToBuiltIn?.(assignee)) {
-    throw new DomainError(`agent ${assignee} is the built-in agent, which runs reviews only`);
-  }
+  const reason = whyAssigneeCannotTake(assignee, type, deps.resolvesToBuiltIn?.(assignee) === true);
+  if (reason) throw new DomainError(reason);
 }
 
 /** A reviewer is always an agent (ADR 0111); unlike an assignee, `human` is

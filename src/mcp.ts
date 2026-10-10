@@ -520,7 +520,7 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
     "list_agents",
     {
       description:
-        "List every agent in the registry, plus human — the pull half of the roster. " +
+        "List every agent you could delegate to, plus human — the pull half of the roster. " +
         "Your system prompt's own Roster section already lists who you can delegate to " +
         "directly; call this only to see the full board, with each entry marked " +
         '"direct" or "needs_approval" (converts to a human approval question).',

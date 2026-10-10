@@ -26,6 +26,7 @@ var TidepoolRules = (() => {
     isSettled: () => isSettled,
     normalizeText: () => normalizeText,
     reviewFlagCarriesMeaning: () => reviewFlagCarriesMeaning,
+    whyAssigneeCannotTake: () => whyAssigneeCannotTake,
     whyBlank: () => whyBlank,
     whyExecutionRequestIsInert: () => whyExecutionRequestIsInert,
     whyInvalidClockTime: () => whyInvalidClockTime,
@@ -170,6 +171,9 @@ var TidepoolRules = (() => {
   }
   function whyExecutionRequestIsInert(t) {
     return t.type === "review" ? "a review task runs at its review_tier; tier and priority are for work tasks only" : void 0;
+  }
+  function whyAssigneeCannotTake(name, type, resolvesToBuiltIn) {
+    return type !== "review" && resolvesToBuiltIn ? `agent ${name} is the built-in agent, which runs reviews only` : void 0;
   }
   var completionReviewFires = (t) => whyNoCompletionReview(t) === void 0;
   var reviewFlagCarriesMeaning = (t) => whyReviewFlagIsInert(t) === void 0;
@@ -1080,7 +1084,7 @@ function RegisterScreen({ onRegister, parentTask, onClose }) {
   const [drafted, setDrafted] = React.useState(false);
   const [plainFormActive, setPlainFormActive] = React.useState(false);
   const [draftBusy, setDraftBusy] = React.useState(false);
-  const [candidates, setCandidates] = React.useState({ assignees: [], workspaces: [], icons: {} });
+  const [candidates, setCandidates] = React.useState({ assignees: [], builtIns: [], workspaces: [], icons: {} });
   React.useEffect(() => {
     api("GET /api/registry/candidates").then(setCandidates).catch(() => {
     });
@@ -1244,7 +1248,8 @@ function RegisterScreen({ onRegister, parentTask, onClose }) {
     { value, label },
     ...names.map((n) => ({ value: n, label: n }))
   ];
-  const assigneeOptions = withPlaceholder("", "(default agent)", candidates.assignees);
+  const canTake = (name, forType) => !TidepoolRules.whyAssigneeCannotTake(name, forType, candidates.builtIns.includes(name));
+  const assigneeOptions = withPlaceholder("", "(default agent)", candidates.assignees.filter((n) => canTake(n, issueMode ? "work" : type)));
   const assigneeSelect = /* @__PURE__ */ React.createElement(Select, { label: "Assignee", options: assigneeOptions, value: assignee, onChange: (e) => setAssignee(e.target.value) });
   const reviewerPicker = showReviewBy && /* @__PURE__ */ React.createElement(ReviewerPicker, { candidates, value: reviewBy, onChange: setReviewBy });
   const reviewTierSelect = showReviewBy && /* @__PURE__ */ React.createElement(Select, { label: "Review tier", options: tierOptions(tiers, "(reviewer's tier, then board default)"), value: reviewTier, onChange: (e) => setReviewTier(e.target.value) });
@@ -1270,8 +1275,10 @@ function RegisterScreen({ onRegister, parentTask, onClose }) {
     color: "var(--text-body)",
     fontWeight: d.id === selectedDumpId ? 600 : 400
   } }, d.line), /* @__PURE__ */ React.createElement(Button, { variant: d.id === selectedDumpId ? "primary" : "secondary", size: "sm", onClick: () => pickPendingDump(d), "aria-label": `use ${d.line}` }, "Use"), /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "sm", onClick: () => discardPendingDump(d.id), "aria-label": `discard ${d.line}` }, "Discard")))), /* @__PURE__ */ React.createElement(Card, { style: { display: "flex", flexDirection: "column", gap: 14 } }, !childMode && /* @__PURE__ */ React.createElement(Select, { label: "Source", options: ["manual", "github issue"], value: source, onChange: (e) => {
-    setSource(e.target.value === "github issue" ? "github issue" : "manual");
+    const nextSource = e.target.value === "github issue" ? "github issue" : "manual";
+    setSource(nextSource);
     setGate(null);
+    if (!canTake(assignee, nextSource === "github issue" ? "work" : type)) setAssignee("");
     setTier("");
     setReviewTier("");
     setSelectedDumpId(null);
@@ -1293,7 +1300,11 @@ function RegisterScreen({ onRegister, parentTask, onClose }) {
     },
     /* @__PURE__ */ React.createElement("span", { style: { color: "var(--text-muted)" } }, "#", i.number),
     /* @__PURE__ */ React.createElement("span", null, i.title)
-  )), !TidepoolRules.whyBlank(workspace) && !issuesFailed && truncated && /* @__PURE__ */ React.createElement("span", { style: issueListHintStyle }, "older issues exist \u2014 type the number directly"))), !issueMode && !plainFormActive && !drafted && /* @__PURE__ */ React.createElement(Input, { multiline: true, rows: 4, placeholder: "what needs doing, in your own words \u2014 sloppy is fine here, sloppy completion criteria are not", value: dump, onChange: (e) => setDump(e.target.value) }), !issueMode && (plainFormActive || drafted) && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: drafted ? "var(--tide-4)" : "var(--sun-4)", textTransform: "uppercase", letterSpacing: "0.08em" } }, drafted ? "drafted \u2014 edit freely" : "plain form \u2014 same fields, no draft"), /* @__PURE__ */ React.createElement(Input, { label: "Title", error: TidepoolRules.whyBlank(title), value: title, onChange: (e) => setTitle(e.target.value) }), /* @__PURE__ */ React.createElement(Input, { label: "Purpose", error: TidepoolRules.whyBlank(purpose), multiline: true, rows: 2, value: purpose, onChange: (e) => setPurpose(e.target.value), placeholder: "state prerequisites here \u2014 the agent verifies and escalates cheaply" }), /* @__PURE__ */ React.createElement(Input, { label: "Completion criteria", error: TidepoolRules.whyBlank(criteria), multiline: true, rows: 2, value: criteria, onChange: (e) => setCriteria(e.target.value), placeholder: "sloppy completion criteria are the expensive kind" }), !childMode && /* @__PURE__ */ React.createElement(Select, { label: "Type", options: ["work", "review"], value: type, onChange: (e) => setType(e.target.value === "review" ? "review" : "work") }), /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 } }, assigneeSelect, /* @__PURE__ */ React.createElement(Select, { label: "Workspace", options: workspaceOptions, value: workspace, onChange: (e) => setWorkspace(e.target.value) })), /* @__PURE__ */ React.createElement(Select, { label: "Tier", options: tierOptions(tiers, "(agent's tier, then board default)"), value: tier, onChange: (e) => setTier(e.target.value) }), riskCheckbox, showReviewFlag && /* @__PURE__ */ React.createElement(Checkbox, { label: "review flag \u2014 request an on-completion review", checked: review, onChange: () => setReview(!review) }), reviewTierSelect, reviewerPicker), /* @__PURE__ */ React.createElement(Button, { variant: "primary", size: "lg", full: true, disabled: primaryAction.disabled, onClick: primaryAction.onClick }, primaryAction.label), childMode && /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "lg", full: true, disabled: busy, onClick: onClose }, "Cancel")), !issueMode && /* @__PURE__ */ React.createElement(
+  )), !TidepoolRules.whyBlank(workspace) && !issuesFailed && truncated && /* @__PURE__ */ React.createElement("span", { style: issueListHintStyle }, "older issues exist \u2014 type the number directly"))), !issueMode && !plainFormActive && !drafted && /* @__PURE__ */ React.createElement(Input, { multiline: true, rows: 4, placeholder: "what needs doing, in your own words \u2014 sloppy is fine here, sloppy completion criteria are not", value: dump, onChange: (e) => setDump(e.target.value) }), !issueMode && (plainFormActive || drafted) && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: drafted ? "var(--tide-4)" : "var(--sun-4)", textTransform: "uppercase", letterSpacing: "0.08em" } }, drafted ? "drafted \u2014 edit freely" : "plain form \u2014 same fields, no draft"), /* @__PURE__ */ React.createElement(Input, { label: "Title", error: TidepoolRules.whyBlank(title), value: title, onChange: (e) => setTitle(e.target.value) }), /* @__PURE__ */ React.createElement(Input, { label: "Purpose", error: TidepoolRules.whyBlank(purpose), multiline: true, rows: 2, value: purpose, onChange: (e) => setPurpose(e.target.value), placeholder: "state prerequisites here \u2014 the agent verifies and escalates cheaply" }), /* @__PURE__ */ React.createElement(Input, { label: "Completion criteria", error: TidepoolRules.whyBlank(criteria), multiline: true, rows: 2, value: criteria, onChange: (e) => setCriteria(e.target.value), placeholder: "sloppy completion criteria are the expensive kind" }), !childMode && /* @__PURE__ */ React.createElement(Select, { label: "Type", options: ["work", "review"], value: type, onChange: (e) => {
+    const next = e.target.value === "review" ? "review" : "work";
+    setType(next);
+    if (!canTake(assignee, next)) setAssignee("");
+  } }), /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 } }, assigneeSelect, /* @__PURE__ */ React.createElement(Select, { label: "Workspace", options: workspaceOptions, value: workspace, onChange: (e) => setWorkspace(e.target.value) })), /* @__PURE__ */ React.createElement(Select, { label: "Tier", options: tierOptions(tiers, "(agent's tier, then board default)"), value: tier, onChange: (e) => setTier(e.target.value) }), riskCheckbox, showReviewFlag && /* @__PURE__ */ React.createElement(Checkbox, { label: "review flag \u2014 request an on-completion review", checked: review, onChange: () => setReview(!review) }), reviewTierSelect, reviewerPicker), /* @__PURE__ */ React.createElement(Button, { variant: "primary", size: "lg", full: true, disabled: primaryAction.disabled, onClick: primaryAction.onClick }, primaryAction.label), childMode && /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "lg", full: true, disabled: busy, onClick: onClose }, "Cancel")), !issueMode && /* @__PURE__ */ React.createElement(
     "button",
     {
       onClick: togglePlainForm,
@@ -4164,7 +4175,7 @@ function EditTaskDialog({ taskCard, onSaved, onClose, say }) {
   const { Button, Card, Input, Select, Checkbox } = window.TidepoolDesignSystem_8a0ead;
   const [full, setFull] = React.useState(null);
   const [busy, setBusy] = React.useState(false);
-  const [candidates, setCandidates] = React.useState({ assignees: [], workspaces: [], icons: {} });
+  const [candidates, setCandidates] = React.useState({ assignees: [], builtIns: [], workspaces: [], icons: {} });
   const [fields, setFields] = React.useState(null);
   React.useEffect(() => {
     api("GET /api/registry/candidates").then(setCandidates).catch(() => {
@@ -4192,6 +4203,9 @@ function EditTaskDialog({ taskCard, onSaved, onClose, say }) {
   const ruleSubject = { ...fields, type: full.type, parent_id: full.parent_id };
   const showReviewFlag = TidepoolRules.reviewFlagCarriesMeaning(ruleSubject);
   const showReviewBy = TidepoolRules.completionReviewFires(ruleSubject);
+  const currentAssignee = full.raw_assignee ?? "";
+  const assigneeNames = candidates.assignees.filter((n) => n === currentAssignee || !TidepoolRules.whyAssigneeCannotTake(n, full.type, candidates.builtIns.includes(n)));
+  if (currentAssignee && !assigneeNames.includes(currentAssignee)) assigneeNames.push(currentAssignee);
   const blankContent = !issueBacked && [fields.title, fields.purpose, fields.completion_criteria].some((value) => TidepoolRules.whyBlank(value));
   const changed = () => {
     const out = {};
@@ -4231,7 +4245,7 @@ function EditTaskDialog({ taskCard, onSaved, onClose, say }) {
     }
     setBusy(false);
   };
-  return /* @__PURE__ */ React.createElement("div", { style: { padding: "20px 16px" } }, /* @__PURE__ */ React.createElement("h1", { style: { fontSize: "var(--text-xl)", margin: "0 0 2px" } }, "Edit"), /* @__PURE__ */ React.createElement("p", { style: { fontSize: "var(--text-sm)", color: "var(--text-secondary)", margin: "0 0 16px" } }, issueBacked ? "issue-backed \u2014 content and workspace stay on GitHub, only board-side fields are editable" : "unconsumed fields only \u2014 type and parent link are not editable"), /* @__PURE__ */ React.createElement(Card, { style: { display: "flex", flexDirection: "column", gap: 14 } }, !issueBacked && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(Input, { label: "Title", error: TidepoolRules.whyBlank(fields.title), value: fields.title, onChange: (e) => set("title", e.target.value) }), /* @__PURE__ */ React.createElement(Input, { label: "Purpose", error: TidepoolRules.whyBlank(fields.purpose), multiline: true, rows: 2, value: fields.purpose, onChange: (e) => set("purpose", e.target.value) }), /* @__PURE__ */ React.createElement(Input, { label: "Completion criteria", error: TidepoolRules.whyBlank(fields.completion_criteria), multiline: true, rows: 2, value: fields.completion_criteria, onChange: (e) => set("completion_criteria", e.target.value) })), /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: issueBacked ? "1fr" : "1fr 1fr", gap: 12 } }, /* @__PURE__ */ React.createElement(Select, { label: "Assignee", options: withPlaceholder("(default agent)", candidates.assignees), value: fields.assignee, onChange: (e) => set("assignee", e.target.value) }), !issueBacked && /* @__PURE__ */ React.createElement(Select, { label: "Workspace", options: withPlaceholder("(default workspace)", candidates.workspaces), value: fields.workspace, onChange: (e) => set("workspace", e.target.value) })), /* @__PURE__ */ React.createElement(Checkbox, { label: "risk flag \u2014 this task has irreversible external effects", checked: fields.risk_flag, onChange: () => set("risk_flag", !fields.risk_flag) }), showReviewFlag && /* @__PURE__ */ React.createElement(Checkbox, { label: "review flag \u2014 request an on-completion review", checked: fields.review_flag, onChange: () => set("review_flag", !fields.review_flag) }), showReviewBy && /* @__PURE__ */ React.createElement(ReviewerPicker, { candidates, value: fields.review_by, onChange: (v) => set("review_by", v) }), /* @__PURE__ */ React.createElement(Button, { variant: "primary", size: "lg", full: true, disabled: busy || blankContent, onClick: submit }, "Save changes"), /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "lg", full: true, disabled: busy, onClick: onClose }, "Cancel")));
+  return /* @__PURE__ */ React.createElement("div", { style: { padding: "20px 16px" } }, /* @__PURE__ */ React.createElement("h1", { style: { fontSize: "var(--text-xl)", margin: "0 0 2px" } }, "Edit"), /* @__PURE__ */ React.createElement("p", { style: { fontSize: "var(--text-sm)", color: "var(--text-secondary)", margin: "0 0 16px" } }, issueBacked ? "issue-backed \u2014 content and workspace stay on GitHub, only board-side fields are editable" : "unconsumed fields only \u2014 type and parent link are not editable"), /* @__PURE__ */ React.createElement(Card, { style: { display: "flex", flexDirection: "column", gap: 14 } }, !issueBacked && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(Input, { label: "Title", error: TidepoolRules.whyBlank(fields.title), value: fields.title, onChange: (e) => set("title", e.target.value) }), /* @__PURE__ */ React.createElement(Input, { label: "Purpose", error: TidepoolRules.whyBlank(fields.purpose), multiline: true, rows: 2, value: fields.purpose, onChange: (e) => set("purpose", e.target.value) }), /* @__PURE__ */ React.createElement(Input, { label: "Completion criteria", error: TidepoolRules.whyBlank(fields.completion_criteria), multiline: true, rows: 2, value: fields.completion_criteria, onChange: (e) => set("completion_criteria", e.target.value) })), /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: issueBacked ? "1fr" : "1fr 1fr", gap: 12 } }, /* @__PURE__ */ React.createElement(Select, { label: "Assignee", options: withPlaceholder("(default agent)", assigneeNames), value: fields.assignee, onChange: (e) => set("assignee", e.target.value) }), !issueBacked && /* @__PURE__ */ React.createElement(Select, { label: "Workspace", options: withPlaceholder("(default workspace)", candidates.workspaces), value: fields.workspace, onChange: (e) => set("workspace", e.target.value) })), /* @__PURE__ */ React.createElement(Checkbox, { label: "risk flag \u2014 this task has irreversible external effects", checked: fields.risk_flag, onChange: () => set("risk_flag", !fields.risk_flag) }), showReviewFlag && /* @__PURE__ */ React.createElement(Checkbox, { label: "review flag \u2014 request an on-completion review", checked: fields.review_flag, onChange: () => set("review_flag", !fields.review_flag) }), showReviewBy && /* @__PURE__ */ React.createElement(ReviewerPicker, { candidates, value: fields.review_by, onChange: (v) => set("review_by", v) }), /* @__PURE__ */ React.createElement(Button, { variant: "primary", size: "lg", full: true, disabled: busy || blankContent, onClick: submit }, "Save changes"), /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "lg", full: true, disabled: busy, onClick: onClose }, "Cancel")));
 }
 function CancelTaskDialog({ task, onCancelled, onClose, say }) {
   const { Button, Card, Input } = window.TidepoolDesignSystem_8a0ead;

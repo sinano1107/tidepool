@@ -62,5 +62,12 @@ export function whyExecutionRequestIsInert(t: Pick<ReviewSubject, "type">): stri
   return t.type === "review" ? "a review task runs at its review_tier; tier and priority are for work tasks only" : undefined;
 }
 
+/** その名前が type の assignee に取れない理由。取れるなら undefined。組み込み agent は review だけを実行する(ADR 0228
+ *  決定1)ので、組み込みに解決される名前は work / question に取れない。登録・Edit・decompose の門と、WebUI の Assignee
+ *  候補の出し分けが同じ関数を呼ぶ(ADR 0235 決定3)。 */
+export function whyAssigneeCannotTake(name: string, type: string, resolvesToBuiltIn: boolean): string | undefined {
+  return type !== "review" && resolvesToBuiltIn ? `agent ${name} is the built-in agent, which runs reviews only` : undefined;
+}
+
 export const completionReviewFires = (t: ReviewSubject): boolean => whyNoCompletionReview(t) === undefined;
 export const reviewFlagCarriesMeaning = (t: ReviewSubject): boolean => whyReviewFlagIsInert(t) === undefined;

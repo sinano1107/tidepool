@@ -122,7 +122,7 @@ function RegisterScreen({ onRegister, parentTask, onClose }: RegisterScreenProps
   // registry-sourced assignee/workspace candidates (issue #12/#65) — fetched
   // once per screen visit; RegisterScreen remounts fresh each tab entry (the
   // shell's key={tab}), so this never goes stale within a sitting
-  const [candidates, setCandidates] = React.useState<AppCandidates>({ assignees: [], workspaces: [], icons: {} });
+  const [candidates, setCandidates] = React.useState<AppCandidates>({ assignees: [], builtIns: [], workspaces: [], icons: {} });
   React.useEffect(() => {
     api('GET /api/registry/candidates').then(setCandidates).catch(() => {});
   }, []);
@@ -310,7 +310,10 @@ function RegisterScreen({ onRegister, parentTask, onClose }: RegisterScreenProps
     { value, label },
     ...names.map((n) => ({ value: n, label: n })),
   ];
-  const assigneeOptions = withPlaceholder('', '(default agent)', candidates.assignees);
+  // 組み込みは review の Assignee にだけ出す —— サーバーの門と同じ規則(ADR 0235 決定2・3)
+  const canTake = (name: string, forType: string) => !TidepoolRules.whyAssigneeCannotTake(name, forType, candidates.builtIns.includes(name));
+  // an issue reference always registers as work, whatever the manual Type select last held
+  const assigneeOptions = withPlaceholder('', '(default agent)', candidates.assignees.filter((n) => canTake(n, issueMode ? 'work' : type)));
   // both sources show these two the same way — one element each so the labels can't drift
   const assigneeSelect = <Select label="Assignee" options={assigneeOptions} value={assignee} onChange={(e) => setAssignee(e.target.value)} />;
   const reviewerPicker = showReviewBy && <ReviewerPicker candidates={candidates} value={reviewBy} onChange={setReviewBy} />;
@@ -371,7 +374,10 @@ function RegisterScreen({ onRegister, parentTask, onClose }: RegisterScreenProps
       <Card style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
         {!childMode && (
           <Select label="Source" options={['manual', 'github issue']} value={source} onChange={(e) => {
-            setSource(e.target.value === 'github issue' ? 'github issue' : 'manual'); setGate(null);
+            const nextSource = e.target.value === 'github issue' ? 'github issue' : 'manual';
+            setSource(nextSource); setGate(null);
+            // a built-in picked for a manual review cannot carry over into an issue reference's work
+            if (!canTake(assignee, nextSource === 'github issue' ? 'work' : type)) setAssignee('');
             // tier state is shared by both paths — reset it so an issue-path
             // tier never leaks into a manual review task as its review_tier
             setTier('');
@@ -428,7 +434,12 @@ function RegisterScreen({ onRegister, parentTask, onClose }: RegisterScreenProps
             <Input label="Completion criteria" error={TidepoolRules.whyBlank(criteria)} multiline rows={2} value={criteria} onChange={(e) => setCriteria(e.target.value)} placeholder="sloppy completion criteria are the expensive kind" />
             {/* a decompose child is always type work (decomposeTask's own ChildSpec has no type field) */}
             {!childMode && (
-              <Select label="Type" options={['work', 'review']} value={type} onChange={(e) => setType(e.target.value === 'review' ? 'review' : 'work')} />
+              <Select label="Type" options={['work', 'review']} value={type} onChange={(e) => {
+                const next = e.target.value === 'review' ? 'review' : 'work';
+                setType(next);
+                // review → work で、選ばれていた組み込みは外す(ADR 0235 決定2)
+                if (!canTake(assignee, next)) setAssignee('');
+              }} />
             )}
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
               {assigneeSelect}

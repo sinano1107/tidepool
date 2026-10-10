@@ -13,6 +13,7 @@ import type { Issue } from "./github.js";
 import type { RegistryCandidates } from "./registry.js";
 import { HANDOFF_FIELDS } from "./tasks.js";
 import { boardCallRow } from "./throttle.js";
+import { whyAssigneeCannotTake } from "./webui-rules.js";
 
 // mirrors TaskDraft (src/draft.ts): the model's response is untrusted input,
 // so every field is validated before it's allowed to reach the API layer
@@ -99,7 +100,8 @@ function buildPrompt(
     "title, purpose, completion_criteria (all required strings), and optionally assignee, workspace " +
     "(strings), risk_flag, review_flag (booleans).";
   const candidateGuidance = candidates
-    ? `Known assignees: ${candidates.assignees.join(", ")}. ` +
+    ? // 下書きは work のフォームを埋める(ADR 0235 決定2)
+      `Known assignees: ${candidates.assignees.filter((name) => !whyAssigneeCannotTake(name, "work", candidates.builtIns.includes(name))).join(", ")}. ` +
       `Known workspaces: ${candidates.workspaces.join(", ")}. ` +
       "When suggesting assignee/workspace, only propose names from these lists."
     : "";

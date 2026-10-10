@@ -142,6 +142,7 @@ describe("ClaudeDraftClient", () => {
       db,
       candidates: {
         assignees: ["reef-crab", "deckhand"],
+        builtIns: [],
         workspaces: ["tidepool", "sandbox"],
         icons: {},
       },
@@ -160,6 +161,22 @@ describe("ClaudeDraftClient", () => {
     expect(prompt).toContain("deckhand");
     expect(prompt).toContain("tidepool");
     expect(prompt).toContain("sandbox");
+  });
+
+  it("下書きは work のフォームを埋めるので、Known assignees に組み込み agent に解決される名前を出さない(ADR 0235 決定2)", async () => {
+    const calls: string[][] = [];
+    const client = new ClaudeDraftClient({
+      db,
+      candidates: { assignees: ["deckhand", "fugu", "human"], builtIns: ["fugu"], workspaces: ["tidepool"], icons: {} },
+      exec: async (_command, args) => {
+        calls.push(args);
+        return JSON.stringify({ result: JSON.stringify({ title: "t", purpose: "p", completion_criteria: "c" }) });
+      },
+    });
+
+    await client.draftTask("set up the greenhouse sensor", "English");
+
+    expect(calls[0]!.join(" ")).toContain("Known assignees: deckhand, human. ");
   });
 
   // ADR 0044: 下書きは Board call であり advisor を持たない。既に渡している

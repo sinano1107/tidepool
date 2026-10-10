@@ -52,3 +52,16 @@ it("an annotation original takes the language of the copied annotation original 
   expect(copiedOriginalLanguage({ text: "keep it all" }, copied, "Japanese")).toBe("Japanese");
   expect(copiedOriginalLanguage({ text: "分ける" }, [...copied, { text: "分ける", language: "English" }], "Japanese")).toBe("Japanese");
 });
+
+import { whyAssigneeCannotTake } from "../src/webui-rules.js";
+
+it("組み込み agent に解決される名前は work / question の assignee に取れず、review なら取れる(ADR 0228 決定1 / ADR 0235 決定3)", () => {
+  for (const type of ["work", "question"]) {
+    expect(whyAssigneeCannotTake("fugu", type, true)).toBe("agent fugu is the built-in agent, which runs reviews only");
+  }
+  expect(whyAssigneeCannotTake("fugu", "review", true)).toBeUndefined();
+});
+
+it("組み込みに解決されない名前はどの type の assignee にも取れる —— shadow している組み込みの名前も同じ(ADR 0235 決定3)", () => {
+  for (const type of ["work", "question", "review"]) expect(whyAssigneeCannotTake("fugu", type, false)).toBeUndefined();
+});
