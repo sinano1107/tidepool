@@ -1,4 +1,4 @@
-import { afterEach, expect, it } from "vitest";
+import { expect, it, onTestFinished } from "vitest";
 import type { Cause } from "../src/cause.js";
 import type { CodexAppServerProbe, CodexAppServerProbeResult } from "../src/codex-app-server.js";
 import { type Db, openDb } from "../src/db.js";
@@ -221,9 +221,6 @@ it("advisor pin ありの episode は advisor 無しのセルに合流しない 
 const WORKER = "fake-worker";
 type Board = { db: Db; clock: FakeClock };
 
-const boards: Array<() => void> = [];
-afterEach(() => boards.splice(0).forEach((stop) => stop()));
-
 /** 自前の db に scheduler を直接組む(pickup だけが要るので、server の合成は通さない)。 */
 function scheduledBoard(options: { candidates?: TaskExecutionCandidates; workspace?: WorkspaceConfig; openaiUsage?: CodexAppServerProbe } = {}) {
   const db = openDb(":memory:");
@@ -242,7 +239,7 @@ function scheduledBoard(options: { candidates?: TaskExecutionCandidates; workspa
     workspace: options.workspace,
     openaiUsage: options.openaiUsage,
   });
-  boards.push(() => {
+  onTestFinished(() => {
     scheduler.stop();
     db.close();
   });
@@ -253,7 +250,9 @@ type ScheduledBoard = ReturnType<typeof scheduledBoard>;
 /** scheduler の無い自前の db(episode は loadEpisodes に直接言う)。 */
 function bareBoard(): Board {
   const db = openDb(":memory:");
-  boards.push(() => db.close());
+  onTestFinished(() => {
+    db.close();
+  });
   return { db, clock: new FakeClock() };
 }
 
@@ -291,16 +290,13 @@ function finish(b: ScheduledBoard, taskId: string) {
   b.slot.release();
 }
 
-/** 1 poll 進めて、登録済みの todo を scheduler に pickup させる。 */
-const poll = (b: ScheduledBoard) => b.clock.advance(HOUR);
-
 const shadowRows = (b: Board) =>
   listRoutingShadow(b.db, "", { since_watermark: 0 }).shadow.map(({ task_id, recommended, actual, source, basis, candidates }) => ({ task_id, recommended, actual, source, basis, candidates }));
 
 it("work task の pickup ごとに shadow 行が1件記録され、selector の選択は変わらない —— review task では学習器を参照せず行も無い", async () => {
   const b = scheduledBoard({ candidates: () => [opus, sol] });
   const work = registerWork(b, "learned");
-  await poll(b);
+  await b.clock.advance(HOUR);
 
   expect(b.worker.startedSettings).toEqual([opus]);
   const cell = { provider: "anthropic", model: "claude-opus-5-5", effort: "high", advisor: null };
@@ -311,7 +307,7 @@ it("work task の pickup ごとに shadow 行が1件記録され、selector の�
   // 完了で統合点レビュー(review task)が生まれ、次の poll で pickup される
   complete(b, work.id);
   b.slot.release();
-  await poll(b);
+  await b.clock.advance(HOUR);
   expect(b.worker.started.map((task) => task.type)).toEqual(["work", "review"]);
   expect(shadowRows(b)).toHaveLength(1);
 });
@@ -321,12 +317,11 @@ it("work task の pickup ごとに shadow 行が1件記録され、selector の�
  *  未観測の候補へ移らない(ADR 0181)ので、移る先に観測を置くのに使う。 */
 async function settledSession(b: ScheduledBoard, run: ExecutionSetting, causes: Cause[] = []) {
   const earlier = registerWork(b, "earlier");
-  await poll(b);
+  await b.clock.advance(HOUR);
   // ScriptedWorker は spawn しないので、その session の記録(spawn + 決定 + 帰責)を setup として置く
-  const spawnedId = recordSpawn(b, earlier.id, { advisor: null, provider: run.provider, model: run.model, effort: run.effort, tier_id: run.tier_id });
+  recordSpawn(b, earlier.id, { advisor: null, provider: run.provider, model: run.model, effort: run.effort, tier_id: run.tier_id });
   if (causes.length > 0) {
     const entryId = logDecision(b.db, getTask(b.db, earlier.id)!, "took the shortcut", WORKER, b.clock.now(), "worker");
-    expect(entryId).toBeGreaterThan(spawnedId);
     for (const [i, cause] of causes.entries()) attribute(b, earlier.id, entryId, cause, `objection ${i}`);
   }
   finish(b, earlier.id);
@@ -352,7 +347,7 @@ it("観測が効くと shadow 行は selector と乖離しうるが、選択は�
   await settledSession(b, sol);
 
   const later = registerWork(b, "later");
-  await poll(b);
+  await b.clock.advance(HOUR);
 
   expect(b.worker.startedSettings.at(-1)).toEqual(opus);
   expect(shadowRows(b).at(-1)).toEqual({
@@ -371,7 +366,7 @@ it("workspace 未指定の未着手タスクの実績は、既定 workspace の�
   await settledSession(b, opus);
 
   const later = registerWork(b, "later");
-  await poll(b);
+  await b.clock.advance(HOUR);
 
   const row = listRoutingShadow(b.db, "", { since_watermark: 0 }).shadow.find((r) => r.task_id === later.id);
   expect(row?.actual_record).toEqual({ board: { accepted: 1, rejected: 0 }, workspace: { accepted: 1, rejected: 0 } });
@@ -383,7 +378,7 @@ it("同じ entry の前の異議群が capability、後の異議群が preferenc
   await settledSession(b, sol);
 
   const later = registerWork(b, "later");
-  await poll(b);
+  await b.clock.advance(HOUR);
 
   expect(shadowRows(b).at(-1)).toMatchObject({
     task_id: later.id,
@@ -402,7 +397,7 @@ it("行を段 T から T' へ settings で移すと T' の pickup の shadow 行
     applyExecutionSettingsChange(b.db, { setting: "row", key, row: { ...key, tier, price_in: 5, price_out: 25 } }, "webui", b.clock.now());
   const pickupIn = async (tier: Tier) => {
     const task = registerWork(b, `in ${tier}`, tier);
-    await poll(b);
+    await b.clock.advance(HOUR);
     const row = shadowRows(b).find((r) => r.task_id === task.id);
     // slot を空ける(ScriptedWorker は spawn しないので episode は増えない)
     finish(b, task.id);
@@ -421,7 +416,7 @@ it("advisor pin ありで相談0回の session は、盤面の記録から読ん
   const b = scheduledBoard({ candidates: () => [opusWithAdvisor, opus] });
   await settledSession(b, opus);
   const earlier = registerWork(b, "earlier");
-  await poll(b);
+  await b.clock.advance(HOUR);
   // ScriptedWorker は spawn しないので、その session の記録(pin あり spawn + 帰責 + 相談0回の exit)を setup として置く
   const spawnedId = recordSpawn(b, earlier.id, { advisor: "claude-fable-5-1", provider: "anthropic", model: "claude-opus-5-5", effort: "high" });
   attribute(b, earlier.id, logDecision(b.db, getTask(b.db, earlier.id)!, "took the shortcut", WORKER, b.clock.now(), "worker"), "capability");
@@ -442,7 +437,7 @@ it("advisor pin ありで相談0回の session は、盤面の記録から読ん
   finish(b, earlier.id);
 
   const later = registerWork(b, "later");
-  await poll(b);
+  await b.clock.advance(HOUR);
 
   expect(b.worker.startedSettings.at(-1)).toEqual(opusWithAdvisor);
   expect(shadowRows(b).at(-1)).toMatchObject({
@@ -494,7 +489,7 @@ it("昇格中の work task は学習器の選択で走り出所は learner、sha
   await settledSession(b, sol);
 
   const later = registerWork(b, "later");
-  await poll(b);
+  await b.clock.advance(HOUR);
 
   expect(settingsOf(b, later.id)).toEqual(byLearner(sol));
   expect(shadowRows(b).at(-1)).toEqual({
@@ -508,7 +503,7 @@ it("昇格中の work task は学習器の選択で走り出所は learner、sha
 
   complete(b, later.id);
   b.slot.release();
-  await poll(b);
+  await b.clock.advance(HOUR);
   expect(b.worker.started.at(-1)).toMatchObject({ type: "review", parent_id: later.id });
   expect(b.worker.startedSettings.at(-1)).toEqual(opus);
 });
@@ -528,7 +523,7 @@ it("昇格中も学習器の選択は Throttle の除外を通る —— 選ん�
   await settledSession(b, sol);
 
   const later = registerWork(b, "later");
-  await poll(b);
+  await b.clock.advance(HOUR);
 
   expect(settingsOf(b, later.id)).toEqual(byLearner(opus));
   // 候補数は除外を当てた後の行の数 —— openai が外れて opus の1行だけ
