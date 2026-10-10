@@ -84,7 +84,7 @@ import {
 import { checkSandboxCapability } from "./sandbox.js";
 import type { TaskExecutionCandidates } from "./scheduler.js";
 import type { BoardCallers, ServerOptions, WorkerFactory } from "./server.js";
-import { resolveTaskAgent, type Task } from "./tasks.js";
+import { resolveTaskAgent, type Task, type TaskType } from "./tasks.js";
 import { tierNames } from "./tier.js";
 import { TranscriptStore } from "./transcript-store.js";
 import type { TranslationClient } from "./translate.js";
@@ -354,7 +354,7 @@ function taskExecutionCandidatesResolver(board: BoardComposition, db: Db): TaskE
   return (task) => {
     const registry = loadBoardRegistry(board);
     const name = resolveTaskAgent(task, board.defaultAgentName, board.auditorName);
-    const agent = resolveExecutionAgent(registry, board.defaultAgentName, name, tierNames(db));
+    const agent = resolveExecutionAgent(registry, board.defaultAgentName, name, tierNames(db), task.type);
     return executionSettingsFor(db, agent.definition, task);
   };
 }
@@ -533,18 +533,19 @@ function agentsSpeakingProvidersResolver(
  *  delegation-aware successor to a single board-wide fixed profile, which
  *  every task shared regardless of who it was actually assigned to. An
  *  assignee the registry no longer knows (UnknownAgentError) or whose
- *  definition no longer stands (InvalidAgentDefinitionError, ADR 0097) throws,
+ *  definition no longer stands (InvalidAgentDefinitionError, ADR 0097 — and a
+ *  non-review task resolving to the built-in, ADR 0228) throws,
  *  and each consumer quarantines the agent name: landing (ADR 0217 決定3) and
  *  the worker verbs that read authority, which are refused (ADR 0224).
  *  Without a registry, no agent's authority is knowable at all — unrestricted. */
 function authorityResolver(
   board: BoardComposition,
   db: Db,
-): ((assignee: string | null) => AuthorityProfile | undefined) | undefined {
+): ((assignee: string | null, taskType: TaskType) => AuthorityProfile | undefined) | undefined {
   const { registryDir, defaultAgentName } = board;
   if (!registryDir) return undefined;
-  return (assignee) =>
-    resolveExecutionAgent(loadBoardRegistry(board), defaultAgentName, assignee, tierNames(db)).profile;
+  return (assignee, taskType) =>
+    resolveExecutionAgent(loadBoardRegistry(board), defaultAgentName, assignee, tierNames(db), taskType).profile;
 }
 
 /** Whether an agent name is currently registered (ADR 0012 / issue #36), read
@@ -557,6 +558,13 @@ function agentRegisteredChecker(board: BoardComposition): ((name: string) => boo
   // ownEntry, not `in`: `in` walks the prototype chain, so a name like
   // "toString" would clear an agent quarantine without any repair (issue #69)
   return (name) => ownEntry(loadBoardRegistry(board).agents, name) !== undefined;
+}
+
+/** Whether a name resolves to the built-in agent right now — no registry entry
+ *  shadows it (ADR 0228). Without a registry there is no built-in. */
+function builtInResolutionChecker(board: BoardComposition): ((name: string) => boolean) | undefined {
+  if (!board.registryDir) return undefined;
+  return (name) => ownEntry(loadBoardRegistry(board).agents, name)?.builtin === true;
 }
 
 /** Whether an explicitly named workspace is protected (issue #15 layer 2 /
@@ -767,6 +775,7 @@ export async function buildServerOptions(board: BoardComposition, db: Db): Promi
     profileAdmin: profileAdmin(board),
     resolveAuthority: authorityResolver(board, db),
     agentRegistered: agentRegisteredChecker(board),
+    resolvesToBuiltIn: builtInResolutionChecker(board),
     isProtectedWorkspace: protectedWorkspaceChecker(board),
     listAgents: listAgentsResolver(board),
     // pass the provider itself, not a boot-time snapshot: the register screen's

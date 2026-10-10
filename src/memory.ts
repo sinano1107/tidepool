@@ -685,7 +685,7 @@ export const exemplarAnnotationSchema = z.object({
   anchor: z.union([z.literal("whole"), z.object({ field: z.enum(["decision", "steering", "handoff", "result"]), quote: requiredTextSchema })]),
   polarity: z.enum(["imitate", "avoid"]),
   text: requiredTextSchema,
-  original: z.string().optional(),
+  original: z.string().transform(normalizeText).optional(),
 });
 type ExemplarAnnotation = Omit<z.infer<typeof exemplarAnnotationSchema>, "original"> & { original?: { text: string; language: string } };
 /** meta-review の consolidate の注釈: 原文は人間のものなので持たない(渡されたら黙って捨てず断る)。 */
@@ -752,12 +752,13 @@ export function humanEntryInput<T extends { workspace: string | null; original_t
   db: Db,
   { workspace, original_title, original_text, ...rest }: T,
 ) {
-  const originalTitle = "title" in rest ? original_title : original_text;
-  if (!originalTitle?.trim() !== !original_text?.trim()) throw new DomainError("an original needs both its title and its text");
+  const originalTitle = normalizeText(("title" in rest ? original_title : original_text) ?? "");
+  const originalText = normalizeText(original_text ?? "");
+  if (!originalTitle !== !originalText) throw new DomainError("an original needs both its title and its text");
   return {
     ...rest,
     scope: workspace,
-    original: originalTitle?.trim() && original_text?.trim() ? { title: originalTitle, text: original_text, language: getDisplayLanguage(db) } : null,
+    original: originalTitle && originalText ? { title: originalTitle, text: originalText, language: getDisplayLanguage(db) } : null,
     author: HUMAN_AUTHOR,
   };
 }
@@ -855,7 +856,7 @@ export function recordExemplar(
     const language = getDisplayLanguage(db);
     const annotationLanguage = (originalText: string) =>
       copiedLanguage(language, replaced.flatMap((r) => r.annotations ?? []).map((a) => (a.original?.text === originalText ? a.original.language : undefined)));
-    const annotations = checked.map(({ original, ...annotation }) => (original?.trim() ? { ...annotation, original: { text: original, language: annotationLanguage(original) } } : annotation));
+    const annotations = checked.map(({ original, ...annotation }) => (original ? { ...annotation, original: { text: original, language: annotationLanguage(original) } } : annotation));
     return createEntry(db, { ...fields, kind: "exemplar", state: "approved", text, original: null, annotations, source }, origin, at, mark);
   });
 }
@@ -1507,6 +1508,10 @@ const STOPWORDS = new Set(
     .split(/\s+/),
 );
 
+/** 語の端の、索引で token にならない字の連なり(字クラスは MEMORY_FTS_TOKEN_CLASS、Co だけ・M だけの語も残す、#1723)。
+ *  クラスの . - _ は端に残らない —— ftsText が token の字に挟まれない . - _ の連なりを既に落としている。 */
+const NON_TOKEN_EDGE = new RegExp(String.raw`^(?:(?!${MEMORY_FTS_TOKEN_CLASS})[^])+|(?:(?!${MEMORY_FTS_TOKEN_CLASS})[^])+$`, "gu");
+
 /** query を前処理して stopword を落とし、語ごとに引用符で囲む(識別子の / . - を FTS の構文として
  *  読ませない)。語は空白と CJK の句読点・記号(、。「」 など)と、CJK の連なりとそれ以外の境目で割る(`src/memory.tsの注入`
  *  の識別子も独立の語、#1178 / #1180)。CJK の連なりは bigram の1 phrase のまま(隣接を保ち、`東京都` は「京都と東京」に
@@ -1517,10 +1522,11 @@ function ftsQuery(query: string, join: " " | " OR " = " "): string | null {
     .split(QUERY_BREAK)
     .flatMap((word) => word.split(CJK_RUN))
     .map((word) => ftsText(word).trim())
-    // 語の端の記号を除いて見る(`it,` も FTS には `it` として届く。記号だけの語は消える)
+    // 語の端の token にならない字を除いて見る(`it,` も FTS には `it` として届く。記号だけの語は消える)。stopword は M を
+    // 除いて照らす(NFC で合成されない `it` + U+0301 も remove_diacritics で索引の `it` に当たる)
     .filter((term) => {
-      const word = term.toLowerCase().replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, "");
-      return word !== "" && !STOPWORDS.has(word);
+      const word = term.toLowerCase().replace(NON_TOKEN_EDGE, "");
+      return word !== "" && !STOPWORDS.has(word.replace(/\p{M}/gu, ""));
     });
   return terms.length === 0 ? null : terms.map((term) => `"${term.replaceAll('"', '""')}"`).join(join);
 }

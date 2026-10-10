@@ -53,6 +53,7 @@ import {
   recordPrOpened,
   registerTask,
   type Task,
+  type TaskType,
 } from "../src/tasks.js";
 import { TranscriptStore } from "../src/transcript-store.js";
 import type { TranslationClient } from "../src/translate.js";
@@ -205,7 +206,7 @@ export interface BootOptions {
    *  issue #36), read fresh every call from `task.assignee` (null → the
    *  board's default agent). Takes precedence over the static `authority`
    *  above when both are given. Absent → falls back to `authority`. */
-  resolveAuthority?: (assignee: string | null) => AuthorityProfile | undefined;
+  resolveAuthority?: (assignee: string | null, taskType: TaskType) => AuthorityProfile | undefined;
   /** Whether an agent name is currently registered (ADR 0012 / issue #36),
    *  read fresh against the registry — used both for registration-time
    *  validation and an agent quarantine Confirmation question's clearance
@@ -213,6 +214,9 @@ export interface BootOptions {
    *  registration and only "no more todo tasks depend on it" can clear a
    *  quarantine. */
   agentRegistered?: (name: string) => boolean;
+  /** Whether an agent name currently resolves to the built-in agent (ADR 0228)
+   *  — no registry entry shadows it. Absent → nothing resolves to the built-in. */
+  resolvesToBuiltIn?: (name: string) => boolean;
   /** Assignee/workspace candidates for the registration screen (issue #12).
    *  A static snapshot (the common case) or a per-request provider — the
    *  latter lets a test prove the endpoint re-reads each call (issue #78). */
@@ -350,6 +354,7 @@ export async function bootTidepool(options: BootOptions = {}): Promise<Tidepool>
     authority: options.authority,
     resolveAuthority: options.resolveAuthority,
     agentRegistered: options.agentRegistered,
+    resolvesToBuiltIn: options.resolvesToBuiltIn,
     // the server takes a per-request provider now; a test may pass one
     // directly, otherwise wrap the static snapshot
     registryCandidates: normalizeCandidates(options.registryCandidates),
@@ -451,6 +456,16 @@ export async function mcpClient(baseUrl: string, taskId?: string): Promise<Clien
     }) as Client["callTool"];
   }
   return client;
+}
+
+/** `taskId` の task として verb を1回呼んで client を閉じ、CallToolResult をそのまま返す(isError は見ない)。 */
+export async function callAsTask(t: Tidepool, taskId: string, name: string, args: Record<string, unknown>): Promise<any> {
+  const client = await mcpClient(t.mcpBaseUrl, taskId);
+  try {
+    return await client.callTool({ name, arguments: args });
+  } finally {
+    await client.close();
+  }
 }
 
 /** 応答予算(ADR 0195)。読み口の応答は、盤面が返す CallToolResult を丸ごとシリアライズした UTF-8 バイト数でこれ以下に収まる。 */
@@ -746,9 +761,7 @@ export function queueWork(
 
 /** Put one decision line in the log for the slot task and return its entry. */
 export async function loggedEntry(t: Tidepool, taskId: string, line: string): Promise<any> {
-  const client = await mcpClient(t.mcpBaseUrl, taskId);
-  await client.callTool({ name: "log_decision", arguments: { line } });
-  await client.close();
+  await callAsTask(t, taskId, "log_decision", { line });
   const log = (await api(t.baseUrl, "GET", "/api/log")).json;
   return log.entries.find((e: any) => e.payload.line === line);
 }
@@ -910,13 +923,7 @@ export function quarantineQuestion(db: Db, kind: QuarantineKind, value: string |
 
 /** slot task を MCP の `complete_task` で完了させる。 */
 export async function completeViaMcp(t: Tidepool, taskId: string, handoff = true): Promise<any> {
-  const client = await mcpClient(t.mcpBaseUrl, taskId);
-  const res: any = await client.callTool({
-    name: "complete_task",
-    arguments: handoff ? { handoff: FULL_HANDOFF } : {},
-  });
-  await client.close();
-  return res;
+  return callAsTask(t, taskId, "complete_task", handoff ? { handoff: FULL_HANDOFF } : {});
 }
 
 /** Finish only the reviews generated for this integration point, through the
@@ -1122,12 +1129,7 @@ export async function settleRcaByWorker(t: Tidepool, reviewId: string) {
 
 /** `taskId` の task として RCA の起草 verb `propose_from_objection` を呼ぶ(起草の中身は固定)。 */
 export async function propose(t: Tidepool, taskId: string, args: Record<string, unknown>) {
-  const client = await mcpClient(t.mcpBaseUrl, taskId);
-  try {
-    return (await client.callTool({ name: "propose_from_objection", arguments: { path: "testing/fixtures", title: "Keep fixtures", text: "Never skip the fixtures.", ...args } })) as any;
-  } finally {
-    await client.close();
-  }
+  return callAsTask(t, taskId, "propose_from_objection", { path: "testing/fixtures", title: "Keep fixtures", text: "Never skip the fixtures.", ...args });
 }
 
 /** settings の撃ち直しを打ち切った件の一覧。 */

@@ -142,6 +142,7 @@ export interface ManagementMcpDeps {
   defaultAgentName?: string;
   auditorName?: string;
   agentRegistered?: (name: string) => boolean;
+  resolvesToBuiltIn?: (name: string) => boolean;
   isProtectedWorkspace?: (name: string) => boolean;
   /** ADR 0099 決定3: 受理された Containment quarantine の確認回答が slot を解放する門。 */
   reclaim?: Pick<PendingReclaim, "acceptReclaimed">;

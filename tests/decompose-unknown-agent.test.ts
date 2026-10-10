@@ -65,3 +65,29 @@ it("registry に存在する agent 名を指定した decompose の子は、auth
   expect(child).toBeDefined();
   expect(child.assignee).toBe("navigator");
 });
+
+it("組み込みに解決される agent を assignee にした decompose の子は、assignable_to の外でも承認 question にならず tool error で差し戻される(ADR 0228 決定1)", async () => {
+  t = await bootTidepool({
+    agentRegistered: () => true,
+    resolvesToBuiltIn: (name) => name === "fugu",
+    // assignable_to の外なので、門が無ければ承認 question に変換される
+    authority: { name: "narrow", guidance: "g", assignable_to: [], allowed_workspaces: ["*"] },
+  });
+  const parent = await registerWork(t, "parent");
+  await t.clock.advance(HOUR);
+
+  const client = await mcpClient(t.mcpBaseUrl, parent.id);
+  const res: any = await client.callTool({
+    name: "decompose",
+    arguments: {
+      reason: "handed to the built-in reviewer",
+      children: [{ title: "handed to fugu", purpose: "apply the change", completion_criteria: "change applied", assignee: "fugu" }],
+    },
+  });
+  await client.close();
+
+  expect(res.isError).toBe(true);
+  expect(res.content[0].text).toContain("agent fugu is the built-in agent, which runs reviews only");
+  const board = (await api(t.baseUrl, "GET", "/api/tasks")).json;
+  expect(board.filter((x: any) => x.type === "question")).toEqual([]);
+});

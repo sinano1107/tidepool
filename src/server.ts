@@ -57,7 +57,7 @@ import {
 import type { AttributionClient, BehaviorDraftClient, RetrospectiveCallDeps } from "./retrospective.js";
 import { type Scheduler, startScheduler, type TaskExecutionCandidates } from "./scheduler.js";
 import { Slot } from "./slot.js";
-import { getTask } from "./tasks.js";
+import { getTask, type TaskType } from "./tasks.js";
 import { acceptTeardownQuarantine, runTeardown, sessionInTeardown, type TeardownDeps, teardownStep } from "./teardown.js";
 import type { TranscriptStore } from "./transcript-store.js";
 import type { TranslationClient } from "./translate.js";
@@ -239,7 +239,7 @@ export interface ServerOptions {
    *  landing reads no dial. Throws UnknownAgentError /
    *  InvalidAgentDefinitionError for an assignee the registry no longer
    *  resolves. */
-  resolveAuthority?: (assignee: string | null) => AuthorityProfile | undefined;
+  resolveAuthority?: (assignee: string | null, taskType: TaskType) => AuthorityProfile | undefined;
   /** Assignee/workspace candidates for the registration screen (issue #12) —
    *  a provider called per request so settings-surface creations surface
    *  without a restart. Absent → no registry configured, no suggestions. */
@@ -252,6 +252,11 @@ export interface ServerOptions {
    *  quarantine Confirmation question's clearance check (api.ts). Absent →
    *  only "no more unsettled tasks depend on it" can ever clear it. */
   agentRegistered?: (name: string) => boolean;
+  /** Whether a name resolves to the built-in agent right now (no registry entry
+   *  shadows it), read fresh against the registry — the assignee gates refuse it
+   *  for anything but review, and agent quarantine clearance does not count it as
+   *  back (ADR 0228). Absent → no registry configured. */
+  resolvesToBuiltIn?: (name: string) => boolean;
   /** The Web Push-facing seam (issue #14): a question task's registration is
    *  promoted to an immediate push through here, outside quiet hours. Absent
    *  → no push is ever sent, questions simply accumulate unnotified. */
@@ -740,6 +745,7 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
     github: options.github,
     landing,
     agentRegistered: options.agentRegistered,
+    resolvesToBuiltIn: options.resolvesToBuiltIn,
     containment,
     reclaim,
     registryReachability,
@@ -800,6 +806,7 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
       draftClient: options.draftClient,
       defaultAgentName: worker.id,
       agentRegistered: options.agentRegistered,
+      resolvesToBuiltIn: options.resolvesToBuiltIn,
       // ADR 0099 決定3: 受理された確認回答が tree rule を走らせて slot を解放する
       reclaim,
       quarantineChecks: checks,
@@ -831,6 +838,7 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
       defaultAgentName: worker.id,
       auditorName,
       agentRegistered: options.agentRegistered,
+      resolvesToBuiltIn: options.resolvesToBuiltIn,
       isProtectedWorkspace: options.isProtectedWorkspace,
       reclaim,
       quarantineChecks: checks,
@@ -866,6 +874,7 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
       defaultAgentName: worker.id,
       auditorName,
       agentRegistered: options.agentRegistered,
+      resolvesToBuiltIn: options.resolvesToBuiltIn,
       isProtectedWorkspace: options.isProtectedWorkspace,
       listAgents: options.listAgents,
       agentAdmin,

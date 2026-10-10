@@ -8,7 +8,7 @@ import {
 } from "../src/agent.js";
 import { type Db, openDb } from "../src/db.js";
 import { InvalidAgentDefinitionError, UnknownAgentError } from "../src/registry.js";
-import { cancelTaskDirectly, completeTask, listBoard, pickupTask, registerTask, type TaskType } from "../src/tasks.js";
+import { cancelTaskDirectly, completeTask, editTask, listBoard, pickupTask, registerTask, type TaskType } from "../src/tasks.js";
 import { FULL_HANDOFF, HUMAN_WEBUI, quarantineQuestion, queuedForAutoMerge } from "./harness.js";
 
 describe("quarantineAgent(ADR 0012 / issue #36: workspace 版の agent 名一般化)", () => {
@@ -120,27 +120,41 @@ describe("verifyAgentRepaired", () => {
     const db = openDb(":memory:");
     try {
       register(db, type, assignee);
-      const verify = () => verifyAgentRepaired(db, name, false, defaultAgentName, auditorName);
+      const verify = () => verifyAgentRepaired(db, name, "absent", defaultAgentName, auditorName);
       if (dependent) expect(verify).toThrow(/still has unsettled tasks/);
       else expect(verify).not.toThrow();
-      expect(() => verifyAgentRepaired(db, name, true, defaultAgentName, auditorName)).not.toThrow();
+      expect(() => verifyAgentRepaired(db, name, "registry", defaultAgentName, auditorName)).not.toThrow();
     } finally {
       db.close();
     }
+  });
+
+  // ADR 0228 決定4: 組み込みは review を走らせられるので、名前が組み込みに解決される間(registry に組み込みで
+  // ないエントリが無い)は review を依存に数えない —— 数えると work の付け替えで解除が永久に通らない
+  it("名前が組み込みに解決される間は、work が残る限り解除できず、work を付け替えれば組み込み宛ての review が残っていても解除できる", () => {
+    const db = openDb(":memory:");
+    const work = register(db, "work", "fugu");
+    register(db, "review", "fugu");
+    register(db, "review", undefined);
+    const verify = () => verifyAgentRepaired(db, "fugu", "built-in", "tako", "fugu");
+
+    expect(verify).toThrow("agent fugu is not back in the registry and still has unsettled tasks assigned");
+    editTask(db, work, { assignee: "tako" }, NOW, "webui");
+    expect(verify).not.toThrow();
   });
 
   it("registry に agent 名が復活していれば、未決着タスクや着地待ちが残っていても解除を認める", () => {
     const db = openDb(":memory:");
     register(db, "work", "navigator");
     queuedForAutoMerge(db, NOW, "navigator");
-    expect(() => verifyAgentRepaired(db, "navigator", true)).not.toThrow();
+    expect(() => verifyAgentRepaired(db, "navigator", "registry")).not.toThrow();
   });
 
   it("registry に復活しておらず、その名前宛ての未決着タスクが残っていれば拒否する", () => {
     const db = openDb(":memory:");
     register(db, "work", "navigator");
 
-    expect(() => verifyAgentRepaired(db, "navigator", false)).toThrow(
+    expect(() => verifyAgentRepaired(db, "navigator", "absent")).toThrow(
       "agent navigator is not back in the registry and still has unsettled tasks assigned",
     );
   });
@@ -150,33 +164,33 @@ describe("verifyAgentRepaired", () => {
     const db = openDb(":memory:");
     queuedForAutoMerge(db, NOW, "navigator");
 
-    expect(() => verifyAgentRepaired(db, "navigator", false)).toThrow(
+    expect(() => verifyAgentRepaired(db, "navigator", "absent")).toThrow(
       "agent navigator is not back in the registry and still has 1 completed task(s) awaiting landing on its profile",
     );
   });
 
   it("registry に復活しておらず、未決着タスクも着地待ちも無ければ解除を認める", () => {
     const db = openDb(":memory:");
-    expect(() => verifyAgentRepaired(db, "navigator", false)).not.toThrow();
+    expect(() => verifyAgentRepaired(db, "navigator", "absent")).not.toThrow();
   });
 
   // ADR 0224 決定4: 実行中の worker が立てた quarantine は、その worker のタスクが決着するまで解除できない
   it("registry に復活しておらず、その名前宛ての実行中タスクが残っていれば拒否し、決着すれば認める", () => {
     const db = openDb(":memory:");
     const task = pickupTask(db, register(db, "work", "navigator"), "navigator", NOW)!;
-    expect(() => verifyAgentRepaired(db, "navigator", false)).toThrow(/still has unsettled tasks/);
+    expect(() => verifyAgentRepaired(db, "navigator", "absent")).toThrow(/still has unsettled tasks/);
 
     completeTask(db, task, FULL_HANDOFF, "navigator", NOW, "worker");
-    expect(() => verifyAgentRepaired(db, "navigator", false)).not.toThrow();
+    expect(() => verifyAgentRepaired(db, "navigator", "absent")).not.toThrow();
   });
 
   it("registry に復活しておらず、その名前宛ての blocked タスク(未決着の子を待つ)が残っていれば拒否し、決着すれば認める", () => {
     const db = openDb(":memory:");
     const parent = register(db, "work", "navigator");
     register(db, "work", "deckhand", parent.id);
-    expect(() => verifyAgentRepaired(db, "navigator", false)).toThrow(/still has unsettled tasks/);
+    expect(() => verifyAgentRepaired(db, "navigator", "absent")).toThrow(/still has unsettled tasks/);
 
     cancelTaskDirectly(db, parent, null, NOW, {}, "webui");
-    expect(() => verifyAgentRepaired(db, "navigator", false)).not.toThrow();
+    expect(() => verifyAgentRepaired(db, "navigator", "absent")).not.toThrow();
   });
 });

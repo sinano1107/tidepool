@@ -321,6 +321,8 @@ export interface DeleteAgentInput {
 export interface AgentDeletionReferences {
   /** この agent を assignee に持つ未決着タスクの件数。 */
   unsettledTaskCount: number;
+  /** そのうち work だけの件数 —— 組み込みを shadow するエントリの扉が数える(ADR 0228 決定3)。 */
+  unsettledWorkTaskCount: number;
   /** この agent の profile を読んで着地を待つ完了タスクの件数 —— agent 名の quarantine の
    *  解除が数えるのと同じ集合(ADR 0217 決定4)。 */
   awaitingLandingTaskCount: number;
@@ -353,18 +355,16 @@ export async function deleteAgent(
   // 確認では買えない拒否が先(ADR 0061 根拠5 と同じ順序)。profile の
   // `assignable_to` に名前が並んでいるだけは参照ではない(ADR 0087 決定2)
   const reasons: DeletionBlockedReason[] = [];
-  // 組み込みを shadow しているエントリだけは、ポインタの指す先でも参照されていても
-  // 消せる —— CONTEXT.md「削除」が「消せない」と数え上げた全体に対する唯一の例外で
-  // ある(ADR 0117 決定2。ADR 0117 が名指すのは ADR 0087 決定3 だが、緩むのは決定2 の
-  // 未決着タスク検査も同じで、根拠も同じ「消えても壊れない」である): 消えれば名前は
-  // 組み込みへ落ちるだけで、`assignee: fugu` も `review_by: ["fugu"]` も解決し続ける
-  // —— ただし work タスクの授権は組み込みの reviewer profile へ**狭まる**(ADR 0013)。
+  // 組み込みを shadow しているエントリだけは、Auditor ポインタの指す先でも review に
+  // 参照されていても消せる —— CONTEXT.md「削除」が「消せない」と数え上げた全体に対する
+  // 唯一の例外である(ADR 0117 決定2): 消えれば名前は組み込みへ落ち、review は組み込みが
+  // 走らせ続ける。work は組み込みへ落ちられない(ADR 0228 決定1)ので、work の未決着
+  // タスクと着地を待つ完了タスクは普通の agent と同じく数える(ADR 0228 決定3)。
   // `board_default` は緩めない —— 既定 agent は registry に残る(ADR 0117 決定3)。
   const shadowsBuiltIn = isBuiltInAgentName(input.name);
-  if (deps.unsettledTaskCount > 0 && !shadowsBuiltIn) {
-    reasons.push({ code: "unsettled_tasks", count: deps.unsettledTaskCount });
-  }
-  if (deps.awaitingLandingTaskCount > 0 && !shadowsBuiltIn) {
+  const unsettled = shadowsBuiltIn ? deps.unsettledWorkTaskCount : deps.unsettledTaskCount;
+  if (unsettled > 0) reasons.push({ code: "unsettled_tasks", count: unsettled });
+  if (deps.awaitingLandingTaskCount > 0) {
     reasons.push({ code: "tasks_awaiting_landing", count: deps.awaitingLandingTaskCount });
   }
   if (deps.defaultAgentName === input.name) reasons.push({ code: "board_default" });

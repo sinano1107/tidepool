@@ -231,18 +231,23 @@ export function packItems<T>(
     const text = Buffer.from(valueAt(objectOf(ofEnvelope), cut[reading]!.path));
     const pageUpTo = (end: number) =>
       page(ofEnvelope, cut, reading, text.subarray(offset, end).toString(), end < text.length ? { reading, offset: end } : reading + 1 < cut.length ? { reading: reading + 1, offset: 0 } : undefined);
-    // 切る欄を全部空にしても1文字も入らないのは、文字列以外の中身だけで予算を超えるとき(追記 #1393 の5)—— 欄の残りを丸ごと
-    // 返して床に任せ、続きが同じ位置を指し続けないようにする
+    // 1文字も入らないのは、1文字と続きの印を載せると予算を超える object(追記 #1393 の5)。切り始めでは切れないと判定する
+    // (cutToFit)ので、ここに来るのは切り始めの後に切らない欄が伸びた続きか、読み手が作った続きか、欄を読み終える最後の切れの
+    // 続き(次の item の key を持つ)が切り始めに測った印より長いとき(issue #1755)—— 欄の残りを丸ごと返して床に任せ、続きが
+    // 同じ位置を指し続けないようにする
     const end = fitEnd(text, offset, (to) => fits(pageUpTo(to)));
     return pageUpTo(end > offset ? end : text.length);
   };
-  /** 予算を超える object の最初の切れ: 収まるまで長い順に文字列の欄を切る(ADR 0195 追記 #1393 の1)。収まるかは、切る欄を
-   *  全部空にし、続きの位置を最も長く書いた切れで測る —— 後ろの切れほど続きの offset の桁が伸びる。文字列の欄が無いか、全部
-   *  切っても収まらなければ切れず、undefined を返す。短い欄ばかりの object は、欄を切るたびに続きの印が欄より大きく伸びるので、
-   *  全部切っても収まらない。 */
+  /** 予算を超える object の最初の切れ: 収まるまで長い順に文字列の欄を切る(ADR 0195 追記 #1393 の1)。収まるかは、断片に
+   *  escape 後に最も広い1文字(制御文字は CallToolResult の中で7バイト)だけを載せてほかの切る欄を空にし、続きの位置を最も長く
+   *  書いた切れで測る —— 切れは1文字以上を載せないと進めず、後ろの切れほど続きの offset の桁が伸びる。こうすると、切ると
+   *  決めた object の、続きが切りの印である切れは予算に収まる(ADR 0195 決定5 の不変条件、issue #1700)。欄を読み終える最後の
+   *  切れの続きはこの測りに入らない(issue #1755)。文字列の欄が無いか、全部切っても
+   *  1文字と続きの印の分で収まらなければ切れず、undefined を返す。短い欄ばかりの object は、欄を切るたびに続きの印が欄より
+   *  大きく伸びるので、全部切っても収まらない。 */
   const cutToFit = (ofEnvelope: boolean) => {
     const fields = stringFields(objectOf(ofEnvelope));
-    const fitsCutting = (count: number) => fits(page(ofEnvelope, fields.slice(0, count), 0, "", { reading: count - 1, offset: fields[0]!.bytes }));
+    const fitsCutting = (count: number) => fits(page(ofEnvelope, fields.slice(0, count), 0, "\u0001", { reading: count - 1, offset: fields[0]!.bytes }));
     if (fields.length === 0 || !fitsCutting(fields.length)) return undefined;
     let count = 1;
     while (count < fields.length && !fitsCutting(count)) count++;

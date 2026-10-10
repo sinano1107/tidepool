@@ -60,6 +60,7 @@ import {
   registerTask,
   settleQuestionAsObserved,
   type Task,
+  type TaskType,
   taskIdForPr,
 } from "./tasks.js";
 import type { FailedTeardownCheck } from "./teardown.js";
@@ -82,6 +83,8 @@ import {
 export interface RegisterThroughHumanDoorDeps {
   db: Db;
   agentRegistered?: (name: string) => boolean;
+  /** その名前がいま組み込み agent に解決されるか(shadow するエントリが無い)。Absent → registry の無い盤面。 */
+  resolvesToBuiltIn?: (name: string) => boolean;
   draftClient?: DraftClient;
   github?: GitHubClient;
   workspace?: WorkspaceConfig;
@@ -125,6 +128,7 @@ export type HumanVerbResult<T> =
 export interface DecomposeThroughHumanDoorDeps {
   db: Db;
   agentRegistered?: (name: string) => boolean;
+  resolvesToBuiltIn?: (name: string) => boolean;
   workspace?: WorkspaceConfig;
   resolveWorkspace?: (taskWorkspace: string | null) => WorkspaceConfig;
   isProtectedWorkspace?: (name: string) => boolean;
@@ -145,7 +149,7 @@ export function decomposeThroughHumanDoor(
       if (child.workspace !== undefined) {
         assertWorkspaceKnown(child.workspace, deps.resolveWorkspace, deps.workspace);
       }
-      assertAssigneeKnown(deps.agentRegistered, child.assignee);
+      assertAssigneeCanTake(deps, child.assignee, "work");
       assertReviewersKnown(deps.agentRegistered, child.review_by);
     }
     if (whyBlank(input.reason)) throw new DomainError("a decomposition requires a reason");
@@ -213,17 +217,19 @@ export async function addIssueCommentThroughHumanDoor(
   }
 }
 
-function assertAssigneeKnown(
-  agentRegistered: ((name: string) => boolean) | undefined,
+/** 人間の登録・Edit と worker の decompose が共有する assignee の門。組み込みは review 専用で、
+ *  判定は名前ではなく解決の結果を見る —— shadow している間は通る(ADR 0228 決定1)。 */
+export function assertAssigneeCanTake(
+  deps: Pick<RegisterThroughHumanDoorDeps, "agentRegistered" | "resolvesToBuiltIn">,
   assignee: string | undefined,
+  type: TaskType,
 ): void {
-  if (
-    assignee !== undefined &&
-    assignee !== HUMAN_WORKER_ID &&
-    agentRegistered &&
-    !agentRegistered(assignee)
-  ) {
+  if (assignee === undefined || assignee === HUMAN_WORKER_ID) return;
+  if (deps.agentRegistered && !deps.agentRegistered(assignee)) {
     throw new DomainError(`unknown agent: ${assignee}`);
+  }
+  if (type !== "review" && deps.resolvesToBuiltIn?.(assignee)) {
+    throw new DomainError(`agent ${assignee} is the built-in agent, which runs reviews only`);
   }
 }
 
@@ -364,7 +370,7 @@ export async function registerThroughHumanDoor(
     if (input.workspace !== undefined) {
       assertWorkspaceKnown(input.workspace, deps.resolveWorkspace, deps.workspace);
     }
-    assertAssigneeKnown(deps.agentRegistered, input.assignee);
+    assertAssigneeCanTake(deps, input.assignee, input.type);
     assertReviewersKnown(deps.agentRegistered, input.review_by);
     if (input.github_issue_number !== undefined && input.workspace) {
       assertNoUnsettledIssueRef(deps.db, input.workspace, input.github_issue_number);
@@ -464,6 +470,8 @@ export interface QuarantineCheckDeps {
   /** Whether an agent name is currently registered — one half of the agent
    *  check; absent → only "no unsettled tasks remain" can clear it. */
   agentRegistered?: (name: string) => boolean;
+  /** A name resolving to the built-in is not "back in the registry" (ADR 0228 決定4). */
+  resolvesToBuiltIn?: (name: string) => boolean;
   /** 封じ込め能力の合成後の検査(ADR 0033 / ADR 0036)。Absent → containment の
    *  検査が組めず、その確認への回答は拒まれる。 */
   containment?: ContainmentCheck;
@@ -543,7 +551,11 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
         verifyAgentRepaired(
           deps.db,
           quarantineAgentName,
-          deps.agentRegistered?.(quarantineAgentName) ?? false,
+          deps.resolvesToBuiltIn?.(quarantineAgentName)
+            ? "built-in"
+            : deps.agentRegistered?.(quarantineAgentName)
+              ? "registry"
+              : "absent",
           deps.defaultAgentName,
           deps.auditorName,
         );
@@ -678,6 +690,8 @@ function assertLandingAllowed(db: Db, landingTaskId: string): void {
 function promotionRetryError(verdict: LandingVerdict): string | undefined {
   switch (verdict.kind) {
     case "landed":
+    // 運ぶものが無いのは人間に判断を求めない事実で、retry を選んだ回答はそのまま受理する(ADR 0073 / issue #1725)
+    case "nothing_to_land":
       return undefined;
     case "failed":
       return verdict.error;
@@ -685,8 +699,6 @@ function promotionRetryError(verdict: LandingVerdict): string | undefined {
       return verdict.reason === "attached_children"
         ? `review still running: ${verdict.count} attached child task(s) unsettled`
         : `cannot land yet: ${verdict.count} objection(s) raised in this triage await commit`;
-    case "nothing_to_land":
-      return `task branch has nothing to land on "${verdict.base}"`;
     case "not_applicable":
       return verdict.reason === "not_work"
         ? "only work tasks can be promoted"
@@ -707,6 +719,7 @@ export interface CancelThroughHumanDoorDeps {
 export interface EditThroughHumanDoorDeps {
   db: Db;
   agentRegistered?: (name: string) => boolean;
+  resolvesToBuiltIn?: (name: string) => boolean;
   workspace?: WorkspaceConfig;
   resolveWorkspace?: (taskWorkspace: string | null) => WorkspaceConfig;
   defaultAgentName?: string;
@@ -761,7 +774,7 @@ export function editThroughHumanDoor(
   const task = getTask(deps.db, taskId);
   if (!task) return { ok: false, failure: { kind: "not_found", error: "task not found" } };
   try {
-    if (input.assignee) assertAssigneeKnown(deps.agentRegistered, input.assignee);
+    if (input.assignee) assertAssigneeCanTake(deps, input.assignee, task.type);
     assertReviewersKnown(deps.agentRegistered, input.review_by);
     if (input.workspace) {
       assertWorkspaceKnown(input.workspace, deps.resolveWorkspace, deps.workspace);
