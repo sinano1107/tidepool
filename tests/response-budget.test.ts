@@ -227,7 +227,7 @@ it("床の行は (surface, verb) ごとに1つで、回数・最後の時刻・�
 });
 
 /** 最初の読みから next が尽きるまで追った応答の列。読み口と同じく、封筒は続きでも渡す。 */
-function followNext(items: readonly { id: number }[], envelope?: Record<string, unknown>) {
+function followNext(items: readonly { id: string | number }[], envelope?: Record<string, unknown>) {
   const responses: any[] = [packItems(first, "events", items, envelope)];
   while (responses.at(-1).next) responses.push(packItems(readNext("get_task", responses.at(-1).next), "events", items, envelope));
   return responses;
@@ -505,8 +505,8 @@ it("続きに載る item の key が長いとき、封筒なしの item でも�
   const key = "k".repeat(300);
   const line = "\u0001".repeat(12) + "x".repeat(84) + "\u0001".repeat(8) + "x".repeat(200);
   const shapes = [
-    { lastCuttable: 65, read: (nums: number[]) => followNext([{ id: "a", nums, line }, { id: key }] as never), cutOf: (piece: any) => piece.events[0] },
-    { lastCuttable: 88, read: (nums: number[]) => followNext([{ id: key }] as never, { nums, line }), cutOf: (piece: any) => piece },
+    { lastCuttable: 65, read: (nums: number[]) => followNext([{ id: "a", nums, line }, { id: key }] as { id: string }[]), cutOf: (piece: any) => piece.events[0] },
+    { lastCuttable: 88, read: (nums: number[]) => followNext([{ id: key }], { nums, line }), cutOf: (piece: any) => piece },
   ];
   for (const { lastCuttable, read, cutOf } of shapes) {
     // 切れる最後の大きさ `lastCuttable` から、最後の切れに1文字と key を持つ続きを載せると超える縁の先までを動かす(1文字を

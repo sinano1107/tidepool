@@ -248,7 +248,8 @@ export function packItems<T>(
     const fields = stringFields(objectOf(ofEnvelope));
     const fitsCutting = (count: number) => {
       const cut = fields.slice(0, count);
-      return fits(page(ofEnvelope, cut, 0, "\u0001", { reading: count - 1, offset: fields[0]!.bytes })) && fits(page(ofEnvelope, cut, count - 1, "\u0001"));
+      const widest = "\u0001";
+      return fits(page(ofEnvelope, cut, 0, widest, { reading: count - 1, offset: fields[0]!.bytes })) && fits(page(ofEnvelope, cut, count - 1, widest));
     };
     if (fields.length === 0 || !fitsCutting(fields.length)) return undefined;
     let count = 1;
