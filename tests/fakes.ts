@@ -620,6 +620,16 @@ export class FakeGitHubClient implements GitHubClient {
   }
 }
 
+/** CI を読み終えた瞬間に change を走らせる — 「CI を読んでいる間に変わる」を作る。 */
+export function afterCiRead(github: FakeGitHubClient, change: () => void): void {
+  const readPullRequest = github.readPullRequest.bind(github);
+  github.readPullRequest = async (ref) => {
+    const pr = await readPullRequest(ref);
+    change();
+    return pr;
+  };
+}
+
 /** Scripted stand-in at the PushClient seam (issue #14): records every send
  *  in call order, no real network — the real WebPushClient talks to an
  *  actual push service, an external API a test never touches directly. */

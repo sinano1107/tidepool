@@ -26,7 +26,7 @@ import {
 import { commitTriage, startTriage } from "../src/triage.js";
 import { BOARD_WORKER_ID, HUMAN_WORKER_ID } from "../src/worker-id.js";
 import { quarantineWorkspace, UnknownWorkspaceError } from "../src/workspace.js";
-import { FakeClock, FakeDraftClient, FakeGitHubClient, unusedLanding } from "./fakes.js";
+import { afterCiRead, FakeClock, FakeDraftClient, FakeGitHubClient, unusedLanding } from "./fakes.js";
 import {
   decomposeTaskViaWorker,
   HUMAN_WEBUI,
@@ -714,18 +714,21 @@ it("猶予の5分を過ぎても check 未報告の PR への merge 回答は、
   expect(github.merged).toEqual([{ path: "/workspaces/product", number: 42 }]);
 });
 
+it("merge 回答は CI を読んだ head に固定して merge する", async () => {
+  const github = new FakeGitHubClient();
+  github.scriptHead(42, "ci-read-head");
+
+  await expect(answerMerge(github, 0)).resolves.toMatchObject({ status: "done" });
+  expect(github.mergedHeads).toEqual(["ci-read-head"]);
+});
+
 // ADR 0231 決定1: 回答を受理してから merge するまでに着いた push は、検査なしに入らない
 it("CI を読んだ後に head が動いた PR への merge 回答は失敗し、merge されず question は開いたまま残る", async () => {
   const github = new FakeGitHubClient();
   github.scriptHead(42, "ci-read-head");
-  const readPullRequest = github.readPullRequest.bind(github);
-  github.readPullRequest = async (ref) => {
-    const pr = await readPullRequest(ref);
-    github.scriptHead(42, "pushed-after-ci-read");
-    return pr;
-  };
+  afterCiRead(github, () => github.scriptHead(42, "pushed-after-ci-read"));
 
-  await expect(answerMerge(github, 0)).rejects.toThrow();
+  await expect(answerMerge(github, 0)).rejects.toThrow("Head branch was modified");
   expect(github.merged).toEqual([]);
   expect(onlyQuestion(db).status).toBe("todo");
 });

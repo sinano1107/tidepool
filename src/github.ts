@@ -110,7 +110,8 @@ export class IssueGoneError extends Error {
  *  `mergePullRequest` (issue #11) back the merge dial: the actual merge is
  *  never performed until a live CI check reports "success" immediately
  *  beforehand — or, on a human's merge answer only, still reports
- *  "unreported" past ADR 0227's grace. */
+ *  "unreported" past ADR 0227's grace — and only on the head that read was
+ *  taken on (ADR 0231 決定1). */
 export interface GitHubClient {
   createPullRequest(input: CreatePrInput): Promise<PrResult>;
   /** タスクブランチを `origin` へ push する —— 盤面がタスクブランチをリモートへ書く唯一の操作。
