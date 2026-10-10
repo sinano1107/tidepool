@@ -997,7 +997,7 @@ export class CodexWorker implements WorkerAdapter {
     const assignee = resolveTaskAgent(task, this.options.agent, this.options.auditorName ?? DEFAULT_AUDITOR_NAME);
     const agent = resolveAgentOrQuarantine(
       this.options.db,
-      (name) => resolveExecutionAgent(registry, this.options.agent, name, tierNames(this.options.db)),
+      (name) => resolveExecutionAgent(registry, this.options.agent, name, tierNames(this.options.db), task.type),
       assignee,
       this.options.clock.now(),
     );

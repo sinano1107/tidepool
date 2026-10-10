@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
-import { resolveExecutionAgent } from "../src/agent.js";
+import { agentNeedsHuman, resolveAgentOrQuarantine, resolveExecutionAgent } from "../src/agent.js";
+import { openDb } from "../src/db.js";
 import {
   agentBodyAtCommit,
   assertValidAgentName,
@@ -61,11 +62,40 @@ it("組み込みの fugu は authority/auditor.yaml の無い registry でも re
   const dir = await makeRegistry();
   const registry = loadRegistry(dir, "purely-local");
 
-  const resolved = resolveExecutionAgent(registry, "deckhand", "fugu", seedTierNames);
+  const resolved = resolveExecutionAgent(registry, "deckhand", "fugu", seedTierNames, "review");
 
   expect(resolved.name).toBe("fugu");
   expect(resolved.profile).toEqual(REVIEWER_AUTHORITY_PROFILE);
   expect(registry.authority.reviewer).toBeUndefined();
+});
+
+it("組み込みに解決される work の実行解決は失敗し、agent 名の quarantine に落ちる(ADR 0228 決定4)", async () => {
+  const registry = loadRegistry(await makeRegistry(), "purely-local");
+  const db = openDb(":memory:");
+
+  const resolved = resolveAgentOrQuarantine(
+    db,
+    (assignee) => resolveExecutionAgent(registry, "deckhand", assignee, seedTierNames, "work"),
+    "fugu",
+    new Date(0),
+  );
+
+  expect(resolved).toBeUndefined();
+  expect(agentNeedsHuman(db, "fugu")).toBe(true);
+});
+
+it("shadow している間は、その名前の work は registry のエントリで解決する(ADR 0228 決定2)", async () => {
+  const registry = loadRegistry(
+    await makeRegistry({
+      "agents/fugu.md": '---\nversion: "2"\nauthority: standard\ndescription: My own auditor.\nprovider: anthropic\nskills: []\n---\nYou are my fugu.\n',
+    }),
+    "purely-local",
+  );
+
+  const resolved = resolveExecutionAgent(registry, "deckhand", "fugu", seedTierNames, "work");
+
+  expect(resolved.definition.builtin).toBeUndefined();
+  expect(resolved.profile.name).toBe("standard");
 });
 
 it("組み込みの名前でも、その commit にファイルが無ければ当時版は undefined —— 自己 RCA は証拠なしに degrade する(ADR 0020 / ADR 0117 帰結)", async () => {

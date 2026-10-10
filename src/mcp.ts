@@ -11,7 +11,7 @@ import { EFFORT_LEVELS } from "./effort.js";
 import { PRIORITY_FIELD_DESCRIPTION, tierFieldDescriptions } from "./execution-setting.js";
 import type { GitHubClient } from "./github.js";
 import type { GitHubAuth } from "./github-auth.js";
-import { assertMemoryReferencesKnown, assertReviewersKnown, assertWorkspaceKnown } from "./human-verbs.js";
+import { assertAssigneeCanTake, assertMemoryReferencesKnown, assertReviewersKnown, assertWorkspaceKnown } from "./human-verbs.js";
 import type { Landing } from "./landing.js";
 import {
   browseMemory,
@@ -70,11 +70,11 @@ import {
   redecompose,
   resolveTaskAgent,
   type Task,
+  type TaskType,
   taskHistoryRows,
   type Unstored,
 } from "./tasks.js";
 import { markTeardown, runTeardown, type TeardownDeps, teardownStep } from "./teardown.js";
-import { HUMAN_WORKER_ID } from "./worker-id.js";
 import {
   buildWorkspaceResolver,
   completionTreeGateApplies,
@@ -148,7 +148,7 @@ export interface McpDeps {
    *  the board's default agent) — the delegation-aware successor to the
    *  single fixed `authority` above, which every task shared regardless of
    *  who it was actually assigned to. Absent → falls back to `authority`. */
-  resolveAuthority?: (assignee: string | null) => AuthorityProfile | undefined;
+  resolveAuthority?: (assignee: string | null, taskType: TaskType) => AuthorityProfile | undefined;
   /** The board's default agent name (ADR 0012 / issue #36): every MCP call is
    *  attributed to a real agent session (never human — that's the separate
    *  /answer route), so a task's unspecified (null) `assignee` resolves here,
@@ -167,6 +167,10 @@ export interface McpDeps {
    *  configured, so any assignee name is accepted, same as the workspace
    *  check's fallback. */
   agentRegistered?: (name: string) => boolean;
+  /** Whether a name resolves to the built-in agent right now (ADR 0228): a
+   *  decompose child assigned to it is rejected outright like an unknown name.
+   *  Absent → no registry configured. */
+  resolvesToBuiltIn?: (name: string) => boolean;
   /** Whether an explicitly named workspace is protected (CONTEXT.md's
    *  protected workspace / ADR 0013), read fresh against the registry — a
    *  decompose child naming a protected workspace converts to an approval
@@ -213,7 +217,7 @@ function attributedWorkerId(deps: McpDeps, task: Task): string {
 function attributedAuthorityOrQuarantine(deps: McpDeps, task: Task): AuthorityProfile | undefined {
   if (task.type === "review") return REVIEWER_AUTHORITY_PROFILE;
   try {
-    return deps.resolveAuthority?.(task.assignee) ?? deps.authority;
+    return deps.resolveAuthority?.(task.assignee, task.type) ?? deps.authority;
   } catch (err) {
     if (!(err instanceof UnknownAgentError) && !(err instanceof InvalidAgentDefinitionError)) {
       throw err;
@@ -386,19 +390,13 @@ function assertChildrenKnown(deps: McpDeps, children: z.infer<ReturnType<typeof 
   }
   // the agent-name generalization of the check above (ADR 0012 / issue
   // #36): an explicitly named child assignee must exist in the
-  // registry — the registering agent's own mistake, not an authority
+  // registry, and a child is work so it never falls to the built-in
+  // (ADR 0228) — the registering agent's own mistake, not an authority
   // question, so it's rejected outright before the assignable_to check
-  // even runs. `human` is valid only as a work assignee, never a reviewer.
+  // even runs: approving it would leave nothing to run it. `human` is
+  // valid only as a work assignee, never a reviewer.
   for (const child of children) {
-    if (deps.agentRegistered) {
-      if (
-        child.assignee !== undefined &&
-        child.assignee !== HUMAN_WORKER_ID &&
-        !deps.agentRegistered(child.assignee)
-      ) {
-        throw new DomainError(`unknown agent: ${child.assignee}`);
-      }
-    }
+    assertAssigneeCanTake(deps, child.assignee, "work");
     assertReviewersKnown(deps.agentRegistered, child.review_by);
   }
 }

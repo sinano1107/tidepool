@@ -1,5 +1,6 @@
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
+import { resolveExecutionAgent } from "../src/agent.js";
 import { type Db, openDb } from "../src/db.js";
 import { DomainError } from "../src/domain-error.js";
 import { appendEvent, latestEventOfTask, listEvents } from "../src/events.js";
@@ -12,7 +13,7 @@ import {
   registerLocalMergeQuestion,
   registerPrPromotionFailureQuestion,
 } from "../src/landing.js";
-import { type AuthorityProfile, type MergeDial, REVIEWER_AUTHORITY_PROFILE, UnknownAgentError } from "../src/registry.js";
+import { type AuthorityProfile, loadRegistry, type MergeDial, UnknownAgentError } from "../src/registry.js";
 import {
   answerQuestion,
   completeTask,
@@ -22,6 +23,7 @@ import {
   recordPrOpened,
   registerTask,
   type Task,
+  type TaskType,
 } from "../src/tasks.js";
 import { raiseObjection } from "../src/triage.js";
 import { BOARD_WORKER_ID } from "../src/worker-id.js";
@@ -34,7 +36,7 @@ import {
   UnknownWorkspaceError,
   type WorkspaceConfig,
 } from "../src/workspace.js";
-import { FakeClock, FakeGitHubClient, UNRESOLVABLE_AGENT, unusedLanding } from "./fakes.js";
+import { FakeClock, FakeGitHubClient, seedTierNames, UNRESOLVABLE_AGENT, unusedLanding } from "./fakes.js";
 import {
   commitWork,
   completedWork,
@@ -47,6 +49,7 @@ import {
   quarantineQuestion,
   squashTaskIntoOrigin,
 } from "./harness.js";
+import { makeRegistry } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
@@ -1933,27 +1936,40 @@ it("CI 赤を読んでいる間に profile が解決できなくなった PR は
   expect(mergeQuestions(db).map((q) => q.pr)).toEqual([1]);
 });
 
-it("解決できてダイヤルを持たない組み込みの reviewer profile は、quarantine に落ちない", async () => {
-  const workspace = await makeWorkspace("landing-reviewer-profile");
+// ADR 0228 決定4: 扉の外で shadow が消え、work が組み込みに落ちたら解決の失敗と同じ quarantine に乗る ——
+// 組み込みの reviewer profile(ダイヤル無し)で `outside_board` に黙って外れることはない。
+it("shadow が消えて組み込みに落ちた work のキューの PR は、キューから外れず quarantine でスキップされ、直った後の tick が merge する", async () => {
+  const workspace = await makeWorkspace("landing-built-in-work");
   const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
-  const work = queueAutoMerge(db, clock, 1);
-
-  await createLanding({
+  const work = registerTask(
+    db,
+    { type: "work", title: "ship", purpose: "p", completion_criteria: "c", assignee: "fugu" },
+    clock.now(),
+    ...HUMAN_WEBUI,
+  );
+  recordPrOpenedViaWorker(db, work, 1, "fugu", clock.now(), { authority: { merge: "auto_if_ci_green" } });
+  const registry = loadRegistry(await makeRegistry(), "purely-local");
+  let resolveAuthority = (assignee: string | null, taskType: TaskType): AuthorityProfile =>
+    resolveExecutionAgent(registry, "tako", assignee, seedTierNames, taskType).profile;
+  const landing = createLanding({
     defaultAgentName: "tako",
     db,
     clock,
     workspace,
     github,
-    resolveAuthority: () => REVIEWER_AUTHORITY_PROFILE,
-  }).tick("auto_merge", clock.now());
+    resolveAuthority: (assignee, taskType) => resolveAuthority(assignee, taskType),
+  });
 
-  expect(agentQuarantines(db)).toEqual([]);
-  expect(
-    listEvents(db, work.id)
-      .filter((e) => e.kind === "auto_merge_withdrawn")
-      .map((e) => e.payload),
-  ).toEqual([{ kind: "auto_merge_withdrawn", pr_number: 1, merge: null }]);
+  await landing.tick("auto_merge", clock.now());
+
+  expect(github.merged).toEqual([]);
+  expect(listEvents(db, work.id).map((e) => e.kind)).not.toContain("auto_merge_withdrawn");
+  expect(agentQuarantines(db).map((q) => q.question_quarantine_value)).toEqual(["fugu"]);
+
+  resolveAuthority = () => profile("auto_if_ci_green");
+  await landing.tick("auto_merge", clock.now());
+  expect(github.merged).toEqual([{ path: workspace.path, number: 1 }]);
 });
 
 // ADR 0103 決定1・4: 帯域外の判定は盤面自身の記録(ref snapshot)との突き合わせで、

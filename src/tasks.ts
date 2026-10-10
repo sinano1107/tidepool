@@ -598,6 +598,18 @@ export function countUnsettledTasksReferencing(
   return row.n;
 }
 
+/** 組み込みを shadow するエントリの削除の扉が数える参照(ADR 0228 決定3): この名前を
+ *  `assignee` に持つ未決着の work。review は組み込みへ落ちても壊れないので数えない。 */
+export function countUnsettledWorkAssignedTo(db: Db, name: string): number {
+  const row = db
+    .prepare(
+      `SELECT COUNT(*) AS n FROM tasks
+       WHERE assignee = ? AND type = 'work' AND status NOT IN ('done', 'cancelled')`,
+    )
+    .get(name) as { n: number };
+  return row.n;
+}
+
 /** Derives an issue-backed task's three content fields from its live GitHub
  *  issue (issue #49, ADR 0016): title and purpose come straight from the
  *  issue's own title and body, completion_criteria is a fixed template
@@ -1928,8 +1940,9 @@ export function recordPrOpened(
  *  (ADR 0079 決定1): 盤面の merge question / 無人 merge キュー / 盤面の外(`external` の
  *  PR 面)。question 面へ倒れる理由(保護・ダイヤル・risk)は3つあるが面は1つで、違うのは
  *  question 本文に書く理由だけなので `reason` で返す。保護はダイヤルに依らない資源側の
- *  不変条件なので最初に読む。`external` と ダイヤル無し(undefined — 手組みの reviewer
- *  profile)は宣言された不作為(ADR 0079 決定2)で、盤面の外。 */
+ *  不変条件なので最初に読む。`external` は宣言された不作為(ADR 0079 決定2)で、盤面の外。
+ *  ダイヤル無し(undefined)に届くのは registry の無い盤面(profile を解決しない)だけで、
+ *  同じく盤面の外 —— 組み込みの reviewer profile は work を走らせないので届かない(ADR 0228)。 */
 export function landingSurface(
   isProtected: boolean | undefined,
   merge: MergeDial | undefined,

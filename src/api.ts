@@ -112,6 +112,7 @@ import { clearSpendDown, getSpendDown, isKnownSpendDownTarget, setSpendDown } fr
 import {
   type BoardTask,
   countUnsettledTasksReferencing,
+  countUnsettledWorkAssignedTo,
   getTask,
   HANDOFF_FIELDS,
   listBoard,
@@ -576,6 +577,8 @@ export interface ApiRouterDeps {
    *  registry by the caller, main.ts) — the registration doors' assignee /
    *  reviewer check. Absent → no registry configured at all. */
   agentRegistered?: (name: string) => boolean;
+  /** その名前がいま組み込み agent に解決されるか(ADR 0228)。Absent → registry の無い盤面。 */
+  resolvesToBuiltIn?: (name: string) => boolean;
   /** ADR 0099 決定3: 受理された Containment quarantine の確認回答が slot を解放する門。 */
   reclaim?: Pick<PendingReclaim, "acceptReclaimed">;
   /** ADR 0137 決定5: 解除の門の map。合成 root が組む。 */
@@ -678,6 +681,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     draftClient,
     defaultAgentName,
     agentRegistered,
+    resolvesToBuiltIn,
     reclaim,
     quarantineChecks,
     vapidPublicKey,
@@ -719,6 +723,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
         github,
         draftClient,
         agentRegistered,
+        resolvesToBuiltIn,
         isProtectedWorkspace,
         pollNow,
         defaultAgentName,
@@ -1070,6 +1075,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
         { name: req.params.name, ...parsed.data },
         {
           unsettledTaskCount: countUnsettledTasksReferencing(db, "assignee", req.params.name),
+          unsettledWorkTaskCount: countUnsettledWorkAssignedTo(db, req.params.name),
           awaitingLandingTaskCount: countTasksAwaitingLanding(
             db,
             req.params.name,
@@ -1331,7 +1337,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       return;
     }
     const result = editThroughHumanDoor(
-      { ...memoryRefDeps, defaultAgentName, auditorName },
+      { ...memoryRefDeps, resolvesToBuiltIn, defaultAgentName, auditorName },
       req.params.id,
       parsed.data,
       () => clock.now(),

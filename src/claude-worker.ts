@@ -1663,7 +1663,8 @@ export class ClaudeCodeWorker implements WorkerAdapter {
    *  ADR 0012 / issue #36) — drift there quarantines instead of throwing. */
   private validateDefaults(registry: Registry): void {
     resolveExecutionWorkspace(registry, this.options.workspace, null, this.workspacesDir);
-    resolveExecutionAgent(registry, this.options.agent, null, tierNames(this.options.db));
+    // 既定 agent は work を走らせる —— 組み込みに解決されるなら起動しない(ADR 0228 決定1)
+    resolveExecutionAgent(registry, this.options.agent, null, tierNames(this.options.db), "work");
   }
 
   start(task: Task, setting: ExecutionSetting, query?: InjectionQuery): void {
@@ -1773,7 +1774,8 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     );
     const agent = resolveAgentOrQuarantine(
       this.options.db,
-      (taskAssignee) => resolveExecutionAgent(registry, this.options.agent, taskAssignee, tierNames(this.options.db)),
+      (taskAssignee) =>
+        resolveExecutionAgent(registry, this.options.agent, taskAssignee, tierNames(this.options.db), task.type),
       taskAgent,
       this.options.clock.now(),
     );

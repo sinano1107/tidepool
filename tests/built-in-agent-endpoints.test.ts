@@ -2,7 +2,7 @@ import { afterEach, expect, it } from "vitest";
 import { createAgent, deleteAgent, listAgentViews, updateAgent } from "../src/agent-create.js";
 import { loadRegistry, ownEntry, type RegistrySource } from "../src/registry.js";
 import { seedTierNames } from "./fakes.js";
-import { api, bootTidepool, registerWork, type Tidepool } from "./harness.js";
+import { api, bootTidepool, type Tidepool } from "./harness.js";
 import { makeRegistry } from "./registry-fixture.js";
 
 let t: Tidepool;
@@ -38,6 +38,7 @@ async function bootWithRegistry(files: Record<string, string> = {}): Promise<Tid
       authorityProfiles: () => Object.keys(load().authority),
     },
     agentRegistered: (name) => ownEntry(load().agents, name) !== undefined,
+    resolvesToBuiltIn: (name) => ownEntry(load().agents, name)?.builtin === true,
   });
 }
 
@@ -83,9 +84,8 @@ it("fugu の作成は成功し、応答が組み込みを shadow することを
   expect(agentRow(listed.json, "fugu")).toMatchObject({ shadowsBuiltIn: true });
 });
 
-it("shadow している fugu は、Auditor ポインタが指していても未決着タスクが参照していても削除でき、一覧は built-in に戻る(ADR 0087 決定3 の唯一の例外)", async () => {
+it("shadow している fugu は、Auditor ポインタが指していても review が参照していても削除でき、一覧は built-in に戻る(ADR 0087 決定3 の唯一の例外 / ADR 0228 決定3)", async () => {
   t = await bootWithRegistry({ "agents/fugu.md": MY_FUGU_MD });
-  await registerWork(t, "assigned to fugu", undefined, "fugu");
   await api(t.baseUrl, "POST", "/api/tasks", {
     type: "work",
     title: "reviewed by fugu",
@@ -145,4 +145,19 @@ it("review_by の fugu は組み込み・shadow のどちらの状態でも登�
   t = await bootWithRegistry({ "agents/fugu.md": MY_FUGU_MD });
 
   expect((await api(t.baseUrl, "POST", "/api/tasks", body)).status).toBe(201);
+});
+
+// shadow している間に通ることはドメイン層(tests/human-verbs.test.ts)が持つ。ここは拒否の写像だけ(ADR 0107 決定3)
+it("組み込みに解決される assignee の work の登録は 400 に写る(ADR 0228 決定1)", async () => {
+  t = await bootWithRegistry();
+
+  const refused = await api(t.baseUrl, "POST", "/api/tasks", {
+    type: "work",
+    title: "work for fugu",
+    purpose: "p",
+    completion_criteria: "c",
+    assignee: "fugu",
+  });
+  expect(refused.status).toBe(400);
+  expect(refused.json.error).toBe("agent fugu is the built-in agent, which runs reviews only");
 });
