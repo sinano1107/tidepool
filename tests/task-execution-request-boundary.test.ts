@@ -8,7 +8,7 @@ import { startServer, type TidepoolServer } from "../src/server.js";
 import { implicitTaskExecutionCandidates } from "../src/server-options.js";
 import { TranscriptStore } from "../src/transcript-store.js";
 import type { WorkerAdapter } from "../src/worker.js";
-import { FakeClock, FakeContainerRuntime, healthyUsageText, pinnedCliVersions } from "./fakes.js";
+import { FakeClock, FakeContainerRuntime, pinnedCliVersions, withHealthyUsage } from "./fakes.js";
 import {
   api,
   bootTidepool,
@@ -245,12 +245,7 @@ You are Tako.
         containers,
         boardCall,
       });
-      return {
-        id: worker.id,
-        start: (task, setting) => worker.start(task, setting),
-        gracefulStop: (taskId) => worker.gracefulStop(taskId),
-        checkUsage: async () => healthyUsageText(clock.now()),
-      };
+      return withHealthyUsage(worker, clock);
     },
   });
   const baseUrl = `http://127.0.0.1:${server.port}`;

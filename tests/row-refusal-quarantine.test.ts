@@ -11,7 +11,7 @@ import { openDb } from "../src/db.js";
 import { applyExecutionSettingsChange, executionSettingsFor } from "../src/execution-setting.js";
 import type { Provider } from "../src/provider.js";
 import { registerQuarantine, tableRowValue } from "../src/quarantine.js";
-import { FakeContainerRuntime, healthyOpenai, healthyUsageText, recordingSpawn } from "./fakes.js";
+import { FakeContainerRuntime, healthyOpenai, recordingSpawn, withHealthyUsage } from "./fakes.js";
 import { api, bootTidepool, HOUR, questions, queueWork, registerQuestion, registerWork, type Tidepool } from "./harness.js";
 import { makeRegistry } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
@@ -73,12 +73,7 @@ async function bootClaude(options: { provider?: Provider; modelProbes?: Partial<
         logDir,
         moonshotApiKeyFile,
       });
-      return {
-        id: worker.id,
-        start: (task, setting) => worker.start(task, setting),
-        gracefulStop: (id) => worker.gracefulStop(id),
-        checkUsage: async () => healthyUsageText(t.clock.now()),
-      };
+      return withHealthyUsage(worker, deps.clock);
     },
   });
   return proc;

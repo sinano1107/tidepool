@@ -8,7 +8,7 @@ import { executionSettingsFor } from "../src/execution-setting.js";
 import type { Provider } from "../src/provider.js";
 import type { WorkerFactory } from "../src/server.js";
 import { moveTask } from "../src/tasks.js";
-import { FakeContainerRuntime, healthyOpenai, healthyUsageText, recordingSpawn } from "./fakes.js";
+import { FakeContainerRuntime, healthyOpenai, recordingSpawn, withHealthyUsage } from "./fakes.js";
 import {
   api,
   bootTidepool,
@@ -427,15 +427,7 @@ async function bootWithAdapter(
       executionSettingsFor(t.db, { provider: [{ name: provider, advisor: false }], tier: undefined }, task),
     openaiUsage: healthyOpenai,
     containerRuntime: new FakeContainerRuntime(proc.spawn),
-    workerAdapter: (deps) => {
-      const worker = build(deps);
-      return {
-        id: worker.id,
-        start: (task, setting) => worker.start(task, setting),
-        gracefulStop: (id) => worker.gracefulStop(id),
-        checkUsage: async () => healthyUsageText(t.clock.now()),
-      };
-    },
+    workerAdapter: (deps) => withHealthyUsage(build(deps), deps.clock),
   });
   return proc;
 }

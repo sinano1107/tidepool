@@ -151,6 +151,17 @@ export function healthyUsageText(now: Date): string {
   });
 }
 
+/** 中の adapter の usage check だけを健全に差し替える包み(issue #1787)。id / start /
+ *  gracefulStop は全引数(start の injection `query` を含む、ADR 0175)をそのまま渡す。 */
+export function withHealthyUsage(adapter: WorkerAdapter, clock: { now(): Date }): WorkerAdapter {
+  return {
+    id: adapter.id,
+    start: (task, setting, query) => adapter.start(task, setting, query),
+    gracefulStop: (taskId) => adapter.gracefulStop(taskId),
+    checkUsage: async () => healthyUsageText(clock.now()),
+  };
+}
+
 interface ScheduledTimer {
   fn: () => void;
   ms: number;
