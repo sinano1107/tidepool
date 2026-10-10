@@ -8,6 +8,7 @@ import {
   countTasksAwaitingLanding,
   countTasksAwaitingLandingInWorkspace,
   createLanding,
+  type Landing,
   landingAnnotation,
   registerLocalMergeQuestion,
   registerPrPromotionFailureQuestion,
@@ -1574,8 +1575,7 @@ it("CI 赤の question の登録が throw したら、PR は無言でキュー�
   const logged = vi.spyOn(console, "error").mockImplementation(() => {});
 
   await landing.tick("auto_merge", clock.now());
-  expect(logged).toHaveBeenCalled();
-  expect(queuedPrs(db)).toEqual([1]);
+  expect(logged).toHaveBeenCalledWith(expect.stringContaining("auto-merge of PR #1 "), expect.any(Error));
 
   db.exec("DROP TRIGGER fail_question");
   await landing.tick("auto_merge", clock.now());
@@ -1583,10 +1583,11 @@ it("CI 赤の question の登録が throw したら、PR は無言でキュー�
 });
 
 // ADR 0229: merge できない PR は状態で分けてキューから外す。tick は reject せず、1件の失敗は後ろの PR を巻き込まない
-function queuedPrs(db: Db): number[] {
-  return (db.prepare("SELECT pr_number FROM pending_auto_merges").all() as Array<{ pr_number: number }>).map(
-    (row) => row.pr_number,
-  );
+// キューに残った行は次の tick で CI を読み直される —— 行の有無は行の直読みでなく振る舞いで見る(ADR 0107 決定2)
+async function readOnNextTick(landing: Landing, github: FakeGitHubClient, now: Date): Promise<number[]> {
+  const before = github.ciChecks.length;
+  await landing.tick("auto_merge", now);
+  return github.ciChecks.slice(before).map((ref) => ref.number);
 }
 
 function autoMerging(db: Db, clock: FakeClock, workspace: WorkspaceConfig, github: FakeGitHubClient, dial = () => profile("auto_if_ci_green")) {
@@ -1613,11 +1614,12 @@ it("merge に失敗した開いたままの PR は、tick を落とさずキュ�
   queueAutoMerge(db, clock, 2);
   github.scriptMergeFailure(1, new Error(CONFLICT));
 
-  await expect(autoMerging(db, clock, workspace, github).tick("auto_merge", clock.now())).resolves.toBeUndefined();
+  const landing = autoMerging(db, clock, workspace, github);
+  await expect(landing.tick("auto_merge", clock.now())).resolves.toBeUndefined();
 
   expect(github.ciChecks.map((ref) => ref.number)).toEqual([1, 2]);
   expect(github.merged).toEqual([{ path: workspace.path, number: 2 }]);
-  expect(queuedPrs(db)).toEqual([]);
+  expect(await readOnNextTick(landing, github, clock.now())).toEqual([]);
   expect(mergeQuestions(db)).toEqual([
     {
       pr: 1,
@@ -1641,12 +1643,31 @@ it.each(["success", "failure", "unreported", "pending"] as const)("盤面の外�
   await landing.tick("auto_merge", clock.now());
 
   expect(github.ciChecks).toHaveLength(1);
-  expect(github.mergeChecks).toEqual([]);
+  expect(github.stateChecks).toEqual([]);
   expect(github.merged).toEqual([]);
-  expect(queuedPrs(db)).toEqual([]);
+  expect(await readOnNextTick(landing, github, clock.now())).toEqual([]);
   expect(mergeQuestions(db)).toEqual([]);
   expect(boardEvents(db, work.id, "pr_close_observed")).toEqual(closeObserved(1));
   expect(boardEvents(db, work.id, "pr_merge_observed")).toEqual([]);
+});
+
+it.each(["failure", "pending"] as const)("盤面の外で merge 済みの PR は CI が %s でも、行為の前の読み取りで merge の観測としてキューを外れる(ADR 0229 決定2)", async (ci) => {
+  const workspace = await makeWorkspace(`landing-merged-before-${ci}`);
+  const { db, clock } = await openBoard();
+  const github = new FakeGitHubClient();
+  const work = queueAutoMerge(db, clock, 1);
+  github.scriptCiStatus(ci);
+  github.scriptMergedOutside(1);
+
+  const landing = autoMerging(db, clock, workspace, github);
+  await landing.tick("auto_merge", clock.now());
+
+  expect(github.stateChecks).toEqual([]);
+  expect(await readOnNextTick(landing, github, clock.now())).toEqual([]);
+  expect(mergeQuestions(db)).toEqual([]);
+  expect(boardEvents(db, work.id, "pr_merge_observed")).toEqual([
+    { worker_id: BOARD_WORKER_ID, origin: "board", payload: { kind: "pr_merge_observed", pr_number: 1 } },
+  ]);
 });
 
 it("CI を読んだ後に閉じられて merge が失敗した PR は、読み直した状態で閉じた観測になり question を立てない", async () => {
@@ -1656,10 +1677,11 @@ it("CI を読んだ後に閉じられて merge が失敗した PR は、読み�
   const work = queueAutoMerge(db, clock, 1);
   afterCiRead(github, () => github.scriptClosedOutside(1));
 
-  await autoMerging(db, clock, workspace, github).tick("auto_merge", clock.now());
+  const landing = autoMerging(db, clock, workspace, github);
+  await landing.tick("auto_merge", clock.now());
 
-  expect(github.mergeChecks).toHaveLength(1);
-  expect(queuedPrs(db)).toEqual([]);
+  expect(github.stateChecks).toHaveLength(1);
+  expect(await readOnNextTick(landing, github, clock.now())).toEqual([]);
   expect(mergeQuestions(db)).toEqual([]);
   expect(boardEvents(db, work.id, "pr_close_observed")).toEqual(closeObserved(1));
 });
@@ -1671,9 +1693,10 @@ it("CI を読んだ後に盤面の外で merge されて merge が失敗した P
   const work = queueAutoMerge(db, clock, 1);
   afterCiRead(github, () => github.scriptMergedOutside(1));
 
-  await autoMerging(db, clock, workspace, github).tick("auto_merge", clock.now());
+  const landing = autoMerging(db, clock, workspace, github);
+  await landing.tick("auto_merge", clock.now());
 
-  expect(queuedPrs(db)).toEqual([]);
+  expect(await readOnNextTick(landing, github, clock.now())).toEqual([]);
   expect(mergeQuestions(db)).toEqual([]);
   expect(boardEvents(db, work.id, "pr_merge_observed")).toEqual([
     { worker_id: BOARD_WORKER_ID, origin: "board", payload: { kind: "pr_merge_observed", pr_number: 1 } },
@@ -1687,13 +1710,14 @@ it("merge が失敗し状態の読み直しも失敗した PR は、tick を落�
   const github = new FakeGitHubClient();
   const work = queueAutoMerge(db, clock, 1);
   github.scriptMergeFailure(1, new Error(CONFLICT));
-  github.scriptMergeCheckFailure(1, new Error("gh: could not reach github.com"));
+  github.scriptStateReadFailure(1, new Error("gh: could not reach github.com"));
   const logged = vi.spyOn(console, "error").mockImplementation(() => {});
 
-  await expect(autoMerging(db, clock, workspace, github).tick("auto_merge", clock.now())).resolves.toBeUndefined();
+  const landing = autoMerging(db, clock, workspace, github);
+  await expect(landing.tick("auto_merge", clock.now())).resolves.toBeUndefined();
 
-  expect(logged).toHaveBeenCalled();
-  expect(queuedPrs(db)).toEqual([1]);
+  expect(logged).toHaveBeenCalledWith(expect.stringContaining("auto-merge of PR #1 "), expect.any(Error));
+  expect(await readOnNextTick(landing, github, clock.now())).toEqual([1]);
   expect(mergeQuestions(db)).toEqual([]);
   expect(
     ["pr_merged", "pr_merge_observed", "pr_close_observed", "auto_merge_withdrawn"].flatMap((kind) =>
@@ -1715,11 +1739,13 @@ it("分類できない例外が1件の PR で起きても、tick は落ちずそ
   };
   const logged = vi.spyOn(console, "error").mockImplementation(() => {});
 
-  await expect(autoMerging(db, clock, workspace, github).tick("auto_merge", clock.now())).resolves.toBeUndefined();
+  const landing = autoMerging(db, clock, workspace, github);
+  await expect(landing.tick("auto_merge", clock.now())).resolves.toBeUndefined();
 
-  expect(logged).toHaveBeenCalled();
-  expect(queuedPrs(db)).toEqual([1]);
+  expect(logged).toHaveBeenCalledWith(expect.stringContaining("auto-merge of PR #1 "), expect.any(Error));
   expect(github.merged).toEqual([{ path: workspace.path, number: 2 }]);
+  github.readPullRequest = readPullRequest;
+  expect(await readOnNextTick(landing, github, clock.now())).toEqual([1]);
 });
 
 it("merge に失敗した開いたままの PR も、question を立てる直前に着地の面を読み直し、external へ取り下げられていれば question なしで外れる", async () => {
@@ -1733,9 +1759,10 @@ it("merge に失敗した開いたままの PR も、question を立てる直前
     throw new Error(CONFLICT);
   };
 
-  await autoMerging(db, clock, workspace, github, () => profile(dial)).tick("auto_merge", clock.now());
+  const landing = autoMerging(db, clock, workspace, github, () => profile(dial));
+  await landing.tick("auto_merge", clock.now());
 
-  expect(queuedPrs(db)).toEqual([]);
+  expect(await readOnNextTick(landing, github, clock.now())).toEqual([]);
   expect(mergeQuestions(db)).toEqual([]);
   expect(boardEvents(db, work.id, "auto_merge_withdrawn")).toEqual([
     { worker_id: BOARD_WORKER_ID, origin: "board", payload: { kind: "auto_merge_withdrawn", pr_number: 1, merge: "external" } },
@@ -2293,9 +2320,9 @@ it("既定 agent の quarantine 回答前の観測は、assignee 未指定の wo
     auditorName: "shako",
   });
 
-  await landing.observeMergedAutoMerges("shako");
+  await landing.observeAutoMergeOutcomes("shako");
   expect(countTasksAwaitingLanding(db, "tako", "tako", "shako")).toBe(1);
-  await landing.observeMergedAutoMerges("tako");
+  await landing.observeAutoMergeOutcomes("tako");
 
   expect(countTasksAwaitingLanding(db, "tako", "tako", "shako")).toBe(0);
   expect(listEvents(db, work.id).filter((event) => event.payload.kind === "pr_merge_observed")).toMatchObject([
@@ -2319,7 +2346,7 @@ it("quarantine 回答前の観測は、盤面の外で閉じられたキュー�
     defaultAgentName: "tako",
   });
 
-  await landing.observeMergedAutoMerges("tako");
+  await landing.observeAutoMergeOutcomes("tako");
 
   expect(countTasksAwaitingLanding(db, "tako", "tako")).toBe(0);
   expect(boardEvents(db, work.id, "pr_close_observed")).toEqual(closeObserved(7));

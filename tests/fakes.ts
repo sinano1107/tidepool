@@ -76,10 +76,10 @@ export const unusedLanding: Landing = {
   async relandAncestors() {
     return [];
   },
-  async observeMergedPullRequest() {
+  async observePullRequestOutcome() {
     return false;
   },
-  async observeMergedAutoMerges() {},
+  async observeAutoMergeOutcomes() {},
   async tick() {},
 };
 
@@ -410,11 +410,11 @@ export class FakeGitHubClient implements GitHubClient {
   readonly issueComments: Array<{ ref: IssueRef; body: string }> = [];
   readonly ciChecks: PrRef[] = [];
   readonly merged: PrRef[] = [];
-  readonly mergeChecks: PrRef[] = [];
+  readonly stateChecks: PrRef[] = [];
   private mergedOutside = new Set<number>();
   private closedOutside = new Set<number>();
   private mergeFailures = new Map<number, Error>();
-  private mergeCheckFailures = new Map<number, Error>();
+  private stateReadFailures = new Map<number, Error>();
   private failure: Error | null = null;
   private pushFailure: Error | null = null;
   private issueFailure: Error | null = null;
@@ -475,8 +475,8 @@ export class FakeGitHubClient implements GitHubClient {
   }
 
   async getPullRequestState(ref: PrRef): Promise<PrState> {
-    this.mergeChecks.push(ref);
-    const failure = this.mergeCheckFailures.get(ref.number);
+    this.stateChecks.push(ref);
+    const failure = this.stateReadFailures.get(ref.number);
     if (failure) throw failure;
     return this.stateOf(ref.number);
   }
@@ -484,8 +484,8 @@ export class FakeGitHubClient implements GitHubClient {
   /** Makes the state read on one PR throw — an offline Pi, a repo the token
    *  lost, a GitHub outage. `gh` exits non-zero and the real client rethrows.
    *  The combined read (readPullRequest) is untouched. */
-  scriptMergeCheckFailure(number: number, err: Error): void {
-    this.mergeCheckFailures.set(number, err);
+  scriptStateReadFailure(number: number, err: Error): void {
+    this.stateReadFailures.set(number, err);
   }
 
   /** Makes merging one still-open PR fail — a conflict, a protection refusal. */

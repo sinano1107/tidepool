@@ -459,7 +459,7 @@ export interface QuarantineCheckDeps {
   github?: GitHubClient;
   /** ADR 0217 決定5: agent 名の quarantine の解除検査の前に、その agent のキューの PR の
    *  盤面の外での merge を観測する。Absent → 観測せず、キューの PR は着地待ちに数えられる。 */
-  landing?: Pick<Landing, "observeMergedAutoMerges">;
+  landing?: Pick<Landing, "observeAutoMergeOutcomes">;
   boardState?: BoardStatePath[];
   /** Whether an agent name is currently registered — one half of the agent
    *  check; absent → only "no unsettled tasks remain" can clear it. */
@@ -538,7 +538,7 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
     },
     agent: async (value) => {
       const quarantineAgentName = value!;
-      await deps.landing?.observeMergedAutoMerges(quarantineAgentName);
+      await deps.landing?.observeAutoMergeOutcomes(quarantineAgentName);
       try {
         verifyAgentRepaired(
           deps.db,
@@ -951,7 +951,7 @@ export async function submitAnswer(
   // 「hold」の回答も決定として記録されてはならない(誰も決めていない)。座礁を
   // 置換するだけの機構なので、workspace が引けない・網が届かない場合は今日どおりの
   // 経路に落ちる(正しさは失われない: merge 実行は依然失敗し question は開いたまま)。
-  if (await deps.landing.observeMergedPullRequest(task)) {
+  if (await deps.landing.observePullRequestOutcome(task)) {
     return presentTask(deps.db, task, deps.defaultAgentName, deps.auditorName);
   }
   const wantsMerge = mergePr !== null && answers[0] === MERGE_QUESTION_OPTIONS[0];

@@ -174,8 +174,8 @@ export interface Landing {
   relandAncestors(
     settled: Task,
   ): Promise<Array<{ taskId: string; verdict: LandingVerdict }>>;
-  observeMergedPullRequest(question: Task): Promise<boolean>;
-  observeMergedAutoMerges(agentName: string): Promise<void>;
+  observePullRequestOutcome(question: Task): Promise<boolean>;
+  observeAutoMergeOutcomes(agentName: string): Promise<void>;
   tick(kind: "auto_merge" | "outside_merge", now: Date): Promise<void>;
 }
 
@@ -410,8 +410,11 @@ function retireAutoMerge(
   payload: { kind: "pr_merged" | (typeof OBSERVED)[keyof typeof OBSERVED]; pr_number: number },
   now: Date,
 ): void {
-  clearPendingAutoMerge(db, taskId);
-  appendEvent(db, { taskId, workerId: BOARD_WORKER_ID, origin: "board", payload, at: now });
+  // 外すことと記録を1つにする —— 片方だけで無言で消える経路を残さない(ADR 0105 決定3)
+  db.transaction(() => {
+    clearPendingAutoMerge(db, taskId);
+    appendEvent(db, { taskId, workerId: BOARD_WORKER_ID, origin: "board", payload, at: now });
+  })();
 }
 
 function isQueuedForAutoMerge(db: Db, taskId: string): boolean {
@@ -770,7 +773,7 @@ export function createLanding(deps: LandingDeps): Landing {
       }
       return results;
     },
-    async observeMergedPullRequest(question) {
+    async observePullRequestOutcome(question) {
       const prNumber = question.question_pending_merge_pr;
       const resolve = buildWorkspaceResolver(deps.resolveWorkspace, deps.workspace);
       if (prNumber === null || !resolve || !deps.github) return false;
@@ -787,7 +790,7 @@ export function createLanding(deps: LandingDeps): Landing {
     // ADR 0217 決定5: agent 名の quarantine に落ちた agent のキューの PR は、tick の観測
     // (ADR 0079 決定3)に届かない。盤面の外で merge された・閉じられたもの(ADR 0229 決定4)は
     // 回答の受理直前にここで観測する。読めない PR は飛ばす —— キューに残り、着地待ちに数えられる。
-    async observeMergedAutoMerges(agentName) {
+    async observeAutoMergeOutcomes(agentName) {
       const resolve = buildWorkspaceResolver(deps.resolveWorkspace, deps.workspace);
       const github = deps.github;
       if (!resolve || !github) return;
@@ -850,7 +853,7 @@ export function createLanding(deps: LandingDeps): Landing {
             retireAutoMerge(deps.db, task_id, { kind: OBSERVED[state], pr_number }, now);
             continue;
           }
-          if (ci === "pending") continue;
+          if (state === "unreadable" || ci === "pending") continue;
           if (ci === "unreported" && !unreportedCiGraceElapsed(deps.db, task_id, now)) continue;
           let purpose: string;
           if (ci === "success") {
@@ -889,7 +892,7 @@ export function createLanding(deps: LandingDeps): Landing {
             askHuman();
           })();
         } catch (error) {
-          console.error(`auto-merge of PR #${pr_number} (task ${task_id}) failed; it stays queued:`, error);
+          console.error(`[landing] auto-merge of PR #${pr_number} (task ${task_id}) failed; it stays queued:`, error);
         }
       }
     },
