@@ -26,7 +26,7 @@ import {
 import { commitTriage, startTriage } from "../src/triage.js";
 import { BOARD_WORKER_ID, HUMAN_WORKER_ID } from "../src/worker-id.js";
 import { quarantineWorkspace, UnknownWorkspaceError } from "../src/workspace.js";
-import { afterCiRead, FakeClock, FakeDraftClient, FakeGitHubClient, unusedLanding } from "./fakes.js";
+import { afterCiRead, FakeClock, FakeDraftClient, FakeGitHubClient, fakeHead, unusedLanding } from "./fakes.js";
 import {
   decomposeTaskViaWorker,
   HUMAN_WEBUI,
@@ -603,7 +603,7 @@ it("merge 回答は question の workspace で live CI を確認してから実 
     NOW,
     ...HUMAN_WEBUI,
   );
-  recordPrOpened(db, work, 42, "worker", NOW, { merge: "escalate" }, undefined, "worker");
+  recordPrOpened(db, work, 42, fakeHead(42), "worker", NOW, { merge: "escalate" }, undefined, "worker");
   const question = onlyQuestion(db);
   const github = new FakeGitHubClient();
   const afterCi = new Date(NOW.getTime() + 60_000);
@@ -658,6 +658,11 @@ it("merge 回答は question の workspace で live CI を確認してから実 
 
 // PR #42 を開いた escalate の work の merge question に、PR を開いてから minutesSincePrOpened 分後に「merge」と答える
 function answerMerge(github: FakeGitHubClient, minutesSincePrOpened: number) {
+  return openMergeQuestion(github).answerAt(minutesSincePrOpened);
+}
+
+/** PR #42 を開いた escalate の work と、その merge question に PR を開いてから何分後かに「merge」と答える手。 */
+function openMergeQuestion(github: FakeGitHubClient) {
   db = openDb(":memory:");
   const work = registerTask(
     db,
@@ -671,24 +676,26 @@ function answerMerge(github: FakeGitHubClient, minutesSincePrOpened: number) {
     NOW,
     ...HUMAN_WEBUI,
   );
-  recordPrOpened(db, work, 42, "worker", NOW, { merge: "escalate" }, undefined, "worker");
-  return submitAnswer(
-    {
-      db,
-      pollNow: () => {},
-      github,
-      resolveWorkspace: (name) => ({ name: name!, path: `/workspaces/${name}` }),
-      landing: unusedLanding,
-    },
-    onlyQuestion(db),
-    ["merge"],
-    undefined,
-    () => new Date(NOW.getTime() + minutesSincePrOpened * 60_000),
-    "webui",
-  );
+  recordPrOpened(db, work, 42, fakeHead(42), "worker", NOW, { merge: "escalate" }, undefined, "worker");
+  const answerAt = (minutesSincePrOpened: number) =>
+    submitAnswer(
+      {
+        db,
+        pollNow: () => {},
+        github,
+        resolveWorkspace: (name) => ({ name: name!, path: `/workspaces/${name}` }),
+        landing: unusedLanding,
+      },
+      onlyQuestion(db),
+      ["merge"],
+      undefined,
+      () => new Date(NOW.getTime() + minutesSincePrOpened * 60_000),
+      "webui",
+    );
+  return { work, answerAt };
 }
 
-// ADR 0227 決定2・3: check 未報告の PR への「merge」回答は、盤面の最後の push から5分の猶予の間だけ拒まれる
+// ADR 0227 決定2・3: check 未報告の PR への「merge」回答は、盤面がその head を知ってから5分の猶予の間だけ拒まれる
 function answerMergeOnUnreportedCi(minutesSincePrOpened: number) {
   const github = new FakeGitHubClient();
   github.scriptCiStatus("unreported");
@@ -700,7 +707,7 @@ it("check 未報告の PR への merge 回答は、PR を開いてから5分の�
 
   await expect(answer).rejects.toThrow(
     new DomainError(
-      "CI checks on PR #42 have not reported yet — answer again once they report, or 5 minutes after the board's last push to it",
+      "CI checks on PR #42 have not reported yet — answer again once they report, or 5 minutes after the board first saw its current head",
     ),
   );
   expect(github.merged).toEqual([]);
@@ -712,6 +719,30 @@ it("猶予の5分を過ぎても check 未報告の PR への merge 回答は、
 
   await expect(answer).resolves.toMatchObject({ status: "done" });
   expect(github.merged).toEqual([{ path: "/workspaces/product", number: 42 }]);
+});
+
+// ADR 0231 決定4: escalate の PR はキューの行を持たない —— 盤面の外の head を回答が先に読めば、起点は回答が刻む
+it("盤面の外の head が check 未報告なら、merge 回答は拒否の前に観測を1件だけ刻み、初めて読んでから5分後の回答は通る", async () => {
+  const github = new FakeGitHubClient();
+  github.scriptCiStatus("unreported");
+  github.scriptHead(42, "outside-head");
+  const { work, answerAt } = openMergeQuestion(github);
+  const observed = () =>
+    listEvents(db, work.id)
+      .filter((e) => e.kind === "pr_head_observed")
+      .map(({ worker_id, origin, payload }) => ({ worker_id, origin, payload }));
+
+  // PR を開いてから6分 —— PR を開いた head の猶予は過ぎているが、この head は初めて読まれる
+  await expect(answerAt(6)).rejects.toThrow("have not reported yet");
+  await expect(answerAt(10)).rejects.toThrow("have not reported yet");
+  expect(observed()).toEqual([
+    { worker_id: BOARD_WORKER_ID, origin: "board", payload: { kind: "pr_head_observed", pr_number: 42, sha: "outside-head" } },
+  ]);
+  expect(github.merged).toEqual([]);
+
+  await expect(answerAt(11)).resolves.toMatchObject({ status: "done" });
+  expect(github.mergedHeads).toEqual(["outside-head"]);
+  expect(observed()).toHaveLength(1);
 });
 
 it("merge 回答は CI を読んだ head に固定して merge する", async () => {
@@ -829,7 +860,7 @@ it.each(["merge", "hold"])("盤面の外で閉じられた PR の merge question
     NOW,
     ...HUMAN_WEBUI,
   );
-  recordPrOpened(db, work, 42, "worker", NOW, { merge: "escalate" }, undefined, "worker");
+  recordPrOpened(db, work, 42, fakeHead(42), "worker", NOW, { merge: "escalate" }, undefined, "worker");
   const question = onlyQuestion(db);
   const github = new FakeGitHubClient();
   github.scriptClosedOutside(42);

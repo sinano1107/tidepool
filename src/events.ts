@@ -168,11 +168,14 @@ export type EventPayload =
     }
   // issue #11: a completed work task's handoff opened this PR — pr_number is
   // the durable link the merge dial (escalate / auto_if_ci_green; `external`
-  // leaves the PR to GitHub's own surface — ADR 0079) reads back
-  | { kind: "pr_opened"; pr_number: number }
+  // leaves the PR to GitHub's own surface — ADR 0079) reads back. sha は PR の作成前に盤面が push した
+  // タスクブランチの commit(ADR 0231 決定4)
+  | { kind: "pr_opened"; pr_number: number; sha: string }
   // ADR 0227 決定2: 盤面が開いている PR へ修理を push した —— 盤面名義の外向きの行為で、`pr_opened` と並んで
-  // check 未報告の猶予の起点になる
-  | { kind: "pr_branch_pushed"; pr_number: number }
+  // その sha の head の check 未報告の猶予の起点になる
+  | { kind: "pr_branch_pushed"; pr_number: number; sha: string }
+  // ADR 0231 決定4: 盤面が記録に無い(盤面の外で push された)PR の head を初めて読んだ —— その head の猶予の起点
+  | { kind: "pr_head_observed"; pr_number: number; sha: string }
   // issue #11: the merge dial actually merged this PR — via the escalate
   // answer (right after a live CI check confirmed success immediately
   // beforehand, or still found no check reported past ADR 0227's grace) or

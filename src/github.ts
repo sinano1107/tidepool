@@ -68,7 +68,7 @@ export interface Issue {
  *  "failure", any still running is "pending", all passed is "success". A PR
  *  with no check reported at all is "unreported" — neither green nor pending,
  *  since "this repo has no CI" and "the checks have not reported yet" look the
- *  same from here; callers wait a grace from the board's last push before
+ *  same from here; callers wait a grace from when the board first knew that head before
  *  treating it as unobservable (ADR 0227). A check state that could not be
  *  **read** is "pending", never "success" and never "failure" (issue #427): an
  *  unobservable CI is not a green light (ADR 0052's fail-closed), and inventing

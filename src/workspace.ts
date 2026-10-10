@@ -235,6 +235,12 @@ export function branchMergeEffect(
   };
 }
 
+/** 盤面がこれから push するタスクブランチの commit(ADR 0231 決定4)。push の前に読む —— PR を作った後で読めずに
+ *  落ちれば、開いた PR が記録に残らない。 */
+export function taskBranchTip(workspace: WorkspaceConfig, taskId: string): string {
+  return git(workspace.path, "rev-parse", `refs/heads/${taskBranch(taskId)}`);
+}
+
 export function taskBranchExists(workspace: WorkspaceConfig, taskId: string): boolean {
   try {
     git(workspace.path, "rev-parse", "--verify", "--quiet", `refs/heads/${taskBranch(taskId)}`);

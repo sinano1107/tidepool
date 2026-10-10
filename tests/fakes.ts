@@ -400,6 +400,10 @@ export class FakeContainerRuntime implements ContainerRuntime {
   }
 }
 
+/** FakeGitHubClient を通して開いていない PR の head —— 盤面が push した sha として記録に直接書くテストもこれを使う
+ *  (ADR 0231 決定4)。 */
+export const fakeHead = (prNumber: number) => `head-of-pr-${prNumber}`;
+
 /** Scripted stand-in at the GitHubClient seam (issue #19): records every PR
  *  request in call order; scriptFailure lets a test make the call throw
  *  without touching a real GitHub API. */
@@ -414,6 +418,7 @@ export class FakeGitHubClient implements GitHubClient {
   readonly mergedHeads: string[] = [];
   readonly stateChecks: PrRef[] = [];
   private heads = new Map<number, string>();
+  private prBranches = new Map<number, string>();
   private unreadable = new Set<number>();
   private mergedOutside = new Set<number>();
   private closedOutside = new Set<number>();
@@ -441,7 +446,16 @@ export class FakeGitHubClient implements GitHubClient {
     });
     if (this.failure) throw this.failure;
     const number = this.nextNumber++;
+    this.prBranches.set(number, input.branch);
+    this.followPush(input);
     return { url: `https://github.com/example/repo/pull/${number}`, number };
+  }
+
+  /** 盤面の push で PR の head はそのブランチの先端へ動く —— 動かなければ、盤面自身の push も記録に無い head と
+   *  読まれる(ADR 0231 決定4)。 */
+  private followPush(input: PushBranchInput): void {
+    const sha = execFileSync("git", ["rev-parse", input.branch], { cwd: input.path }).toString().trim();
+    for (const [number, branch] of this.prBranches) if (branch === input.branch) this.heads.set(number, sha);
   }
 
   /** 記録するだけでなく**実際に push する** —— `refs/remotes/origin/<branch>` が動か
@@ -453,6 +467,7 @@ export class FakeGitHubClient implements GitHubClient {
       cwd: input.path,
       stdio: ["ignore", "pipe", "pipe"],
     });
+    this.followPush(input);
     // 失敗は転送の**後**に起こす: remote-tracking ref が動いた状態で失敗が報告される形に
     // しないと、「失敗後に撮り直さない」(ADR 0064 決定4)を測る断言が旧コードでも通る
     if (this.pushFailure) throw this.pushFailure;
@@ -469,7 +484,7 @@ export class FakeGitHubClient implements GitHubClient {
   }
 
   private headOf(number: number): string {
-    return this.heads.get(number) ?? `head-of-pr-${number}`;
+    return this.heads.get(number) ?? fakeHead(number);
   }
 
   async readPullRequest(ref: PrRef): Promise<PrStatus> {

@@ -1894,6 +1894,7 @@ export function recordPrOpened(
   db: Db,
   task: Task,
   prNumber: number,
+  sha: string,
   workerId: string,
   now: Date,
   authority: AuthorityContext | undefined,
@@ -1906,7 +1907,7 @@ export function recordPrOpened(
       taskId: task.id,
       workerId,
       origin,
-      payload: { kind: "pr_opened", pr_number: prNumber },
+      payload: { kind: "pr_opened", pr_number: prNumber, sha },
       at: now,
     });
     const ask = (purpose: string) =>
