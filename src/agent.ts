@@ -11,6 +11,7 @@ import {
   type Registry,
   UnknownAgentError,
 } from "./registry.js";
+import { unsettledSql } from "./task-status.js";
 import { typeAwareDefaultAgentSql } from "./tasks.js";
 import type { Tier } from "./tier.js";
 
@@ -106,10 +107,10 @@ export function resolveAgentOrQuarantine(
  *  unsettled work left depending on it and no completed task awaiting landing
  *  on its profile — both are legitimate repairs (registry repair, or settling /
  *  reassigning those tasks once nothing completed still waits to land), and
- *  either makes the quarantine moot. Unsettled is the delete door's status line
- *  (`countUnsettledTasksReferencing`), so a task still running under the name
- *  counts too (ADR 0224 決定4). `agentExists` is resolved by the caller (fresh against
- *  the registry, or `false` when no registry is configured at all — in which
+ *  either makes the quarantine moot. Unsettled is `unsettledSql` (shared with the
+ *  delete door), so a task still running under the name counts too (ADR 0224
+ *  決定4). `agentExists` is resolved by the caller (fresh against the registry,
+ *  or `false` when no registry is configured at all — in which
  *  case only the "no more unsettled tasks" path can ever clear it). */
 export function verifyAgentRepaired(
   db: Db,
@@ -121,7 +122,7 @@ export function verifyAgentRepaired(
   if (agentExists) return;
   const fallback = typeAwareDefaultAgentSql("type", "@defaultAgentName", "@auditorName");
   const stillUnsettled = db
-    .prepare(`SELECT 1 FROM tasks WHERE type != 'question' AND status NOT IN ('done', 'cancelled')
+    .prepare(`SELECT 1 FROM tasks WHERE type != 'question' AND ${unsettledSql("status")}
               AND COALESCE(assignee, ${fallback}) = @agentName LIMIT 1`)
     .get({ agentName, defaultAgentName: defaultAgentName ?? null, auditorName: auditorName ?? null });
   if (stillUnsettled) {

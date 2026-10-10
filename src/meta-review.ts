@@ -3,6 +3,7 @@ import type { Db } from "./db.js";
 import { appendEvent, type EventKind, type EventOrigin, listEventsOfKinds } from "./events.js";
 import { type ListAgentTiers, readExecutionSettings, settleStaleProposals } from "./execution-setting.js";
 import { whyNotPositiveInteger } from "./positive-integer.js";
+import { unsettledSql } from "./task-status.js";
 import { registerTask } from "./tasks.js";
 import { BOARD_WORKER_ID, HUMAN_WORKER_ID } from "./worker-id.js";
 
@@ -264,7 +265,7 @@ export function registerDueMetaReviews(db: Db, now: Date, agents?: ListAgentTier
     // 提案の kind では数えない —— routing の meta-review は registry 種別の提案も出す(spec #916 A)
     const open = db
       .prepare(
-        `SELECT 1 FROM tasks WHERE status IN ('todo', 'in_progress')
+        `SELECT 1 FROM tasks WHERE ${unsettledSql("status")}
            AND (meta_review_subject = @subject
              OR (question_proposal IS NOT NULL AND parent_id IN (SELECT id FROM tasks WHERE meta_review_subject = @subject)))`,
       )
