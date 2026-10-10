@@ -431,8 +431,14 @@ export class FakeGitHubClient implements GitHubClient {
   private issueList: OpenIssue[] | null = null;
   private issueListFailure: Error | null = null;
 
+  /** 本物と同じく、PR を開く前にタスクブランチを push する —— `refs/remotes/origin/<branch>` が
+   *  無いと積み残し(ADR 0231 決定2)を読めない。`pushes` には数えない(開いている PR への push の記録)。 */
   async createPullRequest(input: CreatePrInput): Promise<PrResult> {
     this.requests.push(input);
+    execFileSync("git", ["push", "-u", "origin", input.branch], {
+      cwd: input.path,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
     if (this.failure) throw this.failure;
     const number = this.nextNumber++;
     return { url: `https://github.com/example/repo/pull/${number}`, number };

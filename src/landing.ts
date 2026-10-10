@@ -6,7 +6,7 @@ import { appendEvent, latestEventOfTask } from "./events.js";
 import { git } from "./git.js";
 import type { GitHubClient, PrState } from "./github.js";
 import { quarantineAgent } from "./quarantine.js";
-import { type AuthorityProfile, isUnresolvableAgentError } from "./registry.js";
+import { type AuthorityProfile, isUnresolvableAgentError, remoteTrackingRef } from "./registry.js";
 import {
   contentSourceFor,
   countUnsettledAttachedChildren,
@@ -39,6 +39,7 @@ import {
   resolveOrQuarantine,
   resolveTaskBranchLineage,
   taskBranch,
+  taskBranchExists,
   type WorkspaceConfig,
   workspaceNeedsHuman,
 } from "./workspace.js";
@@ -148,6 +149,28 @@ export function landingBlock(db: Db, taskId: string): LandingBlock | null {
   if (attached > 0) return { kind: "attached_children", count: attached };
   const objections = countUnbundledObjections(db, taskId);
   return objections > 0 ? { kind: "objections", count: objections } : null;
+}
+
+/** ADR 0231 決定2: 積み残し —— 盤面が持つ着地の内容が、まだ PR に載っていない。分解ツリーに後始末が未了の
+ *  タスクがある(merge back 前)か、ローカルのタスクブランチが origin 側に無い内容を持つ(push 前)。後者は
+ *  origin 側を candidate に置くので、盤面の外の push で origin 側が先へ進んでいても積み残しと読まない。
+ *  ローカルのタスクブランチが無ければ運ぶ内容も無い。比べられなければ積み残しとする(fail-closed)。
+ *  門(`landingBlock`)とは別の述語で、読むのは回答時と merge 時だけである(決定3)。 */
+export function hasContentLeftBehind(db: Db, workspace: WorkspaceConfig, taskId: string): boolean {
+  const tearingDown = db
+    .prepare(
+      `${subtreeSql("?")}
+       SELECT 1 FROM tasks WHERE id IN (SELECT id FROM subtree) AND teardown_started_at IS NOT NULL`,
+    )
+    .get(taskId);
+  if (tearingDown) return true;
+  if (!taskBranchExists(workspace, taskId)) return false;
+  try {
+    return branchMergeEffect(workspace, remoteTrackingRef(taskBranch(taskId)), taskBranch(taskId))
+      .changesCandidate;
+  } catch {
+    return true;
+  }
 }
 
 export function landingAnnotation(
@@ -669,7 +692,7 @@ export function createLanding(deps: LandingDeps): Landing {
           rebaselineRef(
             deps.db,
             workspace,
-            `refs/remotes/origin/${taskBranch(task.id)}`,
+            remoteTrackingRef(taskBranch(task.id)),
           );
           retireFailures(task.id, excludePrPromotionQuestionId);
           return {
@@ -695,7 +718,7 @@ export function createLanding(deps: LandingDeps): Landing {
           rebaselineRef(
             deps.db,
             workspace,
-            `refs/remotes/origin/${taskBranch(task.id)}`,
+            remoteTrackingRef(taskBranch(task.id)),
           );
         }
         recordPrOpened(
@@ -860,6 +883,8 @@ export function createLanding(deps: LandingDeps): Landing {
           let purpose: string;
           if (ci === "success") {
             if (stop()) continue;
+            // 積み残しは門と同じくキューに残す(ADR 0231 決定3)
+            if (hasContentLeftBehind(deps.db, workspace, task_id)) continue;
             // merge は CI を読んだ head に固定する(ADR 0231 決定1)
             const failure = await github.mergePullRequest(ref, head).then(
               () => null,

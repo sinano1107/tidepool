@@ -235,7 +235,7 @@ export function branchMergeEffect(
   };
 }
 
-function taskBranchExists(workspace: WorkspaceConfig, taskId: string): boolean {
+export function taskBranchExists(workspace: WorkspaceConfig, taskId: string): boolean {
   try {
     git(workspace.path, "rev-parse", "--verify", "--quiet", `refs/heads/${taskBranch(taskId)}`);
     return true;

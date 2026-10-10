@@ -26,6 +26,7 @@ import {
   type Task,
   type TaskType,
 } from "../src/tasks.js";
+import { markTeardown } from "../src/teardown.js";
 import { raiseObjection } from "../src/triage.js";
 import { BOARD_WORKER_ID } from "../src/worker-id.js";
 import {
@@ -1998,6 +1999,136 @@ it("門に当たった PR は面が変わっていなければキューに残り
   await landing.tick("auto_merge", clock.now());
   expect(github.merged).toEqual([{ path: workspace.path, number: 1 }]);
 });
+
+// ADR 0231 決定2・3: 積み残しは回答時と merge 時に読み、門にも着地の登録にも混ぜない。
+// 以下がこの検査を述べる唯一の場所(ADR 0107)。
+/** タスクブランチを push して PR #1 を開く。auto_if_ci_green なら無人 merge キューに入り、
+ *  escalate なら merge question が立つ。checkout はタスクブランチに残る。 */
+async function openPushedPr(name: string, merge: MergeDial) {
+  const { workspace } = await makeRemoteBackedWorkspace(name);
+  const { db, clock } = await openBoard();
+  const github = new FakeGitHubClient();
+  const work = landingWork(db, clock);
+  git(workspace.path, "checkout", "-b", `task/${work.id}`);
+  commitWork(workspace.path, "feature.txt", "ready\n");
+  git(workspace.path, "push", "-u", "origin", `task/${work.id}`);
+  recordPrOpenedViaWorker(db, work, 1, "worker", clock.now(), { authority: { merge } });
+  const landing = createLanding({
+    defaultAgentName: "tako",
+    db,
+    clock,
+    workspace,
+    github,
+    resolveAuthority: () => profile(merge),
+  });
+  return { workspace, db, clock, github, work: getTask(db, work.id)!, landing };
+}
+
+/** 修理(付帯子)は done で、その後始末(merge back)が未了。門は開いている。 */
+function settleRepairStillTearingDown(db: Db, clock: FakeClock, landingTaskId: string) {
+  const repair = attachUnsettledChild(db, clock, landingTaskId);
+  completeTask(db, repair, FULL_HANDOFF, "worker", clock.now(), "worker");
+  markTeardown(db, repair.id, clock.now());
+}
+
+it("子孫に後始末が未了のタスクがあれば積み残しで、CI 緑でも無人 merge されず、event も question も無くキューに残る", async () => {
+  const { db, clock, github, work, landing } = await openPushedPr("left-behind-teardown", "auto_if_ci_green");
+  settleRepairStillTearingDown(db, clock, work.id);
+  const events = listEvents(db, work.id).length;
+
+  await landing.tick("auto_merge", clock.now());
+
+  expect(github.merged).toEqual([]);
+  expect(mergeQuestions(db)).toEqual([]);
+  expect(listEvents(db, work.id)).toHaveLength(events);
+
+  // キューに残っている —— 後始末が終われば次の tick で merge される
+  db.prepare("UPDATE tasks SET teardown_started_at = NULL").run();
+  await landing.tick("auto_merge", clock.now());
+  expect(github.merged.map((pr) => pr.number)).toEqual([1]);
+});
+
+it("merge back 済み・push 前でタスクブランチが origin 側に無い内容を持てば積み残しで無人 merge されず、着地が push した後の tick で merge される", async () => {
+  const { workspace, db, clock, github, work, landing } = await openPushedPr("left-behind-unpushed", "auto_if_ci_green");
+  commitWork(workspace.path, "repair.txt", "fixed\n");
+
+  await landing.tick("auto_merge", clock.now());
+  expect(github.merged).toEqual([]);
+  expect(mergeQuestions(db)).toEqual([]);
+
+  await expect(landing.land(work)).resolves.toMatchObject({ kind: "landed", form: "open_pull_request_updated" });
+  await landing.tick("auto_merge", clock.now());
+  expect(github.merged.map((pr) => pr.number)).toEqual([1]);
+});
+
+it("盤面の外の push で origin 側だけが先へ進んでいるのは積み残しではなく、無人 merge される", async () => {
+  const { workspace, db, clock, github, work, landing } = await openPushedPr("left-behind-outside-push", "auto_if_ci_green");
+  git(workspace.path, "checkout", "-b", "outside");
+  commitWork(workspace.path, "outside.txt", "pushed by a human\n");
+  git(workspace.path, "push", "origin", `outside:task/${work.id}`);
+  git(workspace.path, "checkout", `task/${work.id}`);
+
+  await landing.tick("auto_merge", clock.now());
+
+  expect(github.merged.map((pr) => pr.number)).toEqual([1]);
+  expect(mergeQuestions(db)).toEqual([]);
+});
+
+it("origin 側のタスクブランチが読めなければ積み残しとして無人 merge しない(fail-closed)", async () => {
+  const { workspace, github, work, landing, clock } = await openPushedPr("left-behind-unreadable", "auto_if_ci_green");
+  git(workspace.path, "update-ref", "-d", `refs/remotes/origin/task/${work.id}`);
+
+  await landing.tick("auto_merge", clock.now());
+
+  expect(github.merged).toEqual([]);
+});
+
+it("積み残しがあっても着地の登録は走る —— PR を開き、開いている PR へ修理を push する", async () => {
+  const { workspace } = await makeRemoteBackedWorkspace("left-behind-still-lands");
+  const { db, clock } = await openBoard();
+  const github = new FakeGitHubClient();
+  const landing = createLanding({ defaultAgentName: "tako", db, clock, workspace, github });
+  const work = landingWork(db, clock);
+  git(workspace.path, "checkout", "-b", `task/${work.id}`);
+  commitWork(workspace.path, "feature.txt", "ready\n");
+  settleRepairStillTearingDown(db, clock, work.id);
+
+  await expect(landing.land(work)).resolves.toMatchObject({ kind: "landed", form: "pull_request_opened" });
+  commitWork(workspace.path, "repair.txt", "fixed\n");
+  await expect(landing.land(getTask(db, work.id)!)).resolves.toMatchObject({
+    kind: "landed",
+    form: "open_pull_request_updated",
+  });
+});
+
+it.each<[string, (pr: Awaited<ReturnType<typeof openPushedPr>>) => void]>([
+  ["子孫の後始末が未了", ({ db, clock, work }) => settleRepairStillTearingDown(db, clock, work.id)],
+  ["merge back 済み・push 前", ({ workspace }) => commitWork(workspace.path, "repair.txt", "fixed\n")],
+])(
+  "積み残し(%s)のある PR への人間の merge 回答は拒まれ、merge されず question は開いたまま残る",
+  async (_, leaveBehind) => {
+    const pr = await openPushedPr("left-behind-answer", "escalate");
+    const { workspace, db, clock, github } = pr;
+    leaveBehind(pr);
+    const question = getTask(db, listBoard(db).find((q) => q.question_pending_merge_pr === 1)!.id)!;
+    await expect(
+      submitAnswer(
+        { db, pollNow: () => {}, landing: unusedLanding, workspace, github },
+        question,
+        ["merge"],
+        undefined,
+        () => clock.now(),
+        "webui",
+      ),
+    ).rejects.toThrow(
+      new DomainError(
+        "cannot merge yet: PR #1 does not carry all of the task's content yet — answer again once the board has pushed it",
+      ),
+    );
+    expect(github.merged).toEqual([]);
+    expect(listBoard(db).find((q) => q.id === question.id)?.status).toBe("todo");
+  },
+);
 
 it("escalate で開いた PR の後にダイヤルを auto_if_ci_green へ緩めても、何も無人 merge キューに入らない", async () => {
   const workspace = await makeWorkspace("landing-loosened-dial");
