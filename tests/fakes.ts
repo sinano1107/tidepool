@@ -656,6 +656,26 @@ export class FakeGitHubClient implements GitHubClient {
   }
 }
 
+/** 盤面の await を1回だけ止める窓。最初に `hold` を呼んだ await が `entered` を解決し、`open()` まで止まる。2回目以降は素通りする。 */
+export function awaitWindow() {
+  let enter!: () => void;
+  const entered = new Promise<void>((resolve) => {
+    enter = resolve;
+  });
+  let open!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    open = resolve;
+  });
+  let held = false;
+  const hold = async () => {
+    if (held) return;
+    held = true;
+    enter();
+    await gate;
+  };
+  return { entered, open, hold };
+}
+
 /** CI を読み終えた瞬間に change を走らせる — 「CI を読んでいる間に変わる」を作る。 */
 export function afterCiRead(github: FakeGitHubClient, change: () => void): void {
   const readPullRequest = github.readPullRequest.bind(github);

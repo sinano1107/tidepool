@@ -40,7 +40,7 @@ import {
   UnknownWorkspaceError,
   type WorkspaceConfig,
 } from "../src/workspace.js";
-import { afterCiRead, FakeClock, FakeGitHubClient, fakeHead, seedTierNames, UNRESOLVABLE_AGENT, unusedLanding } from "./fakes.js";
+import { afterCiRead, awaitWindow, FakeClock, FakeGitHubClient, fakeHead, seedTierNames, UNRESOLVABLE_AGENT, unusedLanding } from "./fakes.js";
 import {
   commitWork,
   completedWork,
@@ -3307,24 +3307,14 @@ it("既定 agent a で pickup した assignee 未指定の完了タスクの PR 
 
 // ADR 0236: 盤面が merge している PR には、観測も重なった tick も手を出さない。窓は盤面の await を1回だけ止めて作る
 
-/** 盤面の await を1回だけ止める窓。最初に `hold` を呼んだ await が `entered` を解決し、`open()` まで止まる。2回目以降は素通りする。 */
-function awaitWindow() {
-  let enter!: () => void;
-  const entered = new Promise<void>((resolve) => {
-    enter = resolve;
-  });
-  let open!: () => void;
-  const gate = new Promise<void>((resolve) => {
-    open = resolve;
-  });
-  let held = false;
-  const hold = async () => {
-    if (held) return;
-    held = true;
-    enter();
-    await gate;
+/** CI の読み取りが返った後、応答が盤面に返る前で止める。 */
+function holdAfterRead(github: FakeGitHubClient, hold: () => Promise<void>): void {
+  const read = github.readPullRequest.bind(github);
+  github.readPullRequest = async (ref) => {
+    const pr = await read(ref);
+    await hold();
+    return pr;
   };
-  return { entered, open, hold };
 }
 
 const QUEUE_WINDOWS: Array<{
@@ -3355,12 +3345,7 @@ const QUEUE_WINDOWS: Array<{
     merges: 0,
     install: (github, hold) => {
       github.scriptMergedOutside(1);
-      const read = github.readPullRequest.bind(github);
-      github.readPullRequest = async (ref) => {
-        const pr = await read(ref);
-        await hold();
-        return pr;
-      };
+      holdAfterRead(github, hold);
     },
   },
   {
@@ -3385,14 +3370,7 @@ const QUEUE_WINDOWS: Array<{
     interrupt: "2つ目の tick",
     outcome: "pr_merged",
     merges: 1,
-    install: (github, hold) => {
-      const read = github.readPullRequest.bind(github);
-      github.readPullRequest = async (ref) => {
-        const pr = await read(ref);
-        await hold();
-        return pr;
-      };
-    },
+    install: holdAfterRead,
   },
 ];
 

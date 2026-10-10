@@ -26,7 +26,7 @@ import {
 import { commitTriage, startTriage } from "../src/triage.js";
 import { BOARD_WORKER_ID, HUMAN_WORKER_ID } from "../src/worker-id.js";
 import { quarantineWorkspace, UnknownWorkspaceError } from "../src/workspace.js";
-import { afterCiRead, FakeClock, FakeDraftClient, FakeGitHubClient, fakeHead, unusedLanding } from "./fakes.js";
+import { afterCiRead, awaitWindow, FakeClock, FakeDraftClient, FakeGitHubClient, fakeHead, unusedLanding } from "./fakes.js";
 import {
   decomposeTaskViaWorker,
   defaultingTo,
@@ -967,28 +967,20 @@ async function mergeAnswerInFlight() {
   const question = onlyQuestion(db);
   const github = new FakeGitHubClient();
   const landing = createLanding({ defaultAgentName: "tako", db, clock: new FakeClock(), workspace: PRODUCT, github });
-  let enter!: () => void;
-  const inWindow = new Promise<void>((resolve) => {
-    enter = resolve;
-  });
-  let open!: () => void;
-  const gate = new Promise<void>((resolve) => {
-    open = resolve;
-  });
+  const window = awaitWindow();
   let mergeCalls = 0;
   const merge = github.mergePullRequest.bind(github);
   github.mergePullRequest = async (ref, head) => {
     mergeCalls++;
     await merge(ref, head);
     github.scriptMergedOutside(42); // GitHub はもう MERGED を返すが、応答はまだ盤面に返っていない
-    enter();
-    await gate;
+    await window.hold();
   };
   const answer = () =>
     submitAnswer({ db, pollNow: () => {}, github, workspace: PRODUCT, landing }, getTask(db, question.id)!, ["merge"], undefined, () => NOW, "webui");
   const first = answer();
-  await inWindow;
-  return { question, landing, answer, first, open, mergeCalls: () => mergeCalls };
+  await window.entered;
+  return { question, landing, answer, first, open: window.open, mergeCalls: () => mergeCalls };
 }
 
 const questionOutcomes = (questionId: string) =>
