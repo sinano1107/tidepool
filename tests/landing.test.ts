@@ -26,6 +26,7 @@ import {
   type Task,
   type TaskType,
 } from "../src/tasks.js";
+import { markTeardown } from "../src/teardown.js";
 import { raiseObjection } from "../src/triage.js";
 import { BOARD_WORKER_ID } from "../src/worker-id.js";
 import {
@@ -37,7 +38,7 @@ import {
   UnknownWorkspaceError,
   type WorkspaceConfig,
 } from "../src/workspace.js";
-import { FakeClock, FakeGitHubClient, seedTierNames, UNRESOLVABLE_AGENT, unusedLanding } from "./fakes.js";
+import { afterCiRead, FakeClock, FakeGitHubClient, seedTierNames, UNRESOLVABLE_AGENT, unusedLanding } from "./fakes.js";
 import {
   commitWork,
   completedWork,
@@ -1449,16 +1450,6 @@ it("着地の面は CI を読む前に読まれる — 面が変わった PR は
   expect(mergeQuestions(db).map((q) => q.pr)).toEqual([1]);
 });
 
-/** CI を読み終えた瞬間に change を走らせる — 「CI を読んでいる間に変わる」を作る。 */
-function afterCiRead(github: FakeGitHubClient, change: () => void) {
-  const readPullRequest = github.readPullRequest.bind(github);
-  github.readPullRequest = async (ref) => {
-    const pr = await readPullRequest(ref);
-    change();
-    return pr;
-  };
-}
-
 it("着地の面は merge の直前にも読まれる — CI を読んでいる間にダイヤルが取り下げられたら merge しない", async () => {
   const workspace = await makeWorkspace("landing-surface-before-merge");
   const { db, clock } = await openBoard();
@@ -1633,6 +1624,12 @@ const closeObserved = (pr_number: number) => [
   { worker_id: BOARD_WORKER_ID, origin: "board", payload: { kind: "pr_close_observed", pr_number } },
 ];
 
+/** キューの行の行方を記録する event — 残っていなければ、PR はキューに残ったまま何も起きていない。 */
+const autoMergeOutcomeEvents = (db: Db, taskId: string) =>
+  ["pr_merged", "pr_merge_observed", "pr_close_observed", "auto_merge_withdrawn"].flatMap((kind) =>
+    boardEvents(db, taskId, kind),
+  );
+
 const CONFLICT = "Pull request is not mergeable: the merge commit cannot be cleanly created.";
 
 it("merge に失敗した開いたままの PR は、tick を落とさずキューを外れて失敗を本文に書いた推奨 hold の merge question になり、後ろの PR は同じ tick で merge される", async () => {
@@ -1646,7 +1643,8 @@ it("merge に失敗した開いたままの PR は、tick を落とさずキュ�
   const landing = autoMerging(db, clock, workspace, github);
   await expect(landing.tick("auto_merge", clock.now())).resolves.toBeUndefined();
 
-  expect(github.ciChecks.map((ref) => ref.number)).toEqual([1, 2]);
+  // PR #1 は merge の失敗の後に同じ読み取りで読み直される(ADR 0231 決定1)
+  expect(github.ciChecks.map((ref) => ref.number)).toEqual([1, 1, 2]);
   expect(github.merged).toEqual([{ path: workspace.path, number: 2 }]);
   expect(await readOnNextTick(landing, github, clock.now())).toEqual([]);
   expect(mergeQuestions(db)).toEqual([
@@ -1709,7 +1707,9 @@ it("CI を読んだ後に閉じられて merge が失敗した PR は、読み�
   const landing = autoMerging(db, clock, workspace, github);
   await landing.tick("auto_merge", clock.now());
 
-  expect(github.stateChecks).toHaveLength(1);
+  // CI の読みと、merge の失敗の後の読み直し(ADR 0231 決定1)
+  expect(github.ciChecks).toHaveLength(2);
+  expect(github.stateChecks).toEqual([]);
   expect(await readOnNextTick(landing, github, clock.now())).toEqual([]);
   expect(mergeQuestions(db)).toEqual([]);
   expect(boardEvents(db, work.id, "pr_close_observed")).toEqual(closeObserved(1));
@@ -1739,7 +1739,7 @@ it("merge が失敗し状態の読み直しも失敗した PR は、tick を落�
   const github = new FakeGitHubClient();
   const work = queueAutoMerge(db, clock, 1);
   github.scriptMergeFailure(1, new Error(CONFLICT));
-  github.scriptStateReadFailure(1, new Error("gh: could not reach github.com"));
+  afterCiRead(github, () => github.scriptUnreadable(1));
   const logged = vi.spyOn(console, "error").mockImplementation(() => {});
 
   const landing = autoMerging(db, clock, workspace, github);
@@ -1748,11 +1748,44 @@ it("merge が失敗し状態の読み直しも失敗した PR は、tick を落�
   expect(logged).toHaveBeenCalledWith(expect.stringContaining("auto-merge of PR #1 "), expect.any(Error));
   expect(await readOnNextTick(landing, github, clock.now())).toEqual([1]);
   expect(mergeQuestions(db)).toEqual([]);
-  expect(
-    ["pr_merged", "pr_merge_observed", "pr_close_observed", "auto_merge_withdrawn"].flatMap((kind) =>
-      boardEvents(db, work.id, kind),
-    ),
-  ).toEqual([]);
+  expect(autoMergeOutcomeEvents(db, work.id)).toEqual([]);
+});
+
+// ADR 0231 決定1: 失敗の文面では見分けない — head が同じなら、文面が head の不一致に見えても「開いたまま失敗」
+it("head が CI を読んだときのまま merge が失敗した PR は、失敗の文面に依らず推奨 hold の merge question になる", async () => {
+  const workspace = await makeWorkspace("landing-same-head-fails");
+  const { db, clock } = await openBoard();
+  const github = new FakeGitHubClient();
+  queueAutoMerge(db, clock, 1);
+  const headLikeFailure = "Head branch was modified. Review and try the merge again.";
+  github.scriptMergeFailure(1, new Error(headLikeFailure));
+
+  const landing = autoMerging(db, clock, workspace, github);
+  await landing.tick("auto_merge", clock.now());
+
+  expect(await readOnNextTick(landing, github, clock.now())).toEqual([]);
+  expect(mergeQuestions(db).map((q) => [q.pr, q.recommendation])).toEqual([[1, "hold"]]);
+});
+
+// ADR 0231 決定1: head が動いたことは次の tick で新しい head の CI を読む理由であって、人間に問うことではない
+it("CI を読んだ後に head が動いた PR は merge されず、question も event も残さずキューに残り、次の tick で新しい head の CI が緑なら新しい head で merge される", async () => {
+  const workspace = await makeWorkspace("landing-head-moved");
+  const { db, clock } = await openBoard();
+  const github = new FakeGitHubClient();
+  const work = queueAutoMerge(db, clock, 1);
+  github.scriptHead(1, "ci-read-head");
+  afterCiRead(github, () => github.scriptHead(1, "pushed-after-ci-read"));
+
+  const landing = autoMerging(db, clock, workspace, github);
+  await landing.tick("auto_merge", clock.now());
+
+  expect(github.merged).toEqual([]);
+  expect(mergeQuestions(db)).toEqual([]);
+  expect(autoMergeOutcomeEvents(db, work.id)).toEqual([]);
+
+  expect(await readOnNextTick(landing, github, clock.now())).toEqual([1]);
+  expect(github.merged).toEqual([{ path: workspace.path, number: 1 }]);
+  expect(github.mergedHeads).toEqual(["pushed-after-ci-read"]);
 });
 
 it("分類できない例外が1件の PR で起きても、tick は落ちずその PR はキューに残り、後ろの PR は処理される", async () => {
@@ -2046,6 +2079,136 @@ it("門が閉じている間にダイヤルが external へ変わった PR は�
     { kind: "auto_merge_withdrawn", pr_number: 1, merge: "external" },
   ]);
 });
+
+// ADR 0231 決定2・3: 積み残しは回答時と merge 時に読み、門にも着地の登録にも混ぜない。
+// 以下がこの検査を述べる唯一の場所(ADR 0107)。
+/** タスクブランチを push して PR #1 を開く。auto_if_ci_green なら無人 merge キューに入り、
+ *  escalate なら merge question が立つ。checkout はタスクブランチに残る。 */
+async function openPushedPr(name: string, merge: MergeDial) {
+  const { workspace } = await makeRemoteBackedWorkspace(name);
+  const { db, clock } = await openBoard();
+  const github = new FakeGitHubClient();
+  const work = landingWork(db, clock);
+  git(workspace.path, "checkout", "-b", `task/${work.id}`);
+  commitWork(workspace.path, "feature.txt", "ready\n");
+  git(workspace.path, "push", "-u", "origin", `task/${work.id}`);
+  recordPrOpenedViaWorker(db, work, 1, "worker", clock.now(), { authority: { merge } });
+  const landing = createLanding({
+    defaultAgentName: "tako",
+    db,
+    clock,
+    workspace,
+    github,
+    resolveAuthority: () => profile(merge),
+  });
+  return { workspace, db, clock, github, work: getTask(db, work.id)!, landing };
+}
+
+/** 修理(付帯子)は done で、その後始末(merge back)が未了。門は開いている。 */
+function settleRepairStillTearingDown(db: Db, clock: FakeClock, landingTaskId: string) {
+  const repair = attachUnsettledChild(db, clock, landingTaskId);
+  completeTask(db, repair, FULL_HANDOFF, "worker", clock.now(), "worker");
+  markTeardown(db, repair.id, clock.now());
+}
+
+it("子孫に後始末が未了のタスクがあれば積み残しで、CI 緑でも無人 merge されず、event も question も無くキューに残る", async () => {
+  const { db, clock, github, work, landing } = await openPushedPr("left-behind-teardown", "auto_if_ci_green");
+  settleRepairStillTearingDown(db, clock, work.id);
+  const events = listEvents(db, work.id).length;
+
+  await landing.tick("auto_merge", clock.now());
+
+  expect(github.merged).toEqual([]);
+  expect(mergeQuestions(db)).toEqual([]);
+  expect(listEvents(db, work.id)).toHaveLength(events);
+
+  // キューに残っている —— 後始末が終われば次の tick で merge される
+  db.prepare("UPDATE tasks SET teardown_started_at = NULL").run();
+  await landing.tick("auto_merge", clock.now());
+  expect(github.merged.map((pr) => pr.number)).toEqual([1]);
+});
+
+it("merge back 済み・push 前でタスクブランチが origin 側に無い内容を持てば積み残しで無人 merge されず、着地が push した後の tick で merge される", async () => {
+  const { workspace, db, clock, github, work, landing } = await openPushedPr("left-behind-unpushed", "auto_if_ci_green");
+  commitWork(workspace.path, "repair.txt", "fixed\n");
+
+  await landing.tick("auto_merge", clock.now());
+  expect(github.merged).toEqual([]);
+  expect(mergeQuestions(db)).toEqual([]);
+
+  await expect(landing.land(work)).resolves.toMatchObject({ kind: "landed", form: "open_pull_request_updated" });
+  await landing.tick("auto_merge", clock.now());
+  expect(github.merged.map((pr) => pr.number)).toEqual([1]);
+});
+
+it("盤面の外の push で origin 側だけが先へ進んでいるのは積み残しではなく、無人 merge される", async () => {
+  const { workspace, db, clock, github, work, landing } = await openPushedPr("left-behind-outside-push", "auto_if_ci_green");
+  git(workspace.path, "checkout", "-b", "outside");
+  commitWork(workspace.path, "outside.txt", "pushed by a human\n");
+  git(workspace.path, "push", "origin", `outside:task/${work.id}`);
+  git(workspace.path, "checkout", `task/${work.id}`);
+
+  await landing.tick("auto_merge", clock.now());
+
+  expect(github.merged.map((pr) => pr.number)).toEqual([1]);
+  expect(mergeQuestions(db)).toEqual([]);
+});
+
+it("origin 側のタスクブランチが読めなければ積み残しとして無人 merge しない(fail-closed)", async () => {
+  const { workspace, github, work, landing, clock } = await openPushedPr("left-behind-unreadable", "auto_if_ci_green");
+  git(workspace.path, "update-ref", "-d", `refs/remotes/origin/task/${work.id}`);
+
+  await landing.tick("auto_merge", clock.now());
+
+  expect(github.merged).toEqual([]);
+});
+
+it("積み残しがあっても着地の登録は走る —— PR を開き、開いている PR へ修理を push する", async () => {
+  const { workspace } = await makeRemoteBackedWorkspace("left-behind-still-lands");
+  const { db, clock } = await openBoard();
+  const github = new FakeGitHubClient();
+  const landing = createLanding({ defaultAgentName: "tako", db, clock, workspace, github });
+  const work = landingWork(db, clock);
+  git(workspace.path, "checkout", "-b", `task/${work.id}`);
+  commitWork(workspace.path, "feature.txt", "ready\n");
+  settleRepairStillTearingDown(db, clock, work.id);
+
+  await expect(landing.land(work)).resolves.toMatchObject({ kind: "landed", form: "pull_request_opened" });
+  commitWork(workspace.path, "repair.txt", "fixed\n");
+  await expect(landing.land(getTask(db, work.id)!)).resolves.toMatchObject({
+    kind: "landed",
+    form: "open_pull_request_updated",
+  });
+});
+
+it.each<[string, (pr: Awaited<ReturnType<typeof openPushedPr>>) => void]>([
+  ["子孫の後始末が未了", ({ db, clock, work }) => settleRepairStillTearingDown(db, clock, work.id)],
+  ["merge back 済み・push 前", ({ workspace }) => commitWork(workspace.path, "repair.txt", "fixed\n")],
+])(
+  "積み残し(%s)のある PR への人間の merge 回答は拒まれ、merge されず question は開いたまま残る",
+  async (_, leaveBehind) => {
+    const pr = await openPushedPr("left-behind-answer", "escalate");
+    const { workspace, db, clock, github } = pr;
+    leaveBehind(pr);
+    const question = getTask(db, listBoard(db).find((q) => q.question_pending_merge_pr === 1)!.id)!;
+    await expect(
+      submitAnswer(
+        { db, pollNow: () => {}, landing: unusedLanding, workspace, github },
+        question,
+        ["merge"],
+        undefined,
+        () => clock.now(),
+        "webui",
+      ),
+    ).rejects.toThrow(
+      new DomainError(
+        "cannot merge yet: PR #1 does not carry all of the task's content yet — answer again once the board has pushed it",
+      ),
+    );
+    expect(github.merged).toEqual([]);
+    expect(listBoard(db).find((q) => q.id === question.id)?.status).toBe("todo");
+  },
+);
 
 it("escalate で開いた PR の後にダイヤルを auto_if_ci_green へ緩めても、何も無人 merge キューに入らない", async () => {
   const workspace = await makeWorkspace("landing-loosened-dial");

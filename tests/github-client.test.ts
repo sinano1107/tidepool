@@ -125,7 +125,7 @@ it("トークンは gh の子プロセス env にだけ注入され、盤面プ�
   git(repoPath, "init", "-b", "main");
   git(repoPath, "remote", "add", "origin", "https://github.com/acme/widget.git");
 
-  await new GhCliClient(await makeAuth()).mergePullRequest({ path: repoPath, number: 7 });
+  await new GhCliClient(await makeAuth()).mergePullRequest({ path: repoPath, number: 7 }, "abc123");
 
   // gh 側(子プロセス)が見るのは**仲介が発行した installation token**であって
   // ファイルの中身(user token)ではない。worker が丸ごと継承する側の process.env
@@ -233,13 +233,13 @@ it("readPullRequest は gh が非ゼロ終了したら(到達不能)CI を pendi
   expect(pr).toEqual({ ci: "pending", state: "unreadable" });
 });
 
-// ADR 0229 決定2: 状態は CI と同じ1回の読み取りに載せる —— tick の網の呼び出しを増やさない
-it("readPullRequest は1回の gh pr view --json state,statusCheckRollup で CI と状態を読む", async () => {
+// ADR 0229 決定2 / ADR 0231 決定1: 状態と head は CI と同じ1回の読み取りに載せる —— tick の網の呼び出しを増やさない
+it("readPullRequest は1回の gh pr view --json state,statusCheckRollup,headRefOid で CI と状態と head を読む", async () => {
   const dir = await tempDir("tidepool-fakebin-");
   const logPath = join(dir, "gh-invocations.log");
   writeFileSync(
     join(dir, "gh"),
-    `#!/bin/sh\necho "$@" >> "${logPath}"\nprintf '{"state":"CLOSED","statusCheckRollup":[{"conclusion":"SUCCESS"}]}'\n`,
+    `#!/bin/sh\necho "$@" >> "${logPath}"\nprintf '{"state":"CLOSED","statusCheckRollup":[{"conclusion":"SUCCESS"}],"headRefOid":"abc123"}'\n`,
   );
   chmodSync(join(dir, "gh"), 0o755);
   originalPath = process.env.PATH;
@@ -247,8 +247,10 @@ it("readPullRequest は1回の gh pr view --json state,statusCheckRollup で CI 
 
   const pr = await new GhCliClient(await makeAuth()).readPullRequest({ path: "/tmp", number: 7 });
 
-  expect(pr).toEqual({ ci: "success", state: "CLOSED" });
-  expect((await readFile(logPath, "utf8")).trim().split("\n")).toEqual(["pr view 7 --json state,statusCheckRollup"]);
+  expect(pr).toEqual({ ci: "success", state: "CLOSED", head: "abc123" });
+  expect((await readFile(logPath, "utf8")).trim().split("\n")).toEqual([
+    "pr view 7 --json state,statusCheckRollup,headRefOid",
+  ]);
 });
 
 /** Stands in for `gh issue view --json title,body,comments`: prints the
@@ -361,7 +363,8 @@ it("listIssues は gh issue list --state open --limit 100 --json number,title �
   expect(invocations).toContain("issue list --state open --limit 100 --json number,title");
 });
 
-it("mergePullRequest は gh pr merge --merge を呼ぶ", async () => {
+// ADR 0231 決定1: merge は CI を読んだ head に固定する —— head を渡さない merge の経路は無い
+it("mergePullRequest は CI を読んだ head を --match-head-commit に渡して gh pr merge --merge を呼ぶ", async () => {
   const dir = await tempDir("tidepool-fakebin-");
   const logPath = join(dir, "gh-invocations.log");
   writeFileSync(join(dir, "gh"), `#!/bin/sh\necho "$@" >> "${logPath}"\n`);
@@ -369,10 +372,10 @@ it("mergePullRequest は gh pr merge --merge を呼ぶ", async () => {
   originalPath = process.env.PATH;
   process.env.PATH = `${dir}:${originalPath}`;
 
-  await new GhCliClient(await makeAuth()).mergePullRequest({ path: "/tmp", number: 7 });
+  await new GhCliClient(await makeAuth()).mergePullRequest({ path: "/tmp", number: 7 }, "abc123");
 
   const invocations = await readFile(logPath, "utf8");
-  expect(invocations).toContain("pr merge 7 --merge");
+  expect(invocations.trim().split("\n")).toEqual(["pr merge 7 --merge --match-head-commit abc123"]);
 });
 
 it("getPullRequestState は gh pr view --json state を読み、状態をそのまま返す(ADR 0079 / ADR 0229)", async () => {

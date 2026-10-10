@@ -410,7 +410,11 @@ export class FakeGitHubClient implements GitHubClient {
   readonly issueComments: Array<{ ref: IssueRef; body: string }> = [];
   readonly ciChecks: PrRef[] = [];
   readonly merged: PrRef[] = [];
+  /** The head each entry of `merged` was pinned to (ADR 0231 決定1), same order. */
+  readonly mergedHeads: string[] = [];
   readonly stateChecks: PrRef[] = [];
+  private heads = new Map<number, string>();
+  private unreadable = new Set<number>();
   private mergedOutside = new Set<number>();
   private closedOutside = new Set<number>();
   private mergeFailures = new Map<number, Error>();
@@ -427,8 +431,14 @@ export class FakeGitHubClient implements GitHubClient {
   private issueList: OpenIssue[] | null = null;
   private issueListFailure: Error | null = null;
 
+  /** 本物と同じく、PR を開く前にタスクブランチを push する —— `refs/remotes/origin/<branch>` が
+   *  無いと積み残し(ADR 0231 決定2)を読めない。`pushes` には数えない(開いている PR への push の記録)。 */
   async createPullRequest(input: CreatePrInput): Promise<PrResult> {
     this.requests.push(input);
+    execFileSync("git", ["push", "-u", "origin", input.branch], {
+      cwd: input.path,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
     if (this.failure) throw this.failure;
     const number = this.nextNumber++;
     return { url: `https://github.com/example/repo/pull/${number}`, number };
@@ -458,20 +468,41 @@ export class FakeGitHubClient implements GitHubClient {
     return this.closedOutside.has(number) ? "CLOSED" : "OPEN";
   }
 
-  async readPullRequest(ref: PrRef): Promise<PrStatus> {
-    this.ciChecks.push(ref);
-    return { ci: this.ciStatus, state: this.stateOf(ref.number) };
+  private headOf(number: number): string {
+    return this.heads.get(number) ?? `head-of-pr-${number}`;
   }
 
-  async mergePullRequest(ref: PrRef): Promise<void> {
+  async readPullRequest(ref: PrRef): Promise<PrStatus> {
+    this.ciChecks.push(ref);
+    if (this.unreadable.has(ref.number)) return { ci: "pending", state: "unreadable" };
+    return { ci: this.ciStatus, state: this.stateOf(ref.number), head: this.headOf(ref.number) };
+  }
+
+  async mergePullRequest(ref: PrRef, head: string): Promise<void> {
     // GitHub refuses a merge on an already-merged or closed PR; the fake must
     // too, or the poll's retry hole (ADR 0079 決定3 / ADR 0229) can't be reproduced here
     if (this.stateOf(ref.number) !== "OPEN") {
       throw new Error(`PR #${ref.number} is ${this.stateOf(ref.number).toLowerCase()}`);
     }
+    // --match-head-commit: GitHub refuses a head that is no longer the PR's (ADR 0231 決定1)
+    if (head !== this.headOf(ref.number)) {
+      throw new Error("Head branch was modified. Review and try the merge again.");
+    }
     const failure = this.mergeFailures.get(ref.number);
     if (failure) throw failure;
     this.merged.push(ref);
+    this.mergedHeads.push(head);
+  }
+
+  /** Moves one PR's head — a push onto its branch (ADR 0231 決定1). */
+  scriptHead(number: number, head: string): void {
+    this.heads.set(number, head);
+  }
+
+  /** Makes the combined read on one PR come back unreadable — gh exited
+   *  non-zero. The real client never throws there. */
+  scriptUnreadable(number: number): void {
+    this.unreadable.add(number);
   }
 
   async getPullRequestState(ref: PrRef): Promise<PrState> {
@@ -593,6 +624,16 @@ export class FakeGitHubClient implements GitHubClient {
   ): void {
     this.unreachable.set(fullName.toLowerCase(), reason);
   }
+}
+
+/** CI を読み終えた瞬間に change を走らせる — 「CI を読んでいる間に変わる」を作る。 */
+export function afterCiRead(github: FakeGitHubClient, change: () => void): void {
+  const readPullRequest = github.readPullRequest.bind(github);
+  github.readPullRequest = async (ref) => {
+    const pr = await readPullRequest(ref);
+    change();
+    return pr;
+  };
 }
 
 /** Scripted stand-in at the PushClient seam (issue #14): records every send

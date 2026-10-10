@@ -26,7 +26,7 @@ import {
 import { commitTriage, startTriage } from "../src/triage.js";
 import { BOARD_WORKER_ID, HUMAN_WORKER_ID } from "../src/worker-id.js";
 import { quarantineWorkspace, UnknownWorkspaceError } from "../src/workspace.js";
-import { FakeClock, FakeDraftClient, FakeGitHubClient, unusedLanding } from "./fakes.js";
+import { afterCiRead, FakeClock, FakeDraftClient, FakeGitHubClient, unusedLanding } from "./fakes.js";
 import {
   decomposeTaskViaWorker,
   HUMAN_WEBUI,
@@ -616,9 +616,9 @@ it("merge 回答は question の workspace で live CI を確認してから実 
     currentNow = afterCi;
     return readPullRequest(ref);
   };
-  github.mergePullRequest = async (ref) => {
+  github.mergePullRequest = async (ref, head) => {
     callOrder.push("merge");
-    return mergePullRequest(ref);
+    return mergePullRequest(ref, head);
   };
 
   const answered = await submitAnswer(
@@ -656,8 +656,8 @@ it("merge 回答は question の workspace で live CI を確認してから実 
   });
 });
 
-// ADR 0227 決定2・3: check 未報告の PR への「merge」回答は、盤面の最後の push から5分の猶予の間だけ拒まれる
-function answerMergeOnUnreportedCi(minutesSincePrOpened: number) {
+// PR #42 を開いた escalate の work の merge question に、PR を開いてから minutesSincePrOpened 分後に「merge」と答える
+function answerMerge(github: FakeGitHubClient, minutesSincePrOpened: number) {
   db = openDb(":memory:");
   const work = registerTask(
     db,
@@ -672,9 +672,7 @@ function answerMergeOnUnreportedCi(minutesSincePrOpened: number) {
     ...HUMAN_WEBUI,
   );
   recordPrOpened(db, work, 42, "worker", NOW, { merge: "escalate" }, undefined, "worker");
-  const github = new FakeGitHubClient();
-  github.scriptCiStatus("unreported");
-  const answer = submitAnswer(
+  return submitAnswer(
     {
       db,
       pollNow: () => {},
@@ -688,7 +686,13 @@ function answerMergeOnUnreportedCi(minutesSincePrOpened: number) {
     () => new Date(NOW.getTime() + minutesSincePrOpened * 60_000),
     "webui",
   );
-  return { github, answer };
+}
+
+// ADR 0227 決定2・3: check 未報告の PR への「merge」回答は、盤面の最後の push から5分の猶予の間だけ拒まれる
+function answerMergeOnUnreportedCi(minutesSincePrOpened: number) {
+  const github = new FakeGitHubClient();
+  github.scriptCiStatus("unreported");
+  return { github, answer: answerMerge(github, minutesSincePrOpened) };
 }
 
 it("check 未報告の PR への merge 回答は、PR を開いてから5分の猶予の内なら拒否され question は開いたまま", async () => {
@@ -708,6 +712,25 @@ it("猶予の5分を過ぎても check 未報告の PR への merge 回答は、
 
   await expect(answer).resolves.toMatchObject({ status: "done" });
   expect(github.merged).toEqual([{ path: "/workspaces/product", number: 42 }]);
+});
+
+it("merge 回答は CI を読んだ head に固定して merge する", async () => {
+  const github = new FakeGitHubClient();
+  github.scriptHead(42, "ci-read-head");
+
+  await expect(answerMerge(github, 0)).resolves.toMatchObject({ status: "done" });
+  expect(github.mergedHeads).toEqual(["ci-read-head"]);
+});
+
+// ADR 0231 決定1: 回答を受理してから merge するまでに着いた push は、検査なしに入らない
+it("CI を読んだ後に head が動いた PR への merge 回答は失敗し、merge されず question は開いたまま残る", async () => {
+  const github = new FakeGitHubClient();
+  github.scriptHead(42, "ci-read-head");
+  afterCiRead(github, () => github.scriptHead(42, "pushed-after-ci-read"));
+
+  await expect(answerMerge(github, 0)).rejects.toThrow("Head branch was modified");
+  expect(github.merged).toEqual([]);
+  expect(onlyQuestion(db).status).toBe("todo");
 });
 
 it("workspace quarantine の回答は tree が clean と確認できなければ DomainError になり、question は todo のまま残る", async () => {
