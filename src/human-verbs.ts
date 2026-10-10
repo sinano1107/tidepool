@@ -1002,7 +1002,12 @@ export async function submitAnswer(
     // External merge precedes the persisted answer. If it fails, the question
     // stays open and the human can retry instead of being stranded as done.
     // CI を読んだ head に固定する(ADR 0231 決定1)
-    await deps.github.mergePullRequest({ path: mergeWorkspace.path, number: mergePr }, pr.head);
+    // 失敗は文面で分けずすべて DomainError に包む —— ローカル着地(ADR 0103 決定4)と同じ形で、WebUI は 409 で理由を見られる
+    try {
+      await deps.github.mergePullRequest({ path: mergeWorkspace.path, number: mergePr }, pr.head);
+    } catch (err) {
+      throw new DomainError(`merging PR #${mergePr} failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
   }
 
   // Quarantine confirmation is never taken on faith (ADR 0137 決定5): the
