@@ -10,10 +10,12 @@ CI の無い repo では `auto_if_ci_green` の PR がキュー投入の次の t
 
 1. **空の集計は緑でも pending でもない第4の値(checks 未報告)として読む。** ADR 0053 決定3 が purely-local に引いた
    「観測不能を緑と読まない」を、remote-backed で check の無い PR にも当てる。
-2. **未報告は、盤面自身がその PR の head へ最後に push した時点から5分の猶予の間、pending と同じに扱う。** 盤面が push
-   するのは PR を開くときと、開いている PR へ修理を push するときの2つで、後者も盤面名義の外向きの行為として event に
-   記録し、起点は記録から取る。猶予は PR ごとであり、無人 merge と人間の merge 回答の両方の経路が同じ起点を読む —
-   猶予の間、無人 merge は待ち、人間の「merge」回答は CI 未報告として拒否され question は開いたまま残る。
+2. **未報告は、盤面がその head を知った時点から5分の猶予の間、pending と同じに扱う。** 盤面が head を知るのは、自分で
+   push したとき(PR を開くときと、開いている PR へ修理を push するときの2つ。後者も盤面名義の外向きの行為として event に
+   記録する)と、盤面の外で push された head を初めて読んだときである。どちらも event に記録し、起点は記録から取る。
+   起点の無い head は無い — 知らない head を読んだら、その時点を起点として記録する(fail-closed。issue #1625 /
+   ADR 0231)。猶予は head ごとであり、無人 merge と人間の merge 回答の両方の経路が同じ起点を読む — 猶予の間、無人
+   merge は待ち、人間の「merge」回答は CI 未報告として拒否され question は開いたまま残る。
 3. **猶予を過ぎても未報告なら、無人 merge は理由を本文に書いた merge question に倒れ、人間の回答は通る。** 無人 merge は
    CI 赤と同じ形でキューを外れて question を立てる。立てる直前に門と着地の面を読み直すのも同じで(ADR 0217)、`external`
    へ取り下げられていれば question は立たない。人間の回答を通すのは、merge するかを判断する人間が回答の中にいるから
@@ -25,10 +27,8 @@ CI の無い repo では `auto_if_ci_green` の PR がキュー投入の次の t
 
 ## 残る穴
 
-決定2で塞げないものが2つあり、どちらも両経路に同じ形で残る。盤面の外での push(人間が GitHub 上でタスクブランチへ
-push する — 盤面は起点を知らない。読んだ head と merge する head の対応は #1625)と、猶予より遅れて報告される CI である。
-これを塞ぎたい repo は required status checks を宣言すれば GitHub がネイティブに塞ぐ(盤面の GitHub 身元が bypass を
-持たない限り)。
+決定2で塞げないものが1つあり、両経路に同じ形で残る — 猶予より遅れて報告される CI である。これを塞ぎたい repo は
+required status checks を宣言すれば GitHub がネイティブに塞ぐ(盤面の GitHub 身元が bypass を持たない限り)。
 
 ## Considered options
 
