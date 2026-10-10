@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { Db } from "./db.js";
 import { DEFAULT_AUDITOR_NAME } from "./defaults.js";
 import { DomainError } from "./domain-error.js";
-import { appendEvent, type EventOrigin, type EventPayload, getEvent, latestEventOfTask, type TaskScopedPayload, taskDecisionLog } from "./events.js";
+import { appendEvent, type EventOrigin, type EventPayload, getEvent, latestEventOfTask, type ResolvedFromDefault, type TaskScopedPayload, taskDecisionLog } from "./events.js";
 import type { AddTierAmendment, ExecutionSettingRow, RoutingRowChange } from "./execution-setting.js";
 import type { GitHubClient, Issue, IssueRef } from "./github.js";
 import type { MemoryAmendment } from "./memory.js";
@@ -909,34 +909,28 @@ export function splitHandoffMarkdown(doc: string): Array<{ heading: string; body
 }
 
 /** Hand the queue head to a worker: in_progress + event, atomically. The
- *  default reference ends here (ADR 0233): an empty `workspace` gets
- *  `defaultWorkspaceName`, and an empty work `assignee` gets `workerId` — the
- *  caller's resolved agent (`task.assignee ?? the default agent`), which is
- *  also the event's attribution. A set name is never overwritten (ADR 0012 /
- *  issue #36), and a review's empty assignee stays empty: it refers to the
- *  Auditor pointer, i.e. independent review. The event records which columns
- *  were filled from a default and with what, since registration records
- *  neither.
+ *  default reference ends here (ADR 0233): each name in `fill` — the caller's
+ *  resolution of a default — is written onto its column only while that
+ *  column is empty, so a set name is never overwritten (ADR 0012 / issue
+ *  #36). The event records which columns were filled and with what, since
+ *  registration records neither. `workerId` is the event's attribution.
  *
  *  `task` is the head the scheduler chose before awaiting real I/O (issue
  *  #972): if a human door cancelled it or handed it to `human` meanwhile, the
  *  row no longer matches and the pickup is abandoned (null, no event). The
  *  fills test the row, not `task`, so a name set in that window is kept. */
-export function pickupTask(db: Db, task: Task, workerId: string, now: Date, defaultWorkspaceName?: string): Task | null {
+export function pickupTask(db: Db, task: Task, workerId: string, now: Date, fill: ResolvedFromDefault = {}): Task | null {
   return db.transaction(() => {
     const { changes } = db
       .prepare("UPDATE tasks SET status = 'in_progress' WHERE id = ? AND status = 'todo' AND assignee IS NOT ?")
       .run(task.id, HUMAN_WORKER_ID);
     if (changes === 0) return null;
-    const filled: { assignee?: string; workspace?: string } = {};
-    if (db.prepare("UPDATE tasks SET assignee = ? WHERE id = ? AND type = 'work' AND assignee IS NULL").run(workerId, task.id).changes) {
-      filled.assignee = workerId;
-    }
-    if (
-      defaultWorkspaceName &&
-      db.prepare("UPDATE tasks SET workspace = ? WHERE id = ? AND workspace IS NULL").run(defaultWorkspaceName, task.id).changes
-    ) {
-      filled.workspace = defaultWorkspaceName;
+    const filled: ResolvedFromDefault = {};
+    for (const column of ["assignee", "workspace"] as const) {
+      const name = fill[column];
+      if (name && db.prepare(`UPDATE tasks SET ${column} = ? WHERE id = ? AND ${column} IS NULL`).run(name, task.id).changes) {
+        filled[column] = name;
+      }
     }
     appendEvent(db, {
       taskId: task.id,

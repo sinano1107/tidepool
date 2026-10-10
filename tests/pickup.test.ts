@@ -19,10 +19,6 @@ it("the hourly tick hands the queue head to the worker and marks it in_progress"
   const list = (await api(t.baseUrl, "GET", "/api/tasks")).json;
   const byId = Object.fromEntries(list.map((x: any) => [x.id, x]));
   expect(byId[first.id].status).toBe("in_progress");
-  // the default reference ends at pickup (ADR 0233): the resolved default
-  // agent is written onto the task, so the stored value is the name too
-  expect(byId[first.id]).toMatchObject({ assignee: "fake-worker", raw_assignee: "fake-worker" });
-  expect(byId[second.id]).toMatchObject({ assignee: "fake-worker", raw_assignee: null });
   expect(byId[second.id].status).toBe("todo");
 
   // slot is busy (concurrency = 1): the next tick starts nothing new

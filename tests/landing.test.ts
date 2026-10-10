@@ -2944,14 +2944,9 @@ it("head を刻めなかった abandon は、内容を変えない次の決着�
 
 // ADR 0233: 既定への参照は pickup で終わる —— 着手したタスクの着地は、既定を差し替えた盤面でも pickup で解決した先に向かう
 
-/** 既定 `workspaceName`(省略なら workspace 未指定のまま)と既定 agent `agent` で pickup し、完了して完了時レビューを決着させる。 */
-function pickedUpAndCompleted(board: Db, clock: FakeClock, agent: string, workspaceName?: string, onBranch?: WorkspaceConfig): Task {
-  const picked = pickupTask(board, landingWork(board, clock), agent, clock.now(), workspaceName)!;
-  if (onBranch) {
-    git(onBranch.path, "checkout", "-b", `task/${picked.id}`);
-    commitWork(onBranch.path, "feature.txt", "ready\n");
-    git(onBranch.path, "checkout", "main");
-  }
+/** 既定 `workspace`(省略なら workspace 未指定のまま)と既定 agent `agent` で pickup し、完了して完了時レビューを決着させる。 */
+function pickedUpAndCompleted(board: Db, clock: FakeClock, agent: string, workspace?: WorkspaceConfig): Task {
+  const picked = pickupTask(board, landingWork(board, clock), agent, clock.now(), { assignee: agent, workspace: workspace?.name })!;
   const done = completeTask(board, picked, FULL_HANDOFF, agent, clock.now(), "worker");
   for (const review of listBoard(board).filter((t) => t.parent_id === done.id)) {
     completeTask(board, getTask(board, review.id)!, FULL_HANDOFF, "shako", clock.now(), "worker");
@@ -2965,7 +2960,7 @@ it("既定 workspace a で pickup した workspace 未指定の完了タスク�
   const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
   for (const pr of [7, 8]) {
-    recordPrOpenedViaWorker(db, pickedUpAndCompleted(db, clock, "tako", a.name), pr, "tako", clock.now(), {
+    recordPrOpenedViaWorker(db, pickedUpAndCompleted(db, clock, "tako", a), pr, "tako", clock.now(), {
       authority: { merge: "auto_if_ci_green" },
     });
   }
@@ -2999,7 +2994,10 @@ it("既定 workspace a で pickup した workspace 未指定のタスクの PR �
   const { workspace: b } = await makeRemoteBackedWorkspace("landing-pinned-land-b");
   const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
-  const done = pickedUpAndCompleted(db, clock, "tako", a.name, a);
+  const done = pickedUpAndCompleted(db, clock, "tako", a);
+  git(a.path, "checkout", "-b", `task/${done.id}`);
+  commitWork(a.path, "feature.txt", "ready\n");
+  git(a.path, "checkout", "main");
   const landing = createLanding({
     defaultAgentName: "tako",
     db,

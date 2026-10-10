@@ -22,9 +22,9 @@ export interface WorkerAdapter {
   /** The board's default agent name (ADR 0012 / issue #36) — a pointer to
    *  whichever registry agent an unspecified assignee resolves to, not "the
    *  one worker" (that concept doesn't exist: slot is capacity, not
-   *  identity). Used as the pickup/spawn-time fallback and as the
-   *  attribution on events an unspecified assignee's task generates; never
-   *  written onto a task's own `assignee` column. */
+   *  identity). Pickup resolves an unspecified work assignee to it and writes
+   *  the name onto the task (ADR 0233), so a task already picked up no longer
+   *  follows a swapped default. */
   readonly id: string;
   /** Fire-and-forget: the worker acts back on the board via MCP.
    *

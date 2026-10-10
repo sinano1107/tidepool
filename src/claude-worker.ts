@@ -1687,8 +1687,9 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     // task.workspace (issue #26 / ADR 0009) and task.assignee (ADR 0012 /
     // issue #36) both take precedence over this worker's configured
     // defaults. Pickup has already written the defaults' names onto empty
-    // columns (ADR 0233); only the paths are resolved fresh against the
-    // registry here, never pinned. An unknown name in either is registry drift, not a config
+    // columns (ADR 0233) — except a review's empty assignee, which stays the
+    // reference to the Auditor pointer; the names are resolved fresh against
+    // the registry here, never pinned to a path. An unknown name in either is registry drift, not a config
     // mistake: resolveOrQuarantine/resolveAgentOrQuarantine fail it closed
     // into quarantine rather than throwing out of start() — defense in depth
     // alongside the scheduler's own pre-pickup gate, which is what

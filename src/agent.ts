@@ -28,8 +28,9 @@ export interface ResolvedAgent {
 
 /** CONTEXT.md's Assignee: `task.assignee` is a reference to a registry agent
  *  name, resolved fresh against the registry every time it's used (spawn,
- *  quarantine clearance) — null inherits the board's default agent, never
- *  pinned. Mirrors workspace.ts's resolveExecutionWorkspace.
+ *  quarantine clearance). Null falls back to `defaultAgentName`; a work task
+ *  picked up never carries null, since pickup writes the default's name
+ *  (ADR 0233). Mirrors workspace.ts's resolveExecutionWorkspace.
  *
  *  Resolution also re-runs the definition gates (ADR 0097 決定1/3 / ADR 0110
  *  決定1): a definition whose provider or tier is outside the enumeration, that

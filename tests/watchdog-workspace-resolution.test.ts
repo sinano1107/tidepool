@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import { openDb } from "../src/db.js";
 import { getTask, pickupTask, registerTask } from "../src/tasks.js";
 import { failTask } from "../src/watchdog.js";
-import { ensureTaskBranch, UnknownWorkspaceError, type WorkspaceConfig, workspaceNeedsHuman } from "../src/workspace.js";
+import { ensureTaskBranch, workspaceNeedsHuman } from "../src/workspace.js";
 import { FakeClock } from "./fakes.js";
 import { defaultingTo, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeWorkspace } from "./harness.js";
 
@@ -14,7 +14,6 @@ describe("watchdog の failTask が task.workspace を解決する", () => {
   it("失敗した task 自身の workspace の checkout で tree rule を実行する", async () => {
     const sandbox = await makeWorkspace("sandbox");
     const prod = await makeWorkspace("prod");
-    const registry: Record<string, WorkspaceConfig> = { sandbox, prod };
     const db = openDb(":memory:");
     const clock = new FakeClock();
 
@@ -36,11 +35,7 @@ describe("watchdog の failTask が task.workspace を解決する", () => {
       getTask(db, task.id)!,
       "watchdog killed task",
       "hit its time limit",
-      (name) => {
-        const ws = registry[name ?? "sandbox"];
-        if (!ws) throw new UnknownWorkspaceError(name ?? "sandbox");
-        return ws;
-      },
+      defaultingTo(sandbox, prod),
       clock.now(),
     );
 
@@ -67,7 +62,7 @@ describe("watchdog の failTask が task.workspace を解決する", () => {
       clock.now(),
       ...HUMAN_WEBUI,
     );
-    const picked = pickupTask(db, task, "deckhand", clock.now(), "prod")!;
+    const picked = pickupTask(db, task, "deckhand", clock.now(), { workspace: "prod" })!;
     ensureTaskBranch(db, prod, picked);
     writeFileSync(join(prod.path, "stuck.txt"), "interrupted mid-write\n");
 

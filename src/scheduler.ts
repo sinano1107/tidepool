@@ -374,13 +374,18 @@ export function startScheduler(deps: {
     content: Partial<TaskContent>,
     onPicked: () => void,
   ): Promise<(() => void) | void> {
-    // the same three-value read CONTEXT.md's Assignee describes: pre-set name
-    // as-is, unspecified review to the Auditor pointer, and unspecified work to
-    // the board's default agent. Questions never enter the execution slot.
-    // pickupTask writes this name (and the default workspace's) onto empty
-    // columns — the default reference ends here (ADR 0233).
+    // resolveTaskAgent is the three-value read CONTEXT.md's Assignee
+    // describes: pre-set name as-is, unspecified review to the Auditor
+    // pointer, and unspecified work to the board's default agent. Questions
+    // never enter the execution slot. The default reference ends at pickup
+    // (ADR 0233): pickupTask writes the default workspace's name and a work
+    // task's resolved agent onto empty columns; a review's empty assignee is
+    // left as the reference to the Auditor pointer (ADR 0233 決定3).
     const agent = resolveTaskAgent(task, worker.id, auditorName ?? worker.id);
-    const picked = pickupTask(db, task, agent, clock.now(), workspace?.name);
+    const picked = pickupTask(db, task, agent, clock.now(), {
+      assignee: task.type === "work" ? agent : undefined,
+      workspace: workspace?.name,
+    });
     // await の窓で人間の扉が head を書き換えた(issue #972): slot は空けたまま、次の poll が選び直す
     if (!picked) return;
     onPicked();
