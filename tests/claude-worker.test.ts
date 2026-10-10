@@ -32,7 +32,7 @@ import {
   registryRef,
 } from "../src/registry.js";
 import { Slot } from "../src/slot.js";
-import { getTask, listBoard, nextSlotTask, resolveTaskAgent, type Task } from "../src/tasks.js";
+import { getTask, HUMAN_ROSTER_AGENT, listBoard, nextSlotTask, resolveTaskAgent, type Task } from "../src/tasks.js";
 import { sessionInTeardown } from "../src/teardown.js";
 import { getProviderUsage, reportProviderUsage } from "../src/throttle.js";
 import { TranscriptStore } from "../src/transcript-store.js";
@@ -106,8 +106,8 @@ function makeTask(
 function insertTask(db: ReturnType<typeof openDb>, task: Task): void {
   db.prepare(
     `INSERT INTO tasks (id, type, status, assignee, workspace, title, purpose, completion_criteria,
-       risk_flag, review_flag, sort_key, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       risk_flag, review_flag, sort_key, created_at, parent_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     task.id,
     task.type,
@@ -121,6 +121,7 @@ function insertTask(db: ReturnType<typeof openDb>, task: Task): void {
     task.review_flag,
     task.sort_key,
     task.created_at,
+    task.parent_id,
   );
 }
 
@@ -145,6 +146,31 @@ function pickedSetting(
   loadedRegistries.set(key, loaded);
   const { agents } = loaded;
   return executionSettingsFor(db, (agents[resolveTaskAgent(task, agent, auditorName)] ?? agents[agent])!, task)[0]!;
+}
+
+/** A second registry agent for the 当時版 Roster tests (issue #1741). */
+const LOOKOUT_MD = `---\nversion: "1"\nauthority: standard\ndescription: Looks out for the board.\nprovider: anthropic\nskills: []\n---\nYou are Lookout.\n`;
+
+/** The objected task's record a self RCA anchors on (ADR 0020 part 4): `workerId`
+ *  spawned from `commit`, logged one decision, and a human objected to it. */
+function objectDecisionAt(db: Db, taskId: string, workerId: string, commit: string): number {
+  const at = new FakeClock().now();
+  appendEvent(db, { taskId, workerId, origin: "board", payload: { ...WORKER_SPAWNED, registry_commit: commit }, at });
+  const entryId = appendEvent(db, {
+    taskId,
+    workerId,
+    origin: "worker",
+    payload: { kind: "decision_logged", line: "chose approach X" },
+    at,
+  });
+  appendEvent(db, {
+    taskId,
+    workerId: "human",
+    origin: "webui",
+    payload: { kind: "objection_raised", entry_id: entryId, comment: "reconsider X", session_id: 1 },
+    at,
+  });
+  return entryId;
 }
 
 /** A git runner pinned to the registry fixture clone, identity flags inlined
@@ -2967,12 +2993,14 @@ describe("ClaudeCodeWorker", () => {
     expect(prompt).toContain("the tidepool board's general work agent");
     expect(prompt).toContain("REFINED v2");
     // each version is labeled with the decision-log entry ids it was live for
-    expect(prompt).toContain(
-      `As of registry commit ${v1Hash.slice(0, 7)} — live for your objected entry #${decision1}`,
-    );
-    expect(prompt).toContain(
-      `As of registry commit ${v2Hash.slice(0, 7)} — live for your objected entry #${decision2}`,
-    );
+    expect(prompt).toContain(`### Live for your objected entry #${decision1}\n`);
+    expect(prompt).toContain(`### Live for your objected entry #${decision2}\n`);
+    // each version's Authority / Roster nest one level under its label (issue #1741)
+    expect(prompt).toContain("\n#### Authority as it stood then (profile ");
+    expect(prompt).not.toContain("\n### Authority as it stood then");
+    // the RCA has no registry in its cwd and no verb that reads a hash (issue #1741)
+    expect(prompt).not.toContain(v1Hash.slice(0, 7));
+    expect(prompt).not.toContain(v2Hash.slice(0, 7));
     // full coverage: no evidence-gap note
     expect(prompt).not.toContain("no definition version could be resolved");
   });
@@ -3032,9 +3060,7 @@ describe("ClaudeCodeWorker", () => {
     const args = calls[0]!.args;
     const prompt = args[args.indexOf("--append-system-prompt") + 1]!;
     // the resolvable version is injected, labeled with its entry
-    expect(prompt).toContain(
-      `As of registry commit ${main.slice(0, 7)} — live for your objected entry #${decision2}`,
-    );
+    expect(prompt).toContain(`### Live for your objected entry #${decision2}\n`);
     // and the gap is declared, not silently absorbed
     expect(prompt).toContain(
       `no definition version could be resolved for your objected entry #${decision1}`,
@@ -3071,6 +3097,157 @@ describe("ClaudeCodeWorker", () => {
     expect(prompt).toContain("You are the Auditor");
     // no deckhand definition body injected — the auditor's value is distance
     expect(prompt).not.toContain("general work agent");
+  });
+
+  it("当事者レビューの当時版には当時の Authority と Roster が profile 名の見出しで入り、後で profile を変えても当時の値が出る(issue #1741)", async () => {
+    const { worker, setting, calls, db, registryDir } = await makeWorker({
+      "authority/standard.yaml": `guidance: |\n  Prefer reversible actions THEN.\nassignable_to:\n  - deckhand\n  - human\nallowed_workspaces:\n  - "*"\nmerge: external\n`,
+    });
+    const git = registryGit(registryDir);
+    const then = git("rev-parse", "main");
+    insertTask(db, makeTask("objected-6", null, "deckhand", "work"));
+    objectDecisionAt(db, "objected-6", "deckhand", then);
+    // the profile is edited after the objected call
+    await writeFile(
+      join(registryDir, "authority", "standard.yaml"),
+      `guidance: |\n  Escalate everything NOW.\nassignable_to:\n  - "*"\nallowed_workspaces:\n  - "*"\nmerge: external\n`,
+    );
+    git("commit", "-am", "edit standard");
+
+    const rca: Task = { ...makeTask("rca-6", null, "deckhand", "review"), parent_id: "objected-6" };
+    insertTask(db, rca);
+    worker.start(rca, setting(rca));
+
+    const args = calls[0]!.args;
+    const prompt = args[args.indexOf("--append-system-prompt") + 1]!;
+    // nested one level under the 当時版 section, after the body, profile named and no hash
+    const order = [
+      "## Definition under review",
+      "Work only through the tidepool MCP verbs.\n\n### Authority as it stood then (profile standard)\n\nPrefer reversible actions THEN.",
+      "### Roster as it stood then (profile standard)\n\n" +
+        `deckhand — General work agent for the tidepool board\nhuman — ${HUMAN_ROSTER_AGENT.description}`,
+    ].map((text) => prompt.indexOf(text));
+    expect(order.every((index) => index >= 0)).toBe(true);
+    expect(order).toEqual([...order].sort((x, y) => x - y));
+    expect(prompt).not.toContain("Escalate everything NOW.");
+    expect(prompt).not.toContain(then.slice(0, 7));
+  });
+
+  it("当時の profile の `*` は当時の commit の全 agent と、上書きの無かった組み込み Auditor に展開される(issue #1741)", async () => {
+    const { worker, setting, calls, db, registryDir } = await makeWorker({ "agents/lookout.md": LOOKOUT_MD });
+    const git = registryGit(registryDir);
+    insertTask(db, makeTask("objected-7", null, "deckhand", "work"));
+    objectDecisionAt(db, "objected-7", "deckhand", git("rev-parse", "main"));
+    git("rm", "--quiet", "agents/lookout.md");
+    git("commit", "-m", "retire lookout");
+
+    const rca: Task = { ...makeTask("rca-7", null, "deckhand", "review"), parent_id: "objected-7" };
+    insertTask(db, rca);
+    worker.start(rca, setting(rca));
+
+    const args = calls[0]!.args;
+    expect(args[args.indexOf("--append-system-prompt") + 1]).toContain(
+      "### Roster as it stood then (profile standard)\n\n" +
+        "deckhand — General work agent for the tidepool board\n" +
+        "lookout — Looks out for the board.\n" +
+        `${DEFAULT_AUDITOR_NAME} — Reviews work independently against its completion criteria.`,
+    );
+  });
+
+  it("当時の commit に profile の yaml が無ければ、本文は注入した上で Authority / Roster の欠落を1行申告する(issue #1741)", async () => {
+    const { worker, setting, calls, db, registryDir } = await makeWorker();
+    const git = registryGit(registryDir);
+    git("rm", "--quiet", "authority/standard.yaml");
+    git("commit", "-m", "hand-delete standard");
+    insertTask(db, makeTask("objected-8", null, "deckhand", "work"));
+    objectDecisionAt(db, "objected-8", "deckhand", git("rev-parse", "main"));
+    git("checkout", "HEAD~1", "--", "authority/standard.yaml");
+    git("commit", "-m", "restore standard");
+
+    const rca: Task = { ...makeTask("rca-8", null, "deckhand", "review"), parent_id: "objected-8" };
+    insertTask(db, rca);
+    worker.start(rca, setting(rca));
+
+    const args = calls[0]!.args;
+    const prompt = args[args.indexOf("--append-system-prompt") + 1]!;
+    expect(prompt).toContain(
+      "Work only through the tidepool MCP verbs.\n\nNote: the authority profile standard could not be read at that commit",
+    );
+    expect(prompt).not.toContain("as it stood then");
+  });
+
+  it("当時の Roster の名前がその commit に無ければ黙って飛ばし、description が読めない agent は申告する(issue #1741)", async () => {
+    const { worker, setting, calls, db, registryDir } = await makeWorker({ "agents/lookout.md": LOOKOUT_MD });
+    const git = registryGit(registryDir);
+    await writeFile(
+      join(registryDir, "authority", "standard.yaml"),
+      `guidance: Be careful.\nassignable_to:\n  - deckhand\n  - ghost\n  - lookout\nallowed_workspaces:\n  - "*"\nmerge: external\n`,
+    );
+    await writeFile(join(registryDir, "agents", "lookout.md"), LOOKOUT_MD.replace(/^description:.*\n/m, ""));
+    git("commit", "-am", "lookout loses its description");
+    insertTask(db, makeTask("objected-9", null, "deckhand", "work"));
+    objectDecisionAt(db, "objected-9", "deckhand", git("rev-parse", "main"));
+    await writeFile(join(registryDir, "agents", "lookout.md"), LOOKOUT_MD);
+    git("commit", "-am", "restore lookout");
+
+    const rca: Task = { ...makeTask("rca-9", null, "deckhand", "review"), parent_id: "objected-9" };
+    insertTask(db, rca);
+    worker.start(rca, setting(rca));
+
+    const args = calls[0]!.args;
+    expect(args[args.indexOf("--append-system-prompt") + 1]).toContain(
+      "### Roster as it stood then (profile standard)\n\n" +
+        "deckhand — General work agent for the tidepool board\n" +
+        "lookout — (description could not be read at that commit)",
+    );
+    expect(args[args.indexOf("--append-system-prompt") + 1]).not.toContain("ghost");
+  });
+
+  it("被レビュー task が review だったとき、当時の Authority は reviewer 定数を指す1行になり、Roster は当時の被レビュー task の executor で組み直す(issue #1741)", async () => {
+    const { worker, setting, calls, db, registryDir } = await makeWorker({ "agents/lookout.md": LOOKOUT_MD });
+    insertTask(db, makeTask("reviewed-10", null, "lookout", "work"));
+    insertTask(db, { ...makeTask("objected-10", null, "deckhand", "review"), parent_id: "reviewed-10" });
+    objectDecisionAt(db, "objected-10", "deckhand", registryGit(registryDir)("rev-parse", "main"));
+
+    const rca: Task = { ...makeTask("rca-10", null, "deckhand", "review"), parent_id: "objected-10" };
+    insertTask(db, rca);
+    worker.start(rca, setting(rca));
+
+    const args = calls[0]!.args;
+    const prompt = args[args.indexOf("--append-system-prompt") + 1]!;
+    expect(prompt).toContain(
+      "### Authority as it stood then (the board's reviewer authority)\n\n" +
+        "The board's fixed reviewer authority — the same text as your own `## Authority` above. " +
+        "It is board code, not a registry profile, so it is not a target for a registry diff.\n\n" +
+        "### Roster as it stood then (the board's reviewer authority)\n\nlookout — Looks out for the board.",
+    );
+    expect(prompt).not.toContain("Prefer reversible actions.");
+  });
+
+  it("当時の担当が組み込み Auditor だった self RCA でも当時版の節は消えず、本文の位置の1行と組み直した Roster が入る(issue #1741)", async () => {
+    const { worker, setting, calls, db, registryDir } = await makeWorker(
+      {},
+      { enumerateSkills: recordingEnumerator([]).enumerateSkills },
+    );
+    insertTask(db, makeTask("reviewed-11", null, "deckhand", "work"));
+    insertTask(db, { ...makeTask("objected-11", null, DEFAULT_AUDITOR_NAME, "review"), parent_id: "reviewed-11" });
+    objectDecisionAt(db, "objected-11", DEFAULT_AUDITOR_NAME, registryGit(registryDir)("rev-parse", "main"));
+
+    const rca: Task = { ...makeTask("rca-11", null, DEFAULT_AUDITOR_NAME, "review"), parent_id: "objected-11" };
+    insertTask(db, rca);
+    worker.start(rca, setting(rca));
+    // the built-in's finite skill list launches after the async skill enumeration
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+
+    const args = calls[0]!.args;
+    const prompt = args[args.indexOf("--append-system-prompt") + 1]!;
+    expect(prompt).toContain(
+      `---\n\nYou ran then as the board's built-in ${DEFAULT_AUDITOR_NAME}: it had no registry definition at that commit, ` +
+        "so there is no body to show.\n\n### Authority as it stood then (the board's reviewer authority)",
+    );
+    expect(prompt).toContain(
+      "### Roster as it stood then (the board's reviewer authority)\n\ndeckhand — General work agent for the tidepool board",
+    );
   });
 
   it("registry チェックアウトがタスクブランチ上にあっても、記録する commit hash と版は main のもの(ADR 0020 part 3)", async () => {

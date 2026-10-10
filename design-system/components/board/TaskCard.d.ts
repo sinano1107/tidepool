@@ -1,5 +1,5 @@
 /**
- * Kanban board card for one task — id, type glyph, title, assignee, status, risk.
+ * Kanban board card for one task — id (shown truncated; full id via `title` and where tapping the card leads), type glyph, title, assignee, status, risk.
  * Blocked state is derived (open children) and shown as an amber child count.
  * @startingPoint section="Board" subtitle="Kanban task card with status, type, assignee" viewport="700x300"
  */

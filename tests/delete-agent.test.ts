@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 import { deleteAgent } from "../src/agent-create.js";
 import { openDb } from "../src/db.js";
-import { agentBodyAtCommit, loadRegistry } from "../src/registry.js";
+import { loadRegistry, registryAtCommit } from "../src/registry.js";
 import { DeletionConfirmationRequiredError } from "../src/registry-write.js";
 import { countUnsettledTasksReferencing, countUnsettledWorkAssignedTo, registerTask } from "../src/tasks.js";
 import { HUMAN_WEBUI } from "./harness.js";
@@ -206,8 +206,8 @@ describe("deleteAgent: 記録は git が保つ(ADR 0087 決定1)", () => {
     );
 
     // 過去タスクの自己 RCA が読む経路(ADR 0020 / board-prose.ts)
-    expect(agentBodyAtCommit(registryDir, before, "deckhand")).toContain("You are Deckhand");
-    expect(agentBodyAtCommit(registryDir, "HEAD", "deckhand")).toBeUndefined();
+    expect(registryAtCommit(registryDir, before)?.agents.deckhand?.body).toContain("You are Deckhand");
+    expect(registryAtCommit(registryDir, "HEAD")?.agents.deckhand).toBeUndefined();
   });
 });
 

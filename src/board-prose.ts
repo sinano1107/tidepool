@@ -4,15 +4,16 @@
 import type { Db } from "./db.js";
 import { type EventPayload, listEvents } from "./events.js";
 import {
-  type AgentDefinition,
+  type AgentAtCommit,
   type AuthorityProfile,
-  agentBodyAtCommit,
   ownEntry,
   REVIEWER_AUTHORITY_PROFILE,
   type Registry,
+  type RegistryAtCommit,
   type RosterAgent,
+  registryAtCommit,
 } from "./registry.js";
-import { AUTHORITY_WILDCARD, HUMAN_ROSTER_AGENT, reviewedTaskExecutor, type Task } from "./tasks.js";
+import { AUTHORITY_WILDCARD, getTask, HUMAN_ROSTER_AGENT, reviewedTaskExecutor, type Task } from "./tasks.js";
 
 /** doctrine のスロット(ADR 0157 決定3)。スロットは「委譲先の語」と「Workflow 段落の有無」の2つだけ。 */
 interface DoctrineVocabulary {
@@ -113,31 +114,95 @@ function rosterLine(agent: RosterAgent): string {
  *  fail-closed spirit as the adapters' registry-drift handling — and so are
  *  names resolving to the built-in agent, which never runs delegated work
  *  (ADR 0235; a shadowing entry is an ordinary agent and stays). */
-function buildRoster(registry: Registry, assignableTo: string[] | undefined): string | undefined {
+function buildRoster(
+  registryAgents: Record<string, RosterAgent & { builtin?: true }>,
+  assignableTo: string[] | undefined,
+): string | undefined {
   if (assignableTo === undefined || assignableTo.length === 0) return undefined;
   const wildcard = assignableTo.includes(AUTHORITY_WILDCARD);
   const explicitNames = assignableTo.filter((name) => name !== AUTHORITY_WILDCARD);
-  const agentNames = wildcard ? Object.keys(registry.agents) : explicitNames;
+  const agentNames = wildcard ? Object.keys(registryAgents) : explicitNames;
   const agents: RosterAgent[] = agentNames
-    .map((name) => ownEntry(registry.agents, name))
-    .filter((agent): agent is AgentDefinition => agent !== undefined && agent.builtin !== true);
+    .map((name) => ownEntry(registryAgents, name))
+    .filter((agent): agent is RosterAgent => agent !== undefined && agent.builtin !== true);
   if (explicitNames.includes(HUMAN_ROSTER_AGENT.name)) agents.push(HUMAN_ROSTER_AGENT);
   return agents.length > 0 ? agents.map(rosterLine).join("\n") : undefined;
 }
 
-/** Wraps a built roster (or nothing) as the trailing `## Roster` section of
- *  the system prompt — its own heading (CONTEXT.md's Roster term) rather
+/** Wraps a built roster (or nothing) as a Roster section — by default the
+ *  trailing `## Roster` of the system prompt, or the 当時版's nested `heading` —
+ *  its own heading (CONTEXT.md's Roster term) rather
  *  than folded into `## Authority`, since it names delegates, not authority. */
-function rosterSection(roster: string | undefined): string {
-  return roster === undefined ? "" : `\n\n## Roster\n\n${roster}`;
+function rosterSection(roster: string | undefined, heading = "## Roster"): string {
+  return roster === undefined ? "" : `\n\n${heading}\n\n${roster}`;
 }
 
-/** Wraps authority guidance as the `## Authority` section, or omits the
+/** Wraps authority guidance as an Authority section (`## Authority` unless the
+ *  当時版 passes its nested `heading`), or omits the
  *  section entirely when guidance is empty (issue #488: `standard`'s
  *  template guidance is `""`, and an empty heading would be a lie with
  *  nothing under it). */
-function authoritySection(guidance: string): string {
-  return guidance === "" ? "" : `\n\n## Authority\n\n${guidance}`;
+function authoritySection(guidance: string, heading = "## Authority"): string {
+  return guidance === "" ? "" : `\n\n${heading}\n\n${guidance}`;
+}
+
+/** A review's roster (ADR 0056): the reviewed task's executor, the one name its
+ *  repairs may always target. */
+function reviewAssignableTo(db: Db, review: Task): string[] {
+  const executor = reviewedTaskExecutor(db, review);
+  return executor !== undefined ? [executor] : (REVIEWER_AUTHORITY_PROFILE.assignable_to ?? []);
+}
+
+/** One 当時版 version's evidence (ADR 0020 part 4, #1741 addendum): the body,
+ *  then the Authority and Roster sections that spawn rendered, rebuilt from the
+ *  registry at that commit under `level` headings nested in the 当時版 section.
+ *  `parentReviewAssignableTo` is set when the objected task was itself a review:
+ *  its Authority was then the reviewer constant, identical to the RCA's own. */
+function versionEvidence(
+  level: string,
+  assignee: string,
+  agent: AgentAtCommit,
+  registry: RegistryAtCommit,
+  parentReviewAssignableTo: string[] | undefined,
+): string {
+  const body = agent.builtin
+    ? `You ran then as the board's built-in ${assignee}: it had no registry definition at that commit, so there is no body to show.`
+    : agent.body!;
+  let then: { label: string; guidance: string; assignable_to: string[] };
+  if (parentReviewAssignableTo !== undefined) {
+    then = {
+      label: "the board's reviewer authority",
+      guidance:
+        "The board's fixed reviewer authority — the same text as your own `## Authority` above. " +
+        "It is board code, not a registry profile, so it is not a target for a registry diff.",
+      assignable_to: parentReviewAssignableTo,
+    };
+  } else {
+    const profile = agent.authority === undefined ? undefined : ownEntry(registry.authority, agent.authority);
+    if (profile === undefined) {
+      const missing =
+        agent.authority === undefined
+          ? "your definition named no readable authority profile"
+          : `the authority profile ${agent.authority} could not be read`;
+      return (
+        `${body}\n\nNote: ${missing} at that commit — ` +
+        "the Authority and Roster you were given then are missing from this evidence."
+      );
+    }
+    then = { label: `profile ${agent.authority}`, ...profile };
+  }
+  // a name whose description is unreadable stays listed: dropping it would read as "not in your roster"
+  const rosterAgents = Object.fromEntries(
+    Object.entries(registry.agents).map(([name, { description }]) => [
+      name,
+      { name, description: description ?? "(description could not be read at that commit)" },
+    ]),
+  );
+  return (
+    body +
+    authoritySection(then.guidance, `${level} Authority as it stood then (${then.label})`) +
+    rosterSection(buildRoster(rosterAgents, then.assignable_to), `${level} Roster as it stood then (${then.label})`)
+  );
 }
 
 /** "entry #3" / "entries #3, #5" — decision-log event ids, the same id space
@@ -158,10 +223,12 @@ function entryLabels(ids: number[]): string {
  *  mistaken for the 当時版; resolving per entry — not folding to one anchor —
  *  keeps judgments that span sessions under different versions from being
  *  read against a definition that never shaped them. Entries all resolving
- *  to one version (the common case) produce the original single section,
- *  byte for byte; distinct versions are each injected, labeled with the
- *  decision-log entry ids they were live for (the same id space the RCA
- *  reads via get_current_task's parent decision_log). Independent reviews
+ *  to one version (the common case) produce a single section; distinct
+ *  versions are each injected, labeled with the decision-log entry ids they
+ *  were live for (the same id space the RCA reads via get_current_task's
+ *  parent decision_log), never the hash the RCA has no way to read. Each
+ *  version carries the Authority and Roster that spawn rendered (#1741
+ *  addendum). Independent reviews
  *  (unset assignee → the Auditor pointer, issue #42) get no such injection:
  *  their value is distance from the judgment, not the 原本. Best-effort — an
  *  entry whose version cannot be resolved (a kill left no record, an
@@ -205,22 +272,29 @@ function historicalDefinitionSection(db: Db, registryDir: string, task: Task): s
     >;
     byCommit.set(registry_commit, [...(byCommit.get(registry_commit) ?? []), entryId]);
   }
-  const resolved: Array<{ commit: string; entryIds: number[]; body: string }> = [];
+  const parent = getTask(db, task.parent_id);
+  const parentReviewAssignableTo = parent?.type === "review" ? reviewAssignableTo(db, parent) : undefined;
+  const resolved: Array<{ entryIds: number[]; agent: AgentAtCommit; registry: RegistryAtCommit }> = [];
   for (const [commit, entryIds] of byCommit) {
-    const body = agentBodyAtCommit(registryDir, commit, task.assignee);
-    if (body === undefined) unresolved.push(...entryIds);
-    else resolved.push({ commit, entryIds, body });
+    const registry = registryAtCommit(registryDir, commit);
+    const agent = registry && ownEntry(registry.agents, task.assignee);
+    if (registry === undefined || agent === undefined || (!agent.builtin && agent.body === undefined)) {
+      unresolved.push(...entryIds);
+    } else resolved.push({ entryIds, agent, registry });
   }
   if (resolved.length === 0) return "";
+  const evidence = (level: string, { agent, registry }: (typeof resolved)[number]) =>
+    versionEvidence(level, task.assignee!, agent, registry, parentReviewAssignableTo);
   // 「current definition」の括弧は ADR 0019(修理は再演ではない)
   if (resolved.length === 1 && unresolved.length === 0) {
     return (
       "\n\n## Definition under review (as it stood when you ran the objected task)\n\n" +
-      "This is your agent definition recorded at the commit you were spawned from — " +
+      "This is your agent definition recorded at the commit you were spawned from, with the " +
+      "Authority and Roster it gave you — " +
       "the version that shaped the decision now under review. Read it as evidence for " +
       '"why did I make that call". You nonetheless carry out this review under your ' +
       "current definition (repair is not a re-enactment).\n\n---\n\n" +
-      resolved[0]!.body
+      evidence("###", resolved[0]!)
     );
   }
   // no-spawn entries and unreachable-commit entries land in two phases above,
@@ -235,15 +309,15 @@ function historicalDefinitionSection(db: Db, registryDir: string, task: Task): s
   return (
     "\n\n## Definitions under review (as they stood when you made each objected decision)\n\n" +
     "These are your agent definition bodies recorded at the commits you were spawned " +
-    "from, resolved per objected decision-log entry — each version below is the one " +
+    "from, each with the Authority and Roster it gave you, resolved per objected " +
+    "decision-log entry — each version below is the one " +
     "that was live when you wrote the entries it is labeled with. Read them as evidence " +
     'for "why did I make that call". You nonetheless carry out this review under your ' +
     "current definition (repair is not a re-enactment)." +
     resolved
       .map(
-        ({ commit, entryIds, body }) =>
-          `\n\n### As of registry commit ${commit.slice(0, 7)} — live for your objected ` +
-          `${entryLabels(entryIds)}\n\n---\n\n${body}`,
+        (version) =>
+          `\n\n### Live for your objected ${entryLabels(version.entryIds)}\n\n---\n\n${evidence("####", version)}`,
       )
       .join("") +
     gap
@@ -267,8 +341,8 @@ export function boardProse(input: {
   memorySection: string | null;
 }): string {
   const { db, task } = input;
-  const authorityProfile = task.type === "review" ? REVIEWER_AUTHORITY_PROFILE : input.profile;
-  const reviewExecutor = task.type === "review" ? reviewedTaskExecutor(db, task) : undefined;
-  const rosterAssignableTo = reviewExecutor !== undefined ? [reviewExecutor] : authorityProfile.assignable_to;
-  return `${input.systemPrompt}${authoritySection(authorityProfile.guidance)}${rosterSection(buildRoster(input.registry, rosterAssignableTo))}\n\n${input.doctrine}\n\n${workerProtocol(input.allowedDomains)}${historicalDefinitionSection(db, input.registryDir, task)}${input.memorySection ? `\n\n${input.memorySection}` : ""}`;
+  const review = task.type === "review";
+  const guidance = review ? REVIEWER_AUTHORITY_PROFILE.guidance : input.profile.guidance;
+  const rosterAssignableTo = review ? reviewAssignableTo(db, task) : input.profile.assignable_to;
+  return `${input.systemPrompt}${authoritySection(guidance)}${rosterSection(buildRoster(input.registry.agents, rosterAssignableTo))}\n\n${input.doctrine}\n\n${workerProtocol(input.allowedDomains)}${historicalDefinitionSection(db, input.registryDir, task)}${input.memorySection ? `\n\n${input.memorySection}` : ""}`;
 }
