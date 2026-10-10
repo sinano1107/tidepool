@@ -14,7 +14,7 @@ import { completeTask, getTask, listBoard, listChildren, logDecision, pickupTask
 import { type Tier, tierIdOf } from "../src/tier.js";
 import type { WorkspaceConfig } from "../src/workspace.js";
 import { FakeClock, fakeContainers, healthyOpenai, listedOpenaiModels, noRetrospectiveCalls, ScriptedWorker } from "./fakes.js";
-import { bundledObjection, executionSetting, FULL_HANDOFF, HOUR, HUMAN_WEBUI, makeWorkspace, QUIET_EXIT, WORKER_SPAWNED } from "./harness.js";
+import { bundledObjection, executionSetting, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, HOUR, HUMAN_WEBUI, makeWorkspace, QUIET_EXIT, WORKER_SPAWNED } from "./harness.js";
 
 const opus = executionSetting("anthropic", "claude-opus-5-5");
 const sol = executionSetting("openai", "gpt-5.6-sol");
@@ -256,7 +256,7 @@ function bareBoard(): Board {
   return { db, clock: new FakeClock() };
 }
 
-const registerWork = (b: Board, title: string, tier?: Tier) =>
+const queueWork = (b: Board, title: string, tier?: Tier) =>
   registerTask(b.db, { type: "work", title, purpose: `purpose of ${title}`, completion_criteria: `criteria of ${title}`, tier }, b.clock.now(), ...HUMAN_WEBUI);
 
 /** ScriptedWorker は spawn しないので、その session の開始を setup として置く。 */
@@ -265,7 +265,7 @@ const recordSpawn = (b: Board, taskId: string, run: Partial<typeof WORKER_SPAWNE
 
 /** scheduler 無しで work を pickup し、その session を開く。spawn の event id を返す。 */
 function spawnedWork(b: Board, title: string) {
-  const task = pickupTask(b.db, registerWork(b, title), WORKER, b.clock.now())!;
+  const task = pickupTask(b.db, queueWork(b, title), WORKER, b.clock.now())!;
   return { task, spawnedId: recordSpawn(b, task.id) };
 }
 
@@ -295,7 +295,7 @@ const shadowRows = (b: Board) =>
 
 it("work task の pickup ごとに shadow 行が1件記録され、selector の選択は変わらない —— review task では学習器を参照せず行も無い", async () => {
   const b = scheduledBoard({ candidates: () => [opus, sol] });
-  const work = registerWork(b, "learned");
+  const work = queueWork(b, "learned");
   await b.clock.advance(HOUR);
 
   expect(b.worker.startedSettings).toEqual([opus]);
@@ -316,7 +316,7 @@ it("work task の pickup ごとに shadow 行が1件記録され、selector の�
  *  `causes` と帰責される —— capability があれば学習器はその行を下げる。渡さなければ受理された観測になる —— 学習器は
  *  未観測の候補へ移らない(ADR 0181)ので、移る先に観測を置くのに使う。 */
 async function settledSession(b: ScheduledBoard, run: ExecutionSetting, causes: Cause[] = []) {
-  const earlier = registerWork(b, "earlier");
+  const earlier = queueWork(b, "earlier");
   await b.clock.advance(HOUR);
   // ScriptedWorker は spawn しないので、その session の記録(spawn + 決定 + 帰責)を setup として置く
   recordSpawn(b, earlier.id, { advisor: null, provider: run.provider, model: run.model, effort: run.effort, tier_id: run.tier_id });
@@ -346,7 +346,7 @@ it("観測が効くと shadow 行は selector と乖離しうるが、選択は�
   await settledSession(b, opus, ["capability"]);
   await settledSession(b, sol);
 
-  const later = registerWork(b, "later");
+  const later = queueWork(b, "later");
   await b.clock.advance(HOUR);
 
   expect(b.worker.startedSettings.at(-1)).toEqual(opus);
@@ -365,19 +365,19 @@ it("workspace 未指定の未着手タスクの実績は、既定 workspace の�
   const b = scheduledBoard({ candidates: () => [opus, sol], workspace: await makeWorkspace("learner-default") });
   await settledSession(b, opus);
 
-  const later = registerWork(b, "later");
+  const later = queueWork(b, "later");
   await b.clock.advance(HOUR);
 
   const row = listRoutingShadow(b.db, "", { since_watermark: 0 }).shadow.find((r) => r.task_id === later.id);
   expect(row?.actual_record).toEqual({ board: { accepted: 1, rejected: 0 }, workspace: { accepted: 1, rejected: 0 } });
-});
+}, GIT_FIXTURE_TEST_TIMEOUT);
 
 it("同じ entry の前の異議群が capability、後の異議群が preference と帰責された session も負として数える —— 学習器は opus の行を下げる(ADR 0170 決定3)", async () => {
   const b = scheduledBoard({ candidates: () => [opus, sol] });
   await settledSession(b, opus, ["capability", "preference"]);
   await settledSession(b, sol);
 
-  const later = registerWork(b, "later");
+  const later = queueWork(b, "later");
   await b.clock.advance(HOUR);
 
   expect(shadowRows(b).at(-1)).toMatchObject({
@@ -396,7 +396,7 @@ it("行を段 T から T' へ settings で移すと T' の pickup の shadow 行
   const moveTo = (tier: Tier) =>
     applyExecutionSettingsChange(b.db, { setting: "row", key, row: { ...key, tier, price_in: 5, price_out: 25 } }, "webui", b.clock.now());
   const pickupIn = async (tier: Tier) => {
-    const task = registerWork(b, `in ${tier}`, tier);
+    const task = queueWork(b, `in ${tier}`, tier);
     await b.clock.advance(HOUR);
     const row = shadowRows(b).find((r) => r.task_id === task.id);
     // slot を空ける(ScriptedWorker は spawn しないので episode は増えない)
@@ -415,7 +415,7 @@ it("advisor pin ありで相談0回の session は、盤面の記録から読ん
   const opusWithAdvisor = executionSetting("anthropic", "claude-opus-5-5", { advisor: "claude-fable-5-1" });
   const b = scheduledBoard({ candidates: () => [opusWithAdvisor, opus] });
   await settledSession(b, opus);
-  const earlier = registerWork(b, "earlier");
+  const earlier = queueWork(b, "earlier");
   await b.clock.advance(HOUR);
   // ScriptedWorker は spawn しないので、その session の記録(pin あり spawn + 帰責 + 相談0回の exit)を setup として置く
   const spawnedId = recordSpawn(b, earlier.id, { advisor: "claude-fable-5-1", provider: "anthropic", model: "claude-opus-5-5", effort: "high" });
@@ -436,7 +436,7 @@ it("advisor pin ありで相談0回の session は、盤面の記録から読ん
   });
   finish(b, earlier.id);
 
-  const later = registerWork(b, "later");
+  const later = queueWork(b, "later");
   await b.clock.advance(HOUR);
 
   expect(b.worker.startedSettings.at(-1)).toEqual(opusWithAdvisor);
@@ -488,7 +488,7 @@ it("昇格中の work task は学習器の選択で走り出所は learner、sha
   await settledSession(b, opus, ["capability"]);
   await settledSession(b, sol);
 
-  const later = registerWork(b, "later");
+  const later = queueWork(b, "later");
   await b.clock.advance(HOUR);
 
   expect(settingsOf(b, later.id)).toEqual(byLearner(sol));
@@ -522,7 +522,7 @@ it("昇格中も学習器の選択は Throttle の除外を通る —— 選ん�
   await settledSession(b, opus, ["capability"]);
   await settledSession(b, sol);
 
-  const later = registerWork(b, "later");
+  const later = queueWork(b, "later");
   await b.clock.advance(HOUR);
 
   expect(settingsOf(b, later.id)).toEqual(byLearner(opus));
