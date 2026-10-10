@@ -24,7 +24,7 @@ import {
 } from "./execution-setting.js";
 import { type GitHubClient, IssueGoneError } from "./github.js";
 import type { HarnessContainmentCheck } from "./harness-containment.js";
-import { type Landing, type LandingVerdict, landingBlock, recordPrPromotionAbandoned, UNREPORTED_CI_GRACE_TEXT, unreportedCiGraceElapsed } from "./landing.js";
+import { hasContentLeftBehind, type Landing, type LandingVerdict, landingBlock, recordPrPromotionAbandoned, UNREPORTED_CI_GRACE_TEXT, unreportedCiGraceElapsed } from "./landing.js";
 import { approveMemoryProposal, humanEntryInput, listMemoryEntries, type MemoryAmendment, movedTail, parseMemoryAmendment, rejectMemoryProposal } from "./memory.js";
 import { whyNotPositiveInteger } from "./positive-integer.js";
 import type { Provider } from "./provider.js";
@@ -980,6 +980,12 @@ export async function submitAnswer(
       "cannot check CI or merge",
       "GitHub/workspace",
     );
+    // ADR 0231 決定3: 積み残しは門の検査と同じ時点で、門とは別に読む
+    if (hasContentLeftBehind(deps.db, mergeWorkspace, landingTaskId)) {
+      throw new DomainError(
+        `cannot merge yet: PR #${mergePr} does not carry all of the task's content yet — answer again once the board has pushed it`,
+      );
+    }
     const { ci: status } = await deps.github.readPullRequest({ path: mergeWorkspace.path, number: mergePr });
     // ADR 0227 決定2・3: check 未報告は猶予の間だけ pending と同じに拒み、過ぎれば回答の中の人間の判断で通す
     if (status === "unreported" && !unreportedCiGraceElapsed(deps.db, landingTaskId, now())) {
