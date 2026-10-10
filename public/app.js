@@ -1562,9 +1562,9 @@ const PROVIDER_PLACEHOLDER = { value: "", label: "choose one \u2014 provider is 
 function tierOptions(tiers, blank = "board default") {
   return [{ value: "", label: blank }, ...tiers.map((tier) => ({ value: tier.name, label: `${tier.name} \u2014 ${tier.description}` }))];
 }
-function AgentFields({ draft, set, authorityOptions, providerOptions, tiers, tiersDegraded, advisorCeiling, hostSkills, hostSkillsDegraded }) {
+function AgentFields({ draft, set, authorityOptions, providerOptions, tiers, executionSettingsFailed, advisorCeiling, hostSkills, hostSkillsDegraded }) {
   const { Checkbox, Input, Select } = window.TidepoolDesignSystem_8a0ead;
-  const shownTiers = tiersDegraded ? [] : tiers;
+  const shownTiers = executionSettingsFailed ? [] : tiers;
   const tierChoices = tierOptions(shownTiers);
   if (draft.tier && !shownTiers.some((tier) => tier.name === draft.tier)) tierChoices.push({ value: draft.tier, label: draft.tier });
   return /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(AgentIconPicker, { value: draft.icon, onChange: (v) => set("icon", v) }), /* @__PURE__ */ React.createElement(
@@ -1584,16 +1584,16 @@ function AgentFields({ draft, set, authorityOptions, providerOptions, tiers, tie
       value: draft.systemPrompt,
       onChange: (e) => set("systemPrompt", e.target.value)
     }
-  ), /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 } }, /* @__PURE__ */ React.createElement(Select, { label: "Authority", options: authorityOptions, value: draft.authority, onChange: (e) => set("authority", e.target.value) }), /* @__PURE__ */ React.createElement(Select, { label: "Provider", options: [PROVIDER_PLACEHOLDER, ...providerOptions], value: draft.provider, onChange: (e) => set("provider", e.target.value) })), /* @__PURE__ */ React.createElement(Select, { label: "Default tier", options: tierChoices, value: draft.tier, onChange: (e) => set("tier", e.target.value) }), tiersDegraded && /* @__PURE__ */ React.createElement("p", { style: { margin: 0, fontSize: "var(--text-xs)", color: "var(--text-secondary)" } }, "tier options unavailable \u2014 board default still works, and a tier already set is kept."), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 4 } }, /* @__PURE__ */ React.createElement(
+  ), /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 } }, /* @__PURE__ */ React.createElement(Select, { label: "Authority", options: authorityOptions, value: draft.authority, onChange: (e) => set("authority", e.target.value) }), /* @__PURE__ */ React.createElement(Select, { label: "Provider", options: [PROVIDER_PLACEHOLDER, ...providerOptions], value: draft.provider, onChange: (e) => set("provider", e.target.value) })), /* @__PURE__ */ React.createElement(Select, { label: "Default tier", options: tierChoices, value: draft.tier, onChange: (e) => set("tier", e.target.value) }), executionSettingsFailed && /* @__PURE__ */ React.createElement("p", { style: { margin: 0, fontSize: "var(--text-xs)", color: "var(--text-secondary)" } }, "tier options unavailable \u2014 board default still works, and a tier already set is kept."), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 4 } }, /* @__PURE__ */ React.createElement(
     Checkbox,
     {
       label: "advisor \u2014 this agent may consult a stronger model at decision points",
       checked: draft.advisor,
       onChange: () => set("advisor", !draft.advisor)
     }
-  ), tiersDegraded ? /* @__PURE__ */ React.createElement("p", { style: { margin: 0, fontSize: "var(--text-xs)", color: "var(--text-secondary)" } }, "board advisor ceiling unavailable") : advisorCeiling && /* @__PURE__ */ React.createElement("p", { "data-testid": "agent-advisor-ceiling", style: { margin: 0, fontSize: "var(--text-xs)", color: "var(--text-muted)" } }, advisorCeiling === "off" ? "board advisor ceiling: off \u2014 the advisor is not used on this board" : `board advisor ceiling: ${advisorCeiling} \u2014 the advisor is at most ${advisorCeiling === "fable_then_opus" ? "fable, opus while the Fable window is throttled" : advisorCeiling}; a main model above it runs without one`)), /* @__PURE__ */ React.createElement(SkillListInput, { candidates: hostSkills, degraded: hostSkillsDegraded, values: draft.skills, onChange: (v) => set("skills", v) }));
+  ), executionSettingsFailed ? /* @__PURE__ */ React.createElement("p", { style: { margin: 0, fontSize: "var(--text-xs)", color: "var(--text-secondary)" } }, "board advisor ceiling unavailable") : advisorCeiling && /* @__PURE__ */ React.createElement("p", { "data-testid": "agent-advisor-ceiling", style: { margin: 0, fontSize: "var(--text-xs)", color: "var(--text-muted)" } }, advisorCeiling === "off" ? "board advisor ceiling: off \u2014 the advisor is not used on this board" : `board advisor ceiling: ${advisorCeiling} \u2014 the advisor is at most ${advisorCeiling === "fable_then_opus" ? "fable, opus while the Fable window is throttled" : advisorCeiling}; a main model above it runs without one`)), /* @__PURE__ */ React.createElement(SkillListInput, { candidates: hostSkills, degraded: hostSkillsDegraded, values: draft.skills, onChange: (v) => set("skills", v) }));
 }
-function AgentRecord({ agent, authorityProfiles, providerOptions, tiers, tiersDegraded, advisorCeiling, hostSkills, hostSkillsDegraded, say, onChanged, edit }) {
+function AgentRecord({ agent, authorityProfiles, providerOptions, tiers, executionSettingsFailed, advisorCeiling, hostSkills, hostSkillsDegraded, say, onChanged, edit }) {
   const { Card, FieldRow } = window.TidepoolDesignSystem_8a0ead;
   const { AgentChip } = window.TidepoolDesignSystem_8a0ead;
   const id = `agent:${agent.name}`;
@@ -1650,7 +1650,7 @@ function AgentRecord({ agent, authorityProfiles, providerOptions, tiers, tiersDe
       authorityOptions: authorityProfiles,
       providerOptions,
       tiers,
-      tiersDegraded,
+      executionSettingsFailed,
       advisorCeiling,
       hostSkills,
       hostSkillsDegraded
@@ -3194,7 +3194,7 @@ function NewWorkspaceForm({ baseDir, say, onCreated, edit }) {
     }
   ), dialog);
 }
-function NewAgentForm({ authorityProfiles, providerOptions, tiers, tiersDegraded, advisorCeiling, hostSkills, hostSkillsDegraded, say, onCreated, edit }) {
+function NewAgentForm({ authorityProfiles, providerOptions, tiers, executionSettingsFailed, advisorCeiling, hostSkills, hostSkillsDegraded, say, onCreated, edit }) {
   const { Card, Input } = window.TidepoolDesignSystem_8a0ead;
   const [name, setName] = React.useState("");
   const [draft, setDraft] = React.useState(() => ({ ...NEW_AGENT_DRAFT }));
@@ -3241,7 +3241,7 @@ function NewAgentForm({ authorityProfiles, providerOptions, tiers, tiersDegraded
       authorityOptions: authorityCreateOptions,
       providerOptions,
       tiers,
-      tiersDegraded,
+      executionSettingsFailed,
       advisorCeiling,
       hostSkills,
       hostSkillsDegraded
@@ -3584,7 +3584,7 @@ function SettingsScreen({ say, memoryFocus, registerLeaveGuard }) {
           authorityProfiles,
           providerOptions,
           tiers: executionSettings?.tiers ?? [],
-          tiersDegraded: executionSettingsFailed,
+          executionSettingsFailed,
           advisorCeiling: executionSettings?.advisorCeiling,
           hostSkills,
           hostSkillsDegraded,
@@ -3599,7 +3599,7 @@ function SettingsScreen({ say, memoryFocus, registerLeaveGuard }) {
           authorityProfiles,
           providerOptions,
           tiers: executionSettings?.tiers ?? [],
-          tiersDegraded: executionSettingsFailed,
+          executionSettingsFailed,
           advisorCeiling: executionSettings?.advisorCeiling,
           hostSkills,
           hostSkillsDegraded,

@@ -406,13 +406,13 @@ function tierOptions(tiers: readonly SettingsTier[], blank = 'board default'): S
 
 // Those fields as controls, shared by the record card and the create form so
 // the two never drift — the agent analogue of ProfileFields.
-function AgentFields({ draft, set, authorityOptions, providerOptions, tiers, tiersDegraded, advisorCeiling, hostSkills, hostSkillsDegraded }: {
+function AgentFields({ draft, set, authorityOptions, providerOptions, tiers, executionSettingsFailed, advisorCeiling, hostSkills, hostSkillsDegraded }: {
   draft: AgentDraft;
   set: (key: keyof AgentDraft, value: AgentDraftValue) => void;
   authorityOptions: (string | SettingsOption)[];
   providerOptions: SettingsOption[];
   tiers: readonly SettingsTier[];
-  tiersDegraded: boolean;
+  executionSettingsFailed: boolean;
   advisorCeiling: AdvisorCeiling | undefined;
   hostSkills: string[];
   hostSkillsDegraded: boolean;
@@ -420,7 +420,7 @@ function AgentFields({ draft, set, authorityOptions, providerOptions, tiers, tie
   const { Checkbox, Input, Select } = window.TidepoolDesignSystem_8a0ead;
   // the failure flag beats a list read before it (#1686 決定3), and the agent's own tier stays shown
   // even when the list could not be read or no longer holds it (issue #1752)
-  const shownTiers = tiersDegraded ? [] : tiers;
+  const shownTiers = executionSettingsFailed ? [] : tiers;
   const tierChoices = tierOptions(shownTiers);
   if (draft.tier && !shownTiers.some((tier) => tier.name === draft.tier)) tierChoices.push({ value: draft.tier, label: draft.tier });
   return (
@@ -435,7 +435,7 @@ function AgentFields({ draft, set, authorityOptions, providerOptions, tiers, tie
         <Select label="Provider" options={[PROVIDER_PLACEHOLDER, ...providerOptions]} value={draft.provider} onChange={(e) => set('provider', e.target.value)} />
       </div>
       <Select label="Default tier" options={tierChoices} value={draft.tier} onChange={(e) => set('tier', e.target.value)} />
-      {tiersDegraded && (
+      {executionSettingsFailed && (
         <p style={{ margin: 0, fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>
           tier options unavailable — board default still works, and a tier already set is kept.
         </p>
@@ -444,7 +444,7 @@ function AgentFields({ draft, set, authorityOptions, providerOptions, tiers, tie
         <Checkbox label="advisor — this agent may consult a stronger model at decision points"
           checked={draft.advisor} onChange={() => set('advisor', !draft.advisor)} />
         {/* the board's ceiling decides what the checkbox buys (ADR 0208 決定7): at off it buys nothing */}
-        {tiersDegraded ? (
+        {executionSettingsFailed ? (
           <p style={{ margin: 0, fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>board advisor ceiling unavailable</p>
         ) : advisorCeiling && (
           <p data-testid="agent-advisor-ceiling" style={{ margin: 0, fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
@@ -463,12 +463,12 @@ function AgentFields({ draft, set, authorityOptions, providerOptions, tiers, tie
 // WorkspaceRecord's twin: read-only until Edit, and then the draft above,
 // prefilled from the GET /api/agents list. `name` is shown via AgentChip only —
 // renaming isn't offered here at all (it's the file name, parent issue #54).
-function AgentRecord({ agent, authorityProfiles, providerOptions, tiers, tiersDegraded, advisorCeiling, hostSkills, hostSkillsDegraded, say, onChanged, edit }: {
+function AgentRecord({ agent, authorityProfiles, providerOptions, tiers, executionSettingsFailed, advisorCeiling, hostSkills, hostSkillsDegraded, say, onChanged, edit }: {
   agent: SettingsAgent;
   authorityProfiles: string[];
   providerOptions: SettingsOption[];
   tiers: readonly SettingsTier[];
-  tiersDegraded: boolean;
+  executionSettingsFailed: boolean;
   advisorCeiling: AdvisorCeiling | undefined;
   hostSkills: string[];
   hostSkillsDegraded: boolean;
@@ -539,7 +539,7 @@ function AgentRecord({ agent, authorityProfiles, providerOptions, tiers, tiersDe
       {open && (
         <React.Fragment>
           <AgentFields draft={draft} set={set} authorityOptions={authorityProfiles}
-            providerOptions={providerOptions} tiers={tiers} tiersDegraded={tiersDegraded} advisorCeiling={advisorCeiling}
+            providerOptions={providerOptions} tiers={tiers} executionSettingsFailed={executionSettingsFailed} advisorCeiling={advisorCeiling}
             hostSkills={hostSkills} hostSkillsDegraded={hostSkillsDegraded} />
           <EditActions dirty={dirty} ok={ok} busy={busy} saveLabel="Save changes — commits to the registry"
             onSave={save} onCancel={() => edit.close()} />
@@ -2692,11 +2692,11 @@ function NewWorkspaceForm({ baseDir, say, onCreated, edit }: {
 // The agent create form (issue #72), NewWorkspaceForm's twin. `name` is its own
 // field — it becomes agents/<name>.md and is never editable afterwards; the
 // rest is the same draft the record card edits.
-function NewAgentForm({ authorityProfiles, providerOptions, tiers, tiersDegraded, advisorCeiling, hostSkills, hostSkillsDegraded, say, onCreated, edit }: {
+function NewAgentForm({ authorityProfiles, providerOptions, tiers, executionSettingsFailed, advisorCeiling, hostSkills, hostSkillsDegraded, say, onCreated, edit }: {
   authorityProfiles: string[];
   providerOptions: SettingsOption[];
   tiers: readonly SettingsTier[];
-  tiersDegraded: boolean;
+  executionSettingsFailed: boolean;
   advisorCeiling: AdvisorCeiling | undefined;
   hostSkills: string[];
   hostSkillsDegraded: boolean;
@@ -2744,7 +2744,7 @@ function NewAgentForm({ authorityProfiles, providerOptions, tiers, tiersDegraded
       <Input label="Name" error={nameReason} value={name} onChange={(e) => setName(e.target.value)}
         placeholder="letters, digits, - _ . — becomes agents/<name>.md, not renameable later" />
       <AgentFields draft={draft} set={set} authorityOptions={authorityCreateOptions}
-        providerOptions={providerOptions} tiers={tiers} tiersDegraded={tiersDegraded} advisorCeiling={advisorCeiling}
+        providerOptions={providerOptions} tiers={tiers} executionSettingsFailed={executionSettingsFailed} advisorCeiling={advisorCeiling}
         hostSkills={hostSkills} hostSkillsDegraded={hostSkillsDegraded} />
       <EditActions ok={ok} busy={busy} saveLabel="Add agent — commits to the registry"
         onSave={submit} onCancel={() => edit.close()} />
@@ -3117,12 +3117,12 @@ function SettingsScreen({ say, memoryFocus, registerLeaveGuard }: {
         a.builtin ? 'built-in' : a.shadowsBuiltIn ? `${a.authority} · shadows built-in` : a.authority,
       record: (rec) => (
         <AgentRecord agent={rec} authorityProfiles={authorityProfiles} providerOptions={providerOptions} tiers={executionSettings?.tiers ?? []}
-          tiersDegraded={executionSettingsFailed} advisorCeiling={executionSettings?.advisorCeiling} hostSkills={hostSkills}
+          executionSettingsFailed={executionSettingsFailed} advisorCeiling={executionSettings?.advisorCeiling} hostSkills={hostSkills}
           hostSkillsDegraded={hostSkillsDegraded} say={say} onChanged={loadAgents} edit={edit} />
       ),
       createForm: () => (
         <NewAgentForm authorityProfiles={authorityProfiles} providerOptions={providerOptions} tiers={executionSettings?.tiers ?? []}
-          tiersDegraded={executionSettingsFailed} advisorCeiling={executionSettings?.advisorCeiling} hostSkills={hostSkills}
+          executionSettingsFailed={executionSettingsFailed} advisorCeiling={executionSettings?.advisorCeiling} hostSkills={hostSkills}
           hostSkillsDegraded={hostSkillsDegraded} say={say} onCreated={loadAgents} edit={edit} />
       ),
       reload: loadAgents,
