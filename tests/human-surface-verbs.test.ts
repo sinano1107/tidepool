@@ -1,5 +1,4 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { UnknownWorkspaceError } from "../src/workspace.js";
 import {
   api,
   attachChild,
@@ -7,6 +6,7 @@ import {
   commitWork,
   completeIntegrationReviews,
   completeViaMcp,
+  defaultingTo,
   GIT_FIXTURE_TEST_TIMEOUT,
   HOUR,
   makeWorkspace,
@@ -207,12 +207,7 @@ it("cancel は WebUI と管理MCPで同じ検証・親queue・祖先着地の再
 async function exerciseEdit(surface: HumanSurface) {
   const pool = await bootTidepool({
     agentRegistered: (name) => name === "known-agent",
-    resolveWorkspace: (name) => {
-      if (name === "known-workspace" || name === null) {
-        return { name: "known-workspace", path: "/workspaces/known" };
-      }
-      throw new UnknownWorkspaceError(name);
-    },
+    resolveWorkspace: defaultingTo({ name: "known-workspace", path: "/workspaces/known" }),
   });
   pools.push(pool);
   const task = await registerWork(pool, `${surface} editable task`, undefined, "human");
@@ -262,12 +257,7 @@ it("complete は WebUI と管理MCPで同じ human gate・親queue・祖先着�
 async function exerciseDecompose(surface: HumanSurface) {
   const pool = await bootTidepool({
     agentRegistered: (name) => name === "known-agent",
-    resolveWorkspace: (name) => {
-      if (name === "known-workspace" || name === null) {
-        return { name: "known-workspace", path: "/workspaces/known" };
-      }
-      throw new UnknownWorkspaceError(name);
-    },
+    resolveWorkspace: defaultingTo({ name: "known-workspace", path: "/workspaces/known" }),
   });
   pools.push(pool);
   const parent = await registerWork(pool, `${surface} decomposable task`, undefined, "human");

@@ -1,7 +1,6 @@
 import { afterEach, expect, it } from "vitest";
 import { registerTask } from "../src/tasks.js";
-import { UnknownWorkspaceError } from "../src/workspace.js";
-import { api, bootTidepool, HUMAN_WEBUI, type Tidepool } from "./harness.js";
+import { api, bootTidepool, defaultingTo, HUMAN_WEBUI, type Tidepool } from "./harness.js";
 
 let t: Tidepool;
 afterEach(() => t?.stop());
@@ -121,10 +120,7 @@ it("workspace が解決できない(registry drift)issue参照タスクは unava
   const tidepool = { name: "tidepool", path: "/fake/path" };
   t = await bootTidepool({
     workspace: tidepool,
-    resolveWorkspace: (name) => {
-      if ((name ?? "tidepool") !== "tidepool") throw new UnknownWorkspaceError(name ?? "tidepool");
-      return tidepool;
-    },
+    resolveWorkspace: defaultingTo(tidepool),
   });
 
   // 登録時には存在した workspace 名が registry から消えた状況(drift)

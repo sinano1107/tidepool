@@ -4,10 +4,10 @@ import { createBehaviorCandidate, defineMemoryBranch, proposeMemoryChange, recor
 import { MEMORY_META_REVIEW_VERBS } from "../src/meta-review.js";
 import { nextDescription } from "../src/response-budget.js";
 import { registerTask } from "../src/tasks.js";
-import { UnknownWorkspaceError } from "../src/workspace.js";
 import {
   api,
   bootTidepool,
+  defaultingTo,
   GIT_FIXTURE_TEST_TIMEOUT,
   HOUR,
   HUMAN_WEBUI,
@@ -43,10 +43,7 @@ async function boardWithMetaReview(agentRegistered?: (name: string) => boolean) 
   t = await bootTidepool({
     workspace: sandbox,
     agentRegistered,
-    resolveWorkspace: (name) => {
-      if ((name ?? "sandbox") !== "sandbox") throw new UnknownWorkspaceError(name!);
-      return sandbox;
-    },
+    resolveWorkspace: defaultingTo(sandbox),
   });
   const material = recordKnowledge(
     t.db,

@@ -1,20 +1,11 @@
 import { afterEach, expect, it } from "vitest";
-import { UnknownWorkspaceError, type WorkspaceConfig } from "../src/workspace.js";
-import { api, bootTidepool, type Tidepool } from "./harness.js";
+import { api, bootTidepool, defaultingTo, type Tidepool } from "./harness.js";
 
 let t: Tidepool;
 afterEach(() => t?.stop());
 
-function makeResolver(known: string[]) {
-  return (name: string | null) => {
-    const n = name ?? "sandbox";
-    if (!known.includes(n)) throw new UnknownWorkspaceError(n);
-    return { name: n, path: `/fake/${n}` } as WorkspaceConfig;
-  };
-}
-
 it("registry に存在しない workspace 名での登録は 400 で拒否される", async () => {
-  t = await bootTidepool({ resolveWorkspace: makeResolver(["sandbox"]) });
+  t = await bootTidepool({ resolveWorkspace: defaultingTo({ name: "sandbox", path: "/fake/sandbox" }) });
 
   const res = await api(t.baseUrl, "POST", "/api/tasks", {
     type: "work",
@@ -30,7 +21,7 @@ it("registry に存在しない workspace 名での登録は 400 で拒否され
 });
 
 it("registry に存在する workspace 名での登録は通常どおり成功する", async () => {
-  t = await bootTidepool({ resolveWorkspace: makeResolver(["sandbox", "prod"]) });
+  t = await bootTidepool({ resolveWorkspace: defaultingTo({ name: "sandbox", path: "/fake/sandbox" }, { name: "prod", path: "/fake/prod" }) });
 
   const res = await api(t.baseUrl, "POST", "/api/tasks", {
     type: "work",

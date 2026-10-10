@@ -1,10 +1,10 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { UnknownWorkspaceError, type WorkspaceConfig } from "../src/workspace.js";
 import {
   addTaskChange,
   api,
   bootTidepool,
   completeIntegrationReviews,
+  defaultingTo,
   FULL_HANDOFF,
   GIT_FIXTURE_TEST_TIMEOUT,
   HOUR,
@@ -25,14 +25,9 @@ afterEach(async () => {
 it("prod workspace のタスクの merge 回答は、CI チェックと merge を prod の checkout に対して行う", async () => {
   const sandbox = await makeWorkspace("sandbox");
   const { workspace: prod } = await makeRemoteBackedWorkspace("prod");
-  const registry: Record<string, WorkspaceConfig> = { sandbox, prod };
   t = await bootTidepool({
     workspace: sandbox,
-    resolveWorkspace: (name) => {
-      const ws = registry[name ?? "sandbox"];
-      if (!ws) throw new UnknownWorkspaceError(name ?? "sandbox");
-      return ws;
-    },
+    resolveWorkspace: defaultingTo(sandbox, prod),
     resolveAuthority: () => ({ name: "standard", guidance: "", merge: "escalate" }),
   });
 

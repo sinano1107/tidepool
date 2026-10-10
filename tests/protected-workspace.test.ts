@@ -1,10 +1,10 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { UnknownWorkspaceError, type WorkspaceConfig } from "../src/workspace.js";
 import {
   addTaskChange,
   api,
   bootTidepool,
   completeIntegrationReviews,
+  defaultingTo,
   FULL_HANDOFF,
   GIT_FIXTURE_TEST_TIMEOUT,
   HOUR,
@@ -95,14 +95,9 @@ const MINUTE = 60 * 1000;
 it("completing a task in a protected workspace under the external merge dial still asks for a human merge (ADR 0079: the resource-side invariant outranks the dial)", async () => {
   const sandbox = await makeWorkspace("sandbox");
   const { workspace: registry } = await makeRemoteBackedWorkspace("registry");
-  const workspaces: Record<string, WorkspaceConfig> = { sandbox, registry };
   t = await bootTidepool({
     workspace: sandbox,
-    resolveWorkspace: (name) => {
-      const ws = workspaces[name ?? "sandbox"];
-      if (!ws) throw new UnknownWorkspaceError(name ?? "sandbox");
-      return ws;
-    },
+    resolveWorkspace: defaultingTo(sandbox, registry),
     resolveAuthority: () => ({ name: "standard", guidance: "", merge: "external" }),
     isProtectedWorkspace: (name) => name === "registry",
   });
@@ -127,14 +122,9 @@ it("completing a task in a protected workspace under the external merge dial sti
 it("completing a low-risk task in a protected workspace under auto_if_ci_green asks for merge approval immediately, instead of queueing for auto-merge", async () => {
   const sandbox = await makeWorkspace("sandbox");
   const { workspace: registry } = await makeRemoteBackedWorkspace("registry");
-  const workspaces: Record<string, WorkspaceConfig> = { sandbox, registry };
   t = await bootTidepool({
     workspace: sandbox,
-    resolveWorkspace: (name) => {
-      const ws = workspaces[name ?? "sandbox"];
-      if (!ws) throw new UnknownWorkspaceError(name ?? "sandbox");
-      return ws;
-    },
+    resolveWorkspace: defaultingTo(sandbox, registry),
     resolveAuthority: () => ({ name: "standard", guidance: "", merge: "auto_if_ci_green" }),
     isProtectedWorkspace: (name) => name === "registry",
   });
