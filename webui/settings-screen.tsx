@@ -3156,15 +3156,15 @@ function SettingsScreen({ say, memoryFocus, registerLeaveGuard }: {
     const halted = haltedRefires?.length ?? 0;
     // the editable cards' failed reads flag it too, in card order; the summary is then the flags alone (issue #1686)
     const boardFlags = [
-      displayLanguageFailed && displayLanguageUnavailable,
-      quietHoursFailed && quietHoursUnavailable,
-      paceOffsetsFailed && paceOffsetsUnavailable,
-      executionSettingsFailed && executionSettingsUnavailable,
+      displayLanguageFailed ? displayLanguageUnavailable : null,
+      quietHoursFailed ? quietHoursUnavailable : null,
+      paceOffsetsFailed ? paceOffsetsUnavailable : null,
+      executionSettingsFailed ? executionSettingsUnavailable : null,
       responseFloorsFailed ? cutReadsUnavailable : floors > 0 ? `${floors} read${floors === 1 ? '' : 's'} cut` : null,
       haltedRefiresFailed ? haltedRefiresUnavailable : halted > 0 ? `${halted} halted refire${halted === 1 ? '' : 's'}` : null,
-      memorySettingsFailed && memorySettingsUnavailable,
-      metaReviewFailed && metaReviewUnavailable,
-    ].filter((part) => typeof part === 'string');
+      memorySettingsFailed ? memorySettingsUnavailable : null,
+      metaReviewFailed ? metaReviewUnavailable : null,
+    ].filter((part) => part !== null);
     const rows: { key: string; label: string; summary: string; alert?: boolean }[] = [
       {
         key: 'board', label: 'Board',
