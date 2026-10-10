@@ -1984,6 +1984,7 @@ it("門が閉じている間にダイヤルが escalate へ変わった PR は�
 
   completeTask(db, child, FULL_HANDOFF, "worker", clock.now(), "worker");
   await landing.tick("auto_merge", clock.now());
+  // 外れた後の tick で何も重ならない
   await landing.tick("auto_merge", clock.now());
   expect(github.merged).toEqual([]);
   expect(mergeQuestions(db)).toEqual([
@@ -2015,6 +2016,7 @@ it.each(["failure", "success"] as const)("CI %s を読んでいる間に門が�
 
   completeTask(db, child!, FULL_HANDOFF, "worker", clock.now(), "worker");
   await landing.tick("auto_merge", clock.now());
+  // 外れた後の tick で何も重ならない
   await landing.tick("auto_merge", clock.now());
   expect(github.ciChecks).toHaveLength(1);
   expect(github.merged).toEqual([]);
@@ -2036,37 +2038,13 @@ it("門が閉じている間にダイヤルが external へ変わった PR は�
 
   completeTask(db, child, FULL_HANDOFF, "worker", clock.now(), "worker");
   await landing.tick("auto_merge", clock.now());
+  // 外れた後の tick で何も重ならない
   await landing.tick("auto_merge", clock.now());
   expect(github.ciChecks).toEqual([]);
   expect(mergeQuestions(db)).toEqual([]);
   expect(boardEvents(db, work.id, "auto_merge_withdrawn").map((e) => e.payload)).toEqual([
     { kind: "auto_merge_withdrawn", pr_number: 1, merge: "external" },
   ]);
-});
-
-it("門が閉じている間も profile は読まれ、解決できなければその tick で agent を quarantine に落としてキューに残す", async () => {
-  const workspace = await makeWorkspace("landing-gate-after-profile");
-  const { db, clock } = await openBoard();
-  const github = new FakeGitHubClient();
-  const work = queueAutoMerge(db, clock, 1);
-  const child = attachUnsettledChild(db, clock, work.id);
-  let resolveAuthority = unresolvable;
-  const landing = createLanding({
-    defaultAgentName: "tako",
-    db,
-    clock,
-    workspace,
-    github,
-    resolveAuthority: () => resolveAuthority(),
-  });
-
-  await landing.tick("auto_merge", clock.now());
-  expect(quarantineQuestion(db, "agent", "tako")).toBeDefined();
-
-  resolveAuthority = () => profile("auto_if_ci_green");
-  completeTask(db, child, FULL_HANDOFF, "worker", clock.now(), "worker");
-  await landing.tick("auto_merge", clock.now());
-  expect(github.merged).toEqual([{ path: workspace.path, number: 1 }]);
 });
 
 it("escalate で開いた PR の後にダイヤルを auto_if_ci_green へ緩めても、何も無人 merge キューに入らない", async () => {
@@ -2102,6 +2080,32 @@ const UNRESOLVABLE: Array<[string, () => AuthorityProfile]> = UNRESOLVABLE_AGENT
     throw error("tako");
   },
 ]);
+
+// ADR 0232 決定3: profile は門より先に読むので、門が閉じている間もこの判定は働く
+it("門が閉じている間も profile は読まれ、解決できなければその tick で agent を quarantine に落としてキューに残す", async () => {
+  const workspace = await makeWorkspace("landing-gate-after-profile");
+  const { db, clock } = await openBoard();
+  const github = new FakeGitHubClient();
+  const work = queueAutoMerge(db, clock, 1);
+  const child = attachUnsettledChild(db, clock, work.id);
+  let resolveAuthority = unresolvable;
+  const landing = createLanding({
+    defaultAgentName: "tako",
+    db,
+    clock,
+    workspace,
+    github,
+    resolveAuthority: () => resolveAuthority(),
+  });
+
+  await landing.tick("auto_merge", clock.now());
+  expect(quarantineQuestion(db, "agent", "tako")).toBeDefined();
+
+  resolveAuthority = () => profile("auto_if_ci_green");
+  completeTask(db, child, FULL_HANDOFF, "worker", clock.now(), "worker");
+  await landing.tick("auto_merge", clock.now());
+  expect(github.merged).toEqual([{ path: workspace.path, number: 1 }]);
+});
 
 it.each(UNRESOLVABLE)("PR を開く時点で profile が %s で解決できなければ、PR を開かず agent を quarantine に落とし、着地は retry できる失敗として返る", async (_, fail) => {
   const { workspace } = await makeRemoteBackedWorkspace("landing-unresolvable-at-open");
