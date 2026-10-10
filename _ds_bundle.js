@@ -151,6 +151,10 @@ function IdChip({ id, style }) {
         whiteSpace: "nowrap",
         overflow: "hidden",
         textOverflow: "ellipsis",
+        fontFamily: "var(--font-mono)",
+        fontSize: "var(--text-2xs)",
+        color: "var(--text-muted)",
+        flexShrink: 0,
         ...style
       }
     },
@@ -219,7 +223,7 @@ function LogEntry({ entry = {}, onObject, onExpand, onOpenMemoryEntry, active = 
         } : void 0,
         style: { minWidth: 0 }
       },
-      /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 6, fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--text-muted)" } }, /* @__PURE__ */ React.createElement("span", null, time), /* @__PURE__ */ React.createElement(__ds_scope.AgentChip, { name: agent, icon: agentIcon, human, size: "sm" }), /* @__PURE__ */ React.createElement(__ds_scope.IdChip, { id: taskId, style: { flexShrink: 0 } }), active && /* @__PURE__ */ React.createElement("span", { style: { marginLeft: "auto", color: "var(--coral-4)" } }, "objecting\u2026")),
+      /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 6, fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--text-muted)" } }, /* @__PURE__ */ React.createElement("span", null, time), /* @__PURE__ */ React.createElement(__ds_scope.AgentChip, { name: agent, icon: agentIcon, human, size: "sm" }), /* @__PURE__ */ React.createElement(__ds_scope.IdChip, { id: taskId }), active && /* @__PURE__ */ React.createElement("span", { style: { marginLeft: "auto", color: "var(--coral-4)" } }, "objecting\u2026")),
       /* @__PURE__ */ React.createElement("div", { style: { fontSize: "var(--text-sm)", color: kindColors[kind], lineHeight: "var(--leading-normal)", whiteSpace: "pre-wrap", overflowWrap: "anywhere" } }, completion && /* @__PURE__ */ React.createElement("strong", { style: { fontWeight: "var(--weight-semibold)", marginRight: 4 } }, "done \u2014"), text)
     ),
     onExpand && /* @__PURE__ */ React.createElement(
@@ -262,7 +266,7 @@ function QueueItem({ position, task = {}, skipped = false, skipReason, frontInse
     },
     draggable && /* @__PURE__ */ React.createElement("span", { "aria-hidden": "true", "data-testid": "queue-drag-handle", style: { color: "var(--rock-3)", cursor: "grab", fontSize: 14, lineHeight: 1, letterSpacing: "-2px" } }, "\u283F"),
     /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--tide-4)", background: frontInserted ? "var(--surface-card)" : "var(--tide-1)", borderRadius: "var(--radius-full)", padding: "2px 8px", flexShrink: 0 } }, position),
-    /* @__PURE__ */ React.createElement(__ds_scope.IdChip, { id, style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--text-muted)", flexShrink: 0 } }),
+    /* @__PURE__ */ React.createElement(__ds_scope.IdChip, { id }),
     /* @__PURE__ */ React.createElement("span", { style: { flex: 1, minWidth: 80, fontSize: "var(--text-sm)", fontWeight: "var(--weight-medium)", color: "var(--text-heading)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" } }, title),
     task.risk && /* @__PURE__ */ React.createElement(__ds_scope.RiskFlag, null),
     skipped && /* @__PURE__ */ React.createElement("span", { title: skipReason, style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--status-skipped-fg)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" } }, skipReason ? `skipped \xB7 ${skipReason}` : "skipped"),

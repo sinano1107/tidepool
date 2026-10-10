@@ -17,14 +17,14 @@ export const InContext = () => {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', width: 380 }}>
       <div style={cell}>
-        <IdChip id="tp-0158" style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', flexShrink: 0 }} />
+        <IdChip id="tp-0158" />
         <TypeBadge type="work" showLabel={false} />
         <span style={{ flex: 1, fontSize: 'var(--text-sm)' }}>run destructive migration on prod</span>
         <RiskFlag />
         <StatusBadge status="blocked" />
       </div>
       <div style={cell}>
-        <IdChip id="tp-0159" style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', flexShrink: 0 }} />
+        <IdChip id="tp-0159" />
         <TypeBadge type="work" showLabel={false} />
         <span style={{ flex: 1, fontSize: 'var(--text-sm)' }}>update changelog</span>
         <StatusBadge status="todo" />
