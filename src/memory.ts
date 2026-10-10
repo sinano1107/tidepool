@@ -752,13 +752,13 @@ export function humanEntryInput<T extends { workspace: string | null; original_t
   db: Db,
   { workspace, original_title, original_text, ...rest }: T,
 ) {
-  const title = normalizeText(("title" in rest ? original_title : original_text) ?? "");
-  const text = normalizeText(original_text ?? "");
-  if (!title !== !text) throw new DomainError("an original needs both its title and its text");
+  const originalTitle = normalizeText(("title" in rest ? original_title : original_text) ?? "");
+  const originalText = normalizeText(original_text ?? "");
+  if (!originalTitle !== !originalText) throw new DomainError("an original needs both its title and its text");
   return {
     ...rest,
     scope: workspace,
-    original: title && text ? { title, text, language: getDisplayLanguage(db) } : null,
+    original: originalTitle && originalText ? { title: originalTitle, text: originalText, language: getDisplayLanguage(db) } : null,
     author: HUMAN_AUTHOR,
   };
 }
