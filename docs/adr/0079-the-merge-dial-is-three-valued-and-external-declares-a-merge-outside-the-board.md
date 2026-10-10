@@ -2,6 +2,8 @@
 
 **Status: 決定3 の契機は ADR 0217 で4つ目が加わった — agent 名の quarantine でスキップされた CI 待ちの PR は merge 失敗時の検査に届かないので、その quarantine への回答の受理直前に観測する**
 
+**Status 追記: 決定3 の観測は ADR 0229 で閉じた PR にも広がった — merge されずに閉じられた PR も、盤面が決裁を持つ面すべてで観測して決裁を引退させる**
+
 authority profile の `merge` だけが optional で、省略の意味が定義されていなかった(issue #235 の grilling、2026-08-14)。省略時の実挙動は「盤面は何もしない — PR は open のまま残り、merge は盤面の外で起きる」だが、これは設計された分岐ではなく宣言の空白の漏れであり、帰結として省略 profile では merge の記録が盤面に1つも残らず、CONTEXT.md の GitHub identity「判断の帰属は盤面の記録が正典」が成立していなかった。さらに grilling で判明した新事実として、盤面外の merge は省略 profile だけの現象ではない — `escalate` の merge question が開いている間に人間が GitHub 上で直接 merge すると、回答「merge」は merge 済み PR への merge 実行が失敗して question が座礁し、`auto_if_ci_green` の CI 待ち行に対しては poll の merge 実行が失敗し続けて無限リトライになる。
 
 **決定1: `merge` は必須の3値にする — `escalate` / `auto_if_ci_green` / `external`。** 省略は不正。issue #41 が `assignable_to` / `allowed_workspaces` に引いた線(省略 = 意味を持つという footgun を作らない)をスキーマ全体に貫徹する。ダイヤルの意味は**人間の merge 判断がどの面に住むかの宣言**である: `escalate` は盤面の question 面(決定は decision log に残り、執行は盤面の GitHub 身元)、`auto_if_ci_green` は CI 緑を条件とした決裁権内(無人 merge)、`external` は盤面の外 — GitHub の PR 面のネイティブな統治(レビューUI・required reviews・merge queue、あるいは盤面の外の merge 権者)に委ねる。`escalate` との使い分けは実在する — tidepool 自身の開発がまさに `external` の姿(全 PR を人間が GitHub 上でレビューして merge し、盤面は問わない)であり、2値必須の世界ではこれらすべてに「既に自分で merge した後に回答する」question が立ってしまう。
