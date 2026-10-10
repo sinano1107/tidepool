@@ -69,5 +69,5 @@ export function whyAssigneeCannotTake(name: string, type: string, resolvesToBuil
   return type !== "review" && resolvesToBuiltIn ? `agent ${name} is the built-in agent, which runs reviews only` : undefined;
 }
 
-export const completionReviewFires =(t: ReviewSubject): boolean => whyNoCompletionReview(t) === undefined;
+export const completionReviewFires = (t: ReviewSubject): boolean => whyNoCompletionReview(t) === undefined;
 export const reviewFlagCarriesMeaning = (t: ReviewSubject): boolean => whyReviewFlagIsInert(t) === undefined;
