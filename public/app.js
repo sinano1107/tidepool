@@ -2002,7 +2002,7 @@ function GitHubLoginCard({ loggedIn }) {
       label: "login",
       kind: loggedIn ? "mono" : "unset",
       value: loggedIn ? "logged in" : "",
-      unsetLabel: "not logged in"
+      unsetLabel: loggedIn === null ? githubLoginUnavailable : "not logged in"
     }
   ), /* @__PURE__ */ React.createElement("p", { style: { margin: 0, fontSize: "var(--text-xs)", color: "var(--text-muted)" } }, "the board acts on GitHub as tidepool[bot], and reaches only the repositories the Tidepool App is installed on. run ", /* @__PURE__ */ React.createElement("code", null, "npm run github-login"), " in a terminal on this host to log in \u2014 the same command re-logs in, and the board picks it up without a restart."));
 }
@@ -2028,7 +2028,7 @@ function TranslateUsageCard({ records }) {
     {
       label: "translations",
       kind: "unset",
-      unsetLabel: records ? "none generated yet" : "usage unavailable"
+      unsetLabel: records ? "none generated yet" : translationSpendUnavailable
     }
   ));
 }
@@ -2207,6 +2207,8 @@ const paceOffsetsUnavailable = "provider pace offsets unavailable";
 const executionSettingsUnavailable = "execution settings unavailable";
 const memorySettingsUnavailable = "memory unavailable";
 const metaReviewUnavailable = "meta-review unavailable";
+const githubLoginUnavailable = "github login unavailable";
+const translationSpendUnavailable = "translation spend unavailable";
 function UnavailableSettingsCard({ title, says }) {
   const { Card, FieldRow } = window.TidepoolDesignSystem_8a0ead;
   return /* @__PURE__ */ React.createElement(Card, { style: { display: "flex", flexDirection: "column", gap: 14 } }, /* @__PURE__ */ React.createElement("span", { style: settingsCardLabel }, title), /* @__PURE__ */ React.createElement(FieldRow, { label: "settings", kind: "unset", unsetLabel: says }));
@@ -3428,8 +3430,9 @@ function SettingsScreen({ say, memoryFocus, registerLeaveGuard }) {
     api("GET /api/settings/response-floors").then((r) => setResponseFloors(r.floors)).catch(() => setResponseFloorsFailed(true));
   }, []);
   const [githubLoggedIn, setGithubLoggedIn] = React.useState(null);
+  const [githubLoginFailed, setGithubLoginFailed] = React.useState(false);
   React.useEffect(() => {
-    api("GET /api/settings/github").then(({ loggedIn }) => setGithubLoggedIn(loggedIn)).catch(() => setGithubLoggedIn(null));
+    api("GET /api/settings/github").then(({ loggedIn }) => setGithubLoggedIn(loggedIn)).catch(() => setGithubLoginFailed(true));
   }, []);
   const [translateUsage, setTranslateUsage] = React.useState(null);
   const [translateUsageFailed, setTranslateUsageFailed] = React.useState(false);
@@ -3678,7 +3681,9 @@ function SettingsScreen({ say, memoryFocus, registerLeaveGuard }) {
       haltedRefiresFailed ? haltedRefiresUnavailable : halted > 0 ? `${halted} halted refire${halted === 1 ? "" : "s"}` : null,
       responseFloorsFailed ? cutReadsUnavailable : floors > 0 ? `${floors} read${floors === 1 ? "" : "s"} cut` : null,
       memorySettingsFailed ? memorySettingsUnavailable : null,
-      metaReviewFailed ? metaReviewUnavailable : null
+      metaReviewFailed ? metaReviewUnavailable : null,
+      githubLoginFailed ? githubLoginUnavailable : null,
+      translateUsageFailed ? translationSpendUnavailable : null
     ].filter((part) => part !== null);
     const rows = [
       {
@@ -3739,7 +3744,7 @@ function SettingsScreen({ say, memoryFocus, registerLeaveGuard }) {
         edit,
         focus: boardLoaded ? memoryFocus : null
       }
-    ), metaReviewFailed ? /* @__PURE__ */ React.createElement(UnavailableSettingsCard, { title: "meta-review", says: metaReviewUnavailable }) : metaReviewSettings && /* @__PURE__ */ React.createElement(MetaReviewSettingsCard, { settings: metaReviewSettings, say, onSaved: loadMetaReviewSettings, edit }), !boardLoaded && /* @__PURE__ */ React.createElement(Card, { style: { fontSize: "var(--text-sm)", color: "var(--text-secondary)" } }, "loading\u2026"), /* @__PURE__ */ React.createElement("p", { style: settingsFootnote }, "applies to every task the board picks up"), (githubLoggedIn !== null || translateUsage !== null || translateUsageFailed) && /* @__PURE__ */ React.createElement("p", { style: settingsCardLabel }, "board state"), githubLoggedIn !== null && /* @__PURE__ */ React.createElement(GitHubLoginCard, { loggedIn: githubLoggedIn }), (translateUsage !== null || translateUsageFailed) && /* @__PURE__ */ React.createElement(TranslateUsageCard, { records: translateUsage }));
+    ), metaReviewFailed ? /* @__PURE__ */ React.createElement(UnavailableSettingsCard, { title: "meta-review", says: metaReviewUnavailable }) : metaReviewSettings && /* @__PURE__ */ React.createElement(MetaReviewSettingsCard, { settings: metaReviewSettings, say, onSaved: loadMetaReviewSettings, edit }), !boardLoaded && /* @__PURE__ */ React.createElement(Card, { style: { fontSize: "var(--text-sm)", color: "var(--text-secondary)" } }, "loading\u2026"), /* @__PURE__ */ React.createElement("p", { style: settingsFootnote }, "applies to every task the board picks up"), (githubLoggedIn !== null || githubLoginFailed || translateUsage !== null || translateUsageFailed) && /* @__PURE__ */ React.createElement("p", { style: settingsCardLabel }, "board state"), (githubLoggedIn !== null || githubLoginFailed) && /* @__PURE__ */ React.createElement(GitHubLoginCard, { loggedIn: githubLoggedIn }), (translateUsage !== null || translateUsageFailed) && /* @__PURE__ */ React.createElement(TranslateUsageCard, { records: translateUsage }));
   } else if (!sec) {
     body = /* @__PURE__ */ React.createElement(ScreenHeader, { title: "Settings", backLabel: "Settings", onBack: () => go([]) });
   } else if (recordName === void 0) {
