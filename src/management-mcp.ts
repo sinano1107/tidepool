@@ -93,7 +93,7 @@ import {
 } from "./registry.js";
 import { RepoAccessMissingError } from "./repo-access.js";
 import { requiredTextSchema } from "./required-text-schema.js";
-import { CUT_FIELDS_DESCRIPTION, nextDescription, packItems, type ReadPosition, readNext } from "./response-budget.js";
+import { nextDescription, packItems, type ReadPosition, readNext } from "./response-budget.js";
 import { listHaltedRefires, markHaltedRefire, refireKeySchema } from "./retrospective.js";
 import {
   entryExclusionPredicate,
@@ -366,19 +366,13 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
     },
     async (input) => readBudgeted("list_your_tasks", input, (read) => packItems(read, "tasks", listYourTasks(deps.db))),
   );
+  // 先頭に伸びる新しい順の履歴は鍵で引き直す —— description の文と packItems の挙動を同じ値から作る。
+  const getTaskResumesByKey = true;
   server.registerTool(
     "get_task",
     {
       description:
-        "Get a task and its event history, newest first (event id descending). " +
-        "When the history does not fit in one response, the response carries `next` and `remaining` (how many events are not returned yet): " +
-        "call get_task again with only `next` to read the older events, and repeat until a response carries no `next` — then the history is complete. " +
-        "The task itself comes on the first response only. An event too large for one response comes alone in pieces marked `partial` " +
-        "(`id`, `field`, and `field_bytes`, the field's full size in UTF-8 bytes): join that field across the pieces to get it verbatim." +
-        CUT_FIELDS_DESCRIPTION +
-        " When the task itself is too large, it comes first in pieces the same way, before any event: those pieces' `partial` has no `id`, " +
-        "its `field` is the path from the response root, `events` is empty, and `remaining` counts all the events. " +
-        "Events added after the first call, or after the last piece of a task too large for one response, are not returned: call again without `next` to see them. " +
+        `Get a task and its event history, newest first (event id descending). ${nextDescription("get_task", "events", "The task itself comes", getTaskResumesByKey)} ` +
         QUESTION_ANNOTATIONS_DESCRIPTION,
       inputSchema: { task_id: z.string().optional(), next: z.string().optional() },
     },
@@ -388,21 +382,22 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
         const task = getTask(deps.db, read.args.task_id);
         if (!task) throw new DomainError("task not found");
         const envelope = { ...presentTask(deps.db, task, deps.defaultAgentName, deps.auditorName), ...(task.type === "question" && questionAnnotations(deps.db, task)) };
-        return packItems(read, "events", listEvents(deps.db, task.id).reverse(), envelope, { resumeByKey: true });
+        return packItems(read, "events", listEvents(deps.db, task.id).reverse(), envelope, { resumeByKey: getTaskResumesByKey });
       }),
   );
+  const decisionLogResumesByKey = true;
   server.registerTool(
     "read_decision_log",
     {
       description:
         "Read the decision log without marking it seen, newest first (entry id descending). Each entry carries every objection ever " +
         "raised against it (bundled and still commit-pending alike). `cursor` is the human's unread cursor, unrelated to `next`. " +
-        nextDescription("read_decision_log", "entries", "`cursor` comes", true),
+        nextDescription("read_decision_log", "entries", "`cursor` comes", decisionLogResumesByKey),
       inputSchema: { next: z.string().optional() },
     },
     async (input) =>
       readBudgeted("read_decision_log", input, (read) =>
-        packItems(read, "entries", listLog(deps.db, deps.workspace?.name).reverse(), { cursor: getLogCursor(deps.db) }, { resumeByKey: true }),
+        packItems(read, "entries", listLog(deps.db, deps.workspace?.name).reverse(), { cursor: getLogCursor(deps.db) }, { resumeByKey: decisionLogResumesByKey }),
       ),
   );
   server.registerTool(
