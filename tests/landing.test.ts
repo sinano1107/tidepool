@@ -1874,7 +1874,7 @@ it("遅い走査は、workspace の解決が分類できない失敗で落ちた
   expect(getTask(db, broken.id)!.status).toBe("todo");
   expect(getTask(db, closed.id)!.status).toBe("done");
   expect(boardEvents(db, closed.id, "pr_close_observed")).toEqual(closeObserved(2));
-  expect(logged).toHaveBeenCalledWith(expect.stringContaining("PR #1 "), expect.any(Error));
+  expect(logged).toHaveBeenCalledWith(expect.stringContaining(`PR #1 (question ${broken.id})`), expect.any(Error));
 });
 
 it("遅い走査で UnknownWorkspaceError を投げる workspace は quarantine に落ち、tick は落ちない", async () => {
