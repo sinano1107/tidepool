@@ -3,7 +3,7 @@ import { countTokens } from "gpt-tokenizer/encoding/o200k_base";
 import { z } from "zod";
 import type { Cause } from "./cause.js";
 import { type Db, MEMORY_FTS_DDL, MEMORY_FTS_TOKEN_CLASS, MEMORY_FTS_TOKENIZER, MEMORY_PREPROCESS_VERSION } from "./db.js";
-import { getDisplayLanguage } from "./display-language.js";
+import { getDisplayLanguage, SUPPORTED_DISPLAY_LANGUAGES } from "./display-language.js";
 import { DomainError } from "./domain-error.js";
 import { appendEvent, type EventOrigin, type EventPayload, type EventRow, getEvent, isDecisionLogEntry, listEvents, listEventsOfKinds, sessionSpawnOf, sessionWindow } from "./events.js";
 import { landingAnnotation } from "./landing.js";
@@ -69,8 +69,8 @@ interface EntryInput {
   path: string;
   title: string;
   text: string;
-  /** 人間が書くエントリのみ。 */
-  original?: MemoryEntryFields["original"];
+  /** 人間が書くエントリのみ。`declared` は管理MCP の呼び手が申告した言語で、写しの一致に勝つ(ADR 0230 決定2)。 */
+  original?: (NonNullable<MemoryEntryFields["original"]> & { declared?: true }) | null;
   source?: SourceInput;
   author: MemoryEntryFields["author"];
 }
@@ -306,11 +306,12 @@ function copiedLanguage(language: string, matched: Array<string | undefined>): s
   return languages.size === 1 ? [...languages][0]! : language;
 }
 
-/** 原文の title と text が置き換えられる相手のどれかと完全に一致すれば、その言語を継ぐ(ADR 0223 決定2)。 */
-function inheritedOriginal(original: MemoryEntry["original"] | undefined, replaced: MemoryEntry[]): MemoryEntry["original"] {
+/** 申告があればその言語(ADR 0230 決定2)。無ければ、原文の title と text が置き換えられる相手のどれかと完全に一致すればその言語を継ぐ(ADR 0223 決定2)。 */
+function inheritedOriginal(original: EntryInput["original"], replaced: MemoryEntry[]): MemoryEntry["original"] {
   if (!original) return null;
-  const matched = replaced.map((r) => (r.original?.title === original.title && r.original.text === original.text ? r.original.language : undefined));
-  return { ...original, language: copiedLanguage(original.language, matched) };
+  const { title, text, language, declared } = original;
+  const matched = replaced.map((r) => (r.original?.title === title && r.original.text === text ? r.original.language : undefined));
+  return { title, text, language: declared ? language : copiedLanguage(language, matched) };
 }
 
 /** Knowledge の書き込み(spec #586 E)。承認不要なので書いた瞬間に approved。 */
@@ -663,12 +664,15 @@ export function requireDecision(db: Db, eventId: number, taskId: string): number
 }
 
 /** 人間の面(settings の HTTP / 管理MCP)の書き込み欄(spec #586 F)。workspace は null = 盤面全体、
- *  original_title / original_text は人間の原文で言語は盤面の表示言語。出所欄は Behavior(任意)と Exemplar(必須)だけが持つ(ADR 0083 追記5 / ADR 0153 決定3)。 */
+ *  original_title / original_text は人間の原文で、original_language はその申告(管理MCP は原文を送るなら必須、WebUI は送らない
+ *  —— ADR 0230)。申告が無ければ写しの一致か表示言語(ADR 0223 決定2)。出所欄は Behavior(任意)と Exemplar(必須)だけが持つ(ADR 0083 追記5 / ADR 0153 決定3)。 */
+const originalLanguageSchema = z.enum(SUPPORTED_DISPLAY_LANGUAGES).optional();
 const humanEntryFields = {
   workspace: requiredTextSchema.nullable(),
   path: requiredTextSchema,
   text: requiredTextSchema,
   original_text: z.string().optional(),
+  original_language: originalLanguageSchema,
   /** 新エントリが置き換える approved のエントリ(ADR 0162 決定1)。 */
   supersedes: z.array(z.number().int().positive()).optional(),
 };
@@ -680,16 +684,17 @@ export const humanBehaviorSchema = humanKnowledgeSchema.extend({
   source_event_id: z.number().int().positive().optional(),
 });
 /** Exemplar の注釈(ADR 0153 決定1・3)。anchor は case 描画の欄に結ぶ —— `whole` か、欄(decision / steering / handoff /
- *  result)とその逐語部分文字列。text は英語の正文、original は人間の原文(言語は盤面の表示言語)。 */
+ *  result)とその逐語部分文字列。text は英語の正文、original は人間の原文で、original_language はその申告(注釈ごと —— ADR 0230)。 */
 export const exemplarAnnotationSchema = z.object({
   anchor: z.union([z.literal("whole"), z.object({ field: z.enum(["decision", "steering", "handoff", "result"]), quote: requiredTextSchema })]),
   polarity: z.enum(["imitate", "avoid"]),
   text: requiredTextSchema,
   original: z.string().transform(normalizeText).optional(),
+  original_language: originalLanguageSchema,
 });
-type ExemplarAnnotation = Omit<z.infer<typeof exemplarAnnotationSchema>, "original"> & { original?: { text: string; language: string } };
+type ExemplarAnnotation = Omit<z.infer<typeof exemplarAnnotationSchema>, "original" | "original_language"> & { original?: { text: string; language: string } };
 /** meta-review の consolidate の注釈: 原文は人間のものなので持たない(渡されたら黙って捨てず断る)。 */
-export const metaReviewAnnotationSchema = exemplarAnnotationSchema.omit({ original: true }).strict();
+export const metaReviewAnnotationSchema = exemplarAnnotationSchema.omit({ original: true, original_language: true }).strict();
 /** Exemplar は Behavior の置き場・title・宛先・supersedes・出所の Episode + 注釈の list。英語の title の原文は持たない。出所は
  *  supersedes の揃った出所を継ぐときだけ省ける(recordExemplar)。 */
 export const humanExemplarSchema = humanBehaviorSchema.pick({ workspace: true, path: true, title: true, addressee: true, supersedes: true, source_event_id: true }).extend({
@@ -699,7 +704,7 @@ export const humanExemplarSchema = humanBehaviorSchema.pick({ workspace: true, p
 /** memory の提案の approve に添える修正値(ADR 0152 決定2): 文言と宛先と Exemplar の注釈 list。置き場(path / scope)は動かさない。
  *  扉は形だけを見る —— candidate の種別ごとの拒否(Exemplar に text・原文、Behavior に注釈)は approveMemoryProposal が持つ。 */
 const memoryAmendmentSchema = humanBehaviorSchema
-  .pick({ title: true, text: true, addressee: true, original_title: true, original_text: true })
+  .pick({ title: true, text: true, addressee: true, original_title: true, original_text: true, original_language: true })
   .extend({ annotations: z.array(exemplarAnnotationSchema) })
   .partial()
   .strict()
@@ -709,7 +714,7 @@ export type MemoryAmendment = z.infer<typeof memoryAmendmentSchema>;
 /** 回答の `amendment` の検査。schema 違反は DomainError(扉は形を緩く受ける)。 */
 export function parseMemoryAmendment(input: unknown): MemoryAmendment {
   const parsed = memoryAmendmentSchema.safeParse(input);
-  if (!parsed.success) throw new DomainError(`a memory amendment takes title, text, addressee, original_title + original_text and annotations, nothing else: ${parsed.error.issues.map((i) => i.message).join("; ")}`);
+  if (!parsed.success) throw new DomainError(`a memory amendment takes title, text, addressee, original_title + original_text + original_language and annotations, nothing else: ${parsed.error.issues.map((i) => i.message).join("; ")}`);
   return parsed.data;
 }
 
@@ -748,17 +753,20 @@ export const HUMAN_AUTHOR = { activity: "human", name: HUMAN_WORKER_ID } as cons
 
 /** 原文は title と text の揃いで持つか持たないか。英語の title を持たない Definition は、英語側と
  *  同じく原文も title = text(ADR 0015 五度目の精密化)。 */
-export function humanEntryInput<T extends { workspace: string | null; original_title?: string; original_text?: string }>(
+export function humanEntryInput<T extends { workspace: string | null; original_title?: string; original_text?: string; original_language?: string }>(
   db: Db,
-  { workspace, original_title, original_text, ...rest }: T,
+  { workspace, original_title, original_text, original_language, ...rest }: T,
 ) {
   const originalTitle = normalizeText(("title" in rest ? original_title : original_text) ?? "");
   const originalText = normalizeText(original_text ?? "");
   if (!originalTitle !== !originalText) throw new DomainError("an original needs both its title and its text");
+  if (original_language && !originalText) throw new DomainError("original_language declares the language of an original: send it only with the original");
   return {
     ...rest,
     scope: workspace,
-    original: originalTitle && originalText ? { title: originalTitle, text: originalText, language: getDisplayLanguage(db) } : null,
+    original: originalTitle && originalText
+      ? { title: originalTitle, text: originalText, ...(original_language ? { language: original_language, declared: true as const } : { language: getDisplayLanguage(db) }) }
+      : null,
     author: HUMAN_AUTHOR,
   };
 }
@@ -856,7 +864,10 @@ export function recordExemplar(
     const language = getDisplayLanguage(db);
     const annotationLanguage = (originalText: string) =>
       copiedLanguage(language, replaced.flatMap((r) => r.annotations ?? []).map((a) => (a.original?.text === originalText ? a.original.language : undefined)));
-    const annotations = checked.map(({ original, ...annotation }) => (original ? { ...annotation, original: { text: original, language: annotationLanguage(original) } } : annotation));
+    const annotations = checked.map(({ original, original_language, ...annotation }) => {
+      if (original_language && !original) throw new DomainError("an annotation's original_language declares the language of its original: send it only with the original");
+      return original ? { ...annotation, original: { text: original, language: original_language ?? annotationLanguage(original) } } : annotation;
+    });
     return createEntry(db, { ...fields, kind: "exemplar", state: "approved", text, original: null, annotations, source }, origin, at, mark);
   });
 }

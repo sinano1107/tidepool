@@ -208,8 +208,9 @@ it("管理MCP で Knowledge を書き(supersedes の list は domain に渡る)�
       text: "Run the suite on Node 22.",
       original_title: "Node 22 を使う",
       original_text: "スイートは Node 22 で走らせる",
+      original_language: "Japanese",
     });
-    expect((await call("record_knowledge", { workspace: null, path: "a", title: "t", text: "x", original_text: "原文の text だけ" })).isError).toBe(true);
+    expect((await call("record_knowledge", { workspace: null, path: "a", title: "t", text: "x", original_text: "原文の text だけ", original_language: "Japanese" })).isError).toBe(true);
     const draft = await call("record_knowledge", { workspace: "tidepool", path: "build/tests", title: "Node 22", text: "Node 22." });
     const revised = await call("record_knowledge", { workspace: "tidepool", path: "build/tests", title: "Node 22 only", text: "Node 22 only.", supersedes: [draft.json.entry_id] });
     expect((await call("record_knowledge", { workspace: null, path: "a", title: "t", text: "x", supersedes: [draft.json.entry_id] })).isError).toBe(true);

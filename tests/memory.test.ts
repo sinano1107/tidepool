@@ -16,14 +16,17 @@ import {
   foldMemory,
   foldMemoryEntries,
   humanEntryInput,
+  humanKnowledgeSchema,
   invalidateMemoryEntry,
   listMemoryEntries,
   type MemoryAmendment,
   memoryScope,
+  metaReviewAnnotationSchema,
   movedPins,
   moveMemory,
   moveMemoryBranch,
   OneTreeError,
+  parseMemoryAmendment,
   previewCase,
   proposeMemoryChange,
   readMemory,
@@ -501,6 +504,28 @@ it("supersedes の相手の原文を写したまま書いた Behavior は相手�
   expect(entryById(db, copied)?.original?.language).toBe("Japanese");
 });
 
+it.each([
+  ["Knowledge", (db: ReturnType<typeof openDb>, original_language: "Japanese" | "English" | undefined, supersedes?: number[]) =>
+    recordKnowledge(db, { ...humanEntryInput(db, { ...humanKnowledge, original_title: original.title, original_text: original.text, original_language }), supersedes }, "mcp", at)],
+  ["Behavior", (db: ReturnType<typeof openDb>, original_language: "Japanese" | "English" | undefined, supersedes?: number[]) =>
+    recordBehavior(db, { ...humanEntryInput(db, { ...humanKnowledge, original_title: original.title, original_text: original.text, original_language }), addressee: null, supersedes }, "mcp", at)],
+  ["Definition", (db: ReturnType<typeof openDb>, original_language: "Japanese" | "English" | undefined, supersedes?: number[]) =>
+    defineMemoryBranch(db, { ...humanEntryInput(db, { workspace: "tidepool", path: "build", text: "Use Node 22.", original_text: original.text, original_language }), supersedes }, "mcp", at)],
+] as const)("申告した言語が %s の原文に付き、supersedes の相手の原文を写したままでも申告が勝つ —— English も申告できる(ADR 0230)", (_kind, write) => {
+  const { db } = board();
+  const declared = write(db, "English").entry_id;
+  const undeclared = write(db, undefined, [declared]).entry_id;
+  const corrected = write(db, "Japanese", [undeclared]).entry_id;
+
+  expect([declared, undeclared, corrected].map((id) => entryById(db, id)?.original?.language)).toEqual(["English", "English", "Japanese"]);
+});
+
+it("人間の面の原文の言語は表示言語のリストの値だけ、原文の無い言語は domain error(ADR 0230)", () => {
+  const { db } = board();
+  expect(humanKnowledgeSchema.safeParse({ ...humanKnowledge, original_title: original.title, original_text: original.text, original_language: "French" }).success).toBe(false);
+  expect(() => humanEntryInput(db, { ...humanKnowledge, original_language: "English" })).toThrow(DomainError);
+});
+
 it("人間が書く Knowledge に出所を渡すと domain error —— 出所は自身の作成 event", () => {
   const { db } = board();
   expect(() => recordKnowledge(db, { ...knowledge, author: human, source: { commit: "0a46a46" } }, "webui", at)).toThrow(/no source/);
@@ -668,6 +693,35 @@ it("前後に空白のある注釈の原文は trim して保存し、表示言�
     { text: "形をまるごと保つ", language: "Japanese" },
     { text: "形をまるごと保つ", language: "Japanese" },
   ]);
+});
+
+it("Exemplar の注釈は注釈ごとに申告した言語を持ち、相手の注釈の原文を写したままでも申告が勝つ —— 申告の無い注釈は今のまま(ADR 0230)", () => {
+  const { db, task } = board();
+  const decision = logDecision(db, task, "split the migration into two commits", "deckhand", at, "worker");
+  const first = exemplar(db, decision, [{ ...whole, original: "形をまるごと保つ" }]);
+
+  const declared = recordExemplar(
+    db,
+    humanEntryInput(db, {
+      workspace: "tidepool", path: "habits/migrations", title: "Split the migration", addressee: null, supersedes: [first],
+      annotations: [{ ...whole, original: "形をまるごと保つ", original_language: "English" }, { ...whole, text: "Split it.", original: "分ける" }],
+    }),
+    "mcp",
+    at,
+  ).entry_id;
+
+  expect(entryById(db, declared)?.annotations?.map((a) => a.original)).toEqual([
+    { text: "形をまるごと保つ", language: "English" },
+    { text: "分ける", language: "Japanese" },
+  ]);
+});
+
+it("注釈の言語は表示言語のリストの値だけ、原文の無い注釈の言語は domain error、meta-review の注釈は言語を持たない(ADR 0230)", () => {
+  const { db, task } = board();
+  const decision = logDecision(db, task, "split the migration into two commits", "deckhand", at, "worker");
+  expect(() => exemplar(db, decision, [{ ...whole, original: "分ける", original_language: "French" }])).toThrow(DomainError);
+  expect(() => exemplar(db, decision, [{ ...whole, original_language: "English" }])).toThrow(DomainError);
+  expect(metaReviewAnnotationSchema.safeParse({ ...whole, original_language: "English" }).success).toBe(false);
 });
 
 it("注釈の原文が空白だけなら原文を持たない", () => {
@@ -1275,6 +1329,28 @@ it.each<[string, MemoryAmendment]>([
   const before = listMemoryEntries(db, {});
 
   expect(() => approveMemoryProposal(db, proposal, "question-1", "webui", at, amendment)).toThrow(DomainError);
+  expect(listMemoryEntries(db, {})).toEqual(before);
+});
+
+it("修正値つき approve の原文と注釈の原文は申告した言語を持つ(ADR 0230)", () => {
+  const { db } = board();
+  const behavior = approveMemoryProposal(db, { kind: "memory", op: "approve", candidate_id: candidate(db, "Split migrations"), replaces: [] }, "question-1", "mcp", at,
+    parseMemoryAmendment({ original_title: "移行を分ける", original_text: "移行は2つの commit に分ける", original_language: "English" }));
+  const { db: exemplarDb, proposal } = exemplarProposal();
+  const exemplarEntry = approveMemoryProposal(exemplarDb, proposal, "question-1", "mcp", at,
+    parseMemoryAmendment({ annotations: [{ ...whole, original: "形をまるごと保つ", original_language: "English" }] }));
+
+  expect(entryById(db, behavior)?.original?.language).toBe("English");
+  expect(entryById(exemplarDb, exemplarEntry)?.annotations?.[0]?.original).toEqual({ text: "形をまるごと保つ", language: "English" });
+});
+
+it("修正値の言語は表示言語のリストの値だけ、原文の無い言語は domain error で何も変えない(ADR 0230)", () => {
+  const { db } = board();
+  const drafted = candidate(db, "Split migrations");
+  const before = listMemoryEntries(db, {});
+
+  expect(() => parseMemoryAmendment({ original_title: "分ける", original_text: "分ける", original_language: "French" })).toThrow(DomainError);
+  expect(() => approveMemoryProposal(db, { kind: "memory", op: "approve", candidate_id: drafted, replaces: [] }, "question-1", "mcp", at, parseMemoryAmendment({ original_language: "English" }))).toThrow(DomainError);
   expect(listMemoryEntries(db, {})).toEqual(before);
 });
 

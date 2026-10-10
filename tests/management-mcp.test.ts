@@ -1,11 +1,12 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { BuiltInAgentNotEditableError } from "../src/agent-create.js";
+import { createBehaviorCandidate, proposeMemoryChange } from "../src/memory.js";
 import type { CreateProfileInput, UpdateProfileInput } from "../src/profile-create.js";
 import { ProfileConfirmationRequiredError } from "../src/profile-create.js";
 import { InvalidAllowedDomainError, InvalidWorkspaceNameError } from "../src/registry.js";
 import { RegistryPushFailedError } from "../src/registry-write.js";
 import { RepoAccessMissingError } from "../src/repo-access.js";
-import { HANDOFF_FIELDS, registerTask } from "../src/tasks.js";
+import { HANDOFF_FIELDS, logDecision, registerTask } from "../src/tasks.js";
 import {
   BoardStateOverlapError,
   type CreateWorkspaceInput,
@@ -1182,6 +1183,35 @@ it("create_workspace は生きた dev checkout の信号でも登録を通し、
     expect(payload.notice).not.toContain("confirm");
     // adapter が内部で立てた2回目だけが confirm を持つ
     expect(calls.map((c) => (c as any).confirm)).toEqual([undefined, true]);
+  } finally {
+    await client.close();
+  }
+});
+
+it("管理MCP の人間の書き込み5つの口は、原文を送って言語の申告を省くと拒む —— Exemplar の注釈は注釈ごと(ADR 0230 決定1)", async () => {
+  t = await bootTidepool();
+  // setup のみ: 事例の decision と、修正値で答える memory の提案 question
+  const task = registerTask(t.db, { type: "work", title: "t", purpose: "p", completion_criteria: "c" }, t.clock.now(), ...HUMAN_WEBUI);
+  const decision = logDecision(t.db, task, "split the migration into two commits", "deckhand", t.clock.now(), "worker");
+  const candidate_id = createBehaviorCandidate(t.db, { scope: null, path: "habits", title: "Split", text: "Split it.", addressee: null, source: { commit: "0a46a46" }, author: { activity: "rca", name: "auditor" } }, "board", t.clock.now()).entry_id;
+  const { question_id } = proposeMemoryChange(t.db, task.id, { op: "approve", candidate_id, rationale: "r" }, "auditor", t.clock.now());
+  const original = { original_title: "分ける", original_text: "移行を分ける" };
+  const annotation = { anchor: "whole", polarity: "imitate", text: "Split it.", original: "分ける" };
+  const calls: Array<[string, Record<string, unknown>]> = [
+    ["record_knowledge", { workspace: null, path: "build", title: "Split", text: "Split it.", ...original }],
+    ["define_memory_branch", { workspace: null, path: "build", text: "Split it.", original_text: "分ける" }],
+    ["record_behavior", { workspace: null, path: "habits", title: "Split", text: "Split it.", addressee: null, ...original }],
+    ["record_exemplar", { workspace: null, path: "habits", title: "Split", addressee: null, source_event_id: decision, annotations: [{ ...annotation, original_language: "Japanese" }, annotation] }],
+    ["answer_question", { task_id: question_id, answers: ["approve"], amendment: original }],
+    ["answer_question", { task_id: question_id, answers: ["approve"], amendment: { annotations: [annotation] } }],
+  ];
+  const client = await managementMcpClient(t.baseUrl);
+  try {
+    for (const [name, args] of calls) {
+      const result: any = await client.callTool({ name, arguments: args });
+      expect([name, result.isError, result.content[0].text]).toEqual([name, true, expect.stringContaining("original_language")]);
+    }
+    expect((await api(t.baseUrl, "GET", "/api/settings/memory/entries")).json.entries.filter((e: any) => e.author.activity === "human")).toEqual([]);
   } finally {
     await client.close();
   }

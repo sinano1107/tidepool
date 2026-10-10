@@ -344,7 +344,7 @@ export interface WireContract {
       path: string;
       title: string;
       text: string;
-      original: { title: string; text: string } | null;
+      original: { title: string; text: string; language: string } | null;
       addressee: string | null;
       author: { activity: string };
       invalidation_reason: string | null;
