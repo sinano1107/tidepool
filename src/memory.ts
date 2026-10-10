@@ -1521,10 +1521,11 @@ function ftsQuery(query: string, join: " " | " OR " = " "): string | null {
     .split(QUERY_BREAK)
     .flatMap((word) => word.split(CJK_RUN))
     .map((word) => ftsText(word).trim())
-    // 語の端の記号を除いて見る(`it,` も FTS には `it` として届く。記号だけの語は消える)
+    // 語の端の token にならない字を除いて見る(`it,` も FTS には `it` として届く。記号だけの語は消える)。stopword は M を
+    // 除いて照らす(NFC で合成されない `it` + U+0301 も remove_diacritics で索引の `it` に当たる)
     .filter((term) => {
       const word = term.toLowerCase().replace(NON_TOKEN_EDGE, "");
-      return word !== "" && !STOPWORDS.has(word);
+      return word !== "" && !STOPWORDS.has(word.replace(/\p{M}/gu, ""));
     });
   return terms.length === 0 ? null : terms.map((term) => `"${term.replaceAll('"', '""')}"`).join(join);
 }
