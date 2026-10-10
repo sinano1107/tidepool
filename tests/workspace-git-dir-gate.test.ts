@@ -42,3 +42,16 @@ it("修理確認の検証は `.git` がファイルのままなら拒否し、�
   await rename(join(workspace.path, ".git.real"), join(workspace.path, ".git"));
   expect(() => verifyWorkspaceClean(workspace)).not.toThrow();
 });
+
+it("修理確認の検証は、git として使えない path を使えない git リポジトリとして拒否する", () => {
+  expect(() => verifyWorkspaceClean({ name: "no-repo", path: "/workspace/does-not-exist" })).toThrow(
+    "workspace no-repo is not a usable git repository",
+  );
+});
+
+it("修理確認の検証は、未 commit の変更が残る checkout を拒否する", async () => {
+  const workspace = await makeWorkspace("verify-dirty");
+  await writeFile(join(workspace.path, "uncommitted.txt"), "not committed\n");
+
+  expect(() => verifyWorkspaceClean(workspace)).toThrow(`workspace ${workspace.name} still has uncommitted changes`);
+});

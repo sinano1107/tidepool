@@ -685,8 +685,8 @@ it("workspace quarantine の回答は tree が clean と確認できるまで拒
     error = caught;
   }
 
-  expect({ error: String(error), status: onlyQuestion(db).status }).toEqual({
-    error: expect.stringContaining("workspace product is not a usable git repository"),
+  expect({ error, status: onlyQuestion(db).status }).toEqual({
+    error: expect.any(DomainError),
     status: "todo",
   });
 });
