@@ -6,7 +6,7 @@ import { appendEvent, latestEventOfTask } from "./events.js";
 import { git } from "./git.js";
 import type { GitHubClient, PrState } from "./github.js";
 import { registerQuarantine } from "./quarantine.js";
-import { type AuthorityProfile, InvalidAgentDefinitionError, UnknownAgentError } from "./registry.js";
+import { type AuthorityProfile, InvalidAgentDefinitionError, remoteTrackingRef, UnknownAgentError } from "./registry.js";
 import {
   contentSourceFor,
   countUnsettledAttachedChildren,
@@ -166,7 +166,7 @@ export function hasContentLeftBehind(db: Db, workspace: WorkspaceConfig, taskId:
   if (tearingDown) return true;
   if (!taskBranchExists(workspace, taskId)) return false;
   try {
-    return branchMergeEffect(workspace, `refs/remotes/origin/${taskBranch(taskId)}`, taskBranch(taskId))
+    return branchMergeEffect(workspace, remoteTrackingRef(taskBranch(taskId)), taskBranch(taskId))
       .changesCandidate;
   } catch {
     return true;
@@ -692,7 +692,7 @@ export function createLanding(deps: LandingDeps): Landing {
           rebaselineRef(
             deps.db,
             workspace,
-            `refs/remotes/origin/${taskBranch(task.id)}`,
+            remoteTrackingRef(taskBranch(task.id)),
           );
           retireFailures(task.id, excludePrPromotionQuestionId);
           return {
@@ -718,7 +718,7 @@ export function createLanding(deps: LandingDeps): Landing {
           rebaselineRef(
             deps.db,
             workspace,
-            `refs/remotes/origin/${taskBranch(task.id)}`,
+            remoteTrackingRef(taskBranch(task.id)),
           );
         }
         recordPrOpened(

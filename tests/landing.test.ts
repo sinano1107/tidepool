@@ -2069,12 +2069,15 @@ it("積み残しがあっても着地の登録は走る —— PR を開き、�
   });
 });
 
-it.each(["子孫の後始末が未了", "merge back 済み・push 前"])(
+it.each<[string, (pr: Awaited<ReturnType<typeof openPushedPr>>) => void]>([
+  ["子孫の後始末が未了", ({ db, clock, work }) => settleRepairStillTearingDown(db, clock, work.id)],
+  ["merge back 済み・push 前", ({ workspace }) => commitWork(workspace.path, "repair.txt", "fixed\n")],
+])(
   "積み残し(%s)のある PR への人間の merge 回答は拒まれ、merge されず question は開いたまま残る",
-  async (leftBehind) => {
-    const { workspace, db, clock, github, work } = await openPushedPr("left-behind-answer", "escalate");
-    if (leftBehind === "子孫の後始末が未了") settleRepairStillTearingDown(db, clock, work.id);
-    else commitWork(workspace.path, "repair.txt", "fixed\n");
+  async (_, leaveBehind) => {
+    const pr = await openPushedPr("left-behind-answer", "escalate");
+    const { workspace, db, clock, github } = pr;
+    leaveBehind(pr);
     const question = getTask(db, listBoard(db).find((q) => q.question_pending_merge_pr === 1)!.id)!;
     await expect(
       submitAnswer(
