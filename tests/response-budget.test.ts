@@ -454,6 +454,8 @@ it("短い文字列の欄ばかりで予算を超える封筒は、欄を全部�
 it.each([
   { shape: "1欄 45,000 バイト", item: { id: 2, line: "潮".repeat(15_000) }, envelope: { purpose: "p".repeat(39_700) } },
   { shape: "2欄 30,000 バイト ×2", item: { id: 2, case: { handoff: "h".repeat(30_000), result: "r".repeat(30_000) } }, envelope: { purpose: "p".repeat(39_500) } },
+  // 空の断片なら封筒の横で収まるが、1文字(制御文字は CallToolResult の中で7バイト)を載せると超える窓(issue #1700)
+  ...[39_496, 39_497, 39_498].map((n) => ({ shape: `制御文字 9,000 字・封筒 ${n} 字`, item: { id: 2, line: "\u0001".repeat(9_000) }, envelope: { purpose: "p".repeat(n) } })),
 ])("封筒の横で先頭の item($shape)を切っても収まらないときは、最初の応答で封筒だけを返し、item はその後に封筒なしの切れで届く。next を追うとどの応答も予算以下で、各欄が逐語に戻り、後ろの item も届く(issue #1668)", ({ item, envelope }) => {
   const items = [item, { id: 1, line: "after" }];
 
@@ -471,6 +473,31 @@ it.each([
   expect(restored).toEqual(item);
   expect(responses.flatMap((response) => (response.partial ? [] : response.events))).toEqual([items[1]]);
 });
+
+it("文字列以外の骨格が予算の縁にある object を切るとき、封筒なしの item でも封筒そのものでも、partial を持つ応答は続きの offset の桁が伸びる途中の切れまで予算以下(issue #1700)", () => {
+  // 制御文字(CallToolResult の中で7バイト)を続きの offset が 1→2 桁・2→3 桁に伸びる位置(10 と 100)にまたがって置く。
+  // ほかは1バイトの文字にして、縁で切れが数バイトずつしか載せられなくても切れの数を抑える(末尾の 200 字は、欄を続きの印より
+  // 大きくして item を切れる大きさにするため)
+  const line = "\u0001".repeat(12) + "x".repeat(84) + "\u0001".repeat(8) + "x".repeat(200);
+  const shapes = [
+    { lastCuttable: 200, read: (nums: number[]) => followNext([{ id: 2, nums, line }, { id: 1 }] as { id: number }[]), cutOf: (piece: any) => piece.events[0] },
+    { lastCuttable: 258, read: (nums: number[]) => followNext([{ id: 1 }], { nums, line }), cutOf: (piece: any) => piece },
+  ];
+  for (const { lastCuttable, read, cutOf } of shapes) {
+    // 骨格(数の配列)を1要素(2バイト)ずつ大きくし、切れる最後の大きさ `lastCuttable` から、1文字と続きの印を載せると超える縁の先までを動かす
+    const pieceCounts = [];
+    for (let k = lastCuttable; k <= lastCuttable + 4; k++) {
+      const pieces = read([...Array<number>(2_300).fill(Number.MAX_SAFE_INTEGER), ...Array<number>(k).fill(7)]).filter((response) => response.partial);
+      for (const piece of pieces) expect(bytesOf(piece)).toBeLessThanOrEqual(RESPONSE_BUDGET_BYTES);
+      if (pieces.length > 0) expect(joinPieces(pieces, cutOf)).toEqual({ line });
+      pieceCounts.push(pieces.length);
+    }
+    // 動かした範囲が縁をまたいでいる(切れる読みと切れない読みの両方がある)
+    expect(pieceCounts[0]).toBeGreaterThan(0);
+    expect(pieceCounts).toContain(0);
+  }
+  // 縁で切れる読みは数十の切れになり、切れごとに予算の位置を探すので数秒かかる
+}, 20_000);
 
 it("短い文字列の欄ばかりで予算を超える item は切らずに丸ごと返して床に任せる。封筒があれば、封筒だけを先に返してから続きで丸ごと返す(ADR 0195 追記 #1393 の5)", () => {
   const items = [{ id: 2, tags: Array.from({ length: 10_000 }, () => "ab") }, { id: 1, line: "after" }];
