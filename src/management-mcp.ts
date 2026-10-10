@@ -366,7 +366,6 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
     },
     async (input) => readBudgeted("list_your_tasks", input, (read) => packItems(read, "tasks", listYourTasks(deps.db))),
   );
-  // 先頭に伸びる新しい順の履歴は鍵で引き直す —— description の文と packItems の挙動を同じ値から作る。
   const getTaskResumesByKey = true;
   server.registerTool(
     "get_task",
