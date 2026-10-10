@@ -946,8 +946,8 @@ export async function submitAnswer(
   }
 
   const mergePr = task.question_pending_merge_pr;
-  // ADR 0079 決定3 のバックストップ。回答の値に依らず、かつ CI ゲートより**先**に
-  // 走る — merge 済み PR は CI が赤/pending でも観測決着に到達しなければならず、
+  // ADR 0079 決定3 / ADR 0229 決定4 のバックストップ。回答の値に依らず、かつ CI ゲートより**先**に
+  // 走る — merge 済み・閉じた PR は CI が赤/pending でも観測決着に到達しなければならず、
   // 「hold」の回答も決定として記録されてはならない(誰も決めていない)。座礁を
   // 置換するだけの機構なので、workspace が引けない・網が届かない場合は今日どおりの
   // 経路に落ちる(正しさは失われない: merge 実行は依然失敗し question は開いたまま)。
@@ -967,7 +967,7 @@ export async function submitAnswer(
       "cannot check CI or merge",
       "GitHub/workspace",
     );
-    const status = await deps.github.getCiStatus({ path: mergeWorkspace.path, number: mergePr });
+    const { ci: status } = await deps.github.readPullRequest({ path: mergeWorkspace.path, number: mergePr });
     // ADR 0227 決定2・3: check 未報告は猶予の間だけ pending と同じに拒み、過ぎれば回答の中の人間の判断で通す
     if (status === "unreported" && !unreportedCiGraceElapsed(deps.db, landingTaskId, now())) {
       throw new DomainError(

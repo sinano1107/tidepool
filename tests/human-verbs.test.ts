@@ -557,12 +557,12 @@ it("merge 回答は question の workspace で live CI を確認してから実 
   const afterCi = new Date(NOW.getTime() + 60_000);
   let currentNow = NOW;
   const callOrder: string[] = [];
-  const getCiStatus = github.getCiStatus.bind(github);
+  const readPullRequest = github.readPullRequest.bind(github);
   const mergePullRequest = github.mergePullRequest.bind(github);
-  github.getCiStatus = async (ref) => {
+  github.readPullRequest = async (ref) => {
     callOrder.push("live CI");
     currentNow = afterCi;
-    return getCiStatus(ref);
+    return readPullRequest(ref);
   };
   github.mergePullRequest = async (ref) => {
     callOrder.push("merge");
@@ -734,6 +734,48 @@ it("agent quarantine の回答は解除検査が拒むと DomainError になり�
 });
 
 const PRODUCT = { name: "product", path: "/workspaces/product" };
+
+// ADR 0229 決定4: 回答受理直前のバックストップは閉じた PR も観測する —— 回答の値に依らず、決定としては記録しない
+it.each(["merge", "hold"])("盤面の外で閉じられた PR の merge question に「%s」と答えると、merge せず閉じた観測として決着する", async (answer) => {
+  db = openDb(":memory:");
+  const work = registerTask(
+    db,
+    { type: "work", title: "ship", purpose: "deliver the change", completion_criteria: "merged" },
+    NOW,
+    ...HUMAN_WEBUI,
+  );
+  recordPrOpened(db, work, 42, "worker", NOW, { merge: "escalate" }, undefined, "worker");
+  const question = onlyQuestion(db);
+  const github = new FakeGitHubClient();
+  github.scriptClosedOutside(42);
+
+  const answered = await submitAnswer(
+    {
+      db,
+      pollNow: () => {},
+      github,
+      workspace: PRODUCT,
+      landing: createLanding({ defaultAgentName: "tako", db, clock: new FakeClock(), workspace: PRODUCT, github }),
+    },
+    question,
+    [answer],
+    undefined,
+    () => NOW,
+    "webui",
+  );
+
+  expect({
+    status: answered.status,
+    merged: github.merged,
+    kinds: listEvents(db, question.id).map((event) => event.kind),
+    observed: listEvents(db, question.id).find((event) => event.kind === "pr_close_observed")?.payload,
+  }).toEqual({
+    status: "done",
+    merged: [],
+    kinds: expect.not.arrayContaining(["question_answered"]),
+    observed: { kind: "pr_close_observed", pr_number: 42 },
+  });
+});
 
 it("GitHub の無い盤面の agent quarantine の解除検査は、無人 merge キューの PR を観測せずに拒む", async () => {
   db = openDb(":memory:");

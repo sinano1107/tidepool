@@ -102,19 +102,19 @@ it("CI を読んでいる間に付帯子が付いたら merge 直前の門で止
   await client.close();
   await completeIntegrationReviews(t, task.id);
 
-  const getCiStatus = t.github.getCiStatus.bind(t.github);
+  const readPullRequest = t.github.readPullRequest.bind(t.github);
   let attachedId: string | undefined;
-  t.github.getCiStatus = async (ref) => {
-    const status = await getCiStatus(ref);
+  t.github.readPullRequest = async (ref) => {
+    const pr = await readPullRequest(ref);
     attachedId = attachChild(t, task.id, "repair raised while CI was being read", "human").id;
-    return status;
+    return pr;
   };
 
   await runAutoMergeTick();
   expect(t.github.ciChecks).toEqual([{ path: workspace.path, number: 1 }]);
   expect(t.github.merged).toEqual([]);
 
-  t.github.getCiStatus = getCiStatus;
+  t.github.readPullRequest = readPullRequest;
   await api(t.baseUrl, "POST", `/api/tasks/${attachedId!}/complete`, {});
   await runAutoMergeTick();
   expect(t.github.merged).toEqual([{ path: workspace.path, number: 1 }]);

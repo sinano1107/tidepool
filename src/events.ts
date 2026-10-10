@@ -188,6 +188,9 @@ export type EventPayload =
   // record only for merges the board decides) is unverifiable without the
   // distinction
   | { kind: "pr_merge_observed"; pr_number: number }
+  // ADR 0229 決定3・4: 同じ面で、PR が merge されずに閉じられていたのを盤面が観測し決裁を
+  // 引退させた。merge の観測とも執行とも別の事実なので別に綴る(ADR 0079 決定4)
+  | { kind: "pr_close_observed"; pr_number: number }
   // ADR 0217 決定2: 無人 merge の瞬間に読み直した着地の面が question を立てない面
   // (`external`・ダイヤル無し)に変わっていたので、盤面が PR をキューから外した事実。
   // merge は変わった入力 — ダイヤルの新しい値(null はダイヤル無し)

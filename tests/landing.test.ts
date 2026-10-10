@@ -54,6 +54,7 @@ vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 let db: Db | undefined;
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   db?.close();
   db = undefined;
 });
@@ -1420,11 +1421,11 @@ it("着地の面は CI を読む前に読まれる — 面が変わった PR は
 
 /** CI を読み終えた瞬間に change を走らせる — 「CI を読んでいる間に変わる」を作る。 */
 function afterCiRead(github: FakeGitHubClient, change: () => void) {
-  const getCiStatus = github.getCiStatus.bind(github);
-  github.getCiStatus = async (ref) => {
-    const status = await getCiStatus(ref);
+  const readPullRequest = github.readPullRequest.bind(github);
+  github.readPullRequest = async (ref) => {
+    const pr = await readPullRequest(ref);
     change();
-    return status;
+    return pr;
   };
 }
 
@@ -1570,11 +1571,189 @@ it("CI 赤の question の登録が throw したら、PR は無言でキュー�
      BEGIN SELECT RAISE(ABORT, 'question insert failed'); END`,
   );
 
-  await expect(landing.tick("auto_merge", clock.now())).rejects.toThrow("question insert failed");
+  const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+
+  await landing.tick("auto_merge", clock.now());
+  expect(logged).toHaveBeenCalled();
+  expect(queuedPrs(db)).toEqual([1]);
 
   db.exec("DROP TRIGGER fail_question");
   await landing.tick("auto_merge", clock.now());
   expect(mergeQuestions(db).map((q) => q.pr)).toEqual([1]);
+});
+
+// ADR 0229: merge できない PR は状態で分けてキューから外す。tick は reject せず、1件の失敗は後ろの PR を巻き込まない
+function queuedPrs(db: Db): number[] {
+  return (db.prepare("SELECT pr_number FROM pending_auto_merges").all() as Array<{ pr_number: number }>).map(
+    (row) => row.pr_number,
+  );
+}
+
+function autoMerging(db: Db, clock: FakeClock, workspace: WorkspaceConfig, github: FakeGitHubClient, dial = () => profile("auto_if_ci_green")) {
+  return createLanding({ defaultAgentName: "tako", db, clock, workspace, github, resolveAuthority: dial });
+}
+
+function boardEvents(db: Db, taskId: string, kind: string) {
+  return listEvents(db, taskId)
+    .filter((e) => e.kind === kind)
+    .map(({ worker_id, origin, payload }) => ({ worker_id, origin, payload }));
+}
+
+const closeObserved = (pr_number: number) => [
+  { worker_id: BOARD_WORKER_ID, origin: "board", payload: { kind: "pr_close_observed", pr_number } },
+];
+
+const CONFLICT = "Pull request is not mergeable: the merge commit cannot be cleanly created.";
+
+it("merge に失敗した開いたままの PR は、tick を落とさずキューを外れて失敗を本文に書いた推奨 hold の merge question になり、後ろの PR は同じ tick で merge される", async () => {
+  const workspace = await makeWorkspace("landing-merge-fails-open");
+  const { db, clock } = await openBoard();
+  const github = new FakeGitHubClient();
+  queueAutoMerge(db, clock, 1);
+  queueAutoMerge(db, clock, 2);
+  github.scriptMergeFailure(1, new Error(CONFLICT));
+
+  await expect(autoMerging(db, clock, workspace, github).tick("auto_merge", clock.now())).resolves.toBeUndefined();
+
+  expect(github.ciChecks.map((ref) => ref.number)).toEqual([1, 2]);
+  expect(github.merged).toEqual([{ path: workspace.path, number: 2 }]);
+  expect(queuedPrs(db)).toEqual([]);
+  expect(mergeQuestions(db)).toEqual([
+    {
+      pr: 1,
+      registrant: [BOARD_WORKER_ID, "board"],
+      recommendation: "hold",
+      purpose: `"ship"'s auto_if_ci_green auto-merge could not merge PR #1: ${CONFLICT}. Merge once it is fixed, or hold?`,
+    },
+  ]);
+});
+
+it.each(["success", "failure", "unreported", "pending"] as const)("盤面の外で閉じられた PR は CI が %s でも merge も question もせず、閉じた観測を盤面の名義で残してキューを外れる", async (ci) => {
+  const workspace = await makeWorkspace(`landing-closed-${ci}`);
+  const { db, clock } = await openBoard();
+  const github = new FakeGitHubClient();
+  const work = queueAutoMerge(db, clock, 1);
+  github.scriptCiStatus(ci);
+  github.scriptClosedOutside(1);
+  const landing = autoMerging(db, clock, workspace, github);
+
+  await landing.tick("auto_merge", clock.now());
+  await landing.tick("auto_merge", clock.now());
+
+  expect(github.ciChecks).toHaveLength(1);
+  expect(github.mergeChecks).toEqual([]);
+  expect(github.merged).toEqual([]);
+  expect(queuedPrs(db)).toEqual([]);
+  expect(mergeQuestions(db)).toEqual([]);
+  expect(boardEvents(db, work.id, "pr_close_observed")).toEqual(closeObserved(1));
+  expect(boardEvents(db, work.id, "pr_merge_observed")).toEqual([]);
+});
+
+it("CI を読んだ後に閉じられて merge が失敗した PR は、読み直した状態で閉じた観測になり question を立てない", async () => {
+  const workspace = await makeWorkspace("landing-closed-during-merge");
+  const { db, clock } = await openBoard();
+  const github = new FakeGitHubClient();
+  const work = queueAutoMerge(db, clock, 1);
+  afterCiRead(github, () => github.scriptClosedOutside(1));
+
+  await autoMerging(db, clock, workspace, github).tick("auto_merge", clock.now());
+
+  expect(github.mergeChecks).toHaveLength(1);
+  expect(queuedPrs(db)).toEqual([]);
+  expect(mergeQuestions(db)).toEqual([]);
+  expect(boardEvents(db, work.id, "pr_close_observed")).toEqual(closeObserved(1));
+});
+
+it("CI を読んだ後に盤面の外で merge されて merge が失敗した PR は、merge の観測としてキューを外れる(ADR 0079 決定3)", async () => {
+  const workspace = await makeWorkspace("landing-merged-during-merge");
+  const { db, clock } = await openBoard();
+  const github = new FakeGitHubClient();
+  const work = queueAutoMerge(db, clock, 1);
+  afterCiRead(github, () => github.scriptMergedOutside(1));
+
+  await autoMerging(db, clock, workspace, github).tick("auto_merge", clock.now());
+
+  expect(queuedPrs(db)).toEqual([]);
+  expect(mergeQuestions(db)).toEqual([]);
+  expect(boardEvents(db, work.id, "pr_merge_observed")).toEqual([
+    { worker_id: BOARD_WORKER_ID, origin: "board", payload: { kind: "pr_merge_observed", pr_number: 1 } },
+  ]);
+  expect(boardEvents(db, work.id, "pr_merged")).toEqual([]);
+});
+
+it("merge が失敗し状態の読み直しも失敗した PR は、tick を落とさず question も event も残さずキューに残る", async () => {
+  const workspace = await makeWorkspace("landing-merge-and-reread-fail");
+  const { db, clock } = await openBoard();
+  const github = new FakeGitHubClient();
+  const work = queueAutoMerge(db, clock, 1);
+  github.scriptMergeFailure(1, new Error(CONFLICT));
+  github.scriptMergeCheckFailure(1, new Error("gh: could not reach github.com"));
+  const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+
+  await expect(autoMerging(db, clock, workspace, github).tick("auto_merge", clock.now())).resolves.toBeUndefined();
+
+  expect(logged).toHaveBeenCalled();
+  expect(queuedPrs(db)).toEqual([1]);
+  expect(mergeQuestions(db)).toEqual([]);
+  expect(
+    ["pr_merged", "pr_merge_observed", "pr_close_observed", "auto_merge_withdrawn"].flatMap((kind) =>
+      boardEvents(db, work.id, kind),
+    ),
+  ).toEqual([]);
+});
+
+it("分類できない例外が1件の PR で起きても、tick は落ちずその PR はキューに残り、後ろの PR は処理される", async () => {
+  const workspace = await makeWorkspace("landing-unclassified-throw");
+  const { db, clock } = await openBoard();
+  const github = new FakeGitHubClient();
+  queueAutoMerge(db, clock, 1);
+  queueAutoMerge(db, clock, 2);
+  const readPullRequest = github.readPullRequest.bind(github);
+  github.readPullRequest = async (ref) => {
+    if (ref.number === 1) throw new Error("unexpected");
+    return readPullRequest(ref);
+  };
+  const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+
+  await expect(autoMerging(db, clock, workspace, github).tick("auto_merge", clock.now())).resolves.toBeUndefined();
+
+  expect(logged).toHaveBeenCalled();
+  expect(queuedPrs(db)).toEqual([1]);
+  expect(github.merged).toEqual([{ path: workspace.path, number: 2 }]);
+});
+
+it("merge に失敗した開いたままの PR も、question を立てる直前に着地の面を読み直し、external へ取り下げられていれば question なしで外れる", async () => {
+  const workspace = await makeWorkspace("landing-merge-fails-to-external");
+  const { db, clock } = await openBoard();
+  const github = new FakeGitHubClient();
+  const work = queueAutoMerge(db, clock, 1);
+  let dial: MergeDial = "auto_if_ci_green";
+  github.mergePullRequest = async () => {
+    dial = "external";
+    throw new Error(CONFLICT);
+  };
+
+  await autoMerging(db, clock, workspace, github, () => profile(dial)).tick("auto_merge", clock.now());
+
+  expect(queuedPrs(db)).toEqual([]);
+  expect(mergeQuestions(db)).toEqual([]);
+  expect(boardEvents(db, work.id, "auto_merge_withdrawn")).toEqual([
+    { worker_id: BOARD_WORKER_ID, origin: "board", payload: { kind: "auto_merge_withdrawn", pr_number: 1, merge: "external" } },
+  ]);
+});
+
+it("遅い走査は、盤面の外で閉じられた PR の open な merge question を閉じた観測として決着させる(ADR 0229 決定4)", async () => {
+  const workspace = await makeWorkspace("landing-scan-closed");
+  const { db, clock } = await openBoard();
+  const github = new FakeGitHubClient();
+  const question = mergeQuestion(db, clock, { pending_merge_pr: 1 });
+  github.scriptClosedOutside(1);
+
+  await autoMerging(db, clock, workspace, github).tick("outside_merge", clock.now());
+
+  expect(getTask(db, question.id)!.status).toBe("done");
+  expect(boardEvents(db, question.id, "question_answered")).toEqual([]);
+  expect(boardEvents(db, question.id, "pr_close_observed")).toEqual(closeObserved(1));
 });
 
 // ADR 0227 決定2・3: check が1つも報告されていない PR は、盤面自身がその PR へ最後に push してから5分の猶予の間だけ待つ
@@ -2122,6 +2301,29 @@ it("既定 agent の quarantine 回答前の観測は、assignee 未指定の wo
   expect(listEvents(db, work.id).filter((event) => event.payload.kind === "pr_merge_observed")).toMatchObject([
     { origin: "board", worker_id: BOARD_WORKER_ID, payload: { kind: "pr_merge_observed", pr_number: 7 } },
   ]);
+});
+
+it("quarantine 回答前の観測は、盤面の外で閉じられたキューの PR を閉じた観測としてキューから外す(ADR 0229 決定4)", async () => {
+  const { db, clock } = await openBoard();
+  const work = completeTask(db, landingWork(db, clock), FULL_HANDOFF, "tako", clock.now(), "worker");
+  recordPrOpenedViaWorker(db, work, 7, "tako", clock.now(), {
+    authority: { merge: "auto_if_ci_green" },
+  });
+  const github = new FakeGitHubClient();
+  github.scriptClosedOutside(7);
+  const landing = createLanding({
+    db,
+    clock,
+    workspace: { name: "reef", path: "/reef", repo: "https://github.com/test/reef" },
+    github,
+    defaultAgentName: "tako",
+  });
+
+  await landing.observeMergedAutoMerges("tako");
+
+  expect(countTasksAwaitingLanding(db, "tako", "tako")).toBe(0);
+  expect(boardEvents(db, work.id, "pr_close_observed")).toEqual(closeObserved(7));
+  expect(boardEvents(db, work.id, "pr_merge_observed")).toEqual([]);
 });
 
 it.each(["auto_merge", "promotion_failure"] as const)("assignee 未指定の完了 work が %s を待つとき、既定 agent の着地待ちに数える", (waiting) => {
