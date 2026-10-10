@@ -1,28 +1,20 @@
-import { afterEach, expect, it } from "vitest";
+import { expect, it, onTestFinished } from "vitest";
 import type { Cause } from "../src/cause.js";
-import type { CodexAppServerProbeResult } from "../src/codex-app-server.js";
+import type { CodexAppServerProbe, CodexAppServerProbeResult } from "../src/codex-app-server.js";
+import { type Db, openDb } from "../src/db.js";
+import { DEFAULT_AUDITOR_NAME } from "../src/defaults.js";
 import { appendEvent, type EventPayload } from "../src/events.js";
 import { applyExecutionSettingsChange, type ExecutionSetting } from "../src/execution-setting.js";
 import { episodeOutcome, type LearnerEpisode, loadEpisodes, observedInTier, recommend, selectorBranch } from "../src/learner.js";
 import { listRoutingShadow } from "../src/routing-review.js";
+import { startScheduler, type TaskExecutionCandidates } from "../src/scheduler.js";
+import { implicitTaskExecutionCandidates } from "../src/server-options.js";
+import { Slot } from "../src/slot.js";
+import { completeTask, getTask, listBoard, listChildren, logDecision, pickupTask, registerTask } from "../src/tasks.js";
 import { type Tier, tierIdOf } from "../src/tier.js";
-import { healthyOpenai, listedOpenaiModels } from "./fakes.js";
-import {
-  api,
-  bootTidepool,
-  bundledObjection,
-  completeIntegrationReviews,
-  completeMetaReviews,
-  completeViaMcp,
-  executionSetting,
-  HOUR,
-  loggedEntry,
-  makeWorkspace,
-  QUIET_EXIT,
-  registerWork,
-  type Tidepool,
-  WORKER_SPAWNED,
-} from "./harness.js";
+import type { WorkspaceConfig } from "../src/workspace.js";
+import { FakeClock, fakeContainers, healthyOpenai, listedOpenaiModels, noRetrospectiveCalls, ScriptedWorker } from "./fakes.js";
+import { bundledObjection, executionSetting, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, HOUR, HUMAN_WEBUI, makeWorkspace, QUIET_EXIT, WORKER_SPAWNED } from "./harness.js";
 
 const opus = executionSetting("anthropic", "claude-opus-5-5");
 const sol = executionSetting("openai", "gpt-5.6-sol");
@@ -221,84 +213,144 @@ it("advisor pin ありの episode は advisor 無しのセルに合流しない 
 });
 
 /* ------------------------------------------------------------------ *
- * 盤面境界: pickup ごとの shadow 行(選択には介入しない)。行は routing meta-review の
- * 読み口(listRoutingShadow)で読む。
+ * ドメイン層: pickup ごとの shadow 行(選択には介入しない)。自前の db に scheduler を直接組み、
+ * 行は routing meta-review の読み口(listRoutingShadow)で読む。
  * ------------------------------------------------------------------ */
 
-let t: Tidepool;
-afterEach(() => t?.stop());
+/** ScriptedWorker の既定の id —— scheduler の pickup も setup の session もこの名義。 */
+const WORKER = "fake-worker";
+type Board = { db: Db; clock: FakeClock };
+
+/** 自前の db に scheduler を直接組む(pickup だけが要るので、server の合成は通さない)。 */
+function scheduledBoard(options: { candidates?: TaskExecutionCandidates; workspace?: WorkspaceConfig; openaiUsage?: CodexAppServerProbe } = {}) {
+  const db = openDb(":memory:");
+  const clock = new FakeClock();
+  const worker = new ScriptedWorker(clock);
+  const slot = new Slot();
+  const scheduler = startScheduler({
+    retrospectiveCalls: noRetrospectiveCalls,
+    db,
+    clock,
+    slot,
+    worker,
+    containers: fakeContainers(),
+    onSpawnFailed: () => {},
+    taskExecutionCandidates: options.candidates ?? implicitTaskExecutionCandidates(db),
+    workspace: options.workspace,
+    openaiUsage: options.openaiUsage,
+  });
+  onTestFinished(() => {
+    scheduler.stop();
+    db.close();
+  });
+  return { db, clock, worker, slot };
+}
+type ScheduledBoard = ReturnType<typeof scheduledBoard>;
+
+/** scheduler の無い自前の db(episode は loadEpisodes に直接言う)。 */
+function bareBoard(): Board {
+  const db = openDb(":memory:");
+  onTestFinished(() => {
+    db.close();
+  });
+  return { db, clock: new FakeClock() };
+}
+
+const queueWork = (b: Board, title: string, tier?: Tier) =>
+  registerTask(b.db, { type: "work", title, purpose: `purpose of ${title}`, completion_criteria: `criteria of ${title}`, tier }, b.clock.now(), ...HUMAN_WEBUI);
 
 /** ScriptedWorker は spawn しないので、その session の開始を setup として置く。 */
-const recordSpawn = (taskId: string) =>
-  appendEvent(t.db, { taskId, workerId: "fake-worker", origin: "board", at: t.clock.now(), payload: WORKER_SPAWNED });
+const recordSpawn = (b: Board, taskId: string, run: Partial<typeof WORKER_SPAWNED> = {}) =>
+  appendEvent(b.db, { taskId, workerId: WORKER, origin: "board", at: b.clock.now(), payload: { ...WORKER_SPAWNED, ...run } });
 
-const shadowRows = (t: Tidepool) =>
-  listRoutingShadow(t.db, "", { since_watermark: 0 }).shadow.map(({ task_id, recommended, actual, source, basis, candidates }) => ({ task_id, recommended, actual, source, basis, candidates }));
+/** scheduler 無しで work を pickup し、その session を開く。spawn の event id を返す。 */
+function spawnedWork(b: Board, title: string) {
+  const task = pickupTask(b.db, queueWork(b, title), WORKER, b.clock.now())!;
+  return { task, spawnedId: recordSpawn(b, task.id) };
+}
+
+/** work を完了させる —— completeTask が統合点レビュー(review task)を立てる。 */
+const complete = (b: Board, taskId: string) => completeTask(b.db, getTask(b.db, taskId)!, FULL_HANDOFF, WORKER, b.clock.now(), "worker");
+
+/** todo の review task を Auditor の名義で pickup して完了させる。 */
+const completeReview = (b: Board, reviewId: string) =>
+  completeTask(b.db, pickupTask(b.db, getTask(b.db, reviewId)!, DEFAULT_AUDITOR_NAME, b.clock.now())!, undefined, DEFAULT_AUDITOR_NAME, b.clock.now(), "worker");
+
+/** work を完了させ、立った統合点レビューもドメインで完了させる —— work は受理になる。 */
+function accept(b: Board, taskId: string) {
+  complete(b, taskId);
+  for (const review of listChildren(b.db, taskId).filter((r) => r.type === "review" && r.status === "todo")) completeReview(b, review.id);
+}
+
+/** scheduler が pickup した work を受理させ、slot を空ける。poll が登録した meta-review は slot を取るので、後続の pickup を
+ *  待たせないようドメインで完了させる。 */
+function finish(b: ScheduledBoard, taskId: string) {
+  accept(b, taskId);
+  for (const review of listBoard(b.db).filter((r) => r.meta_review_subject && r.status === "todo")) completeReview(b, review.id);
+  b.slot.release();
+}
+
+const shadowRows = (b: Board) =>
+  listRoutingShadow(b.db, "", { since_watermark: 0 }).shadow.map(({ task_id, recommended, actual, source, basis, candidates }) => ({ task_id, recommended, actual, source, basis, candidates }));
 
 it("work task の pickup ごとに shadow 行が1件記録され、selector の選択は変わらない —— review task では学習器を参照せず行も無い", async () => {
-  t = await bootTidepool({ taskExecutionCandidates: () => [opus, sol] });
-  const work = await registerWork(t, "learned");
-  await t.clock.advance(HOUR);
+  const b = scheduledBoard({ candidates: () => [opus, sol] });
+  const work = queueWork(b, "learned");
+  await b.clock.advance(HOUR);
 
-  expect(t.worker.startedSettings).toEqual([opus]);
+  expect(b.worker.startedSettings).toEqual([opus]);
   const cell = { provider: "anthropic", model: "claude-opus-5-5", effort: "high", advisor: null };
-  expect(shadowRows(t)).toEqual([
+  expect(shadowRows(b)).toEqual([
     { task_id: work.id, recommended: cell, actual: cell, source: opus.source, basis: "prior", candidates: 2 },
   ]);
 
   // 完了で統合点レビュー(review task)が生まれ、次の poll で pickup される
-  await completeViaMcp(t, work.id);
-  await t.clock.advance(HOUR);
-  expect(t.worker.started.map((task) => task.type)).toEqual(["work", "review"]);
-  expect(shadowRows(t)).toHaveLength(1);
+  complete(b, work.id);
+  b.slot.release();
+  await b.clock.advance(HOUR);
+  expect(b.worker.started.map((task) => task.type)).toEqual(["work", "review"]);
+  expect(shadowRows(b)).toHaveLength(1);
 });
 
 /** `run` で走って完了した session がある盤面にする。`causes` を渡すとその session の1つの entry が異議群ごとに
  *  `causes` と帰責される —— capability があれば学習器はその行を下げる。渡さなければ受理された観測になる —— 学習器は
  *  未観測の候補へ移らない(ADR 0181)ので、移る先に観測を置くのに使う。 */
-async function settledSession(t: Tidepool, run: ExecutionSetting, causes: Cause[] = []) {
-  const earlier = await registerWork(t, "earlier");
-  await t.clock.advance(HOUR);
+async function settledSession(b: ScheduledBoard, run: ExecutionSetting, causes: Cause[] = []) {
+  const earlier = queueWork(b, "earlier");
+  await b.clock.advance(HOUR);
   // ScriptedWorker は spawn しないので、その session の記録(spawn + 決定 + 帰責)を setup として置く
-  const spawnedId = appendEvent(t.db, {
-    taskId: earlier.id,
-    workerId: "fake-worker",
-    origin: "board",
-    at: t.clock.now(),
-    payload: { ...WORKER_SPAWNED, advisor: null, provider: run.provider, model: run.model, effort: run.effort, tier_id: run.tier_id },
-  });
+  recordSpawn(b, earlier.id, { advisor: null, provider: run.provider, model: run.model, effort: run.effort, tier_id: run.tier_id });
   if (causes.length > 0) {
-    const entry = await loggedEntry(t, earlier.id, "took the shortcut");
-    expect(entry.id).toBeGreaterThan(spawnedId);
-    for (const [i, cause] of causes.entries()) {
-      const objectionId = bundledObjection(t.db, earlier.id, entry.id, t.clock.now(), `objection ${i}`);
-      const attributed: EventPayload = {
-        kind: "objection_attributed",
-        entry_id: entry.id,
-        objection_event_ids: [objectionId],
-        cause,
-        evidence: "the shortcut missed the second criterion",
-        entries: null,
-        round: "initial",
-      };
-      appendEvent(t.db, { taskId: earlier.id, workerId: "board", origin: "board", at: t.clock.now(), payload: attributed });
-    }
+    const entryId = logDecision(b.db, getTask(b.db, earlier.id)!, "took the shortcut", WORKER, b.clock.now(), "worker");
+    for (const [i, cause] of causes.entries()) attribute(b, earlier.id, entryId, cause, `objection ${i}`);
   }
-  await completeViaMcp(t, earlier.id);
-  await completeIntegrationReviews(t, earlier.id);
-  await completeMetaReviews(t);
+  finish(b, earlier.id);
+}
+
+/** setup: `entryId` に束ね済みの異議群を1つ置き、それを `cause` と帰責する。 */
+function attribute(b: Board, taskId: string, entryId: number, cause: Cause, comment?: string) {
+  const attributed: EventPayload = {
+    kind: "objection_attributed",
+    entry_id: entryId,
+    objection_event_ids: [bundledObjection(b.db, taskId, entryId, b.clock.now(), comment)],
+    cause,
+    evidence: "the shortcut missed the second criterion",
+    entries: null,
+    round: "initial",
+  };
+  appendEvent(b.db, { taskId, workerId: "board", origin: "board", at: b.clock.now(), payload: attributed });
 }
 
 it("観測が効くと shadow 行は selector と乖離しうるが、選択は変わらない —— capability と帰責された session の行が下がり、basis は data", async () => {
-  t = await bootTidepool({ taskExecutionCandidates: () => [opus, sol] });
-  await settledSession(t, opus, ["capability"]);
-  await settledSession(t, sol);
+  const b = scheduledBoard({ candidates: () => [opus, sol] });
+  await settledSession(b, opus, ["capability"]);
+  await settledSession(b, sol);
 
-  const later = await registerWork(t, "later");
-  await t.clock.advance(HOUR);
+  const later = queueWork(b, "later");
+  await b.clock.advance(HOUR);
 
-  expect(t.worker.startedSettings.at(-1)).toEqual(opus);
-  expect(shadowRows(t).at(-1)).toEqual({
+  expect(b.worker.startedSettings.at(-1)).toEqual(opus);
+  expect(shadowRows(b).at(-1)).toEqual({
     task_id: later.id,
     recommended: { provider: "openai", model: "gpt-5.6-sol", effort: "high", advisor: null },
     actual: { provider: "anthropic", model: "claude-opus-5-5", effort: "high", advisor: null },
@@ -310,25 +362,25 @@ it("観測が効くと shadow 行は selector と乖離しうるが、選択は�
 
 // ADR 0233: 完了タスクの workspace は pickup で既定の名前に焼き込まれる —— 未着手の空のタスクも同じ名前の束で照合する
 it("workspace 未指定の未着手タスクの実績は、既定 workspace の名前で焼き込まれた完了タスクを workspace の段に数える", async () => {
-  t = await bootTidepool({ taskExecutionCandidates: () => [opus, sol], workspace: await makeWorkspace("learner-default") });
-  await settledSession(t, opus);
+  const b = scheduledBoard({ candidates: () => [opus, sol], workspace: await makeWorkspace("learner-default") });
+  await settledSession(b, opus);
 
-  const later = await registerWork(t, "later");
-  await t.clock.advance(HOUR);
+  const later = queueWork(b, "later");
+  await b.clock.advance(HOUR);
 
-  const row = listRoutingShadow(t.db, "", { since_watermark: 0 }).shadow.find((r) => r.task_id === later.id);
+  const row = listRoutingShadow(b.db, "", { since_watermark: 0 }).shadow.find((r) => r.task_id === later.id);
   expect(row?.actual_record).toEqual({ board: { accepted: 1, rejected: 0 }, workspace: { accepted: 1, rejected: 0 } });
-});
+}, GIT_FIXTURE_TEST_TIMEOUT);
 
 it("同じ entry の前の異議群が capability、後の異議群が preference と帰責された session も負として数える —— 学習器は opus の行を下げる(ADR 0170 決定3)", async () => {
-  t = await bootTidepool({ taskExecutionCandidates: () => [opus, sol] });
-  await settledSession(t, opus, ["capability", "preference"]);
-  await settledSession(t, sol);
+  const b = scheduledBoard({ candidates: () => [opus, sol] });
+  await settledSession(b, opus, ["capability", "preference"]);
+  await settledSession(b, sol);
 
-  const later = await registerWork(t, "later");
-  await t.clock.advance(HOUR);
+  const later = queueWork(b, "later");
+  await b.clock.advance(HOUR);
 
-  expect(shadowRows(t).at(-1)).toMatchObject({
+  expect(shadowRows(b).at(-1)).toMatchObject({
     task_id: later.id,
     recommended: { provider: "openai", model: "gpt-5.6-sol", effort: "high", advisor: null },
     basis: "data",
@@ -336,64 +388,44 @@ it("同じ entry の前の異議群が capability、後の異議群が preferenc
 });
 
 it("行を段 T から T' へ settings で移すと T' の pickup の shadow 行は未観測(prior)、T へ戻すと T の観測がまた数えられて data に戻る(ADR 0210 決定2)", async () => {
-  t = await bootTidepool();
-  // 動かすのは standard の opus の行 —— 盤面既定の economy には sonnet の行が残り、統合点レビューはそこで走る
+  const b = scheduledBoard();
+  // 動かすのは standard の opus の行 —— 盤面既定の economy には sonnet の行が残る
   const key = { provider: "anthropic", model: "claude-opus-5-5", effort: "high" } as const;
   // standard の opus の行で走り、受理された session
-  await settledSession(t, executionSetting(key.provider, key.model, { tier_id: tierIdOf(t.db, "standard") }));
-  const moveTo = async (tier: Tier) => {
-    applyExecutionSettingsChange(t.db, { setting: "row", key, row: { ...key, tier, price_in: 5, price_out: 25 } }, "webui", t.clock.now());
-    await t.clock.advance(HOUR);
-    await completeMetaReviews(t);
-  };
+  await settledSession(b, executionSetting(key.provider, key.model, { tier_id: tierIdOf(b.db, "standard") }));
+  const moveTo = (tier: Tier) =>
+    applyExecutionSettingsChange(b.db, { setting: "row", key, row: { ...key, tier, price_in: 5, price_out: 25 } }, "webui", b.clock.now());
   const pickupIn = async (tier: Tier) => {
-    const task = (await api(t.baseUrl, "POST", "/api/tasks", { type: "work", title: `in ${tier}`, purpose: "p", completion_criteria: "c", tier })).json;
-    await t.clock.advance(HOUR);
-    const row = shadowRows(t).find((r) => r.task_id === task.id);
+    const task = queueWork(b, `in ${tier}`, tier);
+    await b.clock.advance(HOUR);
+    const row = shadowRows(b).find((r) => r.task_id === task.id);
     // slot を空ける(ScriptedWorker は spawn しないので episode は増えない)
-    await completeViaMcp(t, task.id);
-    await completeIntegrationReviews(t, task.id);
+    finish(b, task.id);
     return row;
   };
 
   // economy の候補は sonnet(先頭)と移ってきた opus —— opus の standard の受理は数えない
-  await moveTo("economy");
+  moveTo("economy");
   expect(await pickupIn("economy")).toMatchObject({ basis: "prior", candidates: 2 });
-  await moveTo("standard");
+  moveTo("standard");
   expect(await pickupIn("standard")).toMatchObject({ actual: { ...key, advisor: null }, basis: "data" });
 });
 
 it("advisor pin ありで相談0回の session は、盤面の記録から読んでも advisor 無しのセルに合流しない(AC4)", async () => {
   const opusWithAdvisor = executionSetting("anthropic", "claude-opus-5-5", { advisor: "claude-fable-5-1" });
-  t = await bootTidepool({ taskExecutionCandidates: () => [opusWithAdvisor, opus] });
-  await settledSession(t, opus);
-  const earlier = await registerWork(t, "earlier");
-  await t.clock.advance(HOUR);
+  const b = scheduledBoard({ candidates: () => [opusWithAdvisor, opus] });
+  await settledSession(b, opus);
+  const earlier = queueWork(b, "earlier");
+  await b.clock.advance(HOUR);
   // ScriptedWorker は spawn しないので、その session の記録(pin あり spawn + 帰責 + 相談0回の exit)を setup として置く
-  const spawnedId = appendEvent(t.db, {
-    taskId: earlier.id,
-    workerId: "fake-worker",
-    origin: "board",
-    at: t.clock.now(),
-    payload: { ...WORKER_SPAWNED, advisor: "claude-fable-5-1", provider: "anthropic", model: "claude-opus-5-5", effort: "high" },
-  });
-  const entry = await loggedEntry(t, earlier.id, "took the shortcut");
-  const attributed: EventPayload = {
-    kind: "objection_attributed",
-    entry_id: entry.id,
-    objection_event_ids: [bundledObjection(t.db, earlier.id, entry.id, t.clock.now())],
-    cause: "capability",
-    evidence: "the shortcut missed the second criterion",
-    entries: null,
-    round: "initial",
-  };
-  appendEvent(t.db, { taskId: earlier.id, workerId: "board", origin: "board", at: t.clock.now(), payload: attributed });
+  const spawnedId = recordSpawn(b, earlier.id, { advisor: "claude-fable-5-1", provider: "anthropic", model: "claude-opus-5-5", effort: "high" });
+  attribute(b, earlier.id, logDecision(b.db, getTask(b.db, earlier.id)!, "took the shortcut", WORKER, b.clock.now(), "worker"), "capability");
   const tokens = { input_tokens: 1, output_tokens: 1, cache_read_tokens: 0, cache_creation_tokens: 0, estimated_cost_usd: 0.5 };
-  appendEvent(t.db, {
+  appendEvent(b.db, {
     taskId: earlier.id,
-    workerId: "fake-worker",
+    workerId: WORKER,
     origin: "board",
-    at: t.clock.now(),
+    at: b.clock.now(),
     payload: {
       kind: "worker_exited",
       ...QUIET_EXIT,
@@ -402,15 +434,13 @@ it("advisor pin ありで相談0回の session は、盤面の記録から読ん
       usage: { ...tokens, advisor: null, model_swaps: [], refusals: [], models: { "claude-opus-5-5": tokens } },
     },
   });
-  await completeViaMcp(t, earlier.id);
-  await completeIntegrationReviews(t, earlier.id);
-  await completeMetaReviews(t);
+  finish(b, earlier.id);
 
-  const later = await registerWork(t, "later");
-  await t.clock.advance(HOUR);
+  const later = queueWork(b, "later");
+  await b.clock.advance(HOUR);
 
-  expect(t.worker.startedSettings.at(-1)).toEqual(opusWithAdvisor);
-  expect(shadowRows(t).at(-1)).toMatchObject({
+  expect(b.worker.startedSettings.at(-1)).toEqual(opusWithAdvisor);
+  expect(shadowRows(b).at(-1)).toMatchObject({
     task_id: later.id,
     recommended: { provider: "anthropic", model: "claude-opus-5-5", effort: "high", advisor: null },
     actual: { provider: "anthropic", model: "claude-opus-5-5", effort: "high", advisor: "claude-fable-5-1" },
@@ -445,28 +475,24 @@ it("同じセルの episode が段 T と T' に分かれていれば、T の候�
   expect(recommendFor([solAccepted, rejectedInOther("tidepool")], [inOther(opus), inOther(sol)])).toEqual({ recommended: inOther(opus), basis: "data" });
 });
 
-/** 学習器を昇格させる —— approve の適用と同じ書き口。設定の変更は routing meta-review の材料なので、登録されたそれを先に済ませる。 */
-async function promote(t: Tidepool) {
-  applyExecutionSettingsChange(t.db, { setting: "learner_promoted", value: true }, "webui", t.clock.now());
-  await t.clock.advance(HOUR);
-  await completeMetaReviews(t);
-}
+/** 学習器を昇格させる —— approve の適用と同じ書き口。 */
+const promote = (b: Board) => applyExecutionSettingsChange(b.db, { setting: "learner_promoted", value: true }, "webui", b.clock.now());
 const byLearner = (s: ExecutionSetting): ExecutionSetting => ({ ...s, source: { ...s.source, provider: "learner" } });
 const cellOf = (s: ExecutionSetting) => ({ provider: s.provider, model: s.model, effort: s.effort, advisor: null });
-/** task が pickup されたときの実行設定(設定の変更は routing meta-review の材料なので、それが先に slot を取りうる)。 */
-const settingsOf = (t: Tidepool, taskId: string) => t.worker.startedSettings[t.worker.started.findIndex((task) => task.id === taskId)];
+/** task が pickup されたときの実行設定。 */
+const settingsOf = (b: ScheduledBoard, taskId: string) => b.worker.startedSettings[b.worker.started.findIndex((task) => task.id === taskId)];
 
 it("昇格中の work task は学習器の選択で走り出所は learner、shadow 行は表の選択を推薦に・学習器の選択を実際に持つ —— review task は表のまま", async () => {
-  t = await bootTidepool({ openaiUsage: healthyOpenai, taskExecutionCandidates: () => [opus, sol] });
-  await promote(t);
-  await settledSession(t, opus, ["capability"]);
-  await settledSession(t, sol);
+  const b = scheduledBoard({ openaiUsage: healthyOpenai, candidates: () => [opus, sol] });
+  promote(b);
+  await settledSession(b, opus, ["capability"]);
+  await settledSession(b, sol);
 
-  const later = await registerWork(t, "later");
-  await t.clock.advance(HOUR);
+  const later = queueWork(b, "later");
+  await b.clock.advance(HOUR);
 
-  expect(settingsOf(t, later.id)).toEqual(byLearner(sol));
-  expect(shadowRows(t).at(-1)).toEqual({
+  expect(settingsOf(b, later.id)).toEqual(byLearner(sol));
+  expect(shadowRows(b).at(-1)).toEqual({
     task_id: later.id,
     recommended: cellOf(opus),
     actual: cellOf(sol),
@@ -475,10 +501,11 @@ it("昇格中の work task は学習器の選択で走り出所は learner、sha
     candidates: 2,
   });
 
-  await completeViaMcp(t, later.id);
-  await t.clock.advance(HOUR);
-  expect(t.worker.started.at(-1)).toMatchObject({ type: "review", parent_id: later.id });
-  expect(t.worker.startedSettings.at(-1)).toEqual(opus);
+  complete(b, later.id);
+  b.slot.release();
+  await b.clock.advance(HOUR);
+  expect(b.worker.started.at(-1)).toMatchObject({ type: "review", parent_id: later.id });
+  expect(b.worker.startedSettings.at(-1)).toEqual(opus);
 });
 
 it("昇格中も学習器の選択は Throttle の除外を通る —— 選んだ Provider が throttle 中なら除外を当てた残りから選び直し、shadow 行の候補数は除外後の行の数", async () => {
@@ -490,77 +517,54 @@ it("昇格中も学習器の選択は Throttle の除外を通る —— 選ん�
     models: listedOpenaiModels,
     windows: [{ name: "primary", model: null, usedPercent: 100, durationMs: 5 * HOUR, resetsAt: new Date(now.getTime() + 4 * HOUR).toISOString() }],
   });
-  t = await bootTidepool({ openaiUsage: throttledOpenai, taskExecutionCandidates: () => [opus, sol] });
-  await promote(t);
-  await settledSession(t, opus, ["capability"]);
-  await settledSession(t, sol);
+  const b = scheduledBoard({ openaiUsage: throttledOpenai, candidates: () => [opus, sol] });
+  promote(b);
+  await settledSession(b, opus, ["capability"]);
+  await settledSession(b, sol);
 
-  const later = await registerWork(t, "later");
-  await t.clock.advance(HOUR);
+  const later = queueWork(b, "later");
+  await b.clock.advance(HOUR);
 
-  expect(settingsOf(t, later.id)).toEqual(byLearner(opus));
+  expect(settingsOf(b, later.id)).toEqual(byLearner(opus));
   // 候補数は除外を当てた後の行の数 —— openai が外れて opus の1行だけ
-  expect(shadowRows(t).at(-1)).toMatchObject({ task_id: later.id, recommended: cellOf(opus), actual: cellOf(opus), candidates: 1 });
+  expect(shadowRows(b).at(-1)).toMatchObject({ task_id: later.id, recommended: cellOf(opus), actual: cellOf(opus), candidates: 1 });
 });
 
-it("別タスクの entry への帰責は、id 窓が重なっても開いたままの session の episode に混ざらない —— cause はタスクの照合で決まる(loadEpisodes)", async () => {
-  t = await bootTidepool();
+it("別タスクの entry への帰責は、id 窓が重なっても開いたままの session の episode に混ざらない —— cause はタスクの照合で決まる(loadEpisodes)", () => {
+  const b = bareBoard();
   // A は完了しても session は開いたまま(exit も次の spawn も無い)。その後ろで B が spawn して帰責される —— A の id 窓は B の帰責を含む
-  const a = await registerWork(t, "a");
-  await t.clock.advance(HOUR);
-  const aSpawnedId = recordSpawn(a.id);
-  await completeViaMcp(t, a.id);
-  await completeIntegrationReviews(t, a.id);
-  const b = await registerWork(t, "b");
-  await t.clock.advance(HOUR);
-  const bSpawnedId = recordSpawn(b.id);
-  const entry = await loggedEntry(t, b.id, "took the shortcut");
-  const attributed: EventPayload = {
-    kind: "objection_attributed",
-    entry_id: entry.id,
-    objection_event_ids: [bundledObjection(t.db, b.id, entry.id, t.clock.now())],
-    cause: "capability",
-    evidence: "the shortcut missed the second criterion",
-    entries: null,
-    round: "initial",
-  };
-  appendEvent(t.db, { taskId: b.id, workerId: "board", origin: "board", at: t.clock.now(), payload: attributed });
+  const a = spawnedWork(b, "a");
+  accept(b, a.task.id);
+  const later = spawnedWork(b, "b");
+  attribute(b, later.task.id, logDecision(b.db, later.task, "took the shortcut", WORKER, b.clock.now(), "worker"), "capability");
 
-  const episodes = loadEpisodes(t.db);
+  const episodes = loadEpisodes(b.db);
   const outcomeOf = (spawnedId: number) => episodes.find((e) => e.worker_spawned_event_id === spawnedId)?.outcome;
   expect(episodes).toHaveLength(2);
-  expect(outcomeOf(bSpawnedId)).toBe("rejected");
-  expect(outcomeOf(aSpawnedId)).not.toBe("rejected");
+  expect(outcomeOf(later.spawnedId)).toBe("rejected");
+  expect(outcomeOf(a.spawnedId)).not.toBe("rejected");
 });
 
-it("受理された work task の episode は、後から別の work task が spawn しても accepted のまま —— 次の spawn はタスクの照合で決まる(loadEpisodes)", async () => {
-  t = await bootTidepool();
-  const a = await registerWork(t, "a");
-  await t.clock.advance(HOUR);
-  const aSpawnedId = recordSpawn(a.id);
-  await completeViaMcp(t, a.id);
-  await completeIntegrationReviews(t, a.id);
-  const b = await registerWork(t, "b");
-  await t.clock.advance(HOUR);
-  recordSpawn(b.id);
+it("受理された work task の episode は、後から別の work task が spawn しても accepted のまま —— 次の spawn はタスクの照合で決まる(loadEpisodes)", () => {
+  const b = bareBoard();
+  const a = spawnedWork(b, "a");
+  accept(b, a.task.id);
+  spawnedWork(b, "b");
 
-  const episodes = loadEpisodes(t.db);
-  expect(episodes.find((e) => e.worker_spawned_event_id === aSpawnedId)?.outcome).toBe("accepted");
+  const episodes = loadEpisodes(b.db);
+  expect(episodes.find((e) => e.worker_spawned_event_id === a.spawnedId)?.outcome).toBe("accepted");
 });
 
-it("行の拒否で落ちた session は、そのタスクが別の行で受理されても excluded —— 受理されたのは次の session(ADR 0184 / ADR 0115 決定5、loadEpisodes)", async () => {
-  t = await bootTidepool();
-  const a = await registerWork(t, "a");
-  await t.clock.advance(HOUR);
-  const refusedId = recordSpawn(a.id);
-  const at = t.clock.now();
-  appendEvent(t.db, { taskId: a.id, workerId: "fake-worker", origin: "board", at, payload: { kind: "worker_exited", ...QUIET_EXIT, exit_code: 1, worker_spawned_event_id: refusedId, output_closed: true, usage: null } });
-  appendEvent(t.db, { taskId: a.id, workerId: "tidepool", origin: "board", at, payload: { kind: "row_refused", provider: "anthropic", model: WORKER_SPAWNED.model, worker_spawned_event_id: refusedId, cause: "api_404" } });
-  const rerunId = recordSpawn(a.id);
-  await completeViaMcp(t, a.id);
-  await completeIntegrationReviews(t, a.id);
+it("行の拒否で落ちた session は、そのタスクが別の行で受理されても excluded —— 受理されたのは次の session(ADR 0184 / ADR 0115 決定5、loadEpisodes)", () => {
+  const b = bareBoard();
+  const { task, spawnedId: refusedId } = spawnedWork(b, "a");
+  const at = b.clock.now();
+  appendEvent(b.db, { taskId: task.id, workerId: WORKER, origin: "board", at, payload: { kind: "worker_exited", ...QUIET_EXIT, exit_code: 1, worker_spawned_event_id: refusedId, output_closed: true, usage: null } });
+  appendEvent(b.db, { taskId: task.id, workerId: "tidepool", origin: "board", at, payload: { kind: "row_refused", provider: "anthropic", model: WORKER_SPAWNED.model, worker_spawned_event_id: refusedId, cause: "api_404" } });
+  const rerunId = recordSpawn(b, task.id);
+  accept(b, task.id);
 
-  const episodes = loadEpisodes(t.db);
+  const episodes = loadEpisodes(b.db);
   const outcomeOf = (spawnedId: number) => episodes.find((e) => e.worker_spawned_event_id === spawnedId)?.outcome;
   expect({ refused: outcomeOf(refusedId), rerun: outcomeOf(rerunId) }).toEqual({ refused: "excluded", rerun: "accepted" });
 });
@@ -578,23 +582,20 @@ it.each([
   ["session", "excluded"],
   [null, "excluded"],
   ["local", "accepted"],
-] as const)("scope %s の差し替えのある session が受理されたら %s —— local は subagent だけが替わり main は pin のまま(loadEpisodes)", async (scope, outcome) => {
-  t = await bootTidepool();
-  const task = await registerWork(t, "swapped");
-  await t.clock.advance(HOUR);
-  const spawnedId = recordSpawn(task.id);
+] as const)("scope %s の差し替えのある session が受理されたら %s —— local は subagent だけが替わり main は pin のまま(loadEpisodes)", (scope, outcome) => {
+  const b = bareBoard();
+  const { task, spawnedId } = spawnedWork(b, "swapped");
   const tokens = { input_tokens: 1, output_tokens: 1, cache_read_tokens: 0, cache_creation_tokens: 0, estimated_cost_usd: 0.5 };
   const swap = { from: "claude-fable-5-1", to: "claude-opus-4-8", scope, category: "cyber" };
-  appendEvent(t.db, {
+  appendEvent(b.db, {
     taskId: task.id,
-    workerId: "fake-worker",
+    workerId: WORKER,
     origin: "board",
-    at: t.clock.now(),
+    at: b.clock.now(),
     payload: { kind: "worker_exited", ...QUIET_EXIT, worker_spawned_event_id: spawnedId, output_closed: true, usage: { ...tokens, advisor: null, model_swaps: [swap], refusals: ["cyber"] } },
   });
-  await completeViaMcp(t, task.id);
-  await completeIntegrationReviews(t, task.id);
+  accept(b, task.id);
 
-  const episodes = loadEpisodes(t.db);
+  const episodes = loadEpisodes(b.db);
   expect(episodes.find((e) => e.worker_spawned_event_id === spawnedId)?.outcome).toBe(outcome);
 });
