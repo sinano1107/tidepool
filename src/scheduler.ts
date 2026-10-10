@@ -650,16 +650,24 @@ export function startScheduler(deps: {
         }
         return branched?.chosen ?? pool[0] ?? null;
       };
-      while (head) {
-        const assignee = resolveTaskAgent(head, worker.id, auditorName);
+      /** 候補を引く唯一の口。解決できない assignee は agent 名の quarantine に落として stop 集合に加え、false を返す
+       *  —— 呼び手はその head を飛ばす(ADR 0097 決定1/3)。引き直し(ADR 0184 決定3)も同じ口を通る(issue #1713) */
+      const loadCandidates = (task: Task): boolean => {
         try {
-          candidates = taskExecutionCandidates(head);
+          candidates = taskExecutionCandidates(task);
+          return true;
         } catch (error) {
           if (!(error instanceof UnknownAgentError) && !(error instanceof InvalidAgentDefinitionError)) {
             throw error;
           }
+          const assignee = resolveTaskAgent(task, worker.id, auditorName);
           quarantineAgent(db, assignee, error, clock.now());
           stopped.assignees.push(assignee);
+          return false;
+        }
+      };
+      heads: while (head) {
+        if (!loadCandidates(head)) {
           head = nextHead();
           continue;
         }
@@ -686,7 +694,10 @@ export function startScheduler(deps: {
             observedProviders.set(setting.provider, observation);
             if (setting.provider === "openai" && observation.status === "observed") {
               // 候補はこの観測の前に引いたもの —— 照合で外れた行(ADR 0184 決定3)を落として選び直す
-              candidates = taskExecutionCandidates(head);
+              if (!loadCandidates(head)) {
+                head = nextHead();
+                continue heads;
+              }
               setting = pick(head);
               continue;
             }
