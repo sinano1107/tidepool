@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { copyFileSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -10,7 +11,8 @@ import { afterEach, describe, expect, it } from "vitest";
 // 走らせる。当たるかどうかは biome.json の override の `includes` に `public/**` があることに懸かっていて、
 // public/ の inline script には今 ADR を引く文字列が無いので、`npm run lint` だけではこの範囲の穴が赤くならない。
 const repoRoot = fileURLToPath(new URL("..", import.meta.url));
-const biome = join(repoRoot, "node_modules", ".bin", "biome");
+// worktree では node_modules が親ディレクトリにしか無いので、固定パスでなく Node の解決で bin を見つける
+const biome = createRequire(import.meta.url).resolve("@biomejs/biome/bin/biome");
 
 let workdir: string | undefined;
 afterEach(() => {
@@ -32,10 +34,13 @@ describe("no-adr-in-board-text lint", () => {
       '<!doctype html><html><body><script>window.probe = "probe (ADR 0009)";</script></body></html>\n',
     );
 
-    const run = spawnSync(biome, ["lint", "--vcs-enabled=false", "--reporter=json", "public/probe.html"], {
+    const run = spawnSync(process.execPath, [biome, "lint", "--vcs-enabled=false", "--reporter=json", "public/probe.html"], {
       cwd: workdir,
       encoding: "utf8",
     });
+    // 起動失敗(ENOENT 等)や空の stdout は、JSON.parse の SyntaxError でなくここで理由つきで落とす
+    expect(run.error, run.stderr).toBeUndefined();
+    expect(run.stdout, run.stderr).not.toBe("");
     const report = JSON.parse(run.stdout) as { diagnostics: { category: string; message: string }[] };
 
     expect(report.diagnostics).toContainEqual(
