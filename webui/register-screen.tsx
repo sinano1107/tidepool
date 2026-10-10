@@ -312,7 +312,8 @@ function RegisterScreen({ onRegister, parentTask, onClose }: RegisterScreenProps
   ];
   // 組み込みは review の Assignee にだけ出す —— サーバーの門と同じ規則(ADR 0235 決定2・3)
   const canTake = (name: string, forType: string) => !TidepoolRules.whyAssigneeCannotTake(name, forType, candidates.builtIns.includes(name));
-  const assigneeOptions = withPlaceholder('', '(default agent)', candidates.assignees.filter((n) => canTake(n, type)));
+  // an issue reference always registers as work, whatever the manual Type select last held
+  const assigneeOptions = withPlaceholder('', '(default agent)', candidates.assignees.filter((n) => canTake(n, issueMode ? 'work' : type)));
   // both sources show these two the same way — one element each so the labels can't drift
   const assigneeSelect = <Select label="Assignee" options={assigneeOptions} value={assignee} onChange={(e) => setAssignee(e.target.value)} />;
   const reviewerPicker = showReviewBy && <ReviewerPicker candidates={candidates} value={reviewBy} onChange={setReviewBy} />;
@@ -373,7 +374,10 @@ function RegisterScreen({ onRegister, parentTask, onClose }: RegisterScreenProps
       <Card style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
         {!childMode && (
           <Select label="Source" options={['manual', 'github issue']} value={source} onChange={(e) => {
-            setSource(e.target.value === 'github issue' ? 'github issue' : 'manual'); setGate(null);
+            const nextSource = e.target.value === 'github issue' ? 'github issue' : 'manual';
+            setSource(nextSource); setGate(null);
+            // a built-in picked for a manual review cannot carry over into an issue reference's work
+            if (!canTake(assignee, nextSource === 'github issue' ? 'work' : type)) setAssignee('');
             // tier state is shared by both paths — reset it so an issue-path
             // tier never leaks into a manual review task as its review_tier
             setTier('');

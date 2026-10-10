@@ -1249,7 +1249,7 @@ function RegisterScreen({ onRegister, parentTask, onClose }) {
     ...names.map((n) => ({ value: n, label: n }))
   ];
   const canTake = (name, forType) => !TidepoolRules.whyAssigneeCannotTake(name, forType, candidates.builtIns.includes(name));
-  const assigneeOptions = withPlaceholder("", "(default agent)", candidates.assignees.filter((n) => canTake(n, type)));
+  const assigneeOptions = withPlaceholder("", "(default agent)", candidates.assignees.filter((n) => canTake(n, issueMode ? "work" : type)));
   const assigneeSelect = /* @__PURE__ */ React.createElement(Select, { label: "Assignee", options: assigneeOptions, value: assignee, onChange: (e) => setAssignee(e.target.value) });
   const reviewerPicker = showReviewBy && /* @__PURE__ */ React.createElement(ReviewerPicker, { candidates, value: reviewBy, onChange: setReviewBy });
   const reviewTierSelect = showReviewBy && /* @__PURE__ */ React.createElement(Select, { label: "Review tier", options: tierOptions(tiers, "(reviewer's tier, then board default)"), value: reviewTier, onChange: (e) => setReviewTier(e.target.value) });
@@ -1275,8 +1275,10 @@ function RegisterScreen({ onRegister, parentTask, onClose }) {
     color: "var(--text-body)",
     fontWeight: d.id === selectedDumpId ? 600 : 400
   } }, d.line), /* @__PURE__ */ React.createElement(Button, { variant: d.id === selectedDumpId ? "primary" : "secondary", size: "sm", onClick: () => pickPendingDump(d), "aria-label": `use ${d.line}` }, "Use"), /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "sm", onClick: () => discardPendingDump(d.id), "aria-label": `discard ${d.line}` }, "Discard")))), /* @__PURE__ */ React.createElement(Card, { style: { display: "flex", flexDirection: "column", gap: 14 } }, !childMode && /* @__PURE__ */ React.createElement(Select, { label: "Source", options: ["manual", "github issue"], value: source, onChange: (e) => {
-    setSource(e.target.value === "github issue" ? "github issue" : "manual");
+    const nextSource = e.target.value === "github issue" ? "github issue" : "manual";
+    setSource(nextSource);
     setGate(null);
+    if (!canTake(assignee, nextSource === "github issue" ? "work" : type)) setAssignee("");
     setTier("");
     setReviewTier("");
     setSelectedDumpId(null);
