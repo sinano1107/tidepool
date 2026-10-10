@@ -487,7 +487,7 @@ it("短い文字列の欄ばかりで予算を超える item は切らずに丸�
 
 it("鍵で引き直す口の説明は、最初の応答だけの部分があれば、その最後の切れより後に積まれた分も返らないと言う。無ければ最初の呼び出しより後だけを言う", () => {
   expect(nextDescription("get_task", "events", "The task itself comes", true)).toContain(
-    "Events added after the first call, or after the last piece of what comes on the first response only when it comes in pieces, are not returned: call again without `next` to see them.",
+    "Events added after the first call are not returned (when what comes on the first response only is itself too large, those added after its last piece instead): call again without `next` to see them.",
   );
   expect(nextDescription("get_task", "events", undefined, true)).toContain(
     "Events added after the first call are not returned: call again without `next` to see them.",

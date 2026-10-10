@@ -132,9 +132,9 @@ export const nextDescription = (verb: string, items: string, firstOnly?: string,
       `those pieces' \`partial\` has no \`id\`, its \`field\` is the path from the response root, the lists are empty, and \`remaining\` counts all the ${items}.`
     : "") +
   (resumeByKey
-    ? ` ${items[0]!.toUpperCase()}${items.slice(1)} added after the first call` +
-      (firstOnly ? ", or after the last piece of what comes on the first response only when it comes in pieces," : "") +
-      " are not returned: call again without `next` to see them."
+    ? ` ${items[0]!.toUpperCase()}${items.slice(1)} added after the first call are not returned` +
+      (firstOnly ? " (when what comes on the first response only is itself too large, those added after its last piece instead)" : "") +
+      ": call again without `next` to see them."
     : ` If the list changes under the read, the call fails with "${listChanged(verb)}"; read again from the start.`);
 
 /** item の列を、予算に収まるだけ丸ごと `key` に詰めた応答にする(ADR 0195 決定3)。

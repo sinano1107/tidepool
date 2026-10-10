@@ -298,12 +298,7 @@ it("続きで読む口の説明は、一覧が読む間に変わると最初か�
     expect(description.list_your_tasks).toContain(
       'If the list changes under the read, the call fails with "the list changed since the first list_your_tasks call: call list_your_tasks again without next to read it from the start"; read again from the start.',
     );
-    expect(description.read_decision_log).toContain(
-      "Entries added after the first call, or after the last piece of what comes on the first response only when it comes in pieces, are not returned: call again without `next` to see them.",
-    );
-    expect(description.get_task).toContain(
-      "Events added after the first call, or after the last piece of what comes on the first response only when it comes in pieces, are not returned: call again without `next` to see them.",
-    );
+    expect(description.read_decision_log).toContain(nextDescription("read_decision_log", "entries", "`cursor` comes", true));
     expect(description.get_task).toContain(nextDescription("get_task", "events", "The task itself comes", true));
     for (const verb of ["read_decision_log", "get_task"]) expect(description[verb]).not.toContain("the list changed");
   } finally {
