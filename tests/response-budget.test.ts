@@ -480,14 +480,7 @@ it("文字列以外の骨格が予算の縁にある object を切るとき、�
   // 大きくして item を切れる大きさにするため)
   const line = "\u0001".repeat(12) + "x".repeat(84) + "\u0001".repeat(8) + "x".repeat(200);
   const shapes = [
-    {
-      last: 200,
-      read: (nums: number[]) => {
-        const items = [{ id: 2, nums, line }, { id: 1 }];
-        return followNext(items);
-      },
-      cutOf: (piece: any) => piece.events[0],
-    },
+    { last: 200, read: (nums: number[]) => followNext([{ id: 2, nums, line }, { id: 1 }] as { id: number }[]), cutOf: (piece: any) => piece.events[0] },
     { last: 258, read: (nums: number[]) => followNext([{ id: 1 }], { nums, line }), cutOf: (piece: any) => piece },
   ];
   for (const { last, read, cutOf } of shapes) {
