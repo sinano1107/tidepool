@@ -2777,8 +2777,8 @@ function settleReviews(board: Db, now: Date): void {
 }
 
 /** reef の完了 work を、abandon promotion 済みか PR を開き終えた形にする。 */
-function rerunnableWorkIn(board: Db, now: Date, shape: "abandoned" | "pr_opened", parentId?: string): Task {
-  const work = completedWork(board, now, "tako", parentId, "reef");
+function rerunnableWorkIn(board: Db, now: Date, shape: "abandoned" | "pr_opened"): Task {
+  const work = completedWork(board, now, "tako", undefined, "reef");
   if (shape === "pr_opened") {
     recordPrOpenedViaWorker(board, work, 7, "tako", now, { authority: { merge: "escalate" } });
   } else {
