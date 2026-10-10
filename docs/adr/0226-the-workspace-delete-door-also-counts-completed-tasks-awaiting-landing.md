@@ -1,5 +1,8 @@
 # workspace の削除の扉も、着地を待つ完了タスクを数える
 
+**Status: 決定2 が #1729 に置いた経路は ADR 0234 で決着** — 完了した work の下にいる未決着タスクが、その祖先の
+workspace の参照として数えられる。
+
 2026-10-09 の grilling(issue #1627)で決定。workspace の削除の扉は未決着タスクの参照だけを数えていたので、無人 merge
 キューに PR がいる完了タスクの workspace を消せた。次の tick は PR も CI も読む前にその workspace を解決して
 quarantine に落とし、解除の検査は registry で解決できることを要求するので、修理は扉が消してよいと言ったエントリを戻す
