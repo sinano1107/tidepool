@@ -3132,6 +3132,33 @@ it("head を刻めなかった abandon は、内容を変えない次の決着�
   expect(github.requests).toHaveLength(1);
 });
 
+// ADR 0234 決定3: 扉の外で消えた workspace を着地し直しで解決できないときも「変わった」と読む
+it("PR 昇格を abandon した後、workspace を解決できないまま内容を変えない付帯子が決着しても昇格の question を立て直し、その retry は拒まれて question が開いたまま残る", async () => {
+  const { db, clock, workspace, github, work } = await abandonedPromotion("landing-abandon-unresolvable");
+  let drifted = false;
+  const landing = createLanding({
+    defaultAgentName: "tako",
+    db,
+    clock,
+    resolveWorkspace: (name) => {
+      if (drifted) throw new UnknownWorkspaceError(name ?? workspace.name);
+      return workspace;
+    },
+    github,
+    resolveAuthority: () => profile("escalate"),
+  });
+  const settled = settleAttachedChild(db, clock, workspace, work.id);
+  drifted = true;
+
+  await landing.relandAncestors(settled);
+
+  const reasked = openPromotionQuestions(db, work.id);
+  expect(reasked.map((q) => q.title)).toEqual(["PR promotion re-asked: ship"]);
+  await expect(answerPromotion(db, clock, landing, workspace, reasked[0]!, "retry")).rejects.toThrow(DomainError);
+  expect(openPromotionQuestions(db, work.id).map((q) => q.id)).toEqual([reasked[0]!.id]);
+  expect(github.requests).toHaveLength(1);
+});
+
 // ADR 0233: 既定への参照は pickup で終わる —— 着手したタスクの着地は、既定を差し替えた盤面でも pickup で解決した先に向かう
 
 /** 既定 `workspace`(省略なら workspace 未指定のまま)と既定 agent `agent` で pickup し、完了して完了時レビューを決着させる。 */
