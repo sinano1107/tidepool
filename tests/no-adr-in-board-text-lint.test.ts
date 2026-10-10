@@ -40,7 +40,7 @@ describe("no-adr-in-board-text lint", () => {
     });
     // 起動失敗(ENOENT 等)や空の stdout は、JSON.parse の SyntaxError でなくここで理由つきで落とす
     expect(run.error, run.stderr).toBeUndefined();
-    expect(run.stdout, run.stderr).not.toBe("");
+    expect(run.stdout, `status ${run.status}, signal ${run.signal}: ${run.stderr}`).not.toBe("");
     const report = JSON.parse(run.stdout) as { diagnostics: { category: string; message: string }[] };
 
     expect(report.diagnostics).toContainEqual(
