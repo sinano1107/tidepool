@@ -19,7 +19,6 @@ import {
   listBoard,
   presentTask,
   recordPrOpened,
-  registerMergeQuestion,
   registerTask,
   type Task,
 } from "../src/tasks.js";
@@ -552,9 +551,7 @@ it("merge 回答は question の workspace で live CI を確認してから実 
     NOW,
     ...HUMAN_WEBUI,
   );
-  // 本番では recordPrOpened が pr_number を書いてから question を立てる(#403 の回答時検証はこの行で着地タスクを引く)
-  db.prepare("UPDATE tasks SET pr_number = 42 WHERE id = ?").run(work.id);
-  registerMergeQuestion(db, work, 42, "decide whether to merge", "merge", NOW);
+  recordPrOpened(db, work, 42, "worker", NOW, { merge: "escalate" }, undefined, "worker");
   const question = onlyQuestion(db);
   const github = new FakeGitHubClient();
   const afterCi = new Date(NOW.getTime() + 60_000);
