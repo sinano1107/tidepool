@@ -121,7 +121,7 @@ it("祖先の PR が既に merge 済みなら push しない", async () => {
   await completeRepair(work, workspace);
 
   expect(t.github.pushes).toEqual([]);
-  expect(t.github.mergeChecks).toContainEqual({ path: workspace.path, number: work.pr_number });
+  expect(t.github.stateChecks).toContainEqual({ path: workspace.path, number: work.pr_number });
 });
 
 it("squash merge 後に review 子が決着しただけの再発火は、push も question も event も増やさない", async () => {

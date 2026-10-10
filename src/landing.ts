@@ -4,7 +4,7 @@ import { DEFAULT_AUDITOR_NAME } from "./defaults.js";
 import { DomainError } from "./domain-error.js";
 import { appendEvent, latestEventOfTask } from "./events.js";
 import { git } from "./git.js";
-import type { GitHubClient } from "./github.js";
+import type { GitHubClient, PrState } from "./github.js";
 import { registerQuarantine } from "./quarantine.js";
 import { type AuthorityProfile, InvalidAgentDefinitionError, UnknownAgentError } from "./registry.js";
 import {
@@ -175,8 +175,8 @@ export interface Landing {
   relandAncestors(
     settled: Task,
   ): Promise<Array<{ taskId: string; verdict: LandingVerdict }>>;
-  observeMergedPullRequest(question: Task): Promise<boolean>;
-  observeMergedAutoMerges(agentName: string): Promise<void>;
+  observePullRequestOutcome(question: Task): Promise<boolean>;
+  observeAutoMergeOutcomes(agentName: string): Promise<void>;
   tick(kind: "auto_merge" | "outside_merge", now: Date): Promise<void>;
 }
 
@@ -295,8 +295,11 @@ export function recordPrPromotionAbandoned(
   });
 }
 
-/** ADR 0079 決定3/4: retires a merge question whose PR turned out to be
- *  already merged outside the board. Deliberately not `answerQuestion`:
+/** 盤面の外で決着した PR の観測の綴り —— merge と閉じたことを、互いにも執行とも区別する(ADR 0079 決定4 / ADR 0229 決定4)。 */
+const OBSERVED = { MERGED: "pr_merge_observed", CLOSED: "pr_close_observed" } as const;
+
+/** ADR 0079 決定3/4 / ADR 0229 決定4: retires a merge question whose PR turned out to be
+ *  already merged or closed outside the board. Deliberately not `answerQuestion`:
  *  nobody decided anything, so there is no `question_answered` event, no
  *  recorded option, and no recommendation-acceptance statistic — a "hold"
  *  submitted against an already-merged PR must never read back as a hold
@@ -307,9 +310,10 @@ function settleMergeQuestionAsObserved(
   db: Db,
   questionId: string,
   prNumber: number,
+  state: keyof typeof OBSERVED,
   now: Date,
 ): void {
-  settleQuestionAsObserved(db, questionId, { kind: "pr_merge_observed", pr_number: prNumber }, now);
+  settleQuestionAsObserved(db, questionId, { kind: OBSERVED[state], pr_number: prNumber }, now);
 }
 
 /** ADR 0092 決定3 の再発火が着地を成立させたら、同じタスクを指す PR 昇格失敗の
@@ -399,16 +403,19 @@ function clearPendingAutoMerge(db: Db, taskId: string): void {
   db.prepare("DELETE FROM pending_auto_merges WHERE task_id = ?").run(taskId);
 }
 
-/** キューの PR が merge された(盤面が merge した、または盤面の外での merge を観測した)ので
+/** キューの PR が決着した(盤面が merge した、または盤面の外での merge・閉じたことを観測した)ので
  *  キューから外し、その事実を盤面の名義で残す。 */
-function retireMergedAutoMerge(
+function retireAutoMerge(
   db: Db,
   taskId: string,
-  payload: { kind: "pr_merged" | "pr_merge_observed"; pr_number: number },
+  payload: { kind: "pr_merged" | (typeof OBSERVED)[keyof typeof OBSERVED]; pr_number: number },
   now: Date,
 ): void {
-  clearPendingAutoMerge(db, taskId);
-  appendEvent(db, { taskId, workerId: BOARD_WORKER_ID, origin: "board", payload, at: now });
+  // 外すことと記録を1つにする —— 片方だけで無言で消える経路を残さない(ADR 0105 決定3)
+  db.transaction(() => {
+    clearPendingAutoMerge(db, taskId);
+    appendEvent(db, { taskId, workerId: BOARD_WORKER_ID, origin: "board", payload, at: now });
+  })();
 }
 
 function isQueuedForAutoMerge(db: Db, taskId: string): boolean {
@@ -637,10 +644,10 @@ export function createLanding(deps: LandingDeps): Landing {
         }
         if (task.pr_number !== null) {
           if (
-            await deps.github.isPullRequestMerged({
+            (await deps.github.getPullRequestState({
               path: workspace.path,
               number: task.pr_number,
-            })
+            })) === "MERGED"
           ) {
             return failed(
               task,
@@ -767,46 +774,40 @@ export function createLanding(deps: LandingDeps): Landing {
       }
       return results;
     },
-    async observeMergedPullRequest(question) {
+    async observePullRequestOutcome(question) {
       const prNumber = question.question_pending_merge_pr;
       const resolve = buildWorkspaceResolver(deps.resolveWorkspace, deps.workspace);
       if (prNumber === null || !resolve || !deps.github) return false;
       try {
         const workspace = resolve(question.workspace);
-        if (!(await deps.github.isPullRequestMerged({ path: workspace.path, number: prNumber }))) {
-          return false;
-        }
-        settleMergeQuestionAsObserved(deps.db, question.id, prNumber, deps.clock.now());
+        const state = await deps.github.getPullRequestState({ path: workspace.path, number: prNumber });
+        if (state === "OPEN") return false;
+        settleMergeQuestionAsObserved(deps.db, question.id, prNumber, state, deps.clock.now());
         return true;
       } catch {
         return false;
       }
     },
-    // ADR 0217 決定5: agent 名の quarantine に落ちた agent のキューの PR は、merge 失敗時の
-    // 観測(ADR 0079 決定3)に届かない。盤面の外で merge されたものは回答の受理直前にここで
-    // 観測する。読めない PR は飛ばす —— キューに残り、着地待ちに数えられる。
-    async observeMergedAutoMerges(agentName) {
+    // ADR 0217 決定5: agent 名の quarantine に落ちた agent のキューの PR は、tick の観測
+    // (ADR 0079 決定3)に届かない。盤面の外で merge された・閉じられたもの(ADR 0229 決定4)は
+    // 回答の受理直前にここで観測する。読めない PR は飛ばす —— キューに残り、着地待ちに数えられる。
+    async observeAutoMergeOutcomes(agentName) {
       const resolve = buildWorkspaceResolver(deps.resolveWorkspace, deps.workspace);
       const github = deps.github;
       if (!resolve || !github) return;
       for (const { task_id, pr_number } of listPendingAutoMerges(deps.db)) {
         const task = getTask(deps.db, task_id);
         if (task?.type !== "work" || (task.assignee ?? deps.defaultAgentName) !== agentName) continue;
+        let state: PrState;
         try {
-          const { path } = resolve(task.workspace);
-          if (!(await github.isPullRequestMerged({ path, number: pr_number }))) continue;
+          state = await github.getPullRequestState({ path: resolve(task.workspace).path, number: pr_number });
         } catch {
           continue;
         }
         // await の間に無人 merge の tick が同じ行を merge して外していれば、それは盤面の
         // merge であって観測ではない
-        if (!isQueuedForAutoMerge(deps.db, task_id)) continue;
-        retireMergedAutoMerge(
-          deps.db,
-          task_id,
-          { kind: "pr_merge_observed", pr_number },
-          deps.clock.now(),
-        );
+        if (state === "OPEN" || !isQueuedForAutoMerge(deps.db, task_id)) continue;
+        retireAutoMerge(deps.db, task_id, { kind: OBSERVED[state], pr_number }, deps.clock.now());
       }
     },
     async tick(kind, now) {
@@ -820,78 +821,80 @@ export function createLanding(deps: LandingDeps): Landing {
           const workspace = resolveOrQuarantine(deps.db, resolve, taskWorkspace, now);
           if (!workspace) continue;
           try {
-            if (
-              await github.isPullRequestMerged({ path: workspace.path, number: pr_number })
-            ) {
-              settleMergeQuestionAsObserved(deps.db, id, pr_number, now);
-            }
+            const state = await github.getPullRequestState({ path: workspace.path, number: pr_number });
+            if (state !== "OPEN") settleMergeQuestionAsObserved(deps.db, id, pr_number, state, now);
           } catch {}
         }
         return;
       }
+      // ADR 0229 決定1: 失敗は PR ごとに閉じ込める —— 分類できない失敗はログに出し、その行はキューに残る
       for (const { task_id, pr_number } of listPendingAutoMerges(deps.db)) {
-        const task = getTask(deps.db, task_id);
-        if (!task) continue;
-        const workspace = resolveOrQuarantine(deps.db, resolve, task.workspace, now);
-        if (!workspace) continue;
-        // 着地の面は門と同じ2点 — CI を読む前と、CI を読んだ後に盤面の名義で行為する直前(緑なら
-        // merge、赤なら merge question)— で読む。面が変わった PR はキューを外れ、門に当たった PR は
-        // キューに残る(ADR 0217 決定1)。profile が読めなければ agent を quarantine に落とし、
-        // キューに残してこの回は飛ばす(決定3)
-        const stop = (askQuestion?: (changed: string) => void) => {
-          const resolved = readAuthority(task, now);
-          return (
-            !resolved ||
-            withdrawIfSurfaceChanged(task, resolved.profile, pr_number, workspace.name, now, askQuestion) ||
-            landingBlock(deps.db, task_id)
-          );
-        };
-        if (stop()) continue;
-        const status = await github.getCiStatus({ path: workspace.path, number: pr_number });
-        if (status === "pending") continue;
-        if (status === "unreported" && !unreportedCiGraceElapsed(deps.db, task_id, now)) continue;
-        if (status === "success") {
+        try {
+          const task = getTask(deps.db, task_id);
+          if (!task) continue;
+          const workspace = resolveOrQuarantine(deps.db, resolve, task.workspace, now);
+          if (!workspace) continue;
+          // 着地の面は門と同じ2点 — CI を読む前と、CI を読んだ後に盤面の名義で行為する直前(緑なら
+          // merge、赤なら merge question)— で読む。面が変わった PR はキューを外れ、門に当たった PR は
+          // キューに残る(ADR 0217 決定1)。profile が読めなければ agent を quarantine に落とし、
+          // キューに残してこの回は飛ばす(決定3)
+          const stop = (askQuestion?: (changed: string) => void) => {
+            const resolved = readAuthority(task, now);
+            return (
+              !resolved ||
+              withdrawIfSurfaceChanged(task, resolved.profile, pr_number, workspace.name, now, askQuestion) ||
+              landingBlock(deps.db, task_id)
+            );
+          };
           if (stop()) continue;
-          let observed = false;
-          try {
-            await github.mergePullRequest({ path: workspace.path, number: pr_number });
-          } catch (error) {
-            if (
-              !(await github.isPullRequestMerged({ path: workspace.path, number: pr_number }))
-            ) {
-              throw error;
-            }
-            observed = true;
+          const ref = { path: workspace.path, number: pr_number };
+          // 状態は CI と同じ読み取りで、行為の前に読む(ADR 0229 決定2)。閉じた PR は CI の色に依らず観測になる
+          const { ci, state } = await github.readPullRequest(ref);
+          if (state === "MERGED" || state === "CLOSED") {
+            retireAutoMerge(deps.db, task_id, { kind: OBSERVED[state], pr_number }, now);
+            continue;
           }
-          retireMergedAutoMerge(
-            deps.db,
-            task_id,
-            { kind: observed ? "pr_merge_observed" : "pr_merged", pr_number },
-            now,
-          );
-          continue;
+          if (state === "unreadable" || ci === "pending") continue;
+          if (ci === "unreported" && !unreportedCiGraceElapsed(deps.db, task_id, now)) continue;
+          let purpose: string;
+          if (ci === "success") {
+            if (stop()) continue;
+            const failure = await github.mergePullRequest(ref).then(
+              () => null,
+              (error: unknown) => (error instanceof Error ? error.message : String(error)),
+            );
+            if (failure === null) {
+              retireAutoMerge(deps.db, task_id, { kind: "pr_merged", pr_number }, now);
+              continue;
+            }
+            // merge の失敗の後に状態を読み直す。読み直しの throw は分類できない失敗(ADR 0229 決定3)
+            const after = await github.getPullRequestState(ref);
+            if (after !== "OPEN") {
+              retireAutoMerge(deps.db, task_id, { kind: OBSERVED[after], pr_number }, now);
+              continue;
+            }
+            purpose =
+              `"${task.title}"'s auto_if_ci_green auto-merge could not merge PR #${pr_number}: ${failure}. ` +
+              "Merge once it is fixed, or hold?";
+          } else {
+            // 面が question 側へ変わっていても、立てるのは CI 赤 / 猶予を過ぎた未報告の question(ADR 0217 決定2・ADR 0227 決定3)
+            const found =
+              ci === "failure"
+                ? `found CI red on PR #${pr_number}`
+                : `found no CI check reported on PR #${pr_number} in the ${UNREPORTED_CI_GRACE_TEXT} since the board last ` +
+                  "pushed to it, so its CI-green condition cannot be observed";
+            purpose = `"${task.title}"'s auto_if_ci_green auto-merge ${found}. Merge anyway, or hold?`;
+          }
+          const askHuman = () => registerMergeQuestion(deps.db, task, pr_number, purpose, "hold", now);
+          if (stop(askHuman)) continue;
+          // 外すことと問うことを1つにする — 片方だけで無言で消える経路を残さない(ADR 0105 決定3)
+          deps.db.transaction(() => {
+            clearPendingAutoMerge(deps.db, task_id);
+            askHuman();
+          })();
+        } catch (error) {
+          console.error(`[landing] auto-merge of PR #${pr_number} (task ${task_id}) failed; it stays queued:`, error);
         }
-        // 面が question 側へ変わっていても、立てるのは CI 赤 / 猶予を過ぎた未報告の question(ADR 0217 決定2・ADR 0227 決定3)
-        const found =
-          status === "failure"
-            ? `found CI red on PR #${pr_number}`
-            : `found no CI check reported on PR #${pr_number} in the ${UNREPORTED_CI_GRACE_TEXT} since the board last ` +
-              "pushed to it, so its CI-green condition cannot be observed";
-        const askHuman = () =>
-          registerMergeQuestion(
-            deps.db,
-            task,
-            pr_number,
-            `"${task.title}"'s auto_if_ci_green auto-merge ${found}. Merge anyway, or hold?`,
-            "hold",
-            now,
-          );
-        if (stop(askHuman)) continue;
-        // 外すことと問うことを1つにする — 片方だけで無言で消える経路を残さない(ADR 0105 決定3)
-        deps.db.transaction(() => {
-          clearPendingAutoMerge(deps.db, task_id);
-          askHuman();
-        })();
       }
     },
   };

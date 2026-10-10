@@ -266,7 +266,7 @@ it("open な merge question の PR が盤面の外で merge されていたら�
   // 60秒面は一切広げない — CI poll の周期では走査は動かない
   await t.clock.advance(MINUTE);
   expect((await api(t.baseUrl, "GET", `/api/tasks/${question.id}`)).json.status).toBe("todo");
-  expect(t.github.mergeChecks).toEqual([]);
+  expect(t.github.stateChecks).toEqual([]);
 
   await t.clock.advance(SCAN);
 
@@ -295,7 +295,7 @@ it("走査中に1枚の PR が読めなくても、走査は倒れず残りの q
   expect(questions).toHaveLength(2);
 
   // 網が届かない PR が先頭に来る(Pi のオフライン耐性)
-  t.github.scriptMergeCheckFailure(1, new Error("gh: could not reach github.com"));
+  t.github.scriptStateReadFailure(1, new Error("gh: could not reach github.com"));
   t.github.scriptMergedOutside(2);
 
   await t.clock.advance(SCAN);
@@ -327,7 +327,7 @@ it("external の PR は open な merge question を残さないので、走査�
   t.github.scriptMergedOutside(1);
   await t.clock.advance(SCAN);
 
-  expect(t.github.mergeChecks).toEqual([]);
+  expect(t.github.stateChecks).toEqual([]);
   const events = (await api(t.baseUrl, "GET", `/api/tasks/${task.id}/events`)).json;
   expect(events.filter((e: any) => e.kind === "pr_merge_observed")).toEqual([]);
 });

@@ -76,6 +76,17 @@ export interface Issue {
  *  (ADR 0079). */
 export type CiStatus = "pending" | "success" | "failure" | "unreported";
 
+/** GitHub's own PR state (ADR 0229 決定2). */
+export type PrState = "OPEN" | "CLOSED" | "MERGED";
+
+/** One read of a PR, CI and state together (ADR 0229 決定2): a read that
+ *  failed is CI "pending" and state "unreadable" — never a state the caller
+ *  would act on. */
+export interface PrStatus {
+  ci: CiStatus;
+  state: PrState | "unreadable";
+}
+
 /** ADR 0016's 確定的失敗 (permanent failure) of an issue-backed task's live
  *  reference, as part of getIssue's contract: the referenced issue is gone
  *  for good — deleted/never existed (`not_found`) or already closed
@@ -95,7 +106,7 @@ export class IssueGoneError extends Error {
 /** The GitHub-facing seam (issue #19): promoting a task branch's work to a PR
  *  is never entrusted to the worker, only to tidepool itself — this is what
  *  it calls through. An external API is a system boundary (mocking.md):
- *  faked in tests, shelled out to `gh` for real. `getCiStatus`/
+ *  faked in tests, shelled out to `gh` for real. `readPullRequest`/
  *  `mergePullRequest` (issue #11) back the merge dial: the actual merge is
  *  never performed until a live CI check reports "success" immediately
  *  beforehand — or, on a human's merge answer only, still reports
@@ -107,15 +118,15 @@ export interface GitHubClient {
    *  修理が merge back されたタスクブランチを押し直すと、その PR が黙って更新される
    *  (ADR 0053 / issue #400)。 */
   pushBranch(input: PushBranchInput): Promise<void>;
-  getCiStatus(ref: PrRef): Promise<CiStatus>;
+  readPullRequest(ref: PrRef): Promise<PrStatus>;
   mergePullRequest(ref: PrRef): Promise<void>;
-  /** Whether this PR is already merged (ADR 0079 決定3) — the read the board
-   *  needs to tell "the merge is still mine to make" from "someone merged it
+  /** The PR's state (ADR 0079 決定3 / ADR 0229) — the read the board needs to
+   *  tell "the merge is still mine to make" from "someone merged or closed it
    *  outside the board". Only asked on the two surfaces the board holds a
    *  decision on (an open merge question, the auto-merge queue) and before
    *  pushing a repair onto a still-open PR (issue #400), never as a standing
-   *  watch over every open PR. */
-  isPullRequestMerged(ref: PrRef): Promise<boolean>;
+   *  watch over every open PR. Throws when it cannot be read. */
+  getPullRequestState(ref: PrRef): Promise<PrState>;
   getIssue(ref: IssueRef): Promise<Issue>;
   /** Lists the repository's open issues (issue #67) — the issue-number
    *  picker's data source. No paging/search-term filter/cache: `--limit 100`,
@@ -169,6 +180,16 @@ const CI_FAILED = [
   "ERROR",
 ];
 
+function ciStatusOf(checks: RollupEntry[]): CiStatus {
+  if (checks.length === 0) return "unreported";
+  // CheckRun は完了時の `conclusion`、StatusContext は `state` に判定を持つ。
+  // どちらも空 = まだ完了していない。知らない判定値は pending 側に落とす。
+  const verdicts = checks.map((c) => c.conclusion || c.state || "");
+  if (verdicts.some((v) => CI_FAILED.includes(v))) return "failure";
+  if (verdicts.some((v) => !CI_PASSED.includes(v))) return "pending";
+  return "success";
+}
+
 /** Real implementation: shells out to `gh`/`git` as `tidepool-board[bot]` (ADR 0093)
  *  — every call injects a repo-scoped installation token into the child env
  *  fresh via GitHubAuth, never the host's ambient `gh auth`. `gh` prints the
@@ -220,30 +241,24 @@ export class GhCliClient implements GitHubClient {
     return { url, number: Number(match[1]) };
   }
 
-  async getCiStatus(ref: PrRef): Promise<CiStatus> {
+  async readPullRequest(ref: PrRef): Promise<PrStatus> {
     // `gh pr checks` はチェック未設定でも「非ゼロ終了 + stdout 空」で、認証・
     // ネットワーク失敗と区別がつかない —— 取得失敗が緑に化ける(issue #427)。
     // `gh pr view --json statusCheckRollup` は未設定なら exit 0 + 空配列を返し、
     // 非ゼロ終了は「読めなかった」だけを意味する。token 取得(仲介への往復)も
-    // 同じ try に入れて、どちらの失敗も pending に倒す。
-    let checks: RollupEntry[];
+    // 同じ try に入れて、どちらの失敗も pending / unreadable に倒す。
+    let parsed: { state: PrState; statusCheckRollup?: RollupEntry[] };
     try {
       const output = execFileSync(
         "gh",
-        ["pr", "view", String(ref.number), "--json", "statusCheckRollup"],
+        ["pr", "view", String(ref.number), "--json", "state,statusCheckRollup"],
         { cwd: ref.path, env: await this.envFor(ref.path), stdio: ["ignore", "pipe", "pipe"] },
       ).toString();
-      checks = (JSON.parse(output) as { statusCheckRollup?: RollupEntry[] }).statusCheckRollup ?? [];
+      parsed = JSON.parse(output);
     } catch {
-      return "pending";
+      return { ci: "pending", state: "unreadable" };
     }
-    if (checks.length === 0) return "unreported";
-    // CheckRun は完了時の `conclusion`、StatusContext は `state` に判定を持つ。
-    // どちらも空 = まだ完了していない。知らない判定値は pending 側に落とす。
-    const verdicts = checks.map((c) => c.conclusion || c.state || "");
-    if (verdicts.some((v) => CI_FAILED.includes(v))) return "failure";
-    if (verdicts.some((v) => !CI_PASSED.includes(v))) return "pending";
-    return "success";
+    return { ci: ciStatusOf(parsed.statusCheckRollup ?? []), state: parsed.state };
   }
 
   async mergePullRequest(ref: PrRef): Promise<void> {
@@ -254,13 +269,13 @@ export class GhCliClient implements GitHubClient {
     });
   }
 
-  async isPullRequestMerged(ref: PrRef): Promise<boolean> {
+  async getPullRequestState(ref: PrRef): Promise<PrState> {
     const output = execFileSync("gh", ["pr", "view", String(ref.number), "--json", "state"], {
       cwd: ref.path,
       env: await this.envFor(ref.path),
       stdio: ["ignore", "pipe", "pipe"],
     }).toString();
-    return (JSON.parse(output) as { state: string }).state === "MERGED";
+    return (JSON.parse(output) as { state: PrState }).state;
   }
 
   async getIssue(ref: IssueRef): Promise<Issue> {

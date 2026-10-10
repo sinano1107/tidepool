@@ -28,6 +28,8 @@ import type {
   OpenIssue,
   PrRef,
   PrResult,
+  PrState,
+  PrStatus,
   PushBranchInput,
   RepoRef,
   RepoSlug,
@@ -74,10 +76,10 @@ export const unusedLanding: Landing = {
   async relandAncestors() {
     return [];
   },
-  async observeMergedPullRequest() {
+  async observePullRequestOutcome() {
     return false;
   },
-  async observeMergedAutoMerges() {},
+  async observeAutoMergeOutcomes() {},
   async tick() {},
 };
 
@@ -408,9 +410,11 @@ export class FakeGitHubClient implements GitHubClient {
   readonly issueComments: Array<{ ref: IssueRef; body: string }> = [];
   readonly ciChecks: PrRef[] = [];
   readonly merged: PrRef[] = [];
-  readonly mergeChecks: PrRef[] = [];
+  readonly stateChecks: PrRef[] = [];
   private mergedOutside = new Set<number>();
-  private mergeCheckFailures = new Map<number, Error>();
+  private closedOutside = new Set<number>();
+  private mergeFailures = new Map<number, Error>();
+  private stateReadFailures = new Map<number, Error>();
   private failure: Error | null = null;
   private pushFailure: Error | null = null;
   private issueFailure: Error | null = null;
@@ -449,37 +453,55 @@ export class FakeGitHubClient implements GitHubClient {
     this.pushFailure = err;
   }
 
-  async getCiStatus(ref: PrRef): Promise<CiStatus> {
+  private stateOf(number: number): PrState {
+    if (this.mergedOutside.has(number)) return "MERGED";
+    return this.closedOutside.has(number) ? "CLOSED" : "OPEN";
+  }
+
+  async readPullRequest(ref: PrRef): Promise<PrStatus> {
     this.ciChecks.push(ref);
-    return this.ciStatus;
+    return { ci: this.ciStatus, state: this.stateOf(ref.number) };
   }
 
   async mergePullRequest(ref: PrRef): Promise<void> {
-    // GitHub refuses a merge on an already-merged PR; the fake must too, or
-    // the poll's retry hole (ADR 0079 決定3) can't be reproduced here
-    if (this.mergedOutside.has(ref.number)) {
-      throw new Error(`PR #${ref.number} is already merged`);
+    // GitHub refuses a merge on an already-merged or closed PR; the fake must
+    // too, or the poll's retry hole (ADR 0079 決定3 / ADR 0229) can't be reproduced here
+    if (this.stateOf(ref.number) !== "OPEN") {
+      throw new Error(`PR #${ref.number} is ${this.stateOf(ref.number).toLowerCase()}`);
     }
+    const failure = this.mergeFailures.get(ref.number);
+    if (failure) throw failure;
     this.merged.push(ref);
   }
 
-  async isPullRequestMerged(ref: PrRef): Promise<boolean> {
-    this.mergeChecks.push(ref);
-    const failure = this.mergeCheckFailures.get(ref.number);
+  async getPullRequestState(ref: PrRef): Promise<PrState> {
+    this.stateChecks.push(ref);
+    const failure = this.stateReadFailures.get(ref.number);
     if (failure) throw failure;
-    return this.mergedOutside.has(ref.number);
+    return this.stateOf(ref.number);
   }
 
-  /** Makes the merged read on one PR throw — an offline Pi, a repo the token
-   *  lost, a GitHub outage. `gh` exits non-zero and the real client rethrows. */
-  scriptMergeCheckFailure(number: number, err: Error): void {
-    this.mergeCheckFailures.set(number, err);
+  /** Makes the state read on one PR throw — an offline Pi, a repo the token
+   *  lost, a GitHub outage. `gh` exits non-zero and the real client rethrows.
+   *  The combined read (readPullRequest) is untouched. */
+  scriptStateReadFailure(number: number, err: Error): void {
+    this.stateReadFailures.set(number, err);
+  }
+
+  /** Makes merging one still-open PR fail — a conflict, a protection refusal. */
+  scriptMergeFailure(number: number, err: Error): void {
+    this.mergeFailures.set(number, err);
   }
 
   /** Scripts the PR as merged by someone on GitHub's own surface, behind the
    *  board's back (ADR 0079) — every later merge attempt on it fails. */
   scriptMergedOutside(number: number): void {
     this.mergedOutside.add(number);
+  }
+
+  /** Scripts the PR as closed without merging on GitHub's own surface (ADR 0229). */
+  scriptClosedOutside(number: number): void {
+    this.closedOutside.add(number);
   }
 
   async getIssue(ref: IssueRef): Promise<Issue> {
@@ -513,7 +535,7 @@ export class FakeGitHubClient implements GitHubClient {
     this.issueListFailure = err;
   }
 
-  /** Scripts what getCiStatus returns from here on (issue #11) — default
+  /** Scripts the CI readPullRequest returns from here on (issue #11) — default
    *  "success" so tests unrelated to the merge dial never need to script it. */
   scriptCiStatus(status: CiStatus): void {
     this.ciStatus = status;

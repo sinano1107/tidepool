@@ -95,10 +95,10 @@ async function sessionInTeardown(
     async relandAncestors() {
       return [];
     },
-    async observeMergedPullRequest() {
+    async observePullRequestOutcome() {
       return false;
     },
-    async observeMergedAutoMerges() {},
+    async observeAutoMergeOutcomes() {},
     async tick() {},
   };
   const worker = new ScriptedWorker(clock);

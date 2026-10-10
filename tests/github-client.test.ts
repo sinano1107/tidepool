@@ -145,56 +145,56 @@ async function fakeGhChecks(stdout: string, exitCode: number): Promise<string> {
   return dir;
 }
 
-it("getCiStatus は全チェック pass で success を返す", async () => {
+it("readPullRequest の CI は全チェック pass で success を返す", async () => {
   const dir = await fakeGhChecks(
-    '{"statusCheckRollup":[{"status":"COMPLETED","conclusion":"SUCCESS"},{"__typename":"StatusContext","state":"SUCCESS"}]}',
+    '{"state":"OPEN","statusCheckRollup":[{"status":"COMPLETED","conclusion":"SUCCESS"},{"__typename":"StatusContext","state":"SUCCESS"}]}',
     0,
   );
   originalPath = process.env.PATH;
   process.env.PATH = `${dir}:${originalPath}`;
 
-  const status = await new GhCliClient(await makeAuth()).getCiStatus({ path: "/tmp", number: 1 });
+  const { ci: status } = await new GhCliClient(await makeAuth()).readPullRequest({ path: "/tmp", number: 1 });
   expect(status).toBe("success");
 });
 
-it("getCiStatus は未完了のチェックが残っていれば pending を返す", async () => {
+it("readPullRequest の CI は未完了のチェックが残っていれば pending を返す", async () => {
   const dir = await fakeGhChecks(
-    '{"statusCheckRollup":[{"status":"COMPLETED","conclusion":"SUCCESS"},{"status":"IN_PROGRESS","conclusion":""}]}',
+    '{"state":"OPEN","statusCheckRollup":[{"status":"COMPLETED","conclusion":"SUCCESS"},{"status":"IN_PROGRESS","conclusion":""}]}',
     0,
   );
   originalPath = process.env.PATH;
   process.env.PATH = `${dir}:${originalPath}`;
 
-  const status = await new GhCliClient(await makeAuth()).getCiStatus({ path: "/tmp", number: 1 });
+  const { ci: status } = await new GhCliClient(await makeAuth()).readPullRequest({ path: "/tmp", number: 1 });
   expect(status).toBe("pending");
 });
 
 // ADR 0227 決定1: 空の集計からは「CI が無い」と「まだ報告されていない」を区別できない —— 緑とも pending とも読まない
-it("getCiStatus はチェックが1つも無い PR を unreported(checks 未報告)として読む", async () => {
-  const dir = await fakeGhChecks('{"statusCheckRollup":[]}', 0);
+it("readPullRequest の CI はチェックが1つも無い PR を unreported(checks 未報告)として読む", async () => {
+  const dir = await fakeGhChecks('{"state":"OPEN","statusCheckRollup":[]}', 0);
   originalPath = process.env.PATH;
   process.env.PATH = `${dir}:${originalPath}`;
 
-  const status = await new GhCliClient(await makeAuth()).getCiStatus({ path: "/tmp", number: 1 });
+  const { ci: status } = await new GhCliClient(await makeAuth()).readPullRequest({ path: "/tmp", number: 1 });
   expect(status).toBe("unreported");
 });
 
-it("getCiStatus は cancel されたチェックを failure として読む", async () => {
+it("readPullRequest の CI は cancel されたチェックを failure として読む", async () => {
   const dir = await fakeGhChecks(
-    '{"statusCheckRollup":[{"status":"COMPLETED","conclusion":"CANCELLED"}]}',
+    '{"state":"OPEN","statusCheckRollup":[{"status":"COMPLETED","conclusion":"CANCELLED"}]}',
     0,
   );
   originalPath = process.env.PATH;
   process.env.PATH = `${dir}:${originalPath}`;
 
-  const status = await new GhCliClient(await makeAuth()).getCiStatus({ path: "/tmp", number: 1 });
+  const { ci: status } = await new GhCliClient(await makeAuth()).readPullRequest({ path: "/tmp", number: 1 });
   expect(status).toBe("failure");
 });
 
-it("getCiStatus は token を取れなければ(仲介に届かない)pending を返す", async () => {
+it("readPullRequest の CI は token を取れなければ(仲介に届かない)pending を返す", async () => {
   // gh 自身は緑を答える —— pending の出どころが仲介の失敗だけであることを固定する
   const dir = await fakeGhChecks(
-    '{"statusCheckRollup":[{"status":"COMPLETED","conclusion":"SUCCESS"}]}',
+    '{"state":"OPEN","statusCheckRollup":[{"status":"COMPLETED","conclusion":"SUCCESS"}]}',
     0,
   );
   originalPath = process.env.PATH;
@@ -205,32 +205,50 @@ it("getCiStatus は token を取れなければ(仲介に届かない)pending �
   git(repoPath, "init", "-b", "main");
   git(repoPath, "remote", "add", "origin", "https://github.com/acme/widget.git");
 
-  const status = await new GhCliClient(await makeAuth({ destroy: true })).getCiStatus({
+  const pr = await new GhCliClient(await makeAuth({ destroy: true })).readPullRequest({
     path: repoPath,
     number: 1,
   });
-  expect(status).toBe("pending");
+  expect(pr).toEqual({ ci: "pending", state: "unreadable" });
 });
 
-it("getCiStatus は失敗したチェックがあれば failure を返す", async () => {
+it("readPullRequest の CI は失敗したチェックがあれば failure を返す", async () => {
   const dir = await fakeGhChecks(
-    '{"statusCheckRollup":[{"status":"COMPLETED","conclusion":"SUCCESS"},{"status":"COMPLETED","conclusion":"FAILURE"}]}',
+    '{"state":"OPEN","statusCheckRollup":[{"status":"COMPLETED","conclusion":"SUCCESS"},{"status":"COMPLETED","conclusion":"FAILURE"}]}',
     0,
   );
   originalPath = process.env.PATH;
   process.env.PATH = `${dir}:${originalPath}`;
 
-  const status = await new GhCliClient(await makeAuth()).getCiStatus({ path: "/tmp", number: 1 });
+  const { ci: status } = await new GhCliClient(await makeAuth()).readPullRequest({ path: "/tmp", number: 1 });
   expect(status).toBe("failure");
 });
 
-it("getCiStatus は gh が非ゼロ終了したら(到達不能)pending を返す", async () => {
+it("readPullRequest は gh が非ゼロ終了したら(到達不能)CI を pending、状態を unreadable と読む", async () => {
   const dir = await fakeGhChecks("", 1);
   originalPath = process.env.PATH;
   process.env.PATH = `${dir}:${originalPath}`;
 
-  const status = await new GhCliClient(await makeAuth()).getCiStatus({ path: "/tmp", number: 1 });
-  expect(status).toBe("pending");
+  const pr = await new GhCliClient(await makeAuth()).readPullRequest({ path: "/tmp", number: 1 });
+  expect(pr).toEqual({ ci: "pending", state: "unreadable" });
+});
+
+// ADR 0229 決定2: 状態は CI と同じ1回の読み取りに載せる —— tick の網の呼び出しを増やさない
+it("readPullRequest は1回の gh pr view --json state,statusCheckRollup で CI と状態を読む", async () => {
+  const dir = await tempDir("tidepool-fakebin-");
+  const logPath = join(dir, "gh-invocations.log");
+  writeFileSync(
+    join(dir, "gh"),
+    `#!/bin/sh\necho "$@" >> "${logPath}"\nprintf '{"state":"CLOSED","statusCheckRollup":[{"conclusion":"SUCCESS"}]}'\n`,
+  );
+  chmodSync(join(dir, "gh"), 0o755);
+  originalPath = process.env.PATH;
+  process.env.PATH = `${dir}:${originalPath}`;
+
+  const pr = await new GhCliClient(await makeAuth()).readPullRequest({ path: "/tmp", number: 7 });
+
+  expect(pr).toEqual({ ci: "success", state: "CLOSED" });
+  expect((await readFile(logPath, "utf8")).trim().split("\n")).toEqual(["pr view 7 --json state,statusCheckRollup"]);
 });
 
 /** Stands in for `gh issue view --json title,body,comments`: prints the
@@ -357,20 +375,21 @@ it("mergePullRequest は gh pr merge --merge を呼ぶ", async () => {
   expect(invocations).toContain("pr merge 7 --merge");
 });
 
-it("isPullRequestMerged は gh pr view --json state を読み、MERGED だけを真とする(ADR 0079)", async () => {
+it("getPullRequestState は gh pr view --json state を読み、状態をそのまま返す(ADR 0079 / ADR 0229)", async () => {
   const dir = await tempDir("tidepool-fakebin-");
   const logPath = join(dir, "gh-invocations.log");
   writeFileSync(
     join(dir, "gh"),
-    `#!/bin/sh\necho "$@" >> "${logPath}"\ncase "$3" in 7) printf '{"state":"MERGED"}';; *) printf '{"state":"OPEN"}';; esac\n`,
+    `#!/bin/sh\necho "$@" >> "${logPath}"\ncase "$3" in 7) printf '{"state":"MERGED"}';; 8) printf '{"state":"CLOSED"}';; *) printf '{"state":"OPEN"}';; esac\n`,
   );
   chmodSync(join(dir, "gh"), 0o755);
   originalPath = process.env.PATH;
   process.env.PATH = `${dir}:${originalPath}`;
 
   const client = new GhCliClient(await makeAuth());
-  expect(await client.isPullRequestMerged({ path: "/tmp", number: 7 })).toBe(true);
-  expect(await client.isPullRequestMerged({ path: "/tmp", number: 8 })).toBe(false);
+  expect(await client.getPullRequestState({ path: "/tmp", number: 7 })).toBe("MERGED");
+  expect(await client.getPullRequestState({ path: "/tmp", number: 8 })).toBe("CLOSED");
+  expect(await client.getPullRequestState({ path: "/tmp", number: 9 })).toBe("OPEN");
 
   const invocations = await readFile(logPath, "utf8");
   expect(invocations).toContain("pr view 7 --json state");
