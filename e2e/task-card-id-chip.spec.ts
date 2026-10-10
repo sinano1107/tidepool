@@ -56,12 +56,31 @@ test("card の id は IdChip で、title が全文 id・9ch に切られ・字�
     expect(await id.evaluate((el) => el.scrollWidth > el.clientWidth)).toBe(true);
     expect(await typography(id)).toEqual(want);
 
-    // 見出し行 = id の親。子の最大の高さを超えて伸びていれば折れている
-    const [rowHeight, tallestChild] = await id.evaluate((el) => {
+    // 同じ字形で 9ch の幅と1行の高さを測る probe —— id 自身が折れると「子の最大」が id になり、
+    // 行の高さとの比較だけでは risk なしの card の折れを見逃す
+    const m = await id.evaluate((el) => {
       const row = el.parentElement as HTMLElement;
-      return [row.getBoundingClientRect().height, Math.max(...[...row.children].map((c) => c.getBoundingClientRect().height))];
+      const probe = el.cloneNode(false) as HTMLElement;
+      probe.removeAttribute("title");
+      probe.style.cssText += ";max-width:none;width:9ch;white-space:nowrap;display:inline-block";
+      probe.textContent = "x";
+      row.append(probe);
+      const line = probe.getBoundingClientRect();
+      probe.remove();
+      const children = [...row.children].map((c) => c.getBoundingClientRect().height);
+      return {
+        idWidth: el.getBoundingClientRect().width,
+        idHeight: el.getBoundingClientRect().height,
+        nineCh: line.width,
+        oneLine: line.height,
+        rowHeight: row.getBoundingClientRect().height,
+        tallestChild: Math.max(...children),
+      };
     });
-    expect(rowHeight).toBeLessThanOrEqual(tallestChild + 0.5);
+    expect(m.idWidth).toBeLessThanOrEqual(m.nineCh + 0.5);
+    expect(m.idHeight).toBeLessThanOrEqual(m.oneLine + 0.5);
+    // 見出し行 = id の親。子の最大の高さを超えて伸びていれば折れている
+    expect(m.rowHeight).toBeLessThanOrEqual(m.tallestChild + 0.5);
   }
 });
 
