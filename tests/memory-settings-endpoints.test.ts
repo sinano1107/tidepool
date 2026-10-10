@@ -607,3 +607,43 @@ it("盤面全体のエントリを置く人間の口(書き込み4種別・1件�
     json: { error: expect.stringContaining("path must be") },
   });
 });
+
+it("人間の Memory 書き込みの HTTP 口(knowledge・definitions・behaviors・exemplars)は schema に無い top-level のキーを黙って捨てず、キーを名指して 400 にし、何も書かない(issue #1771 / ADR 0153 決定1)", async () => {
+  t = await bootTidepool();
+  const task = registerTask(t.db, { type: "work", title: "t", purpose: "p", completion_criteria: "c" }, t.clock.now(), ...HUMAN_WEBUI);
+  const decision = logDecision(t.db, task, "split the migration into two commits", "deckhand", t.clock.now(), "worker");
+  const base = { workspace: null, path: "build", text: "Split it." };
+  const exemplar = { workspace: null, path: "habits", title: "Split", addressee: null, source_event_id: decision, annotations: [{ anchor: "whole", polarity: "imitate", text: "Split it." }] };
+  const originals = { original_language: "Japanese", original_title: "分ける", original_text: "移行を分ける" };
+  const cases: Array<[string, Record<string, unknown>, string]> = [
+    ["exemplars", { ...exemplar, original_language: originals.original_language }, "original_language"],
+    ["exemplars", { ...exemplar, original_title: originals.original_title, original_text: originals.original_text }, "original_title"],
+    ["exemplars", { ...exemplar, ...originals }, "original_text"],
+    ["exemplars", { ...exemplar, bogus: 1 }, "bogus"],
+    ["definitions", { ...base, original_title: "分ける" }, "original_title"],
+    ["knowledge", { ...base, title: "Split", bogus: 1 }, "bogus"],
+    ["behaviors", { ...base, title: "Split", addressee: null, bogus: 1 }, "bogus"],
+  ];
+  for (const [route, body, key] of cases) {
+    const res = await api(t.baseUrl, "POST", `/api/settings/memory/${route}`, body);
+    expect([route, key, res.status, res.json.error]).toEqual([route, key, 400, expect.stringContaining(key)]);
+  }
+  expect((await api(t.baseUrl, "GET", "/api/settings/memory/entries")).json.entries.filter((e: any) => e.author.activity === "human")).toEqual([]);
+});
+
+it("管理MCP の record_exemplar は top-level の original_language / original_title / original_text を tool error で拒み、何も書かない(issue #1771 / #1075)", async () => {
+  t = await bootTidepool();
+  const task = registerTask(t.db, { type: "work", title: "t", purpose: "p", completion_criteria: "c" }, t.clock.now(), ...HUMAN_WEBUI);
+  const decision = logDecision(t.db, task, "split the migration into two commits", "deckhand", t.clock.now(), "worker");
+  const exemplar = { workspace: null, path: "habits", title: "Split", addressee: null, source_event_id: decision, annotations: [{ anchor: "whole", polarity: "imitate", text: "Split it." }] };
+  const client = await managementMcpClient(t.baseUrl);
+  try {
+    for (const extra of [{ original_language: "Japanese" }, { original_title: "分ける" }, { original_text: "移行を分ける" }]) {
+      const result: any = await client.callTool({ name: "record_exemplar", arguments: { ...exemplar, ...extra } });
+      expect([extra, result.isError, result.content[0].text]).toEqual([extra, true, expect.stringContaining(Object.keys(extra)[0]!)]);
+    }
+    expect((await api(t.baseUrl, "GET", "/api/settings/memory/entries")).json.entries.filter((e: any) => e.author.activity === "human")).toEqual([]);
+  } finally {
+    await client.close();
+  }
+});
