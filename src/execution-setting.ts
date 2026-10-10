@@ -12,6 +12,7 @@ import type { AgentDefinition } from "./registry.js";
 import { RegistryFetchFailedError, RegistryPushFailedError } from "./registry-write.js";
 import { normalizeText, whyBlank } from "./required-text.js";
 import { requiredTextSchema } from "./required-text-schema.js";
+import { unsettledSql } from "./task-status.js";
 import {
   type RegistryProposal,
   type RoutingProposal,
@@ -144,7 +145,7 @@ function tierDeletionBlockers(db: Db, id: number, name: Tier, listAgents?: ListA
   if (defaults.default_tier_id === id) reasons.push("it is the board's default tier");
   if (defaults.judgement_tier_id === id) reasons.push("it is the board's judgement tier");
   const tasks = db
-    .prepare("SELECT id FROM tasks WHERE status NOT IN ('done', 'cancelled') AND (tier_id = ? OR review_tier_id = ?) ORDER BY rowid")
+    .prepare(`SELECT id FROM tasks WHERE ${unsettledSql("status")} AND (tier_id = ? OR review_tier_id = ?) ORDER BY rowid`)
     .all(id, id) as { id: string }[];
   if (tasks.length > 0) reasons.push(`unsettled tasks request it: ${tasks.map((task) => task.id).join(", ")}`);
   if (listAgents) {

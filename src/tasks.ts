@@ -9,7 +9,7 @@ import type { MemoryAmendment } from "./memory.js";
 import { whyNotPositiveInteger } from "./positive-integer.js";
 import type { MergeDial, RosterAgent } from "./registry.js";
 import { normalizeText, whyBlank } from "./required-text.js";
-import { isSettled, type TaskStatus } from "./task-status.js";
+import { isSettled, type TaskStatus, unsettledSql } from "./task-status.js";
 import { assertKnownTier, liveTierId, PRIORITIES, type Priority, proposalTierNames, type Tier, type TierId } from "./tier.js";
 import {
   completionReviewFires,
@@ -564,7 +564,7 @@ export function assertNoUnsettledIssueRef(db: Db, workspace: string, issueNumber
     .prepare(
       `SELECT id FROM tasks
        WHERE workspace = ? AND github_issue_number = ?
-         AND status NOT IN ('done', 'cancelled')
+         AND ${unsettledSql("status")}
        LIMIT 1`,
     )
     .get(workspace, issueNumber) as { id: string } | undefined;
@@ -592,7 +592,7 @@ export function countUnsettledTasksReferencing(
   const row = db
     .prepare(
       `SELECT COUNT(*) AS n FROM tasks
-       WHERE ${reference} AND status NOT IN ('done', 'cancelled')`,
+       WHERE ${reference} AND ${unsettledSql("status")}`,
     )
     .get(...(column === "assignee" ? [name, name] : [name])) as { n: number };
   return row.n;
@@ -604,7 +604,7 @@ export function countUnsettledWorkAssignedTo(db: Db, name: string): number {
   const row = db
     .prepare(
       `SELECT COUNT(*) AS n FROM tasks
-       WHERE assignee = ? AND type = 'work' AND status NOT IN ('done', 'cancelled')`,
+       WHERE assignee = ? AND type = 'work' AND ${unsettledSql("status")}`,
     )
     .get(name) as { n: number };
   return row.n;
@@ -1164,7 +1164,7 @@ function cancelUnsettledSubtree(
          SELECT c.id FROM tasks c JOIN subtree s ON c.parent_id = s.id
        )
        SELECT subtree.id FROM subtree JOIN tasks ON tasks.id = subtree.id
-       WHERE tasks.status NOT IN ('done', 'cancelled')`,
+       WHERE ${unsettledSql("tasks.status")}`,
     )
     .all(rootTaskId) as Array<{ id: string }>;
   db.transaction(() => {
@@ -1535,7 +1535,7 @@ export function answerQuestion(
  *  The explicit IS NOT NULL guard prevents the SQL analogue of null === null. */
 function abandonScopeSql(failedRef: string, candidateRef: string): string {
   return `(
-    ${candidateRef}.status NOT IN ('done', 'cancelled')
+    ${unsettledSql(`${candidateRef}.status`)}
     AND (
       ${candidateRef}.id = ${failedRef}.id
       OR (
@@ -2327,7 +2327,7 @@ function assertRiskDemotionKeepsInvariant(db: Db, task: Task): void {
   const riskyChild = db
     .prepare(
       `SELECT 1 FROM tasks WHERE parent_id = ? AND risk_flag = 1
-         AND status NOT IN ('done', 'cancelled') LIMIT 1`,
+         AND ${unsettledSql("status")} LIMIT 1`,
     )
     .get(task.id);
   if (riskyChild) {
@@ -2455,7 +2455,7 @@ export function editTask(
 function unfinishedChildSql(parentRef: string): string {
   return `EXISTS (SELECT 1 FROM tasks c
             WHERE c.parent_id = ${parentRef}
-              AND c.status NOT IN ('done', 'cancelled')
+              AND ${unsettledSql("c.status")}
               AND ${awaitedChildSql("c")})`;
 }
 
@@ -2466,7 +2466,7 @@ function earlyIntegrationReturnSql(parentRef: string): string {
             WHERE d.parent_id = ${parentRef} AND d.premise_breach_decision IS NOT NULL
               AND NOT EXISTS (SELECT 1 FROM tasks c
                 WHERE c.parent_id = ${parentRef}
-                  AND c.status NOT IN ('done', 'cancelled')
+                  AND ${unsettledSql("c.status")}
                   AND ${awaitedChildSql("c")}
                   AND NOT ${abandonScopeSql("d", "c")}))`;
 }
@@ -2506,7 +2506,7 @@ export function countUnsettledAttachedChildren(db: Db, taskId: string): number {
     .prepare(
       `${subtreeSql("?")}
        SELECT COUNT(*) AS n FROM tasks c JOIN subtree s ON c.parent_id = s.id
-        WHERE c.status NOT IN ('done', 'cancelled') AND NOT ${awaitedChildSql("c")}`,
+        WHERE ${unsettledSql("c.status")} AND NOT ${awaitedChildSql("c")}`,
     )
     .get(taskId) as { n: number };
   return n;
@@ -2602,10 +2602,10 @@ function heldSql(idRef: string): string {
  *  review) start `todo` under an already-`done` root (issue #35 comment). */
 const SETTLED_TREE_CTE = `
   tree_status(id, root_id, unsettled) AS (
-    SELECT id, id, CASE WHEN status NOT IN ('done', 'cancelled') THEN 1 ELSE 0 END
+    SELECT id, id, CASE WHEN ${unsettledSql("status")} THEN 1 ELSE 0 END
     FROM tasks WHERE parent_id IS NULL
     UNION ALL
-    SELECT c.id, t.root_id, CASE WHEN c.status NOT IN ('done', 'cancelled') THEN 1 ELSE 0 END
+    SELECT c.id, t.root_id, CASE WHEN ${unsettledSql("c.status")} THEN 1 ELSE 0 END
     FROM tasks c JOIN tree_status t ON c.parent_id = t.id
   ),
   unsettled_roots(root_id) AS (
@@ -2871,7 +2871,7 @@ export function listYourTasks(db: Db): YourTask[] {
     "",
     // 保存値が human の行だけなので既定 agent へは落ちない —— SQL が参照する名前を埋めるだけ
     [{ defaultAgentName: null, auditorName: null }],
-    `tasks.assignee = '${HUMAN_WORKER_ID}' AND tasks.status NOT IN ('done', 'cancelled')`,
+    `tasks.assignee = '${HUMAN_WORKER_ID}' AND ${unsettledSql("tasks.status")}`,
     `, ${blockingSql("tasks")} AS blocking`,
   ) as Array<BoardRow & { blocking: string | null }>;
   return rows.map((row) => ({ ...toBoardTask(db, row), blocking: row.blocking }));
