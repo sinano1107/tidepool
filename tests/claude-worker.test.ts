@@ -2971,6 +2971,9 @@ describe("ClaudeCodeWorker", () => {
     // each version is labeled with the decision-log entry ids it was live for
     expect(prompt).toContain(`### Live for your objected entry #${decision1}\n`);
     expect(prompt).toContain(`### Live for your objected entry #${decision2}\n`);
+    // each version's Authority / Roster nest one level under its label (issue #1741)
+    expect(prompt).toContain("\n#### Authority as it stood then (profile ");
+    expect(prompt).not.toContain("\n### Authority as it stood then");
     // the RCA has no registry in its cwd and no verb that reads a hash (issue #1741)
     expect(prompt).not.toContain(v1Hash.slice(0, 7));
     expect(prompt).not.toContain(v2Hash.slice(0, 7));
@@ -3189,10 +3192,10 @@ describe("ClaudeCodeWorker", () => {
     const args = calls[0]!.args;
     const prompt = args[args.indexOf("--append-system-prompt") + 1]!;
     expect(prompt).toContain(
-      "### Authority as it stood then (profile reviewer)\n\n" +
+      "### Authority as it stood then (the board's reviewer authority)\n\n" +
         "The board's fixed reviewer authority — the same text as your own `## Authority` above. " +
         "It is board code, not a registry profile, so it is not a target for a registry diff.\n\n" +
-        "### Roster as it stood then (profile reviewer)\n\nlookout — Looks out for the board.",
+        "### Roster as it stood then (the board's reviewer authority)\n\nlookout — Looks out for the board.",
     );
     expect(prompt).not.toContain("Prefer reversible actions.");
   });
@@ -3216,10 +3219,10 @@ describe("ClaudeCodeWorker", () => {
     const prompt = args[args.indexOf("--append-system-prompt") + 1]!;
     expect(prompt).toContain(
       `---\n\nYou ran then as the board's built-in ${DEFAULT_AUDITOR_NAME}: it had no registry definition at that commit, ` +
-        "so there is no body to show.\n\n### Authority as it stood then (profile reviewer)",
+        "so there is no body to show.\n\n### Authority as it stood then (the board's reviewer authority)",
     );
     expect(prompt).toContain(
-      "### Roster as it stood then (profile reviewer)\n\ndeckhand — General work agent for the tidepool board",
+      "### Roster as it stood then (the board's reviewer authority)\n\ndeckhand — General work agent for the tidepool board",
     );
   });
 

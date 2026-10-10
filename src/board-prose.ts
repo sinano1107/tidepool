@@ -127,14 +127,16 @@ function buildRoster(
   return agents.length > 0 ? agents.map(rosterLine).join("\n") : undefined;
 }
 
-/** Wraps a built roster (or nothing) as the trailing `## Roster` section of
- *  the system prompt — its own heading (CONTEXT.md's Roster term) rather
+/** Wraps a built roster (or nothing) as a Roster section — by default the
+ *  trailing `## Roster` of the system prompt, or the 当時版's nested `heading` —
+ *  its own heading (CONTEXT.md's Roster term) rather
  *  than folded into `## Authority`, since it names delegates, not authority. */
 function rosterSection(roster: string | undefined, heading = "## Roster"): string {
   return roster === undefined ? "" : `\n\n${heading}\n\n${roster}`;
 }
 
-/** Wraps authority guidance as the `## Authority` section, or omits the
+/** Wraps authority guidance as an Authority section (`## Authority` unless the
+ *  当時版 passes its nested `heading`), or omits the
  *  section entirely when guidance is empty (issue #488: `standard`'s
  *  template guidance is `""`, and an empty heading would be a lie with
  *  nothing under it). */
@@ -152,38 +154,40 @@ function reviewAssignableTo(db: Db, review: Task): string[] {
 /** One 当時版 version's evidence (ADR 0020 part 4, #1741 addendum): the body,
  *  then the Authority and Roster sections that spawn rendered, rebuilt from the
  *  registry at that commit under `level` headings nested in the 当時版 section.
- *  `reviewRoster` is set when the objected task was itself a review: its
- *  Authority was then the reviewer constant, identical to the RCA's own. */
+ *  `parentReviewAssignableTo` is set when the objected task was itself a review:
+ *  its Authority was then the reviewer constant, identical to the RCA's own. */
 function versionEvidence(
   level: string,
   assignee: string,
   agent: AgentAtCommit,
   registry: RegistryAtCommit,
-  reviewRoster: string[] | undefined,
+  parentReviewAssignableTo: string[] | undefined,
 ): string {
   const body = agent.builtin
     ? `You ran then as the board's built-in ${assignee}: it had no registry definition at that commit, so there is no body to show.`
     : agent.body!;
-  let profileName: string;
-  let authority: string;
-  let assignableTo: string[];
-  if (reviewRoster !== undefined) {
-    profileName = REVIEWER_AUTHORITY_PROFILE.name;
-    authority =
-      "The board's fixed reviewer authority — the same text as your own `## Authority` above. " +
-      "It is board code, not a registry profile, so it is not a target for a registry diff.";
-    assignableTo = reviewRoster;
+  let then: { label: string; guidance: string; assignable_to: string[] };
+  if (parentReviewAssignableTo !== undefined) {
+    then = {
+      label: "the board's reviewer authority",
+      guidance:
+        "The board's fixed reviewer authority — the same text as your own `## Authority` above. " +
+        "It is board code, not a registry profile, so it is not a target for a registry diff.",
+      assignable_to: parentReviewAssignableTo,
+    };
   } else {
     const profile = agent.authority === undefined ? undefined : ownEntry(registry.authority, agent.authority);
     if (profile === undefined) {
+      const missing =
+        agent.authority === undefined
+          ? "your definition named no readable authority profile"
+          : `the authority profile ${agent.authority} could not be read`;
       return (
-        `${body}\n\nNote: the authority profile ${agent.authority ?? "your definition named"} could not be ` +
-        "read at that commit — the Authority and Roster you were given then are missing from this evidence."
+        `${body}\n\nNote: ${missing} at that commit — ` +
+        "the Authority and Roster you were given then are missing from this evidence."
       );
     }
-    profileName = agent.authority!;
-    authority = profile.guidance;
-    assignableTo = profile.assignable_to;
+    then = { label: `profile ${agent.authority}`, ...profile };
   }
   // a name whose description is unreadable stays listed: dropping it would read as "not in your roster"
   const rosterAgents = Object.fromEntries(
@@ -194,8 +198,8 @@ function versionEvidence(
   );
   return (
     body +
-    authoritySection(authority, `${level} Authority as it stood then (profile ${profileName})`) +
-    rosterSection(buildRoster(rosterAgents, assignableTo), `${level} Roster as it stood then (profile ${profileName})`)
+    authoritySection(then.guidance, `${level} Authority as it stood then (${then.label})`) +
+    rosterSection(buildRoster(rosterAgents, then.assignable_to), `${level} Roster as it stood then (${then.label})`)
   );
 }
 
@@ -267,7 +271,7 @@ function historicalDefinitionSection(db: Db, registryDir: string, task: Task): s
     byCommit.set(registry_commit, [...(byCommit.get(registry_commit) ?? []), entryId]);
   }
   const parent = getTask(db, task.parent_id);
-  const reviewRoster = parent?.type === "review" ? reviewAssignableTo(db, parent) : undefined;
+  const parentReviewAssignableTo = parent?.type === "review" ? reviewAssignableTo(db, parent) : undefined;
   const resolved: Array<{ entryIds: number[]; agent: AgentAtCommit; registry: RegistryAtCommit }> = [];
   for (const [commit, entryIds] of byCommit) {
     const registry = registryAtCommit(registryDir, commit);
@@ -278,7 +282,7 @@ function historicalDefinitionSection(db: Db, registryDir: string, task: Task): s
   }
   if (resolved.length === 0) return "";
   const evidence = (level: string, { agent, registry }: (typeof resolved)[number]) =>
-    versionEvidence(level, task.assignee!, agent, registry, reviewRoster);
+    versionEvidence(level, task.assignee!, agent, registry, parentReviewAssignableTo);
   // 「current definition」の括弧は ADR 0019(修理は再演ではない)
   if (resolved.length === 1 && unresolved.length === 0) {
     return (

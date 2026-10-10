@@ -622,14 +622,10 @@ thread's history always fails.`));
       ...HUMAN_WEBUI,
     ));
 
+    // 文面そのものは claude-worker.test.ts が釘付けする(ADR 0107 決定3)。ここは developer instructions に届くことだけ
     const developer = developerInstructions(f.process.calls[0]!.args);
-    expect(developer).toContain(
-      "### Authority as it stood then (profile standard)\n\nPrefer reversible actions.",
-    );
-    expect(developer).toContain(
-      "### Roster as it stood then (profile standard)\n\ncodex-agent — Codex agent\n" +
-        "deckhand — General work agent for the tidepool board",
-    );
+    expect(developer).toContain("### Authority as it stood then (profile standard)");
+    expect(developer).toContain("### Roster as it stood then (profile standard)");
   });
 
   it("work / review task の worker_spawned は、盤面が選んだ候補の段の id を持つ(ADR 0210 決定1)", async () => {
