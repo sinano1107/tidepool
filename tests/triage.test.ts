@@ -870,14 +870,17 @@ it("commit が立てる子の登録は材料の異議 id 列を持つ —— 修
   ]);
 });
 
-it("修理子は work の assignee を写す —— エントリの書き手とは別(ADR 0237)", () => {
+it.each([
+  ["registry あり", { agentRegistered: (name: string) => name === "deckhand", resolvesToBuiltIn: () => false }],
+  ["registry なし", undefined],
+] as const)("%sでも修理子は work の assignee を写す —— エントリの書き手とは別(ADR 0237)", (_, assigneeDeps) => {
   const db = openDb(":memory:");
   const at = new Date("2026-10-10T00:00:00.000Z");
   const task = registerTask(db, { type: "work", assignee: "deckhand", title: "t", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI);
   const entry = logDecision(db, task, "human's call", HUMAN_WORKER_ID, at, "webui");
   raiseObjection(db, entry, "redo it", at);
 
-  commitTriage(db, at, [], new Map(), { agentRegistered: (name) => name === "deckhand", resolvesToBuiltIn: () => false });
+  commitTriage(db, at, [], new Map(), assigneeDeps);
 
   const repair = listChildren(db, task.id).find((child) => child.type === "work")!;
   expect(repair.assignee).toBe("deckhand");
@@ -934,20 +937,6 @@ it("pickup 前の work の人間 decompose への異議は修理子の宛先を�
 
   const repair = listChildren(db, task.id).find((child) => child.title === "repair: t")!;
   expect(repair.assignee).toBeNull();
-  expect(listEvents(db, repair.id).find((event) => event.kind === "task_registered")!.payload).not.toHaveProperty("assignee_not_copied");
-});
-
-it("registry の依存が無い盤面は人間の門と同じく修理子へ名前を写す(ADR 0237)", () => {
-  const db = openDb(":memory:");
-  const at = new Date("2026-10-10T00:00:00.000Z");
-  const task = registerTask(db, { type: "work", assignee: "deckhand", title: "t", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI);
-  const entry = logDecision(db, task, "human's call", HUMAN_WORKER_ID, at, "webui");
-  raiseObjection(db, entry, "redo it", at);
-
-  commitTriage(db, at);
-
-  const repair = listChildren(db, task.id).find((child) => child.type === "work")!;
-  expect(repair.assignee).toBe("deckhand");
   expect(listEvents(db, repair.id).find((event) => event.kind === "task_registered")!.payload).not.toHaveProperty("assignee_not_copied");
 });
 
