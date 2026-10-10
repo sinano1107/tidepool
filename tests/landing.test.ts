@@ -3304,3 +3304,143 @@ it("既定 agent a で pickup した assignee 未指定の完了タスクの PR 
   expect(github.merged).toEqual([{ path: workspace.path, number: 7 }]);
   expect(mergeQuestions(db)).toEqual([]);
 });
+
+// ADR 0236: 盤面が merge している PR には、観測も重なった tick も手を出さない。窓は盤面の await を1回だけ止めて作る
+
+/** 盤面の await を1回だけ止める窓。最初に `hold` を呼んだ await が `entered` を解決し、`open()` まで止まる。2回目以降は素通りする。 */
+function awaitWindow() {
+  let enter!: () => void;
+  const entered = new Promise<void>((resolve) => {
+    enter = resolve;
+  });
+  let open!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    open = resolve;
+  });
+  let held = false;
+  const hold = async () => {
+    if (held) return;
+    held = true;
+    enter();
+    await gate;
+  };
+  return { entered, open, hold };
+}
+
+const QUEUE_WINDOWS: Array<{
+  window: string;
+  interrupt: "観測" | "2つ目の tick";
+  outcome: "pr_merged" | "pr_merge_observed";
+  merges: number;
+  install: (github: FakeGitHubClient, hold: () => Promise<void>) => void;
+}> = [
+  {
+    window: "merge の await(merge は通る)",
+    interrupt: "観測",
+    outcome: "pr_merged",
+    merges: 1,
+    install: (github, hold) => {
+      const merge = github.mergePullRequest.bind(github);
+      github.mergePullRequest = async (ref, head) => {
+        await merge(ref, head);
+        github.scriptMergedOutside(ref.number); // GitHub はもう MERGED を返すが、応答はまだ盤面に返っていない
+        await hold();
+      };
+    },
+  },
+  {
+    window: "読み取りの await(盤面の外で merge 済み)",
+    interrupt: "観測",
+    outcome: "pr_merge_observed",
+    merges: 0,
+    install: (github, hold) => {
+      github.scriptMergedOutside(1);
+      const read = github.readPullRequest.bind(github);
+      github.readPullRequest = async (ref) => {
+        const pr = await read(ref);
+        await hold();
+        return pr;
+      };
+    },
+  },
+  {
+    window: "merge の失敗の後の読み直しの await",
+    interrupt: "観測",
+    outcome: "pr_merge_observed",
+    merges: 0,
+    install: (github, hold) => {
+      const read = github.readPullRequest.bind(github);
+      let reads = 0;
+      github.readPullRequest = async (ref) => {
+        const pr = await read(ref);
+        // CI を読んだ直後に盤面の外で merge される —— 盤面の merge は拒まれ、読み直しで止める
+        if (++reads === 1) github.scriptMergedOutside(ref.number);
+        else await hold();
+        return pr;
+      };
+    },
+  },
+  {
+    window: "読み取りの await",
+    interrupt: "2つ目の tick",
+    outcome: "pr_merged",
+    merges: 1,
+    install: (github, hold) => {
+      const read = github.readPullRequest.bind(github);
+      github.readPullRequest = async (ref) => {
+        const pr = await read(ref);
+        await hold();
+        return pr;
+      };
+    },
+  },
+];
+
+it.each(QUEUE_WINDOWS)("無人 merge の tick の $window に$interruptが割り込んでも、キューの PR に決着の event は $outcome の1件だけ残る", async ({ interrupt, outcome, merges, install }) => {
+  const workspace = await makeWorkspace("landing-in-flight-mark");
+  const { db, clock } = await openBoard();
+  const github = new FakeGitHubClient();
+  const work = queueAutoMerge(db, clock, 1);
+  const window = awaitWindow();
+  install(github, window.hold);
+  const landing = autoMerging(db, clock, workspace, github);
+
+  const tick = landing.tick("auto_merge", clock.now());
+  await window.entered;
+  await (interrupt === "観測" ? landing.observeAutoMergeOutcomes("tako") : landing.tick("auto_merge", clock.now()));
+  window.open();
+  await tick;
+
+  expect(autoMergeOutcomeEvents(db, work.id)).toEqual([
+    { worker_id: BOARD_WORKER_ID, origin: "board", payload: { kind: outcome, pr_number: 1 } },
+  ]);
+  expect(github.merged).toHaveLength(merges);
+});
+
+it.each([
+  ["CI pending でキューに残して", (github: FakeGitHubClient) => github.scriptCiStatus("pending")],
+  [
+    "分類できない例外で",
+    (github: FakeGitHubClient) => {
+      github.readPullRequest = async () => {
+        throw new Error("unexpected");
+      };
+    },
+  ],
+])("tick が PR の処理を%s抜けた後は印が残らず、次の観測がその PR の盤面の外の merge を記録する", async (_exit, script) => {
+  const workspace = await makeWorkspace("landing-in-flight-mark-released");
+  const { db, clock } = await openBoard();
+  const github = new FakeGitHubClient();
+  const work = queueAutoMerge(db, clock, 1);
+  script(github);
+  vi.spyOn(console, "error").mockImplementation(() => {});
+  const landing = autoMerging(db, clock, workspace, github);
+
+  await landing.tick("auto_merge", clock.now());
+  github.scriptMergedOutside(1);
+  await landing.observeAutoMergeOutcomes("tako");
+
+  expect(autoMergeOutcomeEvents(db, work.id)).toEqual([
+    { worker_id: BOARD_WORKER_ID, origin: "board", payload: { kind: "pr_merge_observed", pr_number: 1 } },
+  ]);
+});

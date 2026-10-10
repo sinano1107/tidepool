@@ -195,6 +195,10 @@ export interface Landing {
   observePullRequestOutcome(question: Task): Promise<boolean>;
   observeAutoMergeOutcomes(agentName: string): Promise<void>;
   tick(kind: "auto_merge" | "outside_merge", now: Date): Promise<void>;
+  /** ADR 0236 決定2・3: 執行する経路が PR に処理中の印を取る。既に印が付いていれば取らずに false を返す。
+   *  `workspace` はタスクの `workspace` 列の値(未解決のまま)。 */
+  takeInFlightMark(workspace: string | null, prNumber: number): boolean;
+  releaseInFlightMark(workspace: string | null, prNumber: number): void;
 }
 
 export interface LandingDeps {
@@ -599,6 +603,10 @@ export function createLanding(deps: LandingDeps): Landing {
       return true;
     }
   };
+  // ADR 0236: 処理中の印。決着を書く経路はすべてこのプロセスの中にあるので、DB には持たない
+  const inFlight = new Set<string>();
+  const markKey = (workspace: string | null, prNumber: number) => JSON.stringify([workspace, prNumber]);
+  const marked = (workspace: string | null, prNumber: number) => inFlight.has(markKey(workspace, prNumber));
   const landing: Landing = {
     async land(task, excludePrPromotionQuestionId) {
       if (task.type !== "work") return { kind: "not_applicable", reason: "not_work" };
@@ -826,7 +834,8 @@ export function createLanding(deps: LandingDeps): Landing {
       try {
         const workspace = resolve(question.workspace);
         const state = await deps.github.getPullRequestState({ path: workspace.path, number: prNumber });
-        if (state === "OPEN") return false;
+        // 印の付いた PR の決着は執行側が書く。印は await の後に見る(ADR 0236 決定3)
+        if (state === "OPEN" || marked(question.workspace, prNumber)) return false;
         settleMergeQuestionAsObserved(deps.db, question.id, prNumber, state, deps.clock.now());
         return true;
       } catch {
@@ -849,9 +858,9 @@ export function createLanding(deps: LandingDeps): Landing {
         } catch {
           continue;
         }
-        // await の間に無人 merge の tick が同じ行を merge して外していれば、それは盤面の
-        // merge であって観測ではない
-        if (state === "OPEN" || !isQueuedForAutoMerge(deps.db, task_id)) continue;
+        // 印は await の後に見る —— 前に見ると、await の間に執行側が印を取れる。印の付いた PR の決着は
+        // 執行側が書く(ADR 0236 決定3)。キューの確認は、quarantine 回答が重なったときの観測同士の競合を防ぐ
+        if (state === "OPEN" || marked(task.workspace, pr_number) || !isQueuedForAutoMerge(deps.db, task_id)) continue;
         retireAutoMerge(deps.db, task_id, { kind: OBSERVED[state], pr_number }, deps.clock.now());
       }
     },
@@ -870,7 +879,10 @@ export function createLanding(deps: LandingDeps): Landing {
             const state = await github
               .getPullRequestState({ path: workspace.path, number: pr_number })
               .catch(() => null);
-            if (state && state !== "OPEN") settleMergeQuestionAsObserved(deps.db, id, pr_number, state, now);
+            // 印は await の後に見る —— merge 回答が merge 中の PR の決着は回答が書く(ADR 0236 決定3)
+            if (state && state !== "OPEN" && !marked(taskWorkspace, pr_number)) {
+              settleMergeQuestionAsObserved(deps.db, id, pr_number, state, now);
+            }
           } catch (error) {
             // ADR 0229 決定1: 分類できない失敗はログに出し、その question は open のまま残して次へ進む
             console.error(`[landing] outside-merge scan of PR #${pr_number} (question ${id}) failed; it stays open:`, error);
@@ -880,9 +892,12 @@ export function createLanding(deps: LandingDeps): Landing {
       }
       // ADR 0229 決定1: 失敗は PR ごとに閉じ込める —— 分類できない失敗はログに出し、その行はキューに残る
       for (const { task_id, pr_number } of listPendingAutoMerges(deps.db)) {
+        let release: (() => void) | undefined;
         try {
           const task = getTask(deps.db, task_id);
-          if (!task) continue;
+          // 印は await の前に同期で取り、どの抜け方でも finally で放す。重なった tick は印の付いた PR を飛ばす(ADR 0236)
+          if (!task || !landing.takeInFlightMark(task.workspace, pr_number)) continue;
+          release = () => landing.releaseInFlightMark(task.workspace, pr_number);
           const workspace = resolveOrQuarantine(deps.db, resolve, task.workspace, now);
           if (!workspace) continue;
           // 着地の面は門と同じ2点 — CI を読む前と、CI を読んだ後に盤面の名義で行為する直前(緑なら
@@ -958,8 +973,18 @@ export function createLanding(deps: LandingDeps): Landing {
           })();
         } catch (error) {
           console.error(`[landing] auto-merge of PR #${pr_number} (task ${task_id}) failed; it stays queued:`, error);
+        } finally {
+          release?.();
         }
       }
+    },
+    takeInFlightMark(workspace, prNumber) {
+      if (marked(workspace, prNumber)) return false;
+      inFlight.add(markKey(workspace, prNumber));
+      return true;
+    },
+    releaseInFlightMark(workspace, prNumber) {
+      inFlight.delete(markKey(workspace, prNumber));
     },
   };
   return landing;

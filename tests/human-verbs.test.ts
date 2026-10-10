@@ -954,6 +954,73 @@ it.each(["merge", "hold"])("盤面の外で閉じられた PR の merge question
   });
 });
 
+/** escalate の PR #42 の merge question に「merge」と答え、GitHub が merge を受け付けた後、応答が盤面に返る前で止める(ADR 0236)。 */
+async function mergeAnswerInFlight() {
+  db = openDb(":memory:");
+  const work = registerTask(
+    db,
+    { type: "work", title: "ship", purpose: "deliver the change", completion_criteria: "merged" },
+    NOW,
+    ...HUMAN_WEBUI,
+  );
+  recordPrOpened(db, work, 42, fakeHead(42), "worker", NOW, { merge: "escalate" }, undefined, "worker");
+  const question = onlyQuestion(db);
+  const github = new FakeGitHubClient();
+  const landing = createLanding({ defaultAgentName: "tako", db, clock: new FakeClock(), workspace: PRODUCT, github });
+  let enter!: () => void;
+  const inWindow = new Promise<void>((resolve) => {
+    enter = resolve;
+  });
+  let open!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    open = resolve;
+  });
+  let mergeCalls = 0;
+  const merge = github.mergePullRequest.bind(github);
+  github.mergePullRequest = async (ref, head) => {
+    mergeCalls++;
+    await merge(ref, head);
+    github.scriptMergedOutside(42); // GitHub はもう MERGED を返すが、応答はまだ盤面に返っていない
+    enter();
+    await gate;
+  };
+  const answer = () =>
+    submitAnswer({ db, pollNow: () => {}, github, workspace: PRODUCT, landing }, getTask(db, question.id)!, ["merge"], undefined, () => NOW, "webui");
+  const first = answer();
+  await inWindow;
+  return { question, landing, answer, first, open, mergeCalls: () => mergeCalls };
+}
+
+const questionOutcomes = (questionId: string) =>
+  listEvents(db, questionId)
+    .filter((event) => ["pr_merged", "pr_merge_observed", "pr_close_observed"].includes(event.kind))
+    .map((event) => event.payload);
+
+it("merge 回答の merge の await 中に遅い走査が割り込んでも、question に決着の event は盤面の merge の pr_merged の1件だけ残る", async () => {
+  const { question, landing, first, open } = await mergeAnswerInFlight();
+
+  await landing.tick("outside_merge", NOW);
+  open();
+
+  await expect(first).resolves.toMatchObject({ status: "done" });
+  expect(questionOutcomes(question.id)).toEqual([{ kind: "pr_merged", pr_number: 42 }]);
+});
+
+it("merge 回答が merge 中の PR への2つ目の merge 回答は拒まれ、question は開いたまま残り、merge は1回しか呼ばれない", async () => {
+  const { question, answer, first, open, mergeCalls } = await mergeAnswerInFlight();
+
+  await expect(answer()).rejects.toThrow(
+    new DomainError("PR #42 is being merged by the board right now — answer again in a moment"),
+  );
+  expect(getTask(db, question.id)?.status).toBe("todo");
+  expect(questionOutcomes(question.id)).toEqual([]);
+  open();
+
+  await expect(first).resolves.toMatchObject({ status: "done" });
+  expect(mergeCalls()).toBe(1);
+  expect(questionOutcomes(question.id)).toEqual([{ kind: "pr_merged", pr_number: 42 }]);
+});
+
 it("GitHub の無い盤面の agent quarantine の解除検査は、無人 merge キューの PR を観測せずに拒む", async () => {
   db = openDb(":memory:");
   const queued = queuedForAutoMerge(db, NOW, "specialist");
