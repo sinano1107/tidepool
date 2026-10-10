@@ -849,17 +849,19 @@ export function createLanding(deps: LandingDeps): Landing {
           if (stop()) continue;
           const ref = { path: workspace.path, number: pr_number };
           // 状態は CI と同じ読み取りで、行為の前に読む(ADR 0229 決定2)。閉じた PR は CI の色に依らず観測になる
-          const { ci, state } = await github.readPullRequest(ref);
-          if (state === "MERGED" || state === "CLOSED") {
-            retireAutoMerge(deps.db, task_id, { kind: OBSERVED[state], pr_number }, now);
+          const pr = await github.readPullRequest(ref);
+          if (pr.state === "MERGED" || pr.state === "CLOSED") {
+            retireAutoMerge(deps.db, task_id, { kind: OBSERVED[pr.state], pr_number }, now);
             continue;
           }
-          if (state === "unreadable" || ci === "pending") continue;
+          if (pr.state === "unreadable" || pr.ci === "pending") continue;
+          const { ci, head } = pr;
           if (ci === "unreported" && !unreportedCiGraceElapsed(deps.db, task_id, now)) continue;
           let purpose: string;
           if (ci === "success") {
             if (stop()) continue;
-            const failure = await github.mergePullRequest(ref).then(
+            // merge は CI を読んだ head に固定する(ADR 0231 決定1)
+            const failure = await github.mergePullRequest(ref, head).then(
               () => null,
               (error: unknown) => (error instanceof Error ? error.message : String(error)),
             );
@@ -867,12 +869,17 @@ export function createLanding(deps: LandingDeps): Landing {
               retireAutoMerge(deps.db, task_id, { kind: "pr_merged", pr_number }, now);
               continue;
             }
-            // merge の失敗の後に状態を読み直す。読み直しの throw は分類できない失敗(ADR 0229 決定3)
-            const after = await github.getPullRequestState(ref);
-            if (after !== "OPEN") {
-              retireAutoMerge(deps.db, task_id, { kind: OBSERVED[after], pr_number }, now);
+            // merge の失敗の後に状態と head を読み直す。読めなければ分類できない失敗(ADR 0229 決定3)
+            const after = await github.readPullRequest(ref);
+            if (after.state === "unreadable") {
+              throw new Error(`merge failed (${failure}) and PR #${pr_number} could not be re-read`);
+            }
+            if (after.state !== "OPEN") {
+              retireAutoMerge(deps.db, task_id, { kind: OBSERVED[after.state], pr_number }, now);
               continue;
             }
+            // head が動いただけなら、次の tick で新しい head の CI を読む(ADR 0231 決定1)。gh の文面では見分けない
+            if (after.head !== head) continue;
             purpose =
               `"${task.title}"'s auto_if_ci_green auto-merge could not merge PR #${pr_number}: ${failure}. ` +
               "Merge once it is fixed, or hold?";
