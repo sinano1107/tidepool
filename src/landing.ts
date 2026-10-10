@@ -23,6 +23,7 @@ import {
   subtreeSql,
   type Task,
   type TaskType,
+  taskHasLandedSql,
   taskIdForPr,
   typeAwareDefaultAgentSql,
 } from "./tasks.js";
@@ -84,15 +85,7 @@ function countUnbundledObjections(db: Db, taskId: string): number {
 }
 
 function taskHasLanded(db: Db, taskId: string): boolean {
-  return (
-    db
-      .prepare(
-        `SELECT 1 WHERE EXISTS (SELECT 1 FROM events
-                                 WHERE task_id = ? AND kind IN ('pr_opened', 'nothing_to_land'))
-                  OR EXISTS (SELECT 1 FROM tasks WHERE question_pending_local_merge_task_id = ?)`,
-      )
-      .get(taskId, taskId) !== undefined
-  );
+  return db.prepare(`SELECT 1 WHERE ${taskHasLandedSql("@taskId")}`).get({ taskId }) !== undefined;
 }
 
 /** 着地を待つ完了タスクを agent 名の参照で数える(ADR 0217 決定4)—— agent 名の quarantine の解除と
@@ -595,7 +588,8 @@ export function createLanding(deps: LandingDeps): Landing {
       "the assigned agent's authority profile cannot be resolved for landing",
       excludePrPromotionQuestionId,
     );
-  /** ADR 0225 決定1: 刻んだ head から内容が変わったか(ADR 0105 と同じ比較)。読めなければ「変わった」—— 修理を捨てない側 */
+  /** ADR 0225 決定1: 刻んだ head から内容が変わったか(ADR 0105 と同じ比較)。読めなければ「変わった」—— 修理を捨てない側。
+   *  workspace を解決できない場合も「変わった」と読むのは ADR 0234 決定3 */
   const changedSince = (task: Task, head: string | null): boolean => {
     const resolve = buildWorkspaceResolver(deps.resolveWorkspace, deps.workspace);
     if (head === null || !resolve) return true;
