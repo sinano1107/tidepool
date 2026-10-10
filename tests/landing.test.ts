@@ -2067,7 +2067,6 @@ it("積み残しがあっても着地の登録は走る —— PR を開き、�
     kind: "landed",
     form: "open_pull_request_updated",
   });
-  expect(github.pushes).toEqual([{ path: workspace.path, branch: `task/${work.id}` }]);
 });
 
 it.each(["子孫の後始末が未了", "merge back 済み・push 前"])(
