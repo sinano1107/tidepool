@@ -1060,13 +1060,14 @@ const settingsCardLabel = {
 // GitHub login state (ADR 0093 決定5). Read-only on purpose: logging in writes a
 // credential, and that door stays on the terminal — this card only says whether
 // the board has one, and names the command that makes it.
+// `loggedIn` null means the read failed (the card is only mounted once the read settled).
 function GitHubLoginCard({ loggedIn }: { loggedIn: boolean | null }) {
   const { Card, FieldRow } = window.TidepoolDesignSystem_8a0ead;
   return (
     <Card style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
       <span style={settingsCardLabel}>github</span>
       <FieldRow label="login" kind={loggedIn ? 'mono' : 'unset'}
-        value={loggedIn ? 'logged in' : ''} unsetLabel="not logged in" />
+        value={loggedIn ? 'logged in' : ''} unsetLabel={loggedIn === null ? githubLoginUnavailable : 'not logged in'} />
       <p style={{ margin: 0, fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
         the board acts on GitHub as tidepool[bot], and reaches only the repositories the
         Tidepool App is installed on. run <code>npm run github-login</code> in a terminal on
@@ -1098,7 +1099,7 @@ function TranslateUsageCard({ records }: { records: WireContract['GET /api/trans
         </React.Fragment>
       ) : (
         <FieldRow label="translations" kind="unset"
-          unsetLabel={records ? 'none generated yet' : 'usage unavailable'} />
+          unsetLabel={records ? 'none generated yet' : translationSpendUnavailable} />
       )}
     </Card>
   );
@@ -1367,6 +1368,9 @@ const paceOffsetsUnavailable = 'provider pace offsets unavailable';
 const executionSettingsUnavailable = 'execution settings unavailable';
 const memorySettingsUnavailable = 'memory unavailable';
 const metaReviewUnavailable = 'meta-review unavailable';
+// issue #1761: the read-only `board state` cards' reads
+const githubLoginUnavailable = 'github login unavailable';
+const translationSpendUnavailable = 'translation spend unavailable';
 
 // An editable settings card whose read failed (issue #1686): it keeps its title and says so, with no Edit — the same
 // face as HaltedRefiresCard / ResponseFloorsCard, not a toast that is gone before anyone looks.
@@ -2925,11 +2929,13 @@ function SettingsScreen({ say, memoryFocus, registerLeaveGuard }: {
 
   // ADR 0093 決定5: read-only. null → still loading; the card only appears once
   // the board has answered, so "not logged in" is never shown speculatively.
+  // A failed read is its own one-way flag (issue #1761): null alone cannot tell it from loading.
   const [githubLoggedIn, setGithubLoggedIn] = React.useState<boolean | null>(null);
+  const [githubLoginFailed, setGithubLoginFailed] = React.useState(false);
   React.useEffect(() => {
     api('GET /api/settings/github')
       .then(({ loggedIn }) => setGithubLoggedIn(loggedIn))
-      .catch(() => setGithubLoggedIn(null));
+      .catch(() => setGithubLoginFailed(true));
   }, []);
 
   // issue #273: 末尾の loading… カスケードには足さない —— これが読めなくても残りの
@@ -3184,6 +3190,8 @@ function SettingsScreen({ say, memoryFocus, registerLeaveGuard }: {
       responseFloorsFailed ? cutReadsUnavailable : floors > 0 ? `${floors} read${floors === 1 ? '' : 's'} cut` : null,
       memorySettingsFailed ? memorySettingsUnavailable : null,
       metaReviewFailed ? metaReviewUnavailable : null,
+      githubLoginFailed ? githubLoginUnavailable : null,
+      translateUsageFailed ? translationSpendUnavailable : null,
     ].filter((part) => part !== null);
     const rows: { key: string; label: string; summary: string; alert?: boolean }[] = [
       {
@@ -3270,10 +3278,10 @@ function SettingsScreen({ say, memoryFocus, registerLeaveGuard }: {
         )}
         <p style={settingsFootnote}>applies to every task the board picks up</p>
         {/* read-only state the board holds — not a preference, so outside the footer's claim (#691) */}
-        {(githubLoggedIn !== null || translateUsage !== null || translateUsageFailed) && (
+        {(githubLoggedIn !== null || githubLoginFailed || translateUsage !== null || translateUsageFailed) && (
           <p style={settingsCardLabel}>board state</p>
         )}
-        {githubLoggedIn !== null && <GitHubLoginCard loggedIn={githubLoggedIn} />}
+        {(githubLoggedIn !== null || githubLoginFailed) && <GitHubLoginCard loggedIn={githubLoggedIn} />}
         {(translateUsage !== null || translateUsageFailed) && <TranslateUsageCard records={translateUsage} />}
       </React.Fragment>
     );
