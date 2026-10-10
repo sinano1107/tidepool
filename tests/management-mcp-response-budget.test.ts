@@ -2,6 +2,7 @@ import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { afterEach, expect, it } from "vitest";
 import { appendEvent } from "../src/events.js";
 import { listMemoryBranches } from "../src/memory.js";
+import { nextDescription } from "../src/response-budget.js";
 import { registerTask } from "../src/tasks.js";
 import { api, bootTidepool, HOUR, haltedRefires, managementMcpClient, queueWork, RESPONSE_BUDGET_BYTES, type Tidepool, WORKER_SPAWNED } from "./harness.js";
 
@@ -297,8 +298,8 @@ it("続きで読む口の説明は、一覧が読む間に変わると最初か�
     expect(description.list_your_tasks).toContain(
       'If the list changes under the read, the call fails with "the list changed since the first list_your_tasks call: call list_your_tasks again without next to read it from the start"; read again from the start.',
     );
-    expect(description.read_decision_log).toContain("Entries added after the first call are not returned: call again without `next` to see them.");
-    expect(description.get_task).toContain("Events added after the first call, or after the last piece of a task too large for one response, are not returned: call again without `next` to see them.");
+    expect(description.read_decision_log).toContain(nextDescription("read_decision_log", "entries", "`cursor` comes", true));
+    expect(description.get_task).toContain(nextDescription("get_task", "events", "The task itself comes", true));
     for (const verb of ["read_decision_log", "get_task"]) expect(description[verb]).not.toContain("the list changed");
   } finally {
     await client.close();

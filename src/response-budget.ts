@@ -113,8 +113,8 @@ interface PackOptions<T> {
   resumeByKey?: boolean;
 }
 
-/** 1欄を切っても収まらない object の切れの読み方(ADR 0195 追記 #1393 の1)。`get_task` の手書きの description も使う。 */
-export const CUT_FIELDS_DESCRIPTION =
+/** 1欄を切っても収まらない object の切れの読み方(ADR 0195 追記 #1393 の1)。 */
+const CUT_FIELDS_DESCRIPTION =
   " When cutting one field is not enough, the longest string fields are cut in turn: each piece carries one field's text, " +
   "and the other fields being cut come as empty strings named in `partial.emptied`.";
 
@@ -132,7 +132,9 @@ export const nextDescription = (verb: string, items: string, firstOnly?: string,
       `those pieces' \`partial\` has no \`id\`, its \`field\` is the path from the response root, the lists are empty, and \`remaining\` counts all the ${items}.`
     : "") +
   (resumeByKey
-    ? ` ${items[0]!.toUpperCase()}${items.slice(1)} added after the first call are not returned: call again without \`next\` to see them.`
+    ? ` ${items[0]!.toUpperCase()}${items.slice(1)} added after the first call are not returned` +
+      (firstOnly ? " (when what comes on the first response only is itself too large, those added after its last piece instead)" : "") +
+      ": call again without `next` to see them."
     : ` If the list changes under the read, the call fails with "${listChanged(verb)}"; read again from the start.`);
 
 /** item の列を、予算に収まるだけ丸ごと `key` に詰めた応答にする(ADR 0195 決定3)。

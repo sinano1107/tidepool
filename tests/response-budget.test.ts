@@ -2,7 +2,7 @@ import { expect, it } from "vitest";
 import { openDb } from "../src/db.js";
 import { listEventsOfKinds } from "../src/events.js";
 import { toolError, toolResult } from "../src/mcp.js";
-import { floorResponse, listFloorRows, packItems, type ResponseSurface, readNext } from "../src/response-budget.js";
+import { floorResponse, listFloorRows, nextDescription, packItems, type ResponseSurface, readNext } from "../src/response-budget.js";
 import { RESPONSE_BUDGET_BYTES } from "./harness.js";
 
 // 応答予算(ADR 0195): 詰める関数の境目・欄の分割・続きの error と、出口の床はここで言う(issue #1388)。
@@ -483,4 +483,13 @@ it("短い文字列の欄ばかりで予算を超える item は切らずに丸�
   const withEnvelope = packItems(first, "events", items, envelope);
   expect(withEnvelope).toEqual({ ...envelope, events: [], next: expect.any(String), remaining: 2 });
   expect(packItems(readNext("get_task", withEnvelope.next as string), "events", items, envelope)).toEqual(alone);
+});
+
+it("鍵で引き直す口の説明は、最初の応答だけの部分があれば、その最後の切れより後に積まれた分も返らないと言う。無ければ最初の呼び出しより後だけを言う", () => {
+  expect(nextDescription("get_task", "events", "The task itself comes", true)).toContain(
+    "Events added after the first call are not returned (when what comes on the first response only is itself too large, those added after its last piece instead): call again without `next` to see them.",
+  );
+  expect(nextDescription("get_task", "events", undefined, true)).toContain(
+    "Events added after the first call are not returned: call again without `next` to see them.",
+  );
 });
