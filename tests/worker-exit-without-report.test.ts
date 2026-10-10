@@ -102,7 +102,7 @@ it("CLI が報告した失敗の文は、見出し付きで stderr 末尾の前�
       "it did not complete, decompose, or escalate. No self-report is possible." +
       "\n\nerror reported by the CLI:\nAPI error status 400: model is not available" +
       "\n\nstderr tail:\nmodels cache unreadable" +
-      '\n\n"retry" restarts this task from scratch at the queue head. "abandon" cancels this task and its remaining work.',
+      '\n\n"retry" picks this task up again at the queue head: a new worker session continues on its existing task branch, with the work in progress kept. "abandon" cancels this task and its remaining work.',
   );
 });
 
@@ -125,7 +125,7 @@ it("worker の最後の発話は、見出し付きで CLI が報告した失敗�
       "it did not complete, decompose, or escalate. No self-report is possible." +
       "\n\nlast message from the worker:\ntidepool_complete was cancelled by the MCP server.\nStopping here." +
       "\n\nerror reported by the CLI:\nAPI error status 429: rate limited" +
-      '\n\n"retry" restarts this task from scratch at the queue head. "abandon" cancels this task and its remaining work.',
+      '\n\n"retry" picks this task up again at the queue head: a new worker session continues on its existing task branch, with the work in progress kept. "abandon" cancels this task and its remaining work.',
   );
 });
 
@@ -154,7 +154,7 @@ it("CLI が差し替えた model は、見出し付きで1回ずつ `from → to
       "it did not complete, decompose, or escalate. No self-report is possible." +
       "\n\nstderr tail:\nwarn: retrying request" +
       "\n\nmodels swapped in by the CLI:\nclaude-fable-5-1 → claude-opus-4-8\nclaude-opus-4-8 → claude-opus-5" +
-      '\n\n"retry" restarts this task from scratch at the queue head. "abandon" cancels this task and its remaining work.',
+      '\n\n"retry" picks this task up again at the queue head: a new worker session continues on its existing task branch, with the work in progress kept. "abandon" cancels this task and its remaining work.',
   );
   expect(await purposeOf("plain")).not.toContain("swapped in");
 });
@@ -172,7 +172,7 @@ it("CLI が失敗を報告しなかった exit の文面は、その節を持た
     `the worker for task "quiet" (${task.id}) exited (exit code 1) without a final report — ` +
       "it did not complete, decompose, or escalate. No self-report is possible." +
       "\n\nstderr tail:\nboom" +
-      '\n\n"retry" restarts this task from scratch at the queue head. "abandon" cancels this task and its remaining work.',
+      '\n\n"retry" picks this task up again at the queue head: a new worker session continues on its existing task branch, with the work in progress kept. "abandon" cancels this task and its remaining work.',
   );
 });
 
@@ -272,7 +272,7 @@ const SECTIONS =
   "\n\nstderr tail:\nwarn: retrying request";
 
 const RETRY_OR_ABANDON =
-  '\n\n"retry" restarts this task from scratch at the queue head. "abandon" cancels this task and its remaining work.';
+  '\n\n"retry" picks this task up again at the queue head: a new worker session continues on its existing task branch, with the work in progress kept. "abandon" cancels this task and its remaining work.';
 
 const RECLAIMED_PURPOSE =
   `the task hit its work time limit (${90 * MIN}ms) and its container was ` +
