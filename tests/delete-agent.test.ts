@@ -4,7 +4,7 @@ import { deleteAgent } from "../src/agent-create.js";
 import { openDb } from "../src/db.js";
 import { agentBodyAtCommit, loadRegistry } from "../src/registry.js";
 import { DeletionConfirmationRequiredError } from "../src/registry-write.js";
-import { countUnsettledTasksReferencing, registerTask } from "../src/tasks.js";
+import { countUnsettledTasksReferencing, countUnsettledWorkAssignedTo, registerTask } from "../src/tasks.js";
 import { HUMAN_WEBUI } from "./harness.js";
 import { makeRegistry } from "./registry-fixture.js";
 
@@ -232,6 +232,23 @@ describe("countUnsettledTasksReferencing: 数えるのは未決着だけ(ADR 008
     db.prepare("UPDATE tasks SET status = 'cancelled' WHERE id = ?").run(ids[2]);
 
     expect(countUnsettledTasksReferencing(db, column, "deckhand")).toBe(1);
+    db.close();
+  });
+});
+
+describe("countUnsettledWorkAssignedTo: 数えるのは未決着の work だけ(ADR 0228 決定3)", () => {
+  it("assignee に持つ work のうち未決着だけを数え、done と cancelled は数えない", () => {
+    const db = openDb(":memory:");
+    const at = new Date("2026-08-05T00:00:00.000Z");
+    const ids = ["open", "done", "cancelled"].map(
+      (title) =>
+        registerTask(db, { type: "work", title, purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI).id,
+    );
+    for (const id of ids) db.prepare("UPDATE tasks SET assignee = 'deckhand' WHERE id = ?").run(id);
+    db.prepare("UPDATE tasks SET status = 'done' WHERE id = ?").run(ids[1]);
+    db.prepare("UPDATE tasks SET status = 'cancelled' WHERE id = ?").run(ids[2]);
+
+    expect(countUnsettledWorkAssignedTo(db, "deckhand")).toBe(1);
     db.close();
   });
 });

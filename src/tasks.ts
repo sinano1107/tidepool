@@ -604,7 +604,7 @@ export function countUnsettledWorkAssignedTo(db: Db, name: string): number {
   const row = db
     .prepare(
       `SELECT COUNT(*) AS n FROM tasks
-       WHERE assignee = ? AND type = 'work' AND status NOT IN ('done', 'cancelled')`,
+       WHERE assignee = ? AND type = 'work' AND ${unsettledSql("status")}`,
     )
     .get(name) as { n: number };
   return row.n;
