@@ -1508,6 +1508,10 @@ const STOPWORDS = new Set(
     .split(/\s+/),
 );
 
+/** 語の端の、索引で token にならない字の連なり(字クラスは MEMORY_FTS_TOKEN_CLASS、Co だけ・M だけの語も残す、#1723)。
+ *  クラスの . - _ は端に残らない —— ftsText が token の字に挟まれない . - _ の連なりを既に落としている。 */
+const NON_TOKEN_EDGE = new RegExp(String.raw`^(?:(?!${MEMORY_FTS_TOKEN_CLASS})[^])+|(?:(?!${MEMORY_FTS_TOKEN_CLASS})[^])+$`, "gu");
+
 /** query を前処理して stopword を落とし、語ごとに引用符で囲む(識別子の / . - を FTS の構文として
  *  読ませない)。語は空白と CJK の句読点・記号(、。「」 など)と、CJK の連なりとそれ以外の境目で割る(`src/memory.tsの注入`
  *  の識別子も独立の語、#1178 / #1180)。CJK の連なりは bigram の1 phrase のまま(隣接を保ち、`東京都` は「京都と東京」に
@@ -1518,10 +1522,11 @@ function ftsQuery(query: string, join: " " | " OR " = " "): string | null {
     .split(QUERY_BREAK)
     .flatMap((word) => word.split(CJK_RUN))
     .map((word) => ftsText(word).trim())
-    // 語の端の記号を除いて見る(`it,` も FTS には `it` として届く。記号だけの語は消える)
+    // 語の端の token にならない字を除いて見る(`it,` も FTS には `it` として届く。記号だけの語は消える)。stopword は M を
+    // 除いて照らす(NFC で合成されない `it` + U+0301 も remove_diacritics で索引の `it` に当たる)
     .filter((term) => {
-      const word = term.toLowerCase().replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, "");
-      return word !== "" && !STOPWORDS.has(word);
+      const word = term.toLowerCase().replace(NON_TOKEN_EDGE, "");
+      return word !== "" && !STOPWORDS.has(word.replace(/\p{M}/gu, ""));
     });
   return terms.length === 0 ? null : terms.map((term) => `"${term.replaceAll('"', '""')}"`).join(join);
 }
