@@ -77,6 +77,20 @@ it("abandon の説明は同判断の未決着兄弟がいるときだけ規則�
   db.close();
 });
 
+it("abandon の説明は決着済み(done / cancelled)の同判断の兄弟を件数に数えない", () => {
+  const db = openDb(":memory:");
+  const parent = work(db, "T");
+  const failed = work(db, "A", parent.id, 48);
+  const done = work(db, "B done", parent.id, 48);
+  const cancelled = work(db, "C cancelled", parent.id, 48);
+  work(db, "D open", parent.id, 48);
+  db.prepare("UPDATE tasks SET status = 'done' WHERE id = ?").run(done.id);
+  db.prepare("UPDATE tasks SET status = 'cancelled' WHERE id = ?").run(cancelled.id);
+
+  expect(abandonConsequence(db, failed)).toContain("1 unfinished sibling from the same decomposition decision");
+  db.close();
+});
+
 it("判断を持たない異議由来タスクの abandon は既存の分解判断を逆向きに破棄しない", () => {
   const db = openDb(":memory:");
   const parent = work(db, "T");
