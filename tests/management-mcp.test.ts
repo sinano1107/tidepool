@@ -1212,6 +1212,9 @@ it("管理MCP の人間の書き込み5つの口は、原文を送って言語�
       expect([name, result.isError, result.content[0].text]).toEqual([name, true, expect.stringContaining("original_language")]);
     }
     expect((await api(t.baseUrl, "GET", "/api/settings/memory/entries")).json.entries.filter((e: any) => e.author.activity === "human")).toEqual([]);
+    // 空白だけの原文は原文が無いのと同じで、申告を求めない
+    const blank: any = await client.callTool({ name: "record_knowledge", arguments: { workspace: null, path: "build", title: "Split", text: "Split it.", original_title: " ", original_text: "\n" } });
+    expect(blank.isError).toBeFalsy();
   } finally {
     await client.close();
   }

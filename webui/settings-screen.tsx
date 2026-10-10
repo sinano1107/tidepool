@@ -1642,7 +1642,7 @@ function MemoryExemplarAnnotations({ workspace, source, onSource, annotations, c
             options={[{ value: '', label: 'choose…' }, 'imitate', 'avoid']} />
           {translate && (
             <React.Fragment>
-              <Input label={language ? `Original (${TidepoolRules.originalLabelLanguage({ text: a.original }, copied, language)})` : 'Original'} multiline rows={2} value={a.original} onChange={(e) => set(i, { original: e.target.value })} />
+              <Input label={language ? `Original (${TidepoolRules.copiedOriginalLanguage({ text: a.original }, copied, language)})` : 'Original'} multiline rows={2} value={a.original} onChange={(e) => set(i, { original: e.target.value })} />
               <Button variant="secondary" size="sm" disabled={busy || !!TidepoolRules.whyBlank(a.original)} onClick={() => translateOne(i, true)}>Translate</Button>
             </React.Fragment>
           )}
@@ -1836,7 +1836,7 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit, fo
     : fields.every((key) => !TidepoolRules.whyBlank(draft[key]));
   const originalOf: Record<'title' | 'text', string> = { title: draft.originalTitle, text: draft.originalText };
   // the language the server gives the original on save (ADR 0230 決定4): a definition's original title is its text
-  const originalLanguage = TidepoolRules.originalLabelLanguage({ title: originalOf[fields[0]!], text: draft.originalText }, [draft.copied?.original], language);
+  const originalLanguage = TidepoolRules.copiedOriginalLanguage({ title: originalOf[fields[0]!], text: draft.originalText }, [draft.copied?.original], language);
   // the English board shows no original: one copied with English since changed (as saved, trimmed) is not saved, and the form says so
   // before saving (ADR 0223 決定3)
   const changedOutOfSight = (english: string, copied: string | undefined) => !translatable && copied !== undefined && TidepoolRules.normalizeText(english) !== copied;

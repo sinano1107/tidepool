@@ -305,17 +305,17 @@ it("一覧2つの返却はエントリの原文 original も Exemplar の注釈�
   expect(listMemoryEntries(db, {}).find((e) => e.id === exemplar)!.annotations![0]!.original).toMatchObject({ text: "メモは短く" });
 });
 
-it("list_memory_proposals の amendment は人間の原文 original_title / original_text も注釈の原文 annotations[].original も持たない —— 正本の question_answered には残る(#1173 / ADR 0122 追記 #1225)", () => {
+it("list_memory_proposals の amendment は人間の原文 original_title / original_text / original_language も注釈の原文 annotations[].original / original_language も持たない —— 正本の question_answered には残る(#1173 / ADR 0122 追記 #1225)", () => {
   const { reader, db, task, decision, behavior, propose, answer } = proposals();
   const candidate = behavior({ title: "Long notes" });
   const question = propose({ op: "approve", candidate_id: candidate, rationale: "r" });
-  const amendment = { title: "Short notes", text: "Keep notes to one line.", original_title: "短いメモ", original_text: "メモは1行にする" };
+  const amendment = { title: "Short notes", text: "Keep notes to one line.", original_title: "短いメモ", original_text: "メモは1行にする", original_language: "Japanese" as const };
   answer(question, "approve", { amendment });
   // setup のみ: Exemplar の candidate(出所は帰責 event)を注釈の原文つきの修正値で approve する
   const drafted = behavior({ title: "Short note", source: attribution({ db, task, decision }) });
   const text = { scope: null, path: "habits", title: "Short note", addressee: null, kind: "exemplar" as const, annotations: [{ anchor: "whole" as const, polarity: "imitate" as const, text: "Keep it short." }] };
   const exemplar = propose({ op: "consolidate", text, replaces: [drafted], based_on_decision: decision, rationale: "r" });
-  const annotated = { annotations: [{ anchor: "whole" as const, polarity: "imitate" as const, text: "Keep it this short.", original: "この短さで" }] };
+  const annotated = { annotations: [{ anchor: "whole" as const, polarity: "imitate" as const, text: "Keep it this short.", original: "この短さで", original_language: "Japanese" as const }] };
   answer(exemplar, "approve", { amendment: annotated });
 
   const [pulled, pulledExemplar] = pullMemoryProposals(db, reader, {}, at).proposals;

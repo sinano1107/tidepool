@@ -22,9 +22,9 @@ var TidepoolRules = (() => {
   __export(webui_rules_exports, {
     EFFORT_LEVELS: () => EFFORT_LEVELS,
     completionReviewFires: () => completionReviewFires,
+    copiedOriginalLanguage: () => copiedOriginalLanguage,
     isSettled: () => isSettled,
     normalizeText: () => normalizeText,
-    originalLabelLanguage: () => originalLabelLanguage,
     reviewFlagCarriesMeaning: () => reviewFlagCarriesMeaning,
     whyBlank: () => whyBlank,
     whyExecutionRequestIsInert: () => whyExecutionRequestIsInert,
@@ -150,9 +150,11 @@ var TidepoolRules = (() => {
   var HUMAN_WORKER_ID = "human";
 
   // src/webui-rules.ts
-  function originalLabelLanguage(typed, copied, current) {
+  function copiedOriginalLanguage(typed, copied, current) {
     const title = typed.title === void 0 ? void 0 : normalizeText(typed.title);
-    return copied.find((c) => c?.text === normalizeText(typed.text) && c.title === title)?.language ?? current;
+    const text = normalizeText(typed.text);
+    const languages = new Set(copied.filter((c) => c?.text === text && c.title === title).map((c) => c.language));
+    return languages.size === 1 ? [...languages][0] : current;
   }
   function whyNoCompletionReview(t) {
     if (t.type !== "work") return "completion review fires for work tasks only";
@@ -2341,7 +2343,7 @@ function MemoryExemplarAnnotations({ workspace, source, onSource, annotations, c
         options: [{ value: "", label: "choose\u2026" }, "imitate", "avoid"]
       }
     ),
-    translate && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(Input, { label: language ? `Original (${TidepoolRules.originalLabelLanguage({ text: a.original }, copied, language)})` : "Original", multiline: true, rows: 2, value: a.original, onChange: (e) => set(i, { original: e.target.value }) }), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", disabled: busy || !!TidepoolRules.whyBlank(a.original), onClick: () => translateOne(i, true) }, "Translate")),
+    translate && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(Input, { label: language ? `Original (${TidepoolRules.copiedOriginalLanguage({ text: a.original }, copied, language)})` : "Original", multiline: true, rows: 2, value: a.original, onChange: (e) => set(i, { original: e.target.value }) }), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", disabled: busy || !!TidepoolRules.whyBlank(a.original), onClick: () => translateOne(i, true) }, "Translate")),
     /* @__PURE__ */ React.createElement(Input, { label: "Annotation (English)", multiline: true, rows: 2, value: a.text, onChange: (e) => set(i, { text: e.target.value, back: null }) }),
     translate && /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", disabled: busy || !!TidepoolRules.whyBlank(a.text), onClick: () => translateOne(i, false) }, "Back-translate"),
     a.back && /* @__PURE__ */ React.createElement("p", { style: muted }, "back", language ? ` in ${language}` : "", ": ", a.back),
@@ -2430,7 +2432,7 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit, fo
   const holdsOrphan = draft.workspace === draft.dead.workspace || (draft.kind === "behavior" || draft.kind === "exemplar") && draft.addressee === draft.dead.addressee;
   const filled = draft.kind === "exemplar" ? !TidepoolRules.whyBlank(draft.title) && (draft.source ?? draft.inheritedSource) !== null && draft.annotations.length > 0 && draft.annotations.every((a) => a.polarity && !TidepoolRules.whyBlank(a.text)) : fields.every((key) => !TidepoolRules.whyBlank(draft[key]));
   const originalOf = { title: draft.originalTitle, text: draft.originalText };
-  const originalLanguage = TidepoolRules.originalLabelLanguage({ title: originalOf[fields[0]], text: draft.originalText }, [draft.copied?.original], language);
+  const originalLanguage = TidepoolRules.copiedOriginalLanguage({ title: originalOf[fields[0]], text: draft.originalText }, [draft.copied?.original], language);
   const changedOutOfSight = (english, copied) => !translatable && copied !== void 0 && TidepoolRules.normalizeText(english) !== copied;
   const dropsOriginal = !!draft.originalText && fields.some((key) => changedOutOfSight(draft[key], draft.copied?.[key]));
   const dropsAnnotationOriginal = draft.annotations.map((a) => !!a.original && changedOutOfSight(a.text, a.copiedEnglish));

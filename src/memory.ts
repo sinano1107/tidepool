@@ -16,6 +16,7 @@ import { type Packed, packItems, readPosition } from "./response-budget.js";
 import { routingMaterial } from "./routing-review.js";
 import { approvalAnnotation, getTask, isFixedChoiceQuestion, type MemoryProposal, needsComment, type QuestionProposal, questionBlocking, registerTask, settleQuestionAsObserved, type Task, type TierRef } from "./tasks.js";
 import { entryObjections, objectedEntryText, objectionsById } from "./triage.js";
+import { copiedOriginalLanguage } from "./webui-rules.js";
 import { BOARD_WORKER_ID, HUMAN_WORKER_ID } from "./worker-id.js";
 
 /** 無効化の理由コード(spec #586 A)。自由記述は持たない。置換と path の付け替えは後継 id
@@ -299,19 +300,11 @@ export class OneTreeError extends DomainError {
   }
 }
 
-/** 写した原文の言語(ADR 0223 決定2): 置き換えられる相手のうち同じ原文を持つものの言語が1つに揃えばそれを継ぎ、
- *  一致が無いか割れたら渡された言語(人間の面では今の表示言語)のまま。 */
-function copiedLanguage(language: string, matched: Array<string | undefined>): string {
-  const languages = new Set(matched.filter((l) => l !== undefined));
-  return languages.size === 1 ? [...languages][0]! : language;
-}
-
 /** 申告があればその言語(ADR 0230 決定2)。無ければ、原文の title と text が置き換えられる相手のどれかと完全に一致すればその言語を継ぐ(ADR 0223 決定2)。 */
 function inheritedOriginal(original: EntryInput["original"], replaced: MemoryEntry[]): MemoryEntry["original"] {
   if (!original) return null;
   const { title, text, language, declared } = original;
-  const matched = replaced.map((r) => (r.original?.title === title && r.original.text === text ? r.original.language : undefined));
-  return { title, text, language: declared ? language : copiedLanguage(language, matched) };
+  return { title, text, language: declared ? language : copiedOriginalLanguage({ title, text }, replaced.map((r) => r.original), language) };
 }
 
 /** Knowledge の書き込み(spec #586 E)。承認不要なので書いた瞬間に approved。 */
@@ -861,7 +854,7 @@ export function recordExemplar(
     const { annotations: checked, text } = checkedAnnotations(db, source, raw, exemplarAnnotationSchema);
     const language = getDisplayLanguage(db);
     const annotationLanguage = (originalText: string) =>
-      copiedLanguage(language, replaced.flatMap((r) => r.annotations ?? []).map((a) => (a.original?.text === originalText ? a.original.language : undefined)));
+      copiedOriginalLanguage({ text: originalText }, replaced.flatMap((r) => r.annotations ?? []).map((a) => a.original), language);
     const annotations = checked.map(({ original, original_language, ...annotation }) => {
       if (original_language && !original) throw new DomainError("an annotation's original_language declares the language of its original: send it only with the original");
       return original ? { ...annotation, original: { text: original, language: original_language ?? annotationLanguage(original) } } : annotation;
@@ -1698,7 +1691,7 @@ export function listMemoryBranches(db: Db) {
   }));
 }
 
-const withoutOriginal = <T extends { original?: unknown }>({ original: _, ...rest }: T) => rest;
+const withoutOriginal = <T extends { original?: unknown; original_language?: unknown }>({ original: _, original_language: _l, ...rest }: T) => rest;
 
 /** meta-review の枝の一覧: 木の順に応答予算と続き(next)で返す(ADR 0195、境目の鍵は path)。返した id はその応答の行の Definition の id。
  *  Definition の原文は人間の面にだけ残す(一覧と同じ線、#1052)。 */
@@ -1811,9 +1804,9 @@ function memoryProposalRows(db: Db, window?: MetaReviewWindow) {
           return tail.id === id ? [] : [{ id, tail_id: tail.id, path: tail.path, scope: tail.scope, invalidation_reason: tail.invalidation_reason }];
         }),
         answer: answered?.answers[0]?.answer ?? null,
-        // 人間の原文(original_* と注釈の original)は人間の面と正本の event にだけ残す —— 一覧2 verb と同じ側(#1173 / ADR 0122 追記 #1225)
+        // 人間の原文(original_* と注釈の original・original_language)は人間の面と正本の event にだけ残す —— 一覧2 verb と同じ側(#1173 / ADR 0122 追記 #1225)
         amendment: answered?.amendment
-          ? (({ original_title: _t, original_text: _x, annotations, ...rest }) => ({ ...rest, annotations: annotations?.map(withoutOriginal) }))(answered.amendment as MemoryAmendment)
+          ? (({ original_title: _t, original_text: _x, original_language: _l, annotations, ...rest }) => ({ ...rest, annotations: annotations?.map(withoutOriginal) }))(answered.amendment as MemoryAmendment)
           : null,
         comment: answered?.comment ?? null,
         observed: stale && { entry_id: stale.entry_id, observed_event_id: stale.observed_event_id },

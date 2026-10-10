@@ -277,13 +277,16 @@ const QUESTION_ANNOTATIONS_DESCRIPTION =
 
 const ORIGINAL_LANGUAGES = SUPPORTED_DISPLAY_LANGUAGES.join(", ");
 
+/** 空白だけの原文は domain が無いものとして捨てる(normalizeText)ので、送ったことにしない。 */
+const sent = (value: unknown) => typeof value === "string" && value.trim() !== "";
+
 /** 原文を送るなら言語の申告は必須(ADR 0230 決定1)。WebUI は申告を送らない(言語は写しの一致か表示言語)ので、門は管理MCP の
  *  扉だけが持つ。書き込みの4つの verb と answer_question の修正値が同じ欄の名前で通る。 */
-function declared<T extends Record<string, unknown>>(input: T): T {
-  if ((input.original_title || input.original_text) && !input.original_language) {
+function requireOriginalLanguage<T extends Record<string, unknown>>(input: T): T {
+  if ((sent(input.original_title) || sent(input.original_text)) && !input.original_language) {
     throw new DomainError(`an original needs original_language: the language the human wrote it in (${ORIGINAL_LANGUAGES})`);
   }
-  if (Array.isArray(input.annotations) && input.annotations.some((a: { original?: unknown; original_language?: unknown }) => a?.original && !a.original_language)) {
+  if (Array.isArray(input.annotations) && input.annotations.some((a: { original?: unknown; original_language?: unknown }) => sent(a?.original) && !a.original_language)) {
     throw new DomainError(`an annotation's original needs its own original_language: the language the human wrote it in (${ORIGINAL_LANGUAGES})`);
   }
   return input;
@@ -748,7 +751,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
         `English canonical wording; original_title and original_text go together (both or neither). ${supersedesEffect} ${writtenAs}`,
       inputSchema: humanKnowledgeSchema.shape,
     },
-    async (input) => domainResult(() => recordKnowledge(deps.db, gatedHumanEntryInput(deps, declared(input)), "mcp", deps.clock.now())),
+    async (input) => domainResult(() => recordKnowledge(deps.db, gatedHumanEntryInput(deps, requireOriginalLanguage(input)), "mcp", deps.clock.now())),
   );
   server.registerTool(
     "define_memory_branch",
@@ -763,7 +766,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
         `${supersedesEffect} ${writtenAs}`,
       inputSchema: humanDefinitionSchema.shape,
     },
-    async (input) => domainResult(() => defineMemoryBranch(deps.db, gatedHumanEntryInput(deps, declared(input)), "mcp", deps.clock.now())),
+    async (input) => domainResult(() => defineMemoryBranch(deps.db, gatedHumanEntryInput(deps, requireOriginalLanguage(input)), "mcp", deps.clock.now())),
   );
   server.registerTool(
     "record_behavior",
@@ -776,7 +779,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
         `original_title and original_text go together (both or neither). ${supersedesEffect} ${writtenAs}`,
       inputSchema: humanBehaviorSchema.shape,
     },
-    async (input) => domainResult(() => recordBehavior(deps.db, gatedHumanEntryInput(deps, declared(input)), "mcp", deps.clock.now())),
+    async (input) => domainResult(() => recordBehavior(deps.db, gatedHumanEntryInput(deps, requireOriginalLanguage(input)), "mcp", deps.clock.now())),
   );
   server.registerTool(
     "preview_case",
@@ -816,7 +819,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
         "of the rendered case. title is the English one-line label. Written as the human, approved at once. workspace null = the whole board.",
       inputSchema: humanExemplarSchema.shape,
     },
-    async (input) => domainResult(() => recordExemplar(deps.db, gatedHumanEntryInput(deps, declared(input)), "mcp", deps.clock.now())),
+    async (input) => domainResult(() => recordExemplar(deps.db, gatedHumanEntryInput(deps, requireOriginalLanguage(input)), "mcp", deps.clock.now())),
   );
   server.registerTool(
     "fold_memory_entries",
@@ -1131,7 +1134,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
       const task = getTask(deps.db, task_id);
       if (!task) return toolError("task not found");
       try {
-        if (amendment) declared(amendment);
+        if (amendment) requireOriginalLanguage(amendment);
         return toolResult(
           await submitAnswer(
             deps,

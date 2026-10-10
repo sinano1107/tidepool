@@ -15,16 +15,19 @@ export { isSettled } from "./task-status.js";
 import { normalizeText } from "./required-text.js";
 import { HUMAN_WORKER_ID } from "./worker-id.js";
 
-/** 原文欄のラベルの言語 = 申告を送らない WebUI の書き込みにサーバが付ける言語(ADR 0230 決定4、写しの一致は ADR 0223 決定2)。
- *  欄の原文が写した原文のどれかと一致すればその言語、書き換えたら今の表示言語。Knowledge / Behavior / Definition は title と
- *  text の組で、Exemplar の注釈は title を持たず text だけで比べる。一致した相手の言語が割れる端は追わない(先に一致した1件)。 */
-export function originalLabelLanguage(
+/** 写した原文の言語の正本(ADR 0223 決定2、申告の無い書き込み —— ADR 0230 決定2): 原文が写した相手の原文と一致すれば、
+ *  その言語が1つに揃うときだけそれを継ぎ、一致が無いか割れたら `current`(人間の面では今の表示言語)。Knowledge / Behavior /
+ *  Definition は title と text の組で、Exemplar の注釈は title を持たず text だけで比べる。サーバの書き込みと、保存したときに
+ *  付く言語を前もって出す WebUI の原文欄のラベル(ADR 0230 決定4)が同じ関数を呼ぶ。 */
+export function copiedOriginalLanguage(
   typed: { title?: string; text: string },
   copied: ReadonlyArray<{ title?: string; text: string; language: string } | null | undefined>,
   current: string,
 ): string {
   const title = typed.title === undefined ? undefined : normalizeText(typed.title);
-  return copied.find((c) => c?.text === normalizeText(typed.text) && c.title === title)?.language ?? current;
+  const text = normalizeText(typed.text);
+  const languages = new Set(copied.filter((c) => c?.text === text && c.title === title).map((c) => c!.language));
+  return languages.size === 1 ? [...languages][0]! : current;
 }
 
 export interface ReviewSubject {

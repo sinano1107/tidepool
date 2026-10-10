@@ -36,18 +36,19 @@ it("clock time requires an unpadded HH:MM within the day", () => {
   for (const value of ["7:00", "24:00", " 07:00 ", "07:00\n"]) expect(whyInvalidClockTime(value)).toBe("time must be HH:MM between 00:00 and 23:59");
 });
 
-import { originalLabelLanguage } from "../src/webui-rules.js";
+import { copiedOriginalLanguage } from "../src/webui-rules.js";
 
-it("原文欄のラベルの言語は、title と text の組が写した原文と両方一致するあいだは写した言語、片方でも直せば今の表示言語(ADR 0230 決定4)", () => {
+it("an original keeps its copied language while both title and text match the copy, and takes the current language once either changes", () => {
   const copied = { title: "分ける", text: "移行を分ける", language: "English" };
-  expect(originalLabelLanguage({ title: " 分ける", text: "移行を分ける\n" }, [copied], "Japanese")).toBe("English");
-  expect(originalLabelLanguage({ title: "分けよ", text: "移行を分ける" }, [copied], "Japanese")).toBe("Japanese");
-  expect(originalLabelLanguage({ title: "分ける", text: "移行は分ける" }, [copied], "Japanese")).toBe("Japanese");
-  expect(originalLabelLanguage({ title: "分ける", text: "移行を分ける" }, [null], "Japanese")).toBe("Japanese");
+  expect(copiedOriginalLanguage({ title: " 分ける", text: "移行を分ける\n" }, [copied], "Japanese")).toBe("English");
+  expect(copiedOriginalLanguage({ title: "分けよ", text: "移行を分ける" }, [copied], "Japanese")).toBe("Japanese");
+  expect(copiedOriginalLanguage({ title: "分ける", text: "移行は分ける" }, [copied], "Japanese")).toBe("Japanese");
+  expect(copiedOriginalLanguage({ title: "分ける", text: "移行を分ける" }, [null], "Japanese")).toBe("Japanese");
 });
 
-it("Exemplar の注釈の原文欄のラベルの言語は、写した相手の注釈の原文のどれかと一致すればその言語、しなければ今の表示言語(ADR 0230 決定4)", () => {
+it("an annotation original takes the language of the copied annotation original it matches, and the current language when none or several disagree", () => {
   const copied = [{ text: "分ける", language: "Japanese" }, { text: "keep it whole", language: "English" }];
-  expect(originalLabelLanguage({ text: "keep it whole" }, copied, "Japanese")).toBe("English");
-  expect(originalLabelLanguage({ text: "keep it all" }, copied, "Japanese")).toBe("Japanese");
+  expect(copiedOriginalLanguage({ text: "keep it whole" }, copied, "Japanese")).toBe("English");
+  expect(copiedOriginalLanguage({ text: "keep it all" }, copied, "Japanese")).toBe("Japanese");
+  expect(copiedOriginalLanguage({ text: "分ける" }, [...copied, { text: "分ける", language: "English" }], "Japanese")).toBe("Japanese");
 });
