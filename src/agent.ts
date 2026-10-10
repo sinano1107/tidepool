@@ -6,7 +6,6 @@ import {
   type AuthorityProfile,
   assertValidAgentDefinition,
   InvalidAgentDefinitionError,
-  isBuiltInAgentName,
   ownEntry,
   REVIEWER_AUTHORITY_PROFILE,
   type Registry,
@@ -123,22 +122,22 @@ export function resolveAgentOrQuarantine(
  *  reassigning those tasks once nothing completed still waits to land), and
  *  either makes the quarantine moot. Unsettled is the delete door's status line
  *  (`countUnsettledTasksReferencing`), so a task still running under the name
- *  counts too (ADR 0224 決定4). `agentExists` is resolved by the caller (fresh against
- *  the registry, or `false` when no registry is configured at all — in which
- *  case only the "no more unsettled tasks" path can ever clear it). The built-in
- *  never counts as "back" (ADR 0228 決定4): a name resolving to it is not
+ *  counts too (ADR 0224 決定4). `resolution` is resolved by the caller, fresh
+ *  against the registry (`"absent"` when no registry is configured at all — in
+ *  which case only the "no more unsettled tasks" path can ever clear it). The
+ *  built-in never counts as "back" (ADR 0228 決定4): a name resolving to it is not
  *  repaired, and while it does, only work counts as a dependent. */
 export function verifyAgentRepaired(
   db: Db,
   agentName: string,
-  agentExists: boolean,
+  resolution: "registry" | "built-in" | "absent",
   defaultAgentName?: string,
   auditorName?: string,
 ): void {
-  if (agentExists) return;
+  if (resolution === "registry") return;
   const fallback = typeAwareDefaultAgentSql("type", "@defaultAgentName", "@auditorName");
   // 名前が組み込みに解決される間、review は組み込みが走らせられるので依存に数えない(ADR 0228 決定4)
-  const dependentTypes = isBuiltInAgentName(agentName) ? "type = 'work'" : "type != 'question'";
+  const dependentTypes = resolution === "built-in" ? "type = 'work'" : "type != 'question'";
   const stillUnsettled = db
     .prepare(`SELECT 1 FROM tasks WHERE ${dependentTypes} AND status NOT IN ('done', 'cancelled')
               AND COALESCE(assignee, ${fallback}) = @agentName LIMIT 1`)

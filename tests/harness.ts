@@ -214,6 +214,8 @@ export interface BootOptions {
    *  registration and only "no more todo tasks depend on it" can clear a
    *  quarantine. */
   agentRegistered?: (name: string) => boolean;
+  /** Whether an agent name currently resolves to the built-in agent (ADR 0228)
+   *  — no registry entry shadows it. Absent → nothing resolves to the built-in. */
   resolvesToBuiltIn?: (name: string) => boolean;
   /** Assignee/workspace candidates for the registration screen (issue #12).
    *  A static snapshot (the common case) or a per-request provider — the

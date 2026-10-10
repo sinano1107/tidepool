@@ -6,6 +6,7 @@ import {
   DeletionBlockedError,
   DeletionConfirmationRequiredError,
 } from "../src/registry-write.js";
+import { registerTask } from "../src/tasks.js";
 import type {
   DeleteWorkspaceInput,
   WorkspaceDeletionReferences,
@@ -16,6 +17,7 @@ import {
   api,
   bootTidepool,
   completedWork,
+  HUMAN_WEBUI,
   registerWork,
   type Tidepool,
 } from "./harness.js";
@@ -58,11 +60,13 @@ it("DELETE /api/agents/:name は未決着タスクの件数・既定 agent 名�
     completion_criteria: "c",
     review_by: ["fugu"],
   });
+  // review は組み込みへ落ちても壊れないので、shadow の扉の work の数えには入らない(ADR 0228 決定3)
+  registerTask(t.db, { type: "review", title: "review by fugu", purpose: "p", completion_criteria: "c", assignee: "fugu" }, new Date(), ...HUMAN_WEBUI);
 
   await api(t.baseUrl, "DELETE", "/api/agents/fugu", { confirm: true });
 
   expect(refs).toEqual([
-    { unsettledTaskCount: 3, unsettledWorkTaskCount: 2, awaitingLandingTaskCount: 0, defaultAgentName: "tako", auditorName: "fugu" },
+    { unsettledTaskCount: 4, unsettledWorkTaskCount: 2, awaitingLandingTaskCount: 0, defaultAgentName: "tako", auditorName: "fugu" },
   ]);
 });
 

@@ -11,7 +11,7 @@ import { EFFORT_LEVELS } from "./effort.js";
 import { PRIORITY_FIELD_DESCRIPTION, tierFieldDescriptions } from "./execution-setting.js";
 import type { GitHubClient } from "./github.js";
 import type { GitHubAuth } from "./github-auth.js";
-import { assertAssigneeKnown, assertMemoryReferencesKnown, assertReviewersKnown, assertWorkspaceKnown } from "./human-verbs.js";
+import { assertAssigneeCanTake, assertMemoryReferencesKnown, assertReviewersKnown, assertWorkspaceKnown } from "./human-verbs.js";
 import type { Landing } from "./landing.js";
 import {
   browseMemory,
@@ -396,7 +396,7 @@ function assertChildrenKnown(deps: McpDeps, children: z.infer<ReturnType<typeof 
   // even runs: approving it would leave nothing to run it. `human` is
   // valid only as a work assignee, never a reviewer.
   for (const child of children) {
-    assertAssigneeKnown(deps, child.assignee, "work");
+    assertAssigneeCanTake(deps, child.assignee, "work");
     assertReviewersKnown(deps.agentRegistered, child.review_by);
   }
 }

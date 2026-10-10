@@ -149,7 +149,7 @@ export function decomposeThroughHumanDoor(
       if (child.workspace !== undefined) {
         assertWorkspaceKnown(child.workspace, deps.resolveWorkspace, deps.workspace);
       }
-      assertAssigneeKnown(deps, child.assignee, "work");
+      assertAssigneeCanTake(deps, child.assignee, "work");
       assertReviewersKnown(deps.agentRegistered, child.review_by);
     }
     if (whyBlank(input.reason)) throw new DomainError("a decomposition requires a reason");
@@ -219,7 +219,7 @@ export async function addIssueCommentThroughHumanDoor(
 
 /** 人間の登録・Edit と worker の decompose が共有する assignee の門。組み込みは review 専用で、
  *  判定は名前ではなく解決の結果を見る —— shadow している間は通る(ADR 0228 決定1)。 */
-export function assertAssigneeKnown(
+export function assertAssigneeCanTake(
   deps: Pick<RegisterThroughHumanDoorDeps, "agentRegistered" | "resolvesToBuiltIn">,
   assignee: string | undefined,
   type: TaskType,
@@ -370,7 +370,7 @@ export async function registerThroughHumanDoor(
     if (input.workspace !== undefined) {
       assertWorkspaceKnown(input.workspace, deps.resolveWorkspace, deps.workspace);
     }
-    assertAssigneeKnown(deps, input.assignee, input.type);
+    assertAssigneeCanTake(deps, input.assignee, input.type);
     assertReviewersKnown(deps.agentRegistered, input.review_by);
     if (input.github_issue_number !== undefined && input.workspace) {
       assertNoUnsettledIssueRef(deps.db, input.workspace, input.github_issue_number);
@@ -551,7 +551,11 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
         verifyAgentRepaired(
           deps.db,
           quarantineAgentName,
-          (deps.agentRegistered?.(quarantineAgentName) ?? false) && !deps.resolvesToBuiltIn?.(quarantineAgentName),
+          deps.resolvesToBuiltIn?.(quarantineAgentName)
+            ? "built-in"
+            : deps.agentRegistered?.(quarantineAgentName)
+              ? "registry"
+              : "absent",
           deps.defaultAgentName,
           deps.auditorName,
         );
@@ -770,7 +774,7 @@ export function editThroughHumanDoor(
   const task = getTask(deps.db, taskId);
   if (!task) return { ok: false, failure: { kind: "not_found", error: "task not found" } };
   try {
-    if (input.assignee) assertAssigneeKnown(deps, input.assignee, task.type);
+    if (input.assignee) assertAssigneeCanTake(deps, input.assignee, task.type);
     assertReviewersKnown(deps.agentRegistered, input.review_by);
     if (input.workspace) {
       assertWorkspaceKnown(input.workspace, deps.resolveWorkspace, deps.workspace);

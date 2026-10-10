@@ -147,16 +147,17 @@ it("review_by の fugu は組み込み・shadow のどちらの状態でも登�
   expect((await api(t.baseUrl, "POST", "/api/tasks", body)).status).toBe(201);
 });
 
-it("組み込みに解決される assignee の work の登録は 400 で拒まれ、shadow している間は 201 で通る(ADR 0228 決定1)", async () => {
-  const body = { type: "work", title: "work for fugu", purpose: "p", completion_criteria: "c", assignee: "fugu" };
+// shadow している間に通ることはドメイン層(tests/human-verbs.test.ts)が持つ。ここは拒否の写像だけ(ADR 0107 決定3)
+it("組み込みに解決される assignee の work の登録は 400 に写る(ADR 0228 決定1)", async () => {
   t = await bootWithRegistry();
 
-  const refused = await api(t.baseUrl, "POST", "/api/tasks", body);
+  const refused = await api(t.baseUrl, "POST", "/api/tasks", {
+    type: "work",
+    title: "work for fugu",
+    purpose: "p",
+    completion_criteria: "c",
+    assignee: "fugu",
+  });
   expect(refused.status).toBe(400);
   expect(refused.json.error).toBe("agent fugu is the built-in agent, which runs reviews only");
-
-  await t.stop();
-  t = await bootWithRegistry({ "agents/fugu.md": MY_FUGU_MD });
-
-  expect((await api(t.baseUrl, "POST", "/api/tasks", body)).status).toBe(201);
 });
