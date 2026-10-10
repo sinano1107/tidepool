@@ -460,6 +460,35 @@ it("supersedes の相手の原文を写したまま書いた Knowledge は相手
   ]);
 });
 
+it("人間の面の原文は前後の空白を trim して保存する(issue #1704)", () => {
+  const { db } = board();
+  const { entry_id } = recordKnowledge(db, humanEntryInput(db, { ...humanKnowledge, original_title: ` ${original.title} `, original_text: `${original.text}\n` }), "webui", at);
+  expect(entryById(db, entry_id)?.original).toEqual(original);
+});
+
+it.each([
+  ["Knowledge", (db: ReturnType<typeof openDb>, original_title: string, original_text: string, supersedes?: number[]) =>
+    recordKnowledge(db, { ...humanEntryInput(db, { ...humanKnowledge, text: "Use Node 22.", original_title, original_text }), supersedes }, "webui", at)],
+  ["Behavior", (db: ReturnType<typeof openDb>, original_title: string, original_text: string, supersedes?: number[]) =>
+    recordBehavior(db, { ...humanEntryInput(db, { ...humanKnowledge, text: "Use Node 22.", original_title, original_text }), addressee: null, supersedes }, "webui", at)],
+  ["Definition", (db: ReturnType<typeof openDb>, _title: string, original_text: string, supersedes?: number[]) =>
+    defineMemoryBranch(db, { ...humanEntryInput(db, { workspace: "tidepool", path: "build", text: "Use Node 22.", original_text }), supersedes }, "webui", at)],
+] as const)("前後に空白のある原文で書いた %s を、表示言語の切り替え後に trim した原文で supersedes つきで書くと元の言語を継ぐ(issue #1704)", (_kind, write) => {
+  const { db } = board();
+  const first = write(db, ` ${original.title} `, `${original.text}\n`).entry_id;
+  setDisplayLanguage(db, "English");
+
+  const copied = write(db, original.title, original.text, [first]).entry_id;
+
+  expect(entryById(db, copied)?.original?.language).toBe("Japanese");
+});
+
+it("人間が書く原文が title も text も空白だけなら original は null", () => {
+  const { db } = board();
+  const { entry_id } = recordKnowledge(db, humanEntryInput(db, { ...humanKnowledge, original_title: " ", original_text: "\n" }), "webui", at);
+  expect(entryById(db, entry_id)?.original).toBeNull();
+});
+
 it("supersedes の相手の原文を写したまま書いた Behavior は相手の原文の言語を継ぐ(ADR 0223 決定2)", () => {
   const { db } = board();
   const written = (supersedes?: number[]) =>
@@ -619,6 +648,33 @@ it("人間が書く Exemplar は書いた時点で approved・書き手 human・
   db.prepare("UPDATE memory_index_version SET preprocess_version = 'cjk-bigram-0'").run();
   ensureMemoryIndex(db, at);
   expect(approvedMemoryEntries(db)).toEqual(current);
+});
+
+it("前後に空白のある注釈の原文は trim して保存し、表示言語の切り替え後に trim した原文で supersedes つきで書くとその注釈の言語を継ぐ(issue #1704)", () => {
+  const { db, task } = board();
+  const decision = logDecision(db, task, "split the migration into two commits", "deckhand", at, "worker");
+  const annotations = (original: string) => [{ ...whole, original }];
+  const first = exemplar(db, decision, annotations(" 形をまるごと保つ\n"));
+  setDisplayLanguage(db, "English");
+
+  const copied = recordExemplar(
+    db,
+    humanEntryInput(db, { workspace: "tidepool", path: "habits/migrations", title: "Split the migration", addressee: null, supersedes: [first], annotations: annotations("形をまるごと保つ") }),
+    "webui",
+    at,
+  ).entry_id;
+
+  expect([first, copied].map((id) => entryById(db, id)?.annotations?.[0]?.original)).toEqual([
+    { text: "形をまるごと保つ", language: "Japanese" },
+    { text: "形をまるごと保つ", language: "Japanese" },
+  ]);
+});
+
+it("注釈の原文が空白だけなら原文を持たない", () => {
+  const { db, task } = board();
+  const decision = logDecision(db, task, "split the migration into two commits", "deckhand", at, "worker");
+  const id = exemplar(db, decision, [{ ...whole, original: " \n" }]);
+  expect(entryById(db, id)?.annotations).toEqual([whole]);
 });
 
 it("supersedes の相手の注釈の原文を写したままの注釈はその言語を継ぎ、書き換えた注釈は今の表示言語(ADR 0223 決定2)", () => {

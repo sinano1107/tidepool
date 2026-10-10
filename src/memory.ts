@@ -685,7 +685,7 @@ export const exemplarAnnotationSchema = z.object({
   anchor: z.union([z.literal("whole"), z.object({ field: z.enum(["decision", "steering", "handoff", "result"]), quote: requiredTextSchema })]),
   polarity: z.enum(["imitate", "avoid"]),
   text: requiredTextSchema,
-  original: z.string().optional(),
+  original: z.string().transform(normalizeText).optional(),
 });
 type ExemplarAnnotation = Omit<z.infer<typeof exemplarAnnotationSchema>, "original"> & { original?: { text: string; language: string } };
 /** meta-review の consolidate の注釈: 原文は人間のものなので持たない(渡されたら黙って捨てず断る)。 */
@@ -752,12 +752,13 @@ export function humanEntryInput<T extends { workspace: string | null; original_t
   db: Db,
   { workspace, original_title, original_text, ...rest }: T,
 ) {
-  const originalTitle = "title" in rest ? original_title : original_text;
-  if (!originalTitle?.trim() !== !original_text?.trim()) throw new DomainError("an original needs both its title and its text");
+  const originalTitle = normalizeText(("title" in rest ? original_title : original_text) ?? "");
+  const originalText = normalizeText(original_text ?? "");
+  if (!originalTitle !== !originalText) throw new DomainError("an original needs both its title and its text");
   return {
     ...rest,
     scope: workspace,
-    original: originalTitle?.trim() && original_text?.trim() ? { title: originalTitle, text: original_text, language: getDisplayLanguage(db) } : null,
+    original: originalTitle && originalText ? { title: originalTitle, text: originalText, language: getDisplayLanguage(db) } : null,
     author: HUMAN_AUTHOR,
   };
 }
@@ -855,7 +856,7 @@ export function recordExemplar(
     const language = getDisplayLanguage(db);
     const annotationLanguage = (originalText: string) =>
       copiedLanguage(language, replaced.flatMap((r) => r.annotations ?? []).map((a) => (a.original?.text === originalText ? a.original.language : undefined)));
-    const annotations = checked.map(({ original, ...annotation }) => (original?.trim() ? { ...annotation, original: { text: original, language: annotationLanguage(original) } } : annotation));
+    const annotations = checked.map(({ original, ...annotation }) => (original ? { ...annotation, original: { text: original, language: annotationLanguage(original) } } : annotation));
     return createEntry(db, { ...fields, kind: "exemplar", state: "approved", text, original: null, annotations, source }, origin, at, mark);
   });
 }
