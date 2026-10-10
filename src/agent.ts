@@ -110,8 +110,8 @@ export function resolveAgentOrQuarantine(
  *  either makes the quarantine moot. Unsettled is `unsettledSql` (shared with the
  *  delete door), so a task still running under the name counts too (ADR 0224
  *  決定4). `agentExists` is resolved by the caller (fresh against the registry,
- *  or `false` when no registry is configured at all — in which
- *  case only the "no more unsettled tasks" path can ever clear it). */
+ *  or `false` when no registry is configured at all — in which case only the
+ *  "no more unsettled tasks" path can ever clear it). */
 export function verifyAgentRepaired(
   db: Db,
   agentName: string,
