@@ -6,7 +6,6 @@ import {
   completeIntegrationReviews,
   FULL_HANDOFF,
   GIT_FIXTURE_TEST_TIMEOUT,
-  git,
   HOUR,
   makeRemoteBackedWorkspace,
   makeWorkspace,
@@ -22,44 +21,6 @@ let t: Tidepool;
 
 afterEach(async () => {
   await t?.stop();
-});
-
-it("promotion retry の時点で差分ゼロなら、人間にエラーを返して failure question を開いたままにする", async () => {
-  const { workspace } = await makeRemoteBackedWorkspace("sandbox");
-  t = await bootTidepool({ workspace });
-  t.github.scriptFailure(new Error("token expired"));
-  const task = await registerWork(t, "ship the feature");
-  await t.clock.advance(HOUR);
-  commitWork(workspace.path, "feature.txt", "finished\n");
-
-  const client = await mcpClient(t.mcpBaseUrl, task.id);
-  await client.callTool({ name: "complete_task", arguments: { handoff: FULL_HANDOFF } });
-  await client.close();
-  await completeIntegrationReviews(t, task.id);
-  const question = (await api(t.baseUrl, "GET", "/api/tasks")).json.find(
-    (candidate: any) => candidate.question_pending_pr_promotion_task_id === task.id,
-  );
-  git(
-    workspace.path,
-    "update-ref",
-    "refs/remotes/origin/main",
-    `refs/heads/task/${task.id}`,
-  );
-  t.github.scriptFailure(null);
-
-  const answered = await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, {
-    answers: ["retry"],
-  });
-
-  expect(answered).toMatchObject({
-    status: 409,
-    json: { error: 'task branch has nothing to land on "refs/remotes/origin/main"' },
-  });
-  expect((await api(t.baseUrl, "GET", `/api/tasks/${question.id}`)).json).toMatchObject({
-    status: "todo",
-    question_answer: null,
-  });
-  expect(t.github.requests).toHaveLength(1);
 });
 
 it("purely-local の root work が差分ゼロで完了すると、merge question を立てず着地対象なしを記録する", async () => {

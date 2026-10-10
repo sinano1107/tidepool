@@ -779,6 +779,32 @@ it("着地成立は積み上がった failure question を引退させ、回答�
   );
 });
 
+it("retry の時点で運ぶ内容が無ければ回答を受理し、着地対象なしを1件だけ刻んで兄弟の failure question を引退させる", async () => {
+  const { workspace } = await makeRemoteBackedWorkspace("landing-retry-nothing");
+  const { db, clock } = await openBoard();
+  const github = new FakeGitHubClient();
+  github.scriptFailure(new Error("token expired"));
+  const landing = createLanding({ defaultAgentName: "tako", db, clock, workspace, github });
+  const task = landingWork(db, clock);
+  git(workspace.path, "checkout", "-b", `task/${task.id}`);
+  commitWork(workspace.path, "feature.txt", "ready\n");
+  await landing.land(task);
+  await landing.land(task);
+  const failures = promotionFailures(db, task.id);
+  github.scriptFailure(null);
+  git(workspace.path, "update-ref", "refs/remotes/origin/main", `refs/heads/task/${task.id}`);
+
+  await answerPromotion(db, clock, landing, workspace, failures[0]!, "retry");
+
+  expect(getTask(db, failures[0]!.id)).toMatchObject({ status: "done", question_answer: ["retry"] });
+  expect(getTask(db, failures[1]!.id)).toMatchObject({ status: "done", question_answer: null });
+  expect(listEvents(db, failures[1]!.id)).toContainEqual(
+    expect.objectContaining({ payload: { kind: "pr_promotion_observed" } }),
+  );
+  expect(listEvents(db, task.id).filter((e) => e.kind === "nothing_to_land")).toHaveLength(1);
+  expect(github.requests).toHaveLength(2);
+});
+
 it("未束ねの異議がある work は同じ門で理由と数を返す", async () => {
   const workspace = await makeWorkspace("landing-objection");
   const { db, clock } = await openBoard();
@@ -2357,6 +2383,20 @@ it("PR 昇格を abandon した後、修理が内容を変えて決着すると�
   expect(github.requests).toHaveLength(2);
   expect(getTask(db, work.id)?.pr_number).toBe(1);
   expect(openPromotionQuestions(db, work.id)).toEqual([]);
+});
+
+it("立て直した question への retry の時点で運ぶ内容が無ければ、回答を受理して着地対象なしを1件だけ刻む", async () => {
+  const { db, clock, workspace, github, landing, work } = await abandonedPromotion("landing-reasked-nothing");
+  await landing.relandAncestors(settleAttachedChild(db, clock, workspace, work.id, "repair"));
+  const [reasked] = openPromotionQuestions(db, work.id);
+  git(workspace.path, "update-ref", "refs/remotes/origin/main", `refs/heads/task/${work.id}`);
+
+  await answerPromotion(db, clock, landing, workspace, reasked!, "retry");
+
+  expect(getTask(db, reasked!.id)).toMatchObject({ status: "done", question_answer: ["retry"] });
+  expect(listEvents(db, work.id).filter((e) => e.kind === "nothing_to_land")).toHaveLength(1);
+  expect(openPromotionQuestions(db, work.id)).toEqual([]);
+  expect(github.requests).toHaveLength(1);
 });
 
 it("PR 昇格を abandon した後に内容が変わっても、別の付帯子が未決着の間は question を立てず、その付帯子の決着で立てる", async () => {
