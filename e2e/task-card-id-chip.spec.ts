@@ -32,7 +32,7 @@ const registerHumanTodo = async (t: { baseUrl: string }, title: string, risk: bo
     purpose: `purpose of ${title}`,
     completion_criteria: `criteria of ${title}`,
     assignee: "human",
-    ...(risk && { risk_flag: true }),
+    risk_flag: risk,
   });
   expect(res.status).toBeLessThan(300);
   return res.json;
