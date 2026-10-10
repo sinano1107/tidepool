@@ -480,13 +480,13 @@ it("文字列以外の骨格が予算の縁にある object を切るとき、�
   // 大きくして item を切れる大きさにするため)
   const line = "\u0001".repeat(12) + "x".repeat(84) + "\u0001".repeat(8) + "x".repeat(200);
   const shapes = [
-    { last: 200, read: (nums: number[]) => followNext([{ id: 2, nums, line }, { id: 1 }] as { id: number }[]), cutOf: (piece: any) => piece.events[0] },
-    { last: 258, read: (nums: number[]) => followNext([{ id: 1 }], { nums, line }), cutOf: (piece: any) => piece },
+    { lastCuttable: 200, read: (nums: number[]) => followNext([{ id: 2, nums, line }, { id: 1 }] as { id: number }[]), cutOf: (piece: any) => piece.events[0] },
+    { lastCuttable: 258, read: (nums: number[]) => followNext([{ id: 1 }], { nums, line }), cutOf: (piece: any) => piece },
   ];
-  for (const { last, read, cutOf } of shapes) {
-    // 骨格(数の配列)を1要素(2バイト)ずつ大きくし、切れる最後の大きさ `last` から、1文字と続きの印を載せると超える縁の先までを動かす
+  for (const { lastCuttable, read, cutOf } of shapes) {
+    // 骨格(数の配列)を1要素(2バイト)ずつ大きくし、切れる最後の大きさ `lastCuttable` から、1文字と続きの印を載せると超える縁の先までを動かす
     const pieceCounts = [];
-    for (let k = last; k <= last + 4; k++) {
+    for (let k = lastCuttable; k <= lastCuttable + 4; k++) {
       const pieces = read([...Array<number>(2_300).fill(Number.MAX_SAFE_INTEGER), ...Array<number>(k).fill(7)]).filter((response) => response.partial);
       for (const piece of pieces) expect(bytesOf(piece)).toBeLessThanOrEqual(RESPONSE_BUDGET_BYTES);
       if (pieces.length > 0) expect(joinPieces(pieces, cutOf)).toEqual({ line });
