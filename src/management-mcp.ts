@@ -9,6 +9,7 @@ import {
 import { boardHalts } from "./board-halt.js";
 import type { Clock } from "./clock.js";
 import type { Db } from "./db.js";
+import { SUPPORTED_DISPLAY_LANGUAGES } from "./display-language.js";
 import { DomainError } from "./domain-error.js";
 import type { DraftClient } from "./draft.js";
 import { getLogCursor, listEvents } from "./events.js";
@@ -273,6 +274,23 @@ WebUI themselves. This implies:
 
 const QUESTION_ANNOTATIONS_DESCRIPTION =
   "A question also carries `landing` (null for a general question; for a landing question, `blocked_by` says why a `merge` answer would be rejected right now — `attached_children` or `objections` — or null when it would be accepted), `approval` (for a child-approval question, whether approving raises the parent's risk; otherwise null), `blocking` (the id of the parent task it holds up, or null), `moved` (for a memory proposal, one element per pinned entry moved since the proposal was shown: `id` is the entry as pinned, `tail_id` is where it lives now with its current `path` / `scope`, and an answer applies to `tail_id`), `needs_comment` (the answers that `answer_question` refuses without a non-blank comment; empty when every answer takes an optional one), and `free_text` (false when an answer must match one of the item's options verbatim; true when free text is accepted). A non-question task carries none of these.";
+
+const ORIGINAL_LANGUAGES = SUPPORTED_DISPLAY_LANGUAGES.join(", ");
+
+/** 空白だけの原文は domain が無いものとして捨てる(normalizeText)ので、送ったことにしない。 */
+const sent = (value: unknown) => typeof value === "string" && value.trim() !== "";
+
+/** 原文を送るなら言語の申告は必須(ADR 0230 決定1)。WebUI は申告を送らない(言語は写しの一致か表示言語)ので、門は管理MCP の
+ *  扉だけが持つ。書き込みの4つの verb と answer_question の修正値が同じ欄の名前で通る。 */
+function requireOriginalLanguage<T extends Record<string, unknown>>(input: T): T {
+  if ((sent(input.original_title) || sent(input.original_text)) && !input.original_language) {
+    throw new DomainError(`an original needs original_language: the language the human wrote it in (${ORIGINAL_LANGUAGES})`);
+  }
+  if (Array.isArray(input.annotations) && input.annotations.some((a: { original?: unknown; original_language?: unknown }) => sent(a?.original) && !a.original_language)) {
+    throw new DomainError(`an annotation's original needs its own original_language: the language the human wrote it in (${ORIGINAL_LANGUAGES})`);
+  }
+  return input;
+}
 
 /** 結果を返し、DomainError は tool error にする。 */
 export const domainResult = <R>(write: () => Unstored<R>) => {
@@ -691,8 +709,9 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
   // wording the human writes here is approved on write, and AI-drafted wording is approved
   // only through a proposal question. Domain errors come back as tool errors (domainResult).
   const writtenAs =
-    "Written as the human, approved at once. The original_* fields, when given, are the human's own wording, recorded in the " +
-    "board's display language. workspace null = the whole board.";
+    "Written as the human, approved at once. The original_* fields, when given, are the human's own wording that the English was " +
+    `made from, translated or cleaned up, and need original_language: the language the human wrote it in (${ORIGINAL_LANGUAGES}). ` +
+    "workspace null = the whole board.";
   const supersedesEffect =
     "supersedes optionally lists approved entries the new one replaces: each is invalidated as superseded by it in the same step " +
     "(candidates are refused; Behavior and Exemplar entries replace each other, Knowledge and Definitions only their own kind).";
@@ -732,7 +751,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
         `English canonical wording; original_title and original_text go together (both or neither). ${supersedesEffect} ${writtenAs}`,
       inputSchema: humanKnowledgeSchema.shape,
     },
-    async (input) => domainResult(() => recordKnowledge(deps.db, gatedHumanEntryInput(deps, input), "mcp", deps.clock.now())),
+    async (input) => domainResult(() => recordKnowledge(deps.db, gatedHumanEntryInput(deps, requireOriginalLanguage(input)), "mcp", deps.clock.now())),
   );
   server.registerTool(
     "define_memory_branch",
@@ -747,7 +766,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
         `${supersedesEffect} ${writtenAs}`,
       inputSchema: humanDefinitionSchema.shape,
     },
-    async (input) => domainResult(() => defineMemoryBranch(deps.db, gatedHumanEntryInput(deps, input), "mcp", deps.clock.now())),
+    async (input) => domainResult(() => defineMemoryBranch(deps.db, gatedHumanEntryInput(deps, requireOriginalLanguage(input)), "mcp", deps.clock.now())),
   );
   server.registerTool(
     "record_behavior",
@@ -760,7 +779,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
         `original_title and original_text go together (both or neither). ${supersedesEffect} ${writtenAs}`,
       inputSchema: humanBehaviorSchema.shape,
     },
-    async (input) => domainResult(() => recordBehavior(deps.db, gatedHumanEntryInput(deps, input), "mcp", deps.clock.now())),
+    async (input) => domainResult(() => recordBehavior(deps.db, gatedHumanEntryInput(deps, requireOriginalLanguage(input)), "mcp", deps.clock.now())),
   );
   server.registerTool(
     "preview_case",
@@ -794,13 +813,13 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
         "Record an Exemplar entry: a concrete case agents should learn from, injected into the workers of addressee (an agent name, or null " +
         "for every agent). source_event_id is the case: a decision_logged or worker_spawned event id (see preview_case); it may be " +
         `omitted only with supersedes whose entries share one source, which the exemplar then keeps. ${supersedesEffect} annotations is a ` +
-        "non-empty list; each has a polarity (imitate or avoid), an English text, an optional original (the human's own wording), and an " +
+        "non-empty list; each has a polarity (imitate or avoid), an English text, an optional original (the human's own wording that the " +
+        `English was made from, translated or cleaned up) with its original_language (${ORIGINAL_LANGUAGES}: the language the human wrote it in), and an ` +
         "anchor: \"whole\" or { field, quote } where quote is a verbatim substring of that field (decision, steering, handoff or result) " +
-        `of the rendered case. title is the English one-line label. Written as the human, approved at once; an annotation's original is ` +
-        "recorded in the board's display language. workspace null = the whole board.",
+        "of the rendered case. title is the English one-line label. Written as the human, approved at once. workspace null = the whole board.",
       inputSchema: humanExemplarSchema.shape,
     },
-    async (input) => domainResult(() => recordExemplar(deps.db, gatedHumanEntryInput(deps, input), "mcp", deps.clock.now())),
+    async (input) => domainResult(() => recordExemplar(deps.db, gatedHumanEntryInput(deps, requireOriginalLanguage(input)), "mcp", deps.clock.now())),
   );
   server.registerTool(
     "fold_memory_entries",
@@ -1103,8 +1122,10 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
         "Answer every item of a question task as the human. amendment is accepted only with approve: on a routing row proposal, " +
         "tier and/or effort to apply instead of the proposed values; on an agent tier proposal, to — any tier below the agent's current one; " +
         "on a memory approve or consolidate proposal, title, text and/or addressee (null = every agent) to approve instead of the candidate's, " +
-        "with original_title + original_text together if you wrote it in another language; an exemplar candidate takes title, addressee " +
-        "and/or annotations (the whole list, each quote verbatim in its case — see preview_case) instead of text and originals. An amended " +
+        "with original_title + original_text + original_language together when the English was made from the human's own wording, translated " +
+        `or cleaned up (original_language is the language the human wrote it in: ${ORIGINAL_LANGUAGES}); an exemplar candidate takes title, ` +
+        "addressee and/or annotations (the whole list, each quote verbatim in its case — see preview_case; an annotation's original needs its " +
+        "own original_language) instead of text and originals. An amended " +
         "memory approval is written as your own approved entry and supersedes the candidate. The answers in the question's needs_comment require a " +
         "non-blank comment: why for a reject on any proposal or approval question, what is still undecided for a defer on a memory proposal. Every other answer takes an optional comment.",
       inputSchema: answerInputSchema.extend({ task_id: z.string() }),
@@ -1113,6 +1134,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
       const task = getTask(deps.db, task_id);
       if (!task) return toolError("task not found");
       try {
+        if (amendment) requireOriginalLanguage(amendment);
         return toolResult(
           await submitAnswer(
             deps,

@@ -35,3 +35,20 @@ it("clock time requires an unpadded HH:MM within the day", () => {
   for (const value of ["07:00", "23:59"]) expect(whyInvalidClockTime(value)).toBeUndefined();
   for (const value of ["7:00", "24:00", " 07:00 ", "07:00\n"]) expect(whyInvalidClockTime(value)).toBe("time must be HH:MM between 00:00 and 23:59");
 });
+
+import { copiedOriginalLanguage } from "../src/webui-rules.js";
+
+it("an original keeps its copied language while both title and text match the copy, and takes the current language once either changes", () => {
+  const copied = { title: "分ける", text: "移行を分ける", language: "English" };
+  expect(copiedOriginalLanguage({ title: " 分ける", text: "移行を分ける\n" }, [copied], "Japanese")).toBe("English");
+  expect(copiedOriginalLanguage({ title: "分けよ", text: "移行を分ける" }, [copied], "Japanese")).toBe("Japanese");
+  expect(copiedOriginalLanguage({ title: "分ける", text: "移行は分ける" }, [copied], "Japanese")).toBe("Japanese");
+  expect(copiedOriginalLanguage({ title: "分ける", text: "移行を分ける" }, [null], "Japanese")).toBe("Japanese");
+});
+
+it("an annotation original takes the language of the copied annotation original it matches, and the current language when none or several disagree", () => {
+  const copied = [{ text: "分ける", language: "Japanese" }, { text: "keep it whole", language: "English" }];
+  expect(copiedOriginalLanguage({ text: "keep it whole" }, copied, "Japanese")).toBe("English");
+  expect(copiedOriginalLanguage({ text: "keep it all" }, copied, "Japanese")).toBe("Japanese");
+  expect(copiedOriginalLanguage({ text: "分ける" }, [...copied, { text: "分ける", language: "English" }], "Japanese")).toBe("Japanese");
+});
