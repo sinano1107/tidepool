@@ -3160,8 +3160,8 @@ function SettingsScreen({ say, memoryFocus, registerLeaveGuard }: {
       quietHoursFailed ? quietHoursUnavailable : null,
       paceOffsetsFailed ? paceOffsetsUnavailable : null,
       executionSettingsFailed ? executionSettingsUnavailable : null,
-      responseFloorsFailed ? cutReadsUnavailable : floors > 0 ? `${floors} read${floors === 1 ? '' : 's'} cut` : null,
       haltedRefiresFailed ? haltedRefiresUnavailable : halted > 0 ? `${halted} halted refire${halted === 1 ? '' : 's'}` : null,
+      responseFloorsFailed ? cutReadsUnavailable : floors > 0 ? `${floors} read${floors === 1 ? '' : 's'} cut` : null,
       memorySettingsFailed ? memorySettingsUnavailable : null,
       metaReviewFailed ? metaReviewUnavailable : null,
     ].filter((part) => part !== null);
