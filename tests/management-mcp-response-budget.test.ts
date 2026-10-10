@@ -4,7 +4,7 @@ import { appendEvent } from "../src/events.js";
 import { listMemoryBranches } from "../src/memory.js";
 import { nextDescription } from "../src/response-budget.js";
 import { registerTask } from "../src/tasks.js";
-import { api, bootTidepool, HOUR, haltedRefires, managementMcpClient, queueWork, RESPONSE_BUDGET_BYTES, type Tidepool, WORKER_SPAWNED } from "./harness.js";
+import { api, bootTidepool, HOUR, haltedRefires, managementMcpClient, queueWork, RESPONSE_BUDGET_BYTES, readFollowingNext, type Tidepool, WORKER_SPAWNED } from "./harness.js";
 
 // 管理MCP の読み口は応答予算(UTF-8 で 40,000 バイト、ADR 0195)に収まり、収まらない分は続き(next)で読む(issue #1388)。
 // 詰め方の境目・欄の分割・続きの error は tests/response-budget.test.ts が言う。ここは読み口ごとの写像を言う。
@@ -24,13 +24,6 @@ async function call(client: Client, args: Record<string, unknown>, verb = "get_t
   expect(result.isError ?? false, result.content[0].text).toBe(false);
   const text: string = result.content[0].text;
   return { bytes: Buffer.byteLength(JSON.stringify(result)), payload: JSON.parse(text) };
-}
-
-/** 最初の呼び出しから next が尽きるまで追った応答の列。 */
-async function followNext(client: Client, verb: string, args: Record<string, unknown> = {}) {
-  const responses = [await call(client, args, verb)];
-  while (responses.at(-1)!.payload.next) responses.push(await call(client, { next: responses.at(-1)!.payload.next }, verb));
-  return responses;
 }
 
 /** HTTP の events の口(古い順)を新しい順にした id の列。 */
@@ -200,7 +193,7 @@ it.each(reads)("$verb は予算を超える量を予算分ずつ返し、next �
   const client = await managementMcpClient(t.baseUrl);
   try {
     const args = await pile(client, 60);
-    const responses = await followNext(client, verb, args);
+    const responses = await readFollowingNext(client, verb, args);
 
     expect(responses.length).toBeGreaterThan(1);
     for (const response of responses) expect(response.bytes).toBeLessThanOrEqual(RESPONSE_BUDGET_BYTES);

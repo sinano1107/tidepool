@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import type { AuthorityProfile } from "../src/registry.js";
 import { UNRESOLVABLE_AGENT } from "./fakes.js";
-import { api, bootTidepool, HOUR, mcpClient, questions, type Tidepool } from "./harness.js";
+import { api, bootTidepool, callAsTask, HOUR, mcpClient, questions, type Tidepool } from "./harness.js";
 
 let t: Tidepool;
 afterEach(() => t?.stop());
@@ -101,15 +101,6 @@ it("navigator 宛てタスクは navigator 自身の authority(deckhand とは�
 
 const spec = (title: string) => ({ title, purpose: `purpose of ${title}`, completion_criteria: `criteria of ${title}`, assignee: "deckhand" });
 
-async function call(t: Tidepool, taskId: string, name: string, args: Record<string, unknown>): Promise<any> {
-  const client = await mcpClient(t.mcpBaseUrl, taskId);
-  try {
-    return await client.callTool({ name, arguments: args });
-  } finally {
-    await client.close();
-  }
-}
-
 /** `drift()` までは resolveAuthority と同じに解決し、その後は assignee の解決が `fail` で投げる。 */
 function driftingResolver(fail: (name: string) => Error) {
   let drifted = false;
@@ -125,7 +116,7 @@ function driftingResolver(fail: (name: string) => Error) {
 }
 
 async function expectRefusedAndQuarantined(t: Tidepool, taskId: string, verb: string, args: Record<string, unknown>) {
-  const refused = await call(t, taskId, verb, args);
+  const refused = await callAsTask(t, taskId, verb, args);
   expect(refused.isError).toBe(true);
   expect(refused.content[0].text).toContain("do not need to escalate");
 
@@ -133,7 +124,7 @@ async function expectRefusedAndQuarantined(t: Tidepool, taskId: string, verb: st
     ["agent", "deckhand"],
   ]);
 
-  const escalated = await call(t, taskId, "escalate", {
+  const escalated = await callAsTask(t, taskId, "escalate", {
     context: "the plan needs a human call",
     questions: [{ title: "which way?", options: ["a", "b"], recommendation: "a" }],
   });
@@ -168,10 +159,10 @@ describe.each(UNRESOLVABLE_AGENT)("assignee の authority が %s で解決でき
     t = await bootTidepool({ resolveAuthority: resolver.resolveAuthority });
     const parent = await registerAssigned(t, "deckhand's task", "deckhand");
     await t.clock.advance(HOUR);
-    const decomposed = await call(t, parent.id, "decompose", { reason: "split", children: [spec("A")] });
+    const decomposed = await callAsTask(t, parent.id, "decompose", { reason: "split", children: [spec("A")] });
     const [a] = JSON.parse(decomposed.content[0].text).child_ids;
     await t.clock.advance(HOUR);
-    expect((await call(t, a, "declare_premise_breach", { reason: "module M is broken" })).isError ?? false).toBe(false);
+    expect((await callAsTask(t, a, "declare_premise_breach", { reason: "module M is broken" })).isError ?? false).toBe(false);
     expect(t.worker.started.map((x) => x.title)).toEqual(["deckhand's task", "A", "deckhand's task"]);
     resolver.drift();
 

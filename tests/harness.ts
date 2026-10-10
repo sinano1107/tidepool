@@ -453,6 +453,16 @@ export async function mcpClient(baseUrl: string, taskId?: string): Promise<Clien
   return client;
 }
 
+/** `taskId` の task として verb を1回呼んで client を閉じ、CallToolResult をそのまま返す(isError は見ない)。 */
+export async function callAsTask(t: Tidepool, taskId: string, name: string, args: Record<string, unknown>): Promise<any> {
+  const client = await mcpClient(t.mcpBaseUrl, taskId);
+  try {
+    return await client.callTool({ name, arguments: args });
+  } finally {
+    await client.close();
+  }
+}
+
 /** 応答予算(ADR 0195)。読み口の応答は、盤面が返す CallToolResult を丸ごとシリアライズした UTF-8 バイト数でこれ以下に収まる。 */
 export const RESPONSE_BUDGET_BYTES = 40_000;
 
@@ -746,9 +756,7 @@ export function queueWork(
 
 /** Put one decision line in the log for the slot task and return its entry. */
 export async function loggedEntry(t: Tidepool, taskId: string, line: string): Promise<any> {
-  const client = await mcpClient(t.mcpBaseUrl, taskId);
-  await client.callTool({ name: "log_decision", arguments: { line } });
-  await client.close();
+  await callAsTask(t, taskId, "log_decision", { line });
   const log = (await api(t.baseUrl, "GET", "/api/log")).json;
   return log.entries.find((e: any) => e.payload.line === line);
 }
@@ -910,13 +918,7 @@ export function quarantineQuestion(db: Db, kind: QuarantineKind, value: string |
 
 /** slot task を MCP の `complete_task` で完了させる。 */
 export async function completeViaMcp(t: Tidepool, taskId: string, handoff = true): Promise<any> {
-  const client = await mcpClient(t.mcpBaseUrl, taskId);
-  const res: any = await client.callTool({
-    name: "complete_task",
-    arguments: handoff ? { handoff: FULL_HANDOFF } : {},
-  });
-  await client.close();
-  return res;
+  return callAsTask(t, taskId, "complete_task", handoff ? { handoff: FULL_HANDOFF } : {});
 }
 
 /** Finish only the reviews generated for this integration point, through the
@@ -1122,12 +1124,7 @@ export async function settleRcaByWorker(t: Tidepool, reviewId: string) {
 
 /** `taskId` の task として RCA の起草 verb `propose_from_objection` を呼ぶ(起草の中身は固定)。 */
 export async function propose(t: Tidepool, taskId: string, args: Record<string, unknown>) {
-  const client = await mcpClient(t.mcpBaseUrl, taskId);
-  try {
-    return (await client.callTool({ name: "propose_from_objection", arguments: { path: "testing/fixtures", title: "Keep fixtures", text: "Never skip the fixtures.", ...args } })) as any;
-  } finally {
-    await client.close();
-  }
+  return callAsTask(t, taskId, "propose_from_objection", { path: "testing/fixtures", title: "Keep fixtures", text: "Never skip the fixtures.", ...args });
 }
 
 /** settings の撃ち直しを打ち切った件の一覧。 */
