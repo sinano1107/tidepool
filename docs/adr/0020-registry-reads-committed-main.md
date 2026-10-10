@@ -22,6 +22,21 @@
 
 追記時の considered options: **(worker, 版)ごとの RCA 分割** — 1人の worker の判断連鎖を1つの文脈で読むことに当事者レビューの価値があり、版で裂くと連鎖が切れる。**版間 diff の注入** — 証拠(原本)と解釈(diff の意味づけ)の線を越える、RCA 本人の仕事の先取り。
 
+## 追記: 当時版は本文に加えて当時の authority の散文と Roster を含む(2026-10-10 の grilling、issue #1741)
+
+決定3は注入を「当時の agent 定義本文」と名指したが、Authority 節(#7)と Roster 節(#43)はこの ADR より前から本文と同じ system prompt の層に入っていた。profile を検討して退けた記録は無い。判断の原因が guidance の一文や Roster の欠員にあるとき、RCA は見ていないものを名指せず、その見落としは記録にも残らない —— CONTEXT.md の Review が改善提案に含める「authority profile の変更」の元を、RCA は読めなかった。
+
+精密化:
+
+1. **当時版は本文と、当時の Authority 節・Roster 節を含む。** 本文と同じ commit から、objected entry ごとに解決し、同じ版の束に並べる(上の追記の形のまま)。
+2. **節は描画の再現であり、原本ではない。** 当時の commit の registry を今日の描画コードで組み直す。registry 由来の文面(guidance・description・`*` の展開先)は当時のとおりで、組み込み Auditor や `human` の description・見出しのような code 定数の部分は今日の値になる —— RCA が diff を書ける対象は registry 側なので、正確さが要る部分は正確である。この食い違いは prompt では申告しない(読み手の判断が変わらない)。見出しは profile 名(改善提案の宛先)を出し、registry commit の hash は出さない —— RCA の cwd に registry は無く、hash を使う読み口も無い。同じ理由で、複数版の見出しからも hash を外し entry id のラベルだけにする。
+3. **組み直しは schema を通さない。** 当時の spawn は当時の schema で全ファイルを読めていたので、今日読めないのは形の変化である。本文と同じく必要な欄だけを読み、profile が読めない版は本文を注入した上で欠落を1行申告する。その commit の registry に無い名前は黙って飛ばす(spawn 時の Roster もそうだった)が、名前があって description が読めない行は申告する —— 黙って消すと「Roster にいなかった」と読まれる。
+4. **当時と今で必ず同じ部分は指すだけにする。** 被レビュー task が review だった(当時の Authority は ADR 0013 の reviewer 定数 —— ADR 0056)場合、組み直した文面は RCA 自身の Authority と同一なので、その旨を1行書いて自分の節を指す。Roster(当時の被レビュー task の executor)は今と違うので組み直す。当時の担当が組み込み agent に解決されていた(その名前の定義がその commit の registry に無い —— `loadRegistry` の上書き規則と同じ判定)場合も同じ規則で、本文の位置に組み込みだった旨を1行書き、Roster は組み直す。
+
+独立レビューに注入しない線は変わらない。
+
+追記時の considered options: **profile を読む verb を足す** —— 必ず読むべき証拠を規律頼みにする(ADR 0180 の線)。**yaml の原本を丸ごと** —— `allowed_workspaces` や `merge` のように worker が文面として読んでいない値が混ざり、それらの門に当たった事実は既に event log にある。**spawn 時に描画済みの節を `worker_spawned` に記録する** —— 文面は完全に一致するが、`*` の Roster を毎 spawn の event に載せ、上の追記の「events のみで導出、スキーマ変更なし」を外れる。**frontmatter の他の欄(tier・skills・provider)も入れる** —— worker に文面として届いていない。
+
 Considered options:
 
 - **ワーキングツリー読みを維持し、dirty フラグを記録する**(当初案) — 記録は正直になるが、床の破れ(未 merge 内容が spawn に効く)はそのまま残る。
