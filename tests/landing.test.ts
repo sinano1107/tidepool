@@ -1646,7 +1646,8 @@ it("merge に失敗した開いたままの PR は、tick を落とさずキュ�
   const landing = autoMerging(db, clock, workspace, github);
   await expect(landing.tick("auto_merge", clock.now())).resolves.toBeUndefined();
 
-  expect(github.ciChecks.map((ref) => ref.number)).toEqual([1, 2]);
+  // PR #1 は merge の失敗の後に同じ読み取りで読み直される(ADR 0231 決定1)
+  expect(github.ciChecks.map((ref) => ref.number)).toEqual([1, 1, 2]);
   expect(github.merged).toEqual([{ path: workspace.path, number: 2 }]);
   expect(await readOnNextTick(landing, github, clock.now())).toEqual([]);
   expect(mergeQuestions(db)).toEqual([
@@ -1709,7 +1710,8 @@ it("CI を読んだ後に閉じられて merge が失敗した PR は、読み�
   const landing = autoMerging(db, clock, workspace, github);
   await landing.tick("auto_merge", clock.now());
 
-  expect(github.stateChecks).toHaveLength(1);
+  // CI の読みと、merge の失敗の後の読み直し(ADR 0231 決定1)
+  expect(github.ciChecks).toHaveLength(2);
   expect(await readOnNextTick(landing, github, clock.now())).toEqual([]);
   expect(mergeQuestions(db)).toEqual([]);
   expect(boardEvents(db, work.id, "pr_close_observed")).toEqual(closeObserved(1));
@@ -1739,7 +1741,7 @@ it("merge が失敗し状態の読み直しも失敗した PR は、tick を落�
   const github = new FakeGitHubClient();
   const work = queueAutoMerge(db, clock, 1);
   github.scriptMergeFailure(1, new Error(CONFLICT));
-  github.scriptStateReadFailure(1, new Error("gh: could not reach github.com"));
+  afterCiRead(github, () => github.scriptUnreadable(1));
   const logged = vi.spyOn(console, "error").mockImplementation(() => {});
 
   const landing = autoMerging(db, clock, workspace, github);
@@ -1753,6 +1755,31 @@ it("merge が失敗し状態の読み直しも失敗した PR は、tick を落�
       boardEvents(db, work.id, kind),
     ),
   ).toEqual([]);
+});
+
+// ADR 0231 決定1: head が動いたことは次の tick で新しい head の CI を読む理由であって、人間に問うことではない
+it("CI を読んだ後に head が動いた PR は merge されず、question も event も残さずキューに残り、次の tick で新しい head の CI が緑なら新しい head で merge される", async () => {
+  const workspace = await makeWorkspace("landing-head-moved");
+  const { db, clock } = await openBoard();
+  const github = new FakeGitHubClient();
+  const work = queueAutoMerge(db, clock, 1);
+  github.scriptHead(1, "ci-read-head");
+  afterCiRead(github, () => github.scriptHead(1, "pushed-after-ci-read"));
+
+  const landing = autoMerging(db, clock, workspace, github);
+  await landing.tick("auto_merge", clock.now());
+
+  expect(github.merged).toEqual([]);
+  expect(mergeQuestions(db)).toEqual([]);
+  expect(
+    ["pr_merged", "pr_merge_observed", "pr_close_observed", "auto_merge_withdrawn"].flatMap((kind) =>
+      boardEvents(db, work.id, kind),
+    ),
+  ).toEqual([]);
+
+  expect(await readOnNextTick(landing, github, clock.now())).toEqual([1]);
+  expect(github.merged).toEqual([{ path: workspace.path, number: 1 }]);
+  expect(github.mergedHeads).toEqual(["pushed-after-ci-read"]);
 });
 
 it("分類できない例外が1件の PR で起きても、tick は落ちずその PR はキューに残り、後ろの PR は処理される", async () => {

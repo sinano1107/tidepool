@@ -616,9 +616,9 @@ it("merge 回答は question の workspace で live CI を確認してから実 
     currentNow = afterCi;
     return readPullRequest(ref);
   };
-  github.mergePullRequest = async (ref) => {
+  github.mergePullRequest = async (ref, head) => {
     callOrder.push("merge");
-    return mergePullRequest(ref);
+    return mergePullRequest(ref, head);
   };
 
   const answered = await submitAnswer(
@@ -708,6 +708,51 @@ it("猶予の5分を過ぎても check 未報告の PR への merge 回答は、
 
   await expect(answer).resolves.toMatchObject({ status: "done" });
   expect(github.merged).toEqual([{ path: "/workspaces/product", number: 42 }]);
+});
+
+// ADR 0231 決定1: 回答を受理してから merge するまでに着いた push は、検査なしに入らない
+it("CI を読んだ後に head が動いた PR への merge 回答は失敗し、merge されず question は開いたまま残る", async () => {
+  db = openDb(":memory:");
+  const work = registerTask(
+    db,
+    {
+      type: "work",
+      title: "ship the feature",
+      purpose: "deliver the requested change",
+      completion_criteria: "the change is merged",
+      workspace: "product",
+    },
+    NOW,
+    ...HUMAN_WEBUI,
+  );
+  recordPrOpened(db, work, 42, "worker", NOW, { merge: "escalate" }, undefined, "worker");
+  const github = new FakeGitHubClient();
+  github.scriptHead(42, "ci-read-head");
+  const readPullRequest = github.readPullRequest.bind(github);
+  github.readPullRequest = async (ref) => {
+    const pr = await readPullRequest(ref);
+    github.scriptHead(42, "pushed-after-ci-read");
+    return pr;
+  };
+
+  const answer = submitAnswer(
+    {
+      db,
+      pollNow: () => {},
+      github,
+      resolveWorkspace: (name) => ({ name: name!, path: `/workspaces/${name}` }),
+      landing: unusedLanding,
+    },
+    onlyQuestion(db),
+    ["merge"],
+    undefined,
+    () => NOW,
+    "webui",
+  );
+
+  await expect(answer).rejects.toThrow();
+  expect(github.merged).toEqual([]);
+  expect(onlyQuestion(db).status).toBe("todo");
 });
 
 it("workspace quarantine の回答は tree が clean と確認できなければ DomainError になり、question は todo のまま残る", async () => {

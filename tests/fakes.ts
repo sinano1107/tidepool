@@ -410,7 +410,11 @@ export class FakeGitHubClient implements GitHubClient {
   readonly issueComments: Array<{ ref: IssueRef; body: string }> = [];
   readonly ciChecks: PrRef[] = [];
   readonly merged: PrRef[] = [];
+  /** The head each entry of `merged` was pinned to (ADR 0231 決定1), same order. */
+  readonly mergedHeads: string[] = [];
   readonly stateChecks: PrRef[] = [];
+  private heads = new Map<number, string>();
+  private unreadable = new Set<number>();
   private mergedOutside = new Set<number>();
   private closedOutside = new Set<number>();
   private mergeFailures = new Map<number, Error>();
@@ -458,20 +462,41 @@ export class FakeGitHubClient implements GitHubClient {
     return this.closedOutside.has(number) ? "CLOSED" : "OPEN";
   }
 
-  async readPullRequest(ref: PrRef): Promise<PrStatus> {
-    this.ciChecks.push(ref);
-    return { ci: this.ciStatus, state: this.stateOf(ref.number) };
+  private headOf(number: number): string {
+    return this.heads.get(number) ?? `head-of-pr-${number}`;
   }
 
-  async mergePullRequest(ref: PrRef): Promise<void> {
+  async readPullRequest(ref: PrRef): Promise<PrStatus> {
+    this.ciChecks.push(ref);
+    if (this.unreadable.has(ref.number)) return { ci: "pending", state: "unreadable" };
+    return { ci: this.ciStatus, state: this.stateOf(ref.number), head: this.headOf(ref.number) };
+  }
+
+  async mergePullRequest(ref: PrRef, head: string): Promise<void> {
     // GitHub refuses a merge on an already-merged or closed PR; the fake must
     // too, or the poll's retry hole (ADR 0079 決定3 / ADR 0229) can't be reproduced here
     if (this.stateOf(ref.number) !== "OPEN") {
       throw new Error(`PR #${ref.number} is ${this.stateOf(ref.number).toLowerCase()}`);
     }
+    // --match-head-commit: GitHub refuses a head that is no longer the PR's (ADR 0231 決定1)
+    if (head !== this.headOf(ref.number)) {
+      throw new Error(`Head branch was modified. Review and try the merge again.`);
+    }
     const failure = this.mergeFailures.get(ref.number);
     if (failure) throw failure;
     this.merged.push(ref);
+    this.mergedHeads.push(head);
+  }
+
+  /** Moves one PR's head — a push onto its branch (ADR 0231 決定1). */
+  scriptHead(number: number, head: string): void {
+    this.heads.set(number, head);
+  }
+
+  /** Makes the combined read on one PR come back unreadable — gh exited
+   *  non-zero. The real client never throws there. */
+  scriptUnreadable(number: number): void {
+    this.unreadable.add(number);
   }
 
   async getPullRequestState(ref: PrRef): Promise<PrState> {
