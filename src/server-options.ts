@@ -608,16 +608,16 @@ function protectedWorkspaceChecker(
 }
 
 /** The pull half of the roster (issue #43 / ADR 0014), read fresh against the
- *  registry — same pattern as agentRegisteredChecker. Without a registry
+ *  registry — same pattern as agentRegisteredChecker. Names resolving to the
+ *  built-in agent are left out, as in the push half (ADR 0235). Without a registry
  *  there's nothing to list beyond list_agents's own fixed `human` line. */
 function listAgentsResolver(board: BoardComposition): (() => RosterAgent[]) | undefined {
   const { registryDir } = board;
   if (!registryDir) return undefined;
   return () =>
-    Object.values(loadBoardRegistry(board).agents).map((agent) => ({
-      name: agent.name,
-      description: agent.description,
-    }));
+    Object.values(loadBoardRegistry(board).agents)
+      .filter((agent) => agent.builtin !== true)
+      .map((agent) => ({ name: agent.name, description: agent.description }));
 }
 
 /** Assignee/workspace candidates for the registration screen (issue #12).
@@ -631,6 +631,7 @@ function registryCandidates(board: BoardComposition): RegistryCandidates | undef
   }
   return {
     assignees: [...Object.keys(registry.agents), "human"],
+    builtIns: Object.values(registry.agents).filter((agent) => agent.builtin === true).map((agent) => agent.name),
     workspaces: Object.keys(registry.workspaces),
     icons,
   };

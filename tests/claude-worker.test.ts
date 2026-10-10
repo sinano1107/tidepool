@@ -520,6 +520,30 @@ describe("ClaudeCodeWorker", () => {
     expect(systemPrompt).not.toContain("deckhand — General work agent");
   });
 
+  it("組み込み agent に解決される名前は、assignable_to の \"*\" 展開にも名指しにも roster に現れない(ADR 0235 決定1)", async () => {
+    for (const assignableTo of ['"*"', "fugu\n  - navigator"]) {
+      const { start, calls } = await makeWorker({
+        "authority/standard.yaml": `guidance: be careful\nassignable_to:\n  - ${assignableTo}\nallowed_workspaces:\n  - "*"\nmerge: external\n`,
+        "agents/navigator.md": NAVIGATOR_MD,
+      });
+      start();
+      const args = calls[0]!.args;
+      const systemPrompt = args[args.indexOf("--append-system-prompt") + 1]!;
+      expect(systemPrompt).toContain("navigator — Navigation specialist");
+      expect(systemPrompt).not.toContain("fugu —");
+    }
+  });
+
+  it("組み込み agent を shadow している間、その名前は普通の agent として roster に現れる(ADR 0235 決定1 / ADR 0228 決定2)", async () => {
+    const { start, calls } = await makeWorker({
+      "agents/fugu.md": `---\nname: fugu\nversion: 1.0.0\nauthority: standard\nprovider: anthropic\nskills:\n  - "*"\ndescription: Shadowing work agent\n---\nYou are Fugu.\n`,
+    });
+    start();
+    const args = calls[0]!.args;
+    const systemPrompt = args[args.indexOf("--append-system-prompt") + 1]!;
+    expect(systemPrompt).toContain("fugu — Shadowing work agent");
+  });
+
   it("assignable_to の Object.prototype 由来のキー(toString 等)は drift と同じく黙ってスキップされ roster に混入しない(issue #69)", async () => {
     const { start, calls } = await makeWorker({
       "authority/standard.yaml": `guidance: be careful\nassignable_to:\n  - toString\nallowed_workspaces:\n  - "*"\nmerge: external\n`,

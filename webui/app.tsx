@@ -600,7 +600,7 @@ function EditTaskDialog({ taskCard, onSaved, onClose, say }: {
   const { Button, Card, Input, Select, Checkbox } = window.TidepoolDesignSystem_8a0ead;
   const [full, setFull] = React.useState<WireContract['GET /api/tasks/:id'] | null>(null);
   const [busy, setBusy] = React.useState(false);
-  const [candidates, setCandidates] = React.useState<AppCandidates>({ assignees: [], workspaces: [], icons: {} });
+  const [candidates, setCandidates] = React.useState<AppCandidates>({ assignees: [], builtIns: [], workspaces: [], icons: {} });
   const [fields, setFields] = React.useState<EditTaskFields | null>(null);
   React.useEffect(() => {
     api('GET /api/registry/candidates').then(setCandidates).catch(() => {});
@@ -623,6 +623,10 @@ function EditTaskDialog({ taskCard, onSaved, onClose, say }: {
   const ruleSubject = { ...fields, type: full.type, parent_id: full.parent_id };
   const showReviewFlag = TidepoolRules.reviewFlagCarriesMeaning(ruleSubject);
   const showReviewBy = TidepoolRules.completionReviewFires(ruleSubject);
+  // 新しく選ぶ候補だけを task の type で絞り、保存済みの現在値は外れても(registry から消えても)残す(ADR 0235 決定4)
+  const currentAssignee = full.raw_assignee ?? '';
+  const assigneeNames = candidates.assignees.filter((n) => n === currentAssignee || !TidepoolRules.whyAssigneeCannotTake(n, full.type, candidates.builtIns.includes(n)));
+  if (currentAssignee && !assigneeNames.includes(currentAssignee)) assigneeNames.push(currentAssignee);
   // only the fields that actually changed — an unchanged submission is a no-op
   // server-side, but sending a minimal patch keeps the intent clear
   const blankContent = !issueBacked && [fields.title, fields.purpose, fields.completion_criteria].some((value) => TidepoolRules.whyBlank(value));
@@ -680,7 +684,7 @@ function EditTaskDialog({ taskCard, onSaved, onClose, say }: {
           </React.Fragment>
         )}
         <div style={{ display: 'grid', gridTemplateColumns: issueBacked ? '1fr' : '1fr 1fr', gap: 12 }}>
-          <Select label="Assignee" options={withPlaceholder('(default agent)', candidates.assignees)} value={fields.assignee} onChange={(e) => set('assignee', e.target.value)} />
+          <Select label="Assignee" options={withPlaceholder('(default agent)', assigneeNames)} value={fields.assignee} onChange={(e) => set('assignee', e.target.value)} />
           {!issueBacked && (
             <Select label="Workspace" options={withPlaceholder('(default workspace)', candidates.workspaces)} value={fields.workspace} onChange={(e) => set('workspace', e.target.value)} />
           )}

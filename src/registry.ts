@@ -464,7 +464,11 @@ export interface RosterAgent {
  *  #12), resolved from the registry by the caller (main.ts) — the API/server
  *  layers never touch the filesystem/git registry loader themselves. */
 export interface RegistryCandidates {
+  /** 組み込みに解決される名前も含む —— review の Assignee と ReviewerPicker は組み込みを指名できる(ADR 0235 決定2)。 */
   assignees: string[];
+  /** `assignees` のうち、今組み込み agent に解決される名前(shadow されていないもの)。type ごとの出し分けは
+   *  webui-rules の `whyAssigneeCannotTake` が答える(ADR 0235 決定3)。 */
+  builtIns: string[];
   workspaces: string[];
   /** Assignee name → icon (issue #52), for agents that have one configured.
    *  An assignee absent from this map has no icon — the board UI's

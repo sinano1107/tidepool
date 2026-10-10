@@ -152,9 +152,8 @@ it("origin/main がまだ無い remote-backed 盤面でも、起動時 refresh �
     workspaceName: "tidepool",
   });
 
-  // registry のファイルは deckhand 1つだが、組み込みの fugu が同じ map に乗る
-  // (ADR 0117 決定2)—— roster も候補もこの1つの map を読む
-  expect(options.listAgents?.().map((agent) => agent.name)).toEqual(["deckhand", "fugu"]);
+  // 組み込みの fugu も同じ map に乗る(ADR 0117 決定2)が、roster には現れない(ADR 0235 決定1)
+  expect(options.listAgents?.().map((agent) => agent.name)).toEqual(["deckhand"]);
 });
 
 // 決定4 の fail-open。remote へ届かないこと自体は起動を拒む理由にならない —— 床は
@@ -178,7 +177,7 @@ it("起動時 refresh が失敗しても合成は落ちず、理由を1度だけ
     warnings: error.mock.calls.length,
     warning: error.mock.calls.flat().join(" "),
   }).toMatchObject({
-    composed: ["deckhand", "fugu"],
+    composed: ["deckhand"],
     warnings: 1,
     warning: expect.stringContaining("[registry] startup refresh failed"),
   });
@@ -471,8 +470,9 @@ it("registry があるとき、各口には対応する解決子が刺さって�
   expect(options.resolvesToBuiltIn?.("fugu")).toBe(true);
   expect(options.resolvesToBuiltIn?.("deckhand")).toBe(false);
   // 残りの registry 由来の口も、registry の中身をそのまま映していること
-  expect(options.listAgents?.().map((agent) => agent.name)).toEqual(["deckhand", "fugu"]);
-  expect(options.registryCandidates?.()?.assignees).toEqual(["deckhand", "fugu", "human"]);
+  // roster は組み込みを除き、候補は残して組み込みに解決される名前を別に添える(ADR 0235 決定1・3)
+  expect(options.listAgents?.().map((agent) => agent.name)).toEqual(["deckhand"]);
+  expect(options.registryCandidates?.()).toMatchObject({ assignees: ["deckhand", "fugu", "human"], builtIns: ["fugu"] });
   // assignee 未設定は defaultAgentName へ。registry の知らない名前は「profile 無し」に
   // 潰さず、agent 名の quarantine の入口が受ける解決失敗として投げる(ADR 0217 決定3)
   expect(options.resolveAuthority?.(null, "work")).toBeDefined();
@@ -508,6 +508,14 @@ it("registry があるとき、各口には対応する解決子が刺さって�
   // ADR 0024: workspace の pickup 時 fetch がこの名義で撃つ。落とすと private remote の
   // workspace が「認証が無い」理由で黙って quarantine に落ち続ける
   expect(options.githubAuth).toBe(githubAuth);
+});
+
+it("組み込みを shadow している盤面では、その名前は roster にも候補にも普通の agent として現れる(ADR 0235 決定1 / ADR 0228 決定2)", async () => {
+  const registryDir = await makeRegistry({ "agents/fugu.md": agentMd("fugu", "anthropic") });
+  const options = await buildOptions({ ...composition(), registryDir, workspaceName: "tidepool", defaultAgentName: "deckhand" });
+
+  expect(options.listAgents?.().map((agent) => agent.name)).toEqual(["deckhand", "fugu"]);
+  expect(options.registryCandidates?.()).toMatchObject({ assignees: ["deckhand", "fugu", "human"], builtIns: [] });
 });
 
 /** issue #1745: agent quarantine の解除検査の「registry に戻った」は pickup の解決に通ること。

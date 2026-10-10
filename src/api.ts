@@ -2022,7 +2022,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   });
 
   router.get("/registry/candidates", (_req, res) => {
-    sendJson(res, (registryCandidates?.() ?? { assignees: [], workspaces: [], icons: {} }) satisfies WireContract["GET /api/registry/candidates"]);
+    sendJson(res, (registryCandidates?.() ?? { assignees: [], builtIns: [], workspaces: [], icons: {} }) satisfies WireContract["GET /api/registry/candidates"]);
   });
 
   // UI display is one of ADR 0016's use-moments: issue-backed rows expand
