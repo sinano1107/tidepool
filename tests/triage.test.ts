@@ -1,9 +1,9 @@
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import type { Cause } from "../src/cause.js";
 import { type Db, openDb } from "../src/db.js";
 import { appendEvent, listEvents } from "../src/events.js";
 import type { GatedJudgment } from "../src/retrospective.js";
-import { listChildren, logDecision, registerTask } from "../src/tasks.js";
+import { humanDecomposeTask, listChildren, logDecision, registerTask } from "../src/tasks.js";
 import { closeStaleTriage, closeTriageSessionOnly, commitTriage, entryObjections, objectionsById, raiseObjection, recordDisplayedEntries, stageFrontInsert, startTriage, TRIAGE_TIMEOUT, TriageError } from "../src/triage.js";
 import { BOARD_WORKER_ID, HUMAN_WORKER_ID } from "../src/worker-id.js";
 import {
@@ -868,6 +868,124 @@ it("commit が立てる子の登録は材料の異議 id 列を持つ —— 修
     ["rca (self): t", "helmsman", [h]],
     ["rca (auditor): t", null, [d, h]],
   ]);
+});
+
+it("修理子は work の assignee を写す —— エントリの書き手とは別(ADR 0237)", () => {
+  const db = openDb(":memory:");
+  const at = new Date("2026-10-10T00:00:00.000Z");
+  const task = registerTask(db, { type: "work", assignee: "deckhand", title: "t", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI);
+  const entry = logDecision(db, task, "human's call", HUMAN_WORKER_ID, at, "webui");
+  raiseObjection(db, entry, "redo it", at);
+
+  commitTriage(db, at, [], new Map(), { agentRegistered: (name) => name === "deckhand", resolvesToBuiltIn: () => false });
+
+  const repair = listChildren(db, task.id).find((child) => child.type === "work")!;
+  expect(repair.assignee).toBe("deckhand");
+  expect(listEvents(db, repair.id).find((event) => event.kind === "task_registered")!.payload).not.toHaveProperty("assignee_not_copied");
+});
+
+it.each([
+  ["removed-agent", false, false, "unknown agent: removed-agent"],
+  ["fugu", true, true, "agent fugu is the built-in agent, which runs reviews only"],
+] as const)("修理子に写せない %s は空に落ち、名前と門の拒否文が登録 event に残る(ADR 0237)", (name, registered, builtIn, reason) => {
+  const db = openDb(":memory:");
+  const at = new Date("2026-10-10T00:00:00.000Z");
+  const task = registerTask(db, { type: "work", assignee: name, title: "t", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI);
+  const entry = logDecision(db, task, "human's call", HUMAN_WORKER_ID, at, "webui");
+  raiseObjection(db, entry, "redo it", at);
+
+  const result = commitTriage(db, at, [], new Map(), { agentRegistered: () => registered, resolvesToBuiltIn: () => builtIn });
+
+  expect(result.outcome).toBe("closed_now");
+  const repair = listChildren(db, task.id).find((child) => child.type === "work")!;
+  expect(repair.assignee).toBeNull();
+  expect(listEvents(db, repair.id).find((event) => event.kind === "task_registered")!.payload).toMatchObject({
+    assignee_not_copied: { name, reason },
+  });
+});
+
+it.each([
+  ["work", "human", "human"],
+  ["review", undefined, null],
+  ["review", "reviewer", null],
+] as const)("%s の assignee %s から修理子への宛先は %s(ADR 0237)", (type, assignee, expected) => {
+  const db = openDb(":memory:");
+  const at = new Date("2026-10-10T00:00:00.000Z");
+  const task = registerTask(db, { type, assignee, title: "t", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI);
+  const entry = logDecision(db, task, "human's call", HUMAN_WORKER_ID, at, "webui");
+  raiseObjection(db, entry, "redo it", at);
+
+  commitTriage(db, at, [], new Map(), { agentRegistered: () => false, resolvesToBuiltIn: () => true });
+
+  const repair = listChildren(db, task.id).find((child) => child.type === "work")!;
+  expect(repair.assignee).toBe(expected);
+  expect(listEvents(db, repair.id).find((event) => event.kind === "task_registered")!.payload).not.toHaveProperty("assignee_not_copied");
+});
+
+it("pickup 前の work の人間 decompose への異議は修理子の宛先を空に保つ(ADR 0237)", () => {
+  const db = openDb(":memory:");
+  const at = new Date("2026-10-10T00:00:00.000Z");
+  const task = registerTask(db, { type: "work", title: "t", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI);
+  humanDecomposeTask(db, task, { reason: "split the work", children: [{ title: "child", purpose: "p", completion_criteria: "c" }] }, at, undefined, "webui");
+  const entry = listEvents(db, task.id).find((event) => event.kind === "decision_logged")!;
+  raiseObjection(db, entry.id, "redo it", at);
+
+  commitTriage(db, at, [], new Map(), { agentRegistered: () => false, resolvesToBuiltIn: () => true });
+
+  const repair = listChildren(db, task.id).find((child) => child.title === "repair: t")!;
+  expect(repair.assignee).toBeNull();
+  expect(listEvents(db, repair.id).find((event) => event.kind === "task_registered")!.payload).not.toHaveProperty("assignee_not_copied");
+});
+
+it("registry の依存が無い盤面は人間の門と同じく修理子へ名前を写す(ADR 0237)", () => {
+  const db = openDb(":memory:");
+  const at = new Date("2026-10-10T00:00:00.000Z");
+  const task = registerTask(db, { type: "work", assignee: "deckhand", title: "t", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI);
+  const entry = logDecision(db, task, "human's call", HUMAN_WORKER_ID, at, "webui");
+  raiseObjection(db, entry, "redo it", at);
+
+  commitTriage(db, at);
+
+  const repair = listChildren(db, task.id).find((child) => child.type === "work")!;
+  expect(repair.assignee).toBe("deckhand");
+  expect(listEvents(db, repair.id).find((event) => event.kind === "task_registered")!.payload).not.toHaveProperty("assignee_not_copied");
+});
+
+it("timeout も修理子の assignee を門に通す(ADR 0237)", () => {
+  const db = openDb(":memory:");
+  const at = new Date("2026-10-10T00:00:00.000Z");
+  const task = registerTask(db, { type: "work", assignee: "fugu", title: "t", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI);
+  const entry = logDecision(db, task, "human's call", HUMAN_WORKER_ID, at, "webui");
+  raiseObjection(db, entry, "redo it", at);
+
+  expect(closeStaleTriage(db, new Date(at.getTime() + TRIAGE_TIMEOUT), { agentRegistered: () => true, resolvesToBuiltIn: () => true })).toBe(true);
+
+  const repair = listChildren(db, task.id).find((child) => child.type === "work")!;
+  expect(repair.assignee).toBeNull();
+  expect(listEvents(db, repair.id).find((event) => event.kind === "task_registered")!.payload).toMatchObject({
+    assignee_not_copied: { name: "fugu", reason: "agent fugu is the built-in agent, which runs reviews only" },
+  });
+});
+
+it.each(["commit", "close-only", "watchdog"] as const)("%s の入口は registry の assignee 依存を束ねへ渡す(ADR 0237)", async (path) => {
+  const agentRegistered = vi.fn(() => true);
+  const resolvesToBuiltIn = vi.fn(() => false);
+  t = await bootTidepool({ agentRegistered, resolvesToBuiltIn });
+  const at = t.clock.now();
+  const task = registerTask(t.db, { type: "work", assignee: "repair-worker", title: "t", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI);
+  const entry = logDecision(t.db, task, "human's call", HUMAN_WORKER_ID, at, "webui");
+  await api(t.baseUrl, "POST", "/api/triage/objection", { entry_id: entry, comment: "redo it" });
+  agentRegistered.mockClear();
+  resolvesToBuiltIn.mockClear();
+
+  if (path === "watchdog") {
+    await t.clock.advance(TRIAGE_TIMEOUT);
+  } else {
+    expect((await api(t.baseUrl, "POST", "/api/triage/close", { close_only: path === "close-only" })).status).toBe(200);
+  }
+
+  expect(agentRegistered).toHaveBeenCalledWith("repair-worker");
+  expect(resolvesToBuiltIn).toHaveBeenCalledWith("repair-worker");
 });
 
 it("修理の purpose は判定のある対の steering の後に board judged 行を運び、未帰責と uncertain の対には出さず、RCA の purpose には乗せない(ADR 0213 決定3)", () => {

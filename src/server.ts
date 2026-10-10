@@ -713,7 +713,10 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
   // an abandoned triage session may not pause pickup forever: the watchdog
   // closes it past the timeout, and reopening pickup is a "run now" trigger
   const stopTriageWatchdog = options.clock.setInterval(() => {
-    if (closeStaleTriage(db, options.clock.now())) pollNow();
+    if (closeStaleTriage(db, options.clock.now(), {
+      agentRegistered: options.agentRegistered,
+      resolvesToBuiltIn: options.resolvesToBuiltIn,
+    })) pollNow();
   }, 60 * 1000);
   watchdog = options.watchdog
     ? startWatchdog({

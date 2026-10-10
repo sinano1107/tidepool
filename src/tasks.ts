@@ -371,6 +371,8 @@ export interface RegisterTaskInput extends Partial<TaskContent> {
   integration_review?: boolean;
   /** Board-internal only (ADR 0171 決定1): the objection events a triage commit's repair / RCA child took as its material. */
   objection_event_ids?: number[];
+  /** Board-internal only (ADR 0237): the repair assignee refused by the registration gate. */
+  assignee_not_copied?: { name: string; reason: string };
   review_by?: string[];
   review_tier?: string;
   type: TaskType;
@@ -862,6 +864,7 @@ export function registerTask(
         title: task.title,
         ...(input.integration_review && { integration_review: true }),
         ...(input.objection_event_ids && { objection_event_ids: input.objection_event_ids }),
+        ...(input.assignee_not_copied && { assignee_not_copied: input.assignee_not_copied }),
         ...(input.based_on_decision !== undefined && {
           based_on_decision: input.based_on_decision,
         }),
@@ -2247,9 +2250,12 @@ export function assertUnsettledNotInProgress(task: Task, verb: string): void {
  *  `parent` only when all three hold: `parent` is unsettled, `parent` is not
  *  in_progress, and `parent` carries no child an agent has already registered
  *  via its own decompose judgment. Outside this line, rearranging an
- *  agent-decomposed tree is the objection → repair task → assignee's own
- *  replan route's job, not this one's — direct rearrangement here would erase
- *  the fix-forward signal that route depends on. */
+ *  agent-decomposed tree belongs to the objection route: the original assignee
+ *  runs the repair child and, if the original task is unsettled, replans on
+ *  integration return after the children it awaits settle, reading the repair's
+ *  steering. The repair is attached, so objected decomposition children keep
+ *  running (ADR 0237). Direct rearrangement here would erase the fix-forward
+ *  signal that route depends on. */
 function assertHumanDecomposable(db: Db, parent: Task): void {
   assertUnsettledNotInProgress(parent, "decomposed by a human");
   if (hasAgentRegisteredChild(db, parent.id)) {

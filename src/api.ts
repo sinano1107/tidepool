@@ -1979,7 +1979,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     try {
       let result: TriageCommitResult;
       if (parsed.data.close_only) {
-        result = closeTriageSessionOnly(db, clock.now(), "commit");
+        result = closeTriageSessionOnly(db, clock.now(), "commit", { agentRegistered, resolvesToBuiltIn });
       } else {
         // ADR 0115 決定2: the commit asks the Board call for every objected
         // entry's attribution first (in parallel, outside any transaction —
@@ -1987,7 +1987,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
         // transaction that bundles and registers with the judgments in hand
         const open = activeTriageSession(db);
         const judgments = open && (await attributeObjections(db, retrospectiveCalls, open.id, clock.now()));
-        result = commitTriage(db, clock.now(), parsed.data.scratchpad, judgments);
+        result = commitTriage(db, clock.now(), parsed.data.scratchpad, judgments, { agentRegistered, resolvesToBuiltIn });
       }
       // Closing an open session re-opens pickup. A sessionless triage never
       // stopped it, so its terminal commit is not a "run now" trigger — but a

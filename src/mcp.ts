@@ -2,6 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Router } from "express";
 import { z } from "zod";
 import type { AgentAdmin } from "./agent-create.js";
+import { assertAssigneeCanTake } from "./assignee.js";
 import type { Clock } from "./clock.js";
 import type { Db } from "./db.js";
 import { DEFAULT_AUDITOR_NAME } from "./defaults.js";
@@ -10,7 +11,7 @@ import { EFFORT_LEVELS } from "./effort.js";
 import { PRIORITY_FIELD_DESCRIPTION, tierFieldDescriptions } from "./execution-setting.js";
 import type { GitHubClient } from "./github.js";
 import type { GitHubAuth } from "./github-auth.js";
-import { assertAssigneeCanTake, assertMemoryReferencesKnown, assertReviewersKnown, assertWorkspaceKnown } from "./human-verbs.js";
+import { assertMemoryReferencesKnown, assertReviewersKnown, assertWorkspaceKnown } from "./human-verbs.js";
 import type { Landing } from "./landing.js";
 import {
   browseMemory,

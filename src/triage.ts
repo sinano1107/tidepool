@@ -1,5 +1,7 @@
+import { type AssigneeDeps, assertAssigneeCanTake } from "./assignee.js";
 import type { Cause } from "./cause.js";
 import type { Db } from "./db.js";
+import { DomainError } from "./domain-error.js";
 import {
   appendEvent,
   currentAttributions,
@@ -19,6 +21,7 @@ import {
   getTask,
   listBoard,
   moveTask,
+  type RegisterTaskInput,
   registerTask,
   type Task,
 } from "./tasks.js";
@@ -106,11 +109,11 @@ export function stageFrontInsert(db: Db, sessionId: number, taskId: string): voi
 
 /** The watchdog tick: close a session left alone past TRIAGE_TIMEOUT.
  *  Returns true when it closed one, so the caller can fire the immediate poll. */
-export function closeStaleTriage(db: Db, now: Date): boolean {
+export function closeStaleTriage(db: Db, now: Date, assigneeDeps: AssigneeDeps = {}): boolean {
   const open = activeTriageSession(db);
   if (!open) return false;
   if (now.getTime() - Date.parse(open.last_activity_at) < TRIAGE_TIMEOUT) return false;
-  closeTriageSessionOnly(db, now, "timeout");
+  closeTriageSessionOnly(db, now, "timeout", assigneeDeps);
   return true;
 }
 
@@ -319,6 +322,7 @@ function bundleObjections(
   now: Date,
   judgments: Map<number, GatedJudgment>,
   origin: EventOrigin,
+  assigneeDeps: AssigneeDeps,
 ): void {
   const byTask = new Map<string, ObjectionPair[]>();
   for (const pair of listObjectedEntries(db, sessionId)) {
@@ -346,6 +350,15 @@ function bundleObjections(
         at: now,
       });
     }
+    let assignee = objected.type === "work" ? objected.assignee ?? undefined : undefined;
+    let assigneeNotCopied: RegisterTaskInput["assignee_not_copied"];
+    try {
+      assertAssigneeCanTake(assigneeDeps, assignee, "work");
+    } catch (err) {
+      if (!(err instanceof DomainError)) throw err;
+      assigneeNotCopied = { name: assignee!, reason: err.message };
+      assignee = undefined;
+    }
     registerTask(
       db,
       {
@@ -358,6 +371,8 @@ function bundleObjections(
         ),
         completion_criteria: "every objection direction above is addressed",
         parent_id: taskId,
+        assignee,
+        assignee_not_copied: assigneeNotCopied,
         workspace: objected.workspace ?? undefined,
         objection_event_ids: pairs.flatMap((p) => p.objection_event_ids),
       },
@@ -553,10 +568,11 @@ function closeTriageSession(
   now: Date,
   closedBy: "commit" | "timeout",
   judgments: Map<number, GatedJudgment>,
+  assigneeDeps: AssigneeDeps,
 ): void {
   // タイムアウトは盤面の watchdog が起こす(ADR 0194 決定4)
   const origin = closedBy === "timeout" ? "board" : "webui";
-  bundleObjections(db, open.id, now, judgments, origin);
+  bundleObjections(db, open.id, now, judgments, origin, assigneeDeps);
   // apply in reverse staging order so the first-staged task ends up on top
   for (const taskId of stagedFrontInserts(db, open.id).reverse()) {
     const task = getTask(db, taskId);
@@ -577,10 +593,11 @@ export function closeTriageSessionOnly(
   db: Db,
   now: Date,
   closedBy: "commit" | "timeout",
+  assigneeDeps: AssigneeDeps = {},
 ): TriageCommitResult {
   const open = activeTriageSession(db);
   if (!open) return { outcome: "no_open_session", closed_at: null, created_tasks: 0 };
-  db.transaction(() => closeTriageSession(db, open, now, closedBy, new Map()))();
+  db.transaction(() => closeTriageSession(db, open, now, closedBy, new Map(), assigneeDeps))();
   return { outcome: "closed_now", closed_at: now.toISOString(), created_tasks: 0 };
 }
 
@@ -593,6 +610,7 @@ export function commitTriage(
   now: Date,
   scratchpad: Array<{ id: number; disposition: ScratchpadDisposition }> = [],
   judgments: Map<number, GatedJudgment> = new Map(),
+  assigneeDeps: AssigneeDeps = {},
 ): TriageCommitResult {
   const open = activeTriageSession(db);
   if (!open) {
@@ -618,7 +636,7 @@ export function commitTriage(
   let created = 0;
   db.transaction(() => {
     created = applyScratchpad(db, scratchpad, now);
-    closeTriageSession(db, open, now, "commit", judgments);
+    closeTriageSession(db, open, now, "commit", judgments, assigneeDeps);
   })();
   return { outcome: "closed_now", closed_at: now.toISOString(), created_tasks: created };
 }

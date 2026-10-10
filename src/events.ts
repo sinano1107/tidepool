@@ -139,7 +139,7 @@ export type EventPayload =
   // based_on_decision points at the decision-log entry (event id) a decomposed
   // child rests on — stamped at registration so provenance never needs a join.
   // objection_event_ids: a repair / RCA child's material objections (ADR 0171 決定1)
-  | { kind: "task_registered"; type: TaskType; title: string; based_on_decision?: number; integration_review?: boolean; objection_event_ids?: number[] }
+  | { kind: "task_registered"; type: TaskType; title: string; based_on_decision?: number; integration_review?: boolean; objection_event_ids?: number[]; assignee_not_copied?: { name: string; reason: string } }
   | { kind: "decision_logged"; line: string }
   // ADR 0233: the columns pickup filled from a default, and with what — a set column is absent
   | { kind: "task_picked_up"; resolved_from_default?: ResolvedFromDefault }
