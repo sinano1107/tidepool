@@ -658,7 +658,7 @@ it("猶予の5分を過ぎても check 未報告の PR への merge 回答は、
   expect(github.merged).toEqual([{ path: "/workspaces/product", number: 42 }]);
 });
 
-it("workspace quarantine の回答は tree が clean と確認できるまで拒否する", async () => {
+it("workspace quarantine の回答は tree が clean と確認できなければ DomainError になり、question は todo のまま残る", async () => {
   db = openDb(":memory:");
   quarantineWorkspace(db, "product", new Error("tree rule failed"), NOW);
   const question = onlyQuestion(db);
