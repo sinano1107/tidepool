@@ -669,13 +669,14 @@ const humanEntryFields = {
   /** 新エントリが置き換える approved のエントリ(ADR 0162 決定1)。 */
   supersedes: z.array(z.number().int().positive()).optional(),
 };
-export const humanKnowledgeSchema = z.object({ ...humanEntryFields, title: requiredTextSchema, original_title: z.string().optional() });
-export const humanDefinitionSchema = z.object(humanEntryFields);
+/** 人間の書き込みの4 schema(Knowledge・Definition・Behavior・Exemplar)は、無いキー(Exemplar の original_* を含む)を黙って捨てず断るため、それぞれ明示的に strict(issue #1771)。 */
+export const humanKnowledgeSchema = z.object({ ...humanEntryFields, title: requiredTextSchema, original_title: z.string().optional() }).strict();
+export const humanDefinitionSchema = z.object(humanEntryFields).strict();
 /** Behavior は Knowledge の欄 + 宛先(null = 全員)と任意の出所の Episode(ADR 0152 / ADR 0153 決定3)。 */
 export const humanBehaviorSchema = humanKnowledgeSchema.extend({
   addressee: requiredTextSchema.nullable(),
   source_event_id: z.number().int().positive().optional(),
-});
+}).strict();
 /** Exemplar の注釈(ADR 0153 決定1・3)。anchor は case 描画の欄に結ぶ —— `whole` か、欄(decision / steering / handoff /
  *  result)とその逐語部分文字列。text は英語の正文、original は人間の原文で、original_language はその申告(注釈ごと —— ADR 0230)。 */
 export const exemplarAnnotationSchema = z.object({
@@ -692,7 +693,7 @@ export const metaReviewAnnotationSchema = exemplarAnnotationSchema.omit({ origin
  *  supersedes の揃った出所を継ぐときだけ省ける(recordExemplar)。 */
 export const humanExemplarSchema = humanBehaviorSchema.pick({ workspace: true, path: true, title: true, addressee: true, supersedes: true, source_event_id: true }).extend({
   annotations: z.array(exemplarAnnotationSchema),
-});
+}).strict();
 
 /** memory の提案の approve に添える修正値(ADR 0152 決定2): 文言と宛先と Exemplar の注釈 list。置き場(path / scope)は動かさない。
  *  扉は形だけを見る —— candidate の種別ごとの拒否(Exemplar に text・原文、Behavior に注釈)は approveMemoryProposal が持つ。 */
