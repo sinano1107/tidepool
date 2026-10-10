@@ -13,7 +13,7 @@ const NAVIGATOR_AUTHORITY: AuthorityProfile = {
   allowed_workspaces: ["*"],
 };
 
-it("list_agents は registry 全体を返し、assignable_to の内外を direct/needs_approval でマークする(issue #43 / ADR 0014)", async () => {
+it("list_agents は委譲できる agent を返し、assignable_to の内外を direct/needs_approval でマークする(issue #43 / ADR 0014)", async () => {
   t = await bootTidepool({
     listAgents: () => [
       { name: "navigator", description: "Navigation specialist" },
