@@ -480,7 +480,7 @@ export class FakeGitHubClient implements GitHubClient {
     }
     // --match-head-commit: GitHub refuses a head that is no longer the PR's (ADR 0231 決定1)
     if (head !== this.headOf(ref.number)) {
-      throw new Error(`Head branch was modified. Review and try the merge again.`);
+      throw new Error("Head branch was modified. Review and try the merge again.");
     }
     const failure = this.mergeFailures.get(ref.number);
     if (failure) throw failure;

@@ -656,8 +656,8 @@ it("merge 回答は question の workspace で live CI を確認してから実 
   });
 });
 
-// ADR 0227 決定2・3: check 未報告の PR への「merge」回答は、盤面の最後の push から5分の猶予の間だけ拒まれる
-function answerMergeOnUnreportedCi(minutesSincePrOpened: number) {
+// PR #42 を開いた escalate の work の merge question に、PR を開いてから minutesSincePrOpened 分後に「merge」と答える
+function answerMerge(github: FakeGitHubClient, minutesSincePrOpened: number) {
   db = openDb(":memory:");
   const work = registerTask(
     db,
@@ -672,9 +672,7 @@ function answerMergeOnUnreportedCi(minutesSincePrOpened: number) {
     ...HUMAN_WEBUI,
   );
   recordPrOpened(db, work, 42, "worker", NOW, { merge: "escalate" }, undefined, "worker");
-  const github = new FakeGitHubClient();
-  github.scriptCiStatus("unreported");
-  const answer = submitAnswer(
+  return submitAnswer(
     {
       db,
       pollNow: () => {},
@@ -688,7 +686,13 @@ function answerMergeOnUnreportedCi(minutesSincePrOpened: number) {
     () => new Date(NOW.getTime() + minutesSincePrOpened * 60_000),
     "webui",
   );
-  return { github, answer };
+}
+
+// ADR 0227 決定2・3: check 未報告の PR への「merge」回答は、盤面の最後の push から5分の猶予の間だけ拒まれる
+function answerMergeOnUnreportedCi(minutesSincePrOpened: number) {
+  const github = new FakeGitHubClient();
+  github.scriptCiStatus("unreported");
+  return { github, answer: answerMerge(github, minutesSincePrOpened) };
 }
 
 it("check 未報告の PR への merge 回答は、PR を開いてから5分の猶予の内なら拒否され question は開いたまま", async () => {
@@ -712,20 +716,6 @@ it("猶予の5分を過ぎても check 未報告の PR への merge 回答は、
 
 // ADR 0231 決定1: 回答を受理してから merge するまでに着いた push は、検査なしに入らない
 it("CI を読んだ後に head が動いた PR への merge 回答は失敗し、merge されず question は開いたまま残る", async () => {
-  db = openDb(":memory:");
-  const work = registerTask(
-    db,
-    {
-      type: "work",
-      title: "ship the feature",
-      purpose: "deliver the requested change",
-      completion_criteria: "the change is merged",
-      workspace: "product",
-    },
-    NOW,
-    ...HUMAN_WEBUI,
-  );
-  recordPrOpened(db, work, 42, "worker", NOW, { merge: "escalate" }, undefined, "worker");
   const github = new FakeGitHubClient();
   github.scriptHead(42, "ci-read-head");
   const readPullRequest = github.readPullRequest.bind(github);
@@ -735,22 +725,7 @@ it("CI を読んだ後に head が動いた PR への merge 回答は失敗し�
     return pr;
   };
 
-  const answer = submitAnswer(
-    {
-      db,
-      pollNow: () => {},
-      github,
-      resolveWorkspace: (name) => ({ name: name!, path: `/workspaces/${name}` }),
-      landing: unusedLanding,
-    },
-    onlyQuestion(db),
-    ["merge"],
-    undefined,
-    () => NOW,
-    "webui",
-  );
-
-  await expect(answer).rejects.toThrow();
+  await expect(answerMerge(github, 0)).rejects.toThrow();
   expect(github.merged).toEqual([]);
   expect(onlyQuestion(db).status).toBe("todo");
 });
