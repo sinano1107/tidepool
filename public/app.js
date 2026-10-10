@@ -2179,6 +2179,16 @@ function MemorySettingsCard({ settings, say, onSaved, edit }) {
 }
 const haltedRefiresUnavailable = "halted refires unavailable";
 const cutReadsUnavailable = "cut reads unavailable";
+const displayLanguageUnavailable = "display language unavailable";
+const quietHoursUnavailable = "quiet hours unavailable";
+const paceOffsetsUnavailable = "provider pace offsets unavailable";
+const executionSettingsUnavailable = "execution settings unavailable";
+const memorySettingsUnavailable = "memory unavailable";
+const metaReviewUnavailable = "meta-review unavailable";
+function UnavailableSettingsCard({ title, says }) {
+  const { Card, FieldRow } = window.TidepoolDesignSystem_8a0ead;
+  return /* @__PURE__ */ React.createElement(Card, { style: { display: "flex", flexDirection: "column", gap: 14 } }, /* @__PURE__ */ React.createElement("span", { style: settingsCardLabel }, title), /* @__PURE__ */ React.createElement(FieldRow, { label: "settings", kind: "unset", unsetLabel: says }));
+}
 function HaltedRefiresCard({ rows, say, onChanged }) {
   const { Button, Card, FieldRow } = window.TidepoolDesignSystem_8a0ead;
   const [busy, setBusy] = React.useState(false);
@@ -2380,13 +2390,16 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit, fo
   const { Button, Card, Checkbox, Input, Select } = window.TidepoolDesignSystem_8a0ead;
   const [filter, setFilter] = React.useState({ workspace: "", kind: "", state: "" });
   const [entries, setEntries] = React.useState(null);
+  const [entriesFailed, setEntriesFailed] = React.useState(false);
   const [translations, setTranslations] = React.useState({});
   const displayed = entries?.filter((entry) => (!filter.workspace || entry.scope === (filter.workspace === "(board)" ? null : filter.workspace)) && (!filter.kind || entry.kind === filter.kind) && (!filter.state || (filter.state === "invalidated" ? entry.invalidation_reason !== null : entry.invalidation_reason === null && entry.state === filter.state)));
   const load = async () => {
     try {
       setEntries((await api("GET /api/settings/memory/entries")).entries);
-    } catch (err) {
-      say("danger", "memory entries load failed", String(err.message || err));
+      setEntriesFailed(false);
+    } catch {
+      setEntries(null);
+      setEntriesFailed(true);
     }
   };
   React.useEffect(() => {
@@ -2721,7 +2734,7 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit, fo
       style: { flex: "1 1 120px" },
       options: [{ value: "", label: "all" }, "approved", "candidate", "invalidated"]
     }
-  )), entries === null && /* @__PURE__ */ React.createElement("p", { style: muted }, "loading\u2026"), displayed?.length === 0 && /* @__PURE__ */ React.createElement("p", { style: muted }, "no entries"), displayed?.map((entry) => {
+  )), entries === null && /* @__PURE__ */ React.createElement("p", { style: muted }, entriesFailed ? "memory entries unavailable" : "loading\u2026"), displayed?.length === 0 && /* @__PURE__ */ React.createElement("p", { style: muted }, "no entries"), displayed?.map((entry) => {
     const shown = entry.original ?? translations[entry.id];
     return /* @__PURE__ */ React.createElement(
       "div",
@@ -3290,11 +3303,16 @@ function SettingsScreen({ say, memoryFocus, registerLeaveGuard }) {
   const [displayLanguage, setDisplayLanguage] = React.useState("");
   const [displayLanguageOptions, setDisplayLanguageOptions] = React.useState([]);
   const [displayLanguageLoaded, setDisplayLanguageLoaded] = React.useState(false);
+  const [displayLanguageFailed, setDisplayLanguageFailed] = React.useState(false);
   const loadDisplayLanguage = async () => {
-    const { language, options } = await api("GET /api/settings/display-language");
-    setDisplayLanguage(language);
-    setDisplayLanguageOptions([...options]);
-    setDisplayLanguageLoaded(true);
+    try {
+      const { language, options } = await api("GET /api/settings/display-language");
+      setDisplayLanguage(language);
+      setDisplayLanguageOptions([...options]);
+      setDisplayLanguageLoaded(true);
+    } catch {
+      setDisplayLanguageFailed(true);
+    }
   };
   React.useEffect(() => {
     loadDisplayLanguage();
@@ -3303,41 +3321,65 @@ function SettingsScreen({ say, memoryFocus, registerLeaveGuard }) {
   const [quietHoursEnd, setQuietHoursEnd] = React.useState("");
   const [quietHoursTz, setQuietHoursTz] = React.useState("");
   const [quietHoursLoaded, setQuietHoursLoaded] = React.useState(false);
+  const [quietHoursFailed, setQuietHoursFailed] = React.useState(false);
   const loadQuietHours = async () => {
-    const { start, end, tz } = await api("GET /api/settings/quiet-hours");
-    setQuietHoursStart(start);
-    setQuietHoursEnd(end);
-    setQuietHoursTz(tz);
-    setQuietHoursLoaded(true);
+    try {
+      const { start, end, tz } = await api("GET /api/settings/quiet-hours");
+      setQuietHoursStart(start);
+      setQuietHoursEnd(end);
+      setQuietHoursTz(tz);
+      setQuietHoursLoaded(true);
+    } catch {
+      setQuietHoursFailed(true);
+    }
   };
   React.useEffect(() => {
     loadQuietHours();
   }, []);
   const [providerPaceOffsets, setProviderPaceOffsets] = React.useState(null);
+  const [paceOffsetsFailed, setPaceOffsetsFailed] = React.useState(false);
   const loadPaceOffsets = async () => {
-    const result = await api("GET /api/settings/provider-pace-offsets");
-    setProviderPaceOffsets(result.offsets);
+    try {
+      setProviderPaceOffsets((await api("GET /api/settings/provider-pace-offsets")).offsets);
+    } catch {
+      setPaceOffsetsFailed(true);
+    }
   };
   React.useEffect(() => {
     loadPaceOffsets();
   }, []);
   const [executionSettings, setExecutionSettings] = React.useState(null);
+  const [executionSettingsFailed, setExecutionSettingsFailed] = React.useState(false);
   const loadExecutionSettings = async () => {
-    setExecutionSettings(await api("GET /api/settings/execution"));
+    try {
+      setExecutionSettings(await api("GET /api/settings/execution"));
+    } catch {
+      setExecutionSettingsFailed(true);
+    }
   };
   React.useEffect(() => {
     loadExecutionSettings();
   }, []);
   const [memorySettings, setMemorySettings] = React.useState(null);
+  const [memorySettingsFailed, setMemorySettingsFailed] = React.useState(false);
   const loadMemorySettings = async () => {
-    setMemorySettings(await api("GET /api/settings/memory"));
+    try {
+      setMemorySettings(await api("GET /api/settings/memory"));
+    } catch {
+      setMemorySettingsFailed(true);
+    }
   };
   React.useEffect(() => {
     loadMemorySettings();
   }, []);
   const [metaReviewSettings, setMetaReviewSettings] = React.useState(null);
+  const [metaReviewFailed, setMetaReviewFailed] = React.useState(false);
   const loadMetaReviewSettings = async () => {
-    setMetaReviewSettings(await api("GET /api/settings/meta-review"));
+    try {
+      setMetaReviewSettings(await api("GET /api/settings/meta-review"));
+    } catch {
+      setMetaReviewFailed(true);
+    }
   };
   React.useEffect(() => {
     loadMetaReviewSettings();
@@ -3481,7 +3523,7 @@ function SettingsScreen({ say, memoryFocus, registerLeaveGuard }) {
     setStack(next);
     closeEdit();
   });
-  const boardLoaded = displayLanguageLoaded && quietHoursLoaded && !!providerPaceOffsets && !!executionSettings && !!memorySettings && !!metaReviewSettings && (!!haltedRefires || haltedRefiresFailed) && (!!responseFloors || responseFloorsFailed);
+  const boardLoaded = (displayLanguageLoaded || displayLanguageFailed) && (quietHoursLoaded || quietHoursFailed) && (!!providerPaceOffsets || paceOffsetsFailed) && (!!executionSettings || executionSettingsFailed) && (!!memorySettings || memorySettingsFailed) && (!!metaReviewSettings || metaReviewFailed) && (!!haltedRefires || haltedRefiresFailed) && (!!responseFloors || responseFloorsFailed);
   React.useEffect(() => {
     registerLeaveGuard((move) => guard(move));
     return () => registerLeaveGuard(null);
@@ -3602,9 +3644,15 @@ function SettingsScreen({ say, memoryFocus, registerLeaveGuard }) {
     const floors = responseFloors?.length ?? 0;
     const halted = haltedRefires?.length ?? 0;
     const boardFlags = [
+      displayLanguageFailed && displayLanguageUnavailable,
+      quietHoursFailed && quietHoursUnavailable,
+      paceOffsetsFailed && paceOffsetsUnavailable,
+      executionSettingsFailed && executionSettingsUnavailable,
       responseFloorsFailed ? cutReadsUnavailable : floors > 0 ? `${floors} read${floors === 1 ? "" : "s"} cut` : null,
-      haltedRefiresFailed ? haltedRefiresUnavailable : halted > 0 ? `${halted} halted refire${halted === 1 ? "" : "s"}` : null
-    ].filter((part) => part !== null);
+      haltedRefiresFailed ? haltedRefiresUnavailable : halted > 0 ? `${halted} halted refire${halted === 1 ? "" : "s"}` : null,
+      memorySettingsFailed && memorySettingsUnavailable,
+      metaReviewFailed && metaReviewUnavailable
+    ].filter((part) => typeof part === "string");
     const rows = [
       {
         key: "board",
@@ -3632,7 +3680,7 @@ function SettingsScreen({ say, memoryFocus, registerLeaveGuard }) {
       }
     ))));
   } else if (sectionKey === "board") {
-    body = /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(ScreenHeader, { title: "Board", backLabel: "Settings", meta: "board-wide preferences, and the board's state", onBack: () => go([]) }), displayLanguageLoaded && /* @__PURE__ */ React.createElement(
+    body = /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(ScreenHeader, { title: "Board", backLabel: "Settings", meta: "board-wide preferences, and the board's state", onBack: () => go([]) }), displayLanguageFailed ? /* @__PURE__ */ React.createElement(UnavailableSettingsCard, { title: "display language", says: displayLanguageUnavailable }) : displayLanguageLoaded && /* @__PURE__ */ React.createElement(
       DisplayLanguageCard,
       {
         language: displayLanguage,
@@ -3641,7 +3689,7 @@ function SettingsScreen({ say, memoryFocus, registerLeaveGuard }) {
         onSaved: loadDisplayLanguage,
         edit
       }
-    ), quietHoursLoaded && /* @__PURE__ */ React.createElement(
+    ), quietHoursFailed ? /* @__PURE__ */ React.createElement(UnavailableSettingsCard, { title: "quiet hours", says: quietHoursUnavailable }) : quietHoursLoaded && /* @__PURE__ */ React.createElement(
       QuietHoursCard,
       {
         start: quietHoursStart,
@@ -3651,18 +3699,20 @@ function SettingsScreen({ say, memoryFocus, registerLeaveGuard }) {
         onSaved: loadQuietHours,
         edit
       }
-    ), providerPaceOffsets && /* @__PURE__ */ React.createElement(PaceOffsetsCard, { offsets: providerPaceOffsets, say, onSaved: loadPaceOffsets, edit }), executionSettings && /* @__PURE__ */ React.createElement(ExecutionDefaultsCard, { settings: executionSettings, say, onSaved: loadExecutionSettings, edit }), (haltedRefires || haltedRefiresFailed) && /* @__PURE__ */ React.createElement(HaltedRefiresCard, { rows: haltedRefires, say, onChanged: loadHaltedRefires }), (responseFloors || responseFloorsFailed) && /* @__PURE__ */ React.createElement(ResponseFloorsCard, { rows: responseFloors }), executionSettings && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(TiersCard, { settings: executionSettings, say, onSaved: loadExecutionSettings, edit }), /* @__PURE__ */ React.createElement(ExecutionTableCard, { settings: executionSettings, say, onSaved: loadExecutionSettings, edit })), memorySettings && /* @__PURE__ */ React.createElement(MemorySettingsCard, { settings: memorySettings, say, onSaved: loadMemorySettings, edit }), displayLanguageLoaded && // the focus waits for every card above: one that loads later would push the entry back out of view
+    ), paceOffsetsFailed ? /* @__PURE__ */ React.createElement(UnavailableSettingsCard, { title: "provider pace offsets", says: paceOffsetsUnavailable }) : providerPaceOffsets && /* @__PURE__ */ React.createElement(PaceOffsetsCard, { offsets: providerPaceOffsets, say, onSaved: loadPaceOffsets, edit }), executionSettingsFailed ? /* @__PURE__ */ React.createElement(UnavailableSettingsCard, { title: "execution settings", says: executionSettingsUnavailable }) : executionSettings && /* @__PURE__ */ React.createElement(ExecutionDefaultsCard, { settings: executionSettings, say, onSaved: loadExecutionSettings, edit }), (haltedRefires || haltedRefiresFailed) && /* @__PURE__ */ React.createElement(HaltedRefiresCard, { rows: haltedRefires, say, onChanged: loadHaltedRefires }), (responseFloors || responseFloorsFailed) && /* @__PURE__ */ React.createElement(ResponseFloorsCard, { rows: responseFloors }), !executionSettingsFailed && executionSettings && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(TiersCard, { settings: executionSettings, say, onSaved: loadExecutionSettings, edit }), /* @__PURE__ */ React.createElement(ExecutionTableCard, { settings: executionSettings, say, onSaved: loadExecutionSettings, edit })), memorySettingsFailed ? /* @__PURE__ */ React.createElement(UnavailableSettingsCard, { title: "memory", says: memorySettingsUnavailable }) : memorySettings && /* @__PURE__ */ React.createElement(MemorySettingsCard, { settings: memorySettings, say, onSaved: loadMemorySettings, edit }), (displayLanguageLoaded || displayLanguageFailed) && // the focus waits for every card above: one that loads later would push the entry back out of view.
+    // An unreadable display language reads as English: no translation, no original field — never '', which
+    // is not 'English' and would translate every entry (issue #1686)
     /* @__PURE__ */ React.createElement(
       MemoryEntriesCard,
       {
         workspaceNames,
         agentNames,
-        language: displayLanguage,
+        language: displayLanguageFailed ? "English" : displayLanguage,
         say,
         edit,
         focus: boardLoaded ? memoryFocus : null
       }
-    ), metaReviewSettings && /* @__PURE__ */ React.createElement(MetaReviewSettingsCard, { settings: metaReviewSettings, say, onSaved: loadMetaReviewSettings, edit }), !boardLoaded && /* @__PURE__ */ React.createElement(Card, { style: { fontSize: "var(--text-sm)", color: "var(--text-secondary)" } }, "loading\u2026"), /* @__PURE__ */ React.createElement("p", { style: settingsFootnote }, "applies to every task the board picks up"), (githubLoggedIn !== null || translateUsage !== null || translateUsageFailed) && /* @__PURE__ */ React.createElement("p", { style: settingsCardLabel }, "board state"), githubLoggedIn !== null && /* @__PURE__ */ React.createElement(GitHubLoginCard, { loggedIn: githubLoggedIn }), (translateUsage !== null || translateUsageFailed) && /* @__PURE__ */ React.createElement(TranslateUsageCard, { records: translateUsage }));
+    ), metaReviewFailed ? /* @__PURE__ */ React.createElement(UnavailableSettingsCard, { title: "meta-review", says: metaReviewUnavailable }) : metaReviewSettings && /* @__PURE__ */ React.createElement(MetaReviewSettingsCard, { settings: metaReviewSettings, say, onSaved: loadMetaReviewSettings, edit }), !boardLoaded && /* @__PURE__ */ React.createElement(Card, { style: { fontSize: "var(--text-sm)", color: "var(--text-secondary)" } }, "loading\u2026"), /* @__PURE__ */ React.createElement("p", { style: settingsFootnote }, "applies to every task the board picks up"), (githubLoggedIn !== null || translateUsage !== null || translateUsageFailed) && /* @__PURE__ */ React.createElement("p", { style: settingsCardLabel }, "board state"), githubLoggedIn !== null && /* @__PURE__ */ React.createElement(GitHubLoginCard, { loggedIn: githubLoggedIn }), (translateUsage !== null || translateUsageFailed) && /* @__PURE__ */ React.createElement(TranslateUsageCard, { records: translateUsage }));
   } else if (!sec) {
     body = /* @__PURE__ */ React.createElement(ScreenHeader, { title: "Settings", backLabel: "Settings", onBack: () => go([]) });
   } else if (recordName === void 0) {
