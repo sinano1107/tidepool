@@ -866,12 +866,9 @@ export function createLanding(deps: LandingDeps): Landing {
           try {
             const workspace = resolveOrQuarantine(deps.db, resolve, taskWorkspace, now);
             if (!workspace) continue;
-            let state: PrState;
-            try {
-              state = await github.getPullRequestState({ path: workspace.path, number: pr_number });
-            } catch {
-              continue;
-            }
+            const state = await github
+              .getPullRequestState({ path: workspace.path, number: pr_number })
+              .catch(() => "OPEN" as const);
             if (state !== "OPEN") settleMergeQuestionAsObserved(deps.db, id, pr_number, state, now);
           } catch (error) {
             // ADR 0229 決定1: 分類できない失敗はログに出し、その question は open のまま残して次へ進む
