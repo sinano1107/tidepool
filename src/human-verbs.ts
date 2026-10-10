@@ -472,6 +472,10 @@ export interface QuarantineCheckDeps {
   agentRegistered?: (name: string) => boolean;
   /** A name resolving to the built-in is not "back in the registry" (ADR 0228 決定4). */
   resolvesToBuiltIn?: (name: string) => boolean;
+  /** Why a registered name fails pickup's resolution, or undefined when it resolves
+   *  (issue #1745): an entry whose definition does not hold is not "back" either.
+   *  Absent → registration alone counts as back. */
+  agentDefinitionFailure?: (name: string) => string | undefined;
   /** 封じ込め能力の合成後の検査(ADR 0033 / ADR 0036)。Absent → containment の
    *  検査が組めず、その確認への回答は拒まれる。 */
   containment?: ContainmentCheck;
@@ -548,16 +552,17 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
       const quarantineAgentName = value!;
       await deps.landing?.observeAutoMergeOutcomes(quarantineAgentName);
       try {
+        // 組み込みの判定が先: 組み込みを work として解決すると定義の不成立になり、review まで数えてしまう(ADR 0228 決定4)
+        const builtIn = deps.resolvesToBuiltIn?.(quarantineAgentName);
+        const registered = !builtIn && deps.agentRegistered?.(quarantineAgentName);
+        const definitionFailure = registered ? deps.agentDefinitionFailure?.(quarantineAgentName) : undefined;
         verifyAgentRepaired(
           deps.db,
           quarantineAgentName,
-          deps.resolvesToBuiltIn?.(quarantineAgentName)
-            ? "built-in"
-            : deps.agentRegistered?.(quarantineAgentName)
-              ? "registry"
-              : "absent",
+          builtIn ? "built-in" : registered && definitionFailure === undefined ? "registry" : "absent",
           deps.defaultAgentName,
           deps.auditorName,
+          definitionFailure,
         );
       } catch (err) {
         throw new DomainError(err instanceof Error ? err.message : String(err));

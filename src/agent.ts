@@ -118,15 +118,21 @@ export function resolveAgentOrQuarantine(
  *  (`"absent"` when no registry is configured at all — in which case only the
  *  "no more unsettled tasks" path can ever clear it). The built-in never counts
  *  as "back" (ADR 0228 決定4): a name resolving to it is not repaired, and while
- *  it does, only work counts as a dependent. */
+ *  it does, only work counts as a dependent. `"registry"` means the name passes
+ *  pickup's resolution, not merely that an entry exists (issue #1745): an entry
+ *  whose definition does not hold is `"absent"`, and `definitionFailure` names why. */
 export function verifyAgentRepaired(
   db: Db,
   agentName: string,
   resolution: "registry" | "built-in" | "absent",
   defaultAgentName?: string,
   auditorName?: string,
+  definitionFailure?: string,
 ): void {
   if (resolution === "registry") return;
+  const notBack = definitionFailure
+    ? `agent ${agentName}'s definition still does not hold (${definitionFailure})`
+    : `agent ${agentName} is not back in the registry`;
   const fallback = typeAwareDefaultAgentSql("type", "@defaultAgentName", "@auditorName");
   // 名前が組み込みに解決される間、review は組み込みが走らせられるので依存に数えない(ADR 0228 決定4)
   const dependentTypes = resolution === "built-in" ? "type = 'work'" : "type != 'question'";
@@ -135,16 +141,14 @@ export function verifyAgentRepaired(
               AND COALESCE(assignee, ${fallback}) = @agentName LIMIT 1`)
     .get({ agentName, defaultAgentName: defaultAgentName ?? null, auditorName: auditorName ?? null });
   if (stillUnsettled) {
-    throw new Error(
-      `agent ${agentName} is not back in the registry and still has unsettled tasks assigned`,
-    );
+    throw new Error(`${notBack} and still has unsettled tasks assigned`);
   }
   // done のタスクは Edit で付け替えられないので、その profile を読んで着地を待つものが
   // 残る限り、registry を直さずに解除しても次の着地でまた落ちる(ADR 0217 決定4)
   const awaitingLanding = countTasksAwaitingLanding(db, agentName, defaultAgentName, auditorName);
   if (awaitingLanding > 0) {
     throw new Error(
-      `agent ${agentName} is not back in the registry and still has ${awaitingLanding} ` +
+      `${notBack} and still has ${awaitingLanding} ` +
         "completed task(s) awaiting landing on its profile",
     );
   }

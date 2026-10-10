@@ -291,7 +291,7 @@ export class UnknownAgentError extends Error {
 export class InvalidAgentDefinitionError extends Error {
   constructor(
     public readonly agentName: string,
-    reason: string,
+    public readonly reason: string,
   ) {
     super(`agent ${agentName}: ${reason}`);
     this.name = "InvalidAgentDefinitionError";

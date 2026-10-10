@@ -169,6 +169,21 @@ describe("verifyAgentRepaired", () => {
     );
   });
 
+  // issue #1745: エントリはあるが定義が成立しない名前は「戻っていない」と同じく数え、拒否文は理由を名指す
+  it("定義が成立しない理由を渡されると、未決着タスク・着地待ちのどちらで拒むときも定義がまだ成立しないことと理由を名指す", () => {
+    const db = openDb(":memory:");
+    const verify = () => verifyAgentRepaired(db, "navigator", "absent", undefined, undefined, 'unknown tier "x"');
+    queuedForAutoMerge(db, NOW, "navigator");
+
+    expect(verify).toThrow(
+      `agent navigator's definition still does not hold (unknown tier "x") and still has 1 completed task(s) awaiting landing on its profile`,
+    );
+    register(db, "work", "navigator");
+    expect(verify).toThrow(
+      `agent navigator's definition still does not hold (unknown tier "x") and still has unsettled tasks assigned`,
+    );
+  });
+
   it("registry に復活しておらず、未決着タスクも着地待ちも無ければ解除を認める", () => {
     const db = openDb(":memory:");
     expect(() => verifyAgentRepaired(db, "navigator", "absent")).not.toThrow();

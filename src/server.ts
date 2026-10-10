@@ -257,6 +257,10 @@ export interface ServerOptions {
    *  for anything but review, and agent quarantine clearance does not count it as
    *  back (ADR 0228). Absent → no registry configured. */
   resolvesToBuiltIn?: (name: string) => boolean;
+  /** Why a registered name fails pickup's resolution, or undefined when it
+   *  resolves — agent quarantine clearance counts only a resolving name as back
+   *  (issue #1745). Absent → no registry configured. */
+  agentDefinitionFailure?: (name: string) => string | undefined;
   /** The Web Push-facing seam (issue #14): a question task's registration is
    *  promoted to an immediate push through here, outside quiet hours. Absent
    *  → no push is ever sent, questions simply accumulate unnotified. */
@@ -746,6 +750,7 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
     landing,
     agentRegistered: options.agentRegistered,
     resolvesToBuiltIn: options.resolvesToBuiltIn,
+    agentDefinitionFailure: options.agentDefinitionFailure,
     containment,
     reclaim,
     registryReachability,
