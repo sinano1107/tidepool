@@ -22,6 +22,7 @@ import {
   settleQuestionAsObserved,
   subtreeSql,
   type Task,
+  type TaskType,
   taskIdForPr,
   typeAwareDefaultAgentSql,
 } from "./tasks.js";
@@ -185,7 +186,7 @@ export interface LandingDeps {
   workspace?: WorkspaceConfig;
   resolveWorkspace?: (taskWorkspace: string | null) => WorkspaceConfig;
   github: GitHubClient | null;
-  resolveAuthority?: (assignee: string | null) => AuthorityProfile | undefined;
+  resolveAuthority?: (assignee: string | null, taskType: TaskType) => AuthorityProfile | undefined;
   defaultAgentName: string;
   auditorName?: string;
   isProtectedWorkspace?: (name: string) => boolean;
@@ -455,7 +456,7 @@ export function createLanding(deps: LandingDeps): Landing {
    *  undefined を返す。registry の無い盤面(resolver 無し)は profile 無しで解決する。 */
   const readAuthority = (task: Task, now: Date): { profile: AuthorityProfile | undefined } | undefined => {
     try {
-      return { profile: deps.resolveAuthority?.(task.assignee) };
+      return { profile: deps.resolveAuthority?.(task.assignee, task.type) };
     } catch (err) {
       if (!(err instanceof UnknownAgentError) && !(err instanceof InvalidAgentDefinitionError)) throw err;
       registerQuarantine(deps.db, "agent", err.agentName, err.message, now);

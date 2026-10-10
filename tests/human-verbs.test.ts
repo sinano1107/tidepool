@@ -8,6 +8,7 @@ import { listEvents } from "../src/events.js";
 import {
   cancelThroughHumanDoor,
   completeThroughHumanDoor,
+  editThroughHumanDoor,
   quarantineChecks,
   registerThroughHumanDoor,
   submitAnswer,
@@ -97,6 +98,57 @@ it("人間の登録 door は未知の assignee を GateFailure として返す",
     failure: { kind: "invalid", error: "unknown agent: not-a-real-agent" },
   });
   expect(listBoard(db)).toEqual([]);
+});
+
+// ADR 0228 決定1: 組み込みは review 専用。判定は名前ではなく解決の結果を見る —— shadow している間、
+// その名前は registry の普通の agent で work も受ける。人間の登録・子の登録・Edit は同じ1つの門を通る。
+const BUILT_IN_FUGU = { agentRegistered: () => true, resolvesToBuiltIn: (name: string): boolean => name === "fugu" };
+const SHADOWED_FUGU = { agentRegistered: () => true, resolvesToBuiltIn: () => false };
+const BUILT_IN_REFUSAL = "agent fugu is the built-in agent, which runs reviews only";
+
+function registerFor(lookup: typeof BUILT_IN_FUGU, type: "work" | "review", parentId?: string) {
+  return registerThroughHumanDoor(
+    { db, pollNow: () => {}, ...lookup },
+    { type, title: "t", purpose: "p", completion_criteria: "c", assignee: "fugu", parent_id: parentId, decompose_reason: "split" },
+    () => NOW,
+    "webui",
+  );
+}
+
+it("人間の登録 door は組み込みに解決される assignee の work を拒み、review は通す", async () => {
+  db = openDb(":memory:");
+
+  expect(await registerFor(BUILT_IN_FUGU, "work")).toEqual({ ok: false, failure: { kind: "invalid", error: BUILT_IN_REFUSAL } });
+  expect(listBoard(db)).toEqual([]);
+  expect(await registerFor(BUILT_IN_FUGU, "review")).toMatchObject({ ok: true });
+});
+
+it("人間の子の登録は組み込みに解決される assignee を拒む", async () => {
+  db = openDb(":memory:");
+  const parent = registerTask(db, { type: "work", title: "parent", purpose: "p", completion_criteria: "c" }, NOW, ...HUMAN_WEBUI);
+
+  expect(await registerFor(BUILT_IN_FUGU, "work", parent.id)).toEqual({ ok: false, failure: { kind: "invalid", error: BUILT_IN_REFUSAL } });
+});
+
+it("人間の Edit は work の assignee を組み込みに解決される名前へ付け替えるのを拒み、review の付け替えは通す", () => {
+  db = openDb(":memory:");
+  const work = registerTask(db, { type: "work", title: "w", purpose: "p", completion_criteria: "c" }, NOW, ...HUMAN_WEBUI);
+  const review = registerTask(db, { type: "review", title: "r", purpose: "p", completion_criteria: "c" }, NOW, ...HUMAN_WEBUI);
+  const edit = (task: Task) => editThroughHumanDoor({ db, ...BUILT_IN_FUGU }, task.id, { assignee: "fugu" }, () => NOW, "webui");
+
+  expect(edit(work)).toEqual({ ok: false, failure: { kind: "domain_error", error: BUILT_IN_REFUSAL } });
+  expect(edit(review)).toMatchObject({ ok: true, value: { assignee: "fugu" } });
+});
+
+it("shadow している間は、その名前の work の登録・子の登録・Edit が通る", async () => {
+  db = openDb(":memory:");
+  const parent = registerTask(db, { type: "work", title: "parent", purpose: "p", completion_criteria: "c" }, NOW, ...HUMAN_WEBUI);
+
+  expect(await registerFor(SHADOWED_FUGU, "work")).toMatchObject({ ok: true, task: { assignee: "fugu" } });
+  expect(await registerFor(SHADOWED_FUGU, "work", parent.id)).toMatchObject({ ok: true, task: { assignee: "fugu" } });
+  expect(
+    editThroughHumanDoor({ db, ...SHADOWED_FUGU }, parent.id, { assignee: "fugu" }, () => NOW, "webui"),
+  ).toMatchObject({ ok: true, value: { assignee: "fugu" } });
 });
 
 it("人間の登録 door は未知の workspace を GateFailure として返す", async () => {
@@ -731,6 +783,16 @@ it("agent quarantine の回答は解除検査が拒むと DomainError になり�
     error: expect.any(DomainError),
     status: "todo",
   });
+});
+
+it("組み込みに解決される名前は agent quarantine の解除で registry に「戻った」に数えず、work が残る限り解除しない(ADR 0228 決定4)", async () => {
+  db = openDb(":memory:");
+  registerTask(db, { type: "work", title: "w", purpose: "p", completion_criteria: "c", assignee: "fugu" }, NOW, ...HUMAN_WEBUI);
+
+  await expect(quarantineChecks({ db, ...BUILT_IN_FUGU }).agent!("fugu")).rejects.toThrow(
+    "agent fugu is not back in the registry and still has unsettled tasks assigned",
+  );
+  await expect(quarantineChecks({ db, ...SHADOWED_FUGU }).agent!("fugu")).resolves.toBeUndefined();
 });
 
 const PRODUCT = { name: "product", path: "/workspaces/product" };

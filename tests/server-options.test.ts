@@ -6,10 +6,11 @@ import { expect, it, vi } from "vitest";
 import { openDb } from "../src/db.js";
 import { GitHubAuth } from "../src/github-auth.js";
 import { QUARANTINES } from "../src/quarantine.js";
-import { UnknownAgentError } from "../src/registry.js";
+import { InvalidAgentDefinitionError, UnknownAgentError } from "../src/registry.js";
 import {
   type BoardComposition,
   buildServerOptions,
+  buildWorkerFactory,
   buildWorkerOptions,
   declaredRegistryMode,
   WATCHDOG,
@@ -17,7 +18,7 @@ import {
 import type { Task } from "../src/tasks.js";
 import { TranscriptStore } from "../src/transcript-store.js";
 import { containerHarness, FakeClock, FakeTranslationClient, fakeContainers } from "./fakes.js";
-import { TEST_CREDENTIAL } from "./harness.js";
+import { bootTidepool, TEST_CREDENTIAL } from "./harness.js";
 import { makeRegistry, makeRemoteBackedRegistry } from "./registry-fixture.js";
 
 /** 盤面1台ぶんの入力。渡すのは env 由来のスカラと、合成 root でしか作れない
@@ -466,13 +467,19 @@ it("registry があるとき、各口には対応する解決子が刺さって�
   expect(options.agentRegistered?.("guarded")).toBe(false);
   expect(options.isProtectedWorkspace?.("guarded")).toBe(true);
   expect(options.isProtectedWorkspace?.("deckhand")).toBe(false);
+  // 組み込みに解決される名前だけが真 —— registry のエントリは偽(ADR 0228)
+  expect(options.resolvesToBuiltIn?.("fugu")).toBe(true);
+  expect(options.resolvesToBuiltIn?.("deckhand")).toBe(false);
   // 残りの registry 由来の口も、registry の中身をそのまま映していること
   expect(options.listAgents?.().map((agent) => agent.name)).toEqual(["deckhand", "fugu"]);
   expect(options.registryCandidates?.()?.assignees).toEqual(["deckhand", "fugu", "human"]);
   // assignee 未設定は defaultAgentName へ。registry の知らない名前は「profile 無し」に
   // 潰さず、agent 名の quarantine の入口が受ける解決失敗として投げる(ADR 0217 決定3)
-  expect(options.resolveAuthority?.(null)).toBeDefined();
-  expect(() => options.resolveAuthority?.("nobody")).toThrow(UnknownAgentError);
+  expect(options.resolveAuthority?.(null, "work")).toBeDefined();
+  expect(() => options.resolveAuthority?.("nobody", "work")).toThrow(UnknownAgentError);
+  // タスクの type が解決まで届いていること —— 組み込みは review だけを走らせる(ADR 0228 決定4)
+  expect(options.resolveAuthority?.("fugu", "review")).toBeDefined();
+  expect(() => options.resolveAuthority?.("fugu", "work")).toThrow(InvalidAgentDefinitionError);
   // ADR 0110 決定3: model は agent の宣言ではなく盤面の表から来る —— fixture の
   // agent は tier を書いていないので盤面既定の行になる。
   expect(options.taskExecutionCandidates({ assignee: "deckhand" } as any)).toMatchObject([
@@ -514,4 +521,13 @@ it("容器機構は platform で選ばれ、実測が無いホストでは fail-
   const unmeasured =
     capability.available === false && capability.reason.includes("passes the container contract");
   expect(unmeasured).toBe(platform !== "linux");
+});
+
+it("既定 agent が組み込みに解決される盤面は起動しない —— 既定 agent は work を走らせる(ADR 0228 決定1)", async () => {
+  const registryDir = await makeRegistry();
+  const board = { ...composition(), registryDir, workspaceName: "tidepool", defaultAgentName: "fugu" };
+
+  await expect(bootTidepool({ workerAdapter: buildWorkerFactory(board) })).rejects.toThrow(
+    "agent fugu: the built-in agent runs reviews only",
+  );
 });

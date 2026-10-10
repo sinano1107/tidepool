@@ -18,7 +18,7 @@ async function makeMainRegistry(): Promise<string> {
 }
 
 /** 参照ゼロ・既定でもない盤面の事実 —— 拒否の門を跨がない既定の refs。 */
-const NO_REFERENCES = { unsettledTaskCount: 0, awaitingLandingTaskCount: 0, auditorName: "fugu" };
+const NO_REFERENCES = { unsettledTaskCount: 0, unsettledWorkTaskCount: 0, awaitingLandingTaskCount: 0, auditorName: "fugu" };
 
 describe("deleteAgent: 正常系(issue #205 / ADR 0087 決定1)", () => {
   it("agents/<name>.md を committed main から除去するコミットが着地し、loadRegistry から消える", async () => {
@@ -84,17 +84,30 @@ describe("deleteAgent: 確認で買えない拒否(ADR 0087 決定2/3)", () => {
     expect(loadRegistry(registryDir, "purely-local").agents.deckhand).toBeDefined();
   });
 
-  it("組み込みを shadow するエントリは、着地を待つ完了タスクがあっても消せる(ADR 0117 決定2)", async () => {
+  // ADR 0228 決定3: 組み込みは review 専用なので、shadow エントリの扉も work の参照は普通の agent と同じく数える。
+  // review の参照と Auditor ポインタだけが例外に残る —— review は組み込みへ落ちても壊れない
+  it("組み込みを shadow するエントリは、work の未決着タスクと着地を待つ完了タスクを数えて拒み、review の参照と Auditor ポインタは数えない", async () => {
     const registryDir = await makeRegistry({
       "agents/fugu.md":
         '---\nversion: "2"\nauthority: standard\ndescription: My own auditor.\nprovider: anthropic\nskills: []\n---\nYou are my fugu.\n',
     });
     git(registryDir, "branch", "-M", "main");
+    const registry = { dir: registryDir, mode: "purely-local" } as const;
 
-    await deleteAgent(
-      { name: "fugu", confirm: true },
-      { registry: { dir: registryDir, mode: "purely-local" }, ...NO_REFERENCES, awaitingLandingTaskCount: 1 },
-    );
+    await expect(
+      deleteAgent(
+        { name: "fugu", confirm: true },
+        { registry, ...NO_REFERENCES, unsettledTaskCount: 3, unsettledWorkTaskCount: 1, awaitingLandingTaskCount: 2 },
+      ),
+    ).rejects.toMatchObject({
+      name: "DeletionBlockedError",
+      reasons: [
+        { code: "unsettled_tasks", count: 1 },
+        { code: "tasks_awaiting_landing", count: 2 },
+      ],
+    });
+
+    await deleteAgent({ name: "fugu", confirm: true }, { registry, ...NO_REFERENCES, unsettledTaskCount: 2 });
 
     expect(loadRegistry(registryDir, "purely-local").agents.fugu).toMatchObject({ builtin: true });
   });

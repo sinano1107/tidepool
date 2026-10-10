@@ -8,7 +8,7 @@ import {
 } from "../src/agent.js";
 import { type Db, openDb } from "../src/db.js";
 import { InvalidAgentDefinitionError, UnknownAgentError } from "../src/registry.js";
-import { cancelTaskDirectly, completeTask, listBoard, pickupTask, registerTask, type TaskType } from "../src/tasks.js";
+import { cancelTaskDirectly, completeTask, editTask, listBoard, pickupTask, registerTask, type TaskType } from "../src/tasks.js";
 import { FULL_HANDOFF, HUMAN_WEBUI, quarantineQuestion, queuedForAutoMerge } from "./harness.js";
 
 describe("quarantineAgent(ADR 0012 / issue #36: workspace 版の agent 名一般化)", () => {
@@ -127,6 +127,20 @@ describe("verifyAgentRepaired", () => {
     } finally {
       db.close();
     }
+  });
+
+  // ADR 0228 決定4: 組み込みは review を走らせられるので、名前が組み込みに解決される間(registry に組み込みで
+  // ないエントリが無い)は review を依存に数えない —— 数えると work の付け替えで解除が永久に通らない
+  it("名前が組み込みに解決される間は、work が残る限り解除できず、work を付け替えれば組み込み宛ての review が残っていても解除できる", () => {
+    const db = openDb(":memory:");
+    const work = register(db, "work", "fugu");
+    register(db, "review", "fugu");
+    register(db, "review", undefined);
+    const verify = () => verifyAgentRepaired(db, "fugu", false, "tako", "fugu");
+
+    expect(verify).toThrow("agent fugu is not back in the registry and still has unsettled tasks assigned");
+    editTask(db, work, { assignee: "tako" }, NOW, "webui");
+    expect(verify).not.toThrow();
   });
 
   it("registry に agent 名が復活していれば、未決着タスクや着地待ちが残っていても解除を認める", () => {

@@ -53,6 +53,7 @@ import {
   recordPrOpened,
   registerTask,
   type Task,
+  type TaskType,
 } from "../src/tasks.js";
 import { TranscriptStore } from "../src/transcript-store.js";
 import type { TranslationClient } from "../src/translate.js";
@@ -205,7 +206,7 @@ export interface BootOptions {
    *  issue #36), read fresh every call from `task.assignee` (null → the
    *  board's default agent). Takes precedence over the static `authority`
    *  above when both are given. Absent → falls back to `authority`. */
-  resolveAuthority?: (assignee: string | null) => AuthorityProfile | undefined;
+  resolveAuthority?: (assignee: string | null, taskType: TaskType) => AuthorityProfile | undefined;
   /** Whether an agent name is currently registered (ADR 0012 / issue #36),
    *  read fresh against the registry — used both for registration-time
    *  validation and an agent quarantine Confirmation question's clearance
@@ -213,6 +214,7 @@ export interface BootOptions {
    *  registration and only "no more todo tasks depend on it" can clear a
    *  quarantine. */
   agentRegistered?: (name: string) => boolean;
+  resolvesToBuiltIn?: (name: string) => boolean;
   /** Assignee/workspace candidates for the registration screen (issue #12).
    *  A static snapshot (the common case) or a per-request provider — the
    *  latter lets a test prove the endpoint re-reads each call (issue #78). */
@@ -350,6 +352,7 @@ export async function bootTidepool(options: BootOptions = {}): Promise<Tidepool>
     authority: options.authority,
     resolveAuthority: options.resolveAuthority,
     agentRegistered: options.agentRegistered,
+    resolvesToBuiltIn: options.resolvesToBuiltIn,
     // the server takes a per-request provider now; a test may pass one
     // directly, otherwise wrap the static snapshot
     registryCandidates: normalizeCandidates(options.registryCandidates),

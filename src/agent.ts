@@ -6,12 +6,13 @@ import {
   type AuthorityProfile,
   assertValidAgentDefinition,
   InvalidAgentDefinitionError,
+  isBuiltInAgentName,
   ownEntry,
   REVIEWER_AUTHORITY_PROFILE,
   type Registry,
   UnknownAgentError,
 } from "./registry.js";
-import { typeAwareDefaultAgentSql } from "./tasks.js";
+import { type TaskType, typeAwareDefaultAgentSql } from "./tasks.js";
 import type { Tier } from "./tier.js";
 
 /** An assignee (or the board's default) resolved against the registry —
@@ -47,15 +48,29 @@ export function resolveExecutionAgent(
   taskAssignee: string | null,
   /** 盤面の段の名前(ADR 0200 決定2): agent.md の `tier` を検査する一覧。 */
   tiers: readonly Tier[],
+  /** 解決するタスクの type。既定 agent の起動検査は work として解決する。 */
+  taskType: TaskType,
 ): ResolvedAgent {
   const name = taskAssignee ?? defaultAgentName;
   const definition = ownEntry(registry.agents, name);
   if (!definition) throw new UnknownAgentError(name);
   assertValidAgentDefinition(name, definition, tiers);
+  // 組み込みは review 専用(ADR 0228 決定1/4): 名前ではなく解決の結果を見るので、
+  // shadow している間の work はここを通らない。扉の外で work が組み込みに落ちたら
+  // 解決の失敗として agent 名の quarantine に乗せる。
+  if (definition.builtin && taskType !== "review") {
+    throw new InvalidAgentDefinitionError(
+      name,
+      `the built-in agent runs reviews only, but a ${taskType} task resolved to it; ` +
+        `restore a registry entry named ${name} or reassign that task`,
+    );
+  }
   // 組み込み(ADR 0117 決定1)だけは profile を registry から引かない —— 種まきは
   // auditor の profile を書かず、組み込みは授権を増やさないので、床そのものである
   // ADR 0013 の定数を直に返す(registry の authority map には注入しない: 注入すると
   // profile 一覧・削除・authority select に、編集も削除もできない行が生える)。
+  // 組み込みは review しか走らないので、merge ダイヤルを持たないこの profile が
+  // 着地の面に読まれることはない(ADR 0228)。
   const profile = definition.builtin
     ? REVIEWER_AUTHORITY_PROFILE
     : ownEntry(registry.authority, definition.authority);
@@ -110,7 +125,9 @@ export function resolveAgentOrQuarantine(
  *  (`countUnsettledTasksReferencing`), so a task still running under the name
  *  counts too (ADR 0224 決定4). `agentExists` is resolved by the caller (fresh against
  *  the registry, or `false` when no registry is configured at all — in which
- *  case only the "no more unsettled tasks" path can ever clear it). */
+ *  case only the "no more unsettled tasks" path can ever clear it). The built-in
+ *  never counts as "back" (ADR 0228 決定4): a name resolving to it is not
+ *  repaired, and while it does, only work counts as a dependent. */
 export function verifyAgentRepaired(
   db: Db,
   agentName: string,
@@ -120,8 +137,10 @@ export function verifyAgentRepaired(
 ): void {
   if (agentExists) return;
   const fallback = typeAwareDefaultAgentSql("type", "@defaultAgentName", "@auditorName");
+  // 名前が組み込みに解決される間、review は組み込みが走らせられるので依存に数えない(ADR 0228 決定4)
+  const dependentTypes = isBuiltInAgentName(agentName) ? "type = 'work'" : "type != 'question'";
   const stillUnsettled = db
-    .prepare(`SELECT 1 FROM tasks WHERE type != 'question' AND status NOT IN ('done', 'cancelled')
+    .prepare(`SELECT 1 FROM tasks WHERE ${dependentTypes} AND status NOT IN ('done', 'cancelled')
               AND COALESCE(assignee, ${fallback}) = @agentName LIMIT 1`)
     .get({ agentName, defaultAgentName: defaultAgentName ?? null, auditorName: auditorName ?? null });
   if (stillUnsettled) {
