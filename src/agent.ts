@@ -108,7 +108,7 @@ export function resolveAgentOrQuarantine(
 
 /** Quarantine resolution's verification gate for an agent name (CONTEXT.md's
  *  Quarantine, ADR 0012 / issue #36) — never taken on faith. Clearance holds
- *  either the registry has the name back (`agentExists`), or there is no more
+ *  either the registry has the name back (`resolution` is `"registry"`), or there is no more
  *  unsettled work left depending on it and no completed task awaiting landing
  *  on its profile — both are legitimate repairs (registry repair, or settling /
  *  reassigning those tasks once nothing completed still waits to land), and

@@ -217,6 +217,9 @@ export interface BootOptions {
   /** Whether an agent name currently resolves to the built-in agent (ADR 0228)
    *  — no registry entry shadows it. Absent → nothing resolves to the built-in. */
   resolvesToBuiltIn?: (name: string) => boolean;
+  /** Why a registered agent name fails pickup's resolution, or undefined when
+   *  it resolves (issue #1745). Absent → registration alone counts as back. */
+  agentDefinitionFailure?: (name: string) => string | undefined;
   /** Assignee/workspace candidates for the registration screen (issue #12).
    *  A static snapshot (the common case) or a per-request provider — the
    *  latter lets a test prove the endpoint re-reads each call (issue #78). */
@@ -355,6 +358,7 @@ export async function bootTidepool(options: BootOptions = {}): Promise<Tidepool>
     resolveAuthority: options.resolveAuthority,
     agentRegistered: options.agentRegistered,
     resolvesToBuiltIn: options.resolvesToBuiltIn,
+    agentDefinitionFailure: options.agentDefinitionFailure,
     // the server takes a per-request provider now; a test may pass one
     // directly, otherwise wrap the static snapshot
     registryCandidates: normalizeCandidates(options.registryCandidates),

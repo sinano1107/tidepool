@@ -80,3 +80,22 @@ it("その agent 名宛ての todo がもう存在しなければ、回答が受
   expect(t.worker.started.map((x: any) => x.id)).toEqual([delegated.id]);
   expect((await api(t.baseUrl, "GET", `/api/tasks/${other.id}`)).json.status).toBe("todo");
 });
+
+// issue #1745: エントリがあっても pickup の解決に通らない定義は registry に「戻った」に数えない
+it("registry にエントリはあるが定義が成立しない agent 名の quarantine への回答は、その名前宛ての todo が残る限り定義の不成立を名指して拒否される", async () => {
+  t = await bootTidepool({
+    agentRegistered: () => true,
+    agentDefinitionFailure: (name) => (name === "navigator" ? 'unknown tier "x"' : undefined),
+  });
+  queueWork(t, "delegated to navigator", undefined, "navigator");
+
+  quarantineAgent(t.db, "navigator", new Error('agent navigator: unknown tier "x"'), t.clock.now());
+
+  const question = await servedQuarantineQuestion(t, "agent", "navigator");
+  const res = await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, {
+    answers: ["repaired by hand"],
+  });
+  expect(res.status).toBe(409);
+  expect(res.json.error).toContain(`agent navigator's definition still does not hold (unknown tier "x")`);
+  expect((await api(t.baseUrl, "GET", `/api/tasks/${question.id}`)).json.status).toBe("todo");
+});
