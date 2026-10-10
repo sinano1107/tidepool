@@ -1,4 +1,5 @@
 import { AgentChip } from './AgentChip.jsx';
+import { IdChip } from './IdChip.jsx';
 import { RiskFlag } from './RiskFlag.jsx';
 import { StatusBadge } from './StatusBadge.jsx';
 import { TypeBadge } from './TypeBadge.jsx';
@@ -24,7 +25,7 @@ export function TaskCard({ task = {}, onClick, style }) {
       }}
     >
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 6 }}>
-        <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>{id}</span>
+        <IdChip id={id} />
         <TypeBadge type={type} showLabel={false} />
         {risk && <RiskFlag style={{ marginLeft: 'auto' }} />}
       </div>

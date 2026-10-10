@@ -374,7 +374,7 @@ function TaskCard({ task = {}, onClick, style }) {
         ...style
       }
     },
-    /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "baseline", gap: 8, marginBottom: 6 } }, /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--text-muted)" } }, id), /* @__PURE__ */ React.createElement(__ds_scope.TypeBadge, { type, showLabel: false }), risk && /* @__PURE__ */ React.createElement(__ds_scope.RiskFlag, { style: { marginLeft: "auto" } })),
+    /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "baseline", gap: 8, marginBottom: 6 } }, /* @__PURE__ */ React.createElement(__ds_scope.IdChip, { id }), /* @__PURE__ */ React.createElement(__ds_scope.TypeBadge, { type, showLabel: false }), risk && /* @__PURE__ */ React.createElement(__ds_scope.RiskFlag, { style: { marginLeft: "auto" } })),
     /* @__PURE__ */ React.createElement("div", { style: {
       fontSize: "var(--text-sm)",
       fontWeight: "var(--weight-medium)",
