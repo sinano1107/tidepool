@@ -191,6 +191,12 @@ it.each(["한〮abc note", "一\u{16FF0}abc note"])("CJK の連なりに続く M
   expect(searchMemory(db, reader, { query: text }, at).results.map((r) => r.title)).toEqual(["leaf"]);
 });
 
+it.each(["", "́"])("私用領域 Co だけ・結合文字 M だけの語も索引では1語の token なので query から消えず、text に %j を含む leaf はその語だけの query で当たる(#1723)", (word) => {
+  const { db, reader, record } = board();
+  record({ title: "leaf", text: `see ${word} here` });
+  expect(searchMemory(db, reader, { query: word }, at).results.map((r) => r.title)).toEqual(["leaf"]);
+});
+
 it.each([
   ["NFC", "NFC"],
   ["NFC", "NFD"],
