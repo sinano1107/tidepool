@@ -678,6 +678,8 @@ function assertLandingAllowed(db: Db, landingTaskId: string): void {
 function promotionRetryError(verdict: LandingVerdict): string | undefined {
   switch (verdict.kind) {
     case "landed":
+    // 運ぶものが無いのは人間に判断を求めない事実で、retry を選んだ回答はそのまま受理する(ADR 0073 / issue #1725)
+    case "nothing_to_land":
       return undefined;
     case "failed":
       return verdict.error;
@@ -685,8 +687,6 @@ function promotionRetryError(verdict: LandingVerdict): string | undefined {
       return verdict.reason === "attached_children"
         ? `review still running: ${verdict.count} attached child task(s) unsettled`
         : `cannot land yet: ${verdict.count} objection(s) raised in this triage await commit`;
-    case "nothing_to_land":
-      return `task branch has nothing to land on "${verdict.base}"`;
     case "not_applicable":
       return verdict.reason === "not_work"
         ? "only work tasks can be promoted"
