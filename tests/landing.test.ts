@@ -1057,12 +1057,14 @@ function mergeQuestion(
   db: Db,
   clock: FakeClock,
   pending: { pending_local_merge_task_id: string } | { pending_merge_pr: number },
+  workspace?: string,
 ) {
   return registerTask(
     db,
     {
       type: "question",
       title: "land it",
+      workspace,
       purpose: "a human decides whether to land",
       completion_criteria: "the answer is recorded",
       question: [{ title: "land it", options: ["merge", "hold"], recommendation: "merge" }],
@@ -1846,6 +1848,54 @@ it("遅い走査は、盤面の外で閉じられた PR の open な merge quest
   expect(getTask(db, question.id)!.status).toBe("done");
   expect(boardEvents(db, question.id, "question_answered")).toEqual([]);
   expect(boardEvents(db, question.id, "pr_close_observed")).toEqual(closeObserved(1));
+});
+
+it("遅い走査は、workspace の解決が分類できない失敗で落ちた question を open のまま残し、tick は落ちず後ろの question は決着する(ADR 0229 決定1)", async () => {
+  const workspace = await makeWorkspace("landing-scan-resolve-throws");
+  const { db, clock } = await openBoard();
+  const github = new FakeGitHubClient();
+  const broken = mergeQuestion(db, clock, { pending_merge_pr: 1 }, "broken");
+  const closed = mergeQuestion(db, clock, { pending_merge_pr: 2 }, "healthy");
+  github.scriptClosedOutside(2);
+  const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+  const landing = createLanding({
+    defaultAgentName: "tako",
+    db,
+    clock,
+    resolveWorkspace: (name) => {
+      if (name === "broken") throw new Error("registry unreadable");
+      return workspace;
+    },
+    github,
+  });
+
+  await expect(landing.tick("outside_merge", clock.now())).resolves.toBeUndefined();
+
+  expect(getTask(db, broken.id)!.status).toBe("todo");
+  expect(getTask(db, closed.id)!.status).toBe("done");
+  expect(boardEvents(db, closed.id, "pr_close_observed")).toEqual(closeObserved(2));
+  expect(logged).toHaveBeenCalledWith(expect.stringContaining(`PR #1 (question ${broken.id})`), expect.any(Error));
+});
+
+it("遅い走査で UnknownWorkspaceError を投げる workspace は quarantine に落ち、tick は落ちない", async () => {
+  const workspace = await makeWorkspace("landing-scan-unknown-workspace");
+  const { db, clock } = await openBoard();
+  const question = mergeQuestion(db, clock, { pending_merge_pr: 1 }, "gone");
+  const landing = createLanding({
+    defaultAgentName: "tako",
+    db,
+    clock,
+    resolveWorkspace: (name) => {
+      if (name === "gone") throw new UnknownWorkspaceError("gone");
+      return workspace;
+    },
+    github: new FakeGitHubClient(),
+  });
+
+  await expect(landing.tick("outside_merge", clock.now())).resolves.toBeUndefined();
+
+  expect(quarantineQuestion(db, "workspace", "gone")).toBeDefined();
+  expect(getTask(db, question.id)!.status).toBe("todo");
 });
 
 // ADR 0227 決定2・3: check が1つも報告されていない PR は、盤面がその head を知ってから5分の猶予の間だけ待つ

@@ -863,12 +863,18 @@ export function createLanding(deps: LandingDeps): Landing {
         for (const { id, pr_number, workspace: taskWorkspace } of listOpenMergeQuestions(
           deps.db,
         )) {
-          const workspace = resolveOrQuarantine(deps.db, resolve, taskWorkspace, now);
-          if (!workspace) continue;
           try {
-            const state = await github.getPullRequestState({ path: workspace.path, number: pr_number });
-            if (state !== "OPEN") settleMergeQuestionAsObserved(deps.db, id, pr_number, state, now);
-          } catch {}
+            const workspace = resolveOrQuarantine(deps.db, resolve, taskWorkspace, now);
+            if (!workspace) continue;
+            // 状態が読めない(網・認証)回は黙って次の tick へ回す —— 瞬断のたびにログを出さない
+            const state = await github
+              .getPullRequestState({ path: workspace.path, number: pr_number })
+              .catch(() => null);
+            if (state && state !== "OPEN") settleMergeQuestionAsObserved(deps.db, id, pr_number, state, now);
+          } catch (error) {
+            // ADR 0229 決定1: 分類できない失敗はログに出し、その question は open のまま残して次へ進む
+            console.error(`[landing] outside-merge scan of PR #${pr_number} (question ${id}) failed; it stays open:`, error);
+          }
         }
         return;
       }
