@@ -66,7 +66,7 @@ async function bootWithAdapter(
     openaiUsage: healthyOpenai,
     containerRuntime: new FakeContainerRuntime(proc.spawn),
     transcripts,
-    workerAdapter: (deps) => withHealthyUsage(build(deps), { now: () => t.clock.now() }),
+    workerAdapter: (deps) => withHealthyUsage(build(deps), deps.clock),
   });
   return { proc, transcripts, transcriptDir };
 }

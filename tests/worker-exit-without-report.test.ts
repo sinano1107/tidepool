@@ -431,7 +431,7 @@ async function bootWithAdapter(
       executionSettingsFor(t.db, { provider: [{ name: provider, advisor: false }], tier: undefined }, task),
     openaiUsage: healthyOpenai,
     containerRuntime: new FakeContainerRuntime(proc.spawn),
-    workerAdapter: (deps) => withHealthyUsage(build(deps), { now: () => t.clock.now() }),
+    workerAdapter: (deps) => withHealthyUsage(build(deps), deps.clock),
   });
   return proc;
 }

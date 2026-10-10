@@ -211,7 +211,7 @@ it("skill 列挙の容器が空にならず回収 timeout で null に落ちる�
         logDir,
         transcripts: new TranscriptStore(logDir),
       });
-      return withHealthyUsage(worker, { now: () => t.clock.now() });
+      return withHealthyUsage(worker, clock);
     },
   });
   const task = queueWork(t, "never runs");

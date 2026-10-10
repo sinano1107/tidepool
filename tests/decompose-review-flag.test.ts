@@ -410,7 +410,7 @@ it.each([
         kill() {},
         on() {},
       })),
-      workerAdapter: ({ db, containers, boardCall }) => {
+      workerAdapter: ({ db, clock, containers, boardCall }) => {
         const worker = new ClaudeCodeWorker({
           db,
           containers,
@@ -423,7 +423,7 @@ it.each([
           logDir,
           transcripts: new TranscriptStore(logDir),
         });
-        return withHealthyUsage(worker, { now: () => t.clock.now() });
+        return withHealthyUsage(worker, clock);
       },
     });
     const task = (

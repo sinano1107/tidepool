@@ -73,7 +73,7 @@ async function bootClaude(options: { provider?: Provider; modelProbes?: Partial<
         logDir,
         moonshotApiKeyFile,
       });
-      return withHealthyUsage(worker, { now: () => t.clock.now() });
+      return withHealthyUsage(worker, deps.clock);
     },
   });
   return proc;
