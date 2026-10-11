@@ -2523,12 +2523,14 @@ function blockingSql(rowRef: string): string {
 
 /** あるタスクを根とする子孫全体(根自身を含む)の CTE。`rootRef` は根の id を持つ SQL 式
  *  (`?` か名前つきパラメータ)。着地の門と直接 cancel の question gate、triage の異議
- *  勘定が同じ「系譜をたどる」形を共有する。 */
-export function subtreeSql(rootRef: string): string {
+ *  勘定、積み残しが同じ「系譜をたどる」形を共有する。`skipCancelled` なら cancelled の
+ *  タスクとその下へは降りない(根自身は残す)—— 積み残しが abandon で捨てられた判断の内側を
+ *  運ばない(ADR 0239 決定1)。 */
+export function subtreeSql(rootRef: string, skipCancelled = false): string {
   return `WITH RECURSIVE subtree(id) AS (
       SELECT ${rootRef}
       UNION
-      SELECT c.id FROM tasks c JOIN subtree s ON c.parent_id = s.id)`;
+      SELECT c.id FROM tasks c JOIN subtree s ON c.parent_id = s.id${skipCancelled ? " WHERE c.status <> 'cancelled'" : ""})`;
 }
 
 /** 着地の門(ADR 0092 決定1): 着地するタスクの子孫全体に付いた、未決着の付帯子の数。

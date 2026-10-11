@@ -2277,7 +2277,7 @@ it("門が閉じている間にダイヤルが external へ変わった PR は�
   ]);
 });
 
-// ADR 0231 決定2・3: 積み残しは回答時と merge 時に読み、門にも着地の登録にも混ぜない。
+// ADR 0231 決定2・3 / ADR 0239: 積み残しは回答時と merge 時に読み、門にも着地の登録にも混ぜない。
 // 以下がこの検査を述べる唯一の場所(ADR 0107)。
 /** タスクブランチを push して PR #1 を開く。auto_if_ci_green なら無人 merge キューに入り、
  *  escalate なら merge question が立つ。checkout はタスクブランチに残る。 */
@@ -2318,29 +2318,21 @@ function settleRepairNotMergedBack(
   return getTask(db, repair.id)!;
 }
 
-it("#1777: 修理の内容が merge される head に無ければ、後始末が閉じていても積み残しで、無人 merge も人間の merge 回答も通らない", async () => {
-  const auto = await openPushedPr("left-behind-closed-teardown", "auto_if_ci_green");
-  const repair = settleRepairNotMergedBack(auto.db, auto.clock, auto.workspace, auto.work.id);
-  expect(auto.db.prepare("SELECT teardown_started_at FROM tasks WHERE id = ?").get(repair.id)).toEqual({
-    teardown_started_at: null,
-  });
+it("merge back が conflict して後始末が閉じても、修理の内容が merge される head に無ければ積み残しで、CI 緑でも無人 merge されない", async () => {
+  const { workspace, db, clock, github, work, landing } = await openPushedPr("left-behind-merge-back-conflict", "auto_if_ci_green");
+  const repair = attachUnsettledChild(db, clock, work.id);
+  git(workspace.path, "checkout", "-b", `task/${repair.id}`, `task/${work.id}`);
+  commitWork(workspace.path, "repair.txt", "fixed\n");
+  git(workspace.path, "checkout", `task/${work.id}`);
+  commitWork(workspace.path, "repair.txt", "conflicting\n");
+  git(workspace.path, "push", "origin", `task/${work.id}`);
+  await prepareWorkspaceAtPickup(db, workspace, repair, {});
+  completeTask(db, repair, FULL_HANDOFF, "worker", clock.now(), "worker");
+  releaseWorkspace(db, workspace, getTask(db, repair.id)!, clock.now(), true);
+  expect(quarantineQuestion(db, "workspace", workspace.name)?.purpose).toContain(`git merge task/${repair.id}`);
 
-  await auto.landing.tick("auto_merge", auto.clock.now());
-  expect(auto.github.merged).toEqual([]);
+  await landing.tick("auto_merge", clock.now());
 
-  const { workspace, db, clock, github, work } = await openPushedPr("left-behind-closed-teardown-answer", "escalate");
-  settleRepairNotMergedBack(db, clock, workspace, work.id);
-  const question = getTask(db, listBoard(db).find((q) => q.question_pending_merge_pr === 1)!.id)!;
-  await expect(
-    submitAnswer(
-      { db, pollNow: () => {}, landing: unusedLanding, workspace, github },
-      question,
-      ["merge"],
-      undefined,
-      () => clock.now(),
-      "webui",
-    ),
-  ).rejects.toThrow(DomainError);
   expect(github.merged).toEqual([]);
 });
 

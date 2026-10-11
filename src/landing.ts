@@ -154,12 +154,9 @@ export function landingBlock(db: Db, taskId: string): LandingBlock | null {
 export function hasContentLeftBehind(db: Db, workspace: WorkspaceConfig, taskId: string): boolean {
   const targets = db
     .prepare(
-      `WITH RECURSIVE tree(id) AS (
-         SELECT @root
-         UNION
-         SELECT c.id FROM tasks c JOIN tree t ON c.parent_id = t.id WHERE c.status <> 'cancelled')
+      `${subtreeSql("@root", true)}
        SELECT id FROM tasks
-        WHERE id IN (SELECT id FROM tree) AND (id = @root OR (type = 'work' AND status = 'done'))`,
+        WHERE id IN (SELECT id FROM subtree) AND (id = @root OR (type = 'work' AND status = 'done'))`,
     )
     .all({ root: taskId }) as Array<{ id: string }>;
   const mergeHead = remoteTrackingRef(taskBranch(taskId));
