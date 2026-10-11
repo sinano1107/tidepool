@@ -145,23 +145,27 @@ export function landingBlock(db: Db, taskId: string): LandingBlock | null {
   return objections > 0 ? { kind: "objections", count: objections } : null;
 }
 
-/** ADR 0231 決定2: 積み残し —— 盤面が持つ着地の内容が、まだ PR に載っていない。分解ツリーに後始末が未了の
- *  タスクがある(merge back 前)か、ローカルのタスクブランチが origin 側に無い内容を持つ(push 前)。後者は
- *  origin 側を candidate に置くので、盤面の外の push で origin 側が先へ進んでいても積み残しと読まない。
- *  ローカルのタスクブランチが無ければ運ぶ内容も無い。比べられなければ積み残しとする(fail-closed)。
- *  門(`landingBlock`)とは別の述語で、読むのは回答時と merge 時だけである(決定3)。 */
+/** ADR 0231 決定2 / ADR 0239: 積み残し —— 盤面が持つ着地の内容が、まだ PR に載っていない。着地するタスク自身と、
+ *  cancelled の祖先を挟まない done の work の子孫それぞれのブランチを、merge される head(origin 側のタスク
+ *  ブランチ)と ADR 0105 の内容の述語で比べ、1つでも candidate を変えれば積み残しとする。origin 側を candidate に
+ *  置くので、盤面の外の push で origin 側が先へ進んでいても積み残しと読まない。ブランチが無ければ運ぶ内容も無い。
+ *  比べられなければ積み残しとする(fail-closed)。門(`landingBlock`)とは別の述語で、読むのは回答時と merge 時
+ *  だけである(ADR 0231 決定3)。 */
 export function hasContentLeftBehind(db: Db, workspace: WorkspaceConfig, taskId: string): boolean {
-  const tearingDown = db
+  const targets = db
     .prepare(
-      `${subtreeSql("?")}
-       SELECT 1 FROM tasks WHERE id IN (SELECT id FROM subtree) AND teardown_started_at IS NOT NULL`,
+      `${subtreeSql("@root", true)}
+       SELECT id FROM tasks
+        WHERE id IN (SELECT id FROM subtree) AND (id = @root OR (type = 'work' AND status = 'done'))`,
     )
-    .get(taskId);
-  if (tearingDown) return true;
-  if (!taskBranchExists(workspace, taskId)) return false;
+    .all({ root: taskId }) as Array<{ id: string }>;
+  const mergeHead = remoteTrackingRef(taskBranch(taskId));
   try {
-    return branchMergeEffect(workspace, remoteTrackingRef(taskBranch(taskId)), taskBranch(taskId))
-      .changesCandidate;
+    return targets.some(
+      ({ id }) =>
+        taskBranchExists(workspace, id) &&
+        branchMergeEffect(workspace, mergeHead, taskBranch(id)).changesCandidate,
+    );
   } catch {
     return true;
   }
