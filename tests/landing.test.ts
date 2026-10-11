@@ -17,6 +17,7 @@ import {
 import { type AuthorityProfile, loadRegistry, type MergeDial, UnknownAgentError } from "../src/registry.js";
 import {
   answerQuestion,
+  cancelTaskDirectly,
   completeTask,
   countUnsettledTasksReferencing,
   editTask,
@@ -28,7 +29,6 @@ import {
   type Task,
   type TaskType,
 } from "../src/tasks.js";
-import { markTeardown } from "../src/teardown.js";
 import { raiseObjection } from "../src/triage.js";
 import { BOARD_WORKER_ID } from "../src/worker-id.js";
 import {
@@ -2301,16 +2301,52 @@ async function openPushedPr(name: string, merge: MergeDial) {
   return { workspace, db, clock, github, work: getTask(db, work.id)!, landing };
 }
 
-/** 修理(付帯子)は done で、その後始末(merge back)が未了。門は開いている。 */
-function settleRepairStillTearingDown(db: Db, clock: FakeClock, landingTaskId: string) {
-  const repair = attachUnsettledChild(db, clock, landingTaskId);
+/** 修理(`parentId` の付帯子)を着地するタスクのブランチから fork し、`repair.txt` を commit して done にする。
+ *  merge back はしない。門は開いている。checkout は着地するタスクのブランチに戻す。 */
+function settleRepairNotMergedBack(
+  db: Db,
+  clock: FakeClock,
+  workspace: WorkspaceConfig,
+  landingTaskId: string,
+  parentId = landingTaskId,
+) {
+  const repair = attachUnsettledChild(db, clock, parentId);
+  git(workspace.path, "checkout", "-b", `task/${repair.id}`, `task/${landingTaskId}`);
+  commitWork(workspace.path, "repair.txt", "fixed\n");
+  git(workspace.path, "checkout", `task/${landingTaskId}`);
   completeTask(db, repair, FULL_HANDOFF, "worker", clock.now(), "worker");
-  markTeardown(db, repair.id, clock.now());
+  return getTask(db, repair.id)!;
 }
 
-it("子孫に後始末が未了のタスクがあれば積み残しで、CI 緑でも無人 merge されず、event も question も無くキューに残る", async () => {
-  const { db, clock, github, work, landing } = await openPushedPr("left-behind-teardown", "auto_if_ci_green");
-  settleRepairStillTearingDown(db, clock, work.id);
+it("#1777: 修理の内容が merge される head に無ければ、後始末が閉じていても積み残しで、無人 merge も人間の merge 回答も通らない", async () => {
+  const auto = await openPushedPr("left-behind-closed-teardown", "auto_if_ci_green");
+  const repair = settleRepairNotMergedBack(auto.db, auto.clock, auto.workspace, auto.work.id);
+  expect(auto.db.prepare("SELECT teardown_started_at FROM tasks WHERE id = ?").get(repair.id)).toEqual({
+    teardown_started_at: null,
+  });
+
+  await auto.landing.tick("auto_merge", auto.clock.now());
+  expect(auto.github.merged).toEqual([]);
+
+  const { workspace, db, clock, github, work } = await openPushedPr("left-behind-closed-teardown-answer", "escalate");
+  settleRepairNotMergedBack(db, clock, workspace, work.id);
+  const question = getTask(db, listBoard(db).find((q) => q.question_pending_merge_pr === 1)!.id)!;
+  await expect(
+    submitAnswer(
+      { db, pollNow: () => {}, landing: unusedLanding, workspace, github },
+      question,
+      ["merge"],
+      undefined,
+      () => clock.now(),
+      "webui",
+    ),
+  ).rejects.toThrow(DomainError);
+  expect(github.merged).toEqual([]);
+});
+
+it("done の子孫のブランチに merge される head に無い内容があれば積み残しで、CI 緑でも無人 merge されず、event も question も無くキューに残る", async () => {
+  const { workspace, db, clock, github, work, landing } = await openPushedPr("left-behind-descendant", "auto_if_ci_green");
+  const repair = settleRepairNotMergedBack(db, clock, workspace, work.id);
   const events = listEvents(db, work.id).length;
 
   await landing.tick("auto_merge", clock.now());
@@ -2319,9 +2355,43 @@ it("子孫に後始末が未了のタスクがあれば積み残しで、CI 緑�
   expect(mergeQuestions(db)).toEqual([]);
   expect(listEvents(db, work.id)).toHaveLength(events);
 
-  // キューに残っている —— 後始末が終われば次の tick で merge される
-  db.prepare("UPDATE tasks SET teardown_started_at = NULL").run();
+  // キューに残っている —— 修理を merge back し、着地が push した後の tick で merge される
+  git(workspace.path, "merge", "--no-edit", `task/${repair.id}`);
+  await expect(landing.land(work)).resolves.toMatchObject({ kind: "landed", form: "open_pull_request_updated" });
   await landing.tick("auto_merge", clock.now());
+  expect(github.merged.map((pr) => pr.number)).toEqual([1]);
+});
+
+it("cancelled の祖先の下に残った done の work の内容は積み残しではなく、無人 merge される", async () => {
+  const { workspace, db, clock, github, work, landing } = await openPushedPr("left-behind-cancelled", "auto_if_ci_green");
+  const abandoned = attachUnsettledChild(db, clock, work.id);
+  const inner = settleRepairNotMergedBack(db, clock, workspace, work.id, abandoned.id);
+  cancelTaskDirectly(db, getTask(db, abandoned.id)!, null, clock.now(), {}, "webui");
+  expect(getTask(db, inner.id)!.status).toBe("done");
+
+  await landing.tick("auto_merge", clock.now());
+
+  expect(github.merged.map((pr) => pr.number)).toEqual([1]);
+});
+
+it("修理の内容がローカルの着地するタスクのブランチに無くても、merge される head に載っていれば積み残しではない", async () => {
+  const { workspace, db, clock, github, work, landing } = await openPushedPr("left-behind-on-origin", "auto_if_ci_green");
+  const repair = settleRepairNotMergedBack(db, clock, workspace, work.id);
+  git(workspace.path, "push", "origin", `task/${repair.id}:task/${work.id}`);
+
+  await landing.tick("auto_merge", clock.now());
+
+  expect(github.merged.map((pr) => pr.number)).toEqual([1]);
+});
+
+it("着地するタスクのブランチに修理を `merge -s ours` で記録して push すれば、捨てた修理は積み残しではない", async () => {
+  const { workspace, db, clock, github, work, landing } = await openPushedPr("left-behind-discarded", "auto_if_ci_green");
+  const repair = settleRepairNotMergedBack(db, clock, workspace, work.id);
+  git(workspace.path, "merge", "-s", "ours", "--no-edit", `task/${repair.id}`);
+  git(workspace.path, "push", "origin", `task/${work.id}`);
+
+  await landing.tick("auto_merge", clock.now());
+
   expect(github.merged.map((pr) => pr.number)).toEqual([1]);
 });
 
@@ -2368,7 +2438,7 @@ it("積み残しがあっても着地の登録は走る —— PR を開き、�
   const work = landingWork(db, clock);
   git(workspace.path, "checkout", "-b", `task/${work.id}`);
   commitWork(workspace.path, "feature.txt", "ready\n");
-  settleRepairStillTearingDown(db, clock, work.id);
+  settleRepairNotMergedBack(db, clock, workspace, work.id);
 
   await expect(landing.land(work)).resolves.toMatchObject({ kind: "landed", form: "pull_request_opened" });
   commitWork(workspace.path, "repair.txt", "fixed\n");
@@ -2379,7 +2449,7 @@ it("積み残しがあっても着地の登録は走る —— PR を開き、�
 });
 
 it.each<[string, (pr: Awaited<ReturnType<typeof openPushedPr>>) => void]>([
-  ["子孫の後始末が未了", ({ db, clock, work }) => settleRepairStillTearingDown(db, clock, work.id)],
+  ["子孫の merge back 前", ({ workspace, db, clock, work }) => settleRepairNotMergedBack(db, clock, workspace, work.id)],
   ["merge back 済み・push 前", ({ workspace }) => commitWork(workspace.path, "repair.txt", "fixed\n")],
 ])(
   "積み残し(%s)のある PR への人間の merge 回答は拒まれ、merge されず question は開いたまま残る",
