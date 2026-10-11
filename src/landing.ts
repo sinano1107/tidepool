@@ -906,15 +906,15 @@ export function createLanding(deps: LandingDeps): Landing {
           // ADR 0232)。CI を読む前は profile と門だけを読み、面は PR の状態の後で読む —— 閉じた PR は面に依らず観測になり、
           // CI 赤の PR に立つのは CI 赤の question になる(ADR 0238 決定1)。門に当たった PR はキューに残り、面が変わった
           // PR はキューを外れる。profile が読めなければ agent を quarantine に落とし、キューに残してこの回は飛ばす(ADR 0217 決定3)
-          const openGate = () => {
+          const authorityIfGateOpen = () => {
             const resolved = readAuthority(task, now);
             return resolved && !landingBlock(deps.db, task_id) ? resolved : undefined;
           };
           const stop = (askQuestion?: (changed: string) => void) => {
-            const resolved = openGate();
+            const resolved = authorityIfGateOpen();
             return !resolved || withdrawIfSurfaceChanged(task, resolved.profile, pr_number, workspace.name, now, askQuestion);
           };
-          if (!openGate()) continue;
+          if (!authorityIfGateOpen()) continue;
           const ref = { path: workspace.path, number: pr_number };
           // 状態は CI と同じ読み取りで、行為の前に読む(ADR 0229 決定2)。閉じた PR は CI の色に依らず観測になる
           const pr = await github.readPullRequest(ref);
@@ -927,19 +927,28 @@ export function createLanding(deps: LandingDeps): Landing {
           observePrHead(deps.db, task_id, pr_number, pr.head, now);
           const { ci, head } = pr;
           const red = ci === "failure" || (ci === "unreported" && unreportedCiGraceElapsed(deps.db, task_id, head, now));
-          const found =
-            ci === "failure"
-              ? `found CI red on PR #${pr_number}`
-              : `found no CI check reported on PR #${pr_number} in the ${UNREPORTED_CI_GRACE_TEXT} since ` +
-                `${UNREPORTED_CI_GRACE_ORIGIN_TEXT}, so its CI-green condition cannot be observed`;
-          let purpose = `"${task.title}"'s auto_if_ci_green auto-merge ${found}. Merge anyway, or hold?`;
-          const askHuman = () => registerMergeQuestion(deps.db, task, pr_number, purpose, "hold", now);
+          const hold = (purpose: string) => () =>
+            registerMergeQuestion(deps.db, task, pr_number, purpose, "hold", now);
+          const askCiRed = red
+            ? hold(
+                `"${task.title}"'s auto_if_ci_green auto-merge ` +
+                  (ci === "failure"
+                    ? `found CI red on PR #${pr_number}`
+                    : `found no CI check reported on PR #${pr_number} in the ${UNREPORTED_CI_GRACE_TEXT} since ` +
+                      `${UNREPORTED_CI_GRACE_ORIGIN_TEXT}, so its CI-green condition cannot be observed`) +
+                  ". Merge anyway, or hold?",
+              )
+            : undefined;
           // 面が question 側へ変わっていれば、CI 赤 / 猶予を過ぎた未報告なら CI 赤の question、それ以外は推奨 merge の
           // 面変化の question(ADR 0217 決定2・ADR 0227 決定3)。CI が pending でも同じ tick で外す(ADR 0238 決定2)。
           // ここから行為までに await は無いので、この読みが行為の直前の読みを兼ねる
-          if (stop(red ? askHuman : undefined)) continue;
-          if (ci !== "success" && !red) continue;
-          if (ci === "success") {
+          if (stop(askCiRed)) continue;
+          let askHuman: () => void;
+          if (askCiRed) {
+            askHuman = askCiRed;
+          } else if (ci !== "success") {
+            continue;
+          } else {
             // 積み残しは門と同じくキューに残す(ADR 0231 決定3)
             if (hasContentLeftBehind(deps.db, workspace, task_id)) continue;
             // merge は CI を読んだ head に固定する(ADR 0231 決定1)
@@ -963,9 +972,10 @@ export function createLanding(deps: LandingDeps): Landing {
             observePrHead(deps.db, task_id, pr_number, after.head, now);
             // head が動いただけなら、次の tick で新しい head の CI を読む(ADR 0231 決定1)。gh の文面では見分けない
             if (after.head !== head) continue;
-            purpose =
+            askHuman = hold(
               `"${task.title}"'s auto_if_ci_green auto-merge could not merge PR #${pr_number}: ${failure}. ` +
-              "Merge once it is fixed, or hold?";
+                "Merge once it is fixed, or hold?",
+            );
             // merge を待つ間に変わりうるので、question の前に読み直す
             if (stop(askHuman)) continue;
           }
