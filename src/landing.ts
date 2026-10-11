@@ -927,18 +927,18 @@ export function createLanding(deps: LandingDeps): Landing {
           observePrHead(deps.db, task_id, pr_number, pr.head, now);
           const { ci, head } = pr;
           const red = ci === "failure" || (ci === "unreported" && unreportedCiGraceElapsed(deps.db, task_id, head, now));
-          const hold = (purpose: string) => () => registerMergeQuestion(deps.db, task, pr_number, purpose, "hold", now);
           const found =
             ci === "failure"
               ? `found CI red on PR #${pr_number}`
               : `found no CI check reported on PR #${pr_number} in the ${UNREPORTED_CI_GRACE_TEXT} since ` +
                 `${UNREPORTED_CI_GRACE_ORIGIN_TEXT}, so its CI-green condition cannot be observed`;
-          let askHuman = hold(`"${task.title}"'s auto_if_ci_green auto-merge ${found}. Merge anyway, or hold?`);
+          let purpose = `"${task.title}"'s auto_if_ci_green auto-merge ${found}. Merge anyway, or hold?`;
+          const askHuman = () => registerMergeQuestion(deps.db, task, pr_number, purpose, "hold", now);
           // 面が question 側へ変わっていれば、CI 赤 / 猶予を過ぎた未報告なら CI 赤の question、それ以外は推奨 merge の
           // 面変化の question(ADR 0217 決定2・ADR 0227 決定3)。CI が pending でも同じ tick で外す(ADR 0238 決定2)。
           // ここから行為までに await は無いので、この読みが行為の直前の読みを兼ねる
           if (stop(red ? askHuman : undefined)) continue;
-          if (ci === "pending" || (ci === "unreported" && !red)) continue;
+          if (ci !== "success" && !red) continue;
           if (ci === "success") {
             // 積み残しは門と同じくキューに残す(ADR 0231 決定3)
             if (hasContentLeftBehind(deps.db, workspace, task_id)) continue;
@@ -963,10 +963,9 @@ export function createLanding(deps: LandingDeps): Landing {
             observePrHead(deps.db, task_id, pr_number, after.head, now);
             // head が動いただけなら、次の tick で新しい head の CI を読む(ADR 0231 決定1)。gh の文面では見分けない
             if (after.head !== head) continue;
-            askHuman = hold(
+            purpose =
               `"${task.title}"'s auto_if_ci_green auto-merge could not merge PR #${pr_number}: ${failure}. ` +
-                "Merge once it is fixed, or hold?",
-            );
+              "Merge once it is fixed, or hold?";
             // merge を待つ間に変わりうるので、question の前に読み直す
             if (stop(askHuman)) continue;
           }
