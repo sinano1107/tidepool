@@ -21,8 +21,9 @@
 4. **merge back は、workspace の quarantine の受理の検査の中でやり直す。** 先例は ADR 0112 決定3(落ちた後始末の
    受理の検査は再実行そのもの)。後始末と同じ merge back(帰り先を checkout して merge し、休止位置へ戻す)を走らせ、
    conflict すれば merge を取り消して回答を拒む。拒否文には出口を2つ示す。手で merge を解くか、捨てるなら
-   `git merge -s ours` で記録するかである(ADR 0239 帰結)。quarantine が開いている workspace には session が居ない
-   ので、checkout を動かしてよい。受理した後は、その workspace の範囲で決定2 の撃ち直しを fire-and-forget で撃つ。
+   `git merge -s ours` で記録するかである(ADR 0239 帰結)。checkout を動かす前に、その workspace で走っている session が無い
+   ことを読む(ADR 0064)。quarantine は pickup を止めるが、ADR 0103 の帯域外の quarantine は人間の回答から立ち、
+   走っている session を止めない。受理した後は、その workspace の範囲で決定2 の撃ち直しを fire-and-forget で撃つ。
    pickup の契機は撃ち直しが落ち着いた後に撃ち、失敗は既存の PR 昇格失敗 question に落とす(ADR 0109 追記2 の形)。
 5. **積み残しで merge 回答を拒むときは、運ぶ面を名指しする。** workspace の quarantine か、PR 昇格失敗 question
    である。どちらも無ければ、盤面が運んでいる途中だと言う。
