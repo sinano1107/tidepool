@@ -1435,24 +1435,84 @@ it("キュー投入の後に profile がダイヤルを持たなくなった PR 
   ).toEqual([{ kind: "auto_merge_withdrawn", pr_number: 1, merge: null }]);
 });
 
-it("着地の面は CI を読む前に読まれる — 面が変わった PR は CI が pending でも、CI を読まれずにキューを外れる", async () => {
-  const workspace = await makeWorkspace("landing-surface-before-ci");
+// ADR 0238 決定1・2: 面は PR の状態の後で読む。CI が pending でも、面が変われば同じ tick で外れる
+it("CI が pending の間にダイヤルが escalate へ変わった PR は、その tick でキューを外れ、推奨 merge の面変化の question になる", async () => {
+  const workspace = await makeWorkspace("landing-surface-pending-ci");
   const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
   github.scriptCiStatus("pending");
   queueAutoMerge(db, clock, 1);
+  const landing = autoMerging(db, clock, workspace, github, () => profile("escalate"));
 
-  await createLanding({
-    defaultAgentName: "tako",
-    db,
-    clock,
-    workspace,
-    github,
-    resolveAuthority: () => profile("escalate"),
-  }).tick("auto_merge", clock.now());
+  await landing.tick("auto_merge", clock.now());
 
-  expect(github.ciChecks).toEqual([]);
-  expect(mergeQuestions(db).map((q) => q.pr)).toEqual([1]);
+  expect(github.ciChecks).toHaveLength(1);
+  expect(await readOnNextTick(landing, github, clock.now())).toEqual([]);
+  expect(mergeQuestions(db)).toEqual([
+    expect.objectContaining({ pr: 1, recommendation: "merge", purpose: expect.stringMatching(/landing surface changed.*escalate/) }),
+  ]);
+});
+
+it("CI 赤の PR でダイヤルが escalate へ変わっていたら、推奨 merge の面変化の question でなく推奨 hold の CI 赤の question を立てる", async () => {
+  const workspace = await makeWorkspace("landing-surface-red-ci");
+  const { db, clock } = await openBoard();
+  const github = new FakeGitHubClient();
+  github.scriptCiStatus("failure");
+  queueAutoMerge(db, clock, 1);
+  const landing = autoMerging(db, clock, workspace, github, () => profile("escalate"));
+
+  await landing.tick("auto_merge", clock.now());
+  await landing.tick("auto_merge", clock.now());
+
+  expect(mergeQuestions(db)).toEqual([
+    { pr: 1, registrant: [BOARD_WORKER_ID, "board"], recommendation: "hold", purpose: CI_RED_PURPOSE },
+  ]);
+});
+
+// ADR 0238 決定1: 閉じた PR は面の変化に依らず観測になる(ADR 0229 決定2・3)
+it("盤面の外で閉じられた PR は、ダイヤルが escalate へ変わっていても question を立てず、閉じた観測としてキューを外れる", async () => {
+  const workspace = await makeWorkspace("landing-surface-closed-escalate");
+  const { db, clock } = await openBoard();
+  const github = new FakeGitHubClient();
+  const work = queueAutoMerge(db, clock, 1);
+  github.scriptClosedOutside(1);
+  const landing = autoMerging(db, clock, workspace, github, () => profile("escalate"));
+
+  await landing.tick("auto_merge", clock.now());
+
+  expect(await readOnNextTick(landing, github, clock.now())).toEqual([]);
+  expect(mergeQuestions(db)).toEqual([]);
+  expect(boardEvents(db, work.id, "pr_close_observed")).toEqual(closeObserved(1));
+});
+
+it("盤面の外で閉じられた PR は、ダイヤルが external へ変わっていても取り下げでなく閉じた観測としてキューを外れる", async () => {
+  const workspace = await makeWorkspace("landing-surface-closed-external");
+  const { db, clock } = await openBoard();
+  const github = new FakeGitHubClient();
+  const work = queueAutoMerge(db, clock, 1);
+  github.scriptClosedOutside(1);
+  const landing = autoMerging(db, clock, workspace, github, () => profile("external"));
+
+  await landing.tick("auto_merge", clock.now());
+
+  expect(await readOnNextTick(landing, github, clock.now())).toEqual([]);
+  expect(boardEvents(db, work.id, "pr_close_observed")).toEqual(closeObserved(1));
+  expect(boardEvents(db, work.id, "auto_merge_withdrawn")).toEqual([]);
+});
+
+// ADR 0238 決定3: 状態が読めない tick では、面が変わっていてもキューに残す
+it("状態が読めない PR は、ダイヤルが escalate へ変わっていても question を立てずキューに残る", async () => {
+  const workspace = await makeWorkspace("landing-surface-unreadable");
+  const { db, clock } = await openBoard();
+  const github = new FakeGitHubClient();
+  queueAutoMerge(db, clock, 1);
+  github.scriptUnreadable(1);
+  const landing = autoMerging(db, clock, workspace, github, () => profile("escalate"));
+
+  await landing.tick("auto_merge", clock.now());
+
+  expect(await readOnNextTick(landing, github, clock.now())).toEqual([1]);
+  expect(mergeQuestions(db)).toEqual([]);
 });
 
 it("着地の面は merge の直前にも読まれる — CI を読んでいる間にダイヤルが取り下げられたら merge しない", async () => {
@@ -2136,7 +2196,7 @@ it("門に当たった PR は面が変わっていなければキューに残り
 });
 
 // ADR 0232: 読み直しは profile → 門 → 面の順。門が閉じている間は面が変わっても PR はキューで待ち、
-// 門が開いた後の tick で面と CI を読み直す
+// 門が開いた後の tick で CI と面を読み直す(ADR 0238)
 it("門が閉じている間にダイヤルが escalate へ変わった PR は、CI を読まれず question もなくキューに残り、門が開いた後の tick で面の変化の question になる", async () => {
   const workspace = await makeWorkspace("landing-gate-before-surface");
   const { db, clock } = await openBoard();
@@ -2160,9 +2220,12 @@ it("門が閉じている間にダイヤルが escalate へ変わった PR は�
   ]);
 });
 
-// CI を読んでいる間に門が閉じ、ダイヤルも escalate へ変わる(#1720 の再現)。門が開いた後の tick は CI を読む前の
-// 読みで面の変化に当たるので、立つのは CI 赤の question でなく推奨 merge の面変化 question になる
-it.each(["failure", "success"] as const)("CI %s を読んでいる間に門が閉じダイヤルが escalate へ変わった PR は、merge も question もなくキューに残り、門が開いた後の tick で面の変化の question になる", async (ci) => {
+// CI を読んでいる間に門が閉じ、ダイヤルも escalate へ変わる(#1720 の再現)。門が開いた後の tick は CI を読み直してから
+// 面の変化に当たるので、CI 赤なら推奨 hold の CI 赤の question、緑なら推奨 merge の面変化の question になる(ADR 0238 決定1)
+it.each([
+  ["failure", { recommendation: "hold", purpose: CI_RED_PURPOSE }],
+  ["success", { recommendation: "merge", purpose: expect.stringMatching(/landing surface changed.*escalate/) }],
+] as const)("CI %s を読んでいる間に門が閉じダイヤルが escalate へ変わった PR は、merge も question もなくキューに残り、門が開いた後の tick で CI を読み直して question になる", async (ci, question) => {
   const workspace = await makeWorkspace(`landing-gate-before-surface-${ci}`);
   const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
@@ -2186,11 +2249,9 @@ it.each(["failure", "success"] as const)("CI %s を読んでいる間に門が�
   await landing.tick("auto_merge", clock.now());
   // 外れた後の tick で何も重ならない
   await landing.tick("auto_merge", clock.now());
-  expect(github.ciChecks).toHaveLength(1);
+  expect(github.ciChecks).toHaveLength(2);
   expect(github.merged).toEqual([]);
-  expect(mergeQuestions(db)).toEqual([
-    expect.objectContaining({ pr: 1, recommendation: "merge", purpose: expect.stringMatching(/landing surface changed.*escalate/) }),
-  ]);
+  expect(mergeQuestions(db)).toEqual([expect.objectContaining({ pr: 1, ...question })]);
 });
 
 it("門が閉じている間にダイヤルが external へ変わった PR は、取り下げの event を刻まずキューに残り、門が開いた後の tick で event を1回だけ刻んで外れる", async () => {
@@ -2208,7 +2269,7 @@ it("門が閉じている間にダイヤルが external へ変わった PR は�
   await landing.tick("auto_merge", clock.now());
   // 外れた後の tick で何も重ならない
   await landing.tick("auto_merge", clock.now());
-  expect(github.ciChecks).toEqual([]);
+  expect(github.ciChecks).toHaveLength(1);
   expect(mergeQuestions(db)).toEqual([]);
   expect(boardEvents(db, work.id, "auto_merge_withdrawn").map((e) => e.payload)).toEqual([
     { kind: "auto_merge_withdrawn", pr_number: 1, merge: "external" },

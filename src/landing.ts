@@ -902,20 +902,19 @@ export function createLanding(deps: LandingDeps): Landing {
           if (!release || !isQueuedForAutoMerge(deps.db, task_id)) continue;
           const workspace = resolveOrQuarantine(deps.db, resolve, task.workspace, now);
           if (!workspace) continue;
-          // 着地の面は門と同じ2点 — CI を読む前と、CI を読んだ後に盤面の名義で行為する直前(緑なら
-          // merge、赤なら merge question)— で読む。面が変わった PR はキューを外れ、門に当たった PR は
-          // キューに残る(ADR 0217 決定1)。門は面より先に読む —— 門が閉じている間は面が変わっても
-          // キューで待ち、門が開いた後の tick で面と CI を読み直す(ADR 0232)。profile が読めなければ
-          // agent を quarantine に落とし、キューに残してこの回は飛ばす(ADR 0217 決定3)
-          const stop = (askQuestion?: (changed: string) => void) => {
+          // 盤面の名義の行為(merge / merge question)の直前に profile → 門 → 着地の面の順で読み直す(ADR 0217 決定1・
+          // ADR 0232)。CI を読む前は profile と門だけを読み、面は PR の状態の後で読む —— 閉じた PR は面に依らず観測になり、
+          // CI 赤の PR に立つのは CI 赤の question になる(ADR 0238 決定1)。門に当たった PR はキューに残り、面が変わった
+          // PR はキューを外れる。profile が読めなければ agent を quarantine に落とし、キューに残してこの回は飛ばす(ADR 0217 決定3)
+          const openGate = () => {
             const resolved = readAuthority(task, now);
-            return (
-              !resolved ||
-              landingBlock(deps.db, task_id) ||
-              withdrawIfSurfaceChanged(task, resolved.profile, pr_number, workspace.name, now, askQuestion)
-            );
+            return resolved && !landingBlock(deps.db, task_id) ? resolved : undefined;
           };
-          if (stop()) continue;
+          const stop = (askQuestion?: (changed: string) => void) => {
+            const resolved = openGate();
+            return !resolved || withdrawIfSurfaceChanged(task, resolved.profile, pr_number, workspace.name, now, askQuestion);
+          };
+          if (!openGate()) continue;
           const ref = { path: workspace.path, number: pr_number };
           // 状態は CI と同じ読み取りで、行為の前に読む(ADR 0229 決定2)。閉じた PR は CI の色に依らず観測になる
           const pr = await github.readPullRequest(ref);
@@ -923,14 +922,24 @@ export function createLanding(deps: LandingDeps): Landing {
             retireAutoMerge(deps.db, task_id, { kind: OBSERVED[pr.state], pr_number }, now);
             continue;
           }
+          // 状態が読めなければ、面が変わっていてもキューに残す(ADR 0238 決定3)
           if (pr.state === "unreadable") continue;
           observePrHead(deps.db, task_id, pr_number, pr.head, now);
-          if (pr.ci === "pending") continue;
           const { ci, head } = pr;
-          if (ci === "unreported" && !unreportedCiGraceElapsed(deps.db, task_id, head, now)) continue;
-          let purpose: string;
+          const red = ci === "failure" || (ci === "unreported" && unreportedCiGraceElapsed(deps.db, task_id, head, now));
+          const hold = (purpose: string) => () => registerMergeQuestion(deps.db, task, pr_number, purpose, "hold", now);
+          const found =
+            ci === "failure"
+              ? `found CI red on PR #${pr_number}`
+              : `found no CI check reported on PR #${pr_number} in the ${UNREPORTED_CI_GRACE_TEXT} since ` +
+                `${UNREPORTED_CI_GRACE_ORIGIN_TEXT}, so its CI-green condition cannot be observed`;
+          let askHuman = hold(`"${task.title}"'s auto_if_ci_green auto-merge ${found}. Merge anyway, or hold?`);
+          // 面が question 側へ変わっていれば、CI 赤 / 猶予を過ぎた未報告なら CI 赤の question、それ以外は推奨 merge の
+          // 面変化の question(ADR 0217 決定2・ADR 0227 決定3)。CI が pending でも同じ tick で外す(ADR 0238 決定2)。
+          // ここから行為までに await は無いので、この読みが行為の直前の読みを兼ねる
+          if (stop(red ? askHuman : undefined)) continue;
+          if (ci === "pending" || (ci === "unreported" && !red)) continue;
           if (ci === "success") {
-            if (stop()) continue;
             // 積み残しは門と同じくキューに残す(ADR 0231 決定3)
             if (hasContentLeftBehind(deps.db, workspace, task_id)) continue;
             // merge は CI を読んだ head に固定する(ADR 0231 決定1)
@@ -954,20 +963,13 @@ export function createLanding(deps: LandingDeps): Landing {
             observePrHead(deps.db, task_id, pr_number, after.head, now);
             // head が動いただけなら、次の tick で新しい head の CI を読む(ADR 0231 決定1)。gh の文面では見分けない
             if (after.head !== head) continue;
-            purpose =
+            askHuman = hold(
               `"${task.title}"'s auto_if_ci_green auto-merge could not merge PR #${pr_number}: ${failure}. ` +
-              "Merge once it is fixed, or hold?";
-          } else {
-            // 面が question 側へ変わっていても、立てるのは CI 赤 / 猶予を過ぎた未報告の question(ADR 0217 決定2・ADR 0227 決定3)
-            const found =
-              ci === "failure"
-                ? `found CI red on PR #${pr_number}`
-                : `found no CI check reported on PR #${pr_number} in the ${UNREPORTED_CI_GRACE_TEXT} since ` +
-                  `${UNREPORTED_CI_GRACE_ORIGIN_TEXT}, so its CI-green condition cannot be observed`;
-            purpose = `"${task.title}"'s auto_if_ci_green auto-merge ${found}. Merge anyway, or hold?`;
+                "Merge once it is fixed, or hold?",
+            );
+            // merge を待つ間に変わりうるので、question の前に読み直す
+            if (stop(askHuman)) continue;
           }
-          const askHuman = () => registerMergeQuestion(deps.db, task, pr_number, purpose, "hold", now);
-          if (stop(askHuman)) continue;
           // 外すことと問うことを1つにする — 片方だけで無言で消える経路を残さない(ADR 0105 決定3)
           deps.db.transaction(() => {
             clearPendingAutoMerge(deps.db, task_id);
