@@ -29,7 +29,9 @@ Read each picked issue in full (`gh issue view <n> --json title,labels,body,comm
 
 The cluster is how consistency is bought: one sub-agent judges related issues in sequence, so it cannot contradict itself across them, while unrelated clusters run in parallel. When unsure, merge — a wrong merge costs wall-clock, a wrong split costs contradicting judgements.
 
-Print the clusters to the user — issue numbers and a one-line reason each — then go on without waiting.
+Watch for a **family** as you cluster: issues one design mechanism would explain, whatever the cluster's size. Name each family as a root design issue candidate — its issues and the mechanism in one line — for the user to decide; it changes nothing about dispatch.
+
+Print the clusters to the user — issue numbers and a one-line reason each, plus any family candidate — then go on without waiting.
 
 ## 4. Dispatch
 
@@ -46,4 +48,4 @@ Read each report as it arrives. When a judgement in it looks wrong — above all
 
 ## 5. Report
 
-When every sub-agent has returned, print one table — issue, outcome, recommended next step, comment URL — then the blocked-by edges the sub-agents drew, then the issues the sub-agents filed and the Pin PRs they opened, then the `text-only` Agent Briefs under their own heading, each with its comment URL and any issue that must land first, offering to take each to a PR in this session once the user has read and agreed to its brief (a worktree branched from `origin/main`, `gh pr create --body-file`), then anything a sub-agent reports it could not clean up (a worktree, a VM slot): list it and ask the user whether to remove it; on yes, remove it (`git worktree remove --force <path>`, `limactl delete -f <slot>`).
+When every sub-agent has returned, print one table — issue, outcome, recommended next step, comment URL — then the blocked-by edges the sub-agents drew, then the issues the sub-agents filed and the Pin PRs they opened, then the family candidates from step 3, then the `text-only` Agent Briefs under their own heading, each with its comment URL and any issue that must land first, offering to take each to a PR in this session once the user has read and agreed to its brief (a worktree branched from `origin/main`, `gh pr create --body-file`), then anything a sub-agent reports it could not clean up (a worktree, a VM slot): list it and ask the user whether to remove it; on yes, remove it (`git worktree remove --force <path>`, `limactl delete -f <slot>`).
