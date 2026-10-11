@@ -1436,11 +1436,12 @@ it("キュー投入の後に profile がダイヤルを持たなくなった PR 
 });
 
 // ADR 0238 決定1・2: 面は PR の状態の後で読む。CI が pending でも、面が変われば同じ tick で外れる
-it("CI が pending の間にダイヤルが escalate へ変わった PR は、その tick でキューを外れ、推奨 merge の面変化の question になる", async () => {
-  const workspace = await makeWorkspace("landing-surface-pending-ci");
+// ADR 0238 決定2: 猶予内の未報告も pending と同じに扱う
+it.each(["pending", "unreported"] as const)("CI が %s(猶予内)の間にダイヤルが escalate へ変わった PR は、その tick でキューを外れ、推奨 merge の面変化の question になる", async (ci) => {
+  const workspace = await makeWorkspace(`landing-surface-${ci}-ci`);
   const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
-  github.scriptCiStatus("pending");
+  github.scriptCiStatus(ci);
   queueAutoMerge(db, clock, 1);
   const landing = autoMerging(db, clock, workspace, github, () => profile("escalate"));
 
