@@ -26,8 +26,9 @@ merge される。quarantine を受理しても merge back はやり直されな
 - **merge back 前と push 前を別々の比較で並べる**(子孫は着地するタスクのローカルのブランチと、そのブランチは origin
   側と比べる) — merge される head に既に載っている内容(盤面の外の push)を積み残しと読む。測りたいのは merge される
   head に載っているかである。
-- **quarantine の受理を、merge back が届いていない done の work がある間は拒む** — 修理を捨てたいとき、workspace が
-  永久に開かない。
+- **quarantine の受理を、merge back が届いていない done の work がある間は拒む** — 測り方ではなく運ぶ経路の問いで
+  あり、#1766 に任せた。ADR 0240 は受理の検査で merge back をやり直し、conflict のときだけ拒む(捨てる出口は帰結の
+  `-s ours` なので、workspace は永久には閉じない)。
 - **「この修理は運ばない」と答える扉を足す** — 捨てる判断は観測されておらず、git の側で表せる(帰結)。
 
 ## 帰結
