@@ -689,9 +689,11 @@ function promotionRetryError(verdict: LandingVerdict): string | undefined {
         ? `review still running: ${verdict.count} attached child task(s) unsettled`
         : `cannot land yet: ${verdict.count} objection(s) raised in this triage await commit`;
     case "not_applicable":
-      return verdict.reason === "not_work"
-        ? "only work tasks can be promoted"
-        : "task completion lands on an ancestor task branch, not a PR";
+      return {
+        not_work: "only work tasks can be promoted",
+        ancestor_branch: "task completion lands on an ancestor task branch, not a PR",
+        promotion_abandoned: "PR promotion was abandoned",
+      }[verdict.reason];
   }
 }
 
