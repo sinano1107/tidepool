@@ -1,5 +1,7 @@
 # 積み残しは後始末の印ではなく、merge される head と内容で比べて測る
 
+**Status: 決定1 の candidate(「盤面が読む origin 側のタスクブランチ」= 手元の remote-tracking ref)は ADR 0242 で改められた — merge の門では GitHub が報告した head、収束では盤面が最後に push した head と比べる**
+
 2026-10-11 の grilling(issue #1777、発端は #1769 / ADR 0231)で決定。ADR 0231 決定2 は積み残しの merge back 前の
 区間を「分解ツリーに後始末が未了のタスクがある」で測り、後始末の印で読んでいた。merge back が conflict すると、
 workspace は quarantine に落ち、後始末はそのまま閉じて印を消す。修理の内容は修理のブランチにしか無く、着地する

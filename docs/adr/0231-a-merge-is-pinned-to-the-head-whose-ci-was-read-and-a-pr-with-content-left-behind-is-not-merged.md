@@ -2,6 +2,8 @@
 
 **Status: 決定2 の測り方は ADR 0239 で改められた — 積み残しは後始末の印ではなく、分解ツリーの done の work それぞれを merge される head と内容で比べて測る**
 
+**Status: 決定3 の読む場所は ADR 0242 で改められた — 回答時と merge 時(GitHub が報告した head と比べる)に加え、収束の push 判定と push 後(盤面が最後に push した head と比べる)でも読む。盤面の外の push が内容を落とした head は、キューに残さず推奨 hold の merge question に倒す**
+
 2026-10-10 の grilling(issue #1625、発端は #1392 / ADR 0217)で決定。無人 merge と人間の merge 回答は、CI を読んでから
 head を指定せずに merge していた。そのため、CI を読んでいない head が merge されうる窓が2つあった。CI を読んでから
 merge するまでに head が動く窓と、修理(付帯子)が done になってから、その内容が後始末の merge back と再発火の push を
