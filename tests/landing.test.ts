@@ -1418,7 +1418,7 @@ it("閉じた PR を初めて読んだ根は、追いつきの merge も ref の
   git(workspace.path, "checkout", "-b", `task/${repair.id}`, `task/${parent.id}`);
   await squashTaskIntoOrigin(workspace, parent.id);
   git(workspace.path, "fetch", "origin", "main");
-  observeMerged(db, clock, parent.id, 1);
+  boardMerged(db, clock, parent.id, 1);
   commitWork(workspace.path, "repair.txt", "fixed\n");
   finish(db, clock, repair);
   recordPrOpenedViaWorker(db, repair, 2, "worker", clock.now());
@@ -1663,17 +1663,6 @@ function attachUnsettledChild(db: Db, clock: FakeClock, parentId: string) {
     clock.now(),
     ...HUMAN_WEBUI,
   );
-}
-
-/** 盤面の外での PR の merge を盤面が観測した記録 —— 収束はその根を merge 済みの規則で読む。 */
-function observeMerged(db: Db, clock: FakeClock, taskId: string, prNumber: number) {
-  appendEvent(db, {
-    taskId,
-    workerId: BOARD_WORKER_ID,
-    origin: "board",
-    payload: { kind: "pr_merge_observed", pr_number: prNumber },
-    at: clock.now(),
-  });
 }
 
 function raiseUnbundledObjection(db: Db, clock: FakeClock, taskId: string) {
