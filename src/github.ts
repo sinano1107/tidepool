@@ -295,10 +295,13 @@ export class GhCliClient implements GitHubClient {
   async findPullRequestByHead(input: PushBranchInput): Promise<FoundPr | null> {
     const output = execFileSync(
       "gh",
-      ["pr", "list", "--head", input.branch, "--state", "all", "--limit", "10", "--json", "number,state,headRefOid"],
+      ["pr", "list", "--head", input.branch, "--state", "all", "--limit", "10", "--json", "number,state,headRefOid,isCrossRepository"],
       { cwd: input.path, env: await this.envFor(input.path), stdio: ["ignore", "pipe", "pipe"] },
     ).toString();
-    const prs = JSON.parse(output) as Array<{ number: number; state: PrState; headRefOid: string }>;
+    // --head matches the branch name alone: a fork's PR from a same-named branch is not the board's
+    const prs = (
+      JSON.parse(output) as Array<{ number: number; state: PrState; headRefOid: string; isCrossRepository: boolean }>
+    ).filter((p) => !p.isCrossRepository);
     // gh does not document its order: an open PR wins, then a merged one, over closed ones on the same branch
     const pr = prs.find((p) => p.state === "OPEN") ?? prs.find((p) => p.state === "MERGED") ?? prs[0];
     return pr ? { number: pr.number, state: pr.state, head: pr.headRefOid } : null;

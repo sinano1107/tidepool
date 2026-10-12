@@ -15,6 +15,7 @@ import {
   landingSurface,
   MERGE_QUESTION_OPTIONS,
   PR_PROMOTION_FAILURE_OPTIONS,
+  recordPrNumber,
   recordPrOpened,
   registerMergeQuestion,
   registerTask,
@@ -789,7 +790,7 @@ export function createLanding(deps: LandingDeps): Landing {
         if (found && found.state !== "OPEN") {
           const observed = { kind: OBSERVED[found.state], pr_number: found.number };
           deps.db.transaction(() => {
-            deps.db.prepare("UPDATE tasks SET pr_number = ? WHERE id = ?").run(found.number, task.id);
+            recordPrNumber(deps.db, task.id, found.number);
             retireAutoMerge(deps.db, task.id, observed, deps.clock.now());
           })();
           if (found.state === "MERGED") {
@@ -809,11 +810,15 @@ export function createLanding(deps: LandingDeps): Landing {
         // profile を読むのは面を開く時点だけ —— 開いている PR への push は読まない(ADR 0217 決定3)
         const resolved = readAuthority(task, deps.clock.now());
         if (!resolved) return agentUnavailable(task, excludePrPromotionQuestionId);
-        let pr = found && { number: found.number, sha: found.head };
-        if (!pr) {
-          const { title } = await contentSourceFor(task, deps.github, () => workspace?.path).expand();
-          const sha = taskBranchTip(workspace, task.id);
-          try {
+        const sha = taskBranchTip(workspace, task.id);
+        let prNumber: number;
+        try {
+          if (found) {
+            // 見つけた開いている PR にも、作るときと同じく今のタスクブランチを押してから記録する —— 落ちた後に帰った修理も載る
+            await deps.github.pushBranch({ path: workspace.path, branch: taskBranch(task.id) });
+            prNumber = found.number;
+          } else {
+            const { title } = await contentSourceFor(task, deps.github, () => workspace?.path).expand();
             const created = await deps.github.createPullRequest({
               path: workspace.path,
               branch: taskBranch(task.id),
@@ -821,20 +826,20 @@ export function createLanding(deps: LandingDeps): Landing {
               title,
               body: prBody(task.handoff_doc, task.github_issue_number),
             });
-            pr = { number: created.number, sha };
-          } finally {
-            rebaselineRef(
-              deps.db,
-              workspace,
-              remoteTrackingRef(taskBranch(task.id)),
-            );
+            prNumber = created.number;
           }
+        } finally {
+          rebaselineRef(
+            deps.db,
+            workspace,
+            remoteTrackingRef(taskBranch(task.id)),
+          );
         }
         recordPrOpened(
           deps.db,
           task,
-          pr.number,
-          pr.sha,
+          prNumber,
+          sha,
           resolveTaskAgent(
             task,
             deps.defaultAgentName,
@@ -846,7 +851,7 @@ export function createLanding(deps: LandingDeps): Landing {
           "worker",
         );
         retireFailures(task.id, excludePrPromotionQuestionId);
-        return { kind: "landed", form: "pull_request_opened", prNumber: pr.number };
+        return { kind: "landed", form: "pull_request_opened", prNumber };
       } catch (error) {
         const landed = getTask(deps.db, task.id);
         if (!landedBefore && landed && taskHasLanded(deps.db, task.id)) {

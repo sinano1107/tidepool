@@ -706,6 +706,9 @@ it("GitHub に同じ head の開いた PR がある根の着地は PR を作ら�
   expect(github.requests).toEqual([]);
   expect(getTask(db, work.id)?.pr_number).toBe(existing);
   expect(mergeQuestions(db).map(({ pr }) => pr)).toEqual([existing]);
+  // 作ったときと同じく、タスクブランチの今の内容を押してから記録する —— 落ちた後に帰った修理も PR に載る
+  expect(github.pushes.map(({ branch }) => branch)).toEqual([`task/${work.id}`]);
+  expect(git(workspace.path, "rev-parse", `origin/task/${work.id}`)).toBe(git(workspace.path, "rev-parse", "HEAD"));
 });
 
 it("PR の作成の後・記録の前に盤面が落ちた根(GitHub にだけ PR がある)の着地は、作成を呼ばず失敗 question も立てない", async () => {
