@@ -47,6 +47,7 @@ import {
   decomposeTask,
   getTask,
   humanDecomposeTask,
+  listBoard,
   listChildren,
   type RegisterTaskInput,
   recordPrOpened,
@@ -396,7 +397,8 @@ export async function bootTidepool(options: BootOptions = {}): Promise<Tidepool>
     githubTokenFile: options.githubTokenFile,
     boardState: options.boardState,
   });
-  // 起動完了の poll は起動の収束の後に走る(ADR 0241 決定5)—— 盤面を返す前に、その回と poll を終えさせる
+  // 起動完了の poll は起動の収束の後に走る(ADR 0241 決定5)。GitHub を待たない起動の収束と poll はここで終わる ——
+  // テストが盤面に何かを足す前に、起動完了の poll が空の queue を読み終えている(待つ GitHub の fake を渡した盤面は別)
   await new Promise((resolve) => setImmediate(resolve));
   const mcpBaseUrl = `http://127.0.0.1:${server.mcpPort}`;
   boards.set(mcpBaseUrl, worker);
@@ -978,6 +980,13 @@ export const FULL_HANDOFF = {
 };
 
 /** agent `assignee` が完了させた work(domain 層)。着地の記録はまだ何も無い。 */
+/** 盤面の完了時レビューをすべて決着させる —— 着地の門を、fixture の子だけが閉じる形にする。 */
+export function settleReviews(db: Db, now: Date): void {
+  for (const review of listBoard(db).filter((t) => t.type === "review" && t.status === "todo")) {
+    completeTask(db, getTask(db, review.id)!, FULL_HANDOFF, "shako", now, "worker");
+  }
+}
+
 export function completedWork(db: Db, now: Date, assignee: string, parentId?: string, workspace?: string): Task {
   const task = registerTask(
     db,

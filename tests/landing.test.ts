@@ -53,6 +53,7 @@ import {
   makeRemoteBackedWorkspace,
   makeWorkspace,
   quarantineQuestion,
+  settleReviews,
   squashTaskIntoOrigin,
 } from "./harness.js";
 import { makeRegistry } from "./registry-fixture.js";
@@ -1201,7 +1202,6 @@ it("2つの収束を重ねても同じ根の PR は1回だけ作られ、回の�
   expect(promotionFailures(db, first.id)).toEqual([]);
 });
 
-// ADR 0240 決定2: 後始末が未了の行と、その行が着地し直す祖先は、その後始末の分なので外す
 it("人間が担当して完了した work は根にならず、何も撃たれない", async () => {
   const { workspace } = await makeRemoteBackedWorkspace("landing-human-work");
   const { db, clock } = await openBoard();
@@ -1220,6 +1220,7 @@ it("人間が担当して完了した work は根にならず、何も撃たれ�
   expect(github.requests).toEqual([]);
 });
 
+// ADR 0240 決定2: 後始末が未了の行と、その行が着地し直す祖先は、その後始末の分なので外す
 it("後始末が未了の行を木に持つ根は、収束が撃たない", async () => {
   const { workspace } = await makeRemoteBackedWorkspace("landing-teardown-unfinished");
   const { db, clock } = await openBoard();
@@ -3754,12 +3755,6 @@ it("workspace 名では、abandon 済み・着地済み・別 workspace・worksp
 });
 
 // ADR 0234: 未決着タスクは、決着したときに着地し直す完了した work の祖先の workspace も参照する
-/** 盤面の完了時レビューをすべて決着させる —— 数えるのを fixture の子だけにする。 */
-function settleReviews(board: Db, now: Date): void {
-  for (const review of listBoard(board).filter((t) => t.type === "review" && t.status === "todo")) {
-    completeTask(board, getTask(board, review.id)!, FULL_HANDOFF, "shako", now, "worker");
-  }
-}
 
 /** reef の完了 work を、abandon promotion 済みか PR を開き終えた形にする。 */
 function rerunnableWorkInReef(board: Db, now: Date, shape: "abandoned" | "pr_opened"): Task {
@@ -3813,7 +3808,7 @@ it.each(["abandoned", "pr_opened"] as const)(
   },
 );
 
-/** PR を持たずに着地した形 —— 再発火が飛ばす。 */
+/** PR を持たずに着地した形 —— 収束の候補から外れる。 */
 function landWithoutPr(board: Db, now: Date, work: Task, form: "nothing_to_land" | "local_merge_question"): void {
   if (form === "local_merge_question") {
     registerLocalMergeQuestion(board, work, "merge it", now);
@@ -3840,7 +3835,7 @@ it.each(["nothing_to_land", "local_merge_question"] as const)(
     attachReview(db, now, landed.id, "lagoon");
     expect(countUnsettledTasksReferencing(db, "workspace", "reef")).toBe(before);
 
-    // reef の祖先 G の下で、lagoon の P が PR を持たずに着地した —— 再発火は P を飛ばして G を着地し直す
+    // reef の祖先 G の下で、lagoon の P が PR を持たずに着地した —— 収束は P を撃たず、G が着地し直す
     const grand = registerTask(
       db,
       { type: "work", title: "integrate", purpose: "p", completion_criteria: "c", assignee: "tako", workspace: "reef" },
@@ -3860,7 +3855,7 @@ it.each(["nothing_to_land", "local_merge_question"] as const)(
   },
 );
 
-// ADR 0225: abandon promotion が断念するのはその時点の内容の昇格。付帯子の決着による再発火は、
+// ADR 0225: abandon promotion が断念するのはその時点の内容の昇格。付帯子の決着の後の収束は、
 // 刻んだ head から内容が変わっていなければ何もせず、変わっていれば PR を開かずに昇格の question を立て直す
 /** 完了した work の PR 昇格を失敗させ、人間が abandon promotion と答えた形。`stampHead: false` は
  *  workspace を持たない回答 —— head を刻めない。 */

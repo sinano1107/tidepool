@@ -211,7 +211,7 @@ it("早期 return では立たない —— 枠の主が変わった / 梯子の
   expect([questions(changed.db), questions(held.db)]).toEqual([[], []]);
 });
 
-it("受理の検査が通れば question が閉じ、tree rule・merge-back・slot 解放・着地を撃つ収束を突く pickup の契機まで完走する", async () => {
+it("受理の検査が通れば question が閉じ、tree rule・merge-back・slot 解放・pickup の契機まで完走する", async () => {
   const f = await session();
   await runTeardown(f.deps, f.task.id, teardownStep(f.db, f.task.id));
   const question = openQuestion(f);

@@ -185,13 +185,13 @@ async function exerciseSettlement(surface: HumanSurface, verb: SettlementVerb) {
     picked_up_parent: queuePool.worker.started.map((task: any) => task.id).includes(parent.id),
     domain_error: rejected.ok ? null : rejected.error,
     origin: childEvents.find((event: any) => event.kind === spec.eventKind)?.origin,
-    landing_refired: landing.some(
+    ancestor_landed: landing.some(
       (question: any) => question.question_pending_local_merge_task_id === root.id,
     ),
   };
 }
 
-it("cancel は WebUI と管理MCPで同じ検証・親queue・祖先着地の再発火を通り、経路を記録する", async () => {
+it("cancel は WebUI と管理MCPで同じ検証・親queue・祖先の着地を撃つ収束の契機を通り、経路を記録する", async () => {
   for (const surface of ["webui", "mcp"] as const) {
     expect(await exerciseSettlement(surface, "cancel")).toEqual({
       settled: settlementSpecs.cancel.terminalStatus,
@@ -199,7 +199,7 @@ it("cancel は WebUI と管理MCPで同じ検証・親queue・祖先着地の再
       picked_up_parent: true,
       domain_error: settlementSpecs.cancel.rejectedError,
       origin: surface,
-      landing_refired: true,
+      ancestor_landed: true,
     });
   }
 });
@@ -241,7 +241,7 @@ it("edit は WebUI と管理MCPで同じ assignee・workspace・domain 検証を
   }
 });
 
-it("complete は WebUI と管理MCPで同じ human gate・親queue・祖先着地の再発火を通り、経路を記録する", async () => {
+it("complete は WebUI と管理MCPで同じ human gate・親queue・祖先の着地を撃つ収束の契機を通り、経路を記録する", async () => {
   for (const surface of ["webui", "mcp"] as const) {
     expect(await exerciseSettlement(surface, "complete")).toEqual({
       settled: settlementSpecs.complete.terminalStatus,
@@ -249,7 +249,7 @@ it("complete は WebUI と管理MCPで同じ human gate・親queue・祖先着�
       picked_up_parent: true,
       domain_error: settlementSpecs.complete.rejectedError,
       origin: surface,
-      landing_refired: true,
+      ancestor_landed: true,
     });
   }
 });

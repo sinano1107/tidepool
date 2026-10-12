@@ -245,7 +245,7 @@ it("落ちた後始末の question が開いている間、後始末の時限は
   expect(boardHalts(f.db)).toEqual([{ kind: "failedTeardown" }]);
 });
 
-it("梯子の底まで落ちた完了済み session でも、確認回答で後始末が完走して、着地を撃つ収束を突く pickup の契機まで走る", async () => {
+it("梯子の底まで落ちた完了済み session でも、確認回答で後始末が完走して、pickup の契機まで走る", async () => {
   const f = await sessionInTeardown();
   await fallToTheBottom(f);
 

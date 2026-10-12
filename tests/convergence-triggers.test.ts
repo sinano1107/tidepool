@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { completeTask, getTask, listBoard } from "../src/tasks.js";
+import { completeTask } from "../src/tasks.js";
 import type { WorkspaceConfig } from "../src/workspace.js";
 import { awaitWindow, FakeGitHubClient } from "./fakes.js";
 import {
@@ -14,6 +14,7 @@ import {
   makeRemoteBackedWorkspace,
   queueWork,
   registerWork,
+  settleReviews,
   type Tidepool,
 } from "./harness.js";
 
@@ -44,13 +45,6 @@ function heldGitHub() {
   return { github, window, creating };
 }
 
-/** 盤面の完了時レビューを、着地の門だけを開けるために DB で決着させる。 */
-function settleReviews(board: Tidepool): void {
-  for (const review of listBoard(board.db).filter((task) => task.type === "review" && task.status === "todo")) {
-    completeTask(board.db, getTask(board.db, review.id)!, FULL_HANDOFF, "shako", board.clock.now(), "worker");
-  }
-}
-
 /** 契機を撃たずに、タスクブランチに内容を持つ完了した根を盤面に置く。 */
 function silentlyCompletedRoot(board: Tidepool, workspace: WorkspaceConfig) {
   const root = queueWork(board, "landed by the convergence");
@@ -58,7 +52,7 @@ function silentlyCompletedRoot(board: Tidepool, workspace: WorkspaceConfig) {
   commitWork(workspace.path, "feature.txt", "ready\n");
   git(workspace.path, "checkout", "main");
   completeTask(board.db, root, FULL_HANDOFF, "fake-worker", board.clock.now(), "worker");
-  settleReviews(board);
+  settleReviews(board.db, board.clock.now());
   return root;
 }
 
@@ -70,7 +64,7 @@ it("後始末の途中で落ちた盤面は、再起動で後始末を完走し�
   commitWork(workspace.path, "deliverable.txt", "the real work\n");
   t.containers.hold(task.id);
   await completeViaMcp(t, task.id);
-  settleReviews(t);
+  settleReviews(t.db, t.clock.now());
   const next = await registerWork(t, "two");
   await t.stopServer();
 
