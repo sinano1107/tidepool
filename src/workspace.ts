@@ -1077,32 +1077,44 @@ export async function redoMergeBacks(
       `SELECT 1 FROM tasks WHERE COALESCE(workspace, ?) = ? AND (status = 'in_progress' OR teardown_started_at IS NOT NULL)`,
     )
     .get(defaultWorkspaceName ?? null, workspace.name);
-  if (running) throw new Error(`a session is running in workspace ${workspace.name} — answer again once it has finished`);
-  await refreshProtectedBranch(db, workspace, auth);
-  // 1つ運ぶたびに読み直す —— 子孫を運んだ子は、親へ運ぶ内容を新しく持つ
-  for (;;) {
-    const [next] = undeliveredMergeBacks(db, workspace, defaultWorkspaceName);
-    if (!next) break;
-    const source = taskBranch(next.taskId);
-    try {
-      mergeBackInto(workspace, next.target, next.taskId);
-    } catch (err) {
-      // 始まる前に落ちた merge は中断状態を作らず `--abort` が拒む —— そのときは git の理由をそのまま返す
-      try {
-        git(workspace.path, "merge", "--abort");
-      } catch {
-        throw err;
-      }
-      parkOnProtectedBranch(workspace);
-      throw new Error(
-        `${source} does not merge cleanly into '${next.target}' — either merge it there by hand in workspace ` +
-          `${workspace.name} and commit, or, to discard it, record it there with \`git merge -s ours ${source}\`; ` +
-          "then answer again",
-      );
-    }
-    rebaselineRef(db, workspace, `refs/heads/${next.target}`);
+  if (running) {
+    throw new Error(`a session or its teardown is still running in workspace ${workspace.name} — answer again once it has finished`);
   }
-  parkOnProtectedBranch(workspace);
+  await refreshProtectedBranch(db, workspace, auth);
+  // どの拒否でも休止位置へ戻す。先に落ちた理由(出口の文か git の理由)を休止の失敗より優先し、休止の失敗は運び終えたときだけ投げる
+  let failure: { error: unknown } | undefined;
+  try {
+    // 1つ運ぶたびに読み直す —— 子孫を運んだ子は、親へ運ぶ内容を新しく持つ
+    for (;;) {
+      const [next] = undeliveredMergeBacks(db, workspace, defaultWorkspaceName);
+      if (!next) break;
+      const source = taskBranch(next.taskId);
+      try {
+        mergeBackInto(workspace, next.target, next.taskId);
+      } catch (err) {
+        // 始まる前に落ちた merge は中断状態を作らず `--abort` が拒む —— そのときは git の理由をそのまま返す
+        try {
+          git(workspace.path, "merge", "--abort");
+        } catch {
+          throw err;
+        }
+        throw new Error(
+          `${source} does not merge cleanly into '${next.target}' — either merge it there by hand in workspace ` +
+            `${workspace.name} and commit, or, to discard it, record it there with \`git merge -s ours ${source}\`; ` +
+            "then answer again",
+        );
+      }
+      rebaselineRef(db, workspace, `refs/heads/${next.target}`);
+    }
+  } catch (error) {
+    failure = { error };
+  }
+  try {
+    parkOnProtectedBranch(workspace);
+  } catch (parkError) {
+    if (!failure) throw parkError;
+  }
+  if (failure) throw failure.error;
 }
 
 /** ADR 0103 決定1: 着地の時点で保護ブランチが**盤面自身の記録から外れて**動いていた

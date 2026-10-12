@@ -1,3 +1,4 @@
+import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { resolveExecutionAgent } from "../src/agent.js";
@@ -3163,11 +3164,47 @@ it("その workspace で session が走っている間は、checkout を動か�
   pickupTask(db, landingWork(db, clock), "worker", clock.now());
 
   await expect(answerWorkspaceQuarantine(pr, question)).rejects.toThrow(
-    new DomainError(`a session is running in workspace ${workspace.name} — answer again once it has finished`),
+    new DomainError(`a session or its teardown is still running in workspace ${workspace.name} — answer again once it has finished`),
   );
 
   expect(head(workspace)).toBe(`task/${work.id}`);
   expect(getTask(db, question.id)!.status).toBe("todo");
+});
+
+it("merge が始まる前に落ちても、取り消す merge の無いまま git の理由で拒み、checkout は休止位置に戻っている", async () => {
+  const pr = await openPushedPr("redo-merge-back-refused-to-start", "escalate");
+  const { workspace, db, clock, work } = pr;
+  const repair = attachUnsettledChild(db, clock, work.id);
+  git(workspace.path, "checkout", "-b", `task/${repair.id}`, `task/${work.id}`);
+  commitWork(workspace.path, "README.md", "repaired\n");
+  git(workspace.path, "checkout", `task/${work.id}`);
+  completeTask(db, repair, FULL_HANDOFF, "worker", clock.now(), "worker");
+  // status に出ないローカルの変更が merge を始まる前に止める
+  git(workspace.path, "update-index", "--skip-worktree", "README.md");
+  writeFileSync(join(workspace.path, "README.md"), "local\n");
+  quarantineWorkspace(db, workspace.name, new Error("GitHub token acquisition failed"), clock.now());
+
+  await expect(answerWorkspaceQuarantine(pr, quarantineQuestion(db, "workspace", workspace.name)!)).rejects.toThrow(
+    /would be overwritten by merge/,
+  );
+
+  expect(head(workspace)).toBe("main");
+});
+
+it("purely-local な workspace で、やり直しの前に帯域外に動いた保護ブランチは、やり直しの後も着地で帯域外と読まれる", async () => {
+  const workspace = await makeWorkspace("redo-merge-back-local");
+  const { db, clock } = await openBoard();
+  const work = landingWork(db, clock);
+  await prepareWorkspaceAtPickup(db, workspace, work, {});
+  commitWork(workspace.path, "feature.txt", "ready\n");
+  settleRepairNotMergedBack(db, clock, workspace, work.id);
+  git(workspace.path, "update-ref", "refs/heads/main", git(workspace.path, "commit-tree", "main^{tree}", "-p", "main", "-m", "out of band"));
+  quarantineWorkspace(db, workspace.name, new Error("GitHub token acquisition failed"), clock.now());
+
+  await answerWorkspaceQuarantine({ db, clock, workspace, landing: unusedLanding }, quarantineQuestion(db, "workspace", workspace.name)!);
+
+  expect(head(workspace)).toBe("main");
+  expect(() => mergeTaskToProtected(db, workspace, work.id)).toThrow(OutOfBandProtectedBranchError);
 });
 
 it("内容が帰り先に届いていない done の work が無ければ、受理の検査は checkout を動かさない", async () => {

@@ -516,11 +516,15 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
           `no workspace configured for "${quarantineWorkspaceName}" — cannot verify repair`,
         );
       }
-      try {
-        verifyWorkspaceClean(target);
-      } catch (err) {
-        throw new DomainError(err instanceof Error ? err.message : String(err));
-      }
+      // workspace の検査の失敗は、どれも理由をそのまま人間へ返す回答の拒否である
+      const refuseOnError = async (check: () => void | Promise<void>) => {
+        try {
+          await check();
+        } catch (err) {
+          throw new DomainError(err instanceof Error ? err.message : String(err));
+        }
+      };
+      await refuseOnError(() => verifyWorkspaceClean(target));
       if (deps.boardState) {
         const overlap = boardStateOverlap(target.path, deps.boardState);
         if (overlap) throw new DomainError(overlap.reason);
@@ -535,11 +539,7 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
         const { guidance } = await repairRepoAccess(deps.github, ref);
         if (guidance) throw new DomainError(guidance);
       }
-      try {
-        await redoMergeBacks(deps.db, target, deps.workspace?.name, deps.githubAuth);
-      } catch (err) {
-        throw new DomainError(err instanceof Error ? err.message : String(err));
-      }
+      await refuseOnError(() => redoMergeBacks(deps.db, target, deps.workspace?.name, deps.githubAuth));
     },
     agent: async (value) => {
       const quarantineAgentName = value!;
@@ -976,11 +976,11 @@ export async function submitAnswer(
       // ADR 0231 決定3: 積み残しは門の検査と同じ時点で、門とは別に読む
       if (hasContentLeftBehind(deps.db, mergeWorkspace, landingTaskId)) {
         // ADR 0240 決定5: 運ぶ面を名指しする
-        const quarantine = openQuarantineQuestion(deps.db, "workspace", mergeWorkspace.name)?.id;
-        const promotion = openPrPromotionQuestionIds(deps.db, landingTaskId)[0];
-        const carrier = quarantine
-          ? `the open workspace quarantine question (${quarantine})`
-          : promotion && `the open PR promotion failure question (${promotion})`;
+        const quarantineQuestionId = openQuarantineQuestion(deps.db, "workspace", mergeWorkspace.name)?.id;
+        const promotionQuestionId = openPrPromotionQuestionIds(deps.db, landingTaskId)[0];
+        const carrier = quarantineQuestionId
+          ? `the open workspace quarantine question (${quarantineQuestionId})`
+          : promotionQuestionId && `the open PR promotion failure question (${promotionQuestionId})`;
         throw new DomainError(
           `cannot merge yet: PR #${mergePr} does not carry all of the task's content yet — ` +
             (carrier
