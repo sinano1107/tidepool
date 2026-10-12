@@ -299,8 +299,8 @@ export class GhCliClient implements GitHubClient {
       { cwd: input.path, env: await this.envFor(input.path), stdio: ["ignore", "pipe", "pipe"] },
     ).toString();
     const prs = JSON.parse(output) as Array<{ number: number; state: PrState; headRefOid: string }>;
-    // gh does not document its order: an open PR wins over closed/merged ones on the same branch
-    const pr = prs.find((p) => p.state === "OPEN") ?? prs[0];
+    // gh does not document its order: an open PR wins, then a merged one, over closed ones on the same branch
+    const pr = prs.find((p) => p.state === "OPEN") ?? prs.find((p) => p.state === "MERGED") ?? prs[0];
     return pr ? { number: pr.number, state: pr.state, head: pr.headRefOid } : null;
   }
 
