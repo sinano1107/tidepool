@@ -594,6 +594,27 @@ it("無人 merge キューにいる閉じた PR は、再発火が閉じた観�
   expect(boardEvents(db, work.id, "pr_close_observed")).toEqual(closeObserved(1));
 });
 
+it("執行側が印を取っている閉じた PR は、再発火が観測を刻まず、印を放した後の tick が1件だけ刻む", async () => {
+  const { workspace } = await makeRemoteBackedWorkspace("landing-closed-marked-pr");
+  const { db, clock } = await openBoard();
+  const github = new FakeGitHubClient();
+  const work = queueAutoMerge(db, clock, 1);
+  git(workspace.path, "checkout", "-b", `task/${work.id}`);
+  commitWork(workspace.path, "repair.txt", "fixed\n");
+  github.scriptClosedOutside(1);
+  const landing = autoMerging(db, clock, workspace, github);
+  completeTask(db, work, FULL_HANDOFF, "tako", clock.now(), "worker");
+  settleReviews(db, clock.now());
+  const release = landing.takeInFlightMark(getTask(db, work.id)!.workspace, 1)!;
+
+  await expect(landing.land(getTask(db, work.id)!)).resolves.toMatchObject({ reason: "pull_request_closed" });
+  expect(boardEvents(db, work.id, "pr_close_observed")).toEqual([]);
+
+  release();
+  await landing.tick("auto_merge", clock.now());
+  expect(boardEvents(db, work.id, "pr_close_observed")).toEqual(closeObserved(1));
+});
+
 it("open PR branch の push 失敗は既存の着地痕跡で隠さず failure question を立てる", async () => {
   const { workspace } = await makeRemoteBackedWorkspace("landing-push-failure");
   const { db, clock } = await openBoard();
@@ -3411,11 +3432,20 @@ it("PR 昇格を abandon した後、workspace を解決できないまま内容
 });
 
 // ADR 0241 決定3: 断念した根の守りは PR の有無によらない
-it("PR を持つ根の昇格を abandon した後、修理が内容を変えて決着しても push せず昇格の question を1つ立て直し、retry と答えると push する", async () => {
-  const { workspace } = await makeRemoteBackedWorkspace("landing-abandon-with-pr");
+/** PR を開いた完了 work の修理の push を失敗させ、人間が abandon promotion と答えた形。 */
+async function abandonedPushToOpenPr(name: string) {
+  const { workspace } = await makeRemoteBackedWorkspace(name);
   const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
-  const landing = createLanding({ defaultAgentName: "tako", db, clock, workspace, github });
+  const authority = { resolve: (): AuthorityProfile => profile("escalate") };
+  const landing = createLanding({
+    defaultAgentName: "tako",
+    db,
+    clock,
+    workspace,
+    github,
+    resolveAuthority: () => authority.resolve(),
+  });
   const work = landingWork(db, clock);
   git(workspace.path, "checkout", "-b", `task/${work.id}`);
   commitWork(workspace.path, "feature.txt", "ready\n");
@@ -3429,6 +3459,26 @@ it("PR を持つ根の昇格を abandon した後、修理が内容を変えて�
   github.scriptPushFailure(null);
   const [failure] = promotionFailures(db, work.id);
   await answerPromotion(db, clock, landing, workspace, failure!, "abandon promotion");
+  return { db, clock, workspace, github, landing, authority, work: getTask(db, work.id)! };
+}
+
+it("PR を持つ根の昇格を abandon した後、内容を変えない付帯子が決着しても、profile が読めなくても、push も question もせず agent を quarantine に落とさない", async () => {
+  const { db, clock, workspace, github, landing, authority, work } =
+    await abandonedPushToOpenPr("landing-abandon-with-pr-unchanged");
+  authority.resolve = () => {
+    throw new UnknownAgentError("tako");
+  };
+  const pushed = github.pushes.length;
+
+  await landing.relandAncestors(settleAttachedChild(db, clock, workspace, work.id));
+
+  expect(github.pushes).toHaveLength(pushed);
+  expect(openPromotionQuestions(db, work.id)).toEqual([]);
+  expect(quarantineQuestion(db, "agent", "tako")).toBeUndefined();
+});
+
+it("PR を持つ根の昇格を abandon した後、修理が内容を変えて決着しても push せず昇格の question を1つ立て直し、retry と答えると push する", async () => {
+  const { db, clock, workspace, github, landing, work } = await abandonedPushToOpenPr("landing-abandon-with-pr");
   const pushed = github.pushes.length;
 
   await landing.relandAncestors(settleAttachedChild(db, clock, workspace, work.id, "second-repair"));

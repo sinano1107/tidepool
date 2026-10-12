@@ -428,8 +428,8 @@ function clearPendingAutoMerge(db: Db, taskId: string): void {
   db.prepare("DELETE FROM pending_auto_merges WHERE task_id = ?").run(taskId);
 }
 
-/** キューの PR が決着した(盤面が merge した、または盤面の外での merge・閉じたことを観測した)ので
- *  キューから外し、その事実を盤面の名義で残す。 */
+/** PR が決着した(盤面が merge した、または盤面の外での merge・閉じたことを観測した)ので、キューにいれば
+ *  外し、その事実を盤面の名義で残す。キューにいない PR の観測(再発火が閉じた PR を読んだとき)も同じ形で刻む。 */
 function retireAutoMerge(
   db: Db,
   taskId: string,
@@ -607,8 +607,9 @@ export function createLanding(deps: LandingDeps): Landing {
       return true;
     }
   };
-  /** 断念がまだ人間の最新の判断か —— 後の retry が PR を開くか push していれば、断念はその判断に置き換わっている */
-  const abandonInForce = (taskId: string) => {
+  /** ADR 0225 決定2: 断念は人間の最新の明示の判断である間だけ効く。その間は断念の event を返す —— 後の retry が
+   *  PR を開くか push していれば、断念はその retry に置き換わっている */
+  const abandonEventInForce = (taskId: string) => {
     const abandoned = latestEventOfTask(deps.db, taskId, "pr_promotion_abandoned");
     if (!abandoned) return undefined;
     const landedAfter = deps.db
@@ -625,7 +626,7 @@ export function createLanding(deps: LandingDeps): Landing {
       if (task.type !== "work") return { kind: "not_applicable", reason: "not_work" };
       // ADR 0225 / ADR 0241 決定3: 断念した根には PR の有無によらず撃たない。門が開き、刻んだ head から
       // 内容が変わっていれば、PR を開かず(profile も読まず)昇格の question を立て直す。retry はこの守りを外す
-      const abandoned = excludePrPromotionQuestionId === undefined ? abandonInForce(task.id) : undefined;
+      const abandoned = excludePrPromotionQuestionId === undefined ? abandonEventInForce(task.id) : undefined;
       if (abandoned) {
         if (
           landingBlock(deps.db, task.id) ||
@@ -746,7 +747,11 @@ export function createLanding(deps: LandingDeps): Landing {
           // ADR 0241 決定3: 盤面の外で閉じられた PR には push しない。閉じたことは観測として1回だけ刻み、
           // 人間の close を question で問い返さない。キューからも外す —— tick が同じ観測を重ねない
           if (state === "CLOSED") {
-            if (latestEventOfTask(deps.db, task.id, OBSERVED.CLOSED)?.payload.pr_number !== task.pr_number) {
+            // 印の付いた PR の決着は執行側が書く。印は await の後に見る(ADR 0236 決定3)
+            if (
+              !isMarked(task.workspace, task.pr_number) &&
+              latestEventOfTask(deps.db, task.id, OBSERVED.CLOSED)?.payload.pr_number !== task.pr_number
+            ) {
               retireAutoMerge(deps.db, task.id, { kind: OBSERVED.CLOSED, pr_number: task.pr_number }, deps.clock.now());
             }
             return {

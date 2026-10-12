@@ -692,6 +692,7 @@ function promotionRetryError(verdict: LandingVerdict): string | undefined {
       return {
         not_work: "only work tasks can be promoted",
         ancestor_branch: "task completion lands on an ancestor task branch, not a PR",
+        // retry は答えている question を渡すので断念の守りを外す —— この文言は型を網羅するためだけにある
         promotion_abandoned: "PR promotion was abandoned",
       }[verdict.reason];
   }
