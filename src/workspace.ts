@@ -1026,14 +1026,97 @@ export function releaseWorkspace(
       refreshWorkspace(workspace, githubAuth);
     }
     const target = mergeBack && lineageTaskBranch(db, workspace, task);
-    if (target) {
-      git(workspace.path, "checkout", target);
-      git(workspace.path, "merge", taskBranch(task.id));
-    }
+    if (target) mergeBackInto(workspace, target, task.id);
     parkOnProtectedBranch(workspace);
   } catch (err) {
     quarantineWorkspace(db, workspace.name, err, now);
   }
+}
+
+/** 後始末の merge back の一歩 —— 帰り先を checkout して merge する。workspace の quarantine の受理の検査も同じ一歩を踏む
+ *  (ADR 0240 決定4)。 */
+function mergeBackInto(workspace: WorkspaceConfig, target: string, taskId: string): void {
+  git(workspace.path, "checkout", target);
+  git(workspace.path, "merge", taskBranch(taskId));
+}
+
+/** ADR 0240 決定4: 内容が帰り先(lineage が指す祖先のタスクブランチ)に届いていない done の work と、その帰り先。
+ *  新しい行から並べる —— 子孫の内容を先に子へ運んでから、子を親へ運ぶ。読めなければ投げる(fail-closed)。
+ *  ponytail: その workspace の done の子をすべて読む。回答のたびなので、遅くなれば着地の終わった木を SQL で外す。 */
+function undeliveredMergeBacks(
+  db: Db,
+  workspace: WorkspaceConfig,
+  defaultWorkspaceName: string | undefined,
+): Array<{ taskId: string; target: string }> {
+  const rows = db
+    .prepare(
+      `SELECT id FROM tasks
+        WHERE type = 'work' AND status = 'done' AND parent_id IS NOT NULL AND COALESCE(workspace, ?) = ?
+        ORDER BY rowid DESC`,
+    )
+    .all(defaultWorkspaceName ?? null, workspace.name) as Array<{ id: string }>;
+  return rows.flatMap(({ id }) => {
+    if (!taskBranchExists(workspace, id)) return [];
+    const target = lineageTaskBranch(db, workspace, getTask(db, id)!);
+    return target && branchMergeEffect(workspace, target, taskBranch(id)).changesCandidate ? [{ taskId: id, target }] : [];
+  });
+}
+
+/** ADR 0240 決定4: workspace の quarantine の受理の検査がやり直す merge back。届いていない done の work が無ければ何もしない
+ *  (ネットワークにも出ない)。あれば、走っている session(後始末が未了のものを含む)が無いことを読んでから(ADR 0064)、
+ *  後始末と同じ fetch → 帰り先へ merge → 休止位置へ戻す、を踏む。conflict は merge を取り消して休止位置へ戻し、出口を
+ *  2つ示して投げる(ADR 0239 帰結)。merge で動かした帰り先は撮り直す(ADR 0064 決定4)。保護ブランチは撮り直さない ——
+ *  purely-local では休止は ref を書かず、撮り直すと帯域外の移動を記録に飲み込む(ADR 0103)。 */
+export async function redoMergeBacks(
+  db: Db,
+  workspace: WorkspaceConfig,
+  defaultWorkspaceName: string | undefined,
+  auth: GitHubAuth | undefined,
+): Promise<void> {
+  if (undeliveredMergeBacks(db, workspace, defaultWorkspaceName).length === 0) return;
+  const running = db
+    .prepare(
+      `SELECT 1 FROM tasks WHERE COALESCE(workspace, ?) = ? AND (status = 'in_progress' OR teardown_started_at IS NOT NULL)`,
+    )
+    .get(defaultWorkspaceName ?? null, workspace.name);
+  if (running) {
+    throw new Error(`a session or its teardown is still running in workspace ${workspace.name} — answer again once it has finished`);
+  }
+  await refreshProtectedBranch(db, workspace, auth);
+  // どの拒否でも休止位置へ戻す。先に落ちた理由(出口の文か git の理由)を休止の失敗より優先し、休止の失敗は運び終えたときだけ投げる
+  let failure: { error: unknown } | undefined;
+  try {
+    // 1つ運ぶたびに読み直す —— 子孫を運んだ子は、親へ運ぶ内容を新しく持つ
+    for (;;) {
+      const [next] = undeliveredMergeBacks(db, workspace, defaultWorkspaceName);
+      if (!next) break;
+      const source = taskBranch(next.taskId);
+      try {
+        mergeBackInto(workspace, next.target, next.taskId);
+      } catch (err) {
+        // 始まる前に落ちた merge は中断状態を作らず `--abort` が拒む —— そのときは git の理由をそのまま返す
+        try {
+          git(workspace.path, "merge", "--abort");
+        } catch {
+          throw err;
+        }
+        throw new Error(
+          `${source} does not merge cleanly into '${next.target}' — either merge it there by hand in workspace ` +
+            `${workspace.name} and commit, or, to discard it, record it there with \`git merge -s ours ${source}\`; ` +
+            "then answer again",
+        );
+      }
+      rebaselineRef(db, workspace, `refs/heads/${next.target}`);
+    }
+  } catch (error) {
+    failure = { error };
+  }
+  try {
+    parkOnProtectedBranch(workspace);
+  } catch (parkError) {
+    if (!failure) throw parkError;
+  }
+  if (failure) throw failure.error;
 }
 
 /** ADR 0103 決定1: 着地の時点で保護ブランチが**盤面自身の記録から外れて**動いていた

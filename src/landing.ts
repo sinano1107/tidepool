@@ -381,7 +381,7 @@ function registerPrPromotionQuestion(
   );
 }
 
-function openPrPromotionQuestionIds(db: Db, taskId: string): string[] {
+export function openPrPromotionQuestionIds(db: Db, taskId: string): string[] {
   return (
     db.prepare("SELECT id FROM tasks WHERE question_pending_pr_promotion_task_id = ? AND status = 'todo'").all(taskId) as Array<{
       id: string;
