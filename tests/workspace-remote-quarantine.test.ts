@@ -216,9 +216,7 @@ it("完了時の merge back で仲介が token を出せなくても、WIP は�
   expect(result.isError).toBeFalsy();
   expect((await api(t.baseUrl, "GET", `/api/tasks/${task.id}`)).json.status).toBe("done");
   expect(git(workspace.path, "status", "--porcelain")).toBe("");
-  expect(await questionTitles(t)).toEqual([
-    expect.stringContaining("workspace sandbox needs human attention"),
-    expect.stringContaining("PR promotion failed: completes while the broker is down"),
-  ]);
+  // 完了時レビューが未決着で門が閉じているので、着地は門で待ち失敗 question を重ねない(ADR 0241 決定3)
+  expect(await questionTitles(t)).toEqual([expect.stringContaining("workspace sandbox needs human attention")]);
   expect(await quarantineReason(t, "sandbox")).toContain("invalid_user_token");
 });

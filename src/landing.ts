@@ -47,7 +47,7 @@ import {
 } from "./workspace.js";
 
 export type LandingVerdict =
-  | { kind: "not_applicable"; reason: "not_work" | "ancestor_branch" }
+  | { kind: "not_applicable"; reason: "not_work" | "ancestor_branch" | "promotion_abandoned" }
   | { kind: "nothing_to_land"; base: string }
   | { kind: "deferred"; reason: LandingBlock["kind"]; count: number }
   | {
@@ -63,6 +63,7 @@ export type LandingVerdict =
         | "agent_unavailable"
         | "github_not_configured"
         | "pull_request_already_merged"
+        | "pull_request_closed"
         | "promotion_failed";
       error: string;
     };
@@ -427,8 +428,8 @@ function clearPendingAutoMerge(db: Db, taskId: string): void {
   db.prepare("DELETE FROM pending_auto_merges WHERE task_id = ?").run(taskId);
 }
 
-/** キューの PR が決着した(盤面が merge した、または盤面の外での merge・閉じたことを観測した)ので
- *  キューから外し、その事実を盤面の名義で残す。 */
+/** PR が決着した(盤面が merge した、または盤面の外での merge・閉じたことを観測した)ので、キューにいれば
+ *  外し、その事実を盤面の名義で残す。キューにいない PR の観測(再発火が閉じた PR を読んだとき)も同じ形で刻む。 */
 function retireAutoMerge(
   db: Db,
   taskId: string,
@@ -606,6 +607,16 @@ export function createLanding(deps: LandingDeps): Landing {
       return true;
     }
   };
+  /** ADR 0225 決定2: 断念は人間の最新の明示の判断である間だけ効く。その間は断念の event を返す —— 後の retry が
+   *  PR を開くか push していれば、断念はその retry に置き換わっている */
+  const abandonEventInForce = (taskId: string) => {
+    const abandoned = latestEventOfTask(deps.db, taskId, "pr_promotion_abandoned");
+    if (!abandoned) return undefined;
+    const landedAfter = deps.db
+      .prepare("SELECT 1 FROM events WHERE task_id = ? AND kind IN ('pr_opened', 'pr_branch_pushed') AND id > ?")
+      .get(taskId, abandoned.id);
+    return landedAfter === undefined ? abandoned : undefined;
+  };
   // ADR 0236: 処理中の印。決着を書く経路はすべてこのプロセスの中にあるので、DB には持たない
   const inFlight = new Set<string>();
   const markKey = (workspace: string | null, prNumber: number) => JSON.stringify([workspace, prNumber]);
@@ -613,6 +624,34 @@ export function createLanding(deps: LandingDeps): Landing {
   const landing: Landing = {
     async land(task, excludePrPromotionQuestionId) {
       if (task.type !== "work") return { kind: "not_applicable", reason: "not_work" };
+      // ADR 0225 / ADR 0241 決定3: 断念した根には PR の有無によらず撃たない。門が開き、刻んだ head から
+      // 内容が変わっていれば、PR を開かず(profile も読まず)昇格の question を立て直す。retry はこの守りを外す
+      const abandoned = excludePrPromotionQuestionId === undefined ? abandonEventInForce(task.id) : undefined;
+      if (abandoned) {
+        // 門が閉じていれば他の理由より先に待つ(CONTEXT.md「収束」)。待った記録は刻まない —— 立て直しは門が開いてから(ADR 0225 決定2)
+        const block = landingBlock(deps.db, task.id);
+        if (block) return { kind: "deferred", reason: block.kind, count: block.count };
+        if (
+          hasOpenPrPromotionQuestion(deps.db, task.id) ||
+          !changedSince(task, abandoned.payload.head)
+        ) {
+          return { kind: "not_applicable", reason: "promotion_abandoned" };
+        }
+        registerPrPromotionQuestion(
+          deps.db,
+          task,
+          `PR promotion re-asked: ${task.title}`,
+          `PR promotion for completed task "${task.title}" was abandoned. An attached child ` +
+            `settled afterwards, and ${taskBranch(task.id)} no longer matches (or could not be ` +
+            `compared with) the content abandoned then. Promote the current content?`,
+          deps.clock.now(),
+        );
+        return {
+          kind: "failed",
+          reason: "promotion_failed",
+          error: `the content of ${taskBranch(task.id)} changed after PR promotion was abandoned`,
+        };
+      }
       let landedBefore = false;
       try {
         landedBefore = taskHasLanded(deps.db, task.id);
@@ -643,14 +682,6 @@ export function createLanding(deps: LandingDeps): Landing {
         if (lineage.branch) {
           return { kind: "not_applicable", reason: "ancestor_branch" };
         }
-        if (workspaceNeedsHuman(deps.db, workspace.name)) {
-          return failed(
-            task,
-            "workspace_needs_human",
-            `workspace "${workspace.name}" needs human attention before landing`,
-            excludePrPromotionQuestionId,
-          );
-        }
         if (!taskHasContentToLand(workspace, task.id)) {
           const base = protectedBranchRef(workspace);
           if (task.pr_number === null) {
@@ -669,6 +700,15 @@ export function createLanding(deps: LandingDeps): Landing {
         if (block) {
           recordLandingDeferred(deps.db, task.id, block, deps.clock.now());
           return { kind: "deferred", reason: block.kind, count: block.count };
+        }
+        // 門は quarantine より先に読む —— 門が閉じている間の失敗 question は retry で拒まれるだけになる(ADR 0241 決定3)
+        if (workspaceNeedsHuman(deps.db, workspace.name)) {
+          return failed(
+            task,
+            "workspace_needs_human",
+            `workspace "${workspace.name}" needs human attention before landing`,
+            excludePrPromotionQuestionId,
+          );
         }
         if (!isRemoteBacked(workspace)) {
           const resolved = readAuthority(task, deps.clock.now());
@@ -696,12 +736,8 @@ export function createLanding(deps: LandingDeps): Landing {
           rebaselineRef(deps.db, workspace, `refs/heads/${taskBranch(task.id)}`);
         }
         if (task.pr_number !== null) {
-          if (
-            (await deps.github.getPullRequestState({
-              path: workspace.path,
-              number: task.pr_number,
-            })) === "MERGED"
-          ) {
+          const state = await deps.github.getPullRequestState({ path: workspace.path, number: task.pr_number });
+          if (state === "MERGED") {
             return failed(
               task,
               "pull_request_already_merged",
@@ -709,6 +745,22 @@ export function createLanding(deps: LandingDeps): Landing {
                 `${taskBranch(task.id)} still has content to land`,
               excludePrPromotionQuestionId,
             );
+          }
+          // ADR 0241 決定3: 盤面の外で閉じられた PR には push しない。閉じたことは観測として1回だけ刻み、
+          // 人間の close を question で問い返さない。キューからも外す —— tick が同じ観測を重ねない
+          if (state === "CLOSED") {
+            // 印の付いた PR の決着は執行側が書く。印は await の後に見る(ADR 0236 決定3)
+            if (
+              !isMarked(task.workspace, task.pr_number) &&
+              latestEventOfTask(deps.db, task.id, OBSERVED.CLOSED)?.payload.pr_number !== task.pr_number
+            ) {
+              retireAutoMerge(deps.db, task.id, { kind: OBSERVED.CLOSED, pr_number: task.pr_number }, deps.clock.now());
+            }
+            return {
+              kind: "failed",
+              reason: "pull_request_closed",
+              error: `PR #${task.pr_number} was closed outside the board, so ${taskBranch(task.id)} is not pushed to it`,
+            };
           }
           const sha = taskBranchTip(workspace, task.id);
           await deps.github.pushBranch({ path: workspace.path, branch: taskBranch(task.id) });
@@ -793,39 +845,7 @@ export function createLanding(deps: LandingDeps): Landing {
         ancestor = ancestor.parent_id ? getTask(deps.db, ancestor.parent_id) : undefined
       ) {
         if (ancestor.type !== "work" || ancestor.status !== "done") continue;
-        if (ancestor.pr_number === null) {
-          if (taskHasLanded(deps.db, ancestor.id)) continue;
-          // ADR 0225: abandon promotion した祖先は着地し直さない。門が開き、刻んだ head から内容が
-          // 変わっていれば、PR を開かず(profile も読まず)昇格の question を立て直す
-          const abandoned = latestEventOfTask(deps.db, ancestor.id, "pr_promotion_abandoned");
-          if (abandoned) {
-            if (
-              landingBlock(deps.db, ancestor.id) ||
-              hasOpenPrPromotionQuestion(deps.db, ancestor.id) ||
-              !changedSince(ancestor, abandoned.payload.head)
-            ) {
-              continue;
-            }
-            registerPrPromotionQuestion(
-              deps.db,
-              ancestor,
-              `PR promotion re-asked: ${ancestor.title}`,
-              `PR promotion for completed task "${ancestor.title}" was abandoned. An attached child ` +
-                `settled afterwards, and ${taskBranch(ancestor.id)} no longer matches (or could not be ` +
-                `compared with) the content abandoned then. Promote the current content?`,
-              deps.clock.now(),
-            );
-            results.push({
-              taskId: ancestor.id,
-              verdict: {
-                kind: "failed",
-                reason: "promotion_failed",
-                error: `the content of ${taskBranch(ancestor.id)} changed after PR promotion was abandoned`,
-              },
-            });
-            continue;
-          }
-        }
+        if (ancestor.pr_number === null && taskHasLanded(deps.db, ancestor.id)) continue;
         results.push({ taskId: ancestor.id, verdict: await landing.land(ancestor) });
       }
       return results;

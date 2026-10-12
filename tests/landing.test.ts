@@ -544,6 +544,77 @@ it("merge 済み PR に残った修理は閉じた理由で失敗し failure que
   expect(github.pushes).toEqual([]);
 });
 
+// ADR 0241 決定3: 盤面の外で閉じられた PR には push せず、閉じたことを観測として刻む(#1734)
+it("盤面の外で閉じた PR を持つ根の再発火は push せず、閉じた観測を1件だけ刻み、着地したと返さず失敗 question も立てない。retry は閉じたことを理由に拒まれる", async () => {
+  const { workspace } = await makeRemoteBackedWorkspace("landing-closed-pr");
+  const { db, clock } = await openBoard();
+  const github = new FakeGitHubClient();
+  const landing = createLanding({ defaultAgentName: "tako", db, clock, workspace, github });
+  const task = landingWork(db, clock);
+  git(workspace.path, "checkout", "-b", `task/${task.id}`);
+  commitWork(workspace.path, "feature.txt", "ready\n");
+  await landing.land(task);
+  commitWork(workspace.path, "repair.txt", "fixed\n");
+  github.scriptClosedOutside(1);
+  const closed = {
+    kind: "failed",
+    reason: "pull_request_closed",
+    error: expect.stringContaining("PR #1 was closed"),
+  };
+
+  await expect(landing.land(getTask(db, task.id)!)).resolves.toEqual(closed);
+  await expect(landing.land(getTask(db, task.id)!)).resolves.toEqual(closed);
+  expect(github.pushes).toEqual([]);
+  expect(boardEvents(db, task.id, "pr_close_observed")).toEqual(closeObserved(1));
+  expect(promotionFailures(db, task.id)).toEqual([]);
+
+  registerPrPromotionFailureQuestion(db, getTask(db, task.id)!, "earlier failure", clock.now());
+  const [failure] = promotionFailures(db, task.id);
+  await expect(answerPromotion(db, clock, landing, workspace, failure!, "retry")).rejects.toThrow("PR #1 was closed");
+  expect(getTask(db, failure!.id)).toMatchObject({ status: "todo", question_answer: null });
+  expect(github.pushes).toEqual([]);
+});
+
+it("無人 merge キューにいる閉じた PR は、再発火が閉じた観測を刻んだ後の tick で観測を重ねない", async () => {
+  const { workspace } = await makeRemoteBackedWorkspace("landing-closed-queued-pr");
+  const { db, clock } = await openBoard();
+  const github = new FakeGitHubClient();
+  const work = queueAutoMerge(db, clock, 1);
+  git(workspace.path, "checkout", "-b", `task/${work.id}`);
+  commitWork(workspace.path, "repair.txt", "fixed\n");
+  github.scriptClosedOutside(1);
+  const landing = autoMerging(db, clock, workspace, github);
+
+  completeTask(db, work, FULL_HANDOFF, "tako", clock.now(), "worker");
+  settleReviews(db, clock.now());
+
+  await expect(landing.land(getTask(db, work.id)!)).resolves.toMatchObject({ reason: "pull_request_closed" });
+  await landing.tick("auto_merge", clock.now());
+
+  expect(boardEvents(db, work.id, "pr_close_observed")).toEqual(closeObserved(1));
+});
+
+it("執行側が印を取っている閉じた PR は、再発火が観測を刻まず、印を放した後の tick が1件だけ刻む", async () => {
+  const { workspace } = await makeRemoteBackedWorkspace("landing-closed-marked-pr");
+  const { db, clock } = await openBoard();
+  const github = new FakeGitHubClient();
+  const work = queueAutoMerge(db, clock, 1);
+  git(workspace.path, "checkout", "-b", `task/${work.id}`);
+  commitWork(workspace.path, "repair.txt", "fixed\n");
+  github.scriptClosedOutside(1);
+  const landing = autoMerging(db, clock, workspace, github);
+  completeTask(db, work, FULL_HANDOFF, "tako", clock.now(), "worker");
+  settleReviews(db, clock.now());
+  const release = landing.takeInFlightMark(getTask(db, work.id)!.workspace, 1)!;
+
+  await expect(landing.land(getTask(db, work.id)!)).resolves.toMatchObject({ reason: "pull_request_closed" });
+  expect(boardEvents(db, work.id, "pr_close_observed")).toEqual([]);
+
+  release();
+  await landing.tick("auto_merge", clock.now());
+  expect(boardEvents(db, work.id, "pr_close_observed")).toEqual(closeObserved(1));
+});
+
 it("open PR branch の push 失敗は既存の着地痕跡で隠さず failure question を立てる", async () => {
   const { workspace } = await makeRemoteBackedWorkspace("landing-push-failure");
   const { db, clock } = await openBoard();
@@ -718,6 +789,33 @@ it("needs-human workspace は閉じた理由で返す", async () => {
   expect(listEvents(db, failure!.id)).not.toContainEqual(
     expect.objectContaining({ payload: { kind: "pr_promotion_observed" } }),
   );
+});
+
+// ADR 0241 決定3: 門は workspace の quarantine より先に読む(#1834)
+it("workspace が quarantine で門が閉じている根の再発火は、門で待つ verdict を返し失敗 question を立てない", async () => {
+  const workspace = await makeWorkspace("landing-needs-human-gate");
+  const { db, clock } = await openBoard();
+  const landing = createLanding({ defaultAgentName: "tako", db, clock, workspace, github: null });
+  const task = landingWork(db, clock);
+  git(workspace.path, "checkout", "-b", `task/${task.id}`);
+  commitWork(workspace.path, "feature.txt", "ready\n");
+  attachUnsettledChild(db, clock, task.id);
+  quarantineWorkspace(db, workspace.name, new Error("repair the checkout"), clock.now());
+
+  await expect(landing.land(task)).resolves.toEqual({ kind: "deferred", reason: "attached_children", count: 1 });
+  expect(promotionFailures(db, task.id)).toEqual([]);
+});
+
+it("根でない分解の親は、付帯子が未決着でも門で待った記録を刻まない", async () => {
+  const workspace = await makeWorkspace("landing-lineage-gate");
+  const { db, clock } = await openBoard();
+  const landing = createLanding({ defaultAgentName: "tako", db, clock, workspace, github: null });
+  const root = landingWork(db, clock);
+  const parent = attachUnsettledChild(db, clock, root.id);
+  attachUnsettledChild(db, clock, parent.id);
+
+  await expect(landing.land(parent)).resolves.toEqual({ kind: "not_applicable", reason: "ancestor_branch" });
+  expect(latestEventOfTask(db, parent.id, "landing_deferred")).toBeUndefined();
 });
 
 it("着地判定の Git failure も throw せず閉じた失敗 verdict と question にする", async () => {
@@ -3263,12 +3361,15 @@ it("立て直した question への retry の時点で運ぶ内容が無けれ�
   expect(github.requests).toHaveLength(1);
 });
 
-it("PR 昇格を abandon した後に内容が変わっても、別の付帯子が未決着の間は question を立てず、その付帯子の決着で立てる", async () => {
+it("PR 昇格を abandon した後に内容が変わっても、別の付帯子が未決着の間は門で待ち(待った記録は刻まず)question を立てず、その付帯子の決着で立てる", async () => {
   const { db, clock, workspace, landing, work } = await abandonedPromotion("landing-abandon-gate");
   const pending = attachUnsettledChild(db, clock, work.id);
 
-  await landing.relandAncestors(settleAttachedChild(db, clock, workspace, work.id, "repair"));
+  await expect(
+    landing.relandAncestors(settleAttachedChild(db, clock, workspace, work.id, "repair")),
+  ).resolves.toEqual([{ taskId: work.id, verdict: { kind: "deferred", reason: "attached_children", count: 1 } }]);
   expect(openPromotionQuestions(db, work.id)).toEqual([]);
+  expect(boardEvents(db, work.id, "landing_deferred")).toEqual([]);
 
   await landing.relandAncestors(completeTask(db, pending, FULL_HANDOFF, "tako", clock.now(), "worker"));
   expect(openPromotionQuestions(db, work.id).map((q) => q.title)).toEqual(["PR promotion re-asked: ship"]);
@@ -3331,6 +3432,79 @@ it("PR 昇格を abandon した後、workspace を解決できないまま内容
   await expect(answerPromotion(db, clock, landing, workspace, reasked[0]!, "retry")).rejects.toThrow(DomainError);
   expect(openPromotionQuestions(db, work.id).map((q) => q.id)).toEqual([reasked[0]!.id]);
   expect(github.requests).toHaveLength(1);
+});
+
+// ADR 0241 決定3: 断念した根の守りは PR の有無によらない
+/** PR を開いた完了 work の修理の push を失敗させ、人間が abandon promotion と答えた形。 */
+async function abandonedPushToOpenPr(name: string) {
+  const { workspace } = await makeRemoteBackedWorkspace(name);
+  const { db, clock } = await openBoard();
+  const github = new FakeGitHubClient();
+  const authority = { resolve: (): AuthorityProfile => profile("escalate") };
+  const landing = createLanding({
+    defaultAgentName: "tako",
+    db,
+    clock,
+    workspace,
+    github,
+    resolveAuthority: () => authority.resolve(),
+  });
+  const work = landingWork(db, clock);
+  git(workspace.path, "checkout", "-b", `task/${work.id}`);
+  commitWork(workspace.path, "feature.txt", "ready\n");
+  completeTask(db, work, FULL_HANDOFF, "tako", clock.now(), "worker");
+  settleReviews(db, clock.now());
+  await landing.land(getTask(db, work.id)!);
+  commitWork(workspace.path, "repair.txt", "fixed\n");
+  git(workspace.path, "checkout", "main");
+  github.scriptPushFailure(new Error("push rejected"));
+  await landing.land(getTask(db, work.id)!);
+  github.scriptPushFailure(null);
+  const [failure] = promotionFailures(db, work.id);
+  await answerPromotion(db, clock, landing, workspace, failure!, "abandon promotion");
+  return { db, clock, workspace, github, landing, authority, work: getTask(db, work.id)! };
+}
+
+it("PR を持つ根の昇格を abandon した後、内容を変えない付帯子が決着しても、profile が読めなくても、push も question もせず agent を quarantine に落とさない", async () => {
+  const { db, clock, workspace, github, landing, authority, work } =
+    await abandonedPushToOpenPr("landing-abandon-with-pr-unchanged");
+  authority.resolve = () => {
+    throw new UnknownAgentError("tako");
+  };
+  const pushed = github.pushes.length;
+
+  await landing.relandAncestors(settleAttachedChild(db, clock, workspace, work.id));
+
+  expect(github.pushes).toHaveLength(pushed);
+  expect(openPromotionQuestions(db, work.id)).toEqual([]);
+  expect(quarantineQuestion(db, "agent", "tako")).toBeUndefined();
+});
+
+it("PR を持つ根の昇格を abandon した後、修理が内容を変えて決着しても push せず昇格の question を1つ立て直し、retry と答えると push する", async () => {
+  const { db, clock, workspace, github, landing, work } = await abandonedPushToOpenPr("landing-abandon-with-pr");
+  const pushed = github.pushes.length;
+
+  await landing.relandAncestors(settleAttachedChild(db, clock, workspace, work.id, "second-repair"));
+
+  expect(github.pushes).toHaveLength(pushed);
+  const reasked = openPromotionQuestions(db, work.id);
+  expect(reasked.map((q) => q.title)).toEqual(["PR promotion re-asked: ship"]);
+
+  await answerPromotion(db, clock, landing, workspace, reasked[0]!, "retry");
+
+  expect(github.pushes).toHaveLength(pushed + 1);
+  expect(openPromotionQuestions(db, work.id)).toEqual([]);
+});
+
+it("abandon の後の retry が着地させた根は、次の修理の決着で問い直さずに開いた PR へ push する", async () => {
+  const { db, clock, workspace, github, landing, work } = await abandonedPromotion("landing-abandon-superseded");
+  await landing.relandAncestors(settleAttachedChild(db, clock, workspace, work.id, "repair"));
+  await answerPromotion(db, clock, landing, workspace, openPromotionQuestions(db, work.id)[0]!, "retry");
+
+  await landing.relandAncestors(settleAttachedChild(db, clock, workspace, work.id, "second-repair"));
+
+  expect(github.pushes).toHaveLength(1);
+  expect(openPromotionQuestions(db, work.id)).toEqual([]);
 });
 
 // ADR 0233: 既定への参照は pickup で終わる —— 着手したタスクの着地は、既定を差し替えた盤面でも pickup で解決した先に向かう
