@@ -626,6 +626,7 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
     defaultAgentName: worker.id,
     auditorName,
     isProtectedWorkspace: options.isProtectedWorkspace,
+    githubAuth: options.githubAuth,
   });
   // ADR 0109 決定5: 後始末の未了は再起動をまたぐ事実である。in-memory の callback は
   // 盤面の crash を越えないので、行に残った未了をここで拾い、**容器機構の前提検査が

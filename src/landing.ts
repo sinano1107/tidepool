@@ -5,6 +5,7 @@ import { DomainError } from "./domain-error.js";
 import { appendEvent, latestEventOfTask, type TaskScopedPayload } from "./events.js";
 import { git } from "./git.js";
 import type { GitHubClient, PrState } from "./github.js";
+import type { GitHubAuth } from "./github-auth.js";
 import { quarantineAgent } from "./quarantine.js";
 import { type AuthorityProfile, isUnresolvableAgentError, remoteTrackingRef } from "./registry.js";
 import {
@@ -38,6 +39,7 @@ import {
   protectedBranch,
   protectedBranchRef,
   rebaselineRef,
+  refreshProtectedBranch,
   resolveOrQuarantine,
   resolveTaskBranchLineage,
   taskBranch,
@@ -57,6 +59,8 @@ export type LandingVerdict =
     }
   // 開いている PR に積み残しが無い —— push も GitHub の読み取りもしない(ADR 0241)
   | { kind: "up_to_date"; prNumber: number }
+  // retry が答えている根を、この回の収束は撃たなかった(ADR 0241 決定5)。error は回答の拒否文
+  | { kind: "excluded"; reason: "pull_request_closed" | "teardown_unfinished" | "not_a_root"; error: string }
   | {
       kind: "failed";
       reason:
@@ -196,10 +200,12 @@ export function landingAnnotation(
 
 export type RootVerdict = { taskId: string; verdict: LandingVerdict };
 
-/** 盤面がまだ着地を運ぶ根(CONTEXT.md「着地」)。`outlivedForkSource` は lineage が読んだ事実で、PR を開く前の追いつきに使う。 */
-export interface LandingRoot {
+/** 盤面がまだ着地を運ぶ根(CONTEXT.md「着地」)。`outlivedForkSource` は lineage が読んだ事実で、PR を開く前の追いつきに
+ *  使う。`lineageError` は lineage が読めなかった候補 —— 根かどうか分からないので、根として人間に失敗を見せる。 */
+interface LandingRoot {
   task: Task;
   outlivedForkSource: boolean;
+  lineageError?: unknown;
 }
 
 /** PR の merge を記録した(盤面が merge した・merge を観測した)SQL 述語。人間の merge 回答と merge question の観測は、
@@ -215,13 +221,14 @@ function prMergedSql(t: string): string {
 /** ADR 0241 決定1 / ADR 0240 決定2: 収束の根を記録と内容から導く。読むだけで、書かない(quarantine にも落とさない)。
  *  候補は SQL で先に絞り、lineage は候補にだけ解く —— 1回の git の呼び出しの数を、着地の終わっていない木の大きさに
  *  比例させ、盤面の歴史の長さには比例させない。候補から外すのは、着地が終わった根(`landing_finished` /
- *  `nothing_to_land`)、盤面の外で閉じた PR の根、ローカル着地の question を持つ根、後始末が未了の行とその祖先、閉じた
- *  PR の根と断念した根の子孫である —— 子孫はその根が運ぶ。PR が開いている根の子孫は候補に残し、lineage に任せる ——
- *  盤面の外の merge を盤面が観測していない間(`external` のダイヤルは観測しない)、記録の上で「開いている」根の子孫は、
- *  merge の後に完了して自分で根になっている。人間が担当した work は盤面のタスクブランチに内容を持たないので、根に
- *  しない(人間の完了は祖先の着地の契機である)。lineage が祖先のブランチへ帰る done の work は根ではない。workspace を
- *  解決できない候補は lineage を読めないので、work の祖先を持たないものだけを根とする。 */
-export function deriveLandingRoots(
+ *  `nothing_to_land`)、盤面の外で閉じた PR の根、ローカル着地の question を持つ根、閉じた PR の根と断念した根の
+ *  子孫である —— 子孫はその根が運ぶ。PR が開いている根の子孫は候補に残し、lineage に任せる —— 盤面の外の merge を
+ *  盤面が観測していない間(`external` のダイヤルは観測しない)、記録の上で「開いている」根の子孫は、merge の後に完了して
+ *  自分で根になっている。人間が担当した work は盤面のタスクブランチに内容を持たないので、根にしない(人間の完了は祖先の
+ *  着地の契機である)。lineage が祖先のブランチへ帰る done の work は根ではない。workspace を解決できない候補と lineage が
+ *  読めない候補は根かどうか分からないので根として返し、撃つ側がその根の失敗として人間に見せる。後始末が未了の木は、
+ *  撃つ直前に根ごとに読む(`landRoot`)。 */
+function deriveLandingRoots(
   db: Db,
   resolve: ((taskWorkspace: string | null) => WorkspaceConfig) | undefined,
 ): LandingRoot[] {
@@ -236,14 +243,10 @@ export function deriveLandingRoots(
                                 AND NOT EXISTS (SELECT 1 FROM events l WHERE l.task_id = r.id
                                                   AND l.kind IN ('pr_opened', 'pr_branch_pushed') AND l.id > a.id)))
            UNION
-           SELECT c.id FROM tasks c JOIN carried p ON c.parent_id = p.id),
-         held(id) AS (
-           SELECT id FROM tasks WHERE teardown_started_at IS NOT NULL
-           UNION
-           SELECT t.parent_id FROM tasks t JOIN held h ON t.id = h.id WHERE t.parent_id IS NOT NULL)
+           SELECT c.id FROM tasks c JOIN carried p ON c.parent_id = p.id)
        SELECT t.id FROM tasks t
         WHERE t.type = 'work' AND t.status = 'done' AND t.assignee IS NOT '${HUMAN_WORKER_ID}'
-          AND t.id NOT IN (SELECT id FROM carried) AND t.id NOT IN (SELECT id FROM held)
+          AND t.id NOT IN (SELECT id FROM carried)
           AND NOT EXISTS (SELECT 1 FROM events e WHERE e.task_id = t.id
                             AND e.kind IN ('landing_finished', 'nothing_to_land', 'pr_close_observed'))
           AND NOT EXISTS (SELECT 1 FROM tasks q WHERE q.question_pending_local_merge_task_id = t.id)
@@ -258,18 +261,25 @@ export function deriveLandingRoots(
       workspace = resolve?.(task.workspace);
     } catch {}
     if (!workspace) {
-      if (task.parent_id === null) roots.push({ task, outlivedForkSource: false });
+      roots.push({ task, outlivedForkSource: false });
       continue;
     }
     try {
       const lineage = resolveTaskBranchLineage(db, workspace, task);
       if (!lineage.branch) roots.push({ task, outlivedForkSource: lineage.outlivedForkSource });
-    } catch (error) {
-      // 1つの候補の lineage が読めなくても、他の根の導出は続ける
-      console.error(`[landing] the lineage of task ${id} could not be read; it is skipped this pass:`, error);
+    } catch (lineageError) {
+      roots.push({ task, outlivedForkSource: false, lineageError });
     }
   }
   return roots;
+}
+
+/** 根の木(根自身を含む)に、後始末が未了の行があるか —— その後始末の merge back がまだ根へ帰っていない(ADR 0240 決定2)。 */
+function teardownUnfinishedUnder(db: Db, taskId: string): boolean {
+  return (
+    db.prepare(`${subtreeSql("?")} SELECT 1 FROM tasks WHERE id IN (SELECT id FROM subtree) AND teardown_started_at IS NOT NULL`).get(taskId) !==
+    undefined
+  );
 }
 
 export interface Landing {
@@ -295,6 +305,8 @@ export interface LandingDeps {
   defaultAgentName: string;
   auditorName?: string;
   isProtectedWorkspace?: (name: string) => boolean;
+  /** merge 済みの根を比べる前の保護ブランチの fetch(ADR 0241 決定1)が使う盤面の GitHub 身元(ADR 0093)。 */
+  githubAuth?: GitHubAuth;
 }
 
 type LandingFailureReason = Extract<LandingVerdict, { kind: "failed" }>["reason"];
@@ -645,23 +657,23 @@ export function createLanding(deps: LandingDeps): Landing {
   };
   /** 収束の1回の、根ごとの文脈。`answered` は、その根の PR 昇格失敗 question に retry が答えている途中であること
    *  (ADR 0106 決定5) —— 失敗 question を立て直さず、答えている question を引退の対象から除く。 */
-  type Pass = { answering: ReadonlySet<string>; answered: boolean };
-  const retireFailures = (taskId: string, pass: Pass) =>
-    settlePrPromotionQuestionsAsObserved(deps.db, taskId, deps.clock.now(), pass.answering);
+  type RootContext = { answering: ReadonlySet<string>; answered: boolean };
+  const retireFailures = (taskId: string, ctx: RootContext) =>
+    settlePrPromotionQuestionsAsObserved(deps.db, taskId, deps.clock.now(), ctx.answering);
   const failed = (
     task: Task,
     reason: LandingFailureReason,
     error: unknown,
-    pass: Pass,
+    ctx: RootContext,
   ): Extract<LandingVerdict, { kind: "failed" }> => {
     const message = error instanceof Error ? error.message : String(error);
-    if (!pass.answered) {
+    if (!ctx.answered) {
       registerPrPromotionFailureQuestion(deps.db, task, message, deps.clock.now());
     }
     return { kind: "failed", reason, error: message };
   };
-  const agentUnavailable = (task: Task, pass: Pass) =>
-    failed(task, "agent_unavailable", "the assigned agent's authority profile cannot be resolved for landing", pass);
+  const agentUnavailable = (task: Task, ctx: RootContext) =>
+    failed(task, "agent_unavailable", "the assigned agent's authority profile cannot be resolved for landing", ctx);
   /** ADR 0225 決定1: 刻んだ head から内容が変わったか(ADR 0105 と同じ比較)。読めなければ「変わった」—— 修理を捨てない側。
    *  workspace を解決できない場合も「変わった」と読むのは ADR 0234 決定3 */
   const changedSince = (task: Task, head: string | null): boolean => {
@@ -685,27 +697,26 @@ export function createLanding(deps: LandingDeps): Landing {
   };
   const recordBoardFact = (taskId: string, payload: TaskScopedPayload) =>
     appendEvent(deps.db, { taskId, workerId: BOARD_WORKER_ID, origin: "board", payload, at: deps.clock.now() });
-  /** merge 済みの PR の根(ADR 0241 決定1)。根自身のブランチが保護ブランチに無い内容を持つと読んだ後でだけ呼ぶ。
-   *  保護ブランチの写しは pickup と後始末の fetch でしか進まず、merge の直後は merge された内容をまだ持たない ——
-   *  merge された head(盤面が push した origin 側のタスクブランチ。merge は head に固定される —— ADR 0231 決定1)
-   *  にも無い内容だけを運ぶ内容と読む。読めなければ運ぶ内容とする(修理を捨てない側)。子孫の積み残しは読まない ——
-   *  merge の後に完了した子孫は、自分で根になる。 */
-  const settleMerged = (task: Task, workspace: WorkspaceConfig, prNumber: number, pass: Pass): LandingVerdict => {
-    let left = true;
-    try {
-      left = branchMergeEffect(workspace, remoteTrackingRef(taskBranch(task.id)), taskBranch(task.id)).changesCandidate;
-    } catch {}
-    if (left) {
-      return failed(
-        task,
-        "pull_request_already_merged",
-        `PR #${prNumber} is already merged, but merge-backed repair work on ${taskBranch(task.id)} still has content to land`,
-        pass,
-      );
-    }
+  /** merge 済みの PR の根の着地は終わった —— 事実を1回刻み、以後この根は候補に入らない(ADR 0241 決定1)。 */
+  const finishLanding = (task: Task, workspace: WorkspaceConfig, prNumber: number, ctx: RootContext): LandingVerdict => {
     recordBoardFact(task.id, { kind: "landing_finished", pr_number: prNumber });
-    retireFailures(task.id, pass);
+    retireFailures(task.id, ctx);
     return { kind: "nothing_to_land", base: protectedBranchRef(workspace) };
+  };
+  const alreadyMerged = (task: Task, prNumber: number, ctx: RootContext) =>
+    failed(
+      task,
+      "pull_request_already_merged",
+      `PR #${prNumber} is already merged, but merge-backed repair work on ${taskBranch(task.id)} still has content to land`,
+      ctx,
+    );
+  /** merge 済みの PR の根(ADR 0241 決定1): 保護ブランチの写しを読み直してから、根自身のブランチと比べる。子孫の積み残しは
+   *  読まない —— merge の後に完了した子孫は、自分で根になる。 */
+  const settleMerged = async (task: Task, workspace: WorkspaceConfig, prNumber: number, ctx: RootContext) => {
+    await refreshProtectedBranch(deps.db, workspace, deps.githubAuth);
+    return taskHasContentToLand(workspace, task.id)
+      ? alreadyMerged(task, prNumber, ctx)
+      : finishLanding(task, workspace, prNumber, ctx);
   };
   // ADR 0236: 処理中の印。決着を書く経路はすべてこのプロセスの中にあるので、DB には持たない
   const inFlight = new Set<string>();
@@ -714,14 +725,27 @@ export function createLanding(deps: LandingDeps): Landing {
   /** 根ごとの手順(ADR 0241 決定1・3、spec #1839 A): 除外 → workspace の解決 → 運ぶ内容 → 門 → workspace の
    *  quarantine → ローカルか remote か → PR の有無と状態 → profile。lineage は導出(`deriveLandingRoots`)が解いた。
    *  撃たずに外した根は undefined を返す。 */
-  const landRoot = async ({ task, outlivedForkSource }: LandingRoot, answering: ReadonlySet<string>): Promise<LandingVerdict | undefined> => {
+  const landRoot = async (
+    { task, outlivedForkSource, lineageError }: LandingRoot,
+    answering: ReadonlySet<string>,
+  ): Promise<LandingVerdict | undefined> => {
     const open = openPrPromotionQuestionIds(deps.db, task.id);
-    const pass: Pass = { answering, answered: open.some((id) => answering.has(id)) };
+    const ctx: RootContext = { answering, answered: open.some((id) => answering.has(id)) };
     // ADR 0240 決定2: 人間がまだ答えていない失敗 question を、盤面が先回りして潰さない
-    if (open.length > 0 && !pass.answered) return undefined;
+    if (open.length > 0 && !ctx.answered) return undefined;
+    // 後始末が未了の木は、その merge back がまだ帰っていない(ADR 0240 決定2)。回の途中で後始末に入ることがあるので、撃つ直前に読む
+    if (teardownUnfinishedUnder(deps.db, task.id)) {
+      return ctx.answered
+        ? {
+            kind: "excluded",
+            reason: "teardown_unfinished",
+            error: `a task under ${taskBranch(task.id)} is still in its teardown; answer again once it has finished`,
+          }
+        : undefined;
+    }
     // ADR 0225 / ADR 0241 決定3: 断念した根には PR の有無によらず撃たない。門が開き、刻んだ head から
     // 内容が変わっていれば、PR を開かず(profile も読まず)昇格の question を立て直す。retry はこの守りを外す
-    const abandoned = pass.answered ? undefined : abandonEventInForce(task.id);
+    const abandoned = ctx.answered ? undefined : abandonEventInForce(task.id);
     if (abandoned) {
       // 門が閉じていれば他の理由より先に待つ(CONTEXT.md「収束」)。待った記録は刻まない —— 立て直しは門が開いてから(ADR 0225 決定2)
       const block = landingBlock(deps.db, task.id);
@@ -745,19 +769,22 @@ export function createLanding(deps: LandingDeps): Landing {
     try {
       const resolve = buildWorkspaceResolver(deps.resolveWorkspace, deps.workspace);
       if (!resolve) {
-        return failed(task, "workspace_unavailable", "no workspace is configured for landing", pass);
+        return failed(task, "workspace_unavailable", "no workspace is configured for landing", ctx);
       }
       const workspace = resolveOrQuarantine(deps.db, resolve, task.workspace, deps.clock.now());
       if (!workspace) {
-        return failed(task, "workspace_unavailable", "workspace is unavailable for landing", pass);
+        return failed(task, "workspace_unavailable", "workspace is unavailable for landing", ctx);
       }
+      // lineage が読めなかった候補は、根かどうか分からないまま人間に見せる(根ごとの失敗)
+      if (lineageError !== undefined) return failed(task, "promotion_failed", lineageError, ctx);
       const merged = deps.db.prepare(`SELECT 1 FROM tasks t WHERE t.id = ? AND ${prMergedSql("t")}`).get(task.id) !== undefined;
+      // merge 済みの根は、保護ブランチの写しを読み直してから比べる —— merge の直後の写しは merge された内容をまだ持たない
+      if (merged) await refreshProtectedBranch(deps.db, workspace, deps.githubAuth);
       if (!taskHasContentToLand(workspace, task.id)) {
+        if (merged) return finishLanding(task, workspace, task.pr_number!, ctx);
         const base = protectedBranchRef(workspace);
-        // merge 済みの根に内容がもう無ければ、着地は終わった —— 事実を1回刻み、以後この根は候補に入らない
-        if (merged) recordBoardFact(task.id, { kind: "landing_finished", pr_number: task.pr_number! });
-        else if (task.pr_number === null) recordBoardFact(task.id, { kind: "nothing_to_land", base });
-        retireFailures(task.id, pass);
+        if (task.pr_number === null) recordBoardFact(task.id, { kind: "nothing_to_land", base });
+        retireFailures(task.id, ctx);
         return { kind: "nothing_to_land", base };
       }
       const block = landingBlock(deps.db, task.id);
@@ -771,13 +798,13 @@ export function createLanding(deps: LandingDeps): Landing {
           task,
           "workspace_needs_human",
           `workspace "${workspace.name}" needs human attention before landing`,
-          pass,
+          ctx,
         );
       }
-      if (merged) return settleMerged(task, workspace, task.pr_number!, pass);
+      if (merged) return alreadyMerged(task, task.pr_number!, ctx);
       if (!isRemoteBacked(workspace)) {
         const resolved = readAuthority(task, deps.clock.now());
-        if (!resolved) return agentUnavailable(task, pass);
+        if (!resolved) return agentUnavailable(task, ctx);
         const purpose =
           resolved.profile?.merge === "auto_if_ci_green"
             ? `Workspace "${workspace.name}" is purely-local, so CI cannot be observed and ` +
@@ -786,16 +813,16 @@ export function createLanding(deps: LandingDeps): Landing {
             : `Workspace "${workspace.name}" is purely-local and has no GitHub merge surface ` +
               `for "${task.title}". Land its task branch on the protected branch now?`;
         registerLocalMergeQuestion(deps.db, task, purpose, deps.clock.now());
-        retireFailures(task.id, pass);
+        retireFailures(task.id, ctx);
         return { kind: "landed", form: "local_merge_question" };
       }
       // ADR 0241: 開いている PR の根は、積み残しがあるときだけ push する —— 無ければ GitHub を呼ばない
       if (task.pr_number !== null && !hasContentLeftBehind(deps.db, workspace, task.id)) {
-        retireFailures(task.id, pass);
+        retireFailures(task.id, ctx);
         return { kind: "up_to_date", prNumber: task.pr_number };
       }
       if (!deps.github) {
-        return failed(task, "github_not_configured", "GitHub is not configured for PR promotion", pass);
+        return failed(task, "github_not_configured", "GitHub is not configured for PR promotion", ctx);
       }
       // 追いつきは PR の状態を読んだ後に置く —— 閉じた・merge 済みの PR の根のタスクブランチは動かさない
       const catchUp = () => {
@@ -814,7 +841,7 @@ export function createLanding(deps: LandingDeps): Landing {
         ) {
           retireAutoMerge(deps.db, task.id, { kind: OBSERVED[state], pr_number: task.pr_number }, deps.clock.now());
         }
-        if (state === "MERGED") return settleMerged(task, workspace, task.pr_number, pass);
+        if (state === "MERGED") return settleMerged(task, workspace, task.pr_number, ctx);
         // ADR 0241 決定3: 盤面の外で閉じられた PR には push しない。人間の close を question で問い返さない
         if (state === "CLOSED") {
           return {
@@ -829,7 +856,7 @@ export function createLanding(deps: LandingDeps): Landing {
         // push の直後に刻む —— 後段が throw しても、GitHub に載った head の猶予の起点は失わない(ADR 0227 決定2)
         recordBoardFact(task.id, { kind: "pr_branch_pushed", pr_number: task.pr_number, sha });
         rebaselineRef(deps.db, workspace, remoteTrackingRef(taskBranch(task.id)));
-        retireFailures(task.id, pass);
+        retireFailures(task.id, ctx);
         return { kind: "landed", form: "open_pull_request_updated", prNumber: task.pr_number };
       }
       // ADR 0241 決定4: 作る前に同じタスクブランチの PR を探す —— 作成の後・記録の前に落ちた盤面が2つ目を作らない
@@ -840,7 +867,7 @@ export function createLanding(deps: LandingDeps): Landing {
           recordPrNumber(deps.db, task.id, found.number);
           retireAutoMerge(deps.db, task.id, observed, deps.clock.now());
         })();
-        if (found.state === "MERGED") return settleMerged(task, workspace, found.number, pass);
+        if (found.state === "MERGED") return settleMerged(task, workspace, found.number, ctx);
         return {
           kind: "failed",
           reason: "pull_request_closed",
@@ -850,7 +877,7 @@ export function createLanding(deps: LandingDeps): Landing {
       catchUp();
       // profile を読むのは面を開く時点だけ —— 開いている PR への push は読まない(ADR 0217 決定3)
       const resolved = readAuthority(task, deps.clock.now());
-      if (!resolved) return agentUnavailable(task, pass);
+      if (!resolved) return agentUnavailable(task, ctx);
       const sha = taskBranchTip(workspace, task.id);
       let prNumber: number;
       try {
@@ -883,10 +910,10 @@ export function createLanding(deps: LandingDeps): Landing {
         deps.isProtectedWorkspace?.(workspace.name),
         "worker",
       );
-      retireFailures(task.id, pass);
+      retireFailures(task.id, ctx);
       return { kind: "landed", form: "pull_request_opened", prNumber };
     } catch (error) {
-      return failed(task, "promotion_failed", error, pass);
+      return failed(task, "promotion_failed", error, ctx);
     }
   };
   /** 収束の1回(ADR 0241 決定1): 根を導き、根ごとに撃つ。根ごとの失敗はその根に閉じ込め、回は残りの根へ進む。
@@ -907,6 +934,22 @@ export function createLanding(deps: LandingDeps): Landing {
       } catch (error) {
         console.error(`[landing] landing root ${root.task.id} failed; the pass goes on with the rest:`, error);
       }
+    }
+    // retry が答えている根をこの回が候補にしなかったなら、なぜかを verdict にする —— 回答はそれで拒まれる
+    for (const questionId of answering) {
+      const taskId = getTask(deps.db, questionId)?.question_pending_pr_promotion_task_id;
+      if (!taskId || verdicts.some((root) => root.taskId === taskId)) continue;
+      const closed = latestEventOfTask(deps.db, taskId, OBSERVED.CLOSED);
+      verdicts.push({
+        taskId,
+        verdict: closed
+          ? {
+              kind: "excluded",
+              reason: "pull_request_closed",
+              error: `PR #${closed.payload.pr_number} was closed outside the board, so ${taskBranch(taskId)} is not pushed to it`,
+            }
+          : { kind: "excluded", reason: "not_a_root", error: `task ${taskId} is no longer awaiting PR promotion` },
+      });
     }
     return verdicts;
   };

@@ -9,7 +9,7 @@ import type { ContainmentCheck } from "./containment.js";
 import type { Db } from "./db.js";
 import { DomainError } from "./domain-error.js";
 import type { DraftClient } from "./draft.js";
-import { appendEvent, type EventOrigin, latestEventOfTask } from "./events.js";
+import { appendEvent, type EventOrigin } from "./events.js";
 import {
   type AddTierAmendment,
   applyExecutionSettingsChange,
@@ -676,15 +676,9 @@ function assertLandingAllowed(db: Db, landingTaskId: string): void {
   );
 }
 
-/** retry の受理・拒否(ADR 0241 決定5)。verdict が無いのは、その回の収束がこの根を扱わなかったとき —— 盤面の外で
- *  閉じた PR の根は候補から外れる(ADR 0241 決定3)。 */
-function promotionRetryError(db: Db, taskId: string, verdict: LandingVerdict | undefined): string | undefined {
-  if (!verdict) {
-    const closed = latestEventOfTask(db, taskId, "pr_close_observed");
-    return closed
-      ? `PR #${closed.payload.pr_number} was closed outside the board, so task/${taskId} is not pushed to it`
-      : `task ${taskId} is no longer awaiting PR promotion`;
-  }
+/** retry の受理・拒否(ADR 0241 決定5)。verdict が無いのは、候補の読み取りそのものが失敗した回だけである。 */
+function promotionRetryError(verdict: LandingVerdict | undefined): string | undefined {
+  if (!verdict) return "the board could not read its landing roots; answer again";
   switch (verdict.kind) {
     case "landed":
     case "up_to_date":
@@ -692,6 +686,7 @@ function promotionRetryError(db: Db, taskId: string, verdict: LandingVerdict | u
     case "nothing_to_land":
       return undefined;
     case "failed":
+    case "excluded":
       return verdict.error;
     case "deferred":
       return verdict.reason === "attached_children"
@@ -911,7 +906,7 @@ export async function submitAnswer(
     promotionTaskId !== null && answers[0] === PR_PROMOTION_FAILURE_OPTIONS[0];
   if (wantsPromotionRetry) {
     const verdicts = await deps.landing.converge({ answering: task.id });
-    const error = promotionRetryError(deps.db, promotionTaskId, verdicts.find((root) => root.taskId === promotionTaskId)?.verdict);
+    const error = promotionRetryError(verdicts.find((root) => root.taskId === promotionTaskId)?.verdict);
     if (error) throw new DomainError(error);
   }
 
