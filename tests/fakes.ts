@@ -547,8 +547,8 @@ export class FakeGitHubClient implements GitHubClient {
     return number;
   }
 
-  /** head で探す読みを失敗させる。null で戻す。 */
-  scriptFindFailure(err: Error | null): void {
+  /** head で探す読みを失敗させる。 */
+  scriptFindFailure(err: Error): void {
     this.findFailure = err;
   }
 
