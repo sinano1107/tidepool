@@ -595,14 +595,17 @@ function recordLandingDeferred(
 
 export function createLanding(deps: LandingDeps): Landing {
   /** ADR 0217 決定3: 解決できない profile はダイヤルを推測せず、agent 名の quarantine に落として
-   *  undefined を返す。registry の無い盤面(resolver 無し)は profile 無しで解決する。 */
-  const readAuthority = (task: Task, now: Date): { profile: AuthorityProfile | undefined } | undefined => {
+   *  その名前を返す。registry の無い盤面(resolver 無し)は profile 無しで解決する。 */
+  const readAuthority = (
+    task: Task,
+    now: Date,
+  ): { profile: AuthorityProfile | undefined } | { quarantinedAgent: string } => {
     try {
       return { profile: deps.resolveAuthority?.(task.assignee, task.type) };
     } catch (err) {
       if (!isUnresolvableAgentError(err)) throw err;
       quarantineAgent(deps.db, err.agentName, err, now);
-      return undefined;
+      return { quarantinedAgent: err.agentName };
     }
   };
   /** ADR 0217 決定1・2: いま着地しても無人 merge キューに入るかを読み直し、入らなければ
@@ -680,8 +683,6 @@ export function createLanding(deps: LandingDeps): Landing {
         ? `workspace "${name}" is quarantined and needs human attention before landing; answer its quarantine question`
         : `agent "${name}" is quarantined: its authority profile cannot be resolved for landing; repair the registry and answer its quarantine question`,
   });
-  const agentQuarantined = (task: Task) =>
-    quarantined("agent", resolveTaskAgent(task, deps.defaultAgentName, deps.auditorName ?? DEFAULT_AUDITOR_NAME));
   /** ADR 0225 決定1: 刻んだ head から内容が変わったか(ADR 0105 と同じ比較)。読めなければ「変わった」—— 修理を捨てない側。
    *  workspace を解決できない場合も「変わった」と読むのは ADR 0234 決定3 */
   const changedSince = (task: Task, head: string | null): boolean => {
@@ -810,7 +811,7 @@ export function createLanding(deps: LandingDeps): Landing {
       if (merged) return alreadyMerged(task, task.pr_number!, ctx);
       if (!isRemoteBacked(workspace)) {
         const resolved = readAuthority(task, deps.clock.now());
-        if (!resolved) return agentQuarantined(task);
+        if (!("profile" in resolved)) return quarantined("agent", resolved.quarantinedAgent);
         const purpose =
           resolved.profile?.merge === "auto_if_ci_green"
             ? `Workspace "${workspace.name}" is purely-local, so CI cannot be observed and ` +
@@ -882,7 +883,7 @@ export function createLanding(deps: LandingDeps): Landing {
       catchUp();
       // profile を読むのは面を開く時点だけ —— 開いている PR への push は読まない(ADR 0217 決定3)
       const resolved = readAuthority(task, deps.clock.now());
-      if (!resolved) return agentQuarantined(task);
+      if (!("profile" in resolved)) return quarantined("agent", resolved.quarantinedAgent);
       const sha = taskBranchTip(workspace, task.id);
       let prNumber: number;
       try {
@@ -1058,7 +1059,7 @@ export function createLanding(deps: LandingDeps): Landing {
           // PR はキューを外れる。profile が読めなければ agent を quarantine に落とし、キューに残してこの回は飛ばす(ADR 0217 決定3)
           const authorityIfGateOpen = () => {
             const resolved = readAuthority(task, now);
-            return resolved && !landingBlock(deps.db, task_id) ? resolved : undefined;
+            return "profile" in resolved && !landingBlock(deps.db, task_id) ? resolved : undefined;
           };
           const stop = (askQuestion?: (changed: string) => void) => {
             const resolved = authorityIfGateOpen();
