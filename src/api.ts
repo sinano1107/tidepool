@@ -1365,7 +1365,6 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
         defaultAgentName,
         auditorName,
         quarantineResolvers,
-        landing,
       },
       req.params.id,
       parsed.data.reason,
@@ -1435,7 +1434,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       return;
     }
     const result = await completeThroughHumanDoor(
-      { db, pollNow, landing, defaultAgentName, auditorName },
+      { db, pollNow, defaultAgentName, auditorName },
       req.params.id,
       parsed.data.handoff,
       () => clock.now(),

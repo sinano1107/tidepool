@@ -703,7 +703,6 @@ function promotionRetryError(db: Db, taskId: string, verdict: LandingVerdict | u
 export interface CancelThroughHumanDoorDeps {
   db: Db;
   pollNow: () => void;
-  landing: Landing;
   workspace?: WorkspaceConfig;
   defaultAgentName?: string;
   auditorName?: string;
@@ -723,7 +722,6 @@ export interface EditThroughHumanDoorDeps {
 export interface CompleteThroughHumanDoorDeps {
   db: Db;
   pollNow: () => void;
-  landing: Landing;
   defaultAgentName?: string;
   auditorName?: string;
 }
