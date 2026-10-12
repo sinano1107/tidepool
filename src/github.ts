@@ -79,6 +79,13 @@ export type CiStatus = "pending" | "success" | "failure" | "unreported";
 /** GitHub's own PR state (ADR 0229 決定2). */
 export type PrState = "OPEN" | "CLOSED" | "MERGED";
 
+/** The PR found on a task branch, whatever its state (ADR 0241 決定4). */
+export interface FoundPr {
+  number: number;
+  state: PrState;
+  head: string;
+}
+
 /** One read of a PR, CI, state and head together (ADR 0229 決定2 / ADR 0231
  *  決定1): `head` is the commit the CI was read on, the one a merge pins to. A
  *  read that failed is CI "pending" and state "unreadable" with no head —
@@ -130,6 +137,10 @@ export interface GitHubClient {
    *  pushing a repair onto a still-open PR (issue #400), never as a standing
    *  watch over every open PR. Throws when it cannot be read. */
   getPullRequestState(ref: PrRef): Promise<PrState>;
+  /** The PR whose head is `branch`, in any state, or null (ADR 0241 決定4) — read
+   *  before opening one, so a PR the board opened but never recorded is not
+   *  opened twice. Throws when it cannot be read. */
+  findPullRequestByHead(input: PushBranchInput): Promise<FoundPr | null>;
   getIssue(ref: IssueRef): Promise<Issue>;
   /** Lists the repository's open issues (issue #67) — the issue-number
    *  picker's data source. No paging/search-term filter/cache: `--limit 100`,
@@ -279,6 +290,21 @@ export class GhCliClient implements GitHubClient {
       stdio: ["ignore", "pipe", "pipe"],
     }).toString();
     return (JSON.parse(output) as { state: PrState }).state;
+  }
+
+  async findPullRequestByHead(input: PushBranchInput): Promise<FoundPr | null> {
+    const output = execFileSync(
+      "gh",
+      ["pr", "list", "--head", input.branch, "--state", "all", "--limit", "10", "--json", "number,state,headRefOid,isCrossRepository"],
+      { cwd: input.path, env: await this.envFor(input.path), stdio: ["ignore", "pipe", "pipe"] },
+    ).toString();
+    // --head matches the branch name alone: a fork's PR from a same-named branch is not the board's
+    const prs = (
+      JSON.parse(output) as Array<{ number: number; state: PrState; headRefOid: string; isCrossRepository: boolean }>
+    ).filter((p) => !p.isCrossRepository);
+    // gh does not document its order: an open PR wins, then a merged one, over closed ones on the same branch
+    const pr = prs.find((p) => p.state === "OPEN") ?? prs.find((p) => p.state === "MERGED") ?? prs[0];
+    return pr ? { number: pr.number, state: pr.state, head: pr.headRefOid } : null;
   }
 
   async getIssue(ref: IssueRef): Promise<Issue> {

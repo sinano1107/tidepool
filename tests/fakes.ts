@@ -22,6 +22,7 @@ import { type ExecutionSetting, type ExecutionSettingRow, SEED_EXECUTION_SETTING
 import type {
   CiStatus,
   CreatePrInput,
+  FoundPr,
   GitHubClient,
   Issue,
   IssueRef,
@@ -439,6 +440,7 @@ export class FakeGitHubClient implements GitHubClient {
   private mergeFailures = new Map<number, Error>();
   private stateReadFailures = new Map<number, Error>();
   private failure: Error | null = null;
+  private findFailure: Error | null = null;
   private pushFailure: Error | null = null;
   private issueFailure: Error | null = null;
   private issueFailures = new Map<number, Error>();
@@ -526,6 +528,28 @@ export class FakeGitHubClient implements GitHubClient {
   /** Moves one PR's head — a push onto its branch (ADR 0231 決定1). */
   scriptHead(number: number, head: string): void {
     this.heads.set(number, head);
+  }
+
+  /** head で探す読み(ADR 0241 決定4)。盤面が開いた PR も、scriptPullRequestOnBranch で置いた PR も見つかる。 */
+  async findPullRequestByHead(input: PushBranchInput): Promise<FoundPr | null> {
+    if (this.findFailure) throw this.findFailure;
+    for (const [number, branch] of this.prBranches) {
+      if (branch === input.branch) return { number, state: this.stateOf(number), head: this.headOf(number) };
+    }
+    return null;
+  }
+
+  /** GitHub にだけ、そのブランチの PR がある形 —— 作成の後・記録の前に盤面が落ちた跡。状態は
+   *  scriptMergedOutside / scriptClosedOutside で動かす。 */
+  scriptPullRequestOnBranch(branch: string): number {
+    const number = this.nextNumber++;
+    this.prBranches.set(number, branch);
+    return number;
+  }
+
+  /** head で探す読みを失敗させる。 */
+  scriptFindFailure(err: Error): void {
+    this.findFailure = err;
   }
 
   /** Makes the combined read on one PR come back unreadable — gh exited

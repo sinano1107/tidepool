@@ -15,6 +15,7 @@ import {
   landingSurface,
   MERGE_QUESTION_OPTIONS,
   PR_PROMOTION_FAILURE_OPTIONS,
+  recordPrNumber,
   recordPrOpened,
   registerMergeQuestion,
   registerTask,
@@ -784,20 +785,49 @@ export function createLanding(deps: LandingDeps): Landing {
             prNumber: task.pr_number,
           };
         }
+        // ADR 0241 決定4: 作る前に同じタスクブランチの PR を探す —— 作成の後・記録の前に落ちた盤面が2つ目を作らない
+        const found = await deps.github.findPullRequestByHead({ path: workspace.path, branch: taskBranch(task.id) });
+        if (found && found.state !== "OPEN") {
+          const observed = { kind: OBSERVED[found.state], pr_number: found.number };
+          deps.db.transaction(() => {
+            recordPrNumber(deps.db, task.id, found.number);
+            retireAutoMerge(deps.db, task.id, observed, deps.clock.now());
+          })();
+          if (found.state === "MERGED") {
+            return failed(
+              task,
+              "pull_request_already_merged",
+              `PR #${found.number} on ${taskBranch(task.id)} is already merged, but the branch still has content to land`,
+              excludePrPromotionQuestionId,
+            );
+          }
+          return {
+            kind: "failed",
+            reason: "pull_request_closed",
+            error: `PR #${found.number} on ${taskBranch(task.id)} was closed outside the board, so no PR is opened`,
+          };
+        }
         // profile を読むのは面を開く時点だけ —— 開いている PR への push は読まない(ADR 0217 決定3)
         const resolved = readAuthority(task, deps.clock.now());
         if (!resolved) return agentUnavailable(task, excludePrPromotionQuestionId);
-        const { title } = await contentSourceFor(task, deps.github, () => workspace?.path).expand();
         const sha = taskBranchTip(workspace, task.id);
-        let pr: Awaited<ReturnType<GitHubClient["createPullRequest"]>>;
+        let prNumber: number;
         try {
-          pr = await deps.github.createPullRequest({
-            path: workspace.path,
-            branch: taskBranch(task.id),
-            base: protectedBranch(workspace),
-            title,
-            body: prBody(task.handoff_doc, task.github_issue_number),
-          });
+          if (found) {
+            // 見つけた開いている PR にも、作るときと同じく今のタスクブランチを押してから記録する —— 落ちた後に帰った修理も載る
+            await deps.github.pushBranch({ path: workspace.path, branch: taskBranch(task.id) });
+            prNumber = found.number;
+          } else {
+            const { title } = await contentSourceFor(task, deps.github, () => workspace?.path).expand();
+            const created = await deps.github.createPullRequest({
+              path: workspace.path,
+              branch: taskBranch(task.id),
+              base: protectedBranch(workspace),
+              title,
+              body: prBody(task.handoff_doc, task.github_issue_number),
+            });
+            prNumber = created.number;
+          }
         } finally {
           rebaselineRef(
             deps.db,
@@ -808,7 +838,7 @@ export function createLanding(deps: LandingDeps): Landing {
         recordPrOpened(
           deps.db,
           task,
-          pr.number,
+          prNumber,
           sha,
           resolveTaskAgent(
             task,
@@ -821,7 +851,7 @@ export function createLanding(deps: LandingDeps): Landing {
           "worker",
         );
         retireFailures(task.id, excludePrPromotionQuestionId);
-        return { kind: "landed", form: "pull_request_opened", prNumber: pr.number };
+        return { kind: "landed", form: "pull_request_opened", prNumber };
       } catch (error) {
         const landed = getTask(deps.db, task.id);
         if (!landedBefore && landed && taskHasLanded(deps.db, task.id)) {

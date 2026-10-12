@@ -1905,6 +1905,12 @@ function queuePendingAutoMerge(db: Db, taskId: string, prNumber: number): void {
   );
 }
 
+/** The task's PR number — set when the board opens its PR, and when landing finds one already on the
+ *  task branch (ADR 0241 決定4). Callers pair it with the event that says how the PR was met. */
+export function recordPrNumber(db: Db, taskId: string, prNumber: number): void {
+  db.prepare("UPDATE tasks SET pr_number = ? WHERE id = ?").run(prNumber, taskId);
+}
+
 /** Records that a completed task's work opened a PR (issue #11): pr_number is
  *  set once, paired with a pr_opened event — the invariant lives here, not in
  *  the MCP layer's PR side effect, per ADR 0002. The merge dial then decides
@@ -1934,7 +1940,7 @@ export function recordPrOpened(
   origin: EventOrigin,
 ): void {
   db.transaction(() => {
-    db.prepare("UPDATE tasks SET pr_number = ? WHERE id = ?").run(prNumber, task.id);
+    recordPrNumber(db, task.id, prNumber);
     appendEvent(db, {
       taskId: task.id,
       workerId,
