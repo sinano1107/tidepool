@@ -1063,7 +1063,8 @@ function undeliveredMergeBacks(
 /** ADR 0240 決定4: workspace の quarantine の受理の検査がやり直す merge back。届いていない done の work が無ければ何もしない
  *  (ネットワークにも出ない)。あれば、走っている session(後始末が未了のものを含む)が無いことを読んでから(ADR 0064)、
  *  後始末と同じ fetch → 帰り先へ merge → 休止位置へ戻す、を踏む。conflict は merge を取り消して休止位置へ戻し、出口を
- *  2つ示して投げる(ADR 0239 帰結)。盤面が書いた ref は撮り直す(ADR 0064 決定4)。 */
+ *  2つ示して投げる(ADR 0239 帰結)。merge で動かした帰り先は撮り直す(ADR 0064 決定4)。保護ブランチは撮り直さない ——
+ *  purely-local では休止は ref を書かず、撮り直すと帯域外の移動を記録に飲み込む(ADR 0103)。 */
 export async function redoMergeBacks(
   db: Db,
   workspace: WorkspaceConfig,
@@ -1102,7 +1103,6 @@ export async function redoMergeBacks(
     rebaselineRef(db, workspace, `refs/heads/${next.target}`);
   }
   parkOnProtectedBranch(workspace);
-  rebaselineRef(db, workspace, `refs/heads/${protectedBranch(workspace)}`);
 }
 
 /** ADR 0103 決定1: 着地の時点で保護ブランチが**盤面自身の記録から外れて**動いていた
