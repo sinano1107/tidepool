@@ -12,7 +12,6 @@ import { PRIORITY_FIELD_DESCRIPTION, tierFieldDescriptions } from "./execution-s
 import type { GitHubClient } from "./github.js";
 import type { GitHubAuth } from "./github-auth.js";
 import { assertMemoryReferencesKnown, assertReviewersKnown, assertWorkspaceKnown } from "./human-verbs.js";
-import type { Landing } from "./landing.js";
 import {
   browseMemory,
   defineMemoryBranch,
@@ -118,7 +117,6 @@ export interface McpDeps {
   db: Db;
   slot: Slot;
   clock: Clock;
-  landing: Landing;
   /** 盤面側 supervisor(ADR 0099 決定2)。最終 verb の着地後、後始末はこの
    *  **回収済み観測**の後ろでしか走らない(ADR 0109 決定1)。Absent → 容器を
    *  持たない盤面なので、観測は即座に解決したものとして扱う。 */
@@ -333,7 +331,6 @@ function runReleasingVerb(
       slot: deps.slot,
       resolve: buildWorkspaceResolver(deps.resolveWorkspace, deps.workspace),
       githubAuth: deps.githubAuth,
-      landing: deps.landing,
       heldForContainment: deps.heldForContainment,
       pollNow: deps.pollNow,
     };

@@ -2,7 +2,6 @@ import { beforeEach, expect, it, vi } from "vitest";
 import { boardHalts } from "../src/board-halt.js";
 import { type Db, openDb } from "../src/db.js";
 import { quarantineChecks, submitAnswer } from "../src/human-verbs.js";
-import type { Landing } from "../src/landing.js";
 import { FAILED_TEARDOWN_QUESTION_TITLE, openQuarantineQuestion } from "../src/quarantine.js";
 import { Slot } from "../src/slot.js";
 import {
@@ -51,8 +50,8 @@ interface Fixture {
   task: Task;
   ws: WorkspaceConfig;
   deps: TeardownDeps;
-  landing: Landing;
-  landed: string[];
+  /** 後始末が撃った pickup の契機 —— 着地はこの契機が突く収束が撃つ(ADR 0241 決定5)。 */
+  triggered: string[];
   /** 盤面のコードが直って再デプロイされた。 */
   repair: () => void;
 }
@@ -99,14 +98,7 @@ async function session(route: "complete" | "cap" | "watchdog" = "complete"): Pro
   slot.enterTeardown();
 
   let broken = true;
-  const landed: string[] = [];
-  const landing: Landing = {
-    ...unusedLanding,
-    async land(t) {
-      landed.push(t.id);
-      return { kind: "landed", form: "local_merge_question" };
-    },
-  };
+  const triggered: string[] = [];
   const deps: TeardownDeps = {
     db,
     clock,
@@ -115,10 +107,9 @@ async function session(route: "complete" | "cap" | "watchdog" = "complete"): Pro
       if (broken) throw new Error("resolve exploded");
       return ws;
     },
-    landing,
-    pollNow: () => {},
+    pollNow: () => triggered.push("pollNow"),
   };
-  return { db, clock, slot, task, ws, deps, landing, landed, repair: () => (broken = false) };
+  return { db, clock, slot, task, ws, deps, triggered, repair: () => (broken = false) };
 }
 
 /** 立っている落ちた後始末の question。 */
@@ -129,7 +120,7 @@ const answer = (f: Fixture, question: Task, deps: TeardownDeps = f.deps) =>
     {
       db: f.db,
       pollNow() {},
-      landing: f.landing,
+      landing: unusedLanding,
       quarantineChecks: quarantineChecks({
         db: f.db,
         teardownQuarantine: (taskId: string) => acceptTeardownQuarantine(deps, taskId),
@@ -220,7 +211,7 @@ it("早期 return では立たない —— 枠の主が変わった / 梯子の
   expect([questions(changed.db), questions(held.db)]).toEqual([[], []]);
 });
 
-it("受理の検査が通れば question が閉じ、tree rule・merge-back・slot 解放・着地まで完走する", async () => {
+it("受理の検査が通れば question が閉じ、tree rule・merge-back・slot 解放・着地を撃つ収束を突く pickup の契機まで完走する", async () => {
   const f = await session();
   await runTeardown(f.deps, f.task.id, teardownStep(f.db, f.task.id));
   const question = openQuestion(f);
@@ -234,7 +225,7 @@ it("受理の検査が通れば question が閉じ、tree rule・merge-back・sl
   expect(git(f.ws.path, "show", `task/${f.task.id}:deliverable.txt`)).toBe("the real work");
   expect(git(f.ws.path, "log", "--oneline", `task/${f.task.id}`)).not.toContain("WIP");
   expect(f.slot.currentTaskId).toBeNull();
-  expect(f.landed).toEqual([f.task.id]);
+  expect(f.triggered).toEqual(["pollNow"]);
 });
 
 it("受理の検査が投げれば回答が拒まれ、question は開いたまま、例外本文がメッセージに載る", async () => {
@@ -263,5 +254,5 @@ it("再起動を跨いだ受理 —— 枠が空でも tree rule が走り、枠
   expect(getTask(f.db, question.id)?.status).toBe("done");
   expect(git(f.ws.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main");
   expect(restarted.currentTaskId).toBeNull();
-  expect(f.landed).toEqual([f.task.id]);
+  expect(f.triggered).toEqual(["pollNow"]);
 });

@@ -20,6 +20,7 @@ describe("scheduler の pickup が task.workspace を解決する", () => {
     const slot = new Slot();
     const scheduler = startScheduler({
       retrospectiveCalls: noRetrospectiveCalls,
+      converge: async () => [],
       db,
       clock,
       slot,
@@ -55,6 +56,7 @@ describe("scheduler の pickup が task.workspace を解決する", () => {
     const slot = new Slot();
     const scheduler = startScheduler({
       retrospectiveCalls: noRetrospectiveCalls,
+      converge: async () => [],
       db,
       clock,
       slot,
@@ -88,6 +90,7 @@ describe("scheduler の pickup が task.workspace を解決する", () => {
     const slot = new Slot();
     const scheduler = startScheduler({
       retrospectiveCalls: noRetrospectiveCalls,
+      converge: async () => [],
       db,
       clock,
       slot,

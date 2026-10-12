@@ -16,8 +16,11 @@ it("poll が封じ込め検査の await に居る間に登録されたタスク�
   const clock = new FakeClock();
   const worker = new ScriptedWorker(clock);
   let release!: (capability: ContainmentCapability) => void;
+  let entered!: () => void;
+  const inContainment = new Promise<void>((resolve) => (entered = resolve));
   const scheduler = startScheduler({
     retrospectiveCalls: noRetrospectiveCalls,
+    converge: async () => [],
     db,
     clock,
     slot: new Slot(),
@@ -25,11 +28,15 @@ it("poll が封じ込め検査の await に居る間に登録されたタスク�
     containers: fakeContainers(),
     onSpawnFailed: () => {},
     taskExecutionCandidates: implicitTaskExecutionCandidates(db),
-    containment: () => new Promise((resolve) => (release = resolve)),
+    containment: () => {
+      entered();
+      return new Promise((resolve) => (release = resolve));
+    },
   });
 
-  // 空のキューで poll を撃ち、封じ込め検査の await で止める
+  // 空のキューで poll を撃ち、封じ込め検査の await で止める(poll は収束の回の後に始まる —— ADR 0241 決定5)
   scheduler.pollNow();
+  await inContainment;
   // その poll の最中に登録が届く。登録が撃つ契機は inFlight で捨てられる
   const task = registerTask(
     db,

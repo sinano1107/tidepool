@@ -91,6 +91,7 @@ it("a failed Codex Harness preflight skips that route and starts a Claude-route 
   ]);
   const scheduler = startScheduler({
     retrospectiveCalls: noRetrospectiveCalls,
+    converge: async () => [],
     db,
     clock,
     slot: new Slot(),

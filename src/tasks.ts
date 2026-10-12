@@ -599,7 +599,7 @@ export function countUnsettledTasksReferencing(
 }
 
 /** 完了タスクが一度着地した(PR を開いた、local merge question が立った、着地する内容が無かった)SQL 述語。
- *  再発火(`relandAncestors`)が PR を持たない祖先を飛ばす線と、workspace の削除の扉が数える線は、これを共有する。 */
+ *  着地を待つ完了タスクの数えと、workspace の削除の扉が数える線は、これを共有する。 */
 export function taskHasLandedSql(taskRef: string): string {
   return `(EXISTS (SELECT 1 FROM events
                     WHERE task_id = ${taskRef} AND kind IN ('pr_opened', 'nothing_to_land'))

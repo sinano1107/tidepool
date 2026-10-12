@@ -68,14 +68,10 @@ import type { WorkerAdapter, WorkerExit } from "../src/worker.js";
 import { tempDir } from "./temp-dir.js";
 
 /** Required landing dependency for tests whose exercised door cannot reach a
- * landing path. A mistaken land call fails loudly; ancestor re-fire is a
- * legitimate no-op when the fixture has no completed work ancestor. */
+ * landing path. A mistaken convergence (a promotion retry) fails loudly. */
 export const unusedLanding: Landing = {
-  async land() {
+  async converge() {
     throw new Error("unexpected landing call");
-  },
-  async relandAncestors() {
-    return [];
   },
   async observePullRequestOutcome() {
     return false;

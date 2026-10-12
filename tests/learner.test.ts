@@ -229,6 +229,7 @@ function scheduledBoard(options: { candidates?: TaskExecutionCandidates; workspa
   const slot = new Slot();
   const scheduler = startScheduler({
     retrospectiveCalls: noRetrospectiveCalls,
+    converge: async () => [],
     db,
     clock,
     slot,

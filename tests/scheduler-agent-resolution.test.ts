@@ -16,6 +16,7 @@ it.each(UNRESOLVABLE_AGENT)("先頭の assignee の候補解決が %s で倒れ�
   const candidates = implicitTaskExecutionCandidates(db);
   const scheduler = startScheduler({
     retrospectiveCalls: noRetrospectiveCalls,
+    converge: async () => [],
     db,
     clock,
     slot: new Slot(),
@@ -59,6 +60,7 @@ it.each(UNRESOLVABLE_AGENT)("openai の観測後に引き直した候補解決�
   let driftedCalls = 0;
   const scheduler = startScheduler({
     retrospectiveCalls: noRetrospectiveCalls,
+    converge: async () => [],
     db,
     clock,
     slot: new Slot(),
@@ -107,6 +109,7 @@ it("openai の観測後に引き直した候補解決が解決できない agent
   let calls = 0;
   const scheduler = startScheduler({
     retrospectiveCalls: noRetrospectiveCalls,
+    converge: async () => [],
     db,
     clock,
     slot: new Slot(),

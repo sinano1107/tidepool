@@ -529,8 +529,8 @@ it("PR promotion の retry が失敗したら question を未決着のまま残�
         pollNow: () => {},
         landing: {
           ...unusedLanding,
-          async land() {
-            return { kind: "failed", reason: "promotion_failed", error: "retry failed" };
+          async converge() {
+            return [{ taskId: completedTask.id, verdict: { kind: "failed", reason: "promotion_failed", error: "retry failed" } }];
           },
         },
       },

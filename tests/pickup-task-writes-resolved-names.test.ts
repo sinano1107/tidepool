@@ -90,6 +90,7 @@ describe("scheduler の pickup が既定の名前を書く先", () => {
     const clock = new FakeClock();
     const scheduler = startScheduler({
       retrospectiveCalls: noRetrospectiveCalls,
+      converge: async () => [],
       db,
       clock,
       slot: new Slot(),

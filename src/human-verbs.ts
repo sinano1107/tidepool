@@ -9,7 +9,7 @@ import type { ContainmentCheck } from "./containment.js";
 import type { Db } from "./db.js";
 import { DomainError } from "./domain-error.js";
 import type { DraftClient } from "./draft.js";
-import { appendEvent, type EventOrigin } from "./events.js";
+import { appendEvent, type EventOrigin, latestEventOfTask } from "./events.js";
 import {
   type AddTierAmendment,
   applyExecutionSettingsChange,
@@ -676,9 +676,18 @@ function assertLandingAllowed(db: Db, landingTaskId: string): void {
   );
 }
 
-function promotionRetryError(verdict: LandingVerdict): string | undefined {
+/** retry の受理・拒否(ADR 0241 決定5)。verdict が無いのは、その回の収束がこの根を扱わなかったとき —— 盤面の外で
+ *  閉じた PR の根は候補から外れる(ADR 0241 決定3)。 */
+function promotionRetryError(db: Db, taskId: string, verdict: LandingVerdict | undefined): string | undefined {
+  if (!verdict) {
+    const closed = latestEventOfTask(db, taskId, "pr_close_observed");
+    return closed
+      ? `PR #${closed.payload.pr_number} was closed outside the board, so task/${taskId} is not pushed to it`
+      : `task ${taskId} is no longer awaiting PR promotion`;
+  }
   switch (verdict.kind) {
     case "landed":
+    case "up_to_date":
     // 運ぶものが無いのは人間に判断を求めない事実で、retry を選んだ回答はそのまま受理する(ADR 0073 / issue #1725)
     case "nothing_to_land":
       return undefined;
@@ -688,13 +697,6 @@ function promotionRetryError(verdict: LandingVerdict): string | undefined {
       return verdict.reason === "attached_children"
         ? `review still running: ${verdict.count} attached child task(s) unsettled`
         : `cannot land yet: ${verdict.count} objection(s) raised in this triage await commit`;
-    case "not_applicable":
-      return {
-        not_work: "only work tasks can be promoted",
-        ancestor_branch: "task completion lands on an ancestor task branch, not a PR",
-        // retry は答えている question を渡すので断念の守りを外す —— この文言は型を網羅するためだけにある
-        promotion_abandoned: "PR promotion was abandoned",
-      }[verdict.reason];
   }
 }
 
@@ -745,7 +747,6 @@ export async function completeThroughHumanDoor(
     assertUnsettledNotInProgress(task, "completed");
     const done = completeTask(deps.db, task, handoff, HUMAN_WORKER_ID, now(), origin);
     deps.pollNow();
-    await deps.landing.relandAncestors(done);
     return { ok: true, value: presentTask(deps.db, done, deps.defaultAgentName, deps.auditorName) };
   } catch (err) {
     if (err instanceof DomainError) {
@@ -807,7 +808,6 @@ export async function cancelThroughHumanDoor(
       origin,
     );
     deps.pollNow();
-    await deps.landing.relandAncestors(task);
     return { ok: true, value: presentTask(deps.db, task, deps.defaultAgentName, deps.auditorName) };
   } catch (err) {
     if (err instanceof DomainError) {
@@ -912,11 +912,8 @@ export async function submitAnswer(
   const wantsPromotionRetry =
     promotionTaskId !== null && answers[0] === PR_PROMOTION_FAILURE_OPTIONS[0];
   if (wantsPromotionRetry) {
-    const promotionTask = getTask(deps.db, promotionTaskId);
-    if (!promotionTask) {
-      throw new DomainError("PR promotion can no longer be retried");
-    }
-    const error = promotionRetryError(await deps.landing.land(promotionTask, task.id));
+    const verdicts = await deps.landing.converge({ answering: task.id });
+    const error = promotionRetryError(deps.db, promotionTaskId, verdicts.find((root) => root.taskId === promotionTaskId)?.verdict);
     if (error) throw new DomainError(error);
   }
 
@@ -1098,12 +1095,6 @@ export async function submitAnswer(
         promotionTaskId,
         now(),
       );
-    }
-    // abandon は失敗タスクの木を丸ごと cancel する — そこに付帯子が居たなら、待って
-    // いた祖先の着地はここで起きる(ADR 0092 決定3: cancel も決着)
-    if (task.question_cancel_option !== null && answers[0] === task.question_cancel_option) {
-      const abandoned = task.parent_id ? getTask(deps.db, task.parent_id) : undefined;
-      if (abandoned) await deps.landing.relandAncestors(abandoned);
     }
     // 受理された確認回答が slot を解放する唯一の門(ADR 0099 決定3)。空の再観測は
     // 上の検証節で済んでいる — ここは効果の側で、slot-release tree rule はこの

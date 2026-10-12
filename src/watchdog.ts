@@ -4,7 +4,6 @@ import { quarantineContainment } from "./containment.js";
 import type { Db } from "./db.js";
 import { appendEvent, getEvent, latestEventOfTask, type RowRefusal } from "./events.js";
 import type { GitHubAuth } from "./github-auth.js";
-import type { Landing } from "./landing.js";
 import type { ProcessContainers } from "./process-container.js";
 import { openQuarantineValues } from "./quarantine.js";
 import type { Slot } from "./slot.js";
@@ -294,10 +293,6 @@ export function startWatchdog(deps: {
   /** ADR 0093: 完了済み session の後始末が確認回答で解放されるとき、merge-back の
    *  帰り先を決める fetch がここの token を要る。 */
   githubAuth?: GitHubAuth;
-  /** 完了済み session の後始末がここを通る(確認回答で解放される経路)—— 着地は
-   *  後始末の中で走るので(ADR 0109 決定1)、これが無いと梯子の底へ落ちた完了は
-   *  merge-back まで進んだきり PR 昇格 / 着地が永久に起きない。 */
-  landing?: Landing;
   pollNow: () => void;
   config: WatchdogConfig;
 }): Watchdog {
@@ -312,7 +307,6 @@ export function startWatchdog(deps: {
     slot,
     resolve,
     githubAuth: deps.githubAuth,
-    landing: deps.landing,
     // watchdog が撃つ後始末も、梯子の底で保留中の session を遅れた回収済み観測で解放しない(ADR 0099 決定3)
     heldForContainment,
     pollNow: deps.pollNow,

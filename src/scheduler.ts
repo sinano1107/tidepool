@@ -213,7 +213,8 @@ function createResumeTimers(clock: Clock, onFire: () => void) {
 export interface Scheduler {
   stop: () => void;
   /** Immediate poll, fired by every pickup trigger (CONTEXT.md「Pickup trigger」/ ADR 0119).
-   *  Same poll as the hourly tick: a no-op while the slot is occupied. */
+   *  Same poll as the hourly tick: a no-op while the slot is occupied. It first pokes the landing
+   *  convergence and judges pickup only after that pass (ADR 0241 決定5). */
   pollNow: () => void;
 }
 
@@ -281,6 +282,10 @@ export function startScheduler(deps: {
   agents?: ListAgentTiers;
   /** 振り返り Board call(帰責・起草・配分評価、ADR 0172): 発火は poll の sweep だけ。 */
   retrospectiveCalls: RetrospectiveCallDeps;
+  /** 着地の収束(ADR 0241 決定5): pickup の契機はまず収束を突き、pickup はその回が終わってから判定する ——
+   *  pickup の fetch / checkout が着地の push と同じ checkout で並走しない。**必須**なのは、配線漏れが着地の
+   *  撃ち漏れになるからである(ADR 0119 決定3 と同じ理由)。 */
+  converge: () => Promise<unknown>;
   /** 表示時翻訳と同じ Board call(ADR 0175 決定1): 注入の関連 leaf を引く英語の view を pickup で作る。 */
   translationClient?: TranslationClient;
 }): Scheduler {
@@ -307,6 +312,7 @@ export function startScheduler(deps: {
     agents,
     retrospectiveCalls,
     translationClient,
+    converge,
   } = deps;
   let inFlight = false;
   const resumeTimer = createResumeTimers(clock, pollNow);
@@ -770,13 +776,17 @@ export function startScheduler(deps: {
     afterPoll?.();
   }
 
+  let stopped = false;
   function pollNow(): void {
-    void poll();
+    // 収束の側は契機を捨てない(列が束ねる)。捨てるのは poll の側の inFlight だけ(ADR 0119 決定5)。
+    // 収束を待つ間に盤面が止まれば、閉じた DB を読まない
+    void converge().then(() => (stopped ? undefined : poll()));
   }
 
   const cancel = clock.setInterval(pollNow, HOURLY);
   return {
     stop: () => {
+      stopped = true;
       cancel();
       resumeTimer.cancel();
     },
