@@ -691,6 +691,96 @@ it("PR 作成の失敗は閉じた理由で返して failure question を立て�
   );
 });
 
+// ADR 0241 決定4: PR は作る前に、同じタスクブランチの PR を探す
+it("GitHub に同じ head の開いた PR がある根の着地は PR を作らず、その番号を記録して merge question を開く", async () => {
+  const { workspace } = await makeRemoteBackedWorkspace("landing-find-open-pr");
+  const { db, clock } = await openBoard();
+  const github = new FakeGitHubClient();
+  const landing = autoMerging(db, clock, workspace, github, () => profile("escalate"));
+  const work = landingWork(db, clock);
+  git(workspace.path, "checkout", "-b", `task/${work.id}`);
+  commitWork(workspace.path, "feature.txt", "ready\n");
+  const existing = github.scriptPullRequestOnBranch(`task/${work.id}`);
+
+  await expect(landing.land(work)).resolves.toEqual({ kind: "landed", form: "pull_request_opened", prNumber: existing });
+  expect(github.requests).toEqual([]);
+  expect(getTask(db, work.id)?.pr_number).toBe(existing);
+  expect(mergeQuestions(db).map(({ pr }) => pr)).toEqual([existing]);
+});
+
+it("PR の作成の後・記録の前に盤面が落ちた根(GitHub にだけ PR がある)の着地は、作成を呼ばず失敗 question も立てない", async () => {
+  const { workspace } = await makeRemoteBackedWorkspace("landing-find-unrecorded-pr");
+  const { db, clock } = await openBoard();
+  const github = new FakeGitHubClient();
+  const landing = createLanding({ defaultAgentName: "tako", db, clock, workspace, github });
+  const work = landingWork(db, clock);
+  git(workspace.path, "checkout", "-b", `task/${work.id}`);
+  commitWork(workspace.path, "feature.txt", "ready\n");
+  github.scriptPullRequestOnBranch(`task/${work.id}`);
+
+  await landing.land(work);
+
+  expect(github.requests).toEqual([]);
+  expect(promotionFailures(db, work.id)).toEqual([]);
+});
+
+it("GitHub に同じ head の merge 済み PR がある根の着地は、番号と merge の観測を刻み、失敗 question を1枚立てる", async () => {
+  const { workspace } = await makeRemoteBackedWorkspace("landing-find-merged-pr");
+  const { db, clock } = await openBoard();
+  const github = new FakeGitHubClient();
+  const landing = createLanding({ defaultAgentName: "tako", db, clock, workspace, github });
+  const work = landingWork(db, clock);
+  git(workspace.path, "checkout", "-b", `task/${work.id}`);
+  commitWork(workspace.path, "feature.txt", "ready\n");
+  const merged = github.scriptPullRequestOnBranch(`task/${work.id}`);
+  github.scriptMergedOutside(merged);
+
+  await expect(landing.land(work)).resolves.toMatchObject({ kind: "failed", reason: "pull_request_already_merged" });
+  expect(github.requests).toEqual([]);
+  expect(getTask(db, work.id)?.pr_number).toBe(merged);
+  expect(boardEvents(db, work.id, "pr_merge_observed")).toEqual([
+    { worker_id: BOARD_WORKER_ID, origin: "board", payload: { kind: "pr_merge_observed", pr_number: merged } },
+  ]);
+  expect(promotionFailures(db, work.id)).toHaveLength(1);
+});
+
+it("GitHub に同じ head の閉じた PR がある根の着地は、番号と閉じた観測を刻み、PR を作らず失敗 question も立てない", async () => {
+  const { workspace } = await makeRemoteBackedWorkspace("landing-find-closed-pr");
+  const { db, clock } = await openBoard();
+  const github = new FakeGitHubClient();
+  const landing = createLanding({ defaultAgentName: "tako", db, clock, workspace, github });
+  const work = landingWork(db, clock);
+  git(workspace.path, "checkout", "-b", `task/${work.id}`);
+  commitWork(workspace.path, "feature.txt", "ready\n");
+  const closed = github.scriptPullRequestOnBranch(`task/${work.id}`);
+  github.scriptClosedOutside(closed);
+
+  await expect(landing.land(work)).resolves.toMatchObject({ kind: "failed", reason: "pull_request_closed" });
+  expect(github.requests).toEqual([]);
+  expect(getTask(db, work.id)?.pr_number).toBe(closed);
+  expect(boardEvents(db, work.id, "pr_close_observed")).toEqual(closeObserved(closed));
+  expect(promotionFailures(db, work.id)).toEqual([]);
+});
+
+it("同じ head の PR を探す読み取りが失敗した根の着地は、PR を作らず失敗 question に落ちる", async () => {
+  const { workspace } = await makeRemoteBackedWorkspace("landing-find-failure");
+  const { db, clock } = await openBoard();
+  const github = new FakeGitHubClient();
+  github.scriptFindFailure(new Error("gh pr list failed"));
+  const landing = createLanding({ defaultAgentName: "tako", db, clock, workspace, github });
+  const work = landingWork(db, clock);
+  git(workspace.path, "checkout", "-b", `task/${work.id}`);
+  commitWork(workspace.path, "feature.txt", "ready\n");
+
+  await expect(landing.land(work)).resolves.toEqual({
+    kind: "failed",
+    reason: "promotion_failed",
+    error: "gh pr list failed",
+  });
+  expect(github.requests).toEqual([]);
+  expect(promotionFailures(db, work.id)).toHaveLength(1);
+});
+
 it("workspace 不在は閉じた理由で返す", async () => {
   const { db, clock } = await openBoard();
   const landing = createLanding({ defaultAgentName: "tako", db, clock, github: null });

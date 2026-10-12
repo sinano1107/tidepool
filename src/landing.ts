@@ -784,32 +784,57 @@ export function createLanding(deps: LandingDeps): Landing {
             prNumber: task.pr_number,
           };
         }
+        // ADR 0241 決定4: 作る前に同じタスクブランチの PR を探す —— 作成の後・記録の前に落ちた盤面が2つ目を作らない
+        const found = await deps.github.findPullRequestByHead({ path: workspace.path, branch: taskBranch(task.id) });
+        if (found && found.state !== "OPEN") {
+          const observed = { kind: OBSERVED[found.state], pr_number: found.number };
+          deps.db.transaction(() => {
+            deps.db.prepare("UPDATE tasks SET pr_number = ? WHERE id = ?").run(found.number, task.id);
+            retireAutoMerge(deps.db, task.id, observed, deps.clock.now());
+          })();
+          if (found.state === "MERGED") {
+            return failed(
+              task,
+              "pull_request_already_merged",
+              `PR #${found.number} on ${taskBranch(task.id)} is already merged, but the branch still has content to land`,
+              excludePrPromotionQuestionId,
+            );
+          }
+          return {
+            kind: "failed",
+            reason: "pull_request_closed",
+            error: `PR #${found.number} on ${taskBranch(task.id)} was closed outside the board, so no PR is opened`,
+          };
+        }
         // profile を読むのは面を開く時点だけ —— 開いている PR への push は読まない(ADR 0217 決定3)
         const resolved = readAuthority(task, deps.clock.now());
         if (!resolved) return agentUnavailable(task, excludePrPromotionQuestionId);
-        const { title } = await contentSourceFor(task, deps.github, () => workspace?.path).expand();
-        const sha = taskBranchTip(workspace, task.id);
-        let pr: Awaited<ReturnType<GitHubClient["createPullRequest"]>>;
-        try {
-          pr = await deps.github.createPullRequest({
-            path: workspace.path,
-            branch: taskBranch(task.id),
-            base: protectedBranch(workspace),
-            title,
-            body: prBody(task.handoff_doc, task.github_issue_number),
-          });
-        } finally {
-          rebaselineRef(
-            deps.db,
-            workspace,
-            remoteTrackingRef(taskBranch(task.id)),
-          );
+        let pr = found && { number: found.number, sha: found.head };
+        if (!pr) {
+          const { title } = await contentSourceFor(task, deps.github, () => workspace?.path).expand();
+          const sha = taskBranchTip(workspace, task.id);
+          try {
+            const created = await deps.github.createPullRequest({
+              path: workspace.path,
+              branch: taskBranch(task.id),
+              base: protectedBranch(workspace),
+              title,
+              body: prBody(task.handoff_doc, task.github_issue_number),
+            });
+            pr = { number: created.number, sha };
+          } finally {
+            rebaselineRef(
+              deps.db,
+              workspace,
+              remoteTrackingRef(taskBranch(task.id)),
+            );
+          }
         }
         recordPrOpened(
           deps.db,
           task,
           pr.number,
-          sha,
+          pr.sha,
           resolveTaskAgent(
             task,
             deps.defaultAgentName,
