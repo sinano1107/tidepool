@@ -626,6 +626,9 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
     defaultAgentName: worker.id,
     auditorName,
     isProtectedWorkspace: options.isProtectedWorkspace,
+    githubAuth: options.githubAuth,
+    // scheduler は後で組まれ、起動完了で解決される(pollNow と同じ遅延束縛)
+    pickupIdle: () => startedScheduler?.idle() ?? Promise.resolve(),
   });
   // ADR 0109 決定5: 後始末の未了は再起動をまたぐ事実である。in-memory の callback は
   // 盤面の crash を越えないので、行に残った未了をここで拾い、**容器機構の前提検査が
@@ -645,16 +648,16 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
     slot,
     resolve: buildWorkspaceResolver(options.resolveWorkspace, options.workspace),
     githubAuth: options.githubAuth,
-    landing,
     pollNow,
   };
   const unfinishedTeardown = sessionInTeardown(db);
+  let teardownRecovery: Promise<void> | undefined;
   if (unfinishedTeardown && runtimePreflight.available && openQuarantineValues(db, "failedTeardown").length === 0) {
     // 枠を握っているのは task ではなく session である(ADR 0109 決定2)—— 後始末が
     // 走り切るまで pickup は進まない
     slot.occupy(unfinishedTeardown.taskId);
     slot.enterTeardown();
-    void runTeardown(
+    teardownRecovery = runTeardown(
       teardownDeps,
       unfinishedTeardown.taskId,
       teardownStep(db, unfinishedTeardown.taskId),
@@ -709,6 +712,7 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
     agents: agentAdmin?.list,
     retrospectiveCalls,
     translationClient: options.translationClient,
+    converge: () => landing.converge(),
   });
   // an abandoned triage session may not pause pickup forever: the watchdog
   // closes it past the timeout, and reopening pickup is a "run now" trigger
@@ -728,7 +732,6 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
         workspace: options.workspace,
         resolveWorkspace: options.resolveWorkspace,
         githubAuth: options.githubAuth,
-        landing,
         pollNow,
         config: options.watchdog,
       })
@@ -866,7 +869,6 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
       db,
       slot,
       clock: options.clock,
-      landing,
       // ADR 0109 決定1: 最終 verb の後の解放は、この supervisor の回収済み観測の
       // 後ろでしか走らない
       containers,
@@ -937,6 +939,10 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
   // ADR 0119 決定4: 起動完了は pickup の契機である(毎時のティックは setInterval なので
   // 起動直後には走らない)。scheduler の生成直後ではなくここで撃つのは、pickup の封じ込め
   // 検査が上で bind した人間面の実ポートを撃ち、上の Harness の起動時検査と並走しないため。
+  //
+  // ADR 0240 決定3 / ADR 0241 決定5: 起動完了の契機は後始末の復旧の後に撃つ —— その収束が復旧した後始末の根を着地させ、
+  // 最初の pickup はその回が終わってから判定する。`runTeardown` は投げない
+  await teardownRecovery;
   startedScheduler = scheduler;
   pollNow();
 

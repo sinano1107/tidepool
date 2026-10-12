@@ -1,4 +1,6 @@
 import { afterEach, expect, it, vi } from "vitest";
+import { registerPrPromotionFailureQuestion } from "../src/landing.js";
+import { getTask } from "../src/tasks.js";
 import {
   addTaskChange,
   api,
@@ -76,9 +78,14 @@ it("human retry maps failure to a visible error, then lands while excluding the 
   );
   const repair = attachChild(t, task.id, "check the failed promotion", "human");
   await api(t.baseUrl, "POST", `/api/tasks/${repair.id}/complete`, {});
-  const failures = (await api(t.baseUrl, "GET", "/api/tasks")).json.filter(
-    (candidate: any) => candidate.question_pending_pr_promotion_task_id === task.id,
-  );
+  const promotionFailures = async () =>
+    (await api(t.baseUrl, "GET", "/api/tasks")).json.filter(
+      (candidate: any) => candidate.question_pending_pr_promotion_task_id === task.id,
+    );
+  // 失敗 question が開いている根を、収束は撃たない(ADR 0240 決定2 / ADR 0241)—— 積み上がった形は直接作る
+  expect(await promotionFailures()).toHaveLength(1);
+  registerPrPromotionFailureQuestion(t.db, getTask(t.db, task.id)!, "token expired", t.clock.now());
+  const failures = await promotionFailures();
   expect(failures).toHaveLength(2);
   const sibling = failures.find((candidate: any) => candidate.id !== first.id);
 

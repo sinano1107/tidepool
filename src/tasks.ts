@@ -599,15 +599,15 @@ export function countUnsettledTasksReferencing(
 }
 
 /** 完了タスクが一度着地した(PR を開いた、local merge question が立った、着地する内容が無かった)SQL 述語。
- *  再発火(`relandAncestors`)が PR を持たない祖先を飛ばす線と、workspace の削除の扉が数える線は、これを共有する。 */
+ *  着地を待つ完了タスクの数えと、workspace の削除の扉が数える線は、これを共有する。 */
 export function taskHasLandedSql(taskRef: string): string {
   return `(EXISTS (SELECT 1 FROM events
                     WHERE task_id = ${taskRef} AND kind IN ('pr_opened', 'nothing_to_land'))
            OR EXISTS (SELECT 1 FROM tasks WHERE question_pending_local_merge_task_id = ${taskRef}))`;
 }
 
-/** ADR 0234 決定1: 未決着タスクは自身の workspace に加えて、決着したときに着地し直す(ADR 0092 決定3 の
- *  再発火)完了した work の祖先の workspace も参照する。その祖先すべてから一度に子孫をたどり、各タスクを一度だけ数える。 */
+/** ADR 0234 決定1: 未決着タスクは自身の workspace に加えて、決着したときに着地し直す(収束 —— ADR 0241)
+ *  完了した work の祖先の workspace も参照する。その祖先すべてから一度に子孫をたどり、各タスクを一度だけ数える。 */
 function countUnsettledTasksReferencingWorkspace(db: Db, name: string): number {
   const row = db
     .prepare(

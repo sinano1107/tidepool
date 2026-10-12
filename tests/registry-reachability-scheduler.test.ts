@@ -38,6 +38,7 @@ it("次の pickup は spawn の手前で registry を refresh する(ADR 0052)",
   };
   const scheduler = startScheduler({
     retrospectiveCalls: noRetrospectiveCalls,
+    converge: async () => [],
     db,
     clock,
     slot: new Slot(),
@@ -72,6 +73,7 @@ it("registry に到達できない間は盤面全体の pickup を止め、確�
   const worker = new ScriptedWorker(clock);
   const scheduler = startScheduler({
     retrospectiveCalls: noRetrospectiveCalls,
+    converge: async () => [],
     db,
     clock,
     slot: new Slot(),

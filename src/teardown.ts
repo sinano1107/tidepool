@@ -3,7 +3,6 @@ import type { Db } from "./db.js";
 import { DomainError } from "./domain-error.js";
 import { quarantineFailedTeardown } from "./failed-teardown.js";
 import type { GitHubAuth } from "./github-auth.js";
-import type { Landing } from "./landing.js";
 import type { Slot } from "./slot.js";
 import { getTask, returnToQueueHead, type Task } from "./tasks.js";
 import {
@@ -24,11 +23,6 @@ export interface TeardownDeps {
    *  workspace 追跡の無い盤面なので tree rule は走らない。 */
   resolve: ((taskWorkspace: string | null) => WorkspaceConfig) | undefined;
   githubAuth?: GitHubAuth;
-  /** 完了経路の着地(issue #19)。**merge-back の後**に走る —— 帰り先を決める fetch も
-   *  退避もこの手前で済んでいなければ、昇格は古い remote-tracking ref を読み、tree rule の
-   *  失敗より先に PR 昇格の失敗を人間へ届けてしまう。Absent → 着地口を持たない呼び手
-   *  (起動時の復旧より前の段)。 */
-  landing?: Landing;
   /** **この session が梯子の底で保留されているか**(ADR 0099 決定3)。回収 timeout で
    *  Containment quarantine に落ちた session は、確認 question ただ1つを解放の門とする ——
    *  遅れて届いた回収済み観測が、その門を跨いで workspace と slot を解放してはならない。
@@ -36,8 +30,7 @@ export interface TeardownDeps {
    *  前提検査)で開いた quarantine が完了の後始末を黙って no-op にすると、誰も再起動しない
    *  まま枠が刺さるからである。Absent → watchdog を持たない盤面(梯子そのものが無い)。 */
   heldForContainment?: (taskId: string) => boolean;
-  /** pickup の契機(ADR 0119 決定3)。解放の後、landing まで終えてから1回撃つ ——
-   *  解放の瞬間に撃てば次の pickup の fetch / checkout が前タスクの push と並走する。
+  /** pickup の契機(ADR 0119 決定3)。解放の後に1回撃つ —— 着地はこの契機が突く収束が撃つ(ADR 0241 決定5)。
    *  **必須**にしてあるのは、構築箇所の配線漏れを型に捕まえさせるためである(#536 の
    *  欠落は optional な配線の漏れそのものだった)。 */
   pollNow: () => void;
@@ -102,7 +95,7 @@ export function teardownStep(db: Db, taskId: string): TeardownStep {
  *  1枚立てて停止の列挙に載せ、解放の門を後始末の再実行そのものにする
  *  (`acceptTeardownQuarantine`)。
  *
- *  枠を握ったままの throw だけがその停止である。`slot.release()` より後 —— 着地 ——
+ *  枠を握ったままの throw だけがその停止である。`slot.release()` より後 —— pickup の契機 ——
  *  で投げた例外は枠も行も既に空いており、盤面は次へ進める: 再実行すべき後始末が
  *  無いので question は立てない。 */
 export async function runTeardown(
@@ -199,17 +192,9 @@ async function teardown(
   step.transition?.(task, now);
   clearTeardown(db, taskId);
   slot.release();
-  // 早期 return はすべてこの手前にある —— ここを越えた後始末だけが pickup の契機を撃つ
-  try {
-    // 着地は枠を空けた後に撃つ(従来 `complete_task` が解放の後に撃っていたのと同じ位置)
-    if (step.completion && deps.landing && task.status === "done") {
-      await deps.landing.land(task);
-      // 完了したのが付帯子なら、待っていた祖先の着地がここで起きる(ADR 0092 決定3)
-      await deps.landing.relandAncestors(task);
-    }
-  } finally {
-    deps.pollNow();
-  }
+  // 早期 return はすべてこの手前にある —— ここを越えた後始末だけが pickup の契機を撃つ。着地を直接は呼ばない ——
+  // この契機が収束を突き、印を消した後に盤面が落ちても、起動の収束が同じ根を導く(ADR 0241 決定5 / ADR 0240)
+  deps.pollNow();
 }
 
 /** slot-release tree rule の一撃だけ(CONTEXT.md「Slot-release tree rule」)。

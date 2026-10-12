@@ -135,6 +135,7 @@ it("startScheduler を直接構築しても、省略された Auditor は既定�
   const worker = new ScriptedWorker(clock);
   const scheduler = startScheduler({
     retrospectiveCalls: noRetrospectiveCalls,
+    converge: async () => [],
     db,
     clock,
     slot: new Slot(),

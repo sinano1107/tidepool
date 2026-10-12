@@ -529,8 +529,8 @@ it("PR promotion の retry が失敗したら question を未決着のまま残�
         pollNow: () => {},
         landing: {
           ...unusedLanding,
-          async land() {
-            return { kind: "failed", reason: "promotion_failed", error: "retry failed" };
+          async converge() {
+            return [{ taskId: completedTask.id, verdict: { kind: "failed", reason: "promotion_failed", error: "retry failed" } }];
           },
         },
       },
@@ -1253,7 +1253,7 @@ function registerHumanTask(db: Db): Task {
 
 function completeHumanTask(db: Db, taskId: string, outcome: string, pollNow: () => void = () => {}) {
   return completeThroughHumanDoor(
-    { db, pollNow, landing: unusedLanding },
+    { db, pollNow },
     taskId,
     { outcome },
     () => NOW,
@@ -1304,7 +1304,7 @@ it("人間の完了の扉は todo の人間担当 task を完了できる", asyn
 });
 
 function cancelHumanTask(db: Db, taskId: string, pollNow: () => void) {
-  return cancelThroughHumanDoor({ db, pollNow, landing: unusedLanding }, taskId, undefined, () => NOW, "webui");
+  return cancelThroughHumanDoor({ db, pollNow }, taskId, undefined, () => NOW, "webui");
 }
 
 it("人間の完了の扉は親の無い人間担当 task の完了でも即時 poll を1回撃つ", async () => {

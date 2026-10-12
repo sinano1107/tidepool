@@ -472,6 +472,16 @@ function refreshWorkspace(workspace: WorkspaceConfig, auth: GitHubAuth | undefin
   );
 }
 
+/** ADR 0241 決定1: 収束が merge 済みの根を保護ブランチと比べる前に、保護ブランチの写しを pickup と同じ fetch で
+ *  進める —— 写しは pickup と後始末の fetch でしか動かず、merge の直後はまだ merge された内容を持たない。盤面が動かした
+ *  ref だけを撮り直す(ADR 0064 決定4)。失敗は投げる(呼び手の根の失敗になる)。 */
+export async function refreshProtectedBranch(db: Db, workspace: WorkspaceConfig, auth: GitHubAuth | undefined): Promise<void> {
+  if (!isRemoteBacked(workspace)) return;
+  await ensureWorkspaceToken(workspace, auth);
+  refreshWorkspace(workspace, auth);
+  rebaselineRef(db, workspace, protectedBranchRef(workspace));
+}
+
 /** issue #211 やること6: registry clone は「registry の正本」(合成 root が1回解決する
  *  `RegistryMode`)と「workspace」(`workspaces.yaml` の `repo`)の**両方**の役を持つので
  *  宣言を2つ持つ。1本化はできない —— workspace エントリを読むには先に registry を読む

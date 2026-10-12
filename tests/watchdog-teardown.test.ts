@@ -5,7 +5,6 @@ import { type Db, openDb } from "../src/db.js";
 import { listEvents } from "../src/events.js";
 import { applyExecutionSettingsChange, loadExecutionSettingTable } from "../src/execution-setting.js";
 import { quarantineFailedTeardown } from "../src/failed-teardown.js";
-import type { Landing } from "../src/landing.js";
 import { ProcessContainers } from "../src/process-container.js";
 import { FAILED_TEARDOWN_QUESTION_TITLE, openQuarantineValues } from "../src/quarantine.js";
 import { Slot } from "../src/slot.js";
@@ -17,7 +16,7 @@ import {
   type WorkspaceConfig,
   workspaceNeedsHuman,
 } from "../src/workspace.js";
-import { FakeClock, FakeContainerRuntime, ScriptedWorker, unusedLanding } from "./fakes.js";
+import { FakeClock, FakeContainerRuntime, ScriptedWorker } from "./fakes.js";
 import { commitWork, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeWorkspace, QUIET_EXIT } from "./harness.js";
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
@@ -39,10 +38,8 @@ interface Fixture {
   runtime: FakeContainerRuntime;
   worker: ScriptedWorker;
   watchdog: Watchdog;
-  /** 盤面が持つ着地口 —— MCP 側の後始末も同じものを渡される。 */
-  landing: Landing;
-  /** 着地が撃たれた task id、呼ばれた順。 */
-  landed: string[];
+  /** watchdog の後始末が撃った pickup の契機 —— 着地はこの契機が突く収束が撃つ(ADR 0241 決定5)。 */
+  triggered: string[];
 }
 
 /** 最終 verb が着地し、後始末に入ったところで止まっている完了済み session。容器は
@@ -86,14 +83,7 @@ async function sessionInTeardown(
     slot.enterTeardown();
   }
 
-  const landed: string[] = [];
-  const landing: Landing = {
-    ...unusedLanding,
-    async land(t) {
-      landed.push(t.id);
-      return { kind: "landed", form: "local_merge_question" };
-    },
-  };
+  const triggered: string[] = [];
   const worker = new ScriptedWorker(clock);
   const watchdog = startWatchdog({
     db,
@@ -102,8 +92,7 @@ async function sessionInTeardown(
     worker,
     containers,
     workspace: ws,
-    landing,
-    pollNow: () => {},
+    pollNow: () => triggered.push("pollNow"),
     config: { timeLimits: { work: 90 * MIN }, grace: 30 * MIN, reclaimTimeout: 5 * MIN },
   });
   if (route === "cap") {
@@ -111,7 +100,7 @@ async function sessionInTeardown(
     containers.forceReclaim(task.id);
   }
   if (route === "exit") watchdog.onWorkerExited(task.id, { ...QUIET_EXIT, exit_code: 1 });
-  return { db, clock, slot, task, ws, runtime, worker, watchdog, landing, landed };
+  return { db, clock, slot, task, ws, runtime, worker, watchdog, triggered };
 }
 
 /** 後始末の backstop を超え、回収も観測できないまま梯子の底まで落とす。 */
@@ -205,7 +194,6 @@ it("cap reclaim arriving after containment waits for acceptance before stashing 
   expect(git(f.ws.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main");
   expect(workspaceNeedsHuman(f.db, f.ws.name)).toBe(false);
   expect(f.slot.currentTaskId).toBeNull();
-  expect(f.landed).toEqual([]);
 });
 
 it("acceptance of an escalated session stashes WIP without completion inspection or merge-back", async () => {
@@ -221,7 +209,6 @@ it("acceptance of an escalated session stashes WIP without completion inspection
   expect(workspaceNeedsHuman(f.db, f.ws.name)).toBe(false);
   expect(git(f.ws.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main");
   expect(f.slot.currentTaskId).toBeNull();
-  expect(f.landed).toEqual([]);
 });
 
 it("最終 verb 着地後に root が exit しないまま時限を超えると既存の梯子に乗る —— failure question は立たず task は done のまま", async () => {
@@ -258,7 +245,7 @@ it("落ちた後始末の question が開いている間、後始末の時限は
   expect(boardHalts(f.db)).toEqual([{ kind: "failedTeardown" }]);
 });
 
-it("梯子の底まで落ちた完了済み session でも、確認回答で後始末が完走して着地まで走る", async () => {
+it("梯子の底まで落ちた完了済み session でも、確認回答で後始末が完走して、pickup の契機まで走る", async () => {
   const f = await sessionInTeardown();
   await fallToTheBottom(f);
 
@@ -268,12 +255,12 @@ it("梯子の底まで落ちた完了済み session でも、確認回答で後�
   f.watchdog.acceptReclaimed();
   await settle();
 
-  // 検査(退避ではない)→ merge-back → 休止位置 → slot 解放 → **着地**(ADR 0109 決定1)
+  // 検査(退避ではない)→ merge-back → 休止位置 → slot 解放 → **契機**(ADR 0109 決定1 / ADR 0241 決定5)
   expect(workspaceNeedsHuman(f.db, f.ws.name)).toBe(false);
   expect(git(f.ws.path, "log", "--oneline", `task/${f.task.id}`)).not.toContain("WIP");
   expect(git(f.ws.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main");
   expect(f.slot.currentTaskId).toBeNull();
-  expect(f.landed).toEqual([f.task.id]);
+  expect(f.triggered).toEqual(["pollNow"]);
 });
 
 it("梯子の底に落ちた後で届いた回収済み観測は解放しない —— 門は確認 question ただ1つである", async () => {
@@ -289,7 +276,6 @@ it("梯子の底に落ちた後で届いた回収済み観測は解放しない 
     clock: f.clock,
     slot: f.slot,
     resolve: () => f.ws,
-    landing: f.landing,
     heldForContainment: f.watchdog.heldForContainment,
     pollNow: () => {},
   };
@@ -298,7 +284,7 @@ it("梯子の底に落ちた後で届いた回収済み観測は解放しない 
   // 確認 question は開いたまま。workspace も slot も動かない
   expect(git(f.ws.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe(`task/${f.task.id}`);
   expect(f.slot.currentTaskId).toBe(f.task.id);
-  expect(f.landed).toEqual([]);
+  expect(f.triggered).toEqual([]);
   expect(boardHalts(f.db)).toEqual([{ kind: "containment" }]);
 
   // 回答で初めて走る —— どちらの順でもちょうど1回
@@ -306,7 +292,7 @@ it("梯子の底に落ちた後で届いた回収済み観測は解放しない 
   await settle();
   expect(git(f.ws.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main");
   expect(f.slot.currentTaskId).toBeNull();
-  expect(f.landed).toEqual([f.task.id]);
+  expect(f.triggered).toEqual(["pollNow"]);
 });
 
 it("報告なき exit が梯子の底に落ちた後で届いた回収済み観測は解放しない —— 確認回答で tree rule が走る(issue #1380)", async () => {

@@ -12,7 +12,7 @@ import {
   UnknownWorkspaceError,
   type WorkspaceConfig,
 } from "../src/workspace.js";
-import { FakeClock, unusedLanding } from "./fakes.js";
+import { FakeClock } from "./fakes.js";
 import {
   FULL_HANDOFF,
   GIT_FIXTURE_TEST_TIMEOUT,
@@ -130,8 +130,8 @@ it("門が既に解決した workspace は後始末で解決し直さない —�
   expect(slot.currentTaskId).toBeNull();
 });
 
-/** 完了済みの session を枠に置き、後始末が触れる順序を1本の列に記録する deps を返す。 */
-function completedSession(land: () => Promise<void> = async () => {}) {
+/** 完了済みの session を枠に置き、後始末が撃つ契機を1本の列に記録する deps を返す。 */
+function completedSession() {
   const db = openDb(":memory:");
   const clock = new FakeClock();
   const slot = new Slot();
@@ -149,41 +149,18 @@ function completedSession(land: () => Promise<void> = async () => {}) {
     clock,
     slot,
     resolve: undefined,
-    landing: {
-      ...unusedLanding,
-      async land() {
-        calls.push("land");
-        await land();
-        return { kind: "landed" } as never;
-      },
-      async relandAncestors() {
-        calls.push("relandAncestors");
-        return [];
-      },
-    },
     pollNow: () => calls.push("pollNow"),
   };
   return { deps, slot, task, calls };
 }
 
-// ADR 0119 決定3: slot の解放は pickup の契機であり、撃つのは landing の後である
-it("後始末は landing と祖先の再着地を終えてから、pickup の契機を1回撃つ", async () => {
-  const { deps, task, calls } = completedSession();
+// ADR 0119 決定3 / ADR 0241 決定5: slot の解放は pickup の契機である。着地はその契機が突く収束が撃つ
+it("後始末は着地を直接撃たず、枠を空けた後に pickup の契機を1回撃つ", async () => {
+  const { deps, slot, task, calls } = completedSession();
 
   await runTeardown(deps, task.id, { completion: true });
 
-  expect(calls).toEqual(["land", "relandAncestors", "pollNow"]);
-});
-
-it("landing が投げても pickup の契機は撃たれる", async () => {
-  const { deps, slot, task, calls } = completedSession(async () => {
-    throw new Error("push failed");
-  });
-  vi.spyOn(console, "error").mockImplementation(() => {});
-
-  await runTeardown(deps, task.id, { completion: true });
-
-  expect(calls).toEqual(["land", "pollNow"]);
+  expect(calls).toEqual(["pollNow"]);
   expect(slot.currentTaskId).toBeNull();
 });
 

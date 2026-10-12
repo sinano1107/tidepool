@@ -31,6 +31,7 @@ it("既定 workspace a・既定 agent a で pickup したタスクは、再起�
   const schedulerOf = (workspace: typeof a, other: typeof a, worker: ScriptedWorker) =>
     startScheduler({
       retrospectiveCalls: noRetrospectiveCalls,
+      converge: async () => [],
       db,
       clock,
       slot: new Slot(),

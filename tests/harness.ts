@@ -47,6 +47,7 @@ import {
   decomposeTask,
   getTask,
   humanDecomposeTask,
+  listBoard,
   listChildren,
   type RegisterTaskInput,
   recordPrOpened,
@@ -175,6 +176,8 @@ export interface BootOptions {
   dir?: string;
   /** Override the scripted WorkerAdapter identity across board restarts. */
   workerId?: string;
+  /** 起動の間に GitHub を待たせるテスト(起動の収束 —— ADR 0241 決定5)が、起動前に細工した fake を渡す。 */
+  github?: FakeGitHubClient;
   workerAdapter?: Parameters<typeof startServer>[0]["worker"];
   /** The board's workspace: a real git checkout the tree rule acts on. */
   workspace?: WorkspaceConfig;
@@ -327,7 +330,7 @@ export async function bootTidepool(options: BootOptions = {}): Promise<Tidepool>
   const clock = new FakeClock();
   const worker = new ScriptedWorker(clock, options.workerId);
   const containers = options.containerRuntime ?? new FakeContainerRuntime();
-  const github = new FakeGitHubClient();
+  const github = options.github ?? new FakeGitHubClient();
   const push = new FakePushClient();
   // 盤面の接続は1本。テストが直接 SQL を撃つ `t.db` も、盤面が使うのも同じ handle で、
   // 閉じるのは `server.stop()`(ADR 0107 決定4 の「setup 用に db を公開する」の形)。
@@ -394,6 +397,9 @@ export async function bootTidepool(options: BootOptions = {}): Promise<Tidepool>
     githubTokenFile: options.githubTokenFile,
     boardState: options.boardState,
   });
+  // 起動完了の poll は起動の収束の後に走る(ADR 0241 決定5)。GitHub を待たない起動の収束と poll はここで終わる ——
+  // テストが盤面に何かを足す前に、起動完了の poll が空の queue を読み終えている(待つ GitHub の fake を渡した盤面は別)
+  await new Promise((resolve) => setImmediate(resolve));
   const mcpBaseUrl = `http://127.0.0.1:${server.mcpPort}`;
   boards.set(mcpBaseUrl, worker);
   // 走っている停止の Promise を覚える(issue #775) —— ブールでは、中断された1度目の
@@ -974,6 +980,13 @@ export const FULL_HANDOFF = {
 };
 
 /** agent `assignee` が完了させた work(domain 層)。着地の記録はまだ何も無い。 */
+/** 盤面の完了時レビューをすべて決着させる —— 着地の門を、fixture の子だけが閉じる形にする。 */
+export function settleReviews(db: Db, now: Date): void {
+  for (const review of listBoard(db).filter((t) => t.type === "review" && t.status === "todo")) {
+    completeTask(db, getTask(db, review.id)!, FULL_HANDOFF, "shako", now, "worker");
+  }
+}
+
 export function completedWork(db: Db, now: Date, assignee: string, parentId?: string, workspace?: string): Task {
   const task = registerTask(
     db,
