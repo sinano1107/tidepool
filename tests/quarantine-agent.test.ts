@@ -9,7 +9,7 @@ import { type Db, openDb } from "../src/db.js";
 import { quarantineAgent } from "../src/quarantine.js";
 import { InvalidAgentDefinitionError, UnknownAgentError } from "../src/registry.js";
 import { cancelTaskDirectly, completeTask, editTask, listBoard, pickupTask, registerTask, type TaskType } from "../src/tasks.js";
-import { FULL_HANDOFF, HUMAN_WEBUI, quarantineQuestion, queuedForAutoMerge } from "./harness.js";
+import { completedWork, FULL_HANDOFF, HUMAN_WEBUI, quarantineQuestion, queuedForAutoMerge } from "./harness.js";
 
 describe("quarantineAgent(ADR 0012 / issue #36: workspace 版の agent 名一般化)", () => {
   it("agent 名を needs-human にマークし、1択の Confirmation question を登録する", () => {
@@ -189,10 +189,21 @@ describe("verifyAgentRepaired", () => {
     expect(() => verifyAgentRepaired(db, "navigator", "absent")).not.toThrow();
   });
 
-  // ADR 0224 決定4: 実行中の worker が立てた quarantine は、その worker のタスクが決着するまで解除できない
+  // ADR 0241 決定6: 数えは収束の導出から —— quarantine が抱えている根は失敗 question という証拠を持たない
+  it("registry に復活しておらず、失敗 question を持たない未着地の根が残っていれば拒否する", () => {
+    const db = openDb(":memory:");
+    completedWork(db, NOW, "navigator");
+
+    expect(() => verifyAgentRepaired(db, "navigator", "absent")).toThrow(
+      "agent navigator is not back in the registry and still has 1 completed task(s) awaiting landing on its profile",
+    );
+  });
+
+  // ADR 0224 決定4: 実行中の worker が立てた quarantine は、その worker のタスクが決着するまで解除できない。
+  // 着地を待たない review で言う —— 完了した work は着地を待つ
   it("registry に復活しておらず、その名前宛ての実行中タスクが残っていれば拒否し、決着すれば認める", () => {
     const db = openDb(":memory:");
-    const task = pickupTask(db, register(db, "work", "navigator"), "navigator", NOW)!;
+    const task = pickupTask(db, register(db, "review", "navigator"), "navigator", NOW)!;
     expect(() => verifyAgentRepaired(db, "navigator", "absent")).toThrow(/still has unsettled tasks/);
 
     completeTask(db, task, FULL_HANDOFF, "navigator", NOW, "worker");

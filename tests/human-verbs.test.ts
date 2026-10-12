@@ -1060,7 +1060,7 @@ it("agent quarantine の解除検査は、盤面の外で merge 済みのキュ�
   }).agent!("specialist");
 
   expect({
-    awaiting: countTasksAwaitingLanding(db, "specialist"),
+    awaiting: countTasksAwaitingLanding(db, undefined, "specialist"),
     observed: listEvents(db, queued.id).filter((event) => event.kind === "pr_merge_observed"),
   }).toEqual({
     awaiting: 0,

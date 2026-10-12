@@ -547,6 +547,7 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
           deps.defaultAgentName,
           deps.auditorName,
           definitionFailure,
+          buildWorkspaceResolver(deps.resolveWorkspace, deps.workspace),
         );
       } catch (err) {
         throw new DomainError(err instanceof Error ? err.message : String(err));
@@ -687,6 +688,7 @@ function promotionRetryError(verdict: LandingVerdict | undefined): string | unde
       return undefined;
     case "failed":
     case "excluded":
+    case "quarantined":
       return verdict.error;
     case "deferred":
       return verdict.reason === "attached_children"

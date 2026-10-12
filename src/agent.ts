@@ -15,6 +15,7 @@ import {
 import { unsettledSql } from "./task-status.js";
 import { type TaskType, typeAwareDefaultAgentSql } from "./tasks.js";
 import type { Tier } from "./tier.js";
+import type { WorkspaceConfig } from "./workspace.js";
 
 /** An assignee (or the board's default) resolved against the registry —
  *  the agent's own definition and its authority profile together, since spawn
@@ -128,6 +129,7 @@ export function verifyAgentRepaired(
   defaultAgentName?: string,
   auditorName?: string,
   definitionFailure?: string,
+  resolveWorkspace?: (taskWorkspace: string | null) => WorkspaceConfig,
 ): void {
   if (resolution === "registry") return;
   const notBack = definitionFailure
@@ -145,7 +147,7 @@ export function verifyAgentRepaired(
   }
   // done のタスクは Edit で付け替えられないので、その profile を読んで着地を待つものが
   // 残る限り、registry を直さずに解除しても次の着地でまた落ちる(ADR 0217 決定4)
-  const awaitingLanding = countTasksAwaitingLanding(db, agentName, defaultAgentName, auditorName);
+  const awaitingLanding = countTasksAwaitingLanding(db, resolveWorkspace, agentName, defaultAgentName);
   if (awaitingLanding > 0) {
     throw new Error(
       `${notBack} and still has ${awaitingLanding} ` +
