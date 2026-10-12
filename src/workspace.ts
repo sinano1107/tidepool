@@ -957,10 +957,12 @@ export function guardRegistryDefaultBranch(
  *  single workspace (pre-#26 shape, and still today's shape for a caller
  *  with no registry at all). Undefined means no workspace tracking exists —
  *  the caller skips the workspace step entirely, not just resolution. */
+export type WorkspaceResolver = (taskWorkspace: string | null) => WorkspaceConfig;
+
 export function buildWorkspaceResolver(
-  resolveWorkspace: ((taskWorkspace: string | null) => WorkspaceConfig) | undefined,
+  resolveWorkspace: WorkspaceResolver | undefined,
   workspace: WorkspaceConfig | undefined,
-): ((taskWorkspace: string | null) => WorkspaceConfig) | undefined {
+): WorkspaceResolver | undefined {
   return resolveWorkspace ?? (workspace && (() => workspace));
 }
 

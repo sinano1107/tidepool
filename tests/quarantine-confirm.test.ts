@@ -7,6 +7,8 @@ import { quarantineWorkspace, type WorkspaceConfig } from "../src/workspace.js";
 import {
   api,
   bootTidepool,
+  commitWork,
+  completeViaMcp,
   FULL_HANDOFF as fullHandoff,
   GIT_FIXTURE_TEST_TIMEOUT,
   git,
@@ -205,4 +207,32 @@ it("token が出せていれば解除はそのまま受理される —— 新�
 
   expect(res.status).toBe(200);
   expect((await api(t.baseUrl, "GET", `/api/tasks/${question.id}`)).json.status).toBe("done");
+});
+
+// ADR 0241 決定5・6: workspace の quarantine の受理は回答なので収束を突く —— quarantine が抱えていた根は失敗 question を持たないまま着地する
+it("workspace の quarantine が抱えていた根は、その quarantine に答えると、受理の後の収束で PR が開く", async () => {
+  const { workspace } = await makeRemoteBackedWorkspace("quarantine-confirm-workspace-lands");
+  t = await bootTidepool({ workspace });
+  const work = await registerWork(t, "ship reviewable work");
+  await t.clock.advance(HOUR);
+  commitWork(workspace.path, "feature.txt", "v1\n");
+  await completeViaMcp(t, work.id);
+  const review = (await api(t.baseUrl, "GET", "/api/tasks")).json.find(
+    (task: any) => task.type === "review" && task.parent_id === work.id,
+  );
+  await t.clock.advance(HOUR);
+  quarantineWorkspace(t.db, workspace.name, new Error("repair the checkout"), t.clock.now());
+  await completeViaMcp(t, review.id, false);
+  const question = await servedQuarantineQuestion(t, "workspace", workspace.name);
+  expect(t.github.requests).toEqual([]);
+  const failures = (await api(t.baseUrl, "GET", "/api/tasks")).json.filter((q: any) => q.title.startsWith("PR promotion"));
+  expect(failures).toEqual([]);
+
+  const res = await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, {
+    answers: [question.question_items[0].options[0]],
+  });
+  expect(res.status).toBe(200);
+
+  await vi.waitFor(() => expect(t.github.requests).toHaveLength(1));
+  expect(t.github.requests[0]).toMatchObject({ branch: `task/${work.id}` });
 });

@@ -55,6 +55,7 @@ import {
   makeRemoteBackedWorkspace,
   makeWorkspace,
   quarantineQuestion,
+  queuedForAutoMerge,
   settleReviews,
   squashTaskIntoOrigin,
 } from "./harness.js";
@@ -867,7 +868,7 @@ it("workspace 不在は閉じた理由で返す", async () => {
   });
 });
 
-it("retry 時の registry drift は閉じた失敗を返し、既存の failure question を引退させない", async () => {
+it("retry 時の registry drift は workspace の quarantine を名乗る verdict を返し、既存の failure question を引退させない", async () => {
   const { workspace } = await makeRemoteBackedWorkspace("landing-registry-drift");
   const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
@@ -902,10 +903,11 @@ it("retry 時の registry drift は閉じた失敗を返し、既存の failure 
   drifted = true;
   github.scriptFailure(null);
 
-  await expect(convergeOn(landing, task.id, failure!.id)).resolves.toMatchObject({
-    kind: "failed",
-    reason: "workspace_unavailable",
+  await expect(convergeOn(landing, task.id, failure!.id)).resolves.toEqual({
+    kind: "quarantined",
+    error: `workspace "${workspace.name}" is quarantined and needs human attention before landing; answer its quarantine question`,
   });
+  expect(promotionFailures(db, task.id)).toHaveLength(1);
   expect(getTask(db, failure!.id)).toMatchObject({ status: "todo", question_answer: null });
   expect(listEvents(db, failure!.id)).not.toContainEqual(
     expect.objectContaining({ payload: { kind: "pr_promotion_observed" } }),
@@ -914,37 +916,22 @@ it("retry 時の registry drift は閉じた失敗を返し、既存の failure 
   expect(github.requests).toHaveLength(1);
 });
 
-it("needs-human workspace は閉じた理由で返す", async () => {
+// ADR 0241 決定6: 止まっている原因は workspace の quarantine の question としてすでに出ている
+it("workspace が quarantine で門が開いている根の収束は、失敗 question を立てず、verdict は workspace の quarantine を名乗る", async () => {
   const workspace = await makeWorkspace("landing-needs-human");
   const { db, clock } = await openBoard();
   const landing = createLanding({ defaultAgentName: "tako", db, clock, workspace, github: null });
-  const task = registerTask(
-    db,
-    {
-      type: "work",
-      title: "ship",
-      purpose: "ship a change",
-      completion_criteria: "the change is shipped",
-    },
-    clock.now(),
-    ...HUMAN_WEBUI,
-  );
+  const task = landingWork(db, clock);
   git(workspace.path, "checkout", "-b", `task/${task.id}`);
   commitWork(workspace.path, "feature.txt", "ready\n");
-  registerPrPromotionFailureQuestion(db, task, "first failed attempt", clock.now());
-  const [failure] = promotionFailures(db, task.id);
   quarantineWorkspace(db, workspace.name, new Error("repair the checkout"), clock.now());
   finish(db, clock, task);
 
-  await expect(convergeOn(landing, task.id, failure!.id)).resolves.toEqual({
-    kind: "failed",
-    reason: "workspace_needs_human",
-    error: `workspace "${workspace.name}" needs human attention before landing`,
+  await expect(convergeOn(landing, task.id)).resolves.toEqual({
+    kind: "quarantined",
+    error: `workspace "${workspace.name}" is quarantined and needs human attention before landing; answer its quarantine question`,
   });
-  expect(getTask(db, failure!.id)).toMatchObject({ status: "todo", question_answer: null });
-  expect(listEvents(db, failure!.id)).not.toContainEqual(
-    expect.objectContaining({ payload: { kind: "pr_promotion_observed" } }),
-  );
+  expect(promotionFailures(db, task.id)).toEqual([]);
 });
 
 // ADR 0241 決定3: 門は workspace の quarantine より先に読む(#1834)
@@ -1490,7 +1477,7 @@ it("nothing_to_land を刻んだ根の子の修理は根のブランチへ帰ら
 });
 
 // 根かどうか読めない候補は、黙って飛ばさず、その根の失敗として人間に見せる(着地の module の旧 land() と同じ結果)
-it("workspace を解決できない、親を持つ完了 work は、workspace を quarantine に落とし、失敗 question を1枚立てる", async () => {
+it("workspace を解決できない、親を持つ完了 work は、workspace を quarantine に落とし、失敗 question を立てない", async () => {
   const { workspace } = await makeRemoteBackedWorkspace("landing-child-unresolvable");
   const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
@@ -1513,9 +1500,12 @@ it("workspace を解決できない、親を持つ完了 work は、workspace �
   );
   finish(db, clock, child);
 
-  await expect(convergeOn(landing, child.id)).resolves.toMatchObject({ kind: "failed", reason: "workspace_unavailable" });
+  await expect(convergeOn(landing, child.id)).resolves.toEqual({
+    kind: "quarantined",
+    error: 'workspace "ghost" is quarantined and needs human attention before landing; answer its quarantine question',
+  });
   await landing.converge();
-  expect(promotionFailures(db, child.id)).toHaveLength(1);
+  expect(promotionFailures(db, child.id)).toEqual([]);
   expect(quarantineQuestion(db, "workspace", "ghost")).toBeDefined();
 });
 
@@ -3305,23 +3295,98 @@ it("origin 側のタスクブランチが読めなければ積み残しとして
   expect(github.merged).toEqual([]);
 });
 
-it("積み残しがあっても着地の登録は走る —— PR を開き、開いている PR へ修理を push する", async () => {
-  const { workspace } = await makeRemoteBackedWorkspace("left-behind-still-lands");
+// ADR 0241 決定7: push しても積み残しが消えなければ、着地したとは言わない。push はする
+it("PR を開いた後に積み残しが残れば landed を返さず、内容の届いていない子孫を名指す失敗 question を1枚立て、merge back の後の retry で着地する", async () => {
+  const { workspace } = await makeRemoteBackedWorkspace("left-behind-after-open");
   const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
   const landing = createLanding({ defaultAgentName: "tako", db, clock, workspace, github });
   const work = landingWork(db, clock);
   git(workspace.path, "checkout", "-b", `task/${work.id}`);
   commitWork(workspace.path, "feature.txt", "ready\n");
-  settleRepairNotMergedBack(db, clock, workspace, work.id);
+  const repair = settleRepairNotMergedBack(db, clock, workspace, work.id);
   finish(db, clock, work);
 
-  await expect(convergeOn(landing, work.id)).resolves.toMatchObject({ kind: "landed", form: "pull_request_opened" });
-  commitWork(workspace.path, "repair.txt", "fixed\n");
-  await expect(convergeOn(landing, work.id)).resolves.toMatchObject({
+  await expect(convergeOn(landing, work.id)).resolves.toEqual({
+    kind: "failed",
+    reason: "content_left_behind",
+    error: `pushed task/${work.id}, but the content of task/${repair.id} has not reached it`,
+  });
+  expect(github.requests).toHaveLength(1);
+  expect(getTask(db, work.id)?.pr_number).toBe(1);
+  const failures = promotionFailures(db, work.id);
+  expect(failures.map((q) => q.purpose)).toEqual([expect.stringContaining(`task/${repair.id}`)]);
+
+  git(workspace.path, "merge", "--no-edit", `task/${repair.id}`);
+  await expect(convergeOn(landing, work.id, failures[0]!.id)).resolves.toMatchObject({
     kind: "landed",
     form: "open_pull_request_updated",
   });
+});
+
+it("開いている PR へ push した後に積み残しが残れば landed を返さず、失敗 question を1枚立てる", async () => {
+  const { workspace, db, clock, github, work, landing } = await openPushedPr("left-behind-after-push", "escalate");
+  const repair = settleRepairNotMergedBack(db, clock, workspace, work.id);
+  finish(db, clock, work);
+
+  await expect(convergeOn(landing, work.id)).resolves.toMatchObject({ kind: "failed", reason: "content_left_behind" });
+  expect(github.pushes).toHaveLength(1);
+  expect(promotionFailures(db, work.id).map(({ title, purpose }) => ({ title, purpose }))).toEqual([
+    {
+      title: "PR promotion left content behind: ship",
+      purpose:
+        `Pushing task/${work.id} for completed task "ship" left content behind: the content of task/${repair.id} ` +
+        `has not reached task/${work.id}. Merge it back into task/${work.id}, then retry.`,
+    },
+  ]);
+});
+
+it("push の後に積み残しが残っても、workspace の quarantine が抱えていれば失敗 question を立てず、その quarantine を名乗る", async () => {
+  const { workspace, db, clock, github, work, landing } = await openPushedPr("left-behind-quarantined", "escalate");
+  settleRepairNotMergedBack(db, clock, workspace, work.id);
+  finish(db, clock, work);
+  const pushBranch = github.pushBranch.bind(github);
+  github.pushBranch = async (input) => {
+    await pushBranch(input);
+    quarantineWorkspace(db, workspace.name, new Error("repair the checkout"), clock.now());
+  };
+
+  await expect(convergeOn(landing, work.id)).resolves.toEqual({
+    kind: "quarantined",
+    error: `workspace "${workspace.name}" is quarantined and needs human attention before landing; answer its quarantine question`,
+  });
+  expect(promotionFailures(db, work.id)).toEqual([]);
+});
+
+// ADR 0241 決定6: push の後に積み残しを比べられなくても、workspace の quarantine が抱えていれば失敗 question を重ねない。
+// 抱えていなければ失敗 question を立てる(fail-closed)
+it.each([
+  ["workspace の quarantine が抱えていれば、失敗 question を立てずその quarantine を名乗る", true],
+  ["quarantine が抱えていなければ、失敗 question を1枚立てる", false],
+])("push の後に積み残しを比べられないとき、%s", async (_, quarantine) => {
+  const { workspace, db, clock, github, work, landing } = await openPushedPr("left-behind-unreadable-after-push", "escalate");
+  commitWork(workspace.path, "repair.txt", "fixed\n");
+  finish(db, clock, work);
+  const pushBranch = github.pushBranch.bind(github);
+  github.pushBranch = async (input) => {
+    await pushBranch(input);
+    git(workspace.path, "update-ref", "-d", `refs/remotes/origin/task/${work.id}`);
+    if (quarantine) quarantineWorkspace(db, workspace.name, new Error("repair the checkout"), clock.now());
+  };
+
+  const verdict = await convergeOn(landing, work.id);
+
+  expect(github.pushes).toHaveLength(1);
+  if (quarantine) {
+    expect(verdict).toEqual({
+      kind: "quarantined",
+      error: `workspace "${workspace.name}" is quarantined and needs human attention before landing; answer its quarantine question`,
+    });
+    expect(promotionFailures(db, work.id)).toEqual([]);
+  } else {
+    expect(verdict).toMatchObject({ kind: "failed", reason: "promotion_failed" });
+    expect(promotionFailures(db, work.id)).toHaveLength(1);
+  }
 });
 
 // ADR 0240 決定5: 拒否文は積み残しを運ぶ面を名指しする。どちらも無ければ、盤面が運んでいる途中である
@@ -3441,7 +3506,7 @@ it("門が閉じている間も profile は読まれ、解決できなければ�
   expect(github.merged).toEqual([{ path: workspace.path, number: 1 }]);
 });
 
-it.each(UNRESOLVABLE)("PR を開く時点で profile が %s で解決できなければ、PR を開かず agent を quarantine に落とし、着地は retry できる失敗として返る", async (_, fail) => {
+it.each(UNRESOLVABLE)("PR を開く時点で profile が %s で解決できなければ、PR を開かず agent を quarantine に落とし、失敗 question を立てず、registry を直した後の収束で PR を開く", async (_, fail) => {
   const { workspace } = await makeRemoteBackedWorkspace("landing-unresolvable-at-open");
   const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
@@ -3459,15 +3524,17 @@ it.each(UNRESOLVABLE)("PR を開く時点で profile が %s で解決できな�
   commitWork(workspace.path, "feature.txt", "ready\n");
   finish(db, clock, task);
 
-  await expect(convergeOn(landing, task.id)).resolves.toMatchObject({ kind: "failed", reason: "agent_unavailable" });
+  await expect(convergeOn(landing, task.id)).resolves.toEqual({
+    kind: "quarantined",
+    error: 'agent "tako" is quarantined: its authority profile cannot be resolved for landing; repair the registry and answer its quarantine question',
+  });
   expect(github.requests).toEqual([]);
   expect(quarantineQuestion(db, "agent", "tako")).toBeDefined();
-  const [failure] = promotionFailures(db, task.id);
-  expect(failure?.question_items?.[0]?.recommendation).toBe("retry");
+  expect(promotionFailures(db, task.id)).toEqual([]);
 
-  // registry を直して retry すると PR が開き、本当のダイヤル(auto_if_ci_green)の面 —— 無人 merge キュー —— に着地する
+  // registry を直した後の収束で PR が開き、本当のダイヤル(auto_if_ci_green)の面 —— 無人 merge キュー —— に着地する
   resolveAuthority = () => profile("auto_if_ci_green");
-  await expect(convergeOn(landing, task.id, failure!.id)).resolves.toMatchObject({
+  await expect(convergeOn(landing, task.id)).resolves.toMatchObject({
     kind: "landed",
     form: "pull_request_opened",
   });
@@ -3805,10 +3872,10 @@ it("既定 agent の quarantine 回答前の観測は、assignee 未指定の wo
   });
 
   await landing.observeAutoMergeOutcomes("shako");
-  expect(countTasksAwaitingLanding(db, "tako", "tako", "shako")).toBe(1);
+  expect(countTasksAwaitingLanding(db, undefined, "tako", "tako")).toBe(1);
   await landing.observeAutoMergeOutcomes("tako");
 
-  expect(countTasksAwaitingLanding(db, "tako", "tako", "shako")).toBe(0);
+  expect(countTasksAwaitingLanding(db, undefined, "tako", "tako")).toBe(0);
   expect(listEvents(db, work.id).filter((event) => event.payload.kind === "pr_merge_observed")).toMatchObject([
     { origin: "board", worker_id: BOARD_WORKER_ID, payload: { kind: "pr_merge_observed", pr_number: 7 } },
   ]);
@@ -3832,7 +3899,7 @@ it("quarantine 回答前の観測は、盤面の外で閉じられたキュー�
 
   await landing.observeAutoMergeOutcomes("tako");
 
-  expect(countTasksAwaitingLanding(db, "tako", "tako")).toBe(0);
+  expect(countTasksAwaitingLanding(db, undefined, "tako", "tako")).toBe(0);
   expect(boardEvents(db, work.id, "pr_close_observed")).toEqual(closeObserved(7));
   expect(boardEvents(db, work.id, "pr_merge_observed")).toEqual([]);
 });
@@ -3849,12 +3916,13 @@ it.each(["auto_merge", "promotion_failure"] as const)("assignee 未指定の完�
     registerPrPromotionFailureQuestion(db, work, "boom", clock.now());
   }
 
-  expect(countTasksAwaitingLanding(db, "tako", "tako", "shako")).toBe(1);
-  expect(countTasksAwaitingLanding(db, "shako", "tako", "shako")).toBe(0);
-  expect(countTasksAwaitingLanding(db, "tako")).toBe(0);
+  expect(countTasksAwaitingLanding(db, undefined, "tako", "tako")).toBe(1);
+  expect(countTasksAwaitingLanding(db, undefined, "shako", "tako")).toBe(0);
+  expect(countTasksAwaitingLanding(db, undefined, "tako")).toBe(0);
 });
 
-it("着地を待つ完了タスクは、付帯子待ちで PR 未作成(retry が再び門で止まったものも)・無人 merge キューにいる・PR 昇格失敗の question が開いている、を数える", () => {
+// ADR 0241 決定6: 待ちの証拠の寄せ集めではなく、収束が導く根から数える —— quarantine が抱えている根は失敗 question を持たない
+it("着地を待つ完了タスクは、PR をまだ開いていない未着地の根(門・失敗 question・retry で止まったもの、待ちの証拠を何も持たないもの)と無人 merge キューにいるものを数える", () => {
   db = openDb(":memory:");
   const now = new Date("2026-10-09T00:00:00.000Z");
   deferLanding(db, completedWork(db, now, "tako").id, now);
@@ -3862,82 +3930,94 @@ it("着地を待つ完了タスクは、付帯子待ちで PR 未作成(retry �
     authority: { merge: "auto_if_ci_green" },
   });
   registerPrPromotionFailureQuestion(db, completedWork(db, now, "tako"), "boom", now);
-  // retry が再び門で止まった —— `landing_deferred` は最初の1つしか刻まれない
   const retried = completedWork(db, now, "tako");
-  deferLanding(db, retried.id, now);
   registerPrPromotionFailureQuestion(db, retried, "boom", now);
   const [failure] = promotionFailures(db, retried.id);
   answerQuestion(db, getTask(db, failure!.id)!, ["retry"], now, undefined, undefined, undefined, "webui");
+  completedWork(db, now, "tako");
 
-  expect(countTasksAwaitingLanding(db, "tako")).toBe(4);
+  expect(countTasksAwaitingLanding(db, undefined, "tako")).toBe(5);
 });
 
-it("着地済み・未完了・別 agent・PR 昇格を abandon した・祖先の枝に乗る子は、着地を待つ完了タスクに数えない", () => {
+/** 失敗 question に abandon promotion と答えた完了 work —— 断念が効いている。 */
+async function abandonedWork(board: Db, now: Date, workspace?: string): Promise<Task> {
+  const work = completedWork(board, now, "tako", undefined, workspace);
+  registerPrPromotionFailureQuestion(board, work, "boom", now);
+  const [failure] = promotionFailures(board, work.id);
+  await answerPromotion(board, new FakeClock(), unusedLanding, undefined, failure!, "abandon promotion");
+  return work;
+}
+
+it("着地済み・未完了・別 agent・PR 昇格を abandon した・祖先の枝に乗る子は、着地を待つ完了タスクに数えない", async () => {
   db = openDb(":memory:");
   const now = new Date("2026-10-09T00:00:00.000Z");
-  const landed = completedWork(db, now, "tako");
-  deferLanding(db, landed.id, now);
-  recordPrOpenedViaWorker(db, landed, 7, "tako", now, { authority: { merge: "escalate" } });
-  deferLanding(db, completedWork(db, now, "squid").id, now);
-  const abandoned = completedWork(db, now, "tako");
-  deferLanding(db, abandoned.id, now);
-  registerPrPromotionFailureQuestion(db, abandoned, "boom", now);
-  const [failure] = promotionFailures(db, abandoned.id);
-  answerQuestion(db, getTask(db, failure!.id)!, ["abandon promotion"], now, undefined, undefined, undefined, "webui");
-  // 未完了の親(門で止まった記録があっても done でない)と、その枝へ帰る完了した子(`land()` は何も記録しない)
+  recordPrOpenedViaWorker(db, completedWork(db, now, "tako"), 7, "tako", now, { authority: { merge: "escalate" } });
+  completedWork(db, now, "squid");
+  await abandonedWork(db, now);
+  // 未完了の親と、その枝へ帰る完了した子(収束は何も記録しない)
   const parent = registerTask(
     db,
     { type: "work", title: "integrate", purpose: "p", completion_criteria: "c", assignee: "tako" },
     now,
     ...HUMAN_WEBUI,
   );
-  deferLanding(db, parent.id, now);
   completedWork(db, now, "tako", parent.id);
 
-  expect(countTasksAwaitingLanding(db, "tako")).toBe(0);
+  // 根かどうかを lineage で読ませる —— 祖先が未決着なら git を呼ばずにその枝へ帰るので、checkout の実体は要らない
+  expect(countTasksAwaitingLanding(db, () => ({ name: "reef", path: "/nonexistent/reef" }), "tako")).toBe(0);
+});
+
+// ADR 0241 決定6: 1回の要求で導出は1回。数えは何も書かない —— 根かどうか読めない候補を workspace の quarantine に落とさない
+it("数えは導出を1回だけ走らせ、workspace を解決できない候補も根として数え、quarantine に落とさない", () => {
+  db = openDb(":memory:");
+  const now = new Date("2026-10-09T00:00:00.000Z");
+  completedWork(db, now, "tako", undefined, "ghost");
+  completedWork(db, now, "tako", undefined, "ghost");
+  queuedForAutoMerge(db, now, "tako");
+  let resolved = 0;
+  const resolve = (name: string | null): WorkspaceConfig => {
+    resolved += 1;
+    throw new UnknownWorkspaceError(name ?? "reef");
+  };
+
+  expect(countTasksAwaitingLanding(db, resolve, "tako")).toBe(3);
+  expect(resolved).toBe(3);
+  expect(quarantineQuestion(db, "workspace", "ghost")).toBeUndefined();
 });
 
 // ADR 0226: workspace の削除の扉は同じ集合を、タスクの `workspace` の参照で数える
 const completedWorkIn = (board: Db, now: Date, workspace?: string) =>
   completedWork(board, now, "tako", undefined, workspace);
 
-it("workspace 名でも、無人 merge キューにいる・PR 昇格失敗の question が開いている・門で止まって abandon していない完了タスクを数える", () => {
+it("workspace 名でも、無人 merge キューにいる・PR 昇格失敗の question が開いている・PR をまだ開いていない完了タスクを数える", () => {
   db = openDb(":memory:");
   const now = new Date("2026-10-09T00:00:00.000Z");
   recordPrOpenedViaWorker(db, completedWorkIn(db, now, "reef"), 7, "tako", now, {
     authority: { merge: "auto_if_ci_green" },
   });
   registerPrPromotionFailureQuestion(db, completedWorkIn(db, now, "reef"), "boom", now);
-  deferLanding(db, completedWorkIn(db, now, "reef").id, now);
+  completedWorkIn(db, now, "reef");
 
-  expect(countTasksAwaitingLandingInWorkspace(db, "reef")).toBe(3);
+  expect(countTasksAwaitingLandingInWorkspace(db, undefined, "reef")).toBe(3);
 });
 
-it("workspace 名では、abandon 済み・着地済み・別 workspace・workspace 未指定の完了タスクを数えない", () => {
+it("workspace 名では、abandon 済み・着地済み・別 workspace・workspace 未指定の完了タスクを数えない", async () => {
   db = openDb(":memory:");
   const now = new Date("2026-10-09T00:00:00.000Z");
-  const abandoned = completedWorkIn(db, now, "reef");
-  deferLanding(db, abandoned.id, now);
-  registerPrPromotionFailureQuestion(db, abandoned, "boom", now);
-  const [failure] = promotionFailures(db, abandoned.id);
-  answerQuestion(db, getTask(db, failure!.id)!, ["abandon promotion"], now, undefined, undefined, undefined, "webui");
-  const opened = completedWorkIn(db, now, "reef");
-  deferLanding(db, opened.id, now);
-  recordPrOpenedViaWorker(db, opened, 7, "tako", now, { authority: { merge: "escalate" } });
-  const nothing = completedWorkIn(db, now, "reef");
-  deferLanding(db, nothing.id, now);
+  await abandonedWork(db, now, "reef");
+  recordPrOpenedViaWorker(db, completedWorkIn(db, now, "reef"), 7, "tako", now, { authority: { merge: "escalate" } });
   appendEvent(db, {
-    taskId: nothing.id,
+    taskId: completedWorkIn(db, now, "reef").id,
     workerId: BOARD_WORKER_ID,
     origin: "board",
     payload: { kind: "nothing_to_land", base: "main" },
     at: now,
   });
-  deferLanding(db, completedWorkIn(db, now, "lagoon").id, now);
-  deferLanding(db, completedWorkIn(db, now).id, now);
+  completedWorkIn(db, now, "lagoon");
+  completedWorkIn(db, now);
 
-  expect(countTasksAwaitingLandingInWorkspace(db, "reef")).toBe(0);
-  expect(countTasksAwaitingLandingInWorkspace(db, "lagoon")).toBe(1);
+  expect(countTasksAwaitingLandingInWorkspace(db, undefined, "reef")).toBe(0);
+  expect(countTasksAwaitingLandingInWorkspace(db, undefined, "lagoon")).toBe(1);
 });
 
 // ADR 0234: 未決着タスクは、決着したときに着地し直す完了した work の祖先の workspace も参照する
@@ -4128,7 +4208,7 @@ it("PR 昇格を abandon した後、内容を変えない付帯子が決着し�
   expect(github.requests).toHaveLength(1);
   expect(openPromotionQuestions(db, work.id)).toEqual([]);
   expect(quarantineQuestion(db, "agent", "tako")).toBeUndefined();
-  expect(countTasksAwaitingLanding(db, "tako", "tako")).toBe(0);
+  expect(countTasksAwaitingLanding(db, undefined, "tako", "tako")).toBe(0);
 });
 
 it("PR 昇格を abandon した後、修理が内容を変えて決着すると、profile を読まず PR も開かずに昇格の question を1つ立て直し、retry と答えると PR が開く", async () => {
@@ -4151,7 +4231,7 @@ it("PR 昇格を abandon した後、修理が内容を変えて決着すると�
       question_items: [{ options: ["retry", "abandon promotion"], recommendation: "retry" }],
     },
   ]);
-  expect(countTasksAwaitingLanding(db, "tako", "tako")).toBe(1);
+  expect(countTasksAwaitingLanding(db, undefined, "tako", "tako")).toBe(1);
 
   authority.resolve = () => profile("escalate");
   await answerPromotion(db, clock, landing, workspace, reasked[0]!, "retry");
@@ -4370,8 +4450,8 @@ it("既定 workspace a で pickup した workspace 未指定の完了タスク�
     resolveAuthority: () => profile("auto_if_ci_green"),
   });
 
-  expect(countTasksAwaitingLandingInWorkspace(db, a.name)).toBe(2);
-  expect(countTasksAwaitingLandingInWorkspace(db, b.name)).toBe(0);
+  expect(countTasksAwaitingLandingInWorkspace(db, undefined, a.name)).toBe(2);
+  expect(countTasksAwaitingLandingInWorkspace(db, undefined, b.name)).toBe(0);
 
   await landing.observeAutoMergeOutcomes("tako");
   await landing.tick("auto_merge", clock.now());
@@ -4424,8 +4504,8 @@ it("既定 agent a で pickup した assignee 未指定の完了タスクの PR 
     resolveAuthority: (assignee) => profile(assignee === "a" ? "auto_if_ci_green" : "escalate"),
   });
 
-  expect(countTasksAwaitingLanding(db, "a", "b")).toBe(1);
-  expect(countTasksAwaitingLanding(db, "b", "b")).toBe(0);
+  expect(countTasksAwaitingLanding(db, undefined, "a", "b")).toBe(1);
+  expect(countTasksAwaitingLanding(db, undefined, "b", "b")).toBe(0);
 
   await landing.tick("auto_merge", clock.now());
 

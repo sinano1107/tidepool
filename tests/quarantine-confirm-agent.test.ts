@@ -1,13 +1,22 @@
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { quarantineAgent } from "../src/quarantine.js";
+import { UnknownAgentError } from "../src/registry.js";
 import {
   api,
   bootTidepool,
+  commitWork,
+  completeViaMcp,
+  GIT_FIXTURE_TEST_TIMEOUT,
   HOUR,
+  makeRemoteBackedWorkspace,
+  questions,
   queueWork,
+  registerWork,
   servedQuarantineQuestion,
   type Tidepool,
 } from "./harness.js";
+
+vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 
 let t: Tidepool;
 afterEach(async () => {
@@ -98,4 +107,38 @@ it("registry にエントリはあるが定義が成立しない agent 名の qu
   expect(res.status).toBe(409);
   expect(res.json.error).toContain(`agent navigator's definition still does not hold (unknown tier "x")`);
   expect((await api(t.baseUrl, "GET", `/api/tasks/${question.id}`)).json.status).toBe("todo");
+});
+
+// ADR 0241 決定5・6: quarantine の受理は回答なので収束を突く —— quarantine が抱えていた根は失敗 question を持たないまま着地する
+it("PR を開く時点で profile が読めず agent 名の quarantine が抱えていた根は、registry を直して quarantine に答えると、その受理の後の収束で PR が開く", async () => {
+  const { workspace } = await makeRemoteBackedWorkspace("quarantine-confirm-agent-lands");
+  let repaired = false;
+  t = await bootTidepool({
+    workspace,
+    resolveAuthority: (assignee) => {
+      if (!repaired) throw new UnknownAgentError(assignee!);
+      return { name: "standard", guidance: "", merge: "escalate" };
+    },
+    agentRegistered: () => repaired,
+  });
+  const work = await registerWork(t, "ship reviewable work");
+  await t.clock.advance(HOUR);
+  commitWork(workspace.path, "feature.txt", "v1\n");
+  await completeViaMcp(t, work.id);
+  const review = (await api(t.baseUrl, "GET", "/api/tasks")).json.find(
+    (task: any) => task.type === "review" && task.parent_id === work.id,
+  );
+  await t.clock.advance(HOUR);
+  await completeViaMcp(t, review.id, false);
+  const { assignee } = (await api(t.baseUrl, "GET", `/api/tasks/${work.id}`)).json;
+  const question = await servedQuarantineQuestion(t, "agent", assignee);
+  expect(t.github.requests).toEqual([]);
+  expect((await questions(t)).filter((q: any) => q.title.startsWith("PR promotion"))).toEqual([]);
+
+  repaired = true;
+  const res = await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, { answers: ["repaired by hand"] });
+  expect(res.status).toBe(200);
+
+  await vi.waitFor(() => expect(t.github.requests).toHaveLength(1));
+  expect(t.github.requests[0]).toMatchObject({ branch: `task/${work.id}` });
 });

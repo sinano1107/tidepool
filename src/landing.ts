@@ -6,7 +6,7 @@ import { appendEvent, latestEventOfTask, type TaskScopedPayload } from "./events
 import { git } from "./git.js";
 import type { GitHubClient, PrState } from "./github.js";
 import type { GitHubAuth } from "./github-auth.js";
-import { quarantineAgent } from "./quarantine.js";
+import { type QuarantineKind, quarantineAgent } from "./quarantine.js";
 import { type AuthorityProfile, isUnresolvableAgentError, remoteTrackingRef } from "./registry.js";
 import {
   contentSourceFor,
@@ -25,9 +25,7 @@ import {
   subtreeSql,
   type Task,
   type TaskType,
-  taskHasLandedSql,
   taskIdForPr,
-  typeAwareDefaultAgentSql,
 } from "./tasks.js";
 import { activeTriageSession } from "./triage.js";
 import { BOARD_WORKER_ID, HUMAN_WORKER_ID } from "./worker-id.js";
@@ -38,6 +36,7 @@ import {
   isRemoteBacked,
   protectedBranch,
   protectedBranchRef,
+  quarantineWorkspace,
   rebaselineRef,
   refreshProtectedBranch,
   resolveOrQuarantine,
@@ -45,7 +44,9 @@ import {
   taskBranch,
   taskBranchExists,
   taskBranchTip,
+  UnknownWorkspaceError,
   type WorkspaceConfig,
+  type WorkspaceResolver,
   workspaceNeedsHuman,
 } from "./workspace.js";
 
@@ -61,15 +62,16 @@ export type LandingVerdict =
   | { kind: "up_to_date"; prNumber: number }
   // retry が答えている根を、この回の収束は撃たなかった(ADR 0241 決定5)。error は回答の拒否文
   | { kind: "excluded"; reason: "pull_request_closed" | "teardown_unfinished" | "not_a_root"; error: string }
+  // 止まっている原因が quarantine の question としてすでに出ている —— 失敗 question を重ねない(ADR 0241 決定6)。error は retry の拒否文
+  | { kind: "quarantined"; error: string }
   | {
       kind: "failed";
       reason:
         | "workspace_unavailable"
-        | "workspace_needs_human"
-        | "agent_unavailable"
         | "github_not_configured"
         | "pull_request_already_merged"
         | "pull_request_closed"
+        | "content_left_behind"
         | "promotion_failed";
       error: string;
     };
@@ -91,58 +93,51 @@ function countUnbundledObjections(db: Db, taskId: string): number {
   return n;
 }
 
-function taskHasLanded(db: Db, taskId: string): boolean {
-  return db.prepare(`SELECT 1 WHERE ${taskHasLandedSql("@taskId")}`).get({ taskId }) !== undefined;
-}
-
 /** 着地を待つ完了タスクを agent 名の参照で数える(ADR 0217 決定4)—— agent 名の quarantine の解除と
- *  agent 削除の扉。集合の定義は `countAwaitingLanding` にある。 */
+ *  agent 削除の扉。集合の定義は `tasksAwaitingLanding` にある。 */
 export function countTasksAwaitingLanding(
   db: Db,
+  resolve: WorkspaceResolver | undefined,
   agentName: string,
   defaultAgentName?: string,
-  auditorName?: string,
 ): number {
-  const fallback = typeAwareDefaultAgentSql("t.type", "@defaultAgentName", "@auditorName");
-  return countAwaitingLanding(db, `COALESCE(t.assignee, ${fallback}) = @agentName`, {
-    agentName,
-    defaultAgentName: defaultAgentName ?? null,
-    auditorName: auditorName ?? null,
-  });
+  return tasksAwaitingLanding(db, resolve).filter((task) => (task.assignee ?? defaultAgentName) === agentName).length;
 }
 
 /** 同じ集合を、タスクの `workspace` の参照で数える —— workspace の削除の扉(ADR 0226)。 */
-export function countTasksAwaitingLandingInWorkspace(db: Db, workspaceName: string): number {
-  return countAwaitingLanding(db, "t.workspace = @workspaceName", { workspaceName });
+export function countTasksAwaitingLandingInWorkspace(
+  db: Db,
+  resolve: WorkspaceResolver | undefined,
+  workspaceName: string,
+): number {
+  return tasksAwaitingLanding(db, resolve).filter((task) => task.workspace === workspaceName).length;
 }
 
-/** 着地を待つ完了タスク(ADR 0217 決定4 / ADR 0226): agent 名の quarantine の解除と
- *  agent 削除の扉は agent 名で、workspace の削除の扉はタスクの `workspace` で、同じ集合を数える。
- *  「未着地の done」だけでは、祖先の枝に乗る子(収束は何も記録しない)と PR 昇格を
- *  abandon したタスクを永久に数えてしまうので、待っている積極的な証拠で数える ——
- *  無人 merge キューにいる、または未着地で、PR 昇格失敗の question が開いているか、門で止まった
- *  記録があって昇格を abandon していない。`landing_deferred` は1タスクに1回しか刻まれないので、
- *  retry が再び門で止まった場合も記録は最初の1つのままである —— 失敗 question が立ったこと
- *  ではなく、abandon と答えたことだけを待ちの終わりに数える。 */
-function countAwaitingLanding(db: Db, referenceSql: string, params: Record<string, string | null>): number {
-  const rows = db
-    .prepare(
-      `SELECT t.id, EXISTS (SELECT 1 FROM pending_auto_merges WHERE task_id = t.id) AS queued
-         FROM tasks t
-        WHERE t.type = 'work' AND t.status = 'done'
-          AND ${referenceSql}
-          AND (queued
-               OR EXISTS (SELECT 1 FROM tasks q
-                           WHERE q.question_pending_pr_promotion_task_id = t.id AND q.status = 'todo')
-               OR (EXISTS (SELECT 1 FROM events d
-                            WHERE d.task_id = t.id AND d.kind = 'landing_deferred')
-                   AND NOT EXISTS (SELECT 1 FROM tasks q
-                                     JOIN events a ON a.task_id = q.id AND a.kind = 'question_answered'
-                                    WHERE q.question_pending_pr_promotion_task_id = t.id
-                                      AND json_extract(a.payload, '$.answers[0].answer') = @abandon)))`,
-    )
-    .all({ ...params, abandon: PR_PROMOTION_FAILURE_OPTIONS[1] }) as Array<{ id: string; queued: number }>;
-  return rows.filter((row) => row.queued === 1 || !taskHasLanded(db, row.id)).length;
+/** 着地を待つ完了タスク(ADR 0217 決定4 / ADR 0226 / ADR 0241 決定6): 収束の導出を1回走らせ、PR をまだ開いていない
+ *  未着地の根と、無人 merge キューにいるものを返す。何も書かない。profile を読むのは面を開くとき(PR の作成)と無人
+ *  merge の瞬間だけなので(ADR 0217 決定3・4)、この2つに絞る —— 開いている PR への push は profile を読まない。
+ *  根は、門・quarantine・開いた失敗 question で止まっているものを含み、断念が効いている根(ADR 0225)は除く。立て直した
+ *  昇格の question が開いていれば、その retry が profile を読むので数える。 */
+function tasksAwaitingLanding(db: Db, resolve: WorkspaceResolver | undefined): Task[] {
+  const roots = deriveLandingRoots(db, resolve)
+    .map(({ task }) => task)
+    .filter(
+      (task) =>
+        task.pr_number === null &&
+        (!abandonEventInForce(db, task.id) || openPrPromotionQuestionIds(db, task.id).length > 0),
+    );
+  return [...roots, ...listPendingAutoMerges(db).map(({ task_id }) => getTask(db, task_id)!)];
+}
+
+/** ADR 0225 決定2: 断念は人間の最新の明示の判断である間だけ効く。その間は断念の event を返す —— 後の retry が
+ *  PR を開くか push していれば、断念はその retry に置き換わっている */
+function abandonEventInForce(db: Db, taskId: string) {
+  const abandoned = latestEventOfTask(db, taskId, "pr_promotion_abandoned");
+  if (!abandoned) return undefined;
+  const landedAfter = db
+    .prepare("SELECT 1 FROM events WHERE task_id = ? AND kind IN ('pr_opened', 'pr_branch_pushed') AND id > ?")
+    .get(taskId, abandoned.id);
+  return landedAfter === undefined ? abandoned : undefined;
 }
 
 export function landingBlock(db: Db, taskId: string): LandingBlock | null {
@@ -159,6 +154,15 @@ export function landingBlock(db: Db, taskId: string): LandingBlock | null {
  *  比べられなければ積み残しとする(fail-closed)。門(`landingBlock`)とは別の述語で、読むのは回答時と merge 時
  *  だけである(ADR 0231 決定3)。 */
 export function hasContentLeftBehind(db: Db, workspace: WorkspaceConfig, taskId: string): boolean {
+  try {
+    return contentLeftBehind(db, workspace, taskId).length > 0;
+  } catch {
+    return true;
+  }
+}
+
+/** 積み残しを運ぶタスクの id —— 比べられなければ throw する。push の後の読み直し(ADR 0241 決定7)が名指しに使う。 */
+function contentLeftBehind(db: Db, workspace: WorkspaceConfig, taskId: string): string[] {
   const targets = db
     .prepare(
       `${subtreeSql("@root", true)}
@@ -167,15 +171,12 @@ export function hasContentLeftBehind(db: Db, workspace: WorkspaceConfig, taskId:
     )
     .all({ root: taskId }) as Array<{ id: string }>;
   const mergeHead = remoteTrackingRef(taskBranch(taskId));
-  try {
-    return targets.some(
+  return targets
+    .filter(
       ({ id }) =>
-        taskBranchExists(workspace, id) &&
-        branchMergeEffect(workspace, mergeHead, taskBranch(id)).changesCandidate,
-    );
-  } catch {
-    return true;
-  }
+        taskBranchExists(workspace, id) && branchMergeEffect(workspace, mergeHead, taskBranch(id)).changesCandidate,
+    )
+    .map(({ id }) => id);
 }
 
 export function landingAnnotation(
@@ -228,10 +229,7 @@ function prMergedSql(t: string): string {
  *  着地の契機である)。lineage が祖先のブランチへ帰る done の work は根ではない。workspace を解決できない候補と lineage が
  *  読めない候補は根かどうか分からないので根として返し、撃つ側がその根の失敗として人間に見せる。後始末が未了の木は、
  *  撃つ直前に根ごとに読む(`landRoot`)。 */
-function deriveLandingRoots(
-  db: Db,
-  resolve: ((taskWorkspace: string | null) => WorkspaceConfig) | undefined,
-): LandingRoot[] {
+function deriveLandingRoots(db: Db, resolve: WorkspaceResolver | undefined): LandingRoot[] {
   const ids = db
     .prepare(
       `WITH RECURSIVE
@@ -597,14 +595,17 @@ function recordLandingDeferred(
 
 export function createLanding(deps: LandingDeps): Landing {
   /** ADR 0217 決定3: 解決できない profile はダイヤルを推測せず、agent 名の quarantine に落として
-   *  undefined を返す。registry の無い盤面(resolver 無し)は profile 無しで解決する。 */
-  const readAuthority = (task: Task, now: Date): { profile: AuthorityProfile | undefined } | undefined => {
+   *  その名前を返す。registry の無い盤面(resolver 無し)は profile 無しで解決する。 */
+  const readAuthority = (
+    task: Task,
+    now: Date,
+  ): { profile: AuthorityProfile | undefined } | { quarantinedAgent: string } => {
     try {
       return { profile: deps.resolveAuthority?.(task.assignee, task.type) };
     } catch (err) {
       if (!isUnresolvableAgentError(err)) throw err;
       quarantineAgent(deps.db, err.agentName, err, now);
-      return undefined;
+      return { quarantinedAgent: err.agentName };
     }
   };
   /** ADR 0217 決定1・2: いま着地しても無人 merge キューに入るかを読み直し、入らなければ
@@ -675,8 +676,13 @@ export function createLanding(deps: LandingDeps): Landing {
     }
     return { kind: "failed", reason, error: message };
   };
-  const agentUnavailable = (task: Task, ctx: RootContext) =>
-    failed(task, "agent_unavailable", "the assigned agent's authority profile cannot be resolved for landing", ctx);
+  const quarantined = (quarantine: Extract<QuarantineKind, "workspace" | "agent">, name: string): LandingVerdict => ({
+    kind: "quarantined",
+    error:
+      quarantine === "workspace"
+        ? `workspace "${name}" is quarantined and needs human attention before landing; answer its quarantine question`
+        : `agent "${name}" is quarantined: its authority profile cannot be resolved for landing; repair the registry and answer its quarantine question`,
+  });
   /** ADR 0225 決定1: 刻んだ head から内容が変わったか(ADR 0105 と同じ比較)。読めなければ「変わった」—— 修理を捨てない側。
    *  workspace を解決できない場合も「変わった」と読むのは ADR 0234 決定3 */
   const changedSince = (task: Task, head: string | null): boolean => {
@@ -687,16 +693,6 @@ export function createLanding(deps: LandingDeps): Landing {
     } catch {
       return true;
     }
-  };
-  /** ADR 0225 決定2: 断念は人間の最新の明示の判断である間だけ効く。その間は断念の event を返す —— 後の retry が
-   *  PR を開くか push していれば、断念はその retry に置き換わっている */
-  const abandonEventInForce = (taskId: string) => {
-    const abandoned = latestEventOfTask(deps.db, taskId, "pr_promotion_abandoned");
-    if (!abandoned) return undefined;
-    const landedAfter = deps.db
-      .prepare("SELECT 1 FROM events WHERE task_id = ? AND kind IN ('pr_opened', 'pr_branch_pushed') AND id > ?")
-      .get(taskId, abandoned.id);
-    return landedAfter === undefined ? abandoned : undefined;
   };
   const recordBoardFact = (taskId: string, payload: TaskScopedPayload) =>
     appendEvent(deps.db, { taskId, workerId: BOARD_WORKER_ID, origin: "board", payload, at: deps.clock.now() });
@@ -748,7 +744,7 @@ export function createLanding(deps: LandingDeps): Landing {
     }
     // ADR 0225 / ADR 0241 決定3: 断念した根には PR の有無によらず撃たない。門が開き、刻んだ head から
     // 内容が変わっていれば、PR を開かず(profile も読まず)昇格の question を立て直す。retry はこの守りを外す
-    const abandoned = ctx.answered ? undefined : abandonEventInForce(task.id);
+    const abandoned = ctx.answered ? undefined : abandonEventInForce(deps.db, task.id);
     if (abandoned) {
       // 門が閉じていれば他の理由より先に待つ(CONTEXT.md「収束」)。待った記録は刻まない —— 立て直しは門が開いてから(ADR 0225 決定2)
       const block = landingBlock(deps.db, task.id);
@@ -769,15 +765,42 @@ export function createLanding(deps: LandingDeps): Landing {
         error: `the content of ${taskBranch(task.id)} changed after PR promotion was abandoned`,
       };
     }
+    let resolvedWorkspace: string | undefined;
     try {
       const resolve = buildWorkspaceResolver(deps.resolveWorkspace, deps.workspace);
       if (!resolve) {
         return failed(task, "workspace_unavailable", "no workspace is configured for landing", ctx);
       }
-      const workspace = resolveOrQuarantine(deps.db, resolve, task.workspace, deps.clock.now());
-      if (!workspace) {
-        return failed(task, "workspace_unavailable", "workspace is unavailable for landing", ctx);
+      let workspace: WorkspaceConfig;
+      try {
+        workspace = resolve(task.workspace);
+      } catch (err) {
+        if (!(err instanceof UnknownWorkspaceError)) throw err;
+        quarantineWorkspace(deps.db, err.workspaceName, err, deps.clock.now());
+        return quarantined("workspace", err.workspaceName);
       }
+      resolvedWorkspace = workspace.name;
+      // ADR 0241 決定7: push しても積み残しが消えなければ、着地したとは言わない —— quarantine が抱えていなければ失敗 question を1回立てる
+      const afterPush = (landed: LandingVerdict): LandingVerdict => {
+        const left = contentLeftBehind(deps.db, workspace, task.id);
+        if (left.length === 0) {
+          retireFailures(task.id, ctx);
+          return landed;
+        }
+        if (workspaceNeedsHuman(deps.db, workspace.name)) return quarantined("workspace", workspace.name);
+        const [root, branches] = [taskBranch(task.id), left.map(taskBranch).join(", ")];
+        if (!ctx.answered) {
+          registerPrPromotionQuestion(
+            deps.db,
+            task,
+            `PR promotion left content behind: ${task.title}`,
+            `Pushing ${root} for completed task "${task.title}" left content behind: the content of ${branches} ` +
+              `has not reached ${root}. Merge it back into ${root}, then retry.`,
+            deps.clock.now(),
+          );
+        }
+        return { kind: "failed", reason: "content_left_behind", error: `pushed ${root}, but the content of ${branches} has not reached it` };
+      };
       // lineage が読めなかった候補は、根かどうか分からないまま人間に見せる(根ごとの失敗)
       if (lineageError !== undefined) return failed(task, "promotion_failed", lineageError, ctx);
       const merged = deps.db.prepare(`SELECT 1 FROM tasks t WHERE t.id = ? AND ${prMergedSql("t")}`).get(task.id) !== undefined;
@@ -795,19 +818,12 @@ export function createLanding(deps: LandingDeps): Landing {
         recordLandingDeferred(deps.db, task.id, block, deps.clock.now());
         return { kind: "deferred", reason: block.kind, count: block.count };
       }
-      // 門は quarantine より先に読む —— 門が閉じている間の失敗 question は retry で拒まれるだけになる(ADR 0241 決定3)
-      if (workspaceNeedsHuman(deps.db, workspace.name)) {
-        return failed(
-          task,
-          "workspace_needs_human",
-          `workspace "${workspace.name}" needs human attention before landing`,
-          ctx,
-        );
-      }
+      // 門は quarantine より先に読む(ADR 0241 決定3)
+      if (workspaceNeedsHuman(deps.db, workspace.name)) return quarantined("workspace", workspace.name);
       if (merged) return alreadyMerged(task, task.pr_number!, ctx);
       if (!isRemoteBacked(workspace)) {
         const resolved = readAuthority(task, deps.clock.now());
-        if (!resolved) return agentUnavailable(task, ctx);
+        if (!("profile" in resolved)) return quarantined("agent", resolved.quarantinedAgent);
         const purpose =
           resolved.profile?.merge === "auto_if_ci_green"
             ? `Workspace "${workspace.name}" is purely-local, so CI cannot be observed and ` +
@@ -859,8 +875,7 @@ export function createLanding(deps: LandingDeps): Landing {
         // push の直後に刻む —— 後段が throw しても、GitHub に載った head の猶予の起点は失わない(ADR 0227 決定2)
         recordBoardFact(task.id, { kind: "pr_branch_pushed", pr_number: task.pr_number, sha });
         rebaselineRef(deps.db, workspace, remoteTrackingRef(taskBranch(task.id)));
-        retireFailures(task.id, ctx);
-        return { kind: "landed", form: "open_pull_request_updated", prNumber: task.pr_number };
+        return afterPush({ kind: "landed", form: "open_pull_request_updated", prNumber: task.pr_number });
       }
       // ADR 0241 決定4: 作る前に同じタスクブランチの PR を探す —— 作成の後・記録の前に落ちた盤面が2つ目を作らない
       const found = await deps.github.findPullRequestByHead({ path: workspace.path, branch: taskBranch(task.id) });
@@ -880,7 +895,7 @@ export function createLanding(deps: LandingDeps): Landing {
       catchUp();
       // profile を読むのは面を開く時点だけ —— 開いている PR への push は読まない(ADR 0217 決定3)
       const resolved = readAuthority(task, deps.clock.now());
-      if (!resolved) return agentUnavailable(task, ctx);
+      if (!("profile" in resolved)) return quarantined("agent", resolved.quarantinedAgent);
       const sha = taskBranchTip(workspace, task.id);
       let prNumber: number;
       try {
@@ -913,9 +928,12 @@ export function createLanding(deps: LandingDeps): Landing {
         deps.isProtectedWorkspace?.(workspace.name),
         "worker",
       );
-      retireFailures(task.id, ctx);
-      return { kind: "landed", form: "pull_request_opened", prNumber };
+      return afterPush({ kind: "landed", form: "pull_request_opened", prNumber });
     } catch (error) {
+      // 読めなかった根を workspace の quarantine が抱えていれば、失敗 question を重ねない(ADR 0241 決定6)
+      if (resolvedWorkspace !== undefined && workspaceNeedsHuman(deps.db, resolvedWorkspace)) {
+        return quarantined("workspace", resolvedWorkspace);
+      }
       return failed(task, "promotion_failed", error, ctx);
     }
   };
@@ -1057,7 +1075,7 @@ export function createLanding(deps: LandingDeps): Landing {
           // PR はキューを外れる。profile が読めなければ agent を quarantine に落とし、キューに残してこの回は飛ばす(ADR 0217 決定3)
           const authorityIfGateOpen = () => {
             const resolved = readAuthority(task, now);
-            return resolved && !landingBlock(deps.db, task_id) ? resolved : undefined;
+            return "profile" in resolved && !landingBlock(deps.db, task_id) ? resolved : undefined;
           };
           const stop = (askQuestion?: (changed: string) => void) => {
             const resolved = authorityIfGateOpen();
