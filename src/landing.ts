@@ -6,7 +6,7 @@ import { appendEvent, latestEventOfTask, type TaskScopedPayload } from "./events
 import { git } from "./git.js";
 import type { GitHubClient, PrState } from "./github.js";
 import type { GitHubAuth } from "./github-auth.js";
-import { quarantineAgent } from "./quarantine.js";
+import { type QuarantineKind, quarantineAgent } from "./quarantine.js";
 import { type AuthorityProfile, isUnresolvableAgentError, remoteTrackingRef } from "./registry.js";
 import {
   contentSourceFor,
@@ -46,6 +46,7 @@ import {
   taskBranchTip,
   UnknownWorkspaceError,
   type WorkspaceConfig,
+  type WorkspaceResolver,
   workspaceNeedsHuman,
 } from "./workspace.js";
 
@@ -92,8 +93,6 @@ function countUnbundledObjections(db: Db, taskId: string): number {
   return n;
 }
 
-type WorkspaceResolver = (taskWorkspace: string | null) => WorkspaceConfig;
-
 /** 着地を待つ完了タスクを agent 名の参照で数える(ADR 0217 決定4)—— agent 名の quarantine の解除と
  *  agent 削除の扉。集合の定義は `tasksAwaitingLanding` にある。 */
 export function countTasksAwaitingLanding(
@@ -114,10 +113,11 @@ export function countTasksAwaitingLandingInWorkspace(
   return tasksAwaitingLanding(db, resolve).filter((task) => task.workspace === workspaceName).length;
 }
 
-/** 着地を待つ完了タスク(ADR 0217 決定4 / ADR 0226 / ADR 0241 決定6): 収束の導出を1回走らせ、面を開くときに profile を
- *  読む未着地の根 —— PR をまだ開いていないもの。門・quarantine・開いた失敗 question で止まっているものを含み、断念が
- *  効いている根(ADR 0225)は除く。立て直した昇格の question が開いていれば、その retry が profile を読むので数える ——
- *  と、無人 merge キューにいるもの。何も書かない。 */
+/** 着地を待つ完了タスク(ADR 0217 決定4 / ADR 0226 / ADR 0241 決定6): 収束の導出を1回走らせ、PR をまだ開いていない
+ *  未着地の根と、無人 merge キューにいるものを返す。何も書かない。profile を読むのは面を開くとき(PR の作成)と無人
+ *  merge の瞬間だけなので(ADR 0217 決定3・4)、この2つに絞る —— 開いている PR への push は profile を読まない。
+ *  根は、門・quarantine・開いた失敗 question で止まっているものを含み、断念が効いている根(ADR 0225)は除く。立て直した
+ *  昇格の question が開いていれば、その retry が profile を読むので数える。 */
 function tasksAwaitingLanding(db: Db, resolve: WorkspaceResolver | undefined): Task[] {
   const roots = deriveLandingRoots(db, resolve)
     .map(({ task }) => task)
@@ -676,7 +676,7 @@ export function createLanding(deps: LandingDeps): Landing {
     }
     return { kind: "failed", reason, error: message };
   };
-  const quarantined = (quarantine: "workspace" | "agent", name: string): LandingVerdict => ({
+  const quarantined = (quarantine: Extract<QuarantineKind, "workspace" | "agent">, name: string): LandingVerdict => ({
     kind: "quarantined",
     error:
       quarantine === "workspace"
@@ -765,6 +765,7 @@ export function createLanding(deps: LandingDeps): Landing {
         error: `the content of ${taskBranch(task.id)} changed after PR promotion was abandoned`,
       };
     }
+    let resolvedWorkspace: string | undefined;
     try {
       const resolve = buildWorkspaceResolver(deps.resolveWorkspace, deps.workspace);
       if (!resolve) {
@@ -778,6 +779,7 @@ export function createLanding(deps: LandingDeps): Landing {
         quarantineWorkspace(deps.db, err.workspaceName, err, deps.clock.now());
         return quarantined("workspace", err.workspaceName);
       }
+      resolvedWorkspace = workspace.name;
       // ADR 0241 決定7: push しても積み残しが消えなければ、着地したとは言わない —— quarantine が抱えていなければ失敗 question を1回立てる
       const afterPush = (landed: LandingVerdict): LandingVerdict => {
         const left = contentLeftBehind(deps.db, workspace, task.id);
@@ -786,8 +788,18 @@ export function createLanding(deps: LandingDeps): Landing {
           return landed;
         }
         if (workspaceNeedsHuman(deps.db, workspace.name)) return quarantined("workspace", workspace.name);
-        const branches = left.map(taskBranch).join(", ");
-        return failed(task, "content_left_behind", `pushed ${taskBranch(task.id)}, but the content of ${branches} has not reached it`, ctx);
+        const [root, branches] = [taskBranch(task.id), left.map(taskBranch).join(", ")];
+        if (!ctx.answered) {
+          registerPrPromotionQuestion(
+            deps.db,
+            task,
+            `PR promotion left content behind: ${task.title}`,
+            `Pushing ${root} for completed task "${task.title}" left content behind: the content of ${branches} ` +
+              `has not reached ${root}. Merge it back into ${root}, then retry.`,
+            deps.clock.now(),
+          );
+        }
+        return { kind: "failed", reason: "content_left_behind", error: `pushed ${root}, but the content of ${branches} has not reached it` };
       };
       // lineage が読めなかった候補は、根かどうか分からないまま人間に見せる(根ごとの失敗)
       if (lineageError !== undefined) return failed(task, "promotion_failed", lineageError, ctx);
@@ -918,6 +930,10 @@ export function createLanding(deps: LandingDeps): Landing {
       );
       return afterPush({ kind: "landed", form: "pull_request_opened", prNumber });
     } catch (error) {
+      // 読めなかった根を workspace の quarantine が抱えていれば、失敗 question を重ねない(ADR 0241 決定6)
+      if (resolvedWorkspace !== undefined && workspaceNeedsHuman(deps.db, resolvedWorkspace)) {
+        return quarantined("workspace", resolvedWorkspace);
+      }
       return failed(task, "promotion_failed", error, ctx);
     }
   };

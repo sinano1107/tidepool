@@ -3173,7 +3173,14 @@ it("開いている PR へ push した後に積み残しが残れば landed を�
 
   await expect(convergeOn(landing, work.id)).resolves.toMatchObject({ kind: "failed", reason: "content_left_behind" });
   expect(github.pushes).toHaveLength(1);
-  expect(promotionFailures(db, work.id).map((q) => q.purpose)).toEqual([expect.stringContaining(`task/${repair.id}`)]);
+  expect(promotionFailures(db, work.id).map(({ title, purpose }) => ({ title, purpose }))).toEqual([
+    {
+      title: "PR promotion left content behind: ship",
+      purpose:
+        `Pushing task/${work.id} for completed task "ship" left content behind: the content of task/${repair.id} ` +
+        `has not reached task/${work.id}. Merge it back into task/${work.id}, then retry.`,
+    },
+  ]);
 });
 
 it("push の後に積み残しが残っても、workspace の quarantine が抱えていれば失敗 question を立てず、その quarantine を名乗る", async () => {
@@ -3191,6 +3198,37 @@ it("push の後に積み残しが残っても、workspace の quarantine が抱�
     error: `workspace "${workspace.name}" is quarantined and needs human attention before landing; answer its quarantine question`,
   });
   expect(promotionFailures(db, work.id)).toEqual([]);
+});
+
+// ADR 0241 決定6: push の後に積み残しを比べられなくても、workspace の quarantine が抱えていれば失敗 question を重ねない。
+// 抱えていなければ失敗 question を立てる(fail-closed)
+it.each([
+  ["workspace の quarantine が抱えていれば、失敗 question を立てずその quarantine を名乗る", true],
+  ["quarantine が抱えていなければ、失敗 question を1枚立てる", false],
+])("push の後に積み残しを比べられないとき、%s", async (_, quarantine) => {
+  const { workspace, db, clock, github, work, landing } = await openPushedPr("left-behind-unreadable-after-push", "escalate");
+  commitWork(workspace.path, "repair.txt", "fixed\n");
+  finish(db, clock, work);
+  const pushBranch = github.pushBranch.bind(github);
+  github.pushBranch = async (input) => {
+    await pushBranch(input);
+    git(workspace.path, "update-ref", "-d", `refs/remotes/origin/task/${work.id}`);
+    if (quarantine) quarantineWorkspace(db, workspace.name, new Error("repair the checkout"), clock.now());
+  };
+
+  const verdict = await convergeOn(landing, work.id);
+
+  expect(github.pushes).toHaveLength(1);
+  if (quarantine) {
+    expect(verdict).toEqual({
+      kind: "quarantined",
+      error: `workspace "${workspace.name}" is quarantined and needs human attention before landing; answer its quarantine question`,
+    });
+    expect(promotionFailures(db, work.id)).toEqual([]);
+  } else {
+    expect(verdict).toMatchObject({ kind: "failed", reason: "promotion_failed" });
+    expect(promotionFailures(db, work.id)).toHaveLength(1);
+  }
 });
 
 it.each<[string, (pr: Awaited<ReturnType<typeof openPushedPr>>) => void]>([

@@ -15,7 +15,7 @@ import {
 import { unsettledSql } from "./task-status.js";
 import { type TaskType, typeAwareDefaultAgentSql } from "./tasks.js";
 import type { Tier } from "./tier.js";
-import type { WorkspaceConfig } from "./workspace.js";
+import type { WorkspaceResolver } from "./workspace.js";
 
 /** An assignee (or the board's default) resolved against the registry —
  *  the agent's own definition and its authority profile together, since spawn
@@ -129,7 +129,7 @@ export function verifyAgentRepaired(
   defaultAgentName?: string,
   auditorName?: string,
   definitionFailure?: string,
-  resolveWorkspace?: (taskWorkspace: string | null) => WorkspaceConfig,
+  resolveWorkspace?: WorkspaceResolver,
 ): void {
   if (resolution === "registry") return;
   const notBack = definitionFailure
