@@ -753,6 +753,7 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
     workspace: options.workspace,
     resolveWorkspace: options.resolveWorkspace,
     github: options.github,
+    githubAuth: options.githubAuth,
     landing,
     agentRegistered: options.agentRegistered,
     resolvesToBuiltIn: options.resolvesToBuiltIn,
