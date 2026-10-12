@@ -3361,12 +3361,15 @@ it("立て直した question への retry の時点で運ぶ内容が無けれ�
   expect(github.requests).toHaveLength(1);
 });
 
-it("PR 昇格を abandon した後に内容が変わっても、別の付帯子が未決着の間は question を立てず、その付帯子の決着で立てる", async () => {
+it("PR 昇格を abandon した後に内容が変わっても、別の付帯子が未決着の間は門で待ち(待った記録は刻まず)question を立てず、その付帯子の決着で立てる", async () => {
   const { db, clock, workspace, landing, work } = await abandonedPromotion("landing-abandon-gate");
   const pending = attachUnsettledChild(db, clock, work.id);
 
-  await landing.relandAncestors(settleAttachedChild(db, clock, workspace, work.id, "repair"));
+  await expect(
+    landing.relandAncestors(settleAttachedChild(db, clock, workspace, work.id, "repair")),
+  ).resolves.toEqual([{ taskId: work.id, verdict: { kind: "deferred", reason: "attached_children", count: 1 } }]);
   expect(openPromotionQuestions(db, work.id)).toEqual([]);
+  expect(boardEvents(db, work.id, "landing_deferred")).toEqual([]);
 
   await landing.relandAncestors(completeTask(db, pending, FULL_HANDOFF, "tako", clock.now(), "worker"));
   expect(openPromotionQuestions(db, work.id).map((q) => q.title)).toEqual(["PR promotion re-asked: ship"]);

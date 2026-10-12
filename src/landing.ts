@@ -628,8 +628,10 @@ export function createLanding(deps: LandingDeps): Landing {
       // 内容が変わっていれば、PR を開かず(profile も読まず)昇格の question を立て直す。retry はこの守りを外す
       const abandoned = excludePrPromotionQuestionId === undefined ? abandonEventInForce(task.id) : undefined;
       if (abandoned) {
+        // 門が閉じていれば他の理由より先に待つ(CONTEXT.md「収束」)。待った記録は刻まない —— 立て直しは門が開いてから(ADR 0225 決定2)
+        const block = landingBlock(deps.db, task.id);
+        if (block) return { kind: "deferred", reason: block.kind, count: block.count };
         if (
-          landingBlock(deps.db, task.id) ||
           hasOpenPrPromotionQuestion(deps.db, task.id) ||
           !changedSince(task, abandoned.payload.head)
         ) {
