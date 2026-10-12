@@ -744,16 +744,10 @@ export function createLanding(deps: LandingDeps): Landing {
             );
           }
           // ADR 0241 決定3: 盤面の外で閉じられた PR には push しない。閉じたことは観測として1回だけ刻み、
-          // 人間の close を question で問い返さない
+          // 人間の close を question で問い返さない。キューからも外す —— tick が同じ観測を重ねない
           if (state === "CLOSED") {
             if (latestEventOfTask(deps.db, task.id, OBSERVED.CLOSED)?.payload.pr_number !== task.pr_number) {
-              appendEvent(deps.db, {
-                taskId: task.id,
-                workerId: BOARD_WORKER_ID,
-                origin: "board",
-                payload: { kind: OBSERVED.CLOSED, pr_number: task.pr_number },
-                at: deps.clock.now(),
-              });
+              retireAutoMerge(deps.db, task.id, { kind: OBSERVED.CLOSED, pr_number: task.pr_number }, deps.clock.now());
             }
             return {
               kind: "failed",

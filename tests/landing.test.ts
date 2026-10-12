@@ -575,6 +575,25 @@ it("盤面の外で閉じた PR を持つ根の再発火は push せず、閉じ
   expect(github.pushes).toEqual([]);
 });
 
+it("無人 merge キューにいる閉じた PR は、再発火が閉じた観測を刻んだ後の tick で観測を重ねない", async () => {
+  const { workspace } = await makeRemoteBackedWorkspace("landing-closed-queued-pr");
+  const { db, clock } = await openBoard();
+  const github = new FakeGitHubClient();
+  const work = queueAutoMerge(db, clock, 1);
+  git(workspace.path, "checkout", "-b", `task/${work.id}`);
+  commitWork(workspace.path, "repair.txt", "fixed\n");
+  github.scriptClosedOutside(1);
+  const landing = autoMerging(db, clock, workspace, github);
+
+  completeTask(db, work, FULL_HANDOFF, "tako", clock.now(), "worker");
+  settleReviews(db, clock.now());
+
+  await expect(landing.land(getTask(db, work.id)!)).resolves.toMatchObject({ reason: "pull_request_closed" });
+  await landing.tick("auto_merge", clock.now());
+
+  expect(boardEvents(db, work.id, "pr_close_observed")).toEqual(closeObserved(1));
+});
+
 it("open PR branch の push 失敗は既存の着地痕跡で隠さず failure question を立てる", async () => {
   const { workspace } = await makeRemoteBackedWorkspace("landing-push-failure");
   const { db, clock } = await openBoard();
