@@ -24,12 +24,13 @@ import {
   registryPinChanges,
 } from "./execution-setting.js";
 import { type GitHubClient, IssueGoneError } from "./github.js";
+import type { GitHubAuth } from "./github-auth.js";
 import type { HarnessContainmentCheck } from "./harness-containment.js";
-import { hasContentLeftBehind, type Landing, type LandingVerdict, landingBlock, observePrHead, recordPrPromotionAbandoned, UNREPORTED_CI_GRACE_ORIGIN_TEXT, UNREPORTED_CI_GRACE_TEXT, unreportedCiGraceElapsed } from "./landing.js";
+import { hasContentLeftBehind, type Landing, type LandingVerdict, landingBlock, observePrHead, openPrPromotionQuestionIds, recordPrPromotionAbandoned, UNREPORTED_CI_GRACE_ORIGIN_TEXT, UNREPORTED_CI_GRACE_TEXT, unreportedCiGraceElapsed } from "./landing.js";
 import { approveMemoryProposal, humanEntryInput, listMemoryEntries, type MemoryAmendment, movedTail, parseMemoryAmendment, rejectMemoryProposal } from "./memory.js";
 import { whyNotPositiveInteger } from "./positive-integer.js";
 import type { Provider } from "./provider.js";
-import { parseTableRowEffortValue, parseTableRowValue, type QuarantineChecks, type QuarantineKind, type QuarantineResolvers, quarantineStops, tableRowEffortTrigger } from "./quarantine.js";
+import { openQuarantineQuestion, parseTableRowEffortValue, parseTableRowValue, type QuarantineChecks, type QuarantineKind, type QuarantineResolvers, quarantineStops, tableRowEffortTrigger } from "./quarantine.js";
 import type { Harness, RegistryReachabilityCheck } from "./registry.js";
 import { RegistryFetchFailedError, RegistryPushFailedError } from "./registry-write.js";
 import { parseGitHubRepo, repairRepoAccess } from "./repo-access.js";
@@ -75,6 +76,7 @@ import {
   protectedBranch,
   quarantineWorkspace,
   rebaselineRef,
+  redoMergeBacks,
   UnknownWorkspaceError,
   verifyWorkspaceClean,
   type WorkspaceConfig,
@@ -447,6 +449,8 @@ export interface QuarantineCheckDeps {
   workspace?: WorkspaceConfig;
   resolveWorkspace?: (taskWorkspace: string | null) => WorkspaceConfig;
   github?: GitHubClient;
+  /** merge back のやり直し(ADR 0240 決定4)の fetch が使う盤面の GitHub 身元(ADR 0093)。 */
+  githubAuth?: GitHubAuth;
   /** ADR 0217 決定5: agent 名の quarantine の解除検査の前に、その agent のキューの PR の
    *  盤面の外での merge を観測する。Absent → 観測せず、キューの PR は着地待ちに数えられる。 */
   landing?: Pick<Landing, "observeAutoMergeOutcomes">;
@@ -512,11 +516,15 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
           `no workspace configured for "${quarantineWorkspaceName}" — cannot verify repair`,
         );
       }
-      try {
-        verifyWorkspaceClean(target);
-      } catch (err) {
-        throw new DomainError(err instanceof Error ? err.message : String(err));
-      }
+      // workspace の検査の失敗は、どれも理由をそのまま人間へ返す回答の拒否である
+      const refuseOnError = async (check: () => void | Promise<void>) => {
+        try {
+          await check();
+        } catch (err) {
+          throw new DomainError(err instanceof Error ? err.message : String(err));
+        }
+      };
+      await refuseOnError(() => verifyWorkspaceClean(target));
       if (deps.boardState) {
         const overlap = boardStateOverlap(target.path, deps.boardState);
         if (overlap) throw new DomainError(overlap.reason);
@@ -531,6 +539,7 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
         const { guidance } = await repairRepoAccess(deps.github, ref);
         if (guidance) throw new DomainError(guidance);
       }
+      await refuseOnError(() => redoMergeBacks(deps.db, target, deps.workspace?.name, deps.githubAuth));
     },
     agent: async (value) => {
       const quarantineAgentName = value!;
@@ -966,8 +975,17 @@ export async function submitAnswer(
       );
       // ADR 0231 決定3: 積み残しは門の検査と同じ時点で、門とは別に読む
       if (hasContentLeftBehind(deps.db, mergeWorkspace, landingTaskId)) {
+        // ADR 0240 決定5: 運ぶ面を名指しする
+        const quarantineQuestionId = openQuarantineQuestion(deps.db, "workspace", mergeWorkspace.name)?.id;
+        const promotionQuestionId = openPrPromotionQuestionIds(deps.db, landingTaskId)[0];
+        const carrier = quarantineQuestionId
+          ? `the open workspace quarantine question (${quarantineQuestionId})`
+          : promotionQuestionId && `the open PR promotion failure question (${promotionQuestionId})`;
         throw new DomainError(
-          `cannot merge yet: PR #${mergePr} does not carry all of the task's content yet — answer again once the board has pushed it`,
+          `cannot merge yet: PR #${mergePr} does not carry all of the task's content yet — ` +
+            (carrier
+              ? `${carrier} carries it; answer that question first, then answer again`
+              : "the board is still carrying it; answer again later"),
         );
       }
       const pr = await deps.github.readPullRequest({ path: mergeWorkspace.path, number: mergePr });

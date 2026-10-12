@@ -1,14 +1,16 @@
+import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { resolveExecutionAgent } from "../src/agent.js";
 import { type Db, openDb } from "../src/db.js";
 import { DomainError } from "../src/domain-error.js";
 import { appendEvent, latestEventOfTask, listEvents } from "../src/events.js";
-import { submitAnswer } from "../src/human-verbs.js";
+import { quarantineChecks, submitAnswer } from "../src/human-verbs.js";
 import {
   countTasksAwaitingLanding,
   countTasksAwaitingLandingInWorkspace,
   createLanding,
+  hasContentLeftBehind,
   type Landing,
   landingAnnotation,
   registerLocalMergeQuestion,
@@ -3041,8 +3043,11 @@ function settleRepairNotMergedBack(
   return getTask(db, repair.id)!;
 }
 
-it("merge back が conflict して後始末が閉じても、修理の内容が merge される head に無ければ積み残しで、CI 緑でも無人 merge されない", async () => {
-  const { workspace, db, clock, github, work, landing } = await openPushedPr("left-behind-merge-back-conflict", "auto_if_ci_green");
+/** #1777 の形: 修理の merge back が後始末で conflict し、workspace が quarantine に落ちる。checkout は着地するタスクの
+ *  ブランチの上で merge の途中のまま残る。 */
+async function quarantinedByMergeBackConflict(name: string, merge: MergeDial) {
+  const pr = await openPushedPr(name, merge);
+  const { workspace, db, clock, work } = pr;
   const repair = attachUnsettledChild(db, clock, work.id);
   git(workspace.path, "checkout", "-b", `task/${repair.id}`, `task/${work.id}`);
   commitWork(workspace.path, "repair.txt", "fixed\n");
@@ -3052,11 +3057,164 @@ it("merge back が conflict して後始末が閉じても、修理の内容が 
   await prepareWorkspaceAtPickup(db, workspace, repair, {});
   completeTask(db, repair, FULL_HANDOFF, "worker", clock.now(), "worker");
   releaseWorkspace(db, workspace, getTask(db, repair.id)!, clock.now(), true);
-  expect(quarantineQuestion(db, "workspace", workspace.name)?.purpose).toContain(`git merge task/${repair.id}`);
+  const question = quarantineQuestion(db, "workspace", workspace.name)!;
+  return { ...pr, repair: getTask(db, repair.id)!, question };
+}
+
+it("merge back が conflict して後始末が閉じても、修理の内容が merge される head に無ければ積み残しで、CI 緑でも無人 merge されない", async () => {
+  const { clock, github, repair, question, landing } = await quarantinedByMergeBackConflict(
+    "left-behind-merge-back-conflict",
+    "auto_if_ci_green",
+  );
+  expect(question.purpose).toContain(`git merge task/${repair.id}`);
 
   await landing.tick("auto_merge", clock.now());
 
   expect(github.merged).toEqual([]);
+});
+
+// ADR 0240 決定4: workspace の quarantine の受理の検査は、内容が帰り先に届いていない done の work の merge back を
+// やり直す。以下がこの検査を述べる唯一の場所(ADR 0107)。
+function answerWorkspaceQuarantine(
+  { db, clock, workspace, landing }: { db: Db; clock: FakeClock; workspace: WorkspaceConfig; landing: Landing },
+  question: Task,
+  pollNow: () => void = () => {},
+) {
+  return submitAnswer(
+    { db, pollNow, landing, quarantineChecks: quarantineChecks({ db, workspace }) },
+    getTask(db, question.id)!,
+    ["repaired by hand"],
+    undefined,
+    () => clock.now(),
+    "webui",
+  );
+}
+
+const head = (workspace: WorkspaceConfig) => git(workspace.path, "rev-parse", "--abbrev-ref", "HEAD");
+
+it("merge back の conflict を abort しただけの受理は、merge back をやり直して conflict し、取り消して休止位置へ戻し、2つの出口を示して拒む", async () => {
+  const pr = await quarantinedByMergeBackConflict("redo-merge-back-conflict", "escalate");
+  const { workspace, db, work, repair, question } = pr;
+  git(workspace.path, "merge", "--abort");
+
+  await expect(answerWorkspaceQuarantine(pr, question)).rejects.toThrow(
+    new DomainError(
+      `task/${repair.id} does not merge cleanly into 'task/${work.id}' — either merge it there by hand in workspace ` +
+        `${workspace.name} and commit, or, to discard it, record it there with \`git merge -s ours task/${repair.id}\`; ` +
+        "then answer again",
+    ),
+  );
+
+  expect(head(workspace)).toBe("main");
+  expect(git(workspace.path, "status", "--porcelain")).toBe("");
+  expect(hasContentLeftBehind(db, workspace, work.id)).toBe(true);
+  expect(getTask(db, question.id)!.status).toBe("todo");
+});
+
+it("merge back が走らなかった修理は、受理の検査が帰り先へ merge して休止位置へ戻し、受理する", async () => {
+  const pr = await openPushedPr("redo-merge-back-clean", "escalate");
+  const { workspace, db, clock, work } = pr;
+  const repair = settleRepairNotMergedBack(db, clock, workspace, work.id);
+  quarantineWorkspace(db, workspace.name, new Error("GitHub token acquisition failed"), clock.now());
+  const question = quarantineQuestion(db, "workspace", workspace.name)!;
+  const pollNow = vi.fn();
+
+  await answerWorkspaceQuarantine(pr, question, pollNow);
+
+  expect(getTask(db, question.id)!.status).toBe("done");
+  expect(pollNow).toHaveBeenCalledOnce();
+  expect(head(workspace)).toBe("main");
+  expect(git(workspace.path, "merge-base", "--is-ancestor", `task/${repair.id}`, `task/${work.id}`)).toBe("");
+});
+
+it.each<[string, (workspace: WorkspaceConfig, repairId: string) => void]>([
+  [
+    "手で merge を解いた",
+    (workspace, repairId) => {
+      expect(() => git(workspace.path, "merge", `task/${repairId}`)).toThrow();
+      commitWork(workspace.path, "repair.txt", "fixed and conflicting\n");
+    },
+  ],
+  [
+    "`merge -s ours` で修理を捨てると記録した",
+    (workspace, repairId) => {
+      git(workspace.path, "merge", "-s", "ours", "--no-edit", `task/${repairId}`);
+    },
+  ],
+])("merge back の conflict を%s後の受理は通り、収束を突き、続く収束が根へ push して積み残しが消える", async (_, repairByHand) => {
+  const pr = await quarantinedByMergeBackConflict("redo-merge-back-repaired", "escalate");
+  const { workspace, db, clock, work, repair, question, landing } = pr;
+  git(workspace.path, "merge", "--abort");
+  repairByHand(workspace, repair.id);
+  const pollNow = vi.fn();
+
+  await answerWorkspaceQuarantine(pr, question, pollNow);
+
+  expect(getTask(db, question.id)!.status).toBe("done");
+  expect(pollNow).toHaveBeenCalledOnce();
+  finish(db, clock, work);
+  await expect(convergeOn(landing, work.id)).resolves.toMatchObject({ kind: "landed", form: "open_pull_request_updated" });
+  expect(hasContentLeftBehind(db, workspace, work.id)).toBe(false);
+});
+
+it("その workspace で session が走っている間は、checkout を動かさずに受理を拒む", async () => {
+  const pr = await quarantinedByMergeBackConflict("redo-merge-back-running", "escalate");
+  const { workspace, db, clock, work, question } = pr;
+  git(workspace.path, "merge", "--abort");
+  pickupTask(db, landingWork(db, clock), "worker", clock.now());
+
+  await expect(answerWorkspaceQuarantine(pr, question)).rejects.toThrow(
+    new DomainError(`a session or its teardown is still running in workspace ${workspace.name} — answer again once it has finished`),
+  );
+
+  expect(head(workspace)).toBe(`task/${work.id}`);
+  expect(getTask(db, question.id)!.status).toBe("todo");
+});
+
+it("merge が始まる前に落ちても、取り消す merge の無いまま git の理由で拒み、checkout は休止位置に戻っている", async () => {
+  const pr = await openPushedPr("redo-merge-back-refused-to-start", "escalate");
+  const { workspace, db, clock, work } = pr;
+  const repair = attachUnsettledChild(db, clock, work.id);
+  git(workspace.path, "checkout", "-b", `task/${repair.id}`, `task/${work.id}`);
+  commitWork(workspace.path, "README.md", "repaired\n");
+  git(workspace.path, "checkout", `task/${work.id}`);
+  completeTask(db, repair, FULL_HANDOFF, "worker", clock.now(), "worker");
+  // status に出ないローカルの変更が merge を始まる前に止める
+  git(workspace.path, "update-index", "--skip-worktree", "README.md");
+  writeFileSync(join(workspace.path, "README.md"), "local\n");
+  quarantineWorkspace(db, workspace.name, new Error("GitHub token acquisition failed"), clock.now());
+
+  await expect(answerWorkspaceQuarantine(pr, quarantineQuestion(db, "workspace", workspace.name)!)).rejects.toThrow(
+    /would be overwritten by merge/,
+  );
+
+  expect(head(workspace)).toBe("main");
+});
+
+it("purely-local な workspace で、やり直しの前に帯域外に動いた保護ブランチは、やり直しの後も着地で帯域外と読まれる", async () => {
+  const workspace = await makeWorkspace("redo-merge-back-local");
+  const { db, clock } = await openBoard();
+  const work = landingWork(db, clock);
+  await prepareWorkspaceAtPickup(db, workspace, work, {});
+  commitWork(workspace.path, "feature.txt", "ready\n");
+  settleRepairNotMergedBack(db, clock, workspace, work.id);
+  git(workspace.path, "update-ref", "refs/heads/main", git(workspace.path, "commit-tree", "main^{tree}", "-p", "main", "-m", "out of band"));
+  quarantineWorkspace(db, workspace.name, new Error("GitHub token acquisition failed"), clock.now());
+
+  await answerWorkspaceQuarantine({ db, clock, workspace, landing: unusedLanding }, quarantineQuestion(db, "workspace", workspace.name)!);
+
+  expect(head(workspace)).toBe("main");
+  expect(() => mergeTaskToProtected(db, workspace, work.id)).toThrow(OutOfBandProtectedBranchError);
+});
+
+it("内容が帰り先に届いていない done の work が無ければ、受理の検査は checkout を動かさない", async () => {
+  const pr = await openPushedPr("redo-merge-back-nothing", "escalate");
+  const { workspace, db, clock, work } = pr;
+  quarantineWorkspace(db, workspace.name, new Error("repaired out of band"), clock.now());
+
+  await answerWorkspaceQuarantine(pr, quarantineQuestion(db, "workspace", workspace.name)!);
+
+  expect(head(workspace)).toBe(`task/${work.id}`);
 });
 
 it("done の子孫のブランチに merge される head に無い内容があれば積み残しで、CI 緑でも無人 merge されず、event も question も無くキューに残る", async () => {
@@ -3166,15 +3324,47 @@ it("積み残しがあっても着地の登録は走る —— PR を開き、�
   });
 });
 
-it.each<[string, (pr: Awaited<ReturnType<typeof openPushedPr>>) => void]>([
-  ["子孫の merge back 前", ({ workspace, db, clock, work }) => settleRepairNotMergedBack(db, clock, workspace, work.id)],
-  ["merge back 済み・push 前", ({ workspace }) => commitWork(workspace.path, "repair.txt", "fixed\n")],
+// ADR 0240 決定5: 拒否文は積み残しを運ぶ面を名指しする。どちらも無ければ、盤面が運んでいる途中である
+const STILL_CARRYING = "the board is still carrying it; answer again later";
+const carriedBy = (surface: string, questionId: string) =>
+  `the open ${surface} question (${questionId}) carries it; answer that question first, then answer again`;
+it.each<[string, (pr: Awaited<ReturnType<typeof openPushedPr>>) => string]>([
+  [
+    "子孫の merge back 前",
+    ({ workspace, db, clock, work }) => {
+      settleRepairNotMergedBack(db, clock, workspace, work.id);
+      return STILL_CARRYING;
+    },
+  ],
+  [
+    "merge back 済み・push 前",
+    ({ workspace }) => {
+      commitWork(workspace.path, "repair.txt", "fixed\n");
+      return STILL_CARRYING;
+    },
+  ],
+  [
+    "merge back が workspace の quarantine に落ちた",
+    ({ workspace, db, clock, work }) => {
+      settleRepairNotMergedBack(db, clock, workspace, work.id);
+      quarantineWorkspace(db, workspace.name, new Error("merge back conflicted"), clock.now());
+      return carriedBy("workspace quarantine", quarantineQuestion(db, "workspace", workspace.name)!.id);
+    },
+  ],
+  [
+    "push が PR 昇格失敗 question に落ちた",
+    ({ workspace, db, clock, work }) => {
+      commitWork(workspace.path, "repair.txt", "fixed\n");
+      registerPrPromotionFailureQuestion(db, work, "push failed", clock.now());
+      return carriedBy("PR promotion failure", promotionFailures(db, work.id)[0]!.id);
+    },
+  ],
 ])(
-  "積み残し(%s)のある PR への人間の merge 回答は拒まれ、merge されず question は開いたまま残る",
+  "積み残し(%s)のある PR への人間の merge 回答は拒まれ、拒否文は運ぶ面を名指しし、merge されず question は開いたまま残る",
   async (_, leaveBehind) => {
     const pr = await openPushedPr("left-behind-answer", "escalate");
-    const { workspace, db, clock, github } = pr;
-    leaveBehind(pr);
+    const { db, clock, github, workspace } = pr;
+    const carrier = leaveBehind(pr);
     const question = getTask(db, listBoard(db).find((q) => q.question_pending_merge_pr === 1)!.id)!;
     await expect(
       submitAnswer(
@@ -3185,11 +3375,7 @@ it.each<[string, (pr: Awaited<ReturnType<typeof openPushedPr>>) => void]>([
         () => clock.now(),
         "webui",
       ),
-    ).rejects.toThrow(
-      new DomainError(
-        "cannot merge yet: PR #1 does not carry all of the task's content yet — answer again once the board has pushed it",
-      ),
-    );
+    ).rejects.toThrow(new DomainError(`cannot merge yet: PR #1 does not carry all of the task's content yet — ${carrier}`));
     expect(github.merged).toEqual([]);
     expect(listBoard(db).find((q) => q.id === question.id)?.status).toBe("todo");
   },
