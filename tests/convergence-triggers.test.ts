@@ -125,3 +125,32 @@ it.each([
   expect((await api(t.baseUrl, "GET", `/api/tasks/${root.id}`)).json.pr_number).toBe(1);
   expect(started()).toEqual([next.id]);
 });
+
+// CONTEXT.md「収束」: 同じ checkout で pickup の fetch・checkout と着地の push が重ならない —— 逆向きも同じ
+it("poll が走っている間に届いた契機の収束は、その poll が終わってから走る", async () => {
+  const { workspace } = await makeRemoteBackedWorkspace("converge-after-poll");
+  const poll = awaitWindow();
+  let holdPoll = false;
+  t = await bootTidepool({
+    workspace,
+    registryReachability: async () => {
+      if (holdPoll) await poll.hold();
+      return { available: true };
+    },
+  });
+  const next = queueWork(t, "next");
+  holdPoll = true;
+  const tick = t.clock.advance(HOUR);
+  await poll.entered;
+
+  const root = silentlyCompletedRoot(t, workspace);
+  await registerWork(t, "registered while the poll runs");
+  await settle();
+  expect(t.github.requests).toEqual([]);
+
+  poll.open();
+  await tick;
+  await settle();
+  expect(started()).toEqual([next.id]);
+  expect(t.github.requests.map(({ branch }) => branch)).toEqual([`task/${root.id}`]);
+});

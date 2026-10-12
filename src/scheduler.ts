@@ -216,6 +216,9 @@ export interface Scheduler {
    *  Same poll as the hourly tick: a no-op while the slot is occupied. It first pokes the landing
    *  convergence and judges pickup only after that pass (ADR 0241 決定5). */
   pollNow: () => void;
+  /** Settles when no poll is in flight — a convergence pass waits on it so that landing's push never overlaps
+   *  pickup's fetch / checkout in the same checkout (CONTEXT.md「収束」). */
+  idle: () => Promise<void>;
 }
 
 /** Hourly poll: if the slot is free, hand the queue head (lowest sort_key todo)
@@ -777,10 +780,17 @@ export function startScheduler(deps: {
   }
 
   let stopped = false;
+  // 走っている poll。収束の回はこれが終わるのを待つ(`idle`)。失敗は poll 自身の void と同じに扱う
+  let polling: Promise<void> = Promise.resolve();
   function pollNow(): void {
     // 収束の側は契機を捨てない(列が束ねる)。捨てるのは poll の側の inFlight だけ(ADR 0119 決定5)。
     // 収束を待つ間に盤面が止まれば、閉じた DB を読まない
-    void converge().then(() => (stopped ? undefined : poll()));
+    void converge().then(() => {
+      if (stopped || inFlight) return;
+      const running = poll();
+      polling = running.catch(() => {});
+      return running;
+    });
   }
 
   const cancel = clock.setInterval(pollNow, HOURLY);
@@ -791,5 +801,6 @@ export function startScheduler(deps: {
       resumeTimer.cancel();
     },
     pollNow,
+    idle: () => polling,
   };
 }

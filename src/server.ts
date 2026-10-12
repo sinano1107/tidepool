@@ -627,6 +627,8 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
     auditorName,
     isProtectedWorkspace: options.isProtectedWorkspace,
     githubAuth: options.githubAuth,
+    // scheduler は後で組まれ、起動完了で解決される(pollNow と同じ遅延束縛)
+    pickupIdle: () => startedScheduler?.idle() ?? Promise.resolve(),
   });
   // ADR 0109 決定5: 後始末の未了は再起動をまたぐ事実である。in-memory の callback は
   // 盤面の crash を越えないので、行に残った未了をここで拾い、**容器機構の前提検査が

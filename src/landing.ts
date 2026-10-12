@@ -307,6 +307,9 @@ export interface LandingDeps {
   isProtectedWorkspace?: (name: string) => boolean;
   /** merge 済みの根を比べる前の保護ブランチの fetch(ADR 0241 決定1)が使う盤面の GitHub 身元(ADR 0093)。 */
   githubAuth?: GitHubAuth;
+  /** 走っている pickup の poll が終わると解ける。収束の回はこれを待ってから始まる —— 同じ checkout で pickup の
+   *  fetch・checkout と着地の push が重ならない(CONTEXT.md「収束」)。Absent → pickup を持たない盤面。 */
+  pickupIdle?: () => Promise<void>;
 }
 
 type LandingFailureReason = Extract<LandingVerdict, { kind: "failed" }>["reason"];
@@ -961,7 +964,8 @@ export function createLanding(deps: LandingDeps): Landing {
     converge(options) {
       if (!queued) {
         const answering = new Set<string>();
-        const run = tail.then(() => {
+        const run = tail.then(async () => {
+          await deps.pickupIdle?.();
           queued = undefined;
           return pass(answering);
         });
