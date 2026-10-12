@@ -901,10 +901,9 @@ it("retry 時の registry drift は workspace の quarantine を名乗る verdic
   drifted = true;
   github.scriptFailure(null);
 
-  await expect(convergeOn(landing, task.id, failure!.id)).resolves.toMatchObject({
+  await expect(convergeOn(landing, task.id, failure!.id)).resolves.toEqual({
     kind: "quarantined",
-    quarantine: "workspace",
-    name: workspace.name,
+    error: `workspace "${workspace.name}" is quarantined and needs human attention before landing; answer its quarantine question`,
   });
   expect(promotionFailures(db, task.id)).toHaveLength(1);
   expect(getTask(db, failure!.id)).toMatchObject({ status: "todo", question_answer: null });
@@ -928,8 +927,6 @@ it("workspace が quarantine で門が開いている根の収束は、失敗 qu
 
   await expect(convergeOn(landing, task.id)).resolves.toEqual({
     kind: "quarantined",
-    quarantine: "workspace",
-    name: workspace.name,
     error: `workspace "${workspace.name}" is quarantined and needs human attention before landing; answer its quarantine question`,
   });
   expect(promotionFailures(db, task.id)).toEqual([]);
@@ -1501,7 +1498,10 @@ it("workspace を解決できない、親を持つ完了 work は、workspace �
   );
   finish(db, clock, child);
 
-  await expect(convergeOn(landing, child.id)).resolves.toMatchObject({ kind: "quarantined", quarantine: "workspace", name: "ghost" });
+  await expect(convergeOn(landing, child.id)).resolves.toEqual({
+    kind: "quarantined",
+    error: 'workspace "ghost" is quarantined and needs human attention before landing; answer its quarantine question',
+  });
   await landing.converge();
   expect(promotionFailures(db, child.id)).toEqual([]);
   expect(quarantineQuestion(db, "workspace", "ghost")).toBeDefined();
@@ -3186,7 +3186,10 @@ it("push の後に積み残しが残っても、workspace の quarantine が抱�
     quarantineWorkspace(db, workspace.name, new Error("repair the checkout"), clock.now());
   };
 
-  await expect(convergeOn(landing, work.id)).resolves.toMatchObject({ kind: "quarantined", quarantine: "workspace", name: workspace.name });
+  await expect(convergeOn(landing, work.id)).resolves.toEqual({
+    kind: "quarantined",
+    error: `workspace "${workspace.name}" is quarantined and needs human attention before landing; answer its quarantine question`,
+  });
   expect(promotionFailures(db, work.id)).toEqual([]);
 });
 
@@ -3299,8 +3302,6 @@ it.each(UNRESOLVABLE)("PR を開く時点で profile が %s で解決できな�
 
   await expect(convergeOn(landing, task.id)).resolves.toEqual({
     kind: "quarantined",
-    quarantine: "agent",
-    name: "tako",
     error: 'agent "tako" is quarantined: its authority profile cannot be resolved for landing; repair the registry and answer its quarantine question',
   });
   expect(github.requests).toEqual([]);
@@ -3723,9 +3724,6 @@ async function abandonedWork(board: Db, now: Date, workspace?: string): Promise<
   return work;
 }
 
-/** 根かどうかを lineage で読ませる resolver —— 実体の無い checkout を返す。祖先が未決着なら git を呼ばずにその枝へ帰る。 */
-const lineageOnly = (): WorkspaceConfig => ({ name: "reef", path: "/nonexistent/reef" });
-
 it("着地済み・未完了・別 agent・PR 昇格を abandon した・祖先の枝に乗る子は、着地を待つ完了タスクに数えない", async () => {
   db = openDb(":memory:");
   const now = new Date("2026-10-09T00:00:00.000Z");
@@ -3741,7 +3739,8 @@ it("着地済み・未完了・別 agent・PR 昇格を abandon した・祖先�
   );
   completedWork(db, now, "tako", parent.id);
 
-  expect(countTasksAwaitingLanding(db, lineageOnly, "tako")).toBe(0);
+  // 根かどうかを lineage で読ませる —— 祖先が未決着なら git を呼ばずにその枝へ帰るので、checkout の実体は要らない
+  expect(countTasksAwaitingLanding(db, () => ({ name: "reef", path: "/nonexistent/reef" }), "tako")).toBe(0);
 });
 
 // ADR 0241 決定6: 1回の要求で導出は1回。数えは何も書かない —— 根かどうか読めない候補を workspace の quarantine に落とさない

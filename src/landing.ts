@@ -62,7 +62,7 @@ export type LandingVerdict =
   // retry が答えている根を、この回の収束は撃たなかった(ADR 0241 決定5)。error は回答の拒否文
   | { kind: "excluded"; reason: "pull_request_closed" | "teardown_unfinished" | "not_a_root"; error: string }
   // 止まっている原因が quarantine の question としてすでに出ている —— 失敗 question を重ねない(ADR 0241 決定6)。error は retry の拒否文
-  | { kind: "quarantined"; quarantine: "workspace" | "agent"; name: string; error: string }
+  | { kind: "quarantined"; error: string }
   | {
       kind: "failed";
       reason:
@@ -675,8 +675,6 @@ export function createLanding(deps: LandingDeps): Landing {
   };
   const quarantined = (quarantine: "workspace" | "agent", name: string): LandingVerdict => ({
     kind: "quarantined",
-    quarantine,
-    name,
     error:
       quarantine === "workspace"
         ? `workspace "${name}" is quarantined and needs human attention before landing; answer its quarantine question`
