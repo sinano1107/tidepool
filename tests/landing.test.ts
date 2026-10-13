@@ -3319,24 +3319,53 @@ async function dropRepairOutsideBoard(pr: Awaited<ReturnType<typeof openPushedPr
   finish(db, clock, work);
   await expect(convergeOn(landing, work.id)).resolves.toMatchObject({ kind: "landed", form: "open_pull_request_updated" });
   await pushOutsideBoard(workspace, work.id, beforeRepair);
+  return repair;
 }
 
-it("別の clone からの force-push で修理が消えた PR は、CI 緑でも無人 merge されない", async () => {
+// ADR 0242 決定4: 盤面の外の push が落とした内容は、盤面には運ぶ手が無い —— キューを外して推奨 hold の merge question に倒す
+it("別の clone からの force-push で修理が消えた PR は、CI 緑でも無人 merge されず、キューを外れ、届いていない修理のブランチを名指す推奨 hold の merge question が1枚立つ", async () => {
   const pr = await openPushedPr("left-behind-dropped-outside", "auto_if_ci_green");
-  await dropRepairOutsideBoard(pr);
+  const repair = await dropRepairOutsideBoard(pr);
 
   await pr.landing.tick("auto_merge", pr.clock.now());
 
   expect(pr.github.merged).toEqual([]);
+  expect(await readOnNextTick(pr.landing, pr.github, pr.clock.now())).toEqual([]);
+  expect(mergeQuestions(pr.db)).toEqual([
+    {
+      pr: 1,
+      registrant: [BOARD_WORKER_ID, "board"],
+      recommendation: "hold",
+      purpose: expect.stringContaining(`task/${repair.id}`),
+    },
+  ]);
 });
 
-it("別の clone からの force-push で修理が消えた PR への人間の merge 回答は拒まれ、merge されない", async () => {
+it("別の clone からの force-push で修理が消えた PR への人間の merge 回答は、head が盤面の外で push され修理の内容を持たないと言って拒まれ、merge されず question は開いたまま", async () => {
   const pr = await openPushedPr("left-behind-dropped-outside-answer", "escalate");
-  await dropRepairOutsideBoard(pr);
+  const repair = await dropRepairOutsideBoard(pr);
+  const head = originHead(pr.workspace, pr.work.id);
+  const question = listBoard(pr.db).find((q) => q.question_pending_merge_pr === 1)!;
 
-  await expect(answerMergeQuestion(pr)).rejects.toThrow(DomainError);
+  const error = await answerMergeQuestion(pr).catch((err: unknown) => err);
 
+  expect(error).toBeInstanceOf(DomainError);
+  expect((error as Error).message).toMatch(
+    new RegExp(`^cannot merge: PR #1's head ${head} was pushed outside the board and lacks the content of task/${repair.id} — .*merge -s ours`),
+  );
   expect(pr.github.merged).toEqual([]);
+  expect(listBoard(pr.db).find((q) => q.id === question.id)?.status).toBe("todo");
+});
+
+it("外の push が落とした内容をブランチに戻して push すれば、その merge question への「merge」の回答は通る", async () => {
+  const pr = await openPushedPr("left-behind-dropped-outside-restored", "auto_if_ci_green");
+  await dropRepairOutsideBoard(pr);
+  await pr.landing.tick("auto_merge", pr.clock.now());
+  git(pr.workspace.path, "push", "--force", "origin", `task/${pr.work.id}`);
+
+  await expect(answerMergeQuestion(pr)).resolves.toMatchObject({ status: "done" });
+
+  expect(pr.github.merged.map((merged) => merged.number)).toEqual([1]);
 });
 
 /** 収束が PR #1 を開く(盤面自身の push)。`narrowRefspec` は #1778 の形 —— fetch の refspec を保護ブランチだけに絞った

@@ -205,6 +205,24 @@ function lastPushedHead(db: Db, taskId: string): string | undefined {
   return row?.sha ?? undefined;
 }
 
+/** ADR 0242 決定4: GitHub の head に無い内容(`left`)が、盤面が最後に push した head には全部載っていれば、盤面の外の push が
+ *  落としたもので盤面には運ぶ手が無い。そのとき、届いていない子孫のブランチ(子孫が無ければ着地するタスク自身)と直す手段
+ *  2つ(ADR 0239 帰結)を言う文を返す。最後に push した head とも比べられなければ、落としたとは読まない(盤面がまだ運ぶ側) */
+export async function droppedByOutsidePush(
+  db: Db,
+  workspace: WorkspaceConfig,
+  taskId: string,
+  left: string[],
+): Promise<string | undefined> {
+  if (left.length === 0 || (await hasContentLeftBehind(db, workspace, taskId, lastPushedHead(db, taskId)))) return undefined;
+  const descendants = left.filter((id) => id !== taskId);
+  const branches = (descendants.length > 0 ? descendants : left).map(taskBranch).join(", ");
+  return (
+    `lacks the content of ${branches} — push that content back onto ${taskBranch(taskId)}, or, to discard it, ` +
+    `record \`git merge -s ours\` of it in the workspace and push`
+  );
+}
+
 export function landingAnnotation(
   db: Db,
   task: Pick<
@@ -1133,20 +1151,32 @@ export function createLanding(deps: LandingDeps): Landing {
               )
             : undefined;
           // 積み残しは門と同じくキューに残す(ADR 0231 決定3)。CI を読んだ head と比べ、手元に無ければ sha で取る
-          // (ADR 0242 決定1)。fetch を待つので面の読み直しより前に読む
-          const leftBehind =
-            ci === "success" && (await hasContentLeftBehind(deps.db, workspace, task_id, head, { auth: deps.githubAuth }));
-          // 面が question 側へ変わっていれば、CI 赤 / 猶予を過ぎた未報告なら CI 赤の question、それ以外は推奨 merge の
-          // 面変化の question(ADR 0217 決定2・ADR 0227 決定3)。CI が pending でも同じ tick で外す(ADR 0238 決定2)。
-          // ここから行為までに await は無いので、この読みが行為の直前の読みを兼ねる
-          if (stop(askCiRed)) continue;
+          // (ADR 0242 決定1)。比べられなければ null(積み残し)。fetch を待つので面の読み直しより前に読む
+          const left =
+            ci === "success"
+              ? await contentLeftBehind(deps.db, workspace, task_id, head, { auth: deps.githubAuth }).catch(() => null)
+              : [];
+          // 盤面の外の push が落とした内容は、キューを外して推奨 hold の question に倒す(ADR 0242 決定4)
+          const dropped = left && (await droppedByOutsidePush(deps.db, workspace, task_id, left));
+          const askDropped = dropped
+            ? hold(
+                `"${task.title}"'s auto_if_ci_green auto-merge found that PR #${pr_number}'s head ${head} was pushed ` +
+                  `outside the board and ${dropped}; then merge, or hold?`,
+              )
+            : undefined;
+          // 面が question 側へ変わっていれば、CI 赤 / 猶予を過ぎた未報告なら CI 赤の question、外の push が落とした内容は
+          // その question、それ以外は推奨 merge の面変化の question(ADR 0217 決定2・ADR 0227 決定3)。CI が pending でも
+          // 同じ tick で外す(ADR 0238 決定2)。ここから行為までに await は無いので、この読みが行為の直前の読みを兼ねる
+          if (stop(askCiRed ?? askDropped)) continue;
           let askHuman: () => void;
           if (askCiRed) {
             askHuman = askCiRed;
           } else if (ci !== "success") {
             continue;
+          } else if (askDropped) {
+            askHuman = askDropped;
           } else {
-            if (leftBehind) continue;
+            if (left === null || left.length > 0) continue;
             // merge は CI を読んだ head に固定する(ADR 0231 決定1)
             const failure = await github.mergePullRequest(ref, head).then(
               () => null,

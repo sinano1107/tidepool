@@ -26,7 +26,7 @@ import {
 import { type GitHubClient, IssueGoneError } from "./github.js";
 import type { GitHubAuth } from "./github-auth.js";
 import type { HarnessContainmentCheck } from "./harness-containment.js";
-import { contentLeftBehind, type Landing, type LandingVerdict, landingBlock, observePrHead, openPrPromotionQuestionIds, recordPrPromotionAbandoned, UNREPORTED_CI_GRACE_ORIGIN_TEXT, UNREPORTED_CI_GRACE_TEXT, unreportedCiGraceElapsed } from "./landing.js";
+import { contentLeftBehind, droppedByOutsidePush, type Landing, type LandingVerdict, landingBlock, observePrHead, openPrPromotionQuestionIds, recordPrPromotionAbandoned, UNREPORTED_CI_GRACE_ORIGIN_TEXT, UNREPORTED_CI_GRACE_TEXT, unreportedCiGraceElapsed } from "./landing.js";
 import { approveMemoryProposal, humanEntryInput, listMemoryEntries, type MemoryAmendment, movedTail, parseMemoryAmendment, rejectMemoryProposal } from "./memory.js";
 import { whyNotPositiveInteger } from "./positive-integer.js";
 import type { Provider } from "./provider.js";
@@ -996,6 +996,11 @@ export async function submitAnswer(
         );
       }
       if (left.length > 0) {
+        // ADR 0242 決定4: 盤面の外の push が落とした内容は盤面が運べない —— その事実と直す手段を言う
+        const dropped = await droppedByOutsidePush(deps.db, mergeWorkspace, landingTaskId, left);
+        if (dropped) {
+          throw new DomainError(`cannot merge: PR #${mergePr}'s head ${pr.head} was pushed outside the board and ${dropped}; then answer again`);
+        }
         // ADR 0240 決定5: 運ぶ面を名指しする
         const quarantineQuestionId = openQuarantineQuestion(deps.db, "workspace", mergeWorkspace.name)?.id;
         const promotionQuestionId = openPrPromotionQuestionIds(deps.db, landingTaskId)[0];
