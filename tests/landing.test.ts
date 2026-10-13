@@ -1,4 +1,4 @@
-import { appendFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { resolveExecutionAgent } from "../src/agent.js";
@@ -4048,10 +4048,11 @@ async function recordedWork(
   clock: FakeClock,
   workspace: WorkspaceConfig,
   content = "finished\n",
+  file = "feature.txt",
 ) {
   const work = landingWork(board, clock);
   await prepareWorkspaceAtPickup(board, workspace, work, {});
-  commitWork(workspace.path, "feature.txt", content);
+  commitWork(workspace.path, file, content);
   releaseWorkspace(board, workspace, work, clock.now());
   return work;
 }
@@ -4191,6 +4192,129 @@ it.each([
   expect(git(workspace.path, "rev-parse", "HEAD")).toBe(head);
   expect(git(workspace.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe(branch);
   expect(git(workspace.path, "status", "--porcelain")).toBe("");
+});
+
+// ADR 0243 決定4(#1871): 休止中の merge 回答も merge commit を先に作り、口を通して `merge --ff-only` で checkout ごと動かす
+/** 休止中の直列の着地: 同じ保護ブランチから分かれ、被らないファイルを足した3件を記録し、1件目を ff で着地させた形。
+ *  2件目以降の回答は、盤面自身が進めた保護ブランチへ merge commit で追いつく。 */
+async function dormantSerialLanding(board: Db, clock: FakeClock, workspace: WorkspaceConfig) {
+  const works = [];
+  for (const name of ["first", "second", "third"]) works.push(await recordedWork(board, clock, workspace, `${name}\n`, `${name}.txt`));
+  const questions = works.map((work) => mergeQuestion(board, clock, { pending_local_merge_task_id: work.id }));
+  await answerMerge(board, clock, workspace, questions[0]!);
+  return { works, questions };
+}
+
+it("休止中の merge 回答が保護ブランチを書いた後、畳む前に盤面が落ちても、次の回答は帯域外と読まずに着地する", async () => {
+  const workspace = await makeWorkspace("landing-dormant-merge-dropped");
+  const { db, clock } = await openBoard();
+  const { works, questions } = await dormantSerialLanding(db, clock, workspace);
+  // 落ちた盤面の畳みはディスクに届かない: 予告(2値の行)は書けて、1値へ畳む書き込みだけが届かない形
+  db.exec(
+    "CREATE TEMP TRIGGER board_drops_before_fold BEFORE UPDATE OF ref_snapshot ON workspace_state " +
+      "WHEN NEW.ref_snapshot NOT LIKE '%|%' BEGIN SELECT RAISE(ABORT, 'the board dropped'); END",
+  );
+  await expect(answerMerge(db, clock, workspace, questions[1]!)).rejects.toThrow("the board dropped");
+  db.exec("DROP TRIGGER board_drops_before_fold");
+  expect(git(workspace.path, "rev-list", "--count", `main..task/${works[1]!.id}`)).toBe("0");
+
+  await answerMerge(db, clock, workspace, questions[2]!);
+
+  expect(git(workspace.path, "rev-list", "--count", `main..task/${works[2]!.id}`)).toBe("0");
+  expect(quarantineQuestion(db, "workspace", workspace.name)).toBeUndefined();
+});
+
+it.each([
+  ["そのままなら、次の回答が追いつく", false],
+  ["merge の前の位置へ手で戻せば、次の回答は帯域外と読む", true],
+])("休止中の merge 回答の後、記録は保護ブランチを merge commit の位置だけで通す —— %s", async (_shape, rolledBack) => {
+  const workspace = await makeWorkspace("landing-dormant-merge-folded");
+  const { db, clock } = await openBoard();
+  const { works, questions } = await dormantSerialLanding(db, clock, workspace);
+  const beforeMerge = git(workspace.path, "rev-parse", "refs/heads/main");
+  await answerMerge(db, clock, workspace, questions[1]!);
+  if (rolledBack) git(workspace.path, "reset", "--hard", beforeMerge);
+
+  const answered = answerMerge(db, clock, workspace, questions[2]!);
+
+  if (rolledBack) {
+    await expect(answered).rejects.toThrow(DomainError);
+    expect(quarantineQuestion(db, "workspace", workspace.name)).toBeDefined();
+  } else {
+    await answered;
+    expect(git(workspace.path, "rev-list", "--count", `main..task/${works[2]!.id}`)).toBe("0");
+    expect(quarantineQuestion(db, "workspace", workspace.name)).toBeUndefined();
+  }
+});
+
+it("休止中の merge 回答は checkout ごと merge commit へ進め、作業ツリーはその内容になる", async () => {
+  const workspace = await makeWorkspace("landing-dormant-merge-checkout");
+  const { db, clock } = await openBoard();
+  const { questions } = await dormantSerialLanding(db, clock, workspace);
+
+  await answerMerge(db, clock, workspace, questions[1]!);
+
+  expect(git(workspace.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main");
+  expect(git(workspace.path, "rev-parse", "HEAD")).toBe(git(workspace.path, "rev-parse", "refs/heads/main"));
+  expect(readFileSync(join(workspace.path, "first.txt"), "utf8")).toBe("first\n");
+  expect(readFileSync(join(workspace.path, "second.txt"), "utf8")).toBe("second\n");
+  expect(git(workspace.path, "status", "--porcelain")).toBe("");
+});
+
+it("休止中の着地がコンフリクトしても、中断した merge を残さない", async () => {
+  const workspace = await makeWorkspace("landing-dormant-conflict");
+  const { db, clock } = await openBoard();
+  const first = await recordedWork(db, clock, workspace, "from the first task\n");
+  const second = await recordedWork(db, clock, workspace, "from the second task\n");
+  await answerMerge(db, clock, workspace, mergeQuestion(db, clock, { pending_local_merge_task_id: first.id }));
+
+  await expect(
+    answerMerge(db, clock, workspace, mergeQuestion(db, clock, { pending_local_merge_task_id: second.id })),
+  ).rejects.toThrow("does not merge cleanly");
+
+  expect(() => git(workspace.path, "rev-parse", "--verify", "--quiet", "MERGE_HEAD")).toThrow();
+  expect(git(workspace.path, "status", "--porcelain")).toBe("");
+});
+
+// #1872: 走っている session の worker が保護ブランチを checkout していれば、merge 回答は休止中の枝に入る
+/** 着地を待つ work と、保護ブランチを checkout して untracked の WIP を書いた走行中の session。 */
+async function landingUnderWorkerOnProtected(board: Db, clock: FakeClock, workspace: WorkspaceConfig, wip: string) {
+  const work = await recordedWork(board, clock, workspace);
+  const question = mergeQuestion(board, clock, { pending_local_merge_task_id: work.id });
+  await prepareWorkspaceAtPickup(board, workspace, landingWork(board, clock), {});
+  git(workspace.path, "checkout", "main");
+  writeFileSync(join(workspace.path, wip), "the running session's work in progress\n");
+  return { work, question };
+}
+
+it("走っている session が保護ブランチを checkout していれば、merge 回答は checkout ごと ff し、WIP を残し quarantine しない", async () => {
+  const workspace = await makeWorkspace("landing-worker-on-protected");
+  const { db, clock } = await openBoard();
+  const { work, question } = await landingUnderWorkerOnProtected(db, clock, workspace, "wip.txt");
+
+  await answerMerge(db, clock, workspace, question);
+
+  const tip = git(workspace.path, "rev-parse", `refs/heads/task/${work.id}`);
+  expect(git(workspace.path, "rev-parse", "refs/heads/main")).toBe(tip);
+  expect(git(workspace.path, "rev-parse", "HEAD")).toBe(tip);
+  expect(git(workspace.path, "status", "--porcelain")).toBe("?? wip.txt");
+  expect(readFileSync(join(workspace.path, "wip.txt"), "utf8")).toBe("the running session's work in progress\n");
+  expect(quarantineQuestion(db, "workspace", workspace.name)).toBeUndefined();
+});
+
+it("保護ブランチを checkout した worker の WIP が着地の運ぶファイルと被れば、ff の拒否が回答の拒否として返り、何も動かさない", async () => {
+  const workspace = await makeWorkspace("landing-worker-on-protected-overlap");
+  const { db, clock } = await openBoard();
+  const before = git(workspace.path, "rev-parse", "refs/heads/main");
+  const { question } = await landingUnderWorkerOnProtected(db, clock, workspace, "feature.txt");
+
+  await expect(answerMerge(db, clock, workspace, question)).rejects.toThrow("would be overwritten");
+
+  expect(git(workspace.path, "rev-parse", "refs/heads/main")).toBe(before);
+  expect(git(workspace.path, "rev-parse", "HEAD")).toBe(before);
+  expect(readFileSync(join(workspace.path, "feature.txt"), "utf8")).toBe("the running session's work in progress\n");
+  expect(quarantineQuestion(db, "workspace", workspace.name)).toBeUndefined();
+  expect(getTask(db, question.id)?.status).toBe("todo");
 });
 
 /** 付帯子の門で着地が止まった記録 —— `land()` が残す形。 */
