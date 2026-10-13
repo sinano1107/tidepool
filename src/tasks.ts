@@ -401,7 +401,8 @@ export interface RegisterTaskInput extends Partial<TaskContent> {
    *  case, not a distinct shape. */
   question?: QuestionItem[];
   /** System-internal only (ADR 0006 / 0048): answering with this option
-   *  triggers decision-scoped abandon instead of ordinary unblock-to-head.
+   *  triggers decision-scoped abandon instead of ordinary unblock-to-head
+   *  (an Interview pin child's failure abandon stops at itself, ADR 0245 決定5).
    *  Must be one of the question's options. Never set via MCP or JSON API;
    *  only the watchdog's failure-question registration sets it. */
   cancel_option?: string;
@@ -1348,7 +1349,7 @@ export interface CancelDefaults {
  *
  *   - a **failure question** with `question_cancel_option` (watchdog kill or
  *     issue-backed deterministic failure) whose failed task lies in the
- *     subtree. Abandon cancels its decision scope, so direct cancel would
+ *     subtree. Abandon cancels its abandon scope, so direct cancel would
  *     strand the question. PR-promotion failures are excluded: their target
  *     is already done and they carry no cancel option.
  *   - a **quarantine Confirmation** whose resource is used by a subtree task:
@@ -1602,10 +1603,12 @@ export function answerQuestion(
       const failed = getTask(db, question.parent_id!)!;
       const plan = failed.parent_id ? getTask(db, failed.parent_id) : undefined;
       if (plan) {
-        for (const id of abandonScopeIds(db, failed.id, question.question_breached_decision !== null)) {
+        const breach = question.question_breached_decision !== null;
+        for (const id of abandonScopeIds(db, failed.id, breach)) {
           cancelTask(db, getTask(db, id)!, question.id, HUMAN_WORKER_ID, now, origin);
         }
-        unblockTarget = plan;
+        // pin の子の失敗は分解判断を破棄しないので、親は先頭へ戻さない(ADR 0245 決定5)
+        if (failed.interview_target_id === null || breach) unblockTarget = plan;
       } else {
         cancelTask(db, failed, question.id, HUMAN_WORKER_ID, now, origin);
       }
@@ -2735,9 +2738,10 @@ function stoppedSql(taskRef: string, fallback: string): string {
  *  everything its abandon answer could cancel out of the slot. A general
  *  question still holds its parent's children downward. A failure question
  *  holds the failed task's descendants plus each unfinished same-decision
- *  sibling itself and its descendants — no siblings for an Interview pin child's
- *  failure question, though its premise-breach question keeps them (ADR 0245 決定2・5). Seeding siblings themselves prevents
- *  pickup immediately before the answer. Questions stay answerable outside
+ *  sibling itself and its descendants — no siblings for an Interview pin
+ *  child's failure question, though its premise-breach question keeps them
+ *  (ADR 0245 決定2・5). Seeding siblings themselves prevents pickup
+ *  immediately before the answer. Questions stay answerable outside
  *  the slot and are excluded from held presentation. The set is derived only. */
 const HELD_IDS_CTE = `
   held_ids(id) AS (

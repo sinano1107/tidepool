@@ -88,7 +88,8 @@ export function openDb(path: string): Db {
       -- resumed parent's get_current_task can carry both
       question_answer_comment  TEXT,
       -- system-internal only (ADR 0006 / 0048): the sole item's option that
-      -- triggers decision-scoped abandon instead of ordinary unblock-to-head.
+      -- triggers decision-scoped abandon instead of ordinary unblock-to-head
+      -- (an Interview pin child's failure abandon stops at itself, ADR 0245 決定5).
       -- Never set via MCP or JSON API; only failure-question registration does.
       question_cancel_option  TEXT,
       -- system-internal only (ADR 0121 / ADR 0245 決定2・5): the decision a premise-breach

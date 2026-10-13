@@ -166,6 +166,14 @@ it("pin の子の failure question への abandon は、その子だけを cance
   expect(presentTask(db, getTask(db, root.id)!).status).toBe("blocked");
 });
 
+it("最後の pin の子の failure question への abandon は root を先頭へ動かさない —— 親は動かさず、通常どおり起きる(ADR 0245 決定5)", () => {
+  const { db, root, failed, sibling } = twoPinnedChildren();
+  completeTask(db, sibling, FULL_HANDOFF, "tako", new Date(0), "worker");
+  const before = getTask(db, root.id)!.sort_key;
+  answerQuestionViaWebui(db, failureQuestion(db, failed.id, new Date(0)), ["abandon"], new Date(0));
+  expect(getTask(db, root.id)!.sort_key).toBe(before);
+});
+
 it("pin の子の failure question の abandon の文は、分解判断の破棄も兄弟の件数も言わない(ADR 0245 決定5)", () => {
   const { db, failed } = twoPinnedChildren();
   expect(abandonConsequence(db, failed)).toBe(`"abandon" cancels this task and its remaining work.`);
