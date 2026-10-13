@@ -1855,9 +1855,13 @@ function resolvePremiseBreach(
   });
 }
 
+/** pin の子の abandon / reject が Interview を終えうることの条件付きの文(ADR 0247 決定1)。question は登録時に兄弟の行方を知らない。 */
+const INTERVIEW_ENDS_IF_EMPTY = "If no other target of this Interview is done or still unsettled, the Interview ends too.";
+
 /** Canonical English abandon consequence baked into failure questions
  *  (ADR 0015 / 0048) and breach questions (ADR 0121, `breach`). It states the decision-discard
- *  rule and count only when unfinished same-decision siblings are in the abandon scope. */
+ *  rule and count only when unfinished same-decision siblings are in the abandon scope; an Interview pin child's
+ *  wording says instead that the Interview ends (breach) or may end (failure) (ADR 0247). */
 export function abandonConsequence(db: Db, task: Task, breach = false): string {
   // derived from the cancel/held scope so the wording cannot drift
   const siblingCount = abandonScopeIds(db, task.id, breach).filter((id) => id !== task.id).length;
@@ -1874,8 +1878,6 @@ export function abandonConsequence(db: Db, task: Task, breach = false): string {
         `and returns the parent to the queue head to replan.`
     : `"abandon" cancels this task and its remaining work.`;
 }
-
-const INTERVIEW_ENDS_IF_EMPTY = "If no other target of this Interview is done or still unsettled, the Interview ends too.";
 
 /** The ids in `failedId`'s abandon scope, shared by the abandon cascade, redecompose, and abandon's wording. */
 function abandonScopeIds(db: Db, failedId: string, breach: boolean): string[] {
