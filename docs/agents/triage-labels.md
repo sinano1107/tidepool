@@ -44,9 +44,11 @@ the next gate on this line first, then relabel every open issue; until then the 
 | `priority:low`    | Looked at after the gate. Not in any human queue until then.                                              |
 | (none)            | Forgotten. The sweep picks these first and labels them.                                                   |
 
-Four mechanical tests put an issue on `high`: its implementation changes a table or column of the schema
-(no migrations before release — the board is rebuilt, and real-use records with it; an index can be added
-to a live DB and does not count); a defect in what writes records
+Four mechanical tests put an issue on `high`: its implementation reshapes an existing table or column —
+renames, removes or moves a column, or changes its type, NOT NULL or CHECK (no migrations before release — the
+board is rebuilt, and real-use records with it; in SQLite each of these rebuilds the table). A question counts
+before it is answered when any of its conclusions would reshape. Purely additive changes — a new table, a new
+nullable column, an index — apply to a live DB without losing records and do not count; a defect in what writes records
 (decision log, events, episodes, usage, PR outcome); the implementation or a defect of a process
 that acts on its own (memory / routing meta-review, Interview, the learner); a defect that would
 damage the repo, the wallet, or trust in real use. A defect here includes one not yet confirmed: a
