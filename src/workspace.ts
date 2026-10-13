@@ -650,7 +650,7 @@ function readRef(workspace: WorkspaceConfig, ref: string): string {
   }
 }
 
-/** ADR 0243 の口: 盤面が session 中に ref **だけ**を書くときは、すべてここを通る。書く前に基準のその行を
+/** ADR 0243 の口: 盤面が ref を書くときはここを通る(休止中の着地の `merge --ff-only` のように checkout ごと動かす書き込みも)。書く前に基準のその行を
  *  `<old>|<new>` に予告し、`write()` を撃ち、ref を読み返して `new` なら `{new}`、違えば `{old}` に畳む —— 読み返した
  *  値そのものを基準に入れることは無い(決定2)。`write()` が投げても畳んでから投げ直す。予告と畳みの間で盤面が
  *  落ちれば2値の行が残り、次の pickup の全撮りが消すまでどちらの値も違反と読まれない(決定5)。

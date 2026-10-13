@@ -4040,7 +4040,7 @@ it("shadow が消えて組み込みに落ちた work のキューの PR は、�
 });
 
 // ADR 0103 決定1・4: 帯域外の判定は盤面自身の記録(ref snapshot)との突き合わせで、
-// 着地の回答だけがこの型を隔離に結ぶ。以下の5本がこの判定を述べる唯一の場所(ADR 0107)。
+// 着地の回答だけがこの型を隔離に結ぶ。以下のテストがこの判定を述べる唯一の場所(ADR 0107)。
 /** 記録がある形: work を拾い、タスクブランチに commit し、解放する。保護ブランチの行が
  *  記録に入り、HEAD は保護ブランチへ戻っている。 */
 async function recordedWork(
@@ -4276,14 +4276,16 @@ it("休止中の着地がコンフリクトしても、中断した merge を残
   expect(git(workspace.path, "status", "--porcelain")).toBe("");
 });
 
-// #1872: 走っている session の worker が保護ブランチを checkout していれば、merge 回答は休止中の枝に入る
-/** 着地を待つ work と、保護ブランチを checkout して untracked の WIP を書いた走行中の session。 */
-async function landingUnderWorkerOnProtected(board: Db, clock: FakeClock, workspace: WorkspaceConfig, wip: string) {
+// #1872: 走っている session の worker が保護ブランチを checkout していれば、merge 回答は HEAD が保護ブランチにある枝
+// (checkout ごと ff)に入る —— 枝は DB の走っている行ではなく HEAD の位置で選ぶ
+/** 着地を待つ work と、DB 上で走っている(拾われた)session が保護ブランチを checkout して untracked の WIP を書いた形。 */
+async function landingUnderWorkerOnProtected(board: Db, clock: FakeClock, workspace: WorkspaceConfig, wipFile: string) {
   const work = await recordedWork(board, clock, workspace);
   const question = mergeQuestion(board, clock, { pending_local_merge_task_id: work.id });
-  await prepareWorkspaceAtPickup(board, workspace, landingWork(board, clock), {});
+  const running = pickupTask(board, landingWork(board, clock), "worker", clock.now())!;
+  await prepareWorkspaceAtPickup(board, workspace, running, {});
   git(workspace.path, "checkout", "main");
-  writeFileSync(join(workspace.path, wip), "the running session's work in progress\n");
+  writeFileSync(join(workspace.path, wipFile), "the running session's work in progress\n");
   return { work, question };
 }
 
