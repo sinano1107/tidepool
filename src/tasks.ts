@@ -253,7 +253,7 @@ export interface RegistryProposal<T extends TierRef = TierId> {
 /** 提案の approve に添える修正値(ADR 0150 決定2・ADR 0152 決定2): 行の提案は tier / effort、tier の提案は下げ先、段の追加は名前・説明・位置、段の説明の提案は文面、memory は文言と宛先。 */
 export type ProposalAmendment = RoutingRowChange | { to: Tier } | AddTierAmendment | { description: string } | MemoryAmendment;
 
-interface PendingChildSpec extends TaskContent {
+export interface PendingChildSpec extends TaskContent {
   review_by?: string[];
   review_tier?: string;
   /** The decision-log entry this child would have rested on had it registered
