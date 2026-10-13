@@ -1,5 +1,7 @@
 # purely-local の着地の帯域外判定は盤面自身の記録で行い、正当な非 ff は Tidepool 名義の merge で追いつかせる
 
+**Status 追記: 決定3 の「綴りは今日どおり2つ」と Considered options の「plumbing への一本化」は [ADR 0243](0243-the-boards-own-ref-write-is-announced-in-the-baseline-before-the-write-and-folded-after-it.md) 決定4 で「merge の計算は走行中も休止中も plumbing の1つ、ref の動かし方だけが `update-ref` / `merge --ff-only` の2つ」に置き換わった(2026-10-13、#1871)。決定1・2・4・5 はそのまま。**
+
 issue #468 のグリリング(2026-08-27)で決定。#447 のライブ検証で、同一 workspace に独立に登録された
 連続タスクの2件目が、1件目の着地(盤面自身の正当な書き込み)で進んだ保護ブランチに対して ff-only で
 落ち、workspace quarantine → 人間の手動 rebase が毎回必要になることが2回実測された。ADR 0053 決定3 の
