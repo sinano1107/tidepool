@@ -21,7 +21,7 @@ argument-hint: "<N>"
 
 ## 2. Pick the issues
 
-List open issues carrying `needs-triage` or `needs-info`, drop any carrying `auto-triaged` or `verify:production` or with an open blocker (`gh api repos/{owner}/{repo}/issues/<n> --jq .issue_dependencies_summary.blocked_by` above 0), sort by number descending, and take the first N. Fewer than N left means the queue is drained — take what there is.
+List open issues carrying `needs-triage` or `needs-info`, drop any carrying `auto-triaged`, `verify:production`, or `priority:low`, or with an open blocker (`gh api repos/{owner}/{repo}/issues/<n> --jq .issue_dependencies_summary.blocked_by` above 0). Order them: no `priority:*` label first, then `priority:high`, then `priority:medium`, each group by number descending ([triage-labels.md](../../../docs/agents/triage-labels.md) — `low` waits for the gate and is not evaluated until then). Take the first N. Fewer than N left means the queue is drained — take what there is.
 
 ## 3. Cluster
 

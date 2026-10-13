@@ -85,6 +85,8 @@ Show counts and a one-line summary per item. Let the maintainer pick.
      - **Rejected (enhancement)** — write to `.out-of-scope/`, link to it from a comment, then close ([OUT-OF-SCOPE.md](OUT-OF-SCOPE.md)).
    - `needs-triage` — apply the role. Optional comment if there's partial progress.
 
+   Whatever the state, make sure the issue carries one priority label — the gate and the tests are in the priority section of the triage-labels mapping. Default `low`; raising it needs one line in the comment naming the test it met. When it lands on `high`, draw the blocked-by edge from the gate issue to it.
+
 ## Quick state override
 
 If the maintainer says "move #42 to ready-for-agent", trust them and apply the role directly. Confirm what you're about to do (role changes, comment, close), then act. Skip grilling. If moving to `ready-for-agent` without a grilling session, ask whether they want to write an agent brief.

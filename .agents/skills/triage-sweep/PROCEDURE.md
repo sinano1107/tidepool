@@ -77,15 +77,17 @@ One comment per evaluated issue, in Japanese like the issue thread, headings in 
 
 Drop the session link when the parent said there is none, and the Related section when there is nothing to relate.
 
-**Findings outside the issue** — a defect, a contradiction, or a latent problem you only reasoned about, that the issue does not ask about; say which ones you did not reproduce — each get their own issue: `gh issue create --label needs-triage`, opening with the same disclaimer line, then what you observed, how you checked it, the investigated SHA, and the issue it came from. List it under Related in your comment.
+**Findings outside the issue** — a defect, a contradiction, or a latent problem you only reasoned about, that the issue does not ask about; say which ones you did not reproduce — each get their own issue: `gh issue create --label needs-triage --label priority:low` (a higher priority only when one of the four tests in [triage-labels.md](../../../docs/agents/triage-labels.md) applies — say which in the body), opening with the same disclaimer line, then what you observed, how you checked it, the investigated SHA, and the issue it came from. List it under Related in your comment.
 
 ### 5. Label
 
 On each evaluated issue, add `auto-triaged`. Add the category label (`bug` or `enhancement`) only when the issue has none and your outcome moves it forward — an Agent Brief, Questions for grilling, or Findings that confirm a defect. When you recommend close, add none: a suspicion that did not hold is neither.
 
+Set the priority label — the gate and the four tests for `high` are in [triage-labels.md](../../../docs/agents/triage-labels.md). Replace an existing `priority:*` only when the record now shows a different test applies; when the issue had none, add one, `low` unless a test puts it higher. This is not a state move: apply it yourself. When you set `high`, draw a blocked-by edge from the gate issue to this one (the gate issue is blocked by it) and say in the comment which test it met; when you lower an issue off `high`, remove that edge.
+
 Draw a blocked-by edge yourself wherever your comment says another open issue must land or be decided first. The issue that waits is the blocked one: the evaluated issue when its Agent Brief builds on the other or a question's answer waits on it, an issue you filed when it cannot be resolved until the other lands. The edge is GitHub's native dependency ([issue-tracker.md](../../../docs/agents/issue-tracker.md)), drawn the moment you know it, and the comment's Related line names the same issue with `must land first`. A relation that only shares an area, or orders grilling without one outcome feeding the other, gets no edge.
 
-Those labels, the edges, the comment, the issues you file for findings outside the issue, and a Pin's test-only PR are the whole of your write access to the tracker: the state label, `verify:*`, merging, and closing all stay with the maintainer, who acts on your recommended next step.
+Those labels (priority included), the edges, the comment, the issues you file for findings outside the issue, and a Pin's test-only PR are the whole of your write access to the tracker: the state label, `verify:*`, merging, and closing all stay with the maintainer, who acts on your recommended next step.
 
 ## Return
 
