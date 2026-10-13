@@ -650,7 +650,7 @@ function readRef(workspace: WorkspaceConfig, ref: string): string {
   }
 }
 
-/** ADR 0243 の口: 盤面が session 中に ref **だけ**を書くときは、すべてここを通る。書く前に基準のその行を
+/** ADR 0243 の口: 盤面が ref を書くときはここを通る(休止中の着地の `merge --ff-only` のように checkout ごと動かす書き込みも)。書く前に基準のその行を
  *  `<old>|<new>` に予告し、`write()` を撃ち、ref を読み返して `new` なら `{new}`、違えば `{old}` に畳む —— 読み返した
  *  値そのものを基準に入れることは無い(決定2)。`write()` が投げても畳んでから投げ直す。予告と畳みの間で盤面が
  *  落ちれば2値の行が残り、次の pickup の全撮りが消すまでどちらの値も違反と読まれない(決定5)。
@@ -1229,26 +1229,14 @@ function landingConflict(workspace: WorkspaceConfig, branch: string, task: strin
   );
 }
 
-/** ADR 0103 決定3 の走行中の綴り: index も worktree も HEAD も使わずに merge の結果
- *  ツリーだけを作り(`merge-tree --write-tree`、git ≥ 2.38)、保護ブランチの ref だけを
- *  進める —— 「盤面は走っているセッションの checkout を動かさない」(ADR 0064)は無傷。
- *  コンフリクトは `merge-tree` の非零終了で返る。`update-ref` に旧 sha を添えるのは
- *  安価な CAS で、記録との突き合わせから書き込みまでの隙に保護ブランチが動いていれば
- *  ここで落ちる。落ち方が隔離ではなく回答の拒否なのは、この隙の移動が帯域外とは
- *  限らないため —— 同じ workspace への2枚の着地回答が競えば、負けた側がここで落ちる。
- *  再回答が決定1 の判定を、畳まれた記録に対してもう一度走らせる。 */
-function mergeIntoProtectedByPlumbing(
-  db: Db,
-  workspace: WorkspaceConfig,
-  branch: string,
-  protectedSha: string,
-  task: string,
-): void {
-  const ref = `refs/heads/${branch}`;
+/** ADR 0103 決定3 / ADR 0243 決定4: 着地の merge commit を、ref を書く**前に**作る —— index も worktree も HEAD も
+ *  使わずに merge の結果ツリーだけを作り(`merge-tree --write-tree`、git ≥ 2.38)、Tidepool 名義の commit にする。
+ *  コンフリクトは `merge-tree` の非零終了で分かるので、中断状態はどこにも残らない。 */
+function landingMergeCommit(workspace: WorkspaceConfig, branch: string, protectedSha: string, task: string): string {
   const tree = writeMergeTree(workspace, branch, task);
   if (tree === undefined) throw landingConflict(workspace, branch, task);
   const taskSha = git(workspace.path, "rev-parse", `refs/heads/${task}`);
-  const merged = git(
+  return git(
     workspace.path,
     "commit-tree",
     tree,
@@ -1259,13 +1247,12 @@ function mergeIntoProtectedByPlumbing(
     "-m",
     `Merge ${task} into ${branch}`,
   );
-  boardRefWriter(db, workspace)(ref, merged, () => git(workspace.path, "update-ref", ref, merged, protectedSha));
 }
 
 /** ADR 0053 決定3 / ADR 0103: 承認された purely-local の着地を実行する。
  *
  *  帯域外の判定は ff の成否ではなく**盤面自身の記録との突き合わせ**で下す(決定1)。
- *  盤面が自分で進めた保護ブランチは記録に写されている(走行中は口の畳み、休止中は着地の後)ので記録と一致し、一致しない
+ *  盤面が自分で進めた保護ブランチは口の畳みで記録に入っている(ADR 0243)ので記録と一致し、一致しない
  *  位置は帯域外の書き込みだけが作る —— ff が黙って飲み込んでいた巻き戻しもこれで
  *  捕まる。記録に行が無い場合も不一致として扱う(ADR 0064 決定6 と同じ fail-closed)。
  *
@@ -1286,40 +1273,26 @@ export function mergeTaskToProtected(db: Db, workspace: WorkspaceConfig, taskId:
 
   const task = taskBranch(taskId);
   const fastForward = isAncestor(workspace, ref, task);
+  const landed = fastForward
+    ? git(workspace.path, "rev-parse", `refs/heads/${task}`)
+    : landingMergeCommit(workspace, branch, protectedSha, task);
   // 着地は人間面から入るので、同じ workspace で**別のタスクが走っている最中**に来る
   // (ADR 0064 決定4 が挙げる並行そのもの)。checkout はその worker の作業ツリーを
   // 奪い、走っているセッションは自分のタスクブランチの外で終わって tree rule に撃たれる
-  // —— 休止中(HEAD が保護ブランチ)でなければ ref だけを進める。
+  // —— HEAD が保護ブランチに無ければ ref だけを進める。`update-ref` に旧 sha を添えるのは
+  // 安価な CAS で、記録との突き合わせから書き込みまでの隙に保護ブランチが動いていれば
+  // ここで落ちる(同じ workspace への2枚の着地回答が競えば、負けた側が回答の拒否で落ちる)。
+  //
+  // 枝は DB の走っている行ではなく HEAD の位置で選ぶ: 保護ブランチを checkout している worker の下で `update-ref` を
+  // 撃てば、index と作業ツリーが古い位置に取り残され、着地が運んだ変更が幻の削除として見える(#1872 の実測)。
+  // HEAD が保護ブランチにあれば、走っている session の有無によらず checkout ごと ff する —— 被る WIP があれば ff が
+  // 拒んで何も動かさず、その理由がそのまま人間へ返る(quarantine ではない —— ADR 0103 決定4)
+  const write = boardRefWriter(db, workspace);
   if (git(workspace.path, "rev-parse", "--abbrev-ref", "HEAD") !== branch) {
-    if (fastForward) {
-      boardRefWriter(db, workspace)(ref, git(workspace.path, "rev-parse", `refs/heads/${task}`), () =>
-        git(workspace.path, "fetch", ".", `${task}:${branch}`),
-      );
-    } else mergeIntoProtectedByPlumbing(db, workspace, branch, protectedSha, task);
-    return;
-  }
-  git(workspace.path, "checkout", branch);
-  // 休止中の merge は checkout を動かすので口を通らない(ADR 0243 決定4)。ただし帯域外の判定(決定1)は次の pickup より
-  // 前に記録を読む —— 直列の2件目の回答が1件目の着地を帯域外と読まないよう、盤面のこの書き込みの位置を記録に写す。
-  // 走っている session は無いので、読み返した値に worker の偽造は入らない
-  if (fastForward) git(workspace.path, "merge", "--ff-only", task);
-  else {
-    try {
-      // `--no-edit` は環境の `merge.edit` に負けないため —— 盤面の git は誰の端末も持たない
-      git(workspace.path, "merge", "--no-edit", "-m", `Merge ${task} into ${branch}`, task);
-    } catch (err) {
-      // コンフリクトなら merge が中断状態で残り、`--abort` がツリーを元へ戻す。始まる前に
-      // 落ちた失敗(汚れたツリー等)は中断状態を作らないので `--abort` 自体が拒み、その git の
-      // 理由をそのまま人間へ返す —— どちらも quarantine ではない(ADR 0103 決定4)
-      try {
-        git(workspace.path, "merge", "--abort");
-      } catch {
-        throw err;
-      }
-      throw landingConflict(workspace, branch, task);
-    }
-  }
-  updateBaseline(db, workspace, (values) => {
-    values.set(ref, readRef(workspace, ref));
-  });
+    write(ref, landed, () =>
+      fastForward
+        ? git(workspace.path, "fetch", ".", `${task}:${branch}`)
+        : git(workspace.path, "update-ref", ref, landed, protectedSha),
+    );
+  } else write(ref, landed, () => git(workspace.path, "merge", "--ff-only", landed));
 }
