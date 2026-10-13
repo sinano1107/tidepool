@@ -396,6 +396,7 @@ function assertChildrenKnown(deps: McpDeps, children: z.infer<ReturnType<typeof 
     assertAssigneeCanTake(deps, child.assignee, "work");
     assertReviewersKnown(deps.agentRegistered, child.review_by);
   }
+  assertPinsRunnable(deps, children);
 }
 
 /** review の欄は、完了時レビューが立つ子にしか受け付けない(ADR 0111 追記8)。 */
@@ -522,15 +523,12 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
           ...taskHistoryRows(deps.db, task.id).map((row) => ({ ...row, list: "history" })),
         ];
         const rowOf = new Map(rows.map((row) => [row.entry, row]));
-        const interviewTargetsOf = (t: Task) => {
-          const targets = interviewTargets(deps.db, t.id);
-          return targets && { interview_targets: targets };
-        };
+        const targets = interviewTargets(deps.db, task.id);
         const envelope =
           read.at === undefined && {
             ...(await taskContext(deps, task)),
             type: task.type,
-            ...(interviewTargetsOf(task) ?? {}),
+            ...(targets && { interview_targets: targets }),
             parent: parent && { ...(await taskContext(deps, parent)), handoff_doc: parent.handoff_doc },
           };
         const packed = packItems(read, parent ? ["parent.history", "history"] : ["history"], rows.map((row) => row.entry), envelope || {}, {
@@ -648,7 +646,6 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
     async (input) =>
       runReleasingVerb(deps, attributedTaskId, (task, workerId, now) => {
         assertChildrenKnown(deps, input.children);
-        assertPinsRunnable(deps, input.children);
         const children = decomposeTask(
           deps.db,
           task,
@@ -766,7 +763,6 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
     async (input) =>
       runReleasingVerb(deps, attributedTaskId, (task, workerId, now) => {
         assertChildrenKnown(deps, input.children);
-        assertPinsRunnable(deps, input.children);
         const children = redecompose(
           deps.db,
           task,

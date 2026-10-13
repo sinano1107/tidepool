@@ -6,7 +6,7 @@ import { applyExecutionSettingsChange, executionSettingsFor, firstSelectable } f
 import { countTasksAwaitingLanding, countTasksAwaitingLandingInWorkspace } from "../src/landing.js";
 import { loadEpisodes, observedInTier, selectorBranch } from "../src/learner.js";
 import type { Provider } from "../src/provider.js";
-import { completeTask, interviewPin, interviewTargets, listChildren, registerTask, scoreInterview, type Task } from "../src/tasks.js";
+import { completeTask, getTask, interviewTargets, listChildren, registerTask, scoreInterview, type Task } from "../src/tasks.js";
 import { tierIdOf, tierNames } from "../src/tier.js";
 import { answerQuestionViaWebui, decomposeTaskViaWorker, FULL_HANDOFF, HUMAN_WEBUI, WORKER_SPAWNED } from "./harness.js";
 
@@ -32,6 +32,12 @@ it("登録の扉は未知の Provider、anthropic の alias、走らない effor
   expect(() => registerInterview(undefined, [{ ...opusHigh, effort: "ultra" }])).toThrow(/effort must be one of/);
 });
 
+/** 子が走る pin: anthropic の entry を持つ agent の候補の値と段。 */
+function pinOf(db: Db, taskId: string) {
+  const [setting] = executionSettingsFor(db, { provider: [{ name: "anthropic", advisor: false }], tier: undefined }, getTask(db, taskId)!);
+  return setting && { provider: setting.provider, model: setting.model, effort: setting.effort, tier_id: setting.tier_id, source: setting.source.tier };
+}
+
 const CHILD = { title: "probe", purpose: "run the probe", completion_criteria: "the probe's deliverable" };
 
 it("子の pin は root の対象のどれかと4欄一致しなければ拒まれ、effort の null も値として比べる —— 一致した子は対象の段を要求する(ADR 0199 決定3 / ADR 0218 決定5)", () => {
@@ -43,7 +49,7 @@ it("子の pin は root の対象のどれかと4欄一致しなければ拒ま�
   expect(() => decompose({ ...opusHigh, effort: null })).toThrow(/not one of this Interview's targets/);
   expect(() => decompose({ ...opusHigh, tier: "frontier" })).toThrow(/not one of this Interview's targets/);
   const [child] = decompose(haiku);
-  expect(interviewPin(db, child!.id)).toEqual(haiku);
+  expect(pinOf(db, child!.id)).toEqual({ provider: "anthropic", model: "claude-haiku-4-5", effort: null, tier_id: tierIdOf(db, "economy"), source: "interview" });
   expect(child!.tier).toBe("economy");
 });
 
@@ -67,7 +73,7 @@ it("承認 question に変わった pin の子は、approve で同じ pin のま
   const question = listChildren(db, root.id).find((task) => task.type === "question")!;
   answerQuestionViaWebui(db, question, ["approve"], new Date(0));
   const child = listChildren(db, root.id).find((task) => task.type === "work")!;
-  expect(interviewPin(db, child.id)).toEqual(opusHigh);
+  expect(pinOf(db, child.id)).toEqual({ provider: "anthropic", model: "claude-opus-5-5", effort: "high", tier_id: tierIdOf(db, "standard"), source: "interview" });
 });
 
 /** root に対象を1つ持たせ、それを pin した子を返す。 */

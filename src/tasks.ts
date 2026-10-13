@@ -473,18 +473,6 @@ function assertInterviewTargets(db: Db, input: Pick<RegisterTaskInput, "type" | 
   }
 }
 
-/** Interview の子の pin(段は名前)。pin を持たない task は null。 */
-export function interviewPin(db: Db, taskId: string): InterviewTarget | null {
-  return (
-    (db
-      .prepare(
-        `SELECT provider, model, effort, (SELECT name FROM tiers WHERE id = tier_id) AS tier FROM interview_targets
-          WHERE id = (SELECT interview_target_id FROM tasks WHERE id = ?)`,
-      )
-      .get(taskId) as InterviewTarget | undefined) ?? null
-  );
-}
-
 /** decompose の照合(ADR 0199 決定3): 子の pin を root の対象の id に引く。4欄の完全一致で、effort の null も値として比べる
  *  (ADR 0218 決定5)。pin の子は対象で走り、使い捨てブランチで採点されるので、完了時レビューも別の要求も持たない ——
  *  要求ティアは対象の段になる。 */
