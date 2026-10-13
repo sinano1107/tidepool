@@ -6,7 +6,7 @@ import { applyExecutionSettingsChange, executionSettingsFor, firstSelectable } f
 import { countTasksAwaitingLanding, countTasksAwaitingLandingInWorkspace } from "../src/landing.js";
 import { loadEpisodes, observedInTier, selectorBranch } from "../src/learner.js";
 import type { Provider } from "../src/provider.js";
-import { completeTask, countUnsettledTasksReferencing, declarePremiseBreach, getTask, interviewTargets, listBoard, listChildren, redecompose, registerTask, scoreInterview, type Task, taskHistoryRows, withheldDecompositionVerbs } from "../src/tasks.js";
+import { abandonConsequence, completeTask, countUnsettledTasksReferencing, declarePremiseBreach, getTask, interviewTargets, listBoard, listChildren, nextSlotTask, presentTask, redecompose, registerTask, scoreInterview, type Task, taskHistoryRows, withheldDecompositionVerbs } from "../src/tasks.js";
 import { tierIdOf, tierNames } from "../src/tier.js";
 import { answerQuestionViaWebui, decomposeTaskViaWorker, FULL_HANDOFF, failureQuestion, HUMAN_WEBUI, humanDecomposeTaskViaWebui, WORKER_SPAWNED } from "./harness.js";
 
@@ -141,6 +141,51 @@ it("Interview でない task は、子を全部 abandon されて起きたあと
     { id: again!.id, status: "todo" },
   ]);
   expect(withheldDecompositionVerbs(db, plain.id)).toEqual([]);
+});
+
+/** 対象2つの Interview の root を、人間が対象ごとの pin の子2つに分解する(書き手が人間なので前提の破綻は question になる)。 */
+function twoPinnedChildren() {
+  const haiku = { provider: "anthropic", model: "claude-haiku-4-5", effort: null, tier: "economy" };
+  const { db, root } = registerInterview(undefined, [opusHigh, haiku]);
+  const split = { reason: "one child per target", children: [{ ...CHILD, interview_pin: opusHigh }, { ...CHILD, interview_pin: haiku as never }] };
+  const [failed, sibling] = humanDecomposeTaskViaWebui(db, root, split, new Date(0));
+  return { db, root, failed: failed!, sibling: sibling! };
+}
+
+it("pin の子の failure question は兄弟の pin の子を held にしない —— 兄弟はそのまま pickup できる(ADR 0245 決定5)", () => {
+  const { db, failed, sibling } = twoPinnedChildren();
+  failureQuestion(db, failed.id, new Date(0));
+  expect(presentTask(db, getTask(db, sibling.id)!).status).toBe("todo");
+  expect(nextSlotTask(db)?.id).toBe(sibling.id);
+});
+
+it("pin の子の failure question への abandon は、その子だけを cancel する —— 兄弟の pin の子は todo のまま、root は blocked のまま(ADR 0245 決定5)", () => {
+  const { db, root, failed, sibling } = twoPinnedChildren();
+  answerQuestionViaWebui(db, failureQuestion(db, failed.id, new Date(0)), ["abandon"], new Date(0));
+  expect([getTask(db, failed.id)!.status, getTask(db, sibling.id)!.status]).toEqual(["cancelled", "todo"]);
+  expect(presentTask(db, getTask(db, root.id)!).status).toBe("blocked");
+});
+
+it("最後の pin の子の failure question への abandon は root を先頭へ動かさない —— 親は動かさず、通常どおり起きる(ADR 0245 決定5)", () => {
+  const { db, root, failed, sibling } = twoPinnedChildren();
+  completeTask(db, sibling, FULL_HANDOFF, "tako", new Date(0), "worker");
+  const before = getTask(db, root.id)!.sort_key;
+  answerQuestionViaWebui(db, failureQuestion(db, failed.id, new Date(0)), ["abandon"], new Date(0));
+  expect(getTask(db, root.id)!.sort_key).toBe(before);
+});
+
+it("pin の子の failure question の abandon の文は、分解判断の破棄も兄弟の件数も言わない(ADR 0245 決定5)", () => {
+  const { db, failed } = twoPinnedChildren();
+  expect(abandonConsequence(db, failed)).toBe(`"abandon" cancels this task and its remaining work.`);
+});
+
+it("pin の子の前提の破綻の question は、これまでどおり兄弟の pin の子を held にし、その abandon は兄弟も cancel する(ADR 0245 決定2)", () => {
+  const { db, failed, sibling } = twoPinnedChildren();
+  const question = declarePremiseBreach(db, failed, "the probe is broken", "tako", new Date(0), "worker")!;
+  expect(question.purpose).toContain("1 unfinished sibling from the same decomposition decision");
+  expect(presentTask(db, getTask(db, sibling.id)!).status).toBe("held");
+  answerQuestionViaWebui(db, question, ["abandon"], new Date(0));
+  expect([getTask(db, failed.id)!.status, getTask(db, sibling.id)!.status]).toEqual(["cancelled", "cancelled"]);
 });
 
 /** root に対象を1つ持たせ、それを pin した子を返す。 */

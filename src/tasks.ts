@@ -125,6 +125,9 @@ export interface Task {
   question_answer_comment: string | null;
   /** System-internal only (ADR 0006) — never set via MCP or the JSON API. */
   question_cancel_option: string | null;
+  /** System-internal only (ADR 0121 / ADR 0245 決定2・5): the decision this premise-breach question
+   *  stands in for — its abandon scope stays decision-wide even for an Interview pin child. */
+  question_breached_decision: number | null;
   /** System-internal only (issue #11): a pending-child approval question's
    *  would-be child, materialized by answerQuestion only on an "approve"
    *  answer. */
@@ -398,10 +401,13 @@ export interface RegisterTaskInput extends Partial<TaskContent> {
    *  case, not a distinct shape. */
   question?: QuestionItem[];
   /** System-internal only (ADR 0006 / 0048): answering with this option
-   *  triggers decision-scoped abandon instead of ordinary unblock-to-head.
+   *  triggers decision-scoped abandon instead of ordinary unblock-to-head
+   *  (an Interview pin child's failure abandon stops at itself, ADR 0245 決定5).
    *  Must be one of the question's options. Never set via MCP or JSON API;
    *  only the watchdog's failure-question registration sets it. */
   cancel_option?: string;
+  /** System-internal only (ADR 0121): set only by declarePremiseBreach's question. */
+  breached_decision?: number;
   /** System-internal only (issue #11): the would-be child of a pending-child
    *  approval question, materialized by answerQuestion on an "approve"
    *  answer. Never set via MCP or the JSON API — only decomposeTask sets
@@ -895,6 +901,7 @@ export function registerTask(
     question_answer: null,
     question_answer_comment: null,
     question_cancel_option: input.cancel_option ?? null,
+    question_breached_decision: input.breached_decision ?? null,
     question_pending_child: input.pending_child ?? null,
     question_proposal: input.proposal ?? null,
     question_pending_merge_pr: input.pending_merge_pr ?? null,
@@ -912,12 +919,12 @@ export function registerTask(
     db.prepare(
       `INSERT INTO tasks (id, type, status, assignee, workspace, title, purpose, completion_criteria,
          risk_flag, review_flag, review_by, review_tier_id, tier_id, priority, parent_id, based_on_decision, sort_key, handoff_doc, pr_number,
-         question_items, question_answer, question_answer_comment, question_cancel_option,
+         question_items, question_answer, question_answer_comment, question_cancel_option, question_breached_decision,
          question_pending_child, question_proposal, question_pending_merge_pr, question_pending_local_merge_task_id, question_pending_pr_promotion_task_id, question_quarantine_kind,
          question_quarantine_value, question_cli_auth_expiry_warning, github_issue_number, meta_review_subject, interview_target_id, created_at)
        VALUES (@id, @type, @status, @assignee, @workspace, @title, @purpose, @completion_criteria,
          @risk_flag, @review_flag, @review_by, ${liveTierId("@review_tier")}, ${liveTierId("@tier")}, @priority, @parent_id, @based_on_decision, @sort_key, @handoff_doc, @pr_number,
-         @question_items, @question_answer, @question_answer_comment, @question_cancel_option,
+         @question_items, @question_answer, @question_answer_comment, @question_cancel_option, @question_breached_decision,
          @question_pending_child, @question_proposal, @question_pending_merge_pr, @question_pending_local_merge_task_id, @question_pending_pr_promotion_task_id, @question_quarantine_kind,
          @question_quarantine_value, @question_cli_auth_expiry_warning, @github_issue_number, @meta_review_subject, @interview_target_id, @created_at)`,
     ).run({
@@ -1209,6 +1216,8 @@ interface EscalateInput {
    *  the JSON API; only the watchdog's failure-question path sets this.
    *  Meaningful only for a single-item bundle (the item it targets). */
   cancel_option?: string;
+  /** System-internal only (ADR 0121): set only by declarePremiseBreach. */
+  breached_decision?: number;
 }
 
 /** Escalation: a question child carrying a bundle of 1-4 items, each with
@@ -1239,6 +1248,7 @@ export function escalateTask(
         parent_id: parent.id,
         question: input.questions,
         cancel_option: input.cancel_option,
+        breached_decision: input.breached_decision,
       },
       now,
       workerId,
@@ -1339,7 +1349,7 @@ export interface CancelDefaults {
  *
  *   - a **failure question** with `question_cancel_option` (watchdog kill or
  *     issue-backed deterministic failure) whose failed task lies in the
- *     subtree. Abandon cancels its decision scope, so direct cancel would
+ *     subtree. Abandon cancels its abandon scope, so direct cancel would
  *     strand the question. PR-promotion failures are excluded: their target
  *     is already done and they carry no cancel option.
  *   - a **quarantine Confirmation** whose resource is used by a subtree task:
@@ -1593,10 +1603,12 @@ export function answerQuestion(
       const failed = getTask(db, question.parent_id!)!;
       const plan = failed.parent_id ? getTask(db, failed.parent_id) : undefined;
       if (plan) {
-        for (const id of abandonScopeIds(db, failed.id)) {
+        const breach = question.question_breached_decision !== null;
+        for (const id of abandonScopeIds(db, failed.id, breach)) {
           cancelTask(db, getTask(db, id)!, question.id, HUMAN_WORKER_ID, now, origin);
         }
-        unblockTarget = plan;
+        // pin の子の失敗は分解判断を破棄しないので、親は先頭へ戻さない(ADR 0245 決定5)
+        if (failed.interview_target_id === null || breach) unblockTarget = plan;
       } else {
         cancelTask(db, failed, question.id, HUMAN_WORKER_ID, now, origin);
       }
@@ -1650,8 +1662,10 @@ export function answerQuestion(
 
 /** The scope shared by abandon and held (ADR 0048): the failed task itself,
  *  plus siblings from the same decision only when the failed task has one.
+ *  An Interview pin child's failure scope stops at itself (ADR 0245 決定5); its
+ *  premise-breach scope (`breachSql` true) keeps the siblings (決定2).
  *  The explicit IS NOT NULL guard prevents the SQL analogue of null === null. */
-function abandonScopeSql(failedRef: string, candidateRef: string): string {
+function abandonScopeSql(failedRef: string, candidateRef: string, breachSql: string): string {
   return `(
     ${unsettledSql(`${candidateRef}.status`)}
     AND (
@@ -1661,6 +1675,7 @@ function abandonScopeSql(failedRef: string, candidateRef: string): string {
         AND ${candidateRef}.parent_id = ${failedRef}.parent_id
         AND ${candidateRef}.id <> ${failedRef}.id
         AND ${candidateRef}.based_on_decision = ${failedRef}.based_on_decision
+        AND (${failedRef}.interview_target_id IS NULL OR ${breachSql})
       )
     )
   )`;
@@ -1707,11 +1722,12 @@ export function declarePremiseBreach(
       {
         context:
           `${reason}\n\n"continue" keeps the decomposition decision and resumes this task. ` +
-          abandonConsequence(db, task),
+          abandonConsequence(db, task, true),
         questions: [
           { title: `premise breach: ${task.title}`, options: ["continue", "abandon"], recommendation: "continue" },
         ],
         cancel_option: "abandon",
+        breached_decision: decision,
       },
       BOARD_WORKER_ID,
       now,
@@ -1780,7 +1796,7 @@ export function redecompose(
   }
   const declarerId = requireOpenPremiseBreachChildId(db, parent.id);
   return db.transaction(() => {
-    for (const id of abandonScopeIds(db, declarerId)) {
+    for (const id of abandonScopeIds(db, declarerId, true)) {
       cancelUnsettledSubtree(db, id, workerId, now, { kind: "task_cancelled", origin_breach_task_id: declarerId }, origin);
     }
     resolvePremiseBreach(db, declarerId, "redecompose", workerId, now, origin);
@@ -1807,10 +1823,11 @@ function resolvePremiseBreach(
 }
 
 /** Canonical English abandon consequence baked into failure questions
- *  (ADR 0015 / 0048) and breach questions (ADR 0121). It states the decision-discard
- *  rule and count only when unfinished same-decision siblings exist. */
-export function abandonConsequence(db: Db, task: Task): string {
-  const siblingCount = unfinishedDecisionSiblingCount(db, task);
+ *  (ADR 0015 / 0048) and breach questions (ADR 0121, `breach`). It states the decision-discard
+ *  rule and count only when unfinished same-decision siblings are in the abandon scope. */
+export function abandonConsequence(db: Db, task: Task, breach = false): string {
+  // derived from the cancel/held scope so the wording cannot drift
+  const siblingCount = abandonScopeIds(db, task.id, breach).filter((id) => id !== task.id).length;
   return siblingCount > 0
     ? `"abandon" discards this decomposition decision — this task's remaining work plus ` +
         `${siblingCount} unfinished ${siblingCount === 1 ? "sibling" : "siblings"} from the same ` +
@@ -1818,32 +1835,17 @@ export function abandonConsequence(db: Db, task: Task): string {
     : `"abandon" cancels this task and its remaining work.`;
 }
 
-/** The ids in `failedId`'s abandon scope, shared by the abandon cascade and redecompose. */
-function abandonScopeIds(db: Db, failedId: string): string[] {
+/** The ids in `failedId`'s abandon scope, shared by the abandon cascade, redecompose, and abandon's wording. */
+function abandonScopeIds(db: Db, failedId: string, breach: boolean): string[] {
   return (
     db
       .prepare(
         `SELECT candidate.id
          FROM tasks candidate JOIN tasks failed ON failed.id = ?
-         WHERE ${abandonScopeSql("failed", "candidate")}`,
+         WHERE ${abandonScopeSql("failed", "candidate", breach ? "1" : "0")}`,
       )
       .all(failedId) as Array<{ id: string }>
   ).map(({ id }) => id);
-}
-
-/** Count of unfinished same-decision siblings baked into abandon's human-facing
- *  text. Derived from the cancel/held scope so the wording cannot drift. */
-function unfinishedDecisionSiblingCount(db: Db, failed: Task): number {
-  if (failed.parent_id === null) return 0;
-  const { count } = db
-    .prepare(
-      `SELECT COUNT(*) AS count
-       FROM tasks candidate JOIN tasks failed ON failed.id = ?
-       WHERE candidate.id <> failed.id
-         AND ${abandonScopeSql("failed", "candidate")}`,
-    )
-    .get(failed.id) as { count: number };
-  return count;
 }
 
 /** Record an in-authority decision as one log line and move on. The log is the
@@ -2646,7 +2648,7 @@ function earlyIntegrationReturnSql(parentRef: string): string {
                 WHERE c.parent_id = ${parentRef}
                   AND ${unsettledSql("c.status")}
                   AND ${awaitedChildSql("c")}
-                  AND NOT ${abandonScopeSql("d", "c")}))`;
+                  AND NOT ${abandonScopeSql("d", "c", "1")}))`;
 }
 
 /** Just the child-side half of that rule (ADR 0049): "is this row a child its
@@ -2736,8 +2738,10 @@ function stoppedSql(taskRef: string, fallback: string): string {
  *  everything its abandon answer could cancel out of the slot. A general
  *  question still holds its parent's children downward. A failure question
  *  holds the failed task's descendants plus each unfinished same-decision
- *  sibling itself and its descendants. Seeding siblings themselves prevents
- *  pickup immediately before the answer. Questions stay answerable outside
+ *  sibling itself and its descendants — no siblings for an Interview pin
+ *  child's failure question, though its premise-breach question keeps them
+ *  (ADR 0245 決定2・5). Seeding siblings themselves prevents pickup
+ *  immediately before the answer. Questions stay answerable outside
  *  the slot and are excluded from held presentation. The set is derived only. */
 const HELD_IDS_CTE = `
   held_ids(id) AS (
@@ -2752,7 +2756,7 @@ const HELD_IDS_CTE = `
           candidate.parent_id = failed.id
           OR (
             candidate.id <> failed.id
-            AND ${abandonScopeSql("failed", "candidate")}
+            AND ${abandonScopeSql("failed", "candidate", "q.question_breached_decision IS NOT NULL")}
           )
         )
       )
@@ -2760,7 +2764,7 @@ const HELD_IDS_CTE = `
     WHERE q.type = 'question' AND q.status = 'todo'
     UNION
     SELECT candidate.id
-    FROM tasks declarer JOIN tasks candidate ON ${abandonScopeSql("declarer", "candidate")}
+    FROM tasks declarer JOIN tasks candidate ON ${abandonScopeSql("declarer", "candidate", "1")}
     WHERE declarer.premise_breach_decision IS NOT NULL
     UNION
     SELECT c.id FROM tasks c JOIN held_ids h ON c.parent_id = h.id
