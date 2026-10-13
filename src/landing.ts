@@ -151,18 +151,18 @@ export function landingBlock(db: Db, taskId: string): LandingBlock | null {
 /** ADR 0231 決定2 / ADR 0239 / ADR 0242: 積み残し —— 盤面が持つ着地の内容が、まだ PR の head に載っていない。着地する
  *  タスク自身と、cancelled の祖先を挟まない done の work の子孫それぞれのブランチを、呼び手が渡す head(candidate)と
  *  ADR 0105 の内容の述語で比べ、1つでも candidate を変えれば積み残しとする。merge の門は GitHub が報告した head を
- *  `fetch` 付きで、収束は盤面が最後に push した head を渡す。head を candidate に置くので、盤面の外の push で先へ
+ *  `fetchMissing` 付きで、収束は盤面が最後に push した head を渡す。head を candidate に置くので、盤面の外の push で先へ
  *  進んでいても積み残しと読まない。ブランチが無ければ運ぶ内容も無い。比べられなければ積み残しとする(fail-closed)。
  *  門(`landingBlock`)とは別の述語である(ADR 0231 決定3)。 */
-export async function hasContentLeftBehind(
+async function hasContentLeftBehind(
   db: Db,
   workspace: WorkspaceConfig,
   taskId: string,
   candidate: string | undefined,
-  fetch?: { auth: GitHubAuth | undefined },
+  fetchMissing?: { auth: GitHubAuth | undefined },
 ): Promise<boolean> {
   try {
-    return (await contentLeftBehind(db, workspace, taskId, candidate, fetch)).length > 0;
+    return (await contentLeftBehind(db, workspace, taskId, candidate, fetchMissing)).length > 0;
   } catch {
     return true;
   }
@@ -175,7 +175,7 @@ export async function contentLeftBehind(
   workspace: WorkspaceConfig,
   taskId: string,
   candidate: string | undefined,
-  fetch?: { auth: GitHubAuth | undefined },
+  fetchMissing?: { auth: GitHubAuth | undefined },
 ): Promise<string[]> {
   const targets = (
     db
@@ -188,7 +188,7 @@ export async function contentLeftBehind(
   ).filter(({ id }) => taskBranchExists(workspace, id));
   if (targets.length === 0) return [];
   if (candidate === undefined) throw new Error(`the board has no record of pushing ${taskBranch(taskId)}`);
-  if (fetch) await fetchCommitIfMissing(workspace, candidate, fetch.auth);
+  if (fetchMissing) await fetchCommitIfMissing(workspace, candidate, fetchMissing.auth);
   return targets
     .filter(({ id }) => branchMergeEffect(workspace, candidate, taskBranch(id)).changesCandidate)
     .map(({ id }) => id);

@@ -7,10 +7,10 @@ import { DomainError } from "../src/domain-error.js";
 import { appendEvent, latestEventOfTask, listEvents } from "../src/events.js";
 import { quarantineChecks, submitAnswer } from "../src/human-verbs.js";
 import {
+  contentLeftBehind,
   countTasksAwaitingLanding,
   countTasksAwaitingLandingInWorkspace,
   createLanding,
-  hasContentLeftBehind,
   type Landing,
   landingAnnotation,
   registerLocalMergeQuestion,
@@ -3101,7 +3101,7 @@ it("merge back の conflict を abort しただけの受理は、merge back を�
 
   expect(head(workspace)).toBe("main");
   expect(git(workspace.path, "status", "--porcelain")).toBe("");
-  expect(await hasContentLeftBehind(db, workspace, work.id, originHead(workspace, work.id))).toBe(true);
+  expect(await contentLeftBehind(db, workspace, work.id, originHead(workspace, work.id))).toEqual([repair.id]);
   expect(getTask(db, question.id)!.status).toBe("todo");
 });
 
@@ -3148,7 +3148,7 @@ it.each<[string, (workspace: WorkspaceConfig, repairId: string) => void]>([
   expect(pollNow).toHaveBeenCalledOnce();
   finish(db, clock, work);
   await expect(convergeOn(landing, work.id)).resolves.toMatchObject({ kind: "landed", form: "open_pull_request_updated" });
-  expect(await hasContentLeftBehind(db, workspace, work.id, originHead(workspace, work.id))).toBe(false);
+  expect(await contentLeftBehind(db, workspace, work.id, originHead(workspace, work.id))).toEqual([]);
 });
 
 it("その workspace で session が走っている間は、checkout を動かさずに受理を拒む", async () => {
@@ -3603,19 +3603,10 @@ it.each<[string, (pr: Awaited<ReturnType<typeof openPushedPr>>) => string]>([
   "積み残し(%s)のある PR への人間の merge 回答は拒まれ、拒否文は運ぶ面を名指しし、merge されず question は開いたまま残る",
   async (_, leaveBehind) => {
     const pr = await openPushedPr("left-behind-answer", "escalate");
-    const { db, clock, github, workspace } = pr;
+    const { db, github } = pr;
     const carrier = leaveBehind(pr);
-    const question = getTask(db, listBoard(db).find((q) => q.question_pending_merge_pr === 1)!.id)!;
-    await expect(
-      submitAnswer(
-        { db, pollNow: () => {}, landing: unusedLanding, workspace, github },
-        question,
-        ["merge"],
-        undefined,
-        () => clock.now(),
-        "webui",
-      ),
-    ).rejects.toThrow(new DomainError(`cannot merge yet: PR #1 does not carry all of the task's content yet — ${carrier}`));
+    const question = listBoard(db).find((q) => q.question_pending_merge_pr === 1)!;
+    await expect(answerMergeQuestion(pr)).rejects.toThrow(new DomainError(`cannot merge yet: PR #1 does not carry all of the task's content yet — ${carrier}`));
     expect(github.merged).toEqual([]);
     expect(listBoard(db).find((q) => q.id === question.id)?.status).toBe("todo");
   },

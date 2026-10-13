@@ -462,16 +462,12 @@ export async function ensureWorkspaceToken(
  *  原則がそのまま適用できる(ADR 0052 決定5)。 */
 function refreshWorkspace(workspace: WorkspaceConfig, auth: GitHubAuth | undefined): void {
   if (!isRemoteBacked(workspace)) return;
-  authedGitBounded(
-    auth,
-    workspace.path,
-    originRepo(workspace.path),
-    GIT_NETWORK_TIMEOUT_MS,
-    "fetch",
-    "--quiet",
-    "origin",
-    protectedBranch(workspace),
-  );
+  fetchFromOrigin(workspace, auth, protectedBranch(workspace));
+}
+
+/** origin から認証付き・時間制限付きで1つ fetch する —— 保護ブランチの fetch と、merge の門の sha の fetch が共有する形。 */
+function fetchFromOrigin(workspace: WorkspaceConfig, auth: GitHubAuth | undefined, refspec: string): void {
+  authedGitBounded(auth, workspace.path, originRepo(workspace.path), GIT_NETWORK_TIMEOUT_MS, "fetch", "--quiet", "origin", refspec);
 }
 
 /** ADR 0241 決定1: 収束が merge 済みの根を保護ブランチと比べる前に、保護ブランチの写しを pickup と同じ fetch で
@@ -492,7 +488,7 @@ export async function fetchCommitIfMissing(workspace: WorkspaceConfig, sha: stri
     return;
   } catch {}
   await ensureWorkspaceToken(workspace, auth);
-  authedGitBounded(auth, workspace.path, originRepo(workspace.path), GIT_NETWORK_TIMEOUT_MS, "fetch", "--quiet", "origin", sha);
+  fetchFromOrigin(workspace, auth, sha);
 }
 
 /** issue #211 やること6: registry clone は「registry の正本」(合成 root が1回解決する
