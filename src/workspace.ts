@@ -242,11 +242,13 @@ export function taskBranchTip(workspace: WorkspaceConfig, taskId: string): strin
   return git(workspace.path, "rev-parse", `refs/heads/${taskBranch(taskId)}`);
 }
 
+/** 「無い」は `rev-parse --verify --quiet` の exit 1 だけ —— 他の失敗は投げる(ADR 0242 決定3)。 */
 export function taskBranchExists(workspace: WorkspaceConfig, taskId: string): boolean {
   try {
     git(workspace.path, "rev-parse", "--verify", "--quiet", `refs/heads/${taskBranch(taskId)}`);
     return true;
-  } catch {
+  } catch (err) {
+    if ((err as { status?: number } | null)?.status !== 1) throw err;
     return false;
   }
 }
@@ -480,6 +482,17 @@ export async function refreshProtectedBranch(db: Db, workspace: WorkspaceConfig,
   await ensureWorkspaceToken(workspace, auth);
   refreshWorkspace(workspace, auth);
   rebaselineRef(db, workspace, protectedBranchRef(workspace));
+}
+
+/** ADR 0242 決定1: merge の門が比べる GitHub の head が手元に無ければ、保護ブランチの fetch と同じ形で origin から sha で
+ *  取る。sha の fetch は `refs/` に何も書かない(FETCH_HEAD だけ)ので撮り直しは要らない。失敗は投げる。 */
+export async function fetchCommitIfMissing(workspace: WorkspaceConfig, sha: string, auth: GitHubAuth | undefined): Promise<void> {
+  try {
+    git(workspace.path, "cat-file", "-e", `${sha}^{commit}`);
+    return;
+  } catch {}
+  await ensureWorkspaceToken(workspace, auth);
+  authedGitBounded(auth, workspace.path, originRepo(workspace.path), GIT_NETWORK_TIMEOUT_MS, "fetch", "--quiet", "origin", sha);
 }
 
 /** issue #211 やること6: registry clone は「registry の正本」(合成 root が1回解決する

@@ -33,6 +33,7 @@ import {
   branchMergeEffect,
   buildWorkspaceResolver,
   catchUpTaskBranch,
+  fetchCommitIfMissing,
   isRemoteBacked,
   protectedBranch,
   protectedBranchRef,
@@ -147,36 +148,61 @@ export function landingBlock(db: Db, taskId: string): LandingBlock | null {
   return objections > 0 ? { kind: "objections", count: objections } : null;
 }
 
-/** ADR 0231 決定2 / ADR 0239: 積み残し —— 盤面が持つ着地の内容が、まだ PR に載っていない。着地するタスク自身と、
- *  cancelled の祖先を挟まない done の work の子孫それぞれのブランチを、merge される head(origin 側のタスク
- *  ブランチ)と ADR 0105 の内容の述語で比べ、1つでも candidate を変えれば積み残しとする。origin 側を candidate に
- *  置くので、盤面の外の push で origin 側が先へ進んでいても積み残しと読まない。ブランチが無ければ運ぶ内容も無い。
- *  比べられなければ積み残しとする(fail-closed)。門(`landingBlock`)とは別の述語で、読むのは回答時と merge 時
- *  だけである(ADR 0231 決定3)。 */
-export function hasContentLeftBehind(db: Db, workspace: WorkspaceConfig, taskId: string): boolean {
+/** ADR 0231 決定2 / ADR 0239 / ADR 0242: 積み残し —— 盤面が持つ着地の内容が、まだ PR の head に載っていない。着地する
+ *  タスク自身と、cancelled の祖先を挟まない done の work の子孫それぞれのブランチを、呼び手が渡す head(candidate)と
+ *  ADR 0105 の内容の述語で比べ、1つでも candidate を変えれば積み残しとする。merge の門は GitHub が報告した head を
+ *  `fetch` 付きで、収束は盤面が最後に push した head を渡す。head を candidate に置くので、盤面の外の push で先へ
+ *  進んでいても積み残しと読まない。ブランチが無ければ運ぶ内容も無い。比べられなければ積み残しとする(fail-closed)。
+ *  門(`landingBlock`)とは別の述語である(ADR 0231 決定3)。 */
+export async function hasContentLeftBehind(
+  db: Db,
+  workspace: WorkspaceConfig,
+  taskId: string,
+  candidate: string | undefined,
+  fetch?: { auth: GitHubAuth | undefined },
+): Promise<boolean> {
   try {
-    return contentLeftBehind(db, workspace, taskId).length > 0;
+    return (await contentLeftBehind(db, workspace, taskId, candidate, fetch)).length > 0;
   } catch {
     return true;
   }
 }
 
-/** 積み残しを運ぶタスクの id —— 比べられなければ throw する。push の後の読み直し(ADR 0241 決定7)が名指しに使う。 */
-function contentLeftBehind(db: Db, workspace: WorkspaceConfig, taskId: string): string[] {
-  const targets = db
-    .prepare(
-      `${subtreeSql("@root", true)}
+/** 積み残しを運ぶタスクの id —— 比べられなければ throw する。比べるブランチがあるときだけ candidate を読み、`fetch` が
+ *  あれば手元に無い candidate を origin から取る。 */
+export async function contentLeftBehind(
+  db: Db,
+  workspace: WorkspaceConfig,
+  taskId: string,
+  candidate: string | undefined,
+  fetch?: { auth: GitHubAuth | undefined },
+): Promise<string[]> {
+  const targets = (
+    db
+      .prepare(
+        `${subtreeSql("@root", true)}
        SELECT id FROM tasks
         WHERE id IN (SELECT id FROM subtree) AND (id = @root OR (type = 'work' AND status = 'done'))`,
-    )
-    .all({ root: taskId }) as Array<{ id: string }>;
-  const mergeHead = remoteTrackingRef(taskBranch(taskId));
+      )
+      .all({ root: taskId }) as Array<{ id: string }>
+  ).filter(({ id }) => taskBranchExists(workspace, id));
+  if (targets.length === 0) return [];
+  if (candidate === undefined) throw new Error(`the board has no record of pushing ${taskBranch(taskId)}`);
+  if (fetch) await fetchCommitIfMissing(workspace, candidate, fetch.auth);
   return targets
-    .filter(
-      ({ id }) =>
-        taskBranchExists(workspace, id) && branchMergeEffect(workspace, mergeHead, taskBranch(id)).changesCandidate,
-    )
+    .filter(({ id }) => branchMergeEffect(workspace, candidate, taskBranch(id)).changesCandidate)
     .map(({ id }) => id);
+}
+
+/** ADR 0242 決定2: 盤面が最後に push した head(`pr_opened` / `pr_branch_pushed` の sha)—— 収束が積み残しを比べる相手 */
+function lastPushedHead(db: Db, taskId: string): string | undefined {
+  const row = db
+    .prepare(
+      `SELECT json_extract(payload, '$.sha') AS sha FROM events
+        WHERE task_id = ? AND kind IN ('pr_opened', 'pr_branch_pushed') ORDER BY id DESC LIMIT 1`,
+    )
+    .get(taskId) as { sha: string | null } | undefined;
+  return row?.sha ?? undefined;
 }
 
 export function landingAnnotation(
@@ -781,8 +807,8 @@ export function createLanding(deps: LandingDeps): Landing {
       }
       resolvedWorkspace = workspace.name;
       // ADR 0241 決定7: push しても積み残しが消えなければ、着地したとは言わない —— quarantine が抱えていなければ失敗 question を1回立てる
-      const afterPush = (landed: LandingVerdict): LandingVerdict => {
-        const left = contentLeftBehind(deps.db, workspace, task.id);
+      const afterPush = async (landed: LandingVerdict, pushed: string): Promise<LandingVerdict> => {
+        const left = await contentLeftBehind(deps.db, workspace, task.id, pushed);
         if (left.length === 0) {
           retireFailures(task.id, ctx);
           return landed;
@@ -836,7 +862,7 @@ export function createLanding(deps: LandingDeps): Landing {
         return { kind: "landed", form: "local_merge_question" };
       }
       // ADR 0241: 開いている PR の根は、積み残しがあるときだけ push する —— 無ければ GitHub を呼ばない
-      if (task.pr_number !== null && !hasContentLeftBehind(deps.db, workspace, task.id)) {
+      if (task.pr_number !== null && !(await hasContentLeftBehind(deps.db, workspace, task.id, lastPushedHead(deps.db, task.id)))) {
         retireFailures(task.id, ctx);
         return { kind: "up_to_date", prNumber: task.pr_number };
       }
@@ -875,7 +901,7 @@ export function createLanding(deps: LandingDeps): Landing {
         // push の直後に刻む —— 後段が throw しても、GitHub に載った head の猶予の起点は失わない(ADR 0227 決定2)
         recordBoardFact(task.id, { kind: "pr_branch_pushed", pr_number: task.pr_number, sha });
         rebaselineRef(deps.db, workspace, remoteTrackingRef(taskBranch(task.id)));
-        return afterPush({ kind: "landed", form: "open_pull_request_updated", prNumber: task.pr_number });
+        return await afterPush({ kind: "landed", form: "open_pull_request_updated", prNumber: task.pr_number }, sha);
       }
       // ADR 0241 決定4: 作る前に同じタスクブランチの PR を探す —— 作成の後・記録の前に落ちた盤面が2つ目を作らない
       const found = await deps.github.findPullRequestByHead({ path: workspace.path, branch: taskBranch(task.id) });
@@ -928,7 +954,7 @@ export function createLanding(deps: LandingDeps): Landing {
         deps.isProtectedWorkspace?.(workspace.name),
         "worker",
       );
-      return afterPush({ kind: "landed", form: "pull_request_opened", prNumber });
+      return await afterPush({ kind: "landed", form: "pull_request_opened", prNumber }, sha);
     } catch (error) {
       // 読めなかった根を workspace の quarantine が抱えていれば、失敗 question を重ねない(ADR 0241 決定6)
       if (resolvedWorkspace !== undefined && workspaceNeedsHuman(deps.db, resolvedWorkspace)) {
@@ -1106,6 +1132,10 @@ export function createLanding(deps: LandingDeps): Landing {
                   ". Merge anyway, or hold?",
               )
             : undefined;
+          // 積み残しは門と同じくキューに残す(ADR 0231 決定3)。CI を読んだ head と比べ、手元に無ければ sha で取る
+          // (ADR 0242 決定1)。fetch を待つので面の読み直しより前に読む
+          const leftBehind =
+            ci === "success" && (await hasContentLeftBehind(deps.db, workspace, task_id, head, { auth: deps.githubAuth }));
           // 面が question 側へ変わっていれば、CI 赤 / 猶予を過ぎた未報告なら CI 赤の question、それ以外は推奨 merge の
           // 面変化の question(ADR 0217 決定2・ADR 0227 決定3)。CI が pending でも同じ tick で外す(ADR 0238 決定2)。
           // ここから行為までに await は無いので、この読みが行為の直前の読みを兼ねる
@@ -1116,8 +1146,7 @@ export function createLanding(deps: LandingDeps): Landing {
           } else if (ci !== "success") {
             continue;
           } else {
-            // 積み残しは門と同じくキューに残す(ADR 0231 決定3)
-            if (hasContentLeftBehind(deps.db, workspace, task_id)) continue;
+            if (leftBehind) continue;
             // merge は CI を読んだ head に固定する(ADR 0231 決定1)
             const failure = await github.mergePullRequest(ref, head).then(
               () => null,

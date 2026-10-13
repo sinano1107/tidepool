@@ -26,7 +26,7 @@ import {
 import { type GitHubClient, IssueGoneError } from "./github.js";
 import type { GitHubAuth } from "./github-auth.js";
 import type { HarnessContainmentCheck } from "./harness-containment.js";
-import { hasContentLeftBehind, type Landing, type LandingVerdict, landingBlock, observePrHead, openPrPromotionQuestionIds, recordPrPromotionAbandoned, UNREPORTED_CI_GRACE_ORIGIN_TEXT, UNREPORTED_CI_GRACE_TEXT, unreportedCiGraceElapsed } from "./landing.js";
+import { contentLeftBehind, type Landing, type LandingVerdict, landingBlock, observePrHead, openPrPromotionQuestionIds, recordPrPromotionAbandoned, UNREPORTED_CI_GRACE_ORIGIN_TEXT, UNREPORTED_CI_GRACE_TEXT, unreportedCiGraceElapsed } from "./landing.js";
 import { approveMemoryProposal, humanEntryInput, listMemoryEntries, type MemoryAmendment, movedTail, parseMemoryAmendment, rejectMemoryProposal } from "./memory.js";
 import { whyNotPositiveInteger } from "./positive-integer.js";
 import type { Provider } from "./provider.js";
@@ -426,6 +426,8 @@ export interface SubmitAnswerDeps {
   workspace?: WorkspaceConfig;
   resolveWorkspace?: (taskWorkspace: string | null) => WorkspaceConfig;
   github?: GitHubClient;
+  /** merge 回答が手元に無い PR の head を取る fetch の、盤面の GitHub 身元(ADR 0093 / ADR 0242 決定1)。 */
+  githubAuth?: GitHubAuth;
   landing: Landing;
   /** ADR 0099 決定3: 受理された Containment quarantine の確認回答が slot を解放する
    *  唯一の門。空の再観測は containment の検査の側にある。Absent → watchdog を
@@ -975,8 +977,25 @@ export async function submitAnswer(
         "cannot check CI or merge",
         "GitHub/workspace",
       );
+      // ADR 0242 決定1: head を1回だけ読み、同じ head で積み残し・CI・merge を通す
+      const pr = await deps.github.readPullRequest({ path: mergeWorkspace.path, number: mergePr });
+      // ADR 0242 決定3: 比べられなければ積み残し —— 拒否文は「運んでいる途中」でなく、比べられなかった事実と理由を言う(#1854)
+      if (pr.state === "unreadable") {
+        throw new DomainError(`cannot merge: could not read PR #${mergePr}, so its head could not be compared with the task's content`);
+      }
+      // 記録に無い head は拒否より前に刻む —— escalate の PR はキューの行を持たないので、起点はここで残す(ADR 0231 決定4)
+      observePrHead(deps.db, landingTaskId, mergePr, pr.head, now());
       // ADR 0231 決定3: 積み残しは門の検査と同じ時点で、門とは別に読む
-      if (hasContentLeftBehind(deps.db, mergeWorkspace, landingTaskId)) {
+      let left: string[];
+      try {
+        left = await contentLeftBehind(deps.db, mergeWorkspace, landingTaskId, pr.head, { auth: deps.githubAuth });
+      } catch (err) {
+        throw new DomainError(
+          `cannot merge: could not compare PR #${mergePr}'s head ${pr.head} with the task's content — ` +
+            (err instanceof Error ? err.message : String(err)),
+        );
+      }
+      if (left.length > 0) {
         // ADR 0240 決定5: 運ぶ面を名指しする
         const quarantineQuestionId = openQuarantineQuestion(deps.db, "workspace", mergeWorkspace.name)?.id;
         const promotionQuestionId = openPrPromotionQuestionIds(deps.db, landingTaskId)[0];
@@ -990,9 +1009,6 @@ export async function submitAnswer(
               : "the board is still carrying it; answer again later"),
         );
       }
-      const pr = await deps.github.readPullRequest({ path: mergeWorkspace.path, number: mergePr });
-      // 記録に無い head は拒否より前に刻む —— escalate の PR はキューの行を持たないので、起点はここで残す(ADR 0231 決定4)
-      if (pr.state !== "unreadable") observePrHead(deps.db, landingTaskId, mergePr, pr.head, now());
       // ADR 0227 決定2・3: check 未報告は猶予の間だけ pending と同じに拒み、過ぎれば回答の中の人間の判断で通す
       if (pr.ci === "unreported" && !unreportedCiGraceElapsed(deps.db, landingTaskId, pr.head, now())) {
         throw new DomainError(

@@ -22,6 +22,7 @@ import type { ChildDraftContext, DraftClient } from "./draft.js";
 import { advanceLogCursor, getLogCursor, listEvents } from "./events.js";
 import { changeExecutionSettings, executionSettingsChangeSchema, readExecutionSettingsWithQuarantine } from "./execution-setting.js";
 import { type GitHubClient, OPEN_ISSUES_LIMIT } from "./github.js";
+import type { GitHubAuth } from "./github-auth.js";
 import { githubLoggedIn } from "./github-auth.js";
 import {
   addIssueCommentThroughHumanDoor,
@@ -555,6 +556,7 @@ export interface ApiRouterDeps {
   /** The GitHub-facing seam (issue #19), reused here for the merge dial's
    *  CI-check-then-merge (issue #11). Absent → same as no workspace. */
   github?: GitHubClient;
+  githubAuth?: GitHubAuth;
   landing: Landing;
   /** Assignee/workspace name candidates for the registration screen (issue
    *  #12), resolved from the agent registry by the caller (main.ts) — the
@@ -676,6 +678,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     workspace,
     resolveWorkspace,
     github,
+    githubAuth,
     landing,
     registryCandidates,
     draftClient,
@@ -1404,6 +1407,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
           workspace,
           resolveWorkspace,
           github,
+          githubAuth,
           landing,
           reclaim,
           quarantineChecks,
